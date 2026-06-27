@@ -191,7 +191,10 @@ jobs:
 
       - name: Verify image size < 100MB
         run: |
-          IMAGE_SIZE=$(docker image inspect ghcr.io/${{ github.repository }}:${{ github.ref_name }} --format='{{.Size}}')
+          # WHY 使用 ${GITHUB_REPOSITORY,,}(Bash 参数扩展转小写):docker/metadata-action@v5
+          # 默认将 images 转为小写推送,但 ${{ github.repository }} 保留原大小写,
+          # 直接用会导致 docker image inspect 找不到镜像(大小写不匹配)。
+          IMAGE_SIZE=$(docker image inspect ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.ref_name }} --format='{{.Size}}')
           echo "Image size: $IMAGE_SIZE bytes"
           if [ "$IMAGE_SIZE" -gt 104857600 ]; then
             echo "ERROR: Image size exceeds 100MB limit"
