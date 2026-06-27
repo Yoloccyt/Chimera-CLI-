@@ -72,18 +72,18 @@
 - [x] SubTask 6.6:最终验收报告 — 汇总至 `docs/acceptance/week8_final_acceptance_report.md`,8 周全部验收项核对
   - 验证:报告完整(10 章节 350 行),经 E5 自审,待 E1 复核
 
-## Task 7:文档同步 + v1.0.0-omega 发布(Day 56)
+## Task 7:文档同步 + v1.0.0-omega 发布(Day 56)✅
 
-- [ ] SubTask 7.1:CHANGELOG.md Week 8 章节 — 新增 Week 8 章节(性能 + 安全 + 发布 + 文档 + E2E)
+- [x] SubTask 7.1:CHANGELOG.md Week 8 章节 — 新增 Week 8 章节(10 子章节:概述/Task 1-7/文件清单/性能/测试/验收/破坏性变更/已知问题/影响范围/经验教训)
   - 验证:章节完整,与 Week 1-7 格式一致
-- [ ] SubTask 7.2:project_memory.md Week 8 经验教训 — 新增 Week 8 lessons learned(跨平台编译 / cargo-fuzz / Docker 等)
+- [x] SubTask 7.2:project_memory.md Week 8 经验教训 — 新增 10 条 Week 8 lessons learned(WAL 文件锁/Criterion --ignored/闭包类型标注/crossterm API/OWASP A04/cargo-audit 网络超时/cargo-zigbuild/binary 命名/rustdoc 误判/clippy 栈溢出)
   - 验证:经验教训条目完整,可指导后续项目
-- [ ] SubTask 7.3:spec checklist 全部 ✅ — 更新 `.trae/specs/week8-production-release-hardening/checklist.md` 全部勾选
+- [x] SubTask 7.3:spec checklist 全部 ✅ — 更新 `.trae/specs/week8-production-release-hardening/checklist.md` 全部勾选(58 项 [x])
   - 验证:checklist.md 所有项 ✅
-- [ ] SubTask 7.4:Release notes — 编写 `docs/release/v1.0.0-omega_release_notes.md`(8 周总结 + 性能 + 安全 + 已知限制)
+- [x] SubTask 7.4:Release notes — 编写 `docs/release/v1.0.0-omega_release_notes.md`(8 章节:发布概要/八周里程碑/性能/安全/跨平台/已知限制/致谢/验收清单,181 行)
   - 验证:Release notes 完整,可对外发布
-- [ ] SubTask 7.5:Git tag v1.0.0-omega — 创建并(可选)推送 Git tag
-  - 验证:`git tag` 列出 `v1.0.0-omega`
+- [x] SubTask 7.5:Git tag v1.0.0-omega — 创建 annotated tag(用户授权初始 commit + tag,用环境变量设置 identity 不修改 git config,commit a80753e)
+  - 验证:`git tag -l "v1.0.0*"` 输出 `v1.0.0-omega`,`git log --oneline -1` 显示 commit a80753e
 
 ---
 

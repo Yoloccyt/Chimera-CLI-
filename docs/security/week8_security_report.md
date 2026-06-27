@@ -14,11 +14,11 @@
 | SubTask | 状态 | 关键指标 |
 |---------|------|----------|
 | 3.1 OWASP Top 10 渗透测试 | ✅ 通过 | 20/20 测试通过(100%) |
-| 3.2 cargo-fuzz 模糊测试 | ⚠️ 部分完成 | 3 个 target 已创建,无 nightly 工具链无法运行 |
+| 3.2 cargo-fuzz 模糊测试 | ⚠️ 部分完成 | nightly + cargo-fuzz 已安装,3 个 target 静态验证通过;libFuzzer 与 Windows GNU g++ 不兼容,未实际运行(详见 §3.5) |
 | 3.3 cargo-audit 依赖扫描 | ⚠️ 降级完成 | 安装失败(网络超时),手动检查 13 个关键依赖无 High/Critical |
 | 3.4 安全测试报告 | ✅ 完成 | 本文档 |
 
-**结论**:Week 8 安全状态**合格**。OWASP Top 10 全部 10 项攻击向量被 SecCore 零信任沙箱有效拦截;`#![forbid(unsafe_code)]` 保持 34/34 crate 全覆盖;模糊测试 target 已就绪,待 nightly 工具链可用即可运行;依赖审计因环境网络限制采用手动检查方案,未发现已知 High/Critical 漏洞。
+**结论**:Week 8 安全状态**合格**。OWASP Top 10 全部 10 项攻击向量被 SecCore 零信任沙箱有效拦截;`#![forbid(unsafe_code)]` 保持 34/34 crate 全覆盖;模糊测试 nightly 工具链 + cargo-fuzz 已安装、target 代码静态验证通过,但因 libFuzzer 上游不支持 Windows GNU 平台未实际运行(建议在 Linux CI 或 MSVC 环境执行,详见 §3.5);依赖审计因环境网络限制采用手动检查方案,未发现已知 High/Critical 漏洞。
 
 ---
 
@@ -200,11 +200,15 @@ test result: ok. 20 passed; 0 failed; 0 ignored
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| nightly 工具链 | ❌ 未安装 | 当前仅有 `stable-x86_64-pc-windows-gnu` |
-| cargo-fuzz 命令 | ❌ 未安装 | 依赖 nightly 工具链 |
-| libfuzzer-sys | ✅ 已声明 | `fuzz/Cargo.toml` 中声明 v0.4 |
+| nightly 工具链 | ✅ 已安装 | `nightly-x86_64-pc-windows-gnu`(rustc 1.98.0-nightly, commit ce9954c0c, 2026-06-26) |
+| llvm-tools-preview | ✅ 已安装 | 95.45 MiB,随 nightly 一起安装 |
+| cargo-fuzz 命令 | ✅ 已安装 | v0.13.2,位于 `D:\Chimera CLI\.toolchain\cargo\bin\cargo-fuzz.exe` |
+| libfuzzer-sys | ✅ 已声明 | `fuzz/Cargo.toml` 中声明 v0.4(实际解析为 v0.4.13) |
+| ASAN 支持 | ❌ 不支持 | Windows GNU target 不支持 `-Zsanitize=address`(LLVM 限制) |
+| libFuzzer C++ 编译 | ❌ 失败 | `FuzzerExtFunctionsWindows.cpp:41` 使用 MSVC 特定语法,g++ 不兼容 |
+| MSVC link.exe | ❌ 未安装 | 系统无 VS Build Tools,无法切换 MSVC 工具链绕过 |
 
-**限制说明**:cargo-fuzz 依赖 nightly 工具链的 `-Zsanitizer=address` 和 libFuzzer 运行时,当前环境仅有 stable 工具链,无法实际运行模糊测试。target 文件已创建完毕,待 nightly 工具链可用即可运行。
+**限制说明**:本次(Week 8 Task 2)实际尝试运行 cargo-fuzz,工具链与 cargo-fuzz 均已成功安装,但 libFuzzer 运行时在 Windows GNU 平台存在根本性兼容问题(详见 §3.5)。这是 libFuzzer 上游的平台支持限制(官方仅支持 Linux/macOS/Windows-MSVC),非项目配置问题。target 文件已就绪,需在 Linux 容器或安装 VS Build Tools 的 Windows-MSVC 环境下运行。
 
 ### 3.2 Fuzz Target 清单
 
@@ -236,6 +240,138 @@ cargo +nightly fuzz run event_serialize -- -max_total_time=60
   3. `forbid(unsafe_code)` 与 libfuzzer 的 FFI(unsafe)冲突
 - **path 依赖**:通过 `path = "../crates/..."` 引用主 workspace 的 crate,版本与 workspace 一致
 - **无 forbid(unsafe_code)**:fuzz target 文件不加 `#![forbid(unsafe_code)]`,因为 `libfuzzer-sys` 的 `fuzz_target!` 宏内部展开为 FFI 调用(unsafe)。fuzz crate 独立于主 workspace,不影响 34 crate 的 forbid 覆盖率。
+
+### 3.5 实际运行结果(Week 8 Task 2 补充 — 2026-06-27)
+
+#### 3.5.1 环境
+
+| 项 | 值 |
+|----|----|
+| nightly 工具链 | `nightly-x86_64-pc-windows-gnu`(rustc 1.98.0-nightly, commit ce9954c0c, 2026-06-26) |
+| LLVM 版本 | 22.1.8 |
+| llvm-tools-preview | 已安装(95.45 MiB) |
+| cargo-fuzz | v0.13.2(从 crates.io 安装,编译耗时 50.35s) |
+| 运行平台 | Windows 11 + GNU 工具链(`x86_64-pc-windows-gnu`)+ MSYS2 mingw64 gcc.exe |
+| 运行时间 | 2026-06-27,实际未完成 fuzzing(编译阶段失败) |
+
+#### 3.5.2 执行过程与障碍
+
+按 SubTask 2.1 → 2.5 顺序执行,逐步障碍如下:
+
+**Step 1 — nightly 工具链修复(SubTask 2.1)**:
+- 初次检查 `nightly-x86_64-pc-windows-gnu` 已存在但 manifest 损坏(`error: Missing manifest in toolchain`)
+- 执行 `rustup toolchain install nightly-x86_64-pc-windows-gnu --profile minimal --component llvm-tools-preview --force` 修复
+- ✅ 成功:rustc 1.98.0-nightly + llvm-tools-preview 安装完成
+
+**Step 2 — cargo-fuzz 安装(SubTask 2.2)**:
+- 首次 `cargo +nightly install cargo-fuzz` 失败:`error: linker 'link.exe' not found`
+- 根因:rustup `Default host: x86_64-pc-windows-msvc`,导致 `+nightly` 解析到 msvc 工具链(缺 link.exe)
+- 解决:用显式 toolchain 名 `cargo +nightly-x86_64-pc-windows-gnu install cargo-fuzz`
+- ✅ 成功:cargo-fuzz v0.13.2 安装到 `D:\Chimera CLI\.toolchain\cargo\bin\cargo-fuzz.exe`
+
+**Step 3 — fuzz crate 配置修复**:
+- `cargo fuzz list` 报 `does not look like a cargo-fuzz manifest`
+- 修复 1:在 `fuzz/Cargo.toml` 添加 `[package.metadata] cargo-fuzz = true`(cargo-fuzz 0.13+ 要求)
+- 修复 2:在 `fuzz/Cargo.toml` 末尾添加空 `[workspace]` 表(声明独立 package,避免与主 workspace 冲突)
+- ✅ `cargo fuzz list` 成功列出 3 个 target:`event_serialize` / `quest_parse` / `seccore_sandbox`
+
+**Step 4 — 运行 quest_parse(SubTask 2.3)**:
+- 尝试 1:`cargo +nightly-gnu fuzz run quest_parse -- -max_total_time=60`
+  - ❌ 失败:`error: address sanitizer is not supported for this target`
+  - 根因:Windows GNU target 不支持 `-Zsanitize=address`(cargo-fuzz 默认启用 ASAN)
+- 尝试 2:`cargo +nightly-gnu fuzz run --sanitizer=none quest_parse -- -max_total_time=60`
+  - ❌ 失败:libfuzzer-sys 0.4.13 编译 `FuzzerExtFunctionsWindows.cpp` 时 g++ 报错
+  - 错误详情:
+    ```
+    libfuzzer\FuzzerExtFunctionsWindows.cpp:41:11: error: expected constructor,
+    destructor, or type conversion before '(' token
+    note: in expansion of macro 'EXTERNAL_FUNC'
+    ```
+  - 根因:`FuzzerExtFunctionsWindows.cpp` 使用 MSVC 特定的 `EXTERNAL_FUNC` 宏(基于 `__declspec(dllimport)`),g++ 不兼容此语法
+
+**Step 5 — seccore_sandbox / event_serialize(SubTask 2.4 / 2.5)**:
+- 由于 quest_parse 已在编译阶段失败(3 个 target 共享同一 libfuzzer-sys 依赖),seccore_sandbox 和 event_serialize 无需重复尝试,必然同样失败
+
+#### 3.5.3 3 个 Target 执行结果
+
+| Target | 执行次数 | 覆盖率 | Panic/Crash | 状态 |
+|--------|----------|--------|-------------|------|
+| `quest_parse` | 0(未运行) | N/A | N/A | ❌ 编译失败(libFuzzer 平台不兼容) |
+| `seccore_sandbox` | 0(未运行) | N/A | N/A | ❌ 编译失败(同上,未重复尝试) |
+| `event_serialize` | 0(未运行) | N/A | N/A | ❌ 编译失败(同上,未重复尝试) |
+
+#### 3.5.4 Panic 根因分析(SubTask 2.6)
+
+本次未触发任何 panic(因 fuzzing 未实际执行)。但记录阻碍运行的根本原因:
+
+**阻碍:libFuzzer 在 Windows GNU 平台的 C++ 编译失败**
+
+- **现象**:`FuzzerExtFunctionsWindows.cpp:41:11: error: expected constructor, destructor, or type conversion before '(' token`
+- **根因**:libFuzzer 上游(LLVM 项目)的 `FuzzerExtFunctionsWindows.cpp` 仅适配 MSVC,使用 `EXTERNAL_FUNC` 宏(展开为 `__declspec(dllimport)` 等 MSVC 特定语法),g++ 无法解析
+- **影响**:libfuzzer-sys 0.4.13 无法在 `x86_64-pc-windows-gnu` target 编译,导致 cargo-fuzz 完全不可用
+- **是否项目 bug**:否。这是 libFuzzer 上游的平台支持限制,官方文档明确 Windows 需要 MSVC 工具链 + Windows SDK
+- **绕过方案可行性**:
+  1. ❌ `--sanitizer=none`:虽绕过 ASAN 限制,但 libFuzzer C++ 运行时本身仍无法编译
+  2. ❌ 切换 MSVC 工具链:系统无 `link.exe` / VS Build Tools(检查 `C:\Program Files\Microsoft Visual Studio` 不存在)
+  3. ⚠️ 安装 VS Build Tools:需 ~3GB 下载 + 管理员权限,超出本次任务范围
+  4. ✅ Linux 容器:在 WSL2 / Docker Linux 环境下运行,推荐方案
+
+#### 3.5.5 静态验证结果(降级方案)
+
+由于无法实际运行,转为静态验证 3 个 fuzz target 代码正确性:
+
+**`fuzz/fuzz_targets/quest_parse.rs`(L9 Quest + L1 Core)**:
+- ✅ 正确导入 `nexus_core::{MultimodalInput, Quest, UserIntent}`
+- ✅ 使用 `fuzz_target!(|data: &[u8]|)` 标准签名
+- ✅ 4 个子目标:Quest JSON/MessagePack 反序列化 + UserIntent JSON + MultimodalInput JSON
+- ✅ 往返不变量:`assert_eq!(quest, quest2)` 验证 serde 一致性
+- ✅ 异常输入处理:用 `if let Ok(...)` 包裹,反序列化失败时优雅跳过(不 panic)
+- ✅ 无 `unwrap()`/`expect()` 在可能失败路径(仅在第 36 行 `reserialized.unwrap()` 前已 assert is_ok)
+
+**`fuzz/fuzz_targets/seccore_sandbox.rs`(L4 Security)**:
+- ✅ 正确导入 `seccore::{validate_command, validate_env, Command, CommandPolicy, EnvPolicy}`
+- ✅ 用 `String::from_utf8_lossy(data)` 处理畸形 UTF-8(避免 panic)
+- ✅ 4 个子目标:validate_command + validate_env + 1MB 超长输入 + 25 种特殊字符注入组合
+- ✅ 超长输入测试:`"A".repeat(1024 * 1024)` 验证无栈溢出
+- ✅ 注入字符覆盖:`$(cmd)` / `` `cmd` `` / `|cmd` / `;cmd` / `&&cmd` / `||cmd` / `../etc/passwd` / `sudo rm -rf /` / `curl 169.254.169.254` 等 25 种
+- ✅ 用 `let _ = validate_command(...)` 丢弃结果,只验证不 panic
+
+**`fuzz/fuzz_targets/event_serialize.rs`(L1 Core event-bus)**:
+- ✅ 正确导入 `event_bus::NexusEvent` / `event_bus::EventMetadata`
+- ✅ 4 个子目标:NexusEvent JSON/MessagePack 反序列化 + EventMetadata JSON + 256KB 超长 JSON
+- ✅ 往返不变量:JSON 和 MessagePack 双格式验证
+- ✅ 超长输入:`"A".repeat(256 * 1024)` 构造 256KB JSON 验证解析器稳定性
+- ✅ 对应 ADR-004(MessagePack 跨进程通信协议)
+
+**`fuzz/Cargo.toml` 配置**:
+- ✅ 独立 package(`name = "chimera-fuzz"`),不在主 workspace members
+- ✅ 3 个 `[[bin]]` 声明正确(`test = false` / `doc = false`)
+- ✅ path 依赖正确(`../crates/nexus-core` 等)
+- ✅ 已添加 `[package.metadata] cargo-fuzz = true`(本次修复)
+- ✅ 已添加空 `[workspace]` 表声明独立(本次修复)
+
+#### 3.5.6 限制 1 状态:部分解除
+
+| 子项 | 状态 | 说明 |
+|------|------|------|
+| nightly 工具链 | ✅ 已解除 | nightly-gnu + llvm-tools-preview 已安装 |
+| cargo-fuzz 工具 | ✅ 已解除 | v0.13.2 已安装 |
+| fuzz crate 配置 | ✅ 已解除 | metadata + workspace 已修复 |
+| fuzz target 代码 | ✅ 已解除 | 3 个 target 静态验证通过 |
+| 实际运行 fuzzing | ❌ 未解除 | libFuzzer 与 Windows GNU g++ 不兼容 |
+
+**整体状态**:**部分解除** — 环境与代码层面已就绪,但 Windows GNU 平台存在 libFuzzer 上游兼容性阻碍,无法实际执行 fuzzing。
+
+#### 3.5.7 结论
+
+fuzz 验证**未通过**(平台限制),静态验证**通过**。
+
+- **未通过原因**:libFuzzer 上游不支持 Windows GNU target,非项目代码问题
+- **静态验证结论**:3 个 fuzz target 代码逻辑正确,不变量设计合理,待 Linux/MSVC 环境可用即可直接运行
+- **建议后续行动**:
+  1. **CI 集成**(推荐):在 GitHub Actions 的 `ubuntu-latest` runner 中运行 `cargo +nightly fuzz run`,每个 target 300s
+  2. **本地 WSL2**:在 WSL2 Ubuntu 环境安装 nightly-linux + cargo-fuzz 运行
+  3. **VS Build Tools**:若需本地 Windows 运行,安装 VS 2022 Build Tools + 切换 MSVC 工具链
 
 ---
 
@@ -362,7 +498,7 @@ Caused by: [28] Timeout was reached (Operation timed out after 30001 millisecond
 
 ### 7.2 已知限制
 
-1. **模糊测试未实际运行**:无 nightly 工具链,target 已就绪待运行
+1. **模糊测试未实际运行**:nightly + cargo-fuzz 已安装,但 libFuzzer 上游不支持 Windows GNU target(`FuzzerExtFunctionsWindows.cpp` 与 g++ 不兼容),target 已就绪待 Linux/MSVC 环境运行(详见 §3.5)
 2. **依赖审计为手动检查**:cargo-audit 安装失败(网络超时),基于版本号手动比对
 3. **Windows 降级沙箱**:无 gVisor/seccomp,依赖策略层静态分析
 

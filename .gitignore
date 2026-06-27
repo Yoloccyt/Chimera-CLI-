@@ -3,6 +3,7 @@
 
 # === Rust 编译产物 ===
 target/
+target_clippy*/
 **/*.rs.bk
 *.pdb
 
