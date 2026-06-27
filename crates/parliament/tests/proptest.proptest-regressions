@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc fc68c7c1f19c0ef8981068878f270982c5b5d4fa69da74c4b440045d02bfdcdf # shrinks to opinions = [Opinion { role: Architect, position: 0.0, confidence: 0.0, rationale: "proptest 意见" }, Opinion { role: Skeptic, position: 0.0, confidence: 0.0, rationale: "proptest 意见" }, Opinion { role: Optimizer, position: 0.0, confidence: 0.0, rationale: "proptest 意见" }, Opinion { role: Librarian, position: 0.0, confidence: 0.0, rationale: "proptest 意见" }, Opinion { role: Bard, position: 0.0, confidence: 0.0, rationale: "proptest 意见" }], total_roles = 1

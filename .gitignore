@@ -1,0 +1,39 @@
+# Chimera CLI NEXUS-OMEGA — .gitignore
+# 排除编译产物、工具链缓存、临时文件,避免误纳敏感文件
+
+# === Rust 编译产物 ===
+target/
+**/*.rs.bk
+*.pdb
+
+# === Rust 工具链缓存(本地迁移至 D 盘)===
+.toolchain/
+
+# === 临时文件 ===
+tmp/
+*.tmp
+*.temp
+*.log
+
+# === IDE / 编辑器 ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === 操作系统 ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === 环境与密钥(禁止提交)===
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# === 文档二进制(非源码)===
+*.docx
+*.pdf

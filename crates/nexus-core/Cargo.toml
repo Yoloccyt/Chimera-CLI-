@@ -1,0 +1,19 @@
+[package]
+name = "nexus-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# 全部使用 workspace 共享依赖(§4.1 规范)
+ndarray = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+# rusqlite:SubTask 21.2 — sqlite_pragma 模块需要 Connection 类型
+rusqlite = { workspace = true }

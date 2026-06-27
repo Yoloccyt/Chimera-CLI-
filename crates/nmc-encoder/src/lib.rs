@@ -1,0 +1,65 @@
+//! 神经多模态上下文编码器 — 将多模态输入编码为统一的潜在表示
+//!
+//! 对应架构层:L2 Memory
+//! 对应创新点:NMC(Native Multimodal Context,原生多模态上下文编码)
+//! 设计来源:Minimax M3 Native Multimodal + 创新点 5(MPP 多模态感知管道)+ ADR-016
+//!
+//! # 核心机制
+//! 5 种模态感知器(文本/图像/视频/音频/桌面)→ 统一 CLV(512-dim f32)输出
+//! - **TextPerceptor**:SHA256 + 字符频率嵌入(已实现,Week 7/8 接入 ort ONNX)
+//! - **ImagePerceptor**:占位(Week 7/8 接入 ort ONNX)
+//! - **VideoPerceptor**:占位(Week 7/8 接入 ort ONNX)
+//! - **AudioPerceptor**:占位(Week 7/8 接入 ort ONNX)
+//! - **DesktopPerceptor**:基于区域描述文本的哈希嵌入(已实现)
+//!
+//! # 融合策略
+//! - **Concat**:拼接后截断/填充到 512 维
+//! - **Mean**:对齐维度后取平均,截断/填充到 512 维
+//! - **Weighted**:按模态权重加权求和(归一化),截断/填充到 512 维
+//!
+//! # 架构红线
+//! - 所有跨层通信走 EventBus(§2.2 依赖铁律)
+//! - 单函数 ≤ 200 行,禁止 unwrap()/expect()
+//! - 输出维度严格 512(与 CLV::DIMENSION 对齐)
+//! - 优先 impl Trait / enum dispatch,避免 `Box<dyn Trait>`
+//!
+//! # 快速示例
+//! ```
+//! use nmc_encoder::{NmcEncoder, NmcConfig, PerceptionInput};
+//! use event_bus::EventBus;
+//!
+//! let bus = EventBus::new();
+//! let encoder = NmcEncoder::with_event_bus(NmcConfig::default(), bus).unwrap();
+//! let output = encoder.perceive(PerceptionInput::Text("hello".into())).unwrap();
+//! assert_eq!(output.dimension(), 512);
+//! ```
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs, clippy::all)]
+
+// === 模块声明 ===
+pub mod config;
+pub mod error;
+pub mod fusion;
+pub mod perceptors;
+pub mod types;
+
+// === 关键类型重导出,简化外部导入 ===
+pub use config::{FusionStrategy, NmcConfig};
+pub use error::NmcError;
+pub use fusion::{MultimodalFusionEngine, NmcEncoder};
+pub use perceptors::{
+    AudioPerceptor, DesktopPerceptor, ImagePerceptor, Perceptor, TextPerceptor, VideoPerceptor,
+};
+pub use types::{ClvOutput, CognitiveElement, DesktopCapture, Modality, PerceptionInput};
+
+/// 预导入模块 — 提供最常用类型
+pub mod prelude {
+    pub use crate::config::{FusionStrategy, NmcConfig};
+    pub use crate::error::NmcError;
+    pub use crate::fusion::{MultimodalFusionEngine, NmcEncoder};
+    pub use crate::perceptors::Perceptor;
+    pub use crate::types::{
+        ClvOutput, CognitiveElement, DesktopCapture, Modality, PerceptionInput,
+    };
+}

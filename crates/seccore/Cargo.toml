@@ -1,0 +1,33 @@
+[package]
+name = "seccore"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# SHA-256 审计链哈希计算
+sha2 = { workspace = true }
+# 哈希十六进制编码(审计块、执行结果摘要)
+hex = { workspace = true }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 领域类型序列化(审计块持久化、跨进程传输)
+serde = { workspace = true, features = ["derive"] }
+# 异步沙箱执行(tokio::process::Command)
+tokio = { workspace = true }
+# 审计块时间戳(UTC)
+chrono = { workspace = true }
+# 审计/拦截事件日志
+tracing = { workspace = true }
+# Event Bus:L1 事件总线,发布 AsaIntervention 事件通知 Parliament 干预决策(§2.2 跨层通信唯一通道)
+event-bus = { path = "../event-bus" }
+
+[dev-dependencies]
+# criterion 基准测试框架(ASA 审计延迟基准)
+criterion = { workspace = true }
+# proptest:属性测试框架,用于 ASA 不变量验证(SubTask 37.7)
+proptest = { workspace = true }
+
+# criterion 基准测试配置:避免与单元测试冲突
+[[bench]]
+name = "asa_audit"
+harness = false

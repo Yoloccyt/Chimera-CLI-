@@ -1,0 +1,49 @@
+[package]
+name = "scc-cache"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core: nexus-core 提供 id_newtype! 宏
+nexus-core = { path = "../nexus-core" }
+# L1 Core: EventBus 跨层通信,发布 CacheHit/CacheMiss/CachePrefetched/CacheStatsReported 事件
+event-bus = { path = "../event-bus" }
+# 异步运行时(预取后台任务 tokio::spawn)
+tokio = { workspace = true }
+# 序列化:ContextId 的 newtype 派生
+serde = { workspace = true, features = ["derive"] }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 结构化日志(预取失败静默处理时 tracing::warn!)
+tracing = { workspace = true }
+# 线程安全分片锁(缓存条目并发读写)
+dashmap = { workspace = true }
+# UUID(EventMetadata 生成)
+uuid = { workspace = true }
+# 时间戳(EventMetadata 生成)
+chrono = { workspace = true }
+# SQLite WAL 持久化(Task 6.2:SqliteWal 真实持久化实现)
+# WHY rusqlite:workspace 已收录 0.32 + bundled + chrono;
+#   bundled 自动编译 SQLite,Windows 上无需系统预装;
+#   内部 FFI unsafe 不传播到当前 crate(#![forbid(unsafe_code)] 仅约束本 crate 源码)
+rusqlite = { workspace = true }
+
+[dev-dependencies]
+# 基准测试框架
+criterion = { workspace = true }
+# 属性测试框架
+proptest = { workspace = true }
+# 测试用临时文件/目录
+tempfile = { workspace = true }
+# JSON 序列化(测试用,验证 SccConfig 序列化往返)
+serde_json = { workspace = true }
+
+[[bench]]
+name = "cache_hit"
+harness = false
+
+# Week 8 Task 1.1:WAL 崩溃恢复压测基准
+# 1000 次崩溃恢复无数据丢失验证 + 单次恢复延迟测量
+[[bench]]
+name = "wal_recovery"
+harness = false

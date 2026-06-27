@@ -1,0 +1,16 @@
+[package]
+name = "acb-governor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L8 Parliament → L1 Core(向下依赖,event-bus 是唯一跨层通道,§2.2 依赖铁律)
+event-bus = { path = "../event-bus" }
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

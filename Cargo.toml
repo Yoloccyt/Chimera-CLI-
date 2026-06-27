@@ -1,0 +1,229 @@
+# 根 package:承载 workspace 根目录下的 E2E 集成测试(tests/e2e/*)。
+# WHY 必须显式声明 [package]:virtual manifest(只有 [workspace])不支持
+# [[test]] 与 [dev-dependencies];将根目录变为 package manifest 后,
+# Cargo 才能识别 tests/e2e/ 子目录下的 test target。
+# publish = false 防止误发布;根 package 无 lib/bin target,仅承载测试。
+[package]
+name = "chimera-e2e-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Chimera CLI NEXUS-OMEGA E2E integration tests (workspace root)"
+
+[workspace]
+members = [
+    "crates/nexus-core", "crates/event-bus", "crates/quest-engine",
+    "crates/repo-wiki", "crates/model-router", "crates/parliament",
+    "crates/pvl-layer", "crates/osa-coordinator", "crates/kvbsr-router",
+    "crates/faae-router", "crates/gea-activator", "crates/gqep-executor",
+    "crates/sesa-router", "crates/ssra-fusion", "crates/csn-substitutor",
+    "crates/mtpe-executor", "crates/mlc-engine", "crates/hcw-window",
+    "crates/cmt-tiering", "crates/scc-cache", "crates/lsct-tiering",
+    "crates/seccore", "crates/decay-engine", "crates/qeep-protocol",
+    "crates/decb-governor", "crates/acb-governor", "crates/efficiency-monitor",
+    "crates/gsoe-evolution", "crates/auto-dpo", "crates/mcp-mesh",
+    "crates/nmc-encoder", "crates/chtc-bridge", "crates/chimera-tui",
+    "crates/chimera-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0-omega"
+edition = "2021"
+authors = ["Aether CLI Team <team@aether.dev>"]
+license = "Apache-2.0"
+
+[workspace.dependencies]
+tokio = { version = "1.40", features = ["full", "tracing"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+# tracing-subscriber:日志订阅器,用于格式化输出 tracing 事件
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+clap = { version = "4.5", features = ["derive", "env", "cargo"] }
+# Figment:多源配置合并(默认 > File > Env > CLI),支持 Yaml/Toml/Json
+figment = { version = "0.10", features = ["yaml", "toml", "env"] }
+ratatui = "0.29"
+# crossterm:跨平台终端 IO(Chimera TUI 的事件循环与屏幕控制)
+# WHY 添加到 workspace:chimera-tui(L10)需要终端 IO,ratatui 默认依赖 crossterm,
+# 统一在 workspace 声明版本避免 crate 间版本冲突
+crossterm = "0.28"
+wasmtime = "22.0"
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+sqlite-vec = "0.1"
+ndarray = { version = "0.16", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+axum = "0.7"
+prometheus-client = "0.22"
+uuid = { version = "1.10", features = ["v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+once_cell = "1.20"
+dashmap = "6.1"
+criterion = { version = "0.5", features = ["html_reports"] }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = "1.0"
+# ADR-004:消息序列化协议为 MessagePack
+rmp-serde = "1.3"
+# tempfile:测试用临时文件/目录,跨平台安全
+tempfile = "3.10"
+# proptest:属性测试框架,用于不变量验证(SubTask 15.12)
+proptest = { version = "1.5", features = ["alloc"] }
+# tracing-test:测试中捕获 tracing 日志,用于验证 warn/error 日志输出(SubTask 17.2)
+tracing-test = "0.2.5"
+
+# ============================================================
+# E2E 集成测试配置(Week 6 Task 6)
+#
+# WHY 显式声明 [[test]]:测试文件位于 tests/e2e/ 子目录,
+# Cargo 默认 autodiscovery 仅扫描 tests/*.rs 直接子文件,
+# 子目录下的文件必须通过 [[test]] target 显式注册才能被识别。
+# ============================================================
+
+[[test]]
+name = "week6_setup"
+path = "tests/e2e/week6_setup.rs"
+
+[[test]]
+name = "week6_main_flow"
+path = "tests/e2e/week6_main_flow.rs"
+
+[[test]]
+name = "week6_security"
+path = "tests/e2e/week6_security.rs"
+
+# Week 5 事件流 E2E 测试(W7-2 + W7-4)
+# 验证 DECB BudgetAdjusted/BudgetExceeded 事件发布链路 + DegradedModeRejected 错误路径
+[[test]]
+name = "week5_event_flow"
+path = "tests/e2e/week5_event_flow.rs"
+
+# ============================================================
+# Week 7 集成测试配置(Task 6)
+#
+# WHY 新增 4 个 test target:Week 7 引入 4 个新 crate(mcp-mesh/
+# csn-substitutor/sesa-router/efficiency-monitor),需与既有 27 crate
+# 进行 37 模块全量集成。week7_setup 共享管线装配,week7_main_flow
+# 承载 8 条 E2E 关键路径,week7_security 覆盖 30 个攻击载荷,
+# week7_stress 执行 1000 次压测验证无内存泄漏。
+# ============================================================
+
+[[test]]
+name = "week7_setup"
+path = "tests/e2e/week7_setup.rs"
+
+[[test]]
+name = "week7_main_flow"
+path = "tests/e2e/week7_main_flow.rs"
+
+[[test]]
+name = "week7_security"
+path = "tests/e2e/week7_security.rs"
+
+[[test]]
+name = "week7_stress"
+path = "tests/stress/week7_stress.rs"
+
+# ============================================================
+# Week 8 Task 3 SubTask 3.1 — OWASP Top 10 渗透测试套件
+#
+# WHY 新增 test target:OWASP Top 10 (2021) 渗透测试位于
+# tests/security/ 子目录,Cargo 默认 autodiscovery 不扫描子目录,
+# 必须通过 [[test]] 显式注册。10 项测试覆盖 A01-A10 全部类别,
+# 利用 SecCore 沙箱验证命令注入/越权/泄露/SSRF 等攻击拦截。
+# ============================================================
+
+[[test]]
+name = "owasp_top10"
+path = "tests/security/owasp_top10.rs"
+
+# ============================================================
+# Week 8 Task 6 — 全量 E2E + 最终验收测试
+#
+# WHY 新增 4 个 test target:Task 6 覆盖 Quest 生命周期 / 37 模块全量集成 /
+# 1000 次压测 / 8 周最终验收,测试文件位于 tests/e2e/ 子目录,
+# 必须通过 [[test]] 显式注册才能被 Cargo 识别。
+# ============================================================
+
+[[test]]
+name = "quest_lifecycle"
+path = "tests/e2e/quest_lifecycle.rs"
+
+[[test]]
+name = "full_integration"
+path = "tests/e2e/full_integration.rs"
+
+[[test]]
+name = "stress_test"
+path = "tests/e2e/stress_test.rs"
+
+[[test]]
+name = "week8_final_acceptance"
+path = "tests/e2e/week8_final_acceptance.rs"
+
+# E2E 测试所需的被测 crate 与共享依赖
+# WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
+# 版本号由 workspace 统一管理(§4.1 通用约定)。
+[dev-dependencies]
+# L1 Core:EventBus 是 E2E 测试的核心编排通道
+event-bus = { path = "crates/event-bus" }
+# L1 Core:nexus-core 领域类型(UserIntent / Quest / Task / TaskStatus)
+nexus-core = { path = "crates/nexus-core" }
+# Week 6 五个被测 crate(L2/L3/L5/L7/L10)
+nmc-encoder = { path = "crates/nmc-encoder" }        # L2 Memory
+lsct-tiering = { path = "crates/lsct-tiering" }      # L3 Storage
+cmt-tiering = { path = "crates/cmt-tiering" }        # L3 Storage(Tier 类型复用)
+gsoe-evolution = { path = "crates/gsoe-evolution" }  # L5 Knowledge
+ssra-fusion = { path = "crates/ssra-fusion" }        # L7 Execution
+chtc-bridge = { path = "crates/chtc-bridge" }        # L10 Interface
+# Week 5 事件流 E2E 测试(W7-2 + W7-4)被测 crate(L8 Parliament)
+parliament = { path = "crates/parliament" }          # L8 Parliament(RoleRegistry)
+decb-governor = { path = "crates/decb-governor" }    # L8 Parliament(DECB 治理器)
+# Week 7 四个被测 crate(L6/L9/L10)
+mcp-mesh = { path = "crates/mcp-mesh" }              # L10 Interface(MCP 量子网格)
+csn-substitutor = { path = "crates/csn-substitutor" } # L10 Interface(能力替代网络)
+sesa-router = { path = "crates/sesa-router" }        # L6 Router(子专家稀疏激活)
+efficiency-monitor = { path = "crates/efficiency-monitor" } # L9 Quest(效率监控)
+# Week 8 Task 3:SecCore 零信任沙箱(OWASP Top 10 渗透测试被测 crate)
+seccore = { path = "crates/seccore" }                # L4 Security(沙箱+审计链+ASA)
+# Week 8 Task 6 新增被测 crate(Quest 生命周期 / 全量集成 / 压测 / 8 周验收)
+quest-engine = { path = "crates/quest-engine" }      # L9 Quest(Quest 生命周期 E2E)
+repo-wiki = { path = "crates/repo-wiki" }            # L5 Knowledge(Wiki 沉淀)
+model-router = { path = "crates/model-router" }      # L1 Core(模型路由)
+osa-coordinator = { path = "crates/osa-coordinator" } # L6 Router(OSA 五维度稀疏)
+pvl-layer = { path = "crates/pvl-layer" }            # L7 Execution(PVL 生产验证)
+qeep-protocol = { path = "crates/qeep-protocol" }    # L4 Security(QEEP 零孤儿)
+decay-engine = { path = "crates/decay-engine" }      # L4 Security(能力衰减)
+mlc-engine = { path = "crates/mlc-engine" }          # L2 Memory(四级记忆)
+hcw-window = { path = "crates/hcw-window" }          # L2 Memory(分层上下文窗口)
+kvbsr-router = { path = "crates/kvbsr-router" }      # L6 Router(KV 块语义路由)
+gea-activator = { path = "crates/gea-activator" }    # L6 Router(门控专家激活)
+gqep-executor = { path = "crates/gqep-executor" }    # L6 Router(聚集执行)
+mtpe-executor = { path = "crates/mtpe-executor" }    # L7 Execution(多步预测)
+scc-cache = { path = "crates/scc-cache" }            # L3 Storage(推测缓存+WAL)
+acb-governor = { path = "crates/acb-governor" }      # L8 Parliament(自适应预算)
+auto-dpo = { path = "crates/auto-dpo" }              # L5 Knowledge(偏好对生成)
+# 共享依赖(从 workspace 继承版本)
+tokio = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tempfile = { workspace = true }
+
+# ============================================================
+# Week 8 Task 4 — Release Profile 体积优化
+#
+# WHY: 发布构建需最小化 binary 体积以满足 < 50MB 约束。
+# - strip:        移除调试符号,大幅减小体积
+# - panic=abort:  避免 unwind 表展开(代价:panic 直接退出,不 unwind)
+# - opt-level=z:  优化目标为体积最小(比 "s" 更激进,比 3 体积小但速度略低)
+# - lto=true:     跨 crate 链接时优化,消除死代码
+# - codegen-units=1: 单 codegen unit,最大化优化空间(代价:编译变慢,release 可接受)
+# ============================================================
+[profile.release]
+strip = true
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1

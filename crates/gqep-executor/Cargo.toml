@@ -1,0 +1,42 @@
+[package]
+name = "gqep-executor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core:提供 id_newtype! 宏(生成 OperationId newtype)
+nexus-core = { path = "../nexus-core" }
+# L1 Core:跨层通信唯一通道,发布 GatherCompleted/OperationTimedOut/OrphanCallDetected 事件
+event-bus = { path = "../event-bus" }
+# L4 Security:QEEP 协议,提供 OrphanDetector 与 entangle 包裹(零孤儿调用保证)
+qeep-protocol = { path = "../qeep-protocol" }
+# 异步运行时:tokio::time::timeout 包装单操作超时
+tokio = { workspace = true }
+# 配置与结果类型序列化(#[derive(Serialize, Deserialize)])
+serde = { workspace = true, features = ["derive"] }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 结构化日志(事件发布失败告警)
+tracing = { workspace = true }
+# FuturesUnordered 流式聚集(对应 A.2 设计决策:流式处理,内存占用更低)
+futures = "0.3"
+# UUIDv7 操作 ID 生成(时间有序,便于追溯)
+uuid = { workspace = true }
+# 时间戳(聚集延迟计算)
+chrono = { workspace = true }
+
+[dev-dependencies]
+# 性能基准框架(SubTask 24.6)
+# WHY async_tokio:启用 `Bencher::to_async` 方法,支持异步基准测试
+criterion = { workspace = true, features = ["async_tokio"] }
+# 属性测试框架(SubTask 24.6)
+proptest = { workspace = true }
+# tokio 测试工具
+tokio-test = "0.4"
+# JSON 序列化测试(config.rs serde 往返测试)
+serde_json = { workspace = true }
+
+# 性能基准配置:harness=false 以使用 criterion 自定义 main
+[[bench]]
+name = "gather"
+harness = false

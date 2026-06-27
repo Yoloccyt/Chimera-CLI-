@@ -1,0 +1,51 @@
+[package]
+name = "parliament"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core:提供 id_newtype! 宏(生成 RoleId newtype)与 Quest 领域类型
+nexus-core = { path = "../nexus-core" }
+# L1 Core:跨层通信唯一通道,发布 ConsensusReached/VoteCast 事件
+event-bus = { path = "../event-bus" }
+# L4 Security:AHIRT 调用 validate_command 探测命令注入/提权/沙箱逃逸(L8→L4 向下依赖允许)
+seccore = { path = "../seccore" }
+# 异步运行时:tokio::time::timeout 包装辩论超时,sync::RwLock 保护角色注册表
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+# 配置与结果类型序列化(#[derive(Serialize, Deserialize)])
+serde = { workspace = true, features = ["derive"] }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 结构化日志(DebateStarted/RoleRegistered 等未集成事件用 tracing 记录)
+tracing = { workspace = true }
+# FuturesUnordered 流式并发收集 5 角色 Opinion(对应 A.2 设计决策)
+futures = "0.3"
+# UUIDv7 ID 生成(提案 ID、决议哈希等,时间有序便于追溯)
+uuid = { workspace = true }
+# SHA-256 决议内容哈希(共识达成后生成 decision_hash)
+sha2 = { workspace = true }
+# hex 编码(将 SHA-256 字节转为 hex 字符串)
+hex = { workspace = true }
+
+[dev-dependencies]
+# 性能基准框架(SubTask 30.5)
+# WHY async_tokio:启用 `Bencher::to_async` 方法,支持异步基准测试
+criterion = { workspace = true, features = ["async_tokio"] }
+# 属性测试框架
+proptest = { workspace = true }
+# JSON 序列化测试(config.rs serde 往返测试)
+serde_json = { workspace = true }
+# 测试中捕获 tracing 日志
+tracing-test = { workspace = true }
+# AHIRT 并发测试需要 macros(#[tokio::test])与 rt-multi-thread(多线程运行时)
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# SubTask 37.2/37.3:E2E 认知治理流程测试与 CSA 延迟验证需要 TTG 模式选择
+# WHY dev-dependencies:测试专用依赖,不污染生产依赖图(§2.2 依赖铁律)
+quest-engine = { path = "../quest-engine" }
+# SubTask 37.2/37.3:E2E 测试需要 DECB 预算计算与档位切换
+decb-governor = { path = "../decb-governor" }
+
+# 性能基准配置:harness=false 以使用 criterion 自定义 main
+[[bench]]
+name = "debate"
+harness = false

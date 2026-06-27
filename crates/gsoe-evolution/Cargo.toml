@@ -1,0 +1,24 @@
+[package]
+name = "gsoe-evolution"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+ndarray = { workspace = true }
+event-bus = { path = "../event-bus" }
+nexus-core = { path = "../nexus-core" }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true, features = ["async_tokio"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[[bench]]
+name = "evolution_benchmark"
+harness = false

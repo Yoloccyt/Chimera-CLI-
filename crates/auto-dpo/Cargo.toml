@@ -1,0 +1,16 @@
+[package]
+name = "auto-dpo"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L5 Knowledge → L1 Core(向下依赖,event-bus 是唯一跨层通道,§2.2 依赖铁律)
+event-bus = { path = "../event-bus" }
+tokio = { workspace = true, features = ["sync"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
