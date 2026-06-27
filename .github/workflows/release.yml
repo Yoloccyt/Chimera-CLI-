@@ -202,6 +202,28 @@ jobs:
           fi
           echo "OK: Image size within 100MB limit"
 
+      - name: Verify image functionality (--version)
+        run: |
+          # WHY 显式 docker pull:虽然 build-push-action 已推送镜像,但本地缓存不等于
+          # 用户可拉取。此步骤模拟真实用户安装路径,验证 GHCR 上的镜像可被公开拉取。
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.ref_name }}"
+          echo "Pulling image: $IMAGE"
+          docker pull "$IMAGE"
+
+          # 运行 --version 验证 binary 功能正常(distroless 镜像无 shell,直接执行 binary)
+          echo "Running: docker run --rm $IMAGE --version"
+          VERSION_OUTPUT=$(docker run --rm "$IMAGE" --version)
+          echo "Version output: $VERSION_OUTPUT"
+
+          # 验证输出格式:必须匹配 aether|chimera X.Y.Z[-omega](确保 binary 未损坏)
+          if ! echo "$VERSION_OUTPUT" | grep -qE '^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "ERROR: --version output does not match expected format"
+            echo "Expected: aether|chimera X.Y.Z[-omega]"
+            echo "Actual: $VERSION_OUTPUT"
+            exit 1
+          fi
+          echo "OK: Image functionality verified (--version output valid)"
+
   # ============================================================
   # Job 3: 汇总所有平台产物,创建 GitHub Release
   # ============================================================
