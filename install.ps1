@@ -4,7 +4,7 @@
 #
 # 用法:
 #   iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
-#   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-SkipVerify]
+#   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-SkipVerify] [-SetupEnv]
 #
 # 功能:
 #   - 自动检测架构 (x86_64/aarch64)
@@ -12,18 +12,67 @@
 #   - 安装到 $env:LOCALAPPDATA\Programs\chimera\ (默认)
 #   - 添加到用户 PATH (通过 [Environment]::SetEnvironmentVariable)
 #   - 验证安装: chimera --version
+#   - (-SetupEnv) 自动注入工具链环境变量到用户级
 # ============================================================
 
 # param 块必须紧跟注释区,在任何可执行代码之前
 param(
     [string]$Version = '',
     [string]$InstallDir = '',
-    [switch]$SkipVerify
+    [switch]$SkipVerify,
+    [switch]$SetupEnv
 )
 
 # 严格模式: 捕获未定义变量、强制类型转换失败
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# ------------------ 工具链环境变量自动化 ------------------
+# WHY: 新克隆者需手动设置 CARGO_HOME/RUSTUP_HOME/PATH 才能编译,
+#      此函数将工具链 env 注入用户级环境变量,持久化避免每次新 shell 重复设置。
+#      仅 Windows 平台适用,路径硬编码至项目默认 .toolchain 目录。
+function Set-Environment {
+    <#
+    .SYNOPSIS
+        自动设置 Chimera CLI 工具链环境变量(CARGO_HOME/RUSTUP_HOME/PATH)
+    .DESCRIPTION
+        将 D:\Chimera CLI\.toolchain\cargo 与 D:\msys64\mingw64\bin 注入用户级
+        环境变量,持久化保存。仅 Windows 平台适用。
+        覆盖 §10.5 已知基建短板"环境变量仍需手动设置"。
+    .EXAMPLE
+        .\install.ps1 -SetupEnv
+    #>
+    $toolchainCargo = 'D:\Chimera CLI\.toolchain\cargo\bin'
+    $toolchainCargoHome = 'D:\Chimera CLI\.toolchain\cargo'
+    $toolchainRustupHome = 'D:\Chimera CLI\.toolchain\rustup'
+    $mingwBin = 'D:\msys64\mingw64\bin'
+
+    # 设置 CARGO_HOME / RUSTUP_HOME(用户级,持久化)
+    [Environment]::SetEnvironmentVariable('CARGO_HOME', $toolchainCargoHome, 'User')
+    [Environment]::SetEnvironmentVariable('RUSTUP_HOME', $toolchainRustupHome, 'User')
+    Write-Ok "已设置 CARGO_HOME=$toolchainCargoHome"
+    Write-Ok "已设置 RUSTUP_HOME=$toolchainRustupHome"
+
+    # 检查并注入 PATH(避免重复添加)
+    $currentPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+    if (-not $currentPath) { $currentPath = '' }
+    if ($currentPath -notlike "*$toolchainCargo*") {
+        $newPath = "$toolchainCargo;$mingwBin;$currentPath"
+        [Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')
+        Write-Ok "已将 $toolchainCargo 注入用户 PATH"
+    } else {
+        Write-WarnMsg "$toolchainCargo 已在 PATH 中"
+    }
+
+    Write-Host ""
+    Write-Host "请重新打开 PowerShell 终端使环境变量生效。" -ForegroundColor Cyan
+}
+
+# -SetupEnv 短路: 仅设置环境变量后立即退出,不进入下载安装流程
+if ($SetupEnv) {
+    Set-Environment
+    exit 0
+}
 
 # ------------------ 配置常量 ------------------
 # InstallDir 默认值需要延迟到运行时计算 (依赖 $env:LOCALAPPDATA)
@@ -252,12 +301,27 @@ try {
     # ------------------ 验证安装 ------------------
     Write-Info '验证安装...'
     try {
-        $versionOutput = & $installPath --version 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        # 与 release.yml docker job line 229 完全一致(POSIX grep -E → PowerShell -cmatch)
+        # 避免仅检退出码导致 binary 损坏但退出码 0 的假阳性
+        $versionOutput = (& $installPath --version 2>&1 | Out-String).Trim()
+        $versionRegex = '^(aether|chimera) \d+\.\d+\.\d+'
+        $matched = $false
+        if ($LASTEXITCODE -eq 0 -and $versionOutput) {
+            foreach ($line in ($versionOutput -split "`n")) {
+                if ($line.TrimEnd("`r") -cmatch $versionRegex) {
+                    $matched = $true
+                    break
+                }
+            }
+        }
+        if ($matched) {
             Write-Ok '安装成功!'
             Write-Host "  $versionOutput" -ForegroundColor DarkGray
         } else {
-            Write-WarnMsg "$installPath --version 退出码: $LASTEXITCODE"
+            Write-WarnMsg "$installPath --version 验证失败"
+            Write-WarnMsg "期望格式: aether|chimera X.Y.Z[-omega]"
+            Write-WarnMsg "实际输出: $versionOutput"
+            Write-WarnMsg "退出码: $LASTEXITCODE"
             Write-WarnMsg "请手动执行: $installPath --version"
         }
     } catch {

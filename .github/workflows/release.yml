@@ -11,7 +11,8 @@ name: Release
 on:
   push:
     tags:
-      - 'v1.0.0-omega'
+      # WHY: 仅保留通配模式 v*.*.*-omega,已覆盖 v1.0.0-omega;
+      # 显式列举具体版本会造成后续发版需手动追加,违反 DRY
       - 'v*.*.*-omega'
   workflow_dispatch:  # 允许手动触发,便于调试
 
@@ -21,6 +22,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # WHY: panic=abort 下 release binary 无 unwind 表,线上 panic 默认无栈可追;
+  #      全局开启 RUST_BACKTRACE=1 让 build/test/docker/release 所有 job 在
+  #      panic 时输出 backtrace,便于 CI 日志定位根因(对应 §10.5 P1 修复)
+  RUST_BACKTRACE: 1
 
 jobs:
   # ============================================================
@@ -29,6 +34,7 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30  # WHY: 5 平台 matrix × release LTO 编译典型 8-15min,30min 兜底防卡死
     strategy:
       fail-fast: false  # 单平台失败不阻塞其他平台
       matrix:
@@ -129,6 +135,9 @@ jobs:
   test:
     name: Test (ubuntu-latest)
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # WHY: workspace 全量测试典型 5-12min,30min 兜底防卡死
+    # WHY: 仅 tag 推送时触发测试,避免 workflow_dispatch 调试时重复跑全量测试
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -150,6 +159,7 @@ jobs:
     name: Docker Image
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # WHY: docker build+push+验证典型 4-8min,30min 兜底防 registry 网络抖动卡死
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
@@ -231,6 +241,7 @@ jobs:
     name: Publish GitHub Release
     needs: [build, test, docker]
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # WHY: 产物下载+Release 创建典型 1-3min,30min 兜底防 GitHub API 抖动
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download all artifacts
@@ -241,6 +252,27 @@ jobs:
       - name: List artifacts (debug)
         run: ls -laR artifacts
 
+      - name: Generate checksums.txt
+        # WHY: install.sh line 216-260 和 install.ps1 line 199-242 会从 Release 下载
+        # checksums.txt 做 SHA256 校验,缺失则校验空转(warn 跳过)。此 step 生成
+        # 与两端解析逻辑对齐的格式(<64-hex>  <filename> 双空格),并校验 5 平台
+        # 产物全部纳入(防止 matrix 部分失败导致 checksums 不完整)。
+        run: |
+          cd artifacts
+          find . -type f | sort | while IFS= read -r f; do
+            bn=$(basename "$f")
+            hash=$(sha256sum "$f" | awk '{print $1}')
+            printf '%s  %s\n' "$hash" "$bn"
+          done > ../checksums.txt
+          EXPECTED_COUNT=5
+          ACTUAL_COUNT=$(wc -l < ../checksums.txt | tr -d ' ')
+          if [ "$ACTUAL_COUNT" -ne "$EXPECTED_COUNT" ]; then
+            echo "::error::Expected $EXPECTED_COUNT artifacts in checksums.txt, got $ACTUAL_COUNT"
+            exit 1
+          fi
+          echo "checksums.txt generated ($ACTUAL_COUNT entries):"
+          cat ../checksums.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -249,6 +281,7 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/*/*
+            checksums.txt
           draft: false
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           body: |
@@ -270,5 +303,8 @@ jobs:
 
             ### Docker
             ```bash
+            # 拉取 GHCR 镜像(distroless,< 100MB,非 root 运行)
             docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            # 验证镜像可用性(应输出版本号)
+            docker run --rm ghcr.io/${{ github.repository }}:${{ github.ref_name }} --version
             ```
