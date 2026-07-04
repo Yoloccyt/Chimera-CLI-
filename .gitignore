@@ -38,3 +38,12 @@ secrets/
 # === 文档二进制(非源码)===
 *.docx
 *.pdf
+
+# === 发布构建产物 ===
+dist/
+*.exe
+*.zip
+
+# === 本地决策不入库的文档(用户选择)===
+.claude/
+.trae/specs/d-disk-space-exhaustion-root-cause/
