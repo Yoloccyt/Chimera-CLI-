@@ -90,6 +90,17 @@ pub enum McpError {
         /// 错误原因
         reason: String,
     },
+
+    /// SSRF 拦截:endpoint 指向内网/保留地址(回环/私有/链路本地/云元数据等)
+    ///
+    /// WHY: ServerRegistry 是 L10 跨进程通信入口,接受任意 endpoint 会让攻击者
+    /// 借 mesh 事务机制触发对内网服务(如 AWS 元数据 169.254.169.254、K8s API、
+    /// 内网数据库)的请求。此错误在 register 阶段提前拦截,从源头切断 SSRF 路径。
+    #[error("SSRF 拦截: endpoint 指向内网/保留地址: {endpoint}")]
+    SsrfBlocked {
+        /// 被拦截的 endpoint(原样回显,便于排查)
+        endpoint: String,
+    },
 }
 
 #[cfg(test)]

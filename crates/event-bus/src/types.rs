@@ -1128,8 +1128,16 @@ impl NexusEvent {
     /// 判断事件是否为关键事件(Critical)
     ///
     /// 关键事件:CheckpointSaved、ConsensusReached、SlowConsumerDropped、
-    /// OrphanCallDetected(Week 4 新增)、SkepticVeto/RedTeamAudit(Week 5 新增)
+    /// OrphanCallDetected(Week 4 新增)、SkepticVeto/RedTeamAudit(Week 5 新增)、
+    /// BudgetExceeded(F-001 修复:Hard Constraint 第 10 条要求)
     /// 这些事件丢失会导致系统状态不一致或告警遗漏
+    ///
+    /// WHY BudgetExceeded 标记为 Critical:预算耗尽是系统红线,意味着资源
+    /// 已达上限,必须立即触发背压保护(走 mpsc 点对点通道确保投递)并通知
+    /// Parliament 触发降级或终止。若标为 Normal,在背压场景下可能被丢弃,
+    /// 导致预算超限无人响应、Quest 持续消耗资源直至 OOM,违反架构红线
+    /// "1M Token 暴力加载"的预防机制。此为 Hard Constraint 第 10 条的
+    /// 强制要求(F-001 修复)。
     ///
     /// WHY:Week 3 新增的 4 个变体(ContextWindowSwitched/ContextCompressed/
     /// CapabilityTiered/BlocksRebalanced)均为 Normal 级别,由通配符分支
@@ -1146,7 +1154,8 @@ impl NexusEvent {
             | Self::SlowConsumerDropped { .. }
             | Self::OrphanCallDetected { .. }
             | Self::SkepticVeto { .. }
-            | Self::RedTeamAudit { .. } => EventSeverity::Critical,
+            | Self::RedTeamAudit { .. }
+            | Self::BudgetExceeded { .. } => EventSeverity::Critical,
             _ => EventSeverity::Normal,
         }
     }
@@ -1713,5 +1722,29 @@ mod tests {
         let bytes = crate::bus::serialize_msgpack(&e).unwrap();
         let decoded = crate::bus::deserialize_msgpack(&bytes).unwrap();
         assert_eq!(e, decoded);
+    }
+
+    // ============================================================
+    // F-001 回归测试:验证 BudgetExceeded severity == Critical
+    // Hard Constraint 第 10 条:BudgetExceeded 必须标记为 Critical
+    // WHY:预算耗尽是系统红线,若被通配符误判为 Normal,在背压场景下
+    // 可能被丢弃,导致预算超限无人响应、Quest 持续消耗资源直至 OOM。
+    // 此测试守护 severity() 显式分支,防止未来重构时意外回退。
+    // ============================================================
+
+    #[test]
+    fn test_budget_exceeded_severity_is_critical() {
+        let e = NexusEvent::BudgetExceeded {
+            metadata: EventMetadata::new("decb-governor"),
+            budget_type: "token".into(),
+            current: 10_000,
+            limit: 8_000,
+        };
+        assert_eq!(
+            e.severity(),
+            EventSeverity::Critical,
+            "BudgetExceeded 必须为 Critical (Hard Constraint 第 10 条)"
+        );
+        assert_eq!(e.type_name(), "BudgetExceeded");
     }
 }

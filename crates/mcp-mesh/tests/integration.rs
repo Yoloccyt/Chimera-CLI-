@@ -23,7 +23,8 @@ fn make_mesh_with_5_servers() -> McpMesh {
     let mesh = McpMesh::new(MeshConfig::default());
     for i in 0..5 {
         let sid = format!("s-{i}");
-        mesh.register_server(MeshServer::new(sid, format!("127.0.0.1:{i}"), vec![]))
+        // 使用 RFC 5737 TEST-NET-3 地址,绕过 SSRF 校验
+        mesh.register_server(MeshServer::new(sid, format!("203.0.113.1:{i}"), vec![]))
             .expect("注册失败");
     }
     mesh
@@ -35,7 +36,8 @@ fn make_mesh_with_5_servers_and_bus() -> (McpMesh, EventBus) {
     let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus.clone());
     for i in 0..5 {
         let sid = format!("s-{i}");
-        mesh.register_server(MeshServer::new(sid, format!("127.0.0.1:{i}"), vec![]))
+        // 使用 RFC 5737 TEST-NET-3 地址,绕过 SSRF 校验
+        mesh.register_server(MeshServer::new(sid, format!("203.0.113.1:{i}"), vec![]))
             .expect("注册失败");
     }
     (mesh, bus)
@@ -145,7 +147,7 @@ async fn test_transaction_timeout_triggers_rollback() {
     for i in 0..5 {
         mesh.register_server(MeshServer::new(
             format!("s-{i}"),
-            format!("127.0.0.1:{i}"),
+            format!("203.0.113.1:{i}"),
             vec![],
         ))
         .expect("注册失败");
@@ -232,7 +234,7 @@ async fn test_1000_transactions_all_publish_events() {
     let mesh = McpMesh::with_event_bus(config, bus.clone());
     for i in 0..5 {
         let sid = format!("s-{i}");
-        mesh.register_server(MeshServer::new(sid, format!("127.0.0.1:{i}"), vec![]))
+        mesh.register_server(MeshServer::new(sid, format!("203.0.113.1:{i}"), vec![]))
             .expect("注册失败");
     }
     let mut rx = bus.subscribe();
@@ -282,7 +284,7 @@ async fn test_server_registry_lifecycle() {
     assert!(matches!(err, McpError::ServerNotFound { .. }));
 
     // 重新注册
-    mesh.register_server(MeshServer::new("s-2", "127.0.0.1:2", vec![]))
+    mesh.register_server(MeshServer::new("s-2", "203.0.113.1:2", vec![]))
         .expect("注册失败");
     assert_eq!(mesh.registry().len(), 5);
 

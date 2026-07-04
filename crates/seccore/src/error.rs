@@ -2,6 +2,8 @@
 //!
 //! 所有错误携带足够的上下文信息,便于审计追溯与上层决策。
 
+use std::time::Duration;
+
 use thiserror::Error;
 
 use crate::types::AttackType;
@@ -39,6 +41,20 @@ pub enum SecCoreError {
     /// 沙箱执行错误 — 进程启动、等待、信号处理等失败。
     #[error("沙箱执行错误: {0}")]
     SandboxError(String),
+
+    /// 沙箱执行超时 — 子进程未在规定时间内完成,已被强制终止。
+    ///
+    /// WHY: 防止恶意命令(如 `sleep infinity`、死循环)永久阻塞子进程,导致 DoS (F-002)。
+    /// 超时后子进程通过 `kill_on_drop` 被 SIGKILL 强制终止,确保不残留孤儿进程。
+    ///
+    /// 触发场景:命令执行时长超过 `Sandbox::timeout`(默认 30 秒,可配置)。
+    #[error("沙箱执行超时: 程序 '{program}' 未在 {timeout:?} 内完成, 已强制终止")]
+    SandboxTimeout {
+        /// 超时时长(来自 Sandbox 配置)
+        timeout: Duration,
+        /// 被终止的程序名(用于审计追溯)
+        program: String,
+    },
 
     /// 审计错误 — 审计链追加、验证、序列化失败。
     #[error("审计错误: {0}")]

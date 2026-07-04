@@ -19,7 +19,7 @@
 //!
 //! # async fn run() {
 //! let mesh = McpMesh::new(MeshConfig::default());
-//! mesh.register_server(MeshServer::new("s-1", "127.0.0.1:8080", vec!["tool-a".into()])).unwrap();
+//! mesh.register_server(MeshServer::new("s-1", "203.0.113.1:8080", vec!["tool-a".into()])).unwrap();
 //!
 //! let result = mesh.execute_transaction(vec!["s-1".into()], "query".into()).await.unwrap();
 //! assert!(result.success);

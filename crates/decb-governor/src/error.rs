@@ -18,7 +18,8 @@ pub enum DecbError {
     ///
     /// WHY:BudgetExceeded 是溢出检测的核心信号,携带预算类型、当前值与上限,
     /// 便于上层(L8 Parliament)决策是否拒绝新 Quest 或触发降级链路。
-    /// TODO(Week 5 Task 37):集成到 event-bus,发布 `BudgetExceeded` 事件
+    /// 已集成 event-bus:`governor.rs::record_consumption` 在溢出时通过
+    /// `publish_blocking` 发布 `BudgetExceeded` 事件 `[Critical]`(§6.2 红线)。
     #[error("budget exceeded: {budget_type} current={current} limit={limit}")]
     BudgetExceeded {
         /// 预算类型(如 "token"、"tool_call"、"total_cost")

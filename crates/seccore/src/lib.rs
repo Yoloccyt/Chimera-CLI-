@@ -16,6 +16,20 @@
 //! 3. 沙箱执行(`sandbox::Sandbox`):进程隔离(Windows 降级)/gVisor(Linux)
 //! 4. 审计记录(`audit::AuditChain`):SHA-256 Merkle 链,不可篡改
 //! 5. ASA 审计(`asa::AsaAuditor`):基于规则的实时评分,干预分级时发布 `AsaIntervention` 事件
+//!
+//! # 快速示例
+//! ```no_run
+//! use seccore::{Command, Sandbox};
+//!
+//!
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut sandbox = Sandbox::with_default_policy();
+//! let cmd = Command::new("ls").arg("-la");
+//! let result = sandbox.audit_and_execute(cmd).await?;
+//! println!("exit_code={}, audit_hash={}", result.exit_code, result.audit_hash);
+//! # Ok(())
+//! # }
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]

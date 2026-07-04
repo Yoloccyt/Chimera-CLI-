@@ -41,21 +41,38 @@ pub struct Sandbox {
     pub env_policy: EnvPolicy,
     /// 审计链(SHA-256 Merkle 链)
     pub audit_chain: AuditChain,
+    /// 沙箱执行超时 — 防止恶意命令(如 `sleep infinity`)永久阻塞,导致 DoS (F-002)。
+    ///
+    /// WHY: 无超时限制时,恶意命令可永久阻塞子进程,耗尽调度资源造成 DoS。
+    /// 默认 30 秒,可通过 `with_timeout` 按场景调整(如长命令设为 5 分钟)。
+    pub timeout: Duration,
 }
 
 impl Sandbox {
     /// 创建沙箱,携带指定的命令策略与环境变量策略。
+    ///
+    /// 默认超时 30 秒(防止恶意命令永久阻塞),可用 `with_timeout` 调整。
     pub fn new(policy: CommandPolicy, env_policy: EnvPolicy) -> Self {
         Self {
             policy,
             env_policy,
             audit_chain: AuditChain::new(),
+            timeout: Duration::from_secs(30),
         }
     }
 
     /// 创建使用默认安全策略的沙箱。
     pub fn with_default_policy() -> Self {
         Self::new(CommandPolicy::default_secure(), EnvPolicy::default_secure())
+    }
+
+    /// 链式设置沙箱执行超时(F-002)。
+    ///
+    /// WHY: 不同场景命令耗时差异大,需可配置超时。短命令设小超时快速失败,
+    /// 长命令(如构建)设大超时避免误杀。默认 30 秒。
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// 审计并执行命令 — 零信任四层防御的统一入口。
@@ -138,11 +155,27 @@ impl Sandbox {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        // 执行并等待完成
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| SecCoreError::SandboxError(format!("进程启动失败: {e}")))?;
+        // WHY: kill_on_drop 确保超时 future 被 drop 时子进程被 SIGKILL 强制终止
+        // 防止超时后子进程继续运行成为孤儿进程,持续占用资源 (F-002)
+        cmd.kill_on_drop(true);
+
+        // WHY: 超时保护 — 防止恶意命令(如 sleep infinity、死循环)永久阻塞,导致 DoS (F-002)
+        // tokio::time::timeout 包裹 cmd.output():超时后 future 被 drop,
+        // 触发 kill_on_drop 强制终止子进程。cmd.output() 内部并行读取管道与等待,
+        // 避免大输出填满管道缓冲区导致死锁(恶意命令可能故意产生大量输出)。
+        let output = match tokio::time::timeout(self.timeout, cmd.output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                return Err(SecCoreError::SandboxError(format!("进程执行失败: {e}")));
+            }
+            Err(_) => {
+                // 超时:kill_on_drop(true) 已在 future drop 时强制终止子进程
+                return Err(SecCoreError::SandboxTimeout {
+                    timeout: self.timeout,
+                    program: spec.program.clone(),
+                });
+            }
+        };
 
         let duration = start.elapsed();
 

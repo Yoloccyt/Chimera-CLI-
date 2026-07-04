@@ -45,6 +45,19 @@ pub struct DecbConfig {
     pub urgency_factor_min: f32,
     /// 紧急度因子上限
     pub urgency_factor_max: f32,
+    /// 溢出警告阈值(默认 0.5):消耗占比 >= 此值仅告警,不降级
+    ///
+    /// WHY 配置化:不同部署场景对预算敏感度不同,边缘场景可能希望更早告警(0.4),
+    /// 批处理场景可容忍更高占用(0.6)。默认 0.5 保持向后兼容
+    pub overflow_warn_ratio: f64,
+    /// 溢出降级阈值(默认 0.8):消耗占比 >= 此值降级到 LowTier
+    ///
+    /// WHY 配置化:与 overflow_warn_ratio 配合,允许按场景调整降级触发点
+    pub overflow_degrade_ratio: f64,
+    /// 溢出临界阈值(默认 1.0):消耗占比 >= 此值降级到 Degraded
+    ///
+    /// WHY 配置化:某些场景允许短暂超支(如 1.2),默认 1.0(100%)保持原语义
+    pub overflow_critical_ratio: f64,
 }
 
 impl Default for DecbConfig {
@@ -63,6 +76,10 @@ impl Default for DecbConfig {
             complexity_factor_max: 1.5,
             urgency_factor_min: 0.8,
             urgency_factor_max: 1.2,
+            // WHY 默认值与原硬编码常量一致(0.5/0.8/1.0),保持向后兼容
+            overflow_warn_ratio: 0.5,
+            overflow_degrade_ratio: 0.8,
+            overflow_critical_ratio: 1.0,
         }
     }
 }
@@ -158,6 +175,36 @@ impl DecbConfig {
                 ),
             });
         }
+        // WHY 校验溢出阈值:三级阈值必须严格递增(warn < degrade < critical),
+        // 否则 check_overflow 的 if-elif 链会失效(如 warn >= critical 时永不到达 critical 分支)。
+        // 同时禁止 NaN/负值,防止 ratio 比较产生未定义行为。
+        for (name, val) in [
+            ("overflow_warn_ratio", self.overflow_warn_ratio),
+            ("overflow_degrade_ratio", self.overflow_degrade_ratio),
+            ("overflow_critical_ratio", self.overflow_critical_ratio),
+        ] {
+            if val.is_nan() || val < 0.0 {
+                return Err(DecbError::ConfigError {
+                    detail: format!("{name} ({val}) must be finite and >= 0.0"),
+                });
+            }
+        }
+        if self.overflow_warn_ratio >= self.overflow_degrade_ratio {
+            return Err(DecbError::ConfigError {
+                detail: format!(
+                    "overflow_warn_ratio ({}) must be < overflow_degrade_ratio ({})",
+                    self.overflow_warn_ratio, self.overflow_degrade_ratio
+                ),
+            });
+        }
+        if self.overflow_degrade_ratio >= self.overflow_critical_ratio {
+            return Err(DecbError::ConfigError {
+                detail: format!(
+                    "overflow_degrade_ratio ({}) must be < overflow_critical_ratio ({})",
+                    self.overflow_degrade_ratio, self.overflow_critical_ratio
+                ),
+            });
+        }
         Ok(())
     }
 }
@@ -181,6 +228,9 @@ mod tests {
         assert!((cfg.complexity_factor_max - 1.5).abs() < 1e-6);
         assert!((cfg.urgency_factor_min - 0.8).abs() < 1e-6);
         assert!((cfg.urgency_factor_max - 1.2).abs() < 1e-6);
+        assert!((cfg.overflow_warn_ratio - 0.5).abs() < 1e-9);
+        assert!((cfg.overflow_degrade_ratio - 0.8).abs() < 1e-9);
+        assert!((cfg.overflow_critical_ratio - 1.0).abs() < 1e-9);
     }
 
     #[test]
@@ -283,6 +333,48 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_overflow_ratios_not_strictly_increasing() {
+        // warn == degrade → 违反严格递增
+        let cfg = DecbConfig {
+            overflow_warn_ratio: 0.8,
+            overflow_degrade_ratio: 0.8,
+            overflow_critical_ratio: 1.0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+
+        // degrade > critical → 违反严格递增
+        let cfg = DecbConfig {
+            overflow_warn_ratio: 0.5,
+            overflow_degrade_ratio: 1.2,
+            overflow_critical_ratio: 1.0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_overflow_ratio_negative() {
+        let cfg = DecbConfig {
+            overflow_warn_ratio: -0.1,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_overflow_ratios_custom_valid() {
+        // 自定义合法的严格递增阈值(允许 critical > 1.0)
+        let cfg = DecbConfig {
+            overflow_warn_ratio: 0.4,
+            overflow_degrade_ratio: 0.7,
+            overflow_critical_ratio: 1.2,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

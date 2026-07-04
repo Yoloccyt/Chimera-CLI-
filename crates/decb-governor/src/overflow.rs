@@ -15,73 +15,82 @@ use tracing::{info, warn};
 use crate::config::DecbConfig;
 use crate::types::BudgetTier;
 
-/// 溢出检测阈值:50% 警告,80% 降级到 LowTier,100% 降级到 Degraded
-const OVERFLOW_WARN_RATIO: f64 = 0.5;
-/// 80% 阈值:触发降级到 LowTier
-const OVERFLOW_DEGRADE_RATIO: f64 = 0.8;
-/// 100% 阈值:触发降级到 Degraded
-const OVERFLOW_CRITICAL_RATIO: f64 = 1.0;
-
 /// 溢出检测器 — 检测预算消耗是否溢出,建议降级档位
 ///
-/// WHY 无状态:检测器仅持有配置快照(total_budget_limit),不持有可变状态。
-/// 这使得检测器可以安全 Clone 到后台任务中,无需额外同步开销。
+/// WHY 无状态:检测器仅持有配置快照(total_budget_limit + 三级溢出阈值),
+/// 不持有可变状态。这使得检测器可以安全 Clone 到后台任务中,无需额外同步开销。
+///
+/// WHY 配置化阈值:原硬编码常量(0.5/0.8/1.0)无法按部署场景调整。
+/// 现从 `DecbConfig` 快照三级阈值,边缘/批处理等场景可自定义触发点,
+/// 默认值保持向后兼容。
 #[derive(Debug, Clone)]
 pub struct OverflowDetector {
     /// 总预算上限(从配置快照,用于阈值计算)
     total_budget_limit: f64,
+    /// 溢出警告阈值(从配置快照):消耗占比 >= 此值仅告警
+    overflow_warn_ratio: f64,
+    /// 溢出降级阈值(从配置快照):消耗占比 >= 此值降级到 LowTier
+    overflow_degrade_ratio: f64,
+    /// 溢出临界阈值(从配置快照):消耗占比 >= 此值降级到 Degraded
+    overflow_critical_ratio: f64,
 }
 
 impl OverflowDetector {
-    /// 创建溢出检测器,从配置快照总预算上限
+    /// 创建溢出检测器,从配置快照总预算上限与三级溢出阈值
     ///
     /// WHY 持有快照而非 &DecbConfig:后台监控任务需要 'static 生命周期,
     /// 不能持有引用。快照在构造时一次性读取,保证检测器自包含。
     pub fn new(config: &DecbConfig) -> Self {
         Self {
             total_budget_limit: config.total_budget_limit,
+            overflow_warn_ratio: config.overflow_warn_ratio,
+            overflow_degrade_ratio: config.overflow_degrade_ratio,
+            overflow_critical_ratio: config.overflow_critical_ratio,
         }
     }
 
     /// 检测溢出,返回建议降级档位
     ///
-    /// # 返回值
-    /// - `Some(BudgetTier::Degraded)`:消耗 >= 100% 总预算,降级到 Degraded
-    /// - `Some(BudgetTier::LowTier)`:消耗 >= 80% 总预算,降级到 LowTier
-    /// - `None`:消耗 >= 50% 总预算(警告)或 < 50%(无溢出)
+    /// # 返回值(以默认阈值 0.5/0.8/1.0 为例)
+    /// - `Some(BudgetTier::Degraded)`:消耗 >= critical_ratio(默认 100%)总预算
+    /// - `Some(BudgetTier::LowTier)`:消耗 >= degrade_ratio(默认 80%)总预算
+    /// - `None`:消耗 >= warn_ratio(默认 50%,仅告警)或 < warn_ratio(无溢出)
     ///
-    /// WHY 50% 不返回降级建议:50% 阈值仅警告,不触发降级,
+    /// WHY warn 不返回降级建议:warn 阈值仅警告,不触发降级,
     /// 避免过早降级影响正常 Quest 执行。调用方根据 None 判断是否需要降级。
     pub fn check_overflow(&self, current_consumption: f64) -> Option<BudgetTier> {
         let ratio = if self.total_budget_limit > 0.0 {
             current_consumption / self.total_budget_limit
         } else {
             // WHY 预算为 0 时视为已溢出:防止配置错误导致无限消耗
-            OVERFLOW_CRITICAL_RATIO
+            self.overflow_critical_ratio
         };
 
-        if ratio >= OVERFLOW_CRITICAL_RATIO {
+        if ratio >= self.overflow_critical_ratio {
             warn!(
                 consumption = current_consumption,
                 limit = self.total_budget_limit,
                 ratio = ratio,
-                "Budget overflow detected: critical (>=100%), suggest Degraded"
+                threshold = self.overflow_critical_ratio,
+                "Budget overflow detected: critical, suggest Degraded"
             );
             Some(BudgetTier::Degraded)
-        } else if ratio >= OVERFLOW_DEGRADE_RATIO {
+        } else if ratio >= self.overflow_degrade_ratio {
             warn!(
                 consumption = current_consumption,
                 limit = self.total_budget_limit,
                 ratio = ratio,
-                "Budget overflow detected: high (>=80%), suggest LowTier"
+                threshold = self.overflow_degrade_ratio,
+                "Budget overflow detected: high, suggest LowTier"
             );
             Some(BudgetTier::LowTier)
-        } else if ratio >= OVERFLOW_WARN_RATIO {
+        } else if ratio >= self.overflow_warn_ratio {
             warn!(
                 consumption = current_consumption,
                 limit = self.total_budget_limit,
                 ratio = ratio,
-                "Budget usage warning (>=50%), no degradation suggested"
+                threshold = self.overflow_warn_ratio,
+                "Budget usage warning, no degradation suggested"
             );
             None
         } else {
@@ -198,6 +207,32 @@ mod tests {
         // 消耗 99.99% → 降级到 LowTier(未达 100%)
         let result = detector.check_overflow(999_900.0);
         assert_eq!(result, Some(BudgetTier::LowTier));
+    }
+
+    #[test]
+    fn test_check_overflow_custom_thresholds() {
+        // WHY 验证配置化:自定义阈值应改变触发点,证明阈值来自 Config 而非硬编码
+        let detector = OverflowDetector::new(&DecbConfig {
+            total_budget_limit: 1_000_000.0,
+            overflow_warn_ratio: 0.3,
+            overflow_degrade_ratio: 0.6,
+            overflow_critical_ratio: 0.9,
+            ..Default::default()
+        });
+        // 40% 消耗:默认阈值下不告警,自定义 warn=0.3 下应告警(返回 None 但触发 warn 分支)
+        // 这里通过 65% 消耗验证:默认下降级到 LowTier(>=0.8 不满足),
+        // 自定义 degrade=0.6 下应降级到 LowTier
+        assert_eq!(
+            detector.check_overflow(650_000.0),
+            Some(BudgetTier::LowTier)
+        );
+        // 95% 消耗:自定义 critical=0.9 下应降级到 Degraded(默认需 100%)
+        assert_eq!(
+            detector.check_overflow(950_000.0),
+            Some(BudgetTier::Degraded)
+        );
+        // 25% 消耗:低于自定义 warn=0.3,无溢出
+        assert!(detector.check_overflow(250_000.0).is_none());
     }
 
     // ============================================================

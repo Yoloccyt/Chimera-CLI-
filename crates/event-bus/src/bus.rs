@@ -11,16 +11,37 @@
 use crate::error::EventBusError;
 use crate::logging::BusLogger;
 use crate::types::{EventSeverity, NexusEvent};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
-/// 默认广播通道容量
+/// 默认广播容量
 ///
 /// WHY:1024 平衡内存占用与突发流量。每个 NexusEvent 约 200-500 字节,
 /// 1024 容量约占 0.5MB,可吸收短时突发;持续高吞吐应增大容量或加背压策略。
 pub const DEFAULT_CAPACITY: usize = 1024;
+
+/// 判断事件是否走 mpsc 旁路通道(Critical 安全告警事件)
+///
+/// §6.2 红线要求:Critical 安全事件(SkepticVeto/RedTeamAudit/AsaIntervention/
+/// BudgetExceeded)必须用 mpsc channel 确保送达,避免 broadcast 在 Lagged 场景下
+/// 丢失。这与 `NexusEvent::severity()` 部分重叠但语义不同:
+/// - `severity()` 是事件总线背压级别(同步函数,AsaIntervention 即使 Block 级
+///   也返回 Normal,因为不依赖运行时值)
+/// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,4 类安全告警事件强制走 mpsc
+///
+/// WHY 单独定义:AsaIntervention 的 severity() 返回 Normal,但 Block 级别在语义上
+/// 等价于 Critical(见 types.rs:807-810 注释),必须通过 mpsc 旁路确保投递。
+fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
+    matches!(
+        event,
+        NexusEvent::SkepticVeto { .. }
+            | NexusEvent::RedTeamAudit { .. }
+            | NexusEvent::AsaIntervention { .. }
+            | NexusEvent::BudgetExceeded { .. }
+    )
+}
 
 /// 事件总线 — 跨层通信的唯一通道
 ///
@@ -29,6 +50,13 @@ pub const DEFAULT_CAPACITY: usize = 1024;
 ///
 /// 可选配备 `BusLogger` 实现全链路结构化日志埋点,
 /// 记录订阅者连接/断开、事件发布/接收、错误码、重连尝试等关键信息。
+///
+/// # Critical 事件双通道(§6.2 红线,2026-06-29)
+/// 4 类 Critical 安全告警事件(SkepticVeto/RedTeamAudit/AsaIntervention/
+/// BudgetExceeded)额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
+/// 仍能被订阅者接收。订阅者通过 [`subscribe_critical_events`](Self::subscribe_critical_events)
+/// 获取 mpsc Receiver。旁路通道按需初始化(首次订阅时创建),无订阅者时
+/// `publish` 仅走 broadcast 不报错。
 #[derive(Clone)]
 pub struct EventBus {
     sender: broadcast::Sender<NexusEvent>,
@@ -36,6 +64,17 @@ pub struct EventBus {
     capacity: usize,
     /// 可选日志记录器(Arc 共享,跨 Clone 共享同一计数器)
     logger: Option<Arc<BusLogger>>,
+    /// Critical 事件 mpsc 旁路通道(§6.2 红线双通道化)
+    ///
+    /// WHY Arc<Mutex<Vec<UnboundedSender>>>:
+    /// - `Vec<UnboundedSender>` fan-out 模式:每个 subscribe_critical_events
+    ///   调用创建独立 mpsc channel,Sender 入 Vec,Receiver 返回给订阅者
+    /// - `Mutex` 同步 Vec 修改(订阅/发送互斥)
+    /// - `Arc` 使 EventBus 保留 Clone 派生(所有 Clone 副本共享同一 Vec)
+    /// - `UnboundedSender` 实现 Clone,EventBus Clone 副本可向同一 Vec 投递
+    /// - receiver drop 时 send 返回 Err,send_critical_mpsc 静默忽略并定期
+    ///   清理失效 sender(避免 Vec 无限增长)
+    critical_tx: Arc<Mutex<Vec<mpsc::UnboundedSender<NexusEvent>>>>,
 }
 
 impl EventBus {
@@ -51,6 +90,7 @@ impl EventBus {
             sender,
             capacity,
             logger: None,
+            critical_tx: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -63,6 +103,7 @@ impl EventBus {
             sender,
             capacity,
             logger: Some(Arc::new(logger)),
+            critical_tx: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -94,6 +135,12 @@ impl EventBus {
     /// WHY:CheckpointSaved/ConsensusReached 等关键事件丢失会导致系统状态不一致
     /// (如 Quest 无法恢复),无订阅者时必须告警。
     /// Normal 级事件保持静默丢弃,避免日志噪声。
+    ///
+    /// # §6.2 红线双通道(2026-06-29)
+    /// 4 类 Critical 安全告警事件(SkepticVeto/RedTeamAudit/AsaIntervention/
+    /// BudgetExceeded)额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
+    /// 仍能被 `subscribe_critical_events` 订阅者接收。旁路通道未初始化时
+    /// (无 Critical 订阅者)仅走 broadcast,不报错。
     #[allow(clippy::unused_async)]
     pub async fn publish(&self, event: NexusEvent) -> Result<(), EventBusError> {
         let subscriber_count = self.sender.receiver_count();
@@ -113,6 +160,13 @@ impl EventBus {
             );
         }
 
+        // §6.2 红线双通道:4 类 Critical 安全告警事件额外走 mpsc 旁路
+        // WHY 先 mpsc 后 broadcast:mpsc UnboundedSender::send 不会阻塞,
+        // 先投递 mpsc 确保 Critical 订阅者必收;broadcast 仍走以保证向后兼容
+        if is_critical_mpsc_event(&event) {
+            self.send_critical_mpsc(&event);
+        }
+
         // broadcast::Sender::send 仅在无活跃接收者时返回 Err;
         // 按设计无订阅者时事件被静默丢弃,不视为错误。
         let _ = self.sender.send(event);
@@ -125,6 +179,9 @@ impl EventBus {
     ///
     /// # SubTask 17.2:Critical 事件无订阅者告警
     /// 与 `publish` 保持一致:无订阅者且 Critical 级时记录 `warn` 日志。
+    ///
+    /// # §6.2 红线双通道(2026-06-29)
+    /// 与 `publish` 一致:4 类 Critical 安全告警事件额外走 mpsc 旁路通道。
     pub fn publish_blocking(&self, event: NexusEvent) -> Result<(), EventBusError> {
         let subscriber_count = self.sender.receiver_count();
 
@@ -141,9 +198,84 @@ impl EventBus {
             );
         }
 
+        // §6.2 红线双通道:4 类 Critical 安全告警事件额外走 mpsc 旁路
+        if is_critical_mpsc_event(&event) {
+            self.send_critical_mpsc(&event);
+        }
+
         // 与 publish 保持一致:无订阅者时静默丢弃事件。
         let _ = self.sender.send(event);
         Ok(())
+    }
+
+    /// 显式发布 Critical 事件到双通道(broadcast + mpsc 旁路)
+    ///
+    /// 调用方明确知道事件为 Critical 时使用此方法,语义清晰。
+    /// 内部行为与 [`publish`](Self::publish) 对 4 类 Critical 事件的处理一致,
+    /// 但不依赖 `is_critical_mpsc_event` 判定,直接走 mpsc 旁路(适用于
+    /// 调用方自定义的 Critical 事件,如未来扩展的 AsaIntervention Block 级)。
+    ///
+    /// WHY 提供 explicit API:与 `publish_critical_blocking` 配对,
+    /// 供 async 上下文调用方使用(如 spawn_overflow_monitor 中的 async 任务)。
+    #[allow(clippy::unused_async)]
+    pub async fn publish_critical(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        // 先走 mpsc 旁路确保 Critical 订阅者必收,再走 broadcast 保持向后兼容
+        self.send_critical_mpsc(&event);
+        let _ = self.sender.send(event);
+        Ok(())
+    }
+
+    /// 显式同步发布 Critical 事件到双通道(broadcast + mpsc 旁路)
+    ///
+    /// 同步版本,供不便 await 的场景使用(如 sync 方法内调用)。
+    /// 内部行为与 [`publish_blocking`](Self::publish_blocking) 对 4 类 Critical
+    /// 事件的处理一致,但不依赖 `is_critical_mpsc_event` 判定。
+    pub fn publish_critical_blocking(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        self.send_critical_mpsc(&event);
+        let _ = self.sender.send(event);
+        Ok(())
+    }
+
+    /// 订阅 Critical 事件 mpsc 旁路通道
+    ///
+    /// §6.2 红线:Critical 安全事件(SkepticVeto/RedTeamAudit/AsaIntervention/
+    /// BudgetExceeded)必须用 mpsc channel 确保送达。此方法返回 mpsc Receiver,
+    /// 订阅者通过它接收 Critical 事件,即使在 broadcast Lagged 场景下也不会丢失。
+    ///
+    /// # fan-out 多订阅者
+    /// 每次调用创建独立 mpsc channel,Sender 入 `Vec` 内部状态,Receiver 返回。
+    /// 后续发布的 Critical 事件会向 `Vec` 中所有 Sender 投递(fan-out 广播)。
+    /// receiver drop 后,对应 Sender 的 `send` 返回 Err,下次发送时被清理。
+    ///
+    /// # 调用时机(§4.4 反模式 3)
+    /// 必须在 `tokio::spawn()` **之前同步调用**此方法,确保不会错过后续发布的
+    /// Critical 事件。在 spawn 的 async block 内调用可能导致事件静默丢失。
+    pub fn subscribe_critical_events(&self) -> mpsc::UnboundedReceiver<NexusEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut guard = self
+            .critical_tx
+            .lock()
+            .expect("critical_tx mutex poisoned: 总线状态损坏");
+        guard.push(tx);
+        rx
+    }
+
+    /// 向 mpsc 旁路通道投递 Critical 事件(内部辅助方法)
+    ///
+    /// fan-out 投递:遍历 `Vec<UnboundedSender>`,向每个 Sender 投递事件 clone。
+    /// `send` 返回 Err 的 Sender(receiver 已 drop)被从 Vec 中移除,避免无限增长。
+    /// Vec 为空(无 Critical 订阅者)时静默跳过,不报错。
+    fn send_critical_mpsc(&self, event: &NexusEvent) {
+        let mut guard = self
+            .critical_tx
+            .lock()
+            .expect("critical_tx mutex poisoned: 总线状态损坏");
+        if guard.is_empty() {
+            return;
+        }
+        // 保留 send 成功的 sender,移除 send 失败的(receiver 已 drop)
+        // WHY retain:O(n) 一次遍历完成发送 + 清理,避免两次遍历
+        guard.retain(|tx| tx.send(event.clone()).is_ok());
     }
 
     /// 订阅事件流,返回新的接收者

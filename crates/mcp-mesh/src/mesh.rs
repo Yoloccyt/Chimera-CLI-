@@ -360,7 +360,8 @@ mod tests {
         let mesh = McpMesh::new(MeshConfig::default());
         for i in 0..n {
             let sid = format!("s-{i}");
-            mesh.register_server(MeshServer::new(sid, format!("127.0.0.1:{i}"), vec![]))
+            // 使用 RFC 5737 TEST-NET-3 地址,绕过 SSRF 校验
+            mesh.register_server(MeshServer::new(sid, format!("203.0.113.1:{i}"), vec![]))
                 .expect("注册失败");
         }
         mesh
@@ -395,7 +396,7 @@ mod tests {
         let mesh = McpMesh::new(MeshConfig::default());
         // 注册 33 个服务器(max_participants=32)
         for i in 0..33 {
-            mesh.register_server(MeshServer::new(format!("s-{i}"), "127.0.0.1", vec![]))
+            mesh.register_server(MeshServer::new(format!("s-{i}"), "203.0.113.1", vec![]))
                 .expect("注册失败");
         }
         let participants: Vec<String> = (0..33).map(|i| format!("s-{i}")).collect();
@@ -421,7 +422,7 @@ mod tests {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
         let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus);
-        mesh.register_server(MeshServer::new("s-1", "127.0.0.1", vec![]))
+        mesh.register_server(MeshServer::new("s-1", "203.0.113.1", vec![]))
             .expect("注册失败");
 
         let result = mesh

@@ -40,7 +40,7 @@ fn make_mesh_with_n_servers(n: usize) -> McpMesh {
     let mesh = McpMesh::new(config);
     for i in 0..n {
         let sid = format!("s-{i}");
-        let _ = mesh.register_server(MeshServer::new(sid, format!("127.0.0.1:{i}"), vec![]));
+        let _ = mesh.register_server(MeshServer::new(sid, format!("203.0.113.1:{i}"), vec![]));
     }
     mesh
 }

@@ -70,14 +70,16 @@ const MONITOR_SOURCE: &str = "efficiency-monitor";
 
 /// 判断事件是否为 Critical 告警事件(必须立即告警)
 ///
-/// 注意:这与 `NexusEvent::severity()` 不同。
-/// - `NexusEvent::severity()` 是事件总线的背压级别(SkepticVeto/RedTeamAudit 为 Critical,
-///   AsaIntervention/BudgetExceeded 为 Normal)
+/// 注意:这与 `NexusEvent::severity()` 部分重叠但语义不同。
+/// - `NexusEvent::severity()` 是事件总线的背压级别:SkepticVeto/RedTeamAudit/
+///   BudgetExceeded 为 Critical(F-001 修复后),AsaIntervention 仍为 Normal
 /// - `is_critical_alert_event` 是 efficiency-monitor 的告警级别(4 个事件均为 Critical)
 ///
-/// WHY 单独定义:AsaIntervention 和 BudgetExceeded 在 event-bus 中返回 Normal
+/// WHY 单独定义:AsaIntervention 在 event-bus 中返回 Normal
 /// (因为 severity() 是同步函数不依赖运行时值),但在 efficiency-monitor 中
-/// 代表安全/预算红线,必须立即告警。
+/// 代表安全红线,必须立即告警。F-001 修复后 BudgetExceeded 在两层都是 Critical,
+/// 此处保留匹配是出于对称性与稳定性——即使未来 event-bus 的 severity 分类变化,
+/// efficiency-monitor 的告警语义也不受影响。
 fn is_critical_alert_event(event: &NexusEvent) -> bool {
     matches!(
         event,
@@ -200,8 +202,21 @@ impl EfficiencyMonitor {
 
     /// 启动后台事件订阅循环
     ///
-    /// 在 `tokio::spawn` 之前同步调用 `bus.subscribe()`,
-    /// 确保不会错过后续发布的事件(Week 6 教训:broadcast 时序)。
+    /// 在 `tokio::spawn` 之前同步调用 `bus.subscribe()` 与
+    /// `bus.subscribe_critical_events()`,确保不会错过后续发布的事件
+    /// (Week 6 教训:broadcast 时序;§4.4 反模式 3)。
+    ///
+    /// # 双通道消费(§6.2 红线,2026-06-29)
+    /// 后台任务通过 `tokio::select!` 同时消费两个通道,职责互斥避免 double-count:
+    /// - **broadcast 主通道**:接收全部事件,**仅记录事件指标**(不触发告警)
+    /// - **critical mpsc 旁路**:接收 4 类 Critical 安全告警事件
+    ///   (SkepticVeto/RedTeamAudit/AsaIntervention/BudgetExceeded),
+    ///   **仅触发 Critical 告警**(不记录事件指标)。
+    ///   mpsc Unbounded 不会 Lagged,broadcast 丢弃时仍确保告警触发。
+    ///
+    /// WHY 职责拆分:同一 Critical 事件会双投递到两个通道(broadcast + mpsc),
+    /// 若两条通道都触发告警会导致 double-count。拆分后 broadcast 负责指标、
+    /// mpsc 负责告警,即使 broadcast Lagged 仅损失指标,告警必达(§6.2 红线)。
     ///
     /// # 错误
     /// 返回 `MonitorError::Config` 若未绑定 EventBus。
@@ -217,21 +232,56 @@ impl EfficiencyMonitor {
         let bus_for_alerts = bus.clone();
         let critical_enabled = self.config.critical_instant_alert;
 
-        // 在 spawn 之前同步订阅,确保不会错过后续发布的事件
+        // 在 spawn 之前同步订阅两个通道,确保不会错过后续发布的事件
         // WHY: tokio::broadcast 仅投递给发布时已存在的 receiver;
         // 若在 spawn 的 async block 内 subscribe,后台任务调度时机不确定,
         // 可能晚于 publish 导致事件静默丢失(broadcast 不缓存历史消息给新订阅者)
+        // WHY mpsc 旁路同步订阅:§4.4 反模式 3,与 broadcast 同理;
+        // Critical 安全告警事件必须确保投递,不能因 spawn 时序丢失
         let mut rx = bus.subscribe();
+        let mut critical_rx = bus.subscribe_critical_events();
 
+        // WHY fire-and-forget(B-Min-2 评估):事件订阅器为应用生命周期任务,
+        // 随进程退出自动终止。panic 时 tokio 运行时回收资源,不影响监控数据完整性
+        // (collectors 为 Arc 共享,下一轮订阅周期会重新记录)。
         tokio::spawn(async move {
-            while let Ok(event) = rx.recv().await {
-                // 记录事件指标
-                collectors.record_event(&event);
-
-                // Critical 事件立即告警(绕过规则引擎)
-                if critical_enabled && is_critical_alert_event(&event) {
-                    collectors.record_alert(AlertSeverity::Critical.as_str());
-                    publish_critical_alert_blocking(&bus_for_alerts, &event);
+            // 双通道消费循环:broadcast 主流 + mpsc 旁路兜底
+            // WHY tokio::select!:同时 await broadcast recv 与 mpsc recv,
+            // 哪个先就绪就处理哪个,实现双通道并行消费。select! 是 tokio 标准
+            // 模式,无需额外依赖,符合 §4.1 workspace 依赖规范。
+            // WHY mpsc 旁路处理:即使在 broadcast Lagged 场景下,Critical 事件
+            // 仍需触发告警记录与 EfficiencyAlertTriggered 发布,确保运维感知
+            loop {
+                tokio::select! {
+                    // mpsc 旁路:Critical 安全告警事件(broadcast Lagged 兜底)
+                    Some(critical_event) = critical_rx.recv() => {
+                        handle_critical_event(
+                            &collectors,
+                            &bus_for_alerts,
+                            critical_enabled,
+                            &critical_event,
+                        );
+                    }
+                    // broadcast 主流:全部事件(含 Critical,向后兼容)
+                    result = rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                handle_broadcast_event(
+                                    &collectors,
+                                    &bus_for_alerts,
+                                    critical_enabled,
+                                    &event,
+                                );
+                            }
+                            Err(e) => {
+                                // SlowConsumerDropped/RecvTimeout:继续循环等新事件
+                                // ChannelClosed:所有 Sender 已 drop,退出循环
+                                if matches!(e, event_bus::EventBusError::ChannelClosed) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -309,6 +359,50 @@ impl EfficiencyMonitor {
 impl Default for EfficiencyMonitor {
     fn default() -> Self {
         Self::new(MonitorConfig::default())
+    }
+}
+
+/// 在后台任务中处理 broadcast 主流事件(全部事件)
+///
+/// 记录事件指标(所有事件,含 Critical)。**不触发告警** — Critical 告警
+/// 逻辑委托给 [`handle_critical_event`] 通过 mpsc 旁路处理,避免同一
+/// Critical 事件被 double-count(broadcast + mpsc 旁路双投递)。
+///
+/// WHY 拆分职责:broadcast 主流负责事件指标记录(所有事件),
+/// mpsc 旁路负责 Critical 告警触发(仅 4 类事件)。两条通道职责互斥,
+/// 即使 broadcast Lagged 导致事件指标缺失,Critical 告警仍由 mpsc 旁路
+/// 确保触发(§6.2 红线:Critical 安全事件必须确保送达)。
+fn handle_broadcast_event(
+    collectors: &EventMetricCollector,
+    _bus: &EventBus,
+    _critical_enabled: bool,
+    event: &NexusEvent,
+) {
+    // 仅记录事件指标,告警逻辑委托给 handle_critical_event(mpsc 旁路)
+    collectors.record_event(event);
+}
+
+/// 在后台任务中处理 mpsc 旁路 Critical 事件(Critical 告警触发)
+///
+/// §6.2 红线:Critical 安全告警事件通过 mpsc 旁路确保投递。此函数是
+/// Critical 告警的**唯一触发点** — broadcast 主流不再触发告警,
+/// 避免同一事件被 double-count。mpsc 旁路 Unbounded 不会 Lagged,
+/// 确保 broadcast 丢弃时 Critical 告警仍能触发。
+///
+/// WHY 不调用 record_event:event 指标已由 broadcast 主流的
+/// `handle_broadcast_event` 记录(若未 Lagged);若 broadcast Lagged,
+/// event 指标缺失但告警仍触发(可接受取舍:告警优先于指标)。
+fn handle_critical_event(
+    collectors: &EventMetricCollector,
+    bus: &EventBus,
+    critical_enabled: bool,
+    event: &NexusEvent,
+) {
+    // mpsc 旁路仅投递 4 类 Critical 安全告警事件,无需再判 is_critical_alert_event
+    // WHY 不调用 record_event:避免与 broadcast 主流 double-count event 指标
+    if critical_enabled {
+        collectors.record_alert(AlertSeverity::Critical.as_str());
+        publish_critical_alert_blocking(bus, event);
     }
 }
 

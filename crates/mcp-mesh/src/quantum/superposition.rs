@@ -207,7 +207,8 @@ mod tests {
         let registry = ServerRegistry::new(MeshConfig::default().registry_capacity);
         for i in 0..n {
             let sid = format!("s-{i}");
-            let server = MeshServer::new(sid, format!("127.0.0.1:{i}"), vec![]);
+            // 使用 RFC 5737 TEST-NET-3 地址,绕过 SSRF 校验
+            let server = MeshServer::new(sid, format!("203.0.113.1:{i}"), vec![]);
             registry.register(server).expect("注册失败");
         }
         registry
@@ -258,7 +259,7 @@ mod tests {
     async fn test_superposition_dead_server_rejected() {
         let registry = ServerRegistry::new(MeshConfig::default().registry_capacity);
         // 注册一个服务器,但其 last_heartbeat 是很久以前(已超时)
-        let mut server = MeshServer::new("s-dead", "127.0.0.1:1", vec![]);
+        let mut server = MeshServer::new("s-dead", "203.0.113.1:1", vec![]);
         server.last_heartbeat = Utc::now() - chrono::Duration::seconds(60);
         registry.register(server).expect("注册失败");
 

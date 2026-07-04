@@ -600,3 +600,86 @@ fn test_publish_blocking_critical_no_subscriber_warns() {
     );
     assert!(logs_contain("同步发布"));
 }
+
+// ============================================================
+// F-001 回归测试:BudgetExceeded 必须标记为 Critical
+//
+// WHY:Hard Constraint 第 10 条要求 BudgetExceeded 事件在 severity()
+// 中返回 Critical。此测试防止未来重构时 BudgetExceeded 被误归入
+// Normal 分支(走通配符 `_ => Normal`),导致背压保护不足、预算超限
+// 无人响应。详见 types.rs::NexusEvent::severity() 的 WHY 注释。
+// ============================================================
+
+#[test]
+fn test_budget_exceeded_severity_is_critical() {
+    // 构造 BudgetExceeded 事件(预算耗尽场景:token 消耗 1_000_000 已达上限)
+    let event = NexusEvent::BudgetExceeded {
+        metadata: EventMetadata::new("decb-governor"),
+        budget_type: "token".into(),
+        current: 1_000_000,
+        limit: 1_000_000,
+    };
+
+    // F-001 修复:BudgetExceeded 必须为 Critical,触发背压保护优先投递
+    assert_eq!(
+        event.severity(),
+        EventSeverity::Critical,
+        "BudgetExceeded 必须为 Critical(Hard Constraint 第 10 条),\
+         否则背压场景下被丢弃会导致预算超限无人响应"
+    );
+
+    // is_critical_event 辅助函数应与 severity() 保持一致
+    assert!(
+        is_critical_event(&event),
+        "is_critical_event 应识别 BudgetExceeded 为关键事件"
+    );
+
+    // type_name 稳定性校验(防止重命名导致序列化 tag 漂移)
+    assert_eq!(event.type_name(), "BudgetExceeded");
+}
+
+#[test]
+fn test_budget_exceeded_severity_critical_with_various_budget_types() {
+    // 覆盖多种预算类型(token/字节/调用次数),确保 severity 与字段值无关
+    // severity() 是同步函数不依赖运行时值,仅依赖变体类型
+    for (budget_type, current, limit) in [
+        ("token", 500_000_u64, 500_000_u64),
+        ("bytes", 1_073_741_824, 1_073_741_824),
+        ("calls", 100, 100),
+        ("cost_cents", 1_000_000, 1_000_000),
+    ] {
+        let event = NexusEvent::BudgetExceeded {
+            metadata: EventMetadata::new("decb-governor"),
+            budget_type: budget_type.into(),
+            current,
+            limit,
+        };
+        assert_eq!(
+            event.severity(),
+            EventSeverity::Critical,
+            "BudgetExceeded(budget_type={budget_type}) 必须为 Critical"
+        );
+    }
+}
+
+#[test]
+fn test_budget_exceeded_serialization_roundtrip() {
+    // F-001 附带:验证 BudgetExceeded 序列化往返一致性
+    // 防止 severity 修复时意外影响 serde tag/content 结构
+    let event = NexusEvent::BudgetExceeded {
+        metadata: EventMetadata::new("decb-governor"),
+        budget_type: "token".into(),
+        current: 999_999,
+        limit: 1_000_000,
+    };
+
+    // JSON 往返
+    let json = event_bus::serialize_json(&event).unwrap();
+    let decoded_json = event_bus::deserialize_json(&json).unwrap();
+    assert_eq!(decoded_json, event, "JSON 往返应保持一致");
+
+    // MessagePack 往返(ADR-004 主序列化协议)
+    let msgpack = event_bus::serialize_msgpack(&event).unwrap();
+    let decoded_mp = event_bus::deserialize_msgpack(&msgpack).unwrap();
+    assert_eq!(decoded_mp, event, "MessagePack 往返应保持一致");
+}

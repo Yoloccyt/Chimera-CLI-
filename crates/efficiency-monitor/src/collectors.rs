@@ -275,16 +275,20 @@ mod tests {
     }
 
     #[test]
-    fn test_budget_exceeded_is_normal_in_event_bus_but_critical_in_monitor() {
-        // BudgetExceeded 在 NexusEvent::severity() 中返回 Normal,
-        // 但在 efficiency-monitor 中是 Critical 告警事件。
-        // 这里验证 record_event 按 severity() 统计 critical_counts,
-        // BudgetExceeded 不会进入 critical_counts(因为 severity() == Normal)
+    fn test_budget_exceeded_is_critical_in_both_event_bus_and_monitor() {
+        // F-001 修复后:BudgetExceeded.severity() 从 Normal 改为 Critical
+        // (Hard Constraint 第 10 条要求,见 event-bus/src/types.rs 第 1132 行)
+        //
+        // WHY 必须为 Critical:预算耗尽是系统红线,若被标为 Normal 在背压场景下
+        // 可能被丢弃,导致预算超限无人响应、Quest 持续消耗资源直至 OOM。
+        //
+        // 因此 record_event 会同时更新 event_counts 和 critical_counts,
+        // 即 BudgetExceeded 在 EventBus 和 Monitor 中都是 Critical。
         let collector = EventMetricCollector::new();
         collector.record_event(&make_event("BudgetExceeded"));
         // event_counts 应记录
         assert_eq!(collector.event_count("BudgetExceeded"), 1);
-        // critical_counts 不应记录(severity() == Normal)
-        assert_eq!(collector.total_critical_events(), 0);
+        // critical_counts 也应记录(severity() == Critical,F-001 修复)
+        assert_eq!(collector.total_critical_events(), 1);
     }
 }

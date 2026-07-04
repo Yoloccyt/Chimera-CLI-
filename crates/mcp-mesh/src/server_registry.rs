@@ -9,6 +9,8 @@
 //! - 注册表容量不强制上限(避免 register 时持锁遍历),由调用方管理;
 //!   `capacity()` 仅作为指标暴露,`RegistryFull` 错误由调用方判断后抛出
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -23,7 +25,7 @@ use crate::error::McpError;
 pub struct MeshServer {
     /// 服务器唯一标识
     pub server_id: String,
-    /// 服务器端点(如 "127.0.0.1:8080")
+    /// 服务器端点(如 "203.0.113.1:8080";register 时会做 SSRF 校验,拒绝内网地址)
     pub endpoint: String,
     /// 服务器声明的能力 ID 列表(如 ["shell-exec", "code-gen"])
     pub capabilities: Vec<String>,
@@ -84,11 +86,16 @@ impl ServerRegistry {
     ///
     /// # 错误
     /// - `RegistryFull`:容量为 0
+    /// - `SsrfBlocked`:endpoint 指向内网/保留地址(SSRF 防御)
     /// - `ServerNotFound`:内部不应触发(保留以扩展)
     pub fn register(&self, server: MeshServer) -> Result<(), McpError> {
         if self.capacity == 0 {
             return Err(McpError::RegistryFull { capacity: 0 });
         }
+        // WHY: SSRF 校验必须在 register 入口执行,防止攻击者注册指向
+        // 云元数据(169.254.169.254)、内网数据库等的 endpoint,
+        // 借 mesh 事务机制发起内网探测。详见 `validate_endpoint`。
+        validate_endpoint(&server.endpoint)?;
         let key = server.server_id.clone();
         self.servers.insert(key, server);
         Ok(())
@@ -152,6 +159,150 @@ impl ServerRegistry {
     }
 }
 
+/// 校验 endpoint 是否安全(非内网/保留地址) — SSRF 防御核心
+///
+/// WHY: ServerRegistry 接受任意 endpoint 会构成 SSRF 攻击面:攻击者可注册
+/// 指向 AWS 元数据(169.254.169.254/latest/meta-data)、K8s API(10.0.0.1)、
+/// 内网数据库(192.168.x.x)等的 endpoint,借 mesh 事务机制触发对内网的请求。
+/// 此函数在 `register` 入口拦截所有已知内网/保留地址,从源头切断 SSRF 路径。
+///
+/// # 策略(YAGNI 工程折中)
+/// - **IP 字面量黑名单**:覆盖 IPv4/IPv6 所有关键保留段(回环/私有/链路本地/
+///   CGNAT/未指定/云元数据),无需 DNS 解析即可判定。
+/// - **域名黑名单**:仅拦截已知内网域名(`localhost`、`metadata.google.internal`
+///   等)。不做 DNS 解析 — 因为 register 阶段同步解析可能阻塞、CI 不稳定,
+///   且 DNS rebinding 攻击需要请求层二次校验才能彻底防御,不属于 register 职责。
+///   公网域名一律放行,实际网络请求层应在 connect 前再次校验解析后的 IP。
+///
+/// # 支持的 endpoint 格式
+/// - `host:port` (如 `203.0.113.1:8080`)
+/// - `scheme://host:port/path` (如 `http://example.com:8080/api`)
+/// - `scheme://[ipv6]:port/path` (如 `http://[::1]:8080/`)
+///
+/// # 错误
+/// - `SsrfBlocked`:endpoint 解析出的 host 为内网/保留地址或已知内网域名
+pub(crate) fn validate_endpoint(endpoint: &str) -> Result<(), McpError> {
+    let host = extract_host(endpoint)?;
+    if is_reserved_domain(&host) {
+        return Err(McpError::SsrfBlocked {
+            endpoint: endpoint.to_string(),
+        });
+    }
+    // 若 host 可解析为 IP 字面量,校验是否为保留地址
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_reserved_ip(ip) {
+            return Err(McpError::SsrfBlocked {
+                endpoint: endpoint.to_string(),
+            });
+        }
+    }
+    // 公网域名或非保留 IP 字面量 → 放行
+    Ok(())
+}
+
+/// 从 endpoint 提取 host 部分(剥离 scheme、port、path)
+///
+/// 支持三种格式:
+/// - `host:port` → `host`
+/// - `scheme://host:port/path` → `host`
+/// - `scheme://[ipv6]:port/path` → `ipv6`(不含方括号)
+fn extract_host(endpoint: &str) -> Result<String, McpError> {
+    // 剥离 scheme:取 `://` 之后的部分;若无 scheme,原样使用
+    let after_scheme = endpoint.split("://").nth(1).unwrap_or(endpoint);
+    // 取 authority 段(第一个 `/` 之前)
+    let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
+    // 处理 IPv6 字面量 `[::1]:port`
+    let host = if let Some(stripped) = authority.strip_prefix('[') {
+        // 期望形如 `[::1]:port` 或 `[::1]`,以 `]` 结束 host 部分
+        stripped
+            .split(']')
+            .next()
+            .ok_or_else(|| McpError::SsrfBlocked {
+                endpoint: endpoint.to_string(),
+            })?
+    } else {
+        // IPv4 或域名:剥离末尾 `:port`(若存在)
+        // 注意:用 rsplit_once 确保只剥离最后一个 `:`,避免误判 IPv6(已在上分支处理)
+        authority
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(authority)
+    };
+    if host.is_empty() {
+        return Err(McpError::SsrfBlocked {
+            endpoint: endpoint.to_string(),
+        });
+    }
+    Ok(host.to_string())
+}
+
+/// 判断域名是否为已知内网域名(不做 DNS 解析,仅黑名单匹配)
+///
+/// 涵盖主流云厂商元数据服务域名与本地别名。DNS 解析后的二次校验
+/// 留给实际网络请求层(此处仅做轻量拦截)。
+fn is_reserved_domain(domain: &str) -> bool {
+    let lower = domain.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "localhost"
+            | "metadata.google.internal"
+            | "metadata.aws.internal"
+            | "metadata.azure.com"
+            | "169.254.169.254.nip.io"
+            | "kubernetes.default.svc"
+            | "kubernetes.default.svc.cluster.local"
+    )
+}
+
+/// 判断 IP 是否属于内网/保留地址段
+///
+/// 覆盖范围:
+/// - IPv4: 0.0.0.0/8(本机网络)、10.0.0.0/8(私有)、100.64.0.0/10(CGNAT)、
+///   127.0.0.0/8(回环)、169.254.0.0/16(链路本地,含云元数据)、
+///   172.16.0.0/12(私有)、192.168.0.0/16(私有)、224.0.0.0/4(组播)、
+///   255.255.255.255(广播)
+/// - IPv6: ::1(回环)、::(未指定)、fc00::/7(唯一本地)、fe80::/10(链路本地)
+fn is_reserved_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_reserved_ipv4(v4),
+        IpAddr::V6(v6) => is_reserved_ipv6(v6),
+    }
+}
+
+fn is_reserved_ipv4(v4: Ipv4Addr) -> bool {
+    let o = v4.octets();
+    // 0.0.0.0/8 — 本机网络(含 0.0.0.0 未指定)
+    o[0] == 0
+    // 10.0.0.0/8 — RFC 1918 私有
+    || o[0] == 10
+    // 100.64.0.0/10 — RFC 6598 CGNAT
+    || (o[0] == 100 && (o[1] & 0xC0) == 64)
+    // 127.0.0.0/8 — 回环(标准库 is_loopback 覆盖,显式列出便于阅读)
+    || o[0] == 127
+    // 169.254.0.0/16 — 链路本地(含 AWS/GCP/Azure 元数据 169.254.169.254)
+    || (o[0] == 169 && o[1] == 254)
+    // 172.16.0.0/12 — RFC 1918 私有
+    || (o[0] == 172 && (o[1] & 0xF0) == 16)
+    // 192.168.0.0/16 — RFC 1918 私有
+    || (o[0] == 192 && o[1] == 168)
+    // 224.0.0.0/4 — 组播
+    || (o[0] & 0xF0) == 224
+    // 255.255.255.255 — 广播
+    || o == [255, 255, 255, 255]
+}
+
+fn is_reserved_ipv6(v6: Ipv6Addr) -> bool {
+    let s = v6.segments();
+    // ::1 — 回环
+    v6.is_loopback()
+    // :: — 未指定
+    || v6.is_unspecified()
+    // fc00::/7 — 唯一本地地址(ULA)
+    || (s[0] & 0xFE00) == 0xFC00
+    // fe80::/10 — 链路本地
+    || (s[0] & 0xFFC0) == 0xFE80
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,7 +310,8 @@ mod tests {
     use std::time::Duration as StdDuration;
 
     fn make_server(id: &str) -> MeshServer {
-        MeshServer::new(id, format!("127.0.0.1:{id}"), vec!["cap-1".into()])
+        // 使用 RFC 5737 TEST-NET-3(203.0.113.0/24)文档用途地址,绕过 SSRF 校验
+        MeshServer::new(id, format!("203.0.113.1:{id}"), vec!["cap-1".into()])
     }
 
     #[test]
@@ -193,12 +345,12 @@ mod tests {
         let registry = ServerRegistry::new(16);
         registry.register(make_server("s-1")).expect("注册失败");
         // 用相同 ID 重新注册(更新 endpoint)
-        let updated = MeshServer::new("s-1", "127.0.0.1:9999", vec![]);
+        let updated = MeshServer::new("s-1", "203.0.113.1:9999", vec![]);
         registry.register(updated).expect("注册失败");
         assert_eq!(registry.len(), 1);
         assert_eq!(
             registry.get("s-1").expect("应存在").endpoint,
-            "127.0.0.1:9999"
+            "203.0.113.1:9999"
         );
     }
 

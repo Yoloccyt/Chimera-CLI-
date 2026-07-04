@@ -9,8 +9,12 @@
 //! - `CriticalMpsc`:关键事件(CheckpointSaved 等)建议走 mpsc 点对点通道
 //!
 //! # 实现说明
-//! 当前实现基于 broadcast + 标注,关键事件仍走 broadcast 但标注 Critical,
-//! 消费者优先处理 Critical 事件。未来可扩展为双通道(broadcast + mpsc)。
+//! 已实现双通道:broadcast + mpsc 旁路,2026-06-29。
+//! 4 类 Critical 安全告警事件(SkepticVeto/RedTeamAudit/AsaIntervention/
+//! BudgetExceeded)在 `EventBus::publish`/`publish_blocking` 中自动额外
+//! 投递到 mpsc 旁路通道(见 `bus.rs::is_critical_mpsc_event`)。订阅者通过
+//! `EventBus::subscribe_critical_events()` 获取 mpsc Receiver,确保在 broadcast
+//! Lagged 场景下仍能接收 Critical 事件。
 
 use crate::types::{EventMetadata, EventSeverity, NexusEvent};
 
@@ -35,7 +39,8 @@ pub enum BackpressurePolicy {
     ///
     /// WHY:CheckpointSaved 等关键事件丢失会导致 Quest 无法恢复,
     /// 建议为这类事件建立独立 mpsc 通道确保投递。
-    /// 当前实现简化为 broadcast + Critical 标注,未来扩展为双通道。
+    /// 已实现双通道:broadcast + mpsc 旁路,2026-06-29(见 `bus.rs`
+    /// `subscribe_critical_events` / `is_critical_mpsc_event`)。
     CriticalMpsc {
         /// 普通事件仍走 broadcast
         broadcast_capacity: usize,
