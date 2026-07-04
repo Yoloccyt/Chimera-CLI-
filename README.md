@@ -43,9 +43,53 @@ Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 3
 
 ### 安装
 
-#### 方式 1:从 Release 下载(推荐)
+#### 方式 1:一键安装脚本(推荐)
 
-从 [GitHub Releases](https://github.com/aether/chimera-cli/releases) 下载对应平台的预编译 binary:
+项目提供跨平台一键安装脚本,自动检测平台/架构、下载对应 binary、校验 SHA256、配置 PATH 并验证安装。
+
+**Linux / macOS**(POSIX sh,兼容 dash/bash/zsh/fish):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.sh | sh
+```
+
+**Windows**(PowerShell 5.1+):
+
+```powershell
+iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
+```
+
+**私有仓库安装**(需 `GITHUB_TOKEN` 环境变量鉴权):
+
+```bash
+# Linux / macOS
+GITHUB_TOKEN=ghp_xxx curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.sh | sh
+
+# Windows
+$env:GITHUB_TOKEN='ghp_xxx'; iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
+```
+
+**可选参数**:
+
+```bash
+# 指定版本
+sh install.sh --version v1.0.2-omega
+
+# 指定安装目录
+sh install.sh --install-dir /usr/local/bin
+
+# 跳过 SHA256 校验
+sh install.sh --skip-verify
+
+# Windows: 仅设置工具链环境变量(不下载 binary)
+.\install.ps1 -SetupEnv
+```
+
+脚本功能详见 [install.sh](./install.sh) / [install.ps1](./install.ps1) 头部注释。
+
+#### 方式 2:从 Release 下载
+
+从 [GitHub Releases](https://github.com/Yoloccyt/Chimera-CLI-/releases) 下载对应平台的预编译 binary:
 
 | 平台 | 文件名 |
 |------|--------|
@@ -66,7 +110,7 @@ move chimera-windows-x86_64.exe C:\Windows\chimera.exe
 chimera --version
 ```
 
-#### 方式 2:从源码构建
+#### 方式 3:从源码构建
 
 ```powershell
 # 0. 克隆仓库
@@ -93,7 +137,7 @@ cargo build --workspace --release
 > $env:PATH = "D:\Chimera CLI\.toolchain\cargo\bin;D:\msys64\mingw64\bin;$env:PATH"
 > ```
 
-#### 方式 3:Docker
+#### 方式 4:Docker
 
 ```bash
 # 构建镜像(< 100MB,distroless 基础)

@@ -1,0 +1,177 @@
+name: Test Install Scripts
+
+# ============================================================
+# 安装脚本端到端测试 CI
+#
+# 触发:
+#   - workflow_dispatch: 手动触发,可指定版本号
+#   - schedule: 每日 UTC 04:00(在 audit.yml 02:00 之后)
+#   - release.published: Release 发布后自动测试
+#
+# 目的:
+#   验证 install.sh / install.ps1 在 3 平台 matrix 上的
+#   下载链路、SHA256 校验、--version 验证全链路。
+#   覆盖架构审查 P5 改进项(CI 缺少 install 脚本端到端测试)。
+#
+# Matrix 设计:
+#   - ubuntu-latest (x86_64): 测试 install.sh + chimera-linux-x86_64
+#   - macos-latest (aarch64): 测试 install.sh + chimera-macos-aarch64
+#   - windows-latest (x86_64): 测试 install.ps1 + chimera-windows-x86_64.exe
+#
+# 局限:
+#   - Linux aarch64 与 macOS x86_64 需交叉 runner,复杂度高暂不覆盖
+#   - 私有仓库鉴权通过 secrets.GITHUB_TOKEN 自动注入
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如 v1.0.2-omega,留空用 latest)'
+        required: false
+        default: ''
+  schedule:
+    # 每日 UTC 04:00 执行(北京时间 12:00,在 audit.yml 02:00 之后)
+    - cron: '0 4 * * *'
+  release:
+    types: [published]  # Release 发布后自动测试
+
+permissions:
+  contents: read  # 读取 Release assets
+
+jobs:
+  test-install:
+    name: Test install (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10  # WHY: 下载 + 校验 + 验证典型 2-3min,10min 兜底防卡死
+    strategy:
+      fail-fast: false  # 单平台失败不阻塞其他平台
+
+      matrix:
+        include:
+          # Linux x86_64 — 主力服务器平台
+          - os: linux-x86_64
+            runner: ubuntu-latest
+            script: install.sh
+          # macOS aarch64 — Apple Silicon (macos-latest 当前为 ARM64)
+          - os: macos-aarch64
+            runner: macos-latest
+            script: install.sh
+          # Windows x86_64 — 主力桌面平台
+          - os: windows-x86_64
+            runner: windows-latest
+            script: install.ps1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          # 优先使用 workflow_dispatch 输入,其次 schedule 模式用 latest,
+          # release 触发时用 release.tag_name
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ] && [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          fi
+          if [ -z "$VERSION" ]; then
+            VERSION="latest"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Resolved version: $VERSION"
+
+      # ============ Linux / macOS: 执行 install.sh ============
+      - name: Run install.sh (Linux/macOS)
+        if: matrix.script == 'install.sh'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: sh
+        run: |
+          # WHY 使用临时安装目录:避免污染 runner 系统 PATH,
+          # 测试隔离,失败不影响后续 CI 作业
+          INSTALL_DIR="$HOME/.local/chimera-test"
+          mkdir -p "$INSTALL_DIR"
+
+          VERSION_ARG=""
+          if [ "${{ steps.version.outputs.version }}" != "latest" ]; then
+            VERSION_ARG="--version ${{ steps.version.outputs.version }}"
+          fi
+
+          # 执行安装脚本(自动检测平台/架构/下载/校验/PATH)
+          sh install.sh $VERSION_ARG --install-dir "$INSTALL_DIR"
+
+          # 验证 binary 存在且可执行
+          if [ ! -x "$INSTALL_DIR/chimera" ]; then
+            echo "❌ binary 未安装到 $INSTALL_DIR/chimera"
+            exit 1
+          fi
+
+          echo "✅ install.sh 执行成功"
+
+      # ============ Windows: 执行 install.ps1 ============
+      - name: Run install.ps1 (Windows)
+        if: matrix.script == 'install.ps1'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: powershell
+        run: |
+          $installDir = Join-Path $env:USERPROFILE '.local\chimera-test'
+          New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+
+          $versionArg = @()
+          if ('${{ steps.version.outputs.version }}' -ne 'latest') {
+            $versionArg = @('-Version', '${{ steps.version.outputs.version }}')
+          }
+
+          # 执行安装脚本
+          .\install.ps1 @versionArg -InstallDir $installDir
+
+          # 验证 binary 存在
+          $binPath = Join-Path $installDir 'chimera.exe'
+          if (-not (Test-Path $binPath)) {
+            Write-Host "❌ binary 未安装到 $binPath"
+            exit 1
+          }
+
+          Write-Host "✅ install.ps1 执行成功"
+
+      # ============ 验证 --version 正则 ============
+      # 与 release.yml docker job line 232 完全一致的正则
+      # 避免仅检退出码导致 binary 损坏但退出码 0 的假阳性
+      - name: Verify --version regex
+        shell: bash
+        run: |
+          VERSION_OUTPUT=""
+          BIN_PATH="$HOME/.local/chimera-test/chimera"
+          if [ ! -f "$BIN_PATH" ]; then
+            BIN_PATH="$HOME/.local/chimera-test/chimera.exe"
+          fi
+
+          if [ -f "$BIN_PATH" ]; then
+            # WHY 命令替换内 || true:binary 退出码非 0 时 set -e 会触发退出
+            VERSION_OUTPUT=$("$BIN_PATH" --version 2>&1 || true)
+          fi
+
+          echo "Binary path: $BIN_PATH"
+          echo "Version output: $VERSION_OUTPUT"
+
+          # 与 release.yml docker job line 232 一致的正则
+          # ^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+
+          if printf '%s\n' "$VERSION_OUTPUT" | grep -Eq '^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "✅ Version regex validation passed"
+          else
+            echo "❌ Version regex validation failed"
+            echo "Expected: ^(aether|chimera) [0-9]+\\.[0-9]+\\.[0-9]+"
+            echo "Actual: $VERSION_OUTPUT"
+            exit 1
+          fi
+
+      # ============ 清理测试目录 ============
+      - name: Cleanup test directory
+        if: always()  # 即使前面步骤失败也执行清理
+        shell: bash
+        run: |
+          rm -rf "$HOME/.local/chimera-test" 2>/dev/null || true
+          echo "🧹 清理完成"

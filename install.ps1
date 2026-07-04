@@ -6,13 +6,34 @@
 #   iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
 #   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-SkipVerify] [-SetupEnv]
 #
+# 私有仓库安装(需 $env:GITHUB_TOKEN 环境变量鉴权):
+#   $env:GITHUB_TOKEN='ghp_xxx'; iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
+#   $env:GITHUB_TOKEN='ghp_xxx'; .\install.ps1
+#
+# 参数说明:
+#   -Version <ver>      指定版本 (默认: latest,如 v1.0.2-omega)
+#   -InstallDir <path>  安装目录 (默认: $env:LOCALAPPDATA\Programs\chimera)
+#   -SkipVerify         跳过 SHA256 校验
+#   -SetupEnv           仅设置工具链环境变量后退出,不下载 binary
+#                       (用于源码构建场景,覆盖 §10.5 "环境变量手动设置"短板)
+#
 # 功能:
-#   - 自动检测架构 (x86_64/aarch64)
+#   - 自动检测架构 (x86_64/aarch64,ARM64 降级 x86_64 兼容层)
 #   - 从 GitHub Release 下载 chimera-windows-x86_64.exe
+#   - 可选 SHA256 校验 (若 Release 附带 checksums.txt)
 #   - 安装到 $env:LOCALAPPDATA\Programs\chimera\ (默认)
 #   - 添加到用户 PATH (通过 [Environment]::SetEnvironmentVariable)
-#   - 验证安装: chimera --version
-#   - (-SetupEnv) 自动注入工具链环境变量到用户级
+#   - 验证安装: chimera --version (正则 ^(aether|chimera) \d+\.\d+\.\d+)
+#   - (-SetupEnv) 自动注入 CARGO_HOME/RUSTUP_HOME/PATH 到用户级
+#
+# 退出码:
+#   0  安装成功(或 -SetupEnv 模式下环境变量设置成功)
+#   1  安装失败(网络/鉴权/校验/权限错误,见 [ERROR] 输出)
+#
+# 与 release.yml 一致性:
+#   - artifact 命名: chimera-windows-x86_64.exe (匹配 release.yml matrix)
+#   - --version 正则: ^(aether|chimera) \d+\.\d+\.\d+ (匹配 docker job grep)
+#   - checksums.txt 格式: 兼容 "HASH  file" / "HASH *file" (匹配 printf '%s  %s\n')
 # ============================================================
 
 # param 块必须紧跟注释区,在任何可执行代码之前

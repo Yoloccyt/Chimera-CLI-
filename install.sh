@@ -172,7 +172,13 @@ info "目标产物: ${ARTIFACT_NAME}"
 # 若未指定版本,通过 GitHub API 获取 latest
 if [ -z "${VERSION}" ]; then
     info "未指定版本,正在获取最新版本号..."
-    API_RESPONSE=$(http_get "${GITHUB_API}/releases/latest" 2>/dev/null || die "无法访问 GitHub API (网络/权限错误)")
+    # WHY die 在命令替换外层:POSIX sh 中 $(...) 创建子 shell,
+    # 子 shell 内的 exit 仅退出子 shell 不影响父脚本。
+    # 若写 `API_RESPONSE=$(http_get ... || die "...")`,die 在子 shell
+    # 执行,exit 1 被吞掉,父脚本继续运行导致后续 ${VERSION} 为空触发
+    # 兜底 die,虽功能正确但可读性误导。此处将 || die 移到命令替换外层,
+    # 确保 die 在父 shell 执行,set -e 下命令替换退出码会传递到外层。
+    API_RESPONSE=$(http_get "${GITHUB_API}/releases/latest" 2>/dev/null) || die "无法访问 GitHub API (网络/权限错误)"
     # 从 API 响应提取 tag_name (兼容 grep / sed)
     VERSION=$(printf "%s" "${API_RESPONSE}" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "${VERSION}" ] || die "无法解析最新版本号 (仓库可能未发布 Release)"
@@ -212,6 +218,34 @@ fi
 
 success "下载完成: $(ls -lh "${DOWNLOADED_FILE}" | awk '{print $5}')"
 
+# ------------------ SHA256 校验辅助函数 ------------------
+# 计算 SHA256 哈希(stdout 输出 hash)
+# WHY 抽函数:sha256sum (Linux) 与 shasum -a 256 (macOS) 输出格式相同,
+# 仅命令名不同,原代码两分支各 15 行几乎完全重复(DRY 违规)。
+# 参数:
+#   $1 - 文件路径
+# 返回:0(总是),stdout 输出 hash;工具不可用时 stdout 为空,
+#       调用方通过 [ -z "${ACTUAL_HASH}" ] 判定
+compute_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        # macOS 自带 shasum
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+    # 工具不可用时 stdout 为空,return 0 避免触发 set -e
+    return 0
+}
+
+# 从 checksums.txt 提取期望 hash(stdout 输出 hash)
+# 参数:
+#   $1 - checksums 文件路径
+#   $2 - artifact 名称(grep 模式)
+# 返回:0,stdout 输出 hash;未找到匹配时 stdout 为空
+extract_expected_hash() {
+    grep "$2" "$1" 2>/dev/null | awk '{print $1}' || true
+}
+
 # ------------------ SHA256 校验 (可选) ------------------
 if [ "${SKIP_VERIFY}" = "false" ]; then
     CHECKSUM_URL="${GITHUB_RELEASES}/download/${VERSION}/checksums.txt"
@@ -220,37 +254,20 @@ if [ "${SKIP_VERIFY}" = "false" ]; then
     http_get "${CHECKSUM_URL}" "${CHECKSUM_FILE}" 2>/dev/null || true
 
     if [ -s "${CHECKSUM_FILE}" ]; then
-        if command -v sha256sum >/dev/null 2>&1; then
-            EXPECTED_HASH=$(grep "${ARTIFACT_NAME}" "${CHECKSUM_FILE}" | awk '{print $1}' || true)
-            if [ -n "${EXPECTED_HASH}" ]; then
-                ACTUAL_HASH=$(sha256sum "${DOWNLOADED_FILE}" | awk '{print $1}')
-                if [ "${EXPECTED_HASH}" = "${ACTUAL_HASH}" ]; then
-                    success "SHA256 校验通过"
-                else
-                    die "SHA256 校验失败
+        EXPECTED_HASH=$(extract_expected_hash "${CHECKSUM_FILE}" "${ARTIFACT_NAME}")
+        if [ -n "${EXPECTED_HASH}" ]; then
+            ACTUAL_HASH=$(compute_sha256 "${DOWNLOADED_FILE}")
+            if [ -z "${ACTUAL_HASH}" ]; then
+                warn "未找到 sha256sum / shasum,跳过校验"
+            elif [ "${EXPECTED_HASH}" = "${ACTUAL_HASH}" ]; then
+                success "SHA256 校验通过"
+            else
+                die "SHA256 校验失败
   期望: ${EXPECTED_HASH}
   实际: ${ACTUAL_HASH}"
-                fi
-            else
-                warn "checksums.txt 中未找到 ${ARTIFACT_NAME},跳过校验"
-            fi
-        elif command -v shasum >/dev/null 2>&1; then
-            # macOS 自带 shasum
-            EXPECTED_HASH=$(grep "${ARTIFACT_NAME}" "${CHECKSUM_FILE}" | awk '{print $1}' || true)
-            if [ -n "${EXPECTED_HASH}" ]; then
-                ACTUAL_HASH=$(shasum -a 256 "${DOWNLOADED_FILE}" | awk '{print $1}')
-                if [ "${EXPECTED_HASH}" = "${ACTUAL_HASH}" ]; then
-                    success "SHA256 校验通过 (shasum)"
-                else
-                    die "SHA256 校验失败
-  期望: ${EXPECTED_HASH}
-  实际: ${ACTUAL_HASH}"
-                fi
-            else
-                warn "checksums.txt 中未找到 ${ARTIFACT_NAME},跳过校验"
             fi
         else
-            warn "未找到 sha256sum / shasum,跳过校验"
+            warn "checksums.txt 中未找到 ${ARTIFACT_NAME},跳过校验"
         fi
     else
         warn "Release 未附带 checksums.txt,跳过 SHA256 校验"
