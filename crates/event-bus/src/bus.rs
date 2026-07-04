@@ -252,10 +252,11 @@ impl EventBus {
     /// Critical 事件。在 spawn 的 async block 内调用可能导致事件静默丢失。
     pub fn subscribe_critical_events(&self) -> mpsc::UnboundedReceiver<NexusEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut guard = self
-            .critical_tx
-            .lock()
-            .expect("critical_tx mutex poisoned: 总线状态损坏");
+        // WHY unwrap_or_else: 中毒锁降级访问内部数据而非 panic。
+        // EventBus 是核心组件,前任持有者 panic 导致 poison 后,
+        // 继续抛 panic 会中断所有事件发布,降级为访问中毒数据更稳健(§4.1 红线)。
+        // 与 csn-substitutor/substitutor.rs 的 register_lock 处理方式保持一致。
+        let mut guard = self.critical_tx.lock().unwrap_or_else(|e| e.into_inner());
         guard.push(tx);
         rx
     }
@@ -266,10 +267,8 @@ impl EventBus {
     /// `send` 返回 Err 的 Sender(receiver 已 drop)被从 Vec 中移除,避免无限增长。
     /// Vec 为空(无 Critical 订阅者)时静默跳过,不报错。
     fn send_critical_mpsc(&self, event: &NexusEvent) {
-        let mut guard = self
-            .critical_tx
-            .lock()
-            .expect("critical_tx mutex poisoned: 总线状态损坏");
+        // WHY unwrap_or_else: 中毒锁降级访问而非 panic(见 subscribe_critical_events 注释)。
+        let mut guard = self.critical_tx.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_empty() {
             return;
         }
