@@ -30,7 +30,7 @@ rmp-serde = { workspace = true }
 sha2 = { workspace = true }
 # hex:十六进制编码,将 SHA-256 字节转为可读字符串存储
 hex = { workspace = true }
-# decb-governor:L3 预算治理,TTG 订阅 BudgetTier 进行联动切换(L9→L3 向下依赖允许)
+# decb-governor:L8 预算治理,TTG 订阅 BudgetTier 进行联动切换(L9→L8 跨层依赖)
 decb-governor = { path = "../decb-governor" }
 
 [dev-dependencies]

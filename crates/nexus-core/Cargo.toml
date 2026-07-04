@@ -17,3 +17,13 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 # rusqlite:SubTask 21.2 — sqlite_pragma 模块需要 Connection 类型
 rusqlite = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+rmp-serde = { workspace = true }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "clv_bench"
+harness = false

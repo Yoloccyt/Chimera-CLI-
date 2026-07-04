@@ -22,6 +22,8 @@ dashmap = { workspace = true }
 uuid = { workspace = true }
 # 时间处理(事件元数据)
 chrono = { workspace = true }
+# 伪随机数生成(EDSB 概率均衡 Task 11:替换 SystemTime 纳秒伪随机)
+rand = { workspace = true }
 
 [dev-dependencies]
 # 基准测试框架
