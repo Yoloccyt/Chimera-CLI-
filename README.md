@@ -47,29 +47,45 @@ Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 3
 
 项目提供跨平台一键安装脚本,自动检测平台/架构、下载对应 binary、校验 SHA256、配置 PATH 并验证安装。
 
-**Linux / macOS**(POSIX sh,兼容 dash/bash/zsh/fish):
+> **仓库可见性说明**
+> 本仓库(Yoloccyt/Chimera-CLI-)当前为**私有仓库**。`raw.githubusercontent.com` 拉取私有仓库内容必须在 HTTP header 中携带 `Authorization: Bearer <GITHUB_TOKEN>`,否则直接返回 `404 Not Found`。
+> 如果你已将仓库改为公有,可省略 `-H` / `-Headers` 参数。
+
+##### 公有仓库(可省略鉴权 header)
+
+**Linux / macOS**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
 ```
 
-**Windows**(PowerShell 5.1+):
+**Windows**:
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
 ```
 
-**私有仓库安装**(需 `GITHUB_TOKEN` 环境变量鉴权):
+##### 私有仓库(必须携带 GITHUB_TOKEN)
+
+**Linux / macOS**:
 
 ```bash
-# Linux / macOS
-GITHUB_TOKEN=ghp_xxx curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
-
-# Windows
-$env:GITHUB_TOKEN='ghp_xxx'; iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
+export GITHUB_TOKEN='ghp_xxx'
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
 ```
 
-**可选参数**:
+**Windows**:
+
+```powershell
+$env:GITHUB_TOKEN='ghp_xxx'
+$headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)
+```
+
+**WHY 需要 header 鉴权**: `raw.githubusercontent.com` 对私有仓库的 raw 内容拒绝匿名访问;`GITHUB_TOKEN` 仅作为环境变量存在时,`curl`/ `irm` 不会自动把它加入 header,必须显式传递。脚本内部下载 Release binary 时同样会读取该环境变量。
+
+##### 可选参数
 
 ```bash
 # 指定版本
@@ -88,11 +104,11 @@ sh install.sh --skip-verify
 脚本功能详见 [install.sh](./install.sh) / [install.ps1](./install.ps1) 头部注释。
 
 > **⚠️ 一键安装脚本访问失败?**
-> 如果你在中国大陆或某些企业网络中,`raw.githubusercontent.com` 可能被 DNS 污染或阻断,导致 `404` / `Connection timed out`。
-> 解决方法:
-> 1. 使用 [GitHub Releases](https://github.com/Yoloccyt/Chimera-CLI-/releases) 手动下载对应平台 binary(见方式 2)
-> 2. 或配置 DNS / 代理后重试
-> 3. 或克隆仓库后本地执行 `sh install.sh` / `.\install.ps1`
+> 如果你在中国大陆或某些企业网络中,`raw.githubusercontent.com` 可能被 DNS 污染或阻断,导致 `404` / `Connection timed out`。解决方法:
+> 1. 确认仓库可见性:私有仓库必须按上方示例携带 `Authorization: Bearer <GITHUB_TOKEN>` header
+> 2. 使用 [GitHub Releases](https://github.com/Yoloccyt/Chimera-CLI-/releases) 手动下载对应平台 binary(见方式 2)
+> 3. 配置 DNS / 代理后重试
+> 4. 克隆仓库后本地执行 `sh install.sh` / `.\install.ps1`
 
 #### 方式 2:从 Release 下载
 

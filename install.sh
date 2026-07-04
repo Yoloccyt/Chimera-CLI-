@@ -7,8 +7,20 @@
 #   sh install.sh [--version <ver>] [--install-dir <path>] [--skip-verify]
 #
 # 私有仓库安装(需 GITHUB_TOKEN 环境变量):
-#   GITHUB_TOKEN=ghp_xxx curl -fsSL .../install.sh | sh
-#   GITHUB_TOKEN=ghp_xxx sh install.sh
+#   WHY: raw.githubusercontent.com 对私有仓库 raw 内容拒绝匿名访问,
+#        必须显式在 HTTP header 中传递 Authorization: Bearer <token>。
+#        仅设置环境变量不会自动被 curl 加入 header。
+#
+#   Linux / macOS:
+#     export GITHUB_TOKEN=ghp_xxx
+#     curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+#       https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
+#
+#   如果 curl 持续 404,建议直接克隆仓库后本地执行:
+#     git clone https://github.com/Yoloccyt/Chimera-CLI-.git
+#     cd Chimera-CLI-
+#     export GITHUB_TOKEN=ghp_xxx
+#     sh install.sh
 #
 # 功能:
 #   - 自动检测平台 (Linux/macOS) 与架构 (x86_64/aarch64)
