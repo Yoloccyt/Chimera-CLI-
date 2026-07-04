@@ -1,0 +1,23 @@
+[package]
+name = "mtpe-executor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nexus-core = { path = "../nexus-core" }
+event-bus = { path = "../event-bus" }
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "predict"
+harness = false

@@ -1,0 +1,46 @@
+# Chimera CLI 配置样例(Figment 三源合并:Default < File < Env < CLI)
+#
+# 用法:
+#   1. 复制为 ~/.aether/omega.toml 并按需修改
+#   2. 或通过 CHIMERA_CONFIG 环境变量指定路径:
+#        $env:CHIMERA_CONFIG = 'D:\my\config.toml'
+#   3. 或通过 --config 命令行参数覆盖:
+#        aether --config /path/to/config.toml wiki "查询"
+#
+# 完整字段参考:`crates/chimera-cli/src/config.rs` 中的 `ChimeraConfig` struct,
+# 或执行 `aether config init` 生成完整 omega.toml 模板(含全部 14 个顶层 section)。
+#
+# 配置优先级(后者覆盖前者):
+#   1. 内置默认值(ChimeraConfig::default)
+#   2. 配置文件(本文件)
+#   3. 环境变量(前缀 AETHER_,嵌套用 __ 分隔,如 AETHER_MODEL_ROUTER__STRATEGY)
+#   4. CLI 参数(--config / --model 等,优先级最高)
+#
+# WHY TOML 样例:Figment 支持 TOML/YAML/JSON/ENV 四源,但 TOML 是 Rust 生态
+# 首选(Rust 社区惯例 + cargo 用 TOML)。提供 TOML 样例便于用户复制即用,
+# 避免用户手写 TOML 时遗漏字段类型或数组语法(§10.5 已补齐 yaml+toml 双样例)。
+
+# Quest 引擎配置
+[quest]
+max_concurrent_quests = 4
+checkpoint_interval_secs = 300
+
+# SecCore 沙箱配置
+[seccore]
+sandbox_mode = "drop"  # drop | kill | log
+command_whitelist = ["ls", "cat", "grep"]
+
+# DECB 预算配置
+[decb]
+budget_limit = 10000
+adjustment_factor = 0.1
+
+# OSA 稀疏化配置
+[osa]
+sparsity_ratio = 0.4
+routing_mask_size = 128
+
+# 日志配置
+[logging]
+level = "info"  # trace | debug | info | warn | error
+format = "json"  # json | plain

@@ -1,0 +1,39 @@
+[package]
+name = "osa-coordinator"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core:基础类型(如 CLV,本 crate 暂未直接使用,保留以备扩展)
+nexus-core = { path = "../nexus-core" }
+# L1 Core:EventBus 跨层通信,发布 OmniSparseMasksComputed 事件(修正 V1 违规)
+event-bus = { path = "../event-bus" }
+# 序列化:mask_hash 计算需将五维度掩码序列化为 JSON
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# mask_hash 计算:五维度掩码序列化后取 SHA-256 hex
+sha2 = { workspace = true }
+hex = { workspace = true }
+# 结构化日志(掩码计算与事件发布追踪)
+tracing = { workspace = true }
+
+[dev-dependencies]
+# 异步测试运行器(coordinator.rs 集成测试使用 #[tokio::test])
+tokio = { workspace = true }
+# 端到端测试(e2e.rs)需同时依赖 L2/L3/L6 多个 crate,验证完整数据流:
+# OSA(L6) → HCW(L2) → KVBSR(L6) → MLC(L2) → CMT(L3)
+# WHY:测试代码不属于生产依赖,通过 dev-dependencies 引入不违反 §2.2 依赖铁律
+hcw-window = { path = "../hcw-window" }
+mlc-engine = { path = "../mlc-engine" }
+cmt-tiering = { path = "../cmt-tiering" }
+kvbsr-router = { path = "../kvbsr-router" }
+# 基准测试框架(SubTask 11.1:Week 3 复审扩展)
+criterion = { workspace = true }
+# 属性测试框架(SubTask 15.12:sparsity/complexity 不变量验证)
+proptest = { workspace = true }
+
+[[bench]]
+name = "compute_masks"
+harness = false

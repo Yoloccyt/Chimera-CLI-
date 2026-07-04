@@ -1,0 +1,44 @@
+[package]
+name = "hcw-window"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core:CLV 类型(任务相关性计算,基于 CLV 余弦相似度)
+nexus-core = { path = "../nexus-core" }
+# L1 Core:EventBus 跨层通信
+# - 发布 ContextWindowSwitched/ContextCompressed 事件(Week 3 Task 6 新增)
+# - 订阅 OmniSparseMasksComputed 事件(Week 1 定义,修正 V1 违规)
+event-bus = { path = "../event-bus" }
+# 序列化:状态持久化与事件 payload(CompressionReport/HcwState 序列化)
+# WHY(SubTask 13.6):启用 "rc" feature,使 serde 为 Arc<str> 实现 Serialize/Deserialize
+# (ContextEntry.content 改为 Arc<str> 共享,serde 默认不为 Arc/Rc 实现反序列化)
+serde = { workspace = true, features = ["rc"] }
+serde_json = { workspace = true }
+# 库层错误类型标准(4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 异步运行时与 RwLock(4.1:所有 async fn 满足 Send + 'static 约束)
+tokio = { workspace = true }
+# 时间:ContextEntry 的 last_accessed_at 与 recency 计算(重要性评分 0.4时近性)
+chrono = { workspace = true }
+# 结构化日志(窗口切换与压缩追踪)
+tracing = { workspace = true }
+# 线程安全并发 Map(SubTask 2.11 要求,预留用于未来按 id 索引优化)
+dashmap = { workspace = true }
+# 向量运算(SubTask 2.11 要求,通过 nexus-core CLV 间接使用)
+ndarray = { workspace = true }
+
+[dev-dependencies]
+# 异步测试运行器(window.rs 集成测试使用 #[tokio::test])
+tokio = { workspace = true }
+# 基准测试框架(SubTask 11.1:Week 3 复审扩展)
+criterion = { workspace = true }
+# 属性测试框架(SubTask 20.3:压缩不变量与窗口选择单调性验证)
+proptest = { workspace = true }
+# SCC 推测上下文缓存 — HCW×SCC 跨周集成测试
+# WHY:HCW 压缩上下文后 SCC 缓存压缩结果,供 PVL Producer/Verifier 共享
+scc-cache = { path = "../scc-cache" }
+
+[[bench]]
+name = "compress"
+harness = false

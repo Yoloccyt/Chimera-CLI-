@@ -1,0 +1,38 @@
+[package]
+name = "faae-router"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core:CLV 余弦相似度计算 + id_newtype! 宏
+nexus-core = { path = "../nexus-core" }
+# L1 Core:EventBus 跨层通信,发布 ExpertRouted/EntropyBalanced 等事件
+event-bus = { path = "../event-bus" }
+# 异步运行时(RwLock/tokio::spawn 用于并发路由与后台衰减循环)
+tokio = { workspace = true }
+# 序列化:ExpertProfile/RoutingResult 等类型派生 Serialize/Deserialize
+serde = { workspace = true, features = ["derive"] }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 结构化日志(路由与均衡追踪)
+tracing = { workspace = true }
+# 线程安全并发映射(保留以备未来高并发场景优化)
+dashmap = { workspace = true }
+# UUIDv7 生成(事件元数据)
+uuid = { workspace = true }
+# 时间处理(事件元数据)
+chrono = { workspace = true }
+# 伪随机数生成(EDSB 概率均衡 Task 11:替换 SystemTime 纳秒伪随机)
+rand = { workspace = true }
+
+[dev-dependencies]
+# 基准测试框架
+criterion = { workspace = true }
+# 属性测试框架
+proptest = { workspace = true }
+# 测试用临时文件/目录
+tempfile = { workspace = true }
+
+[[bench]]
+name = "route"
+harness = false

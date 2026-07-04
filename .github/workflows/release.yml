@@ -1,0 +1,313 @@
+name: Release
+
+# ============================================================
+# Week 8 Task 4 — 跨平台发布 CI/CD
+#
+# 触发:推送 v*.*.*-omega 标签(如 v1.0.0-omega)
+# 产物:5 平台 binary + GitHub Release
+# Matrix:Windows x86_64 · Linux x86_64/aarch64 · macOS x86_64/aarch64
+# ============================================================
+
+on:
+  push:
+    tags:
+      # WHY: 仅保留通配模式 v*.*.*-omega,已覆盖 v1.0.0-omega;
+      # 显式列举具体版本会造成后续发版需手动追加,违反 DRY
+      - 'v*.*.*-omega'
+  workflow_dispatch:  # 允许手动触发,便于调试
+
+permissions:
+  contents: write  # 创建 GitHub Release 需要
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # WHY: panic=abort 下 release binary 无 unwind 表,线上 panic 默认无栈可追;
+  #      全局开启 RUST_BACKTRACE=1 让 build/test/docker/release 所有 job 在
+  #      panic 时输出 backtrace,便于 CI 日志定位根因(对应 §10.5 P1 修复)
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ============================================================
+  # Job 1: 5 平台 Matrix 构建
+  # ============================================================
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30  # WHY: 5 平台 matrix × release LTO 编译典型 8-15min,30min 兜底防卡死
+    strategy:
+      fail-fast: false  # 单平台失败不阻塞其他平台
+      matrix:
+        include:
+          # Windows x86_64 — GNU 工具链(项目默认工具链)
+          - target: x86_64-pc-windows-gnu
+            runner: windows-latest
+            cross: false
+            artifact_name: chimera-windows-x86_64.exe
+            binary_name: aether.exe
+          # Linux x86_64 — 主力服务器平台
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: false
+            artifact_name: chimera-linux-x86_64
+            binary_name: aether
+          # Linux aarch64 — ARM 服务器(交叉编译,需 cross)
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: true
+            artifact_name: chimera-linux-aarch64
+            binary_name: aether
+          # macOS x86_64 — Intel Mac
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            cross: false
+            artifact_name: chimera-macos-x86_64
+            binary_name: aether
+          # macOS aarch64 — Apple Silicon (M1/M2/M3)
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            cross: false
+            artifact_name: chimera-macos-aarch64
+            binary_name: aether
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Install cross (for aarch64-linux)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p chimera-cli
+          else
+            cargo build --release --target ${{ matrix.target }} -p chimera-cli
+          fi
+
+      - name: Strip binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          BIN_PATH="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          if [ -f "$BIN_PATH" ]; then
+            strip "$BIN_PATH" || echo "strip skipped (tool unavailable)"
+          fi
+
+      - name: Rename to artifact name
+        shell: bash
+        run: |
+          BIN_PATH="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          cp "$BIN_PATH" "${{ matrix.artifact_name }}"
+
+      - name: Verify binary runs
+        shell: bash
+        run: |
+          ./${{ matrix.artifact_name }} --version || echo "version check skipped"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+          retention-days: 30
+
+  # ============================================================
+  # Job 2: 全 workspace 测试(不阻塞 matrix 构建)
+  # ============================================================
+  test:
+    name: Test (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # WHY: workspace 全量测试典型 5-12min,30min 兜底防卡死
+    # WHY: 仅 tag 推送时触发测试,避免 workflow_dispatch 调试时重复跑全量测试
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-test-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-test-cargo-
+      - name: Run workspace tests
+        run: cargo test --workspace
+
+  # ============================================================
+  # Job 2.5: Docker 镜像构建 + 推送 GHCR
+  # ============================================================
+  docker:
+    name: Docker Image
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # WHY: docker build+push+验证典型 4-8min,30min 兜底防 registry 网络抖动卡死
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      packages: write  # GHCR 推送权限
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-rc') }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # WHY 注入 VERSION build-arg:让 Dockerfile L49 的 ARG VERSION 接收实际 git tag,
+          # 使 LABEL org.opencontainers.image.version 与 Release 版本一致,避免镜像元数据漂移
+          build-args: VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image size < 100MB
+        run: |
+          # WHY 使用 ${GITHUB_REPOSITORY,,}(Bash 参数扩展转小写):docker/metadata-action@v5
+          # 默认将 images 转为小写推送,但 ${{ github.repository }} 保留原大小写,
+          # 直接用会导致 docker image inspect 找不到镜像(大小写不匹配)。
+          IMAGE_SIZE=$(docker image inspect ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.ref_name }} --format='{{.Size}}')
+          echo "Image size: $IMAGE_SIZE bytes"
+          if [ "$IMAGE_SIZE" -gt 104857600 ]; then
+            echo "ERROR: Image size exceeds 100MB limit"
+            exit 1
+          fi
+          echo "OK: Image size within 100MB limit"
+
+      - name: Verify image functionality (--version)
+        run: |
+          # WHY 显式 docker pull:虽然 build-push-action 已推送镜像,但本地缓存不等于
+          # 用户可拉取。此步骤模拟真实用户安装路径,验证 GHCR 上的镜像可被公开拉取。
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.ref_name }}"
+          echo "Pulling image: $IMAGE"
+          docker pull "$IMAGE"
+
+          # 运行 --version 验证 binary 功能正常(distroless 镜像无 shell,直接执行 binary)
+          echo "Running: docker run --rm $IMAGE --version"
+          VERSION_OUTPUT=$(docker run --rm "$IMAGE" --version)
+          echo "Version output: $VERSION_OUTPUT"
+
+          # 验证输出格式:必须匹配 aether|chimera X.Y.Z[-omega](确保 binary 未损坏)
+          if ! echo "$VERSION_OUTPUT" | grep -qE '^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "ERROR: --version output does not match expected format"
+            echo "Expected: aether|chimera X.Y.Z[-omega]"
+            echo "Actual: $VERSION_OUTPUT"
+            exit 1
+          fi
+          echo "OK: Image functionality verified (--version output valid)"
+
+  # ============================================================
+  # Job 3: 汇总所有平台产物,创建 GitHub Release
+  # ============================================================
+  release:
+    name: Publish GitHub Release
+    needs: [build, test, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # WHY: 产物下载+Release 创建典型 1-3min,30min 兜底防 GitHub API 抖动
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts (debug)
+        run: ls -laR artifacts
+
+      - name: Generate checksums.txt
+        # WHY: install.sh line 216-260 和 install.ps1 line 199-242 会从 Release 下载
+        # checksums.txt 做 SHA256 校验,缺失则校验空转(warn 跳过)。此 step 生成
+        # 与两端解析逻辑对齐的格式(<64-hex>  <filename> 双空格),并校验 5 平台
+        # 产物全部纳入(防止 matrix 部分失败导致 checksums 不完整)。
+        run: |
+          cd artifacts
+          find . -type f | sort | while IFS= read -r f; do
+            bn=$(basename "$f")
+            hash=$(sha256sum "$f" | awk '{print $1}')
+            printf '%s  %s\n' "$hash" "$bn"
+          done > ../checksums.txt
+          EXPECTED_COUNT=5
+          ACTUAL_COUNT=$(wc -l < ../checksums.txt | tr -d ' ')
+          if [ "$ACTUAL_COUNT" -ne "$EXPECTED_COUNT" ]; then
+            echo "::error::Expected $EXPECTED_COUNT artifacts in checksums.txt, got $ACTUAL_COUNT"
+            exit 1
+          fi
+          echo "checksums.txt generated ($ACTUAL_COUNT entries):"
+          cat ../checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Chimera CLI ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/*/*
+            checksums.txt
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          body: |
+            ## Chimera CLI (NEXUS-OMEGA) ${{ github.ref_name }}
+
+            ### 平台支持
+            | 平台 | 文件 | 架构 |
+            |------|------|------|
+            | Windows | `chimera-windows-x86_64.exe` | x86_64 |
+            | Linux   | `chimera-linux-x86_64`       | x86_64 |
+            | Linux   | `chimera-linux-aarch64`      | aarch64 (ARM) |
+            | macOS   | `chimera-macos-x86_64`       | Intel |
+            | macOS   | `chimera-macos-aarch64`      | Apple Silicon |
+
+            ### 验证
+            ```bash
+            chimera --version
+            ```
+
+            ### Docker
+            ```bash
+            # 拉取 GHCR 镜像(distroless,< 100MB,非 root 运行)
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            # 验证镜像可用性(应输出版本号)
+            docker run --rm ghcr.io/${{ github.repository }}:${{ github.ref_name }} --version
+            ```

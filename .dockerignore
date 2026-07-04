@@ -1,0 +1,30 @@
+# 构建产物(可能数 GB,会拖慢构建上下文上传)
+target/
+**/target/
+
+# 工具链本地缓存(不应进入镜像)
+.toolchain/
+tmp/
+
+# 版本控制
+.git/
+.gitignore
+
+# IDE / 编辑器
+.vscode/
+.idea/
+.trae/
+.claude/
+
+# 文档与测试日志(构建不需要)
+docs/
+*.md
+!Cargo.toml
+!Cargo.lock
+tests/
+fuzz/
+
+# 临时文件
+*.log
+*.tmp
+*.bak

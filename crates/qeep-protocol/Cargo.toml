@@ -1,0 +1,25 @@
+[package]
+name = "qeep-protocol"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# 异步运行时:tokio(timeout 包裹 future,spawn 任务管理)
+tokio = { workspace = true }
+# 唯一 ID 生成(UUIDv7 含时间戳,便于按时间排序)
+uuid = { workspace = true }
+# 时间戳(调用创建/完成/孤儿报告)
+chrono = { workspace = true }
+# 并发安全 HashMap(追踪 pending_calls)
+dashmap = { workspace = true }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# 测试用 tokio(多线程 runtime)
+tokio = { workspace = true }
+# 测试用:构造 EntangledCallId 与 OrphanReport
+uuid = { workspace = true }
+chrono = { workspace = true }
+# 属性测试框架,用于 QEEP 核心不变量验证(W7-3)
+proptest = { workspace = true }

@@ -1,0 +1,23 @@
+[package]
+name = "decb-governor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nexus-core = { path = "../nexus-core" }
+event-bus = { path = "../event-bus" }
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+
+# criterion 基准测试目标 — 对应 SubTask 34.6
+[[bench]]
+name = "budget_compute"
+harness = false

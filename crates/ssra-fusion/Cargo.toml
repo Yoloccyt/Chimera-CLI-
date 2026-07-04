@@ -1,0 +1,39 @@
+[package]
+name = "ssra-fusion"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# 异步运行时:timeout 超时控制 + spawn 后台订阅任务
+tokio = { workspace = true }
+# 配置与类型序列化(#[derive(Serialize, Deserialize)])
+serde = { workspace = true, features = ["derive"] }
+# 应用层错误(顶层调用方使用,库层用 thiserror)
+anyhow = { workspace = true }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 结构化日志(事件发布失败、防御性适配告警)
+tracing = { workspace = true }
+# UUIDv7 融合模板 ID 生成(时间有序,便于追溯)
+uuid = { workspace = true }
+# 时间戳(模板预编译时刻、LRU 驱逐排序)
+chrono = { workspace = true }
+# 并发安全模板缓存(O(1) 分片查找)
+dashmap = { workspace = true }
+# L1 Core:跨层通信唯一通道,发布 SsraFusionCompleted 事件
+event-bus = { path = "../event-bus" }
+# L1 Core:CLV 余弦相似度(可选,用于模板语义匹配扩展)
+nexus-core = { path = "../nexus-core" }
+
+[dev-dependencies]
+# 性能基准框架(SubTask 1.5)
+criterion = { workspace = true }
+# 属性测试框架(SubTask 1.6,proptest 1.5 闭包语法)
+proptest = { workspace = true }
+# JSON 序列化测试(config serde 往返)
+serde_json = { workspace = true }
+
+# 性能基准配置:harness=false 以使用 criterion 自定义 main
+[[bench]]
+name = "fusion_benchmark"
+harness = false

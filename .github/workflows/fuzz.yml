@@ -1,0 +1,85 @@
+name: Fuzz
+
+# ============================================================
+# Week 8 限制深度攻坚 — cargo-fuzz CI 集成
+#
+# 触发:推送 v*.*.*-omega 标签 或 手动触发
+# 运行:ubuntu-latest runner + nightly 工具链 + cargo-fuzz
+# 时长:3 target × 300s + 编译 ≈ 15-20min
+#
+# 本地 Windows GNU 无法运行(libFuzzer C++ 与 g++ 不兼容),
+# 委托 Linux CI 执行,解除限制 1。
+# ============================================================
+
+on:
+  push:
+    tags:
+      - 'v*.*.*-omega'
+  workflow_dispatch:  # 允许手动触发
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20  # WHY: 3 target × 300s + 编译 ≈ 15-20min,20min 兜底防止 fuzz hang 占用 nightly runner
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - quest_parse
+          - seccore_sandbox
+          - event_serialize
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: fuzz-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            fuzz-${{ matrix.target }}-cargo-
+
+      - name: Install cargo-fuzz
+        # WHY: --locked 锁定 Cargo.lock,防止 cargo-fuzz 上游 minor 版本引入
+        #      破坏性变更导致 CI 间歇性失败(reproducibility 优先)
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run fuzz target (${{ matrix.target }})
+        working-directory: ./fuzz
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300 -print_final_stats=1 2>&1 | tee fuzz_${{ matrix.target }}.log
+
+      - name: Upload fuzz log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-log-${{ matrix.target }}
+          path: fuzz/fuzz_${{ matrix.target }}.log
+          retention-days: 30
+
+      - name: Upload crash inputs (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/crash-*
+          retention-days: 90
+          if-no-files-found: ignore

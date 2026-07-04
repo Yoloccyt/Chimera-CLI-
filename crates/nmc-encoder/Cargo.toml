@@ -1,0 +1,32 @@
+[package]
+name = "nmc-encoder"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core:使用 CLV(512-dim 潜在向量)作为多模态编码的统一输出
+nexus-core = { path = "../nexus-core" }
+# L1 Core:EventBus 跨层通信,发布 NmcEncoded 事件
+event-bus = { path = "../event-bus" }
+# 异步运行时(事件总线 publish_blocking 同步调用,但保留 tokio 供未来扩展)
+tokio = { workspace = true }
+# 序列化:配置与类型派生
+serde = { workspace = true, features = ["derive"] }
+# 应用层错误(集成测试场景)
+anyhow = { workspace = true }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 结构化日志(操作追踪与调试)
+tracing = { workspace = true }
+# 内容哈希(SHA256,生成 CognitiveElement.content_hash)
+sha2 = { workspace = true }
+
+[dev-dependencies]
+# 属性测试框架(嵌入不变量验证)
+proptest = { workspace = true }
+# 基准测试框架(文本编码延迟 p95 ≤ 30ms 验收)
+criterion = { workspace = true }
+
+[[bench]]
+name = "encoding_benchmark"
+harness = false

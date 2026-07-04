@@ -1,0 +1,76 @@
+# =============================================================================
+# Week 8 Task 3 SubTask 3.2 — cargo-fuzz 模糊测试 crate
+#
+# WHY 独立 package:fuzz crate 不在主 workspace members 中,避免:
+# 1. nightly 工具链依赖污染主 workspace(stable 编译)
+# 2. libfuzzer-sys 的 -Zsanitizer=address 影响 CI
+# 3. forbid(unsafe_code) 与 libfuzzer 的 unsafe 冲突
+#
+# 运行方式(需 nightly 工具链):
+#   rustup install nightly
+#   rustup component add --toolchain nightly llvm-tools-preview
+#   cargo +nightly fuzz run quest_parse
+#   cargo +nightly fuzz run seccore_sandbox
+#   cargo +nightly fuzz run event_serialize
+#
+# 当前环境仅有 stable 工具链,无法实际运行,详见
+# docs/security/week8_security_report.md
+# =============================================================================
+
+[package]
+name = "chimera-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "NEXUS-OMEGA 模糊测试 target 集合(cargo-fuzz)"
+
+# WHY cargo-fuzz = true:cargo-fuzz 0.13+ 要求 fuzz crate 显式声明此 metadata,
+# 否则拒绝识别(报 "does not look like a cargo-fuzz manifest")。
+# 仅 fuzz harness 配置,不影响被测 crate。
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+# libfuzzer-sys:cargo-fuzz 的核心运行时,提供 fuzz_target! 宏
+# 需要 nightly 工具链(-Zsanitizer=address)
+libfuzzer-sys = "0.4"
+
+# 被测 crate(通过 path 引用主 workspace,版本与 workspace 一致)
+nexus-core = { path = "../crates/nexus-core" }
+event-bus = { path = "../crates/event-bus" }
+seccore = { path = "../crates/seccore" }
+
+# 序列化依赖(直接指定版本,fuzz crate 不在 workspace 内无法用 workspace = true)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rmp-serde = "1.3"
+
+# ============================================================
+# Fuzz target 二进制声明
+#
+# WHY test = false / doc = false:fuzz target 不是常规测试/文档目标,
+# 仅通过 `cargo +nightly fuzz run <name>` 调用 libFuzzer 运行
+# ============================================================
+
+[[bin]]
+name = "quest_parse"
+path = "fuzz_targets/quest_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "seccore_sandbox"
+path = "fuzz_targets/seccore_sandbox.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "event_serialize"
+path = "fuzz_targets/event_serialize.rs"
+test = false
+doc = false
+
+# WHY 空 [workspace] 表:声明 fuzz crate 为独立 package,
+# 不属于主 workspace(避免 nightly 工具链 + libfuzzer-sys 污染 stable workspace)。
+# 否则 cargo 报 "current package believes it's in a workspace when it's not"。
+[workspace]

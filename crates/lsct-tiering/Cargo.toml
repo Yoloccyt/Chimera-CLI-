@@ -1,0 +1,28 @@
+[package]
+name = "lsct-tiering"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+# L1 Core:跨层通信,发布 LsctTierSwitched 事件
+event-bus = { path = "../event-bus" }
+# L1 Core:nexus-core(workspace 共享基础设施)
+nexus-core = { path = "../nexus-core" }
+# L3 同层互引:复用 Tier/CapabilityId 类型(类型重用,非实现重用,§2.2 允许)
+cmt-tiering = { path = "../cmt-tiering" }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "tiering_benchmark"
+harness = false

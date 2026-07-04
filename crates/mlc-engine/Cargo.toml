@@ -1,0 +1,43 @@
+﻿[package]
+name = "mlc-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core:使用 CLV(512-dim 潜在向量)作为语义记忆的统一表示
+nexus-core = { path = "../nexus-core" }
+# L1 Core:EventBus 跨层通信,发布 MemoryMetricsReported/MemoryTiered 事件
+event-bus = { path = "../event-bus" }
+# L3 ProceduralMemory 持久化(WAL 模式提升并发读写性能)
+rusqlite = { workspace = true }
+# L0 WorkingMemory 线程安全分片锁(支持并发读写)
+dashmap = { workspace = true }
+# CLV 向量运算(余弦相似度计算,通过 nexus-core 间接依赖,此处直接用于 L2)
+ndarray = { workspace = true }
+# 序列化:条目持久化与事件 payload
+serde = { workspace = true }
+serde_json = { workspace = true }
+# 库层错误类型标准(4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# MemoryId/ProceduralEntry ID 生成(UUIDv7 时间有序)
+uuid = { workspace = true }
+# 时间戳:EpisodicMemory 时间索引、MemoryEntry 访问时间
+chrono = { workspace = true }
+# 异步运行时与 spawn_blocking(L3 ProceduralMemory SQLite 操作包装,避免阻塞 worker 线程)
+tokio = { workspace = true }
+# 结构化日志(操作追踪与调试)
+tracing = { workspace = true }
+
+[dev-dependencies]
+# 测试用临时文件/目录(跨平台安全),用于 L3 SQLite 持久化测试
+tempfile = { workspace = true }
+# 异步测试运行器(engine.rs 集成测试使用 #[tokio::test])
+tokio = { workspace = true }
+# 基准测试框架(SubTask 11.1:Week 3 复审扩展)
+criterion = { workspace = true }
+# 属性测试框架(SubTask 15.12:L2 recall_by_clv 分数不变量验证)
+proptest = { workspace = true }
+
+[[bench]]
+name = "l2_recall"
+harness = false

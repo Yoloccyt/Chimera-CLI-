@@ -1,0 +1,31 @@
+[package]
+name = "chimera-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Clap:子命令式 CLI 框架,启用 derive 宏、env 变量支持、cargo 元信息
+clap = { workspace = true }
+# Figment:多源配置合并(默认 > File > Env > CLI 优先级)
+figment = { workspace = true }
+# Tokio:异步运行时,full feature 提供完整能力
+tokio = { workspace = true }
+# Serde:配置序列化/反序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
+# anyhow:应用层错误处理(库层应使用 thiserror)
+anyhow = { workspace = true }
+# tracing:结构化日志,避免 println! 滥用
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# tempfile:集成测试中生成临时配置文件
+tempfile = { workspace = true }
+# proptest:属性测试框架,验证 CLI 参数解析的不变量(对应 E-MINOR-1)
+proptest = { workspace = true }
+
+# 显式声明二进制目标,确保 main.rs 被识别为 aether 可执行文件
+[[bin]]
+name = "aether"
+path = "src/main.rs"

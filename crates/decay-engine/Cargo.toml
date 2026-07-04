@@ -1,0 +1,12 @@
+[package]
+name = "decay-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# thiserror:库层错误类型标准(§4.1 规范:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# dashmap:并发安全哈希表;读多写少场景下分片锁并发性能优于 RwLock<HashMap>
+dashmap = { workspace = true }
+# tracing:结构化日志,用于记录衰减事件与冻结决策(审计追溯)
+tracing = { workspace = true }

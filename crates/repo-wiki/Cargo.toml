@@ -1,0 +1,48 @@
+[package]
+name = "repo-wiki"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core 依赖(向下依赖允许,§2.2 依赖铁律)
+nexus-core = { path = "../nexus-core" }
+event-bus = { path = "../event-bus" }
+
+# SQLite 持久化(WAL 模式 + Mutex 包装 Connection)
+rusqlite = { workspace = true }
+
+# 序列化(tags JSON、WikiEntry serde)
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# 错误处理(§4.1:库层用 thiserror enum)
+thiserror = { workspace = true }
+
+# 占位嵌入向量生成(SHA-256 扩展为 512-dim,Week 6 替换为 NMC 编码)
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+# 唯一标识(UUIDv7 时间有序)
+uuid = { workspace = true }
+
+# 时间戳(ISO 8601 序列化)
+chrono = { workspace = true }
+
+# 异步运行时(发布 WikiUpdated 事件)
+tokio = { workspace = true }
+
+# 结构化日志
+tracing = { workspace = true }
+
+# 向量运算(预留,Week 6 NMC 集成时使用)
+ndarray = { workspace = true }
+
+# NOTE: sqlite-vec 集成已降级为内存向量检索
+# WHY: sqlite-vec 0.1.9 的 Rust binding 仅暴露 C 入口 sqlite3_vec_init,
+#      注册需调用 sqlite3_auto_extension + unsafe,与 #![forbid(unsafe_code)] 冲突。
+#      降级在 10-1000 条目规模下性能足够(KNN < 10ms)。
+#      Week 6 NMC 实现后可重新评估引入专用向量索引(如 HNSW)。
+# sqlite-vec = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,51 @@
+[package]
+name = "quest-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# nexus-core:L1 核心领域类型(UserIntent/Quest/Task/TaskStatus/ThinkingMode)
+nexus-core = { path = "../nexus-core" }
+# event-bus:L1 事件总线,跨层通信唯一通道(§2.2 依赖铁律)
+event-bus = { path = "../event-bus" }
+# dashmap:并发安全哈希表;读多写少场景下分片锁并发性能优于 RwLock<HashMap>
+dashmap = { workspace = true }
+# tokio:异步运行时,EventBus::publish 为 async
+tokio = { workspace = true }
+# tracing:结构化日志,记录 Quest 生命周期事件(审计追溯)
+tracing = { workspace = true }
+# thiserror:库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# serde:配置序列化(QuestConfig)
+serde = { workspace = true, features = ["derive"] }
+# serde_json:JSON 序列化,用于检查点状态持久化
+serde_json = { workspace = true }
+# uuid:UUIDv7 生成 quest_id(时间有序,便于因果追踪)
+uuid = { workspace = true }
+# chrono:时间处理(检查点 created_at 时间戳)
+chrono = { workspace = true }
+# rmp-serde:MessagePack 序列化(ADR-004,与 Event Bus 一致),用于检查点持久化
+rmp-serde = { workspace = true }
+# sha2:SHA-256 哈希,用于检查点完整性校验(防状态漂移)
+sha2 = { workspace = true }
+# hex:十六进制编码,将 SHA-256 字节转为可读字符串存储
+hex = { workspace = true }
+# decb-governor:L8 预算治理,TTG 订阅 BudgetTier 进行联动切换(L9→L8 跨层依赖)
+decb-governor = { path = "../decb-governor" }
+
+[dev-dependencies]
+# tempfile:测试用临时文件/目录
+tempfile = { workspace = true }
+# repo-wiki:L5 知识沉淀,端到端集成测试需验证 Quest 结果可生成 Wiki 条目
+repo-wiki = { path = "../repo-wiki" }
+# model-router:L1 模型路由,端到端集成测试需验证 Quest 创建后可路由至执行模型
+model-router = { path = "../model-router" }
+# criterion:基准测试框架,用于 TTG 模式选择延迟基准(SubTask 35.6)
+criterion = { workspace = true }
+# proptest:属性测试框架,用于 TTG 不变量验证(SubTask 37.7)
+proptest = { workspace = true }
+
+# criterion 基准测试目标 — 对应 SubTask 35.6
+[[bench]]
+name = "ttg_select"
+harness = false

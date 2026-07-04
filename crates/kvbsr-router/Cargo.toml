@@ -1,0 +1,37 @@
+[package]
+name = "kvbsr-router"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# L1 Core:CLV 类型(512 维向量,余弦相似度计算)
+nexus-core = { path = "../nexus-core" }
+# L1 Core:EventBus 跨层通信,发布 ToolsRouted/BlocksRebalanced 事件
+event-bus = { path = "../event-bus" }
+# 向量运算:CLV 内部基于 ndarray,本 crate 通过 clv.as_slice() 获取 &[f32],
+# 保留 ndarray 依赖以备未来性能优化(如改用 ndarray 向量运算替代手写循环)
+ndarray = { workspace = true }
+# 线程安全并发映射:SubTask 5.11 要求,当前使用 RwLock<HashMap>,
+# 保留 dashmap 以备未来高并发场景优化(如工具向量索引改为 DashMap)
+dashmap = { workspace = true }
+# 序列化:SemanticBlock/RoutingResult 等类型派生 Serialize/Deserialize
+serde = { workspace = true }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# UUIDv7 生成 block_id(时间有序,便于因果追踪)
+uuid = { workspace = true }
+# 结构化日志(路由与重平衡追踪)
+tracing = { workspace = true }
+# 异步运行时(RwLock/tokio::spawn 用于原子切换与异步重平衡)
+tokio = { workspace = true }
+
+[dev-dependencies]
+# 无额外 dev-dependencies(测试使用 tokio 的 #[tokio::test],已在 dependencies 中)
+# 基准测试框架(SubTask 11.1:Week 3 复审扩展)
+criterion = { workspace = true }
+# 属性测试框架(SubTask 20.4:路由结果不变量验证)
+proptest = { workspace = true }
+
+[[bench]]
+name = "route"
+harness = false
