@@ -69,22 +69,29 @@ chimera --version
 #### 方式 2:从源码构建
 
 ```powershell
-# 1. 设置环境变量(Windows,每次新 shell 需设置)
-$env:CARGO_HOME = 'D:\Chimera CLI\.toolchain\cargo'
-$env:RUSTUP_HOME = 'D:\Chimera CLI\.toolchain\rustup'
-$env:TMP = 'D:\Chimera CLI\tmp'
-$env:TEMP = 'D:\Chimera CLI\tmp'
-$env:PATH = "D:\Chimera CLI\.toolchain\cargo\bin;D:\msys64\mingw64\bin;$env:PATH"
-
-# 2. 克隆并构建
+# 0. 克隆仓库
 git clone <repo-url> "D:\Chimera CLI"
 cd "D:\Chimera CLI"
-cargo build --workspace --release
 
-# 3. 验证
+# 1. 一键配置工具链环境变量(推荐,仅需执行一次)
+#    自动设置 CARGO_HOME / RUSTUP_HOME / PATH 到用户级环境变量
+.\install.ps1 -SetupEnv
+#    执行后重启 PowerShell 终端使环境变量生效
+
+# 2. 构建验证
+cargo build --workspace --release
 .\target\release\aether.exe --version
 # 预期输出:chimera 1.0.0-omega
 ```
+
+> **手动设置环境变量**(替代方案,适用于非默认路径或自定义工具链):
+> ```powershell
+> $env:CARGO_HOME = 'D:\Chimera CLI\.toolchain\cargo'
+> $env:RUSTUP_HOME = 'D:\Chimera CLI\.toolchain\rustup'
+> $env:TMP = 'D:\Chimera CLI\tmp'
+> $env:TEMP = 'D:\Chimera CLI\tmp'
+> $env:PATH = "D:\Chimera CLI\.toolchain\cargo\bin;D:\msys64\mingw64\bin;$env:PATH"
+> ```
 
 #### 方式 3:Docker
 
@@ -123,6 +130,23 @@ aether --config ~/.aether/omega.yaml wiki "查询"
 
 > **说明**:binary 内部产物名为 `aether`(由 `crates/chimera-cli/Cargo.toml` 的 `[[bin]] name = "aether"` 决定)。CI/Docker 中重命名为 `chimera` 以保持对外品牌一致。
 
+---
+
+## 已知限制(占位实现)
+
+> 以下 6 项占位实现已在 v1.0.0-omega 中明确标注,计划于 v1.1.0+ 逐步替换为生产级实现。
+> 这些占位不影响核心功能正确性,仅限制部分高级特性的精度与泛化能力。
+
+| 占位实现 | 位置 | 当前状态 | v1.1+ 计划 |
+|---------|------|---------|----------|
+| MTPE pseudo_predictions | `crates/mtpe-executor/src/predictor.rs:248` | 伪预测(N=1-10 步,确定性推断) | 接入真实多步预测模型 |
+| SecCore ASA rule-based | `crates/seccore/src/asa.rs:146` | 规则式风险评分 | Critic PPO 强化学习 |
+| GSOE policy rule-based | `crates/gsoe-evolution/src/policy/{grpo,mutation,fitness}.rs` | 规则式进化策略 | GRPO 风格强化学习 |
+| NMC multimodal perceptors | `crates/nmc-encoder/src/perceptors/{image,video,audio}.rs` | 占位返回 EncodingFailed | ort ONNX 接入 |
+| RepoWiki placeholder_embedding | `crates/repo-wiki/src/generator.rs:66` | SHA-256 哈希扩展(无语义) | NMC CLV 512-dim 替换 |
+| SCC InMemoryWal | `crates/scc-cache/src/wal.rs:125` | 内存缓冲(进程退出丢失) | SqliteWal 持久化 |
+
+**设计决策**:v1.0.0-omega 选择"占位 + 明确标注"而非"阻塞发布",因为这些组件均有完整的接口契约和测试覆盖,替换为生产实现时无需修改调用方代码(符合依赖倒置原则)。详见 [docs/release/v1.0.0-omega_release_notes.md](./docs/release/v1.0.0-omega_release_notes.md) 第 6 节。
 ---
 
 ## 10 层架构
@@ -269,6 +293,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 - **cargo build --workspace --release** ✓
 
 ---
+
 
 ## 文档索引
 

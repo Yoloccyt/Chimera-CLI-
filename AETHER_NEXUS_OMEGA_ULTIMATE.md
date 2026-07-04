@@ -484,7 +484,7 @@ cd nexus-omega
 
 ```
 nexus-omega/
-├── Cargo.toml                    # Workspace root (37 crates)
+├── Cargo.toml                    # Workspace root (34 crates)
 ├── aether.yaml                   # 主配置
 ├── docs/
 │   ├── ARCHITECTURE.md
@@ -502,27 +502,27 @@ nexus-omega/
 │   ├── osa-coordinator/          # L6: 全维稀疏
 │   ├── kvbsr-router/             # L6: KV 块路由
 │   ├── faae-router/              # L6: FaaE + EDSB
-│   ├── gea-activator/            # L6: 门控激活
-│   ├── gqep-executor/            # L6: 聚集执行
-│   ├── sesa-router/              # L6: μCap
-│   ├── ssra-fusion/              # L6: 黏液式适配
-│   ├── csn-substitutor/          # L6: 降级链
-│   ├── mtpe-executor/            # L6: 多步预测
-│   ├── mlc-engine/               # L5: 四级记忆
-│   ├── hcw-window/               # L5: 分层窗口
-│   ├── cmt-tiering/              # L5: 能力内存分层
-│   ├── scc-cache/                # L5: 推测缓存
-│   ├── lsct-tiering/             # L5: 任务感知分层
-│   ├── seccore/                  # L4: 零信任 + ASA + AHIRT
-│   ├── decay-engine/             # L4: 能力衰减
-│   ├── qeep-protocol/            # L4: 量子纠缠
-│   ├── decb-governor/            # L3: 双档预算
-│   ├── acb-governor/             # L3: 自适应预算
-│   ├── efficiency-monitor/       # L3: 效率监控
-│   ├── gsoe-evolution/           # L2: 在线进化
-│   ├── auto-dpo/                 # L2: Auto-DPO
-│   ├── mcp-mesh/                 # L1: MCP 量子网格
-│   ├── nmc-encoder/              # L10: 多模态编码
+│   ├── gea-activator/            # L9: 门控激活(Quest 层,门控执行)
+│   ├── gqep-executor/            # L7: 聚集执行(Execution 层)
+│   ├── sesa-router/              # L6: μCap(Router 层)
+│   ├── ssra-fusion/              # L7: 黏液式适配(Execution 层)
+│   ├── csn-substitutor/          # L10: 降级链(Interface 层)
+│   ├── mtpe-executor/            # L7: 多步预测(Execution 层)
+│   ├── mlc-engine/               # L2: 四级记忆(Memory 层)
+│   ├── hcw-window/               # L2: 分层窗口(Memory 层)
+│   ├── cmt-tiering/              # L3: 能力内存分层(Storage 层)
+│   ├── scc-cache/                # L3: 推测缓存(Storage 层)
+│   ├── lsct-tiering/             # L3: 任务感知分层(Storage 层)
+│   ├── seccore/                  # L4: 零信任 + ASA + AHIRT(Security 层)
+│   ├── decay-engine/             # L4: 能力衰减(Security 层)
+│   ├── qeep-protocol/            # L4: 量子纠缠(Security 层)
+│   ├── decb-governor/            # L8: 双档预算(Parliament 层)
+│   ├── acb-governor/             # L8: 自适应预算(Parliament 层)
+│   ├── efficiency-monitor/       # L9: 效率监控(Quest 层)
+│   ├── gsoe-evolution/           # L5: 在线进化(Knowledge 层)
+│   ├── auto-dpo/                 # L5: Auto-DPO(Knowledge 层)
+│   ├── mcp-mesh/                 # L10: MCP 量子网格(Interface 层)
+│   ├── nmc-encoder/              # L2: 多模态编码(Memory 层)
 │   ├── chtc-bridge/              # L10: 跨平台桥接
 │   ├── chimera-tui/              # L10: TUI
 │   └── chimera-cli/              # L10: CLI 入口
@@ -1081,7 +1081,7 @@ impl CostAwareCognitiveRouting {
 
 | Day | 任务 | 代码目标 | 测试目标 | 提交信息 |
 |-----|------|---------|---------|---------|
-| 1 | Workspace 初始化 + CI/CD | 37 crates 骨架 | `cargo build` 通过 | `feat(workspace): 37 crates skeleton` |
+| 1 | Workspace 初始化 + CI/CD | 34 crates 骨架 | `cargo build` 通过 | `feat(workspace): 34 crates skeleton` |
 | 2 | Event Bus 实现 | 20+ 事件类型 | 1000 事件/秒 | `feat(event-bus): typed broadcast bus` |
 | 3 | SecCore 零信任 | gVisor + seccomp | 拦截 6 种攻击 | `feat(seccore): zero-trust sandbox` |
 | 4 | 能力衰减模型 | DecayEngine | 5 次冻结测试 | `feat(decay): capability decay model` |
@@ -1157,8 +1157,8 @@ impl CostAwareCognitiveRouting {
 | 44 | CSN 降级链 | 功能相似度 | 降级排序 | `feat(csn): capability substitution` |
 | 45 | SESA μCap | 256-bit 掩码 | 稀疏度 < 40% | `feat(sesa): micro-capability activation` |
 | 46 | 监控仪表盘 | Prometheus + Grafana | 指标采集 | `feat(monitoring): metrics + alerts` |
-| 47 | 全量集成 | 37 模块联调 | 无集成失败 | `feat(integration): full system integration` |
-| 48 | 性能调优 | SIMD + WAL | 路由 < 2ms | `perf(week7): simd + sqlite wal` |
+| 47 | 全量集成 | 34 模块联调 | 无集成失败 | `feat(integration): full system integration` |
+| 48 | 性能调优 | WAL + autovectorization | 路由 < 2ms | `perf(week7): sqlite wal + autovec` |
 | 49 | Week 7 验收 | 压力测试 | 1000 次无泄漏 | `test(week7): stress test passed` |
 
 ### Week 8: 生产化（安全 + 发布 + 文档）
