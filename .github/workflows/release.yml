@@ -196,6 +196,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # WHY 注入 VERSION build-arg:让 Dockerfile L49 的 ARG VERSION 接收实际 git tag,
+          # 使 LABEL org.opencontainers.image.version 与 Release 版本一致,避免镜像元数据漂移
+          build-args: VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

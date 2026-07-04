@@ -62,14 +62,18 @@ fuzz_target!(|data: &[u8]| {
 
     // === 目标3:EventMetadata JSON 反序列化不 panic ===
     if let Ok(meta) = serde_json::from_slice::<event_bus::EventMetadata>(data) {
-        let _ = serde_json::to_vec(&meta).expect("EventMetadata 重新序列化应成功");
+        // WHY 用 assert! 而非 expect():项目 §4.1 禁止 expect(),
+        // assert! 在失败时同样提供诊断信息,且符合 invariant 检查范式
+        let reserialized = serde_json::to_vec(&meta);
+        assert!(
+            reserialized.is_ok(),
+            "EventMetadata 重新序列化应成功,但失败: {:?}",
+            reserialized.err()
+        );
     }
 
-    // === 目标4:超长输入不导致栈溢出 ===
-    // 构造 256KB 的 JSON 字符串,验证解析器稳定性
-    let long_json = format!(
-        r#"{{"type":"UserIntentEncoded","data":{{"metadata":{{"event_id":"00000000-0000-0000-0000-000000000000","timestamp":"2026-01-01T00:00:00Z","source":"{}"}},"intent_id":"i-1","raw_text":"x","risk_level":0}}}}"#,
-        "A".repeat(256 * 1024)
-    );
-    let _ = serde_json::from_str::<event_bus::NexusEvent>(&long_json);
+    // WHY 不在此处构造 256KB 固定 JSON 字符串(原 W4 反模式):
+    // 1. fuzz harness 必须只依赖 `data` 输入,固定大输入应由 corpus seed 覆盖
+    // 2. 每次迭代分配 256KB 严重拖慢 fuzz 吞吐量,且不增加覆盖率
+    // 3. libFuzzer 会自动基于 `data` 探索超长输入,无需手动构造
 });

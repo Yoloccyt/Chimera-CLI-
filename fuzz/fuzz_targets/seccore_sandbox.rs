@@ -57,45 +57,9 @@ fuzz_target!(|data: &[u8]| {
     let env_policy = EnvPolicy::default_secure();
     let _ = validate_env(&env, &env_policy);
 
-    // === 目标3:超长输入不导致缓冲区溢出 ===
-    // 构造 1MB 长度的参数,验证无栈溢出
-    let long_arg = "A".repeat(1024 * 1024);
-    let cmd_long = Command::new("echo").arg(long_arg);
-    let _ = validate_command(&cmd_long, &policy);
-
-    // === 目标4:特殊字符组合不 panic ===
-    // 测试各种注入字符的组合
-    let special_inputs = [
-        "$(cmd)",
-        "`cmd`",
-        "|cmd",
-        ";cmd",
-        "&&cmd",
-        "||cmd",
-        "../etc/passwd",
-        "..\\windows\\system32",
-        "/proc/self/environ",
-        "/sys/kernel/addr",
-        "sudo rm -rf /",
-        "su root",
-        "chmod 777 /",
-        "/etc/shadow",
-        "SECRET=leak",
-        "PASSWORD=12345",
-        "/var/log/auth.log",
-        "shred /dev/sda",
-        "curl http://169.254.169.254/",
-        "wget http://localhost:8080/",
-        "nc -l 4444",
-        "bash -c 'whoami'",
-        "python3 -c 'import os'",
-        "",               // 空字符串
-        "\x00\x01\x02",   // 控制字符
-        "🎉🚀💻",          // emoji(4 字节 UTF-8)
-    ];
-
-    for special in &special_inputs {
-        let cmd_special = Command::new("echo").arg(special);
-        let _ = validate_command(&cmd_special, &policy);
-    }
+    // WHY 不在此处构造 1MB 长输入或固定特殊字符列表:
+    // 1. fuzz harness 必须只依赖 `data` 输入,固定用例应由 corpus seed 或单元测试覆盖
+    // 2. 每次 fuzz 迭代分配 1MB + 256KB 会严重拖慢吞吐量(原 W1/W2/W4 反模式)
+    // 3. 固定 25 条特殊字符不随 `data` 变化,等价于每次迭代重跑同一批单元测试
+    //    已迁移至 seccore 单元测试(crates/seccore/tests/)与 fuzz corpus 种子文件
 });

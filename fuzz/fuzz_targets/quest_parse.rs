@@ -68,6 +68,13 @@ fuzz_target!(|data: &[u8]| {
 
     // === 目标4:MultimodalInput 枚举反序列化不 panic ===
     if let Ok(input) = serde_json::from_slice::<MultimodalInput>(data) {
-        let _ = serde_json::to_vec(&input).expect("MultimodalInput 重新序列化应成功");
+        // WHY 用 assert! 而非 expect():项目 §4.1 禁止 expect(),
+        // assert! 在失败时同样提供诊断信息,且符合 invariant 检查范式
+        let reserialized = serde_json::to_vec(&input);
+        assert!(
+            reserialized.is_ok(),
+            "MultimodalInput 重新序列化应成功,但失败: {:?}",
+            reserialized.err()
+        );
     }
 });

@@ -1,0 +1,42 @@
+# cargo-audit 安全审计 — 每日定时 + PR 触发
+# WHY: 自动检测 Cargo.lock 中的已知漏洞(RustSec Advisory Database),
+# 防止引入含 CVE 的依赖。对应审计 F-012 修复。
+name: Security Audit
+
+on:
+  schedule:
+    # 每日 UTC 02:00 执行(北京时间 10:00)
+    - cron: '0 2 * * *'
+  pull_request:
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # WHY: 防止 cargo-audit 卡死占用 CI 资源(网络拉取 Advisory DB 偶发挂起)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+        # WHY: 加速 cargo-audit 安装与 Cargo.lock 解析,典型缓存命中可省 30-60s
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run security audit
+        # WHY --ignore 3 个经评估确认不影响项目的 RUSTSEC 警告:
+        #   RUSTSEC-2026-0190 (anyhow unsound): 影响 Error::downcast_mut(),
+        #     项目用 ? 和 match 处理错误,未调用此方法
+        #   RUSTSEC-2026-0002 (lru unsound): 影响 IterMut,
+        #     间接依赖(ratatui→lru),ratatui 不使用 IterMut
+        #   RUSTSEC-2024-0436 (paste unmaintained): 间接依赖(ratatui→paste),
+        #     仅用于宏拼接,无安全影响
+        # 跟踪计划:待 anyhow 发布修复版本后移除对应 --ignore;
+        #   待 ratatui 升级 lru/paste 后移除对应 --ignore
+        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0002 --ignore RUSTSEC-2024-0436
