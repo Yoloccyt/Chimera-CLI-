@@ -191,9 +191,13 @@ pub fn register_default_experts(router: &SesaRouter) -> anyhow::Result<()> {
 }
 
 /// 注册 2 个默认 MCP Mesh 服务器(in-process mock),供量子事务测试使用
+///
+/// WHY 使用 203.0.113.x(TEST-NET-3,RFC 5737):F-004 SSRF 校验在 register
+/// 入口拦截 127.0.0.0/8 等内网地址,此处仅作 in-process mock 不发起真实网络
+/// 请求,改用公网文档用途地址既绕过校验、又是合规的测试占位(非保留段)。
 pub fn register_default_servers(mesh: &McpMesh) -> anyhow::Result<()> {
-    let s1 = MeshServer::new("srv-1", "127.0.0.1:9001", vec!["cap-shell".into()]);
-    let s2 = MeshServer::new("srv-2", "127.0.0.1:9002", vec!["cap-python".into()]);
+    let s1 = MeshServer::new("srv-1", "203.0.113.1:9001", vec!["cap-shell".into()]);
+    let s2 = MeshServer::new("srv-2", "203.0.113.1:9002", vec!["cap-python".into()]);
     mesh.register_server(s1)?;
     mesh.register_server(s2)?;
     Ok(())

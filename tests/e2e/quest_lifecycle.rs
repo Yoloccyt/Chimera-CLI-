@@ -64,14 +64,8 @@ fn test_quest_create_decompose() {
         let mut rx = bus.subscribe();
         let engine = QuestEngine::new(bus);
 
-        let intent = make_intent(
-            "i-create-1",
-            "分析需求。设计方案。实现代码。",
-        );
-        let quest = engine
-            .create_quest(intent)
-            .await
-            .expect("Quest 创建失败");
+        let intent = make_intent("i-create-1", "分析需求。设计方案。实现代码。");
+        let quest = engine.create_quest(intent).await.expect("Quest 创建失败");
 
         // 验证:3 个 Task,线性依赖链
         assert_eq!(quest.tasks.len(), 3, "应分解为 3 个 Task");
@@ -315,7 +309,10 @@ fn test_quest_full_lifecycle() {
             .get_quest(&quest.quest_id)
             .expect("恢复后应能获取 Quest");
         assert!(
-            final_quest.tasks.iter().all(|t| t.status == TaskStatus::Completed),
+            final_quest
+                .tasks
+                .iter()
+                .all(|t| t.status == TaskStatus::Completed),
             "所有 Task 应为 Completed"
         );
     });

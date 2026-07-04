@@ -154,12 +154,12 @@ async fn test_e2e_full_pipeline_happy_path() {
 
     // 持久化条目并构建向量索引
     for entry in &entries {
-        store.insert(entry).unwrap();
+        store.insert(entry.clone()).await.unwrap();
         vector_index
             .upsert(&entry.entry_id, &entry.embedding)
             .unwrap();
     }
-    assert_eq!(store.count().unwrap(), 3, "WikiStore 应有 3 条记录");
+    assert_eq!(store.count().await.unwrap(), 3, "WikiStore 应有 3 条记录");
 
     // ========== 阶段 5:向量检索性能基准 ==========
     let query = entries[0].embedding.clone();
@@ -182,14 +182,19 @@ async fn test_e2e_full_pipeline_happy_path() {
     );
 
     // ========== 阶段 6:全文检索验证 ==========
-    let found = store.search_fulltext("分析").unwrap();
+    let found = store.search_fulltext("分析".to_string()).await.unwrap();
     assert!(!found.is_empty(), "全文检索'分析'应命中条目");
 
     // ========== 阶段 7:ISCM 跨层锚点 ==========
     let anchor = store
-        .create_anchor(Layer::L9_Quest, "quest-engine", &entries[0].entry_id)
+        .create_anchor(
+            Layer::L9_Quest,
+            "quest-engine".to_string(),
+            entries[0].entry_id.clone(),
+        )
+        .await
         .unwrap();
-    let resolved = store.resolve_anchor(anchor.anchor_id).unwrap();
+    let resolved = store.resolve_anchor(anchor.anchor_id).await.unwrap();
     assert_eq!(resolved.entry_id, entries[0].entry_id, "锚点应解析到原条目");
 }
 
@@ -317,22 +322,25 @@ async fn test_e2e_wiki_generation_and_retrieval() {
     // 阶段 3:持久化
     let store = WikiStore::open(&tmp.path().join("wiki.db")).unwrap();
     let vector_index = VectorIndex::new(512);
+    // WHY entry.clone() + .await:WikiStore::insert 按值接收 WikiEntry 且为 async fn
     for entry in &entries {
-        store.insert(entry).unwrap();
+        store.insert(entry.clone()).await.unwrap();
         vector_index
             .upsert(&entry.entry_id, &entry.embedding)
             .unwrap();
     }
 
     // 阶段 4:按 tag 检索(WikiGenerator 生成的条目含 "quest" 与 quest_id 两个 tag)
-    let by_tag = store.list_by_tag("quest").unwrap();
+    // WHY .to_string() + .await:list_by_tag 按值接收 String 且为 async fn
+    let by_tag = store.list_by_tag("quest".to_string()).await.unwrap();
     assert_eq!(by_tag.len(), 3, "按 'quest' tag 应检索到 3 条");
 
-    let by_quest_tag = store.list_by_tag(&quest.quest_id).unwrap();
+    // WHY .clone():quest.quest_id 后续可能复用,避免移走所有权
+    let by_quest_tag = store.list_by_tag(quest.quest_id.clone()).await.unwrap();
     assert_eq!(by_quest_tag.len(), 3, "按 quest_id tag 应检索到 3 条");
 
     // 阶段 5:全文检索
-    let by_text = store.search_fulltext("分析").unwrap();
+    let by_text = store.search_fulltext("分析".to_string()).await.unwrap();
     assert!(!by_text.is_empty(), "全文检索 '分析' 应命中");
 
     // 阶段 6:向量检索排序验证
@@ -537,8 +545,13 @@ async fn test_e2e_performance_benchmarks() {
 
     // 额外验证:WikiStore 持久化可用
     let store = WikiStore::open(&tmp.path().join("bench.db")).unwrap();
+    // WHY entry.clone() + .await:WikiStore::insert 按值接收 WikiEntry 且为 async fn
     for entry in &entries {
-        store.insert(entry).unwrap();
+        store.insert(entry.clone()).await.unwrap();
     }
-    assert_eq!(store.count().unwrap(), 3, "WikiStore 应持久化 3 条记录");
+    assert_eq!(
+        store.count().await.unwrap(),
+        3,
+        "WikiStore 应持久化 3 条记录"
+    );
 }

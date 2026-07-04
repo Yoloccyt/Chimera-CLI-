@@ -132,8 +132,10 @@ fn test_stress_1000_iterations() {
                 .get_quest(&quest.quest_id)
                 .expect("应能获取 Quest");
             let entries = WikiGenerator::from_quest_result(&final_quest);
+            // WHY entry.clone():WikiStore::insert 按值接收 WikiEntry,迭代借用需 clone
+            // WHY .await:insert 是 async fn,必须 await 才能真正执行写入
             for entry in &entries {
-                let _ = store.insert(entry);
+                let _ = store.insert(entry.clone()).await;
             }
             total_wiki_entries += entries.len();
 
@@ -176,7 +178,7 @@ fn test_stress_1000_iterations() {
 
         // === 验证 3:WikiStore 持久化计数 ===
         // WHY as usize:WikiStore::count 返回 u32,TOTAL_ITERATIONS 为 usize,统一到 usize 比较
-        let store_count = store.count().expect("WikiStore count 失败");
+        let store_count = store.count().await.expect("WikiStore count 失败");
         assert_eq!(
             store_count as usize,
             TOTAL_ITERATIONS * 3,

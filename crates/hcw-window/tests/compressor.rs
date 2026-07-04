@@ -4,6 +4,8 @@
 //! 端到端 128K 压缩到 32K,压缩率 > 4x。
 //! 测试通过 `hcw_window` crate 的公共 API 进行(集成测试)。
 
+use std::sync::Arc;
+
 use chrono::{Duration, Utc};
 use hcw_window::{ContextCompressor, ContextEntry, HcwConfig};
 use nexus_core::CLV;
@@ -21,13 +23,23 @@ fn make_entry_with_file(id: &str, file_id: &str, token_size: usize) -> ContextEn
     ContextEntry::new(id, file_id, format!("content-{id}"), token_size)
 }
 
+/// 测试辅助:将 `Vec<ContextEntry>` 转为 `Vec<Arc<ContextEntry>>`
+///
+/// WHY(M-01/M-02):compress 签名改为 `&[Arc<ContextEntry>]`,
+/// 测试需用 Arc 包装条目。此辅助函数避免每个测试重复 `.map(Arc::new)`。
+fn to_arc(entries: Vec<ContextEntry>) -> Vec<Arc<ContextEntry>> {
+    entries.into_iter().map(Arc::new).collect()
+}
+
 /// 验证 100K Token 压缩到 32K,压缩率 > 3x(任务要求)
 #[test]
 fn test_compress_100k_to_32k_ratio_above_3() {
     // 100 个条目,每个 1000 token = 100K,目标 32K
-    let entries: Vec<ContextEntry> = (0..100)
-        .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64 * 10))
-        .collect();
+    let entries = to_arc(
+        (0..100)
+            .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64 * 10))
+            .collect(),
+    );
 
     let report =
         ContextCompressor::compress(&HcwConfig::default(), &entries, 32000, None, Utc::now());
@@ -52,9 +64,11 @@ fn test_compress_100k_to_32k_ratio_above_3() {
 #[test]
 fn test_compress_128k_to_32k_ratio_above_4() {
     // 129 个条目,每个 1000 token = 129K,目标 32K,保留 32 个 = 32K
-    let entries: Vec<ContextEntry> = (0..129)
-        .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64 * 10))
-        .collect();
+    let entries = to_arc(
+        (0..129)
+            .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64 * 10))
+            .collect(),
+    );
 
     let report =
         ContextCompressor::compress(&HcwConfig::default(), &entries, 32000, None, Utc::now());
@@ -76,7 +90,7 @@ fn test_compress_128k_to_32k_ratio_above_4() {
 /// 验证无需压缩时返回原样
 #[test]
 fn test_no_compression_needed() {
-    let entries = vec![make_entry("e-1", 100, 1, 0)];
+    let entries = to_arc(vec![make_entry("e-1", 100, 1, 0)]);
     let report =
         ContextCompressor::compress(&HcwConfig::default(), &entries, 200, None, Utc::now());
 
@@ -93,8 +107,10 @@ fn test_no_compression_needed() {
 /// 验证空条目列表
 #[test]
 fn test_compress_empty_entries() {
+    // WHY(M-01/M-02):compress 签名要求 &[Arc<ContextEntry>],空 Vec 需明确类型
+    let entries: Vec<Arc<ContextEntry>> = Vec::new();
     let report =
-        ContextCompressor::compress(&HcwConfig::default(), &Vec::new(), 100, None, Utc::now());
+        ContextCompressor::compress(&HcwConfig::default(), &entries, 100, None, Utc::now());
 
     assert_eq!(report.original_size, 0);
     assert_eq!(report.compressed_size, 0);
@@ -104,12 +120,12 @@ fn test_compress_empty_entries() {
 /// 验证重要性评分:高频条目应被保留,低频条目应被丢弃
 #[test]
 fn test_importance_scoring_preserves_high_frequency() {
-    let entries = vec![
+    let entries = to_arc(vec![
         make_entry("low-freq", 100, 0, 100),  // 低频,旧
         make_entry("high-freq", 100, 100, 0), // 高频,新
         make_entry("mid-freq", 100, 50, 50),  // 中频,中
         make_entry("low-freq-2", 100, 1, 90), // 低频,较旧
-    ];
+    ]);
 
     let report =
         ContextCompressor::compress(&HcwConfig::default(), &entries, 200, None, Utc::now());
@@ -149,7 +165,7 @@ fn test_clv_relevance_scoring() {
     let mut e_dissimilar = make_entry("dissimilar", 100, 1, 0);
     e_dissimilar.clv = Some(CLV::from_vec(dissimilar_clv).unwrap());
 
-    let entries = vec![e_dissimilar, e_similar];
+    let entries = to_arc(vec![e_dissimilar, e_similar]);
     let report = ContextCompressor::compress(
         &HcwConfig::default(),
         &entries,
@@ -170,12 +186,12 @@ fn test_clv_relevance_scoring() {
 #[test]
 fn test_recency_scoring() {
     // 所有条目频次相同,仅时近性不同
-    let entries = vec![
+    let entries = to_arc(vec![
         make_entry("oldest", 100, 10, 1000), // 最旧
         make_entry("newest", 100, 10, 0),    // 最新
         make_entry("middle", 100, 10, 500),  // 中间
         make_entry("old-2", 100, 10, 800),   // 较旧
-    ];
+    ]);
 
     let report =
         ContextCompressor::compress(&HcwConfig::default(), &entries, 200, None, Utc::now());
@@ -195,7 +211,7 @@ fn test_recency_scoring() {
 /// 验证 target_size = 0 时不产生 panic(防御性)
 #[test]
 fn test_target_zero_no_panic() {
-    let entries = vec![make_entry("e-1", 100, 1, 0)];
+    let entries = to_arc(vec![make_entry("e-1", 100, 1, 0)]);
     let report = ContextCompressor::compress(&HcwConfig::default(), &entries, 0, None, Utc::now());
 
     // effective_target = 1,但条目 token_size = 100 > 1,retained 为空
@@ -208,13 +224,13 @@ fn test_target_zero_no_panic() {
 /// 验证压缩报告的字段完整性
 #[test]
 fn test_compression_report_fields() {
-    let entries = vec![
+    let entries = to_arc(vec![
         make_entry("e-1", 100, 1, 0),
         make_entry("e-2", 100, 2, 10),
         make_entry("e-3", 100, 3, 20),
         make_entry("e-4", 100, 4, 30),
         make_entry("e-5", 100, 5, 40),
-    ];
+    ]);
 
     let report =
         ContextCompressor::compress(&HcwConfig::default(), &entries, 300, None, Utc::now());
@@ -234,9 +250,11 @@ fn test_compression_report_fields() {
 #[test]
 fn test_compress_1m_to_128k_ratio_above_7() {
     // 1024 个条目,每个 1000 token = 1M,目标 128K
-    let entries: Vec<ContextEntry> = (0..1024)
-        .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64))
-        .collect();
+    let entries = to_arc(
+        (0..1024)
+            .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64))
+            .collect(),
+    );
 
     let report =
         ContextCompressor::compress(&HcwConfig::default(), &entries, 131072, None, Utc::now());
@@ -258,12 +276,12 @@ fn test_compress_1m_to_128k_ratio_above_7() {
 /// 验证 file_id 字段在压缩后保留(用于后续 OSA 掩码稀疏化)
 #[test]
 fn test_file_id_preserved_after_compression() {
-    let entries = vec![
+    let entries = to_arc(vec![
         make_entry_with_file("e-1", "file-a", 100),
         make_entry_with_file("e-2", "file-b", 100),
         make_entry_with_file("e-3", "file-c", 100),
         make_entry_with_file("e-4", "file-d", 100),
-    ];
+    ]);
 
     let report =
         ContextCompressor::compress(&HcwConfig::default(), &entries, 200, None, Utc::now());
@@ -288,16 +306,19 @@ fn bench_compress_1000_entries_arc_shared() {
     use std::time::Instant;
 
     // 构造 1000 条目,每个 content 4KB,token_size 1000(总 1M token)
-    let make_entries = || -> Vec<ContextEntry> {
-        (0..1000)
-            .map(|i| {
-                let mut entry =
-                    ContextEntry::new(format!("e-{i}"), "file-1", "x".repeat(4096), 1000);
-                entry.access_count = (i % 10) as u32;
-                entry.last_accessed_at = Utc::now() - Duration::milliseconds(i as i64);
-                entry
-            })
-            .collect()
+    // WHY(M-01/M-02):compress 签名要求 Vec<Arc<ContextEntry>>,用 to_arc 包装
+    let make_entries = || -> Vec<Arc<ContextEntry>> {
+        to_arc(
+            (0..1000)
+                .map(|i| {
+                    let mut entry =
+                        ContextEntry::new(format!("e-{i}"), "file-1", "x".repeat(4096), 1000);
+                    entry.access_count = (i % 10) as u32;
+                    entry.last_accessed_at = Utc::now() - Duration::milliseconds(i as i64);
+                    entry
+                })
+                .collect(),
+        )
     };
 
     // warmup 10 次
@@ -338,16 +359,18 @@ fn bench_compress_1000_entries_arc_shared() {
 fn bench_compress_100k_select_nth_unstable() {
     use std::time::Instant;
 
-    let make_entries = || -> Vec<ContextEntry> {
-        (0..100)
-            .map(|i| {
-                let mut entry =
-                    ContextEntry::new(format!("e-{i}"), "file-1", format!("content-{i}"), 1000);
-                entry.access_count = (i % 10) as u32;
-                entry.last_accessed_at = Utc::now() - Duration::milliseconds(i as i64 * 10);
-                entry
-            })
-            .collect()
+    let make_entries = || -> Vec<Arc<ContextEntry>> {
+        to_arc(
+            (0..100)
+                .map(|i| {
+                    let mut entry =
+                        ContextEntry::new(format!("e-{i}"), "file-1", format!("content-{i}"), 1000);
+                    entry.access_count = (i % 10) as u32;
+                    entry.last_accessed_at = Utc::now() - Duration::milliseconds(i as i64 * 10);
+                    entry
+                })
+                .collect(),
+        )
     };
 
     // warmup 10 次

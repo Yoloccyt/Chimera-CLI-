@@ -9,6 +9,9 @@
 //! 5. delete 联动标记悬空:删除条目后,list_anchors_by_entity 返回的锚点 is_dangling=true
 //! 6. list_anchors_by_layer:按层过滤锚点
 //! 7. mark_dangling 手动标记:手动调用 mark_dangling 后 resolve_anchor 返回错误
+//!
+//! 注意:WikiStore 所有方法已改为 async(C-01 修复:spawn_blocking),
+//! 所有测试用 `#[tokio::test]` 标注。
 
 use chrono::Utc;
 use repo_wiki::{IscmAnchor, Layer, WikiEntry, WikiError, WikiStore};
@@ -38,8 +41,8 @@ fn make_entry(
 // 场景 1:锚点创建与解析(L9 创建 → L5 解析)
 // ============================================================
 
-#[test]
-fn test_anchor_create_and_resolve() {
+#[tokio::test]
+async fn test_anchor_create_and_resolve() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
@@ -51,11 +54,16 @@ fn test_anchor_create_and_resolve() {
         vec!["tag".into()],
         vec![0.0; 512],
     );
-    store.insert(&entry).unwrap();
+    store.insert(entry).await.unwrap();
 
     // L9 层创建锚点(模拟 quest-engine 引用知识实体)
     let anchor = store
-        .create_anchor(Layer::L9_Quest, "quest-engine", "e-1")
+        .create_anchor(
+            Layer::L9_Quest,
+            "quest-engine".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
     assert_eq!(anchor.layer, Layer::L9_Quest);
     assert_eq!(anchor.crate_name, "quest-engine");
@@ -63,7 +71,7 @@ fn test_anchor_create_and_resolve() {
     assert!(!anchor.is_dangling);
 
     // L5 层解析锚点(模拟 repo-wiki 跨层读取)
-    let resolved = store.resolve_anchor(anchor.anchor_id).unwrap();
+    let resolved = store.resolve_anchor(anchor.anchor_id).await.unwrap();
     assert_eq!(resolved.entry_id, "e-1");
     assert_eq!(resolved.title, "Title");
     assert_eq!(resolved.content, "Content");
@@ -73,23 +81,28 @@ fn test_anchor_create_and_resolve() {
 // 场景 2:悬空锚点检测(删除条目后 resolve 返回 AnchorDangling)
 // ============================================================
 
-#[test]
-fn test_dangling_anchor_detection() {
+#[tokio::test]
+async fn test_dangling_anchor_detection() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
     let entry = make_entry("e-1", "Title", "Content", vec![], vec![0.0; 512]);
-    store.insert(&entry).unwrap();
+    store.insert(entry).await.unwrap();
 
     let anchor = store
-        .create_anchor(Layer::L5_Knowledge, "repo-wiki", "e-1")
+        .create_anchor(
+            Layer::L5_Knowledge,
+            "repo-wiki".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
 
     // 删除条目(应联动标记锚点为悬空)
-    store.delete("e-1").unwrap();
+    store.delete("e-1".to_string()).await.unwrap();
 
     // 解析锚点应返回 AnchorDangling
-    let result = store.resolve_anchor(anchor.anchor_id);
+    let result = store.resolve_anchor(anchor.anchor_id).await;
     assert!(
         matches!(result, Err(WikiError::AnchorDangling(_))),
         "expected AnchorDangling, got {result:?}"
@@ -100,28 +113,44 @@ fn test_dangling_anchor_detection() {
 // 场景 3:跨层一致性(L9 创建 → L5 更新 → L2 读取同一 updated_at)
 // ============================================================
 
-#[test]
-fn test_cross_layer_consistency() {
+#[tokio::test]
+async fn test_cross_layer_consistency() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
     // 初始条目
     let entry_v1 = make_entry("e-1", "v1", "content v1", vec![], vec![0.0; 512]);
-    store.insert(&entry_v1).unwrap();
+    // WHY clone:entry_v1.created_at 在后续构造 entry_v2 时复用,需保留所有权
+    store.insert(entry_v1.clone()).await.unwrap();
 
     // L9 创建锚点
     let anchor_l9 = store
-        .create_anchor(Layer::L9_Quest, "quest-engine", "e-1")
+        .create_anchor(
+            Layer::L9_Quest,
+            "quest-engine".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
 
     // L5 也创建锚点(同一实体,不同层引用)
     let anchor_l5 = store
-        .create_anchor(Layer::L5_Knowledge, "repo-wiki", "e-1")
+        .create_anchor(
+            Layer::L5_Knowledge,
+            "repo-wiki".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
 
     // L2 创建锚点
     let anchor_l2 = store
-        .create_anchor(Layer::L2_Memory, "mlc-engine", "e-1")
+        .create_anchor(
+            Layer::L2_Memory,
+            "mlc-engine".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
 
     // 模拟 L5 更新条目(UPSERT 语义,updated_at 刷新)
@@ -138,12 +167,12 @@ fn test_cross_layer_consistency() {
             updated_at: now,
         }
     };
-    store.insert(&entry_v2).unwrap();
+    store.insert(entry_v2.clone()).await.unwrap();
 
     // 三层各自解析锚点,应返回同一 updated_at(跨层一致性)
-    let resolved_l9 = store.resolve_anchor(anchor_l9.anchor_id).unwrap();
-    let resolved_l5 = store.resolve_anchor(anchor_l5.anchor_id).unwrap();
-    let resolved_l2 = store.resolve_anchor(anchor_l2.anchor_id).unwrap();
+    let resolved_l9 = store.resolve_anchor(anchor_l9.anchor_id).await.unwrap();
+    let resolved_l5 = store.resolve_anchor(anchor_l5.anchor_id).await.unwrap();
+    let resolved_l2 = store.resolve_anchor(anchor_l2.anchor_id).await.unwrap();
 
     assert_eq!(resolved_l9.updated_at, entry_v2.updated_at);
     assert_eq!(resolved_l5.updated_at, entry_v2.updated_at);
@@ -159,21 +188,29 @@ fn test_cross_layer_consistency() {
 // 场景 4:锚点 UUIDv7 全局唯一性(1000 个无冲突)
 // ============================================================
 
-#[test]
-fn test_anchor_uuid_uniqueness() {
+#[tokio::test]
+async fn test_anchor_uuid_uniqueness() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
     let mut ids = std::collections::HashSet::new();
     for i in 0..1000 {
         let anchor = store
-            .create_anchor(Layer::L5_Knowledge, "repo-wiki", &format!("e-{i}"))
+            .create_anchor(
+                Layer::L5_Knowledge,
+                "repo-wiki".to_string(),
+                format!("e-{i}"),
+            )
+            .await
             .unwrap();
         assert!(ids.insert(anchor.anchor_id), "UUID 冲突 at iteration {i}");
     }
 
     // 验证 1000 个锚点全部持久化
-    let l5_anchors = store.list_anchors_by_layer(Layer::L5_Knowledge).unwrap();
+    let l5_anchors = store
+        .list_anchors_by_layer(Layer::L5_Knowledge)
+        .await
+        .unwrap();
     assert_eq!(l5_anchors.len(), 1000);
 }
 
@@ -181,35 +218,56 @@ fn test_anchor_uuid_uniqueness() {
 // 场景 5:delete 联动标记悬空(list_anchors_by_entity 返回 is_dangling=true)
 // ============================================================
 
-#[test]
-fn test_delete_marks_anchors_dangling() {
+#[tokio::test]
+async fn test_delete_marks_anchors_dangling() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
     let entry = make_entry("e-1", "Title", "Content", vec![], vec![0.0; 512]);
-    store.insert(&entry).unwrap();
+    store.insert(entry).await.unwrap();
 
     // 创建多个跨层锚点
     store
-        .create_anchor(Layer::L9_Quest, "quest-engine", "e-1")
+        .create_anchor(
+            Layer::L9_Quest,
+            "quest-engine".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
     store
-        .create_anchor(Layer::L5_Knowledge, "repo-wiki", "e-1")
+        .create_anchor(
+            Layer::L5_Knowledge,
+            "repo-wiki".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
     store
-        .create_anchor(Layer::L2_Memory, "mlc-engine", "e-1")
+        .create_anchor(
+            Layer::L2_Memory,
+            "mlc-engine".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
 
     // 删除前:所有锚点 is_dangling=false
-    let before = store.list_anchors_by_entity("e-1").unwrap();
+    let before = store
+        .list_anchors_by_entity("e-1".to_string())
+        .await
+        .unwrap();
     assert_eq!(before.len(), 3);
     assert!(before.iter().all(|a| !a.is_dangling));
 
     // 删除条目
-    store.delete("e-1").unwrap();
+    store.delete("e-1".to_string()).await.unwrap();
 
     // 删除后:所有锚点 is_dangling=true
-    let after = store.list_anchors_by_entity("e-1").unwrap();
+    let after = store
+        .list_anchors_by_entity("e-1".to_string())
+        .await
+        .unwrap();
     assert_eq!(after.len(), 3);
     assert!(
         after.iter().all(|a| a.is_dangling),
@@ -229,42 +287,65 @@ fn test_delete_marks_anchors_dangling() {
 // 场景 6:list_anchors_by_layer 按层过滤
 // ============================================================
 
-#[test]
-fn test_list_anchors_by_layer() {
+#[tokio::test]
+async fn test_list_anchors_by_layer() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
     // 为不同实体在不同层创建锚点
     store
-        .create_anchor(Layer::L9_Quest, "quest-engine", "e-1")
+        .create_anchor(
+            Layer::L9_Quest,
+            "quest-engine".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
     store
-        .create_anchor(Layer::L9_Quest, "quest-engine", "e-2")
+        .create_anchor(
+            Layer::L9_Quest,
+            "quest-engine".to_string(),
+            "e-2".to_string(),
+        )
+        .await
         .unwrap();
     store
-        .create_anchor(Layer::L5_Knowledge, "repo-wiki", "e-1")
+        .create_anchor(
+            Layer::L5_Knowledge,
+            "repo-wiki".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
     store
-        .create_anchor(Layer::L2_Memory, "mlc-engine", "e-1")
+        .create_anchor(
+            Layer::L2_Memory,
+            "mlc-engine".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
 
     // L9 应有 2 个锚点
-    let l9 = store.list_anchors_by_layer(Layer::L9_Quest).unwrap();
+    let l9 = store.list_anchors_by_layer(Layer::L9_Quest).await.unwrap();
     assert_eq!(l9.len(), 2);
     assert!(l9.iter().all(|a| a.layer == Layer::L9_Quest));
 
     // L5 应有 1 个锚点
-    let l5 = store.list_anchors_by_layer(Layer::L5_Knowledge).unwrap();
+    let l5 = store
+        .list_anchors_by_layer(Layer::L5_Knowledge)
+        .await
+        .unwrap();
     assert_eq!(l5.len(), 1);
     assert_eq!(l5[0].layer, Layer::L5_Knowledge);
 
     // L2 应有 1 个锚点
-    let l2 = store.list_anchors_by_layer(Layer::L2_Memory).unwrap();
+    let l2 = store.list_anchors_by_layer(Layer::L2_Memory).await.unwrap();
     assert_eq!(l2.len(), 1);
     assert_eq!(l2[0].layer, Layer::L2_Memory);
 
     // L1 应有 0 个锚点
-    let l1 = store.list_anchors_by_layer(Layer::L1_Core).unwrap();
+    let l1 = store.list_anchors_by_layer(Layer::L1_Core).await.unwrap();
     assert!(l1.is_empty());
 }
 
@@ -272,34 +353,42 @@ fn test_list_anchors_by_layer() {
 // 场景 7:mark_dangling 手动标记后 resolve 返回错误
 // ============================================================
 
-#[test]
-fn test_mark_dangling_manual() {
+#[tokio::test]
+async fn test_mark_dangling_manual() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
     let entry = make_entry("e-1", "Title", "Content", vec![], vec![0.0; 512]);
-    store.insert(&entry).unwrap();
+    store.insert(entry).await.unwrap();
 
     let anchor = store
-        .create_anchor(Layer::L5_Knowledge, "repo-wiki", "e-1")
+        .create_anchor(
+            Layer::L5_Knowledge,
+            "repo-wiki".to_string(),
+            "e-1".to_string(),
+        )
+        .await
         .unwrap();
 
     // 解析成功(条目存在,锚点未悬空)
-    let resolved = store.resolve_anchor(anchor.anchor_id).unwrap();
+    let resolved = store.resolve_anchor(anchor.anchor_id).await.unwrap();
     assert_eq!(resolved.entry_id, "e-1");
 
     // 手动标记悬空(模拟外部失效检测)
-    store.mark_dangling(anchor.anchor_id).unwrap();
+    store.mark_dangling(anchor.anchor_id).await.unwrap();
 
     // 解析应返回 AnchorDangling
-    let result = store.resolve_anchor(anchor.anchor_id);
+    let result = store.resolve_anchor(anchor.anchor_id).await;
     assert!(
         matches!(result, Err(WikiError::AnchorDangling(_))),
         "expected AnchorDangling after manual mark, got {result:?}"
     );
 
     // 验证 list_anchors_by_entity 中 is_dangling=true
-    let anchors = store.list_anchors_by_entity("e-1").unwrap();
+    let anchors = store
+        .list_anchors_by_entity("e-1".to_string())
+        .await
+        .unwrap();
     assert_eq!(anchors.len(), 1);
     assert!(anchors[0].is_dangling);
 }
@@ -308,13 +397,13 @@ fn test_mark_dangling_manual() {
 // 边界场景:resolve 不存在的锚点返回 EntryNotFound
 // ============================================================
 
-#[test]
-fn test_resolve_nonexistent_anchor() {
+#[tokio::test]
+async fn test_resolve_nonexistent_anchor() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
     let fake_id = Uuid::now_v7();
-    let result = store.resolve_anchor(fake_id);
+    let result = store.resolve_anchor(fake_id).await;
     assert!(
         matches!(result, Err(WikiError::EntryNotFound(_))),
         "expected EntryNotFound for nonexistent anchor, got {result:?}"
@@ -325,13 +414,13 @@ fn test_resolve_nonexistent_anchor() {
 // 边界场景:mark_dangling 不存在的锚点返回 EntryNotFound
 // ============================================================
 
-#[test]
-fn test_mark_dangling_nonexistent_anchor() {
+#[tokio::test]
+async fn test_mark_dangling_nonexistent_anchor() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
     let fake_id = Uuid::now_v7();
-    let result = store.mark_dangling(fake_id);
+    let result = store.mark_dangling(fake_id).await;
     assert!(
         matches!(result, Err(WikiError::EntryNotFound(_))),
         "expected EntryNotFound for nonexistent anchor, got {result:?}"
@@ -342,30 +431,38 @@ fn test_mark_dangling_nonexistent_anchor() {
 // 边界场景:懒标记悬空(锚点存在但实体不存在)
 // ============================================================
 
-#[test]
-fn test_lazy_dangling_mark_on_resolve() {
+#[tokio::test]
+async fn test_lazy_dangling_mark_on_resolve() {
     let tmp = tempfile::tempdir().unwrap();
     let store = WikiStore::open(&tmp.path().join("test.db")).unwrap();
 
     // 直接创建锚点(不插入实体)
     let anchor = store
-        .create_anchor(Layer::L5_Knowledge, "repo-wiki", "e-missing")
+        .create_anchor(
+            Layer::L5_Knowledge,
+            "repo-wiki".to_string(),
+            "e-missing".to_string(),
+        )
+        .await
         .unwrap();
 
     // 第一次解析:实体不存在,应懒标记为悬空并返回 AnchorDangling
-    let result = store.resolve_anchor(anchor.anchor_id);
+    let result = store.resolve_anchor(anchor.anchor_id).await;
     assert!(
         matches!(result, Err(WikiError::AnchorDangling(_))),
         "expected AnchorDangling for missing entity, got {result:?}"
     );
 
     // 验证锚点已被懒标记为悬空
-    let anchors = store.list_anchors_by_entity("e-missing").unwrap();
+    let anchors = store
+        .list_anchors_by_entity("e-missing".to_string())
+        .await
+        .unwrap();
     assert_eq!(anchors.len(), 1);
     assert!(anchors[0].is_dangling);
 
     // 第二次解析:应直接返回 AnchorDangling(因 is_dangling=true)
-    let result2 = store.resolve_anchor(anchor.anchor_id);
+    let result2 = store.resolve_anchor(anchor.anchor_id).await;
     assert!(
         matches!(result2, Err(WikiError::AnchorDangling(_))),
         "expected AnchorDangling on second resolve, got {result2:?}"

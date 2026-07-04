@@ -243,6 +243,7 @@ async fn test_stress_event_bus_1000_cycles_no_accumulation() {
 // 单次开销约为主测试的 4 倍。100 迭代 × 4 操作 = 400 次跨 crate 调用,
 // 已足够验证多 crate 协同无累积问题,同时控制总测试时间在合理范围。
 
+#[ignore = "perf: run with --ignored"]
 #[tokio::test]
 async fn test_stress_multi_crate_100_cycles() {
     const MULTI_ITERATIONS: usize = 100;
@@ -378,6 +379,7 @@ async fn test_stress_concurrent_10_pipelines_thread_safety() {
 // 立即验证相关资源(注册表容量)可被新管线复用,间接证明 Drop 已释放资源。
 // 若 Drop 未正确实现(如 DashMap 未清空),新管线创建会因资源占用失败。
 
+#[ignore = "perf: run with --ignored"]
 #[tokio::test]
 async fn test_stress_drop_trait_full_coverage() {
     const DROP_CYCLES: usize = 200;

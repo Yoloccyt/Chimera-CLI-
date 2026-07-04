@@ -16,6 +16,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use chrono::Utc;
 use hcw_window::{ContextCompressor, ContextEntry, HcwConfig, WindowSelector};
 use proptest::prelude::*;
@@ -23,18 +25,21 @@ use proptest::prelude::*;
 /// 生成随机上下文条目集合
 ///
 /// 每个条目的 token_size ∈ [10, 1000],确保压缩测试有足够的数据量
-fn make_entries(count: usize, token_sizes: Vec<usize>) -> Vec<ContextEntry> {
+///
+/// WHY(M-01/M-02):compress 签名改为 `&[Arc<ContextEntry>]`,
+/// 此函数返回 `Vec<Arc<ContextEntry>>` 以匹配签名,用 `.map(Arc::new)` 包装
+fn make_entries(count: usize, token_sizes: Vec<usize>) -> Vec<Arc<ContextEntry>> {
     token_sizes
         .into_iter()
         .take(count)
         .enumerate()
         .map(|(i, ts)| {
-            ContextEntry::new(
+            Arc::new(ContextEntry::new(
                 format!("e-{i}"),
                 format!("file-{i}"),
                 format!("content-{i}"),
                 ts,
-            )
+            ))
         })
         .collect()
 }
@@ -122,7 +127,8 @@ proptest! {
     fn test_empty_entries_no_compression(
         target_size in 0usize..=50000,
     ) {
-        let entries: Vec<ContextEntry> = Vec::new();
+        // WHY(M-01/M-02):compress 签名要求 &[Arc<ContextEntry>],空 Vec 需明确类型
+        let entries: Vec<Arc<ContextEntry>> = Vec::new();
         let now = Utc::now();
         let report = ContextCompressor::compress(&HcwConfig::default(), &entries, target_size, None, now);
 

@@ -94,10 +94,7 @@ fn test_week2_quest_repo_router() {
             multimodal_inputs: vec![nexus_core::MultimodalInput::Text("test".into())],
             risk_level: 20,
         };
-        let quest = engine
-            .create_quest(intent)
-            .await
-            .expect("Quest 创建失败");
+        let quest = engine.create_quest(intent).await.expect("Quest 创建失败");
         assert_eq!(quest.tasks.len(), 2, "Quest Engine 应分解为 2 个 Task");
 
         // L5 Knowledge:Repo Wiki 持久化
@@ -105,13 +102,14 @@ fn test_week2_quest_repo_router() {
         let store =
             repo_wiki::WikiStore::open(&tmp.path().join("w2.db")).expect("WikiStore 打开失败");
         assert_eq!(
-            store.count().expect("WikiStore count 失败"),
+            store.count().await.expect("WikiStore count 失败"),
             0,
             "WikiStore 初始应为空"
         );
 
         // L1 Core:Model Router 路由
-        let registry = model_router::ModelRegistry::from_config(&model_router::RouterConfig::default());
+        let registry =
+            model_router::ModelRegistry::from_config(&model_router::RouterConfig::default());
         let router = model_router::ModelRouter::new(registry, bus);
         let req = model_router::RoutingRequest {
             quest_id: "q-w2".into(),
@@ -125,10 +123,7 @@ fn test_week2_quest_repo_router() {
             strategy: model_router::RoutingStrategy::Lite,
         };
         let decision = router.route(req).await.expect("Model Router 路由失败");
-        assert!(
-            !decision.model_id.is_empty(),
-            "Model Router 应选中非空模型"
-        );
+        assert!(!decision.model_id.is_empty(), "Model Router 应选中非空模型");
     });
 }
 
@@ -144,14 +139,15 @@ fn test_week3_memory_storage_router() {
 
         // L2 Memory:MLC 四级记忆引擎(用 in_memory 避免 SQLite 文件锁)
         // WHY _mlc:仅证明实例化成功,后续不使用该绑定,前缀下划线避免 unused 警告
-        let _mlc = mlc_engine::MlcEngine::new_in_memory(bus.clone())
-            .expect("MLC Engine 创建失败");
+        let _mlc = mlc_engine::MlcEngine::new_in_memory(bus.clone()).expect("MLC Engine 创建失败");
         // MLC 实例化成功即证明 L2 可用
 
         // L2 Memory:HCW 分层上下文窗口
-        let hcw =
-            hcw_window::HcwWindow::with_default_config(bus.clone()).expect("HCW 创建失败");
-        let tier = hcw.select_window(0.6).await.expect("HCW select_window 失败");
+        let hcw = hcw_window::HcwWindow::with_default_config(bus.clone()).expect("HCW 创建失败");
+        let tier = hcw
+            .select_window(0.6)
+            .await
+            .expect("HCW select_window 失败");
         // 0.6 复杂度应选中 L2(Complex 档位)
         assert_eq!(tier, hcw_window::WindowTier::L2, "HCW 应选中 L2 窗口");
 
@@ -161,19 +157,13 @@ fn test_week3_memory_storage_router() {
 
         // L6 Router:OSA 五维度稀疏协调器
         let coord = osa_coordinator::OmniSparseCoordinator::new(bus.clone());
-        let profile = osa_coordinator::TaskProfile::new(
-            "w3-task",
-            0.5,
-            osa_coordinator::RiskLevel::Medium,
-        );
+        let profile =
+            osa_coordinator::TaskProfile::new("w3-task", 0.5, osa_coordinator::RiskLevel::Medium);
         let masks = coord
             .compute_all_masks(&profile)
             .await
             .expect("OSA 掩码计算失败");
-        assert!(
-            !masks.mask_hash().is_empty(),
-            "OSA 应计算非空 mask_hash"
-        );
+        assert!(!masks.mask_hash().is_empty(), "OSA 应计算非空 mask_hash");
 
         // L6 Router:KVBSR 两级块语义路由器
         let _router = kvbsr_router::KVBlockSemanticRouter::new(bus);
@@ -192,18 +182,14 @@ fn test_week4_execution_router() {
         let bus = EventBus::new();
 
         // L6 Router:GEA 门控专家激活器
-        let gea = gea_activator::GeaActivator::new(
-            gea_activator::GeaConfig::default(),
-            bus.clone(),
-        )
-        .expect("GEA 创建失败");
+        let gea =
+            gea_activator::GeaActivator::new(gea_activator::GeaConfig::default(), bus.clone())
+                .expect("GEA 创建失败");
         // GEA 实例化成功即证明 L6 Router 可用
 
         // L6 Router:GQEP 聚集执行器
-        let gqep = gqep_executor::GqepExecutor::new(
-            gqep_executor::GqepConfig::default(),
-            bus.clone(),
-        );
+        let gqep =
+            gqep_executor::GqepExecutor::new(gqep_executor::GqepConfig::default(), bus.clone());
         // GQEP 实例化成功即证明 L6 Router 聚集执行可用
 
         // L7 Execution:PVL 生产验证闭环
@@ -214,10 +200,8 @@ fn test_week4_execution_router() {
         // PVL 三组件实例化成功即证明 L7 Execution 可用
 
         // L7 Execution:MTPE 多步预测执行器
-        let mtpe = mtpe_executor::MtpeExecutor::new(
-            mtpe_executor::MtpeConfig::default(),
-            bus.clone(),
-        );
+        let mtpe =
+            mtpe_executor::MtpeExecutor::new(mtpe_executor::MtpeConfig::default(), bus.clone());
         // MTPE 实例化成功即证明 L7 Execution 多步预测可用
 
         // L3 Storage:SCC 推测上下文缓存
@@ -285,17 +269,15 @@ fn test_week6_multimodal_evolution() {
         // L2 Memory:NMC 多模态编码
         let clv = pipeline
             .encoder
-            .perceive(nmc_encoder::PerceptionInput::Text("week6 acceptance".into()))
+            .perceive(nmc_encoder::PerceptionInput::Text(
+                "week6 acceptance".into(),
+            ))
             .expect("NMC 编码失败");
         assert_eq!(clv.dimension(), 512, "NMC CLV 维度必须为 512");
 
         // L7 Execution:SSRA 黏液式融合
         let request = setup::make_fusion_request("q-w6", vec!["cap-text-fusion"], "target");
-        let result = pipeline
-            .fusion
-            .fuse(request)
-            .await
-            .expect("SSRA 融合失败");
+        let result = pipeline.fusion.fuse(request).await.expect("SSRA 融合失败");
         assert!(result.confidence > 0.0, "SSRA 融合置信度应大于 0");
 
         // L5 Knowledge:GSOE 在线进化
@@ -345,18 +327,11 @@ fn test_week7_mesh_monitoring() {
         // L10 Interface:CSN 能力替代查询
         let candidates = pipeline.substitutor.find_substitutes("cap-shell", 3);
         // find_substitutes 返回 Vec,非 Result;cap-shell 与 cap-python 高相似
-        assert!(
-            !candidates.is_empty(),
-            "CSN 应返回 cap-shell 的替代候选"
-        );
+        assert!(!candidates.is_empty(), "CSN 应返回 cap-shell 的替代候选");
 
         // L6 Router:SESA 子专家稀疏激活
         let req = setup::make_activation_request("w7-req", 2);
-        let (mask, _profile) = pipeline
-            .sesa
-            .activate(req)
-            .await
-            .expect("SESA 激活失败");
+        let (mask, _profile) = pipeline.sesa.activate(req).await.expect("SESA 激活失败");
         assert!(mask.active_count <= 3, "SESA 激活数不应超过总专家数");
 
         // L9 Quest:Efficiency Monitor 告警规则注册(验证可用)
@@ -396,10 +371,7 @@ fn test_week8_production() {
 
     // 3. L10 Interface:Dockerfile 存在(跨平台发布)
     let dockerfile_path = Path::new("Dockerfile");
-    assert!(
-        dockerfile_path.exists(),
-        "Dockerfile 应存在(跨平台发布)"
-    );
+    assert!(dockerfile_path.exists(), "Dockerfile 应存在(跨平台发布)");
 
     // 4. L10 Interface:CI/CD 配置存在
     let ci_path = Path::new(".github/workflows/release.yml");

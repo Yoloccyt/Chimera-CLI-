@@ -28,7 +28,7 @@ use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use nmc_encoder::PerceptionInput;
 use osa_coordinator::{OmniSparseCoordinator, RiskLevel as OsaRiskLevel, TaskProfile};
 use parliament::{Parliament, ParliamentConfig, Proposal};
-use pvl_layer::{FeedbackChannel, PvlConfig, Producer, Verifier};
+use pvl_layer::{FeedbackChannel, Producer, PvlConfig, Verifier};
 use qeep_protocol::QeepProtocol;
 use seccore::{validate_command, Command, CommandPolicy};
 use setup::{assert_has_event, drain_events, setup_week7_pipeline};
@@ -91,11 +91,7 @@ fn test_layer_dependencies() {
 
         // L7 Execution:SSRA 融合,发布 SsraFusionCompleted 事件
         let request = setup::make_fusion_request("q-layer", vec!["cap-text-fusion"], "target");
-        let result = pipeline
-            .fusion
-            .fuse(request)
-            .await
-            .expect("SSRA 融合失败");
+        let result = pipeline.fusion.fuse(request).await.expect("SSRA 融合失败");
         assert!(result.confidence > 0.0, "融合置信度应大于 0");
 
         // L10 Interface:CHTC 转发工具调用,发布 ChtcToolCallReceived 事件
@@ -219,9 +215,9 @@ fn test_parliament_consensus() {
 
         // 验证:议会事件已发布(DebateStarted 或 ConsensusReached)
         let events = drain_events(&mut rx, 10).await;
-        let has_debate_or_consensus = events.iter().any(|e| {
-            e.type_name() == "DebateStarted" || e.type_name() == "ConsensusReached"
-        });
+        let has_debate_or_consensus = events
+            .iter()
+            .any(|e| e.type_name() == "DebateStarted" || e.type_name() == "ConsensusReached");
         assert!(
             has_debate_or_consensus,
             "应发布 DebateStarted 或 ConsensusReached 事件"
@@ -239,9 +235,7 @@ fn test_parliament_consensus() {
         let (fb_tx, mut fb_rx) = tokio::sync::mpsc::channel(128);
 
         // 启动验证者后台任务
-        let verifier_handle = tokio::spawn(async move {
-            verifier.run(&mut op_rx, &fb_tx).await
-        });
+        let verifier_handle = tokio::spawn(async move { verifier.run(&mut op_rx, &fb_tx).await });
 
         // 生产 5 个操作
         producer
@@ -260,10 +254,7 @@ fn test_parliament_consensus() {
         }
 
         // 验证:5 个操作均产生反馈(生产→验证→反馈链路完整)
-        assert_eq!(
-            feedback_count, 5,
-            "应收到 5 个反馈,实际 {feedback_count}"
-        );
+        assert_eq!(feedback_count, 5, "应收到 5 个反馈,实际 {feedback_count}");
 
         // 验证:验证者正常退出
         verifier_handle
@@ -297,18 +288,12 @@ fn test_security_sandbox() {
         // 1b. 注入命令应被拦截(包含 $( 命令替换)
         let inject_cmd = Command::new("echo").arg("$(rm -rf /)");
         let inject_result = validate_command(&inject_cmd, &policy);
-        assert!(
-            inject_result.is_err(),
-            "注入命令 $(...) 应被静态分析拦截"
-        );
+        assert!(inject_result.is_err(), "注入命令 $(...) 应被静态分析拦截");
 
         // 1c. 权限提升命令应被拦截(sudo)
         let sudo_cmd = Command::new("sudo").arg("ls");
         let sudo_result = validate_command(&sudo_cmd, &policy);
-        assert!(
-            sudo_result.is_err(),
-            "sudo 提权命令应被静态分析拦截"
-        );
+        assert!(sudo_result.is_err(), "sudo 提权命令应被静态分析拦截");
 
         // === 阶段 2:QEEP 纠缠协议零孤儿调用 ===
         // WHY 用 DEFAULT_TIMEOUT:与 crate 默认值一致,30s 足够覆盖测试 future
@@ -326,14 +311,9 @@ fn test_security_sandbox() {
 
         // 2b. entangle 错误传播(future 返回 Err)
         let err_result = qeep
-            .entangle(async {
-                Err::<u32, _>(qeep_protocol::QeepError::Timeout)
-            })
+            .entangle(async { Err::<u32, _>(qeep_protocol::QeepError::Timeout) })
             .await;
-        assert!(
-            err_result.is_err(),
-            "QEEP entangle 应传播 future 的错误"
-        );
+        assert!(err_result.is_err(), "QEEP entangle 应传播 future 的错误");
 
         // 2c. 验证 QEEP 完成计数 > 0(至少 1 个成功完成)
         // WHY completed_count:成功 + 失败 + 超时均计数,孤儿不计数

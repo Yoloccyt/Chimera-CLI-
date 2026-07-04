@@ -52,7 +52,9 @@ async fn test_mcp_injection_sql_in_server_id() {
     let start = Instant::now();
 
     let malicious_id = "'; DROP TABLE servers; --";
-    let server = MeshServer::new(malicious_id, "127.0.0.1:9999", vec!["cap".into()]);
+    // WHY 203.0.113.x:本测试聚焦 server_id SQL 注入,endpoint 仅作占位,
+    // 须绕过 F-004 SSRF 校验(127.0.0.0/8 被拦截),改用 TEST-NET-3 公网文档地址
+    let server = MeshServer::new(malicious_id, "203.0.113.1:9999", vec!["cap".into()]);
     pipeline
         .mesh
         .register_server(server)
@@ -123,7 +125,9 @@ async fn test_mcp_injection_xss_in_capabilities() {
     let start = Instant::now();
 
     let xss_payload = "<script>alert('xss')</script>";
-    let server = MeshServer::new("srv-xss", "127.0.0.1:8888", vec![xss_payload.into()]);
+    // WHY 203.0.113.x:本测试聚焦 capabilities XSS,endpoint 仅作占位,
+    // 须绕过 F-004 SSRF 校验(127.0.0.0/8 被拦截),改用 TEST-NET-3 公网文档地址
+    let server = MeshServer::new("srv-xss", "203.0.113.1:8888", vec![xss_payload.into()]);
     pipeline
         .mesh
         .register_server(server)

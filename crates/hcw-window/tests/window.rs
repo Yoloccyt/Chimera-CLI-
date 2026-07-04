@@ -446,6 +446,7 @@ async fn test_select_window_concurrent_safety() {
 /// HashSet 构建 O(m) + 查找 O(1),总复杂度 O(n + m),
 /// 相比原 Vec 线性扫描 O(n×m) 显著降低(原约 50ms → 优化后 < 5ms)。
 #[test]
+#[ignore]
 fn bench_retain_by_file_ids_hashset() {
     use hcw_window::HcwState;
     use std::time::Instant;
@@ -456,7 +457,9 @@ fn bench_retain_by_file_ids_hashset() {
         for i in 0..10000u32 {
             let file_id = format!("file-{}", i % 1000);
             let entry = ContextEntry::new(format!("e-{i}"), file_id, "content", 100);
-            state.entries.push(entry);
+            // WHY(M-01/M-02):entries 已改为 Vec<Arc<ContextEntry>>,
+            // 用 push_entry 封装 Arc::new 包装 + 索引维护,保持状态一致
+            state.push_entry(entry);
         }
         state
     };

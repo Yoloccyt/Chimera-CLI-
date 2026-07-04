@@ -153,6 +153,32 @@ async fn test_a03_sensitive_data_env_secret() {
     }
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn test_a03_windows_path_traversal() {
+    // WHY Windows 专属:Windows 路径穿越使用反斜杠 `\` 与盘符(`C:\`),
+    // 与 Unix 的正斜杠 `/` 攻击向量不同。SecCore 需识别 Windows 风格穿越。
+    let mut sandbox = make_sandbox();
+    // 攻击载荷:type ..\..\..\windows\win.ini — 通过相对路径穿越读取系统文件
+    // type 不在白名单 → CommandBlocked(Abuse);若路径穿越被识别 → DataLeak
+    let cmd = Command::new("type").arg("..\\..\\..\\windows\\win.ini");
+    let result = sandbox.audit_and_execute(cmd).await;
+
+    assert!(result.is_err(), "A03(Windows): 路径穿越应被拦截");
+    match result.unwrap_err() {
+        SecCoreError::CommandBlocked { attack_type, .. } => {
+            assert!(
+                matches!(
+                    attack_type,
+                    AttackType::SandboxEscape | AttackType::DataLeak | AttackType::Abuse
+                ),
+                "A03(Windows): 应识别为 SandboxEscape/DataLeak/Abuse, 实际: {attack_type:?}"
+            );
+        }
+        e => panic!("A03(Windows): 期望 CommandBlocked, 实际: {e:?}"),
+    }
+}
+
 // =============================================================================
 // A04:2021 — 不安全设计(Insecure Design)
 //
@@ -303,6 +329,60 @@ fn test_a06_vulnerable_components_no_unsafe() {
         !policy.allowed_commands.is_empty(),
         "A06: 默认策略应非空(证明 SecCore 正常加载)"
     );
+}
+
+#[test]
+fn test_a06_dependency_version_assertions() {
+    // WHY 直接断言 Cargo.lock 关键依赖版本:对照 RustSec Advisory Database,
+    // 确保未引入已知有漏洞的依赖版本。cargo-audit 覆盖全量扫描,
+    // 此处为关键依赖的快速断言(CI 双保险)。
+    let lock_content =
+        std::fs::read_to_string("Cargo.lock").expect("Cargo.lock should exist at workspace root");
+
+    // rusqlite 0.32.x(0.31 之前有 RUSTSEC-2024-NNNN 等公告)
+    assert!(
+        lock_content.contains("name = \"rusqlite\""),
+        "rusqlite missing"
+    );
+    assert!(
+        lock_content.contains("version = \"0.32"),
+        "rusqlite should be 0.32.x"
+    );
+
+    // tokio 1.x(异步 runtime)
+    assert!(lock_content.contains("name = \"tokio\""), "tokio missing");
+    assert!(
+        lock_content.contains("version = \"1."),
+        "tokio should be 1.x"
+    );
+
+    // serde 1.0.x(序列化框架)
+    assert!(lock_content.contains("name = \"serde\""), "serde missing");
+    assert!(
+        lock_content.contains("version = \"1.0"),
+        "serde should be 1.0.x"
+    );
+
+    // thiserror 1.0.x(库层错误类型,§4.1)
+    assert!(
+        lock_content.contains("name = \"thiserror\""),
+        "thiserror missing"
+    );
+    assert!(
+        lock_content.contains("version = \"1.0"),
+        "thiserror should be 1.0.x"
+    );
+
+    // chrono 0.4.x(时间库,0.4.35 之前有 RUSTSEC-2020-0159)
+    assert!(lock_content.contains("name = \"chrono\""), "chrono missing");
+    assert!(
+        lock_content.contains("version = \"0.4"),
+        "chrono should be 0.4.x"
+    );
+
+    // WHY 不断言 reqwest/axum:项目当前未实际使用 HTTP 客户端/服务器
+    // (workspace 声明但无 crate 引用,Cargo.lock 中不存在),断言存在会失败。
+    // 若未来引入,需补充版本断言(对照 RustSec 最新公告)。
 }
 
 // =============================================================================
@@ -541,4 +621,39 @@ async fn test_a10_ssrf_python_requests_blocked() {
     let result = sandbox.audit_and_execute(cmd).await;
 
     assert!(result.is_err(), "A10: SSRF(python3)应被拦截");
+}
+
+// -----------------------------------------------------------------------------
+// A10 Windows 专属:SSRF via PowerShell Invoke-WebRequest
+//
+// WHY Windows 专属:Windows 平台 SSRF 常用 PowerShell 的 Invoke-WebRequest
+// (别名 iwr)或 Invoke-RestMethod,与 Unix 的 curl/wget 攻击向量不同,
+// 需独立验证 SecCore 拦截 PowerShell SSRF 载荷(§6.2 红线:零信任白名单)。
+// -----------------------------------------------------------------------------
+
+#[cfg(windows)]
+#[tokio::test]
+async fn test_a10_windows_ssrf_powershell() {
+    let mut sandbox = make_sandbox();
+    // 攻击载荷:powershell -c "Invoke-WebRequest http://169.254.169.254/..."
+    // — 通过 PowerShell 访问 AWS 元数据服务(云 SSRF)
+    // powershell 不在白名单 → CommandBlocked(Abuse)
+    let cmd = Command::new("powershell").args([
+        "-c",
+        "Invoke-WebRequest",
+        "http://169.254.169.254/latest/meta-data/",
+    ]);
+    let result = sandbox.audit_and_execute(cmd).await;
+
+    assert!(result.is_err(), "A10(Windows): SSRF(powershell)应被拦截");
+    match result.unwrap_err() {
+        SecCoreError::CommandBlocked { attack_type, .. } => {
+            assert_eq!(
+                attack_type,
+                AttackType::Abuse,
+                "A10(Windows): powershell 应识别为 Abuse(非白名单)"
+            );
+        }
+        e => panic!("A10(Windows): 期望 CommandBlocked(Abuse), 实际: {e:?}"),
+    }
 }
