@@ -15,11 +15,13 @@
 //! - **均衡概率 `p = 1 - entropy`**:熵低(负载集中)时均衡概率高,
 //!   熵高(负载均匀)时均衡概率低
 //! - **不强制均衡**:强制均衡会破坏语义路由准确性,概率性均衡在准确性与均衡性间折中
-//! - **伪随机用 SystemTime 纳秒**:不引入 rand 依赖,用纳秒做简单概率判断
+//! - **伪随机用 rand crate**:`rand::random::<f32>()` 生成 [0.0, 1.0) 均匀分布随机数,
+//!   替代原 SystemTime 纳秒方案(Task 11 修复:纳秒伪随机在高频调用时易碰撞,
+//!   且非密码学安全;rand crate 提供更稳定的随机性)
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tokio::sync::RwLock;
@@ -28,13 +30,6 @@ use tracing::warn;
 use crate::config::FaaeConfig;
 use crate::error::FaaeError;
 use crate::types::{EntropyStats, ExpertProfile, ToolId};
-
-/// 衰减循环周期(秒)— 默认 5 分钟
-///
-/// WHY:5 分钟平衡衰减及时性与 CPU 开销。过短周期频繁扫描所有 Profile,
-/// 过长周期导致负载统计滞后。5 分钟内路由次数约 500-1000 次(中等负载),
-/// 衰减 8%(exp(-300/3600) ≈ 0.92),时近性权重明显但不至于过快淡出
-const DECAY_INTERVAL_SECS: u64 = 300;
 
 /// EDSB 熵驱动自均衡器 — 度量负载分布并概率性重分配
 ///
@@ -286,44 +281,75 @@ impl EdsbBalancer {
         let tau = self.config.decay_tau;
 
         for profile_arc in profiles.values() {
-            let profile = profile_arc.read().await;
-            let raw_count = profile.get_usage_count();
+            // WHY: 分阶段获取锁,避免嵌套锁(profile 读锁内获取 last_used_at 读锁)跨 await:
+            //   阶段1:持 profile 读锁获取 raw_count + clone last_used_at Arc,立即释放
+            //   阶段2:锁外读取 last_used_at(单独 await,不嵌套 profile 锁),计算衰减
+            //   阶段3:持 profile 读锁原子更新 usage_count(同步操作),立即释放
+            // last_used_at 是 Arc<RwLock<Instant>>,可 clone 后锁外访问(B-Crit-3 修复)。
+
+            // 阶段1:获取快照(raw_count + last_used_at Arc)
+            let (raw_count, last_used_arc) = {
+                let profile = profile_arc.read().await;
+                (profile.get_usage_count(), profile.last_used_at.clone())
+            }; // profile 读锁释放
             if raw_count == 0 {
                 continue;
             }
 
-            let last_used = *profile.last_used_at.read().await;
+            // 阶段2:锁外读取 last_used_at 并计算衰减(不嵌套 profile 锁)
+            let last_used = *last_used_arc.read().await;
             let delta_secs = now.duration_since(last_used).as_secs_f64();
 
             // 衰减因子:exp(-Δt / τ)
             let decay_factor = (-delta_secs / tau).exp();
             let decayed_count = (raw_count as f64 * decay_factor).round() as u64;
 
-            // 原子更新 usage_count
-            profile.set_usage_count(decayed_count);
+            // 阶段3:原子更新 usage_count(set_usage_count 是 &self 原子 store,同步操作)
+            {
+                let profile = profile_arc.read().await;
+                profile.set_usage_count(decayed_count);
+            } // profile 读锁释放
         }
     }
 
     /// 启动后台衰减循环
     ///
-    /// 每 `DECAY_INTERVAL_SECS`(5 分钟)执行一次 `decay_usage_counts`,
+    /// 每 `config.decay_interval_secs`(默认 300 秒 = 5 分钟)执行一次 `decay_usage_counts`,
     /// 在独立 tokio 任务中异步运行,不阻塞路由路径。
+    ///
+    /// WHY 配置化:衰减周期从 `FaaeConfig.decay_interval_secs` 读取,
+    /// 支持按部署场景调整(边缘设备拉长降低 CPU 开销,高频场景缩短提升时近性)。
+    ///
+    /// WHY 返回 JoinHandle:调用方可通过 `handle.abort()` 优雅停止后台衰减,
+    /// 或 `handle.await` 等待任务结束(B-Min-3 修复,避免 fire-and-forget)。
+    /// 忽略返回值也是安全的 — 任务会独立运行直至进程退出。
     ///
     /// # 参数
     /// - `self`:需要 `Arc<Self>` 持有自身引用
     /// - `profiles`:专家注册表(Arc 共享,跨任务访问)
+    ///
+    /// # 返回
+    /// 后台衰减任务的 `JoinHandle`,调用方可选择 await/abort 或忽略
     pub fn spawn_decay_loop(
         self: Arc<Self>,
         profiles: Arc<RwLock<HashMap<ToolId, Arc<RwLock<ExpertProfile>>>>>,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            let interval = Duration::from_secs(DECAY_INTERVAL_SECS);
+            // WHY 从 config 读取周期:支持按部署场景调整,默认 300s 保持向后兼容
+            let interval = Duration::from_secs(self.config.decay_interval_secs);
             loop {
                 tokio::time::sleep(interval).await;
-                let registry = profiles.read().await;
-                self.decay_usage_counts(&registry).await;
+                // WHY: 克隆 HashMap 获取快照后立即释放 registry 读锁,再调用 decay_usage_counts,
+                // 避免 decay 内部的多次 await(profile 读锁、last_used_at 读锁)跨 registry 锁,
+                // 导致 register/unregister 写锁被阻塞(B-Crit-4)。
+                // HashMap 内是 Arc<RwLock<ExpertProfile>>,Clone 仅增加引用计数,代价低。
+                let registry_snapshot: HashMap<ToolId, Arc<RwLock<ExpertProfile>>> = {
+                    let registry = profiles.read().await;
+                    registry.clone()
+                };
+                self.decay_usage_counts(&registry_snapshot).await;
             }
-        });
+        })
     }
 
     /// 获取配置引用
@@ -334,16 +360,12 @@ impl EdsbBalancer {
 
 /// 生成伪随机概率 [0.0, 1.0)
 ///
-/// WHY:不引入 rand 依赖,用 SystemTime 纳秒做简单概率判断。
-/// 取纳秒数除以 1000 的余数,映射到 [0.0, 1.0) 区间。
-/// 非密码学安全,但满足 EDSB 概率均衡的随机性需求。
-// TODO(Week 8): 伪随机概率实现,评估替换为 rand crate 真随机。
+/// WHY:使用 `rand::random::<f32>()` 生成 [0.0, 1.0) 均匀分布随机数。
+/// Task 11 修复:原 SystemTime 纳秒方案在高频调用时(纳秒精度内多次调用)
+/// 易产生相同返回值,且非密码学安全;rand crate 使用 thread-local CSPRNG
+/// ( ChaCha12-based),提供更稳定的随机性,满足 EDSB 概率均衡严格性。
 fn pseudo_random_probability() -> f32 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    (nanos as f32) / 1_000_000_000.0
+    rand::random::<f32>()
 }
 
 #[cfg(test)]
@@ -479,23 +501,37 @@ mod tests {
         // 创建一个 profile,设置 last_used_at 为 1 小时前
         let profile = ExpertProfile::with_usage_count("t1", vec![0.5; 64], vec![], 0.5, 100);
         // 手动设置 last_used_at 为 1 小时前
+        // WHY: Windows 上 Instant 基于 QPC(从系统启动计数),系统启动不足 3600 秒时
+        // `Instant::now() - Duration::from_secs(3600)` 会溢出 panic。
+        // 用 checked_sub 安全降级到 60 秒,并动态计算实际 Δt 用于断言。
+        let now_before = Instant::now();
+        let last_used_instant = now_before
+            .checked_sub(Duration::from_secs(3600))
+            .unwrap_or_else(|| now_before - Duration::from_secs(60));
         {
             let mut last_used = profile.last_used_at.write().await;
-            *last_used = Instant::now() - Duration::from_secs(3600);
+            *last_used = last_used_instant;
         }
 
         let mut profiles = HashMap::new();
         profiles.insert(ToolId::new("t1"), Arc::new(RwLock::new(profile)));
 
-        // 衰减:Δt = 1 小时,τ = 3600 秒 → factor = exp(-1) ≈ 0.368
+        // 衰减:Δt = actual_delta_secs,τ = 3600 秒 → factor = exp(-Δt/τ)
         balancer.decay_usage_counts(&profiles).await;
+
+        // 计算实际 Δt(decay_usage_counts 内部用 decay 调用前的 Instant::now())
+        let actual_delta_secs = Instant::now()
+            .duration_since(last_used_instant)
+            .as_secs_f64();
+        let tau = config.decay_tau;
+        let expected = 100.0 * (-actual_delta_secs / tau).exp();
 
         let profile = profiles.get(&ToolId::new("t1")).unwrap().read().await;
         let decayed = profile.get_usage_count();
-        // 100 × 0.368 ≈ 37
+        // 容差 ±2(四舍五入误差)
         assert!(
-            (decayed as f64 - 100.0 * (-1.0_f64).exp()).abs() < 2.0,
-            "衰减后计数应 ≈ 37,实际 {decayed}"
+            (decayed as f64 - expected).abs() < 2.0,
+            "衰减后计数应 ≈ {expected:.2}(Δt={actual_delta_secs:.0}s),实际 {decayed}"
         );
     }
 

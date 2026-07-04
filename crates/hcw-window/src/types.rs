@@ -214,8 +214,18 @@ impl ContextEntry {
 /// 所有字段在 HcwWindow 的 async 方法中通过 RwLock 读写。
 ///
 /// # 设计决策(WHY)
-/// - `entries: Vec<ContextEntry>`:按插入顺序存储,压缩时按重要性评分排序保留 Top-N。
-///   未使用 DashMap 是因为压缩需要全量排序,DashMap 的分片锁不利于全量操作
+/// - `entries: Vec<Arc<ContextEntry>>`(M-01/M-02 修复):按插入顺序存储,
+///   压缩时按重要性评分排序保留 Top-N。未使用 DashMap 是因为压缩需要全量排序,
+///   DashMap 的分片锁不利于全量操作。
+///   WHY 用 `Vec<Arc<ContextEntry>>` 而非 `Vec<ContextEntry>`(M-01/M-02 热路径深拷贝优化):
+///   原实现 `get_arc` 内部 `Arc::new(entry.clone())` 等价于先深拷贝再包 Arc,
+///   多消费者场景下 content String 被反复深拷贝。改为 `Vec<Arc<ContextEntry>>` 后:
+///   - `get_arc` 返回 `Arc::clone(&entries[idx])`(O(1) 引用计数,真零拷贝)
+///   - `get_ref` 返回 `&Arc<ContextEntry>`(完全零拷贝引用访问)
+///   - `get_mut` 内部用 `Arc::make_mut`(CoW,无外部引用时零分配)
+///   - `remove` 返回 `Arc<ContextEntry>`(直接移交所有权,无需 clone)
+///
+///   Arc<T> 实现 Deref<Target=T>,原有 `e.token_size`、`e.id` 等字段访问代码无需改动。
 /// - `entries_index: HashMap<String, usize>`(SubTask 19.5):id → entries 索引的 HashMap,
 ///   使 `get`/`get_mut`/`remove` 从 O(n) 线性扫描降为 O(1) 哈希查找。
 ///   1000 条目规模下 get 延迟从 ~15μs 降到 ~0.1μs。
@@ -232,8 +242,15 @@ impl ContextEntry {
 pub struct HcwState {
     /// 当前窗口层级
     pub current_tier: WindowTier,
-    /// 上下文条目列表(按插入顺序)
-    pub entries: Vec<ContextEntry>,
+    /// 上下文条目列表(按插入顺序)— Arc 共享,避免热路径深拷贝(M-01/M-02 修复)
+    ///
+    /// WHY(M-01/M-02):`get_arc`/`get` 是热路径,原 `Vec<ContextEntry>` 导致:
+    /// - get_arc 内部 `Arc::new(entry.clone())` 等价先深拷贝再包 Arc
+    /// - get 返回 `entry.clone()` 深拷贝 content String
+    ///
+    /// 改为 `Vec<Arc<ContextEntry>>` 后,get_arc 返回 `Arc::clone`(O(1) 引用计数),
+    /// get_ref 返回 `&Arc`(完全零拷贝),get_mut 用 `Arc::make_mut`(CoW)。
+    pub entries: Vec<Arc<ContextEntry>>,
     /// 条目 ID → entries 索引的 HashMap(SubTask 19.5:O(1) 查找替代 O(n) 扫描)
     ///
     /// WHY(SubTask 19.5):1000 条目 get 从 ~15μs 降到 ~0.1μs。
@@ -288,18 +305,37 @@ impl HcwState {
     ///
     /// WHY(SubTask 19.5):封装 push + index 更新,避免调用方直接操作 entries
     /// 后忘记维护索引。insert 路径应统一使用此方法。
+    ///
+    /// WHY(M-01/M-02):内部用 `Arc::new(entry)` 包装,使后续 `get_arc`/`get_ref`
+    /// 能通过 `Arc::clone` 以 O(1) 引用计数共享条目,避免热路径深拷贝。
     pub fn push_entry(&mut self, entry: ContextEntry) {
         let idx = self.entries.len();
         self.entries_index.insert(entry.id.clone(), idx);
-        self.entries.push(entry);
+        self.entries.push(Arc::new(entry));
     }
 
     /// 按 ID 查找条目(只读)— O(1) HashMap 索引查找
     ///
     /// WHY(SubTask 19.5):原实现 `iter().find()` 为 O(n) 线性扫描,
     /// 1000 条目规模约 15μs。改为 HashMap 索引查找 O(1),约 0.1μs。
+    ///
+    /// WHY(M-01/M-02):entries 是 `Vec<Arc<ContextEntry>>`,`.get(pos)` 返回
+    /// `Option<&Arc<ContextEntry>>`,通过 `.map(|arc| arc.as_ref())` 解引用为
+    /// `&ContextEntry`,保持原签名兼容。调用方需 Arc 所有权时用 `get_ref`。
     pub fn get(&self, id: &str) -> Option<&ContextEntry> {
         // *解引用 usize(Copy 类型),borrow 立即结束,可接着借用 entries
+        let pos = *self.entries_index.get(id)?;
+        self.entries.get(pos).map(|arc| arc.as_ref())
+    }
+
+    /// 按 ID 查找条目,返回 `&Arc<ContextEntry>`(零拷贝引用访问)
+    ///
+    /// WHY(M-01/M-02 热路径深拷贝优化):与 `get` 的区别 —
+    /// `get` 返回 `&ContextEntry`(通过 Deref,无法直接获取 Arc 所有权);
+    /// `get_ref` 返回 `&Arc<ContextEntry>`,调用方可通过 `Arc::clone(arc_ref)`
+    /// 以 O(1) 引用计数获取共享所有权,避免深拷贝 content String。
+    /// 适用于多消费者共享场景(如 PVL 并行验证同一上下文)。
+    pub fn get_ref(&self, id: &str) -> Option<&Arc<ContextEntry>> {
         let pos = *self.entries_index.get(id)?;
         self.entries.get(pos)
     }
@@ -308,9 +344,15 @@ impl HcwState {
     ///
     /// WHY(SubTask 19.5):同 get,借用分离 — entries_index 的借用随 usize 复制结束,
     /// 随后可变借用 entries 不冲突。
+    ///
+    /// WHY(M-01/M-02):entries 是 `Vec<Arc<ContextEntry>>`,`.get_mut(pos)` 返回
+    /// `Option<&mut Arc<ContextEntry>>`,用 `Arc::make_mut` 获取 `&mut ContextEntry`。
+    /// CoW 语义:无外部 Arc 引用时零分配(直接返回可变引用);有外部引用时深拷贝一份,
+    /// 保证外部 Arc 不被意外修改。在 HcwWindow 内部 entries 是唯一所有者时,
+    /// `Arc::make_mut` 退化为 O(1)。
     pub fn get_mut(&mut self, id: &str) -> Option<&mut ContextEntry> {
         let pos = *self.entries_index.get(id)?;
-        self.entries.get_mut(pos)
+        self.entries.get_mut(pos).map(Arc::make_mut)
     }
 
     /// 按 ID 移除条目 — O(1) swap_remove + 索引更新
@@ -323,9 +365,14 @@ impl HcwState {
     ///
     /// 注意:swap_remove 改变元素顺序,但 HCW 的 entries 顺序无语义
     /// (压缩按重要性评分排序,不依赖插入顺序)。
-    pub fn remove(&mut self, id: &str) -> Option<ContextEntry> {
+    ///
+    /// WHY(M-01/M-02):返回 `Arc<ContextEntry>` 而非 `ContextEntry`,
+    /// 直接移交所有权(无需 clone)。调用方需 `ContextEntry` 所有权时
+    /// 可 `(*arc).clone()` 或 `Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone())`。
+    pub fn remove(&mut self, id: &str) -> Option<Arc<ContextEntry>> {
         let pos = *self.entries_index.get(id)?;
         // swap_remove:O(1) 删除,将末尾元素移到 pos 位置
+        // WHY(M-01/M-02):Vec<Arc<ContextEntry>> 的 swap_remove 直接返回 Arc,零拷贝
         let removed = self.entries.swap_remove(pos);
         // 从索引中移除被删除的条目
         self.entries_index.remove(id);
@@ -398,8 +445,12 @@ pub struct CompressionReport {
     pub retained_count: usize,
     /// 丢弃条目数
     pub dropped_count: usize,
-    /// 保留的条目列表(用于调用方替换原始 entries)
-    pub retained_entries: Vec<ContextEntry>,
+    /// 保留的条目列表(用于调用方替换原始 entries)— Arc 共享,避免压缩路径深拷贝
+    ///
+    /// WHY(M-01/M-02):改为 `Vec<Arc<ContextEntry>>` 后,compressor 内部
+    /// 从 `&[Arc<ContextEntry>]` 借用,retained 用 `Arc::clone` 推入(零拷贝),
+    /// 调用方 `state.entries = report.retained_entries` 也是零拷贝移动赋值。
+    pub retained_entries: Vec<Arc<ContextEntry>>,
     /// 压缩算法名称(如 "importance-top-n"、"sparse-mask")
     pub algorithm: String,
 }

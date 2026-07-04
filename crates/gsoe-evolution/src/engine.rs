@@ -250,19 +250,31 @@ impl GsoeEvolutionEngine {
             return Vec::new();
         }
 
+        // 至少保留 1 个精英,最多保留全部
+        let elite_count = ((reports.len() as f32) * elite_ratio).ceil() as usize;
+        let elite_count = elite_count.max(1).min(reports.len());
+
         let mut sorted: Vec<FitnessReport> = reports.to_vec();
-        // 降序排序(适应度高的在前)
+        // WHY: Top-K 必须用 select_nth_unstable (O(n)) 而非 sort_by + truncate (O(n log n))
+        //      (§6.2 红线 + §4.4 工程约定)。原实现全排序 O(n log n) 后 take,
+        //      改用 select_nth_unstable O(n) 划分,再对前 elite_count 做 K-log-K 排序,
+        //      总复杂度 O(n + k log k)。
+        // 降序:b.fitness_score vs a.fitness_score,让前 elite_count 是适应度最高的
+        if elite_count < sorted.len() {
+            sorted.select_nth_unstable_by(elite_count, |a, b| {
+                b.fitness_score
+                    .partial_cmp(&a.fitness_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        sorted.truncate(elite_count);
+        // 仅对前 elite_count 做 K-log-K 排序(降序,适应度高的在前),保证精英有序
         sorted.sort_by(|a, b| {
             b.fitness_score
                 .partial_cmp(&a.fitness_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-
-        // 至少保留 1 个精英,最多保留全部
-        let elite_count = ((reports.len() as f32) * elite_ratio).ceil() as usize;
-        let elite_count = elite_count.max(1).min(reports.len());
-
-        sorted.into_iter().take(elite_count).collect()
+        sorted
     }
 }
 

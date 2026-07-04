@@ -10,7 +10,8 @@
 //! - 通过 `event_bus::EventBus` 发布 `WikiUpdated` 事件通知上层
 //!
 //! # 架构红线
-//! - 所有 SQLite 操作通过 `Mutex<Connection>` 串行化(线程安全)
+//! - 所有 SQLite 操作通过 `Arc<Mutex<Connection>>` 串行化(线程安全),
+//!   并使用 `spawn_blocking` 转移到阻塞线程池(避免阻塞 async runtime)
 //! - `#![forbid(unsafe_code)]` 禁止 unsafe,因此 sqlite-vec 集成降级为内存向量检索
 //! - 单函数 ≤ 200 行,所有可能失败的边界用 `?` 处理
 //!
@@ -19,7 +20,7 @@
 //! use repo_wiki::{WikiStore, WikiEntry, VectorIndex};
 //! use std::path::Path;
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let tmp = tempfile::tempdir()?;
 //! let store = WikiStore::open(&tmp.path().join("wiki.db"))?;
 //!
@@ -30,9 +31,10 @@
 //!     vec!["rust".into(), "async".into()],
 //!     vec![0.0; 512],
 //! );
-//! store.insert(&entry)?;
+//! // 所有 SQLite 操作均为 async,通过 spawn_blocking 在阻塞线程池执行
+//! store.insert(entry).await?;
 //!
-//! let fetched = store.get("e-1")?.unwrap();
+//! let fetched = store.get("e-1".to_string()).await?.unwrap();
 //! assert_eq!(fetched.title, "Rust 异步编程");
 //! # Ok(())
 //! # }

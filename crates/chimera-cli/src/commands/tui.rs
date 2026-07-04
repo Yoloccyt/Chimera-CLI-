@@ -11,6 +11,6 @@ use crate::config::ChimeraConfig;
 pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
     tracing::info!("启动 TUI 交互界面");
     println!("[tui] TUI 启动中...");
-    println!("[tui] (骨架:待 chimera-tui crate 实现后接入,Week 6)");
+    println!("[tui] (骨架:Stage 8 RC,L10 接线延后到 v1.1)");
     Ok(())
 }

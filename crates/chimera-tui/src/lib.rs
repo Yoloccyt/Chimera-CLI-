@@ -12,6 +12,15 @@
 //! Chimera TUI 是 L10 层,向下依赖 L1 的 event-bus。作为用户交互入口,
 //! 不直接调用下层逻辑,通过 EventBus 订阅事件更新状态。
 //!
+//! # 技术选型(WHY)
+//! - **ratatui 0.29**:Rust 生态最成熟的 TUI 框架,纯 Rust 实现契合
+//!   `#![forbid(unsafe_code)]` 安全哲学;提供 Widget trait 组合式布局,
+//!   支持 5 面板并行渲染(Quest/Parliament/Budget/Log/Help)。
+//! - **crossterm 0.28**:跨平台终端后端(Windows/macOS/Linux),
+//!   0.28 版本 KeyEvent API 变更为 `KeyEvent::new(code, modifiers)` 双参数,
+//!   Release 事件需 `KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release)`。
+//!   选 crossterm 而非 termion 因其 Windows 原生支持(项目主开发平台为 Windows)。
+//!
 //! # 快速示例
 //! ```no_run
 //! use chimera_tui::{TuiApp, TuiConfig};

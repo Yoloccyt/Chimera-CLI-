@@ -13,6 +13,6 @@ pub async fn execute(query: &str, config: &ChimeraConfig) -> Result<()> {
     println!("[wiki] 查询语句:{}", query);
     println!("[wiki] 知识库路径:{}", config.repo_wiki.db_path);
     println!("[wiki] 嵌入维度:{}", config.repo_wiki.embedding_dim);
-    println!("[wiki] (骨架:待 repo-wiki crate 实现后接入,Week 2)");
+    println!("[wiki] (骨架:Stage 8 RC,L10 接线延后到 v1.1)");
     Ok(())
 }

@@ -13,6 +13,7 @@
 //! - `from_snapshot()` 从快照重建 Profile,恢复 usage_count 但重置 last_used_at
 
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::sync::RwLock;
@@ -38,7 +39,7 @@ impl ExpertProfile {
             expert_vector,
             capability_tags,
             usage_count: std::sync::atomic::AtomicU64::new(0),
-            last_used_at: RwLock::new(Instant::now()),
+            last_used_at: Arc::new(RwLock::new(Instant::now())),
             priority,
         }
     }

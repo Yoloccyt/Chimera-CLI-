@@ -168,6 +168,11 @@ impl<T: Clone + PartialEq + Eq + Hash> SparseMask<T> {
         // 收集对应的 ID(按评分降序)
         let active_ids: Vec<T> = top_k_indices.iter().map(|&i| ids[i].clone()).collect();
         let sparsity = 1.0 - (k as f32 / total as f32);
+        // WHY 双重存储(Vec + HashSet,m-05 评估):active_ids 提供有序遍历(O(K)),
+        // active_set 提供 O(1) 包含性检查(contains)。二者互补,避免热路径排序开销。
+        // 此处 `iter().cloned()` 是必要的二次 clone — HashSet 需要拥有所有权,
+        // 而 active_ids 仍需保留供 Self.active_ids 字段使用。
+        // 若 T 实现 Copy(trivial clone),开销可忽略;否则 K 通常 ≤ 64,clone 代价可接受。
         let active_set = HashSet::from_iter(active_ids.iter().cloned());
         Self {
             active_ids,

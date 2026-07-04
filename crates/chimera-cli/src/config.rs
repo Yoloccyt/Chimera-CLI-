@@ -6,6 +6,10 @@
 //! 3. 环境变量(前缀 `AETHER_`,嵌套用 `__` 分隔)
 //! 4. CLI 参数(目前仅 `--config` 影响加载路径)
 //!
+//! ## 配置样例
+//! - 简化样例见 `examples/config.sample.yaml` / `examples/config.sample.toml`
+//! - 完整模板(含全部 14 个顶层 section)由 `aether config init` 生成
+//!
 //! ## 设计决策
 //! - 子配置全部派生 `Default`,避免在 `ChimeraConfig::default` 中重复初始化
 //! - `providers` 的 `capabilities` 用 `Vec<String>` 而非枚举,保持向前兼容(新能力不需改代码)

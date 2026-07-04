@@ -18,7 +18,7 @@
 //! - Quest 关联查询:O(1) HashMap 查找
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
 use tracing::{debug, trace};
@@ -28,8 +28,11 @@ use crate::types::{MemoryEntry, MemoryId, MemoryTier, QuestId};
 
 /// L1 情节记忆内部状态(RwLock 保护,保持三索引一致性)
 struct EpisodicInner {
-    /// 条目主存储(MemoryId → MemoryEntry)
-    entries: HashMap<MemoryId, MemoryEntry>,
+    /// 条目主存储(MemoryId → Arc<MemoryEntry>)
+    ///
+    /// WHY Arc<MemoryEntry>:`list_all_arc()` 通过 `Arc::clone` 零拷贝共享,
+    /// 避免 `list_all()` 全量深拷贝(1024 条目 ~2MB 分配)
+    entries: HashMap<MemoryId, Arc<MemoryEntry>>,
     /// 时间索引(created_at → Vec<MemoryId>),支持范围查询
     ///
     /// WHY Vec<MemoryId>:同一时间戳可能插入多个条目(并发场景),
@@ -152,7 +155,7 @@ impl EpisodicMemory {
             .push(entry.id.clone());
 
         // 插入主存储
-        inner.entries.insert(entry.id.clone(), entry);
+        inner.entries.insert(entry.id.clone(), Arc::new(entry));
 
         Ok(evicted)
     }
@@ -163,10 +166,11 @@ impl EpisodicMemory {
             .inner
             .read()
             .map_err(|e| MlcError::StorageError(format!("L1 rwlock poisoned: {e}")))?;
+        // **v:&Arc<MemoryEntry> → Arc<MemoryEntry> → MemoryEntry,clone 返回 owned
         inner
             .entries
             .get(id)
-            .cloned()
+            .map(|v| (**v).clone())
             .ok_or_else(|| MlcError::EntryNotFound(format!("L1 情节记忆条目: {id}")))
     }
 
@@ -189,7 +193,7 @@ impl EpisodicMemory {
         for (_ts, ids) in inner.time_index.range(start..end) {
             for id in ids {
                 if let Some(entry) = inner.entries.get(id) {
-                    results.push(entry.clone());
+                    results.push((**entry).clone());
                 }
             }
         }
@@ -210,7 +214,7 @@ impl EpisodicMemory {
         let mut results = Vec::with_capacity(ids.len());
         for id in &ids {
             if let Some(entry) = inner.entries.get(id) {
-                results.push(entry.clone());
+                results.push((**entry).clone());
             }
         }
         Ok(results)
@@ -237,7 +241,10 @@ impl EpisodicMemory {
         };
 
         // 从主存储移除
-        let victim = inner.entries.remove(&victim_id);
+        let victim = inner
+            .entries
+            .remove(&victim_id)
+            .map(|v| Arc::try_unwrap(v).unwrap_or_else(|arc| (*arc).clone()));
 
         // 从时间索引移除
         if let Some(vec) = inner.time_index.get_mut(&ts) {
@@ -289,16 +296,33 @@ impl EpisodicMemory {
                 }
             }
         }
-        Ok(entry)
+        // Arc<MemoryEntry> → MemoryEntry(try_unwrap 零拷贝,共享时 fallback clone)
+        Ok(entry.map(|v| Arc::try_unwrap(v).unwrap_or_else(|arc| (*arc).clone())))
     }
 
-    /// 列出所有条目(克隆,用于迁移或快照)
+    /// 列出所有条目(深拷贝,用于迁移或快照)
+    ///
+    /// WHY 保留 list_all:API 兼容,调用方需 owned `MemoryEntry`。
+    /// 热路径(批量只读扫描)应优先使用 `list_all_arc()` 避免 1024 条目 ~2MB 深拷贝。
     pub fn list_all(&self) -> Result<Vec<MemoryEntry>, MlcError> {
         let inner = self
             .inner
             .read()
             .map_err(|e| MlcError::StorageError(format!("L1 rwlock poisoned: {e}")))?;
-        Ok(inner.entries.values().cloned().collect())
+        Ok(inner.entries.values().map(|v| (**v).clone()).collect())
+    }
+
+    /// 列出所有条目的 Arc 引用(零拷贝共享,避免全量深拷贝)
+    ///
+    /// WHY list_all_arc:`list_all()` 返回 `Vec<MemoryEntry>` 需深拷贝每个条目,
+    /// 1024 条目时 ~2MB 堆分配。本方法返回 `Vec<Arc<MemoryEntry>>`,
+    /// 通过 `Arc::clone` 仅增加引用计数(原子 +1),无堆分配,适用于迁移/快照等热路径。
+    pub fn list_all_arc(&self) -> Result<Vec<Arc<MemoryEntry>>, MlcError> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| MlcError::StorageError(format!("L1 rwlock poisoned: {e}")))?;
+        Ok(inner.entries.values().map(Arc::clone).collect())
     }
 
     /// 清空所有条目
@@ -486,6 +510,21 @@ mod tests {
         }
         let all = mem.list_all().unwrap();
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_list_all_arc_shares_entries() {
+        let mem = EpisodicMemory::new(1024);
+        let now = Utc::now();
+        for i in 0..3 {
+            mem.insert(make_entry(&format!("m-{i}"), now)).unwrap();
+        }
+        let arcs = mem.list_all_arc().unwrap();
+        assert_eq!(arcs.len(), 3);
+        // 验证 Arc 内数据正确
+        assert!(arcs.iter().all(|a| a.id.as_str().starts_with("m-")));
+        // 验证 Arc 共享:存储中的 Arc 与返回的 Arc 是同一份(refcount > 1)
+        assert!(arcs.iter().all(|a| Arc::strong_count(a) >= 2));
     }
 
     #[test]

@@ -31,8 +31,11 @@ use crate::types::{MemoryEntry, MemoryId, MemoryTier, SharedCLV};
 /// WHY RwLock 而非 Mutex:`recall_by_clv`(读)频率远高于 `insert`(写),
 /// RwLock 允许多个召回并发,提升高并发场景下的吞吐量
 struct SemanticInner {
-    /// 条目主存储(MemoryId → MemoryEntry)
-    entries: HashMap<MemoryId, MemoryEntry>,
+    /// 条目主存储(MemoryId → Arc<MemoryEntry>)
+    ///
+    /// WHY Arc<MemoryEntry>:`list_all_arc()` 通过 `Arc::clone` 零拷贝共享,
+    /// 避免 `list_all()` 全量深拷贝(4096 条目 ~8MB 分配)
+    entries: HashMap<MemoryId, Arc<MemoryEntry>>,
     /// 向量索引((SharedCLV, MemoryId) 队列,顺序扫描)
     ///
     /// WHY VecDeque 而非 Vec:FIFO 驱逐用 `pop_front` O(1),
@@ -158,7 +161,7 @@ impl SemanticMemory {
         // 添加新向量
         inner.vectors.push_back((shared_clv, entry.id.clone()));
         // 插入主存储
-        inner.entries.insert(entry.id.clone(), entry);
+        inner.entries.insert(entry.id.clone(), Arc::new(entry));
 
         Ok(evicted)
     }
@@ -236,10 +239,11 @@ impl SemanticMemory {
             .inner
             .read()
             .map_err(|e| MlcError::StorageError(format!("L2 rwlock poisoned: {e}")))?;
+        // **v:&Arc<MemoryEntry> → Arc<MemoryEntry> → MemoryEntry,clone 返回 owned
         inner
             .entries
             .get(id)
-            .cloned()
+            .map(|v| (**v).clone())
             .ok_or_else(|| MlcError::EntryNotFound(format!("L2 语义记忆条目: {id}")))
     }
 
@@ -274,7 +278,10 @@ impl SemanticMemory {
             }
         }
 
-        let victim = inner.entries.remove(&victim_id);
+        let victim = inner
+            .entries
+            .remove(&victim_id)
+            .map(|v| Arc::try_unwrap(v).unwrap_or_else(|arc| (*arc).clone()));
 
         if let Some(ref v) = victim {
             trace!(victim_id = %v.id, "L2 FIFO 驱逐完成");
@@ -315,16 +322,33 @@ impl SemanticMemory {
                 }
             }
         }
-        Ok(entry)
+        // Arc<MemoryEntry> → MemoryEntry(try_unwrap 零拷贝,共享时 fallback clone)
+        Ok(entry.map(|v| Arc::try_unwrap(v).unwrap_or_else(|arc| (*arc).clone())))
     }
 
-    /// 列出所有条目(克隆,用于迁移或快照)
+    /// 列出所有条目(深拷贝,用于迁移或快照)
+    ///
+    /// WHY 保留 list_all:API 兼容,调用方需 owned `MemoryEntry`。
+    /// 热路径(批量只读扫描)应优先使用 `list_all_arc()` 避免 4096 条目 ~8MB 深拷贝。
     pub fn list_all(&self) -> Result<Vec<MemoryEntry>, MlcError> {
         let inner = self
             .inner
             .read()
             .map_err(|e| MlcError::StorageError(format!("L2 rwlock poisoned: {e}")))?;
-        Ok(inner.entries.values().cloned().collect())
+        Ok(inner.entries.values().map(|v| (**v).clone()).collect())
+    }
+
+    /// 列出所有条目的 Arc 引用(零拷贝共享,避免全量深拷贝)
+    ///
+    /// WHY list_all_arc:`list_all()` 返回 `Vec<MemoryEntry>` 需深拷贝每个条目,
+    /// 4096 条目时 ~8MB 堆分配。本方法返回 `Vec<Arc<MemoryEntry>>`,
+    /// 通过 `Arc::clone` 仅增加引用计数(原子 +1),无堆分配,适用于迁移/快照等热路径。
+    pub fn list_all_arc(&self) -> Result<Vec<Arc<MemoryEntry>>, MlcError> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| MlcError::StorageError(format!("L2 rwlock poisoned: {e}")))?;
+        Ok(inner.entries.values().map(Arc::clone).collect())
     }
 
     /// 清空所有条目与 CLV 池
@@ -588,6 +612,23 @@ mod tests {
 
         mem.clear().unwrap();
         assert_eq!(mem.len().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_list_all_arc_shares_entries() {
+        // 验证 list_all_arc 返回 Arc 引用,内容与 list_all 一致且 Arc 共享
+        let mem = SemanticMemory::new(64);
+        let clv = make_clv(1.0);
+        for i in 0..3 {
+            mem.insert(make_entry(&format!("m-{i}"), clv.clone()))
+                .unwrap();
+        }
+        let arcs = mem.list_all_arc().unwrap();
+        assert_eq!(arcs.len(), 3);
+        // 验证 Arc 内数据正确
+        assert!(arcs.iter().all(|a| a.id.as_str().starts_with("m-")));
+        // 验证 Arc 共享:存储中的 Arc 与返回的 Arc 是同一份(refcount > 1)
+        assert!(arcs.iter().all(|a| Arc::strong_count(a) >= 2));
     }
 
     // 注:test_recall_performance_100_entries 已删除(与 tests/semantic.rs 中的

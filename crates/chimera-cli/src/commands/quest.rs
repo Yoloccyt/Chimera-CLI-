@@ -33,6 +33,6 @@ pub async fn execute(action: &QuestAction, config: &ChimeraConfig) -> Result<()>
             println!("[quest checkpoint] 为 Quest 创建检查点:{}", id);
         }
     }
-    println!("[quest] (骨架:待 quest-engine crate 实现后接入,Week 2)");
+    println!("[quest] (骨架:Stage 8 RC,L10 接线延后到 v1.1)");
     Ok(())
 }

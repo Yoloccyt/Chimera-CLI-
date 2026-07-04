@@ -22,6 +22,8 @@
 //!   任务要求"压缩率 > 3×"即 compression_ratio > 3.0。
 //!   `compressed_size == 0` 时取 `f32::MAX`(非 INFINITY,避免序列化失败)
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use nexus_core::CLV;
 
@@ -54,20 +56,25 @@ impl ContextCompressor {
     /// WHY:至少保留 1 个条目 — 避免压缩后上下文为空,此时 compressed_size
     /// 可能 > target_size,调用方(HcwWindow)据此触发窗口升级
     ///
-    /// WHY 接受 `&[ContextEntry]` 而非 `Vec<ContextEntry>`(SubTask 19.4):
+    /// WHY 接受 `&[Arc<ContextEntry>]` 而非 `Vec<ContextEntry>`(SubTask 19.4 + M-01/M-02):
     /// 原实现要求调用方 `state.entries.clone()` 全量 clone 1000 条目后传入,
-    /// 现接受借用引用,内部仅 clone 保留的 Top-N 条目(通常 ≤ 100),
-    /// 消除 900+ 次无用 clone。无需压缩时返回空 retained_entries,
+    /// 现接受 `&[Arc<ContextEntry>]` 借用引用,内部仅 `Arc::clone` 保留的 Top-N 条目
+    /// (通常 ≤ 100),消除 900+ 次无用 clone。无需压缩时返回空 retained_entries,
     /// 调用方检查 `algorithm == "none"` 跳过 entries 替换。
     ///
+    /// WHY(M-01/M-02):返回的 `retained_entries: Vec<Arc<ContextEntry>>` 与
+    /// `HcwState.entries` 同类型,调用方 `state.entries = report.retained_entries`
+    /// 是零拷贝移动赋值。compressor 内部从 `&Arc<ContextEntry>` 用 `Arc::clone`
+    /// 推入 retained(仅引用计数 O(1)),避免 content String 深拷贝。
+    ///
     /// # 参数
-    /// - `entries`:待压缩的条目切片(借用,不消费)
+    /// - `entries`:待压缩的条目切片(`&[Arc<ContextEntry>]` 借用,不消费)
     /// - `target_size`:目标总 Token 大小
     /// - `task_clv`:当前任务的 CLV(用于相关性计算,None 时相关性取 0.5)
     /// - `now`:当前时间(用于时近性计算)
     pub fn compress(
         config: &HcwConfig,
-        entries: &[ContextEntry],
+        entries: &[Arc<ContextEntry>],
         target_size: usize,
         task_clv: Option<&CLV>,
         now: DateTime<Utc>,
@@ -115,8 +122,12 @@ impl ContextCompressor {
         // 时间跨度(毫秒),为 0 时所有条目时近性相同(取 1.0)
         let time_span_ms = (newest - oldest).num_milliseconds().max(1) as f32;
 
-        // 计算每个条目的重要性评分并配对(借用引用,不 clone)
-        let mut scored: Vec<(f32, &ContextEntry)> = entries
+        // 计算每个条目的重要性评分并配对(借用 Arc 引用,不 clone)
+        // WHY(M-01/M-02):scored 存 `&Arc<ContextEntry>` 而非 `&ContextEntry`,
+        // 以便后续 `retained.push(Arc::clone(entry))` 零拷贝推入。
+        // compute_importance 接受 `&ContextEntry`,通过 Deref coercion
+        // 自动将 `&Arc<ContextEntry>` 解引用为 `&ContextEntry`。
+        let mut scored: Vec<(f32, &Arc<ContextEntry>)> = entries
             .iter()
             .map(|e| {
                 let score = Self::compute_importance(
@@ -173,21 +184,24 @@ impl ContextCompressor {
         // WHY:若所有条目 token_size > effective_target,retained 为空,
         // 此时用最高分条目作为 fallback,调用方据此触发窗口升级
         //
-        // SubTask 19.4:用 *e 替代 e.clone() — e 是 &&ContextEntry,
-        // *e 解引用为 &ContextEntry(Copy 类型,零成本复制引用),
-        // 避免 suspicious_double_ref_op 警告(clone 双引用仅复制内层引用)
+        // WHY(M-01/M-02):scored 元素是 `(f32, &Arc<ContextEntry>)`,
+        // `*e` 解引用为 `&Arc<ContextEntry>`(Copy 类型,零成本复制引用)。
+        // fallback_entry 类型为 `Option<&Arc<ContextEntry>>`,与 retained 同源,
+        // 后续 `Arc::clone(entry)` 零拷贝推入。
         let fallback_entry = scored.first().map(|(_, e)| *e);
 
-        let mut retained: Vec<ContextEntry> = Vec::new();
+        let mut retained: Vec<Arc<ContextEntry>> = Vec::new();
         let mut compressed_size: usize = 0;
 
-        // WHY 仅 clone 保留的条目:原实现消费 Vec<ContextEntry> 全量移动,
-        // 现接受 &[ContextEntry] 借用,仅对通过贪心筛选的条目 clone,
-        // 1000 条目中保留 100 条时,clone 次数从 1000 降到 100
+        // WHY(M-01/M-02):用 `Arc::clone` 替代 `entry.clone()` —
+        // entry 是 `&Arc<ContextEntry>`,`Arc::clone` 仅增加引用计数(O(1)),
+        // 避免 `ContextEntry` 深拷贝(content String 被复制)。
+        // 1000 条目保留 100 条时,从 100 次 String clone 降为 100 次 refcount inc。
+        // token_size 等字段访问通过 Arc 的 Deref 自动解引用,无需修改。
         for (score, entry) in scored {
             if compressed_size + entry.token_size <= effective_target {
                 compressed_size += entry.token_size;
-                retained.push(entry.clone());
+                retained.push(Arc::clone(entry));
             }
             // 超出 effective_target 的条目被丢弃
             // 注:score 仅用于排序,不存入 retained
@@ -198,10 +212,10 @@ impl ContextCompressor {
         // WHY:避免压缩后上下文为空,调用方据此触发窗口升级
         if retained.is_empty() {
             if let Some(entry) = fallback_entry {
+                // entry: &Arc<ContextEntry>(fallback_entry 为 Option<&Arc<ContextEntry>>)
+                // token_size 通过 Arc Deref 访问
                 compressed_size = entry.token_size;
-                // SubTask 19.4:entry 是 &ContextEntry(fallback_entry 为 Option<&ContextEntry>),
-                // .clone() 返回 ContextEntry(方法解析匹配 ContextEntry: Clone,非 &T: Clone)
-                retained.push(entry.clone());
+                retained.push(Arc::clone(entry));
             }
         }
 
@@ -276,9 +290,17 @@ mod tests {
         entry
     }
 
+    /// 测试辅助:将 `Vec<ContextEntry>` 转为 `Vec<Arc<ContextEntry>>`
+    ///
+    /// WHY(M-01/M-02):compress 签名改为 `&[Arc<ContextEntry>]`,
+    /// 测试需用 Arc 包装条目。此辅助函数避免每个测试重复 `.map(Arc::new)`。
+    fn to_arc(entries: Vec<ContextEntry>) -> Vec<Arc<ContextEntry>> {
+        entries.into_iter().map(Arc::new).collect()
+    }
+
     #[test]
     fn test_compress_no_compression_needed() {
-        let entries = vec![make_entry("e-1", 100, 1, 0)];
+        let entries = to_arc(vec![make_entry("e-1", 100, 1, 0)]);
         let report =
             ContextCompressor::compress(&HcwConfig::default(), &entries, 200, None, Utc::now());
         assert_eq!(report.original_size, 100);
@@ -290,8 +312,9 @@ mod tests {
 
     #[test]
     fn test_compress_empty_entries() {
+        let entries: Vec<Arc<ContextEntry>> = Vec::new();
         let report =
-            ContextCompressor::compress(&HcwConfig::default(), &Vec::new(), 100, None, Utc::now());
+            ContextCompressor::compress(&HcwConfig::default(), &entries, 100, None, Utc::now());
         assert_eq!(report.original_size, 0);
         assert_eq!(report.compressed_size, 0);
         assert_eq!(report.retained_count, 0);
@@ -300,13 +323,13 @@ mod tests {
     #[test]
     fn test_compress_basic_top_n() {
         // 5 个条目,每个 100 token,目标 300 → 保留 3 个
-        let entries = vec![
+        let entries = to_arc(vec![
             make_entry("e-1", 100, 1, 0),
             make_entry("e-2", 100, 2, 10),
             make_entry("e-3", 100, 3, 20),
             make_entry("e-4", 100, 4, 30),
             make_entry("e-5", 100, 5, 40),
-        ];
+        ]);
         let report =
             ContextCompressor::compress(&HcwConfig::default(), &entries, 300, None, Utc::now());
         assert_eq!(report.original_size, 500);
@@ -320,9 +343,11 @@ mod tests {
     #[test]
     fn test_compress_100k_to_32k_ratio_above_3() {
         // 100 个条目,每个 1000 token = 100K,目标 32K → 保留 32 个
-        let entries: Vec<ContextEntry> = (0..100)
-            .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64 * 10))
-            .collect();
+        let entries: Vec<Arc<ContextEntry>> = to_arc(
+            (0..100)
+                .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64 * 10))
+                .collect(),
+        );
         let report =
             ContextCompressor::compress(&HcwConfig::default(), &entries, 32000, None, Utc::now());
         assert_eq!(report.original_size, 100_000);
@@ -338,9 +363,11 @@ mod tests {
     #[test]
     fn test_compress_128k_to_32k_ratio_above_4() {
         // 129 个条目,每个 1000 token = 129K,目标 32K,保留 32 个 = 32K
-        let entries: Vec<ContextEntry> = (0..129)
-            .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64 * 10))
-            .collect();
+        let entries: Vec<Arc<ContextEntry>> = to_arc(
+            (0..129)
+                .map(|i| make_entry(&format!("e-{i}"), 1000, (i % 10) as u32, i as i64 * 10))
+                .collect(),
+        );
         let report =
             ContextCompressor::compress(&HcwConfig::default(), &entries, 32000, None, Utc::now());
         assert_eq!(report.original_size, 129_000);
@@ -356,15 +383,17 @@ mod tests {
     #[test]
     fn test_compress_preserves_high_importance() {
         // 高频条目应被保留,低频条目应被丢弃
-        let entries = vec![
+        let entries = to_arc(vec![
             make_entry("low-freq", 100, 0, 100),  // 低频,旧
             make_entry("high-freq", 100, 100, 0), // 高频,新
             make_entry("mid-freq", 100, 50, 50),  // 中频,中
             make_entry("low-freq-2", 100, 1, 90), // 低频,较旧
-        ];
+        ]);
         let report =
             ContextCompressor::compress(&HcwConfig::default(), &entries, 200, None, Utc::now());
         // 保留 2 个,应为 high-freq 与 mid-freq
+        // WHY(M-01/M-02):retained_entries 是 Vec<Arc<ContextEntry>>,
+        // .iter() 产生 &Arc<ContextEntry>,.id 通过 Deref 访问
         let retained_ids: Vec<&str> = report
             .retained_entries
             .iter()
@@ -391,7 +420,7 @@ mod tests {
         let mut e_dissimilar = make_entry("dissimilar", 100, 1, 0);
         e_dissimilar.clv = Some(CLV::from_vec(dissimilar_clv).unwrap());
 
-        let entries = vec![e_dissimilar, e_similar];
+        let entries = to_arc(vec![e_dissimilar, e_similar]);
         let report = ContextCompressor::compress(
             &HcwConfig::default(),
             &entries,
@@ -407,7 +436,7 @@ mod tests {
     #[test]
     fn test_compress_target_zero_preserves_one() {
         // target_size = 0,应保留至少 1 个条目(避免空上下文)
-        let entries = vec![make_entry("e-1", 100, 1, 0)];
+        let entries = to_arc(vec![make_entry("e-1", 100, 1, 0)]);
         let report =
             ContextCompressor::compress(&HcwConfig::default(), &entries, 0, None, Utc::now());
         // effective_target = 1,但条目 token_size = 100 > 1,retained 为空

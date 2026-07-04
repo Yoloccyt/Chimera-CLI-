@@ -150,13 +150,19 @@ impl HcwWindow {
         self.handle_overflow().await
     }
 
-    /// 按 ID 获取条目(更新访问次数与时间)
+    /// 按 ID 获取条目(更新访问次数与时间,返回深拷贝)
     ///
     /// 找到后返回条目克隆,并递增 access_count、更新 last_accessed_at(LRU 语义)。
     /// 不存在返回 None。
+    ///
+    /// WHY(M-02):get 在热路径上 clone ContextEntry(含 content String 深拷贝)。
+    /// 保持此签名(API 兼容),但内部 state.get_mut 用 Arc::make_mut(CoW):
+    /// 无外部 Arc 引用时零分配,有外部引用时 clone 一份(保证外部 Arc 不被修改)。
+    /// 调用方需零拷贝时用 get_arc/get_ref(不递增 access_count)。
     pub async fn get(&self, id: &str) -> Result<Option<ContextEntry>, HcwError> {
         let mut state = self.state.write().await;
         // SubTask 19.5:用 state.get_mut(id) O(1) 索引查找替代 iter().find() O(n) 扫描
+        // WHY(M-01/M-02):state.get_mut 内部 Arc::make_mut(CoW),无外部引用时零分配
         if let Some(entry) = state.get_mut(id) {
             entry.increment_access();
             return Ok(Some(entry.clone()));
@@ -164,28 +170,49 @@ impl HcwWindow {
         Ok(None)
     }
 
-    /// 按 ID 获取条目(返回 `Arc<ContextEntry>`,共享所有权)
+    /// 按 ID 获取条目(返回 `Arc<ContextEntry>`,共享所有权,真零拷贝)
     ///
-    /// 与 get() 的区别:get() 返回 ContextEntry 的克隆(深拷贝),
-    /// get_arc() 返回 `Arc<ContextEntry>` 的克隆(引用计数,廉价)。
-    /// 调用者持有 Arc 期间,条目不会被释放,适合多消费者共享场景。
+    /// 与 get() 的区别:
+    /// - get() 返回 ContextEntry 克隆(深拷贝 content String,递增 access_count)
+    /// - get_arc() 返回 `Arc::clone(&entries[idx])`(O(1) 引用计数,真零拷贝,
+    ///   不递增 access_count)
     ///
-    /// WHY(Minor-4 修复):get() 在热路径上 clone ContextEntry(含大字段 content),
-    /// 多消费者场景下每个消费者各自 clone,造成冗余分配。
-    /// get_arc() 通过 Arc 共享,所有消费者持有同一份数据,零额外 clone。
+    /// WHY(M-01 修复):原实现 `Arc::new(entry.clone())` 等价于先深拷贝再包 Arc,
+    /// 多消费者场景下 content String 被反复深拷贝。
+    /// 修复后用读锁 + get_ref 获取 &Arc,Arc::clone 返回共享 Arc,
+    /// 返回的 Arc 与内部存储共享同一引用(Arc::ptr_eq 为 true)。
+    ///
+    /// 不递增 access_count:保证 Arc::ptr_eq 为 true(递增会触发 Arc::make_mut CoW,
+    /// 破坏 Arc 共享)。调用方需 LRU 语义时用 get()。
     pub async fn get_arc(&self, id: &str) -> Result<Option<Arc<ContextEntry>>, HcwError> {
-        let mut state = self.state.write().await;
-        if let Some(entry) = state.get_mut(id) {
-            entry.increment_access();
-            return Ok(Some(Arc::new(entry.clone())));
-        }
-        Ok(None)
+        let state = self.state.read().await;
+        // WHY(M-01):读锁 + get_ref,Arc::clone 零拷贝(仅引用计数 +1)
+        Ok(state.get_ref(id).map(Arc::clone))
+    }
+
+    /// 按 ID 获取条目(返回 `Arc<ContextEntry>`,引用语义,零拷贝)
+    ///
+    /// WHY(M-02 新增):与 get_arc 行为相同(读锁 + Arc::clone,零拷贝),
+    /// 语义强调"引用访问"(不深拷贝 content)。适用于性能敏感场景
+    /// (如 PVL 并行验证同一上下文,多消费者共享同一 Arc)。
+    ///
+    /// 与 get() 的区别:get() 深拷贝 + 递增 access_count(LRU 语义),
+    /// get_ref() 零拷贝 + 不递增 access_count(纯读)。
+    pub async fn get_ref(&self, id: &str) -> Result<Option<Arc<ContextEntry>>, HcwError> {
+        let state = self.state.read().await;
+        // WHY(M-02):同 get_arc,读锁 + Arc::clone,零拷贝引用访问
+        Ok(state.get_ref(id).map(Arc::clone))
     }
 
     /// 按 ID 移除条目
+    ///
+    /// WHY(M-01/M-02):state.remove 返回 `Arc<ContextEntry>`(零拷贝移交所有权),
+    /// HcwWindow::remove 保持 API 兼容返回 ContextEntry,用 `(*arc).clone()` 解包。
+    /// remove 非热路径(不如 get 频繁),clone 开销可接受。
+    /// 若 Arc 为唯一引用(无外部 get_arc/get_ref 持有),可用 Arc::try_unwrap 零拷贝。
     pub async fn remove(&self, id: &str) -> Result<Option<ContextEntry>, HcwError> {
         let mut state = self.state.write().await;
-        Ok(state.remove(id))
+        Ok(state.remove(id).map(|arc| (*arc).clone()))
     }
 
     /// 按复杂度选择窗口层级(可能触发压缩或层级切换)

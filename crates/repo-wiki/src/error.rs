@@ -32,6 +32,13 @@ pub enum WikiError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
+    /// spawn_blocking 任务 join 失败 — 阻塞线程池任务被取消或 panic
+    ///
+    /// WHY:所有 SQLite 操作通过 `tokio::task::spawn_blocking` 转移到阻塞线程池,
+    /// 若该任务被取消或 panic,JoinError 需要传播给调用方(架构红线:无孤儿调用)
+    #[error("spawn_blocking join error: {0}")]
+    BlockingJoinError(#[from] tokio::task::JoinError),
+
     /// 事件总线错误 — 发布 WikiUpdated 事件失败
     #[error("event bus error: {0}")]
     EventBusError(#[from] event_bus::EventBusError),

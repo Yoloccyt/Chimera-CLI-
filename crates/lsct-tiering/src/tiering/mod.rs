@@ -15,5 +15,5 @@ pub mod promoter;
 
 pub use coordinator::LsctCoordinator;
 pub use demoter::LsctDemoter;
-pub use profile::compute_target_tier;
+pub use profile::{compute_target_tier, compute_target_tier_with_config};
 pub use promoter::LsctPromoter;

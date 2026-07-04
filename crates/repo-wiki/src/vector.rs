@@ -75,8 +75,8 @@ impl VectorIndex {
     /// 相似度 ∈ [0.0, 1.0](余弦相似度,1.0 表示完全相同)。
     ///
     /// # 性能
-    /// O(n) 遍历 + O(n log n) 排序,n 为索引中的向量总数。
-    /// 在 10-1000 条目规模下延迟 < 10ms。
+    /// O(n) 遍历 + O(n) Top-K 选择(`select_nth_unstable_by`)+ O(K log K) 局部排序,
+    /// n 为索引中的向量总数。在 10-1000 条目规模下延迟 < 10ms。
     pub fn search(&self, query: &[f32], top_k: usize) -> Result<Vec<(String, f32)>, WikiError> {
         if query.len() != self.dim {
             return Err(WikiError::VectorIndexError(format!(
@@ -98,11 +98,16 @@ impl VectorIndex {
             .map(|(id, vec)| (id.clone(), nexus_core::cosine_similarity_slices(query, vec)))
             .collect();
 
-        // 按相似度降序排序
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        // 取 Top-K
+        // Top-K 选择用 select_nth_unstable_by (O(n)),仅对前 K 做 K-log-K 排序
+        // WHY 不用 sort_by:工程约定 Top-K 必须用 select_nth_unstable(O(n)) 替代 O(n log n)
+        if top_k < scored.len() {
+            scored.select_nth_unstable_by(top_k, |a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
         scored.truncate(top_k);
+        // 前 K 元素已是无序的 Top-K 集合,这里做最终降序排序(K log K)
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         Ok(scored)
     }
 

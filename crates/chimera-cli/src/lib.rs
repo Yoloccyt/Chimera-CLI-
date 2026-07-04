@@ -21,7 +21,7 @@
 //! - **跨平台**:使用 `notify` crate 监听 `omega.yaml` 文件变更,debounce 500ms 后重载
 //!
 //!   重载后通过 `event-bus` 广播 `ConfigReloaded` 事件,各子系统订阅并应用新配置。
-//!   当前 Stage 0 阶段仅实现静态加载,热加载留待 Week 8 打磨阶段。
+//!   当前 Week 8 已完成静态加载,热加载为未来增强项(优先级 P3)。
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]

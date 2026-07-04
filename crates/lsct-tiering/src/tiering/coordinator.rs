@@ -28,7 +28,7 @@ use tracing::{debug, warn};
 use crate::config::LsctConfig;
 use crate::error::LsctError;
 use crate::tiering::demoter::LsctDemoter;
-use crate::tiering::profile::compute_target_tier;
+use crate::tiering::profile::compute_target_tier_with_config;
 use crate::tiering::promoter::LsctPromoter;
 use crate::types::{
     next_colder, next_warmer, tier_rank, TaskLoadProfile, TierAssignment, TierSwitchDecision,
@@ -166,7 +166,8 @@ impl LsctCoordinator {
             .map(|entry| (entry.key().clone(), entry.current_tier))
             .collect();
 
-        let target = compute_target_tier(profile);
+        // WHY 使用配置化变体:从 self.config 读取升降温阈值,支持按部署场景调整
+        let target = compute_target_tier_with_config(profile, &self.config);
         let target_rank = tier_rank(target);
         let mut decisions = Vec::with_capacity(snapshot.len());
 

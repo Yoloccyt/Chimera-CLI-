@@ -434,10 +434,14 @@ impl AhirtRedTeam {
         let mut remediation_suggestions = Vec::new();
 
         // WHY total > 0 守卫:空载荷库时 detection_rate = 0.0,不应误报漏洞
-        // WHY f32→f64 提升:detection_rate(f32) 提升至 f64 与 threshold 比较,无损精度
+        // WHY f32 全程比较:§4.4 #6 红线禁止 f32 隐式转 f64 比较
+        //   (f32→f64 精度膨胀会让 0.4f32 as f64 变为 > 0.4,导致边界误判);
+        //   threshold(f64)→f32 是降精度方向,数值不会膨胀,安全。
+        //   更彻底方案是把 config.detection_rate_threshold 改为 f32,但 RC 阶段
+        //   不允许变更核心 API(§3.1),故采用本降精度转换方案。
         // WHY 配置化:阈值来自 config.detection_rate_threshold,替代硬编码 0.95
         let threshold = self.config.detection_rate_threshold;
-        if stats.total > 0 && (stats.detection_rate as f64) < threshold {
+        if stats.total > 0 && stats.detection_rate < threshold as f32 {
             error!(
                 detection_rate = stats.detection_rate,
                 threshold = threshold,

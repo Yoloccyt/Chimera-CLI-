@@ -10,13 +10,9 @@
 //! 对同一 task_type,intensity 越高 → tier_rank 越小(越热)或相等,
 //! 绝不会出现"高强度得到更冷的 tier"。
 
+use crate::config::LsctConfig;
 use crate::types::{TaskLoadProfile, TaskType};
 use cmt_tiering::Tier;
-
-/// 升温阈值(与 LsctConfig::default 一致)
-const PROMOTION_THRESHOLD: f32 = 0.7;
-/// 降温阈值(与 LsctConfig::default 一致)
-const DEMOTION_THRESHOLD: f32 = 0.3;
 
 impl TaskLoadProfile {
     /// 创建任务负载画像
@@ -76,9 +72,23 @@ impl TaskLoadProfile {
     }
 }
 
-/// 计算目标存储层级 — 按任务类型与强度决定
+/// 计算目标存储层级 — 按任务类型与强度决定(使用默认配置阈值)
 ///
-/// 决策矩阵(tier_rank:Hot=0 < Warm=1 < Cold=2 < Ice=3):
+/// 向后兼容包装:委托给 [`compute_target_tier_with_config`] 并传入
+/// [`LsctConfig::default()`](crate::config::LsctConfig::default)。
+/// 适用于测试或无自定义阈值需求的场景。
+///
+/// WHY 保留包装:原 API 被大量单元/集成/proptest 调用,这些测试验证
+/// 默认阈值(0.7/0.3)下的决策行为。包装器避免破坏既有测试契约。
+/// 生产路径(coordinator)应使用 [`compute_target_tier_with_config`]。
+pub fn compute_target_tier(profile: &TaskLoadProfile) -> Tier {
+    compute_target_tier_with_config(profile, &LsctConfig::default())
+}
+
+/// 计算目标存储层级(配置化)— 按任务类型与强度决定,升降温阈值由 `config` 提供
+///
+/// 决策矩阵(tier_rank:Hot=0 < Warm=1 < Cold=2 < Ice=3),
+/// 以默认阈值 promotion=0.7 / demotion=0.3 为例:
 ///
 /// | task_type | 高(≥0.7) | 中(0.3, 0.7) | 低(≤0.3) |
 /// |-----------|----------|--------------|----------|
@@ -89,9 +99,12 @@ impl TaskLoadProfile {
 ///
 /// WHY Run 始终 Hot:运行任务需要快速响应,无论强度都放热层。
 /// WHY Debug 降两级:调试任务访问频率低,放冷/冰层节省热层容量。
-pub fn compute_target_tier(profile: &TaskLoadProfile) -> Tier {
-    let high = profile.intensity >= PROMOTION_THRESHOLD;
-    let low = profile.intensity <= DEMOTION_THRESHOLD;
+/// WHY 配置化:不同部署场景(边缘设备 vs 数据中心)对升降温敏感度不同,
+/// 硬编码阈值无法适配。移入 [`LsctConfig`] 后可通过配置文件按场景调整,
+/// 默认值(0.7/0.3)保持向后兼容。
+pub fn compute_target_tier_with_config(profile: &TaskLoadProfile, config: &LsctConfig) -> Tier {
+    let high = profile.intensity >= config.promotion_threshold;
+    let low = profile.intensity <= config.demotion_threshold;
 
     match profile.task_type {
         TaskType::Run => Tier::Hot,

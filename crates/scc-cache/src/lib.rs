@@ -58,7 +58,9 @@ pub use config::SccConfig;
 pub use error::SccError;
 pub use prefetch::AccessPatternLearner;
 pub use types::{AccessPattern, CacheStats, ContextEntry, ContextId};
-pub use wal::{InMemoryWal, WalEntry, WalOperation, WalTrait};
+// WHY 顶层导出 SqliteWal:C-02 修复后 SqliteWal 改为 async API(不再实现 WalTrait),
+// 外部调用方需直接引用 SqliteWal 类型以调用 async 方法
+pub use wal::{InMemoryWal, SqliteWal, WalEntry, WalOperation, WalTrait};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {

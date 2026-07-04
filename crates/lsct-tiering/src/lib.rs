@@ -41,7 +41,10 @@ pub mod types;
 // === 关键类型重导出,简化外部导入 ===
 pub use config::LsctConfig;
 pub use error::LsctError;
-pub use tiering::{compute_target_tier, LsctCoordinator, LsctDemoter, LsctPromoter};
+pub use tiering::{
+    compute_target_tier, compute_target_tier_with_config, LsctCoordinator, LsctDemoter,
+    LsctPromoter,
+};
 pub use types::{
     next_colder, next_warmer, tier_rank, TaskLoadProfile, TaskType, TierAssignment,
     TierSwitchDecision,

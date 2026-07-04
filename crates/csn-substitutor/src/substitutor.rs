@@ -12,8 +12,10 @@
 //! - 100 能力 × 50 维 in-memory
 //! - 单次替代查询 p95 ≤ 30ms(纯内存计算,实际远低于此)
 
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use crate::error::CsnError;
 use crate::similarity::cosine_similarity;
@@ -64,6 +66,12 @@ pub struct SubstitutionCandidateRegistry {
     hits: AtomicUsize,
     /// 未命中计数
     misses: AtomicUsize,
+    /// register() 串行化锁 — 修复 B-Maj-1 TOCTOU 竞态
+    ///
+    /// WHY: DashMap 的 `contains_key`/`len()` 与 `insert` 之间存在 check-then-act 窗口,
+    /// 高并发下会导致容量超限或重复条目。此锁将 "检查存在性 + 检查容量 + 插入"
+    /// 原子化为单一临界区。register 是冷路径(启动/配置加载),序列化开销可接受。
+    register_lock: Mutex<()>,
 }
 
 impl SubstitutionCandidateRegistry {
@@ -74,6 +82,7 @@ impl SubstitutionCandidateRegistry {
             capacity,
             hits: AtomicUsize::new(0),
             misses: AtomicUsize::new(0),
+            register_lock: Mutex::new(()),
         }
     }
 
@@ -101,21 +110,36 @@ impl SubstitutionCandidateRegistry {
 
         let key = cap.capability_id.clone();
 
-        // 已存在则覆盖(更新能力描述符)
-        if self.capabilities.contains_key(&key) {
-            self.capabilities.insert(key, cap);
-            return Ok(());
-        }
+        // WHY: 持有 register_lock 将 "检查存在性 + 检查容量 + 插入" 原子化,
+        // 修复 B-Maj-1 TOCTOU 竞态。原先 contains_key + insert 与 len + insert
+        // 是无锁 check-then-act 模式,高并发下会突破容量上限。
+        // unwrap_or_else 处理中毒锁(前任持有者 panic),恢复访问内部数据。
+        let _guard = self.register_lock.lock().unwrap_or_else(|e| e.into_inner());
 
-        // 新增:检查容量上限
-        if self.capabilities.len() >= self.capacity {
+        // WHY: 容量检查必须在 entry() 之前完成。entry() 持有 shard 写锁,
+        // 此时调用 len() 会自死锁(len 需读所有分片,包括 entry 持有写锁的分片)。
+        // 在 register_lock 保护下,contains_key/len 读取准确,无 TOCTOU 窗口
+        // (只有 register() 能插入,而它已被锁串行化)。
+        let key_exists = self.capabilities.contains_key(&key);
+        if !key_exists && self.capabilities.len() >= self.capacity {
             return Err(CsnError::RegistryFull {
                 capacity: self.capacity,
             });
         }
 
-        self.capabilities.insert(key, cap);
-        Ok(())
+        // entry API 原子化 key 检查:Occupied → 覆盖,Vacant → 插入(容量已预检)
+        match self.capabilities.entry(key) {
+            Entry::Occupied(mut e) => {
+                // key 已存在 → 覆盖(更新能力描述符),不改变 len
+                e.insert(cap);
+                Ok(())
+            }
+            Entry::Vacant(e) => {
+                // 新 key → 容量已在 entry() 之前检查通过,直接插入
+                e.insert(cap);
+                Ok(())
+            }
+        }
     }
 
     /// 查找能力描述符 — O(1),返回 clone,更新命中/未命中计数
@@ -499,5 +523,74 @@ mod tests {
             let candidates = h.join().expect("线程 panic");
             assert!(candidates.len() <= 5);
         }
+    }
+
+    // === 8. TOCTOU 竞态修复验证(B-Maj-1)===
+    //
+    // 验证 register() 在高并发下:
+    // 1. 不同 key 不超过容量上限(len <= capacity)
+    // 2. 相同 key 不产生重复条目(len == 1)
+    //
+    // 使用 Barrier 同步所有线程同时启动,最大化竞态窗口。
+
+    #[test]
+    fn test_concurrent_register_unique_keys_respects_capacity() {
+        // 100 线程并发注册不同 key,容量上限 50
+        // 验证:注册表条目数严格不超过容量上限
+        let capacity = 50;
+        let registry = std::sync::Arc::new(SubstitutionCandidateRegistry::new(capacity));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(100));
+        let mut handles = Vec::new();
+
+        for i in 0..100 {
+            let reg = std::sync::Arc::clone(&registry);
+            let b = std::sync::Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                // Barrier 确保所有线程同时开始,最大化竞态窗口
+                b.wait();
+                let id = format!("cap-{i}");
+                // 忽略 RegistryFull 错误(容量满后预期返回)
+                let _ = reg.register(make_descriptor(&id, vec![1.0; 50]));
+            }));
+        }
+        for h in handles {
+            h.join().expect("线程 panic");
+        }
+
+        assert!(
+            registry.len() <= capacity,
+            "注册表不应超过容量上限: {} > {}",
+            registry.len(),
+            capacity
+        );
+        assert_eq!(
+            registry.len(),
+            capacity,
+            "应注册满容量(100 线程竞争 50 槽位)"
+        );
+    }
+
+    #[test]
+    fn test_concurrent_register_same_key_no_duplicate() {
+        // 100 线程并发注册相同 key
+        // 验证:最终只有 1 个条目(无重复插入)
+        let registry = std::sync::Arc::new(SubstitutionCandidateRegistry::new(100));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(100));
+        let mut handles = Vec::new();
+
+        for _ in 0..100 {
+            let reg = std::sync::Arc::clone(&registry);
+            let b = std::sync::Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                b.wait();
+                reg.register(make_descriptor("same-cap", vec![1.0; 50]))
+                    .expect("注册失败");
+            }));
+        }
+        for h in handles {
+            h.join().expect("线程 panic");
+        }
+
+        assert_eq!(registry.len(), 1, "相同 key 并发注册不应产生重复条目");
     }
 }

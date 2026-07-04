@@ -43,12 +43,15 @@ use crate::types::{ExpertProfile, RoutingResult, ToolId};
 /// - `expert_registry`: `Arc<RwLock<HashMap<...>>>`,读多写少场景,RwLock 允许并发读
 /// - 内层 `Arc<RwLock<ExpertProfile>>`:每个专家画像独立锁,支持并发访问不同专家
 /// - `event_bus`: Clone 廉价(基于 Arc)
-/// - `edsb`: 无状态均衡器,Clone 廉价
+/// - `edsb`: `Arc<EdsbBalancer>`,无状态均衡器,以 Arc 共享给后台衰减循环
+///   (避免 `Arc::new(self.edsb.clone())` 创建独立副本,违反 §4.4 #5 Arc 共享 mutate 红线;
+///   虽 EdsbBalancer 当前无 mutate 状态,但 `spawn_decay_loop(self: Arc<Self>)` 的签名
+///   表明设计意图就是 Arc 共享,统一以 Arc 持有避免未来引入内部状态时的隐性分裂)
 ///
 /// # 并发设计
 /// - `route`:获取 registry 读锁 → clone 候选 Arc → 释放锁 → 锁外计算相似度
 /// - `register_expert`/`unregister_expert`:获取 registry 写锁,原子更新
-/// - `spawn_decay_loop`:通过 Arc 共享 registry,后台异步衰减
+/// - `spawn_decay_loop`:通过 `Arc::clone` 共享 edsb 与 registry,后台异步衰减
 ///
 /// # 示例
 /// ```no_run
@@ -76,8 +79,8 @@ pub struct FaaeRouter {
     config: FaaeConfig,
     /// 事件总线(发布 ExpertRouted/ExpertRegistered 等事件)
     event_bus: EventBus,
-    /// EDSB 熵均衡器
-    edsb: EdsbBalancer,
+    /// EDSB 熵均衡器(Arc 共享,后台衰减循环通过 `Arc::clone` 持有同一引用)
+    edsb: Arc<EdsbBalancer>,
 }
 
 impl FaaeRouter {
@@ -88,7 +91,9 @@ impl FaaeRouter {
 
     /// 创建路由器,使用自定义配置
     pub fn with_config(event_bus: EventBus, config: FaaeConfig) -> Self {
-        let edsb = EdsbBalancer::new(config.clone(), event_bus.clone());
+        // WHY: edsb 用 Arc 包装,确保 spawn_decay_loop 通过 `Arc::clone(&self.edsb)`
+        // 共享同一实例,而非 `Arc::new(self.edsb.clone())` 创建独立副本(§4.4 #5 红线)。
+        let edsb = Arc::new(EdsbBalancer::new(config.clone(), event_bus.clone()));
         Self {
             expert_registry: Arc::new(RwLock::new(HashMap::new())),
             config,
@@ -108,6 +113,9 @@ impl FaaeRouter {
     }
 
     /// 获取 EDSB 均衡器引用
+    ///
+    /// WHY: 返回 `&EdsbBalancer` 而非 `&Arc<EdsbBalancer>`,保持对外 API 不变。
+    /// 内部 `Arc::clone(&self.edsb)` 仍可由 `spawn_decay_loop` 直接调用。
     pub fn edsb(&self) -> &EdsbBalancer {
         &self.edsb
     }
@@ -193,9 +201,16 @@ impl FaaeRouter {
 
         // 5. EDSB 均衡(若启用)
         let final_tool = if self.config.balance_enabled {
-            let registry = self.expert_registry.read().await;
+            // WHY: 克隆 HashMap 获取快照后立即释放 registry 读锁,再调用 balance,
+            // 避免 balance 内部的多次 await(compute_entropy / estimate / publish)
+            // 跨 registry 锁,导致 register/unregister 写锁被阻塞(B-Crit-1)。
+            // HashMap 内是 Arc<RwLock<ExpertProfile>>,Clone 仅增加引用计数,代价低。
+            let registry_snapshot: HashMap<ToolId, Arc<RwLock<ExpertProfile>>> = {
+                let registry = self.expert_registry.read().await;
+                registry.clone()
+            };
             self.edsb
-                .balance(&registry, &routed_tool, &candidates)
+                .balance(&registry_snapshot, &routed_tool, &candidates)
                 .await
                 .unwrap_or(routed_tool.clone())
         } else {
@@ -203,14 +218,26 @@ impl FaaeRouter {
         };
 
         // 6. 更新被路由工具的 usage_count 和 last_used_at
-        {
+        // WHY: 消除三重嵌套锁(registry 读锁 → profile 读锁 → last_used_at 写锁),
+        // 改为顺序获取快照 + 锁外 await(B-Crit-2 修复):
+        //   1. registry 读锁内仅 clone profile_arc,立即释放(消除 registry 锁跨 await)
+        //   2. profile 读锁内原子 fetch_add(同步)+ clone last_used_at Arc,立即释放
+        //   3. last_used_at 写锁单独获取(锁外 await),更新时间戳
+        // last_used_at 是 Arc<RwLock<Instant>>,可 clone 后锁外访问,消除嵌套锁死锁风险。
+        let profile_arc_opt: Option<Arc<RwLock<ExpertProfile>>> = {
             let registry = self.expert_registry.read().await;
-            if let Some(profile_arc) = registry.get(&final_tool) {
+            registry.get(&final_tool).cloned()
+        };
+        if let Some(profile_arc) = profile_arc_opt {
+            // 原子更新 usage_count(同步)+ clone last_used_at Arc(同步,廉价)
+            let last_used_arc = {
                 let profile = profile_arc.read().await;
                 profile.usage_count.fetch_add(1, Ordering::Relaxed);
-                let mut last_used = profile.last_used_at.write().await;
-                *last_used = Instant::now();
-            }
+                profile.last_used_at.clone()
+            }; // profile 读锁在此释放
+               // 锁外获取 last_used_at 写锁(不嵌套 profile 读锁,消除 await 跨嵌套锁)
+            let mut last_used = last_used_arc.write().await;
+            *last_used = Instant::now();
         }
 
         // 7. 发布 ExpertRouted 事件
@@ -291,12 +318,20 @@ impl FaaeRouter {
 
     /// 启动后台衰减循环 — 定期对使用计数应用指数衰减
     ///
-    /// 在独立 tokio 任务中运行,每 5 分钟执行一次 `decay_usage_counts`。
+    /// 在独立 tokio 任务中运行,每 `config.decay_interval_secs` 秒执行一次 `decay_usage_counts`。
     /// 需要在 tokio 运行时上下文中调用。
-    pub fn spawn_decay_loop(&self) {
-        let edsb = Arc::new(self.edsb.clone());
+    ///
+    /// WHY: 使用 `Arc::clone(&self.edsb)` 而非 `Arc::new(self.edsb.clone())`,
+    /// 共享同一 `EdsbBalancer` 实例的引用计数,而非创建独立副本(§4.4 #5 红线)。
+    /// 即便 EdsbBalancer 当前无 mutate 状态,统一以 Arc 持有可避免未来引入
+    /// 内部状态时(如统计计数器、缓存)后台循环看不到 router 状态变更的隐性 bug。
+    ///
+    /// 返回 `JoinHandle` 供调用方管理任务生命周期(B-Min-3 修复,§4.4 #7:
+    /// 关键路径必须管理 JoinHandle)。忽略返回值也是安全的 — 任务独立运行直至进程退出。
+    pub fn spawn_decay_loop(&self) -> tokio::task::JoinHandle<()> {
+        let edsb = Arc::clone(&self.edsb);
         let registry = self.expert_registry.clone();
-        edsb.spawn_decay_loop(registry);
+        edsb.spawn_decay_loop(registry)
     }
 
     /// 获取专家注册表的共享引用(用于 EDSB 直接访问)
@@ -499,5 +534,59 @@ mod tests {
         }
 
         assert_eq!(router.expert_count().await, 10);
+    }
+
+    /// SubTask 10.4:验证 spawn_decay_loop 通过共享 Arc 修改原 router 持有的状态。
+    ///
+    /// WHY 此测试存在:§4.4 反模式 5 红线要求 `spawn_decay_loop` 用 `Arc::clone(&self.edsb)`
+    /// 而非 `Arc::new(self.edsb.clone())`,确保后台任务与原 router 共享同一引用。
+    /// 由于 `EdsbBalancer` 本身无 mutate 状态,decay_loop 实际修改的是通过共享
+    /// `Arc<RwLock<HashMap>>` 传入的 `expert_registry` 中各 profile 的 `usage_count`。
+    /// 本测试通过验证 `usage_count` 衰减,间接证明共享 Arc 路径正确工作
+    /// (若用独立副本,registry 仍是共享的,但若未来 edsb 引入 mutate 状态就会分裂)。
+    #[tokio::test]
+    async fn test_decay_loop_modifies_shared_edsb() {
+        use std::time::{Duration, Instant};
+
+        // 配置:1s 衰减周期 + τ=1s,让测试在 3s 内完成且衰减效果明显
+        // (Δt=10s, τ=1s → 衰减因子 exp(-10) ≈ 4.5e-5 → 100 × 4.5e-5 ≈ 0)
+        let config = FaaeConfig::default()
+            .with_decay_interval_secs(1)
+            .with_decay_tau(1.0);
+        let bus = EventBus::new();
+        let router = FaaeRouter::with_config(bus, config);
+
+        // 注册一个工具:usage_count=100,last_used_at 设为 10s 前
+        let profile = ExpertProfile::with_usage_count("tool-1", vec![1.0; 64], vec![], 1.0, 100);
+        {
+            let mut last_used = profile.last_used_at.write().await;
+            *last_used = Instant::now() - Duration::from_secs(10);
+        }
+        router.register_expert(profile).await;
+
+        // 启动后台 decay_loop(通过 Arc::clone 共享 edsb 与 registry)
+        let handle = router.spawn_decay_loop();
+
+        // 等待 2 个周期(2s),确保 decay_loop 至少执行一次
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // 验证 router 持有的 registry 中 usage_count 已衰减
+        let registry = router.registry();
+        let profile = registry
+            .read()
+            .await
+            .get(&ToolId::new("tool-1"))
+            .unwrap()
+            .clone();
+        let count_after = profile.read().await.get_usage_count();
+
+        // 衰减因子 exp(-10/1) ≈ 4.5e-5,100 × 4.5e-5 ≈ 0.0045,round 后 = 0
+        assert!(
+            count_after < 100,
+            "decay_loop 应已通过共享 Arc 修改 registry,实际 count_after={count_after}"
+        );
+
+        // 清理:停止后台任务避免影响其他测试
+        handle.abort();
     }
 }

@@ -19,6 +19,6 @@ pub async fn execute(proposal: &str, config: &ChimeraConfig) -> Result<()> {
         "[parliament] 命令插值策略:{}",
         config.seccore.command_interpolation
     );
-    println!("[parliament] (骨架:待 parliament crate 实现后接入,Week 5)");
+    println!("[parliament] (骨架:Stage 8 RC,L10 接线延后到 v1.1)");
     Ok(())
 }

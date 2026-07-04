@@ -43,6 +43,15 @@ pub struct FaaeConfig {
     ///
     /// WHY:默认启用均衡以确保负载分布。可在测试或特殊场景(如纯语义路由基准)关闭
     pub balance_enabled: bool,
+
+    /// 后台衰减循环周期(秒,默认 300 = 5 分钟)
+    ///
+    /// WHY 配置化:原硬编码 `DECAY_INTERVAL_SECS=300` 无法按部署场景调整。
+    /// 边缘设备 CPU 紧张时可拉长周期(如 600s)降低扫描开销;高频路由场景
+    /// 可缩短(如 120s)让时近性权重更敏感。默认 300 保持向后兼容:
+    /// 5 分钟内路由约 500-1000 次(中等负载),衰减 8%(exp(-300/3600) ≈ 0.92),
+    /// 时近性权重明显但不至于过快淡出
+    pub decay_interval_secs: u64,
 }
 
 impl FaaeConfig {
@@ -74,6 +83,12 @@ impl FaaeConfig {
         self.balance_enabled = enabled;
         self
     }
+
+    /// 设置后台衰减循环周期(秒)
+    pub fn with_decay_interval_secs(mut self, secs: u64) -> Self {
+        self.decay_interval_secs = secs;
+        self
+    }
 }
 
 impl Default for FaaeConfig {
@@ -83,6 +98,8 @@ impl Default for FaaeConfig {
             entropy_threshold: 0.6,
             decay_tau: 3600.0,
             balance_enabled: true,
+            // WHY 默认 300s 与原硬编码 DECAY_INTERVAL_SECS 一致,保持向后兼容
+            decay_interval_secs: 300,
         }
     }
 }
@@ -98,6 +115,7 @@ mod tests {
         assert!((config.entropy_threshold - 0.6).abs() < 1e-6);
         assert!((config.decay_tau - 3600.0).abs() < 1e-6);
         assert!(config.balance_enabled);
+        assert_eq!(config.decay_interval_secs, 300);
     }
 
     #[test]
@@ -106,10 +124,12 @@ mod tests {
             .with_top_k(16)
             .with_entropy_threshold(0.8)
             .with_decay_tau(1800.0)
-            .with_balance_enabled(false);
+            .with_balance_enabled(false)
+            .with_decay_interval_secs(600);
         assert_eq!(config.top_k, 16);
         assert!((config.entropy_threshold - 0.8).abs() < 1e-6);
         assert!((config.decay_tau - 1800.0).abs() < 1e-6);
         assert!(!config.balance_enabled);
+        assert_eq!(config.decay_interval_secs, 600);
     }
 }

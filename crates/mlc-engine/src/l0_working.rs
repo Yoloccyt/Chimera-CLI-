@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
@@ -238,8 +238,12 @@ impl LruList {
 /// `get` 方法获取写锁以更新 `last_accessed_at`(LRU 语义所需),
 /// 同时锁 LruList 将节点移到 MRU 端。
 pub struct WorkingMemory {
-    /// 记忆条目分片表(MemoryId → MemoryEntry)
-    entries: DashMap<MemoryId, MemoryEntry>,
+    /// 记忆条目分片表(MemoryId → Arc<MemoryEntry>)
+    ///
+    /// WHY Arc<MemoryEntry> 而非 MemoryEntry:`list_all_arc()` 通过 `Arc::clone`
+    /// 共享条目(仅原子计数+1),避免 `list_all()` 全量深拷贝(4096 条目 ~8MB)。
+    /// `get()`/`peek()` 等 API 仍返回 owned `MemoryEntry`(clone 出 Arc),保持兼容。
+    entries: DashMap<MemoryId, Arc<MemoryEntry>>,
     /// O(1) LRU 索引(SubTask 13.2),与 entries 保持一致
     ///
     /// WHY Mutex 而非 DashMap:LruList 是单一链表结构,需整体操作,
@@ -306,7 +310,7 @@ impl WorkingMemory {
         match self.entries.entry(id.clone()) {
             Entry::Occupied(mut occupied) => {
                 // 条目已存在:原子更新,无需驱逐
-                occupied.insert(entry);
+                occupied.insert(Arc::new(entry));
                 drop(occupied);
 
                 // 更新 LRU:移到 MRU 端
@@ -340,7 +344,7 @@ impl WorkingMemory {
                     Entry::Occupied(mut occupied) => {
                         // 并发插入:其他线程已插入同 id,更新而非插入
                         // victim 已驱逐(缓存场景下少量过度驱逐可接受)
-                        occupied.insert(entry);
+                        occupied.insert(Arc::new(entry));
                         drop(occupied);
 
                         self.lru
@@ -352,7 +356,7 @@ impl WorkingMemory {
                     }
                     Entry::Vacant(vacant) => {
                         // insert 消费 vacant 并返回 RefMut,无需显式 drop
-                        let _ = vacant.insert(entry);
+                        let _ = vacant.insert(Arc::new(entry));
 
                         // push_back 幂等(内部检查 contains,防止重复入队)
                         self.lru
@@ -392,9 +396,14 @@ impl WorkingMemory {
             lru.touch(id);
         }
         // 再获取条目并更新访问时间
-        if let Some(mut entry) = self.entries.get_mut(id) {
-            entry.touch();
-            return Ok(entry.clone());
+        if let Some(mut arc_entry) = self.entries.get_mut(id) {
+            // Arc::make_mut:若 Arc 唯一(refcount==1)直接返回 &mut T;
+            // 若共享(refcount>1,如 list_all_arc 持有引用)则克隆内层 T 再返回 &mut T。
+            // WHY make_mut 而非 get_mut:get_mut 返回 Option,共享时 None 无法 touch;
+            // make_mut 保证始终返回 &mut T,共享时自动 clone(仅 ~2KB,且 get 已 clone 返回)
+            let entry_ref = Arc::make_mut(&mut *arc_entry);
+            entry_ref.touch();
+            return Ok(entry_ref.clone());
         }
         Err(MlcError::EntryNotFound(format!("L0 工作记忆条目: {id}")))
     }
@@ -403,7 +412,9 @@ impl WorkingMemory {
     ///
     /// 用于内部检查或不需要 LRU 语义的场景
     pub fn peek(&self, id: &str) -> Option<MemoryEntry> {
-        self.entries.get(id).map(|r| r.clone())
+        // **r:Ref<Arc<MemoryEntry>> → Arc<MemoryEntry> → MemoryEntry
+        // 显式双层解引用确保调用 MemoryEntry::clone 而非 Arc::clone
+        self.entries.get(id).map(|r| (**r).clone())
     }
 
     /// 驱逐最久未访问的条目(LRU)— O(1)
@@ -422,7 +433,13 @@ impl WorkingMemory {
             lru.pop_front()
         };
 
-        let victim = victim_id.and_then(|id| self.entries.remove(&id).map(|(_, v)| v));
+        let victim = victim_id.and_then(|id| {
+            self.entries.remove(&id).map(|(_, v)| {
+                // 条目正从存储移除,通常 Arc refcount==1(无 list_all_arc 引用),
+                // try_unwrap 零拷贝提取 owned 值;若被 list_all_arc 持有则 fallback clone
+                Arc::try_unwrap(v).unwrap_or_else(|arc| (*arc).clone())
+            })
+        });
 
         if let Some(ref v) = victim {
             trace!(victim_id = %v.id, "L0 LRU 驱逐完成");
@@ -435,7 +452,10 @@ impl WorkingMemory {
     ///
     /// 用于主动删除或迁移到下层,同步从 LRU 索引移除。
     pub fn remove(&self, id: &str) -> Option<MemoryEntry> {
-        let entry = self.entries.remove(id).map(|(_, v)| v);
+        let entry = self
+            .entries
+            .remove(id)
+            .map(|(_, v)| Arc::try_unwrap(v).unwrap_or_else(|arc| (*arc).clone()));
         if entry.is_some() {
             if let Ok(mut lru) = self.lru.lock() {
                 lru.remove(id);
@@ -449,9 +469,22 @@ impl WorkingMemory {
         self.entries.contains_key(id)
     }
 
-    /// 列出所有条目(克隆,用于迁移或快照)
+    /// 列出所有条目(深拷贝,用于迁移或快照)
+    ///
+    /// WHY 保留 list_all:API 兼容,调用方需 owned `MemoryEntry` 的场景(如序列化、跨层迁移)。
+    /// 热路径(批量只读扫描)应优先使用 `list_all_arc()` 避免 4096 条目 ~8MB 深拷贝。
     pub fn list_all(&self) -> Vec<MemoryEntry> {
-        self.entries.iter().map(|r| r.clone()).collect()
+        // **r:RefMulti<Arc<MemoryEntry>> → Arc<MemoryEntry> → MemoryEntry
+        self.entries.iter().map(|r| (**r).clone()).collect()
+    }
+
+    /// 列出所有条目的 Arc 引用(零拷贝共享,避免全量深拷贝)
+    ///
+    /// WHY list_all_arc:`list_all()` 返回 `Vec<MemoryEntry>` 需深拷贝每个条目,
+    /// 4096 条目时 ~8MB 堆分配。本方法返回 `Vec<Arc<MemoryEntry>>`,
+    /// 通过 `Arc::clone` 仅增加引用计数(原子 +1),无堆分配,适用于迁移/快照等热路径。
+    pub fn list_all_arc(&self) -> Vec<Arc<MemoryEntry>> {
+        self.entries.iter().map(|r| Arc::clone(&*r)).collect()
     }
 
     /// 清空所有条目与 LRU 索引(不重置驱逐计数)
@@ -661,6 +694,21 @@ mod tests {
         }
         let all = mem.list_all();
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_list_all_arc_shares_entries() {
+        // 验证 list_all_arc 返回 Arc 引用,内容与 list_all 一致
+        let mem = WorkingMemory::new(64);
+        for i in 0..3 {
+            mem.insert(make_entry(&format!("m-{i}"))).unwrap();
+        }
+        let arcs = mem.list_all_arc();
+        assert_eq!(arcs.len(), 3);
+        // 验证 Arc 内数据正确(每个条目 id 以 "m-" 开头)
+        assert!(arcs.iter().all(|a| a.id.as_str().starts_with("m-")));
+        // 验证 Arc 共享:存储中的 Arc 与返回的 Arc 是同一份(refcount > 1)
+        assert!(arcs.iter().all(|a| Arc::strong_count(a) >= 2));
     }
 
     #[test]

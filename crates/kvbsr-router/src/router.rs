@@ -375,6 +375,9 @@ impl KVBlockSemanticRouter {
             // 异步触发重平衡(不阻塞当前路由响应)
             // WHY:重平衡在独立任务中执行,不影响当前路由延迟。
             // Clone 廉价(所有字段基于 Arc),不会显著增加内存。
+            // WHY fire-and-forget(B-Min-1 评估):重平衡为幂等操作,失败仅记录日志
+            // 不影响路由正确性;任务 panic 时 tokio 运行时会自动回收资源。
+            // 路由热路径不持有 JoinHandle 以避免内存开销,符合性能优先设计。
             let router = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = router.auto_rebalance().await {

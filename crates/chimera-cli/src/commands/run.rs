@@ -15,6 +15,6 @@ pub async fn execute(prompt: &str, config: &ChimeraConfig) -> Result<()> {
     println!("[run] 任务提示词:{}", prompt);
     println!("[run] 当前思考模式:{}", config.thinking_toggle.default_mode);
     println!("[run] 模型路由策略:{}", config.model_router.strategy);
-    println!("[run] (骨架:业务逻辑待 Week 4 PVL/MTPE 实现后接入)");
+    println!("[run] (骨架:Stage 8 RC,L10 接线延后到 v1.1)");
     Ok(())
 }
