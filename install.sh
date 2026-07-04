@@ -3,7 +3,7 @@
 # Chimera CLI (NEXUS-OMEGA) — 一键安装脚本 (Linux / macOS)
 #
 # 用法:
-#   curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
 #   sh install.sh [--version <ver>] [--install-dir <path>] [--skip-verify]
 #
 # 私有仓库安装(需 GITHUB_TOKEN 环境变量):

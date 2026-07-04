@@ -50,23 +50,23 @@ Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 3
 **Linux / macOS**(POSIX sh,兼容 dash/bash/zsh/fish):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
 ```
 
 **Windows**(PowerShell 5.1+):
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
+iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
 ```
 
 **私有仓库安装**(需 `GITHUB_TOKEN` 环境变量鉴权):
 
 ```bash
 # Linux / macOS
-GITHUB_TOKEN=ghp_xxx curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.sh | sh
+GITHUB_TOKEN=ghp_xxx curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
 
 # Windows
-$env:GITHUB_TOKEN='ghp_xxx'; iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
+$env:GITHUB_TOKEN='ghp_xxx'; iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
 ```
 
 **可选参数**:
@@ -86,6 +86,13 @@ sh install.sh --skip-verify
 ```
 
 脚本功能详见 [install.sh](./install.sh) / [install.ps1](./install.ps1) 头部注释。
+
+> **⚠️ 一键安装脚本访问失败?**
+> 如果你在中国大陆或某些企业网络中,`raw.githubusercontent.com` 可能被 DNS 污染或阻断,导致 `404` / `Connection timed out`。
+> 解决方法:
+> 1. 使用 [GitHub Releases](https://github.com/Yoloccyt/Chimera-CLI-/releases) 手动下载对应平台 binary(见方式 2)
+> 2. 或配置 DNS / 代理后重试
+> 3. 或克隆仓库后本地执行 `sh install.sh` / `.\install.ps1`
 
 #### 方式 2:从 Release 下载
 

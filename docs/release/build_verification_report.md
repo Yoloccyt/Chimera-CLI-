@@ -160,7 +160,7 @@ workspace `[profile.release]` 已启用以下优化(解释 1.34MB 体积):
 
 ```bash
 # 一键安装 (最新版)
-curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
 
 # 指定版本
 sh install.sh --version v1.0.1-omega
@@ -198,7 +198,7 @@ sh install.sh --skip-verify
 
 ```powershell
 # 一键安装 (最新版)
-iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
+iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
 
 # 指定版本
 .\install.ps1 -Version v1.0.1-omega
@@ -241,8 +241,8 @@ URL 格式:`https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v${VERSIO
 
 | 平台 | 安装命令 | URL 格式核对 |
 |------|----------|-------------|
-| Linux/macOS | `curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.sh \| sh` | ✅ 正确 |
-| Windows | `iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)` | ✅ 正确 |
+| Linux/macOS | `curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh \| sh` | ✅ 正确 |
+| Windows | `iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)` | ✅ 正确 |
 
 **GitHub API 调用核对**:
 - install.sh: `https://api.github.com/repos/Yoloccyt/Chimera-CLI-/releases/latest` ✅

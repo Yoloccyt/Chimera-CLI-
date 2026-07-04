@@ -3,11 +3,11 @@
 # Chimera CLI (NEXUS-OMEGA) — 一键安装脚本 (Windows PowerShell)
 #
 # 用法:
-#   iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
+#   iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
 #   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-SkipVerify] [-SetupEnv]
 #
 # 私有仓库安装(需 $env:GITHUB_TOKEN 环境变量鉴权):
-#   $env:GITHUB_TOKEN='ghp_xxx'; iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/master/install.ps1)
+#   $env:GITHUB_TOKEN='ghp_xxx'; iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
 #   $env:GITHUB_TOKEN='ghp_xxx'; .\install.ps1
 #
 # 参数说明:
