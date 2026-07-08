@@ -32,6 +32,18 @@
 - **已完成**:Week 1-8(L1-L10 全层覆盖,34 个 crate 全部实现,覆盖率 100%)
 - **状态**:Week 8 验收通过 — 性能调优 + 安全测试 + 跨平台发布 + 文档完善全部达标
 - **总测试数**:~3,002 个(Week 1-8 累计;Week 1-6: 2378 + Week 7: 338 + Week 8: 286)
+- **v1.1.0 进展**:F2(rusqlite 下沉)已完成 — `nexus-core` 删除 `rusqlite` 依赖,改用 L1 `PragmaCapable` trait 抽象(ADR-006 方案 E,2026-07-08)
+
+### 1.4 第二阶段主要参考资料
+
+> GA 后演进(v1.1.0+)以下列两份文档为主要参考(详见 `nuxus规则.md §3.3`)。两份文档互补分工,覆盖"如何搭"与"如何进化"两个维度。
+
+| 文档 | 角色 | 版本 | 适用场景 |
+|------|------|------|---------|
+| `AETHER_NEXUS_OMEGA_从零搭建完全指南.md` | **工程实施主参考**(如何搭) | v2.0.0-omega | 新 crate 搭建、模块从零实现、架构全貌理解 |
+| `OMEGA_大模型架构魔改创新_AI_Agent项目套用设计.md` | **创新演进主参考**(如何进化) | v3.0.0-omega | 创新点演进、五大模型理念融合、魔改架构深化 |
+
+**已知错误提示**:`AETHER_NEXUS_OMEGA_从零搭建完全指南.md` 中"37 crates 骨架"数量错误,实际为 34 crate(以 `Cargo.toml` workspace.members 与本 Wiki §3.1 为权威)。
 
 ---
 
@@ -66,6 +78,19 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 - `event-bus` 是唯一的模块间通信通道,所有状态变更必须通过事件类型广播
 - 任何违反依赖方向规则的 import 必须被拒绝,除非有 ADR 记录特批
 - **decb-governor 归位 L8 Parliament**(非 L3 Storage,见 §3.8)
+
+### 2.3 ADR 决策参考
+
+| ADR | 主题 | 启示 | 落地状态 |
+|-----|------|------|---------|
+| ADR-001 | 沙箱运行时选择(gVisor) | 执行沙箱优先 | ⚠️ 降级(seccore `sandbox.rs` 当前实现为降级版本) |
+| ADR-002 | 能力衰减模型设计 | 连续权限流体 | ✅ decay-engine 落地 |
+| ADR-003 | Event Bus 实现选型 | Tokio broadcast | ✅ event-bus 落地 |
+| ADR-004 | 消息序列化协议 | MessagePack | ✅ rmp-serde 使用 |
+| ADR-005 | 持久化存储选型 | SQLite + 向量 | ⚠️ 部分降级(sqlite-vec 违反 `forbid(unsafe_code)`,改内存 KNN) |
+| ADR-006 | rusqlite 依赖从 nexus-core 下沉 | L1 trait abstraction(`PragmaCapable` trait) | ✅ 已完成(2026-07-08,方案 E) |
+
+> ADR-006 文件:`docs/adr/ADR-006-rusqlite-descoping-from-nexus-core.md`(注:文件名编号与 `docs/architecture/adr_index.md` 中 ADR-006 存在冲突,合并时建议重新编号为 ADR-027,详见 ADR-006 文件头部说明)
 
 ---
 
@@ -115,10 +140,10 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 ### 3.2 L1 Core — 核心层
 
 #### nexus-core
-- **职责**:全局核心类型(CLV/NexusState/UserIntent)+ 共享工具模块(newtype/pragma/path/clv)
+- **职责**:全局核心类型(CLV/NexusState/UserIntent)+ 共享工具模块(newtype/storage_traits/path/clv)
 - **关键类型**:`CLV`(512-dim f32 上下文潜在向量)、`NexusState`、`UserIntent`、`FileId`
-- **共享模块**:`newtype!` 宏、`apply_performance_pragmas`、`expand_tilde`、`cosine_similarity_slices`
-- **依赖**:仅依赖 Rust 标准库 + workspace 共享依赖,保持最小化
+- **共享模块**:`newtype!` 宏、`PragmaCapable` trait + `apply_performance_pragmas` 泛型函数、`expand_tilde`、`cosine_similarity_slices`
+- **依赖**:仅依赖 Rust 标准库 + workspace 共享依赖,保持最小化(rusqlite 依赖已通过 L1 `PragmaCapable` trait 抽象隔离,L2/L3 实现 trait 并调用泛型函数,见 ADR-006 方案 E)
 
 #### event-bus
 - **职责**:跨层通信唯一通道,基于 `tokio::broadcast`
