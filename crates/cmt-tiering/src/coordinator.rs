@@ -91,7 +91,8 @@ impl CmtCoordinator {
                 ))
             })?;
         }
-        let warm = WarmTier::open(&warm_db_path, config.warm_capacity)?;
+        let warm =
+            WarmTier::open_with_pool(&warm_db_path, config.warm_capacity, config.warm_pool_size)?;
 
         // 展开 `~` 并打开 Cold 层(附加数据库)
         let cold_dir = CmtConfig::expand_tilde(&config.cold_dir);
@@ -102,7 +103,8 @@ impl CmtCoordinator {
                 e
             ))
         })?;
-        let cold = ColdTier::open(&cold_dir, config.cold_capacity)?;
+        let cold =
+            ColdTier::open_with_pool(&cold_dir, config.cold_capacity, config.cold_pool_size)?;
 
         // 展开 `~` 并打开 Ice 层(归档文件)
         let ice_dir = CmtConfig::expand_tilde(&config.ice_dir);

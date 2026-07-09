@@ -7,6 +7,7 @@
 //! - 维护 5 角色注册表(Architect/Skeptic/Optimizer/Librarian/Bard)
 //! - 提案 → 辩论 → 投票 → 共识 全流程
 //! - 加权投票:Skeptic 拥有否决权(红队防线)
+//! - 否决覆盖:`VetoOverrideTicket` 提供受控的人工覆盖路径(P1-3)
 //! - 共识判定:法定人数 + 赞成率双阈值
 //! - 发布 `ConsensusReached`/`VoteCast`/`DebateStarted`/`SkepticVeto`/`CapabilityFrozen`/`RedTeamAudit`/`AhirtProbeCompleted` 事件通知订阅者
 //!
@@ -69,7 +70,7 @@ pub use roles::RoleRegistry;
 pub use types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
 pub use veto::{
     IntentRule, MaliciousIntentRuleBook, MaliciousIntentType, RuleAction, Severity, Skeptic,
-    VetoReason,
+    VetoOverrideTicket, VetoReason,
 };
 pub use voting::{VoteCounter, VoteResult};
 
@@ -86,7 +87,7 @@ pub mod prelude {
     pub use crate::types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
     pub use crate::veto::{
         IntentRule, MaliciousIntentRuleBook, MaliciousIntentType, RuleAction, Severity, Skeptic,
-        VetoReason,
+        VetoOverrideTicket, VetoReason,
     };
     pub use crate::voting::{VoteCounter, VoteResult};
 }

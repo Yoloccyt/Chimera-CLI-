@@ -1360,7 +1360,7 @@ dependencies = [
 name = "model-router"
 version = "1.0.0-omega"
 dependencies = [
- "dashmap",
+ "criterion",
  "event-bus",
  "nexus-core",
  "serde",
@@ -1414,7 +1414,6 @@ dependencies = [
  "ndarray",
  "proptest",
  "rmp-serde",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -1959,6 +1958,7 @@ name = "repo-wiki"
 version = "1.0.0-omega"
 dependencies = [
  "chrono",
+ "criterion",
  "event-bus",
  "hex",
  "ndarray",

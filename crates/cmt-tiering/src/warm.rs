@@ -5,9 +5,9 @@
 //! # 设计决策(WHY)
 //! - **SQLite WAL 模式**:Warm 层需跨会话保留,WAL 模式允许读写并发,
 //!   适合"读多写少"的能力查询场景(参考 repo-wiki/store.rs 实现)
-//! - **`Arc<Mutex<Connection>>` 包装**:`rusqlite::Connection` 不是 `Sync`,
-//!   用 Mutex 提供线程安全访问;Arc 包装支持 Clone 与跨任务共享,
-//!   使 `spawn_blocking` 闭包可拥有连接(参考 cold.rs 实现)
+//! - **SqlitePool 连接池(P1-5)**:替代原始 `Arc<Mutex<Connection>>` 单连接方案,
+//!   通过读写分离(N 个读连接 + 1 个写连接)实现真正的并发读。
+//!   WAL 模式下读写互不阻塞,读多写少场景吞吐量提升 N 倍
 //! - **spawn_blocking 包装文件 I/O**:SQLite 操作可能阻塞异步运行时,
 //!   使用 `tokio::task::spawn_blocking` 将其放到阻塞线程池
 //!   (架构红线:所有 async fn 满足 Send + 'static 约束)
@@ -31,32 +31,33 @@
 //! ```
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
-use tokio::task::spawn_blocking;
 use tracing::{debug, trace};
 
 use crate::error::CmtError;
+use crate::pool::SqlitePool;
 use crate::types::{CapabilityEntry, CapabilityId, Tier};
 
 /// Warm 层 — SQLite 持久化的温存储
 ///
-/// 封装 `Arc<Mutex<Connection>>`,提供线程安全的能力条目 CRUD。
+/// 使用 `SqlitePool` 连接池实现读写分离,支持并发读与串行写。
 /// WAL 模式允许读写并发,所有 async 方法通过 `spawn_blocking`
 /// 在阻塞线程池中执行 SQLite 操作,避免阻塞异步运行时。
 ///
 /// # 线程安全
-/// `Arc<Mutex<Connection>>` 包装,可 Clone(廉价,Arc 引用计数)。
+/// `Arc<SqlitePool>` 包装,可 Clone(廉价,Arc 引用计数)。
 /// 所有 async fn 满足 `Send + 'static` 约束。
 #[derive(Clone)]
 pub struct WarmTier {
-    /// SQLite 连接(`Arc<Mutex>` 包装,支持 Clone 与跨任务共享)
+    /// SQLite 连接池(P1-5:替代 Arc<Mutex<Connection>>,支持并发读)
     ///
-    /// WHY `Arc<Mutex>`:spawn_blocking 需要 'static + Send 的闭包,
-    /// `Arc<Mutex>` 允许将连接所有权转移到阻塞线程
-    conn: Arc<Mutex<Connection>>,
+    /// WHY SqlitePool:原始单 Mutex 序列化所有操作(包括读),
+    /// WAL 模式下并发读被不必要地阻塞。连接池将读操作分散到多个独立连接,
+    /// 写操作仍通过独立写连接序列化,读写互不阻塞。
+    pool: Arc<SqlitePool>,
     /// 容量上限(超出时由上层触发迁移到 Cold)
     capacity: usize,
 }
@@ -65,58 +66,81 @@ impl WarmTier {
     /// 打开或创建 Warm 层数据库
     ///
     /// 自动启用 WAL 模式并创建 `warm_capabilities` 表(若不存在)。
+    /// 使用 SqlitePool 创建 1 写 + `read_pool_size` 读连接(默认 2)。
     /// 路径的父目录应已存在(调用方负责创建)。
     pub fn open(path: &Path, capacity: usize) -> Result<Self, CmtError> {
-        let conn = Connection::open(path)?;
+        Self::open_with_pool(path, capacity, 2)
+    }
 
-        // 启用 WAL 模式:提升并发读写性能
-        // WHY:WAL(Write-Ahead Logging)允许读写并发,默认 rollback journal 模式下写会阻塞读
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+    /// 打开 Warm 层数据库并指定读连接池大小
+    ///
+    /// WHY 独立方法:连接池大小影响并发读吞吐量与内存开销,
+    /// 允许调用方(如 CmtCoordinator)根据部署场景调整。
+    /// `read_pool_size = 0` 退化为单连接模式(适合测试或低并发场景)。
+    pub fn open_with_pool(
+        path: &Path,
+        capacity: usize,
+        read_pool_size: usize,
+    ) -> Result<Self, CmtError> {
+        let db_path = path.to_path_buf();
+        let pool = SqlitePool::open(read_pool_size, move || {
+            let conn = Connection::open(&db_path)?;
+            // 启用 WAL 模式:提升并发读写性能
+            // WHY:WAL(Write-Ahead Logging)允许读写并发,默认 rollback journal 模式下写会阻塞读
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            // 应用 SQLite PRAGMA 性能优化(必须在 journal_mode=WAL 之后设置)
+            // WHY:减少 fsync 与磁盘 I/O,查询延迟降低 30-50%
+            apply_performance_pragmas(&conn)?;
+            // 创建 warm_capabilities 表(IF NOT EXISTS 保证幂等)
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS warm_capabilities (
+                    cap_id           TEXT PRIMARY KEY,
+                    content          TEXT NOT NULL,
+                    created_at       TEXT NOT NULL,
+                    last_accessed_at TEXT NOT NULL,
+                    access_count     INTEGER NOT NULL
+                );
 
-        // 应用 SQLite PRAGMA 性能优化(必须在 journal_mode=WAL 之后设置)
-        // WHY:减少 fsync 与磁盘 I/O,查询延迟降低 30-50%
-        apply_performance_pragmas(&conn)?;
+                CREATE INDEX IF NOT EXISTS idx_warm_last_accessed
+                    ON warm_capabilities(last_accessed_at);",
+            )?;
+            Ok(conn)
+        })?;
 
-        // 创建 warm_capabilities 表
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS warm_capabilities (
-                cap_id           TEXT PRIMARY KEY,
-                content          TEXT NOT NULL,
-                created_at       TEXT NOT NULL,
-                last_accessed_at TEXT NOT NULL,
-                access_count     INTEGER NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_warm_last_accessed
-                ON warm_capabilities(last_accessed_at);",
-        )?;
-
-        debug!(path = ?path, capacity, "Warm 层数据库已打开");
+        debug!(path = ?path, capacity, read_pool_size, "Warm 层数据库已打开(连接池)");
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            pool: Arc::new(pool),
             capacity,
         })
     }
 
     /// 在内存中创建 Warm 层(用于测试,不持久化)
+    ///
+    /// WHY 单连接:`:memory:` 数据库彼此独立(每个连接是独立的内存数据库),
+    /// 无法跨连接共享数据。测试场景使用 `read_pool_size = 0`,
+    /// 所有读写共用写连接,保证数据可见性。
     pub fn open_in_memory(capacity: usize) -> Result<Self, CmtError> {
-        let conn = Connection::open_in_memory()?;
-        // 内存数据库也应用 PRAGMA 优化(部分 PRAGMA 对内存库无效,但不会报错)
-        apply_performance_pragmas(&conn)?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS warm_capabilities (
-                cap_id           TEXT PRIMARY KEY,
-                content          TEXT NOT NULL,
-                created_at       TEXT NOT NULL,
-                last_accessed_at TEXT NOT NULL,
-                access_count     INTEGER NOT NULL
-            );
+        let pool = SqlitePool::open(0, || {
+            let conn = Connection::open_in_memory()?;
+            // 内存数据库也应用 PRAGMA 优化(部分 PRAGMA 对内存库无效,但不会报错)
+            apply_performance_pragmas(&conn)?;
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS warm_capabilities (
+                    cap_id           TEXT PRIMARY KEY,
+                    content          TEXT NOT NULL,
+                    created_at       TEXT NOT NULL,
+                    last_accessed_at TEXT NOT NULL,
+                    access_count     INTEGER NOT NULL
+                );
 
-            CREATE INDEX IF NOT EXISTS idx_warm_last_accessed
-                ON warm_capabilities(last_accessed_at);",
-        )?;
+                CREATE INDEX IF NOT EXISTS idx_warm_last_accessed
+                    ON warm_capabilities(last_accessed_at);",
+            )?;
+            Ok(conn)
+        })?;
+
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            pool: Arc::new(pool),
             capacity,
         })
     }
@@ -131,60 +155,17 @@ impl WarmTier {
     /// - 若 `cap_id` 不存在,插入新条目
     /// - 若 `cap_id` 已存在,更新所有字段(覆盖)
     ///
-    /// 使用 `spawn_blocking` 包装 SQLite 操作,避免阻塞异步运行时。
+    /// WHY `with_write_async`:INSERT 是写操作,通过写连接序列化,
+    /// 避免 WAL 模式下多写者 SQLITE_BUSY。
     pub async fn insert(&self, mut entry: CapabilityEntry) -> Result<(), CmtError> {
         // 强制设置 tier 为 Warm(防止上层传入错误层级)
         entry.tier = Tier::Warm;
 
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
-
-            let created_iso = entry.created_at.to_rfc3339();
-            let accessed_iso = entry.last_accessed_at.to_rfc3339();
-
-            conn.execute(
-                "INSERT OR REPLACE INTO warm_capabilities
-                    (cap_id, content, created_at, last_accessed_at, access_count)
-                 VALUES (?1, ?2, ?3, ?4, ?5);",
-                params![
-                    entry.id.as_str(),
-                    entry.content,
-                    created_iso,
-                    accessed_iso,
-                    entry.access_count as i64,
-                ],
-            )?;
-
-            trace!(cap_id = %entry.id, "Warm 层条目已插入/更新");
-            Ok(())
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
-    }
-
-    /// 异步批量插入能力条目(单事务,提升批量写入性能)
-    ///
-    /// WHY:批量插入场景下,单事务包裹多个 INSERT 比 N 次独立 INSERT 快 10-100 倍,
-    /// 避免每次提交都触发 fsync。失败时整个事务回滚,保证原子性。
-    pub async fn insert_batch(&self, mut entries: Vec<CapabilityEntry>) -> Result<(), CmtError> {
-        // 强制设置 tier 为 Warm
-        for entry in &mut entries {
-            entry.tier = Tier::Warm;
-        }
-
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
-
-            conn.execute_batch("BEGIN;")?;
-            for entry in &entries {
+        self.pool
+            .with_write_async(move |conn| {
                 let created_iso = entry.created_at.to_rfc3339();
                 let accessed_iso = entry.last_accessed_at.to_rfc3339();
+
                 conn.execute(
                     "INSERT OR REPLACE INTO warm_capabilities
                         (cap_id, content, created_at, last_accessed_at, access_count)
@@ -197,87 +178,117 @@ impl WarmTier {
                         entry.access_count as i64,
                     ],
                 )?;
-            }
-            conn.execute_batch("COMMIT;")?;
 
-            trace!(count = entries.len(), "Warm 层批量条目已插入/更新");
-            Ok(())
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                trace!(cap_id = %entry.id, "Warm 层条目已插入/更新");
+                Ok(())
+            })
+            .await
+    }
+
+    /// 异步批量插入能力条目(单事务,提升批量写入性能)
+    ///
+    /// WHY:批量插入场景下,单事务包裹多个 INSERT 比 N 次独立 INSERT 快 10-100 倍,
+    /// 避免每次提交都触发 fsync。失败时整个事务回滚,保证原子性。
+    pub async fn insert_batch(&self, mut entries: Vec<CapabilityEntry>) -> Result<(), CmtError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        // 强制设置 tier 为 Warm
+        for entry in &mut entries {
+            entry.tier = Tier::Warm;
+        }
+
+        self.pool
+            .with_write_async(move |conn| {
+                conn.execute_batch("BEGIN;")?;
+                for entry in &entries {
+                    let created_iso = entry.created_at.to_rfc3339();
+                    let accessed_iso = entry.last_accessed_at.to_rfc3339();
+                    conn.execute(
+                        "INSERT OR REPLACE INTO warm_capabilities
+                            (cap_id, content, created_at, last_accessed_at, access_count)
+                         VALUES (?1, ?2, ?3, ?4, ?5);",
+                        params![
+                            entry.id.as_str(),
+                            entry.content,
+                            created_iso,
+                            accessed_iso,
+                            entry.access_count as i64,
+                        ],
+                    )?;
+                }
+                conn.execute_batch("COMMIT;")?;
+
+                trace!(count = entries.len(), "Warm 层批量条目已插入/更新");
+                Ok(())
+            })
+            .await
     }
 
     /// 异步获取能力条目(更新 last_accessed_at 与 access_count)
     ///
     /// 返回条目克隆;若不存在返回 None。
     ///
-    /// WHY 更新访问时间:Warm 层条目被访问时,应刷新其空闲计时,
-    /// 避免刚被访问的条目立即被迁移到 Cold 层
+    /// WHY `with_write_async`:虽然逻辑上是"读",但 get 会更新 last_accessed_at
+    /// 与 access_count(写操作),必须通过写连接执行以保证数据一致性。
+    /// WAL 模式下写连接不影响并发读连接(peek/list_* 仍可用读连接)。
     ///
     /// WHY 单次查询优化:原实现 SELECT → UPDATE → SELECT(两次查询),
     /// 现改为 SELECT → 内存更新字段 → UPDATE → 返回内存构造的条目,
     /// 避免第二次 SELECT 往返,提升 Warm 层读取性能约 50%
     pub async fn get(&self, id: String) -> Result<Option<CapabilityEntry>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_write_async(move |conn| {
+                let result: Option<CapabilityEntry> = conn
+                    .query_row(
+                        "SELECT cap_id, content, created_at, last_accessed_at, access_count
+                         FROM warm_capabilities WHERE cap_id = ?1;",
+                        params![id],
+                        row_to_entry,
+                    )
+                    .optional()?;
 
-            let result: Option<CapabilityEntry> = conn
-                .query_row(
-                    "SELECT cap_id, content, created_at, last_accessed_at, access_count
-                     FROM warm_capabilities WHERE cap_id = ?1;",
-                    params![id],
-                    row_to_entry,
-                )
-                .optional()?;
+                // 若找到条目,在内存中更新访问时间与计数,执行 UPDATE 后返回内存构造的条目
+                if let Some(mut entry) = result {
+                    let now = Utc::now();
+                    entry.last_accessed_at = now;
+                    entry.access_count = entry.access_count.saturating_add(1);
 
-            // 若找到条目,在内存中更新访问时间与计数,执行 UPDATE 后返回内存构造的条目
-            if let Some(mut entry) = result {
-                let now = Utc::now();
-                entry.last_accessed_at = now;
-                entry.access_count = entry.access_count.saturating_add(1);
+                    conn.execute(
+                        "UPDATE warm_capabilities
+                         SET last_accessed_at = ?1, access_count = ?2
+                         WHERE cap_id = ?3;",
+                        params![now.to_rfc3339(), entry.access_count as i64, id],
+                    )?;
 
-                conn.execute(
-                    "UPDATE warm_capabilities
-                     SET last_accessed_at = ?1, access_count = ?2
-                     WHERE cap_id = ?3;",
-                    params![now.to_rfc3339(), entry.access_count as i64, id],
-                )?;
-
-                Ok(Some(entry))
-            } else {
-                Ok(None)
-            }
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                    Ok(Some(entry))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await
     }
 
     /// 异步尝试获取条目(不更新访问时间,不增加计数)
     ///
-    /// 用于内部检查或不需要 LRU 语义的场景
+    /// WHY `with_read_async`:peek 是纯只读操作,可通过读连接并发执行,
+    /// 不受写连接 Mutex 限制。用于内部检查或不需要 LRU 语义的场景。
     pub async fn peek(&self, id: String) -> Result<Option<CapabilityEntry>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_read_async(id.clone(), move |conn| {
+                let result = conn
+                    .query_row(
+                        "SELECT cap_id, content, created_at, last_accessed_at, access_count
+                         FROM warm_capabilities WHERE cap_id = ?1;",
+                        params![id],
+                        row_to_entry,
+                    )
+                    .optional()?;
 
-            let result = conn
-                .query_row(
-                    "SELECT cap_id, content, created_at, last_accessed_at, access_count
-                     FROM warm_capabilities WHERE cap_id = ?1;",
-                    params![id],
-                    row_to_entry,
-                )
-                .optional()?;
-
-            Ok(result)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                Ok(result)
+            })
+            .await
     }
 
     /// 异步删除指定条目
@@ -288,21 +299,16 @@ impl WarmTier {
     /// 内部统一转为 `CapabilityId` 后用 `as_str()` 传给 SQL(避免 `ToSql` 未实现问题)
     pub async fn delete(&self, id: impl Into<CapabilityId>) -> Result<bool, CmtError> {
         let id = id.into();
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_write_async(move |conn| {
+                let affected = conn.execute(
+                    "DELETE FROM warm_capabilities WHERE cap_id = ?1;",
+                    params![id.as_str()],
+                )?;
 
-            let affected = conn.execute(
-                "DELETE FROM warm_capabilities WHERE cap_id = ?1;",
-                params![id.as_str()],
-            )?;
-
-            Ok(affected > 0)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                Ok(affected > 0)
+            })
+            .await
     }
 
     /// 异步批量删除能力条目(单事务,消除 N+1 查询)
@@ -315,59 +321,51 @@ impl WarmTier {
             return Ok(0);
         }
 
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
-
-            conn.execute_batch("BEGIN;")?;
-            let mut deleted = 0u64;
-            for id in &ids {
-                let affected = conn.execute(
-                    "DELETE FROM warm_capabilities WHERE cap_id = ?1;",
-                    params![id.as_str()],
-                )?;
-                if affected > 0 {
-                    deleted += 1;
+        self.pool
+            .with_write_async(move |conn| {
+                conn.execute_batch("BEGIN;")?;
+                let mut deleted = 0u64;
+                for id in &ids {
+                    let affected = conn.execute(
+                        "DELETE FROM warm_capabilities WHERE cap_id = ?1;",
+                        params![id.as_str()],
+                    )?;
+                    if affected > 0 {
+                        deleted += 1;
+                    }
                 }
-            }
-            conn.execute_batch("COMMIT;")?;
+                conn.execute_batch("COMMIT;")?;
 
-            trace!(count = deleted, "Warm 层批量删除完成");
-            Ok(deleted)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                trace!(count = deleted, "Warm 层批量删除完成");
+                Ok(deleted)
+            })
+            .await
     }
 
     /// 异步列出空闲条目(最后访问时间早于 `until` 的条目)
     ///
+    /// WHY `with_any_read_async`:纯只读查询,可并发执行。
+    /// 使用轮询分配(无特定 hint),均匀分布到各读分片。
     /// 用于 Warm → Cold 的空闲超时迁移(24 小时未被访问)。
     /// 返回满足条件的 `cap_id` 列表,调用方据此逐个迁移。
     pub async fn list_idle_entries(&self, until: DateTime<Utc>) -> Result<Vec<String>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_any_read_async(move |conn| {
+                let until_iso = until.to_rfc3339();
+                let mut stmt = conn.prepare(
+                    "SELECT cap_id FROM warm_capabilities
+                     WHERE last_accessed_at < ?1
+                     ORDER BY last_accessed_at ASC;",
+                )?;
+                let rows = stmt.query_map(params![until_iso], |row| row.get::<_, String>(0))?;
 
-            let until_iso = until.to_rfc3339();
-            let mut stmt = conn.prepare(
-                "SELECT cap_id FROM warm_capabilities
-                 WHERE last_accessed_at < ?1
-                 ORDER BY last_accessed_at ASC;",
-            )?;
-            let rows = stmt.query_map(params![until_iso], |row| row.get::<_, String>(0))?;
-
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(row?);
-            }
-            Ok(ids)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                let mut ids = Vec::new();
+                for row in rows {
+                    ids.push(row?);
+                }
+                Ok(ids)
+            })
+            .await
     }
 
     /// 异步列出所有条目的元数据(不含 content,用于衰减周期扫描)
@@ -379,90 +377,90 @@ impl WarmTier {
     pub async fn list_idle_metadata(
         &self,
     ) -> Result<Vec<(CapabilityId, DateTime<Utc>, u64)>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_any_read_async(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT cap_id, last_accessed_at, access_count
+                     FROM warm_capabilities ORDER BY last_accessed_at ASC;",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    let cap_id: String = row.get(0)?;
+                    let accessed_iso: String = row.get(1)?;
+                    let access_count_i64: i64 = row.get(2)?;
+                    // 时间戳解析(失败时降级为当前时间,不阻断查询)
+                    let last_accessed_at = DateTime::parse_from_rfc3339(&accessed_iso)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now());
+                    Ok((
+                        CapabilityId::from(cap_id),
+                        last_accessed_at,
+                        u64::try_from(access_count_i64).unwrap_or(0),
+                    ))
+                })?;
 
-            let mut stmt = conn.prepare(
-                "SELECT cap_id, last_accessed_at, access_count
-                 FROM warm_capabilities ORDER BY last_accessed_at ASC;",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                let cap_id: String = row.get(0)?;
-                let accessed_iso: String = row.get(1)?;
-                let access_count_i64: i64 = row.get(2)?;
-                // 时间戳解析(失败时降级为当前时间,不阻断查询)
-                let last_accessed_at = DateTime::parse_from_rfc3339(&accessed_iso)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
-                Ok((
-                    CapabilityId::from(cap_id),
-                    last_accessed_at,
-                    u64::try_from(access_count_i64).unwrap_or(0),
-                ))
-            })?;
-
-            let mut metadata = Vec::new();
-            for row in rows {
-                metadata.push(row?);
-            }
-            Ok(metadata)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                let mut metadata = Vec::new();
+                for row in rows {
+                    metadata.push(row?);
+                }
+                Ok(metadata)
+            })
+            .await
     }
 
     /// 异步列出所有条目(用于迁移或快照)
+    ///
+    /// WHY `with_any_read_async`:纯只读查询,可并发执行。
     pub async fn list_all(&self) -> Result<Vec<CapabilityEntry>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_any_read_async(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT cap_id, content, created_at, last_accessed_at, access_count
+                     FROM warm_capabilities ORDER BY created_at ASC;",
+                )?;
+                let rows = stmt.query_map([], row_to_entry)?;
 
-            let mut stmt = conn.prepare(
-                "SELECT cap_id, content, created_at, last_accessed_at, access_count
-                 FROM warm_capabilities ORDER BY created_at ASC;",
-            )?;
-            let rows = stmt.query_map([], row_to_entry)?;
-
-            let mut entries = Vec::new();
-            for row in rows {
-                entries.push(row?);
-            }
-            Ok(entries)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                let mut entries = Vec::new();
+                for row in rows {
+                    entries.push(row?);
+                }
+                Ok(entries)
+            })
+            .await
     }
 
     /// 异步计算条目总数
+    ///
+    /// WHY `with_any_read_async`:COUNT(*) 是纯只读查询,可并发执行。
     pub async fn count(&self) -> Result<u64, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Warm 层 mutex poisoned: {e}")))?;
-            let count: i64 =
-                conn.query_row("SELECT COUNT(*) FROM warm_capabilities;", [], |row| {
-                    row.get(0)
-                })?;
-            Ok(u64::try_from(count).unwrap_or(0))
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+        self.pool
+            .with_any_read_async(move |conn| {
+                let count: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM warm_capabilities;", [], |row| {
+                        row.get(0)
+                    })?;
+                Ok(u64::try_from(count).unwrap_or(0))
+            })
+            .await
     }
 }
 
 /// 应用 SQLite 性能优化 PRAGMA(在 WAL 模式设置之后调用)
 ///
-/// WHY:SubTask 21.2 — 委托给 `nexus_core::sqlite_pragma::apply_performance_pragmas`,
-/// 消除与 cold.rs / mlc-engine 的重复实现,统一 PRAGMA 配置。
-fn apply_performance_pragmas(conn: &Connection) -> Result<(), CmtError> {
-    nexus_core::sqlite_pragma::apply_performance_pragmas(conn)
-        .map_err(|e| CmtError::StorageError(format!("SQLite PRAGMA 设置失败: {e}")))
+/// WHY:F2.2.3 — 委托给 `nexus_core::storage_traits::apply_performance_pragmas`。
+/// 用 newtype wrapper(`PragmaConn`)包装 `&Connection` 以满足 PragmaCapable trait,
+/// 规避 Rust coherence 规则下与 mlc-engine 的 `conflicting implementations` 冲突。
+///
+/// WHY 返回 `rusqlite::Result` 而非 `Result<(), CmtError>`:此函数仅在
+/// `SqlitePool::open` 的 conn_factory 闭包内调用,闭包签名要求返回
+/// `rusqlite::Result<Connection>`。返回 `rusqlite::Result` 让闭包内 `?` 直接工作,
+/// 避免每个调用点重复 map_err 转换(原代码因 CmtError 无法转 rusqlite::Error 编译失败)。
+fn apply_performance_pragmas(conn: &Connection) -> rusqlite::Result<()> {
+    let wrapper = crate::PragmaConn(conn);
+    nexus_core::apply_performance_pragmas(&wrapper).map_err(|e| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(CmtError::StorageError(format!(
+            "SQLite PRAGMA 设置失败: {e}"
+        ))))
+    })
 }
 
 /// 将 SQLite 行映射为 CapabilityEntry
@@ -497,6 +495,7 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<CapabilityEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Tier;
     use chrono::Duration;
 
     fn make_entry(id: &str) -> CapabilityEntry {
@@ -651,9 +650,13 @@ mod tests {
         let db_path = tmp.path().join("test_wal.db");
         let tier = WarmTier::open(&db_path, 4096).unwrap();
 
-        let conn = tier.conn.lock().unwrap();
-        let mode: String = conn
-            .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+        // 通过 SqlitePool 的写连接验证 WAL 模式
+        let mode: String = tier
+            .pool
+            .with_write(|conn| {
+                let m: String = conn.query_row("PRAGMA journal_mode;", [], |row| row.get(0))?;
+                Ok(m)
+            })
             .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
     }
@@ -672,5 +675,18 @@ mod tests {
         // 验证条目内容
         let fetched = tier.peek("cap-2".to_string()).await.unwrap().unwrap();
         assert_eq!(fetched.content, "content-cap-2");
+    }
+
+    #[tokio::test]
+    async fn test_pool_read_pool_size() {
+        // 文件数据库默认 read_pool_size = 2
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test_pool_size.db");
+        let tier = WarmTier::open(&db_path, 4096).unwrap();
+        assert_eq!(tier.pool.read_pool_size(), 2);
+
+        // 内存数据库 read_pool_size = 0
+        let tier_mem = WarmTier::open_in_memory(4096).unwrap();
+        assert_eq!(tier_mem.pool.read_pool_size(), 0);
     }
 }

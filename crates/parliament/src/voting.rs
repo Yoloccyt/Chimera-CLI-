@@ -300,6 +300,42 @@ pub async fn publish_capability_frozen_event(bus: &EventBus, capability_id: &str
     }
 }
 
+/// 发布 VetoOverridden 事件 `[Critical]`
+///
+/// WHY Critical:Skeptic 否决覆盖是高风险操作,必须保证投递到 SecCore 与
+/// 审计系统。此事件与 SkepticVeto(Critical)互补:
+/// - SkepticVeto:记录否决行为(安全防线触发)
+/// - VetoOverridden:记录覆盖行为(安全防线被人工绕过)
+///   两者均不可丢弃,丢失 VetoOverridden 将导致覆盖行为无审计记录。
+///
+/// # 参数
+/// - `bus`:事件总线
+/// - `quest_id`:Quest ID
+/// - `proposal_id`:被覆盖否决的提案 ID
+/// - `veto_reason`:原始否决原因(Skeptic 检测到的恶意意图)
+/// - `override_reason`:覆盖原因(操作方提供)
+/// - `override_by`:授权操作方标识
+pub async fn publish_veto_overridden_event(
+    bus: &EventBus,
+    quest_id: &str,
+    proposal_id: &str,
+    veto_reason: &str,
+    override_reason: &str,
+    override_by: &str,
+) {
+    let event = NexusEvent::VetoOverridden {
+        metadata: EventMetadata::new("parliament"),
+        quest_id: quest_id.to_string(),
+        proposal_id: proposal_id.to_string(),
+        veto_reason: veto_reason.to_string(),
+        override_reason: override_reason.to_string(),
+        override_by: override_by.to_string(),
+    };
+    if let Err(e) = bus.publish(event).await {
+        warn!(error = %e, "发布 VetoOverridden 事件失败");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

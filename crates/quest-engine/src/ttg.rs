@@ -13,9 +13,11 @@
 //! TTG 是 L9 层,可向下依赖 L3 DECB(订阅 BudgetAdjusted 事件)。
 //! 不能向上依赖 L8 Parliament(通过事件解耦)。
 //!
-//! # 事件集成(Week 5 Task 37)
-//! 当前用 `tracing::info!` 记录模式切换事件,Task 37 统一集成到 event-bus:
-//! - 模式切换 → `ThinkingModeChanged` 事件
+//! # 事件集成
+//! TtgGovernor 可选持有 `EventBus`,在模式切换时自动发布 `ThinkingModeSwitched` 事件。
+//! 异步入口 `select_mode_and_publish` / `on_budget_adjusted_and_publish` 封装
+//! "选择 + 发布" 的完整流程;同步方法(`select_mode` 等)保留纯计算语义,
+//! 供测试和不依赖事件总线的场景使用。
 //!
 //! # 快速示例
 //! ```
@@ -48,6 +50,8 @@ use decb_governor::BudgetTier;
 use nexus_core::{Quest, ThinkingMode};
 use tracing::info;
 use uuid::Uuid;
+
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 
 use crate::error::QuestError;
 
@@ -184,16 +188,18 @@ struct QuestModeEntry {
 /// - 自动模式选择(基于复杂度与预算档位)
 /// - 预算联动切换(订阅 DECB 档位变化,带滞后机制)
 /// - 手动覆盖(受预算档位约束)
+/// - 事件集成:可选持有 EventBus,模式切换时发布 ThinkingModeSwitched 事件
 ///
 /// # 线程安全
 /// - `modes` 用 `Mutex<HashMap>` 保护,check-then-act 原子化
 ///   (§6 架构红线:竞态防护)
 /// - `last_budget_switch` 用 `Mutex<HashMap>` 保护,滞后机制时间戳原子读写
+/// - `event_bus` 基于 Arc,Clone 廉价,跨任务共享安全
 ///
 /// # 架构红线
 /// - 单函数 ≤ 200 行
 /// - 无 unwrap()/expect() 在非测试代码
-/// - 所有 async fn 满足 Send + 'static(当前无 async fn,Task 37 集成 event-bus 时补充)
+/// - 所有 async fn 满足 Send + 'static
 pub struct TtgGovernor {
     /// TTG 配置(只读,构造后不变)
     config: TtgConfig,
@@ -204,16 +210,43 @@ pub struct TtgGovernor {
     /// WHY 独立于 modes:滞后机制仅作用于预算联动切换,
     /// 手动覆盖不受滞后限制(上层显式指定应立即生效)
     last_budget_switch: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// 事件总线(可选)— 模式切换时发布 ThinkingModeSwitched 事件
+    ///
+    /// WHY Option:测试场景或纯计算用途无需事件总线,
+    /// None 时异步发布方法静默跳过事件发布(仅记录 tracing)
+    event_bus: Option<EventBus>,
 }
 
 impl TtgGovernor {
-    /// 创建新的 TTG 治理器
+    /// 创建新的 TTG 治理器(不持有事件总线)
     pub fn new(config: TtgConfig) -> Self {
         Self {
             config,
             modes: Mutex::new(HashMap::new()),
             last_budget_switch: Mutex::new(HashMap::new()),
+            event_bus: None,
         }
+    }
+
+    /// 创建带事件总线的 TTG 治理器
+    ///
+    /// 模式切换时自动发布 `ThinkingModeSwitched` 事件,
+    /// 供 Parliament、Dashboard 等下游消费者订阅。
+    pub fn with_event_bus(config: TtgConfig, event_bus: EventBus) -> Self {
+        Self {
+            config,
+            modes: Mutex::new(HashMap::new()),
+            last_budget_switch: Mutex::new(HashMap::new()),
+            event_bus: Some(event_bus),
+        }
+    }
+
+    /// 注入事件总线(延迟绑定场景)
+    ///
+    /// WHY:某些构造流程中 EventBus 在 TtgGovernor 之后才可用,
+    /// 此方法允许延迟注入,避免强制要求构造顺序。
+    pub fn set_event_bus(&mut self, event_bus: EventBus) {
+        self.event_bus = Some(event_bus);
     }
 
     /// 评估 Quest 复杂度 — 基于任务数、依赖深度与描述长度
@@ -276,7 +309,7 @@ impl TtgGovernor {
                 complexity_score = complexity_score.value(),
                 budget_tier = %budget_tier,
                 reason = "auto_select:degraded_forced_fast",
-                "ThinkingModeChanged 事件(待 Task 37 集成 event-bus)"
+                "ThinkingModeChanged(异步发布见 select_mode_and_publish)"
             );
             return (
                 mode,
@@ -297,7 +330,7 @@ impl TtgGovernor {
                 complexity_score = complexity_score.value(),
                 budget_tier = %budget_tier,
                 reason = "auto_select:simple_task",
-                "ThinkingModeChanged 事件(待 Task 37 集成 event-bus)"
+                "ThinkingModeChanged(异步发布见 select_mode_and_publish)"
             );
             return (
                 mode,
@@ -318,7 +351,7 @@ impl TtgGovernor {
                 complexity_score = complexity_score.value(),
                 budget_tier = %budget_tier,
                 reason = "auto_select:medium_task_or_low_tier",
-                "ThinkingModeChanged 事件(待 Task 37 集成 event-bus)"
+                "ThinkingModeChanged(异步发布见 select_mode_and_publish)"
             );
             return (
                 mode,
@@ -338,7 +371,7 @@ impl TtgGovernor {
             complexity_score = complexity_score.value(),
             budget_tier = %budget_tier,
             reason = "auto_select:complex_task_or_high_tier",
-            "ThinkingModeChanged 事件(待 Task 37 集成 event-bus)"
+            "ThinkingModeChanged(异步发布见 select_mode_and_publish)"
         );
         (
             mode,
@@ -439,7 +472,7 @@ impl TtgGovernor {
             old_tier = %old_tier,
             new_tier = %new_tier,
             reason = "budget_linkage",
-            "ThinkingModeChanged 事件(待 Task 37 集成 event-bus)"
+            "ThinkingModeChanged(异步发布见 select_mode_and_publish)"
         );
         Some((mode, reason))
     }
@@ -506,7 +539,7 @@ impl TtgGovernor {
             current_tier = %current_tier,
             reason = "manual_override",
             override_by = "external",
-            "ThinkingModeChanged 事件(待 Task 37 集成 event-bus)"
+            "ThinkingModeChanged(异步发布见 select_mode_and_publish)"
         );
         Ok(mode)
     }
@@ -541,10 +574,166 @@ impl TtgGovernor {
             .unwrap_or(false)
     }
 
+    // ============================================================
+    // 异步事件发布入口 — 封装 "选择 + 发布" 完整流程
+    // ============================================================
+
+    /// 自动选择思考模式并发布 ThinkingModeSwitched 事件
+    ///
+    /// 封装 `select_mode`(同步) + 事件发布(异步)的完整流程。
+    /// 仅当新模式与当前模式不同时才发布事件(避免冗余事件)。
+    ///
+    /// # 返回值
+    /// - `Some((mode, reason))`:模式发生变化,已发布事件
+    /// - `None`:模式未变化或 Quest 尚未经过 TTG 注册
+    ///
+    /// # 并发注意
+    /// `current_mode` 读取与 `select_mode` 写入之间是两次独立锁获取,
+    /// 存在微小 TOCTOU 窗口,极端并发下可能产生冗余事件。
+    /// 消费者应幂等处理 ThinkingModeSwitched 事件。
+    ///
+    /// # 错误
+    /// 事件总线发布失败时返回 `QuestError::EventBusError`。
+    pub async fn select_mode_and_publish(
+        &self,
+        quest_id: &str,
+        quest: &Quest,
+        budget_tier: BudgetTier,
+    ) -> Result<Option<(ThinkingMode, ModeSwitchReason)>, QuestError> {
+        let previous_mode = self.current_mode(quest_id);
+        let (new_mode, reason) = self.select_mode(quest, budget_tier);
+
+        // 仅在模式实际变化时发布事件(避免冗余事件噪声)
+        if previous_mode == Some(new_mode) {
+            return Ok(None);
+        }
+
+        let from_mode_str = previous_mode
+            .map(|m| format!("{m:?}"))
+            .unwrap_or_else(|| "None".into());
+
+        self.publish_mode_switch(quest_id, from_mode_str, new_mode, &reason)
+            .await?;
+        Ok(Some((new_mode, reason)))
+    }
+
+    /// 预算联动切换并发布事件
+    ///
+    /// 封装 `on_budget_adjusted`(同步) + 事件发布(异步)。
+    /// 滞后机制和档位未变化时自动跳过。
+    pub async fn on_budget_adjusted_and_publish(
+        &self,
+        quest_id: &str,
+        old_tier: BudgetTier,
+        new_tier: BudgetTier,
+        quest: &Quest,
+    ) -> Result<Option<(ThinkingMode, ModeSwitchReason)>, QuestError> {
+        let previous_mode = self.current_mode(quest_id);
+        let result = self.on_budget_adjusted(quest_id, old_tier, new_tier, quest);
+
+        let (new_mode, reason) = match result {
+            Some(pair) => pair,
+            None => return Ok(None),
+        };
+
+        let from_mode_str = previous_mode
+            .map(|m| format!("{m:?}"))
+            .unwrap_or_else(|| "None".into());
+
+        self.publish_mode_switch(quest_id, from_mode_str, new_mode, &reason)
+            .await?;
+        Ok(Some((new_mode, reason)))
+    }
+
+    /// 手动覆盖并发布事件
+    ///
+    /// 封装 `override_mode`(同步) + 事件发布(异步)。
+    /// Degraded 档位下覆盖为 Deep 仍返回 `TtgOverrideRejected` 错误。
+    pub async fn override_mode_and_publish(
+        &self,
+        quest_id: &str,
+        mode: ThinkingMode,
+        current_tier: BudgetTier,
+    ) -> Result<ThinkingMode, QuestError> {
+        let previous_mode = self.current_mode(quest_id);
+        let result_mode = self.override_mode(quest_id, mode, current_tier)?;
+
+        let from_mode_str = previous_mode
+            .map(|m| format!("{m:?}"))
+            .unwrap_or_else(|| "None".into());
+        let reason = ModeSwitchReason::ManualOverride {
+            override_by: "external".into(),
+        };
+
+        self.publish_mode_switch(quest_id, from_mode_str, result_mode, &reason)
+            .await?;
+        Ok(result_mode)
+    }
+
+    // ============================================================
+    // 内部辅助 — 事件构建与发布
+    // ============================================================
+
+    /// 构建并发布 ThinkingModeSwitched 事件
+    ///
+    /// 若 `event_bus` 为 None,仅记录 tracing(与集成前行为一致)。
+    /// 发布失败时向上传播错误,由调用方决定降级策略。
+    async fn publish_mode_switch(
+        &self,
+        quest_id: &str,
+        from_mode: String,
+        to_mode: ThinkingMode,
+        reason: &ModeSwitchReason,
+    ) -> Result<(), QuestError> {
+        let reason_str = mode_switch_reason_to_str(reason);
+        info!(
+            quest_id = %quest_id,
+            from = %from_mode,
+            to = ?to_mode,
+            reason = %reason_str,
+            "ThinkingModeSwitched 事件已发布"
+        );
+
+        if let Some(bus) = &self.event_bus {
+            let event = NexusEvent::ThinkingModeSwitched {
+                metadata: EventMetadata::new("ttg-governor"),
+                quest_id: quest_id.to_string(),
+                from_mode,
+                to_mode: format!("{to_mode:?}"),
+                reason: reason_str,
+            };
+            bus.publish(event).await?;
+        }
+        Ok(())
+    }
+
     /// 生成唯一 ID(用于测试辅助,复用 UUIDv7)
     #[allow(dead_code)]
     fn generate_id() -> String {
         format!("ttg-{}", Uuid::now_v7())
+    }
+}
+
+// ============================================================
+// 辅助函数 — 模式切换原因序列化
+// ============================================================
+
+/// 将 ModeSwitchReason 转为人类可读字符串,用于事件 `reason` 字段
+///
+/// WHY 独立函数:避免在多个发布入口重复 match 逻辑,
+/// 且测试可独立验证字符串格式。
+fn mode_switch_reason_to_str(reason: &ModeSwitchReason) -> String {
+    match reason {
+        ModeSwitchReason::AutoSelect {
+            complexity_score,
+            basis,
+        } => format!("auto_select({basis},score={:.2})", complexity_score.value()),
+        ModeSwitchReason::BudgetLinkage { old_tier, new_tier } => {
+            format!("budget_linkage({old_tier}->{new_tier})")
+        }
+        ModeSwitchReason::ManualOverride { override_by } => {
+            format!("manual_override(by={override_by})")
+        }
     }
 }
 
@@ -1127,5 +1316,193 @@ mod tests {
             },
         ];
         assert_eq!(compute_dependency_depth(&tasks), 3);
+    }
+
+    // ============================================================
+    // P1-6: 事件总线集成测试
+    // ============================================================
+
+    #[test]
+    fn test_mode_switch_reason_to_str_auto_select() {
+        let reason = ModeSwitchReason::AutoSelect {
+            complexity_score: ComplexityScore::new(3.5),
+            basis: "complexity_score".into(),
+        };
+        let s = mode_switch_reason_to_str(&reason);
+        assert!(s.contains("auto_select"), "got: {s}");
+        assert!(s.contains("complexity_score"), "got: {s}");
+        assert!(s.contains("3.5"), "got: {s}");
+    }
+
+    #[test]
+    fn test_mode_switch_reason_to_str_budget_linkage() {
+        let reason = ModeSwitchReason::BudgetLinkage {
+            old_tier: BudgetTier::HighTier,
+            new_tier: BudgetTier::Degraded,
+        };
+        let s = mode_switch_reason_to_str(&reason);
+        assert!(s.contains("budget_linkage"), "got: {s}");
+        assert!(s.contains("high_tier"), "got: {s}");
+        assert!(s.contains("degraded"), "got: {s}");
+    }
+
+    #[test]
+    fn test_mode_switch_reason_to_str_manual_override() {
+        let reason = ModeSwitchReason::ManualOverride {
+            override_by: "parliament".into(),
+        };
+        let s = mode_switch_reason_to_str(&reason);
+        assert!(s.contains("manual_override"), "got: {s}");
+        assert!(s.contains("parliament"), "got: {s}");
+    }
+
+    #[test]
+    fn test_with_event_bus_constructor() {
+        let bus = event_bus::EventBus::new();
+        let governor = TtgGovernor::with_event_bus(TtgConfig::default(), bus);
+        assert!(governor.event_bus.is_some());
+    }
+
+    #[test]
+    fn test_set_event_bus() {
+        let mut governor = TtgGovernor::new(TtgConfig::default());
+        assert!(governor.event_bus.is_none());
+        governor.set_event_bus(event_bus::EventBus::new());
+        assert!(governor.event_bus.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_select_mode_and_publish_publishes_event() {
+        let bus = event_bus::EventBus::new();
+        let mut rx = bus.subscribe();
+        let governor = TtgGovernor::with_event_bus(TtgConfig::default(), bus);
+
+        // 复杂 Quest + HighTier → Deep
+        let quest = make_quest("q-evt-1", make_parallel_tasks(20));
+        let result = governor
+            .select_mode_and_publish("q-evt-1", &quest, BudgetTier::HighTier)
+            .await
+            .expect("发布不应失败");
+
+        assert!(result.is_some(), "首次选择应触发事件");
+        let (mode, _) = result.unwrap();
+        assert_eq!(mode, ThinkingMode::Deep);
+
+        // 验证事件已发布
+        let event = rx.recv().await.expect("应收到事件");
+        match event {
+            NexusEvent::ThinkingModeSwitched {
+                quest_id,
+                to_mode,
+                reason,
+                ..
+            } => {
+                assert_eq!(quest_id, "q-evt-1");
+                assert_eq!(to_mode, "Deep");
+                assert!(reason.contains("auto_select"), "reason: {reason}");
+            }
+            other => panic!("expected ThinkingModeSwitched, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_select_mode_and_publish_skips_same_mode() {
+        let bus = event_bus::EventBus::new();
+        let governor = TtgGovernor::with_event_bus(TtgConfig::default(), bus.clone());
+
+        let quest = make_quest("q-evt-2", make_parallel_tasks(20));
+        // 第一次选择:None → Deep,应发布事件
+        let first = governor
+            .select_mode_and_publish("q-evt-2", &quest, BudgetTier::HighTier)
+            .await
+            .unwrap();
+        assert!(first.is_some());
+
+        // 第二次选择:Deep → Deep(不变),应跳过
+        let second = governor
+            .select_mode_and_publish("q-evt-2", &quest, BudgetTier::HighTier)
+            .await
+            .unwrap();
+        assert!(second.is_none(), "模式未变化不应重复发布");
+    }
+
+    #[tokio::test]
+    async fn test_select_mode_and_publish_without_bus() {
+        // 无 EventBus 时仍应正常工作(仅 tracing 记录)
+        let governor = TtgGovernor::new(TtgConfig::default());
+        let quest = make_quest("q-evt-3", make_parallel_tasks(1));
+        let result = governor
+            .select_mode_and_publish("q-evt-3", &quest, BudgetTier::LowTier)
+            .await;
+        assert!(result.is_ok(), "无 EventBus 不应报错");
+        assert!(result.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_on_budget_adjusted_and_publish() {
+        let bus = event_bus::EventBus::new();
+        let mut rx = bus.subscribe();
+        let governor = TtgGovernor::with_event_bus(TtgConfig::default(), bus);
+
+        let quest = make_quest("q-evt-4", make_parallel_tasks(20));
+        let result = governor
+            .on_budget_adjusted_and_publish(
+                "q-evt-4",
+                BudgetTier::HighTier,
+                BudgetTier::Degraded,
+                &quest,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.is_some());
+        let (mode, _) = result.unwrap();
+        assert_eq!(mode, ThinkingMode::Fast);
+
+        let event = rx.recv().await.expect("应收到事件");
+        match event {
+            NexusEvent::ThinkingModeSwitched { to_mode, .. } => {
+                assert_eq!(to_mode, "Fast");
+            }
+            other => panic!("expected ThinkingModeSwitched, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_override_mode_and_publish() {
+        let bus = event_bus::EventBus::new();
+        let mut rx = bus.subscribe();
+        let governor = TtgGovernor::with_event_bus(TtgConfig::default(), bus);
+
+        let mode = governor
+            .override_mode_and_publish("q-evt-5", ThinkingMode::Deep, BudgetTier::HighTier)
+            .await
+            .unwrap();
+        assert_eq!(mode, ThinkingMode::Deep);
+
+        let event = rx.recv().await.expect("应收到事件");
+        match event {
+            NexusEvent::ThinkingModeSwitched {
+                quest_id, reason, ..
+            } => {
+                assert_eq!(quest_id, "q-evt-5");
+                assert!(reason.contains("manual_override"), "reason: {reason}");
+            }
+            other => panic!("expected ThinkingModeSwitched, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_override_mode_and_publish_degraded_rejects_deep() {
+        let bus = event_bus::EventBus::new();
+        let governor = TtgGovernor::with_event_bus(TtgConfig::default(), bus);
+
+        let result = governor
+            .override_mode_and_publish("q-evt-6", ThinkingMode::Deep, BudgetTier::Degraded)
+            .await;
+        assert!(matches!(
+            result,
+            Err(QuestError::TtgOverrideRejected { .. })
+        ));
     }
 }

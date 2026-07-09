@@ -49,6 +49,8 @@ pub mod error;
 pub mod hot;
 pub mod ice;
 pub mod migrator;
+pub mod pool;
+pub mod storage_impl;
 pub mod types;
 pub mod warm;
 
@@ -61,6 +63,8 @@ pub use error::CmtError;
 pub use hot::HotTier;
 pub use ice::IceTier;
 pub use migrator::TierMigrator;
+pub use pool::SqlitePool;
+pub use storage_impl::PragmaConn;
 pub use types::{CapabilityEntry, CapabilityId, MigrationReason, Tier};
 pub use warm::WarmTier;
 
@@ -74,6 +78,7 @@ pub mod prelude {
     pub use crate::hot::HotTier;
     pub use crate::ice::IceTier;
     pub use crate::migrator::TierMigrator;
+    pub use crate::pool::SqlitePool;
     pub use crate::types::{CapabilityEntry, CapabilityId, MigrationReason, Tier};
     pub use crate::warm::WarmTier;
 }

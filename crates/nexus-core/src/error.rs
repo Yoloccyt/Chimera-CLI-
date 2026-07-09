@@ -32,14 +32,6 @@ pub enum NexusError {
     /// IO 错误 — 文件读写等底层 IO 失败
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-
-    /// SQLite 错误 — PRAGMA 设置、查询执行等底层 SQLite 操作失败
-    ///
-    /// WHY:SubTask 21.2 — `apply_performance_pragmas` 需要返回统一错误类型,
-    /// 通过 `#[from] rusqlite::Error` 支持 `?` 自动转换,调用方再 `.map_err()`
-    /// 转换为各自的库层错误类型(CmtError / MlcError)
-    #[error("SQLite error: {0}")]
-    SqliteError(#[from] rusqlite::Error),
 }
 
 /// 从 serde_json 错误转换 — 快照哈希等场景的序列化失败

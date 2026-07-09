@@ -35,3 +35,7 @@ proptest = { workspace = true }
 [[bench]]
 name = "hot_lru"
 harness = false
+
+[[bench]]
+name = "pragma_capable_bench"
+harness = false

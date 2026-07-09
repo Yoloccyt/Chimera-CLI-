@@ -36,14 +36,15 @@ pub mod clv;
 pub mod error;
 pub mod newtype;
 pub mod path_util;
-pub mod sqlite_pragma;
 pub mod state;
+pub mod storage_traits;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use clv::{cosine_similarity_slices, CLV};
 pub use error::NexusError;
 pub use state::NexusState;
+pub use storage_traits::{apply_performance_pragmas, PragmaCapable};
 pub use types::{Checkpoint, MultimodalInput, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
 
 /// 预导入模块 — 提供最常用类型
@@ -51,6 +52,7 @@ pub mod prelude {
     pub use crate::clv::{cosine_similarity_slices, CLV};
     pub use crate::error::NexusError;
     pub use crate::state::NexusState;
+    pub use crate::storage_traits::{apply_performance_pragmas, PragmaCapable};
     pub use crate::types::{
         Checkpoint, MultimodalInput, Quest, Task, TaskStatus, ThinkingMode, UserIntent,
     };

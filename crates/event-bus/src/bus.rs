@@ -431,6 +431,72 @@ impl EventReceiver {
         }
     }
 
+    /// 接收下一个匹配谓词的事件 — 选择性订阅(主题过滤)
+    ///
+    /// 内部循环接收事件,跳过不匹配的事件,直到找到匹配的或通道关闭。
+    /// 不匹配的事件被消费但不返回给调用方(类似 filter+find 语义)。
+    ///
+    /// # 使用场景
+    /// - 只关心特定类型的事件(如只监听 Quest 生命周期事件)
+    /// - 只关心特定 quest_id 的事件
+    /// - 按 severity 过滤(如只处理 Critical 事件)
+    ///
+    /// # 注意事项
+    /// 不匹配的事件会被消费(从接收缓冲区移除),无法再被此 receiver 读取。
+    /// 如果需要同时处理多种事件,应使用 `recv` 并在调用方分派。
+    ///
+    /// # 错误
+    /// - `ChannelClosed`:所有 Sender 已 drop,流结束
+    /// - `SlowConsumerDropped`:lag 超限,可能需要重订阅
+    ///
+    /// # 示例
+    /// ```no_run
+    /// use event_bus::{EventBus, NexusEvent};
+    ///
+    /// # async fn example(bus: &EventBus) {
+    /// let mut rx = bus.subscribe();
+    /// // 只接收 QuestCreated 事件
+    /// let event = rx.recv_matching(|e| matches!(e, NexusEvent::QuestCreated { .. })).await.unwrap();
+    /// # }
+    /// ```
+    pub async fn recv_matching<F>(&mut self, mut predicate: F) -> Result<NexusEvent, EventBusError>
+    where
+        F: FnMut(&NexusEvent) -> bool,
+    {
+        loop {
+            let event = self.recv().await?;
+            if predicate(&event) {
+                return Ok(event);
+            }
+            // 不匹配的事件被消费并丢弃(调用方明确只需要匹配的事件)
+        }
+    }
+
+    /// 尝试非阻塞接收匹配谓词的事件
+    ///
+    /// 扫描当前缓冲区中的事件,返回第一个匹配的。
+    /// 不匹配的事件被消费(从缓冲区移除)。
+    ///
+    /// # 返回值
+    /// - `Ok(Some(event))`:找到匹配事件
+    /// - `Ok(None)`:缓冲区为空(可能还有后续事件,但当前无可用)
+    /// - `Err`:通道关闭或 lag 超限
+    pub fn try_recv_matching<F>(
+        &mut self,
+        mut predicate: F,
+    ) -> Result<Option<NexusEvent>, EventBusError>
+    where
+        F: FnMut(&NexusEvent) -> bool,
+    {
+        loop {
+            match self.try_recv()? {
+                Some(event) if predicate(&event) => return Ok(Some(event)),
+                Some(_) => continue, // 不匹配,消费并继续
+                None => return Ok(None),
+            }
+        }
+    }
+
     /// 获取订阅者标识
     pub fn subscriber_id(&self) -> &str {
         &self.subscriber_id
@@ -553,5 +619,147 @@ mod tests {
         let _rx1 = bus.subscribe();
         let _rx2 = bus.subscribe();
         assert_eq!(bus.subscriber_count(), 2);
+    }
+
+    // ============================================================
+    // P1-1: 事件主题过滤测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_recv_matching_filters_events() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 发布不同类型的事件
+        let quest_event = make_test_event();
+        let progress_event = NexusEvent::QuestProgressUpdated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-001".into(),
+            completed: 1,
+            total: 3,
+        };
+
+        bus.publish(quest_event.clone()).await.unwrap();
+        bus.publish(progress_event.clone()).await.unwrap();
+
+        // recv_matching 只接收 QuestProgressUpdated
+        let received = rx
+            .recv_matching(|e| matches!(e, NexusEvent::QuestProgressUpdated { .. }))
+            .await
+            .unwrap();
+        assert_eq!(received, progress_event);
+        // QuestCreated 事件被消费但未返回
+    }
+
+    #[tokio::test]
+    async fn test_recv_matching_skips_non_matching() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 发布 3 个事件,只有最后 1 个匹配
+        for i in 0..2 {
+            bus.publish(NexusEvent::QuestProgressUpdated {
+                metadata: EventMetadata::new("quest-engine"),
+                quest_id: format!("q-{i}"),
+                completed: i as u32,
+                total: 3,
+            })
+            .await
+            .unwrap();
+        }
+        let target = make_test_event(); // QuestCreated
+        bus.publish(target.clone()).await.unwrap();
+
+        // 只匹配 QuestCreated — 前两个 ProgressUpdated 被跳过
+        let received = rx
+            .recv_matching(|e| matches!(e, NexusEvent::QuestCreated { .. }))
+            .await
+            .unwrap();
+        assert_eq!(received, target);
+    }
+
+    #[tokio::test]
+    async fn test_recv_matching_by_quest_id() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        bus.publish(NexusEvent::QuestCreated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-other".into(),
+            title: "其他任务".into(),
+            task_count: 1,
+        })
+        .await
+        .unwrap();
+
+        let target = NexusEvent::QuestCreated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-target".into(),
+            title: "目标任务".into(),
+            task_count: 5,
+        };
+        bus.publish(target.clone()).await.unwrap();
+
+        // 按 quest_id 过滤
+        let received = rx
+            .recv_matching(|e| {
+                matches!(e, NexusEvent::QuestCreated { quest_id, .. } if quest_id == "q-target")
+            })
+            .await
+            .unwrap();
+        assert_eq!(received, target);
+    }
+
+    #[test]
+    fn test_try_recv_matching_finds_event() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 同步发布多个事件
+        bus.publish_blocking(NexusEvent::QuestProgressUpdated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-1".into(),
+            completed: 1,
+            total: 3,
+        })
+        .unwrap();
+        let target = make_test_event();
+        bus.publish_blocking(target.clone()).unwrap();
+
+        // 只匹配 QuestCreated
+        let result = rx
+            .try_recv_matching(|e| matches!(e, NexusEvent::QuestCreated { .. }))
+            .unwrap();
+        assert_eq!(result, Some(target));
+    }
+
+    #[test]
+    fn test_try_recv_matching_empty_buffer() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        // 缓冲区为空
+        let result = rx.try_recv_matching(|_| true).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_try_recv_matching_no_match_in_buffer() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 只有 ProgressUpdated 事件
+        bus.publish_blocking(NexusEvent::QuestProgressUpdated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-1".into(),
+            completed: 1,
+            total: 3,
+        })
+        .unwrap();
+
+        // 寻找 QuestCreated — 不应找到
+        let result = rx
+            .try_recv_matching(|e| matches!(e, NexusEvent::QuestCreated { .. }))
+            .unwrap();
+        assert_eq!(result, None, "缓冲区中没有匹配事件");
     }
 }

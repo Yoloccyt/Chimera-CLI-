@@ -45,6 +45,7 @@ pub mod l0_working;
 pub mod l1_episodic;
 pub mod l2_semantic;
 pub mod l3_procedural;
+pub mod storage_impl;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
@@ -55,6 +56,7 @@ pub use l0_working::WorkingMemory;
 pub use l1_episodic::EpisodicMemory;
 pub use l2_semantic::SemanticMemory;
 pub use l3_procedural::ProceduralMemory;
+pub use storage_impl::PragmaConn;
 pub use types::{
     ExecutionStats, MemoryEntry, MemoryId, MemoryTier, PatternSignature, ProceduralEntry, QuestId,
     SharedCLV,

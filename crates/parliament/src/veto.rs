@@ -479,6 +479,81 @@ impl Default for Skeptic {
 }
 
 // ============================================================
+// 否决覆盖票据 — P1-3: Skeptic 否决权覆盖机制
+// ============================================================
+
+/// 否决覆盖票据 — 授权覆盖 Skeptic 否决的凭证
+///
+/// WHY 独立结构:Skeptic 否决是红队安全防线,覆盖否决是高风险操作,
+/// 需要明确的授权凭证。`VetoOverrideTicket` 将覆盖授权从辩论流程中解耦,
+/// 便于独立验证、审计追溯与权限系统集成。
+///
+/// # 安全设计
+/// - `proposal_id` 必须与被覆盖否决的提案 ID 匹配(防止票据重用)
+/// - `override_reason` 必填,记录覆盖原因(审计追溯)
+/// - `override_by` 必填,记录授权操作方(责任归属)
+/// - 此结构本身不做权限校验 — 权限校验由调用方(如 SecCore/API 层)
+///   在构造 ticket 前完成,ticket 仅携带审计所需信息
+///
+/// # 线程安全
+/// `VetoOverrideTicket` 仅持有 `String` 字段,通过 `Clone` 传递,
+/// 天然 `Send + Sync`。
+///
+/// # 典型场景(误报覆盖)
+/// - "sudo apt install git" → 匹配 PrivilegeEscalation,实为合法环境安装
+/// - "curl https://api.github.com" → 匹配 DataExfiltration,实为合法 API 调用
+/// - "/proc/cpuinfo" → 匹配 SandboxEscape,实为合法系统监控
+/// - YAML 配置中的 "system:" → 匹配 PromptInjection,实为合法配置语法
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VetoOverrideTicket {
+    /// 被覆盖否决的提案 ID(必须与 proposal.proposal_id 匹配)
+    pub proposal_id: String,
+    /// 覆盖原因(自然语言,如 "false positive: legitimate shell script")
+    pub override_reason: String,
+    /// 授权操作方标识(如 "admin:alice" 或 "system:auto-review")
+    pub override_by: String,
+}
+
+impl VetoOverrideTicket {
+    /// 创建新的否决覆盖票据
+    ///
+    /// # 参数
+    /// - `proposal_id`:被覆盖否决的提案 ID
+    /// - `override_reason`:覆盖原因(不可为空)
+    /// - `override_by`:授权操作方标识(不可为空)
+    ///
+    /// # 错误
+    /// - 若 `override_reason` 或 `override_by` 为空,返回错误描述
+    pub fn new(
+        proposal_id: impl Into<String>,
+        override_reason: impl Into<String>,
+        override_by: impl Into<String>,
+    ) -> Result<Self, String> {
+        let reason = override_reason.into();
+        let by = override_by.into();
+        if reason.trim().is_empty() {
+            return Err("override_reason 不可为空".into());
+        }
+        if by.trim().is_empty() {
+            return Err("override_by 不可为空".into());
+        }
+        Ok(Self {
+            proposal_id: proposal_id.into(),
+            override_reason: reason,
+            override_by: by,
+        })
+    }
+
+    /// 验证票据是否适用于指定提案
+    ///
+    /// 检查 `proposal_id` 是否匹配。不匹配返回 `false`,
+    /// 调用方应拒绝覆盖并记录告警。
+    pub fn validate(&self, proposal_id: &str) -> bool {
+        self.proposal_id == proposal_id
+    }
+}
+
+// ============================================================
 // 单元测试 — 25 条规则匹配 + Skeptic 否决权
 // ============================================================
 
@@ -1066,5 +1141,58 @@ mod tests {
         let json = serde_json::to_string(&reason).unwrap();
         let restored: VetoReason = serde_json::from_str(&json).unwrap();
         assert_eq!(reason, restored);
+    }
+
+    // === P1-3: VetoOverrideTicket 测试 ===
+
+    #[test]
+    fn test_veto_override_ticket_new_valid() {
+        let ticket =
+            VetoOverrideTicket::new("p-1", "false positive: legitimate script", "admin:alice");
+        assert!(ticket.is_ok());
+        let t = ticket.unwrap();
+        assert_eq!(t.proposal_id, "p-1");
+        assert_eq!(t.override_reason, "false positive: legitimate script");
+        assert_eq!(t.override_by, "admin:alice");
+    }
+
+    #[test]
+    fn test_veto_override_ticket_new_empty_reason_rejected() {
+        let ticket = VetoOverrideTicket::new("p-1", "", "admin:alice");
+        assert!(ticket.is_err());
+        assert!(ticket.unwrap_err().contains("override_reason"));
+    }
+
+    #[test]
+    fn test_veto_override_ticket_new_whitespace_reason_rejected() {
+        let ticket = VetoOverrideTicket::new("p-1", "   ", "admin:alice");
+        assert!(ticket.is_err());
+    }
+
+    #[test]
+    fn test_veto_override_ticket_new_empty_by_rejected() {
+        let ticket = VetoOverrideTicket::new("p-1", "legitimate", "");
+        assert!(ticket.is_err());
+        assert!(ticket.unwrap_err().contains("override_by"));
+    }
+
+    #[test]
+    fn test_veto_override_ticket_validate_matching() {
+        let ticket = VetoOverrideTicket::new("p-1", "legitimate", "admin:alice").unwrap();
+        assert!(ticket.validate("p-1"), "proposal_id 匹配应返回 true");
+    }
+
+    #[test]
+    fn test_veto_override_ticket_validate_non_matching() {
+        let ticket = VetoOverrideTicket::new("p-1", "legitimate", "admin:alice").unwrap();
+        assert!(!ticket.validate("p-2"), "proposal_id 不匹配应返回 false");
+    }
+
+    #[test]
+    fn test_veto_override_ticket_serde_roundtrip() {
+        let ticket = VetoOverrideTicket::new("p-1", "false positive", "admin:bob").unwrap();
+        let json = serde_json::to_string(&ticket).unwrap();
+        let restored: VetoOverrideTicket = serde_json::from_str(&json).unwrap();
+        assert_eq!(ticket, restored);
     }
 }

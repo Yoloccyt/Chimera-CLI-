@@ -15,8 +15,6 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-# rusqlite:SubTask 21.2 — sqlite_pragma 模块需要 Connection 类型
-rusqlite = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
