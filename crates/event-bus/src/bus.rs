@@ -290,11 +290,53 @@ impl EventBus {
             logger.log_subscriber_connected(&subscriber_id, subscriber_count, self.capacity);
         }
 
-        EventReceiver {
-            inner: self.sender.subscribe(),
-            subscriber_id,
-            logger: self.logger.clone(),
+        // WHY 复用 from_broadcast:与 subscribe_filtered 共享构造逻辑,
+        // 避免两处分别拼装 EventReceiver 导致字段初始化不一致风险
+        EventReceiver::from_broadcast(self.sender.subscribe(), subscriber_id, self.logger.clone())
+    }
+
+    /// 订阅指定 topic 集合的事件,返回 [`FilteredSubscriber`](crate::topic::FilteredSubscriber)
+    ///
+    /// 仅接收 topic 匹配的事件,不匹配的事件在 FilteredSubscriber 内部被消费丢弃。
+    /// 既有 [`subscribe`](Self::subscribe) 保持全量广播,不受影响。
+    ///
+    /// # 调用时机(§4.4 反模式 3)
+    /// 必须在 `tokio::spawn()` **之前同步调用**,确保不错过后续事件。
+    /// 在 spawn 的 async block 内调用可能导致事件静默丢失。
+    ///
+    /// # 使用场景
+    /// - TTG 仲裁层只需 Parliament + Budget 事件
+    /// - N9 PrerequisiteChecker 只需 Routing 事件
+    /// - 减少无关事件对消费者缓冲区的占用
+    ///
+    /// # 示例
+    /// ```no_run
+    /// use event_bus::{EventBus, EventTopic};
+    /// use std::collections::HashSet;
+    ///
+    /// let bus = EventBus::new();
+    /// let topics: HashSet<EventTopic> = [EventTopic::Routing].into_iter().collect();
+    /// let mut rx = bus.subscribe_filtered(topics);
+    /// ```
+    pub fn subscribe_filtered(
+        &self,
+        topics: std::collections::HashSet<crate::topic::EventTopic>,
+    ) -> crate::topic::FilteredSubscriber {
+        let subscriber_id = format!("filtered-{}", uuid::Uuid::now_v7());
+        let subscriber_count = self.sender.receiver_count() + 1; // +1 包含即将创建的
+
+        // 记录订阅者连接日志(若已启用日志埋点)
+        if let Some(logger) = &self.logger {
+            logger.log_subscriber_connected(&subscriber_id, subscriber_count, self.capacity);
         }
+
+        // 复用 subscribe() 的内部构造逻辑,仅外层包一层 FilteredSubscriber
+        let receiver = EventReceiver::from_broadcast(
+            self.sender.subscribe(),
+            subscriber_id,
+            self.logger.clone(),
+        );
+        crate::topic::FilteredSubscriber::new(receiver, topics)
     }
 
     /// 获取当前订阅者数量
@@ -327,6 +369,23 @@ pub struct EventReceiver {
 }
 
 impl EventReceiver {
+    /// 内部构造函数(crate 内可见,用于 FilteredSubscriber 包装)
+    ///
+    /// WHY pub(crate):避免外部直接拼装 EventReceiver 绕过 EventBus 的订阅者
+    /// 计数与日志埋点;同时允许 topic.rs 在同 crate 内构造 FilteredSubscriber
+    /// 时复用 EventReceiver 的 recv/try_recv 能力。
+    pub(crate) fn from_broadcast(
+        inner: broadcast::Receiver<NexusEvent>,
+        subscriber_id: String,
+        logger: Option<Arc<BusLogger>>,
+    ) -> Self {
+        EventReceiver {
+            inner,
+            subscriber_id,
+            logger,
+        }
+    }
+
     /// 接收下一个事件
     ///
     /// 错误处理:
