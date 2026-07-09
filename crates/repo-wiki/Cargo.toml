@@ -49,6 +49,8 @@ ndarray = { workspace = true }
 criterion = { workspace = true }
 # 测试用临时文件/目录
 tempfile = { workspace = true }
+# 属性测试框架 — KNN 检索不变量验证
+proptest = { workspace = true }
 
 [[bench]]
 name = "store_bench"
@@ -56,4 +58,8 @@ harness = false
 
 [[bench]]
 name = "vector_bench"
+harness = false
+
+[[bench]]
+name = "fts_bench"
 harness = false

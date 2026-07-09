@@ -37,7 +37,7 @@ use event_bus::{EventBus, EventMetadata, EventSeverity, EventTopic, NexusEvent};
 async fn test_critical_event_no_subscriber_logs_warning() {
     let bus = EventBus::new();
     let mut main_rx = bus.subscribe(); // broadcast 订阅者
-    // 故意不调用 subscribe_critical_events():模拟无 Critical 订阅者的部署形态
+                                       // 故意不调用 subscribe_critical_events():模拟无 Critical 订阅者的部署形态
 
     let event = NexusEvent::BudgetExceeded {
         metadata: EventMetadata::new("decb-governor"),

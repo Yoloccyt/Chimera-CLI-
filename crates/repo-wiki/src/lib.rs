@@ -45,6 +45,7 @@
 
 pub mod config;
 pub mod error;
+pub mod fts;
 pub mod generator;
 pub mod iscm;
 pub mod store;
@@ -53,6 +54,7 @@ pub mod vector;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use error::WikiError;
+pub use fts::FtsCapability;
 pub use generator::WikiGenerator;
 pub use iscm::{IscmAnchor, Layer};
 pub use store::WikiStore;
@@ -62,6 +64,7 @@ pub use vector::VectorIndex;
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::error::WikiError;
+    pub use crate::fts::FtsCapability;
     pub use crate::generator::WikiGenerator;
     pub use crate::iscm::{IscmAnchor, Layer};
     pub use crate::store::WikiStore;

@@ -33,7 +33,7 @@ use gqep_executor::{GqepConfig, GqepError, GqepExecutor, GqepFuture};
 async fn test_gather_global_deadline_limits_total_duration() {
     let config = GqepConfig {
         default_timeout_ms: 30_000, // 单操作超时设大,确保全局超时先触发
-        gather_deadline_ms: 300,     // 全局 deadline 300ms
+        gather_deadline_ms: 300,    // 全局 deadline 300ms
         ..Default::default()
     };
     let executor = GqepExecutor::new(config, EventBus::new());
@@ -62,10 +62,13 @@ async fn test_gather_global_deadline_limits_total_duration() {
     assert_eq!(result.succeeded, 0, "deadline 内不应有操作成功");
     // 应包含 GlobalTimedOut 错误(区分于单操作超时 OperationTimeout)
     assert!(
-        result
-            .errors
-            .iter()
-            .any(|e| matches!(e, GqepError::GlobalTimedOut { deadline_ms: 300, .. })),
+        result.errors.iter().any(|e| matches!(
+            e,
+            GqepError::GlobalTimedOut {
+                deadline_ms: 300,
+                ..
+            }
+        )),
         "应返回 GlobalTimedOut 错误(deadline_ms=300),实际 errors: {:?}",
         result.errors
     );
@@ -124,7 +127,8 @@ async fn test_gather_global_deadline_zero_disables() {
     // 但 deadline=0 禁用,应全部完成
     let futures: Vec<GqepFuture<String>> = (0..3)
         .map(|i| {
-            Box::pin(async {
+            // move 捕获 i:GqepFuture 要求 'static,async block 默认引用捕获会触发 E0597
+            Box::pin(async move {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 Ok(format!("ok-{i}"))
             }) as GqepFuture<String>

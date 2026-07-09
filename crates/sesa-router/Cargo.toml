@@ -26,6 +26,8 @@ nexus-core = { path = "../nexus-core" }
 criterion = { workspace = true }
 # JSON 序列化测试(config serde 往返)
 serde_json = { workspace = true }
+# 属性测试框架 — 稀疏化不变量验证
+proptest = { workspace = true }
 # 三层路由组合基准(Task 4 / W7-Carryover-1):串联 SESA → KVBSR → FaaE
 # WHY dev-dep 而非 dep:基准仅在 bench target 中使用,不影响运行时依赖图
 kvbsr-router = { path = "../kvbsr-router" }

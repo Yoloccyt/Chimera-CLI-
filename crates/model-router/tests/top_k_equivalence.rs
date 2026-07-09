@@ -135,7 +135,10 @@ fn test_cases() -> Vec<Vec<ModelInfo>> {
         // 边界:1 模型(select_nth 跳过,candidates 为空)
         vec![make_model("only", 0.001, 100, 0.8)],
         // 边界:2 模型(select_nth(1) 分区,scored[1..] 单元素排序)
-        vec![make_model("a", 0.001, 100, 0.8), make_model("b", 0.01, 200, 0.9)],
+        vec![
+            make_model("a", 0.001, 100, 0.8),
+            make_model("b", 0.01, 200, 0.9),
+        ],
         // 边界:等分(同分不同 model_id,验证 tiebreaker 确定性)
         vec![
             make_model("z", 0.001, 100, 0.8),
@@ -172,18 +175,14 @@ fn test_top_k_select_nth_unstable_equivalence() {
         assert_eq!(
             decision.model_id, ref_selected,
             "case {}: selected model mismatch (expected {}, got {})",
-            idx,
-            ref_selected,
-            decision.model_id
+            idx, ref_selected, decision.model_id
         );
 
         // 候选列表必须有序且逐元素一致(验证候选有序契约未被破坏)
         assert_eq!(
             decision.candidates, ref_candidates,
             "case {}: candidates mismatch (expected {:?}, got {:?})",
-            idx,
-            ref_candidates,
-            decision.candidates
+            idx, ref_candidates, decision.candidates
         );
     }
 }
@@ -229,11 +228,7 @@ fn test_candidates_are_ordered_descending() {
     };
 
     // candidates 必须按评分降序(score[i] >= score[i+1])
-    let cand_scores: Vec<f64> = decision
-        .candidates
-        .iter()
-        .map(|id| score_of(id))
-        .collect();
+    let cand_scores: Vec<f64> = decision.candidates.iter().map(|id| score_of(id)).collect();
     for w in cand_scores.windows(2) {
         assert!(
             w[0] >= w[1] || (w[0] - w[1]).abs() < 1e-9,

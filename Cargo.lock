@@ -7,6 +7,7 @@ name = "acb-governor"
 version = "1.0.0-omega"
 dependencies = [
  "chrono",
+ "criterion",
  "event-bus",
  "proptest",
  "serde",
@@ -127,6 +128,7 @@ dependencies = [
 name = "auto-dpo"
 version = "1.0.0-omega"
 dependencies = [
+ "criterion",
  "event-bus",
  "proptest",
  "serde",
@@ -629,6 +631,7 @@ dependencies = [
 name = "decay-engine"
 version = "1.0.0-omega"
 dependencies = [
+ "criterion",
  "dashmap",
  "thiserror",
  "tracing",
@@ -712,6 +715,7 @@ name = "event-bus"
 version = "1.0.0-omega"
 dependencies = [
  "chrono",
+ "criterion",
  "prometheus-client",
  "rmp-serde",
  "serde",
@@ -1366,6 +1370,7 @@ dependencies = [
  "criterion",
  "event-bus",
  "nexus-core",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",
@@ -1744,6 +1749,7 @@ name = "qeep-protocol"
 version = "1.0.0-omega"
 dependencies = [
  "chrono",
+ "criterion",
  "dashmap",
  "proptest",
  "thiserror",
@@ -1966,6 +1972,7 @@ dependencies = [
  "hex",
  "ndarray",
  "nexus-core",
+ "proptest",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2188,6 +2195,7 @@ dependencies = [
  "faae-router",
  "kvbsr-router",
  "nexus-core",
+ "proptest",
  "serde",
  "serde_json",
  "thiserror",

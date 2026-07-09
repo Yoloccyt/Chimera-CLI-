@@ -53,13 +53,8 @@ fn make_quest(quest_id: &str, task_count: usize) -> Quest {
 ///
 /// WHY 抽取辅助:四个测试用例都有 "recv → match → 断言变体" 的相同结构,
 /// 提取后避免重复,且失败信息统一。返回 `(quest_id, to_mode, reason)` 三元组。
-async fn assert_mode_switch(
-    rx: &mut EventReceiver,
-) -> (String, String, String) {
-    let event = rx
-        .recv()
-        .await
-        .expect("应收到 ThinkingModeSwitched 事件");
+async fn assert_mode_switch(rx: &mut EventReceiver) -> (String, String, String) {
+    let event = rx.recv().await.expect("应收到 ThinkingModeSwitched 事件");
     match event {
         NexusEvent::ThinkingModeSwitched {
             quest_id,
@@ -124,10 +119,7 @@ async fn test_select_mode_publishes_event_for_each_rule() {
     let expected_modes = ["Fast", "Fast", "Standard", "Deep"];
     for expected in expected_modes {
         let (_, to_mode, _) = assert_mode_switch(&mut rx).await;
-        assert_eq!(
-            to_mode, expected,
-            "规则事件的目标模式应匹配"
-        );
+        assert_eq!(to_mode, expected, "规则事件的目标模式应匹配");
     }
 }
 

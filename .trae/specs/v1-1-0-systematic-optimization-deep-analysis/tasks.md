@@ -221,10 +221,10 @@
   - [x] SubTask V-1.3: TDD-GREEN — Phase IV C1 已实现双通道架构,纯核验无需修改生产代码
   - [x] SubTask V-1.4: TDD-REFACTOR + `cargo test -p event-bus` 验证通过
 
-- [ ] **Task V-2: model-router MoE 稀疏门控 [I1]**(20h,演进专家 agent) — 延后到 v1.2.0-omega
-  - [ ] ~~SubTask V-2.1: Round 1 现状核验~~ (延后:需 50+ 模型规模验证,当前 3 模型无收益)
-  - [ ] ~~SubTask V-2.2: Round 2 方案设计~~
-  - [ ] ~~SubTask V-2.3: TDD-RED + TDD-GREEN + TDD-REFACTOR~~
+- [x] **Task V-2: model-router MoE 稀疏门控 [I1]**(20h,演进专家 agent) — 已在 v1.2.0-omega 完成(2026-07-09)
+  - [x] ~~SubTask V-2.1: Round 1 现状核验~~ (延后:需 50+ 模型规模验证,当前 3 模型无收益) — v1.2.0-omega 已完成
+  - [x] ~~SubTask V-2.2: Round 2 方案设计~~ — v1.2.0-omega 已完成
+  - [x] ~~SubTask V-2.3: TDD-RED + TDD-GREEN + TDD-REFACTOR~~ — v1.2.0-omega 已完成
 
 - [x] **Task V-3: gqep-executor 全局超时 [N14]**(4h,演进专家 agent) — 已完成 2026-07-09
   - [x] SubTask V-3.1: 新增 gather_deadline_ms(默认 5000,0=禁用)+ GlobalTimedOut 错误 + GatherTimedOut 事件 + collect_with_deadline 独立方法 + 4 测试 + `cargo test -p gqep-executor` 验证通过
@@ -235,11 +235,11 @@
 - [x] **Task V-5: quest-engine TTG EventBus 集成 [N18]**(4h,演进专家 agent) — 已完成 2026-07-09(调整为清理重复 tracing)
   - [x] SubTask V-5.1: 9 处 info!→debug!/删除 + 4 特征化测试 + `cargo test -p quest-engine` 验证通过
 
-- [ ] **Task V-6: repo-wiki FTS5 全文索引 [N15]**(8h,演进专家 agent) — 延后到 v1.2.0-omega
-  - [ ] ~~SubTask V-6.1~~ (延后:FTS5 编译配置复杂,LIKE 已满足当前规模)
+- [x] **Task V-6: repo-wiki FTS5 全文索引 [N15]**(8h,演进专家 agent) — 已在 v1.2.0-omega 完成(2026-07-09)
+  - [x] ~~SubTask V-6.1~~ (延后:FTS5 编译配置复杂,LIKE 已满足当前规模) — v1.2.0-omega 已完成,采用 standalone + 运行时检测 + CJK 空结果降级 LIKE 策略
 
-- [ ] **Task V-7: chimera-cli OnceCell 懒加载 [E1]**(8h,演进专家 agent) — 延后到 v1.2.0-omega
-  - [ ] ~~SubTask V-7.1~~ (延后:14 section 重构风险高,需独立设计)
+- [x] **Task V-7: chimera-cli OnceCell 懒加载 [E1]**(8h,演进专家 agent) — 已在 v1.2.0-omega 完成(2026-07-09)
+  - [x] ~~SubTask V-7.1~~ (延后:14 section 重构风险高,需独立设计) — v1.2.0-omega 已完成,改用 std::sync::OnceLock(Rust 1.70+ 标准库)+ LazySection<T> 辅助类型 + Figment::extract_inner section 级懒加载,22 测试覆盖
 
 - [x] **Task V-8: event-bus Prometheus 指标 [G2]**(8h,演进专家 agent) — 已完成 2026-07-09
   - [x] SubTask V-8.1: prometheus-client 依赖 + 3 指标(nexus_event_total/nexus_critical_event_total/nexus_event_publish_duration_seconds)+ TopicLabel 独立枚举 + 6 测试 + `cargo test -p event-bus` 验证通过
@@ -250,11 +250,11 @@
   - [x] SubTask V-9.3: Site 5 (model-router/strategies.rs) 替换为 select_nth_unstable_by + 候选 sort_by
   - [x] SubTask V-9.4: `cargo test --workspace` 验证通过(3 等价性测试)
 
-- [ ] **Task V-10: 测试覆盖补齐**(并行进行,12h,质量验证 agent) — 延后到 v1.2.0-omega
-  - [ ] ~~SubTask V-10.1~~ (延后:5 crate benches,规模大)
-  - [ ] ~~SubTask V-10.2~~ (延后:5 crate proptest)
-  - [ ] ~~SubTask V-10.3~~ (延后:23 crate doctest)
-  - [ ] ~~SubTask V-10.4~~ (延后:fuzz 3→6 target)
+- [x] **Task V-10: 测试覆盖补齐**(并行进行,12h,质量验证 agent) — 已在 v1.2.0-omega 完成(2026-07-09)
+  - [x] ~~SubTask V-10.1~~ (延后:5 crate benches,规模大) — v1.2.0-omega 已完成(event-bus / acb-governor / decay-engine / qeep-protocol / auto-dpo)
+  - [x] ~~SubTask V-10.2~~ (延后:5 crate proptest) — v1.2.0-omega 已完成(acb-governor / model-router / repo-wiki / sesa-router / gea-activator)
+  - [x] ~~SubTask V-10.3~~ (延后:23 crate doctest) — v1.2.0-omega 已完成(qeep-protocol / decay-engine / chimera-cli 3 crate 补齐,34 crate 全通过)
+  - [x] ~~SubTask V-10.4~~ (延后:fuzz 3→6 target) — v1.2.0-omega 已完成(新增 cacr_budget_parse / checkpoint_deserialize / config_section_parse,委托 Linux CI 执行)
 
 - [x] **Task V-11: Phase V 验证与归档 + 最终交付**(8h,质量验证 + 文档同步 agent) — 已完成 2026-07-09
   - [x] SubTask V-11.1: `cargo test --workspace` 退出码 0(3228 passed / 0 failed / 55 ignored)

@@ -5,6 +5,139 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.2.0 开发中 — 第二阶段开发:延后优化与测试覆盖补齐
+
+### Task 4: E1 chimera-cli OnceCell 懒加载(2026-07-09)
+
+**日期**:2026-07-09
+
+**新增 `LazyConfig` 懒加载容器**:
+- **`LazySection<T>` 辅助类型**(`crates/chimera-cli/src/config.rs`):封装 `std::sync::OnceLock<Result<T, String>>` + "首次解析、后续缓存"模式,使 14 个 getter 各缩为一行;错误也缓存(配置格式错误不因重试自愈)
+- **`LazyConfig` 容器**:持有 `Figment` provider + 14 个 `LazySection<SectionType>` 字段;`new()` 只构建 provider 链不 extract,各 getter 首次调用时通过 `Figment::extract_inner` 按路径反序列化对应 section
+- **14 section getter**:`nexus()` / `quest()` / `thinking_toggle()` / `repo_wiki()` / `model_router()` / `osa()` / `kvbsr()` / `pvl()` / `mtpe()` / `gqep()` / `seccore()` / `mcp()` / `evolution()` / `monitoring()`
+- **`to_chimera_config()` 聚合方法**:用于需要完整配置的场景(如 `aether config dump`)
+- **向后兼容**:`config::load` / `config::default_config` / `ChimeraConfig::default` 等既有 API 签名与行为不变
+
+**测试覆盖**(22 新增测试):
+- 5 核心测试(向后兼容 / 懒加载隔离性错误探针 / `std::ptr::eq` 缓存命中 / 14 section 全覆盖 / to_chimera_config 聚合)
+- 17 等价性测试(3 核心 + 14 section 逐个 JSON 字符串比对 lazy vs eager)
+
+**验证结果**:
+- `cargo test -p chimera-cli` exit 0,**41 passed / 0 failed**
+- `cargo clippy -p chimera-cli --all-targets -- -D warnings` exit 0,零警告
+- `cargo fmt -p chimera-cli -- --check` exit 0,零 diff
+
+**关键设计决策**:
+1. **`std::sync::OnceLock` 而非 `once_cell` crate**:Rust 1.70+ 标准库,零新增依赖,无 unsafe
+2. **错误缓存(`Result<T, String>`)**:配置格式错误不因重试自愈,缓存错误保证"懒加载只算一次"语义
+3. **`Figment::extract_inner` 按 section 提取**:实现真正 section 级惰性求值,未访问 section 零解析开销
+4. **`LazySection<T>` 辅助类型**:统一 fallible 初始化模式,14 getter 各缩为一行(14 行 vs 70 行样板)
+5. **JSON 字符串比对替代 `PartialEq`**:14 section 类型未派生 `PartialEq`(nexus-core 核心类型,RC 阶段不修改)
+
+**关联文档**:`docs/optimization/v1.2.0/task4_oncecell_verification_report.md`
+
+### Task 3: I1 model-router MoE 稀疏门控(2026-07-09)
+
+**日期**:2026-07-09
+
+**新增 MoE 稀疏门控**:
+- **`MoeGate` 类型**(`crates/model-router/src/moe.rs`):不可变值类型(`Copy`),持有 `threshold`(默认 50)+ `top_k`(默认 5),既是配置载体也是门控执行者(`gate()` 方法)
+- **轻量级门控评分**:倒数形式 `1/(1+x)`,无需全局 max 归一化,单遍 O(n) 评分;权重 0.4/0.4/0.2 与 `route_auto` 完整评分一致,保证粗筛排序近似
+- **Top-K 选取**:`select_nth_unstable_by`(O(n) partition)替代 `sort_by`(O(n log n)),将完整评估工作量从 O(n) 降至 O(k)=O(5)
+- **阈值退化**:模型数 < 50 时自动退化为全量评估,行为与未启用 MoE 时完全一致(向后兼容)
+- **公开 API**:`route_auto_with_gate(&registry, &req, &gate)` 新增;`route_auto` 内部委托默认 `MoeGate::default()`,签名不变
+
+**测试覆盖**(123 passed / 0 failed):
+- 13 单元测试(默认值 / clamp / should_sparsify / effective_k / gate_score 三维 / 退化 / Top-K 激活 / 降序 / 召回)
+- 8 集成测试(50/100/200 模型 Top-K / 阈值退化 / 自定义 top_k / 召回 / 向后兼容)
+- 2 proptest 各 256 cases(稀疏性不变量 + 退化不变量)
+- 1 bench 对比 `full_O(n)` vs `moe_O(k)` 在 50/100/200 规模延迟
+
+**验证结果**:
+- `cargo test -p model-router` exit 0,**123 passed / 0 failed**
+- `cargo clippy -p model-router --all-targets -- -D warnings` exit 0,零警告
+- `cargo fmt -p model-router -- --check` exit 0,零 diff
+- `cargo bench -p model-router --bench moe_bench --no-run` exit 0,编译通过
+
+**关键设计决策**:
+1. **门控评分用倒数而非 CLV cosine**:`model-router` 是 L1 Core,无 CLV 模型特征向量;改用 cost/latency/quality 倒数评分,维度与完整评分一致
+2. **移除 `MoeGateConfig` 包装**:2 字段结构体过度设计,统一为两参数 `new(threshold, top_k)`
+3. **阈值选 50**:默认 3 模型 + 安全余量;50 以下全量评估微秒级,优化收益不足
+4. **退化模式不排序**:保持与历史全量评估行为完全一致(由调用方排序)
+
+**关联文档**:`docs/optimization/v1.2.0/task3_moe_verification_report.md`
+
+### Task 2: N15 repo-wiki FTS5 全文索引(2026-07-09)
+
+**日期**:2026-07-09
+
+**新增 FTS5 全文索引模块**:
+- **`FtsCapability` 枚举**(`crates/repo-wiki/src/fts.rs`):`Available` / `Unavailable`,运行时检测 FTS5 可用性,`Copy` 语义
+- **FTS5 虚拟表**:`entries_fts(entry_id UNINDEXED, title, content, tokenize='unicode61')`,standalone 模式(自存文本副本,同步逻辑清晰)
+- **索引同步**:`sync_fts_insert`(DELETE+INSERT 保证 UPSERT 幂等) / `sync_fts_delete`;insert 时自动同步 FTS5 索引
+- **查询优先级**:`search_fulltext` 优先 FTS5 `MATCH`(O(log n) 倒排索引),失败或空结果降级 `LIKE`(O(n) 全表扫描)
+- **查询安全化**:`sanitize_fts5_query` 将每个 token 包裹为 `"token"` phrase,防止特殊字符触发 MATCH 语法错误
+- **初始化回填**:`init_fts_table` 创建虚拟表后用 `NOT IN` 增量回填已有数据(适用于已有库首次启用 FTS5)
+
+**CJK 空结果降级修复**:
+- FTS5 `unicode61` tokenizer 将连续 CJK 字符视为单个 token,导致中文子串检索(如 "分析" 搜索 "性能分析报告")无法 MATCH 命中
+- 修复:`search_fulltext` 在 FTS5 返回空结果时降级到 LIKE,保证 CJK 子串检索召回率
+- 不影响 FTS5 在英文/分词文本上的性能优势
+
+**测试覆盖**(14 FTS5-specific 测试):
+- 8 单元测试(sanitize 变体 6 + capability 2)
+- 6 集成测试(召回 / 降级 / 索引同步 / capability 检测 / UPSERT 幂等 / 查询安全化)
+
+**验证结果**:
+- `cargo test -p repo-wiki` exit 0,**35 passed / 0 failed**(6 fts_test + 12 iscm + 1 proptest + 14 store + 2 doctest)
+- `cargo clippy -p repo-wiki --all-targets -- -D warnings` exit 0,零警告(修复 2 处 doc_lazy_continuation)
+- `cargo fmt -p repo-wiki -- --check` exit 0,零 diff
+- `cargo bench -p repo-wiki --bench fts_bench --no-run` exit 0,编译通过
+
+**关键设计决策**:
+1. **standalone 而非 external content**:external content 需触发器同步,DELETE 语义在 UPSERT 场景易出错;standalone 同步逻辑清晰可控
+2. **运行时检测而非编译时假设**:`libsqlite3-sys 0.30.1` bundled 默认启用 FTS5,但运行时检测保留(跨平台/schema 损坏/磁盘权限)
+3. **entry_id UNINDEXED**:仅用于 JOIN/DELETE,不进倒排索引,节省体积
+4. **CJK 空结果降级**:FTS5 返回 0 结果时降级 LIKE,保证中文子串检索召回率
+5. **降级不报错**:FTS5 是性能优化非功能前提,降级时仅记 warning
+
+**关联文档**:`docs/optimization/v1.2.0/task2_fts5_verification_report.md`
+
+### Task 1: V-10 测试覆盖补齐(2026-07-09)
+
+**日期**:2026-07-09
+
+**新增测试基础设施**:
+- **5 crate criterion benches**(SubTask 1.1):event-bus / acb-governor / decay-engine / qeep-protocol / auto-dpo,每个含延迟 + 吞吐量双维度,`Throughput::Elements` 报告 events/sec
+- **5 crate proptest**(SubTask 1.2):acb-governor 3 invariants × 64 cases(级别递增 / 预算不超限 / degrade/upgrade 单调)+ model-router 1 × 32(CACR 预算一致性)+ repo-wiki 1 × 32(KNN 返回最近 k 个)+ sesa-router 2 × 32(稀疏比 + 裁剪约束)+ gea-activator 1 × 32(激活幂等性)
+- **3 crate doctest 补齐**(SubTask 1.3):qeep-protocol / decay-engine / chimera-cli 模块级 `# 快速示例` 代码块
+- **fuzz 3→6 target**(SubTask 1.4):新增 cacr_budget_parse / checkpoint_deserialize / config_section_parse,`fuzz/Cargo.toml` 含 6 个 `[[bin]]`,Rust 源码静态验证通过(C++ 编译失败为预存平台限制 §10.3,委托 Linux CI)
+
+**预存 bug 修复**(SubTask 1.5 验证阶段发现):
+- `crates/gqep-executor/tests/gatherer_test.rs` L130:`async` block 缺 `move` 关键字导致 E0597(`i` does not live long enough),Phase V V-3 测试遗漏。修复为 `Box::pin(async move { ... })`,1 行改动 + 1 行注释。
+
+**验证结果**:
+- `cargo fmt --all -- --check` exit 0,零 diff
+- `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` exit 0,零警告(`RUST_MIN_STACK=33554432` + `CARGO_INCREMENTAL=0`)
+- `cargo test --workspace --jobs 1` exit 0,**3339 passed / 0 failed / 56 ignored**(增量 +111 passed / +1 ignored,从 Phase V 基线 3228 → 3339)
+- 测试总数 3339 ≥ 期望门槛 3248,超出 91
+
+**关键设计教训**:
+1. **proptest async 模式**:gea-activator `activate()` 是 async,proptest 宏内无法直接 `.await`,用 `tokio::runtime::Builder::new_current_timestamp()` + `block_on()` 包裹
+2. **proptest 借用错误**:repo-wiki proptest 中 `String` 不实现 `Copy`,需用 `&actual.0` 引用比较而非值比较(E0507)
+3. **fuzz target 选择**:原计划 `moe_gate_compute` 但 MoE 模块未实现,改用 `config_section_parse` 模糊测试 ChimeraConfig 解析
+4. **fuzz C++ 平台限制**:libfuzzer-sys 的 FuzzerExtFunctionsWindows.cpp 仅适配 MSVC,MinGW 无法编译,影响全部 6 个 target(非新增代码问题),委托 Linux CI
+5. **bench 设计**:每个 bench 需 2 个维度(延迟 + 吞吐量),延迟用单次操作,吞吐量用并发/批量
+6. **doctest 调研**:34 crate 全部已启用 `#![warn(missing_docs)]`,公开 API 均有 `///` 文档;模块级 `# 快速示例` 是 doctest 的主要载体
+
+**关联文档**:`docs/optimization/v1.2.0/task1_test_coverage_report.md`
+
+### Task 0: 脱敏化处理与安全提交(2026-07-09)
+
+详见 `docs/optimization/v1.2.0/task0_desensitization_report.md`。Phase V commit 7024b03 涉及的 26 个修改文件扫描,凭据/密钥全部假阳性(YAML 配置示例 / token 预算管理领域术语 / 测试占位符),个人路径为 memory 系统引用(非凭据),无安全风险。
+
+---
+
 ## v1.1.0 开发中 — F2: rusqlite 依赖从 nexus-core 下沉(2026-07-08)
 
 ### Phase I: Critical 安全修复与基线稳定化(2026-07-09)

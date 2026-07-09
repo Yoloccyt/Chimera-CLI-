@@ -20,3 +20,9 @@ prometheus-client = { workspace = true }
 tokio = { workspace = true }
 # tracing-test:捕获 tracing 日志,验证 Critical 事件无订阅者时的 warn 日志(SubTask 17.2)
 tracing-test = { workspace = true }
+# criterion:性能基准测试框架(§7.1 测试矩阵约定)
+criterion = { workspace = true }
+
+[[bench]]
+name = "bus_bench"
+harness = false

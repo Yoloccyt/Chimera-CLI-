@@ -16,6 +16,7 @@ impl WikiConfig {
             vector_dim: 512,
             wal_enabled: true,
             read_pool_size: 2,
+            fts_enabled: true,
         }
     }
 
@@ -34,6 +35,14 @@ impl WikiConfig {
     /// 设置只读连接池大小(builder 风格)
     pub fn read_pool_size(mut self, size: usize) -> Self {
         self.read_pool_size = size;
+        self
+    }
+
+    /// 设置 FTS5 全文索引启用状态(builder 风格)
+    ///
+    /// 设为 false 可禁用 FTS5,强制 `search_fulltext` 走 LIKE 降级路径。
+    pub fn fts_enabled(mut self, enabled: bool) -> Self {
+        self.fts_enabled = enabled;
         self
     }
 }

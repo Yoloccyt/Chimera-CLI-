@@ -41,6 +41,7 @@
 pub mod cacr;
 pub mod config;
 pub mod error;
+pub mod moe;
 pub mod registry;
 pub mod router;
 pub mod strategies;
@@ -50,6 +51,7 @@ pub mod types;
 pub use cacr::{CacrConfig, CacrDecision, CacrGuard};
 pub use config::RouterConfig;
 pub use error::RouterError;
+pub use moe::MoeGate;
 pub use registry::ModelRegistry;
 pub use router::ModelRouter;
 pub use types::{ModelInfo, RoutingDecision, RoutingRequest, RoutingStrategy};
@@ -59,6 +61,7 @@ pub mod prelude {
     pub use crate::cacr::{CacrConfig, CacrDecision, CacrGuard};
     pub use crate::config::RouterConfig;
     pub use crate::error::RouterError;
+    pub use crate::moe::MoeGate;
     pub use crate::registry::ModelRegistry;
     pub use crate::router::ModelRouter;
     pub use crate::types::{ModelInfo, RoutingDecision, RoutingRequest, RoutingStrategy};

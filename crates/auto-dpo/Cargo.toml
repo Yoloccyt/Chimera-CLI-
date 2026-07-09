@@ -14,3 +14,9 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# criterion:性能基准测试框架(§7.1 测试矩阵约定)
+criterion = { workspace = true }
+
+[[bench]]
+name = "dpo_bench"
+harness = false

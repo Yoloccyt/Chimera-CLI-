@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::cacr::CacrConfig;
 use crate::types::{ModelInfo, RoutingStrategy};
 
-/// 路由器配置 — 持有模型列表、默认路由策略与 CACR 成本保护配置
+/// 路由器配置 — 持有模型列表、默认路由策略、CACR 成本保护与 MoE 门控配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouterConfig {
     /// 已注册模型列表
@@ -20,6 +20,28 @@ pub struct RouterConfig {
     /// 序列化时随 RouterConfig 一起持久化,部署时可通过配置文件调整阈值。
     #[serde(default)]
     pub cacr: CacrConfig,
+    /// MoE 稀疏门控触发阈值 — 模型数 < 此值时退化为全量评估(默认 50)
+    ///
+    /// WHY `#[serde(default)]`:旧配置文件无此字段时使用默认值 50,
+    /// 保证向后兼容(与 cacr 字段一致的渐进式设计)。
+    #[serde(default = "default_moe_threshold")]
+    pub moe_threshold: usize,
+    /// MoE Top-K 激活数量 — 门控后保留的候选数(默认 5)
+    ///
+    /// WHY top_k=5:在保证召回真正 Top-1 的前提下尽量减少完整评估工作量。
+    /// 详见 `moe.rs` 模块文档。
+    #[serde(default = "default_moe_top_k")]
+    pub moe_top_k: usize,
+}
+
+/// `moe_threshold` 的 serde 默认值函数(与 `MoeGate::default` 保持一致)
+fn default_moe_threshold() -> usize {
+    50
+}
+
+/// `moe_top_k` 的 serde 默认值函数(与 `MoeGate::default` 保持一致)
+fn default_moe_top_k() -> usize {
+    5
 }
 
 impl Default for RouterConfig {
@@ -31,6 +53,7 @@ impl Default for RouterConfig {
     /// - premium-model:Anthropic 旗舰模型,延迟较高,质量最佳
     ///
     /// CACR 配置使用 `CacrConfig::default()`(10000 美元预算,0.8/1.0 阈值)。
+    /// MoE 配置使用默认值(threshold=50, top_k=5,3 模型走退化路径)。
     fn default() -> Self {
         Self {
             models: vec![
@@ -61,6 +84,8 @@ impl Default for RouterConfig {
             ],
             default_strategy: RoutingStrategy::Auto,
             cacr: CacrConfig::default(),
+            moe_threshold: 50,
+            moe_top_k: 5,
         }
     }
 }
@@ -129,5 +154,37 @@ mod tests {
         assert_eq!(de.default_strategy, RoutingStrategy::Lite);
         // cacr 字段缺失时使用默认值
         assert_eq!(de.cacr.budget_limit, 1_000_000);
+    }
+
+    #[test]
+    fn test_default_config_has_moe_defaults() {
+        let config = RouterConfig::default();
+        assert_eq!(config.moe_threshold, 50);
+        assert_eq!(config.moe_top_k, 5);
+    }
+
+    #[test]
+    fn test_config_serde_preserves_moe() {
+        let config = RouterConfig {
+            moe_threshold: 100,
+            moe_top_k: 3,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let de: RouterConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.moe_threshold, 100);
+        assert_eq!(de.moe_top_k, 3);
+    }
+
+    #[test]
+    fn test_config_serde_backward_compatible_without_moe() {
+        // WHY:旧配置文件可能没有 moe 字段,#[serde(default)] 保证向后兼容
+        let json = r#"{
+            "models": [],
+            "default_strategy": "Lite"
+        }"#;
+        let de: RouterConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(de.moe_threshold, 50);
+        assert_eq!(de.moe_top_k, 5);
     }
 }

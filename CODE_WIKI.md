@@ -33,6 +33,7 @@
 - **状态**:Week 8 验收通过 — 性能调优 + 安全测试 + 跨平台发布 + 文档完善全部达标
 - **总测试数**:~3,002 个(Week 1-8 累计;Week 1-6: 2378 + Week 7: 338 + Week 8: 286)
 - **v1.1.0 进展**:F2(rusqlite 下沉)已完成 — `nexus-core` 删除 `rusqlite` 依赖,改用 L1 `PragmaCapable` trait 抽象(ADR-006 方案 E,2026-07-08)
+- **v1.2.0 进展**:4 项延后优化任务全部完成(2026-07-09)— V-10 测试覆盖补齐(5 crate benches + 5 proptest + 3 doctest + fuzz 3→6 target,3339 → +111 passed)、N15 repo-wiki FTS5 全文索引(FtsCapability 运行时检测 + standalone 虚拟表 + CJK 空结果降级 LIKE)、I1 model-router MoE 稀疏门控(倒数评分 1/(1+x) + select_nth_unstable_by Top-K + 50 阈值退化)、E1 chimera-cli OnceCell 懒加载(std::sync::OnceLock + LazySection<T> + Figment::extract_inner section 级懒加载,14 getter)
 
 ### 1.4 第二阶段主要参考资料
 

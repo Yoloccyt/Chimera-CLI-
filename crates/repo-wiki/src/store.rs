@@ -41,6 +41,7 @@ use tokio::task::spawn_blocking;
 use uuid::Uuid;
 
 use crate::error::WikiError;
+use crate::fts::{self, FtsCapability};
 use crate::iscm::{IscmAnchor, Layer};
 use crate::types::{WikiConfig, WikiEntry};
 
@@ -87,6 +88,13 @@ pub struct WikiStore {
     next_reader: AtomicUsize,
     /// 存储配置(运行时只读)
     config: WikiConfig,
+    /// FTS5 全文索引可用性(运行时检测,决定 search_fulltext 查询路径)
+    ///
+    /// WHY:open 时检测一次,后续查询据此选择 MATCH 或 LIKE 路径。
+    /// `Copy` 语义,clone 时复制;运行时不变。检测一次避免每次查询重复
+    /// 探测虚拟表开销。若运行中 FTS5 表被外部删除,`search_fulltext` 的
+    /// FTS5 路径会失败并降级 LIKE(运行时容错)。
+    fts_capability: FtsCapability,
 }
 
 impl Clone for WikiStore {
@@ -97,6 +105,7 @@ impl Clone for WikiStore {
             read_conns: Arc::clone(&self.read_conns),
             next_reader: AtomicUsize::new(self.next_reader.load(Ordering::Relaxed)),
             config: self.config.clone(),
+            fts_capability: self.fts_capability,
         }
     }
 }
@@ -165,8 +174,18 @@ impl WikiStore {
 
         init_schema(&writer_conn)?;
 
+        // 检测 FTS5 可用性并初始化虚拟表(若配置启用)。
+        // WHY:FTS5 通过 .cargo/config.toml [env] SQLITE_ENABLE_FTS5 = "1"
+        // 在 bundled SQLite 编译时启用。此处运行时检测保证跨平台/非 bundled
+        // 场景降级到 LIKE 而非硬失败。config.fts_enabled = false 可强制禁用。
+        let fts_capability = if config.fts_enabled {
+            fts::init_fts_table(&writer_conn)
+        } else {
+            FtsCapability::Unavailable
+        };
+
         let (tx, rx) = mpsc::channel();
-        let handle = std::thread::spawn(move || run_writer(writer_conn, rx));
+        let handle = std::thread::spawn(move || run_writer(writer_conn, rx, fts_capability));
 
         // 读连接池大小至少为 1,避免除零;默认 2 以体现并发优势。
         let pool_size = config.read_pool_size.max(1);
@@ -189,12 +208,22 @@ impl WikiStore {
             read_conns: Arc::new(read_conns),
             next_reader: AtomicUsize::new(0),
             config,
+            fts_capability,
         })
     }
 
     /// 返回配置的引用
     pub fn config(&self) -> &WikiConfig {
         &self.config
+    }
+
+    /// 返回 FTS5 可用性状态 — open 时检测一次的结果。
+    ///
+    /// 调用方可据此感知底层全文检索引擎:Available 走 FTS5 MATCH(O(log n)),
+    /// Unavailable 走 LIKE(O(n) 全表扫描)。通常无需调用方关心,`search_fulltext`
+    /// 已内部处理降级;此方法仅供监控/测试/上层决策感知。
+    pub fn fts_capability(&self) -> FtsCapability {
+        self.fts_capability
     }
 
     /// 异步查询当前 journal_mode(用于验证 WAL 是否启用)
@@ -270,23 +299,42 @@ impl WikiStore {
         .await
     }
 
-    /// 异步全文模糊匹配(LIKE)— 在 title 与 content 中搜索
+    /// 异步全文检索 — 优先 FTS5 MATCH,不可用或失败时降级到 LIKE。
     ///
-    /// 大小写不敏感(SQLite LIKE 默认对 ASCII 不敏感)。
+    /// # 引擎选择
+    /// - FTS5 Available:走 `MATCH` 查询,O(log n) 倒排索引,按相关度排序
+    /// - FTS5 Unavailable 或 query 触发 FTS5 语法错误:降级 LIKE,O(n) 全表扫描,
+    ///   记 warning 日志。大小写不敏感(SQLite LIKE 默认对 ASCII 不敏感)。
+    ///
+    /// # WHY 降级而非硬失败
+    /// FTS5 的 MATCH 对特殊字符(如不平衡引号)会报语法错误。直接返回 Err 会
+    /// 暴露底层引擎细节给调用方。降级到 LIKE 保证:即使 query 无法用 FTS5 表达,
+    /// 仍能通过子串匹配召回结果(语义降级,功能不丢失)。
     pub async fn search_fulltext(&self, query: String) -> Result<Vec<WikiEntry>, WikiError> {
+        let capability = self.fts_capability;
         self.with_read_conn(move |conn| {
-            let pattern = format!("%{query}%");
-            let mut stmt = conn.prepare(
-                "SELECT entry_id, title, content, tags, embedding, created_at, updated_at
-                 FROM entries
-                 WHERE title LIKE ?1 OR content LIKE ?1;",
-            )?;
-            let rows = stmt.query_map(params![pattern], row_to_entry)?;
-            let mut entries = Vec::new();
-            for row in rows {
-                entries.push(row?);
+            if capability.is_available() {
+                match fts::search_fts(conn, &query) {
+                    Ok(entries) if !entries.is_empty() => return Ok(entries),
+                    Ok(_) => {
+                        // WHY 空结果降级:FTS5 unicode61 tokenizer 将连续 CJK 字符
+                        // 视为单个 token,导致中文子串检索无法 MATCH 命中
+                        // (如 "分析" 不匹配 "性能分析报告" 这一整体 token)。
+                        // LIKE 的 %query% 子串匹配能正确召回此类结果。
+                        // 降级不影响 FTS5 在英文/分词文本上的性能优势。
+                    }
+                    Err(e) => {
+                        // FTS5 查询失败(常见于 query 含 FTS5 非法语法,如不平衡引号),
+                        // 降级到 LIKE,记录 warning 便于排查降级频率。
+                        tracing::warn!(
+                            error = %e,
+                            query = %query,
+                            "FTS5 search failed, falling back to LIKE"
+                        );
+                    }
+                }
             }
-            Ok(entries)
+            fts::search_like(conn, &query)
         })
         .await
     }
@@ -477,14 +525,17 @@ fn init_schema(conn: &Connection) -> Result<(), WikiError> {
 }
 
 /// 写入线程主循环 — 持有单一 `Connection` 串行执行写操作
-fn run_writer(conn: Connection, rx: mpsc::Receiver<WriteOp>) {
+///
+/// `fts` 为 FTS5 可用性状态,用于决定 insert/delete 时是否同步 FTS5 索引。
+/// `Copy` 语义,每次循环复制无需担心所有权。
+fn run_writer(conn: Connection, rx: mpsc::Receiver<WriteOp>, fts: FtsCapability) {
     while let Ok(op) = rx.recv() {
         match op {
             WriteOp::Insert(entry, respond) => {
-                let _ = respond.send(writer_insert(&conn, entry));
+                let _ = respond.send(writer_insert(&conn, entry, fts));
             }
             WriteOp::Delete(entry_id, respond) => {
-                let _ = respond.send(writer_delete(&conn, entry_id));
+                let _ = respond.send(writer_delete(&conn, entry_id, fts));
             }
             WriteOp::CreateAnchor { anchor, respond } => {
                 let _ = respond.send(writer_create_anchor(&conn, anchor));
@@ -500,7 +551,10 @@ fn run_writer(conn: Connection, rx: mpsc::Receiver<WriteOp>) {
 }
 
 /// 写入线程:执行 insert
-fn writer_insert(conn: &Connection, entry: WikiEntry) -> Result<(), WikiError> {
+///
+/// `fts` 决定是否同步 FTS5 索引。FTS5 可用时,entries 写入成功后调用
+/// `sync_fts_insert` 同步索引(先删后插,保证 UPSERT 不产生重复行)。
+fn writer_insert(conn: &Connection, entry: WikiEntry, fts: FtsCapability) -> Result<(), WikiError> {
     let tags_json = serde_json::to_string(&entry.tags)?;
     let embedding_blob = embedding_to_blob(&entry.embedding);
     let created_iso = entry.created_at.to_rfc3339();
@@ -520,11 +574,19 @@ fn writer_insert(conn: &Connection, entry: WikiEntry) -> Result<(), WikiError> {
             updated_iso,
         ],
     )?;
+
+    // FTS5 可用时同步索引(先删后插,保证 UPSERT 不产生重复行)
+    if fts.is_available() {
+        fts::sync_fts_insert(conn, &entry)?;
+    }
     Ok(())
 }
 
 /// 写入线程:执行 delete 并联动标记悬空锚点
-fn writer_delete(conn: &Connection, entry_id: String) -> Result<(), WikiError> {
+///
+/// `fts` 决定是否同步删除 FTS5 索引。FTS5 可用时,entries 删除后调用
+/// `sync_fts_delete` 同步清除索引,保持索引与数据一致。
+fn writer_delete(conn: &Connection, entry_id: String, fts: FtsCapability) -> Result<(), WikiError> {
     conn.execute(
         "DELETE FROM entries WHERE entry_id = ?1;",
         params![entry_id],
@@ -535,6 +597,11 @@ fn writer_delete(conn: &Connection, entry_id: String) -> Result<(), WikiError> {
         "UPDATE anchors SET is_dangling = 1, updated_at = ?1 WHERE entity_id = ?2;",
         params![now_iso, entry_id],
     )?;
+
+    // FTS5 可用时同步删除索引(entry_id 借用已释放,&String deref 到 &str)
+    if fts.is_available() {
+        fts::sync_fts_delete(conn, &entry_id)?;
+    }
     Ok(())
 }
 
@@ -643,7 +710,10 @@ fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {
 }
 
 /// 将 SQLite 行映射为 WikiEntry
-fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<WikiEntry> {
+///
+/// `pub(crate)` 暴露给 `fts` 模块复用(FTS5 JOIN 查询与 LIKE 查询的列顺序一致),
+/// 避免在 fts.rs 重复行映射逻辑。
+pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<WikiEntry> {
     let entry_id: String = row.get(0)?;
     let title: String = row.get(1)?;
     let content: String = row.get(2)?;
@@ -760,6 +830,7 @@ mod tests {
             vector_dim: 512,
             wal_enabled: false,
             read_pool_size: 0,
+            fts_enabled: false,
         };
         match WikiStore::open_with_config(config) {
             Err(err) => assert!(err.to_string().contains(":memory:")),

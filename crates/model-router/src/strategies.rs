@@ -12,8 +12,9 @@
 //! 单位为美分(1 美元 = 100 美分),与 `BudgetExceeded` 事件保持一致。
 
 use crate::error::RouterError;
+use crate::moe::MoeGate;
 use crate::registry::ModelRegistry;
-use crate::types::{RoutingDecision, RoutingRequest};
+use crate::types::{ModelInfo, RoutingDecision, RoutingRequest};
 
 /// 计算预估成本(美分)
 ///
@@ -81,7 +82,7 @@ pub fn route_efficient(
     })
 }
 
-/// Auto 策略:加权评分选择综合最优
+/// Auto 策略:加权评分选择综合最优(默认 MoE 门控)
 ///
 /// 评分公式:
 /// `score = 0.4 * (1 - cost_normalized) + 0.4 * (1 - latency_normalized) + 0.2 * quality_score`
@@ -90,26 +91,59 @@ pub fn route_efficient(
 /// 归一化使用 `value / max_value`,确保所有维度在 [0, 1] 范围内可比。
 /// 当 max_value 为 0(所有模型该维度相同)时,该项直接给满分 1.0,
 /// 避免除零并表达"该维度无差异,不影响选择"的语义。
+///
+/// # MoE 稀疏门控
+/// 50+ 模型时先用 `MoeGate` 轻量级评分粗筛 Top-5,再仅对 Top-5 做完整
+/// 归一化评分;模型数 < 50 时退化为全量评估(行为与未启用 MoE 一致)。
+/// 详见 [`crate::moe`] 模块文档。
+///
+/// WHY 使用默认 `MoeGate::default()`:保持 `route_auto` 签名不变(向后兼容)。
+/// 需要自定义 MoE 配置时使用 [`route_auto_with_gate`]。
 pub fn route_auto(
     registry: &ModelRegistry,
     req: &RoutingRequest,
+) -> Result<RoutingDecision, RouterError> {
+    route_auto_with_gate(registry, req, &MoeGate::default())
+}
+
+/// Auto 策略(可配置 MoE 门控)— 供 bench / 可配置场景传入自定义门控
+///
+/// WHY 独立 pub fn:`route_auto` 签名不变(向后兼容),但 bench 需要对比
+/// "全量评估"vs"MoE 门控",且未来 `ModelRouter` 可能持有 `MoeGate`。
+/// 提取完整逻辑到此函数,`route_auto` 仅作默认门控的薄封装。
+///
+/// # 行为
+/// - `gate.gate()` 返回全部模型(退化):完整评估对全部模型做归一化,
+///   行为与原 `route_auto` 完全一致
+/// - `gate.gate()` 返回 Top-K(门控):完整评估仅对 Top-K 做归一化,
+///   `candidates` 长度 = K-1(而非 n-1)
+pub fn route_auto_with_gate(
+    registry: &ModelRegistry,
+    req: &RoutingRequest,
+    gate: &MoeGate,
 ) -> Result<RoutingDecision, RouterError> {
     let models = registry.list();
     if models.is_empty() {
         return Err(RouterError::NoModelsRegistered);
     }
 
-    let max_cost = models
+    // MoE 稀疏门控:粗筛 Top-K(大规模)或退化全量(小规模)
+    // gated: 退化模式返回全部引用(原顺序),门控模式返回 Top-K 引用(评分降序)
+    let gated: Vec<&ModelInfo> = gate.gate(&models, req);
+
+    // 完整评估:仅对门控候选做归一化评分
+    // 退化模式下 gated = 全部模型,max 与历史全量评估一致
+    let max_cost = gated
         .iter()
         .map(|m| m.cost_per_1k_tokens)
         .fold(0.0_f64, f64::max);
-    let max_latency = models
+    let max_latency = gated
         .iter()
         .map(|m| m.avg_latency_ms as f64)
         .fold(0.0_f64, f64::max);
 
-    // 计算每个模型的综合评分
-    let mut scored: Vec<(f64, &crate::types::ModelInfo)> = models
+    // 计算每个候选模型的综合评分
+    let mut scored: Vec<(f64, &ModelInfo)> = gated
         .iter()
         .map(|m| {
             let cost_score = if max_cost > 0.0 {
@@ -123,17 +157,14 @@ pub fn route_auto(
                 1.0
             };
             let score = 0.4 * cost_score + 0.4 * latency_score + 0.2 * m.quality_score as f64;
-            (score, m)
+            (score, *m)
         })
         .collect();
 
     // 评分降序比较器:评分高者优先,相同则 model_id 升序(保证确定性)
     // WHY 嵌套 fn:item 天生 Copy,可同时传递给 select_nth_unstable_by 和 sort_by,
     // 避免闭包 move 后无法复用的问题。
-    fn cmp_score_desc(
-        a: &(f64, &crate::types::ModelInfo),
-        b: &(f64, &crate::types::ModelInfo),
-    ) -> std::cmp::Ordering {
+    fn cmp_score_desc(a: &(f64, &ModelInfo), b: &(f64, &ModelInfo)) -> std::cmp::Ordering {
         b.0.partial_cmp(&a.0)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.1.model_id.cmp(&b.1.model_id))
@@ -152,9 +183,9 @@ pub fn route_auto(
 
     // 候选列表需按策略优先级降序(RoutingDecision.candidates 文档契约:
     // types.rs "按策略优先级降序排序"),对 [1..] 排序保证有序。
-    // 复杂度 O((n-1) log (n-1)) < O(n log n) 全排序。
+    // 复杂度 O((k-1) log (k-1))(门控模式)或 O((n-1) log (n-1))(退化模式)。
     scored[1..].sort_by(cmp_score_desc);
-    let candidates: Vec<String> = scored[1..]
+    let candidate_ids: Vec<String> = scored[1..]
         .iter()
         .map(|(_, m)| m.model_id.clone())
         .collect();
@@ -178,7 +209,7 @@ pub fn route_auto(
             selected.quality_score
         ),
         estimated_cost,
-        candidates,
+        candidates: candidate_ids,
     })
 }
 
