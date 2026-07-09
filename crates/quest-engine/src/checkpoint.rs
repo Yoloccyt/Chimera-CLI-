@@ -12,8 +12,9 @@
 //!   防止磁盘位翻转或人为篡改导致状态漂移
 //! - **保留策略**:最近 N 个检查点(默认 5),超出删除最旧
 //!   避免磁盘膨胀,同时保留足够回滚点供恢复
-//! - **同步 I/O**:Week 2 阶段检查点操作不频繁(每 N 个 Task 一次),
-//!   简单同步 I/O 即可;后续若成瓶颈可改 spawn_blocking
+//! - **异步 I/O**:所有磁盘操作通过 `tokio::task::spawn_blocking` 封装,
+//!   避免阻塞 tokio worker 线程(A1 优化:save/load 可能涉及多次文件 I/O +
+//!   MessagePack 序列化 + SHA-256 校验,累计可达数十毫秒)
 //!
 //! # 架构红线
 //! - 单函数 ≤ 200 行
@@ -60,7 +61,10 @@ impl CheckpointManager {
         }
     }
 
-    /// 保存检查点 — 序列化 Quest 为 MessagePack,写入磁盘
+    /// 保存检查点 — 序列化 Quest 为 MessagePack,写入磁盘(异步)
+    ///
+    /// 内部通过 `spawn_blocking` 将磁盘 I/O + MessagePack 序列化 + SHA-256 校验
+    /// 放到阻塞线程池执行,避免阻塞 tokio worker 线程。
     ///
     /// 流程:
     /// 1. 生成 checkpoint_id(UUIDv7,时间有序,便于排序与因果追踪)
@@ -68,18 +72,14 @@ impl CheckpointManager {
     /// 3. 计算 SHA-256 哈希(用于恢复时完整性校验)
     /// 4. 创建 Checkpoint 实例并整体序列化为 MessagePack 写入磁盘
     /// 5. 调用 prune_old 清理超出 max_keep 的旧检查点
-    pub fn save(&self, quest: &Quest) -> Result<Checkpoint, QuestError> {
-        // 1. 生成 checkpoint_id(UUIDv7 时间有序,load_latest 可借此排序)
+    pub async fn save(&self, quest: &Quest) -> Result<Checkpoint, QuestError> {
+        // UUIDv7 生成是 CPU-only 操作,在 async 上下文中完成
         let checkpoint_id = format!("cp-{}", Uuid::now_v7());
-
-        // 2. 序列化 Quest 为 MessagePack(ADR-004)
+        // Quest 序列化也是纯 CPU,提前完成(避免 clone Quest 到 spawn_blocking)
         let serialized_state = rmp_serde::to_vec(quest)
             .map_err(|e| QuestError::SerializationError(format!("msgpack encode: {e}")))?;
-
-        // 3. 计算 SHA-256 哈希(完整性校验锚点)
         let memory_snapshot_hash = compute_sha256_hex(&serialized_state);
 
-        // 4. 创建 Checkpoint 实例(created_at 自动设为当前 UTC)
         let checkpoint = Checkpoint::new(
             quest.quest_id.clone(),
             checkpoint_id,
@@ -87,65 +87,143 @@ impl CheckpointManager {
             serialized_state,
         );
 
-        // 5. 写入磁盘:整体序列化 Checkpoint 为 MessagePack
-        let file_path = self.checkpoint_path(&checkpoint.quest_id, &checkpoint.checkpoint_id);
+        // 阻塞操作:创建目录 + 写文件 + prune_old 移到 spawn_blocking
+        let dir = self.checkpoint_dir.clone();
+        let max_keep = self.max_keep;
+
+        tokio::task::spawn_blocking(move || Self::save_blocking(checkpoint, &dir, max_keep))
+            .await
+            .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
+    }
+
+    /// 检查点保存的阻塞部分 — 磁盘写入 + 旧检查点清理
+    ///
+    /// WHY 独立静态函数:spawn_blocking 要求闭包 Send + 'static,
+    /// 将所需参数显式传入,避免捕获 `&self` 引发借用冲突。
+    fn save_blocking(
+        checkpoint: Checkpoint,
+        checkpoint_dir: &Path,
+        max_keep: usize,
+    ) -> Result<Checkpoint, QuestError> {
+        let quest_id = checkpoint.quest_id.clone();
+        let checkpoint_id_str = checkpoint.checkpoint_id.clone();
+
+        // 构造文件路径
+        let file_path = checkpoint_dir
+            .join(&quest_id)
+            .join(format!("{checkpoint_id_str}.bin"));
+
         if let Some(parent) = file_path.parent() {
-            // 递归创建目录(已存在则忽略错误)
             fs::create_dir_all(parent).map_err(|e| {
                 QuestError::CheckpointSaveFailed(format!("mkdir {}: {e}", parent.display()))
             })?;
         }
+
+        // 序列化 Checkpoint 为 MessagePack 并写入磁盘
         let bytes = rmp_serde::to_vec(&checkpoint)
             .map_err(|e| QuestError::SerializationError(format!("msgpack encode cp: {e}")))?;
         fs::write(&file_path, bytes).map_err(|e| {
             QuestError::CheckpointSaveFailed(format!("write {}: {e}", file_path.display()))
         })?;
 
-        // 6. 清理超出 max_keep 的旧检查点(失败不阻断保存,仅记录)
-        if let Err(e) = self.prune_old(&checkpoint.quest_id, self.max_keep) {
+        // 清理超出 max_keep 的旧检查点(失败不阻断保存,仅记录)
+        if let Err(e) = Self::prune_old_blocking(&quest_id, checkpoint_dir, max_keep) {
             tracing::warn!(
-                quest_id = %checkpoint.quest_id,
+                quest_id = %quest_id,
                 error = %e,
                 "prune_old 失败,旧检查点未清理(不影响本次保存)"
             );
         }
 
         tracing::debug!(
-            quest_id = %checkpoint.quest_id,
-            checkpoint_id = %checkpoint.checkpoint_id,
+            quest_id = %quest_id,
+            checkpoint_id = %checkpoint_id_str,
             file = %file_path.display(),
             "检查点已保存"
         );
         Ok(checkpoint)
     }
 
-    /// 加载指定检查点 — 读取磁盘并校验完整性
-    pub fn load(&self, quest_id: &str, checkpoint_id: &str) -> Result<Checkpoint, QuestError> {
+    /// 加载指定检查点 — 读取磁盘并校验完整性(异步)
+    ///
+    /// 内部通过 `spawn_blocking` 将磁盘读取 + MessagePack 反序列化 + SHA-256 校验
+    /// 放到阻塞线程池执行。
+    pub async fn load(
+        &self,
+        quest_id: &str,
+        checkpoint_id: &str,
+    ) -> Result<Checkpoint, QuestError> {
         let file_path = self.checkpoint_path(quest_id, checkpoint_id);
-        let bytes = fs::read(&file_path).map_err(|e| {
+
+        tokio::task::spawn_blocking(move || Self::load_blocking(&file_path))
+            .await
+            .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
+    }
+
+    /// 检查点加载的阻塞部分 — 磁盘读取 + 反序列化 + 完整性校验
+    fn load_blocking(file_path: &Path) -> Result<Checkpoint, QuestError> {
+        let bytes = fs::read(file_path).map_err(|e| {
             QuestError::CheckpointNotFound(format!("read {}: {e}", file_path.display()))
         })?;
         let checkpoint: Checkpoint = rmp_serde::from_slice(&bytes)
             .map_err(|e| QuestError::SerializationError(format!("msgpack decode cp: {e}")))?;
         // 完整性校验(防磁盘位翻转或人为篡改)
-        self.verify_integrity(&checkpoint)?;
+        let actual_hash = compute_sha256_hex(&checkpoint.serialized_state);
+        if actual_hash != checkpoint.memory_snapshot_hash {
+            return Err(QuestError::CheckpointCorrupted);
+        }
         Ok(checkpoint)
     }
 
-    /// 加载最新检查点(按 created_at 排序)— 无检查点返回 None
+    /// 加载最新检查点(按 created_at 排序)— 无检查点返回 None(异步)
     ///
     /// WHY:崩溃恢复场景下,用户只需"最新可用检查点",无需知道具体 ID。
     /// 按 created_at 排序而非 checkpoint_id,因前者语义明确(时间),
     /// 后者虽 UUIDv7 时间有序但解析复杂。
-    pub fn load_latest(&self, quest_id: &str) -> Result<Option<Checkpoint>, QuestError> {
-        let ids = self.list_checkpoints(quest_id)?;
+    ///
+    /// 内部通过 `spawn_blocking` 将多次磁盘读取 + 完整性校验放到阻塞线程池,
+    /// 避免 load_latest 最差情况(max_keep 次文件读取)阻塞 tokio worker。
+    pub async fn load_latest(&self, quest_id: &str) -> Result<Option<Checkpoint>, QuestError> {
+        let dir = self.checkpoint_dir.join(quest_id);
+        let quest_id = quest_id.to_string();
+
+        tokio::task::spawn_blocking(move || Self::load_latest_blocking(&dir, &quest_id))
+            .await
+            .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
+    }
+
+    /// 加载最新检查点的阻塞部分 — 列出 + 逐个加载 + 排序
+    fn load_latest_blocking(
+        quest_dir: &Path,
+        quest_id: &str,
+    ) -> Result<Option<Checkpoint>, QuestError> {
+        // 列出所有 .bin 文件(等价于 list_checkpoints 的文件遍历部分)
+        if !quest_dir.exists() {
+            return Ok(None);
+        }
+        let entries = fs::read_dir(quest_dir).map_err(|e| {
+            QuestError::CheckpointSaveFailed(format!("readdir {}: {e}", quest_dir.display()))
+        })?;
+        let mut ids = Vec::new();
+        for entry in entries {
+            let entry = entry
+                .map_err(|e| QuestError::CheckpointSaveFailed(format!("readdir entry: {e}")))?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("bin") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(stem.to_string());
+                }
+            }
+        }
         if ids.is_empty() {
             return Ok(None);
         }
-        // 逐个加载并收集(失败的不阻断,跳过损坏文件)
+
+        // 逐个加载并校验(失败的跳过,不阻断)
         let mut checkpoints: Vec<Checkpoint> = Vec::with_capacity(ids.len());
-        for id in ids {
-            match self.load(quest_id, &id) {
+        for id in &ids {
+            let file_path = quest_dir.join(format!("{id}.bin"));
+            match Self::load_blocking(&file_path) {
                 Ok(cp) => checkpoints.push(cp),
                 Err(e) => {
                     tracing::warn!(
@@ -173,28 +251,65 @@ impl CheckpointManager {
         Ok(())
     }
 
-    /// 保留最近 N 个检查点,删除其余
+    /// 保留最近 N 个检查点,删除其余(异步)
     ///
     /// 按 created_at 降序排序,保留前 N 个,删除其余文件。
     /// WHY:避免磁盘膨胀,同时保留足够回滚点。
-    pub fn prune_old(&self, quest_id: &str, keep: usize) -> Result<(), QuestError> {
-        let ids = self.list_checkpoints(quest_id)?;
+    pub async fn prune_old(&self, quest_id: &str, keep: usize) -> Result<(), QuestError> {
+        let dir = self.checkpoint_dir.clone();
+        let quest_id = quest_id.to_string();
+
+        tokio::task::spawn_blocking(move || Self::prune_old_blocking(&quest_id, &dir, keep))
+            .await
+            .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
+    }
+
+    /// 检查点清理的阻塞部分 — 列出 + 加载元数据 + 删除旧文件
+    ///
+    /// WHY 独立静态函数:save_blocking 内部调用,需纯同步实现。
+    fn prune_old_blocking(
+        quest_id: &str,
+        checkpoint_dir: &Path,
+        keep: usize,
+    ) -> Result<(), QuestError> {
+        let quest_dir = checkpoint_dir.join(quest_id);
+        if !quest_dir.exists() {
+            return Ok(());
+        }
+
+        // 列出所有 .bin 文件
+        let entries = fs::read_dir(&quest_dir).map_err(|e| {
+            QuestError::CheckpointSaveFailed(format!("readdir {}: {e}", quest_dir.display()))
+        })?;
+        let mut ids = Vec::new();
+        for entry in entries {
+            let entry = entry
+                .map_err(|e| QuestError::CheckpointSaveFailed(format!("readdir entry: {e}")))?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("bin") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(stem.to_string());
+                }
+            }
+        }
+
         if ids.len() <= keep {
             return Ok(());
         }
-        // 加载所有检查点元数据(完整加载以获取 created_at)
+
+        // 逐个加载获取 created_at(使用阻塞版本,避免异步调用)
         let mut checkpoints: Vec<(String, chrono::DateTime<Utc>)> = Vec::with_capacity(ids.len());
         for id in &ids {
-            // 仅读取文件并解析 created_at,避免完整反序列化开销
-            // 简化方案:完整加载(检查点数量小,性能可接受)
-            if let Ok(cp) = self.load(quest_id, id) {
+            let file_path = quest_dir.join(format!("{id}.bin"));
+            if let Ok(cp) = Self::load_blocking(&file_path) {
                 checkpoints.push((cp.checkpoint_id, cp.created_at));
             }
         }
+
         // 按 created_at 降序,保留前 keep 个,删除其余
         checkpoints.sort_by_key(|(_, ts)| std::cmp::Reverse(*ts));
         for (id, _) in checkpoints.iter().skip(keep) {
-            let path = self.checkpoint_path(quest_id, id);
+            let path = quest_dir.join(format!("{id}.bin"));
             if let Err(e) = fs::remove_file(&path) {
                 tracing::warn!(
                     quest_id = quest_id,
@@ -307,18 +422,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_save_load_roundtrip() {
+    #[tokio::test]
+    async fn test_save_load_roundtrip() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         let quest = make_quest("q-1", 3);
 
-        let checkpoint = cm.save(&quest).unwrap();
+        let checkpoint = cm.save(&quest).await.unwrap();
         assert_eq!(checkpoint.quest_id, "q-1");
         assert!(!checkpoint.serialized_state.is_empty());
         assert!(!checkpoint.memory_snapshot_hash.is_empty());
 
-        let loaded = cm.load("q-1", &checkpoint.checkpoint_id).unwrap();
+        let loaded = cm.load("q-1", &checkpoint.checkpoint_id).await.unwrap();
         assert_eq!(loaded.quest_id, checkpoint.quest_id);
         assert_eq!(loaded.checkpoint_id, checkpoint.checkpoint_id);
         assert_eq!(loaded.memory_snapshot_hash, checkpoint.memory_snapshot_hash);
@@ -331,26 +446,26 @@ mod tests {
         assert_eq!(restored_quest.thinking_mode, quest.thinking_mode);
     }
 
-    #[test]
-    fn test_verify_integrity_corrupted() {
+    #[tokio::test]
+    async fn test_verify_integrity_corrupted() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         let quest = make_quest("q-1", 2);
 
-        let mut checkpoint = cm.save(&quest).unwrap();
+        let mut checkpoint = cm.save(&quest).await.unwrap();
         // 篡改 serialized_state,哈希应不匹配
         checkpoint.serialized_state[0] ^= 0xff;
         let result = cm.verify_integrity(&checkpoint);
         assert!(matches!(result, Err(QuestError::CheckpointCorrupted)));
     }
 
-    #[test]
-    fn test_load_corrupted_file_returns_error() {
+    #[tokio::test]
+    async fn test_load_corrupted_file_returns_error() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         let quest = make_quest("q-1", 2);
 
-        let checkpoint = cm.save(&quest).unwrap();
+        let checkpoint = cm.save(&quest).await.unwrap();
         // 直接篡改磁盘文件
         let path = cm.checkpoint_path("q-1", &checkpoint.checkpoint_id);
         let mut bytes = std::fs::read(&path).unwrap();
@@ -359,13 +474,13 @@ mod tests {
         bytes[last] ^= 0xff;
         std::fs::write(&path, bytes).unwrap();
 
-        let result = cm.load("q-1", &checkpoint.checkpoint_id);
+        let result = cm.load("q-1", &checkpoint.checkpoint_id).await;
         // 篡改可能破坏反序列化或哈希校验,任一错误均可接受
         assert!(result.is_err(), "篡改文件后 load 应失败");
     }
 
-    #[test]
-    fn test_prune_old_keeps_latest_n() {
+    #[tokio::test]
+    async fn test_prune_old_keeps_latest_n() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::with_max_keep(tmp.path().to_path_buf(), 3);
         let quest = make_quest("q-1", 1);
@@ -375,7 +490,7 @@ mod tests {
         for _ in 0..5 {
             // 微小延迟确保 created_at 不同(chrono::Utc::now 精度可能不足)
             std::thread::sleep(std::time::Duration::from_millis(5));
-            let cp = cm.save(&quest).unwrap();
+            let cp = cm.save(&quest).await.unwrap();
             ids.push(cp.checkpoint_id);
         }
 
@@ -386,16 +501,16 @@ mod tests {
         assert!(remaining.contains(&ids[4]));
     }
 
-    #[test]
-    fn test_load_latest_returns_none_when_empty() {
+    #[tokio::test]
+    async fn test_load_latest_returns_none_when_empty() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
-        let result = cm.load_latest("nonexistent").unwrap();
+        let result = cm.load_latest("nonexistent").await.unwrap();
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_load_latest_returns_most_recent() {
+    #[tokio::test]
+    async fn test_load_latest_returns_most_recent() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         let quest = make_quest("q-1", 1);
@@ -403,11 +518,11 @@ mod tests {
         let mut newest_time = chrono::DateTime::<Utc>::MIN_UTC;
         for _ in 0..3 {
             std::thread::sleep(std::time::Duration::from_millis(5));
-            let cp = cm.save(&quest).unwrap();
+            let cp = cm.save(&quest).await.unwrap();
             newest_time = cp.created_at;
         }
 
-        let latest = cm.load_latest("q-1").unwrap().unwrap();
+        let latest = cm.load_latest("q-1").await.unwrap().unwrap();
         assert_eq!(latest.created_at, newest_time);
     }
 
@@ -419,11 +534,11 @@ mod tests {
         assert!(ids.is_empty());
     }
 
-    #[test]
-    fn test_load_nonexistent_returns_error() {
+    #[tokio::test]
+    async fn test_load_nonexistent_returns_error() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
-        let result = cm.load("q-1", "cp-nonexistent");
+        let result = cm.load("q-1", "cp-nonexistent").await;
         assert!(matches!(result, Err(QuestError::CheckpointNotFound(_))));
     }
 
@@ -453,27 +568,27 @@ mod tests {
         assert_eq!(cm.checkpoint_dir(), &path);
     }
 
-    #[test]
-    fn test_save_creates_nested_directory() {
+    #[tokio::test]
+    async fn test_save_creates_nested_directory() {
         let tmp = tempdir().unwrap();
         // 嵌套不存在的目录,save 应自动创建
         let nested = tmp.path().join("a").join("b").join("c");
         let cm = CheckpointManager::new(nested.clone());
         let quest = make_quest("q-1", 1);
-        let result = cm.save(&quest);
+        let result = cm.save(&quest).await;
         assert!(result.is_ok(), "应自动创建嵌套目录");
         assert!(nested.exists());
     }
 
-    #[test]
-    fn test_multiple_quests_isolated() {
+    #[tokio::test]
+    async fn test_multiple_quests_isolated() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         let q1 = make_quest("q-1", 2);
         let q2 = make_quest("q-2", 3);
 
-        cm.save(&q1).unwrap();
-        cm.save(&q2).unwrap();
+        cm.save(&q1).await.unwrap();
+        cm.save(&q2).await.unwrap();
 
         // 各 Quest 的检查点互不影响
         let ids1 = cm.list_checkpoints("q-1").unwrap();
@@ -487,16 +602,16 @@ mod tests {
         assert_eq!(cm.list_checkpoints("q-2").unwrap().len(), 1);
     }
 
-    #[test]
-    fn test_prune_when_under_limit() {
+    #[tokio::test]
+    async fn test_prune_when_under_limit() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::with_max_keep(tmp.path().to_path_buf(), 5);
         let quest = make_quest("q-1", 1);
 
         // 仅创建 2 个检查点(未超限),prune 不应删除任何
-        cm.save(&quest).unwrap();
+        cm.save(&quest).await.unwrap();
         std::thread::sleep(std::time::Duration::from_millis(5));
-        cm.save(&quest).unwrap();
+        cm.save(&quest).await.unwrap();
 
         let ids = cm.list_checkpoints("q-1").unwrap();
         assert_eq!(ids.len(), 2);
@@ -513,8 +628,8 @@ mod tests {
     }
 
     /// 验证包含多模态输入的 Quest 也能正确序列化
-    #[test]
-    fn test_save_quest_with_multimodal_intent_context() {
+    #[tokio::test]
+    async fn test_save_quest_with_multimodal_intent_context() {
         let tmp = tempdir().unwrap();
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         // 构造带多模态输入描述的 Quest(模拟实际场景)
@@ -537,8 +652,8 @@ mod tests {
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
         };
-        let cp = cm.save(&quest).unwrap();
-        let loaded = cm.load("q-mm", &cp.checkpoint_id).unwrap();
+        let cp = cm.save(&quest).await.unwrap();
+        let loaded = cm.load("q-mm", &cp.checkpoint_id).await.unwrap();
         let restored: Quest = rmp_serde::from_slice(&loaded.serialized_state).unwrap();
         assert_eq!(restored, quest);
     }

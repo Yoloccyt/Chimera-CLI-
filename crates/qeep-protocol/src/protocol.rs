@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use crate::detector::OrphanDetector;
 use crate::error::QeepError;
-use crate::types::{CallState, EntangledCallId, OrphanReport};
+use crate::types::{Ack, CallState, EntangledCallId, OrphanReport};
 
 /// 内部共享状态,由 `Arc` 包裹供 `OrphanGuard` 与 `QeepProtocol` 共享。
 struct Inner {
@@ -58,6 +58,8 @@ struct CallRecord {
     created_at: chrono::DateTime<Utc>,
     /// 完成时间(若已终结)
     completed_at: Option<chrono::DateTime<Utc>>,
+    /// 确认回执(若已 Ack)
+    ack: Option<Ack>,
 }
 
 /// QEEP 协议主体
@@ -124,8 +126,21 @@ impl QeepProtocol {
                 state: CallState::Pending,
                 created_at,
                 completed_at: None,
+                ack: None,
             },
         );
+
+        // 步骤 1.5:创建 Ack 并进入 Acknowledged 状态
+        // WHY: QEEP 三元组要求 Request → Ack → Receipt;Ack 表示 future
+        // 已被接收并即将 poll,是零孤儿调用保证的关键可观测点。
+        let ack = Ack {
+            id,
+            acknowledged_at: Utc::now(),
+        };
+        if let Some(mut entry) = self.inner.pending_calls.get_mut(&id) {
+            entry.state = CallState::Acknowledged;
+            entry.ack = Some(ack);
+        }
 
         // 步骤 2:创建 OrphanGuard
         // completed 标志用于区分"正常完成"与"被 drop"
@@ -219,6 +234,35 @@ impl QeepProtocol {
             .lock()
             .expect("orphan_detector mutex poisoned");
         detector.orphan_count()
+    }
+
+    /// 获取当前所有待处理调用的 ID 列表
+    ///
+    /// 用于调用者按 id 查询具体状态(见 `call_state`/`call_ack`)。
+    pub fn pending_call_ids(&self) -> Vec<EntangledCallId> {
+        self.inner
+            .pending_calls
+            .iter()
+            .map(|entry| *entry.key())
+            .collect()
+    }
+
+    /// 按 id 查询调用当前状态
+    ///
+    /// 返回 `None` 表示该调用已终结(Completed/Timeout/Failed)或从未注册,
+    /// 因为协议在调用终结后会立即清理记录。
+    pub fn call_state(&self, id: EntangledCallId) -> Option<CallState> {
+        self.inner.pending_calls.get(&id).map(|entry| entry.state)
+    }
+
+    /// 按 id 查询调用确认回执(Ack)
+    ///
+    /// 返回 `None` 表示调用尚未 Ack 或已终结。
+    pub fn call_ack(&self, id: EntangledCallId) -> Option<Ack> {
+        self.inner
+            .pending_calls
+            .get(&id)
+            .and_then(|entry| entry.ack.clone())
     }
 }
 
