@@ -96,6 +96,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/optimization/v1.1.0/phase3_performance_verification_report.md`
 - `docs/optimization/v1.1.0/performance_baseline_comparison.md`
 
+### Phase IV: P1 架构补债(2026-07-09)
+
+**日期**:2026-07-09
+
+**架构补债范围**(6 项实施 + 1 项延后):
+- **IV-1 F1 配置类型迁移到 nexus-core [commit `211e91c`]**:`crates/nexus-core/src/config.rs` 新建,迁移 14 个 section 配置类型;`crates/chimera-cli/src/config.rs` 改为 `pub use nexus_core::config::*;` re-export 保持向后兼容。消除 L2-L9 各 crate 依赖 `chimera-cli`(L10)违反 §2.2 依赖铁律的问题,单一真相源消除平行类型漂移风险。
+- **IV-2 C1 event-bus EventTopic 9 类 + FilteredSubscriber [commit `4f10603`]**:`crates/event-bus/src/topic.rs` 新增 `EventTopic` 枚举(9 类:Routing/Memory/Security/Execution/Parliament/Quest/System/Knowledge/Storage),覆盖全部 66 个 NexusEvent 变体;新增 `FilteredSubscriber` 类型包装 `EventReceiver`,仅接收指定 topic 事件;`EventBus::subscribe_filtered()` 创建过滤订阅者。既有 `subscribe()` 保持全量广播向后兼容。新增 `crates/event-bus/tests/filtered_subscriber_test.rs` 5 个测试。
+- **IV-3 N9 sesa-router 前置事件校验 [commit `9267553`]**:`crates/sesa-router/src/prerequisite.rs` 新增 `PrerequisiteChecker` 类型,构造时同步 `bus.subscribe_filtered()`(遵守 broadcast 反模式),监听 Routing topic;`activate()` 入口校验 OSA+KVBSR+FaaE 三事件,未收到时返回 `SesaError::PrerequisiteNotMet`。`prerequisite_check_enabled` 默认 true(安全优先,强制五层路由顺序)。新增 `crates/sesa-router/tests/prerequisite_test.rs` 3 个测试。
+- **IV-4 N6 acb-governor 滞后机制 [commit `e23337f`]**:`crates/acb-governor/src/governor.rs` 增加 `tier_switch_lag_ms` 参数(默认 1000ms),`Mutex<Option<DateTime<Utc>>>` 记录上次切换时间,check-then-act 原子化避免 TOCTOU 竞态。复用 DECB 已验证的滞后模式保持架构一致性,防止利用率在阈值附近波动时 tier 抖动。
+- **IV-5 N7 TTG ACB/DECB 仲裁层 [commit `83e0358`]**:`crates/quest-engine/src/arbitration.rs` 新建 `ArbitrationLayer` 类型,同时订阅 ACB 与 DECB 的 `BudgetAdjusted` 事件(通过 `metadata.source` 区分发布者),保守取严策略:ACB L0→Degraded / L1→LowTier / L2+L3→跟随 DECB。`TtgGovernor` 集成 `arbitration` 字段 + `effective_tier()` + `select_mode_with_arbitration()` 方法。通过字符串解析 ACB tier 避免 L9→L8 向上依赖违反。新增 `crates/quest-engine/tests/arbitration_test.rs` 11 个集成测试。
+- **IV-6 N8 parliament Skeptic 否决覆议 [commit `1770a9a`]**:`crates/parliament/src/config.rs` 新增 `override_consensus_threshold: f32`(默认 0.667 = 2/3 超级多数);`crates/parliament/src/debate.rs` 新增 `reopen_veto()` 公开方法(票据校验 + 薄包装),`deliberate_with_override()` 覆盖路径使用 `override_consensus_threshold` 计票;`voting.rs` 新增 `count_votes_with_threshold()` 支持自定义阈值。4 角色(Explorer/Architect/Skeptic/Validator)中 3 个或以上赞成可推翻 Skeptic 否决。新增 `crates/parliament/tests/reopen_veto_test.rs` 3 个测试。
+- **IV-7 D1 repo-wiki r2d2 连接池 [延后 Phase V]**:架构决策延后,r2d2 与 Phase III-4 写线程分离(mpsc + spawn_blocking + read_conns)冲突,现有架构已满足 WAL 并发读需求(10 并发读 ~1280 万 ops/s)。
+
+**新增/修改文件**:
+- `crates/nexus-core/src/config.rs`(新建)+ `crates/nexus-core/src/lib.rs` + `crates/nexus-core/tests/config_test.rs`
+- `crates/chimera-cli/src/config.rs`(re-export)
+- `crates/event-bus/src/topic.rs`(新建)+ `crates/event-bus/src/bus.rs` + `crates/event-bus/src/lib.rs` + `crates/event-bus/tests/filtered_subscriber_test.rs`
+- `crates/sesa-router/src/prerequisite.rs`(新建)+ `crates/sesa-router/src/error.rs` + `crates/sesa-router/src/config.rs` + `crates/sesa-router/src/activation.rs` + `crates/sesa-router/src/lib.rs` + `crates/sesa-router/tests/prerequisite_test.rs` + `crates/sesa-router/tests/integration.rs`
+- `crates/acb-governor/src/governor.rs` + `crates/acb-governor/src/config.rs`
+- `crates/quest-engine/src/arbitration.rs`(新建)+ `crates/quest-engine/src/ttg.rs` + `crates/quest-engine/src/lib.rs` + `crates/quest-engine/tests/arbitration_test.rs`
+- `crates/parliament/src/config.rs` + `crates/parliament/src/debate.rs` + `crates/parliament/src/voting.rs` + `crates/parliament/tests/reopen_veto_test.rs`
+- `CODE_WIKI.md`(ADR-007~010)+ `.trae/specs/v1-1-0-systematic-optimization-deep-analysis/checklist.md`
+
+**验证结果**:
+- `cargo test --workspace --jobs 1` exit 0(测试增量 +23:C1:5 + N7:11 + N9:3 + N8:3 + F1:1)
+- `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` exit 0,零警告
+- `cargo fmt --all -- --check` exit 0,零 diff
+- `git push origin master` 成功,commit `83e0358` 已推送(2026-07-09)
+
+**关键设计教训**:
+1. **EventTopic 9 类 vs 66 类权衡**:细粒度(66 类)失去过滤意义,粗粒度(2 类 severity)无法支撑 N9 PrerequisiteChecker 等只需 Routing 事件的场景。9 类按架构层职责划分是架构纯净度与实用性的平衡点。
+2. **FilteredSubscriber 内部可变性**:`try_recv()` 需要 `&mut self`,但订阅者通常作为共享状态。用 `Mutex<Option<FilteredSubscriber>>` 包装获得内部可变性,与 N9 PrerequisiteChecker 设计模式一致。
+3. **跨层依赖规避字符串解析**:`quest-engine`(L9)需要 ACB tier 信息,但 L9→L8 依赖违反铁律。通过 `metadata.source` 字符串解析避免依赖 `acb-governor` crate,保持最小依赖原则。代价:字符串解析脆弱,需测试覆盖所有合法值。
+4. **保守取严仲裁策略**:ACB 与 DECB 档位不一致时取更严格的一方,确保预算紧张时 TTG 选择更保守的思考模式(Fast 而非 Deep)。
+5. **broadcast subscribe 时序**:`FilteredSubscriber` 必须在 `tokio::spawn` 之前同步创建(构造时调用 `subscribe_filtered()`),否则事件静默丢失。这是 §4.4 反模式 #3 的强制约束。
+6. **2/3 超级多数覆议门槛**:安全审计否决(Skeptic veto)的覆议需要更高门槛(0.667)而非简单多数(0.5),防止轻率绕过红队安全防线。
+
+**关联文档**:
+- `docs/optimization/v1.1.0/phase4_architecture_verification_report.md`
+- `CODE_WIKI.md §2.3`(ADR-007 ~ ADR-010)
+
 ### F2: rusqlite 依赖从 nexus-core 下沉(ADR-006 方案 E)
 
 **日期**:2026-07-08

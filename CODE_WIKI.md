@@ -89,8 +89,14 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 | ADR-004 | 消息序列化协议 | MessagePack | ✅ rmp-serde 使用 |
 | ADR-005 | 持久化存储选型 | SQLite + 向量 | ⚠️ 部分降级(sqlite-vec 违反 `forbid(unsafe_code)`,改内存 KNN) |
 | ADR-006 | rusqlite 依赖从 nexus-core 下沉 | L1 trait abstraction(`PragmaCapable` trait) | ✅ 已完成(2026-07-08,方案 E) |
+| ADR-007 | EventTopic 9 类分类 + FilteredSubscriber | 架构纯净度优先(9 类覆盖 66 变体) | ✅ 已完成(2026-07-09,Phase IV C1,commit `4f10603`) |
+| ADR-008 | ACB tier 切换滞后机制 | `tier_switch_lag_ms`(默认 1000ms)防止振荡 | ✅ 已完成(2026-07-09,Phase IV N6,commit `e23337f`) |
+| ADR-009 | Skeptic 否决覆议机制 | 2/3 超级多数(`override_consensus_threshold` 默认 0.667) | ✅ 已完成(2026-07-09,Phase IV N8,commit `1770a9a`) |
+| ADR-010 | 配置类型迁移到 L1 nexus-core | 消除平行类型漂移风险 + re-export 向后兼容 | ✅ 已完成(2026-07-09,Phase IV F1,commit `211e91c`) |
 
 > ADR-006 文件:`docs/adr/ADR-006-rusqlite-descoping-from-nexus-core.md`(注:文件名编号与 `docs/architecture/adr_index.md` 中 ADR-006 存在冲突,合并时建议重新编号为 ADR-027,详见 ADR-006 文件头部说明)
+>
+> ADR-007~010 详细设计见 `docs/optimization/v1.1.0/phase4_architecture_verification_report.md`
 
 ---
 

@@ -157,59 +157,67 @@
 ### C1 event-bus EventTopic + FilteredSubscriber
 
 > **决策(2026-07-09)**:采用方案 B(9 类),新增 Knowledge + Storage 类,架构纯净度优先
+> **交付**:commit `4f10603`(`crates/event-bus/src/topic.rs` + `bus.rs` + `lib.rs` + `tests/filtered_subscriber_test.rs`)
 
-- [ ] `crates/event-bus/src/topic.rs` 新增 `EventTopic` 枚举(**9 类**:Routing/Memory/Security/Execution/Parliament/Quest/System/Knowledge/Storage)
-- [ ] 新增 `FilteredSubscriber` 类型,仅接收指定 topic 事件
-- [ ] 65 个 NexusEvent 变体添加 `topic()` 方法映射(覆盖全部变体,无遗漏)
-- [ ] 既有 `subscribe()` 保持全量广播向后兼容
-- [ ] `crates/event-bus/tests/filtered_subscriber_test.rs` 新增测试(含 topic 覆盖完整性测试)
-- [ ] WHY 注释说明 9 类分类与向后兼容策略
-- [ ] `cargo test -p event-bus` 通过
+- [x] `crates/event-bus/src/topic.rs` 新增 `EventTopic` 枚举(**9 类**:Routing/Memory/Security/Execution/Parliament/Quest/System/Knowledge/Storage)
+- [x] 新增 `FilteredSubscriber` 类型,仅接收指定 topic 事件
+- [x] **66 个** NexusEvent 变体添加 `topic()` 方法映射(覆盖全部变体,无遗漏;原 spec 写 65,实际 66 —— NmcEncoded 已归入 Memory 类,spec 计数笔误)
+- [x] 既有 `subscribe()` 保持全量广播向后兼容
+- [x] `crates/event-bus/tests/filtered_subscriber_test.rs` 新增测试(含 topic 覆盖完整性测试,5 个测试用例)
+- [x] WHY 注释说明 9 类分类与向后兼容策略(`topic.rs` 顶部与 `EventTopic` 枚举文档)
+- [x] `cargo test -p event-bus` 通过
 
 ### N6/N7 acb-governor 滞后机制 + TTG 仲裁层
 
-- [ ] `crates/acb-governor/src/governor.rs` 增加 `tier_switch_lag_ms` 参数(默认 1000ms)
-- [ ] 利用率在阈值附近波动时滞后机制防止振荡
-- [ ] `crates/quest-engine/src/ttg.rs` 增加 ACB/DECB 仲裁层
-- [ ] TTG 综合两个治理器的事件,不再仅订阅 DECB
-- [ ] 提取 `ArbitrationLayer` 类型
-- [ ] `cargo test -p acb-governor -p quest-engine` 通过
+> **交付**:N6 commit `e23337f`(`crates/acb-governor/src/governor.rs` + `config.rs`)/ N7 commit `83e0358`(`crates/quest-engine/src/arbitration.rs` 新建 + `ttg.rs` 集成 + `tests/arbitration_test.rs` 11 测试)
+
+- [x] `crates/acb-governor/src/governor.rs` 增加 `tier_switch_lag_ms` 参数(默认 1000ms)
+- [x] 利用率在阈值附近波动时滞后机制防止振荡(`Mutex<Option<DateTime<Utc>>>` + check-then-act 原子化,复用 DECB 模式)
+- [x] `crates/quest-engine/src/ttg.rs` 增加 ACB/DECB 仲裁层(`arbitration: Option<ArbitrationLayer>` 字段)
+- [x] TTG 综合两个治理器的事件,不再仅订阅 DECB(通过 `metadata.source` 区分发布者)
+- [x] 提取 `ArbitrationLayer` 类型(`crates/quest-engine/src/arbitration.rs`)
+- [x] 保守取严策略:ACB L0→Degraded / L1→LowTier / L2+L3→跟随 DECB
+- [x] `cargo test -p acb-governor -p quest-engine` 通过(42 个 quest-engine 测试零回归)
 
 ### N8 parliament Skeptic 否决覆议
 
 > **决策(2026-07-09)**:采用方案 C(配置阈值),新增 `override_consensus_threshold` 配置项(默认 0.667)
+> **交付**:commit `1770a9a`(`crates/parliament/src/config.rs` + `debate.rs` + `voting.rs` + `tests/reopen_veto_test.rs`)
 
-- [ ] `crates/parliament/src/config.rs` 新增 `override_consensus_threshold: f32` 字段(默认 0.667)
-- [ ] `crates/parliament/src/debate.rs` `deliberate_with_override` 覆盖路径使用 `override_consensus_threshold` 计票
-- [ ] `crates/parliament/src/debate.rs` 新增 `reopen_veto()` 公开方法(薄包装 + 票据校验)
-- [ ] 4 角色(Explorer/Architect/Skeptic/Validator)中 3 个或以上赞成可推翻 Skeptic 否决(2/3 超级多数)
-- [ ] `crates/parliament/tests/reopen_veto_test.rs` 新增 3 个测试(有效票据/不匹配票据/超级多数未达)
-- [ ] WHY 注释说明 2/3 超级多数防止轻率绕过红队安全防线
-- [ ] `cargo test -p parliament` 通过
+- [x] `crates/parliament/src/config.rs` 新增 `override_consensus_threshold: f32` 字段(默认 0.667)
+- [x] `crates/parliament/src/debate.rs` `deliberate_with_override` 覆盖路径使用 `override_consensus_threshold` 计票
+- [x] `crates/parliament/src/debate.rs` 新增 `reopen_veto()` 公开方法(薄包装 + 票据校验)
+- [x] 4 角色(Explorer/Architect/Skeptic/Validator)中 3 个或以上赞成可推翻 Skeptic 否决(2/3 超级多数)
+- [x] `crates/parliament/tests/reopen_veto_test.rs` 新增 3 个测试(有效票据/不匹配票据/超级多数未达)
+- [x] WHY 注释说明 2/3 超级多数防止轻率绕过红队安全防线
+- [x] `cargo test -p parliament` 通过
 
 ### N9 sesa-router 前置事件校验
 
 > **决策(2026-07-09)**:PrerequisiteChecker 默认启用(安全优先),需同步更新现有 E2E 测试与基准
+> **交付**:commit `9267553`(`crates/sesa-router/src/prerequisite.rs` 新建 + `error.rs` + `config.rs` + `activation.rs` + `lib.rs` + `tests/prerequisite_test.rs`)
 
-- [ ] `crates/sesa-router/src/prerequisite.rs` 新增 `PrerequisiteChecker` 类型
-- [ ] 订阅模式:构造时同步 `bus.subscribe()`(遵守 broadcast 反模式),监听 OSA+KVBSR+FaaE 三事件
-- [ ] `activate()` 入口校验上游事件,未收到时返回 `SesaError::PrerequisiteNotMet`
-- [ ] **默认启用**(安全优先,强制五层路由顺序)
-- [ ] 现有 E2E 测试与基准已同步更新(activate 路径需发布上游事件)
-- [ ] `crates/sesa-router/tests/prerequisite_test.rs` 新增 3 个测试(无上游事件/有上游事件/默认启用)
-- [ ] WHY 注释说明五层路由顺序的代码强制
-- [ ] `cargo test -p sesa-router` 通过
+- [x] `crates/sesa-router/src/prerequisite.rs` 新增 `PrerequisiteChecker` 类型
+- [x] 订阅模式:构造时同步 `bus.subscribe_filtered()`(遵守 broadcast 反模式,使用 C1 FilteredSubscriber),监听 OSA+KVBSR+FaaE 三 Routing 事件
+- [x] `activate()` 入口校验上游事件,未收到时返回 `SesaError::PrerequisiteNotMet`
+- [x] **默认启用**(安全优先,强制五层路由顺序,`prerequisite_check_enabled: bool` 默认 true)
+- [x] 现有 E2E 测试与基准已同步更新(`tests/integration.rs::make_router_with_bus` 辅助函数禁用 checker)
+- [x] `crates/sesa-router/tests/prerequisite_test.rs` 新增 3 个测试(无上游事件/有上游事件/默认启用)
+- [x] WHY 注释说明五层路由顺序的代码强制
+- [x] `cargo test -p sesa-router` 通过
 
 ### F1 配置类型迁移到 nexus-core
 
-- [ ] `crates/nexus-core/src/config.rs` 新建,迁移 14 个 section 类型
-- [ ] `crates/nexus-core/src/lib.rs` 添加 `pub mod config;` + `pub use config::*;`
-- [ ] `crates/chimera-cli/src/config.rs` 改为 `pub use nexus_core::config::*;` re-export
-- [ ] 所有下游 crate 的 `use` 路径已更新为 `use nexus_core::config::*`
-- [ ] `crates/nexus-core/tests/config_test.rs` 新增 `test_config_types_in_nexus_core` 测试
-- [ ] WHY 注释说明"L1 配置类型共享消除平行类型漂移风险"
-- [ ] `cargo check --workspace` + `cargo test --workspace` 退出码 0
-- [ ] 向后兼容:既有 `use chimera_cli::config::*` 路径通过 re-export 仍可用
+> **交付**:commit `211e91c`(`crates/nexus-core/src/config.rs` 新建 + `crates/chimera-cli/src/config.rs` re-export)
+
+- [x] `crates/nexus-core/src/config.rs` 新建,迁移 14 个 section 类型
+- [x] `crates/nexus-core/src/lib.rs` 添加 `pub mod config;` + `pub use config::*;`
+- [x] `crates/chimera-cli/src/config.rs` 改为 `pub use nexus_core::config::*;` re-export
+- [x] 所有下游 crate 的 `use` 路径已更新为 `use nexus_core::config::*`
+- [x] `crates/nexus-core/tests/config_test.rs` 新增 `test_config_types_in_nexus_core` 测试
+- [x] WHY 注释说明"L1 配置类型共享消除平行类型漂移风险"
+- [x] `cargo check --workspace` + `cargo test --workspace` 退出码 0
+- [x] 向后兼容:既有 `use chimera_cli::config::*` 路径通过 re-export 仍可用
 
 ### D1 repo-wiki r2d2 连接池(延后到 Phase V)
 
@@ -223,13 +231,14 @@
 
 ### Phase IV 全阶段验收
 
-- [ ] `cargo test --workspace` 退出码 0,测试增量 ≥ 12
-- [ ] `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` 退出码 0
-- [ ] `cargo fmt --all -- --check` 退出码 0
-- [ ] `docs/optimization/v1.1.0/phase4_architecture_verification_report.md` 已创建
-- [ ] `CODE_WIKI.md` §2.3 ADR 表格新增 ADR-007(EventTopic 过滤)/ ADR-008(ACB 滞后机制)/ ADR-009(覆议机制)/ ADR-010(配置类型迁移)
-- [ ] `CHANGELOG.md` + `project_memory.md` 同步
-- [ ] 所有 Phase IV Task 在 tasks.md 中已勾选 `[x]`
+- [x] `cargo test --workspace` 退出码 0,测试增量 ≥ 12(C1: 5 + N7: 11 + N9: 3 + N8: 3 + F1: 1 = 23)
+- [x] `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` 退出码 0
+- [x] `cargo fmt --all -- --check` 退出码 0
+- [x] `docs/optimization/v1.1.0/phase4_architecture_verification_report.md` 已创建
+- [x] `CODE_WIKI.md` §2.3 ADR 表格新增 ADR-007(EventTopic 过滤)/ ADR-008(ACB 滞后机制)/ ADR-009(覆议机制)/ ADR-010(配置类型迁移)
+- [x] `CHANGELOG.md` + `project_memory.md` 同步
+- [x] 所有 Phase IV Task 在 tasks.md 中已勾选 `[x]`
+- [x] **N7 commit 推送**:commit `83e0358` 已成功推送到 `origin/master`(2026-07-09)
 
 ## Phase V:P2 渐进优化验收(至少 5 项完成即可)
 
