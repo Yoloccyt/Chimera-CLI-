@@ -39,7 +39,7 @@
 
 ### 阶段 IV:P1 架构补债(2 周)
 
-- **[C1]** `event-bus` 增加 `EventTopic` 枚举(7 类)+ `FilteredSubscriber`,每个订阅者仅接收相关事件,消除全量广播反序列化开销
+- **[C1]** `event-bus` 增加 `EventTopic` 枚举(**9 类**:Routing/Memory/Security/Execution/Parliament/Quest/System/Knowledge/Storage)+ `FilteredSubscriber`,每个订阅者仅接收相关事件,消除全量广播反序列化开销。**决策(2026-07-09)**:采用方案 B(9 类),新增 Knowledge + Storage 类,架构纯净度优先
 - **[N6/N7]** `acb-governor` 增加时间维度滞后机制(参照 DECB `tier_switch_lag_ms`),并在 TTG 中增加 ACB/DECB 仲裁层,消除双治理器矛盾指令与振荡风险
 - **[N8]** `parliament` 增加 Skeptic 否决覆议机制 — 其他 4 角色以 2/3 超级多数可推翻否决,防止决策僵局
 - **[N9]** `sesa-router`(链路末端)增加前置事件校验 — 验证是否收到 OSA + KVBSR + FaaE 事件,代码强制五层路由顺序

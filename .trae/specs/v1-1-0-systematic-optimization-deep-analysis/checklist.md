@@ -156,12 +156,14 @@
 
 ### C1 event-bus EventTopic + FilteredSubscriber
 
-- [ ] `crates/event-bus/src/lib.rs` 新增 `EventTopic` 枚举(7 类)
+> **决策(2026-07-09)**:采用方案 B(9 类),新增 Knowledge + Storage 类,架构纯净度优先
+
+- [ ] `crates/event-bus/src/topic.rs` 新增 `EventTopic` 枚举(**9 类**:Routing/Memory/Security/Execution/Parliament/Quest/System/Knowledge/Storage)
 - [ ] 新增 `FilteredSubscriber` 类型,仅接收指定 topic 事件
-- [ ] 65 个 NexusEvent 变体添加 `topic()` 方法映射
+- [ ] 65 个 NexusEvent 变体添加 `topic()` 方法映射(覆盖全部变体,无遗漏)
 - [ ] 既有 `subscribe()` 保持全量广播向后兼容
-- [ ] `crates/event-bus/tests/filtered_subscriber_test.rs` 新增测试
-- [ ] WHY 注释说明 topic 分类与向后兼容策略
+- [ ] `crates/event-bus/tests/filtered_subscriber_test.rs` 新增测试(含 topic 覆盖完整性测试)
+- [ ] WHY 注释说明 9 类分类与向后兼容策略
 - [ ] `cargo test -p event-bus` 通过
 
 ### N6/N7 acb-governor 滞后机制 + TTG 仲裁层
@@ -175,18 +177,26 @@
 
 ### N8 parliament Skeptic 否决覆议
 
-- [ ] `crates/parliament/src/voting.rs` 新增 `reopen_veto()` 方法
-- [ ] 4 角色(Explorer/Architect/Skeptic/Validator)中 3 个或以上赞成可推翻 Skeptic 否决
-- [ ] `crates/parliament/tests/voting_test.rs` 新增 `test_skeptic_veto_can_be_overridden_by_two_thirds` 测试
-- [ ] WHY 注释说明防止决策僵局的设计意图
+> **决策(2026-07-09)**:采用方案 C(配置阈值),新增 `override_consensus_threshold` 配置项(默认 0.667)
+
+- [ ] `crates/parliament/src/config.rs` 新增 `override_consensus_threshold: f32` 字段(默认 0.667)
+- [ ] `crates/parliament/src/debate.rs` `deliberate_with_override` 覆盖路径使用 `override_consensus_threshold` 计票
+- [ ] `crates/parliament/src/debate.rs` 新增 `reopen_veto()` 公开方法(薄包装 + 票据校验)
+- [ ] 4 角色(Explorer/Architect/Skeptic/Validator)中 3 个或以上赞成可推翻 Skeptic 否决(2/3 超级多数)
+- [ ] `crates/parliament/tests/reopen_veto_test.rs` 新增 3 个测试(有效票据/不匹配票据/超级多数未达)
+- [ ] WHY 注释说明 2/3 超级多数防止轻率绕过红队安全防线
 - [ ] `cargo test -p parliament` 通过
 
 ### N9 sesa-router 前置事件校验
 
-- [ ] `crates/sesa-router/src/lib.rs` 新增 `PrerequisiteChecker`
-- [ ] `activate()` 入口校验上游事件(OSA + KVBSR + FaaE)
-- [ ] 未收到上游事件时拒绝激活
-- [ ] `crates/sesa-router/tests/prerequisite_test.rs` 新增 `test_blocks_activation_without_upstream_events` 测试
+> **决策(2026-07-09)**:PrerequisiteChecker 默认启用(安全优先),需同步更新现有 E2E 测试与基准
+
+- [ ] `crates/sesa-router/src/prerequisite.rs` 新增 `PrerequisiteChecker` 类型
+- [ ] 订阅模式:构造时同步 `bus.subscribe()`(遵守 broadcast 反模式),监听 OSA+KVBSR+FaaE 三事件
+- [ ] `activate()` 入口校验上游事件,未收到时返回 `SesaError::PrerequisiteNotMet`
+- [ ] **默认启用**(安全优先,强制五层路由顺序)
+- [ ] 现有 E2E 测试与基准已同步更新(activate 路径需发布上游事件)
+- [ ] `crates/sesa-router/tests/prerequisite_test.rs` 新增 3 个测试(无上游事件/有上游事件/默认启用)
 - [ ] WHY 注释说明五层路由顺序的代码强制
 - [ ] `cargo test -p sesa-router` 通过
 
@@ -201,16 +211,15 @@
 - [ ] `cargo check --workspace` + `cargo test --workspace` 退出码 0
 - [ ] 向后兼容:既有 `use chimera_cli::config::*` 路径通过 re-export 仍可用
 
-### D1 repo-wiki r2d2 连接池
+### D1 repo-wiki r2d2 连接池(延后到 Phase V)
 
-- [ ] 根 `Cargo.toml` `[workspace.dependencies]` 添加 `r2d2 = "0.8"` + `r2d2_sqlite = "0.24"`
-- [ ] `crates/repo-wiki/Cargo.toml` 添加 `r2d2` + `r2d2_sqlite` 依赖
-- [ ] `crates/repo-wiki/src/store.rs` 引入 `r2d2::Pool<SqliteConnectionManager>`
-- [ ] 1 个写连接 + N 个只读连接
-- [ ] `crates/repo-wiki/benches/pool_bench.rs` 新增 `concurrent_read_with_pool` bench
-- [ ] bench 显示并发读吞吐显著提升
-- [ ] WHY 注释说明 WAL 并发读优势
-- [ ] `cargo test -p repo-wiki` + `cargo bench -p repo-wiki` 通过
+> **决策(2026-07-09)**:延后到 Phase V,r2d2 与 Phase III-4 写线程分离冲突,现有架构已满足 WAL 并发读需求
+
+- [~] ~~根 `Cargo.toml` `[workspace.dependencies]` 添加 `r2d2 = "0.8"` + `r2d2_sqlite = "0.24"`~~ (延后 Phase V)
+- [~] ~~`crates/repo-wiki/Cargo.toml` 添加 `r2d2` + `r2d2_sqlite` 依赖~~ (延后 Phase V)
+- [~] ~~`crates/repo-wiki/src/store.rs` 引入 `r2d2::Pool<SqliteConnectionManager>`~~ (延后 Phase V)
+- [x] **架构决策**:Phase III-4 已实现写线程分离(mpsc + spawn_blocking + read_conns),r2d2 收益有限
+- [x] WHY 注释说明延后决策(避免与 Phase III-4 冲突)
 
 ### Phase IV 全阶段验收
 
