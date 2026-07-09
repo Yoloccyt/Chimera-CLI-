@@ -85,7 +85,15 @@ pub fn setup_week7_pipeline() -> anyhow::Result<Week7Pipeline> {
     // Week 7 四个新 crate
     let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus.clone());
     let substitutor = CsnSubstitutor::with_event_bus(CsnConfig::default(), bus.clone());
-    let sesa = SesaRouter::with_event_bus(SesaConfig::default(), bus.clone());
+    // WHY 禁用 PrerequisiteChecker:E2E 测试验证 SESA 激活逻辑本身,
+    // 前置事件校验已由 sesa-router/tests/prerequisite_test.rs 专门覆盖
+    let sesa = SesaRouter::with_event_bus(
+        SesaConfig {
+            prerequisite_check_enabled: false,
+            ..Default::default()
+        },
+        bus.clone(),
+    );
     let monitor = EfficiencyMonitor::with_event_bus(MonitorConfig::default(), bus.clone());
 
     let pipeline = Week7Pipeline {

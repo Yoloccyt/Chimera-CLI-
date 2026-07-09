@@ -34,7 +34,7 @@ use csn_substitutor::{CapabilityDescriptor, CsnError};
 use efficiency_monitor::{AlertRule, AlertSeverity, Comparison, MonitorConfig};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use mcp_mesh::{McpError, MeshServer};
-use sesa_router::{ActivationRequest, ExpertDescriptor, SesaConfig, SesaError};
+use sesa_router::{ActivationRequest, ExpertDescriptor, SesaError};
 use setup::setup_week7_pipeline;
 
 /// CSA 延迟阈值:500ms(与 week7_main_flow 一致,Task 6.5)
@@ -605,7 +605,15 @@ async fn test_sesa_bypass_empty_expert_pool_activation() {
     // 攻击:空专家池激活,试图触发未定义行为
     // 防御:activate_inner 校验 total==0 返回 EmptyExpertPool
     let bus = EventBus::new();
-    let router = sesa_router::SesaRouter::with_event_bus(SesaConfig::default(), bus);
+    // WHY 禁用 PrerequisiteChecker:安全测试验证 SESA 激活逻辑本身,
+    // 前置事件校验已由 sesa-router/tests/prerequisite_test.rs 专门覆盖
+    let router = sesa_router::SesaRouter::with_event_bus(
+        sesa_router::SesaConfig {
+            prerequisite_check_enabled: false,
+            ..Default::default()
+        },
+        bus,
+    );
     let start = Instant::now();
 
     let request = ActivationRequest::new("req-attack-3", vec![0.5; 64], 8, 5);
@@ -628,7 +636,15 @@ async fn test_sesa_bypass_exceed_mask_capacity() {
     // 攻击:注册超过 256 个专家,试图溢出 256-bit 掩码
     // 防御:register_expert 校验 mask_index < 256,返回 IndexOutOfBounds
     let bus = EventBus::new();
-    let router = sesa_router::SesaRouter::with_event_bus(SesaConfig::default(), bus);
+    // WHY 禁用 PrerequisiteChecker:安全测试验证 SESA 激活逻辑本身,
+    // 前置事件校验已由 sesa-router/tests/prerequisite_test.rs 专门覆盖
+    let router = sesa_router::SesaRouter::with_event_bus(
+        sesa_router::SesaConfig {
+            prerequisite_check_enabled: false,
+            ..Default::default()
+        },
+        bus,
+    );
     let start = Instant::now();
 
     // 注册 256 个专家(刚好满)
@@ -660,7 +676,15 @@ async fn test_sesa_bypass_sparsity_boundary_40_percent() {
     // 攻击:100 专家 top_k=40,试图恰好达到 40% 边界绕过"严格 <"约束
     // 防御:enforce_sparsity 用严格小于,40/100=0.4>=0.4 → 裁剪到 39
     let bus = EventBus::new();
-    let router = sesa_router::SesaRouter::with_event_bus(SesaConfig::default(), bus);
+    // WHY 禁用 PrerequisiteChecker:安全测试验证 SESA 激活逻辑本身,
+    // 前置事件校验已由 sesa-router/tests/prerequisite_test.rs 专门覆盖
+    let router = sesa_router::SesaRouter::with_event_bus(
+        sesa_router::SesaConfig {
+            prerequisite_check_enabled: false,
+            ..Default::default()
+        },
+        bus,
+    );
     let start = Instant::now();
 
     // 注册 100 个专家
@@ -695,7 +719,15 @@ async fn test_sesa_bypass_large_top_k_small_pool() {
     // 攻击:5 专家池 top_k=100,试图激活全部绕过稀疏度
     // 防御:5×0.4=2,2/5=0.4>=0.4 → max_allowed=1(严格 < 40%)
     let bus = EventBus::new();
-    let router = sesa_router::SesaRouter::with_event_bus(SesaConfig::default(), bus);
+    // WHY 禁用 PrerequisiteChecker:安全测试验证 SESA 激活逻辑本身,
+    // 前置事件校验已由 sesa-router/tests/prerequisite_test.rs 专门覆盖
+    let router = sesa_router::SesaRouter::with_event_bus(
+        sesa_router::SesaConfig {
+            prerequisite_check_enabled: false,
+            ..Default::default()
+        },
+        bus,
+    );
     let start = Instant::now();
 
     for i in 0..5 {
