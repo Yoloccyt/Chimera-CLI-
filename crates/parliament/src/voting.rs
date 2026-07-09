@@ -49,7 +49,35 @@ impl VoteCounter {
         }
     }
 
-    /// 计票并判定共识
+    /// 计票并判定共识(使用常规 consensus_threshold)
+    ///
+    /// 委托 `count_votes_with_threshold`,传入配置的 `consensus_threshold`。
+    /// 常规 deliberate() 路径使用此方法。
+    ///
+    /// # 参数
+    /// - `opinions`:所有角色的意见列表
+    /// - `total_roles`:已注册角色总数(用于计算参与率)
+    /// - `proposal`:提案(用于生成决议哈希)
+    pub fn count_votes(
+        &self,
+        opinions: &[Opinion],
+        total_roles: usize,
+        proposal: &Proposal,
+    ) -> VoteResult {
+        self.count_votes_with_threshold(
+            opinions,
+            total_roles,
+            proposal,
+            self.config.consensus_threshold,
+        )
+    }
+
+    /// 计票并判定共识(使用自定义共识阈值)
+    ///
+    /// WHY 独立方法:覆议路径(reopen_veto / deliberate_with_override 覆盖分支)
+    /// 需使用更高的 `override_consensus_threshold`(默认 0.667),而非常规
+    /// `consensus_threshold`(0.6)。此方法允许调用方指定共识阈值,
+    /// 其余流程(法定人数、Skeptic 否决、加权赞成率)与 `count_votes` 完全一致。
     ///
     /// # 流程
     /// 1. 计算参与率(已投票角色数 / 总角色数,含弃权)
@@ -63,11 +91,13 @@ impl VoteCounter {
     /// - `opinions`:所有角色的意见列表
     /// - `total_roles`:已注册角色总数(用于计算参与率)
     /// - `proposal`:提案(用于生成决议哈希)
-    pub fn count_votes(
+    /// - `consensus_threshold`:共识判定阈值(覆议路径传 override_consensus_threshold)
+    pub fn count_votes_with_threshold(
         &self,
         opinions: &[Opinion],
         total_roles: usize,
         proposal: &Proposal,
+        consensus_threshold: f32,
     ) -> VoteResult {
         // 步骤 1:计算参与率(已投票角色数 / 总角色数)
         let participation_rate = if total_roles == 0 {
@@ -114,7 +144,7 @@ impl VoteCounter {
         let (weighted_approval_rate, _) = self.compute_weighted_approval(opinions);
 
         // 步骤 5-6:共识判定
-        let consensus = if weighted_approval_rate >= self.config.consensus_threshold {
+        let consensus = if weighted_approval_rate >= consensus_threshold {
             // 共识达成:生成决议哈希
             let decision_hash = compute_decision_hash(proposal, opinions);
             Consensus::Reached {
@@ -126,7 +156,7 @@ impl VoteCounter {
             Consensus::Rejected {
                 reason: format!(
                     "赞成率不足: {:.2} < 阈值 {:.2}",
-                    weighted_approval_rate, self.config.consensus_threshold
+                    weighted_approval_rate, consensus_threshold
                 ),
             }
         };
@@ -492,6 +522,43 @@ mod tests {
         assert!(result.consensus.is_rejected());
         assert!(!result.consensus.is_vetoed());
         assert!(result.weighted_approval_rate < 0.6);
+    }
+
+    #[test]
+    fn test_count_votes_with_threshold_uses_custom_threshold() {
+        // WHY 阈值区分验证:同一组 opinions,赞成率 ≈ 0.643 ∈ [0.6, 0.667)
+        // - 用 0.6 阈值 → Reached
+        // - 用 0.667 阈值 → Rejected
+        // 证明 count_votes_with_threshold 确实使用了传入的阈值
+        let counter = make_counter();
+        let proposal = make_proposal();
+
+        // Architect(0.25)反对,Skeptic(0.30)弃权,
+        // Optimizer(0.20)+Librarian(0.15)+Bard(0.10)赞成
+        // 非弃权权重 = 0.70,赞成 = 0.45,赞成率 = 0.45/0.70 ≈ 0.643
+        let opinions = vec![
+            Opinion::new(Role::Architect, 0.0, 0.9, "反对"),
+            Opinion::new(Role::Skeptic, 0.5, 0.5, "弃权"),
+            Opinion::new(Role::Optimizer, 1.0, 0.8, "赞成"),
+            Opinion::new(Role::Librarian, 1.0, 0.7, "赞成"),
+            Opinion::new(Role::Bard, 1.0, 0.6, "赞成"),
+        ];
+
+        // 常规阈值 0.6:0.643 ≥ 0.6 → Reached
+        let result_low = counter.count_votes_with_threshold(&opinions, 5, &proposal, 0.6);
+        assert!(
+            result_low.consensus.is_reached(),
+            "阈值 0.6 下赞成率 0.643 应达成共识,实际: {:?}",
+            result_low.consensus
+        );
+
+        // 覆议阈值 0.667:0.643 < 0.667 → Rejected
+        let result_high = counter.count_votes_with_threshold(&opinions, 5, &proposal, 0.667);
+        assert!(
+            result_high.consensus.is_rejected(),
+            "阈值 0.667 下赞成率 0.643 应被拒绝,实际: {:?}",
+            result_high.consensus
+        );
     }
 
     #[test]

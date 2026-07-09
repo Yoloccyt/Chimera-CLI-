@@ -363,6 +363,11 @@ impl Parliament {
         proposal: &Proposal,
         override_ticket: Option<&VetoOverrideTicket>,
     ) -> Result<Consensus, ParliamentError> {
+        // 覆盖标志:记录本次审议是否触发了否决覆盖
+        // WHY 独立标志:覆议路径需使用 override_consensus_threshold(0.667),
+        // 而常规路径使用 consensus_threshold(0.6)。此标志决定计票时选用哪个阈值。
+        let mut override_active = false;
+
         // 步骤 0:Skeptic 恶意意图检测(始终执行,覆盖不跳过检测)
         if let Some((veto_reason, frozen_capabilities)) =
             self.skeptic.exercise_veto(&quest.quest_id, proposal)
@@ -380,6 +385,8 @@ impl Parliament {
                 override_ticket.filter(|t| t.validate(&proposal.proposal_id));
 
             if let Some(ticket) = override_ticket_valid {
+                // 标记覆盖已激活:后续计票使用 override_consensus_threshold
+                override_active = true;
                 // === 覆盖路径:发布否决 + 覆盖事件,继续辩论 ===
                 info!(
                     quest_id = %quest.quest_id,
@@ -467,9 +474,20 @@ impl Parliament {
         self.publish_vote_events(proposal, &opinions).await;
 
         let total_roles = self.registry.count();
-        let result = self
-            .vote_counter
-            .count_votes(&opinions, total_roles, proposal);
+        // WHY 阈值选择:覆议路径(override_active=true)使用更高的
+        // override_consensus_threshold(0.667),防止轻率绕过红队安全防线;
+        // 常规路径使用 consensus_threshold(0.6)
+        let result = if override_active {
+            self.vote_counter.count_votes_with_threshold(
+                &opinions,
+                total_roles,
+                proposal,
+                self.config.override_consensus_threshold,
+            )
+        } else {
+            self.vote_counter
+                .count_votes(&opinions, total_roles, proposal)
+        };
 
         let mut consensus = result.consensus;
         if let Consensus::Reached { decision_hash, .. } = &consensus {
@@ -498,6 +516,44 @@ impl Parliament {
         }
 
         Ok(consensus)
+    }
+
+    /// 重新开启被 Skeptic 否决的提案(覆议)
+    ///
+    /// 包装 `deliberate_with_override`,要求提供有效的 `VetoOverrideTicket`,
+    /// 并在覆盖路径使用更高的 `override_consensus_threshold`(默认 0.667,
+    /// 即 2/3 超级多数)校验共识。
+    ///
+    /// # WHY 独立公开方法
+    /// 覆议是绕过 Skeptic 红队安全防线的高风险操作,需要语义化的公开入口与
+    /// 独立的审计路径,避免常规调用方意外触发覆盖。`reopen_veto` 强制要求
+    /// ticket 参数不可选,从 API 层面表达"覆议必须显式授权"的意图。
+    ///
+    /// # 流程(全部委托给 `deliberate_with_override` 覆盖路径)
+    /// 1. 票据 `proposal_id` 匹配校验(防重用)— 由覆盖路径内部完成
+    /// 2. 超级多数校验(`override_consensus_threshold`)— 由覆盖路径完成
+    /// 3. 事件发布(SkepticVeto + VetoOverridden)— 由覆盖路径完成
+    ///
+    /// # 参数
+    /// - `quest`:关联的 Quest
+    /// - `proposal`:待审议的提案
+    /// - `ticket`:否决覆盖票据(`proposal_id` 必须匹配,防重用)
+    ///
+    /// # 返回
+    /// 共识判定结果:
+    /// - 票据失配 → `Consensus::Vetoed`(否决仍生效)
+    /// - 票据匹配 + 赞成率 ≥ 0.667 → `Consensus::Reached`
+    /// - 票据匹配 + 赞成率 < 0.667 → `Consensus::Rejected`
+    pub async fn reopen_veto(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+        ticket: &VetoOverrideTicket,
+    ) -> Result<Consensus, ParliamentError> {
+        // 薄包装:proposal_id 匹配校验与超级多数校验均由
+        // deliberate_with_override 的覆盖路径完成,保证审计路径一致。
+        self.deliberate_with_override(quest, proposal, Some(ticket))
+            .await
     }
 
     /// 并发收集 5 角色的 Opinion,带超时
