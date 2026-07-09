@@ -201,7 +201,7 @@
 - [x] 订阅模式:构造时同步 `bus.subscribe_filtered()`(遵守 broadcast 反模式,使用 C1 FilteredSubscriber),监听 OSA+KVBSR+FaaE 三 Routing 事件
 - [x] `activate()` 入口校验上游事件,未收到时返回 `SesaError::PrerequisiteNotMet`
 - [x] **默认启用**(安全优先,强制五层路由顺序,`prerequisite_check_enabled: bool` 默认 true)
-- [x] 现有 E2E 测试与基准已同步更新(`tests/integration.rs::make_router_with_bus` 辅助函数禁用 checker)
+- [x] 现有 E2E 测试与基准已同步更新(`tests/integration.rs::make_router_with_bus` 辅助函数禁用 checker + `tests/e2e/week7_setup.rs::setup_week7_pipeline` helper 禁用 checker + `tests/e2e/week7_security.rs` 4 个 test_sesa_bypass_* 直接构造路径禁用 checker,commit `e41644c`)
 - [x] `crates/sesa-router/tests/prerequisite_test.rs` 新增 3 个测试(无上游事件/有上游事件/默认启用)
 - [x] WHY 注释说明五层路由顺序的代码强制
 - [x] `cargo test -p sesa-router` 通过

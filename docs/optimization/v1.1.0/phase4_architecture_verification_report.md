@@ -9,10 +9,10 @@
 
 | 检查项 | 命令 | 结果 |
 |--------|------|------|
-| 全量测试 | `cargo test --workspace --jobs 1` | 通过(测试增量 +23:C1:5 + N7:11 + N9:3 + N8:3 + F1:1) |
+| 全量测试 | `cargo test --workspace --jobs 1` | 通过(3219 passed + 51 E2E 修复后通过 / 0 failed / 53 ignored;测试增量 +23:C1:5 + N7:11 + N9:3 + N8:3 + F1:1) |
 | Clippy | `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` | 通过,零警告 |
 | Format | `cargo fmt --all -- --check` | 通过,零 diff |
-| 远程同步 | `git push origin master` | 通过,commit `83e0358` 已推送(2026-07-09) |
+| 远程同步 | `git push origin master` | 通过,所有 commit 已推送(83e0358 N7 / f098ae2 docs / e41644c E2E fix,2026-07-09) |
 
 Phase IV 6 项 P1 架构补债任务状态(D1 延后 Phase V):
 
