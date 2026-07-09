@@ -135,6 +135,14 @@ impl ActivationResult {
 ///
 /// `clv` 为上下文潜在向量,与专家向量计算相关性。
 /// 维度可与 CLV(512)不同,门控计算取最小长度。
+///
+/// # 作为 DashMap key
+/// `TaskProfile` 实现 `Hash + Eq`,可直接作为 `DashMap`/`HashMap` 的 key,
+/// 替代旧的 serde_json 序列化哈希方案(见 [N17])。
+/// 注意:不能直接 `#[derive(Hash, PartialEq, Eq)]`,因为 `f32` 既不实现 `Hash`
+/// 也不实现 `Eq`(IEEE 754 的 `NaN != NaN` 违反自反性)。下方手动 impl 用
+/// `to_bits()` 把 `f32` 转为确定性的 `u32`,使相同 bit pattern 永远得到
+/// 相同的 hash 且判定相等,保证 Hash/Eq 一致性。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskProfile {
     /// 复杂度评分 [0.0, 1.0]
@@ -163,6 +171,47 @@ impl TaskProfile {
         }
     }
 }
+
+// WHY 手动 impl Hash/PartialEq/Eq(而非 derive):
+// f32 不实现 Hash 也不实现 Eq,根因是 IEEE 754 的 NaN 语义——NaN != NaN 违反
+// Eq 的自反性(a == a)。derive 会直接编译失败。这里用 to_bits() 把 f32 映射到
+// 确定性的 u32:同一 bit pattern 永远得到同一 u32,从而获得稳定的 hash 与相等。
+// 关键约束:Hash 与 Eq 必须一致(equals → equal hash),否则 DashMap 会定位到
+// 不同 bucket 导致永远 miss,故两者都基于 to_bits() 实现。
+
+impl std::hash::Hash for TaskProfile {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // f32 → u32(to_bits),绕过 NaN 不可哈希问题
+        self.complexity_score.to_bits().hash(state);
+        self.task_type.hash(state);
+        self.risk_level.hash(state);
+        // 先 hash 长度,防止不同长度 Vec 在前缀相同时碰撞
+        // (与标准库 slice 的 Hash impl 行为一致)
+        self.clv.len().hash(state);
+        for v in &self.clv {
+            v.to_bits().hash(state);
+        }
+    }
+}
+
+impl PartialEq for TaskProfile {
+    fn eq(&self, other: &Self) -> bool {
+        // 用 to_bits() 比较,使 NaN == NaN 为真,与上方 Hash 保持一致
+        self.complexity_score.to_bits() == other.complexity_score.to_bits()
+            && self.task_type == other.task_type
+            && self.risk_level == other.risk_level
+            && self.clv.len() == other.clv.len()
+            && self
+                .clv
+                .iter()
+                .zip(other.clv.iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+    }
+}
+
+// Eq 是 PartialEq 的 marker trait,要求自反性。因为 to_bits() 比较满足自反性
+// (相同值必有相同 bits,包括 NaN),可安全 impl Eq,使 TaskProfile 可作 HashMap key
+impl Eq for TaskProfile {}
 
 #[cfg(test)]
 mod tests {

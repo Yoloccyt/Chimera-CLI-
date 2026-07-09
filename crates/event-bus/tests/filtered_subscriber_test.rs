@@ -179,18 +179,18 @@ async fn test_subscribe_remains_backward_compatible() {
 }
 
 // ============================================================
-// 测试 5：遍历全部 66 个 NexusEvent 变体，验证 topic() 返回有效 EventTopic
+// 测试 5：遍历全部 67 个 NexusEvent 变体，验证 topic() 返回有效 EventTopic
 //
 // WHY 此测试：Rust match 的穷尽性保证编译期覆盖所有变体，但运行时仍需
 // 验证每个变体实例化后调用 topic() 不 panic 且返回 all() 集合内的值。
-// 此测试同时是"66 变体映射完整性"的守护测试。
+// 此测试同时是"67 变体映射完整性"的守护测试。
 // ============================================================
 
 #[test]
 fn test_topic_mapping_covers_all_variants() {
     let all_topics = EventTopic::all();
 
-    // 构造全部 66 个变体的实例，逐个验证 topic() 返回有效值
+    // 构造全部 67 个变体的实例，逐个验证 topic() 返回有效值
     let variants: Vec<NexusEvent> = vec![
         // === Quest (7) ===
         NexusEvent::UserIntentEncoded {
@@ -358,6 +358,13 @@ fn test_topic_mapping_covers_all_variants() {
             metadata: EventMetadata::new("test-source"),
             operation_id: "o-1".into(),
             timeout_ms: 1000,
+        },
+        NexusEvent::GatherTimedOut {
+            metadata: EventMetadata::new("test-source"),
+            deadline_ms: 5000,
+            elapsed_ms: 5012,
+            total: 10,
+            abandoned: 3,
         },
         NexusEvent::OrphanCallDetected {
             metadata: EventMetadata::new("test-source"),
@@ -588,11 +595,11 @@ fn test_topic_mapping_covers_all_variants() {
         },
     ];
 
-    // 守护：变体总数必须等于 66（与 NexusEvent 当前定义一致）
+    // 守护：变体总数必须等于 67（与 NexusEvent 当前定义一致）
     assert_eq!(
         variants.len(),
-        66,
-        "测试构造的变体数应为 66（与 NexusEvent 当前定义一致）"
+        67,
+        "测试构造的变体数应为 67（与 NexusEvent 当前定义一致）"
     );
 
     // 遍历每个变体，验证 topic() 返回值在 all_topics 集合内（无 panic）

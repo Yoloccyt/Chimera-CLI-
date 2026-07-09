@@ -712,6 +712,7 @@ name = "event-bus"
 version = "1.0.0-omega"
 dependencies = [
  "chrono",
+ "prometheus-client",
  "rmp-serde",
  "serde",
  "serde_json",

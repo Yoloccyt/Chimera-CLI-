@@ -18,14 +18,14 @@ use std::collections::HashSet;
 
 use crate::types::NexusEvent;
 
-/// 事件主题 — 9 类分类覆盖全部 66 个 NexusEvent 变体
+/// 事件主题 — 9 类分类覆盖全部 67 个 NexusEvent 变体
 ///
 /// WHY 9 类分类：按架构层职责划分，每个 topic 对应一个功能域。
 /// FilteredSubscriber 订阅指定 topic 集合，仅接收匹配事件，
 /// 避免无关事件占用消费者缓冲区。
 ///
 /// # 设计权衡（2026-07-09）
-/// - 方案 A（细粒度 66 类）：每变体一个 topic，过细，FilterSubscriber 失去意义
+/// - 方案 A（细粒度 67 类）：每变体一个 topic，过细，FilterSubscriber 失去意义
 /// - 方案 B（9 类，采用）：架构纯净度优先，每个 topic 对应一个功能域
 /// - 方案 C（按 severity 分 2 类）：粒度过粗，无法支撑 N9 PrerequisiteChecker
 ///   等只需 Routing 事件的场景
@@ -76,7 +76,7 @@ impl EventTopic {
 impl NexusEvent {
     /// 获取事件所属主题
     ///
-    /// 66 个变体映射到 9 类 EventTopic。
+    /// 67 个变体映射到 9 类 EventTopic。
     /// WHY 用 match 而非 HashMap：编译期穷尽性检查，新增变体时编译器强制更新映射，
     /// 避免遗漏导致 topic() panic。
     pub fn topic(&self) -> EventTopic {
@@ -113,12 +113,13 @@ impl NexusEvent {
             | Self::AsaIntervention { .. }
             | Self::AhirtProbeCompleted { .. } => EventTopic::Security,
 
-            // === Execution (11) === L7 Execution 生产验证与融合
+            // === Execution (12) === L7 Execution 生产验证与融合
             Self::OperationProduced { .. }
             | Self::PredictionVerified { .. }
             | Self::ExecutionCompleted { .. }
             | Self::GatherCompleted { .. }
             | Self::OperationTimedOut { .. }
+            | Self::GatherTimedOut { .. }
             | Self::OrphanCallDetected { .. }
             | Self::ProducerStrategyAdjusted { .. }
             | Self::PredictionMade { .. }
@@ -174,7 +175,7 @@ impl NexusEvent {
 /// 不匹配的事件从接收缓冲区移除（消费但不返回），与 `recv_matching` 语义一致。
 ///
 /// # 使用场景
-/// - TTG 仲裁层只需 Parliament + Budget 事件，无需接收全部 66 类
+/// - TTG 仲裁层只需 Parliament + Budget 事件，无需接收全部 67 类
 /// - N9 PrerequisiteChecker 只需 Routing 事件
 /// - 减少无关事件对消费者缓冲区的占用
 ///

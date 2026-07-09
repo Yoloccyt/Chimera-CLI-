@@ -28,19 +28,25 @@ pub type GqepFuture<T> = Pin<Box<dyn Future<Output = Result<T, GqepError>> + Sen
 /// 聚集执行结果统计
 ///
 /// 记录一次 `gather` 调用的整体执行情况,用于事件发布与监控指标。
-/// 字段 `succeeded + failed` 可能小于 `total`(批量原子性场景下,
-/// 失败后剩余操作不执行)。
+/// 字段 `succeeded + failed` 可能小于 `total`,两种场景:
+/// - 批量原子性场景下(`gather_atomic`),失败后剩余操作不执行
+/// - 全局 gather 超时场景下,被放弃(未完成)的 future 不计入 `succeeded`/`failed`,
+///   它们通过 `OrphanCallDetected` 事件(Critical)被独立报告
 #[derive(Debug, Clone)]
 pub struct GatherResult {
     /// 批次中总操作数(传入的 futures 数量)
     pub total: u32,
     /// 成功操作数
     pub succeeded: u32,
-    /// 失败操作数(含超时、执行错误)
+    /// 失败操作数(含单操作超时、执行错误;不含全局超时放弃的 future)
     pub failed: u32,
     /// 聚集延迟(毫秒),从 gather 开始到所有 future 完成的总耗时
     pub latency_ms: f32,
-    /// 失败操作的错误列表(仅含失败操作的错误,长度 == failed)
+    /// 失败操作的错误列表。
+    ///
+    /// 常规场景长度 == `failed`(每个失败操作一条错误)。全局 gather 超时时,
+    /// 额外追加一条 `GqepError::GlobalTimedOut` 汇总错误(此时长度 == failed + 1),
+    /// 用于让调用者区分"整批被全局超时放弃"与"单个操作失败"。
     pub errors: Vec<GqepError>,
 }
 

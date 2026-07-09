@@ -137,6 +137,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/optimization/v1.1.0/phase4_architecture_verification_report.md`
 - `CODE_WIKI.md §2.3`(ADR-007 ~ ADR-010)
 
+### Phase V: P2 渐进优化(2026-07-09)
+
+**日期**:2026-07-09
+
+**渐进优化范围**(6 项主任务实施 + 4 项延后到 v1.2.0-omega):
+
+- **V-1 I4 event-bus Critical mpsc 一致性核验**:核验 7 个 Critical 事件发布点(BudgetExceeded×3/SkepticVeto×1/RedTeamAudit×2/AsaIntervention×1)全部走 `publish`/`publish_blocking` 统一入口,`is_critical_mpsc_event()` 自动路由 mpsc 旁路。纯核验任务,无生产代码修改。新增 `crates/event-bus/tests/critical_channel_test.rs` 4 个测试。
+- **V-3 N14 gqep-executor 全局 gather 超时**:`crates/gqep-executor/src/config.rs` 新增 `gather_deadline_ms`(默认 5000,0=禁用);`crates/gqep-executor/src/gatherer.rs` 提取 `collect_with_deadline()` 独立方法,用 `tokio::time::timeout` 包裹整个 stream 循环(双层超时:单操作 entangle 内 timeout + 全局 gather deadline);`crates/gqep-executor/src/error.rs` 新增 `GlobalTimedOut` 错误变体;跨 crate 修改 `crates/event-bus/src/types.rs` 新增 `GatherTimedOut` 事件变体(NexusEvent 66→67)+ `topic.rs` 映射。新增 `crates/gqep-executor/tests/gatherer_test.rs` 4 个测试。
+- **V-4 N17 gea-activator TaskProfile Hash**:`crates/gea-activator/src/types.rs` 为 `TaskProfile` 实现 `Hash` + `PartialEq` + `Eq`(f32 用 `to_bits()` 转 u32,规避 NaN 不 impl Hash 问题);`crates/gea-activator/src/activator.rs` DashMap key 从 `u64`(hash 值)改为 `TaskProfile` 直接 key,删除 `hash_task_profile` 辅助函数,消除 serde_json 序列化开销。新增 `crates/gea-activator/tests/activator_test.rs` 4 个测试。
+- **V-5 N18 quest-engine TTG EventBus 集成收尾**:`crates/quest-engine/src/ttg.rs` 清理 9 处与事件发布重复的 `tracing::info!`(8 处 info!→debug!,1 处删除)。特征化测试先建立行为安全网再清理。新增 `crates/quest-engine/tests/ttg_event_test.rs` 4 个测试。
+- **V-8 G2 event-bus Prometheus 指标导出**:`crates/event-bus/Cargo.toml` 新增 `prometheus-client` 依赖;`crates/event-bus/src/logging.rs` `BusLogger` 增加 Prometheus Registry + 3 个指标(`nexus_event_total` counter with topic 标签 / `nexus_critical_event_total` counter / `nexus_event_publish_duration_seconds` histogram);`crates/event-bus/src/bus.rs` publish/publish_blocking 添加 Instant 耗时测量。`TopicLabel` 独立枚举隔离标签类型与领域类型 `EventTopic`。新增 `crates/event-bus/tests/metrics_test.rs` 6 个测试。
+- **V-9 Top-K 全量优化 select_nth_unstable**:全 workspace 核验 5 个 Top-K 候选 Site,Site 1-4(faae-router/mlc-engine/kvbsr-router/ssra-fusion)已在先前阶段完成优化,仅 Site 5 `crates/model-router/src/strategies.rs` 从全排序改为 `select_nth_unstable_by`(O(n))。新增 `crates/model-router/tests/top_k_equivalence.rs` 3 个测试。
+
+**延后到 v1.2.0-omega**:I1 MoE 稀疏门控(需 50+ 模型规模)/ N15 FTS5 全文索引(编译配置复杂)/ E1 OnceCell 懒加载(重构风险高)/ V-10 测试覆盖补齐配套(benches+proptest+doctest+fuzz)。
+
+**新增/修改文件**:
+- `crates/gqep-executor/src/{config,error,gatherer,lib,types}.rs` + `crates/gqep-executor/tests/gatherer_test.rs`
+- `crates/gea-activator/src/{activator,types}.rs` + `crates/gea-activator/tests/activator_test.rs`
+- `crates/quest-engine/src/ttg.rs` + `crates/quest-engine/tests/ttg_event_test.rs`
+- `crates/event-bus/Cargo.toml` + `crates/event-bus/src/{bus,logging,topic,types}.rs` + `crates/event-bus/tests/{critical_channel_test,metrics_test,filtered_subscriber_test}.rs`
+- `crates/model-router/src/strategies.rs` + `crates/model-router/tests/top_k_equivalence.rs`
+- `Cargo.lock`(prometheus-client 依赖锁)
+- `docs/optimization/v1.1.0/phase5_progressive_optimization_report.md`(新建)
+
+**验证结果**:
+- `cargo fmt --all -- --check` exit 0,零 diff
+- `cargo check --workspace` exit 0,Finished in 13.27s
+- `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` exit 0,零警告
+- `cargo test --workspace --jobs 1` exit 0,3228 passed / 0 failed / 55 ignored(测试增量 +25)
+
+**关键设计教训**:
+1. **f32 Hash 的 to_bits 模式**:f32 不 impl `Hash`(因 NaN != NaN),必须用 `to_bits()` 转 u32,PartialEq 也用 to_bits 保持 Hash/Eq 契约一致。
+2. **双层超时职责分离**:collect_with_deadline 独立方法保持单函数 ≤200 行,`let outcome = ...;` 绑定规避 Edition 2021 临时量生命周期陷阱。
+3. **TopicLabel 独立枚举隔离**:Prometheus 标签用独立枚举隔离领域类型,避免 EventTopic 变更破坏标签兼容性。
+4. **特征化测试驱动重构式收尾**:V-5 先写特征化测试建立行为安全网,再清理重复日志,避免无意删除事件发布。
+5. **核验任务的 trust but verify**:V-9 核验报告列出 5 处候选,逐站核验发现 Site 1-4 已最优,仅 Site 5 需修改。
+
+**关联文档**:
+- `docs/optimization/v1.1.0/phase5_progressive_optimization_report.md`
+
 ### F2: rusqlite 依赖从 nexus-core 下沉(ADR-006 方案 E)
 
 **日期**:2026-07-08

@@ -12,7 +12,7 @@ use crate::error::EventBusError;
 use crate::logging::BusLogger;
 use crate::types::{EventSeverity, NexusEvent};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
@@ -143,11 +143,15 @@ impl EventBus {
     /// (无 Critical 订阅者)仅走 broadcast,不报错。
     #[allow(clippy::unused_async)]
     pub async fn publish(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        // WHY 在方法入口测量 start:log_publish 在 send 之前调用(event 所有权
+        // 尚未 move),elapsed 主要覆盖 receiver_count() 调用(接近零),
+        // 但保留测量点以便未来将 log/指标采集移到 send 之后时仍准确。
+        let start = Instant::now();
         let subscriber_count = self.sender.receiver_count();
 
         // 记录发布日志(若已启用日志埋点)
         if let Some(logger) = &self.logger {
-            logger.log_publish(&event, subscriber_count);
+            logger.log_publish(&event, subscriber_count, start.elapsed());
         }
 
         // SubTask 17.2:Critical 事件无订阅者告警
@@ -183,11 +187,13 @@ impl EventBus {
     /// # §6.2 红线双通道(2026-06-29)
     /// 与 `publish` 一致:4 类 Critical 安全告警事件额外走 mpsc 旁路通道。
     pub fn publish_blocking(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        // 与 publish 保持一致:入口测量耗时(Phase V Task V-8 指标采集)
+        let start = Instant::now();
         let subscriber_count = self.sender.receiver_count();
 
         // 记录发布日志(若已启用日志埋点)
         if let Some(logger) = &self.logger {
-            logger.log_publish(&event, subscriber_count);
+            logger.log_publish(&event, subscriber_count, start.elapsed());
         }
 
         // SubTask 17.2:Critical 事件无订阅者告警(与 publish 保持一致)

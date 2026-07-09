@@ -13,6 +13,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 rmp-serde = { workspace = true }
+# Prometheus 指标注册表与文本编码(Phase V Task V-8:/metrics 端点导出)
+prometheus-client = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

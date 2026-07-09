@@ -607,6 +607,25 @@ pub enum NexusEvent {
         timeout_ms: u64,
     },
 
+    /// GQEP 全局 gather 超时 — L6 Router 状态变更(Phase V Task V-3 [N14])
+    ///
+    /// 整个 gather 流程触达全局 deadline,剩余未完成的 future 被放弃。
+    /// 与 `OperationTimedOut`(单操作超时)互补,二者构成双层超时防护:
+    /// 单操作超时保护单个 future,全局超时保护整个 gather 流程不因单操作
+    /// 超时累积而失控。供 efficiency-monitor 等订阅者记录全局超时指标。
+    GatherTimedOut {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 全局 deadline 阈值(毫秒),即 `GqepConfig::gather_deadline_ms`
+        deadline_ms: u64,
+        /// 触发超时时实际已运行时间(毫秒)
+        elapsed_ms: u64,
+        /// 本次 gather 的总操作数
+        total: u32,
+        /// 被放弃(未完成)的操作数
+        abandoned: u32,
+    },
+
     /// GQEP 检测到孤儿调用 `[Critical]` — 系统健康告警
     ///
     /// WHY:对应 Claude Code 尸检 5.4% 孤儿调用教训,孤儿调用必须
@@ -1121,6 +1140,7 @@ impl NexusEvent {
             | Self::ActivationCacheStats { metadata, .. }
             | Self::GatherCompleted { metadata, .. }
             | Self::OperationTimedOut { metadata, .. }
+            | Self::GatherTimedOut { metadata, .. }
             | Self::OrphanCallDetected { metadata, .. }
             | Self::ProducerStrategyAdjusted { metadata, .. }
             | Self::PredictionMade { metadata, .. }
@@ -1231,6 +1251,7 @@ impl NexusEvent {
             Self::ActivationCacheStats { .. } => "ActivationCacheStats",
             Self::GatherCompleted { .. } => "GatherCompleted",
             Self::OperationTimedOut { .. } => "OperationTimedOut",
+            Self::GatherTimedOut { .. } => "GatherTimedOut",
             Self::OrphanCallDetected { .. } => "OrphanCallDetected",
             Self::ProducerStrategyAdjusted { .. } => "ProducerStrategyAdjusted",
             Self::PredictionMade { .. } => "PredictionMade",

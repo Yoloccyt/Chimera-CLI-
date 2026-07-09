@@ -14,7 +14,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -68,10 +68,20 @@ impl GqepExecutor {
     /// 使用 `FuturesUnordered` 流式处理,每个 future 经 QEEP `entangle` 包裹。
     /// 聚集完成后发布 `GatherCompleted` 事件,并检查孤儿调用报告。
     ///
+    /// # 双层超时防护
+    /// - **单操作超时**:`entangle` 内部用 `tokio::time::timeout` 包裹每个 future
+    ///   (阈值取自 `config.default_timeout_ms`),超时返回 `OperationTimeout`。
+    /// - **全局超时**:整个 `stream.next()` 循环用 `tokio::time::timeout` 包裹
+    ///   (阈值取自 `config.gather_deadline_ms`),超时返回 `GlobalTimedOut` 并
+    ///   发布 `GatherTimedOut` 事件。`gather_deadline_ms = 0` 时禁用(向后兼容)。
+    ///   WHY 全局超时:大规模 gather 时单操作超时累积可能导致整体执行时间失控,
+    ///   全局 deadline 为整批操作兜底(对应架构红线"所有异步操作必须有 GQEP
+    ///   聚集/超时处理")。
+    ///
     /// # 流程
     /// 1. 记录开始时间
     /// 2. 每个 future 经 `entangle` 包裹(实现孤儿检测 + 单操作超时)
-    /// 3. `FuturesUnordered` 流式处理:完成一个处理一个
+    /// 3. `collect_with_deadline` 流式处理 + 全局 deadline 包裹
     /// 4. 检查 `orphan_reports`,发布 `OrphanCallDetected` 事件(Critical)
     /// 5. 发布 `GatherCompleted` 事件
     ///
@@ -79,19 +89,16 @@ impl GqepExecutor {
     /// - `futures`:待聚集的异步操作列表
     ///
     /// # 返回
-    /// 聚集结果统计(总数/成功数/失败数/延迟/错误列表)
+    /// 聚集结果统计(总数/成功数/失败数/延迟/错误列表)。全局超时时,未完成的
+    /// future 计入 `failed`,`errors` 含一个 `GlobalTimedOut`(区分于单操作超时)。
     pub async fn gather(&self, futures: Vec<GqepFuture<String>>) -> GatherResult {
         let total = futures.len() as u32;
         let start = Instant::now();
 
-        let mut succeeded: u32 = 0;
-        let mut failed: u32 = 0;
-        let mut errors: Vec<GqepError> = Vec::new();
-
         // 将每个 future 经 QEEP entangle 包裹后放入 FuturesUnordered
         // WHY entangle:利用 OrphanGuard 在 future drop 时检测孤儿调用,
         // 同时 entangle 内部用 tokio::time::timeout 提供单操作超时保护
-        let mut stream: FuturesUnordered<GqepFuture<String>> = FuturesUnordered::new();
+        let stream: FuturesUnordered<GqepFuture<String>> = FuturesUnordered::new();
         for future in futures {
             let qeep = self.qeep.clone();
             // 将 GqepFuture<String> 经 entangle 包裹,转换为 GqepFuture<String>
@@ -106,22 +113,18 @@ impl GqepExecutor {
             stream.push(entangled);
         }
 
-        // 流式处理:完成一个处理一个(对应 A.2 设计决策)
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(_value) => succeeded += 1,
-                Err(e) => {
-                    failed += 1;
-                    errors.push(e);
-                }
-            }
-        }
+        // 流式收集结果,应用全局 gather deadline(双层超时的外层)
+        // WHY 提取为独立方法:将"全局超时包裹"与"统计"职责分离,
+        // 保持 gather 主方法简洁(架构红线:单函数 ≤200 行)
+        let (succeeded, failed, errors) = self.collect_with_deadline(stream, start, total).await;
 
         let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
 
         // SubTask 24.5:检查孤儿调用并发布 Critical 事件
         // WHY 在 gather 中检查:孤儿可能由 future 内部 spawn 子任务且不 await 引起,
         // QEEP OrphanGuard 会在子任务 drop 时报告。gather 聚集后统一发布事件。
+        // NOTE:全局超时丢弃的未完成 future 也会触发 OrphanGuard(预期行为:
+        // 被放弃的 future 本质即孤儿调用,系统应感知并告警)。
         self.publish_orphan_events().await;
 
         let result = GatherResult {
@@ -145,6 +148,109 @@ impl GqepExecutor {
         }
 
         result
+    }
+
+    /// 流式收集 `FuturesUnordered` 结果,并应用全局 gather deadline
+    ///
+    /// 这是双层超时的外层:用 `tokio::time::timeout` 包裹整个 `stream.next()` 循环。
+    /// 与 `entangle` 内部的单操作超时互补:
+    /// - 单操作超时保护单个 future(超时返回 `OperationTimeout`,该 future 计入 failed)
+    /// - 全局超时保护整个 gather 流程(超时后未完成 future 全部放弃,返回 `GlobalTimedOut`)
+    ///
+    /// # 全局超时触发时的副作用
+    /// `tokio::time::timeout` 超时会 drop 内部的 `collect_all` future,进而 drop
+    /// `FuturesUnordered` 及其中所有未完成的 entangle future。由于 `entangle` 仅在
+    /// 其内部超时/完成时才把 `OrphanGuard.completed` 置 true,被外层 drop 的 entangle
+    /// future 仍处于 `completed=false`,会触发 `OrphanGuard::drop` 报告孤儿。这是
+    /// **预期行为**:被全局超时放弃的 future 本质上就是孤儿调用(结果未被收集),
+    /// 系统应通过 `OrphanCallDetected` 事件感知并告警(由 `publish_orphan_events` 广播)。
+    ///
+    /// # 借用细节(反模式规避)
+    /// `collect_all` 以可变引用捕获计数器。`tokio::time::timeout(deadline, collect_all).await`
+    /// 产生的 `Timeout` 临时量在 Edition 2021 下会存活到所在 match 语句结束,导致 match
+    /// 分支无法 move 计数器。故先 `let outcome = ...;` 绑定,使临时量在分号处 drop、
+    /// 释放借用,再 match outcome(对应 §4.4 async 反模式经验)。
+    ///
+    /// # 参数
+    /// - `stream`:已 entangle 包裹的 FuturesUnordered
+    /// - `start`:gather 开始时刻(用于计算 elapsed_ms)
+    /// - `total`:总操作数(用于计算被放弃数,发布事件)
+    ///
+    /// # 返回
+    /// `(succeeded, failed, errors)` 三元组。全局超时时 `errors` 含一个 `GlobalTimedOut`。
+    async fn collect_with_deadline(
+        &self,
+        mut stream: FuturesUnordered<GqepFuture<String>>,
+        start: Instant,
+        total: u32,
+    ) -> (u32, u32, Vec<GqepError>) {
+        let mut succeeded: u32 = 0;
+        let mut failed: u32 = 0;
+        let mut errors: Vec<GqepError> = Vec::new();
+
+        let deadline_ms = self.config.gather_deadline_ms;
+
+        // deadline_ms=0 表示禁用全局超时(向后兼容,行为与无全局超时一致)
+        // WHY 0=禁用:与 with_timeout 的 timeout_ms=0 语义保持一致
+        if deadline_ms == 0 {
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(_) => succeeded += 1,
+                    Err(e) => {
+                        failed += 1;
+                        errors.push(e);
+                    }
+                }
+            }
+            return (succeeded, failed, errors);
+        }
+
+        let deadline = Duration::from_millis(deadline_ms);
+
+        // collect_all 以引用方式捕获计数器,stream 被 move 进来;
+        // 全局超时 drop collect_all 时,已完成部分的计数得以保留
+        let collect_all = async {
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(_) => succeeded += 1,
+                    Err(e) => {
+                        failed += 1;
+                        errors.push(e);
+                    }
+                }
+            }
+        };
+
+        // 先绑定 outcome:使 Timeout 临时量在分号处 drop,释放对计数器的借用,
+        // 否则下方 match 分支无法 move succeeded/failed/errors(Edition 2021 临时量生命周期)
+        let outcome = tokio::time::timeout(deadline, collect_all).await;
+
+        match outcome {
+            Ok(()) => (succeeded, failed, errors),
+            Err(_) => {
+                // 全局超时:记录 GlobalTimedOut(区分单操作超时,供调用者决策)
+                let elapsed_ms = start.elapsed().as_millis() as u64;
+                let abandoned = total.saturating_sub(succeeded + failed);
+
+                // 发布 GatherTimedOut 事件(可观测性:供 efficiency-monitor 记录全局超时指标)
+                let event = NexusEvent::GatherTimedOut {
+                    metadata: EventMetadata::new("gqep-executor"),
+                    deadline_ms,
+                    elapsed_ms,
+                    total,
+                    abandoned,
+                };
+                if let Err(e) = self.event_bus.publish(event).await {
+                    warn!(error = %e, "发布 gather 全局超时事件失败");
+                }
+
+                errors.push(GqepError::GlobalTimedOut {
+                    deadline_ms,
+                    elapsed_ms,
+                });
+                (succeeded, failed, errors)
+            }
+        }
     }
 
     /// 发布所有已检测到的孤儿调用事件
@@ -215,6 +321,12 @@ pub(crate) fn map_gqep_to_qeep(e: GqepError) -> QeepErr {
         GqepError::OrphanCallDetected { .. } => QeepErr::Orphaned,
         GqepError::OperationFailed { reason, .. } => QeepErr::SerializationError(reason),
         GqepError::BatchAtomicFailure { reason, .. } => QeepErr::SerializationError(reason),
+        // WHY 此分支不应被触达:GlobalTimedOut 是 gather 级错误,在 collect_with_deadline
+        // 中直接生成并入 GatherResult.errors,不会经 entangle 流转。此映射仅为保持
+        // match 穷尽性(新增错误变体必须显式处理,防止遗漏)。
+        GqepError::GlobalTimedOut { deadline_ms, .. } => {
+            QeepErr::SerializationError(format!("global gather timeout: deadline_ms={deadline_ms}"))
+        }
     }
 }
 

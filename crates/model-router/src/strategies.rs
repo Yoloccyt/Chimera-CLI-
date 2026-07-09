@@ -127,18 +127,35 @@ pub fn route_auto(
         })
         .collect();
 
-    // 按评分降序排序(评分相同则按 model_id 升序,保证确定性)
-    scored.sort_by(|a, b| {
+    // 评分降序比较器:评分高者优先,相同则 model_id 升序(保证确定性)
+    // WHY 嵌套 fn:item 天生 Copy,可同时传递给 select_nth_unstable_by 和 sort_by,
+    // 避免闭包 move 后无法复用的问题。
+    fn cmp_score_desc(
+        a: &(f64, &crate::types::ModelInfo),
+        b: &(f64, &crate::types::ModelInfo),
+    ) -> std::cmp::Ordering {
         b.0.partial_cmp(&a.0)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.1.model_id.cmp(&b.1.model_id))
-    });
+    }
+
+    // O(n) 部分排序选出最佳模型(index 0),替代全排序 O(n log n)
+    // WHY select_nth_unstable_by:符合 §4.1 Engineering Convention,
+    // Top-1 选择用 O(n) 而非 O(n log n) 全排序。partition 后 [0] 为最佳,
+    // [1..] 无序,需单独排序以满足候选列表有序契约。
+    if scored.len() > 1 {
+        scored.select_nth_unstable_by(1, cmp_score_desc);
+    }
 
     let selected = scored[0].1;
     let estimated_cost = estimate_cost(req.estimated_tokens, selected.cost_per_1k_tokens);
-    let candidates: Vec<String> = scored
+
+    // 候选列表需按策略优先级降序(RoutingDecision.candidates 文档契约:
+    // types.rs "按策略优先级降序排序"),对 [1..] 排序保证有序。
+    // 复杂度 O((n-1) log (n-1)) < O(n log n) 全排序。
+    scored[1..].sort_by(cmp_score_desc);
+    let candidates: Vec<String> = scored[1..]
         .iter()
-        .skip(1)
         .map(|(_, m)| m.model_id.clone())
         .collect();
 

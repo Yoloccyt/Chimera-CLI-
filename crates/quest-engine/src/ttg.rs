@@ -48,7 +48,10 @@ use std::sync::Mutex;
 use chrono::{DateTime, Duration, Utc};
 use decb_governor::BudgetTier;
 use nexus_core::{Quest, ThinkingMode};
-use tracing::info;
+// WHY 降级:ThinkingModeSwitched 事件已通过 EventBus 发布(见 publish_mode_switch),
+// 同步方法内的 info! 与已发布事件重复(违反 DRY)。降级为 debug! 保留诊断信息,
+// 避免生产日志噪声;下游消费者订阅 EventBus 获取结构化切换通知,不依赖 tracing。
+use tracing::debug;
 use uuid::Uuid;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
@@ -320,7 +323,8 @@ impl TtgGovernor {
         if budget_tier == BudgetTier::Degraded {
             let mode = ThinkingMode::Fast;
             self.record_mode(quest, mode);
-            info!(
+            // WHY debug:事件由 select_mode_and_publish 发布,此处仅保留诊断
+            debug!(
                 quest_id = %quest.quest_id,
                 ?mode,
                 complexity_score = complexity_score.value(),
@@ -341,7 +345,8 @@ impl TtgGovernor {
         if task_count <= self.config.simple_task_threshold && budget_tier != BudgetTier::HighTier {
             let mode = ThinkingMode::Fast;
             self.record_mode(quest, mode);
-            info!(
+            // WHY debug:事件由 select_mode_and_publish 发布,此处仅保留诊断
+            debug!(
                 quest_id = %quest.quest_id,
                 ?mode,
                 complexity_score = complexity_score.value(),
@@ -362,7 +367,8 @@ impl TtgGovernor {
         if task_count <= self.config.complex_task_threshold || budget_tier == BudgetTier::LowTier {
             let mode = ThinkingMode::Standard;
             self.record_mode(quest, mode);
-            info!(
+            // WHY debug:事件由 select_mode_and_publish 发布,此处仅保留诊断
+            debug!(
                 quest_id = %quest.quest_id,
                 ?mode,
                 complexity_score = complexity_score.value(),
@@ -382,7 +388,8 @@ impl TtgGovernor {
         // 规则 4:复杂任务或高预算档位 → Deep
         let mode = ThinkingMode::Deep;
         self.record_mode(quest, mode);
-        info!(
+        // WHY debug:事件由 select_mode_and_publish 发布,此处仅保留诊断
+        debug!(
             quest_id = %quest.quest_id,
             ?mode,
             complexity_score = complexity_score.value(),
@@ -463,7 +470,8 @@ impl TtgGovernor {
 
         // 滞后机制检查:上次切换时间 + lag_interval 内不再次切换
         if self.is_within_lag_interval(quest_id) {
-            info!(
+            // WHY debug:抑制非事件,仅诊断;不发布事件故无需 EventBus
+            debug!(
                 quest_id = %quest_id,
                 old_tier = %old_tier,
                 new_tier = %new_tier,
@@ -483,7 +491,8 @@ impl TtgGovernor {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         last_switch.insert(quest_id.to_string(), Utc::now());
 
-        info!(
+        // WHY debug:事件由 on_budget_adjusted_and_publish 发布,此处仅保留诊断
+        debug!(
             quest_id = %quest_id,
             ?mode,
             old_tier = %old_tier,
@@ -550,7 +559,8 @@ impl TtgGovernor {
         entry.last_switch_time = Some(Utc::now());
         drop(modes);
 
-        info!(
+        // WHY debug:事件由 override_mode_and_publish 发布,此处仅保留诊断
+        debug!(
             quest_id = %quest_id,
             ?mode,
             current_tier = %current_tier,
@@ -573,7 +583,9 @@ impl TtgGovernor {
         if let Some(entry) = modes.get_mut(quest_id) {
             entry.manual_override = None;
         }
-        info!(
+        // WHY debug:reset 清除覆盖标记、恢复自动决策,非模式切换,不发布事件;
+        // 降级为 debug 避免与 ThinkingModeSwitched 事件混淆
+        debug!(
             quest_id = %quest_id,
             "手动覆盖已清除,恢复自动选择"
         );
@@ -750,14 +762,10 @@ impl TtgGovernor {
         reason: &ModeSwitchReason,
     ) -> Result<(), QuestError> {
         let reason_str = mode_switch_reason_to_str(reason);
-        info!(
-            quest_id = %quest_id,
-            from = %from_mode,
-            to = ?to_mode,
-            reason = %reason_str,
-            "ThinkingModeSwitched 事件已发布"
-        );
 
+        // WHY 删除 info!:本函数即发布 ThinkingModeSwitched 事件,事件本身已携带
+        // from_mode/to_mode/reason 结构化字段,重复 tracing::info! 违反 DRY。
+        // 有 EventBus 时消费者订阅事件;无 EventBus 时静默返回(集成前行为)。
         if let Some(bus) = &self.event_bus {
             let event = NexusEvent::ThinkingModeSwitched {
                 metadata: EventMetadata::new("ttg-governor"),
