@@ -11,6 +11,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# chrono:时间滞后机制(复用 DECB tier_switch_lag_ms 模式,记录 last_switch_time)
+chrono = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

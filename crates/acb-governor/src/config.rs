@@ -35,6 +35,13 @@ pub struct AcbGovernorConfig {
     pub degrade_threshold: f32,
     /// 升级阈值 [0.0, 1.0]:利用率低于此值触发自动升级
     pub upgrade_threshold: f32,
+    /// 级别切换时间滞后(毫秒),默认 1000ms,防止阈值附近频繁切换
+    ///
+    /// WHY 复用 DECB 模式:阈值滞后带(degrade/upgrade)只防止"判定区间"内的抖动,
+    /// 但无法防止"利用率在阈值两侧反复横跳"导致的连续切换。时间滞后在每次切换后
+    /// 强制冷却 `tier_switch_lag_ms`,与滞后带正交,双重防抖(§6 架构红线:竞态/抖动防护)。
+    /// 默认 1s 比 DECB 的 10s 更短:ACB 级别切换影响单次请求预算上限,恢复敏感度更高。
+    pub tier_switch_lag_ms: u64,
 }
 
 impl Default for AcbGovernorConfig {
@@ -51,6 +58,9 @@ impl Default for AcbGovernorConfig {
             // 中间 50% 区间为稳定带,避免频繁切换
             degrade_threshold: 0.8,
             upgrade_threshold: 0.3,
+            // WHY 1000ms 时间滞后:阈值滞后带的补充,切换后强制冷却 1s。
+            // 比 DECB 的 10s 短:ACB 级别影响单次请求上限,恢复敏感度更高
+            tier_switch_lag_ms: 1_000,
         }
     }
 }
@@ -153,6 +163,7 @@ mod tests {
         assert_eq!(cfg.total_budget_limit, 1_000_000);
         assert!((cfg.degrade_threshold - 0.8).abs() < 1e-6);
         assert!((cfg.upgrade_threshold - 0.3).abs() < 1e-6);
+        assert_eq!(cfg.tier_switch_lag_ms, 1_000);
     }
 
     #[test]
