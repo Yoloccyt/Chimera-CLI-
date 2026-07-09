@@ -98,11 +98,20 @@ impl CacrGuard {
     /// - `Block`:`estimated_cost >= remaining_budget * block_threshold`
     ///
     /// # 边界情况
-    /// 当 `remaining_budget` 为 0 时,任何非零成本都会触发 Block,
-    /// 零成本则 Allow(无消耗无需保护)。
+    /// 当 `remaining_budget` 为 0 时,任何成本(含 0)都会触发 Block,
+    /// 表示预算已耗尽,不允许任何路由。
+    /// 当 `remaining_budget` 极小导致 `warn_limit` 被截断为 0 时,
+    /// 非零成本会触发 `Downgrade`,零成本按 `estimated_cost >= warn_limit` 规则判定。
     pub fn check(&self, estimated_cost: u64, remaining_budget: u64) -> CacrDecision {
-        let warn_limit = (remaining_budget as f32 * self.config.warn_threshold) as u64;
-        let block_limit = (remaining_budget as f32 * self.config.block_threshold) as u64;
+        // WHY: f32 只有 24 位有效尾数，无法精确表示所有大于 2^24(16,777,216) 的整数。
+        // 当 remaining_budget 超过 2^24 后，先转 f32 再乘阈值会丢失个位精度，造成
+        // 一美分级的阈值判定误差。配置阈值仍保留 f32(便于人类阅读/配置)，但在
+        // check 内部转换为 u64 百分比后做纯整数运算，避免浮点误差。
+        let warn_percent = (self.config.warn_threshold * 100.0).round() as u64;
+        let block_percent = (self.config.block_threshold * 100.0).round() as u64;
+
+        let warn_limit = remaining_budget * warn_percent / 100;
+        let block_limit = remaining_budget * block_percent / 100;
 
         if estimated_cost >= block_limit {
             CacrDecision::Block(format!(

@@ -10,8 +10,8 @@
 //! - 通过 `event_bus::EventBus` 发布 `WikiUpdated` 事件通知上层
 //!
 //! # 架构红线
-//! - 所有 SQLite 操作通过 `Arc<Mutex<Connection>>` 串行化(线程安全),
-//!   并使用 `spawn_blocking` 转移到阻塞线程池(避免阻塞 async runtime)
+//! - 写操作通过专用写入线程(mpsc + oneshot)序列化,读操作通过只读连接池
+//!   在 `spawn_blocking` 中并发执行;从而利用 SQLite WAL 的读写并发能力
 //! - `#![forbid(unsafe_code)]` 禁止 unsafe,因此 sqlite-vec 集成降级为内存向量检索
 //! - 单函数 ≤ 200 行,所有可能失败的边界用 `?` 处理
 //!

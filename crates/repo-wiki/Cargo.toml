@@ -45,4 +45,15 @@ ndarray = { workspace = true }
 # sqlite-vec = { workspace = true }
 
 [dev-dependencies]
+# 基准测试框架
+criterion = { workspace = true }
+# 测试用临时文件/目录
 tempfile = { workspace = true }
+
+[[bench]]
+name = "store_bench"
+harness = false
+
+[[bench]]
+name = "vector_bench"
+harness = false

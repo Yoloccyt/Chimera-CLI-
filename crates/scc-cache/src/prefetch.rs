@@ -31,10 +31,195 @@ use event_bus::{EventBus, EventMetadata, NexusEvent};
 use crate::cache::SccCache;
 use crate::types::{AccessPattern, ContextId};
 
+/// 默认转移矩阵容量上限
+///
+/// WHY 10000: 在长期运行场景中,上下文 ID 数量可能无限增长。
+/// 10000 个活跃上下文足以覆盖典型会话的局部性,同时将内存占用
+/// 控制在可预测范围(约数 MB),符合 Ω-Sparse 定律。
+const DEFAULT_PATTERN_CAPACITY: usize = 10_000;
+
+/// LRU 节点 — 使用 Vec 索引实现的无 unsafe 双向链表节点
+///
+/// WHY 不用 `std::collections::LinkedList`:其 Cursor API 在 Rust 2021
+/// 中不稳定,无法在不使用 unsafe 指针的情况下 O(1) 移动节点。
+/// 用 Vec 索引 + prev/next 指针可在 `#![forbid(unsafe_code)]` 约束下
+/// 实现真正的 O(1) LRU 维护。
+#[derive(Debug)]
+struct LruNode {
+    /// 当前上下文 ID
+    key: ContextId,
+    /// 前驱节点索引(`None` 表示当前节点是 LRU 头)
+    prev: Option<usize>,
+    /// 后继节点索引(`None` 表示当前节点是 MRU 尾)
+    next: Option<usize>,
+}
+
+/// 容量受限的 LRU 访问模式图
+///
+/// 存储结构:current → (节点索引, {next → count})。
+///
+/// WHY: 一阶马尔可夫链随上下文 ID 数量线性增长;无界 HashMap 在
+/// 长期运行中会导致内存无限膨胀。LruPatternMap 在保持 O(1) 查找/
+/// 更新的前提下,通过 LRU 策略将活跃上下文数量限制在固定容量内,
+/// 符合 Ω-Sparse 定律。
+struct LruPatternMap {
+    /// current → (节点索引, 转移计数表)
+    data: HashMap<ContextId, (usize, HashMap<ContextId, u32>)>,
+    /// 双向链表节点池。使用 Vec 索引而非指针,避免 unsafe。
+    nodes: Vec<LruNode>,
+    /// 可复用的节点索引(被驱逐节点留下的空位)
+    free_indices: Vec<usize>,
+    /// 链表头索引:最近最少使用(LRU)
+    head: Option<usize>,
+    /// 链表尾索引:最近最多使用(MRU)
+    tail: Option<usize>,
+    /// 最大容量
+    capacity: usize,
+}
+
+impl LruPatternMap {
+    /// 创建指定容量的空模式图
+    fn with_capacity(capacity: usize) -> Self {
+        assert!(capacity > 0, "LruPatternMap capacity must be > 0");
+        Self {
+            data: HashMap::with_capacity(capacity),
+            nodes: Vec::with_capacity(capacity),
+            free_indices: Vec::new(),
+            head: None,
+            tail: None,
+            capacity,
+        }
+    }
+
+    /// 当前存储的 current 上下文数量
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// 记录一次状态转移,并在需要时触发 LRU 淘汰
+    ///
+    /// 复杂度:O(1) 平均。
+    fn record_transition(&mut self, current: &ContextId, next: &ContextId) {
+        // 先在一个独立作用域内更新转移计数,避免 `self.data.get_mut` 借用
+        // 与后续 `self.move_to_tail` 的 `&mut self` 冲突。
+        let idx = if let Some((idx, transitions)) = self.data.get_mut(current) {
+            transitions
+                .entry(next.clone())
+                .and_modify(|count| *count = count.saturating_add(1))
+                .or_insert(1);
+            Some(*idx)
+        } else {
+            None
+        };
+
+        if let Some(idx) = idx {
+            // 已存在:移到 MRU
+            self.move_to_tail(idx);
+        } else {
+            // 新 current:先淘汰 LRU 再插入
+            if self.data.len() >= self.capacity {
+                self.evict_lru();
+            }
+
+            let mut transitions = HashMap::new();
+            transitions.insert(next.clone(), 1);
+
+            let idx = self.alloc_node(current.clone());
+            self.append_to_tail(idx);
+            self.data.insert(current.clone(), (idx, transitions));
+        }
+    }
+
+    /// 获取指定 current 的转移计数表(只读,不更新 LRU)
+    fn get_transitions(&self, current: &ContextId) -> Option<&HashMap<ContextId, u32>> {
+        self.data.get(current).map(|(_, t)| t)
+    }
+
+    /// 分配一个节点(复用空闲索引或追加新节点)
+    fn alloc_node(&mut self, key: ContextId) -> usize {
+        if let Some(idx) = self.free_indices.pop() {
+            self.nodes[idx] = LruNode {
+                key,
+                prev: None,
+                next: None,
+            };
+            idx
+        } else {
+            let idx = self.nodes.len();
+            self.nodes.push(LruNode {
+                key,
+                prev: None,
+                next: None,
+            });
+            idx
+        }
+    }
+
+    /// 将节点追加到 MRU 尾
+    fn append_to_tail(&mut self, idx: usize) {
+        if let Some(tail_idx) = self.tail {
+            self.nodes[tail_idx].next = Some(idx);
+            self.nodes[idx].prev = Some(tail_idx);
+        } else {
+            // 第一个节点
+            self.head = Some(idx);
+            self.nodes[idx].prev = None;
+        }
+        self.nodes[idx].next = None;
+        self.tail = Some(idx);
+    }
+
+    /// 将已存在节点移动到 MRU 尾
+    fn move_to_tail(&mut self, idx: usize) {
+        if self.tail == Some(idx) {
+            return;
+        }
+
+        let node = &self.nodes[idx];
+        let prev = node.prev;
+        let next = node.next;
+
+        // 从当前位置移除
+        if let Some(p) = prev {
+            self.nodes[p].next = next;
+        } else {
+            self.head = next;
+        }
+        if let Some(n) = next {
+            self.nodes[n].prev = prev;
+        }
+
+        // 追加到尾部
+        let tail_idx = self.tail.expect("tail must exist when len > 0");
+        self.nodes[tail_idx].next = Some(idx);
+        self.nodes[idx].prev = Some(tail_idx);
+        self.nodes[idx].next = None;
+        self.tail = Some(idx);
+    }
+
+    /// 驱逐最近最少使用的 current 上下文
+    fn evict_lru(&mut self) {
+        let lru_idx = self.head.expect("cannot evict from empty map");
+        let lru_key = self.nodes[lru_idx].key.clone();
+        let new_head = self.nodes[lru_idx].next;
+
+        self.data.remove(&lru_key);
+
+        if let Some(n) = new_head {
+            self.nodes[n].prev = None;
+        } else {
+            // 唯一节点被移除
+            self.tail = None;
+        }
+        self.head = new_head;
+        self.free_indices.push(lru_idx);
+    }
+}
+
 /// 访问模式学习器 — 基于一阶马尔可夫链的上下文访问预测
 ///
 /// # 马尔可夫链模型
-/// `patterns: RwLock<HashMap<ContextId, HashMap<ContextId, u32>>>`
+/// `patterns: RwLock<LruPatternMap>`
 /// - 外层 key:当前上下文 ID
 /// - 内层 key:下一步上下文 ID
 /// - 内层 value:转移计数(current → next 出现次数)
@@ -45,8 +230,8 @@ use crate::types::{AccessPattern, ContextId};
 /// `patterns` 使用 `std::sync::RwLock` 保护,支持并发读、独占写。
 /// `record_access` 获取写锁,`predict_next` 获取读锁,两者均满足 `Send + Sync`。
 pub struct AccessPatternLearner {
-    /// 一阶马尔可夫链:current → {next → count}
-    patterns: RwLock<HashMap<ContextId, HashMap<ContextId, u32>>>,
+    /// 一阶马尔可夫链:current → {next → count},带 LRU 容量上限
+    patterns: RwLock<LruPatternMap>,
     /// 事件总线(预取完成后发布 CachePrefetched 事件)
     event_bus: EventBus,
     /// 预取概率阈值(默认 0.6)
@@ -54,17 +239,42 @@ pub struct AccessPatternLearner {
 }
 
 impl AccessPatternLearner {
-    /// 创建访问模式学习器
+    /// 创建访问模式学习器(使用默认容量 10000)
     ///
     /// # 参数
     /// - `event_bus`:事件总线(预取完成后发布 CachePrefetched 事件)
     /// - `prefetch_threshold`:预取概率阈值,概率 >= 此值的上下文会被预取
     pub fn new(event_bus: EventBus, prefetch_threshold: f32) -> Self {
+        Self::with_capacity(event_bus, prefetch_threshold, DEFAULT_PATTERN_CAPACITY)
+    }
+
+    /// 创建指定容量的访问模式学习器
+    ///
+    /// # 参数
+    /// - `event_bus`:事件总线(预取完成后发布 CachePrefetched 事件)
+    /// - `prefetch_threshold`:预取概率阈值
+    /// - `capacity`:转移矩阵容量上限,至少为 1
+    ///
+    /// WHY 显式容量构造函数:测试需要构造小容量场景以快速验证 LRU 行为,
+    /// 同时生产代码通过 `new()` 获得合理的默认上限。
+    pub fn with_capacity(event_bus: EventBus, prefetch_threshold: f32, capacity: usize) -> Self {
         Self {
-            patterns: RwLock::new(HashMap::new()),
+            patterns: RwLock::new(LruPatternMap::with_capacity(capacity)),
             event_bus,
             prefetch_threshold,
         }
+    }
+
+    /// 返回当前存储的 current 上下文数量(用于监控与测试)
+    ///
+    /// WHY 暴露此指标:调用方可据此观察学习器内存占用,并在测试中
+    /// 验证 LRU 容量上限是否生效。
+    pub fn pattern_count(&self) -> usize {
+        let patterns = self.patterns.read().unwrap_or_else(|e| {
+            tracing::warn!("patterns RwLock poisoned, recovering");
+            e.into_inner()
+        });
+        patterns.len()
     }
 
     /// 记录上下文访问转移 — 更新马尔可夫链转移计数
@@ -82,12 +292,7 @@ impl AccessPatternLearner {
             e.into_inner()
         });
 
-        patterns
-            .entry(current.clone())
-            .or_default()
-            .entry(next.clone())
-            .and_modify(|count| *count = count.saturating_add(1))
-            .or_insert(1);
+        patterns.record_transition(current, next);
     }
 
     /// 异步后台记录访问转移 — 不阻塞主流程
@@ -136,7 +341,7 @@ impl AccessPatternLearner {
             e.into_inner()
         });
 
-        let transitions = match patterns.get(current) {
+        let transitions = match patterns.get_transitions(current) {
             Some(t) => t,
             None => return Vec::new(),
         };
@@ -167,7 +372,7 @@ impl AccessPatternLearner {
             e.into_inner()
         });
 
-        patterns.get(current).map(|transitions| {
+        patterns.get_transitions(current).map(|transitions| {
             let mut sorted: Vec<(ContextId, u32)> =
                 transitions.iter().map(|(id, &c)| (id.clone(), c)).collect();
             sorted.sort_by_key(|b| std::cmp::Reverse(b.1));

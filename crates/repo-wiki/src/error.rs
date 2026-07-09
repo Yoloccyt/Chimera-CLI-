@@ -39,6 +39,13 @@ pub enum WikiError {
     #[error("spawn_blocking join error: {0}")]
     BlockingJoinError(#[from] tokio::task::JoinError),
 
+    /// 写入通道已关闭 — 写入线程已退出,无法继续执行写操作
+    ///
+    /// WHY:写入线程在 `WikiStore` 被 Drop 时随 channel 关闭而退出;
+    /// 若调用方仍持有旧 clone 并尝试写入,应得到明确错误而非 panic。
+    #[error("write channel closed")]
+    WriteChannelClosed,
+
     /// 事件总线错误 — 发布 WikiUpdated 事件失败
     #[error("event bus error: {0}")]
     EventBusError(#[from] event_bus::EventBusError),
