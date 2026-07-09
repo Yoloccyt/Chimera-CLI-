@@ -57,6 +57,23 @@ pub enum SesaError {
     /// 调用者应先注册至少一个专家再发起激活请求。
     #[error("空专家池: 无法激活")]
     EmptyExpertPool,
+
+    /// 前置事件未满足 — SESA 激活前上游路由事件未收到
+    ///
+    /// WHY 默认启用校验:SESA 是五层路由末端(OSA → KVBSR → FaaE → GEA → SESA),
+    /// 若上游(OSA/KVBSR/FaaE)未完成就激活 SESA,会导致稀疏激活基于不完整的路由
+    /// 结果,违反 Ω-Sparse 原则。`PrerequisiteChecker` 在 activate() 入口强制
+    /// 校验三个必需上游事件:
+    /// - `OmniSparseMasksComputed`(OSA 完成)
+    /// - `ToolsRouted`(KVBSR/FaaE 完成)
+    /// - `ExpertRouted`(FaaE 路由完成)
+    ///
+    /// 缺失任一事件即返回此错误,调用者应等待上游完成后再重试。
+    #[error("prerequisite not met: missing upstream events: {missing_events:?}")]
+    PrerequisiteNotMet {
+        /// 缺失的上游事件名称列表
+        missing_events: Vec<&'static str>,
+    },
 }
 
 #[cfg(test)]

@@ -37,6 +37,18 @@ pub struct SesaConfig {
     /// WHY 固定 256:SESA 创新点要求 256-bit 位向量,可表示最多 256 个专家。
     /// 若专家数超过 256,应通过 KVBSR 粗筛降至 256 以内再激活。
     pub mask_width: usize,
+
+    /// 是否启用前置事件校验(默认 true,安全优先)
+    ///
+    /// WHY 默认启用:SESA 是五层路由末端(OSA → KVBSR → FaaE → GEA → SESA),
+    /// 启用后 `activate()` 入口会校验是否已收到三个上游路由事件:
+    /// - `OmniSparseMasksComputed`(OSA 完成)
+    /// - `ToolsRouted`(KVBSR/FaaE 完成)
+    /// - `ExpertRouted`(FaaE 路由完成)
+    ///
+    /// 缺失任一事件即返回 `SesaError::PrerequisiteNotMet`,强制五层路由顺序。
+    /// 仅在测试或降级场景下设为 false(跳过校验,向后兼容旧行为)。
+    pub prerequisite_check_enabled: bool,
 }
 
 impl Default for SesaConfig {
@@ -46,6 +58,7 @@ impl Default for SesaConfig {
             max_sparsity_ratio: 0.4,
             activation_deadline_ms: 5,
             mask_width: 256,
+            prerequisite_check_enabled: true,
         }
     }
 }
@@ -70,6 +83,7 @@ mod tests {
             max_sparsity_ratio: 0.3,
             activation_deadline_ms: 10,
             mask_width: 256,
+            prerequisite_check_enabled: true,
         };
         let json = serde_json::to_string(&config).expect("序列化失败");
         let restored: SesaConfig = serde_json::from_str(&json).expect("反序列化失败");
