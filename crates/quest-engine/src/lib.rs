@@ -34,6 +34,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+pub mod arbitration;
 pub mod checkpoint;
 pub mod config;
 pub mod dag;
@@ -43,6 +44,7 @@ pub mod ttg;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use arbitration::ArbitrationLayer;
 pub use checkpoint::CheckpointManager;
 pub use config::QuestConfig;
 pub use engine::QuestEngine;

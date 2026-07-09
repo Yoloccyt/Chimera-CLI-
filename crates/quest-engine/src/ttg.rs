@@ -53,6 +53,7 @@ use uuid::Uuid;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 
+use crate::arbitration::ArbitrationLayer;
 use crate::error::QuestError;
 
 // ============================================================
@@ -215,6 +216,11 @@ pub struct TtgGovernor {
     /// WHY Option:测试场景或纯计算用途无需事件总线,
     /// None 时异步发布方法静默跳过事件发布(仅记录 tracing)
     event_bus: Option<EventBus>,
+    /// ACB/DECB 仲裁层(可选)— 综合两个治理器信号,保守取严
+    ///
+    /// WHY Option:与 event_bus 同生命周期,仅 with_event_bus 时创建。
+    /// None 时 effective_tier() 直接返回 fallback,向后兼容。
+    arbitration: Option<ArbitrationLayer>,
 }
 
 impl TtgGovernor {
@@ -225,6 +231,7 @@ impl TtgGovernor {
             modes: Mutex::new(HashMap::new()),
             last_budget_switch: Mutex::new(HashMap::new()),
             event_bus: None,
+            arbitration: None,
         }
     }
 
@@ -232,12 +239,20 @@ impl TtgGovernor {
     ///
     /// 模式切换时自动发布 `ThinkingModeSwitched` 事件,
     /// 供 Parliament、Dashboard 等下游消费者订阅。
+    ///
+    /// 同时创建 ArbitrationLayer 订阅 Parliament topic 事件,
+    /// 使 `effective_tier()` / `select_mode_with_arbitration()` 可用。
     pub fn with_event_bus(config: TtgConfig, event_bus: EventBus) -> Self {
+        // WHY 先创建 ArbitrationLayer 再 move event_bus:
+        // ArbitrationLayer::new 借用 &EventBus,不消费所有权。
+        // 但 event_bus 后续需要 move 到 Self,所以 arbitration 必须先创建。
+        let arbitration = ArbitrationLayer::new(&event_bus);
         Self {
             config,
             modes: Mutex::new(HashMap::new()),
             last_budget_switch: Mutex::new(HashMap::new()),
             event_bus: Some(event_bus),
+            arbitration: Some(arbitration),
         }
     }
 
@@ -245,7 +260,9 @@ impl TtgGovernor {
     ///
     /// WHY:某些构造流程中 EventBus 在 TtgGovernor 之后才可用,
     /// 此方法允许延迟注入,避免强制要求构造顺序。
+    /// 同时创建 ArbitrationLayer 订阅 Parliament topic 事件。
     pub fn set_event_bus(&mut self, event_bus: EventBus) {
+        self.arbitration = Some(ArbitrationLayer::new(&event_bus));
         self.event_bus = Some(event_bus);
     }
 
@@ -572,6 +589,53 @@ impl TtgGovernor {
             .get(quest_id)
             .map(|e| e.manual_override.is_some())
             .unwrap_or(false)
+    }
+
+    // ============================================================
+    // N7: ACB/DECB 仲裁层集成
+    // ============================================================
+
+    /// 返回仲裁后的有效 DECB 档位
+    ///
+    /// 综合订阅到的 ACB 与 DECB 事件,应用保守取严策略:
+    /// - ACB L0 → Degraded(无论 DECB 报告什么)
+    /// - ACB L1 → LowTier
+    /// - ACB L2/L3 或无 ACB 事件 → 使用 DECB 最新档位
+    ///
+    /// 无仲裁层(无 EventBus)或无事件时返回 `fallback_tier`,
+    /// 保证向后兼容。
+    ///
+    /// # 使用场景
+    /// 调用方在 `select_mode` 前先调用此方法获取有效档位:
+    /// ```ignore
+    /// let tier = governor.effective_tier(decb_tier);
+    /// let (mode, reason) = governor.select_mode(&quest, tier);
+    /// ```
+    pub fn effective_tier(&self, fallback_tier: BudgetTier) -> BudgetTier {
+        match &self.arbitration {
+            Some(layer) => layer.arbitrated_tier().unwrap_or(fallback_tier),
+            None => fallback_tier,
+        }
+    }
+
+    /// 基于仲裁档位自动选择思考模式
+    ///
+    /// 封装 `effective_tier()` + `select_mode()` 的完整流程:
+    /// 1. 调用 ArbitrationLayer 获取仲裁后的有效 DECB 档位
+    /// 2. 基于有效档位调用 `select_mode` 选择思考模式
+    ///
+    /// 无仲裁层时使用 `fallback_tier`,等价于直接调用 `select_mode`。
+    ///
+    /// # 参数
+    /// - `quest`:待评估的 Quest
+    /// - `fallback_tier`:无仲裁事件时的降级档位(通常是 DECB 直接报告的档位)
+    pub fn select_mode_with_arbitration(
+        &self,
+        quest: &Quest,
+        fallback_tier: BudgetTier,
+    ) -> (ThinkingMode, ModeSwitchReason) {
+        let effective = self.effective_tier(fallback_tier);
+        self.select_mode(quest, effective)
     }
 
     // ============================================================
