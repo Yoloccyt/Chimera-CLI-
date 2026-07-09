@@ -46,7 +46,7 @@ pub use asa::{
     AsaAuditor, AsaConfig, AsaSandboxCoordinator, AuditResult, InterventionAction,
     OperationAuditInput,
 };
-pub use audit::{AuditBlock, AuditChain};
+pub use audit::{AuditBlock, AuditChain, AuditRecordStatus, RecordId};
 pub use error::SecCoreError;
 pub use policy::{validate_command, validate_env, BlockedPattern, CommandPolicy, EnvPolicy};
 pub use sandbox::Sandbox;
