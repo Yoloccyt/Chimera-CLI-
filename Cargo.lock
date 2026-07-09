@@ -6,6 +6,7 @@ version = 4
 name = "acb-governor"
 version = "1.0.0-omega"
 dependencies = [
+ "chrono",
  "event-bus",
  "proptest",
  "serde",
@@ -233,6 +234,7 @@ dependencies = [
  "anyhow",
  "clap",
  "figment",
+ "nexus-core",
  "proptest",
  "serde",
  "serde_json",

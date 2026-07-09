@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# nexus-core:L1 核心类型(配置类型定义,向下依赖符合 §2.2 铁律)
+nexus-core = { path = "../nexus-core" }
 # Clap:子命令式 CLI 框架,启用 derive 宏、env 变量支持、cargo 元信息
 clap = { workspace = true }
 # Figment:多源配置合并(默认 > File > Env > CLI 优先级)
