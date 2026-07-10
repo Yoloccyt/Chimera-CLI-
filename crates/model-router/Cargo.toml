@@ -11,6 +11,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+# v1.3.0 S2:InMemoryHistoryStore 并发安全历史存储(model_id → HistoryRecord)
+# WHY DashMap:L1 Core 工具依赖,符合 §2.2 依赖铁律;并发读写无锁,适合路由热路径
+dashmap = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

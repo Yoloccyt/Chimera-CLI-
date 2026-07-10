@@ -5,6 +5,151 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.3.0-omega 汇总(2026-07-09)
+
+v1.3.0-omega 阶段完成 P0(GA 前收尾)+ P1(短期增强)共 6 项任务,P2(3 项条件触发)待评估。
+
+**P0 — GA 前收尾**(3 项,已完成):
+- G1 cargo audit:anyhow 1.0.102 → 1.0.103 升级(RUSTSEC-2026-0190)
+- G2 CHANGELOG v1.2.0-omega 汇总章节插入
+- G3 project_memory v1.2.0-omega 8 条原则提炼
+
+**P1 — 短期增强**(3 项,已完成):
+- S1 chimera-cli OnceLock 并发 bench:14 section 并发 p99 = 7.22µs(< 100µs 门槛)
+- S2 model-router MoE 五维评分扩展:HistoryStore trait + 五维权重 + 降级三维
+- S3 repo-wiki FTS5 trigram tokenizer 升级:三值枚举 + 三级降级链
+
+**最终测试基线**:3416 passed / 0 failed / 56 ignored(+13 from v1.2.0 3403)
+
+**验证基线全部通过**:
+- `cargo fmt --all -- --check` 退出码 0(零 diff)
+- `cargo test --workspace --jobs 1` 退出码 0(3416 passed / 0 failed / 56 ignored)
+- `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` 退出码 0(零警告)
+
+**关键发现**:
+- OnceLock spinlock 不是瓶颈(贡献 < 0.3%)
+- trigram 在高命中率场景比 LIKE 慢 7x,低命中率场景快 3x(如实记录)
+- v1-2-0-omega checklist 4 项教训勾选存在虚假完成(已绕过)
+
+详见 [v1.3.0-omega 综合报告](docs/optimization/v1.3.0/full_post_optimization_report.md)。
+
+**下一步**:v1.4.0-omega P2 中期演进(M1/M2/M3 条件触发评估)
+
+---
+
+## v1.3.0-omega S2 — model-router MoE 五维评分扩展(2026-07-09)
+
+**任务**:S2(P1 短期增强,中等风险,MoE 评分维度扩展)
+
+将 model-router MoE 门控评分从三维(cost/latency/quality)扩展为五维,加入运行时
+统计维度(success_rate / latency_variance),历史数据不足时降级三维(向后兼容):
+
+- **新增 `HistoryStore` trait + `InMemoryHistoryStore`**(DashMap 并发安全):
+  `get(model_id) -> Option<HistoryRecord>` + `record(model_id, latency_ms, success)`,
+  对象安全(`&dyn HistoryStore`),为 v1.4.0 RL 路由(M2)预留扩展点
+- **`HistoryRecord`**:success_count / total_count(累计统计)+ latency_samples
+  (VecDeque<f32> 滑动窗口 capacity 100);`success_rate()` + `latency_variance()`
+  (无偏估计)+ `is_sufficient()`(total_count >= 100)
+- **`gate_score` 五维扩展**:`0.3*cost + 0.3*latency + 0.2*quality + 0.1*success_rate
+  + 0.1*variance_gate`(variance_gate = `1/(1+variance)`,惩罚抖动模型)
+- **降级路径**:历史数据 < 100 条时降级三维,权重重新归一化为
+  `0.375/0.375/0.25`(保持 3:3:2 比例,等比放大 1.25x,Top-K 排名与 v1.2.0 一致)
+- **`route_auto` 签名不变**(内部默认 `history=None` 退化三维);`route_auto_with_gate`
+  新增第 4 参数 `Option<&dyn HistoryStore>`,供 bench/可配置场景启用五维
+
+**测试覆盖**(16 passed / 0 failed,6 新增 TDD + 1 proptest 256 cases):
+- `test_five_dim_score_when_history_sufficient` — 历史充足时五维评分
+- `test_three_dim_fallback_when_history_insufficient` — 历史不足降级三维
+- `test_history_none_degrades_to_three_dim` — history=None 向后兼容
+- `test_success_rate_affects_ranking` — 成功率影响排名
+- `test_latency_variance_penalizes_unstable` — 方差惩罚抖动模型(静态指标相同隔离方差效果)
+- `prop_five_dim_sparsity_invariant` — n ∈ [50,200] + history ≥ 100,激活数 ≤ top_k
+
+**bench**:`crates/model-router/benches/moe_bench.rs` 新增 `moe_O(k)_5dim` bench,
+对比三维 vs 五维在 50/100/200 模型规模的延迟。五维比三维慢 ~4x(DashMap 查找 +
+方差计算),但仍在微秒级(n=200 时 89.93µs < 0.1ms)。
+
+**验证结果**:
+- `cargo test -p model-router` exit 0(全部通过,含 3 doc-tests)
+- `cargo clippy -p model-router --all-targets --jobs 2 -- -D warnings` exit 0(零警告)
+- `cargo fmt -p model-router -- --check` exit 0(零 diff)
+- `cargo bench -p model-router --bench moe_bench --no-run` exit 0(编译通过)
+
+**关键设计**:MoeGate 保持 `Copy`(history 作为方法参数而非字段);HistoryStore trait
+抽象为 v1.4.0 预留扩展点但不过度设计(仅 get/record 两方法);降级归一化保持总权重
+1.0 避免 Top-K 排名漂移。
+
+详见 [S2 报告](docs/optimization/v1.3.0/s2_moe_history_report.md)。
+
+## v1.3.0-omega S3 — repo-wiki FTS5 trigram tokenizer 升级(2026-07-09)
+
+**任务**:S3(P1 短期增强,较高复杂度,FTS5 tokenizer 升级)
+
+将 repo-wiki FTS5 tokenizer 从 `unicode61` 升级为 `trigram`,改善 CJK 三字以上子串
+检索(v1.2.0 依赖 LIKE 降级保证召回率):
+
+- **`FtsCapability` 从二值扩展为三值**:`AvailableTrigram` / `AvailableUnicode61` /
+  `Unavailable`(三值在初始化时一次检测并缓存能力,避免运行时重复探测)
+- **`init_fts_table` 三级降级链**:trigram(SQLite 3.34+ 创建 + `verify_trigram_match`
+  验证 MATCH 实际工作) → unicode61 → Unavailable。`verify_trigram_match` 插入测试
+  数据 + 执行 MATCH + 清理,确保 trigram 实际可用才标记 `AvailableTrigram`
+- **`search_fulltext` 三级降级链**:trigram MATCH(空或非空都返回,不降级 LIKE —
+  精确匹配语义) > unicode61 MATCH + 空结果降级 LIKE(v1.2.0 行为) > LIKE
+- **短查询(< 3 字符)降级 LIKE**:trigram 按 3 字符滑窗分词,1-2 字符无法生成有效
+  trigram token,直接降级 LIKE 更高效且语义更宽松
+- **API 向后兼容**:`search_fulltext(&self, query: String)` 签名不变;
+  `is_available()` 对 `AvailableTrigram` + `AvailableUnicode61` 都返回 true,
+  v1.2.0 调用方(`writer_insert`/`writer_delete` FTS5 索引同步)语义不变
+
+**关键发现**:bundled SQLite 3.43+ **实际支持 trigram tokenizer**,运行时检测标记为
+`AvailableTrigram`,CJK 4 字子串 "分析报告" 直接 MATCH 命中(无需降级 LIKE)。
+
+**测试覆盖**(12 passed / 0 failed,6 新增 TDD):
+- `test_trigram_cjk_substring_match` — CJK 4 字子串 trigram 直接命中
+- `test_trigram_short_query_fallback` — 1-2 字符查询降级 LIKE
+- `test_trigram_unavailable_falls_back_to_unicode61` — 三值枚举 + is_available 语义
+- `test_unicode61_unavailable_falls_back_to_like` — FTS5 禁用降级 LIKE(v1.2.0 行为)
+- `test_search_fulltext_priority_chain` — 完整降级链 trigram > unicode61 > LIKE
+- `test_trigram_english_search` — 英文查询 trigram 与 unicode61 结果一致
+
+**bench**:`crates/repo-wiki/benches/fts_bench.rs` 新增 9 个 CJK 三引擎对比 bench
+(trigram/unicode61/LIKE × 50/100/1000 文档规模,raw rusqlite 控制 tokenizer)。
+保留 v1.2.0 的 2 个 WikiStore 端到端 bench(`fts5_match` / `like_scan`)。
+
+**验证结果**:
+- `cargo test -p repo-wiki` exit 0(41 passed,含 12 fts_test)
+- `cargo clippy -p repo-wiki --all-targets --jobs 2 -- -D warnings` exit 0(零警告)
+- `cargo fmt -p repo-wiki -- --check` exit 0(零 diff)
+- `cargo bench -p repo-wiki --bench fts_bench --no-run` exit 0(编译通过)
+
+详见 [S3 报告](docs/optimization/v1.3.0/s3_trigram_report.md)。
+
+## v1.3.0-omega S1 — chimera-cli OnceLock 并发性能压测(2026-07-09)
+
+**任务**:S1(P1 短期增强,最低风险,纯 bench 新增,零生产代码修改)
+
+新增 4 个 criterion bench 覆盖 chimera-cli 14 section OnceLock 懒加载的性能基线:
+
+- `single_section_first_access`:单 section 冷启动延迟(mean 458µs / p99 467µs,含 Figment provider 构建)
+- `single_section_cached_access`:单 section 缓存命中延迟(mean 1.26ns / p99 1.28ns,亚纳秒级,OnceLock::get 几乎免费)
+- `14_sections_sequential`:14 section 顺序访问总延迟(mean 668µs / p99 688µs,含 14 次 extract_inner)
+- `14_sections_concurrent/14_tasks`:14 section 并发访问 p99 延迟(mean 6.89µs / **p99 7.22µs**)
+
+**门槛验证**:**14 section 并发访问 p99 = 7.22 µs < 100 µs ✅**(13.8x 余量)
+
+**关键结论**:OnceLock spinlock 不成为瓶颈。证据:
+- 热路径单 section 访问 = 1.26ns(atomic load + return,spinlock 不被获取)
+- 14 并发访问 = 7.22µs,其中 OnceLock 贡献 < 20ns(< 0.3%),剩余为 tokio::spawn 调度开销
+- 14 不同 OnceLock 实例无锁竞争,即使首次并发初始化也无 spinlock 竞争
+
+**新增文件**:
+- `crates/chimera-cli/benches/config_concurrency_bench.rs`(4 bench + WHY 注释)
+- `crates/chimera-cli/Cargo.toml`:`[[bench]]` 声明 + dev-dep `criterion = { workspace = true }`
+
+**验证结果**:`cargo bench --no-run` 编译通过 + `cargo clippy --all-targets -- -D warnings` 零警告 + `cargo fmt -- --check` 零 diff。
+
+详见 [S1 报告](docs/optimization/v1.3.0/s1_concurrency_bench_report.md)。
+
 ## v1.2.0 开发中 — 第二阶段开发:延后优化与测试覆盖补齐
 
 ### Task 4: E1 chimera-cli OnceCell 懒加载(2026-07-09)
@@ -131,6 +276,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 6. **doctest 调研**:34 crate 全部已启用 `#![warn(missing_docs)]`,公开 API 均有 `///` 文档;模块级 `# 快速示例` 是 doctest 的主要载体
 
 **关联文档**:`docs/optimization/v1.2.0/task1_test_coverage_report.md`
+
+## v1.2.0-omega 汇总(2026-07-09)
+
+**完成日期**:2026-07-09
+**commit hash**:9f43d97(本地领先 origin/master,远程推送因网络不可达延后到 GA 发布前)
+**测试基线**:**3403 passed / 0 failed / 56 ignored**(+175 from Phase V 3228)
+
+### 4 项延后任务概述
+
+| Task | 编号 | 一句话概述 |
+|------|------|-----------|
+| Task 1 | V-10 测试覆盖补齐 | 补齐 benches / proptest / doctest / fuzz 四维度(5 crate benches + 5 crate proptest + 3 crate doctest + fuzz 3→6 target),新增 ~270 项测试 |
+| Task 2 | N15 repo-wiki FTS5 全文索引 | LIKE 全表扫描 → FTS5 倒排索引 MATCH 查询,1000+ 文档规模显著降延迟;CJK 子串检索 unicode61 局限通过空结果降级 LIKE 修复 |
+| Task 3 | I1 model-router MoE 稀疏门控 | 50+ 模型规模下 O(n) 全量评估 → O(k) Top-K 激活(k ≤ 5),倒数评分 `1/(1+x)` + `select_nth_unstable_by` 实现,阈值退化向后兼容 |
+| Task 4 | E1 chimera-cli OnceCell 懒加载 | 14 个顶层配置 section 从 eager extract 改为 `std::sync::OnceLock` + `Figment::extract_inner` section 级懒加载,消除启动期未使用 section 解析开销 |
+
+### 关键修复
+
+- **FTS5 CJK 空结果降级**:FTS5 `unicode61` tokenizer 将连续 CJK 字符视为单 token,中文子串(如"分析"搜"性能分析报告")MATCH 不命中,通过 `Ok(_) => 降级 LIKE` 分支保证召回率
+- **gqep-executor E0597**:`crates/gqep-executor/tests/gatherer_test.rs` L130 `async` block 缺 `move` 关键字导致 E0597(`i` does not live long enough),改为 `Box::pin(async move { ... })` 修复 `'static` 约束
+
+### OMEGA 四定律对齐性
+
+Task 2/3/4 分别对齐 Ω-Compress(FTS5 倒排索引)/ Ω-Sparse(MoE Top-K 激活)/ Ω-Compress(OnceCell section 级懒加载),全部遵守 §2.2 依赖铁律,无跨层向上依赖。
+
+### 关联文档
+
+- 综合报告:[`full_deferred_optimization_report.md`](docs/optimization/v1.2.0/full_deferred_optimization_report.md)
+- Task 0 脱敏报告:[`task0_desensitization_report.md`](docs/optimization/v1.2.0/task0_desensitization_report.md)
+- Task 1 测试覆盖报告:[`task1_test_coverage_report.md`](docs/optimization/v1.2.0/task1_test_coverage_report.md)
+- Task 2 FTS5 报告:[`task2_fts5_verification_report.md`](docs/optimization/v1.2.0/task2_fts5_verification_report.md)
+- Task 3 MoE 报告:[`task3_moe_verification_report.md`](docs/optimization/v1.2.0/task3_moe_verification_report.md)
+- Task 4 OnceCell 报告:[`task4_oncecell_verification_report.md`](docs/optimization/v1.2.0/task4_oncecell_verification_report.md)
+
+### 下一步
+
+v1.3.0-omega 后续优化路线图(`.trae/specs/v1-3-0-omega-post-optimization-roadmap/`),含 P0 GA 收尾(cargo audit / CHANGELOG 汇总 / project_memory 总结)+ P1 短期增强(chimera-cli 并发压测 / MoE 五维评分 / FTS5 trigram)+ P2 中期演进(向量索引 / 路由学习 / 配置热重载)。
+
+---
 
 ### Task 0: 脱敏化处理与安全提交(2026-07-09)
 

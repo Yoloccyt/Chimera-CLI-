@@ -13,22 +13,44 @@
 //! - **无需全局 max 归一化**(避免两遍遍历),支持单遍 O(n) 评分
 //! - 用倒数形式 `1/(1+x)`,值域 (0,1],方向与完整评分一致(越小越好 → 分越高)
 //! - 纯算术,无字符串 `format!`,常数因子远低于完整评估
-//! - 权重 0.4/0.4/0.2 与 `route_auto` 完整评分一致,保证粗筛排序近似
 //!
-//! # 阈值退化(向后兼容)
-//! 模型数 < `threshold`(默认 50)时,门控返回全部模型引用,`route_auto`
-//! 退化为全量评估,行为与未启用 MoE 时完全一致。默认 3 模型配置(<< 50)
-//! 走退化路径,现有测试与行为不受影响。
+//! ## v1.2.0 三维评分(cost / latency / quality)
+//! 权重 0.4/0.4/0.2,与 `route_auto` 完整评分一致,保证粗筛排序近似。
 //!
-//! WHY 阈值选 50:默认配置 3 模型 + 安全余量。50 以下全量评估的绝对耗时
-//! 在微秒级(见 `registry_bench`),优化收益不足以抵消门控评分开销;
-//! 50 以上全量归一化与 candidates 生成的累积开销才开始显著。
+//! ## v1.3.0 五维评分扩展(加入运行时统计维度)
+//! 历史数据充足时(≥ 100 条记录),扩展为五维评分:
+//! - `cost`(0.3):成本倒数(与 v1.2.0 一致,权重从 0.4 降至 0.3)
+//! - `latency`(0.3):延迟倒数(与 v1.2.0 一致,权重从 0.4 降至 0.3)
+//! - `quality`(0.2):质量评分(与 v1.2.0 一致)
+//! - `success_rate`(0.1):历史成功率,值域 [0,1],直接作为分数
+//! - `latency_variance`(0.1):延迟稳定性倒数 `1/(1+variance)`,惩罚抖动模型
+//!
+//! WHY 五维权重 0.3/0.3/0.2/0.1/0.1:cost/latency 仍是主导因素(各 0.3,
+//! 合计 0.6),quality 补充(0.2),历史维度仅占 0.2(success_rate 0.1 +
+//! variance 0.1)作为排名微调,避免历史噪声主导决策。前三维权重合计 0.8
+//! (v1.2.0 为 1.0),历史维度占 0.2,总权重 1.0。
+//!
+//! # 降级路径(向后兼容)
+//! - **模型数 < threshold(默认 50)**:门控返回全部模型,退化为全量评估
+//! - **history=None 或历史数据不足(< 100 条)**:降级三维评分,权重重新
+//!   归一化为 0.375/0.375/0.25(保持 3:3:2 比例,等比放大 1.25x,总权重 1.0)
+//!
+//! WHY 降级归一化:历史数据不足时 success_rate/variance 估计不稳定(统计
+//! 显著性不足),降级三维避免噪声主导排名。归一化保持 3:3:2 比例不变,
+//! Top-K 选择结果与 v1.2.0 一致(仅绝对分数值缩放,排名不变)。
+//!
+//! WHY 降级阈值 100:统计显著性最小样本数。success_rate 在 < 100 样本时
+//! 置信区间过宽(如 50 样本 → 95% CI ±0.14),variance 估计同样不稳定。
+//! 100 样本下 95% CI 收窄至 ±0.10,可接受作为排名微调输入。
 
 #![forbid(unsafe_code)]
 
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 
-use crate::types::{ModelInfo, RoutingRequest};
+use dashmap::DashMap;
+
+use crate::types::ModelInfo;
 
 /// 默认稀疏化触发阈值 — 模型数达到此值时启用 Top-K 门控
 ///
@@ -42,6 +64,182 @@ pub const DEFAULT_MOE_THRESHOLD: usize = 50;
 /// WHY 5:覆盖典型路由的候选广度(主选 + 4 个降级候选),与 CACR
 /// Downgrade 的"次优候选"语义衔接,同时将完整评估开销固定为常数。
 pub const DEFAULT_MOE_TOP_K: usize = 5;
+
+/// 历史数据充分性阈值 — 样本数达到此值时启用五维评分
+///
+/// WHY 100:统计显著性最小样本数。success_rate 在 < 100 样本时 95% CI
+/// 过宽(如 50 样本 → ±0.14),variance 估计同样不稳定。100 样本下
+/// 95% CI 收窄至 ±0.10,可接受作为门控排名微调输入。低于此值降级三维。
+pub const HISTORY_SUFFICIENT_THRESHOLD: u64 = 100;
+
+/// 延迟样本滑动窗口容量 — 保留最近 N 次延迟用于方差估计
+///
+/// WHY 100:滑动窗口平衡内存(每模型约 400B = 100 × 4B f32)与时效性。
+/// 100 个样本足够计算稳定方差(无偏估计需 ≥ 2,但稳定性随 n 增长),
+/// 同时丢弃过旧样本使方差反映"近期"抖动而非全历史均值。
+pub const LATENCY_WINDOW_CAPACITY: usize = 100;
+
+/// 单个模型的历史路由记录(运行时统计)
+///
+/// 用于五维门控评分的后两维:`success_rate` 与 `latency_variance`。
+/// 由 `HistoryStore` 实现(ex: `InMemoryHistoryStore`)按 model_id 维护。
+///
+/// # 字段
+/// - `success_count` / `total_count`:累计成功/总次数,success_rate = success/total
+/// - `latency_samples`:最近 `LATENCY_WINDOW_CAPACITY`(100)次延迟样本(ms),
+///   最新在尾部;VecDeque 滑动窗口自动淘汰最旧样本
+///
+/// WHY Clone:get() 返回 owned HistoryRecord(避免 DashMap Ref guard 跨 await/
+/// 作用域问题)。克隆成本 ~400B/次,在路由热路径(单次决策)上可忽略。
+#[derive(Debug, Clone)]
+pub struct HistoryRecord {
+    /// 成功路由次数(累计,不随窗口滑动)
+    pub success_count: u64,
+    /// 总路由次数(累计,不随窗口滑动)
+    pub total_count: u64,
+    /// 最近 `LATENCY_WINDOW_CAPACITY` 次延迟样本(ms),尾部为最新
+    pub latency_samples: VecDeque<f32>,
+}
+
+impl HistoryRecord {
+    /// 创建空记录(零样本)
+    pub fn new() -> Self {
+        Self {
+            success_count: 0,
+            total_count: 0,
+            latency_samples: VecDeque::with_capacity(LATENCY_WINDOW_CAPACITY),
+        }
+    }
+
+    /// 记录一次路由结果(latency_ms + success)
+    ///
+    /// - total_count 始终递增(累计统计,用于 success_rate)
+    /// - latency_samples 维持滑动窗口:满则淘汰最旧(popleft),再 push 新样本
+    /// - success_count 仅在 success=true 时递增
+    pub fn record(&mut self, latency_ms: f32, success: bool) {
+        self.total_count += 1;
+        if success {
+            self.success_count += 1;
+        }
+        // 滑动窗口:超容量时淘汰最旧样本,保持窗口大小恒定
+        if self.latency_samples.len() >= LATENCY_WINDOW_CAPACITY {
+            self.latency_samples.pop_front();
+        }
+        self.latency_samples.push_back(latency_ms);
+    }
+
+    /// 历史成功率 ∈ [0,1],无样本时返回 0.0
+    pub fn success_rate(&self) -> f32 {
+        if self.total_count == 0 {
+            0.0
+        } else {
+            self.success_count as f32 / self.total_count as f32
+        }
+    }
+
+    /// 延迟方差(样本方差,无偏估计)
+    ///
+    /// 公式:`sum((x - mean)^2) / (n - 1)`(n >= 2),n < 2 时返回 0.0
+    /// WHY 无偏估计(n-1 而非 n):样本方差修正 Bessel 校正,避免小样本低估。
+    /// 返回值单位为 ms²,值域 [0, +∞),方差越大 → 延迟越不稳定 → 惩罚越重。
+    pub fn latency_variance(&self) -> f32 {
+        let n = self.latency_samples.len();
+        if n < 2 {
+            return 0.0;
+        }
+        let mean: f32 = self.latency_samples.iter().sum::<f32>() / n as f32;
+        let sum_sq: f32 = self
+            .latency_samples
+            .iter()
+            .map(|x| {
+                let diff = x - mean;
+                diff * diff
+            })
+            .sum();
+        sum_sq / (n - 1) as f32
+    }
+
+    /// 历史数据是否充分(>= HISTORY_SUFFICIENT_THRESHOLD 100 条)
+    ///
+    /// 充分时启用五维评分,不足时降级三维(向后兼容)。
+    /// WHY 用 total_count 而非 latency_samples.len():total_count 是累计
+    /// 统计(不随窗口滑动),反映"该模型是否被路由过足够多次"。
+    /// latency_samples 受窗口限制(max 100),无法区分"刚好 100"与"1000+次"。
+    pub fn is_sufficient(&self) -> bool {
+        self.total_count >= HISTORY_SUFFICIENT_THRESHOLD
+    }
+}
+
+impl Default for HistoryRecord {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 模型历史路由存储 trait(抽象,允许内存/持久化实现)
+///
+/// WHY trait 抽象:为 v1.4.0 RL 路由(M2)预留扩展点 — 未来可替换为
+/// SQLite 持久化实现或 Redis 共享实现,而无需修改 `MoeGate::gate()`。
+/// 当前仅暴露 get/record 两方法,不过度设计(遵循 §9 长期主义)。
+///
+/// # 对象安全(Object Safety)
+/// trait 可作为 `&dyn HistoryStore` 使用:
+/// - 所有方法取 `&self`(无 `&mut self`、无 `Self` 返回)
+/// - 无泛型参数
+/// - 返回 owned HistoryRecord(避免 DashMap Ref guard 生命周期约束)
+pub trait HistoryStore: Send + Sync {
+    /// 查询指定模型的历史记录(返回 owned clone)
+    ///
+    /// 返回 None 表示该模型无历史(降级三维处理)。
+    fn get(&self, model_id: &str) -> Option<HistoryRecord>;
+
+    /// 记录一次路由结果(latency_ms + success)
+    fn record(&self, model_id: &str, latency_ms: f32, success: bool);
+}
+
+/// 内存实现(DashMap 并发安全)— 默认 HistoryStore 实现
+///
+/// WHY DashMap:并发读写无锁(sharded locking),适合路由热路径多线程
+/// 记录场景。DashMap 内部 unsafe 不传播到当前 crate(§4.1 forbid 语义)。
+///
+/// # 使用示例
+/// ```
+/// use model_router::{InMemoryHistoryStore, HistoryStore};
+///
+/// let store = InMemoryHistoryStore::new();
+/// store.record("gpt-4", 200.0, true);
+/// let record = store.get("gpt-4").unwrap();
+/// assert_eq!(record.total_count, 1);
+/// assert_eq!(record.success_count, 1);
+/// ```
+#[derive(Debug, Default)]
+pub struct InMemoryHistoryStore {
+    records: DashMap<String, HistoryRecord>,
+}
+
+impl InMemoryHistoryStore {
+    /// 创建空的历史存储
+    pub fn new() -> Self {
+        Self {
+            records: DashMap::new(),
+        }
+    }
+}
+
+impl HistoryStore for InMemoryHistoryStore {
+    fn get(&self, model_id: &str) -> Option<HistoryRecord> {
+        // 返回 owned clone:避免返回 DashMap Ref guard(生命周期约束复杂,
+        // 且 guard 持锁可能影响并发写入)。克隆成本 ~400B,路由热路径可忽略。
+        self.records.get(model_id).map(|r| r.clone())
+    }
+
+    fn record(&self, model_id: &str, latency_ms: f32, success: bool) {
+        // WHY entry().or_default() 而非 get_mut:原子地"不存在则创建+写入",
+        // 避免 get → 判空 → insert 的 TOCTOU 竞态(两线程同时创建同一 model_id)。
+        let mut r = self.records.entry(model_id.to_string()).or_default();
+        r.record(latency_ms, success);
+    }
+}
 
 /// MoE 稀疏门控 — 控制 `route_auto` 的大规模稀疏化行为
 ///
@@ -71,7 +269,8 @@ pub const DEFAULT_MOE_TOP_K: usize = 5;
 ///     strategy: RoutingStrategy::Auto,
 /// };
 /// let models = registry.list();
-/// let candidates = gate.gate(&models, &req);
+/// // history=None:退化三维评分(向后兼容 v1.2.0)
+/// let candidates = gate.gate(&models, None);
 /// // 3 模型 < 50 阈值,退化为全量(返回全部引用)
 /// assert_eq!(candidates.len(), models.len());
 /// ```
@@ -121,10 +320,21 @@ impl MoeGate {
     /// - 无需预计算全局 max,支持单遍 O(n) 评分 + Top-K 选取
     /// - 纯算术,无字符串操作,常数因子远低于完整评估(含归一化遍历 + format!)
     ///
-    /// 权重 0.4/0.4/0.2 与 `route_auto` 完整评分一致,保证粗筛排序近似。
+    /// # 五维评分(v1.3.0)— 历史数据充足时(≥ 100 条)
+    /// `0.3*cost + 0.3*latency + 0.2*quality + 0.1*success_rate + 0.1*variance_gate`
+    /// - cost/latency/quality 权重从 v1.2.0 的 0.4/0.4/0.2 降至 0.3/0.3/0.2,
+    ///   腾出 0.2 给历史维度(success_rate 0.1 + variance 0.1)
+    /// - success_rate ∈ [0,1] 直接作为分数(无需归一化)
+    /// - variance_gate = `1/(1+variance)`:方差越大 → gate 越小 → 惩罚越重
+    ///
+    /// # 三维降级 — 历史数据不足时(history=None 或 < 100 条)
+    /// `0.375*cost + 0.375*latency + 0.25*quality`
+    /// - 权重从 0.3/0.3/0.2 等比放大 1.25x → 0.375/0.375/0.25(总权重 1.0)
+    /// - 保持 3:3:2 比例不变,Top-K 排名与 v1.2.0 一致(仅绝对值缩放)
+    ///
     /// `quality_score` 为 f32,显式 `as f64` 转换参与 f64 运算(此处为算术
     /// 运算而非比较,不触发 §4.4 #6 的 f32→f64 比较精度问题)。
-    fn gate_score(m: &ModelInfo) -> f64 {
+    fn gate_score(m: &ModelInfo, history: Option<&HistoryRecord>) -> f64 {
         // 成本倒数:cost_per_1k_tokens 单位为美元,量级 0.0001~0.05,
         // 乘以 1000 放大到 0.1~50 区间,使倒数有合理区分度
         let cost_gate = 1.0 / (1.0 + m.cost_per_1k_tokens * 1000.0);
@@ -132,7 +342,23 @@ impl MoeGate {
         // 除以 100 归一到 0.5~10 区间,使倒数有合理区分度
         let latency_gate = 1.0 / (1.0 + m.avg_latency_ms as f64 / 100.0);
         let quality = m.quality_score as f64;
-        0.4 * cost_gate + 0.4 * latency_gate + 0.2 * quality
+
+        match history {
+            // 五维:历史数据充足(调用方已确保 is_sufficient),启用完整五维评分
+            Some(h) => {
+                let success_rate = h.success_rate() as f64;
+                let variance = h.latency_variance() as f64;
+                let variance_gate = 1.0 / (1.0 + variance);
+                0.3 * cost_gate
+                    + 0.3 * latency_gate
+                    + 0.2 * quality
+                    + 0.1 * success_rate
+                    + 0.1 * variance_gate
+            }
+            // 三维降级:历史不足或 None,权重重新归一化(0.3/0.3/0.2 → 0.375/0.375/0.25)
+            // WHY 0.375 = 0.3/0.8、0.25 = 0.2/0.8:前三维权重合计 0.8,等比放大至 1.0
+            None => 0.375 * cost_gate + 0.375 * latency_gate + 0.25 * quality,
+        }
     }
 
     /// 门控评分降序比较器:评分高者优先,相同则 model_id 升序(保证确定性)
@@ -148,16 +374,26 @@ impl MoeGate {
     /// 执行门控:返回 Top-K 候选引用(评分降序),或退化时返回全部
     ///
     /// # 复杂度
-    /// - 退化(模型数 < threshold):O(n) 收集引用,不排序
-    /// - 门控:O(n) 评分 + O(n) `select_nth_unstable_by` + O(k log k) 排序 = O(n)
+    /// - 退化(模型数 < threshold):O(n) 收集引用,不评分
+    /// - 门控:O(n) 评分(含历史查询)+ O(n) `select_nth_unstable_by` + O(k log k) 排序 = O(n)
     ///
     /// # 返回
     /// - 门控模式:Top-K 候选引用(按门控评分降序)
     /// - 退化模式:全部模型引用(原顺序,交给 `route_auto` 全量评估排序)
     ///
-    /// WHY 退化模式不排序:保持与历史全量评估行为完全一致(由调用方排序),
-    /// 避免引入额外的排序顺序差异。
-    pub fn gate<'a>(&self, models: &'a [ModelInfo], _req: &RoutingRequest) -> Vec<&'a ModelInfo> {
+    /// # 历史维度(history 参数)
+    /// - `Some(store)`:每模型查询历史,充分(≥ 100 条)则五维评分,不足则三维降级
+    /// - `None`:全部模型三维降级(向后兼容 v1.2.0)
+    /// - 混合模式:同一 gate() 调用中,有历史的模型用五维,无历史的用三维
+    ///
+    /// WHY 退化模式不评分不排序:保持与历史全量评估行为完全一致(由调用方排序),
+    /// 避免引入额外的排序顺序差异;退化时历史也无需查询(全量评估用 `route_auto`
+    /// 完整评分,不经过 gate_score)。
+    pub fn gate<'a>(
+        &self,
+        models: &'a [ModelInfo],
+        history: Option<&dyn HistoryStore>,
+    ) -> Vec<&'a ModelInfo> {
         if !self.should_sparsify(models.len()) {
             // WHY 退化:模型数低于阈值,全量评估的绝对耗时在微秒级,
             // 门控评分开销不划算;返回全部引用交给 route_auto 全量评估。
@@ -167,9 +403,16 @@ impl MoeGate {
         // 防御 top_k > models.len() 的边界(effective_k clamp)
         let k = self.effective_k(models.len());
 
-        // 轻量级门控评分:O(n),纯算术无 format!
-        let mut scored: Vec<(f64, &ModelInfo)> =
-            models.iter().map(|m| (Self::gate_score(m), m)).collect();
+        // 轻量级门控评分:O(n),每模型查询历史(若有)决定五维 vs 三维
+        // WHY 逐模型查询:不同模型历史充足性可能不同(新模型无历史→三维,
+        // 老模型有历史→五维),混合模式正确反映"已知模型用历史,未知用静态"。
+        let mut scored: Vec<(f64, &ModelInfo)> = models
+            .iter()
+            .map(|m| {
+                let hist = history.and_then(|h| h.get(&m.model_id).filter(|r| r.is_sufficient()));
+                (Self::gate_score(m, hist.as_ref()), m)
+            })
+            .collect();
 
         // Top-K 选取:O(n) select_nth_unstable_by
         // WHY select_nth_unstable_by:O(n) 部分排序,符合 §4.1 Engineering Convention,
@@ -190,8 +433,6 @@ impl MoeGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::RoutingStrategy;
-    use nexus_core::{MultimodalInput, UserIntent};
 
     fn make_model(id: &str, cost: f64, latency: u64, quality: f32) -> ModelInfo {
         ModelInfo {
@@ -201,20 +442,6 @@ mod tests {
             avg_latency_ms: latency,
             max_context: 8192,
             quality_score: quality,
-        }
-    }
-
-    fn make_request() -> RoutingRequest {
-        RoutingRequest {
-            quest_id: "q-1".into(),
-            intent: UserIntent {
-                intent_id: "i-1".into(),
-                raw_text: "test".into(),
-                multimodal_inputs: vec![MultimodalInput::Text("test".into())],
-                risk_level: 10,
-            },
-            estimated_tokens: 1000,
-            strategy: RoutingStrategy::Auto,
         }
     }
 
@@ -259,24 +486,24 @@ mod tests {
 
     #[test]
     fn test_gate_score_low_cost_high_score() {
-        // 低成本应得高分(倒数形式)
+        // 低成本应得高分(倒数形式)— history=None 退化三维
         let cheap = make_model("cheap", 0.0001, 100, 0.6);
         let expensive = make_model("expensive", 0.05, 100, 0.6);
-        assert!(MoeGate::gate_score(&cheap) > MoeGate::gate_score(&expensive));
+        assert!(MoeGate::gate_score(&cheap, None) > MoeGate::gate_score(&expensive, None));
     }
 
     #[test]
     fn test_gate_score_low_latency_high_score() {
         let fast = make_model("fast", 0.001, 50, 0.6);
         let slow = make_model("slow", 0.001, 1000, 0.6);
-        assert!(MoeGate::gate_score(&fast) > MoeGate::gate_score(&slow));
+        assert!(MoeGate::gate_score(&fast, None) > MoeGate::gate_score(&slow, None));
     }
 
     #[test]
     fn test_gate_score_high_quality_high_score() {
         let good = make_model("good", 0.001, 100, 0.95);
         let bad = make_model("bad", 0.001, 100, 0.5);
-        assert!(MoeGate::gate_score(&good) > MoeGate::gate_score(&bad));
+        assert!(MoeGate::gate_score(&good, None) > MoeGate::gate_score(&bad, None));
     }
 
     #[test]
@@ -288,8 +515,7 @@ mod tests {
             make_model("m3", 0.003, 300, 0.6),
         ];
         let gate = MoeGate::default();
-        let req = make_request();
-        let result = gate.gate(&models, &req);
+        let result = gate.gate(&models, None);
         assert_eq!(result.len(), 3, "退化模式应返回全部模型");
     }
 
@@ -307,8 +533,7 @@ mod tests {
             })
             .collect();
         let gate = MoeGate::default();
-        let req = make_request();
-        let result = gate.gate(&models, &req);
+        let result = gate.gate(&models, None);
         assert_eq!(result.len(), 5, "门控模式应返回 Top-5");
     }
 
@@ -326,8 +551,7 @@ mod tests {
             })
             .collect();
         let gate = MoeGate::new(50, 3);
-        let req = make_request();
-        let result = gate.gate(&models, &req);
+        let result = gate.gate(&models, None);
         assert_eq!(result.len(), 3, "自定义 top_k=3 应返回 3 个候选");
     }
 
@@ -345,12 +569,11 @@ mod tests {
             })
             .collect();
         let gate = MoeGate::default();
-        let req = make_request();
-        let result = gate.gate(&models, &req);
+        let result = gate.gate(&models, None);
         // 验证降序:每个候选的 gate_score 应 >= 下一个
         for i in 0..result.len() - 1 {
-            let score_curr = MoeGate::gate_score(result[i]);
-            let score_next = MoeGate::gate_score(result[i + 1]);
+            let score_curr = MoeGate::gate_score(result[i], None);
+            let score_next = MoeGate::gate_score(result[i + 1], None);
             assert!(
                 score_curr >= score_next,
                 "候选应降序排列: [{}] score {:.6} < [{}] score {:.6}",
@@ -371,8 +594,7 @@ mod tests {
             make_model("m3", 0.003, 300, 0.6),
         ];
         let gate = MoeGate::new(1, 5);
-        let req = make_request();
-        let result = gate.gate(&models, &req);
+        let result = gate.gate(&models, None);
         assert_eq!(
             result.len(),
             3,
@@ -396,8 +618,7 @@ mod tests {
             .collect();
         models.push(best);
         let gate = MoeGate::default();
-        let req = make_request();
-        let result = gate.gate(&models, &req);
+        let result = gate.gate(&models, None);
         let ids: Vec<&str> = result.iter().map(|m| m.model_id.as_str()).collect();
         assert!(ids.contains(&"best"), "Top-K 应包含最优模型, got {:?}", ids);
     }

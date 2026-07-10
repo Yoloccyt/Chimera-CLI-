@@ -111,9 +111,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "atomic"
@@ -235,6 +235,7 @@ version = "1.0.0-omega"
 dependencies = [
  "anyhow",
  "clap",
+ "criterion",
  "figment",
  "nexus-core",
  "proptest",
@@ -1368,6 +1369,7 @@ name = "model-router"
 version = "1.0.0-omega"
 dependencies = [
  "criterion",
+ "dashmap",
  "event-bus",
  "nexus-core",
  "proptest",

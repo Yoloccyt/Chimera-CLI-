@@ -12,7 +12,7 @@
 //! 单位为美分(1 美元 = 100 美分),与 `BudgetExceeded` 事件保持一致。
 
 use crate::error::RouterError;
-use crate::moe::MoeGate;
+use crate::moe::{HistoryStore, MoeGate};
 use crate::registry::ModelRegistry;
 use crate::types::{ModelInfo, RoutingDecision, RoutingRequest};
 
@@ -97,30 +97,35 @@ pub fn route_efficient(
 /// 归一化评分;模型数 < 50 时退化为全量评估(行为与未启用 MoE 一致)。
 /// 详见 [`crate::moe`] 模块文档。
 ///
-/// WHY 使用默认 `MoeGate::default()`:保持 `route_auto` 签名不变(向后兼容)。
-/// 需要自定义 MoE 配置时使用 [`route_auto_with_gate`]。
+/// WHY 使用默认 `MoeGate::default()` + `history=None`:保持 `route_auto` 签名
+/// 不变(向后兼容 v1.2.0)。需要五维评分(历史维度)时使用
+/// [`route_auto_with_gate`] 并传入 `Some(&dyn HistoryStore)`。
 pub fn route_auto(
     registry: &ModelRegistry,
     req: &RoutingRequest,
 ) -> Result<RoutingDecision, RouterError> {
-    route_auto_with_gate(registry, req, &MoeGate::default())
+    route_auto_with_gate(registry, req, &MoeGate::default(), None)
 }
 
-/// Auto 策略(可配置 MoE 门控)— 供 bench / 可配置场景传入自定义门控
+/// Auto 策略(可配置 MoE 门控 + 历史存储)— 供 bench / 可配置场景使用
 ///
 /// WHY 独立 pub fn:`route_auto` 签名不变(向后兼容),但 bench 需要对比
-/// "全量评估"vs"MoE 门控",且未来 `ModelRouter` 可能持有 `MoeGate`。
-/// 提取完整逻辑到此函数,`route_auto` 仅作默认门控的薄封装。
+/// "全量评估"vs"MoE 门控"vs"五维评分",且未来 `ModelRouter` 可能持有
+/// `MoeGate` + `HistoryStore`。提取完整逻辑到此函数,`route_auto` 仅作
+/// 默认门控 + 无历史的薄封装。
 ///
 /// # 行为
 /// - `gate.gate()` 返回全部模型(退化):完整评估对全部模型做归一化,
 ///   行为与原 `route_auto` 完全一致
 /// - `gate.gate()` 返回 Top-K(门控):完整评估仅对 Top-K 做归一化,
 ///   `candidates` 长度 = K-1(而非 n-1)
+/// - `history=Some`:门控评分启用五维(历史充足模型),不足模型降级三维
+/// - `history=None`:全部模型三维降级(v1.2.0 行为)
 pub fn route_auto_with_gate(
     registry: &ModelRegistry,
     req: &RoutingRequest,
     gate: &MoeGate,
+    history: Option<&dyn HistoryStore>,
 ) -> Result<RoutingDecision, RouterError> {
     let models = registry.list();
     if models.is_empty() {
@@ -129,7 +134,7 @@ pub fn route_auto_with_gate(
 
     // MoE 稀疏门控:粗筛 Top-K(大规模)或退化全量(小规模)
     // gated: 退化模式返回全部引用(原顺序),门控模式返回 Top-K 引用(评分降序)
-    let gated: Vec<&ModelInfo> = gate.gate(&models, req);
+    let gated: Vec<&ModelInfo> = gate.gate(&models, history);
 
     // 完整评估:仅对门控候选做归一化评分
     // 退化模式下 gated = 全部模型,max 与历史全量评估一致

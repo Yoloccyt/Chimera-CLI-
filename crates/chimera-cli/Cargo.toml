@@ -26,8 +26,16 @@ tracing-subscriber = { workspace = true }
 tempfile = { workspace = true }
 # proptest:属性测试框架,验证 CLI 参数解析的不变量(对应 E-MINOR-1)
 proptest = { workspace = true }
+# criterion:性能基准框架,用于 OnceLock 并发压测(SubTask S1)
+criterion = { workspace = true }
 
 # 显式声明二进制目标,确保 main.rs 被识别为 aether 可执行文件
 [[bin]]
 name = "aether"
 path = "src/main.rs"
+
+# OnceLock 14 section 懒加载并发性能基准(SubTask S1)
+# WHY harness = false:criterion 自带 main + 命令行解析,需禁用 libtest 默认 harness
+[[bench]]
+name = "config_concurrency_bench"
+harness = false

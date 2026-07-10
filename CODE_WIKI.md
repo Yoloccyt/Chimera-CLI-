@@ -34,6 +34,7 @@
 - **总测试数**:~3,002 个(Week 1-8 累计;Week 1-6: 2378 + Week 7: 338 + Week 8: 286)
 - **v1.1.0 进展**:F2(rusqlite 下沉)已完成 — `nexus-core` 删除 `rusqlite` 依赖,改用 L1 `PragmaCapable` trait 抽象(ADR-006 方案 E,2026-07-08)
 - **v1.2.0 进展**:4 项延后优化任务全部完成(2026-07-09)— V-10 测试覆盖补齐(5 crate benches + 5 proptest + 3 doctest + fuzz 3→6 target,3339 → +111 passed)、N15 repo-wiki FTS5 全文索引(FtsCapability 运行时检测 + standalone 虚拟表 + CJK 空结果降级 LIKE)、I1 model-router MoE 稀疏门控(倒数评分 1/(1+x) + select_nth_unstable_by Top-K + 50 阈值退化)、E1 chimera-cli OnceCell 懒加载(std::sync::OnceLock + LazySection<T> + Figment::extract_inner section 级懒加载,14 getter)
+- **v1.3.0 进展**:P0 GA 收尾 + P1 短期增强完成(2026-07-09),6 项任务完成,P2 待评估 — G1 cargo audit(anyhow 1.0.102 → 1.0.103 升级 RUSTSEC-2026-0190)、G2 CHANGELOG v1.2.0 汇总章节、G3 project_memory 8 条原则提炼(发现 v1-2-0 checklist 4 项虚假完成)、S1 chimera-cli OnceLock 并发 bench(14 section 并发 p99 = 7.22µs < 100µs 门槛,13.8x 余量)、S2 model-router MoE 五维评分扩展(HistoryStore trait + 五维 gate_score + 降级三维权重归一化 0.375/0.375/0.25)、S3 repo-wiki FTS5 trigram tokenizer 升级(FtsCapability 三值枚举 + 三级降级链 trigram > unicode61 > LIKE,trigram 在高命中率场景比 LIKE 慢 7x、低命中率快 3x)
 
 ### 1.4 第二阶段主要参考资料
 

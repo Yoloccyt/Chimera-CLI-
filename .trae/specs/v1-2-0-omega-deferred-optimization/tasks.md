@@ -10,7 +10,7 @@
   - [x] SubTask 0.1: 识别 Phase V commit 7024b03 涉及的 26 个修改文件(19 修改 + 7 新增) — 7024b03 已含 26 文件
   - [x] SubTask 0.2: Grep 敏感模式扫描完成 — 命中全部为领域术语(token_limit 等)+ 配置示例 + 文档占位符
   - [x] SubTask 0.3: 人工核验命中项 — 全部假阳性,无真实敏感信息
-  - [x] SubTask 0.4: 个人路径扫描完成 — `C:\Users\30324\` 仅出现在 memory 路径引用(低风险,非凭据)
+  - [x] SubTask 0.4: 个人路径扫描完成 — 用户目录路径仅出现在 memory 路径引用(低风险,非凭据,具体路径见 `.trae/rules/nuxus规则.md` §10.4)
   - [x] SubTask 0.5: `.gitignore` 覆盖核验通过(.env* / *.pem / .toolchain/ / target/)
   - [x] SubTask 0.6: `git status` 确认无 .env / 凭据文件暂存
   - [x] SubTask 0.7: 逐文件 git add 完成(4 文件:spec.md/tasks.md/checklist.md/task0_desensitization_report.md)

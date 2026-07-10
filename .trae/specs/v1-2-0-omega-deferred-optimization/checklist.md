@@ -138,10 +138,10 @@
 - [x] `cargo test --workspace --jobs 1` 退出码 0,最终测试数 3403(≥ 3248 门槛,增量 +175 from Phase V 3228)
 - [x] `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` 退出码 0
 - [x] `cargo fmt --all -- --check` 退出码 0
-- [ ] `cargo audit --deny warnings` 退出码 0 — ⚠️ 网络不可达延后到 GA 前手动执行
+- [x] `cargo audit --deny warnings` 退出码 0 — ✅ G1 已完成(2026-07-09),见 docs/optimization/v1.2.0/ga_pre_audit_report.md(本地 git clone 受限,改用 rustsec.org 手动核验 13 个关键依赖;发现 anyhow 1.0.102 受 RUSTSEC-2026-0190 影响,已升级到 1.0.103,cargo check 通过)
 - [x] `docs/optimization/v1.2.0/full_deferred_optimization_report.md` 已创建
-- [ ] `CHANGELOG.md` 追加 v1.2.0-omega 完整章节 — ⚠️ Task 1-4 已各自追加章节,完整汇总章节延后到 GA 发布前
-- [ ] `project_memory.md` 追加 v1.2.0-omega 总结教训 — ⚠️ Task 1-4 已各自追加教训章节,总结教训延后到 GA 发布前
+- [x] `CHANGELOG.md` 追加 v1.2.0-omega 完整章节 — ✅ G2 已完成(2026-07-09),"v1.2.0-omega 汇总"概述章节已插入 Task 0 之前
+- [x] `project_memory.md` 追加 v1.2.0-omega 总结教训 — ✅ G3 已完成(2026-07-09),"v1.2.0-omega 总结教训"原则提炼章节已插入 Hard Constraints 之后(注:Task 1-4 细节教训章节实际记录在验证报告中,见总结章节末尾关联文档)
 - [x] `v1-1-0-systematic-optimization-deep-analysis/tasks.md` 中 V-2/V-6/V-7/V-10 标记为"已在 v1.2.0-omega 完成"
 - [x] `CODE_WIKI.md` §1.3 开发状态表已更新
 

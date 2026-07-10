@@ -217,11 +217,14 @@ impl WikiStore {
         &self.config
     }
 
-    /// 返回 FTS5 可用性状态 — open 时检测一次的结果。
+    /// 返回 FTS5 tokenizer 能力状态 — open 时检测一次的结果(v1.3.0 三值)。
     ///
-    /// 调用方可据此感知底层全文检索引擎:Available 走 FTS5 MATCH(O(log n)),
-    /// Unavailable 走 LIKE(O(n) 全表扫描)。通常无需调用方关心,`search_fulltext`
-    /// 已内部处理降级;此方法仅供监控/测试/上层决策感知。
+    /// 调用方可据此感知底层全文检索引擎:
+    /// - `AvailableTrigram` / `AvailableUnicode61` 走 FTS5 MATCH(O(log n))
+    /// - `Unavailable` 走 LIKE(O(n) 全表扫描)
+    ///
+    /// 通常无需调用方关心,`search_fulltext` 已内部处理三级降级链;
+    /// 此方法仅供监控/测试/上层决策感知(如选择是否启用 FTS5 索引同步)。
     pub fn fts_capability(&self) -> FtsCapability {
         self.fts_capability
     }
@@ -299,12 +302,29 @@ impl WikiStore {
         .await
     }
 
-    /// 异步全文检索 — 优先 FTS5 MATCH,不可用或失败时降级到 LIKE。
+    /// 异步全文检索 — v1.3.0 三级降级链(trigram > unicode61 > LIKE)。
     ///
-    /// # 引擎选择
-    /// - FTS5 Available:走 `MATCH` 查询,O(log n) 倒排索引,按相关度排序
-    /// - FTS5 Unavailable 或 query 触发 FTS5 语法错误:降级 LIKE,O(n) 全表扫描,
-    ///   记 warning 日志。大小写不敏感(SQLite LIKE 默认对 ASCII 不敏感)。
+    /// # 引擎选择(根据 `FtsCapability`)
+    /// - `AvailableTrigram`:CJK 三字以上子串走 trigram MATCH(直接命中);
+    ///   短查询(< 3 字符)trigram 无优势,直接降级 LIKE;
+    ///   MATCH 报错(特殊字符)降级 LIKE
+    /// - `AvailableUnicode61`:走 unicode61 MATCH,空结果降级 LIKE
+    ///   (v1.2.0 行为 — unicode61 将连续 CJK 视为单 token,子串不命中)
+    /// - `Unavailable`:直接 LIKE 全表扫描(v1.2.0 行为)
+    ///
+    /// # WHY trigram 空结果不降级 LIKE(与 unicode61 不同)
+    /// trigram 对 CJK 三字以上子串应能命中(生成对应 trigram token)。若 trigram
+    /// MATCH 返回空 Vec,说明文档确实不含该子串(trigram 工作正常),返回空 Vec
+    /// 是正确语义。若降级 LIKE,会引入子串匹配的"部分命中"语义(LIKE %query%
+    /// 可能匹配更多结果),破坏 trigram 的精确匹配语义。
+    ///
+    /// 而 unicode61 对 CJK 子串有不命中问题(整体 token),空结果可能是
+    /// tokenizer 局限而非真的无匹配,故需降级 LIKE 保证召回率。
+    ///
+    /// # WHY 短查询(< 3 字符)直接降级 LIKE
+    /// trigram 按 3 字符滑窗分词,1-2 字符查询无法生成有效 trigram token,
+    /// 继续走 trigram MATCH 会空结果(误判为无匹配)。直接降级 LIKE 更高效
+    /// (LIKE 对短查询性能足够,子串扫描开销小),且语义更宽松(子串匹配)。
     ///
     /// # WHY 降级而非硬失败
     /// FTS5 的 MATCH 对特殊字符(如不平衡引号)会报语法错误。直接返回 Err 会
@@ -313,25 +333,53 @@ impl WikiStore {
     pub async fn search_fulltext(&self, query: String) -> Result<Vec<WikiEntry>, WikiError> {
         let capability = self.fts_capability;
         self.with_read_conn(move |conn| {
-            if capability.is_available() {
-                match fts::search_fts(conn, &query) {
-                    Ok(entries) if !entries.is_empty() => return Ok(entries),
-                    Ok(_) => {
-                        // WHY 空结果降级:FTS5 unicode61 tokenizer 将连续 CJK 字符
-                        // 视为单个 token,导致中文子串检索无法 MATCH 命中
-                        // (如 "分析" 不匹配 "性能分析报告" 这一整体 token)。
-                        // LIKE 的 %query% 子串匹配能正确召回此类结果。
-                        // 降级不影响 FTS5 在英文/分词文本上的性能优势。
+            match capability {
+                FtsCapability::AvailableTrigram => {
+                    // WHY 短查询降级:trigram 按 3 字符滑窗分词,1-2 字符无法生成
+                    // 有效 trigram token,MATCH 会空结果(误判无匹配)。LIKE 对短
+                    // 查询性能足够,且子串匹配语义更宽松。chars().count() 按 Unicode
+                    // 标量值计数,正确处理 CJK(每个汉字算 1 字符)。
+                    if query.chars().count() >= 3 {
+                        match fts::search_fts(conn, &query) {
+                            // trigram 应直接命中(空或非空都是正确语义,不降级 LIKE)
+                            Ok(entries) => return Ok(entries),
+                            Err(e) => {
+                                // FTS5 查询失败(常见于 query 含 FTS5 非法语法,如不平衡引号),
+                                // 降级到 LIKE,记录 warning 便于排查降级频率。
+                                tracing::warn!(
+                                    error = %e,
+                                    query = %query,
+                                    "trigram MATCH failed, falling back to LIKE"
+                                );
+                            }
+                        }
                     }
-                    Err(e) => {
-                        // FTS5 查询失败(常见于 query 含 FTS5 非法语法,如不平衡引号),
-                        // 降级到 LIKE,记录 warning 便于排查降级频率。
-                        tracing::warn!(
-                            error = %e,
-                            query = %query,
-                            "FTS5 search failed, falling back to LIKE"
-                        );
+                    // 短查询(< 3 字符)或 MATCH 失败:fall through 到 LIKE
+                }
+                FtsCapability::AvailableUnicode61 => {
+                    // v1.2.0 行为:unicode61 MATCH + 空结果降级 LIKE
+                    match fts::search_fts(conn, &query) {
+                        Ok(entries) if !entries.is_empty() => return Ok(entries),
+                        Ok(_) => {
+                            // WHY 空结果降级:FTS5 unicode61 tokenizer 将连续 CJK 字符
+                            // 视为单个 token,导致中文子串检索无法 MATCH 命中
+                            // (如 "分析" 不匹配 "性能分析报告" 这一整体 token)。
+                            // LIKE 的 %query% 子串匹配能正确召回此类结果。
+                            // 降级不影响 FTS5 在英文/分词文本上的性能优势。
+                        }
+                        Err(e) => {
+                            // FTS5 查询失败(常见于 query 含 FTS5 非法语法,如不平衡引号),
+                            // 降级到 LIKE,记录 warning 便于排查降级频率。
+                            tracing::warn!(
+                                error = %e,
+                                query = %query,
+                                "unicode61 MATCH failed, falling back to LIKE"
+                            );
+                        }
                     }
+                }
+                FtsCapability::Unavailable => {
+                    // v1.2.0 行为:LIKE 全表扫描(无 FTS5 可用)
                 }
             }
             fts::search_like(conn, &query)
