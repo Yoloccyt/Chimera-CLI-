@@ -43,6 +43,13 @@ pub enum NmcError {
         /// 实际维度
         actual: usize,
     },
+
+    /// 嵌入服务错误 — 神经网络语义嵌入请求失败(P0-1)
+    #[error("嵌入服务错误: {reason}")]
+    EmbeddingError {
+        /// 失败原因描述
+        reason: String,
+    },
 }
 
 /// 从 event_bus::EventBusError 转换 — 事件发布失败时向上传播

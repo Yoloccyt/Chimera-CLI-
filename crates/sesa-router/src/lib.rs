@@ -5,6 +5,7 @@
 //!
 //! # 核心机制
 //! - **256-bit 位向量掩码**:`SesaMask` 用 32 字节位向量表示最多 256 个专家的激活状态
+//! - **分层 1024 专家掩码(P1-8)**:`HierarchicalSesaMask` 用 4 层 × 256 位支持 1024 专家
 //! - **O(n) Top-K 选择**:使用 `select_nth_unstable_by` 选 Top-K 专家,避免 O(n log n) 排序
 //! - **稀疏度强制 < 40%**:`enforce_sparsity` 确保激活专家数不超过总专家数的 40%
 //! - **EventBus 集成**:激活完成发布 `SesaActivationCompleted`,订阅 `ConsensusReached` 调整策略
@@ -55,7 +56,7 @@ pub mod types;
 pub use activation::SesaRouter;
 pub use config::SesaConfig;
 pub use error::SesaError;
-pub use mask::SesaMask;
+pub use mask::{HierarchicalSesaMask, SesaMask, TOTAL_EXPERTS, LAYER_COUNT, EXPERTS_PER_LAYER};
 pub use prerequisite::PrerequisiteChecker;
 pub use sparsity::{enforce_sparsity, max_allowed_active, SparsityProfile};
 pub use types::{ActivationRequest, ExpertDescriptor};
@@ -65,7 +66,7 @@ pub mod prelude {
     pub use crate::activation::SesaRouter;
     pub use crate::config::SesaConfig;
     pub use crate::error::SesaError;
-    pub use crate::mask::SesaMask;
+    pub use crate::mask::{HierarchicalSesaMask, SesaMask, TOTAL_EXPERTS, LAYER_COUNT, EXPERTS_PER_LAYER};
     pub use crate::prerequisite::PrerequisiteChecker;
     pub use crate::sparsity::{enforce_sparsity, max_allowed_active, SparsityProfile};
     pub use crate::types::{ActivationRequest, ExpertDescriptor};

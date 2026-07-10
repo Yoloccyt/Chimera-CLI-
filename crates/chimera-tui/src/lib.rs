@@ -28,6 +28,16 @@
 //! let mut app = TuiApp::new(TuiConfig::default()).unwrap();
 //! app.run().unwrap(); // 启动 TUI 事件循环
 //! ```
+//!
+//! P1-15: 事件驱动模式示例
+//! ```no_run
+//! use chimera_tui::{TuiApp, TuiConfig};
+//! use event_bus::EventBus;
+//!
+//! let bus = EventBus::new();
+//! let mut app = TuiApp::with_event_bus(TuiConfig::default(), bus).unwrap();
+//! app.run().unwrap(); // 事件驱动:同时监听键盘和 EventBus
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]

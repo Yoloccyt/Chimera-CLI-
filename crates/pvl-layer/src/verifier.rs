@@ -83,6 +83,10 @@ impl Verifier {
     /// # 返回
     /// 验证结果(通过/拒绝 + 原因)
     pub fn verify(&self, operation: &Operation) -> VerificationResult {
+        // P1-9:验证超时保护 — 使用 std::time::Instant 限制验证时间
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(self.config.verification_timeout_ms);
+
         // 1. 语法检查:内容非空
         if operation.content.trim().is_empty() {
             return VerificationResult::rejected(
@@ -90,9 +94,21 @@ impl Verifier {
                 "语法检查失败:内容为空",
             );
         }
+        if start.elapsed() > timeout {
+            return VerificationResult::rejected(
+                operation.operation_id.clone(),
+                "验证超时:语法检查阶段超时",
+            );
+        }
 
         // 2. 安全检查:不含危险关键词
         let content_lower = operation.content.to_lowercase();
+        if start.elapsed() > timeout {
+            return VerificationResult::rejected(
+                operation.operation_id.clone(),
+                "验证超时:安全检查阶段超时",
+            );
+        }
         for keyword in DANGEROUS_KEYWORDS {
             if content_lower.contains(keyword) {
                 return VerificationResult::rejected(
@@ -101,12 +117,24 @@ impl Verifier {
                 );
             }
         }
+        if start.elapsed() > timeout {
+            return VerificationResult::rejected(
+                operation.operation_id.clone(),
+                "验证超时:安全检查阶段超时",
+            );
+        }
 
         // 3. 依赖检查:不含未定义引用(占位)
         if operation.content.contains("$undefined") {
             return VerificationResult::rejected(
                 operation.operation_id.clone(),
                 "依赖检查失败:包含未定义引用 '$undefined'",
+            );
+        }
+        if start.elapsed() > timeout {
+            return VerificationResult::rejected(
+                operation.operation_id.clone(),
+                "验证超时:依赖检查阶段超时",
             );
         }
 

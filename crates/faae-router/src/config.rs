@@ -52,6 +52,15 @@ pub struct FaaeConfig {
     /// 5 分钟内路由约 500-1000 次(中等负载),衰减 8%(exp(-300/3600) ≈ 0.92),
     /// 时近性权重明显但不至于过快淡出
     pub decay_interval_secs: u64,
+
+    /// 多步均衡步数(默认 1,单步均衡)
+    ///
+    /// WHY(P1-7):控制 EDSB 均衡的"lookahead"步数。
+    /// - 1:仅重分配到次优候选(原行为)
+    /// - 2+:考虑多步后的均衡效果,选择最优路径。
+    ///   例如 2 步均衡:若 Top-2 也过载,可进一步分配到 Top-3。
+    ///   步数越大均衡越全局,但计算成本越高。
+    pub multi_step_balance_depth: usize,
 }
 
 impl FaaeConfig {
@@ -91,6 +100,13 @@ impl FaaeConfig {
     }
 }
 
+    /// 设置多步均衡步数
+    pub fn with_multi_step_balance_depth(mut self, depth: usize) -> Self {
+        self.multi_step_balance_depth = depth;
+        self
+    }
+}
+
 impl Default for FaaeConfig {
     fn default() -> Self {
         Self {
@@ -100,6 +116,7 @@ impl Default for FaaeConfig {
             balance_enabled: true,
             // WHY 默认 300s 与原硬编码 DECAY_INTERVAL_SECS 一致,保持向后兼容
             decay_interval_secs: 300,
+            multi_step_balance_depth: 1,
         }
     }
 }

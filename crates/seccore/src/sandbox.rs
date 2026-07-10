@@ -29,6 +29,7 @@ use crate::audit::{AuditChain, AuditRecordStatus};
 use crate::error::SecCoreError;
 use crate::policy::{validate_command, validate_env, CommandPolicy, EnvPolicy};
 use crate::types::{Command, CommandSpec, ExecutionResult};
+use crate::windows_sandbox::WindowsSandboxExecutor;
 
 /// 零信任沙箱 — 封装策略、环境策略与审计链,提供统一的执行入口。
 ///
@@ -170,15 +171,39 @@ impl Sandbox {
     /// 在沙箱中执行校验通过的命令规格。
     ///
     /// 跨平台策略:
+    /// - **Windows**: 使用 `WindowsSandboxExecutor` 实现三层降级:
+    ///   1. Windows Sandbox API (WSB 配置文件 + WindowsSandbox.exe)
+    ///   2. Job Object 限制 (`start /b /low` 低优先级 + 单核亲和)
+    ///   3. 标准进程隔离(最终降级)
     /// - **Linux 生产环境**:此处应通过 gVisor runsc 运行时启动子进程,
     ///   并应用 seccomp 过滤器限制系统调用集合。当前实现为降级版本。
-    /// - **Windows/macOS**:用 `tokio::process::Command` 直接执行,
+    /// - **macOS**:用 `tokio::process::Command` 直接执行,
     ///   依赖策略层的静态分析拦截危险命令。这是降级方案,安全性弱于 Linux。
     ///
     /// # 安全提示
     /// 此函数只接受 `CommandSpec`(已通过策略校验),不接受原始 `Command`。
     /// 调用方必须先调用 `validate_command`。
     async fn execute_in_sandbox(
+        &self,
+        spec: &CommandSpec,
+    ) -> Result<ExecutionResult, SecCoreError> {
+        // Windows 平台:使用 WindowsSandboxExecutor 实现三层降级隔离
+        #[cfg(windows)]
+        {
+            let executor = WindowsSandboxExecutor::new(self.timeout)
+                .with_job_object(true);
+            return executor.execute(spec).await;
+        }
+
+        // 非 Windows 平台:使用原有进程隔离(后续可接入 gVisor)
+        #[cfg(not(windows))]
+        {
+            self.execute_standard(spec).await
+        }
+    }
+
+    /// 标准进程隔离(跨平台降级)
+    async fn execute_standard(
         &self,
         spec: &CommandSpec,
     ) -> Result<ExecutionResult, SecCoreError> {

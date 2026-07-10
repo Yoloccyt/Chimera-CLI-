@@ -1,18 +1,18 @@
-//! 访问模式学习与推测性预取 — 基于一阶马尔可夫链的上下文访问预测
+//! 访问模式学习与推测性预取 — 基于二阶马尔可夫链的上下文访问预测
 //!
 //! 对应架构层:L3 Storage
 //! 对应创新点:SCC(Speculative Context Cache)的推测性预取机制
 //!
 //! # 核心职责
-//! - `AccessPatternLearner`:学习上下文访问转移模式(一阶马尔可夫链)
-//! - `record_access`:记录上下文转移(current → next),更新转移计数
+//! - `AccessPatternLearner`:学习上下文访问转移模式(二阶马尔可夫链)
+//! - `record_access`:记录上下文转移(previous → current → next),更新转移计数
 //! - `predict_next`:预测下一步可能访问的上下文及概率(按概率降序)
 //! - `prefetch`:对高概率上下文异步预取(预热)到缓存,发布 CachePrefetched 事件
 //!
 //! # 设计决策(WHY)
-//! - **一阶马尔可夫链**:当前状态 → 下一步状态概率,简单有效(spec.md 决策 1)。
-//!   不用高阶马尔可夫链(N-gram),因为上下文访问的马尔可夫性质足够强,
-//!   且一阶模型内存开销低(HashMap<ContextId, HashMap<ContextId, u32>>)
+//! - **二阶马尔可夫链**:previous → current → next 概率,比一阶更准确
+//!   因为上下文访问有局部性(如 A→B→C→D 序列中,知道 A→B 比仅知道 B
+//!   更能预测 C)。内存开销可控:HashMap<(ContextId, ContextId), HashMap<ContextId, u32>>
 //! - **std::sync::RwLock 而非 tokio::sync::RwLock**:record_access/predict_next
 //!   是同步方法(spec 签名要求),std::sync::RwLock 支持同步读写在非 async 上下文调用
 //! - **tokio::spawn 后台更新**:record_access_background 将模式更新放入后台任务,
@@ -54,17 +54,17 @@ struct LruNode {
     next: Option<usize>,
 }
 
-/// 容量受限的 LRU 访问模式图
+/// 容量受限的 LRU 访问模式图 — 二阶马尔可夫链
 ///
-/// 存储结构:current → (节点索引, {next → count})。
+/// 存储结构:(previous, current) → (节点索引, {next → count})。
 ///
-/// WHY: 一阶马尔可夫链随上下文 ID 数量线性增长;无界 HashMap 在
-/// 长期运行中会导致内存无限膨胀。LruPatternMap 在保持 O(1) 查找/
-/// 更新的前提下,通过 LRU 策略将活跃上下文数量限制在固定容量内,
-/// 符合 Ω-Sparse 定律。
+/// WHY: 二阶马尔可夫链比一阶更准确,因为上下文访问有局部性。
+/// 例如序列 A→B→C→D 中,知道 A→B 比仅知道 B 更能预测 C。
+/// 内存开销:键从 ContextId 变为 (ContextId, ContextId),但值结构不变,
+/// 总体增长可控(活跃转移对数量 × 平均分支数)。
 struct LruPatternMap {
-    /// current → (节点索引, 转移计数表)
-    data: HashMap<ContextId, (usize, HashMap<ContextId, u32>)>,
+    /// (previous, current) → (节点索引, 转移计数表)
+    data: HashMap<(ContextId, ContextId), (usize, HashMap<ContextId, u32>)>,
     /// 双向链表节点池。使用 Vec 索引而非指针,避免 unsafe。
     nodes: Vec<LruNode>,
     /// 可复用的节点索引(被驱逐节点留下的空位)
@@ -91,18 +91,25 @@ impl LruPatternMap {
         }
     }
 
-    /// 当前存储的 current 上下文数量
+    /// 当前存储的 (previous, current) 对数量
     fn len(&self) -> usize {
         self.data.len()
     }
 
-    /// 记录一次状态转移,并在需要时触发 LRU 淘汰
+    /// 记录一次二阶状态转移,并在需要时触发 LRU 淘汰
     ///
     /// 复杂度:O(1) 平均。
-    fn record_transition(&mut self, current: &ContextId, next: &ContextId) {
+    fn record_transition(
+        &mut self,
+        previous: &ContextId,
+        current: &ContextId,
+        next: &ContextId,
+    ) {
+        let key = (previous.clone(), current.clone());
+
         // 先在一个独立作用域内更新转移计数,避免 `self.data.get_mut` 借用
         // 与后续 `self.move_to_tail` 的 `&mut self` 冲突。
-        let idx = if let Some((idx, transitions)) = self.data.get_mut(current) {
+        let idx = if let Some((idx, transitions)) = self.data.get_mut(&key) {
             transitions
                 .entry(next.clone())
                 .and_modify(|count| *count = count.saturating_add(1))
@@ -116,7 +123,7 @@ impl LruPatternMap {
             // 已存在:移到 MRU
             self.move_to_tail(idx);
         } else {
-            // 新 current:先淘汰 LRU 再插入
+            // 新 (previous, current) 对:先淘汰 LRU 再插入
             if self.data.len() >= self.capacity {
                 self.evict_lru();
             }
@@ -124,22 +131,26 @@ impl LruPatternMap {
             let mut transitions = HashMap::new();
             transitions.insert(next.clone(), 1);
 
-            let idx = self.alloc_node(current.clone());
+            let idx = self.alloc_node(key.clone());
             self.append_to_tail(idx);
-            self.data.insert(current.clone(), (idx, transitions));
+            self.data.insert(key, (idx, transitions));
         }
     }
 
-    /// 获取指定 current 的转移计数表(只读,不更新 LRU)
-    fn get_transitions(&self, current: &ContextId) -> Option<&HashMap<ContextId, u32>> {
-        self.data.get(current).map(|(_, t)| t)
+    /// 获取指定 (previous, current) 的转移计数表(只读,不更新 LRU)
+    fn get_transitions(
+        &self,
+        previous: &ContextId,
+        current: &ContextId,
+    ) -> Option<&HashMap<ContextId, u32>> {
+        self.data.get(&(previous.clone(), current.clone())).map(|(_, t)| t)
     }
 
     /// 分配一个节点(复用空闲索引或追加新节点)
-    fn alloc_node(&mut self, key: ContextId) -> usize {
+    fn alloc_node(&mut self, key: (ContextId, ContextId)) -> usize {
         if let Some(idx) = self.free_indices.pop() {
             self.nodes[idx] = LruNode {
-                key,
+                key: key.0.to_string() + "|" + &key.1,
                 prev: None,
                 next: None,
             };
@@ -147,7 +158,7 @@ impl LruPatternMap {
         } else {
             let idx = self.nodes.len();
             self.nodes.push(LruNode {
-                key,
+                key: key.0.to_string() + "|" + &key.1,
                 prev: None,
                 next: None,
             });
@@ -216,26 +227,31 @@ impl LruPatternMap {
     }
 }
 
-/// 访问模式学习器 — 基于一阶马尔可夫链的上下文访问预测
+/// 访问模式学习器 — 基于二阶马尔可夫链的上下文访问预测
 ///
 /// # 马尔可夫链模型
 /// `patterns: RwLock<LruPatternMap>`
-/// - 外层 key:当前上下文 ID
-/// - 内层 key:下一步上下文 ID
-/// - 内层 value:转移计数(current → next 出现次数)
+/// - 外层 key:(previous 上下文 ID, current 上下文 ID)
+/// - 内层 key:next 上下文 ID
+/// - 内层 value:转移计数(previous → current → next 出现次数)
 ///
-/// 概率计算:`P(next | current) = count(current → next) / Σ count(current → *)`
+/// 概率计算:`P(next | previous, current) = count(previous → current → next) / Σ count(previous → current → *)`
 ///
 /// # 线程安全
 /// `patterns` 使用 `std::sync::RwLock` 保护,支持并发读、独占写。
 /// `record_access` 获取写锁,`predict_next` 获取读锁,两者均满足 `Send + Sync`。
 pub struct AccessPatternLearner {
-    /// 一阶马尔可夫链:current → {next → count},带 LRU 容量上限
+    /// 二阶马尔可夫链:(previous, current) → {next → count},带 LRU 容量上限
     patterns: RwLock<LruPatternMap>,
     /// 事件总线(预取完成后发布 CachePrefetched 事件)
     event_bus: EventBus,
     /// 预取概率阈值(默认 0.6)
     prefetch_threshold: f32,
+    /// 最近访问的上下文 ID(用于二阶链:保存上一个访问的上下文)
+    ///
+    /// WHY:二阶马尔可夫链需要 previous → current → next,
+    /// 此字段保存上一个访问的上下文,作为 next 次 record_access 的 previous。
+    last_accessed: RwLock<Option<ContextId>>,
 }
 
 impl AccessPatternLearner {
@@ -262,10 +278,11 @@ impl AccessPatternLearner {
             patterns: RwLock::new(LruPatternMap::with_capacity(capacity)),
             event_bus,
             prefetch_threshold,
+            last_accessed: RwLock::new(None),
         }
     }
 
-    /// 返回当前存储的 current 上下文数量(用于监控与测试)
+    /// 返回当前存储的 (previous, current) 对数量(用于监控与测试)
     ///
     /// WHY 暴露此指标:调用方可据此观察学习器内存占用,并在测试中
     /// 验证 LRU 容量上限是否生效。
@@ -277,22 +294,63 @@ impl AccessPatternLearner {
         patterns.len()
     }
 
-    /// 记录上下文访问转移 — 更新马尔可夫链转移计数
+    /// 记录上下文访问转移 — 更新二阶马尔可夫链转移计数
     ///
     /// # 参数
+    /// - `previous`:上一个访问的上下文 ID
     /// - `current`:当前访问的上下文 ID
     /// - `next`:下一步访问的上下文 ID
     ///
     /// # 并发安全
     /// 获取 `patterns` 写锁更新转移计数。锁持有时间极短(HashMap entry 操作),
     /// 不影响并发性能。
-    pub fn record_access(&self, current: &ContextId, next: &ContextId) {
+    pub fn record_access(&self, previous: &ContextId, current: &ContextId, next: &ContextId) {
         let mut patterns = self.patterns.write().unwrap_or_else(|e| {
             tracing::warn!("patterns RwLock poisoned, recovering");
             e.into_inner()
         });
 
-        patterns.record_transition(current, next);
+        patterns.record_transition(previous, current, next);
+
+        // 更新 last_accessed 为 current
+        drop(patterns); // 先释放 patterns 锁,再获取 last_accessed 锁,避免死锁
+        let mut last = self.last_accessed.write().unwrap_or_else(|e| {
+            tracing::warn!("last_accessed RwLock poisoned, recovering");
+            e.into_inner()
+        });
+        *last = Some(current.clone());
+    }
+
+    /// 记录当前访问的上下文 — 自动维护 last_accessed 状态
+    ///
+    /// 此简化版不需要调用方显式提供 previous,学习器内部维护
+    /// 访问历史。第一次调用时(previous 为 None)不记录转移,
+    /// 仅设置 last_accessed。
+    pub fn record_current(&self, current: &ContextId) {
+        let mut last = self.last_accessed.write().unwrap_or_else(|e| {
+            tracing::warn!("last_accessed RwLock poisoned, recovering");
+            e.into_inner()
+        });
+
+        if let Some(ref previous) = *last {
+            // 需要 next 才能形成完整二阶转移,这里仅更新 last_accessed
+            // 完整转移由 record_access(previous, current, next) 记录
+            // 此简化方法用于场景:调用方只关心当前访问,不关心下一步预测
+            let previous_clone = previous.clone();
+            let current_clone = current.clone();
+            *last = Some(current_clone.clone());
+            drop(last); // 释放锁后再获取 patterns 锁
+
+            // 记录一个自环转移(previous → current → current)作为占位
+            // 实际 next 在后续调用中确定。这是降级到一阶的近似行为。
+            let mut patterns = self.patterns.write().unwrap_or_else(|e| {
+                tracing::warn!("patterns RwLock poisoned, recovering");
+                e.into_inner()
+            });
+            patterns.record_transition(&previous_clone, &current_clone, &current_clone);
+        } else {
+            *last = Some(current.clone());
+        }
     }
 
     /// 异步后台记录访问转移 — 不阻塞主流程
@@ -301,7 +359,7 @@ impl AccessPatternLearner {
     ///
     /// # WHY self: `Arc<Self>`
     /// `tokio::spawn` 要求 Future 为 `Send + 'static`。`self: Arc<Self>` 将
-    /// 学习器的所有权移入任务,任务内调用 `self.record_access(&current, &next)`。
+    /// 学习器的所有权移入任务,任务内调用 `self.record_access(&previous, &current, &next)`。
     /// `record_access` 内部的 `RwLockWriteGuard` 是函数栈帧局部变量,
     /// 不进入 Future 状态机,Future 仍为 `Send`。
     ///
@@ -315,33 +373,35 @@ impl AccessPatternLearner {
     /// Arc::clone(&learner).record_access_background(
     ///     ContextId::new("ctx-a"),
     ///     ContextId::new("ctx-b"),
+    ///     ContextId::new("ctx-c"),
     /// );
     /// // learner 仍可使用(Arc::clone 保留了引用)
     /// # }
     /// ```
-    pub fn record_access_background(self: Arc<Self>, current: ContextId, next: ContextId) {
+    pub fn record_access_background(self: Arc<Self>, previous: ContextId, current: ContextId, next: ContextId) {
         tokio::spawn(async move {
-            self.record_access(&current, &next);
+            self.record_access(&previous, &current, &next);
         });
     }
 
     /// 预测下一步可能访问的上下文及概率 — 按概率降序排列
     ///
     /// # 参数
-    /// - `current`:当前上下文 ID
+    /// - `previous`:上一个访问的上下文 ID
+    /// - `current`:当前访问的上下文 ID
     ///
     /// # 返回
-    /// `(ContextId, 概率)` 列表,按概率降序。未知上下文返回空 Vec。
+    /// `(ContextId, 概率)` 列表,按概率降序。未知 (previous, current) 对返回空 Vec。
     ///
     /// # 概率计算
-    /// `P(next | current) = count(current → next) / Σ count(current → *)`
-    pub fn predict_next(&self, current: &ContextId) -> Vec<(ContextId, f32)> {
+    /// `P(next | previous, current) = count(previous → current → next) / Σ count(previous → current → *)`
+    pub fn predict_next(&self, previous: &ContextId, current: &ContextId) -> Vec<(ContextId, f32)> {
         let patterns = self.patterns.read().unwrap_or_else(|e| {
             tracing::warn!("patterns RwLock poisoned, recovering");
             e.into_inner()
         });
 
-        let transitions = match patterns.get_transitions(current) {
+        let transitions = match patterns.get_transitions(previous, current) {
             Some(t) => t,
             None => return Vec::new(),
         };
@@ -362,17 +422,51 @@ impl AccessPatternLearner {
         predictions
     }
 
-    /// 获取指定上下文的访问模式快照
+    /// 一阶预测降级 — 仅基于 current 预测 next(兼容旧行为)
     ///
-    /// 返回 `AccessPattern`,包含当前上下文 ID 与转移计数列表(按计数降序)。
-    /// 未知上下文返回 None。
-    pub fn get_pattern(&self, current: &ContextId) -> Option<AccessPattern> {
+    /// 当二阶预测无结果时,调用方可使用此降级方法。
+    /// 内部聚合所有 previous 的转移计数,按 current 做一阶预测。
+    pub fn predict_next_first_order(&self, current: &ContextId) -> Vec<(ContextId, f32)> {
         let patterns = self.patterns.read().unwrap_or_else(|e| {
             tracing::warn!("patterns RwLock poisoned, recovering");
             e.into_inner()
         });
 
-        patterns.get_transitions(current).map(|transitions| {
+        // 聚合所有 (previous, current) 对中 current 的转移计数
+        let mut aggregated: HashMap<ContextId, u32> = HashMap::new();
+        for ((_, c), (_, transitions)) in patterns.data.iter() {
+            if c == current {
+                for (next_id, &count) in transitions.iter() {
+                    *aggregated.entry(next_id.clone()).or_insert(0) += count;
+                }
+            }
+        }
+
+        let total: u32 = aggregated.values().sum();
+        if total == 0 {
+            return Vec::new();
+        }
+
+        let mut predictions: Vec<(ContextId, f32)> = aggregated
+            .iter()
+            .map(|(id, &count)| (id.clone(), count as f32 / total as f32))
+            .collect();
+
+        predictions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        predictions
+    }
+
+    /// 获取指定上下文的访问模式快照
+    ///
+    /// 返回 `AccessPattern`,包含当前上下文 ID 与转移计数列表(按计数降序)。
+    /// 未知上下文返回 None。
+    pub fn get_pattern(&self, previous: &ContextId, current: &ContextId) -> Option<AccessPattern> {
+        let patterns = self.patterns.read().unwrap_or_else(|e| {
+            tracing::warn!("patterns RwLock poisoned, recovering");
+            e.into_inner()
+        });
+
+        patterns.get_transitions(previous, current).map(|transitions| {
             let mut sorted: Vec<(ContextId, u32)> =
                 transitions.iter().map(|(id, &c)| (id.clone(), c)).collect();
             sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
@@ -402,8 +496,21 @@ impl AccessPatternLearner {
     ///
     /// # 注意
     /// 此方法调用 `tokio::spawn`,必须在 Tokio 运行时上下文中调用。
-    pub fn prefetch(&self, current: &ContextId, cache: &SccCache) -> Vec<ContextId> {
-        let predictions = self.predict_next(current);
+    pub fn prefetch(
+        &self,
+        previous: &ContextId,
+        current: &ContextId,
+        cache: &SccCache,
+    ) -> Vec<ContextId> {
+        // 先尝试二阶预测
+        let predictions = self.predict_next(previous, current);
+        let predictions = if predictions.is_empty() {
+            // 二阶无结果,降级到一阶
+            self.predict_next_first_order(current)
+        } else {
+            predictions
+        };
+
         let threshold = self.prefetch_threshold;
 
         // 过滤概率 >= 阈值的上下文
@@ -459,33 +566,36 @@ mod tests {
     }
 
     #[test]
-    fn test_record_access_and_predict() {
+    fn test_record_access_and_predict_second_order() {
         let learner = make_learner();
         let ctx_a = ContextId::new("ctx-a");
         let ctx_b = ContextId::new("ctx-b");
         let ctx_c = ContextId::new("ctx-c");
+        let ctx_d = ContextId::new("ctx-d");
 
-        // 记录转移:a → b 三次,a → c 一次
-        learner.record_access(&ctx_a, &ctx_b);
-        learner.record_access(&ctx_a, &ctx_b);
-        learner.record_access(&ctx_a, &ctx_b);
-        learner.record_access(&ctx_a, &ctx_c);
+        // 记录二阶转移: (a, b) → c 三次, (a, b) → d 一次
+        learner.record_access(&ctx_a, &ctx_b, &ctx_c);
+        learner.record_access(&ctx_a, &ctx_b, &ctx_c);
+        learner.record_access(&ctx_a, &ctx_b, &ctx_c);
+        learner.record_access(&ctx_a, &ctx_b, &ctx_d);
 
-        let predictions = learner.predict_next(&ctx_a);
+        // 二阶预测:已知 (a, b),预测 next
+        let predictions = learner.predict_next(&ctx_a, &ctx_b);
         assert_eq!(predictions.len(), 2);
 
-        // b 概率 3/4 = 0.75,c 概率 1/4 = 0.25
-        assert_eq!(predictions[0].0.as_str(), "ctx-b");
+        // c 概率 3/4 = 0.75,d 概率 1/4 = 0.25
+        assert_eq!(predictions[0].0.as_str(), "ctx-c");
         assert!((predictions[0].1 - 0.75).abs() < 0.01);
-        assert_eq!(predictions[1].0.as_str(), "ctx-c");
+        assert_eq!(predictions[1].0.as_str(), "ctx-d");
         assert!((predictions[1].1 - 0.25).abs() < 0.01);
     }
 
     #[test]
-    fn test_predict_unknown_context() {
+    fn test_predict_unknown_pair() {
         let learner = make_learner();
-        let unknown = ContextId::new("ctx-unknown");
-        let predictions = learner.predict_next(&unknown);
+        let unknown_prev = ContextId::new("ctx-unknown-prev");
+        let unknown_cur = ContextId::new("ctx-unknown-cur");
+        let predictions = learner.predict_next(&unknown_prev, &unknown_cur);
         assert!(predictions.is_empty());
     }
 
@@ -493,45 +603,71 @@ mod tests {
     fn test_predict_sorted_by_probability_desc() {
         let learner = make_learner();
         let ctx_a = ContextId::new("ctx-a");
+        let ctx_b = ContextId::new("ctx-b");
 
-        // a → b 一次,a → c 五次
-        learner.record_access(&ctx_a, &ContextId::new("ctx-b"));
+        // (a, b) → c 一次,(a, b) → d 五次
+        learner.record_access(&ctx_a, &ctx_b, &ContextId::new("ctx-c"));
         for _ in 0..5 {
-            learner.record_access(&ctx_a, &ContextId::new("ctx-c"));
+            learner.record_access(&ctx_a, &ctx_b, &ContextId::new("ctx-d"));
         }
 
-        let predictions = learner.predict_next(&ctx_a);
-        // c (5/6 ≈ 0.83) 应排在 b (1/6 ≈ 0.17) 前面
-        assert_eq!(predictions[0].0.as_str(), "ctx-c");
-        assert_eq!(predictions[1].0.as_str(), "ctx-b");
+        let predictions = learner.predict_next(&ctx_a, &ctx_b);
+        // d (5/6 ≈ 0.83) 应排在 c (1/6 ≈ 0.17) 前面
+        assert_eq!(predictions[0].0.as_str(), "ctx-d");
+        assert_eq!(predictions[1].0.as_str(), "ctx-c");
     }
 
     #[test]
-    fn test_get_pattern() {
+    fn test_first_order_fallback() {
         let learner = make_learner();
         let ctx_a = ContextId::new("ctx-a");
+        let ctx_b = ContextId::new("ctx-b");
+        let ctx_c = ContextId::new("ctx-c");
+        let ctx_x = ContextId::new("ctx-x");
+        let ctx_y = ContextId::new("ctx-y");
 
-        learner.record_access(&ctx_a, &ContextId::new("ctx-b"));
-        learner.record_access(&ctx_a, &ContextId::new("ctx-c"));
-        learner.record_access(&ctx_a, &ContextId::new("ctx-c"));
+        // 记录多个 (different_prev, b) → c 的转移
+        // 当 (x, b) 无记录时,一阶降级应聚合所有 previous 的计数
+        learner.record_access(&ctx_a, &ctx_b, &ctx_c);
+        learner.record_access(&ctx_x, &ctx_b, &ctx_c);
+        learner.record_access(&ctx_x, &ctx_b, &ctx_c);
 
-        let pattern = learner.get_pattern(&ctx_a);
+        // (x, b) 无直接记录,但一阶降级应找到 b → c 的聚合计数
+        let first_order = learner.predict_next_first_order(&ctx_b);
+        assert!(!first_order.is_empty());
+        assert_eq!(first_order[0].0.as_str(), "ctx-c");
+        // 3 次 c / 3 次总计 = 1.0
+        assert!((first_order[0].1 - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_get_pattern_second_order() {
+        let learner = make_learner();
+        let ctx_a = ContextId::new("ctx-a");
+        let ctx_b = ContextId::new("ctx-b");
+
+        learner.record_access(&ctx_a, &ctx_b, &ContextId::new("ctx-c"));
+        learner.record_access(&ctx_a, &ctx_b, &ContextId::new("ctx-d"));
+        learner.record_access(&ctx_a, &ctx_b, &ContextId::new("ctx-d"));
+
+        let pattern = learner.get_pattern(&ctx_a, &ctx_b);
         assert!(pattern.is_some());
         let pattern = pattern.unwrap();
-        assert_eq!(pattern.current.as_str(), "ctx-a");
+        assert_eq!(pattern.current.as_str(), "ctx-b");
         assert_eq!(pattern.transitions.len(), 2);
-        // 按计数降序:c (2) 在 b (1) 前面
-        assert_eq!(pattern.transitions[0].0.as_str(), "ctx-c");
+        // 按计数降序:d (2) 在 c (1) 前面
+        assert_eq!(pattern.transitions[0].0.as_str(), "ctx-d");
         assert_eq!(pattern.transitions[0].1, 2);
-        assert_eq!(pattern.transitions[1].0.as_str(), "ctx-b");
+        assert_eq!(pattern.transitions[1].0.as_str(), "ctx-c");
         assert_eq!(pattern.transitions[1].1, 1);
     }
 
     #[test]
     fn test_get_pattern_unknown() {
         let learner = make_learner();
-        let unknown = ContextId::new("ctx-unknown");
-        assert!(learner.get_pattern(&unknown).is_none());
+        let unknown_prev = ContextId::new("ctx-unknown-prev");
+        let unknown_cur = ContextId::new("ctx-unknown-cur");
+        assert!(learner.get_pattern(&unknown_prev, &unknown_cur).is_none());
     }
 
     #[tokio::test]
@@ -539,17 +675,22 @@ mod tests {
         let learner = Arc::new(make_learner());
         let ctx_a = ContextId::new("ctx-a");
         let ctx_b = ContextId::new("ctx-b");
+        let ctx_c = ContextId::new("ctx-c");
 
-        // 后台记录转移
-        Arc::clone(&learner).record_access_background(ctx_a.clone(), ctx_b.clone());
+        // 后台记录二阶转移
+        Arc::clone(&learner).record_access_background(
+            ctx_a.clone(),
+            ctx_b.clone(),
+            ctx_c.clone(),
+        );
 
         // 等待后台任务完成
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // 验证模式已记录
-        let predictions = learner.predict_next(&ctx_a);
+        let predictions = learner.predict_next(&ctx_a, &ctx_b);
         assert_eq!(predictions.len(), 1);
-        assert_eq!(predictions[0].0.as_str(), "ctx-b");
+        assert_eq!(predictions[0].0.as_str(), "ctx-c");
         assert!((predictions[0].1 - 1.0).abs() < 0.01);
     }
 
@@ -562,17 +703,18 @@ mod tests {
         let ctx_a = ContextId::new("ctx-a");
         let ctx_b = ContextId::new("ctx-b");
         let ctx_c = ContextId::new("ctx-c");
+        let ctx_d = ContextId::new("ctx-d");
 
-        // 训练模式:a → b 概率 0.75(>= 0.6),a → c 概率 0.25(< 0.6)
+        // 训练二阶模式:(a, b) → c 概率 0.75(>= 0.6),(a, b) → d 概率 0.25(< 0.6)
         for _ in 0..3 {
-            learner.record_access(&ctx_a, &ctx_b);
+            learner.record_access(&ctx_a, &ctx_b, &ctx_c);
         }
-        learner.record_access(&ctx_a, &ctx_c);
+        learner.record_access(&ctx_a, &ctx_b, &ctx_d);
 
-        // 预取应只返回 ctx-b(概率 0.75 >= 0.6)
-        let prefetched = learner.prefetch(&ctx_a, &cache);
+        // 预取应只返回 ctx-c(概率 0.75 >= 0.6)
+        let prefetched = learner.prefetch(&ctx_a, &ctx_b, &cache);
         assert_eq!(prefetched.len(), 1);
-        assert_eq!(prefetched[0].as_str(), "ctx-b");
+        assert_eq!(prefetched[0].as_str(), "ctx-c");
     }
 
     #[tokio::test]
@@ -581,9 +723,10 @@ mod tests {
         let cache = SccCache::new(SccConfig::default(), bus.clone());
         let learner = AccessPatternLearner::new(bus, 0.6);
 
-        // 未知上下文,无预测
-        let unknown = ContextId::new("ctx-unknown");
-        let prefetched = learner.prefetch(&unknown, &cache);
+        // 未知 (previous, current) 对,无预测
+        let unknown_prev = ContextId::new("ctx-unknown-prev");
+        let unknown_cur = ContextId::new("ctx-unknown-cur");
+        let prefetched = learner.prefetch(&unknown_prev, &unknown_cur, &cache);
         assert!(prefetched.is_empty());
     }
 
@@ -595,22 +738,23 @@ mod tests {
 
         let ctx_a = ContextId::new("ctx-a");
         let ctx_b = ContextId::new("ctx-b");
+        let ctx_c = ContextId::new("ctx-c");
 
-        // 插入 ctx-b 到缓存
-        cache.insert(ContextEntry::new("ctx-b", "content-b"));
+        // 插入 ctx-c 到缓存
+        cache.insert(ContextEntry::new("ctx-c", "content-c"));
 
-        // 训练模式:a → b 概率 1.0
-        learner.record_access(&ctx_a, &ctx_b);
+        // 训练二阶模式:(a, b) → c 概率 1.0
+        learner.record_access(&ctx_a, &ctx_b, &ctx_c);
 
-        // 预取:ctx-b 在缓存中,应被预热
-        let prefetched = learner.prefetch(&ctx_a, &cache);
+        // 预取:ctx-c 在缓存中,应被预热
+        let prefetched = learner.prefetch(&ctx_a, &ctx_b, &cache);
         assert_eq!(prefetched.len(), 1);
 
         // 等待后台任务完成
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // 验证 ctx-b 被预热(access_count 增加)
-        let entry = cache.get_or_prefetch(&ctx_b).unwrap();
+        // 验证 ctx-c 被预热(access_count 增加)
+        let entry = cache.get_or_prefetch(&ctx_c).unwrap();
         // warm_entry 调用 record_access 一次,get_or_prefetch 又一次
         assert!(entry.access_count() >= 2);
     }
@@ -623,18 +767,54 @@ mod tests {
 
         let ctx_a = ContextId::new("ctx-a");
         let ctx_b = ContextId::new("ctx-b");
+        let ctx_c = ContextId::new("ctx-c");
 
-        // 训练模式但不插入 ctx-b 到缓存
-        learner.record_access(&ctx_a, &ctx_b);
+        // 训练模式但不插入 ctx-c 到缓存
+        learner.record_access(&ctx_a, &ctx_b, &ctx_c);
 
-        // 预取:ctx-b 不在缓存中,应静默失败(仅 warn 日志)
-        let prefetched = learner.prefetch(&ctx_a, &cache);
+        // 预取:ctx-c 不在缓存中,应静默失败(仅 warn 日志)
+        let prefetched = learner.prefetch(&ctx_a, &ctx_b, &cache);
         assert_eq!(prefetched.len(), 1); // 返回预测 ID(不管是否在缓存中)
 
         // 等待后台任务完成(不应 panic)
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // ctx-b 不在缓存中
-        assert!(!cache.contains(&ctx_b));
+        // ctx-c 不在缓存中
+        assert!(!cache.contains(&ctx_c));
+    }
+
+    #[test]
+    fn test_second_order_vs_first_order_accuracy() {
+        // 验证二阶比一阶更准确
+        let learner = make_learner();
+        let ctx_a = ContextId::new("ctx-a");
+        let ctx_b = ContextId::new("ctx-b");
+        let ctx_x = ContextId::new("ctx-x");
+        let ctx_c = ContextId::new("ctx-c");
+        let ctx_d = ContextId::new("ctx-d");
+
+        // 场景:从 a 和 x 都会到 b,但从 a→b 后总是到 c,从 x→b 后总是到 d
+        for _ in 0..5 {
+            learner.record_access(&ctx_a, &ctx_b, &ctx_c);
+            learner.record_access(&ctx_x, &ctx_b, &ctx_d);
+        }
+
+        // 一阶预测(仅知道 b):c 和 d 各 50%
+        let first_order = learner.predict_next_first_order(&ctx_b);
+        assert_eq!(first_order.len(), 2);
+        // 概率接近 0.5
+        assert!(first_order.iter().all(|(_, p)| (*p - 0.5).abs() < 0.1));
+
+        // 二阶预测(知道 a→b):100% c
+        let second_order = learner.predict_next(&ctx_a, &ctx_b);
+        assert_eq!(second_order.len(), 1);
+        assert_eq!(second_order[0].0.as_str(), "ctx-c");
+        assert!((second_order[0].1 - 1.0).abs() < 0.01);
+
+        // 二阶预测(知道 x→b):100% d
+        let second_order_x = learner.predict_next(&ctx_x, &ctx_b);
+        assert_eq!(second_order_x.len(), 1);
+        assert_eq!(second_order_x[0].0.as_str(), "ctx-d");
+        assert!((second_order_x[0].1 - 1.0).abs() < 0.01);
     }
 }

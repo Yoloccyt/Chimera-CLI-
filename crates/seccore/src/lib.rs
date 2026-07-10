@@ -40,6 +40,7 @@ pub mod error;
 pub mod policy;
 pub mod sandbox;
 pub mod types;
+pub mod windows_sandbox;
 
 // === 公开 API 导出 ===
 pub use asa::{
@@ -51,3 +52,4 @@ pub use error::SecCoreError;
 pub use policy::{validate_command, validate_env, BlockedPattern, CommandPolicy, EnvPolicy};
 pub use sandbox::Sandbox;
 pub use types::{AttackType, Command, CommandSpec, ExecutionResult, RiskLevel};
+pub use windows_sandbox::WindowsSandboxExecutor;

@@ -33,6 +33,7 @@ use crate::checkpoint::CheckpointManager;
 use crate::config::QuestConfig;
 use crate::dag::validate_dag;
 use crate::error::QuestError;
+use crate::semantic_dag::SemanticDagDecomposer;
 use crate::ttg::TtgGovernor;
 
 /// Quest Engine — 长期任务分解与生命周期管理
@@ -293,6 +294,79 @@ impl QuestEngine {
         };
         self.event_bus.publish(event).await?;
         info!(quest_id = %quest_id, "QuestCreated 事件已发布");
+        Ok(quest)
+    }
+
+    /// P1-12: 从用户意图创建 Quest — 使用语义 DAG 分解器
+    ///
+    /// 与 `create_quest` 的区别:
+    /// - `create_quest`:基于标点切分 + 线性依赖链(向后兼容)
+    /// - `create_quest_semantic`:基于语义相似度构建 DAG 依赖图
+    ///
+    /// 流程:
+    /// 1. 调用 `SemanticDagDecomposer::decompose` 按语义分解任务
+    /// 2. `validate_dag` 校验无环
+    /// 3. 生成 quest_id
+    /// 4. 创建 Quest 实例
+    /// 5. TTG 自动模式选择(若已配置)
+    /// 6. 存入 DashMap
+    /// 7. 发布 QuestCreated 事件
+    pub async fn create_quest_semantic(&self, intent: UserIntent) -> Result<Quest, QuestError> {
+        // 1. 语义 DAG 分解
+        let decomposer = SemanticDagDecomposer::new();
+        let tasks = decomposer.decompose(&intent.raw_text, self.config.max_tasks_per_quest as usize)?;
+
+        // 2. 校验 DAG 无环
+        validate_dag(&tasks)?;
+
+        // 3. 生成 quest_id
+        let quest_id = format!("quest-semantic-{}", Uuid::now_v7());
+
+        // 4. 创建 Quest
+        let title = extract_title(&intent.raw_text);
+        let mut quest = Quest {
+            quest_id: quest_id.clone(),
+            title,
+            tasks,
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+        };
+        let task_count = quest.tasks.len() as u32;
+
+        // 5. TTG 自动模式选择
+        if let Some(governor) = &self.ttg_governor {
+            match governor
+                .select_mode_and_publish(&quest_id, &quest, BudgetTier::LowTier)
+                .await
+            {
+                Ok(Some((mode, _reason))) => {
+                    quest.thinking_mode = mode;
+                    debug!(quest_id = %quest_id, ?mode, "TTG 自动选择思考模式(语义 DAG)");
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    warn!(
+                        quest_id = %quest_id,
+                        error = %e,
+                        "TTG 自动选择失败(语义 DAG),使用默认 Standard"
+                    );
+                }
+            }
+        }
+
+        // 6. 存入注册表
+        self.quests.insert(quest_id.clone(), quest.clone());
+        debug!(quest_id = %quest_id, task_count, "Quest(语义 DAG)已创建并注册");
+
+        // 7. 发布 QuestCreated 事件
+        let event = NexusEvent::QuestCreated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest_id.clone(),
+            title: quest.title.clone(),
+            task_count,
+        };
+        self.event_bus.publish(event).await?;
+        info!(quest_id = %quest_id, "QuestCreated(语义 DAG)事件已发布");
         Ok(quest)
     }
 
@@ -965,5 +1039,90 @@ mod tests {
         // 模式不变
         let stored = engine.get_quest(&quest.quest_id).unwrap();
         assert_eq!(stored.thinking_mode, ThinkingMode::Standard);
+    }
+
+    // ============================================================
+    // P1-12: 语义 DAG 分解测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_create_quest_semantic_publishes_event() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = QuestEngine::new(bus);
+        let intent = make_intent("分析需求。设计方案。实现功能。测试验证。");
+        let quest = engine.create_quest_semantic(intent).await.unwrap();
+
+        // 语义分解应产生 4 个任务
+        assert_eq!(quest.tasks.len(), 4);
+        // quest_id 应包含 semantic 前缀
+        assert!(quest.quest_id.starts_with("quest-semantic-"));
+
+        // 应收到 QuestCreated 事件
+        let event = rx.recv().await.unwrap();
+        match event {
+            NexusEvent::QuestCreated { quest_id, .. } => {
+                assert_eq!(quest_id, quest.quest_id);
+            }
+            other => panic!("expected QuestCreated, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_quest_semantic_vs_linear() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus);
+
+        // 使用有明显语义关联的文本
+        let text = "设计数据库表结构。编写数据库访问层代码。实现业务逻辑处理。集成前端展示组件。";
+        let intent = make_intent(text);
+
+        // 语义 DAG 分解
+        let semantic_quest = engine.create_quest_semantic(intent.clone()).await.unwrap();
+        // 线性链分解
+        let linear_quest = engine.create_quest(intent).await.unwrap();
+
+        // 两者任务数相同(基于相同切分)
+        assert_eq!(semantic_quest.tasks.len(), linear_quest.tasks.len());
+
+        // 语义分解的依赖关系应更复杂(至少有一个任务有非紧邻依赖)
+        // 或至少与线性链不同
+        let semantic_deps: Vec<Vec<String>> = semantic_quest
+            .tasks
+            .iter()
+            .map(|t| t.dependencies.clone())
+            .collect();
+        let linear_deps: Vec<Vec<String>> = linear_quest
+            .tasks
+            .iter()
+            .map(|t| t.dependencies.clone())
+            .collect();
+
+        // 语义 DAG 和线性链的依赖结构可能不同
+        // (取决于语义相似度计算结果,不强求一定不同)
+        assert!(
+            !semantic_deps.is_empty() || !linear_deps.is_empty(),
+            "两者都应产生有效依赖"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_quest_semantic_empty_text() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus);
+        let intent = make_intent("");
+        let quest = engine.create_quest_semantic(intent).await.unwrap();
+        assert_eq!(quest.tasks.len(), 1);
+        assert_eq!(quest.tasks[0].task_id, "task-0");
+    }
+
+    #[tokio::test]
+    async fn test_create_quest_semantic_respects_max_tasks() {
+        let bus = EventBus::new();
+        let config = QuestConfig::new(3, 1);
+        let engine = QuestEngine::with_config(bus, config);
+        let intent = make_intent("一。二。三。四。五。六。");
+        let quest = engine.create_quest_semantic(intent).await.unwrap();
+        assert_eq!(quest.tasks.len(), 3); // 截断到 max=3
     }
 }

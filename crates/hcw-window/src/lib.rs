@@ -44,16 +44,20 @@
 #![warn(missing_docs, clippy::all)]
 
 // === 模块声明 ===
+pub mod clv_compressor;
 pub mod compressor;
 pub mod config;
 pub mod error;
+pub mod long_context;
 pub mod selector;
 pub mod types;
 pub mod window;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use clv_compressor::{ClvCompressor, CompressionMethod, CompressedClv, COMPRESSED_DIM};
 pub use compressor::ContextCompressor;
 pub use error::HcwError;
+pub use long_context::LongContextManager;
 pub use selector::WindowSelector;
 pub use types::{CompressionReport, ContextEntry, HcwConfig, HcwState, WindowTier};
 pub use window::HcwWindow;
@@ -62,8 +66,10 @@ pub use window::HcwWindow;
 ///
 /// 使用方式:`use hcw_window::prelude::*;`
 pub mod prelude {
+    pub use crate::clv_compressor::{ClvCompressor, CompressionMethod, CompressedClv, COMPRESSED_DIM};
     pub use crate::compressor::ContextCompressor;
     pub use crate::error::HcwError;
+    pub use crate::long_context::LongContextManager;
     pub use crate::selector::WindowSelector;
     pub use crate::types::{CompressionReport, ContextEntry, HcwConfig, HcwState, WindowTier};
     pub use crate::window::HcwWindow;

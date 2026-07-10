@@ -160,6 +160,12 @@ pub struct ContextEntry {
     /// WHY:Option 而非直接 CLV — 部分上下文(如系统提示)无语义向量,
     /// 无 CLV 时相关性取中性值 0.5,避免阻塞压缩流程
     pub clv: Option<CLV>,
+    /// 压缩后的 CLV(64-dim,8× 压缩)
+    ///
+    /// WHY(P1-2):L3 等效窗口中,原始 512-dim CLV 占用 2KB 内存。
+    /// 压缩到 64-dim 后仅 256B,8× 内存节省。
+    /// 压缩后的 CLV 用于快速相似度筛选,精确排序仍用原始 CLV。
+    pub compressed_clv: Option<crate::clv_compressor::CompressedClv>,
 }
 
 impl ContextEntry {
@@ -187,12 +193,24 @@ impl ContextEntry {
             last_accessed_at: now,
             created_at: now,
             clv: None,
+            compressed_clv: None,
         }
     }
 
     /// 设置 CLV(链式调用)
     pub fn with_clv(mut self, clv: CLV) -> Self {
         self.clv = Some(clv);
+        self
+    }
+
+    /// 设置压缩后的 CLV(链式调用)
+    ///
+    /// WHY:通常在 `with_clv` 之后调用,由压缩器生成压缩表示。
+    pub fn with_compressed_clv(
+        mut self,
+        compressed: crate::clv_compressor::CompressedClv,
+    ) -> Self {
+        self.compressed_clv = Some(compressed);
         self
     }
 
@@ -483,10 +501,28 @@ pub struct HcwConfig {
     /// 调优示例:对时近性敏感的场景可设为 (0.6, 0.2, 0.2)。
     #[serde(default = "default_compressor_weights")]
     pub compressor_weights: (f32, f32, f32),
+    /// CLV 压缩方法配置
+    ///
+    /// WHY(P1-2):控制 512-dim CLV → 64-dim 的压缩算法。
+    /// - `RandomProjection`:无需训练,即时可用(默认)
+    /// - `Pca`:质量最高,需预训练
+    /// - `Hybrid`:自适应选择(推荐)
+    #[serde(default)]
+    pub clv_compression_method: crate::clv_compressor::CompressionMethod,
+    /// CLV 压缩训练样本阈值
+    ///
+    /// Hybrid 模式下,样本数 >= 此阈值时切换 PCA。
+    /// 默认值 100,确保协方差矩阵有足够秩。
+    #[serde(default = "default_clv_training_threshold")]
+    pub clv_training_threshold: usize,
 }
 
 fn default_compressor_weights() -> (f32, f32, f32) {
     (0.4, 0.3, 0.3)
+}
+
+fn default_clv_training_threshold() -> usize {
+    100
 }
 
 #[cfg(test)]

@@ -47,10 +47,13 @@ pub mod cli;
 pub mod commands;
 /// Figment 多源配置加载
 pub mod config;
+/// P2-8: 多语言支持
+pub mod i18n;
 
 // === 公开 API 重导出 ===
 pub use cli::{Cli, Commands, ConfigAction, QuestAction};
 pub use config::{ChimeraConfig, LazyConfig};
+pub use i18n::{Language, MultilingualProcessor};
 
 /// Crate 版本(从 workspace.package.version 派生)
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

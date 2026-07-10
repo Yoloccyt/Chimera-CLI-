@@ -41,6 +41,13 @@ pub enum MtpeError {
         /// 失败原因描述
         reason: String,
     },
+
+    /// 配置错误 — 推理客户端初始化或请求失败
+    #[error("config error: {reason}")]
+    ConfigError {
+        /// 错误原因
+        reason: String,
+    },
 }
 
 #[cfg(test)]

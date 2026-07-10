@@ -143,9 +143,13 @@ impl EdsbBalancer {
     /// 3. 若熵 < 阈值:
     ///    a. 计算均衡概率 `p = 1 - entropy`
     ///    b. 生成伪随机数 r ∈ [0, 1)
-    ///    c. 若 r < p 且存在次优候选:重分配到次优工具
+    ///    c. 若 r < p:调用多步均衡选择最优目标工具
     ///    d. 否则:保持原工具
     /// 4. 发布 EntropyBalanced 事件(携带 old/new 熵值与重分配计数)
+    ///
+    /// # 多步均衡(P1-7)
+    /// 当 `config.multi_step_balance_depth > 1` 时,不简单地选 candidates[1],
+    /// 而是模拟多步重分配后的熵值,选择使最终熵最大的分配路径。
     ///
     /// # 参数
     /// - `profiles`:专家注册表
@@ -181,9 +185,12 @@ impl EdsbBalancer {
         let random_val = pseudo_random_probability();
 
         let (final_tool, redistributed) = if random_val < balance_prob {
-            // 重分配到次优候选(candidates[1],因为 candidates[0] 是原工具)
-            let next_best = &candidates[1].0;
-            (next_best.clone(), 1u32)
+            // 多步均衡:选择使模拟熵最大的目标工具
+            let depth = self.config.multi_step_balance_depth.max(1);
+            let target = self
+                .multi_step_balance(profiles, routed_tool, candidates, depth)
+                .await;
+            (target, 1u32)
         } else {
             (routed_tool.clone(), 0u32)
         };
@@ -206,6 +213,79 @@ impl EdsbBalancer {
         }
 
         Some(final_tool)
+    }
+
+    /// 多步均衡 — 模拟多步重分配后的熵值,选择最优目标工具
+    ///
+    /// # 算法
+    /// 1. 对 candidates[1..] 中的每个候选工具,模拟"将 routed_tool 的计数 -1,
+    ///    候选工具计数 +1"后的新熵值
+    /// 2. 选择使新熵值最大的候选作为目标
+    /// 3. 若 depth > 1,递归对目标工具继续寻找最优重分配
+    ///
+    /// # 参数
+    /// - `profiles`:专家注册表
+    /// - `routed_tool`:当前被路由的工具
+    /// - `candidates`:候选列表(按相似度降序)
+    /// - `depth`:剩余均衡步数
+    async fn multi_step_balance(
+        &self,
+        profiles: &HashMap<ToolId, Arc<RwLock<ExpertProfile>>>,
+        routed_tool: &ToolId,
+        candidates: &[(ToolId, f32)],
+        depth: usize,
+    ) -> ToolId {
+        if depth == 0 || candidates.len() < 2 {
+            return routed_tool.clone();
+        }
+
+        // 收集所有候选(排除 routed_tool 自身)
+        let candidate_tools: Vec<&ToolId> = candidates
+            .iter()
+            .map(|(id, _)| id)
+            .filter(|id| *id != routed_tool)
+            .collect();
+
+        if candidate_tools.is_empty() {
+            return routed_tool.clone();
+        }
+
+        // 评估每个候选的单步重分配后的熵值
+        let mut best_entropy = -1.0f32;
+        let mut best_tool = candidate_tools[0].clone();
+
+        for candidate in &candidate_tools {
+            // 估算单步重分配后的熵值
+            let entropy = self
+                .estimate_entropy_after_redistribution(profiles, routed_tool, candidate)
+                .await
+                .unwrap_or(0.0);
+
+            // 若 depth > 1,递归评估多步效果
+            let final_entropy = if depth > 1 {
+                // 模拟重分配后的 profiles(不修改实际 profiles)
+                let next_tool = self
+                    .multi_step_balance(profiles, candidate, candidates, depth - 1)
+                    .await;
+                // 如果下一步还会重分配,用下一步的目标估算
+                if next_tool != **candidate {
+                    self.estimate_entropy_after_redistribution(profiles, candidate, &next_tool)
+                        .await
+                        .unwrap_or(entropy)
+                } else {
+                    entropy
+                }
+            } else {
+                entropy
+            };
+
+            if final_entropy > best_entropy {
+                best_entropy = final_entropy;
+                best_tool = (*candidate).clone();
+            }
+        }
+
+        best_tool
     }
 
     /// 估算重分配后的熵值(模拟计数变化,不修改实际 usage_count)

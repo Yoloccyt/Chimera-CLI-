@@ -59,6 +59,15 @@ pub struct KvbsrConfig {
     /// WHY:1000 次路由足以积累新的共现模式(新工具使用、工作流变化),
     /// 又不至于频繁重平衡影响性能。重平衡在独立任务中异步执行,不阻塞路由
     pub rebalance_interval: u64,
+
+    /// CLV 投影方法(默认 Truncate)
+    ///
+    /// WHY(P1-6):控制 512-dim CLV → block_vector_dim 的投影算法。
+    /// - `Truncate`:简单截取前 N 维,零成本(默认)
+    /// - `Pca`:主成分分析,数据驱动区分度更高
+    /// - `RandomProjection`:随机投影,快速无需训练
+    #[serde(default)]
+    pub projection_method: crate::clv_projector::ProjectionMethod,
 }
 
 impl KvbsrConfig {
@@ -94,6 +103,12 @@ impl KvbsrConfig {
     /// 设置自动重平衡间隔
     pub fn with_rebalance_interval(mut self, n: u64) -> Self {
         self.rebalance_interval = n;
+        self
+    }
+
+    /// 设置 CLV 投影方法
+    pub fn with_projection_method(mut self, method: crate::clv_projector::ProjectionMethod) -> Self {
+        self.projection_method = method;
         self
     }
 
@@ -133,6 +148,7 @@ impl Default for KvbsrConfig {
             top_blocks: 3,
             top_tools: 8,
             rebalance_interval: 1000,
+            projection_method: crate::clv_projector::ProjectionMethod::Truncate,
         }
     }
 }

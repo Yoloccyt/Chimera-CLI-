@@ -20,6 +20,8 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 # Event Bus:L1 事件总线,发布 AsaIntervention 事件通知 Parliament 干预决策(§2.2 跨层通信唯一通道)
 event-bus = { path = "../event-bus" }
+# P0-8:审计链SQLite持久化
+rusqlite = { workspace = true }
 
 [dev-dependencies]
 # criterion 基准测试框架(ASA 审计延迟基准)

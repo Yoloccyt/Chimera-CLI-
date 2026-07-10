@@ -1,0 +1,25 @@
+[package]
+name = "online-learning"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# nexus-core:L1 核心类型(配置类型定义,向下依赖符合 §2.2 铁律)
+nexus-core = { path = "../nexus-core" }
+# event-bus:L1 事件总线,跨层通信唯一通道(§2.2 依赖铁律)
+event-bus = { path = "../event-bus" }
+# tokio:异步运行时,EventBus::publish 为 async
+tokio = { workspace = true }
+# tracing:结构化日志,记录参数学习过程(审计追溯)
+tracing = { workspace = true }
+# thiserror:库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# serde:参数序列化持久化
+serde = { workspace = true, features = ["derive"] }
+# serde_json:JSON 序列化,用于参数状态持久化
+serde_json = { workspace = true }
+# dashmap:并发安全参数存储
+ dashmap = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

@@ -56,14 +56,76 @@ impl Lcg {
     }
 }
 
-/// 基于 policy 与 seed 采样一组 rollout
+/// 基于 policy 与模型采样客户端异步采样一组 rollout
 ///
-/// 本周占位逻辑:
-/// 1. 为每条轨迹生成 ACTION_DIM=10 维动作向量
-/// 2. 动作 = 基准值(1.0)+ mutation_rate * 随机扰动
-/// 3. reward = -|actions - optimal| 的均值(越接近最优解 reward 越高,最高 0.0)
+/// P0-6 实现:支持真实模型采样(Mock 模式保留 LCG 伪随机)。
+/// 通过 `ModelSampler` 发送采样请求到外部模型服务,获取 logits/embedding 作为动作向量。
+/// Mock 模式直接返回本地伪随机动作,与原有行为一致。
 ///
-/// // TODO(Week 7): 接入 MCP Mesh 真实模型,用 logits 采样替代规则采样
+/// # 参数
+/// - `policy`:进化策略参数
+/// - `count`:采样轨迹数
+/// - `sampler`:模型采样客户端(Mock 或真实)
+///
+/// # 返回
+/// 采样轨迹列表,每个轨迹包含动作向量与奖励
+pub async fn sample_rollouts_with_model(
+    policy: &EvolutionPolicy,
+    count: u32,
+    sampler: &crate::model_client::ModelSampler,
+) -> Vec<GrpoRollout> {
+    let mut rollouts = Vec::with_capacity(count as usize);
+
+    for i in 0..count {
+        let trajectory_id = format!("traj-{i}");
+        let req = crate::model_client::ModelSampleRequest {
+            prompt: format!("mutation_rate={:.4},selection_pressure={:.4}",
+                policy.mutation_rate, policy.selection_pressure),
+            temperature: policy.mutation_rate,
+            action_dim: ACTION_DIM,
+            trajectory_id: trajectory_id.clone(),
+        };
+
+        match sampler.sample(req).await {
+            Ok(resp) => {
+                let reward = resp.estimated_reward.unwrap_or_else(|| {
+                    // 本地计算 reward:负距离
+                    let distance = resp.actions
+                        .iter()
+                        .map(|a| (a - OPTIMAL_ACTION).abs())
+                        .sum::<f32>()
+                        / ACTION_DIM as f32;
+                    -distance
+                });
+                rollouts.push(GrpoRollout::new(trajectory_id, resp.actions, reward));
+            }
+            Err(e) => {
+                // 采样失败:回退到 Mock 生成
+                tracing::warn!(error = %e, trajectory_id = %trajectory_id, "模型采样失败,回退到 Mock");
+                let mut rng = Lcg::new(i as u64 + 42);
+                let mut actions = Vec::with_capacity(ACTION_DIM);
+                for _ in 0..ACTION_DIM {
+                    let action = OPTIMAL_ACTION + policy.mutation_rate * rng.next_f32();
+                    actions.push(action);
+                }
+                let distance = actions
+                    .iter()
+                    .map(|a| (a - OPTIMAL_ACTION).abs())
+                    .sum::<f32>()
+                    / ACTION_DIM as f32;
+                let reward = -distance;
+                rollouts.push(GrpoRollout::new(trajectory_id, actions, reward));
+            }
+        }
+    }
+
+    rollouts
+}
+
+/// 基于 policy 与 seed 采样一组 rollout(同步版本,Mock 模式)
+///
+/// 保留原有同步接口,用于无 async 上下文的场景。内部使用 LCG 伪随机。
+/// 新代码应优先使用 `sample_rollouts_with_model` 以支持真实模型接入。
 pub fn sample_rollouts(policy: &EvolutionPolicy, count: u32) -> Vec<GrpoRollout> {
     let mut rng = Lcg::new(42);
     let mut rollouts = Vec::with_capacity(count as usize);

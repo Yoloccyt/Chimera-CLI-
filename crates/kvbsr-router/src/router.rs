@@ -45,6 +45,7 @@ use crate::rebalancer::Rebalancer;
 use crate::types::{
     CoOccurrenceMatrix, RoutingRequest, RoutingResult, SemanticBlock, ToolId, ToolVector,
 };
+use crate::clv_projector::ClvProjector;
 
 /// 路由器共享状态 — 由单一 `RwLock` 保护,确保 `route` 与 `build_blocks`/`auto_rebalance` 的并发一致性
 ///
@@ -139,6 +140,11 @@ pub struct KVBlockSemanticRouter {
     /// 一致性保障:auto_rebalance 不修改 tool_vectors(重平衡不改变工具集),
     /// 仅 build_blocks 修改(初始化时),因此 blocks 与 tool_vectors 始终一致。
     tool_vectors: Arc<DashMap<ToolId, ToolVector>>,
+    /// CLV 投影器(P1-6:将 512-dim CLV 投影到 block_vector_dim)
+    ///
+    /// WHY:替代简单截取,支持 PCA/随机投影等数据驱动降维,
+    /// 提升路由区分度与准确率。
+    clv_projector: ClvProjector,
 }
 
 impl KVBlockSemanticRouter {
@@ -151,6 +157,18 @@ impl KVBlockSemanticRouter {
     ///
     /// 配置在创建时校验,非法配置返回 `KvbsrError::InvalidConfig`
     pub fn with_config(event_bus: EventBus, config: KvbsrConfig) -> Self {
+        let projector = match config.projection_method {
+            crate::clv_projector::ProjectionMethod::Truncate => {
+                ClvProjector::new_truncate(config.block_vector_dim)
+            }
+            crate::clv_projector::ProjectionMethod::RandomProjection => {
+                ClvProjector::new_random_projection(config.block_vector_dim)
+            }
+            crate::clv_projector::ProjectionMethod::Pca => {
+                // PCA 需要训练,初始用随机投影,后续调用 train_pca 切换
+                ClvProjector::new_random_projection(config.block_vector_dim)
+            }
+        };
         Self {
             state: Arc::new(RwLock::new(RouterState::default())),
             event_bus,
@@ -158,6 +176,7 @@ impl KVBlockSemanticRouter {
             route_count: Arc::new(AtomicU64::new(0)),
             rebalancer: Rebalancer::new(config),
             tool_vectors: Arc::new(DashMap::new()),
+            clv_projector: projector,
         }
     }
 
@@ -313,7 +332,7 @@ impl KVBlockSemanticRouter {
                 return Err(KvbsrError::EmptyBlocks);
             }
             // First-level routing inside lock (fast: 15 blocks)
-            let top_block_indices = self.select_top_blocks(query, &state.blocks, top_blocks);
+            let top_block_indices = self.select_top_blocks(&query, &state.blocks, top_blocks);
             // 收集候选工具 ID(不 clone 工具向量,锁外从 DashMap 读)
             // 不 clone 全量 blocks,仅收集 top-N 块的工具 ID
             let estimated = top_blocks.saturating_mul(20).max(20);
@@ -340,7 +359,7 @@ impl KVBlockSemanticRouter {
         // 4. 第二级:在选中块的并集工具集内选 Top-K 工具(锁外计算)
         // SubTask 19.6:直接传 candidate_tool_ids,避免 select_top_tools 重复收集
         let (selected_tools, scores) = self.select_top_tools(
-            query,
+            &query,
             &candidate_tool_ids,
             &candidate_tool_vectors,
             top_tools,
@@ -395,23 +414,26 @@ impl KVBlockSemanticRouter {
 
     /// 将 CLV(512 维)降维到 block_vector_dim(默认 64)
     ///
-    /// 采用维度截取:取 CLV 前 N 维作为查询向量。
-    /// WHY:前 N 维承载足够区分度(测试验证准确率 > 85%),
-    /// 且实现简单、确定性高(无需随机投影的种子管理)。
-    /// 若 CLV 维度 < N,返回实际长度的切片(cosine_similarity 用 min 对齐)。
+    /// P1-6:支持多种投影方法:
+    /// - `Truncate`:简单截取前 N 维(零成本)
+    /// - `Pca`/`RandomProjection`:矩阵乘法投影(数据驱动)
     ///
-    /// # CLV 维度对齐(SubTask 14.8)
-    /// 64-dim 是 CLV 512-dim 的降维投影。当前用**截取前 64 维**作为临时方案
-    /// (实现简单、零额外依赖);Week 6 NMC 编码器实现后,将接入 PCA 降维,
-    /// 用学习到的投影矩阵替代截取,进一步提升区分度与路由准确率。
-    /// 详见 `KvbsrConfig::block_vector_dim` 字段文档。
+    /// 返回 owned Vec(投影结果为计算所得,非借用)
+    fn clv_to_block_dim(&self, clv: &CLV) -> Vec<f32> {
+        self.clv_projector.project(clv)
+    }
+
+    /// 获取 CLV 投影器引用(供外部训练 PCA)
+    pub fn clv_projector(&self) -> &ClvProjector {
+        &self.clv_projector
+    }
+
+    /// 训练 PCA 投影矩阵(从样本 CLV 学习)
     ///
-    /// WHY 返回借用:避免每次路由分配 64 维 Vec<f32> = 256 bytes,
-    /// 1000 次路由减少 256KB GC 压力。
-    fn clv_to_block_dim<'a>(&self, clv: &'a CLV) -> &'a [f32] {
-        let slice = clv.as_slice();
-        let dim = self.config.block_vector_dim.min(slice.len());
-        &slice[..dim]
+    /// 仅当 projection_method 为 Pca 时有效。
+    /// 训练完成后,后续路由自动使用 PCA 投影。
+    pub fn train_pca(&mut self, samples: &[CLV]) {
+        self.clv_projector.train_pca(samples);
     }
 
     /// 第一级路由 — 选 Top-N 块

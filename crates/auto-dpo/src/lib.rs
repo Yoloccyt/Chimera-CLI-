@@ -35,12 +35,14 @@
 pub mod config;
 pub mod error;
 pub mod generator;
+pub mod trainer;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use config::AutoDpoConfig;
 pub use error::AutoDpoError;
 pub use generator::PreferencePairGenerator;
+pub use trainer::DpoTrainer;
 pub use types::{ModelOutput, PreferencePair, SampleQuality};
 
 /// 预导入模块 — 提供最常用类型
@@ -48,5 +50,6 @@ pub mod prelude {
     pub use crate::config::AutoDpoConfig;
     pub use crate::error::AutoDpoError;
     pub use crate::generator::PreferencePairGenerator;
+    pub use crate::trainer::DpoTrainer;
     pub use crate::types::{ModelOutput, PreferencePair, SampleQuality};
 }

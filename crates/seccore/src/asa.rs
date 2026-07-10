@@ -106,6 +106,46 @@ pub struct OperationAuditInput {
     pub risk_keywords: Vec<String>,
     /// 操作复杂度 ∈ `[0.0, 1.0]`(越高越复杂)
     pub complexity_score: f32,
+    /// P0-4:语义向量(用于语义相似度检测)
+    ///
+    /// 可选,提供时启用语义相似度评估(对抗性样本检测)。
+    /// 向量为空时回退到关键词匹配。
+    pub semantic_vector: Option<Vec<f32>>,
+    /// P0-4:参考风险向量(用于语义相似度比较)
+    ///
+    /// 已知风险操作的语义向量,计算与当前操作的相似度。
+    pub reference_risk_vectors: Vec<Vec<f32>>,
+}
+
+impl OperationAuditInput {
+    /// 创建新的操作审计输入
+    pub fn new(
+        operation_id: impl Into<String>,
+        content: impl Into<String>,
+        risk_keywords: Vec<String>,
+        complexity_score: f32,
+    ) -> Self {
+        Self {
+            operation_id: operation_id.into(),
+            content: content.into(),
+            risk_keywords,
+            complexity_score,
+            semantic_vector: None,
+            reference_risk_vectors: Vec::new(),
+        }
+    }
+
+    /// P0-4:设置语义向量
+    pub fn with_semantic_vector(mut self, vector: Vec<f32>) -> Self {
+        self.semantic_vector = Some(vector);
+        self
+    }
+
+    /// P0-4:添加参考风险向量
+    pub fn with_reference_risk(mut self, vectors: Vec<Vec<f32>>) -> Self {
+        self.reference_risk_vectors = vectors;
+        self
+    }
 }
 
 /// 操作历史 — 记录成功/失败次数与最近失败记录。
@@ -192,16 +232,19 @@ impl AsaAuditor {
         &self.event_bus
     }
 
-    /// 审计操作 — 基于规则的评分模型(Week 5 占位)。
+    /// 审计操作 — P0-4:基于语义相似度+关键词的混合评分模型。
     ///
-    /// 评分公式:`safety_score = 1.0 - risk_weight × keyword_count - history_failure_rate`
+    /// 评分公式:`safety_score = 1.0 - risk_weight × keyword_count - history_failure_rate - semantic_risk`
     /// - `keyword_count`:content 中匹配的 risk_keywords 数量(大小写不敏感)
     /// - `history_failure_rate`:历史失败次数 / 历史总次数
+    /// - `semantic_risk`:与已知风险操作的语义相似度最大值(0.0-1.0)
     ///
-    /// 此方法是同步的(基于规则评分,无 I/O),满足 < 5ms 延迟要求。
+    /// P0-4:当提供 semantic_vector 和 reference_risk_vectors 时,
+    /// 启用语义相似度检测,可识别对抗性样本(如关键词替换、编码绕过)。
+    ///
+    /// 此方法是同步的(基于规则评分+向量点积,无 I/O),满足 < 5ms 延迟要求。
     pub fn audit(&self, input: &OperationAuditInput) -> AuditResult {
         // 读取历史失败率(RwLock 读锁)
-        // WHY: unwrap_or_else 处理 PoisonError,避免 expect/unwrap,poisoned 时仍可访问数据
         let history_rate = {
             let history = self
                 .history
@@ -217,6 +260,9 @@ impl AsaAuditor {
             .iter()
             .filter(|kw| content_lower.contains(&kw.to_lowercase()))
             .count();
+
+        // P0-4:语义相似度风险评估
+        let semantic_risk = self.compute_semantic_risk(input);
 
         // 评估风险等级 — N4 安全修复
         // WHY: 当 risk_keywords 为空时返回 RiskLevel::Unknown(而非 Low),作为信号
@@ -235,10 +281,12 @@ impl AsaAuditor {
             }
         };
 
-        // safety_score = 1.0 - risk_weight × keyword_count - history_failure_rate
-        // Week 5 占位:history_failure_rate 直接使用(不加权)
-        // TODO(Week 6):history_failure_weight 用于 Critic PPO 模型加权
-        let safety_score = 1.0 - self.config.risk_weight * keyword_count as f32 - history_rate;
+        // safety_score = 1.0 - risk_weight × keyword_count - history_failure_rate - semantic_risk
+        // P0-4:semantic_risk 使对抗性样本(关键词绕过)仍能被检测
+        let safety_score = 1.0
+            - self.config.risk_weight * keyword_count as f32
+            - history_rate
+            - semantic_risk;
         let safety_score = safety_score.clamp(0.0, 1.0);
 
         // correctness_score 占位:基于括号匹配的简单语法检查
@@ -250,9 +298,9 @@ impl AsaAuditor {
         // 干预分级
         let intervention = self.classify_intervention(safety_score);
 
-        // 生成审计原因
+        // 生成审计原因(包含语义风险信息)
         let audit_reason =
-            format_audit_reason(intervention, keyword_count, history_rate, safety_score);
+            format_audit_reason(intervention, keyword_count, history_rate, semantic_risk, safety_score);
 
         // 仅在 intervention != Allow 时发布(避免事件风暴)
         // WHY publish_blocking:audit() 是同步方法,不能 await。
@@ -375,6 +423,60 @@ impl AsaAuditor {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         (history.total_count, history.failure_count)
     }
+
+    /// P0-4:计算语义风险分数
+    ///
+    /// 计算当前操作语义向量与已知风险操作向量的最大相似度。
+    /// 相似度越高,表示操作越接近已知风险模式。
+    ///
+    /// # 返回
+    /// 语义风险分数 ∈ [0.0, 1.0],0.0表示无风险,1.0表示极高风险
+    fn compute_semantic_risk(&self, input: &OperationAuditInput) -> f32 {
+        let query = match &input.semantic_vector {
+            Some(v) => v,
+            None => return 0.0, // 无语义向量,回退到0
+        };
+
+        if query.is_empty() || input.reference_risk_vectors.is_empty() {
+            return 0.0;
+        }
+
+        // 计算与所有参考风险向量的最大相似度
+        let max_similarity = input
+            .reference_risk_vectors
+            .iter()
+            .filter(|v| !v.is_empty() && v.len() == query.len())
+            .map(|ref_vec| cosine_similarity(query, ref_vec))
+            .fold(0.0f32, |max, sim| max.max(sim));
+
+        // 将相似度映射到风险分数:相似度>0.8视为高风险
+        if max_similarity > 0.8 {
+            (max_similarity - 0.8) * 5.0 // 0.8→0.0, 1.0→1.0
+        } else {
+            0.0
+        }
+    }
+}
+
+/// P0-4:计算两个向量的余弦相似度
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot: f32 = 0.0;
+    let mut norm_a: f32 = 0.0;
+    let mut norm_b: f32 = 0.0;
+    for (xa, xb) in a.iter().zip(b.iter()) {
+        dot += xa * xb;
+        norm_a += xa * xa;
+        norm_b += xb * xb;
+    }
+    let norm_product = (norm_a * norm_b).sqrt();
+    if norm_product == 0.0 {
+        0.0
+    } else {
+        (dot / norm_product).clamp(0.0, 1.0)
+    }
 }
 
 /// 计算正确性分数 — 基于括号匹配的简单语法检查(Week 5 占位)。
@@ -398,6 +500,7 @@ fn format_audit_reason(
     intervention: InterventionAction,
     keyword_count: usize,
     history_rate: f32,
+    semantic_risk: f32,
     safety_score: f32,
 ) -> String {
     let action_str = match intervention {
@@ -405,10 +508,17 @@ fn format_audit_reason(
         InterventionAction::Warn => "Warn",
         InterventionAction::Block => "Block",
     };
-    format!(
-        "{}: 安全分数 {:.3}(关键字 {} 个, 历史失败率 {:.3})",
-        action_str, safety_score, keyword_count, history_rate
-    )
+    if semantic_risk > 0.0 {
+        format!(
+            "{}: 安全分数 {:.3}(关键字 {} 个, 历史失败率 {:.3}, 语义风险 {:.3})",
+            action_str, safety_score, keyword_count, history_rate, semantic_risk
+        )
+    } else {
+        format!(
+            "{}: 安全分数 {:.3}(关键字 {} 个, 历史失败率 {:.3})",
+            action_str, safety_score, keyword_count, history_rate
+        )
+    }
 }
 
 /// ASA-沙箱协同器 — 串联 ASA 审计与沙箱执行。

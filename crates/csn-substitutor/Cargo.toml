@@ -24,6 +24,8 @@ dashmap = { workspace = true }
 event-bus = { path = "../event-bus" }
 # L1 Core:CLV 语义向量类型(可选,用于与 nexus-core 类型对齐)
 nexus-core = { path = "../nexus-core" }
+# P0-14:复用mlc-engine的LSH-ANN索引实现HNSW近似最近邻
+mlc-engine = { path = "../mlc-engine" }
 
 [dev-dependencies]
 # 性能基准框架(SubTask 2.7)

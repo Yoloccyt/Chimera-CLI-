@@ -748,4 +748,26 @@ mod tests {
         assert_eq!(monitor.config().collect_interval_ms, 1000);
         assert!(monitor.config().critical_instant_alert);
     }
+
+    // ============================================================
+    // P2-2: 统一 MetricsCollector 注册表测试
+    // ============================================================
+
+    #[test]
+    fn test_metrics_collector_registry() {
+        let registry = crate::collectors::CollectorRegistry::new();
+        let collector = EventMetricCollector::new();
+        registry.register("events", Box::new(collector.clone()));
+
+        // 记录事件
+        collector.record_event(&NexusEvent::CacheHit {
+            metadata: EventMetadata::new("test"),
+            cache_key: "k-1".into(),
+        });
+
+        // 通过注册表采集
+        let samples = registry.collect_all();
+        assert!(!samples.is_empty());
+        assert!(samples.iter().any(|s| s.name == "nexus_event_total"));
+    }
 }

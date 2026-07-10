@@ -34,21 +34,32 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+pub mod adaptive_weights;
 pub mod arbitration;
 pub mod checkpoint;
 pub mod config;
 pub mod dag;
 pub mod engine;
 pub mod error;
+pub mod incremental_checkpoint;
+pub mod semantic_dag;
 pub mod ttg;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use adaptive_weights::{
+    AdaptiveWeightLearner, AdaptiveWeights, QuestOutcome,
+};
 pub use arbitration::ArbitrationLayer;
 pub use checkpoint::CheckpointManager;
 pub use config::QuestConfig;
 pub use engine::QuestEngine;
 pub use error::QuestError;
+pub use incremental_checkpoint::{
+    IncrementalCheckpoint, IncrementalCheckpointBuilder, IncrementalCheckpointRestorer,
+    QuestMetadataDelta,
+};
+pub use semantic_dag::SemanticDagDecomposer;
 pub use ttg::{ComplexityScore, ModeSwitchReason, TtgConfig, TtgGovernor};
 pub use types::{CheckpointMeta, TaskResult};
 

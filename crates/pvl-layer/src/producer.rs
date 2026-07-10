@@ -118,6 +118,10 @@ impl Producer {
         count: usize,
         tx: &mpsc::Sender<Operation>,
     ) -> Result<(), PvlError> {
+        // P1-9:批量生产超时保护
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(self.config.produce_timeout_ms);
+
         // 读取当前策略(决定生成间隔)
         // WHY 解引用而非 clone:ProducerStrategy 实现 Copy,直接解引用更高效
         let strategy = *self.strategy.read().map_err(|_| PvlError::ProduceFailed {
@@ -126,6 +130,24 @@ impl Producer {
         let interval = Duration::from_millis(strategy.produce_interval_ms());
 
         for i in 0..count {
+            // P1-9:检查总超时
+            if start.elapsed() > timeout {
+                warn!(
+                    quest_id,
+                    produced = i,
+                    target = count,
+                    "produce 超时:已生产 {} / {} 操作,剩余操作丢弃", i, count
+                );
+                // 超时降级策略为 Conservative
+                self.set_strategy(ProducerStrategy::Conservative);
+                return Err(PvlError::ProduceFailed {
+                    reason: format!(
+                        "produce 超时:已生产 {} / {} 操作",
+                        i, count
+                    ),
+                });
+            }
+
             // 生成占位内容(未来接入模型后替换为模型生成)
             let content = format!("operation-{quest_id}-{i}");
             let confidence = compute_confidence(&content);

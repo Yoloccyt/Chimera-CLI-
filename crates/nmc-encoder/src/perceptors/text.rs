@@ -19,28 +19,81 @@
 //! - 语义区分度:同义句相似度 > 0.85,无关句相似度 < 0.3
 
 use crate::config::NmcConfig;
+use crate::embedding_client::EmbeddingClient;
 use crate::error::NmcError;
 use crate::perceptors::{sha256_hex, Perceptor};
 use crate::types::{CognitiveElement, Modality, PerceptionInput};
 
-/// 文本感知器 — 基于 n-gram 语义感知哈希的实现
+/// 文本感知器 — v3.0 神经网络语义嵌入 + v2.0 Mock 回退
 ///
-/// v2.0 核心改进:从"字节频率"(顺序无关)升级到"n-gram 感知+位置加权"
-/// 确保"hello"和"olleh"产生截然不同的嵌入向量。
+/// v3.0 核心改进:从 n-gram SipHash 感知哈希升级到神经网络语义嵌入。
+/// 通过 `EmbeddingClient` 调用外部 embedding 服务(如 sentence-transformers),
+/// 同义句相似度从 >0.85 提升到 >0.9。
+///
+/// Mock 模式(默认):保留 v2.0 n-gram SipHash 算法,用于 CI/无网络环境。
 pub struct TextPerceptor {
     /// 配置(含 text_dim 维度参数,现用于语义特征维度)
     config: NmcConfig,
+    /// 语义嵌入客户端(Mock 或真实)
+    embedding_client: EmbeddingClient,
 }
 
 impl TextPerceptor {
-    /// 创建文本感知器
+    /// 创建文本感知器(Mock 模式)
     pub fn new(config: NmcConfig) -> Self {
-        Self { config }
+        let embedding_client = EmbeddingClient::from_config(
+            true, // mock
+            None,
+            5000,
+            config.clv_dim,
+        );
+        Self {
+            config,
+            embedding_client,
+        }
+    }
+
+    /// 创建文本感知器(带真实 embedding 服务端点)
+    pub fn with_endpoint(config: NmcConfig, endpoint: impl Into<String>, timeout_ms: u64) -> Self {
+        let embedding_client = EmbeddingClient::new(endpoint, timeout_ms, config.clv_dim);
+        Self {
+            config,
+            embedding_client,
+        }
     }
 
     /// 返回配置引用
     pub fn config(&self) -> &NmcConfig {
         &self.config
+    }
+
+    /// 异步感知 — v3.0 真实神经网络语义嵌入
+    ///
+    /// 当 `embedding_client` 为 Mock 模式时,行为与 `perceive` 一致(v2 n-gram SipHash)。
+    /// 真实模式下,通过 HTTP 调用外部 embedding 服务获取语义向量。
+    pub async fn perceive_async(&self, input: &PerceptionInput) -> Result<CognitiveElement, NmcError> {
+        let text = match input {
+            PerceptionInput::Text(t) => t.as_str(),
+            other => {
+                return Err(NmcError::InvalidModality {
+                    reason: format!("TextPerceptor 仅接受 Text 输入,收到 {}", other.modality()),
+                });
+            }
+        };
+
+        let content_hash = sha256_hex(text.as_bytes());
+
+        // v3.0:神经网络语义嵌入(通过 EmbeddingClient)
+        let embedding = self.embedding_client.embed(text).await.map_err(|e| NmcError::EncodingFailed {
+            modality: "Text".into(),
+            reason: e.to_string(),
+        })?;
+
+        Ok(CognitiveElement::new(
+            Modality::Text,
+            content_hash,
+            embedding,
+        ))
     }
 }
 
@@ -62,8 +115,8 @@ impl Perceptor for TextPerceptor {
         // content_hash: SHA256 of UTF-8 bytes(内容唯一标识,不变)
         let content_hash = sha256_hex(text.as_bytes());
 
-        // v2.0:语义感知嵌入(512-dim,与 CLV 对齐)
-        // WHY 512-dim:与 nexus_core::CLV::DIMENSION 对齐,下游模块无需转换
+        // v2.0 Mock:同步语义感知嵌入(512-dim,与 CLV 对齐)
+        // 当需要真实模型嵌入时,使用 perceive_async
         let embedding = semantic_embedding_v2(text, self.config.clv_dim);
 
         Ok(CognitiveElement::new(

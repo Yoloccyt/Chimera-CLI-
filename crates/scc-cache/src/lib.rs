@@ -5,7 +5,7 @@
 //!
 //! # 核心职责
 //! - 基于 DashMap 的并发安全上下文缓存(Draft/Verify 共享 `Arc<ContextEntry>`)
-//! - 一阶马尔可夫链访问模式学习与推测性预取
+//! - 二阶马尔可夫链访问模式学习与推测性预取
 //! - LRU 驱逐策略(Arc 引用保护:strong_count > 1 时不驱逐)
 //! - EventBus 集成:发布 CacheHit/CacheMiss/CachePrefetched/CacheStatsReported 事件
 //!
@@ -34,9 +34,9 @@
 //! let verifier_entry = cache.get_or_prefetch(&ContextId::new("ctx-1")).unwrap();
 //! assert!(Arc::ptr_eq(&producer_entry, &verifier_entry));
 //!
-//! // 学习访问模式并预取
-//! learner.record_access(&ContextId::new("ctx-1"), &ContextId::new("ctx-2"));
-//! let prefetched = learner.prefetch(&ContextId::new("ctx-1"), &cache);
+//! // 学习访问模式并预取(二阶马尔可夫链:previous → current → next)
+//! learner.record_access(&ContextId::new("ctx-0"), &ContextId::new("ctx-1"), &ContextId::new("ctx-2"));
+//! let prefetched = learner.prefetch(&ContextId::new("ctx-0"), &ContextId::new("ctx-1"), &cache);
 //! # }
 //! ```
 

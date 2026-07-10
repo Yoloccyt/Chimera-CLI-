@@ -290,12 +290,12 @@ impl OmniSparseCoordinator {
     /// - Complex(档位 2):Top-24 工具
     /// - UltraComplex(档位 3):Top-32 工具
     ///
-    /// WHY:复杂度越高,保留更多工具以应对多样化需求。
-    /// Top-K 由 `routing_top_k_bounds` 配置,默认 (8, 32)。
+    /// P1-1: 优先使用 `TaskProfile.tool_scores` 动态语义评分,
+    /// 若未提供则回退到启发式评分(索引负相关)。
     pub fn compute_routing_mask(&self, profile: &TaskProfile) -> SparseMask<ToolId> {
         let band = profile.complexity_band_with_thresholds(self.config.complexity_thresholds());
         let k = self.config.routing_top_k_for(band);
-        let scores = heuristic_scores(profile.available_tools.len());
+        let scores = get_semantic_scores(&profile.available_tools, &profile.tool_scores);
         SparseMask::select_top_k(&profile.available_tools, &scores, k)
     }
 
@@ -307,29 +307,22 @@ impl OmniSparseCoordinator {
     /// - Complex(档位 2):100 文件
     /// - UltraComplex(档位 3):1000 文件
     ///
-    /// WHY:复杂度越高,需加载更多上下文文件以理解任务全貌。
-    /// Top-K 由 `context_scope_multipliers` 配置,默认 [1, 10, 100, 1000]。
+    /// P1-1: 优先使用 `TaskProfile.file_scores` 动态语义评分。
     pub fn compute_context_mask(&self, profile: &TaskProfile) -> SparseMask<FileId> {
         let band = profile.complexity_band_with_thresholds(self.config.complexity_thresholds());
         let k = self.config.context_scope_for(band);
-        let scores = heuristic_scores(profile.available_files.len());
+        let scores = get_semantic_scores(&profile.available_files, &profile.file_scores);
         SparseMask::select_top_k(&profile.available_files, &scores, k)
     }
 
     /// 计算 memory 维度掩码 — 按复杂度档位选取 Top-K 记忆
     ///
     /// 策略:与 routing 维度联动,使用相同的 Top-K 策略
-    /// - Simple:Top-8 记忆
-    /// - Regular:Top-16 记忆
-    /// - Complex:Top-24 记忆
-    /// - UltraComplex:Top-32 记忆
-    ///
-    /// WHY:记忆维度与工具维度共享 Top-K 策略,因为复杂任务需要更多历史记忆
-    /// 辅助决策,与工具需求量正相关
+    /// P1-1: 优先使用 `TaskProfile.memory_scores` 动态语义评分。
     pub fn compute_memory_mask(&self, profile: &TaskProfile) -> SparseMask<MemoryId> {
         let band = profile.complexity_band_with_thresholds(self.config.complexity_thresholds());
         let k = self.config.routing_top_k_for(band);
-        let scores = heuristic_scores(profile.available_memories.len());
+        let scores = get_semantic_scores(&profile.available_memories, &profile.memory_scores);
         SparseMask::select_top_k(&profile.available_memories, &scores, k)
     }
 
@@ -343,8 +336,8 @@ impl OmniSparseCoordinator {
     ///
     /// 风险等级调整:实际采样率取复杂度档位默认值与风险等级配置值的最大值(更保守)
     ///
-    /// WHY:高风险任务需更密集审计,即使复杂度低也应提高采样率。
-    /// 例如:Simple 档位 + Critical 风险 → max(0.1, 1.0) = 1.0(全审计)
+    /// P1-1: 优先使用 `TaskProfile.operation_scores` 动态语义评分,
+    /// 高评分操作优先被纳入审计样本。
     pub fn compute_audit_mask(&self, profile: &TaskProfile) -> SparseMask<OperationId> {
         let band = profile.complexity_band_with_thresholds(self.config.complexity_thresholds());
         let complexity_rate = complexity_audit_rate(band);
@@ -363,7 +356,7 @@ impl OmniSparseCoordinator {
             ((total as f32) * audit_rate).ceil() as usize
         };
         let k = k.min(total);
-        let scores = heuristic_scores(profile.recent_operations.len());
+        let scores = get_semantic_scores(&profile.recent_operations, &profile.operation_scores);
         SparseMask::select_top_k(&profile.recent_operations, &scores, k)
     }
 
@@ -374,23 +367,19 @@ impl OmniSparseCoordinator {
     /// - 复杂度越高,保护比例越高(保留更多任务以避免预算耗尽)
     /// - 保留数量 = ceil(active_tasks.len() × protection_ratio)
     ///
-    /// WHY:复杂任务消耗更多预算,需保留更多活跃任务以并行执行,
-    /// 避免预算耗尽导致任务中断。简单任务预算充足,可只保留高优先级任务。
+    /// P1-1: 优先使用 `TaskProfile.task_scores` 动态语义评分,
+    /// 高评分任务优先被保留。
     pub fn compute_budget_mask(&self, profile: &TaskProfile) -> SparseMask<TaskId> {
         let total = profile.active_tasks.len();
         if total == 0 {
             return SparseMask::empty();
         }
         // 保护比例:复杂度越高,保留越多任务(降低稀疏度)
-        // protection = threshold × (0.5 + complexity × 0.5)
-        // complexity=0 → protection=threshold×0.5(默认 0.4,保留 40%)
-        // complexity=1 → protection=threshold×1.0(默认 0.8,保留 80%)
-        // WHY:复杂任务预算紧张,保留更多任务以并行执行;简单任务预算充足,稀疏化
         let protection =
             self.config.budget_protection_threshold * (0.5 + profile.complexity_score * 0.5);
         let k = ((total as f32) * protection).ceil() as usize;
         let k = k.clamp(1, total);
-        let scores = heuristic_scores(profile.active_tasks.len());
+        let scores = get_semantic_scores(&profile.active_tasks, &profile.task_scores);
         SparseMask::select_top_k(&profile.active_tasks, &scores, k)
     }
 }
@@ -411,12 +400,43 @@ fn complexity_audit_rate(band: ComplexityBand) -> f32 {
     }
 }
 
+/// 获取语义评分 — P1-1 动态评分核心
+///
+/// 优先使用 `scores_opt` 提供的动态语义评分(由上游 NMC 编码器计算)。
+/// 若 `scores_opt` 为 None 或长度不匹配,回退到启发式评分(索引负相关)。
+///
+/// WHY:动态评分基于文本语义嵌入的余弦相似度,能真正反映候选项与任务的相关性。
+/// 启发式评分仅为索引负相关,无真实语义区分能力。
+fn get_semantic_scores<T>(items: &[T], scores_opt: &Option<Vec<f32>>) -> Vec<f32> {
+    let len = items.len();
+    if len == 0 {
+        return Vec::new();
+    }
+
+    if let Some(scores) = scores_opt {
+        if scores.len() == len {
+            // 使用动态语义评分,归一化到 [0.0, 1.0]
+            let min = scores.iter().cloned().fold(f32::INFINITY, f32::min);
+            let max = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let range = max - min;
+            if range > 1e-6 {
+                return scores.iter().map(|s| (s - min) / range).collect();
+            }
+            // 所有评分相同,返回均匀分布
+            return vec![0.5; len];
+        }
+    }
+
+    // 回退到启发式评分:索引越小评分越高
+    heuristic_scores(len)
+}
+
 /// 生成启发式评分向量:索引越小,评分越高(前 K 个为 Top-K)
 ///
 /// WHY:SubTask 13.10 — TaskProfile 暂未携带五维度评分,用索引负相关评分作为启发式,
 /// 使 Top-K 退化为前 K 个(保持与旧签名相同的行为),且确保 `select_nth_unstable_by`
 /// 产生确定的顺序(相同输入 → 相同输出,保证 `mask_hash` 一致性)。
-/// 未来可在 TaskProfile 中添加各维度的评分字段,实现真正的 Top-K。
+/// P1-1 后:当动态语义评分不可用时作为回退。
 fn heuristic_scores(len: usize) -> Vec<f32> {
     if len == 0 {
         return Vec::new();
@@ -439,14 +459,19 @@ mod tests {
             time_pressure: TimePressure::Low,
             affected_scope: AffectedScope::Local,
             available_tools: (0..50).map(|i| ToolId::new(format!("tool-{i}"))).collect(),
+            tool_scores: None,
             available_files: (0..2000)
                 .map(|i| FileId::new(format!("file-{i}")))
                 .collect(),
+            file_scores: None,
             available_memories: (0..50).map(|i| MemoryId::new(format!("mem-{i}"))).collect(),
+            memory_scores: None,
             recent_operations: (0..100)
                 .map(|i| OperationId::new(format!("op-{i}")))
                 .collect(),
+            operation_scores: None,
             active_tasks: (0..10).map(|i| TaskId::new(format!("task-{i}"))).collect(),
+            task_scores: None,
         }
     }
 
@@ -521,5 +546,60 @@ mod tests {
         )
         .unwrap();
         assert!((masks.average_sparsity() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_semantic_scores_fallback() {
+        // 无动态评分时回退到启发式评分
+        let items = vec!["a", "b", "c"];
+        let scores = get_semantic_scores(&items, &None);
+        assert_eq!(scores.len(), 3);
+        // 启发式:索引越小评分越高
+        assert!(scores[0] > scores[1]);
+        assert!(scores[1] > scores[2]);
+    }
+
+    #[test]
+    fn test_semantic_scores_dynamic() {
+        // 使用动态语义评分
+        let items = vec!["a", "b", "c"];
+        let dynamic_scores = Some(vec![0.2f32, 0.8, 0.5]);
+        let scores = get_semantic_scores(&items, &dynamic_scores);
+        assert_eq!(scores.len(), 3);
+        // 归一化后:0.2→0.0, 0.8→1.0, 0.5→0.5
+        assert!(scores[1] > scores[2]); // b > c
+        assert!(scores[2] > scores[0]); // c > a
+    }
+
+    #[test]
+    fn test_semantic_scores_length_mismatch_fallback() {
+        // 评分长度不匹配时回退到启发式
+        let items = vec!["a", "b", "c"];
+        let bad_scores = Some(vec![0.5f32, 0.5]); // 长度 2 != 3
+        let scores = get_semantic_scores(&items, &bad_scores);
+        assert_eq!(scores.len(), 3);
+        // 回退到启发式:索引越小评分越高
+        assert!(scores[0] > scores[1]);
+    }
+
+    #[test]
+    fn test_routing_mask_with_semantic_scores() {
+        let bus = EventBus::new();
+        let coord = OmniSparseCoordinator::new(bus);
+        let mut profile = make_profile(0.5, RiskLevel::Medium);
+        // 提供动态评分:tool-2 最相关(0.9),tool-0 次之(0.5),tool-1 最不相关(0.1)
+        profile.tool_scores = Some(vec![0.5f32, 0.1, 0.9]);
+
+        let mask = coord.compute_routing_mask(&profile);
+        // Top-1 应选中 tool-2(评分最高)
+        let top1 = SparseMask::select_top_k(&profile.available_tools, &vec![0.0, 0.0, 1.0], 1);
+        assert_eq!(mask.active_ids, top1.active_ids);
+    }
+
+    #[test]
+    fn test_heuristic_scores_deterministic() {
+        let s1 = heuristic_scores(10);
+        let s2 = heuristic_scores(10);
+        assert_eq!(s1, s2);
     }
 }

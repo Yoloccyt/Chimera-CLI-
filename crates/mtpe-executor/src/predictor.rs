@@ -18,6 +18,7 @@ use tracing::debug;
 
 use crate::config::MtpeConfig;
 use crate::error::MtpeError;
+use crate::inference_client::{InferenceClient, InferenceRequest, to_mtpe_tokens};
 use crate::types::{PredictionContext, PredictionResult, PredictionStats, Token};
 
 /// 模拟推理启动开销 — 每次 predict 调用的固定延迟
@@ -49,6 +50,8 @@ pub struct MtpeExecutor {
     stats: RwLock<PredictionStats>,
     /// 预测计数器(用于触发周期性统计事件)
     prediction_count: AtomicU64,
+    /// 推理客户端(Mock 或真实)
+    inference_client: InferenceClient,
 }
 
 /// 上下文哈希的稳定种子 — 用于伪预测生成确定性 token
@@ -57,13 +60,30 @@ pub struct MtpeExecutor {
 const CONTEXT_HASH_SEED: u32 = 0x4D54_5045; // "MTPE" 的 ASCII
 
 impl MtpeExecutor {
-    /// 创建 MTPE 执行器
+    /// 创建 MTPE 执行器(Mock 推理模式)
     pub fn new(config: MtpeConfig, event_bus: EventBus) -> Self {
+        let inference_client = InferenceClient::from_config(
+            config.inference_mock,
+            config.inference_endpoint.clone(),
+            config.inference_timeout_ms,
+        );
         Self {
             config,
             event_bus,
             stats: RwLock::new(PredictionStats::new()),
             prediction_count: AtomicU64::new(0),
+            inference_client,
+        }
+    }
+
+    /// 创建 MTPE 执行器(带指定推理客户端)
+    pub fn with_client(config: MtpeConfig, event_bus: EventBus, client: InferenceClient) -> Self {
+        Self {
+            config,
+            event_bus,
+            stats: RwLock::new(PredictionStats::new()),
+            prediction_count: AtomicU64::new(0),
+            inference_client: client,
         }
     }
 
@@ -90,10 +110,10 @@ impl MtpeExecutor {
     /// # 事件
     /// 预测完成后发布 `PredictionMade` 事件(携带 quest_id/n/avg_confidence)
     ///
-    /// # 占位实现说明
-    /// Week 4 使用基于上下文哈希的伪预测:
-    /// - Token.text = format!("pred_{}_{}", i, hash_of_context)
-    /// - Token.confidence = 1.0 - (i * 0.05),步数越高置信度越低
+    /// # 实现说明
+    /// P0-9: 支持真实推理(Mock 模式保留伪预测)。
+    /// 通过 `InferenceClient` 发送推理请求到外部模型服务,
+    /// 获取真实多步预测 token。Mock 模式使用 FNV-1a 哈希生成确定性 token。
     pub async fn predict(
         &self,
         context: &PredictionContext,
@@ -109,15 +129,21 @@ impl MtpeExecutor {
 
         let start = Instant::now();
 
-        // 模拟推理启动开销(与 N 无关的固定延迟)
-        // WHY:真实推理中,模型启动/上下文编码开销远大于生成单个 token,
-        // 且此开销与 N 无关。MTPE 通过一次推理产出 N 个 token 来摊薄此开销
-        tokio::time::sleep(SIMULATED_INFERENCE_DELAY).await;
+        // P0-9: 通过 InferenceClient 进行真实推理或 Mock 预测
+        let context_str = format!("{}|{:?}", context.quest_id, context.history);
+        let request = InferenceRequest {
+            context: context_str,
+            n,
+            request_id: format!("{}-n{}", context.quest_id, n),
+        };
 
-        // 伪预测:基于上下文哈希生成 N 个确定性 token
-        let context_hash = compute_context_hash(context);
-        let predicted_tokens = generate_pseudo_predictions(n, context_hash);
+        let inference_resp = self.inference_client.infer(request).await.map_err(|e| {
+            MtpeError::PredictionFailed {
+                reason: format!("推理失败: {e}"),
+            }
+        })?;
 
+        let predicted_tokens = to_mtpe_tokens(inference_resp.tokens);
         let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
 
         // 计算平均置信度,用于事件上报

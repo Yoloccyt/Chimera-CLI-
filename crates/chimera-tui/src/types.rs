@@ -98,6 +98,11 @@ impl std::fmt::Display for PanelKind {
 ///
 /// WHY 独立结构体:将状态与渲染逻辑分离,便于纯逻辑测试(无需终端)。
 /// `running` 标志控制事件循环退出,`current_panel` 控制主面板显示。
+///
+/// P0-13:新增EventBus集成字段
+/// - `quest_status`:从EventBus接收的实时Quest状态
+/// - `last_event`:最后收到的事件摘要(用于状态栏显示)
+/// - `dirty`:脏区域标记,避免无变化时重渲染
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TuiState {
     /// 当前激活的面板
@@ -108,6 +113,12 @@ pub struct TuiState {
     pub input_buffer: String,
     /// 已渲染的帧数(用于调试与性能监控)
     pub frame_count: u64,
+    /// P0-13:实时Quest状态(从EventBus接收)
+    pub quest_status: String,
+    /// P0-13:最后收到的事件摘要
+    pub last_event: String,
+    /// P0-13:脏区域标记(状态变化时设为true,渲染后设为false)
+    pub dirty: bool,
 }
 
 impl TuiState {
@@ -118,6 +129,9 @@ impl TuiState {
             running: true,
             input_buffer: String::new(),
             frame_count: 0,
+            quest_status: "No active quest".to_string(),
+            last_event: "TUI initialized".to_string(),
+            dirty: true,
         }
     }
 
@@ -154,6 +168,31 @@ impl TuiState {
     /// 增加帧计数
     pub fn tick_frame(&mut self) {
         self.frame_count += 1;
+    }
+
+    /// P0-13:更新Quest状态(从EventBus接收)
+    pub fn update_quest_status(&mut self, status: impl Into<String>) {
+        let new_status = status.into();
+        if self.quest_status != new_status {
+            self.quest_status = new_status;
+            self.dirty = true;
+        }
+    }
+
+    /// P0-13:更新最后事件(从EventBus接收)
+    pub fn update_last_event(&mut self, event: impl Into<String>) {
+        self.last_event = event.into();
+        self.dirty = true;
+    }
+
+    /// P0-13:标记为脏(需要重渲染)
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// P0-13:清除脏标记(渲染后调用)
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
     }
 }
 
@@ -245,6 +284,9 @@ mod tests {
         assert!(state.running);
         assert!(state.input_buffer.is_empty());
         assert_eq!(state.frame_count, 0);
+        assert_eq!(state.quest_status, "No active quest");
+        assert_eq!(state.last_event, "TUI initialized");
+        assert!(state.dirty);
     }
 
     #[test]
@@ -299,9 +341,44 @@ mod tests {
 
     #[test]
     fn test_state_serde_roundtrip() {
-        let state = TuiState::new();
+        let mut state = TuiState::new();
+        state.update_quest_status("Quest-1: Running");
         let json = serde_json::to_string(&state).unwrap();
         let restored: TuiState = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, state);
+    }
+
+    // P0-13: EventBus集成测试
+    #[test]
+    fn test_quest_status_update() {
+        let mut state = TuiState::new();
+        state.clear_dirty();
+        assert!(!state.dirty);
+
+        state.update_quest_status("Quest-1: Running");
+        assert_eq!(state.quest_status, "Quest-1: Running");
+        assert!(state.dirty);
+    }
+
+    #[test]
+    fn test_last_event_update() {
+        let mut state = TuiState::new();
+        state.clear_dirty();
+        assert!(!state.dirty);
+
+        state.update_last_event("QuestCompleted: q-1");
+        assert_eq!(state.last_event, "QuestCompleted: q-1");
+        assert!(state.dirty);
+    }
+
+    #[test]
+    fn test_duplicate_status_no_dirty() {
+        let mut state = TuiState::new();
+        state.update_quest_status("Same");
+        state.clear_dirty();
+
+        // 相同状态不应触发脏标记
+        state.update_quest_status("Same");
+        assert!(!state.dirty);
     }
 }

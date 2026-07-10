@@ -42,6 +42,10 @@ pub enum TuiError {
         /// 配置错误详情
         detail: String,
     },
+
+    /// P1-15: EventBus 事件接收错误
+    #[error("event bus error: {0}")]
+    EventBus(String),
 }
 
 impl From<std::io::Error> for TuiError {
@@ -51,6 +55,13 @@ impl From<std::io::Error> for TuiError {
     /// 统一转换为 TerminalInit 便于调用方处理
     fn from(e: std::io::Error) -> Self {
         TuiError::TerminalInit(e.to_string())
+    }
+}
+
+impl From<event_bus::EventBusError> for TuiError {
+    /// P1-15: 将 EventBusError 转换为 TuiError
+    fn from(e: event_bus::EventBusError) -> Self {
+        TuiError::EventBus(e.to_string())
     }
 }
 

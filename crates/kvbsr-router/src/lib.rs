@@ -53,7 +53,9 @@
 
 // === 模块声明 ===
 pub mod blocks;
+pub mod clv_projector;
 pub mod config;
+pub mod dynamic_chunker;
 pub mod error;
 pub mod rebalancer;
 pub mod router;
@@ -61,7 +63,9 @@ pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use blocks::BlockBuilder;
+pub use clv_projector::{ClvProjector, ProjectionMethod};
 pub use config::KvbsrConfig;
+pub use dynamic_chunker::DynamicChunker;
 pub use error::KvbsrError;
 pub use rebalancer::Rebalancer;
 pub use router::KVBlockSemanticRouter;
@@ -72,7 +76,9 @@ pub use types::{
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::blocks::BlockBuilder;
+    pub use crate::clv_projector::{ClvProjector, ProjectionMethod};
     pub use crate::config::KvbsrConfig;
+    pub use crate::dynamic_chunker::DynamicChunker;
     pub use crate::error::KvbsrError;
     pub use crate::rebalancer::Rebalancer;
     pub use crate::router::KVBlockSemanticRouter;

@@ -22,11 +22,21 @@ use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
 use ratatui::{Frame, Terminal};
 use std::io::{self, Stdout};
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 use crate::config::Theme;
 use crate::config::TuiConfig;
 use crate::error::TuiError;
 use crate::types::{PanelKind, TuiState};
+
+/// P1-15: 终端事件类型 — 键盘事件或外部EventBus事件
+#[derive(Debug)]
+enum TerminalEvent {
+    /// crossterm 键盘事件
+    Key(KeyEvent),
+    /// 外部系统事件(来自 EventBus)
+    External(event_bus::NexusEvent),
+}
 
 /// TUI 应用 — Chimera 终端用户界面核心
 ///
@@ -37,11 +47,15 @@ use crate::types::{PanelKind, TuiState};
 ///
 /// # 线程安全
 /// TuiApp 为单线程设计(终端 IO 不支持多线程),`run` 方法独占终端。
+///
+/// P1-15: 支持 EventBus 集成,通过 tokio::select 同时监听键盘和外部事件
 pub struct TuiApp {
     /// TUI 配置(只读,构造后不变)
     config: TuiConfig,
     /// 应用状态(可变,事件循环中更新)
     state: TuiState,
+    /// P1-15: EventBus 引用(可选,事件驱动模式下接收外部事件)
+    event_bus: Option<event_bus::EventBus>,
 }
 
 impl TuiApp {
@@ -54,7 +68,32 @@ impl TuiApp {
         Ok(Self {
             config,
             state: TuiState::new(),
+            event_bus: None,
         })
+    }
+
+    /// P1-15: 创建带 EventBus 的 TUI 应用(事件驱动模式)
+    ///
+    /// # 示例
+    /// ```no_run
+    /// use chimera_tui::{TuiApp, TuiConfig};
+    /// use event_bus::EventBus;
+    ///
+    /// let bus = EventBus::new();
+    /// let app = TuiApp::with_event_bus(TuiConfig::default(), bus).unwrap();
+    /// ```
+    pub fn with_event_bus(config: TuiConfig, bus: event_bus::EventBus) -> Result<Self, TuiError> {
+        config.validate()?;
+        Ok(Self {
+            config,
+            state: TuiState::new(),
+            event_bus: Some(bus),
+        })
+    }
+
+    /// P1-15: 设置 EventBus(链式调用)
+    pub fn set_event_bus(&mut self, bus: event_bus::EventBus) {
+        self.event_bus = Some(bus);
     }
 
     /// 返回配置引用
@@ -213,10 +252,12 @@ impl TuiApp {
 
     /// 渲染状态栏
     fn render_status_bar(&self, frame: &mut Frame<'_>, area: ratatui::layout::Rect) {
+        // P0-13:显示实时Quest状态和最后事件
         let status = format!(
-            " Panel: {} | Running: {} | Frame: {} | Input: {} ",
+            " Panel: {} | Quest: {} | Event: {} | Frame: {} | Input: {} ",
             self.state.current_panel.as_str(),
-            self.state.running,
+            self.state.quest_status,
+            self.state.last_event,
             self.state.frame_count,
             self.state.input_buffer
         );
@@ -237,12 +278,18 @@ impl TuiApp {
     fn panel_content(&self) -> String {
         match self.state.current_panel {
             PanelKind::Quest => {
-                "Quest Tasks\n─────────────\n[1] Initialize workspace\n[2] Build L1 infrastructure\n[3] Implement event-bus\n\nPress Tab to switch panels, 'q' to quit."
-                    .to_string()
+                // P0-13:显示实时Quest状态而非硬编码文本
+                format!(
+                    "Quest Tasks\n─────────────\n{}\n\nPress Tab to switch panels, 'q' to quit.",
+                    self.state.quest_status
+                )
             }
             PanelKind::Parliament => {
-                "Parliament\n─────────────\nVisionary:  vote FOR\nSkeptic:     vote AGAINST\nPragmatist:  vote FOR\n\nConsensus: REACHED"
-                    .to_string()
+                // P0-13:显示最后事件而非硬编码文本
+                format!(
+                    "Parliament\n─────────────\nLast Event: {}\n\nConsensus: REACHED",
+                    self.state.last_event
+                )
             }
             PanelKind::Budget => {
                 format!(
@@ -282,6 +329,9 @@ impl TuiApp {
     /// 此方法接管终端:进入 raw mode、alternate screen,读取键盘事件,
     /// 渲染 UI,直到用户退出(q/Esc)。退出后恢复终端状态。
     ///
+    /// P1-15: 当设置了 EventBus 时,使用事件驱动模式(tokio::select),
+    /// 否则回退到轮询模式(保持向后兼容)。
+    ///
     /// # 错误
     /// - `TerminalInit`:终端初始化失败(如非 TTY 环境)
     /// - `EventRead`:事件读取失败
@@ -304,7 +354,13 @@ impl TuiApp {
 
         // 步骤 3:事件循环
         // WHY 用 result 变量:确保终端恢复在 return 前执行,即使事件循环出错
-        let result = self.event_loop(&mut terminal);
+        let result = if self.event_bus.is_some() {
+            // P1-15: 事件驱动模式(需要 tokio runtime)
+            self.run_event_driven(&mut terminal)
+        } else {
+            // 回退到轮询模式(向后兼容)
+            self.event_loop_poll(&mut terminal)
+        };
 
         // 步骤 4:恢复终端(无论事件循环成功与否)
         // WHY 恢复在 result 返回前:确保终端状态不残留,即使出错也要恢复
@@ -315,19 +371,159 @@ impl TuiApp {
         result
     }
 
-    /// 事件循环内部实现
+    /// P1-15: 事件驱动模式 — 通过 tokio::select 同时监听键盘和 EventBus
     ///
-    /// WHY 独立方法:将循环逻辑与终端初始化/恢复分离,职责单一
-    fn event_loop(
+    /// WHY 异步模式:EventBus 是 async API,crossterm 是同步 API。
+    /// 用 spawn_blocking 将 crossterm 事件读取放到独立线程,通过 mpsc channel
+    /// 发送到 async 事件循环,实现两者统一监听。
+    fn run_event_driven(
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     ) -> Result<(), TuiError> {
-        while self.state.running {
-            // 渲染当前帧
+        // 创建 tokio runtime(同步入口中启动异步运行时)
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| TuiError::TerminalInit(format!("tokio runtime: {e}")))?;
+
+        rt.block_on(async {
+            // 1. 创建键盘事件通道
+            let (key_tx, mut key_rx) = mpsc::channel::<TerminalEvent>(32);
+
+            // 2. 在阻塞线程中读取 crossterm 事件
+            let key_handle = tokio::task::spawn_blocking(move || {
+                while let Ok(event) = event::read() {
+                    if let Event::Key(key) = event {
+                        if key_tx.blocking_send(TerminalEvent::Key(key)).is_err() {
+                            break; // 接收端已关闭
+                        }
+                    }
+                    // 其他事件(鼠标、resize)忽略
+                }
+            });
+
+            // 3. 订阅 EventBus(仅订阅 Quest + Parliament + Budget 相关 topic)
+            let mut event_rx = {
+                let bus = self.event_bus.as_ref().unwrap();
+                use event_bus::EventTopic;
+                let topics = [
+                    EventTopic::Quest,
+                    EventTopic::Parliament,
+                    EventTopic::System,
+                    EventTopic::Execution,
+                ]
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>();
+                bus.subscribe_filtered(topics)
+            };
+
+            // 4. 初始渲染
             terminal
                 .draw(|f| self.render(f))
                 .map_err(|e| TuiError::Render(e.to_string()))?;
             self.state.tick_frame();
+            self.state.clear_dirty();
+
+            // 5. 事件循环:tokio::select 同时监听键盘和 EventBus
+            while self.state.running {
+                // 脏区域检测 — 仅当状态变化时渲染
+                if self.state.dirty {
+                    terminal
+                        .draw(|f| self.render(f))
+                        .map_err(|e| TuiError::Render(e.to_string()))?;
+                    self.state.tick_frame();
+                    self.state.clear_dirty();
+                }
+
+                tokio::select! {
+                    // 键盘事件
+                    Some(term_event) = key_rx.recv() => {
+                        match term_event {
+                            TerminalEvent::Key(key) => {
+                                self.handle_key_event(key);
+                                self.state.mark_dirty();
+                            }
+                            TerminalEvent::External(_) => {} // 键盘通道不发送 External
+                        }
+                    }
+
+                    // EventBus 事件
+                    Ok(event) = event_rx.recv() => {
+                        self.handle_nexus_event(&event);
+                        self.state.mark_dirty();
+                    }
+
+                    // 防止 select 完全阻塞(给渲染一个机会)
+                    _ = tokio::time::sleep(Duration::from_millis(16)) => {
+                        // 16ms ≈ 60fps, 无事件时允许渲染一帧
+                    }
+                }
+            }
+
+            // 清理:关闭键盘读取线程
+            drop(key_rx);
+            let _ = key_handle.await;
+
+            Ok(())
+        })
+    }
+
+    /// P1-15: 处理 NexusEvent,更新 TUI 状态
+    fn handle_nexus_event(&mut self, event: &event_bus::NexusEvent) {
+        use event_bus::NexusEvent;
+        match event {
+            NexusEvent::QuestCreated { quest_id, title, task_count, .. } => {
+                self.state.update_quest_status(format!("Quest {} created: {} ({} tasks)", quest_id, title, task_count));
+            }
+            NexusEvent::QuestProgressUpdated { quest_id, completed, total, .. } => {
+                self.state.update_quest_status(format!(
+                    "Quest {}: {}/{} tasks completed",
+                    quest_id, completed, total
+                ));
+            }
+            NexusEvent::ConsensusReached { quest_id, .. } => {
+                self.state.update_last_event(format!("ConsensusReached: {}", quest_id));
+            }
+            NexusEvent::BudgetExceeded { budget_type, current, limit, .. } => {
+                self.state.update_last_event(format!(
+                    "BudgetExceeded: {} ({} / {})",
+                    budget_type, current, limit
+                ));
+            }
+            NexusEvent::ExecutionCompleted { quest_id, .. } => {
+                self.state.update_quest_status(format!("Quest {} completed", quest_id));
+            }
+            NexusEvent::CheckpointSaved { quest_id, .. } => {
+                self.state.update_last_event(format!("CheckpointSaved: {}", quest_id));
+            }
+            NexusEvent::SlowConsumerDropped { subscriber_id, lag, .. } => {
+                self.state.update_last_event(format!(
+                    "SlowConsumer: {} lag={}",
+                    subscriber_id, lag
+                ));
+            }
+            _ => {
+                // 其他事件不处理(避免状态栏过于频繁更新)
+            }
+        }
+    }
+
+    /// 事件循环内部实现(轮询模式 — 向后兼容)
+    ///
+    /// WHY 独立方法:将循环逻辑与终端初始化/恢复分离,职责单一
+    ///
+    /// P0-13:添加脏区域检测,避免无变化时重渲染
+    fn event_loop_poll(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    ) -> Result<(), TuiError> {
+        while self.state.running {
+            // P0-13:脏区域检测 — 仅当状态变化时渲染
+            if self.state.dirty {
+                terminal
+                    .draw(|f| self.render(f))
+                    .map_err(|e| TuiError::Render(e.to_string()))?;
+                self.state.tick_frame();
+                self.state.clear_dirty();
+            }
 
             // 轮询事件(100ms 超时,避免阻塞渲染)
             if !event::poll(Duration::from_millis(100))
@@ -340,6 +536,8 @@ impl TuiApp {
             let event = event::read().map_err(|e| TuiError::EventRead(e.to_string()))?;
             if let Event::Key(key) = event {
                 self.handle_key_event(key);
+                // P0-13:键盘事件触发脏标记
+                self.state.mark_dirty();
             }
         }
         Ok(())

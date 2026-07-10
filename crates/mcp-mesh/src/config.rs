@@ -38,6 +38,16 @@ pub struct MeshConfig {
     ///
     /// 默认 256,平衡内存占用与典型 MCP 网格规模。
     pub registry_capacity: usize,
+
+    /// JSON-RPC 单请求超时(毫秒)
+    ///
+    /// 默认 5000,覆盖 prepare/commit/rollback/query 单次 RPC 调用。
+    pub json_rpc_timeout_ms: u64,
+
+    /// 是否启用 JSON-RPC Mock 模式(跳过真实网络,直接返回成功)
+    ///
+    /// 默认 true(兼容既有测试与 CI 环境)。生产环境应设为 false 启用真实网络。
+    pub json_rpc_mock: bool,
 }
 
 impl Default for MeshConfig {
@@ -48,6 +58,8 @@ impl Default for MeshConfig {
             max_retries: 2,
             max_participants: 32,
             registry_capacity: 256,
+            json_rpc_timeout_ms: 5000,
+            json_rpc_mock: true,
         }
     }
 }
@@ -64,6 +76,8 @@ mod tests {
         assert_eq!(config.max_retries, 2);
         assert_eq!(config.max_participants, 32);
         assert_eq!(config.registry_capacity, 256);
+        assert_eq!(config.json_rpc_timeout_ms, 5000);
+        assert!(config.json_rpc_mock);
     }
 
     #[test]
@@ -74,6 +88,8 @@ mod tests {
             max_retries: 3,
             max_participants: 64,
             registry_capacity: 512,
+            json_rpc_timeout_ms: 10000,
+            json_rpc_mock: false,
         };
         let json = serde_json::to_string(&config).expect("序列化失败");
         let restored: MeshConfig = serde_json::from_str(&json).expect("反序列化失败");
@@ -82,6 +98,8 @@ mod tests {
         assert_eq!(restored.max_retries, 3);
         assert_eq!(restored.max_participants, 64);
         assert_eq!(restored.registry_capacity, 512);
+        assert_eq!(restored.json_rpc_timeout_ms, 10000);
+        assert!(!restored.json_rpc_mock);
     }
 
     #[test]

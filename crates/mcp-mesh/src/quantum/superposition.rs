@@ -22,6 +22,7 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::error::McpError;
+use crate::protocol::json_rpc::JsonRpcClient;
 use crate::server_registry::ServerRegistry;
 
 /// 超位置查询请求 — 描述一次并发 fanout 查询
@@ -118,6 +119,8 @@ impl QueryResult {
 /// # 流程
 /// 1. 校验参与者:所有 fanout_servers 必须在 registry 中注册且 alive
 /// 2. 用 `JoinSet` 并发 spawn 每个服务器的查询任务
+///    - 若提供 `rpc_client`,通过 JSON-RPC 发送真实 `mcp.query` 请求
+///    - 若 `rpc_client` 为 None,使用 Mock 延迟模拟
 /// 3. `tokio::time::timeout` 包装整体收集,超时返回已收集的部分结果
 /// 4. 任一服务器失败不阻断其他,失败结果标记 `success=false`
 ///
@@ -132,6 +135,7 @@ pub async fn execute_superposition_query(
     query: &SuperpositionQuery,
     registry: &ServerRegistry,
     heartbeat_timeout_ms: u64,
+    rpc_client: Option<&JsonRpcClient>,
 ) -> Result<Vec<QueryResult>, McpError> {
     // 1. 校验所有参与者已注册且 alive
     for server_id in &query.fanout_servers {
@@ -156,16 +160,33 @@ pub async fn execute_superposition_query(
         let sid = server_id.clone();
         let qid = query_id.clone();
         let qtext = query_text.clone();
+        let client = rpc_client.cloned();
+        let endpoint = registry.get(&sid).map(|s| s.endpoint.clone());
         set.spawn(async move {
             let start = std::time::Instant::now();
-            // 模拟服务器端处理延迟(in-process mock,1-3ms 随机)
-            // WHY 模拟延迟:替代真实网络往返,验证并发 fanout 与超时机制
-            let processing_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 3);
-            tokio::time::sleep(Duration::from_millis(processing_ms)).await;
 
-            let latency_ms = start.elapsed().as_millis() as u64;
-            // 模拟成功响应(payload = "query=<qtext>@<sid>")
-            QueryResult::ok(qid, sid, latency_ms, format!("result@{qtext}"))
+            match (client, endpoint) {
+                // 真实 JSON-RPC 模式
+                (Some(client), Some(ep)) => {
+                    match client.query(&ep, &qid, &qtext, &sid).await {
+                        Ok(result) => {
+                            let latency_ms = start.elapsed().as_millis() as u64;
+                            QueryResult::ok(qid, sid, latency_ms, result.payload)
+                        }
+                        Err(e) => {
+                            let latency_ms = start.elapsed().as_millis() as u64;
+                            QueryResult::err(qid, sid, latency_ms, format!("{e}"))
+                        }
+                    }
+                }
+                // Mock 模式(无 rpc_client 或 endpoint)
+                _ => {
+                    let processing_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 3);
+                    tokio::time::sleep(Duration::from_millis(processing_ms)).await;
+                    let latency_ms = start.elapsed().as_millis() as u64;
+                    QueryResult::ok(qid, sid, latency_ms, format!("result@{qtext}"))
+                }
+            }
         });
     }
 
@@ -218,7 +239,7 @@ mod tests {
     async fn test_superposition_single_server() {
         let registry = make_registry_with_servers(1);
         let query = SuperpositionQuery::new("test", vec!["s-0".into()], 100);
-        let results = execute_superposition_query(&query, &registry, 5000)
+        let results = execute_superposition_query(&query, &registry, 5000, None)
             .await
             .expect("查询失败");
         assert_eq!(results.len(), 1);
@@ -238,7 +259,7 @@ mod tests {
             },
             200,
         );
-        let results = execute_superposition_query(&query, &registry, 5000)
+        let results = execute_superposition_query(&query, &registry, 5000, None)
             .await
             .expect("查询失败");
         assert_eq!(results.len(), 5);
@@ -249,7 +270,7 @@ mod tests {
     async fn test_superposition_unregistered_server_rejected() {
         let registry = make_registry_with_servers(1);
         let query = SuperpositionQuery::new("test", vec!["s-0".into(), "unknown".into()], 100);
-        let err = execute_superposition_query(&query, &registry, 5000)
+        let err = execute_superposition_query(&query, &registry, 5000, None)
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::ServerNotFound { .. }));
@@ -264,10 +285,22 @@ mod tests {
         registry.register(server).expect("注册失败");
 
         let query = SuperpositionQuery::new("test", vec!["s-dead".into()], 100);
-        let err = execute_superposition_query(&query, &registry, 1000)
+        let err = execute_superposition_query(&query, &registry, 1000, None)
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::ServerUnreachable { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_superposition_with_mock_rpc_client() {
+        let registry = make_registry_with_servers(1);
+        let client = JsonRpcClient::mock();
+        let query = SuperpositionQuery::new("test", vec!["s-0".into()], 100);
+        let results = execute_superposition_query(&query, &registry, 5000, Some(&client))
+            .await
+            .expect("查询失败");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success);
     }
 
     #[test]

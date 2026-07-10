@@ -134,6 +134,8 @@ impl Default for HcwConfig {
             l3_capacity: 1048576,       // 1M Token 等效(128K 实际加载 + 8× 稀疏化)
             compression_threshold: 0.9, // 容量利用率达 90% 触发压缩
             compressor_weights: (0.4, 0.3, 0.3),
+            clv_compression_method: crate::clv_compressor::CompressionMethod::Hybrid,
+            clv_training_threshold: 100,
         }
     }
 }

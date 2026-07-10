@@ -221,14 +221,27 @@ pub struct TaskProfile {
     pub affected_scope: AffectedScope,
     /// 可用工具列表(routing 维度候选集,OSA 选 Top-K)
     pub available_tools: Vec<ToolId>,
+    /// 工具语义评分(routing 维度,与 available_tools 一一对应)
+    ///
+    /// WHY:P1-1 动态语义评分。若为空,OSA 回退到启发式评分(索引负相关)。
+    /// 评分由上游(NMC 编码器)基于工具描述文本的语义嵌入计算。
+    pub tool_scores: Option<Vec<f32>>,
     /// 可用文件列表(context 维度候选集,OSA 选 Top-K)
     pub available_files: Vec<FileId>,
+    /// 文件语义评分(context 维度,与 available_files 一一对应)
+    pub file_scores: Option<Vec<f32>>,
     /// 可用记忆列表(memory 维度候选集,OSA 选 Top-K)
     pub available_memories: Vec<MemoryId>,
+    /// 记忆语义评分(memory 维度,与 available_memories 一一对应)
+    pub memory_scores: Option<Vec<f32>>,
     /// 近期操作列表(audit 维度候选集,OSA 按采样率选取)
     pub recent_operations: Vec<OperationId>,
+    /// 操作语义评分(audit 维度,与 recent_operations 一一对应)
+    pub operation_scores: Option<Vec<f32>>,
     /// 活跃任务列表(budget 维度候选集,OSA 按保护比例选取)
     pub active_tasks: Vec<TaskId>,
+    /// 任务语义评分(budget 维度,与 active_tasks 一一对应)
+    pub task_scores: Option<Vec<f32>>,
 }
 
 impl TaskProfile {
@@ -248,10 +261,15 @@ impl TaskProfile {
             time_pressure: TimePressure::Low,
             affected_scope: AffectedScope::Local,
             available_tools: Vec::new(),
+            tool_scores: None,
             available_files: Vec::new(),
+            file_scores: None,
             available_memories: Vec::new(),
+            memory_scores: None,
             recent_operations: Vec::new(),
+            operation_scores: None,
             active_tasks: Vec::new(),
+            task_scores: None,
         }
     }
 

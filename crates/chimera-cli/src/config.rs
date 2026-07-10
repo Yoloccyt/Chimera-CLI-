@@ -22,12 +22,201 @@ pub use nexus_core::config::*;
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use figment::{
     providers::{Env, Format, Serialized, Yaml},
     Figment,
 };
+
+// === P2-3: 配置热重载 — 文件监听与增量更新 ===
+
+/// 配置文件状态 — 用于检测文件变化
+#[derive(Debug, Clone)]
+struct ConfigFileState {
+    /// 文件路径
+    path: PathBuf,
+    /// 最后修改时间
+    last_modified: SystemTime,
+    /// 文件内容哈希(简单检测内容变化)
+    content_hash: u64,
+}
+
+impl ConfigFileState {
+    /// 从路径创建状态快照
+    fn from_path(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        let last_modified = metadata.modified().ok()?;
+        let content = std::fs::read(path).ok()?;
+        let content_hash = fnv_hash(&content);
+        Some(Self {
+            path: path.to_path_buf(),
+            last_modified,
+            content_hash,
+        })
+    }
+
+    /// 检查文件是否发生变化
+    fn has_changed(&self) -> bool {
+        let current = Self::from_path(&self.path);
+        match current {
+            Some(c) => c.last_modified != self.last_modified || c.content_hash != self.content_hash,
+            None => true,
+        }
+    }
+}
+
+/// 简单的 FNV-1a 哈希(用于检测文件内容变化)
+fn fnv_hash(data: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in data {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// P2-3: 热重载配置管理器 — 支持文件监听与增量更新
+///
+/// 基于 `LazyConfig` 扩展,添加文件变化检测与自动重载能力。
+/// 使用轮询方式(而非 OS 文件监听)检测变化,跨平台兼容且无需额外依赖。
+///
+/// # 使用示例
+/// ```no_run
+/// use chimera_cli::config::HotReloadConfig;
+///
+/// # async fn run() {
+/// let mut hot = HotReloadConfig::new(None).unwrap();
+/// // 每 5 秒检查一次文件变化
+/// hot.start_watch(std::time::Duration::from_secs(5)).await;
+/// # }
+/// ```
+pub struct HotReloadConfig {
+    /// 内部 LazyConfig(持有 Figment provider)
+    inner: LazyConfig,
+    /// 配置文件路径
+    config_path: PathBuf,
+    /// 文件状态(用于检测变化)
+    file_state: Option<ConfigFileState>,
+    /// 重载回调列表(配置变化时触发)
+    reload_callbacks: Vec<Box<dyn Fn(&ChimeraConfig) + Send + Sync>>,
+}
+
+impl HotReloadConfig {
+    /// 创建热重载配置管理器
+    ///
+    /// `config_path` 为 `None` 时使用 [`default_config_path`]。
+    pub fn new(config_path: Option<PathBuf>) -> Result<Self> {
+        let path = config_path.unwrap_or_else(default_config_path);
+        let inner = LazyConfig::new(Some(path.clone()))?;
+        let file_state = ConfigFileState::from_path(&path);
+
+        Ok(Self {
+            inner,
+            config_path: path,
+            file_state,
+            reload_callbacks: Vec::new(),
+        })
+    }
+
+    /// 添加重载回调
+    ///
+    /// 配置发生变化并成功重载后,调用此回调通知上层。
+    pub fn on_reload<F>(&mut self, callback: F)
+    where
+        F: Fn(&ChimeraConfig) + Send + Sync + 'static,
+    {
+        self.reload_callbacks.push(Box::new(callback));
+    }
+
+    /// 手动检查文件变化并触发重载
+    ///
+    /// 返回 `true` 表示文件已变化且重载成功。
+    pub fn check_and_reload(&mut self) -> Result<bool> {
+        let changed = match &self.file_state {
+            Some(state) => state.has_changed(),
+            None => true,
+        };
+
+        if !changed {
+            return Ok(false);
+        }
+
+        // 重建 Figment provider(重新读取文件)
+        let new_inner = LazyConfig::new(Some(self.config_path.clone()))?;
+
+        // 触发全量解析验证配置有效性
+        let _ = new_inner.to_chimera_config()?;
+
+        // 更新内部状态
+        self.inner = new_inner;
+        self.file_state = ConfigFileState::from_path(&self.config_path);
+
+        // 触发回调
+        if let Ok(config) = self.inner.to_chimera_config() {
+            for cb in &self.reload_callbacks {
+                cb(&config);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// 启动后台轮询监听(异步)
+    ///
+    /// 在 tokio runtime 中定期(按 `interval`)检查文件变化,
+    /// 变化时自动重载配置并触发回调。
+    ///
+    /// 返回 `JoinHandle` 供调用者管理任务生命周期。
+    pub fn start_watch(
+        &mut self,
+        interval: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let mut self_clone = self.clone_state();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                if let Err(e) = self_clone.check_and_reload() {
+                    tracing::warn!(error = %e, "配置热重载失败");
+                }
+            }
+        })
+    }
+
+    /// 获取当前完整配置
+    pub fn config(&self) -> Result<ChimeraConfig> {
+        self.inner.to_chimera_config()
+    }
+
+    /// 委托给 LazyConfig 的 section getter
+    pub fn nexus(&self) -> Result<&NexusConfig> {
+        self.inner.nexus()
+    }
+
+    /// 委托给 LazyConfig 的 section getter
+    pub fn quest(&self) -> Result<&QuestConfig> {
+        self.inner.quest()
+    }
+
+    /// 委托给 LazyConfig 的 section getter
+    pub fn monitoring(&self) -> Result<&MonitoringConfig> {
+        self.inner.monitoring()
+    }
+
+    // 克隆状态用于后台任务
+    fn clone_state(&self) -> Self {
+        Self {
+            inner: LazyConfig::new(Some(self.config_path.clone())).unwrap_or_else(|_| {
+                LazyConfig::new(None).expect("default config always valid")
+            }),
+            config_path: self.config_path.clone(),
+            file_state: self.file_state.clone(),
+            reload_callbacks: Vec::new(), // 回调不克隆
+        }
+    }
+}
 
 // === 配置加载逻辑(保留在 L10 chimera-cli) ===
 
@@ -502,5 +691,48 @@ mod tests {
         assert!(tpl.contains("nexus:"));
         assert!(tpl.contains("model_router:"));
         assert!(tpl.contains("seccore:"));
+    }
+
+    // ============================================================
+    // P2-3: 热重载测试
+    // ============================================================
+
+    #[test]
+    fn test_hot_reload_config_new() {
+        let hot = HotReloadConfig::new(None);
+        assert!(hot.is_ok());
+    }
+
+    #[test]
+    fn test_hot_reload_config_path() {
+        use tempfile::NamedTempFile;
+        let file = NamedTempFile::with_suffix(".yaml").unwrap();
+        std::fs::write(file.path(), "nexus:\n  version: \"1.0.0\"\n").unwrap();
+
+        let mut hot = HotReloadConfig::new(Some(file.path().to_path_buf())).unwrap();
+        assert!(hot.config().is_ok());
+    }
+
+    #[test]
+    fn test_config_file_state_detects_change() {
+        use tempfile::NamedTempFile;
+        let file = NamedTempFile::with_suffix(".yaml").unwrap();
+        std::fs::write(file.path(), "nexus:\n  version: \"1.0.0\"\n").unwrap();
+
+        let state = ConfigFileState::from_path(file.path()).unwrap();
+        assert!(!state.has_changed()); // 未修改
+
+        // 修改文件
+        std::fs::write(file.path(), "nexus:\n  version: \"2.0.0\"\n").unwrap();
+        assert!(state.has_changed());
+    }
+
+    #[test]
+    fn test_fnv_hash() {
+        let h1 = fnv_hash(b"hello");
+        let h2 = fnv_hash(b"hello");
+        let h3 = fnv_hash(b"world");
+        assert_eq!(h1, h2);
+        assert_ne!(h1, h3);
     }
 }

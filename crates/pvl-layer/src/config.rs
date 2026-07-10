@@ -31,6 +31,20 @@ pub struct PvlConfig {
     /// WHY 10:L7 层操作(如代码生成、命令执行)通常需要 100ms+ 验证,
     /// 10 操作/秒与单线程 Verifier 处理能力匹配
     pub producer_rate_limit: u32,
+
+    /// 操作验证超时(毫秒,默认 5000 = 5 秒)
+    ///
+    /// WHY(P1-9):Verifier 处理单个操作的最大时间限制。
+    /// 超过此时间,操作被标记为超时拒绝,避免阻塞整个流水线。
+    /// 5 秒覆盖大多数验证场景(语法检查+安全扫描+依赖检查),
+    /// 复杂操作可在 Verifier 内部分段处理。
+    pub verification_timeout_ms: u64,
+
+    /// 生产者流式超时(毫秒,默认 30000 = 30 秒)
+    ///
+    /// WHY(P1-9):produce() 批量生成操作的总时间限制。
+    /// 超过此时间,未完成的操作被丢弃,Producer 策略降级为 Conservative。
+    pub produce_timeout_ms: u64,
 }
 
 impl Default for PvlConfig {
@@ -39,6 +53,8 @@ impl Default for PvlConfig {
             channel_capacity: 128,
             rejection_rate_threshold: 0.3,
             producer_rate_limit: 10,
+            verification_timeout_ms: 5000,
+            produce_timeout_ms: 30000,
         }
     }
 }

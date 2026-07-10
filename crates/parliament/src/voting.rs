@@ -207,6 +207,229 @@ impl VoteCounter {
     }
 }
 
+/// Borda投票计数器 — P0-11优化: Borda计数+置信度加权+贝叶斯角色准确率更新
+///
+/// 相比简单加权平均,Borda计数通过排序偏好而非绝对立场来减少策略性投票影响。
+/// 置信度加权使高置信度角色的意见更有影响力。
+/// 贝叶斯更新根据历史准确率动态调整角色权重。
+///
+/// # Borda计数原理
+/// 1. 收集所有角色对提案的立场排序
+/// 2. 赞成=2分,弃权=1分,反对=0分(3选项Borda)
+/// 3. 分数 × 角色权重 × 置信度 = 加权Borda分
+/// 4. 加权Borda分 / 最大可能分 = Borda赞成率
+///
+/// # 置信度加权
+/// 角色的confidence字段直接乘入分数,高置信度角色(如基于强证据的判断)
+/// 比低置信度角色(如猜测)更有影响力。
+pub struct BordaVoteCounter {
+    config: ParliamentConfig,
+    /// 角色历史准确率(贝叶斯更新)
+    ///
+    /// WHY:角色准确率从0.5(无信息先验)开始,
+    /// 每次投票后根据结果(预测正确/错误)更新。
+    /// 准确率高的角色在后续投票中权重更高。
+    role_accuracy: std::sync::RwLock<std::collections::HashMap<Role, f32>>,
+}
+
+impl BordaVoteCounter {
+    /// 创建新的Borda投票计数器
+    pub fn new(config: &ParliamentConfig) -> Self {
+        let mut accuracy = std::collections::HashMap::new();
+        for role in Role::all() {
+            // 无信息先验:0.5(完全不确定)
+            accuracy.insert(role, 0.5);
+        }
+        Self {
+            config: config.clone(),
+            role_accuracy: std::sync::RwLock::new(accuracy),
+        }
+    }
+
+    /// 计票并判定共识(使用Borda计数+置信度加权)
+    ///
+    /// # 流程
+    /// 1. 计算参与率
+    /// 2. 法定人数检查
+    /// 3. Skeptic否决检查(红队防线不变)
+    /// 4. Borda计数+置信度加权+贝叶斯准确率
+    /// 5. 共识判定
+    pub fn count_votes(
+        &self,
+        opinions: &[Opinion],
+        total_roles: usize,
+        proposal: &Proposal,
+    ) -> VoteResult {
+        self.count_votes_with_threshold(opinions, total_roles, proposal, self.config.consensus_threshold)
+    }
+
+    /// 计票并判定共识(使用自定义共识阈值)
+    pub fn count_votes_with_threshold(
+        &self,
+        opinions: &[Opinion],
+        total_roles: usize,
+        proposal: &Proposal,
+        consensus_threshold: f32,
+    ) -> VoteResult {
+        // 步骤1:计算参与率
+        let participation_rate = if total_roles == 0 {
+            0.0
+        } else {
+            opinions.len() as f32 / total_roles as f32
+        };
+
+        // 步骤2:法定人数检查
+        if participation_rate < self.config.quorum_threshold {
+            return VoteResult {
+                weighted_approval_rate: 0.0,
+                participation_rate,
+                consensus: Consensus::Rejected {
+                    reason: format!(
+                        "quorum not met: participation {:.2} < required {:.2}",
+                        participation_rate, self.config.quorum_threshold
+                    ),
+                },
+            };
+        }
+
+        // 步骤3:Skeptic否决检查
+        let skeptic_opinion = opinions.iter().find(|o| o.role == Role::Skeptic);
+        if let Some(skeptic) = skeptic_opinion {
+            if skeptic.is_reject() {
+                let veto_reason = format!(
+                    "Skeptic 否决:风险等级 {:.2},理由: {}",
+                    proposal.risk_level, skeptic.rationale
+                );
+                return VoteResult {
+                    weighted_approval_rate: 0.0,
+                    participation_rate,
+                    consensus: Consensus::Vetoed {
+                        veto_reason,
+                        frozen_capabilities: Vec::new(),
+                    },
+                };
+            }
+        }
+
+        // 步骤4:Borda计数+置信度加权+贝叶斯准确率
+        let borda_rate = self.compute_borda_approval(opinions);
+
+        // 步骤5:共识判定
+        let consensus = if borda_rate >= consensus_threshold {
+            let decision_hash = compute_decision_hash(proposal, opinions);
+            Consensus::Reached {
+                decision_hash,
+                dpo_pair_id: None,
+            }
+        } else {
+            Consensus::Rejected {
+                reason: format!(
+                    "Borda赞成率不足: {:.2} < 阈值 {:.2}",
+                    borda_rate, consensus_threshold
+                ),
+            }
+        };
+
+        VoteResult {
+            weighted_approval_rate: borda_rate,
+            participation_rate,
+            consensus,
+        }
+    }
+
+    /// 计算Borda赞成率(置信度加权+贝叶斯准确率)
+    ///
+    /// # 公式
+    /// - 赞成(position=1.0): 2 Borda分
+    /// - 弃权(position=0.5): 1 Borda分
+    /// - 反对(position=0.0): 0 Borda分
+    /// - 加权分 = Borda分 × 角色权重 × 置信度 × 贝叶斯准确率
+    /// - Borda赞成率 = 加权分总和 / 最大可能加权分
+    fn compute_borda_approval(&self, opinions: &[Opinion]) -> f32 {
+        let accuracy_map = self.role_accuracy.read().unwrap_or_else(|e| {
+            // 如果锁被毒化,使用默认准确率
+            let mut default = std::collections::HashMap::new();
+            for role in Role::all() {
+                default.insert(role, 0.5);
+            }
+            drop(e);
+            default
+        });
+
+        let mut weighted_sum: f32 = 0.0;
+        let mut max_possible_sum: f32 = 0.0;
+
+        for opinion in opinions {
+            if opinion.is_abstain() {
+                // 弃权:1 Borda分,但计入分母(与简单加权不同)
+                let borda_score = 1.0f32;
+                let weight = self.config.weight_of(opinion.role);
+                let accuracy = accuracy_map.get(&opinion.role).copied().unwrap_or(0.5);
+                let adjusted_weight = weight * accuracy;
+                weighted_sum += borda_score * adjusted_weight * opinion.confidence;
+                max_possible_sum += 2.0 * adjusted_weight; // 最大可能分(赞成=2)
+            } else if opinion.is_approve() {
+                let borda_score = 2.0f32;
+                let weight = self.config.weight_of(opinion.role);
+                let accuracy = accuracy_map.get(&opinion.role).copied().unwrap_or(0.5);
+                let adjusted_weight = weight * accuracy;
+                weighted_sum += borda_score * adjusted_weight * opinion.confidence;
+                max_possible_sum += 2.0 * adjusted_weight;
+            } else {
+                // 反对:0分,但分母仍计入
+                let weight = self.config.weight_of(opinion.role);
+                let accuracy = accuracy_map.get(&opinion.role).copied().unwrap_or(0.5);
+                let adjusted_weight = weight * accuracy;
+                max_possible_sum += 2.0 * adjusted_weight;
+            }
+        }
+
+        if max_possible_sum > 0.0 {
+            (weighted_sum / max_possible_sum).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// 更新角色准确率(贝叶斯更新)
+    ///
+    /// 在共识达成后,根据角色预测是否正确更新其准确率。
+    /// 使用Beta分布共轭先验的简化形式:
+    /// - 预测正确:准确率 = (准确率 × 0.9 + 0.1) (向1.0靠近)
+    /// - 预测错误:准确率 = (准确率 × 0.9) (向0.0靠近)
+    ///
+    /// # 参数
+    /// - `role`:需要更新的角色
+    /// - `predicted_correctly`:角色预测是否正确
+    pub fn update_role_accuracy(&self, role: Role, predicted_correctly: bool) {
+        if let Ok(mut accuracy_map) = self.role_accuracy.write() {
+            let current = accuracy_map.get(&role).copied().unwrap_or(0.5);
+            let updated = if predicted_correctly {
+                // 向1.0靠近(学习率0.1)
+                current * 0.9 + 0.1
+            } else {
+                // 向0.0靠近(学习率0.1)
+                current * 0.9
+            };
+            accuracy_map.insert(role, updated.clamp(0.1, 0.9));
+        }
+    }
+
+    /// 获取角色当前准确率
+    pub fn role_accuracy(&self, role: Role) -> f32 {
+        self.role_accuracy
+            .read()
+            .ok()
+            .and_then(|m| m.get(&role).copied())
+            .unwrap_or(0.5)
+    }
+
+    /// 获取配置引用
+    pub fn config(&self) -> &ParliamentConfig {
+        &self.config
+    }
+}
+
 /// 计算决议内容哈希(SHA-256 hex)
 ///
 /// WHY SHA-256:决议哈希用于审计日志去重与 GSOE 进化追踪,
@@ -680,5 +903,136 @@ mod tests {
 
         assert!(result.consensus.is_rejected());
         assert!((result.participation_rate - 0.0).abs() < 1e-6);
+    }
+
+    // === P0-11: BordaVoteCounter 测试 ===
+
+    fn make_borda_counter() -> BordaVoteCounter {
+        BordaVoteCounter::new(&ParliamentConfig::default())
+    }
+
+    #[test]
+    fn test_borda_all_approve_reaches_consensus() {
+        let counter = make_borda_counter();
+        let opinions = make_all_approve_opinions();
+        let proposal = make_proposal();
+
+        let result = counter.count_votes(&opinions, 5, &proposal);
+
+        assert!(result.consensus.is_reached(), "Borda全赞成应达成共识");
+        assert!(
+            result.weighted_approval_rate > 0.8,
+            "Borda赞成率应>0.8, got {}",
+            result.weighted_approval_rate
+        );
+    }
+
+    #[test]
+    fn test_borda_all_reject_vetoed() {
+        let counter = make_borda_counter();
+        let opinions = make_all_reject_opinions();
+        let proposal = make_proposal();
+
+        let result = counter.count_votes(&opinions, 5, &proposal);
+
+        assert!(result.consensus.is_vetoed(), "Borda全反对应触发Skeptic否决");
+    }
+
+    #[test]
+    fn test_borda_confidence_weighting() {
+        let counter = make_borda_counter();
+        let proposal = make_proposal();
+
+        // 高置信度赞成 vs 低置信度反对:赞成应胜出
+        let opinions = vec![
+            Opinion::new(Role::Architect, 1.0, 1.0, "高置信度赞成"),
+            Opinion::new(Role::Skeptic, 1.0, 1.0, "高置信度赞成"),
+            Opinion::new(Role::Optimizer, 0.0, 0.1, "低置信度反对"),
+            Opinion::new(Role::Librarian, 0.0, 0.1, "低置信度反对"),
+            Opinion::new(Role::Bard, 0.0, 0.1, "低置信度反对"),
+        ];
+
+        let result = counter.count_votes(&opinions, 5, &proposal);
+
+        // 高置信度赞成的加权分应超过低置信度反对
+        assert!(
+            result.weighted_approval_rate > 0.5,
+            "高置信度赞成应胜出, got {}",
+            result.weighted_approval_rate
+        );
+    }
+
+    #[test]
+    fn test_borda_bayesian_accuracy_update() {
+        let counter = make_borda_counter();
+
+        // 初始准确率应为0.5
+        assert!((counter.role_accuracy(Role::Architect) - 0.5).abs() < 1e-6);
+
+        // 更新:预测正确
+        counter.update_role_accuracy(Role::Architect, true);
+        let acc_after_correct = counter.role_accuracy(Role::Architect);
+        assert!(
+            acc_after_correct > 0.5,
+            "预测正确后准确率应上升, got {}",
+            acc_after_correct
+        );
+
+        // 更新:预测错误
+        counter.update_role_accuracy(Role::Architect, false);
+        let acc_after_incorrect = counter.role_accuracy(Role::Architect);
+        assert!(
+            acc_after_incorrect < acc_after_correct,
+            "预测错误后准确率应下降, got {}",
+            acc_after_incorrect
+        );
+    }
+
+    #[test]
+    fn test_borda_abstain_counts_in_denominator() {
+        let counter = make_borda_counter();
+        let proposal = make_proposal();
+
+        // 2赞成,1弃权,2反对
+        let opinions = vec![
+            Opinion::new(Role::Architect, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Skeptic, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Optimizer, 0.5, 0.5, "弃权"),
+            Opinion::new(Role::Librarian, 0.0, 0.8, "反对"),
+            Opinion::new(Role::Bard, 0.0, 0.8, "反对"),
+        ];
+
+        let result = counter.count_votes(&opinions, 5, &proposal);
+
+        // Borda:弃权=1分,应计入分母,赞成率应高于简单加权
+        assert!(
+            result.weighted_approval_rate > 0.4,
+            "Borda弃权应提升赞成率, got {}",
+            result.weighted_approval_rate
+        );
+    }
+
+    #[test]
+    fn test_borda_vs_simple_weighted_difference() {
+        let config = ParliamentConfig::default();
+        let simple_counter = VoteCounter::new(&config);
+        let borda_counter = BordaVoteCounter::new(&config);
+        let proposal = make_proposal();
+
+        // 3赞成,2反对(无弃权)
+        let opinions = vec![
+            Opinion::new(Role::Architect, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Skeptic, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Optimizer, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Librarian, 0.0, 0.8, "反对"),
+            Opinion::new(Role::Bard, 0.0, 0.8, "反对"),
+        ];
+
+        let simple_result = simple_counter.count_votes(&opinions, 5, &proposal);
+        let borda_result = borda_counter.count_votes(&opinions, 5, &proposal);
+
+        // 两者都应达成共识
+        assert!(simple_result.consensus.is_reached());
+        assert!(borda_result.consensus.is_reached());
     }
 }

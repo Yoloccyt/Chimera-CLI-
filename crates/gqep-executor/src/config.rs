@@ -27,10 +27,8 @@ pub struct GqepConfig {
     /// 防止资源耗尽(对应架构红线:1M Token 暴力加载)。
     /// 默认 100,适合大多数 L6-L10 层操作。
     ///
-    /// NOTE:当前实现暂未强制限流(`FuturesUnordered` 一次性放入所有 future)。
-    /// 未来可通过 `futures::stream::buffer_unordered` 实现限流,
-    /// 或分批聚集。保留此字段用于未来扩展与配置一致性。
-    #[allow(dead_code)]
+    /// P0-10:已通过 `tokio::sync::Semaphore` 实现硬限流,
+    /// 超过 `max_concurrency` 的 future 将等待 permit 释放后才启动。
     pub max_concurrency: usize,
 
     /// 全局 gather 超时阈值(毫秒) — 整个聚集流程的 deadline

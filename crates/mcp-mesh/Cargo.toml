@@ -22,6 +22,8 @@ chrono = { workspace = true }
 dashmap = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 McpMeshTransactionCompleted 事件、订阅 ChtcToolCallReceived
 event-bus = { path = "../event-bus" }
+# JSON-RPC 真实网络传输(HTTP POST)
+reqwest = { workspace = true }
 
 [dev-dependencies]
 # 性能基准框架(SubTask 1.7)

@@ -296,6 +296,143 @@ impl AuditChain {
     pub fn is_empty(&self) -> bool {
         self.blocks.is_empty()
     }
+
+    /// P0-8:持久化审计链到SQLite数据库
+    ///
+    /// 将审计链的所有块写入SQLite,使用WAL模式保证写入性能。
+    /// 表结构包含所有AuditBlock字段,并建立索引加速查询。
+    ///
+    /// # 参数
+    /// - `db_path`:SQLite数据库文件路径
+    ///
+    /// # 返回
+    /// - `Ok(())`:持久化成功
+    /// - `Err(SecCoreError::AuditError)`:数据库操作失败
+    pub fn persist_to_sqlite(&self, db_path: &str) -> Result<(), SecCoreError> {
+        use rusqlite::{params, Connection};
+
+        let conn = Connection::open(db_path).map_err(|e| {
+            SecCoreError::AuditError(format!("无法打开SQLite数据库: {e}"))
+        })?;
+
+        // 启用WAL模式提升并发写入性能
+        conn.execute("PRAGMA journal_mode=WAL;", [])
+            .map_err(|e| SecCoreError::AuditError(format!("无法设置WAL模式: {e}")))?;
+
+        // 创建审计块表(若不存在)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS audit_blocks (
+                index_val INTEGER PRIMARY KEY,
+                timestamp INTEGER NOT NULL,
+                command_hash TEXT NOT NULL,
+                result_hash TEXT NOT NULL,
+                prev_hash TEXT NOT NULL,
+                merkle_root TEXT NOT NULL,
+                status INTEGER NOT NULL
+            );",
+            [],
+        )
+        .map_err(|e| SecCoreError::AuditError(format!("创建表失败: {e}")))?;
+
+        // 创建索引加速查询
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_status ON audit_blocks(status);",
+            [],
+        )
+        .map_err(|e| SecCoreError::AuditError(format!("创建索引失败: {e}")))?;
+
+        // 插入所有审计块(使用事务批量写入)
+        let tx = conn
+            .transaction()
+            .map_err(|e| SecCoreError::AuditError(format!("开始事务失败: {e}")))?;
+
+        for block in &self.blocks {
+            tx.execute(
+                "INSERT OR REPLACE INTO audit_blocks 
+                 (index_val, timestamp, command_hash, result_hash, prev_hash, merkle_root, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                params![
+                    block.index as i64,
+                    block.timestamp,
+                    &block.command_hash,
+                    &block.result_hash,
+                    &block.prev_hash,
+                    &block.merkle_root,
+                    block.status as i64,
+                ],
+            )
+            .map_err(|e| SecCoreError::AuditError(format!("插入审计块失败: {e}")))?;
+        }
+
+        tx.commit()
+            .map_err(|e| SecCoreError::AuditError(format!("提交事务失败: {e}")))?;
+
+        Ok(())
+    }
+
+    /// P0-8:从SQLite数据库恢复审计链
+    ///
+    /// 从SQLite读取所有审计块,重建AuditChain。
+    /// 恢复后应调用verify()验证链完整性。
+    ///
+    /// # 参数
+    /// - `db_path`:SQLite数据库文件路径
+    ///
+    /// # 返回
+    /// - `Ok(AuditChain)`:恢复成功
+    /// - `Err(SecCoreError::AuditError)`:数据库操作失败或数据损坏
+    pub fn restore_from_sqlite(db_path: &str) -> Result<Self, SecCoreError> {
+        use rusqlite::Connection;
+
+        let conn = Connection::open(db_path).map_err(|e| {
+            SecCoreError::AuditError(format!("无法打开SQLite数据库: {e}"))
+        })?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT index_val, timestamp, command_hash, result_hash, 
+                        prev_hash, merkle_root, status
+                 FROM audit_blocks ORDER BY index_val;",
+            )
+            .map_err(|e| SecCoreError::AuditError(format!("准备查询失败: {e}")))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let status_int: i64 = row.get(6)?;
+                let status = match status_int {
+                    0 => AuditRecordStatus::Intent,
+                    1 => AuditRecordStatus::Executed,
+                    2 => AuditRecordStatus::Failed,
+                    _ => AuditRecordStatus::Intent, // 默认值
+                };
+                Ok(AuditBlock {
+                    index: row.get::<_, i64>(0)? as u64,
+                    timestamp: row.get(1)?,
+                    command_hash: row.get(2)?,
+                    result_hash: row.get(3)?,
+                    prev_hash: row.get(4)?,
+                    merkle_root: row.get(5)?,
+                    status,
+                })
+            })
+            .map_err(|e| SecCoreError::AuditError(format!("查询失败: {e}")))?;
+
+        let mut blocks = Vec::new();
+        let mut current_hash = "0".repeat(64);
+
+        for row in rows {
+            let block = row.map_err(|e| {
+                SecCoreError::AuditError(format!("读取审计块失败: {e}"))
+            })?;
+            current_hash = block.merkle_root.clone();
+            blocks.push(block);
+        }
+
+        Ok(Self {
+            blocks,
+            current_hash,
+        })
+    }
 }
 
 impl Default for AuditChain {
@@ -480,5 +617,58 @@ mod tests {
         assert_eq!(chain.blocks[0].status, AuditRecordStatus::Failed);
         assert!(chain.blocks[0].result_hash.is_empty());
         assert!(chain.verify().unwrap(), "Failed 状态审计链应完整");
+    }
+
+    // P0-8: SQLite持久化测试
+    #[test]
+    fn test_persist_and_restore_sqlite() {
+        let mut chain = AuditChain::new();
+        for _ in 0..3 {
+            chain.append(&make_spec(), &make_result()).unwrap();
+        }
+        assert_eq!(chain.len(), 3);
+        assert!(chain.verify().unwrap());
+
+        // 持久化到临时数据库
+        let db_path = ":memory:"; // 使用内存数据库测试
+        chain.persist_to_sqlite(db_path).unwrap();
+
+        // 从数据库恢复
+        let restored = AuditChain::restore_from_sqlite(db_path).unwrap();
+        assert_eq!(restored.len(), 3);
+        assert!(restored.verify().unwrap(), "恢复的审计链应完整");
+
+        // 验证恢复的块与原块一致
+        for (orig, restored_block) in chain.blocks.iter().zip(restored.blocks.iter()) {
+            assert_eq!(orig.index, restored_block.index);
+            assert_eq!(orig.command_hash, restored_block.command_hash);
+            assert_eq!(orig.status, restored_block.status);
+        }
+    }
+
+    #[test]
+    fn test_restore_empty_sqlite() {
+        // 测试空数据库恢复
+        let db_path = ":memory:";
+        // 创建空表
+        {
+            use rusqlite::Connection;
+            let conn = Connection::open(db_path).unwrap();
+            conn.execute(
+                "CREATE TABLE audit_blocks (
+                    index_val INTEGER PRIMARY KEY,
+                    timestamp INTEGER NOT NULL,
+                    command_hash TEXT NOT NULL,
+                    result_hash TEXT NOT NULL,
+                    prev_hash TEXT NOT NULL,
+                    merkle_root TEXT NOT NULL,
+                    status INTEGER NOT NULL
+                );",
+                [],
+            ).unwrap();
+        }
+
+        let restored = AuditChain::restore_from_sqlite(db_path).unwrap();
+        assert!(restored.is_empty());
     }
 }

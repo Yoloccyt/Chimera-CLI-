@@ -56,6 +56,7 @@ use uuid::Uuid;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 
+use crate::adaptive_weights::{AdaptiveWeightLearner, AdaptiveWeights, QuestOutcome};
 use crate::arbitration::ArbitrationLayer;
 use crate::error::QuestError;
 
@@ -72,6 +73,8 @@ use crate::error::QuestError;
 ///   (与 DECB 滞后机制一致,§6 架构红线:竞态/抖动防护)
 /// - `description_length_normalizer`:描述长度归一化基数,
 ///   长度 / 此值 clamp 到 `[0,1]` 得到 description_length_factor
+/// - `adaptive_weights`:P1-13 自适应权重学习配置
+///   若启用,复杂度评估权重会根据历史 Quest 成功率动态调整
 #[derive(Debug, Clone)]
 pub struct TtgConfig {
     /// 简单任务阈值(任务数 ≤ 此值视为简单),默认 3
@@ -82,6 +85,12 @@ pub struct TtgConfig {
     pub lag_interval_ms: u64,
     /// 描述长度归一化基数,默认 1000.0
     pub description_length_normalizer: f32,
+    /// P1-13: 是否启用自适应权重学习
+    pub enable_adaptive_weights: bool,
+    /// P1-13: 自适应权重学习率
+    pub adaptive_learning_rate: f32,
+    /// P1-13: 自适应权重滑动窗口大小
+    pub adaptive_window_size: usize,
 }
 
 impl Default for TtgConfig {
@@ -91,6 +100,9 @@ impl Default for TtgConfig {
             complex_task_threshold: 10,
             lag_interval_ms: 10_000,
             description_length_normalizer: 1000.0,
+            enable_adaptive_weights: true,
+            adaptive_learning_rate: 0.05,
+            adaptive_window_size: 20,
         }
     }
 }
@@ -108,6 +120,30 @@ impl TtgConfig {
             complex_task_threshold,
             lag_interval_ms,
             description_length_normalizer,
+            enable_adaptive_weights: true,
+            adaptive_learning_rate: 0.05,
+            adaptive_window_size: 20,
+        }
+    }
+
+    /// P1-13: 创建带自适应权重配置的 TTG 配置
+    pub fn with_adaptive(
+        simple_task_threshold: usize,
+        complex_task_threshold: usize,
+        lag_interval_ms: u64,
+        description_length_normalizer: f32,
+        enable_adaptive: bool,
+        learning_rate: f32,
+        window_size: usize,
+    ) -> Self {
+        Self {
+            simple_task_threshold,
+            complex_task_threshold,
+            lag_interval_ms,
+            description_length_normalizer,
+            enable_adaptive_weights: enable_adaptive,
+            adaptive_learning_rate: learning_rate,
+            adaptive_window_size: window_size,
         }
     }
 }
@@ -192,6 +228,7 @@ struct QuestModeEntry {
 /// - 自动模式选择(基于复杂度与预算档位)
 /// - 预算联动切换(订阅 DECB 档位变化,带滞后机制)
 /// - 手动覆盖(受预算档位约束)
+/// - P1-13: 自适应权重学习(根据历史 Quest 成功率动态调整权重)
 /// - 事件集成:可选持有 EventBus,模式切换时发布 ThinkingModeSwitched 事件
 ///
 /// # 线程安全
@@ -224,17 +261,33 @@ pub struct TtgGovernor {
     /// WHY Option:与 event_bus 同生命周期,仅 with_event_bus 时创建。
     /// None 时 effective_tier() 直接返回 fallback,向后兼容。
     arbitration: Option<ArbitrationLayer>,
+    /// P1-13: 自适应权重学习器(可选)
+    ///
+    /// WHY Option:向后兼容,不启用自适应时退化为固定权重。
+    /// 启用时根据历史 Quest 结果动态调整复杂度评估权重。
+    adaptive_learner: Option<Mutex<AdaptiveWeightLearner>>,
 }
 
 impl TtgGovernor {
     /// 创建新的 TTG 治理器(不持有事件总线)
     pub fn new(config: TtgConfig) -> Self {
+        let adaptive_learner = if config.enable_adaptive_weights {
+            Some(Mutex::new(AdaptiveWeightLearner::with_params(
+                AdaptiveWeights::default(),
+                config.adaptive_window_size,
+                config.adaptive_learning_rate,
+                5,
+            )))
+        } else {
+            None
+        };
         Self {
             config,
             modes: Mutex::new(HashMap::new()),
             last_budget_switch: Mutex::new(HashMap::new()),
             event_bus: None,
             arbitration: None,
+            adaptive_learner,
         }
     }
 
@@ -250,12 +303,23 @@ impl TtgGovernor {
         // ArbitrationLayer::new 借用 &EventBus,不消费所有权。
         // 但 event_bus 后续需要 move 到 Self,所以 arbitration 必须先创建。
         let arbitration = ArbitrationLayer::new(&event_bus);
+        let adaptive_learner = if config.enable_adaptive_weights {
+            Some(Mutex::new(AdaptiveWeightLearner::with_params(
+                AdaptiveWeights::default(),
+                config.adaptive_window_size,
+                config.adaptive_learning_rate,
+                5,
+            )))
+        } else {
+            None
+        };
         Self {
             config,
             modes: Mutex::new(HashMap::new()),
             last_budget_switch: Mutex::new(HashMap::new()),
             event_bus: Some(event_bus),
             arbitration: Some(arbitration),
+            adaptive_learner,
         }
     }
 
@@ -269,9 +333,53 @@ impl TtgGovernor {
         self.event_bus = Some(event_bus);
     }
 
+    /// P1-13: 获取当前自适应权重(若启用)
+    ///
+    /// 返回 None 表示未启用自适应权重学习。
+    pub fn adaptive_weights(&self) -> Option<AdaptiveWeights> {
+        self.adaptive_learner.as_ref().map(|l| {
+            l.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .weights()
+        })
+    }
+
+    /// P1-13: 记录 Quest 结果并更新自适应权重
+    ///
+    /// 应在 Quest 完成后调用,传入任务成功率。
+    /// 若未启用自适应权重,此方法无效果。
+    pub fn record_quest_outcome(&self, success_rate: f32, complexity_score: f32, mode: ThinkingMode) {
+        let Some(learner) = self.adaptive_learner.as_ref() else {
+            return;
+        };
+        let mode_val = match mode {
+            ThinkingMode::Fast => 1,
+            ThinkingMode::Standard => 2,
+            ThinkingMode::Deep => 3,
+        };
+        let mut locked = learner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        locked.record_outcome(QuestOutcome {
+            mode_selected: mode_val,
+            success_rate: success_rate.clamp(0.0, 1.0),
+            complexity_score,
+        });
+    }
+
+    /// P1-13: 获取平均成功率
+    pub fn average_success_rate(&self) -> Option<f32> {
+        self.adaptive_learner.as_ref().map(|l| {
+            l.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .average_success_rate()
+        })
+    }
+
     /// 评估 Quest 复杂度 — 基于任务数、依赖深度与描述长度
     ///
-    /// 公式:`complexity_score = task_count × 0.3 + dependency_depth × 0.4 + description_length_factor × 0.3`
+    /// 公式:`complexity_score = task_count × w1 + dependency_depth × w2 + description_length_factor × w3`
+    ///
+    /// P1-13: 若启用自适应权重,权重会根据历史 Quest 成功率动态调整。
+    /// 否则使用固定权重(0.3, 0.4, 0.3)。
     ///
     /// WHY 权重分配:
     /// - 依赖深度权重最高(0.4):深度反映任务编排复杂度,是执行难度的核心指标
@@ -282,7 +390,9 @@ impl TtgGovernor {
         let dependency_depth = compute_dependency_depth(&quest.tasks) as f32;
         let description_length_factor = self.compute_description_length_factor(quest);
 
-        let score = task_count * 0.3 + dependency_depth * 0.4 + description_length_factor * 0.3;
+        // P1-13: 使用自适应权重或固定权重
+        let weights = self.adaptive_weights().unwrap_or_else(AdaptiveWeights::default);
+        let score = weights.compute_score(task_count, dependency_depth, description_length_factor);
         ComplexityScore::new(score)
     }
 

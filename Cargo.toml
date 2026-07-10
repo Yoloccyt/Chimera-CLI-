@@ -23,7 +23,7 @@ members = [
     "crates/decb-governor", "crates/acb-governor", "crates/efficiency-monitor",
     "crates/gsoe-evolution", "crates/auto-dpo", "crates/mcp-mesh",
     "crates/nmc-encoder", "crates/chtc-bridge", "crates/chimera-tui",
-    "crates/chimera-cli",
+    "crates/chimera-cli", "crates/online-learning",
 ]
 resolver = "2"
 

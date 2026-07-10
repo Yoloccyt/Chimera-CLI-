@@ -31,12 +31,23 @@ pub struct CsnConfig {
     /// 多级回退,避免"一次失败即放弃"的脆弱性。
     pub default_degradation_levels: Vec<String>,
 
-    /// 默认 Top-K 值
+    /// P0-14:启用LSH-ANN索引的阈值
     ///
-    /// 默认 5,从注册表中选出相似度最高的 5 个候选。
-    /// WHY 5:与 FaaE/GEA 的 Top-K=8 对齐(略低,因 CSN 仅在失败时触发),
-    /// 过大增加选择开销,过小丢失可选替代。
-    pub top_k: usize,
+    /// 当注册能力数≥此值时启用LSH-ANN近似最近邻索引,
+    /// 低于此值时使用线性扫描(小数据量时LSH开销不划算)。
+    /// 默认20,与mlc-engine的LSH_ENABLE_THRESHOLD(1000)不同,
+    /// 因CSN规模较小(100能力),更早启用索引收益更大。
+    pub lsh_enable_threshold: usize,
+
+    /// P0-14:LSH索引表数
+    ///
+    /// 更多表=更高召回率+更多内存。默认8(平衡召回与内存)。
+    pub lsh_num_tables: usize,
+
+    /// P0-14:LSH每表哈希bit数
+    ///
+    /// 更多bit=更精确+更少碰撞。默认16(平衡精度与候选集大小)。
+    pub lsh_hash_bits: usize,
 }
 
 impl Default for CsnConfig {
@@ -49,7 +60,9 @@ impl Default for CsnConfig {
                 "secondary".into(),
                 "tertiary".into(),
             ],
-            top_k: 5,
+            lsh_enable_threshold: 20,
+            lsh_num_tables: 8,
+            lsh_hash_bits: 16,
         }
     }
 }
@@ -68,7 +81,9 @@ mod tests {
             3,
             "默认 ≥ 3 级降级"
         );
-        assert_eq!(config.top_k, 5);
+        assert_eq!(config.lsh_enable_threshold, 20);
+        assert_eq!(config.lsh_num_tables, 8);
+        assert_eq!(config.lsh_hash_bits, 16);
     }
 
     #[test]
@@ -86,14 +101,18 @@ mod tests {
             vector_dimension: 64,
             registry_capacity: 200,
             default_degradation_levels: vec!["L1".into(), "L2".into(), "L3".into(), "L4".into()],
-            top_k: 10,
+            lsh_enable_threshold: 10,
+            lsh_num_tables: 4,
+            lsh_hash_bits: 8,
         };
         let json = serde_json::to_string(&config).expect("序列化失败");
         let restored: CsnConfig = serde_json::from_str(&json).expect("反序列化失败");
         assert_eq!(restored.vector_dimension, 64);
         assert_eq!(restored.registry_capacity, 200);
         assert_eq!(restored.default_degradation_levels.len(), 4);
-        assert_eq!(restored.top_k, 10);
+        assert_eq!(restored.lsh_enable_threshold, 10);
+        assert_eq!(restored.lsh_num_tables, 4);
+        assert_eq!(restored.lsh_hash_bits, 8);
     }
 
     #[test]
@@ -106,5 +125,8 @@ mod tests {
             config.default_degradation_levels,
             cloned.default_degradation_levels
         );
+        assert_eq!(config.lsh_enable_threshold, cloned.lsh_enable_threshold);
+        assert_eq!(config.lsh_num_tables, cloned.lsh_num_tables);
+        assert_eq!(config.lsh_hash_bits, cloned.lsh_hash_bits);
     }
 }

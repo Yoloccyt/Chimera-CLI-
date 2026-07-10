@@ -35,6 +35,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+pub mod adaptive;
 pub mod config;
 pub mod error;
 pub mod fusion;
@@ -42,6 +43,7 @@ pub mod templates;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use adaptive::AdaptiveStrategySelector;
 pub use config::SsraConfig;
 pub use error::SsraError;
 pub use fusion::SlimeFusionEngine;
@@ -50,6 +52,7 @@ pub use types::{FusionRequest, FusionResult, FusionStrategy, SlimeTemplate};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
+    pub use crate::adaptive::AdaptiveStrategySelector;
     pub use crate::config::SsraConfig;
     pub use crate::error::SsraError;
     pub use crate::fusion::SlimeFusionEngine;

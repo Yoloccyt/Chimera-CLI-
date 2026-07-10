@@ -12,6 +12,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+# P0-9: 推理客户端 HTTP 传输
+reqwest = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

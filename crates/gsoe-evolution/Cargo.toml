@@ -12,6 +12,8 @@ tracing = { workspace = true }
 ndarray = { workspace = true }
 event-bus = { path = "../event-bus" }
 nexus-core = { path = "../nexus-core" }
+# P0-6: 模型采样 HTTP 客户端
+reqwest = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

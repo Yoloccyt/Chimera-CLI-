@@ -28,6 +28,7 @@
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod model_client;
 pub mod policy;
 pub mod types;
 
@@ -35,8 +36,9 @@ pub mod types;
 pub use config::GsoeConfig;
 pub use engine::GsoeEvolutionEngine;
 pub use error::GsoeError;
+pub use model_client::{ModelSampleRequest, ModelSampleResponse, ModelSampler};
 pub use policy::fitness::{evaluate_fitness, evaluate_population};
-pub use policy::grpo::{compute_advantage, sample_rollouts};
+pub use policy::grpo::{compute_advantage, sample_rollouts, sample_rollouts_with_model};
 pub use policy::mutation::{apply_mutation, mutate};
 pub use types::{
     EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout, MutationCandidate, MutationType,
@@ -47,6 +49,7 @@ pub mod prelude {
     pub use crate::config::GsoeConfig;
     pub use crate::engine::GsoeEvolutionEngine;
     pub use crate::error::GsoeError;
+    pub use crate::model_client::{ModelSampleRequest, ModelSampleResponse, ModelSampler};
     pub use crate::types::{
         EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout, MutationCandidate,
         MutationType,

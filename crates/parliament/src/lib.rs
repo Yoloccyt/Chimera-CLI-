@@ -52,6 +52,7 @@
 pub mod ahirt;
 pub mod config;
 pub mod debate;
+pub mod distributed_veto;
 pub mod error;
 pub mod roles;
 pub mod types;
@@ -65,6 +66,9 @@ pub use ahirt::{
 };
 pub use config::{AhirtConfig, ParliamentConfig};
 pub use debate::{DpoPair, DpoPairGenerator, Parliament};
+pub use distributed_veto::{
+    DistributedSkepticCluster, DistributedVetoResult, NodeVetoReason, SkepticNode,
+};
 pub use error::ParliamentError;
 pub use roles::RoleRegistry;
 pub use types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
@@ -72,7 +76,7 @@ pub use veto::{
     IntentRule, MaliciousIntentRuleBook, MaliciousIntentType, RuleAction, Severity, Skeptic,
     VetoOverrideTicket, VetoReason,
 };
-pub use voting::{VoteCounter, VoteResult};
+pub use voting::{BordaVoteCounter, VoteCounter, VoteResult};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
@@ -82,6 +86,9 @@ pub mod prelude {
     };
     pub use crate::config::{AhirtConfig, ParliamentConfig};
     pub use crate::debate::{DpoPair, DpoPairGenerator, Parliament};
+    pub use crate::distributed_veto::{
+        DistributedSkepticCluster, DistributedVetoResult, NodeVetoReason, SkepticNode,
+    };
     pub use crate::error::ParliamentError;
     pub use crate::roles::RoleRegistry;
     pub use crate::types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
@@ -89,5 +96,5 @@ pub mod prelude {
         IntentRule, MaliciousIntentRuleBook, MaliciousIntentType, RuleAction, Severity, Skeptic,
         VetoOverrideTicket, VetoReason,
     };
-    pub use crate::voting::{VoteCounter, VoteResult};
+    pub use crate::voting::{BordaVoteCounter, VoteCounter, VoteResult};
 }

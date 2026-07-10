@@ -21,6 +21,9 @@ use crate::error::CsnError;
 use crate::similarity::cosine_similarity;
 use crate::types::{CapabilityDescriptor, SubstitutionCandidate};
 
+// P0-14:复用mlc-engine的LSH-ANN索引
+use mlc_engine::LshIndex;
+
 /// 替代候选注册表统计 — 监控指标快照
 ///
 /// 用于运行时监控注册表健康度(命中率、容量利用率)。
@@ -72,17 +75,42 @@ pub struct SubstitutionCandidateRegistry {
     /// 高并发下会导致容量超限或重复条目。此锁将 "检查存在性 + 检查容量 + 插入"
     /// 原子化为单一临界区。register 是冷路径(启动/配置加载),序列化开销可接受。
     register_lock: Mutex<()>,
+    /// P0-14:LSH-ANN索引(可选,能力数≥阈值时启用)
+    ///
+    /// WHY:当注册能力数≥lsh_enable_threshold时启用LSH索引,
+    /// 将查询复杂度从O(n)降至O(1)哈希查找+O(k)精确计算。
+    lsh_index: Mutex<Option<LshIndex>>,
+    /// P0-14:LSH启用阈值与配置
+    lsh_enable_threshold: usize,
 }
 
 impl SubstitutionCandidateRegistry {
     /// 创建指定容量的注册表
     pub fn new(capacity: usize) -> Self {
+        Self::with_lsh_config(capacity, 20, 8, 16)
+    }
+
+    /// P0-14:创建带LSH配置的注册表
+    ///
+    /// # 参数
+    /// - `capacity`:注册表容量上限
+    /// - `lsh_enable_threshold`:启用LSH的阈值(能力数≥此值时启用)
+    /// - `lsh_num_tables`:LSH哈希表数
+    /// - `lsh_hash_bits`:每表哈希bit数
+    pub fn with_lsh_config(
+        capacity: usize,
+        lsh_enable_threshold: usize,
+        lsh_num_tables: usize,
+        lsh_hash_bits: usize,
+    ) -> Self {
         Self {
             capabilities: DashMap::new(),
             capacity,
             hits: AtomicUsize::new(0),
             misses: AtomicUsize::new(0),
             register_lock: Mutex::new(()),
+            lsh_index: Mutex::new(None),
+            lsh_enable_threshold,
         }
     }
 
@@ -128,7 +156,7 @@ impl SubstitutionCandidateRegistry {
         }
 
         // entry API 原子化 key 检查:Occupied → 覆盖,Vacant → 插入(容量已预检)
-        match self.capabilities.entry(key) {
+        match self.capabilities.entry(key.clone()) {
             Entry::Occupied(mut e) => {
                 // key 已存在 → 覆盖(更新能力描述符),不改变 len
                 e.insert(cap);
@@ -137,8 +165,29 @@ impl SubstitutionCandidateRegistry {
             Entry::Vacant(e) => {
                 // 新 key → 容量已在 entry() 之前检查通过,直接插入
                 e.insert(cap);
+                // P0-14:更新LSH索引
+                self.rebuild_lsh_index();
                 Ok(())
             }
+        }
+    }
+
+    /// P0-14:重建LSH索引
+    ///
+    /// 当能力数达到阈值时,重建LSH索引以加速查询。
+    /// 重建在register_lock保护下执行,避免并发冲突。
+    fn rebuild_lsh_index(&self) {
+        let count = self.capabilities.len();
+        if count < self.lsh_enable_threshold {
+            return; // 未达阈值,不启用LSH
+        }
+
+        if let Ok(mut lsh_guard) = self.lsh_index.lock() {
+            let mut lsh = LshIndex::new(8, 16, self.lsh_enable_threshold);
+            for (idx, entry) in self.capabilities.iter().enumerate() {
+                lsh.insert(idx, &entry.value().semantic_vector);
+            }
+            *lsh_guard = Some(lsh);
         }
     }
 
@@ -158,12 +207,16 @@ impl SubstitutionCandidateRegistry {
 
     /// 查找替代候选 — 基于余弦相似度选 Top-K(排除自身)
     ///
+    /// P0-14:智能路由 — 能力数 < lsh_enable_threshold 时线性扫描O(n),
+    /// 能力数 ≥ lsh_enable_threshold 时LSH-ANN索引查询O(1)+O(k)。
+    ///
     /// # 流程
     /// 1. 获取目标能力的语义向量(未找到则返回空 Vec,不计入未命中)
-    /// 2. 遍历所有其他能力,计算余弦相似度
-    /// 3. 使用 `select_nth_unstable_by` 选 Top-K(降序,O(n))
-    /// 4. 对 Top-K 内部排序(降序,O(K log K),K << n)
-    /// 5. 按 rank 分配 tier:0=primary, 1=secondary, 2=tertiary(封顶)
+    /// 2. 若LSH索引已启用,使用LSH-ANN获取候选集,再精确计算相似度
+    /// 3. 若LSH未启用,遍历所有其他能力计算余弦相似度(线性扫描)
+    /// 4. 使用 `select_nth_unstable_by` 选 Top-K(降序,O(n))
+    /// 5. 对 Top-K 内部排序(降序,O(K log K),K << n)
+    /// 6. 按 rank 分配 tier:0=primary, 1=secondary, 2=tertiary(封顶)
     ///
     /// # 返回
     /// 按 `similarity_score` 降序排列的 Top-K 候选列表;若 `capability_id`
@@ -179,16 +232,50 @@ impl SubstitutionCandidateRegistry {
             None => return Vec::new(),
         };
 
-        // 收集所有其他能力的 (similarity, candidate_id)
-        let mut scored: Vec<(f32, String)> = self
-            .capabilities
-            .iter()
-            .filter(|r| r.key() != capability_id)
-            .map(|r| {
-                let score = cosine_similarity(&target_vector, &r.value().semantic_vector);
-                (score, r.key().clone())
-            })
-            .collect();
+        // P0-14:智能路由 — LSH索引启用且能力数足够时使用ANN查询
+        let mut scored: Vec<(f32, String)> = if let Ok(lsh_guard) = self.lsh_index.lock() {
+            if let Some(lsh) = lsh_guard.as_ref() {
+                if lsh.is_enabled() {
+                    // LSH-ANN路径:获取候选集,再精确计算相似度
+                    let candidates = lsh.query(&target_vector, 2); // 2 probes
+                    candidates
+                        .into_iter()
+                        .filter_map(|idx| {
+                            self.capabilities.iter().nth(idx).map(|entry| {
+                                if entry.key() != capability_id {
+                                    let score = cosine_similarity(
+                                        &target_vector,
+                                        &entry.value().semantic_vector,
+                                    );
+                                    Some((score.clamp(0.0, 1.0), entry.key().clone()))
+                                } else {
+                                    None
+                                }
+                            })?
+                        })
+                        .collect()
+                } else {
+                    Vec::new() // LSH未启用,回退到线性扫描
+                }
+            } else {
+                Vec::new() // LSH未初始化,回退到线性扫描
+            }
+        } else {
+            Vec::new() // 锁获取失败,回退到线性扫描
+        };
+
+        // 若LSH路径未返回结果(未启用/空候选),回退到线性扫描
+        if scored.is_empty() {
+            scored = self
+                .capabilities
+                .iter()
+                .filter(|r| r.key() != capability_id)
+                .map(|r| {
+                    let score = cosine_similarity(&target_vector, &r.value().semantic_vector);
+                    (score, r.key().clone())
+                })
+                .collect();
+        }
 
         if scored.is_empty() || top_k == 0 {
             return Vec::new();

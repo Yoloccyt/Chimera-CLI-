@@ -16,8 +16,9 @@
 
 use crate::config::GsoeConfig;
 use crate::error::GsoeError;
+use crate::model_client::ModelSampler;
 use crate::policy::fitness::evaluate_population;
-use crate::policy::grpo::{compute_advantage, sample_rollouts};
+use crate::policy::grpo::{compute_advantage, sample_rollouts, sample_rollouts_with_model};
 use crate::policy::mutation::{apply_mutation, mutate};
 use crate::types::{EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
@@ -36,6 +37,8 @@ pub struct GsoeEvolutionEngine {
     generation: u64,
     /// 可选的 EventBus 连接(用于发布 GsoePolicyUpdated 事件)
     event_bus: Option<EventBus>,
+    /// 模型采样客户端(Mock 或真实)
+    model_sampler: ModelSampler,
     /// 待处理的议会共识信号数(作为进化奖励加成)
     pending_consensus_count: u32,
     /// 待处理的红队审计信号数(提升 mutation_rate)
@@ -43,7 +46,7 @@ pub struct GsoeEvolutionEngine {
 }
 
 impl GsoeEvolutionEngine {
-    /// 构造进化引擎(无 EventBus 连接)
+    /// 构造进化引擎(无 EventBus 连接,Mock 模型采样)
     pub fn new(config: GsoeConfig) -> Self {
         let policy = config.to_initial_policy().unwrap_or_else(|_| {
             // 配置非法时回退到 Default(防御性:配置应已在外部校验)
@@ -54,14 +57,34 @@ impl GsoeEvolutionEngine {
             config,
             generation: 0,
             event_bus: None,
+            model_sampler: ModelSampler::mock(),
             pending_consensus_count: 0,
             pending_red_team_count: 0,
         }
     }
 
-    /// 构造进化引擎(带 EventBus 连接)
+    /// 构造进化引擎(带 EventBus 连接,Mock 模型采样)
     pub fn with_event_bus(config: GsoeConfig, bus: EventBus) -> Self {
         let mut engine = Self::new(config);
+        engine.event_bus = Some(bus);
+        engine
+    }
+
+    /// 构造进化引擎(带真实模型采样)
+    ///
+    /// # 参数
+    /// - `config`:进化引擎配置
+    /// - `model_endpoint`:模型服务 HTTP 端点(如 "http://203.0.113.1:8080/v1/sample")
+    /// - `model_timeout_ms`:模型采样请求超时(毫秒)
+    pub fn with_model(config: GsoeConfig, model_endpoint: impl Into<String>, model_timeout_ms: u64) -> Self {
+        let mut engine = Self::new(config);
+        engine.model_sampler = ModelSampler::new(model_endpoint, model_timeout_ms);
+        engine
+    }
+
+    /// 构造进化引擎(带 EventBus 与真实模型采样)
+    pub fn with_event_bus_and_model(config: GsoeConfig, bus: EventBus, model_endpoint: impl Into<String>, model_timeout_ms: u64) -> Self {
+        let mut engine = Self::with_model(config, model_endpoint, model_timeout_ms);
         engine.event_bus = Some(bus);
         engine
     }
@@ -112,7 +135,7 @@ impl GsoeEvolutionEngine {
         }
 
         // 步骤 1:采样
-        let mut rollouts = self.sample_with_signals();
+        let mut rollouts = self.sample_with_signals().await;
 
         // 步骤 2:计算优势 + 评估适应度
         compute_advantage(&mut rollouts);
@@ -158,11 +181,11 @@ impl GsoeEvolutionEngine {
         })
     }
 
-    /// 带信号加成的采样
+    /// 带信号加成的采样 — 支持真实模型采样(P0-6)
     ///
     /// - consensus 信号:每个加 0.1 到 reward 基线(进化奖励)
     /// - red_team 信号:临时提升 mutation_rate(对抗进化)
-    fn sample_with_signals(&self) -> Vec<GrpoRollout> {
+    async fn sample_with_signals(&self) -> Vec<GrpoRollout> {
         // 对抗进化:red_team 信号提升 mutation_rate
         let effective_rate = if self.pending_red_team_count > 0 {
             // 每个红队信号提升 50% mutation_rate,上限 1.0
@@ -175,7 +198,13 @@ impl GsoeEvolutionEngine {
         let mut adjusted_policy = self.current_policy.clone();
         adjusted_policy.mutation_rate = effective_rate;
 
-        let mut rollouts = sample_rollouts(&adjusted_policy, self.config.default_rollout_count);
+        // P0-6: 使用 ModelSampler 进行真实模型采样(Mock 模式自动回退)
+        let mut rollouts = sample_rollouts_with_model(
+            &adjusted_policy,
+            self.config.default_rollout_count,
+            &self.model_sampler,
+        )
+        .await;
 
         // consensus 信号:加到 reward 基线(进化奖励)
         if self.pending_consensus_count > 0 {

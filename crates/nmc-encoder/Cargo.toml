@@ -20,6 +20,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 # 内容哈希(SHA256,生成 CognitiveElement.content_hash)
 sha2 = { workspace = true }
+# P0-1: 语义嵌入 HTTP 客户端
+reqwest = { workspace = true }
 
 [dev-dependencies]
 # 属性测试框架(嵌入不变量验证)

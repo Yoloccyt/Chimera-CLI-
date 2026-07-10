@@ -14,11 +14,13 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use futures::stream::{FuturesUnordered, StreamExt};
 use qeep_protocol::{QeepError as QeepErr, QeepProtocol};
+use tokio::sync::Semaphore;
 use tracing::warn;
 
 use crate::config::GqepConfig;
@@ -41,6 +43,12 @@ pub struct GqepExecutor {
     pub(crate) event_bus: EventBus,
     /// QEEP 协议实例,提供孤儿调用检测(entangle 包裹 + OrphanGuard)
     pub(crate) qeep: QeepProtocol,
+    /// 并发限流信号量(P0-10)
+    ///
+    /// WHY Semaphore:硬限流,防止FuturesUnordered一次性启动所有future导致OOM。
+    /// `max_concurrency`从配置读取,默认100。所有gather调用共享同一Semaphore,
+    /// 保证系统级并发度受控。
+    semaphore: Arc<Semaphore>,
 }
 
 impl GqepExecutor {
@@ -56,10 +64,13 @@ impl GqepExecutor {
     pub fn new(config: GqepConfig, event_bus: EventBus) -> Self {
         let default_timeout = std::time::Duration::from_millis(config.default_timeout_ms);
         let qeep = QeepProtocol::new(default_timeout);
+        // P0-10:初始化Semaphore硬限流,permits取自config.max_concurrency
+        let semaphore = Arc::new(Semaphore::new(config.max_concurrency));
         Self {
             config,
             event_bus,
             qeep,
+            semaphore,
         }
     }
 
@@ -95,16 +106,23 @@ impl GqepExecutor {
         let total = futures.len() as u32;
         let start = Instant::now();
 
-        // 将每个 future 经 QEEP entangle 包裹后放入 FuturesUnordered
+        // P0-10:Semaphore硬限流 — 限制同时pending的future数量
+        // 防止FuturesUnordered一次性放入所有future导致内存峰值过高
+        let semaphore = Arc::clone(&self.semaphore);
+
+        // 将每个 future 经 QEEP entangle 包裹,并通过Semaphore限流
         // WHY entangle:利用 OrphanGuard 在 future drop 时检测孤儿调用,
         // 同时 entangle 内部用 tokio::time::timeout 提供单操作超时保护
         let stream: FuturesUnordered<GqepFuture<String>> = FuturesUnordered::new();
         for future in futures {
             let qeep = self.qeep.clone();
-            // 将 GqepFuture<String> 经 entangle 包裹,转换为 GqepFuture<String>
-            // 内部做 GqepError <-> QeepError 错误映射(entangle 要求 QeepError)
+            // P0-10:获取Semaphore permit,限制并发度
+            // permit在future完成时自动释放
+            let permit = semaphore.clone().acquire_owned().await;
             let entangled: GqepFuture<String> = Box::pin(async move {
-                // 将 GqepFuture 转换为 entangle 要求的 Future<Output=Result<String, QeepError>>
+                // Permit在future完成时自动释放
+                let _permit = permit;
+                // 将 GqepFuture 转换为 entangle 要求的 Future<Output=Result<String, QeepErr>>
                 let mapped: Pin<Box<dyn Future<Output = Result<String, QeepErr>> + Send>> =
                     Box::pin(async move { future.await.map_err(map_gqep_to_qeep) });
                 // entangle 提供孤儿检测 + 单操作超时

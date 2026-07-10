@@ -31,12 +31,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+pub mod budget_coordinator;
 pub mod config;
 pub mod error;
 pub mod governor;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use budget_coordinator::{BudgetCoordinator, UnifiedBudgetDecision, UnifiedBudgetStatus};
 pub use config::AcbGovernorConfig;
 pub use error::AcbError;
 pub use governor::AcbGovernor;
@@ -44,6 +46,7 @@ pub use types::{BudgetAllocation, BudgetRequest, BudgetStatus, BudgetTier, TierS
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
+    pub use crate::budget_coordinator::{BudgetCoordinator, UnifiedBudgetDecision, UnifiedBudgetStatus};
     pub use crate::config::AcbGovernorConfig;
     pub use crate::error::AcbError;
     pub use crate::governor::AcbGovernor;

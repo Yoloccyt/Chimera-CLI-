@@ -157,6 +157,52 @@ impl MetricCollector for EventMetricCollector {
     }
 }
 
+// ============================================================
+// P2-2: 统一 MetricsCollector 注册表
+// ============================================================
+
+/// 采集器注册表 — 聚合多个 MetricCollector 的统一采集入口
+///
+/// P2-2: 统一 MetricsCollector+Prometheus
+///
+/// 支持注册多个命名采集器,`collect_all()` 汇总所有采集器的样本,
+/// 输出统一的 Prometheus 文本格式。
+#[derive(Default)]
+pub struct CollectorRegistry {
+    collectors: std::sync::Mutex<Vec<(String, Box<dyn MetricCollector>)>>,
+}
+
+impl CollectorRegistry {
+    /// 创建新的采集器注册表
+    pub fn new() -> Self {
+        Self {
+            collectors: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// 注册采集器
+    pub fn register(&self, name: impl Into<String>, collector: Box<dyn MetricCollector>) {
+        let mut guard = self.collectors.lock().unwrap();
+        guard.push((name.into(), collector));
+    }
+
+    /// 采集所有注册采集器的样本
+    pub fn collect_all(&self) -> Vec<MetricSample> {
+        let guard = self.collectors.lock().unwrap();
+        let mut all_samples = Vec::new();
+        for (_, collector) in guard.iter() {
+            all_samples.extend(collector.collect());
+        }
+        all_samples
+    }
+
+    /// 渲染 Prometheus 文本格式
+    pub fn render_prometheus(&self) -> String {
+        let samples = self.collect_all();
+        crate::dashboard::render_samples(&samples)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

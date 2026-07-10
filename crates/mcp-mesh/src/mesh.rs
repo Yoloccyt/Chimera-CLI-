@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 use crate::config::MeshConfig;
 use crate::error::McpError;
+use crate::protocol::json_rpc::JsonRpcClient;
 use crate::quantum::superposition::{execute_superposition_query, QueryResult, SuperpositionQuery};
 use crate::quantum::transaction::{QuantumTransaction, TransactionState};
 use crate::server_registry::{MeshServer, ServerRegistry};
@@ -40,16 +41,24 @@ pub struct McpMesh {
     registry: Arc<ServerRegistry>,
     /// 可选事件总线(事务完成时发布事件)
     event_bus: Option<EventBus>,
+    /// JSON-RPC 客户端(真实网络或 Mock 模式)
+    rpc_client: JsonRpcClient,
 }
 
 impl McpMesh {
     /// 创建 MCP Mesh(无 EventBus,不发布事件)
     pub fn new(config: MeshConfig) -> Self {
         let registry = Arc::new(ServerRegistry::new(config.registry_capacity));
+        let rpc_client = if config.json_rpc_mock {
+            JsonRpcClient::mock()
+        } else {
+            JsonRpcClient::new(config.json_rpc_timeout_ms)
+        };
         Self {
             config,
             registry,
             event_bus: None,
+            rpc_client,
         }
     }
 
@@ -59,10 +68,16 @@ impl McpMesh {
     /// 调用 `start_event_subscriber` 可订阅 `ChtcToolCallReceived` 处理 IDE 工具调用。
     pub fn with_event_bus(config: MeshConfig, bus: EventBus) -> Self {
         let registry = Arc::new(ServerRegistry::new(config.registry_capacity));
+        let rpc_client = if config.json_rpc_mock {
+            JsonRpcClient::mock()
+        } else {
+            JsonRpcClient::new(config.json_rpc_timeout_ms)
+        };
         Self {
             config,
             registry,
             event_bus: Some(bus),
+            rpc_client,
         }
     }
 
@@ -166,7 +181,7 @@ impl McpMesh {
                     "事务超时,触发回滚"
                 );
                 timed_out = true;
-                let _ = self.rollback_phase(&participants).await;
+                let _ = self.rollback_phase(&participants, &tx_id).await;
                 TransactionResult::failed(tx_id.clone(), start.elapsed().as_millis() as u64)
             }
         };
@@ -197,11 +212,11 @@ impl McpMesh {
         tx.transition(TransactionState::Prepare)?;
 
         // Prepare 阶段:并发向所有参与者发 prepare
-        match self.prepare_phase(&tx.participant_servers, op).await {
+        match self.prepare_phase(&tx.participant_servers, op, &tx.transaction_id).await {
             Ok(()) => {
                 // 全部 ACK → Commit
                 tx.transition(TransactionState::Commit)?;
-                self.commit_phase(&tx.participant_servers).await?;
+                self.commit_phase(&tx.participant_servers, &tx.transaction_id).await?;
                 Ok(Some(tx.participant_servers.clone()))
             }
             Err(e) => {
@@ -212,27 +227,43 @@ impl McpMesh {
                     "Prepare 阶段失败,触发回滚"
                 );
                 tx.transition(TransactionState::Abort)?;
-                self.rollback_phase(&tx.participant_servers).await?;
+                self.rollback_phase(&tx.participant_servers, &tx.transaction_id).await?;
                 tx.transition(TransactionState::Rollback)?;
                 Ok(None)
             }
         }
     }
 
-    /// Prepare 阶段 — 并发向所有参与者发送 prepare 请求
+    /// Prepare 阶段 — 并发向所有参与者发送 JSON-RPC prepare 请求
     ///
-    /// in-process mock:用 `tokio::time::sleep` 模拟网络往返(1-2ms/服务器)。
-    /// 任一参与者失败则整体失败(此处 mock 始终成功)。
-    async fn prepare_phase(&self, participants: &[String], _op: &str) -> Result<(), McpError> {
+    /// 真实模式:通过 `JsonRpcClient` 向每个参与者的 endpoint 发送 `mcp.prepare`。
+    /// Mock 模式:保留 `tokio::time::sleep` 模拟网络往返(1-2ms/服务器),始终成功。
+    /// 任一参与者失败则整体失败。
+    async fn prepare_phase(&self, participants: &[String], op: &str, tx_id: &str) -> Result<(), McpError> {
         use tokio::task::JoinSet;
         let mut set: JoinSet<Result<(), McpError>> = JoinSet::new();
         for sid in participants {
             let sid = sid.clone();
+            let op = op.to_string();
+            let tx_id = tx_id.to_string();
+            let client = self.rpc_client.clone();
+            let endpoint = self.registry.get(&sid).map(|s| s.endpoint.clone());
             set.spawn(async move {
-                // 模拟 prepare 网络往返(1-2ms,基于 server_id 哈希)
-                let delay_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 2);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                Ok(())
+                match endpoint {
+                    Some(ep) => {
+                        let result = client.prepare(&ep, &tx_id, &op, &sid).await?;
+                        if result.ack {
+                            Ok(())
+                        } else {
+                            Err(McpError::ServerUnreachable {
+                                server_id: sid.clone(),
+                            })
+                        }
+                    }
+                    None => Err(McpError::ServerNotFound {
+                        server_id: sid.clone(),
+                    }),
+                }
             });
         }
         // 收集所有结果,任一失败则返回错误
@@ -244,16 +275,31 @@ impl McpMesh {
         Ok(())
     }
 
-    /// Commit 阶段 — 并发向所有参与者发送 commit 请求
-    async fn commit_phase(&self, participants: &[String]) -> Result<(), McpError> {
+    /// Commit 阶段 — 并发向所有参与者发送 JSON-RPC commit 请求
+    async fn commit_phase(&self, participants: &[String], tx_id: &str) -> Result<(), McpError> {
         use tokio::task::JoinSet;
         let mut set: JoinSet<Result<(), McpError>> = JoinSet::new();
         for sid in participants {
             let sid = sid.clone();
+            let tx_id = tx_id.to_string();
+            let client = self.rpc_client.clone();
+            let endpoint = self.registry.get(&sid).map(|s| s.endpoint.clone());
             set.spawn(async move {
-                let delay_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 2);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                Ok(())
+                match endpoint {
+                    Some(ep) => {
+                        let result = client.commit(&ep, &tx_id).await?;
+                        if result.ack {
+                            Ok(())
+                        } else {
+                            Err(McpError::ServerUnreachable {
+                                server_id: sid.clone(),
+                            })
+                        }
+                    }
+                    None => Err(McpError::ServerNotFound {
+                        server_id: sid.clone(),
+                    }),
+                }
             });
         }
         while let Some(res) = set.join_next().await {
@@ -264,15 +310,21 @@ impl McpMesh {
         Ok(())
     }
 
-    /// Rollback 阶段 — 并发向所有参与者发送 rollback 请求(best-effort,失败仅告警)
-    async fn rollback_phase(&self, participants: &[String]) -> Result<(), McpError> {
+    /// Rollback 阶段 — 并发向所有参与者发送 JSON-RPC rollback 请求(best-effort,失败仅告警)
+    async fn rollback_phase(&self, participants: &[String], tx_id: &str) -> Result<(), McpError> {
         use tokio::task::JoinSet;
         let mut set: JoinSet<()> = JoinSet::new();
         for sid in participants {
             let sid = sid.clone();
+            let tx_id = tx_id.to_string();
+            let client = self.rpc_client.clone();
+            let endpoint = self.registry.get(&sid).map(|s| s.endpoint.clone());
             set.spawn(async move {
-                let delay_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 2);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                if let Some(ep) = endpoint {
+                    if let Err(e) = client.rollback(&ep, &tx_id, Some("2PC abort")).await {
+                        warn!(server_id = %sid, error = %e, "Rollback 请求失败(best-effort)");
+                    }
+                }
             });
         }
         // 等待所有回滚完成(忽略错误)
@@ -285,7 +337,13 @@ impl McpMesh {
         &self,
         query: SuperpositionQuery,
     ) -> Result<Vec<QueryResult>, McpError> {
-        execute_superposition_query(&query, &self.registry, self.config.heartbeat_timeout_ms).await
+        execute_superposition_query(
+            &query,
+            &self.registry,
+            self.config.heartbeat_timeout_ms,
+            Some(&self.rpc_client),
+        )
+        .await
     }
 
     /// 发布 `McpMeshTransactionCompleted` 事件(best-effort,失败仅告警)
