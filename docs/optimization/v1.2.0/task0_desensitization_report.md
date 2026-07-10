@@ -11,7 +11,7 @@
 | 模式 | 用途 |
 |------|------|
 | `api_key|secret|password|token|private_key|credential|bearer|auth_token|access_key|AWS_|GITHUB_TOKEN` | 凭据/密钥/认证信息 |
-| `C:\Users\30324|/home/30324|/Users/30324` | 个人路径信息 |
+| `C:\Users\<USERNAME>|/home/<USERNAME>|/Users/<USERNAME>` | 个人路径信息 |
 
 ## 2. 扫描结果
 

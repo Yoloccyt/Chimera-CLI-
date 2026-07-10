@@ -26,7 +26,7 @@ v1.2.0-omega 阶段的 4 项延后优化任务(I1 MoE 稀疏门控 / N15 repo-wi
 
 **扫描方法**:case-insensitive grep 双模式扫描——
 - 凭据/密钥模式:`api_key|secret|password|token|private_key|credential|bearer|auth_token|access_key|AWS_|GITHUB_TOKEN`
-- 个人路径模式:`C:\Users\30324|/home/30324|/Users/30324`
+- 个人路径模式:`C:\Users\<USERNAME>|/home/<USERNAME>|/Users/<USERNAME>`
 
 **扫描结果**:
 - **凭据扫描全部假阳性**——`crates/chimera-cli/src/config.rs:224` `auth: password` 为 MCP 认证类型枚举值示例;`crates/acb-governor/src/*.rs` 多处 `token_limit`/`requested_tokens`/`cost_per_token` 为 LLM token 预算管理领域术语;`docs/security/week8_security_report.md` `SECRET_KEY=super_secret_value` 为 OWASP A03 测试用例载荷。
