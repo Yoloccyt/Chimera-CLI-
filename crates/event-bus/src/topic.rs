@@ -151,7 +151,11 @@ impl NexusEvent {
             | Self::ChtcToolCallReceived { .. }
             | Self::McpMeshTransactionCompleted { .. }
             | Self::CsnSubstitutionTriggered { .. }
-            | Self::EfficiencyAlertTriggered { .. } => EventTopic::System,
+            | Self::EfficiencyAlertTriggered { .. }
+            // Task 11 (N16): ChainExhausted 属于 System 主题
+            // WHY:CSN 降级链耗尽是 L10 Interface 层的系统级告警事件,
+            // 与 CsnSubstitutionTriggered 同属 CSN 能力替代域,归为 System
+            | Self::ChainExhausted { .. } => EventTopic::System,
 
             // === Knowledge (4) === L5 Knowledge 知识沉淀与进化
             Self::WikiUpdated { .. }
@@ -377,5 +381,19 @@ mod tests {
             cache_key: "k-1".into(),
         };
         assert_eq!(e.topic(), EventTopic::Storage);
+    }
+
+    #[test]
+    fn test_topic_mapping_chain_exhausted() {
+        let e = NexusEvent::ChainExhausted {
+            metadata: EventMetadata::new("csn-substitutor"),
+            chain_id: "cap-1".into(),
+            last_error: "降级链已耗尽".into(),
+        };
+        assert_eq!(
+            e.topic(),
+            EventTopic::System,
+            "ChainExhausted 属于 System 主题(CSN 降级链事件)"
+        );
     }
 }

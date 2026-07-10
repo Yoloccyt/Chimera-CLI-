@@ -43,7 +43,9 @@ pub mod types;
 pub use config::MeshConfig;
 pub use error::McpError;
 pub use mesh::McpMesh;
-pub use protocol::json_rpc::{JsonRpcClient, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse};
+pub use protocol::json_rpc::{
+    JsonRpcClient, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+};
 pub use quantum::entanglement::{EntanglementLink, EntanglementManager, SyncStrategy};
 pub use quantum::superposition::{QueryResult, SuperpositionQuery};
 pub use quantum::transaction::{QuantumTransaction, TransactionState};
@@ -55,7 +57,9 @@ pub mod prelude {
     pub use crate::config::MeshConfig;
     pub use crate::error::McpError;
     pub use crate::mesh::McpMesh;
-    pub use crate::protocol::json_rpc::{JsonRpcClient, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse};
+    pub use crate::protocol::json_rpc::{
+        JsonRpcClient, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+    };
     pub use crate::quantum::entanglement::{EntanglementLink, EntanglementManager, SyncStrategy};
     pub use crate::quantum::superposition::{QueryResult, SuperpositionQuery};
     pub use crate::quantum::transaction::{QuantumTransaction, TransactionState};

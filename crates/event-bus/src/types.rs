@@ -44,6 +44,13 @@ impl EventMetadata {
 pub enum EventSeverity {
     /// 普通事件:可被背压策略丢弃
     Normal,
+    /// 警告事件:降级链耗尽、非致命异常等,建议优先投递但允许背压丢弃
+    ///
+    /// WHY:ChainExhausted 等降级链耗尽事件属于监控告警级别,
+    /// 不如 Critical 致命(不会导致数据不一致或安全漏洞),但比
+    /// Normal 重要(运维需监控降级链耗尽率以评估系统健康度)。
+    /// 介于二者之间,新增 Warning 级别明确语义。
+    Warning,
     /// 关键事件:检查点、共识、安全告警等,不可丢弃
     ///
     /// WHY:CheckpointSaved 等事件丢失会导致 Quest 无法恢复,
@@ -1097,6 +1104,31 @@ pub enum NexusEvent {
         /// 阈值
         threshold: f64,
     },
+
+    // ============================================================
+    // Task 11 (N16): CSN 降级链耗尽事件
+    //
+    // WHY:原实现仅用 warn! 日志记录降级链耗尽,存在监控盲区——
+    // 运维无法通过 EventBus 订阅统计降级链耗尽率、定位哪些能力
+    // 频繁耗尽。新增此事件后,efficiency-monitor 可订阅统计指标,
+    // Lead Architect 可据此告警。warn! 日志仍保留(向后兼容)。
+    // Warning 级别:不如 Critical 致命(不会导致数据不一致),
+    // 但比 Normal 重要(需监控系统健康度)。
+    // ============================================================
+    /// CSN 降级链已耗尽 — L10 Interface(csn-substitutor)→ 任意订阅者
+    ///
+    /// WHY:降级链耗尽意味着所有替代方案均不可达,能力完全失效。
+    /// 原实现仅 warn! 日志,存在监控盲区;新增事件供
+    /// efficiency-monitor 统计耗尽率、Lead Architect 触发告警。
+    /// warn! 日志仍保留(向后兼容),事件是额外补充。
+    ChainExhausted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 耗尽的降级链 ID(通常等于 capability_id)
+        chain_id: String,
+        /// 最后一个错误的描述信息(来自 CsnError::ChainExhausted 的 Display)
+        last_error: String,
+    },
 }
 
 impl NexusEvent {
@@ -1169,7 +1201,8 @@ impl NexusEvent {
             | Self::McpMeshTransactionCompleted { metadata, .. }
             | Self::CsnSubstitutionTriggered { metadata, .. }
             | Self::SesaActivationCompleted { metadata, .. }
-            | Self::EfficiencyAlertTriggered { metadata, .. } => metadata,
+            | Self::EfficiencyAlertTriggered { metadata, .. }
+            | Self::ChainExhausted { metadata, .. } => metadata,
         }
     }
 
@@ -1207,6 +1240,11 @@ impl NexusEvent {
             | Self::VetoOverridden { .. }
             | Self::RedTeamAudit { .. }
             | Self::BudgetExceeded { .. } => EventSeverity::Critical,
+            // Task 11 (N16): ChainExhausted 为 Warning 级别
+            // WHY:降级链耗尽意味着所有替代方案不可达,能力完全失效,
+            // 但不会导致数据不一致或安全漏洞(不如 Critical 致命),
+            // 运维需监控此指标评估系统健康度(比 Normal 重要)
+            Self::ChainExhausted { .. } => EventSeverity::Warning,
             _ => EventSeverity::Normal,
         }
     }
@@ -1281,6 +1319,7 @@ impl NexusEvent {
             Self::CsnSubstitutionTriggered { .. } => "CsnSubstitutionTriggered",
             Self::SesaActivationCompleted { .. } => "SesaActivationCompleted",
             Self::EfficiencyAlertTriggered { .. } => "EfficiencyAlertTriggered",
+            Self::ChainExhausted { .. } => "ChainExhausted",
         }
     }
 }
@@ -1848,6 +1887,50 @@ mod tests {
             veto_reason: "sandbox_escape /proc/".into(),
             override_reason: "monitoring use case".into(),
             override_by: "admin:bob".into(),
+        };
+        let bytes = crate::bus::serialize_msgpack(&e).unwrap();
+        let decoded = crate::bus::deserialize_msgpack(&bytes).unwrap();
+        assert_eq!(e, decoded);
+    }
+
+    // ============================================================
+    // Task 11 (N16): ChainExhausted 事件测试
+    // ============================================================
+
+    #[test]
+    fn test_chain_exhausted_has_warning_severity() {
+        let e = NexusEvent::ChainExhausted {
+            metadata: EventMetadata::new("csn-substitutor"),
+            chain_id: "cap-shell-exec".into(),
+            last_error: "降级链已耗尽(共 3 级)".into(),
+        };
+        assert_eq!(
+            e.severity(),
+            EventSeverity::Warning,
+            "ChainExhausted 应为 Warning 级别(既不是 Critical 也不是 Normal)"
+        );
+        assert_eq!(e.type_name(), "ChainExhausted");
+        assert_eq!(e.metadata().source, "csn-substitutor");
+    }
+
+    #[test]
+    fn test_chain_exhausted_serialization_roundtrip() {
+        let e = NexusEvent::ChainExhausted {
+            metadata: EventMetadata::new("csn-substitutor"),
+            chain_id: "fs-write".into(),
+            last_error: "降级链已耗尽: fs-write(共 4 级)".into(),
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let restored: NexusEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, restored);
+    }
+
+    #[test]
+    fn test_chain_exhausted_msgpack_roundtrip() {
+        let e = NexusEvent::ChainExhausted {
+            metadata: EventMetadata::new("csn-substitutor"),
+            chain_id: "shell-exec".into(),
+            last_error: "降级链已耗尽: shell-exec(共 3 级)".into(),
         };
         let bytes = crate::bus::serialize_msgpack(&e).unwrap();
         let decoded = crate::bus::deserialize_msgpack(&bytes).unwrap();

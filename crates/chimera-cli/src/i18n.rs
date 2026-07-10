@@ -211,10 +211,11 @@ fn is_hangul(ch: char) -> bool {
 
 /// 判断是否为标点符号
 fn is_punctuation(ch: char) -> bool {
-    ch.is_ascii_punctuation() || matches!(ch,
-        '\u{3000}'..='\u{303F}' | // CJK Symbols and Punctuation
-        '\u{FF00}'..='\u{FFEF}'    // Halfwidth and Fullwidth Forms
-    )
+    ch.is_ascii_punctuation()
+        || matches!(ch,
+            '\u{3000}'..='\u{303F}' | // CJK Symbols and Punctuation
+            '\u{FF00}'..='\u{FFEF}'    // Halfwidth and Fullwidth Forms
+        )
 }
 
 #[cfg(test)]

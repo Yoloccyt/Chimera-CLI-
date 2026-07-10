@@ -79,8 +79,10 @@ pub async fn sample_rollouts_with_model(
     for i in 0..count {
         let trajectory_id = format!("traj-{i}");
         let req = crate::model_client::ModelSampleRequest {
-            prompt: format!("mutation_rate={:.4},selection_pressure={:.4}",
-                policy.mutation_rate, policy.selection_pressure),
+            prompt: format!(
+                "mutation_rate={:.4},selection_pressure={:.4}",
+                policy.mutation_rate, policy.selection_pressure
+            ),
             temperature: policy.mutation_rate,
             action_dim: ACTION_DIM,
             trajectory_id: trajectory_id.clone(),
@@ -90,7 +92,8 @@ pub async fn sample_rollouts_with_model(
             Ok(resp) => {
                 let reward = resp.estimated_reward.unwrap_or_else(|| {
                     // 本地计算 reward:负距离
-                    let distance = resp.actions
+                    let distance = resp
+                        .actions
                         .iter()
                         .map(|a| (a - OPTIMAL_ACTION).abs())
                         .sum::<f32>()

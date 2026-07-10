@@ -18,7 +18,7 @@ use tracing::debug;
 
 use crate::config::MtpeConfig;
 use crate::error::MtpeError;
-use crate::inference_client::{InferenceClient, InferenceRequest, to_mtpe_tokens};
+use crate::inference_client::{to_mtpe_tokens, InferenceClient, InferenceRequest};
 use crate::types::{PredictionContext, PredictionResult, PredictionStats, Token};
 
 /// 模拟推理启动开销 — 每次 predict 调用的固定延迟

@@ -138,9 +138,7 @@ impl DistributedSkepticCluster {
     /// 创建带自定义规则库的 3 节点集群
     ///
     /// 每个节点使用不同的规则库,提升覆盖度。
-    pub fn with_diverse_rules(
-        rule_books: Vec<crate::veto::MaliciousIntentRuleBook>,
-    ) -> Self {
+    pub fn with_diverse_rules(rule_books: Vec<crate::veto::MaliciousIntentRuleBook>) -> Self {
         let nodes: Vec<SkepticNode> = rule_books
             .into_iter()
             .enumerate()
@@ -221,7 +219,11 @@ fn build_consensus_reason(node_reasons: &[NodeVetoReason]) -> String {
         .iter()
         .map(|nr| format!("[{}] {}", nr.node_id, nr.reason.intent_type.as_str()))
         .collect();
-    format!("分布式否决共识({}): {}", node_reasons.len(), parts.join("; "))
+    format!(
+        "分布式否决共识({}): {}",
+        node_reasons.len(),
+        parts.join("; ")
+    )
 }
 
 /// 合并冻结能力列表 — 去重并集
@@ -249,19 +251,28 @@ mod tests {
         // 节点 0: 仅命令注入规则
         let mut rb0 = MaliciousIntentRuleBook::new();
         rb0.rules.retain(|r| {
-            matches!(r.intent_type, crate::veto::MaliciousIntentType::CommandInjection)
+            matches!(
+                r.intent_type,
+                crate::veto::MaliciousIntentType::CommandInjection
+            )
         });
 
         // 节点 1: 仅提权规则
         let mut rb1 = MaliciousIntentRuleBook::new();
         rb1.rules.retain(|r| {
-            matches!(r.intent_type, crate::veto::MaliciousIntentType::PrivilegeEscalation)
+            matches!(
+                r.intent_type,
+                crate::veto::MaliciousIntentType::PrivilegeEscalation
+            )
         });
 
         // 节点 2: 仅数据外传规则
         let mut rb2 = MaliciousIntentRuleBook::new();
         rb2.rules.retain(|r| {
-            matches!(r.intent_type, crate::veto::MaliciousIntentType::DataExfiltration)
+            matches!(
+                r.intent_type,
+                crate::veto::MaliciousIntentType::DataExfiltration
+            )
         });
 
         DistributedSkepticCluster::with_diverse_rules(vec![rb0, rb1, rb2])
@@ -389,7 +400,10 @@ mod tests {
         let result = cluster.deliberate(&proposal);
 
         match result {
-            DistributedVetoResult::Vetoed { frozen_capabilities, .. } => {
+            DistributedVetoResult::Vetoed {
+                frozen_capabilities,
+                ..
+            } => {
                 // 应包含提权和数据外传的能力冻结
                 assert!(
                     frozen_capabilities.contains(&"sudo".to_string()),
@@ -411,7 +425,9 @@ mod tests {
         let result = cluster.deliberate(&proposal);
 
         match result {
-            DistributedVetoResult::Vetoed { consensus_reason, .. } => {
+            DistributedVetoResult::Vetoed {
+                consensus_reason, ..
+            } => {
                 assert!(consensus_reason.contains("分布式否决共识"));
                 assert!(consensus_reason.contains("command_injection"));
             }

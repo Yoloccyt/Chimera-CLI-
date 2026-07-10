@@ -14,6 +14,8 @@ fn make_input(content: &str, keywords: Vec<&str>, complexity: f32) -> OperationA
         content: content.to_string(),
         risk_keywords: keywords.iter().map(|s| s.to_string()).collect(),
         complexity_score: complexity,
+        semantic_vector: None,
+        reference_risk_vectors: Vec::new(),
     }
 }
 

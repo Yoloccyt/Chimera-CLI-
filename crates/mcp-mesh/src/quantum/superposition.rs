@@ -167,18 +167,16 @@ pub async fn execute_superposition_query(
 
             match (client, endpoint) {
                 // 真实 JSON-RPC 模式
-                (Some(client), Some(ep)) => {
-                    match client.query(&ep, &qid, &qtext, &sid).await {
-                        Ok(result) => {
-                            let latency_ms = start.elapsed().as_millis() as u64;
-                            QueryResult::ok(qid, sid, latency_ms, result.payload)
-                        }
-                        Err(e) => {
-                            let latency_ms = start.elapsed().as_millis() as u64;
-                            QueryResult::err(qid, sid, latency_ms, format!("{e}"))
-                        }
+                (Some(client), Some(ep)) => match client.query(&ep, &qid, &qtext, &sid).await {
+                    Ok(result) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        QueryResult::ok(qid, sid, latency_ms, result.payload)
                     }
-                }
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        QueryResult::err(qid, sid, latency_ms, format!("{e}"))
+                    }
+                },
                 // Mock 模式(无 rpc_client 或 endpoint)
                 _ => {
                     let processing_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 3);

@@ -94,7 +94,10 @@ impl ModelSampler {
     ///
     /// Mock 模式:使用 LCG 生成伪随机动作向量(与原有行为一致)。
     /// 真实模式:HTTP POST 到模型服务端点,返回模型生成的动作向量。
-    pub async fn sample(&self, request: ModelSampleRequest) -> Result<ModelSampleResponse, GsoeError> {
+    pub async fn sample(
+        &self,
+        request: ModelSampleRequest,
+    ) -> Result<ModelSampleResponse, GsoeError> {
         if self.mock {
             return Ok(self.mock_sample(&request));
         }
@@ -102,9 +105,12 @@ impl ModelSampler {
         let http = self.http.as_ref().ok_or_else(|| GsoeError::ConfigError {
             reason: "HTTP client 初始化失败".into(),
         })?;
-        let endpoint = self.endpoint.as_ref().ok_or_else(|| GsoeError::ConfigError {
-            reason: "模型服务端点未配置".into(),
-        })?;
+        let endpoint = self
+            .endpoint
+            .as_ref()
+            .ok_or_else(|| GsoeError::ConfigError {
+                reason: "模型服务端点未配置".into(),
+            })?;
 
         let resp = http
             .post(endpoint)

@@ -18,10 +18,15 @@
 //! 3. 沙箱执行(execute_in_sandbox):进程隔离(Windows 降级)/gVisor(Linux)
 //! 4. 审计记录(audit_chain.append):SHA-256 Merkle 链,不可篡改
 
-use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+#[cfg(not(windows))]
+use std::process::Stdio;
+#[cfg(not(windows))]
+use std::time::Instant;
+#[cfg(not(windows))]
 use sha2::{Digest, Sha256};
+#[cfg(not(windows))]
 use tokio::process::Command as TokioCommand;
 use tracing::info;
 
@@ -190,8 +195,7 @@ impl Sandbox {
         // Windows 平台:使用 WindowsSandboxExecutor 实现三层降级隔离
         #[cfg(windows)]
         {
-            let executor = WindowsSandboxExecutor::new(self.timeout)
-                .with_job_object(true);
+            let executor = WindowsSandboxExecutor::new(self.timeout).with_job_object(true);
             return executor.execute(spec).await;
         }
 
@@ -202,11 +206,9 @@ impl Sandbox {
         }
     }
 
-    /// 标准进程隔离(跨平台降级)
-    async fn execute_standard(
-        &self,
-        spec: &CommandSpec,
-    ) -> Result<ExecutionResult, SecCoreError> {
+    /// 标准进程隔离(跨平台降级,非Windows平台使用)
+    #[cfg(not(windows))]
+    async fn execute_standard(&self, spec: &CommandSpec) -> Result<ExecutionResult, SecCoreError> {
         let start = Instant::now();
 
         // 构建子进程命令
@@ -275,6 +277,7 @@ impl Sandbox {
 /// 哈希内容:exit_code || stdout || stderr || duration_nanos。
 /// 此哈希存储在 `ExecutionResult.audit_hash`,用于快速比对。
 /// 审计链验证时会重新计算(不信任此字段),防止篡改。
+#[cfg(not(windows))]
 fn compute_audit_hash(exit_code: i32, stdout: &str, stderr: &str, duration: Duration) -> String {
     let mut hasher = Sha256::new();
     hasher.update(exit_code.to_le_bytes());

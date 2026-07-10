@@ -183,7 +183,18 @@ impl CsnSubstitutor {
             .ok_or_else(|| CsnError::ChainNotFound {
                 chain_id: chain_id.to_string(),
             })?;
-        chain.next_level()
+        match chain.next_level() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Task 11 (N16):降级链已耗尽时,除了返回错误,还发布 ChainExhausted 事件
+                // WHY:公开 API 调用方可能只处理 Result 不记录日志,
+                // 发布事件确保监控系统能捕获到所有耗尽场景(消除监控盲区)。
+                // warn! 日志在 start_degradation_listener 中已有,此处不重复
+                warn!(chain_id = %chain_id, error = %e, "降级链已耗尽");
+                self.publish_chain_exhausted(chain_id, &e);
+                Err(e)
+            }
+        }
     }
 
     /// 获取降级链当前层级(若存在)
@@ -231,7 +242,11 @@ impl CsnSubstitutor {
         // 反映到原始 substitutor(Week 7 Task 2.5 关键 bug 修复)
         let chains = Arc::clone(&self.chains);
 
-        // 在 spawn 之前同步订阅,确保不丢失后续事件
+        // WHY clone 两次 bus:一次用于 subscribe(接收事件),
+        // 一次用于 publish_blocking(发布 ChainExhausted 事件)。
+        // EventBus 是 Arc 引用计数,clone 低成本。
+        // 必须在 spawn 之前 subscribe(Week 6 教训 #9),bus_pub 可在闭包内 move
+        let bus_pub = bus.clone();
         let mut rx = bus.subscribe();
 
         Some(tokio::spawn(async move {
@@ -240,9 +255,23 @@ impl CsnSubstitutor {
                     // 事务失败:推进所有现有降级链
                     // WHY:事务失败可能是能力不可达导致,推进降级链触发下一级替代
                     for mut chain in chains.iter_mut() {
-                        if chain.next_level().is_err() {
-                            // 降级链已耗尽,记录日志后跳过
-                            warn!(chain_id = chain.chain_id, "降级链已耗尽,无法继续推进");
+                        match chain.next_level() {
+                            Ok(()) => {}
+                            Err(e) => {
+                                // 降级链已耗尽:保留 warn! 日志(向后兼容),
+                                // 同时发布 ChainExhausted 事件(N16,消除监控盲区)
+                                let chain_id = chain.chain_id.clone();
+                                warn!(chain_id = %chain_id, error = %e, "降级链已耗尽,无法继续推进");
+                                // 发布事件(best-effort,失败仅记录日志)
+                                let event = NexusEvent::ChainExhausted {
+                                    metadata: EventMetadata::new("csn-substitutor"),
+                                    chain_id: chain_id.clone(),
+                                    last_error: format!("{e}"),
+                                };
+                                if let Err(pub_err) = bus_pub.publish_blocking(event) {
+                                    warn!(error = %pub_err, chain_id = %chain_id, "CSN 降级链耗尽事件发布失败");
+                                }
+                            }
                         }
                     }
                 }
@@ -261,7 +290,12 @@ impl CsnSubstitutor {
         // 若已有降级链,推进;否则创建新链
         if let Some(mut chain) = self.chains.get_mut(original_id) {
             // 已存在:推进到下一级(若已耗尽则保持当前层级)
-            let _ = chain.next_level();
+            // Task 11 (N16):即使调用方选择静默忽略耗尽错误(保持当前层级),
+            // 仍发布 ChainExhausted 事件供监控系统捕获(消除监控盲区)
+            if let Err(e) = chain.next_level() {
+                warn!(chain_id = %original_id, error = %e, "降级链推进失败(已耗尽,保持当前层级)");
+                self.publish_chain_exhausted(original_id, &e);
+            }
             return Ok(chain.current_level() as u32);
         }
 
@@ -290,6 +324,28 @@ impl CsnSubstitutor {
             };
             if let Err(e) = bus.publish(event).await {
                 warn!(error = %e, "CSN 替代触发事件发布失败");
+            }
+        }
+    }
+
+    /// 发布降级链耗尽事件(best-effort,失败仅记录日志)
+    ///
+    /// WHY:原实现仅 warn! 日志记录降级链耗尽,存在监控盲区——
+    /// 运维无法通过 EventBus 订阅统计降级链耗尽率。新增事件供
+    /// efficiency-monitor 统计指标、Lead Architect 告警。
+    /// warn! 日志仍保留(向后兼容),事件是额外补充(N16)。
+    fn publish_chain_exhausted(&self, chain_id: &str, error: &CsnError) {
+        if let Some(bus) = &self.event_bus {
+            let event = NexusEvent::ChainExhausted {
+                metadata: EventMetadata::new("csn-substitutor"),
+                chain_id: chain_id.to_string(),
+                last_error: format!("{error}"),
+            };
+            // WHY publish_blocking:此方法在同步上下文调用(后台任务的loop中),
+            // 不能用 async publish()(会导致"cannot call async fn in sync context"编译错误)。
+            // publish_blocking 是同步发布方法,内部使用非阻塞通道发送。
+            if let Err(e) = bus.publish_blocking(event) {
+                warn!(error = %e, chain_id = %chain_id, "CSN 降级链耗尽事件发布失败");
             }
         }
     }

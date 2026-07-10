@@ -240,11 +240,13 @@ mod tests {
 
     fn make_entries(count: usize, tokens_each: usize) -> Vec<ContextEntry> {
         (0..count)
-            .map(|i| ContextEntry::new(
-                format!("e-{i}"),
-                format!("Content of entry {i} with some keywords"),
-                tokens_each,
-            ))
+            .map(|i| {
+                ContextEntry::new(
+                    format!("e-{i}"),
+                    format!("Content of entry {i} with some keywords"),
+                    tokens_each,
+                )
+            })
             .collect()
     }
 
@@ -264,7 +266,11 @@ mod tests {
         let managed = manager.manage(&entries);
         assert_eq!(managed.strategy, ManagementStrategy::Hierarchical);
         // 近期全文条目token数应 <= 1000
-        let full_tokens: usize = managed.full_text_entries.iter().map(|e| e.token_count).sum();
+        let full_tokens: usize = managed
+            .full_text_entries
+            .iter()
+            .map(|e| e.token_count)
+            .sum();
         assert!(full_tokens <= 1000, "全文部分应 <= 阈值");
         // 应有摘要条目
         assert!(!managed.summary_entries.is_empty());

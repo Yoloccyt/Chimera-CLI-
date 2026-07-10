@@ -54,7 +54,7 @@ pub mod types;
 pub mod window;
 
 // === 关键类型重导出,简化外部导入 ===
-pub use clv_compressor::{ClvCompressor, CompressionMethod, CompressedClv, COMPRESSED_DIM};
+pub use clv_compressor::{ClvCompressor, CompressedClv, CompressionMethod, COMPRESSED_DIM};
 pub use compressor::ContextCompressor;
 pub use error::HcwError;
 pub use long_context::LongContextManager;
@@ -66,7 +66,9 @@ pub use window::HcwWindow;
 ///
 /// 使用方式:`use hcw_window::prelude::*;`
 pub mod prelude {
-    pub use crate::clv_compressor::{ClvCompressor, CompressionMethod, CompressedClv, COMPRESSED_DIM};
+    pub use crate::clv_compressor::{
+        ClvCompressor, CompressedClv, CompressionMethod, COMPRESSED_DIM,
+    };
     pub use crate::compressor::ContextCompressor;
     pub use crate::error::HcwError;
     pub use crate::long_context::LongContextManager;

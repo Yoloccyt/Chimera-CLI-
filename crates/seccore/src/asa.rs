@@ -283,10 +283,8 @@ impl AsaAuditor {
 
         // safety_score = 1.0 - risk_weight × keyword_count - history_failure_rate - semantic_risk
         // P0-4:semantic_risk 使对抗性样本(关键词绕过)仍能被检测
-        let safety_score = 1.0
-            - self.config.risk_weight * keyword_count as f32
-            - history_rate
-            - semantic_risk;
+        let safety_score =
+            1.0 - self.config.risk_weight * keyword_count as f32 - history_rate - semantic_risk;
         let safety_score = safety_score.clamp(0.0, 1.0);
 
         // correctness_score 占位:基于括号匹配的简单语法检查
@@ -299,8 +297,13 @@ impl AsaAuditor {
         let intervention = self.classify_intervention(safety_score);
 
         // 生成审计原因(包含语义风险信息)
-        let audit_reason =
-            format_audit_reason(intervention, keyword_count, history_rate, semantic_risk, safety_score);
+        let audit_reason = format_audit_reason(
+            intervention,
+            keyword_count,
+            history_rate,
+            semantic_risk,
+            safety_score,
+        );
 
         // 仅在 intervention != Allow 时发布(避免事件风暴)
         // WHY publish_blocking:audit() 是同步方法,不能 await。
@@ -597,6 +600,8 @@ mod tests {
             content: content.to_string(),
             risk_keywords: keywords.iter().map(|s| s.to_string()).collect(),
             complexity_score: complexity,
+            semantic_vector: None,
+            reference_risk_vectors: Vec::new(),
         }
     }
 

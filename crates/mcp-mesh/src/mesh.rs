@@ -212,11 +212,15 @@ impl McpMesh {
         tx.transition(TransactionState::Prepare)?;
 
         // Prepare 阶段:并发向所有参与者发 prepare
-        match self.prepare_phase(&tx.participant_servers, op, &tx.transaction_id).await {
+        match self
+            .prepare_phase(&tx.participant_servers, op, &tx.transaction_id)
+            .await
+        {
             Ok(()) => {
                 // 全部 ACK → Commit
                 tx.transition(TransactionState::Commit)?;
-                self.commit_phase(&tx.participant_servers, &tx.transaction_id).await?;
+                self.commit_phase(&tx.participant_servers, &tx.transaction_id)
+                    .await?;
                 Ok(Some(tx.participant_servers.clone()))
             }
             Err(e) => {
@@ -227,7 +231,8 @@ impl McpMesh {
                     "Prepare 阶段失败,触发回滚"
                 );
                 tx.transition(TransactionState::Abort)?;
-                self.rollback_phase(&tx.participant_servers, &tx.transaction_id).await?;
+                self.rollback_phase(&tx.participant_servers, &tx.transaction_id)
+                    .await?;
                 tx.transition(TransactionState::Rollback)?;
                 Ok(None)
             }
@@ -239,7 +244,12 @@ impl McpMesh {
     /// 真实模式:通过 `JsonRpcClient` 向每个参与者的 endpoint 发送 `mcp.prepare`。
     /// Mock 模式:保留 `tokio::time::sleep` 模拟网络往返(1-2ms/服务器),始终成功。
     /// 任一参与者失败则整体失败。
-    async fn prepare_phase(&self, participants: &[String], op: &str, tx_id: &str) -> Result<(), McpError> {
+    async fn prepare_phase(
+        &self,
+        participants: &[String],
+        op: &str,
+        tx_id: &str,
+    ) -> Result<(), McpError> {
         use tokio::task::JoinSet;
         let mut set: JoinSet<Result<(), McpError>> = JoinSet::new();
         for sid in participants {

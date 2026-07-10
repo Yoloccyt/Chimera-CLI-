@@ -39,13 +39,13 @@ use tracing::{info, warn};
 
 // SubTask 21.4:使用 nexus_core 统一的 cosine_similarity_slices
 // (原 crate::blocks::cosine_similarity 已删除,统一到 L1 Core)
+use crate::clv_projector::ClvProjector;
 use crate::config::KvbsrConfig;
 use crate::error::KvbsrError;
 use crate::rebalancer::Rebalancer;
 use crate::types::{
     CoOccurrenceMatrix, RoutingRequest, RoutingResult, SemanticBlock, ToolId, ToolVector,
 };
-use crate::clv_projector::ClvProjector;
 
 /// 路由器共享状态 — 由单一 `RwLock` 保护,确保 `route` 与 `build_blocks`/`auto_rebalance` 的并发一致性
 ///

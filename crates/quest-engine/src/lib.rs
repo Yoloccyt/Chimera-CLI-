@@ -47,9 +47,7 @@ pub mod ttg;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
-pub use adaptive_weights::{
-    AdaptiveWeightLearner, AdaptiveWeights, QuestOutcome,
-};
+pub use adaptive_weights::{AdaptiveWeightLearner, AdaptiveWeights, QuestOutcome};
 pub use arbitration::ArbitrationLayer;
 pub use checkpoint::CheckpointManager;
 pub use config::QuestConfig;

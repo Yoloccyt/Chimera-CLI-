@@ -314,7 +314,8 @@ impl QuestEngine {
     pub async fn create_quest_semantic(&self, intent: UserIntent) -> Result<Quest, QuestError> {
         // 1. 语义 DAG 分解
         let decomposer = SemanticDagDecomposer::new();
-        let tasks = decomposer.decompose(&intent.raw_text, self.config.max_tasks_per_quest as usize)?;
+        let tasks =
+            decomposer.decompose(&intent.raw_text, self.config.max_tasks_per_quest as usize)?;
 
         // 2. 校验 DAG 无环
         validate_dag(&tasks)?;

@@ -99,12 +99,7 @@ impl LruPatternMap {
     /// 记录一次二阶状态转移,并在需要时触发 LRU 淘汰
     ///
     /// 复杂度:O(1) 平均。
-    fn record_transition(
-        &mut self,
-        previous: &ContextId,
-        current: &ContextId,
-        next: &ContextId,
-    ) {
+    fn record_transition(&mut self, previous: &ContextId, current: &ContextId, next: &ContextId) {
         let key = (previous.clone(), current.clone());
 
         // 先在一个独立作用域内更新转移计数,避免 `self.data.get_mut` 借用
@@ -143,7 +138,9 @@ impl LruPatternMap {
         previous: &ContextId,
         current: &ContextId,
     ) -> Option<&HashMap<ContextId, u32>> {
-        self.data.get(&(previous.clone(), current.clone())).map(|(_, t)| t)
+        self.data
+            .get(&(previous.clone(), current.clone()))
+            .map(|(_, t)| t)
     }
 
     /// 分配一个节点(复用空闲索引或追加新节点)
@@ -378,7 +375,12 @@ impl AccessPatternLearner {
     /// // learner 仍可使用(Arc::clone 保留了引用)
     /// # }
     /// ```
-    pub fn record_access_background(self: Arc<Self>, previous: ContextId, current: ContextId, next: ContextId) {
+    pub fn record_access_background(
+        self: Arc<Self>,
+        previous: ContextId,
+        current: ContextId,
+        next: ContextId,
+    ) {
         tokio::spawn(async move {
             self.record_access(&previous, &current, &next);
         });
@@ -466,15 +468,17 @@ impl AccessPatternLearner {
             e.into_inner()
         });
 
-        patterns.get_transitions(previous, current).map(|transitions| {
-            let mut sorted: Vec<(ContextId, u32)> =
-                transitions.iter().map(|(id, &c)| (id.clone(), c)).collect();
-            sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
-            AccessPattern {
-                current: current.clone(),
-                transitions: sorted,
-            }
-        })
+        patterns
+            .get_transitions(previous, current)
+            .map(|transitions| {
+                let mut sorted: Vec<(ContextId, u32)> =
+                    transitions.iter().map(|(id, &c)| (id.clone(), c)).collect();
+                sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
+                AccessPattern {
+                    current: current.clone(),
+                    transitions: sorted,
+                }
+            })
     }
 
     /// 推测性预取 — 对高概率上下文异步预热到缓存
@@ -678,11 +682,7 @@ mod tests {
         let ctx_c = ContextId::new("ctx-c");
 
         // 后台记录二阶转移
-        Arc::clone(&learner).record_access_background(
-            ctx_a.clone(),
-            ctx_b.clone(),
-            ctx_c.clone(),
-        );
+        Arc::clone(&learner).record_access_background(ctx_a.clone(), ctx_b.clone(), ctx_c.clone());
 
         // 等待后台任务完成
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;

@@ -253,10 +253,18 @@ mod tests {
         let elements = make_elements(20, true);
         let chunks = chunker.chunk(&elements);
         // 相似元素应形成较少的大块
-        assert!(chunks.len() <= 5, "相似元素应分块较少, got {} chunks", chunks.len());
+        assert!(
+            chunks.len() <= 5,
+            "相似元素应分块较少, got {} chunks",
+            chunks.len()
+        );
         // 一致性应较高
         for chunk in &chunks {
-            assert!(chunk.coherence >= 0.7, "一致性应 >= 0.7, got {}", chunk.coherence);
+            assert!(
+                chunk.coherence >= 0.7,
+                "一致性应 >= 0.7, got {}",
+                chunk.coherence
+            );
         }
     }
 

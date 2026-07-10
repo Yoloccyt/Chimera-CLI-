@@ -348,7 +348,12 @@ impl TtgGovernor {
     ///
     /// 应在 Quest 完成后调用,传入任务成功率。
     /// 若未启用自适应权重,此方法无效果。
-    pub fn record_quest_outcome(&self, success_rate: f32, complexity_score: f32, mode: ThinkingMode) {
+    pub fn record_quest_outcome(
+        &self,
+        success_rate: f32,
+        complexity_score: f32,
+        mode: ThinkingMode,
+    ) {
         let Some(learner) = self.adaptive_learner.as_ref() else {
             return;
         };
@@ -357,7 +362,9 @@ impl TtgGovernor {
             ThinkingMode::Standard => 2,
             ThinkingMode::Deep => 3,
         };
-        let mut locked = learner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut locked = learner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         locked.record_outcome(QuestOutcome {
             mode_selected: mode_val,
             success_rate: success_rate.clamp(0.0, 1.0),
@@ -391,7 +398,9 @@ impl TtgGovernor {
         let description_length_factor = self.compute_description_length_factor(quest);
 
         // P1-13: 使用自适应权重或固定权重
-        let weights = self.adaptive_weights().unwrap_or_else(AdaptiveWeights::default);
+        let weights = self
+            .adaptive_weights()
+            .unwrap_or_else(AdaptiveWeights::default);
         let score = weights.compute_score(task_count, dependency_depth, description_length_factor);
         ComplexityScore::new(score)
     }

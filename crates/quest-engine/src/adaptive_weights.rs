@@ -73,7 +73,8 @@ impl AdaptiveWeights {
 
     /// 归一化权重(确保和为 1.0)
     fn normalize(&mut self) {
-        let sum = self.task_count_weight + self.dependency_depth_weight + self.description_length_weight;
+        let sum =
+            self.task_count_weight + self.dependency_depth_weight + self.description_length_weight;
         if sum > 0.0 {
             self.task_count_weight /= sum;
             self.dependency_depth_weight /= sum;
@@ -236,16 +237,10 @@ impl AdaptiveWeightLearner {
         }
 
         // 计算高/低成功率 Quest 的平均复杂度特征
-        let high_complexity_avg = high_success
-            .iter()
-            .map(|o| o.complexity_score)
-            .sum::<f32>()
+        let high_complexity_avg = high_success.iter().map(|o| o.complexity_score).sum::<f32>()
             / high_success.len() as f32;
-        let low_complexity_avg = low_success
-            .iter()
-            .map(|o| o.complexity_score)
-            .sum::<f32>()
-            / low_success.len() as f32;
+        let low_complexity_avg =
+            low_success.iter().map(|o| o.complexity_score).sum::<f32>() / low_success.len() as f32;
 
         // 若高成功率 Quest 复杂度更高,说明当前权重可能低估复杂度
         // 应增加依赖深度权重(通常复杂度与深度最相关)
@@ -348,12 +343,8 @@ mod tests {
 
     #[test]
     fn test_learner_weights_adapt() {
-        let mut learner = AdaptiveWeightLearner::with_params(
-            AdaptiveWeights::default(),
-            20,
-            0.1,
-            5,
-        );
+        let mut learner =
+            AdaptiveWeightLearner::with_params(AdaptiveWeights::default(), 20, 0.1, 5);
 
         let initial_depth_weight = learner.weights().dependency_depth_weight;
 
@@ -441,7 +432,11 @@ mod tests {
         }
 
         let feedback = learner.compute_feedback_signal();
-        assert!(feedback > 0.0, "成功率上升趋势应产生正反馈, got {}", feedback);
+        assert!(
+            feedback > 0.0,
+            "成功率上升趋势应产生正反馈, got {}",
+            feedback
+        );
     }
 
     #[test]
@@ -465,6 +460,10 @@ mod tests {
         }
 
         let feedback = learner.compute_feedback_signal();
-        assert!(feedback < 0.0, "成功率下降趋势应产生负反馈, got {}", feedback);
+        assert!(
+            feedback < 0.0,
+            "成功率下降趋势应产生负反馈, got {}",
+            feedback
+        );
     }
 }

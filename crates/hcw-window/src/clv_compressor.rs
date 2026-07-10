@@ -132,7 +132,8 @@ impl ClvCompressor {
         if mean.len() != ORIGINAL_DIM {
             return Err(format!(
                 "均值向量长度应为 {},实际为 {}",
-                ORIGINAL_DIM, mean.len()
+                ORIGINAL_DIM,
+                mean.len()
             ));
         }
         Ok(Self {
@@ -316,11 +317,7 @@ impl ClvCompressor {
     ///
     /// # 返回
     /// k 个特征向量,每列一个,形状 (n, k)
-    fn power_iteration_top_k(
-        matrix: &Array2<f32>,
-        k: usize,
-        max_iterations: usize,
-    ) -> Array2<f32> {
+    fn power_iteration_top_k(matrix: &Array2<f32>, k: usize, max_iterations: usize) -> Array2<f32> {
         let n = matrix.shape()[0];
         let mut eigenvectors = Array2::zeros((n, k));
 
@@ -329,7 +326,9 @@ impl ClvCompressor {
             let mut v = Array1::zeros(n);
             let mut seed: u64 = 0x123456789abcdef0u64.wrapping_add(eigen_idx as u64);
             for i in 0..n {
-                seed = seed.wrapping_mul(0x5851f42d4c957f2d).wrapping_add(0x14057b7ef767814f);
+                seed = seed
+                    .wrapping_mul(0x5851f42d4c957f2d)
+                    .wrapping_add(0x14057b7ef767814f);
                 v[i] = ((seed as f64) / (u64::MAX as f64)) as f32 - 0.5;
             }
 
@@ -509,9 +508,7 @@ mod tests {
     #[test]
     fn test_batch_compress() {
         let compressor = ClvCompressor::new_random_projection();
-        let clvs: Vec<CLV> = (0..10)
-            .map(|i| make_clv(&[i as f32]))
-            .collect();
+        let clvs: Vec<CLV> = (0..10).map(|i| make_clv(&[i as f32])).collect();
 
         let compressed = compressor.compress_batch(&clvs);
         assert_eq!(compressed.len(), 10);

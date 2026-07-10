@@ -29,11 +29,10 @@ use crate::error::QuestError;
 /// 中文停用词表 — 语义分析中忽略的高频无意义词
 const STOP_WORDS: &[&str] = &[
     "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "一个", "上", "也",
-    "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "那",
-    "进行", "完成", "分析", "设计", "实现", "测试", "部署", "优化", "检查", "确认",
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
-    "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+    "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "那", "进行",
+    "完成", "分析", "设计", "实现", "测试", "部署", "优化", "检查", "确认", "the", "a", "an", "is",
+    "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "will",
+    "would", "could", "should", "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
     "and", "or", "but", "if", "then", "else", "when", "where", "why", "how",
 ];
 
@@ -119,11 +118,7 @@ impl SemanticDagDecomposer {
             let mut best_i = None;
 
             for i in 0..j {
-                let sim = semantic_similarity(
-                    &keywords_list[i],
-                    &keywords_list[j],
-                    &idf,
-                );
+                let sim = semantic_similarity(&keywords_list[i], &keywords_list[j], &idf);
                 if sim > self.threshold && sim > best_sim {
                     best_sim = sim;
                     best_i = Some(i);
@@ -243,7 +238,6 @@ fn semantic_similarity(
 
 /// 传递依赖剪枝 — 若 A→B→C,则移除 A→C
 fn prune_transitive_dependencies(deps: &[Vec<String>]) -> Vec<Vec<String>> {
-    let n = deps.len();
     let mut result: Vec<Vec<String>> = deps.iter().cloned().collect();
 
     // 构建邻接表:task_id → 直接依赖的 task_id 集合
@@ -263,7 +257,7 @@ fn prune_transitive_dependencies(deps: &[Vec<String>]) -> Vec<Vec<String>> {
             let current = set.clone();
             for dep in &current {
                 if let Some(dep_of_dep) = adj.get(dep) {
-                    for &transitive in dep_of_dep {
+                    for transitive in dep_of_dep {
                         if set.insert(transitive.clone()) {
                             changed = true;
                         }
@@ -274,9 +268,8 @@ fn prune_transitive_dependencies(deps: &[Vec<String>]) -> Vec<Vec<String>> {
         reachable.insert(task_id.clone(), set);
     }
 
-    // 剪枝:对每个任务,移除可通过其他依赖传递到达的直接依赖
+    // 剪枝:对每个任务,移除可通过其他直接依赖传递到达的直接依赖
     for (idx, dep_list) in deps.iter().enumerate() {
-        let task_id = format!("task-{idx}");
         let direct: HashSet<String> = dep_list.iter().cloned().collect();
         let mut pruned = Vec::new();
 
@@ -313,9 +306,7 @@ mod tests {
     fn test_semantic_decomposer_linear() {
         let decomposer = SemanticDagDecomposer::new();
         // 语义不相关的句子 → 线性链(回退)
-        let tasks = decomposer
-            .decompose("A。B。C。", 10)
-            .unwrap();
+        let tasks = decomposer.decompose("A。B。C。", 10).unwrap();
         assert_eq!(tasks.len(), 3);
         assert!(tasks[0].dependencies.is_empty());
         assert_eq!(tasks[1].dependencies, vec!["task-0"]);
@@ -367,8 +358,8 @@ mod tests {
     #[test]
     fn test_prune_transitive() {
         let deps = vec![
-            vec![],                           // task-0: 无依赖
-            vec!["task-0".to_string()],       // task-1: 依赖 task-0
+            vec![],                                           // task-0: 无依赖
+            vec!["task-0".to_string()],                       // task-1: 依赖 task-0
             vec!["task-0".to_string(), "task-1".to_string()], // task-2: 依赖 task-0 和 task-1
         ];
         let pruned = prune_transitive_dependencies(&deps);

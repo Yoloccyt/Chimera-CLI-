@@ -107,7 +107,10 @@ impl KvbsrConfig {
     }
 
     /// 设置 CLV 投影方法
-    pub fn with_projection_method(mut self, method: crate::clv_projector::ProjectionMethod) -> Self {
+    pub fn with_projection_method(
+        mut self,
+        method: crate::clv_projector::ProjectionMethod,
+    ) -> Self {
         self.projection_method = method;
         self
     }

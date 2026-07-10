@@ -470,35 +470,56 @@ impl TuiApp {
     fn handle_nexus_event(&mut self, event: &event_bus::NexusEvent) {
         use event_bus::NexusEvent;
         match event {
-            NexusEvent::QuestCreated { quest_id, title, task_count, .. } => {
-                self.state.update_quest_status(format!("Quest {} created: {} ({} tasks)", quest_id, title, task_count));
+            NexusEvent::QuestCreated {
+                quest_id,
+                title,
+                task_count,
+                ..
+            } => {
+                self.state.update_quest_status(format!(
+                    "Quest {} created: {} ({} tasks)",
+                    quest_id, title, task_count
+                ));
             }
-            NexusEvent::QuestProgressUpdated { quest_id, completed, total, .. } => {
+            NexusEvent::QuestProgressUpdated {
+                quest_id,
+                completed,
+                total,
+                ..
+            } => {
                 self.state.update_quest_status(format!(
                     "Quest {}: {}/{} tasks completed",
                     quest_id, completed, total
                 ));
             }
             NexusEvent::ConsensusReached { quest_id, .. } => {
-                self.state.update_last_event(format!("ConsensusReached: {}", quest_id));
+                self.state
+                    .update_last_event(format!("ConsensusReached: {}", quest_id));
             }
-            NexusEvent::BudgetExceeded { budget_type, current, limit, .. } => {
+            NexusEvent::BudgetExceeded {
+                budget_type,
+                current,
+                limit,
+                ..
+            } => {
                 self.state.update_last_event(format!(
                     "BudgetExceeded: {} ({} / {})",
                     budget_type, current, limit
                 ));
             }
             NexusEvent::ExecutionCompleted { quest_id, .. } => {
-                self.state.update_quest_status(format!("Quest {} completed", quest_id));
+                self.state
+                    .update_quest_status(format!("Quest {} completed", quest_id));
             }
             NexusEvent::CheckpointSaved { quest_id, .. } => {
-                self.state.update_last_event(format!("CheckpointSaved: {}", quest_id));
+                self.state
+                    .update_last_event(format!("CheckpointSaved: {}", quest_id));
             }
-            NexusEvent::SlowConsumerDropped { subscriber_id, lag, .. } => {
-                self.state.update_last_event(format!(
-                    "SlowConsumer: {} lag={}",
-                    subscriber_id, lag
-                ));
+            NexusEvent::SlowConsumerDropped {
+                subscriber_id, lag, ..
+            } => {
+                self.state
+                    .update_last_event(format!("SlowConsumer: {} lag={}", subscriber_id, lag));
             }
             _ => {
                 // 其他事件不处理(避免状态栏过于频繁更新)

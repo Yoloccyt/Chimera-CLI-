@@ -74,11 +74,7 @@ impl ParameterRegistry {
     }
 
     /// 更新参数值(直接设置)
-    pub fn set_value(
-        &self,
-        id: &str,
-        value: ParameterValue,
-    ) -> Result<(), LearningError> {
+    pub fn set_value(&self, id: &str, value: ParameterValue) -> Result<(), LearningError> {
         let mut entry = self
             .params
             .get_mut(id)
@@ -163,7 +159,12 @@ mod tests {
     use super::*;
 
     fn make_param(id: &str, value: f32) -> LearnableParameter {
-        LearnableParameter::new(id, format!("param-{id}"), "test-crate", ParameterValue::scalar(value))
+        LearnableParameter::new(
+            id,
+            format!("param-{id}"),
+            "test-crate",
+            ParameterValue::scalar(value),
+        )
     }
 
     #[test]
@@ -194,9 +195,12 @@ mod tests {
         let registry = ParameterRegistry::new();
         registry.register(make_param("p1", 0.5)).unwrap();
         registry
-            .register(
-                LearnableParameter::new("p2", "p2", "other-crate", ParameterValue::scalar(0.3)),
-            )
+            .register(LearnableParameter::new(
+                "p2",
+                "p2",
+                "other-crate",
+                ParameterValue::scalar(0.3),
+            ))
             .unwrap();
 
         let test_params = registry.list_by_crate("test-crate");

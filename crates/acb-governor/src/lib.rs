@@ -46,7 +46,9 @@ pub use types::{BudgetAllocation, BudgetRequest, BudgetStatus, BudgetTier, TierS
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
-    pub use crate::budget_coordinator::{BudgetCoordinator, UnifiedBudgetDecision, UnifiedBudgetStatus};
+    pub use crate::budget_coordinator::{
+        BudgetCoordinator, UnifiedBudgetDecision, UnifiedBudgetStatus,
+    };
     pub use crate::config::AcbGovernorConfig;
     pub use crate::error::AcbError;
     pub use crate::governor::AcbGovernor;

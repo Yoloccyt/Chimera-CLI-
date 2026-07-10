@@ -56,7 +56,7 @@ pub mod types;
 pub use activation::SesaRouter;
 pub use config::SesaConfig;
 pub use error::SesaError;
-pub use mask::{HierarchicalSesaMask, SesaMask, TOTAL_EXPERTS, LAYER_COUNT, EXPERTS_PER_LAYER};
+pub use mask::{HierarchicalSesaMask, SesaMask, EXPERTS_PER_LAYER, LAYER_COUNT, TOTAL_EXPERTS};
 pub use prerequisite::PrerequisiteChecker;
 pub use sparsity::{enforce_sparsity, max_allowed_active, SparsityProfile};
 pub use types::{ActivationRequest, ExpertDescriptor};
@@ -66,7 +66,9 @@ pub mod prelude {
     pub use crate::activation::SesaRouter;
     pub use crate::config::SesaConfig;
     pub use crate::error::SesaError;
-    pub use crate::mask::{HierarchicalSesaMask, SesaMask, TOTAL_EXPERTS, LAYER_COUNT, EXPERTS_PER_LAYER};
+    pub use crate::mask::{
+        HierarchicalSesaMask, SesaMask, EXPERTS_PER_LAYER, LAYER_COUNT, TOTAL_EXPERTS,
+    };
     pub use crate::prerequisite::PrerequisiteChecker;
     pub use crate::sparsity::{enforce_sparsity, max_allowed_active, SparsityProfile};
     pub use crate::types::{ActivationRequest, ExpertDescriptor};

@@ -112,10 +112,8 @@ impl IncrementalCheckpointBuilder {
         let mut changed = Vec::new();
 
         // 构建 old_task 的 id → Task 映射
-        let old_map: std::collections::HashMap<&str, &Task> = old_tasks
-            .iter()
-            .map(|t| (t.task_id.as_str(), t))
-            .collect();
+        let old_map: std::collections::HashMap<&str, &Task> =
+            old_tasks.iter().map(|t| (t.task_id.as_str(), t)).collect();
 
         for new_task in new_tasks {
             if let Some(old_task) = old_map.get(new_task.task_id.as_str()) {
@@ -196,7 +194,10 @@ impl IncrementalCheckpointRestorer {
     /// 2. 应用增量中的 changed_tasks(覆盖或追加)
     /// 3. 应用 metadata_delta
     /// 4. 返回重建的 Quest
-    pub fn restore(base_quest: Option<Quest>, delta: &IncrementalCheckpoint) -> Result<Quest, QuestError> {
+    pub fn restore(
+        base_quest: Option<Quest>,
+        delta: &IncrementalCheckpoint,
+    ) -> Result<Quest, QuestError> {
         let mut quest = base_quest.unwrap_or_else(|| Quest {
             quest_id: delta.quest_id.clone(),
             title: String::new(),
@@ -219,7 +220,10 @@ impl IncrementalCheckpointRestorer {
         // 保持 Task 顺序(按 task_id 排序)
         let mut task_ids: Vec<_> = task_map.keys().cloned().collect();
         task_ids.sort();
-        quest.tasks = task_ids.into_iter().filter_map(|id| task_map.remove(&id)).collect();
+        quest.tasks = task_ids
+            .into_iter()
+            .filter_map(|id| task_map.remove(&id))
+            .collect();
 
         // 应用元数据变更
         if let Some(meta) = &delta.metadata_delta {
@@ -320,14 +324,9 @@ mod tests {
         ];
         let quest = make_quest("q-1", tasks);
 
-        let delta = IncrementalCheckpointBuilder::build(
-            "q-1".into(),
-            "cp-1".into(),
-            None,
-            None,
-            &quest,
-        )
-        .unwrap();
+        let delta =
+            IncrementalCheckpointBuilder::build("q-1".into(), "cp-1".into(), None, None, &quest)
+                .unwrap();
 
         assert_eq!(delta.changed_tasks.len(), 2); // 所有 Task 都是变更
         assert!(delta.metadata_delta.is_some());
@@ -409,14 +408,9 @@ mod tests {
         let tasks = vec![make_task("t-0", "task 0", TaskStatus::Pending)];
         let quest = make_quest("q-1", tasks);
 
-        let delta = IncrementalCheckpointBuilder::build(
-            "q-1".into(),
-            "cp-1".into(),
-            None,
-            None,
-            &quest,
-        )
-        .unwrap();
+        let delta =
+            IncrementalCheckpointBuilder::build("q-1".into(), "cp-1".into(), None, None, &quest)
+                .unwrap();
 
         let restored = IncrementalCheckpointRestorer::restore(None, &delta).unwrap();
         assert_eq!(restored.tasks.len(), 1);
@@ -484,7 +478,10 @@ mod tests {
         .unwrap();
 
         assert!(delta.metadata_delta.is_some());
-        assert_eq!(delta.metadata_delta.as_ref().unwrap().thinking_mode, Some(ThinkingMode::Deep));
+        assert_eq!(
+            delta.metadata_delta.as_ref().unwrap().thinking_mode,
+            Some(ThinkingMode::Deep)
+        );
     }
 
     #[test]
@@ -519,14 +516,9 @@ mod tests {
         let tasks = vec![make_task("t-0", "task 0", TaskStatus::Pending)];
         let quest = make_quest("q-1", tasks);
 
-        let delta = IncrementalCheckpointBuilder::build(
-            "q-1".into(),
-            "cp-1".into(),
-            None,
-            None,
-            &quest,
-        )
-        .unwrap();
+        let delta =
+            IncrementalCheckpointBuilder::build("q-1".into(), "cp-1".into(), None, None, &quest)
+                .unwrap();
 
         // 正常恢复应成功
         let restored = IncrementalCheckpointRestorer::restore(None, &delta);

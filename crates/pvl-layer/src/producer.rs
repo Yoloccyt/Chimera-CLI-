@@ -136,15 +136,14 @@ impl Producer {
                     quest_id,
                     produced = i,
                     target = count,
-                    "produce 超时:已生产 {} / {} 操作,剩余操作丢弃", i, count
+                    "produce 超时:已生产 {} / {} 操作,剩余操作丢弃",
+                    i,
+                    count
                 );
                 // 超时降级策略为 Conservative
                 self.set_strategy(ProducerStrategy::Conservative);
                 return Err(PvlError::ProduceFailed {
-                    reason: format!(
-                        "produce 超时:已生产 {} / {} 操作",
-                        i, count
-                    ),
+                    reason: format!("produce 超时:已生产 {} / {} 操作", i, count),
                 });
             }
 

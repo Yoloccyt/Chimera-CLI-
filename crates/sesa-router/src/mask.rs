@@ -233,7 +233,12 @@ impl HierarchicalSesaMask {
     /// 创建全零分层掩码(无专家激活)
     pub fn new() -> Self {
         Self {
-            layers: [SesaMask::new(), SesaMask::new(), SesaMask::new(), SesaMask::new()],
+            layers: [
+                SesaMask::new(),
+                SesaMask::new(),
+                SesaMask::new(),
+                SesaMask::new(),
+            ],
             total_active_count: 0,
         }
     }
@@ -665,10 +670,10 @@ mod tests {
     fn test_hierarchical_set_expert_all_layers() {
         let mut mask = HierarchicalSesaMask::new();
         // 每层设置 1 个专家
-        mask.set_expert(0);    // Layer 0, local 0
-        mask.set_expert(256);  // Layer 1, local 0
-        mask.set_expert(512);  // Layer 2, local 0
-        mask.set_expert(768);  // Layer 3, local 0
+        mask.set_expert(0); // Layer 0, local 0
+        mask.set_expert(256); // Layer 1, local 0
+        mask.set_expert(512); // Layer 2, local 0
+        mask.set_expert(768); // Layer 3, local 0
         assert_eq!(mask.total_active_count(), 4);
         assert_eq!(mask.layer_active_count(0), 1);
         assert_eq!(mask.layer_active_count(1), 1);

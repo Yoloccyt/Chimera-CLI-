@@ -52,7 +52,8 @@ pub struct DpoTrainer {
     /// 训练步数计数器
     step_counter: AtomicU64,
     /// 累计损失(用于监控收敛)
-    cumulative_loss: std::sync::atomic::AtomicF32,
+    /// WHY RwLock<f32>:stable Rust 无 AtomicF32,读多写少场景 RwLock 合适
+    cumulative_loss: std::sync::RwLock<f32>,
 }
 
 /// 策略 — 简化的参数化策略表示
@@ -111,7 +112,7 @@ impl DpoTrainer {
             reference_policy: std::sync::RwLock::new(reference),
             current_policy: std::sync::RwLock::new(current),
             step_counter: AtomicU64::new(0),
-            cumulative_loss: std::sync::atomic::AtomicF32::new(0.0),
+            cumulative_loss: std::sync::RwLock::new(0.0),
         }
     }
 
@@ -133,18 +134,18 @@ impl DpoTrainer {
     /// # 返回
     /// 损失值(非负,越小表示策略越好)
     pub fn compute_loss(&self, pair: &PreferencePair) -> Result<f32, AutoDpoError> {
-        let ref_policy = self
-            .reference_policy
-            .read()
-            .map_err(|e| AutoDpoError::GenerationFailed {
-                reason: format!("参考策略锁中毒: {e}"),
-            })?;
-        let cur_policy = self
-            .current_policy
-            .read()
-            .map_err(|e| AutoDpoError::GenerationFailed {
-                reason: format!("当前策略锁中毒: {e}"),
-            })?;
+        let ref_policy =
+            self.reference_policy
+                .read()
+                .map_err(|e| AutoDpoError::GenerationFailed {
+                    reason: format!("参考策略锁中毒: {e}"),
+                })?;
+        let cur_policy =
+            self.current_policy
+                .read()
+                .map_err(|e| AutoDpoError::GenerationFailed {
+                    reason: format!("当前策略锁中毒: {e}"),
+                })?;
 
         // 计算奖励差: r_θ(y) = log π_θ(y|x) - log π_ref(y|x)
         let r_chosen = cur_policy.log_prob(&pair.chosen) - ref_policy.log_prob(&pair.chosen);
@@ -175,12 +176,12 @@ impl DpoTrainer {
 
         // 简化梯度更新:根据损失方向调整策略参数
         // 实际应用中应使用自动微分(如 candle/ort)
-        let mut cur_policy = self
-            .current_policy
-            .write()
-            .map_err(|e| AutoDpoError::GenerationFailed {
-                reason: format!("当前策略锁中毒: {e}"),
-            })?;
+        let mut cur_policy =
+            self.current_policy
+                .write()
+                .map_err(|e| AutoDpoError::GenerationFailed {
+                    reason: format!("当前策略锁中毒: {e}"),
+                })?;
 
         // 模拟梯度下降:根据 chosen/rejected 的得分差调整参数
         let score_gap = pair.score_gap();
@@ -199,8 +200,9 @@ impl DpoTrainer {
 
         // 更新统计
         self.step_counter.fetch_add(1, Ordering::Relaxed);
-        self.cumulative_loss
-            .fetch_add(loss, Ordering::Relaxed);
+        if let Ok(mut cum_loss) = self.cumulative_loss.write() {
+            *cum_loss += loss;
+        }
 
         Ok(loss)
     }
@@ -233,7 +235,10 @@ impl DpoTrainer {
     /// 获取平均损失(累计损失 / 步数)
     pub fn average_loss(&self) -> f32 {
         let steps = self.step_count().max(1);
-        self.cumulative_loss.load(Ordering::Relaxed) / steps as f32
+        self.cumulative_loss
+            .read()
+            .map(|loss| *loss / steps as f32)
+            .unwrap_or(0.0)
     }
 
     /// 获取参考策略参数(只读,用于验证冻结)
@@ -291,10 +296,7 @@ mod tests {
         let trainer = DpoTrainer::with_default_config();
         let pair = make_pair(0.9, 0.3);
         let loss = trainer.compute_loss(&pair).unwrap();
-        assert!(
-            loss >= 0.0,
-            "DPO损失应为非负, got {loss}"
-        );
+        assert!(loss >= 0.0, "DPO损失应为非负, got {loss}");
     }
 
     #[test]
@@ -312,10 +314,7 @@ mod tests {
         let pair = make_pair(0.9, 0.3);
         let _ = trainer.train_step(&pair, 0.01).unwrap();
         let ref_after = trainer.reference_params();
-        assert_eq!(
-            ref_before, ref_after,
-            "参考策略应冻结,训练后不应变化"
-        );
+        assert_eq!(ref_before, ref_after, "参考策略应冻结,训练后不应变化");
     }
 
     #[test]
@@ -326,10 +325,7 @@ mod tests {
         let _ = trainer.train_step(&pair, 0.01).unwrap();
         let cur_after = trainer.current_params();
         // 当前策略应更新(参数变化)
-        assert_ne!(
-            cur_before, cur_after,
-            "当前策略应被训练更新"
-        );
+        assert_ne!(cur_before, cur_after, "当前策略应被训练更新");
     }
 
     #[test]
@@ -347,9 +343,9 @@ mod tests {
 
     #[test]
     fn test_log_sigmoid() {
-        // log_sigmoid(0) = log(0.5) ≈ -0.693
+        // log_sigmoid(0) = log(0.5) = -ln(2) ≈ -0.693
         let v = log_sigmoid(0.0);
-        assert!((v - (-0.6931472)).abs() < 1e-5);
+        assert!((v - (-std::f32::consts::LN_2)).abs() < 1e-5);
 
         // log_sigmoid(大正数) ≈ 0
         let v2 = log_sigmoid(10.0);

@@ -169,10 +169,7 @@ impl HotReloadConfig {
     /// 变化时自动重载配置并触发回调。
     ///
     /// 返回 `JoinHandle` 供调用者管理任务生命周期。
-    pub fn start_watch(
-        &mut self,
-        interval: std::time::Duration,
-    ) -> tokio::task::JoinHandle<()> {
+    pub fn start_watch(&mut self, interval: std::time::Duration) -> tokio::task::JoinHandle<()> {
         let mut self_clone = self.clone_state();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
@@ -208,9 +205,8 @@ impl HotReloadConfig {
     // 克隆状态用于后台任务
     fn clone_state(&self) -> Self {
         Self {
-            inner: LazyConfig::new(Some(self.config_path.clone())).unwrap_or_else(|_| {
-                LazyConfig::new(None).expect("default config always valid")
-            }),
+            inner: LazyConfig::new(Some(self.config_path.clone()))
+                .unwrap_or_else(|_| LazyConfig::new(None).expect("default config always valid")),
             config_path: self.config_path.clone(),
             file_state: self.file_state.clone(),
             reload_callbacks: Vec::new(), // 回调不克隆

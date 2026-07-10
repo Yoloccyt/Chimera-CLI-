@@ -245,10 +245,8 @@ impl JsonRpcClient {
             return Ok(Resp::default());
         }
 
-        let http = self.http.as_ref().ok_or_else(|| {
-            McpError::ConfigError {
-                reason: "HTTP client 初始化失败".into(),
-            }
+        let http = self.http.as_ref().ok_or_else(|| McpError::ConfigError {
+            reason: "HTTP client 初始化失败".into(),
         })?;
 
         let request = JsonRpcRequest::new(method, params, id.clone());
@@ -282,11 +280,10 @@ impl JsonRpcClient {
             });
         }
 
-        let rpc_resp: JsonRpcResponse<Resp> = response.json().await.map_err(|e| {
-            McpError::ConfigError {
+        let rpc_resp: JsonRpcResponse<Resp> =
+            response.json().await.map_err(|e| McpError::ConfigError {
                 reason: format!("JSON-RPC 响应解析失败: {e}"),
-            }
-        })?;
+            })?;
 
         // 校验 ID 匹配
         if rpc_resp.id.as_ref() != Some(&id) {
@@ -302,10 +299,8 @@ impl JsonRpcClient {
             });
         }
 
-        rpc_resp.result.ok_or_else(|| {
-            McpError::ConfigError {
-                reason: "JSON-RPC 响应既无 result 也无 error".into(),
-            }
+        rpc_resp.result.ok_or_else(|| McpError::ConfigError {
+            reason: "JSON-RPC 响应既无 result 也无 error".into(),
         })
     }
 
@@ -427,7 +422,8 @@ mod tests {
     #[test]
     fn test_jsonrpc_response_deserialization_success() {
         let json = r#"{"jsonrpc":"2.0","result":{"ack":true,"metadata":null},"id":1}"#;
-        let resp: JsonRpcResponse<PrepareResult> = serde_json::from_str(json).expect("反序列化失败");
+        let resp: JsonRpcResponse<PrepareResult> =
+            serde_json::from_str(json).expect("反序列化失败");
         assert_eq!(resp.jsonrpc, "2.0");
         assert!(resp.result.is_some());
         assert!(resp.result.unwrap().ack);
@@ -437,7 +433,8 @@ mod tests {
     #[test]
     fn test_jsonrpc_response_deserialization_error() {
         let json = r#"{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found","data":null},"id":1}"#;
-        let resp: JsonRpcResponse<PrepareResult> = serde_json::from_str(json).expect("反序列化失败");
+        let resp: JsonRpcResponse<PrepareResult> =
+            serde_json::from_str(json).expect("反序列化失败");
         assert!(resp.result.is_none());
         assert!(resp.error.is_some());
         let err = resp.error.unwrap();

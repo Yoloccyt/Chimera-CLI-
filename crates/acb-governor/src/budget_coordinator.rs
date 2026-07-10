@@ -23,7 +23,7 @@ use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tracing::{info, warn};
 
 use acb_governor::{AcbGovernor, AcbGovernorConfig, BudgetRequest, BudgetTier};
-use decb_governor::{DecbGovernor, DecbConfig, QuestBudgetInput};
+use decb_governor::{DecbConfig, DecbGovernor, QuestBudgetInput};
 
 /// 统一预算决策 — 协调器对预算请求的综合判断结果
 #[derive(Debug, Clone, PartialEq)]
@@ -42,11 +42,7 @@ pub struct UnifiedBudgetDecision {
 
 impl UnifiedBudgetDecision {
     /// 创建批准决策
-    fn approved(
-        acb_tier: BudgetTier,
-        decb_coefficient: f32,
-        unified_coefficient: f32,
-    ) -> Self {
+    fn approved(acb_tier: BudgetTier, decb_coefficient: f32, unified_coefficient: f32) -> Self {
         Self {
             approved: true,
             acb_tier,
@@ -211,10 +207,7 @@ impl BudgetCoordinator {
         // 3. 检查 ACB 级别变化,若降级则通知
         let new_tier = self.acb.current_tier();
         if new_tier == BudgetTier::L0 {
-            info!(
-                quest_id,
-                "ACB 降级到 L0,通知 DECB 进入降级模式"
-            );
+            info!(quest_id, "ACB 降级到 L0,通知 DECB 进入降级模式");
         }
 
         Ok(())
@@ -282,12 +275,7 @@ mod tests {
 
     fn make_coordinator() -> BudgetCoordinator {
         let bus = EventBus::new();
-        BudgetCoordinator::new(
-            AcbGovernorConfig::default(),
-            DecbConfig::default(),
-            bus,
-        )
-        .unwrap()
+        BudgetCoordinator::new(AcbGovernorConfig::default(), DecbConfig::default(), bus).unwrap()
     }
 
     #[test]

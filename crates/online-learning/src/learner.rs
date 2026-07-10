@@ -48,8 +48,7 @@ impl OnlineLearner for GradientDescent {
                 ParameterValue::Vector(new_vec)
             }
             ParameterValue::Matrix { rows, cols, data } => {
-                let new_data: Vec<f32> =
-                    data.iter().map(|v| v + learning_rate * reward).collect();
+                let new_data: Vec<f32> = data.iter().map(|v| v + learning_rate * reward).collect();
                 ParameterValue::Matrix {
                     rows: *rows,
                     cols: *cols,
@@ -97,7 +96,10 @@ impl OnlineLearner for EwmaLearner {
                     .collect();
                 ParameterValue::Vector(new_vec)
             }
-            (ParameterValue::Matrix { rows, cols, data }, ParameterValue::Matrix { data: t, .. }) => {
+            (
+                ParameterValue::Matrix { rows, cols, data },
+                ParameterValue::Matrix { data: t, .. },
+            ) => {
                 let new_data: Vec<f32> = data
                     .iter()
                     .zip(t.iter())

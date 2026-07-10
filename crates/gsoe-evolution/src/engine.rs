@@ -76,14 +76,23 @@ impl GsoeEvolutionEngine {
     /// - `config`:进化引擎配置
     /// - `model_endpoint`:模型服务 HTTP 端点(如 "http://203.0.113.1:8080/v1/sample")
     /// - `model_timeout_ms`:模型采样请求超时(毫秒)
-    pub fn with_model(config: GsoeConfig, model_endpoint: impl Into<String>, model_timeout_ms: u64) -> Self {
+    pub fn with_model(
+        config: GsoeConfig,
+        model_endpoint: impl Into<String>,
+        model_timeout_ms: u64,
+    ) -> Self {
         let mut engine = Self::new(config);
         engine.model_sampler = ModelSampler::new(model_endpoint, model_timeout_ms);
         engine
     }
 
     /// 构造进化引擎(带 EventBus 与真实模型采样)
-    pub fn with_event_bus_and_model(config: GsoeConfig, bus: EventBus, model_endpoint: impl Into<String>, model_timeout_ms: u64) -> Self {
+    pub fn with_event_bus_and_model(
+        config: GsoeConfig,
+        bus: EventBus,
+        model_endpoint: impl Into<String>,
+        model_timeout_ms: u64,
+    ) -> Self {
         let mut engine = Self::with_model(config, model_endpoint, model_timeout_ms);
         engine.event_bus = Some(bus);
         engine

@@ -206,10 +206,7 @@ impl ContextEntry {
     /// 设置压缩后的 CLV(链式调用)
     ///
     /// WHY:通常在 `with_clv` 之后调用,由压缩器生成压缩表示。
-    pub fn with_compressed_clv(
-        mut self,
-        compressed: crate::clv_compressor::CompressedClv,
-    ) -> Self {
+    pub fn with_compressed_clv(mut self, compressed: crate::clv_compressor::CompressedClv) -> Self {
         self.compressed_clv = Some(compressed);
         self
     }

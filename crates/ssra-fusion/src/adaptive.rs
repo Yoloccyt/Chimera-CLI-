@@ -118,10 +118,11 @@ impl AdaptiveStrategySelector {
 
     /// 纯利用:选择当前评分最高的策略
     fn exploit(&self) -> FusionStrategy {
-        let best = self
-            .performances
-            .values()
-            .max_by(|a, b| a.ewma_score.partial_cmp(&b.ewma_score).unwrap_or(std::cmp::Ordering::Equal));
+        let best = self.performances.values().max_by(|a, b| {
+            a.ewma_score
+                .partial_cmp(&b.ewma_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         match best {
             Some(p) => p.strategy,

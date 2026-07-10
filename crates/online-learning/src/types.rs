@@ -226,8 +226,9 @@ mod tests {
 
     #[test]
     fn test_learnable_parameter_clamp() {
-        let mut p = LearnableParameter::new("test", "Test", "test-crate", ParameterValue::scalar(1.5))
-            .with_bounds(0.0, 1.0);
+        let mut p =
+            LearnableParameter::new("test", "Test", "test-crate", ParameterValue::scalar(1.5))
+                .with_bounds(0.0, 1.0);
         p.clamp_value();
         assert_eq!(p.value.as_scalar(), Some(1.0));
     }

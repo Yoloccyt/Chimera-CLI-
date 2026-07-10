@@ -311,12 +311,11 @@ impl AuditChain {
     pub fn persist_to_sqlite(&self, db_path: &str) -> Result<(), SecCoreError> {
         use rusqlite::{params, Connection};
 
-        let conn = Connection::open(db_path).map_err(|e| {
-            SecCoreError::AuditError(format!("无法打开SQLite数据库: {e}"))
-        })?;
+        let mut conn = Connection::open(db_path)
+            .map_err(|e| SecCoreError::AuditError(format!("无法打开SQLite数据库: {e}")))?;
 
         // 启用WAL模式提升并发写入性能
-        conn.execute("PRAGMA journal_mode=WAL;", [])
+        conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| SecCoreError::AuditError(format!("无法设置WAL模式: {e}")))?;
 
         // 创建审计块表(若不存在)
@@ -384,9 +383,8 @@ impl AuditChain {
     pub fn restore_from_sqlite(db_path: &str) -> Result<Self, SecCoreError> {
         use rusqlite::Connection;
 
-        let conn = Connection::open(db_path).map_err(|e| {
-            SecCoreError::AuditError(format!("无法打开SQLite数据库: {e}"))
-        })?;
+        let conn = Connection::open(db_path)
+            .map_err(|e| SecCoreError::AuditError(format!("无法打开SQLite数据库: {e}")))?;
 
         let mut stmt = conn
             .prepare(
@@ -421,9 +419,8 @@ impl AuditChain {
         let mut current_hash = "0".repeat(64);
 
         for row in rows {
-            let block = row.map_err(|e| {
-                SecCoreError::AuditError(format!("读取审计块失败: {e}"))
-            })?;
+            let block =
+                row.map_err(|e| SecCoreError::AuditError(format!("读取审计块失败: {e}")))?;
             current_hash = block.merkle_root.clone();
             blocks.push(block);
         }
@@ -629,12 +626,14 @@ mod tests {
         assert_eq!(chain.len(), 3);
         assert!(chain.verify().unwrap());
 
-        // 持久化到临时数据库
-        let db_path = ":memory:"; // 使用内存数据库测试
-        chain.persist_to_sqlite(db_path).unwrap();
+        // 持久化到临时文件数据库（内存数据库:memory:在不同连接间不共享数据）
+        let dir = std::env::temp_dir();
+        let db_path = dir.join("chimera_audit_test_persist.db");
+        let _ = std::fs::remove_file(&db_path);
+        chain.persist_to_sqlite(db_path.to_str().unwrap()).unwrap();
 
         // 从数据库恢复
-        let restored = AuditChain::restore_from_sqlite(db_path).unwrap();
+        let restored = AuditChain::restore_from_sqlite(db_path.to_str().unwrap()).unwrap();
         assert_eq!(restored.len(), 3);
         assert!(restored.verify().unwrap(), "恢复的审计链应完整");
 
@@ -644,16 +643,19 @@ mod tests {
             assert_eq!(orig.command_hash, restored_block.command_hash);
             assert_eq!(orig.status, restored_block.status);
         }
+
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[test]
     fn test_restore_empty_sqlite() {
-        // 测试空数据库恢复
-        let db_path = ":memory:";
-        // 创建空表
+        // 测试空数据库恢复——使用临时文件（内存数据库连接间不共享）
+        let dir = std::env::temp_dir();
+        let db_path = dir.join("chimera_audit_test_empty.db");
+        let _ = std::fs::remove_file(&db_path);
         {
             use rusqlite::Connection;
-            let conn = Connection::open(db_path).unwrap();
+            let conn = Connection::open(db_path.to_str().unwrap()).unwrap();
             conn.execute(
                 "CREATE TABLE audit_blocks (
                     index_val INTEGER PRIMARY KEY,
@@ -665,10 +667,13 @@ mod tests {
                     status INTEGER NOT NULL
                 );",
                 [],
-            ).unwrap();
+            )
+            .unwrap();
         }
 
-        let restored = AuditChain::restore_from_sqlite(db_path).unwrap();
+        let restored = AuditChain::restore_from_sqlite(db_path.to_str().unwrap()).unwrap();
         assert!(restored.is_empty());
+
+        let _ = std::fs::remove_file(&db_path);
     }
 }

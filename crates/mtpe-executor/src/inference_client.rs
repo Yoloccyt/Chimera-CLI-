@@ -108,9 +108,12 @@ impl InferenceClient {
         let http = self.http.as_ref().ok_or_else(|| MtpeError::ConfigError {
             reason: "HTTP client 初始化失败".into(),
         })?;
-        let endpoint = self.endpoint.as_ref().ok_or_else(|| MtpeError::ConfigError {
-            reason: "推理服务端点未配置".into(),
-        })?;
+        let endpoint = self
+            .endpoint
+            .as_ref()
+            .ok_or_else(|| MtpeError::ConfigError {
+                reason: "推理服务端点未配置".into(),
+            })?;
 
         let resp = http
             .post(endpoint)

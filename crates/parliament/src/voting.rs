@@ -260,7 +260,12 @@ impl BordaVoteCounter {
         total_roles: usize,
         proposal: &Proposal,
     ) -> VoteResult {
-        self.count_votes_with_threshold(opinions, total_roles, proposal, self.config.consensus_threshold)
+        self.count_votes_with_threshold(
+            opinions,
+            total_roles,
+            proposal,
+            self.config.consensus_threshold,
+        )
     }
 
     /// 计票并判定共识(使用自定义共识阈值)
