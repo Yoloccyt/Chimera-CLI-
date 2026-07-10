@@ -22,7 +22,7 @@ Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 3
 | **Ω-Evolve** | 自组织在线进化 | GRPO 风格进化 + 偏好优化 | `gsoe-evolution` + `auto-dpo` |
 | **Ω-Event** | 事件驱动架构 | Tokio broadcast 跨层解耦 | `event-bus` |
 
-项目核心目标是为多模型 AI 应用提供一个安全、可观测、可进化的异步执行框架,避免传统 AI 代码助手常见的"孤儿调用""裸奔命令""内存爆炸"等系统性问题。
+项目核心目标是为多模型 AI 应用提供一个安全、可观测、可进化的异步执行框架,避免传统 AI 代码助手常见的“孤儿调用”“裸奔命令”“内存爆炸”等系统性问题。
 
 ### 关键特性
 
@@ -48,7 +48,7 @@ Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 3
 项目提供跨平台一键安装脚本,自动检测平台/架构、下载对应 binary、校验 SHA256、配置 PATH 并验证安装。
 
 > **仓库可见性说明**
-> 本仓库(Yoloccyt/Chimera-CLI-)当前为**私有仓库**。`raw.githubusercontent.com` 拉取私有仓库内容必须在 HTTP header 中携带 `Authorization: Bearer <GITHUB_TOKEN>`,否则直接返回 `404 Not Found`。
+> 本仓库(Yoloccyt/Chimera-CLI-)当前为**私有仓库**。`raw.githubusercontent.com` 拉取私有仓库内容必须在 HTTP header 中携带 `Authorization: Bearer <GITHUB_TOKEN>`,否则直接访问会失败。
 > 如果你已将仓库改为公有,可省略 `-H` / `-Headers` 参数。
 
 ##### 公有仓库(可省略鉴权 header)
@@ -83,7 +83,7 @@ $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)
 ```
 
-**WHY 需要 header 鉴权**: `raw.githubusercontent.com` 对私有仓库的 raw 内容拒绝匿名访问;`GITHUB_TOKEN` 仅作为环境变量存在时,`curl`/ `irm` 不会自动把它加入 header,必须显式传递。脚本内部下载 Release binary 时同样会读取该环境变量。
+**WHY 需要 header 鉴权**: `raw.githubusercontent.com` 对私有仓库的 raw 内容拒绝匿名访问;`GITHUB_TOKEN` 仅作为环境变量存在时,`curl`/`irm` 不会自动把它加入 header。
 
 ##### 可选参数
 
@@ -108,7 +108,8 @@ sh install.sh --skip-verify
 > 1. 确认仓库可见性:私有仓库必须按上方示例携带 `Authorization: Bearer <GITHUB_TOKEN>` header
 > 2. 使用 [GitHub Releases](https://github.com/Yoloccyt/Chimera-CLI-/releases) 手动下载对应平台 binary(见方式 2)
 > 3. 配置 DNS / 代理后重试
-> 4. 克隆仓库后本地执行 `sh install.sh` / `.\install.ps1`
+> 4. 克隆仓库后本地执行 `sh install.sh` / `.
+install.ps1`
 
 #### 方式 2:从 Release 下载
 
@@ -213,36 +214,37 @@ aether --config ~/.aether/omega.yaml wiki "查询"
 | RepoWiki placeholder_embedding | `crates/repo-wiki/src/generator.rs:66` | SHA-256 哈希扩展(无语义) | NMC CLV 512-dim 替换 |
 | SCC InMemoryWal | `crates/scc-cache/src/wal.rs:125` | 内存缓冲(进程退出丢失) | SqliteWal 持久化 |
 
-**设计决策**:v1.0.0-omega 选择"占位 + 明确标注"而非"阻塞发布",因为这些组件均有完整的接口契约和测试覆盖,替换为生产实现时无需修改调用方代码(符合依赖倒置原则)。详见 [docs/release/v1.0.0-omega_release_notes.md](./docs/release/v1.0.0-omega_release_notes.md) 第 6 节。
+**设计决策**:v1.0.0-omega 选择“占位 + 明确标注”而非“阻塞发布”,因为这些组件均有完整的接口契约和测试覆盖,替换为生产实现时无需修改调用方代码。
+
 ---
 
 ## 10 层架构
 
 ```text
-┌─────────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────────[...]
 │ L10  Interface ─ chimera-cli · chimera-tui · chtc-bridge        │
 │                   mcp-mesh · csn-substitutor                    │
-├─────────────────────────────────────────────────────────────────┤
+├────────────────────────────────────────────────────────────────[...]
 │ L9   Quest ────── quest-engine · gea-activator · efficiency-monitor │
-├─────────────────────────────────────────────────────────────────┤
+├────────────────────────────────────────────────────────────────[...]
 │ L8   Parliament ─ parliament · acb-governor · decb-governor     │
-├─────────────────────────────────────────────────────────────────┤
+├────────────────────────────────────────────────────────────────[...]
 │ L7   Execution ── pvl-layer · gqep-executor · mtpe-executor     │
 │                   ssra-fusion                                   │
-├─────────────────────────────────────────────────────────────────┤
+├────────────────────────────────────────────────────────────────[...]
 │ L6   Router ───── osa-coordinator · kvbsr-router · faae-router  │
 │                   sesa-router                                   │
-├─────────────────────────────────────────────────────────────────┤
+├────────────────────────────────────────────────────────────────[...]
 │ L5   Knowledge ── repo-wiki · gsoe-evolution · auto-dpo         │
-├─────────────────────────────────────────────────────────────────┤
+├────────────────────────────────────────────────────────────────[...]
 │ L4   Security ─── seccore · qeep-protocol · decay-engine        │
-├─────────────────────────────────────────────────────────────────┤
+├────────────────────────────────────────────────────────────────[...]
 │ L3   Storage ──── scc-cache · lsct-tiering · cmt-tiering        │
-├─────────────────────────────────────────────────────────────────┤
+├────────────────────────────────────────────────────────────────[...]
 │ L2   Memory ───── nmc-encoder · hcw-window · mlc-engine         │
-├─────────────────────────────────────────────────────────────────┤
+├────────────────────────────────────────────────────────────────[...]
 │ L1   Core ─────── nexus-core · event-bus · model-router         │
-└─────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────[...]
 ```
 
 ### 依赖铁律
@@ -361,20 +363,15 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 
 ---
 
-
 ## 文档索引
 
-| 文档 | 说明 |
-|------|------|
-| [CODE_WIKI.md](./CODE_WIKI.md) | 代码 Wiki(架构、模块职责、术语表) |
-| [CHANGELOG.md](./CHANGELOG.md) | 版本变更记录 |
-| [AETHER_NEXUS_OMEGA_ULTIMATE.md](./AETHER_NEXUS_OMEGA_ULTIMATE.md) | 主架构手册(8 周计划、25 ADR、核心类型) |
-| [CHIMERA_NEXUS_COMPLETE_BUILD_GUIDE.md](./CHIMERA_NEXUS_COMPLETE_BUILD_GUIDE.md) | 构建指南 |
-| [docs/architecture/](./docs/architecture/) | 架构文档(10 层详解、数据流、ADR 索引) |
-| [docs/performance/](./docs/performance/) | 性能报告 |
-| [docs/security/](./docs/security/) | 安全报告 |
-| [docs/release/](./docs/release/) | 发布指南 |
-| [docs/grafana/](./docs/grafana/) | Grafana 监控仪表盘 |
+- [docs/README.md](./docs/README.md) — 文档中心入口
+- [docs/INDEX.md](./docs/INDEX.md) — 文档总索引
+- [docs/architecture/](./docs/architecture/) — 架构文档
+- [docs/performance/](./docs/performance/) — 性能报告
+- [docs/security/](./docs/security/) — 安全报告
+- [docs/release/](./docs/release/) — 发布指南
+- [docs/grafana/](./docs/grafana/) — Grafana 监控仪表盘
 
 ---
 
@@ -431,13 +428,13 @@ cargo doc --workspace --no-deps
 |------|------|------|
 | v1.0.0-omega | 2026-06-27 | Week 8 验收通过,34/34 crate 全覆盖,3002+ 测试,性能/安全/文档/发布全部达标 |
 
-详见 [CHANGELOG.md](./CHANGELOG.md)。
+详见 [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
 ## 许可证
 
-Apache-2.0 License — 详见 [LICENSE](./LICENSE)。
+Apache-2.0 License — 详见 [LICENSE](./LICENSE).
 
 ---
 
