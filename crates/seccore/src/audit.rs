@@ -8,6 +8,9 @@
 //! - **独立计算**:审计链验证时重新计算 command_hash/result_hash,不信任
 //!   存储的 audit_hash 字段,防止字段被篡改后绕过验证。
 //! - **SHA-256**:抗碰撞,工业标准。使用 sha2 crate 的纯 Rust 实现。
+//! - **Pre-execution audit (N5 修复)**:借鉴数据库 WAL 思想,执行前先写 Intent
+//!   记录,执行后更新为 Executed/Failed。这样即使执行中崩溃或 append 失败,
+//!   审计链仍保留意图痕迹,关闭"执行成功但 append 失败导致无痕"的漏洞窗口。
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -16,6 +19,34 @@ use tracing::warn;
 
 use crate::error::SecCoreError;
 use crate::types::{CommandSpec, ExecutionResult};
+
+/// 审计记录状态 — pre-execution audit 模式的状态机(N5 修复)。
+///
+/// WHY: 引入状态机让审计链能区分"意图已记录但未执行"与"已执行"两种状态,
+///      消除后置 append 模式的漏洞窗口(执行成功但 append 失败时无痕)。
+///
+/// 状态流转:
+/// - `Intent` → `Executed`(执行成功,result_hash 填充)
+/// - `Intent` → `Failed`(执行失败或被拦截,result_hash 保持空占位)
+///
+/// status 字段纳入 merkle_root 计算,防止攻击者将 Intent 篡改为 Executed
+/// 伪造执行证据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuditRecordStatus {
+    /// 意图记录:命令执行前已记录意图,等待执行结果。
+    /// result_hash 为空占位,执行后由 update_status 填充。
+    Intent,
+    /// 已执行:命令执行成功,result_hash 已填充。
+    Executed,
+    /// 执行失败:命令执行失败或被拦截,result_hash 保持空占位。
+    Failed,
+}
+
+/// 审计记录 ID — pre-execution 模式下 append_intent 返回的记录定位符。
+///
+/// WHY: 调用方在 append_intent 后拿到 RecordId,执行命令后用同一 ID 调用
+///      update_status 更新对应记录。ID 即块索引,严格递增。
+pub type RecordId = u64;
 
 /// 审计块 — 审计链中的单个记录,对应一次命令执行。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,11 +58,17 @@ pub struct AuditBlock {
     /// 命令哈希(SHA-256,程序名+参数+环境变量)
     pub command_hash: String,
     /// 结果哈希(SHA-256,退出码+stdout+stderr+duration)
+    ///
+    /// N5 修复:Intent 状态下为空字符串占位,Executed 状态下由 update_status 填充。
     pub result_hash: String,
     /// 前一块的 merkle_root(创世块为 64 个 '0')
     pub prev_hash: String,
-    /// 本块的 Merkle 根(SHA-256(index||timestamp||command_hash||result_hash||prev_hash))
+    /// 本块的 Merkle 根(SHA-256(index||timestamp||command_hash||result_hash||prev_hash||status))
     pub merkle_root: String,
+    /// 审计记录状态(N5 修复:pre-execution audit 状态机)
+    ///
+    /// WHY: 纳入 merkle_root 计算,防止 Intent 被篡改为 Executed 伪造执行证据。
+    pub status: AuditRecordStatus,
 }
 
 /// 审计链 — 由 AuditBlock 组成的单向链表,支持完整性验证。
@@ -55,7 +92,125 @@ impl AuditChain {
         }
     }
 
-    /// 追加一条审计记录 — 计算哈希并链接到链尾。
+    /// Pre-execution append:命令执行前记录 Intent 状态的审计块(N5 修复)。
+    ///
+    /// WHY: 这是修复 N5 漏洞的核心 API。在命令执行前先写入 Intent 记录,
+    ///      确保即使后续执行中崩溃或 update_status 失败,审计链仍保留
+    ///      "曾尝试执行该命令"的意图痕迹。append_intent 失败时返回 Err,
+    ///      调用方必须用 `?` 短路阻止命令执行。
+    ///
+    /// 典型流程:
+    /// ```ignore
+    /// let id = chain.append_intent(&spec)?;       // 执行前记录意图
+    /// let result = execute(cmd).await;            // 执行命令
+    /// match result {
+    ///     Ok(r) => chain.update_status(id, AuditRecordStatus::Executed, Some(&r))?,
+    ///     Err(_) => { let _ = chain.update_status(id, AuditRecordStatus::Failed, None); }
+    /// }
+    /// ```
+    ///
+    /// # 参数
+    /// - `command`:校验通过的命令规格(已通过 policy::validate_command)
+    ///
+    /// # 返回
+    /// - `Ok(RecordId)`:追加成功,返回记录 ID(即块索引,用于后续 update_status)
+    /// - `Err(SecCoreError::AuditError)`:哈希计算失败(理论上不会发生)
+    pub fn append_intent(&mut self, command: &CommandSpec) -> Result<RecordId, SecCoreError> {
+        let index = self.blocks.len() as u64;
+        let timestamp = Utc::now().timestamp();
+        let command_hash = hash_command(command);
+        // Intent 状态:result_hash 为空占位,执行后由 update_status 填充
+        let result_hash = String::new();
+        let prev_hash = self.current_hash.clone();
+        let status = AuditRecordStatus::Intent;
+        let merkle_root = compute_block_hash(
+            index,
+            timestamp,
+            &command_hash,
+            &result_hash,
+            &prev_hash,
+            status,
+        );
+
+        let block = AuditBlock {
+            index,
+            timestamp,
+            command_hash,
+            result_hash,
+            prev_hash,
+            merkle_root: merkle_root.clone(),
+            status,
+        };
+
+        self.current_hash = merkle_root;
+        self.blocks.push(block);
+        Ok(index)
+    }
+
+    /// Post-execution update:命令执行后更新对应记录的状态与结果(N5 修复)。
+    ///
+    /// WHY: 配合 append_intent 使用。执行后用 append_intent 返回的 RecordId
+    ///      更新记录为 Executed(填充 result_hash)或 Failed(保持空占位)。
+    ///      重新计算 merkle_root 并更新 current_hash,保持链完整性。
+    ///
+    /// # 安全约束
+    /// 仅允许更新**链尾块** — 更新中间块会改变其 merkle_root,导致后续所有块
+    /// 的 prev_hash 链断裂。这强制调用方严格遵循 append_intent → 立即执行 →
+    /// 立即 update_status 的串行模式,防止 Intent 记录悬挂。
+    ///
+    /// # 参数
+    /// - `id`:append_intent 返回的 RecordId
+    /// - `status`:目标状态(Executed / Failed)
+    /// - `result`:执行结果(Executed 状态必传,Failed 状态可传 None)
+    ///
+    /// # 返回
+    /// - `Ok(())`:更新成功
+    /// - `Err(SecCoreError::AuditError)`:id 无效或非链尾块
+    pub fn update_status(
+        &mut self,
+        id: RecordId,
+        status: AuditRecordStatus,
+        result: Option<&ExecutionResult>,
+    ) -> Result<(), SecCoreError> {
+        // 校验:id 必须是有效的链尾块索引
+        // WHY: 仅允许更新链尾块,防止中间块 merkle_root 变更破坏后续 prev_hash 链
+        if self.blocks.is_empty() {
+            return Err(SecCoreError::AuditError(format!(
+                "审计链为空,RecordId {id} 不存在(需先调用 append_intent)"
+            )));
+        }
+        let last_index = (self.blocks.len() - 1) as u64;
+        if id != last_index {
+            return Err(SecCoreError::AuditError(format!(
+                "RecordId {id} 不是链尾块(当前链尾索引 {last_index}),更新非链尾块会破坏 merkle 链"
+            )));
+        }
+
+        let block = &mut self.blocks[id as usize];
+        block.status = status;
+        if let Some(result) = result {
+            block.result_hash = hash_result(result);
+        }
+        // WHY: status 或 result_hash 变更后必须重算 merkle_root,并更新 current_hash
+        //      保持链尾块的 merkle_root 与 current_hash 一致(verify 检查 4)
+        let new_root = compute_block_hash(
+            block.index,
+            block.timestamp,
+            &block.command_hash,
+            &block.result_hash,
+            &block.prev_hash,
+            block.status,
+        );
+        self.current_hash = new_root.clone();
+        block.merkle_root = new_root;
+        Ok(())
+    }
+
+    /// 追加一条已完成的审计记录 — 向后兼容接口(N5 修复保留)。
+    ///
+    /// WHY: 保留此方法避免破坏既有调用点(如 sandbox.rs 原有流程、security.rs 测试)。
+    ///      内部委托 append_intent + update_status(Executed),等价于 pre-execution
+    ///      模式的快捷路径(执行前记录意图 + 立即标记为已执行)。
     ///
     /// # 参数
     /// - `command`:校验通过的命令规格
@@ -69,25 +224,8 @@ impl AuditChain {
         command: &CommandSpec,
         result: &ExecutionResult,
     ) -> Result<(), SecCoreError> {
-        let index = self.blocks.len() as u64;
-        let timestamp = Utc::now().timestamp();
-        let command_hash = hash_command(command);
-        let result_hash = hash_result(result);
-        let prev_hash = self.current_hash.clone();
-        let merkle_root =
-            compute_block_hash(index, timestamp, &command_hash, &result_hash, &prev_hash);
-
-        let block = AuditBlock {
-            index,
-            timestamp,
-            command_hash,
-            result_hash,
-            prev_hash,
-            merkle_root: merkle_root.clone(),
-        };
-
-        self.current_hash = merkle_root;
-        self.blocks.push(block);
+        let id = self.append_intent(command)?;
+        self.update_status(id, AuditRecordStatus::Executed, Some(result))?;
         Ok(())
     }
 
@@ -123,13 +261,14 @@ impl AuditChain {
                 return Ok(false);
             }
 
-            // 检查3:merkle_root 重新计算匹配
+            // 检查3:merkle_root 重新计算匹配(含 status 字段,防止状态篡改)
             let expected_root = compute_block_hash(
                 block.index,
                 block.timestamp,
                 &block.command_hash,
                 &block.result_hash,
                 &block.prev_hash,
+                block.status,
             );
             if block.merkle_root != expected_root {
                 warn!(block_index = i, "审计链篡改: merkle_root 不匹配");
@@ -200,14 +339,18 @@ fn hash_result(result: &ExecutionResult) -> String {
 
 /// 计算审计块的 Merkle 根(SHA-256)。
 ///
-/// 哈希内容:index || timestamp || command_hash || result_hash || prev_hash。
+/// 哈希内容:index || timestamp || command_hash || result_hash || prev_hash || status。
 /// 这是链式结构的核心:每个块的哈希依赖前一块,形成单向链。
+///
+/// WHY(N5 修复):status 纳入哈希,防止攻击者将 Intent 状态篡改为 Executed
+/// 伪造执行证据。status 用单字节表示(Intent=0 / Executed=1 / Failed=2)。
 fn compute_block_hash(
     index: u64,
     timestamp: i64,
     command_hash: &str,
     result_hash: &str,
     prev_hash: &str,
+    status: AuditRecordStatus,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(index.to_le_bytes());
@@ -215,6 +358,8 @@ fn compute_block_hash(
     hasher.update(command_hash.as_bytes());
     hasher.update(result_hash.as_bytes());
     hasher.update(prev_hash.as_bytes());
+    // WHY: status 作为单字节纳入哈希,防止状态字段被篡改后绕过验证
+    hasher.update([status as u8]);
     hex::encode(hasher.finalize())
 }
 
@@ -275,5 +420,65 @@ mod tests {
         }
         assert_eq!(chain.len(), 5);
         assert!(chain.verify().unwrap());
+    }
+
+    /// N5 修复验证:status 字段纳入 merkle_root,篡改 status 应被检测。
+    ///
+    /// WHY: 防止攻击者将 Intent 状态篡改为 Executed 伪造执行证据。
+    #[test]
+    fn test_chain_status_tamper_detected() {
+        let mut chain = AuditChain::new();
+        // 写入一条 Intent 记录(不调用 update_status)
+        chain.append_intent(&make_spec()).unwrap();
+        assert_eq!(chain.blocks[0].status, AuditRecordStatus::Intent);
+        assert!(chain.verify().unwrap(), "Intent 状态审计链应完整");
+
+        // 篡改:将 Intent 改为 Executed,但不更新 result_hash 与 merkle_root
+        chain.blocks[0].status = AuditRecordStatus::Executed;
+
+        // 篡改后验证应失败(merkle_root 重算时 status 字段不匹配)
+        assert!(
+            !chain.verify().unwrap(),
+            "篡改 status 应被 merkle_root 重算检测"
+        );
+    }
+
+    /// N5 修复验证:pre-execution 流程(Intent → Executed)后审计链完整。
+    #[test]
+    fn test_chain_pre_execution_flow() {
+        let mut chain = AuditChain::new();
+        let spec = make_spec();
+        let result = make_result();
+
+        // 执行前记录意图
+        let id = chain.append_intent(&spec).unwrap();
+        assert_eq!(chain.blocks[0].status, AuditRecordStatus::Intent);
+        assert!(chain.verify().unwrap(), "Intent 阶段审计链应完整");
+
+        // 执行后更新为 Executed
+        chain
+            .update_status(id, AuditRecordStatus::Executed, Some(&result))
+            .unwrap();
+        assert_eq!(chain.blocks[0].status, AuditRecordStatus::Executed);
+        assert!(chain.verify().unwrap(), "Executed 阶段审计链应完整");
+
+        // 验证 update_status 重算了 merkle_root(result_hash 从空变为实际哈希)
+        assert!(!chain.blocks[0].result_hash.is_empty());
+    }
+
+    /// N5 修复验证:Failed 状态路径 — 执行失败时记录 Failed,审计链仍完整。
+    #[test]
+    fn test_chain_failed_status_flow() {
+        let mut chain = AuditChain::new();
+        let spec = make_spec();
+
+        let id = chain.append_intent(&spec).unwrap();
+        // 执行失败:更新为 Failed,不传 result(result_hash 保持空占位)
+        chain
+            .update_status(id, AuditRecordStatus::Failed, None)
+            .unwrap();
+        assert_eq!(chain.blocks[0].status, AuditRecordStatus::Failed);
+        assert!(chain.blocks[0].result_hash.is_empty());
+        assert!(chain.verify().unwrap(), "Failed 状态审计链应完整");
     }
 }

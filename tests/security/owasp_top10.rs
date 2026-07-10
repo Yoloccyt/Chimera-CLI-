@@ -126,11 +126,11 @@ async fn test_a03_sensitive_data_etc_passwd() {
 async fn test_a03_sensitive_data_env_secret() {
     let mut sandbox = make_sandbox();
     // 通过环境变量传递 SECRET — 应被环境过滤层拦截
-    #[cfg(windows)]
-    let cmd = Command::new("cmd")
-        .args(["/C", "echo", "leak"])
-        .env("SECRET_KEY", "super_secret_value");
-    #[cfg(not(windows))]
+    //
+    // WHY 不用 cmd /C echo(N1 修复副作用):cmd.exe 已从 default_secure 白名单
+    // 移除(见 policy.rs),Windows 下若用 cmd 会先被 validate_command 判定为
+    // Abuse,到不了 validate_env 层,无法验证环境变量过滤(原测试意图)。
+    // 改用白名单内的 echo,确保测试到达环境变量过滤层。
     let cmd = Command::new("echo")
         .arg("leak")
         .env("SECRET_KEY", "super_secret_value");
@@ -176,6 +176,38 @@ async fn test_a03_windows_path_traversal() {
             );
         }
         e => panic!("A03(Windows): 期望 CommandBlocked, 实际: {e:?}"),
+    }
+}
+
+// =============================================================================
+// A03 N1 — cmd.exe 绕过 Critical 漏洞防护(回归测试)
+//
+// WHY 回归测试:cmd.exe 是 Windows 通用 shell 启动器,`cmd /c "任意命令"`
+// 可绕过全部四层防御(白名单通过 + 无 blocked_pattern 匹配 + 沙箱执行 +
+// 审计记录),构成零信任模型的致命漏洞(N1 Critical)。
+// 修复:cmd 永不在 default_secure 白名单中(见 policy.rs),任何 cmd 调用
+// 直接判定为 Abuse(未授权命令)被拦截。此测试防止未来回退引入 cmd。
+// 跨平台验证:无论 Windows 还是 Unix,cmd 都不在白名单,均应被拦截。
+// =============================================================================
+
+#[tokio::test]
+async fn test_owasp_a03_cmd_exe_bypass_blocked() {
+    let mut sandbox = make_sandbox();
+    // 攻击载荷:cmd /c "del /f /s /q C:\fake_path"
+    // — 尝试通过 cmd.exe shell 启动器绕过白名单执行破坏性命令
+    let cmd = Command::new("cmd").args(["/c", "del", "/f", "/s", "/q", "C:\\fake_path"]);
+    let result = sandbox.audit_and_execute(cmd).await;
+
+    assert!(result.is_err(), "N1: cmd.exe 绕过尝试必须被拦截");
+    match result.unwrap_err() {
+        SecCoreError::CommandBlocked { attack_type, .. } => {
+            assert_eq!(
+                attack_type,
+                AttackType::Abuse,
+                "N1: cmd 应识别为 Abuse(非白名单命令), 实际: {attack_type:?}"
+            );
+        }
+        e => panic!("N1: 期望 CommandBlocked(Abuse), 实际: {e:?}"),
     }
 }
 
@@ -498,10 +530,13 @@ async fn test_a09_logging_security_events_recorded() {
 
     // 场景1:被拦截的攻击应记录(虽然审计链不追加失败操作,但策略层有 tracing 日志)
     // 这里验证成功执行的命令被审计链记录
-    #[cfg(windows)]
-    let cmd = Command::new("cmd").args(["/C", "echo", "audit_test"]);
-    #[cfg(not(windows))]
-    let cmd = Command::new("echo").arg("audit_test");
+    //
+    // WHY 用 whoami 而非 echo(N1 修复副作用 + Windows 兼容):
+    // 1. cmd 已从白名单移除(N1),不能用 cmd /C echo
+    // 2. Windows 下 echo 是 cmd 内置命令,无独立 echo.exe,直接执行会失败
+    // whoami 是跨平台独立可执行文件(Windows: whoami.exe, Unix: /usr/bin/whoami),
+    // 且在白名单内,能成功执行以验证审计链追加(原测试意图)。
+    let cmd = Command::new("whoami");
 
     let initial_len = sandbox.audit_chain.len();
     let result = sandbox.audit_and_execute(cmd).await;
@@ -524,10 +559,10 @@ async fn test_a09_logging_multiple_events_tracked() {
 
     // 执行多条命令,验证每条都被记录
     for i in 0..5 {
-        #[cfg(windows)]
-        let cmd = Command::new("cmd").args(["/C", "echo", &format!("event_{i}")]);
-        #[cfg(not(windows))]
-        let cmd = Command::new("echo").arg(format!("event_{i}"));
+        // WHY 用 whoami 而非 echo(N1 修复副作用 + Windows 兼容):
+        // 同 test_a09_logging_security_events_recorded,whoami 跨平台可执行,
+        // 重复执行 5 次产生 5 条独立审计记录验证多次追踪。
+        let cmd = Command::new("whoami");
 
         let result = sandbox.audit_and_execute(cmd).await;
         assert!(result.is_ok(), "A09: 第 {i} 条命令应执行成功");

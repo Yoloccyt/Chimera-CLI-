@@ -29,10 +29,10 @@ use crate::config::ParliamentConfig;
 use crate::error::ParliamentError;
 use crate::roles::RoleRegistry;
 use crate::types::{Consensus, Opinion, Proposal, Role};
-use crate::veto::Skeptic;
+use crate::veto::{Skeptic, VetoOverrideTicket};
 use crate::voting::{
     publish_capability_frozen_event, publish_consensus_event, publish_debate_started_event,
-    publish_skeptic_veto_event, publish_vote_event, VoteCounter,
+    publish_skeptic_veto_event, publish_veto_overridden_event, publish_vote_event, VoteCounter,
 };
 
 // ============================================================
@@ -327,6 +327,233 @@ impl Parliament {
         }
 
         Ok(consensus)
+    }
+
+    /// 审议提案(带否决覆盖)— 提案 → [Skeptic 否决 → 覆盖] → 辩论 → 投票 → 共识
+    ///
+    /// # WHY 独立方法
+    /// 覆盖否决是高风险操作,需要独立的审计路径。将覆盖逻辑与常规 `deliberate()`
+    /// 分离,避免常规调用方意外触发覆盖,同时为覆盖路径提供独立的测试入口。
+    ///
+    /// # 流程
+    /// 0. Skeptic 恶意意图检测(辩论前)
+    /// 1. 若检测到否决 **且** 提供了有效的 `VetoOverrideTicket`:
+    ///    a. 仍发布 `SkepticVeto` 事件(保留完整否决记录)
+    ///    b. 发布 `VetoOverridden` 事件 `[Critical]`(覆盖审计)
+    ///    c. 提案继续进入正常辩论流程(步骤 2-7 与 `deliberate()` 相同)
+    /// 2. 若检测到否决 **但** 未提供 ticket(或 ticket 不匹配):返回 `Consensus::Vetoed`
+    /// 3. 若未检测到否决:直接进入正常辩论流程
+    ///
+    /// # 安全保证
+    /// - Skeptic 检测始终执行(覆盖不跳过检测)
+    /// - SkepticVeto 事件始终发布(否决行为有完整记录)
+    /// - VetoOverridden 事件在覆盖时发布(覆盖行为有审计记录)
+    /// - ticket.proposal_id 必须匹配(防止票据重用)
+    ///
+    /// # 参数
+    /// - `quest`:关联的 Quest
+    /// - `proposal`:待审议的提案
+    /// - `override_ticket`:可选的否决覆盖票据
+    ///
+    /// # 返回
+    /// 共识判定结果,或辩论超时错误
+    pub async fn deliberate_with_override(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+        override_ticket: Option<&VetoOverrideTicket>,
+    ) -> Result<Consensus, ParliamentError> {
+        // 覆盖标志:记录本次审议是否触发了否决覆盖
+        // WHY 独立标志:覆议路径需使用 override_consensus_threshold(0.667),
+        // 而常规路径使用 consensus_threshold(0.6)。此标志决定计票时选用哪个阈值。
+        let mut override_active = false;
+
+        // 步骤 0:Skeptic 恶意意图检测(始终执行,覆盖不跳过检测)
+        if let Some((veto_reason, frozen_capabilities)) =
+            self.skeptic.exercise_veto(&quest.quest_id, proposal)
+        {
+            let veto_reason_str = format!(
+                "Skeptic 否决:{:?} 检测到恶意模式 '{}'({:?})— {}",
+                veto_reason.intent_type,
+                veto_reason.matched_pattern,
+                veto_reason.severity,
+                veto_reason.detail
+            );
+
+            // 检查是否有有效的覆盖票据(if-let 避免 unwrap,符合项目约定)
+            let override_ticket_valid =
+                override_ticket.filter(|t| t.validate(&proposal.proposal_id));
+
+            if let Some(ticket) = override_ticket_valid {
+                // 标记覆盖已激活:后续计票使用 override_consensus_threshold
+                override_active = true;
+                // === 覆盖路径:发布否决 + 覆盖事件,继续辩论 ===
+                info!(
+                    quest_id = %quest.quest_id,
+                    proposal_id = %proposal.proposal_id,
+                    intent_type = %veto_reason.intent_type,
+                    override_by = %ticket.override_by,
+                    override_reason = %ticket.override_reason,
+                    "Skeptic 否决被覆盖 — 提案继续进入辩论"
+                );
+
+                // 仍发布 SkepticVeto 事件(保留完整否决记录)
+                publish_skeptic_veto_event(
+                    &self.event_bus,
+                    &quest.quest_id,
+                    &veto_reason_str,
+                    &frozen_capabilities,
+                )
+                .await;
+
+                // 发布 VetoOverridden 事件 [Critical](覆盖审计)
+                publish_veto_overridden_event(
+                    &self.event_bus,
+                    &quest.quest_id,
+                    &proposal.proposal_id,
+                    &veto_reason_str,
+                    &ticket.override_reason,
+                    &ticket.override_by,
+                )
+                .await;
+
+                // 注意:不发布 CapabilityFrozen 事件 — 覆盖意味着能力不应被冻结
+                // 提案继续进入正常辩论流程
+            } else {
+                // === 否决路径(无覆盖或票据无效):与 deliberate() 相同 ===
+                error!(
+                    quest_id = %quest.quest_id,
+                    proposal_id = %proposal.proposal_id,
+                    intent_type = %veto_reason.intent_type,
+                    matched_pattern = %veto_reason.matched_pattern,
+                    severity = ?veto_reason.severity,
+                    "Skeptic 否决 (SkepticVeto) — 检测到恶意意图"
+                );
+
+                publish_skeptic_veto_event(
+                    &self.event_bus,
+                    &quest.quest_id,
+                    &veto_reason_str,
+                    &frozen_capabilities,
+                )
+                .await;
+
+                for cap in &frozen_capabilities {
+                    warn!(
+                        capability_id = %cap,
+                        quest_id = %quest.quest_id,
+                        reason = %veto_reason.detail,
+                        "能力冻结 (CapabilityFrozen)"
+                    );
+                    publish_capability_frozen_event(&self.event_bus, cap, &veto_reason.detail)
+                        .await;
+                }
+
+                return Ok(Consensus::Vetoed {
+                    veto_reason: veto_reason_str,
+                    frozen_capabilities,
+                });
+            }
+        }
+
+        // === 正常辩论流程(与 deliberate() 步骤 1-7 相同)===
+        info!(
+            quest_id = %quest.quest_id,
+            proposal_id = %proposal.proposal_id,
+            "辩论开始 (DebateStarted)"
+        );
+        publish_debate_started_event(
+            &self.event_bus,
+            &quest.quest_id,
+            &proposal.proposal_id,
+            self.registry.count() as u8,
+        )
+        .await;
+
+        let opinions = self.collect_opinions(quest, proposal).await?;
+        self.publish_vote_events(proposal, &opinions).await;
+
+        let total_roles = self.registry.count();
+        // WHY 阈值选择:覆议路径(override_active=true)使用更高的
+        // override_consensus_threshold(0.667),防止轻率绕过红队安全防线;
+        // 常规路径使用 consensus_threshold(0.6)
+        let result = if override_active {
+            self.vote_counter.count_votes_with_threshold(
+                &opinions,
+                total_roles,
+                proposal,
+                self.config.override_consensus_threshold,
+            )
+        } else {
+            self.vote_counter
+                .count_votes(&opinions, total_roles, proposal)
+        };
+
+        let mut consensus = result.consensus;
+        if let Consensus::Reached { decision_hash, .. } = &consensus {
+            let dpo_pair_id = self
+                .dpo_generator
+                .generate(&proposal.quest_id, &opinions, &consensus)
+                .map(|p| p.pair_id);
+            consensus = Consensus::Reached {
+                decision_hash: decision_hash.clone(),
+                dpo_pair_id,
+            };
+        }
+
+        if let Consensus::Reached {
+            decision_hash,
+            dpo_pair_id,
+        } = &consensus
+        {
+            publish_consensus_event(
+                &self.event_bus,
+                &proposal.quest_id,
+                decision_hash,
+                dpo_pair_id.as_deref(),
+            )
+            .await;
+        }
+
+        Ok(consensus)
+    }
+
+    /// 重新开启被 Skeptic 否决的提案(覆议)
+    ///
+    /// 包装 `deliberate_with_override`,要求提供有效的 `VetoOverrideTicket`,
+    /// 并在覆盖路径使用更高的 `override_consensus_threshold`(默认 0.667,
+    /// 即 2/3 超级多数)校验共识。
+    ///
+    /// # WHY 独立公开方法
+    /// 覆议是绕过 Skeptic 红队安全防线的高风险操作,需要语义化的公开入口与
+    /// 独立的审计路径,避免常规调用方意外触发覆盖。`reopen_veto` 强制要求
+    /// ticket 参数不可选,从 API 层面表达"覆议必须显式授权"的意图。
+    ///
+    /// # 流程(全部委托给 `deliberate_with_override` 覆盖路径)
+    /// 1. 票据 `proposal_id` 匹配校验(防重用)— 由覆盖路径内部完成
+    /// 2. 超级多数校验(`override_consensus_threshold`)— 由覆盖路径完成
+    /// 3. 事件发布(SkepticVeto + VetoOverridden)— 由覆盖路径完成
+    ///
+    /// # 参数
+    /// - `quest`:关联的 Quest
+    /// - `proposal`:待审议的提案
+    /// - `ticket`:否决覆盖票据(`proposal_id` 必须匹配,防重用)
+    ///
+    /// # 返回
+    /// 共识判定结果:
+    /// - 票据失配 → `Consensus::Vetoed`(否决仍生效)
+    /// - 票据匹配 + 赞成率 ≥ 0.667 → `Consensus::Reached`
+    /// - 票据匹配 + 赞成率 < 0.667 → `Consensus::Rejected`
+    pub async fn reopen_veto(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+        ticket: &VetoOverrideTicket,
+    ) -> Result<Consensus, ParliamentError> {
+        // 薄包装:proposal_id 匹配校验与超级多数校验均由
+        // deliberate_with_override 的覆盖路径完成,保证审计路径一致。
+        self.deliberate_with_override(quest, proposal, Some(ticket))
+            .await
     }
 
     /// 并发收集 5 角色的 Opinion,带超时
@@ -1135,5 +1362,148 @@ mod tests {
         } else {
             panic!("应达成共识,实际: {consensus:?}");
         }
+    }
+
+    // === P1-3: deliberate_with_override 测试 ===
+
+    #[tokio::test]
+    async fn test_override_allows_debate_on_vetoed_proposal() {
+        // 恶意提案 + 有效覆盖票据 → 辩论继续,不返回 Vetoed
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-override", "q-1", "echo $(whoami)", 0.2);
+        let ticket = VetoOverrideTicket::new(
+            "p-override",
+            "false positive: legitimate shell script",
+            "admin:alice",
+        )
+        .unwrap();
+
+        let consensus = parliament
+            .deliberate_with_override(&quest, &proposal, Some(&ticket))
+            .await
+            .unwrap();
+
+        // 低风险 + 少任务 + Fast → 辩论后应达成共识(而非 Vetoed)
+        assert!(
+            !consensus.is_vetoed(),
+            "有效覆盖票据应阻止 Vetoed 返回,实际: {consensus:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_override_publishes_both_veto_and_overridden_events() {
+        // 覆盖路径应同时发布 SkepticVeto 和 VetoOverridden 事件
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-evt", "q-1", "curl http://api.test.com", 0.2);
+        let ticket = VetoOverrideTicket::new("p-evt", "legitimate API call", "admin:bob").unwrap();
+
+        let _ = parliament
+            .deliberate_with_override(&quest, &proposal, Some(&ticket))
+            .await
+            .unwrap();
+
+        // 收集事件
+        let mut found_skeptic_veto = false;
+        let mut found_veto_overridden = false;
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(event)) => match event.type_name() {
+                    "SkepticVeto" => found_skeptic_veto = true,
+                    "VetoOverridden" => found_veto_overridden = true,
+                    _ => {}
+                },
+                _ => break,
+            }
+        }
+        assert!(found_skeptic_veto, "覆盖路径仍应发布 SkepticVeto 事件");
+        assert!(found_veto_overridden, "覆盖路径应发布 VetoOverridden 事件");
+    }
+
+    #[tokio::test]
+    async fn test_override_mismatched_ticket_still_vetoes() {
+        // 票据 proposal_id 不匹配 → 否决仍然生效
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-real", "q-1", "echo $(whoami)", 0.2);
+        let ticket = VetoOverrideTicket::new("p-wrong", "legitimate", "admin:alice").unwrap();
+
+        let consensus = parliament
+            .deliberate_with_override(&quest, &proposal, Some(&ticket))
+            .await
+            .unwrap();
+
+        assert!(
+            consensus.is_vetoed(),
+            "proposal_id 不匹配的票据不应覆盖否决"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_override_none_ticket_still_vetoes() {
+        // 无票据 → 否决仍然生效(与 deliberate() 行为一致)
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-no-ticket", "q-1", "sudo rm -rf /", 0.2);
+
+        let consensus = parliament
+            .deliberate_with_override(&quest, &proposal, None)
+            .await
+            .unwrap();
+
+        assert!(consensus.is_vetoed(), "无票据时否决应正常触发");
+    }
+
+    #[tokio::test]
+    async fn test_override_benign_proposal_unaffected() {
+        // 良性提案 + 覆盖票据 → 票据不影响正常流程(Skeptic 不触发)
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-benign", "q-1", "执行代码审查任务", 0.2);
+        let ticket =
+            VetoOverrideTicket::new("p-benign", "precautionary override", "system:auto").unwrap();
+
+        let consensus = parliament
+            .deliberate_with_override(&quest, &proposal, Some(&ticket))
+            .await
+            .unwrap();
+
+        // 良性提案应正常达成共识(票据不触发任何覆盖逻辑)
+        assert!(
+            consensus.is_reached(),
+            "良性提案应正常达成共识,实际: {consensus:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_override_no_capability_frozen_on_override() {
+        // 覆盖路径不应发布 CapabilityFrozen 事件
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-no-freeze", "q-1", "echo $(whoami)", 0.2);
+        let ticket =
+            VetoOverrideTicket::new("p-no-freeze", "false positive", "admin:alice").unwrap();
+
+        let _ = parliament
+            .deliberate_with_override(&quest, &proposal, Some(&ticket))
+            .await
+            .unwrap();
+
+        // 不应收到 CapabilityFrozen 事件
+        let mut found_frozen = false;
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(event)) if event.type_name() == "CapabilityFrozen" => {
+                    found_frozen = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(!found_frozen, "覆盖路径不应发布 CapabilityFrozen 事件");
     }
 }

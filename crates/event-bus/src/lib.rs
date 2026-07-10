@@ -33,6 +33,7 @@ pub mod backpressure;
 pub mod bus;
 pub mod error;
 pub mod logging;
+pub mod topic;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
@@ -43,6 +44,7 @@ pub use bus::{
 };
 pub use error::EventBusError;
 pub use logging::BusLogger;
+pub use topic::{EventTopic, FilteredSubscriber};
 pub use types::{EventMetadata, EventSeverity, NexusEvent};
 
 /// 预导入模块 — 提供最常用类型
@@ -51,5 +53,6 @@ pub mod prelude {
     pub use crate::bus::{EventBus, EventReceiver, DEFAULT_CAPACITY};
     pub use crate::error::EventBusError;
     pub use crate::logging::BusLogger;
+    pub use crate::topic::{EventTopic, FilteredSubscriber};
     pub use crate::types::{EventMetadata, EventSeverity, NexusEvent};
 }

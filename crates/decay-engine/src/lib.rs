@@ -9,6 +9,21 @@
 //! - 事件驱动:违规事件触发惩罚性衰减
 //!
 //! 冻结/解冻 API 对应 Skeptic 否决权(Week 5 Parliament 实现)
+//!
+//! # 快速示例
+//! WHY 选此示例:展示最常用路径 —— 注册能力 + 事件驱动惩罚衰减,体现双驱动模型的核心。
+//! ```
+//! use decay_engine::{DecayEngine, DecayConfig, DecayEvent};
+//!
+//! let engine = DecayEngine::new(DecayConfig::default());
+//! engine.register_capability("file_write", "文件写入", 1.0).unwrap();
+//! // 违规事件触发惩罚性衰减(severity=2.0 加重违规,penalty=0.1×2.0=0.2)
+//! let level = engine.decay("file_write", DecayEvent::ViolationPenalty {
+//!     capability_id: "file_write".into(),
+//!     severity: 2.0,
+//! }).unwrap();
+//! assert!(level.value() < 1.0, "违规后权限应下降");
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]

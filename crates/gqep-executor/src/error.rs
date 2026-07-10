@@ -68,6 +68,23 @@ pub enum GqepError {
         /// spawn 位置(文件:行号),用于定位代码中的未 await 调用
         spawn_location: String,
     },
+
+    /// 全局 gather 超时:整个聚集流程超过 deadline 未完成。
+    ///
+    /// 区别于 `OperationTimeout`(单操作超时):此变体表示整个 gather 流程
+    /// 触达全局 deadline,剩余未完成的 future 被 drop(放弃)。它附带的
+    /// `deadline_ms`/`elapsed_ms` 供调用者区分超时来源并决策(降级/重试/告警)。
+    ///
+    /// WHY 单独变体:单操作超时累积与全局超时在处置语义上不同 —— 单操作
+    /// 超时可由调用者对单个失败重试,全局超时意味着整批操作需要整体降级,
+    /// 必须显式区分(对应架构红线"所有异步操作必须有 GQEP 聚集/超时处理")。
+    #[error("全局 gather 超时: deadline_ms={deadline_ms}, elapsed_ms={elapsed_ms}")]
+    GlobalTimedOut {
+        /// 全局 deadline 阈值(毫秒),即 `GqepConfig::gather_deadline_ms`
+        deadline_ms: u64,
+        /// 实际耗时(毫秒),触发超时时已运行的时间
+        elapsed_ms: u64,
+    },
 }
 
 #[cfg(test)]
@@ -116,6 +133,17 @@ mod tests {
         let msg = format!("{e}");
         assert!(msg.contains("op-4"));
         assert!(msg.contains("gatherer.rs:42"));
+    }
+
+    #[test]
+    fn test_error_display_global_timeout() {
+        let e = GqepError::GlobalTimedOut {
+            deadline_ms: 5000,
+            elapsed_ms: 5012,
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("5000"));
+        assert!(msg.contains("5012"));
     }
 
     #[test]

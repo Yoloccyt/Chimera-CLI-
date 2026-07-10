@@ -128,7 +128,7 @@ Start-Process -FilePath "D:\Chimera CLI\tmp\procdump\procdump64.exe" `
 Windows Error Reporting 默认配置在进程崩溃时自动生成 minidump,存放于:
 
 ```
-C:\Users\30324\AppData\Local\CrashDumps\
+C:\Users\<USERNAME>\AppData\Local\CrashDumps\
 ```
 
 本次崩溃生成的 dump 文件(4 个,均为 22:48:02–04 生成):
@@ -378,7 +378,7 @@ cargo clippy --workspace --all-targets --jobs 2 -- -D warnings
 | `D:\Chimera CLI\tmp\clippy_dumps\clippy_21612.dmp` | WER minidump(备份样本) |
 | `D:\Chimera CLI\tmp\clippy_dumps\monitor.log` | procdump 监控日志(40 PID 附加记录) |
 | `D:\Chimera CLI\tmp\clippy_crash_run.log` | clippy 崩溃完整 stdout/stderr |
-| `C:\Users\30324\AppData\Local\CrashDumps\clippy-driver.exe.*.dmp` | WER 默认 dump 原始位置(4 个) |
+| `C:\Users\<USER>\AppData\Local\CrashDumps\clippy-driver.exe.*.dmp` | WER 默认 dump 原始位置(4 个) |
 | `C:\ProgramData\Microsoft\Windows\WER\ReportArchive\AppCrash_clippy-driver.ex_*\Report.wer` | WER 详细文本报告 |
 
 ---

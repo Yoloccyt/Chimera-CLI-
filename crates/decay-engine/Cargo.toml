@@ -10,3 +10,11 @@ thiserror = { workspace = true }
 dashmap = { workspace = true }
 # tracing:结构化日志,用于记录衰减事件与冻结决策(审计追溯)
 tracing = { workspace = true }
+
+[dev-dependencies]
+# criterion:性能基准测试框架(§7.1 测试矩阵约定)
+criterion = { workspace = true }
+
+[[bench]]
+name = "decay_bench"
+harness = false

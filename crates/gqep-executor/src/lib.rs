@@ -5,7 +5,13 @@
 //!
 //! ## 核心职责
 //! - 使用 `FuturesUnordered` 流式聚集并发异步操作(对应 A.2 设计决策)
-//! - 单操作超时 + 全局超时治理,杜绝永久挂起(对应尸检教训:5.4% 孤儿调用)
+//! - 双层超时治理,杜绝永久挂起(对应尸检教训:5.4% 孤儿调用):
+//!   - **单操作超时**:`entangle` 内部 `tokio::time::timeout` 包裹每个 future
+//!     (阈值 `GqepConfig.default_timeout_ms`),超时返回 `OperationTimeout`
+//!   - **全局超时**:整个 `stream.next()` 循环用 `tokio::time::timeout` 包裹
+//!     (阈值 `GqepConfig.gather_deadline_ms`),超时返回 `GlobalTimedOut` 并
+//!     发布 `GatherTimedOut` 事件;`0` 禁用(向后兼容)。WHY 全局超时:大规模
+//!     gather 时单操作超时累积可能导致整体执行时间失控,全局 deadline 为整批兜底
 //! - 批量原子性保证:任一失败触发回滚,回滚本身也经 GQEP 聚集
 //! - 集成 QEEP `OrphanDetector`,检测孤儿调用并发布 Critical 事件
 //!

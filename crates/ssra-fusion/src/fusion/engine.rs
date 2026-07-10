@@ -136,7 +136,11 @@ impl SlimeFusionEngine {
         let selected = select_top_k_desc(&mut metas, k);
 
         // 主导策略:Top-K 中权重最高的模板策略
-        let strategy = selected[0].1;
+        // WHY: select_nth_unstable_by 仅保证 [0..k] 都 >= 第 k 大,
+        // 但不保证 [0] 就是最大值(分区操作后 [0] 可能是任意 >= pivot 的元素)。
+        let strategy = pick_max_weight(selected)
+            .map(|(_, s)| *s)
+            .unwrap_or(FusionStrategy::TopK);
         let confidence = compute_confidence(selected, strategy);
         let selected_count = selected.len();
 
@@ -200,6 +204,17 @@ impl SlimeFusionEngine {
             }
         }))
     }
+}
+
+/// 从 `(weight, strategy)` 切片中挑选权重最大的元素
+///
+/// WHY: 单独抽出可测函数,便于回归测试验证 `select_nth_unstable_by` 后
+/// 必须显式取最大,而不是误用 `selected[0]`。
+/// f32 使用 `partial_cmp` 并在 NaN 时回退到 `Equal`,与现有排序语义一致。
+fn pick_max_weight(metas: &[(f32, FusionStrategy)]) -> Option<&(f32, FusionStrategy)> {
+    metas
+        .iter()
+        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
 }
 
 /// Top-K 降序选择 — 使用 `select_nth_unstable_by` 实现 O(n) 平均复杂度
@@ -563,5 +578,63 @@ mod tests {
             "主导策略 MeanField 应为 0.55, got {}",
             result.confidence
         );
+    }
+
+    // === 16. pick_max_weight 与 select_top_k_desc 边界回归 ===
+
+    #[test]
+    fn test_pick_max_weight_single_element() {
+        let metas = vec![(0.8_f32, FusionStrategy::TopK)];
+        let max = pick_max_weight(&metas);
+        assert_eq!(max.map(|(w, _)| *w), Some(0.8));
+        assert_eq!(max.map(|(_, s)| *s), Some(FusionStrategy::TopK));
+    }
+
+    #[test]
+    fn test_pick_max_weight_all_nan() {
+        let metas = vec![
+            (f32::NAN, FusionStrategy::TopK),
+            (f32::NAN, FusionStrategy::MeanField),
+        ];
+        let max = pick_max_weight(&metas);
+        // NaN 的 partial_cmp 返回 None,按 Equal 处理,max_by 返回首个元素
+        assert!(max.is_some());
+        assert!(max.unwrap().0.is_nan());
+    }
+
+    #[test]
+    fn test_pick_max_weight_nan_mixed() {
+        let metas = vec![
+            (f32::NAN, FusionStrategy::TopK),
+            (0.7_f32, FusionStrategy::MeanField),
+            (0.9_f32, FusionStrategy::WeightedAverage),
+        ];
+        let max = pick_max_weight(&metas);
+        // 有效数值中 0.9 最大;NaN 被当作 Equal,不会覆盖真实最大值
+        assert_eq!(max.map(|(w, _)| *w), Some(0.9));
+        assert_eq!(max.map(|(_, s)| *s), Some(FusionStrategy::WeightedAverage));
+    }
+
+    #[test]
+    fn test_select_top_k_desc_empty() {
+        let mut metas: Vec<(f32, FusionStrategy)> = vec![];
+        let top = select_top_k_desc(&mut metas, 5);
+        assert!(top.is_empty(), "空切片应返回空");
+    }
+
+    #[test]
+    fn test_select_top_k_desc_dominant_is_true_max() {
+        // 构造输入使 select_nth_unstable_by 分区后 [0] 不一定为最大值,
+        // 回归验证必须用显式 max_by 取最大值,不能假设 selected[0]。
+        let mut metas = vec![
+            (0.5, FusionStrategy::MeanField),
+            (0.9, FusionStrategy::TopK),
+            (0.3, FusionStrategy::WeightedAverage),
+            (0.7, FusionStrategy::MeanField),
+        ];
+        let top = select_top_k_desc(&mut metas, 3);
+        let max = pick_max_weight(top);
+        assert_eq!(max.map(|(w, _)| *w), Some(0.9));
+        assert_eq!(max.map(|(_, s)| *s), Some(FusionStrategy::TopK));
     }
 }

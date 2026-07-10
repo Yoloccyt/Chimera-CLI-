@@ -159,11 +159,16 @@ workspace `[profile.release]` 已启用以下优化(解释 1.34MB 体积):
 **用法**:
 
 ```bash
-# 一键安装 (最新版)
+# 一键安装 (最新版,公有仓库)
 curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
 
+# 私有仓库:必须在 header 中携带 GITHUB_TOKEN
+export GITHUB_TOKEN=ghp_xxx
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
+
 # 指定版本
-sh install.sh --version v1.0.1-omega
+sh install.sh --version v1.0.2-omega
 
 # 系统级安装
 sudo sh install.sh --install-dir /usr/local/bin
@@ -197,11 +202,16 @@ sh install.sh --skip-verify
 **用法**:
 
 ```powershell
-# 一键安装 (最新版)
+# 一键安装 (最新版,公有仓库)
 iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
 
+# 私有仓库:必须在 header 中携带 GITHUB_TOKEN
+$env:GITHUB_TOKEN='ghp_xxx'
+$headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)
+
 # 指定版本
-.\install.ps1 -Version v1.0.1-omega
+.\install.ps1 -Version v1.0.2-omega
 
 # 指定安装目录
 .\install.ps1 -InstallDir "D:\Tools\chimera"

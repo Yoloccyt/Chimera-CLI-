@@ -37,6 +37,11 @@ tracing = { workspace = true }
 # 向量运算(预留,Week 6 NMC 集成时使用)
 ndarray = { workspace = true }
 
+# Prometheus 监控指标(M1 触发条件监控:wiki_entries_total gauge)
+# WHY 仅引入 gauge 类型:event-bus 已用同一依赖暴露 counter/histogram,
+# 此处仅需 Gauge 跟踪可增可减的条目总数,不引入额外依赖。
+prometheus-client = { workspace = true }
+
 # NOTE: sqlite-vec 集成已降级为内存向量检索
 # WHY: sqlite-vec 0.1.9 的 Rust binding 仅暴露 C 入口 sqlite3_vec_init,
 #      注册需调用 sqlite3_auto_extension + unsafe,与 #![forbid(unsafe_code)] 冲突。
@@ -45,4 +50,21 @@ ndarray = { workspace = true }
 # sqlite-vec = { workspace = true }
 
 [dev-dependencies]
+# 基准测试框架
+criterion = { workspace = true }
+# 测试用临时文件/目录
 tempfile = { workspace = true }
+# 属性测试框架 — KNN 检索不变量验证
+proptest = { workspace = true }
+
+[[bench]]
+name = "store_bench"
+harness = false
+
+[[bench]]
+name = "vector_bench"
+harness = false
+
+[[bench]]
+name = "fts_bench"
+harness = false

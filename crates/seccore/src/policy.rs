@@ -103,11 +103,14 @@ impl CommandPolicy {
         let mut policy = Self::new();
 
         // === 安全命令白名单(只读、无副作用) ===
-        // 注意:`cmd` 仅用于 Windows 兼容性测试(Windows echo 是 cmd 内置命令)
-        // 生产环境应移除 cmd,改用 PowerShell 沙箱或 gVisor 隔离
+        // 安全决策(WHY 不含 cmd/PowerShell):
+        // cmd.exe 是通用 shell 启动器,`cmd /c "任意命令"` 可绕过全部 4 层防御
+        // (白名单通过 + 无 blocked_pattern 匹配),构成零信任模型的致命漏洞。
+        // Windows 兼容性测试应使用受限 PowerShell ExecutionPolicy 沙箱,
+        // 而非在白名单中保留 cmd。参见 N1 安全审计报告。
         for cmd in [
             "echo", "ls", "cat", "pwd", "whoami", "date", "true", "false", "printf", "head",
-            "tail", "wc", "sort", "uniq", "cut", "tr", "basename", "dirname", "cmd",
+            "tail", "wc", "sort", "uniq", "cut", "tr", "basename", "dirname",
         ] {
             policy = policy.allow_command(cmd);
         }

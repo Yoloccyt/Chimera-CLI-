@@ -409,10 +409,16 @@ impl ProceduralMemory {
 
 /// 应用 SQLite 性能优化 PRAGMA(在 WAL 模式设置之后调用)
 ///
-/// WHY:SubTask 21.2 — 委托给 `nexus_core::sqlite_pragma::apply_performance_pragmas`,
+/// WHY:SubTask 21.2 — 委托给 `nexus_core::storage_traits::apply_performance_pragmas`,
 /// 消除与 cmt-tiering(cold.rs / warm.rs)的重复实现,统一 PRAGMA 配置。
+///
+/// F2.2.3 + F2.3.4 迁移:改用 `nexus_core::PragmaCapable` trait + newtype wrapper
+/// (`crate::PragmaConn`),不再走 `nexus_core::sqlite_pragma` 直接函数调用,
+/// 以配合 rusqlite 依赖下沉(F2)。newtype wrapper 是为避免与 cmt-tiering 同时
+/// `impl PragmaCapable for rusqlite::Connection` 触发 coherence 冲突。
 fn apply_performance_pragmas(conn: &Connection) -> Result<(), MlcError> {
-    nexus_core::sqlite_pragma::apply_performance_pragmas(conn)
+    let wrapper = crate::PragmaConn(conn);
+    nexus_core::apply_performance_pragmas(&wrapper)
         .map_err(|e| MlcError::StorageError(format!("SQLite PRAGMA 设置失败: {e}")))
 }
 

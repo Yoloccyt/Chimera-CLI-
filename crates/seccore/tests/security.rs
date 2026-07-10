@@ -19,6 +19,25 @@ fn make_sandbox() -> Sandbox {
     Sandbox::with_default_policy()
 }
 
+/// 构建 Windows 可执行命令测试沙箱。
+///
+/// # 安全说明
+/// Windows 的 echo/ping 等是 cmd.exe 内置命令,不是独立可执行文件。
+/// 测试需要实际执行命令时,必须显式允许 "cmd"。
+/// **生产环境 default_secure() 不含 cmd** — 见 N1 安全审计报告。
+#[cfg(windows)]
+fn make_windows_exec_sandbox() -> Sandbox {
+    let policy = CommandPolicy::default_secure().allow_command("cmd");
+    Sandbox::new(policy, EnvPolicy::default_secure())
+}
+
+/// 同上,带自定义超时。
+#[cfg(windows)]
+fn make_windows_exec_sandbox_with_timeout(timeout: Duration) -> Sandbox {
+    let policy = CommandPolicy::default_secure().allow_command("cmd");
+    Sandbox::new(policy, EnvPolicy::default_secure()).with_timeout(timeout)
+}
+
 // =============================================================================
 // 1. Injection:命令注入拦截
 // =============================================================================
@@ -172,10 +191,13 @@ async fn test_abuse_blocked() {
 
 #[tokio::test]
 async fn test_audit_chain_integrity() {
+    // Windows: echo 是 cmd 内置命令,需显式允许 cmd(生产 default_secure 不含 cmd)
+    #[cfg(windows)]
+    let mut sandbox = make_windows_exec_sandbox();
+    #[cfg(not(windows))]
     let mut sandbox = make_sandbox();
 
     // 跨平台命令:Windows 用 cmd /C echo hello,Linux 用 echo hello
-    // 注意:Windows 的 echo 是 cmd 内置命令,需通过 cmd /C 调用
     #[cfg(windows)]
     let cmd = Command::new("cmd").args(["/C", "echo", "hello"]);
     #[cfg(not(windows))]
@@ -198,6 +220,10 @@ async fn test_audit_chain_integrity() {
 
 #[tokio::test]
 async fn test_env_whitelist() {
+    // Windows: echo 是 cmd 内置命令,需显式允许 cmd
+    #[cfg(windows)]
+    let mut sandbox = make_windows_exec_sandbox();
+    #[cfg(not(windows))]
     let mut sandbox = make_sandbox();
 
     // 场景1:白名单内环境变量(PATH)应通过
@@ -319,7 +345,7 @@ fn test_sandbox_default_timeout_is_30s() {
 #[tokio::test]
 async fn test_sandbox_timeout_kills_long_running_process() {
     // 跨平台长时间运行命令(运行约 30 秒,远超 1 秒超时)
-    // Windows:cmd 在默认白名单内,用 ping -n 30(约 29 秒)
+    // Windows: cmd 不在 default_secure() 白名单(安全修复),测试显式允许
     //   注意:沙箱 env_clear() 清除 PATH,需显式传递 PATH 让 cmd 找到 ping.exe
     // Linux:sleep 不在默认白名单,构造自定义策略允许 sleep
     #[cfg(windows)]
@@ -330,7 +356,7 @@ async fn test_sandbox_timeout_kills_long_running_process() {
     let cmd = Command::new("sleep").arg("30");
 
     #[cfg(windows)]
-    let policy = CommandPolicy::default_secure();
+    let policy = CommandPolicy::default_secure().allow_command("cmd");
     #[cfg(not(windows))]
     let policy = CommandPolicy::new().allow_command("sleep");
 
@@ -370,6 +396,10 @@ async fn test_sandbox_timeout_kills_long_running_process() {
 async fn test_sandbox_normal_command_not_affected_by_timeout() {
     // 验证:合理的超时设置不影响正常命令执行
     // 设置 5 秒超时,执行瞬时命令(echo),应正常返回而非超时
+    // Windows: echo 是 cmd 内置命令,需显式允许 cmd
+    #[cfg(windows)]
+    let mut sandbox = make_windows_exec_sandbox_with_timeout(Duration::from_secs(5));
+    #[cfg(not(windows))]
     let mut sandbox = Sandbox::with_default_policy().with_timeout(Duration::from_secs(5));
 
     #[cfg(windows)]

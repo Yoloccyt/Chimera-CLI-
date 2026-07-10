@@ -31,6 +31,13 @@ pub enum RouterError {
     /// 配置错误 — 配置解析或语义错误
     #[error("config error: {0}")]
     ConfigError(String),
+
+    /// SQLite 历史存储错误 — 持久化操作失败(打开/查询/序列化)
+    ///
+    /// WHY 独立变体而非 `ConfigError`:SQLite 错误源自运行时 I/O 与序列化,
+    /// 与配置语义错误不同源;独立变体便于调用方按错误类型降级(如回退 Memory)。
+    #[error("sqlite history store error: {0}")]
+    SqliteHistoryError(String),
 }
 
 #[cfg(test)]

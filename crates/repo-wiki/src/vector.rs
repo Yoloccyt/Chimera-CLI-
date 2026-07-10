@@ -19,19 +19,22 @@
 //! 专用向量索引(如 HNSW),同时保持 API 不变。
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 use crate::error::WikiError;
 
 /// 向量索引 — 内存 KNN 检索(降级实现)
 ///
-/// 使用 `Mutex<HashMap<String, Vec<f32>>>` 存储向量,
-/// `search` 时遍历计算余弦相似度并排序。
+/// 使用 `RwLock<HashMap<String, Vec<f32>>>` 存储向量,
+/// `search`/`len` 持读锁(可并发),`upsert`/`delete` 持写锁(互斥)。
+///
+/// WHY RwLock 而非 Mutex:B1 优化,search 是高频读操作(KNN 遍历),
+/// RwLock 允许多个并发 search 同时执行,仅在写入时互斥。
 pub struct VectorIndex {
     /// 向量维度(应与 WikiConfig.vector_dim 一致)
     dim: usize,
     /// 内存向量存储(entry_id → embedding)
-    vectors: Mutex<HashMap<String, Vec<f32>>>,
+    vectors: RwLock<HashMap<String, Vec<f32>>>,
 }
 
 impl VectorIndex {
@@ -39,7 +42,7 @@ impl VectorIndex {
     pub fn new(dim: usize) -> Self {
         Self {
             dim,
-            vectors: Mutex::new(HashMap::new()),
+            vectors: RwLock::new(HashMap::new()),
         }
     }
 
@@ -63,8 +66,8 @@ impl VectorIndex {
 
         let mut vectors = self
             .vectors
-            .lock()
-            .map_err(|e| WikiError::VectorIndexError(format!("mutex poisoned: {e}")))?;
+            .write()
+            .map_err(|e| WikiError::VectorIndexError(format!("rwlock poisoned: {e}")))?;
         vectors.insert(entry_id.to_string(), embedding.to_vec());
         Ok(())
     }
@@ -88,8 +91,8 @@ impl VectorIndex {
 
         let vectors = self
             .vectors
-            .lock()
-            .map_err(|e| WikiError::VectorIndexError(format!("mutex poisoned: {e}")))?;
+            .read()
+            .map_err(|e| WikiError::VectorIndexError(format!("rwlock poisoned: {e}")))?;
 
         // 计算所有向量的余弦相似度
         // SubTask 21.4:使用 nexus_core 统一的 cosine_similarity_slices
@@ -117,8 +120,8 @@ impl VectorIndex {
     pub fn delete(&self, entry_id: &str) -> Result<(), WikiError> {
         let mut vectors = self
             .vectors
-            .lock()
-            .map_err(|e| WikiError::VectorIndexError(format!("mutex poisoned: {e}")))?;
+            .write()
+            .map_err(|e| WikiError::VectorIndexError(format!("rwlock poisoned: {e}")))?;
         vectors.remove(entry_id);
         Ok(())
     }
@@ -127,8 +130,8 @@ impl VectorIndex {
     pub fn len(&self) -> Result<usize, WikiError> {
         let vectors = self
             .vectors
-            .lock()
-            .map_err(|e| WikiError::VectorIndexError(format!("mutex poisoned: {e}")))?;
+            .read()
+            .map_err(|e| WikiError::VectorIndexError(format!("rwlock poisoned: {e}")))?;
         Ok(vectors.len())
     }
 

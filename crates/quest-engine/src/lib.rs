@@ -1,4 +1,4 @@
-//! 长期任务引擎 — Quest 分解、检查点持久化与思考模式切换
+//! 长期任务引擎 — Quest 分解、检查点持久化与思考模式治理
 //!
 //! 对应架构层:L9 Quest
 //! 对应创新点:TTG(Thinking Toggle Governance)+ LHQP(Long-Horizon Quest Persistence)
@@ -6,7 +6,8 @@
 //! # 核心职责
 //! - 从 `UserIntent` 分解任务图(DAG),校验无环后创建 Quest
 //! - 维护 Task 状态机(Pending→Running→Completed/Failed),广播进度事件
-//! - 切换思考模式(TTG),广播模式切换事件供 Parliament 调整预算
+//! - TTG 自动思考模式治理:基于 Quest 复杂度与 DECB 预算档位自动选择 Fast/Standard/Deep
+//! - 模式切换通过 EventBus 发布 ThinkingModeSwitched 事件,供 Parliament 等下游订阅
 //! - 完成 Quest 时广播 ExecutionCompleted 事件
 //! - LHQP 检查点持久化:Quest 状态序列化为 MessagePack 落盘,崩溃后可恢复
 //!
@@ -33,6 +34,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+pub mod arbitration;
 pub mod checkpoint;
 pub mod config;
 pub mod dag;
@@ -42,6 +44,7 @@ pub mod ttg;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use arbitration::ArbitrationLayer;
 pub use checkpoint::CheckpointManager;
 pub use config::QuestConfig;
 pub use engine::QuestEngine;

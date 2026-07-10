@@ -13,8 +13,16 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 rmp-serde = { workspace = true }
+# Prometheus 指标注册表与文本编码(Phase V Task V-8:/metrics 端点导出)
+prometheus-client = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 # tracing-test:捕获 tracing 日志,验证 Critical 事件无订阅者时的 warn 日志(SubTask 17.2)
 tracing-test = { workspace = true }
+# criterion:性能基准测试框架(§7.1 测试矩阵约定)
+criterion = { workspace = true }
+
+[[bench]]
+name = "bus_bench"
+harness = false

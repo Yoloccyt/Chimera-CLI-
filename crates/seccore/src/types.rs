@@ -15,6 +15,12 @@ use serde::{Deserialize, Serialize};
 /// - `Medium`:有输出重定向或通配符
 /// - `High`:破坏性命令(rm / dd / mkfs)
 /// - `Critical`:理论上不应到达执行层(应被策略拦截)
+/// - `Unknown`:风险无法评估(如 ASA 审计时调用者未提供 risk_keywords 列表)
+///
+/// WHY `Unknown` 变体(N4 安全修复):旧实现中 `AsaAuditor::audit()` 在 risk_keywords
+/// 为空时将风险等同于 Low,调用者可通过省略关键字列表绕过检测。修复后空关键字 →
+/// `Unknown`,作为信号触发 Parliament/下游消费者的额外审计检查。`assess_risk()`
+/// (命令静态风险评估)不会产生此变体,仅 ASA 动态审计路径使用。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RiskLevel {
     /// 低风险:只读命令
@@ -25,6 +31,9 @@ pub enum RiskLevel {
     High,
     /// 临界:应被策略拦截,不应执行
     Critical,
+    /// 未知风险:风险无法评估(如 ASA 审计未提供 risk_keywords)。
+    /// 触发下游额外审计检查,防止调用者通过省略关键字列表绕过检测。
+    Unknown,
 }
 
 /// 攻击类型 — 对应 6 种需拦截的攻击向量(对齐验收标准)。

@@ -37,6 +37,7 @@ use tracing::warn;
 use crate::config::SesaConfig;
 use crate::error::SesaError;
 use crate::mask::{SesaMask, MASK_TOTAL_BITS};
+use crate::prerequisite::PrerequisiteChecker;
 use crate::sparsity::{enforce_sparsity, SparsityProfile};
 use crate::types::{ActivationRequest, ExpertDescriptor};
 
@@ -77,16 +78,25 @@ pub struct SesaRouter {
     next_mask_index: AtomicU32,
     /// 可选事件总线(激活成功后发布事件)
     event_bus: Option<EventBus>,
+    /// 前置事件校验器(仅 with_event_bus 且 config.prerequisite_check_enabled 时创建)
+    ///
+    /// WHY Option:无 EventBus(SesaRouter::new)或配置禁用时为 None,跳过校验。
+    /// 默认启用时在 with_event_bus 构造时同步订阅 Routing 事件(§4.4 反模式 #3)。
+    prerequisite_checker: Option<PrerequisiteChecker>,
 }
 
 impl SesaRouter {
     /// 创建激活路由器(无 EventBus,不发布事件)
+    ///
+    /// WHY 无 EventBus 不创建 PrerequisiteChecker:没有 EventBus 就无法订阅
+    /// 上游路由事件,校验无意义。此构造函数适合纯计算场景(如基准测试)。
     pub fn new(config: SesaConfig) -> Self {
         Self {
             config,
             experts: DashMap::new(),
             next_mask_index: AtomicU32::new(0),
             event_bus: None,
+            prerequisite_checker: None, // 无 EventBus 不校验
         }
     }
 
@@ -95,12 +105,30 @@ impl SesaRouter {
     /// 绑定后,`activate` 成功会发布 `SesaActivationCompleted` 事件,
     /// 调用 `start_consensus_listener` 可订阅 `ConsensusReached`
     /// 触发稀疏激活策略调整。
+    ///
+    /// # 前置事件校验(Phase IV N9)
+    /// 若 `config.prerequisite_check_enabled` 为 true(默认),构造时同步创建
+    /// `PrerequisiteChecker` 并订阅 `EventTopic::Routing` 事件。
+    /// 后续 `activate()` 入口会校验三个上游事件是否齐备:
+    /// - `OmniSparseMasksComputed`(OSA 完成)
+    /// - `ToolsRouted`(KVBSR/FaaE 完成)
+    /// - `ExpertRouted`(FaaE 路由完成)
+    ///
+    /// WHY 在构造时订阅:遵守 §4.4 反模式 #3,subscribe 必须在 spawn 之前
+    /// 同步调用,否则可能错过后续发布的上游事件。
     pub fn with_event_bus(config: SesaConfig, bus: EventBus) -> Self {
+        // 根据 config.prerequisite_check_enabled 决定是否创建校验器
+        let prerequisite_checker = if config.prerequisite_check_enabled {
+            Some(PrerequisiteChecker::new(&bus))
+        } else {
+            None
+        };
         Self {
             config,
             experts: DashMap::new(),
             next_mask_index: AtomicU32::new(0),
             event_bus: Some(bus),
+            prerequisite_checker,
         }
     }
 
@@ -155,17 +183,35 @@ impl SesaRouter {
     /// 执行激活 — 异步,带超时控制与事件发布
     ///
     /// # 流程
-    /// 1. `deadline_ms == 0` 直接返回超时(无可用时间)
-    /// 2. `tokio::time::timeout` 包装 `activate_inner` 同步逻辑
-    /// 3. 成功后测量实际延迟并发布 `SesaActivationCompleted` 事件
+    /// 1. 前置事件校验(若 PrerequisiteChecker 启用):确保五层路由顺序已完成
+    /// 2. `deadline_ms == 0` 直接返回超时(无可用时间)
+    /// 3. `tokio::time::timeout` 包装 `activate_inner` 同步逻辑
+    /// 4. 成功后测量实际延迟并发布 `SesaActivationCompleted` 事件
+    ///
+    /// # 前置事件校验(Phase IV N9)
+    /// 若 `with_event_bus` 构造且 `config.prerequisite_check_enabled` 为 true(默认),
+    /// 入口会校验三个上游事件是否齐备:
+    /// - `OmniSparseMasksComputed`(OSA 完成)
+    /// - `ToolsRouted`(KVBSR/FaaE 完成)
+    /// - `ExpertRouted`(FaaE 路由完成)
+    ///
+    /// 缺失任一事件返回 `SesaError::PrerequisiteNotMet`,强制五层路由顺序。
     ///
     /// # 错误
+    /// - `PrerequisiteNotMet`:上游路由事件未齐备(PrerequisiteChecker 启用时)
     /// - `ActivationTimeout`:超过 deadline_ms
     /// - `EmptyExpertPool`:注册表为空
     pub async fn activate(
         &self,
         request: ActivationRequest,
     ) -> Result<(SesaMask, SparsityProfile), SesaError> {
+        // 前置事件校验:确保五层路由顺序(OSA → KVBSR → FaaE → GEA → SESA)
+        // WHY 在 deadline 检查之前:上游未完成时连超时检查都无意义,应直接拒绝。
+        // check() 是同步方法(Mutex 不跨 await),不阻塞 async runtime。
+        if let Some(checker) = &self.prerequisite_checker {
+            checker.check()?;
+        }
+
         if request.deadline_ms == 0 {
             return Err(SesaError::ActivationTimeout { deadline_ms: 0 });
         }
@@ -628,6 +674,7 @@ mod tests {
             max_sparsity_ratio: 0.2, // 20%
             activation_deadline_ms: 5,
             mask_width: 256,
+            prerequisite_check_enabled: false, // 此测试校验稀疏度,跳过前置校验
         };
         let router = SesaRouter::new(config);
         for i in 0..100 {

@@ -7,8 +7,19 @@
 #   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-SkipVerify] [-SetupEnv]
 #
 # 私有仓库安装(需 $env:GITHUB_TOKEN 环境变量鉴权):
-#   $env:GITHUB_TOKEN='ghp_xxx'; iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
-#   $env:GITHUB_TOKEN='ghp_xxx'; .\install.ps1
+#   WHY: raw.githubusercontent.com 对私有仓库 raw 内容拒绝匿名访问,
+#        必须显式在 HTTP header 中传递 Authorization: Bearer <token>。
+#        仅设置环境变量不会自动被 irm 加入 header。
+#
+#   PowerShell 5.1+:
+#     $env:GITHUB_TOKEN='ghp_xxx'
+#     $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+#     iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)
+#
+#   如果 irm 持续 404,建议直接克隆仓库后本地执行:
+#     git clone https://github.com/Yoloccyt/Chimera-CLI-.git
+#     cd Chimera-CLI-
+#     $env:GITHUB_TOKEN='ghp_xxx'; .\install.ps1
 #
 # 参数说明:
 #   -Version <ver>      指定版本 (默认: latest,如 v1.0.2-omega)

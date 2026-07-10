@@ -3,13 +3,15 @@
 //! 对应架构:L1 Core,被 Router 与 Strategies 共享访问
 //!
 //! # 设计要点
-//! - 基于 `DashMap` 提供并发安全的读写(无锁读,细粒度写锁)
-//! - `Arc<DashMap>` 使 `ModelRegistry` 可廉价 Clone,跨任务共享
+//! - 基于 `RwLock<HashMap>` 提供并发安全的读写(读锁可并发,写锁互斥)
+//! - B3 优化:对于小规模注册表(≤10 模型),RwLock 开销(~50ns)远低于
+//!   DashMap 分片锁(~200ns),且无哈希分片开销
+//! - `Arc<RwLock<HashMap>>` 使 `ModelRegistry` 可廉价 Clone,跨任务共享
 //! - 注册/注销操作返回 `Result`,避免静默覆盖或丢失
+//! - `register()` 使用 entry API 原子性检查+插入,消除 TOCTOU 竞态
 
-use std::sync::Arc;
-
-use dashmap::DashMap;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use crate::error::RouterError;
 use crate::types::ModelInfo;
@@ -20,25 +22,33 @@ use crate::types::ModelInfo;
 /// 所有 Clone 共享同一份底层数据。
 #[derive(Clone)]
 pub struct ModelRegistry {
-    models: Arc<DashMap<String, ModelInfo>>,
+    models: Arc<RwLock<HashMap<String, ModelInfo>>>,
 }
 
 impl ModelRegistry {
     /// 创建空注册表
     pub fn new() -> Self {
         Self {
-            models: Arc::new(DashMap::new()),
+            models: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// 从配置加载模型列表,返回新注册表
     pub fn from_config(config: &crate::config::RouterConfig) -> Self {
         let registry = Self::new();
-        for model in &config.models {
-            // 配置加载阶段静默覆盖重复项(配置错误应在解析时校验)
-            registry
+        // SAFETY:RwLock 刚创建,无其他线程可能 panic 持锁,不可能 poisoned
+        // WHY 用作用域限定 guard 生命周期:RwLockWriteGuard 的 Drop 持有对
+        // registry.models 的引用,若 guard 仍存活时 move registry 会触发 E0505
+        // (cannot move out of borrowed)。作用域结束先 drop guard,再 move registry。
+        {
+            let mut models = registry
                 .models
-                .insert(model.model_id.clone(), model.clone());
+                .write()
+                .expect("fresh RwLock cannot be poisoned");
+            for model in &config.models {
+                // 配置加载阶段静默覆盖重复项(配置错误应在解析时校验)
+                models.insert(model.model_id.clone(), model.clone());
+            }
         }
         registry
     }
@@ -46,22 +56,34 @@ impl ModelRegistry {
     /// 注册新模型
     ///
     /// 若 model_id 已存在,返回 `RouterError::ConfigError` 以避免静默覆盖。
+    /// 使用 entry API 原子性检查+插入,消除 contains_key + insert 之间的竞态窗口。
     pub fn register(&self, model: ModelInfo) -> Result<(), RouterError> {
-        if self.models.contains_key(&model.model_id) {
-            return Err(RouterError::ConfigError(format!(
+        let mut models = self
+            .models
+            .write()
+            .map_err(|_| RouterError::ConfigError("rwlock poisoned".into()))?;
+        use std::collections::hash_map::Entry;
+        match models.entry(model.model_id.clone()) {
+            Entry::Occupied(_) => Err(RouterError::ConfigError(format!(
                 "model already registered: {}",
                 model.model_id
-            )));
+            ))),
+            Entry::Vacant(entry) => {
+                entry.insert(model);
+                Ok(())
+            }
         }
-        self.models.insert(model.model_id.clone(), model);
-        Ok(())
     }
 
     /// 注销模型
     ///
     /// 若 model_id 不存在,返回 `RouterError::ModelNotFound`。
     pub fn unregister(&self, model_id: &str) -> Result<(), RouterError> {
-        self.models
+        let mut models = self
+            .models
+            .write()
+            .map_err(|_| RouterError::ConfigError("rwlock poisoned".into()))?;
+        models
             .remove(model_id)
             .map(|_| ())
             .ok_or_else(|| RouterError::ModelNotFound(model_id.into()))
@@ -69,12 +91,17 @@ impl ModelRegistry {
 
     /// 查询指定模型,返回克隆(避免持锁)
     pub fn get(&self, model_id: &str) -> Option<ModelInfo> {
-        self.models.get(model_id).map(|r| r.clone())
+        let models = self.models.read().ok()?;
+        models.get(model_id).cloned()
     }
 
     /// 列出所有已注册模型(无序)
     pub fn list(&self) -> Vec<ModelInfo> {
-        self.models.iter().map(|r| r.value().clone()).collect()
+        let models = match self.models.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        models.values().cloned().collect()
     }
 
     /// 按成本升序返回模型列表(Lite 策略使用)
@@ -97,7 +124,11 @@ impl ModelRegistry {
 
     /// 已注册模型数量
     pub fn count(&self) -> usize {
-        self.models.len()
+        let models = match self.models.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        models.len()
     }
 }
 
@@ -211,7 +242,7 @@ mod tests {
         registry
             .register(make_model("m1", 0.001, 100, 0.8))
             .unwrap();
-        // Clone 共享底层 DashMap,因此 cloned 也能看到新注册的模型
+        // Clone 共享底层 RwLock<HashMap>,因此 cloned 也能看到新注册的模型
         assert_eq!(cloned.count(), 1);
     }
 }

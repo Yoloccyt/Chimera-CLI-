@@ -13,6 +13,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use chrono::{DateTime, Utc};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tracing::{info, warn};
 
@@ -43,6 +44,13 @@ pub struct AcbGovernor {
     /// WHY:Ω-Event 定律要求所有状态变更经 EventBus 广播,打破"仅 tracing 日志"
     /// 的断裂。`EventBus` 内部为 `Arc<broadcast::Sender>`,Clone 廉价。
     event_bus: EventBus,
+    /// 上次级别切换时间(UTC),用于时间滞后机制
+    ///
+    /// WHY 复用 DECB TierState 模式而非抽象共享 trait:ACB 与 DECB 的 `BudgetTier`
+    /// 枚举不同(ACB=L0-L3 离散四级,DECB=HighTier/LowTier/Degraded 连续三档),
+    /// 强行抽象会引入泛型噪声与 phantom 类型,违背"避免过度工程化"原则。复制模式
+    /// 更直观,且 lag 检查逻辑极简(约 10 行),重复成本低于抽象成本。
+    last_switch_time: Mutex<Option<DateTime<Utc>>>,
 }
 
 impl AcbGovernor {
@@ -72,6 +80,8 @@ impl AcbGovernor {
             current_tier: Mutex::new(BudgetTier::L3),
             total_consumption: AtomicU64::new(0),
             event_bus: bus,
+            // WHY None:首次启动无历史切换时间,首次切换不受滞后约束
+            last_switch_time: Mutex::new(None),
         })
     }
 
@@ -211,6 +221,39 @@ impl AcbGovernor {
             });
         }
 
+        // WHY 时间滞后:切换后 tier_switch_lag_ms 内不再次切换,防止阈值附近抖动。
+        // 复用 DECB switch_tier 模式(§6 架构红线:竞态/抖动防护)。
+        // 锁内 check-then-act 原子化:检查 elapsed 与更新 last_switch_time 在同一锁内,
+        // 避免并发 adjust_budget 双双通过滞后检查后双重切换。锁在 `}` 释放,不跨 await。
+        {
+            let mut last = self
+                .last_switch_time
+                .lock()
+                .map_err(|e| AcbError::ConfigError {
+                    detail: format!("last_switch_time lock poisoned: {e}"),
+                })?;
+            if let Some(last_switch) = *last {
+                let elapsed = Utc::now().signed_duration_since(last_switch);
+                let lag = chrono::Duration::milliseconds(self.config.tier_switch_lag_ms as i64);
+                if elapsed < lag {
+                    // 滞后期内,静默抑制切换(非错误,是预期防抖行为)
+                    info!(
+                        old_tier = %old_tier,
+                        target_tier = %target_tier,
+                        lag_ms = self.config.tier_switch_lag_ms,
+                        "ACB tier switch suppressed by lag"
+                    );
+                    return Ok(TierSwitchResult {
+                        from_tier: old_tier,
+                        to_tier: old_tier,
+                        switched: false,
+                    });
+                }
+            }
+            // 更新切换时间戳(同一锁内,check-then-act 原子化)
+            *last = Some(Utc::now());
+        }
+
         // 原子切换级别(check-then-act)
         {
             let mut tier_guard = self
@@ -298,6 +341,11 @@ impl AcbGovernor {
         self.total_consumption.store(0, Ordering::Relaxed);
         if let Ok(mut tier) = self.current_tier.lock() {
             *tier = BudgetTier::L3;
+        }
+        // WHY 同步清零 last_switch_time:reset 语义为"恢复初始状态",
+        // 初始状态无历史切换时间,reset 后首次切换不应受滞后约束
+        if let Ok(mut last) = self.last_switch_time.lock() {
+            *last = None;
         }
         info!("ACB budget reset to initial state (L3)");
     }
@@ -489,5 +537,89 @@ mod tests {
         assert!((tier_to_coefficient(BudgetTier::L1) - 0.5).abs() < 1e-6);
         assert!((tier_to_coefficient(BudgetTier::L2) - 0.75).abs() < 1e-6);
         assert!((tier_to_coefficient(BudgetTier::L3) - 1.0).abs() < 1e-6);
+    }
+
+    // ============================================================
+    // 时间滞后机制测试(WHY 复用 DECB tier_switch_lag_ms 模式)
+    // ============================================================
+
+    #[test]
+    fn test_adjust_budget_lag_default_1000ms() {
+        // WHY 默认 1000ms:阈值滞后带的补充冷却,比 DECB 的 10s 短(ACB 恢复敏感度更高)
+        let config = AcbGovernorConfig::default();
+        assert_eq!(config.tier_switch_lag_ms, 1_000, "默认时间滞后应为 1000ms");
+    }
+
+    #[test]
+    fn test_adjust_budget_lag_suppresses_rapid_switch() {
+        // 场景:降级后立即出现"可升级"信号,但滞后期内不应切换
+        let config = AcbGovernorConfig {
+            tier_switch_lag_ms: 10_000,
+            ..Default::default()
+        };
+        let governor = AcbGovernor::new(config).unwrap();
+
+        // 步骤 1:消耗到 85% > degrade_threshold(0.8),触发降级 L3→L2
+        let degrade_consume = (governor.config.total_budget_limit as f64 * 0.85) as u64;
+        governor
+            .total_consumption
+            .store(degrade_consume, Ordering::Relaxed);
+        let result = governor.adjust_budget().unwrap();
+        assert!(result.switched, "首次降级应成功(无历史时间戳,不受滞后约束)");
+        assert_eq!(result.from_tier, BudgetTier::L3);
+        assert_eq!(result.to_tier, BudgetTier::L2);
+
+        // 步骤 2:利用率降至 20% < upgrade_threshold(0.3),目标应为升级 L2→L3
+        let upgrade_consume = (governor.config.total_budget_limit as f64 * 0.20) as u64;
+        governor
+            .total_consumption
+            .store(upgrade_consume, Ordering::Relaxed);
+
+        // 步骤 3:立即再次调用,距上次切换不足 10s,应被滞后机制抑制
+        let result2 = governor.adjust_budget().unwrap();
+        assert!(!result2.switched, "滞后期内不应切换(距上次切换 < 10s)");
+        assert_eq!(
+            result2.to_tier,
+            BudgetTier::L2,
+            "被抑制时 to_tier 应保持当前级别"
+        );
+        assert_eq!(governor.current_tier(), BudgetTier::L2);
+    }
+
+    #[test]
+    fn test_adjust_budget_lag_expired_allows_switch() {
+        use std::thread::sleep;
+        use std::time::Duration;
+
+        // 场景:滞后极短(1ms),sleep 20ms 后应允许切换
+        let config = AcbGovernorConfig {
+            tier_switch_lag_ms: 1,
+            ..Default::default()
+        };
+        let governor = AcbGovernor::new(config).unwrap();
+
+        // 步骤 1:降级 L3→L2
+        let degrade_consume = (governor.config.total_budget_limit as f64 * 0.85) as u64;
+        governor
+            .total_consumption
+            .store(degrade_consume, Ordering::Relaxed);
+        let result = governor.adjust_budget().unwrap();
+        assert!(result.switched);
+        assert_eq!(result.to_tier, BudgetTier::L2);
+
+        // 步骤 2:利用率降至 20%,目标升级
+        let upgrade_consume = (governor.config.total_budget_limit as f64 * 0.20) as u64;
+        governor
+            .total_consumption
+            .store(upgrade_consume, Ordering::Relaxed);
+
+        // 步骤 3:等待滞后过期(20ms > 1ms lag)
+        sleep(Duration::from_millis(20));
+
+        // 步骤 4:滞后已过期,应成功升级 L2→L3
+        let result2 = governor.adjust_budget().unwrap();
+        assert!(result2.switched, "滞后过期后应允许切换");
+        assert_eq!(result2.to_tier, BudgetTier::L3);
+        assert_eq!(governor.current_tier(), BudgetTier::L3);
     }
 }

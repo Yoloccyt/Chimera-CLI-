@@ -47,6 +47,7 @@ pub mod activation;
 pub mod config;
 pub mod error;
 pub mod mask;
+pub mod prerequisite;
 pub mod sparsity;
 pub mod types;
 
@@ -55,6 +56,7 @@ pub use activation::SesaRouter;
 pub use config::SesaConfig;
 pub use error::SesaError;
 pub use mask::SesaMask;
+pub use prerequisite::PrerequisiteChecker;
 pub use sparsity::{enforce_sparsity, max_allowed_active, SparsityProfile};
 pub use types::{ActivationRequest, ExpertDescriptor};
 
@@ -64,6 +66,7 @@ pub mod prelude {
     pub use crate::config::SesaConfig;
     pub use crate::error::SesaError;
     pub use crate::mask::SesaMask;
+    pub use crate::prerequisite::PrerequisiteChecker;
     pub use crate::sparsity::{enforce_sparsity, max_allowed_active, SparsityProfile};
     pub use crate::types::{ActivationRequest, ExpertDescriptor};
 }

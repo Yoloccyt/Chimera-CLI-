@@ -39,6 +39,8 @@ libfuzzer-sys = "0.4"
 nexus-core = { path = "../crates/nexus-core" }
 event-bus = { path = "../crates/event-bus" }
 seccore = { path = "../crates/seccore" }
+# model-router: CACR 预算配置解析 fuzz(cacr_budget_parse target)
+model-router = { path = "../crates/model-router" }
 
 # 序列化依赖(直接指定版本,fuzz crate 不在 workspace 内无法用 workspace = true)
 serde = { version = "1.0", features = ["derive"] }
@@ -67,6 +69,24 @@ doc = false
 [[bin]]
 name = "event_serialize"
 path = "fuzz_targets/event_serialize.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "cacr_budget_parse"
+path = "fuzz_targets/cacr_budget_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "checkpoint_deserialize"
+path = "fuzz_targets/checkpoint_deserialize.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "config_section_parse"
+path = "fuzz_targets/config_section_parse.rs"
 test = false
 doc = false
 

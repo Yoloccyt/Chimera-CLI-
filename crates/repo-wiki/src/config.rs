@@ -9,25 +9,14 @@ use std::path::PathBuf;
 use crate::types::WikiConfig;
 
 impl WikiConfig {
-    /// 创建内存数据库配置(仅用于测试)
-    ///
-    /// WHY:SQLite 支持 `:memory:` 内存数据库,适合单元测试,
-    /// 避免文件系统 IO 影响测试速度与隔离性。
-    #[cfg(test)]
-    pub fn in_memory() -> Self {
-        Self {
-            db_path: PathBuf::from(":memory:"),
-            vector_dim: 512,
-            wal_enabled: false,
-        }
-    }
-
-    /// 创建指定路径的配置,使用默认维度(512)与 WAL 启用
+    /// 创建指定路径的配置,使用默认维度(512)、WAL 启用、读连接池大小 2
     pub fn with_path(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
             vector_dim: 512,
             wal_enabled: true,
+            read_pool_size: 2,
+            fts_enabled: true,
         }
     }
 
@@ -42,6 +31,20 @@ impl WikiConfig {
         self.wal_enabled = enabled;
         self
     }
+
+    /// 设置只读连接池大小(builder 风格)
+    pub fn read_pool_size(mut self, size: usize) -> Self {
+        self.read_pool_size = size;
+        self
+    }
+
+    /// 设置 FTS5 全文索引启用状态(builder 风格)
+    ///
+    /// 设为 false 可禁用 FTS5,强制 `search_fulltext` 走 LIKE 降级路径。
+    pub fn fts_enabled(mut self, enabled: bool) -> Self {
+        self.fts_enabled = enabled;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -52,10 +55,12 @@ mod tests {
     fn test_with_path_builder() {
         let config = WikiConfig::with_path("/tmp/test.db")
             .vector_dim(256)
-            .wal_enabled(false);
+            .wal_enabled(false)
+            .read_pool_size(4);
         assert_eq!(config.db_path, PathBuf::from("/tmp/test.db"));
         assert_eq!(config.vector_dim, 256);
         assert!(!config.wal_enabled);
+        assert_eq!(config.read_pool_size, 4);
     }
 
     #[test]
@@ -63,5 +68,6 @@ mod tests {
         let config = WikiConfig::with_path("wiki.db");
         assert_eq!(config.vector_dim, 512);
         assert!(config.wal_enabled);
+        assert_eq!(config.read_pool_size, 2);
     }
 }

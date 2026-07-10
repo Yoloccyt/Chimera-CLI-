@@ -15,6 +15,21 @@
 //! - future 被 drop 但无运行时检测
 //!
 //! QEEP 通过 `OrphanGuard` + `Drop` trait 从机制上杜绝此类问题。
+//!
+//! # 快速示例
+//! WHY 选此示例:展示最常用路径 —— `entangle()` 包裹 future,完成即计数 +1。
+//! ```no_run
+//! use qeep_protocol::{QeepProtocol, QeepError, DEFAULT_TIMEOUT};
+//!
+//! # async fn run() -> Result<(), QeepError> {
+//! let protocol = QeepProtocol::new(DEFAULT_TIMEOUT);
+//! // 纠缠包裹:future 必须输出 Result<T, QeepError>,超时即报错
+//! let result: u32 = protocol.entangle(async { Ok(42u32) }).await?;
+//! assert_eq!(result, 42);
+//! assert_eq!(protocol.completed_count(), 1);
+//! # Ok(())
+//! # }
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]

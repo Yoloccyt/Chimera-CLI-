@@ -127,7 +127,7 @@ async fn test_integrity_check_corrupted_file() {
     std::fs::write(&file_path, bytes).unwrap();
 
     // load 应失败(反序列化错误或哈希不匹配)
-    let result = cm.load(&quest.quest_id, &checkpoint.checkpoint_id);
+    let result = cm.load(&quest.quest_id, &checkpoint.checkpoint_id).await;
     assert!(result.is_err(), "篡改文件后 load 应失败,实际: {result:?}");
 }
 
@@ -295,11 +295,11 @@ async fn test_load_latest_returns_most_recent() {
     let mut newest_time = chrono::DateTime::<chrono::Utc>::MIN_UTC;
     for _ in 0..3 {
         std::thread::sleep(Duration::from_millis(5));
-        let cp = cm.save(&quest).unwrap();
+        let cp = cm.save(&quest).await.unwrap();
         newest_time = cp.created_at;
     }
 
-    let latest = cm.load_latest("q-test").unwrap().unwrap();
+    let latest = cm.load_latest("q-test").await.unwrap().unwrap();
     assert_eq!(latest.created_at, newest_time);
 }
 
@@ -311,7 +311,7 @@ async fn test_load_latest_returns_none_when_empty() {
     let tmp = tempdir().unwrap();
     let cm = CheckpointManager::new(tmp.path().to_path_buf());
 
-    let result = cm.load_latest("nonexistent-quest").unwrap();
+    let result = cm.load_latest("nonexistent-quest").await.unwrap();
     assert!(result.is_none());
 }
 
@@ -524,4 +524,161 @@ async fn test_save_checkpoint_nonexistent_quest_returns_error() {
         matches!(result, Err(QuestError::QuestNotFound(_))),
         "应返回 QuestNotFound,实际: {result:?}"
     );
+}
+
+// ============================================================
+// 回归测试:CheckpointManager 的 I/O 不阻塞 async runtime
+// ============================================================
+
+use std::sync::Arc;
+
+use nexus_core::{Task, ThinkingMode};
+use tokio::task::JoinSet;
+
+/// 构造较大体积的 Quest,使 MessagePack 序列化 + 磁盘 I/O 非平凡
+fn make_large_quest(id: &str, task_count: usize) -> Quest {
+    let long_desc = "中".repeat(1024);
+    let tasks = (0..task_count)
+        .map(|i| Task {
+            task_id: format!("task-{i}"),
+            description: format!("任务 {i} 的详细描述: {long_desc}"),
+            status: TaskStatus::Pending,
+            dependencies: if i == 0 {
+                vec![]
+            } else {
+                vec![format!("task-{}", i - 1)]
+            },
+        })
+        .collect();
+
+    Quest {
+        quest_id: id.into(),
+        title: format!("大 Quest {id}"),
+        tasks,
+        thinking_mode: ThinkingMode::Standard,
+        checkpoint_id: None,
+    }
+}
+
+/// 轻量任务:仅连续 yield 10 次,用于探测 runtime 是否被阻塞
+async fn yield_ten_times() {
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+}
+
+// ------------------------------------------------------------
+// 测试 A:save() 不阻塞 runtime
+// ------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_save_load_not_blocking_runtime() {
+    let tmp = tempdir().unwrap();
+    let cm = CheckpointManager::new(tmp.path().to_path_buf());
+    let quest = make_large_quest("q-save-blocking", 50);
+
+    // 将 save 放到独立任务,与轻量任务并发执行
+    let save_handle = tokio::spawn(async move { cm.save(&quest).await });
+
+    let lightweight = yield_ten_times();
+    let light_result = tokio::time::timeout(Duration::from_millis(100), lightweight).await;
+
+    let save_result = save_handle
+        .await
+        .expect("save 任务不应 panic")
+        .expect("save 应成功");
+
+    assert!(
+        light_result.is_ok(),
+        "save 期间轻量任务应在 100ms 内完成,说明 runtime 未被阻塞"
+    );
+    assert_eq!(save_result.quest_id, "q-save-blocking");
+}
+
+// ------------------------------------------------------------
+// 测试 B:load_latest() 不阻塞 runtime
+// ------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_load_latest_not_blocking_runtime() {
+    let tmp = tempdir().unwrap();
+    let cm = CheckpointManager::new(tmp.path().to_path_buf());
+    let quest = make_large_quest("q-load-blocking", 50);
+
+    // 先保存一个检查点,使 load_latest 有文件可读
+    let _ = cm.save(&quest).await.expect("前置 save 应成功");
+
+    let cm = Arc::new(cm);
+    let cm2 = Arc::clone(&cm);
+    let load_handle = tokio::spawn(async move { cm2.load_latest("q-load-blocking").await });
+
+    let lightweight = yield_ten_times();
+    let light_result = tokio::time::timeout(Duration::from_millis(100), lightweight).await;
+
+    let load_result = load_handle
+        .await
+        .expect("load_latest 任务不应 panic")
+        .expect("load_latest 应成功");
+
+    assert!(
+        light_result.is_ok(),
+        "load_latest 期间轻量任务应在 100ms 内完成,说明 runtime 未被阻塞"
+    );
+    assert!(load_result.is_some(), "load_latest 应返回已保存的检查点");
+}
+
+// ------------------------------------------------------------
+// 测试 C:并发 save/load 无数据丢失或 ID 冲突
+// ------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_concurrent_save_load_correctness() {
+    let tmp = tempdir().unwrap();
+    let cm = Arc::new(CheckpointManager::new(tmp.path().to_path_buf()));
+    let quest = make_large_quest("q-concurrent", 30);
+
+    // 并发保存 5 个检查点
+    let mut save_set = JoinSet::new();
+    for _ in 0..5 {
+        let cm = Arc::clone(&cm);
+        let quest = quest.clone();
+        save_set.spawn(async move { cm.save(&quest).await });
+    }
+
+    let mut checkpoint_ids = Vec::new();
+    while let Some(result) = save_set.join_next().await {
+        let cp = result.expect("save 任务不应 panic").expect("save 应成功");
+        checkpoint_ids.push(cp.checkpoint_id);
+    }
+    assert_eq!(checkpoint_ids.len(), 5, "应保存 5 个检查点");
+
+    // 并发按 ID 加载并校验完整性
+    let mut load_set = JoinSet::new();
+    for id in &checkpoint_ids {
+        let cm = Arc::clone(&cm);
+        let id = id.clone();
+        load_set.spawn(async move { cm.load("q-concurrent", &id).await });
+    }
+
+    let mut loaded_count = 0;
+    while let Some(result) = load_set.join_next().await {
+        let cp = result.expect("load 任务不应 panic").expect("load 应成功");
+        let restored: Quest =
+            rmp_serde::from_slice(&cp.serialized_state).expect("反序列化 Quest 应成功");
+        assert_eq!(restored.quest_id, quest.quest_id);
+        assert_eq!(restored.tasks.len(), quest.tasks.len());
+        loaded_count += 1;
+    }
+    assert_eq!(loaded_count, 5, "应成功加载全部 5 个检查点");
+
+    // list_checkpoints 应恰好看到 5 个文件
+    let listed = cm.list_checkpoints("q-concurrent").expect("list 应成功");
+    assert_eq!(listed.len(), 5, "磁盘上应保留 5 个检查点文件");
+
+    // load_latest 应返回一个有效的 Quest
+    let latest = cm
+        .load_latest("q-concurrent")
+        .await
+        .expect("load_latest 应成功")
+        .expect("应存在最新检查点");
+    let latest_quest: Quest =
+        rmp_serde::from_slice(&latest.serialized_state).expect("反序列化最新 Quest 应成功");
+    assert_eq!(latest_quest.quest_id, quest.quest_id);
 }

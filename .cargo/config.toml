@@ -9,3 +9,9 @@ linker = "D:/msys64/mingw64/bin/gcc.exe"
 # 代价:日常增量编译速度变慢,但项目规模(34 crates)下全量 check 仅 ~7s,可接受。
 [build]
 incremental = false
+
+# WHY:启用 rusqlite bundled SQLite 的 FTS5 全文索引扩展编译。
+# libsqlite3-sys 的 build.rs 读取此环境变量,传递 -DSQLITE_ENABLE_FTS5 给 C 编译器。
+# 不设置时 FTS5 不可用,repo-wiki 自动降级到 LIKE 全表扫描(降级策略见 fts.rs)。
+[env]
+SQLITE_ENABLE_FTS5 = "1"

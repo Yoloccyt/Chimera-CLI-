@@ -1,5 +1,11 @@
 //! Figment 多源配置加载 — 对齐 §10.2 omega.yaml 模板
 //!
+//! ## 架构说明(Phase IV F1 迁移后)
+//! - **配置类型定义**(27 个 struct + Default impl + 默认值函数)已迁移至 `nexus-core/src/config.rs`
+//! - 本模块通过 `pub use nexus_core::config::*;` re-export 全部类型,保持向后兼容
+//! - **加载逻辑**(figment 合并 / omega.yaml 模板 / 文件初始化)保留在本模块
+//! - 这样 L10 chimera-cli 依赖 L1 nexus-core(向下依赖,符合 §2.2 铁律)
+//!
 //! ## 配置优先级(后者覆盖前者)
 //! 1. 内置默认值(`ChimeraConfig::default`)
 //! 2. 配置文件(默认 `~/.aether/omega.yaml`,可由 `--config` 覆盖)
@@ -9,806 +15,21 @@
 //! ## 配置样例
 //! - 简化样例见 `examples/config.sample.yaml` / `examples/config.sample.toml`
 //! - 完整模板(含全部 14 个顶层 section)由 `aether config init` 生成
-//!
-//! ## 设计决策
-//! - 子配置全部派生 `Default`,避免在 `ChimeraConfig::default` 中重复初始化
-//! - `providers` 的 `capabilities` 用 `Vec<String>` 而非枚举,保持向前兼容(新能力不需改代码)
-//! - `mcp.servers` 用统一 struct + `Option` 字段,兼容 stdio/http/db 三种传输
-//! - home 目录展开手动实现(避免引入 `dirs` crate 增加依赖)
+
+// 类型定义 re-export:nexus-core 定义,L10 通过 re-export 保持向后兼容。
+// trait impl(Serialize/Deserialize)是全局的,re-export 后自动随类型传播。
+pub use nexus_core::config::*;
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use figment::{
     providers::{Env, Format, Serialized, Yaml},
     Figment,
 };
-use serde::{Deserialize, Serialize};
 
-// === 顶层配置结构 ===
-
-/// Chimera CLI 顶层配置(对应 omega.yaml 根结构)
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(default)]
-pub struct ChimeraConfig {
-    /// Nexus 元信息
-    pub nexus: NexusConfig,
-    /// Quest 长期任务配置
-    pub quest: QuestConfig,
-    /// 思考切换治理(TTG)
-    pub thinking_toggle: ThinkingToggleConfig,
-    /// Repo Wiki 知识库
-    pub repo_wiki: RepoWikiConfig,
-    /// 模型路由器
-    pub model_router: ModelRouterConfig,
-    /// 全维稀疏架构(OSA)
-    pub osa: OsaConfig,
-    /// KV 块语义路由器(KVBSR)
-    pub kvbsr: KvbsrConfig,
-    /// 生产者-验证者循环(PVL)
-    pub pvl: PvlConfig,
-    /// 多步预测执行(MTPE)
-    pub mtpe: MtpeConfig,
-    /// 聚集执行协议(GQEP)
-    pub gqep: GqepConfig,
-    /// 安全核心(SecCore)
-    pub seccore: SeccoreConfig,
-    /// MCP 网格
-    pub mcp: McpConfig,
-    /// 在线进化(GSOE)
-    pub evolution: EvolutionConfig,
-    /// 监控(Prometheus/Grafana)
-    pub monitoring: MonitoringConfig,
-}
-
-/// Nexus 元信息
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct NexusConfig {
-    /// 配置版本号(与 workspace.package.version 对齐)
-    pub version: String,
-}
-
-impl Default for NexusConfig {
-    fn default() -> Self {
-        Self {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-        }
-    }
-}
-
-/// Quest 长期任务配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct QuestConfig {
-    /// 是否自动分解 Quest 为子任务
-    pub auto_decompose: bool,
-    /// 单个 Quest 最大任务数(防止无限分解)
-    pub max_tasks_per_quest: u32,
-    /// 默认截止时间(小时)
-    pub default_deadline_hours: u32,
-    /// 检查点间隔(操作次数)
-    pub checkpoint_interval_ops: u32,
-    /// 检查点间隔(分钟)
-    pub checkpoint_interval_minutes: u32,
-}
-
-impl Default for QuestConfig {
-    fn default() -> Self {
-        Self {
-            auto_decompose: true,
-            max_tasks_per_quest: 20,
-            default_deadline_hours: 168,
-            checkpoint_interval_ops: 100,
-            checkpoint_interval_minutes: 10,
-        }
-    }
-}
-
-/// 思考切换治理(TTG)配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct ThinkingToggleConfig {
-    /// 默认思考模式:NonThinking / Lite / Deep / Max / Auto
-    pub default_mode: String,
-    /// Auto 模式下的自动切换阈值
-    pub auto_thresholds: AutoThresholdsConfig,
-}
-
-impl Default for ThinkingToggleConfig {
-    fn default() -> Self {
-        Self {
-            default_mode: "Auto".to_string(),
-            auto_thresholds: AutoThresholdsConfig::default(),
-        }
-    }
-}
-
-/// Auto 模式阈值(复杂度 + 风险双维度)
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct AutoThresholdsConfig {
-    /// 非思考模式阈值
-    pub non_thinking: ThresholdEntry,
-    /// 轻量思考阈值
-    pub lite: ThresholdEntry,
-    /// 深度思考阈值
-    pub deep: ThresholdEntry,
-    /// 最大思考阈值
-    pub max: ThresholdEntry,
-}
-
-impl Default for AutoThresholdsConfig {
-    fn default() -> Self {
-        Self {
-            non_thinking: ThresholdEntry {
-                complexity: 0.1,
-                risk: "Low".to_string(),
-            },
-            lite: ThresholdEntry {
-                complexity: 0.4,
-                risk: "Medium".to_string(),
-            },
-            deep: ThresholdEntry {
-                complexity: 0.7,
-                risk: "High".to_string(),
-            },
-            max: ThresholdEntry {
-                complexity: 0.9,
-                risk: "Critical".to_string(),
-            },
-        }
-    }
-}
-
-/// 单个阈值条目
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(default)]
-pub struct ThresholdEntry {
-    /// 复杂度阈值(0.0-1.0)
-    pub complexity: f64,
-    /// 风险等级:Low / Medium / High / Critical
-    pub risk: String,
-}
-
-/// Repo Wiki 知识库配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct RepoWikiConfig {
-    /// 是否自动生成 Wiki
-    pub auto_generate: bool,
-    /// Wiki 数据库路径
-    pub db_path: String,
-    /// 嵌入向量维度
-    pub embedding_dim: u32,
-    /// 提交时自动更新
-    pub auto_update_on_commit: bool,
-}
-
-impl Default for RepoWikiConfig {
-    fn default() -> Self {
-        Self {
-            auto_generate: true,
-            db_path: "~/.aether/wiki.db".to_string(),
-            embedding_dim: 256,
-            auto_update_on_commit: true,
-        }
-    }
-}
-
-/// 模型路由器配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct ModelRouterConfig {
-    /// 路由策略:CostOptimized / SpeedOptimized / QualityOptimized / Auto / Failover
-    pub strategy: String,
-    /// 预算控制
-    pub budget: BudgetConfig,
-    /// 模型提供商列表
-    pub providers: Vec<ProviderConfig>,
-}
-
-impl Default for ModelRouterConfig {
-    fn default() -> Self {
-        Self {
-            strategy: "Auto".to_string(),
-            budget: BudgetConfig::default(),
-            providers: default_providers(),
-        }
-    }
-}
-
-/// 预算配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct BudgetConfig {
-    /// 每日预算(美元)
-    pub daily_usd: f64,
-    /// 每月预算(美元)
-    pub monthly_usd: f64,
-    /// 告警阈值(0.0-1.0,占预算比例)
-    pub alert_threshold: f64,
-}
-
-impl Default for BudgetConfig {
-    fn default() -> Self {
-        Self {
-            daily_usd: 50.0,
-            monthly_usd: 1000.0,
-            alert_threshold: 0.8,
-        }
-    }
-}
-
-/// 单个模型提供商配置
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(default)]
-pub struct ProviderConfig {
-    /// 提供商 ID(唯一标识)
-    pub id: String,
-    /// 显示名称
-    pub name: String,
-    /// API 端点
-    pub endpoint: String,
-    /// 上下文窗口大小(tokens)
-    pub context_window: u32,
-    /// 能力列表(用 String 保持向前兼容)
-    pub capabilities: Vec<String>,
-    /// 层级:premium / efficient / lite
-    pub tier: String,
-    /// 每 1k 输入 token 成本(美元)
-    pub input_cost_per_1k: f64,
-    /// 每 1k 输出 token 成本(美元)
-    pub output_cost_per_1k: f64,
-}
-
-/// 默认提供商列表(对齐 §10.2 模板的 5 个模型)
-fn default_providers() -> Vec<ProviderConfig> {
-    vec![
-        ProviderConfig {
-            id: "claude-opus".to_string(),
-            name: "Claude Opus 4.8".to_string(),
-            endpoint: "https://api.anthropic.com".to_string(),
-            context_window: 200_000,
-            capabilities: vec![
-                "CodeGeneration".into(),
-                "ArchitectureDesign".into(),
-                "SecurityAudit".into(),
-                "Reasoning".into(),
-            ],
-            tier: "premium".into(),
-            input_cost_per_1k: 15.0,
-            output_cost_per_1k: 75.0,
-        },
-        ProviderConfig {
-            id: "gpt-4o".to_string(),
-            name: "GPT-4o".to_string(),
-            endpoint: "https://api.openai.com".to_string(),
-            context_window: 128_000,
-            capabilities: vec![
-                "CodeGeneration".into(),
-                "CodeReview".into(),
-                "ToolUse".into(),
-            ],
-            tier: "efficient".into(),
-            input_cost_per_1k: 2.5,
-            output_cost_per_1k: 10.0,
-        },
-        ProviderConfig {
-            id: "qwen-coder".to_string(),
-            name: "Qwen Coder".to_string(),
-            endpoint: "https://dashscope.aliyuncs.com".to_string(),
-            context_window: 128_000,
-            capabilities: vec![
-                "CodeGeneration".into(),
-                "LongContext".into(),
-                "Multilingual".into(),
-            ],
-            tier: "lite".into(),
-            input_cost_per_1k: 0.5,
-            output_cost_per_1k: 2.0,
-        },
-        ProviderConfig {
-            id: "minimax-m3".to_string(),
-            name: "Minimax M3".to_string(),
-            endpoint: "https://api.minimax.chat".to_string(),
-            context_window: 1_000_000,
-            capabilities: vec![
-                "CodeGeneration".into(),
-                "LongContext".into(),
-                "Multimodal".into(),
-            ],
-            tier: "efficient".into(),
-            input_cost_per_1k: 0.3,
-            // 注:§10.2 模板原文为 output_cost_per_k,此处修正为 output_cost_per_1k 以保持字段一致
-            output_cost_per_1k: 1.2,
-        },
-        ProviderConfig {
-            id: "glm-5.2".to_string(),
-            name: "GLM 5.2".to_string(),
-            endpoint: "https://api.zhipu.ai".to_string(),
-            context_window: 1_000_000,
-            capabilities: vec![
-                "CodeGeneration".into(),
-                "LongContext".into(),
-                "Reasoning".into(),
-            ],
-            tier: "premium".into(),
-            input_cost_per_1k: 1.0,
-            output_cost_per_1k: 4.0,
-        },
-    ]
-}
-
-/// 全维稀疏架构(OSA)配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct OsaConfig {
-    /// 稀疏化维度:routing / context / memory / audit / budget
-    pub dimensions: Vec<String>,
-    /// 基础稀疏度(0.0-1.0,越高越稀疏)
-    pub sparsity_base: f64,
-    /// 是否根据复杂度动态调整
-    pub complexity_adjustment: bool,
-}
-
-impl Default for OsaConfig {
-    fn default() -> Self {
-        Self {
-            dimensions: vec![
-                "routing".into(),
-                "context".into(),
-                "memory".into(),
-                "audit".into(),
-                "budget".into(),
-            ],
-            sparsity_base: 0.8,
-            complexity_adjustment: true,
-        }
-    }
-}
-
-/// KV 块语义路由器(KVBSR)配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct KvbsrConfig {
-    /// 最大块数
-    pub max_blocks: u32,
-    /// 每块工具数
-    pub tools_per_block: u32,
-    /// 自动重平衡阈值
-    pub auto_rebalance_threshold: u32,
-    /// 最小一致性阈值
-    pub coherence_min: f64,
-}
-
-impl Default for KvbsrConfig {
-    fn default() -> Self {
-        Self {
-            max_blocks: 20,
-            tools_per_block: 15,
-            auto_rebalance_threshold: 100,
-            coherence_min: 0.7,
-        }
-    }
-}
-
-/// 生产者-验证者循环(PVL)配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct PvlConfig {
-    /// 生产者超时(毫秒)
-    pub producer_timeout_ms: u64,
-    /// 验证者超时(毫秒)
-    pub verifier_timeout_ms: u64,
-    /// 反馈通道容量
-    pub feedback_channel_size: u32,
-    /// 最大重试次数
-    pub max_retry: u32,
-}
-
-impl Default for PvlConfig {
-    fn default() -> Self {
-        Self {
-            producer_timeout_ms: 5000,
-            verifier_timeout_ms: 3000,
-            feedback_channel_size: 100,
-            max_retry: 3,
-        }
-    }
-}
-
-/// 多步预测执行(MTPE)配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct MtpeConfig {
-    /// 默认预测深度
-    pub default_prediction_depth: u32,
-    /// 最大预测深度
-    pub max_prediction_depth: u32,
-    /// 是否启用自适应深度
-    pub adapt_depth_enabled: bool,
-    /// 是否批量验证
-    pub batch_verify: bool,
-}
-
-impl Default for MtpeConfig {
-    fn default() -> Self {
-        Self {
-            default_prediction_depth: 3,
-            max_prediction_depth: 10,
-            adapt_depth_enabled: true,
-            batch_verify: true,
-        }
-    }
-}
-
-/// 聚集执行协议(GQEP)配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct GqepConfig {
-    /// 批量大小
-    pub batch_size: u32,
-    /// 资源类型:FileSystem / Network / Git / Docker / Database
-    pub resource_types: Vec<String>,
-    /// 连接池大小
-    pub connection_pool_size: u32,
-}
-
-impl Default for GqepConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: 10,
-            resource_types: vec![
-                "FileSystem".into(),
-                "Network".into(),
-                "Git".into(),
-                "Docker".into(),
-                "Database".into(),
-            ],
-            connection_pool_size: 5,
-        }
-    }
-}
-
-/// 安全核心(SecCore)配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct SeccoreConfig {
-    /// 沙箱类型:gvisor / none
-    pub sandbox: String,
-    /// 是否启用 seccomp
-    pub seccomp: bool,
-    /// 命令插值策略:forbidden / allowed
-    pub command_interpolation: String,
-    /// 红队配置
-    pub red_team: RedTeamConfig,
-    /// 能力衰减配置
-    pub capability_decay: CapabilityDecayConfig,
-}
-
-impl Default for SeccoreConfig {
-    fn default() -> Self {
-        Self {
-            sandbox: "gvisor".to_string(),
-            seccomp: true,
-            command_interpolation: "forbidden".to_string(),
-            red_team: RedTeamConfig::default(),
-            capability_decay: CapabilityDecayConfig::default(),
-        }
-    }
-}
-
-/// 红队(AHIRT)配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct RedTeamConfig {
-    /// 是否启用红队
-    pub enabled: bool,
-    /// 审计频率(0.0-1.0,每次操作被审计的概率)
-    pub audit_frequency: f64,
-    /// 主动探测间隔(小时)
-    pub active_probe_interval_hours: u32,
-}
-
-impl Default for RedTeamConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            audit_frequency: 0.1,
-            active_probe_interval_hours: 24,
-        }
-    }
-}
-
-/// 能力衰减配置(对应 DecayEngine)
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct CapabilityDecayConfig {
-    /// 初始能力值
-    pub initial: f64,
-    /// 高风险衰减率
-    pub high_risk_decay: f64,
-    /// 中风险衰减率
-    pub medium_risk_decay: f64,
-    /// 低风险衰减率
-    pub low_risk_decay: f64,
-    /// 恢复率
-    pub recovery_rate: f64,
-    /// 恢复间隔(分钟)
-    pub recovery_interval_minutes: u32,
-}
-
-impl Default for CapabilityDecayConfig {
-    fn default() -> Self {
-        Self {
-            initial: 1.0,
-            high_risk_decay: 0.2,
-            medium_risk_decay: 0.1,
-            low_risk_decay: 0.02,
-            recovery_rate: 0.05,
-            recovery_interval_minutes: 10,
-        }
-    }
-}
-
-/// MCP 网格配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct McpConfig {
-    /// Mesh 网格配置
-    pub mesh: McpMeshConfig,
-    /// MCP 服务器列表
-    pub servers: Vec<McpServerConfig>,
-}
-
-impl Default for McpConfig {
-    fn default() -> Self {
-        Self {
-            mesh: McpMeshConfig::default(),
-            servers: default_mcp_servers(),
-        }
-    }
-}
-
-/// MCP Mesh 配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct McpMeshConfig {
-    /// 传输协议:stdio / http
-    pub transports: Vec<String>,
-    /// 是否启用量子纠缠(QEEP)
-    pub entanglement: bool,
-}
-
-impl Default for McpMeshConfig {
-    fn default() -> Self {
-        Self {
-            transports: vec!["stdio".into(), "http".into()],
-            entanglement: true,
-        }
-    }
-}
-
-/// 单个 MCP 服务器配置(统一 struct,兼容 stdio/http/db 三种传输)
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(default)]
-pub struct McpServerConfig {
-    /// 服务器 ID
-    pub id: String,
-    /// stdio 模式:启动命令
-    pub command: Option<String>,
-    /// stdio 模式:命令参数
-    pub args: Option<Vec<String>>,
-    /// http/db 模式:URL
-    pub url: Option<String>,
-    /// 认证方式:oauth / password / none
-    pub auth: Option<String>,
-}
-
-/// 默认 MCP 服务器列表(对齐 §10.2 模板)
-fn default_mcp_servers() -> Vec<McpServerConfig> {
-    vec![
-        McpServerConfig {
-            id: "filesystem".to_string(),
-            command: Some("npx".to_string()),
-            args: Some(vec![
-                "-y".into(),
-                "@modelcontextprotocol/server-filesystem".into(),
-            ]),
-            url: None,
-            auth: None,
-        },
-        McpServerConfig {
-            id: "github".to_string(),
-            command: None,
-            args: None,
-            url: Some("https://api.github.com/mcp".to_string()),
-            auth: Some("oauth".to_string()),
-        },
-        McpServerConfig {
-            id: "postgres".to_string(),
-            command: None,
-            args: None,
-            url: Some("postgresql://localhost:5432/mcp".to_string()),
-            auth: Some("password".to_string()),
-        },
-    ]
-}
-
-/// 在线进化(GSOE)配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct EvolutionConfig {
-    /// 是否启用进化
-    pub enabled: bool,
-    /// 变异池路径
-    pub mutation_pool_path: String,
-    /// 适应度函数表达式
-    pub fitness_function: String,
-    /// A/B 测试配置
-    pub ab_test: AbTestConfig,
-    /// 在线学习配置
-    pub online_learning: OnlineLearningConfig,
-}
-
-impl Default for EvolutionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            mutation_pool_path: "~/.aether/evolution/mutations/".to_string(),
-            fitness_function:
-                "(success_rate * 0.4) + (speed * 0.3) + (token_efficiency * 0.2) + (safety * 0.1)"
-                    .to_string(),
-            ab_test: AbTestConfig::default(),
-            online_learning: OnlineLearningConfig::default(),
-        }
-    }
-}
-
-/// A/B 测试配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct AbTestConfig {
-    /// 是否启用 A/B 测试
-    pub enabled: bool,
-    /// 最小样本数(统计显著性)
-    pub min_samples: u32,
-    /// 显著性阈值
-    pub significance_threshold: f64,
-}
-
-impl Default for AbTestConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            min_samples: 30,
-            significance_threshold: 1.5,
-        }
-    }
-}
-
-/// 在线学习配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct OnlineLearningConfig {
-    /// 是否启用在线学习
-    pub enabled: bool,
-    /// 更新频率(每 N 次任务更新一次)
-    pub update_frequency: u32,
-    /// 学习率
-    pub learning_rate: f64,
-}
-
-impl Default for OnlineLearningConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            update_frequency: 10,
-            learning_rate: 0.01,
-        }
-    }
-}
-
-/// 监控配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct MonitoringConfig {
-    /// Prometheus 配置
-    pub prometheus: PrometheusConfig,
-    /// Grafana 配置
-    pub grafana: GrafanaConfig,
-    /// 告警规则
-    pub alerts: Vec<AlertConfig>,
-}
-
-impl Default for MonitoringConfig {
-    fn default() -> Self {
-        Self {
-            prometheus: PrometheusConfig::default(),
-            grafana: GrafanaConfig::default(),
-            alerts: default_alerts(),
-        }
-    }
-}
-
-/// Prometheus 配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct PrometheusConfig {
-    /// 是否启用
-    pub enabled: bool,
-    /// 端口
-    pub port: u16,
-}
-
-impl Default for PrometheusConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            port: 9090,
-        }
-    }
-}
-
-/// Grafana 配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct GrafanaConfig {
-    /// 是否启用
-    pub enabled: bool,
-    /// Dashboard 路径
-    pub dashboard_path: String,
-}
-
-impl Default for GrafanaConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            dashboard_path: "./monitoring/grafana-dashboard.json".to_string(),
-        }
-    }
-}
-
-/// 告警规则配置
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(default)]
-pub struct AlertConfig {
-    /// 告警名称
-    pub name: String,
-    /// PromQL 表达式
-    pub expr: String,
-    /// 持续时间
-    pub r#for: String,
-}
-
-/// 默认告警规则(对齐 §10.2 模板)
-fn default_alerts() -> Vec<AlertConfig> {
-    vec![
-        AlertConfig {
-            name: "CapabilityDepleted".to_string(),
-            expr: "aether_capability_current < 0.1".to_string(),
-            r#for: "1m".to_string(),
-        },
-        AlertConfig {
-            name: "HighOrphanRate".to_string(),
-            expr: "rate(aether_orphan_calls_total[5m]) > 0".to_string(),
-            r#for: "1m".to_string(),
-        },
-        AlertConfig {
-            name: "BudgetAlert".to_string(),
-            expr: "aether_daily_cost / aether_daily_budget > 0.8".to_string(),
-            r#for: "5m".to_string(),
-        },
-        AlertConfig {
-            name: "RedTeamVulnerability".to_string(),
-            expr: "aether_red_team_vulnerabilities > 0".to_string(),
-            r#for: "1m".to_string(),
-        },
-    ]
-}
-
-// === 配置加载逻辑 ===
+// === 配置加载逻辑(保留在 L10 chimera-cli) ===
 
 /// 默认配置文件路径:`~/.aether/omega.yaml`
 ///
@@ -1039,17 +260,241 @@ monitoring:
 "#
 }
 
+// === LazyConfig:14 section 按需懒加载(Task 4 / E1) ===
+//
+// WHY 懒加载:`load()` 通过 `figment.extract::<ChimeraConfig>()` 一次性反序列化
+// 全部 14 个顶层 section。实际 CLI 运行往往只用其中一部分(如 `aether quest list`
+// 不需要 evolution/monitoring),启动期解析未使用 section 是纯浪费。
+// `LazyConfig` 仅在首次访问对应 getter 时,通过 `Figment::extract_inner` 按路径
+// 反序列化该 section,未访问 section 零解析开销。
+
+/// 单个 section 的 fallible 懒加载缓存。
+///
+/// 封装 [`OnceLock`] + "首次解析、后续缓存"模式,使 14 个 getter 各自缩为一行,
+/// 避免样板重复。
+///
+/// 线程安全:基于 [`std::sync::OnceLock`](Rust 1.70+ 稳定),无 `unsafe`,
+/// 契合 crate 级 `#![forbid(unsafe_code)]`。多线程并发访问同一 getter 时,
+/// 至多一个线程执行解析,其余线程阻塞等待并共享结果。
+struct LazySection<T> {
+    /// 缓存解析结果(含错误)。
+    ///
+    /// WHY 缓存 `Err`:配置文件格式错误不会因重试自愈,缓存错误既避免
+    /// 重复解析坏 section,也保证"懒加载只算一次"的语义一致。
+    cell: OnceLock<Result<T, String>>,
+}
+
+impl<T> LazySection<T> {
+    const fn new() -> Self {
+        Self {
+            cell: OnceLock::new(),
+        }
+    }
+
+    /// 首次访问调用 `init` 解析并缓存;后续直接返回缓存。
+    ///
+    /// 返回值生命周期与 `&self` 绑定(由生命周期省略规则自动推导),
+    /// 保证缓存引用跨多次调用有效。
+    fn get_or_try_init<F>(&self, init: F) -> Result<&T>
+    where
+        F: FnOnce() -> std::result::Result<T, String>,
+    {
+        match self.cell.get_or_init(init) {
+            Ok(value) => Ok(value),
+            // WHY 重建为 owned anyhow::Error:get_or_init 借出 &String,
+            // 但调用方链式 `?` 需要 owned `anyhow::Error`; anyhow::Error
+            // 非 Clone,故用消息重建。backtrace 信息在配置加载场景非必需。
+            Err(msg) => Err(anyhow::anyhow!("配置 section 解析失败: {msg}")),
+        }
+    }
+}
+
+/// 懒加载配置容器:持有 Figment provider,14 个 section 按需首次访问时解析。
+///
+/// 与 [`load`] 的区别:`load` 立即全量 `extract::<ChimeraConfig>()`;
+/// [`LazyConfig::new`] 只构建 provider 链不 extract,各 getter 首次调用时
+/// 通过 `Figment::extract_inner` 按 key 路径反序列化对应 section 并缓存。
+///
+/// 向后兼容:`LazyConfig` 是新增 API,既有 [`load`] / [`default_config`] /
+/// [`ChimeraConfig`] 签名与行为均不变。
+pub struct LazyConfig {
+    /// 合并后的 Figment provider(defaults > file > env),供懒加载 extract。
+    /// WHY 保留 provider 引用而非 extract 后丢弃:14 个 getter 需在各自首次
+    /// 访问时从同一 provider 按路径取子树,必须长期持有 Figment。
+    figment: Figment,
+    nexus: LazySection<NexusConfig>,
+    quest: LazySection<QuestConfig>,
+    thinking_toggle: LazySection<ThinkingToggleConfig>,
+    repo_wiki: LazySection<RepoWikiConfig>,
+    model_router: LazySection<ModelRouterConfig>,
+    osa: LazySection<OsaConfig>,
+    kvbsr: LazySection<KvbsrConfig>,
+    pvl: LazySection<PvlConfig>,
+    mtpe: LazySection<MtpeConfig>,
+    gqep: LazySection<GqepConfig>,
+    seccore: LazySection<SeccoreConfig>,
+    mcp: LazySection<McpConfig>,
+    evolution: LazySection<EvolutionConfig>,
+    monitoring: LazySection<MonitoringConfig>,
+}
+
+impl LazyConfig {
+    /// 从配置路径构建懒加载容器。
+    ///
+    /// `config_path` 为 `None` 时使用 [`default_config_path`]。
+    /// 配置文件不存在时不报错(与 [`load`] 一致),仅使用默认值 + 环境变量。
+    ///
+    /// WHY 只构建 provider 不 extract:14 section 的反序列化推迟到首次访问,
+    /// 消除启动期未使用 section 的解析开销。
+    pub fn new(config_path: Option<PathBuf>) -> Result<Self> {
+        let path = config_path.unwrap_or_else(default_config_path);
+        let figment = Figment::from(Serialized::defaults(ChimeraConfig::default()))
+            .merge(Yaml::file(&path))
+            .merge(Env::prefixed("AETHER_").split("__"));
+        Ok(Self {
+            figment,
+            nexus: LazySection::new(),
+            quest: LazySection::new(),
+            thinking_toggle: LazySection::new(),
+            repo_wiki: LazySection::new(),
+            model_router: LazySection::new(),
+            osa: LazySection::new(),
+            kvbsr: LazySection::new(),
+            pvl: LazySection::new(),
+            mtpe: LazySection::new(),
+            gqep: LazySection::new(),
+            seccore: LazySection::new(),
+            mcp: LazySection::new(),
+            evolution: LazySection::new(),
+            monitoring: LazySection::new(),
+        })
+    }
+
+    /// Nexus 元信息(首次访问时按 `nexus` 路径解析并缓存)。
+    pub fn nexus(&self) -> Result<&NexusConfig> {
+        self.nexus
+            .get_or_try_init(|| extract_section(&self.figment, "nexus"))
+    }
+
+    /// Quest 长期任务配置。
+    pub fn quest(&self) -> Result<&QuestConfig> {
+        self.quest
+            .get_or_try_init(|| extract_section(&self.figment, "quest"))
+    }
+
+    /// 思考切换治理(TTG)配置。
+    pub fn thinking_toggle(&self) -> Result<&ThinkingToggleConfig> {
+        self.thinking_toggle
+            .get_or_try_init(|| extract_section(&self.figment, "thinking_toggle"))
+    }
+
+    /// Repo Wiki 知识库配置。
+    pub fn repo_wiki(&self) -> Result<&RepoWikiConfig> {
+        self.repo_wiki
+            .get_or_try_init(|| extract_section(&self.figment, "repo_wiki"))
+    }
+
+    /// 模型路由器配置。
+    pub fn model_router(&self) -> Result<&ModelRouterConfig> {
+        self.model_router
+            .get_or_try_init(|| extract_section(&self.figment, "model_router"))
+    }
+
+    /// 全维稀疏架构(OSA)配置。
+    pub fn osa(&self) -> Result<&OsaConfig> {
+        self.osa
+            .get_or_try_init(|| extract_section(&self.figment, "osa"))
+    }
+
+    /// KV 块语义路由器(KVBSR)配置。
+    pub fn kvbsr(&self) -> Result<&KvbsrConfig> {
+        self.kvbsr
+            .get_or_try_init(|| extract_section(&self.figment, "kvbsr"))
+    }
+
+    /// 生产者-验证者循环(PVL)配置。
+    pub fn pvl(&self) -> Result<&PvlConfig> {
+        self.pvl
+            .get_or_try_init(|| extract_section(&self.figment, "pvl"))
+    }
+
+    /// 多步预测执行(MTPE)配置。
+    pub fn mtpe(&self) -> Result<&MtpeConfig> {
+        self.mtpe
+            .get_or_try_init(|| extract_section(&self.figment, "mtpe"))
+    }
+
+    /// 聚集执行协议(GQEP)配置。
+    pub fn gqep(&self) -> Result<&GqepConfig> {
+        self.gqep
+            .get_or_try_init(|| extract_section(&self.figment, "gqep"))
+    }
+
+    /// 安全核心(SecCore)配置。
+    pub fn seccore(&self) -> Result<&SeccoreConfig> {
+        self.seccore
+            .get_or_try_init(|| extract_section(&self.figment, "seccore"))
+    }
+
+    /// MCP 网格配置。
+    pub fn mcp(&self) -> Result<&McpConfig> {
+        self.mcp
+            .get_or_try_init(|| extract_section(&self.figment, "mcp"))
+    }
+
+    /// 在线进化(GSOE)配置。
+    pub fn evolution(&self) -> Result<&EvolutionConfig> {
+        self.evolution
+            .get_or_try_init(|| extract_section(&self.figment, "evolution"))
+    }
+
+    /// 监控(Prometheus/Grafana)配置。
+    pub fn monitoring(&self) -> Result<&MonitoringConfig> {
+        self.monitoring
+            .get_or_try_init(|| extract_section(&self.figment, "monitoring"))
+    }
+
+    /// 聚合全部 14 section 为完整 [`ChimeraConfig`]。
+    ///
+    /// WHY 会触发所有未访问 section 的解析:仅用于需要完整配置的场景;
+    /// 若只需部分 section,优先用对应 getter 避免全量解析。
+    pub fn to_chimera_config(&self) -> Result<ChimeraConfig> {
+        Ok(ChimeraConfig {
+            nexus: self.nexus()?.clone(),
+            quest: self.quest()?.clone(),
+            thinking_toggle: self.thinking_toggle()?.clone(),
+            repo_wiki: self.repo_wiki()?.clone(),
+            model_router: self.model_router()?.clone(),
+            osa: self.osa()?.clone(),
+            kvbsr: self.kvbsr()?.clone(),
+            pvl: self.pvl()?.clone(),
+            mtpe: self.mtpe()?.clone(),
+            gqep: self.gqep()?.clone(),
+            seccore: self.seccore()?.clone(),
+            mcp: self.mcp()?.clone(),
+            evolution: self.evolution()?.clone(),
+            monitoring: self.monitoring()?.clone(),
+        })
+    }
+}
+
+/// 按 key 路径从 Figment 提取单个 section(私有辅助)。
+///
+/// WHY 独立函数:14 个 getter 的解析逻辑完全相同
+/// (`figment.extract_inner::<T>(path).map_err(to_string)`),
+/// 提取为函数消除重复,且便于未来统一错误格式。
+fn extract_section<T>(figment: &Figment, path: &str) -> std::result::Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    figment
+        .extract_inner::<T>(path)
+        .map_err(|e| format!("section `{path}`: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_default_config_non_empty() {
-        let cfg = default_config();
-        assert!(!cfg.nexus.version.is_empty());
-        assert!(!cfg.quest.auto_decompose.to_string().is_empty());
-        assert!(!cfg.model_router.providers.is_empty());
-    }
 
     #[test]
     fn test_omega_yaml_template_non_empty() {

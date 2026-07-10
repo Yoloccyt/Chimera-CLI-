@@ -7,8 +7,9 @@
 //! - 专家注册表用 `RwLock<HashMap>`:读多写少场景,读锁并发无阻塞
 //! - 缓存用 `DashMap`:线程安全,支持并发读写,LRU 容量 128
 //! - `activate` 为 async:因 EventBus::publish 为 async(保留 API 稳定性)
-//! - 缓存 key 用 TaskProfile 的 serde 序列化哈希:f32 不实现 Hash(NaN),
-//!   用序列化避免手动处理浮点哈希
+//! - 缓存 key 直接用 `TaskProfile`(已 impl Hash+Eq):零分配 O(n) 哈希,
+//!   替代旧的 serde_json 序列化哈希方案。f32 经 `to_bits()` 转为确定性 u32,
+//!   绕过 NaN 不可哈希问题(详见 `types::TaskProfile` 的 Hash impl 注释)
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,8 +78,8 @@ pub struct GeaActivator {
     config: GeaConfig,
     /// 事件总线(跨层通信唯一通道)
     event_bus: EventBus,
-    /// 激活缓存:key 为 TaskProfile 序列化哈希,value 为 (结果, 写入时刻)
-    activation_cache: DashMap<u64, (ActivationResult, Instant)>,
+    /// 激活缓存:key 为 TaskProfile(直接 Hash,value 为 (结果, 写入时刻)
+    activation_cache: DashMap<TaskProfile, (ActivationResult, Instant)>,
     /// 缓存命中统计
     cache_stats: CacheStats,
 }
@@ -135,13 +136,12 @@ impl GeaActivator {
     /// - `ConflictResolutionFailed`:冲突消解内部错误
     /// - `ExpertNotFound`:候选专家在注册表中找不到(理论上不会发生)
     pub async fn activate(&self, task: &TaskProfile) -> Result<ActivationResult, GeaError> {
-        // 步骤 1:查缓存
-        let cache_key = hash_task_profile(task);
-        if let Some(entry) = self.activation_cache.get(&cache_key) {
+        // 步骤 1:查缓存(直接用 TaskProfile 作 key,TaskProfile 已 impl Hash+Eq)
+        if let Some(entry) = self.activation_cache.get(task) {
             let (cached_result, written_at) = entry.value();
             if written_at.elapsed() < Duration::from_secs(self.config.cache_ttl_secs) {
                 self.cache_stats.record_hit();
-                debug!("GEA cache hit, key={cache_key}");
+                debug!("GEA cache hit, task_type={}", task.task_type);
                 return Ok(cached_result.clone());
             }
         }
@@ -173,8 +173,8 @@ impl GeaActivator {
             resolve_conflicts(candidates, &registry, &self.config)?
         }; // 读锁在此释放,后续 await 不持锁
 
-        // 步骤 5:写缓存(LRU 驱逐)
-        self.write_cache(cache_key, result.clone());
+        // 步骤 5:写缓存(LRU 驱逐),key 为 TaskProfile 克隆(零序列化)
+        self.write_cache(task.clone(), result.clone());
 
         // 步骤 6:发布 ExpertActivated 事件
         self.publish_activation_event(&result).await;
@@ -212,7 +212,7 @@ impl GeaActivator {
     }
 
     /// 写缓存,执行 LRU 驱逐
-    fn write_cache(&self, key: u64, result: ActivationResult) {
+    fn write_cache(&self, key: TaskProfile, result: ActivationResult) {
         // LRU 驱逐:超过容量时移除最早的条目
         if self.activation_cache.len() >= self.config.cache_capacity {
             self.evict_oldest();
@@ -225,20 +225,21 @@ impl GeaActivator {
     /// WHY 简单实现:遍历找最旧的移除。DashMap 无序,需全遍历。
     /// 缓存容量 128,遍历成本可接受。后续可换 LRU 专用数据结构优化。
     fn evict_oldest(&self) {
-        let mut oldest_key: Option<u64> = None;
+        let mut oldest_key: Option<TaskProfile> = None;
         let mut oldest_time = Instant::now();
 
         for entry in self.activation_cache.iter() {
             let (_, written_at) = entry.value();
             if *written_at < oldest_time {
                 oldest_time = *written_at;
-                oldest_key = Some(*entry.key());
+                oldest_key = Some(entry.key().clone());
             }
         }
 
         if let Some(key) = oldest_key {
+            // key 是 owned TaskProfile,remove 仅借用不移走所有权,debug 可直接读 key.task_type
             self.activation_cache.remove(&key);
-            debug!("GEA cache evicted key={key}");
+            debug!("GEA cache evicted task_type={}", key.task_type);
         }
     }
 
@@ -289,20 +290,6 @@ impl GeaActivator {
             .expect("expert_registry poisoned")
             .len()
     }
-}
-
-/// 计算 TaskProfile 的哈希(缓存 key)
-///
-/// WHY serde 序列化哈希:TaskProfile 含 Vec<f32>,f32 不实现 Hash(NaN 问题)。
-/// 用 serde_json 序列化为字符串再哈希,稳定且无 NaN 歧义。
-fn hash_task_profile(task: &TaskProfile) -> u64 {
-    use std::hash::{Hash, Hasher};
-
-    // 序列化为 JSON 字符串,确保稳定表示
-    let json = serde_json::to_string(task).unwrap_or_default();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    json.hash(&mut hasher);
-    hasher.finish()
 }
 
 #[cfg(test)]

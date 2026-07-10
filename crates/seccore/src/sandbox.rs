@@ -25,7 +25,7 @@ use sha2::{Digest, Sha256};
 use tokio::process::Command as TokioCommand;
 use tracing::info;
 
-use crate::audit::AuditChain;
+use crate::audit::{AuditChain, AuditRecordStatus};
 use crate::error::SecCoreError;
 use crate::policy::{validate_command, validate_env, CommandPolicy, EnvPolicy};
 use crate::types::{Command, CommandSpec, ExecutionResult};
@@ -77,11 +77,16 @@ impl Sandbox {
 
     /// 审计并执行命令 — 零信任四层防御的统一入口。
     ///
-    /// 执行流程:
+    /// 执行流程(N5 修复:pre-execution audit 模式):
     /// 1. `validate_command`:静态分析,拦截注入/越权/逃逸/泄露/篡改/滥用
     /// 2. `validate_env`:环境变量过滤,拦截 SECRET/KEY/TOKEN 泄露
-    /// 3. `execute_in_sandbox`:进程隔离执行(Windows 降级 / Linux gVisor)
-    /// 4. `audit_chain.append`:SHA-256 Merkle 链记录,不可篡改
+    /// 3. `audit_chain.append_intent`:**执行前**记录 Intent 审计块(关闭 N5 漏洞)
+    /// 4. `execute_in_sandbox`:进程隔离执行(Windows 降级 / Linux gVisor)
+    /// 5. `audit_chain.update_status`:执行后更新为 Executed/Failed
+    ///
+    /// WHY(N5 修复): 原实现步骤3在步骤4之后(后置 append),若执行成功但 append
+    /// 失败则无审计痕迹。改为 pre-execution 模式:执行前先写 Intent,即使后续
+    /// 崩溃也有意图痕迹;执行失败也更新为 Failed,保持审计链完整。
     ///
     /// # 参数
     /// - `command`:原始命令(不可信,需经策略校验)
@@ -106,19 +111,60 @@ impl Sandbox {
             "命令通过策略校验,进入沙箱执行"
         );
 
-        // 步骤3:沙箱执行 — 进程隔离(Windows 降级 / Linux gVisor)
-        let result = self.execute_in_sandbox(&spec).await?;
+        // 步骤3(N5 修复):pre-execution audit — 执行前记录 Intent
+        // WHY: append_intent 失败时 `?` 短路,阻止命令执行,确保无意图无执行
+        let record_id = self.audit_chain.append_intent(&spec)?;
 
-        // 步骤4:审计记录 — SHA-256 Merkle 链
-        self.audit_chain.append(&spec, &result)?;
+        // 步骤4:沙箱执行 — 进程隔离(Windows 降级 / Linux gVisor)
+        let exec_result = self.execute_in_sandbox(&spec).await;
 
-        info!(
-            exit_code = result.exit_code,
-            audit_hash = %result.audit_hash,
-            "命令执行完成,审计记录已追加"
-        );
+        // 步骤5(N5 修复):post-execution update — 根据执行结果更新审计状态
+        // WHY: 无论成功失败都要更新审计链,防止 Intent 记录永久悬挂
+        match exec_result {
+            Ok(result) => {
+                // 执行成功:更新为 Executed,填充 result_hash
+                if let Err(e) = self.audit_chain.update_status(
+                    record_id,
+                    AuditRecordStatus::Executed,
+                    Some(&result),
+                ) {
+                    // WHY: update_status 失败不影响已执行的命令结果,但记录错误供审计
+                    // 审计链更新失败是严重异常(理论上不会发生),仅记日志不阻塞返回
+                    tracing::error!(
+                        record_id = record_id,
+                        error = %e,
+                        "审计链 update_status(Executed) 失败,执行结果仍返回但审计可能不完整"
+                    );
+                }
 
-        Ok(result)
+                info!(
+                    exit_code = result.exit_code,
+                    audit_hash = %result.audit_hash,
+                    "命令执行完成,审计记录已更新为 Executed"
+                );
+
+                Ok(result)
+            }
+            Err(e) => {
+                // 执行失败:更新为 Failed,保持审计链完整(记录失败意图)
+                // WHY: 用 let _ = 忽略 update_status 的二次错误,优先返回原始执行错误
+                //      审计更新失败仅记日志,不掩盖原始执行失败原因
+                if let Err(audit_err) =
+                    self.audit_chain
+                        .update_status(record_id, AuditRecordStatus::Failed, None)
+                {
+                    tracing::error!(
+                        record_id = record_id,
+                        error = %audit_err,
+                        "审计链 update_status(Failed) 失败,执行错误仍返回但审计可能不完整"
+                    );
+                }
+
+                info!(error = %e, "命令执行失败,审计记录已更新为 Failed");
+
+                Err(e)
+            }
+        }
     }
 
     /// 在沙箱中执行校验通过的命令规格。

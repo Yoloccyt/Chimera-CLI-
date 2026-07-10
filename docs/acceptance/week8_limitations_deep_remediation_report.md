@@ -70,7 +70,7 @@ Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\Local
 
 **结果**:**✅ 成功捕获 4 个 minidump**。
 
-- **dump 位置**:`C:\Users\30324\AppData\Local\CrashDumps\clippy-driver.exe.*.dmp`
+- **dump 位置**:`C:\Users\<USERNAME>\AppData\Local\CrashDumps\clippy-driver.exe.*.dmp`
 - **dump 数量**:4 个(对应 4 个并行崩溃的 clippy-driver 进程)
 - **单 dump 大小**:~2.6MB(minidump,非 full dump)
 - **WER 配置**:DumpType=0(minidump,默认)

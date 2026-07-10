@@ -12,7 +12,7 @@ use crate::error::EventBusError;
 use crate::logging::BusLogger;
 use crate::types::{EventSeverity, NexusEvent};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
 use tracing::warn;
 
@@ -143,11 +143,15 @@ impl EventBus {
     /// (无 Critical 订阅者)仅走 broadcast,不报错。
     #[allow(clippy::unused_async)]
     pub async fn publish(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        // WHY 在方法入口测量 start:log_publish 在 send 之前调用(event 所有权
+        // 尚未 move),elapsed 主要覆盖 receiver_count() 调用(接近零),
+        // 但保留测量点以便未来将 log/指标采集移到 send 之后时仍准确。
+        let start = Instant::now();
         let subscriber_count = self.sender.receiver_count();
 
         // 记录发布日志(若已启用日志埋点)
         if let Some(logger) = &self.logger {
-            logger.log_publish(&event, subscriber_count);
+            logger.log_publish(&event, subscriber_count, start.elapsed());
         }
 
         // SubTask 17.2:Critical 事件无订阅者告警
@@ -183,11 +187,13 @@ impl EventBus {
     /// # §6.2 红线双通道(2026-06-29)
     /// 与 `publish` 一致:4 类 Critical 安全告警事件额外走 mpsc 旁路通道。
     pub fn publish_blocking(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        // 与 publish 保持一致:入口测量耗时(Phase V Task V-8 指标采集)
+        let start = Instant::now();
         let subscriber_count = self.sender.receiver_count();
 
         // 记录发布日志(若已启用日志埋点)
         if let Some(logger) = &self.logger {
-            logger.log_publish(&event, subscriber_count);
+            logger.log_publish(&event, subscriber_count, start.elapsed());
         }
 
         // SubTask 17.2:Critical 事件无订阅者告警(与 publish 保持一致)
@@ -290,11 +296,53 @@ impl EventBus {
             logger.log_subscriber_connected(&subscriber_id, subscriber_count, self.capacity);
         }
 
-        EventReceiver {
-            inner: self.sender.subscribe(),
-            subscriber_id,
-            logger: self.logger.clone(),
+        // WHY 复用 from_broadcast:与 subscribe_filtered 共享构造逻辑,
+        // 避免两处分别拼装 EventReceiver 导致字段初始化不一致风险
+        EventReceiver::from_broadcast(self.sender.subscribe(), subscriber_id, self.logger.clone())
+    }
+
+    /// 订阅指定 topic 集合的事件,返回 [`FilteredSubscriber`](crate::topic::FilteredSubscriber)
+    ///
+    /// 仅接收 topic 匹配的事件,不匹配的事件在 FilteredSubscriber 内部被消费丢弃。
+    /// 既有 [`subscribe`](Self::subscribe) 保持全量广播,不受影响。
+    ///
+    /// # 调用时机(§4.4 反模式 3)
+    /// 必须在 `tokio::spawn()` **之前同步调用**,确保不错过后续事件。
+    /// 在 spawn 的 async block 内调用可能导致事件静默丢失。
+    ///
+    /// # 使用场景
+    /// - TTG 仲裁层只需 Parliament + Budget 事件
+    /// - N9 PrerequisiteChecker 只需 Routing 事件
+    /// - 减少无关事件对消费者缓冲区的占用
+    ///
+    /// # 示例
+    /// ```no_run
+    /// use event_bus::{EventBus, EventTopic};
+    /// use std::collections::HashSet;
+    ///
+    /// let bus = EventBus::new();
+    /// let topics: HashSet<EventTopic> = [EventTopic::Routing].into_iter().collect();
+    /// let mut rx = bus.subscribe_filtered(topics);
+    /// ```
+    pub fn subscribe_filtered(
+        &self,
+        topics: std::collections::HashSet<crate::topic::EventTopic>,
+    ) -> crate::topic::FilteredSubscriber {
+        let subscriber_id = format!("filtered-{}", uuid::Uuid::now_v7());
+        let subscriber_count = self.sender.receiver_count() + 1; // +1 包含即将创建的
+
+        // 记录订阅者连接日志(若已启用日志埋点)
+        if let Some(logger) = &self.logger {
+            logger.log_subscriber_connected(&subscriber_id, subscriber_count, self.capacity);
         }
+
+        // 复用 subscribe() 的内部构造逻辑,仅外层包一层 FilteredSubscriber
+        let receiver = EventReceiver::from_broadcast(
+            self.sender.subscribe(),
+            subscriber_id,
+            self.logger.clone(),
+        );
+        crate::topic::FilteredSubscriber::new(receiver, topics)
     }
 
     /// 获取当前订阅者数量
@@ -327,6 +375,23 @@ pub struct EventReceiver {
 }
 
 impl EventReceiver {
+    /// 内部构造函数(crate 内可见,用于 FilteredSubscriber 包装)
+    ///
+    /// WHY pub(crate):避免外部直接拼装 EventReceiver 绕过 EventBus 的订阅者
+    /// 计数与日志埋点;同时允许 topic.rs 在同 crate 内构造 FilteredSubscriber
+    /// 时复用 EventReceiver 的 recv/try_recv 能力。
+    pub(crate) fn from_broadcast(
+        inner: broadcast::Receiver<NexusEvent>,
+        subscriber_id: String,
+        logger: Option<Arc<BusLogger>>,
+    ) -> Self {
+        EventReceiver {
+            inner,
+            subscriber_id,
+            logger,
+        }
+    }
+
     /// 接收下一个事件
     ///
     /// 错误处理:
@@ -427,6 +492,72 @@ impl EventReceiver {
                     subscriber_id: self.subscriber_id.clone(),
                     lag,
                 })
+            }
+        }
+    }
+
+    /// 接收下一个匹配谓词的事件 — 选择性订阅(主题过滤)
+    ///
+    /// 内部循环接收事件,跳过不匹配的事件,直到找到匹配的或通道关闭。
+    /// 不匹配的事件被消费但不返回给调用方(类似 filter+find 语义)。
+    ///
+    /// # 使用场景
+    /// - 只关心特定类型的事件(如只监听 Quest 生命周期事件)
+    /// - 只关心特定 quest_id 的事件
+    /// - 按 severity 过滤(如只处理 Critical 事件)
+    ///
+    /// # 注意事项
+    /// 不匹配的事件会被消费(从接收缓冲区移除),无法再被此 receiver 读取。
+    /// 如果需要同时处理多种事件,应使用 `recv` 并在调用方分派。
+    ///
+    /// # 错误
+    /// - `ChannelClosed`:所有 Sender 已 drop,流结束
+    /// - `SlowConsumerDropped`:lag 超限,可能需要重订阅
+    ///
+    /// # 示例
+    /// ```no_run
+    /// use event_bus::{EventBus, NexusEvent};
+    ///
+    /// # async fn example(bus: &EventBus) {
+    /// let mut rx = bus.subscribe();
+    /// // 只接收 QuestCreated 事件
+    /// let event = rx.recv_matching(|e| matches!(e, NexusEvent::QuestCreated { .. })).await.unwrap();
+    /// # }
+    /// ```
+    pub async fn recv_matching<F>(&mut self, mut predicate: F) -> Result<NexusEvent, EventBusError>
+    where
+        F: FnMut(&NexusEvent) -> bool,
+    {
+        loop {
+            let event = self.recv().await?;
+            if predicate(&event) {
+                return Ok(event);
+            }
+            // 不匹配的事件被消费并丢弃(调用方明确只需要匹配的事件)
+        }
+    }
+
+    /// 尝试非阻塞接收匹配谓词的事件
+    ///
+    /// 扫描当前缓冲区中的事件,返回第一个匹配的。
+    /// 不匹配的事件被消费(从缓冲区移除)。
+    ///
+    /// # 返回值
+    /// - `Ok(Some(event))`:找到匹配事件
+    /// - `Ok(None)`:缓冲区为空(可能还有后续事件,但当前无可用)
+    /// - `Err`:通道关闭或 lag 超限
+    pub fn try_recv_matching<F>(
+        &mut self,
+        mut predicate: F,
+    ) -> Result<Option<NexusEvent>, EventBusError>
+    where
+        F: FnMut(&NexusEvent) -> bool,
+    {
+        loop {
+            match self.try_recv()? {
+                Some(event) if predicate(&event) => return Ok(Some(event)),
+                Some(_) => continue, // 不匹配,消费并继续
+                None => return Ok(None),
             }
         }
     }
@@ -553,5 +684,147 @@ mod tests {
         let _rx1 = bus.subscribe();
         let _rx2 = bus.subscribe();
         assert_eq!(bus.subscriber_count(), 2);
+    }
+
+    // ============================================================
+    // P1-1: 事件主题过滤测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_recv_matching_filters_events() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 发布不同类型的事件
+        let quest_event = make_test_event();
+        let progress_event = NexusEvent::QuestProgressUpdated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-001".into(),
+            completed: 1,
+            total: 3,
+        };
+
+        bus.publish(quest_event.clone()).await.unwrap();
+        bus.publish(progress_event.clone()).await.unwrap();
+
+        // recv_matching 只接收 QuestProgressUpdated
+        let received = rx
+            .recv_matching(|e| matches!(e, NexusEvent::QuestProgressUpdated { .. }))
+            .await
+            .unwrap();
+        assert_eq!(received, progress_event);
+        // QuestCreated 事件被消费但未返回
+    }
+
+    #[tokio::test]
+    async fn test_recv_matching_skips_non_matching() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 发布 3 个事件,只有最后 1 个匹配
+        for i in 0..2 {
+            bus.publish(NexusEvent::QuestProgressUpdated {
+                metadata: EventMetadata::new("quest-engine"),
+                quest_id: format!("q-{i}"),
+                completed: i as u32,
+                total: 3,
+            })
+            .await
+            .unwrap();
+        }
+        let target = make_test_event(); // QuestCreated
+        bus.publish(target.clone()).await.unwrap();
+
+        // 只匹配 QuestCreated — 前两个 ProgressUpdated 被跳过
+        let received = rx
+            .recv_matching(|e| matches!(e, NexusEvent::QuestCreated { .. }))
+            .await
+            .unwrap();
+        assert_eq!(received, target);
+    }
+
+    #[tokio::test]
+    async fn test_recv_matching_by_quest_id() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        bus.publish(NexusEvent::QuestCreated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-other".into(),
+            title: "其他任务".into(),
+            task_count: 1,
+        })
+        .await
+        .unwrap();
+
+        let target = NexusEvent::QuestCreated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-target".into(),
+            title: "目标任务".into(),
+            task_count: 5,
+        };
+        bus.publish(target.clone()).await.unwrap();
+
+        // 按 quest_id 过滤
+        let received = rx
+            .recv_matching(|e| {
+                matches!(e, NexusEvent::QuestCreated { quest_id, .. } if quest_id == "q-target")
+            })
+            .await
+            .unwrap();
+        assert_eq!(received, target);
+    }
+
+    #[test]
+    fn test_try_recv_matching_finds_event() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 同步发布多个事件
+        bus.publish_blocking(NexusEvent::QuestProgressUpdated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-1".into(),
+            completed: 1,
+            total: 3,
+        })
+        .unwrap();
+        let target = make_test_event();
+        bus.publish_blocking(target.clone()).unwrap();
+
+        // 只匹配 QuestCreated
+        let result = rx
+            .try_recv_matching(|e| matches!(e, NexusEvent::QuestCreated { .. }))
+            .unwrap();
+        assert_eq!(result, Some(target));
+    }
+
+    #[test]
+    fn test_try_recv_matching_empty_buffer() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        // 缓冲区为空
+        let result = rx.try_recv_matching(|_| true).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_try_recv_matching_no_match_in_buffer() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 只有 ProgressUpdated 事件
+        bus.publish_blocking(NexusEvent::QuestProgressUpdated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: "q-1".into(),
+            completed: 1,
+            total: 3,
+        })
+        .unwrap();
+
+        // 寻找 QuestCreated — 不应找到
+        let result = rx
+            .try_recv_matching(|e| matches!(e, NexusEvent::QuestCreated { .. }))
+            .unwrap();
+        assert_eq!(result, None, "缓冲区中没有匹配事件");
     }
 }

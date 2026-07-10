@@ -24,7 +24,7 @@ use tracing::{error, warn};
 
 use crate::error::SecCoreError;
 use crate::sandbox::Sandbox;
-use crate::types::{Command, ExecutionResult};
+use crate::types::{Command, ExecutionResult, RiskLevel};
 
 /// 干预动作 — ASA 审计后的处置决策。
 ///
@@ -55,6 +55,14 @@ pub struct AuditResult {
     pub intervention: InterventionAction,
     /// 审计原因(人类可读,用于审计追溯)
     pub audit_reason: String,
+    /// 风险等级 — 基于关键字列表完整性与匹配数评估
+    ///
+    /// WHY(N4 安全修复):当 `risk_keywords` 为空时返回 `RiskLevel::Unknown`,
+    /// 作为信号触发 Parliament/下游消费者的额外审计检查。旧实现将空关键字
+    /// 等同于 Low,调用者可通过省略关键字列表绕过检测。下游消费方应检查
+    /// `risk_level == Unknown` 并启动补充审计(如要求调用方补全关键字、
+    /// 触发人工复核或应用更严格的沙箱策略)。
+    pub risk_level: RiskLevel,
 }
 
 /// ASA 配置 — 审计阈值与权重参数。
@@ -210,6 +218,23 @@ impl AsaAuditor {
             .filter(|kw| content_lower.contains(&kw.to_lowercase()))
             .count();
 
+        // 评估风险等级 — N4 安全修复
+        // WHY: 当 risk_keywords 为空时返回 RiskLevel::Unknown(而非 Low),作为信号
+        // 触发 Parliament/下游消费者的额外审计检查。安全语义:调用者未提供检测
+        // 维度 = 风险无法评估 = Unknown,防止调用者通过省略关键字列表绕过风险检测。
+        // 当关键字列表非空时,按匹配数映射 Low(0)/Medium(1-2)/High(3+)。
+        // 注意:intervention 仍由 safety_score 决定(保持向后兼容),risk_level
+        // 是独立的额外审计信号,下游消费方应显式检查 Unknown 启动补充审计。
+        let risk_level = if input.risk_keywords.is_empty() {
+            RiskLevel::Unknown
+        } else {
+            match keyword_count {
+                0 => RiskLevel::Low,
+                1..=2 => RiskLevel::Medium,
+                _ => RiskLevel::High,
+            }
+        };
+
         // safety_score = 1.0 - risk_weight × keyword_count - history_failure_rate
         // Week 5 占位:history_failure_rate 直接使用(不加权)
         // TODO(Week 6):history_failure_weight 用于 Critic PPO 模型加权
@@ -254,6 +279,7 @@ impl AsaAuditor {
             efficiency_score,
             intervention,
             audit_reason,
+            risk_level,
         }
     }
 

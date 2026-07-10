@@ -10,11 +10,13 @@
 //!   2. 附加的文件数据库提供持久化,可随时分离/附加
 //!   3. 避免引入 zstd 依赖(SQLite 文件本身有压缩,Week 8 再评估)
 //!   4. 未来可附加多个文件实现分片(扩展性好)
+//! - **SqlitePool 连接池(P1-5)**:替代原始 `Arc<Mutex<Connection>>` 单连接方案,
+//!   通过读写分离(N 个读连接 + 1 个写连接)实现真正的并发读。
+//!   每个连接独立 ATTACH 同一文件数据库,通过 `cold_db.table_name` 访问共享数据。
+//!   WAL 模式下读写互不阻塞,读多写少场景吞吐量提升 N 倍
 //! - **spawn_blocking 包装文件 I/O**:SQLite 操作可能阻塞异步运行时,
 //!   使用 `tokio::task::spawn_blocking` 将其放到阻塞线程池
 //!   (架构红线:所有 async fn 满足 Send + 'static 约束)
-//! - **`Mutex<Connection>` 包装**:`rusqlite::Connection` 不是 `Sync`,
-//!   用 Mutex 提供线程安全访问(参考 warm.rs 实现)
 //! - **PRAGMA 性能优化**:附加数据库启用 WAL 模式,连接级设置
 //!   synchronous=NORMAL、cache_size、mmap_size、temp_store=MEMORY、
 //!   wal_autocheckpoint,减少 fsync 与磁盘 I/O,查询延迟降低 30-50%
@@ -37,14 +39,14 @@
 //! ```
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
-use tokio::task::spawn_blocking;
 use tracing::{debug, trace};
 
 use crate::error::CmtError;
+use crate::pool::SqlitePool;
 use crate::types::{CapabilityEntry, CapabilityId, Tier};
 
 /// 附加数据库的别名(用于 `ATTACH DATABASE ... AS cold_db`)
@@ -54,17 +56,19 @@ const ATTACH_ALIAS: &str = "cold_db";
 ///
 /// 主连接为内存数据库,通过 `ATTACH DATABASE` 附加文件数据库。
 /// 所有数据存储在附加的文件数据库中,通过 `cold_db.table_name` 访问。
+/// 使用 `SqlitePool` 连接池实现读写分离,支持并发读与串行写。
 ///
 /// # 线程安全
-/// `Arc<Mutex<Connection>>` 包装,所有 async 方法通过 `spawn_blocking`
-/// 在阻塞线程池中执行 SQLite 操作,避免阻塞异步运行时。
+/// `Arc<SqlitePool>` 包装,可 Clone(廉价,Arc 引用计数)。
+/// 所有 async fn 满足 `Send + 'static` 约束。
 #[derive(Clone)]
 pub struct ColdTier {
-    /// SQLite 连接(`Arc<Mutex>` 包装,支持 Clone 与跨任务共享)
+    /// SQLite 连接池(P1-5:替代 Arc<Mutex<Connection>>,支持并发读)
     ///
-    /// WHY `Arc<Mutex>`:spawn_blocking 需要 'static + Send 的闭包,
-    /// `Arc<Mutex>` 允许将连接所有权转移到阻塞线程
-    conn: Arc<Mutex<Connection>>,
+    /// WHY SqlitePool:原始单 Mutex 序列化所有操作(包括读),
+    /// WAL 模式下并发读被不必要地阻塞。连接池中每个连接独立 ATTACH
+    /// 同一文件数据库,读操作分散到多个连接,写操作仍通过独立写连接序列化。
+    pool: Arc<SqlitePool>,
     /// 容量上限(超出时由上层触发迁移到 Ice)
     capacity: usize,
 }
@@ -74,52 +78,72 @@ impl ColdTier {
     ///
     /// 主连接为内存数据库,通过 `ATTACH DATABASE` 附加 `cold_dir/cmt_cold.db`。
     /// 附加数据库启用 WAL 模式与 PRAGMA 性能优化,减少 fsync 与磁盘 I/O。
+    /// 使用 SqlitePool 创建 1 写 + `read_pool_size` 读连接(默认 2)。
     /// 路径的父目录应已存在(调用方负责创建)。
     pub fn open(cold_dir: &Path, capacity: usize) -> Result<Self, CmtError> {
-        // 主连接使用内存数据库(快速连接,无需文件 I/O)
-        let conn = Connection::open_in_memory()?;
+        Self::open_with_pool(cold_dir, capacity, 2)
+    }
 
-        // 附加文件数据库
+    /// 打开 Cold 层数据库并指定读连接池大小
+    ///
+    /// WHY 独立方法:连接池大小影响并发读吞吐量与内存开销,
+    /// 允许调用方(如 CmtCoordinator)根据部署场景调整。
+    /// `read_pool_size = 0` 退化为单连接模式(适合测试或低并发场景)。
+    pub fn open_with_pool(
+        cold_dir: &Path,
+        capacity: usize,
+        read_pool_size: usize,
+    ) -> Result<Self, CmtError> {
         let db_path = cold_dir.join("cmt_cold.db");
-        let db_path_str = db_path.to_string_lossy();
-        conn.execute(
-            &format!("ATTACH DATABASE ?1 AS {ATTACH_ALIAS};"),
-            params![db_path_str.as_ref()],
-        )?;
 
-        // 为附加数据库启用 WAL 模式(提升并发读写性能)
-        // WHY:WAL 允许读写并发,默认 rollback journal 模式下写会阻塞读
-        conn.pragma_update(
-            Some(rusqlite::DatabaseName::Attached(ATTACH_ALIAS)),
-            "journal_mode",
-            "WAL",
-        )?;
+        let pool = SqlitePool::open(read_pool_size, || {
+            // 主连接使用内存数据库(快速连接,无需文件 I/O)
+            let conn = Connection::open_in_memory()?;
 
-        // 应用 SQLite PRAGMA 性能优化(连接级,影响所有附加数据库)
-        apply_performance_pragmas(&conn)?;
+            // 附加文件数据库(每个连接独立 ATTACH 同一文件)
+            let db_path_str = db_path.to_string_lossy();
+            conn.execute(
+                &format!("ATTACH DATABASE ?1 AS {ATTACH_ALIAS};"),
+                params![db_path_str.as_ref()],
+            )?;
 
-        // 在附加数据库中创建表(使用 `alias.table_name` 语法)
-        // 同时在 last_accessed_at 上创建索引,加速 list_idle_entries 查询
-        // WHY:65536 条目下 O(n) 全表扫描约 50ms,O(log n) 索引查找 < 5ms
-        // 注意:SQLite 的 CREATE INDEX 语法中,table-name 不支持 schema-name 前缀,
-        // 但 index-name 支持。用 `cold_db.idx_cold_last_access` 指定索引所在的 schema,
-        // SQLite 会自动在所有附加数据库中查找 cold_capabilities 表。
-        conn.execute_batch(&format!(
-            "CREATE TABLE IF NOT EXISTS {ATTACH_ALIAS}.cold_capabilities (
-                cap_id           TEXT PRIMARY KEY,
-                content          TEXT NOT NULL,
-                created_at       TEXT NOT NULL,
-                last_accessed_at TEXT NOT NULL,
-                access_count     INTEGER NOT NULL
-            );
+            // 为附加数据库启用 WAL 模式(提升并发读写性能)
+            // WHY:WAL 允许读写并发,默认 rollback journal 模式下写会阻塞读
+            conn.pragma_update(
+                Some(rusqlite::DatabaseName::Attached(ATTACH_ALIAS)),
+                "journal_mode",
+                "WAL",
+            )?;
 
-            CREATE INDEX IF NOT EXISTS {ATTACH_ALIAS}.idx_cold_last_access
-                ON cold_capabilities(last_accessed_at);"
-        ))?;
+            // 应用 SQLite PRAGMA 性能优化(连接级,影响所有附加数据库)
+            apply_performance_pragmas(&conn)?;
 
-        debug!(db_path = ?db_path, capacity, "Cold 层附加数据库已打开(WAL + PRAGMA 优化 + last_accessed_at 索引)");
+            // 在附加数据库中创建表(使用 `alias.table_name` 语法)
+            // 同时在 last_accessed_at 上创建索引,加速 list_idle_entries 查询
+            // WHY:65536 条目下 O(n) 全表扫描约 50ms,O(log n) 索引查找 < 5ms
+            // 注意:SQLite 的 CREATE INDEX 语法中,table-name 不支持 schema-name 前缀,
+            // 但 index-name 支持。用 `cold_db.idx_cold_last_access` 指定索引所在的 schema,
+            // SQLite 会自动在所有附加数据库中查找 cold_capabilities 表。
+            // IF NOT EXISTS 保证多连接初始化幂等(每个连接都执行,仅首次创建)
+            conn.execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS {ATTACH_ALIAS}.cold_capabilities (
+                    cap_id           TEXT PRIMARY KEY,
+                    content          TEXT NOT NULL,
+                    created_at       TEXT NOT NULL,
+                    last_accessed_at TEXT NOT NULL,
+                    access_count     INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS {ATTACH_ALIAS}.idx_cold_last_access
+                    ON cold_capabilities(last_accessed_at);"
+            ))?;
+
+            Ok(conn)
+        })?;
+
+        debug!(db_path = ?db_path, capacity, read_pool_size, "Cold 层附加数据库已打开(连接池 + WAL + PRAGMA 优化 + last_accessed_at 索引)");
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            pool: Arc::new(pool),
             capacity,
         })
     }
@@ -128,35 +152,43 @@ impl ColdTier {
     ///
     /// WHY:测试场景不需要持久化,使用纯内存附加数据库更快且自动清理。
     /// 内存数据库也应用 PRAGMA 优化(部分 PRAGMA 对内存库无效,但不会报错)。
+    ///
+    /// WHY 单连接:`:memory:` 数据库彼此独立(每个连接是独立的内存数据库),
+    /// 无法跨连接共享数据。测试场景使用 `read_pool_size = 0`,
+    /// 所有读写共用写连接,保证数据可见性。
     pub fn open_in_memory(capacity: usize) -> Result<Self, CmtError> {
-        let conn = Connection::open_in_memory()?;
+        let pool = SqlitePool::open(0, || {
+            let conn = Connection::open_in_memory()?;
 
-        // 附加另一个内存数据库(使用 :memory:)
-        // WHY:SQLite 允许附加内存数据库,每个 :memory: 是独立的内存数据库
-        conn.execute(
-            &format!("ATTACH DATABASE ':memory:' AS {ATTACH_ALIAS};"),
-            [],
-        )?;
+            // 附加另一个内存数据库(使用 :memory:)
+            // WHY:SQLite 允许附加内存数据库,每个 :memory: 是独立的内存数据库
+            conn.execute(
+                &format!("ATTACH DATABASE ':memory:' AS {ATTACH_ALIAS};"),
+                [],
+            )?;
 
-        // 应用 PRAGMA 优化(内存库不适用 WAL,但其他 PRAGMA 无害)
-        apply_performance_pragmas(&conn)?;
+            // 应用 PRAGMA 优化(内存库不适用 WAL,但其他 PRAGMA 无害)
+            apply_performance_pragmas(&conn)?;
 
-        // 创建表与索引(与 open 方法保持一致,加速 list_idle_entries)
-        conn.execute_batch(&format!(
-            "CREATE TABLE IF NOT EXISTS {ATTACH_ALIAS}.cold_capabilities (
-                cap_id           TEXT PRIMARY KEY,
-                content          TEXT NOT NULL,
-                created_at       TEXT NOT NULL,
-                last_accessed_at TEXT NOT NULL,
-                access_count     INTEGER NOT NULL
-            );
+            // 创建表与索引(与 open 方法保持一致,加速 list_idle_entries)
+            conn.execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS {ATTACH_ALIAS}.cold_capabilities (
+                    cap_id           TEXT PRIMARY KEY,
+                    content          TEXT NOT NULL,
+                    created_at       TEXT NOT NULL,
+                    last_accessed_at TEXT NOT NULL,
+                    access_count     INTEGER NOT NULL
+                );
 
-            CREATE INDEX IF NOT EXISTS {ATTACH_ALIAS}.idx_cold_last_access
-                ON cold_capabilities(last_accessed_at);"
-        ))?;
+                CREATE INDEX IF NOT EXISTS {ATTACH_ALIAS}.idx_cold_last_access
+                    ON cold_capabilities(last_accessed_at);"
+            ))?;
+
+            Ok(conn)
+        })?;
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            pool: Arc::new(pool),
             capacity,
         })
     }
@@ -168,40 +200,36 @@ impl ColdTier {
 
     /// 异步插入或更新能力条目(UPSERT 语义)
     ///
-    /// 使用 `spawn_blocking` 包装 SQLite 操作,避免阻塞异步运行时。
+    /// WHY `with_write_async`:INSERT 是写操作,通过写连接序列化,
+    /// 避免 WAL 模式下多写者 SQLITE_BUSY。
     pub async fn insert(&self, mut entry: CapabilityEntry) -> Result<(), CmtError> {
         // 强制设置 tier 为 Cold(防止上层传入错误层级)
         entry.tier = Tier::Cold;
 
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_write_async(move |conn| {
+                let created_iso = entry.created_at.to_rfc3339();
+                let accessed_iso = entry.last_accessed_at.to_rfc3339();
 
-            let created_iso = entry.created_at.to_rfc3339();
-            let accessed_iso = entry.last_accessed_at.to_rfc3339();
+                conn.execute(
+                    &format!(
+                        "INSERT OR REPLACE INTO {ATTACH_ALIAS}.cold_capabilities
+                            (cap_id, content, created_at, last_accessed_at, access_count)
+                         VALUES (?1, ?2, ?3, ?4, ?5);"
+                    ),
+                    params![
+                        entry.id.as_str(),
+                        entry.content,
+                        created_iso,
+                        accessed_iso,
+                        entry.access_count as i64,
+                    ],
+                )?;
 
-            conn.execute(
-                &format!(
-                    "INSERT OR REPLACE INTO {ATTACH_ALIAS}.cold_capabilities
-                        (cap_id, content, created_at, last_accessed_at, access_count)
-                     VALUES (?1, ?2, ?3, ?4, ?5);"
-                ),
-                params![
-                    entry.id.as_str(),
-                    entry.content,
-                    created_iso,
-                    accessed_iso,
-                    entry.access_count as i64,
-                ],
-            )?;
-
-            trace!(cap_id = ?entry.id, "Cold 层条目已插入/更新");
-            Ok(())
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                trace!(cap_id = ?entry.id, "Cold 层条目已插入/更新");
+                Ok(())
+            })
+            .await
     }
 
     /// 异步批量插入能力条目(单事务,消除 N+1 查询)
@@ -218,115 +246,107 @@ impl ColdTier {
             entry.tier = Tier::Cold;
         }
 
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_write_async(move |conn| {
+                conn.execute_batch("BEGIN;")?;
+                for entry in &entries {
+                    let created_iso = entry.created_at.to_rfc3339();
+                    let accessed_iso = entry.last_accessed_at.to_rfc3339();
+                    conn.execute(
+                        &format!(
+                            "INSERT OR REPLACE INTO {ATTACH_ALIAS}.cold_capabilities
+                                (cap_id, content, created_at, last_accessed_at, access_count)
+                             VALUES (?1, ?2, ?3, ?4, ?5);"
+                        ),
+                        params![
+                            entry.id.as_str(),
+                            entry.content,
+                            created_iso,
+                            accessed_iso,
+                            entry.access_count as i64,
+                        ],
+                    )?;
+                }
+                conn.execute_batch("COMMIT;")?;
 
-            conn.execute_batch("BEGIN;")?;
-            for entry in &entries {
-                let created_iso = entry.created_at.to_rfc3339();
-                let accessed_iso = entry.last_accessed_at.to_rfc3339();
-                conn.execute(
-                    &format!(
-                        "INSERT OR REPLACE INTO {ATTACH_ALIAS}.cold_capabilities
-                            (cap_id, content, created_at, last_accessed_at, access_count)
-                         VALUES (?1, ?2, ?3, ?4, ?5);"
-                    ),
-                    params![
-                        entry.id.as_str(),
-                        entry.content,
-                        created_iso,
-                        accessed_iso,
-                        entry.access_count as i64,
-                    ],
-                )?;
-            }
-            conn.execute_batch("COMMIT;")?;
-
-            trace!(count = entries.len(), "Cold 层批量条目已插入/更新");
-            Ok(())
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                trace!(count = entries.len(), "Cold 层批量条目已插入/更新");
+                Ok(())
+            })
+            .await
     }
 
     /// 异步获取能力条目(更新 last_accessed_at 与 access_count)
     ///
     /// 返回条目克隆;若不存在返回 None。
     ///
+    /// WHY `with_write_async`:虽然逻辑上是"读",但 get 会更新 last_accessed_at
+    /// 与 access_count(写操作),必须通过写连接执行以保证数据一致性。
+    /// WAL 模式下写连接不影响并发读连接(peek/list_* 仍可用读连接)。
+    ///
     /// WHY 单次查询优化(SubTask 19.1):原实现 SELECT → UPDATE → SELECT(三次查询),
     /// 现改为 SELECT → 内存构造更新字段 → UPDATE → 返回内存构造的条目,
     /// 消除第二次 SELECT 往返,Cold get 延迟降低约 33%。
     /// 参照 Warm 层 `get` 方法的优化模式,保持两层实现一致性。
     pub async fn get(&self, id: String) -> Result<Option<CapabilityEntry>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_write_async(move |conn| {
+                // 单次 SELECT 读取所有字段
+                let result: Option<CapabilityEntry> = conn
+                    .query_row(
+                        &format!(
+                            "SELECT cap_id, content, created_at, last_accessed_at, access_count
+                             FROM {ATTACH_ALIAS}.cold_capabilities WHERE cap_id = ?1;"
+                        ),
+                        params![id],
+                        row_to_entry,
+                    )
+                    .optional()?;
 
-            // 单次 SELECT 读取所有字段
-            let result: Option<CapabilityEntry> = conn
-                .query_row(
-                    &format!(
-                        "SELECT cap_id, content, created_at, last_accessed_at, access_count
-                         FROM {ATTACH_ALIAS}.cold_capabilities WHERE cap_id = ?1;"
-                    ),
-                    params![id],
-                    row_to_entry,
-                )
-                .optional()?;
+                // 若找到条目,在内存中更新访问时间与计数,执行 UPDATE 后返回内存构造的条目
+                // WHY 内存构造:避免 UPDATE 后再次 SELECT 读取,消除一次查询往返
+                if let Some(mut entry) = result {
+                    let now = Utc::now();
+                    entry.last_accessed_at = now;
+                    entry.access_count = entry.access_count.saturating_add(1);
 
-            // 若找到条目,在内存中更新访问时间与计数,执行 UPDATE 后返回内存构造的条目
-            // WHY 内存构造:避免 UPDATE 后再次 SELECT 读取,消除一次查询往返
-            if let Some(mut entry) = result {
-                let now = Utc::now();
-                entry.last_accessed_at = now;
-                entry.access_count = entry.access_count.saturating_add(1);
+                    conn.execute(
+                        &format!(
+                            "UPDATE {ATTACH_ALIAS}.cold_capabilities
+                             SET last_accessed_at = ?1, access_count = ?2
+                             WHERE cap_id = ?3;"
+                        ),
+                        params![now.to_rfc3339(), entry.access_count as i64, id],
+                    )?;
 
-                conn.execute(
-                    &format!(
-                        "UPDATE {ATTACH_ALIAS}.cold_capabilities
-                         SET last_accessed_at = ?1, access_count = ?2
-                         WHERE cap_id = ?3;"
-                    ),
-                    params![now.to_rfc3339(), entry.access_count as i64, id],
-                )?;
-
-                Ok(Some(entry))
-            } else {
-                Ok(None)
-            }
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                    Ok(Some(entry))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await
     }
 
     /// 异步尝试获取条目(不更新访问时间,不增加计数)
+    ///
+    /// WHY `with_read_async`:peek 是纯只读操作,可通过读连接并发执行,
+    /// 不受写连接 Mutex 限制。
     pub async fn peek(&self, id: String) -> Result<Option<CapabilityEntry>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_read_async(id.clone(), move |conn| {
+                let result = conn
+                    .query_row(
+                        &format!(
+                            "SELECT cap_id, content, created_at, last_accessed_at, access_count
+                             FROM {ATTACH_ALIAS}.cold_capabilities WHERE cap_id = ?1;"
+                        ),
+                        params![id],
+                        row_to_entry,
+                    )
+                    .optional()?;
 
-            let result = conn
-                .query_row(
-                    &format!(
-                        "SELECT cap_id, content, created_at, last_accessed_at, access_count
-                         FROM {ATTACH_ALIAS}.cold_capabilities WHERE cap_id = ?1;"
-                    ),
-                    params![id],
-                    row_to_entry,
-                )
-                .optional()?;
-
-            Ok(result)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                Ok(result)
+            })
+            .await
     }
 
     /// 异步删除指定条目
@@ -337,21 +357,16 @@ impl ColdTier {
     /// 内部统一转为 `CapabilityId` 后用 `as_str()` 传给 SQL(避免 `ToSql` 未实现问题)
     pub async fn delete(&self, id: impl Into<CapabilityId>) -> Result<bool, CmtError> {
         let id = id.into();
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_write_async(move |conn| {
+                let affected = conn.execute(
+                    &format!("DELETE FROM {ATTACH_ALIAS}.cold_capabilities WHERE cap_id = ?1;"),
+                    params![id.as_str()],
+                )?;
 
-            let affected = conn.execute(
-                &format!("DELETE FROM {ATTACH_ALIAS}.cold_capabilities WHERE cap_id = ?1;"),
-                params![id.as_str()],
-            )?;
-
-            Ok(affected > 0)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                Ok(affected > 0)
+            })
+            .await
     }
 
     /// 异步批量删除能力条目(单事务,消除 N+1 查询)
@@ -364,58 +379,50 @@ impl ColdTier {
             return Ok(0);
         }
 
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
-
-            conn.execute_batch("BEGIN;")?;
-            let mut deleted = 0u64;
-            for id in &ids {
-                let affected = conn.execute(
-                    &format!("DELETE FROM {ATTACH_ALIAS}.cold_capabilities WHERE cap_id = ?1;"),
-                    params![id.as_str()],
-                )?;
-                if affected > 0 {
-                    deleted += 1;
+        self.pool
+            .with_write_async(move |conn| {
+                conn.execute_batch("BEGIN;")?;
+                let mut deleted = 0u64;
+                for id in &ids {
+                    let affected = conn.execute(
+                        &format!("DELETE FROM {ATTACH_ALIAS}.cold_capabilities WHERE cap_id = ?1;"),
+                        params![id.as_str()],
+                    )?;
+                    if affected > 0 {
+                        deleted += 1;
+                    }
                 }
-            }
-            conn.execute_batch("COMMIT;")?;
+                conn.execute_batch("COMMIT;")?;
 
-            trace!(count = deleted, "Cold 层批量删除完成");
-            Ok(deleted)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                trace!(count = deleted, "Cold 层批量删除完成");
+                Ok(deleted)
+            })
+            .await
     }
 
     /// 异步列出空闲条目(最后访问时间早于 `until` 的条目)
     ///
+    /// WHY `with_any_read_async`:纯只读查询,可并发执行。
+    /// 使用轮询分配(无特定 hint),均匀分布到各读分片。
     /// 用于 Cold → Ice 的空闲超时迁移(7 天未被访问)。
     pub async fn list_idle_entries(&self, until: DateTime<Utc>) -> Result<Vec<String>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_any_read_async(move |conn| {
+                let until_iso = until.to_rfc3339();
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT cap_id FROM {ATTACH_ALIAS}.cold_capabilities
+                     WHERE last_accessed_at < ?1
+                     ORDER BY last_accessed_at ASC;"
+                ))?;
+                let rows = stmt.query_map(params![until_iso], |row| row.get::<_, String>(0))?;
 
-            let until_iso = until.to_rfc3339();
-            let mut stmt = conn.prepare(&format!(
-                "SELECT cap_id FROM {ATTACH_ALIAS}.cold_capabilities
-                 WHERE last_accessed_at < ?1
-                 ORDER BY last_accessed_at ASC;"
-            ))?;
-            let rows = stmt.query_map(params![until_iso], |row| row.get::<_, String>(0))?;
-
-            let mut ids = Vec::new();
-            for row in rows {
-                ids.push(row?);
-            }
-            Ok(ids)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                let mut ids = Vec::new();
+                for row in rows {
+                    ids.push(row?);
+                }
+                Ok(ids)
+            })
+            .await
     }
 
     /// 异步列出所有条目的元数据(不含 content,用于衰减周期扫描)
@@ -427,81 +434,71 @@ impl ColdTier {
     pub async fn list_idle_metadata(
         &self,
     ) -> Result<Vec<(CapabilityId, DateTime<Utc>, u64)>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_any_read_async(move |conn| {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT cap_id, last_accessed_at, access_count
+                     FROM {ATTACH_ALIAS}.cold_capabilities ORDER BY last_accessed_at ASC;"
+                ))?;
+                let rows = stmt.query_map([], |row| {
+                    let cap_id: String = row.get(0)?;
+                    let accessed_iso: String = row.get(1)?;
+                    let access_count_i64: i64 = row.get(2)?;
+                    // 时间戳解析(失败时降级为当前时间,不阻断查询)
+                    let last_accessed_at = DateTime::parse_from_rfc3339(&accessed_iso)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now());
+                    Ok((
+                        CapabilityId::from(cap_id),
+                        last_accessed_at,
+                        u64::try_from(access_count_i64).unwrap_or(0),
+                    ))
+                })?;
 
-            let mut stmt = conn.prepare(&format!(
-                "SELECT cap_id, last_accessed_at, access_count
-                 FROM {ATTACH_ALIAS}.cold_capabilities ORDER BY last_accessed_at ASC;"
-            ))?;
-            let rows = stmt.query_map([], |row| {
-                let cap_id: String = row.get(0)?;
-                let accessed_iso: String = row.get(1)?;
-                let access_count_i64: i64 = row.get(2)?;
-                // 时间戳解析(失败时降级为当前时间,不阻断查询)
-                let last_accessed_at = DateTime::parse_from_rfc3339(&accessed_iso)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
-                Ok((
-                    CapabilityId::from(cap_id),
-                    last_accessed_at,
-                    u64::try_from(access_count_i64).unwrap_or(0),
-                ))
-            })?;
-
-            let mut metadata = Vec::new();
-            for row in rows {
-                metadata.push(row?);
-            }
-            Ok(metadata)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                let mut metadata = Vec::new();
+                for row in rows {
+                    metadata.push(row?);
+                }
+                Ok(metadata)
+            })
+            .await
     }
 
     /// 异步列出所有条目(用于迁移或快照)
+    ///
+    /// WHY `with_any_read_async`:纯只读查询,可并发执行。
     pub async fn list_all(&self) -> Result<Vec<CapabilityEntry>, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
+        self.pool
+            .with_any_read_async(move |conn| {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT cap_id, content, created_at, last_accessed_at, access_count
+                     FROM {ATTACH_ALIAS}.cold_capabilities ORDER BY created_at ASC;"
+                ))?;
+                let rows = stmt.query_map([], row_to_entry)?;
 
-            let mut stmt = conn.prepare(&format!(
-                "SELECT cap_id, content, created_at, last_accessed_at, access_count
-                 FROM {ATTACH_ALIAS}.cold_capabilities ORDER BY created_at ASC;"
-            ))?;
-            let rows = stmt.query_map([], row_to_entry)?;
-
-            let mut entries = Vec::new();
-            for row in rows {
-                entries.push(row?);
-            }
-            Ok(entries)
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+                let mut entries = Vec::new();
+                for row in rows {
+                    entries.push(row?);
+                }
+                Ok(entries)
+            })
+            .await
     }
 
     /// 异步计算条目总数
+    ///
+    /// WHY `with_any_read_async`:COUNT(*) 是纯只读查询,可并发执行。
     pub async fn count(&self) -> Result<u64, CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
-            let count: i64 = conn.query_row(
-                &format!("SELECT COUNT(*) FROM {ATTACH_ALIAS}.cold_capabilities;"),
-                [],
-                |row| row.get(0),
-            )?;
-            Ok(u64::try_from(count).unwrap_or(0))
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+        self.pool
+            .with_any_read_async(move |conn| {
+                let count: i64 = conn.query_row(
+                    &format!("SELECT COUNT(*) FROM {ATTACH_ALIAS}.cold_capabilities;"),
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok(u64::try_from(count).unwrap_or(0))
+            })
+            .await
     }
 
     /// 测试辅助:删除 cold_capabilities 表,使后续 insert/delete 等操作失败
@@ -516,28 +513,34 @@ impl ColdTier {
     /// 生产代码不应调用此方法。
     #[doc(hidden)]
     pub async fn break_for_testing(&self) -> Result<(), CmtError> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| CmtError::StorageError(format!("Cold 层 mutex poisoned: {e}")))?;
-            conn.execute_batch(&format!(
-                "DROP TABLE IF EXISTS {ATTACH_ALIAS}.cold_capabilities;"
-            ))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| CmtError::StorageError(format!("spawn_blocking join 错误: {e}")))?
+        self.pool
+            .with_write_async(move |conn| {
+                conn.execute_batch(&format!(
+                    "DROP TABLE IF EXISTS {ATTACH_ALIAS}.cold_capabilities;"
+                ))?;
+                Ok(())
+            })
+            .await
     }
 }
 
 /// 应用 SQLite 性能优化 PRAGMA(连接级,影响所有附加数据库)
 ///
-/// WHY:SubTask 21.2 — 委托给 `nexus_core::sqlite_pragma::apply_performance_pragmas`,
-/// 消除与 warm.rs / mlc-engine 的重复实现,统一 PRAGMA 配置。
-fn apply_performance_pragmas(conn: &Connection) -> Result<(), CmtError> {
-    nexus_core::sqlite_pragma::apply_performance_pragmas(conn)
-        .map_err(|e| CmtError::StorageError(format!("SQLite PRAGMA 设置失败: {e}")))
+/// WHY:F2.2.3 — 委托给 `nexus_core::storage_traits::apply_performance_pragmas`。
+/// 用 newtype wrapper(`PragmaConn`)包装 `&Connection` 以满足 PragmaCapable trait,
+/// 规避 Rust coherence 规则下与 mlc-engine 的 `conflicting implementations` 冲突。
+///
+/// WHY 返回 `rusqlite::Result` 而非 `Result<(), CmtError>`:此函数仅在
+/// `SqlitePool::open` 的 conn_factory 闭包内调用,闭包签名要求返回
+/// `rusqlite::Result<Connection>`。返回 `rusqlite::Result` 让闭包内 `?` 直接工作,
+/// 避免每个调用点重复 map_err 转换(原代码因 CmtError 无法转 rusqlite::Error 编译失败)。
+fn apply_performance_pragmas(conn: &Connection) -> rusqlite::Result<()> {
+    let wrapper = crate::PragmaConn(conn);
+    nexus_core::apply_performance_pragmas(&wrapper).map_err(|e| {
+        rusqlite::Error::ToSqlConversionFailure(Box::new(CmtError::StorageError(format!(
+            "SQLite PRAGMA 设置失败: {e}"
+        ))))
+    })
 }
 
 /// 将 SQLite 行映射为 CapabilityEntry
@@ -572,6 +575,7 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<CapabilityEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Tier;
     use chrono::Duration;
 
     fn make_entry(id: &str) -> CapabilityEntry {
@@ -717,5 +721,17 @@ mod tests {
             assert_eq!(fetched.id.as_str(), "cap-1");
             assert_eq!(fetched.content, "content-cap-1");
         }
+    }
+
+    #[tokio::test]
+    async fn test_pool_read_pool_size() {
+        // 文件数据库默认 read_pool_size = 2
+        let tmp = tempfile::tempdir().unwrap();
+        let tier = ColdTier::open(tmp.path(), 65536).unwrap();
+        assert_eq!(tier.pool.read_pool_size(), 2);
+
+        // 内存数据库 read_pool_size = 0
+        let tier_mem = ColdTier::open_in_memory(65536).unwrap();
+        assert_eq!(tier_mem.pool.read_pool_size(), 0);
     }
 }

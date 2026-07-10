@@ -22,6 +22,21 @@
 //!
 //!   重载后通过 `event-bus` 广播 `ConfigReloaded` 事件,各子系统订阅并应用新配置。
 //!   当前 Week 8 已完成静态加载,热加载为未来增强项(优先级 P3)。
+//!
+//! # 快速示例
+//! WHY 选此示例:展示最常用路径 —— `Cli::parse_from` 解析参数 + `ChimeraConfig::default` 内置默认,
+//! 覆盖 CLI 入口与配置加载两条核心 API,且无需 IO 可在 doctest 直接运行。
+//! ```
+//! use chimera_cli::{Cli, Commands, QuestAction, ChimeraConfig};
+//! use clap::Parser;
+//!
+//! // Cli 实现 clap::Parser,可从字符串切片解析(便于测试与脚本调用)
+//! let cli = Cli::parse_from(["aether", "quest", "list"]);
+//! assert!(matches!(cli.command, Some(Commands::Quest { action: QuestAction::List })));
+//!
+//! // ChimeraConfig 实现 Default,提供内置兜底配置(对应 omega.yaml 缺省值)
+//! let _config = ChimeraConfig::default();
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
@@ -35,7 +50,7 @@ pub mod config;
 
 // === 公开 API 重导出 ===
 pub use cli::{Cli, Commands, ConfigAction, QuestAction};
-pub use config::ChimeraConfig;
+pub use config::{ChimeraConfig, LazyConfig};
 
 /// Crate 版本(从 workspace.package.version 派生)
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -10,8 +10,8 @@
 //! - 通过 `event_bus::EventBus` 发布 `WikiUpdated` 事件通知上层
 //!
 //! # 架构红线
-//! - 所有 SQLite 操作通过 `Arc<Mutex<Connection>>` 串行化(线程安全),
-//!   并使用 `spawn_blocking` 转移到阻塞线程池(避免阻塞 async runtime)
+//! - 写操作通过专用写入线程(mpsc + oneshot)序列化,读操作通过只读连接池
+//!   在 `spawn_blocking` 中并发执行;从而利用 SQLite WAL 的读写并发能力
 //! - `#![forbid(unsafe_code)]` 禁止 unsafe,因此 sqlite-vec 集成降级为内存向量检索
 //! - 单函数 ≤ 200 行,所有可能失败的边界用 `?` 处理
 //!
@@ -45,16 +45,20 @@
 
 pub mod config;
 pub mod error;
+pub mod fts;
 pub mod generator;
 pub mod iscm;
+pub mod metrics;
 pub mod store;
 pub mod types;
 pub mod vector;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use error::WikiError;
+pub use fts::FtsCapability;
 pub use generator::WikiGenerator;
 pub use iscm::{IscmAnchor, Layer};
+pub use metrics::WikiMetrics;
 pub use store::WikiStore;
 pub use types::{WikiConfig, WikiEntry};
 pub use vector::VectorIndex;
@@ -62,8 +66,10 @@ pub use vector::VectorIndex;
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::error::WikiError;
+    pub use crate::fts::FtsCapability;
     pub use crate::generator::WikiGenerator;
     pub use crate::iscm::{IscmAnchor, Layer};
+    pub use crate::metrics::WikiMetrics;
     pub use crate::store::WikiStore;
     pub use crate::types::{WikiConfig, WikiEntry};
     pub use crate::vector::VectorIndex;

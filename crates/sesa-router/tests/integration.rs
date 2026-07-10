@@ -30,8 +30,15 @@ fn make_router(n: usize) -> SesaRouter {
 }
 
 /// 辅助:创建带 N 个专家的路由器(绑定 EventBus)
+///
+/// WHY 禁用 prerequisite_check:这些集成测试验证 EventBus 集成与稀疏度约束,
+/// 不关心五层路由顺序。PrerequisiteChecker 有独立的 prerequisite_test.rs 测试。
 fn make_router_with_bus(bus: EventBus, n: usize) -> SesaRouter {
-    let router = SesaRouter::with_event_bus(SesaConfig::default(), bus);
+    let config = SesaConfig {
+        prerequisite_check_enabled: false,
+        ..SesaConfig::default()
+    };
+    let router = SesaRouter::with_event_bus(config, bus);
     for i in 0..n {
         let v = vec![(i as f32) * 0.01; 64];
         let expert = ExpertDescriptor::new(format!("expert-{i}"), v);

@@ -11,6 +11,8 @@
 //! - `quorum_threshold` 默认 0.6:法定人数要求 60% 角色参与,
 //!   防止少数角色垄断决策
 //! - `debate_timeout_ms` 默认 5000:5 秒超时,平衡深度辩论与响应延迟
+//! - `override_consensus_threshold` 默认 0.667(2/3 超级多数):覆议路径
+//!   需更高门槛,防止轻率绕过 Skeptic 红队安全防线(Phase IV N8)
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +39,13 @@ pub struct ParliamentConfig {
     pub quorum_threshold: f32,
     /// 辩论超时(毫秒),5 角色需在此时间内完成,默认 5000
     pub debate_timeout_ms: u64,
+    /// 覆议共识阈值:覆议路径(reopen_veto / deliberate_with_override 覆盖分支)
+    /// 需达到此加权赞成率才达成共识,默认 0.667(2/3 超级多数)
+    ///
+    /// WHY 2/3 超级多数:覆议是绕过 Skeptic 红队安全防线的高风险操作,
+    /// 要求比常规 consensus_threshold(0.6)更高的门槛,防止轻率绕过。
+    /// 常规 deliberate() 路径不受此阈值影响,仍使用 consensus_threshold。
+    pub override_consensus_threshold: f32,
 }
 
 impl Default for ParliamentConfig {
@@ -50,6 +59,7 @@ impl Default for ParliamentConfig {
             consensus_threshold: 0.6,
             quorum_threshold: 0.6,
             debate_timeout_ms: 5000,
+            override_consensus_threshold: 0.667,
         }
     }
 }
@@ -91,6 +101,13 @@ impl ParliamentConfig {
         if !(0.0..=1.0).contains(&self.quorum_threshold) {
             return Err(ParliamentError::ConfigError {
                 detail: "quorum_threshold must be in [0.0, 1.0]".into(),
+            });
+        }
+
+        // 覆议阈值应在 [0.0, 1.0] 区间
+        if !(0.0..=1.0).contains(&self.override_consensus_threshold) {
+            return Err(ParliamentError::ConfigError {
+                detail: "override_consensus_threshold must be in [0.0, 1.0]".into(),
             });
         }
 
@@ -215,6 +232,10 @@ mod tests {
         assert!((cfg.consensus_threshold - 0.6).abs() < 1e-6);
         assert!((cfg.quorum_threshold - 0.6).abs() < 1e-6);
         assert_eq!(cfg.debate_timeout_ms, 5000);
+        assert!(
+            (cfg.override_consensus_threshold - 0.667).abs() < 1e-3,
+            "覆议阈值默认应为 0.667"
+        );
     }
 
     #[test]
@@ -274,6 +295,38 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_override_threshold_out_of_range() {
+        // WHY 边界校验:覆议阈值越界会导致共识判定异常,需提前拦截
+        let cfg_above = ParliamentConfig {
+            override_consensus_threshold: 1.5,
+            ..Default::default()
+        };
+        assert!(cfg_above.validate().is_err());
+
+        let cfg_below = ParliamentConfig {
+            override_consensus_threshold: -0.1,
+            ..Default::default()
+        };
+        assert!(cfg_below.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_override_threshold_boundary() {
+        // 边界值 0.0 与 1.0 应通过校验
+        let cfg_zero = ParliamentConfig {
+            override_consensus_threshold: 0.0,
+            ..Default::default()
+        };
+        assert!(cfg_zero.validate().is_ok());
+
+        let cfg_one = ParliamentConfig {
+            override_consensus_threshold: 1.0,
+            ..Default::default()
+        };
+        assert!(cfg_one.validate().is_ok());
+    }
+
+    #[test]
     fn test_validate_zero_timeout() {
         let cfg = ParliamentConfig {
             debate_timeout_ms: 0,
@@ -299,6 +352,9 @@ mod tests {
         let restored: ParliamentConfig = serde_json::from_str(&json).unwrap();
         assert!((cfg.architect_weight - restored.architect_weight).abs() < 1e-6);
         assert_eq!(cfg.debate_timeout_ms, restored.debate_timeout_ms);
+        assert!(
+            (cfg.override_consensus_threshold - restored.override_consensus_threshold).abs() < 1e-6
+        );
     }
 
     // === SubTask 8.1: AhirtConfig 测试 ===

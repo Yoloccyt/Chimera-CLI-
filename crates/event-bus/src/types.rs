@@ -607,6 +607,25 @@ pub enum NexusEvent {
         timeout_ms: u64,
     },
 
+    /// GQEP 全局 gather 超时 — L6 Router 状态变更(Phase V Task V-3 [N14])
+    ///
+    /// 整个 gather 流程触达全局 deadline,剩余未完成的 future 被放弃。
+    /// 与 `OperationTimedOut`(单操作超时)互补,二者构成双层超时防护:
+    /// 单操作超时保护单个 future,全局超时保护整个 gather 流程不因单操作
+    /// 超时累积而失控。供 efficiency-monitor 等订阅者记录全局超时指标。
+    GatherTimedOut {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 全局 deadline 阈值(毫秒),即 `GqepConfig::gather_deadline_ms`
+        deadline_ms: u64,
+        /// 触发超时时实际已运行时间(毫秒)
+        elapsed_ms: u64,
+        /// 本次 gather 的总操作数
+        total: u32,
+        /// 被放弃(未完成)的操作数
+        abandoned: u32,
+    },
+
     /// GQEP 检测到孤儿调用 `[Critical]` — 系统健康告警
     ///
     /// WHY:对应 Claude Code 尸检 5.4% 孤儿调用教训,孤儿调用必须
@@ -755,6 +774,33 @@ pub enum NexusEvent {
         veto_reason: String,
         /// 被冻结的能力 ID 列表
         frozen_capabilities: Vec<String>,
+    },
+
+    /// Skeptic 否决权被人工覆盖 `[Critical]` — L8 Parliament → L4 Security/审计
+    ///
+    /// WHY Critical:Skeptic 否决是红队安全防线,覆盖否决是高风险操作,
+    /// 必须保证投递到 SecCore 与审计系统。丢失将导致覆盖行为无审计记录,
+    /// 违反"所有安全相关操作可追溯"原则。此事件与 SkepticVeto 互补:
+    /// SkepticVeto 记录否决,VetoOverridden 记录覆盖,两者均不可丢弃。
+    ///
+    /// # 触发条件
+    /// 由 `Parliament::deliberate_with_override()` 发布:
+    /// 当 Skeptic 检测到恶意意图但操作方提供了 `VetoOverrideTicket` 时,
+    /// 系统仍发布 SkepticVeto 事件(保留完整否决记录),随后发布此事件
+    /// 标记覆盖行为,提案继续进入正常辩论流程。
+    VetoOverridden {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// Quest ID
+        quest_id: String,
+        /// 被覆盖否决的提案 ID
+        proposal_id: String,
+        /// 原始否决原因(Skeptic 检测到的恶意意图描述)
+        veto_reason: String,
+        /// 覆盖原因(操作方提供的覆盖理由)
+        override_reason: String,
+        /// 授权操作方标识(如 "admin:alice" 或 "system:auto-review")
+        override_by: String,
     },
 
     /// AHIRT 红队审计结果 `[Critical]` — L8 Parliament → L4 Security
@@ -1094,6 +1140,7 @@ impl NexusEvent {
             | Self::ActivationCacheStats { metadata, .. }
             | Self::GatherCompleted { metadata, .. }
             | Self::OperationTimedOut { metadata, .. }
+            | Self::GatherTimedOut { metadata, .. }
             | Self::OrphanCallDetected { metadata, .. }
             | Self::ProducerStrategyAdjusted { metadata, .. }
             | Self::PredictionMade { metadata, .. }
@@ -1107,6 +1154,7 @@ impl NexusEvent {
             | Self::ExpertUnregistered { metadata, .. }
             | Self::DebateStarted { metadata, .. }
             | Self::SkepticVeto { metadata, .. }
+            | Self::VetoOverridden { metadata, .. }
             | Self::RedTeamAudit { metadata, .. }
             | Self::BudgetAdjusted { metadata, .. }
             | Self::AsaIntervention { metadata, .. }
@@ -1129,6 +1177,7 @@ impl NexusEvent {
     ///
     /// 关键事件:CheckpointSaved、ConsensusReached、SlowConsumerDropped、
     /// OrphanCallDetected(Week 4 新增)、SkepticVeto/RedTeamAudit(Week 5 新增)、
+    /// VetoOverridden(P1-3 新增:否决覆盖审计)、
     /// BudgetExceeded(F-001 修复:Hard Constraint 第 10 条要求)
     /// 这些事件丢失会导致系统状态不一致或告警遗漏
     ///
@@ -1145,8 +1194,9 @@ impl NexusEvent {
     /// (对应 Claude Code 尸检 5.4% 孤儿调用教训),其余 15 个为 Normal,
     /// 由通配符分支自动覆盖。Week 5 新增的 8 个变体中,SkepticVeto(否决权
     /// 行使)与 RedTeamAudit(红队漏洞审计)为 Critical(丢失导致安全机制
-    /// 失效),其余 6 个为 Normal,由通配符分支自动覆盖。若未来新增 Critical
-    /// 事件,必须在此显式列出,避免被通配符误判为 Normal。
+    /// 失效),其余 6 个为 Normal,由通配符分支自动覆盖。P1-3 新增
+    /// VetoOverridden 为 Critical(否决覆盖审计,丢失导致覆盖行为不可追溯)。
+    /// 若未来新增 Critical 事件,必须在此显式列出,避免被通配符误判为 Normal。
     pub fn severity(&self) -> EventSeverity {
         match self {
             Self::CheckpointSaved { .. }
@@ -1154,6 +1204,7 @@ impl NexusEvent {
             | Self::SlowConsumerDropped { .. }
             | Self::OrphanCallDetected { .. }
             | Self::SkepticVeto { .. }
+            | Self::VetoOverridden { .. }
             | Self::RedTeamAudit { .. }
             | Self::BudgetExceeded { .. } => EventSeverity::Critical,
             _ => EventSeverity::Normal,
@@ -1200,6 +1251,7 @@ impl NexusEvent {
             Self::ActivationCacheStats { .. } => "ActivationCacheStats",
             Self::GatherCompleted { .. } => "GatherCompleted",
             Self::OperationTimedOut { .. } => "OperationTimedOut",
+            Self::GatherTimedOut { .. } => "GatherTimedOut",
             Self::OrphanCallDetected { .. } => "OrphanCallDetected",
             Self::ProducerStrategyAdjusted { .. } => "ProducerStrategyAdjusted",
             Self::PredictionMade { .. } => "PredictionMade",
@@ -1213,6 +1265,7 @@ impl NexusEvent {
             Self::ExpertUnregistered { .. } => "ExpertUnregistered",
             Self::DebateStarted { .. } => "DebateStarted",
             Self::SkepticVeto { .. } => "SkepticVeto",
+            Self::VetoOverridden { .. } => "VetoOverridden",
             Self::RedTeamAudit { .. } => "RedTeamAudit",
             Self::BudgetAdjusted { .. } => "BudgetAdjusted",
             Self::AsaIntervention { .. } => "AsaIntervention",
@@ -1746,5 +1799,58 @@ mod tests {
             "BudgetExceeded 必须为 Critical (Hard Constraint 第 10 条)"
         );
         assert_eq!(e.type_name(), "BudgetExceeded");
+    }
+
+    // ============================================================
+    // P1-3 扩展测试:验证 VetoOverridden 事件变体
+    // ============================================================
+
+    #[test]
+    fn test_veto_overridden_severity_is_critical() {
+        let e = NexusEvent::VetoOverridden {
+            metadata: EventMetadata::new("parliament"),
+            quest_id: "q-1".into(),
+            proposal_id: "p-1".into(),
+            veto_reason: "command_injection detected".into(),
+            override_reason: "false positive: legitimate shell script".into(),
+            override_by: "admin:alice".into(),
+        };
+        assert_eq!(
+            e.severity(),
+            EventSeverity::Critical,
+            "VetoOverridden 必须为 Critical(否决覆盖审计)"
+        );
+        assert_eq!(e.type_name(), "VetoOverridden");
+        assert_eq!(e.metadata().source, "parliament");
+    }
+
+    #[test]
+    fn test_veto_overridden_serialization_roundtrip() {
+        let e = NexusEvent::VetoOverridden {
+            metadata: EventMetadata::new("parliament"),
+            quest_id: "q-1".into(),
+            proposal_id: "p-1".into(),
+            veto_reason: "Skeptic 否决:DataExfiltration 'curl'".into(),
+            override_reason: "legitimate API call to github.com".into(),
+            override_by: "system:auto-review".into(),
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let restored: NexusEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, restored);
+    }
+
+    #[test]
+    fn test_veto_overridden_msgpack_roundtrip() {
+        let e = NexusEvent::VetoOverridden {
+            metadata: EventMetadata::new("parliament"),
+            quest_id: "q-2".into(),
+            proposal_id: "p-2".into(),
+            veto_reason: "sandbox_escape /proc/".into(),
+            override_reason: "monitoring use case".into(),
+            override_by: "admin:bob".into(),
+        };
+        let bytes = crate::bus::serialize_msgpack(&e).unwrap();
+        let decoded = crate::bus::deserialize_msgpack(&bytes).unwrap();
+        assert_eq!(e, decoded);
     }
 }

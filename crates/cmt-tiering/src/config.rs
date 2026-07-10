@@ -60,6 +60,21 @@ pub struct CmtConfig {
     /// τ 越大衰减越慢。24 小时意味着 1 天前的访问权重降为 1/e ≈ 0.37。
     /// `priority < 0.1` 时触发降级迁移
     pub decay_tau_seconds: u64,
+
+    /// Warm 层 SQLite 读连接池大小(默认 2)
+    ///
+    /// WHY(P1-5):WAL 模式下 SQLite 支持并发读,但单 Mutex 序列化所有操作。
+    /// 连接池将读操作分散到多个独立连接,写操作仍通过独立写连接序列化。
+    /// 0 = 单连接模式(读写共用写连接,适合测试或低并发场景)。
+    /// 2 = CLI 工具默认,平衡内存与并发。
+    /// 4+ = 服务端高并发场景。
+    pub warm_pool_size: usize,
+
+    /// Cold 层 SQLite 读连接池大小(默认 2)
+    ///
+    /// WHY(P1-5):与 warm_pool_size 相同,控制 Cold 层附加数据库的并发读连接数。
+    /// Cold 层容量更大(65536),读操作更频繁,池大小可根据负载调整。
+    pub cold_pool_size: usize,
 }
 
 impl CmtConfig {
@@ -110,6 +125,18 @@ impl CmtConfig {
         self
     }
 
+    /// 设置 Warm 层读连接池大小(P1-5)
+    pub fn with_warm_pool_size(mut self, size: usize) -> Self {
+        self.warm_pool_size = size;
+        self
+    }
+
+    /// 设置 Cold 层读连接池大小(P1-5)
+    pub fn with_cold_pool_size(mut self, size: usize) -> Self {
+        self.cold_pool_size = size;
+        self
+    }
+
     /// 校验配置合法性,返回 CmtError 描述具体问题
     ///
     /// 校验规则:
@@ -138,6 +165,18 @@ impl CmtConfig {
         if self.ice_dir.as_os_str().is_empty() {
             return Err(CmtError::InvalidConfig("ice_dir 不能为空".into()));
         }
+        if self.warm_pool_size > 64 {
+            return Err(CmtError::InvalidConfig(format!(
+                "warm_pool_size 不能超过 64(当前: {})",
+                self.warm_pool_size
+            )));
+        }
+        if self.cold_pool_size > 64 {
+            return Err(CmtError::InvalidConfig(format!(
+                "cold_pool_size 不能超过 64(当前: {})",
+                self.cold_pool_size
+            )));
+        }
         Ok(())
     }
 
@@ -161,6 +200,8 @@ impl Default for CmtConfig {
             cold_dir: PathBuf::from("~/.aether/memory/cold/"),
             ice_dir: PathBuf::from("~/.aether/memory/ice/"),
             decay_tau_seconds: 86400,
+            warm_pool_size: 2,
+            cold_pool_size: 2,
         }
     }
 }
@@ -182,6 +223,8 @@ mod tests {
         assert_eq!(config.cold_dir, PathBuf::from("~/.aether/memory/cold/"));
         assert_eq!(config.ice_dir, PathBuf::from("~/.aether/memory/ice/"));
         assert_eq!(config.decay_tau_seconds, 86400);
+        assert_eq!(config.warm_pool_size, 2);
+        assert_eq!(config.cold_pool_size, 2);
     }
 
     #[test]
@@ -193,11 +236,15 @@ mod tests {
             .with_warm_db_path("/tmp/warm.db")
             .with_cold_dir("/tmp/cold/")
             .with_ice_dir("/tmp/ice/")
-            .with_decay_tau_seconds(3600);
+            .with_decay_tau_seconds(3600)
+            .with_warm_pool_size(4)
+            .with_cold_pool_size(4);
         assert_eq!(config.hot_capacity, 128);
         assert_eq!(config.warm_capacity, 2048);
         assert_eq!(config.cold_capacity, 32768);
         assert_eq!(config.decay_tau_seconds, 3600);
+        assert_eq!(config.warm_pool_size, 4);
+        assert_eq!(config.cold_pool_size, 4);
     }
 
     #[test]

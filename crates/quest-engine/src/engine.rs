@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use decb_governor::BudgetTier;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_core::{Checkpoint, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
 use tracing::{debug, info, warn};
@@ -32,11 +33,13 @@ use crate::checkpoint::CheckpointManager;
 use crate::config::QuestConfig;
 use crate::dag::validate_dag;
 use crate::error::QuestError;
+use crate::ttg::TtgGovernor;
 
 /// Quest Engine — 长期任务分解与生命周期管理
 ///
 /// 管理 Quest 注册表,通过 Event Bus 广播生命周期事件。
 /// 可选配置 `CheckpointManager` 启用 LHQP 检查点持久化。
+/// 可选配置 `TtgGovernor` 启用基于复杂度和预算的自动思考模式选择。
 /// 可跨 async 任务共享(Send + Sync),所有方法满足 Send 约束。
 pub struct QuestEngine {
     /// Quest 注册表(quest_id → Quest),DashMap 分片锁支持并发读写
@@ -50,21 +53,28 @@ pub struct QuestEngine {
     /// WHY:Option 而非直接持有 — 测试场景或内存模式无需持久化,
     /// None 时 save_checkpoint/restore_from_checkpoint 返回明确错误
     checkpoint_manager: Option<CheckpointManager>,
+    /// TTG 思考模式治理器(Option 允许禁用自动模式选择)
+    ///
+    /// WHY Option:简单场景或测试不需要 TTG 自动治理,
+    /// None 时 create_quest 使用默认 ThinkingMode::Standard,
+    /// Some 时 create_quest 自动调用 select_mode_and_publish 选择最优模式。
+    ttg_governor: Option<TtgGovernor>,
 }
 
 impl QuestEngine {
-    /// 创建 QuestEngine,使用默认配置(不启用检查点)
+    /// 创建 QuestEngine,使用默认配置(不启用检查点与 TTG)
     pub fn new(event_bus: EventBus) -> Self {
         Self::with_config(event_bus, QuestConfig::default())
     }
 
-    /// 创建 QuestEngine,使用自定义配置(不启用检查点)
+    /// 创建 QuestEngine,使用自定义配置(不启用检查点与 TTG)
     pub fn with_config(event_bus: EventBus, config: QuestConfig) -> Self {
         Self {
             quests: Arc::new(DashMap::new()),
             event_bus,
             config,
             checkpoint_manager: None,
+            ttg_governor: None,
         }
     }
 
@@ -81,6 +91,7 @@ impl QuestEngine {
             event_bus,
             config,
             checkpoint_manager: Some(CheckpointManager::new(checkpoint_dir)),
+            ttg_governor: None,
         }
     }
 
@@ -96,7 +107,45 @@ impl QuestEngine {
             event_bus,
             config,
             checkpoint_manager: Some(CheckpointManager::with_max_keep(checkpoint_dir, max_keep)),
+            ttg_governor: None,
         }
+    }
+
+    /// 创建带检查点与 TTG 治理器的完整 QuestEngine
+    ///
+    /// 全功能构造:Quest 创建时自动评估复杂度并选择思考模式,
+    /// 模式切换通过 EventBus 发布 ThinkingModeSwitched 事件。
+    ///
+    /// 注意:无论 `ttg_governor` 是否已持有 EventBus,此方法都会用
+    /// engine 的 EventBus 覆盖它,确保两者共享同一事件通道。
+    pub fn full(
+        event_bus: EventBus,
+        config: QuestConfig,
+        checkpoint_dir: PathBuf,
+        mut ttg_governor: TtgGovernor,
+    ) -> Self {
+        // 确保 TTG 治理器与 engine 使用同一 EventBus(防止配置漂移)
+        ttg_governor.set_event_bus(event_bus.clone());
+        Self {
+            quests: Arc::new(DashMap::new()),
+            event_bus,
+            config,
+            checkpoint_manager: Some(CheckpointManager::new(checkpoint_dir)),
+            ttg_governor: Some(ttg_governor),
+        }
+    }
+
+    /// 注入 TTG 治理器(延迟绑定场景)
+    ///
+    /// WHY:某些初始化流程中 TtgGovernor 在 QuestEngine 之后才构造,
+    /// 此方法允许延迟注入,与 `set_event_bus` 对称。
+    pub fn set_ttg_governor(&mut self, governor: TtgGovernor) {
+        self.ttg_governor = Some(governor);
+    }
+
+    /// 获取 TTG 治理器引用(若已配置)
+    pub fn ttg_governor(&self) -> Option<&TtgGovernor> {
+        self.ttg_governor.as_ref()
     }
 
     /// 获取检查点管理器引用(若已配置)
@@ -117,7 +166,7 @@ impl QuestEngine {
         let quest = self
             .get_quest(quest_id)
             .ok_or_else(|| QuestError::QuestNotFound(quest_id.to_string()))?;
-        let checkpoint = cm.save(&quest)?;
+        let checkpoint = cm.save(&quest).await?;
 
         // 发布 CheckpointSaved 事件(Critical,EventBus 据此优先投递)
         let event = NexusEvent::CheckpointSaved {
@@ -147,7 +196,7 @@ impl QuestEngine {
             .checkpoint_manager
             .as_ref()
             .ok_or_else(|| QuestError::CheckpointNotFound("checkpoints disabled".into()))?;
-        let checkpoint = cm.load_latest(quest_id)?.ok_or_else(|| {
+        let checkpoint = cm.load_latest(quest_id).await?.ok_or_else(|| {
             QuestError::CheckpointNotFound(format!("no checkpoint for {quest_id}"))
         })?;
 
@@ -188,9 +237,9 @@ impl QuestEngine {
         validate_dag(&tasks)?;
         // 3. 生成 quest_id(UUIDv7 时间有序,便于跨进程因果追踪)
         let quest_id = format!("quest-{}", Uuid::now_v7());
-        // 4. 创建 Quest 实例
+        // 4. 创建 Quest 实例(默认 Standard,TTG 集成后自动选择)
         let title = extract_title(&intent.raw_text);
-        let quest = Quest {
+        let mut quest = Quest {
             quest_id: quest_id.clone(),
             title,
             tasks,
@@ -198,14 +247,44 @@ impl QuestEngine {
             checkpoint_id: None,
         };
         let task_count = quest.tasks.len() as u32;
-        // 5. 存入注册表
+
+        // 5. TTG 自动模式选择(若已配置)
+        //    WHY 在插入 DashMap 前选择:减少锁竞争(不需要先插入再 get_mut 更新)
+        //    默认 BudgetTier::LowTier — 新 Quest 尚无预算历史,
+        //    LowTier 使 TTG 根据复杂度保守选择:简单→Fast,中等→Standard,复杂→Standard。
+        //    DECB 启动后通过 ttg_on_budget_adjusted 联动切换到实际档位。
+        if let Some(governor) = &self.ttg_governor {
+            match governor
+                .select_mode_and_publish(&quest_id, &quest, BudgetTier::LowTier)
+                .await
+            {
+                Ok(Some((mode, _reason))) => {
+                    quest.thinking_mode = mode;
+                    debug!(
+                        quest_id = %quest_id,
+                        ?mode,
+                        "TTG 自动选择思考模式"
+                    );
+                }
+                Ok(None) => {} // 模式未变化,无需操作
+                Err(e) => {
+                    warn!(
+                        quest_id = %quest_id,
+                        error = %e,
+                        "TTG 自动选择失败,使用默认 Standard 模式"
+                    );
+                }
+            }
+        }
+
+        // 6. 存入注册表
         self.quests.insert(quest_id.clone(), quest.clone());
         debug!(
             quest_id = %quest_id,
             task_count,
             "Quest 已创建并注册"
         );
-        // 6. 发布 QuestCreated 事件
+        // 7. 发布 QuestCreated 事件
         let event = NexusEvent::QuestCreated {
             metadata: EventMetadata::new("quest-engine"),
             quest_id: quest_id.clone(),
@@ -375,6 +454,13 @@ impl QuestEngine {
 
     /// 切换思考模式 — 发布 ThinkingModeSwitched 事件
     ///
+    /// 当 TTG 治理器已配置时,委托给 `override_mode_and_publish`,
+    /// 自动记录覆盖状态并发布事件。未配置时走原有手动切换逻辑。
+    ///
+    /// WHY 手动覆盖使用 HighTier:手动切换是用户/上层的显式决策,
+    /// 不应受当前预算档位约束(Degraded 下用户仍可强制 Deep)。
+    /// 预算约束仅作用于 TTG 自动选择路径(见 `ttg_auto_select`)。
+    ///
     /// WHY:Parliament 订阅此事件,据此调整预算分配
     /// (Deep 模式消耗更多 token,需提前预留预算)
     pub async fn switch_thinking_mode(
@@ -382,6 +468,17 @@ impl QuestEngine {
         quest_id: &str,
         new_mode: ThinkingMode,
     ) -> Result<(), QuestError> {
+        // TTG 集成路径:委托给治理器,自动记录覆盖 + 发布事件
+        if let Some(governor) = &self.ttg_governor {
+            let mode = governor
+                .override_mode_and_publish(quest_id, new_mode, BudgetTier::HighTier)
+                .await?;
+            // 同步更新 DashMap 中的 Quest 状态
+            self.apply_thinking_mode(quest_id, mode)?;
+            return Ok(());
+        }
+
+        // 无 TTG 路径:原有手动切换逻辑
         let mut entry = self
             .quests
             .get_mut(quest_id)
@@ -416,6 +513,78 @@ impl QuestEngine {
             to = ?new_mode,
             "ThinkingModeSwitched 事件已发布"
         );
+        Ok(())
+    }
+
+    /// 将思考模式应用到 DashMap 中的 Quest(内部辅助)
+    ///
+    /// WHY:TTG 治理器维护独立的模式注册表,但 Quest 结构体的 thinking_mode
+    /// 字段需要同步更新,供 Parliament 等直接读取 Quest 的消费方使用。
+    fn apply_thinking_mode(&self, quest_id: &str, mode: ThinkingMode) -> Result<(), QuestError> {
+        let mut entry = self
+            .quests
+            .get_mut(quest_id)
+            .ok_or_else(|| QuestError::QuestNotFound(quest_id.to_string()))?;
+        entry.thinking_mode = mode;
+        Ok(())
+    }
+
+    /// TTG 自动选择 — 基于 Quest 复杂度与预算档位自动选择思考模式
+    ///
+    /// 若未配置 TTG 治理器,返回当前 Quest 的模式(不做变更)。
+    /// 若已配置,调用 `select_mode_and_publish` 并同步更新 Quest。
+    pub async fn ttg_auto_select(
+        &self,
+        quest_id: &str,
+        budget_tier: BudgetTier,
+    ) -> Result<ThinkingMode, QuestError> {
+        let quest = self
+            .get_quest(quest_id)
+            .ok_or_else(|| QuestError::QuestNotFound(quest_id.to_string()))?;
+
+        let governor = match &self.ttg_governor {
+            Some(g) => g,
+            None => return Ok(quest.thinking_mode),
+        };
+
+        match governor
+            .select_mode_and_publish(quest_id, &quest, budget_tier)
+            .await?
+        {
+            Some((mode, _reason)) => {
+                self.apply_thinking_mode(quest_id, mode)?;
+                Ok(mode)
+            }
+            None => Ok(quest.thinking_mode),
+        }
+    }
+
+    /// TTG 预算联动 — DECB 档位变化时自动重新选择思考模式
+    ///
+    /// 若未配置 TTG 治理器,静默跳过(返回 Ok)。
+    /// 配置时委托给 `on_budget_adjusted_and_publish` 并同步更新 Quest。
+    pub async fn ttg_on_budget_adjusted(
+        &self,
+        quest_id: &str,
+        old_tier: BudgetTier,
+        new_tier: BudgetTier,
+    ) -> Result<(), QuestError> {
+        let quest = match self.get_quest(quest_id) {
+            Some(q) => q,
+            None => return Ok(()), // Quest 可能已完成或不存在,静默跳过
+        };
+
+        let governor = match &self.ttg_governor {
+            Some(g) => g,
+            None => return Ok(()),
+        };
+
+        if let Some((mode, _reason)) = governor
+            .on_budget_adjusted_and_publish(quest_id, old_tier, new_tier, &quest)
+            .await?
+        {
+            self.apply_thinking_mode(quest_id, mode)?;
+        }
         Ok(())
     }
 
@@ -625,5 +794,176 @@ mod tests {
             }
             other => panic!("expected QuestCreated, got {other:?}"),
         }
+    }
+
+    // ============================================================
+    // P1-6: TTG 集成测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_create_quest_with_ttg_auto_selects_mode() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let governor = TtgGovernor::with_event_bus(crate::ttg::TtgConfig::default(), bus.clone());
+        let mut engine = QuestEngine::new(bus);
+        engine.set_ttg_governor(governor);
+
+        // 简单意图(2 个句子 = 2 个任务,≤ simple_task_threshold=3)→ Fast
+        let intent = make_intent("分析需求。设计方案。");
+        let quest = engine.create_quest(intent).await.unwrap();
+
+        // TTG 应为简单任务选择 Fast 模式
+        assert_eq!(
+            quest.thinking_mode,
+            ThinkingMode::Fast,
+            "简单任务应自动选择 Fast 模式"
+        );
+
+        // 应收 ThinkingModeSwitched + QuestCreated 两个事件
+        let mut saw_mode_switch = false;
+        let mut saw_quest_created = false;
+        for _ in 0..2 {
+            let event = rx.recv().await.unwrap();
+            match event {
+                NexusEvent::ThinkingModeSwitched { to_mode, .. } => {
+                    assert_eq!(to_mode, "Fast");
+                    saw_mode_switch = true;
+                }
+                NexusEvent::QuestCreated { .. } => {
+                    saw_quest_created = true;
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert!(saw_mode_switch, "应发布 ThinkingModeSwitched 事件");
+        assert!(saw_quest_created, "应发布 QuestCreated 事件");
+    }
+
+    #[tokio::test]
+    async fn test_create_quest_without_ttg_defaults_standard() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus);
+        let intent = make_intent("分析需求。设计方案。");
+        let quest = engine.create_quest(intent).await.unwrap();
+        // 无 TTG 时应保持默认 Standard
+        assert_eq!(quest.thinking_mode, ThinkingMode::Standard);
+    }
+
+    #[tokio::test]
+    async fn test_ttg_auto_select_updates_quest_in_dashmap() {
+        let bus = EventBus::new();
+        let governor = TtgGovernor::with_event_bus(crate::ttg::TtgConfig::default(), bus.clone());
+        let mut engine = QuestEngine::new(bus);
+        engine.set_ttg_governor(governor);
+
+        let intent = make_intent("分析。");
+        let quest = engine.create_quest(intent).await.unwrap();
+        // DashMap 中的 Quest 也应更新为 Fast
+        let stored = engine.get_quest(&quest.quest_id).unwrap();
+        assert_eq!(stored.thinking_mode, ThinkingMode::Fast);
+    }
+
+    #[tokio::test]
+    async fn test_switch_thinking_mode_with_ttg_delegates() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let governor = TtgGovernor::with_event_bus(crate::ttg::TtgConfig::default(), bus.clone());
+        let mut engine = QuestEngine::new(bus);
+        engine.set_ttg_governor(governor);
+
+        let intent = make_intent("分析需求。");
+        let quest = engine.create_quest(intent).await.unwrap();
+        // 消费 create_quest 产生的事件
+        let _ = rx.recv().await; // ThinkingModeSwitched
+        let _ = rx.recv().await; // QuestCreated
+
+        // 手动切换到 Deep — TTG 应记录为手动覆盖
+        engine
+            .switch_thinking_mode(&quest.quest_id, ThinkingMode::Deep)
+            .await
+            .unwrap();
+
+        let stored = engine.get_quest(&quest.quest_id).unwrap();
+        assert_eq!(stored.thinking_mode, ThinkingMode::Deep);
+
+        // 验证 TTG 治理器记录了覆盖状态
+        assert!(engine
+            .ttg_governor()
+            .unwrap()
+            .is_overridden(&quest.quest_id));
+    }
+
+    #[tokio::test]
+    async fn test_ttg_on_budget_adjusted_integration() {
+        let bus = EventBus::new();
+        let governor = TtgGovernor::with_event_bus(crate::ttg::TtgConfig::default(), bus.clone());
+
+        // 验证 HighTier 下 12 任务 → Deep(规则 4)— 在 move 到 engine 前测试
+        let long_text = "一。二。三。四。五。六。七。八。九。十。十一。十二。";
+        let intent = make_intent(long_text);
+        // 注:select_mode 内部通过 tasks.len() 计数,此处直接构造 12 任务的 quest
+        let quest_with_tasks = Quest {
+            quest_id: "test-quest-2".to_string(),
+            title: "test".to_string(),
+            tasks: (0..12)
+                .map(|i| nexus_core::Task {
+                    task_id: format!("task-{i}"),
+                    description: format!("任务 {i}"),
+                    dependencies: vec![],
+                    status: nexus_core::TaskStatus::Pending,
+                })
+                .collect(),
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+        };
+        let (mode, _reason) = governor.select_mode(&quest_with_tasks, BudgetTier::HighTier);
+        assert_eq!(
+            mode,
+            ThinkingMode::Deep,
+            "12 任务 + HighTier → Deep(规则 4)"
+        );
+
+        let mut engine = QuestEngine::new(bus);
+        engine.set_ttg_governor(governor);
+
+        // 创建一个复杂 Quest(12 个任务 > complex_task_threshold=10)
+        // create_quest 默认使用 LowTier → 规则 3(OR 条件) → Standard
+        let quest = engine.create_quest(intent).await.unwrap();
+        assert_eq!(
+            quest.thinking_mode,
+            ThinkingMode::Standard,
+            "12 任务 + LowTier → Standard(规则 3 OR 条件)"
+        );
+
+        // 模拟预算降级:LowTier → Degraded,应自动切换为 Fast
+        engine
+            .ttg_on_budget_adjusted(&quest.quest_id, BudgetTier::LowTier, BudgetTier::Degraded)
+            .await
+            .unwrap();
+
+        let stored = engine.get_quest(&quest.quest_id).unwrap();
+        assert_eq!(
+            stored.thinking_mode,
+            ThinkingMode::Fast,
+            "Degraded 预算应强制 Fast"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ttg_on_budget_adjusted_without_governor_is_noop() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus);
+        let intent = make_intent("分析。");
+        let quest = engine.create_quest(intent).await.unwrap();
+
+        // 无 TTG 时 ttg_on_budget_adjusted 应静默成功
+        let result = engine
+            .ttg_on_budget_adjusted(&quest.quest_id, BudgetTier::LowTier, BudgetTier::Degraded)
+            .await;
+        assert!(result.is_ok());
+
+        // 模式不变
+        let stored = engine.get_quest(&quest.quest_id).unwrap();
+        assert_eq!(stored.thinking_mode, ThinkingMode::Standard);
     }
 }
