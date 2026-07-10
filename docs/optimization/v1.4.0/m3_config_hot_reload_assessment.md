@@ -89,9 +89,42 @@
   - `LazyConfig` 重构:`OnceLock` → `RwLock<Arc<T>>` 或 `ArcSwap`(支持热替换)
   - 风险:`OnceLock` 不可变语义被破坏,需重新评估所有 getter 调用方对引用稳定性的假设
 
-## 5. 关联文档
+## 5. v1.4.0-omega 评估更新(2026-07-10)
+
+### 5.1 触发条件状态
+
+v1.4.0-omega P0 + P1 完成后,重新评估 M3 触发条件:
+
+| 触发条件 | 阈值 | v1.4.0 状态 | 是否触发 |
+|---------|------|------------|---------|
+| 用户明确请求运行时配置变更 | 是 | 无用户请求(GitHub issues / project_memory / 直接指令 均无) | ❌ 否 |
+| 长期运行服务消费配置 | 存在 daemon 模式 | **仍无 daemon 模式**(CLI 命令树未变) | ❌ 否 |
+| 交互式 TUI 消费 omega.yaml | TUI 读取主配置 | **TUI 仍是占位实现**(TuiConfig 与 ChimeraConfig 解耦未变) | ❌ 否 |
+| 用户反馈热重载需求 | 有反馈 | 无反馈 | ❌ 否 |
+
+**结论**:触发条件**仍未满足** → 继续延后实施。v1.4.0-omega 未引入 daemon 模式,
+也未收到任何用户关于配置热重载的明确请求。
+
+### 5.2 v1.4.0 相关变更
+
+v1.4.0-omega 的 P0 + P1 任务均未触及配置加载机制:
+- P0(repo-wiki 监控):仅新增 metrics 模块,未修改 LazyConfig
+- P1(Sqlite history):仅新增 history 模块,未修改 LazyConfig
+- LazyConfig 设计保持 v1.2.0 OnceLock + Figment::extract_inner section 级懒加载不变
+- §2.1 当前配置加载实现的描述仍然准确
+
+### 5.3 下次评估计划
+
+- **评估时间**:用户明确提出热重载需求时,或 v1.5.0+ 引入 daemon 模式时
+- **触发后路径**:新建 `.trae/specs/v1-4-0-omega-config-hot-reload/` 实施 spec
+- **候选方案**:`notify` crate(跨平台 + 无 unsafe)+ `ArcSwap`(支持热替换)
+
+---
+
+## 6. 关联文档
 
 - v1.2.0 Task 4 OnceCell 报告:`docs/optimization/v1.2.0/task4_oncecell_verification_report.md`
 - v1.3.0 S1 并发 bench 报告:`docs/optimization/v1.3.0/s1_concurrency_bench_report.md`
 - v1.3.0 综合报告:`docs/optimization/v1.3.0/full_post_optimization_report.md`
-- spec 路径:`.trae/specs/v1-3-0-omega-post-optimization-roadmap/tasks.md`(Task M3 行 138-142)
+- **v1.4.0 综合报告**:`docs/optimization/v1.4.0/full_p2_implementation_report.md`
+- spec 路径:`.trae/specs/v1-4-0-omega-p2-implementation/`

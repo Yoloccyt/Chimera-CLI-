@@ -30,7 +30,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use model_router::{
     HistoryStore, InMemoryHistoryStore, ModelInfo, ModelRegistry, MoeGate, RoutingRequest,
-    RoutingStrategy,
+    RoutingStrategy, SqliteHistoryStore,
 };
 use nexus_core::{MultimodalInput, UserIntent};
 
@@ -157,5 +157,85 @@ fn route_latency_bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, route_latency_bench);
+/// HistoryStore record 延迟基准:对比 InMemory vs SQLite 的单次 record 延迟
+///
+/// WHY 对比维度:量化 SQLite 持久化相对内存的延迟开销,为是否启用 SQLite
+/// (M2 RL 路由触发条件)提供数据支撑。SQLite record 包含 SELECT 旧值 +
+/// 反序列化 BLOB + 合并 + 序列化 BLOB + INSERT OR REPLACE 全流程,
+/// 反映真实 UPSERT 场景(同一 model_id 多次 record,数据累积)。
+///
+/// WHY 累积 record 而非每次新 model_id:真实使用场景是同一模型多次路由,
+/// 历史数据累积;bench 测量的是 UPSERT 延迟(含 SELECT 旧值合并),
+/// 而非仅 INSERT(后者无合并开销,不反映生产场景)。
+///
+/// # 运行
+/// ```bash
+/// cargo bench -p model-router --bench moe_bench -- history_store_record
+/// ```
+fn history_store_record_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("history_store_record");
+    // min-of-N 5 采样(与 route_latency_bench 一致)
+    group.sample_size(10);
+
+    // Memory 实现:DashMap entry().or_default() + HistoryRecord::record
+    // WHY 不用 black_box:record 返回 (),无值可被优化掉;直接调用即可
+    let memory = InMemoryHistoryStore::new();
+    group.bench_function("memory", |b| {
+        b.iter(|| memory.record("bench-model", 100.0, true));
+    });
+
+    // SQLite 实现:SELECT 旧值 + 合并 + INSERT OR REPLACE
+    // WHY tempdir 生命周期绑定到 bench 函数:避免 tempdir drop 删除数据库文件
+    let tmp = tempfile::tempdir().expect("tempdir 创建失败");
+    let db_path = tmp.path().join("bench_record.db");
+    let sqlite = SqliteHistoryStore::new(&db_path).expect("SqliteHistoryStore 打开失败");
+    group.bench_function("sqlite", |b| {
+        b.iter(|| sqlite.record("bench-model", 100.0, true));
+    });
+
+    group.finish();
+}
+
+/// HistoryStore get 延迟基准:对比 InMemory vs SQLite 的单次 get 延迟
+///
+/// WHY 预填充 100 条记录:模拟真实路由场景(模型已有充足历史,触发五维评分
+/// 路径),get 返回非空 HistoryRecord(含 100 个 latency_samples)。
+/// SQLite get 包含 SELECT + 反序列化 BLOB → VecDeque<f32> 全流程。
+///
+/// # 运行
+/// ```bash
+/// cargo bench -p model-router --bench moe_bench -- history_store_get
+/// ```
+fn history_store_get_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("history_store_get");
+    group.sample_size(10);
+
+    // 预填充数据(每模型 100 条记录,latency_samples 满窗口)
+    let memory = InMemoryHistoryStore::new();
+    let tmp = tempfile::tempdir().expect("tempdir 创建失败");
+    let db_path = tmp.path().join("bench_get.db");
+    let sqlite = SqliteHistoryStore::new(&db_path).expect("SqliteHistoryStore 打开失败");
+    for i in 0..100u32 {
+        let latency = i as f32 * 1.0;
+        let success = i % 2 == 0;
+        memory.record("bench-model", latency, success);
+        sqlite.record("bench-model", latency, success);
+    }
+
+    group.bench_function("memory", |b| {
+        b.iter(|| black_box(memory.get("bench-model")));
+    });
+    group.bench_function("sqlite", |b| {
+        b.iter(|| black_box(sqlite.get("bench-model")));
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    route_latency_bench,
+    history_store_record_bench,
+    history_store_get_bench
+);
 criterion_main!(benches);

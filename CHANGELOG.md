@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.4.0-omega 汇总(2026-07-10)
+
+v1.4.0-omega 阶段完成 P0(监控缺口补齐)+ P1(M2 历史数据持久化)两项前置必做任务,
+P2/P3/P4(条件触发)评估完成但触发条件未满足,继续延后。
+
+**P0 — 监控缺口补齐**(1 项,已完成):
+- repo-wiki 接入 `prometheus-client` 监控指标,暴露 `wiki_entries_total` gauge
+- insert/delete 后自动刷新,entries >= 800 时 WARN 预警(M1 触发阈值 1000 的 80%)
+- 4 TDD 测试 + WHY 注释(Gauge vs Counter / i64 vs f64 / Arc 共享)
+
+**P1 — M2 历史数据持久化**(1 项,已完成):
+- model-router 新增 `SqliteHistoryStore`,解除 M2 RL 路由触发条件阻塞
+- HistoryStore trait 迁移至 `history` 模块(mod/memory/sqlite)
+- SQLite + MessagePack(rmp-serde)序列化 VecDeque<f32>
+- UPSERT(SELECT-merge-INSERT OR REPLACE)原子合并,Mutex 保证无 TOCTOU
+- 默认 Memory 向后兼容,SQLite 为 opt-in
+- 9 TDD 测试 + bench(memory 70.9ns vs sqlite 98.0µs)
+
+**P2/P3/P4 — 条件触发**(3 项,评估完成,触发条件未满足):
+- P2 M1 向量索引升级:entries < 100, KNN p95 < 1ms(10x 余量),继续延后
+- P3 M2 RL 路由策略:持久化已就绪,历史数据需生产环境积累
+- P4 M3 配置热重载:无 daemon 模式,无用户请求,继续延后
+
+**验证基线**:全量测试通过(0 failed),clippy 零警告,fmt 零 diff
+
+详见 [v1.4.0 P2 综合报告](docs/optimization/v1.4.0/full_p2_implementation_report.md)。
+
+## v1.4.0-omega P1
+
+- **model-router**: 新增 `SqliteHistoryStore` 持久化实现,解除 M2 RL 路由触发条件阻塞(历史数据 > 10000 条)
+- HistoryStore trait 迁移至 `history` 模块(mod/memory/sqlite 三文件)
+- SQLite + MessagePack(rmp-serde)序列化 VecDeque<f32> 滑动窗口
+- UPSERT(SELECT-merge-INSERT OR REPLACE)原子合并计数,Mutex 保证串行无 TOCTOU
+- 默认 memory 向后兼容,SQLite 为 opt-in(`history_persistence = HistoryPersistence::Sqlite`)
+- 新增 9 个 TDD 测试 + memory vs sqlite 延迟对比 bench
+- WHY 同步 trait:HistoryStore 是 v1.3.0 已发布 API,async 化会破坏对象安全性与 gate() 签名;SQLite 单行操作微秒级,调用方用 spawn_blocking 包装
+- WHY MessagePack:ADR-004 一致选型,VecDeque<f32> → BLOB,比 JSON 紧凑 ~2.4x
+- bench 数据:sqlite record 98µs / memory 71ns(~1380x),sqlite get 5.8µs / memory 127ns(~46x),均在微秒级可接受
+
+详见 [P1 SqliteHistoryStore 报告](docs/optimization/v1.4.0/p1_sqlite_history_report.md)。
+
+## v1.4.0-omega P0
+
+- **repo-wiki**: 接入 `prometheus-client` 监控指标,暴露 `wiki_entries_total` gauge
+- 为 M1 向量索引升级触发条件(Wiki entries > 1000)提供数据支撑
+- 新增 `WikiMetrics` 结构体 + `WikiStore::metrics()` 访问器
+- insert/delete 后自动刷新指标,entries >= 800 时 WARN 预警
+- 新增 4 个 TDD 测试(metrics_test.rs)
+- WHY Gauge 而非 Counter:entries 可因 delete 减少,需可增可减
+- WHY i64 而非 f64:条目数是整数计数,默认泛型参数更简洁(prometheus-client 0.22 默认 i64)
+- WHY Arc<WikiMetrics> 共享:WikiStore::clone 共享写线程,指标也需共享一致视图
+
+详见 [P0 指标接入报告](docs/optimization/v1.4.0/p0_metrics_report.md)。
+
 ## v1.3.0-omega 汇总(2026-07-09)
 
 v1.3.0-omega 阶段完成 P0(GA 前收尾)+ P1(短期增强)共 6 项任务,P2(3 项条件触发)待评估。

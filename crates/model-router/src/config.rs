@@ -1,11 +1,46 @@
-//! 路由器配置 — 模型列表、默认策略与 CACR 配置
+//! 路由器配置 — 模型列表、默认策略、CACR 配置与历史持久化配置
 //!
 //! 对应架构:L1 Core,可从 YAML/TOML/JSON 配置文件加载
+
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::cacr::CacrConfig;
 use crate::types::{ModelInfo, RoutingStrategy};
+
+/// 历史存储持久化模式 — v1.4.0 P1 新增
+///
+/// 控制路由历史统计(success_count / total_count / latency_samples)的存储位置。
+/// 默认 `Memory`(v1.3.0 行为不变),`Sqlite` 为 opt-in 启用跨重启持久化。
+///
+/// # serde 约定(externally tagged enum)
+/// JSON 序列化形式:
+/// - `"Memory"`(单变体,无字段)
+/// - `{"Sqlite": {"db_path": "history.db"}}`(带 db_path 字段)
+///
+/// WHY externally tagged 而非 adjacently tagged:serde 默认 enum 标记方式,
+/// 配置文件可读性最好(无需自定义 tag),且与现有 enum(如 `RoutingStrategy`)
+/// 风格一致。旧配置无此字段时 `#[serde(default)]` 回退到 `Memory`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum HistoryPersistence {
+    /// 内存模式(DashMap)— v1.3.0 默认,进程退出后历史丢失
+    Memory,
+    /// SQLite 持久化模式 — v1.4.0 P1 新增,跨重启保留历史
+    ///
+    /// `db_path` 指向 SQLite 数据库文件路径(自动创建,无需预初始化)
+    Sqlite {
+        /// SQLite 数据库文件路径(相对路径相对工作目录,建议用绝对路径)
+        db_path: PathBuf,
+    },
+}
+
+impl Default for HistoryPersistence {
+    /// 默认 Memory — 向后兼容 v1.3.0 行为(进程内内存,不持久化)
+    fn default() -> Self {
+        Self::Memory
+    }
+}
 
 /// 路由器配置 — 持有模型列表、默认路由策略、CACR 成本保护与 MoE 门控配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +67,16 @@ pub struct RouterConfig {
     /// 详见 `moe.rs` 模块文档。
     #[serde(default = "default_moe_top_k")]
     pub moe_top_k: usize,
+    /// 历史存储持久化模式 — v1.4.0 P1 新增
+    ///
+    /// 控制 `HistoryStore` 使用内存(DashMap)还是 SQLite 持久化。
+    /// 默认 `Memory`(v1.3.0 行为不变,向后兼容);显式配置 `Sqlite` 启用
+    /// 跨重启历史累积,为 M2 RL 路由(需 > 10000 条历史)提供持久化基础。
+    ///
+    /// WHY `#[serde(default)]`:旧配置文件(v1.3.0)无此字段时回退到 `Memory`,
+    /// 保证向后兼容(与 cacr/moe 字段一致的渐进式 serde default 设计)。
+    #[serde(default)]
+    pub history_persistence: HistoryPersistence,
 }
 
 /// `moe_threshold` 的 serde 默认值函数(与 `MoeGate::default` 保持一致)
@@ -86,6 +131,7 @@ impl Default for RouterConfig {
             cacr: CacrConfig::default(),
             moe_threshold: 50,
             moe_top_k: 5,
+            history_persistence: HistoryPersistence::default(),
         }
     }
 }

@@ -43,6 +43,7 @@ use uuid::Uuid;
 use crate::error::WikiError;
 use crate::fts::{self, FtsCapability};
 use crate::iscm::{IscmAnchor, Layer};
+use crate::metrics::WikiMetrics;
 use crate::types::{WikiConfig, WikiEntry};
 
 /// 写入线程接收的操作。
@@ -95,6 +96,11 @@ pub struct WikiStore {
     /// 探测虚拟表开销。若运行中 FTS5 表被外部删除,`search_fulltext` 的
     /// FTS5 路径会失败并降级 LIKE(运行时容错)。
     fts_capability: FtsCapability,
+    /// Prometheus 监控指标(通过 Arc 在所有 clone 间共享)
+    ///
+    /// WHY Arc 共享:WikiStore::clone 共享同一写线程与读连接池,
+    /// 指标也必须共享同一实例,否则不同 clone 的 gauge 值会不一致。
+    metrics: Arc<WikiMetrics>,
 }
 
 impl Clone for WikiStore {
@@ -106,6 +112,7 @@ impl Clone for WikiStore {
             next_reader: AtomicUsize::new(self.next_reader.load(Ordering::Relaxed)),
             config: self.config.clone(),
             fts_capability: self.fts_capability,
+            metrics: Arc::clone(&self.metrics),
         }
     }
 }
@@ -202,6 +209,12 @@ impl WikiStore {
             read_conns.push(Mutex::new(conn));
         }
 
+        // 初始化 Prometheus 指标:Gauge 默认值为 0(AtomicI64::default()),
+        // 无需显式 set(0)。对于已有数据的数据库,调用方应在 open 后手动调用
+        // refresh_metrics() 刷新到真实计数(open_with_config 是同步函数,无法调用
+        // async 的 count())。
+        let metrics = Arc::new(WikiMetrics::new());
+
         Ok(Self {
             write_tx: tx,
             writer_handle: Arc::new(Mutex::new(Some(handle))),
@@ -209,6 +222,7 @@ impl WikiStore {
             next_reader: AtomicUsize::new(0),
             config,
             fts_capability,
+            metrics,
         })
     }
 
@@ -242,12 +256,26 @@ impl WikiStore {
     ///
     /// 若 `entry_id` 已存在,则更新所有字段(含 `created_at` 重置);
     /// 否则插入新记录。
+    ///
+    /// WHY insert 后调用 refresh_metrics:保证 `wiki_entries_total` gauge
+    /// 与实际数据库条目数一致。refresh 失败不阻断主操作(insert 已成功),
+    /// 仅记录 warning — 指标滞后是可接受的(下次 insert/delete 会再次刷新)。
     pub async fn insert(&self, entry: WikiEntry) -> Result<(), WikiError> {
         let (tx, rx) = oneshot::channel();
         self.write_tx
             .send(WriteOp::Insert(entry, tx))
             .map_err(|_| WikiError::WriteChannelClosed)?;
-        rx.await.map_err(|_| WikiError::WriteChannelClosed)?
+        // WHY 双 ??:rx.await 返回 Result<Result<(), WikiError>, RecvError>。
+        // 第一个 ? 展开 RecvError,第二个 ? 展开写入线程返回的 WikiError。
+        // 原实现仅单 ?(作为函数最后表达式直接返回内层 Result),现在需在
+        // 后续调用 refresh_metrics,必须完全展开为 ()。
+        rx.await.map_err(|_| WikiError::WriteChannelClosed)??;
+
+        // 刷新 Prometheus 指标(失败不阻断已成功的 insert)
+        if let Err(e) = self.refresh_metrics().await {
+            tracing::warn!(error = %e, "refresh_metrics after insert failed");
+        }
+        Ok(())
     }
 
     /// 异步按 entry_id 精确查找
@@ -273,12 +301,22 @@ impl WikiStore {
     /// 若条目不存在,返回 `Ok(())`(幂等)。
     /// 注意:此方法仅删除 SQLite 中的记录,不删除 VectorIndex 中的向量;
     /// 调用方需同步调用 `VectorIndex::delete` 保持一致性。
+    ///
+    /// WHY delete 后调用 refresh_metrics:与 insert 对称,保证 gauge 反映
+    /// delete 后的实际条目数(条目数减少是 Gauge 而非 Counter 的关键场景)。
     pub async fn delete(&self, entry_id: String) -> Result<(), WikiError> {
         let (tx, rx) = oneshot::channel();
         self.write_tx
             .send(WriteOp::Delete(entry_id, tx))
             .map_err(|_| WikiError::WriteChannelClosed)?;
-        rx.await.map_err(|_| WikiError::WriteChannelClosed)?
+        // WHY 双 ??:同 insert,展开 oneshot 的 RecvError + 写入线程的 WikiError。
+        rx.await.map_err(|_| WikiError::WriteChannelClosed)??;
+
+        // 刷新 Prometheus 指标(失败不阻断已成功的 delete)
+        if let Err(e) = self.refresh_metrics().await {
+            tracing::warn!(error = %e, "refresh_metrics after delete failed");
+        }
+        Ok(())
     }
 
     /// 异步按 tag 过滤(精确匹配 tags JSON 数组中的某个元素)
@@ -412,6 +450,32 @@ impl WikiStore {
             Ok(u32::try_from(count).unwrap_or(0))
         })
         .await
+    }
+
+    /// 返回 Prometheus 监控指标引用
+    ///
+    /// 调用方可通过 `store.metrics().entries_total.get()` 读取当前条目数,
+    /// 或将 `WikiMetrics` 注册到 Prometheus Registry 供 /metrics 端点采集。
+    ///
+    /// WHY 返回 &WikiMetrics 而非 Arc<WikiMetrics>:避免调用方意外长期持有
+    /// Arc 副本导致指标实例生命周期与 store 解耦。引用绑定到 store 生命周期,
+    /// 保证指标在 store 存活期间可用。
+    pub fn metrics(&self) -> &WikiMetrics {
+        &self.metrics
+    }
+
+    /// 刷新 Prometheus 指标 — 调用 `count()` 后更新 `wiki_entries_total` gauge
+    ///
+    /// WHY 在 insert/delete 后自动调用:保证 gauge 与实际数据库条目数一致。
+    /// `count()` 是 O(1) 的 `SELECT COUNT(*)`(SQLite 维护行计数,无需全表扫描),
+    /// 在 `spawn_blocking` 中执行不阻塞 async runtime,性能开销可接受。
+    ///
+    /// 对于 `open_with_config` 打开已有数据库的场景,调用方应手动调用此方法
+    /// 初始化指标(因 open_with_config 是同步函数,无法调用 async 的 count)。
+    pub async fn refresh_metrics(&self) -> Result<(), WikiError> {
+        let count = self.count().await?;
+        self.metrics.set_entries(count);
+        Ok(())
     }
 
     // ============================================================

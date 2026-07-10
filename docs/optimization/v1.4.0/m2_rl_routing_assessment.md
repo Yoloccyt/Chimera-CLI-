@@ -92,10 +92,57 @@
   - `#![forbid(unsafe_code)]` 约束:Bandit 算法纯 Rust 实现可行,无需 unsafe
   - 与 v1.3.0 五维评分向后兼容:RL 权重作为"调整项"叠加在静态权重上,而非完全替代
 
-## 5. 关联文档
+## 5. v1.4.0-omega 评估更新(2026-07-10)
+
+### 5.1 P1 持久化阻塞解除
+
+v1.4.0-omega P1 已完成 `SqliteHistoryStore` 持久化实现,触发条件 1 的物理阻塞已解除:
+
+| 阻塞项 | v1.3.0 状态 | v1.4.0 状态 |
+|--------|------------|------------|
+| 历史数据持久化 | ❌ InMemoryHistoryStore(进程重启丢失) | ✅ SqliteHistoryStore(WAL 模式 + MessagePack) |
+| 跨重启数据保留 | ❌ 不可能 | ✅ `test_sqlite_history_persistence_across_restart` 验证 |
+| 配置开关 | ❌ 仅 Memory | ✅ HistoryPersistence enum(Memory / Sqlite),默认 Memory 向后兼容 |
+| 路由热路径开销 | N/A | ✅ record 98µs / get 39µs(同步 trait,spawn_blocking 包装不阻塞 runtime) |
+
+**解除的阻塞**:§2.2 "持久化评估"中"触发条件 1 物理上不可达"的结论已失效。
+现在历史数据可跨重启累积,理论上可达 10000 条触发阈值。
+
+### 5.2 触发条件重新评估
+
+| 触发条件 | 阈值 | v1.4.0 状态 | 是否触发 |
+|---------|------|------------|---------|
+| 历史路由数据规模 | > 10000 条 | 持久化已就绪;但生产环境需长时间运行积累(RC 阶段未达) | ❌ 否 |
+| 静态权重次优路由率 | > 5% | 仍无生产数据;Top-K=5 召回保护理论值 < 5% | ❌ 否 |
+
+**结论**:触发条件**仍未满足** → 继续延后实施。但持久化基础设施已就绪,
+历史数据现已可跨重启累积,待生产环境运行足够时间后可达触发阈值。
+
+### 5.3 数据积累路径
+
+- **SqliteHistoryStore 配置**:`RouterConfig.history_persistence = HistoryPersistence::Sqlite { db_path }`
+- **默认行为**:Memory(向后兼容 v1.3.0);用户需显式 opt-in SQLite 持久化
+- **数据查询**:`SELECT COUNT(*) FROM history`(P3 触发评估时使用)
+- **下次评估时机**:历史数据积累 ≥ 10000 条时,或 v1.5.0+ 例行评估
+
+### 5.4 下次评估计划
+
+- **评估时间**:历史数据达 10000 条后,或 v1.5.0+ 例行评估
+- **评估数据源**:`SELECT COUNT(*) FROM history` + 静态权重次优率 bench(待新增)
+- **触发后路径**:新建 `.trae/specs/v1-4-0-omega-rl-routing/` 实施 spec(Bandit 算法)
+
+---
+
+## 6. 关联文档
 
 - v1.2.0 Task 3 MoE 报告:`docs/optimization/v1.2.0/task3_moe_verification_report.md`
 - v1.3.0 S2 MoE 五维报告:`docs/optimization/v1.3.0/s2_moe_history_report.md`
 - v1.3.0 综合报告:`docs/optimization/v1.3.0/full_post_optimization_report.md`
-- 代码权威源:`crates/model-router/src/moe.rs`(HistoryStore trait L190-198 / InMemoryHistoryStore L216-242 / gate_score L337-362)
-- spec 路径:`.trae/specs/v1-3-0-omega-post-optimization-roadmap/tasks.md`(Task M2 行 132-136)
+- 代码权威源:
+  - `crates/model-router/src/history/mod.rs`(HistoryStore trait)
+  - `crates/model-router/src/history/memory.rs`(InMemoryHistoryStore)
+  - `crates/model-router/src/history/sqlite.rs`(SqliteHistoryStore,v1.4.0 新增)
+  - `crates/model-router/src/moe.rs`(gate_score)
+- **v1.4.0 P1 SqliteHistoryStore 报告**:`docs/optimization/v1.4.0/p1_sqlite_history_report.md`
+- **v1.4.0 综合报告**:`docs/optimization/v1.4.0/full_p2_implementation_report.md`
+- spec 路径:`.trae/specs/v1-4-0-omega-p2-implementation/`

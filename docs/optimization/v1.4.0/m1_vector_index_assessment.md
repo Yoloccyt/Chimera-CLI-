@@ -113,7 +113,41 @@
 - 预估工时:40h+(trait 抽象 + 集成 + bench + 迁移工具)
 - 风险评估:外部依赖引入破坏「零外部进程」部署模型;需 ADR 记录权衡
 
-## 5. 关联文档
+## 5. v1.4.0-omega 评估更新(2026-07-10)
+
+### 5.1 P0 监控指标就绪
+
+v1.4.0-omega P0 已完成 repo-wiki 监控指标接入,触发条件监控的数据源已就绪:
+
+| 监控能力 | v1.3.0 状态 | v1.4.0 状态 |
+|---------|------------|------------|
+| `wiki_entries_total` gauge | ❌ 缺失 | ✅ 已暴露(`crates/repo-wiki/src/metrics.rs`) |
+| insert/delete 后自动刷新 | ❌ 无 | ✅ `refresh_metrics()` 调用 |
+| entries >= 800 预警 | ❌ 无 | ✅ `tracing::warn!` 触发 |
+| Prometheus 采集 | ❌ 无 | ✅ prometheus-client 0.22 集成 |
+
+**解除的阻塞**:§4.2 "当前监控缺口"已解除。运维现在可通过 Prometheus 实时观测
+entries 增长趋势,并在接近 800 时收到 WARN 日志预警。
+
+### 5.2 触发条件重新评估
+
+| 触发条件 | 阈值 | v1.4.0 状态 | 是否触发 |
+|---------|------|------------|---------|
+| Wiki entries 规模 | > 1000 | 监控已就绪;部署规模仍 < 100(RC 阶段) | ❌ 否 |
+| KNN p95 延迟 | > 10ms | 未跑 bench;代码复杂度评估 < 1ms(10x 余量) | ❌ 否 |
+
+**结论**:触发条件**仍未满足** → 继续延后实施。但监控基础设施已就绪,
+下次评估可直接基于 Prometheus 历史数据判断,而非推测。
+
+### 5.3 下次评估计划
+
+- **评估时间**:2026-10(每季度例行评估)或 entries 接近 800 触发 WARN 时提前评估
+- **评估数据源**:Prometheus `wiki_entries_total` 历史曲线 + `vector_bench.rs` 实测
+- **触发后路径**:新建 `.trae/specs/v1-4-0-omega-vector-index-upgrade/` 实施 spec
+
+---
+
+## 6. 关联文档
 
 - ADR-005 持久化存储选型降级说明:`CODE_WIKI.md §2.3`(sqlite-vec unsafe 降级原因)
 - vector.rs 内存 KNN 实现:`crates/repo-wiki/src/vector.rs`
@@ -121,4 +155,6 @@
 - v1.2.0 Task 2 FTS5 报告:`docs/optimization/v1.2.0/task2_fts5_verification_report.md`
 - v1.3.0 S3 trigram 报告:`docs/optimization/v1.3.0/s3_trigram_report.md`
 - v1.3.0 综合报告:`docs/optimization/v1.3.0/full_post_optimization_report.md`
-- spec 路径:`.trae/specs/v1-3-0-omega-post-optimization-roadmap/`
+- **v1.4.0 P0 监控指标报告**:`docs/optimization/v1.4.0/p0_metrics_report.md`
+- **v1.4.0 综合报告**:`docs/optimization/v1.4.0/full_p2_implementation_report.md`
+- spec 路径:`.trae/specs/v1-4-0-omega-p2-implementation/`

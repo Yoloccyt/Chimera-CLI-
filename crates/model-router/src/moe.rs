@@ -48,7 +48,13 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 
-use dashmap::DashMap;
+// v1.4.0 P1:HistoryStore trait + InMemoryHistoryStore + 常量已迁移至 `history` 模块
+// WHY `pub use` 而非 `use`:strategies.rs 等同 crate 模块通过 `crate::moe::HistoryStore`
+// 路径引用 trait,需要 `pub use` 重导出保持路径可见性(向后兼容)。外部用户应优先
+// 从 `model_router::history` 或 `model_router::` 顶层导入(lib.rs 已重导出)。
+pub use crate::history::{
+    HistoryStore, InMemoryHistoryStore, HISTORY_SUFFICIENT_THRESHOLD, LATENCY_WINDOW_CAPACITY,
+};
 
 use crate::types::ModelInfo;
 
@@ -65,19 +71,8 @@ pub const DEFAULT_MOE_THRESHOLD: usize = 50;
 /// Downgrade 的"次优候选"语义衔接,同时将完整评估开销固定为常数。
 pub const DEFAULT_MOE_TOP_K: usize = 5;
 
-/// 历史数据充分性阈值 — 样本数达到此值时启用五维评分
-///
-/// WHY 100:统计显著性最小样本数。success_rate 在 < 100 样本时 95% CI
-/// 过宽(如 50 样本 → ±0.14),variance 估计同样不稳定。100 样本下
-/// 95% CI 收窄至 ±0.10,可接受作为门控排名微调输入。低于此值降级三维。
-pub const HISTORY_SUFFICIENT_THRESHOLD: u64 = 100;
-
-/// 延迟样本滑动窗口容量 — 保留最近 N 次延迟用于方差估计
-///
-/// WHY 100:滑动窗口平衡内存(每模型约 400B = 100 × 4B f32)与时效性。
-/// 100 个样本足够计算稳定方差(无偏估计需 ≥ 2,但稳定性随 n 增长),
-/// 同时丢弃过旧样本使方差反映"近期"抖动而非全历史均值。
-pub const LATENCY_WINDOW_CAPACITY: usize = 100;
+// `HISTORY_SUFFICIENT_THRESHOLD` / `LATENCY_WINDOW_CAPACITY` 已迁移至
+// `crate::history` 模块(权威源),本文件通过 `use` 引用(见文件顶部)。
 
 /// 单个模型的历史路由记录(运行时统计)
 ///
@@ -176,70 +171,12 @@ impl Default for HistoryRecord {
     }
 }
 
-/// 模型历史路由存储 trait(抽象,允许内存/持久化实现)
-///
-/// WHY trait 抽象:为 v1.4.0 RL 路由(M2)预留扩展点 — 未来可替换为
-/// SQLite 持久化实现或 Redis 共享实现,而无需修改 `MoeGate::gate()`。
-/// 当前仅暴露 get/record 两方法,不过度设计(遵循 §9 长期主义)。
-///
-/// # 对象安全(Object Safety)
-/// trait 可作为 `&dyn HistoryStore` 使用:
-/// - 所有方法取 `&self`(无 `&mut self`、无 `Self` 返回)
-/// - 无泛型参数
-/// - 返回 owned HistoryRecord(避免 DashMap Ref guard 生命周期约束)
-pub trait HistoryStore: Send + Sync {
-    /// 查询指定模型的历史记录(返回 owned clone)
-    ///
-    /// 返回 None 表示该模型无历史(降级三维处理)。
-    fn get(&self, model_id: &str) -> Option<HistoryRecord>;
-
-    /// 记录一次路由结果(latency_ms + success)
-    fn record(&self, model_id: &str, latency_ms: f32, success: bool);
-}
-
-/// 内存实现(DashMap 并发安全)— 默认 HistoryStore 实现
-///
-/// WHY DashMap:并发读写无锁(sharded locking),适合路由热路径多线程
-/// 记录场景。DashMap 内部 unsafe 不传播到当前 crate(§4.1 forbid 语义)。
-///
-/// # 使用示例
-/// ```
-/// use model_router::{InMemoryHistoryStore, HistoryStore};
-///
-/// let store = InMemoryHistoryStore::new();
-/// store.record("gpt-4", 200.0, true);
-/// let record = store.get("gpt-4").unwrap();
-/// assert_eq!(record.total_count, 1);
-/// assert_eq!(record.success_count, 1);
-/// ```
-#[derive(Debug, Default)]
-pub struct InMemoryHistoryStore {
-    records: DashMap<String, HistoryRecord>,
-}
-
-impl InMemoryHistoryStore {
-    /// 创建空的历史存储
-    pub fn new() -> Self {
-        Self {
-            records: DashMap::new(),
-        }
-    }
-}
-
-impl HistoryStore for InMemoryHistoryStore {
-    fn get(&self, model_id: &str) -> Option<HistoryRecord> {
-        // 返回 owned clone:避免返回 DashMap Ref guard(生命周期约束复杂,
-        // 且 guard 持锁可能影响并发写入)。克隆成本 ~400B,路由热路径可忽略。
-        self.records.get(model_id).map(|r| r.clone())
-    }
-
-    fn record(&self, model_id: &str, latency_ms: f32, success: bool) {
-        // WHY entry().or_default() 而非 get_mut:原子地"不存在则创建+写入",
-        // 避免 get → 判空 → insert 的 TOCTOU 竞态(两线程同时创建同一 model_id)。
-        let mut r = self.records.entry(model_id.to_string()).or_default();
-        r.record(latency_ms, success);
-    }
-}
+// `HistoryStore` trait 与 `InMemoryHistoryStore` 已迁移至 `crate::history` 模块:
+// - `crate::history::HistoryStore`(trait 定义,权威源)
+// - `crate::history::InMemoryHistoryStore`(DashMap 实现,v1.3.0 行为不变)
+// - `crate::history::SqliteHistoryStore`(v1.4.0 P1 新增,SQLite 持久化)
+// 本文件通过文件顶部的 `use crate::history::{HistoryStore, InMemoryHistoryStore, ...}`
+// 引用保持内部兼容(MoeGate::gate 签名不变)。
 
 /// MoE 稀疏门控 — 控制 `route_auto` 的大规模稀疏化行为
 ///

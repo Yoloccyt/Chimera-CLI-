@@ -14,6 +14,14 @@ tracing = { workspace = true }
 # v1.3.0 S2:InMemoryHistoryStore 并发安全历史存储(model_id → HistoryRecord)
 # WHY DashMap:L1 Core 工具依赖,符合 §2.2 依赖铁律;并发读写无锁,适合路由热路径
 dashmap = { workspace = true }
+# v1.4.0 P1:SqliteHistoryStore 持久化实现
+# WHY rusqlite:SQLite 原生 Rust 绑定,bundled feature 内嵌 SQLite 不依赖系统库;
+# 与 repo-wiki/scc-cache 一致,L1 Core 工具依赖,符合 §2.2 依赖铁律
+rusqlite = { workspace = true }
+# v1.4.0 P1:VecDeque<f32> → BLOB 序列化(MessagePack)
+# WHY rmp-serde:ADR-004 已采用 MessagePack 作为消息序列化协议,此处复用一致选型;
+# VecDeque<f32> 滑动窗口序列化为 BLOB 存储,反序列化时恢复 VecDeque 类型
+rmp-serde = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
