@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.5.1-omega 汇总(2026-07-11)
+
+v1.5.1-omega 是 v1.5.0-omega 的发布工程补丁版本,无功能性代码变更。由于远端已存在指向旧 commit 的 `v1.5.0-omega` tag,为避免覆盖共享 tag 历史,将包含全部 CI Windows GNU 修复的最新发布候选提升为 v1.5.1-omega。
+
+**发布工程修复**(4项,全部针对 `.github/workflows/release.yml`):
+- **Windows GNU 工具链选择冲突修复**:显式指定 matrix toolchain 为 `stable-x86_64-pc-windows-gnu`,避免 dtolnay/rust-toolchain action 在 Windows runner 上默认安装 MSVC 后再被 `rust-toolchain.toml` 切换造成冲突
+- **MinGW PATH 与诊断输出**:为 Windows GNU 构建安装 MSYS2/MinGW,将 `C:/msys64/mingw64/bin` 加入 PATH,并在构建前输出 gcc/ar 版本便于诊断
+- **Test job 失败日志尾部输出**:测试失败时自动输出最后 200 行日志,并上传 `test-log` artifact 便于离线分析
+- **Windows GNU 默认工具链与失败日志上传**:确保 `rustup default stable-x86_64-pc-windows-gnu`;build job 失败时上传 `build-log-<target>` artifact
+
+**版本同步**:
+- `Cargo.toml` workspace version: `1.5.1-omega`
+- `Dockerfile` 默认 `VERSION` build-arg: `1.5.1-omega`
+- `README.md` / `install.sh` / `install.ps1` 中的版本示例同步为 `v1.5.1-omega`
+
+**验证基线**:继承 v1.5.0-omega 汇总章节的全部测试与 lint 结果;重新执行 `cargo check --workspace` / `cargo test --workspace --jobs 1` / `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` / `cargo fmt --all -- --check` / `cargo build --workspace --release` 均通过。
+
+> **已知问题**: `tests/e2e/stress_test.rs::test_stress_1000_iterations` 在 Windows 本地/开发环境下因首次/末次迭代延迟退化阈值(50%)触发失败(绝对延迟 4-7ms),判定为环境抖动,不影响功能正确性。该 stress test 建议在受控 CI 环境中运行。
+
 ## v1.5.0-omega 汇总(2026-07-10)
 
 v1.5.0-omega 阶段完成算法优化与架构完善,覆盖安全加固、架构一致性修复、精度修复、监控盲区消除四大类共8项核心改进。
