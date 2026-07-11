@@ -395,11 +395,44 @@ jobs:
           echo "OK: Image functionality verified (--version output valid)"
 
   # ============================================================
+  # Job 2.6: 构建 Debian .deb 包
+  # ============================================================
+  deb:
+    name: Build Debian package
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux x86_64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: chimera-linux-x86_64
+          path: ./artifacts
+
+      - name: Build .deb package
+        run: |
+          chmod +x ./artifacts/chimera-linux-x86_64
+          mkdir -p debian-pkg/usr/bin debian-pkg/DEBIAN
+          mv ./artifacts/chimera-linux-x86_64 debian-pkg/usr/bin/chimera
+          sed "s/^Version: .*/Version: ${GITHUB_REF_NAME#v}/" packaging/apt/chimera-cli.control > debian-pkg/DEBIAN/control
+          dpkg-deb --build debian-pkg "chimera-cli_${GITHUB_REF_NAME#v}_amd64.deb"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chimera-cli-deb
+          path: chimera-cli_*_amd64.deb
+
+  # ============================================================
   # Job 3: 汇总所有平台产物,创建 GitHub Release
   # ============================================================
   release:
     name: Publish GitHub Release
-    needs: [build, test, docker]
+    needs: [build, test, docker, deb]
     runs-on: ubuntu-latest
     timeout-minutes: 30  # WHY: 产物下载+Release 创建典型 1-3min,30min 兜底防 GitHub API 抖动
     if: startsWith(github.ref, 'refs/tags/v')
@@ -416,7 +449,7 @@ jobs:
         # WHY: install.sh line 216-260 和 install.ps1 line 199-242 会从 Release 下载
         # checksums.txt 做 SHA256 校验,缺失则校验空转(warn 跳过)。此 step 生成
         # 与两端解析逻辑对齐的格式(<64-hex>  <filename> 双空格),并校验 5 平台
-        # 产物全部纳入(防止 matrix 部分失败导致 checksums 不完整)。
+        # binary + 1 个 .deb 共 6 项产物全部纳入(防止 matrix 部分失败导致 checksums 不完整)。
         run: |
           cd artifacts
           find . -type f | sort | while IFS= read -r f; do
@@ -424,7 +457,7 @@ jobs:
             hash=$(sha256sum "$f" | awk '{print $1}')
             printf '%s  %s\n' "$hash" "$bn"
           done > ../checksums.txt
-          EXPECTED_COUNT=5
+          EXPECTED_COUNT=6
           ACTUAL_COUNT=$(wc -l < ../checksums.txt | tr -d ' ')
           if [ "$ACTUAL_COUNT" -ne "$EXPECTED_COUNT" ]; then
             echo "::error::Expected $EXPECTED_COUNT artifacts in checksums.txt, got $ACTUAL_COUNT"
@@ -455,6 +488,15 @@ jobs:
             | Linux   | `chimera-linux-aarch64`      | aarch64 (ARM) |
             | macOS   | `chimera-macos-x86_64`       | Intel |
             | macOS   | `chimera-macos-aarch64`      | Apple Silicon |
+
+            ### 包管理器安装
+            | 平台 | 命令 |
+            |------|------|
+            | macOS / Linux (Homebrew) | `brew tap yoloccyt/chimera-cli && brew install chimera-cli` |
+            | Windows (Scoop) | `scoop bucket add chimera-cli https://github.com/Yoloccyt/scoop-chimera-cli.git && scoop install chimera-cli` |
+            | Debian / Ubuntu | `sudo apt install ./chimera-cli_${GITHUB_REF_NAME#v}_amd64.deb` |
+
+            完整终端安装指南参见 [docs/release/v1.5.1-omega_installation_guide.md](docs/release/v1.5.1-omega_installation_guide.md)。
 
             ### 验证
             ```bash

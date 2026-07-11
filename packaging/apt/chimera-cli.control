@@ -1,0 +1,9 @@
+Package: chimera-cli
+Version: 1.5.1-omega
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Aether CLI Team <team@aether.dev>
+Description: Chimera CLI (NEXUS-OMEGA) terminal interface
+ A context-aware command-line interface for the NEXUS-OMEGA system.
+Homepage: https://github.com/Yoloccyt/Chimera-CLI-

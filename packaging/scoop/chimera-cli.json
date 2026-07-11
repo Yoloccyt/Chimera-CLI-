@@ -1,0 +1,27 @@
+{
+  "version": "1.5.1-omega",
+  "description": "Chimera CLI (NEXUS-OMEGA) terminal interface",
+  "homepage": "https://github.com/Yoloccyt/Chimera-CLI-",
+  "license": "Apache-2.0",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v1.5.1-omega/chimera-windows-x86_64.exe",
+      "hash": "PLACEHOLDER_SHA256_WINDOWS_X86_64",
+      "bin": [
+        ["chimera-windows-x86_64.exe", "chimera"]
+      ]
+    }
+  },
+  "checkver": {
+    "url": "https://api.github.com/repos/Yoloccyt/Chimera-CLI-/releases/latest",
+    "jsonpath": "$.tag_name",
+    "regex": "v([\\d.]+(-omega)?)"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v$version/chimera-windows-x86_64.exe"
+      }
+    }
+  }
+}
