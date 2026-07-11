@@ -32,6 +32,8 @@ nexus-core = { path = "../nexus-core" }
 criterion = { workspace = true }
 # JSON 序列化测试(config serde 往返)
 serde_json = { workspace = true }
+# 属性测试(§3.3.2 新 crate 准入 checklist 第 3 条要求)
+proptest = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]

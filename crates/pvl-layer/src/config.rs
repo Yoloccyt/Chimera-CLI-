@@ -45,6 +45,33 @@ pub struct PvlConfig {
     /// WHY(P1-9):produce() 批量生成操作的总时间限制。
     /// 超过此时间,未完成的操作被丢弃,Producer 策略降级为 Conservative。
     pub produce_timeout_ms: u64,
+
+    /// 分块大小（Producer分块生成时的默认块大小）
+    ///
+    /// 默认128，与mpsc通道容量对齐，减少内存峰值。
+    /// WHY 128: 参考FlashAttention的tile大小，与通道容量一致。
+    pub chunk_size: usize,
+
+    /// 最小分块大小
+    ///
+    /// 默认16，防止分块过小导致调度overhead。
+    pub min_chunk_size: usize,
+
+    /// 最大分块大小
+    ///
+    /// 默认512，限制单块内存占用。
+    pub max_chunk_size: usize,
+
+    /// 启用优先级调度
+    ///
+    /// 默认true，操作数超过阈值时启用注意力权重调度。
+    pub enable_priority_scheduling: bool,
+
+    /// 优先级调度阈值
+    ///
+    /// 操作数超过此值才启用优先级调度，避免小批量overhead。
+    /// 默认32。
+    pub priority_threshold: usize,
 }
 
 impl Default for PvlConfig {
@@ -55,6 +82,11 @@ impl Default for PvlConfig {
             producer_rate_limit: 10,
             verification_timeout_ms: 5000,
             produce_timeout_ms: 30000,
+            chunk_size: 128,
+            min_chunk_size: 16,
+            max_chunk_size: 512,
+            enable_priority_scheduling: true,
+            priority_threshold: 32,
         }
     }
 }
@@ -67,8 +99,18 @@ mod tests {
     fn test_default_config() {
         let config = PvlConfig::default();
         assert_eq!(config.channel_capacity, 128);
-        assert!((config.rejection_rate_threshold - 0.3).abs() < f32::EPSILON);
+        assert_eq!(
+            config.rejection_rate_threshold.total_cmp(&0.3f32),
+            std::cmp::Ordering::Equal
+        );
         assert_eq!(config.producer_rate_limit, 10);
+        assert_eq!(config.verification_timeout_ms, 5000);
+        assert_eq!(config.produce_timeout_ms, 30000);
+        assert_eq!(config.chunk_size, 128);
+        assert_eq!(config.min_chunk_size, 16);
+        assert_eq!(config.max_chunk_size, 512);
+        assert!(config.enable_priority_scheduling);
+        assert_eq!(config.priority_threshold, 32);
     }
 
     #[test]
@@ -77,12 +119,33 @@ mod tests {
             channel_capacity: 256,
             rejection_rate_threshold: 0.2,
             producer_rate_limit: 20,
+            verification_timeout_ms: 5000,
+            produce_timeout_ms: 30000,
+            chunk_size: 256,
+            min_chunk_size: 32,
+            max_chunk_size: 512,
+            enable_priority_scheduling: true,
+            priority_threshold: 64,
         };
-        let json = serde_json::to_string(&config).expect("序列化失败");
-        let restored: PvlConfig = serde_json::from_str(&json).expect("反序列化失败");
+        let json = match serde_json::to_string(&config) {
+            Ok(s) => s,
+            Err(e) => panic!("序列化失败: {}", e),
+        };
+        let restored: PvlConfig = match serde_json::from_str(&json) {
+            Ok(c) => c,
+            Err(e) => panic!("反序列化失败: {}", e),
+        };
         assert_eq!(restored.channel_capacity, 256);
-        assert!((restored.rejection_rate_threshold - 0.2).abs() < f32::EPSILON);
+        assert_eq!(
+            restored.rejection_rate_threshold.total_cmp(&0.2f32),
+            std::cmp::Ordering::Equal
+        );
         assert_eq!(restored.producer_rate_limit, 20);
+        assert_eq!(restored.chunk_size, 256);
+        assert_eq!(restored.min_chunk_size, 32);
+        assert_eq!(restored.max_chunk_size, 512);
+        assert!(restored.enable_priority_scheduling);
+        assert_eq!(restored.priority_threshold, 64);
     }
 
     #[test]
@@ -91,5 +154,13 @@ mod tests {
         let cloned = config.clone();
         assert_eq!(config.channel_capacity, cloned.channel_capacity);
         assert_eq!(config.producer_rate_limit, cloned.producer_rate_limit);
+        assert_eq!(config.chunk_size, cloned.chunk_size);
+        assert_eq!(config.min_chunk_size, cloned.min_chunk_size);
+        assert_eq!(config.max_chunk_size, cloned.max_chunk_size);
+        assert_eq!(
+            config.enable_priority_scheduling,
+            cloned.enable_priority_scheduling
+        );
+        assert_eq!(config.priority_threshold, cloned.priority_threshold);
     }
 }

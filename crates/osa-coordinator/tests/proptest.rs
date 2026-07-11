@@ -32,6 +32,12 @@ fn fail<E: std::fmt::Display>(e: E) -> TestCaseError {
 /// WHY 固定候选集:隔离 complexity_score 的影响,确保 active_count 变化仅由档位驱动
 fn make_profile(complexity: f32) -> TaskProfile {
     TaskProfile {
+        // v1.5.0 新增语义评分字段(proptest 使用默认 None)
+        tool_scores: None,
+        file_scores: None,
+        memory_scores: None,
+        operation_scores: None,
+        task_scores: None,
         task_id: TaskId::new("t-1"),
         task_type: TaskType::Read,
         complexity_score: complexity,

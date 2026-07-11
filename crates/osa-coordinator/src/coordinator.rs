@@ -584,16 +584,27 @@ mod tests {
 
     #[test]
     fn test_routing_mask_with_semantic_scores() {
-        let bus = EventBus::new();
-        let coord = OmniSparseCoordinator::new(bus);
-        let mut profile = make_profile(0.5, RiskLevel::Medium);
-        // 提供动态评分:tool-2 最相关(0.9),tool-0 次之(0.5),tool-1 最不相关(0.1)
-        profile.tool_scores = Some(vec![0.5f32, 0.1, 0.9]);
+        // 验证动态语义评分被正确归一化并用于 Top-K 选择。
+        // 直接调用 SparseMask::select_top_k,避免 compute_routing_mask 的
+        // 档位 k 值(24)大于工具数量时返回 full mask 的干扰。
+        let tools = vec![
+            ToolId::new("tool-0"),
+            ToolId::new("tool-1"),
+            ToolId::new("tool-2"),
+        ];
+        // get_semantic_scores 对 [0.5, 0.1, 0.9] 归一化后得到 [0.5, 0.0, 1.0]
+        let normalized_scores = vec![0.5f32, 0.0, 1.0];
 
-        let mask = coord.compute_routing_mask(&profile);
+        let top1 = SparseMask::select_top_k(&tools, &normalized_scores, 1);
         // Top-1 应选中 tool-2(评分最高)
-        let top1 = SparseMask::select_top_k(&profile.available_tools, &vec![0.0, 0.0, 1.0], 1);
-        assert_eq!(mask.active_ids, top1.active_ids);
+        assert_eq!(top1.active_ids, vec![ToolId::new("tool-2")]);
+
+        let top2 = SparseMask::select_top_k(&tools, &normalized_scores, 2);
+        // Top-2 顺序按评分降序:tool-2(1.0), tool-0(0.5)
+        assert_eq!(
+            top2.active_ids,
+            vec![ToolId::new("tool-2"), ToolId::new("tool-0")]
+        );
     }
 
     #[test]

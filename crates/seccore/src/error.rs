@@ -76,4 +76,11 @@ pub enum SecCoreError {
         /// 阻断原因(人类可读,用于审计追溯)
         block_reason: String,
     },
+
+    /// Spectral Attention 分析错误 — 图构建或频谱计算失败。
+    ///
+    /// 触发场景: 矩阵运算溢出、图结构损坏、配置错误。
+    /// 此错误通常不阻塞命令执行,仅影响审计增强分析。
+    #[error("Spectral Attention 分析错误: {0}")]
+    SpectralAttentionError(String),
 }

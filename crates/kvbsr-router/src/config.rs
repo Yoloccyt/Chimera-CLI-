@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent_attention::AgentAttentionConfig;
 use crate::error::KvbsrError;
 
 /// KVBSR 路由器配置 — 两级语义块路由的参数化控制
@@ -68,6 +69,13 @@ pub struct KvbsrConfig {
     /// - `RandomProjection`:随机投影,快速无需训练
     #[serde(default)]
     pub projection_method: crate::clv_projector::ProjectionMethod,
+
+    /// Agent Token 注意力路由配置(默认关闭)
+    ///
+    /// WHY:引入STAGformer的两阶段Agent注意力机制，替代静态余弦相似度，
+    /// 实现动态语义路由。默认关闭以保持向后兼容。
+    #[serde(default)]
+    pub agent_attention: AgentAttentionConfig,
 }
 
 impl KvbsrConfig {
@@ -115,6 +123,12 @@ impl KvbsrConfig {
         self
     }
 
+    /// 设置 Agent Token 注意力路由配置
+    pub fn with_agent_attention(mut self, config: AgentAttentionConfig) -> Self {
+        self.agent_attention = config;
+        self
+    }
+
     /// 校验配置合法性,返回 KvbsrError 描述具体问题
     ///
     /// 校验规则:
@@ -122,6 +136,8 @@ impl KvbsrConfig {
     /// - `top_blocks > 0`:一级路由必须至少选 1 个块
     /// - `top_tools > 0`:二级路由必须至少选 1 个工具
     /// - `rebalance_interval > 0`:重平衡间隔不能为 0
+    /// - `block_vector_dim % num_heads == 0`:维度必须能被头数整除
+    /// - `num_agent_tokens > 0`:Agent Token数量不能为 0
     pub fn validate(&self) -> Result<(), KvbsrError> {
         if self.block_vector_dim == 0 {
             return Err(KvbsrError::InvalidConfig(
@@ -139,6 +155,20 @@ impl KvbsrConfig {
                 "rebalance_interval 不能为 0".into(),
             ));
         }
+        if !self
+            .block_vector_dim
+            .is_multiple_of(self.agent_attention.num_heads)
+        {
+            return Err(KvbsrError::InvalidConfig(format!(
+                "block_vector_dim {} 必须能被 num_heads {} 整除",
+                self.block_vector_dim, self.agent_attention.num_heads
+            )));
+        }
+        if self.agent_attention.num_agent_tokens == 0 {
+            return Err(KvbsrError::InvalidConfig(
+                "num_agent_tokens 不能为 0".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -152,6 +182,7 @@ impl Default for KvbsrConfig {
             top_tools: 8,
             rebalance_interval: 1000,
             projection_method: crate::clv_projector::ProjectionMethod::Truncate,
+            agent_attention: AgentAttentionConfig::default(),
         }
     }
 }

@@ -20,6 +20,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 # 并发安全模板缓存(O(1) 分片查找)
 dashmap = { workspace = true }
+# 探索-利用随机选择(ε-贪心策略)
+rand = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 SsraFusionCompleted 事件
 event-bus = { path = "../event-bus" }
 # L1 Core:CLV 余弦相似度(可选,用于模板语义匹配扩展)

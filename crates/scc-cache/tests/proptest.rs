@@ -129,15 +129,20 @@ proptest! {
     ) {
         let n_transitions = n_targets + extra_transitions;
         let learner = AccessPatternLearner::new(EventBus::new(), 0.0);
+        let previous = ContextId::new("ctx-previous");
         let current = ContextId::new("ctx-current");
 
         // 记录 n_transitions 次转移,目标分布在 n_targets 个上下文
         for i in 0..n_transitions {
             let target_idx = i % n_targets;
-            learner.record_access(&current, &ContextId::new(format!("ctx-target-{target_idx}")));
+            learner.record_access(
+                &previous,
+                &current,
+                &ContextId::new(format!("ctx-target-{target_idx}")),
+            );
         }
 
-        let predictions = learner.predict_next(&current);
+        let predictions = learner.predict_next(&previous, &current);
 
         // 应有 n_targets 个预测(每个目标至少被访问一次,由 n_transitions >= n_targets 保证)
         prop_assert_eq!(
@@ -175,15 +180,20 @@ proptest! {
         n_targets in 2u32..=6,
     ) {
         let learner = AccessPatternLearner::new(EventBus::new(), 0.0);
+        let previous = ContextId::new("ctx-previous");
         let current = ContextId::new("ctx-current");
 
         // 记录转移,不同目标有不同计数
         for i in 0..n_transitions {
             let target_idx = i % n_targets;
-            learner.record_access(&current, &ContextId::new(format!("ctx-target-{target_idx}")));
+            learner.record_access(
+                &previous,
+                &current,
+                &ContextId::new(format!("ctx-target-{target_idx}")),
+            );
         }
 
-        let predictions = learner.predict_next(&current);
+        let predictions = learner.predict_next(&previous, &current);
 
         // 验证降序排列
         for i in 1..predictions.len() {
@@ -227,9 +237,10 @@ proptest! {
         context_id in any::<String>(),
     ) {
         let learner = AccessPatternLearner::new(EventBus::new(), 0.6);
-        let unknown = ContextId::new(context_id);
+        let unknown_prev = ContextId::new(format!("ctx-unknown-prev-{context_id}"));
+        let unknown_cur = ContextId::new(format!("ctx-unknown-cur-{context_id}"));
 
-        let predictions = learner.predict_next(&unknown);
+        let predictions = learner.predict_next(&unknown_prev, &unknown_cur);
         prop_assert!(
             predictions.is_empty(),
             "未知上下文应返回空预测列表"
@@ -244,15 +255,16 @@ proptest! {
         n_records in 1u32..=20,
     ) {
         let learner = AccessPatternLearner::new(EventBus::new(), 0.0);
+        let previous = ContextId::new("ctx-previous");
         let current = ContextId::new("ctx-current");
         let target = ContextId::new("ctx-target");
 
         // 记录 n_records 次相同转移
         for _ in 0..n_records {
-            learner.record_access(&current, &target);
+            learner.record_access(&previous, &current, &target);
         }
 
-        let pattern = learner.get_pattern(&current);
+        let pattern = learner.get_pattern(&previous, &current);
         prop_assert!(pattern.is_some(), "应有访问模式");
 
         let pattern = pattern.unwrap();
@@ -264,7 +276,7 @@ proptest! {
         );
 
         // 概率应为 1.0(唯一目标)
-        let predictions = learner.predict_next(&current);
+        let predictions = learner.predict_next(&previous, &current);
         prop_assert_eq!(predictions.len(), 1);
         prop_assert!(
             (predictions[0].1 - 1.0).abs() < 1e-5,

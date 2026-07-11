@@ -85,6 +85,14 @@ pub enum GqepError {
         /// 实际耗时(毫秒),触发超时时已运行的时间
         elapsed_ms: u64,
     },
+
+    /// Semaphore 已关闭:并发限流信号量被意外关闭。
+    ///
+    /// GQEP 的 Semaphore 与 Executor 同生命周期,正常不应关闭。此错误用于
+    /// 覆盖 `tokio::sync::Semaphore::acquire_owned` 的返回类型,避免在
+    /// 不可能失败的边界使用 unwrap/expect。
+    #[error("并发限流信号量已关闭")]
+    SemaphoreClosed,
 }
 
 #[cfg(test)]

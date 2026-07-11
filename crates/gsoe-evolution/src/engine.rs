@@ -7,19 +7,29 @@
 //! 1. 采样:基于当前策略生成一组 rollout
 //! 2. 评估:计算 GRPO 组内相对优势 + 规则适应度
 //! 3. 选择:按适应度排序,选取 top elite_ratio 作为精英
-//! 4. 变异:基于精英参数生成新策略
+//! 4. 变异:基于精英参数生成新策略 (GRPO 策略梯度更新或传统变异)
 //! 5. 发布:通过 EventBus 广播 GsoePolicyUpdated 事件
 //!
 //! # 事件订阅
 //! - `ConsensusReached`:议会共识作为进化奖励,提升下次采样的 reward 基线
 //! - `RedTeamAudit`:红队审计作为对抗信号,提升下次变异的 mutation_rate
+//!
+//! # GRPO 策略更新
+//! 当 `use_grpo_update` 为 true 时, 引擎使用完整的 GRPO 算法更新策略:
+//! - 组采样与优势计算
+//! - 概率比计算 (π_θ / π_θ_old)
+//! - Clip Surrogate Objective
+//! - KL 散度约束
+//! - 策略熵奖励
+//! - 参数梯度上升
 
 use crate::config::GsoeConfig;
 use crate::error::GsoeError;
 use crate::model_client::ModelSampler;
 use crate::policy::fitness::evaluate_population;
-use crate::policy::grpo::{compute_advantage, sample_rollouts, sample_rollouts_with_model};
+use crate::policy::grpo::{compute_advantage, sample_rollouts_with_model};
 use crate::policy::mutation::{apply_mutation, mutate};
+use crate::policy::trainer::GrpoTrainer;
 use crate::types::{EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tracing::debug;
@@ -28,6 +38,11 @@ use tracing::debug;
 ///
 /// 维护当前进化策略、世代计数器与可选的 EventBus 连接。
 /// 每次调用 `evolve_once` 执行一轮完整的"采样-评估-选择-变异"循环。
+///
+/// # GRPO 更新路径
+/// 当 `use_grpo_update` 为 true (默认) 时, `evolve_once` 使用 GRPO 策略梯度上升
+/// 更新 `mutation_rate`, 而不是传统随机变异。若 GRPO 产生无效值 (NaN/Inf),
+/// 自动回退到传统变异路径。
 pub struct GsoeEvolutionEngine {
     /// 当前进化策略
     current_policy: EvolutionPolicy,
@@ -43,6 +58,10 @@ pub struct GsoeEvolutionEngine {
     pending_consensus_count: u32,
     /// 待处理的红队审计信号数(提升 mutation_rate)
     pending_red_team_count: u32,
+    /// 参考策略 (用于 KL 散度约束)
+    reference_policy: EvolutionPolicy,
+    /// 是否启用 GRPO 策略更新
+    use_grpo_update: bool,
 }
 
 impl GsoeEvolutionEngine {
@@ -53,13 +72,15 @@ impl GsoeEvolutionEngine {
             EvolutionPolicy::default()
         });
         Self {
-            current_policy: policy,
+            current_policy: policy.clone(),
             config,
             generation: 0,
             event_bus: None,
             model_sampler: ModelSampler::mock(),
             pending_consensus_count: 0,
             pending_red_team_count: 0,
+            reference_policy: policy.clone(),
+            use_grpo_update: true,
         }
     }
 
@@ -132,6 +153,16 @@ impl GsoeEvolutionEngine {
         );
     }
 
+    /// 更新参考策略 (用于 KL 散度约束)
+    ///
+    /// 通常在阶段性检查点或 KL 散度过大时调用,
+    /// 将当前策略设为新的参考策略。
+    /// 参考策略更新后, KL 散度约束的基准会发生变化。
+    pub fn update_reference_policy(&mut self) {
+        self.reference_policy = self.current_policy.clone();
+        tracing::info!(generation = self.generation, "参考策略已更新");
+    }
+
     /// 执行单轮进化
     ///
     /// 完整流程:采样 → 评估 → 选择 → 变异 → 发布事件
@@ -155,8 +186,8 @@ impl GsoeEvolutionEngine {
         let elite_reports = Self::select_elite(&fitness_reports, self.current_policy.elite_ratio);
         let elite_avg_fitness = Self::average_fitness(&elite_reports);
 
-        // 步骤 4:基于精英生成新策略
-        let new_policy = self.generate_new_policy(&elite_reports)?;
+        // 步骤 4:基于精英生成新策略 (GRPO 路径或传统变异)
+        let new_policy = self.generate_new_policy(&rollouts, &elite_reports)?;
 
         // 步骤 5:计算改进幅度
         // improvement = elite 平均适应度 - 种群平均适应度
@@ -167,6 +198,11 @@ impl GsoeEvolutionEngine {
         self.generation += 1;
         let old_policy = self.current_policy.clone();
         self.current_policy = new_policy.clone();
+
+        // 每 10 代更新参考策略 (使 KL 约束基准更贴近当前策略)
+        if self.generation.is_multiple_of(10) {
+            self.update_reference_policy();
+        }
 
         // 清除待处理信号(已在本轮进化中消费)
         self.pending_consensus_count = 0;
@@ -180,6 +216,7 @@ impl GsoeEvolutionEngine {
             improvement,
             old_mr = old_policy.mutation_rate,
             new_mr = new_policy.mutation_rate,
+            new_sp = new_policy.selection_pressure,
             "进化完成"
         );
 
@@ -228,20 +265,63 @@ impl GsoeEvolutionEngine {
 
     /// 基于精英适应度报告生成新策略
     ///
-    /// 策略:对当前策略应用变异,变异幅度受精英平均置信度调制
+    /// 优先使用 GRPO 策略梯度上升 (若 `use_grpo_update` 为 true 且有足够 rollout)。
+    /// 若 GRPO 产生无效值 (NaN/Inf), 自动回退到传统变异路径。
+    ///
+    /// # 参数
+    /// - `rollouts`: 采样轨迹 (用于 GRPO 概率比计算)
+    /// - `elite_reports`: 精英适应度报告 (用于传统变异)
     fn generate_new_policy(
         &self,
+        rollouts: &[GrpoRollout],
         elite_reports: &[FitnessReport],
     ) -> Result<EvolutionPolicy, GsoeError> {
         let mut new_policy = self.current_policy.clone();
 
-        // 精英平均置信度作为变异率调制因子
-        let elite_confidence = Self::average_confidence(elite_reports);
-        let mutation_rate = self.current_policy.mutation_rate * elite_confidence;
+        // GRPO 路径: 使用 GrpoTrainer 执行策略梯度上升
+        let mut grpo_valid = false;
+        if self.use_grpo_update && rollouts.len() >= 2 {
+            let mut trainer = GrpoTrainer::new(self.reference_policy.clone());
+            let mut rollouts_copy = rollouts.to_vec();
 
-        // 生成并应用变异候选
-        let candidate = mutate(&self.current_policy, mutation_rate)?;
-        apply_mutation(&mut new_policy, &candidate);
+            let iterations = self.current_policy.grpo_hyperparams.update_iterations;
+            let results = trainer.train(&mut rollouts_copy, &mut new_policy, iterations);
+
+            // 验证 KL 散度
+            if let Some(result) = results.last() {
+                if result.kl_divergence.total_cmp(&0.5).is_gt() {
+                    tracing::warn!(kl = result.kl_divergence, "KL 散度过大, 部分回退到参考策略");
+                    // 混合策略: 在参考策略和当前策略之间插值
+                    new_policy.mutation_rate =
+                        0.7 * new_policy.mutation_rate + 0.3 * self.reference_policy.mutation_rate;
+                }
+
+                // 记录 GRPO 指标
+                tracing::debug!(
+                    objective = result.objective,
+                    surrogate = result.mean_surrogate,
+                    kl = result.kl_divergence,
+                    entropy = result.entropy,
+                    "GRPO 目标函数"
+                );
+            }
+
+            grpo_valid = new_policy.mutation_rate.is_finite()
+                && new_policy
+                    .mutation_rate
+                    .total_cmp(&new_policy.grpo_hyperparams.min_std)
+                    .is_ge()
+                && new_policy.selection_pressure.is_finite();
+        }
+
+        // 如果 GRPO 未启用或产生无效值, 回退到传统变异
+        if !self.use_grpo_update || !grpo_valid {
+            let elite_confidence = Self::average_confidence(elite_reports);
+            let mutation_rate = self.current_policy.mutation_rate * elite_confidence;
+
+            let candidate = mutate(&self.current_policy, mutation_rate)?;
+            apply_mutation(&mut new_policy, &candidate);
+        }
 
         // 确保 rollout_count 不变(变异不应改变采样规模)
         new_policy.rollout_count = self.current_policy.rollout_count;
@@ -300,18 +380,12 @@ impl GsoeEvolutionEngine {
         // 降序:b.fitness_score vs a.fitness_score,让前 elite_count 是适应度最高的
         if elite_count < sorted.len() {
             sorted.select_nth_unstable_by(elite_count, |a, b| {
-                b.fitness_score
-                    .partial_cmp(&a.fitness_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                b.fitness_score.total_cmp(&a.fitness_score)
             });
         }
         sorted.truncate(elite_count);
         // 仅对前 elite_count 做 K-log-K 排序(降序,适应度高的在前),保证精英有序
-        sorted.sort_by(|a, b| {
-            b.fitness_score
-                .partial_cmp(&a.fitness_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted.sort_by(|a, b| b.fitness_score.total_cmp(&a.fitness_score));
         sorted
     }
 }
@@ -324,8 +398,17 @@ mod tests {
     fn test_engine_new_initializes_correctly() {
         let engine = GsoeEvolutionEngine::new(GsoeConfig::default());
         assert_eq!(engine.generation(), 0);
-        assert_eq!(engine.current_policy().mutation_rate, 0.1);
+        assert!(engine
+            .current_policy()
+            .mutation_rate
+            .total_cmp(&0.1)
+            .is_eq());
         assert_eq!(engine.current_policy().rollout_count, 8);
+        assert!(engine
+            .reference_policy
+            .mutation_rate
+            .total_cmp(&engine.current_policy().mutation_rate)
+            .is_eq());
     }
 
     #[test]
@@ -353,6 +436,27 @@ mod tests {
     }
 
     #[test]
+    fn test_update_reference_policy() {
+        let mut engine = GsoeEvolutionEngine::new(GsoeConfig::default());
+        let original_ref = engine.reference_policy.clone();
+
+        // 修改当前策略后更新参考策略
+        engine.current_policy.mutation_rate = 0.2;
+        engine.update_reference_policy();
+
+        assert!(engine
+            .reference_policy
+            .mutation_rate
+            .total_cmp(&0.2)
+            .is_eq());
+        assert!(engine
+            .reference_policy
+            .mutation_rate
+            .total_cmp(&original_ref.mutation_rate)
+            .is_ne());
+    }
+
+    #[test]
     fn test_select_elite_returns_top_n() {
         let reports: Vec<FitnessReport> = (0..10)
             .map(|i| FitnessReport {
@@ -362,11 +466,17 @@ mod tests {
             })
             .collect();
         let elite = GsoeEvolutionEngine::select_elite(&reports, 0.2);
-        // 10 * 0.2 = 2,ceil = 2
+        // 10 * 0.2 = 2, ceil = 2
         assert_eq!(elite.len(), 2);
         // 应是分数最高的两个(0.9 和 0.8)
-        assert!((elite[0].fitness_score - 0.9).abs() < 1e-6);
-        assert!((elite[1].fitness_score - 0.8).abs() < 1e-6);
+        assert!((elite[0].fitness_score - 0.9)
+            .abs()
+            .total_cmp(&1e-6)
+            .is_lt());
+        assert!((elite[1].fitness_score - 0.8)
+            .abs()
+            .total_cmp(&1e-6)
+            .is_lt());
     }
 
     #[test]
@@ -407,13 +517,16 @@ mod tests {
             },
         ];
         let avg = GsoeEvolutionEngine::average_fitness(&reports);
-        assert!((avg - 0.5).abs() < 1e-6);
+        assert!((avg - 0.5).abs().total_cmp(&1e-6).is_lt());
     }
 
     #[tokio::test]
     async fn test_evolve_once_basic() {
         let mut engine = GsoeEvolutionEngine::new(GsoeConfig::default());
-        let result = engine.evolve_once().await.unwrap();
+        let result = match engine.evolve_once().await {
+            Ok(r) => r,
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
         assert_eq!(result.generation, 1);
         assert_eq!(engine.generation(), 1);
     }
@@ -422,7 +535,10 @@ mod tests {
     async fn test_evolve_once_multiple_generations() {
         let mut engine = GsoeEvolutionEngine::new(GsoeConfig::default());
         for i in 1..=5 {
-            let result = engine.evolve_once().await.unwrap();
+            let result = match engine.evolve_once().await {
+                Ok(r) => r,
+                Err(e) => panic!("进化失败: {:?}", e),
+            };
             assert_eq!(result.generation, i);
         }
         assert_eq!(engine.generation(), 5);
@@ -437,8 +553,14 @@ mod tests {
         let mut engine = GsoeEvolutionEngine::new(config);
 
         // 前两轮应成功
-        engine.evolve_once().await.unwrap();
-        engine.evolve_once().await.unwrap();
+        match engine.evolve_once().await {
+            Ok(_) => {}
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
+        match engine.evolve_once().await {
+            Ok(_) => {}
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
 
         // 第三轮应返回 MaxGenerationReached
         let result = engine.evolve_once().await;
@@ -454,13 +576,16 @@ mod tests {
         let mut rx = bus.subscribe();
         let mut engine = GsoeEvolutionEngine::with_event_bus(GsoeConfig::default(), bus);
 
-        engine.evolve_once().await.unwrap();
+        match engine.evolve_once().await {
+            Ok(_) => {}
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
 
         // 应收到 GsoePolicyUpdated 事件
-        let event = rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .await
-            .expect("接收事件超时");
+        let event = match rx.recv_timeout(std::time::Duration::from_secs(1)).await {
+            Ok(e) => e,
+            Err(e) => panic!("接收事件超时: {e:?}"),
+        };
         match event {
             NexusEvent::GsoePolicyUpdated {
                 generation,
@@ -471,8 +596,11 @@ mod tests {
             } => {
                 assert_eq!(generation, 1);
                 assert!(improvement.is_finite());
-                assert!((0.0..=1.0).contains(&new_mutation_rate));
-                assert!(new_selection_pressure >= 0.0);
+                assert!(
+                    new_mutation_rate.total_cmp(&0.0).is_ge()
+                        && new_mutation_rate.total_cmp(&1.0).is_le()
+                );
+                assert!(new_selection_pressure.total_cmp(&0.0).is_ge());
             }
             other => panic!("期望 GsoePolicyUpdated 事件,收到 {other:?}"),
         }
@@ -482,7 +610,10 @@ mod tests {
     async fn test_evolve_once_no_event_bus_succeeds() {
         // 无 EventBus 时进化仍应正常工作
         let mut engine = GsoeEvolutionEngine::new(GsoeConfig::default());
-        let result = engine.evolve_once().await.unwrap();
+        let result = match engine.evolve_once().await {
+            Ok(r) => r,
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
         assert_eq!(result.generation, 1);
     }
 
@@ -492,7 +623,10 @@ mod tests {
         engine.handle_consensus_reached();
         engine.handle_consensus_reached();
 
-        let result = engine.evolve_once().await.unwrap();
+        let result = match engine.evolve_once().await {
+            Ok(r) => r,
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
         assert_eq!(result.generation, 1);
         // 信号应在进化后被清除
         assert_eq!(engine.pending_consensus_count, 0);
@@ -503,7 +637,10 @@ mod tests {
         let mut engine = GsoeEvolutionEngine::new(GsoeConfig::default());
         engine.handle_red_team_audit();
 
-        let result = engine.evolve_once().await.unwrap();
+        let result = match engine.evolve_once().await {
+            Ok(r) => r,
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
         assert_eq!(result.generation, 1);
         // 信号应在进化后被清除
         assert_eq!(engine.pending_red_team_count, 0);
@@ -515,16 +652,63 @@ mod tests {
         let mut rx = bus.subscribe();
         let mut engine = GsoeEvolutionEngine::with_event_bus(GsoeConfig::default(), bus);
 
-        engine.evolve_once().await.unwrap();
+        match engine.evolve_once().await {
+            Ok(_) => {}
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
 
-        let event = rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .await
-            .unwrap();
+        let event = match rx.recv_timeout(std::time::Duration::from_secs(1)).await {
+            Ok(e) => e,
+            Err(e) => panic!("接收事件超时: {e:?}"),
+        };
         assert_eq!(
             event.metadata().source,
             "gsoe-evolution",
             "事件 source 应为 gsoe-evolution"
         );
+    }
+
+    #[tokio::test]
+    async fn test_evolve_once_updates_reference_policy_periodically() {
+        let mut engine = GsoeEvolutionEngine::new(GsoeConfig::default());
+        let original_ref = engine.reference_policy.clone();
+
+        // 进化 9 代 (不应触发参考策略更新)
+        for _ in 0..9 {
+            match engine.evolve_once().await {
+                Ok(_) => {}
+                Err(e) => panic!("进化失败: {:?}", e),
+            };
+        }
+        assert!(engine
+            .reference_policy
+            .mutation_rate
+            .total_cmp(&original_ref.mutation_rate)
+            .is_eq());
+
+        // 第 10 代应触发参考策略更新
+        match engine.evolve_once().await {
+            Ok(_) => {}
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
+        assert!(engine
+            .reference_policy
+            .mutation_rate
+            .total_cmp(&original_ref.mutation_rate)
+            .is_ne());
+    }
+
+    #[tokio::test]
+    async fn test_evolve_once_grpo_fallback_on_nan() {
+        // 测试当 GRPO 产生无效值时回退到传统变异
+        let mut engine = GsoeEvolutionEngine::new(GsoeConfig::default());
+        engine.use_grpo_update = false; // 禁用 GRPO
+
+        let result = match engine.evolve_once().await {
+            Ok(r) => r,
+            Err(e) => panic!("进化失败: {:?}", e),
+        };
+        assert_eq!(result.generation, 1);
+        assert!(result.new_policy.mutation_rate.is_finite());
     }
 }

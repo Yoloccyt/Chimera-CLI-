@@ -10,3 +10,4 @@
 pub mod fitness;
 pub mod grpo;
 pub mod mutation;
+pub mod trainer;

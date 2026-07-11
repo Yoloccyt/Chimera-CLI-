@@ -363,10 +363,16 @@ fn run_scc_flow(bus: &EventBus) -> f32 {
         ));
     }
 
-    // 训练访问模式:ctx-0 → ctx-1 → ctx-2(马尔可夫链)
+    // 训练访问模式:ctx-0 → ctx-1 → ctx-2(二阶马尔可夫链)
+    // record_access(previous, current, next) — 记录三序转移,
+    // 学习器据此预测:当 previous=ctx-0 且 current=ctx-1 时,next 最可能是 ctx-2
     let learner = AccessPatternLearner::new(bus.clone(), 0.6);
     for _ in 0..10 {
-        learner.record_access(&ContextId::new("ctx-0"), &ContextId::new("ctx-1"));
+        learner.record_access(
+            &ContextId::new("ctx-0"),
+            &ContextId::new("ctx-1"),
+            &ContextId::new("ctx-2"),
+        );
     }
 
     // 80 次命中(访问已存在的条目)

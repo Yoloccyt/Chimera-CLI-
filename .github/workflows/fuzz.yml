@@ -5,7 +5,7 @@ name: Fuzz
 #
 # 触发:推送 v*.*.*-omega 标签 或 手动触发
 # 运行:ubuntu-latest runner + nightly 工具链 + cargo-fuzz
-# 时长:3 target × 300s + 编译 ≈ 15-20min
+# 时长:6 target × 300s + 编译 ≈ 15-20min(matrix 并行,每个 target 独立 job)
 #
 # 本地 Windows GNU 无法运行(libFuzzer C++ 与 g++ 不兼容),
 # 委托 Linux CI 执行,解除限制 1。
@@ -28,7 +28,7 @@ jobs:
   fuzz:
     name: Fuzz (${{ matrix.target }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20  # WHY: 3 target × 300s + 编译 ≈ 15-20min,20min 兜底防止 fuzz hang 占用 nightly runner
+    timeout-minutes: 20  # WHY: 6 target × 300s + 编译 ≈ 15-20min(matrix 并行,每个 target 独立 job),20min 兜底防止 fuzz hang 占用 nightly runner
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +36,9 @@ jobs:
           - quest_parse
           - seccore_sandbox
           - event_serialize
+          - cacr_budget_parse
+          - checkpoint_deserialize
+          - config_section_parse
 
     steps:
       - name: Checkout

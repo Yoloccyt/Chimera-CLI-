@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_adaptive_weights_clamp() {
-        let mut w = AdaptiveWeights::new(10.0, 0.01, 0.01);
+        let w = AdaptiveWeights::new(10.0, 0.01, 0.01);
         // 归一化后 clamp 到 [0.1, 0.8]
         assert!(w.task_count_weight <= 0.8);
         assert!(w.dependency_depth_weight >= 0.1);

@@ -22,6 +22,12 @@ use osa_coordinator::{
 /// - 候选集:50 工具 / 2000 文件 / 50 记忆 / 100 操作 / 10 任务
 fn make_profile(complexity: f32, risk: RiskLevel) -> TaskProfile {
     TaskProfile {
+        // v1.5.0 新增语义评分字段(集成测试使用默认 None)
+        tool_scores: None,
+        file_scores: None,
+        memory_scores: None,
+        operation_scores: None,
+        task_scores: None,
         task_id: TaskId::new(format!("task-{complexity}")),
         task_type: TaskType::Read,
         complexity_score: complexity,

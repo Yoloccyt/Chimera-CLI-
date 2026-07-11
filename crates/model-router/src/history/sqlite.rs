@@ -45,7 +45,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -179,6 +179,8 @@ impl HistoryStore for SqliteHistoryStore {
             success_count: success_count as u64,
             total_count: total_count as u64,
             latency_samples,
+            // WHY None:从 SQLite 反序列化的记录无缓存,首次 latency_variance() 时懒计算
+            cached_variance: RwLock::new(None),
         })
     }
 
@@ -221,6 +223,8 @@ impl HistoryStore for SqliteHistoryStore {
                     success_count: sc,
                     total_count: tc,
                     latency_samples: samples,
+                    // WHY None:从 SQLite 反序列化的记录,缓存待首次计算
+                    cached_variance: RwLock::new(None),
                 }
             }
             None => HistoryRecord::new(),

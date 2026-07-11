@@ -63,9 +63,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+pub mod attention;
+pub mod chunked_producer;
 pub mod config;
 pub mod error;
 pub mod feedback;
+pub mod priority_scheduler;
 pub mod producer;
 pub mod types;
 pub mod verifier;

@@ -238,7 +238,7 @@ fn semantic_similarity(
 
 /// 传递依赖剪枝 — 若 A→B→C,则移除 A→C
 fn prune_transitive_dependencies(deps: &[Vec<String>]) -> Vec<Vec<String>> {
-    let mut result: Vec<Vec<String>> = deps.iter().cloned().collect();
+    let mut result: Vec<Vec<String>> = deps.to_vec();
 
     // 构建邻接表:task_id → 直接依赖的 task_id 集合
     let mut adj: HashMap<String, HashSet<String>> = HashMap::new();
@@ -334,11 +334,19 @@ mod tests {
     #[test]
     fn test_extract_keywords() {
         let stop_words: HashSet<String> = STOP_WORDS.iter().map(|s| s.to_string()).collect();
-        let kw = extract_keywords("设计数据库表结构", &stop_words);
-        assert!(kw.contains("设计"));
-        assert!(kw.contains("数据库"));
-        assert!(kw.contains("表结构"));
-        assert!(!kw.contains("的"));
+        // WHY: extract_keywords 的设计契约是"简单按非字母数字切分"(见函数注释),
+        // 不做 CJK 分词。CJK 字符在 Unicode 中属 alphanumeric,故连续 CJK 文本
+        // 作为单个 token。用空格分隔以验证切分行为。
+        let kw = extract_keywords("database schema 设计", &stop_words);
+        assert!(kw.contains("database")); // 小写化后保留
+        assert!(kw.contains("schema")); // 非停用词,保留
+        assert!(!kw.contains("设计")); // "设计"是停用词(见 STOP_WORDS),被过滤
+        assert!(!kw.contains("的")); // 停用词
+
+        // 验证 CJK 连续文本作为单个 token(设计意图:简单切分,非 CJK 分词)
+        let kw_cjk = extract_keywords("数据库设计", &stop_words);
+        assert!(kw_cjk.contains("数据库设计")); // 整体作为一个 token
+        assert!(!kw_cjk.contains("数据库")); // 不会拆分出子串
     }
 
     #[test]

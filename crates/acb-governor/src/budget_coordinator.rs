@@ -22,7 +22,7 @@
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tracing::{info, warn};
 
-use acb_governor::{AcbGovernor, AcbGovernorConfig, BudgetRequest, BudgetTier};
+use crate::{AcbGovernor, AcbGovernorConfig, BudgetRequest, BudgetTier};
 use decb_governor::{DecbConfig, DecbGovernor, QuestBudgetInput};
 
 /// 统一预算决策 — 协调器对预算请求的综合判断结果
@@ -139,7 +139,7 @@ impl BudgetCoordinator {
         let acb_ok = self.acb.check_budget(&acb_request).is_ok();
 
         // 2. DECB 计算系数
-        let decb_coef = self.decb.compute_budget(quest_input).value();
+        let decb_coef = self.decb.compute_budget(quest_input);
 
         // 3. ACB 级别映射为系数
         let acb_coef = acb_tier_to_coefficient(acb_tier);
@@ -226,7 +226,7 @@ impl BudgetCoordinator {
     /// 获取当前统一预算状态
     pub fn status(&self) -> UnifiedBudgetStatus {
         let acb_status = self.acb.get_status();
-        let decb_stats = self.decb.stats();
+        let decb_stats = self.decb.get_stats();
         UnifiedBudgetStatus {
             acb_tier: acb_status.current_tier,
             acb_utilization: acb_status.utilization_rate,

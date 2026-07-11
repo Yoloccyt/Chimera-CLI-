@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "event-bus"
-version = "1.0.0-omega"
+version = "1.5.0-omega"
 dependencies = [
  "chrono",
  "prometheus-client",
@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "model-router"
-version = "1.0.0-omega"
+version = "1.5.0-omega"
 dependencies = [
  "dashmap",
  "event-bus",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "1.0.0-omega"
+version = "1.5.0-omega"
 dependencies = [
  "chrono",
  "hex",
@@ -660,11 +660,12 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seccore"
-version = "1.0.0-omega"
+version = "1.5.0-omega"
 dependencies = [
  "chrono",
  "event-bus",
  "hex",
+ "rusqlite",
  "serde",
  "sha2",
  "thiserror",

@@ -55,4 +55,20 @@ impl HistoryStore for InMemoryHistoryStore {
         let mut r = self.records.entry(model_id.to_string()).or_default();
         r.record(latency_ms, success);
     }
+
+    /// 查询指定模型的延迟方差(带缓存)— 操作 stored record 使缓存持久
+    ///
+    /// WHY override trait 默认实现:默认实现调用 `get()` 返回 clone,在 clone 上
+    /// 计算 variance 后缓存随 clone drop 丢失。此 override 使用 DashMap `get()`
+    /// 返回的 `Ref`(对 stored record 的不可变引用),`HistoryRecord::latency_variance()`
+    /// 通过 `RwLock` 内部可变性写入缓存,缓存持久存储在 stored record 上。
+    ///
+    /// 缓存命中路径:read lock O(1);缓存未命中路径:O(n) 计算 + write lock。
+    /// `gate()` 热路径中,首次调用后后续模型查询均命中缓存(O(1))。
+    fn latency_variance(&self, model_id: &str) -> Option<f32> {
+        let r = self.records.get(model_id)?;
+        // r 是 DashMap Ref,deref 到 &HistoryRecord(stored record)
+        // RwLock 内部可变性允许 latency_variance() 写缓存,无需 &mut self
+        Some(r.latency_variance())
+    }
 }

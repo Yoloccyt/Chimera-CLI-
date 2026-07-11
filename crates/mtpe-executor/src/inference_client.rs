@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::MtpeError;
-use crate::types::{PredictionContext, Token};
+use crate::types::Token;
 
 /// 推理请求 — 发送给外部推理服务
 #[derive(Debug, Clone, Serialize)]
@@ -53,8 +53,6 @@ pub struct InferenceClient {
     endpoint: Option<String>,
     /// Mock 模式:直接返回伪预测 token
     mock: bool,
-    /// 请求超时(毫秒)
-    timeout_ms: u64,
 }
 
 impl InferenceClient {
@@ -64,7 +62,6 @@ impl InferenceClient {
             http: None,
             endpoint: None,
             mock: true,
-            timeout_ms: 5000,
         }
     }
 
@@ -83,16 +80,14 @@ impl InferenceClient {
             http,
             endpoint: Some(endpoint),
             mock: false,
-            timeout_ms,
         }
     }
 
     /// 从配置创建推理客户端
     pub fn from_config(mock: bool, endpoint: Option<String>, timeout_ms: u64) -> Self {
-        if mock || endpoint.is_none() {
-            Self::mock()
-        } else {
-            Self::new(endpoint.unwrap(), timeout_ms)
+        match (mock, endpoint) {
+            (true, _) | (false, None) => Self::mock(),
+            (false, Some(ep)) => Self::new(ep, timeout_ms),
         }
     }
 

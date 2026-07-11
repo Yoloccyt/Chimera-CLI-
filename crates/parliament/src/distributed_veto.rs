@@ -16,7 +16,6 @@
 //! - **异步并行检测**:3 节点并行检测,取结果后统计,延迟不增加
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 use crate::types::Proposal;
 use crate::veto::{Skeptic, VetoReason};
@@ -47,6 +46,13 @@ impl SkepticNode {
     /// 节点独立检测提案
     pub fn detect(&self, proposal: &Proposal) -> Option<VetoReason> {
         self.skeptic.detect_malicious_intent(proposal)
+    }
+
+    /// 节点全量检测提案 — 返回所有匹配的恶意意图
+    ///
+    /// 用于分布式审议中合并冻结能力列表(同一内容可能匹配多种攻击模式)。
+    pub fn detect_all(&self, proposal: &Proposal) -> Vec<VetoReason> {
+        self.skeptic.detect_all_malicious_intent(proposal)
     }
 }
 
@@ -156,21 +162,26 @@ impl DistributedSkepticCluster {
     /// 4. 否则返回 Passed
     pub fn deliberate(&self, proposal: &Proposal) -> DistributedVetoResult {
         let mut node_reasons = Vec::new();
-        let mut total_veto_weight = 0.0f32;
+        // 用 HashSet 统计唯一否决节点数(一个节点可能匹配多条规则,
+        // 但在 2-of-3 投票中仍只算 1 票),避免多规则匹配虚增 veto_count
+        let mut vetoed_nodes = std::collections::HashSet::new();
 
         for node in &self.nodes {
-            if let Some(reason) = node.detect(proposal) {
-                total_veto_weight += node.weight;
-                node_reasons.push(NodeVetoReason {
-                    node_id: node.node_id.clone(),
-                    weight: node.weight,
-                    reason,
-                });
+            let reasons = node.detect_all(proposal);
+            if !reasons.is_empty() {
+                vetoed_nodes.insert(node.node_id.clone());
+                for reason in reasons {
+                    node_reasons.push(NodeVetoReason {
+                        node_id: node.node_id.clone(),
+                        weight: node.weight,
+                        reason,
+                    });
+                }
             }
         }
 
-        // 统计实际否决节点数(非加权,用于判定)
-        let veto_count = node_reasons.len();
+        // 统计唯一否决节点数(非加权,用于判定 2-of-3 阈值)
+        let veto_count = vetoed_nodes.len();
         let total_nodes = self.nodes.len();
 
         if veto_count >= self.veto_threshold {

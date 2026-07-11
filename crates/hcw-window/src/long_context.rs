@@ -51,7 +51,7 @@ impl LongContextManager {
     ///
     /// 输入:上下文条目列表(每个条目携带token数和内容)
     /// 输出:管理后的上下文(近期全文+远期摘要)
-    pub fn manage<'a>(&self, entries: &'a [ContextEntry]) -> ManagedContext<'a> {
+    pub fn manage(&self, entries: &[ContextEntry]) -> ManagedContext {
         let total_tokens: usize = entries.iter().map(|e| e.token_count).sum();
 
         if total_tokens <= self.full_text_threshold {
@@ -173,7 +173,7 @@ pub struct SummaryEntry {
 
 /// 管理后的上下文
 #[derive(Debug, Clone)]
-pub struct ManagedContext<'a> {
+pub struct ManagedContext {
     /// 保留全文的条目
     pub full_text_entries: Vec<ContextEntry>,
     /// 摘要条目
@@ -182,7 +182,7 @@ pub struct ManagedContext<'a> {
     pub strategy: ManagementStrategy,
 }
 
-impl<'a> ManagedContext<'a> {
+impl ManagedContext {
     /// 总token数(全文+摘要)
     pub fn total_tokens(&self) -> usize {
         let full: usize = self.full_text_entries.iter().map(|e| e.token_count).sum();
@@ -192,8 +192,16 @@ impl<'a> ManagedContext<'a> {
 
     /// 压缩比(原始/压缩后)
     pub fn compression_ratio(&self) -> f32 {
-        let original: usize = self.full_text_entries.iter().map(|e| e.token_count).sum()
-            + self.summary_entries.iter().map(|s| s.original_tokens).sum();
+        let original: usize = self
+            .full_text_entries
+            .iter()
+            .map(|e| e.token_count)
+            .sum::<usize>()
+            + self
+                .summary_entries
+                .iter()
+                .map(|s| s.original_tokens)
+                .sum::<usize>();
         let compressed = self.total_tokens();
         if compressed == 0 {
             return 1.0;

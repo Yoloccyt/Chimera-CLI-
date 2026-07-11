@@ -35,6 +35,11 @@ enum TerminalEvent {
     /// crossterm 键盘事件
     Key(KeyEvent),
     /// 外部系统事件(来自 EventBus)
+    ///
+    /// WHY allow(dead_code):P1-15 EventBus 集成预留变体,当前键盘通道仅发送 `Key`,
+    /// 但 `run` 事件循环需在 match 中防御性处理此变体(app.rs:444)。
+    /// 待 EventBus 事件驱动模式落地后将自然消除。
+    #[allow(dead_code)]
     External(event_bus::NexusEvent),
 }
 

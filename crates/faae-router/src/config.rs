@@ -98,7 +98,6 @@ impl FaaeConfig {
         self.decay_interval_secs = secs;
         self
     }
-}
 
     /// 设置多步均衡步数
     pub fn with_multi_step_balance_depth(mut self, depth: usize) -> Self {

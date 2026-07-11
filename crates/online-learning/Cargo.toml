@@ -19,7 +19,15 @@ serde = { workspace = true, features = ["derive"] }
 # serde_json:JSON 序列化,用于参数状态持久化
 serde_json = { workspace = true }
 # dashmap:并发安全参数存储
- dashmap = { workspace = true }
+dashmap = { workspace = true }
+# chrono:UTC 时间戳,记录参数最后更新时间
+chrono = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# criterion:性能基准测试框架(§7.1 测试矩阵约定)
+criterion = { workspace = true }
+
+[[bench]]
+name = "registry_bench"
+harness = false

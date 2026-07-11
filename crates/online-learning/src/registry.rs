@@ -61,7 +61,7 @@ impl ParameterRegistry {
     pub fn get_value(&self, id: &str) -> Result<ParameterValue, LearningError> {
         self.params
             .get(id)
-            .map(|e| e.value.clone().value)
+            .map(|e| e.value.clone())
             .ok_or_else(|| LearningError::ParameterNotFound(id.to_string()))
     }
 
@@ -69,7 +69,7 @@ impl ParameterRegistry {
     pub fn get_param(&self, id: &str) -> Result<LearnableParameter, LearningError> {
         self.params
             .get(id)
-            .map(|e| e.value.clone())
+            .map(|e| e.clone())
             .ok_or_else(|| LearningError::ParameterNotFound(id.to_string()))
     }
 
@@ -115,7 +115,7 @@ impl ParameterRegistry {
 
     /// 列出所有已注册参数
     pub fn list_params(&self) -> Vec<LearnableParameter> {
-        self.params.iter().map(|e| e.value.clone()).collect()
+        self.params.iter().map(|e| e.clone()).collect()
     }
 
     /// 按crate筛选参数
@@ -123,7 +123,7 @@ impl ParameterRegistry {
         self.params
             .iter()
             .filter(|e| e.crate_name == crate_name)
-            .map(|e| e.value.clone())
+            .map(|e| e.clone())
             .collect()
     }
 

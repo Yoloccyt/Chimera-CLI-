@@ -47,6 +47,7 @@
 
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::sync::RwLock;
 
 // v1.4.0 P1:HistoryStore trait + InMemoryHistoryStore + 常量已迁移至 `history` 模块
 // WHY `pub use` 而非 `use`:strategies.rs 等同 crate 模块通过 `crate::moe::HistoryStore`
@@ -86,7 +87,12 @@ pub const DEFAULT_MOE_TOP_K: usize = 5;
 ///
 /// WHY Clone:get() 返回 owned HistoryRecord(避免 DashMap Ref guard 跨 await/
 /// 作用域问题)。克隆成本 ~400B/次,在路由热路径(单次决策)上可忽略。
-#[derive(Debug, Clone)]
+///
+/// WHY 手动 Clone 而非 derive(Clone):`RwLock` 不实现 `Clone`(锁是同步原语,
+/// 非数据容器),需手动 clone 内部缓存值 `RwLock::new(cached.read().unwrap().clone())`。
+/// 每个 clone 获得独立的 RwLock + 相同的缓存值,行为正确:clone 的 `record()`
+/// 仅失效 clone 自身缓存,不影响 stored record 的缓存。
+#[derive(Debug)]
 pub struct HistoryRecord {
     /// 成功路由次数(累计,不随窗口滑动)
     pub success_count: u64,
@@ -94,6 +100,16 @@ pub struct HistoryRecord {
     pub total_count: u64,
     /// 最近 `LATENCY_WINDOW_CAPACITY` 次延迟样本(ms),尾部为最新
     pub latency_samples: VecDeque<f32>,
+    /// `latency_variance` 缓存:None = 需重算,Some(v) = 缓存命中
+    ///
+    /// WHY RwLock 而非 AtomicF32:stable Rust 无 AtomicF32(§4.1 规则),
+    /// 并发浮点缓存需 RwLock<Option<f32>> 提供读写隔离。
+    /// WHY Option<f32>:None 表示缓存失效(记录已变更),Some(v) 表示缓存有效。
+    /// WHY 字段在 HistoryRecord 而非 InMemoryHistoryStore:每模型独立缓存,
+    /// DashMap 内的 stored record 持有缓存,跨 `get()` clone 持久化。
+    /// WHY pub(crate):sqlite.rs 需在反序列化时构造 HistoryRecord,
+    /// 外部 crate 不应直接访问缓存(通过 latency_variance() 方法读写)。
+    pub(crate) cached_variance: RwLock<Option<f32>>,
 }
 
 impl HistoryRecord {
@@ -103,6 +119,7 @@ impl HistoryRecord {
             success_count: 0,
             total_count: 0,
             latency_samples: VecDeque::with_capacity(LATENCY_WINDOW_CAPACITY),
+            cached_variance: RwLock::new(None),
         }
     }
 
@@ -111,6 +128,7 @@ impl HistoryRecord {
     /// - total_count 始终递增(累计统计,用于 success_rate)
     /// - latency_samples 维持滑动窗口:满则淘汰最旧(popleft),再 push 新样本
     /// - success_count 仅在 success=true 时递增
+    /// - cached_variance 失效:样本变更后缓存值不再有效,设为 None 懒重算
     pub fn record(&mut self, latency_ms: f32, success: bool) {
         self.total_count += 1;
         if success {
@@ -121,6 +139,9 @@ impl HistoryRecord {
             self.latency_samples.pop_front();
         }
         self.latency_samples.push_back(latency_ms);
+        // WHY get_mut() 而非 write():record() 取 &mut self,已有独占访问,
+        // 无需 RwLock 写锁(get_mut 利用 &mut self 保证无竞争,零开销)
+        *self.cached_variance.get_mut().unwrap() = None;
     }
 
     /// 历史成功率 ∈ [0,1],无样本时返回 0.0
@@ -137,21 +158,50 @@ impl HistoryRecord {
     /// 公式:`sum((x - mean)^2) / (n - 1)`(n >= 2),n < 2 时返回 0.0
     /// WHY 无偏估计(n-1 而非 n):样本方差修正 Bessel 校正,避免小样本低估。
     /// 返回值单位为 ms²,值域 [0, +∞),方差越大 → 延迟越不稳定 → 惩罚越重。
+    ///
+    /// # 缓存(v1.5.0-omega 优化)
+    /// 首次调用计算方差并写入 `cached_variance`,后续调用直接读缓存(O(1))。
+    /// `record()` 调用时缓存失效(设为 None),下次调用懒重算。
+    ///
+    /// WHY 双重检查锁定(double-checked locking):
+    /// 1. 先 read lock 查缓存(fast path,不阻塞并发读)
+    /// 2. miss 时释放 read lock → write lock → 再次检查(防竞争)→ 计算 → 写入
+    ///
+    /// 读锁在写锁前释放,避免死锁(RwLock 不支持 read→write 升级)。
     pub fn latency_variance(&self) -> f32 {
-        let n = self.latency_samples.len();
-        if n < 2 {
-            return 0.0;
+        // Fast path:读缓存(read lock,不阻塞并发 reader)
+        {
+            let cache = self.cached_variance.read().unwrap();
+            if let Some(v) = *cache {
+                return v;
+            }
+        } // read lock 在此释放,避免 read→write 死锁
+
+        // Slow path:cache miss → write lock → double-check → 计算 → 写入
+        let mut cache = self.cached_variance.write().unwrap();
+        // Double-check:等待 write lock 期间可能已有其他线程完成计算
+        if let Some(v) = *cache {
+            return v;
         }
-        let mean: f32 = self.latency_samples.iter().sum::<f32>() / n as f32;
-        let sum_sq: f32 = self
-            .latency_samples
-            .iter()
-            .map(|x| {
-                let diff = x - mean;
-                diff * diff
-            })
-            .sum();
-        sum_sq / (n - 1) as f32
+
+        let n = self.latency_samples.len();
+        let variance = if n < 2 {
+            0.0
+        } else {
+            let mean: f32 = self.latency_samples.iter().sum::<f32>() / n as f32;
+            let sum_sq: f32 = self
+                .latency_samples
+                .iter()
+                .map(|x| {
+                    let diff = x - mean;
+                    diff * diff
+                })
+                .sum();
+            sum_sq / (n - 1) as f32
+        };
+
+        *cache = Some(variance);
+        variance
     }
 
     /// 历史数据是否充分(>= HISTORY_SUFFICIENT_THRESHOLD 100 条)
@@ -162,6 +212,20 @@ impl HistoryRecord {
     /// latency_samples 受窗口限制(max 100),无法区分"刚好 100"与"1000+次"。
     pub fn is_sufficient(&self) -> bool {
         self.total_count >= HISTORY_SUFFICIENT_THRESHOLD
+    }
+}
+
+impl Clone for HistoryRecord {
+    /// 手动 Clone:`RwLock` 不实现 `Clone`,需读取内部值并构造新 `RwLock`。
+    /// clone 继承 stored record 的缓存值(若有),避免 clone 首次 `latency_variance()`
+    /// 时重算。`get()` 返回的 clone 可直接命中 inherited 缓存。
+    fn clone(&self) -> Self {
+        Self {
+            success_count: self.success_count,
+            total_count: self.total_count,
+            latency_samples: self.latency_samples.clone(),
+            cached_variance: RwLock::new(*self.cached_variance.read().unwrap()),
+        }
     }
 }
 
@@ -271,7 +335,13 @@ impl MoeGate {
     ///
     /// `quality_score` 为 f32,显式 `as f64` 转换参与 f64 运算(此处为算术
     /// 运算而非比较,不触发 §4.4 #6 的 f32→f64 比较精度问题)。
-    fn gate_score(m: &ModelInfo, history: Option<&HistoryRecord>) -> f64 {
+    ///
+    /// # v1.5.0-omega 缓存优化
+    /// `variance` 由调用方(`gate()`)通过 `HistoryStore::latency_variance()`
+    /// 预计算并传入,而非在 `gate_score` 内部调 `h.latency_variance()`。
+    /// 这允许 `InMemoryHistoryStore` 在 stored record 上计算(缓存持久),
+    /// 而非在 `get()` 返回的 clone 上计算(缓存随 drop 丢失)。
+    fn gate_score(m: &ModelInfo, history: Option<(&HistoryRecord, f32)>) -> f64 {
         // 成本倒数:cost_per_1k_tokens 单位为美元,量级 0.0001~0.05,
         // 乘以 1000 放大到 0.1~50 区间,使倒数有合理区分度
         let cost_gate = 1.0 / (1.0 + m.cost_per_1k_tokens * 1000.0);
@@ -282,10 +352,10 @@ impl MoeGate {
 
         match history {
             // 五维:历史数据充足(调用方已确保 is_sufficient),启用完整五维评分
-            Some(h) => {
+            // variance 由调用方预计算(来自 HistoryStore::latency_variance 缓存)
+            Some((h, variance)) => {
                 let success_rate = h.success_rate() as f64;
-                let variance = h.latency_variance() as f64;
-                let variance_gate = 1.0 / (1.0 + variance);
+                let variance_gate = 1.0 / (1.0 + variance as f64);
                 0.3 * cost_gate
                     + 0.3 * latency_gate
                     + 0.2 * quality
@@ -343,11 +413,23 @@ impl MoeGate {
         // 轻量级门控评分:O(n),每模型查询历史(若有)决定五维 vs 三维
         // WHY 逐模型查询:不同模型历史充足性可能不同(新模型无历史→三维,
         // 老模型有历史→五维),混合模式正确反映"已知模型用历史,未知用静态"。
+        //
+        // WHY 通过 store 级 latency_variance() 而非 record.latency_variance():
+        // store 级方法操作 DashMap 内的 stored record,缓存跨 get() clone 持久化,
+        // 显著降低 gate() 热路径中重复 variance 计算的延迟(v1.5.0-omega 优化)。
         let mut scored: Vec<(f64, &ModelInfo)> = models
             .iter()
             .map(|m| {
-                let hist = history.and_then(|h| h.get(&m.model_id).filter(|r| r.is_sufficient()));
-                (Self::gate_score(m, hist.as_ref()), m)
+                let hist = history.and_then(|h| {
+                    let record = h.get(&m.model_id)?;
+                    if !record.is_sufficient() {
+                        return None;
+                    }
+                    // 在 stored record 上计算/读缓存(缓存持久,跨 gate() 调用)
+                    let variance = h.latency_variance(&m.model_id)?;
+                    Some((record, variance))
+                });
+                (Self::gate_score(m, hist.as_ref().map(|(r, v)| (r, *v))), m)
             })
             .collect();
 

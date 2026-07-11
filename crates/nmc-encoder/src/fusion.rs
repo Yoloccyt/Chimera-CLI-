@@ -410,23 +410,51 @@ mod tests {
 
     #[test]
     fn test_nmc_encoder_perceive_image_error() {
+        // WHY v2.0 迁移:ImagePerceptor 已从 v1.0 占位(始终 EncodingFailed)
+        // 升级为 v2.0 像素统计嵌入。空数据才返回 EncodingFailed,非空数据成功编码。
         let encoder = NmcEncoder::new(NmcConfig::default()).unwrap();
-        let result = encoder.perceive(PerceptionInput::Image(vec![0; 1024]));
+
+        // 空图像数据 → EncodingFailed
+        let result = encoder.perceive(PerceptionInput::Image(vec![]));
         assert!(matches!(result, Err(NmcError::EncodingFailed { .. })));
+
+        // 非空图像数据 → 成功编码为 512-dim CLV
+        let output = encoder
+            .perceive(PerceptionInput::Image(vec![0; 1024]))
+            .unwrap();
+        assert_eq!(output.dimension(), 512);
     }
 
     #[test]
     fn test_nmc_encoder_perceive_video_error() {
+        // WHY v2.0 迁移:VideoPerceptor 已从 v1.0 占位升级为 v2.0 帧统计嵌入。
         let encoder = NmcEncoder::new(NmcConfig::default()).unwrap();
-        let result = encoder.perceive(PerceptionInput::Video(vec![0; 1024]));
+
+        // 空视频数据 → EncodingFailed
+        let result = encoder.perceive(PerceptionInput::Video(vec![]));
         assert!(matches!(result, Err(NmcError::EncodingFailed { .. })));
+
+        // 非空视频数据 → 成功编码为 512-dim CLV
+        let output = encoder
+            .perceive(PerceptionInput::Video(vec![0; 1024]))
+            .unwrap();
+        assert_eq!(output.dimension(), 512);
     }
 
     #[test]
     fn test_nmc_encoder_perceive_audio_error() {
+        // WHY v2.0 迁移:AudioPerceptor 已从 v1.0 占位升级为 v2.0 时频统计嵌入。
         let encoder = NmcEncoder::new(NmcConfig::default()).unwrap();
-        let result = encoder.perceive(PerceptionInput::Audio(vec![0; 512]));
+
+        // 空音频数据 → EncodingFailed
+        let result = encoder.perceive(PerceptionInput::Audio(vec![]));
         assert!(matches!(result, Err(NmcError::EncodingFailed { .. })));
+
+        // 非空音频数据 → 成功编码为 512-dim CLV
+        let output = encoder
+            .perceive(PerceptionInput::Audio(vec![0; 512]))
+            .unwrap();
+        assert_eq!(output.dimension(), 512);
     }
 
     #[test]

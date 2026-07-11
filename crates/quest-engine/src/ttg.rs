@@ -398,9 +398,7 @@ impl TtgGovernor {
         let description_length_factor = self.compute_description_length_factor(quest);
 
         // P1-13: 使用自适应权重或固定权重
-        let weights = self
-            .adaptive_weights()
-            .unwrap_or_else(AdaptiveWeights::default);
+        let weights = self.adaptive_weights().unwrap_or_default();
         let score = weights.compute_score(task_count, dependency_depth, description_length_factor);
         ComplexityScore::new(score)
     }

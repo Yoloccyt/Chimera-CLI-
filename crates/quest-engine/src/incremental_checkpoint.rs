@@ -20,7 +20,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use nexus_core::{Quest, Task, TaskStatus};
+use nexus_core::{Quest, Task};
 
 use crate::error::QuestError;
 
@@ -87,7 +87,7 @@ impl IncrementalCheckpointBuilder {
             // 无基础状态,所有元数据都是变更
             Some(QuestMetadataDelta {
                 title: Some(new_quest.title.clone()),
-                thinking_mode: Some(new_quest.thinking_mode.clone()),
+                thinking_mode: Some(new_quest.thinking_mode),
                 checkpoint_id: new_quest.checkpoint_id.clone(),
             })
         };
@@ -147,7 +147,7 @@ impl IncrementalCheckpointBuilder {
             has_changes = true;
         }
         if old_quest.thinking_mode != new_quest.thinking_mode {
-            delta.thinking_mode = Some(new_quest.thinking_mode.clone());
+            delta.thinking_mode = Some(new_quest.thinking_mode);
             has_changes = true;
         }
         if old_quest.checkpoint_id != new_quest.checkpoint_id {
@@ -231,7 +231,7 @@ impl IncrementalCheckpointRestorer {
                 quest.title = title.clone();
             }
             if let Some(mode) = &meta.thinking_mode {
-                quest.thinking_mode = mode.clone();
+                quest.thinking_mode = *mode;
             }
             if let Some(cp_id) = &meta.checkpoint_id {
                 quest.checkpoint_id = Some(cp_id.clone());

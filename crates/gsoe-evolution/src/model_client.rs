@@ -48,6 +48,11 @@ pub struct ModelSampler {
     /// Mock 模式:直接返回伪随机动作
     mock: bool,
     /// 请求超时(毫秒)
+    ///
+    /// WHY allow(dead_code):超时值在 `new()` 中传入 `reqwest::Client` builder 后,
+    /// 字段本身不再被直接读取(超时由 HTTP client 内部管理)。
+    /// 保留字段用于 Debug 输出与未来扩展(如动态调整超时)。
+    #[allow(dead_code)]
     timeout_ms: u64,
 }
 
@@ -83,10 +88,12 @@ impl ModelSampler {
 
     /// 从配置创建采样器(mock 模式或真实模式)
     pub fn from_config(mock: bool, endpoint: Option<String>, timeout_ms: u64) -> Self {
-        if mock || endpoint.is_none() {
-            Self::mock()
-        } else {
-            Self::new(endpoint.unwrap(), timeout_ms)
+        if mock {
+            return Self::mock();
+        }
+        match endpoint {
+            Some(ep) => Self::new(ep, timeout_ms),
+            None => Self::mock(),
         }
     }
 
@@ -266,7 +273,7 @@ mod tests {
         let mut rng = Lcg::new(123);
         for _ in 0..1000 {
             let v = rng.next_f32();
-            assert!(v >= -1.0 && v < 1.0, "f32 应在 [-1.0, 1.0) 范围内: {v}");
+            assert!((-1.0..1.0).contains(&v), "f32 应在 [-1.0, 1.0) 范围内: {v}");
         }
     }
 }

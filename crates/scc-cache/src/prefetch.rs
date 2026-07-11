@@ -46,8 +46,11 @@ const DEFAULT_PATTERN_CAPACITY: usize = 10_000;
 /// 实现真正的 O(1) LRU 维护。
 #[derive(Debug)]
 struct LruNode {
-    /// 当前上下文 ID
-    key: ContextId,
+    /// (previous, current) 上下文对 — 与 `LruPatternMap.data` 的键保持一致
+    ///
+    /// WHY: LRU 节点需要保存完整的二阶状态键,才能在驱逐时从 `data` HashMap
+    /// 中定位并删除对应的 (previous, current) 条目。
+    key: (ContextId, ContextId),
     /// 前驱节点索引(`None` 表示当前节点是 LRU 头)
     prev: Option<usize>,
     /// 后继节点索引(`None` 表示当前节点是 MRU 尾)
@@ -147,7 +150,7 @@ impl LruPatternMap {
     fn alloc_node(&mut self, key: (ContextId, ContextId)) -> usize {
         if let Some(idx) = self.free_indices.pop() {
             self.nodes[idx] = LruNode {
-                key: key.0.to_string() + "|" + &key.1,
+                key,
                 prev: None,
                 next: None,
             };
@@ -155,7 +158,7 @@ impl LruPatternMap {
         } else {
             let idx = self.nodes.len();
             self.nodes.push(LruNode {
-                key: key.0.to_string() + "|" + &key.1,
+                key,
                 prev: None,
                 next: None,
             });
@@ -628,7 +631,7 @@ mod tests {
         let ctx_b = ContextId::new("ctx-b");
         let ctx_c = ContextId::new("ctx-c");
         let ctx_x = ContextId::new("ctx-x");
-        let ctx_y = ContextId::new("ctx-y");
+        let _ctx_y = ContextId::new("ctx-y");
 
         // 记录多个 (different_prev, b) → c 的转移
         // 当 (x, b) 无记录时,一阶降级应聚合所有 previous 的计数

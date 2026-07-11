@@ -20,22 +20,18 @@
 
 use ndarray::{Array1, Array2};
 use nexus_core::CLV;
+use serde::{Deserialize, Serialize};
 
 /// CLV 投影方法
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ProjectionMethod {
     /// 简单截取前 N 维 — 零成本,确定性高
+    #[default]
     Truncate,
     /// 主成分分析投影 — 数据驱动,区分度最高
     Pca,
     /// 随机投影 — 快速,无需训练
     RandomProjection,
-}
-
-impl Default for ProjectionMethod {
-    fn default() -> Self {
-        Self::Truncate
-    }
 }
 
 /// CLV 投影器 — 将 512-dim CLV 投影到目标维度
@@ -227,10 +223,6 @@ impl ClvProjector {
         for col in 0..target_dim {
             for row in 0..CLV::DIMENSION {
                 seed = seed.wrapping_add(0x9e3779b97f4a7c15);
-                let mut z = seed;
-                z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-                z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-                z = z ^ (z >> 31);
 
                 // 中心极限定理近似正态分布
                 let mut normal: f32 = 0.0;
@@ -332,8 +324,8 @@ mod tests {
         let mut samples = Vec::new();
         for i in 0..200 {
             let mut v = vec![0.0_f32; CLV::DIMENSION];
-            for j in 0..64 {
-                v[j] = (i as f32 * 0.01 + j as f32 * 0.1).sin();
+            for (j, val) in v.iter_mut().enumerate().take(64) {
+                *val = (i as f32 * 0.01 + j as f32 * 0.1).sin();
             }
             samples.push(CLV::from_vec(v).unwrap());
         }

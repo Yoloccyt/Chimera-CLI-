@@ -71,7 +71,10 @@ impl TextPerceptor {
     ///
     /// 当 `embedding_client` 为 Mock 模式时,行为与 `perceive` 一致(v2 n-gram SipHash)。
     /// 真实模式下,通过 HTTP 调用外部 embedding 服务获取语义向量。
-    pub async fn perceive_async(&self, input: &PerceptionInput) -> Result<CognitiveElement, NmcError> {
+    pub async fn perceive_async(
+        &self,
+        input: &PerceptionInput,
+    ) -> Result<CognitiveElement, NmcError> {
         let text = match input {
             PerceptionInput::Text(t) => t.as_str(),
             other => {
@@ -84,10 +87,14 @@ impl TextPerceptor {
         let content_hash = sha256_hex(text.as_bytes());
 
         // v3.0:神经网络语义嵌入(通过 EmbeddingClient)
-        let embedding = self.embedding_client.embed(text).await.map_err(|e| NmcError::EncodingFailed {
-            modality: "Text".into(),
-            reason: e.to_string(),
-        })?;
+        let embedding =
+            self.embedding_client
+                .embed(text)
+                .await
+                .map_err(|e| NmcError::EncodingFailed {
+                    modality: "Text".into(),
+                    reason: e.to_string(),
+                })?;
 
         Ok(CognitiveElement::new(
             Modality::Text,
@@ -140,7 +147,7 @@ impl Perceptor for TextPerceptor {
 /// 3. 提取全局语义特征:词长分布、标点密度、数字比例、大小写模式
 /// 4. 使用 SipHash-1-3 将特征散列到 dim 维向量
 /// 5. L2 归一化,确保向量在超球面上(便于余弦相似度计算)
-fn semantic_embedding_v2(text: &str, dim: usize) -> Vec<f32> {
+pub(crate) fn semantic_embedding_v2(text: &str, dim: usize) -> Vec<f32> {
     if text.is_empty() {
         return vec![0.0; dim];
     }
@@ -286,7 +293,7 @@ fn extract_global_features(text: &str, chars: &[char], features: &mut [f64], dim
 
     // 标点密度
     let punctuation = chars.iter().filter(|&&c| c.is_ascii_punctuation()).count() as f64;
-    let sentence_ends = text.matches(|c| c == '.' || c == '!' || c == '?' || c == '。' || c == '！' || c == '？').count() as f64;
+    let sentence_ends = text.matches(['.', '!', '?', '。', '！', '？']).count() as f64;
 
     // 数字比例
     let digits = chars.iter().filter(|&&c| c.is_ascii_digit()).count() as f64;
@@ -299,7 +306,10 @@ fn extract_global_features(text: &str, chars: &[char], features: &mut [f64], dim
     let whitespace = chars.iter().filter(|&&c| c.is_whitespace()).count() as f64;
 
     // 中文检测
-    let chinese = chars.iter().filter(|&&c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF).count() as f64;
+    let chinese = chars
+        .iter()
+        .filter(|&&c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF)
+        .count() as f64;
 
     // 将特征散列到不同桶
     let feature_vec = [
@@ -317,7 +327,7 @@ fn extract_global_features(text: &str, chars: &[char], features: &mut [f64], dim
 
     for (i, &value) in feature_vec.iter().enumerate() {
         let idx = siphash_index(i as u64, 3, dim);
-        features[idx] += value as f64;
+        features[idx] += value;
     }
 }
 
@@ -376,7 +386,10 @@ mod tests {
         assert_eq!(elem.embedding_dim(), 512);
         // L2 归一化后,向量长度应为 1.0
         let norm_sq: f32 = elem.embedding.iter().map(|&v| v * v).sum();
-        assert!((norm_sq - 1.0).abs() < 1e-3, "L2 归一化后范数应为 1.0,实际为 {norm_sq}");
+        assert!(
+            (norm_sq - 1.0).abs() < 1e-3,
+            "L2 归一化后范数应为 1.0,实际为 {norm_sq}"
+        );
     }
 
     #[test]
@@ -388,7 +401,10 @@ mod tests {
         assert_eq!(elem.embedding_dim(), 512);
         // L2 归一化后,向量长度应为 1.0
         let norm_sq: f32 = elem.embedding.iter().map(|&v| v * v).sum();
-        assert!((norm_sq - 1.0).abs() < 1e-3, "L2 归一化后范数应为 1.0,实际为 {norm_sq}");
+        assert!(
+            (norm_sq - 1.0).abs() < 1e-3,
+            "L2 归一化后范数应为 1.0,实际为 {norm_sq}"
+        );
     }
 
     #[test]
@@ -468,7 +484,10 @@ mod tests {
             .unwrap();
         // L2 归一化后,向量长度应为 1.0
         let norm_sq: f32 = elem.embedding.iter().map(|&v| v * v).sum();
-        assert!((norm_sq - 1.0).abs() < 1e-3, "L2 归一化后范数应为 1.0,实际为 {norm_sq}");
+        assert!(
+            (norm_sq - 1.0).abs() < 1e-3,
+            "L2 归一化后范数应为 1.0,实际为 {norm_sq}"
+        );
     }
 
     // ── v2.0 核心改进测试:语义区分度 ──
@@ -482,70 +501,71 @@ mod tests {
 
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
         // 相同字符不同顺序,相似度应显著低于 1.0(预期 < 0.5)
-        assert!(
-            sim < 0.5,
-            "'hello'与'olleh'语义相似度应 < 0.5,实际为 {sim}"
-        );
+        assert!(sim < 0.5, "'hello'与'olleh'语义相似度应 < 0.5,实际为 {sim}");
     }
 
     #[test]
     fn test_semantic_similar_synonyms() {
         // 同义句应产生高相似度
         let p = TextPerceptor::new(NmcConfig::default());
-        let elem1 = p.perceive(&PerceptionInput::Text("快速棕色狐狸".into())).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Text("迅速的棕色狐狸".into())).unwrap();
+        let elem1 = p
+            .perceive(&PerceptionInput::Text("快速棕色狐狸".into()))
+            .unwrap();
+        let elem2 = p
+            .perceive(&PerceptionInput::Text("迅速的棕色狐狸".into()))
+            .unwrap();
 
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
         // 语义相似句,相似度应 > 0.3(共享"棕色狐狸"核心语义)
-        assert!(
-            sim > 0.3,
-            "同义句语义相似度应 > 0.3,实际为 {sim}"
-        );
+        assert!(sim > 0.3, "同义句语义相似度应 > 0.3,实际为 {sim}");
     }
 
     #[test]
     fn test_semantic_different_unrelated() {
         // 无关句应产生低相似度
         let p = TextPerceptor::new(NmcConfig::default());
-        let elem1 = p.perceive(&PerceptionInput::Text("Rust programming language".into())).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Text("chocolate cake recipe".into())).unwrap();
+        let elem1 = p
+            .perceive(&PerceptionInput::Text("Rust programming language".into()))
+            .unwrap();
+        let elem2 = p
+            .perceive(&PerceptionInput::Text("chocolate cake recipe".into()))
+            .unwrap();
 
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
         // 无关句,相似度应较低
-        assert!(
-            sim < 0.7,
-            "无关句语义相似度应 < 0.7,实际为 {sim}"
-        );
+        assert!(sim < 0.7, "无关句语义相似度应 < 0.7,实际为 {sim}");
     }
 
     #[test]
     fn test_semantic_prefix_order_matters() {
         // 前缀顺序不同应产生不同嵌入
         let p = TextPerceptor::new(NmcConfig::default());
-        let elem1 = p.perceive(&PerceptionInput::Text("fn main() { println!".into())).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Text("println! fn main() {".into())).unwrap();
+        let elem1 = p
+            .perceive(&PerceptionInput::Text("fn main() { println!".into()))
+            .unwrap();
+        let elem2 = p
+            .perceive(&PerceptionInput::Text("println! fn main() {".into()))
+            .unwrap();
 
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
         // 相同 token 不同顺序,相似度应显著不同
-        assert!(
-            sim < 0.9,
-            "前缀顺序不同,相似度应 < 0.9,实际为 {sim}"
-        );
+        assert!(sim < 0.9, "前缀顺序不同,相似度应 < 0.9,实际为 {sim}");
     }
 
     #[test]
     fn test_semantic_chinese_order_matters() {
         // 中文语序不同应产生不同嵌入
         let p = TextPerceptor::new(NmcConfig::default());
-        let elem1 = p.perceive(&PerceptionInput::Text("猫追老鼠".into())).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Text("老鼠追猫".into())).unwrap();
+        let elem1 = p
+            .perceive(&PerceptionInput::Text("猫追老鼠".into()))
+            .unwrap();
+        let elem2 = p
+            .perceive(&PerceptionInput::Text("老鼠追猫".into()))
+            .unwrap();
 
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
         // 相同字符不同语序,相似度应显著低于 1.0
-        assert!(
-            sim < 0.8,
-            "中文语序不同,相似度应 < 0.8,实际为 {sim}"
-        );
+        assert!(sim < 0.8, "中文语序不同,相似度应 < 0.8,实际为 {sim}");
     }
 
     #[test]
@@ -586,199 +606,5 @@ mod tests {
         assert!(w0 > w50, "前缀权重应 > 中间权重");
         assert!(w50 > w99, "中间权重应 > 后缀权重");
         assert!((w0 - 1.0).abs() < 1e-6, "位置 0 权重应 ≈ 1.0");
-    }
-}
-//! 文本感知器 — 将文本输入编码为认知元素
-//!
-//! 对应架构层:L2 Memory
-//!
-//! # 实现说明
-//! 本周使用 SHA256 + 字符频率统计的占位实现,Week 7/8 将接入 ort ONNX
-//! Runtime 实现真正的语义嵌入。占位实现的特性:
-//! - **确定性**:相同输入始终产生相同输出(哈希 + 频率统计)
-//! - **维度**:text_dim 维(默认 256),每个 UTF-8 字节映射到一个桶
-//! - **归一化**:频率向量归一化到 [0, 1],便于后续融合
-
-use crate::config::NmcConfig;
-use crate::error::NmcError;
-use crate::perceptors::{byte_frequency_embedding, sha256_hex, Perceptor};
-use crate::types::{CognitiveElement, Modality, PerceptionInput};
-
-/// 文本感知器 — 基于字符频率统计的占位实现
-///
-/// TODO(Week 7/8): 接入 ort ONNX Runtime 实现语义嵌入
-pub struct TextPerceptor {
-    /// 配置(含 text_dim 维度参数)
-    config: NmcConfig,
-}
-
-impl TextPerceptor {
-    /// 创建文本感知器
-    pub fn new(config: NmcConfig) -> Self {
-        Self { config }
-    }
-
-    /// 返回配置引用
-    pub fn config(&self) -> &NmcConfig {
-        &self.config
-    }
-}
-
-impl Perceptor for TextPerceptor {
-    fn modality(&self) -> Modality {
-        Modality::Text
-    }
-
-    fn perceive(&self, input: &PerceptionInput) -> Result<CognitiveElement, NmcError> {
-        let text = match input {
-            PerceptionInput::Text(t) => t.as_str(),
-            other => {
-                return Err(NmcError::InvalidModality {
-                    reason: format!("TextPerceptor 仅接受 Text 输入,收到 {}", other.modality()),
-                });
-            }
-        };
-
-        // content_hash: SHA256 of UTF-8 bytes
-        let content_hash = sha256_hex(text.as_bytes());
-
-        // embedding: 字符频率统计(text_dim 维)
-        // TODO(Week 7/8): 接入 ort ONNX Runtime 实现语义嵌入
-        let embedding = byte_frequency_embedding(text.as_bytes(), self.config.text_dim);
-
-        Ok(CognitiveElement::new(
-            Modality::Text,
-            content_hash,
-            embedding,
-        ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_text_perceptor_empty_text() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let elem = p.perceive(&PerceptionInput::Text(String::new())).unwrap();
-        assert_eq!(elem.modality, Modality::Text);
-        assert_eq!(elem.embedding_dim(), 256);
-        // 空文本:所有桶为 0.0
-        assert!(elem.embedding.iter().all(|&v| v == 0.0));
-        // 空文本仍有有效哈希
-        assert!(!elem.content_hash.is_empty());
-    }
-
-    #[test]
-    fn test_text_perceptor_long_text_10kb() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let long_text = "a".repeat(10_000);
-        let elem = p
-            .perceive(&PerceptionInput::Text(long_text.clone()))
-            .unwrap();
-        assert_eq!(elem.embedding_dim(), 256);
-        // 全 'a' 文本:字节 0x61 对应桶 0x61 % 256 = 97,该桶值为 1.0
-        assert!((elem.embedding[97] - 1.0).abs() < 1e-6);
-        // 其余桶为 0.0
-        for (i, &v) in elem.embedding.iter().enumerate() {
-            if i != 97 {
-                assert!(v.abs() < 1e-6, "桶 {i} 应为 0,实际为 {v}");
-            }
-        }
-    }
-
-    #[test]
-    fn test_text_perceptor_chinese() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let elem = p
-            .perceive(&PerceptionInput::Text("你好世界".into()))
-            .unwrap();
-        assert_eq!(elem.embedding_dim(), 256);
-        // 中文 UTF-8 编码为多字节,频率应分布在多个桶
-        let non_zero = elem.embedding.iter().filter(|&&v| v > 0.0).count();
-        assert!(non_zero > 0, "中文文本应产生非零嵌入");
-        // 频率之和应接近 1.0(归一化)
-        let sum: f32 = elem.embedding.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5, "频率之和应为 1.0,实际为 {sum}");
-    }
-
-    #[test]
-    fn test_text_perceptor_unicode_emoji() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let elem = p
-            .perceive(&PerceptionInput::Text("Hello 🌍🚀".into()))
-            .unwrap();
-        assert_eq!(elem.embedding_dim(), 256);
-        let sum: f32 = elem.embedding.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_text_perceptor_special_chars() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let elem = p
-            .perceive(&PerceptionInput::Text("!@#$%^&*()".into()))
-            .unwrap();
-        assert_eq!(elem.embedding_dim(), 256);
-        let sum: f32 = elem.embedding.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_text_perceptor_repeated_text() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let elem1 = p.perceive(&PerceptionInput::Text("abcabc".into())).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Text("abcabc".into())).unwrap();
-        // 相同文本产生相同哈希与嵌入
-        assert_eq!(elem1.content_hash, elem2.content_hash);
-        assert_eq!(elem1.embedding, elem2.embedding);
-    }
-
-    #[test]
-    fn test_text_perceptor_content_hash_deterministic() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let elem1 = p.perceive(&PerceptionInput::Text("hello".into())).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Text("hello".into())).unwrap();
-        assert_eq!(elem1.content_hash, elem2.content_hash);
-        // SHA256 of "hello" 应为固定值
-        assert_eq!(
-            elem1.content_hash,
-            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-        );
-    }
-
-    #[test]
-    fn test_text_perceptor_different_text_different_hash() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let elem1 = p.perceive(&PerceptionInput::Text("hello".into())).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Text("world".into())).unwrap();
-        assert_ne!(elem1.content_hash, elem2.content_hash);
-    }
-
-    #[test]
-    fn test_text_perceptor_wrong_modality() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let result = p.perceive(&PerceptionInput::Image(vec![1, 2, 3]));
-        assert!(matches!(result, Err(NmcError::InvalidModality { .. })));
-    }
-
-    #[test]
-    fn test_text_perceptor_custom_text_dim() {
-        let config = NmcConfig::default().with_text_dim(128);
-        let p = TextPerceptor::new(config);
-        let elem = p.perceive(&PerceptionInput::Text("test".into())).unwrap();
-        assert_eq!(elem.embedding_dim(), 128);
-    }
-
-    #[test]
-    fn test_text_perceptor_embedding_normalized() {
-        let p = TextPerceptor::new(NmcConfig::default());
-        let elem = p
-            .perceive(&PerceptionInput::Text("The quick brown fox".into()))
-            .unwrap();
-        let sum: f32 = elem.embedding.iter().sum();
-        // 非空文本的频率之和应为 1.0
-        assert!((sum - 1.0).abs() < 1e-5, "频率之和应为 1.0,实际为 {sum}");
     }
 }

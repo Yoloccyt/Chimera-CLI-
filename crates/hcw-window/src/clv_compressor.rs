@@ -23,10 +23,9 @@
 //!   复杂构建依赖。512-dim → 64-dim 的矩阵乘法计算量小
 //!   (512×64=32768 次乘加),完全在 Rust 层面高效。
 
-use std::sync::Arc;
-
-use ndarray::{Array1, Array2, Axis};
+use ndarray::{Array1, Array2};
 use nexus_core::CLV;
+use serde::{Deserialize, Serialize};
 
 /// 压缩后维度 — 64(512 / 8 = 64)
 pub const COMPRESSED_DIM: usize = 64;
@@ -35,7 +34,7 @@ pub const COMPRESSED_DIM: usize = 64;
 const ORIGINAL_DIM: usize = CLV::DIMENSION; // 512
 
 /// CLV 压缩方法
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CompressionMethod {
     /// 主成分分析 — 保留最大方差方向,质量最高
     ///
@@ -50,13 +49,8 @@ pub enum CompressionMethod {
     /// 混合模式 — 自适应选择 PCA 或随机投影
     ///
     /// 样本数 >= 100 且 PCA 矩阵已训练时用 PCA,否则用随机投影。
+    #[default]
     Hybrid,
-}
-
-impl Default for CompressionMethod {
-    fn default() -> Self {
-        Self::Hybrid
-    }
 }
 
 /// CLV 压缩器 — 将 512-dim CLV 压缩到 64-dim
@@ -278,10 +272,6 @@ impl ClvCompressor {
         for col in 0..COMPRESSED_DIM {
             for row in 0..ORIGINAL_DIM {
                 seed = seed.wrapping_add(0x9e3779b97f4a7c15);
-                let mut z = seed;
-                z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-                z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-                z = z ^ (z >> 31);
 
                 // Box-Muller 变换:将均匀随机数转为正态分布
                 // 简化版:使用中心极限定理近似(12 个均匀分布之和 - 6)
@@ -470,8 +460,8 @@ mod tests {
         for i in 0..200 {
             let mut v = vec![0.0_f32; ORIGINAL_DIM];
             // 前 64 维有结构,其余为噪声
-            for j in 0..64 {
-                v[j] = (i as f32 * 0.01 + j as f32 * 0.1).sin();
+            for (j, v_item) in v.iter_mut().take(64).enumerate() {
+                *v_item = (i as f32 * 0.01 + j as f32 * 0.1).sin();
             }
             samples.push(CLV::from_vec(v).unwrap());
         }

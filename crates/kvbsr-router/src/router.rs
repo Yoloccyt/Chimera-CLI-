@@ -39,6 +39,7 @@ use tracing::{info, warn};
 
 // SubTask 21.4:使用 nexus_core 统一的 cosine_similarity_slices
 // (原 crate::blocks::cosine_similarity 已删除,统一到 L1 Core)
+use crate::agent_attention::AgentAttentionEngine;
 use crate::clv_projector::ClvProjector;
 use crate::config::KvbsrConfig;
 use crate::error::KvbsrError;
@@ -145,6 +146,12 @@ pub struct KVBlockSemanticRouter {
     /// WHY:替代简单截取,支持 PCA/随机投影等数据驱动降维,
     /// 提升路由区分度与准确率。
     clv_projector: ClvProjector,
+    /// Agent Token 注意力路由引擎(可选)
+    ///
+    /// WHY:引入STAGformer的两阶段Agent注意力机制，替代静态余弦相似度。
+    /// 通过RwLock保护，build_blocks时初始化Agent Token，route时读取。
+    /// 使用Option<Arc<RwLock<>>>设计，当未启用时为None，无额外开销。
+    agent_attention: Arc<RwLock<Option<AgentAttentionEngine>>>,
 }
 
 impl KVBlockSemanticRouter {
@@ -169,6 +176,14 @@ impl KVBlockSemanticRouter {
                 ClvProjector::new_random_projection(config.block_vector_dim)
             }
         };
+        // 初始化Agent Attention引擎(如果启用)
+        let agent_attention = if config.agent_attention.enabled {
+            let engine =
+                AgentAttentionEngine::new(config.block_vector_dim, config.agent_attention.clone());
+            Some(engine)
+        } else {
+            None
+        };
         Self {
             state: Arc::new(RwLock::new(RouterState::default())),
             event_bus,
@@ -177,6 +192,7 @@ impl KVBlockSemanticRouter {
             rebalancer: Rebalancer::new(config),
             tool_vectors: Arc::new(DashMap::new()),
             clv_projector: projector,
+            agent_attention: Arc::new(RwLock::new(agent_attention)),
         }
     }
 
@@ -249,6 +265,13 @@ impl KVBlockSemanticRouter {
             return Err(KvbsrError::EmptyBlocks);
         }
 
+        // 2.5 初始化Agent Token(如果启用Agent Attention)
+        // 从工具向量通过k-means++初始化，使Agent Token代表语义聚类中心
+        if let Some(ref mut engine) = *self.agent_attention.write().await {
+            let tool_refs: Vec<&[f32]> = tools.iter().map(|t| t.vector.as_slice()).collect();
+            engine.init_agent_tokens_from_tools(&tool_refs);
+        }
+
         // 3. 原子更新所有状态(单一写锁,确保一致性)
         let mut state = self.state.write().await;
         // SubTask 13.13:同步更新 DashMap(清空 + 插入,在 write 锁内避免与 route 并发)
@@ -317,6 +340,14 @@ impl KVBlockSemanticRouter {
         // 1. 将 CLV 降维到 block_vector_dim
         let query = self.clv_to_block_dim(clv);
 
+        // 1.5 获取Agent Attention引擎(如果启用)
+        // WHY:在state锁之前获取，避免死锁(不同锁的获取顺序一致)
+        let agent_engine = if self.config.agent_attention.enabled {
+            self.agent_attention.read().await.as_ref().cloned()
+        } else {
+            None
+        };
+
         // 2. 一次性获取读锁,完成第一级路由并记录候选工具 ID,释放锁
         // WHY 单一读锁:确保 blocks 快照来自同一时刻
         // WHY 锁内仅记录候选工具 ID(不 clone 工具向量):减少锁持有时间,
@@ -332,7 +363,8 @@ impl KVBlockSemanticRouter {
                 return Err(KvbsrError::EmptyBlocks);
             }
             // First-level routing inside lock (fast: 15 blocks)
-            let top_block_indices = self.select_top_blocks(&query, &state.blocks, top_blocks);
+            let top_block_indices =
+                self.select_top_blocks(&query, &state.blocks, top_blocks, agent_engine.as_ref());
             // 收集候选工具 ID(不 clone 工具向量,锁外从 DashMap 读)
             // 不 clone 全量 blocks,仅收集 top-N 块的工具 ID
             let estimated = top_blocks.saturating_mul(20).max(20);
@@ -363,6 +395,7 @@ impl KVBlockSemanticRouter {
             &candidate_tool_ids,
             &candidate_tool_vectors,
             top_tools,
+            agent_engine.as_ref(),
         );
 
         let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
@@ -438,12 +471,41 @@ impl KVBlockSemanticRouter {
 
     /// 第一级路由 — 选 Top-N 块
     ///
-    /// 计算查询向量与各 block_vector 的余弦相似度,返回相似度最高的 N 个块的索引。
+    /// 支持两种模式:
+    /// 1. Agent Attention模式:使用两阶段交叉注意力计算动态路由分数
+    /// 2. 余弦相似度模式:计算查询向量与各 block_vector 的余弦相似度
+    ///
+    /// 当 `agent_engine` 为 Some 且配置启用块级Agent Attention时，使用Agent Attention。
+    /// 否则回退到余弦相似度。
     ///
     /// WHY 使用 select_nth_unstable_by:部分排序 O(n) 替代全排序 O(n log n),
     /// 300 工具 / 50 块规模下单次路由延迟降低 20-30%。
     /// 前 K 个元素再排序确保降序输出(K log K << n log n)。
-    fn select_top_blocks(&self, query: &[f32], blocks: &[SemanticBlock], n: usize) -> Vec<usize> {
+    fn select_top_blocks(
+        &self,
+        query: &[f32],
+        blocks: &[SemanticBlock],
+        n: usize,
+        agent_engine: Option<&AgentAttentionEngine>,
+    ) -> Vec<usize> {
+        // 优先使用Agent Attention(如果启用且引擎就绪)
+        if let Some(engine) = agent_engine {
+            if self.config.agent_attention.use_in_block_routing {
+                let block_refs: Vec<&[f32]> =
+                    blocks.iter().map(|b| b.block_vector.as_slice()).collect();
+                let scores = engine.compute_scores(query, &block_refs);
+                let mut scored: Vec<(usize, f32)> =
+                    scores.iter().enumerate().map(|(i, &s)| (i, s)).collect();
+                let k = n.min(scored.len());
+                if k < scored.len() {
+                    scored.select_nth_unstable_by(k, |a, b| b.1.total_cmp(&a.1));
+                }
+                scored[..k].sort_by(|a, b| b.1.total_cmp(&a.1));
+                return scored[..k].iter().map(|(i, _)| *i).collect();
+            }
+        }
+
+        // 回退:静态余弦相似度
         let mut scored: Vec<(usize, f32)> = blocks
             .iter()
             .enumerate()
@@ -457,19 +519,21 @@ impl KVBlockSemanticRouter {
         // 部分排序:Top-N 用 select_nth_unstable_by(O(n))
         let k = n.min(scored.len());
         if k < scored.len() {
-            scored.select_nth_unstable_by(k, |a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            scored.select_nth_unstable_by(k, |a, b| b.1.total_cmp(&a.1));
         }
         // 前 K 个再排序确保降序(K log K << n log n)
-        scored[..k].sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored[..k].sort_by(|a, b| b.1.total_cmp(&a.1));
         scored[..k].iter().map(|(i, _)| *i).collect()
     }
 
     /// 第二级路由 — 在选中块的并集工具集内选 Top-K 工具
     ///
-    /// 计算查询向量与各候选工具向量的余弦相似度,
-    /// 返回相似度最高的 K 个工具 ID 与分数。
+    /// 支持两种模式:
+    /// 1. Agent Attention模式:使用两阶段交叉注意力计算动态路由分数
+    /// 2. 余弦相似度模式:计算查询向量与各工具向量的余弦相似度
+    ///
+    /// 当 `agent_engine` 为 Some 且配置启用工具级Agent Attention时，使用Agent Attention。
+    /// 否则回退到余弦相似度。
     ///
     /// WHY 使用 select_nth_unstable_by:部分排序 O(n) 替代全排序 O(n log n),
     /// 候选工具集通常 20-50 个,Top-8 选择从 O(n log n) 降到 O(n)。
@@ -484,7 +548,37 @@ impl KVBlockSemanticRouter {
         candidate_tool_ids: &HashSet<ToolId>,
         tool_vectors: &HashMap<ToolId, ToolVector>,
         k: usize,
+        agent_engine: Option<&AgentAttentionEngine>,
     ) -> (Vec<ToolId>, Vec<f32>) {
+        // 优先使用Agent Attention(如果启用且引擎就绪)
+        if let Some(engine) = agent_engine {
+            if self.config.agent_attention.use_in_tool_routing {
+                let mut tool_ids_list = Vec::new();
+                let mut tool_refs = Vec::new();
+                for tid in candidate_tool_ids {
+                    if let Some(tv) = tool_vectors.get(tid) {
+                        tool_ids_list.push(tid.clone());
+                        tool_refs.push(tv.vector.as_slice());
+                    }
+                }
+                let scores = engine.compute_scores(query, &tool_refs);
+                let mut scored: Vec<(ToolId, f32)> =
+                    tool_ids_list.into_iter().zip(scores).collect();
+
+                let limit = k.min(scored.len());
+                if limit < scored.len() {
+                    scored.select_nth_unstable_by(limit, |a, b| b.1.total_cmp(&a.1));
+                }
+                scored[..limit].sort_by(|a, b| b.1.total_cmp(&a.1));
+
+                let selected_tools: Vec<ToolId> =
+                    scored[..limit].iter().map(|(tid, _)| tid.clone()).collect();
+                let scores: Vec<f32> = scored[..limit].iter().map(|(_, s)| *s).collect();
+                return (selected_tools, scores);
+            }
+        }
+
+        // 回退:静态余弦相似度
         // SubTask 19.6:直接使用传入的 candidate_tool_ids,无需重新收集
         // 计算相似度
         let mut scored: Vec<(ToolId, f32)> = candidate_tool_ids
@@ -502,12 +596,10 @@ impl KVBlockSemanticRouter {
         // 部分排序:Top-K 用 select_nth_unstable_by(O(n))
         let limit = k.min(scored.len());
         if limit < scored.len() {
-            scored.select_nth_unstable_by(limit, |a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            scored.select_nth_unstable_by(limit, |a, b| b.1.total_cmp(&a.1));
         }
         // 前 limit 个再排序确保降序
-        scored[..limit].sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored[..limit].sort_by(|a, b| b.1.total_cmp(&a.1));
 
         // 取 Top-K
         let selected_tools: Vec<ToolId> =
@@ -633,6 +725,9 @@ impl KVBlockSemanticRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // WHY: 测试用例构造 Agent Attention 配置,但父模块未导入此类型(仅导入 AgentAttentionEngine)。
+    // 测试代码独立导入,避免污染 lib 构建的 use 列表(dev-dependencies 可绕过依赖方向)。
+    use crate::agent_attention::AgentAttentionConfig;
 
     /// 构造测试用工具向量与共现矩阵(15 块 × 20 工具 = 300 工具)
     fn make_test_data() -> (Vec<ToolVector>, CoOccurrenceMatrix) {
@@ -817,5 +912,134 @@ mod tests {
             .with_top_tools(3);
         let result = router.route_with_request(&req).await.unwrap();
         assert!(result.routed_count() <= 3);
+    }
+
+    // ============ Agent Attention 测试 ============
+
+    #[tokio::test]
+    async fn test_agent_attention_routing_disabled_by_default() {
+        let bus = EventBus::new();
+        let router = KVBlockSemanticRouter::new(bus);
+        let (tools, co) = make_test_data();
+        router.build_blocks(tools, co).await.unwrap();
+
+        let mut clv_vec = vec![0.0_f32; 512];
+        clv_vec[0] = 1.0;
+        clv_vec[1] = 1.0;
+        let clv = CLV::from_vec(clv_vec).unwrap();
+
+        // 默认禁用Agent Attention，应正常路由
+        let result = router.route(&clv).await.unwrap();
+        assert!(!result.selected_tools.is_empty());
+        assert!(result.routed_count() <= 8);
+    }
+
+    #[tokio::test]
+    async fn test_agent_attention_routing_enabled() {
+        let bus = EventBus::new();
+        let agent_config = AgentAttentionConfig {
+            enabled: true,
+            num_heads: 4,
+            num_agent_tokens: 8,
+            ..Default::default()
+        };
+        let config = KvbsrConfig::default().with_agent_attention(agent_config);
+        let router = KVBlockSemanticRouter::with_config(bus, config);
+        let (tools, co) = make_test_data();
+        router.build_blocks(tools, co).await.unwrap();
+
+        let mut clv_vec = vec![0.0_f32; 512];
+        clv_vec[0] = 1.0;
+        clv_vec[1] = 1.0;
+        let clv = CLV::from_vec(clv_vec).unwrap();
+
+        // 启用Agent Attention后应正常路由
+        let result = router.route(&clv).await.unwrap();
+        assert!(!result.selected_tools.is_empty());
+        assert!(result.routed_count() <= 8);
+        // 分数应非负
+        assert!(result.scores.iter().all(|&s| s >= 0.0));
+    }
+
+    #[tokio::test]
+    async fn test_agent_attention_block_routing_only() {
+        let bus = EventBus::new();
+        let agent_config = AgentAttentionConfig {
+            enabled: true,
+            use_in_block_routing: true,
+            use_in_tool_routing: false,
+            ..Default::default()
+        };
+        let config = KvbsrConfig::default().with_agent_attention(agent_config);
+        let router = KVBlockSemanticRouter::with_config(bus, config);
+        let (tools, co) = make_test_data();
+        router.build_blocks(tools, co).await.unwrap();
+
+        let clv = CLV::zero();
+        let result = router.route(&clv).await.unwrap();
+        assert!(result.routed_count() <= 8);
+    }
+
+    #[tokio::test]
+    async fn test_agent_attention_tool_routing_only() {
+        let bus = EventBus::new();
+        let agent_config = AgentAttentionConfig {
+            enabled: true,
+            use_in_block_routing: false,
+            use_in_tool_routing: true,
+            ..Default::default()
+        };
+        let config = KvbsrConfig::default().with_agent_attention(agent_config);
+        let router = KVBlockSemanticRouter::with_config(bus, config);
+        let (tools, co) = make_test_data();
+        router.build_blocks(tools, co).await.unwrap();
+
+        let clv = CLV::zero();
+        let result = router.route(&clv).await.unwrap();
+        assert!(result.routed_count() <= 8);
+    }
+
+    #[tokio::test]
+    async fn test_agent_attention_online_update() {
+        let bus = EventBus::new();
+        let agent_config = AgentAttentionConfig {
+            enabled: true,
+            num_agent_tokens: 4,
+            ..Default::default()
+        };
+        let config = KvbsrConfig::default().with_agent_attention(agent_config);
+        let router = KVBlockSemanticRouter::with_config(bus, config);
+        let (tools, co) = make_test_data();
+        router.build_blocks(tools, co).await.unwrap();
+
+        let mut clv_vec = vec![0.0_f32; 512];
+        clv_vec[0] = 1.0;
+        clv_vec[1] = 1.0;
+        let clv = CLV::from_vec(clv_vec).unwrap();
+
+        // 先路由一次
+        let result1 = router.route(&clv).await.unwrap();
+
+        // 在线更新Agent Token
+        let guard = router.agent_attention.read().await;
+        if let Some(ref engine) = *guard {
+            let query = router.clv_to_block_dim(&clv);
+            // WHY clone: DashMap::get 返回 Ref<ToolVector> 守卫,as_slice() 借用守卫但
+            // 守卫在闭包返回时立即释放,导致悬垂引用(E0515)。收集 owned Vec<f32>
+            // 替代借用切片,语义不变(测试仅验证 online_update 不 panic)。
+            let tool_refs: Vec<Vec<f32>> = result1
+                .selected_tools
+                .iter()
+                .filter_map(|tid| router.tool_vectors.get(tid).map(|tv| tv.vector.clone()))
+                .collect();
+            if !tool_refs.is_empty() {
+                let mut engine_clone = engine.clone();
+                drop(guard);
+                let indices: Vec<usize> = (0..tool_refs.len()).collect();
+                let selected_refs: Vec<&[f32]> = tool_refs.iter().map(|v| v.as_slice()).collect();
+                engine_clone.online_update(&query, &indices, &selected_refs, 0.01);
+                // 更新后不应panic
+            }
+        }
     }
 }

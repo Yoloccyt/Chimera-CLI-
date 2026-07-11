@@ -164,6 +164,7 @@ pub struct VetoReason {
 /// # 扩展性
 /// 规则库可通过 `from_config` 从 `omega.yaml` 加载自定义规则,
 /// 支持运行时扩展检测能力。
+#[derive(Debug, Clone)]
 pub struct MaliciousIntentRuleBook {
     /// 规则列表(顺序敏感:detect 返回首个匹配)
     pub rules: Vec<IntentRule>,
@@ -421,6 +422,7 @@ fn default_rules() -> Vec<IntentRule> {
 /// # 线程安全
 /// `Skeptic` 仅持有 `MaliciousIntentRuleBook`(不可变数据),
 /// 通过 `&self` 调用,天然线程安全(Send + Sync)。
+#[derive(Debug, Clone)]
 pub struct Skeptic {
     /// 恶意意图规则库
     rule_book: MaliciousIntentRuleBook,
@@ -438,6 +440,15 @@ impl Skeptic {
     /// 返回首个匹配的 VetoReason,无匹配则返回 None。
     pub fn detect_malicious_intent(&self, proposal: &Proposal) -> Option<VetoReason> {
         self.rule_book.detect(&proposal.content)
+    }
+
+    /// 检测提案中的所有恶意意图(全量匹配)
+    ///
+    /// 与 `detect_malicious_intent` 不同,此方法返回所有匹配的规则,
+    /// 用于分布式否决场景下合并冻结能力列表(同一内容可能同时包含
+    /// 命令注入与提权等多种攻击模式)。
+    pub fn detect_all_malicious_intent(&self, proposal: &Proposal) -> Vec<VetoReason> {
+        self.rule_book.detect_all(&proposal.content)
     }
 
     /// 行使否决权:检测恶意意图并生成冻结能力列表

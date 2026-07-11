@@ -18,6 +18,12 @@ use osa_coordinator::{
 /// 构造测试用 TaskProfile(模拟真实任务规模)
 fn make_profile() -> TaskProfile {
     TaskProfile {
+        // v1.5.0 新增语义评分字段(本 bench 不测试语义评分,使用默认 None)
+        tool_scores: None,
+        file_scores: None,
+        memory_scores: None,
+        operation_scores: None,
+        task_scores: None,
         task_id: TaskId::new("t-1"),
         task_type: TaskType::Read,
         complexity_score: 0.6,

@@ -90,10 +90,11 @@ impl Default for AdaptiveStrategySelector {
 impl AdaptiveStrategySelector {
     /// 创建新的选择器
     pub fn new(beta: f32, epsilon: f32) -> Self {
-        let mut s = Self::default();
-        s.beta = beta.clamp(0.0, 1.0);
-        s.epsilon = epsilon.clamp(0.0, 1.0);
-        s
+        Self {
+            beta: beta.clamp(0.0, 1.0),
+            epsilon: epsilon.clamp(0.0, 1.0),
+            ..Default::default()
+        }
     }
 
     /// 选择策略(ε-贪心)

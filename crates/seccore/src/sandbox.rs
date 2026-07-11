@@ -21,25 +21,26 @@
 use std::time::Duration;
 
 #[cfg(not(windows))]
+use sha2::{Digest, Sha256};
+#[cfg(not(windows))]
 use std::process::Stdio;
 #[cfg(not(windows))]
 use std::time::Instant;
 #[cfg(not(windows))]
-use sha2::{Digest, Sha256};
-#[cfg(not(windows))]
 use tokio::process::Command as TokioCommand;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::audit::{AuditChain, AuditRecordStatus};
 use crate::error::SecCoreError;
 use crate::policy::{validate_command, validate_env, CommandPolicy, EnvPolicy};
+use crate::spectral_attention::SpectralAttentionAnalyzer;
 use crate::types::{Command, CommandSpec, ExecutionResult};
 use crate::windows_sandbox::WindowsSandboxExecutor;
 
-/// 零信任沙箱 — 封装策略、环境策略与审计链,提供统一的执行入口。
+/// 零信任沙箱 — 封装策略、环境策略、审计链与 Spectral Attention 分析器,提供统一的执行入口。
 ///
 /// 所有外部命令必须经 `Sandbox::audit_and_execute` 执行,
-/// 确保经过四层防御:静态分析 → 环境过滤 → 沙箱执行 → 审计记录。
+/// 确保经过四层防御:静态分析 → 环境过滤 → 沙箱执行 → 审计记录 → 频谱分析。
 pub struct Sandbox {
     /// 命令策略(白名单 + 拦截模式)
     pub policy: CommandPolicy,
@@ -47,6 +48,12 @@ pub struct Sandbox {
     pub env_policy: EnvPolicy,
     /// 审计链(SHA-256 Merkle 链)
     pub audit_chain: AuditChain,
+    /// Spectral Attention 安全审计分析器
+    ///
+    /// WHY: 在审计链基础上增加图注意力分析,检测命令执行序列中的异常模式
+    /// (周期性攻击、异常密集连接、安全关键头异常)。分析结果仅记录告警,
+    /// 不阻塞命令执行(事后分析层)。
+    pub spectral_analyzer: SpectralAttentionAnalyzer,
     /// 沙箱执行超时 — 防止恶意命令(如 `sleep infinity`)永久阻塞,导致 DoS (F-002)。
     ///
     /// WHY: 无超时限制时,恶意命令可永久阻塞子进程,耗尽调度资源造成 DoS。
@@ -58,11 +65,13 @@ impl Sandbox {
     /// 创建沙箱,携带指定的命令策略与环境变量策略。
     ///
     /// 默认超时 30 秒(防止恶意命令永久阻塞),可用 `with_timeout` 调整。
+    /// 默认启用 Spectral Attention 分析器。
     pub fn new(policy: CommandPolicy, env_policy: EnvPolicy) -> Self {
         Self {
             policy,
             env_policy,
             audit_chain: AuditChain::new(),
+            spectral_analyzer: SpectralAttentionAnalyzer::with_default_config(),
             timeout: Duration::from_secs(30),
         }
     }
@@ -81,18 +90,35 @@ impl Sandbox {
         self
     }
 
-    /// 审计并执行命令 — 零信任四层防御的统一入口。
+    /// 链式设置 Spectral Attention 配置。
     ///
-    /// 执行流程(N5 修复:pre-execution audit 模式):
+    /// 用于调整异常检测阈值、注意力权重、容量限制等参数。
+    pub fn with_spectral_config(
+        mut self,
+        config: crate::spectral_attention::SpectralConfig,
+    ) -> Self {
+        self.spectral_analyzer = SpectralAttentionAnalyzer::new(config);
+        self
+    }
+
+    /// 审计并执行命令 — 零信任四层防御 + Spectral Attention 增强的统一入口。
+    ///
+    /// 执行流程(N5 修复:pre-execution audit 模式 + Spectral Attention 事后分析):
     /// 1. `validate_command`:静态分析,拦截注入/越权/逃逸/泄露/篡改/滥用
     /// 2. `validate_env`:环境变量过滤,拦截 SECRET/KEY/TOKEN 泄露
     /// 3. `audit_chain.append_intent`:**执行前**记录 Intent 审计块(关闭 N5 漏洞)
     /// 4. `execute_in_sandbox`:进程隔离执行(Windows 降级 / Linux gVisor)
     /// 5. `audit_chain.update_status`:执行后更新为 Executed/Failed
+    /// 6. `spectral_analyzer.add_execution_record` + `analyze`: Spectral Attention 分析,
+    ///    检测异常模式并记录告警(不阻塞返回)
     ///
     /// WHY(N5 修复): 原实现步骤3在步骤4之后(后置 append),若执行成功但 append
     /// 失败则无审计痕迹。改为 pre-execution 模式:执行前先写 Intent,即使后续
     /// 崩溃也有意图痕迹;执行失败也更新为 Failed,保持审计链完整。
+    ///
+    /// WHY(Spectral Attention): 审计链记录单次命令的哈希,但无法检测跨命令的
+    /// 异常模式(如周期性攻击、异常依赖链)。Spectral Attention 将执行序列建模为图,
+    /// 通过频谱分析检测这些模式,作为审计链的增强层。分析失败不影响命令执行结果。
     ///
     /// # 参数
     /// - `command`:原始命令(不可信,需经策略校验)
@@ -126,7 +152,7 @@ impl Sandbox {
 
         // 步骤5(N5 修复):post-execution update — 根据执行结果更新审计状态
         // WHY: 无论成功失败都要更新审计链,防止 Intent 记录永久悬挂
-        match exec_result {
+        let final_result = match exec_result {
             Ok(result) => {
                 // 执行成功:更新为 Executed,填充 result_hash
                 if let Err(e) = self.audit_chain.update_status(
@@ -170,7 +196,61 @@ impl Sandbox {
 
                 Err(e)
             }
+        };
+
+        // 步骤6:Spectral Attention 分析 — 事后增强审计(不阻塞返回)
+        // WHY: 分析失败仅记录日志,不影响命令执行结果。分析器从 spec 和 result 构建图,
+        //      检测跨命令的异常模式。只有在 final_result 是 Ok 时才传入 result,
+        //      Failed 时传入一个占位结果。
+        let result_for_analysis = match &final_result {
+            Ok(result) => result.clone(),
+            Err(_) => ExecutionResult {
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: String::new(),
+                duration: Duration::from_secs(0),
+                audit_hash: "0".repeat(64),
+            },
+        };
+        self.spectral_analyzer
+            .add_execution_record(&spec, &result_for_analysis);
+        match self.spectral_analyzer.analyze() {
+            Ok(analysis) => {
+                if !analysis.critical_head_alerts.is_empty() {
+                    for alert in &analysis.critical_head_alerts {
+                        warn!(
+                            head_type = %alert.head_type,
+                            alert_level = ?alert.alert_level,
+                            attention_score = alert.attention_score,
+                            description = %alert.description,
+                            "Spectral Attention 安全关键头告警"
+                        );
+                    }
+                }
+                if analysis.anomaly_level != crate::spectral_attention::AnomalyLevel::Normal {
+                    warn!(
+                        anomaly_level = ?analysis.anomaly_level,
+                        anomaly_score = analysis.anomaly_score,
+                        periodicity_score = analysis.periodicity_score,
+                        "Spectral Attention 检测到异常执行模式"
+                    );
+                }
+                if analysis.anomaly_level == crate::spectral_attention::AnomalyLevel::Critical {
+                    info!(
+                        anomaly_score = analysis.anomaly_score,
+                        "Spectral Attention 判定为 Critical 异常,建议人工复核"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "Spectral Attention 分析失败,不影响命令执行结果"
+                );
+            }
         }
+
+        final_result
     }
 
     /// 在沙箱中执行校验通过的命令规格。
@@ -305,5 +385,38 @@ mod tests {
         let cmd = Command::new("echo").arg("hello").env("SECRET_KEY", "leak");
         let result = sandbox.audit_and_execute(cmd).await;
         assert!(result.is_err());
+    }
+
+    // === Spectral Attention 集成测试 ===
+
+    #[test]
+    fn test_sandbox_spectral_analyzer_default() {
+        let sandbox = Sandbox::with_default_policy();
+        assert!(sandbox.spectral_analyzer.graph().nodes().is_empty());
+        assert_eq!(sandbox.spectral_analyzer.config().anomaly_threshold, 0.7);
+    }
+
+    #[test]
+    fn test_sandbox_with_spectral_config() {
+        let config = crate::spectral_attention::SpectralConfig {
+            anomaly_threshold: 0.9,
+            max_nodes: 500,
+            ..Default::default()
+        };
+        let sandbox = Sandbox::with_default_policy().with_spectral_config(config);
+        assert_eq!(sandbox.spectral_analyzer.config().anomaly_threshold, 0.9);
+        assert_eq!(sandbox.spectral_analyzer.config().max_nodes, 500);
+    }
+
+    #[tokio::test]
+    async fn test_sandbox_spectral_graph_after_blocked() {
+        // 被拦截的命令不应进入 Spectral Attention 图
+        let mut sandbox = Sandbox::with_default_policy();
+        let cmd = Command::new("echo").arg("$(whoami)");
+        let _ = sandbox.audit_and_execute(cmd).await;
+        assert!(
+            sandbox.spectral_analyzer.graph().nodes().is_empty(),
+            "被拦截命令不应进入 Spectral Attention 图"
+        );
     }
 }

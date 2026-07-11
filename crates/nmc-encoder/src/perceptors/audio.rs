@@ -100,7 +100,7 @@ fn audio_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
     }
 
     const FRAME_SIZE: usize = 1024; // 模拟音频帧大小
-    let frame_count = (bytes.len() + FRAME_SIZE - 1) / FRAME_SIZE;
+    let frame_count = bytes.len().div_ceil(FRAME_SIZE);
 
     let mut features = vec![0.0_f64; dim];
 
@@ -120,12 +120,13 @@ fn audio_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
         let samples: Vec<i16> = chunk.iter().map(|&b| b as i16 - 128).collect();
 
         // RMS 能量
-        let energy = (samples.iter().map(|&s| (s * s) as f64).sum::<f64>() / samples.len() as f64).sqrt();
+        let energy =
+            (samples.iter().map(|&s| (s * s) as f64).sum::<f64>() / samples.len() as f64).sqrt();
         frame_energy.push(energy);
 
         // 模拟频谱:低频(0-63)、中频(64-127)、高频(128-255)
         let low_count = chunk.iter().filter(|&&b| b < 64).count() as f64;
-        let mid_count = chunk.iter().filter(|&&b| b >= 64 && b < 128).count() as f64;
+        let mid_count = chunk.iter().filter(|&&b| (64..128).contains(&b)).count() as f64;
         let high_count = chunk.iter().filter(|&&b| b >= 128).count() as f64;
         let total = chunk.len() as f64;
 
@@ -185,11 +186,16 @@ fn audio_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
         }
 
         if !peak_intervals.is_empty() {
-            let mean_interval = peak_intervals.iter().sum::<usize>() as f64 / peak_intervals.len() as f64;
-            let variance = peak_intervals.iter().map(|&v| {
-                let diff = v as f64 - mean_interval;
-                diff * diff
-            }).sum::<f64>() / peak_intervals.len() as f64;
+            let mean_interval =
+                peak_intervals.iter().sum::<usize>() as f64 / peak_intervals.len() as f64;
+            let variance = peak_intervals
+                .iter()
+                .map(|&v| {
+                    let diff = v as f64 - mean_interval;
+                    diff * diff
+                })
+                .sum::<f64>()
+                / peak_intervals.len() as f64;
             let std_interval = variance.sqrt();
 
             let rhythm_features = [
@@ -207,10 +213,14 @@ fn audio_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
     // 阶段 4:全局统计特征
     if !frame_energy.is_empty() {
         let energy_mean = frame_energy.iter().sum::<f64>() / frame_energy.len() as f64;
-        let energy_variance = frame_energy.iter().map(|&v| {
-            let diff = v - energy_mean;
-            diff * diff
-        }).sum::<f64>() / frame_energy.len() as f64;
+        let energy_variance = frame_energy
+            .iter()
+            .map(|&v| {
+                let diff = v - energy_mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / frame_energy.len() as f64;
         let energy_std = energy_variance.sqrt();
 
         let zc_mean = frame_zero_crossing.iter().sum::<f64>() / frame_zero_crossing.len() as f64;
@@ -231,10 +241,7 @@ fn audio_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
 
     // 阶段 5:音频大小与时长特征
     let total_bytes = bytes.len() as f64;
-    let size_features = [
-        total_bytes.ln() / 15.0,
-        frame_count as f64 / 100.0,
-    ];
+    let size_features = [total_bytes.ln() / 15.0, frame_count as f64 / 100.0];
     for (i, &value) in size_features.iter().enumerate() {
         let idx = siphash_index(i as u64, 34, dim);
         features[idx] += value * 50.0;
@@ -344,7 +351,10 @@ mod tests {
         assert_eq!(elem.embedding_dim(), 512);
         // L2 归一化后,向量长度应为 1.0
         let norm_sq: f32 = elem.embedding.iter().map(|&v| v * v).sum();
-        assert!((norm_sq - 1.0).abs() < 1e-3, "L2 归一化后范数应为 1.0,实际为 {norm_sq}");
+        assert!(
+            (norm_sq - 1.0).abs() < 1e-3,
+            "L2 归一化后范数应为 1.0,实际为 {norm_sq}"
+        );
     }
 
     #[test]
@@ -360,8 +370,12 @@ mod tests {
     #[test]
     fn test_audio_perceptor_different_data() {
         let p = AudioPerceptor::new();
-        let elem1 = p.perceive(&PerceptionInput::Audio(vec![0xFF; 4096])).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Audio(vec![0x00; 4096])).unwrap();
+        let elem1 = p
+            .perceive(&PerceptionInput::Audio(vec![0xFF; 4096]))
+            .unwrap();
+        let elem2 = p
+            .perceive(&PerceptionInput::Audio(vec![0x00; 4096]))
+            .unwrap();
         // 最大音量 vs 静音,应产生不同哈希和嵌入
         assert_ne!(elem1.content_hash, elem2.content_hash);
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
@@ -380,7 +394,7 @@ mod tests {
     fn test_audio_perceptor_similar_audio() {
         // 相似音频应产生较高相似度
         let p = AudioPerceptor::new();
-        let mut data1 = vec![0x80u8; 4096];
+        let data1 = vec![0x80u8; 4096];
         let mut data2 = vec![0x80u8; 4096];
         data2[0] = 0x81; // 仅第一个样本差异
 
@@ -396,8 +410,12 @@ mod tests {
     fn test_audio_perceptor_different_sizes() {
         let p = AudioPerceptor::new();
         // 相同内容但不同长度
-        let elem1 = p.perceive(&PerceptionInput::Audio(vec![0x80; 1024])).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Audio(vec![0x80; 8192])).unwrap();
+        let elem1 = p
+            .perceive(&PerceptionInput::Audio(vec![0x80; 1024]))
+            .unwrap();
+        let elem2 = p
+            .perceive(&PerceptionInput::Audio(vec![0x80; 8192]))
+            .unwrap();
         // 相同内容,相似度应较高
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
         assert!(sim > 0.5, "相同内容不同长度音频相似度应 > 0.5,实际为 {sim}");
@@ -409,8 +427,8 @@ mod tests {
         let p = AudioPerceptor::new();
         // 模拟有节奏音频:交替高低能量
         let mut data1 = vec![0u8; 8192];
-        for i in 0..data1.len() {
-            data1[i] = if (i / 256) % 2 == 0 { 0xFF } else { 0x00 };
+        for (i, data) in data1.iter_mut().enumerate() {
+            *data = if (i / 256) % 2 == 0 { 0xFF } else { 0x00 };
         }
         // 模拟无节奏音频:恒定能量
         let data2 = vec![0x80u8; 8192];
@@ -421,74 +439,5 @@ mod tests {
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
         // 节奏差异,相似度应显著不同
         assert!(sim < 0.95, "节奏不同音频相似度应 < 0.95,实际为 {sim}");
-    }
-}
-//! 音频感知器 — 占位实现(Week 7/8 接入 ort ONNX Runtime)
-//!
-//! 对应架构层:L2 Memory
-//!
-//! # 当前状态
-//! 本周为占位实现,`perceive` 始终返回 `EncodingFailed` 错误。
-//! Week 7/8 将接入 ort ONNX Runtime 实现音频编码(如 Whisper encoder)。
-
-use crate::error::NmcError;
-use crate::perceptors::Perceptor;
-use crate::types::{CognitiveElement, Modality, PerceptionInput};
-
-/// 音频感知器 — 占位实现
-///
-/// TODO(Week 7/8): 接入 ort ONNX Runtime 实现音频编码
-pub struct AudioPerceptor;
-
-impl AudioPerceptor {
-    /// 创建音频感知器(占位,无配置)
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for AudioPerceptor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Perceptor for AudioPerceptor {
-    fn modality(&self) -> Modality {
-        Modality::Audio
-    }
-
-    fn perceive(&self, input: &PerceptionInput) -> Result<CognitiveElement, NmcError> {
-        if !matches!(input, PerceptionInput::Audio(_)) {
-            return Err(NmcError::InvalidModality {
-                reason: format!("AudioPerceptor 仅接受 Audio 输入,收到 {}", input.modality()),
-            });
-        }
-        // TODO(Week 7/8): 接入 ort ONNX Runtime 实现音频编码
-        Err(NmcError::EncodingFailed {
-            modality: "Audio".into(),
-            reason: "Audio perceptor not implemented yet, TODO Week 7/8".into(),
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_audio_perceptor_returns_error() {
-        let p = AudioPerceptor::new();
-        let result = p.perceive(&PerceptionInput::Audio(vec![0; 512]));
-        assert!(matches!(result, Err(NmcError::EncodingFailed { .. })));
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Audio"));
-    }
-
-    #[test]
-    fn test_audio_perceptor_wrong_modality() {
-        let p = AudioPerceptor::new();
-        let result = p.perceive(&PerceptionInput::Text("hello".into()));
-        assert!(matches!(result, Err(NmcError::InvalidModality { .. })));
     }
 }

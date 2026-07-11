@@ -17,8 +17,8 @@
 //!
 //! ## 降级路径
 //! - 真实模式:通过 `reqwest` 发送 HTTP POST 到参与者 endpoint
-//! - Mock 模式:保留 `tokio::time::sleep` 模拟,用于 CI/无网络环境
-//! 通过 `MeshConfig.json_rpc_mock` 切换。
+//! - Mock 模式:保留 `tokio::time::sleep` 模拟,用于 CI/无网络环境,
+//!   通过 `MeshConfig.json_rpc_mock` 切换。
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

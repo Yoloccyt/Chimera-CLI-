@@ -89,4 +89,21 @@ pub trait HistoryStore: Send + Sync {
     /// 语义:`total_count += 1`,`success_count += 1`(if success),
     /// `latency_samples` 滑动窗口(满则淘汰最旧,保持容量 `LATENCY_WINDOW_CAPACITY`)。
     fn record(&self, model_id: &str, latency_ms: f32, success: bool);
+
+    /// 查询指定模型的延迟方差(带缓存)
+    ///
+    /// 返回 None 表示该模型无历史记录。有记录时返回 `Some(variance)`。
+    ///
+    /// # 缓存语义(v1.5.0-omega)
+    /// - 默认实现:调用 `get()` + `HistoryRecord::latency_variance()`,clone 上计算
+    /// - `InMemoryHistoryStore` override:操作 DashMap 内的 stored record,
+    ///   缓存跨 `get()` clone 持久化,显著降低 `gate()` 热路径延迟
+    /// - `record()` 调用后缓存自动失效(由 `HistoryRecord::record()` 处理)
+    ///
+    /// WHY trait 方法而非直接调 `get()` + `latency_variance()`:trait 方法允许
+    /// `InMemoryHistoryStore` 在 stored record 上计算(缓存持久),而非在 clone 上
+    /// 计算(缓存随 clone drop 丢失)。`gate()` 通过 `&dyn HistoryStore` 调用此方法。
+    fn latency_variance(&self, model_id: &str) -> Option<f32> {
+        self.get(model_id).map(|r| r.latency_variance())
+    }
 }

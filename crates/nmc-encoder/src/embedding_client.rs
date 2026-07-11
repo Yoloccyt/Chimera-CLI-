@@ -51,6 +51,11 @@ pub struct EmbeddingClient {
     /// Mock 模式:使用 v2 语义嵌入算法
     mock: bool,
     /// 请求超时(毫秒)
+    //
+    // WHY allow(dead_code): 该值在 `new()` 构造时已通过 `reqwest::ClientBuilder::timeout()`
+    // 应用到 HTTP 客户端,字段本身不再被运行时读取。保留存储以便配置自省/调试与
+    // 未来可能的动态超时调整(如运行时重连时复用同一超时值)。
+    #[allow(dead_code)]
     timeout_ms: u64,
     /// 目标维度(512,与 CLV 对齐)
     target_dim: usize,
@@ -90,11 +95,16 @@ impl EmbeddingClient {
     }
 
     /// 从配置创建客户端
-    pub fn from_config(mock: bool, endpoint: Option<String>, timeout_ms: u64, target_dim: usize) -> Self {
-        if mock || endpoint.is_none() {
-            Self::mock(target_dim)
-        } else {
-            Self::new(endpoint.unwrap(), timeout_ms, target_dim)
+    pub fn from_config(
+        mock: bool,
+        endpoint: Option<String>,
+        timeout_ms: u64,
+        target_dim: usize,
+    ) -> Self {
+        match (mock, endpoint) {
+            (false, Some(ep)) => Self::new(ep, timeout_ms, target_dim),
+            // mock=true 或 endpoint=None 时回退到 mock 实现
+            _ => Self::mock(target_dim),
         }
     }
 
@@ -110,9 +120,12 @@ impl EmbeddingClient {
         let http = self.http.as_ref().ok_or_else(|| NmcError::EmbeddingError {
             reason: "HTTP client 初始化失败".into(),
         })?;
-        let endpoint = self.endpoint.as_ref().ok_or_else(|| NmcError::EmbeddingError {
-            reason: "embedding 服务端点未配置".into(),
-        })?;
+        let endpoint = self
+            .endpoint
+            .as_ref()
+            .ok_or_else(|| NmcError::EmbeddingError {
+                reason: "embedding 服务端点未配置".into(),
+            })?;
 
         let request = EmbeddingRequest {
             input: text.into(),
@@ -135,18 +148,21 @@ impl EmbeddingClient {
             });
         }
 
-        let embedding_resp: EmbeddingResponse = resp.json().await.map_err(|e| {
-            NmcError::EmbeddingError {
+        let embedding_resp: EmbeddingResponse =
+            resp.json().await.map_err(|e| NmcError::EmbeddingError {
                 reason: format!("embedding 响应解析失败: {e}"),
-            }
-        })?;
+            })?;
 
         // 维度适配:若返回维度与目标维度不同,进行投影/截断
         let embedding = if embedding_resp.embedding.len() == self.target_dim {
             embedding_resp.embedding
         } else if embedding_resp.embedding.len() > self.target_dim {
             // 截断到目标维度
-            embedding_resp.embedding.into_iter().take(self.target_dim).collect()
+            embedding_resp
+                .embedding
+                .into_iter()
+                .take(self.target_dim)
+                .collect()
         } else {
             // 维度不足,用零填充
             let mut padded = embedding_resp.embedding;

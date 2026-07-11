@@ -334,13 +334,15 @@ fn test_tui_render_after_keyboard_input() {
     app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
     // 渲染应正常工作,不 panic
-    let content = render_to_string(&app, 80, 24);
+    // WHY 宽度 120:状态栏字符串较长(面板/Quest/事件/帧/输入缓冲),
+    // 80 列会导致 "Input: test" 被截断;120 列确保完整显示。
+    let content = render_to_string(&app, 120, 24);
     assert!(
         content.contains("Parliament"),
         "render after input should show Parliament panel"
     );
     assert!(
         content.contains("test"),
-        "render after input should show input buffer content"
+        "render after input should show input buffer content, got: {content:?}"
     );
 }

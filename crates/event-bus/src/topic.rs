@@ -127,14 +127,16 @@ impl NexusEvent {
             | Self::PredictionRolledBack { .. }
             | Self::SsraFusionCompleted { .. } => EventTopic::Execution,
 
-            // === Parliament (7) === L8 Parliament 投票/共识/预算
+            // === Parliament (8) === L8 Parliament 投票/共识/预算
             Self::ConsensusReached { .. }
             | Self::VoteCast { .. }
             | Self::DebateStarted { .. }
             | Self::RoleRegistered { .. }
             | Self::BudgetAdjusted { .. }
             | Self::BudgetStatsReported { .. }
-            | Self::BudgetExceeded { .. } => EventTopic::Parliament,
+            | Self::BudgetExceeded { .. }
+            // v1.6.0: ACB-DECB 预算协调完成事件,同属 L8 Parliament 预算治理域
+            | Self::BudgetCoordinated { .. } => EventTopic::Parliament,
 
             // === Quest (7) === L9 Quest 意图/任务/检查点
             Self::UserIntentEncoded { .. }

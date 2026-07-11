@@ -589,6 +589,9 @@ fn test_a09_logging_asa_audit_trail() {
         content: "echo hello".to_string(),
         risk_keywords: vec!["rm".to_string()],
         complexity_score: 0.2,
+        // v1.5.0 新增字段:语义向量与参考风险向量(本测试不涉及语义检测,留空)
+        semantic_vector: None,
+        reference_risk_vectors: Vec::new(),
     };
 
     let result = auditor.audit(&input);

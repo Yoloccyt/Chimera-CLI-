@@ -161,7 +161,7 @@ impl LearnableParameter {
 }
 
 /// 反馈信号 — 用于驱动参数更新
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum FeedbackSignal {
     /// 任务成功完成
     Success,

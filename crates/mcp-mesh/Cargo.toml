@@ -8,6 +8,8 @@ edition.workspace = true
 tokio = { workspace = true }
 # 配置与类型序列化(#[derive(Serialize, Deserialize)])
 serde = { workspace = true, features = ["derive"] }
+# JSON 序列化(JSON-RPC 请求体与响应体)
+serde_json = { workspace = true }
 # 应用层错误(顶层调用方使用,库层用 thiserror)
 anyhow = { workspace = true }
 # 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
@@ -30,6 +32,8 @@ reqwest = { workspace = true }
 criterion = { workspace = true }
 # JSON 序列化测试(config serde 往返)
 serde_json = { workspace = true }
+# 属性测试(§3.3.2 新 crate 准入 checklist 第 3 条要求)
+proptest = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]

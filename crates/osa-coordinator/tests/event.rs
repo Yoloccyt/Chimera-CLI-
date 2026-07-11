@@ -15,6 +15,12 @@ use std::time::Duration;
 /// 构造测试用 TaskProfile
 fn make_profile(complexity: f32) -> TaskProfile {
     TaskProfile {
+        // v1.5.0 新增语义评分字段(事件测试使用默认 None)
+        tool_scores: None,
+        file_scores: None,
+        memory_scores: None,
+        operation_scores: None,
+        task_scores: None,
         task_id: TaskId::new(format!("task-{complexity}")),
         task_type: TaskType::Read,
         complexity_score: complexity,

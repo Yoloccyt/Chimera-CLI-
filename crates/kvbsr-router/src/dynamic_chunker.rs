@@ -9,8 +9,6 @@
 //! - 一致性低于阈值时触发重新分块
 //! - 支持在线学习优化分块边界
 
-use std::collections::HashSet;
-
 /// 动态分块器
 #[derive(Debug, Clone)]
 pub struct DynamicChunker {
@@ -53,7 +51,10 @@ impl DynamicChunker {
         if elements.len() <= self.target_chunk_size {
             return vec![Chunk {
                 indices: (0..elements.len()).collect(),
-                coherence: self.compute_chunk_coherence(elements, &(0..elements.len()).collect()),
+                coherence: self.compute_chunk_coherence(
+                    elements,
+                    &(0..elements.len()).collect::<Vec<usize>>(),
+                ),
             }];
         }
 
@@ -93,9 +94,10 @@ impl DynamicChunker {
             chunks.push(Chunk { indices, coherence });
             start = best_end;
 
-            // 防止块数过多
-            if chunks.len() >= self.max_chunks {
-                // 将剩余所有元素放入最后一块
+            // 防止块数过多:预留一个位置给“剩余所有元素”合并成的最后一块
+            // WHY >= max_chunks - 1:当前块已占一个位置,若继续循环会再产生新块,
+            // 导致总块数超过 max_chunks。此处直接把后续所有元素追加为最后一块。
+            if chunks.len() >= self.max_chunks - 1 {
                 if start < elements.len() {
                     let remaining: Vec<usize> = (start..elements.len()).collect();
                     let coherence = self.compute_chunk_coherence(elements, &remaining);
@@ -230,7 +232,7 @@ mod tests {
                 let vector = if similar {
                     vec![0.5f32 + (i as f32 * 0.01); 64]
                 } else {
-                    vec![(i as f32 / count as f32); 64]
+                    vec![i as f32 / count as f32; 64]
                 };
                 ChunkElement::new(format!("e-{i}"), ElementType::Text, vector, 100)
             })

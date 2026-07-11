@@ -56,7 +56,9 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
 
-    dot_product / norm_product
+    // clamp 到 [-1.0, 1.0]:f32 浮点运算中 dot_product / norm_product
+    // 可能因舍入误差略超数学定义域(如 1.0000001),clamp 保证不变量成立
+    (dot_product / norm_product).clamp(-1.0, 1.0)
 }
 
 #[cfg(test)]

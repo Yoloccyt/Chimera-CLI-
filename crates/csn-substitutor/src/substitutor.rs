@@ -82,6 +82,10 @@ pub struct SubstitutionCandidateRegistry {
     lsh_index: Mutex<Option<LshIndex>>,
     /// P0-14:LSH启用阈值与配置
     lsh_enable_threshold: usize,
+    /// LSH 哈希表数量
+    lsh_num_tables: usize,
+    /// 每组 LSH 哈希 bit 数
+    lsh_hash_bits: usize,
 }
 
 impl SubstitutionCandidateRegistry {
@@ -111,6 +115,8 @@ impl SubstitutionCandidateRegistry {
             register_lock: Mutex::new(()),
             lsh_index: Mutex::new(None),
             lsh_enable_threshold,
+            lsh_num_tables,
+            lsh_hash_bits,
         }
     }
 
@@ -183,7 +189,15 @@ impl SubstitutionCandidateRegistry {
         }
 
         if let Ok(mut lsh_guard) = self.lsh_index.lock() {
-            let mut lsh = LshIndex::new(8, 16, self.lsh_enable_threshold);
+            // WHY with_dimension(..., 50): CSN 的语义向量是 50 维
+            // (见 CapabilityDescriptor::semantic_vector 文档),与默认的
+            // CLV::DIMENSION(512) 不一致;必须用显式维度,否则访问超平面时越界。
+            let mut lsh = LshIndex::with_dimension(
+                self.lsh_num_tables,
+                self.lsh_hash_bits,
+                50,
+                self.lsh_enable_threshold,
+            );
             for (idx, entry) in self.capabilities.iter().enumerate() {
                 lsh.insert(idx, &entry.value().semantic_vector);
             }
@@ -455,12 +469,13 @@ mod tests {
 
     #[test]
     fn test_find_substitutes_top_k_ordering() {
-        // 三个候选:cap-2 最相似(0.99),cap-3 次之(0.9),cap-4 最远(0.5)
+        // WHY 2D 向量带角度差:vec![x; N] 同方向向量 cos=1.0 无法区分相似度,
+        // 需用不同角度的向量使 cos 递减:cap-2≈0.995 > cap-3≈0.894 > cap-4≈0.447
         let registry = make_registry_with_caps(vec![
-            ("cap-1", vec![1.0; 50]),
-            ("cap-2", vec![0.99; 50]),
-            ("cap-3", vec![0.9; 50]),
-            ("cap-4", vec![0.5; 50]),
+            ("cap-1", vec![1.0, 0.0]),
+            ("cap-2", vec![1.0, 0.1]),
+            ("cap-3", vec![1.0, 0.5]),
+            ("cap-4", vec![1.0, 2.0]),
         ]);
 
         let candidates = registry.find_substitutes("cap-1", 3);

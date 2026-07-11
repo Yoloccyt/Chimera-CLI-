@@ -52,6 +52,8 @@
 #![warn(missing_docs, clippy::all)]
 
 // === 模块声明 ===
+pub mod agent_attention;
+pub mod agent_token;
 pub mod blocks;
 pub mod clv_projector;
 pub mod config;
@@ -62,6 +64,8 @@ pub mod router;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use agent_attention::{AgentAttentionConfig, AgentAttentionEngine};
+pub use agent_token::{AgentToken, AgentTokenBank, AgentTokenError, AttentionProjector};
 pub use blocks::BlockBuilder;
 pub use clv_projector::{ClvProjector, ProjectionMethod};
 pub use config::KvbsrConfig;
@@ -75,6 +79,8 @@ pub use types::{
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
+    pub use crate::agent_attention::{AgentAttentionConfig, AgentAttentionEngine};
+    pub use crate::agent_token::{AgentToken, AgentTokenBank, AgentTokenError};
     pub use crate::blocks::BlockBuilder;
     pub use crate::clv_projector::{ClvProjector, ProjectionMethod};
     pub use crate::config::KvbsrConfig;

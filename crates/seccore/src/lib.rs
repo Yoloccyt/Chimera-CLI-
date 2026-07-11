@@ -39,6 +39,7 @@ pub mod audit;
 pub mod error;
 pub mod policy;
 pub mod sandbox;
+pub mod spectral_attention;
 pub mod types;
 pub mod windows_sandbox;
 
@@ -51,5 +52,10 @@ pub use audit::{AuditBlock, AuditChain, AuditRecordStatus, RecordId};
 pub use error::SecCoreError;
 pub use policy::{validate_command, validate_env, BlockedPattern, CommandPolicy, EnvPolicy};
 pub use sandbox::Sandbox;
+pub use spectral_attention::{
+    AlertLevel, AnomalyLevel, CriticalHeadAlert, EdgeType, ExecutionEdge, ExecutionGraph,
+    ExecutionNode, FileAccessType, NodeId, NodeType, SpectralAnalysis, SpectralAttentionAnalyzer,
+    SpectralConfig,
+};
 pub use types::{AttackType, Command, CommandSpec, ExecutionResult, RiskLevel};
 pub use windows_sandbox::WindowsSandboxExecutor;

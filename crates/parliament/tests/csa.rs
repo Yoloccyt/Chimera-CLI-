@@ -107,6 +107,9 @@ async fn run_csa_once_async(
         content: "执行代码审查".into(),
         risk_keywords: vec!["sudo".into(), "rm -rf".into()],
         complexity_score: 0.3,
+        // P0-4 新增字段:CSA 延迟测试仅验证关键词匹配路径,不启用语义相似度检测
+        semantic_vector: None,
+        reference_risk_vectors: Vec::new(),
     };
     let _result = auditor.audit(&audit_input);
 
@@ -279,6 +282,8 @@ async fn test_csa_latency_breakdown() -> TestResult {
         content: "执行代码审查".into(),
         risk_keywords: vec!["sudo".into(), "rm -rf".into()],
         complexity_score: 0.3,
+        semantic_vector: None,
+        reference_risk_vectors: Vec::new(),
     };
     let start = Instant::now();
     let _result = auditor.audit(&audit_input);

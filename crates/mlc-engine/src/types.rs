@@ -126,6 +126,12 @@ impl SharedCLV {
     }
 }
 
+impl AsRef<[f32]> for SharedCLV {
+    fn as_ref(&self) -> &[f32] {
+        &self.0
+    }
+}
+
 impl PartialEq for SharedCLV {
     fn eq(&self, other: &Self) -> bool {
         self.0.as_ref() == other.0.as_ref()

@@ -116,18 +116,26 @@ impl GqepExecutor {
         let stream: FuturesUnordered<GqepFuture<String>> = FuturesUnordered::new();
         for future in futures {
             let qeep = self.qeep.clone();
-            // P0-10:获取Semaphore permit,限制并发度
-            // permit在future完成时自动释放
-            let permit = semaphore.clone().acquire_owned().await;
+            let sem = semaphore.clone();
+            // P0-10:Semaphore 限流必须放在 future 内部获取,不能在 push 前 await。
+            // WHY:stream.next() 在 for 循环结束后才会被调用;若在此处 await 获取 permit,
+            // 当 future 数量 > max_concurrency 时,前 max_concurrency 个 permit 被占,
+            // 后续 future 阻塞在 acquire,而已入队的 future 因 stream.next() 未执行而无法
+            // 推进,permit 无法释放,形成死锁。
             let entangled: GqepFuture<String> = Box::pin(async move {
-                // Permit在future完成时自动释放
-                let _permit = permit;
+                // 在 future 真正执行时获取 permit,完成时自动释放。
+                // Semaphore 与 Executor 同生命周期,关闭视为内部错误。
+                let _permit = sem
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| GqepError::SemaphoreClosed)?;
                 // 将 GqepFuture 转换为 entangle 要求的 Future<Output=Result<String, QeepErr>>
                 let mapped: Pin<Box<dyn Future<Output = Result<String, QeepErr>> + Send>> =
                     Box::pin(async move { future.await.map_err(map_gqep_to_qeep) });
                 // entangle 提供孤儿检测 + 单操作超时
                 qeep.entangle(mapped).await.map_err(map_qeep_to_gqep)
             });
+
             stream.push(entangled);
         }
 
@@ -345,6 +353,10 @@ pub(crate) fn map_gqep_to_qeep(e: GqepError) -> QeepErr {
         GqepError::GlobalTimedOut { deadline_ms, .. } => {
             QeepErr::SerializationError(format!("global gather timeout: deadline_ms={deadline_ms}"))
         }
+        // WHY 此分支不应被触达:SemaphoreClosed 在 gather 内部由 entangled future 产生,
+        // 经 entangle 返回后已在 collect_with_deadline 中作为失败结果收集,不会反向流入
+        // map_gqep_to_qeep。此处显式映射保持 match 穷尽性。
+        GqepError::SemaphoreClosed => QeepErr::SerializationError("semaphore closed".into()),
     }
 }
 

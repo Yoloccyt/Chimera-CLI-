@@ -927,6 +927,28 @@ pub enum NexusEvent {
         utilization_rate: f32,
     },
 
+    /// ACB-DECB 预算协调完成 — L8 Parliament 内部协调结果通知
+    ///
+    /// WHY:BudgetCoordinator 综合 ACB(离散四级)与 DECB(连续系数)后,
+    /// 发布协调结果供下游(TTG/efficiency-monitor)感知统一预算决策。
+    /// Normal 级别,丢失仅导致本次协调未通知下游,可由下次协调补偿。
+    BudgetCoordinated {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// Quest ID
+        quest_id: String,
+        /// ACB 级别(L0/L1/L2/L3)
+        acb_tier: String,
+        /// DECB 系数 [0.0, 1.0]
+        decb_coefficient: f32,
+        /// 统一系数(取 ACB 与 DECB 的保守值)
+        unified_coefficient: f32,
+        /// 是否批准
+        approved: bool,
+        /// 决策原因
+        reason: String,
+    },
+
     // ============================================================
     // Week 6 扩展:NMC 多模态编码完成事件
     //
@@ -1193,6 +1215,7 @@ impl NexusEvent {
             | Self::AhirtProbeCompleted { metadata, .. }
             | Self::RoleRegistered { metadata, .. }
             | Self::BudgetStatsReported { metadata, .. }
+            | Self::BudgetCoordinated { metadata, .. }
             | Self::NmcEncoded { metadata, .. }
             | Self::ChtcToolCallReceived { metadata, .. }
             | Self::SsraFusionCompleted { metadata, .. }
@@ -1310,6 +1333,7 @@ impl NexusEvent {
             Self::AhirtProbeCompleted { .. } => "AhirtProbeCompleted",
             Self::RoleRegistered { .. } => "RoleRegistered",
             Self::BudgetStatsReported { .. } => "BudgetStatsReported",
+            Self::BudgetCoordinated { .. } => "BudgetCoordinated",
             Self::NmcEncoded { .. } => "NmcEncoded",
             Self::ChtcToolCallReceived { .. } => "ChtcToolCallReceived",
             Self::SsraFusionCompleted { .. } => "SsraFusionCompleted",

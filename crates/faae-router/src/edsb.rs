@@ -264,9 +264,10 @@ impl EdsbBalancer {
             // 若 depth > 1,递归评估多步效果
             let final_entropy = if depth > 1 {
                 // 模拟重分配后的 profiles(不修改实际 profiles)
-                let next_tool = self
-                    .multi_step_balance(profiles, candidate, candidates, depth - 1)
-                    .await;
+                // WHY Box::pin:递归 async fn 调用会产生无限大 future,必须用 Pin<Box<dyn Future>> 引入间接层
+                let next_tool =
+                    Box::pin(self.multi_step_balance(profiles, candidate, candidates, depth - 1))
+                        .await;
                 // 如果下一步还会重分配,用下一步的目标估算
                 if next_tool != **candidate {
                     self.estimate_entropy_after_redistribution(profiles, candidate, &next_tool)

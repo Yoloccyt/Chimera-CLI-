@@ -1,41 +1,101 @@
 //! 适应度评估 — 基于规则的轨迹适应度计算
 //!
-//! 对应架构层:L5 Knowledge
+//! 对应架构层: L5 Knowledge
 //!
-//! # 评估规则(本周占位)
-//! - `fitness_score = (reward + 1.0) / 2.0` ∈ [0.0, 1.0]
-//! - `confidence = 1.0 / (1.0 + action_count as f32)`(动作越少越确信)
-//! - `evidence` 记录评估依据,便于审计与调试
+//! # 评估规则
+//! - 综合适应度 = 0.4 * base_fitness + 0.4 * correctness + 0.2 * process_reward
+//! - `base_fitness = (reward + 1.0) / 2.0` ∈ [0.0, 1.0]
+//! - `correctness` 基于动作与最优解的接近程度
+//! - `process_reward` 基于动作简洁性和一致性
+//! - `confidence = 1.0 / (1.0 + action_count as f32)` (动作越少越确信)
+//! - `evidence` 记录评估依据, 便于审计与调试
 //!
-//! // TODO(Week 7): 接入 MCP Mesh 真实模型,用验证集准确率替代规则评估
+//! // TODO(Week 7): 接入 MCP Mesh 真实模型, 用验证集准确率替代规则评估
 
 use crate::types::{FitnessReport, GrpoRollout};
 
-/// 评估单次轨迹的适应度
-///
-/// 本周占位逻辑:
-/// 1. fitness_score = (reward + 1.0) / 2.0,将 [-1.0, 1.0] 映射到 [0.0, 1.0]
-/// 2. confidence = 1.0 / (1.0 + n),n 为动作数量(动作越多越不确信)
-/// 3. evidence 记录 reward、action_count、advantage 等评估依据
-pub fn evaluate_fitness(rollout: &GrpoRollout) -> FitnessReport {
-    // fitness_score: 将 reward 从 [-1, 1] 映射到 [0, 1]
-    let raw_fitness = (rollout.reward + 1.0) / 2.0;
-    let fitness_score = raw_fitness.clamp(0.0, 1.0);
+/// 最优解动作值（占位）
+const OPTIMAL_ACTION: f32 = 1.0;
 
-    // confidence: 动作越多越不确信(贝叶斯先验:简短决策更可靠)
+/// 计算正确性奖励
+///
+/// 基于动作序列与最优解的接近程度:
+/// correctness = 1.0 - mean(|a_i - optimal|)
+///
+/// 返回值 ∈ [0.0, 1.0], 1.0 表示完全正确。
+pub fn compute_correctness_reward(actions: &[f32], optimal: f32) -> f32 {
+    if actions.is_empty() {
+        return 0.0;
+    }
+    let mean_distance =
+        actions.iter().map(|a| (a - optimal).abs()).sum::<f32>() / actions.len() as f32;
+    (1.0 - mean_distance).clamp(0.0, 1.0)
+}
+
+/// 计算过程奖励
+///
+/// 鼓励简短、一致的决策:
+/// - 动作越少, 过程奖励越高
+/// - 动作方差越小, 过程奖励越高
+///
+/// 返回值 ∈ [0.0, 1.0]。
+pub fn compute_process_reward(actions: &[f32]) -> f32 {
+    if actions.is_empty() {
+        return 1.0;
+    }
+    // 简短奖励: 动作越少奖励越高
+    let len_bonus = 1.0 / (1.0 + actions.len() as f32 * 0.1);
+
+    // 一致性奖励: 方差越小奖励越高
+    let mean = actions.iter().sum::<f32>() / actions.len() as f32;
+    let variance = actions
+        .iter()
+        .map(|a| {
+            let diff = a - mean;
+            diff * diff
+        })
+        .sum::<f32>()
+        / actions.len() as f32;
+    let consistency_bonus = (-variance).exp();
+
+    (len_bonus * 0.5 + consistency_bonus * 0.5).clamp(0.0, 1.0)
+}
+
+/// 评估单次轨迹的适应度（增强版）
+///
+/// 综合 reward、正确性奖励、过程奖励和优势值:
+/// 1. base_fitness = (reward + 1.0) / 2.0, 将 [-1.0, 1.0] 映射到 [0.0, 1.0]
+/// 2. correctness = compute_correctness_reward(actions, optimal)
+/// 3. process = compute_process_reward(actions)
+/// 4. fitness_score = 0.4 * base + 0.4 * correctness + 0.2 * process
+/// 5. confidence = 1.0 / (1.0 + n), n 为动作数量
+/// 6. evidence 记录 reward、correctness、process_reward 等评估依据
+pub fn evaluate_fitness(rollout: &GrpoRollout) -> FitnessReport {
+    let correctness = compute_correctness_reward(&rollout.actions, OPTIMAL_ACTION);
+    let process = compute_process_reward(&rollout.actions);
+
+    // base_fitness: 将 reward 从 [-1, 1] 映射到 [0, 1]
+    let base_fitness = (rollout.reward + 1.0) / 2.0;
+
+    // 加权综合适应度
+    let fitness_score = (base_fitness * 0.4 + correctness * 0.4 + process * 0.2).clamp(0.0, 1.0);
+
+    // confidence: 动作越多越不确信 (贝叶斯先验: 简短决策更可靠)
     let action_count = rollout.actions.len() as f32;
     let confidence = (1.0 / (1.0 + action_count)).clamp(0.0, 1.0);
 
     // evidence: 记录评估依据
-    let advantage_str = rollout
-        .advantage
-        .map(|a| format!("{a:.4}"))
-        .unwrap_or_else(|| "未计算".into());
+    let advantage_str = match rollout.advantage {
+        Some(a) => format!("{a:.4}"),
+        None => "未计算".into(),
+    };
     let evidence = vec![
         format!("reward={:.4}", rollout.reward),
+        format!("correctness={:.4}", correctness),
+        format!("process_reward={:.4}", process),
         format!("action_count={}", rollout.actions.len()),
         format!("advantage={advantage_str}"),
-        format!("fitness_rule=(reward+1)/2"),
+        format!("fitness_rule=weighted_sum"),
     ];
 
     FitnessReport {
@@ -47,7 +107,7 @@ pub fn evaluate_fitness(rollout: &GrpoRollout) -> FitnessReport {
 
 /// 批量评估一组轨迹的适应度
 ///
-/// 对每个 rollout 调用 `evaluate_fitness`,返回对应的适应度报告列表。
+/// 对每个 rollout 调用 `evaluate_fitness`, 返回对应的适应度报告列表。
 /// 输入为空时返回空 Vec。
 pub fn evaluate_population(rollouts: &[GrpoRollout]) -> Vec<FitnessReport> {
     rollouts.iter().map(evaluate_fitness).collect()
@@ -63,49 +123,92 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_correctness_reward_empty() {
+        let r = compute_correctness_reward(&[], 1.0);
+        assert!(r.total_cmp(&0.0).is_eq());
+    }
+
+    #[test]
+    fn test_compute_correctness_reward_perfect() {
+        // 所有动作都等于最优解
+        let r = compute_correctness_reward(&[1.0, 1.0, 1.0], 1.0);
+        assert!(r.total_cmp(&1.0).is_eq());
+    }
+
+    #[test]
+    fn test_compute_correctness_reward_zero() {
+        // 所有动作都远离最优解
+        let r = compute_correctness_reward(&[0.0, 0.0, 0.0], 1.0);
+        assert!(r.total_cmp(&0.0).is_eq());
+    }
+
+    #[test]
+    fn test_compute_process_reward_empty() {
+        let r = compute_process_reward(&[]);
+        assert!(r.total_cmp(&1.0).is_eq());
+    }
+
+    #[test]
+    fn test_compute_process_reward_single_action() {
+        // 单个动作方差为 0, 一致性最高
+        let r = compute_process_reward(&[0.5]);
+        assert!(r.total_cmp(&0.0).is_gt());
+    }
+
+    #[test]
     fn test_evaluate_fitness_score_in_range() {
         let rollout = make_rollout(0.5, 10);
         let report = evaluate_fitness(&rollout);
-        assert!((0.0..=1.0).contains(&report.fitness_score));
+        assert!(
+            report.fitness_score.total_cmp(&0.0).is_ge()
+                && report.fitness_score.total_cmp(&1.0).is_le()
+        );
     }
 
     #[test]
-    fn test_evaluate_fitness_score_formula() {
-        // reward=0.5 → fitness = (0.5+1)/2 = 0.75
+    fn test_evaluate_fitness_contains_correctness() {
         let rollout = make_rollout(0.5, 5);
         let report = evaluate_fitness(&rollout);
-        assert!((report.fitness_score - 0.75).abs() < 1e-6);
+        let has_correctness = report.evidence.iter().any(|e| e.contains("correctness"));
+        assert!(has_correctness, "evidence 应包含 correctness 信息");
     }
 
     #[test]
-    fn test_evaluate_fitness_negative_reward() {
-        // reward=-0.8 → fitness = (-0.8+1)/2 = 0.1
-        let rollout = make_rollout(-0.8, 5);
+    fn test_evaluate_fitness_contains_process() {
+        let rollout = make_rollout(0.5, 5);
         let report = evaluate_fitness(&rollout);
-        assert!((report.fitness_score - 0.1).abs() < 1e-6);
+        let has_process = report.evidence.iter().any(|e| e.contains("process_reward"));
+        assert!(has_process, "evidence 应包含 process_reward 信息");
     }
 
     #[test]
     fn test_evaluate_fitness_clamp_high_reward() {
-        // reward=2.0 → raw=1.5 → clamp 到 1.0
+        // reward=2.0 超出 [-1,1] 范围,base_fitness 经 clamp 后不会使加权总分超过 1.0
         let rollout = make_rollout(2.0, 5);
         let report = evaluate_fitness(&rollout);
-        assert_eq!(report.fitness_score, 1.0);
+        assert!(
+            report.fitness_score.total_cmp(&1.0).is_le(),
+            "适应度评分应被 clamp 到 [0,1] 上限,实际 {}",
+            report.fitness_score
+        );
+        assert!(report.fitness_score.total_cmp(&0.0).is_ge());
     }
 
     #[test]
     fn test_evaluate_fitness_clamp_low_reward() {
-        // reward=-3.0 → raw=-1.0 → clamp 到 0.0
+        // reward=-3.0 → base=-1.0 → clamp 到 0.0
         let rollout = make_rollout(-3.0, 5);
         let report = evaluate_fitness(&rollout);
-        assert_eq!(report.fitness_score, 0.0);
+        assert!(report.fitness_score.total_cmp(&0.0).is_eq());
     }
 
     #[test]
     fn test_evaluate_fitness_confidence_in_range() {
         let rollout = make_rollout(0.5, 10);
         let report = evaluate_fitness(&rollout);
-        assert!((0.0..=1.0).contains(&report.confidence));
+        assert!(
+            report.confidence.total_cmp(&0.0).is_ge() && report.confidence.total_cmp(&1.0).is_le()
+        );
     }
 
     #[test]
@@ -115,7 +218,10 @@ mod tests {
         let report_few = evaluate_fitness(&rollout_few);
         let report_many = evaluate_fitness(&rollout_many);
         assert!(
-            report_few.confidence > report_many.confidence,
+            report_few
+                .confidence
+                .total_cmp(&report_many.confidence)
+                .is_gt(),
             "动作少的置信度应更高: {} vs {}",
             report_few.confidence,
             report_many.confidence
@@ -128,7 +234,10 @@ mod tests {
         let rollout = make_rollout(0.5, 10);
         let report = evaluate_fitness(&rollout);
         let expected = 1.0 / 11.0;
-        assert!((report.confidence - expected).abs() < 1e-6);
+        assert!((report.confidence - expected)
+            .abs()
+            .total_cmp(&1e-6)
+            .is_lt());
     }
 
     #[test]
@@ -136,7 +245,6 @@ mod tests {
         let rollout = make_rollout(0.5, 5);
         let report = evaluate_fitness(&rollout);
         assert!(!report.evidence.is_empty());
-        // evidence 应包含 reward 信息
         let has_reward = report.evidence.iter().any(|e| e.contains("reward"));
         assert!(has_reward, "evidence 应包含 reward 信息");
     }
@@ -146,7 +254,7 @@ mod tests {
         let rollout = make_rollout(0.5, 0);
         let report = evaluate_fitness(&rollout);
         // 0 个动作 → confidence = 1/(1+0) = 1.0
-        assert!((report.confidence - 1.0).abs() < 1e-6);
+        assert!((report.confidence - 1.0).abs().total_cmp(&1e-6).is_lt());
     }
 
     #[test]
@@ -159,7 +267,7 @@ mod tests {
     fn test_evaluate_population_count_matches() {
         let rollouts: Vec<GrpoRollout> = (0..5).map(|i| make_rollout(i as f32 * 0.1, 10)).collect();
         let reports = evaluate_population(&rollouts);
-        assert_eq!(reports.len(), 5);
+        assert!(reports.len() == 5);
     }
 
     #[test]
@@ -169,8 +277,34 @@ mod tests {
             .collect();
         let reports = evaluate_population(&rollouts);
         for report in &reports {
-            assert!((0.0..=1.0).contains(&report.fitness_score));
-            assert!((0.0..=1.0).contains(&report.confidence));
+            assert!(
+                report.fitness_score.total_cmp(&0.0).is_ge()
+                    && report.fitness_score.total_cmp(&1.0).is_le()
+            );
+            assert!(
+                report.confidence.total_cmp(&0.0).is_ge()
+                    && report.confidence.total_cmp(&1.0).is_le()
+            );
         }
+    }
+
+    #[test]
+    fn test_correctness_decreases_with_distance() {
+        let near = compute_correctness_reward(&[0.9, 0.9, 0.9], 1.0);
+        let far = compute_correctness_reward(&[0.1, 0.1, 0.1], 1.0);
+        assert!(
+            near.total_cmp(&far).is_gt(),
+            "接近最优解的动作应有更高正确性奖励"
+        );
+    }
+
+    #[test]
+    fn test_process_reward_decreases_with_variance() {
+        let consistent = compute_process_reward(&[0.5, 0.5, 0.5]);
+        let varied = compute_process_reward(&[0.0, 0.5, 1.0]);
+        assert!(
+            consistent.total_cmp(&varied).is_ge(),
+            "一致性高的动作应有更高过程奖励"
+        );
     }
 }

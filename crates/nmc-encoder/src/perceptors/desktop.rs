@@ -12,11 +12,12 @@ use crate::error::NmcError;
 use crate::perceptors::{byte_frequency_embedding, sha256_hex, Perceptor};
 use crate::types::{CognitiveElement, Modality, PerceptionInput};
 
-/// 桌面感知器 — 基于区域描述文本的占位编码
+/// 桌面感知器 — 基于区域描述文本的字节频率嵌入
 ///
-/// TODO(Week 7/8): 结合截图字节实现多模态桌面编码
+/// v2.0:使用 clv_dim(512)维度输出 + L2 归一化,与其他感知器统一。
+/// 未来可扩展为结合截图字节实现多模态桌面编码。
 pub struct DesktopPerceptor {
-    /// 配置(含 text_dim 维度参数,用于描述文本嵌入)
+    /// 配置(含 clv_dim 维度参数,用于描述文本嵌入维度)
     config: NmcConfig,
 }
 
@@ -55,13 +56,33 @@ impl Perceptor for DesktopPerceptor {
         // 像素数据本周不处理,描述文本足以区分不同桌面状态
         let desc_bytes = capture.region_description.as_bytes();
         let content_hash = sha256_hex(desc_bytes);
-        let embedding = byte_frequency_embedding(desc_bytes, self.config.text_dim);
+
+        // v2.0 迁移:使用 clv_dim(512)而非 text_dim(256),与 CLV 对齐。
+        // 所有 v2.0 感知器输出统一 512-dim 嵌入,便于融合引擎处理。
+        let mut embedding = byte_frequency_embedding(desc_bytes, self.config.clv_dim);
+        // L2 归一化,与其他 v2.0 感知器(Image/Video/Audio)保持一致,
+        // 确保嵌入在超球面上,余弦相似度可比。
+        l2_normalize(&mut embedding);
 
         Ok(CognitiveElement::new(
             Modality::Desktop,
             content_hash,
             embedding,
         ))
+    }
+}
+
+/// L2 归一化 — 将向量缩放到单位长度
+///
+/// WHY:确保桌面嵌入在超球面上,与其他 v2.0 感知器一致,
+/// 使余弦相似度等价于欧氏距离,不同描述文本的嵌入幅度可比。
+fn l2_normalize(vec: &mut [f32]) {
+    let sum_sq: f32 = vec.iter().map(|&v| v * v).sum();
+    if sum_sq > 0.0 {
+        let norm = sum_sq.sqrt();
+        for v in vec.iter_mut() {
+            *v /= norm;
+        }
     }
 }
 
@@ -80,10 +101,12 @@ mod tests {
         let input = PerceptionInput::Desktop(make_capture("code editor with Rust syntax"));
         let elem = p.perceive(&input).unwrap();
         assert_eq!(elem.modality, Modality::Desktop);
-        assert_eq!(elem.embedding_dim(), 256);
+        // v2.0:嵌入维度为 clv_dim(512),与 CLV 对齐
+        assert_eq!(elem.embedding_dim(), 512);
         assert!(!elem.content_hash.is_empty());
-        let sum: f32 = elem.embedding.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5);
+        // v2.0:L2 归一化后范数 ≈ 1.0
+        let norm_sq: f32 = elem.embedding.iter().map(|&v| v * v).sum();
+        assert!((norm_sq - 1.0).abs() < 1e-5);
     }
 
     #[test]
@@ -92,8 +115,9 @@ mod tests {
         let input = PerceptionInput::Desktop(make_capture(""));
         let elem = p.perceive(&input).unwrap();
         assert_eq!(elem.modality, Modality::Desktop);
-        assert_eq!(elem.embedding_dim(), 256);
-        // 空描述:所有桶为 0.0
+        // v2.0:嵌入维度为 clv_dim(512)
+        assert_eq!(elem.embedding_dim(), 512);
+        // 空描述:所有桶为 0.0(L2 归一化对零向量无操作)
         assert!(elem.embedding.iter().all(|&v| v == 0.0));
         assert!(!elem.content_hash.is_empty());
     }
@@ -130,12 +154,14 @@ mod tests {
 
     #[test]
     fn test_desktop_perceptor_custom_text_dim() {
+        // v2.0:text_dim 不再影响输出维度,输出始终为 clv_dim(512)
+        // (与 TextPerceptor.test_text_perceptor_custom_text_dim 行为一致)
         let config = NmcConfig::default().with_text_dim(128);
         let p = DesktopPerceptor::new(config);
         let elem = p
             .perceive(&PerceptionInput::Desktop(make_capture("test")))
             .unwrap();
-        assert_eq!(elem.embedding_dim(), 128);
+        assert_eq!(elem.embedding_dim(), 512);
     }
 
     #[test]
@@ -144,9 +170,11 @@ mod tests {
         let elem = p
             .perceive(&PerceptionInput::Desktop(make_capture("代码编辑器")))
             .unwrap();
-        assert_eq!(elem.embedding_dim(), 256);
-        let sum: f32 = elem.embedding.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5);
+        // v2.0:嵌入维度为 clv_dim(512)
+        assert_eq!(elem.embedding_dim(), 512);
+        // v2.0:L2 归一化后范数 ≈ 1.0
+        let norm_sq: f32 = elem.embedding.iter().map(|&v| v * v).sum();
+        assert!((norm_sq - 1.0).abs() < 1e-5);
     }
 
     #[test]

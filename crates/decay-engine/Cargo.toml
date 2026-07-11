@@ -14,6 +14,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 # criterion:性能基准测试框架(§7.1 测试矩阵约定)
 criterion = { workspace = true }
+# 属性测试(§3.3.2 新 crate 准入 checklist 第 3 条要求)
+proptest = { workspace = true }
 
 [[bench]]
 name = "decay_bench"

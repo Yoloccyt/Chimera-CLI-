@@ -22,6 +22,8 @@ tracing = { workspace = true }
 sha2 = { workspace = true }
 # P0-1: 语义嵌入 HTTP 客户端
 reqwest = { workspace = true }
+# MLA 投影矩阵随机初始化
+rand = { workspace = true }
 
 [dev-dependencies]
 # 属性测试框架(嵌入不变量验证)

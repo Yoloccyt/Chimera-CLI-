@@ -2,6 +2,17 @@
 ## 从零开始搭建终极工程手册
 ### 综合 Claude Code CLI + Hermes Agent + Qoder CLI Agent + OMEGA 第三代架构
 
+> ⚠️ **权威源说明**（v1.5.0-omega 更新）：
+> 本文档为**早期设计文档**，部分内容与当前实现存在差异：
+> - 层级编号：本文档使用 L0-L10（11层），当前实现为 L1-L10（10层），以 `CODE_WIKI.md §2.1` 为准
+> - ADR 编号：本文档 §10.3 的 ADR 编号为早期草案，与 `CODE_WIKI.md §2.3` 冲突时以 CODE_WIKI 为准
+> - Crate 数量：本文档描述"37 crates 骨架"，实际为 34 个 crate，以 `Cargo.toml` workspace.members 为准
+> - **权威架构源**：[CODE_WIKI.md](CODE_WIKI.md)（10层映射、34 crate索引、ADR权威编号）
+> - **工程实施主参考**：[AETHER_NEXUS_OMEGA_从零搭建完全指南.md](AETHER_NEXUS_OMEGA_从零搭建完全指南.md) v2.0.0-omega
+> - **创新演进主参考**：[OMEGA_大模型架构魔改创新_AI_Agent项目套用设计.md](OMEGA_大模型架构魔改创新_AI_Agent项目套用设计.md) v3.0.0-omega
+>
+> 原文内容保持不变（保留历史设计文档价值），仅添加此头部说明消除歧义。
+
 > **版本**: v1.0.0-omega  
 > **代号**: NEXUS-OMEGA (Omni-Model Engineering Generative Architecture)  
 > **参考基线**:  

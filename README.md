@@ -1,10 +1,10 @@
 # Chimera CLI (NEXUS-OMEGA)
 
-[![Version](https://img.shields.io/badge/version-1.0.0--omega-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.5.0--omega-blue.svg)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](./LICENSE)
-[![Crates](https://img.shields.io/badge/crates-34-orange.svg)](./CODE_WIKI.md)
+[![Crates](https://img.shields.io/badge/crates-35-orange.svg)](./CODE_WIKI.md)
 [![Tests](https://img.shields.io/badge/tests-3002+-brightgreen.svg)](./CHANGELOG.md)
-[![unsafe](https://img.shields.io/badge/forbid(unsafe_code)-34/34-success.svg)](./docs/security/week8_security_report.md)
+[![unsafe](https://img.shields.io/badge/forbid(unsafe_code)-35/35-success.svg)](./docs/security/week8_security_report.md)
 
 > **Omni-Model Engineering Generative Architecture**
 > 一个面向未来的多模型 AI 工程生成架构命令行工具,代号 **NEXUS-OMEGA**。
@@ -13,7 +13,7 @@
 
 ## 项目总览
 
-Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 34 crate workspace 项目,遵循 10 层架构(L1-L10)和 **OMEGA 四定律**:
+Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 35 crate workspace 项目,遵循 10 层架构(L1-L10)和 **OMEGA 四定律**:
 
 | 定律 | 全称 | 工程实现 | 对应 crate |
 |------|------|---------|-----------|
@@ -26,7 +26,7 @@ Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 3
 
 ### 关键特性
 
-- **安全**:`#![forbid(unsafe_code)]` 34/34 crate 全覆盖;SecCore 零信任沙箱;OWASP Top 10 全部拦截
+- **安全**:`#![forbid(unsafe_code)]` 35/35 crate 全覆盖;SecCore 零信任沙箱;OWASP Top 10 全部拦截
 - **性能**:三层路由 p95 = 78.79µs(目标 ≤ 2ms,25× 余量);WAL 崩溃恢复 1000 次零数据丢失;SSRA 融合 5.64µs
 - **可观测**:Event Bus 跨层通信;Prometheus /metrics 端点;Merkle 审计链
 - **可进化**:GRPO 在线进化;DPO 偏好优化;黏液式快速适配
@@ -259,7 +259,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 
 ---
 
-## 34 Crate 索引
+## 35 Crate 索引
 
 | 层 | Crate | 职责 |
 |----|-------|------|
@@ -298,7 +298,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 | L10 Interface | `mcp-mesh` | MCP 量子网格(跨进程通信) |
 | L10 Interface | `csn-substitutor` | 能力替代网络(降级链) |
 
-**统计**:34 个 crate,覆盖率 100%(Week 8 Task 2 已补齐 acb-governor / auto-dpo / chimera-tui)
+**统计**:35 个 crate,覆盖率 100%(Week 8 Task 2 已补齐 acb-governor / auto-dpo / chimera-tui)
 
 ---
 
@@ -323,7 +323,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 
 | 特性 | 说明 | 状态 |
 |------|------|------|
-| `#![forbid(unsafe_code)]` | 34/34 crate 全覆盖(编译期保证) | ✅ |
+| `#![forbid(unsafe_code)]` | 35/35 crate 全覆盖(编译期保证) | ✅ |
 | SecCore 零信任沙箱 | 白名单 + 静态分析 + 环境过滤 | ✅ |
 | OWASP Top 10 渗透测试 | 20/20 测试通过(100%) | ✅ |
 | Merkle 审计链 | SHA-256 链式校验,篡改可检测 | ✅ |
@@ -429,7 +429,7 @@ cargo doc --workspace --no-deps
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| v1.0.0-omega | 2026-06-27 | Week 8 验收通过,34/34 crate 全覆盖,3002+ 测试,性能/安全/文档/发布全部达标 |
+| v1.0.0-omega | 2026-06-27 | Week 8 验收通过,35/35 crate 全覆盖,3002+ 测试,性能/安全/文档/发布全部达标 |
 
 详见 [CHANGELOG.md](./CHANGELOG.md)。
 

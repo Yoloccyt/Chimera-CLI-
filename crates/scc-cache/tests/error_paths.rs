@@ -42,14 +42,15 @@ async fn test_prefetch_missing_entry_silent_no_panic() {
     let cache = SccCache::new(SccConfig::default(), bus.clone());
     let learner = AccessPatternLearner::new(bus, 0.5);
 
+    let ctx_prev = ContextId::new("ctx-prev");
     let ctx_a = ContextId::new("ctx-a");
     let ctx_b = ContextId::new("ctx-b");
 
     // 训练模式但不插入 ctx-b 到缓存
-    learner.record_access(&ctx_a, &ctx_b);
+    learner.record_access(&ctx_prev, &ctx_a, &ctx_b);
 
     // 预取:ctx-b 不在缓存中,应静默失败
-    let prefetched = learner.prefetch(&ctx_a, &cache);
+    let prefetched = learner.prefetch(&ctx_prev, &ctx_a, &cache);
     assert_eq!(prefetched.len(), 1, "应返回预测 ID(不管是否在缓存中)");
     assert_eq!(prefetched[0].as_str(), "ctx-b");
 
@@ -67,13 +68,14 @@ async fn test_prefetch_missing_entry_silent_no_panic() {
 #[tokio::test]
 async fn test_predict_next_unknown_returns_empty() {
     let learner = AccessPatternLearner::new(EventBus::new(), 0.6);
-    let unknown = ContextId::new("ctx-unknown");
+    let unknown_prev = ContextId::new("ctx-unknown-prev");
+    let unknown_cur = ContextId::new("ctx-unknown-cur");
 
-    let predictions = learner.predict_next(&unknown);
+    let predictions = learner.predict_next(&unknown_prev, &unknown_cur);
     assert!(predictions.is_empty(), "未知上下文应返回空预测列表");
 
     // get_pattern 也应返回 None
-    let pattern = learner.get_pattern(&unknown);
+    let pattern = learner.get_pattern(&unknown_prev, &unknown_cur);
     assert!(pattern.is_none(), "未知上下文应返回 None 模式");
 }
 

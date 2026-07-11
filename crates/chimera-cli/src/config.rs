@@ -77,6 +77,9 @@ fn fnv_hash(data: &[u8]) -> u64 {
     hash
 }
 
+/// 配置重载回调类型
+type ReloadCallback = Box<dyn Fn(&ChimeraConfig) + Send + Sync>;
+
 /// P2-3: 热重载配置管理器 — 支持文件监听与增量更新
 ///
 /// 基于 `LazyConfig` 扩展,添加文件变化检测与自动重载能力。
@@ -100,7 +103,7 @@ pub struct HotReloadConfig {
     /// 文件状态(用于检测变化)
     file_state: Option<ConfigFileState>,
     /// 重载回调列表(配置变化时触发)
-    reload_callbacks: Vec<Box<dyn Fn(&ChimeraConfig) + Send + Sync>>,
+    reload_callbacks: Vec<ReloadCallback>,
 }
 
 impl HotReloadConfig {
@@ -705,7 +708,7 @@ mod tests {
         let file = NamedTempFile::with_suffix(".yaml").unwrap();
         std::fs::write(file.path(), "nexus:\n  version: \"1.0.0\"\n").unwrap();
 
-        let mut hot = HotReloadConfig::new(Some(file.path().to_path_buf())).unwrap();
+        let hot = HotReloadConfig::new(Some(file.path().to_path_buf())).unwrap();
         assert!(hot.config().is_ok());
     }
 

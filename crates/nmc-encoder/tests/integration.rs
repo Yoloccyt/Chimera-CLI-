@@ -6,7 +6,7 @@
 //! 1. 编码文本 → 发布 NmcEncoded 事件(端到端链路)
 //! 2. 编码桌面 → 发布 NmcEncoded 事件
 //! 3. 不同模态的事件 modality 字段正确
-//! 4. 占位感知器(Image/Video/Audio)返回 EncodingFailed
+//! 4. v2.0 感知器(Image/Video/Audio)对非空数据成功编码,空数据返回 EncodingFailed
 //! 5. 无事件总线时编码仍正常工作
 //! 6. 事件 clv_dimension 始终为 512
 
@@ -98,25 +98,46 @@ fn test_different_modalities_produce_different_events() {
 
 #[test]
 fn test_image_perceptor_returns_encoding_failed() {
+    // WHY v2.0 迁移:ImagePerceptor 已升级为像素统计嵌入,
+    // 非空数据成功编码为 512-dim CLV,仅空数据返回 EncodingFailed。
     let encoder = NmcEncoder::new(NmcConfig::default()).expect("编码器构造应成功");
-    let result = encoder.perceive(PerceptionInput::Image(vec![0xFF; 2048]));
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("Image"));
-    assert!(err.to_string().contains("Week 7/8"));
+
+    // 空图像 → EncodingFailed
+    let result = encoder.perceive(PerceptionInput::Image(vec![]));
+    assert!(result.is_err(), "空图像应返回 EncodingFailed");
+
+    // 非空图像 → 成功编码为 512-dim CLV
+    let output = encoder
+        .perceive(PerceptionInput::Image(vec![0xFF; 2048]))
+        .expect("非空图像应成功编码");
+    assert_eq!(output.dimension(), 512);
 }
 
 #[test]
 fn test_video_and_audio_perceptors_return_errors() {
+    // WHY v2.0 迁移:Video/AudioPerceptor 已升级为统计特征嵌入,
+    // 非空数据成功编码,仅空数据返回 EncodingFailed。
     let encoder = NmcEncoder::new(NmcConfig::default()).expect("编码器构造应成功");
 
-    let video_result = encoder.perceive(PerceptionInput::Video(vec![0; 1024]));
-    assert!(video_result.is_err());
-    assert!(video_result.unwrap_err().to_string().contains("Video"));
+    // 空视频 → EncodingFailed
+    let video_result = encoder.perceive(PerceptionInput::Video(vec![]));
+    assert!(video_result.is_err(), "空视频应返回 EncodingFailed");
 
-    let audio_result = encoder.perceive(PerceptionInput::Audio(vec![0; 512]));
-    assert!(audio_result.is_err());
-    assert!(audio_result.unwrap_err().to_string().contains("Audio"));
+    // 非空视频 → 成功编码
+    let video_output = encoder
+        .perceive(PerceptionInput::Video(vec![0; 1024]))
+        .expect("非空视频应成功编码");
+    assert_eq!(video_output.dimension(), 512);
+
+    // 空音频 → EncodingFailed
+    let audio_result = encoder.perceive(PerceptionInput::Audio(vec![]));
+    assert!(audio_result.is_err(), "空音频应返回 EncodingFailed");
+
+    // 非空音频 → 成功编码
+    let audio_output = encoder
+        .perceive(PerceptionInput::Audio(vec![0; 512]))
+        .expect("非空音频应成功编码");
+    assert_eq!(audio_output.dimension(), 512);
 }
 
 #[test]

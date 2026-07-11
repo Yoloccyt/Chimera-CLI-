@@ -99,7 +99,7 @@ fn video_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
     }
 
     const FRAME_SIZE: usize = 4096; // 模拟帧大小
-    let frame_count = (bytes.len() + FRAME_SIZE - 1) / FRAME_SIZE;
+    let frame_count = bytes.len().div_ceil(FRAME_SIZE);
 
     let mut features = vec![0.0_f64; dim];
 
@@ -120,10 +120,14 @@ fn video_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
 
         // 对比度(标准差)
         let mean = brightness;
-        let variance = chunk.iter().map(|&b| {
-            let diff = b as f64 - mean;
-            diff * diff
-        }).sum::<f64>() / chunk.len() as f64;
+        let variance = chunk
+            .iter()
+            .map(|&b| {
+                let diff = b as f64 - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / chunk.len() as f64;
         frame_contrast.push(variance.sqrt());
 
         // 熵(信息密度)
@@ -132,7 +136,8 @@ fn video_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
             byte_counts[b as usize] += 1;
         }
         let total = chunk.len() as f64;
-        let entropy = byte_counts.iter()
+        let entropy = byte_counts
+            .iter()
             .filter(|&&c| c > 0)
             .map(|&c| {
                 let p = c as f64 / total;
@@ -144,7 +149,8 @@ fn video_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
         // 边缘密度(相邻字节差分)
         let mut edge_sum = 0u64;
         for i in 1..chunk.len() {
-            edge_sum += (chunk[i] as i16 - chunk[i - 1] as i16).abs() as u64;
+            // WHY unsigned_abs: i16::abs() 在 i16::MIN 时会溢出,unsigned_abs() 安全无溢出
+            edge_sum += (chunk[i] as i16 - chunk[i - 1] as i16).unsigned_abs() as u64;
         }
         let edge_density = edge_sum as f64 / (chunk.len() - 1).max(1) as f64;
         frame_edges.push(edge_density);
@@ -179,15 +185,21 @@ fn video_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
     // 阶段 3:时间序列统计特征
     if !frame_brightness.is_empty() {
         let brightness_mean = frame_brightness.iter().sum::<f64>() / frame_brightness.len() as f64;
-        let brightness_variance = frame_brightness.iter().map(|&v| {
-            let diff = v - brightness_mean;
-            diff * diff
-        }).sum::<f64>() / frame_brightness.len() as f64;
+        let brightness_variance = frame_brightness
+            .iter()
+            .map(|&v| {
+                let diff = v - brightness_mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / frame_brightness.len() as f64;
         let brightness_std = brightness_variance.sqrt();
 
-        // 时间趋势(首尾帧差异)
+        // 时间趋势(首尾帧差异,保留符号以区分递增 vs 递减)
+        // WHY 不取绝对值:递增亮度 vs 递减亮度是语义不同的视频模式,
+        // 取 abs 会将两者映射为相同特征值,导致无法区分时间方向。
         let trend = if frame_brightness.len() > 1 {
-            (frame_brightness[frame_brightness.len() - 1] - frame_brightness[0]).abs()
+            frame_brightness[frame_brightness.len() - 1] - frame_brightness[0]
         } else {
             0.0
         };
@@ -196,7 +208,8 @@ fn video_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
         let autocorr = if frame_brightness.len() > 1 {
             let mut cov = 0.0;
             for i in 1..frame_brightness.len() {
-                cov += (frame_brightness[i] - brightness_mean) * (frame_brightness[i - 1] - brightness_mean);
+                cov += (frame_brightness[i] - brightness_mean)
+                    * (frame_brightness[i - 1] - brightness_mean);
             }
             cov / (frame_brightness.len() - 1) as f64
         } else {
@@ -218,7 +231,7 @@ fn video_statistical_embedding(bytes: &[u8], dim: usize) -> Vec<f32> {
     // 阶段 4:全局统计
     let total_bytes = bytes.len() as f64;
     let global_features = [
-        total_bytes.ln() / 20.0, // 视频大小对数归一化
+        total_bytes.ln() / 20.0,     // 视频大小对数归一化
         frame_count as f64 / 1000.0, // 帧数归一化
     ];
     for (i, &value) in global_features.iter().enumerate() {
@@ -330,7 +343,10 @@ mod tests {
         assert_eq!(elem.embedding_dim(), 512);
         // L2 归一化后,向量长度应为 1.0
         let norm_sq: f32 = elem.embedding.iter().map(|&v| v * v).sum();
-        assert!((norm_sq - 1.0).abs() < 1e-3, "L2 归一化后范数应为 1.0,实际为 {norm_sq}");
+        assert!(
+            (norm_sq - 1.0).abs() < 1e-3,
+            "L2 归一化后范数应为 1.0,实际为 {norm_sq}"
+        );
     }
 
     #[test]
@@ -346,8 +362,12 @@ mod tests {
     #[test]
     fn test_video_perceptor_different_data() {
         let p = VideoPerceptor::new();
-        let elem1 = p.perceive(&PerceptionInput::Video(vec![0xFF; 8192])).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Video(vec![0x00; 8192])).unwrap();
+        let elem1 = p
+            .perceive(&PerceptionInput::Video(vec![0xFF; 8192]))
+            .unwrap();
+        let elem2 = p
+            .perceive(&PerceptionInput::Video(vec![0x00; 8192]))
+            .unwrap();
         // 全亮 vs 全暗,应产生不同哈希和嵌入
         assert_ne!(elem1.content_hash, elem2.content_hash);
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
@@ -366,7 +386,7 @@ mod tests {
     fn test_video_perceptor_similar_videos() {
         // 相似视频应产生较高相似度
         let p = VideoPerceptor::new();
-        let mut data1 = vec![0x80u8; 8192];
+        let data1 = vec![0x80u8; 8192];
         let mut data2 = vec![0x80u8; 8192];
         data2[0] = 0x81; // 仅第一个字节差异
 
@@ -382,8 +402,12 @@ mod tests {
     fn test_video_perceptor_different_sizes() {
         let p = VideoPerceptor::new();
         // 相同内容但不同长度
-        let elem1 = p.perceive(&PerceptionInput::Video(vec![0x80; 4096])).unwrap();
-        let elem2 = p.perceive(&PerceptionInput::Video(vec![0x80; 8192])).unwrap();
+        let elem1 = p
+            .perceive(&PerceptionInput::Video(vec![0x80; 4096]))
+            .unwrap();
+        let elem2 = p
+            .perceive(&PerceptionInput::Video(vec![0x80; 8192]))
+            .unwrap();
         // 相同内容,相似度应较高
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
         assert!(sim > 0.5, "相同内容不同长度视频相似度应 > 0.5,实际为 {sim}");
@@ -407,74 +431,5 @@ mod tests {
         let sim = cosine_similarity(&elem1.embedding, &elem2.embedding);
         // 时间趋势不同,相似度应显著不同
         assert!(sim < 0.95, "时间趋势不同视频相似度应 < 0.95,实际为 {sim}");
-    }
-}
-//! 视频感知器 — 占位实现(Week 7/8 接入 ort ONNX Runtime)
-//!
-//! 对应架构层:L2 Memory
-//!
-//! # 当前状态
-//! 本周为占位实现,`perceive` 始终返回 `EncodingFailed` 错误。
-//! Week 7/8 将接入 ort ONNX Runtime 实现视频编码(如 VideoMAE)。
-
-use crate::error::NmcError;
-use crate::perceptors::Perceptor;
-use crate::types::{CognitiveElement, Modality, PerceptionInput};
-
-/// 视频感知器 — 占位实现
-///
-/// TODO(Week 7/8): 接入 ort ONNX Runtime 实现视频编码
-pub struct VideoPerceptor;
-
-impl VideoPerceptor {
-    /// 创建视频感知器(占位,无配置)
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for VideoPerceptor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Perceptor for VideoPerceptor {
-    fn modality(&self) -> Modality {
-        Modality::Video
-    }
-
-    fn perceive(&self, input: &PerceptionInput) -> Result<CognitiveElement, NmcError> {
-        if !matches!(input, PerceptionInput::Video(_)) {
-            return Err(NmcError::InvalidModality {
-                reason: format!("VideoPerceptor 仅接受 Video 输入,收到 {}", input.modality()),
-            });
-        }
-        // TODO(Week 7/8): 接入 ort ONNX Runtime 实现视频编码
-        Err(NmcError::EncodingFailed {
-            modality: "Video".into(),
-            reason: "Video perceptor not implemented yet, TODO Week 7/8".into(),
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_video_perceptor_returns_error() {
-        let p = VideoPerceptor::new();
-        let result = p.perceive(&PerceptionInput::Video(vec![0; 1024]));
-        assert!(matches!(result, Err(NmcError::EncodingFailed { .. })));
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Video"));
-    }
-
-    #[test]
-    fn test_video_perceptor_wrong_modality() {
-        let p = VideoPerceptor::new();
-        let result = p.perceive(&PerceptionInput::Audio(vec![0; 512]));
-        assert!(matches!(result, Err(NmcError::InvalidModality { .. })));
     }
 }

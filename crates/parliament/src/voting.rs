@@ -352,13 +352,8 @@ impl BordaVoteCounter {
     /// - Borda赞成率 = 加权分总和 / 最大可能加权分
     fn compute_borda_approval(&self, opinions: &[Opinion]) -> f32 {
         let accuracy_map = self.role_accuracy.read().unwrap_or_else(|e| {
-            // 如果锁被毒化,使用默认准确率
-            let mut default = std::collections::HashMap::new();
-            for role in Role::all() {
-                default.insert(role, 0.5);
-            }
-            drop(e);
-            default
+            // 锁被毒化时,使用锁内的数据(可能不一致但可用)
+            e.into_inner()
         });
 
         let mut weighted_sum: f32 = 0.0;

@@ -37,11 +37,18 @@ pub use config::GsoeConfig;
 pub use engine::GsoeEvolutionEngine;
 pub use error::GsoeError;
 pub use model_client::{ModelSampleRequest, ModelSampleResponse, ModelSampler};
-pub use policy::fitness::{evaluate_fitness, evaluate_population};
-pub use policy::grpo::{compute_advantage, sample_rollouts, sample_rollouts_with_model};
+pub use policy::fitness::{
+    compute_correctness_reward, compute_process_reward, evaluate_fitness, evaluate_population,
+};
+pub use policy::grpo::{
+    compute_advantage, compute_ratio, gaussian_kl_divergence, gaussian_log_prob,
+    iterative_grpo_update, sample_rollouts, sample_rollouts_with_model, update_policy_with_grpo,
+};
 pub use policy::mutation::{apply_mutation, mutate};
+pub use policy::trainer::GrpoTrainer;
 pub use types::{
-    EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout, MutationCandidate, MutationType,
+    EvolutionPolicy, EvolutionResult, FitnessReport, GrpoHyperparams, GrpoObjectiveResult,
+    GrpoRollout, MutationCandidate, MutationType, PolicyGradient,
 };
 
 /// 预导入模块 — 提供最常用类型
@@ -50,8 +57,9 @@ pub mod prelude {
     pub use crate::engine::GsoeEvolutionEngine;
     pub use crate::error::GsoeError;
     pub use crate::model_client::{ModelSampleRequest, ModelSampleResponse, ModelSampler};
+    pub use crate::policy::trainer::GrpoTrainer;
     pub use crate::types::{
-        EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout, MutationCandidate,
-        MutationType,
+        EvolutionPolicy, EvolutionResult, FitnessReport, GrpoHyperparams, GrpoObjectiveResult,
+        GrpoRollout, MutationCandidate, MutationType, PolicyGradient,
     };
 }

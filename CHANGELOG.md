@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.5.0-omega 汇总(2026-07-10)
+
+v1.5.0-omega 阶段完成算法优化与架构完善,覆盖安全加固、架构一致性修复、精度修复、监控盲区消除四大类共8项核心改进。
+
+**安全加固**(2项,High优先级):
+- **ASA空关键字加固**(seccore):风险关键字列表为空时返回`RiskLevel::Unknown`而非`Low`,添加warn!日志;防止空配置误判为安全
+- **AuditChain WAL模式修复**(seccore):`PRAGMA journal_mode=WAL`改用`pragma_update`API(原execute方式不生效);修复`conn`未声明mut的编译错误
+
+**架构一致性修复**(4项,High/Medium优先级):
+- **TTG EventBus集成修正**(quest-engine):移除错误新增的`ThinkingModeChanged`事件,复用现有`ThinkingModeSwitched`事件,确保向后兼容;模式切换时正确发布事件
+- **GQEP全局超时**(gqep-executor):新增`gather_deadline_ms`配置,实现全局超时+单操作超时双层防护;超时保留已完成结果
+- **ACB/DECB双治理器仲裁**(quest-engine):新增`ArbitrationLayer`,应用max保守原则融合ACB(Token预算四级)和DECB(认知负载三档)信号;所有TTG模式选择路径(`on_budget_adjusted`/`select_mode_and_publish`/`override_mode`)均通过`effective_tier()`仲裁
+- **CSN ChainExhausted事件**(event-bus/csn-substitutor):新增`EventSeverity::Warning`级别和`NexusEvent::ChainExhausted`事件;降级链耗尽三处代码路径全部发布事件(原仅有warn!日志,监控盲区)
+
+**精度修复**(1项,Medium优先级):
+- **CACR f32精度修复**(model-router):u64预算>2^24时使用f64中间值计算百分比阈值,避免f32乘法精度丢失;proptest覆盖u64全范围,小预算向后兼容
+
+**额外修复**(1项,Low优先级):
+- **auto-dpo AtomicF32→RwLock**:修复stable Rust不存在`AtomicF32`的编译错误,改用`RwLock<f32>`;clippy魔法数字改用`std::f32::consts::LN_2`
+
+**跳过的优化**(6项,YAGNI原则,延后GA后):
+- Task 7 NexusState Arc共享:需bench数据支撑,修改L1核心类型风险高
+- Task 8 TaskProfile Hash trait:需bench证明serde_json是瓶颈
+- Task 9 EDSB次优选择:策略变更非bugfix,延后GA后
+- Task 12 cosine_similarity优化:默认不实施,需bench证明瓶颈
+- Task 13 NMC Perceptor并行化:占位阶段无收益,延后真实perceptor接入
+- Task 14 gsoe spawn_blocking:种群规模小无需spawn_blocking
+
+**验证基线**:
+- 核心crate测试全部通过:event-bus(121)、seccore、gqep-executor、model-router(148)、quest-engine、decb-governor、auto-dpo(58)
+- 修复的预存在编译错误:seccore audit.rs mut conn、quest-engine semantic_dag.rs move String、auto-dpo AtomicF32
+- clippy零警告(修改的crate),fmt零diff
+- 新增6条project_memory原则(17-22)
+- ULTIMATE.md添加权威源说明注释(不修改原文)
+
+详见 [v1.5.0 Spec](.trae/specs/v1-5-0-omega-algorithm-architecture-optimization/spec.md)。
+
 ## v1.4.0-omega 汇总(2026-07-10)
 
 v1.4.0-omega 阶段完成 P0(监控缺口补齐)+ P1(M2 历史数据持久化)两项前置必做任务,
@@ -373,6 +410,104 @@ v1.3.0-omega 后续优化路线图(`.trae/specs/v1-3-0-omega-post-optimization-r
 ### Task 0: 脱敏化处理与安全提交(2026-07-09)
 
 详见 `docs/optimization/v1.2.0/task0_desensitization_report.md`。Phase V commit 7024b03 涉及的 26 个修改文件扫描,凭据/密钥全部假阳性(YAML 配置示例 / token 预算管理领域术语 / 测试占位符),个人路径为 memory 系统引用(非凭据),无安全风险。
+
+---
+
+## v1.1.0-omega 汇总(2026-07-09)
+
+v1.1.0-omega 是 GA 后的首个系统化优化版本,完成 5 阶段深度验证(安全/正确性/性能/架构/渐进优化)+ F2 依赖下沉,共 16 项核心改进。测试基线从 v1.0.0 的 3002+ 增长至 3228 passed(+226 测试)。
+
+**Phase I — Critical 安全修复**(3 项):
+- **N1** `seccore/policy.rs`:移除 `cmd` 白名单,阻断 `cmd /c "任意命令"` 绕过(OWASP A03)
+- **N4** `seccore/asa.rs`:ASA 空 `risk_keywords` 列表返回 `RiskLevel::Unknown`(原等价 Low),防止空配置绕过风险检测
+- **N5** `seccore/audit.rs`:AuditChain 改为 pre-execution 模式,`status` 纳入 merkle_root 防篡改
+
+**Phase II — 正确性修复**(3 项):
+- **N2** `ssra-fusion/engine.rs`:`select_nth_unstable_by` 后误用 `selected[0]`,改用 `max_by` 显式取最大(NaN 安全降级)
+- **N3** `qeep-protocol`:三元组协议(Request→Ack→Receipt)补齐 Ack 创建,引入 `CallState` 状态机
+- **A1** `quest-engine/checkpoint.rs`:`save()`/`load()` 等四方法改 async + `spawn_blocking`,消除 Tokio worker 阻塞
+
+**Phase III — P0 性能优化**(5 项):
+- **III-1** `repo-wiki/vector.rs`:Mutex→RwLock,读密集 KNN 搜索并发度提升
+- **III-2** `model-router/registry.rs`:DashMap→RwLock+entry(),消除分片锁开销与 TOCTOU
+- **III-3** `scc-cache/prefetch.rs`:自实现 `LruPatternMap`(无 unsafe),转移矩阵 10_000 容量上限
+- **III-4** `repo-wiki/store.rs`:mpsc 写线程 + 只读连接池 + `spawn_blocking`,WAL 读写并发
+- **III-5** `model-router/cacr.rs`:f32→u64 整数百分比运算,修复 budget > 2^24 精度丢失
+
+**Phase IV — P1 架构补债**(6 项实施 + 1 项延后):
+- **IV-1 F1** 配置类型迁移到 `nexus-core/src/config.rs`,消除 L2-L9 依赖 `chimera-cli`(L10)违反依赖铁律
+- **IV-2 C1** `event-bus` EventTopic 9 类 + FilteredSubscriber,覆盖 66 个 NexusEvent 变体
+- **IV-3 N9** `sesa-router` PrerequisiteChecker,前置校验 OSA+KVBSR+FaaE 三事件
+- **IV-4 N6** `acb-governor` tier_switch_lag_ms 滞后机制,防止 tier 抖动
+- **IV-5 N7** `quest-engine` ArbitrationLayer,ACB/DECB 双治理器保守取严仲裁
+- **IV-6 N8** `parliament` Skeptic 否决覆议,2/3 超级多数门槛
+- **IV-7 D1** repo-wiki r2d2 连接池(延后,Phase III-4 已满足并发读需求)
+
+**Phase V — P2 渐进优化**(6 项 + 4 项延后到 v1.2.0):
+- **V-1** event-bus Critical mpsc 一致性核验(7 个 Critical 事件发布点)
+- **V-3** `gqep-executor` 全局 gather 超时(双层超时:单操作 + 全局 deadline)
+- **V-4** `gea-activator` TaskProfile Hash(f32 用 to_bits 转 u32)
+- **V-5** `quest-engine` TTG EventBus 集成收尾(清理 9 处重复日志)
+- **V-8** `event-bus` Prometheus 指标导出(3 个指标 + TopicLabel 独立枚举)
+- **V-9** 全 workspace Top-K `select_nth_unstable` 核验(Site 5 model-router 修复)
+- 延后:I1 MoE 稀疏门控 / N15 FTS5 全文索引 / E1 OnceCell 懒加载 / V-10 测试覆盖补齐
+
+**F2 — rusqlite 依赖下沉**(ADR-006 方案 E):
+- `nexus-core`(L1)删除 `rusqlite` 依赖,新增 `PragmaCapable` trait + `apply_performance_pragmas<T>` 泛型函数
+- 下游 `cmt-tiering`/`mlc-engine` 用 newtype wrapper(`PragmaConn<'a>`)实现 trait
+- M1 验收达成:`cargo tree -p nexus-core` 无 `rusqlite` 输出
+
+**验证基线**:
+- `cargo test --workspace --jobs 1` exit 0,3228 passed / 0 failed / 55 ignored(Phase V 基线)
+- `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` 零警告
+- `cargo fmt --all -- --check` 零 diff
+- ADR-006 ~ ADR-010 已登记到 `CODE_WIKI.md §2.3`
+
+**关联文档**:
+- [Phase I 安全验证报告](docs/optimization/v1.1.0/phase1_security_verification_report.md)
+- [Phase II 正确性验证报告](docs/optimization/v1.1.0/phase2_correctness_verification_report.md)
+- [Phase III 性能验证报告](docs/optimization/v1.1.0/phase3_performance_verification_report.md)
+- [Phase IV 架构验证报告](docs/optimization/v1.1.0/phase4_architecture_verification_report.md)
+- [Phase V 渐进优化报告](docs/optimization/v1.1.0/phase5_progressive_optimization_report.md)
+- [性能基线对比](docs/optimization/v1.1.0/performance_baseline_comparison.md)
+
+---
+
+## v1.0.0-omega 汇总(2026-06-28)
+
+v1.0.0-omega 是 NEXUS-OMEGA 项目首个生产就绪版本(Production Ready),历经 8 周开发周期完成。本版本实现 34 个 crate(覆盖 10 层架构 L1→L10),累计 3002+ 测试全绿,严格遵循 OMEGA 四定律(Ω-Sparse / Ω-Compress / Ω-Evolve / Ω-Event),融合 37 个创新点(22 个第一代 + 15 个第三代)。
+
+**八周里程碑**:
+- Week 1:L1 基础设施(EventBus / SecCore / Decay / QEEP / CLI 入口)
+- Week 2:L9+L5+L1(Quest Engine / Repo Wiki / Model Router / CACR)
+- Week 3:L5+L6(MLC / HCW / CMT / OSA / KVBSR)
+- Week 4:L6+L7(GEA / GQEP / PVL / MTPE / SCC / EDSB)
+- Week 5:L8+L4+L3(Parliament / ASA / AHIRT / TTG / DECB)
+- Week 6:L2+L10(SSRA / LSCT / GSOE / NMC / CHTC)
+- Week 7:L10+L6+L9(MCP Mesh / CSN / SESA / efficiency-monitor)
+- Week 8:生产化 + 安全 + 发布 + 文档(性能调优 / 3 crate 补齐 / OWASP+fuzz+audit / 跨平台发布 / 文档完善 / 全量 E2E)
+
+**性能指标**:
+- WAL 崩溃恢复 1000 次:0 丢失,中位数 251.21ms
+- 三层路由 p95(KVBSR+SESA+FaaE):78.79µs(基准 ≤ 2ms,25× 余量)
+- SSRA 100 模板融合:5.64μs(基准 ≤ 20ms,3500× 余量)
+- Windows binary 体积:6.96MB(基准 < 50MB,7× 余量)
+- Docker 镜像体积:< 100MB(distroless)
+
+**安全特性**:
+- `#![forbid(unsafe_code)]` 40/40 crate 全覆盖(workspace + 附属)
+- OWASP Top 10 渗透测试 20/20 通过(SecCore 零信任沙箱)
+- cargo-fuzz 3 target 模糊测试框架(quest_parse / seccore_sandbox / event_serialize;v1.2.0 扩展至 6 target)
+- cargo-audit 无 High/Critical 漏洞
+
+**跨平台发布**:
+- 5 平台 matrix CI/CD:Windows x86_64 / Linux x86_64+aarch64 / macOS x86_64+aarch64
+- Docker distroless 镜像(`gcr.io/distroless/cc-debian12`,nonroot UID 65532)
+- Release profile:`strip = true` / `lto = true` / `opt-level = "z"` / `panic = "abort"` / `codegen-units = 1`
+
+**文档完备**:README 重写 / CODE_WIKI 34 crate 全覆盖 / 架构文档 4 个 / cargo doc 零 warning / cargo fmt 零 diff
+
+**关联文档**:[v1.0.0-omega Release Notes](docs/release/v1.0.0-omega_release_notes.md)
 
 ---
 

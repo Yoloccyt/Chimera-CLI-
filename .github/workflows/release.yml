@@ -14,6 +14,14 @@ on:
       # WHY: 仅保留通配模式 v*.*.*-omega,已覆盖 v1.0.0-omega;
       # 显式列举具体版本会造成后续发版需手动追加,违反 DRY
       - 'v*.*.*-omega'
+  # WHY: PR 触发 test job,在合并前验证 Cargo.toml/Cargo.lock/crates 修改
+  # 不破坏既有测试基线;build/docker/release 仍仅 tag 触发(见各 job if 条件)
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - '.github/workflows/**'
   workflow_dispatch:  # 允许手动触发,便于调试
 
 permissions:
@@ -35,6 +43,8 @@ jobs:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30  # WHY: 5 平台 matrix × release LTO 编译典型 8-15min,30min 兜底防卡死
+    # WHY: build 仅 tag 触发;PR 时仅跑 test job 验证逻辑正确性,不重复 5 平台 release 编译
+    if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false  # 单平台失败不阻塞其他平台
       matrix:
@@ -79,6 +89,26 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # WHY MinGW:Windows GNU target 需要 gcc.exe 链接器,windows-latest runner
+      # 默认不安装 MinGW;本地 .cargo/config.toml 指向 D:/msys64/mingw64/bin/gcc.exe,
+      # CI 需安装 MSYS2 并通过环境变量覆盖 linker 路径(对应 §10.5 P1 已知短板)
+      - name: Setup MSYS2 and MinGW (Windows GNU target)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: gcc
+          path-type: inherit
+
+      - name: Configure MinGW linker for CI
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        shell: bash
+        run: |
+          # WHY 环境变量覆盖:msys2/setup-msys2 默认安装到 C:/msys64,而本地
+          # .cargo/config.toml 硬编码 D:/msys64/mingw64/bin/gcc.exe(本地 D 盘工具链)。
+          # CARGO_TARGET_*_LINKER 环境变量优先级高于 .cargo/config.toml,无需修改仓库文件
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=C:/msys64/mingw64/bin/gcc.exe" >> $GITHUB_ENV
+
       - name: Cache cargo registry & target
         uses: actions/cache@v4
         with:
@@ -122,6 +152,20 @@ jobs:
         run: |
           ./${{ matrix.artifact_name }} --version || echo "version check skipped"
 
+      - name: Verify binary size < 50MB
+        shell: bash
+        run: |
+          # WHY 50MB 体积红线:release profile 已配置 strip/lto/opt-level=z,
+          # 典型 binary 7-15MB;超 50MB 说明体积优化失效或引入了重量级依赖
+          BIN_PATH="${{ matrix.artifact_name }}"
+          BINARY_SIZE=$(stat -c%s "$BIN_PATH" 2>/dev/null || stat -f%z "$BIN_PATH" 2>/dev/null || wc -c < "$BIN_PATH")
+          echo "Binary size: $BINARY_SIZE bytes (${{ matrix.artifact_name }})"
+          if [ "$BINARY_SIZE" -gt 52428800 ]; then
+            echo "ERROR: Binary size $BINARY_SIZE bytes exceeds 50MB (52428800 bytes) limit"
+            exit 1
+          fi
+          echo "OK: Binary size $BINARY_SIZE bytes < 50MB limit"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -136,8 +180,9 @@ jobs:
     name: Test (ubuntu-latest)
     runs-on: ubuntu-latest
     timeout-minutes: 30  # WHY: workspace 全量测试典型 5-12min,30min 兜底防卡死
-    # WHY: 仅 tag 推送时触发测试,避免 workflow_dispatch 调试时重复跑全量测试
-    if: startsWith(github.ref, 'refs/tags/v')
+    # WHY: PR + tag 双触发 — PR 时验证修改不破坏测试基线,tag 时作为发布前最终验证;
+    #      workflow_dispatch 调试不触发(避免重复跑全量测试)
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
