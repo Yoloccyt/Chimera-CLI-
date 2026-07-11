@@ -1,5 +1,9 @@
 # Chimera CLI NEXUS-OMEGA — .gitignore
-# 排除编译产物、工具链缓存、临时文件,避免误纳敏感文件
+# 版本控制规则：明确排除临时/系统/敏感文件，包含所有技术文档与规格说明
+
+# ============================================================================
+# 排除项：编译产物、缓存、临时文件、系统目录、IDE 配置、敏感信息
+# ============================================================================
 
 # === Rust 编译产物 ===
 target/
@@ -7,35 +11,40 @@ target_clippy*/
 **/*.rs.bk
 *.pdb
 
-# === Rust 工具链缓存(本地迁移至 D 盘)===
+# === Rust 工具链缓存（本地迁移至 D 盘）===
 .toolchain/
 
-# === 临时文件 ===
+# === 临时文件与日志 ===
 tmp/
 *.tmp
 *.temp
 *.log
+*.bak
 
-# === IDE / 编辑器 ===
+# === IDE / 编辑器配置 ===
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
 
-# === 操作系统 ===
+# === 操作系统文件 ===
 .DS_Store
 Thumbs.db
 desktop.ini
+ehthumbs.db
 
-# === 环境与密钥(禁止提交)===
+# === 环境与密钥（禁止提交）===
 .env
 .env.*
 *.pem
 *.key
 secrets/
+credentials/
 
-# === 文档二进制(非源码)===
+# === 文档二进制（非源码，用户选择排除）===
 *.docx
 *.pdf
 
@@ -43,7 +52,90 @@ secrets/
 dist/
 *.exe
 *.zip
+*.tar.gz
 
-# === 本地决策不入库的文档(用户选择)===
+# === 本地决策不入库的文档 ===
 .claude/
 .trae/specs/d-disk-space-exhaustion-root-cause/
+
+# === 系统目录泄漏（环境变量解析错误产生）===
+%SystemDrive%/
+%USERPROFILE%/
+%APPDATA%/
+
+# === 第三方工具临时目录 ===
+.qoder/
+.trae/mcp.json
+
+# === Node.js / Python 缓存（如有）===
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# === 数据库文件（运行时生成）===
+*.db
+*.sqlite
+*.sqlite3
+
+# === 覆盖率报告 ===
+coverage/
+*.lcov
+
+# === 基准测试结果（可选，用户可选择提交）===
+# criterion/
+
+# ============================================================================
+# 包含项：技术文档、规格说明、研究数据、源码、配置
+# ============================================================================
+# 以下类型默认允许提交（无需显式声明，但列出以供参考）：
+#
+# ✅ Markdown 文档（.md）
+#    - README.md, CHANGELOG.md, CODE_WIKI.md
+#    - AETHER_NEXUS_OMEGA_*.md（架构文档）
+#    - ATTENTION_PAPERS_SUMMARY*.md（研究总结）
+#    - NEXUS_OMEGA_DEEP_OPTIMIZATION_REPORT.md（优化报告）
+#    - .trae/rules/*.md（项目规则）
+#
+# ✅ 规格说明文档（.trae/specs/）
+#    - spec.md, tasks.md, checklist.md
+#    - 所有 v*.*.*-omega-* 子目录
+#
+# ✅ 研究数据（CSV）
+#    - arxiv_*.csv（论文数据集）
+#
+# ✅ Rust 源码（*.rs）
+#    - crates/*/src/**/*.rs
+#    - tests/**/*.rs
+#    - benches/**/*.rs
+#
+# ✅ 配置文件
+#    - Cargo.toml, Cargo.lock
+#    - rust-toolchain.toml
+#    - .cargo/config.toml
+#    - Dockerfile
+#    - .github/workflows/*.yml
+#
+# ✅ 测试数据
+#    - crates/*/tests/proptest.proptest-regressions
+#
+# ============================================================================
+# 验证方法
+# ============================================================================
+# 1. 查看被忽略的文件：
+#    git status --ignored
+#
+# 2. 测试特定文件是否被忽略：
+#    git check-ignore <file-path>
+#    # 返回路径表示被忽略，无输出表示允许提交
+#
+# 3. 模拟添加，查看哪些文件会被纳入：
+#    git add --dry-run .
+#
+# 4. 强制添加被忽略的文件（谨慎使用）：
+#    git add -f <file-path>
+#
+# 5. 查看当前 .gitignore 规则：
+#    git check-ignore -v <file-path>
+#    # 显示匹配的规则行号和内容

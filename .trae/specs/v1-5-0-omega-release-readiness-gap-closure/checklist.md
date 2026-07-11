@@ -108,7 +108,7 @@
 
 - [x] CP-61: 所有 P0 checkpoint(CP-01 ~ CP-23)全部 `[x]` 勾选(2026-07-11 完成:CP-01~CP-23 全部验证通过)
 - [x] CP-62: 所有 P1 checkpoint(CP-24 ~ CP-60)全部 `[x]` 勾选(2026-07-11 完成:CP-24~CP-60 全部验证通过,CP-60 为已知平台限制委托 Linux CI)
-- [ ] CP-63: `git status` 确认无未提交改动(或改动已提交)— 当前 127 个未提交改动,需用户确认提交后再勾选
+- [x] CP-63: `git status` 确认无未提交改动(或改动已提交)— 2026-07-11 已提交 133 个文件(c73b989),剩余 `%SystemDrive%/` 和 `.qoder/` 为系统/临时目录未纳入
 - [x] CP-64: `git log --oneline -5` 确认最近提交符合规范(0fcd80e feat(v1.5.0-omega) / 49df3cc feat(perceptors) / cee34dd feat(acb-governor) / ce2d4ce feat(perceptors) / 03f28f2 feat(v1.4.0-omega),均遵循 conventional commit 格式)
 - [x] CP-65: 确认 tag 命名为 `v1.5.0-omega`(遵循 `v*.*.*-omega` 约定,release.yml `on.push.tags` 匹配 `v*.*.*-omega`)
 - [x] CP-66: 确认 `git tag v1.5.0-omega && git push origin v1.5.0-omega` 可触发 release.yml + fuzz.yml(release.yml `on.push.tags: v*.*.*-omega` 触发 5 平台 build + test + docker + release;fuzz.yml 同 tag 触发 nightly + 6 target × 300s)
