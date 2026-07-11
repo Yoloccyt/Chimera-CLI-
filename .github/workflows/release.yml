@@ -132,6 +132,18 @@ jobs:
           # .cargo/config.toml 硬编码 D:/msys64/mingw64/bin/gcc.exe(本地 D 盘工具链)。
           # CARGO_TARGET_*_LINKER 环境变量优先级高于 .cargo/config.toml,无需修改仓库文件
           echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=C:/msys64/mingw64/bin/gcc.exe" >> $GITHUB_ENV
+          # WHY: cargo 除了 linker 外还需要 ar/windres 等 MinGW 工具,必须将
+          # mingw64/bin 加入 PATH,否则链接阶段会因找不到 ar 而失败
+          echo "C:/msys64/mingw64/bin" >> $GITHUB_PATH
+
+      - name: Verify MinGW toolchain (Windows)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        shell: bash
+        run: |
+          which gcc || echo "gcc not in PATH"
+          which ar || echo "ar not in PATH"
+          gcc --version || true
+          ar --version || true
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -161,6 +173,16 @@ jobs:
       - name: Build binary
         shell: bash
         run: |
+          # WHY: Windows GNU 构建失败时日志难定位,先输出 toolchain/路径信息
+          # 便于在 annotations 中快速诊断
+          echo "=== Rust toolchain info ==="
+          rustup show || true
+          rustc --version || true
+          cargo --version || true
+          echo "=== MinGW toolchain info ==="
+          which gcc || true
+          which ar || true
+          echo "=== Build start ==="
           if [ "${{ matrix.cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }} -p chimera-cli
           else
