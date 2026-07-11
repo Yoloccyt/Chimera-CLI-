@@ -89,6 +89,21 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # WHY: rust-toolchain.toml 默认 channel 为 stable-x86_64-pc-windows-gnu,
+      # 在 Linux/macOS runner 上会导致 toolchain 选择冲突。通过 RUSTUP_TOOLCHAIN
+      # 环境变量强制使用 stable,确保跨平台 matrix 使用正确的 host toolchain。
+      - name: Override toolchain for cross-platform matrix
+        shell: bash
+        run: echo "RUSTUP_TOOLCHAIN=stable" >> $GITHUB_ENV
+
+      # WHY: repo-wiki 使用 rusqlite bundled + FTS5,Linux 上需要 sqlite3 开发头文件;
+      # 某些 runner 镜像可能未预装,显式安装避免链接失败。
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev pkg-config
+
       # WHY MinGW:Windows GNU target 需要 gcc.exe 链接器,windows-latest runner
       # 默认不安装 MinGW;本地 .cargo/config.toml 指向 D:/msys64/mingw64/bin/gcc.exe,
       # CI 需安装 MSYS2 并通过环境变量覆盖 linker 路径(对应 §10.5 P1 已知短板)
@@ -120,9 +135,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
+      # WHY: 优先使用 crates.io 稳定版 cross,避免 --git 在 runner 上因网络或权限失败;
+      # --locked 锁定依赖版本,确保可复现构建。
       - name: Install cross (for aarch64-linux)
         if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: cargo install cross --locked
+
+      # WHY: 在 Linux/macOS 上 cargo 找不到 cross 时给出清晰错误,避免静默失败。
+      - name: Verify cross availability
+        if: matrix.cross
+        shell: bash
+        run: |
+          which cross || echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          cross --version
 
       - name: Build binary
         shell: bash
@@ -186,6 +211,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # WHY: 与 build job 保持一致,避免 rust-toolchain.toml 的 Windows GNU channel
+      # 在 Linux runner 上导致 toolchain 选择问题。
+      - name: Override toolchain for Linux
+        shell: bash
+        run: echo "RUSTUP_TOOLCHAIN=stable" >> $GITHUB_ENV
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev pkg-config
       - uses: actions/cache@v4
         with:
           path: |
@@ -194,8 +228,10 @@ jobs:
             target
           key: linux-test-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: linux-test-cargo-
+      # WHY: 与本地 Windows --jobs 1 保持一致,避免 Ubuntu runner 内存不足导致 OOM;
+      # 同时加 --no-fail-fast 便于一次看到所有失败测试。
       - name: Run workspace tests
-        run: cargo test --workspace
+        run: cargo test --workspace --jobs 1 --no-fail-fast
 
   # ============================================================
   # Job 2.5: Docker 镜像构建 + 推送 GHCR
