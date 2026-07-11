@@ -260,9 +260,18 @@ jobs:
           key: linux-test-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: linux-test-cargo-
       # WHY: 与本地 Windows --jobs 1 保持一致,避免 Ubuntu runner 内存不足导致 OOM;
-      # 同时加 --no-fail-fast 便于一次看到所有失败测试。
+      # 同时加 --no-fail-fast 便于一次看到所有失败测试。通过 tee 捕获日志,
+      # 失败时输出最后 200 行到 job 日志,无需下载完整日志即可定位失败用例。
       - name: Run workspace tests
-        run: cargo test --workspace --jobs 1 --no-fail-fast
+        shell: bash
+        run: |
+          cargo test --workspace --jobs 1 --no-fail-fast 2>&1 | tee test.log
+          TEST_EXIT=${PIPESTATUS[0]}
+          if [ "$TEST_EXIT" -ne 0 ]; then
+            echo "=== cargo test failed with exit code $TEST_EXIT; last 200 lines ==="
+            tail -n 200 test.log
+            exit "$TEST_EXIT"
+          fi
 
   # ============================================================
   # Job 2.5: Docker 镜像构建 + 推送 GHCR
