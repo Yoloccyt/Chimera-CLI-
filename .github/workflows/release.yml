@@ -105,6 +105,16 @@ jobs:
         shell: bash
         run: echo "RUSTUP_TOOLCHAIN=stable" >> $GITHUB_ENV
 
+      # WHY: dtolnay/rust-toolchain 安装 target-specific toolchain 后,
+      # 仍需显式设为 default,避免 rust-toolchain.toml 与 action 安装的 toolchain
+      # 竞争导致实际编译使用错误工具链
+      - name: Ensure Windows GNU toolchain is default
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        shell: bash
+        run: |
+          rustup default stable-x86_64-pc-windows-gnu
+          rustup show
+
       # WHY: repo-wiki 使用 rusqlite bundled + FTS5,Linux 上需要 sqlite3 开发头文件;
       # 某些 runner 镜像可能未预装,显式安装避免链接失败。
       - name: Install system dependencies (Linux)
@@ -184,10 +194,28 @@ jobs:
           which ar || true
           echo "=== Build start ==="
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p chimera-cli
+            cross build --release --target ${{ matrix.target }} -p chimera-cli 2>&1 | tee build.log
           else
-            cargo build --release --target ${{ matrix.target }} -p chimera-cli
+            cargo build --release --target ${{ matrix.target }} -p chimera-cli 2>&1 | tee build.log
           fi
+          BUILD_EXIT=${PIPESTATUS[0]}
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "=== Build failed; emitting annotations ==="
+            grep -E '^(error|warning)(\[.*\])?:' build.log | head -30 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            echo "=== Build failed; last 100 lines ==="
+            tail -n 100 build.log
+            exit "$BUILD_EXIT"
+          fi
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.target }}
+          path: build.log
+          retention-days: 7
 
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
@@ -272,6 +300,14 @@ jobs:
             tail -n 200 test.log
             exit "$TEST_EXIT"
           fi
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: test.log
+          retention-days: 7
 
   # ============================================================
   # Job 2.5: Docker 镜像构建 + 推送 GHCR
