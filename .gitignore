@@ -139,3 +139,4 @@ coverage/
 # 5. 查看当前 .gitignore 规则：
 #    git check-ignore -v <file-path>
 #    # 显示匹配的规则行号和内容
+.worktrees/
