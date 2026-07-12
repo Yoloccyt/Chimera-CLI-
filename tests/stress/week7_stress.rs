@@ -11,7 +11,7 @@
 //!    `strong_count == 1`,确保测试 harness 自身无引用泄漏。虽然无法直接探测
 //!    9 个 crate 内部的 Arc,但若 crate 内部存在 Drop 失败导致的 Arc 泄漏,
 //!    会在后续"资源可重建性"检查中暴露(资源耗尽导致创建失败)。
-//! 2. **延迟稳定性**:测量首次 vs 末次迭代延迟,差异 < 50% 视为无累积性能退化。
+//! 2. **延迟稳定性**:测量前后各 100 次迭代平均延迟,差异 < 50% 视为无累积性能退化。
 //!    WHY 50%:内存泄漏通常导致分配器变慢(空闲链表变长/碎片化),表现为延迟
 //!    逐渐增长;50% 容忍度可过滤调度噪声,同时捕获明显的泄漏趋势。
 //! 3. **资源可重建性**:1000 次迭代后仍能成功创建新管线,证明无资源耗尽
@@ -51,10 +51,19 @@ const TOTAL_ITERATIONS: usize = 1000;
 /// CSA 延迟阈值:500ms(与 main_flow/security 一致,Task 6.5)
 const CSA_THRESHOLD_MS: u128 = 500;
 
-/// 延迟退化阈值:末次 vs 首次延迟差异 < 50% 视为无累积性能退化
-/// WHY 50%:首次迭代含冷启动开销(模块加载/编译预热),末次迭代在稳态;
-/// 50% 容忍度可过滤 tokio 调度噪声,同时捕获明显的泄漏趋势。
+/// 延迟比较窗口大小
+/// WHY 100:在 1000 次迭代中取前后各 100 次做平均,可过滤 Windows 调度/IDE 后台
+/// 进程等偶发噪声,同时保留对真实累积性能退化的敏感度。
+const LATENCY_WINDOW_SIZE: usize = 100;
+
+/// 延迟退化阈值:末段窗口平均 vs 首段窗口平均延迟差异 < 50% 视为无累积性能退化
+/// WHY 50%:窗口平均后仍保留 50% 容忍度,可过滤 tokio 调度噪声,同时捕获明显泄漏趋势。
 const LATENCY_DEGRADATION_THRESHOLD_PCT: f64 = 50.0;
+
+/// 低基线场景下的绝对退化容差(ms)
+/// WHY:当首段窗口平均延迟 < 10ms 时,相对 50% 阈值会被环境噪声极度放大。
+/// 使用绝对容差可避免低延迟场景下的 flaky。
+const LATENCY_DEGRADATION_ABSOLUTE_SLACK_MS: u128 = 10;
 
 // ============================================================
 // 测试 1:1000 次全链路迭代 + Arc 泄漏探针 + 延迟稳定性 + p95 + 可重建性
@@ -63,7 +72,7 @@ const LATENCY_DEGRADATION_THRESHOLD_PCT: f64 = 50.0;
 // 本测试是 Task 6.4 的核心交付物,一次性覆盖:
 // - 1000 次管线创建+操作+销毁(Drop trait 全覆盖)
 // - Arc strong_count 验证(无引用泄漏)
-// - 首次 vs 末次延迟对比(无性能退化)
+// - 前后窗口平均延迟对比(无性能退化)
 // - p95 延迟 ≤ CSA 阈值
 // - 1000 次后仍可创建新管线(资源未耗尽)
 
@@ -118,24 +127,40 @@ async fn test_stress_1000_iterations_no_leak() {
         TOTAL_ITERATIONS, total_success
     );
 
-    // === 验证 2:首次 vs 末次延迟退化 < 50%(无累积性能退化,间接证明无内存泄漏)===
-    // WHY 单向检测:仅当末次 > 首次(变慢)才视为退化;末次 <= 首次(变快或持平)
-    // 是改善/稳态,不应触发退化告警。早期版本用 .abs() 把改善误判为退化(2ms→0ms
-    // 被错误标为 100% 退化),此处改为仅检测正向差异。
-    let first_ms = latencies[0];
-    let last_ms = latencies[TOTAL_ITERATIONS - 1];
-    let diff_pct = if first_ms > 0 && last_ms > first_ms {
-        (last_ms as f64 - first_ms as f64) / first_ms as f64 * 100.0
+    // === 验证 2:前后窗口平均延迟退化 < 50%(无累积性能退化,间接证明无内存泄漏)===
+    // WHY 窗口平均:单次首/末迭代极易受 Windows 调度噪声影响(4ms→7ms 即被
+    // 判定为 75% 退化)。取前后各 100 次平均,在保留趋势检测能力的同时,
+    // 显著降低偶发抖动导致的 flaky 失败。
+    // WHY 绝对容差:低基线(如 2ms)时相对阈值会被噪声极度放大;当首段窗口
+    // 平均 < 10ms 时,改用「末段窗口 - 首段窗口 <= 10ms」作为通过标准。
+    // WHY 单向检测:仅当末段窗口 > 首段窗口(变慢)才视为退化;末段 <= 首段
+    // (变快或持平)是改善/稳态,不应触发退化告警。
+    let first_avg_ms =
+        latencies[..LATENCY_WINDOW_SIZE].iter().sum::<u128>() / LATENCY_WINDOW_SIZE as u128;
+    let last_avg_ms = latencies[TOTAL_ITERATIONS - LATENCY_WINDOW_SIZE..]
+        .iter()
+        .sum::<u128>()
+        / LATENCY_WINDOW_SIZE as u128;
+    let diff_pct = if first_avg_ms > 0 && last_avg_ms > first_avg_ms {
+        (last_avg_ms as f64 - first_avg_ms as f64) / first_avg_ms as f64 * 100.0
     } else {
         0.0
     };
+    let degraded = if first_avg_ms < 10 {
+        last_avg_ms > first_avg_ms + LATENCY_DEGRADATION_ABSOLUTE_SLACK_MS
+    } else {
+        diff_pct >= LATENCY_DEGRADATION_THRESHOLD_PCT
+    };
     assert!(
-        diff_pct < LATENCY_DEGRADATION_THRESHOLD_PCT,
-        "首次 {}ms vs 末次 {}ms,退化 {:.2}% >= {}%,疑似内存泄漏导致性能退化",
-        first_ms,
-        last_ms,
+        !degraded,
+        "前 {} 次平均 {}ms vs 后 {} 次平均 {}ms,退化 {:.2}% >= {}%(或超过绝对容差 {}ms),疑似内存泄漏导致性能退化",
+        LATENCY_WINDOW_SIZE,
+        first_avg_ms,
+        LATENCY_WINDOW_SIZE,
+        last_avg_ms,
         diff_pct,
-        LATENCY_DEGRADATION_THRESHOLD_PCT
+        LATENCY_DEGRADATION_THRESHOLD_PCT,
+        LATENCY_DEGRADATION_ABSOLUTE_SLACK_MS
     );
 
     // === 验证 3:p95 延迟 ≤ CSA 阈值 ===
@@ -179,8 +204,8 @@ async fn test_stress_1000_iterations_no_leak() {
     drop(final_pipeline);
 
     println!(
-        "[STRESS-1] 1000 次全链路迭代完成:success={} first={}ms last={}ms p50={}ms p95={}ms p99={}ms max={}ms diff={:.2}%",
-        total_success, first_ms, last_ms, p50_latency, p95_latency, p99_latency, max_iter_ms, diff_pct
+        "[STRESS-1] 1000 次全链路迭代完成:success={} first_avg={}ms last_avg={}ms p50={}ms p95={}ms p99={}ms max={}ms diff={:.2}%",
+        total_success, first_avg_ms, last_avg_ms, p50_latency, p95_latency, p99_latency, max_iter_ms, diff_pct
     );
 }
 
