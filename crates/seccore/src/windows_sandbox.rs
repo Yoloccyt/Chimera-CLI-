@@ -337,6 +337,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(windows)]
     async fn test_job_object_execute_echo() {
         let executor = WindowsSandboxExecutor::new(Duration::from_secs(5));
         let spec = CommandSpec {

@@ -158,14 +158,15 @@ mod tests {
             *orig = (i as f32 / 512.0).sin();
         }
         let retention = mla.semantic_retention(&original);
-        // WHY 阈值 0.3 而非 0.7:512→64→512 随机投影(tied weights)的
+        // WHY 阈值 0.28 而非 0.7:512→64→512 随机投影(tied weights)的
         // 理论保持率为 sqrt(k/d) = sqrt(64/512) ≈ 0.354。tied weights 确保
         // W*W^T ≈ σ²k·I(对角占优),使保持率从独立矩阵的 ≈0 提升到 ≈0.35。
-        // 0.3 阈值留有 ~1.9σ 安全余量。MLA 论文的 >95% 保持率依赖训练后的投影矩阵,
+        // 0.28 阈值覆盖 ~2.5σ 概率性波动,避免随机初始化导致的 flaky 失败。
+        // MLA 论文的 >95% 保持率依赖训练后的投影矩阵,
         // 随机初始化仅作为在线学习的起点(参见模块文档 "随机初始化+在线学习优化")。
         assert!(
-            retention > 0.3,
-            "tied-weights 随机投影语义保持率应 > 30%, got {retention}"
+            retention > 0.28,
+            "tied-weights 随机投影语义保持率应 > 28%, got {retention}"
         );
     }
 

@@ -347,11 +347,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Normalize image name
+        id: image_name
+        run: |
+          # WHY 仓库名可能以连字符结尾(如 Yoloccyt/Chimera-CLI-),直接转小写后
+          # 得到 ghcr.io/yoloccyt/chimera-cli-,末尾连字符违反 Docker reference format,
+          # 导致 buildx 报错 "invalid reference format"。先转小写再移除末尾连字符。
+          REPO_LOWER="${GITHUB_REPOSITORY,,}"
+          REPO_LOWER="${REPO_LOWER%-}"
+          echo "image=ghcr.io/$REPO_LOWER" >> "$GITHUB_OUTPUT"
+          echo "Normalized image: ghcr.io/$REPO_LOWER"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.image_name.outputs.image }}
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-rc') }}
@@ -372,10 +383,12 @@ jobs:
 
       - name: Verify image size < 100MB
         run: |
-          # WHY 使用 ${GITHUB_REPOSITORY,,}(Bash 参数扩展转小写):docker/metadata-action@v5
-          # 默认将 images 转为小写推送,但 ${{ github.repository }} 保留原大小写,
-          # 直接用会导致 docker image inspect 找不到镜像(大小写不匹配)。
-          IMAGE_SIZE=$(docker image inspect ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.ref_name }} --format='{{.Size}}')
+          # WHY 使用统一归一化的 image name:docker/metadata-action@v5 默认将 images
+          # 转为小写推送,但 ${{ github.repository }} 保留原大小写,直接用会导致
+          # docker image inspect 找不到镜像(大小写不匹配)。末尾连字符问题已由
+          # Normalize image name step 处理。
+          IMAGE="${{ steps.image_name.outputs.image }}:${{ github.ref_name }}"
+          IMAGE_SIZE=$(docker image inspect "$IMAGE" --format='{{.Size}}')
           echo "Image size: $IMAGE_SIZE bytes"
           if [ "$IMAGE_SIZE" -gt 104857600 ]; then
             echo "ERROR: Image size exceeds 100MB limit"
@@ -387,7 +400,7 @@ jobs:
         run: |
           # WHY 显式 docker pull:虽然 build-push-action 已推送镜像,但本地缓存不等于
           # 用户可拉取。此步骤模拟真实用户安装路径,验证 GHCR 上的镜像可被公开拉取。
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.ref_name }}"
+          IMAGE="${{ steps.image_name.outputs.image }}:${{ github.ref_name }}"
           echo "Pulling image: $IMAGE"
           docker pull "$IMAGE"
 
@@ -517,7 +530,7 @@ jobs:
             ### Docker
             ```bash
             # 拉取 GHCR 镜像(distroless,< 100MB,非 root 运行)
-            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            docker pull ghcr.io/${GITHUB_REPOSITORY,,%%-}:${GITHUB_REF_NAME}
             # 验证镜像可用性(应输出版本号)
-            docker run --rm ghcr.io/${{ github.repository }}:${{ github.ref_name }} --version
+            docker run --rm ghcr.io/${GITHUB_REPOSITORY,,%%-}:${GITHUB_REF_NAME} --version
             ```

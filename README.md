@@ -89,7 +89,7 @@ iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps
 
 ```bash
 # 指定版本
-sh install.sh --version v1.5.2-omega
+sh install.sh --version v1.5.3-omega
 
 # 指定安装目录
 sh install.sh --install-dir /usr/local/bin
@@ -148,7 +148,7 @@ cd "D:\Chimera CLI"
 # 2. 构建验证
 cargo build --workspace --release
 .\target\release\aether.exe --version
-# 预期输出:chimera 1.5.2-omega
+# 预期输出:chimera 1.5.3-omega
 ```
 
 > **手动设置环境变量**(替代方案,适用于非默认路径或自定义工具链):
@@ -164,16 +164,16 @@ cargo build --workspace --release
 
 ```bash
 # 构建镜像(< 100MB,distroless 基础)
-docker build -t chimera:1.5.2-omega .
+docker build -t chimera:1.5.3-omega .
 
 # 查看版本
-docker run --rm chimera:1.5.2-omega --version
+docker run --rm chimera:1.5.3-omega --version
 
 # 运行任务
-docker run --rm chimera:1.5.2-omega run "解释 OMEGA 四定律"
+docker run --rm chimera:1.5.3-omega run "解释 OMEGA 四定律"
 
 # 挂载配置目录(持久化 ~/.aether/omega.yaml)
-docker run --rm -v "$HOME/.aether:/root/.aether" chimera:1.5.2-omega config show
+docker run --rm -v "$HOME/.aether:/root/.aether" chimera:1.5.3-omega config show
 ```
 
 ### 基础用法

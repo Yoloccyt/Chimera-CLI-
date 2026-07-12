@@ -46,7 +46,7 @@ ENV RUST_LOG=info
 
 # 版本标签:CI 可通过 --build-arg VERSION=... 覆盖,默认与 workspace 版本一致
 # WHY 用 ARG 而非硬编码:发布流水线需按 git tag 动态注入版本号,硬编码会导致版本漂移
-ARG VERSION=1.5.2-omega
+ARG VERSION=1.5.3-omega
 
 # OCI 标准 LABELS:镜像元数据,便于镜像仓库(GHCR/Docker Hub)索引与运维检索
 # WHY 缺失 LABELS 的镜像在仓库中无法被搜索/过滤,违反 OCI 镜像规范的可发现性要求;

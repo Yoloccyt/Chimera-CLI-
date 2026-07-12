@@ -77,12 +77,12 @@ alwaysApply: true
 | 核心哲学 | OMEGA 四定律: Ω-Sparse · Ω-Compress · Ω-Evolve · Ω-Event |
 | 设计来源 | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂 |
 | 创新总数 | 37 个(22 个第一代 + 15 个第三代) |
-| 当前版本 | `workspace.package.version = 1.4.0-omega`; CHANGELOG 最新汇总 `v1.5.0-omega` |
+| 当前版本 | `workspace.package.version = 1.5.3-omega`; CHANGELOG 最新汇总 `v1.5.3-omega` |
 | 测试规模 | 单元/集成测试 + proptest + benches + OWASP A01-A10 + E2E/压测 target(持续增加) |
 
 ### 1.2 当前开发阶段
 
-- **阶段**:GA 后演进阶段 — 以 `CHANGELOG.md` 最新汇总章节(v1.5.0-omega)为当前基线,持续迭代优化
+- **阶段**:GA 后演进阶段 — 以 `CHANGELOG.md` 最新汇总章节(v1.5.3-omega)为当前基线,持续迭代优化
 - **实现状态**:35/35 crate 已实现;零 `todo!()`/`unimplemented!()`;依赖铁律零违规;error 体系分层(库层 thiserror / 应用层 anyhow)
 - **下一步**:按 CHANGELOG 规划继续 v1.x 演进(性能/架构/安全/监控)
 - **参照**:`CHANGELOG.md` + `CODE_WIKI.md` + 本规则 §3.3 第二阶段原则
@@ -574,7 +574,7 @@ c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI\project_memory.md
 | release 镜像未设 `RUST_BACKTRACE=1` | ✅ 2026-06-29 已修复(Dockerfile 加 ENV RUST_BACKTRACE=1) | P1 | ✅ 已完成 |
 | figment 三源已声明但无 `*.yaml` 配置样例 | ✅ 2026-06-29 已补齐(examples/config.sample.{yaml,toml}) | P2 | ✅ 已完成 |
 | 环境变量(CARGO_HOME/PATH)仍需手动设置 | ✅ 2026-06-29 已改进(install.ps1 --setup-env) | P1 | ✅ 已完成 |
-| release.yml Windows job MinGW linker 路径不匹配 | v1.5.1-omega CI(run 29156147195)已安装 MinGW,但硬编码 `C:/msys64/mingw64/bin/gcc.exe` 与实际路径 `C:/mingw64/bin/gcc` 不匹配;已在 release.yml 改为 `which gcc` + `cygpath -w` 动态探测 | P1 | 🔧 待 v1.5.2-omega tag 推送验证修复效果 |
+| release.yml Windows job MinGW linker 路径不匹配 | v1.5.2-omega CI(run 29193406939)已验证:msys2/setup-msys2 将 MinGW 安装到 `C:/mingw64`,release.yml 通过 `which gcc` + `cygpath -w` 动态探测后 Windows GNU build 成功 | P1 | ✅ 已完成 |
 | 合并/大改后 `cargo check` 重复定义 | 当前 `check_errors*.txt` 显示 `E0428`/`E0252` 等,需在提交前清零 | P0 | ⚠️ 需立即修复 |
 | D盘空间管理(回收站黑洞/应用商店缓存) | 后台下载+未清空回收站可导致磁盘满 | P1 | ⚠️ 需定期清理 |
 
