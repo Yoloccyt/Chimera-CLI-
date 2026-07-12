@@ -22,7 +22,7 @@
 #     $env:GITHUB_TOKEN='ghp_xxx'; .\install.ps1
 #
 # 参数说明:
-#   -Version <ver>      指定版本 (默认: latest,如 v1.5.1-omega)
+#   -Version <ver>      指定版本 (默认: latest,如 v1.5.2-omega)
 #   -InstallDir <path>  安装目录 (默认: $env:LOCALAPPDATA\Programs\chimera)
 #   -SkipVerify         跳过 SHA256 校验
 #   -SetupEnv           仅设置工具链环境变量后退出,不下载 binary

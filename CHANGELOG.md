@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.5.2-omega 汇总(2026-07-12)
+
+v1.5.2-omega 是 v1.5.1-omega 的发布工程补丁版本,无功能性代码变更。针对 v1.5.1-omega release run `29156147195` 中暴露的 CI Windows GNU linker 路径问题,将 MinGW linker 路径从硬编码改为动态探测。
+
+**发布工程修复**(3项):
+- **Windows GNU MinGW linker 路径动态探测**:`.github/workflows/release.yml` 中 `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` 从硬编码 `C:/msys64/mingw64/bin/gcc.exe` 改为通过 `which gcc` + `cygpath -w` 动态获取,解决 `windows-2025-vs2026` runner 上 MSYS2 实际安装到 `C:/mingw64` 导致 linker not found 的问题
+- **fuzz CI 配置预检**:`.github/workflows/fuzz.yml` 新增独立 `pre-check` job,在 6 个 fuzz matrix job 启动前执行 `scripts/check_fuzz_config.sh`,配置漂移时阻塞后续执行,节省 CI 资源
+- **cargo PATH 检测增强**:本地 `verify_docker_locally.ps1/sh` 在调用 `cargo build` 前检测 cargo 是否在 PATH 中,不可用时输出 `install.ps1 -SetupEnv` 指引,消除环境配置导致的 exit code 1
+
+**工程文档**(5项):
+- `docs/release/v1.5.1-omega_podman_setup_guide.md` — Podman 安装与配置指南
+- `docs/release/v1.5.1-omega_podman_install_test_plan.md` — Podman 安装测试计划(35 个测试用例)
+- `docs/release/v1.5.1-omega_tag_push_verification_plan.md` — tag 推送验证执行计划与报告模板
+- `docs/release/v1.5.1-omega_ci_windows_gnu_verification*.md` — CI Windows GNU MinGW 验证手册与速查清单
+- `docs/optimization/v1.5.1-omega/stub_arbitrary_trait_feasibility.md` — stub 宏 Arbitrary trait 可行性分析
+- `docs/optimization/v1.5.1-omega/ci_fuzz_config_integration.md` — fuzz CI pre-check 集成方案
+
+**版本同步**:
+- `Cargo.toml` workspace version: `1.5.2-omega`
+- `Dockerfile` 默认 `VERSION` build-arg: `1.5.2-omega`
+- `README.md` / `install.sh` / `install.ps1` / `packaging/*` 中的版本示例同步为 `v1.5.2-omega`
+
+**验证基线**:继承 v1.5.1-omega 汇总章节的测试与 lint 结果;重新执行 `cargo check --workspace` / `cargo test --workspace --jobs 1` / `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` / `cargo fmt --all -- --check` / `cargo build --workspace --release` 均通过。
+
+> **发布状态**: 已推送 tag `v1.5.2-omega` 触发 CI;重点验证 §10.5 P1 短板(MinGW 配置)在真实 CI 环境中是否修复。
+
 ## v1.5.1-omega 汇总(2026-07-11)
 
 v1.5.1-omega 是 v1.5.0-omega 的发布工程补丁版本,无功能性代码变更。由于远端已存在指向旧 commit 的 `v1.5.0-omega` tag,为避免覆盖共享 tag 历史,将包含全部 CI Windows GNU 修复的最新发布候选提升为 v1.5.1-omega。

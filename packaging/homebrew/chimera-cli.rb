@@ -1,17 +1,17 @@
 class ChimeraCli < Formula
   desc "Chimera CLI (NEXUS-OMEGA) terminal interface"
   homepage "https://github.com/Yoloccyt/Chimera-CLI-"
-  version "1.5.1-omega"
+  version "1.5.2-omega"
   license "Apache-2.0"
 
   if OS.mac? && Hardware::CPU.arm?
-    url "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v1.5.1-omega/chimera-macos-aarch64"
+    url "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v1.5.2-omega/chimera-macos-aarch64"
     sha256 "PLACEHOLDER_SHA256_MACOS_AARCH64"
   elsif OS.mac? && Hardware::CPU.intel?
-    url "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v1.5.1-omega/chimera-macos-x86_64"
+    url "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v1.5.2-omega/chimera-macos-x86_64"
     sha256 "PLACEHOLDER_SHA256_MACOS_X86_64"
   elsif OS.linux? && Hardware::CPU.intel?
-    url "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v1.5.1-omega/chimera-linux-x86_64"
+    url "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v1.5.2-omega/chimera-linux-x86_64"
     sha256 "PLACEHOLDER_SHA256_LINUX_X86_64"
   else
     odie "Unsupported platform"

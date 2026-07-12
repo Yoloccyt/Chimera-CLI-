@@ -1,5 +1,5 @@
 Package: chimera-cli
-Version: 1.5.1-omega
+Version: 1.5.2-omega
 Section: utils
 Priority: optional
 Architecture: amd64
