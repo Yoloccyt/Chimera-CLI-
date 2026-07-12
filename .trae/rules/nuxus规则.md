@@ -449,8 +449,8 @@ event-bus 定义 65 个 `NexusEvent` 变体,关键 Critical 级事件(必须用 
      --ignore RUSTSEC-2026-0002 `
      --ignore RUSTSEC-2024-0436
    ```
-6. `cargo check --manifest-path fuzz/Cargo.toml` 通过(实际 fuzz 委托 Linux CI)。
-7. Docker 镜像体积 < 100MB;`docker run --rm <image> --version` 输出匹配 `^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+`。
+6. `cargo check --manifest-path fuzz/Cargo.toml` 通过(Windows-GNU 下通过 `fuzz/src/lib.rs` stub 宏验证 fuzz 逻辑语法;实际 fuzz 委托 Linux CI)。额外运行 `scripts/check_fuzz_config.{ps1,sh}` 静态验证配置完整性(metadata/bin 声明/target 文件存在性)。
+7. Docker 镜像体积 < 100MB;`docker run --rm <image> --version` 输出匹配 `^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+`。本地无 Docker 时运行 `scripts/verify_docker_locally.{ps1,sh}` 降级验证(Docker→Podman→Dockerfile 静态+binary 体积代理+CI 引导),完整镜像验证由 `release.yml` docker job 在 tag 推送时执行。
 8. `cargo build --workspace --release` 通过;binary 体积 < 50MB。
 9. **版本同步**:发布 `vX.Y.Z-omega` 前,`Cargo.toml [workspace.package].version` 必须改为 `X.Y.Z`,`CHANGELOG.md` 必须存在 `vX.Y.Z-omega` 汇总章节。
 10. `git tag v<x.y.z>-omega && git push origin v<x.y.z>-omega` 触发 `release.yml` + `fuzz.yml`。
@@ -543,10 +543,11 @@ GA 后演进阶段允许新建 crate。模板见附录 §A.2;新增 crate 必须
 
 ### 10.3 fuzz 与 cargo-audit 委托模式
 
-> **平台限制**:libFuzzer 的 `FuzzerExtFunctionsWindows.cpp` 仅适配 MSVC(`__declspec(dllimport)`),MinGW g++ 无法解析。Windows GNU-only 环境无法跑 cargo-fuzz。
+> **平台限制**:libFuzzer 的 `FuzzerExtFunctionsWindows.cpp` 仅适配 MSVC(`__builtin_function_start` + `/alternatename` linker pragma),MinGW g++ 无法解析。Windows GNU-only 环境无法跑 cargo-fuzz。
 
-**委托模式**(本地静态验证 + CI 实际执行):
-- 本地:`fuzz/Cargo.toml` 静态核验(独立 workspace 隔离 + `[package.metadata] cargo-fuzz = true`)
+**委托模式**(本地 stub 宏验证 + CI 实际执行):
+- 本地(Windows-GNU):`cargo check --manifest-path fuzz/Cargo.toml` 通过 stub 宏方案通过(`fuzz/src/lib.rs` 提供 Windows-GNU 下的 `fuzz_target!` 宏替代品,将 fuzz body 编译为闭包验证语法);额外运行 `scripts/check_fuzz_config.{ps1,sh}` 静态验证配置完整性(metadata/bin 声明/target 文件存在性)
+- 本地(非 Windows-GNU):正常引入 libfuzzer-sys,可实际运行 `cargo +nightly fuzz run <target>`
 - CI:`fuzz.yml` ubuntu-latest + nightly + matrix 6 target × 300s
 - cargo-audit:本地网络超时时手动检查 Cargo.lock 13 个关键依赖版本
 
@@ -573,7 +574,7 @@ c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI\project_memory.md
 | release 镜像未设 `RUST_BACKTRACE=1` | ✅ 2026-06-29 已修复(Dockerfile 加 ENV RUST_BACKTRACE=1) | P1 | ✅ 已完成 |
 | figment 三源已声明但无 `*.yaml` 配置样例 | ✅ 2026-06-29 已补齐(examples/config.sample.{yaml,toml}) | P2 | ✅ 已完成 |
 | 环境变量(CARGO_HOME/PATH)仍需手动设置 | ✅ 2026-06-29 已改进(install.ps1 --setup-env) | P1 | ✅ 已完成 |
-| release.yml Windows job 未安装 MinGW | `windows-latest` 默认无 `D:/msys64/...`,GNU target 可能链接失败 | P1 | ⚠️ 待验证/修复 |
+| release.yml Windows job MinGW linker 路径不匹配 | v1.5.1-omega CI(run 29156147195)已安装 MinGW,但硬编码 `C:/msys64/mingw64/bin/gcc.exe` 与实际路径 `C:/mingw64/bin/gcc` 不匹配;已在 release.yml 改为 `which gcc` + `cygpath -w` 动态探测 | P1 | 🔧 待 v1.5.2-omega tag 推送验证修复效果 |
 | 合并/大改后 `cargo check` 重复定义 | 当前 `check_errors*.txt` 显示 `E0428`/`E0252` 等,需在提交前清零 | P0 | ⚠️ 需立即修复 |
 | D盘空间管理(回收站黑洞/应用商店缓存) | 后台下载+未清空回收站可导致磁盘满 | P1 | ⚠️ 需定期清理 |
 

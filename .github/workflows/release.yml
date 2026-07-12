@@ -138,13 +138,24 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-gnu'
         shell: bash
         run: |
-          # WHY 环境变量覆盖:msys2/setup-msys2 默认安装到 C:/msys64,而本地
-          # .cargo/config.toml 硬编码 D:/msys64/mingw64/bin/gcc.exe(本地 D 盘工具链)。
-          # CARGO_TARGET_*_LINKER 环境变量优先级高于 .cargo/config.toml,无需修改仓库文件
-          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=C:/msys64/mingw64/bin/gcc.exe" >> $GITHUB_ENV
+          # WHY 动态路径:msys2/setup-msys2 在不同 runner image 上安装路径可能不同
+          # (如 windows-2025-vs2026 实际将 MinGW 安装到 C:/mingw64,而非 C:/msys64)。
+          # 通过 which gcc 获取实际路径,避免硬编码路径不匹配导致 linker not found。
+          # 根因见 v1.5.1-omega release run 29156147195:硬编码 C:/msys64/mingw64/bin/gcc.exe
+          # 在 runner 上实际路径为 C:/mingw64/bin/gcc, cargo 报 "linker not found"。
+          GCC_PATH=$(which gcc)
+          if [ -z "$GCC_PATH" ]; then
+            echo "Error: gcc not found in PATH after MSYS2 setup" >&2
+            exit 1
+          fi
+          # cargo 在 Windows 上需要 Windows 风格绝对路径,cygpath 将 MSYS 路径转换。
+          GCC_WIN_PATH=$(cygpath -w "$GCC_PATH")
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=$GCC_WIN_PATH" >> $GITHUB_ENV
           # WHY: cargo 除了 linker 外还需要 ar/windres 等 MinGW 工具,必须将
-          # mingw64/bin 加入 PATH,否则链接阶段会因找不到 ar 而失败
-          echo "C:/msys64/mingw64/bin" >> $GITHUB_PATH
+          # gcc 所在目录加入 PATH,否则链接阶段会因找不到 ar 而失败。
+          MINGW_BIN_DIR=$(dirname "$GCC_PATH")
+          echo "$MINGW_BIN_DIR" >> $GITHUB_PATH
+          echo "Detected MinGW linker: $GCC_PATH -> $GCC_WIN_PATH"
 
       - name: Verify MinGW toolchain (Windows)
         if: matrix.target == 'x86_64-pc-windows-gnu'
