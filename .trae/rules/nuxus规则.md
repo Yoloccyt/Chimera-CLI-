@@ -77,12 +77,12 @@ alwaysApply: true
 | 核心哲学 | OMEGA 四定律: Ω-Sparse · Ω-Compress · Ω-Evolve · Ω-Event |
 | 设计来源 | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂 |
 | 创新总数 | 37 个(22 个第一代 + 15 个第三代) |
-| 当前版本 | `workspace.package.version = 1.5.3-omega`; CHANGELOG 最新汇总 `v1.5.3-omega` |
+| 当前版本 | `workspace.package.version = 1.5.4-omega`; CHANGELOG 最新汇总 `v1.5.4-omega` |
 | 测试规模 | 单元/集成测试 + proptest + benches + OWASP A01-A10 + E2E/压测 target(持续增加) |
 
 ### 1.2 当前开发阶段
 
-- **阶段**:GA 后演进阶段 — 以 `CHANGELOG.md` 最新汇总章节(v1.5.3-omega)为当前基线,持续迭代优化
+- **阶段**:GA 后演进阶段 — 以 `CHANGELOG.md` 最新汇总章节(v1.5.4-omega)为当前基线,持续迭代优化
 - **实现状态**:35/35 crate 已实现;零 `todo!()`/`unimplemented!()`;依赖铁律零违规;error 体系分层(库层 thiserror / 应用层 anyhow)
 - **下一步**:按 CHANGELOG 规划继续 v1.x 演进(性能/架构/安全/监控)
 - **参照**:`CHANGELOG.md` + `CODE_WIKI.md` + 本规则 §3.3 第二阶段原则

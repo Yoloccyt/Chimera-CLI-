@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.5.4-omega 汇总(2026-07-13)
+
+v1.5.4-omega 是 v1.5.3-omega 的发布工程补丁版本,修复 Docker 镜像构建失败问题,无功能性代码变更。
+
+**发布工程修复**(1项):
+- **Dockerfile Rust 版本升级**:`Dockerfile` builder 基础镜像从 `rust:1.82-slim` 升级至 `rust:1.85-slim`。根因:`hashbrown-0.17.1` 等依赖需要 `edition2024` 特性(Cargo 1.85.0 稳定化),`rust:1.82-slim` 的 Cargo 1.82.0 不支持,导致 Docker build 时 `cargo build` 报 `feature 'edition2024' is required` 错误(exit code 101)。同步更新 `scripts/verify_docker_locally.ps1` 和 `scripts/verify_docker_locally.sh` 中的版本检查模式为 `rust:1.85-slim`。
+
+**版本同步**:
+- `Cargo.toml` workspace version: `1.5.4-omega`
+- `Dockerfile` 默认 `VERSION` build-arg: `1.5.4-omega`
+- 验证脚本: `verify_docker_locally.ps1` 和 `verify_docker_locally.sh` 中的 builder 检查模式更新为 `rust:1.85-slim`
+
+**验证基线**:继承 v1.5.3-omega 汇总章节的测试与 lint 结果;Dockerfile 修改后通过 `cargo check --workspace` 验证。
+
 ## v1.5.3-omega 汇总(2026-07-12)
 
 v1.5.3-omega 是 v1.5.2-omega 的发布工程补丁版本,修复 v1.5.2-omega release run `29193406939` 中阻塞完整 release 的三个独立 CI 问题,无功能性代码变更。

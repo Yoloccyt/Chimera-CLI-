@@ -157,7 +157,7 @@ run_dockerfile_check() {
 
     # 关键指令检查清单: 每项对应 Dockerfile 中的一条安全/功能约束
     # 缺失任一项意味着 Dockerfile 被意外篡改或降级, 需要人工排查
-    check_pattern 'FROM rust:1\.82-slim AS builder'  "Builder 阶段 (rust:1.82-slim)"
+    check_pattern 'FROM rust:1\.85-slim AS builder'  "Builder 阶段 (rust:1.85-slim)"
     check_pattern 'FROM gcr\.io/distroless/cc-debian12' "Runtime 阶段 (distroless/cc-debian12)"
     check_pattern 'COPY --from=builder'              "多阶段 COPY --from=builder"
     check_pattern '--chown=nonroot:nonroot'          "文件归属 --chown=nonroot:nonroot"

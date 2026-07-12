@@ -8,7 +8,11 @@
 # ============================================================
 
 # ---------- Stage 1: Builder ----------
-FROM rust:1.82-slim AS builder
+# WHY 1.85-slim 而非 1.82:hashbrown-0.17.1 等依赖需要 edition2024 特性,
+# 该特性在 Cargo 1.85.0(2025-02-20) 中稳定化;1.82 的 Cargo 1.82.0 不支持 edition2024,
+# 会报 "feature `edition2024` is required" 错误导致构建失败。
+# 若后续 Rust 版本继续升级,可同步提升此版本号。
+FROM rust:1.85-slim AS builder
 
 # 系统依赖:
 # - pkg-config: 部分 crate 探测系统库时需要
@@ -46,7 +50,7 @@ ENV RUST_LOG=info
 
 # 版本标签:CI 可通过 --build-arg VERSION=... 覆盖,默认与 workspace 版本一致
 # WHY 用 ARG 而非硬编码:发布流水线需按 git tag 动态注入版本号,硬编码会导致版本漂移
-ARG VERSION=1.5.3-omega
+ARG VERSION=1.5.4-omega
 
 # OCI 标准 LABELS:镜像元数据,便于镜像仓库(GHCR/Docker Hub)索引与运维检索
 # WHY 缺失 LABELS 的镜像在仓库中无法被搜索/过滤,违反 OCI 镜像规范的可发现性要求;

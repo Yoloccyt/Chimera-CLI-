@@ -162,7 +162,7 @@ function Invoke-DockerfileStaticCheck {
     # 关键指令检查清单: 每项对应 Dockerfile 中的一条安全/功能约束
     # 缺失任一项意味着 Dockerfile 被意外篡改或降级, 需要人工排查
     $requiredChecks = @(
-        @{ Name = "Builder 阶段 (rust:1.82-slim)";         Pattern = 'FROM rust:1\.82-slim AS builder' },
+        @{ Name = "Builder 阶段 (rust:1.85-slim)";         Pattern = 'FROM rust:1\.85-slim AS builder' },
         @{ Name = "Runtime 阶段 (distroless/cc-debian12)"; Pattern = 'FROM gcr\.io/distroless/cc-debian12' },
         @{ Name = "多阶段 COPY --from=builder";            Pattern = 'COPY --from=builder' },
         @{ Name = "文件归属 --chown=nonroot:nonroot";      Pattern = '--chown=nonroot:nonroot' },
