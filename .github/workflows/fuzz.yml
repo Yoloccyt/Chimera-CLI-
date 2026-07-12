@@ -25,8 +25,45 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # ============================================================
+  # Job 1: pre-check — fuzz crate 配置静态验证
+  #
+  # WHY 此 job 存在:在 fuzz matrix 启动前验证 fuzz/Cargo.toml 配置完整性,
+  #   提前发现配置漂移(metadata/bin 声明/target 文件丢失/fuzz_target! 宏缺失等)。
+  #   失败时阻塞 6 个 matrix job 启动,避免配置错误导致 6 target × ~5min
+  #   编译运行全部失败浪费 CI 资源(约 30min matrix 总时长)。
+  #
+  # 执行内容:仅 checkout + 运行 scripts/check_fuzz_config.sh shell 脚本,
+  #   无需 nightly toolchain 或 cargo-fuzz 安装,典型 <30s 完成。
+  # ============================================================
+  pre-check:
+    name: Fuzz config pre-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 3  # WHY: 仅 checkout + shell 脚本验证,典型 <30s,3min 兜底防 runner 启动慢或网络抖动
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run fuzz config static validation
+        # WHY: 调用 scripts/check_fuzz_config.sh 验证 fuzz crate 配置完整性:
+        #   1. fuzz/Cargo.toml 存在
+        #   2. cargo-fuzz metadata 声明
+        #   3. [lib] path 声明(承载 Windows-GNU stub 宏)
+        #   4. 8 个 [[bin]] 声明 + target 文件存在性(6 生产 + 2 stub 宏测试)
+        #   5. 每个 fuzz target 包含 fuzz_target! 宏调用
+        #   6. 被测 crate path 依赖目录存在
+        # 失败时退出码 1,阻塞后续 fuzz job 启动(配置漂移意味着 fuzz 可能无效)
+        shell: bash
+        run: |
+          chmod +x scripts/check_fuzz_config.sh
+          ./scripts/check_fuzz_config.sh
+
+  # ============================================================
+  # Job 2: fuzz — 6 target × 300s matrix 实际执行
+  # ============================================================
   fuzz:
     name: Fuzz (${{ matrix.target }})
+    needs: pre-check  # WHY: 配置预检通过后再启动 fuzz matrix,避免配置错误导致 6 个 job 全部失败浪费 CI 资源
     runs-on: ubuntu-latest
     timeout-minutes: 20  # WHY: 6 target × 300s + 编译 ≈ 15-20min(matrix 并行,每个 target 独立 job),20min 兜底防止 fuzz hang 占用 nightly runner
     strategy:

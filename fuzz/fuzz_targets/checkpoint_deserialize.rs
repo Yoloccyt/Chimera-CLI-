@@ -23,7 +23,15 @@
 // fuzz_target! 宏内部展开为 FFI 调用(unsafe),与 forbid 冲突。
 // fuzz crate 独立于主 workspace,不影响 34 crate 的 forbid 覆盖率。
 
+// WHY 条件 use:Windows-GNU 无法编译 libfuzzer-sys(C++ MSVC pragma 不兼容),
+// 改用 crate 内部 stub 宏(chimera_fuzz::fuzz_target)验证 fuzz 逻辑语法。
+// 非 Windows-GNU 环境(Linux CI / Windows-MSVC)使用真正的 libfuzzer-sys。
+#[cfg(not(all(target_os = "windows", target_env = "gnu")))]
 use libfuzzer_sys::fuzz_target;
+
+#[cfg(all(target_os = "windows", target_env = "gnu"))]
+use chimera_fuzz::fuzz_target;
+
 use nexus_core::Checkpoint;
 
 fuzz_target!(|data: &[u8]| {

@@ -6,15 +6,18 @@
 # 2. libfuzzer-sys 的 -Zsanitizer=address 影响 CI
 # 3. forbid(unsafe_code) 与 libfuzzer 的 unsafe 冲突
 #
-# 运行方式(需 nightly 工具链):
+# 运行方式(需 nightly 工具链,Linux/macOS 或 Windows-MSVC):
 #   rustup install nightly
 #   rustup component add --toolchain nightly llvm-tools-preview
 #   cargo +nightly fuzz run quest_parse
 #   cargo +nightly fuzz run seccore_sandbox
 #   cargo +nightly fuzz run event_serialize
 #
-# 当前环境仅有 stable 工具链,无法实际运行,详见
-# docs/security/week8_security_report.md
+# Windows-GNU(MinGW)限制:libfuzzer-sys 的 FuzzerExtFunctionsWindows.cpp
+# 使用 MSVC 特定语法,MinGW g++ 无法编译。本地 Windows-GNU 仅做
+# `cargo check --manifest-path fuzz/Cargo.toml`(stub 宏验证语法),
+# 实际 fuzz 运行委托 Linux CI(.github/workflows/fuzz.yml)。
+# 详见 .claude/CLAUDE.md §6 与 .trae/rules/nuxus规则.md §7.2。
 # =============================================================================
 
 [package]
@@ -31,10 +34,6 @@ description = "NEXUS-OMEGA 模糊测试 target 集合(cargo-fuzz)"
 cargo-fuzz = true
 
 [dependencies]
-# libfuzzer-sys:cargo-fuzz 的核心运行时,提供 fuzz_target! 宏
-# 需要 nightly 工具链(-Zsanitizer=address)
-libfuzzer-sys = "0.4"
-
 # 被测 crate(通过 path 引用主 workspace,版本与 workspace 一致)
 nexus-core = { path = "../crates/nexus-core" }
 event-bus = { path = "../crates/event-bus" }
@@ -46,6 +45,22 @@ model-router = { path = "../crates/model-router" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rmp-serde = "1.3"
+
+# WHY 条件依赖:libfuzzer-sys 的 C++ 源码 FuzzerExtFunctionsWindows.cpp 使用
+# MSVC 特定的 __builtin_function_start 和 /alternatename linker pragma,
+# MinGW g++ 无法解析(::__msan_unpoison 等符号未声明,编译报错)。
+# 仅在非 Windows-GNU 环境引入 libfuzzer-sys;
+# Windows-GNU 下使用 crate 内部的 stub 宏(见 src/lib.rs)验证 fuzz 逻辑语法,
+# 实际 fuzz 运行委托 Linux CI(.github/workflows/fuzz.yml)。
+[target.'cfg(not(all(target_os = "windows", target_env = "gnu")))'.dependencies]
+libfuzzer-sys = "0.4"
+
+# WHY [lib] 声明:fuzz crate 需要一个 lib target 承载 Windows GNU 下的
+# fuzz_target! stub 宏(见 src/lib.rs)。非 Windows-GNU 环境下 lib.rs 的
+# stub 宏被 cfg 排除,lib target 内容为空,不影响 cargo-fuzz 对 [[bin]]
+# target 的识别和运行(cargo-fuzz 只关注 [[bin]] 声明)。
+[lib]
+path = "src/lib.rs"
 
 # ============================================================
 # Fuzz target 二进制声明
@@ -87,6 +102,26 @@ doc = false
 [[bin]]
 name = "config_section_parse"
 path = "fuzz_targets/config_section_parse.rs"
+test = false
+doc = false
+
+# ============================================================
+# Stub 宏覆盖测试 target(回归测试)
+#
+# WHY 存在:验证 fuzz/src/lib.rs 中的 stub 宏覆盖 libfuzzer-sys 0.4
+# 的全部 3 种签名形式。非 Windows-GNU 环境使用真正的 libfuzzer-sys
+# (已支持所有形式),Windows-GNU 使用 stub 宏。
+# ============================================================
+
+[[bin]]
+name = "stub_form1_test"
+path = "fuzz_targets/stub_form1_test.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "stub_form3_test"
+path = "fuzz_targets/stub_form3_test.rs"
 test = false
 doc = false
 
