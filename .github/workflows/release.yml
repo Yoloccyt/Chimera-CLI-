@@ -383,11 +383,15 @@ jobs:
 
       - name: Verify image size < 100MB
         run: |
-          # WHY 使用统一归一化的 image name:docker/metadata-action@v5 默认将 images
+          # WHY 先 pull 再 inspect:docker buildx build --push 仅推送镜像到 registry,
+          # 不会在本地 Docker 存储中保留镜像;直接 docker image inspect 会报
+          # "No such image" 错误。先 pull 拉取到本地,再 inspect 获取体积。
+          # 使用统一归一化的 image name:docker/metadata-action@v5 默认将 images
           # 转为小写推送,但 ${{ github.repository }} 保留原大小写,直接用会导致
           # docker image inspect 找不到镜像(大小写不匹配)。末尾连字符问题已由
           # Normalize image name step 处理。
           IMAGE="${{ steps.image_name.outputs.image }}:${{ github.ref_name }}"
+          docker pull "$IMAGE"
           IMAGE_SIZE=$(docker image inspect "$IMAGE" --format='{{.Size}}')
           echo "Image size: $IMAGE_SIZE bytes"
           if [ "$IMAGE_SIZE" -gt 104857600 ]; then

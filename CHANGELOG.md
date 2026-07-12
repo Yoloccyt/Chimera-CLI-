@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.5.5-omega 汇总(2026-07-13)
+
+v1.5.5-omega 是 v1.5.4-omega 的发布工程补丁版本,修复 Docker 镜像体积验证步骤中 `docker image inspect` 找不到镜像的问题,无功能性代码变更。
+
+**发布工程修复**(1项):
+- **release.yml 体积验证步骤**:在 `Verify image size < 100MB` 步骤中添加 `docker pull` 命令,再执行 `docker image inspect`。根因:`docker buildx build --push` 仅推送镜像到 registry,不会在本地 Docker 存储中保留镜像,直接 `docker image inspect` 报 `No such image` 错误。
+
+**版本同步**:
+- `Cargo.toml` workspace version: `1.5.5-omega`
+- `Dockerfile` 默认 `VERSION` build-arg: `1.5.5-omega`
+
+**验证基线**:继承 v1.5.4-omega 汇总章节的测试与 lint 结果;release.yml 修改后通过 `cargo check --workspace` 验证。
+
 ## v1.5.4-omega 汇总(2026-07-13)
 
 v1.5.4-omega 是 v1.5.3-omega 的发布工程补丁版本,修复 Docker 镜像构建失败问题,无功能性代码变更。
