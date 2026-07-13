@@ -77,12 +77,12 @@ alwaysApply: true
 | 核心哲学 | OMEGA 四定律: Ω-Sparse · Ω-Compress · Ω-Evolve · Ω-Event |
 | 设计来源 | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂 |
 | 创新总数 | 37 个(22 个第一代 + 15 个第三代) |
-| 当前版本 | `workspace.package.version = 1.5.5-omega`; CHANGELOG 最新汇总 `v1.5.5-omega` |
+| 当前版本 | `workspace.package.version = 1.5.7-omega`; CHANGELOG 最新汇总 `v1.5.7-omega` |
 | 测试规模 | 单元/集成测试 + proptest + benches + OWASP A01-A10 + E2E/压测 target(持续增加) |
 
 ### 1.2 当前开发阶段
 
-- **阶段**:GA 后演进阶段 — 以 `CHANGELOG.md` 最新汇总章节(v1.5.5-omega)为当前基线,持续迭代优化
+- **阶段**:GA 后演进阶段 — 以 `CHANGELOG.md` 最新汇总章节(v1.5.7-omega)为当前基线,持续迭代优化
 - **实现状态**:35/35 crate 已实现;零 `todo!()`/`unimplemented!()`;依赖铁律零违规;error 体系分层(库层 thiserror / 应用层 anyhow)
 - **下一步**:按 CHANGELOG 规划继续 v1.x 演进(性能/架构/安全/监控)
 - **参照**:`CHANGELOG.md` + `CODE_WIKI.md` + 本规则 §3.3 第二阶段原则
@@ -173,7 +173,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 
 ### 3.1 GA 后演进阶段规则
 
-> 项目第一阶段(Stage 0-8 / v1.0.0-omega GA)已完成。当前处于 **GA 后演进阶段**,以 `CHANGELOG.md` 最新汇总章节(v1.5.0-omega)为当前基线,`Cargo.toml` `workspace.package.version = 1.4.0-omega` 为发布候选版本号。所有决策继续遵循 OMEGA 四定律与 §2.2 依赖铁律。
+> 项目第一阶段(Stage 0-8 / v1.0.0-omega GA)已完成。当前处于 **GA 后演进阶段**,以 `CHANGELOG.md` 最新汇总章节(v1.5.7-omega)为当前基线,`Cargo.toml` `workspace.package.version = 1.5.7-omega` 为发布候选版本号。所有决策继续遵循 OMEGA 四定律与 §2.2 依赖铁律。
 
 此阶段开发原则:
 
@@ -450,7 +450,7 @@ event-bus 定义 65 个 `NexusEvent` 变体,关键 Critical 级事件(必须用 
      --ignore RUSTSEC-2024-0436
    ```
 6. `cargo check --manifest-path fuzz/Cargo.toml` 通过(Windows-GNU 下通过 `fuzz/src/lib.rs` stub 宏验证 fuzz 逻辑语法;实际 fuzz 委托 Linux CI)。额外运行 `scripts/check_fuzz_config.{ps1,sh}` 静态验证配置完整性(metadata/bin 声明/target 文件存在性)。
-7. Docker 镜像体积 < 100MB;`docker run --rm <image> --version` 输出匹配 `^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+`。本地无 Docker 时运行 `scripts/verify_docker_locally.{ps1,sh}` 降级验证(Docker→Podman→Dockerfile 静态+binary 体积代理+CI 引导),完整镜像验证由 `release.yml` docker job 在 tag 推送时执行。
+7. Docker 镜像体积 < 100MB;`docker run --rm <image> --version` 输出匹配 `^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+`。本地无 Docker 时运行 `scripts/verify_docker_locally.{ps1,sh}` 降级验证(Docker→Podman→Dockerfile 静态+binary 体积代理+CI 引导),完整镜像验证由 `release.yml` docker job 在 tag 推送时执行。
 8. `cargo build --workspace --release` 通过;binary 体积 < 50MB。
 9. **版本同步**:发布 `vX.Y.Z-omega` 前,`Cargo.toml [workspace.package].version` 必须改为 `X.Y.Z`,`CHANGELOG.md` 必须存在 `vX.Y.Z-omega` 汇总章节。
 10. `git tag v<x.y.z>-omega && git push origin v<x.y.z>-omega` 触发 `release.yml` + `fuzz.yml`。
@@ -477,7 +477,7 @@ GA 后演进阶段允许新建 crate。模板见附录 §A.2;新增 crate 必须
 | `OMEGA_大模型架构魔改创新_AI_Agent项目套用设计.md` | OMEGA 架构魔改设计(五大模型融合,十二大魔改创新)。**第二阶段创新演进主参考**(见 §3.3.2,如何进化) | ⭐⭐⭐⭐ |
 | `DEEP_RESEARCH_OPTIMIZATION_ALGORITHM.md` | 深度研究:优化算法 — ⚠️ 基于 Week 2 快照,部分 crate 已演进 | ⭐ |
 | `DEEP_RESEARCH_LLM_ARCHITECTURE_MAPPING.md` | 深度研究:LLM 架构映射 — ⚠️ 基于 Week 2 快照 | ⭐ |
-| `CHANGELOG.md` | 版本演进史(Week 1-8 + GA 后演进,最新 v1.5.0-omega) | ⭐⭐⭐ |
+| `CHANGELOG.md` | 版本演进史(Week 1-8 + GA 后演进,最新 v1.5.7-omega) | ⭐⭐⭐ |
 | `README.md` | 项目入口(开发状态表准确) | ⭐⭐⭐ |
 | `Cargo.toml` | Workspace 根配置(35 members × 20+ 共享依赖,根 package `chimera-e2e-tests`) | ⭐⭐⭐ |
 
@@ -536,11 +536,11 @@ GA 后演进阶段允许新建 crate。模板见附录 §A.2;新增 crate 必须
 
 - **基础镜像**:`gcr.io/distroless/cc-debian12`(无 shell,内置 nonroot UID 65532)
 - **USER**:`nonroot:nonroot`(契合 `#![forbid(unsafe_code)]` 哲学)
-- **HEALTHCHECK**:`CMD ["chimera","--version"]` exec form
-- **ENTRYPOINT**:`["chimera"]`
+- **HEALTHCHECK**:`CMD ["chimela","--version"]` exec form
+- **ENTRYPOINT**:`["chimela"]`
 - **体积**:< 100MB(release.yml 断言)
-- **--version 验证**:`docker pull` + `docker run --rm --version`,grep `^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+`(case-sensitive,PowerShell 用 `-cmatch`)
-- **品牌一致性**:内部 codename `aether`(`crates/chimera-cli/Cargo.toml [[bin]]`),Dockerfile/CI 重命名 `chimera` 保持外部品牌
+- **--version 验证**:`docker pull` + `docker run --rm --version`,grep `^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+`(case-sensitive,PowerShell 用 `-cmatch`)
+- **品牌一致性**:内部 codename `aether`(`crates/chimera-cli/Cargo.toml [[bin]]`),Dockerfile/CI 重命名 `chimela` 保持外部品牌;同时保留 `chimera` 作为兼容别名
 
 ### 10.3 fuzz 与 cargo-audit 委托模式
 

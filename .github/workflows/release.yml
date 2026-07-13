@@ -56,31 +56,31 @@ jobs:
             # WHY: 显式指定 GNU channel,避免 dtolnay/rust-toolchain@stable 在 Windows 上
             # 默认安装 MSVC 工具链后再被 rust-toolchain.toml 切换,造成 toolchain 冲突
             toolchain: stable-x86_64-pc-windows-gnu
-            artifact_name: chimera-windows-x86_64.exe
+            artifact_name: chimela-windows-x86_64.exe
             binary_name: aether.exe
           # Linux x86_64 — 主力服务器平台
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             cross: false
-            artifact_name: chimera-linux-x86_64
+            artifact_name: chimela-linux-x86_64
             binary_name: aether
           # Linux aarch64 — ARM 服务器(交叉编译,需 cross)
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             cross: true
-            artifact_name: chimera-linux-aarch64
+            artifact_name: chimela-linux-aarch64
             binary_name: aether
           # macOS x86_64 — Intel Mac
           - target: x86_64-apple-darwin
             runner: macos-latest
             cross: false
-            artifact_name: chimera-macos-x86_64
+            artifact_name: chimela-macos-x86_64
             binary_name: aether
           # macOS aarch64 — Apple Silicon (M1/M2/M3)
           - target: aarch64-apple-darwin
             runner: macos-latest
             cross: false
-            artifact_name: chimera-macos-aarch64
+            artifact_name: chimela-macos-aarch64
             binary_name: aether
 
     steps:
@@ -413,10 +413,10 @@ jobs:
           VERSION_OUTPUT=$(docker run --rm "$IMAGE" --version)
           echo "Version output: $VERSION_OUTPUT"
 
-          # 验证输出格式:必须匹配 aether|chimera X.Y.Z[-omega](确保 binary 未损坏)
-          if ! echo "$VERSION_OUTPUT" | grep -qE '^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'; then
+          # 验证输出格式:必须匹配 aether|chimera|chimela X.Y.Z[-omega](确保 binary 未损坏,且新品牌名可用)
+          if ! echo "$VERSION_OUTPUT" | grep -qE '^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+'; then
             echo "ERROR: --version output does not match expected format"
-            echo "Expected: aether|chimera X.Y.Z[-omega]"
+            echo "Expected: aether|chimera|chimela X.Y.Z[-omega]"
             echo "Actual: $VERSION_OUTPUT"
             exit 1
           fi
@@ -438,22 +438,24 @@ jobs:
       - name: Download Linux x86_64 binary
         uses: actions/download-artifact@v4
         with:
-          name: chimera-linux-x86_64
+          name: chimela-linux-x86_64
           path: ./artifacts
 
       - name: Build .deb package
         run: |
-          chmod +x ./artifacts/chimera-linux-x86_64
+          chmod +x ./artifacts/chimela-linux-x86_64
           mkdir -p debian-pkg/usr/bin debian-pkg/DEBIAN
-          mv ./artifacts/chimera-linux-x86_64 debian-pkg/usr/bin/chimera
-          sed "s/^Version: .*/Version: ${GITHUB_REF_NAME#v}/" packaging/apt/chimera-cli.control > debian-pkg/DEBIAN/control
-          dpkg-deb --build debian-pkg "chimera-cli_${GITHUB_REF_NAME#v}_amd64.deb"
+          mv ./artifacts/chimela-linux-x86_64 debian-pkg/usr/bin/chimela
+          ln -s chimela debian-pkg/usr/bin/chimera
+          ln -s chimela debian-pkg/usr/bin/aether
+          sed "s/^Version: .*/Version: ${GITHUB_REF_NAME#v}/" packaging/apt/chimela-cli.control > debian-pkg/DEBIAN/control
+          dpkg-deb --build debian-pkg "chimela-cli_${GITHUB_REF_NAME#v}_amd64.deb"
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chimera-cli-deb
-          path: chimera-cli_*_amd64.deb
+          name: chimela-cli-deb
+          path: chimela-cli_*_amd64.deb
 
   # ============================================================
   # Job 3: 汇总所有平台产物,创建 GitHub Release
@@ -494,11 +496,21 @@ jobs:
           echo "checksums.txt generated ($ACTUAL_COUNT entries):"
           cat ../checksums.txt
 
+      - name: Compute release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          # WHY: GHCR 镜像名必须全小写且不能以连字符结尾;GitHub Actions 的 with:body 不支持 bash 参数展开
+          repo_lower='${{ github.repository }}'
+          repo_lower=$(echo "$repo_lower" | tr '[:upper:]' '[:lower:]' | sed 's/-$//')
+          echo "image=ghcr.io/${repo_lower}" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Chimera CLI ${{ github.ref_name }}
+          name: chimela CLI ${{ github.ref_name }}
           generate_release_notes: true
           files: |
             artifacts/*/*
@@ -506,35 +518,35 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           body: |
-            ## Chimera CLI (NEXUS-OMEGA) ${{ github.ref_name }}
+            ## chimela CLI (NEXUS-OMEGA) ${{ github.ref_name }}
 
             ### 平台支持
             | 平台 | 文件 | 架构 |
             |------|------|------|
-            | Windows | `chimera-windows-x86_64.exe` | x86_64 |
-            | Linux   | `chimera-linux-x86_64`       | x86_64 |
-            | Linux   | `chimera-linux-aarch64`      | aarch64 (ARM) |
-            | macOS   | `chimera-macos-x86_64`       | Intel |
-            | macOS   | `chimera-macos-aarch64`      | Apple Silicon |
+            | Windows | `chimela-windows-x86_64.exe` | x86_64 |
+            | Linux   | `chimela-linux-x86_64`       | x86_64 |
+            | Linux   | `chimela-linux-aarch64`      | aarch64 (ARM) |
+            | macOS   | `chimela-macos-x86_64`       | Intel |
+            | macOS   | `chimela-macos-aarch64`      | Apple Silicon |
 
             ### 包管理器安装
             | 平台 | 命令 |
             |------|------|
-            | macOS / Linux (Homebrew) | `brew tap yoloccyt/chimera-cli && brew install chimera-cli` |
-            | Windows (Scoop) | `scoop bucket add chimera-cli https://github.com/Yoloccyt/scoop-chimera-cli.git && scoop install chimera-cli` |
-            | Debian / Ubuntu | `sudo apt install ./chimera-cli_${GITHUB_REF_NAME#v}_amd64.deb` |
+            | macOS / Linux (Homebrew) | `brew tap yoloccyt/chimela-cli && brew install chimela-cli` |
+            | Windows (Scoop) | `scoop bucket add chimela-cli https://github.com/Yoloccyt/scoop-chimela-cli.git && scoop install chimela-cli` |
+            | Debian / Ubuntu | `sudo apt install ./chimela-cli_${{ steps.release_meta.outputs.version }}_amd64.deb` |
 
-            完整终端安装指南参见 [docs/release/v1.5.1-omega_installation_guide.md](docs/release/v1.5.1-omega_installation_guide.md)。
+            完整终端安装指南参见 [docs/release/v1.5.7-omega_installation_guide.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/release/v1.5.7-omega_installation_guide.md)。
 
             ### 验证
             ```bash
-            chimera --version
+            chimela --version
             ```
 
             ### Docker
             ```bash
             # 拉取 GHCR 镜像(distroless,< 100MB,非 root 运行)
-            docker pull ghcr.io/${GITHUB_REPOSITORY,,%%-}:${GITHUB_REF_NAME}
+            docker pull ${{ steps.release_meta.outputs.image }}:${{ github.ref_name }}
             # 验证镜像可用性(应输出版本号)
-            docker run --rm ghcr.io/${GITHUB_REPOSITORY,,%%-}:${GITHUB_REF_NAME} --version
+            docker run --rm ${{ steps.release_meta.outputs.image }}:${{ github.ref_name }} --version
             ```

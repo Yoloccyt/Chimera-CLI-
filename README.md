@@ -1,6 +1,8 @@
-# Chimera CLI (NEXUS-OMEGA)
+# chimela CLI (NEXUS-OMEGA)
 
-[![Version](https://img.shields.io/badge/version-1.5.6--omega-blue.svg)](./CHANGELOG.md)
+> 别名: `chimera` / `aether`(内部 cargo binary 名)。本 README 使用新的用户侧品牌名 `chimela`。
+
+[![Version](https://img.shields.io/badge/version-1.5.7--omega-blue.svg)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](./LICENSE)
 [![Crates](https://img.shields.io/badge/crates-35-orange.svg)](./CODE_WIKI.md)
 [![Tests](https://img.shields.io/badge/tests-3002+-brightgreen.svg)](./CHANGELOG.md)
@@ -13,7 +15,7 @@
 
 ## 项目总览
 
-Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 35 crate workspace 项目,遵循 10 层架构(L1-L10)和 **OMEGA 四定律**:
+chimela CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 35 crate workspace 项目,遵循 10 层架构(L1-L10)和 **OMEGA 四定律**:
 
 | 定律 | 全称 | 工程实现 | 对应 crate |
 |------|------|---------|-----------|
@@ -42,6 +44,8 @@ Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 3
 - **链接器**(Windows):MinGW-w64 GCC(`D:\msys64\mingw64\bin\gcc.exe`)
 
 ### 安装
+
+完整安装指南见 [docs/release/v1.5.7-omega_installation_guide.md](./docs/release/v1.5.7-omega_installation_guide.md)。
 
 #### 方式 1:一键安装脚本(推荐)
 
@@ -89,7 +93,7 @@ iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps
 
 ```bash
 # 指定版本
-sh install.sh --version v1.5.6-omega
+sh install.sh --version v1.5.7-omega
 
 # 指定安装目录
 sh install.sh --install-dir /usr/local/bin
@@ -116,21 +120,21 @@ sh install.sh --skip-verify
 
 | 平台 | 文件名 |
 |------|--------|
-| Windows x86_64 | `chimera-windows-x86_64.exe` |
-| Linux x86_64 | `chimera-linux-x86_64` |
-| Linux aarch64 | `chimera-linux-aarch64` |
-| macOS Intel | `chimera-macos-x86_64` |
-| macOS Apple Silicon | `chimera-macos-aarch64` |
+| Windows x86_64 | `chimela-windows-x86_64.exe` |
+| Linux x86_64 | `chimela-linux-x86_64` |
+| Linux aarch64 | `chimela-linux-aarch64` |
+| macOS Intel | `chimela-macos-x86_64` |
+| macOS Apple Silicon | `chimela-macos-aarch64` |
 
 ```bash
 # Linux/macOS
-chmod +x chimera-linux-x86_64
-sudo mv chimera-linux-x86_64 /usr/local/bin/chimera
-chimera --version
+chmod +x chimela-linux-x86_64
+sudo mv chimela-linux-x86_64 /usr/local/bin/chimela
+chimela --version
 
 # Windows
-move chimera-windows-x86_64.exe C:\Windows\chimera.exe
-chimera --version
+move chimela-windows-x86_64.exe C:\Windows\chimela.exe
+chimela --version
 ```
 
 #### 方式 3:从源码构建
@@ -148,7 +152,7 @@ cd "D:\Chimera CLI"
 # 2. 构建验证
 cargo build --workspace --release
 .\target\release\aether.exe --version
-# 预期输出:chimera 1.5.6-omega
+# 预期输出:aether 1.5.7-omega
 ```
 
 > **手动设置环境变量**(替代方案,适用于非默认路径或自定义工具链):
@@ -164,38 +168,38 @@ cargo build --workspace --release
 
 ```bash
 # 构建镜像(< 100MB,distroless 基础)
-docker build -t chimera:1.5.6-omega .
+docker build -t chimela-cli:local .
 
 # 查看版本
-docker run --rm chimera:1.5.6-omega --version
+docker run --rm chimela-cli:local --version
 
 # 运行任务
-docker run --rm chimera:1.5.6-omega run "解释 OMEGA 四定律"
+docker run --rm chimela-cli:local run "解释 OMEGA 四定律"
 
 # 挂载配置目录(持久化 ~/.aether/omega.yaml)
-docker run --rm -v "$HOME/.aether:/root/.aether" chimera:1.5.6-omega config show
+docker run --rm -v "$HOME/.aether:/home/nonroot/.aether" chimela-cli:local config show
 ```
 
 ### 基础用法
 
 ```bash
 # 查看版本
-aether --version
+chimela --version
 
 # 初始化配置(生成 ~/.aether/omega.yaml)
-aether config init
+chimela config init
 
 # Wiki 语义搜索
-aether wiki "查询内容"
+chimela wiki "查询内容"
 
 # 生成 omega.yaml 配置模板
-aether generate
+chimela generate
 
 # 指定配置文件
-aether --config ~/.aether/omega.yaml wiki "查询"
+chimela --config ~/.aether/omega.yaml wiki "查询"
 ```
 
-> **说明**:binary 内部产物名为 `aether`(由 `crates/chimera-cli/Cargo.toml` 的 `[[bin]] name = "aether"` 决定)。CI/Docker 中重命名为 `chimera` 以保持对外品牌一致。
+> **说明**:binary 内部产物名为 `aether`(由 `crates/chimera-cli/Cargo.toml` 的 `[[bin]] name = "aether"` 决定)。Docker 镜像(distroless)仅提供 `chimela` 入口;`install.sh` 与 `.deb` 包同时提供 `chimela`、`chimera` 和 `aether`(后两者为软链接别名);Windows `install.ps1` 还会额外复制一份 `aether.exe`,以便习惯内部产物名的用户直接使用。
 
 ---
 

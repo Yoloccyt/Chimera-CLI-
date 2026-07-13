@@ -1,6 +1,6 @@
 ﻿#Requires -Version 5.1
 # ============================================================
-# Chimera CLI (NEXUS-OMEGA) — 一键安装脚本 (Windows PowerShell)
+# chimela CLI (NEXUS-OMEGA) — 一键安装脚本 (Windows PowerShell)
 #
 # 用法:
 #   iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
@@ -10,7 +10,7 @@
 #   .\install.ps1 -Proxy 'http://proxy.company.com:8080'
 #
 # 离线/手动下载场景:
-#   .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimera-windows-x86_64.exe' -Version v1.5.7-omega
+#   .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimela-windows-x86_64.exe' -Version v1.5.7-omega
 #
 # 私有仓库安装(需 $env:GITHUB_TOKEN 环境变量鉴权):
 #   WHY: raw.githubusercontent.com 对私有仓库 raw 内容拒绝匿名访问,
@@ -29,7 +29,7 @@
 #
 # 参数说明:
 #   -Version <ver>      指定版本 (默认: latest,如 v1.5.7-omega)
-#   -InstallDir <path>  安装目录 (默认: $env:LOCALAPPDATA\Programs\chimera)
+#   -InstallDir <path>  安装目录 (默认: $env:LOCALAPPDATA\Programs\chimela)
 #   -Proxy <url>        HTTP/HTTPS 代理地址 (如 http://proxy.company.com:8080)
 #   -LocalFile <path>   使用预先下载的本地 binary 安装,跳过所有网络请求
 #   -SkipVerify         跳过 SHA256 校验
@@ -39,12 +39,13 @@
 #
 # 功能:
 #   - 自动检测架构 (x86_64/aarch64,ARM64 降级 x86_64 兼容层)
-#   - 从 GitHub Release 下载 chimera-windows-x86_64.exe
+#   - 从 GitHub Release 下载 chimela-windows-x86_64.exe
 #   - 可选 SHA256 校验 (若 Release 附带 checksums.txt)
-#   - 安装到 $env:LOCALAPPDATA\Programs\chimera\ (默认)
-#   - 同时生成 chimera.exe 和 aether.exe 两个入口(消除品牌名与 cargo 二进制名不一致的困惑)
+#   - 安装到 $env:LOCALAPPDATA\Programs\chimela\ (默认)
+#   - 同时生成 chimela.exe / aether.exe / chimera.exe 三个入口
+#     (chimela 为新品牌名,aether 为 cargo 二进制名,chimera 为兼容别名)
 #   - 添加到用户 PATH (通过 [Environment]::SetEnvironmentVariable)
-#   - 验证安装: chimera --version 与 aether --version (正则 ^(aether|chimera) \d+\.\d+\.\d+)
+#   - 验证安装: chimela --version / aether --version / chimera --version (正则 ^(aether|chimera|chimela) \d+\.\d+\.\d+)
 #   - (-SetupEnv) 自动注入 CARGO_HOME/RUSTUP_HOME/PATH 到用户级
 #
 # 退出码:
@@ -52,8 +53,8 @@
 #   1  安装失败(网络/鉴权/校验/权限错误,见 [ERROR] 输出)
 #
 # 与 release.yml 一致性:
-#   - artifact 命名: chimera-windows-x86_64.exe (匹配 release.yml matrix)
-#   - --version 正则: ^(aether|chimera) \d+\.\d+\.\d+ (匹配 docker job grep)
+#   - artifact 命名: chimela-windows-x86_64.exe (匹配 release.yml matrix)
+#   - --version 正则: ^(aether|chimera|chimela) \d+\.\d+\.\d+ (匹配 docker job grep)
 #   - checksums.txt 格式: 兼容 "HASH  file" / "HASH *file" (匹配 printf '%s  %s\n')
 # ============================================================
 
@@ -185,14 +186,14 @@ function Set-Environment {
 # ------------------ 配置常量 ------------------
 # InstallDir 默认值需要延迟到运行时计算 (依赖 $env:LOCALAPPDATA)
 if ([string]::IsNullOrEmpty($InstallDir)) {
-    $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\chimera'
+    $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\chimela'
 }
 
 $script:RepoOwner = 'Yoloccyt'
 $script:RepoName = 'Chimera-CLI-'
 $script:GitHubApi = "https://api.github.com/repos/$($script:RepoOwner)/$($script:RepoName)"
 $script:GitHubReleases = "https://github.com/$($script:RepoOwner)/$($script:RepoName)/releases"
-$script:BinName = 'chimera'
+$script:BinName = 'chimela'
 
 # ------------------ 颜色输出函数 ------------------
 function Write-Info    { param([string]$Msg) Write-Host "[INFO] $Msg" -ForegroundColor Cyan }
@@ -279,7 +280,7 @@ if (-not [string]::IsNullOrEmpty($Version) -and $Version -ne 'local' -and $Versi
 if (-not $localFileMode -and [string]::IsNullOrEmpty($Version)) {
     Write-Info '未指定版本,正在获取最新版本号...'
     try {
-        $headers = @{ 'User-Agent' = 'chimera-install-script' }
+        $headers = @{ 'User-Agent' = 'chimela-install-script' }
         # 私有仓库支持: 若设置了 GITHUB_TOKEN,使用鉴权
         if ($env:GITHUB_TOKEN) {
             $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
@@ -300,7 +301,7 @@ if (-not $localFileMode -and [string]::IsNullOrEmpty($Version)) {
   1) 网络连接问题 → 检查能否访问 https://api.github.com
   2) 企业防火墙/DPI 阻断 → 使用 -Proxy 参数,或先手动下载后用 -LocalFile 安装
      示例: .\install.ps1 -Proxy 'http://proxy.company.com:8080'
-     示例: .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimera-windows-x86_64.exe' -Version v1.5.7-omega
+     示例: .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimela-windows-x86_64.exe' -Version v1.5.7-omega
   3) 仓库为私有 (需设置 `$env:GITHUB_TOKEN)
   4) GitHub API 速率限制"
     }
@@ -396,7 +397,7 @@ function Invoke-DownloadWithRetry {
         $bitsParams = @{
             Source          = $Url
             Destination     = $OutFile
-            DisplayName     = 'Chimera CLI Download'
+            DisplayName     = 'chimela CLI Download'
             ErrorAction     = 'Stop'
         }
         if ($ProxyParams.ContainsKey('Proxy')) {
@@ -416,7 +417,7 @@ function Invoke-DownloadWithRetry {
 }
 
 # ------------------ 创建临时目录 ------------------
-$tempDir = Join-Path $env:TEMP "chimera-install-$(Get-Random)"
+$tempDir = Join-Path $env:TEMP "chimela-install-$(Get-Random)"
 if (-not (Test-Path $tempDir)) {
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 }
@@ -437,7 +438,7 @@ try {
         Write-Info "正在下载 $artifactName ..."
 
         try {
-            $headers = @{ 'User-Agent' = 'chimera-install-script' }
+            $headers = @{ 'User-Agent' = 'chimela-install-script' }
             if ($env:GITHUB_TOKEN) {
                 $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
             }
@@ -485,7 +486,7 @@ try {
         $checksumFile = Join-Path $tempDir 'checksums.txt'
         $checksumAvailable = $false
         try {
-            $headers = @{ 'User-Agent' = 'chimera-install-script' }
+            $headers = @{ 'User-Agent' = 'chimela-install-script' }
             if ($env:GITHUB_TOKEN) {
                 $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
             }
@@ -539,16 +540,21 @@ try {
     }
 
     # ------------------ 安装 binary ------------------
-    # WHY: 项目内部 cargo binary 名为 'aether',但 CI/Docker 外部品牌名为 'chimera'。
-    #      为消除用户困惑,同时提供两个命令入口,安装时复制一份 aether.exe。
+    # WHY: 项目内部 cargo binary 名为 'aether',但 CI/Docker 外部品牌名为 'chimela'。
+    #      为消除用户困惑,同时提供三个命令入口:
+    #        - chimela.exe: 新品牌名
+    #        - aether.exe:   cargo 内部二进制名
+    #        - chimera.exe:  旧品牌兼容别名
     #      Windows 符号链接需要特殊权限且兼容性差,直接复制更可靠(仅 1.3MB)。
     $installPath = Join-Path $InstallDir "$($script:BinName).exe"
     $aetherPath = Join-Path $InstallDir 'aether.exe'
+    $chimeraPath = Join-Path $InstallDir 'chimera.exe'
     Write-Info "安装到: $installPath"
 
     try {
         Copy-Item -Path $downloadedFile -Destination $installPath -Force -ErrorAction Stop
         Copy-Item -Path $installPath -Destination $aetherPath -Force -ErrorAction Stop
+        Copy-Item -Path $installPath -Destination $chimeraPath -Force -ErrorAction Stop
     } catch {
         Die "安装失败 (权限不足?): $($_.Exception.Message)"
     }
@@ -557,8 +563,9 @@ try {
     #      SmartScreen/企业 AV 的拦截,导致 --version 验证失败。安装后解除标记。
     Unblock-File -Path $installPath -ErrorAction SilentlyContinue
     Unblock-File -Path $aetherPath -ErrorAction SilentlyContinue
+    Unblock-File -Path $chimeraPath -ErrorAction SilentlyContinue
 
-    Write-Ok 'binary 已安装 (chimera.exe + aether.exe)'
+    Write-Ok 'binary 已安装 (chimela.exe + aether.exe + chimera.exe 兼容别名)'
 
     # ------------------ PATH 配置 ------------------
     $pathUpdated = $false
@@ -601,15 +608,15 @@ try {
     }
 
     # ------------------ 验证安装 ------------------
-    # WHY: 同时验证 chimera.exe 和 aether.exe,确保两个入口都可用。
+    # WHY: 同时验证 chimela.exe / aether.exe / chimera.exe,确保三个入口都可用。
     #      验证失败默认阻塞安装(exit 1),因为继续返回 0 会让 CI/用户误以为成功。
     #      企业安全策略可能首次运行拦截 exe,此时可用 -SkipVersionCheck 显式绕过。
     Write-Info '验证安装...'
-    $versionRegex = '^(aether|chimera) \d+\.\d+\.\d+'
+    $versionRegex = '^(aether|chimera|chimela) \d+\.\d+\.\d+'
     $verifiedEntries = @()
     $versionFailed = 0
 
-    foreach ($exePath in @($installPath, $aetherPath)) {
+    foreach ($exePath in @($installPath, $aetherPath, $chimeraPath)) {
         try {
             $versionOutput = (& $exePath --version 2>&1 | Out-String).Trim()
             $matched = $false
@@ -628,7 +635,7 @@ try {
             } else {
                 $versionFailed++
                 Write-WarnMsg "$exePath --version 验证失败"
-                Write-WarnMsg "期望格式: aether|chimera X.Y.Z[-omega]"
+                Write-WarnMsg "期望格式: aether|chimera|chimela X.Y.Z[-omega]"
                 Write-WarnMsg "实际输出: $versionOutput"
                 Write-WarnMsg "退出码: $LASTEXITCODE"
                 Write-WarnMsg "可能原因: 缺少 VC++ 运行时 / Windows Defender 拦截 / 文件损坏"
@@ -642,7 +649,7 @@ try {
     }
 
     if ($versionFailed -gt 0 -and -not $SkipVersionCheck) {
-        Die "安装验证失败 ($versionFailed/2 个入口不可用)。请检查上述警告,或使用 -SkipVersionCheck 跳过验证。"
+        Die "安装验证失败 ($versionFailed/3 个入口不可用)。请检查上述警告,或使用 -SkipVersionCheck 跳过验证。"
     }
 
     # ------------------ 总结输出 ------------------
@@ -650,7 +657,7 @@ try {
     Write-Info '================ 安装总结 ================'
     Write-Info "  版本:   $Version"
     Write-Info "  主入口: $installPath"
-    Write-Info "  别名:   $aetherPath"
+    Write-Info "  别名:   $aetherPath, $chimeraPath"
     Write-Info "  平台:   windows/$archNorm"
     if ($pathUpdated) {
         Write-Info '  PATH:   已更新 (用户级)'
@@ -660,7 +667,7 @@ try {
     }
     Write-Info '=========================================='
     Write-Host ''
-    Write-Ok "执行 'chimera --help' 或 'aether --help' 开始使用"
+    Write-Ok "执行 'chimela --help'、'aether --help' 或 'chimera --help' 开始使用"
 
 } finally {
     # ------------------ 清理临时目录 ------------------

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-1.5.3-omega}"
-BINARY_URL="https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v${VERSION}/chimera-linux-x86_64"
-PKG_DIR="chimera-cli_${VERSION}_amd64"
+VERSION="${VERSION:-1.5.7-omega}"
+BINARY_URL="https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v${VERSION}/chimela-linux-x86_64"
+PKG_DIR="chimela-cli_${VERSION}_amd64"
 DEB_FILE="${PKG_DIR}.deb"
 
 rm -rf "${PKG_DIR}" "${DEB_FILE}"
@@ -16,10 +16,13 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
   curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi
 
-curl "${curl_args[@]}" -o "${PKG_DIR}/usr/bin/chimera" "${BINARY_URL}"
-chmod +x "${PKG_DIR}/usr/bin/chimera"
+curl "${curl_args[@]}" -o "${PKG_DIR}/usr/bin/chimela" "${BINARY_URL}"
+chmod +x "${PKG_DIR}/usr/bin/chimela"
+# 保留 chimera 兼容别名
+ln -s "chimela" "${PKG_DIR}/usr/bin/chimera"
+ln -s "chimela" "${PKG_DIR}/usr/bin/aether"
 
-sed "s/^Version: .*/Version: ${VERSION}/" packaging/apt/chimera-cli.control > "${PKG_DIR}/DEBIAN/control"
+sed "s/^Version: .*/Version: ${VERSION}/" packaging/apt/chimela-cli.control > "${PKG_DIR}/DEBIAN/control"
 
 dpkg-deb --build "${PKG_DIR}"
 rm -rf "${PKG_DIR}"

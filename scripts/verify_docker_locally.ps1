@@ -39,7 +39,7 @@ param(
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $DockerfilePath = Join-Path $RepoRoot "Dockerfile"
 $BinaryPath = Join-Path $RepoRoot "target\release\aether.exe"
-$ImageName = "chimera-cli:local-verify"
+$ImageName = "chimela-cli:local-verify"
 
 # 体积红线 (与 release.yml / nuxus规则.md S7.2 一致)
 $BinarySizeLimit = 52428800    # 50MB = 50 * 1024 * 1024
@@ -89,7 +89,7 @@ function Test-CommandAvailable {
   使用指定容器引擎 (docker 或 podman) 执行完整镜像验证。
   验证项与 release.yml docker job 完全对齐:
     - build 镜像
-    - run --version (grep ^(aether|chimera) X.Y.Z)
+    - run --version (grep ^(aether|chimera|chimela) X.Y.Z)
     - image inspect --format {{.Size}} (< 100MB)
   参数:
     $Engine - "docker" 或 "podman"
@@ -114,10 +114,10 @@ function Invoke-EngineVerification {
     Write-Check "$Engine build 成功" $true
 
     # --- --version 验证 ---
-    # distroless 无 shell, 直接执行 binary; 输出必须匹配 aether|chimera X.Y.Z
+    # distroless 无 shell, 直接执行 binary; 输出必须匹配 aether|chimera|chimela X.Y.Z
     $versionOutput = (& $Engine run --rm $ImageName --version 2>&1).ToString().Trim()
     # -cmatch = case-sensitive match (与 release.yml grep -qE 等价)
-    $versionMatch = $versionOutput -cmatch '^(aether|chimera) \d+\.\d+\.\d+'
+    $versionMatch = $versionOutput -cmatch '^(aether|chimera|chimela) \d+\.\d+\.\d+'
     Write-Check "$Engine run --version 格式校验" $versionMatch "输出: $versionOutput"
     if (-not $versionMatch) { return $false }
 
@@ -167,7 +167,7 @@ function Invoke-DockerfileStaticCheck {
         @{ Name = "多阶段 COPY --from=builder";            Pattern = 'COPY --from=builder' },
         @{ Name = "文件归属 --chown=nonroot:nonroot";      Pattern = '--chown=nonroot:nonroot' },
         @{ Name = "USER nonroot:nonroot (最小权限)";       Pattern = 'USER nonroot:nonroot' },
-        @{ Name = "ENTRYPOINT exec form (无 shell)";       Pattern = 'ENTRYPOINT \["chimera"\]' },
+        @{ Name = "ENTRYPOINT exec form (无 shell)";       Pattern = 'ENTRYPOINT \["chimela"\]' },
         @{ Name = "HEALTHCHECK 定义";                      Pattern = 'HEALTHCHECK' },
         @{ Name = "ARG VERSION (CI 版本注入)";             Pattern = 'ARG VERSION' },
         @{ Name = "ENV RUST_BACKTRACE=1 (panic 栈回溯)";   Pattern = 'ENV RUST_BACKTRACE=1' },
@@ -230,7 +230,7 @@ function Invoke-BinaryVerification {
 
     # --version 执行 + 格式校验 (与 release.yml Verify binary runs 步骤对齐)
     $versionOutput = (& $BinaryPath --version 2>&1).ToString().Trim()
-    $versionMatch = $versionOutput -cmatch '^(aether|chimera) \d+\.\d+\.\d+'
+    $versionMatch = $versionOutput -cmatch '^(aether|chimera|chimela) \d+\.\d+\.\d+'
     Write-Check "binary --version 格式校验" $versionMatch "输出: $versionOutput"
 
     # 体积验证 (与 release.yml Verify binary size < 50MB 步骤对齐)

@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DOCKERFILE="$REPO_ROOT/Dockerfile"
 BINARY_PATH="$REPO_ROOT/target/release/aether"
-IMAGE_NAME="chimera-cli:local-verify"
+IMAGE_NAME="chimela-cli:local-verify"
 
 # 体积红线 (与 release.yml / nuxus规则.md S7.2 一致)
 BINARY_SIZE_LIMIT=52428800   # 50MB
@@ -78,7 +78,7 @@ command_exists() {
 # 使用指定容器引擎 (docker 或 podman) 执行完整镜像验证。
 # 验证项与 release.yml docker job 完全对齐:
 #   - build 镜像
-#   - run --version (grep ^(aether|chimera) X.Y.Z)
+#   - run --version (grep ^(aether|chimera|chimela) X.Y.Z)
 #   - image inspect --format {{.Size}} (< 100MB)
 # 参数: $1 = "docker" 或 "podman"
 # 返回: 0=全部通过, 1=任一失败
@@ -96,10 +96,10 @@ run_engine_verification() {
     print_check "$engine build 成功" 0
 
     # --- --version 验证 ---
-    # distroless 无 shell, 直接执行 binary; 输出必须匹配 aether|chimera X.Y.Z
+    # distroless 无 shell, 直接执行 binary; 输出必须匹配 aether|chimera|chimela X.Y.Z
     local version_output
     version_output=$("$engine" run --rm "$IMAGE_NAME" --version 2>&1) || true
-    if echo "$version_output" | grep -qE '^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'; then
+    if echo "$version_output" | grep -qE '^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+'; then
         print_check "$engine run --version 格式校验" 0 "输出: $version_output"
     else
         print_check "$engine run --version 格式校验" 1 "输出: $version_output"
@@ -162,7 +162,7 @@ run_dockerfile_check() {
     check_pattern 'COPY --from=builder'              "多阶段 COPY --from=builder"
     check_pattern '--chown=nonroot:nonroot'          "文件归属 --chown=nonroot:nonroot"
     check_pattern 'USER nonroot:nonroot'             "USER nonroot:nonroot (最小权限)"
-    check_pattern 'ENTRYPOINT \["chimera"\]'         "ENTRYPOINT exec form (无 shell)"
+    check_pattern 'ENTRYPOINT \["chimela"\]'         "ENTRYPOINT exec form (无 shell)"
     check_pattern 'HEALTHCHECK'                      "HEALTHCHECK 定义"
     check_pattern 'ARG VERSION'                      "ARG VERSION (CI 版本注入)"
     check_pattern 'ENV RUST_BACKTRACE=1'             "ENV RUST_BACKTRACE=1 (panic 栈回溯)"
@@ -208,7 +208,7 @@ run_binary_check() {
     # --version 执行 + 格式校验 (与 release.yml Verify binary runs 步骤对齐)
     local version_output
     version_output=$("$BINARY_PATH" --version 2>&1) || true
-    if echo "$version_output" | grep -qE '^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'; then
+    if echo "$version_output" | grep -qE '^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+'; then
         print_check "binary --version 格式校验" 0 "输出: $version_output"
     else
         print_check "binary --version 格式校验" 1 "输出: $version_output"

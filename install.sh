@@ -1,6 +1,6 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 # ============================================================
-# Chimera CLI (NEXUS-OMEGA) — 一键安装脚本 (Linux / macOS)
+# chimela CLI (NEXUS-OMEGA) — 一键安装脚本 (Linux / macOS)
 #
 # 用法:
 #   curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
@@ -26,9 +26,10 @@
 #   - 自动检测平台 (Linux/macOS) 与架构 (x86_64/aarch64)
 #   - 从 GitHub Release 下载对应 binary
 #   - 可选 SHA256 校验 (若 Release 附带 checksums.txt)
-#   - 安装到 ~/.local/bin/chimera (默认) 或 /usr/local/bin (需 sudo)
+#   - 安装到 ~/.local/bin/chimela (默认) 或 /usr/local/bin (需 sudo)
 #   - 自动追加 PATH 到当前 shell 的 rc 文件(~/.zshrc / ~/.bashrc / ~/.profile)
-#   - 验证安装: chimera --version
+#   - 验证安装: chimela --version
+#   - 同时创建 chimera 软链接作为兼容别名
 # ============================================================
 
 set -euo pipefail
@@ -39,7 +40,7 @@ REPO_NAME="Chimera-CLI-"
 GITHUB_API="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}"
 GITHUB_RELEASES="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases"
 DEFAULT_INSTALL_DIR="${HOME}/.local/bin"
-BIN_NAME="chimera"
+BIN_NAME="chimela"
 
 # ------------------ 颜色输出 ------------------
 # 检测是否为 TTY,非交互模式禁用颜色 (适配 CI / curl | sh)
@@ -86,7 +87,7 @@ while [ $# -gt 0 ]; do
             ;;
         -h|--help)
             cat <<EOF
-Chimera CLI 安装脚本
+chimela CLI 安装脚本
 
 用法:
   sh install.sh [选项]
@@ -98,7 +99,7 @@ Chimera CLI 安装脚本
   -h, --help           显示帮助
 
 示例:
-  sh install.sh --version v1.5.3-omega
+  sh install.sh --version v1.5.7-omega
   sh install.sh --install-dir /usr/local/bin
   sudo sh install.sh --install-dir /usr/local/bin
 EOF
@@ -204,7 +205,7 @@ DOWNLOAD_URL="${GITHUB_RELEASES}/download/${VERSION}/${ARTIFACT_NAME}"
 info "下载链接: ${DOWNLOAD_URL}"
 
 # ------------------ 创建临时目录 ------------------
-TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t chimera-install)"
+TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t chimela-install)"
 cleanup() {
     rm -rf "${TMP_DIR}"
 }
@@ -318,6 +319,22 @@ fi
 
 success "binary 已安装"
 
+# 保留 chimera 兼容别名(通过软链接)
+COMPAT_LINK="${INSTALL_DIR}/chimera"
+if [ "${NEED_SUDO}" = "true" ]; then
+    sudo ln -sf "${INSTALL_PATH}" "${COMPAT_LINK}" 2>/dev/null || warn "无法创建 chimera 兼容别名"
+else
+    ln -sf "${INSTALL_PATH}" "${COMPAT_LINK}" 2>/dev/null || warn "无法创建 chimera 兼容别名"
+fi
+
+# 保留 aether 兼容别名(通过软链接)
+AETHER_LINK="${INSTALL_DIR}/aether"
+if [ "${NEED_SUDO}" = "true" ]; then
+    sudo ln -sf "${INSTALL_PATH}" "${AETHER_LINK}" 2>/dev/null || warn "无法创建 aether 兼容别名"
+else
+    ln -sf "${INSTALL_PATH}" "${AETHER_LINK}" 2>/dev/null || warn "无法创建 aether 兼容别名"
+fi
+
 # ------------------ PATH 配置 ------------------
 # 检查 INSTALL_DIR 是否已在 PATH 中
 PATH_UPDATED="false"
@@ -351,7 +368,7 @@ case ":${PATH}:" in
 
         if [ "${NEED_SUDO}" = "false" ]; then
             # 追加 export 行(marker 防重复,幂等)
-            MARKER="# chimera-cli install"
+            MARKER="# chimela-cli install"
             if ! grep -q "${MARKER}" "${RC_FILE}" 2>/dev/null; then
                 printf '\n%s\nexport PATH="%s:$PATH"\n' "${MARKER}" "${INSTALL_DIR}" >> "${RC_FILE}"
                 PATH_UPDATED="true"
@@ -372,9 +389,9 @@ fi
 info "验证安装..."
 # WHY 命令替换内 || true 短路:set -e 下 binary 退出码非 0 会触发脚本提前退出
 VERSION_OUTPUT=$("${INSTALL_PATH}" --version 2>/dev/null || true)
-# 与 release.yml docker job line 229 完全一致: ^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+
+# 与 release.yml docker job line 229 完全一致: ^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+
 # 避免仅检退出码导致 binary 损坏但退出码 0 的假阳性
-VERSION_REGEX='^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'
+VERSION_REGEX='^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+'
 
 if [ -n "${VERSION_OUTPUT}" ]; then
     if printf '%s\n' "${VERSION_OUTPUT}" | grep -Eq "${VERSION_REGEX}"; then
@@ -382,7 +399,7 @@ if [ -n "${VERSION_OUTPUT}" ]; then
         info "版本输出: ${VERSION_OUTPUT}"
     else
         warn "${INSTALL_PATH} --version 输出格式异常"
-        warn "期望格式: aether|chimera X.Y.Z[-omega]"
+        warn "期望格式: aether|chimera|chimela X.Y.Z[-omega]"
         warn "实际输出: ${VERSION_OUTPUT}"
         warn "请手动执行: ${INSTALL_PATH} --version"
     fi
@@ -402,4 +419,4 @@ if [ "${PATH_UPDATED}" = "true" ]; then
 fi
 info "=========================================="
 printf "\n"
-success "执行 'chimera --help' 开始使用"
+success "执行 'chimela --help' 开始使用"
