@@ -5,7 +5,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chimera_tui::{
     BudgetMetrics, DataPipeline, DataSourceConfig, EventSubscriber, PanelKind, TuiApp, TuiConfig,
@@ -99,8 +99,26 @@ async fn tui_renders_live_event_bus_data() {
     .await
     .unwrap();
 
-    // 等待后台任务完成一次 tick 聚合。
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // 轮询等待后台任务完成一次 tick 聚合,替代固定 sleep,避免 CI 抖动导致 flaky。
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let snap = pipeline.snapshot();
+        let quest_ready = snap
+            .quest_list
+            .first()
+            .map(|q| q.title == "Live Event Quest")
+            .unwrap_or(false);
+        let budget_ready = (snap.budget_metrics.total_consumption - 4200.0).abs() < f64::EPSILON;
+        if quest_ready && budget_ready {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for pipeline snapshot; quest_ready={quest_ready}, budget_ready={budget_ready}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 
     // 使用实时数据管道创建 TUI 应用。
     let mut app = TuiApp::with_data_source(

@@ -10,25 +10,12 @@
 //! - `DataSnapshot` 使用本地 `BudgetMetrics` 而非直接暴露 L9 指标类型,
 //!   避免跨层泄漏。
 //!
-//! # 当前 `NexusEvent` 覆盖度分析与建议新增变体(P0.2)
+//! # 消费的事件变体
 //!
-//! TUI 需要三类数据:Quest 列表、最近事件流、Budget 指标。对
-//! `event-bus/src/types.rs` 现有变体盘点如下:
-//!
-//! - **Quest 列表**:现有 `QuestCreated` / `QuestProgressUpdated` /
-//!   `ThinkingModeSwitched` / `CheckpointSaved` / `ExecutionCompleted`
-//!   可用于增量维护列表,但缺少:
-//!   1. `QuestListUpdated { quests: Vec<Quest>, source: String }`:由 `quest-engine` 周期性发布完整列表,便于 TUI 冷启动或 lag 后快速对齐,避免依赖多次增量事件才能拼出完整状态。
-//!   2. `QuestCompleted { quest_id: String, status: QuestStatus }`:标记 Quest 结束(成功/失败/取消),用于从活动列表移除。
-//! - **Budget 指标**:现有 `BudgetStatsReported` / `BudgetAdjusted` /
-//!   `BudgetExceeded` / `EfficiencyAlertTriggered` 已足够 TUI 聚合出
-//!   `BudgetMetrics`;但为了减少面板解析文本的负担,建议新增:
-//!   3. `BudgetMetricsUpdated { metrics: BudgetMetricsPayload }`:由 `efficiency-monitor` 发布结构化的预算指标,`BudgetMetricsPayload` 可复用本模块 `BudgetMetrics` 字段,使 TUI 直接消费而不必从多个事件拼合。
-//! - **事件流**:直接订阅 `EventBus` 即可获得 `VecDeque<NexusEvent>`,
-//!   无需新增事件变体。
-//!
-//! 上述新增变体将在 Task P1.2 中提交到 `event-bus/src/types.rs`,
-//! 本模块当前仅作契约描述,不修改 event-bus。
+//! `DataPipeline` 直接消费 `event-bus` 中已有的以下 `NexusEvent` 变体:
+//! - `QuestListUpdated` / `QuestCompleted`:维护 Quest 列表。
+//! - `BudgetMetricsUpdated`:更新 Budget 面板指标。
+//! - 其余事件进入 `latest_events` 日志流,供 Log 面板展示。
 
 use crate::error::TuiError;
 use crate::subscriber::EventSubscriber;
@@ -306,6 +293,10 @@ pub struct DataPipeline {
     // WHY Mutex<Option<JoinHandle>>: 支持 `shutdown(&self)` 被外部 Arc 持有方调用,
     // 无需 TuiApp 归还所有权即可清理后台任务。
     task: Mutex<Option<JoinHandle<()>>>,
+    // WHY 用 Arc<Mutex<Option<EventSubscriber>>>: 后台任务需要可变访问
+    // `try_recv`,而 `DataPipeline::shutdown` 需要持有 subscriber 调用其
+    // `shutdown`,因此共享所有权并由 `shutdown` 通过 `take()` 取出。
+    subscriber: Arc<Mutex<Option<EventSubscriber>>>,
     snapshot: Arc<Mutex<DataSnapshot>>,
 }
 
@@ -315,9 +306,11 @@ impl DataPipeline {
     /// # 参数
     /// - `subscriber`: 已订阅 event-bus 的事件订阅者
     /// - `config`: 数据源配置，包含 tick 间隔与容量限制
-    pub fn new(mut subscriber: EventSubscriber, config: DataSourceConfig) -> Self {
+    pub fn new(subscriber: EventSubscriber, config: DataSourceConfig) -> Self {
         let snapshot = Arc::new(Mutex::new(DataSnapshot::default()));
         let snapshot_clone = Arc::clone(&snapshot);
+        let subscriber = Arc::new(Mutex::new(Some(subscriber)));
+        let subscriber_clone = Arc::clone(&subscriber);
         let tick_ms = config.tick_interval_ms;
         let max_event_history = config.max_event_history;
         let max_quest_list_size = config.max_quest_list_size;
@@ -330,63 +323,68 @@ impl DataPipeline {
             let mut latest_events: VecDeque<NexusEvent> = VecDeque::new();
 
             loop {
-                // EventSubscriber 提供同步 try_recv，因此 select! 中仅 timer 分支驱动
-                // 批量消费；没有 timer 时任务阻塞等待，避免 busy loop。
-                tokio::select! {
-                    _ = interval.tick() => {
-                        // 批量取出当前缓冲区中的所有事件，一次性消费避免多次加锁。
-                        let mut events = Vec::new();
-                        while let Some(event) = subscriber.try_recv() {
-                            events.push(event);
-                        }
+                interval.tick().await;
 
-                        // 先定位同一 tick 内最后一个 QuestListUpdated 与 BudgetMetricsUpdated
-                        // 的索引。仅这两个高频状态事件需要在状态更新层去重，日志流仍保留全部。
-                        let mut last_quest_idx = None::<usize>;
-                        let mut last_budget_idx = None::<usize>;
-                        for (idx, event) in events.iter().enumerate() {
-                            match event {
-                                NexusEvent::QuestListUpdated { .. } => last_quest_idx = Some(idx),
-                                NexusEvent::BudgetMetricsUpdated { .. } => last_budget_idx = Some(idx),
-                                _ => {}
-                            }
-                        }
+                // 取出订阅者引用;若已被 shutdown 取走,则退出循环。
+                let mut guard = subscriber_clone.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(sub) = guard.as_mut() else {
+                    break;
+                };
 
-                        for (idx, event) in events.iter().enumerate() {
-                            let is_deduped_quest = matches!(event, NexusEvent::QuestListUpdated { .. })
-                                && Some(idx) != last_quest_idx;
-                            let is_deduped_budget =
-                                matches!(event, NexusEvent::BudgetMetricsUpdated { .. })
-                                    && Some(idx) != last_budget_idx;
+                // 批量取出当前缓冲区中的所有事件，一次性消费避免多次加锁。
+                let mut events = Vec::new();
+                while let Some(event) = sub.try_recv() {
+                    events.push(event);
+                }
+                // 锁只在取订阅者和 drain 缓冲区时持有,状态更新与快照写入不跨 await。
+                drop(guard);
 
-                            // 非去重状态事件才应用同步器；被去重的事件仍进入日志流。
-                            if !is_deduped_quest && !is_deduped_budget {
-                                quest_sync.apply_event(event);
-                                budget_sync.apply_event(event);
-                            }
-                            latest_events.push_back(event.clone());
-                        }
-
-                        // 限制事件日志长度，防止内存无限增长。
-                        while latest_events.len() > max_event_history {
-                            latest_events.pop_front();
-                        }
-
-                        let snap = DataSnapshot {
-                            quest_list: truncate_quests(quest_sync.quests(), max_quest_list_size),
-                            latest_events: latest_events.clone(),
-                            budget_metrics: budget_sync.metrics(),
-                        };
-                        let mut guard = snapshot_clone.lock().unwrap_or_else(|e| e.into_inner());
-                        *guard = snap;
+                // 先定位同一 tick 内最后一个 QuestListUpdated 与 BudgetMetricsUpdated
+                // 的索引。仅这两个高频状态事件需要在状态更新层去重，日志流仍保留全部。
+                let mut last_quest_idx = None::<usize>;
+                let mut last_budget_idx = None::<usize>;
+                for (idx, event) in events.iter().enumerate() {
+                    match event {
+                        NexusEvent::QuestListUpdated { .. } => last_quest_idx = Some(idx),
+                        NexusEvent::BudgetMetricsUpdated { .. } => last_budget_idx = Some(idx),
+                        _ => {}
                     }
                 }
+
+                for (idx, event) in events.iter().enumerate() {
+                    let is_deduped_quest = matches!(event, NexusEvent::QuestListUpdated { .. })
+                        && Some(idx) != last_quest_idx;
+                    let is_deduped_budget =
+                        matches!(event, NexusEvent::BudgetMetricsUpdated { .. })
+                            && Some(idx) != last_budget_idx;
+
+                    // 非去重状态事件才应用同步器；被去重的事件仍进入日志流。
+                    if !is_deduped_quest && !is_deduped_budget {
+                        quest_sync.apply_event(event);
+                        budget_sync.apply_event(event);
+                    }
+                    latest_events.push_back(event.clone());
+                }
+
+                // 限制事件日志长度，防止内存无限增长。
+                while latest_events.len() > max_event_history {
+                    latest_events.pop_front();
+                }
+
+                let snap = DataSnapshot {
+                    quest_list: truncate_quests(quest_sync.quests(), max_quest_list_size),
+                    latest_events: latest_events.clone(),
+                    budget_metrics: budget_sync.metrics(),
+                };
+                let mut guard = snapshot_clone.lock().unwrap_or_else(|e| e.into_inner());
+                *guard = snap;
             }
         });
 
         Self {
             config,
             task: Mutex::new(Some(task)),
+            subscriber,
             snapshot,
         }
     }
@@ -405,7 +403,18 @@ impl DataPipeline {
     /// 关闭数据管道，中止并等待后台任务结束
     ///
     /// 取 `&self` 使外部 Arc 持有方可在不回收所有权的情况下清理后台任务。
+    /// 先关闭 `EventSubscriber` 的转发任务，再中止数据聚合任务，避免 orphan task。
     pub async fn shutdown(&self) {
+        // 先优雅停止 EventSubscriber,避免其后台转发任务被 detach。
+        let sub = self
+            .subscriber
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(mut sub) = sub {
+            sub.shutdown().await;
+        }
+
         // 取出 JoinHandle 所有权后再 abort + await，避免 `&self` 无法消费 handle。
         let Some(handle) = self.task.lock().unwrap_or_else(|e| e.into_inner()).take() else {
             return;
