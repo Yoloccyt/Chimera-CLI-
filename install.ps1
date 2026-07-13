@@ -4,7 +4,13 @@
 #
 # 用法:
 #   iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
-#   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-SkipVerify] [-SetupEnv]
+#   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-Proxy <url>] [-LocalFile <path>] [-SkipVerify] [-SetupEnv]
+#
+# 企业网络/代理场景:
+#   .\install.ps1 -Proxy 'http://proxy.company.com:8080'
+#
+# 离线/手动下载场景:
+#   .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimera-windows-x86_64.exe' -Version v1.5.7-omega
 #
 # 私有仓库安装(需 $env:GITHUB_TOKEN 环境变量鉴权):
 #   WHY: raw.githubusercontent.com 对私有仓库 raw 内容拒绝匿名访问,
@@ -22,8 +28,10 @@
 #     $env:GITHUB_TOKEN='ghp_xxx'; .\install.ps1
 #
 # 参数说明:
-#   -Version <ver>      指定版本 (默认: latest,如 v1.5.3-omega)
+#   -Version <ver>      指定版本 (默认: latest,如 v1.5.7-omega)
 #   -InstallDir <path>  安装目录 (默认: $env:LOCALAPPDATA\Programs\chimera)
+#   -Proxy <url>        HTTP/HTTPS 代理地址 (如 http://proxy.company.com:8080)
+#   -LocalFile <path>   使用预先下载的本地 binary 安装,跳过所有网络请求
 #   -SkipVerify         跳过 SHA256 校验
 #   -SetupEnv           仅设置工具链环境变量后退出,不下载 binary
 #                       (用于源码构建场景,覆盖 §10.5 "环境变量手动设置"短板)
@@ -51,6 +59,8 @@
 param(
     [string]$Version = '',
     [string]$InstallDir = '',
+    [string]$Proxy = '',
+    [string]$LocalFile = '',
     [switch]$SkipVerify,
     [switch]$SetupEnv
 )
@@ -58,6 +68,32 @@ param(
 # 严格模式: 捕获未定义变量、强制类型转换失败
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# ------------------ 网络层健壮性初始化 ------------------
+# WHY: PowerShell 5.1 默认仅启用 TLS 1.0 / SSL3,而 GitHub 等现代 CDN 要求 TLS 1.2+。
+#      企业 DPI 防火墙对旧 TLS 握手进行深度检测并阻断,强制 TLS 1.2 可绕过此类检测,
+#      与 Podman 安装经验一致([Net.SecurityProtocolType]::Tls12 可成功下载 GitHub 资源)。
+#      此设置必须在任何 Invoke-WebRequest/Invoke-RestMethod 调用之前生效。
+try {
+    $currentProtocols = [Net.ServicePointManager]::SecurityProtocol
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+    # 仅在成功设置后才输出,避免在 -SetupEnv 等静默模式下产生噪音
+    if (-not $SetupEnv) {
+        Write-Host "[INFO] 已强制启用 TLS 1.2/1.3 (原始协议: $currentProtocols)" -ForegroundColor Cyan
+    }
+} catch {
+    Write-Warning "无法强制 TLS 1.2/1.3: $($_.Exception.Message)"
+}
+
+# 代理支持: 构造统一的 Invoke-WebRequest 通用参数 splat
+$script:CommonWebRequestParams = @{
+    UseBasicParsing = $true
+    ErrorAction     = 'Stop'
+}
+if (-not [string]::IsNullOrEmpty($Proxy)) {
+    $script:CommonWebRequestParams['Proxy'] = $Proxy
+    Write-Host "[INFO] 使用代理: $Proxy" -ForegroundColor Cyan
+}
 
 # ------------------ 工具链环境变量自动化 ------------------
 # WHY: 新克隆者需手动设置 CARGO_HOME/RUSTUP_HOME/PATH 才能编译,
@@ -100,12 +136,6 @@ function Set-Environment {
     Write-Host "请重新打开 PowerShell 终端使环境变量生效。" -ForegroundColor Cyan
 }
 
-# -SetupEnv 短路: 仅设置环境变量后立即退出,不进入下载安装流程
-if ($SetupEnv) {
-    Set-Environment
-    exit 0
-}
-
 # ------------------ 配置常量 ------------------
 # InstallDir 默认值需要延迟到运行时计算 (依赖 $env:LOCALAPPDATA)
 if ([string]::IsNullOrEmpty($InstallDir)) {
@@ -127,6 +157,14 @@ function Die {
     param([string]$Msg)
     Write-ErrMsg $Msg
     exit 1
+}
+
+# -SetupEnv 短路: 仅设置环境变量后立即退出,不进入下载安装流程
+# WHY: 必须放在 Write-Ok/Write-WarnMsg 等函数定义之后,确保 PowerShell 7 的
+#      顺序执行模式下函数已可用。
+if ($SetupEnv) {
+    Set-Environment
+    exit 0
 }
 
 # ------------------ 平台/架构检测 ------------------
@@ -163,9 +201,26 @@ $artifactName = "$($script:BinName)-windows-$archNorm.exe"
 Write-Info "检测到平台: windows / $archNorm"
 Write-Info "目标产物: $artifactName"
 
+# ------------------ 本地文件模式短路 ------------------
+# WHY: 企业网络常阻断 GitHub releases 直连,允许用户预先把 binary 下载到本地,
+#      然后通过 -LocalFile 参数直接安装,跳过所有网络请求。
+$localFileMode = $false
+if (-not [string]::IsNullOrEmpty($LocalFile)) {
+    $localFileResolved = Resolve-Path $LocalFile -ErrorAction SilentlyContinue
+    if (-not $localFileResolved -or -not (Test-Path $localFileResolved.Path)) {
+        Die "指定的本地文件不存在: $LocalFile"
+    }
+    $localFileMode = $true
+    if ([string]::IsNullOrEmpty($Version)) {
+        $Version = 'local'
+    }
+    Write-Info "本地文件模式: $($localFileResolved.Path)"
+    Write-Info "版本标记: $Version"
+}
+
 # ------------------ 版本解析 ------------------
-# 若未指定版本,通过 GitHub API 获取 latest
-if ([string]::IsNullOrEmpty($Version)) {
+# 若未指定版本且非本地文件模式,通过 GitHub API 获取 latest
+if (-not $localFileMode -and [string]::IsNullOrEmpty($Version)) {
     Write-Info '未指定版本,正在获取最新版本号...'
     try {
         $headers = @{ 'User-Agent' = 'chimera-install-script' }
@@ -173,7 +228,11 @@ if ([string]::IsNullOrEmpty($Version)) {
         if ($env:GITHUB_TOKEN) {
             $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
         }
-        $release = Invoke-RestMethod -Uri "$($script:GitHubApi)/releases/latest" -Headers $headers -ErrorAction Stop
+        $requestParams = @{ Uri = "$($script:GitHubApi)/releases/latest"; Headers = $headers; ErrorAction = 'Stop' }
+        if ($script:CommonWebRequestParams.ContainsKey('Proxy')) {
+            $requestParams['Proxy'] = $script:CommonWebRequestParams['Proxy']
+        }
+        $release = Invoke-RestMethod @requestParams
         $Version = $release.tag_name
         if ([string]::IsNullOrEmpty($Version)) {
             Die '无法解析最新版本号 (仓库可能未发布 Release)'
@@ -181,18 +240,23 @@ if ([string]::IsNullOrEmpty($Version)) {
         Write-Info "最新版本: $Version"
     } catch {
         Die "无法访问 GitHub API: $($_.Exception.Message)
-可能原因:
-  1) 网络连接问题
-  2) 仓库为私有 (需设置 `$env:GITHUB_TOKEN)
-  3) GitHub API 速率限制"
+可能原因与解决方案:
+  1) 网络连接问题 → 检查能否访问 https://api.github.com
+  2) 企业防火墙/DPI 阻断 → 使用 -Proxy 参数,或先手动下载后用 -LocalFile 安装
+     示例: .\install.ps1 -Proxy 'http://proxy.company.com:8080'
+     示例: .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimera-windows-x86_64.exe' -Version v1.5.7-omega
+  3) 仓库为私有 (需设置 `$env:GITHUB_TOKEN)
+  4) GitHub API 速率限制"
     }
-} else {
+} elseif (-not $localFileMode) {
     Write-Info "指定版本: $Version"
 }
 
 # ------------------ 下载链接构造 ------------------
 $downloadUrl = "$($script:GitHubReleases)/download/$Version/$artifactName"
-Write-Info "下载链接: $downloadUrl"
+if (-not $localFileMode) {
+    Write-Info "下载链接: $downloadUrl"
+}
 
 # ------------------ 创建临时目录 ------------------
 $tempDir = Join-Path $env:TEMP "chimera-install-$(Get-Random)"
@@ -201,35 +265,53 @@ if (-not (Test-Path $tempDir)) {
 }
 
 try {
-    # ------------------ 下载 binary ------------------
+    # ------------------ 获取 binary ------------------
     $downloadedFile = Join-Path $tempDir $artifactName
-    Write-Info "正在下载 $artifactName ..."
 
-    try {
-        $headers = @{ 'User-Agent' = 'chimera-install-script' }
-        if ($env:GITHUB_TOKEN) {
-            $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
-        }
-        # UseBasicParsing 兼容旧 PowerShell,禁用 IE 引擎依赖
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $downloadedFile -Headers $headers `
-            -UseBasicParsing -ErrorAction Stop
+    if ($localFileMode) {
+        # WHY: 本地文件模式完全跳过网络,直接复制到临时目录参与后续安装流程
+        Write-Info "正在复制本地 binary ..."
+        Copy-Item -Path $localFileResolved.Path -Destination $downloadedFile -Force -ErrorAction Stop
         $fileSize = (Get-Item $downloadedFile).Length
-        if ($fileSize -eq 0) {
-            Die '下载文件为空 (鉴权失败? 请设置 $env:GITHUB_TOKEN)'
-        }
         $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
-        Write-Ok "下载完成: $fileSizeMB MB"
-    } catch {
-        Die "下载失败 (URL: $downloadUrl)
+        Write-Ok "本地 binary 已复制: $fileSizeMB MB"
+    } else {
+        # ------------------ 下载 binary ------------------
+        Write-Info "正在下载 $artifactName ..."
+
+        try {
+            $headers = @{ 'User-Agent' = 'chimera-install-script' }
+            if ($env:GITHUB_TOKEN) {
+                $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
+            }
+            $requestParams = $script:CommonWebRequestParams.Clone()
+            $requestParams['Uri'] = $downloadUrl
+            $requestParams['OutFile'] = $downloadedFile
+            $requestParams['Headers'] = $headers
+            Invoke-WebRequest @requestParams
+            $fileSize = (Get-Item $downloadedFile).Length
+            if ($fileSize -eq 0) {
+                Die '下载文件为空 (鉴权失败? 请设置 $env:GITHUB_TOKEN)'
+            }
+            $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
+            Write-Ok "下载完成: $fileSizeMB MB"
+        } catch {
+            Die "下载失败 (URL: $downloadUrl)
 错误: $($_.Exception.Message)
-可能原因:
+可能原因与解决方案:
   1) 版本不存在 (检查 -Version 参数)
   2) 仓库为私有 (需设置 `$env:GITHUB_TOKEN)
-  3) 网络连接问题"
+  3) 网络连接问题 / 企业 DPI 阻断
+     → 尝试强制 TLS 1.2 后重试(脚本已自动启用)
+     → 使用代理: .\install.ps1 -Proxy 'http://proxy.company.com:8080'
+     → 手动下载 Release 中的 $artifactName,然后使用:
+       .\install.ps1 -LocalFile '<下载路径>' -Version $Version"
+        }
     }
 
     # ------------------ SHA256 校验 (可选) ------------------
-    if (-not $SkipVerify) {
+    # WHY: 本地文件模式下网络不可达,跳过 checksum 下载(由用户自行确保本地 binary 来源可信)
+    if (-not $SkipVerify -and -not $localFileMode) {
         $checksumUrl = "$($script:GitHubReleases)/download/$Version/checksums.txt"
         Write-Info '尝试下载 checksums.txt 进行 SHA256 校验...'
         $checksumFile = Join-Path $tempDir 'checksums.txt'
@@ -239,13 +321,16 @@ try {
             if ($env:GITHUB_TOKEN) {
                 $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
             }
-            Invoke-WebRequest -Uri $checksumUrl -OutFile $checksumFile -Headers $headers `
-                -UseBasicParsing -ErrorAction Stop
+            $requestParams = $script:CommonWebRequestParams.Clone()
+            $requestParams['Uri'] = $checksumUrl
+            $requestParams['OutFile'] = $checksumFile
+            $requestParams['Headers'] = $headers
+            Invoke-WebRequest @requestParams
             if ((Get-Item $checksumFile).Length -gt 0) {
                 $checksumAvailable = $true
             }
         } catch {
-            Write-WarnMsg 'Release 未附带 checksums.txt,跳过 SHA256 校验'
+            Write-WarnMsg 'Release 未附带 checksums.txt 或网络不可达,跳过 SHA256 校验'
         }
 
         if ($checksumAvailable) {
