@@ -56,6 +56,8 @@ criterion = { workspace = true }
 tempfile = { workspace = true }
 # 属性测试框架 — KNN 检索不变量验证
 proptest = { workspace = true }
+# 串行化测试执行 — 隔离并发资源竞争(QA-DEFECT-001:并行测试下 SQLite I/O 竞争导致 flaky)
+serial_test = { workspace = true }
 
 [[bench]]
 name = "store_bench"

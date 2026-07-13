@@ -77,6 +77,10 @@ proptest = { version = "1.5", features = ["alloc"] }
 rand = "0.8"
 # tracing-test:测试中捕获 tracing 日志,用于验证 warn/error 日志输出(SubTask 17.2)
 tracing-test = "0.2.5"
+# serial_test:串行化测试执行,隔离并发资源竞争导致的 flaky failure
+# WHY 添加到 workspace:repo-wiki 的 test_read_during_write_not_blocked 在并行
+# 测试环境下因 SQLite 文件 I/O 竞争出现 flaky failure,用 #[serial] 隔离执行
+serial_test = "3.1"
 
 # ============================================================
 # E2E 集成测试配置(Week 6 Task 6)

@@ -441,7 +441,7 @@ event-bus 定义 65 个 `NexusEvent` 变体,关键 Critical 级事件(必须用 
 1. `cargo check --workspace` 通过(无 `E0428` 重复定义、`E0252` 重复导入等合并后遗症)。
 2. `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` 通过。
 3. `cargo fmt --all -- --check` 通过。
-4. `cargo test --workspace` 通过;`cargo test -- --ignored --nocapture` 压力测试通过。
+4. `cargo test --workspace` 通过;`cargo test --workspace --release -- --ignored --nocapture` 压力测试通过。**含性能阈值的 `#[ignore]` 基准测试(如 `hcw-window/bench_retain_by_file_ids_hashset`)必须在 release 模式下运行**,避免 debug 模式开销 + 并行竞争污染延迟测量导致 flaky 误报(v1.5.6-omega QA 教训:debug P50 6.577ms > 5ms 阈值误报,release 隔离复测 P50=3.184ms 余量 36%)。
 5. 安全审计命令必须与 `.github/workflows/audit.yml` 一致:
    ```powershell
    cargo audit --deny warnings `

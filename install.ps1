@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # ============================================================
 # Chimera CLI (NEXUS-OMEGA) — 一键安装脚本 (Windows PowerShell)
 #

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     fuzz cra
     te 配置静态验证脚本(Windows PowerShell 版)
@@ -13,7 +13,7 @@
     1. fuzz/Cargo.toml 存在且可被 cargo 解析
     2. [package.metadata] cargo-fuzz = true
     3. [lib] path 声明存在(承载 stub 宏)
-    4. 6 个 [[bin]] 声明存在,每个 bin 的 path 指向的文件存在
+    4. 8 个 [[bin]] 声明存在(6 生产 + 2 stub 宏测试),每个 bin 的 path 指向的文件存在
     5. 每个 fuzz target 文件包含 fuzz_target! 宏调用
     6. 被测 crate 的 path 依赖目录存在
 

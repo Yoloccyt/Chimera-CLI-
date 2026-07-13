@@ -1097,7 +1097,13 @@ mod tests {
     /// WHY:旧实现使用单 `Mutex<Connection>` 串行化所有读写;
     /// 本测试一个任务持续写入,另一个任务持续读取,
     /// 若读仍被写阻塞,`timeout` 会触发。
+    ///
+    /// # 并发隔离
+    /// 标注 `#[serial_test::serial]` 隔离并行测试资源竞争(QA-DEFECT-001):
+    /// 本测试在并行测试环境下因 SQLite 文件 I/O 竞争出现 flaky failure,
+    /// 隔离复测确认代码实现规范,串行化执行避免环境抖动。
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_read_during_write_not_blocked() {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test_rw.db");
