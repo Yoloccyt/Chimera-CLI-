@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use chimera_tui::{
-    BudgetMetrics, DataPipeline, DataSourceConfig, EventSubscriber, PanelKind, TuiApp, TuiConfig,
+    BudgetMetrics, DataPipeline, DataSourceConfig, EventSubscriber, PanelId, TuiApp, TuiConfig,
 };
 use event_bus::{BudgetMetricsPayload, EventBus, EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
@@ -57,7 +57,7 @@ fn budget_metrics_event(metrics: BudgetMetrics) -> NexusEvent {
 }
 
 /// 将 TestBackend 渲染内容转为字符串
-fn render_to_string(app: &TuiApp, width: u16, height: u16) -> String {
+fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
@@ -131,7 +131,7 @@ async fn tui_renders_live_event_bus_data() {
     app.update();
 
     // 默认渲染 Quest 面板，应包含发布的 quest 标题。
-    let content = render_to_string(&app, 80, 24);
+    let mut content = render_to_string(&mut app, 80, 24);
     assert!(
         content.contains("Live Event Quest"),
         "Quest panel should render live quest title, got: {}",
@@ -139,8 +139,8 @@ async fn tui_renders_live_event_bus_data() {
     );
 
     // 切换到 Budget 面板，应包含发布的预算指标。
-    app.state_mut().switch_to(PanelKind::Budget);
-    let content = render_to_string(&app, 80, 24);
+    app.switch_panel_to(PanelId::Budget);
+    content = render_to_string(&mut app, 80, 24);
     assert!(
         content.contains("Medium") && content.contains("4200.0"),
         "Budget panel should render live budget metrics, got: {}",
@@ -148,8 +148,8 @@ async fn tui_renders_live_event_bus_data() {
     );
 
     // 事件也应出现在 Log 面板。
-    app.state_mut().switch_to(PanelKind::Log);
-    let content = render_to_string(&app, 80, 24);
+    app.switch_panel_to(PanelId::Log);
+    content = render_to_string(&mut app, 80, 24);
     assert!(
         content.contains("QuestListUpdated") && content.contains("BudgetMetricsUpdated"),
         "Log panel should render live events, got: {}",

@@ -1,11 +1,12 @@
 //! Chimera TUI 集成测试 — 验证布局渲染、输入模式切换与键盘事件处理
 //!
-//! 对应 Week 8 Task 5(测试体系补齐)
+//! 对应 Week 8 Task 5(测试体系补齐)与 M1 架构重构
 //! 架构层:L10 Interface
 //!
 //! # 测试目标
 //! - 验证多面板布局渲染(ratatui TestBackend 内存渲染,无需真实终端)
-//! - 验证输入模式切换(Tab/Shift+Tab/数字键 1-5)
+//! - 验证输入模式切换(Tab/Shift+Tab/数字键 1-5/F1-F5)
+//! - 验证命令面板切换面板与退出
 //! - 验证键盘事件处理(crossterm 0.28 KeyEvent::new 双参数 API)
 //!
 //! # 设计约束
@@ -19,11 +20,17 @@
 #![forbid(unsafe_code)]
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use event_bus::{EventMetadata, NexusEvent};
+use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use std::collections::VecDeque;
 
 use chimera_tui::config::Theme;
-use chimera_tui::{PanelKind, TuiApp, TuiConfig};
+use chimera_tui::{
+    BudgetMetrics, DataSnapshot, DataSourceConfig, InputMode, PanelId, PopupKind, Severity, TuiApp,
+    TuiConfig, TuiDataSource, TuiError,
+};
 
 // ============================================================
 // 辅助函数
@@ -35,7 +42,7 @@ fn make_app() -> TuiApp {
 }
 
 /// 在 TestBackend 上渲染应用,返回渲染后的字符串内容
-fn render_to_string(app: &TuiApp, width: u16, height: u16) -> String {
+fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
@@ -55,8 +62,8 @@ fn render_to_string(app: &TuiApp, width: u16, height: u16) -> String {
 #[test]
 fn test_tui_layout_rendering() {
     // WHY TestBackend:验证 render() 产出非空内容,包含核心 UI 元素
-    let app = make_app();
-    let content = render_to_string(&app, 80, 24);
+    let mut app = make_app();
+    let content = render_to_string(&mut app, 80, 24);
 
     // 验证:渲染内容包含面板标签(顶部 Tabs)
     assert!(
@@ -82,17 +89,17 @@ fn test_tui_layout_rendering() {
 fn test_tui_layout_rendering_all_panels() {
     // WHY 全面板渲染:验证 5 个面板都能正确渲染各自内容
     let panels = [
-        PanelKind::Quest,
-        PanelKind::Parliament,
-        PanelKind::Budget,
-        PanelKind::Log,
-        PanelKind::Help,
+        PanelId::Quest,
+        PanelId::Parliament,
+        PanelId::Budget,
+        PanelId::Log,
+        PanelId::Help,
     ];
 
     for panel in panels {
         let mut app = make_app();
-        app.state_mut().switch_to(panel);
-        let content = render_to_string(&app, 80, 24);
+        app.switch_panel_to(panel);
+        let content = render_to_string(&mut app, 80, 24);
 
         // 每个面板渲染后应包含面板标题
         assert!(
@@ -107,19 +114,19 @@ fn test_tui_layout_rendering_all_panels() {
 #[test]
 fn test_tui_layout_rendering_theme_switch() {
     // WHY 主题切换:验证 Light/Dark 主题下都能正常渲染
-    let dark_app = make_app();
-    let dark_content = render_to_string(&dark_app, 80, 24);
+    let mut dark_app = make_app();
+    let dark_content = render_to_string(&mut dark_app, 80, 24);
     assert!(
         !dark_content.is_empty(),
         "Dark theme should render non-empty content"
     );
 
-    let light_app = TuiApp::new(TuiConfig {
+    let mut light_app = TuiApp::new(TuiConfig {
         theme: Theme::Light,
         ..Default::default()
     })
     .unwrap();
-    let light_content = render_to_string(&light_app, 80, 24);
+    let light_content = render_to_string(&mut light_app, 80, 24);
     assert!(
         !light_content.is_empty(),
         "Light theme should render non-empty content"
@@ -140,27 +147,27 @@ fn test_tui_layout_rendering_theme_switch() {
 fn test_tui_input_mode_switching() {
     // WHY 输入模式:验证 Tab/Shift+Tab/数字键切换面板
     let mut app = make_app();
-    assert_eq!(app.state().current_panel, PanelKind::Quest);
+    assert_eq!(app.state().current_panel, PanelId::Quest);
 
     // Tab:Quest → Parliament
     app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelKind::Parliament);
+    assert_eq!(app.state().current_panel, PanelId::Parliament);
 
     // Tab:Parliament → Budget
     app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelKind::Budget);
+    assert_eq!(app.state().current_panel, PanelId::Budget);
 
     // Shift+Tab(BackTab):Budget → Parliament
     app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    assert_eq!(app.state().current_panel, PanelKind::Parliament);
+    assert_eq!(app.state().current_panel, PanelId::Parliament);
 
     // 数字键 5:跳转到 Help
     app.handle_key_event(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelKind::Help);
+    assert_eq!(app.state().current_panel, PanelId::Help);
 
     // 数字键 1:跳转回 Quest
     app.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelKind::Quest);
+    assert_eq!(app.state().current_panel, PanelId::Quest);
 }
 
 #[test]
@@ -170,11 +177,11 @@ fn test_tui_input_mode_circular_navigation() {
 
     // 连续 Tab 5 次应回到原点(Quest → Parliament → Budget → Log → Help → Quest)
     for expected in [
-        PanelKind::Parliament,
-        PanelKind::Budget,
-        PanelKind::Log,
-        PanelKind::Help,
-        PanelKind::Quest,
+        PanelId::Parliament,
+        PanelId::Budget,
+        PanelId::Log,
+        PanelId::Help,
+        PanelId::Quest,
     ] {
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(
@@ -187,11 +194,11 @@ fn test_tui_input_mode_circular_navigation() {
 
     // Shift+Tab 反向循环 5 次也应回到原点
     for expected in [
-        PanelKind::Help,
-        PanelKind::Log,
-        PanelKind::Budget,
-        PanelKind::Parliament,
-        PanelKind::Quest,
+        PanelId::Help,
+        PanelId::Log,
+        PanelId::Budget,
+        PanelId::Parliament,
+        PanelId::Quest,
     ] {
         app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
         assert_eq!(
@@ -209,11 +216,11 @@ fn test_tui_input_mode_direct_jump() {
     let mut app = make_app();
 
     let cases = [
-        ('1', PanelKind::Quest),
-        ('2', PanelKind::Parliament),
-        ('3', PanelKind::Budget),
-        ('4', PanelKind::Log),
-        ('5', PanelKind::Help),
+        ('1', PanelId::Quest),
+        ('2', PanelId::Parliament),
+        ('3', PanelId::Budget),
+        ('4', PanelId::Log),
+        ('5', PanelId::Help),
     ];
 
     for (ch, expected_panel) in cases {
@@ -226,6 +233,17 @@ fn test_tui_input_mode_direct_jump() {
             expected_panel
         );
     }
+}
+
+#[test]
+fn test_tui_f_keys_jump_to_panels() {
+    let mut app = make_app();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+    assert_eq!(app.state().current_panel, PanelId::Budget);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+    assert_eq!(app.state().current_panel, PanelId::Quest);
 }
 
 // ============================================================
@@ -272,15 +290,19 @@ fn test_tui_keyboard_release_event_ignored() {
     ));
     assert_eq!(
         app.state().current_panel,
-        PanelKind::Quest,
+        PanelId::Quest,
         "Tab Release should not switch panel"
     );
 }
 
 #[test]
-fn test_tui_keyboard_input_buffer() {
-    // WHY 输入缓冲:验证 ASCII 可打印字符进入 input_buffer,Backspace 删除
+fn test_tui_keyboard_command_input_buffer() {
+    // WHY 输入缓冲:命令模式下 ASCII 可打印字符进入 input_buffer,Backspace 删除
     let mut app = make_app();
+
+    // 进入命令模式
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+    assert_eq!(app.state().input_mode, InputMode::Command);
 
     // 输入 "hello"
     for c in ['h', 'e', 'l', 'l', 'o'] {
@@ -298,9 +320,12 @@ fn test_tui_keyboard_input_buffer() {
 }
 
 #[test]
-fn test_tui_keyboard_non_printable_ignored() {
+fn test_tui_keyboard_non_printable_ignored_in_command_mode() {
     // WHY 非可打印字符:验证 Enter/Arrow 等非可打印键不进入 input_buffer
     let mut app = make_app();
+
+    // 进入命令模式
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
 
     // Enter 不应进入 input_buffer
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -325,22 +350,412 @@ fn test_tui_render_after_keyboard_input() {
     // WHY 渲染+输入联合:验证键盘输入后渲染仍能正常工作
     let mut app = make_app();
 
-    // 输入一些字符
-    for c in "test".chars() {
+    // 进入命令模式并输入
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+    for c in "budget".chars() {
         app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
 
-    // 切换面板
-    app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-
-    // 渲染应正常工作,不 panic
-    let content = render_to_string(&app, 80, 24);
+    // 渲染应正常工作,不 panic,且显示命令面板
+    let content = render_to_string(&mut app, 80, 24);
     assert!(
-        content.contains("Parliament"),
-        "render after input should show Parliament panel"
+        content.contains("Command"),
+        "render after command input should show command palette"
     );
     assert!(
-        content.contains("test"),
+        content.contains("budget"),
         "render after input should show input buffer content"
+    );
+}
+
+// ============================================================
+// D. 命令面板集成测试
+// ============================================================
+
+#[test]
+fn test_tui_command_palette_switch_panel() {
+    let mut app = make_app();
+
+    // 进入命令模式并输入 budget
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+    for c in "budget".chars() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(app.state().current_panel, PanelId::Budget);
+    assert_eq!(app.state().input_mode, InputMode::Normal);
+    assert!(app.state().input_buffer.is_empty());
+}
+
+#[test]
+fn test_tui_command_palette_quit() {
+    let mut app = make_app();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+    for c in "quit".chars() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(!app.state().running);
+}
+
+#[test]
+fn test_tui_search_mode_accepts_input() {
+    let mut app = make_app();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    assert_eq!(app.state().input_mode, InputMode::Search);
+
+    for c in "query".chars() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(app.state().input_buffer, "query");
+
+    // 提交后回到 Normal,不改变面板
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.state().input_mode, InputMode::Normal);
+    assert_eq!(app.state().current_panel, PanelId::Quest);
+}
+
+// ============================================================
+// E. 弹窗栈集成测试
+// ============================================================
+
+#[test]
+fn test_tui_popup_esc_closes() {
+    let mut app = make_app();
+    app.state_mut().popup_stack.push(PopupKind::Notification {
+        message: "test notification".into(),
+        severity: Severity::Warning,
+    });
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.state().popup_stack.is_empty());
+}
+
+#[test]
+fn test_tui_popup_enter_closes() {
+    let mut app = make_app();
+    app.state_mut().popup_stack.push(PopupKind::Detail {
+        title: "Detail".into(),
+        content: "content".into(),
+    });
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.state().popup_stack.is_empty());
+}
+
+// ============================================================
+// F. Budget 数据驱动渲染测试
+// ============================================================
+
+/// 返回预算超限快照的测试数据源
+///
+/// WHY 内联实现:集成测试只需要一种固定快照,无需在 crate 公开测试桩。
+struct CriticalBudgetSource {
+    snapshot: DataSnapshot,
+    config: DataSourceConfig,
+}
+
+impl CriticalBudgetSource {
+    fn new() -> Self {
+        Self {
+            snapshot: DataSnapshot {
+                budget_metrics: BudgetMetrics {
+                    total_consumption: 9500.0,
+                    remaining_budget: 500.0,
+                    utilization_rate: 0.95,
+                    current_tier: "Critical".into(),
+                    coefficient: 1.2,
+                    is_exceeded: true,
+                    alert: Some("Budget cap exceeded".into()),
+                },
+                ..Default::default()
+            },
+            config: DataSourceConfig::default(),
+        }
+    }
+}
+
+impl TuiDataSource for CriticalBudgetSource {
+    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+        Ok(self.snapshot.clone())
+    }
+
+    fn config(&self) -> &DataSourceConfig {
+        &self.config
+    }
+}
+
+#[test]
+fn test_budget_panel_shows_critical_state() {
+    // WHY 数据驱动渲染:验证 Budget 面板在 is_exceeded=true 时正确显示 EXCEEDED
+    let mut app =
+        TuiApp::with_data_source(TuiConfig::default(), Box::new(CriticalBudgetSource::new()))
+            .unwrap();
+
+    // 从数据源拉取快照,确保 state.budget 反映测试数据
+    app.update();
+    app.switch_panel_to(PanelId::Budget);
+
+    let content = render_to_string(&mut app, 80, 24);
+    assert!(
+        content.contains("EXCEEDED"),
+        "Budget panel should render EXCEEDED status when budget is exceeded, got: {}",
+        &content[..content.len().min(300)]
+    );
+}
+
+// ============================================================
+// G. Quest 数据驱动渲染测试
+// ============================================================
+
+/// 返回包含特定 Quest 快照的测试数据源
+///
+/// WHY 内联实现:集成测试只需要一种固定 Quest 快照,无需在 crate 公开测试桩。
+struct QuestTestSource {
+    snapshot: DataSnapshot,
+    config: DataSourceConfig,
+}
+
+impl QuestTestSource {
+    fn new(snapshot: DataSnapshot) -> Self {
+        Self {
+            snapshot,
+            config: DataSourceConfig::default(),
+        }
+    }
+}
+
+impl TuiDataSource for QuestTestSource {
+    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+        Ok(self.snapshot.clone())
+    }
+
+    fn config(&self) -> &DataSourceConfig {
+        &self.config
+    }
+}
+
+#[test]
+fn test_quest_panel_renders_real_quest_data() {
+    // WHY 数据驱动 Quest 面板:验证自定义数据源提供的 Quest 能被渲染到面板中
+    let quest = Quest {
+        quest_id: "quest-panel-test-001".into(),
+        title: "Panel Data Quest".into(),
+        tasks: vec![
+            Task {
+                task_id: "t1".into(),
+                description: "first task".into(),
+                status: TaskStatus::Completed,
+                dependencies: vec![],
+            },
+            Task {
+                task_id: "t2".into(),
+                description: "second task".into(),
+                status: TaskStatus::Pending,
+                dependencies: vec![],
+            },
+        ],
+        thinking_mode: ThinkingMode::Deep,
+        checkpoint_id: Some("cp-1".into()),
+    };
+
+    let snapshot = DataSnapshot {
+        quest_list: vec![quest],
+        budget_metrics: BudgetMetrics::default(),
+        latest_events: VecDeque::new(),
+    };
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig::default(),
+        Box::new(QuestTestSource::new(snapshot)),
+    )
+    .unwrap();
+
+    // 从数据源拉取快照,确保 state.quest_list 反映测试数据
+    app.update();
+
+    let content = render_to_string(&mut app, 80, 24);
+    assert!(
+        content.contains("Panel Data Quest"),
+        "Quest panel should render quest title, got: {}",
+        &content[..content.len().min(300)]
+    );
+    assert!(
+        content.contains("quest-panel-test-001"),
+        "Quest panel should render quest_id, got: {}",
+        &content[..content.len().min(300)]
+    );
+    assert!(
+        content.contains("Deep"),
+        "Quest panel should render thinking mode, got: {}",
+        &content[..content.len().min(300)]
+    );
+    assert!(
+        content.contains("2 total"),
+        "Quest panel should render task summary, got: {}",
+        &content[..content.len().min(300)]
+    );
+}
+
+// ============================================================
+// H. Parliament 面板数据驱动渲染测试
+// ============================================================
+
+/// 返回包含 Parliament 相关事件快照的测试数据源
+///
+/// WHY 内联实现:集成测试只需要一种固定事件快照,无需在 crate 公开测试桩。
+struct ParliamentTestSource {
+    snapshot: DataSnapshot,
+    config: DataSourceConfig,
+}
+
+impl ParliamentTestSource {
+    fn new(snapshot: DataSnapshot) -> Self {
+        Self {
+            snapshot,
+            config: DataSourceConfig::default(),
+        }
+    }
+}
+
+impl TuiDataSource for ParliamentTestSource {
+    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+        Ok(self.snapshot.clone())
+    }
+
+    fn config(&self) -> &DataSourceConfig {
+        &self.config
+    }
+}
+
+#[test]
+fn test_parliament_panel_renders_recent_events() {
+    // WHY 数据驱动 Parliament 面板:验证自定义数据源提供的议会事件能被渲染到面板中
+    let snapshot = DataSnapshot {
+        latest_events: VecDeque::from([
+            NexusEvent::SkepticVeto {
+                metadata: EventMetadata::new("parliament"),
+                quest_id: "q-1".into(),
+                veto_reason: "unsafe shell injection detected".into(),
+                frozen_capabilities: vec!["shell_exec".into()],
+            },
+            NexusEvent::RedTeamAudit {
+                metadata: EventMetadata::new("parliament"),
+                vulnerability_type: "prompt_injection".into(),
+                failed_probes: 5,
+                total_probes: 20,
+                detection_rate: 0.25,
+                remediation_suggestion: "add input sanitization".into(),
+            },
+        ]),
+        ..Default::default()
+    };
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig::default(),
+        Box::new(ParliamentTestSource::new(snapshot)),
+    )
+    .unwrap();
+
+    // 从数据源拉取快照,确保 state.latest_events 反映测试数据
+    app.update();
+    app.switch_panel_to(PanelId::Parliament);
+
+    let content = render_to_string(&mut app, 80, 24);
+    assert!(
+        content.contains("unsafe shell injection detected"),
+        "Parliament panel should render SkepticVeto reason, got: {}",
+        &content[..content.len().min(300)]
+    );
+    assert!(
+        content.contains("q-1"),
+        "Parliament panel should render quest_id, got: {}",
+        &content[..content.len().min(300)]
+    );
+    assert!(
+        content.contains("prompt_injection") || content.contains("RedTeamAudit"),
+        "Parliament panel should render RedTeamAudit info, got: {}",
+        &content[..content.len().min(300)]
+    );
+    assert!(
+        !content.contains("No recent parliament events"),
+        "should not show empty hint when parliament events exist"
+    );
+}
+
+// ============================================================
+// I. Log 面板数据驱动渲染测试
+// ============================================================
+
+/// 返回包含多事件快照的测试数据源
+///
+/// WHY 内联实现:集成测试只需要固定事件快照,无需在 crate 公开测试桩。
+struct LogTestSource {
+    snapshot: DataSnapshot,
+    config: DataSourceConfig,
+}
+
+impl LogTestSource {
+    fn new(snapshot: DataSnapshot) -> Self {
+        Self {
+            snapshot,
+            config: DataSourceConfig::default(),
+        }
+    }
+}
+
+impl TuiDataSource for LogTestSource {
+    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+        Ok(self.snapshot.clone())
+    }
+
+    fn config(&self) -> &DataSourceConfig {
+        &self.config
+    }
+}
+
+#[test]
+fn test_log_panel_renders_events() {
+    // WHY 数据驱动 Log 面板:验证自定义数据源提供的事件能被渲染到主 Log 面板中。
+    // M1 移除底部固定日志面板,Log 作为普通主面板存在。
+    let snapshot = DataSnapshot {
+        latest_events: VecDeque::from([
+            NexusEvent::CacheHit {
+                metadata: EventMetadata::new("scc-cache"),
+                cache_key: "k1".into(),
+            },
+            NexusEvent::BudgetExceeded {
+                metadata: EventMetadata::new("efficiency-monitor"),
+                budget_type: "token".into(),
+                current: 9500,
+                limit: 10000,
+            },
+        ]),
+        ..Default::default()
+    };
+
+    let mut app =
+        TuiApp::with_data_source(TuiConfig::default(), Box::new(LogTestSource::new(snapshot)))
+            .unwrap();
+
+    // 从数据源拉取快照,确保 state.latest_events 反映测试数据
+    app.update();
+
+    // 切换到 Log 主面板,验证主面板渲染事件摘要
+    app.switch_panel_to(PanelId::Log);
+    let content = render_to_string(&mut app, 80, 24);
+    assert!(
+        content.contains("CacheHit"),
+        "Main Log panel should render event type, got: {}",
+        &content[..content.len().min(300)]
+    );
+    assert!(
+        content.contains("BudgetExceeded"),
+        "Main Log panel should render critical event type, got: {}",
+        &content[..content.len().min(300)]
     );
 }

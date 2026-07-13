@@ -5,8 +5,8 @@
 //!
 //! # 核心职责
 //! - 多面板终端渲染(Quest / Parliament / Budget / Log / Help)
-//! - 键盘事件处理(面板切换、退出等)
-//! - 状态管理(当前面板、运行状态)
+//! - 键盘事件处理(面板切换、退出、命令面板、搜索模式)
+//! - 状态管理(当前面板、运行状态、弹窗栈)
 //!
 //! # 依赖方向(§2.2 依赖铁律)
 //! Chimera TUI 是 L10 层,向下依赖 L1 的 event-bus。作为用户交互入口,
@@ -33,20 +33,43 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod app;
+pub mod command_palette;
 pub mod config;
+pub mod data;
 pub mod error;
+pub mod focus;
+pub mod panels;
+pub mod popup;
+pub mod subscriber;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use app::TuiApp;
+pub use command_palette::CommandPalette;
 pub use config::TuiConfig;
+pub use data::{
+    BudgetMetrics, BudgetSync, DataPipeline, DataSnapshot, DataSourceConfig, QuestSync,
+    StubDataSource, TuiDataSource,
+};
 pub use error::TuiError;
-pub use types::{PanelKind, TuiState};
+pub use focus::FocusManager;
+pub use panels::{BudgetPanel, Panel, QuestPanel};
+pub use popup::{PopupKind, PopupStack, Severity};
+pub use subscriber::EventSubscriber;
+pub use types::{InputMode, PanelId, TuiCommand, TuiState};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::app::TuiApp;
+    pub use crate::command_palette::CommandPalette;
     pub use crate::config::TuiConfig;
+    pub use crate::data::{
+        BudgetMetrics, DataPipeline, DataSnapshot, DataSourceConfig, StubDataSource, TuiDataSource,
+    };
     pub use crate::error::TuiError;
-    pub use crate::types::{PanelKind, TuiState};
+    pub use crate::focus::FocusManager;
+    pub use crate::panels::{BudgetPanel, Panel, QuestPanel};
+    pub use crate::popup::{PopupKind, PopupStack, Severity};
+    pub use crate::subscriber::EventSubscriber;
+    pub use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
 }
