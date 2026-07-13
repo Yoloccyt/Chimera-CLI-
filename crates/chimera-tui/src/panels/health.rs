@@ -28,16 +28,24 @@ impl HealthPanel {
         Self
     }
 
-    /// 构建左侧信息文本
-    fn info_text(state: &TuiState) -> Text<'static> {
-        let hm = &state.health_metrics;
-        let health_color = if hm.health_score >= 80 {
+    /// 根据健康评分返回阈值颜色
+    ///
+    /// WHY 提取辅助函数:消除 `info_text` 与 `render` 中重复的分段阈值逻辑,
+    /// 避免未来调整阈值时遗漏一处。
+    fn health_score_color(score: u8) -> Color {
+        if score >= 80 {
             Color::Green
-        } else if hm.health_score >= 50 {
+        } else if score >= 50 {
             Color::Yellow
         } else {
             Color::Red
-        };
+        }
+    }
+
+    /// 构建左侧信息文本
+    fn info_text(state: &TuiState) -> Text<'static> {
+        let hm = &state.health_metrics;
+        let health_color = Self::health_score_color(hm.health_score);
 
         let lines = vec![
             Line::from(vec![
@@ -111,13 +119,7 @@ impl Panel for HealthPanel {
             .constraints([Constraint::Length(5), Constraint::Min(5)])
             .split(chunks[1]);
 
-        let score_color = if state.health_metrics.health_score >= 80 {
-            Color::Green
-        } else if state.health_metrics.health_score >= 50 {
-            Color::Yellow
-        } else {
-            Color::Red
-        };
+        let score_color = Self::health_score_color(state.health_metrics.health_score);
         let gauge = render::gauge(
             state.health_metrics.health_score as f64,
             100.0,

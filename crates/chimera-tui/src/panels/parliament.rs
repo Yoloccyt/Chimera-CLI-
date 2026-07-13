@@ -29,7 +29,7 @@ impl ParliamentPanel {
     }
 
     /// 构建 Parliament 面板文本内容
-    pub fn content(state: &TuiState) -> Text<'static> {
+    fn content(state: &TuiState) -> Text<'static> {
         let mut lines: Vec<Line<'static>> =
             vec![Line::from("Parliament"), Line::from("─────────────")];
 

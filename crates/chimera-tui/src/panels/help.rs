@@ -26,9 +26,9 @@ impl HelpPanel {
     }
 
     /// 构建 Help 面板文本内容
-    pub fn content() -> Text<'static> {
+    fn content() -> Text<'static> {
         Text::from(
-            "Help\n─────────────\nTab       - Next panel\nShift+Tab - Previous panel\n1-8       - Jump to panel\nF1-F8     - Jump to panel\n:         - Command mode\n/         - Search mode (M1 stub)\nq / Esc   - Quit\n?         - Show help\n\nChimera CLI NEXUS-OMEGA",
+            "Help\n─────────────\nTab       - Next panel\nShift+Tab - Previous panel\n1-8       - Jump to panel\nF1        - Quest\nF2        - Parliament\nF3        - Budget\nF6        - Memory\nF7        - Security\nF8        - Health\n:         - Command mode\n/         - Search mode (M1 stub)\nq / Esc   - Quit\n?         - Show help\n\nChimera CLI NEXUS-OMEGA",
         )
     }
 }
@@ -69,6 +69,10 @@ mod tests {
         assert!(content.contains("Help"));
         assert!(content.contains("Tab"));
         assert!(content.contains("q / Esc"));
+        assert!(content.contains("F1        - Quest"));
+        assert!(content.contains("F6        - Memory"));
+        assert!(content.contains("F7        - Security"));
+        assert!(content.contains("F8        - Health"));
         assert!(content.contains("Chimera CLI NEXUS-OMEGA"));
     }
 }

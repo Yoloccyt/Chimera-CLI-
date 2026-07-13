@@ -311,13 +311,13 @@ fn test_tui_f_keys_jump_to_panels() {
 fn test_tui_f_keys_new_panels() {
     let mut app = make_app();
 
-    app.handle_key_event(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
+    app.handle_key_event(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
     assert_eq!(app.current_panel(), PanelId::Memory);
 
-    app.handle_key_event(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
+    app.handle_key_event(KeyEvent::new(KeyCode::F(7), KeyModifiers::NONE));
     assert_eq!(app.current_panel(), PanelId::Security);
 
-    app.handle_key_event(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
+    app.handle_key_event(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
     assert_eq!(app.current_panel(), PanelId::Health);
 }
 

@@ -250,11 +250,9 @@ impl TuiApp {
             KeyCode::F(1) => self.switch_panel_to(PanelId::Quest),
             KeyCode::F(2) => self.switch_panel_to(PanelId::Parliament),
             KeyCode::F(3) => self.switch_panel_to(PanelId::Budget),
-            KeyCode::F(4) => self.switch_panel_to(PanelId::Memory),
-            KeyCode::F(5) => self.switch_panel_to(PanelId::Security),
-            KeyCode::F(6) => self.switch_panel_to(PanelId::Health),
-            KeyCode::F(7) => self.switch_panel_to(PanelId::Log),
-            KeyCode::F(8) => self.switch_panel_to(PanelId::Help),
+            KeyCode::F(6) => self.switch_panel_to(PanelId::Memory),
+            KeyCode::F(7) => self.switch_panel_to(PanelId::Security),
+            KeyCode::F(8) => self.switch_panel_to(PanelId::Health),
             _ => {
                 // 其他按键委托给当前焦点面板
                 let focused = self.focus_manager.focused();
@@ -678,10 +676,13 @@ mod tests {
     #[test]
     fn test_handle_key_f_keys_new_panels() {
         let mut app = make_app();
-        app.handle_key_event(KeyEvent::new(KeyCode::F(4), event::KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::F(6), event::KeyModifiers::NONE));
         assert_eq!(app.current_panel(), PanelId::Memory);
 
-        app.handle_key_event(KeyEvent::new(KeyCode::F(6), event::KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::F(7), event::KeyModifiers::NONE));
+        assert_eq!(app.current_panel(), PanelId::Security);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::F(8), event::KeyModifiers::NONE));
         assert_eq!(app.current_panel(), PanelId::Health);
     }
 

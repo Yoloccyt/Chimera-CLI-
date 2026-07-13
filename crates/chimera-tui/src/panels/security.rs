@@ -25,6 +25,10 @@ use crate::types::{PanelId, TuiCommand, TuiState};
 pub struct SecurityPanel {
     /// 当前选中事件的索引
     selected: usize,
+    /// 事件列表的滚动偏移
+    ///
+    /// WHY:当事件数量超过可见区域时,通过滚动偏移保持选中项始终可见。
+    scroll_offset: usize,
 }
 
 impl SecurityPanel {
@@ -51,7 +55,7 @@ impl SecurityPanel {
     }
 
     /// 构建所有安全事件行的统一视图
-    fn build_rows(state: &TuiState, selected: usize) -> (Vec<Line<'static>>, usize) {
+    fn build_rows(state: &TuiState, selected: usize) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
         let mut current_idx = 0usize;
 
@@ -105,7 +109,21 @@ impl SecurityPanel {
             current_idx += 1;
         }
 
-        (rows, current_idx)
+        rows
+    }
+
+    /// 根据选中项与可见行数调整滚动偏移,保证选中项始终位于可视区域内
+    fn adjust_scroll(selected: usize, scroll_offset: usize, visible_rows: usize) -> usize {
+        if visible_rows == 0 {
+            return scroll_offset;
+        }
+        if selected < scroll_offset {
+            selected
+        } else if selected >= scroll_offset + visible_rows {
+            selected.saturating_sub(visible_rows - 1)
+        } else {
+            scroll_offset
+        }
     }
 
     /// 构造选中事件的详情文本
@@ -213,24 +231,39 @@ impl Panel for SecurityPanel {
             .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
             .split(inner);
 
-        // 左侧:事件列表
-        let (rows, _count) = Self::build_rows(state, self.selected);
-        let mut left_lines = vec![
+        // 左侧:事件列表(标题 + 可滚动行 + 页脚)
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2), // Security Events + 分隔线
+                Constraint::Min(1),    // 可滚动事件行
+                Constraint::Length(2), // 空行 + FOOTER
+            ])
+            .split(chunks[0]);
+
+        let header = Paragraph::new(Text::from(vec![
             Line::from(vec![Span::styled(
                 "Security Events",
                 Style::default().add_modifier(Modifier::BOLD),
             )]),
             Line::from("─────────────"),
-        ];
-        if rows.is_empty() {
-            left_lines.push(Line::from("No security events"));
+        ]));
+        header.render(left_chunks[0], buf);
+
+        let rows = Self::build_rows(state, self.selected);
+        let visible_rows = left_chunks[1].height as usize;
+        self.scroll_offset = Self::adjust_scroll(self.selected, self.scroll_offset, visible_rows);
+
+        let rows_text = if rows.is_empty() {
+            Text::from(vec![Line::from("No security events")])
         } else {
-            left_lines.extend(rows);
-        }
-        left_lines.push(Line::from(""));
-        left_lines.push(Line::from(FOOTER_TEXT));
-        let left = Paragraph::new(Text::from(left_lines));
-        left.render(chunks[0], buf);
+            Text::from(rows)
+        };
+        let rows_paragraph = Paragraph::new(rows_text).scroll((self.scroll_offset as u16, 0));
+        rows_paragraph.render(left_chunks[1], buf);
+
+        let footer = Paragraph::new(Text::from(vec![Line::from(""), Line::from(FOOTER_TEXT)]));
+        footer.render(left_chunks[2], buf);
 
         // 右侧:冻结能力
         let right = Paragraph::new(Self::frozen_text(state));
@@ -249,13 +282,13 @@ impl Panel for SecurityPanel {
                 if count > 0 && self.selected > 0 {
                     self.selected -= 1;
                 }
-                Some(TuiCommand::SwitchPanel(PanelId::Security))
+                None
             }
             KeyCode::Down => {
                 if count > 0 && self.selected + 1 < count {
                     self.selected += 1;
                 }
-                Some(TuiCommand::SwitchPanel(PanelId::Security))
+                None
             }
             KeyCode::Enter => {
                 if let Some((title, content)) = Self::detail_content(state, self.selected) {

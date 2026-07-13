@@ -172,9 +172,9 @@ fn make_app_with_data() -> TuiApp {
     app
 }
 
-/// bench 1:5 面板完整渲染帧时间
+/// bench 1:8 面板完整渲染帧时间
 ///
-/// 测量 `TuiApp::render` 完整调用:标签栏 + 主面板 + 日志面板 + 状态栏。
+/// 测量 `TuiApp::render` 完整调用:标签栏 + 主面板 + 状态栏。
 /// 每 iter 创建新 TestBackend(开销极低),`app` 在 iter 外创建保证数据稳定。
 ///
 /// 目标 P95 < 16ms(60 FPS 帧预算 16.67ms 留余量)。
@@ -183,7 +183,7 @@ fn render_all_panels(c: &mut Criterion) {
     let mut app = make_app_with_data();
 
     let mut group = c.benchmark_group("render_all_panels");
-    group.bench_function("80x24_5panels", |b| {
+    group.bench_function("80x24_8panels", |b| {
         b.iter(|| {
             // 每 iter 创建新 TestBackend:避免上一轮渲染残留污染
             let backend = TestBackend::new(TERM_WIDTH, TERM_HEIGHT);

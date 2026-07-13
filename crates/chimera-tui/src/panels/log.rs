@@ -29,7 +29,7 @@ impl LogPanel {
     }
 
     /// 构建 Log 面板文本内容
-    pub fn content(state: &TuiState) -> Text<'static> {
+    fn content(state: &TuiState) -> Text<'static> {
         let mut lines: Vec<Line<'static>> =
             vec![Line::from("System Log"), Line::from("─────────────")];
 
