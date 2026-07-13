@@ -3,8 +3,8 @@
 # chimela CLI (NEXUS-OMEGA) — 一键安装脚本 (Windows PowerShell)
 #
 # 用法:
-#   PowerShell 5.1 / 7+ 推荐(兼容 param() 块):
-#     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)))
+#   PowerShell 5.1 / 7+ 推荐(先下载再执行,兼容 param() 块):
+#     $tempFile = Join-Path $env:TEMP "chimela-install.ps1"; irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 | Out-File -FilePath $tempFile -Encoding utf8; & $tempFile; Remove-Item $tempFile -Force
 #   PowerShell 5.1 传统写法(部分 PS 7.x 版本会因 param() 块报错):
 #     iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
 #   本地执行:
@@ -24,7 +24,7 @@
 #   PowerShell 5.1+:
 #     $env:GITHUB_TOKEN='ghp_xxx'
 #     $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
-#     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)))
+#     $tempFile = Join-Path $env:TEMP "chimela-install.ps1"; irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers | Out-File -FilePath $tempFile -Encoding utf8; & $tempFile; Remove-Item $tempFile -Force
 #
 #   如果 irm 持续 404,建议直接克隆仓库后本地执行:
 #     git clone https://github.com/Yoloccyt/Chimera-CLI-.git

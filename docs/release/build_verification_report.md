@@ -203,14 +203,21 @@ sh install.sh --skip-verify
 
 ```powershell
 # 一键安装 (最新版,公有仓库)
-# WHY 使用 [scriptblock]::Create: install.ps1 含 param() 块,iex (irm ...) 在部分 PS 7.x 会报
-#     "The assignment expression is not valid"
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)))
+# WHY 先下载再执行: install.ps1 含 param() 块,iex (irm ...) 在部分 PS 7.x 会报
+#     "The assignment expression is not valid";[scriptblock]::Create() 也不支持 param() 块。
+#     先下载到临时文件再执行是最可靠的方式。
+$tempFile = Join-Path $env:TEMP "chimela-install.ps1"
+irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 | Out-File -FilePath $tempFile -Encoding utf8
+& $tempFile
+Remove-Item $tempFile -Force
 
 # 私有仓库:必须在 header 中携带 GITHUB_TOKEN
 $env:GITHUB_TOKEN='ghp_xxx'
 $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)))
+$tempFile = Join-Path $env:TEMP "chimela-install.ps1"
+irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers | Out-File -FilePath $tempFile -Encoding utf8
+& $tempFile
+Remove-Item $tempFile -Force
 
 # 指定版本
 .\install.ps1 -Version v1.0.2-omega
@@ -254,7 +261,7 @@ URL 格式:`https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v${VERSIO
 | 平台 | 安装命令 | URL 格式核对 |
 |------|----------|-------------|
 | Linux/macOS | `curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh \| sh` | ✅ 正确 |
-| Windows | `& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)))` | ✅ 正确 |
+| Windows | `$tempFile = Join-Path $env:TEMP "chimela-install.ps1"; irm ... \| Out-File $tempFile; & $tempFile; Remove-Item $tempFile` | ✅ 正确 |
 
 **GitHub API 调用核对**:
 - install.sh: `https://api.github.com/repos/Yoloccyt/Chimera-CLI-/releases/latest` ✅
