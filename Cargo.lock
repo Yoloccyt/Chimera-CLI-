@@ -234,11 +234,14 @@ name = "chimera-cli"
 version = "1.4.0-omega"
 dependencies = [
  "anyhow",
+ "chimera-tui",
  "clap",
  "criterion",
+ "event-bus",
  "figment",
  "nexus-core",
  "proptest",
+ "quest-engine",
  "serde",
  "serde_json",
  "tempfile",
@@ -292,8 +295,11 @@ dependencies = [
 name = "chimera-tui"
 version = "1.4.0-omega"
 dependencies = [
+ "chrono",
+ "criterion",
  "crossterm",
  "event-bus",
+ "nexus-core",
  "proptest",
  "ratatui",
  "serde",
@@ -717,6 +723,7 @@ version = "1.4.0-omega"
 dependencies = [
  "chrono",
  "criterion",
+ "nexus-core",
  "prometheus-client",
  "rmp-serde",
  "serde",

@@ -10,6 +10,8 @@ nexus-core = { path = "../nexus-core" }
 event-bus = { workspace = true }
 # chimera-tui:L10 Interface 层 TUI 界面(ratatui + crossterm)
 chimera-tui = { workspace = true }
+# quest-engine:L9 Quest 层,为 tui 命令提供控制事件上游消费示例(§2.2 向下依赖)
+quest-engine = { path = "../quest-engine" }
 # Clap:子命令式 CLI 框架,启用 derive 宏、env 变量支持、cargo 元信息
 clap = { workspace = true }
 # Figment:多源配置合并(默认 > File > Env > CLI 优先级)

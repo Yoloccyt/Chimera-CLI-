@@ -2,8 +2,9 @@
 
 #![forbid(unsafe_code)]
 
-use chimera_tui::{CommandPalette, InputMode, PanelId, PopupKind, Severity, TuiCommand, TuiState};
+use chimera_tui::{CommandPalette, InputMode, PanelId, Severity, TuiCommand, TuiState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use event_bus::VoteValue;
 
 fn command_state(input: &str) -> TuiState {
     let mut state = TuiState::new();
@@ -278,19 +279,11 @@ fn command_palette_parses_pause_command() {
     let mut state = command_state("pause q-1");
 
     let cmd = palette.submit(&mut state);
-    match cmd {
-        Some(TuiCommand::OpenPopup(PopupKind::Confirm {
-            prompt,
-            on_confirm,
-            confirmed,
-        })) => {
-            assert!(prompt.contains("Pause quest"));
-            assert!(prompt.contains("q-1"));
-            assert_eq!(on_confirm, "pause:q-1");
-            assert!(confirmed, "control confirm should default to Yes");
-        }
-        other => panic!("expected Confirm popup, got {other:?}"),
-    }
+    assert_eq!(
+        cmd,
+        Some(TuiCommand::RequestQuestPause("q-1".into())),
+        "pause should return RequestQuestPause"
+    );
 }
 
 #[test]
@@ -299,19 +292,11 @@ fn command_palette_parses_resume_command() {
     let mut state = command_state("resume q-2");
 
     let cmd = palette.submit(&mut state);
-    match cmd {
-        Some(TuiCommand::OpenPopup(PopupKind::Confirm {
-            prompt,
-            on_confirm,
-            confirmed,
-        })) => {
-            assert!(prompt.contains("Resume quest"));
-            assert!(prompt.contains("q-2"));
-            assert_eq!(on_confirm, "resume:q-2");
-            assert!(confirmed, "control confirm should default to Yes");
-        }
-        other => panic!("expected Confirm popup, got {other:?}"),
-    }
+    assert_eq!(
+        cmd,
+        Some(TuiCommand::RequestQuestResume("q-2".into())),
+        "resume should return RequestQuestResume"
+    );
 }
 
 #[test]
@@ -320,19 +305,14 @@ fn command_palette_parses_vote_command() {
     let mut state = command_state("vote yes p-1");
 
     let cmd = palette.submit(&mut state);
-    match cmd {
-        Some(TuiCommand::OpenPopup(PopupKind::Confirm {
-            prompt,
-            on_confirm,
-            confirmed,
-        })) => {
-            assert!(prompt.contains("Vote yes on proposal"));
-            assert!(prompt.contains("p-1"));
-            assert_eq!(on_confirm, "vote:yes:p-1");
-            assert!(confirmed, "control confirm should default to Yes");
-        }
-        other => panic!("expected Confirm popup, got {other:?}"),
-    }
+    assert_eq!(
+        cmd,
+        Some(TuiCommand::RequestVote {
+            proposal_id: "p-1".into(),
+            vote: VoteValue::Yes,
+        }),
+        "vote should return RequestVote"
+    );
 }
 
 #[test]

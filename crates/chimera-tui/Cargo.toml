@@ -6,14 +6,30 @@ edition.workspace = true
 [dependencies]
 # L10 Interface → L1 Core(向下依赖,event-bus 是唯一跨层通道,§2.2 依赖铁律)
 event-bus = { path = "../event-bus" }
-tokio = { workspace = true, features = ["sync"] }
+# nexus-core 为 L1 Core 共享领域类型(Quest/Task 等),L10 向下依赖允许
+nexus-core = { path = "../nexus-core" }
+tokio = { workspace = true, features = ["sync", "time"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# 事件元数据中的时间戳格式化(已存在于 workspace 依赖)
+chrono = { workspace = true }
 # TUI 渲染与终端 IO
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# criterion:性能基准测试框架(P3.2 任务,§7.1 测试矩阵约定)
+criterion = { workspace = true }
+
+# P3.2 性能与压力验证:data_pipeline 测量快照生成延迟,render 测量 5 面板渲染帧时间。
+# harness = false:criterion 自带 main,关闭 libtest 默认 harness 避免冲突。
+[[bench]]
+name = "data_pipeline_bench"
+harness = false
+
+[[bench]]
+name = "render_bench"
+harness = false

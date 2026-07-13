@@ -52,11 +52,12 @@ pub enum EventSeverity {
     Critical,
 }
 
-/// Quest 完成状态 — 用于 `QuestCompleted` 事件
+/// Quest 完成状态 — 用于 `QuestCompleted` 事件(P1.2 实时数据驱动面板)
 ///
 /// WHY 定义在 event-bus 而非 nexus-core:原 nexus-core 仅有 `TaskStatus`,
 /// 没有 Quest 级别的结束状态。为不修改核心领域类型(§3.3.1 要求 ADR),
 /// 在 event-bus 这一跨层通信契约层定义轻量级状态枚举。
+/// 注:此类型属于 P1.2 实时数据面板契约,非 M4 双向控制新增。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum QuestStatus {
     /// Quest 成功完成
@@ -81,11 +82,12 @@ pub enum VoteValue {
     Abstain,
 }
 
-/// 预算指标载荷 — TUI Budget 面板的结构化数据
+/// 预算指标载荷 — TUI Budget 面板的结构化数据(P1.2 实时数据驱动面板)
 ///
 /// WHY 定义在 event-bus:chimera-tui(L10)无法直接依赖 efficiency-monitor(L9),
 /// 通过 event-bus(L1)传递结构化预算指标,避免面板侧从多个事件拼合。
 /// 字段与 `chimera_tui::data::BudgetMetrics` 保持一致。
+/// 注:此类型属于 P1.2 实时数据面板契约,非 M4 双向控制新增。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BudgetMetricsPayload {
     /// 总消耗量(单位由预算类型决定)
@@ -184,10 +186,11 @@ pub enum NexusEvent {
         total: u32,
     },
 
-    /// Quest 完整列表更新 — L9 Quest → L10 Interface
+    /// Quest 完整列表更新 — L9 Quest → L10 Interface(P1.2 实时数据驱动面板)
     ///
     /// WHY:quest-engine 周期性发布完整列表,供 TUI 冷启动或 lag 后快速对齐,
     /// 避免依赖多次增量事件才能拼出完整状态。Normal 级别,丢失可由下次周期补偿。
+    /// 注:此变体属于 P1.2 实时数据面板契约,非 M4 双向控制新增。
     QuestListUpdated {
         /// 事件元数据
         metadata: EventMetadata,
@@ -197,10 +200,11 @@ pub enum NexusEvent {
         source: String,
     },
 
-    /// Quest 已完成 — L9 Quest → L10 Interface
+    /// Quest 已完成 — L9 Quest → L10 Interface(P1.2 实时数据驱动面板)
     ///
     /// WHY:标记 Quest 结束,TUI 据此从活动列表移除。携带 status 以区分
     /// 成功/失败/取消,便于面板展示不同视觉状态。
+    /// 注:此变体属于 P1.2 实时数据面板契约,非 M4 双向控制新增。
     QuestCompleted {
         /// 事件元数据
         metadata: EventMetadata,
@@ -999,11 +1003,12 @@ pub enum NexusEvent {
         utilization_rate: f32,
     },
 
-    /// 预算指标更新 — L9 Quest(efficiency-monitor)→ L10 Interface
+    /// 预算指标更新 — L9 Quest(efficiency-monitor)→ L10 Interface(P1.2 实时数据驱动面板)
     ///
     /// WHY:结构化预算指标,供 TUI Budget 面板直接消费,避免面板侧
     /// 从 BudgetStatsReported / BudgetAdjusted / BudgetExceeded 等多个
     /// 事件拼合。Normal 级别,丢失可由下次周期补偿。
+    /// 注:此变体属于 P1.2 实时数据面板契约,非 M4 双向控制新增。
     BudgetMetricsUpdated {
         /// 事件元数据
         metadata: EventMetadata,

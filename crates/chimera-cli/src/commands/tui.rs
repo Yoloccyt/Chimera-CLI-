@@ -33,12 +33,23 @@ pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
     .context("TUI 初始化失败")?;
 
     // M4:将 EventBus 注入 TUI,使控制面板可发布请求事件。
-    app = chimera_tui::TuiApp::with_event_bus(app, bus);
+    // 保留 bus 所有权,后续仍需要克隆给上游控制订阅者。
+    app = chimera_tui::TuiApp::with_event_bus(app, bus.clone());
+
+    // M4 review fix:启动 quest-engine 控制事件订阅者,
+    // 消费 TUI 发布的 QuestPauseRequested/QuestResumeRequested,
+    // 形成 TUI → EventBus → 上游处理 → 状态反馈的端到端路径。
+    // 这里使用最小化的 QuestEngine 实例(仅支持控制订阅演示)。
+    let engine = Arc::new(quest_engine::QuestEngine::new(bus.clone()));
+    let control_handle = quest_engine::spawn_control_subscriber(Arc::clone(&engine), bus.clone());
 
     // 启动 TUI 事件循环(阻塞直到用户退出)
     // WHY 先保存结果再 shutdown:即使 run() 返回 Err,也必须清理 DataPipeline
     // 后台任务,避免 orphan task(§4.4 反模式 #7)。
     let run_result = app.run().context("TUI 运行失败");
+
+    // 中止上游控制订阅者;EventBus 仍由 pipeline 等持有,不会提前关闭。
+    control_handle.abort();
 
     // 中止并清理数据管道后台任务。
     pipeline.shutdown().await;

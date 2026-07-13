@@ -15,8 +15,9 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
-use crate::popup::{PopupKind, Severity};
+use crate::popup::Severity;
 use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
+use event_bus::VoteValue;
 
 /// 命令面板 — 解析并执行底部输入栏的命令
 ///
@@ -183,22 +184,16 @@ impl CommandPalette {
                     state.set_status("pause requires a quest id", Severity::Error);
                     return None;
                 }
-                Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
-                    "Pause quest",
-                    arg,
-                    format!("pause:{arg}"),
-                )))
+                // M4 review fix:统一走 TuiCommand::RequestQuestPause,
+                // 由 TuiApp::apply_command 负责弹出确认框,避免两条控制路径并存。
+                Some(TuiCommand::RequestQuestPause(arg.to_string()))
             }
             "resume" => {
                 if arg.is_empty() {
                     state.set_status("resume requires a quest id", Severity::Error);
                     return None;
                 }
-                Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
-                    "Resume quest",
-                    arg,
-                    format!("resume:{arg}"),
-                )))
+                Some(TuiCommand::RequestQuestResume(arg.to_string()))
             }
             "vote" => Self::parse_vote_command(arg, state),
             _ => {
@@ -224,8 +219,10 @@ impl CommandPalette {
         let vote_str = parts.next().unwrap_or("").trim();
         let proposal_id = parts.next().unwrap_or("").trim();
 
-        match vote_str.to_lowercase().as_str() {
-            "yes" | "no" | "abstain" => {}
+        let vote = match vote_str.to_lowercase().as_str() {
+            "yes" => VoteValue::Yes,
+            "no" => VoteValue::No,
+            "abstain" => VoteValue::Abstain,
             _ => {
                 state.set_status(
                     format!("invalid vote '{}': expected yes|no|abstain", vote_str),
@@ -240,11 +237,11 @@ impl CommandPalette {
             return None;
         }
 
-        Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
-            &format!("Vote {vote_str} on proposal"),
-            proposal_id,
-            format!("vote:{vote_str}:{proposal_id}"),
-        )))
+        // M4 review fix:统一走 TuiCommand::RequestVote,由 TuiApp 负责确认弹窗。
+        Some(TuiCommand::RequestVote {
+            proposal_id: proposal_id.to_string(),
+            vote,
+        })
     }
 }
 

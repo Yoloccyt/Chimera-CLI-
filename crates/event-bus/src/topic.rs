@@ -127,7 +127,7 @@ impl NexusEvent {
             | Self::PredictionRolledBack { .. }
             | Self::SsraFusionCompleted { .. } => EventTopic::Execution,
 
-            // === Parliament (8 + M4 1 个) === L8 Parliament 投票/共识/预算
+            // === Parliament (8 + P1.2 1 + M4 1 个) === L8 Parliament 投票/共识/预算
             Self::ConsensusReached { .. }
             | Self::VoteCast { .. }
             | Self::DebateStarted { .. }
@@ -135,19 +135,23 @@ impl NexusEvent {
             | Self::BudgetAdjusted { .. }
             | Self::BudgetStatsReported { .. }
             | Self::BudgetExceeded { .. }
+            // P1.2 实时数据驱动面板:结构化预算指标
             | Self::BudgetMetricsUpdated { .. }
+            // M4 双向控制:投票请求
             | Self::VoteCastRequested { .. } => EventTopic::Parliament,
 
-            // === Quest (9 + M4 4 个) === L9 Quest 意图/任务/检查点
+            // === Quest (7 + P1.2 2 + M4 4 个) === L9 Quest 意图/任务/检查点
             Self::UserIntentEncoded { .. }
             | Self::QuestCreated { .. }
             | Self::QuestProgressUpdated { .. }
+            // P1.2 实时数据驱动面板:完整列表对齐与结束移除
             | Self::QuestListUpdated { .. }
             | Self::QuestCompleted { .. }
             | Self::ThinkingModeSwitched { .. }
             | Self::CheckpointSaved { .. }
             | Self::CheckpointLoaded { .. }
             | Self::ModelRouteSelected { .. }
+            // M4 双向控制:Quest 控制请求与状态反馈
             | Self::QuestPauseRequested { .. }
             | Self::QuestResumeRequested { .. }
             | Self::RefreshStateRequested { .. }
