@@ -6,6 +6,10 @@ edition.workspace = true
 [dependencies]
 # nexus-core:L1 核心类型(配置类型定义,向下依赖符合 §2.2 铁律)
 nexus-core = { path = "../nexus-core" }
+# event-bus:L1 事件总线,TUI 实时数据订阅依赖(向下依赖符合 §2.2 铁律)
+event-bus = { path = "../event-bus" }
+# chimera-tui:L10 Interface 层 TUI 界面(ratatui + crossterm)
+chimera-tui = { path = "../chimera-tui" }
 # Clap:子命令式 CLI 框架,启用 derive 宏、env 变量支持、cargo 元信息
 clap = { workspace = true }
 # Figment:多源配置合并(默认 > File > Env > CLI 优先级)
