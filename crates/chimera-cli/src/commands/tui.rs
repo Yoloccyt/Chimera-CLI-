@@ -13,8 +13,9 @@ use crate::config::ChimeraConfig;
 pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
     tracing::info!("启动 TUI 交互界面");
 
-    // 创建事件总线并订阅实时事件。EventSubscriber::new 内部先同步 subscribe，
-    // 再 spawn 后台转发任务，遵循 subscribe-before-spawn 规则(§4.4 反模式 #3)。
+    // M0: 为当前 TUI 会话创建本地事件总线；真正的全系统 EventBus 共享将在后续里程碑接入。
+    // EventSubscriber::new 内部先同步 subscribe，再 spawn 后台转发任务，
+    // 遵循 subscribe-before-spawn 规则(§4.4 反模式 #3)。
     let bus = event_bus::EventBus::new();
     let subscriber = chimera_tui::EventSubscriber::new(bus.clone());
 

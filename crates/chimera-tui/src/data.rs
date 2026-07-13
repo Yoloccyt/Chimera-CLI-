@@ -326,7 +326,12 @@ impl DataPipeline {
                 interval.tick().await;
 
                 // 取出订阅者引用;若已被 shutdown 取走,则退出循环。
-                let mut guard = subscriber_clone.lock().unwrap_or_else(|e| e.into_inner());
+                let mut guard = subscriber_clone.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!(
+                        "TUI data pipeline subscriber mutex was poisoned; recovering state"
+                    );
+                    poisoned.into_inner()
+                });
                 let Some(sub) = guard.as_mut() else {
                     break;
                 };
@@ -376,7 +381,12 @@ impl DataPipeline {
                     latest_events: latest_events.clone(),
                     budget_metrics: budget_sync.metrics(),
                 };
-                let mut guard = snapshot_clone.lock().unwrap_or_else(|e| e.into_inner());
+                let mut guard = snapshot_clone.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!(
+                        "TUI data pipeline snapshot mutex was poisoned; recovering state"
+                    );
+                    poisoned.into_inner()
+                });
                 *guard = snap;
             }
         });
@@ -391,7 +401,10 @@ impl DataPipeline {
 
     /// 非阻塞读取当前快照
     pub fn snapshot(&self) -> DataSnapshot {
-        let guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = self.snapshot.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("TUI data pipeline snapshot mutex was poisoned; recovering state");
+            poisoned.into_inner()
+        });
         guard.clone()
     }
 
@@ -409,14 +422,25 @@ impl DataPipeline {
         let sub = self
             .subscriber
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("TUI data pipeline subscriber mutex was poisoned; recovering state");
+                poisoned.into_inner()
+            })
             .take();
         if let Some(mut sub) = sub {
             sub.shutdown().await;
         }
 
         // 取出 JoinHandle 所有权后再 abort + await，避免 `&self` 无法消费 handle。
-        let Some(handle) = self.task.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        let Some(handle) = self
+            .task
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("TUI data pipeline task mutex was poisoned; recovering state");
+                poisoned.into_inner()
+            })
+            .take()
+        else {
             return;
         };
         // abort 唤醒可能正在 interval.tick() 上等待的任务，再 await 确保资源释放，

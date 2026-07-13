@@ -68,7 +68,10 @@ impl EventSubscriber {
                     event = rx.recv() => {
                         match event {
                             Ok(event) => {
-                                let mut buf = buffer_clone.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut buf = buffer_clone.lock().unwrap_or_else(|poisoned| {
+                                    tracing::warn!("TUI event subscriber buffer mutex was poisoned; recovering state");
+                                    poisoned.into_inner()
+                                });
                                 if buf.len() >= BUFFER_CAPACITY {
                                     // 缓冲区满时丢弃最旧事件,保持最新 1024 条,
                                     // 避免 TUI 消费慢导致内存无限增长。
@@ -111,7 +114,10 @@ impl EventSubscriber {
     ///
     /// 返回 `None` 表示当前缓冲区为空。
     pub fn try_recv(&mut self) -> Option<NexusEvent> {
-        let mut buf = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buf = self.buffer.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("TUI event subscriber buffer mutex was poisoned; recovering state");
+            poisoned.into_inner()
+        });
         buf.pop_front()
     }
 
@@ -134,6 +140,15 @@ impl EventSubscriber {
             handle.abort();
             // abort 后 await 可捕获 JoinError;忽略是因为任务已被显式取消。
             let _ = handle.await;
+        }
+    }
+}
+
+impl Drop for EventSubscriber {
+    fn drop(&mut self) {
+        // 若未显式 shutdown,至少 abort 转发任务,避免 orphan task。
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
         }
     }
 }
