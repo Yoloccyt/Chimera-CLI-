@@ -33,11 +33,13 @@ pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
     .context("TUI 初始化失败")?;
 
     // 启动 TUI 事件循环(阻塞直到用户退出)
-    app.run().context("TUI 运行失败")?;
+    // WHY 先保存结果再 shutdown:即使 run() 返回 Err,也必须清理 DataPipeline
+    // 后台任务,避免 orphan task(§4.4 反模式 #7)。
+    let run_result = app.run().context("TUI 运行失败");
 
     // 中止并清理数据管道后台任务。
     pipeline.shutdown().await;
 
     tracing::info!("TUI 已退出");
-    Ok(())
+    run_result
 }

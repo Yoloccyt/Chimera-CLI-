@@ -35,8 +35,8 @@ use tokio::time::{self, Duration};
 pub struct DataSnapshot {
     /// 当前活动 Quest 列表
     ///
-    /// 来源:聚合 `QuestCreated` / `QuestListUpdated` 等事件。
-    /// 使用 `nexus_core::Quest` 保证与 L1 领域模型一致。
+    /// 来源:聚合 `QuestListUpdated`(替换整个列表)与 `QuestCompleted`
+    /// (按 quest_id 移除)事件。使用 `nexus_core::Quest` 保证与 L1 领域模型一致。
     pub quest_list: Vec<Quest>,
 
     /// 最近接收到的 NexusEvent,按时间顺序,旧在前
@@ -53,8 +53,7 @@ pub struct DataSnapshot {
 ///
 /// WHY 不直接复用 `efficiency-monitor` 类型:该 crate 位于 L9,
 /// L10 不能直接依赖。本结构体只保留面板展示必需字段,
-/// 由 `BudgetStatsReported` / `BudgetAdjusted` / `BudgetExceeded`
-/// 等事件聚合而来。
+/// 由 `BudgetMetricsUpdated` 事件直接填充而来。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BudgetMetrics {
     /// 总消耗量(单位由预算类型决定)
@@ -98,6 +97,7 @@ pub struct DataSourceConfig {
     /// Quest 列表保留的最大条数
     pub max_quest_list_size: usize,
     /// 预算指标无更新时的过期时间(毫秒),当前占位
+    // TODO(M2): wire up budget metrics TTL/expiry when the panel needs staleness handling.
     pub budget_metrics_ttl_ms: u64,
     /// tick 间隔(毫秒),控制快照生成频率
     pub tick_interval_ms: u64,
@@ -447,6 +447,33 @@ impl DataPipeline {
         // 避免 orphan task(§4.4 反模式 #7)。
         handle.abort();
         let _ = handle.await;
+    }
+}
+
+// WHY 实现 Drop:调用者若忘记 `shutdown()` 或提前 drop DataPipeline,
+// 仍必须中止后台任务,避免 tokio::task::JoinHandle 被 drop 后任务继续运行
+// 成为 orphan task(§4.4 反模式 #7)。
+// Drop 仅作为兜底;正常路径仍应显式调用 `shutdown().await` 以优雅关闭 subscriber。
+impl Drop for DataPipeline {
+    fn drop(&mut self) {
+        // 取出 JoinHandle 所有权后显式 abort;若直接 drop handle,tokio 会 detach
+        // 任务,导致其在后台继续运行。
+        if let Some(handle) = self
+            .task
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(
+                    "TUI data pipeline task mutex was poisoned during drop; recovering state"
+                );
+                poisoned.into_inner()
+            })
+            .take()
+        {
+            handle.abort();
+        }
+
+        // subscriber 字段会在 DataPipeline drop 后按声明顺序释放,
+        // EventSubscriber 自己的 Drop 会 abort 其转发任务;此处无需额外处理。
     }
 }
 

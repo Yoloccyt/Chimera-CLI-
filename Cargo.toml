@@ -77,6 +77,10 @@ proptest = { version = "1.5", features = ["alloc"] }
 rand = "0.8"
 # tracing-test:测试中捕获 tracing 日志,用于验证 warn/error 日志输出(SubTask 17.2)
 tracing-test = "0.2.5"
+# 本地 workspace crate:供成员通过 `workspace = true` 统一引用,
+# 版本号由 workspace.package 集中管理。
+event-bus = { path = "crates/event-bus" }
+chimera-tui = { path = "crates/chimera-tui" }
 
 # ============================================================
 # E2E 集成测试配置(Week 6 Task 6)
