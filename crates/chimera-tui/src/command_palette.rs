@@ -5,8 +5,8 @@
 //! # 设计决策(WHY)
 //! - 命令面板为无状态解析器:输入状态保存在 `TuiState` 中,
 //!   便于面板与 `TuiApp` 统一访问。
-//! - M1 仅支持面板切换与退出命令;搜索模式为占位,
-//!   后续可在 `submit` 中接入真实搜索逻辑。
+//! - M3 扩展命令解析,支持 `:find`/`:filter`/`:level`/`:refresh` 等
+//!   过滤器命令;搜索模式提交后设置全局关键字过滤器。
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -15,6 +15,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
+use crate::popup::Severity;
 use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
 
 /// 命令面板 — 解析并执行底部输入栏的命令
@@ -33,7 +34,7 @@ impl CommandPalette {
     pub fn render(&self, state: &TuiState, area: Rect, buf: &mut Buffer) {
         let (prefix, title) = match state.input_mode {
             InputMode::Command => (":", " Command "),
-            InputMode::Search => ("/", " Search (M1 stub) "),
+            InputMode::Search => ("/", " Search "),
             InputMode::Normal => return,
         };
 
@@ -55,6 +56,10 @@ impl CommandPalette {
     pub fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {
         match key.code {
             KeyCode::Esc => {
+                // WHY:搜索模式 Esc 需清除过滤器,避免残留关键字导致面板为空
+                if state.input_mode == InputMode::Search {
+                    state.filter_keyword = None;
+                }
                 state.input_mode = InputMode::Normal;
                 state.input_buffer.clear();
                 None
@@ -76,11 +81,16 @@ impl CommandPalette {
     ///
     /// 解析完成后清空输入缓冲并恢复 Normal 模式。
     pub fn submit(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
-        let input = state.input_buffer.trim();
+        let input = state.input_buffer.trim().to_string();
         let cmd = match state.input_mode {
-            InputMode::Command => Self::parse_command(input),
+            InputMode::Command => Self::parse_command(&input, state),
             InputMode::Search => {
-                // M1 搜索为占位:接受输入但不执行任何操作。
+                // M3:搜索输入作为全局关键字过滤器
+                if input.is_empty() {
+                    state.filter_keyword = None;
+                } else {
+                    state.filter_keyword = Some(input.to_lowercase());
+                }
                 None
             }
             InputMode::Normal => None,
@@ -96,21 +106,99 @@ impl CommandPalette {
     /// 支持的命令(冒号可省略,因为进入命令模式时已输入冒号):
     /// - `quest`/`parliament`/`budget`/`memory`/`security`/`health`/`log`/`help`:切换面板
     /// - `quit`:退出应用
-    fn parse_command(input: &str) -> Option<TuiCommand> {
+    /// - `find <keyword>`:设置关键字过滤器
+    /// - `filter <topic>`:设置主题过滤器
+    /// - `level <severity>`:设置级别过滤器
+    /// - `refresh`:清空过滤器(M4 将触发数据重载)
+    fn parse_command(input: &str, state: &mut TuiState) -> Option<TuiCommand> {
         let cmd = input.strip_prefix(':').unwrap_or(input).trim();
+        if cmd.is_empty() {
+            return None;
+        }
+
+        // 先处理无参数命令,避免被下面的 split 逻辑覆盖
         match cmd {
-            "quest" => Some(TuiCommand::SwitchPanel(PanelId::Quest)),
-            "parliament" => Some(TuiCommand::SwitchPanel(PanelId::Parliament)),
-            "budget" => Some(TuiCommand::SwitchPanel(PanelId::Budget)),
-            "memory" => Some(TuiCommand::SwitchPanel(PanelId::Memory)),
-            "security" => Some(TuiCommand::SwitchPanel(PanelId::Security)),
-            "health" => Some(TuiCommand::SwitchPanel(PanelId::Health)),
-            "log" => Some(TuiCommand::SwitchPanel(PanelId::Log)),
-            "help" => Some(TuiCommand::SwitchPanel(PanelId::Help)),
-            "quit" => Some(TuiCommand::Quit),
-            _ => None,
+            "quest" => return Some(TuiCommand::SwitchPanel(PanelId::Quest)),
+            "parliament" => return Some(TuiCommand::SwitchPanel(PanelId::Parliament)),
+            "budget" => return Some(TuiCommand::SwitchPanel(PanelId::Budget)),
+            "memory" => return Some(TuiCommand::SwitchPanel(PanelId::Memory)),
+            "security" => return Some(TuiCommand::SwitchPanel(PanelId::Security)),
+            "health" => return Some(TuiCommand::SwitchPanel(PanelId::Health)),
+            "log" => return Some(TuiCommand::SwitchPanel(PanelId::Log)),
+            "help" => return Some(TuiCommand::SwitchPanel(PanelId::Help)),
+            "quit" => return Some(TuiCommand::Quit),
+            "refresh" => {
+                state.clear_filters();
+                state.set_status(
+                    "filters cleared (refresh is M4 placeholder)",
+                    Severity::Info,
+                );
+                return None;
+            }
+            _ => {}
+        }
+
+        // 处理带参数命令
+        let mut parts = cmd.splitn(2, ' ');
+        let name = parts.next().unwrap_or("");
+        let arg = parts.next().unwrap_or("").trim();
+
+        match name {
+            "find" => {
+                if arg.is_empty() {
+                    state.set_status("find requires an argument", Severity::Error);
+                    return None;
+                }
+                state.filter_keyword = Some(arg.to_lowercase());
+                None
+            }
+            "filter" => {
+                if arg.is_empty() {
+                    state.set_status("filter requires an argument", Severity::Error);
+                    return None;
+                }
+                if is_valid_topic(arg) {
+                    state.filter_topic = Some(arg.to_lowercase());
+                    None
+                } else {
+                    state.set_status(
+                        format!("invalid topic '{}': expected quest|security|memory|health|parliament|budget|system", arg),
+                        Severity::Error,
+                    );
+                    None
+                }
+            }
+            "level" => {
+                if arg.is_empty() {
+                    state.set_status("level requires an argument", Severity::Error);
+                    return None;
+                }
+                let level = arg.to_lowercase();
+                if matches!(level.as_str(), "info" | "warn" | "error" | "critical") {
+                    state.filter_level = Some(level);
+                    None
+                } else {
+                    state.set_status(
+                        format!("invalid level '{}': expected info|warn|error|critical", arg),
+                        Severity::Error,
+                    );
+                    None
+                }
+            }
+            _ => {
+                state.set_status(format!("unknown command '{}'", cmd), Severity::Error);
+                None
+            }
         }
     }
+}
+
+/// 校验主题参数是否合法
+fn is_valid_topic(topic: &str) -> bool {
+    matches!(
+        topic.to_lowercase().as_str(),
+        "quest" | "security" | "memory" | "health" | "parliament" | "budget" | "system"
+    )
 }
 
 #[cfg(test)]
@@ -127,35 +215,35 @@ mod tests {
     #[test]
     fn test_parse_panel_commands() {
         assert_eq!(
-            CommandPalette::parse_command("quest"),
+            CommandPalette::parse_command("quest", &mut TuiState::new()),
             Some(TuiCommand::SwitchPanel(PanelId::Quest))
         );
         assert_eq!(
-            CommandPalette::parse_command("parliament"),
+            CommandPalette::parse_command("parliament", &mut TuiState::new()),
             Some(TuiCommand::SwitchPanel(PanelId::Parliament))
         );
         assert_eq!(
-            CommandPalette::parse_command("budget"),
+            CommandPalette::parse_command("budget", &mut TuiState::new()),
             Some(TuiCommand::SwitchPanel(PanelId::Budget))
         );
         assert_eq!(
-            CommandPalette::parse_command("memory"),
+            CommandPalette::parse_command("memory", &mut TuiState::new()),
             Some(TuiCommand::SwitchPanel(PanelId::Memory))
         );
         assert_eq!(
-            CommandPalette::parse_command("security"),
+            CommandPalette::parse_command("security", &mut TuiState::new()),
             Some(TuiCommand::SwitchPanel(PanelId::Security))
         );
         assert_eq!(
-            CommandPalette::parse_command("health"),
+            CommandPalette::parse_command("health", &mut TuiState::new()),
             Some(TuiCommand::SwitchPanel(PanelId::Health))
         );
         assert_eq!(
-            CommandPalette::parse_command("log"),
+            CommandPalette::parse_command("log", &mut TuiState::new()),
             Some(TuiCommand::SwitchPanel(PanelId::Log))
         );
         assert_eq!(
-            CommandPalette::parse_command("help"),
+            CommandPalette::parse_command("help", &mut TuiState::new()),
             Some(TuiCommand::SwitchPanel(PanelId::Help))
         );
     }
@@ -163,14 +251,121 @@ mod tests {
     #[test]
     fn test_parse_quit_command() {
         assert_eq!(
-            CommandPalette::parse_command("quit"),
+            CommandPalette::parse_command("quit", &mut TuiState::new()),
             Some(TuiCommand::Quit)
         );
     }
 
     #[test]
     fn test_parse_unknown_command() {
-        assert_eq!(CommandPalette::parse_command("foo"), None);
+        let mut state = TuiState::new();
+        assert_eq!(CommandPalette::parse_command("foo", &mut state), None);
+        assert!(
+            state
+                .status_message
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("unknown command"),
+            "status should report unknown command"
+        );
+    }
+
+    #[test]
+    fn test_parse_find_command() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("find error", &mut state);
+        assert_eq!(cmd, None);
+        assert_eq!(state.filter_keyword, Some("error".into()));
+    }
+
+    #[test]
+    fn test_parse_filter_command_valid() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("filter security", &mut state);
+        assert_eq!(cmd, None);
+        assert_eq!(state.filter_topic, Some("security".into()));
+    }
+
+    #[test]
+    fn test_parse_filter_command_invalid() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("filter foo", &mut state);
+        assert_eq!(cmd, None);
+        assert!(state.filter_topic.is_none());
+        assert!(
+            state
+                .status_message
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("invalid topic"),
+            "status should report invalid topic"
+        );
+    }
+
+    #[test]
+    fn test_parse_level_command_valid() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("level critical", &mut state);
+        assert_eq!(cmd, None);
+        assert_eq!(state.filter_level, Some("critical".into()));
+    }
+
+    #[test]
+    fn test_parse_level_command_invalid() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("level foo", &mut state);
+        assert_eq!(cmd, None);
+        assert!(state.filter_level.is_none());
+        assert!(
+            state
+                .status_message
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("invalid level"),
+            "status should report invalid level"
+        );
+    }
+
+    #[test]
+    fn test_parse_refresh_command_clears_filters() {
+        let mut state = TuiState::new();
+        state.filter_keyword = Some("foo".into());
+        state.filter_topic = Some("security".into());
+        state.filter_level = Some("critical".into());
+
+        let cmd = CommandPalette::parse_command("refresh", &mut state);
+        assert_eq!(cmd, None);
+        assert!(state.filter_keyword.is_none());
+        assert!(state.filter_topic.is_none());
+        assert!(state.filter_level.is_none());
+        assert!(
+            state
+                .status_message
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("filters cleared"),
+            "status should confirm refresh"
+        );
+    }
+
+    #[test]
+    fn test_parse_missing_argument() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("find", &mut state);
+        assert_eq!(cmd, None);
+        assert!(
+            state
+                .status_message
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("requires an argument"),
+            "status should report missing argument"
+        );
     }
 
     #[test]
@@ -196,6 +391,33 @@ mod tests {
     }
 
     #[test]
+    fn test_submit_search_sets_keyword() {
+        let mut palette = CommandPalette::new();
+        let mut state = TuiState::new();
+        state.input_mode = InputMode::Search;
+        state.input_buffer = "Error".into();
+
+        let cmd = palette.submit(&mut state);
+        assert_eq!(cmd, None);
+        assert_eq!(state.input_mode, InputMode::Normal);
+        assert!(state.input_buffer.is_empty());
+        assert_eq!(state.filter_keyword, Some("error".into()));
+    }
+
+    #[test]
+    fn test_submit_empty_search_clears_keyword() {
+        let mut palette = CommandPalette::new();
+        let mut state = TuiState::new();
+        state.input_mode = InputMode::Search;
+        state.filter_keyword = Some("old".into());
+        state.input_buffer = "   ".into();
+
+        let cmd = palette.submit(&mut state);
+        assert_eq!(cmd, None);
+        assert!(state.filter_keyword.is_none());
+    }
+
+    #[test]
     fn test_handle_key_appends_input() {
         let mut palette = CommandPalette::new();
         let mut state = TuiState::new();
@@ -218,6 +440,25 @@ mod tests {
         );
 
         assert_eq!(cmd, None);
+        assert_eq!(state.input_mode, InputMode::Normal);
+        assert!(state.input_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_handle_key_esc_in_search_clears_keyword() {
+        let mut palette = CommandPalette::new();
+        let mut state = TuiState::new();
+        state.input_mode = InputMode::Search;
+        state.filter_keyword = Some("old".into());
+        state.input_buffer = "new".into();
+
+        let cmd = palette.handle_key(
+            KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
+            &mut state,
+        );
+
+        assert_eq!(cmd, None);
+        assert!(state.filter_keyword.is_none());
         assert_eq!(state.input_mode, InputMode::Normal);
         assert!(state.input_buffer.is_empty());
     }

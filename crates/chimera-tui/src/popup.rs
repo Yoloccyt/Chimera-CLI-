@@ -5,13 +5,13 @@
 //! # 设计决策(WHY)
 //! - `PopupStack` 用 Vec 实现 LIFO:支持多层弹窗叠加,后打开的弹窗优先显示,
 //!   关闭后自动回到下层弹窗。
-//! - `PopupKind` 区分通知/详情/确认三种语义,M1 实现通知与详情渲染,
-//!   确认为占位,为 M3/M4 的用户确认流程预留扩展点。
+//! - `PopupKind` 区分通知/详情/确认三种语义,M3 完成确认弹窗渲染并支持
+//!   详情弹窗滚动,为 M4 的用户确认流程预留扩展点。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Text};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 use serde::{Deserialize, Serialize};
 
@@ -53,13 +53,17 @@ pub enum PopupKind {
         title: String,
         /// 详情内容
         content: String,
+        /// 垂直滚动偏移(行数)
+        scroll: u16,
     },
-    /// 确认弹窗 — M1 占位,包含提示与确认后执行的命令字符串
+    /// 确认弹窗 — 包含提示、Yes/No 选项与确认后执行的命令字符串
     Confirm {
         /// 提示文本
         prompt: String,
         /// 确认后执行的命令字符串(如 "quit")
         on_confirm: String,
+        /// 当前是否选中 Yes(true) 或 No(false)
+        confirmed: bool,
     },
 }
 
@@ -90,6 +94,11 @@ impl PopupStack {
         self.stack.last()
     }
 
+    /// 查看栈顶弹窗可变引用,用于更新滚动状态等
+    pub fn current_mut(&mut self) -> Option<&mut PopupKind> {
+        self.stack.last_mut()
+    }
+
     /// 弹窗栈是否为空
     pub fn is_empty(&self) -> bool {
         self.stack.is_empty()
@@ -100,10 +109,27 @@ impl PopupStack {
         self.stack.clear();
     }
 
+    /// 滚动当前详情弹窗
+    ///
+    /// `delta` 为正向下滚动,为负向上滚动。非详情弹窗被忽略。
+    pub fn scroll_current(&mut self, delta: i16) {
+        if let Some(PopupKind::Detail { scroll, .. }) = self.current_mut() {
+            let new = *scroll as i32 + delta as i32;
+            *scroll = new.clamp(0, u16::MAX as i32) as u16;
+        }
+    }
+
+    /// 切换当前确认弹窗的选中项(Yes/No)
+    pub fn toggle_confirm(&mut self) {
+        if let Some(PopupKind::Confirm { confirmed, .. }) = self.current_mut() {
+            *confirmed = !*confirmed;
+        }
+    }
+
     /// 渲染当前弹窗到缓冲区
     ///
     /// WHY 接收 `area`:调用者传入整个终端区域,弹窗自行居中计算。
-    /// M1 仅实现通知与详情弹窗;确认弹窗渲染为占位提示。
+    /// M3 实现通知、详情与确认弹窗渲染;详情弹窗支持滚动。
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         let Some(popup) = self.current() else {
             return;
@@ -135,30 +161,73 @@ impl PopupStack {
                     .wrap(Wrap { trim: true });
                 paragraph.render(popup_area, buf);
             }
-            PopupKind::Detail { title, content } => {
+            PopupKind::Detail {
+                title,
+                content,
+                scroll,
+            } => {
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .title(format!(" {title} "));
                 let paragraph = Paragraph::new(content.as_str())
                     .block(block)
-                    .wrap(Wrap { trim: true });
+                    .wrap(Wrap { trim: true })
+                    .scroll((*scroll, 0));
                 paragraph.render(popup_area, buf);
             }
-            PopupKind::Confirm { prompt, .. } => {
-                // M1 占位:仅渲染提示,不处理确认回调。
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Confirm (M1 stub) ");
+            PopupKind::Confirm {
+                prompt, confirmed, ..
+            } => {
+                let block = Block::default().borders(Borders::ALL).title(" Confirm ");
+                let yes_style = if *confirmed {
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    Style::default().fg(Color::Green)
+                };
+                let no_style = if *confirmed {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default()
+                        .fg(Color::Red)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                };
                 let lines = vec![
                     Line::from(prompt.as_str()),
                     Line::from(""),
-                    Line::from("Press Enter to confirm, Esc to cancel."),
+                    Line::from(vec![
+                        Span::styled("[Yes]", yes_style),
+                        Span::raw("   "),
+                        Span::styled("[No]", no_style),
+                    ]),
+                    Line::from(""),
+                    Line::from("Left/Right to select, Enter to confirm, Esc to cancel."),
                 ];
                 let paragraph = Paragraph::new(Text::from(lines))
                     .block(block)
                     .wrap(Wrap { trim: true });
                 paragraph.render(popup_area, buf);
             }
+        }
+    }
+}
+
+/// 只读辅助方法,避免测试/调用方直接解构 enum
+#[cfg(test)]
+impl PopupKind {
+    /// 返回 Detail 弹窗的滚动偏移;非 Detail 返回 None
+    pub(crate) fn detail_scroll(&self) -> Option<u16> {
+        match self {
+            PopupKind::Detail { scroll, .. } => Some(*scroll),
+            _ => None,
+        }
+    }
+
+    fn is_confirmed(&self) -> bool {
+        match self {
+            PopupKind::Confirm { confirmed, .. } => *confirmed,
+            _ => false,
         }
     }
 }
@@ -202,6 +271,7 @@ mod tests {
         stack.push(PopupKind::Detail {
             title: "first".into(),
             content: "content".into(),
+            scroll: 0,
         });
         stack.push(PopupKind::Notification {
             message: "second".into(),
@@ -234,5 +304,40 @@ mod tests {
         assert_eq!(Severity::Info.color(), Color::Cyan);
         assert_eq!(Severity::Warning.color(), Color::Yellow);
         assert_eq!(Severity::Error.color(), Color::Red);
+    }
+
+    #[test]
+    fn test_detail_scroll() {
+        let mut stack = PopupStack::new();
+        stack.push(PopupKind::Detail {
+            title: "detail".into(),
+            content: "line1\nline2\nline3".into(),
+            scroll: 0,
+        });
+
+        stack.scroll_current(1);
+        assert_eq!(stack.current().unwrap().detail_scroll(), Some(1));
+
+        stack.scroll_current(-3);
+        assert_eq!(stack.current().unwrap().detail_scroll(), Some(0));
+
+        stack.scroll_current(10);
+        assert_eq!(stack.current().unwrap().detail_scroll(), Some(10));
+    }
+
+    #[test]
+    fn test_confirm_toggle() {
+        let mut stack = PopupStack::new();
+        stack.push(PopupKind::Confirm {
+            prompt: "quit?".into(),
+            on_confirm: "quit".into(),
+            confirmed: true,
+        });
+
+        assert!(stack.current().unwrap().is_confirmed());
+        stack.toggle_confirm();
+        assert!(!stack.current().unwrap().is_confirmed());
+        stack.toggle_confirm();
+        assert!(stack.current().unwrap().is_confirmed());
     }
 }

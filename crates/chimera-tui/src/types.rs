@@ -206,6 +206,12 @@ pub struct TuiState {
     pub popup_stack: PopupStack,
     /// 临时状态栏消息(内容 + 严重级别)
     pub status_message: Option<(String, Severity)>,
+    /// 关键字过滤器 — 应用于 Log / Quest 面板
+    pub filter_keyword: Option<String>,
+    /// 主题过滤器 — 应用于 Log 面板的事件主题
+    pub filter_topic: Option<String>,
+    /// 级别过滤器 — 应用于 Log 面板的事件严重级别
+    pub filter_level: Option<String>,
 }
 
 impl TuiState {
@@ -227,6 +233,9 @@ impl TuiState {
             latest_events: VecDeque::new(),
             popup_stack: PopupStack::new(),
             status_message: None,
+            filter_keyword: None,
+            filter_topic: None,
+            filter_level: None,
         }
     }
 
@@ -243,6 +252,18 @@ impl TuiState {
     /// 清空输入缓冲
     pub fn clear_input(&mut self) {
         self.input_buffer.clear();
+    }
+
+    /// 清空所有过滤器
+    pub fn clear_filters(&mut self) {
+        self.filter_keyword = None;
+        self.filter_topic = None;
+        self.filter_level = None;
+    }
+
+    /// 设置状态栏消息
+    pub fn set_status(&mut self, message: impl Into<String>, severity: Severity) {
+        self.status_message = Some((message.into(), severity));
     }
 
     /// 增加帧计数
@@ -339,6 +360,41 @@ mod tests {
         let json = serde_json::to_string(&panel).unwrap();
         let restored: PanelId = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, panel);
+    }
+
+    #[test]
+    fn test_state_filters_roundtrip() {
+        let mut state = TuiState::new();
+        state.filter_keyword = Some("foo".into());
+        state.filter_topic = Some("security".into());
+        state.filter_level = Some("critical".into());
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: TuiState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.filter_keyword, Some("foo".into()));
+        assert_eq!(restored.filter_topic, Some("security".into()));
+        assert_eq!(restored.filter_level, Some("critical".into()));
+    }
+
+    #[test]
+    fn test_state_clear_filters() {
+        let mut state = TuiState::new();
+        state.filter_keyword = Some("foo".into());
+        state.filter_topic = Some("security".into());
+        state.filter_level = Some("critical".into());
+        state.clear_filters();
+        assert!(state.filter_keyword.is_none());
+        assert!(state.filter_topic.is_none());
+        assert!(state.filter_level.is_none());
+    }
+
+    #[test]
+    fn test_state_set_status() {
+        let mut state = TuiState::new();
+        state.set_status("error", Severity::Error);
+        assert_eq!(
+            state.status_message,
+            Some(("error".into(), Severity::Error))
+        );
     }
 
     // ============================================================

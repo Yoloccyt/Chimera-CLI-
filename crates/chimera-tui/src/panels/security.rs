@@ -292,7 +292,11 @@ impl Panel for SecurityPanel {
             }
             KeyCode::Enter => {
                 if let Some((title, content)) = Self::detail_content(state, self.selected) {
-                    Some(TuiCommand::OpenPopup(PopupKind::Detail { title, content }))
+                    Some(TuiCommand::OpenPopup(PopupKind::Detail {
+                        title,
+                        content,
+                        scroll: 0,
+                    }))
                 } else {
                     None
                 }
@@ -381,7 +385,7 @@ mod tests {
             &mut state,
         );
         match cmd {
-            Some(TuiCommand::OpenPopup(PopupKind::Detail { title, content })) => {
+            Some(TuiCommand::OpenPopup(PopupKind::Detail { title, content, .. })) => {
                 assert!(title.contains("Veto"));
                 assert!(content.contains("q1"));
             }

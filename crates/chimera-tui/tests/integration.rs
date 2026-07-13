@@ -20,7 +20,9 @@
 
 #![forbid(unsafe_code)]
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use event_bus::{EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
@@ -534,6 +536,7 @@ fn test_tui_popup_enter_closes() {
     app.state_mut().popup_stack.push(PopupKind::Detail {
         title: "Detail".into(),
         content: "content".into(),
+        scroll: 0,
     });
 
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -805,4 +808,171 @@ fn test_health_panel_switch_and_render() {
         "Health panel should render title, got: {}",
         &content[..content.len().min(300)]
     );
+}
+
+// ============================================================
+// K. M3 新增:搜索、过滤、鼠标与布局调整集成测试
+// ============================================================
+
+#[test]
+fn test_search_mode_filters_log_panel() {
+    // WHY:通过 '/' 进入搜索模式,提交后关键字过滤器应作用于 Log 面板
+    let snapshot = full_snapshot(
+        Vec::new(),
+        VecDeque::from([
+            NexusEvent::CacheHit {
+                metadata: EventMetadata::new("scc-cache"),
+                cache_key: "alpha".into(),
+            },
+            NexusEvent::CacheMiss {
+                metadata: EventMetadata::new("scc-cache"),
+                cache_key: "beta".into(),
+            },
+        ]),
+        BudgetMetrics::default(),
+    );
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig::default(),
+        Box::new(StaticSnapshotSource::new(snapshot)),
+    )
+    .unwrap();
+    app.update();
+    app.switch_panel_to(PanelId::Log);
+
+    // 进入搜索模式并输入关键字
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    for c in "alpha".chars() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(app.state().filter_keyword, Some("alpha".into()));
+
+    // 渲染后 Log 面板标题应包含关键字指示器
+    let content = render_to_string(&mut app, 80, 24);
+    assert!(
+        content.contains("keyword:alpha"),
+        "Log panel title should show active keyword filter, got: {}",
+        &content[..content.len().min(300)]
+    );
+}
+
+#[test]
+fn test_command_filter_and_level_applies_to_log() {
+    // WHY:`:filter` 与 `:level` 命令应设置状态过滤器并影响 Log 面板渲染
+    let snapshot = full_snapshot(
+        Vec::new(),
+        VecDeque::from([
+            NexusEvent::CacheHit {
+                metadata: EventMetadata::new("scc-cache"),
+                cache_key: "k1".into(),
+            },
+            NexusEvent::BudgetExceeded {
+                metadata: EventMetadata::new("decb-governor"),
+                budget_type: "token".into(),
+                current: 9500,
+                limit: 10000,
+            },
+        ]),
+        BudgetMetrics::default(),
+    );
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig::default(),
+        Box::new(StaticSnapshotSource::new(snapshot)),
+    )
+    .unwrap();
+    app.update();
+    app.switch_panel_to(PanelId::Log);
+
+    // 执行 :filter budget
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+    for c in "filter budget".chars() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.state().filter_topic, Some("budget".into()));
+
+    // 执行 :level critical
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+    for c in "level critical".chars() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.state().filter_level, Some("critical".into()));
+
+    let content = render_to_string(&mut app, 80, 24);
+    assert!(
+        content.contains("topic:budget"),
+        "Log panel title should show topic filter"
+    );
+    assert!(
+        content.contains("level:critical"),
+        "Log panel title should show level filter"
+    );
+}
+
+#[test]
+fn test_refresh_command_clears_filters() {
+    let mut app = make_app();
+    app.state_mut().filter_keyword = Some("old".into());
+    app.state_mut().filter_topic = Some("security".into());
+    app.state_mut().filter_level = Some("error".into());
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+    for c in "refresh".chars() {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(app.state().filter_keyword.is_none());
+    assert!(app.state().filter_topic.is_none());
+    assert!(app.state().filter_level.is_none());
+}
+
+#[test]
+fn test_ctrl_up_down_adjusts_main_panel_ratio() {
+    let mut app = make_app();
+
+    // 先渲染一帧以设置 last_area,否则鼠标事件会跳过
+    let _ = render_to_string(&mut app, 80, 24);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL));
+    assert!(app.main_panel_ratio() > 0.7 - f32::EPSILON);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL));
+    assert!((app.main_panel_ratio() - 0.7).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_mouse_tab_click_switches_panel_integration() {
+    let mut app = make_app();
+    // 先渲染以设置 last_area
+    let _ = render_to_string(&mut app, 80, 24);
+
+    // 点击标签栏第二个标签区域(约第 10-20 列)
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 12,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(app.current_panel(), PanelId::Parliament);
+}
+
+#[test]
+fn test_mouse_command_bar_click_enters_command_mode() {
+    let mut app = make_app();
+    let _ = render_to_string(&mut app, 80, 24);
+
+    app.handle_mouse_event(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 10,
+        row: 20,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(app.state().input_mode, InputMode::Command);
 }

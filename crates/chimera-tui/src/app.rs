@@ -14,14 +14,17 @@
 //! - M2 迁移 Parliament/Log/Help 到独立模块,并新增 Memory/Security/Health 面板。
 //! - M2 清理 `TuiState.current_panel` 双来源:当前面板以 `FocusManager` 为准,
 //!   `TuiApp::current_panel()` 对外暴露。
+//! - M3 增加鼠标支持、可调整主面板比例、弹窗滚动与确认弹窗处理。
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
@@ -39,13 +42,20 @@ use crate::panels::{
     BudgetPanel, HealthPanel, HelpPanel, LogPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel,
     SecurityPanel,
 };
-use crate::popup::Severity;
+use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
+
+/// 主面板比例调整步长
+const RATIO_STEP: f32 = 0.05;
+/// 主面板比例最小值
+const RATIO_MIN: f32 = 0.3;
+/// 主面板比例最大值
+const RATIO_MAX: f32 = 0.9;
 
 /// TUI 应用 — Chimera 终端用户界面核心
 ///
 /// 维护配置与状态,提供:
-/// - 终端事件循环(键盘事件处理)
+/// - 终端事件循环(键盘/鼠标事件处理)
 /// - 多面板渲染(基于 ratatui 与 `Panel` trait)
 /// - 状态管理(面板切换、退出、命令面板、弹窗栈)
 ///
@@ -54,6 +64,8 @@ use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
 pub struct TuiApp {
     /// TUI 配置(只读,构造后不变)
     config: TuiConfig,
+    /// 当前会话的主面板比例(从配置初始化,不持久化到文件)
+    main_panel_ratio: f32,
     /// 应用状态(可变,事件循环中更新)
     state: TuiState,
     /// 数据源(抽象,支持内存桩、事件管道或测试替身)
@@ -74,6 +86,8 @@ pub struct TuiApp {
     ///
     /// WHY M1 清理项 #5:仅在实际变化时通知面板焦点变化,减少无效回调。
     last_focused: Option<PanelId>,
+    /// 最后一帧的终端区域,用于鼠标事件命中测试
+    last_area: Rect,
 }
 
 impl TuiApp {
@@ -111,15 +125,18 @@ impl TuiApp {
         let panel_ids: Vec<PanelId> = panels.iter().map(|p| p.id()).collect();
         let focus_manager = FocusManager::new(panel_ids);
         let state = TuiState::new();
+        let main_panel_ratio = config.main_panel_ratio;
 
         Ok(Self {
             config,
+            main_panel_ratio,
             state,
             data_source,
             panels,
             focus_manager,
             command_palette: CommandPalette::new(),
             last_focused: None,
+            last_area: Rect::default(),
         })
     }
 
@@ -136,6 +153,11 @@ impl TuiApp {
     /// 返回状态可变引用(测试与外部控制用)
     pub fn state_mut(&mut self) -> &mut TuiState {
         &mut self.state
+    }
+
+    /// 返回当前主面板比例(会话级,不持久化)
+    pub fn main_panel_ratio(&self) -> f32 {
+        self.main_panel_ratio
     }
 
     /// 返回当前焦点面板
@@ -207,14 +229,9 @@ impl TuiApp {
             return;
         }
 
-        // 弹窗激活时:Esc/Enter 关闭当前弹窗,其他按键忽略
+        // 弹窗激活时:优先处理弹窗级交互
         if !self.state.popup_stack.is_empty() {
-            match key.code {
-                KeyCode::Esc | KeyCode::Enter => {
-                    self.state.popup_stack.pop();
-                }
-                _ => {}
-            }
+            self.handle_popup_key(key);
             return;
         }
 
@@ -253,6 +270,9 @@ impl TuiApp {
             KeyCode::F(6) => self.switch_panel_to(PanelId::Memory),
             KeyCode::F(7) => self.switch_panel_to(PanelId::Security),
             KeyCode::F(8) => self.switch_panel_to(PanelId::Health),
+            KeyCode::Up | KeyCode::Down if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                self.adjust_main_panel_ratio(key.code == KeyCode::Up);
+            }
             _ => {
                 // 其他按键委托给当前焦点面板
                 let focused = self.focus_manager.focused();
@@ -263,6 +283,59 @@ impl TuiApp {
                 }
             }
         }
+    }
+
+    /// 处理弹窗激活时的键盘事件
+    fn handle_popup_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.state.popup_stack.pop();
+            }
+            KeyCode::Enter => {
+                // 确认弹窗且选中 Yes 时执行关联命令
+                if let Some(PopupKind::Confirm {
+                    on_confirm,
+                    confirmed,
+                    ..
+                }) = self.state.popup_stack.current()
+                {
+                    if *confirmed {
+                        let cmd = on_confirm.clone();
+                        self.state.popup_stack.pop();
+                        self.apply_confirm_command(&cmd);
+                    } else {
+                        self.state.popup_stack.pop();
+                    }
+                } else {
+                    self.state.popup_stack.pop();
+                }
+            }
+            KeyCode::Up => {
+                self.state.popup_stack.scroll_current(-1);
+            }
+            KeyCode::Down => {
+                self.state.popup_stack.scroll_current(1);
+            }
+            KeyCode::Left | KeyCode::Right => {
+                self.state.popup_stack.toggle_confirm();
+            }
+            _ => {}
+        }
+    }
+
+    /// 根据确认弹窗的命令字符串执行动作
+    fn apply_confirm_command(&mut self, cmd: &str) {
+        if cmd == "quit" {
+            self.quit();
+        }
+    }
+
+    /// 调整主面板比例
+    ///
+    /// `increase` 为 true 时增大比例,否则减小。限制在 [RATIO_MIN, RATIO_MAX]。
+    fn adjust_main_panel_ratio(&mut self, increase: bool) {
+        let delta = if increase { RATIO_STEP } else { -RATIO_STEP };
+        self.main_panel_ratio = (self.main_panel_ratio + delta).clamp(RATIO_MIN, RATIO_MAX);
     }
 
     /// 执行高层命令
@@ -282,20 +355,13 @@ impl TuiApp {
     ///
     /// # 布局
     /// - 顶部:面板标签栏(1 行,含边框)
-    /// - 中部:主面板(自适应高度)
+    /// - 中部:主面板(占 `main_panel_ratio`)
     /// - 底部:命令面板(激活时)或状态栏(普通模式)
     /// - 最上层:弹窗叠加
     pub fn render(&mut self, frame: &mut Frame<'_>) {
         let area = frame.area();
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // 标签栏
-                Constraint::Min(1),    // 主面板
-                Constraint::Length(3), // 底部命令面板或状态栏(含边框)
-            ])
-            .split(area);
+        self.last_area = area;
+        let chunks = self.layout(area);
 
         self.render_tabs(frame, chunks[0]);
         self.render_main_panel(frame, chunks[1]);
@@ -311,6 +377,27 @@ impl TuiApp {
         if !self.state.popup_stack.is_empty() {
             self.state.popup_stack.render(area, frame.buffer_mut());
         }
+    }
+
+    /// 计算当前布局,返回 [tabs, main, bottom] 三个区域
+    ///
+    /// WHY 独立方法:事件处理中需要知道各区域位置以响应鼠标点击,
+    /// 与渲染复用同一套布局逻辑。
+    fn layout(&self, area: Rect) -> [Rect; 3] {
+        let tab_and_rest = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(0)])
+            .split(area);
+
+        let main_and_bottom = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage((self.main_panel_ratio * 100.0) as u16),
+                Constraint::Min(3),
+            ])
+            .split(tab_and_rest[1]);
+
+        [tab_and_rest[0], main_and_bottom[0], main_and_bottom[1]]
     }
 
     /// 渲染面板标签栏
@@ -381,10 +468,11 @@ impl TuiApp {
             ),
             None => (
                 format!(
-                    " Panel: {} | Running: {} | Frame: {} ",
+                    " Panel: {} | Running: {} | Frame: {} | Ratio: {:.0}% ",
                     self.current_panel().as_str(),
                     self.state.running,
                     self.state.frame_count,
+                    self.main_panel_ratio * 100.0
                 ),
                 Color::Black,
             ),
@@ -438,6 +526,12 @@ impl TuiApp {
         execute!(stdout, EnterAlternateScreen)
             .map_err(|e| TuiError::TerminalInit(e.to_string()))?;
 
+        // M3:按配置启用鼠标捕获
+        if self.config.enable_mouse {
+            execute!(stdout, event::EnableMouseCapture)
+                .map_err(|e| TuiError::TerminalInit(e.to_string()))?;
+        }
+
         // 步骤 2:创建终端
         let backend = CrosstermBackend::new(stdout);
         let mut terminal =
@@ -449,8 +543,12 @@ impl TuiApp {
 
         // 步骤 4:恢复终端(无论事件循环成功与否)
         // WHY 恢复在 result 返回前:确保终端状态不残留,即使出错也要恢复
+        let stdout = terminal.backend_mut();
+        if self.config.enable_mouse {
+            let _ = execute!(stdout, event::DisableMouseCapture);
+        }
         disable_raw_mode().map_err(|e| TuiError::TerminalRestore(e.to_string()))?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)
+        execute!(stdout, LeaveAlternateScreen)
             .map_err(|e| TuiError::TerminalRestore(e.to_string()))?;
 
         result
@@ -494,15 +592,62 @@ impl TuiApp {
 
     /// 处理鼠标事件
     ///
-    /// M1 未启用鼠标处理,仅按面板分发;后续可在面板中扩展点击交互。
-    fn handle_mouse_event(&mut self, mouse: MouseEvent) {
-        let focused = self.focus_manager.focused();
-        if let Some(idx) = self.panel_index(focused) {
-            if let Some(cmd) = self.panels[idx].handle_mouse(mouse, &mut self.state) {
-                self.apply_command(cmd);
+    /// M3 实现:标签栏切换、命令栏聚焦、弹窗/面板滚轮滚动。
+    pub fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        let area = self.last_area;
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let chunks = self.layout(area);
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if is_inside(mouse.column, mouse.row, chunks[0]) {
+                    self.handle_tab_click(mouse.column, chunks[0].width);
+                } else if is_inside(mouse.column, mouse.row, chunks[2]) {
+                    self.state.input_mode = InputMode::Command;
+                    self.state.input_buffer.clear();
+                }
+                // 主面板点击已在焦点上,无需额外处理
             }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if !self.state.popup_stack.is_empty() {
+                    let delta = if mouse.kind == MouseEventKind::ScrollUp {
+                        -1
+                    } else {
+                        1
+                    };
+                    self.state.popup_stack.scroll_current(delta);
+                } else if is_inside(mouse.column, mouse.row, chunks[1]) {
+                    let focused = self.focus_manager.focused();
+                    if let Some(idx) = self.panel_index(focused) {
+                        if let Some(cmd) = self.panels[idx].handle_mouse(mouse, &mut self.state) {
+                            self.apply_command(cmd);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
+
+    /// 处理标签栏点击,切换到对应面板
+    fn handle_tab_click(&mut self, column: u16, tab_area_width: u16) {
+        let panel_count = self.focus_manager.panels().len() as u16;
+        if panel_count == 0 || tab_area_width == 0 {
+            return;
+        }
+        let tab_width = tab_area_width / panel_count;
+        let index = (column / tab_width) as usize;
+        if let Some(&panel) = self.focus_manager.panels().get(index) {
+            self.switch_panel_to(panel);
+        }
+    }
+}
+
+/// 判断坐标是否落在指定区域内
+fn is_inside(column: u16, row: u16, area: Rect) -> bool {
+    column >= area.x && column < area.x + area.width && row >= area.y && row < area.y + area.height
 }
 
 #[cfg(test)]
@@ -676,6 +821,7 @@ mod tests {
     #[test]
     fn test_handle_key_f_keys_new_panels() {
         let mut app = make_app();
+
         app.handle_key_event(KeyEvent::new(KeyCode::F(6), event::KeyModifiers::NONE));
         assert_eq!(app.current_panel(), PanelId::Memory);
 
@@ -718,20 +864,19 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_key_search_mode_stub() {
+    fn test_handle_key_search_mode_sets_filter() {
         let mut app = make_app();
         app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), event::KeyModifiers::NONE));
         assert_eq!(app.state().input_mode, InputMode::Search);
 
-        for c in "test".chars() {
+        for c in "Error".chars() {
             app.handle_key_event(KeyEvent::new(KeyCode::Char(c), event::KeyModifiers::NONE));
         }
-        assert_eq!(app.state().input_buffer, "test");
+        assert_eq!(app.state().input_buffer, "Error");
 
-        // 搜索模式提交不改变面板
         app.handle_key_event(KeyEvent::new(KeyCode::Enter, event::KeyModifiers::NONE));
         assert_eq!(app.state().input_mode, InputMode::Normal);
-        assert!(app.state().input_buffer.is_empty());
+        assert_eq!(app.state().filter_keyword, Some("error".into()));
     }
 
     #[test]
@@ -754,6 +899,36 @@ mod tests {
         assert_eq!(app.current_panel(), PanelId::Help);
     }
 
+    #[test]
+    fn test_handle_key_ctrl_up_increases_ratio() {
+        let mut app = make_app();
+        let before = app.main_panel_ratio;
+        app.handle_key_event(KeyEvent::new(KeyCode::Up, event::KeyModifiers::CONTROL));
+        assert!(app.main_panel_ratio > before);
+    }
+
+    #[test]
+    fn test_handle_key_ctrl_down_decreases_ratio() {
+        let mut app = make_app();
+        let before = app.main_panel_ratio;
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, event::KeyModifiers::CONTROL));
+        assert!(app.main_panel_ratio < before);
+    }
+
+    #[test]
+    fn test_main_panel_ratio_bounds() {
+        let mut app = make_app();
+        for _ in 0..100 {
+            app.adjust_main_panel_ratio(true);
+        }
+        assert!((app.main_panel_ratio - RATIO_MAX).abs() < f32::EPSILON);
+
+        for _ in 0..100 {
+            app.adjust_main_panel_ratio(false);
+        }
+        assert!((app.main_panel_ratio - RATIO_MIN).abs() < f32::EPSILON);
+    }
+
     // ============================================================
     // 弹窗测试
     // ============================================================
@@ -769,6 +944,50 @@ mod tests {
 
         app.handle_key_event(KeyEvent::new(KeyCode::Esc, event::KeyModifiers::NONE));
         assert!(app.state.popup_stack.is_empty());
+    }
+
+    #[test]
+    fn test_detail_popup_scroll() {
+        let mut app = make_app();
+        app.state.popup_stack.push(PopupKind::Detail {
+            title: "Detail".into(),
+            content: "line1\nline2\nline3".into(),
+            scroll: 0,
+        });
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, event::KeyModifiers::NONE));
+        assert_eq!(
+            app.state.popup_stack.current().unwrap().detail_scroll(),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_confirm_popup_yes_quits() {
+        let mut app = make_app();
+        app.state.popup_stack.push(PopupKind::Confirm {
+            prompt: "Quit?".into(),
+            on_confirm: "quit".into(),
+            confirmed: true,
+        });
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, event::KeyModifiers::NONE));
+        assert!(app.state.popup_stack.is_empty());
+        assert!(!app.state.running);
+    }
+
+    #[test]
+    fn test_confirm_popup_no_dismisses() {
+        let mut app = make_app();
+        app.state.popup_stack.push(PopupKind::Confirm {
+            prompt: "Quit?".into(),
+            on_confirm: "quit".into(),
+            confirmed: false,
+        });
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, event::KeyModifiers::NONE));
+        assert!(app.state.popup_stack.is_empty());
+        assert!(app.state.running);
     }
 
     // ============================================================
@@ -1099,5 +1318,78 @@ mod tests {
             .collect();
         assert!(content.contains("System Log"));
         assert!(content.contains("CacheHit"));
+    }
+
+    // ============================================================
+    // 鼠标事件测试
+    // ============================================================
+
+    #[test]
+    fn test_mouse_scroll_in_main_panel() {
+        let mut app = make_app();
+        app.switch_panel_to(PanelId::Log);
+        let state = app.state_mut();
+        state.latest_events = VecDeque::from([
+            NexusEvent::CacheHit {
+                metadata: EventMetadata::new("scc-cache"),
+                cache_key: "k1".into(),
+            },
+            NexusEvent::CacheMiss {
+                metadata: EventMetadata::new("scc-cache"),
+                cache_key: "k2".into(),
+            },
+        ]);
+
+        // 先渲染以设置 last_area
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+
+        // 在主面板区域(80x24 默认布局)滚动
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: event::KeyModifiers::NONE,
+        });
+
+        // 滚动 Down 在 Log 面板中选择下一条事件
+        // 由于 selected 初始为 0,ScrollDown 应使其变为 1
+        // 但面板状态无法直接从 app 访问,这里只验证不 panic
+    }
+
+    #[test]
+    fn test_mouse_tab_click_switches_panel() {
+        let mut app = make_app();
+        // 先渲染以设置 last_area
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+
+        // 标签栏宽度 80,8 个面板,每个约 10 列;点击第 2 个标签(Parliament)
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 12,
+            row: 1,
+            modifiers: event::KeyModifiers::NONE,
+        });
+        assert_eq!(app.current_panel(), PanelId::Parliament);
+    }
+
+    #[test]
+    fn test_mouse_command_bar_click_focuses() {
+        let mut app = make_app();
+        // 先渲染以设置 last_area
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 20,
+            modifiers: event::KeyModifiers::NONE,
+        });
+        assert_eq!(app.state().input_mode, InputMode::Command);
     }
 }
