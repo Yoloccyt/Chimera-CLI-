@@ -32,6 +32,75 @@ P2/P3/P4(条件触发)评估完成但触发条件未满足,继续延后。
 
 详见 [v1.4.0 P2 综合报告](docs/optimization/v1.4.0/full_p2_implementation_report.md)。
 
+## v1.4.0-omega 实时数据驱动 TUI 面板系统
+
+将 `chimera-tui` 从静态占位渲染升级为实时数据驱动面板,通过 event-bus 订阅 NexusEvent 流,实现 Quest / Budget / Parliament / Log 四大面板的动态数据展示。
+
+**P0 — 现状核验与接口契约定义**:
+- 盘点 chimera-tui 现状,确认 L10 只能向下依赖 L1 的约束
+- 设计 TuiDataSource trait / DataSnapshot / BudgetMetrics / DataSourceConfig 接口契约
+- 结论:需在 event-bus 新增 3 个事件变体支撑数据流
+
+**P1 — 数据接入层实现**:
+- EventSubscriber:后台 tokio 任务转发事件到 1024 容量环形缓冲区,遵循"先 subscribe 再 spawn"红线(§4.4 反模式 #3)
+- QuestSync / BudgetSync:消费 NexusEvent 维护本地状态;event-bus 新增 QuestListUpdated / QuestCompleted / BudgetMetricsUpdated 三个事件变体 + QuestStatus 枚举 + BudgetMetricsPayload 结构体
+- DataPipeline:250ms tick 批量消费、同 tick 去重(QuestListUpdated/BudgetMetricsUpdated 只保留最后一个用于状态更新)、容量截断、tokio::select! 避免 busy loop;实现 TuiDataSource trait
+
+**P2 — 面板渲染改造**:
+- TuiState 增加 quest_list / budget / latest_events 三个数据字段
+- TuiApp 增加 Box<dyn TuiDataSource> 与 update() 方法,每次 event_loop 循环前刷新
+- 渲染架构升级:panel_content 返回类型 String → Text<'static>
+- Quest 面板:显示 title/ID/thinking mode/任务统计(done 绿色/pending 灰色)
+- Budget 面板:tier/coefficient/consumption/remaining/utilization + 30 字符进度条,EXCEEDED 红色加粗
+- Parliament 面板:筛选 VoteCast/ConsensusReached/SkepticVeto/RedTeamAudit/AsaIntervention 并着色
+- Log 面板:主面板与底部固定面板联动,显示 [HH:MM:SS] [source] type_name,4 类 Critical 事件红色高亮
+
+**P3 — 验证与文档**:
+- cargo test --workspace:3461 passed / 0 failed / 57 ignored
+- cargo clippy --workspace --all-targets --jobs 2 -- -D warnings:0 warnings
+- cargo fmt --all -- --check:0 diff
+- 新增 data_pipeline_bench.rs(snapshot latency + throughput)与 render_bench.rs(all_panels + each_panel)
+- 目标性能:snapshot latency P95 < 100ms;render time P95 < 16ms(60 FPS)
+
+**依赖变更**:
+- chimera-tui 新增 chrono(workspace)、criterion(dev-dependency)
+- chimera-tui tokio features 扩展为 ["sync", "time"]
+- event-bus 新增 3 个 NexusEvent 变体 + QuestStatus 枚举 + BudgetMetricsPayload 结构体
+
+详见 [实时数据驱动 TUI 面板系统报告](docs/tui/realtime_dashboard_report.md)。
+
+## v1.4.0-omega TUI 面板系统 M5 验证与文档(2026-07-14)
+
+TUI 综合重构(M0-M4)完成后的最终验证、文档补齐与打磨。
+
+**P0 — 全量验证**:
+- `cargo check --workspace`:通过
+- `cargo test --workspace`:3667 passed / 0 failed / 57 ignored
+- `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings`:0 warnings
+- `cargo fmt --all -- --check`:0 diff
+
+**P1 — 性能基准**:
+- `cargo bench -p chimera-tui`:成功执行
+  - `render_all_panels/80x24_8panels`:~147 µs
+  - 各面板独立渲染:~128-172 µs
+  - 满足 60 FPS 渲染预算(16 ms)
+
+**P2 — Release 模式被忽略测试**:
+- `cargo test --workspace --release -- --ignored --nocapture`:未通过
+- 失败原因:Windows GNU 环境下 release 编译触发 `dlltool.exe` / `gcc.exe` 工具链查找失败,属于本地 MinGW 环境配置问题,不影响 debug 模式测试结果
+- 已在报告中记录,建议具备完整 MinGW 工具链的环境或 CI 中重新验证
+
+**P3 — 文档补齐**:
+- 更新 `CODE_WIKI.md` TUI 章节,补充 8 面板、命令面板、搜索过滤、鼠标支持、确认弹窗、双向控制事件、安全约束等描述
+- 新增 `docs/tui/README.md` 用户手册,涵盖启动方式、面板说明、快捷键、鼠标、命令参考、控制命令与确认弹窗流程
+- 更新 `crates/chimera-tui/src/panels/help.rs` 帮助文本,与手册保持一致
+
+**P4 — 代码审视**:
+- 无新增外部依赖
+- `chimera-tui` / `event-bus` / `chimera-cli` 顶层 `#![forbid(unsafe_code)]` 保持完整
+- `chimera-tui` 仅依赖 L1(event-bus、nexus-core),未出现向上/跨层依赖
+- clippy 零警告,fmt 零 diff,无 dead code 警告
+
 ## v1.4.0-omega P1
 
 - **model-router**: 新增 `SqliteHistoryStore` 持久化实现,解除 M2 RL 路由触发条件阻塞(历史数据 > 10000 条)

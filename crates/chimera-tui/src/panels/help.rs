@@ -28,7 +28,31 @@ impl HelpPanel {
     /// 构建 Help 面板文本内容
     fn content() -> Text<'static> {
         Text::from(
-            "Help\n─────────────\nTab       - Next panel\nShift+Tab - Previous panel\n1-8       - Jump to panel\nF1        - Quest\nF2        - Parliament\nF3        - Budget\nF6        - Memory\nF7        - Security\nF8        - Health\n:         - Command mode\n/         - Search mode (M1 stub)\nq / Esc   - Quit\n?         - Show help\n\nChimera CLI NEXUS-OMEGA",
+            "Help\n────────────────────────────────────────\n\
+            Navigation\n\
+            Tab           - Next panel\n\
+            Shift+Tab     - Previous panel\n\
+            1-8           - Jump to panel\n\
+            F1 Quest  F2 Parliament  F3 Budget\n\
+            F6 Memory F7 Security    F8 Health\n\
+            \n\
+            Input\n\
+            :             - Command mode\n\
+            /             - Search mode (keyword filter)\n\
+            Enter         - Submit command/search\n\
+            Esc           - Cancel input / close popup\n\
+            \n\
+            Layout & Quit\n\
+            Ctrl+Up       - Increase main panel ratio\n\
+            Ctrl+Down     - Decrease main panel ratio\n\
+            q / Esc       - Quit (normal mode)\n\
+            ?             - Show this help\n\
+            \n\
+            Commands: find <k>, filter <topic>, level <severity>,\n\
+                      pause <quest>, resume <quest>,\n\
+                      vote <yes|no|abstain> <proposal>, refresh, quit\n\
+            \n\
+            Chimera CLI NEXUS-OMEGA",
         )
     }
 }
@@ -68,11 +92,17 @@ mod tests {
         let content = HelpPanel::content().to_string();
         assert!(content.contains("Help"));
         assert!(content.contains("Tab"));
+        assert!(content.contains("Shift+Tab"));
         assert!(content.contains("q / Esc"));
-        assert!(content.contains("F1        - Quest"));
-        assert!(content.contains("F6        - Memory"));
-        assert!(content.contains("F7        - Security"));
-        assert!(content.contains("F8        - Health"));
+        assert!(content.contains("F1 Quest"));
+        assert!(content.contains("F6 Memory"));
+        assert!(content.contains("F7 Security"));
+        assert!(content.contains("F8 Health"));
+        assert!(content.contains("Ctrl+Up"));
+        assert!(content.contains("Ctrl+Down"));
+        assert!(content.contains("Search mode (keyword filter)"));
+        assert!(content.contains("find"));
+        assert!(content.contains("vote"));
         assert!(content.contains("Chimera CLI NEXUS-OMEGA"));
     }
 }

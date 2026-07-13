@@ -382,11 +382,53 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 - **架构约束**:仅依赖 L1(event-bus、nexus-core),不直接依赖 L2-L9 任何 crate
 - **API**:`ChtcBridge::new(config)`、`receive(json, IdeSource) -> UnifiedToolCall`、`execute(&call) -> ToolCallResult`
 
-#### chimera-tui(Week 8 补齐)
-- **职责**:基于 ratatui 的 TUI 界面,提供交互式终端 UI
-- **状态**:Week 8 Task 2 已补齐实现(配置/类型/应用/错误类型)
-- **关键类型**:`TuiConfig`、`TuiApp`、`Theme`、`TuiError`
-- **配置**:`main_panel_ratio`(主面板占比)、`log_panel_height`(日志面板高度)、`frame_rate`(刷新率)
+#### chimera-tui(Week 8 补齐 + v1.4.0-omega TUI 重构)
+- **职责**:基于 ratatui 的多面板终端用户界面,提供实时数据驱动的交互式终端 UI
+- **状态**:M0-M4 已完成,L10 Interface 层入口;M5 完成文档、验证与最终打磨
+- **关键类型**:
+  - 配置/应用:`TuiConfig`、`TuiApp`、`Theme`、`TuiError`
+  - 状态/命令:`TuiState`、`InputMode`、`PanelId`、`TuiCommand`、`FocusManager`、`PopupStack`
+  - 数据层:`TuiDataSource`、`DataPipeline`、`DataSnapshot`、`EventSubscriber`、`StubDataSource`
+  - 领域视图:`BudgetMetrics`、`MemoryMetrics`、`SecurityState`、`HealthMetrics`
+  - 面板:`Panel` trait + `QuestPanel` / `ParliamentPanel` / `BudgetPanel` / `MemoryPanel` / `SecurityPanel` / `HealthPanel` / `LogPanel` / `HelpPanel`
+- **配置**:`theme`(主题)、`main_panel_ratio`(主面板占比)、`log_panel_height`(日志面板高度)、`enable_mouse`(鼠标支持)、`frame_rate`(刷新率)
+- **快捷键**:Tab/Shift+Tab 切换面板,`1-8`/`F1-F3,F6-F8` 跳转,`:` 命令模式,`/` 搜索模式,`q`/`Esc` 退出,`Ctrl+Up/Down` 调整主面板比例
+
+##### 实时数据驱动 TUI 面板系统
+
+`chimera-tui` 通过 `TuiDataSource` trait 抽象数据接入,`EventSubscriber` 将 `EventBus` 事件缓冲到本地有界队列,`DataPipeline` 按 250ms tick 聚合事件并生成 `DataSnapshot`;TUI 主循环每帧调用 `TuiApp::update()` 拉取快照刷新 8 面板:
+
+```
+EventBus ─publish─> EventSubscriber ─try_recv─> DataPipeline ─snapshot─> TuiApp.update()
+                                                                        ↓
+                                                            TuiState { quest_list, budget, memory_metrics,
+                                                                      security_state, health_metrics,
+                                                                      latest_events, ... }
+                                                                        ↓
+                                                            render() → Quest / Parliament / Budget / Memory /
+                                                                       Security / Health / Log / Help
+```
+
+- **8 面板(M2 补齐)**:
+  - `Quest`:任务列表、任务统计、思考模式
+  - `Parliament`:投票、共识、Skeptic 否决、ASA 干预等治理事件
+  - `Budget`:预算档位/消耗/剩余/利用率、历史 Sparkline
+  - `Memory`:缓存命中率、上下文窗口、压缩率、历史 Sparkline
+  - `Security`:Skeptic 否决、红队审计、ASA 干预、被冻结能力
+  - `Health`:事件速率、慢消费者、MCP Mesh 延迟、健康评分
+  - `Log`:最近 NexusEvent 流,支持关键字/主题/级别过滤
+  - `Help`:快捷键与命令速查
+- **EventSubscriber**:1024 容量环形缓冲区,溢出丢弃最旧事件,遵循"先 subscribe 再 spawn"红线(§4.4 反模式 #3)
+- **DataPipeline**:250ms tick 批量消费,同 tick 内 `QuestListUpdated`/`BudgetMetricsUpdated` 去重,`latest_events` 日志流不去重;面板渲染依赖 `DataSnapshot` 而非直接访问 EventBus
+- **TuiDataSource**:trait 抽象,`DataPipeline` 为生产实现,`StubDataSource` 为测试桩
+- **鼠标支持(M3)**:标签栏点击切换面板、底部栏点击聚焦命令模式、主面板/弹窗滚动
+- **弹窗与确认(M3-M4)**:通知/详情/确认三种弹窗;`pause`/`resume`/`vote` 等破坏性控制命令先弹确认框,再由 `TuiApp` 发布请求事件
+- **双向控制(M4)**:TUI 通过 EventBus 发布 `QuestPauseRequested` / `QuestResumeRequested` / `VoteCastRequested` / `RefreshStateRequested`,上游订阅者消费后状态变更再反馈到面板
+- **依赖方向**:chimera-tui(L10) 只依赖 event-bus / nexus-core(L1),不直接依赖 quest-engine / efficiency-monitor / mlc-engine 等上层/同层 crate
+- **依赖 event-bus 新增事件(实时数据面板)**:除原 `QuestListUpdated` / `QuestCompleted` / `BudgetMetricsUpdated` 外,还消费 `MemoryMetricsReported` / `ContextWindowSwitched` / `ContextCompressed` / `CacheStatsReported` / `CacheHit` / `CacheMiss` / `SkepticVeto` / `RedTeamAudit` / `AsaIntervention` / `CapabilityFrozen` / `SlowConsumerDropped` / `McpMeshTransactionCompleted` 等
+- **安全约束**:crate 顶层 `#![forbid(unsafe_code)]`;依赖库中的 unsafe 不破坏本 crate 编译期保证
+
+详细用户手册见 [`docs/tui/README.md`](docs/tui/README.md)。
 
 #### mcp-mesh(Week 7)
 - **职责**:MCP 量子网格(Model Context Protocol 的量子化网格通信层),跨进程通信唯一通道
