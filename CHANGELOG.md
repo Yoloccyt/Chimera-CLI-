@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.7-omega] - 2026-07-13
+
+### Summary
+
+v1.5.7-omega 是 v1.5.6-omega 的 GA 后演进 patch 版本,聚焦 QA 改进项落地与项目配置一致性同步。本次迭代包含 7 个文件变更,无功能性代码变更,主要为 flaky test 隔离加固、规则文档同步、脚本编码合规修复。
+
+### Changed
+
+- `Cargo.toml` `[workspace.package].version` 从 `1.5.6-omega` 更新为 `1.5.7-omega`
+
+### Added
+
+- **serial_test 依赖**(`Cargo.toml workspace.dependencies`):新增 `serial_test = "3.1"`,引入串行化测试执行能力,用于隔离并行资源竞争导致的 flaky failure。
+- **测试隔离标注**(`crates/repo-wiki/src/store.rs`):为 `test_read_during_write_not_blocked` 添加 `#[serial_test::serial]` 标注,防止并行测试下 SQLite 文件 I/O 竞争导致的 flaky failure(QA-DEFECT-001 根因消除)。
+
+### Fixed
+
+- **规则文档同步**(`.trae/rules/nuxus规则.md §7.2` + `.claude/CLAUDE.md §5`):发布前检查清单中 ignored 压力测试命令升级为 `cargo test --workspace --release -- --ignored --nocapture`,明确含性能阈值的 `#[ignore]` 基准测试必须在 release 模式下运行,避免 debug 模式开销 + 并行竞争导致 flaky 误报(QA-DEFECT-002 教训)。
+- **fuzz pre-check 注释修复**(`scripts/check_fuzz_config.ps1`):文档头 `[[bin]]` 声明计数从 6 修正为 8(6 生产 + 2 stub 回归测试),与实际配置同步。
+- **PowerShell 脚本 BOM 修复**(`install.ps1` + `scripts/check_fuzz_config.ps1`):添加 UTF-8 BOM,符合 `.editorconfig` `[*.ps1] charset = utf-8-bom` 约定,确保 PowerShell 5.x 正确识别 UTF-8 编码。
+
 ## [1.5.6-omega] - 2026-07-13
 
 ### Summary
