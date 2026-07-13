@@ -4,7 +4,7 @@
 #
 # 用法:
 #   iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
-#   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-Proxy <url>] [-LocalFile <path>] [-SkipVerify] [-SetupEnv]
+#   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-Proxy <url>] [-LocalFile <path>] [-SkipVerify] [-SkipVersionCheck] [-SetupEnv]
 #
 # 企业网络/代理场景:
 #   .\install.ps1 -Proxy 'http://proxy.company.com:8080'
@@ -33,6 +33,7 @@
 #   -Proxy <url>        HTTP/HTTPS 代理地址 (如 http://proxy.company.com:8080)
 #   -LocalFile <path>   使用预先下载的本地 binary 安装,跳过所有网络请求
 #   -SkipVerify         跳过 SHA256 校验
+#   -SkipVersionCheck   跳过 --version 验证(企业安全策略拦截首次运行等场景)
 #   -SetupEnv           仅设置工具链环境变量后退出,不下载 binary
 #                       (用于源码构建场景,覆盖 §10.5 "环境变量手动设置"短板)
 #
@@ -41,8 +42,9 @@
 #   - 从 GitHub Release 下载 chimera-windows-x86_64.exe
 #   - 可选 SHA256 校验 (若 Release 附带 checksums.txt)
 #   - 安装到 $env:LOCALAPPDATA\Programs\chimera\ (默认)
+#   - 同时生成 chimera.exe 和 aether.exe 两个入口(消除品牌名与 cargo 二进制名不一致的困惑)
 #   - 添加到用户 PATH (通过 [Environment]::SetEnvironmentVariable)
-#   - 验证安装: chimera --version (正则 ^(aether|chimera) \d+\.\d+\.\d+)
+#   - 验证安装: chimera --version 与 aether --version (正则 ^(aether|chimera) \d+\.\d+\.\d+)
 #   - (-SetupEnv) 自动注入 CARGO_HOME/RUSTUP_HOME/PATH 到用户级
 #
 # 退出码:
@@ -62,12 +64,16 @@ param(
     [string]$Proxy = '',
     [string]$LocalFile = '',
     [switch]$SkipVerify,
+    [switch]$SkipVersionCheck,
     [switch]$SetupEnv
 )
 
 # 严格模式: 捕获未定义变量、强制类型转换失败
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# WHY: PS 5.1 的 Invoke-WebRequest 进度条更新会严重拖慢大文件下载,
+#      在企业网络场景下可能导致超时。静默进度条可显著改善下载性能。
+$ProgressPreference = 'SilentlyContinue'
 
 # ------------------ 网络层健壮性初始化 ------------------
 # WHY: PowerShell 5.1 默认仅启用 TLS 1.0 / SSL3,而 GitHub 等现代 CDN 要求 TLS 1.2+。
@@ -98,42 +104,82 @@ if (-not [string]::IsNullOrEmpty($Proxy)) {
 # ------------------ 工具链环境变量自动化 ------------------
 # WHY: 新克隆者需手动设置 CARGO_HOME/RUSTUP_HOME/PATH 才能编译,
 #      此函数将工具链 env 注入用户级环境变量,持久化避免每次新 shell 重复设置。
-#      仅 Windows 平台适用,路径硬编码至项目默认 .toolchain 目录。
+#      路径基于 $PSScriptRoot 推导,支持仓库位于任意盘符;MINGW 通过 gcc 探测。
+#      仅 Windows 平台适用。
 function Set-Environment {
     <#
     .SYNOPSIS
-        自动设置 Chimera CLI 工具链环境变量(CARGO_HOME/RUSTUP_HOME/PATH)
+        自动设置 Chimera CLI 工具链环境变量(CARGO_HOME/RUSTUP_HOME/PATH/TMP/TEMP)
     .DESCRIPTION
-        将 D:\Chimera CLI\.toolchain\cargo 与 D:\msys64\mingw64\bin 注入用户级
-        环境变量,持久化保存。仅 Windows 平台适用。
+        基于脚本所在目录推导项目根目录,将 .toolchain\cargo\bin 与 MSYS2 mingw64\bin
+        注入用户级环境变量,持久化保存。同时同步当前会话,避免必须重启终端。
         覆盖 §10.5 已知基建短板"环境变量仍需手动设置"。
     .EXAMPLE
         .\install.ps1 -SetupEnv
     #>
-    $toolchainCargo = 'D:\Chimera CLI\.toolchain\cargo\bin'
-    $toolchainCargoHome = 'D:\Chimera CLI\.toolchain\cargo'
-    $toolchainRustupHome = 'D:\Chimera CLI\.toolchain\rustup'
+    # WHY: 仓库可能在 D 盘以外的位置,不能写死路径。优先使用 $PSScriptRoot;
+    #      若通过 iex(irm...) 执行导致为空,则回退到历史默认路径保持兼容。
+    $projectRoot = if ($PSScriptRoot) { $PSScriptRoot } else { 'D:\Chimera CLI' }
+    $toolchainRoot = Join-Path $projectRoot '.toolchain'
+    $toolchainCargo = Join-Path $toolchainRoot 'cargo\bin'
+    $toolchainCargoHome = Join-Path $toolchainRoot 'cargo'
+    $toolchainRustupHome = Join-Path $toolchainRoot 'rustup'
+
+    # WHY: MSYS2 也可能安装在其他位置,优先用 where.exe gcc 探测真实路径;
+    #      探测失败再回退到默认 D:\msys64\mingw64\bin。
     $mingwBin = 'D:\msys64\mingw64\bin'
+    $gccCommand = Get-Command gcc -ErrorAction SilentlyContinue
+    if ($gccCommand -and $gccCommand.Source) {
+        $detectedMingwBin = Split-Path -Parent $gccCommand.Source
+        if ($detectedMingwBin -and (Test-Path (Join-Path $detectedMingwBin 'gcc.exe'))) {
+            $mingwBin = $detectedMingwBin
+            Write-Info "探测到 MINGW: $mingwBin"
+        }
+    } elseif (-not (Test-Path (Join-Path $mingwBin 'gcc.exe'))) {
+        Write-WarnMsg '未找到 gcc.exe,将使用默认 MINGW 路径;若后续 cargo build 失败请检查 MSYS2 安装'
+    }
 
     # 设置 CARGO_HOME / RUSTUP_HOME(用户级,持久化)
     [Environment]::SetEnvironmentVariable('CARGO_HOME', $toolchainCargoHome, 'User')
     [Environment]::SetEnvironmentVariable('RUSTUP_HOME', $toolchainRustupHome, 'User')
+    # 同步当前会话,避免用户必须重启终端才能执行 cargo/rustup
+    $env:CARGO_HOME = $toolchainCargoHome
+    $env:RUSTUP_HOME = $toolchainRustupHome
     Write-Ok "已设置 CARGO_HOME=$toolchainCargoHome"
     Write-Ok "已设置 RUSTUP_HOME=$toolchainRustupHome"
+
+    # WHY: 项目构建临时文件默认重定向到项目根目录 tmp,避免 C 盘空间不足或权限问题。
+    $tmpDir = Join-Path $projectRoot 'tmp'
+    if (Test-Path $tmpDir) {
+        [Environment]::SetEnvironmentVariable('TMP', $tmpDir, 'User')
+        [Environment]::SetEnvironmentVariable('TEMP', $tmpDir, 'User')
+        $env:TMP = $tmpDir
+        $env:TEMP = $tmpDir
+        Write-Ok "已设置 TMP/TEMP=$tmpDir"
+    } else {
+        Write-WarnMsg "未找到项目 tmp 目录 $tmpDir,跳过 TMP/TEMP 重定向"
+    }
 
     # 检查并注入 PATH(避免重复添加)
     $currentPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
     if (-not $currentPath) { $currentPath = '' }
     if ($currentPath -notlike "*$toolchainCargo*") {
         $newPath = "$toolchainCargo;$mingwBin;$currentPath"
-        [Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')
-        Write-Ok "已将 $toolchainCargo 注入用户 PATH"
+        if ($newPath.Length -gt 8191) {
+            Write-WarnMsg "用户 PATH 过长 ($($newPath.Length) 字符),超过 8191 安全上限"
+            Write-WarnMsg "请手动将以下目录添加到 PATH: $toolchainCargo; $mingwBin"
+        } else {
+            [Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')
+            $env:Path = "$toolchainCargo;$mingwBin;$env:Path"
+            Write-Ok "已将 $toolchainCargo 注入用户 PATH"
+        }
     } else {
         Write-WarnMsg "$toolchainCargo 已在 PATH 中"
     }
 
     Write-Host ""
-    Write-Host "请重新打开 PowerShell 终端使环境变量生效。" -ForegroundColor Cyan
+    Write-Host "用户级环境变量已持久化,当前会话也已同步。" -ForegroundColor Cyan
+    Write-Host "如仍无法识别 cargo/rustup,请重新打开 PowerShell 终端。" -ForegroundColor Cyan
 }
 
 # ------------------ 配置常量 ------------------
@@ -216,6 +262,16 @@ if (-not [string]::IsNullOrEmpty($LocalFile)) {
     }
     Write-Info "本地文件模式: $($localFileResolved.Path)"
     Write-Info "版本标记: $Version"
+}
+
+# ------------------ 版本号归一化 ------------------
+# WHY: 用户常输入 1.5.7-omega 而非 v1.5.7-omega,直接拼入 Release URL 会导致 404。
+#      此处自动补 v 前缀,同时保留 latest/local 等特殊标记,避免无意义失败。
+if (-not [string]::IsNullOrEmpty($Version) -and $Version -ne 'local' -and $Version -notmatch '^v\d') {
+    if ($Version -match '^\d+\.\d+\.\d+') {
+        $Version = "v$Version"
+        Write-Info "版本号已归一化为: $Version"
+    }
 }
 
 # ------------------ 版本解析 ------------------
@@ -371,16 +427,26 @@ try {
     }
 
     # ------------------ 安装 binary ------------------
+    # WHY: 项目内部 cargo binary 名为 'aether',但 CI/Docker 外部品牌名为 'chimera'。
+    #      为消除用户困惑,同时提供两个命令入口,安装时复制一份 aether.exe。
+    #      Windows 符号链接需要特殊权限且兼容性差,直接复制更可靠(仅 1.3MB)。
     $installPath = Join-Path $InstallDir "$($script:BinName).exe"
+    $aetherPath = Join-Path $InstallDir 'aether.exe'
     Write-Info "安装到: $installPath"
 
     try {
         Copy-Item -Path $downloadedFile -Destination $installPath -Force -ErrorAction Stop
+        Copy-Item -Path $installPath -Destination $aetherPath -Force -ErrorAction Stop
     } catch {
         Die "安装失败 (权限不足?): $($_.Exception.Message)"
     }
 
-    Write-Ok 'binary 已安装'
+    # WHY: 从网络下载的 exe 会携带 Internet 区域标记(MOTW),可能触发 Windows Defender/
+    #      SmartScreen/企业 AV 的拦截,导致 --version 验证失败。安装后解除标记。
+    Unblock-File -Path $installPath -ErrorAction SilentlyContinue
+    Unblock-File -Path $aetherPath -ErrorAction SilentlyContinue
+
+    Write-Ok 'binary 已安装 (chimera.exe + aether.exe)'
 
     # ------------------ PATH 配置 ------------------
     $pathUpdated = $false
@@ -400,11 +466,18 @@ try {
     if (-not $alreadyInPath) {
         try {
             $newPath = if ($userPath) { "$InstallDir;$userPath" } else { $InstallDir }
-            [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-            $pathUpdated = $true
-            Write-Info 'PATH 已更新 (用户级)'
-            # 当前会话也立即生效
-            $env:Path = "$InstallDir;$env:Path"
+            # WHY: Windows 用户级 PATH 过长会导致注册表写入被截断或后续进程解析失败。
+            #      8191 是现代 Windows API 的安全上限,超过时拒绝自动写入并提示手动添加。
+            if ($newPath.Length -gt 8191) {
+                Write-WarnMsg "用户 PATH 过长 ($($newPath.Length) 字符),超过 8191 安全上限"
+                Write-WarnMsg "请手动将 $InstallDir 添加到 PATH"
+            } else {
+                [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+                $pathUpdated = $true
+                Write-Info 'PATH 已更新 (用户级)'
+                # 当前会话也立即生效
+                $env:Path = "$InstallDir;$env:Path"
+            }
         } catch {
             Write-WarnMsg "无法更新 PATH: $($_.Exception.Message)"
             Write-WarnMsg "请手动将 $InstallDir 添加到 PATH"
@@ -416,48 +489,66 @@ try {
     }
 
     # ------------------ 验证安装 ------------------
+    # WHY: 同时验证 chimera.exe 和 aether.exe,确保两个入口都可用。
+    #      验证失败默认阻塞安装(exit 1),因为继续返回 0 会让 CI/用户误以为成功。
+    #      企业安全策略可能首次运行拦截 exe,此时可用 -SkipVersionCheck 显式绕过。
     Write-Info '验证安装...'
-    try {
-        # 与 release.yml docker job line 229 完全一致(POSIX grep -E → PowerShell -cmatch)
-        # 避免仅检退出码导致 binary 损坏但退出码 0 的假阳性
-        $versionOutput = (& $installPath --version 2>&1 | Out-String).Trim()
-        $versionRegex = '^(aether|chimera) \d+\.\d+\.\d+'
-        $matched = $false
-        if ($LASTEXITCODE -eq 0 -and $versionOutput) {
-            foreach ($line in ($versionOutput -split "`n")) {
-                if ($line.TrimEnd("`r") -cmatch $versionRegex) {
-                    $matched = $true
-                    break
+    $versionRegex = '^(aether|chimera) \d+\.\d+\.\d+'
+    $verifiedEntries = @()
+    $versionFailed = 0
+
+    foreach ($exePath in @($installPath, $aetherPath)) {
+        try {
+            $versionOutput = (& $exePath --version 2>&1 | Out-String).Trim()
+            $matched = $false
+            if ($LASTEXITCODE -eq 0 -and $versionOutput) {
+                foreach ($line in ($versionOutput -split "`n")) {
+                    if ($line.TrimEnd("`r") -cmatch $versionRegex) {
+                        $matched = $true
+                        break
+                    }
                 }
             }
+            if ($matched) {
+                $verifiedEntries += (Split-Path -Leaf $exePath)
+                Write-Ok "$exePath 验证通过"
+                Write-Host "  $versionOutput" -ForegroundColor DarkGray
+            } else {
+                $versionFailed++
+                Write-WarnMsg "$exePath --version 验证失败"
+                Write-WarnMsg "期望格式: aether|chimera X.Y.Z[-omega]"
+                Write-WarnMsg "实际输出: $versionOutput"
+                Write-WarnMsg "退出码: $LASTEXITCODE"
+                Write-WarnMsg "可能原因: 缺少 VC++ 运行时 / Windows Defender 拦截 / 文件损坏"
+                Write-WarnMsg "请手动执行: $exePath --version"
+            }
+        } catch {
+            $versionFailed++
+            Write-WarnMsg "$exePath --version 执行失败: $($_.Exception.Message)"
+            Write-WarnMsg '可能缺少运行时依赖 (Visual C++ Redistributable)'
         }
-        if ($matched) {
-            Write-Ok '安装成功!'
-            Write-Host "  $versionOutput" -ForegroundColor DarkGray
-        } else {
-            Write-WarnMsg "$installPath --version 验证失败"
-            Write-WarnMsg "期望格式: aether|chimera X.Y.Z[-omega]"
-            Write-WarnMsg "实际输出: $versionOutput"
-            Write-WarnMsg "退出码: $LASTEXITCODE"
-            Write-WarnMsg "请手动执行: $installPath --version"
-        }
-    } catch {
-        Write-WarnMsg "$installPath --version 执行失败: $($_.Exception.Message)"
-        Write-WarnMsg '可能缺少运行时依赖 (Visual C++ Redistributable)'
+    }
+
+    if ($versionFailed -gt 0 -and -not $SkipVersionCheck) {
+        Die "安装验证失败 ($versionFailed/2 个入口不可用)。请检查上述警告,或使用 -SkipVersionCheck 跳过验证。"
     }
 
     # ------------------ 总结输出 ------------------
     Write-Host ''
     Write-Info '================ 安装总结 ================'
     Write-Info "  版本:   $Version"
-    Write-Info "  路径:   $installPath"
+    Write-Info "  主入口: $installPath"
+    Write-Info "  别名:   $aetherPath"
     Write-Info "  平台:   windows/$archNorm"
     if ($pathUpdated) {
         Write-Info '  PATH:   已更新 (用户级)'
     }
+    if ($verifiedEntries.Count -gt 0) {
+        Write-Info "  验证:   $($verifiedEntries -join ', ')"
+    }
     Write-Info '=========================================='
     Write-Host ''
-    Write-Ok "执行 'chimera --help' 开始使用"
+    Write-Ok "执行 'chimera --help' 或 'aether --help' 开始使用"
 
 } finally {
     # ------------------ 清理临时目录 ------------------
