@@ -10,12 +10,12 @@
     2. docker run --version (simulated by direct binary execution)
     3. grep regex validation of output format
 
-    Uses the SAME regex as release.yml line 219:
-        ^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+
+    Uses the SAME regex as release.yml line 417:
+        ^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+
 
     Test coverage:
     - Real binary output (happy path)
-    - Simulated normal outputs (aether/chimera x various version formats)
+    - Simulated normal outputs (aether/chimera/chimela x various version formats)
     - Simulated abnormal outputs (empty, no version, wrong prefix, etc.)
     - Multi-line outputs (binary emitting extra info)
     - Regex consistency between grep and PowerShell
@@ -36,13 +36,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # ============================================================
-# Regex - IDENTICAL to release.yml line 219
-# grep -qE '^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'
-# PowerShell equivalent: -match '^(aether|chimera) \d+\.\d+\.\d+'
+# Regex - IDENTICAL to release.yml line 417
+# grep -qE '^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+'
+# PowerShell equivalent: -match '^(aether|chimera|chimela) \d+\.\d+\.\d+'
 # Note: grep [0-9]+ and PowerShell \d+ are semantically identical
 # (both match one or more digits)
 # ============================================================
-$script:VersionRegex = '^(aether|chimera) \d+\.\d+\.\d+'
+$script:VersionRegex = '^(aether|chimera|chimela) \d+\.\d+\.\d+'
 
 # ============================================================
 # Test counters
@@ -138,8 +138,10 @@ Write-Section "Test 2: Simulated normal outputs (all should PASS)"
 $normalCases = @(
     @{ Output = "aether 1.0.0-omega";       Desc = "aether + omega version" }
     @{ Output = "chimera 1.0.0-omega";      Desc = "chimera + omega version" }
+    @{ Output = "chimela 1.0.0-omega";      Desc = "chimela + omega version" }
     @{ Output = "aether 1.0.0";             Desc = "aether + plain semver" }
     @{ Output = "chimera 2.5.3";            Desc = "chimera + multi-digit version" }
+    @{ Output = "chimela 1.5.8-omega";      Desc = "chimela + current release version" }
     @{ Output = "aether 10.20.30";          Desc = "aether + two-digit version parts" }
     @{ Output = "aether 1.0.0-alpha";       Desc = "aether + alpha prerelease" }
     @{ Output = "aether 1.0.0-rc.1";        Desc = "aether + rc prerelease" }
@@ -221,14 +223,14 @@ foreach ($case in $multilineCases) {
 # ============================================================
 Write-Section "Test 5: Regex consistency (CI grep vs PowerShell)"
 
-$ciRegex = '^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'
+$ciRegex = '^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+'
 $psRegex = $script:VersionRegex
 
 Write-Host "  CI regex (grep):  $ciRegex" -ForegroundColor DarkGray
 Write-Host "  PS regex (-match): $psRegex" -ForegroundColor DarkGray
 
 # Verify both regexes are semantically equivalent on the same input set
-$testInputs = @("aether 1.0.0", "chimera 2.0.0", "unknown 1.0.0", "aether v1.0.0")
+$testInputs = @("aether 1.0.0", "chimera 2.0.0", "chimela 1.5.8-omega", "unknown 1.0.0", "aether v1.0.0")
 $allConsistent = $true
 
 foreach ($input in $testInputs) {
