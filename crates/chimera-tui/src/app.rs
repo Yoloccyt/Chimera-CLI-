@@ -453,7 +453,7 @@ impl TuiApp {
                 ));
             }
             TuiCommand::RequestVote { proposal_id, vote } => {
-                let vote_str = format!("{vote:?}").to_lowercase();
+                let vote_str = vote.as_str();
                 self.state.popup_stack.push(PopupKind::control_confirm(
                     &format!("Vote {vote_str} on proposal"),
                     &proposal_id,
@@ -771,13 +771,9 @@ fn is_inside(column: u16, row: u16, area: Rect) -> bool {
 ///
 /// WHY:确认弹窗的 `on_confirm` 只能传递字符串,解码时需要与
 /// CommandPalette 编码时使用的 `yes|no|abstain` 保持一致。
+/// 委托给 `VoteValue::from_str` 以保证唯一真实来源。
 fn parse_vote_value(s: &str) -> Option<VoteValue> {
-    match s.to_lowercase().as_str() {
-        "yes" => Some(VoteValue::Yes),
-        "no" => Some(VoteValue::No),
-        "abstain" => Some(VoteValue::Abstain),
-        _ => None,
-    }
+    s.parse().ok()
 }
 
 #[cfg(test)]

@@ -110,7 +110,7 @@ impl CommandPalette {
     /// - `find <keyword>`:设置关键字过滤器
     /// - `filter <topic>`:设置主题过滤器
     /// - `level <severity>`:设置级别过滤器
-    /// - `refresh`:清空过滤器(M4 将触发数据重载)
+    /// - `refresh`:发布 `RefreshStateRequested` 控制请求事件,由上游决定是否重载/清空过滤器
     fn parse_command(input: &str, state: &mut TuiState) -> Option<TuiCommand> {
         let cmd = input.strip_prefix(':').unwrap_or(input).trim();
         if cmd.is_empty() {
@@ -205,7 +205,7 @@ impl CommandPalette {
 
     /// 解析 `:vote <yes|no|abstain> <proposal-id>` 命令
     ///
-    /// 返回确认弹窗命令;若参数非法则设置状态消息并返回 None。
+    /// 返回 `TuiCommand::RequestVote`;若参数非法则设置状态消息并返回 None。
     fn parse_vote_command(arg: &str, state: &mut TuiState) -> Option<TuiCommand> {
         if arg.trim().is_empty() {
             state.set_status(
@@ -219,11 +219,9 @@ impl CommandPalette {
         let vote_str = parts.next().unwrap_or("").trim();
         let proposal_id = parts.next().unwrap_or("").trim();
 
-        let vote = match vote_str.to_lowercase().as_str() {
-            "yes" => VoteValue::Yes,
-            "no" => VoteValue::No,
-            "abstain" => VoteValue::Abstain,
-            _ => {
+        let vote = match vote_str.parse::<VoteValue>() {
+            Ok(v) => v,
+            Err(()) => {
                 state.set_status(
                     format!("invalid vote '{}': expected yes|no|abstain", vote_str),
                     Severity::Error,

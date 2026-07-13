@@ -82,6 +82,31 @@ pub enum VoteValue {
     Abstain,
 }
 
+impl VoteValue {
+    /// 返回投票值的小写字符串表示,用于 UI 展示与命令编码。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VoteValue::Yes => "yes",
+            VoteValue::No => "no",
+            VoteValue::Abstain => "abstain",
+        }
+    }
+}
+
+impl std::str::FromStr for VoteValue {
+    type Err = ();
+
+    /// 从字符串解析投票值,大小写不敏感。
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "yes" => Ok(VoteValue::Yes),
+            "no" => Ok(VoteValue::No),
+            "abstain" => Ok(VoteValue::Abstain),
+            _ => Err(()),
+        }
+    }
+}
+
 /// 预算指标载荷 — TUI Budget 面板的结构化数据(P1.2 实时数据驱动面板)
 ///
 /// WHY 定义在 event-bus:chimera-tui(L10)无法直接依赖 efficiency-monitor(L9),
