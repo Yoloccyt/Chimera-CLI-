@@ -3,8 +3,12 @@
 # chimela CLI (NEXUS-OMEGA) — 一键安装脚本 (Windows PowerShell)
 #
 # 用法:
-#   iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
-#   .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-Proxy <url>] [-LocalFile <path>] [-SkipVerify] [-SkipVersionCheck] [-SetupEnv]
+#   PowerShell 5.1 / 7+ 推荐(兼容 param() 块):
+#     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)))
+#   PowerShell 5.1 传统写法(部分 PS 7.x 版本会因 param() 块报错):
+#     iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
+#   本地执行:
+#     .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-Proxy <url>] [-LocalFile <path>] [-SkipVerify] [-SkipVersionCheck] [-SetupEnv]
 #
 # 企业网络/代理场景:
 #   .\install.ps1 -Proxy 'http://proxy.company.com:8080'
@@ -20,7 +24,7 @@
 #   PowerShell 5.1+:
 #     $env:GITHUB_TOKEN='ghp_xxx'
 #     $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
-#     iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)
+#     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)))
 #
 #   如果 irm 持续 404,建议直接克隆仓库后本地执行:
 #     git clone https://github.com/Yoloccyt/Chimera-CLI-.git

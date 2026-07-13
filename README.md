@@ -59,11 +59,13 @@ Chimera CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 3
 curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
 ```
 
-**Windows**:
+**Windows** (PowerShell 5.1 / 7+):
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)))
 ```
+
+> **WHY 推荐 scriptblock 方式**: `install.ps1` 顶部包含 `param()` 块。`iex (irm ...)` 在部分 PowerShell 7.x 版本下会把 `param()` 解析为非法赋值表达式，导致 `The assignment expression is not valid`。`[scriptblock]::Create()` 是执行完整脚本的正确方式。
 
 ##### 私有仓库(必须携带 GITHUB_TOKEN)
 
@@ -80,7 +82,7 @@ curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
 ```powershell
 $env:GITHUB_TOKEN='ghp_xxx'
 $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
-iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -Headers $headers)))
 ```
 
 **WHY 需要 header 鉴权**: `raw.githubusercontent.com` 对私有仓库的 raw 内容拒绝匿名访问;`GITHUB_TOKEN` 仅作为环境变量存在时,`curl`/ `irm` 不会自动把它加入 header,必须显式传递。脚本内部下载 Release binary 时同样会读取该环境变量。
