@@ -19,6 +19,7 @@ use crate::types::{PanelId, TuiCommand, TuiState};
 pub mod budget;
 pub mod health;
 pub mod help;
+pub mod list_state;
 pub mod log;
 pub mod memory;
 pub mod parliament;

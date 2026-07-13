@@ -7,13 +7,14 @@
 //! - 对未识别事件使用安全回退(skip)而非 panic,符合 §4 编码红线。
 //! - M3 增加滚动选择与详情弹窗。
 
-use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
+use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
 use crate::render::FOOTER_TEXT;
@@ -262,29 +263,6 @@ impl ParliamentPanel {
 
         lines.join("\n")
     }
-
-    /// 根据选中项与可见行数调整滚动偏移
-    fn adjust_scroll(selected: usize, scroll_offset: usize, visible_rows: usize) -> usize {
-        if visible_rows == 0 {
-            return scroll_offset;
-        }
-        if selected < scroll_offset {
-            selected
-        } else if selected >= scroll_offset + visible_rows {
-            selected.saturating_sub(visible_rows - 1)
-        } else {
-            scroll_offset
-        }
-    }
-
-    /// 将选中索引限制在有效范围内
-    fn clamp_selected(&mut self, max: usize) {
-        if max == 0 {
-            self.selected = 0;
-        } else if self.selected >= max {
-            self.selected = max - 1;
-        }
-    }
 }
 
 impl Panel for ParliamentPanel {
@@ -298,14 +276,15 @@ impl Panel for ParliamentPanel {
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
         let events = Self::parliament_events(state);
-        self.clamp_selected(events.len());
+        self.selected = list_state::clamp_selected(self.selected, events.len());
 
         let block = Block::default().borders(Borders::ALL).title(self.title());
         let inner = block.inner(area);
         block.render(area, buf);
 
         let content_height = inner.height.saturating_sub(3) as usize;
-        self.scroll_offset = Self::adjust_scroll(self.selected, self.scroll_offset, content_height);
+        self.scroll_offset =
+            list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
         let paragraph = Paragraph::new(Self::content(state, self.selected))
             .scroll((self.scroll_offset as u16, 0));
@@ -314,19 +293,14 @@ impl Panel for ParliamentPanel {
 
     fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {
         let count = Self::parliament_events(state).len();
+        if let Some(new_selected) =
+            list_state::handle_key_navigation(key.code, self.selected, count)
+        {
+            self.selected = new_selected;
+            return None;
+        }
+
         match key.code {
-            KeyCode::Up => {
-                if count > 0 && self.selected > 0 {
-                    self.selected -= 1;
-                }
-                None
-            }
-            KeyCode::Down => {
-                if count > 0 && self.selected + 1 < count {
-                    self.selected += 1;
-                }
-                None
-            }
             KeyCode::Enter => {
                 let events = Self::parliament_events(state);
                 if let Some(event) = events.get(self.selected) {
@@ -346,22 +320,13 @@ impl Panel for ParliamentPanel {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, state: &mut TuiState) -> Option<TuiCommand> {
-        match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                }
-                None
-            }
-            MouseEventKind::ScrollDown => {
-                let count = Self::parliament_events(state).len();
-                if count > 0 && self.selected + 1 < count {
-                    self.selected += 1;
-                }
-                None
-            }
-            _ => None,
+        let count = Self::parliament_events(state).len();
+        if let Some(new_selected) =
+            list_state::handle_mouse_scroll(mouse.kind, self.selected, count)
+        {
+            self.selected = new_selected;
         }
+        None
     }
 }
 
