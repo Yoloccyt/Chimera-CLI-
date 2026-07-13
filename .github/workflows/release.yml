@@ -536,7 +536,7 @@ jobs:
             | Windows (Scoop) | `scoop bucket add chimela-cli https://github.com/Yoloccyt/scoop-chimela-cli.git && scoop install chimela-cli` |
             | Debian / Ubuntu | `sudo apt install ./chimela-cli_${{ steps.release_meta.outputs.version }}_amd64.deb` |
 
-            完整终端安装指南参见 [docs/release/v1.5.7-omega_installation_guide.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/release/v1.5.7-omega_installation_guide.md)。
+            完整终端安装指南参见 [docs/release/v1.5.8-omega_installation_guide.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/release/v1.5.8-omega_installation_guide.md)。
 
             ### 验证
             ```bash

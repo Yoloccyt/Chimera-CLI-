@@ -2,7 +2,7 @@
 
 > 别名: `chimera` / `aether`(内部 cargo binary 名)。本 README 使用新的用户侧品牌名 `chimela`。
 
-[![Version](https://img.shields.io/badge/version-1.5.7--omega-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.5.8--omega-blue.svg)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](./LICENSE)
 [![Crates](https://img.shields.io/badge/crates-35-orange.svg)](./CODE_WIKI.md)
 [![Tests](https://img.shields.io/badge/tests-3002+-brightgreen.svg)](./CHANGELOG.md)
@@ -45,7 +45,7 @@ chimela CLI(代号 **NEXUS-OMEGA**)是一个基于 Rust 2021 edition 构建的 3
 
 ### 安装
 
-完整安装指南见 [docs/release/v1.5.7-omega_installation_guide.md](./docs/release/v1.5.7-omega_installation_guide.md)。
+完整安装指南见 [docs/release/v1.5.8-omega_installation_guide.md](./docs/release/v1.5.8-omega_installation_guide.md)。
 
 #### 方式 1:一键安装脚本(推荐)
 
@@ -93,7 +93,7 @@ iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps
 
 ```bash
 # 指定版本
-sh install.sh --version v1.5.7-omega
+sh install.sh --version v1.5.8-omega
 
 # 指定安装目录
 sh install.sh --install-dir /usr/local/bin
@@ -152,7 +152,7 @@ cd "D:\Chimera CLI"
 # 2. 构建验证
 cargo build --workspace --release
 .\target\release\aether.exe --version
-# 预期输出:aether 1.5.7-omega
+# 预期输出:aether 1.5.8-omega
 ```
 
 > **手动设置环境变量**(替代方案,适用于非默认路径或自定义工具链):

@@ -10,7 +10,7 @@
 #   .\install.ps1 -Proxy 'http://proxy.company.com:8080'
 #
 # 离线/手动下载场景:
-#   .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimela-windows-x86_64.exe' -Version v1.5.7-omega
+#   .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimela-windows-x86_64.exe' -Version v1.5.8-omega
 #
 # 私有仓库安装(需 $env:GITHUB_TOKEN 环境变量鉴权):
 #   WHY: raw.githubusercontent.com 对私有仓库 raw 内容拒绝匿名访问,
@@ -28,7 +28,7 @@
 #     $env:GITHUB_TOKEN='ghp_xxx'; .\install.ps1
 #
 # 参数说明:
-#   -Version <ver>      指定版本 (默认: latest,如 v1.5.7-omega)
+#   -Version <ver>      指定版本 (默认: latest,如 v1.5.8-omega)
 #   -InstallDir <path>  安装目录 (默认: $env:LOCALAPPDATA\Programs\chimela)
 #   -Proxy <url>        HTTP/HTTPS 代理地址 (如 http://proxy.company.com:8080)
 #   -LocalFile <path>   使用预先下载的本地 binary 安装,跳过所有网络请求
@@ -266,7 +266,7 @@ if (-not [string]::IsNullOrEmpty($LocalFile)) {
 }
 
 # ------------------ 版本号归一化 ------------------
-# WHY: 用户常输入 1.5.7-omega 而非 v1.5.7-omega,直接拼入 Release URL 会导致 404。
+# WHY: 用户常输入 1.5.8-omega 而非 v1.5.8-omega,直接拼入 Release URL 会导致 404。
 #      此处自动补 v 前缀,同时保留 latest/local 等特殊标记,避免无意义失败。
 if (-not [string]::IsNullOrEmpty($Version) -and $Version -ne 'local' -and $Version -notmatch '^v\d') {
     if ($Version -match '^\d+\.\d+\.\d+') {
@@ -301,7 +301,7 @@ if (-not $localFileMode -and [string]::IsNullOrEmpty($Version)) {
   1) 网络连接问题 → 检查能否访问 https://api.github.com
   2) 企业防火墙/DPI 阻断 → 使用 -Proxy 参数,或先手动下载后用 -LocalFile 安装
      示例: .\install.ps1 -Proxy 'http://proxy.company.com:8080'
-     示例: .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimela-windows-x86_64.exe' -Version v1.5.7-omega
+     示例: .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimela-windows-x86_64.exe' -Version v1.5.8-omega
   3) 仓库为私有 (需设置 `$env:GITHUB_TOKEN)
   4) GitHub API 速率限制"
     }

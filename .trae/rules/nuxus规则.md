@@ -77,12 +77,12 @@ alwaysApply: true
 | 核心哲学 | OMEGA 四定律: Ω-Sparse · Ω-Compress · Ω-Evolve · Ω-Event |
 | 设计来源 | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂 |
 | 创新总数 | 37 个(22 个第一代 + 15 个第三代) |
-| 当前版本 | `workspace.package.version = 1.5.7-omega`; CHANGELOG 最新汇总 `v1.5.7-omega` |
+| 当前版本 | `workspace.package.version = 1.5.8-omega`; CHANGELOG 最新汇总 `v1.5.8-omega` |
 | 测试规模 | 单元/集成测试 + proptest + benches + OWASP A01-A10 + E2E/压测 target(持续增加) |
 
 ### 1.2 当前开发阶段
 
-- **阶段**:GA 后演进阶段 — 以 `CHANGELOG.md` 最新汇总章节(v1.5.7-omega)为当前基线,持续迭代优化
+- **阶段**:GA 后演进阶段 — 以 `CHANGELOG.md` 最新汇总章节(v1.5.8-omega)为当前基线,持续迭代优化
 - **实现状态**:35/35 crate 已实现;零 `todo!()`/`unimplemented!()`;依赖铁律零违规;error 体系分层(库层 thiserror / 应用层 anyhow)
 - **下一步**:按 CHANGELOG 规划继续 v1.x 演进(性能/架构/安全/监控)
 - **参照**:`CHANGELOG.md` + `CODE_WIKI.md` + 本规则 §3.3 第二阶段原则
@@ -173,7 +173,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 
 ### 3.1 GA 后演进阶段规则
 
-> 项目第一阶段(Stage 0-8 / v1.0.0-omega GA)已完成。当前处于 **GA 后演进阶段**,以 `CHANGELOG.md` 最新汇总章节(v1.5.7-omega)为当前基线,`Cargo.toml` `workspace.package.version = 1.5.7-omega` 为发布候选版本号。所有决策继续遵循 OMEGA 四定律与 §2.2 依赖铁律。
+> 项目第一阶段(Stage 0-8 / v1.0.0-omega GA)已完成。当前处于 **GA 后演进阶段**,以 `CHANGELOG.md` 最新汇总章节(v1.5.8-omega)为当前基线,`Cargo.toml` `workspace.package.version = 1.5.8-omega` 为发布候选版本号。所有决策继续遵循 OMEGA 四定律与 §2.2 依赖铁律。
 
 此阶段开发原则:
 
@@ -477,7 +477,7 @@ GA 后演进阶段允许新建 crate。模板见附录 §A.2;新增 crate 必须
 | `OMEGA_大模型架构魔改创新_AI_Agent项目套用设计.md` | OMEGA 架构魔改设计(五大模型融合,十二大魔改创新)。**第二阶段创新演进主参考**(见 §3.3.2,如何进化) | ⭐⭐⭐⭐ |
 | `DEEP_RESEARCH_OPTIMIZATION_ALGORITHM.md` | 深度研究:优化算法 — ⚠️ 基于 Week 2 快照,部分 crate 已演进 | ⭐ |
 | `DEEP_RESEARCH_LLM_ARCHITECTURE_MAPPING.md` | 深度研究:LLM 架构映射 — ⚠️ 基于 Week 2 快照 | ⭐ |
-| `CHANGELOG.md` | 版本演进史(Week 1-8 + GA 后演进,最新 v1.5.7-omega) | ⭐⭐⭐ |
+| `CHANGELOG.md` | 版本演进史(Week 1-8 + GA 后演进,最新 v1.5.8-omega) | ⭐⭐⭐ |
 | `README.md` | 项目入口(开发状态表准确) | ⭐⭐⭐ |
 | `Cargo.toml` | Workspace 根配置(35 members × 20+ 共享依赖,根 package `chimera-e2e-tests`) | ⭐⭐⭐ |
 

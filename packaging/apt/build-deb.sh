@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-1.5.7-omega}"
+VERSION="${VERSION:-1.5.8-omega}"
 BINARY_URL="https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v${VERSION}/chimela-linux-x86_64"
 PKG_DIR="chimela-cli_${VERSION}_amd64"
 DEB_FILE="${PKG_DIR}.deb"

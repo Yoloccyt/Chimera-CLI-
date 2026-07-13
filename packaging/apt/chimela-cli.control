@@ -1,5 +1,5 @@
 Package: chimela-cli
-Version: 1.5.7-omega
+Version: 1.5.8-omega
 Section: utils
 Priority: optional
 Architecture: amd64

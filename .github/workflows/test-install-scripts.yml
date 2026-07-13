@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (如 v1.5.7-omega,留空用 latest)'
+        description: '版本号 (如 v1.5.8-omega,留空用 latest)'
         required: false
         default: ''
   schedule:
