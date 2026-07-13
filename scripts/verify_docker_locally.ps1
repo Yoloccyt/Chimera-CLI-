@@ -1,4 +1,4 @@
-﻿﻿﻿﻿<#
+﻿<#
 .SYNOPSIS
     Chimera CLI 本地 Docker 验证替代脚本 (Windows PowerShell)
 

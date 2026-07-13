@@ -1,6 +1,7 @@
-﻿﻿﻿﻿<#
+<#
 .SYNOPSIS
-    fuzz crate 配置静态验证脚本(Windows PowerShell 版)
+    fuzz cra
+    te 配置静态验证脚本(Windows PowerShell 版)
 
 .DESCRIPTION
     WHY 此脚本存在:Windows-GNU 环境下 libfuzzer-sys 的 C++ 源码无法编译

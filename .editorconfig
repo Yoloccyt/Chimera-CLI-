@@ -1,0 +1,60 @@
+# EditorConfig: 统一 Chimera CLI 项目编码规范
+# 官方文档: https://editorconfig.org
+# 编辑器支持: VS Code (内置), JetBrains (内置), Vim (插件), Sublime (插件)
+
+root = true
+
+# ── 全局默认 ──────────────────────────────────────────────────
+# charset = utf-8     避免 GBK/Shift-JIS 等编码导致的乱码
+# end_of_line = lf    跨平台一致性（Git 已配置 autocrlf，LF 确保在 CI/Linux 下不乱）
+# indent_style = space 统一空格缩进，避免 Tab 宽度在不同编辑器显示不一致
+# indent_size = 4     多数语言（Rust/TOML/Python）社区标准缩进
+# insert_final_newline = true  POSIX 兼容要求文件以换行结尾
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# ── Rust ──────────────────────────────────────────────────────
+# rustfmt 默认使用 4 空格缩进，indent_size = 4 与 rustfmt 保持一致
+# 不设置 max_line_length，由 rustfmt 的 `max_width` 配置独立管理
+[*.rs]
+indent_size = 4
+
+# ── PowerShell ────────────────────────────────────────────────
+# charset = utf-8-bom: PowerShell 5.x 解析 UTF-8 脚本时依赖 BOM 标记
+# 来正确识别编码；不带 BOM 的 UTF-8 文件可能被当作 ANSI（如 GBK）解析，
+# 导致中文注释或字符串乱码/脚本执行失败。
+# indent_size = 4: PowerShell 编辑器（ISE、VS Code 扩展）默认缩进
+[*.ps1]
+charset = utf-8-bom
+indent_size = 4
+
+# ── Shell 脚本 ────────────────────────────────────────────────
+# indent_size = 2: Shell 脚本社区惯例（Google Shell Style Guide 推荐 2 空格）
+# 适用于本项目中的 .sh 脚本（install.sh、check_fuzz_config.sh 等）
+[*.sh]
+indent_size = 2
+
+# ── YAML ──────────────────────────────────────────────────────
+# indent_size = 2: YAML 社区标准，GitHub Actions、Ansible 等官方推荐
+# 适用于 .github/workflows/*.yml 及项目中的 *.yaml 配置文件
+[*.{yml,yaml}]
+indent_size = 2
+
+# ── Markdown ──────────────────────────────────────────────────
+# indent_size = 2: Markdown 的嵌套列表在有缩进时通常用 2 空格
+# trim_trailing_whitespace = false: 保留行尾双空格（Markdown 硬换行语法）
+# 也保留 Markdown 表格对齐所需的空格
+[*.md]
+indent_size = 2
+trim_trailing_whitespace = false
+
+# ── TOML ──────────────────────────────────────────────────────
+# indent_size = 4: Cargo.toml 社区标准（cargo fmt 默认 4 空格）
+# 适用于整个 workspace 的 Cargo.toml 及各个 crate 的 Cargo.toml
+[*.toml]
+indent_size = 4

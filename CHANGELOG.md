@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.6-omega] - 2026-07-13
+
+### Summary
+
+v1.5.6-omega 是 v1.5.5-omega 的 GA 后演进 patch 版本,聚焦发布文档同步与质量保障产物补齐。本次迭代不包含功能性代码变更,主要完成 README 版本引用对齐、QA 报告、安全扫描报告、终端安装指南与发布审批记录的归档,确保发布流程的可追溯性与文档一致性。
+
+### Changed
+
+- Sync README version reference to 1.5.6-omega(纠正 README badge 长期滞留于 1.5.1-omega、安装与 Docker 示例滞留于 1.5.3-omega 的问题)
+- `Cargo.toml` `[workspace.package].version` 从 `1.5.5-omega` 更新为 `1.5.6-omega`
+
+### Added
+
+- **QA 报告**(`docs/release/v1.5.6-omega_qa_report.md`):完整质量保障测试报告,包含 cargo check / clippy / fmt / test / 压力测试结果。3371 单元/集成测试 + 27 压测通过,2 个 flaky test 经隔离复测确认不阻塞发布。1000 次全链路压测 100% 成功,CSA 总延迟 < 2ms。
+- **安全扫描报告**(`docs/release/v1.5.6-omega_security_report.md`):cargo audit(383 依赖,0 漏洞)+ `#![forbid(unsafe_code)]` 35/35 声明审计 + 依赖方向铁律抽查 5/5 合规 + Critical 事件安全性验证(BudgetExceeded severity=Critical,4 类事件走 mpsc 旁路)。
+- **终端安装指南**(`docs/release/v1.5.6-omega_installation_guide.md`):面向终端用户的完整安装指导,覆盖 a-e 五个步骤(软件介绍/OS 检测与包管理器选择/Windows-macOS-Linux-Docker-源码构建具体命令/安装后验证/常见问题排查),约 1.2 万字。
+- **发布审批记录**(`docs/release/v1.5.6-omega_release_approval.md`):发布前检查清单逐项验证记录,包含 QA/安全/文档/构建稳定性审批结论。
+
+### QA 调查结论
+
+两项测试失败经隔离复测确认 为**环境抖动型 flaky test**(并行测试资源竞争),非真实 bug:
+- `repo-wiki/store::tests::test_read_during_write_not_blocked`:隔离 debug 0.73s / release 0.75s 均 PASS,WAL 实现符合所有项目铁律
+- `hcw-window/bench_retain_by_file_ids_hashset`:隔离 debug P50=4.934ms / release P50=3.184ms 均 < 5ms 阈值,代码实现规范
+
 ## v1.5.5-omega 汇总(2026-07-13)
 
 v1.5.5-omega 是 v1.5.4-omega 的发布工程补丁版本,修复 Docker 镜像体积验证步骤中 `docker image inspect` 找不到镜像的问题,无功能性代码变更。
