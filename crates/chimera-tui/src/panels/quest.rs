@@ -14,6 +14,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::panels::Panel;
+use crate::render::FOOTER_TEXT;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use nexus_core::TaskStatus;
 
@@ -67,6 +68,11 @@ impl QuestPanel {
                         .iter()
                         .filter(|&t| t.status == TaskStatus::Completed)
                         .count();
+                    let running = quest
+                        .tasks
+                        .iter()
+                        .filter(|&t| t.status == TaskStatus::Running)
+                        .count();
                     let pending = quest
                         .tasks
                         .iter()
@@ -78,6 +84,11 @@ impl QuestPanel {
                         Span::from(format!("{total} total")),
                         Span::from(", "),
                         Span::styled(format!("{done} done"), Style::default().fg(Color::Green)),
+                        Span::from(", "),
+                        Span::styled(
+                            format!("{running} running"),
+                            Style::default().fg(Color::Yellow),
+                        ),
                         Span::from(", "),
                         Span::styled(
                             format!("{pending} pending"),
@@ -94,9 +105,7 @@ impl QuestPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(
-            "Press Tab to switch panels, ':' for commands, 'q' to quit.",
-        ));
+        lines.push(Line::from(FOOTER_TEXT));
         Text::from(lines)
     }
 }

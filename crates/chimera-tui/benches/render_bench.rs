@@ -4,8 +4,8 @@
 //! 对应架构层:L10 Interface(`chimera-tui`)
 //!
 //! # 基准项
-//! - `render_all_panels`:5 面板完整渲染帧时间。目标 P95 < 16ms(60 FPS)。
-//! - `render_each_panel`:分别测量 5 个面板的渲染耗时,定位热点面板。
+//! - `render_all_panels`:8 面板完整渲染帧时间。目标 P95 < 16ms(60 FPS)。
+//! - `render_each_panel`:分别测量 8 个面板的渲染耗时,定位热点面板。
 //!
 //! # 设计理由(WHY)
 //! - **TestBackend 而非真实终端**:TestBackend 在内存中渲染到 Buffer,
@@ -32,7 +32,9 @@
 
 #![forbid(unsafe_code)]
 
-use chimera_tui::{BudgetMetrics, PanelId, TuiApp, TuiConfig};
+use chimera_tui::{
+    BudgetMetrics, HealthMetrics, MemoryMetrics, PanelId, SecurityState, TuiApp, TuiConfig,
+};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::{BudgetMetricsPayload, EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
@@ -147,6 +149,25 @@ fn make_app_with_data() -> TuiApp {
         sample_quest("q3", "Write Parliament tests"),
     ];
     state.budget = sample_budget();
+    state.memory_metrics = MemoryMetrics {
+        hit_rate_percent: 87.5,
+        evictions: 12,
+        context_window_size: 4096,
+        compressed_ratio: 0.72,
+        cache_hits: 120,
+        cache_misses: 18,
+        tier: "L1".into(),
+    };
+    state.security_state = SecurityState::default();
+    state.health_metrics = HealthMetrics {
+        events_per_second: 42.0,
+        slow_consumer_count: 1,
+        average_latency_ms: 15.5,
+        health_score: 90,
+    };
+    state.budget_history = vec![30, 32, 35, 33, 36, 38, 35];
+    state.memory_history = vec![80, 82, 85, 83, 86, 88, 87];
+    state.event_rate_history = vec![30, 35, 40, 38, 42, 45, 42];
     state.latest_events = sample_events();
     app
 }
@@ -176,7 +197,7 @@ fn render_all_panels(c: &mut Criterion) {
     group.finish();
 }
 
-/// bench 2:分别测量 5 个面板的渲染耗时
+/// bench 2:分别测量 8 个面板的渲染耗时
 ///
 /// 切换 `current_panel` 后渲染,定位热点面板。日志面板与状态栏始终渲染,
 /// 主面板内容随 `current_panel` 变化,因此差异主要来自主面板内容生成。
@@ -186,6 +207,9 @@ fn render_each_panel(c: &mut Criterion) {
         (PanelId::Quest, "Quest"),
         (PanelId::Parliament, "Parliament"),
         (PanelId::Budget, "Budget"),
+        (PanelId::Memory, "Memory"),
+        (PanelId::Security, "Security"),
+        (PanelId::Health, "Health"),
         (PanelId::Log, "Log"),
         (PanelId::Help, "Help"),
     ];

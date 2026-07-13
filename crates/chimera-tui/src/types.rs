@@ -4,22 +4,23 @@
 //! 对应创新点:无(用户交互入口)
 //!
 //! # 设计决策(WHY)
-//! - `PanelId` 为 enum:主面板(Quest/Parliament/Budget/Log/Help)语义清晰,
-//!   并预留 Memory/Security/Health 占位,为 M2 扩展做准备。
-//!   匹配 §6 架构红线的"禁止功能标志"——面板是 UI 模式的离散投影。
-//! - `TuiState` 为状态结构体:封装当前面板、运行标志、输入缓冲、弹窗栈等,
+//! - `PanelId` 为 enum:主面板(Quest/Parliament/Budget/Memory/Security/Health/Log/Help)
+//!   语义清晰,匹配 §6 架构红线的"禁止功能标志"——面板是 UI 模式的离散投影。
+//! - `TuiState` 为状态结构体:封装运行标志、输入缓冲、弹窗栈等,
 //!   支持纯逻辑测试(无需终端)。
+//! - `current_panel` 字段已移除(M1 清理项 #2):当前面板以 `FocusManager`
+//!   为唯一来源,`TuiApp` 通过 `current_panel()` 方法对外暴露,避免双来源不一致。
 
 use std::collections::VecDeque;
 
-use crate::data::BudgetMetrics;
+use crate::data::{BudgetMetrics, HealthMetrics, MemoryMetrics, SecurityState};
 use crate::popup::{PopupStack, Severity};
 use event_bus::NexusEvent;
 use nexus_core::Quest;
 use serde::{Deserialize, Serialize};
 
 // ============================================================
-// 面板标识 — 主面板枚举(含 M2 占位)
+// 面板标识 — 主面板枚举
 // ============================================================
 
 /// 面板标识 — Chimera TUI 的主面板
@@ -27,9 +28,11 @@ use serde::{Deserialize, Serialize};
 /// - `Quest`:Quest 任务面板,显示任务列表与进度
 /// - `Parliament`:议会面板,显示议员投票与共识
 /// - `Budget`:预算面板,显示预算级别与消耗
+/// - `Memory`:记忆面板,显示缓存命中率与上下文窗口
+/// - `Security`:安全面板,显示 Skeptic 否决与红队审计
+/// - `Health`:健康面板,显示事件速率与健康评分
 /// - `Log`:日志面板,显示系统日志流
 /// - `Help`:帮助面板,显示快捷键说明
-/// - `Memory`/`Security`/`Health`:M2 占位,当前仅用于架构扩展
 ///
 /// WHY Copy + PartialEq:面板标识频繁参与比较与传递,Copy 避免克隆开销。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -40,16 +43,16 @@ pub enum PanelId {
     Parliament,
     /// 预算面板 — 显示预算级别与消耗
     Budget,
+    /// 记忆面板 — 显示缓存命中率与上下文窗口
+    Memory,
+    /// 安全面板 — 显示 Skeptic 否决与红队审计
+    Security,
+    /// 健康面板 — 显示事件速率与健康评分
+    Health,
     /// 日志面板 — 显示系统日志流
     Log,
     /// 帮助面板 — 显示快捷键说明
     Help,
-    /// 记忆面板占位(M2)
-    Memory,
-    /// 安全面板占位(M2)
-    Security,
-    /// 健康面板占位(M2)
-    Health,
 }
 
 impl PanelId {
@@ -59,11 +62,11 @@ impl PanelId {
             PanelId::Quest => "Quest",
             PanelId::Parliament => "Parliament",
             PanelId::Budget => "Budget",
-            PanelId::Log => "Log",
-            PanelId::Help => "Help",
             PanelId::Memory => "Memory",
             PanelId::Security => "Security",
             PanelId::Health => "Health",
+            PanelId::Log => "Log",
+            PanelId::Help => "Help",
         }
     }
 
@@ -73,41 +76,41 @@ impl PanelId {
             PanelId::Quest => " Quest Tasks ",
             PanelId::Parliament => " Parliament ",
             PanelId::Budget => " Budget ",
-            PanelId::Log => " System Log ",
-            PanelId::Help => " Help ",
             PanelId::Memory => " Memory ",
             PanelId::Security => " Security ",
             PanelId::Health => " Health ",
+            PanelId::Log => " System Log ",
+            PanelId::Help => " Help ",
         }
     }
 
     /// 切换到下一个面板(循环顺序)
     ///
-    /// M1 仅循环 5 个主面板;占位面板不参与默认导航。
+    /// M2 完整循环:Quest → Parliament → Budget → Memory → Security → Health → Log → Help → Quest
     pub fn next(&self) -> PanelId {
         match self {
             PanelId::Quest => PanelId::Parliament,
             PanelId::Parliament => PanelId::Budget,
-            PanelId::Budget => PanelId::Log,
+            PanelId::Budget => PanelId::Memory,
+            PanelId::Memory => PanelId::Security,
+            PanelId::Security => PanelId::Health,
+            PanelId::Health => PanelId::Log,
             PanelId::Log => PanelId::Help,
             PanelId::Help => PanelId::Quest,
-            // 占位面板默认回到 Quest
-            PanelId::Memory | PanelId::Security | PanelId::Health => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
-    ///
-    /// M1 仅循环 5 个主面板;占位面板不参与默认导航。
     pub fn prev(&self) -> PanelId {
         match self {
             PanelId::Quest => PanelId::Help,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
-            PanelId::Log => PanelId::Budget,
+            PanelId::Memory => PanelId::Budget,
+            PanelId::Security => PanelId::Memory,
+            PanelId::Health => PanelId::Security,
+            PanelId::Log => PanelId::Health,
             PanelId::Help => PanelId::Log,
-            // 占位面板默认回到 Help
-            PanelId::Memory | PanelId::Security | PanelId::Health => PanelId::Help,
         }
     }
 }
@@ -164,14 +167,15 @@ pub enum TuiCommand {
 /// TUI 状态 — 应用运行时的可变状态
 ///
 /// WHY 独立结构体:将状态与渲染逻辑分离,便于纯逻辑测试(无需终端)。
-/// `running` 标志控制事件循环退出,`current_panel` 控制主面板显示。
+/// `running` 标志控制事件循环退出。
 ///
-/// WHY 移除 `Eq`: `BudgetMetrics` 包含浮点字段(f32/f64),浮点数不满足
+/// WHY 移除 `current_panel`(M1 清理项 #2):当前面板以 `FocusManager` 为
+/// 唯一来源,避免 `TuiState` 与 `FocusManager` 双来源不一致。
+///
+/// WHY 移除 `Eq`: `BudgetMetrics` 等包含浮点字段(f32/f64),浮点数不满足
 /// `Eq`;保留 `PartialEq` 以便测试比较与快照校验。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TuiState {
-    /// 当前激活的面板
-    pub current_panel: PanelId,
     /// 是否正在运行(false 时事件循环退出)
     pub running: bool,
     /// 当前输入模式
@@ -184,6 +188,18 @@ pub struct TuiState {
     pub quest_list: Vec<Quest>,
     /// 当前预算指标(数据驱动 Budget 面板)
     pub budget: BudgetMetrics,
+    /// 当前记忆指标(数据驱动 Memory 面板)
+    pub memory_metrics: MemoryMetrics,
+    /// 当前安全状态(数据驱动 Security 面板)
+    pub security_state: SecurityState,
+    /// 当前健康指标(数据驱动 Health 面板)
+    pub health_metrics: HealthMetrics,
+    /// 预算利用率历史(数据驱动 Budget Sparkline)
+    pub budget_history: Vec<u64>,
+    /// 缓存命中率历史(数据驱动 Memory Sparkline)
+    pub memory_history: Vec<u64>,
+    /// 事件速率历史(数据驱动 Health Sparkline)
+    pub event_rate_history: Vec<u64>,
     /// 最近事件流(数据驱动 Parliament / Log 面板)
     pub latest_events: VecDeque<NexusEvent>,
     /// 弹窗栈(详情/通知/确认)
@@ -196,32 +212,22 @@ impl TuiState {
     /// 创建新的初始状态(默认 Quest 面板,运行中)
     pub fn new() -> Self {
         Self {
-            current_panel: PanelId::Quest,
             running: true,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             frame_count: 0,
             quest_list: Vec::new(),
             budget: BudgetMetrics::default(),
+            memory_metrics: MemoryMetrics::default(),
+            security_state: SecurityState::default(),
+            health_metrics: HealthMetrics::default(),
+            budget_history: Vec::new(),
+            memory_history: Vec::new(),
+            event_rate_history: Vec::new(),
             latest_events: VecDeque::new(),
             popup_stack: PopupStack::new(),
             status_message: None,
         }
-    }
-
-    /// 切换到下一个面板
-    pub fn switch_next(&mut self) {
-        self.current_panel = self.current_panel.next();
-    }
-
-    /// 切换到上一个面板
-    pub fn switch_prev(&mut self) {
-        self.current_panel = self.current_panel.prev();
-    }
-
-    /// 切换到指定面板
-    pub fn switch_to(&mut self, panel: PanelId) {
-        self.current_panel = panel;
     }
 
     /// 退出应用(设置 running = false)
@@ -264,24 +270,28 @@ mod tests {
         assert_eq!(PanelId::Quest.as_str(), "Quest");
         assert_eq!(PanelId::Parliament.as_str(), "Parliament");
         assert_eq!(PanelId::Budget.as_str(), "Budget");
-        assert_eq!(PanelId::Log.as_str(), "Log");
-        assert_eq!(PanelId::Help.as_str(), "Help");
         assert_eq!(PanelId::Memory.as_str(), "Memory");
         assert_eq!(PanelId::Security.as_str(), "Security");
         assert_eq!(PanelId::Health.as_str(), "Health");
+        assert_eq!(PanelId::Log.as_str(), "Log");
+        assert_eq!(PanelId::Help.as_str(), "Help");
     }
 
     #[test]
     fn test_panel_id_title() {
         assert_eq!(PanelId::Quest.title(), " Quest Tasks ");
         assert_eq!(PanelId::Budget.title(), " Budget ");
+        assert_eq!(PanelId::Memory.title(), " Memory ");
     }
 
     #[test]
     fn test_panel_id_next() {
         assert_eq!(PanelId::Quest.next(), PanelId::Parliament);
         assert_eq!(PanelId::Parliament.next(), PanelId::Budget);
-        assert_eq!(PanelId::Budget.next(), PanelId::Log);
+        assert_eq!(PanelId::Budget.next(), PanelId::Memory);
+        assert_eq!(PanelId::Memory.next(), PanelId::Security);
+        assert_eq!(PanelId::Security.next(), PanelId::Health);
+        assert_eq!(PanelId::Health.next(), PanelId::Log);
         assert_eq!(PanelId::Log.next(), PanelId::Help);
         // 循环:Help → Quest
         assert_eq!(PanelId::Help.next(), PanelId::Quest);
@@ -291,7 +301,10 @@ mod tests {
     fn test_panel_id_prev() {
         assert_eq!(PanelId::Parliament.prev(), PanelId::Quest);
         assert_eq!(PanelId::Budget.prev(), PanelId::Parliament);
-        assert_eq!(PanelId::Log.prev(), PanelId::Budget);
+        assert_eq!(PanelId::Memory.prev(), PanelId::Budget);
+        assert_eq!(PanelId::Security.prev(), PanelId::Memory);
+        assert_eq!(PanelId::Health.prev(), PanelId::Security);
+        assert_eq!(PanelId::Log.prev(), PanelId::Health);
         assert_eq!(PanelId::Help.prev(), PanelId::Log);
         // 循环:Quest → Help
         assert_eq!(PanelId::Quest.prev(), PanelId::Help);
@@ -304,6 +317,9 @@ mod tests {
             PanelId::Quest,
             PanelId::Parliament,
             PanelId::Budget,
+            PanelId::Memory,
+            PanelId::Security,
+            PanelId::Health,
             PanelId::Log,
             PanelId::Help,
         ] {
@@ -352,34 +368,13 @@ mod tests {
     #[test]
     fn test_state_new() {
         let state = TuiState::new();
-        assert_eq!(state.current_panel, PanelId::Quest);
         assert!(state.running);
         assert_eq!(state.input_mode, InputMode::Normal);
         assert!(state.input_buffer.is_empty());
         assert_eq!(state.frame_count, 0);
         assert!(state.popup_stack.is_empty());
         assert!(state.status_message.is_none());
-    }
-
-    #[test]
-    fn test_state_switch_next() {
-        let mut state = TuiState::new();
-        state.switch_next();
-        assert_eq!(state.current_panel, PanelId::Parliament);
-    }
-
-    #[test]
-    fn test_state_switch_prev() {
-        let mut state = TuiState::new();
-        state.switch_prev();
-        assert_eq!(state.current_panel, PanelId::Help);
-    }
-
-    #[test]
-    fn test_state_switch_to() {
-        let mut state = TuiState::new();
-        state.switch_to(PanelId::Budget);
-        assert_eq!(state.current_panel, PanelId::Budget);
+        assert_eq!(state.health_metrics.health_score, 100);
     }
 
     #[test]

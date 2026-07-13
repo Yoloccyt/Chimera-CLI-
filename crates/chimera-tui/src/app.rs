@@ -11,6 +11,9 @@
 //! - M1 引入 `Panel` trait + `FocusManager` + `CommandPalette` + `PopupStack`:
 //!   将原本硬编码在 `app.rs` 中的面板切换/渲染/输入逻辑拆分为可扩展架构,
 //!   为 M2/M3/M4 的新面板与控制功能提供插拔点。
+//! - M2 迁移 Parliament/Log/Help 到独立模块,并新增 Memory/Security/Health 面板。
+//! - M2 清理 `TuiState.current_panel` 双来源:当前面板以 `FocusManager` 为准,
+//!   `TuiApp::current_panel()` 对外暴露。
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
 use crossterm::execute;
@@ -20,8 +23,8 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Widget};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
 use ratatui::{Frame, Terminal};
 use std::io::{self, Stdout};
 use std::time::Duration;
@@ -32,274 +35,12 @@ use crate::config::TuiConfig;
 use crate::data::{StubDataSource, TuiDataSource};
 use crate::error::TuiError;
 use crate::focus::FocusManager;
-use crate::panels::{BudgetPanel, Panel, QuestPanel};
+use crate::panels::{
+    BudgetPanel, HealthPanel, HelpPanel, LogPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel,
+    SecurityPanel,
+};
+use crate::popup::Severity;
 use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
-use event_bus::NexusEvent;
-
-/// Parliament 面板 — M1 简单包装
-///
-/// WHY 内联在 app.rs:Parliament 面板在 M2 才会完整迁移为独立模块,
-/// M1 先用最小 trait 实现保证 `Vec<Box<dyn Panel>>` 可用。
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-struct ParliamentPanel;
-
-impl ParliamentPanel {
-    fn new() -> Self {
-        Self
-    }
-
-    fn content(state: &TuiState) -> Text<'static> {
-        let mut lines: Vec<Line<'static>> =
-            vec![Line::from("Parliament"), Line::from("─────────────")];
-
-        let parliament_events: Vec<&NexusEvent> = state
-            .latest_events
-            .iter()
-            .filter(|&e| {
-                matches!(
-                    e,
-                    NexusEvent::VoteCast { .. }
-                        | NexusEvent::ConsensusReached { .. }
-                        | NexusEvent::SkepticVeto { .. }
-                        | NexusEvent::RedTeamAudit { .. }
-                        | NexusEvent::AsaIntervention { .. }
-                )
-            })
-            .collect();
-
-        if parliament_events.is_empty() {
-            lines.push(Line::from("No recent parliament events"));
-        } else {
-            for event in parliament_events.iter().rev().take(10) {
-                let (label, summary, style) = match event {
-                    NexusEvent::SkepticVeto {
-                        quest_id,
-                        veto_reason,
-                        ..
-                    } => (
-                        "SkepticVeto",
-                        format!("{} | {}", quest_id, veto_reason),
-                        Style::default().fg(Color::Red),
-                    ),
-                    NexusEvent::AsaIntervention {
-                        operation_id,
-                        action,
-                        block_reason,
-                        ..
-                    } => {
-                        let detail = block_reason
-                            .as_deref()
-                            .filter(|&r| !r.is_empty())
-                            .unwrap_or(action);
-                        (
-                            "AsaIntervention",
-                            format!("{} | {}", operation_id, detail),
-                            Style::default().fg(Color::Yellow),
-                        )
-                    }
-                    NexusEvent::RedTeamAudit {
-                        vulnerability_type,
-                        detection_rate,
-                        remediation_suggestion,
-                        ..
-                    } => (
-                        "RedTeamAudit",
-                        format!(
-                            "{} | risk={:.0}% | {}",
-                            vulnerability_type,
-                            detection_rate * 100.0,
-                            remediation_suggestion
-                        ),
-                        Style::default().fg(Color::LightYellow),
-                    ),
-                    NexusEvent::ConsensusReached {
-                        quest_id,
-                        decision_hash,
-                        ..
-                    } => (
-                        "ParliamentConsensusReached",
-                        format!("{} | {}", quest_id, decision_hash),
-                        Style::default().fg(Color::Green),
-                    ),
-                    NexusEvent::VoteCast {
-                        proposal_id,
-                        voter,
-                        vote,
-                        ..
-                    } => (
-                        "ParliamentVoteCast",
-                        format!(
-                            "{} | {}: {}",
-                            proposal_id,
-                            voter,
-                            if *vote { "FOR" } else { "AGAINST" }
-                        ),
-                        Style::default(),
-                    ),
-                    _ => unreachable!(),
-                };
-
-                lines.push(Line::from(vec![
-                    Span::styled(format!("[{}] ", label), style),
-                    Span::raw(summary),
-                ]));
-            }
-        }
-
-        lines.push(Line::from(""));
-        lines.push(Line::from(
-            "Press Tab to switch panels, ':' for commands, 'q' to quit.",
-        ));
-        Text::from(lines)
-    }
-}
-
-impl Panel for ParliamentPanel {
-    fn id(&self) -> PanelId {
-        PanelId::Parliament
-    }
-
-    fn title(&self) -> Line<'static> {
-        Line::from(" Parliament ")
-    }
-
-    fn render(
-        &mut self,
-        state: &TuiState,
-        area: ratatui::layout::Rect,
-        buf: &mut ratatui::buffer::Buffer,
-    ) {
-        let block = Block::default().borders(Borders::ALL).title(self.title());
-        let paragraph = Paragraph::new(Self::content(state)).block(block);
-        paragraph.render(area, buf);
-    }
-
-    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
-        match key.code {
-            KeyCode::Char('?') => Some(TuiCommand::ShowHelp),
-            _ => None,
-        }
-    }
-}
-
-/// Log 面板 — M1 简单包装
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-struct LogPanel;
-
-impl LogPanel {
-    fn new() -> Self {
-        Self
-    }
-
-    fn content(state: &TuiState) -> Text<'static> {
-        let mut lines: Vec<Line<'static>> =
-            vec![Line::from("System Log"), Line::from("─────────────")];
-
-        if state.latest_events.is_empty() {
-            lines.push(Line::from("[INFO]  System initialized"));
-            lines.push(Line::from("[DEBUG] Event bus subscribed"));
-            lines.push(Line::from("[WARN]  No critical events"));
-            lines.push(Line::from("[ERROR] (none)"));
-        } else {
-            for event in state.latest_events.iter().rev().take(10) {
-                let metadata = event.metadata();
-                let ts = metadata.timestamp.format("%H:%M:%S").to_string();
-                let source = &metadata.source;
-                let event_type = event.type_name();
-
-                let is_critical = matches!(
-                    event,
-                    NexusEvent::SkepticVeto { .. }
-                        | NexusEvent::RedTeamAudit { .. }
-                        | NexusEvent::AsaIntervention { .. }
-                        | NexusEvent::BudgetExceeded { .. }
-                );
-                let style = if is_critical {
-                    Style::default().fg(Color::Red)
-                } else {
-                    Style::default()
-                };
-
-                lines.push(Line::from(vec![
-                    Span::styled(format!("[{}] ", ts), style),
-                    Span::styled(format!("[{}] ", source), style),
-                    Span::styled(event_type.to_string(), style),
-                ]));
-            }
-        }
-
-        Text::from(lines)
-    }
-}
-
-impl Panel for LogPanel {
-    fn id(&self) -> PanelId {
-        PanelId::Log
-    }
-
-    fn title(&self) -> Line<'static> {
-        Line::from(" System Log ")
-    }
-
-    fn render(
-        &mut self,
-        state: &TuiState,
-        area: ratatui::layout::Rect,
-        buf: &mut ratatui::buffer::Buffer,
-    ) {
-        let block = Block::default().borders(Borders::ALL).title(self.title());
-        let paragraph = Paragraph::new(Self::content(state)).block(block);
-        paragraph.render(area, buf);
-    }
-
-    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
-        match key.code {
-            KeyCode::Char('?') => Some(TuiCommand::ShowHelp),
-            _ => None,
-        }
-    }
-}
-
-/// Help 面板 — M1 简单包装
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-struct HelpPanel;
-
-impl HelpPanel {
-    fn new() -> Self {
-        Self
-    }
-
-    fn content() -> Text<'static> {
-        Text::from(
-            "Help\n─────────────\nTab      - Next panel\nShift+Tab - Previous panel\n1-5      - Jump to panel\nF1-F5    - Jump to panel\n:        - Command mode\n/        - Search mode (M1 stub)\nq / Esc  - Quit\n?        - Show help\n\nChimera CLI NEXUS-OMEGA",
-        )
-    }
-}
-
-impl Panel for HelpPanel {
-    fn id(&self) -> PanelId {
-        PanelId::Help
-    }
-
-    fn title(&self) -> Line<'static> {
-        Line::from(" Help ")
-    }
-
-    fn render(
-        &mut self,
-        _state: &TuiState,
-        area: ratatui::layout::Rect,
-        buf: &mut ratatui::buffer::Buffer,
-    ) {
-        let block = Block::default().borders(Borders::ALL).title(self.title());
-        let paragraph = Paragraph::new(Self::content()).block(block);
-        paragraph.render(area, buf);
-    }
-
-    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
-        None
-    }
-}
 
 /// TUI 应用 — Chimera 终端用户界面核心
 ///
@@ -329,6 +70,10 @@ pub struct TuiApp {
     focus_manager: FocusManager,
     /// 命令面板
     command_palette: CommandPalette,
+    /// 上一帧的焦点面板,用于避免每帧重复调用 `focus(true/false)`
+    ///
+    /// WHY M1 清理项 #5:仅在实际变化时通知面板焦点变化,减少无效回调。
+    last_focused: Option<PanelId>,
 }
 
 impl TuiApp {
@@ -357,13 +102,15 @@ impl TuiApp {
             Box::new(QuestPanel::new()),
             Box::new(ParliamentPanel::new()),
             Box::new(BudgetPanel::new()),
+            Box::new(MemoryPanel::new()),
+            Box::new(SecurityPanel::new()),
+            Box::new(HealthPanel::new()),
             Box::new(LogPanel::new()),
             Box::new(HelpPanel::new()),
         ];
         let panel_ids: Vec<PanelId> = panels.iter().map(|p| p.id()).collect();
         let focus_manager = FocusManager::new(panel_ids);
-        let mut state = TuiState::new();
-        state.current_panel = focus_manager.focused();
+        let state = TuiState::new();
 
         Ok(Self {
             config,
@@ -372,6 +119,7 @@ impl TuiApp {
             panels,
             focus_manager,
             command_palette: CommandPalette::new(),
+            last_focused: None,
         })
     }
 
@@ -390,49 +138,57 @@ impl TuiApp {
         &mut self.state
     }
 
+    /// 返回当前焦点面板
+    ///
+    /// WHY M1 清理项 #2:`FocusManager` 是当前面板的唯一来源,
+    /// 避免与 `TuiState.current_panel` 双来源不一致。
+    pub fn current_panel(&self) -> PanelId {
+        self.focus_manager.focused()
+    }
+
     /// 从数据源拉取最新快照并更新状态
     ///
     /// WHY 独立方法:将数据刷新与事件循环解耦，便于单元测试直接调用验证，
     /// 也允许未来在渲染之外的时刻(如收到特定按键)手动刷新。
     pub fn update(&mut self) {
-        if let Ok(snapshot) = self.data_source.snapshot() {
-            self.state.quest_list = snapshot.quest_list;
-            self.state.budget = snapshot.budget_metrics;
-            self.state.latest_events = snapshot.latest_events;
+        match self.data_source.snapshot() {
+            Ok(snapshot) => {
+                self.state.quest_list = snapshot.quest_list;
+                self.state.budget = snapshot.budget_metrics;
+                self.state.memory_metrics = snapshot.memory_metrics;
+                self.state.security_state = snapshot.security_state;
+                self.state.health_metrics = snapshot.health_metrics;
+                self.state.budget_history = snapshot.budget_history;
+                self.state.memory_history = snapshot.memory_history;
+                self.state.event_rate_history = snapshot.event_rate_history;
+                self.state.latest_events = snapshot.latest_events;
+            }
+            Err(e) => {
+                // M1 清理项 #4:数据源失败时向用户展示状态栏警告,而非静默忽略。
+                self.state.status_message =
+                    Some((format!("data source unavailable: {e}"), Severity::Warning));
+            }
         }
-        // 拉取失败时保持当前状态，避免 transient error 导致面板闪烁。
     }
 
     /// 切换到下一个面板
     pub fn switch_panel_next(&mut self) {
         self.focus_manager.next();
-        self.sync_current_panel();
     }
 
     /// 切换到上一个面板
     pub fn switch_panel_prev(&mut self) {
         self.focus_manager.prev();
-        self.sync_current_panel();
     }
 
     /// 切换到指定面板
     pub fn switch_panel_to(&mut self, panel: PanelId) {
-        if self.focus_manager.jump_to(panel) {
-            self.sync_current_panel();
-        }
+        self.focus_manager.jump_to(panel);
     }
 
     /// 退出应用
     pub fn quit(&mut self) {
         self.state.quit();
-    }
-
-    /// 同步 `FocusManager` 的焦点到 `TuiState.current_panel`
-    ///
-    /// WHY:保持 `state.current_panel` 与 `focus_manager` 一致,
-    /// 避免既有测试与外部代码依赖的 `state.current_panel` 失效。
-    fn sync_current_panel(&mut self) {
-        self.state.current_panel = self.focus_manager.focused();
     }
 
     /// 查找面板索引
@@ -478,8 +234,11 @@ impl TuiApp {
             KeyCode::Char('1') => self.switch_panel_to(PanelId::Quest),
             KeyCode::Char('2') => self.switch_panel_to(PanelId::Parliament),
             KeyCode::Char('3') => self.switch_panel_to(PanelId::Budget),
-            KeyCode::Char('4') => self.switch_panel_to(PanelId::Log),
-            KeyCode::Char('5') => self.switch_panel_to(PanelId::Help),
+            KeyCode::Char('4') => self.switch_panel_to(PanelId::Memory),
+            KeyCode::Char('5') => self.switch_panel_to(PanelId::Security),
+            KeyCode::Char('6') => self.switch_panel_to(PanelId::Health),
+            KeyCode::Char('7') => self.switch_panel_to(PanelId::Log),
+            KeyCode::Char('8') => self.switch_panel_to(PanelId::Help),
             KeyCode::Char(':') => {
                 self.state.input_mode = InputMode::Command;
                 self.state.input_buffer.clear();
@@ -491,8 +250,11 @@ impl TuiApp {
             KeyCode::F(1) => self.switch_panel_to(PanelId::Quest),
             KeyCode::F(2) => self.switch_panel_to(PanelId::Parliament),
             KeyCode::F(3) => self.switch_panel_to(PanelId::Budget),
-            KeyCode::F(4) => self.switch_panel_to(PanelId::Log),
-            KeyCode::F(5) => self.switch_panel_to(PanelId::Help),
+            KeyCode::F(4) => self.switch_panel_to(PanelId::Memory),
+            KeyCode::F(5) => self.switch_panel_to(PanelId::Security),
+            KeyCode::F(6) => self.switch_panel_to(PanelId::Health),
+            KeyCode::F(7) => self.switch_panel_to(PanelId::Log),
+            KeyCode::F(8) => self.switch_panel_to(PanelId::Help),
             _ => {
                 // 其他按键委托给当前焦点面板
                 let focused = self.focus_manager.focused();
@@ -588,16 +350,21 @@ impl TuiApp {
         let focused = self.focus_manager.focused();
         let focused_idx = self.panel_index(focused);
 
-        if let Some(idx) = focused_idx {
-            self.panels[idx].focus(true);
-            self.panels[idx].render(&self.state, area, frame.buffer_mut());
+        // M1 清理项 #5:仅当焦点面板变化时才调用 focus 回调。
+        if self.last_focused != Some(focused) {
+            if let Some(idx) = focused_idx {
+                self.panels[idx].focus(true);
+            }
+            for (i, panel) in self.panels.iter_mut().enumerate() {
+                if Some(i) != focused_idx {
+                    panel.focus(false);
+                }
+            }
+            self.last_focused = Some(focused);
         }
 
-        // 通知其他面板失去焦点(可选,用于后续焦点高亮)
-        for (i, panel) in self.panels.iter_mut().enumerate() {
-            if Some(i) != focused_idx {
-                panel.focus(false);
-            }
+        if let Some(idx) = focused_idx {
+            self.panels[idx].render(&self.state, area, frame.buffer_mut());
         }
     }
 
@@ -607,7 +374,7 @@ impl TuiApp {
             Some((msg, severity)) => (
                 format!(
                     " Panel: {} | Running: {} | Frame: {} | {} ",
-                    self.state.current_panel.as_str(),
+                    self.current_panel().as_str(),
                     self.state.running,
                     self.state.frame_count,
                     msg
@@ -617,7 +384,7 @@ impl TuiApp {
             None => (
                 format!(
                     " Panel: {} | Running: {} | Frame: {} ",
-                    self.state.current_panel.as_str(),
+                    self.current_panel().as_str(),
                     self.state.running,
                     self.state.frame_count,
                 ),
@@ -804,7 +571,7 @@ mod tests {
     #[test]
     fn test_app_new() {
         let app = make_app();
-        assert_eq!(app.state().current_panel, PanelId::Quest);
+        assert_eq!(app.current_panel(), PanelId::Quest);
         assert!(app.state().running);
         assert_eq!(app.config().theme, Theme::Dark);
     }
@@ -825,25 +592,27 @@ mod tests {
     #[test]
     fn test_switch_panel_next() {
         let mut app = make_app();
-        assert_eq!(app.state().current_panel, PanelId::Quest);
+        assert_eq!(app.current_panel(), PanelId::Quest);
         app.switch_panel_next();
-        assert_eq!(app.state().current_panel, PanelId::Parliament);
+        assert_eq!(app.current_panel(), PanelId::Parliament);
         app.switch_panel_next();
-        assert_eq!(app.state().current_panel, PanelId::Budget);
+        assert_eq!(app.current_panel(), PanelId::Budget);
+        app.switch_panel_next();
+        assert_eq!(app.current_panel(), PanelId::Memory);
     }
 
     #[test]
     fn test_switch_panel_prev() {
         let mut app = make_app();
         app.switch_panel_prev();
-        assert_eq!(app.state().current_panel, PanelId::Help);
+        assert_eq!(app.current_panel(), PanelId::Help);
     }
 
     #[test]
     fn test_switch_panel_to() {
         let mut app = make_app();
         app.switch_panel_to(PanelId::Budget);
-        assert_eq!(app.state().current_panel, PanelId::Budget);
+        assert_eq!(app.current_panel(), PanelId::Budget);
     }
 
     #[test]
@@ -876,21 +645,44 @@ mod tests {
     fn test_handle_key_tab_switches_panel() {
         let mut app = make_app();
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, event::KeyModifiers::NONE));
-        assert_eq!(app.state().current_panel, PanelId::Parliament);
+        assert_eq!(app.current_panel(), PanelId::Parliament);
     }
 
     #[test]
     fn test_handle_key_number_jumps_to_panel() {
         let mut app = make_app();
         app.handle_key_event(KeyEvent::new(KeyCode::Char('3'), event::KeyModifiers::NONE));
-        assert_eq!(app.state().current_panel, PanelId::Budget);
+        assert_eq!(app.current_panel(), PanelId::Budget);
+    }
+
+    #[test]
+    fn test_handle_key_new_panels() {
+        let mut app = make_app();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('4'), event::KeyModifiers::NONE));
+        assert_eq!(app.current_panel(), PanelId::Memory);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('5'), event::KeyModifiers::NONE));
+        assert_eq!(app.current_panel(), PanelId::Security);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('6'), event::KeyModifiers::NONE));
+        assert_eq!(app.current_panel(), PanelId::Health);
     }
 
     #[test]
     fn test_handle_key_f_keys_jump_to_panel() {
         let mut app = make_app();
         app.handle_key_event(KeyEvent::new(KeyCode::F(2), event::KeyModifiers::NONE));
-        assert_eq!(app.state().current_panel, PanelId::Parliament);
+        assert_eq!(app.current_panel(), PanelId::Parliament);
+    }
+
+    #[test]
+    fn test_handle_key_f_keys_new_panels() {
+        let mut app = make_app();
+        app.handle_key_event(KeyEvent::new(KeyCode::F(4), event::KeyModifiers::NONE));
+        assert_eq!(app.current_panel(), PanelId::Memory);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::F(6), event::KeyModifiers::NONE));
+        assert_eq!(app.current_panel(), PanelId::Health);
     }
 
     #[test]
@@ -920,7 +712,7 @@ mod tests {
 
         // 提交
         app.handle_key_event(KeyEvent::new(KeyCode::Enter, event::KeyModifiers::NONE));
-        assert_eq!(app.state().current_panel, PanelId::Budget);
+        assert_eq!(app.current_panel(), PanelId::Budget);
         assert_eq!(app.state().input_mode, InputMode::Normal);
     }
 
@@ -958,7 +750,7 @@ mod tests {
     fn test_handle_key_question_mark_shows_help() {
         let mut app = make_app();
         app.handle_key_event(KeyEvent::new(KeyCode::Char('?'), event::KeyModifiers::NONE));
-        assert_eq!(app.state().current_panel, PanelId::Help);
+        assert_eq!(app.current_panel(), PanelId::Help);
     }
 
     // ============================================================
@@ -1019,6 +811,69 @@ mod tests {
         assert!(
             content.contains("Parliament"),
             "rendered output should contain Parliament panel"
+        );
+    }
+
+    #[test]
+    fn test_render_memory_panel() {
+        let mut app = make_app();
+        app.switch_panel_to(PanelId::Memory);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            content.contains("Memory") || content.contains("Cache Hit Rate"),
+            "rendered output should contain Memory panel"
+        );
+    }
+
+    #[test]
+    fn test_render_security_panel() {
+        let mut app = make_app();
+        app.switch_panel_to(PanelId::Security);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            content.contains("Security") || content.contains("VETO"),
+            "rendered output should contain Security panel"
+        );
+    }
+
+    #[test]
+    fn test_render_health_panel() {
+        let mut app = make_app();
+        app.switch_panel_to(PanelId::Health);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            content.contains("Health") || content.contains("Events/sec"),
+            "rendered output should contain Health panel"
         );
     }
 
@@ -1098,6 +953,7 @@ mod tests {
                 metadata: EventMetadata::new("test"),
                 cache_key: "k1".into(),
             }]),
+            ..Default::default()
         };
 
         let mut app = TuiApp::with_data_source(
@@ -1111,6 +967,36 @@ mod tests {
         assert_eq!(app.state().quest_list[0].title, "Data Driven Quest");
         assert_eq!(app.state().budget.current_tier, "Critical");
         assert_eq!(app.state().latest_events.len(), 1);
+    }
+
+    #[test]
+    fn test_update_sets_status_message_on_error() {
+        /// 总是返回错误的数据源
+        #[derive(Debug)]
+        struct FailingDataSource;
+
+        impl TuiDataSource for FailingDataSource {
+            fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+                Err(TuiError::DataSource("forced failure".into()))
+            }
+
+            fn config(&self) -> &DataSourceConfig {
+                static CONFIG: std::sync::OnceLock<DataSourceConfig> = std::sync::OnceLock::new();
+                CONFIG.get_or_init(DataSourceConfig::default)
+            }
+        }
+
+        let mut app =
+            TuiApp::with_data_source(TuiConfig::default(), Box::new(FailingDataSource)).unwrap();
+        app.update();
+
+        assert!(
+            app.state().status_message.is_some(),
+            "data source failure should set status message"
+        );
+        let (msg, severity) = app.state().status_message.as_ref().unwrap();
+        assert!(msg.contains("forced failure"));
+        assert_eq!(*severity, Severity::Warning);
     }
 
     #[test]

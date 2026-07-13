@@ -36,6 +36,10 @@ pub enum TuiError {
     #[error("terminal restore failed: {0}")]
     TerminalRestore(String),
 
+    /// 数据源错误 — 从 `TuiDataSource` 拉取快照失败
+    #[error("data source error: {0}")]
+    DataSource(String),
+
     /// 配置错误 — 配置项非法(如布局比例为 0 等)
     #[error("config error: {detail}")]
     ConfigError {

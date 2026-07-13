@@ -17,10 +17,22 @@ use ratatui::text::Line;
 use crate::types::{PanelId, TuiCommand, TuiState};
 
 pub mod budget;
+pub mod health;
+pub mod help;
+pub mod log;
+pub mod memory;
+pub mod parliament;
 pub mod quest;
+pub mod security;
 
 pub use budget::BudgetPanel;
+pub use health::HealthPanel;
+pub use help::HelpPanel;
+pub use log::LogPanel;
+pub use memory::MemoryPanel;
+pub use parliament::ParliamentPanel;
 pub use quest::QuestPanel;
+pub use security::SecurityPanel;
 
 /// 面板 trait — 所有 TUI 面板的统一接口
 ///

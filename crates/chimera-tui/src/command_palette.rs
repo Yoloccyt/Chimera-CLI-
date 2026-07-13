@@ -94,7 +94,7 @@ impl CommandPalette {
     /// 解析命令字符串
     ///
     /// 支持的命令(冒号可省略,因为进入命令模式时已输入冒号):
-    /// - `quest`/`parliament`/`budget`/`log`/`help`:切换面板
+    /// - `quest`/`parliament`/`budget`/`memory`/`security`/`health`/`log`/`help`:切换面板
     /// - `quit`:退出应用
     fn parse_command(input: &str) -> Option<TuiCommand> {
         let cmd = input.strip_prefix(':').unwrap_or(input).trim();
@@ -102,6 +102,9 @@ impl CommandPalette {
             "quest" => Some(TuiCommand::SwitchPanel(PanelId::Quest)),
             "parliament" => Some(TuiCommand::SwitchPanel(PanelId::Parliament)),
             "budget" => Some(TuiCommand::SwitchPanel(PanelId::Budget)),
+            "memory" => Some(TuiCommand::SwitchPanel(PanelId::Memory)),
+            "security" => Some(TuiCommand::SwitchPanel(PanelId::Security)),
+            "health" => Some(TuiCommand::SwitchPanel(PanelId::Health)),
             "log" => Some(TuiCommand::SwitchPanel(PanelId::Log)),
             "help" => Some(TuiCommand::SwitchPanel(PanelId::Help)),
             "quit" => Some(TuiCommand::Quit),
@@ -134,6 +137,18 @@ mod tests {
         assert_eq!(
             CommandPalette::parse_command("budget"),
             Some(TuiCommand::SwitchPanel(PanelId::Budget))
+        );
+        assert_eq!(
+            CommandPalette::parse_command("memory"),
+            Some(TuiCommand::SwitchPanel(PanelId::Memory))
+        );
+        assert_eq!(
+            CommandPalette::parse_command("security"),
+            Some(TuiCommand::SwitchPanel(PanelId::Security))
+        );
+        assert_eq!(
+            CommandPalette::parse_command("health"),
+            Some(TuiCommand::SwitchPanel(PanelId::Health))
         );
         assert_eq!(
             CommandPalette::parse_command("log"),

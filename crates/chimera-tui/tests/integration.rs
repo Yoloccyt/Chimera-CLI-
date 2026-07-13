@@ -1,13 +1,14 @@
 //! Chimera TUI 集成测试 — 验证布局渲染、输入模式切换与键盘事件处理
 //!
-//! 对应 Week 8 Task 5(测试体系补齐)与 M1 架构重构
+//! 对应 Week 8 Task 5(测试体系补齐)与 M1/M2 架构重构
 //! 架构层:L10 Interface
 //!
 //! # 测试目标
 //! - 验证多面板布局渲染(ratatui TestBackend 内存渲染,无需真实终端)
-//! - 验证输入模式切换(Tab/Shift+Tab/数字键 1-5/F1-F5)
+//! - 验证输入模式切换(Tab/Shift+Tab/数字键 1-8/F1-F8)
 //! - 验证命令面板切换面板与退出
 //! - 验证键盘事件处理(crossterm 0.28 KeyEvent::new 双参数 API)
+//! - M2 新增:验证 Memory/Security/Health 面板渲染与切换
 //!
 //! # 设计约束
 //! - WHY TestBackend 而非 CrosstermBackend:TestBackend 为内存后端,
@@ -28,12 +29,12 @@ use std::collections::VecDeque;
 
 use chimera_tui::config::Theme;
 use chimera_tui::{
-    BudgetMetrics, DataSnapshot, DataSourceConfig, InputMode, PanelId, PopupKind, Severity, TuiApp,
-    TuiConfig, TuiDataSource, TuiError,
+    BudgetMetrics, DataSnapshot, DataSourceConfig, HealthMetrics, InputMode, MemoryMetrics,
+    PanelId, PopupKind, SecurityState, Severity, TuiApp, TuiConfig, TuiDataSource, TuiError,
 };
 
 // ============================================================
-// 辅助函数
+// 辅助函数与可配置静态数据源
 // ============================================================
 
 /// 构造测试用 TUI 应用(默认配置)
@@ -53,6 +54,54 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect()
+}
+
+/// 通用静态快照数据源 — M1 清理项 #3
+///
+/// WHY 统一 helper:替代原先 `CriticalBudgetSource`/`QuestTestSource`/
+/// `ParliamentTestSource`/`LogTestSource` 四处重复实现。
+#[derive(Debug)]
+struct StaticSnapshotSource {
+    snapshot: DataSnapshot,
+    config: DataSourceConfig,
+}
+
+impl StaticSnapshotSource {
+    fn new(snapshot: DataSnapshot) -> Self {
+        Self {
+            snapshot,
+            config: DataSourceConfig::default(),
+        }
+    }
+}
+
+impl TuiDataSource for StaticSnapshotSource {
+    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+        Ok(self.snapshot.clone())
+    }
+
+    fn config(&self) -> &DataSourceConfig {
+        &self.config
+    }
+}
+
+/// 构造包含完整默认字段的 DataSnapshot
+fn full_snapshot(
+    quest_list: Vec<Quest>,
+    latest_events: VecDeque<NexusEvent>,
+    budget: BudgetMetrics,
+) -> DataSnapshot {
+    DataSnapshot {
+        quest_list,
+        latest_events,
+        budget_metrics: budget,
+        memory_metrics: MemoryMetrics::default(),
+        security_state: SecurityState::default(),
+        health_metrics: HealthMetrics::default(),
+        budget_history: Vec::new(),
+        memory_history: Vec::new(),
+        event_rate_history: Vec::new(),
+    }
 }
 
 // ============================================================
@@ -87,11 +136,14 @@ fn test_tui_layout_rendering() {
 
 #[test]
 fn test_tui_layout_rendering_all_panels() {
-    // WHY 全面板渲染:验证 5 个面板都能正确渲染各自内容
+    // WHY 全面板渲染:验证 8 个面板都能正确渲染各自内容
     let panels = [
         PanelId::Quest,
         PanelId::Parliament,
         PanelId::Budget,
+        PanelId::Memory,
+        PanelId::Security,
+        PanelId::Health,
         PanelId::Log,
         PanelId::Help,
     ];
@@ -147,27 +199,27 @@ fn test_tui_layout_rendering_theme_switch() {
 fn test_tui_input_mode_switching() {
     // WHY 输入模式:验证 Tab/Shift+Tab/数字键切换面板
     let mut app = make_app();
-    assert_eq!(app.state().current_panel, PanelId::Quest);
+    assert_eq!(app.current_panel(), PanelId::Quest);
 
     // Tab:Quest → Parliament
     app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelId::Parliament);
+    assert_eq!(app.current_panel(), PanelId::Parliament);
 
     // Tab:Parliament → Budget
     app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelId::Budget);
+    assert_eq!(app.current_panel(), PanelId::Budget);
 
     // Shift+Tab(BackTab):Budget → Parliament
     app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    assert_eq!(app.state().current_panel, PanelId::Parliament);
+    assert_eq!(app.current_panel(), PanelId::Parliament);
 
-    // 数字键 5:跳转到 Help
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelId::Help);
+    // 数字键 8:跳转到 Help
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('8'), KeyModifiers::NONE));
+    assert_eq!(app.current_panel(), PanelId::Help);
 
     // 数字键 1:跳转回 Quest
     app.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelId::Quest);
+    assert_eq!(app.current_panel(), PanelId::Quest);
 }
 
 #[test]
@@ -175,34 +227,40 @@ fn test_tui_input_mode_circular_navigation() {
     // WHY 循环导航:验证 Quest → ... → Help → Quest 的完整循环
     let mut app = make_app();
 
-    // 连续 Tab 5 次应回到原点(Quest → Parliament → Budget → Log → Help → Quest)
+    // 连续 Tab 8 次应回到原点
     for expected in [
         PanelId::Parliament,
         PanelId::Budget,
+        PanelId::Memory,
+        PanelId::Security,
+        PanelId::Health,
         PanelId::Log,
         PanelId::Help,
         PanelId::Quest,
     ] {
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(
-            app.state().current_panel,
+            app.current_panel(),
             expected,
             "circular Tab navigation failed at {:?}",
             expected
         );
     }
 
-    // Shift+Tab 反向循环 5 次也应回到原点
+    // Shift+Tab 反向循环 8 次也应回到原点
     for expected in [
         PanelId::Help,
         PanelId::Log,
+        PanelId::Health,
+        PanelId::Security,
+        PanelId::Memory,
         PanelId::Budget,
         PanelId::Parliament,
         PanelId::Quest,
     ] {
         app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
         assert_eq!(
-            app.state().current_panel,
+            app.current_panel(),
             expected,
             "circular Shift+Tab navigation failed at {:?}",
             expected
@@ -212,21 +270,24 @@ fn test_tui_input_mode_circular_navigation() {
 
 #[test]
 fn test_tui_input_mode_direct_jump() {
-    // WHY 直接跳转:验证数字键 1-5 直接跳转到对应面板
+    // WHY 直接跳转:验证数字键 1-8 直接跳转到对应面板
     let mut app = make_app();
 
     let cases = [
         ('1', PanelId::Quest),
         ('2', PanelId::Parliament),
         ('3', PanelId::Budget),
-        ('4', PanelId::Log),
-        ('5', PanelId::Help),
+        ('4', PanelId::Memory),
+        ('5', PanelId::Security),
+        ('6', PanelId::Health),
+        ('7', PanelId::Log),
+        ('8', PanelId::Help),
     ];
 
     for (ch, expected_panel) in cases {
         app.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         assert_eq!(
-            app.state().current_panel,
+            app.current_panel(),
             expected_panel,
             "key '{}' should jump to {:?}",
             ch,
@@ -240,10 +301,24 @@ fn test_tui_f_keys_jump_to_panels() {
     let mut app = make_app();
 
     app.handle_key_event(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelId::Budget);
+    assert_eq!(app.current_panel(), PanelId::Budget);
 
     app.handle_key_event(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
-    assert_eq!(app.state().current_panel, PanelId::Quest);
+    assert_eq!(app.current_panel(), PanelId::Quest);
+}
+
+#[test]
+fn test_tui_f_keys_new_panels() {
+    let mut app = make_app();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
+    assert_eq!(app.current_panel(), PanelId::Memory);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
+    assert_eq!(app.current_panel(), PanelId::Security);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
+    assert_eq!(app.current_panel(), PanelId::Health);
 }
 
 // ============================================================
@@ -289,7 +364,7 @@ fn test_tui_keyboard_release_event_ignored() {
         KeyEventKind::Release,
     ));
     assert_eq!(
-        app.state().current_panel,
+        app.current_panel(),
         PanelId::Quest,
         "Tab Release should not switch panel"
     );
@@ -383,7 +458,7 @@ fn test_tui_command_palette_switch_panel() {
     }
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(app.state().current_panel, PanelId::Budget);
+    assert_eq!(app.current_panel(), PanelId::Budget);
     assert_eq!(app.state().input_mode, InputMode::Normal);
     assert!(app.state().input_buffer.is_empty());
 }
@@ -402,6 +477,24 @@ fn test_tui_command_palette_quit() {
 }
 
 #[test]
+fn test_tui_command_palette_new_panels() {
+    let mut app = make_app();
+
+    for (cmd, expected) in [
+        ("memory", PanelId::Memory),
+        ("security", PanelId::Security),
+        ("health", PanelId::Health),
+    ] {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+        for c in cmd.chars() {
+            app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.current_panel(), expected, "command '{}' failed", cmd);
+    }
+}
+
+#[test]
 fn test_tui_search_mode_accepts_input() {
     let mut app = make_app();
 
@@ -416,7 +509,7 @@ fn test_tui_search_mode_accepts_input() {
     // 提交后回到 Normal,不改变面板
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.state().input_mode, InputMode::Normal);
-    assert_eq!(app.state().current_panel, PanelId::Quest);
+    assert_eq!(app.current_panel(), PanelId::Quest);
 }
 
 // ============================================================
@@ -451,50 +544,28 @@ fn test_tui_popup_enter_closes() {
 // F. Budget 数据驱动渲染测试
 // ============================================================
 
-/// 返回预算超限快照的测试数据源
-///
-/// WHY 内联实现:集成测试只需要一种固定快照,无需在 crate 公开测试桩。
-struct CriticalBudgetSource {
-    snapshot: DataSnapshot,
-    config: DataSourceConfig,
-}
-
-impl CriticalBudgetSource {
-    fn new() -> Self {
-        Self {
-            snapshot: DataSnapshot {
-                budget_metrics: BudgetMetrics {
-                    total_consumption: 9500.0,
-                    remaining_budget: 500.0,
-                    utilization_rate: 0.95,
-                    current_tier: "Critical".into(),
-                    coefficient: 1.2,
-                    is_exceeded: true,
-                    alert: Some("Budget cap exceeded".into()),
-                },
-                ..Default::default()
-            },
-            config: DataSourceConfig::default(),
-        }
-    }
-}
-
-impl TuiDataSource for CriticalBudgetSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
-    }
-
-    fn config(&self) -> &DataSourceConfig {
-        &self.config
-    }
-}
-
 #[test]
 fn test_budget_panel_shows_critical_state() {
     // WHY 数据驱动渲染:验证 Budget 面板在 is_exceeded=true 时正确显示 EXCEEDED
-    let mut app =
-        TuiApp::with_data_source(TuiConfig::default(), Box::new(CriticalBudgetSource::new()))
-            .unwrap();
+    let snapshot = full_snapshot(
+        Vec::new(),
+        VecDeque::new(),
+        BudgetMetrics {
+            total_consumption: 9500.0,
+            remaining_budget: 500.0,
+            utilization_rate: 0.95,
+            current_tier: "Critical".into(),
+            coefficient: 1.2,
+            is_exceeded: true,
+            alert: Some("Budget cap exceeded".into()),
+        },
+    );
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig::default(),
+        Box::new(StaticSnapshotSource::new(snapshot)),
+    )
+    .unwrap();
 
     // 从数据源拉取快照,确保 state.budget 反映测试数据
     app.update();
@@ -512,33 +583,6 @@ fn test_budget_panel_shows_critical_state() {
 // G. Quest 数据驱动渲染测试
 // ============================================================
 
-/// 返回包含特定 Quest 快照的测试数据源
-///
-/// WHY 内联实现:集成测试只需要一种固定 Quest 快照,无需在 crate 公开测试桩。
-struct QuestTestSource {
-    snapshot: DataSnapshot,
-    config: DataSourceConfig,
-}
-
-impl QuestTestSource {
-    fn new(snapshot: DataSnapshot) -> Self {
-        Self {
-            snapshot,
-            config: DataSourceConfig::default(),
-        }
-    }
-}
-
-impl TuiDataSource for QuestTestSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
-    }
-
-    fn config(&self) -> &DataSourceConfig {
-        &self.config
-    }
-}
-
 #[test]
 fn test_quest_panel_renders_real_quest_data() {
     // WHY 数据驱动 Quest 面板:验证自定义数据源提供的 Quest 能被渲染到面板中
@@ -555,6 +599,12 @@ fn test_quest_panel_renders_real_quest_data() {
             Task {
                 task_id: "t2".into(),
                 description: "second task".into(),
+                status: TaskStatus::Running,
+                dependencies: vec![],
+            },
+            Task {
+                task_id: "t3".into(),
+                description: "third task".into(),
                 status: TaskStatus::Pending,
                 dependencies: vec![],
             },
@@ -563,15 +613,11 @@ fn test_quest_panel_renders_real_quest_data() {
         checkpoint_id: Some("cp-1".into()),
     };
 
-    let snapshot = DataSnapshot {
-        quest_list: vec![quest],
-        budget_metrics: BudgetMetrics::default(),
-        latest_events: VecDeque::new(),
-    };
+    let snapshot = full_snapshot(vec![quest], VecDeque::new(), BudgetMetrics::default());
 
     let mut app = TuiApp::with_data_source(
         TuiConfig::default(),
-        Box::new(QuestTestSource::new(snapshot)),
+        Box::new(StaticSnapshotSource::new(snapshot)),
     )
     .unwrap();
 
@@ -595,8 +641,13 @@ fn test_quest_panel_renders_real_quest_data() {
         &content[..content.len().min(300)]
     );
     assert!(
-        content.contains("2 total"),
+        content.contains("3 total"),
         "Quest panel should render task summary, got: {}",
+        &content[..content.len().min(300)]
+    );
+    assert!(
+        content.contains("1 running"),
+        "Quest panel should include Running count, got: {}",
         &content[..content.len().min(300)]
     );
 }
@@ -605,38 +656,12 @@ fn test_quest_panel_renders_real_quest_data() {
 // H. Parliament 面板数据驱动渲染测试
 // ============================================================
 
-/// 返回包含 Parliament 相关事件快照的测试数据源
-///
-/// WHY 内联实现:集成测试只需要一种固定事件快照,无需在 crate 公开测试桩。
-struct ParliamentTestSource {
-    snapshot: DataSnapshot,
-    config: DataSourceConfig,
-}
-
-impl ParliamentTestSource {
-    fn new(snapshot: DataSnapshot) -> Self {
-        Self {
-            snapshot,
-            config: DataSourceConfig::default(),
-        }
-    }
-}
-
-impl TuiDataSource for ParliamentTestSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
-    }
-
-    fn config(&self) -> &DataSourceConfig {
-        &self.config
-    }
-}
-
 #[test]
 fn test_parliament_panel_renders_recent_events() {
     // WHY 数据驱动 Parliament 面板:验证自定义数据源提供的议会事件能被渲染到面板中
-    let snapshot = DataSnapshot {
-        latest_events: VecDeque::from([
+    let snapshot = full_snapshot(
+        Vec::new(),
+        VecDeque::from([
             NexusEvent::SkepticVeto {
                 metadata: EventMetadata::new("parliament"),
                 quest_id: "q-1".into(),
@@ -652,12 +677,12 @@ fn test_parliament_panel_renders_recent_events() {
                 remediation_suggestion: "add input sanitization".into(),
             },
         ]),
-        ..Default::default()
-    };
+        BudgetMetrics::default(),
+    );
 
     let mut app = TuiApp::with_data_source(
         TuiConfig::default(),
-        Box::new(ParliamentTestSource::new(snapshot)),
+        Box::new(StaticSnapshotSource::new(snapshot)),
     )
     .unwrap();
 
@@ -691,39 +716,13 @@ fn test_parliament_panel_renders_recent_events() {
 // I. Log 面板数据驱动渲染测试
 // ============================================================
 
-/// 返回包含多事件快照的测试数据源
-///
-/// WHY 内联实现:集成测试只需要固定事件快照,无需在 crate 公开测试桩。
-struct LogTestSource {
-    snapshot: DataSnapshot,
-    config: DataSourceConfig,
-}
-
-impl LogTestSource {
-    fn new(snapshot: DataSnapshot) -> Self {
-        Self {
-            snapshot,
-            config: DataSourceConfig::default(),
-        }
-    }
-}
-
-impl TuiDataSource for LogTestSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
-    }
-
-    fn config(&self) -> &DataSourceConfig {
-        &self.config
-    }
-}
-
 #[test]
 fn test_log_panel_renders_events() {
     // WHY 数据驱动 Log 面板:验证自定义数据源提供的事件能被渲染到主 Log 面板中。
     // M1 移除底部固定日志面板,Log 作为普通主面板存在。
-    let snapshot = DataSnapshot {
-        latest_events: VecDeque::from([
+    let snapshot = full_snapshot(
+        Vec::new(),
+        VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -735,12 +734,14 @@ fn test_log_panel_renders_events() {
                 limit: 10000,
             },
         ]),
-        ..Default::default()
-    };
+        BudgetMetrics::default(),
+    );
 
-    let mut app =
-        TuiApp::with_data_source(TuiConfig::default(), Box::new(LogTestSource::new(snapshot)))
-            .unwrap();
+    let mut app = TuiApp::with_data_source(
+        TuiConfig::default(),
+        Box::new(StaticSnapshotSource::new(snapshot)),
+    )
+    .unwrap();
 
     // 从数据源拉取快照,确保 state.latest_events 反映测试数据
     app.update();
@@ -756,6 +757,52 @@ fn test_log_panel_renders_events() {
     assert!(
         content.contains("BudgetExceeded"),
         "Main Log panel should render critical event type, got: {}",
+        &content[..content.len().min(300)]
+    );
+}
+
+// ============================================================
+// J. Memory/Security/Health 面板切换测试
+// ============================================================
+
+#[test]
+fn test_memory_panel_switch_and_render() {
+    let mut app = make_app();
+    app.switch_panel_to(PanelId::Memory);
+    assert_eq!(app.current_panel(), PanelId::Memory);
+
+    let content = render_to_string(&mut app, 80, 24);
+    assert!(
+        content.contains("Memory"),
+        "Memory panel should render title, got: {}",
+        &content[..content.len().min(300)]
+    );
+}
+
+#[test]
+fn test_security_panel_switch_and_render() {
+    let mut app = make_app();
+    app.switch_panel_to(PanelId::Security);
+    assert_eq!(app.current_panel(), PanelId::Security);
+
+    let content = render_to_string(&mut app, 80, 24);
+    assert!(
+        content.contains("Security"),
+        "Security panel should render title, got: {}",
+        &content[..content.len().min(300)]
+    );
+}
+
+#[test]
+fn test_health_panel_switch_and_render() {
+    let mut app = make_app();
+    app.switch_panel_to(PanelId::Health);
+    assert_eq!(app.current_panel(), PanelId::Health);
+
+    let content = render_to_string(&mut app, 80, 24);
+    assert!(
+        content.contains("Health"),
+        "Health panel should render title, got: {}",
         &content[..content.len().min(300)]
     );
 }
