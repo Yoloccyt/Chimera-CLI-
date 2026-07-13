@@ -67,6 +67,21 @@ pub enum PopupKind {
     },
 }
 
+impl PopupKind {
+    /// 创建控制命令确认弹窗
+    ///
+    /// WHY M4:将动作描述与目标组合为提示文本,同时保留机器可解析的
+    /// `on_confirm` 字符串,供 `TuiApp::apply_confirm_command` 解码执行。
+    /// 默认选中 Yes,减少操作员每次控制命令都需多按一次键的摩擦。
+    pub fn control_confirm(action: &str, target: &str, on_confirm: impl Into<String>) -> Self {
+        Self::Confirm {
+            prompt: format!("{action} {target}?"),
+            on_confirm: on_confirm.into(),
+            confirmed: true,
+        }
+    }
+}
+
 /// 弹窗栈 — LIFO 管理当前显示的弹窗
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PopupStack {

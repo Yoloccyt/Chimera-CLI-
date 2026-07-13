@@ -23,7 +23,7 @@
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use event_bus::{EventMetadata, NexusEvent};
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -914,8 +914,12 @@ fn test_command_filter_and_level_applies_to_log() {
 }
 
 #[test]
-fn test_refresh_command_clears_filters() {
-    let mut app = make_app();
+fn test_refresh_command_publishes_request() {
+    let app = make_app();
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let mut app = TuiApp::with_event_bus(app, bus);
+
     app.state_mut().filter_keyword = Some("old".into());
     app.state_mut().filter_topic = Some("security".into());
     app.state_mut().filter_level = Some("error".into());
@@ -926,9 +930,23 @@ fn test_refresh_command_clears_filters() {
     }
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert!(app.state().filter_keyword.is_none());
-    assert!(app.state().filter_topic.is_none());
-    assert!(app.state().filter_level.is_none());
+    // M4:refresh 不再由命令面板直接清空过滤器,而是发布 RefreshStateRequested 请求。
+    let event = rx.try_recv().expect("should receive event").unwrap();
+    assert!(
+        matches!(event, NexusEvent::RefreshStateRequested { .. }),
+        "expected RefreshStateRequested, got {event:?}"
+    );
+    assert!(app
+        .state()
+        .status_message
+        .as_ref()
+        .unwrap()
+        .0
+        .contains("RefreshStateRequested request published"));
+    // 过滤器保持原状,由上游订阅者决定是否响应刷新请求
+    assert!(app.state().filter_keyword.is_some());
+    assert!(app.state().filter_topic.is_some());
+    assert!(app.state().filter_level.is_some());
 }
 
 #[test]

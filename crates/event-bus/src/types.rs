@@ -9,6 +9,7 @@
 //! - V3/V4(Parliament→GSOE/AutoDPO 向上依赖):`ConsensusReached` 事件
 
 use chrono::{DateTime, Utc};
+use nexus_core::Quest;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -49,6 +50,58 @@ pub enum EventSeverity {
     /// WHY:CheckpointSaved 等事件丢失会导致 Quest 无法恢复,
     /// 必须标注 Critical 以触发 mpsc 点对点通道或保留优先级
     Critical,
+}
+
+/// Quest 完成状态 — 用于 `QuestCompleted` 事件
+///
+/// WHY 定义在 event-bus 而非 nexus-core:原 nexus-core 仅有 `TaskStatus`,
+/// 没有 Quest 级别的结束状态。为不修改核心领域类型(§3.3.1 要求 ADR),
+/// 在 event-bus 这一跨层通信契约层定义轻量级状态枚举。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum QuestStatus {
+    /// Quest 成功完成
+    Completed,
+    /// Quest 执行失败
+    Failed,
+    /// Quest 被取消
+    Cancelled,
+}
+
+/// 投票值 — 议会投票的赞成/反对/弃权选项
+///
+/// WHY 定义在 event-bus:VoteCast 原使用 bool,但控制面板的 :vote 命令
+/// 需要显式表达 Abstain,因此在跨层通信契约层定义三值枚举。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum VoteValue {
+    /// 赞成
+    Yes,
+    /// 反对
+    No,
+    /// 弃权
+    Abstain,
+}
+
+/// 预算指标载荷 — TUI Budget 面板的结构化数据
+///
+/// WHY 定义在 event-bus:chimera-tui(L10)无法直接依赖 efficiency-monitor(L9),
+/// 通过 event-bus(L1)传递结构化预算指标,避免面板侧从多个事件拼合。
+/// 字段与 `chimera_tui::data::BudgetMetrics` 保持一致。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BudgetMetricsPayload {
+    /// 总消耗量(单位由预算类型决定)
+    pub total_consumption: f64,
+    /// 剩余预算
+    pub remaining_budget: f64,
+    /// 利用率 [0.0, 1.0]
+    pub utilization_rate: f32,
+    /// 当前预算档位(如 "High"/"Medium"/"Low")
+    pub current_tier: String,
+    /// 档位系数,1.0 为基准
+    pub coefficient: f32,
+    /// 是否已触发预算超限
+    pub is_exceeded: bool,
+    /// 最新告警信息(无告警为 None)
+    pub alert: Option<String>,
 }
 
 /// NEXUS-OMEGA 核心事件枚举 — 跨层通信的唯一契约
@@ -129,6 +182,32 @@ pub enum NexusEvent {
         completed: u32,
         /// 总任务数
         total: u32,
+    },
+
+    /// Quest 完整列表更新 — L9 Quest → L10 Interface
+    ///
+    /// WHY:quest-engine 周期性发布完整列表,供 TUI 冷启动或 lag 后快速对齐,
+    /// 避免依赖多次增量事件才能拼出完整状态。Normal 级别,丢失可由下次周期补偿。
+    QuestListUpdated {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 当前活动 Quest 完整列表
+        quests: Vec<Quest>,
+        /// 列表来源标识(如 "quest-engine")
+        source: String,
+    },
+
+    /// Quest 已完成 — L9 Quest → L10 Interface
+    ///
+    /// WHY:标记 Quest 结束,TUI 据此从活动列表移除。携带 status 以区分
+    /// 成功/失败/取消,便于面板展示不同视觉状态。
+    QuestCompleted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// Quest ID
+        quest_id: String,
+        /// 完成状态
+        status: QuestStatus,
     },
 
     /// TTG 切换思考模式(快速/标准/深度),Parliament 据此调整预算
@@ -920,6 +999,18 @@ pub enum NexusEvent {
         utilization_rate: f32,
     },
 
+    /// 预算指标更新 — L9 Quest(efficiency-monitor)→ L10 Interface
+    ///
+    /// WHY:结构化预算指标,供 TUI Budget 面板直接消费,避免面板侧
+    /// 从 BudgetStatsReported / BudgetAdjusted / BudgetExceeded 等多个
+    /// 事件拼合。Normal 级别,丢失可由下次周期补偿。
+    BudgetMetricsUpdated {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 结构化预算指标
+        metrics: BudgetMetricsPayload,
+    },
+
     // ============================================================
     // Week 6 扩展:NMC 多模态编码完成事件
     //
@@ -1097,6 +1188,84 @@ pub enum NexusEvent {
         /// 阈值
         threshold: f64,
     },
+
+    // ============================================================
+    // M4 扩展:TUI 双向控制请求事件
+    //
+    // WHY:chimera-tui(L10 Interface)作为控制面板,需通过 EventBus
+    // 向下游发布控制请求,而非直接修改上游状态。所有变体均为请求语义,
+    // 对应上游消费后产生状态变更事件。字段加 #[serde(default)] 保证
+    // 未来字段扩展或旧数据反序列化兼容。
+    // ============================================================
+    /// Quest 暂停请求 — L10 Interface → L9 Quest
+    QuestPauseRequested {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 目标 Quest ID
+        #[serde(default)]
+        quest_id: String,
+        /// 请求者标识
+        #[serde(default)]
+        requested_by: String,
+    },
+
+    /// Quest 恢复请求 — L10 Interface → L9 Quest
+    QuestResumeRequested {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 目标 Quest ID
+        #[serde(default)]
+        quest_id: String,
+        /// 请求者标识
+        #[serde(default)]
+        requested_by: String,
+    },
+
+    /// 投票请求 — L10 Interface → L8 Parliament
+    VoteCastRequested {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 目标提案 ID
+        #[serde(default)]
+        proposal_id: String,
+        /// 投票者标识
+        #[serde(default)]
+        voter: String,
+        /// 投票值
+        vote: VoteValue,
+    },
+
+    /// 状态刷新请求 — L10 Interface → 任意订阅者
+    RefreshStateRequested {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 请求者标识
+        #[serde(default)]
+        requested_by: String,
+    },
+
+    /// Quest 已暂停 — L9 Quest → L10 Interface
+    ///
+    /// WHY:quest-engine 消费 QuestPauseRequested 后发布状态变更事件,
+    /// 供 TUI 数据管道感知并反馈给操作员,完成双向控制闭环。
+    QuestPaused {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 已暂停的 Quest ID
+        quest_id: String,
+        /// 请求者标识
+        requested_by: String,
+    },
+
+    /// Quest 已恢复 — L9 Quest → L10 Interface
+    QuestResumed {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 已恢复的 Quest ID
+        quest_id: String,
+        /// 请求者标识
+        requested_by: String,
+    },
 }
 
 impl NexusEvent {
@@ -1108,6 +1277,8 @@ impl NexusEvent {
             | Self::ModelRouteSelected { metadata, .. }
             | Self::QuestCreated { metadata, .. }
             | Self::QuestProgressUpdated { metadata, .. }
+            | Self::QuestListUpdated { metadata, .. }
+            | Self::QuestCompleted { metadata, .. }
             | Self::ThinkingModeSwitched { metadata, .. }
             | Self::CheckpointSaved { metadata, .. }
             | Self::CheckpointLoaded { metadata, .. }
@@ -1161,6 +1332,7 @@ impl NexusEvent {
             | Self::AhirtProbeCompleted { metadata, .. }
             | Self::RoleRegistered { metadata, .. }
             | Self::BudgetStatsReported { metadata, .. }
+            | Self::BudgetMetricsUpdated { metadata, .. }
             | Self::NmcEncoded { metadata, .. }
             | Self::ChtcToolCallReceived { metadata, .. }
             | Self::SsraFusionCompleted { metadata, .. }
@@ -1169,7 +1341,13 @@ impl NexusEvent {
             | Self::McpMeshTransactionCompleted { metadata, .. }
             | Self::CsnSubstitutionTriggered { metadata, .. }
             | Self::SesaActivationCompleted { metadata, .. }
-            | Self::EfficiencyAlertTriggered { metadata, .. } => metadata,
+            | Self::EfficiencyAlertTriggered { metadata, .. }
+            | Self::QuestPauseRequested { metadata, .. }
+            | Self::QuestResumeRequested { metadata, .. }
+            | Self::VoteCastRequested { metadata, .. }
+            | Self::RefreshStateRequested { metadata, .. }
+            | Self::QuestPaused { metadata, .. }
+            | Self::QuestResumed { metadata, .. } => metadata,
         }
     }
 
@@ -1219,6 +1397,8 @@ impl NexusEvent {
             Self::ModelRouteSelected { .. } => "ModelRouteSelected",
             Self::QuestCreated { .. } => "QuestCreated",
             Self::QuestProgressUpdated { .. } => "QuestProgressUpdated",
+            Self::QuestListUpdated { .. } => "QuestListUpdated",
+            Self::QuestCompleted { .. } => "QuestCompleted",
             Self::ThinkingModeSwitched { .. } => "ThinkingModeSwitched",
             Self::CheckpointSaved { .. } => "CheckpointSaved",
             Self::CheckpointLoaded { .. } => "CheckpointLoaded",
@@ -1272,6 +1452,7 @@ impl NexusEvent {
             Self::AhirtProbeCompleted { .. } => "AhirtProbeCompleted",
             Self::RoleRegistered { .. } => "RoleRegistered",
             Self::BudgetStatsReported { .. } => "BudgetStatsReported",
+            Self::BudgetMetricsUpdated { .. } => "BudgetMetricsUpdated",
             Self::NmcEncoded { .. } => "NmcEncoded",
             Self::ChtcToolCallReceived { .. } => "ChtcToolCallReceived",
             Self::SsraFusionCompleted { .. } => "SsraFusionCompleted",
@@ -1281,6 +1462,12 @@ impl NexusEvent {
             Self::CsnSubstitutionTriggered { .. } => "CsnSubstitutionTriggered",
             Self::SesaActivationCompleted { .. } => "SesaActivationCompleted",
             Self::EfficiencyAlertTriggered { .. } => "EfficiencyAlertTriggered",
+            Self::QuestPauseRequested { .. } => "QuestPauseRequested",
+            Self::QuestResumeRequested { .. } => "QuestResumeRequested",
+            Self::VoteCastRequested { .. } => "VoteCastRequested",
+            Self::RefreshStateRequested { .. } => "RefreshStateRequested",
+            Self::QuestPaused { .. } => "QuestPaused",
+            Self::QuestResumed { .. } => "QuestResumed",
         }
     }
 }
@@ -1852,5 +2039,148 @@ mod tests {
         let bytes = crate::bus::serialize_msgpack(&e).unwrap();
         let decoded = crate::bus::deserialize_msgpack(&bytes).unwrap();
         assert_eq!(e, decoded);
+    }
+
+    // ============================================================
+    // M4 扩展测试:验证 TUI 双向控制事件
+    // ============================================================
+
+    #[test]
+    fn test_m4_control_events_normal_severity() {
+        let meta = EventMetadata::new("chimera-tui");
+        let pause = NexusEvent::QuestPauseRequested {
+            metadata: meta.clone(),
+            quest_id: "q-1".into(),
+            requested_by: "operator".into(),
+        };
+        let resume = NexusEvent::QuestResumeRequested {
+            metadata: meta.clone(),
+            quest_id: "q-1".into(),
+            requested_by: "operator".into(),
+        };
+        let vote = NexusEvent::VoteCastRequested {
+            metadata: meta.clone(),
+            proposal_id: "p-1".into(),
+            voter: "operator".into(),
+            vote: VoteValue::Abstain,
+        };
+        let refresh = NexusEvent::RefreshStateRequested {
+            metadata: meta,
+            requested_by: "operator".into(),
+        };
+
+        for e in [pause, resume, vote, refresh] {
+            assert_eq!(e.severity(), EventSeverity::Normal);
+        }
+    }
+
+    #[test]
+    fn test_m4_control_events_type_names() {
+        let meta = EventMetadata::new("chimera-tui");
+        assert_eq!(
+            NexusEvent::QuestPauseRequested {
+                metadata: meta.clone(),
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            }
+            .type_name(),
+            "QuestPauseRequested"
+        );
+        assert_eq!(
+            NexusEvent::QuestResumeRequested {
+                metadata: meta.clone(),
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            }
+            .type_name(),
+            "QuestResumeRequested"
+        );
+        assert_eq!(
+            NexusEvent::VoteCastRequested {
+                metadata: meta.clone(),
+                proposal_id: "p-1".into(),
+                voter: "operator".into(),
+                vote: VoteValue::Yes,
+            }
+            .type_name(),
+            "VoteCastRequested"
+        );
+        assert_eq!(
+            NexusEvent::RefreshStateRequested {
+                metadata: meta.clone(),
+                requested_by: "operator".into(),
+            }
+            .type_name(),
+            "RefreshStateRequested"
+        );
+        assert_eq!(
+            NexusEvent::QuestPaused {
+                metadata: meta.clone(),
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            }
+            .type_name(),
+            "QuestPaused"
+        );
+        assert_eq!(
+            NexusEvent::QuestResumed {
+                metadata: meta,
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            }
+            .type_name(),
+            "QuestResumed"
+        );
+    }
+
+    #[test]
+    fn test_m4_control_events_serialization_roundtrip() {
+        let cases = vec![
+            NexusEvent::QuestPauseRequested {
+                metadata: EventMetadata::new("chimera-tui"),
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            },
+            NexusEvent::QuestResumeRequested {
+                metadata: EventMetadata::new("chimera-tui"),
+                quest_id: "q-2".into(),
+                requested_by: "operator".into(),
+            },
+            NexusEvent::VoteCastRequested {
+                metadata: EventMetadata::new("chimera-tui"),
+                proposal_id: "p-1".into(),
+                voter: "operator".into(),
+                vote: VoteValue::No,
+            },
+            NexusEvent::RefreshStateRequested {
+                metadata: EventMetadata::new("chimera-tui"),
+                requested_by: "operator".into(),
+            },
+            NexusEvent::QuestPaused {
+                metadata: EventMetadata::new("quest-engine"),
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            },
+            NexusEvent::QuestResumed {
+                metadata: EventMetadata::new("quest-engine"),
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            },
+        ];
+
+        for e in cases {
+            let json = serde_json::to_string(&e).unwrap();
+            let restored: NexusEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(e, restored);
+        }
+    }
+
+    #[test]
+    fn test_m4_vote_value_serialization() {
+        for value in [VoteValue::Yes, VoteValue::No, VoteValue::Abstain] {
+            let json = serde_json::to_string(&value).unwrap();
+            let restored: VoteValue = serde_json::from_str(&json).unwrap();
+            assert_eq!(value, restored);
+        }
     }
 }

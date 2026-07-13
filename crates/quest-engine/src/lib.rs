@@ -37,6 +37,7 @@
 pub mod arbitration;
 pub mod checkpoint;
 pub mod config;
+pub mod control;
 pub mod dag;
 pub mod engine;
 pub mod error;
@@ -47,6 +48,9 @@ pub mod types;
 pub use arbitration::ArbitrationLayer;
 pub use checkpoint::CheckpointManager;
 pub use config::QuestConfig;
+pub use control::{
+    handle_control_event, spawn_control_subscriber, spawn_control_subscriber_with_receiver,
+};
 pub use engine::QuestEngine;
 pub use error::QuestError;
 pub use ttg::{ComplexityScore, ModeSwitchReason, TtgConfig, TtgGovernor};

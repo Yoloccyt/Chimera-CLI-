@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use chimera_tui::{CommandPalette, InputMode, PanelId, Severity, TuiCommand, TuiState};
+use chimera_tui::{CommandPalette, InputMode, PanelId, PopupKind, Severity, TuiCommand, TuiState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn command_state(input: &str) -> TuiState {
@@ -173,19 +173,19 @@ fn command_palette_level_command_rejects_invalid_level() {
 }
 
 #[test]
-fn command_palette_refresh_clears_filters() {
+fn command_palette_refresh_returns_request() {
     let mut palette = CommandPalette::new();
     let mut state = command_state("refresh");
     state.filter_keyword = Some("old".into());
     state.filter_topic = Some("security".into());
     state.filter_level = Some("error".into());
 
+    // M4:refresh 现在作为控制请求发布,由上游订阅者处理过滤器清空。
     let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, None);
-    assert!(state.filter_keyword.is_none());
-    assert!(state.filter_topic.is_none());
-    assert!(state.filter_level.is_none());
-    assert_eq!(state.status_message.as_ref().unwrap().1, Severity::Info);
+    assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
+    assert!(state.filter_keyword.is_some());
+    assert!(state.filter_topic.is_some());
+    assert!(state.filter_level.is_some());
 }
 
 #[test]
@@ -270,4 +270,118 @@ fn command_palette_handle_key_enter_submits() {
     );
     assert_eq!(cmd, Some(TuiCommand::SwitchPanel(PanelId::Help)));
     assert_eq!(state.input_mode, InputMode::Normal);
+}
+
+#[test]
+fn command_palette_parses_pause_command() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("pause q-1");
+
+    let cmd = palette.submit(&mut state);
+    match cmd {
+        Some(TuiCommand::OpenPopup(PopupKind::Confirm {
+            prompt,
+            on_confirm,
+            confirmed,
+        })) => {
+            assert!(prompt.contains("Pause quest"));
+            assert!(prompt.contains("q-1"));
+            assert_eq!(on_confirm, "pause:q-1");
+            assert!(confirmed, "control confirm should default to Yes");
+        }
+        other => panic!("expected Confirm popup, got {other:?}"),
+    }
+}
+
+#[test]
+fn command_palette_parses_resume_command() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("resume q-2");
+
+    let cmd = palette.submit(&mut state);
+    match cmd {
+        Some(TuiCommand::OpenPopup(PopupKind::Confirm {
+            prompt,
+            on_confirm,
+            confirmed,
+        })) => {
+            assert!(prompt.contains("Resume quest"));
+            assert!(prompt.contains("q-2"));
+            assert_eq!(on_confirm, "resume:q-2");
+            assert!(confirmed, "control confirm should default to Yes");
+        }
+        other => panic!("expected Confirm popup, got {other:?}"),
+    }
+}
+
+#[test]
+fn command_palette_parses_vote_command() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("vote yes p-1");
+
+    let cmd = palette.submit(&mut state);
+    match cmd {
+        Some(TuiCommand::OpenPopup(PopupKind::Confirm {
+            prompt,
+            on_confirm,
+            confirmed,
+        })) => {
+            assert!(prompt.contains("Vote yes on proposal"));
+            assert!(prompt.contains("p-1"));
+            assert_eq!(on_confirm, "vote:yes:p-1");
+            assert!(confirmed, "control confirm should default to Yes");
+        }
+        other => panic!("expected Confirm popup, got {other:?}"),
+    }
+}
+
+#[test]
+fn command_palette_vote_command_rejects_invalid_vote() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("vote maybe p-1");
+
+    let cmd = palette.submit(&mut state);
+    assert_eq!(cmd, None);
+    assert!(
+        state
+            .status_message
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("invalid vote"),
+        "status should report invalid vote"
+    );
+}
+
+#[test]
+fn command_palette_refresh_command_returns_request() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("refresh");
+    state.filter_keyword = Some("old".into());
+
+    let cmd = palette.submit(&mut state);
+    assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
+    // refresh 现在直接发布请求,不再清空过滤器;清空逻辑留待上游处理
+    assert_eq!(state.filter_keyword, Some("old".into()));
+}
+
+#[test]
+fn command_palette_control_commands_require_arguments() {
+    let cases = [
+        ("pause", "pause requires a quest id"),
+        ("resume", "resume requires a quest id"),
+        ("vote", "vote requires a vote value and proposal id"),
+    ];
+
+    for (input, expected) in cases {
+        let mut palette = CommandPalette::new();
+        let mut state = command_state(input);
+        let cmd = palette.submit(&mut state);
+        assert_eq!(cmd, None, "input '{}' should not produce command", input);
+        assert!(
+            state.status_message.as_ref().unwrap().0.contains(expected),
+            "input '{}' should report missing argument",
+            input
+        );
+    }
 }

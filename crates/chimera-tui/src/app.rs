@@ -44,6 +44,7 @@ use crate::panels::{
 };
 use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
+use event_bus::{EventBus, EventMetadata, NexusEvent, VoteValue};
 
 /// 主面板比例调整步长
 const RATIO_STEP: f32 = 0.05;
@@ -88,6 +89,10 @@ pub struct TuiApp {
     last_focused: Option<PanelId>,
     /// 最后一帧的终端区域,用于鼠标事件命中测试
     last_area: Rect,
+    /// 可选的事件总线引用,用于发布控制请求事件(M4 双向控制)
+    ///
+    /// WHY Option:测试与普通启动场景可能不需要 EventBus,避免强制依赖。
+    event_bus: Option<EventBus>,
 }
 
 impl TuiApp {
@@ -137,7 +142,16 @@ impl TuiApp {
             command_palette: CommandPalette::new(),
             last_focused: None,
             last_area: Rect::default(),
+            event_bus: None,
         })
+    }
+
+    /// 将 EventBus 绑定到已有 TUI 应用
+    ///
+    /// WHY M4:CLI 在创建 TUI 后注入生产 EventBus,使 TUI 获得双向控制能力。
+    pub fn with_event_bus(mut app: Self, bus: EventBus) -> Self {
+        app.event_bus = Some(bus);
+        app
     }
 
     /// 返回配置引用
@@ -327,6 +341,84 @@ impl TuiApp {
     fn apply_confirm_command(&mut self, cmd: &str) {
         if cmd == "quit" {
             self.quit();
+        } else if let Some(quest_id) = cmd.strip_prefix("pause:") {
+            self.publish_pause(quest_id);
+        } else if let Some(quest_id) = cmd.strip_prefix("resume:") {
+            self.publish_resume(quest_id);
+        } else if let Some(rest) = cmd.strip_prefix("vote:") {
+            let mut parts = rest.splitn(2, ':');
+            let vote_str = parts.next().unwrap_or("");
+            let proposal_id = parts.next().unwrap_or("");
+            if let Some(vote) = parse_vote_value(vote_str) {
+                self.publish_vote(proposal_id, vote);
+            } else {
+                self.state.set_status(
+                    format!("invalid vote in confirm command: {cmd}"),
+                    Severity::Error,
+                );
+            }
+        }
+    }
+
+    /// 发布 Quest 暂停请求
+    fn publish_pause(&mut self, quest_id: &str) {
+        self.publish_control_event(NexusEvent::QuestPauseRequested {
+            metadata: EventMetadata::new("chimera-tui"),
+            quest_id: quest_id.to_string(),
+            requested_by: "operator".to_string(),
+        });
+    }
+
+    /// 发布 Quest 恢复请求
+    fn publish_resume(&mut self, quest_id: &str) {
+        self.publish_control_event(NexusEvent::QuestResumeRequested {
+            metadata: EventMetadata::new("chimera-tui"),
+            quest_id: quest_id.to_string(),
+            requested_by: "operator".to_string(),
+        });
+    }
+
+    /// 发布投票请求
+    fn publish_vote(&mut self, proposal_id: &str, vote: VoteValue) {
+        self.publish_control_event(NexusEvent::VoteCastRequested {
+            metadata: EventMetadata::new("chimera-tui"),
+            proposal_id: proposal_id.to_string(),
+            voter: "operator".to_string(),
+            vote,
+        });
+    }
+
+    /// 发布状态刷新请求
+    fn publish_refresh(&mut self) {
+        self.publish_control_event(NexusEvent::RefreshStateRequested {
+            metadata: EventMetadata::new("chimera-tui"),
+            requested_by: "operator".to_string(),
+        });
+    }
+
+    /// 通用控制事件发布,处理 EventBus 不可用或发布失败
+    ///
+    /// WHY:所有 M4 控制请求走同一入口,统一设置状态栏反馈,
+    /// 避免每个命令重复 error/success 处理逻辑。
+    fn publish_control_event(&mut self, event: NexusEvent) {
+        let type_name = event.type_name();
+        match &self.event_bus {
+            Some(bus) => match bus.publish_blocking(event) {
+                Ok(()) => {
+                    let msg = format!("{type_name} request published");
+                    self.state.set_status(msg, Severity::Info);
+                }
+                Err(e) => {
+                    self.state.set_status(
+                        format!("failed to publish {type_name}: {e}"),
+                        Severity::Error,
+                    );
+                }
+            },
+            None => {
+                self.state
+                    .set_status("event bus not available", Severity::Error);
+            }
         }
     }
 
@@ -345,6 +437,31 @@ impl TuiApp {
             TuiCommand::SwitchPanel(id) => self.switch_panel_to(id),
             TuiCommand::ShowHelp => self.switch_panel_to(PanelId::Help),
             TuiCommand::OpenPopup(kind) => self.state.popup_stack.push(kind),
+            // M4:破坏性控制命令先弹出确认框,由操作员二次确认后再发布事件
+            TuiCommand::RequestQuestPause(quest_id) => {
+                self.state.popup_stack.push(PopupKind::control_confirm(
+                    "Pause quest",
+                    &quest_id,
+                    format!("pause:{quest_id}"),
+                ));
+            }
+            TuiCommand::RequestQuestResume(quest_id) => {
+                self.state.popup_stack.push(PopupKind::control_confirm(
+                    "Resume quest",
+                    &quest_id,
+                    format!("resume:{quest_id}"),
+                ));
+            }
+            TuiCommand::RequestVote { proposal_id, vote } => {
+                let vote_str = format!("{vote:?}").to_lowercase();
+                self.state.popup_stack.push(PopupKind::control_confirm(
+                    &format!("Vote {vote_str} on proposal"),
+                    &proposal_id,
+                    format!("vote:{vote_str}:{proposal_id}"),
+                ));
+            }
+            // M4:非破坏性刷新直接发布事件
+            TuiCommand::RequestRefresh => self.publish_refresh(),
         }
     }
 
@@ -648,6 +765,19 @@ impl TuiApp {
 /// 判断坐标是否落在指定区域内
 fn is_inside(column: u16, row: u16, area: Rect) -> bool {
     column >= area.x && column < area.x + area.width && row >= area.y && row < area.y + area.height
+}
+
+/// 将 vote 字符串解析为 VoteValue
+///
+/// WHY:确认弹窗的 `on_confirm` 只能传递字符串,解码时需要与
+/// CommandPalette 编码时使用的 `yes|no|abstain` 保持一致。
+fn parse_vote_value(s: &str) -> Option<VoteValue> {
+    match s.to_lowercase().as_str() {
+        "yes" => Some(VoteValue::Yes),
+        "no" => Some(VoteValue::No),
+        "abstain" => Some(VoteValue::Abstain),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

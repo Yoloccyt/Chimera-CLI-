@@ -44,6 +44,11 @@ use crate::ttg::TtgGovernor;
 pub struct QuestEngine {
     /// Quest 注册表(quest_id → Quest),DashMap 分片锁支持并发读写
     quests: Arc<DashMap<String, Quest>>,
+    /// 已暂停 Quest 集合(quest_id → ())
+    ///
+    /// WHY M4:Quest 结构体本身无 paused 字段(避免修改 nexus-core),
+    /// 由 quest-engine 维护独立的暂停状态表,供控制事件消费。
+    paused_quests: Arc<DashMap<String, ()>>,
     /// 事件总线(基于 Arc,Clone 廉价)
     event_bus: EventBus,
     /// 引擎配置
@@ -71,6 +76,7 @@ impl QuestEngine {
     pub fn with_config(event_bus: EventBus, config: QuestConfig) -> Self {
         Self {
             quests: Arc::new(DashMap::new()),
+            paused_quests: Arc::new(DashMap::new()),
             event_bus,
             config,
             checkpoint_manager: None,
@@ -88,6 +94,7 @@ impl QuestEngine {
     ) -> Self {
         Self {
             quests: Arc::new(DashMap::new()),
+            paused_quests: Arc::new(DashMap::new()),
             event_bus,
             config,
             checkpoint_manager: Some(CheckpointManager::new(checkpoint_dir)),
@@ -104,6 +111,7 @@ impl QuestEngine {
     ) -> Self {
         Self {
             quests: Arc::new(DashMap::new()),
+            paused_quests: Arc::new(DashMap::new()),
             event_bus,
             config,
             checkpoint_manager: Some(CheckpointManager::with_max_keep(checkpoint_dir, max_keep)),
@@ -128,6 +136,7 @@ impl QuestEngine {
         ttg_governor.set_event_bus(event_bus.clone());
         Self {
             quests: Arc::new(DashMap::new()),
+            paused_quests: Arc::new(DashMap::new()),
             event_bus,
             config,
             checkpoint_manager: Some(CheckpointManager::new(checkpoint_dir)),
@@ -598,6 +607,46 @@ impl QuestEngine {
         self.quests.iter().map(|r| r.clone()).collect()
     }
 
+    /// 暂停指定 Quest,并发布 QuestPaused 状态变更事件
+    ///
+    /// WHY M4:消费 TUI 发布的 QuestPauseRequested 请求,将 Quest 标记为暂停,
+    /// 并通过 EventBus 反馈状态变更,完成双向控制闭环。
+    pub async fn pause_quest(&self, quest_id: &str, requested_by: &str) -> Result<(), QuestError> {
+        if !self.quests.contains_key(quest_id) {
+            return Err(QuestError::QuestNotFound(quest_id.to_string()));
+        }
+        self.paused_quests.insert(quest_id.to_string(), ());
+        let event = NexusEvent::QuestPaused {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest_id.to_string(),
+            requested_by: requested_by.to_string(),
+        };
+        self.event_bus.publish(event).await?;
+        info!(quest_id = %quest_id, "Quest 已暂停");
+        Ok(())
+    }
+
+    /// 恢复指定 Quest,并发布 QuestResumed 状态变更事件
+    pub async fn resume_quest(&self, quest_id: &str, requested_by: &str) -> Result<(), QuestError> {
+        if !self.quests.contains_key(quest_id) {
+            return Err(QuestError::QuestNotFound(quest_id.to_string()));
+        }
+        self.paused_quests.remove(quest_id);
+        let event = NexusEvent::QuestResumed {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest_id.to_string(),
+            requested_by: requested_by.to_string(),
+        };
+        self.event_bus.publish(event).await?;
+        info!(quest_id = %quest_id, "Quest 已恢复");
+        Ok(())
+    }
+
+    /// 查询 Quest 是否处于暂停状态
+    pub fn is_paused(&self, quest_id: &str) -> bool {
+        self.paused_quests.contains_key(quest_id)
+    }
+
     /// 获取配置引用(用于测试与调试)
     pub fn config(&self) -> &QuestConfig {
         &self.config
@@ -965,5 +1014,64 @@ mod tests {
         // 模式不变
         let stored = engine.get_quest(&quest.quest_id).unwrap();
         assert_eq!(stored.thinking_mode, ThinkingMode::Standard);
+    }
+
+    // ============================================================
+    // M4 扩展测试:Quest 暂停/恢复控制
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_pause_resume_quest_updates_state_and_publishes_events() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = QuestEngine::new(bus);
+        let intent = make_intent("分析需求。");
+        let quest = engine.create_quest(intent).await.unwrap();
+
+        // 消费 QuestCreated 事件
+        let _ = rx.recv().await.unwrap();
+
+        engine
+            .pause_quest(&quest.quest_id, "operator")
+            .await
+            .unwrap();
+        assert!(engine.is_paused(&quest.quest_id));
+
+        let event = rx.recv().await.unwrap();
+        match event {
+            NexusEvent::QuestPaused { quest_id, .. } => {
+                assert_eq!(quest_id, quest.quest_id);
+            }
+            other => panic!("expected QuestPaused, got {other:?}"),
+        }
+
+        engine
+            .resume_quest(&quest.quest_id, "operator")
+            .await
+            .unwrap();
+        assert!(!engine.is_paused(&quest.quest_id));
+
+        let event = rx.recv().await.unwrap();
+        match event {
+            NexusEvent::QuestResumed { quest_id, .. } => {
+                assert_eq!(quest_id, quest.quest_id);
+            }
+            other => panic!("expected QuestResumed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pause_unknown_quest_returns_error() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus);
+        let result = engine.pause_quest("nonexistent", "operator").await;
+        assert!(matches!(result, Err(QuestError::QuestNotFound(_))));
+    }
+
+    #[test]
+    fn test_is_paused_defaults_to_false() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus);
+        assert!(!engine.is_paused("any-quest"));
     }
 }

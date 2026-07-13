@@ -32,6 +32,9 @@ pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
     )
     .context("TUI 初始化失败")?;
 
+    // M4:将 EventBus 注入 TUI,使控制面板可发布请求事件。
+    app = chimera_tui::TuiApp::with_event_bus(app, bus);
+
     // 启动 TUI 事件循环(阻塞直到用户退出)
     // WHY 先保存结果再 shutdown:即使 run() 返回 Err,也必须清理 DataPipeline
     // 后台任务,避免 orphan task(§4.4 反模式 #7)。

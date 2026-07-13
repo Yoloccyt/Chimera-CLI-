@@ -15,7 +15,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
-use crate::popup::Severity;
+use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
 
 /// 命令面板 — 解析并执行底部输入栏的命令
@@ -127,14 +127,7 @@ impl CommandPalette {
             "log" => return Some(TuiCommand::SwitchPanel(PanelId::Log)),
             "help" => return Some(TuiCommand::SwitchPanel(PanelId::Help)),
             "quit" => return Some(TuiCommand::Quit),
-            "refresh" => {
-                state.clear_filters();
-                state.set_status(
-                    "filters cleared (refresh is M4 placeholder)",
-                    Severity::Info,
-                );
-                return None;
-            }
+            "refresh" => return Some(TuiCommand::RequestRefresh),
             _ => {}
         }
 
@@ -185,11 +178,73 @@ impl CommandPalette {
                     None
                 }
             }
+            "pause" => {
+                if arg.is_empty() {
+                    state.set_status("pause requires a quest id", Severity::Error);
+                    return None;
+                }
+                Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                    "Pause quest",
+                    arg,
+                    format!("pause:{arg}"),
+                )))
+            }
+            "resume" => {
+                if arg.is_empty() {
+                    state.set_status("resume requires a quest id", Severity::Error);
+                    return None;
+                }
+                Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                    "Resume quest",
+                    arg,
+                    format!("resume:{arg}"),
+                )))
+            }
+            "vote" => Self::parse_vote_command(arg, state),
             _ => {
                 state.set_status(format!("unknown command '{}'", cmd), Severity::Error);
                 None
             }
         }
+    }
+
+    /// 解析 `:vote <yes|no|abstain> <proposal-id>` 命令
+    ///
+    /// 返回确认弹窗命令;若参数非法则设置状态消息并返回 None。
+    fn parse_vote_command(arg: &str, state: &mut TuiState) -> Option<TuiCommand> {
+        if arg.trim().is_empty() {
+            state.set_status(
+                "vote requires a vote value and proposal id",
+                Severity::Error,
+            );
+            return None;
+        }
+
+        let mut parts = arg.splitn(2, ' ');
+        let vote_str = parts.next().unwrap_or("").trim();
+        let proposal_id = parts.next().unwrap_or("").trim();
+
+        match vote_str.to_lowercase().as_str() {
+            "yes" | "no" | "abstain" => {}
+            _ => {
+                state.set_status(
+                    format!("invalid vote '{}': expected yes|no|abstain", vote_str),
+                    Severity::Error,
+                );
+                return None;
+            }
+        };
+
+        if proposal_id.is_empty() {
+            state.set_status("vote requires a proposal id", Severity::Error);
+            return None;
+        }
+
+        Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+            &format!("Vote {vote_str} on proposal"),
+            proposal_id,
+            format!("vote:{vote_str}:{proposal_id}"),
+        )))
     }
 }
 
@@ -330,26 +385,19 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_refresh_command_clears_filters() {
+    fn test_parse_refresh_command_returns_request() {
         let mut state = TuiState::new();
         state.filter_keyword = Some("foo".into());
         state.filter_topic = Some("security".into());
         state.filter_level = Some("critical".into());
 
+        // M4:refresh 现在作为控制请求发布,由上游订阅者决定是否清空过滤器,
+        // 命令面板本身不再直接修改过滤器状态。
         let cmd = CommandPalette::parse_command("refresh", &mut state);
-        assert_eq!(cmd, None);
-        assert!(state.filter_keyword.is_none());
-        assert!(state.filter_topic.is_none());
-        assert!(state.filter_level.is_none());
-        assert!(
-            state
-                .status_message
-                .as_ref()
-                .unwrap()
-                .0
-                .contains("filters cleared"),
-            "status should confirm refresh"
-        );
+        assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
+        assert!(state.filter_keyword.is_some());
+        assert!(state.filter_topic.is_some());
+        assert!(state.filter_level.is_some());
     }
 
     #[test]

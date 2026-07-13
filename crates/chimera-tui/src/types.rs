@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 
 use crate::data::{BudgetMetrics, HealthMetrics, MemoryMetrics, SecurityState};
 use crate::popup::{PopupStack, Severity};
-use event_bus::NexusEvent;
+use event_bus::{NexusEvent, VoteValue};
 use nexus_core::Quest;
 use serde::{Deserialize, Serialize};
 
@@ -158,6 +158,19 @@ pub enum TuiCommand {
     ShowHelp,
     /// 打开弹窗
     OpenPopup(crate::popup::PopupKind),
+    /// 请求暂停指定 Quest(M4 双向控制)
+    RequestQuestPause(String),
+    /// 请求恢复指定 Quest(M4 双向控制)
+    RequestQuestResume(String),
+    /// 请求对提案投票(M4 双向控制)
+    RequestVote {
+        /// 目标提案 ID
+        proposal_id: String,
+        /// 投票值
+        vote: VoteValue,
+    },
+    /// 请求刷新状态(M4 双向控制)
+    RequestRefresh,
 }
 
 // ============================================================

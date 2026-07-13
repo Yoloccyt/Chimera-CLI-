@@ -76,7 +76,7 @@ impl EventTopic {
 impl NexusEvent {
     /// 获取事件所属主题
     ///
-    /// 67 个变体映射到 9 类 EventTopic。
+    /// 70 个变体映射到 9 类 EventTopic。
     /// WHY 用 match 而非 HashMap：编译期穷尽性检查，新增变体时编译器强制更新映射，
     /// 避免遗漏导致 topic() panic。
     pub fn topic(&self) -> EventTopic {
@@ -127,23 +127,32 @@ impl NexusEvent {
             | Self::PredictionRolledBack { .. }
             | Self::SsraFusionCompleted { .. } => EventTopic::Execution,
 
-            // === Parliament (7) === L8 Parliament 投票/共识/预算
+            // === Parliament (8 + M4 1 个) === L8 Parliament 投票/共识/预算
             Self::ConsensusReached { .. }
             | Self::VoteCast { .. }
             | Self::DebateStarted { .. }
             | Self::RoleRegistered { .. }
             | Self::BudgetAdjusted { .. }
             | Self::BudgetStatsReported { .. }
-            | Self::BudgetExceeded { .. } => EventTopic::Parliament,
+            | Self::BudgetExceeded { .. }
+            | Self::BudgetMetricsUpdated { .. }
+            | Self::VoteCastRequested { .. } => EventTopic::Parliament,
 
-            // === Quest (7) === L9 Quest 意图/任务/检查点
+            // === Quest (9 + M4 4 个) === L9 Quest 意图/任务/检查点
             Self::UserIntentEncoded { .. }
             | Self::QuestCreated { .. }
             | Self::QuestProgressUpdated { .. }
+            | Self::QuestListUpdated { .. }
+            | Self::QuestCompleted { .. }
             | Self::ThinkingModeSwitched { .. }
             | Self::CheckpointSaved { .. }
             | Self::CheckpointLoaded { .. }
-            | Self::ModelRouteSelected { .. } => EventTopic::Quest,
+            | Self::ModelRouteSelected { .. }
+            | Self::QuestPauseRequested { .. }
+            | Self::QuestResumeRequested { .. }
+            | Self::RefreshStateRequested { .. }
+            | Self::QuestPaused { .. }
+            | Self::QuestResumed { .. } => EventTopic::Quest,
 
             // === System (6) === L10 Interface + 跨层系统告警
             Self::McpMessageReceived { .. }
@@ -377,5 +386,64 @@ mod tests {
             cache_key: "k-1".into(),
         };
         assert_eq!(e.topic(), EventTopic::Storage);
+    }
+
+    #[test]
+    fn test_topic_mapping_m4_control_requests() {
+        let meta = EventMetadata::new("test");
+        assert_eq!(
+            NexusEvent::QuestPauseRequested {
+                metadata: meta.clone(),
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            }
+            .topic(),
+            EventTopic::Quest
+        );
+        assert_eq!(
+            NexusEvent::QuestResumeRequested {
+                metadata: meta.clone(),
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            }
+            .topic(),
+            EventTopic::Quest
+        );
+        assert_eq!(
+            NexusEvent::RefreshStateRequested {
+                metadata: meta.clone(),
+                requested_by: "operator".into(),
+            }
+            .topic(),
+            EventTopic::Quest
+        );
+        assert_eq!(
+            NexusEvent::VoteCastRequested {
+                metadata: meta.clone(),
+                proposal_id: "p-1".into(),
+                voter: "operator".into(),
+                vote: crate::types::VoteValue::Yes,
+            }
+            .topic(),
+            EventTopic::Parliament
+        );
+        assert_eq!(
+            NexusEvent::QuestPaused {
+                metadata: meta.clone(),
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            }
+            .topic(),
+            EventTopic::Quest
+        );
+        assert_eq!(
+            NexusEvent::QuestResumed {
+                metadata: meta,
+                quest_id: "q-1".into(),
+                requested_by: "operator".into(),
+            }
+            .topic(),
+            EventTopic::Quest
+        );
     }
 }
