@@ -314,6 +314,107 @@ if (-not $localFileMode) {
     Write-Info "下载链接: $downloadUrl"
 }
 
+# ------------------ 下载辅助函数 ------------------
+# WHY: 企业网络/DPI 防火墙常见阻断策略是在数据传输阶段中断连接,单次重试不足。
+#      此函数提供三层降级策略:
+#        1. Invoke-WebRequest + 重试(默认,支持代理)
+#        2. curl.exe (Win10+ 1803 内置,绕开 PS 5.1 WebRequest 限制)
+#        3. Start-BitsTransfer (支持断点续传,适合不稳定网络)
+#      每层失败后自动 fallback 到下一层,确保尽可能完成下载。
+function Invoke-DownloadWithRetry {
+    param(
+        [string]$Url,
+        [string]$OutFile,
+        [hashtable]$Headers,
+        [hashtable]$ProxyParams,
+        [int]$TimeoutSec = 300,
+        [int]$MaxRetries = 3
+    )
+
+    # ---- 1. Invoke-WebRequest 模式 (带重试 + 指数退避) ----
+    for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+        try {
+            $requestParams = @{
+                Uri             = $Url
+                OutFile         = $OutFile
+                Headers         = $Headers
+                UseBasicParsing = $true
+                ErrorAction     = 'Stop'
+                TimeoutSec      = $TimeoutSec
+            }
+            if ($ProxyParams.ContainsKey('Proxy')) {
+                $requestParams['Proxy'] = $ProxyParams['Proxy']
+            }
+            Invoke-WebRequest @requestParams
+            $fileSize = (Get-Item $OutFile).Length
+            if ($fileSize -eq 0) { throw '下载文件为空' }
+            return 'Invoke-WebRequest'
+        } catch {
+            if ($attempt -lt $MaxRetries) {
+                $waitSec = [math]::Pow(2, $attempt)  # 2s, 4s
+                Write-WarnMsg "下载第 $attempt/$MaxRetries 次失败,${waitSec}s 后重试: $($_.Exception.Message)"
+                Start-Sleep -Seconds $waitSec
+            } else {
+                Write-WarnMsg "下载第 $attempt/$MaxRetries 次失败: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    # ---- 2. curl.exe 回退 (Win10+ 1803 内置,绕开 PS 5.1 限制) ----
+    $curlPath = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curlPath) {
+        Write-WarnMsg '尝试 curl.exe 作为回退下载方式...'
+        try {
+            $curlArgs = @(
+                '-L', '-o', $OutFile,
+                '--max-time', $TimeoutSec,
+                '--retry', $MaxRetries,
+                '--retry-delay', 2
+            )
+            if ($Headers.ContainsKey('Authorization')) {
+                $curlArgs += '-H'; $curlArgs += "Authorization: $($Headers['Authorization'])"
+            }
+            if ($ProxyParams.ContainsKey('Proxy')) {
+                $curlArgs += '-x'; $curlArgs += $ProxyParams['Proxy']
+            }
+            $curlArgs += $Url
+            & $curlPath @curlArgs 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0 -and (Get-Item $OutFile).Length -gt 0) {
+                Write-Ok 'curl.exe 下载成功'
+                return 'curl'
+            }
+        } catch {
+            Write-WarnMsg "curl.exe 回退失败: $($_.Exception.Message)"
+        }
+    }
+
+    # ---- 3. Start-BitsTransfer 回退 (支持断点续传,适合不稳定网络) ----
+    # WHY: BITS 后台智能传输可自动恢复网络中断,但 Windows 11 默认禁用。
+    #      不作为首选,仅作为 Invoke-WebRequest 和 curl 均失败时的最后尝试。
+    try {
+        Write-WarnMsg '尝试 Start-BitsTransfer 作为最终回退方式...'
+        $bitsParams = @{
+            Source          = $Url
+            Destination     = $OutFile
+            DisplayName     = 'Chimera CLI Download'
+            ErrorAction     = 'Stop'
+        }
+        if ($ProxyParams.ContainsKey('Proxy')) {
+            $bitsParams['ProxyUsage'] = 'Override'
+            $bitsParams['ProxyList'] = $ProxyParams['Proxy']
+        }
+        Start-BitsTransfer @bitsParams
+        if ((Get-Item $OutFile).Length -gt 0) {
+            Write-Ok 'Start-BitsTransfer 下载成功'
+            return 'BITS'
+        }
+    } catch {
+        Write-WarnMsg "Start-BitsTransfer 回退失败: $($_.Exception.Message)"
+    }
+
+    return $null  # 全部失败
+}
+
 # ------------------ 创建临时目录 ------------------
 $tempDir = Join-Path $env:TEMP "chimera-install-$(Get-Random)"
 if (-not (Test-Path $tempDir)) {
@@ -340,25 +441,36 @@ try {
             if ($env:GITHUB_TOKEN) {
                 $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
             }
-            $requestParams = $script:CommonWebRequestParams.Clone()
-            $requestParams['Uri'] = $downloadUrl
-            $requestParams['OutFile'] = $downloadedFile
-            $requestParams['Headers'] = $headers
-            Invoke-WebRequest @requestParams
-            $fileSize = (Get-Item $downloadedFile).Length
-            if ($fileSize -eq 0) {
-                Die '下载文件为空 (鉴权失败? 请设置 $env:GITHUB_TOKEN)'
+            # 三层降级下载: Invoke-WebRequest(重试×3) → curl.exe → BITS
+            $downloadParams = @{
+                Url         = $downloadUrl
+                OutFile     = $downloadedFile
+                Headers     = $headers
+                ProxyParams = $script:CommonWebRequestParams
+                TimeoutSec  = 300
+                MaxRetries  = 3
             }
-            $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
-            Write-Ok "下载完成: $fileSizeMB MB"
-        } catch {
-            Die "下载失败 (URL: $downloadUrl)
-错误: $($_.Exception.Message)
-可能原因与解决方案:
+            $downloadMethod = Invoke-DownloadWithRetry @downloadParams
+            if (-not $downloadMethod) {
+                Die "下载失败 (URL: $downloadUrl)
+所有下载方式均失败,可能原因:
   1) 版本不存在 (检查 -Version 参数)
   2) 仓库为私有 (需设置 `$env:GITHUB_TOKEN)
   3) 网络连接问题 / 企业 DPI 阻断
-     → 尝试强制 TLS 1.2 后重试(脚本已自动启用)
+     → 使用代理: .\install.ps1 -Proxy 'http://proxy.company.com:8080'
+     → 手动下载 Release 中的 $artifactName,然后使用:
+       .\install.ps1 -LocalFile '<下载路径>' -Version $Version"
+            }
+            $fileSize = (Get-Item $downloadedFile).Length
+            $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
+            Write-Ok "下载完成: $fileSizeMB MB (方式: $downloadMethod)"
+        } catch {
+            Die "下载失败 (URL: $downloadUrl)
+错误: $($_.Exception.Message)
+所有下载方式均失败,可能原因:
+  1) 版本不存在 (检查 -Version 参数)
+  2) 仓库为私有 (需设置 `$env:GITHUB_TOKEN)
+  3) 网络连接问题 / 企业 DPI 阻断
      → 使用代理: .\install.ps1 -Proxy 'http://proxy.company.com:8080'
      → 手动下载 Release 中的 $artifactName,然后使用:
        .\install.ps1 -LocalFile '<下载路径>' -Version $Version"
