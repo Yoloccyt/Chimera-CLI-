@@ -192,6 +192,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Normalize IMAGE_NAME to lowercase
+        # WHY: docker/metadata-action@v5 自动将镜像名转小写推送至 GHCR,
+        # 但 ${{ env.IMAGE_NAME }} 保留 github.repository_owner 的原大小写(如 Yoloccyt),
+        # 导致后续 docker pull / docker run 找不到镜像。此处统一转小写覆写 IMAGE_NAME。
+        run: echo "IMAGE_NAME=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -299,13 +305,21 @@ jobs:
         run: |
           # WHY 显式 docker pull:虽然 build-push-action 已推送镜像,但本地缓存不等于
           # 用户可拉取。此步骤模拟真实用户安装路径,验证 GHCR 上的镜像可被公开拉取。
+          set -euo pipefail
           IMAGE="${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
           echo "Pulling image: $IMAGE"
           docker pull "$IMAGE"
 
           # 运行 --version 验证 binary 功能正常(distroless 镜像无 shell,直接执行 binary)
+          # WHY 捕获 stderr(2>&1):若 binary 因缺少共享库等原因启动失败,docker run 的
+          # 错误信息会输出到 stderr。合并到 stdout 后即使 docker run 失败也能在日志中
+          # 看到根因,而非仅看到 "exit code 1"。
           echo "Running: docker run --rm $IMAGE --version"
-          VERSION_OUTPUT=$(docker run --rm "$IMAGE" --version)
+          VERSION_OUTPUT=$(docker run --rm "$IMAGE" --version 2>&1) || {
+            echo "ERROR: docker run --version failed"
+            echo "Output: $VERSION_OUTPUT"
+            exit 1
+          }
           echo "Version output: $VERSION_OUTPUT"
 
           # 验证输出格式:必须匹配 aether|chimera|chimela X.Y.Z[-omega](确保 binary 未损坏)
@@ -327,6 +341,10 @@ jobs:
     timeout-minutes: 30  # WHY: 产物下载+Release 创建典型 1-3min,30min 兜底防 GitHub API 抖动
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      - name: Normalize IMAGE_NAME to lowercase
+        # WHY: 与 docker job 一致,确保 Release body 中的 docker pull/run 命令使用小写镜像名
+        run: echo "IMAGE_NAME=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
