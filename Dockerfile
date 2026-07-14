@@ -20,9 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# 先复制 manifest,利用 Docker 层缓存加速依赖编译
+# 先复制 manifest 与 cargo 配置,利用 Docker 层缓存加速依赖编译
 # (仅依赖变更时重编译 dependencies,改源码不触发)
 COPY Cargo.toml Cargo.lock ./
+COPY .cargo/config.toml ./.cargo/config.toml
 COPY crates/ ./crates/
 
 # Release 构建:仅构建 chimera-cli 的 binary(aether)
