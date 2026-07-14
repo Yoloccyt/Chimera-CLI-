@@ -51,7 +51,6 @@ ratatui = "0.29"
 crossterm = "0.28"
 wasmtime = "22.0"
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
-sqlite-vec = "0.1"
 ndarray = { version = "0.16", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 axum = "0.7"

@@ -16,6 +16,9 @@ tmp/
 *.temp
 *.log
 
+# === Git Worktrees ===
+.worktrees/
+
 # === IDE / 编辑器 ===
 .idea/
 .vscode/

@@ -8,7 +8,7 @@
 # ============================================================
 
 # ---------- Stage 1: Builder ----------
-FROM rust:1.82-slim AS builder
+FROM rust:1.85-slim AS builder
 
 # 系统依赖:
 # - pkg-config: 部分 crate 探测系统库时需要
