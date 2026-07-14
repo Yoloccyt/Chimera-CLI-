@@ -215,6 +215,13 @@ pub enum TuiCommand {
     },
     /// 请求刷新状态(M4 双向控制)
     RequestRefresh,
+    /// 设置 tick 间隔(毫秒,P4.3 可调 tick 暴露)
+    ///
+    /// 取值范围 [100, 1000](与 `TuiConfig::validate` 一致)。
+    /// WHY 仅更新配置:`tokio::time::interval` 创建后不可修改周期,
+    /// 运行中的 `DataPipeline` 无法安全重建,故本命令只更新
+    /// `TuiConfig.tick_interval_ms`,在下次启动时生效。
+    SetTickInterval(u16),
 }
 
 // ============================================================
@@ -495,6 +502,44 @@ impl TuiState {
     /// 增加帧计数
     pub fn tick_frame(&mut self) {
         self.frame_count += 1;
+    }
+
+    // ============================================================
+    // P4.1 增量渲染 — dirty_panels 标记 API
+    // ============================================================
+    //
+    // WHY 采用"数据驱动"标记策略:仅当某个面板绑定的数据字段在本帧发生
+    // 变化时才将其加入 `dirty_panels`,避免"每帧全量重建 Text/Span"的浪费。
+    // 由于 ratatui 的 Frame 每帧都会用空白缓冲区覆盖前帧内容,面板渲染
+    // 本身仍必须每帧执行(否则该面板区域会被清空)。本标记的实际用途:
+    // 1) 为面板内部提供缓存失效信号(数据未变时可复用上次构建的 Text/Span);
+    // 2) 为后续 P4.2/P6.1 等性能优化提供统一的数据变化检测入口;
+    // 3) 为测试提供可观测的"哪些面板本次更新过数据"。
+
+    /// 标记指定面板为 dirty(数据已变化,需要刷新内部缓存)
+    pub fn mark_dirty(&mut self, panel: PanelId) {
+        self.dirty_panels.insert(panel);
+    }
+
+    /// 判断指定面板是否被标记为 dirty
+    pub fn is_dirty(&self, panel: PanelId) -> bool {
+        self.dirty_panels.contains(&panel)
+    }
+
+    /// 取出当前 dirty 面板集合并清空(消费语义)
+    ///
+    /// WHY take 而非借用:渲染结束时调用,既提供可见性又确保下一帧
+    /// 从空集合开始,避免历史脏标记残留影响下一轮的判断。
+    pub fn take_dirty(&mut self) -> HashSet<PanelId> {
+        std::mem::take(&mut self.dirty_panels)
+    }
+
+    /// 清空 dirty 面板集合
+    ///
+    /// WHY 与 `take_dirty` 并存:调用方不关心集合内容、只想"重置"时
+    /// 使用此方法,语义更直观,且不会触发 HashSet 的移动分配。
+    pub fn clear_dirty(&mut self) {
+        self.dirty_panels.clear();
     }
 }
 

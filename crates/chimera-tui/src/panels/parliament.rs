@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::FOOTER_TEXT;
+use crate::render::{virtual_scroll_window, FOOTER_TEXT};
 use crate::types::{PanelId, TuiCommand, TuiState};
 use event_bus::NexusEvent;
 
@@ -59,7 +59,10 @@ impl ParliamentPanel {
     }
 
     /// 构建 Parliament 面板文本内容
-    fn content(state: &TuiState, selected: usize) -> Text<'static> {
+    ///
+    /// P4.2 虚拟滚动:`window` 为 `(start, end)` 半开区间,仅渲染窗口内事件,
+    /// 避免 1000+ 条事件时全量构建 `Text` 的性能开销。
+    fn content(state: &TuiState, selected: usize, window: (usize, usize)) -> Text<'static> {
         let mut lines: Vec<Line<'static>> =
             vec![Line::from("Parliament"), Line::from("─────────────")];
 
@@ -68,7 +71,12 @@ impl ParliamentPanel {
         if parliament_events.is_empty() {
             lines.push(Line::from("No recent parliament events"));
         } else {
-            for (idx, event) in parliament_events.iter().enumerate().take(50) {
+            let (start, end) = window;
+            for (idx, event) in parliament_events.iter().enumerate() {
+                // 虚拟滚动:跳过窗口外的事件
+                if idx < start || idx >= end {
+                    continue;
+                }
                 let is_selected = idx == selected;
                 let prefix = if is_selected { "> " } else { "  " };
                 let (label, summary, style) = match event {
@@ -261,7 +269,9 @@ impl Panel for ParliamentPanel {
         self.scroll_offset =
             list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
-        let paragraph = Paragraph::new(Self::content(state, self.selected))
+        // P4.2 虚拟滚动:仅构建窗口内事件的 Text,减少内存与 CPU 开销
+        let window = virtual_scroll_window(events.len(), self.scroll_offset, content_height);
+        let paragraph = Paragraph::new(Self::content(state, self.selected, window))
             .scroll((self.scroll_offset as u16, 0));
         paragraph.render(inner, buf);
     }
@@ -332,7 +342,7 @@ mod tests {
     #[test]
     fn test_parliament_panel_empty_state() {
         let state = TuiState::new();
-        let content = ParliamentPanel::content(&state, 0).to_string();
+        let content = ParliamentPanel::content(&state, 0, (0, 50)).to_string();
         assert!(content.contains("Parliament"));
         assert!(content.contains("No recent parliament events"));
     }
@@ -353,7 +363,7 @@ mod tests {
                 vote: true,
             },
         ]);
-        let content = ParliamentPanel::content(&state, 0).to_string();
+        let content = ParliamentPanel::content(&state, 0, (0, 50)).to_string();
         assert!(content.contains("ParliamentVoteCast"));
         assert!(!content.contains("CacheHit"));
     }

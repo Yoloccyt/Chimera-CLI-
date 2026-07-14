@@ -292,6 +292,26 @@ impl Default for DataSourceConfig {
     }
 }
 
+impl DataSourceConfig {
+    /// 从 `TuiConfig` 构建数据源配置(P4.3 可调 tick 暴露)
+    ///
+    /// WHY 单一桥接:`TuiConfig.tick_interval_ms` 是面向用户的 tick 配置,
+    /// 而 `DataPipeline` 消费的是独立的 `DataSourceConfig`。此前 CLI 固定使用
+    /// `DataSourceConfig::default()`,导致 TuiConfig 的 tick 形同虚设——修改
+    /// `TuiConfig` 不会改变管道实际 tick。本桥接让 `TuiConfig` 成为 tick 的
+    /// 唯一真实来源(single source of truth)。
+    ///
+    /// 当前仅映射 `tick_interval_ms`(本任务范围);其余字段沿用
+    /// `DataSourceConfig` 默认值,后续若 `TuiConfig` 需控制更多数据源行为
+    /// 可在此扩展映射,避免调用点散落字段拼接。
+    pub fn from_tui_config(tui: &crate::config::TuiConfig) -> Self {
+        Self {
+            tick_interval_ms: u64::from(tui.tick_interval_ms),
+            ..Self::default()
+        }
+    }
+}
+
 /// TUI 数据源 trait — 抽象事件总线订阅、测试桩或缓存
 ///
 /// 设计目标:
@@ -912,6 +932,15 @@ impl StubDataSource {
     /// 创建新的示例桩数据源
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 使用指定数据源配置创建示例桩数据源(P4.3)
+    ///
+    /// WHY:让默认 `TuiApp::new` 路径同样尊重 `TuiConfig.tick_interval_ms`,
+    /// 保证 "TuiConfig 驱动数据源 tick" 在桩模式下与生产管道行为一致,
+    /// 而非仅在 CLI 实时管道生效。
+    pub fn with_config(config: DataSourceConfig) -> Self {
+        Self { config }
     }
 }
 

@@ -29,13 +29,14 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
 use ratatui::{Frame, Terminal};
+use std::collections::VecDeque;
 use std::io::{self, Stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::command_palette::CommandPalette;
 use crate::config::Theme;
 use crate::config::TuiConfig;
-use crate::data::{StubDataSource, TuiDataSource};
+use crate::data::{DataSnapshot, StubDataSource, TuiDataSource};
 use crate::error::TuiError;
 use crate::focus::FocusManager;
 use crate::panels::{
@@ -52,6 +53,15 @@ const RATIO_STEP: f32 = 0.05;
 const RATIO_MIN: f32 = 0.3;
 /// 主面板比例最大值
 const RATIO_MAX: f32 = 0.9;
+/// FPS 移动平均窗口大小(最近 N 帧)
+///
+/// WHY 60 帧:对应 60fps 下约 1 秒的窗口,既能平滑单帧抖动
+/// (避免状态栏数字频繁跳动),又能对真实帧率变化保持灵敏。
+const FPS_WINDOW_SIZE: usize = 60;
+/// FPS 显示上限,防止瞬时帧(如调试器步进后首帧)产生超大数字撑破状态栏宽度
+///
+/// WHY 999:三位数可保证 `FPS: <n>` 文本宽度稳定,配合 80 列状态栏约束。
+const FPS_DISPLAY_MAX: u16 = 999;
 
 /// TUI 应用 — Chimera 终端用户界面核心
 ///
@@ -93,6 +103,10 @@ pub struct TuiApp {
     ///
     /// WHY Option:测试与普通启动场景可能不需要 EventBus,避免强制依赖。
     event_bus: Option<EventBus>,
+    /// 上一帧的渲染时间戳(P4.4 FPS 计算)
+    last_frame_time: Instant,
+    /// 最近 N 帧的耗时(毫秒),用于 FPS 移动平均(P4.4)
+    frame_times: VecDeque<f64>,
 }
 
 impl TuiApp {
@@ -154,6 +168,8 @@ impl TuiApp {
             last_focused: None,
             last_area: Rect::default(),
             event_bus: None,
+            last_frame_time: Instant::now(),
+            frame_times: VecDeque::with_capacity(FPS_WINDOW_SIZE),
         })
     }
 
@@ -197,9 +213,18 @@ impl TuiApp {
     ///
     /// WHY 独立方法:将数据刷新与事件循环解耦，便于单元测试直接调用验证，
     /// 也允许未来在渲染之外的时刻(如收到特定按键)手动刷新。
+    ///
+    /// # P4.1 增量渲染
+    /// 在赋值前比较新旧快照中各面板绑定的字段,若发生变化则通过
+    /// `TuiState::mark_dirty` 标记对应面板。由于 `PartialEq` 已经在
+    /// 各 `*Metrics` / `*State` 上派生,比较为 O(字段大小) 的结构化
+    /// 相等比较,不引入额外哈希/序列化开销。
     pub fn update(&mut self) {
         match self.data_source.snapshot() {
             Ok(snapshot) => {
+                // P4.1:在覆盖状态前检测哪些面板数据发生变化,先打 dirty 标记
+                self.mark_dirty_panels_from_snapshot(&snapshot);
+
                 self.state.quest_list = snapshot.quest_list;
                 self.state.budget = snapshot.budget_metrics;
                 self.state.memory_metrics = snapshot.memory_metrics;
@@ -221,6 +246,70 @@ impl TuiApp {
                 self.state.status_message =
                     Some((format!("data source unavailable: {e}"), Severity::Warning));
             }
+        }
+    }
+
+    /// 比较当前 `TuiState` 与新 `DataSnapshot` 中各面板绑定的字段,
+    /// 对发生变化的字段调用 `mark_dirty`。
+    ///
+    /// WHY 独立方法:集中维护"字段 → PanelId"映射,避免 `update` 方法
+    /// 臃肿;同时便于测试针对单个字段的变化进行断言。
+    ///
+    /// # 字段 → 面板映射
+    /// - `quest_list` → Quest
+    /// - `budget_metrics` / `budget_history` → Budget
+    /// - `memory_metrics` / `memory_history` → Memory
+    /// - `security_state` → Security
+    /// - `health_metrics` / `event_rate_history` → Health
+    /// - `latest_events` → Parliament + Log + EventStream(三者共享事件流)
+    /// - `decay_metrics` / `decay_history` → Decay
+    /// - `router_metrics` → Router
+    /// - `mcp_nodes` → McpNodes
+    /// - `chtc_state` → Chtc
+    fn mark_dirty_panels_from_snapshot(&mut self, snapshot: &DataSnapshot) {
+        // WHY 使用 `!=` 而非哈希比较:所有 metrics 类型都已 `PartialEq`,
+        // 结构化比较更易读,且无需额外引入哈希依赖。
+        if self.state.quest_list != snapshot.quest_list {
+            self.state.mark_dirty(PanelId::Quest);
+        }
+        if self.state.budget != snapshot.budget_metrics
+            || self.state.budget_history != snapshot.budget_history
+        {
+            self.state.mark_dirty(PanelId::Budget);
+        }
+        if self.state.memory_metrics != snapshot.memory_metrics
+            || self.state.memory_history != snapshot.memory_history
+        {
+            self.state.mark_dirty(PanelId::Memory);
+        }
+        if self.state.security_state != snapshot.security_state {
+            self.state.mark_dirty(PanelId::Security);
+        }
+        if self.state.health_metrics != snapshot.health_metrics
+            || self.state.event_rate_history != snapshot.event_rate_history
+        {
+            self.state.mark_dirty(PanelId::Health);
+        }
+        // WHY latest_events 同时驱动 Parliament / Log / EventStream 三面板,
+        // 任一变化都需标记这三个面板,避免事件流面板错过新事件。
+        if self.state.latest_events != snapshot.latest_events {
+            self.state.mark_dirty(PanelId::Parliament);
+            self.state.mark_dirty(PanelId::Log);
+            self.state.mark_dirty(PanelId::EventStream);
+        }
+        if self.state.decay_metrics != snapshot.decay_metrics
+            || self.state.decay_history != snapshot.decay_history
+        {
+            self.state.mark_dirty(PanelId::Decay);
+        }
+        if self.state.router_metrics != snapshot.router_metrics {
+            self.state.mark_dirty(PanelId::Router);
+        }
+        if self.state.mcp_nodes != snapshot.mcp_nodes {
+            self.state.mark_dirty(PanelId::McpNodes);
+        }
+        if self.state.chtc_state != snapshot.chtc_state {
+            self.state.mark_dirty(PanelId::Chtc);
         }
     }
 
@@ -509,6 +598,34 @@ impl TuiApp {
         self.main_panel_ratio = (self.main_panel_ratio + delta).clamp(RATIO_MIN, RATIO_MAX);
     }
 
+    /// 更新 FPS 移动平均(P4.4)
+    ///
+    /// WHY 使用移动平均:单帧耗时受 OS 调度、事件循环等待、IO 等影响波动较大,
+    /// 直接显示瞬时 FPS 会让状态栏数字频繁跳动、难以阅读。固定窗口移动平均
+    /// 平滑短时抖动,同时对真实帧率下降仍保持灵敏响应。
+    ///
+    /// WHY `VecDeque<f64>` + O(1) push/pop:窗口大小固定为 `FPS_WINDOW_SIZE`,
+    /// 不需要环形缓冲区等更复杂结构,`VecDeque` 已能满足需求且语义直观。
+    fn update_fps(&mut self, delta: Duration) {
+        let frame_time_ms = delta.as_secs_f64() * 1000.0;
+        self.frame_times.push_back(frame_time_ms);
+        while self.frame_times.len() > FPS_WINDOW_SIZE {
+            self.frame_times.pop_front();
+        }
+        if self.frame_times.is_empty() {
+            self.state.fps = 0;
+            return;
+        }
+        let avg_ms = self.frame_times.iter().sum::<f64>() / self.frame_times.len() as f64;
+        // avg_ms 为 0 仅在两帧几乎同时渲染(如调试步进)时发生,避免除零,
+        // 将 FPS 记为显示上限。
+        self.state.fps = if avg_ms > 0.0 {
+            ((1000.0 / avg_ms).round() as u16).min(FPS_DISPLAY_MAX)
+        } else {
+            FPS_DISPLAY_MAX
+        };
+    }
+
     /// 执行高层命令
     fn apply_command(&mut self, cmd: TuiCommand) {
         match cmd {
@@ -541,6 +658,14 @@ impl TuiApp {
             }
             // M4:非破坏性刷新直接发布事件
             TuiCommand::RequestRefresh => self.publish_refresh(),
+            // P4.3:运行时调整 tick 间隔(更新配置,下次启动 DataPipeline 时生效)
+            TuiCommand::SetTickInterval(ms) => {
+                self.config.tick_interval_ms = ms;
+                self.state.status_message = Some((
+                    format!("Tick interval set to {}ms (restart to apply)", ms),
+                    crate::popup::Severity::Info,
+                ));
+            }
         }
     }
 
@@ -554,7 +679,23 @@ impl TuiApp {
     /// - 中部:主面板(占 `main_panel_ratio`)
     /// - 底部:命令面板(激活时)或状态栏(普通模式)
     /// - 最上层:弹窗叠加
+    ///
+    /// # P4.1 增量渲染说明
+    /// ratatui 的 Frame 每帧会用空白缓冲区覆盖前帧内容,因此面板渲染
+    /// 本身必须每帧执行(否则对应区域会被清空)。`dirty_panels` 标记
+    /// 并不跳过渲染,而是为面板内部提供"数据是否变化"的可观测信号:
+    /// 面板实现可以选择在数据未变时复用上次构建的 `Text` / `Span`。
+    /// 渲染结束后调用 `clear_dirty` 重置集合,保证下一帧的脏标记
+    /// - 最上层:弹窗叠加
     pub fn render(&mut self, frame: &mut Frame<'_>) {
+        // P4.4 FPS 统计:测量上一帧到本帧的真实耗时。
+        // WHY 放在 render 开头:捕获两次渲染间的完整间隔(含事件处理与等待),
+        // 这是用户实际感知到的帧率,比仅测量绘制耗时更具代表性。
+        let now = Instant::now();
+        let delta = now.duration_since(self.last_frame_time);
+        self.last_frame_time = now;
+        self.update_fps(delta);
+
         let area = frame.area();
         self.last_area = area;
         let chunks = self.layout(area);
@@ -573,6 +714,10 @@ impl TuiApp {
         if !self.state.popup_stack.is_empty() {
             self.state.popup_stack.render(area, frame.buffer_mut());
         }
+
+        // P4.1:本帧渲染完成,重置 dirty 集合。下一帧的 `update` 会基于
+        // 新一轮快照比较重新填充。
+        self.state.clear_dirty();
     }
 
     /// 计算当前布局,返回 [tabs, main, bottom] 三个区域
@@ -654,19 +799,18 @@ impl TuiApp {
         let (status, fg) = match &self.state.status_message {
             Some((msg, severity)) => (
                 format!(
-                    " Panel: {} | Running: {} | Frame: {} | {} ",
+                    " Panel: {} | FPS: {} | {} ",
                     self.current_panel().as_str(),
-                    self.state.running,
-                    self.state.frame_count,
+                    self.state.fps,
                     msg
                 ),
                 severity.color(),
             ),
             None => (
                 format!(
-                    " Panel: {} | Running: {} | Frame: {} | Ratio: {:.0}% ",
+                    " Panel: {} | FPS: {} | Frame: {} | Ratio: {:.0}% ",
                     self.current_panel().as_str(),
-                    self.state.running,
+                    self.state.fps,
                     self.state.frame_count,
                     self.main_panel_ratio * 100.0
                 ),

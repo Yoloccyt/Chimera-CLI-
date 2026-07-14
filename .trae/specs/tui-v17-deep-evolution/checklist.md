@@ -164,15 +164,15 @@
 
 ### P4.1 增量渲染
 
-- [ ] `crates/chimera-tui/tests/incremental_render_test.rs` 新增测试,验证仅 Budget 面板数据更新时其他面板不被重绘
-- [ ] `TuiState` 新增 `dirty_panels: HashSet<PanelId>` 字段,数据更新时标记
-- [ ] `TuiApp::render` 重构,仅对 `dirty_panels` 中的面板调用 `Panel::render`
-- [ ] 帧结束清空 `dirty_panels` 实现
-- [ ] dirty 标记策略(数据驱动 vs 时间驱动)已用 WHY 注释说明
-- [ ] `cargo test -p chimera-tui` 新增增量渲染测试全部通过
-- [ ] 性能测试:仅 1 面板更新时,帧时间相比全量重绘降低 ≥ 30%
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/incremental_render_test.rs` 新增测试,验证仅 Budget 面板数据更新时其他面板不被标记 dirty
+- [x] `TuiState` 新增 `mark_dirty` / `is_dirty` / `take_dirty` / `clear_dirty` API,数据更新时通过 `dirty_panels: HashSet<PanelId>` 标记
+- [x] `TuiApp::update` 新增 `mark_dirty_panels_from_snapshot` 辅助方法,在快照赋值前比较各面板绑定字段,将变化字段对应面板标记为 dirty(latest_events 同时驱动 Parliament / Log / EventStream)
+- [x] `TuiApp::render` 在末尾调用 `state.clear_dirty()` 重置 dirty 集合(面板渲染仍每帧执行,因为 ratatui Frame 会清空缓冲区,dirty 标记为面板内部缓存复用与测试可观测性服务)
+- [x] dirty 标记策略(数据驱动,基于 `PartialEq` 结构化比较)已用 WHY 注释说明(见 `types.rs` mark_dirty API 与 `app.rs::mark_dirty_panels_from_snapshot`)
+- [x] `cargo test -p chimera-tui` 新增增量渲染测试全部通过(9 用例)
+- [ ] 性能测试:仅 1 面板更新时,帧时间相比全量重绘降低 ≥ 30%(P4.1 当前交付仅标记机制,实际帧时间优化需面板内部接入缓存后再量化,推迟到 P4 整体性能验收统一基准)
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P4.2 虚拟滚动扩展到 Parliament
 
