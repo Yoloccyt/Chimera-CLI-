@@ -91,17 +91,26 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Install MinGW (Windows GNU target only)
-        if: matrix.target == 'x86_64-pc-windows-gnu'
+        if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
-          install: >-
+          install: |
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-gcc-libs
         # WHY: windows-latest runner 默认不预装 MinGW，而项目使用 GNU target
         # 作为默认 Windows 目标（.cargo/config.toml 的 linker 指向 MinGW gcc）。
         # 通过 msys2/setup-msys2@v2 安装 MinGW-w64 工具链，为 cargo 提供链接器。
+
+      - name: Set Windows linker path for CI
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=C:/msys64/mingw64/bin/gcc.exe" >> "$GITHUB_ENV"
+        # WHY: .cargo/config.toml 中的 linker 路径指向本地开发环境的 D:/msys64/...，
+        # 而 CI 通过 setup-msys2 安装到 C:/msys64。通过环境变量覆盖 config 文件，
+        # 确保 Windows GNU target 在 CI 中能找到正确的 gcc 链接器。
 
       - name: Install cross (for aarch64-linux)
         if: matrix.cross
