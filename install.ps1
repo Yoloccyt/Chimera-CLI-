@@ -1,12 +1,14 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 # ============================================================
 # chimela CLI (NEXUS-OMEGA) — 一键安装脚本 (Windows PowerShell)
 #
 # 用法:
-#   PowerShell 5.1 / 7+ 推荐(先下载再执行,兼容 param() 块):
-#     $tempFile = Join-Path $env:TEMP "chimela-install.ps1"; irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 | Out-File -FilePath $tempFile -Encoding utf8; & $tempFile; Remove-Item $tempFile -Force
-#   PowerShell 5.1 传统写法(部分 PS 7.x 版本会因 param() 块报错):
-#     iex (irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)
+#   一行命令(PS 5.1 / PS 7+ 均兼容):
+#     & ([scriptblock]::Create((Invoke-RestMethod https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)))
+#
+#   多行(推荐,适用于所有版本):
+#     $f="$env:TEMP\chimela-install.ps1";irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -OutFile $f;& $f;ri $f -Force
+#
 #   本地执行:
 #     .\install.ps1 [-Version <ver>] [-InstallDir <path>] [-Proxy <url>] [-LocalFile <path>] [-SkipVerify] [-SkipVersionCheck] [-SetupEnv]
 #

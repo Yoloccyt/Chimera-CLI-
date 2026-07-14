@@ -1,0 +1,41 @@
+{
+    "version": "1.7.0-omega",
+    "description": "Aether CLI — next-gen AI programming agent CLI (NEXUS-OMEGA)",
+    "homepage": "https://github.com/Yoloccyt/Chimera-CLI-",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v1.7.0-omega/chimela-windows-x86_64.exe",
+            "hash": ""
+        }
+    },
+    "bin": [
+        "chimela-windows-x86_64.exe",
+        ["chimela-windows-x86_64.exe", "aether"],
+        ["chimela-windows-x86_64.exe", "chimera"]
+    ],
+    "checkver": {
+        "github": "https://github.com/Yoloccyt/Chimera-CLI-",
+        "regex": "tag/([\\w.-]+)"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/$version/chimela-windows-x86_64.exe"
+            }
+        },
+        "hash": {
+            "url": "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/$version/checksums.txt",
+            "regex": "$sha256\\s+\\*?chimela-windows-x86_64\\.exe"
+        }
+    },
+    "notes": [
+        "三个命令入口均可使用(互为别名):",
+        "  chimela --version",
+        "  aether --version",
+        "  chimera --version",
+        "",
+        "首次使用前请确保已安装 Visual C++ Redistributable:",
+        "  https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    ]
+}

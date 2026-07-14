@@ -12,6 +12,8 @@ target_clippy*/
 
 # === 临时文件 ===
 tmp/
+tmp_podman/
+%SystemDrive%/
 *.tmp
 *.temp
 *.log
@@ -53,4 +55,5 @@ dist/
 .trae/
 
 # === 例外：唯一允许入库的发布指南 ===
+!README.md
 !docs/release/release_guide.md

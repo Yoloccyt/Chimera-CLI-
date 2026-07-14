@@ -276,6 +276,33 @@ jobs:
           echo "checksums.txt generated ($ACTUAL_COUNT entries):"
           cat ../checksums.txt
 
+      - name: Sign artifacts with GPG
+        # WHY: 用户下载后可验证二进制完整性: gpg --verify chimela-*.asc chimela-*
+        # 使用 GitHub Actions 内置的 GPG_KEY_SIGNING secret (ASCII-armored私钥)
+        # 密钥需提前生成并通过: gpg --full-generate-key; gpg --armor --export-secret-key
+        # 然后添加到仓库 Settings → Secrets and variables → Actions → GPG_KEY_SIGNING
+        # 对应的公钥需上传到 GitHub Profile → GPG Keys 以便验证者信任
+        if: env.GPG_KEY_SIGNING != ''
+        env:
+          GPG_KEY_SIGNING: ${{ secrets.GPG_KEY_SIGNING }}
+        run: |
+          # 导入签名密钥(无密码的 CI 密钥)
+          echo "$GPG_KEY_SIGNING" | gpg --batch --import
+          # 获取密钥 ID(取第一个私钥的 fingerprint)
+          KEY_ID=$(gpg --list-secret-keys --with-colons --batch 2>/dev/null | grep '^sec' | head -1 | cut -d: -f5)
+          echo "Signing with key: $KEY_ID"
+          # 签名所有 artifacts 和 checksums.txt
+          cd artifacts
+          for f in */*; do
+            [ -f "$f" ] || continue
+            gpg --batch --yes --detach-sign --armor --default-key "$KEY_ID" "$f"
+            mv "${f}.asc" "../$(basename "$f").asc"
+            echo "Signed: $f → $(basename "$f").asc"
+          done
+          cd ..
+          gpg --batch --yes --detach-sign --armor --default-key "$KEY_ID" checksums.txt
+          echo "Signed: checksums.txt → checksums.txt.asc"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -285,6 +312,7 @@ jobs:
           files: |
             artifacts/*/*
             checksums.txt
+            *.asc
           draft: false
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           body: |
