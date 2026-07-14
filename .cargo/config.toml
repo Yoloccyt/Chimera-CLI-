@@ -1,5 +1,9 @@
 [target.x86_64-pc-windows-gnu]
-linker = "D:/msys64/mingw64/bin/gcc.exe"
+# WHY: 使用 "gcc" 而非硬编码路径，让 cargo 从 PATH 中解析 MinGW 链接器。
+# 本地开发通过 CLAUDE.md §1 的环境变量将 D:/msys64/mingw64/bin 加入 PATH；
+# CI 通过 msys2/setup-msys2@v2 安装 MinGW 后自动注入 PATH。
+# 硬编码 D:/msys64/... 在 CI 中失效（runner 只有 C 盘），导致 Windows release 构建失败。
+linker = "gcc"
 
 # WHY 固化 incremental = false:rustc 1.96.0 + Windows GNU + incremental compilation
 # 存在 ICE(rmeta/encoder.rs:2448 panic "no entry found for key"),导致 cargo check
