@@ -8,12 +8,16 @@
 # ============================================================
 
 # ---------- Stage 1: Builder ----------
-# WHY 使用 rust:1-bookworm-slim 而非 rust:1-slim:
+# WHY 使用 rust:1-slim-bookworm 而非 rust:1-slim:
+# Docker Hub 官方 Rust 镜像 tag 命名规则为 <version>-<variant>-<codename>,
+# 即 slim-bookworm（variant 在前,codename 在后)。注意与 Debian 官方镜像
+# <codename>-<variant>(如 bookworm-slim)顺序相反。
+#
 # rust:1-slim 可能基于 Debian Trixie(13),而 runtime 阶段使用
 # gcr.io/distroless/cc-debian12(Debian 12/Bookworm)。若 builder 的 glibc
 # 版本高于 runtime,二进制会因 "GLIBC_x.xx not found" 启动失败。
-# 固定 bookworm-slim 确保 builder 与 runtime 的 glibc 版本一致。
-FROM rust:1-bookworm-slim AS builder
+# 固定 slim-bookworm 确保 builder 与 runtime 的 glibc 版本一致。
+FROM rust:1-slim-bookworm AS builder
 
 # 系统依赖:
 # - pkg-config: 部分 crate 探测系统库时需要
