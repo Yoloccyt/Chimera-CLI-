@@ -90,6 +90,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
+      - name: Install MinGW (Windows GNU target only)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gcc-libs
+        # WHY: windows-latest runner 默认不预装 MinGW，而项目使用 GNU target
+        # 作为默认 Windows 目标（.cargo/config.toml 的 linker 指向 MinGW gcc）。
+        # 通过 msys2/setup-msys2@v2 安装 MinGW-w64 工具链，为 cargo 提供链接器。
+
       - name: Install cross (for aarch64-linux)
         if: matrix.cross
         uses: taiki-e/install-action@v2
