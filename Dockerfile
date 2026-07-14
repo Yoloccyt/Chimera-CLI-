@@ -8,7 +8,9 @@
 # ============================================================
 
 # ---------- Stage 1: Builder ----------
-FROM rust:1.85-slim AS builder
+# WHY 使用 rust:stable-slim:与 CI 的 dtolnay/rust-toolchain@stable 保持一致,
+#      避免 1.85 镜像落后于 workspace 依赖所需的 Rust 版本而导致编译失败。
+FROM rust:stable-slim AS builder
 
 # 系统依赖:
 # - pkg-config: 部分 crate 探测系统库时需要
