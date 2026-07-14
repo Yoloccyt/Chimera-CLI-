@@ -233,18 +233,37 @@ jobs:
           # 各 layer 解压后的累计体积(uncompressed),distroless 基础镜像解压后通常超过
           # 100MB,导致误判。用户感知的镜像体积与 registry 计费以 compressed size 为准,
           # 因此通过 manifest 的 layers[].size 求和得到 compressed size 进行校验。
+          set -euo pipefail
+          export DOCKER_CLI_EXPERIMENTAL=enabled
+
           IMAGE="${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
           echo "Inspecting compressed size for image: $IMAGE"
 
-          # 拉取 manifest;单平台镜像直接含 .layers,多平台 manifest list 需先取 linux/amd64
-          MANIFEST=$(docker manifest inspect "$IMAGE")
+          # docker manifest inspect 需要 experimental CLI;失败时给出明确错误并退出
+          MANIFEST=$(docker manifest inspect "$IMAGE") || {
+            echo "ERROR: failed to inspect manifest for $IMAGE"
+            exit 1
+          }
+
+          # 处理多平台 manifest list(含 build-push-action 生成的 attestation)与单平台镜像
           if echo "$MANIFEST" | jq -e '.manifests' >/dev/null 2>&1; then
             DIGEST=$(echo "$MANIFEST" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
+            if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
+              echo "ERROR: could not find linux/amd64 manifest in index"
+              exit 1
+            fi
             echo "Multi-platform manifest list; resolving linux/amd64 digest: $DIGEST"
-            MANIFEST=$(docker manifest inspect "${IMAGE}@${DIGEST}")
+            MANIFEST=$(docker manifest inspect "${IMAGE}@${DIGEST}") || {
+              echo "ERROR: failed to inspect platform manifest ${IMAGE}@${DIGEST}"
+              exit 1
+            }
           fi
 
-          IMAGE_SIZE=$(echo "$MANIFEST" | jq '[.layers[].size] | add')
+          IMAGE_SIZE=$(echo "$MANIFEST" | jq -r '[.layers[].size] | add // 0')
+          if [ -z "$IMAGE_SIZE" ] || [ "$IMAGE_SIZE" = "null" ] || [ "$IMAGE_SIZE" = "0" ]; then
+            echo "ERROR: could not compute compressed size from manifest"
+            exit 1
+          fi
           echo "Image compressed size: $IMAGE_SIZE bytes"
           if [ "$IMAGE_SIZE" -gt 104857600 ]; then
             echo "ERROR: Image compressed size exceeds 100MB limit"
