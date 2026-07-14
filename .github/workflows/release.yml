@@ -229,19 +229,28 @@ jobs:
         run: |
           # WHY 使用 ${{ env.IMAGE_NAME }}:统一从顶层 env 读取已规范化的镜像名,
           # 避免仓库名尾部非法字符导致 reference 格式错误,同时消去大小写不一致风险。
-          # WHY 先 docker pull:build-push-action@v5 在 buildx 模式下 push 后不会自动
-          # 将镜像加载到本地 daemon,导致 docker image inspect 找不到镜像。显式 pull
-          # 后再 inspect,确保 size 校验针对的是 registry 上的实际产物。
+          # WHY 校验 compressed size:`docker image inspect --format='{{.Size}}'` 返回的是
+          # 各 layer 解压后的累计体积(uncompressed),distroless 基础镜像解压后通常超过
+          # 100MB,导致误判。用户感知的镜像体积与 registry 计费以 compressed size 为准,
+          # 因此通过 manifest 的 layers[].size 求和得到 compressed size 进行校验。
           IMAGE="${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
-          echo "Pulling image for size check: $IMAGE"
-          docker pull "$IMAGE"
-          IMAGE_SIZE=$(docker image inspect "$IMAGE" --format='{{.Size}}')
-          echo "Image size: $IMAGE_SIZE bytes"
+          echo "Inspecting compressed size for image: $IMAGE"
+
+          # 拉取 manifest;单平台镜像直接含 .layers,多平台 manifest list 需先取 linux/amd64
+          MANIFEST=$(docker manifest inspect "$IMAGE")
+          if echo "$MANIFEST" | jq -e '.manifests' >/dev/null 2>&1; then
+            DIGEST=$(echo "$MANIFEST" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
+            echo "Multi-platform manifest list; resolving linux/amd64 digest: $DIGEST"
+            MANIFEST=$(docker manifest inspect "${IMAGE}@${DIGEST}")
+          fi
+
+          IMAGE_SIZE=$(echo "$MANIFEST" | jq '[.layers[].size] | add')
+          echo "Image compressed size: $IMAGE_SIZE bytes"
           if [ "$IMAGE_SIZE" -gt 104857600 ]; then
-            echo "ERROR: Image size exceeds 100MB limit"
+            echo "ERROR: Image compressed size exceeds 100MB limit"
             exit 1
           fi
-          echo "OK: Image size within 100MB limit"
+          echo "OK: Image compressed size within 100MB limit"
 
       - name: Verify image functionality (--version)
         run: |
