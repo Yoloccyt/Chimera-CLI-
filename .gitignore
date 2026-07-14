@@ -44,6 +44,10 @@ dist/
 *.exe
 *.zip
 
-# === 本地决策不入库的文档(用户选择)===
+# === 文档/规格/规则文件 — 本地保留，不入远程仓库 ===
+*.md
 .claude/
-.trae/specs/d-disk-space-exhaustion-root-cause/
+.trae/
+
+# === 例外：唯一允许入库的发布指南 ===
+!docs/release/release_guide.md
