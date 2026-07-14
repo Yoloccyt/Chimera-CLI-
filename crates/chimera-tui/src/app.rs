@@ -666,6 +666,21 @@ impl TuiApp {
                     crate::popup::Severity::Info,
                 ));
             }
+            // P5 跨面板联动:Quest→EventStream 跳转,原子完成 filter 设置 + 面板切换
+            //
+            // WHY 先设置 filter 再切换:确保 EventStream 面板首次渲染时
+            // 即应用筛选,避免一帧全量事件闪烁后再被过滤的视觉抖动。
+            // filter_keyword 复用现有 EventStream 的关键字过滤逻辑
+            // (event_matches_keyword),quest_id 作为关键字可匹配事件 JSON
+            // 载荷中包含该 quest_id 的所有事件(如 QuestCreated/QuestProgressUpdated 等)。
+            TuiCommand::JumpToEventStream { quest_id } => {
+                self.state.filter_keyword = Some(quest_id.clone());
+                self.switch_panel_to(PanelId::EventStream);
+                self.state.set_status(
+                    format!("Jumped to EventStream, filter: {quest_id}"),
+                    Severity::Info,
+                );
+            }
         }
     }
 

@@ -222,6 +222,17 @@ pub enum TuiCommand {
     /// 运行中的 `DataPipeline` 无法安全重建,故本命令只更新
     /// `TuiConfig.tick_interval_ms`,在下次启动时生效。
     SetTickInterval(u16),
+    /// 跳转到 EventStream 面板并按 quest_id 筛选事件(P5 跨面板联动)
+    ///
+    /// WHY 独立变体而非复用 `SwitchPanel`:Quest→EventStream 跳转需原子完成
+    /// 两个操作 — (1) 设置 `filter_keyword` 筛选该 Quest 相关事件,
+    /// (2) 切换到 EventStream 面板。若用 `SwitchPanel` 则面板无法表达
+    /// "设置 filter"的意图,且 filter 设置与面板切换应作为原子操作由
+    /// `apply_command` 统一执行,避免 filter 设置后面板切换失败导致状态不一致。
+    JumpToEventStream {
+        /// 目标 Quest ID,作为 EventStream 的筛选关键字
+        quest_id: String,
+    },
 }
 
 // ============================================================

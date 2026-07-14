@@ -95,6 +95,11 @@ impl LogPanel {
     pub fn selected(&self) -> usize {
         self.selected
     }
+
+    /// 返回当前滚动偏移(测试用,与 EventStreamPanel 模式一致)
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
 }
 
 impl Panel for LogPanel {

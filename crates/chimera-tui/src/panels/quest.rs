@@ -36,6 +36,16 @@ impl QuestPanel {
         Self::default()
     }
 
+    /// 返回当前选中项索引(测试用,与 EventStreamPanel/LogPanel 模式一致)
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
+
+    /// 返回当前滚动偏移(测试用,与 EventStreamPanel 模式一致)
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
     /// 返回经过关键字过滤的 Quest 列表
     pub fn filtered_quests(state: &TuiState) -> Vec<&Quest> {
         if let Some(kw) = &state.filter_keyword {
@@ -243,18 +253,33 @@ impl Panel for QuestPanel {
         }
 
         match key.code {
+            // P5 跨面板联动:Enter 跳转到 EventStream 面板并按 quest_id 筛选事件
+            //
+            // WHY Enter 改为跳转:Quest 面板的核心联动场景是"查看某 Quest 的
+            // 关联事件流",Enter 作为最直接的动作键,应触发最高频的联动操作。
+            // 原 detail popup 功能保留到 `d` 键,避免功能丢失。
             KeyCode::Enter => {
                 let quests = Self::filtered_quests(state);
-                if let Some(quest) = quests.get(self.selected) {
+                quests
+                    .get(self.selected)
+                    .map(|quest| TuiCommand::JumpToEventStream {
+                        quest_id: quest.quest_id.clone(),
+                    })
+            }
+            // `d` 键打开 Quest 详情弹窗(原 Enter 功能,P5 迁移到此键)
+            //
+            // WHY 迁移到 `d`:`d` 是 "detail" 的首字母,语义直观;
+            // 与 EventStream 面板的 Enter(事件详情)保持键位区分,避免混淆。
+            KeyCode::Char('d') => {
+                let quests = Self::filtered_quests(state);
+                quests.get(self.selected).map(|quest| {
                     let content = Self::detail_content(quest);
-                    Some(TuiCommand::OpenPopup(PopupKind::Detail {
+                    TuiCommand::OpenPopup(PopupKind::Detail {
                         title: quest.title.clone(),
                         content,
                         scroll: 0,
-                    }))
-                } else {
-                    None
-                }
+                    })
+                })
             }
             KeyCode::Char('g') => {
                 self.scroll_to_top(state);
@@ -421,12 +446,13 @@ mod tests {
 
     #[test]
     fn test_quest_panel_detail_popup() {
+        // P5:detail popup 迁移到 `d` 键(原 Enter 已改为跳转 EventStream)
         let mut panel = QuestPanel::new();
         let mut state = TuiState::new();
         state.quest_list = vec![sample_quest("q1", "Detail Quest")];
 
         let cmd = panel.handle_key(
-            KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('d'), crossterm::event::KeyModifiers::NONE),
             &mut state,
         );
         match cmd {
@@ -437,6 +463,38 @@ mod tests {
             }
             _ => panic!("expected Detail popup command, got {:?}", cmd),
         }
+    }
+
+    #[test]
+    fn test_quest_panel_enter_jumps_to_event_stream() {
+        // P5 跨面板联动:Enter 键应返回 JumpToEventStream 命令
+        let mut panel = QuestPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![sample_quest("q1", "Jump Quest")];
+
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE),
+            &mut state,
+        );
+        match cmd {
+            Some(TuiCommand::JumpToEventStream { quest_id }) => {
+                assert_eq!(quest_id, "q1");
+            }
+            _ => panic!("expected JumpToEventStream command, got {:?}", cmd),
+        }
+    }
+
+    #[test]
+    fn test_quest_panel_enter_no_quest_returns_none() {
+        // P5:无 Quest 时 Enter 应返回 None
+        let mut panel = QuestPanel::new();
+        let mut state = TuiState::new();
+
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE),
+            &mut state,
+        );
+        assert!(cmd.is_none());
     }
 
     #[test]
