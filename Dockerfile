@@ -39,9 +39,6 @@ COPY crates/ ./crates/
 # workspace 级 [profile.release] 已配置 strip/lto/opt-level=z/panic=abort
 RUN cargo build --release -p chimera-cli
 
-# 打印 binary 的动态库依赖,便于排查 distroless 运行时缺少共享库的问题
-RUN ldd target/release/aether 2>&1 || true
-
 # ---------- Stage 2: Runtime (distroless) ----------
 # WHY distroless/cc-debian12:
 # - 无 shell、无包管理器,攻击面最小化(契合 #![forbid(unsafe_code)] 安全哲学)
