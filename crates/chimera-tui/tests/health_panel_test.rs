@@ -5,12 +5,11 @@
 #![forbid(unsafe_code)]
 
 use chimera_tui::{
-    BudgetMetrics, DataSnapshot, DataSourceConfig, HealthMetrics, MemoryMetrics, PanelId,
-    SecurityState, TuiApp, TuiConfig, TuiDataSource, TuiError,
+    DataSnapshot, DataSourceConfig, HealthMetrics, PanelId, TuiApp, TuiConfig, TuiDataSource,
+    TuiError,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
-use std::collections::VecDeque;
 
 #[derive(Debug)]
 struct HealthTestSource {
@@ -53,20 +52,14 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
 #[test]
 fn test_health_panel_renders_with_sample_data() {
     let snapshot = DataSnapshot {
-        quest_list: Vec::new(),
-        latest_events: VecDeque::new(),
-        budget_metrics: BudgetMetrics::default(),
-        memory_metrics: MemoryMetrics::default(),
-        security_state: SecurityState::default(),
         health_metrics: HealthMetrics {
             events_per_second: 120.5,
             slow_consumer_count: 2,
             average_latency_ms: 23.4,
             health_score: 80,
         },
-        budget_history: Vec::new(),
-        memory_history: Vec::new(),
         event_rate_history: vec![100, 110, 105, 115, 120, 118, 122],
+        ..Default::default()
     };
 
     let mut app = TuiApp::with_data_source(

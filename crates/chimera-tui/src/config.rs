@@ -63,6 +63,25 @@ pub struct TuiConfig {
     pub enable_mouse: bool,
     /// 刷新率(帧/秒)
     pub frame_rate: u16,
+    /// tick 间隔(毫秒),控制 DataPipeline 快照频率(P4.3 性能优化)
+    ///
+    /// WHY 250ms 默认:平衡响应性与 CPU 开销,4 Hz 更新足够面板展示
+    /// 实时指标;过低(如 50ms)会导致 event-bus 频繁加锁,
+    /// 过高(如 1000ms)会让操作员感觉面板"卡顿"。
+    pub tick_interval_ms: u16,
+    /// 快照间隔(秒),P7 历史回放用(P7 接口占位,v1.8+ 实现)
+    ///
+    /// WHY 30s 默认:历史回放粒度,过细会占用大量内存,过粗无法回看细节。
+    pub snapshot_interval_s: u16,
+    /// 事件流最大保留条数(P2.2 EventStream 面板需要万级)
+    ///
+    /// WHY 256 默认:与现有 `DataSourceConfig::max_event_history` 默认值
+    /// 保持一致;P2.2 EventStream 实现万级虚拟滚动时,可上调至 10000+。
+    pub max_event_history: usize,
+    /// 快照最大保留数(P7 接口占位,v1.8+ 实现)
+    ///
+    /// WHY 100 默认:30s × 100 = 50 分钟历史回放窗口,覆盖典型调试场景。
+    pub max_snapshots: usize,
 }
 
 impl Default for TuiConfig {
@@ -77,6 +96,11 @@ impl Default for TuiConfig {
             enable_mouse: true,
             // WHY 60:60 FPS,流畅渲染且不过度消耗 CPU
             frame_rate: 60,
+            // P2.4 默认值见字段文档
+            tick_interval_ms: 250,
+            snapshot_interval_s: 30,
+            max_event_history: 256,
+            max_snapshots: 100,
         }
     }
 }
@@ -90,6 +114,10 @@ impl TuiConfig {
     /// - `main_panel_ratio` ∈ (0.0, 1.0)(不能为 0 或 1,需留侧边栏空间)
     /// - `log_panel_height` >= 3(至少 3 行:边框 + 1 行内容)
     /// - `frame_rate` >= 1
+    /// - `tick_interval_ms` ∈ [100, 1000](过短导致 CPU 占用高,过长面板卡顿)
+    /// - `snapshot_interval_s` >= 1(P7 历史回放最小粒度)
+    /// - `max_event_history` >= 64(EventStream 面板最小可用容量)
+    /// - `max_snapshots` >= 10(P7 历史回放最小回看窗口)
     pub fn validate(&self) -> Result<(), TuiError> {
         if self.main_panel_ratio.is_nan() || !(0.0..=1.0).contains(&self.main_panel_ratio) {
             return Err(TuiError::ConfigError {
@@ -120,6 +148,39 @@ impl TuiConfig {
                 detail: "frame_rate must be >= 1".into(),
             });
         }
+        // P2.4 新增校验
+        if !(100..=1000).contains(&self.tick_interval_ms) {
+            return Err(TuiError::ConfigError {
+                detail: format!(
+                    "tick_interval_ms must be in [100, 1000], got {} (too low: CPU overhead; too high: panel feels frozen)",
+                    self.tick_interval_ms
+                ),
+            });
+        }
+        if self.snapshot_interval_s < 1 {
+            return Err(TuiError::ConfigError {
+                detail: format!(
+                    "snapshot_interval_s must be >= 1, got {}",
+                    self.snapshot_interval_s
+                ),
+            });
+        }
+        if self.max_event_history < 64 {
+            return Err(TuiError::ConfigError {
+                detail: format!(
+                    "max_event_history must be >= 64 (EventStream panel minimum), got {}",
+                    self.max_event_history
+                ),
+            });
+        }
+        if self.max_snapshots < 10 {
+            return Err(TuiError::ConfigError {
+                detail: format!(
+                    "max_snapshots must be >= 10 (P7 history replay minimum), got {}",
+                    self.max_snapshots
+                ),
+            });
+        }
         Ok(())
     }
 }
@@ -136,6 +197,11 @@ mod tests {
         assert_eq!(cfg.log_panel_height, 8);
         assert!(cfg.enable_mouse);
         assert_eq!(cfg.frame_rate, 60);
+        // P2.4 新增字段默认值
+        assert_eq!(cfg.tick_interval_ms, 250);
+        assert_eq!(cfg.snapshot_interval_s, 30);
+        assert_eq!(cfg.max_event_history, 256);
+        assert_eq!(cfg.max_snapshots, 100);
     }
 
     #[test]
@@ -184,6 +250,53 @@ mod tests {
     fn test_validate_zero_frame_rate() {
         let cfg = TuiConfig {
             frame_rate: 0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    // === P2.4 新增字段校验测试 ===
+
+    #[test]
+    fn test_validate_tick_interval_too_low() {
+        let cfg = TuiConfig {
+            tick_interval_ms: 50,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_tick_interval_too_high() {
+        let cfg = TuiConfig {
+            tick_interval_ms: 2000,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_snapshot_interval_zero() {
+        let cfg = TuiConfig {
+            snapshot_interval_s: 0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_max_event_history_too_small() {
+        let cfg = TuiConfig {
+            max_event_history: 32,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_max_snapshots_too_small() {
+        let cfg = TuiConfig {
+            max_snapshots: 5,
             ..Default::default()
         };
         assert!(cfg.validate().is_err());

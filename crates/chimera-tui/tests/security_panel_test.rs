@@ -5,15 +5,13 @@
 #![forbid(unsafe_code)]
 
 use chimera_tui::{
-    AsaInterventionSummary, BudgetMetrics, DataSnapshot, DataSourceConfig, HealthMetrics,
-    MemoryMetrics, PanelId, RedTeamAuditSummary, SecurityState, SkepticVetoSummary, TuiApp,
-    TuiConfig, TuiDataSource, TuiError,
+    AsaInterventionSummary, DataSnapshot, DataSourceConfig, PanelId, RedTeamAuditSummary,
+    SecurityState, SkepticVetoSummary, TuiApp, TuiConfig, TuiDataSource, TuiError,
 };
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
-use std::collections::VecDeque;
 
 #[derive(Debug)]
 struct SecurityTestSource {
@@ -55,10 +53,6 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
 
 fn sample_security_snapshot() -> DataSnapshot {
     DataSnapshot {
-        quest_list: Vec::new(),
-        latest_events: VecDeque::new(),
-        budget_metrics: BudgetMetrics::default(),
-        memory_metrics: MemoryMetrics::default(),
         security_state: SecurityState {
             active_vetoes: vec![SkepticVetoSummary {
                 quest_id: "q-1".into(),
@@ -83,10 +77,7 @@ fn sample_security_snapshot() -> DataSnapshot {
             }],
             frozen_capabilities: vec!["shell_exec".into(), "file_delete".into()],
         },
-        health_metrics: HealthMetrics::default(),
-        budget_history: Vec::new(),
-        memory_history: Vec::new(),
-        event_rate_history: Vec::new(),
+        ..Default::default()
     }
 }
 

@@ -39,8 +39,8 @@ use crate::data::{StubDataSource, TuiDataSource};
 use crate::error::TuiError;
 use crate::focus::FocusManager;
 use crate::panels::{
-    BudgetPanel, HealthPanel, HelpPanel, LogPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel,
-    SecurityPanel,
+    BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
+    McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, SecurityPanel,
 };
 use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
@@ -117,6 +117,11 @@ impl TuiApp {
         data_source: Box<dyn TuiDataSource>,
     ) -> Result<Self, TuiError> {
         config.validate()?;
+        // P2 TUI v1.7-omega:注册 13 个面板(8 原始 + 5 新增监控面板)。
+        // WHY 不含 Timeline:Timeline 面板由 P7 历史回放引擎(v1.8+)实现,
+        // 当前 PanelId::Timeline 已定义但无对应 Panel 实现,故不注册。
+        // FocusManager 循环顺序:Quest → Parliament → ... → Help → Decay
+        // → EventStream → Router → McpNodes → Chtc → Quest(13 面板循环)。
         let panels: Vec<Box<dyn Panel>> = vec![
             Box::new(QuestPanel::new()),
             Box::new(ParliamentPanel::new()),
@@ -126,6 +131,12 @@ impl TuiApp {
             Box::new(HealthPanel::new()),
             Box::new(LogPanel::new()),
             Box::new(HelpPanel::new()),
+            // P2 新增监控面板(占位实现,后续 Task 填充具体渲染逻辑)
+            Box::new(DecayPanel::new()),
+            Box::new(EventStreamPanel::new()),
+            Box::new(RouterPanel::new()),
+            Box::new(McpNodesPanel::new()),
+            Box::new(ChtcPanel::new()),
         ];
         let panel_ids: Vec<PanelId> = panels.iter().map(|p| p.id()).collect();
         let focus_manager = FocusManager::new(panel_ids);
@@ -198,6 +209,12 @@ impl TuiApp {
                 self.state.memory_history = snapshot.memory_history;
                 self.state.event_rate_history = snapshot.event_rate_history;
                 self.state.latest_events = snapshot.latest_events;
+                // P2 新增字段同步:DataSnapshot → TuiState
+                self.state.decay_metrics = snapshot.decay_metrics;
+                self.state.router_metrics = snapshot.router_metrics;
+                self.state.mcp_nodes = snapshot.mcp_nodes;
+                self.state.chtc_state = snapshot.chtc_state;
+                self.state.decay_history = snapshot.decay_history;
             }
             Err(e) => {
                 // M1 清理项 #4:数据源失败时向用户展示状态栏警告,而非静默忽略。
@@ -270,6 +287,10 @@ impl TuiApp {
             KeyCode::Char('6') => self.switch_panel_to(PanelId::Health),
             KeyCode::Char('7') => self.switch_panel_to(PanelId::Log),
             KeyCode::Char('8') => self.switch_panel_to(PanelId::Help),
+            // P2 TUI v1.7-omega:数字键 9 跳转到 Decay 面板(P0 Note 第 1 节)
+            // WHY 数字键仅映射前 9 个面板:超过 9 的面板(EventStream/Router/
+            // McpNodes/Chtc/Timeline)由 P3.3 的 `g` 前缀 + 数字键映射。
+            KeyCode::Char('9') => self.switch_panel_to(PanelId::Decay),
             KeyCode::Char(':') => {
                 self.state.input_mode = InputMode::Command;
                 self.state.input_buffer.clear();
@@ -874,7 +895,9 @@ mod tests {
     fn test_switch_panel_prev() {
         let mut app = make_app();
         app.switch_panel_prev();
-        assert_eq!(app.current_panel(), PanelId::Help);
+        // P2 TUI v1.7-omega:FocusManager 现注册 13 面板(8 原始 + 5 新增,
+        // 不含 Timeline),Quest.prev() 跳到列表末尾的 Chtc 面板。
+        assert_eq!(app.current_panel(), PanelId::Chtc);
     }
 
     #[test]
@@ -935,6 +958,14 @@ mod tests {
 
         app.handle_key_event(KeyEvent::new(KeyCode::Char('6'), event::KeyModifiers::NONE));
         assert_eq!(app.current_panel(), PanelId::Health);
+    }
+
+    #[test]
+    fn test_handle_key_9_jumps_to_decay() {
+        // P2 TUI v1.7-omega:数字键 9 跳转到 Decay 面板(P0 Note 第 1 节)
+        let mut app = make_app();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('9'), event::KeyModifiers::NONE));
+        assert_eq!(app.current_panel(), PanelId::Decay);
     }
 
     #[test]
@@ -1492,10 +1523,12 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
 
-        // 标签栏宽度 80,8 个面板,每个约 10 列;点击第 2 个标签(Parliament)
+        // P2 TUI v1.7-omega:标签栏宽度 80,13 个面板(8 原始 + 5 新增),
+        // 每个标签约 6 列。点击第 2 个标签(Parliament)需落在 column 6-11 范围内。
+        // WHY column=8:避开标签边界(6/12),确保命中 Parliament 标签内部。
         app.handle_mouse_event(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: 12,
+            column: 8,
             row: 1,
             modifiers: event::KeyModifiers::NONE,
         });

@@ -131,6 +131,26 @@ pub struct BudgetMetricsPayload {
     pub alert: Option<String>,
 }
 
+/// 路由器统计载荷 — 三路由器(KVBSR/SESA/FaaE)的统一统计格式
+///
+/// WHY 定义在 event-bus:chimera-tui(L10)无法直接依赖 L6 的 kvbsr-router/
+/// sesa-router/faae-router,通过 event-bus(L1)传递结构化路由统计,
+/// 避免面板侧从多个事件拼合,也避免 L10→L6 类型泄漏。
+/// 由 L9 efficiency-monitor 聚合三路由器指标后统一发布。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RouterStatsPayload {
+    /// 命中率 [0.0, 1.0]
+    pub hit_rate: f32,
+    /// P50 延迟(微秒)
+    pub p50_latency_us: u64,
+    /// P95 延迟(微秒)
+    pub p95_latency_us: u64,
+    /// P99 延迟(微秒)
+    pub p99_latency_us: u64,
+    /// 热点能力列表(能力 ID,调用次数),按热度降序
+    pub hot_capabilities: Vec<(String, u64)>,
+}
+
 /// NEXUS-OMEGA 核心事件枚举 — 跨层通信的唯一契约
 ///
 /// 设计原则:
@@ -1296,6 +1316,72 @@ pub enum NexusEvent {
         /// 请求者标识
         requested_by: String,
     },
+
+    /// 衰减指标报告 — L4 decay-engine 发布,L10 TUI Decay 面板消费
+    ///
+    /// WHY 新增(P2.1 TUI v1.7-omega):TUI 无法直接依赖 L4 decay-engine,
+    /// 通过 event-bus 传递衰减系数与最近事件,供 Decay 面板绘制 sparkline。
+    DecayMetricsReported {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 当前衰减系数 [0.0, 1.0],1.0 表示无衰减
+        coefficient: f32,
+        /// 本周期内触发衰减的最近事件摘要(最多 N 条,由发布者截断)
+        recent_events: Vec<String>,
+        /// 本衰减周期开始时间
+        cycle_start: DateTime<Utc>,
+    },
+
+    /// 路由器统计报告 — L9 efficiency-monitor 聚合发布,L10 TUI Router 面板消费
+    ///
+    /// WHY 新增(P2.3 TUI v1.7-omega):三路由器(KVBSR/SESA/FaaE)的命中率
+    /// 与延迟分位数统一通过此事件传递,避免 TUI 分别订阅三个路由器事件。
+    RouterStatsReported {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// KVBSR 路由器统计
+        kvbsr_stats: RouterStatsPayload,
+        /// SESA 路由器统计
+        sesa_stats: RouterStatsPayload,
+        /// FaaE 路由器统计
+        faae_stats: RouterStatsPayload,
+    },
+
+    /// MCP 节点心跳 — L10 mcp-mesh 发布,L10 TUI McpNodes 面板消费
+    ///
+    /// WHY 新增(P2.4 TUI v1.7-omega):MCP Mesh 节点状态通过事件流推送到 TUI,
+    /// 供操作员实时观察节点健康与吞吐量。
+    McpNodeHeartbeat {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 节点 ID
+        node_id: String,
+        /// 节点状态字符串(如 "online"/"degraded"/"offline")
+        status: String,
+        /// 节点吞吐量(每秒事务数)
+        throughput: u64,
+        /// 最近一次心跳时间
+        last_seen: DateTime<Utc>,
+    },
+
+    /// CHTC 适配器状态 — L10 chtc-bridge 发布,L10 TUI Chtc 面板消费
+    ///
+    /// WHY 新增(P2.5 TUI v1.7-omega):5 IDE 适配器的兼容性评分与请求计数
+    /// 通过事件流推送到 TUI,供操作员观察跨平台工具兼容性。
+    ChtcAdapterStatus {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 适配器 ID
+        adapter_id: String,
+        /// 适配器类型(如 "vscode"/"jetbrains"/"vim"/"emacs"/"cli")
+        adapter_type: String,
+        /// 兼容性评分 [0, 100]
+        compatibility_score: u8,
+        /// 最近请求(请求标识, 次数)列表
+        recent_requests: Vec<(String, u32)>,
+        /// 是否在线
+        is_online: bool,
+    },
 }
 
 impl NexusEvent {
@@ -1377,7 +1463,11 @@ impl NexusEvent {
             | Self::VoteCastRequested { metadata, .. }
             | Self::RefreshStateRequested { metadata, .. }
             | Self::QuestPaused { metadata, .. }
-            | Self::QuestResumed { metadata, .. } => metadata,
+            | Self::QuestResumed { metadata, .. }
+            | Self::DecayMetricsReported { metadata, .. }
+            | Self::RouterStatsReported { metadata, .. }
+            | Self::McpNodeHeartbeat { metadata, .. }
+            | Self::ChtcAdapterStatus { metadata, .. } => metadata,
         }
     }
 
@@ -1498,6 +1588,10 @@ impl NexusEvent {
             Self::RefreshStateRequested { .. } => "RefreshStateRequested",
             Self::QuestPaused { .. } => "QuestPaused",
             Self::QuestResumed { .. } => "QuestResumed",
+            Self::DecayMetricsReported { .. } => "DecayMetricsReported",
+            Self::RouterStatsReported { .. } => "RouterStatsReported",
+            Self::McpNodeHeartbeat { .. } => "McpNodeHeartbeat",
+            Self::ChtcAdapterStatus { .. } => "ChtcAdapterStatus",
         }
     }
 }

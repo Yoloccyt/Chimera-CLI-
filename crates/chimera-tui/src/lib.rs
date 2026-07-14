@@ -56,13 +56,19 @@ pub use data::{
 pub use error::TuiError;
 pub use focus::FocusManager;
 pub use panels::{
-    BudgetPanel, HealthPanel, HelpPanel, LogPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel,
-    SecurityPanel,
+    BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
+    McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, SecurityPanel,
 };
 pub use popup::{PopupKind, PopupStack, Severity};
-pub use render::{gauge, sparkline, utilization_bar, FOOTER_TEXT};
+pub use render::{
+    gauge, latency_line, sparkline, utilization_bar, virtual_scroll_window, FOOTER_TEXT,
+    VIRTUAL_SCROLL_BUFFER,
+};
 pub use subscriber::EventSubscriber;
-pub use types::{InputMode, PanelId, TuiCommand, TuiState};
+pub use types::{
+    ChtcAdapterInfo, ChtcState, DecayMetrics, InputMode, McpNodeStatus, NodeStatus, PanelId,
+    RouterMetrics, RouterStatsInfo, TimelineSnapshot, TuiCommand, TuiState,
+};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
@@ -75,8 +81,8 @@ pub mod prelude {
     pub use crate::error::TuiError;
     pub use crate::focus::FocusManager;
     pub use crate::panels::{
-        BudgetPanel, HealthPanel, HelpPanel, LogPanel, MemoryPanel, Panel, ParliamentPanel,
-        QuestPanel, SecurityPanel,
+        BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
+        McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, SecurityPanel,
     };
     pub use crate::popup::{PopupKind, PopupStack, Severity};
     pub use crate::subscriber::EventSubscriber;

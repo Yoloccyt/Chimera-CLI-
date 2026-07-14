@@ -31,8 +31,8 @@ use std::collections::VecDeque;
 
 use chimera_tui::config::Theme;
 use chimera_tui::{
-    BudgetMetrics, DataSnapshot, DataSourceConfig, HealthMetrics, InputMode, MemoryMetrics,
-    PanelId, PopupKind, SecurityState, Severity, TuiApp, TuiConfig, TuiDataSource, TuiError,
+    BudgetMetrics, DataSnapshot, DataSourceConfig, InputMode, PanelId, PopupKind, Severity, TuiApp,
+    TuiConfig, TuiDataSource, TuiError,
 };
 
 // ============================================================
@@ -97,12 +97,7 @@ fn full_snapshot(
         quest_list,
         latest_events,
         budget_metrics: budget,
-        memory_metrics: MemoryMetrics::default(),
-        security_state: SecurityState::default(),
-        health_metrics: HealthMetrics::default(),
-        budget_history: Vec::new(),
-        memory_history: Vec::new(),
-        event_rate_history: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -226,10 +221,12 @@ fn test_tui_input_mode_switching() {
 
 #[test]
 fn test_tui_input_mode_circular_navigation() {
-    // WHY 循环导航:验证 Quest → ... → Help → Quest 的完整循环
+    // WHY 循环导航:验证 Quest → ... → Chtc → Quest 的完整循环(13 面板)
+    // P2 TUI v1.7-omega:循环从 8 面板扩展到 13 面板(新增 Decay/EventStream/
+    // Router/McpNodes/Chtc,Timeline 面板未注册故不含)。
     let mut app = make_app();
 
-    // 连续 Tab 8 次应回到原点
+    // 连续 Tab 13 次应回到原点
     for expected in [
         PanelId::Parliament,
         PanelId::Budget,
@@ -238,6 +235,11 @@ fn test_tui_input_mode_circular_navigation() {
         PanelId::Health,
         PanelId::Log,
         PanelId::Help,
+        PanelId::Decay,
+        PanelId::EventStream,
+        PanelId::Router,
+        PanelId::McpNodes,
+        PanelId::Chtc,
         PanelId::Quest,
     ] {
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -249,8 +251,13 @@ fn test_tui_input_mode_circular_navigation() {
         );
     }
 
-    // Shift+Tab 反向循环 8 次也应回到原点
+    // Shift+Tab 反向循环 13 次也应回到原点
     for expected in [
+        PanelId::Chtc,
+        PanelId::McpNodes,
+        PanelId::Router,
+        PanelId::EventStream,
+        PanelId::Decay,
         PanelId::Help,
         PanelId::Log,
         PanelId::Health,
@@ -969,10 +976,12 @@ fn test_mouse_tab_click_switches_panel_integration() {
     // 先渲染以设置 last_area
     let _ = render_to_string(&mut app, 80, 24);
 
-    // 点击标签栏第二个标签区域(约第 10-20 列)
+    // P2 TUI v1.7-omega:标签栏宽度 80,13 个面板,每个标签约 6 列。
+    // 点击第 2 个标签(Parliament)需落在 column 6-11 范围内。
+    // WHY column=8:避开标签边界(6/12),确保命中 Parliament 标签内部。
     app.handle_mouse_event(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 12,
+        column: 8,
         row: 1,
         modifiers: KeyModifiers::NONE,
     });

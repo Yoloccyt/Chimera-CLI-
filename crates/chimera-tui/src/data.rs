@@ -71,6 +71,18 @@ pub struct DataSnapshot {
 
     /// 事件速率历史(每秒事件数),用于 Health 面板 Sparkline
     pub event_rate_history: Vec<u64>,
+
+    // === P2 TUI v1.7-omega 新增字段(与 TuiState 对齐) ===
+    /// 衰减指标(数据驱动 Decay 面板)
+    pub decay_metrics: crate::types::DecayMetrics,
+    /// 路由器指标(数据驱动 Router 面板)
+    pub router_metrics: crate::types::RouterMetrics,
+    /// MCP 节点状态列表(数据驱动 McpNodes 面板)
+    pub mcp_nodes: Vec<crate::types::McpNodeStatus>,
+    /// CHTC 适配器状态(数据驱动 Chtc 面板)
+    pub chtc_state: crate::types::ChtcState,
+    /// 衰减历史 sparkline 数据点
+    pub decay_history: Vec<u64>,
 }
 
 /// 预算指标 — TUI Budget 面板的轻量级本地视图
@@ -660,6 +672,232 @@ impl HealthSync {
     }
 }
 
+// ============================================================
+// P2 TUI v1.7-omega 新增同步器 — 4 个监控面板的数据接入
+// ============================================================
+//
+// WHY 独立结构体:与 QuestSync/BudgetSync 等保持对称,将事件→状态
+// 转换逻辑隔离。每个同步器只处理一个 NexusEvent 变体,职责单一,
+// 便于单元测试直接喂事件验证状态变化。
+
+/// 衰减同步器 — 从 `DecayMetricsReported` 事件维护本地 DecayMetrics
+///
+/// 发布者:L4 decay-engine。消费:L10 TUI Decay 面板。
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DecaySync {
+    metrics: crate::types::DecayMetrics,
+}
+
+impl DecaySync {
+    /// 创建空的衰减同步器
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 应用单个 NexusEvent,若事件影响衰减指标则返回更新后的指标副本
+    ///
+    /// - `DecayMetricsReported`:替换本地衰减指标,并返回新系数用于历史追加。
+    /// - 其他事件:返回 `None`,状态不变。
+    pub fn apply_event(&mut self, event: &NexusEvent) -> Option<crate::types::DecayMetrics> {
+        match event {
+            NexusEvent::DecayMetricsReported {
+                coefficient,
+                recent_events,
+                cycle_start,
+                ..
+            } => {
+                self.metrics.coefficient = *coefficient;
+                self.metrics.recent_events = recent_events.clone();
+                self.metrics.cycle_start = Some(*cycle_start);
+                Some(self.metrics.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// 获取当前衰减指标副本
+    pub fn metrics(&self) -> crate::types::DecayMetrics {
+        self.metrics.clone()
+    }
+}
+
+/// 路由器统计同步器 — 从 `RouterStatsReported` 事件维护本地 RouterMetrics
+///
+/// 发布者:L9 efficiency-monitor(聚合 L6 三路由器)。消费:L10 TUI Router 面板。
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct RouterSync {
+    metrics: crate::types::RouterMetrics,
+}
+
+impl RouterSync {
+    /// 创建空的路由器统计同步器
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 应用单个 NexusEvent,若事件影响路由器指标则返回更新后的指标副本
+    ///
+    /// - `RouterStatsReported`:替换三路由器统计。
+    /// - 其他事件:返回 `None`,状态不变。
+    pub fn apply_event(&mut self, event: &NexusEvent) -> Option<crate::types::RouterMetrics> {
+        match event {
+            NexusEvent::RouterStatsReported {
+                kvbsr_stats,
+                sesa_stats,
+                faae_stats,
+                ..
+            } => {
+                self.metrics.kvbsr_stats = convert_router_payload(kvbsr_stats);
+                self.metrics.sesa_stats = convert_router_payload(sesa_stats);
+                self.metrics.faae_stats = convert_router_payload(faae_stats);
+                Some(self.metrics.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// 获取当前路由器指标副本
+    pub fn metrics(&self) -> crate::types::RouterMetrics {
+        self.metrics.clone()
+    }
+}
+
+/// 将 event-bus 的 RouterStatsPayload 转换为 TUI 内部的 RouterStatsInfo
+///
+/// WHY 单独函数:DecaySync/RouterSync/McpNodesSync/ChtcSync 均需做类似
+/// 载荷→本地类型的转换,提取为函数避免重复代码。同时隔离类型映射,
+/// 未来若 TUI 内部类型字段变化,只需修改此函数。
+fn convert_router_payload(
+    payload: &event_bus::RouterStatsPayload,
+) -> crate::types::RouterStatsInfo {
+    crate::types::RouterStatsInfo {
+        hit_rate: payload.hit_rate,
+        p50_latency_us: payload.p50_latency_us,
+        p95_latency_us: payload.p95_latency_us,
+        p99_latency_us: payload.p99_latency_us,
+        hot_capabilities: payload.hot_capabilities.clone(),
+    }
+}
+
+/// MCP 节点同步器 — 从 `McpNodeHeartbeat` 事件维护本地节点列表
+///
+/// 发布者:L10 mcp-mesh。消费:L10 TUI McpNodes 面板。
+/// 采用 upsert 语义:相同 node_id 更新,新 node_id 追加。
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct McpNodesSync {
+    nodes: Vec<crate::types::McpNodeStatus>,
+}
+
+impl McpNodesSync {
+    /// 创建空的 MCP 节点同步器
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 应用单个 NexusEvent,若事件为节点心跳则 upsert 节点状态
+    ///
+    /// - `McpNodeHeartbeat`:按 node_id upsert。状态字符串映射到 NodeStatus 枚举:
+    ///   - "online" → Online
+    ///   - "degraded" → Degraded
+    ///   - 其他(含 "offline")→ Offline
+    /// - 其他事件:返回 `None`,状态不变。
+    pub fn apply_event(&mut self, event: &NexusEvent) -> Option<Vec<crate::types::McpNodeStatus>> {
+        match event {
+            NexusEvent::McpNodeHeartbeat {
+                node_id,
+                status,
+                throughput,
+                last_seen,
+                ..
+            } => {
+                let node_status = match status.as_str() {
+                    "online" => crate::types::NodeStatus::Online,
+                    "degraded" => crate::types::NodeStatus::Degraded,
+                    _ => crate::types::NodeStatus::Offline,
+                };
+                let new_status = crate::types::McpNodeStatus {
+                    node_id: node_id.clone(),
+                    status: node_status,
+                    throughput: *throughput,
+                    last_seen: Some(*last_seen),
+                };
+                // upsert:已有则替换,无则追加
+                if let Some(existing) = self.nodes.iter_mut().find(|n| n.node_id == *node_id) {
+                    *existing = new_status;
+                } else {
+                    self.nodes.push(new_status);
+                }
+                Some(self.nodes.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// 获取当前节点列表副本
+    pub fn nodes(&self) -> Vec<crate::types::McpNodeStatus> {
+        self.nodes.clone()
+    }
+}
+
+/// CHTC 适配器同步器 — 从 `ChtcAdapterStatus` 事件维护本地适配器列表
+///
+/// 发布者:L10 chtc-bridge。消费:L10 TUI Chtc 面板。
+/// 采用 upsert 语义:相同 adapter_id 更新,新 adapter_id 追加。
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ChtcSync {
+    state: crate::types::ChtcState,
+}
+
+impl ChtcSync {
+    /// 创建空的 CHTC 适配器同步器
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 应用单个 NexusEvent,若事件为适配器状态则 upsert 适配器信息
+    ///
+    /// - `ChtcAdapterStatus`:按 adapter_id upsert。
+    /// - 其他事件:返回 `None`,状态不变。
+    pub fn apply_event(&mut self, event: &NexusEvent) -> Option<crate::types::ChtcState> {
+        match event {
+            NexusEvent::ChtcAdapterStatus {
+                adapter_id,
+                adapter_type,
+                compatibility_score,
+                recent_requests,
+                is_online,
+                ..
+            } => {
+                let new_info = crate::types::ChtcAdapterInfo {
+                    adapter_id: adapter_id.clone(),
+                    adapter_type: adapter_type.clone(),
+                    compatibility_score: *compatibility_score,
+                    recent_requests: recent_requests.clone(),
+                    is_online: *is_online,
+                };
+                // upsert:已有则替换,无则追加
+                if let Some(existing) = self
+                    .state
+                    .adapters
+                    .iter_mut()
+                    .find(|a| a.adapter_id == *adapter_id)
+                {
+                    *existing = new_info;
+                } else {
+                    self.state.adapters.push(new_info);
+                }
+                Some(self.state.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// 获取当前 CHTC 状态副本
+    pub fn state(&self) -> crate::types::ChtcState {
+        self.state.clone()
+    }
+}
+
 /// 内存桩数据源 — 返回包含示例 Quest 与 Budget 数据的快照
 ///
 /// WHY: TUI 默认启动时不强制要求真实 event-bus 连接；提供一个无依赖的
@@ -764,6 +1002,75 @@ impl TuiDataSource for StubDataSource {
         snapshot.memory_history = vec![80, 82, 85, 83, 86, 88, 87];
         snapshot.event_rate_history = vec![30, 35, 40, 38, 42, 45, 42];
 
+        // P2 新增:提供示例衰减指标与历史,让 Decay 面板不空载。
+        snapshot.decay_metrics = crate::types::DecayMetrics {
+            coefficient: 0.85,
+            recent_events: vec!["capability_frozen:cap-1".into()],
+            cycle_start: Some(Utc::now()),
+        };
+        snapshot.decay_history = vec![1000, 980, 950, 920, 880, 860, 850];
+
+        // P2 新增:提供示例路由器指标,让 Router 面板不空载。
+        snapshot.router_metrics = crate::types::RouterMetrics {
+            kvbsr_stats: crate::types::RouterStatsInfo {
+                hit_rate: 0.87,
+                p50_latency_us: 120,
+                p95_latency_us: 480,
+                p99_latency_us: 950,
+                hot_capabilities: vec![("search".into(), 42), ("read_file".into(), 28)],
+            },
+            sesa_stats: crate::types::RouterStatsInfo {
+                hit_rate: 0.72,
+                p50_latency_us: 200,
+                p95_latency_us: 800,
+                p99_latency_us: 1500,
+                hot_capabilities: vec![("activate".into(), 15)],
+            },
+            faae_stats: crate::types::RouterStatsInfo {
+                hit_rate: 0.91,
+                p50_latency_us: 60,
+                p95_latency_us: 280,
+                p99_latency_us: 650,
+                hot_capabilities: vec![("tool_call".into(), 88)],
+            },
+        };
+
+        // P2 新增:提供示例 MCP 节点状态,让 McpNodes 面板不空载。
+        snapshot.mcp_nodes = vec![
+            crate::types::McpNodeStatus {
+                node_id: "mcp-node-1".into(),
+                status: crate::types::NodeStatus::Online,
+                throughput: 120,
+                last_seen: Some(Utc::now()),
+            },
+            crate::types::McpNodeStatus {
+                node_id: "mcp-node-2".into(),
+                status: crate::types::NodeStatus::Degraded,
+                throughput: 45,
+                last_seen: Some(Utc::now()),
+            },
+        ];
+
+        // P2 新增:提供示例 CHTC 适配器状态,让 Chtc 面板不空载。
+        snapshot.chtc_state = crate::types::ChtcState {
+            adapters: vec![
+                crate::types::ChtcAdapterInfo {
+                    adapter_id: "vscode-ext".into(),
+                    adapter_type: "vscode".into(),
+                    compatibility_score: 95,
+                    recent_requests: vec![("tool_call".into(), 42)],
+                    is_online: true,
+                },
+                crate::types::ChtcAdapterInfo {
+                    adapter_id: "jetbrains-plugin".into(),
+                    adapter_type: "jetbrains".into(),
+                    compatibility_score: 88,
+                    recent_requests: vec![("tool_call".into(), 18)],
+                    is_online: true,
+                },
+            ],
+        };
+
         // 提供一条示例事件，让 Log / Parliament 面板不空载。
         snapshot.latest_events.push_back(NexusEvent::CacheHit {
             metadata: EventMetadata::new("stub"),
@@ -821,12 +1128,18 @@ impl DataPipeline {
             let mut memory_sync = MemorySync::new();
             let mut security_sync = SecuritySync::new();
             let mut health_sync = HealthSync::new(max_history_len);
+            // P2 新增同步器
+            let mut decay_sync = DecaySync::new();
+            let mut router_sync = RouterSync::new();
+            let mut mcp_nodes_sync = McpNodesSync::new();
+            let mut chtc_sync = ChtcSync::new();
             let mut latest_events: VecDeque<NexusEvent> = VecDeque::new();
 
             // Sparkline 历史缓存
             let mut budget_history: Vec<u64> = Vec::with_capacity(max_history_len);
             let mut memory_history: Vec<u64> = Vec::with_capacity(max_history_len);
             let mut event_rate_history: Vec<u64> = Vec::with_capacity(max_history_len);
+            let mut decay_history: Vec<u64> = Vec::with_capacity(max_history_len);
 
             loop {
                 interval.tick().await;
@@ -881,6 +1194,11 @@ impl DataPipeline {
                         max_frozen_capabilities,
                     );
                     health_sync.apply_event(event);
+                    // P2 新增同步器:全部事件均尝试应用,不匹配的变体返回 None
+                    decay_sync.apply_event(event);
+                    router_sync.apply_event(event);
+                    mcp_nodes_sync.apply_event(event);
+                    chtc_sync.apply_event(event);
                     latest_events.push_back(event.clone());
                 }
 
@@ -894,6 +1212,7 @@ impl DataPipeline {
                 let eps = health_sync.compute_events_per_second(events_this_tick, tick_ms);
                 let budget = budget_sync.metrics();
                 let memory = memory_sync.metrics();
+                let decay = decay_sync.metrics();
 
                 push_history(
                     &mut budget_history,
@@ -906,6 +1225,12 @@ impl DataPipeline {
                     max_history_len,
                 );
                 push_history(&mut event_rate_history, eps as u64, max_history_len);
+                // 衰减系数 × 1000 作为 sparkline 数据点,保留 3 位小数精度
+                push_history(
+                    &mut decay_history,
+                    (decay.coefficient * 1000.0) as u64,
+                    max_history_len,
+                );
 
                 let health = HealthMetrics {
                     events_per_second: eps,
@@ -922,6 +1247,12 @@ impl DataPipeline {
                     budget_history: budget_history.clone(),
                     memory_history: memory_history.clone(),
                     event_rate_history: event_rate_history.clone(),
+                    // P2 新增字段
+                    decay_metrics: decay,
+                    router_metrics: router_sync.metrics(),
+                    mcp_nodes: mcp_nodes_sync.nodes(),
+                    chtc_state: chtc_sync.state(),
+                    decay_history: decay_history.clone(),
                 };
                 let mut guard = snapshot_clone.lock().unwrap_or_else(|poisoned| {
                     tracing::warn!(
@@ -1490,5 +1821,229 @@ mod tests {
         assert_eq!(history.len(), 64);
         assert_eq!(history[0], 6);
         assert_eq!(history[63], 69);
+    }
+
+    // ============================================================
+    // P2 新增同步器测试 — DecaySync / RouterSync / McpNodesSync / ChtcSync
+    // ============================================================
+
+    /// 构造 DecayMetricsReported 事件
+    fn decay_event(coefficient: f32, recent: Vec<&str>) -> NexusEvent {
+        NexusEvent::DecayMetricsReported {
+            metadata: EventMetadata::new("decay-engine"),
+            coefficient,
+            recent_events: recent.into_iter().map(String::from).collect(),
+            cycle_start: Utc::now(),
+        }
+    }
+
+    /// 构造 RouterStatsReported 事件
+    fn router_stats_event(kvbsr_hit: f32, sesa_hit: f32, faae_hit: f32) -> NexusEvent {
+        NexusEvent::RouterStatsReported {
+            metadata: EventMetadata::new("efficiency-monitor"),
+            kvbsr_stats: event_bus::RouterStatsPayload {
+                hit_rate: kvbsr_hit,
+                p50_latency_us: 100,
+                p95_latency_us: 500,
+                p99_latency_us: 1000,
+                hot_capabilities: vec![("cap-1".into(), 42)],
+            },
+            sesa_stats: event_bus::RouterStatsPayload {
+                hit_rate: sesa_hit,
+                p50_latency_us: 200,
+                p95_latency_us: 800,
+                p99_latency_us: 1500,
+                hot_capabilities: vec![],
+            },
+            faae_stats: event_bus::RouterStatsPayload {
+                hit_rate: faae_hit,
+                p50_latency_us: 50,
+                p95_latency_us: 300,
+                p99_latency_us: 700,
+                hot_capabilities: vec![],
+            },
+        }
+    }
+
+    /// 构造 McpNodeHeartbeat 事件
+    fn mcp_heartbeat_event(node_id: &str, status: &str, throughput: u64) -> NexusEvent {
+        NexusEvent::McpNodeHeartbeat {
+            metadata: EventMetadata::new("mcp-mesh"),
+            node_id: node_id.into(),
+            status: status.into(),
+            throughput,
+            last_seen: Utc::now(),
+        }
+    }
+
+    /// 构造 ChtcAdapterStatus 事件
+    fn chtc_adapter_event(
+        adapter_id: &str,
+        adapter_type: &str,
+        score: u8,
+        online: bool,
+    ) -> NexusEvent {
+        NexusEvent::ChtcAdapterStatus {
+            metadata: EventMetadata::new("chtc-bridge"),
+            adapter_id: adapter_id.into(),
+            adapter_type: adapter_type.into(),
+            compatibility_score: score,
+            recent_requests: vec![("req-1".into(), 5)],
+            is_online: online,
+        }
+    }
+
+    #[test]
+    fn test_decay_sync_metrics_reported() {
+        let mut sync = DecaySync::new();
+        // 默认状态:系数 1.0,无事件
+        assert_eq!(sync.metrics().coefficient, 1.0);
+        assert!(sync.metrics().cycle_start.is_none());
+
+        let updated = sync.apply_event(&decay_event(0.7, vec!["ev1", "ev2"]));
+        assert!(updated.is_some());
+        let metrics = sync.metrics();
+        assert_eq!(metrics.coefficient, 0.7);
+        assert_eq!(
+            metrics.recent_events,
+            vec!["ev1".to_string(), "ev2".to_string()]
+        );
+        assert!(metrics.cycle_start.is_some());
+    }
+
+    #[test]
+    fn test_decay_sync_unrelated_event_unchanged() {
+        let mut sync = DecaySync::new();
+        sync.apply_event(&decay_event(0.5, vec!["ev1"]));
+
+        let unrelated = NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        };
+        let result = sync.apply_event(&unrelated);
+        assert!(result.is_none());
+        assert_eq!(sync.metrics().coefficient, 0.5);
+    }
+
+    #[test]
+    fn test_router_sync_stats_reported() {
+        let mut sync = RouterSync::new();
+        let updated = sync.apply_event(&router_stats_event(0.85, 0.72, 0.91));
+        assert!(updated.is_some());
+        let metrics = sync.metrics();
+        assert_eq!(metrics.kvbsr_stats.hit_rate, 0.85);
+        assert_eq!(metrics.sesa_stats.hit_rate, 0.72);
+        assert_eq!(metrics.faae_stats.hit_rate, 0.91);
+        assert_eq!(metrics.kvbsr_stats.p99_latency_us, 1000);
+        assert_eq!(metrics.kvbsr_stats.hot_capabilities.len(), 1);
+    }
+
+    #[test]
+    fn test_router_sync_unrelated_event_unchanged() {
+        let mut sync = RouterSync::new();
+        sync.apply_event(&router_stats_event(0.85, 0.72, 0.91));
+
+        let unrelated = NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        };
+        let result = sync.apply_event(&unrelated);
+        assert!(result.is_none());
+        assert_eq!(sync.metrics().kvbsr_stats.hit_rate, 0.85);
+    }
+
+    #[test]
+    fn test_mcp_nodes_sync_upsert() {
+        let mut sync = McpNodesSync::new();
+        assert!(sync.nodes().is_empty());
+
+        // 首次心跳:新增节点
+        sync.apply_event(&mcp_heartbeat_event("node-1", "online", 100));
+        assert_eq!(sync.nodes().len(), 1);
+        assert_eq!(sync.nodes()[0].node_id, "node-1");
+        assert_eq!(sync.nodes()[0].status, crate::types::NodeStatus::Online);
+        assert_eq!(sync.nodes()[0].throughput, 100);
+
+        // 同 node_id 再次心跳:upsert 更新状态
+        sync.apply_event(&mcp_heartbeat_event("node-1", "degraded", 50));
+        assert_eq!(sync.nodes().len(), 1, "upsert should not duplicate");
+        assert_eq!(sync.nodes()[0].status, crate::types::NodeStatus::Degraded);
+        assert_eq!(sync.nodes()[0].throughput, 50);
+
+        // 新 node_id:追加
+        sync.apply_event(&mcp_heartbeat_event("node-2", "offline", 0));
+        assert_eq!(sync.nodes().len(), 2);
+        assert_eq!(sync.nodes()[1].node_id, "node-2");
+        assert_eq!(sync.nodes()[1].status, crate::types::NodeStatus::Offline);
+    }
+
+    #[test]
+    fn test_mcp_nodes_sync_status_string_mapping() {
+        let mut sync = McpNodesSync::new();
+        sync.apply_event(&mcp_heartbeat_event("n1", "online", 10));
+        sync.apply_event(&mcp_heartbeat_event("n2", "degraded", 5));
+        sync.apply_event(&mcp_heartbeat_event("n3", "offline", 0));
+        sync.apply_event(&mcp_heartbeat_event("n4", "unknown_status", 0));
+
+        let nodes = sync.nodes();
+        assert_eq!(nodes[0].status, crate::types::NodeStatus::Online);
+        assert_eq!(nodes[1].status, crate::types::NodeStatus::Degraded);
+        assert_eq!(nodes[2].status, crate::types::NodeStatus::Offline);
+        // 未知状态字符串映射到 Offline
+        assert_eq!(nodes[3].status, crate::types::NodeStatus::Offline);
+    }
+
+    #[test]
+    fn test_chtc_sync_upsert() {
+        let mut sync = ChtcSync::new();
+        assert!(sync.state().adapters.is_empty());
+
+        // 首次状态:新增适配器
+        sync.apply_event(&chtc_adapter_event("vscode", "vscode", 95, true));
+        assert_eq!(sync.state().adapters.len(), 1);
+        assert_eq!(sync.state().adapters[0].adapter_id, "vscode");
+        assert_eq!(sync.state().adapters[0].compatibility_score, 95);
+        assert!(sync.state().adapters[0].is_online);
+
+        // 同 adapter_id 再次状态:upsert 更新
+        sync.apply_event(&chtc_adapter_event("vscode", "vscode", 80, false));
+        assert_eq!(
+            sync.state().adapters.len(),
+            1,
+            "upsert should not duplicate"
+        );
+        assert_eq!(sync.state().adapters[0].compatibility_score, 80);
+        assert!(!sync.state().adapters[0].is_online);
+
+        // 新 adapter_id:追加
+        sync.apply_event(&chtc_adapter_event("jetbrains", "jetbrains", 90, true));
+        assert_eq!(sync.state().adapters.len(), 2);
+        assert_eq!(sync.state().adapters[1].adapter_id, "jetbrains");
+    }
+
+    #[test]
+    fn test_chtc_sync_unrelated_event_unchanged() {
+        let mut sync = ChtcSync::new();
+        sync.apply_event(&chtc_adapter_event("vscode", "vscode", 95, true));
+
+        let unrelated = NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        };
+        let result = sync.apply_event(&unrelated);
+        assert!(result.is_none());
+        assert_eq!(sync.state().adapters.len(), 1);
+    }
+
+    #[test]
+    fn test_data_snapshot_p2_fields_default() {
+        // P2 新增字段在 Default 实现中应正确初始化
+        let snap = DataSnapshot::default();
+        assert_eq!(snap.decay_metrics.coefficient, 1.0);
+        assert!(snap.decay_metrics.cycle_start.is_none());
+        assert_eq!(snap.router_metrics.kvbsr_stats.hit_rate, 0.0);
+        assert!(snap.mcp_nodes.is_empty());
+        assert!(snap.chtc_state.adapters.is_empty());
+        assert!(snap.decay_history.is_empty());
     }
 }

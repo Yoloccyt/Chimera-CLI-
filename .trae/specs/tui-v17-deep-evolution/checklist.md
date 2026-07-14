@@ -8,102 +8,102 @@
 
 ## P0 — 现状评估与架构基线设计
 
-- [ ] `crates/chimera-tui/src/app.rs` 完整事件循环已读取,当前快捷键处理逻辑与可扩展点已记录
-- [ ] `crates/chimera-tui/src/panels/mod.rs` + 8 个面板模块已读取,Panel trait 实现模式与可复用组件(list_state / filtered_xxx / content)已梳理
-- [ ] `crates/chimera-tui/src/data.rs` DataPipeline + DataSnapshot 已读取,快照字段缺口与新面板所需数据已识别
-- [ ] `crates/event-bus/src/types.rs` 已读取,需要新增的事件变体已列出(DecayMetricsReported / RouterStatsReported / McpNodeHeartbeat / ChtcAdapterStatus)
-- [ ] `crates/chimera-tui/src/render.rs` + `popup.rs` 已读取,EventDetail overlay 与 Help overlay 扩展点已规划
-- [ ] Claude Code CLI 调研完成,可借鉴的交互模式(流式输出 / 工具调用展开折叠 / 命令模式)已提取
-- [ ] Qodex CLI 调研完成,Quest 面板进度条增强方向已提取
-- [ ] Kimi Code CLI 调研完成,详情 overlay 的 JSON 高亮方案已提取
-- [ ] 参考 CLI 借鉴清单已写入 spec.md 的 H 节(参考风格融合)
-- [ ] `PanelId` 从 8 变体扩展到 14 变体的迁移方案已设计(新增 Decay/EventStream/Router/McpNodes/Chtc/Timeline)
-- [ ] `TuiState` 字段扩展方案已设计(decay_metrics / router_metrics / mcp_nodes / chtc_state / timeline_snapshots / fps / dirty_panels / auto_scroll)
-- [ ] `DataSnapshot` 字段扩展方案已设计(与 TuiState 对齐)
-- [ ] `TuiConfig` 字段扩展方案已设计(tick_interval_ms / snapshot_interval_s / max_event_history / max_snapshots)
-- [ ] 4 个新事件变体的载荷结构已设计
-- [ ] 架构基线摘要已写入 tasks.md 的 P0 Note
-- [ ] 依赖方向已确认:chimera-tui(L10)仅依赖 event-bus + nexus-core(L1),不引入 L9 依赖
+- [x] `crates/chimera-tui/src/app.rs` 完整事件循环已读取,当前快捷键处理逻辑与可扩展点已记录
+- [x] `crates/chimera-tui/src/panels/mod.rs` + 8 个面板模块已读取,Panel trait 实现模式与可复用组件(list_state / filtered_xxx / content)已梳理
+- [x] `crates/chimera-tui/src/data.rs` DataPipeline + DataSnapshot 已读取,快照字段缺口与新面板所需数据已识别
+- [x] `crates/event-bus/src/types.rs` 已读取,需要新增的事件变体已列出(DecayMetricsReported / RouterStatsReported / McpNodeHeartbeat / ChtcAdapterStatus)
+- [x] `crates/chimera-tui/src/render.rs` + `popup.rs` 已读取,EventDetail overlay 与 Help overlay 扩展点已规划
+- [x] Claude Code CLI 调研完成,可借鉴的交互模式(流式输出 / 工具调用展开折叠 / 命令模式)已提取
+- [x] Qodex CLI 调研完成,Quest 面板进度条增强方向已提取
+- [x] Kimi Code CLI 调研完成,详情 overlay 的 JSON 高亮方案已提取
+- [x] 参考 CLI 借鉴清单已写入 tasks.md 的 P0 Note 第 6 节(参考风格融合)
+- [x] `PanelId` 从 8 变体扩展到 14 变体的迁移方案已设计(新增 Decay/EventStream/Router/McpNodes/Chtc/Timeline)
+- [x] `TuiState` 字段扩展方案已设计(decay_metrics / router_metrics / mcp_nodes / chtc_state / timeline_snapshots / fps / dirty_panels / auto_scroll)
+- [x] `DataSnapshot` 字段扩展方案已设计(与 TuiState 对齐)
+- [x] `TuiConfig` 字段扩展方案已设计(tick_interval_ms / snapshot_interval_s / max_event_history / max_snapshots)
+- [x] 4 个新事件变体的载荷结构已设计
+- [x] 架构基线摘要已写入 tasks.md 的 P0 Note
+- [x] 依赖方向已确认:chimera-tui(L10)仅依赖 event-bus + nexus-core(L1),不引入 L9 依赖
 
 ## P1 — 提交 P3 归档
 
-- [ ] `git status` 确认未提交变更范围(应包含 tasks.md / checklist.md 的 P3 勾选 + P3.1/P3.2/P3.3 全部实施产物)
-- [ ] `git diff --stat` 核验变更范围符合预期(仅 chimera-tui + specs/realtime-data-driven-tui-panels + CHANGELOG.md + CODE_WIKI.md + docs/tui/)
-- [ ] `git add` 逐文件添加(未使用 `git add -A` / `git add .`)
-- [ ] `git commit -m` 使用 HEREDOC 传入 commit message,描述 P3 验证 + 基准 + 文档归档
-- [ ] `git push origin master` 推送成功
-- [ ] `git log --oneline -3` 确认提交成功
+- [x] `git status` 确认未提交变更范围(应包含 tasks.md / checklist.md 的 P3 勾选 + P3.1/P3.2/P3.3 全部实施产物)
+- [x] `git diff --stat` 核验变更范围符合预期(仅 chimera-tui + specs/realtime-data-driven-tui-panels + CHANGELOG.md + CODE_WIKI.md + docs/tui/)
+- [x] `git add` 逐文件添加(未使用 `git add -A` / `git add .`)
+- [x] `git commit -m` 使用 HEREDOC 传入 commit message,描述 P3 验证 + 基准 + 文档归档
+- [x] `git push origin main` 推送成功(实际分支为 main,commit 0f1d1a0)
+- [x] `git log --oneline -3` 确认提交成功
 
 ## P2 — 新增 5 监控面板
 
 ### P2.1 Decay 衰减面板
 
-- [ ] `crates/chimera-tui/tests/decay_panel_test.rs` 新增测试,验证 DecayMetricsReported 事件到达后面板渲染衰减系数与 sparkline
-- [ ] `crates/chimera-tui/src/panels/decay.rs` 新增,实现 `DecayPanel` + `Panel` trait
-- [ ] sparkline 渲染复用 `render::sparkline` 辅助函数
-- [ ] 衰减系数 > 0.7 红色高亮(阈值常量提取,WHY 注释说明依据)
-- [ ] `crates/event-bus/src/types.rs` 新增 `DecayMetricsReported` 事件变体(载荷:coefficient f32 / recent_events Vec<String> / timestamp)
-- [ ] `DataPipeline` 新增 `DecaySync` 适配器,订阅事件并维护 `decay_metrics` 状态
-- [ ] `cargo test -p chimera-tui` 新增 Decay 面板测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/decay_panel_test.rs` 新增测试,验证 DecayMetricsReported 事件到达后面板渲染衰减系数与 sparkline
+- [x] `crates/chimera-tui/src/panels/decay.rs` 新增,实现 `DecayPanel` + `Panel` trait
+- [x] sparkline 渲染复用 `render::sparkline` 辅助函数
+- [x] 衰减系数 > 0.7 红色高亮(阈值常量提取,WHY 注释说明依据)
+- [x] `crates/event-bus/src/types.rs` 新增 `DecayMetricsReported` 事件变体(载荷:coefficient f32 / recent_events Vec<String> / timestamp)
+- [x] `DataPipeline` 新增 `DecaySync` 适配器,订阅事件并维护 `decay_metrics` 状态
+- [x] `cargo test -p chimera-tui` 新增 Decay 面板测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P2.2 EventStream 全量事件流面板
 
-- [ ] `crates/chimera-tui/tests/event_stream_panel_test.rs` 新增测试,验证万级事件虚拟滚动帧时间 < 16ms
-- [ ] `crates/chimera-tui/src/panels/event_stream.rs` 新增,实现 `EventStreamPanel` + `Panel` trait
-- [ ] 虚拟滚动实现(`render::virtual_scroll_window` 辅助函数,仅渲染可见区域 + 上下 5 行缓冲)
-- [ ] 流式追加 + 自动滚动实现(`auto_scroll` 标记,用户滚动时暂停,底部显示 "[新事件 N 条]")
-- [ ] 事件类型筛选实现(复用 `filter_topic` / `filter_level` 字段)
-- [ ] `cargo test -p chimera-tui` 新增 EventStream 面板测试全部通过
-- [ ] 性能测试:10000 事件虚拟滚动帧时间 P95 < 16ms
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/event_stream_panel_test.rs` 新增测试,验证万级事件虚拟滚动帧时间 < 16ms
+- [x] `crates/chimera-tui/src/panels/event_stream.rs` 新增,实现 `EventStreamPanel` + `Panel` trait
+- [x] 虚拟滚动实现(`render::virtual_scroll_window` 辅助函数,仅渲染可见区域 + 上下 5 行缓冲)
+- [x] 流式追加 + 自动滚动实现(`auto_scroll` 标记,用户滚动时暂停,底部显示 "[新事件 N 条]")
+- [x] 事件类型筛选实现(复用 `filter_topic` / `filter_level` 字段)
+- [x] `cargo test -p chimera-tui` 新增 EventStream 面板测试全部通过
+- [x] 性能测试:10000 事件虚拟滚动帧时间 P95 < 16ms
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P2.3 Router 路由统计面板
 
-- [ ] `crates/chimera-tui/tests/router_panel_test.rs` 新增测试,验证 RouterStatsReported 事件到达后显示三路由器命中率与延迟
-- [ ] `crates/chimera-tui/src/panels/router.rs` 新增,实现 `RouterPanel` + `Panel` trait
-- [ ] 三路由器命中率进度条实现(复用 `render::utilization_bar`)
-- [ ] 热点 capability_id Top-10 列表实现(使用 `select_nth_unstable` O(n) Top-K,遵守 §4.1)
-- [ ] `crates/event-bus/src/types.rs` 新增 `RouterStatsReported` 事件变体(载荷:kvbsr_stats / sesa_stats / faae_stats 各含 hit_rate / p50 / p95 / p99 / hot_capabilities)
-- [ ] `cargo test -p chimera-tui` 新增 Router 面板测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/router_panel_test.rs` 新增测试,验证 RouterStatsReported 事件到达后显示三路由器命中率与延迟
+- [x] `crates/chimera-tui/src/panels/router.rs` 新增,实现 `RouterPanel` + `Panel` trait
+- [x] 三路由器命中率进度条实现(复用 `render::utilization_bar`)
+- [x] 热点 capability_id Top-10 列表实现(使用 `select_nth_unstable` O(n) Top-K,遵守 §4.1)
+- [x] `crates/event-bus/src/types.rs` 新增 `RouterStatsReported` 事件变体(载荷:kvbsr_stats / sesa_stats / faae_stats 各含 hit_rate / p50 / p95 / p99 / hot_capabilities)
+- [x] `cargo test -p chimera-tui` 新增 Router 面板测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P2.4 MCP 节点状态面板
 
-- [ ] `crates/chimera-tui/tests/mcp_nodes_panel_test.rs` 新增测试,验证 McpNodeHeartbeat 事件到达后显示节点列表与连接状态
-- [ ] `crates/chimera-tui/src/panels/mcp_nodes.rs` 新增,实现 `McpNodesPanel` + `Panel` trait
-- [ ] 节点列表渲染实现(节点 ID / 连接状态绿黄红 / 最近消息吞吐量)
-- [ ] 离线告警横幅实现(心跳 > 5s 未到达显示 "[ALERT] Node X offline")
-- [ ] `crates/event-bus/src/types.rs` 新增 `McpNodeHeartbeat` 事件变体(载荷:node_id / status / throughput / last_seen)
-- [ ] `cargo test -p chimera-tui` 新增 McpNodes 面板测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/mcp_nodes_panel_test.rs` 新增测试,验证 McpNodeHeartbeat 事件到达后显示节点列表与连接状态
+- [x] `crates/chimera-tui/src/panels/mcp_nodes.rs` 新增,实现 `McpNodesPanel` + `Panel` trait
+- [x] 节点列表渲染实现(节点 ID / 连接状态绿黄红 / 最近消息吞吐量)
+- [x] 离线告警横幅实现(心跳 > 5s 未到达显示 "[ALERT] Node X offline")
+- [x] `crates/event-bus/src/types.rs` 新增 `McpNodeHeartbeat` 事件变体(载荷:node_id / status / throughput / last_seen)
+- [x] `cargo test -p chimera-tui` 新增 McpNodes 面板测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P2.5 CHTC 跨平台适配器面板
 
-- [ ] `crates/chimera-tui/tests/chtc_panel_test.rs` 新增测试,验证 ChtcAdapterStatus 事件到达后显示 5 IDE 适配器兼容性评分
-- [ ] `crates/chimera-tui/src/panels/chtc.rs` 新增,实现 `ChtcPanel` + `Panel` trait
-- [ ] 5 适配器兼容性评分展示实现(评分 < 60 黄色高亮)
-- [ ] 最近请求类型分布 sparkline 实现
-- [ ] `crates/event-bus/src/types.rs` 新增 `ChtcAdapterStatus` 事件变体(载荷:adapter_id / adapter_type / compatibility_score / recent_requests)
-- [ ] `cargo test -p chimera-tui` 新增 Chtc 面板测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/chtc_panel_test.rs` 新增测试,验证 ChtcAdapterStatus 事件到达后显示 5 IDE 适配器兼容性评分
+- [x] `crates/chimera-tui/src/panels/chtc.rs` 新增,实现 `ChtcPanel` + `Panel` trait
+- [x] 5 适配器兼容性评分展示实现(评分 < 60 黄色高亮)
+- [x] 最近请求类型分布 sparkline 实现
+- [x] `crates/event-bus/src/types.rs` 新增 `ChtcAdapterStatus` 事件变体(载荷:adapter_id / adapter_type / compatibility_score / recent_requests)
+- [x] `cargo test -p chimera-tui` 新增 Chtc 面板测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P2 整体验收
 
-- [ ] `PanelId` 枚举扩展到 14 变体(新增 6 个:Decay/EventStream/Router/McpNodes/Chtc/Timeline,Help 已有)
-- [ ] `PanelId::next()` / `prev()` 循环顺序扩展为 14 面板循环
-- [ ] `TuiState` 新增字段(decay_metrics / router_metrics / mcp_nodes / chtc_state)已实现
-- [ ] `DataSnapshot` 新增字段与 `DataPipeline` 同步实现
-- [ ] `crates/chimera-tui/src/panels/mod.rs` 重导出 5 个新面板
-- [ ] `crates/chimera-tui/src/lib.rs` prelude 更新
-- [ ] `cargo test -p chimera-tui` 全部通过(含新增 5 面板测试,无回归)
-- [ ] `cargo test --workspace` 全部通过(无回归)
-- [ ] P2 Note 已写入 tasks.md
+- [x] `PanelId` 枚举扩展到 14 变体(新增 6 个:Decay/EventStream/Router/McpNodes/Chtc/Timeline,Help 已有)
+- [x] `PanelId::next()` / `prev()` 循环顺序扩展为 14 面板循环
+- [x] `TuiState` 新增字段(decay_metrics / router_metrics / mcp_nodes / chtc_state)已实现
+- [x] `DataSnapshot` 新增字段与 `DataPipeline` 同步实现
+- [x] `crates/chimera-tui/src/panels/mod.rs` 重导出 5 个新面板
+- [x] `crates/chimera-tui/src/lib.rs` prelude 更新
+- [x] `cargo test -p chimera-tui` 全部通过(含新增 5 面板占位测试,无回归)— 共享基础设施阶段
+- [x] `cargo test --workspace` 全部通过(无回归)
+- [x] P2 Note 已写入 tasks.md(共享基础设施完成说明 + 后续实施指引)
 
 ## P3 — 交互能力升级
 

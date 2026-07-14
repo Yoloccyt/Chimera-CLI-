@@ -81,7 +81,7 @@ impl NexusEvent {
     /// 避免遗漏导致 topic() panic。
     pub fn topic(&self) -> EventTopic {
         match self {
-            // === Routing (11) === L6 Router 路由与激活
+            // === Routing (11 + P2.3 1 个) === L6 Router 路由与激活
             Self::OmniSparseMasksComputed { .. }
             | Self::ToolsRouted { .. }
             | Self::BlocksRebalanced { .. }
@@ -92,7 +92,9 @@ impl NexusEvent {
             | Self::ExpertRegistered { .. }
             | Self::ExpertUnregistered { .. }
             | Self::EntropyBalanced { .. }
-            | Self::SesaActivationCompleted { .. } => EventTopic::Routing,
+            | Self::SesaActivationCompleted { .. }
+            // P2.3 TUI v1.7-omega:三路由器统计聚合报告(L9 聚合发布,消费 L6 数据)
+            | Self::RouterStatsReported { .. } => EventTopic::Routing,
 
             // === Memory (7) === L2 Memory 记忆编码与分层
             Self::NexusStateChanged { .. }
@@ -103,7 +105,7 @@ impl NexusEvent {
             | Self::CapabilityTiered { .. }
             | Self::NmcEncoded { .. } => EventTopic::Memory,
 
-            // === Security (8) === L4 Security 安全审计与干预
+            // === Security (8 + P2.1 1 个) === L4 Security 安全审计与干预
             Self::CapabilityFrozen { .. }
             | Self::SandboxViolation { .. }
             | Self::AuditLogged { .. }
@@ -111,7 +113,9 @@ impl NexusEvent {
             | Self::VetoOverridden { .. }
             | Self::RedTeamAudit { .. }
             | Self::AsaIntervention { .. }
-            | Self::AhirtProbeCompleted { .. } => EventTopic::Security,
+            | Self::AhirtProbeCompleted { .. }
+            // P2.1 TUI v1.7-omega:衰减指标报告(L4 decay-engine 发布)
+            | Self::DecayMetricsReported { .. } => EventTopic::Security,
 
             // === Execution (12) === L7 Execution 生产验证与融合
             Self::OperationProduced { .. }
@@ -158,13 +162,17 @@ impl NexusEvent {
             | Self::QuestPaused { .. }
             | Self::QuestResumed { .. } => EventTopic::Quest,
 
-            // === System (6) === L10 Interface + 跨层系统告警
+            // === System (6 + P2.4 1 + P2.5 1 个) === L10 Interface + 跨层系统告警
             Self::McpMessageReceived { .. }
             | Self::SlowConsumerDropped { .. }
             | Self::ChtcToolCallReceived { .. }
             | Self::McpMeshTransactionCompleted { .. }
             | Self::CsnSubstitutionTriggered { .. }
-            | Self::EfficiencyAlertTriggered { .. } => EventTopic::System,
+            | Self::EfficiencyAlertTriggered { .. }
+            // P2.4 TUI v1.7-omega:MCP 节点心跳(L10 mcp-mesh 发布)
+            | Self::McpNodeHeartbeat { .. }
+            // P2.5 TUI v1.7-omega:CHTC 适配器状态(L10 chtc-bridge 发布)
+            | Self::ChtcAdapterStatus { .. } => EventTopic::System,
 
             // === Knowledge (4) === L5 Knowledge 知识沉淀与进化
             Self::WikiUpdated { .. }

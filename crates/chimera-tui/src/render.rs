@@ -17,6 +17,15 @@ use ratatui::widgets::{Block, Borders, Gauge, Sparkline};
 /// 避免两处维护导致不一致。
 pub const FOOTER_TEXT: &str = "Press Tab to switch panels, ':' for commands, 'q' to quit.";
 
+/// 虚拟滚动缓冲行数 — 上下各保留 5 行
+///
+/// WHY 5 行:过小会导致快速滚动时出现空白闪烁(用户视线下移时缓冲已耗尽),
+/// 过大则削弱虚拟滚动的性能优势(渲染行数 = visible + 2×BUFFER)。
+/// 5 行在 120x40 终端下约占 12% 额外渲染量,既能吸收单次滚轮多行事件,
+/// 又保持 O(visible + 2×BUFFER) 复杂度。参考 Claude Code 的 heightCache
+/// 缓冲策略(流式输出场景验证)。
+pub const VIRTUAL_SCROLL_BUFFER: usize = 5;
+
 /// 构造 Sparkline widget
 ///
 /// # 参数
@@ -80,6 +89,77 @@ pub fn utilization_bar(value: f64, max: f64, width: usize) -> Line<'static> {
     ])
 }
 
+/// 构造延迟统计行(P50/P95/P99 三列横向对比)
+///
+/// # 参数
+/// - `label`: 行前缀标签(如路由器名称 "KVBSR"/"SESA"/"FaaE")
+/// - `p50`: P50 延迟(微秒)— 中位数,反映典型体验
+/// - `p95`: P95 延迟(微秒)— 多数用户的上限
+/// - `p99`: P99 延迟(微秒)— 尾部异常
+///
+/// # 设计决策(WHY)
+/// P50/P95/P99 三列横向对比:运维常需同时观察 P50(中位数)与 P95/P99(尾部)
+/// 的差距来判断长尾延迟严重程度,横排比纵排更易快速扫读。P50 反映典型体验,
+/// P95 反映多数用户的上限,P99 反映尾部异常,三者并列可一眼识别延迟分布形态
+/// (如 P99 远大于 P50 表示长尾问题)。同时复用此函数避免各面板重复拼字符串。
+pub fn latency_line(label: &str, p50: u64, p95: u64, p99: u64) -> Line<'static> {
+    Line::from(format!(
+        "{}  Latency  P50: {}μs  P95: {}μs  P99: {}μs",
+        label, p50, p95, p99,
+    ))
+}
+
+/// 虚拟滚动窗口计算 — 仅返回可见区域 + 上下缓冲行的事件索引范围
+///
+/// 给定总条目数、滚动偏移与可见行数,返回 `[start_index, end_index)` 的渲染范围。
+/// 仅渲染可见区域 + 上下 `VIRTUAL_SCROLL_BUFFER` 行缓冲,
+/// 将万级事件的渲染复杂度从 O(n) 降至 O(visible + 2×BUFFER)。
+///
+/// # 参数
+/// - `total_items`: 列表总条目数
+/// - `scroll_offset`: 当前滚动偏移(可见区域起始行,通常由 `list_state::adjust_scroll` 计算)
+/// - `visible_rows`: 可见区域行数
+///
+/// # 返回
+/// `(start_index, end_index)`,其中:
+/// - `start_index` 已应用上缓冲(向后扩展 BUFFER 行,不超过 0)
+/// - `end_index` 已应用下缓冲(向前扩展 BUFFER 行,不超过 total_items)
+///
+/// # 边界情况
+/// - `total_items == 0`:返回 `(0, 0)`
+/// - `visible_rows == 0`:返回 `(0, 0)`(无可见区域时不渲染)
+/// - `scroll_offset` 超出范围:自动钳位到 `[0, total_items)`
+///
+/// # 设计决策(WHY)
+/// - **基于 scroll_offset 而非 selected**:与 `list_state::adjust_scroll` 配合,
+///   后者已确保 selected 位于 `[scroll_offset, scroll_offset + visible_rows)` 内,
+///   本函数只需在 scroll_offset 基础上扩展缓冲,职责单一。
+/// - **半开区间**:与 Rust 切片语法 `&items[start..end]` 自然契合,避免 +1 偏移错误。
+/// - **缓冲行数 5**:见 `VIRTUAL_SCROLL_BUFFER` 常量文档。
+pub fn virtual_scroll_window(
+    total_items: usize,
+    scroll_offset: usize,
+    visible_rows: usize,
+) -> (usize, usize) {
+    if total_items == 0 || visible_rows == 0 {
+        return (0, 0);
+    }
+
+    // 钳位 scroll_offset 到 [0, total_items - 1],避免溢出
+    let clamped_offset = scroll_offset.min(total_items.saturating_sub(1));
+
+    // 起始索引:滚动偏移向上扩展缓冲,但不超过 0
+    let start = clamped_offset.saturating_sub(VIRTUAL_SCROLL_BUFFER);
+
+    // 结束索引:滚动偏移 + 可见行数 + 下缓冲,但不超过总条目数
+    let end = clamped_offset
+        .saturating_add(visible_rows)
+        .saturating_add(VIRTUAL_SCROLL_BUFFER)
+        .min(total_items);
+
+    (start, end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,6 +189,28 @@ mod tests {
     }
 
     #[test]
+    fn test_latency_line_contains_all_percentiles() {
+        let line = latency_line("KVBSR", 120, 480, 950);
+        let text = line.to_string();
+        assert!(text.contains("KVBSR"), "label should be present");
+        assert!(text.contains("P50"), "P50 label should be present");
+        assert!(text.contains("P95"), "P95 label should be present");
+        assert!(text.contains("P99"), "P99 label should be present");
+        assert!(text.contains("120"), "P50 value should be present");
+        assert!(text.contains("480"), "P95 value should be present");
+        assert!(text.contains("950"), "P99 value should be present");
+    }
+
+    #[test]
+    fn test_latency_line_zero_values() {
+        let line = latency_line("FaaE", 0, 0, 0);
+        let text = line.to_string();
+        assert!(text.contains("P50: 0μs"));
+        assert!(text.contains("P95: 0μs"));
+        assert!(text.contains("P99: 0μs"));
+    }
+
+    #[test]
     fn test_gauge_full() {
         let g = gauge(100.0, 100.0, "full", Color::Green);
         // Gauge 没有直接公开内部 percent,通过构造不 panic 即可
@@ -126,5 +228,65 @@ mod tests {
         assert!(FOOTER_TEXT.contains("Tab"));
         assert!(FOOTER_TEXT.contains(":"));
         assert!(FOOTER_TEXT.contains("q"));
+    }
+
+    // ============================================================
+    // 虚拟滚动辅助函数测试
+    // ============================================================
+
+    #[test]
+    fn test_virtual_scroll_window_empty() {
+        assert_eq!(virtual_scroll_window(0, 0, 10), (0, 0));
+    }
+
+    #[test]
+    fn test_virtual_scroll_window_zero_visible() {
+        assert_eq!(virtual_scroll_window(100, 50, 0), (0, 0));
+    }
+
+    #[test]
+    fn test_virtual_scroll_window_small_list() {
+        // 列表条数 < 可视窗口:应返回部分(从 0 开始)
+        let (start, end) = virtual_scroll_window(10, 0, 20);
+        assert_eq!(start, 0);
+        assert_eq!(end, 10);
+    }
+
+    #[test]
+    fn test_virtual_scroll_window_large_list_middle() {
+        // 10000 条数据,scroll_offset=5000,可视 20 行,缓冲 5 行
+        // 期望:start = 5000 - 5 = 4995
+        //       end   = 5000 + 20 + 5 = 5025
+        let (start, end) = virtual_scroll_window(10000, 5000, 20);
+        assert_eq!(start, 4995, "start should be scroll_offset - BUFFER");
+        assert_eq!(end, 5025, "end should be scroll_offset + visible + BUFFER");
+        assert_eq!(end - start, 30, "window size = visible + 2*BUFFER");
+    }
+
+    #[test]
+    fn test_virtual_scroll_window_near_start() {
+        // scroll_offset 接近 0:上缓冲会被 saturating_sub 钳位到 0
+        let (start, end) = virtual_scroll_window(1000, 2, 20);
+        assert_eq!(
+            start, 0,
+            "start should be clamped to 0 when offset < BUFFER"
+        );
+        assert_eq!(end, 27, "end = 2 + 20 + 5 = 27");
+    }
+
+    #[test]
+    fn test_virtual_scroll_window_near_end() {
+        // 接近末尾时,end 应被钳位到 total_items
+        let (start, end) = virtual_scroll_window(100, 95, 20);
+        assert_eq!(end, 100, "end should be clamped to total_items");
+        assert_eq!(start, 90, "start = 95 - 5 = 90");
+    }
+
+    #[test]
+    fn test_virtual_scroll_window_offset_exceeds_total() {
+        // scroll_offset 超出 total_items:应被钳位
+        let (start, end) = virtual_scroll_window(50, 100, 20);
+        assert_eq!(start, 44, "offset clamped to 49, start = 49 - 5");
+        assert_eq!(end, 50, "end clamped to total_items");
     }
 }

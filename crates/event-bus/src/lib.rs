@@ -46,7 +46,8 @@ pub use error::EventBusError;
 pub use logging::BusLogger;
 pub use topic::{EventTopic, FilteredSubscriber};
 pub use types::{
-    BudgetMetricsPayload, EventMetadata, EventSeverity, NexusEvent, QuestStatus, VoteValue,
+    BudgetMetricsPayload, EventMetadata, EventSeverity, NexusEvent, QuestStatus,
+    RouterStatsPayload, VoteValue,
 };
 
 /// 预导入模块 — 提供最常用类型
@@ -58,5 +59,6 @@ pub mod prelude {
     pub use crate::topic::{EventTopic, FilteredSubscriber};
     pub use crate::types::{
         BudgetMetricsPayload, EventMetadata, EventSeverity, NexusEvent, QuestStatus,
+        RouterStatsPayload,
     };
 }

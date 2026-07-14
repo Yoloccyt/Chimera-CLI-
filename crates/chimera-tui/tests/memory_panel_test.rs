@@ -5,12 +5,11 @@
 #![forbid(unsafe_code)]
 
 use chimera_tui::{
-    BudgetMetrics, DataSnapshot, DataSourceConfig, MemoryMetrics, PanelId, TuiApp, TuiConfig,
-    TuiDataSource, TuiError,
+    DataSnapshot, DataSourceConfig, MemoryMetrics, PanelId, TuiApp, TuiConfig, TuiDataSource,
+    TuiError,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
-use std::collections::VecDeque;
 
 /// 测试数据源 — 返回预设 Memory 指标
 #[derive(Debug)]
@@ -54,9 +53,6 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
 #[test]
 fn test_memory_panel_renders_with_sample_data() {
     let snapshot = DataSnapshot {
-        quest_list: Vec::new(),
-        latest_events: VecDeque::new(),
-        budget_metrics: BudgetMetrics::default(),
         memory_metrics: MemoryMetrics {
             hit_rate_percent: 92.5,
             evictions: 3,
@@ -66,11 +62,9 @@ fn test_memory_panel_renders_with_sample_data() {
             cache_misses: 42,
             tier: "L2".into(),
         },
-        security_state: Default::default(),
-        health_metrics: Default::default(),
         budget_history: vec![70, 75, 80, 85, 90, 92],
         memory_history: vec![80, 82, 85, 88, 90, 92],
-        event_rate_history: Vec::new(),
+        ..Default::default()
     };
 
     let mut app = TuiApp::with_data_source(

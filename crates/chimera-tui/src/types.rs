@@ -10,11 +10,11 @@
 //!   支持纯逻辑测试(无需终端)。
 //! - `current_panel` 字段已移除(M1 清理项 #2):当前面板以 `FocusManager`
 //!   为唯一来源,`TuiApp` 通过 `current_panel()` 方法对外暴露,避免双来源不一致。
-
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use crate::data::{BudgetMetrics, HealthMetrics, MemoryMetrics, SecurityState};
 use crate::popup::{PopupStack, Severity};
+use chrono::{DateTime, Utc};
 use event_bus::{NexusEvent, VoteValue};
 use nexus_core::Quest;
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,12 @@ use serde::{Deserialize, Serialize};
 /// - `Health`:健康面板,显示事件速率与健康评分
 /// - `Log`:日志面板,显示系统日志流
 /// - `Help`:帮助面板,显示快捷键说明
+/// - `Decay`:衰减面板,显示衰减系数与历史(P2.1 TUI v1.7-omega)
+/// - `EventStream`:事件流面板,全量事件流虚拟滚动(P2.2)
+/// - `Router`:路由统计面板,三路由器命中率与延迟(P2.3)
+/// - `McpNodes`:MCP 节点面板,节点状态与心跳(P2.4)
+/// - `Chtc`:CHTC 适配器面板,跨平台兼容性评分(P2.5)
+/// - `Timeline`:时间轴面板,P7 历史回放(v1.8+ 接口占位)
 ///
 /// WHY Copy + PartialEq:面板标识频繁参与比较与传递,Copy 避免克隆开销。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -53,6 +59,18 @@ pub enum PanelId {
     Log,
     /// 帮助面板 — 显示快捷键说明
     Help,
+    /// 衰减面板 — 显示衰减系数与历史(P2.1 TUI v1.7-omega)
+    Decay,
+    /// 事件流面板 — 全量事件流(虚拟滚动,P2.2)
+    EventStream,
+    /// 路由统计面板 — 三路由器命中率与延迟(P2.3)
+    Router,
+    /// MCP 节点面板 — 节点状态与心跳(P2.4)
+    McpNodes,
+    /// CHTC 适配器面板 — 跨平台兼容性评分(P2.5)
+    Chtc,
+    /// 时间轴面板 — P7 历史回放(v1.8+ 接口占位)
+    Timeline,
 }
 
 impl PanelId {
@@ -67,6 +85,12 @@ impl PanelId {
             PanelId::Health => "Health",
             PanelId::Log => "Log",
             PanelId::Help => "Help",
+            PanelId::Decay => "Decay",
+            PanelId::EventStream => "EventStream",
+            PanelId::Router => "Router",
+            PanelId::McpNodes => "McpNodes",
+            PanelId::Chtc => "Chtc",
+            PanelId::Timeline => "Timeline",
         }
     }
 
@@ -81,12 +105,20 @@ impl PanelId {
             PanelId::Health => " Health ",
             PanelId::Log => " System Log ",
             PanelId::Help => " Help ",
+            PanelId::Decay => " Decay ",
+            PanelId::EventStream => " Event Stream ",
+            PanelId::Router => " Router Stats ",
+            PanelId::McpNodes => " MCP Nodes ",
+            PanelId::Chtc => " CHTC Adapters ",
+            PanelId::Timeline => " Timeline ",
         }
     }
 
     /// 切换到下一个面板(循环顺序)
     ///
-    /// M2 完整循环:Quest → Parliament → Budget → Memory → Security → Health → Log → Help → Quest
+    /// 完整循环(14 面板):
+    /// Quest → Parliament → Budget → Memory → Security → Health → Log → Help
+    /// → Decay → EventStream → Router → McpNodes → Chtc → Timeline → Quest
     pub fn next(&self) -> PanelId {
         match self {
             PanelId::Quest => PanelId::Parliament,
@@ -96,14 +128,20 @@ impl PanelId {
             PanelId::Security => PanelId::Health,
             PanelId::Health => PanelId::Log,
             PanelId::Log => PanelId::Help,
-            PanelId::Help => PanelId::Quest,
+            PanelId::Help => PanelId::Decay,
+            PanelId::Decay => PanelId::EventStream,
+            PanelId::EventStream => PanelId::Router,
+            PanelId::Router => PanelId::McpNodes,
+            PanelId::McpNodes => PanelId::Chtc,
+            PanelId::Chtc => PanelId::Timeline,
+            PanelId::Timeline => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
     pub fn prev(&self) -> PanelId {
         match self {
-            PanelId::Quest => PanelId::Help,
+            PanelId::Quest => PanelId::Timeline,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
             PanelId::Memory => PanelId::Budget,
@@ -111,6 +149,12 @@ impl PanelId {
             PanelId::Health => PanelId::Security,
             PanelId::Log => PanelId::Health,
             PanelId::Help => PanelId::Log,
+            PanelId::Decay => PanelId::Help,
+            PanelId::EventStream => PanelId::Decay,
+            PanelId::Router => PanelId::EventStream,
+            PanelId::McpNodes => PanelId::Router,
+            PanelId::Chtc => PanelId::McpNodes,
+            PanelId::Timeline => PanelId::Chtc,
         }
     }
 }
@@ -174,6 +218,140 @@ pub enum TuiCommand {
 }
 
 // ============================================================
+// 新面板数据类型 — P2 TUI v1.7-omega 共享基础设施
+// ============================================================
+//
+// WHY 镜像 event-bus 类型而非直接复用:chimera-tui(L10)只依赖 L1 的
+// event-bus + nexus-core,理论上可以直接复用 RouterStatsPayload 等类型。
+// 但为了保持 TUI 内部状态的可演进性(例如未来添加 TUI 专有的展示字段),
+// 并与现有 BudgetMetrics/MemoryMetrics 模式保持一致(均镜像 L9/L2 类型),
+// 这里采用独立类型定义。同步逻辑在 data.rs 的 *Sync 同步器中完成。
+// 参见 §2.2 依赖铁律:L10→L1 允许,但类型定义不跨层泄漏。
+
+/// 衰减指标 — Decay 面板的数据视图(P2.1)
+///
+/// 镜像 `NexusEvent::DecayMetricsReported` 的载荷,由 `DecaySync` 填充。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecayMetrics {
+    /// 当前衰减系数 [0.0, 1.0],1.0 表示无衰减
+    pub coefficient: f32,
+    /// 本周期内触发衰减的最近事件摘要
+    pub recent_events: Vec<String>,
+    /// 本衰减周期开始时间,None 表示尚未收到任何衰减事件
+    pub cycle_start: Option<DateTime<Utc>>,
+}
+
+impl Default for DecayMetrics {
+    fn default() -> Self {
+        // WHY coefficient=1.0:无衰减事件时默认满血,避免面板显示误导性低系数
+        Self {
+            coefficient: 1.0,
+            recent_events: Vec::new(),
+            cycle_start: None,
+        }
+    }
+}
+
+/// 路由器统计信息 — Router 面板的单路由器数据视图(P2.3)
+///
+/// 镜像 `event_bus::RouterStatsPayload`,避免 L10→L1 类型强耦合,
+/// 同时与 BudgetMetrics 模式保持一致。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RouterStatsInfo {
+    /// 命中率 [0.0, 1.0]
+    pub hit_rate: f32,
+    /// P50 延迟(微秒)
+    pub p50_latency_us: u64,
+    /// P95 延迟(微秒)
+    pub p95_latency_us: u64,
+    /// P99 延迟(微秒)
+    pub p99_latency_us: u64,
+    /// 热点能力列表(能力 ID,调用次数)
+    pub hot_capabilities: Vec<(String, u64)>,
+}
+
+impl Default for RouterStatsInfo {
+    fn default() -> Self {
+        Self {
+            hit_rate: 0.0,
+            p50_latency_us: 0,
+            p95_latency_us: 0,
+            p99_latency_us: 0,
+            hot_capabilities: Vec::new(),
+        }
+    }
+}
+
+/// 路由器指标 — 三路由器(KVBSR/SESA/FaaE)聚合视图(P2.3)
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RouterMetrics {
+    /// KVBSR 路由器统计
+    pub kvbsr_stats: RouterStatsInfo,
+    /// SESA 路由器统计
+    pub sesa_stats: RouterStatsInfo,
+    /// FaaE 路由器统计
+    pub faae_stats: RouterStatsInfo,
+}
+
+/// 节点状态枚举 — MCP 节点健康状态(P2.4)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NodeStatus {
+    /// 在线,正常服务
+    Online,
+    /// 降级,部分功能受限
+    Degraded,
+    /// 离线,不可达
+    Offline,
+}
+
+/// MCP 节点状态 — McpNodes 面板的单节点视图(P2.4)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpNodeStatus {
+    /// 节点 ID
+    pub node_id: String,
+    /// 节点状态
+    pub status: NodeStatus,
+    /// 节点吞吐量(每秒事务数)
+    pub throughput: u64,
+    /// 最近一次心跳时间,None 表示尚未收到心跳
+    pub last_seen: Option<DateTime<Utc>>,
+}
+
+/// CHTC 适配器信息 — Chtc 面板的单适配器视图(P2.5)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChtcAdapterInfo {
+    /// 适配器 ID
+    pub adapter_id: String,
+    /// 适配器类型(如 "vscode"/"jetbrains"/"vim"/"emacs"/"cli")
+    pub adapter_type: String,
+    /// 兼容性评分 [0, 100]
+    pub compatibility_score: u8,
+    /// 最近请求(请求标识, 次数)列表
+    pub recent_requests: Vec<(String, u32)>,
+    /// 是否在线
+    pub is_online: bool,
+}
+
+/// CHTC 状态 — 5 IDE 适配器聚合视图(P2.5)
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ChtcState {
+    /// 全部适配器列表
+    pub adapters: Vec<ChtcAdapterInfo>,
+}
+
+/// 时间轴快照 — P7 历史回放的接口占位(v1.8+ 实现)
+///
+/// WHY 现在定义:让 TuiState 与 DataSnapshot 提前预留字段,
+/// v1.8 实现历史回放时无需再破坏性扩展结构体。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct TimelineSnapshot {
+    /// 快照时间戳,None 表示尚未生成
+    pub timestamp: Option<DateTime<Utc>>,
+    /// 快照时点的事件总数
+    pub event_count: u64,
+}
+
+// ============================================================
 // TUI 状态 — 应用运行时状态
 // ============================================================
 
@@ -225,6 +403,25 @@ pub struct TuiState {
     pub filter_topic: Option<String>,
     /// 级别过滤器 — 应用于 Log 面板的事件严重级别
     pub filter_level: Option<String>,
+    // === P2 TUI v1.7-omega 新增字段 ===
+    /// 衰减指标(数据驱动 Decay 面板)
+    pub decay_metrics: DecayMetrics,
+    /// 路由器指标(数据驱动 Router 面板)
+    pub router_metrics: RouterMetrics,
+    /// MCP 节点状态列表(数据驱动 McpNodes 面板)
+    pub mcp_nodes: Vec<McpNodeStatus>,
+    /// CHTC 适配器状态(数据驱动 Chtc 面板)
+    pub chtc_state: ChtcState,
+    /// 时间轴快照(P7 接口占位,v1.8+ 实现)
+    pub timeline_snapshots: Vec<TimelineSnapshot>,
+    /// FPS 显示(P4.4 性能监控)
+    pub fps: u16,
+    /// 增量渲染脏面板集合(P4.1,记录本帧需重绘的面板)
+    pub dirty_panels: HashSet<PanelId>,
+    /// 流式追加自动滚动标记(P3.4,EventStream/Log 面板用)
+    pub auto_scroll: bool,
+    /// 衰减历史 sparkline 数据点(系数 × 1000 的整型表示)
+    pub decay_history: Vec<u64>,
 }
 
 impl TuiState {
@@ -249,6 +446,16 @@ impl TuiState {
             filter_keyword: None,
             filter_topic: None,
             filter_level: None,
+            // P2 新增字段默认值
+            decay_metrics: DecayMetrics::default(),
+            router_metrics: RouterMetrics::default(),
+            mcp_nodes: Vec::new(),
+            chtc_state: ChtcState::default(),
+            timeline_snapshots: Vec::new(),
+            fps: 0,
+            dirty_panels: HashSet::new(),
+            auto_scroll: true,
+            decay_history: Vec::new(),
         }
     }
 
@@ -327,8 +534,15 @@ mod tests {
         assert_eq!(PanelId::Security.next(), PanelId::Health);
         assert_eq!(PanelId::Health.next(), PanelId::Log);
         assert_eq!(PanelId::Log.next(), PanelId::Help);
-        // 循环:Help → Quest
-        assert_eq!(PanelId::Help.next(), PanelId::Quest);
+        // P2 扩展:Help → Decay(不再是 Help → Quest)
+        assert_eq!(PanelId::Help.next(), PanelId::Decay);
+        assert_eq!(PanelId::Decay.next(), PanelId::EventStream);
+        assert_eq!(PanelId::EventStream.next(), PanelId::Router);
+        assert_eq!(PanelId::Router.next(), PanelId::McpNodes);
+        assert_eq!(PanelId::McpNodes.next(), PanelId::Chtc);
+        assert_eq!(PanelId::Chtc.next(), PanelId::Timeline);
+        // 循环:Timeline → Quest
+        assert_eq!(PanelId::Timeline.next(), PanelId::Quest);
     }
 
     #[test]
@@ -340,13 +554,20 @@ mod tests {
         assert_eq!(PanelId::Health.prev(), PanelId::Security);
         assert_eq!(PanelId::Log.prev(), PanelId::Health);
         assert_eq!(PanelId::Help.prev(), PanelId::Log);
-        // 循环:Quest → Help
-        assert_eq!(PanelId::Quest.prev(), PanelId::Help);
+        // P2 扩展:Decay → Help(不再是 Quest → Help)
+        assert_eq!(PanelId::Decay.prev(), PanelId::Help);
+        assert_eq!(PanelId::EventStream.prev(), PanelId::Decay);
+        assert_eq!(PanelId::Router.prev(), PanelId::EventStream);
+        assert_eq!(PanelId::McpNodes.prev(), PanelId::Router);
+        assert_eq!(PanelId::Chtc.prev(), PanelId::McpNodes);
+        assert_eq!(PanelId::Timeline.prev(), PanelId::Chtc);
+        // 循环:Quest → Timeline
+        assert_eq!(PanelId::Quest.prev(), PanelId::Timeline);
     }
 
     #[test]
     fn test_panel_id_next_prev_roundtrip() {
-        // next 再 prev 应回到原面板
+        // next 再 prev 应回到原面板(P2 扩展至 14 面板)
         for panel in [
             PanelId::Quest,
             PanelId::Parliament,
@@ -356,6 +577,12 @@ mod tests {
             PanelId::Health,
             PanelId::Log,
             PanelId::Help,
+            PanelId::Decay,
+            PanelId::EventStream,
+            PanelId::Router,
+            PanelId::McpNodes,
+            PanelId::Chtc,
+            PanelId::Timeline,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);
