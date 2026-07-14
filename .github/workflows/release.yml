@@ -227,44 +227,68 @@ jobs:
 
       - name: Verify image size < 100MB
         run: |
-          # WHY 使用 ${{ env.IMAGE_NAME }}:统一从顶层 env 读取已规范化的镜像名,
-          # 避免仓库名尾部非法字符导致 reference 格式错误,同时消去大小写不一致风险。
-          # WHY 校验 compressed size:`docker image inspect --format='{{.Size}}'` 返回的是
-          # 各 layer 解压后的累计体积(uncompressed),distroless 基础镜像解压后通常超过
-          # 100MB,导致误判。用户感知的镜像体积与 registry 计费以 compressed size 为准,
-          # 因此通过 manifest 的 layers[].size 求和得到 compressed size 进行校验。
+          # WHY 使用 GHCR Registry HTTP API 而非 `docker manifest inspect`:
+          # `docker manifest inspect` 需要 DOCKER_CLI_EXPERIMENTAL=enabled 且在某些
+          # Docker CLI 版本中不可用,导致 CI 环境中反复失败。直接用 curl 查询 GHCR
+          # v2 API 更可靠,且不依赖 Docker daemon 或 experimental 特性。
+          #
+          # 校验 compressed size(layers[].size 求和)而非 `docker image inspect` 的
+          # uncompressed size,因为用户感知与 registry 计费均以 compressed size 为准。
           set -euo pipefail
-          export DOCKER_CLI_EXPERIMENTAL=enabled
 
-          IMAGE="${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
-          echo "Inspecting compressed size for image: $IMAGE"
+          # WHY 转小写:GHCR API 路径要求全小写,而 github.repository_owner 可能保留原大小写
+          REPO=$(echo "${{ github.repository_owner }}/chimera-cli" | tr '[:upper:]' '[:lower:]')
+          TAG="${{ github.ref_name }}"
+          REGISTRY="https://ghcr.io"
 
-          # docker manifest inspect 需要 experimental CLI;失败时给出明确错误并退出
-          MANIFEST=$(docker manifest inspect "$IMAGE") || {
-            echo "ERROR: failed to inspect manifest for $IMAGE"
+          # 获取匿名 pull token(GHCR 公开镜像支持匿名拉取)
+          TOKEN=$(curl -sf "${REGISTRY}/token?service=ghcr.io&scope=repository:${REPO}:pull" | jq -r '.token') || {
+            echo "ERROR: failed to obtain GHCR token from ${REGISTRY}/token"
             exit 1
           }
 
-          # 处理多平台 manifest list(含 build-push-action 生成的 attestation)与单平台镜像
+          ACCEPT_IDX="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json"
+          ACCEPT_MAN="application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
+
+          # 拉取 manifest(可能为 OCI index 或单平台 manifest)
+          MANIFEST=$(curl -sfL \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: ${ACCEPT_IDX},${ACCEPT_MAN}" \
+            "${REGISTRY}/v2/${REPO}/manifests/${TAG}") || {
+            echo "ERROR: failed to fetch manifest from ${REGISTRY}/v2/${REPO}/manifests/${TAG}"
+            exit 1
+          }
+
+          # 若为多平台 index,解析 linux/amd64 子 manifest
           if echo "$MANIFEST" | jq -e '.manifests' >/dev/null 2>&1; then
-            DIGEST=$(echo "$MANIFEST" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
+            DIGEST=$(echo "$MANIFEST" | jq -r \
+              '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
             if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
               echo "ERROR: could not find linux/amd64 manifest in index"
               exit 1
             fi
-            echo "Multi-platform manifest list; resolving linux/amd64 digest: $DIGEST"
-            MANIFEST=$(docker manifest inspect "${IMAGE}@${DIGEST}") || {
-              echo "ERROR: failed to inspect platform manifest ${IMAGE}@${DIGEST}"
+            echo "Multi-platform index; resolving linux/amd64 digest: $DIGEST"
+            MANIFEST=$(curl -sfL \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: ${ACCEPT_MAN}" \
+              "${REGISTRY}/v2/${REPO}/manifests/${DIGEST}") || {
+              echo "ERROR: failed to fetch platform manifest ${REGISTRY}/v2/${REPO}/manifests/${DIGEST}"
               exit 1
             }
           fi
 
-          IMAGE_SIZE=$(echo "$MANIFEST" | jq -r '[.layers[].size] | add // 0')
-          if [ -z "$IMAGE_SIZE" ] || [ "$IMAGE_SIZE" = "null" ] || [ "$IMAGE_SIZE" = "0" ]; then
+          # 求和所有 layer 的 compressed size
+          IMAGE_SIZE=$(echo "$MANIFEST" | jq '[.layers[].size] | add') || {
             echo "ERROR: could not compute compressed size from manifest"
+            echo "Manifest (truncated): $(echo "$MANIFEST" | head -c 500)"
+            exit 1
+          }
+          if [ -z "$IMAGE_SIZE" ] || [ "$IMAGE_SIZE" = "null" ]; then
+            echo "ERROR: computed size is empty or null; manifest may have no layers"
             exit 1
           fi
-          echo "Image compressed size: $IMAGE_SIZE bytes"
+
+          echo "Image compressed size: $IMAGE_SIZE bytes ($(( IMAGE_SIZE / 1048576 )) MB)"
           if [ "$IMAGE_SIZE" -gt 104857600 ]; then
             echo "ERROR: Image compressed size exceeds 100MB limit"
             exit 1
