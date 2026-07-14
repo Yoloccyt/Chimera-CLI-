@@ -274,7 +274,54 @@ impl TuiApp {
             return;
         }
 
-        // 普通模式:全局导航快捷键
+        // 普通模式:全局快捷键优先拦截,未命中再委托面板
+        // WHY 全局键优先:面板无需重复实现退出/切换面板/帮助等通用语义,
+        // 同时保证 `q`/`Tab`/`?` 等键在所有面板行为一致。
+        if !self.handle_global_key(key) {
+            let focused = self.focus_manager.focused();
+            if let Some(idx) = self.panel_index(focused) {
+                if let Some(cmd) = self.panels[idx].handle_key(key, &mut self.state) {
+                    self.apply_command(cmd);
+                }
+            }
+        }
+    }
+
+    /// 处理全局快捷键
+    ///
+    /// WHY 提取为独立方法:
+    /// - 将"全局键优先"策略集中在一处,避免 `handle_key_event` 中 match 分支膨胀。
+    /// - 便于单元测试直接验证全局快捷键,无需构造完整终端事件流程。
+    /// - 后续新增全局键(如 P6 主题切换 `t`)只需修改此方法。
+    ///
+    /// 返回 `true` 表示事件已被消费;`false` 表示未命中,应委托给当前面板。
+    fn handle_global_key(&mut self, key: KeyEvent) -> bool {
+        // g 前缀状态优先处理:收到非 g1-g5 键时重置,避免卡死。
+        if self.state.g_prefix {
+            match key.code {
+                KeyCode::Char('1') => self.switch_panel_to(PanelId::EventStream),
+                KeyCode::Char('2') => self.switch_panel_to(PanelId::Router),
+                KeyCode::Char('3') => self.switch_panel_to(PanelId::McpNodes),
+                KeyCode::Char('4') => self.switch_panel_to(PanelId::Chtc),
+                KeyCode::Char('5') => self.switch_panel_to(PanelId::Timeline),
+                KeyCode::Char('g') => {
+                    // gg:调用当前面板 scroll_to_top(与 vim 一致)
+                    let focused = self.focus_manager.focused();
+                    if let Some(idx) = self.panel_index(focused) {
+                        self.panels[idx].scroll_to_top(&mut self.state);
+                    }
+                }
+                _ => {
+                    // 非预期后续键:重置前缀,交给后续逻辑(面板)处理,
+                    // 保证用户误按时不会卡死在等待状态。
+                    self.state.g_prefix = false;
+                    return false;
+                }
+            }
+            self.state.g_prefix = false;
+            return true;
+        }
+
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit(),
             KeyCode::Tab => self.switch_panel_next(),
@@ -291,6 +338,18 @@ impl TuiApp {
             // WHY 数字键仅映射前 9 个面板:超过 9 的面板(EventStream/Router/
             // McpNodes/Chtc/Timeline)由 P3.3 的 `g` 前缀 + 数字键映射。
             KeyCode::Char('9') => self.switch_panel_to(PanelId::Decay),
+            KeyCode::Char('g') => {
+                self.state.g_prefix = true;
+                return true;
+            }
+            KeyCode::Char('G') => {
+                // 全局 G:调用当前面板 scroll_to_bottom
+                let focused = self.focus_manager.focused();
+                if let Some(idx) = self.panel_index(focused) {
+                    self.panels[idx].scroll_to_bottom(&mut self.state);
+                }
+                return true;
+            }
             KeyCode::Char(':') => {
                 self.state.input_mode = InputMode::Command;
                 self.state.input_buffer.clear();
@@ -298,6 +357,12 @@ impl TuiApp {
             KeyCode::Char('/') => {
                 self.state.input_mode = InputMode::Search;
                 self.state.input_buffer.clear();
+            }
+            // WHY P3.2:`?` 作为全局快捷键直接触发 Help overlay,
+            // 不再交给面板处理,确保在任何面板都能一致地弹出帮助浮层,
+            // 且不会切换当前焦点面板。
+            KeyCode::Char('?') => {
+                self.state.popup_stack.push(PopupKind::help_overlay());
             }
             KeyCode::F(1) => self.switch_panel_to(PanelId::Quest),
             KeyCode::F(2) => self.switch_panel_to(PanelId::Parliament),
@@ -308,16 +373,9 @@ impl TuiApp {
             KeyCode::Up | KeyCode::Down if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                 self.adjust_main_panel_ratio(key.code == KeyCode::Up);
             }
-            _ => {
-                // 其他按键委托给当前焦点面板
-                let focused = self.focus_manager.focused();
-                if let Some(idx) = self.panel_index(focused) {
-                    if let Some(cmd) = self.panels[idx].handle_key(key, &mut self.state) {
-                        self.apply_command(cmd);
-                    }
-                }
-            }
+            _ => return false,
         }
+        true
     }
 
     /// 处理弹窗激活时的键盘事件
@@ -1050,10 +1108,16 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_key_question_mark_shows_help() {
+    fn test_handle_key_question_mark_shows_help_overlay() {
         let mut app = make_app();
         app.handle_key_event(KeyEvent::new(KeyCode::Char('?'), event::KeyModifiers::NONE));
-        assert_eq!(app.current_panel(), PanelId::Help);
+        assert!(!app.state.popup_stack.is_empty());
+        assert!(
+            app.state.popup_stack.current().unwrap().is_help_overlay(),
+            "'?' should open Help overlay instead of switching to Help panel"
+        );
+        // P3.2:不切换当前面板,焦点仍保持在 Quest
+        assert_eq!(app.current_panel(), PanelId::Quest);
     }
 
     #[test]

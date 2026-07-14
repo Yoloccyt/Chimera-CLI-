@@ -15,6 +15,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 # 事件元数据中的时间戳格式化(已存在于 workspace 依赖)
 chrono = { workspace = true }
+# MessagePack 编码/解码,用于事件详情弹窗(P3.1)
+rmp-serde = { workspace = true }
 # TUI 渲染与终端 IO
 ratatui = { workspace = true }
 crossterm = { workspace = true }

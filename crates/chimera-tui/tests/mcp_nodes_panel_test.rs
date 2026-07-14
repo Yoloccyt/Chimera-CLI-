@@ -15,7 +15,7 @@
 
 use chimera_tui::{
     DataSnapshot, DataSourceConfig, McpNodeStatus, McpNodesPanel, NodeStatus, Panel, PanelId,
-    TuiApp, TuiCommand, TuiConfig, TuiDataSource, TuiError, TuiState,
+    TuiApp, TuiConfig, TuiDataSource, TuiError, TuiState,
 };
 use chrono::{Duration, Utc};
 use ratatui::backend::TestBackend;
@@ -519,11 +519,11 @@ fn test_mcp_nodes_panel_content_offline_alert() {
 }
 
 // ============================================================
-// G. handle_key 测试 — 导航与 ShowHelp
+// G. handle_key 测试 — 导航(ShowHelp 已由 TuiApp 全局拦截)
 // ============================================================
 
 #[test]
-fn test_mcp_nodes_panel_handle_key_question_mark() {
+fn test_mcp_nodes_panel_handle_key_question_mark_returns_none() {
     let mut panel = McpNodesPanel::new();
     let mut state = TuiState::new();
     state.mcp_nodes = normal_nodes_snapshot().mcp_nodes;
@@ -533,7 +533,8 @@ fn test_mcp_nodes_panel_handle_key_question_mark() {
     );
     assert_eq!(
         panel.handle_key(key, &mut state),
-        Some(TuiCommand::ShowHelp)
+        None,
+        "'?' should be handled globally by TuiApp as Help overlay"
     );
 }
 

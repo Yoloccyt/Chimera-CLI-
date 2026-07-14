@@ -301,9 +301,28 @@ impl Panel for SecurityPanel {
                     None
                 }
             }
-            KeyCode::Char('?') => Some(TuiCommand::ShowHelp),
+            KeyCode::Char('g') => {
+                self.scroll_to_top(state);
+                None
+            }
+            KeyCode::Char('G') => {
+                self.scroll_to_bottom(state);
+                None
+            }
+            // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
+    }
+
+    fn scroll_to_top(&mut self, _state: &mut TuiState) {
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
+    fn scroll_to_bottom(&mut self, state: &mut TuiState) {
+        let count = Self::event_count(state);
+        self.selected = if count == 0 { 0 } else { count - 1 };
+        self.scroll_offset = self.selected;
     }
 }
 

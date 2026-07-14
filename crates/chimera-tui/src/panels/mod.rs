@@ -78,4 +78,17 @@ pub trait Panel: Send {
     ///
     /// 默认空实现;需要高亮焦点状态的面板可覆盖。
     fn focus(&mut self, _focused: bool) {}
+
+    /// 滚动到面板顶部
+    ///
+    /// 默认空实现;列表型面板应覆盖以将选中项/滚动偏移归零。
+    /// 需要 `state` 参数:部分面板(如 EventStream)需同步 `TuiState::auto_scroll`,
+    /// 列表型面板需在状态中获取当前项目数以钳制底部边界。
+    fn scroll_to_top(&mut self, _state: &mut TuiState) {}
+
+    /// 滚动到面板底部
+    ///
+    /// 默认空实现;列表型面板应覆盖以将选中项移到最后一项。
+    /// 需要 `state` 参数的原因同 `scroll_to_top`。
+    fn scroll_to_bottom(&mut self, _state: &mut TuiState) {}
 }

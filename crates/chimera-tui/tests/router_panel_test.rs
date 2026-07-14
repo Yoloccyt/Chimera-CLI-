@@ -13,7 +13,7 @@
 
 use chimera_tui::{
     DataSnapshot, DataSourceConfig, Panel, PanelId, RouterMetrics, RouterPanel, RouterStatsInfo,
-    TuiApp, TuiCommand, TuiConfig, TuiDataSource, TuiError, TuiState,
+    TuiApp, TuiConfig, TuiDataSource, TuiError, TuiState,
 };
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -540,7 +540,7 @@ fn test_router_panel_threshold_boundary_60_percent() {
 // ============================================================
 
 #[test]
-fn test_router_panel_handle_key_question_mark() {
+fn test_router_panel_handle_key_question_mark_returns_none() {
     let mut panel = RouterPanel::new();
     let mut state = TuiState::new();
     let key = crossterm::event::KeyEvent::new(
@@ -549,7 +549,8 @@ fn test_router_panel_handle_key_question_mark() {
     );
     assert_eq!(
         panel.handle_key(key, &mut state),
-        Some(TuiCommand::ShowHelp)
+        None,
+        "'?' should be handled globally by TuiApp as Help overlay"
     );
 }
 

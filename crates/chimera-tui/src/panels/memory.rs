@@ -7,7 +7,7 @@
 //!   不直接依赖 L2/L3 crate。
 //! - 使用 `render.rs` 中的 `sparkline`/`gauge`/`utilization_bar` 统一视觉风格。
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -128,11 +128,9 @@ impl Panel for MemoryPanel {
         sparkline.render(right_chunks[1], buf);
     }
 
-    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
-        match key.code {
-            KeyCode::Char('?') => Some(TuiCommand::ShowHelp),
-            _ => None,
-        }
+    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
+        None
     }
 }
 

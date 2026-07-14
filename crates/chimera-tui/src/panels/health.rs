@@ -7,7 +7,7 @@
 //! - 健康评分使用 Gauge 直观展示 0-100 区间。
 //! - 事件速率使用 Sparkline 展示近期趋势。
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -133,11 +133,9 @@ impl Panel for HealthPanel {
         sparkline.render(right_chunks[1], buf);
     }
 
-    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
-        match key.code {
-            KeyCode::Char('?') => Some(TuiCommand::ShowHelp),
-            _ => None,
-        }
+    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
+        None
     }
 }
 

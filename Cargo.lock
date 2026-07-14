@@ -302,6 +302,7 @@ dependencies = [
  "nexus-core",
  "proptest",
  "ratatui",
+ "rmp-serde",
  "serde",
  "serde_json",
  "thiserror",

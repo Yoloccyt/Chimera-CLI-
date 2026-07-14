@@ -196,17 +196,21 @@ fn event_stream_panel_enter_opens_detail_popup() {
     );
 
     match cmd {
-        Some(TuiCommand::OpenPopup(PopupKind::Detail { title, content, .. })) => {
+        Some(TuiCommand::OpenPopup(PopupKind::EventDetail {
+            title,
+            payload_decoded,
+            ..
+        })) => {
             assert!(
                 title.contains("CacheHit"),
                 "detail popup title should contain event type name"
             );
             assert!(
-                content.contains("scc-cache"),
+                payload_decoded.contains("scc-cache"),
                 "detail popup content should contain event source"
             );
         }
-        _ => panic!("expected Detail popup command, got {cmd:?}"),
+        _ => panic!("expected EventDetail popup command, got {cmd:?}"),
     }
 }
 
@@ -392,12 +396,13 @@ fn event_stream_panel_id_is_registered() {
 }
 
 #[test]
-fn event_stream_panel_question_mark_shows_help() {
+fn event_stream_panel_question_mark_returns_none() {
     let mut panel = EventStreamPanel::new();
     let mut state = TuiState::new();
     let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
     assert_eq!(
         panel.handle_key(key, &mut state),
-        Some(TuiCommand::ShowHelp)
+        None,
+        "'?' should be handled globally by TuiApp as Help overlay"
     );
 }

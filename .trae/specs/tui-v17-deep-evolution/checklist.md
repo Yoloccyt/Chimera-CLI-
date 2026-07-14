@@ -109,27 +109,28 @@
 
 ### P3.1 Enter 事件详情 overlay
 
-- [ ] `crates/chimera-tui/tests/event_detail_test.rs` 新增测试,验证 EventStream 面板选中事件后按 Enter 弹出 Detail overlay
-- [ ] `crates/chimera-tui/src/popup.rs` 新增 `PopupKind::EventDetail` 变体(载荷:event_type / payload_msgpack / payload_decoded / related_event_ids)
-- [ ] MessagePack 解码为 JSON 实现(使用 rmp-serde)
-- [ ] JSON 语法高亮实现(字符串绿色 / 数字青色 / 布尔黄色 / null 灰色)
-- [ ] 上下游事件 ID 链展示实现(底部显示 related_event_ids,Tab 跳转)
-- [ ] Parliament / Log / EventStream 三面板 `handle_key` 处理 Enter 键
-- [ ] MessagePack 解码失败时的降级策略实现(显示原始 hex)
-- [ ] `cargo test -p chimera-tui` 新增 EventDetail 测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/event_detail_test.rs` 新增测试,验证 EventStream 面板选中事件后按 Enter 弹出 Detail overlay
+- [x] `crates/chimera-tui/src/popup.rs` 新增 `PopupKind::EventDetail` 变体(载荷:event_type / payload_msgpack / payload_decoded / related_event_ids)
+- [x] MessagePack 解码为 JSON 实现(使用 rmp-serde)
+- [x] JSON 语法高亮实现(字符串绿色 / 数字青色 / 布尔黄色 / null 灰色)
+- [x] 上下游事件 ID 链展示实现(底部显示 related_event_ids,Tab 跳转)
+- [x] Parliament / Log / EventStream 三面板 `handle_key` 处理 Enter 键
+- [x] MessagePack 解码失败时的降级策略实现(显示原始 hex)
+- [x] `cargo test -p chimera-tui` 新增 EventDetail 测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P3.2 Help overlay(? 键触发)
 
-- [ ] `crates/chimera-tui/tests/help_overlay_test.rs` 新增测试,验证任意面板按 `?` 弹出 Help overlay
-- [ ] `crates/chimera-tui/src/popup.rs` 新增 `PopupKind::HelpOverlay` 变体(载荷:快捷键表 Vec<(key, description)>)
-- [ ] Help overlay 渲染实现(居中浮窗,半透明背景,Esc 关闭)
-- [ ] `TuiApp::handle_key` 全局拦截 `?` 键,产生 `TuiCommand::ShowHelp`
-- [ ] Help overlay 与 Help 面板的区别已用 WHY 注释说明
-- [ ] `cargo test -p chimera-tui` 新增 Help overlay 测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/help_overlay_test.rs` 新增测试,验证任意面板按 `?` 弹出 Help overlay
+- [x] `crates/chimera-tui/src/popup.rs` 新增 `PopupKind::HelpOverlay` 变体(载荷:快捷键表 Vec<(key, description)> + scroll)
+- [x] Help overlay 渲染实现(居中浮窗,深色背景 + 标题栏,Esc 关闭)
+- [x] `TuiApp::handle_key` 全局拦截 `?` 键,直接压入 `PopupKind::help_overlay()`(不切换当前面板)
+- [x] 各面板中分散的 `?` 键 `ShowHelp` 处理已清理,统一由全局处理
+- [x] Help overlay 与 Help 面板的区别已用 WHY 注释说明
+- [x] `cargo test -p chimera-tui` 新增 Help overlay 测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P3.3 全局快捷键系统统一
 
@@ -144,14 +145,14 @@
 
 ### P3.4 流式事件追加(Claude Code 风格)
 
-- [ ] `crates/chimera-tui/tests/auto_scroll_test.rs` 新增测试,验证 auto_scroll=true 时新事件自动滚动到底部
-- [ ] `auto_scroll` 状态字段实现,用户手动滚动时设为 false
-- [ ] 新事件到达时若 auto_scroll=false 显示 "[新事件 N 条]" 提示
-- [ ] `G` 快捷键跳到底部并恢复 auto_scroll=true
-- [ ] auto_scroll 策略已用 WHY 注释说明(参考 Claude Code 工具调用流式输出 UX)
-- [ ] `cargo test -p chimera-tui` 新增 auto_scroll 测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/auto_scroll_test.rs` 新增测试,验证 auto_scroll=true 时新事件自动滚动到底部
+- [x] `auto_scroll` 状态字段实现,用户手动滚动时设为 false
+- [x] 新事件到达时若 auto_scroll=false 显示 "[新事件 N 条]" 提示
+- [x] `G` 快捷键跳到底部并恢复 auto_scroll=true
+- [x] auto_scroll 策略已用 WHY 注释说明(参考 Claude Code 工具调用流式输出 UX)
+- [x] `cargo test -p chimera-tui` 新增 auto_scroll 测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P3 整体验收
 

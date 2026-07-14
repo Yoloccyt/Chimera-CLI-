@@ -420,6 +420,11 @@ pub struct TuiState {
     pub dirty_panels: HashSet<PanelId>,
     /// 流式追加自动滚动标记(P3.4,EventStream/Log 面板用)
     pub auto_scroll: bool,
+    /// g 前缀状态(P3.3):按下 `g` 后进入等待状态,下一键决定动作。
+    /// - `g` + `1`-`5`:切换到后 5 个面板(EventStream/Router/McpNodes/Chtc/Timeline)
+    /// - `g` + `g`:调用当前面板 scroll_to_top(gg 跳顶,与 vim 一致)
+    /// - `g` + 其他键:重置前缀,将后续键委托给当前面板处理,避免卡死
+    pub g_prefix: bool,
     /// 衰减历史 sparkline 数据点(系数 × 1000 的整型表示)
     pub decay_history: Vec<u64>,
 }
@@ -455,6 +460,7 @@ impl TuiState {
             fps: 0,
             dirty_panels: HashSet::new(),
             auto_scroll: true,
+            g_prefix: false,
             decay_history: Vec::new(),
         }
     }

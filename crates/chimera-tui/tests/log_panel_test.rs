@@ -215,12 +215,16 @@ fn log_panel_enter_opens_detail_popup() {
     );
 
     match cmd {
-        Some(TuiCommand::OpenPopup(PopupKind::Detail { title, content, .. })) => {
+        Some(TuiCommand::OpenPopup(PopupKind::EventDetail {
+            title,
+            payload_decoded,
+            ..
+        })) => {
             assert!(title.contains("CacheHit"));
-            assert!(content.contains("scc-cache"));
-            assert!(content.contains("k1"));
+            assert!(payload_decoded.contains("scc-cache"));
+            assert!(payload_decoded.contains("k1"));
         }
-        _ => panic!("expected Detail popup command, got {:?}", cmd),
+        _ => panic!("expected EventDetail popup command, got {:?}", cmd),
     }
 }
 

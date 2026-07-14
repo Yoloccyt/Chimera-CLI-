@@ -12,7 +12,7 @@
 //!   O(k log k),k=10 时约 33 次比较,可接受。
 //! - 命中率低水位:`< 60%` 时追加 `[LOW]` 标记并黄色高亮,提醒运维关注。
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -165,11 +165,9 @@ impl Panel for RouterPanel {
         paragraph.render(area, buf);
     }
 
-    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
-        match key.code {
-            KeyCode::Char('?') => Some(TuiCommand::ShowHelp),
-            _ => None,
-        }
+    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
+        None
     }
 }
 
@@ -261,17 +259,15 @@ mod tests {
     }
 
     #[test]
-    fn test_router_panel_handle_key_question_mark() {
+    fn test_router_panel_handle_key_question_mark_returns_none() {
         let mut panel = RouterPanel::new();
         let mut state = TuiState::new();
         let key = KeyEvent::new(
             crossterm::event::KeyCode::Char('?'),
             crossterm::event::KeyModifiers::NONE,
         );
-        assert_eq!(
-            panel.handle_key(key, &mut state),
-            Some(TuiCommand::ShowHelp)
-        );
+        // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
+        assert_eq!(panel.handle_key(key, &mut state), None);
     }
 
     #[test]

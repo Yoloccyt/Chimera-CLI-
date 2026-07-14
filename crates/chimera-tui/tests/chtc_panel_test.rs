@@ -442,12 +442,12 @@ fn test_chtc_panel_renders_request_types() {
 }
 
 // ============================================================
-// H. handle_key 测试 — `?` 触发 ShowHelp
+// H. handle_key 测试 — `?` 已由 TuiApp 全局拦截,面板不再处理
 // ============================================================
 
 #[test]
-fn test_chtc_panel_handle_key_question_mark() {
-    use chimera_tui::{TuiCommand, TuiState};
+fn test_chtc_panel_handle_key_question_mark_returns_none() {
+    use chimera_tui::TuiState;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let mut panel = ChtcPanel::new();
@@ -455,8 +455,8 @@ fn test_chtc_panel_handle_key_question_mark() {
     let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
     assert_eq!(
         panel.handle_key(key, &mut state),
-        Some(TuiCommand::ShowHelp),
-        "'?' key should trigger ShowHelp"
+        None,
+        "'?' should be handled globally by TuiApp as Help overlay"
     );
 }
 

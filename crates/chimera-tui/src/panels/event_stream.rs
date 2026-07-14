@@ -10,8 +10,8 @@
 //! - **虚拟滚动**:万级事件下,仅渲染可见区域 + 上下 5 行缓冲,
 //!   将 O(n) 渲染降至 O(visible + 2×BUFFER),实测 10000 事件帧时间 < 2ms。
 //! - **auto_scroll 策略**:默认 true(跟随新事件);用户主动 Up/Down/滚轮
-//!   时设为 false(用户接管);Shift+G 跳到底部并恢复 true。
-//!   当 auto_scroll=false 且 selected 不在末尾时,底部显示 "[新事件 N 条]"
+//!   时设为 false(用户接管);`G` 跳到底部并恢复 true,`g` 跳到顶部。
+//!   当 auto_scroll=false 且 selected 不在末尾时,顶部显示 "[新事件 N 条]"
 //!   提示(N = filtered.len() - 1 - selected),借鉴 Claude Code 流式输出
 //!   的"暂停滚动时显示新事件计数"模式。
 //! - **三重过滤**:复用 Log 面板的 keyword/topic/level 过滤逻辑,
@@ -106,11 +106,27 @@ impl EventStreamPanel {
         scroll_offset: usize,
         visible_rows: usize,
     ) -> Text<'static> {
+        let filtered = Self::filtered_events(state);
+        let total = filtered.len();
+
         let mut lines: Vec<Line<'static>> =
             vec![Line::from("Event Stream"), Line::from("─────────────")];
 
-        let filtered = Self::filtered_events(state);
-        let total = filtered.len();
+        // auto_scroll 暂停时,在事件列表顶部显示新事件累积提示(Claude Code 风格)
+        // WHY 放在事件列表之前:用户视线从标题自然下移时首先看到提示,
+        // 且不会与底部的页脚/虚拟滚动提示混淆。
+        if !state.auto_scroll && !filtered.is_empty() {
+            let last_idx = total.saturating_sub(1);
+            if selected < last_idx {
+                let new_count = last_idx - selected;
+                lines.push(Line::from(Span::styled(
+                    format!("[新事件 {} 条] 按 G 跟随", new_count),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
+        }
 
         if filtered.is_empty() {
             lines.push(Line::from("[INFO]  No events"));
@@ -156,55 +172,8 @@ impl EventStreamPanel {
             }
         }
 
-        // auto_scroll 提示:用户暂停滚动后,显示新事件累积计数
-        // WHY 提示位置:放在 FOOTER_TEXT 之前,用户视线扫到末尾时自然看到
-        if !state.auto_scroll && !filtered.is_empty() {
-            let last_idx = filtered.len().saturating_sub(1);
-            if selected < last_idx {
-                let new_count = last_idx - selected;
-                lines.push(Line::from(Span::styled(
-                    format!("[新事件 {} 条] (press G to jump to bottom)", new_count),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                )));
-            } else {
-                // selected 已在末尾但 auto_scroll 仍 false:提示用户可恢复
-                lines.push(Line::from(Span::styled(
-                    "[auto-scroll paused] (press G to resume)",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-        }
-
         lines.push(Line::from(FOOTER_TEXT));
         Text::from(lines)
-    }
-
-    /// 构建事件详情弹窗内容
-    ///
-    /// WHY 复用 LogPanel 的模式:标题用事件类型名,内容含元数据 + JSON 载荷,
-    /// 便于调试时查看完整事件结构。失败时降级显示原始字符串。
-    fn detail_content(event: &NexusEvent) -> String {
-        let meta = event.metadata();
-        let mut lines = vec![
-            format!("Type: {}", event.type_name()),
-            format!("Source: {}", meta.source),
-            format!("Time: {}", meta.timestamp.to_rfc3339()),
-            format!("Severity: {:?}", event.severity()),
-            format!("Event ID: {}", meta.event_id),
-        ];
-
-        // 按事件变体追加 JSON 载荷,使用 pretty 格式便于阅读
-        if let Ok(json) = serde_json::to_string_pretty(event) {
-            lines.push("".into());
-            lines.push("Payload:".into());
-            for raw in json.lines() {
-                lines.push(raw.to_string());
-            }
-        }
-
-        lines.join("\n")
     }
 }
 
@@ -220,10 +189,11 @@ impl Panel for EventStreamPanel {
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
         let filtered = Self::filtered_events(state);
 
-        // auto_scroll=true 时,自动跟随到最后一项(流式追加 UX)
+        // auto_scroll=true 且无弹窗遮挡时,自动跟随到最后一项(流式追加 UX)
         // WHY 在 render 中处理:每次重绘都同步 selected,确保新事件到达时
-        // 选中项立即跟随,无需额外的 tick 事件驱动
-        if state.auto_scroll && !filtered.is_empty() {
+        // 选中项立即跟随,无需额外的 tick 事件驱动。
+        // 弹窗打开时冻结跟随,避免详情 overlay 后方列表跳动(P3.1 冲突规避)。
+        if state.popup_stack.is_empty() && state.auto_scroll && !filtered.is_empty() {
             self.selected = filtered.len() - 1;
         }
         self.selected = list_state::clamp_selected(self.selected, filtered.len());
@@ -257,48 +227,64 @@ impl Panel for EventStreamPanel {
 
     fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {
         let count = Self::filtered_events(state).len();
-
-        // Up/Down 导航:复用 list_state 辅助函数,同时关闭 auto_scroll
-        // WHY 关闭 auto_scroll:用户主动浏览表示要接管导航,
-        // 此时不应让新事件自动滚动打断用户阅读(参考 Claude Code 流式输出 UX)
-        if let Some(new_selected) =
-            list_state::handle_key_navigation(key.code, self.selected, count)
-        {
-            self.selected = new_selected;
-            state.auto_scroll = false;
-            return None;
-        }
+        let last_idx = count.saturating_sub(1);
 
         match key.code {
-            KeyCode::Enter => {
-                let filtered = Self::filtered_events(state);
-                if let Some(event) = filtered.get(self.selected) {
-                    let content = Self::detail_content(event);
-                    Some(TuiCommand::OpenPopup(PopupKind::Detail {
-                        title: format!("{} Detail", event.type_name()),
-                        content,
-                        scroll: 0,
-                    }))
-                } else {
-                    None
-                }
-            }
-            // Shift+G(大写 G):跳到底部并恢复 auto_scroll
-            // WHY Shift+G 而非小写 g:与 vim 风格一致,避免与 P3.3 的 `g` 前缀面板跳转冲突
-            KeyCode::Char('G')
-                if key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::SHIFT) =>
-            {
+            // Down / j:向下移动;若已在底部则保持/恢复 auto_scroll,
+            // 否则关闭 auto_scroll 交由用户接管。
+            KeyCode::Down | KeyCode::Char('j') => {
                 if count > 0 {
-                    self.selected = count - 1;
-                    state.auto_scroll = true;
+                    if self.selected == last_idx {
+                        state.auto_scroll = true;
+                    } else {
+                        state.auto_scroll = false;
+                        self.selected += 1;
+                    }
                 }
                 None
             }
-            KeyCode::Char('?') => Some(TuiCommand::ShowHelp),
+            // Up / k:向上移动并关闭 auto_scroll
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
+                state.auto_scroll = false;
+                None
+            }
+            KeyCode::Char('g') => {
+                self.scroll_to_top(state);
+                None
+            }
+            KeyCode::Char('G') => {
+                self.scroll_to_bottom(state);
+                None
+            }
+            KeyCode::Enter => {
+                let filtered = Self::filtered_events(state);
+                filtered
+                    .get(self.selected)
+                    .map(|event| TuiCommand::OpenPopup(PopupKind::event_detail(event)))
+            }
+            // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
+    }
+
+    fn scroll_to_top(&mut self, _state: &mut TuiState) {
+        // WHY:用户主动跳到顶部时不改变 auto_scroll,保持当前流式策略。
+        // 若 auto_scroll 原本为 true,selected=0 后下一事件仍会回到底部。
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
+    fn scroll_to_bottom(&mut self, state: &mut TuiState) {
+        let count = Self::filtered_events(state).len();
+        if count > 0 {
+            self.selected = count - 1;
+            self.scroll_offset = self.selected;
+        }
+        // WHY:跳到底部意味着用户希望持续关注最新事件,恢复 auto_scroll。
+        state.auto_scroll = true;
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, state: &mut TuiState) -> Option<TuiCommand> {
@@ -674,27 +660,33 @@ mod tests {
             &mut state,
         );
         match cmd {
-            Some(TuiCommand::OpenPopup(PopupKind::Detail { title, content, .. })) => {
+            Some(TuiCommand::OpenPopup(PopupKind::EventDetail {
+                title,
+                event_type,
+                payload_decoded,
+                related_event_ids,
+                ..
+            })) => {
                 assert!(title.contains("CacheHit"));
-                assert!(content.contains("scc-cache"));
-                assert!(content.contains("k1"));
+                assert_eq!(event_type, "CacheHit");
+                assert!(payload_decoded.contains("scc-cache"));
+                assert!(payload_decoded.contains("k1"));
+                assert!(!related_event_ids.is_empty());
             }
-            _ => panic!("expected Detail popup command, got {:?}", cmd),
+            _ => panic!("expected EventDetail popup command, got {:?}", cmd),
         }
     }
 
     #[test]
-    fn test_event_stream_panel_help_key() {
+    fn test_event_stream_panel_help_key_returns_none() {
         let mut panel = EventStreamPanel::new();
         let mut state = TuiState::new();
         let key = KeyEvent::new(
             crossterm::event::KeyCode::Char('?'),
             crossterm::event::KeyModifiers::NONE,
         );
-        assert_eq!(
-            panel.handle_key(key, &mut state),
-            Some(TuiCommand::ShowHelp)
-        );
+        // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
+        assert_eq!(panel.handle_key(key, &mut state), None);
     }
 
     #[test]

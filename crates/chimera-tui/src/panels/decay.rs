@@ -16,7 +16,7 @@
 //! `coefficient = 1.0` 表示无衰减(满血),`0.0` 表示完全衰减。
 //! 这样默认值 1.0(无衰减)不会误显示为红色高亮。
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -146,11 +146,9 @@ impl Panel for DecayPanel {
         sparkline.render(chunks[1], buf);
     }
 
-    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
-        match key.code {
-            KeyCode::Char('?') => Some(TuiCommand::ShowHelp),
-            _ => None,
-        }
+    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
+        None
     }
 }
 
@@ -185,17 +183,15 @@ mod tests {
     }
 
     #[test]
-    fn test_decay_panel_handle_key_question_mark() {
+    fn test_decay_panel_handle_key_question_mark_returns_none() {
         let mut panel = DecayPanel::new();
         let mut state = TuiState::new();
         let key = KeyEvent::new(
             crossterm::event::KeyCode::Char('?'),
             crossterm::event::KeyModifiers::NONE,
         );
-        assert_eq!(
-            panel.handle_key(key, &mut state),
-            Some(TuiCommand::ShowHelp)
-        );
+        // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
+        assert_eq!(panel.handle_key(key, &mut state), None);
     }
 
     #[test]

@@ -91,30 +91,6 @@ impl LogPanel {
         Text::from(lines)
     }
 
-    /// 构建详情弹窗内容
-    fn detail_content(event: &NexusEvent) -> String {
-        let meta = event.metadata();
-        let mut lines = vec![
-            format!("Type: {}", event.type_name()),
-            format!("Source: {}", meta.source),
-            format!("Time: {}", meta.timestamp.to_rfc3339()),
-            format!("Severity: {:?}", event.severity()),
-            format!("Event ID: {}", meta.event_id),
-        ];
-
-        // 按事件变体追加关键字段,使用 JSON 作为通用展示格式。
-        if let Ok(json) = serde_json::to_string_pretty(event) {
-            lines.push("".into());
-            lines.push("Payload:".into());
-            // 简单缩进,避免弹窗内显得太宽
-            for raw in json.lines() {
-                lines.push(raw.to_string());
-            }
-        }
-
-        lines.join("\n")
-    }
-
     /// 返回当前选中项索引(测试用)
     pub fn selected(&self) -> usize {
         self.selected
@@ -162,20 +138,32 @@ impl Panel for LogPanel {
         match key.code {
             KeyCode::Enter => {
                 let filtered = Self::filtered_events(state);
-                if let Some(event) = filtered.get(self.selected) {
-                    let content = Self::detail_content(event);
-                    Some(TuiCommand::OpenPopup(PopupKind::Detail {
-                        title: format!("{} Detail", event.type_name()),
-                        content,
-                        scroll: 0,
-                    }))
-                } else {
-                    None
-                }
+                filtered
+                    .get(self.selected)
+                    .map(|event| TuiCommand::OpenPopup(PopupKind::event_detail(event)))
             }
-            KeyCode::Char('?') => Some(TuiCommand::ShowHelp),
+            KeyCode::Char('g') => {
+                self.scroll_to_top(state);
+                None
+            }
+            KeyCode::Char('G') => {
+                self.scroll_to_bottom(state);
+                None
+            }
+            // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
+    }
+
+    fn scroll_to_top(&mut self, _state: &mut TuiState) {
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
+    fn scroll_to_bottom(&mut self, state: &mut TuiState) {
+        let count = Self::filtered_events(state).len();
+        self.selected = if count == 0 { 0 } else { count - 1 };
+        self.scroll_offset = self.selected;
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, state: &mut TuiState) -> Option<TuiCommand> {
@@ -507,12 +495,20 @@ mod tests {
             &mut state,
         );
         match cmd {
-            Some(TuiCommand::OpenPopup(PopupKind::Detail { title, content, .. })) => {
+            Some(TuiCommand::OpenPopup(PopupKind::EventDetail {
+                title,
+                event_type,
+                payload_decoded,
+                related_event_ids,
+                ..
+            })) => {
                 assert!(title.contains("CacheHit"));
-                assert!(content.contains("scc-cache"));
-                assert!(content.contains("CacheHit"));
+                assert_eq!(event_type, "CacheHit");
+                assert!(payload_decoded.contains("scc-cache"));
+                assert!(payload_decoded.contains("k1"));
+                assert!(!related_event_ids.is_empty());
             }
-            _ => panic!("expected Detail popup command, got {:?}", cmd),
+            _ => panic!("expected EventDetail popup command, got {:?}", cmd),
         }
     }
 }
