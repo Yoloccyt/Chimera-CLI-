@@ -26,6 +26,11 @@ env:
   #      全局开启 RUST_BACKTRACE=1 让 build/test/docker/release 所有 job 在
   #      panic 时输出 backtrace,便于 CI 日志定位根因(对应 §10.5 P1 修复)
   RUST_BACKTRACE: 1
+  # WHY: 仓库名 Yoloccyt/Chimera-CLI- 以连字符结尾,docker/metadata-action 转小写后
+  #      得到 ghcr.io/yoloccyt/chimera-cli-,镜像 reference 不能以 - 结尾,导致 buildx
+  #      报 invalid reference format。固定使用 repository_owner + chimera-cli 作为镜像名,
+  #      避开仓库名尾部的非法字符,同时保证品牌一致。
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/chimera-cli
 
 jobs:
   # ============================================================
@@ -201,7 +206,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-rc') }}
@@ -222,10 +227,9 @@ jobs:
 
       - name: Verify image size < 100MB
         run: |
-          # WHY 使用 ${GITHUB_REPOSITORY,,}(Bash 参数扩展转小写):docker/metadata-action@v5
-          # 默认将 images 转为小写推送,但 ${{ github.repository }} 保留原大小写,
-          # 直接用会导致 docker image inspect 找不到镜像(大小写不匹配)。
-          IMAGE_SIZE=$(docker image inspect ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.ref_name }} --format='{{.Size}}')
+          # WHY 使用 ${{ env.IMAGE_NAME }}:统一从顶层 env 读取已规范化的镜像名,
+          # 避免仓库名尾部非法字符导致 reference 格式错误,同时消去大小写不一致风险。
+          IMAGE_SIZE=$(docker image inspect ${{ env.IMAGE_NAME }}:${{ github.ref_name }} --format='{{.Size}}')
           echo "Image size: $IMAGE_SIZE bytes"
           if [ "$IMAGE_SIZE" -gt 104857600 ]; then
             echo "ERROR: Image size exceeds 100MB limit"
@@ -237,7 +241,7 @@ jobs:
         run: |
           # WHY 显式 docker pull:虽然 build-push-action 已推送镜像,但本地缓存不等于
           # 用户可拉取。此步骤模拟真实用户安装路径,验证 GHCR 上的镜像可被公开拉取。
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.ref_name }}"
+          IMAGE="${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
           echo "Pulling image: $IMAGE"
           docker pull "$IMAGE"
 
@@ -353,7 +357,7 @@ jobs:
             ### Docker
             ```bash
             # 拉取 GHCR 镜像(distroless,< 100MB,非 root 运行)
-            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            docker pull ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
             # 验证镜像可用性(应输出版本号)
-            docker run --rm ghcr.io/${{ github.repository }}:${{ github.ref_name }} --version
+            docker run --rm ${{ env.IMAGE_NAME }}:${{ github.ref_name }} --version
             ```
