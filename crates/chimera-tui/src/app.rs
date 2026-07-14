@@ -44,7 +44,7 @@ use crate::panels::{
     McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, SecurityPanel,
 };
 use crate::popup::{PopupKind, Severity};
-use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
+use crate::types::{InputMode, LayoutMode, PanelId, TuiCommand, TuiState};
 use event_bus::{EventBus, EventMetadata, NexusEvent, VoteValue};
 
 /// 主面板比例调整步长
@@ -453,6 +453,33 @@ impl TuiApp {
             KeyCode::Char('?') => {
                 self.state.popup_stack.push(PopupKind::help_overlay());
             }
+            // P6.1:循环切换主题 Dark → Light → HighContrast → Dark
+            //
+            // WHY `t` 键:与 vim 的 `:set background` 语义一致,t=theme 易记。
+            // 切换后立即标记所有面板为 dirty,触发重绘以应用新颜色方案。
+            KeyCode::Char('t') => {
+                let new_theme = self.config.theme.next();
+                self.config.theme = new_theme;
+                // 标记所有已注册面板为 dirty,确保下一帧重绘
+                for panel_id in self.focus_manager.panels() {
+                    self.state.mark_dirty(*panel_id);
+                }
+                self.state.status_message =
+                    Some((format!("Theme: {}", new_theme.as_str()), Severity::Info));
+            }
+            // P6.2:循环切换布局 SinglePane → DualPane → TriplePane → SinglePane
+            //
+            // WHY 用 `l` 而非 spec 的 `1/2/3`:数字键 1-9 已映射面板跳转(P3.3),
+            // 用 `l` 循环切换与 `t` 键切换主题模式一致,避免冲突。
+            // - SinglePane:当前面板全屏(专注模式)
+            // - DualPane:tabs + main + status_bar(默认对比模式)
+            // - TriplePane:tabs + main + status_bar(main 更小,预留 log_panel)
+            KeyCode::Char('l') => {
+                let new_mode = self.state.layout_mode.next();
+                self.state.layout_mode = new_mode;
+                self.state.status_message =
+                    Some((format!("Layout: {}", new_mode.as_str()), Severity::Info));
+            }
             KeyCode::F(1) => self.switch_panel_to(PanelId::Quest),
             KeyCode::F(2) => self.switch_panel_to(PanelId::Parliament),
             KeyCode::F(3) => self.switch_panel_to(PanelId::Budget),
@@ -715,13 +742,20 @@ impl TuiApp {
         self.last_area = area;
         let chunks = self.layout(area);
 
-        self.render_tabs(frame, chunks[0]);
+        // P6.2:SinglePane 专注模式不渲染 tabs(全屏当前面板)
+        // WHY 跳过渲染:SinglePane 的 layout 返回 chunks[0] = Rect::default()(空),
+        // 在空 Rect 上渲染 Tabs widget 虽不 panic 但浪费 CPU,显式跳过更高效。
+        if self.state.layout_mode != LayoutMode::SinglePane {
+            self.render_tabs(frame, chunks[0]);
+        }
         self.render_main_panel(frame, chunks[1]);
 
+        // P6.2:SinglePane 专注模式不渲染 status_bar(全屏当前面板)
+        // 但命令/搜索模式仍需渲染 command_palette(用户输入需可见)
         if self.state.input_mode != InputMode::Normal {
             self.command_palette
                 .render(&self.state, chunks[2], frame.buffer_mut());
-        } else {
+        } else if self.state.layout_mode != LayoutMode::SinglePane {
             self.render_status_bar(frame, chunks[2]);
         }
 
@@ -739,21 +773,52 @@ impl TuiApp {
     ///
     /// WHY 独立方法:事件处理中需要知道各区域位置以响应鼠标点击,
     /// 与渲染复用同一套布局逻辑。
+    ///
+    /// # P6.2 布局模式
+    /// - `SinglePane`:当前面板全屏,无 tabs,无 bottom(专注模式)
+    /// - `DualPane`:默认布局(tabs 3 行 + main ratio% + bottom 剩余)
+    /// - `TriplePane`:main 更小(70% × ratio),bottom 更大(预留 log_panel)
     fn layout(&self, area: Rect) -> [Rect; 3] {
-        let tab_and_rest = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(0)])
-            .split(area);
+        match self.state.layout_mode {
+            // P6.2 SinglePane:当前面板全屏,无 tabs,无 bottom
+            // 返回 [空, 全屏, 空],render 时跳过 tabs/status_bar 渲染
+            LayoutMode::SinglePane => [Rect::default(), area, Rect::default()],
+            // P6.2 DualPane:默认布局(tabs + main + bottom)
+            LayoutMode::DualPane => {
+                let tab_and_rest = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(3), Constraint::Min(0)])
+                    .split(area);
 
-        let main_and_bottom = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage((self.main_panel_ratio * 100.0) as u16),
-                Constraint::Min(3),
-            ])
-            .split(tab_and_rest[1]);
+                let main_and_bottom = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Percentage((self.main_panel_ratio * 100.0) as u16),
+                        Constraint::Min(3),
+                    ])
+                    .split(tab_and_rest[1]);
 
-        [tab_and_rest[0], main_and_bottom[0], main_and_bottom[1]]
+                [tab_and_rest[0], main_and_bottom[0], main_and_bottom[1]]
+            }
+            // P6.2 TriplePane:main 更小(70% × ratio),bottom 更大(预留 log_panel)
+            // WHY 70%:DualPane 的 main 是 ratio(默认 70%),TriplePane 的 main 是
+            // ratio × 0.7(默认约 49%),留出更多空间给 bottom(log_panel + status_bar)
+            LayoutMode::TriplePane => {
+                let tab_and_rest = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(3), Constraint::Min(0)])
+                    .split(area);
+
+                // TriplePane 的 main 占 ratio × 0.7,bottom 占剩余(更大)
+                let triple_ratio = (self.main_panel_ratio * 0.7 * 100.0) as u16;
+                let main_and_bottom = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(triple_ratio), Constraint::Min(3)])
+                    .split(tab_and_rest[1]);
+
+                [tab_and_rest[0], main_and_bottom[0], main_and_bottom[1]]
+            }
+        }
     }
 
     /// 渲染面板标签栏
@@ -850,6 +915,8 @@ impl TuiApp {
         match self.config.theme {
             Theme::Dark => Color::White,
             Theme::Light => Color::Black,
+            // P6.1:HighContrast 前景为白色(纯黑白最大对比度)
+            Theme::HighContrast => Color::White,
         }
     }
 
@@ -858,6 +925,8 @@ impl TuiApp {
         match self.config.theme {
             Theme::Dark => Color::Cyan,
             Theme::Light => Color::Blue,
+            // P6.1:HighContrast 强调色为亮黄(高饱和度,色盲友好)
+            Theme::HighContrast => Color::LightYellow,
         }
     }
 
@@ -1523,6 +1592,142 @@ mod tests {
     fn test_theme_accent_dark() {
         let app = make_app();
         assert_eq!(app.theme_accent(), Color::Cyan);
+    }
+
+    // ============================================================
+    // P6.1/P6.2 handle_global_key 主题/布局切换测试
+    // ============================================================
+
+    /// P6.1.1 TDD-RED:按 `t` 键,主题从 Dark → Light
+    #[test]
+    fn test_handle_key_t_switches_theme_dark_to_light() {
+        let mut app = make_app();
+        assert_eq!(app.config().theme, Theme::Dark);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE));
+        assert_eq!(app.config().theme, Theme::Light);
+    }
+
+    /// P6.1.1 TDD-RED:按 `t` 键 3 次,主题循环回到 Dark
+    #[test]
+    fn test_handle_key_t_cycles_through_all_themes() {
+        let mut app = make_app();
+        // Dark → Light
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE));
+        assert_eq!(app.config().theme, Theme::Light);
+        // Light → HighContrast
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE));
+        assert_eq!(app.config().theme, Theme::HighContrast);
+        // HighContrast → Dark
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE));
+        assert_eq!(app.config().theme, Theme::Dark);
+    }
+
+    /// P6.1.1 TDD-RED:按 `t` 键后,所有面板被标记 dirty(立即重绘)
+    #[test]
+    fn test_handle_key_t_marks_all_panels_dirty() {
+        let mut app = make_app();
+        // 初始无 dirty 面板
+        assert!(app.state().dirty_panels.is_empty());
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE));
+        // 所有已注册面板都应被标记 dirty
+        assert!(!app.state().dirty_panels.is_empty());
+        // 验证至少 Quest 与 Parliament 被标记(代表性断言)
+        assert!(app.state().dirty_panels.contains(&PanelId::Quest));
+        assert!(app.state().dirty_panels.contains(&PanelId::Parliament));
+    }
+
+    /// P6.1:按 `t` 键后,status_message 显示新主题名
+    #[test]
+    fn test_handle_key_t_sets_status_message() {
+        let mut app = make_app();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE));
+        let (msg, severity) = app
+            .state()
+            .status_message
+            .clone()
+            .expect("status_message should be set");
+        assert!(
+            msg.contains("Theme:"),
+            "status_message should contain 'Theme:', got: {msg}"
+        );
+        assert!(
+            msg.contains("light"),
+            "status_message should contain 'light', got: {msg}"
+        );
+        assert_eq!(severity, Severity::Info);
+    }
+
+    /// P6.2:按 `l` 键,布局从 DualPane → TriplePane
+    #[test]
+    fn test_handle_key_l_switches_layout_dual_to_triple() {
+        let mut app = make_app();
+        assert_eq!(app.state().layout_mode, LayoutMode::DualPane);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), event::KeyModifiers::NONE));
+        assert_eq!(app.state().layout_mode, LayoutMode::TriplePane);
+    }
+
+    /// P6.2:按 `l` 键 3 次,布局循环回到 DualPane
+    #[test]
+    fn test_handle_key_l_cycles_through_all_layouts() {
+        let mut app = make_app();
+        // DualPane → TriplePane
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), event::KeyModifiers::NONE));
+        assert_eq!(app.state().layout_mode, LayoutMode::TriplePane);
+        // TriplePane → SinglePane
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), event::KeyModifiers::NONE));
+        assert_eq!(app.state().layout_mode, LayoutMode::SinglePane);
+        // SinglePane → DualPane
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), event::KeyModifiers::NONE));
+        assert_eq!(app.state().layout_mode, LayoutMode::DualPane);
+    }
+
+    /// P6.2:按 `l` 键后,status_message 显示新布局名
+    #[test]
+    fn test_handle_key_l_sets_status_message() {
+        let mut app = make_app();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), event::KeyModifiers::NONE));
+        let (msg, severity) = app
+            .state()
+            .status_message
+            .clone()
+            .expect("status_message should be set");
+        assert!(
+            msg.contains("Layout:"),
+            "status_message should contain 'Layout:', got: {msg}"
+        );
+        assert!(
+            msg.contains("triple"),
+            "status_message should contain 'triple', got: {msg}"
+        );
+        assert_eq!(severity, Severity::Info);
+    }
+
+    /// P6.2:SinglePane 布局下 render 不崩溃(专注模式跳过 tabs/status_bar)
+    #[test]
+    fn test_render_single_pane_layout_no_panic() {
+        let mut app = make_app();
+        // 切换到 SinglePane(按 `l` 两次:DualPane → TriplePane → SinglePane)
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), event::KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), event::KeyModifiers::NONE));
+        assert_eq!(app.state().layout_mode, LayoutMode::SinglePane);
+
+        // 渲染不应 panic(SinglePane 跳过 tabs 和 status_bar)
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+    }
+
+    /// P6.2:TriplePane 布局下 render 不崩溃
+    #[test]
+    fn test_render_triple_pane_layout_no_panic() {
+        let mut app = make_app();
+        // 切换到 TriplePane
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), event::KeyModifiers::NONE));
+        assert_eq!(app.state().layout_mode, LayoutMode::TriplePane);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
     }
 
     // ============================================================

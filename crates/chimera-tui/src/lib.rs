@@ -47,7 +47,10 @@ pub mod types;
 // === 关键类型重导出,简化外部导入 ===
 pub use app::TuiApp;
 pub use command_palette::CommandPalette;
-pub use config::TuiConfig;
+// P6.1/P6.3:重导出 Theme / ThemeColors / ColorKind / ColorScheme,供 CLI 入口
+// 与下游 crate 在运行时切换主题、查询颜色方案、细粒度覆盖颜色
+// (如 chimera-cli 根据配置渲染启动画面)。
+pub use config::{ColorKind, ColorScheme, Theme, ThemeColors, TuiConfig};
 pub use data::{
     AsaInterventionSummary, BudgetMetrics, BudgetSync, DataPipeline, DataSnapshot,
     DataSourceConfig, HealthMetrics, MemoryMetrics, MemorySync, QuestSync, RedTeamAuditSummary,
@@ -66,15 +69,17 @@ pub use render::{
 };
 pub use subscriber::EventSubscriber;
 pub use types::{
-    ChtcAdapterInfo, ChtcState, DecayMetrics, InputMode, McpNodeStatus, NodeStatus, PanelId,
-    RouterMetrics, RouterStatsInfo, TimelineSnapshot, TuiCommand, TuiState,
+    ChtcAdapterInfo, ChtcState, DecayMetrics, InputMode, LayoutMode, McpNodeStatus, NodeStatus,
+    PanelId, RouterMetrics, RouterStatsInfo, TimelineSnapshot, TuiCommand, TuiState,
 };
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::app::TuiApp;
     pub use crate::command_palette::CommandPalette;
-    pub use crate::config::TuiConfig;
+    // prelude 只暴露 Theme(用户频繁切换),ColorKind/ThemeColors 用于细粒度
+    // 颜色定制,使用频率低,不放入 prelude 避免命名空间污染。
+    pub use crate::config::{Theme, TuiConfig};
     pub use crate::data::{
         BudgetMetrics, DataPipeline, DataSnapshot, DataSourceConfig, StubDataSource, TuiDataSource,
     };
@@ -86,5 +91,6 @@ pub mod prelude {
     };
     pub use crate::popup::{PopupKind, PopupStack, Severity};
     pub use crate::subscriber::EventSubscriber;
-    pub use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
+    // P6.2:LayoutMode 加入 prelude,便于 CLI 入口与测试用 `use prelude::*` 直接构造
+    pub use crate::types::{InputMode, LayoutMode, PanelId, TuiCommand, TuiState};
 }

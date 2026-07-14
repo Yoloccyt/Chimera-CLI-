@@ -185,6 +185,56 @@ pub enum InputMode {
 }
 
 // ============================================================
+// 布局模式 — 主区域 panel 排列方式(P6.2 布局模板)
+// ============================================================
+
+/// 布局模式 — 控制主区域的 panel 排列方式
+///
+/// WHY 三种布局:
+/// - SinglePane:专注模式,当前面板全屏,适合深度查看单一面板(如 EventStream 万级事件)
+/// - DualPane:对比模式,主面板 + 侧边栏,适合边查看边监控(默认布局)
+/// - TriplePane:全监控模式,主面板 + 侧边栏 + 底部日志,适合多面板协同观察
+///
+/// WHY 派生 Serialize/Deserialize:`TuiState` 派生了 serde,作为其字段的
+/// `LayoutMode` 必须同步派生,否则 `#[derive(Serialize)]` 缺少 trait bound 编译失败。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum LayoutMode {
+    /// 单面板全屏(专注模式)
+    SinglePane,
+    /// 双面板:主面板 + 侧边栏(对比模式)
+    ///
+    /// WHY 默认值:用户首次启动 TUI 时应看到完整界面(tabs + main + status_bar),
+    /// 知晓有 13 个面板可切换。SinglePane 是用户主动按 `l` 切换的专注模式,
+    /// 不适合作为默认值 — 否则用户不知道有其他面板存在。
+    #[default]
+    DualPane,
+    /// 三面板:主面板 + 侧边栏 + 底部日志(全监控模式)
+    TriplePane,
+}
+
+impl LayoutMode {
+    /// 返回布局模式的人类可读名称
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LayoutMode::SinglePane => "single",
+            LayoutMode::DualPane => "dual",
+            LayoutMode::TriplePane => "triple",
+        }
+    }
+
+    /// 循环切换到下一个布局模式(SinglePane → DualPane → TriplePane → SinglePane)
+    ///
+    /// WHY 循环顺序:从专注 → 对比 → 全监控 → 回到专注,符合用户逐步增加信息密度的需求
+    pub fn next(&self) -> Self {
+        match self {
+            LayoutMode::SinglePane => LayoutMode::DualPane,
+            LayoutMode::DualPane => LayoutMode::TriplePane,
+            LayoutMode::TriplePane => LayoutMode::SinglePane,
+        }
+    }
+}
+
+// ============================================================
 // 高层命令 — 面板返回的语义化动作
 // ============================================================
 
@@ -445,6 +495,12 @@ pub struct TuiState {
     pub g_prefix: bool,
     /// 衰减历史 sparkline 数据点(系数 × 1000 的整型表示)
     pub decay_history: Vec<u64>,
+    // === P6.2 布局模板新增字段 ===
+    /// 当前布局模式(P6.2 布局模板)
+    ///
+    /// WHY 默认 DualPane:启动时显示完整界面(tabs + main + status_bar),
+    /// 用户按 `l` 可切换到 TriplePane(全监控)或 SinglePane(专注模式)。
+    pub layout_mode: LayoutMode,
 }
 
 impl TuiState {
@@ -480,6 +536,8 @@ impl TuiState {
             auto_scroll: true,
             g_prefix: false,
             decay_history: Vec::new(),
+            // P6.2 布局模板默认值(DualPane,见 LayoutMode::default 的 WHY 注释)
+            layout_mode: LayoutMode::default(),
         }
     }
 
@@ -770,5 +828,38 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let restored: TuiState = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, state);
+    }
+
+    // ============================================================
+    // LayoutMode 测试(P6.2 布局模板)
+    // ============================================================
+
+    #[test]
+    fn test_layout_mode_default() {
+        assert_eq!(LayoutMode::default(), LayoutMode::DualPane);
+    }
+
+    #[test]
+    fn test_layout_mode_as_str() {
+        assert_eq!(LayoutMode::SinglePane.as_str(), "single");
+        assert_eq!(LayoutMode::DualPane.as_str(), "dual");
+        assert_eq!(LayoutMode::TriplePane.as_str(), "triple");
+    }
+
+    #[test]
+    fn test_layout_mode_next_cycle() {
+        // SinglePane → DualPane → TriplePane → SinglePane
+        assert_eq!(LayoutMode::SinglePane.next(), LayoutMode::DualPane);
+        assert_eq!(LayoutMode::DualPane.next(), LayoutMode::TriplePane);
+        assert_eq!(LayoutMode::TriplePane.next(), LayoutMode::SinglePane);
+        // 完整循环验证:连续 next 三次回到起点
+        let mode = LayoutMode::SinglePane;
+        assert_eq!(mode.next().next().next(), mode);
+    }
+
+    #[test]
+    fn test_tui_state_layout_mode_default() {
+        let state = TuiState::new();
+        assert_eq!(state.layout_mode, LayoutMode::DualPane);
     }
 }

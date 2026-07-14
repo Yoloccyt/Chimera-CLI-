@@ -134,14 +134,14 @@
 
 ### P3.3 全局快捷键系统统一
 
-- [ ] `crates/chimera-tui/tests/global_keys_test.rs` 新增测试,验证 `j/k` / `g/G` / `/` / `:` / `?` / `Tab/Shift+Tab` / `数字` 全部生效
-- [ ] `TuiApp::handle_global_key` 方法提取,全局键先拦截,未命中再委托面板
-- [ ] 数字键 1-9 跳转面板实现
-- [ ] `g/G` 跳顶/底实现(Panel trait 新增 `scroll_to_top/bottom` 默认实现)
-- [ ] 全局键与面板键的优先级已用 WHY 注释说明
-- [ ] `cargo test -p chimera-tui` 新增全局快捷键测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/global_keys_test.rs` 新增测试,验证 `j/k` / `g/G` / `/` / `:` / `?` / `Tab/Shift+Tab` / `数字` 全部生效
+- [x] `TuiApp::handle_global_key` 方法提取,全局键先拦截,未命中再委托面板
+- [x] 数字键 1-9 跳转面板实现
+- [x] `g/G` 跳顶/底实现(Panel trait 新增 `scroll_to_top/bottom` 默认实现)
+- [x] 全局键与面板键的优先级已用 WHY 注释说明
+- [x] `cargo test -p chimera-tui` 新增全局快捷键测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P3.4 流式事件追加(Claude Code 风格)
 
@@ -156,9 +156,9 @@
 
 ### P3 整体验收
 
-- [ ] `cargo test -p chimera-tui` 全部通过(含新增交互测试,无回归)
-- [ ] `cargo test --workspace` 全部通过(无回归)
-- [ ] P3 Note 已写入 tasks.md
+- [x] `cargo test -p chimera-tui` 全部通过(含新增交互测试,无回归)
+- [x] `cargo test --workspace` 全部通过(无回归)
+- [x] P3 Note 已写入 tasks.md
 
 ## P4 — 性能优化
 
@@ -176,43 +176,43 @@
 
 ### P4.2 虚拟滚动扩展到 Parliament
 
-- [ ] `crates/chimera-tui/tests/parliament_virtual_scroll_test.rs` 新增测试,验证 1000 条历史事件虚拟滚动
-- [ ] `render::virtual_scroll_window`(P2.2.3 实现)应用到 Parliament 面板
-- [ ] 虚拟滚动缓冲行数(5 行)的选择依据已用 WHY 注释说明
-- [ ] `cargo test -p chimera-tui` 新增 Parliament 虚拟滚动测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/parliament_virtual_scroll_test.rs` 新增测试,验证 1000 条历史事件虚拟滚动
+- [x] `render::virtual_scroll_window`(P2.2.3 实现)应用到 Parliament 面板
+- [x] 虚拟滚动缓冲行数(5 行)的选择依据已用 WHY 注释说明
+- [x] `cargo test -p chimera-tui` 新增 Parliament 虚拟滚动测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P4.3 可调 tick 暴露
 
-- [ ] `crates/chimera-tui/tests/configurable_tick_test.rs` 新增测试,验证 `TuiConfig { tick_interval_ms: 100 }` 时 DataPipeline 使用 100ms tick
-- [ ] `TuiConfig` 新增 `tick_interval_ms: u16` 字段(默认 250,范围 100-1000)
-- [ ] `TuiApp::new` 将 `config.tick_interval_ms` 传递给 `DataPipeline::new` 的 `DataSourceConfig`
-- [ ] `chimera-cli/src/commands/tui.rs` 新增 `--tick <ms>` CLI 参数
-- [ ] 100-1000ms 范围的依据已用 WHY 注释说明
-- [ ] `cargo test -p chimera-tui` 新增 tick 配置测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/configurable_tick_test.rs` 新增测试,验证 `TuiConfig { tick_interval_ms: 100 }` 时 DataPipeline 使用 100ms tick
+- [x] `TuiConfig` 新增 `tick_interval_ms: u16` 字段(默认 250,范围 100-1000)
+- [x] `TuiApp::new` 将 `config.tick_interval_ms` 传递给 `DataPipeline::new` 的 `DataSourceConfig`
+- [ ] `chimera-cli/src/commands/tui.rs` 新增 `--tick <ms>` CLI 参数(推迟到 v1.8+ CLI 命令补齐)
+- [x] 100-1000ms 范围的依据已用 WHY 注释说明
+- [x] `cargo test -p chimera-tui` 新增 tick 配置测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P4.4 FPS 显示
 
-- [ ] `crates/chimera-tui/tests/fps_test.rs` 新增测试,验证 Health 面板渲染内容包含 "FPS: <n>",FPS < 30 黄色 / < 15 红色
-- [ ] `TuiApp` 新增 `fps_tracker: FpsTracker` 结构体,基于 `frame_count` 与时间戳计算 FPS
-- [ ] `TuiState` 新增 `fps: u16` 字段,每秒更新一次
-- [ ] `HealthPanel::render` 显示 `FPS: <n>`,根据阈值着色
-- [ ] FPS 计算窗口(1 秒滑动平均)已用 WHY 注释说明
-- [ ] `cargo test -p chimera-tui` 新增 FPS 测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/tests/fps_test.rs` 新增测试,验证 Health 面板渲染内容包含 "FPS: <n>",FPS < 30 黄色 / < 15 红色
+- [x] `TuiApp` 新增 `fps_tracker: FpsTracker` 结构体,基于 `frame_count` 与时间戳计算 FPS
+- [x] `TuiState` 新增 `fps: u16` 字段,每秒更新一次
+- [x] `HealthPanel::render` 显示 `FPS: <n>`,根据阈值着色
+- [x] FPS 计算窗口(1 秒滑动平均)已用 WHY 注释说明
+- [x] `cargo test -p chimera-tui` 新增 FPS 测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P4 整体验收
 
-- [ ] `crates/chimera-tui/benches/render_bench.rs` 扩展,新增增量渲染基准(全量 vs 增量对比)
-- [ ] `crates/chimera-tui/benches/data_pipeline_bench.rs` 扩展,新增可调 tick 基准(100/250/500/1000ms 对比)
-- [ ] 性能阈值:snapshot latency P95 < 100ms;render time P95 < 16ms;增量渲染帧时间降低 ≥ 30%
-- [ ] `cargo test -p chimera-tui` 全部通过(无回归)
-- [ ] `cargo test --workspace` 全部通过(无回归)
-- [ ] P4 Note 已写入 tasks.md
+- [ ] `crates/chimera-tui/benches/render_bench.rs` 扩展,新增增量渲染基准(全量 vs 增量对比)(推迟到 v1.8+ 性能基准补齐)
+- [ ] `crates/chimera-tui/benches/data_pipeline_bench.rs` 扩展,新增可调 tick 基准(100/250/500/1000ms 对比)(推迟到 v1.8+ 性能基准补齐)
+- [ ] 性能阈值:snapshot latency P95 < 100ms;render time P95 < 16ms;增量渲染帧时间降低 ≥ 30%(推迟到 v1.8+ 性能基准补齐)
+- [x] `cargo test -p chimera-tui` 全部通过(无回归)
+- [x] `cargo test --workspace` 全部通过(无回归)
+- [x] P4 Note 已写入 tasks.md
 
 ## P5 — 跨面板联动
 
@@ -258,42 +258,42 @@
 
 ### P6.1 运行时主题切换
 
-- [ ] `crates/chimera-tui/tests/theme_switch_test.rs` 新增测试,验证按 `t` 键 Dark → Light → HighContrast → Dark 循环
-- [ ] `Theme` 枚举新增 `HighContrast` 变体
-- [ ] `Theme::next()` 方法实现(Dark → Light → HighContrast → Dark 循环)
-- [ ] `TuiApp::handle_global_key` 处理 `t` 键,切换 `config.theme` 并标记所有面板为 dirty
-- [ ] HighContrast 主题颜色方案实现(纯黑背景 / 纯白前景 / 高饱和度强调色)
-- [ ] HighContrast 主题的目标用户(色盲 + 高亮环境)已用 WHY 注释说明
-- [ ] `cargo test -p chimera-tui` 新增主题切换测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/src/app.rs` 单元测试新增(变更:用 app.rs 单元测试替代 `tests/theme_switch_test.rs`,避免过度工程化)— `test_handle_key_t_switches_theme_dark_to_light` / `test_handle_key_t_cycles_through_all_themes` / `test_handle_key_t_marks_all_panels_dirty` / `test_handle_key_t_sets_status_message`
+- [x] `Theme` 枚举新增 `HighContrast` 变体 — config.rs
+- [x] `Theme::next()` 方法实现(Dark → Light → HighContrast → Dark 循环) — config.rs
+- [x] `TuiApp::handle_global_key` 处理 `t` 键,切换 `config.theme` 并标记所有面板为 dirty — app.rs
+- [x] HighContrast 主题颜色方案实现(纯黑背景 / 纯白前景 / 高饱和度强调色) — config.rs `Theme::colors()` + app.rs `theme_fg`/`theme_accent`
+- [x] HighContrast 主题的目标用户(色盲 + 高亮环境)已用 WHY 注释说明 — config.rs ThemeColors doc
+- [x] `cargo test -p chimera-tui` 新增主题切换测试全部通过 — 295 lib passed
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过 — 零警告
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P6.2 布局模板
 
-- [ ] `crates/chimera-tui/tests/layout_test.rs` 新增测试,验证 `1`/`2`/`3` 切换单/双/三面板布局
-- [ ] `TuiState` 新增 `layout_mode: LayoutMode` 枚举(SinglePane / DualPane / TriplePane)
-- [ ] `TuiApp::render` 根据 `layout_mode` 选择布局
-- [ ] `handle_global_key` 处理 `1`/`2`/`3` 键切换 `layout_mode`
-- [ ] 三种布局的适用场景已用 WHY 注释说明
-- [ ] `cargo test -p chimera-tui` 新增布局测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/src/app.rs` 单元测试新增(变更:用 app.rs 单元测试替代 `tests/layout_test.rs`,避免过度工程化)— `test_handle_key_l_switches_layout_dual_to_triple` / `test_handle_key_l_cycles_through_all_layouts` / `test_handle_key_l_sets_status_message` / `test_render_single_pane_layout_no_panic` / `test_render_triple_pane_layout_no_panic`
+- [x] `TuiState` 新增 `layout_mode: LayoutMode` 枚举(SinglePane / DualPane / TriplePane) — types.rs(默认值 DualPane,用户决策)
+- [x] `TuiApp::render` 根据 `layout_mode` 选择布局 — app.rs `layout()` 3 模式 + `render()` SinglePane 跳过 tabs/status_bar
+- [x] `handle_global_key` 处理布局切换键(变更:从 `1`/`2`/`3` 改为 `l` 键循环,避免与 P3.3 面板跳转冲突)— app.rs
+- [x] 三种布局的适用场景已用 WHY 注释说明 — types.rs LayoutMode doc + app.rs handle_global_key `l` 分支
+- [x] `cargo test -p chimera-tui` 新增布局测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P6.3 颜色方案配置
 
-- [ ] `crates/chimera-tui/tests/color_scheme_test.rs` 新增测试,验证配置文件 `tui.colors` 节覆盖默认颜色
-- [ ] `TuiConfig` 新增 `colors: ColorScheme` 结构体
-- [ ] `ColorScheme::default_for_theme(theme)` 方法实现
-- [ ] 颜色配置与主题的关系(主题是离散预设,颜色是细粒度覆盖)已用 WHY 注释说明
-- [ ] `cargo test -p chimera-tui` 新增颜色配置测试全部通过
-- [ ] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] `crates/chimera-tui/src/config.rs` 单元测试新增(变更:用 config.rs 单元测试替代 `tests/color_scheme_test.rs`,避免过度工程化)— `test_config_json_colors_override_from_string` / `test_config_colors_field_default_when_absent` 等 9 个测试
+- [x] `TuiConfig` 新增 `colors: ColorScheme` 结构体 — config.rs(struct 级 `#[serde(default)]`)
+- [x] `ColorScheme::default_for_theme(theme)` 方法实现 — config.rs + `resolve(theme)` 合并方法
+- [x] 颜色配置与主题的关系(主题是离散预设,颜色是细粒度覆盖)已用 WHY 注释说明 — config.rs ColorScheme doc
+- [x] `cargo test -p chimera-tui` 新增颜色配置测试全部通过
+- [x] `cargo clippy -p chimera-tui --all-targets --jobs 2 -- -D warnings` 通过
+- [x] `cargo fmt --all -- --check` 通过
 
 ### P6 整体验收
 
-- [ ] `cargo test -p chimera-tui` 全部通过(无回归)
-- [ ] `cargo test --workspace` 全部通过(无回归)
-- [ ] P6 Note 已写入 tasks.md
+- [x] `cargo test -p chimera-tui` 全部通过(无回归)— 295 lib + 集成测试全过
+- [x] `cargo test --workspace` 全部通过(无回归)— exit 0,所有 test result: ok,0 failed
+- [x] P6 Note 已写入 tasks.md
 
 ## P7 — 历史回放引擎(v1.8+ 接口设计)
 
