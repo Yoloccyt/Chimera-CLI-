@@ -8,9 +8,12 @@
 # ============================================================
 
 # ---------- Stage 1: Builder ----------
-# WHY 使用 rust:1-slim:与 CI 的 dtolnay/rust-toolchain@stable 保持一致(指向 latest 1.x),
-#      避免 1.85 镜像落后于 workspace 依赖所需的 Rust 版本而导致编译失败。
-FROM rust:1-slim AS builder
+# WHY 使用 rust:1-bookworm-slim 而非 rust:1-slim:
+# rust:1-slim 可能基于 Debian Trixie(13),而 runtime 阶段使用
+# gcr.io/distroless/cc-debian12(Debian 12/Bookworm)。若 builder 的 glibc
+# 版本高于 runtime,二进制会因 "GLIBC_x.xx not found" 启动失败。
+# 固定 bookworm-slim 确保 builder 与 runtime 的 glibc 版本一致。
+FROM rust:1-bookworm-slim AS builder
 
 # 系统依赖:
 # - pkg-config: 部分 crate 探测系统库时需要
@@ -31,6 +34,9 @@ COPY crates/ ./crates/
 # Release 构建:仅构建 chimera-cli 的 binary(aether)
 # workspace 级 [profile.release] 已配置 strip/lto/opt-level=z/panic=abort
 RUN cargo build --release -p chimera-cli
+
+# 打印 binary 的动态库依赖,便于排查 distroless 运行时缺少共享库的问题
+RUN ldd target/release/aether 2>&1 || true
 
 # ---------- Stage 2: Runtime (distroless) ----------
 # WHY distroless/cc-debian12:
