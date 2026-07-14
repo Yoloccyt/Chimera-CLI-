@@ -229,7 +229,13 @@ jobs:
         run: |
           # WHY 使用 ${{ env.IMAGE_NAME }}:统一从顶层 env 读取已规范化的镜像名,
           # 避免仓库名尾部非法字符导致 reference 格式错误,同时消去大小写不一致风险。
-          IMAGE_SIZE=$(docker image inspect ${{ env.IMAGE_NAME }}:${{ github.ref_name }} --format='{{.Size}}')
+          # WHY 先 docker pull:build-push-action@v5 在 buildx 模式下 push 后不会自动
+          # 将镜像加载到本地 daemon,导致 docker image inspect 找不到镜像。显式 pull
+          # 后再 inspect,确保 size 校验针对的是 registry 上的实际产物。
+          IMAGE="${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
+          echo "Pulling image for size check: $IMAGE"
+          docker pull "$IMAGE"
+          IMAGE_SIZE=$(docker image inspect "$IMAGE" --format='{{.Size}}')
           echo "Image size: $IMAGE_SIZE bytes"
           if [ "$IMAGE_SIZE" -gt 104857600 ]; then
             echo "ERROR: Image size exceeds 100MB limit"
