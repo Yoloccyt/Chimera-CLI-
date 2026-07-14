@@ -54,6 +54,7 @@ dist/
 .claude/
 .trae/
 
-# === 例外：唯一允许入库的发布指南 ===
+# === 例外：允许入库的发布指南与 Changelog ===
 !README.md
+!CHANGELOG.md
 !docs/release/release_guide.md
