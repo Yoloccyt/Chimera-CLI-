@@ -92,7 +92,12 @@ jobs:
 
       - name: Install cross (for aarch64-linux)
         if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+        # WHY: 使用预编译 binary 而非 `cargo install --git`，避免 CI 环境中
+        # 从 GitHub 克隆源码并编译导致的超时或网络失败。taiki-e/install-action
+        # 是官方推荐的 Rust 工具安装 Action，速度快且稳定。
 
       - name: Build binary
         shell: bash
