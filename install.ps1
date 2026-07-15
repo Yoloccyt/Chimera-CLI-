@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # ============================================================
-# chimela CLI (NEXUS-OMEGA) — 一键安装脚本 (Windows PowerShell)
+# Chimera CLI (NEXUS-OMEGA) — 一键安装脚本 (Windows PowerShell)
 #
 # 用法:
 #   一行命令(PS 5.1 / PS 7+ 均兼容):
@@ -199,7 +199,7 @@ $script:RepoOwner = 'Yoloccyt'
 $script:RepoName = 'Chimera-CLI-'
 $script:GitHubApi = "https://api.github.com/repos/$($script:RepoOwner)/$($script:RepoName)"
 $script:GitHubReleases = "https://github.com/$($script:RepoOwner)/$($script:RepoName)/releases"
-$script:BinName = 'chimela'
+$script:BinName = 'chimera'
 
 # ------------------ 颜色输出函数 ------------------
 function Write-Info    { param([string]$Msg) Write-Host "[INFO] $Msg" -ForegroundColor Cyan }
@@ -546,21 +546,20 @@ try {
     }
 
     # ------------------ 安装 binary ------------------
-    # WHY: 项目内部 cargo binary 名为 'aether',但 CI/Docker 外部品牌名为 'chimela'。
-    #      为消除用户困惑,同时提供三个命令入口:
-    #        - chimela.exe: 新品牌名
-    #        - aether.exe:   cargo 内部二进制名
-    #        - chimera.exe:  旧品牌兼容别名
-    #      Windows 符号链接需要特殊权限且兼容性差,直接复制更可靠(仅 1.3MB)。
+    # WHY: chimera 是统一后的主入口命令名。
+    #      为消除用户困惑,同时提供两个兼容别名:
+    #        - chimela.exe: 旧品牌名(向后兼容)
+    #        - aether.exe:  cargo 内部二进制名(开发兼容)
+    #      Windows 符号链接需要特殊权限且兼容性差,直接复制更可靠(仅约 1.3MB)。
     $installPath = Join-Path $InstallDir "$($script:BinName).exe"
+    $chimelaPath = Join-Path $InstallDir 'chimela.exe'
     $aetherPath = Join-Path $InstallDir 'aether.exe'
-    $chimeraPath = Join-Path $InstallDir 'chimera.exe'
     Write-Info "安装到: $installPath"
 
     try {
         Copy-Item -Path $downloadedFile -Destination $installPath -Force -ErrorAction Stop
+        Copy-Item -Path $installPath -Destination $chimelaPath -Force -ErrorAction Stop
         Copy-Item -Path $installPath -Destination $aetherPath -Force -ErrorAction Stop
-        Copy-Item -Path $installPath -Destination $chimeraPath -Force -ErrorAction Stop
     } catch {
         Die "安装失败 (权限不足?): $($_.Exception.Message)"
     }
@@ -568,10 +567,10 @@ try {
     # WHY: 从网络下载的 exe 会携带 Internet 区域标记(MOTW),可能触发 Windows Defender/
     #      SmartScreen/企业 AV 的拦截,导致 --version 验证失败。安装后解除标记。
     Unblock-File -Path $installPath -ErrorAction SilentlyContinue
+    Unblock-File -Path $chimelaPath -ErrorAction SilentlyContinue
     Unblock-File -Path $aetherPath -ErrorAction SilentlyContinue
-    Unblock-File -Path $chimeraPath -ErrorAction SilentlyContinue
 
-    Write-Ok 'binary 已安装 (chimela.exe + aether.exe + chimera.exe 兼容别名)'
+    Write-Ok 'binary 已安装 (chimera.exe + chimela.exe + aether.exe 兼容别名)'
 
     # ------------------ PATH 配置 ------------------
     $pathUpdated = $false
@@ -614,7 +613,7 @@ try {
     }
 
     # ------------------ 验证安装 ------------------
-    # WHY: 同时验证 chimela.exe / aether.exe / chimera.exe,确保三个入口都可用。
+    # WHY: 同时验证 chimera.exe / chimela.exe / aether.exe,确保三个入口都可用。
     #      验证失败默认阻塞安装(exit 1),因为继续返回 0 会让 CI/用户误以为成功。
     #      企业安全策略可能首次运行拦截 exe,此时可用 -SkipVersionCheck 显式绕过。
     Write-Info '验证安装...'
@@ -622,7 +621,7 @@ try {
     $verifiedEntries = @()
     $versionFailed = 0
 
-    foreach ($exePath in @($installPath, $aetherPath, $chimeraPath)) {
+    foreach ($exePath in @($installPath, $chimelaPath, $aetherPath)) {
         try {
             $versionOutput = (& $exePath --version 2>&1 | Out-String).Trim()
             $matched = $false
@@ -641,7 +640,7 @@ try {
             } else {
                 $versionFailed++
                 Write-WarnMsg "$exePath --version 验证失败"
-                Write-WarnMsg "期望格式: aether|chimera|chimela X.Y.Z[-omega]"
+                Write-WarnMsg "期望格式: chimera X.Y.Z[-omega]"
                 Write-WarnMsg "实际输出: $versionOutput"
                 Write-WarnMsg "退出码: $LASTEXITCODE"
                 Write-WarnMsg "可能原因: 缺少 VC++ 运行时 / Windows Defender 拦截 / 文件损坏"
@@ -663,7 +662,7 @@ try {
     Write-Info '================ 安装总结 ================'
     Write-Info "  版本:   $Version"
     Write-Info "  主入口: $installPath"
-    Write-Info "  别名:   $aetherPath, $chimeraPath"
+    Write-Info "  别名:   $chimelaPath, $aetherPath"
     Write-Info "  平台:   windows/$archNorm"
     if ($pathUpdated) {
         Write-Info '  PATH:   已更新 (用户级)'

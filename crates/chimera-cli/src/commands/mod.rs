@@ -1,7 +1,8 @@
 //! 子命令业务骨架 — 各命令的入口分发与实现
 //!
-//! 当前 Stage 8 RC 阶段(L10 编排接线延后到 v1.1),所有子命令仅打印占位信息并返回
-//! `NotImplemented` 错误,后续按 8 周计划逐步接入真实业务逻辑。
+//! 分发逻辑:
+//! - 有显式子命令时路由到对应 handler
+//! - 无子命令时默认启动 TUI 交互界面(品牌统一后 `chimera` 命令即进入可视化面板)
 
 use anyhow::Result;
 
@@ -24,7 +25,7 @@ pub mod wiki;
 /// 命令分发入口
 ///
 /// 根据 `Cli.command` 路由到对应子命令处理函数。
-/// 无子命令时打印帮助信息(不执行任何重活,对齐 §6 红线)。
+/// 无子命令时默认启动 TUI 交互界面,用户可直接输入 `chimera` 进入可视化面板。
 ///
 /// 注:参数命名为 `cfg` 而非 `config`,避免遮蔽 `pub mod config;` 声明的模块名,
 /// 否则 `config::execute(...)` 会被解析为对 `&ChimeraConfig` 参数的方法调用。
@@ -37,11 +38,9 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         Some(Commands::Wiki { query }) => wiki::execute(query, cfg).await,
         Some(Commands::Parliament { proposal }) => parliament::execute(proposal, cfg).await,
         None => {
-            // 无子命令:打印帮助提示(不调用 clap 的 print_help 以避免耦合)
-            println!("NEXUS-OMEGA AI Coding Agent v{}\n", crate::VERSION);
-            println!("用法: aether <COMMAND> [OPTIONS]");
-            println!("运行 `aether --help` 查看可用命令");
-            Ok(())
+            // 无子命令:默认启动 TUI 交互界面
+            // --help/--version 由 Clap 在 Cli::parse() 阶段内置处理,不会进入此分支
+            tui::execute(cfg).await
         }
     }
 }

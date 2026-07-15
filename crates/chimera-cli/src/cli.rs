@@ -2,7 +2,7 @@
 //!
 //! 命令树:
 //! ```text
-//! aether
+//! chimera
 //!   ├── run <prompt>          # 运行单次任务
 //!   ├── tui                    # 启动 TUI 交互界面
 //!   ├── quest <action>         # Quest 管理
@@ -29,18 +29,18 @@ use clap::{Parser, Subcommand};
 /// (符合 §6 红线:避免暴力加载,无命令时不应执行任何重活)。
 #[derive(Parser, Debug)]
 #[command(
-    name = "aether",
+    name = "chimera",
     version,
     about = "NEXUS-OMEGA AI Coding Agent — 全维稀疏架构的下一代编码代理"
 )]
 pub struct Cli {
-    /// 子命令(可选,缺省时打印帮助)
+    /// 子命令(可选,缺省时启动 TUI 交互界面)
     #[command(subcommand)]
     pub command: Option<Commands>,
 
-    /// 配置文件路径(默认 ~/.aether/omega.yaml)
+    /// 配置文件路径(默认 ~/.chimera/omega.yaml)
     ///
-    /// 全局参数,可在任意子命令前使用,如 `aether --config ./x.yaml run "hi"`
+    /// 全局参数,可在任意子命令前使用,如 `chimera --config ./x.yaml run "hi"`
     #[arg(long, global = true, value_name = "FILE")]
     pub config: Option<PathBuf>,
 

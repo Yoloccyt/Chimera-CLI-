@@ -1,4 +1,4 @@
-//! `aether wiki <query>` — Wiki 查询骨架
+//! `chimera wiki <query>` — Wiki 查询骨架
 //!
 //! 后续接入 `repo-wiki` crate 的语义检索(ISCM 跨层共享索引)。
 //! 当前仅打印查询占位信息。

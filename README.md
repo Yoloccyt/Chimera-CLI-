@@ -35,6 +35,24 @@
 
 ---
 
+## 📚 文档索引
+
+新成员请优先阅读以下文档：
+
+| 文档 | 路径 | 用途 |
+|------|------|------|
+| 架构文档索引 | [docs/architecture/INDEX.md](docs/architecture/INDEX.md) | 架构手册、设计文档、深研报告的统一入口 |
+| 文件命名规范 | [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | 文件命名与存放规则，新成员必读 |
+| 项目规则 | [.trae/rules/nuxus规则.md](.trae/rules/nuxus规则.md) | 全局规则、架构硬约束、依赖铁律、async/SQLite/安全红线 |
+| 项目命令 | [.claude/CLAUDE.md](.claude/CLAUDE.md) | 环境设置、常用命令、CI/CD 与发布、本地限制 |
+| 版本演进史 | [CHANGELOG.md](CHANGELOG.md) | Week 1-8 验收记录 + v1.0.0-omega GA + 后续版本 |
+
+### 缺失文档警示
+
+- `CODE_WIKI.md` 与 `AETHER_NEXUS_OMEGA_ULTIMATE.md` 当前缺失，详见 [docs/architecture/INDEX.md](docs/architecture/INDEX.md) 缺失文档恢复建议。
+
+---
+
 ## 一键安装
 
 ### Windows (PowerShell 5.1+)
@@ -64,9 +82,9 @@ docker run --rm ghcr.io/yoloccyt/chimera-cli:v1.7.0-omega --version
 ### 验证安装
 
 ```bash
-chimela --version   # 期望输出: chimela 1.7.0-omega
-aether --version    # 期望输出: aether 1.7.0-omega
 chimera --version   # 期望输出: chimera 1.7.0-omega
+chimela --version   # 期望输出: chimera 1.7.0-omega (兼容别名)
+aether --version    # 期望输出: chimera 1.7.0-omega (内部编码名)
 ```
 
 ---
@@ -75,20 +93,22 @@ chimera --version   # 期望输出: chimera 1.7.0-omega
 
 ```bash
 # 查看帮助
-chimela --help
+chimera --help
 
 # 知识库检索
-chimela wiki "查询关键词"
+chimera wiki "查询关键词"
 
 # 生成代码
-chimela generate "任务描述"
+chimera generate "任务描述"
 
 # 启动 TUI 仪表盘 (14 面板实时监控)
-chimela tui
+chimera tui
+# 或直接输入 chimera (无参数默认启动 TUI)
+chimera
 
 # 配置管理
-chimela config init     # 初始化配置 ~/.aether/omega.yaml
-chimela config show     # 查看当前配置
+chimera config init     # 初始化配置 ~/.chimera/omega.yaml
+chimera config show     # 查看当前配置
 ```
 
 ---

@@ -1,4 +1,4 @@
-//! `aether quest <action>` — Quest 管理骨架
+//! `chimera quest <action>` — Quest 管理骨架
 //!
 //! 后续接入 `quest-engine` crate,支持 Quest 的创建/查询/取消/检查点。
 //! 当前仅打印动作占位信息。

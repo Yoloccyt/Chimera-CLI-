@@ -1,4 +1,4 @@
-//! `aether parliament <proposal>` — 议会审议骨架
+//! `chimera parliament <proposal>` — 议会审议骨架
 //!
 //! 后续接入 `parliament` crate,提交提案供多模型议会表决(AHIRT 反黑客红队参与)。
 //! 当前仅打印提案占位信息。

@@ -39,7 +39,7 @@ REPO_NAME="Chimera-CLI-"
 GITHUB_API="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}"
 GITHUB_RELEASES="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases"
 DEFAULT_INSTALL_DIR="${HOME}/.local/bin"
-BIN_NAME="chimela"
+BIN_NAME="chimera"
 
 # ------------------ 颜色输出 ------------------
 # 检测是否为 TTY,非交互模式禁用颜色 (适配 CI / curl | sh)
@@ -317,6 +317,17 @@ else
 fi
 
 success "binary 已安装"
+
+# 兼容别名:为 chimela 和 aether 创建符号链接指向 chimera
+# WHY: 旧品牌名 chimela 和内部编码名 aether 作为向后兼容别名保留,
+#      确保老用户和新用户都能找到命令入口
+for _alias in chimela aether; do
+    _alias_path="${INSTALL_DIR}/${_alias}"
+    if [ ! -e "${_alias_path}" ]; then
+        ln -sf "${BIN_NAME}" "${_alias_path}" 2>/dev/null || true
+        info "已创建别名: ${_alias_path} -> ${BIN_NAME}"
+    fi
+done
 
 # ------------------ PATH 配置 ------------------
 # 检查 INSTALL_DIR 是否已在 PATH 中

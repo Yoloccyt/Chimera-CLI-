@@ -8,13 +8,13 @@
 //!
 //! ## 配置优先级(后者覆盖前者)
 //! 1. 内置默认值(`ChimeraConfig::default`)
-//! 2. 配置文件(默认 `~/.aether/omega.yaml`,可由 `--config` 覆盖)
-//! 3. 环境变量(前缀 `AETHER_`,嵌套用 `__` 分隔)
+//! 2. 配置文件(默认 `~/.chimera/omega.yaml`,可由 `--config` 覆盖)
+//! 3. 环境变量(前缀 `CHIMERA_`,嵌套用 `__` 分隔)
 //! 4. CLI 参数(目前仅 `--config` 影响加载路径)
 //!
 //! ## 配置样例
 //! - 简化样例见 `examples/config.sample.yaml` / `examples/config.sample.toml`
-//! - 完整模板(含全部 14 个顶层 section)由 `aether config init` 生成
+//! - 完整模板(含全部 14 个顶层 section)由 `chimera config init` 生成
 
 // 类型定义 re-export:nexus-core 定义,L10 通过 re-export 保持向后兼容。
 // trait impl(Serialize/Deserialize)是全局的,re-export 后自动随类型传播。
@@ -31,16 +31,16 @@ use figment::{
 
 // === 配置加载逻辑(保留在 L10 chimera-cli) ===
 
-/// 默认配置文件路径:`~/.aether/omega.yaml`
+/// 默认配置文件路径:`~/.chimera/omega.yaml`
 ///
 /// 跨平台 home 目录展开:
-/// - Unix: `$HOME/.aether/omega.yaml`
-/// - Windows: `%USERPROFILE%\.aether\omega.yaml`
+/// - Unix: `$HOME/.chimera/omega.yaml`
+/// - Windows: `%USERPROFILE%\.chimera\omega.yaml`
 pub fn default_config_path() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".aether").join("omega.yaml")
+    PathBuf::from(home).join(".chimera").join("omega.yaml")
 }
 
 /// 返回内置默认配置(等价于 `ChimeraConfig::default()`)
@@ -60,7 +60,7 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ChimeraConfig> {
     //     后续可扩展 CLI override provider 以支持 --strategy 等参数。
     let figment = Figment::from(Serialized::defaults(ChimeraConfig::default()))
         .merge(Yaml::file(&path))
-        .merge(Env::prefixed("AETHER_").split("__"));
+        .merge(Env::prefixed("CHIMERA_").split("__"));
 
     figment
         .extract::<ChimeraConfig>()
@@ -92,7 +92,7 @@ pub fn init_config_file(path: &Path) -> Result<()> {
 fn omega_yaml_template() -> &'static str {
     // 注:模板内容与 AETHER_NEXUS_OMEGA_ULTIMATE.md §10.2 完全对齐
     // minimax-m3 的 output_cost_per_k 已修正为 output_cost_per_1k 以保持字段一致
-    r#"# ~/.aether/omega.yaml
+    r#"# ~/.chimera/omega.yaml
 nexus:
   version: "1.0.0-omega"
 
@@ -113,7 +113,7 @@ thinking_toggle:
 
 repo_wiki:
   auto_generate: true
-  db_path: "~/.aether/wiki.db"
+  db_path: "~/.chimera/wiki.db"
   embedding_dim: 256
   auto_update_on_commit: true
 
@@ -226,7 +226,7 @@ mcp:
 
 evolution:
   enabled: true
-  mutation_pool_path: "~/.aether/evolution/mutations/"
+  mutation_pool_path: "~/.chimera/evolution/mutations/"
   fitness_function: "(success_rate * 0.4) + (speed * 0.3) + (token_efficiency * 0.2) + (safety * 0.1)"
   ab_test:
     enabled: true
@@ -246,16 +246,16 @@ monitoring:
     dashboard_path: "./monitoring/grafana-dashboard.json"
   alerts:
     - name: "CapabilityDepleted"
-      expr: "aether_capability_current < 0.1"
+      expr: "chimera_capability_current < 0.1"
       for: "1m"
     - name: "HighOrphanRate"
-      expr: "rate(aether_orphan_calls_total[5m]) > 0"
+      expr: "rate(chimera_orphan_calls_total[5m]) > 0"
       for: "1m"
     - name: "BudgetAlert"
-      expr: "aether_daily_cost / aether_daily_budget > 0.8"
+      expr: "chimera_daily_cost / chimera_daily_budget > 0.8"
       for: "5m"
     - name: "RedTeamVulnerability"
-      expr: "aether_red_team_vulnerabilities > 0"
+      expr: "chimera_red_team_vulnerabilities > 0"
       for: "1m"
 "#
 }
@@ -350,7 +350,7 @@ impl LazyConfig {
         let path = config_path.unwrap_or_else(default_config_path);
         let figment = Figment::from(Serialized::defaults(ChimeraConfig::default()))
             .merge(Yaml::file(&path))
-            .merge(Env::prefixed("AETHER_").split("__"));
+            .merge(Env::prefixed("CHIMERA_").split("__"));
         Ok(Self {
             figment,
             nexus: LazySection::new(),

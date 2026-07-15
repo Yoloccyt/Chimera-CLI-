@@ -11,8 +11,8 @@
 //! ## 配置优先级
 //! Figment 合并顺序(后者覆盖前者):
 //! 1. 内置默认值(`ChimeraConfig::default`)
-//! 2. 配置文件(默认 `~/.aether/omega.yaml`,可由 `--config` 覆盖)
-//! 3. 环境变量(前缀 `AETHER_`,嵌套用 `__` 分隔,如 `AETHER_QUEST__MAX_TASKS_PER_QUEST`)
+//! 2. 配置文件(默认 `~/.chimera/omega.yaml`,可由 `--config` 覆盖)
+//! 3. 环境变量(前缀 `CHIMERA_`,嵌套用 `__` 分隔,如 `CHIMERA_QUEST__MAX_TASKS_PER_QUEST`)
 //! 4. CLI 参数(目前仅 `--config` 影响配置加载路径,后续可扩展)
 //!
 //! ## 热加载方案(注释说明,骨架暂不实现)
@@ -31,7 +31,7 @@
 //! use clap::Parser;
 //!
 //! // Cli 实现 clap::Parser,可从字符串切片解析(便于测试与脚本调用)
-//! let cli = Cli::parse_from(["aether", "quest", "list"]);
+//! let cli = Cli::parse_from(["chimera", "quest", "list"]);
 //! assert!(matches!(cli.command, Some(Commands::Quest { action: QuestAction::List })));
 //!
 //! // ChimeraConfig 实现 Default,提供内置兜底配置(对应 omega.yaml 缺省值)

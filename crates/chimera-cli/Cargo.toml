@@ -35,9 +35,9 @@ proptest = { workspace = true }
 # criterion:性能基准框架,用于 OnceLock 并发压测(SubTask S1)
 criterion = { workspace = true }
 
-# 显式声明二进制目标,确保 main.rs 被识别为 aether 可执行文件
+# 显式声明二进制目标,确保 main.rs 被识别为 chimera 可执行文件
 [[bin]]
-name = "aether"
+name = "chimera"
 path = "src/main.rs"
 
 # OnceLock 14 section 懒加载并发性能基准(SubTask S1)

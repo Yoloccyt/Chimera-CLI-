@@ -48,32 +48,32 @@ jobs:
           - target: x86_64-pc-windows-gnu
             runner: windows-latest
             cross: false
-            artifact_name: chimela-windows-x86_64.exe
-            binary_name: aether.exe
+            artifact_name: chimera-windows-x86_64.exe
+            binary_name: chimera.exe
           # Linux x86_64 — 主力服务器平台
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             cross: false
-            artifact_name: chimela-linux-x86_64
-            binary_name: aether
+            artifact_name: chimera-linux-x86_64
+            binary_name: chimera
           # Linux aarch64 — ARM 服务器(交叉编译,需 cross)
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             cross: true
-            artifact_name: chimela-linux-aarch64
-            binary_name: aether
+            artifact_name: chimera-linux-aarch64
+            binary_name: chimera
           # macOS x86_64 — Intel Mac
           - target: x86_64-apple-darwin
             runner: macos-latest
             cross: false
-            artifact_name: chimela-macos-x86_64
-            binary_name: aether
+            artifact_name: chimera-macos-x86_64
+            binary_name: chimera
           # macOS aarch64 — Apple Silicon (M1/M2/M3)
           - target: aarch64-apple-darwin
             runner: macos-latest
             cross: false
-            artifact_name: chimela-macos-aarch64
-            binary_name: aether
+            artifact_name: chimera-macos-aarch64
+            binary_name: chimera
 
     steps:
       - name: Checkout
@@ -322,10 +322,10 @@ jobs:
           }
           echo "Version output: $VERSION_OUTPUT"
 
-          # 验证输出格式:必须匹配 aether|chimera|chimela X.Y.Z[-omega](确保 binary 未损坏)
+          # 验证输出格式:必须匹配 chimera X.Y.Z[-omega](确保 binary 未损坏)
           if ! echo "$VERSION_OUTPUT" | grep -qE '^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+'; then
             echo "ERROR: --version output does not match expected format"
-            echo "Expected: aether|chimera|chimela X.Y.Z[-omega]"
+            echo "Expected: chimera X.Y.Z[-omega]"
             echo "Actual: $VERSION_OUTPUT"
             exit 1
           fi
@@ -375,7 +375,7 @@ jobs:
           cat ../checksums.txt
 
       - name: Sign artifacts with GPG
-        # WHY: 用户下载后可验证二进制完整性: gpg --verify chimela-*.asc chimela-*
+        # WHY: 用户下载后可验证二进制完整性: gpg --verify chimera-*.asc chimera-*
         # 使用 GitHub Actions 内置的 GPG_KEY_SIGNING secret (ASCII-armored私钥)
         # 密钥需提前生成并通过: gpg --full-generate-key; gpg --armor --export-secret-key
         # 然后添加到仓库 Settings → Secrets and variables → Actions → GPG_KEY_SIGNING
@@ -419,15 +419,15 @@ jobs:
             ### 平台支持
             | 平台 | 文件 | 架构 |
             |------|------|------|
-            | Windows | `chimela-windows-x86_64.exe` | x86_64 |
-            | Linux   | `chimela-linux-x86_64`       | x86_64 |
-            | Linux   | `chimela-linux-aarch64`      | aarch64 (ARM) |
-            | macOS   | `chimela-macos-x86_64`       | Intel |
-            | macOS   | `chimela-macos-aarch64`      | Apple Silicon |
+            | Windows | `chimera-windows-x86_64.exe` | x86_64 |
+            | Linux   | `chimera-linux-x86_64`       | x86_64 |
+            | Linux   | `chimera-linux-aarch64`      | aarch64 (ARM) |
+            | macOS   | `chimera-macos-x86_64`       | Intel |
+            | macOS   | `chimera-macos-aarch64`      | Apple Silicon |
 
             ### 验证
             ```bash
-            chimela --version
+            chimera --version
             ```
 
             ### Docker

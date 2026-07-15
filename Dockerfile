@@ -3,8 +3,7 @@
 # Chimera CLI (NEXUS-OMEGA) — 多阶段 Dockerfile
 #
 # 产物:distroless 镜像,目标 < 100MB
-# Binary: chimera-cli crate 产出名为 `aether`,镜像中重命名为 `chimera`
-#         (保持对外统一命令名,契合 "Chimera CLI" 品牌)
+# Binary: chimera-cli crate 产出名为 `chimera`,与 CLI 命令入口一致
 # ============================================================
 
 # ---------- Stage 1: Builder ----------
@@ -35,7 +34,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY .cargo/config.toml ./.cargo/config.toml
 COPY crates/ ./crates/
 
-# Release 构建:仅构建 chimera-cli 的 binary(aether)
+# Release 构建:chimera-cli crate 产出 binary `chimera`
 # workspace 级 [profile.release] 已配置 strip/lto/opt-level=z/panic=abort
 RUN cargo build --release -p chimera-cli
 
@@ -67,10 +66,10 @@ LABEL org.opencontainers.image.title="Chimera CLI" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}"
 
-# 构建产物 aether 复制为 chimera(对外统一命令名)
+# 构建产物 chimera 复制到镜像(与 CLI 命令入口一致)
 # --chown=nonroot:nonroot:文件归属 distroless 内置 nonroot 用户(UID/GID 65532)
 # WHY 设置所有权:默认 COPY 以 root:root 归属,切换 nonroot 后将无法读取/执行 binary
-COPY --from=builder --chown=nonroot:nonroot /app/target/release/aether /usr/local/bin/chimera
+COPY --from=builder --chown=nonroot:nonroot /app/target/release/chimera /usr/local/bin/chimera
 
 # 基础健康检查:验证 binary 可执行(无网络服务,仅检查进程存活与二进制完整性)
 # WHY exec form(JSON 数组):distroless 无 shell,shell form 会因 /bin/sh 不存在而失败

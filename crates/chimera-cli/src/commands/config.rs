@@ -1,4 +1,4 @@
-//! `aether config <action>` — 配置管理子命令
+//! `chimera config <action>` — 配置管理子命令
 //!
 //! 支持:
 //! - `init`:生成默认 omega.yaml

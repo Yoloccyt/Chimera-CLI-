@@ -1,4 +1,4 @@
-//! `aether tui` — TUI 交互界面
+//! `chimera tui` — TUI 交互界面
 //!
 //! 调用 `chimera-tui` crate 启动 ratatui 终端界面。
 //! 生产环境通过 EventBus 订阅实时数据，替代默认的 StubDataSource。

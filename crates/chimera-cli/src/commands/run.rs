@@ -1,4 +1,4 @@
-//! `aether run <prompt>` — 单次任务运行骨架
+//! `chimera run <prompt>` — 单次任务运行骨架
 //!
 //! 后续接入流程:NMC 编码 → TTG 切换 → PVL 生产验证 → GQEP 聚集。
 //! 当前仅打印 prompt 占位。

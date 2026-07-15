@@ -1,13 +1,13 @@
-//! `aether` 二进制入口 — NEXUS-OMEGA CLI 主程序
+//! `chimera` 二进制入口 — NEXUS-OMEGA CLI 主程序
 //!
 //! 启动流程(目标 < 200ms):
 //! 1. Clap 解析命令行参数(同步,极快)
 //! 2. 初始化 tracing 日志订阅器
 //! 3. Figment 加载合并配置(默认 > file > env)
-//! 4. 分发到对应子命令
+//! 4. 分发到对应子命令(无子命令时默认启动 TUI)
 //!
 //! 注意:main 中不做重活(如数据库连接、模型加载),这些延迟到子命令内部按需初始化,
-//! 确保 `aether --version` 等快速命令的响应时间。
+//! 确保 `chimera --version` 等快速命令的响应时间。
 
 // WHY: 与 lib.rs 保持一致,禁止 main 入口引入 unsafe。
 // `#![forbid(unsafe_code)]` 是项目铁律,所有 crate 必须声明(见 AETHER_NEXUS_OMEGA_ULTIMATE.md §6 红线)。
