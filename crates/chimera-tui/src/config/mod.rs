@@ -7,6 +7,13 @@
 //! - `theme` 默认 Dark:终端应用常用深色主题,与多数终端配色兼容
 //! - `main_panel_ratio` 默认 0.7:主面板占 70%,侧边栏占 30%,保证主内容可读性
 //! - `log_panel_height` 默认 8:日志面板 8 行,足够显示最近日志不占用过多空间
+//!
+//! # 模块组织
+//! - `tui_bible` 子模块:基于 Figment 多源合并的"设计手册"配置加载器
+//!   (Task 3.2,v1.8-omega),通过 `TuiBible::load()` 提供 4 源合并:
+//!   默认 < `~/.chimera/tui_bible.yaml` < env `CHIMERA_BIBLE_*` < CLI 参数
+
+pub mod tui_bible;
 
 use serde::{Deserialize, Serialize};
 

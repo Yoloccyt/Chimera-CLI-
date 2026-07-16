@@ -51,7 +51,10 @@ pub use command_palette::CommandPalette;
 // P6.1/P6.3:重导出 Theme / ThemeColors / ColorKind / ColorScheme,供 CLI 入口
 // 与下游 crate 在运行时切换主题、查询颜色方案、细粒度覆盖颜色
 // (如 chimera-cli 根据配置渲染启动画面)。
-pub use config::{ColorKind, ColorScheme, Theme, ThemeColors, TuiConfig};
+pub use config::{
+    tui_bible::{KeyBinding, LayoutTemplate, TuiBible},
+    ColorKind, ColorScheme, Theme, ThemeColors, TuiConfig,
+};
 pub use data::{
     metrics_history::MetricsHistory,
     resource_history::{MetricSample, ResourceHistory, ThresholdLevel},
@@ -64,7 +67,8 @@ pub use focus::FocusManager;
 pub use panels::{
     BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
     McpNodesPanel, MemoryPanel, MetricsDashboardPanel, Panel, ParliamentPanel, QuestPanel,
-    ResourceMonitorPanel, RouterPanel, SecurityPanel, TaskManagerPanel, TimelinePanel,
+    ResourceMonitorPanel, RouterPanel, SecurityPanel, SysinfoPanel, TaskManagerPanel,
+    TimelinePanel,
 };
 pub use popup::{PopupKind, PopupStack, Severity};
 pub use render::{

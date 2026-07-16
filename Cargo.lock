@@ -300,6 +300,7 @@ dependencies = [
  "criterion",
  "crossterm",
  "event-bus",
+ "figment",
  "nexus-core",
  "proptest",
  "ratatui",

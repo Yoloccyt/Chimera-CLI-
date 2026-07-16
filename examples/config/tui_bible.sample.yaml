@@ -1,0 +1,101 @@
+# TuiBible 设计手册配置样例
+# 复制到 ~/.chimera/tui_bible.yaml 后按需修改字段
+#
+# 优先级(后者覆盖前者):
+#   1. 内置默认值(TuiBible::default)
+#   2. 本文件(~/.chimera/tui_bible.yaml)
+#   3. 环境变量 CHIMERA_BIBLE_*(嵌套字段用 __,如 CHIMERA_BIBLE_THEME)
+#   4. CLI 参数(后续扩展)
+
+# ============================================================
+# 主题(Dark / Light / HighContrast)
+# ============================================================
+# 主题是离散预设,选定后所有颜色按主题默认值生效。
+# 想要细粒度覆盖某颜色,用下方的 color_scheme 节。
+theme: Dark
+
+# ============================================================
+# 颜色方案覆盖(可选)
+# ============================================================
+# 字段为 Option<ColorKind>:None = 用主题预设,Some(...) = 覆盖。
+# 可用颜色:Black / White / Red / Green / Yellow / Blue / Cyan / Magenta /
+#           LightGray / DarkGray / BrightRed / BrightGreen / BrightYellow /
+#           BrightBlue / BrightCyan / BrightMagenta
+color_scheme:
+  # accent: 强调色(标题/选中),Dark 主题默认 Cyan
+  # accent: BrightBlue
+  # warning: 警告色
+  # warning: BrightYellow
+  # error: 错误色
+  # error: BrightRed
+  # success: 成功色
+  # success: BrightGreen
+  # foreground: 前景色(文字)
+  # background: 背景色
+
+# ============================================================
+# 键位绑定(HashMap<action, KeyBinding>)
+# ============================================================
+# key 是动作语义名(任意字符串),value 描述按键 + 描述。
+# Figment 浅合并:同名 key 覆盖,不同名 key 保留默认。
+# 内置默认键位:
+#   quit, next_panel, prev_panel, help, search, command_palette, refresh
+# 想"清空"默认,把所有默认键名写一个空 binding 即可。
+key_bindings:
+  # 退出 TUI
+  quit:
+    action: quit
+    key: "q"
+    description: "退出 TUI"
+  # 切换到下一个面板
+  next_panel:
+    action: next_panel
+    key: "Tab"
+    description: "下一个面板"
+  # 切换到上一个面板
+  prev_panel:
+    action: prev_panel
+    key: "BackTab"
+    description: "上一个面板"
+  # 任务控制快捷键(v1.8-omega Task 1.3 任务管理面板)
+  task_pause:
+    action: task_pause
+    key: "p"
+    description: "暂停选中的 Quest"
+  task_terminate:
+    action: task_terminate
+    key: "t"
+    description: "终止选中的 Quest(需确认)"
+
+# ============================================================
+# 阈值映射(HashMap<metric, f32 比例>)
+# ============================================================
+# 阈值范围 [0.0, 1.0],超过阈值触发告警颜色渐变。
+# 内置默认阈值(CPU/内存/磁盘/网络 warning + critical):
+#   cpu_warning=0.70, cpu_critical=0.90
+#   memory_warning=0.80, memory_critical=0.95
+#   disk_warning=0.85, disk_critical=0.95
+#   network_warning=0.75, network_critical=0.90
+# 想自定义业务指标(例如 quest 队列长度),加新 key 即可。
+thresholds:
+  # 覆盖默认 CPU 阈值
+  cpu_warning: 0.75
+  cpu_critical: 0.95
+  # 内存阈值
+  memory_warning: 0.80
+  # 自定义业务指标:Quest 队列积压告警
+  queue_backlog_warning: 0.50
+  queue_backlog_critical: 0.80
+
+# ============================================================
+# 布局模板(mode + 几何参数)
+# ============================================================
+# mode: SinglePane(专注) / DualPane(对比,默认) / TriplePane(全监控)
+# main_panel_ratio: 主面板占比 [0.0, 1.0]
+# log_panel_height: 日志面板高度(行数)
+# sidebar_width: 侧边栏宽度(字符数)
+layout:
+  mode: DualPane
+  main_panel_ratio: 0.7
+  log_panel_height: 8
+  sidebar_width: 24

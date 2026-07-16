@@ -15,6 +15,9 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# TuiBible 多源配置加载器(Task 3.2):Figment 4 源合并(默认/文件/env/CLI),
+# 复用 workspace 共享 figment,避免重复声明版本
+figment = { workspace = true }
 # 事件元数据中的时间戳格式化(已存在于 workspace 依赖)
 chrono = { workspace = true }
 # MessagePack 编码/解码,用于事件详情弹窗(P3.1)
