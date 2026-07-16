@@ -91,6 +91,12 @@ pub enum PanelId {
     /// 每个 cell 可独立绑定 `TuiDataSource` + `VizChartKind`,复用
     /// `viz/` 组件库渲染。
     MetricsDashboard,
+    /// 系统信息面板 — 主机与 Chimera 进程只读视图(v1.8-omega Task 3.1)
+    ///
+    /// 展示 OS / CPU 型号 / 核心数 / 总内存 / 启动时间 / Chimera 进程 PID + RSS。
+    /// 主机信息仅构造时采集,进程信息按 `TuiConfig.sysinfo_refresh_interval_ms`
+    /// 周期刷新(默认 5s)。数据源:`sysinfo` 0.32 crate(纯 Rust 跨平台)。
+    Sysinfo,
 }
 
 impl PanelId {
@@ -115,6 +121,7 @@ impl PanelId {
             PanelId::ClvVector => "ClvVector",
             PanelId::ResourceMonitor => "ResourceMonitor",
             PanelId::MetricsDashboard => "MetricsDashboard",
+            PanelId::Sysinfo => "Sysinfo",
         }
     }
 
@@ -139,15 +146,16 @@ impl PanelId {
             PanelId::ClvVector => " CLV Vector ",
             PanelId::ResourceMonitor => " Resources ",
             PanelId::MetricsDashboard => " Metrics Dashboard ",
+            PanelId::Sysinfo => " System Info ",
         }
     }
 
     /// 切换到下一个面板(循环顺序)
     ///
-    /// 完整循环(18 面板):
+    /// 完整循环(19 面板):
     /// Quest → Parliament → Budget → Memory → Security → Health → Log → Help
     /// → Decay → EventStream → Router → McpNodes → Chtc → Timeline
-    /// → OsaSparse → ClvVector → ResourceMonitor → MetricsDashboard → Quest
+    /// → OsaSparse → ClvVector → ResourceMonitor → MetricsDashboard → Sysinfo → Quest
     pub fn next(&self) -> PanelId {
         match self {
             PanelId::Quest => PanelId::Parliament,
@@ -167,14 +175,15 @@ impl PanelId {
             PanelId::OsaSparse => PanelId::ClvVector,
             PanelId::ClvVector => PanelId::ResourceMonitor,
             PanelId::ResourceMonitor => PanelId::MetricsDashboard,
-            PanelId::MetricsDashboard => PanelId::Quest,
+            PanelId::MetricsDashboard => PanelId::Sysinfo,
+            PanelId::Sysinfo => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
     pub fn prev(&self) -> PanelId {
         match self {
-            PanelId::Quest => PanelId::MetricsDashboard,
+            PanelId::Quest => PanelId::Sysinfo,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
             PanelId::Memory => PanelId::Budget,
@@ -192,6 +201,7 @@ impl PanelId {
             PanelId::ClvVector => PanelId::OsaSparse,
             PanelId::ResourceMonitor => PanelId::ClvVector,
             PanelId::MetricsDashboard => PanelId::ResourceMonitor,
+            PanelId::Sysinfo => PanelId::MetricsDashboard,
         }
     }
 }
@@ -941,8 +951,10 @@ mod tests {
         assert_eq!(PanelId::ClvVector.next(), PanelId::ResourceMonitor);
         // 循环:ResourceMonitor → MetricsDashboard
         assert_eq!(PanelId::ResourceMonitor.next(), PanelId::MetricsDashboard);
-        // 循环:MetricsDashboard → Quest(Task 2.2 新增)
-        assert_eq!(PanelId::MetricsDashboard.next(), PanelId::Quest);
+        // 循环:MetricsDashboard → Sysinfo(Task 3.1 新增)
+        assert_eq!(PanelId::MetricsDashboard.next(), PanelId::Sysinfo);
+        // 循环:Sysinfo → Quest(Task 3.1 新增)
+        assert_eq!(PanelId::Sysinfo.next(), PanelId::Quest);
     }
 
     #[test]
@@ -967,13 +979,15 @@ mod tests {
         assert_eq!(PanelId::ResourceMonitor.prev(), PanelId::ClvVector);
         // Task 2.2:MetricsDashboard → ResourceMonitor
         assert_eq!(PanelId::MetricsDashboard.prev(), PanelId::ResourceMonitor);
-        // 循环:Quest → MetricsDashboard(不再是 Quest → ResourceMonitor)
-        assert_eq!(PanelId::Quest.prev(), PanelId::MetricsDashboard);
+        // 循环:Sysinfo → MetricsDashboard(Task 3.1 新增)
+        assert_eq!(PanelId::Sysinfo.prev(), PanelId::MetricsDashboard);
+        // 循环:Quest → Sysinfo(不再是 Quest → ResourceMonitor)
+        assert_eq!(PanelId::Quest.prev(), PanelId::Sysinfo);
     }
 
     #[test]
     fn test_panel_id_next_prev_roundtrip() {
-        // next 再 prev 应回到原面板(P8 扩展至 18 面板)
+        // next 再 prev 应回到原面板(P8 扩展至 19 面板)
         for panel in [
             PanelId::Quest,
             PanelId::Parliament,
@@ -993,6 +1007,7 @@ mod tests {
             PanelId::ClvVector,
             PanelId::ResourceMonitor,
             PanelId::MetricsDashboard,
+            PanelId::Sysinfo,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);

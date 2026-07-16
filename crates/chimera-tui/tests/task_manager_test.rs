@@ -9,6 +9,12 @@
 //! - `test_sort_by_priority_descending_default`:默认按优先级降序
 //! - `test_terminate_key_sends_quest_control_terminate`:T 键产生 Terminate 命令
 //!
+//! # Phase 4 P4.3 新增测试(RED 阶段)
+//! - `test_sort_by_status_groups_running_first`:Status 模式 Running 排第一
+//! - `test_sort_by_status_orders_by_quest_id_within_group`:Status 模式同组内按 quest_id 字典序
+//! - `test_sort_by_created_at_descending`:CreatedAt 模式最新任务在前
+//! - `test_cycle_sort_mode_key_s_advances_to_next`:S 键循环切换 sort_mode
+//!
 //! # 设计约束
 //! - RED 阶段全部测试应失败(因 `TuiCommand::QuestControl` / `TaskManagerPanel` 尚未实现)
 //! - 沿用既有 `Panel` trait + `TuiCommand` 模式,不破坏 17 面板 API
@@ -17,7 +23,7 @@
 #![forbid(unsafe_code)]
 
 use chimera_tui::panels::Panel;
-use chimera_tui::{PanelId, TaskManagerPanel, TuiCommand, TuiState};
+use chimera_tui::{PanelId, SortMode, TaskManagerPanel, TuiCommand, TuiState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 
@@ -30,6 +36,28 @@ fn sample_quest(id: &str, title: &str, priority: u8) -> Quest {
             task_id: format!("{id}-t1"),
             description: "test task".into(),
             status: TaskStatus::Pending,
+            dependencies: vec![],
+        }],
+        thinking_mode: ThinkingMode::Standard,
+        checkpoint_id: None,
+        priority,
+    }
+}
+
+/// 构造指定 ID、标题、优先级、任务状态的 Quest 样本(P4.3 Status 排序测试用)
+fn sample_quest_with_task_status(
+    id: &str,
+    title: &str,
+    priority: u8,
+    task_status: TaskStatus,
+) -> Quest {
+    Quest {
+        quest_id: id.into(),
+        title: title.into(),
+        tasks: vec![Task {
+            task_id: format!("{id}-t1"),
+            description: "test task".into(),
+            status: task_status,
             dependencies: vec![],
         }],
         thinking_mode: ThinkingMode::Standard,
@@ -111,10 +139,12 @@ fn test_priority_increment_within_bounds() {
     );
     // 期望:返回 None(上限已达)或返回 SetPriority(10)(已钳制)— 取决于实现
     // 但绝不应返回 SetPriority(11) 越界值
-    if let Some(TuiCommand::QuestControl { action, .. }) = &cmd_up {
-        if let chimera_tui::QuestAction::SetPriority(n) = action {
-            assert!(*n <= 10, "上限保护:priority 不应超过 10,got {n}");
-        }
+    if let Some(TuiCommand::QuestControl {
+        action: chimera_tui::QuestAction::SetPriority(n),
+        ..
+    }) = &cmd_up
+    {
+        assert!(*n <= 10, "上限保护:priority 不应超过 10,got {n}");
     }
 
     // 测试下限:priority=0 时 ↓ 不应产生命令
@@ -123,12 +153,13 @@ fn test_priority_increment_within_bounds() {
         KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE),
         &mut state,
     );
-    if let Some(TuiCommand::QuestControl { action, .. }) = &cmd_down {
-        if let chimera_tui::QuestAction::SetPriority(n) = action {
-            // 下限保护:priority 不应低于 0(u8 天然保证,但显式断言表达意图)
-            // 允许 SetPriority(0) 已钳制到边界
-            let _ = n; // u8 恒 ≥ 0,显式无操作保留意图注释
-        }
+    if let Some(TuiCommand::QuestControl {
+        action: chimera_tui::QuestAction::SetPriority(_),
+        ..
+    }) = &cmd_down
+    {
+        // 下限保护:priority 不应低于 0(u8 天然保证,但显式模式匹配表达意图)
+        // 允许 SetPriority(0) 已钳制到边界
     }
 }
 
@@ -194,4 +225,137 @@ fn test_task_manager_panel_does_not_break_panel_cycle() {
     ] {
         assert_eq!(panel.next().prev(), panel);
     }
+}
+
+// ============================================================
+// Phase 4 P4.3 TaskManagerPanel 3 模式排序 — RED 阶段测试
+// ============================================================
+
+/// P4.3 Task 1:Status 模式 Running 排第一
+///
+/// 验证当 `sort_mode = SortMode::Status` 时,Quest 列表按状态分组排序:
+/// Running(0) → Pending(1) → Failed(2) → Completed(3)。
+/// 同状态内按 quest_id 字典序升序(稳定排序)。
+#[test]
+fn test_sort_by_status_groups_running_first() {
+    // 构造 4 个不同状态的 Quest(顺序故意打乱)
+    let mut state = TuiState::new();
+    state.quest_list = vec![
+        sample_quest_with_task_status("q-completed", "Done", 5, TaskStatus::Completed),
+        sample_quest_with_task_status("q-pending", "Waiting", 8, TaskStatus::Pending),
+        sample_quest_with_task_status("q-running", "Active", 3, TaskStatus::Running),
+        sample_quest_with_task_status("q-other-pending", "Also Waiting", 6, TaskStatus::Pending),
+    ];
+    // 预期排序后顺序(按任务状态聚合分组):
+    // 1) q-running (任务 Running → Quest Running)
+    // 2-3) q-other-pending, q-pending (任务 Pending → Quest Pending,按 quest_id 字典序)
+    // 4) q-completed (任务 Completed → Quest Completed)
+    let panel = TaskManagerPanel::with_sort_mode(SortMode::Status);
+    let sorted: Vec<String> = panel
+        .sorted_with_mode(&state, SortMode::Status)
+        .iter()
+        .map(|q| q.quest_id.clone())
+        .collect();
+    let expected = vec!["q-running", "q-other-pending", "q-pending", "q-completed"];
+    assert_eq!(
+        sorted, expected,
+        "Status 模式排序错误,期望 {expected:?} 实际 {sorted:?}"
+    );
+}
+
+/// P4.3 Task 2:Status 模式同状态内按 quest_id 字典序
+///
+/// 验证同 TaskStatus 状态的 Quest 在 Status 模式下按 quest_id 字典序升序排列。
+#[test]
+fn test_sort_by_status_orders_by_quest_id_within_group() {
+    let mut state = TuiState::new();
+    state.quest_list = vec![
+        sample_quest_with_task_status("q-zeta", "Z", 5, TaskStatus::Pending),
+        sample_quest_with_task_status("q-alpha", "A", 5, TaskStatus::Pending),
+        sample_quest_with_task_status("q-mu", "M", 5, TaskStatus::Pending),
+    ];
+    let panel = TaskManagerPanel::with_sort_mode(SortMode::Status);
+    let sorted: Vec<String> = panel
+        .sorted_with_mode(&state, SortMode::Status)
+        .iter()
+        .map(|q| q.quest_id.clone())
+        .collect();
+    assert_eq!(
+        sorted,
+        vec!["q-alpha", "q-mu", "q-zeta"],
+        "Status 模式同组内应按 quest_id 字典序"
+    );
+}
+
+/// P4.3 Task 3:CreatedAt 模式最新任务在前
+///
+/// 验证 `sort_mode = SortMode::CreatedAt` 时,Quest 列表按面板首次观察时间降序。
+///
+/// WHY 用面板侧表(`TaskManagerPanel::note_first_observation`)而非 Quest 字段:
+/// 避免修改 nexus-core 域类型(95+ 构造点),L10 自治追踪"首次观察时间"
+/// 作为 TUI 上下文的创建时间代理。
+#[test]
+fn test_sort_by_created_at_descending() {
+    let mut state = TuiState::new();
+    state.quest_list = vec![
+        sample_quest("q-old", "Oldest", 5),
+        sample_quest("q-mid", "Middle", 5),
+        sample_quest("q-new", "Newest", 5),
+    ];
+    // 通过 note_first_observation 注入观察时间(测试用公开 API)
+    let mut panel = TaskManagerPanel::with_sort_mode(SortMode::CreatedAt);
+    panel.note_first_observation("q-old", chrono::Utc::now() - chrono::Duration::seconds(300));
+    panel.note_first_observation("q-mid", chrono::Utc::now() - chrono::Duration::seconds(150));
+    panel.note_first_observation("q-new", chrono::Utc::now() - chrono::Duration::seconds(10));
+
+    let sorted: Vec<String> = panel
+        .sorted_with_mode(&state, SortMode::CreatedAt)
+        .iter()
+        .map(|q| q.quest_id.clone())
+        .collect();
+    assert_eq!(
+        sorted,
+        vec!["q-new", "q-mid", "q-old"],
+        "CreatedAt 模式应按首次观察时间降序(最新在前)"
+    );
+}
+
+/// P4.3 Task 4:`S` 键循环切换 sort_mode
+///
+/// 验证用户在 TaskManagerPanel 焦点下按 `S` 键,sort_mode 字段
+/// 按 Priority → Status → CreatedAt → Priority 循环,
+/// 且不返回任何 TuiCommand(纯本地状态变更)。
+#[test]
+fn test_cycle_sort_mode_key_s_advances_to_next() {
+    let mut panel = TaskManagerPanel::new();
+    // 初始 sort_mode = Priority
+    assert_eq!(
+        panel.sort_mode(),
+        SortMode::Priority,
+        "默认 sort_mode 应为 Priority"
+    );
+
+    // 第 1 次按 S:Priority → Status
+    let cmd1 = panel.handle_key(
+        KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+        &mut TuiState::new(),
+    );
+    assert!(cmd1.is_none(), "S 键不应产生任何 TuiCommand");
+    assert_eq!(panel.sort_mode(), SortMode::Status);
+
+    // 第 2 次按 S:Status → CreatedAt
+    let cmd2 = panel.handle_key(
+        KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+        &mut TuiState::new(),
+    );
+    assert!(cmd2.is_none(), "S 键不应产生任何 TuiCommand");
+    assert_eq!(panel.sort_mode(), SortMode::CreatedAt);
+
+    // 第 3 次按 S:CreatedAt → Priority(循环回起点)
+    let cmd3 = panel.handle_key(
+        KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+        &mut TuiState::new(),
+    );
+    assert!(cmd3.is_none(), "S 键不应产生任何 TuiCommand");
+    assert_eq!(panel.sort_mode(), SortMode::Priority);
 }
