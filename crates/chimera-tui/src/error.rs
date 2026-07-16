@@ -46,6 +46,14 @@ pub enum TuiError {
         /// 配置错误详情
         detail: String,
     },
+
+    /// SQLite 持久化错误 — 指标历史存储的 I/O / SQL 错误
+    ///
+    /// WHY 独立变体:Task 2.3 引入 `MetricsHistory` SQLite 持久化后,
+    /// 需要在库层透传 rusqlite 错误(避免应用层 `anyhow` 入侵)。
+    /// 调用方可对 `SqliteError` 显式处理(例如忽略过期数据清理失败)。
+    #[error("sqlite error: {0}")]
+    SqliteError(String),
 }
 
 impl From<std::io::Error> for TuiError {

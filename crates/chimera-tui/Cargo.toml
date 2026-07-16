@@ -19,14 +19,22 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 # MessagePack 编码/解码,用于事件详情弹窗(P3.1)
 rmp-serde = { workspace = true }
+# 系统资源指标采集(CPU/内存/磁盘/网络)
+sysinfo = "0.32"
 # TUI 渲染与终端 IO
 ratatui = { workspace = true }
 crossterm = { workspace = true }
+# Task 2.3: 指标历史 SQLite 持久化(资源监控趋势图)
+# WHY rusqlite: 复合主键 (unix_ts, metric) + ON CONFLICT REPLACE 幂等写入
+# 是 SQLite 标准用法;bundled 模式不依赖系统 SQLite,跨平台一致
+rusqlite = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 # criterion:性能基准测试框架(P3.2 任务,§7.1 测试矩阵约定)
 criterion = { workspace = true }
+# Task 2.3: SQLite 历史持久化测试隔离(每个测试独占临时目录,避免污染)
+tempfile = { workspace = true }
 
 # P3.2 性能与压力验证:data_pipeline 测量快照生成延迟,render 测量 5 面板渲染帧时间。
 # harness = false:criterion 自带 main,关闭 libtest 默认 harness 避免冲突。
