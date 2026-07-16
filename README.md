@@ -1,71 +1,55 @@
 <p align="center">
-  <img src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=aether+climbing+a+spiral+staircase+toward+a+sparse%2C+evolving+cosmic+nexus+in+dark+teal+and+amber%2C+sleek+minimalist+style%2C+tech+startup+aesthetic%2C+no+text%2C+high+contrast%2C+wide+format+landscape&image_size=landscape_16_9" alt="NEXUS-OMEGA" width="100%">
+  <img src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=aether+climbing+a+spiral+staircase+toward+a+sparse%2C+evolving+cosmic+nexus+in+dark+teal+and+amber%2C+sleek+minimalist+style" alt="Chimera CLI Banner" width="760" />
 </p>
 
-<h1 align="center">Chimera CLI — Aether (NEXUS-OMEGA)</h1>
+<h1 align="center">Chimera CLI — NEXUS-OMEGA</h1>
 
 <p align="center">
-  <b>下一代 AI 编程智能体命令行工具</b><br>
-  从四次工业级"尸检"与五大前沿模型架构中诞生的<br>
-  免疫型 · 进化型 · 全维稀疏型 Agent 系统
-</p>
-
-<p align="center">
-  <a href="#-一键安装"><img src="https://img.shields.io/badge/Windows-install.ps1-0078D4?logo=windows&logoColor=white" alt="Windows"></a>
-  <a href="#-一键安装"><img src="https://img.shields.io/badge/Linux%2FmacOS-install.sh-FCC624?logo=linux&logoColor=black" alt="Linux/macOS"></a>
-  <a href="#-docker"><img src="https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
-  <a href="#-源码构建"><img src="https://img.shields.io/badge/Rust-1.82%2B-dea584?logo=rust&logoColor=white" alt="Rust"></a>
+  <a href="#-安装"><img src="https://img.shields.io/badge/Windows-install.ps1-0078D4?logo=windows&logoColor=white" alt="Windows"></a>
+  <a href="#-安装"><img src="https://img.shields.io/badge/Linux%2FmacOS-install.sh-FCC624?logo=linux&logoColor=black" alt="Linux/macOS"></a>
+  <a href="#-安装"><img src="https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
 </p>
 
 ---
 
-## 项目简介
+## 项目概述
 
-**Chimera CLI** — 代号 **NEXUS-OMEGA** (Omni-Model Engineering Generative Architecture)。基于 Rust 2021 + Tokio 异步运行时构建，遵循 **OMEGA 四定律**：
+**Chimera CLI**（代号 **NEXUS-OMEGA**）是一个面向 AI 编程的 Rust 命令行智能体工具，基于进化型与稀疏化 Agent 架构。
 
-| 定律 | 工程实现 | 说明 |
-|------|---------|------|
-| **Ω-Sparse** | 全维稀疏掩码(工具/上下文/记忆/审计/预算) | 按需激活，零浪费 |
-| **Ω-Compress** | 四级窗口 + 神经形态记忆 | 4K / 32K / 128K / 1M 分层上下文 |
-| **Ω-Evolve** | GRPO 风格进化 + DPO 偏好优化 | 运行时自适应 |
-| **Ω-Event** | 事件驱动架构 | Tokio broadcast 跨层解耦 |
+### OMEGA 四定律
 
-核心组件：Event Bus 跨层通信 · SecCore 零信任沙箱 · 三层语义路由 · 14 面板终端仪表盘 · Merkle 审计链 · 能力衰减引擎 · 34 crates · 10 层架构。
-
----
-
-## 📚 文档索引
-
-新成员请优先阅读以下文档：
-
-| 文档 | 路径 | 用途 |
-|------|------|------|
-| ⭐ **Code Wiki (权威源)** | [docs/architecture/CODE_WIKI.md](docs/architecture/CODE_WIKI.md) | **架构权威参考** — 34 crate索引、核心类型、事件系统、依赖铁律、设计模式、工程红线、构建指南 |
-| 架构文档索引 | [docs/architecture/INDEX.md](docs/architecture/INDEX.md) | 架构文档统一索引（7 分类导航） |
-| 项目规则 | [.trae/rules/nuxus规则.md](.trae/rules/nuxus规则.md) | 全局规则、架构硬约束、依赖铁律、async/SQLite/安全红线 |
-| 项目命令 | [.claude/CLAUDE.md](.claude/CLAUDE.md) | 环境设置、常用命令、CI/CD 与发布、本地限制 |
-| 版本演进史 | [CHANGELOG.md](CHANGELOG.md) | Week 1-8 验收记录 + v1.0.0-omega GA + 后续版本 |
+| 定律 | 价值 |
+|------|------|
+| **Ω-Sparse** | 全维稀疏掩码，按需激活工具/上下文/记忆/审计/预算 |
+| **Ω-Compress** | 四级分层窗口（4K/32K/128K/1M），智能记忆管理 |
+| **Ω-Evolve** | GRPO 风格运行时进化，DPO 偏好学习 |
+| **Ω-Event** | Tokio broadcast + mpsc 双通道事件驱动 |
 
 ---
 
-## 一键安装
+## 核心功能
 
-### Windows (PowerShell 5.1+)
+- **全维稀疏激活**：零资源浪费的按需能力调度
+- **分层上下文窗口**：动态适配任务复杂度的上下文管理
+- **运行时自适应进化**：无需重新训练的在线优化
+- **事件驱动架构**：跨层解耦的通信系统
+- **安全沙箱**：零信任执行环境，能力衰减机制
+- **TUI 仪表盘**：实时系统监控与交互界面
+
+
+## 🚀 安装
+
+### Windows (PowerShell)
 
 ```powershell
-# 一行命令，适用于 PS 5.1 / PS 7+
-$f="$env:TEMP\chimela-install.ps1";irm https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1 -OutFile $f;& $f;ri $f -Force
+& ([scriptblock]::Create((Invoke-RestMethod https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.ps1)))
 ```
 
-### Linux / macOS (Shell)
+### Linux / macOS
 
 ```bash
-# 一行命令
 curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh
-
-# 指定版本
-curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.sh | sh -s -- --version v1.7.0-omega
 ```
 
 ### Docker
@@ -75,86 +59,49 @@ docker pull ghcr.io/yoloccyt/chimera-cli:v1.7.0-omega
 docker run --rm ghcr.io/yoloccyt/chimera-cli:v1.7.0-omega --version
 ```
 
-### 验证安装
+### 源码构建
 
 ```bash
-chimera --version   # 期望输出: chimera 1.7.0-omega
-chimela --version   # 期望输出: chimera 1.7.0-omega (兼容别名)
-aether --version    # 期望输出: chimera 1.7.0-omega (内部编码名)
-```
-
----
-
-## 基本使用
-
-```bash
-# 查看帮助
-chimera --help
-
-# 知识库检索
-chimera wiki "查询关键词"
-
-# 生成代码
-chimera generate "任务描述"
-
-# 启动 TUI 仪表盘 (14 面板实时监控)
-chimera tui
-# 或直接输入 chimera (无参数默认启动 TUI)
-chimera
-
-# 配置管理
-chimera config init     # 初始化配置 ~/.chimera/omega.yaml
-chimera config show     # 查看当前配置
-```
-
----
-
-## 平台支持
-
-| 平台 | 架构 | 安装方式 |
-|------|------|---------|
-| Windows 10/11 | x86_64 | install.ps1 / Scoop |
-| Linux | x86_64 / aarch64 | install.sh |
-| macOS | x86_64 / Apple Silicon | install.sh / Homebrew |
-| Docker | 多架构 (distroless) | `docker pull ghcr.io/...` |
-
----
-
-## 源码构建
-
-```bash
-# 前置条件: Rust 1.82+、MinGW-w64 GCC (Windows)
 git clone https://github.com/Yoloccyt/Chimera-CLI-.git
 cd Chimera-CLI-
-
-# Release 构建
 cargo build --release -p chimera-cli
+./target/release/chimera --version
+```
 
-# 运行
-./target/release/aether --version
+> **环境要求与配置**：详见 [CODE_WIKI.md](docs/architecture/CODE_WIKI.md) §10
+
+---
+
+## ⚡ 快速开始
+
+> **命令别名**：`chimela`、`chimera`、`aether` 三者功能相同，可互换使用。
+
+```bash
+chimera --help          # 帮助
+chimera                 # 启动 TUI 界面
+chimera wiki "关键词"    # 知识库查询
+chimera generate "任务"  # 代码生成
+chimera config init     # 初始化配置
 ```
 
 ---
 
-## 开发状态
+## 开发与构建
 
-| 维度 | 状态 |
-|------|------|
-| 架构 | 10 层 · 34 crates · 129k+ 行 Rust |
-| 测试 | 1142 单元测试 + 44 proptest + 26 benchmarks |
-| 安全 | OWASP A01-A10 全覆盖 · `#![forbid(unsafe_code)]` |
-| CI/CD | 8 条流水线 · 5 平台自动发布 · Docker distroless |
-| 许可证 | MIT |
+```bash
+cargo check --workspace              # 类型检查
+cargo build --release -p chimera-cli # 构建
+cargo test --workspace               # 测试
+cargo clippy --all-targets -- -D warnings  # Lint
+cargo fmt --all                      # 格式化
+```
+
 
 ---
 
-## 版本号规则
+## 📄 许可证
 
-| 标签 | 语义 |
-|------|------|
-| `v1.7.0-omega` | 正式发布 |
-| `v1.7.1-omega` | Bug 修复 |
-| `v2.0.0-omega` | Breaking Change |
+MIT License — [LICENSE](LICENSE)
 
 ---
 
