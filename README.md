@@ -5,9 +5,8 @@
 <h1 align="center">Chimera CLI — Aether (NEXUS-OMEGA)</h1>
 
 <p align="center">
-  <b>下一代 AI 编程智能体命令行工具</b><br>
-  从四次工业级"尸检"与五大前沿模型架构中诞生的<br>
-  免疫型 · 进化型 · 全维稀疏型 Agent 系统
+  <b> AI 编程智能体命令行工具</b><br><br>
+  进化型 · 稀疏型 Agent 系统
 </p>
 
 <p align="center">
