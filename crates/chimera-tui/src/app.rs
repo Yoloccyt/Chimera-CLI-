@@ -24,7 +24,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
@@ -40,8 +40,9 @@ use crate::data::{DataSnapshot, StubDataSource, TuiDataSource};
 use crate::error::TuiError;
 use crate::focus::FocusManager;
 use crate::panels::{
-    BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
-    McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, SecurityPanel,
+    BudgetPanel, ChtcPanel, ClvVectorPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel,
+    LogPanel, McpNodesPanel, MemoryPanel, MetricsDashboardPanel, Panel, ParliamentPanel,
+    QuestPanel, ResourceMonitorPanel, RouterPanel, SecurityPanel,
 };
 use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, LayoutMode, PanelId, TuiCommand, TuiState};
@@ -131,11 +132,13 @@ impl TuiApp {
         data_source: Box<dyn TuiDataSource>,
     ) -> Result<Self, TuiError> {
         config.validate()?;
-        // P2 TUI v1.7-omega:注册 13 个面板(8 原始 + 5 新增监控面板)。
+        // P8 TUI v1.7-omega:注册 15 个面板(8 原始 + 7 新增面板)。
         // WHY 不含 Timeline:Timeline 面板由 P7 历史回放引擎(v1.8+)实现,
         // 当前 PanelId::Timeline 已定义但无对应 Panel 实现,故不注册。
-        // FocusManager 循环顺序:Quest → Parliament → ... → Help → Decay
-        // → EventStream → Router → McpNodes → Chtc → Quest(13 面板循环)。
+        // FocusManager 循环顺序:Quest → Parliament → ... → Chtc → ClvVector
+        // → ResourceMonitor → MetricsDashboard → Quest(16 面板循环)。
+        // WHY MetricsDashboard 加入主循环:与 ResourceMonitorPanel 同属
+        // 监控类展示面板,默认进入主循环便于用户 Tab 键直接访问。
         let panels: Vec<Box<dyn Panel>> = vec![
             Box::new(QuestPanel::new()),
             Box::new(ParliamentPanel::new()),
@@ -151,6 +154,11 @@ impl TuiApp {
             Box::new(RouterPanel::new()),
             Box::new(McpNodesPanel::new()),
             Box::new(ChtcPanel::new()),
+            // P8 系统资源监控面板:CLV 向量可视化 + 实时资源指标
+            Box::new(ClvVectorPanel::new()),
+            Box::new(ResourceMonitorPanel::new()),
+            // P9 指标仪表盘面板(Task 2.2):5×2 网格 + 可绑定数据源
+            Box::new(MetricsDashboardPanel::new()),
         ];
         let panel_ids: Vec<PanelId> = panels.iter().map(|p| p.id()).collect();
         let focus_manager = FocusManager::new(panel_ids);
@@ -241,6 +249,9 @@ impl TuiApp {
                 self.state.mcp_nodes = snapshot.mcp_nodes;
                 self.state.chtc_state = snapshot.chtc_state;
                 self.state.decay_history = snapshot.decay_history;
+                // P8 ResourceMonitor 面板字段同步:DataSnapshot → TuiState
+                self.state.sys_metrics = snapshot.sys_metrics.clone();
+                self.state.sys_metrics_history = snapshot.sys_metrics_history.clone();
             }
             Err(e) => {
                 // M1 清理项 #4:数据源失败时向用户展示状态栏警告,而非静默忽略。
@@ -315,6 +326,14 @@ impl TuiApp {
         }
         if self.state.chtc_state != snapshot.chtc_state {
             self.state.mark_dirty(PanelId::Chtc);
+        }
+        // P8:系统资源指标变化时标记 ResourceMonitor 面板 dirty,
+        // 同时标记 Health 面板(Health 面板也展示系统资源摘要)
+        if self.state.sys_metrics != snapshot.sys_metrics
+            || self.state.sys_metrics_history != snapshot.sys_metrics_history
+        {
+            self.state.mark_dirty(PanelId::ResourceMonitor);
+            self.state.mark_dirty(PanelId::Health);
         }
     }
 
@@ -398,6 +417,8 @@ impl TuiApp {
                 KeyCode::Char('3') => self.switch_panel_to(PanelId::McpNodes),
                 KeyCode::Char('4') => self.switch_panel_to(PanelId::Chtc),
                 KeyCode::Char('5') => self.switch_panel_to(PanelId::Timeline),
+                // P8:g+6 跳转到 ResourceMonitor 面板(系统资源实时监控)
+                KeyCode::Char('6') => self.switch_panel_to(PanelId::ResourceMonitor),
                 KeyCode::Char('g') => {
                     // gg:调用当前面板 scroll_to_top(与 vim 一致)
                     let focused = self.focus_manager.focused();
@@ -547,6 +568,18 @@ impl TuiApp {
             self.publish_resume(quest_id);
         } else if let Some(quest_id) = cmd.strip_prefix("cancel:") {
             self.publish_cancel_request(quest_id);
+        } else if let Some(ids_str) = cmd.strip_prefix("batch_pause:") {
+            // 批量暂停:遍历逗号分隔的 quest_id 列表,逐个发布暂停请求
+            for quest_id in ids_str.split(',') {
+                self.publish_pause(quest_id);
+            }
+        } else if let Some(ids_str) = cmd.strip_prefix("batch_cancel:") {
+            // 批量取消:遍历逗号分隔的 quest_id 列表,逐个发布取消请求
+            // WHY 逐条发布而非单事件:event-bus 的 QuestCancelRequested 事件
+            // 语义为单个 Quest 的取消,保持契约一致。
+            for quest_id in ids_str.split(',') {
+                self.publish_cancel_request(quest_id);
+            }
         } else if let Some(rest) = cmd.strip_prefix("vote:") {
             let mut parts = rest.splitn(2, ':');
             let vote_str = parts.next().unwrap_or("");
@@ -756,6 +789,52 @@ impl TuiApp {
                     Severity::Info,
                 );
             }
+            // M3-2 TaskManagerPanel:Quest 控制命令的桥接层
+            //
+            // WHY 在此桥接:TaskManagerPanel 是 L10 用户面,使用 0-10 优先级范围
+            // (spec 用户面友好);底层 event-bus 沿用 0-255 内部范围(Quest.priority)。
+            // 桥接公式:`priority_255 = priority_10 * 25` (0→0, 10→250),
+            // 保留两端极值,中段略稀疏,符合"用户面稀疏、内部精细"的直觉。
+            //
+            // WHY Pause/Resume/Terminate 走确认弹窗:沿用既有
+            // `RequestQuestPause` 的二次确认 UX(Week 7 M4 教训);
+            // 破坏性动作(Terminate)与 Pause/Resume 一致走 Confirm,避免误触。
+            // SetPriority 直接发布(非破坏性,可逆),与既有
+            // `RequestQuestPriorityChange` 行为对齐。
+            TuiCommand::QuestControl { id, action } => {
+                use crate::types::QuestAction;
+                match action {
+                    QuestAction::Pause => {
+                        self.state.popup_stack.push(PopupKind::control_confirm(
+                            "Pause quest",
+                            &id,
+                            format!("pause:{id}"),
+                        ));
+                    }
+                    QuestAction::Resume => {
+                        self.state.popup_stack.push(PopupKind::control_confirm(
+                            "Resume quest",
+                            &id,
+                            format!("resume:{id}"),
+                        ));
+                    }
+                    QuestAction::Terminate => {
+                        self.state.popup_stack.push(PopupKind::control_confirm(
+                            "Terminate quest",
+                            &id,
+                            format!("terminate:{id}"),
+                        ));
+                    }
+                    QuestAction::SetPriority(level) => {
+                        // 用户面 [0, 10] → 内部 [0, 250] 线性映射
+                        // 边界已在 TaskManagerPanel 钳制,此处仍做 defensive saturate
+                        // 防止未来调用方传入越界值
+                        let level = level.min(10);
+                        let new_priority = (level as u16 * 25).min(u8::MAX as u16) as u8;
+                        self.publish_priority_change(&id, new_priority);
+                    }
+                }
+            }
         }
     }
 
@@ -803,8 +882,17 @@ impl TuiApp {
         if self.state.input_mode != InputMode::Normal {
             self.command_palette
                 .render(&self.state, chunks[2], frame.buffer_mut());
-        } else if self.state.layout_mode != LayoutMode::SinglePane {
-            self.render_status_bar(frame, chunks[2]);
+        } else if self.state.layout_mode == LayoutMode::SinglePane {
+            // SinglePane:只渲染 hint_bar(快捷提示),不渲染 status_bar
+            self.render_hint_bar(frame, chunks[2]);
+        } else {
+            // DualPane/TriplePane:将 bottom 区域拆分为 status_bar + hint_bar 双行
+            let bottom_split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Length(1)])
+                .split(chunks[2]);
+            self.render_status_bar(frame, bottom_split[0]);
+            self.render_hint_bar(frame, bottom_split[1]);
         }
 
         // 弹窗叠加在最上层
@@ -842,7 +930,8 @@ impl TuiApp {
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Percentage((self.main_panel_ratio * 100.0) as u16),
-                        Constraint::Min(3),
+                        // 双行状态栏(状态行 + 快捷提示行)至少占 4 行
+                        Constraint::Min(4),
                     ])
                     .split(tab_and_rest[1]);
 
@@ -861,7 +950,11 @@ impl TuiApp {
                 let triple_ratio = (self.main_panel_ratio * 0.7 * 100.0) as u16;
                 let main_and_bottom = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(triple_ratio), Constraint::Min(3)])
+                    .constraints([
+                        Constraint::Percentage(triple_ratio),
+                        // 双行状态栏(状态行 + 快捷提示行)至少占 4 行
+                        Constraint::Min(4),
+                    ])
                     .split(tab_and_rest[1]);
 
                 [tab_and_rest[0], main_and_bottom[0], main_and_bottom[1]]
@@ -955,6 +1048,17 @@ impl TuiApp {
         );
         let line = Line::from(span);
         let paragraph = Paragraph::new(line);
+        frame.render_widget(paragraph, area);
+    }
+
+    /// 渲染键盘快捷提示栏
+    ///
+    /// WHY 独立方法:用户首次使用 TUI 时不知道有哪些快捷键,
+    /// 底部提示栏可降低学习曲线,同时不会挤占状态信息空间。
+    fn render_hint_bar(&self, frame: &mut Frame<'_>, area: ratatui::layout::Rect) {
+        let hints = " q:Quit  Tab:Next  /:Search  ::Cmd  ?:Help  t:Theme  l:Layout  g+1-6:Panel ";
+        let span = Span::styled(hints, Style::default().fg(Color::DarkGray));
+        let paragraph = Paragraph::new(Line::from(span)).alignment(Alignment::Right);
         frame.render_widget(paragraph, area);
     }
 
@@ -1247,9 +1351,9 @@ mod tests {
     fn test_switch_panel_prev() {
         let mut app = make_app();
         app.switch_panel_prev();
-        // P2 TUI v1.7-omega:FocusManager 现注册 13 面板(8 原始 + 5 新增,
-        // 不含 Timeline),Quest.prev() 跳到列表末尾的 Chtc 面板。
-        assert_eq!(app.current_panel(), PanelId::Chtc);
+        // P9:FocusManager 现注册 16 面板(8 原始 + 8 新增,不含 Timeline),
+        // Quest.prev() 跳到列表末尾的 MetricsDashboard 面板。
+        assert_eq!(app.current_panel(), PanelId::MetricsDashboard);
     }
 
     #[test]
@@ -2017,9 +2121,9 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
 
-        // P2 TUI v1.7-omega:标签栏宽度 80,13 个面板(8 原始 + 5 新增),
-        // 每个标签约 6 列。点击第 2 个标签(Parliament)需落在 column 6-11 范围内。
-        // WHY column=8:避开标签边界(6/12),确保命中 Parliament 标签内部。
+        // P9:标签栏宽度 80,16 个面板(8 原始 + 8 新增,MetricsDashboard 加入循环),
+        // 每个标签约 4-5 列。点击第 2 个标签(Parliament)需落在 column 5-10 范围内。
+        // WHY column=8:避开标签边界(5/10),确保命中 Parliament 标签内部。
         app.handle_mouse_event(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 8,

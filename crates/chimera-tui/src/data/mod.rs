@@ -10,6 +10,10 @@
 //! - `DataSnapshot` 使用本地 `BudgetMetrics` 而非直接暴露 L9 指标类型,
 //!   避免跨层泄漏。
 //!
+//! # 子模块
+//! - `resource_history`:ResourceMonitorPanel 趋势图所需的滑动窗口时间序列
+//!   与中位数滤波组件(见 enterprise-tui-monitoring-task-viz §二)。
+//!
 //! # 消费的事件变体
 //!
 //! `DataPipeline` 直接消费 `event-bus` 中已有的以下 `NexusEvent` 变体:
@@ -23,14 +27,18 @@
 //! - `SlowConsumerDropped` / `McpMeshTransactionCompleted`:更新 Health 面板指标。
 //! - 其余事件进入 `latest_events` 日志流,供 Log 面板展示。
 
+pub mod metrics_history;
+pub mod resource_history;
 use crate::error::TuiError;
 use crate::subscriber::EventSubscriber;
+use crate::types::{CpuMetrics, DiskMetrics, MemMetrics, NetworkMetrics, SystemMetrics};
 use chrono::{DateTime, Utc};
 use event_bus::{EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 
@@ -106,6 +114,11 @@ pub struct DataSnapshot {
     pub osa_sparsity_history: Vec<u64>,
     /// CLV 摘要(None = 未收到事件)
     pub clv_summary: Option<event_bus::ClvSummary>,
+    // === P8 ResourceMonitor 面板新增字段 ===
+    /// 系统资源指标(由 SysMetricsCollector 采集)
+    pub sys_metrics: crate::types::SystemMetrics,
+    /// 系统资源指标历史(sparkline 数据)
+    pub sys_metrics_history: Vec<u64>,
 }
 
 /// 预算指标 — TUI Budget 面板的轻量级本地视图
@@ -1162,6 +1175,148 @@ impl ClvSync {
     }
 }
 
+// ============================================================
+// P8 系统资源指标采集器 — SysMetricsCollector
+// ============================================================
+//
+// 通过 sysinfo 采集 OS 级 CPU/内存/磁盘/网络指标。
+// 发布者:DataPipeline 每个 tick 调用 refresh_and_snapshot()。
+// 消费:L10 TUI ResourceMonitor / Health 面板。
+
+/// 系统资源指标采集器 — 通过 sysinfo 采集 OS 级 CPU/内存/磁盘/网络指标
+///
+/// 发布者:DataPipeline 每个 tick 调用 refresh_and_snapshot()。
+/// 消费:L10 TUI ResourceMonitor / Health 面板。
+///
+/// # 实现说明
+/// - CPU 使用率基于两次 refresh 之间的差值计算(sysinfo 的 CPU usage 需要
+///   至少两次采样才能计算差值)
+/// - 首次调用返回全零(无历史基准),后续调用返回实际差值
+/// - 网络速率基于两次采样的累计值差值与时间间隔计算
+/// - 磁盘 I/O 速率在 sysinfo 0.32 中不可用(Disk 无 usage() 方法),设为 0
+pub struct SysMetricsCollector {
+    /// sysinfo 系统实例(持有以复用内部缓存)
+    system: sysinfo::System,
+    /// 上次采样时间(用于计算速率)
+    last_sample_time: Instant,
+    /// 上次累计接收字节(网络)
+    last_rx_bytes: u64,
+    /// 上次累计发送字节(网络)
+    last_tx_bytes: u64,
+}
+
+impl SysMetricsCollector {
+    /// 创建新的系统资源采集器
+    pub fn new() -> Self {
+        // WHY 先 refresh_all 再采样:sysinfo 需要初始基准值才能计算 CPU 差值
+        let mut system = sysinfo::System::new_all();
+        system.refresh_all();
+        // 在初始刷新后获取网络累计值作为基准
+        let networks = sysinfo::Networks::new_with_refreshed_list();
+        let total_rx: u64 = networks.values().map(|n| n.total_received()).sum();
+        let total_tx: u64 = networks.values().map(|n| n.total_transmitted()).sum();
+
+        Self {
+            system,
+            last_sample_time: Instant::now(),
+            last_rx_bytes: total_rx,
+            last_tx_bytes: total_tx,
+        }
+    }
+
+    /// 刷新系统指标并返回快照
+    ///
+    /// 每个 DataPipeline tick 调用一次。首次调用后即可获得非零 CPU 值
+    /// (构造时已做初始刷新)。
+    pub fn refresh_and_snapshot(&mut self) -> SystemMetrics {
+        // 刷新 CPU 和内存
+        self.system.refresh_cpu_all();
+        self.system.refresh_memory();
+
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_sample_time);
+        let elapsed_secs = elapsed.as_secs_f64();
+        self.last_sample_time = now;
+
+        // --- CPU ---
+        let cpu_count = self.system.cpus().len();
+        let per_core: Vec<f32> = self
+            .system
+            .cpus()
+            .iter()
+            .map(|cpu| cpu.cpu_usage())
+            .collect();
+        let global_usage = if !per_core.is_empty() {
+            per_core.iter().sum::<f32>() / per_core.len() as f32
+        } else {
+            0.0
+        };
+        let cpu = CpuMetrics {
+            global_usage,
+            per_core_usage: per_core,
+            core_count: cpu_count,
+        };
+
+        // --- 内存 ---
+        let total_mem = self.system.total_memory();
+        let used_mem = self.system.used_memory();
+        let available_mem = self.system.available_memory();
+        let usage_percent = if total_mem > 0 {
+            (used_mem as f32 / total_mem as f32) * 100.0
+        } else {
+            0.0
+        };
+        let swap_total = self.system.total_swap();
+        let swap_used = self.system.used_swap();
+        let memory = MemMetrics {
+            total_bytes: total_mem,
+            used_bytes: used_mem,
+            available_bytes: available_mem,
+            usage_percent,
+            swap_total_bytes: swap_total,
+            swap_used_bytes: swap_used,
+        };
+
+        // --- 磁盘 ---
+        // NOTE: sysinfo 0.32 Disk 无 usage() 方法,磁盘 I/O 速率不可用。
+        // 当升级到 sysinfo >= 0.34 后可通过 Disk::usage() 采集读写字节。
+        let disk = DiskMetrics::default();
+
+        // --- 网络 ---
+        let networks = sysinfo::Networks::new_with_refreshed_list();
+        let current_rx: u64 = networks.values().map(|n| n.total_received()).sum();
+        let current_tx: u64 = networks.values().map(|n| n.total_transmitted()).sum();
+        let (rx_rate, tx_rate) = if elapsed_secs > 0.0 {
+            let rx = ((current_rx.saturating_sub(self.last_rx_bytes)) as f64 / elapsed_secs) as u64;
+            let tx = ((current_tx.saturating_sub(self.last_tx_bytes)) as f64 / elapsed_secs) as u64;
+            (rx, tx)
+        } else {
+            (0, 0)
+        };
+        self.last_rx_bytes = current_rx;
+        self.last_tx_bytes = current_tx;
+        let network = NetworkMetrics {
+            rx_bytes_per_sec: rx_rate,
+            tx_bytes_per_sec: tx_rate,
+            total_rx_bytes: current_rx,
+            total_tx_bytes: current_tx,
+        };
+
+        SystemMetrics {
+            cpu,
+            memory,
+            disk,
+            network,
+        }
+    }
+}
+
+impl Default for SysMetricsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 内存桩数据源 — 返回包含示例 Quest 与 Budget 数据的快照
 ///
 /// WHY: TUI 默认启动时不强制要求真实 event-bus 连接；提供一个无依赖的
@@ -1414,6 +1569,14 @@ impl DataPipeline {
             // P7 新增同步器:OsaSparse / ClvVector 面板数据接入
             let mut osa_sync = OsaSync::new();
             let mut clv_sync = ClvSync::new();
+            // P8:系统资源采集器,延迟到第一次 tick 时初始化
+            // WHY 延迟初始化: SysMetricsCollector::new() 调用
+            // sysinfo::System::new_all() + refresh_all() 是同步阻塞操作
+            // (Windows 上可能耗时 100ms-500ms)。在 spawn 任务启动时同步执行会阻塞
+            // current_thread runtime(如 #[tokio::test] 默认),导致 EventSubscriber
+            // 无法及时将事件转发到 buffer。延迟到第一次 tick 之后,让 interval.tick()
+            // 的 await 点先让出控制权给 EventSubscriber 运行,减少启动阻塞。
+            let mut sys_collector: Option<SysMetricsCollector> = None;
             let mut latest_events: VecDeque<NexusEvent> = VecDeque::new();
 
             // Sparkline 历史缓存
@@ -1421,6 +1584,8 @@ impl DataPipeline {
             let mut memory_history: Vec<u64> = Vec::with_capacity(max_history_len);
             let mut event_rate_history: Vec<u64> = Vec::with_capacity(max_history_len);
             let mut decay_history: Vec<u64> = Vec::with_capacity(max_history_len);
+            // P8:系统资源指标历史(sparkline 数据,CPU 使用率 × 10 的 u64 表示)
+            let mut sys_metrics_history: Vec<u64> = Vec::with_capacity(max_history_len);
 
             // P7:Timeline 快照状态(周期生成,非事件驱动)
             // - timeline_snapshots:历史快照列表(FIFO max_snapshots 容量)
@@ -1531,6 +1696,16 @@ impl DataPipeline {
                     max_history_len,
                 );
 
+                // P8:延迟初始化系统资源采集器(首次 tick 时)
+                let sys_collector = sys_collector.get_or_insert_with(SysMetricsCollector::new);
+                // P8:采集系统资源指标并维护 sparkline 历史
+                let sys_metrics = sys_collector.refresh_and_snapshot();
+                push_history(
+                    &mut sys_metrics_history,
+                    (sys_metrics.cpu.global_usage * 10.0) as u64,
+                    max_history_len,
+                );
+
                 // 提前 truncate quest_list,供健康评分积压因子与快照共用
                 let quest_list = truncate_quests(quest_sync.quests(), max_quest_list_size);
                 let paused_quest_count = quest_sync.paused_quest_count();
@@ -1601,6 +1776,9 @@ impl DataPipeline {
                     osa_context_mask: osa_sync.context_mask(),
                     osa_sparsity_history: osa_sync.sparsity_history(),
                     clv_summary: clv_sync.summary(),
+                    // P8:系统资源指标(由 SysMetricsCollector 实时采集)
+                    sys_metrics,
+                    sys_metrics_history: sys_metrics_history.clone(),
                 };
                 let mut guard = snapshot_clone.lock().unwrap_or_else(|poisoned| {
                     tracing::warn!(

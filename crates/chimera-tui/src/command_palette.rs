@@ -105,7 +105,7 @@ impl CommandPalette {
     /// 解析命令字符串
     ///
     /// 支持的命令(冒号可省略,因为进入命令模式时已输入冒号):
-    /// - `quest`/`parliament`/`budget`/`memory`/`security`/`health`/`log`/`help`:切换面板
+    /// - `quest`/`parliament`/`budget`/`memory`/`security`/`health`/`log`/`help`/`monitor`:切换面板
     /// - `quit`:退出应用
     /// - `find <keyword>`:设置关键字过滤器
     /// - `filter <topic>`:设置主题过滤器
@@ -127,6 +127,7 @@ impl CommandPalette {
             "health" => return Some(TuiCommand::SwitchPanel(PanelId::Health)),
             "log" => return Some(TuiCommand::SwitchPanel(PanelId::Log)),
             "help" => return Some(TuiCommand::SwitchPanel(PanelId::Help)),
+            "monitor" => return Some(TuiCommand::SwitchPanel(PanelId::ResourceMonitor)),
             "quit" => return Some(TuiCommand::Quit),
             "refresh" => return Some(TuiCommand::RequestRefresh),
             _ => {}

@@ -16,18 +16,31 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::panels::Panel;
 use crate::render::{self, FOOTER_TEXT};
-use crate::types::{PanelId, TuiCommand, TuiState};
+use crate::types::{PanelId, SystemMetrics, TuiCommand, TuiState};
 
 /// Health 面板
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub struct HealthPanel;
+#[derive(Debug, Clone)]
+pub struct HealthPanel {
+    /// 上一 tick 的系统指标，用于计算趋势箭头
+    last_sys_metrics: SystemMetrics,
+}
 
 impl HealthPanel {
     /// 创建新的 Health 面板
     pub fn new() -> Self {
-        Self
+        Self {
+            last_sys_metrics: SystemMetrics::default(),
+        }
     }
+}
 
+impl Default for HealthPanel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HealthPanel {
     /// 根据健康评分返回阈值颜色
     ///
     /// WHY 提取辅助函数:消除 `info_text` 与 `render` 中重复的分段阈值逻辑,
@@ -39,6 +52,39 @@ impl HealthPanel {
             Color::Yellow
         } else {
             Color::Red
+        }
+    }
+
+    /// 计算趋势箭头 — 与上一 tick 的值比较
+    ///
+    /// ↑ 上升（资源压力增大），↓ 下降（资源压力减小），→ 持平（变化 < 5%）
+    fn trend_arrow(current: f32, previous: f32) -> &'static str {
+        if previous == 0.0 {
+            return "→"; // 首次采样
+        }
+        let change = (current - previous).abs();
+        let pct = if previous > 0.0 {
+            change / previous
+        } else {
+            1.0
+        };
+        if pct < 0.05 {
+            "→"
+        } else if current > previous {
+            "↑"
+        } else {
+            "↓"
+        }
+    }
+
+    /// 阈值着色 — 根据值与阈值决定颜色
+    fn threshold_color(value: f32, warn: f32, crit: f32) -> Color {
+        if value >= crit {
+            Color::Red
+        } else if value >= warn {
+            Color::Yellow
+        } else {
+            Color::Green
         }
     }
 
@@ -100,6 +146,82 @@ impl HealthPanel {
         ];
         Text::from(lines)
     }
+
+    /// 渲染系统资源摘要行 — CPU/RAM/Disk/Net 趋势 + 颜色
+    fn render_sys_summary(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        let sys = &state.sys_metrics;
+        let last = &self.last_sys_metrics;
+
+        // 构造各段 Span
+        let mut spans: Vec<Span<'static>> = Vec::new();
+
+        // CPU: global_usage + 趋势箭头
+        {
+            let trend = Self::trend_arrow(sys.cpu.global_usage, last.cpu.global_usage);
+            let color = Self::threshold_color(sys.cpu.global_usage, 60.0, 80.0);
+            spans.push(Span::styled(
+                format!("CPU {:.0}%{}", sys.cpu.global_usage, trend),
+                Style::default().fg(color),
+            ));
+        }
+
+        // RAM: used/total GB + 趋势箭头
+        {
+            let ram_used_gb = sys.memory.used_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+            let ram_total_gb = sys.memory.total_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+            let trend = Self::trend_arrow(sys.memory.usage_percent, last.memory.usage_percent);
+            let color = Self::threshold_color(sys.memory.usage_percent, 70.0, 90.0);
+            spans.push(Span::styled(
+                format!("RAM {:.1}/{:.1} GB{}", ram_used_gb, ram_total_gb, trend),
+                Style::default().fg(color),
+            ));
+        }
+
+        // Disk: 读写 MB/s
+        {
+            let disk_r_mb = sys.disk.read_bytes_per_sec as f64 / 1024.0 / 1024.0;
+            let disk_w_mb = sys.disk.write_bytes_per_sec as f64 / 1024.0 / 1024.0;
+            let current_io = (sys.disk.read_bytes_per_sec + sys.disk.write_bytes_per_sec) as f32;
+            let last_io = (last.disk.read_bytes_per_sec + last.disk.write_bytes_per_sec) as f32;
+            let trend = Self::trend_arrow(current_io, last_io);
+            spans.push(Span::styled(
+                format!("Disk R{:.1} W{:.1} MB/s{}", disk_r_mb, disk_w_mb, trend),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+
+        // Net: ↓RX ↑TX MB/s
+        {
+            let net_rx_mb = sys.network.rx_bytes_per_sec as f64 / 1024.0 / 1024.0;
+            let net_tx_mb = sys.network.tx_bytes_per_sec as f64 / 1024.0 / 1024.0;
+            let trend = Self::trend_arrow(
+                sys.network.rx_bytes_per_sec as f32,
+                last.network.rx_bytes_per_sec as f32,
+            );
+            spans.push(Span::styled(
+                format!("Net ↓{:.1} ↑{:.1} MB/s{}", net_rx_mb, net_tx_mb, trend),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+
+        // 用 " | " 拼接:构建含分隔符的 Line
+        let mut line_spans: Vec<Span<'static>> = Vec::with_capacity(spans.len() * 2);
+        for (i, span) in spans.into_iter().enumerate() {
+            if i > 0 {
+                line_spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+            }
+            line_spans.push(span);
+        }
+        let line = Line::from(line_spans);
+        let summary = Paragraph::new(line)
+            .style(Style::default())
+            .alignment(ratatui::layout::Alignment::Center);
+
+        summary.render(area, buf);
+
+        // 更新上一 tick 缓存
+        self.last_sys_metrics = state.sys_metrics.clone();
+    }
 }
 
 impl Panel for HealthPanel {
@@ -147,6 +269,13 @@ impl Panel for HealthPanel {
         let sparkline =
             render::sparkline(&state.event_rate_history, "Event Rate History", Color::Cyan);
         sparkline.render(right_chunks[1], buf);
+
+        // 底部系统资源摘要行
+        if inner.height > 2 {
+            let summary_y = inner.bottom().saturating_sub(1);
+            let summary_area = Rect::new(inner.x, summary_y, inner.width, 1);
+            self.render_sys_summary(state, summary_area, buf);
+        }
     }
 
     fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {

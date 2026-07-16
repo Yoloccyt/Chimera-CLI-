@@ -27,11 +27,14 @@ pub(crate) mod list_state;
 pub mod log;
 pub mod mcp_nodes;
 pub mod memory;
+pub mod metrics_dashboard;
 pub mod osa_sparse;
 pub mod parliament;
 pub mod quest;
+pub mod resource_monitor;
 pub mod router;
 pub mod security;
+pub mod task_manager;
 pub mod timeline;
 
 pub use budget::BudgetPanel;
@@ -44,11 +47,14 @@ pub use help::HelpPanel;
 pub use log::LogPanel;
 pub use mcp_nodes::McpNodesPanel;
 pub use memory::MemoryPanel;
+pub use metrics_dashboard::MetricsDashboardPanel;
 pub use osa_sparse::OsaSparsePanel;
 pub use parliament::ParliamentPanel;
 pub use quest::QuestPanel;
+pub use resource_monitor::ResourceMonitorPanel;
 pub use router::RouterPanel;
 pub use security::SecurityPanel;
+pub use task_manager::TaskManagerPanel;
 pub use timeline::TimelinePanel;
 
 /// 面板 trait — 所有 TUI 面板的统一接口

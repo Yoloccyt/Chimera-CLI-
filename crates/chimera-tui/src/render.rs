@@ -7,6 +7,8 @@
 //! - 辅助函数接收原始数值与主题色,返回可直接 `render` 的 widget,
 //!   保持面板代码聚焦于业务布局。
 
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Sparkline};
@@ -256,6 +258,220 @@ pub fn sparkline_dual(
         sparkline(data1, title, color1),
         sparkline(data2, &format!("{} (secondary)", title), color2),
     )
+}
+
+/// 渲染带阈值着色的 sparkline
+///
+/// 数据点超过 `warn_threshold` 时用黄色渲染,超过 `crit_threshold` 时用红色渲染,
+/// 正常范围用前景色渲染。
+///
+/// WHY:ResourceMonitor 面板需要一眼识别 CPU/内存是否进入危险区域,
+/// 单纯单色 sparkline 无法传达告警信息。
+///
+/// # 参数
+/// - `data`:数据点数组(u64,最大值决定每列高度)
+/// - `area`:渲染区域
+/// - `buf`:ratatui Buffer
+/// - `fg`:正常数据点颜色
+/// - `warn_threshold`:警告阈值(>=)
+/// - `crit_threshold`:危险阈值(>=)
+/// - `max_value`:数据上限(用于归一化条高度)
+pub fn sparkline_thresholded(
+    data: &[u64],
+    area: Rect,
+    buf: &mut Buffer,
+    fg: Color,
+    warn_threshold: u64,
+    crit_threshold: u64,
+    max_value: Option<u64>,
+) {
+    if data.is_empty() || area.width == 0 || area.height == 0 {
+        return;
+    }
+    let max = max_value.unwrap_or_else(|| data.iter().copied().max().unwrap_or(1).max(1));
+    let bar_width = area.width as usize / data.len().max(1);
+    if bar_width == 0 {
+        return;
+    }
+
+    let warn_color = Color::Yellow;
+    let crit_color = Color::Red;
+
+    for (i, &value) in data.iter().enumerate() {
+        let height = if max > 0 {
+            ((value as f64 / max as f64) * area.height as f64) as usize
+        } else {
+            0
+        };
+        let capped_height = height.min(area.height as usize);
+
+        let bar_color = if value >= crit_threshold {
+            crit_color
+        } else if value >= warn_threshold {
+            warn_color
+        } else {
+            fg
+        };
+
+        let x = area.x + (i * bar_width) as u16;
+        for bar_x in x..x.saturating_add(bar_width as u16).min(area.right()) {
+            for row in 0..capped_height {
+                let y = area.bottom().saturating_sub(1 + row as u16);
+                if let Some(cell) = buf.cell_mut((bar_x, y)) {
+                    cell.set_char('▀');
+                    cell.set_fg(bar_color);
+                }
+            }
+        }
+    }
+}
+
+/// 渲染双色 sparkline(两条数据线在同一区域,不同颜色)
+///
+/// 与 `sparkline_dual` 的区别:用 `fg1`/`fg2` 参数显式控制两条线的颜色,
+/// 而非复用 `fg` + 硬编码 `Color::Cyan`,使调用方可为双线指定独立颜色方案。
+///
+/// WHY:ResourceMonitor 中磁盘 R/W 和网络 RX/TX 需要明确的颜色区分,
+/// 绿色=读/收,红色=写/发,避免混淆。
+pub fn sparkline_dual_colored(
+    data1: &[u64],
+    data2: &[u64],
+    area: Rect,
+    buf: &mut Buffer,
+    fg1: Color,
+    fg2: Color,
+    max_value: Option<u64>,
+) {
+    let mut combined_max = max_value.unwrap_or(1);
+    if max_value.is_none() {
+        combined_max = combined_max
+            .max(data1.iter().copied().max().unwrap_or(1))
+            .max(data2.iter().copied().max().unwrap_or(1))
+            .max(1);
+    }
+
+    let len = data1.len().min(data2.len());
+    if len == 0 || area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let step = (len as f32 / area.width as f32).max(1.0) as usize;
+    for col in 0..area.width as usize {
+        let idx = (col * step).min(len - 1);
+        let v1 = data1[idx];
+        let v2 = data2[idx];
+        let h1 = ((v1 as f64 / combined_max as f64) * area.height as f64) as usize;
+        let h2 = ((v2 as f64 / combined_max as f64) * area.height as f64) as usize;
+
+        for row in 0..area.height as usize {
+            let y = area.bottom().saturating_sub(1 + row as u16);
+            let in_1 = row < h1;
+            let in_2 = row < h2;
+            if !in_1 && !in_2 {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut((area.x + col as u16, y)) {
+                if in_1 && in_2 {
+                    cell.set_char('█');
+                    cell.set_fg(fg1);
+                } else if in_1 {
+                    cell.set_char('▄');
+                    cell.set_fg(fg1);
+                } else if in_2 {
+                    cell.set_char('▀');
+                    cell.set_fg(fg2);
+                }
+            }
+        }
+    }
+}
+
+/// 渲染水平柱状图 — 用于 CPU 每核使用率等指标
+///
+/// 在单行区域内渲染一组水平柱状条。每个值映射为不同长度的色块。
+///
+/// WHY 自定义而非 ratatui::BarChart:ratatui BarChart 占多行且需要 Label,
+/// ResourceMonitor 的每核 CPU 展示需要紧凑水平排列的单行柱状图,
+/// 自定义渲染更灵活可控。
+///
+/// # 参数
+/// - `values`:各柱的值(0.0-100.0 百分比)
+/// - `labels`:各柱的标签
+/// - `area`:渲染区域
+/// - `buf`:ratatui Buffer
+/// - `bar_fg`:正常颜色
+/// - `warn_fg`:警告颜色(>= warn_threshold)
+/// - `crit_fg`:危险颜色(>= crit_threshold)
+/// - `warn_threshold`:警告阈值百分比(默认 60.0)
+/// - `crit_threshold`:危险阈值百分比(默认 80.0)
+// WHY allow: 此渲染函数参数本质上是领域配置（值/标签/区域/颜色/阈值），
+// 引入额外配置 struct 不会降低整体复杂度且徒增间接层
+#[allow(clippy::too_many_arguments)]
+pub fn horizontal_bar_chart(
+    values: &[f32],
+    labels: &[String],
+    area: Rect,
+    buf: &mut Buffer,
+    bar_fg: Color,
+    warn_fg: Color,
+    crit_fg: Color,
+    warn_threshold: f32,
+    crit_threshold: f32,
+) {
+    if values.is_empty() || area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let bar_count = values.len().min(labels.len());
+    let label_width = 4;
+    let available_width = area.width as usize;
+
+    for i in 0..bar_count {
+        let row = area.y + i as u16;
+        if row >= area.bottom() {
+            break;
+        }
+
+        let label = &labels[i];
+        for (j, ch) in label.chars().enumerate() {
+            if j >= label_width {
+                break;
+            }
+            let x = area.x + j as u16;
+            if x < area.right() {
+                if let Some(cell) = buf.cell_mut((x, row)) {
+                    cell.set_char(ch);
+                    cell.set_fg(bar_fg);
+                }
+            }
+        }
+
+        let value = values[i].clamp(0.0, 100.0);
+        let bar_color = if value >= crit_threshold {
+            crit_fg
+        } else if value >= warn_threshold {
+            warn_fg
+        } else {
+            bar_fg
+        };
+
+        let max_bar_width = available_width.saturating_sub(label_width);
+        let bar_width = if max_bar_width > 0 {
+            ((value / 100.0) * max_bar_width as f32) as usize
+        } else {
+            0
+        };
+
+        for j in 0..bar_width {
+            let x = area.x + (label_width + j) as u16;
+            if x < area.right() {
+                if let Some(cell) = buf.cell_mut((x, row)) {
+                    cell.set_char('█');
+                    cell.set_fg(bar_color);
+                }
+            }
+        }
+    }
 }
 
 /// 构造阈值着色 Gauge widget — 根据值区间自动选颜色

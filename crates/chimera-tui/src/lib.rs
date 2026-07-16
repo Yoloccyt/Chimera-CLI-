@@ -43,6 +43,7 @@ pub mod popup;
 pub mod render;
 pub mod subscriber;
 pub mod types;
+pub mod viz;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use app::TuiApp;
@@ -52,6 +53,8 @@ pub use command_palette::CommandPalette;
 // (如 chimera-cli 根据配置渲染启动画面)。
 pub use config::{ColorKind, ColorScheme, Theme, ThemeColors, TuiConfig};
 pub use data::{
+    metrics_history::MetricsHistory,
+    resource_history::{MetricSample, ResourceHistory, ThresholdLevel},
     AsaInterventionSummary, BudgetMetrics, BudgetSync, DataPipeline, DataSnapshot,
     DataSourceConfig, HealthMetrics, MemoryMetrics, MemorySync, QuestSync, RedTeamAuditSummary,
     SecurityState, SecuritySync, SkepticVetoSummary, StubDataSource, TuiDataSource,
@@ -60,19 +63,26 @@ pub use error::TuiError;
 pub use focus::FocusManager;
 pub use panels::{
     BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
-    McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, SecurityPanel,
-    TimelinePanel,
+    McpNodesPanel, MemoryPanel, MetricsDashboardPanel, Panel, ParliamentPanel, QuestPanel,
+    ResourceMonitorPanel, RouterPanel, SecurityPanel, TaskManagerPanel, TimelinePanel,
 };
 pub use popup::{PopupKind, PopupStack, Severity};
 pub use render::{
-    gauge, gauge_thresholded, latency_line, sparkline, sparkline_dual, utilization_bar,
-    virtual_scroll_window, GaugeThreshold, FOOTER_TEXT, VIRTUAL_SCROLL_BUFFER,
+    gauge, gauge_thresholded, horizontal_bar_chart, latency_line, sparkline, sparkline_dual,
+    sparkline_dual_colored, sparkline_thresholded, utilization_bar, virtual_scroll_window,
+    GaugeThreshold, FOOTER_TEXT, VIRTUAL_SCROLL_BUFFER,
 };
 pub use subscriber::EventSubscriber;
 pub use types::{
     ChtcAdapterInfo, ChtcState, DecayMetrics, InputMode, LayoutMode, McpNodeStatus, NodeStatus,
-    PanelId, RouterMetrics, RouterStatsInfo, TimelineSnapshot, TuiCommand, TuiState,
+    PanelId, QuestAction, RouterMetrics, RouterStatsInfo, SortMode, TimelineSnapshot, TuiCommand,
+    TuiState,
 };
+// P9.1:重导出 viz 公共 API(5 个高阶图表 widget + VizChartKind 枚举 + VizWidget trait),
+// 供 MetricsDashboardPanel / 外部测试 / 命令面板预览使用
+// NOTE: viz::gauge 名称与 render::gauge 冲突,不在 lib.rs 顶层重导出,
+// 调用方通过 `chimera_tui::viz::gauge` 访问(避免命名空间污染)
+pub use viz::{bar_chart, heatmap, histogram, line_chart, VizChartKind, VizWidget};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
@@ -82,14 +92,15 @@ pub mod prelude {
     // 颜色定制,使用频率低,不放入 prelude 避免命名空间污染。
     pub use crate::config::{Theme, TuiConfig};
     pub use crate::data::{
+        resource_history::{ResourceHistory, ThresholdLevel},
         BudgetMetrics, DataPipeline, DataSnapshot, DataSourceConfig, StubDataSource, TuiDataSource,
     };
     pub use crate::error::TuiError;
     pub use crate::focus::FocusManager;
     pub use crate::panels::{
         BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
-        McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, SecurityPanel,
-        TimelinePanel,
+        McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, ResourceMonitorPanel,
+        RouterPanel, SecurityPanel, TimelinePanel,
     };
     pub use crate::popup::{PopupKind, PopupStack, Severity};
     pub use crate::subscriber::EventSubscriber;

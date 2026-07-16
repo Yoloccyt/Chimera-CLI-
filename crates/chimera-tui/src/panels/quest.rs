@@ -7,7 +7,9 @@
 //! - 使用 `Panel` trait 统一接口,便于 `TuiApp` 通过 `Box<dyn Panel>` 管理。
 //! - M3 增加关键字过滤、滚动选择与详情弹窗。
 
-use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
+use std::collections::HashSet;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -22,18 +24,33 @@ use crate::types::{PanelId, TuiCommand, TuiState};
 use nexus_core::{Quest, TaskStatus};
 
 /// Quest 面板
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone)]
 pub struct QuestPanel {
     /// 当前选中 Quest 的索引(在已过滤列表中)
     selected: usize,
     /// 列表滚动偏移
     scroll_offset: usize,
+    /// 多选索引集合(批量操作用)
+    selected_indices: HashSet<usize>,
+}
+
+/// 自定义 PartialEq:忽略 selected_indices,避免同一面板状态在不同选择集合下被判不等
+///
+/// WHY:多选索引是瞬时 UI 状态,不影响面板的功能等价性。
+/// 两个 QuestPanel 若光标位置与滚动偏移相同即视为等价。
+impl PartialEq for QuestPanel {
+    fn eq(&self, other: &Self) -> bool {
+        self.selected == other.selected && self.scroll_offset == other.scroll_offset
+    }
 }
 
 impl QuestPanel {
     /// 创建新的 Quest 面板
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            selected_indices: HashSet::new(),
+            ..Default::default()
+        }
     }
 
     /// 返回当前选中项索引(测试用,与 EventStreamPanel/LogPanel 模式一致)
@@ -63,7 +80,16 @@ impl QuestPanel {
     /// 构建 Quest 面板文本内容
     ///
     /// WHY 独立方法:与 `render` 解耦,便于单元测试直接验证文本输出。
-    pub fn content(state: &TuiState, selected: usize) -> Text<'static> {
+    ///
+    /// # 参数
+    /// - `state`:TUI 共享状态
+    /// - `cursor`:当前光标所在的 Quest 索引
+    /// - `selected_indices`:批量选中的索引集合
+    pub fn content(
+        state: &TuiState,
+        cursor: usize,
+        selected_indices: &HashSet<usize>,
+    ) -> Text<'static> {
         let mut lines: Vec<Line<'static>> =
             vec![Line::from("Quest Tasks"), Line::from("─────────────")];
 
@@ -74,28 +100,68 @@ impl QuestPanel {
         } else {
             let quest_count = quests.len();
             for (idx, quest) in quests.iter().enumerate() {
-                let is_selected = idx == selected;
-                let selected_style = if is_selected {
+                let is_cursor = idx == cursor;
+                let is_checked = selected_indices.contains(&idx);
+
+                // 标题行:前缀 + 序号 + 标题 + mini gauge
+                let title_prefix = match (is_cursor, is_checked) {
+                    (true, true) => "●>",
+                    (true, false) => "> ",
+                    (false, true) => "● ",
+                    (false, false) => "  ",
+                };
+
+                let title_style = if is_checked {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_cursor {
                     Style::default()
                         .fg(Color::Black)
                         .bg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().add_modifier(Modifier::BOLD)
+                    Style::default()
                 };
-                let prefix = if is_selected { "> " } else { "  " };
 
-                // 标题行:加粗显示 Quest 序号与标题
-                lines.push(Line::from(vec![Span::styled(
-                    format!("{}[{}] {}", prefix, idx + 1, quest.title),
-                    selected_style,
-                )]));
+                // 任务进度百分比 mini gauge
+                let gauge = if quest.tasks.is_empty() {
+                    "          ".to_string()
+                } else {
+                    let total = quest.tasks.len();
+                    let done = quest
+                        .tasks
+                        .iter()
+                        .filter(|t| t.status == TaskStatus::Completed)
+                        .count();
+                    let pct = if total > 0 {
+                        (done as f32 / total as f32 * 100.0) as usize
+                    } else {
+                        0
+                    };
+                    format!(
+                        " {} {}/{} ({}%)",
+                        render_mini_gauge(done, total),
+                        done,
+                        total,
+                        pct
+                    )
+                };
+
+                let index_str = format!("[{}]", idx + 1);
+                // 用固定宽度标题区 + gauge 右对齐在 80 列内
+                let title_text = format!(
+                    "{title_prefix}{index_str} {title}{gauge}",
+                    title = quest.title
+                );
+
+                lines.push(Line::from(vec![Span::styled(title_text, title_style)]));
 
                 // 元信息行:灰色缩进显示 ID 与思考模式
                 lines.push(Line::from(vec![Span::styled(
                     format!(
-                        "    ID: {} | Mode: {:?}",
-                        quest.quest_id, quest.thinking_mode
+                        "    ID: {} | Mode: {:?} | Priority: {}",
+                        quest.quest_id, quest.thinking_mode, quest.priority
                     ),
                     Style::default().fg(Color::Gray),
                 )]));
@@ -214,6 +280,29 @@ fn build_filter_title(state: &TuiState, base: &str) -> String {
     }
 }
 
+/// 渲染 mini progress gauge(4 字符宽)
+///
+/// 用 Unicode block 字符 ▰/▱ 表示进度,固定 4 格宽度。
+/// 当 total=0 时返回 `[    ]`。
+fn render_mini_gauge(completed: usize, total: usize) -> String {
+    if total == 0 {
+        return "[    ]".to_string();
+    }
+    let ratio = completed as f32 / total as f32;
+    let filled = (ratio * 4.0).round() as usize;
+    let mut s = String::with_capacity(6);
+    s.push('[');
+    for i in 0..4 {
+        if i < filled {
+            s.push('▰');
+        } else {
+            s.push('▱');
+        }
+    }
+    s.push(']');
+    s
+}
+
 impl Panel for QuestPanel {
     fn id(&self) -> PanelId {
         PanelId::Quest
@@ -238,7 +327,7 @@ impl Panel for QuestPanel {
         self.scroll_offset =
             list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
-        let paragraph = Paragraph::new(Self::content(state, self.selected))
+        let paragraph = Paragraph::new(Self::content(state, self.selected, &self.selected_indices))
             .scroll((self.scroll_offset as u16, 0));
         paragraph.render(inner, buf);
     }
@@ -253,6 +342,95 @@ impl Panel for QuestPanel {
         }
 
         match key.code {
+            // 空格键:切换当前项的批量选择状态
+            //
+            // WHY 空格:与文件管理器/邮件客户端的多选语义一致,
+            // 操作员直觉式操作无需学习。不影响单行光标导航。
+            KeyCode::Char(' ') => {
+                let quests = Self::filtered_quests(state);
+                if quests.is_empty() {
+                    return None;
+                }
+                let idx = list_state::clamp_selected(self.selected, quests.len());
+                if self.selected_indices.contains(&idx) {
+                    self.selected_indices.remove(&idx);
+                } else {
+                    self.selected_indices.insert(idx);
+                }
+                None
+            }
+            // Ctrl+A:全选当前过滤列表中所有 Quest
+            //
+            // WHY Ctrl+A:与编辑器全选语义一致,减少逐项选择的操作成本。
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let quests = Self::filtered_quests(state);
+                for i in 0..quests.len() {
+                    self.selected_indices.insert(i);
+                }
+                None
+            }
+            // Ctrl+D:取消所有批量选择
+            //
+            // WHY Ctrl+D:对称于 Ctrl+A,同时不与现有 `d`(单条取消)冲突。
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.selected_indices.clear();
+                None
+            }
+            // `p` 键:暂停 Quest(批量优先;无多选时暂停当前光标项)
+            //
+            // WHY 批量优先:若操作员已勾选多个 Quest,`p` 应暂停全部而非仅当前项,
+            // 减少操作员的认知负担。多选时弹出批量确认弹窗;无多选时回退到单选暂停。
+            KeyCode::Char('p') => {
+                if !self.selected_indices.is_empty() {
+                    let quests = Self::filtered_quests(state);
+                    let quest_ids: Vec<String> = self
+                        .selected_indices
+                        .iter()
+                        .filter_map(|&i| quests.get(i))
+                        .map(|q| q.quest_id.clone())
+                        .collect();
+                    if quest_ids.is_empty() {
+                        return None;
+                    }
+                    let batch_ids = quest_ids.join(",");
+                    return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                        &format!("Batch pause {} quests", quest_ids.len()),
+                        &batch_ids,
+                        format!("batch_pause:{batch_ids}"),
+                    )));
+                }
+                // 单选暂停:委托给现有 RequestQuestPause 命令
+                let quests = Self::filtered_quests(state);
+                quests
+                    .get(self.selected)
+                    .map(|quest| TuiCommand::RequestQuestPause(quest.quest_id.clone()))
+            }
+            // `c` 键:取消 Quest(批量优先,破坏性操作需确认)
+            //
+            // WHY `c` 而非复用 `d`:单条取消(`d`)与批量取消(`c`)语义区分,
+            // 避免操作员因肌肉记忆按 `d` 时意外触发批量操作。
+            // 多选时弹出批量确认弹窗;无多选时 `c` 为 no-op(单条取消请用 `d`)。
+            KeyCode::Char('c') => {
+                if !self.selected_indices.is_empty() {
+                    let quests = Self::filtered_quests(state);
+                    let quest_ids: Vec<String> = self
+                        .selected_indices
+                        .iter()
+                        .filter_map(|&i| quests.get(i))
+                        .map(|q| q.quest_id.clone())
+                        .collect();
+                    if quest_ids.is_empty() {
+                        return None;
+                    }
+                    let batch_ids = quest_ids.join(",");
+                    return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                        &format!("Batch cancel {} quests", quest_ids.len()),
+                        &batch_ids,
+                        format!("batch_cancel:{batch_ids}"),
+                    )));
+                }
+                None
+            }
             // P5 跨面板联动:Enter 跳转到 EventStream 面板并按 quest_id 筛选事件
             //
             // WHY Enter 改为跳转:Quest 面板的核心联动场景是"查看某 Quest 的
@@ -394,7 +572,7 @@ mod tests {
     #[test]
     fn test_quest_panel_empty_state() {
         let state = TuiState::new();
-        let content = QuestPanel::content(&state, 0).to_string();
+        let content = QuestPanel::content(&state, 0, &HashSet::new()).to_string();
         assert!(content.contains("Quest Tasks"));
         assert!(content.contains("No active quests"));
     }
@@ -406,7 +584,7 @@ mod tests {
             sample_quest("q1", "First Quest"),
             sample_quest("q2", "Second Quest"),
         ];
-        let content = QuestPanel::content(&state, 0).to_string();
+        let content = QuestPanel::content(&state, 0, &HashSet::new()).to_string();
         assert!(content.contains("First Quest"));
         assert!(content.contains("Second Quest"));
         assert!(content.contains("[1]"));

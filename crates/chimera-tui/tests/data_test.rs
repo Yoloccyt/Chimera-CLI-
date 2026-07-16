@@ -75,6 +75,33 @@ fn test_config() -> DataSourceConfig {
     }
 }
 
+/// 轮询等待 pipeline 快照包含指定数量的事件，最多等待 2 秒
+///
+/// WHY 轮询而非固定 sleep: SysMetricsCollector::new() 调用
+/// sysinfo::System::new_all() 是同步阻塞操作，在 current_thread runtime
+/// (#[tokio::test] 默认)中会阻塞整个 runtime。固定 sleep(80ms) 不足以
+/// 覆盖初始化时间，导致 DataPipeline 在窗口内未处理事件，snapshot 中
+/// quest_list 为空。轮询等待确保 DataPipeline 至少处理完
+/// expected_event_count 个事件后才进行断言，与 live_data_test.rs 模式一致。
+async fn wait_for_events(pipeline: &DataPipeline, expected_event_count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snap = pipeline.snapshot();
+        if snap.latest_events.len() >= expected_event_count {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for {} events; got {} events, quest_list len={}",
+                expected_event_count,
+                snap.latest_events.len(),
+                snap.quest_list.len()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[tokio::test]
 async fn pipeline_aligns_multi_source_events_into_single_snapshot() {
     let bus = EventBus::with_capacity(1024);
@@ -101,8 +128,8 @@ async fn pipeline_aligns_multi_source_events_into_single_snapshot() {
     .unwrap();
     bus.publish(skeptic_veto_event("q1")).await.unwrap();
 
-    // 等待一次 tick，让 DataPipeline 处理事件
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // 等待 DataPipeline 处理完 3 个事件（轮询避免 SysMetricsCollector 初始化阻塞）
+    wait_for_events(&pipeline, 3).await;
 
     let snapshot = pipeline.snapshot();
     assert_eq!(snapshot.quest_list, vec![q]);
@@ -164,8 +191,8 @@ async fn pipeline_deduplicates_repeated_state_events() {
     .await
     .unwrap();
 
-    // 等待一次 tick 完成批量处理
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // 等待 DataPipeline 处理完 5 个事件（轮询避免 SysMetricsCollector 初始化阻塞）
+    wait_for_events(&pipeline, 5).await;
 
     let snapshot = pipeline.snapshot();
     // 去重后 quest_list 应为最后一个 QuestListUpdated 的内容 [q1, q2, q3]
@@ -277,8 +304,8 @@ async fn test_quest_cancelled_removes_from_list() {
     // 发布 QuestCancelled 取消 q1
     bus.publish(quest_cancelled_event("q1")).await.unwrap();
 
-    // 等待 tick 处理
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // 等待 DataPipeline 处理完 2 个事件（轮询避免 SysMetricsCollector 初始化阻塞）
+    wait_for_events(&pipeline, 2).await;
 
     let snapshot = pipeline.snapshot();
     // q1 被移除,只剩 q2
@@ -304,8 +331,8 @@ async fn test_quest_priority_adjusted_updates_field() {
         .await
         .unwrap();
 
-    // 等待 tick 处理
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // 等待 DataPipeline 处理完 2 个事件（轮询避免 SysMetricsCollector 初始化阻塞）
+    wait_for_events(&pipeline, 2).await;
 
     let snapshot = pipeline.snapshot();
     assert_eq!(snapshot.quest_list.len(), 1, "quest should still exist");
@@ -332,8 +359,8 @@ async fn test_quest_cancelled_unknown_id_no_change() {
         .await
         .unwrap();
 
-    // 等待 tick 处理
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // 等待 DataPipeline 处理完 2 个事件（轮询避免 SysMetricsCollector 初始化阻塞）
+    wait_for_events(&pipeline, 2).await;
 
     let snapshot = pipeline.snapshot();
     assert_eq!(

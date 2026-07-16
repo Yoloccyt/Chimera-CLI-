@@ -221,12 +221,12 @@ fn test_tui_input_mode_switching() {
 
 #[test]
 fn test_tui_input_mode_circular_navigation() {
-    // WHY 循环导航:验证 Quest → ... → Chtc → Quest 的完整循环(13 面板)
-    // P2 TUI v1.7-omega:循环从 8 面板扩展到 13 面板(新增 Decay/EventStream/
-    // Router/McpNodes/Chtc,Timeline 面板未注册故不含)。
+    // WHY 循环导航:验证 Quest → ... → MetricsDashboard → Quest 的完整循环(16 面板)
+    // P9 TUI v1.8-omega Task 2.2:MetricsDashboardPanel 加入主循环后,从 15 面板扩展
+    // 到 16 面板(新增 MetricsDashboard 监控类展示面板,Timeline 仍未注册故不含)。
     let mut app = make_app();
 
-    // 连续 Tab 13 次应回到原点
+    // 连续 Tab 15 次应回到原点(16 面板循环:起点 Quest + 15 个后续)
     for expected in [
         PanelId::Parliament,
         PanelId::Budget,
@@ -240,6 +240,9 @@ fn test_tui_input_mode_circular_navigation() {
         PanelId::Router,
         PanelId::McpNodes,
         PanelId::Chtc,
+        PanelId::ClvVector,
+        PanelId::ResourceMonitor,
+        PanelId::MetricsDashboard,
         PanelId::Quest,
     ] {
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -251,8 +254,11 @@ fn test_tui_input_mode_circular_navigation() {
         );
     }
 
-    // Shift+Tab 反向循环 13 次也应回到原点
+    // Shift+Tab 反向循环 15 次也应回到原点
     for expected in [
+        PanelId::MetricsDashboard,
+        PanelId::ResourceMonitor,
+        PanelId::ClvVector,
         PanelId::Chtc,
         PanelId::McpNodes,
         PanelId::Router,

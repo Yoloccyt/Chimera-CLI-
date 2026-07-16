@@ -81,6 +81,16 @@ pub enum PanelId {
     ///
     /// 展示 ClvSnapshotReported 事件的 8 分块热图 + L2 范数 + Top-8 维度。
     ClvVector,
+    /// 系统资源监控面板 — CPU/内存/磁盘/网络实时指标
+    ///
+    /// 展示 sysinfo 采集的 OS 级系统资源使用情况。
+    ResourceMonitor,
+    /// 指标仪表盘面板 — 5×2 网格 + 可绑定数据源(v1.8-omega Task 2.2)
+    ///
+    /// 5×2 网格:左列 5 个 sparkline 实时指标,右列 5 个 gauge 当前值;
+    /// 每个 cell 可独立绑定 `TuiDataSource` + `VizChartKind`,复用
+    /// `viz/` 组件库渲染。
+    MetricsDashboard,
 }
 
 impl PanelId {
@@ -103,6 +113,8 @@ impl PanelId {
             PanelId::Timeline => "Timeline",
             PanelId::OsaSparse => "OsaSparse",
             PanelId::ClvVector => "ClvVector",
+            PanelId::ResourceMonitor => "ResourceMonitor",
+            PanelId::MetricsDashboard => "MetricsDashboard",
         }
     }
 
@@ -125,15 +137,17 @@ impl PanelId {
             PanelId::Timeline => " Timeline ",
             PanelId::OsaSparse => " OSA Sparse ",
             PanelId::ClvVector => " CLV Vector ",
+            PanelId::ResourceMonitor => " Resources ",
+            PanelId::MetricsDashboard => " Metrics Dashboard ",
         }
     }
 
     /// 切换到下一个面板(循环顺序)
     ///
-    /// 完整循环(16 面板):
+    /// 完整循环(18 面板):
     /// Quest → Parliament → Budget → Memory → Security → Health → Log → Help
     /// → Decay → EventStream → Router → McpNodes → Chtc → Timeline
-    /// → OsaSparse → ClvVector → Quest
+    /// → OsaSparse → ClvVector → ResourceMonitor → MetricsDashboard → Quest
     pub fn next(&self) -> PanelId {
         match self {
             PanelId::Quest => PanelId::Parliament,
@@ -151,14 +165,16 @@ impl PanelId {
             PanelId::Chtc => PanelId::Timeline,
             PanelId::Timeline => PanelId::OsaSparse,
             PanelId::OsaSparse => PanelId::ClvVector,
-            PanelId::ClvVector => PanelId::Quest,
+            PanelId::ClvVector => PanelId::ResourceMonitor,
+            PanelId::ResourceMonitor => PanelId::MetricsDashboard,
+            PanelId::MetricsDashboard => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
     pub fn prev(&self) -> PanelId {
         match self {
-            PanelId::Quest => PanelId::ClvVector,
+            PanelId::Quest => PanelId::MetricsDashboard,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
             PanelId::Memory => PanelId::Budget,
@@ -174,6 +190,8 @@ impl PanelId {
             PanelId::Timeline => PanelId::Chtc,
             PanelId::OsaSparse => PanelId::Timeline,
             PanelId::ClvVector => PanelId::OsaSparse,
+            PanelId::ResourceMonitor => PanelId::ClvVector,
+            PanelId::MetricsDashboard => PanelId::ResourceMonitor,
         }
     }
 }
@@ -254,8 +272,85 @@ impl LayoutMode {
 }
 
 // ============================================================
+// 排序模式 — 任务管理面板的列表排序策略(Task 1.4)
+// ============================================================
+
+/// 排序模式 — TaskManagerPanel 的 Quest 列表排序策略
+///
+/// WHY 三种排序模式覆盖任务管理三大典型场景:
+/// - `Priority`:运维关注 — 优先处理高优先级任务(默认,与 spec 一致)
+/// - `Status`:状态管理 — 区分 Pending/Running/Paused/Completed 队列
+/// - `CreatedAt`:时间追溯 — 最近任务在前,便于追溯新问题
+///
+/// WHY 派生 `Copy + Hash + Eq`:排序键需参与 HashMap 索引、Vec 排序、
+/// `==` 比较;`Copy` 避免克隆开销(枚举小)。
+///
+/// WHY `#[default]`:与 `TuiConfig::task_manager_default_sort` 默认值契约一致
+/// (spec §Requirement "任务管理面板" — 默认按优先级降序)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum SortMode {
+    /// 按优先级降序(默认,运维关注高优先级任务)
+    #[default]
+    Priority,
+    /// 按状态分组(Pending → Running → Paused → Completed)
+    Status,
+    /// 按创建时间降序(最新任务在前)
+    CreatedAt,
+}
+
+impl SortMode {
+    /// 返回排序模式的人类可读名称(小写,用于配置显示)
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SortMode::Priority => "priority",
+            SortMode::Status => "status",
+            SortMode::CreatedAt => "created_at",
+        }
+    }
+
+    /// 循环切换到下一个排序模式(Priority → Status → CreatedAt → Priority)
+    ///
+    /// WHY 循环顺序:从运维关注(优先级)→ 状态管理 → 时间追溯 → 回到优先级,
+    /// 符合运维人员逐步切换视角的需求。
+    pub fn next(&self) -> Self {
+        match self {
+            SortMode::Priority => SortMode::Status,
+            SortMode::Status => SortMode::CreatedAt,
+            SortMode::CreatedAt => SortMode::Priority,
+        }
+    }
+}
+
+impl std::fmt::Display for SortMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================
 // 高层命令 — 面板返回的语义化动作
 // ============================================================
+
+/// Quest 控制动作 — TaskManagerPanel 与 quest-engine 双向控制的动作枚举
+///
+/// WHY 独立 enum:`TuiCommand::RequestQuestPause` 等是面板直接发出的命令,
+/// `QuestAction` 是为 TaskManagerPanel 设计的"控制动作"概念,可在不同面板间复用
+/// (如未来 ParliamentPanel 审批后也通过 QuestControl 触发动作)。
+///
+/// `SetPriority(u8)` 使用 0-10 用户面范围(spec 明确),与既有
+/// `RequestQuestPriorityChange { new_priority: u8 }` 的 0-255 内部范围不同。
+/// 范围映射在 `TuiApp::apply_command` 中桥接。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestAction {
+    /// 暂停 Quest
+    Pause,
+    /// 恢复 Quest
+    Resume,
+    /// 终止 Quest(破坏性操作)
+    Terminate,
+    /// 设置优先级,值域 [0, 10]
+    SetPriority(u8),
+}
 
 /// 高层命令 — 由面板或命令面板产生,由 `TuiApp` 统一解释执行
 ///
@@ -318,6 +413,24 @@ pub enum TuiCommand {
     JumpToEventStream {
         /// 目标 Quest ID,作为 EventStream 的筛选关键字
         quest_id: String,
+    },
+    /// Quest 控制命令(TaskManagerPanel,M3-2)
+    ///
+    /// WHY 独立变体:TaskManagerPanel 提供完整的 Quest CRUD 控制(P/T/↑/↓/Enter),
+    /// 既有 `RequestQuestPause`/`RequestQuestResume`/`RequestQuestCancel` 三个
+    /// 独立变体无法表达完整动作空间(缺少 `Terminate` 与 `SetPriority` 抽象)。
+    /// 统一的 `QuestControl { id, action }` 形式便于:
+    /// - 未来新增动作(如 `Clone`/`Archive`)只需扩展 `QuestAction` enum
+    /// - 跨面板复用 ParliamentPanel 审批后也能触发同一动作空间
+    /// - 测试与文档按"动作"而非"按键"组织
+    ///
+    /// 桥接:`TuiApp::apply_command` 将 `QuestAction` 映射到既有确认弹窗
+    /// (Pause/Resume/Terminate)或直接发布优先级变更(SetPriority)。
+    QuestControl {
+        /// 目标 Quest ID
+        id: String,
+        /// 控制动作
+        action: QuestAction,
     },
 }
 
@@ -574,6 +687,11 @@ pub struct TuiState {
     pub osa_sparsity_history: Vec<u64>,
     /// CLV 摘要(None = 未收到事件)
     pub clv_summary: Option<event_bus::ClvSummary>,
+    // === P8 ResourceMonitor 面板新增字段 ===
+    /// 系统资源指标(数据驱动 ResourceMonitor / Health 面板)
+    pub sys_metrics: SystemMetrics,
+    /// 系统资源指标历史(sparkline: CPU 使用率 × 10 的 u64 表示)
+    pub sys_metrics_history: Vec<u64>,
 }
 
 impl TuiState {
@@ -617,6 +735,9 @@ impl TuiState {
             osa_context_mask: Vec::new(),
             osa_sparsity_history: Vec::new(),
             clv_summary: None,
+            // P8 ResourceMonitor 面板默认值
+            sys_metrics: SystemMetrics::default(),
+            sys_metrics_history: Vec::new(),
         }
     }
 
@@ -697,6 +818,79 @@ impl Default for TuiState {
     }
 }
 
+// ============================================================
+// P8 系统资源指标类型 — CPU/内存/磁盘/网络聚合视图
+// ============================================================
+//
+// 由 SysMetricsCollector 采集，供 ResourceMonitor 和 Health 面板使用。
+
+/// 系统资源指标 — CPU/内存/磁盘/网络的聚合视图
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SystemMetrics {
+    /// CPU 指标
+    pub cpu: CpuMetrics,
+    /// 内存指标
+    pub memory: MemMetrics,
+    /// 磁盘指标
+    pub disk: DiskMetrics,
+    /// 网络指标
+    pub network: NetworkMetrics,
+}
+
+/// CPU 指标 — 全局使用率与每核使用率
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CpuMetrics {
+    /// 全局 CPU 使用率百分比 [0.0, 100.0]
+    pub global_usage: f32,
+    /// 各核 CPU 使用率百分比
+    pub per_core_usage: Vec<f32>,
+    /// 逻辑核心数
+    pub core_count: usize,
+}
+
+/// 内存指标 — 物理内存与交换空间
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct MemMetrics {
+    /// 总物理内存(字节)
+    pub total_bytes: u64,
+    /// 已用物理内存(字节)
+    pub used_bytes: u64,
+    /// 可用物理内存(字节)
+    pub available_bytes: u64,
+    /// 内存使用率百分比 [0.0, 100.0]
+    pub usage_percent: f32,
+    /// 交换空间总大小(字节)
+    pub swap_total_bytes: u64,
+    /// 交换空间已用(字节)
+    pub swap_used_bytes: u64,
+}
+
+/// 磁盘指标 — 读写速率
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DiskMetrics {
+    /// 磁盘读取速率(字节/秒，基于两次采集差值的瞬时估算)
+    pub read_bytes_per_sec: u64,
+    /// 磁盘写入速率(字节/秒)
+    pub write_bytes_per_sec: u64,
+    /// 累计读取字节
+    pub total_read_bytes: u64,
+    /// 累计写入字节
+    pub total_write_bytes: u64,
+}
+
+/// 网络指标 — 接收/发送速率
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct NetworkMetrics {
+    /// 接收速率(字节/秒)
+    pub rx_bytes_per_sec: u64,
+    /// 发送速率(字节/秒)
+    pub tx_bytes_per_sec: u64,
+    /// 累计接收字节
+    pub total_rx_bytes: u64,
+    /// 累计发送字节
+    pub total_tx_bytes: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,8 +937,12 @@ mod tests {
         // P3 扩展:Timeline → OsaSparse(不再是 Timeline → Quest)
         assert_eq!(PanelId::Timeline.next(), PanelId::OsaSparse);
         assert_eq!(PanelId::OsaSparse.next(), PanelId::ClvVector);
-        // 循环:ClvVector → Quest
-        assert_eq!(PanelId::ClvVector.next(), PanelId::Quest);
+        // 循环:ClvVector → ResourceMonitor
+        assert_eq!(PanelId::ClvVector.next(), PanelId::ResourceMonitor);
+        // 循环:ResourceMonitor → MetricsDashboard
+        assert_eq!(PanelId::ResourceMonitor.next(), PanelId::MetricsDashboard);
+        // 循环:MetricsDashboard → Quest(Task 2.2 新增)
+        assert_eq!(PanelId::MetricsDashboard.next(), PanelId::Quest);
     }
 
     #[test]
@@ -766,13 +964,16 @@ mod tests {
         // P3 扩展:OsaSparse → Timeline,ClvVector → OsaSparse
         assert_eq!(PanelId::OsaSparse.prev(), PanelId::Timeline);
         assert_eq!(PanelId::ClvVector.prev(), PanelId::OsaSparse);
-        // 循环:Quest → ClvVector(不再是 Quest → Timeline)
-        assert_eq!(PanelId::Quest.prev(), PanelId::ClvVector);
+        assert_eq!(PanelId::ResourceMonitor.prev(), PanelId::ClvVector);
+        // Task 2.2:MetricsDashboard → ResourceMonitor
+        assert_eq!(PanelId::MetricsDashboard.prev(), PanelId::ResourceMonitor);
+        // 循环:Quest → MetricsDashboard(不再是 Quest → ResourceMonitor)
+        assert_eq!(PanelId::Quest.prev(), PanelId::MetricsDashboard);
     }
 
     #[test]
     fn test_panel_id_next_prev_roundtrip() {
-        // next 再 prev 应回到原面板(P3 扩展至 16 面板)
+        // next 再 prev 应回到原面板(P8 扩展至 18 面板)
         for panel in [
             PanelId::Quest,
             PanelId::Parliament,
@@ -790,6 +991,8 @@ mod tests {
             PanelId::Timeline,
             PanelId::OsaSparse,
             PanelId::ClvVector,
+            PanelId::ResourceMonitor,
+            PanelId::MetricsDashboard,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);
@@ -824,8 +1027,8 @@ mod tests {
         let p = PanelId::ClvVector;
         assert_eq!(p.as_str(), "ClvVector");
         assert_eq!(p.title(), " CLV Vector ");
-        // 验证循环:ClvVector 的下一个是 Quest,前一个是 OsaSparse
-        assert_eq!(p.next(), PanelId::Quest);
+        // 验证循环:ClvVector 的下一个是 ResourceMonitor,前一个是 OsaSparse
+        assert_eq!(p.next(), PanelId::ResourceMonitor);
         assert_eq!(p.prev(), PanelId::OsaSparse);
     }
 

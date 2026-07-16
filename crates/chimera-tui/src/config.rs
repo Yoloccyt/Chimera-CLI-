@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::TuiError;
+use crate::types::SortMode;
 
 // ============================================================
 // 主题枚举
@@ -287,6 +288,37 @@ pub struct TuiConfig {
     ///
     /// WHY 100 默认:30s × 100 = 50 分钟历史回放窗口,覆盖典型调试场景。
     pub max_snapshots: usize,
+    // === v1.8-omega: 监控/任务/系统信息扩展字段(Task 1.4) ===
+    /// 是否启用实时趋势图(默认 false — 不破坏既有 resource_monitor 面板断言)
+    ///
+    /// WHY 默认 false:spec §MODIFIED Requirements 迁移路径明确指出"默认关闭,
+    /// 需用户显式开启以避免破坏既有 `resource_monitor_panel_test.rs` 断言"。
+    /// 用户在配置文件中设置 `enable_trend_charts: true` 后,ResourceMonitorPanel
+    /// 才渲染 sparkline 趋势图 + 阈值告警颜色。
+    pub enable_trend_charts: bool,
+    /// 指标采样间隔(毫秒,默认 1000ms = 1Hz)
+    ///
+    /// 控制 ResourceMonitorPanel 趋势图的采样频率,1Hz 与 5 分钟窗口 300 点对齐。
+    /// WHY 1000ms:平衡实时性与存储开销;过低(<500ms)导致 CPU/IO 压力,
+    /// 过高(>5000ms)丢失细节。validate() 限制 [100, 60000]。
+    pub metrics_sample_interval_ms: u64,
+    /// 指标历史保留天数(默认 7 天)
+    ///
+    /// 控制 metrics_history.sqlite 的数据保留期,过期数据由后台清理任务删除。
+    /// WHY 7 天:一周历史覆盖典型运维诊断周期(周末复盘 + 工作日回溯)。
+    pub metrics_history_retention_days: u32,
+    /// 任务管理面板默认排序模式(默认 Priority)
+    ///
+    /// 决定 TaskManagerPanel 启动时的 Quest 列表排序方式,
+    /// 用户可在面板内通过快捷键循环切换(SortMode::next())。
+    pub task_manager_default_sort: SortMode,
+    /// 系统信息刷新间隔(毫秒,默认 5000ms = 5s)
+    ///
+    /// 控制 SysinfoPanel 进程信息(PID/RSS/线程数/文件句柄数)的刷新频率,
+    /// 主机信息(OS/CPU/内存)仅在面板首次打开时采集一次。
+    /// WHY 5000ms:5s 刷新足够展示进程变化趋势,避免 sysinfo 调用过于频繁
+    /// 导致 CPU 占用(spec §Scenario "系统信息面板启动加载")。
+    pub sysinfo_refresh_interval_ms: u64,
 }
 
 impl Default for TuiConfig {
@@ -308,6 +340,13 @@ impl Default for TuiConfig {
             snapshot_interval_s: 30,
             max_event_history: 256,
             max_snapshots: 100,
+            // === v1.8-omega 扩展字段默认值(Task 1.4) ===
+            // 与 spec §Requirement / §MODIFIED Requirements 对齐
+            enable_trend_charts: false,
+            metrics_sample_interval_ms: 1000,
+            metrics_history_retention_days: 7,
+            task_manager_default_sort: SortMode::default(), // = Priority
+            sysinfo_refresh_interval_ms: 5000,
         }
     }
 }
@@ -408,6 +447,33 @@ impl TuiConfig {
                 ),
             });
         }
+        // === v1.8-omega 扩展字段校验(Task 1.4 REFACTOR) ===
+        // 校验规则与字段文档保持一致,避免文档/代码漂移
+        if !(100..=60_000).contains(&self.metrics_sample_interval_ms) {
+            return Err(TuiError::ConfigError {
+                detail: format!(
+                    "metrics_sample_interval_ms must be in [100, 60000], got {} (too low: CPU/IO pressure; too high: loses detail)",
+                    self.metrics_sample_interval_ms
+                ),
+            });
+        }
+        if self.metrics_history_retention_days < 1 {
+            return Err(TuiError::ConfigError {
+                detail: format!(
+                    "metrics_history_retention_days must be >= 1, got {} (0 days would immediately purge all history)",
+                    self.metrics_history_retention_days
+                ),
+            });
+        }
+        if self.sysinfo_refresh_interval_ms < 100 {
+            return Err(TuiError::ConfigError {
+                detail: format!(
+                    "sysinfo_refresh_interval_ms must be >= 100, got {} (too low: sysinfo refresh is heavy)",
+                    self.sysinfo_refresh_interval_ms
+                ),
+            });
+        }
+        // SortMode 是 enum,无范围可言,无需校验(serde 反序列化已保证有效性)
         Ok(())
     }
 
