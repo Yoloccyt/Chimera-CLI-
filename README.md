@@ -2,11 +2,11 @@
   <img src="https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=aether+climbing+a+spiral+staircase+toward+a+sparse%2C+evolving+cosmic+nexus+in+dark+teal+and+amber%2C+sleek+minimalist+style%2C+tech+startup+aesthetic%2C+no+text%2C+high+contrast%2C+wide+format+landscape&image_size=landscape_16_9" alt="NEXUS-OMEGA" width="100%">
 </p>
 
-<h1 align="center">Chimera CLI — Aether (NEXUS-OMEGA)</h1>
+<h1 align="center">Chimera CLI — (NEXUS-OMEGA)</h1>
 
 <p align="center">
-  <b>下一代 AI 编程智能体命令行工具</b><br>
-  从四次工业级"尸检"与五大前沿模型架构中诞生的<br>
+  <b> AI 编程智能体命令行工具</b><br>
+  <br>
   免疫型 · 进化型 · 全维稀疏型 Agent 系统
 </p>
 
