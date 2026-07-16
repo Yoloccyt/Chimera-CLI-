@@ -57,7 +57,7 @@ pub use config::{
 };
 pub use data::{
     metrics_history::MetricsHistory,
-    resource_history::{MetricSample, ResourceHistory, ThresholdLevel},
+    resource_history::{gradient_color, MetricSample, ResourceHistory, ThresholdLevel},
     AsaInterventionSummary, BudgetMetrics, BudgetSync, DataPipeline, DataSnapshot,
     DataSourceConfig, HealthMetrics, MemoryMetrics, MemorySync, QuestSync, RedTeamAuditSummary,
     SecurityState, SecuritySync, SkepticVetoSummary, StubDataSource, TuiDataSource,

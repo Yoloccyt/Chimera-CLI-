@@ -17,7 +17,7 @@
 //!   必须继续通过(测试断言 CPU/RAM/Disk/Net 标题与瞬时数值)
 
 use std::collections::HashSet;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -26,7 +26,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use crate::data::resource_history::{ResourceHistory, ThresholdLevel};
+use crate::data::resource_history::{gradient_color, ResourceHistory, ThresholdLevel};
 use crate::panels::Panel;
 use crate::render::{
     horizontal_bar_chart, sparkline, sparkline_dual_colored, sparkline_thresholded,
@@ -64,8 +64,6 @@ pub struct ResourceMonitorPanel {
     net_rx_history: ResourceHistory,
     /// 网络 TX 速率滑动窗口(字节/秒)
     net_tx_history: ResourceHistory,
-    /// 上次 push_sample 调用时间(用于节流)
-    last_sample_at: Option<Instant>,
 }
 
 impl ResourceMonitorPanel {
@@ -79,7 +77,6 @@ impl ResourceMonitorPanel {
             mem_history: ResourceHistory::new(DEFAULT_TREND_WINDOW, FILTER_WINDOW),
             net_rx_history: ResourceHistory::new(DEFAULT_TREND_WINDOW, FILTER_WINDOW),
             net_tx_history: ResourceHistory::new(DEFAULT_TREND_WINDOW, FILTER_WINDOW),
-            last_sample_at: None,
         }
     }
 
@@ -172,9 +169,17 @@ impl ResourceMonitorPanel {
         area: Rect,
         buf: &mut Buffer,
     ) {
-        // 阈值告警颜色:根据全局 CPU 使用率取 Normal/Warning/Critical
-        let level = ThresholdLevel::classify(cpu.global_usage);
-        let title_color = level.color();
+        // 标题颜色:趋势图启用时使用平滑渐变色,否则使用 `ThresholdLevel` 三档离散色。
+        //
+        // WHY gradient vs level:趋势图场景下用户期望颜色随数值细微变化
+        // (避免 70%/90% 离散色突变),关闭时保持 `ThresholdLevel` 三档逻辑
+        // (70/90 边界,Normal=Green/Warning=Yellow/Critical=Red)。
+        let title_color = if self.enable_trend_charts {
+            gradient_color(cpu.global_usage)
+        } else {
+            let level = ThresholdLevel::classify(cpu.global_usage);
+            level.color()
+        };
 
         // 标题行
         let title = format!(" CPU: {:.1}% ", cpu.global_usage);
@@ -243,17 +248,6 @@ impl ResourceMonitorPanel {
                 60.0,
                 80.0,
             );
-        }
-    }
-
-    fn cpu_color(usage: f32) -> Color {
-        // 兼容旧 API 边界(60% 黄 / 80% 红),既有 `cpu_color_thresholds` 测试断言此语义
-        if usage >= 80.0 {
-            Color::Red
-        } else if usage >= 60.0 {
-            Color::Yellow
-        } else {
-            Color::Green
         }
     }
 
@@ -515,11 +509,20 @@ mod tests {
     }
 
     #[test]
-    fn test_cpu_color_thresholds() {
-        assert_eq!(ResourceMonitorPanel::cpu_color(30.0), Color::Green);
-        assert_eq!(ResourceMonitorPanel::cpu_color(60.0), Color::Yellow);
-        assert_eq!(ResourceMonitorPanel::cpu_color(80.0), Color::Red);
-        assert_eq!(ResourceMonitorPanel::cpu_color(95.0), Color::Red);
+    fn test_threshold_level_classify() {
+        // WHY 验证 ThresholdLevel 边界语义:资源监控面板的 CPU/内存标题颜色
+        // 已统一走 `ThresholdLevel::classify`(70/90 边界,Normal/Warning/Critical),
+        // 此测试断言规范的 70/90 阈值映射与 color() 输出。
+        assert_eq!(ThresholdLevel::classify(30.0), ThresholdLevel::Normal);
+        assert_eq!(ThresholdLevel::classify(50.0), ThresholdLevel::Normal);
+        assert_eq!(ThresholdLevel::classify(70.0), ThresholdLevel::Warning);
+        assert_eq!(ThresholdLevel::classify(85.0), ThresholdLevel::Warning);
+        assert_eq!(ThresholdLevel::classify(90.0), ThresholdLevel::Critical);
+        assert_eq!(ThresholdLevel::classify(99.0), ThresholdLevel::Critical);
+        // color() 映射:Normal=Green, Warning=Yellow, Critical=Red
+        assert_eq!(ThresholdLevel::Normal.color(), Color::Green);
+        assert_eq!(ThresholdLevel::Warning.color(), Color::Yellow);
+        assert_eq!(ThresholdLevel::Critical.color(), Color::Red);
     }
 
     #[test]

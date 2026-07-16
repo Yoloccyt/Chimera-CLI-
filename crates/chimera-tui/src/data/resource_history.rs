@@ -88,6 +88,88 @@ impl ThresholdLevel {
     }
 }
 
+// ============================================================
+// 阈值颜色渐变(P4.1 体验优化)
+// ============================================================
+
+/// 渐变端点:Green(0% 起点)
+///
+/// WHY 选 #2ECC40:与 ratatui `Color::Green` 视觉接近但稍亮,
+/// 在 0% 处比 ANSI Green (#00FF00) 柔和,避免视觉过饱和。
+const GRADIENT_GREEN: (u8, u8, u8) = (46, 204, 64);
+/// 渐变端点:Yellow(70% 段终点 / 70-90% 段起点)
+const GRADIENT_YELLOW: (u8, u8, u8) = (255, 220, 0);
+/// 渐变端点:OrangeRed(90% 段终点 / 90-100% 段起点)
+const GRADIENT_ORANGE_RED: (u8, u8, u8) = (255, 133, 27);
+/// 渐变端点:Red(100% 终点)
+const GRADIENT_RED: (u8, u8, u8) = (255, 65, 54);
+
+/// 根据百分比值返回平滑过渡的 RGB 颜色
+///
+/// # 算法
+/// RGB 线性插值,三段过渡,避免 70%/90% 离散色突变:
+/// - `[0%, 70%)` : Green → Yellow
+/// - `[70%, 90%)`: Yellow → OrangeRed
+/// - `[90%, 100%]` : OrangeRed → Red
+///
+/// # 参数
+/// - `value_pct`:百分比值,自动钳制到 `[0.0, 100.0]`(NaN 钳制为 0)
+///
+/// # 返回
+/// `ratatui::style::Color::Rgb(r, g, b)`,确保趋势图渐变着色与终端
+/// 256 色 / 真彩色模式兼容。
+///
+/// # 设计权衡
+/// - 选 RGB 线性插值而非 HSL:避免 hue 环绕(HSL 在 0% 与 100% 间
+///   会出现 hue 跨 360° 跳跃);RGB 在 70/90 段切换处仍连续。
+/// - 三段而非单段:RGB 端点距离较大(>350),单段插值会导致中间色
+///   偏离预期橙黄色调。三段对应 spec 阈值 (70/90%) 告警颜色逻辑。
+pub fn gradient_color(value_pct: f32) -> Color {
+    // 钳制输入:负值 → 0.0,> 100 → 100.0
+    // WHY NaN 检查:NaN 在 f32 排序中行为未定义(Ord 不可派生),
+    // clamp 不能正确处理 NaN(is_nan() 不会返回 true 给 clamp),
+    // 显式 is_finite() 守卫保证插值计算稳定。
+    let v = if value_pct.is_finite() {
+        value_pct.clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+
+    if v < 70.0 {
+        // 段 1: Green → Yellow
+        let t = v / 70.0;
+        lerp_rgb(GRADIENT_GREEN, GRADIENT_YELLOW, t)
+    } else if v < 90.0 {
+        // 段 2: Yellow → OrangeRed
+        let t = (v - 70.0) / 20.0;
+        lerp_rgb(GRADIENT_YELLOW, GRADIENT_ORANGE_RED, t)
+    } else {
+        // 段 3: OrangeRed → Red
+        let t = ((v - 90.0) / 10.0).min(1.0);
+        lerp_rgb(GRADIENT_ORANGE_RED, GRADIENT_RED, t)
+    }
+}
+
+/// RGB 线性插值
+///
+/// # 参数
+/// - `start`:起始颜色 (r, g, b)
+/// - `end`:终止颜色 (r, g, b)
+/// - `t`:插值因子,预期 [0.0, 1.0],超出范围会被钳制
+///
+/// # 算法
+/// `result = start + (end - start) * t`,逐通道浮点计算后四舍五入到 u8。
+///
+/// WHY 用 f64:避免 f32 在大数乘法时精度损失(如 255.0 * 0.7 = 178.4999...,
+/// round() 后是 178;f32 在 70% 处误差可忽略但 f64 更稳定)。
+fn lerp_rgb(start: (u8, u8, u8), end: (u8, u8, u8), t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0) as f64;
+    let r = start.0 as f64 + (end.0 as f64 - start.0 as f64) * t;
+    let g = start.1 as f64 + (end.1 as f64 - start.1 as f64) * t;
+    let b = start.2 as f64 + (end.2 as f64 - start.2 as f64) * t;
+    Color::Rgb(r.round() as u8, g.round() as u8, b.round() as u8)
+}
+
 /// 资源历史滑动窗口 — ResourceMonitorPanel 趋势图的数据结构
 ///
 /// # 容量控制
