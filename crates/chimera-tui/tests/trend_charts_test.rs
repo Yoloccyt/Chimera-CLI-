@@ -24,7 +24,6 @@ use chimera_tui::panels::{Panel, ResourceMonitorPanel};
 use chimera_tui::types::{
     CpuMetrics, DiskMetrics, MemMetrics, NetworkMetrics, PanelId, SystemMetrics, TuiState,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
@@ -40,9 +39,11 @@ fn test_trend_chart_renders_300_samples() {
 
     // 构造 300 个 CPU 历史点(锯齿状,模拟真实采样抖动)
     let mut history: Vec<u64> = Vec::with_capacity(300);
-    for i in 0..300 {
+    // WHY i32 范围:`(i % 40 - 20)` 在 i < 20 时为负,usize 下溢;
+    // 用 i32 范围避免内部 `i as i32` 重复 cast
+    for i in 0i32..300 {
         // 基础值 50% + 锯齿 ±20
-        let v = 500 + ((i as i32 % 40) - 20) * 5;
+        let v = 500 + (i % 40 - 20) * 5;
         history.push(v as u64);
     }
     state.sys_metrics_history = history;

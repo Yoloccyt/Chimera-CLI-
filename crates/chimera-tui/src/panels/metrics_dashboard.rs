@@ -287,15 +287,18 @@ impl Panel for MetricsDashboardPanel {
             .collect();
 
         // 3) 遍历 5×2 网格,按索引选择 cell 或渲染空槽位
-        for row in 0..GRID_ROWS {
-            for col in 0..GRID_COLS {
-                let idx = row * GRID_COLS + col;
-                let cell_area = col_rows[col][row];
-                if let Some(cell) = &self.cells[idx] {
-                    Self::render_cell(cell, cell_area, buf);
-                } else {
-                    Self::render_empty(cell_area, buf);
-                }
+        //
+        // WHY enumerate 风格:cell 在 `self.cells` 中按 `row * GRID_COLS + col`
+        // 线性存储,`enumerate` 提供 idx 同时迭代 cell,消除
+        // `needless_range_loop` 警告;row/col 从 idx 反算(用于 `col_rows`
+        // 二维布局索引,顺序与 self.cells 一致)。
+        for (idx, cell_opt) in self.cells.iter().enumerate() {
+            let row = idx / GRID_COLS;
+            let col = idx % GRID_COLS;
+            let cell_area = col_rows[col][row];
+            match cell_opt {
+                Some(cell) => Self::render_cell(cell, cell_area, buf),
+                None => Self::render_empty(cell_area, buf),
             }
         }
     }
@@ -317,14 +320,15 @@ impl Panel for MetricsDashboardPanel {
                 }
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                if self.selected % GRID_COLS > 0 {
+                if !self.selected.is_multiple_of(GRID_COLS) {
                     self.selected -= 1;
                 }
             }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if self.selected % GRID_COLS < GRID_COLS - 1 && self.selected + 1 < GRID_SIZE {
-                    self.selected += 1;
-                }
+            KeyCode::Right | KeyCode::Char('l')
+                if self.selected % GRID_COLS < GRID_COLS - 1
+                    && self.selected + 1 < GRID_SIZE =>
+            {
+                self.selected += 1;
             }
             _ => {}
         }
