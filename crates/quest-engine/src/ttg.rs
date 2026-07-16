@@ -37,6 +37,7 @@
 //!     }],
 //!     thinking_mode: ThinkingMode::Standard,
 //!     checkpoint_id: None,
+//!     priority: 128,
 //! };
 //! let (mode, reason) = governor.select_mode(&quest, BudgetTier::LowTier);
 //! assert_eq!(mode, ThinkingMode::Fast);
@@ -887,6 +888,7 @@ mod tests {
             tasks,
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         }
     }
 

@@ -21,6 +21,7 @@ fn quest(id: &str, title: &str) -> Quest {
         }],
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     }
 }
 
@@ -69,6 +70,8 @@ fn test_config() -> DataSourceConfig {
         max_history_len: 64,
         max_security_summaries: 10,
         max_frozen_capabilities: 20,
+        snapshot_interval_s: 30,
+        max_snapshots: 100,
     }
 }
 
@@ -229,4 +232,114 @@ async fn pipeline_handles_1000_events_per_second() {
         "1000 events processing took {:?}, expected < 400ms",
         elapsed
     );
+}
+
+// ============================================================
+// Task M4 扩展:QuestCancelled / QuestPriorityAdjusted 事件消费
+// ============================================================
+//
+// WHY 独立测试组:quest-engine 发布这两个状态变更事件后,DataPipeline
+// 必须更新 quest_list 以反映最新状态。QuestCancelled 移除 Quest 并清理
+// 暂停集合(避免内存泄漏),QuestPriorityAdjusted 只更新 priority 字段。
+
+/// 构造 QuestCancelled 事件
+fn quest_cancelled_event(quest_id: &str) -> NexusEvent {
+    NexusEvent::QuestCancelled {
+        metadata: EventMetadata::new("quest-engine"),
+        quest_id: quest_id.into(),
+        requested_by: "test".into(),
+    }
+}
+
+/// 构造 QuestPriorityAdjusted 事件
+fn quest_priority_adjusted_event(quest_id: &str, new_priority: u8) -> NexusEvent {
+    NexusEvent::QuestPriorityAdjusted {
+        metadata: EventMetadata::new("quest-engine"),
+        quest_id: quest_id.into(),
+        new_priority,
+        requested_by: "test".into(),
+    }
+}
+
+#[tokio::test]
+async fn test_quest_cancelled_removes_from_list() {
+    let bus = EventBus::with_capacity(1024);
+    let subscriber = EventSubscriber::new(bus.clone());
+    let pipeline = DataPipeline::new(subscriber, test_config());
+
+    // 初始化两个 Quest
+    let q1 = quest("q1", "first");
+    let q2 = quest("q2", "second");
+    bus.publish(quest_list_event(vec![q1, q2.clone()], "quest-engine"))
+        .await
+        .unwrap();
+
+    // 发布 QuestCancelled 取消 q1
+    bus.publish(quest_cancelled_event("q1")).await.unwrap();
+
+    // 等待 tick 处理
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    let snapshot = pipeline.snapshot();
+    // q1 被移除,只剩 q2
+    assert_eq!(snapshot.quest_list.len(), 1, "q1 should be removed");
+    assert_eq!(snapshot.quest_list[0].quest_id, "q2");
+    assert_eq!(snapshot.quest_list[0].title, "second");
+}
+
+#[tokio::test]
+async fn test_quest_priority_adjusted_updates_field() {
+    let bus = EventBus::with_capacity(1024);
+    let subscriber = EventSubscriber::new(bus.clone());
+    let pipeline = DataPipeline::new(subscriber, test_config());
+
+    // 初始化一个 Quest(priority=128,默认值)
+    let q1 = quest("q1", "priority-test");
+    bus.publish(quest_list_event(vec![q1], "quest-engine"))
+        .await
+        .unwrap();
+
+    // 发布 QuestPriorityAdjusted 调整优先级为 200
+    bus.publish(quest_priority_adjusted_event("q1", 200))
+        .await
+        .unwrap();
+
+    // 等待 tick 处理
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    let snapshot = pipeline.snapshot();
+    assert_eq!(snapshot.quest_list.len(), 1, "quest should still exist");
+    assert_eq!(
+        snapshot.quest_list[0].priority, 200,
+        "priority should be updated to 200"
+    );
+}
+
+#[tokio::test]
+async fn test_quest_cancelled_unknown_id_no_change() {
+    let bus = EventBus::with_capacity(1024);
+    let subscriber = EventSubscriber::new(bus.clone());
+    let pipeline = DataPipeline::new(subscriber, test_config());
+
+    // 初始化一个 Quest
+    let q1 = quest("q1", "only-one");
+    bus.publish(quest_list_event(vec![q1.clone()], "quest-engine"))
+        .await
+        .unwrap();
+
+    // 发布 QuestCancelled 取消不存在的 quest_id,不应 panic 也不应改变列表
+    bus.publish(quest_cancelled_event("nonexistent"))
+        .await
+        .unwrap();
+
+    // 等待 tick 处理
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    let snapshot = pipeline.snapshot();
+    assert_eq!(
+        snapshot.quest_list.len(),
+        1,
+        "quest_list should remain unchanged for unknown quest_id"
+    );
+    assert_eq!(snapshot.quest_list[0].quest_id, "q1");
 }

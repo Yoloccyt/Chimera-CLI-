@@ -621,6 +621,7 @@ fn test_quest_panel_renders_real_quest_data() {
         ],
         thinking_mode: ThinkingMode::Deep,
         checkpoint_id: Some("cp-1".into()),
+        priority: 128,
     };
 
     let snapshot = full_snapshot(vec![quest], VecDeque::new(), BudgetMetrics::default());

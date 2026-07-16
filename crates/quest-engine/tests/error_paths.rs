@@ -20,6 +20,7 @@ fn make_quest(quest_id: &str, tasks: Vec<Task>) -> Quest {
         tasks,
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     }
 }
 

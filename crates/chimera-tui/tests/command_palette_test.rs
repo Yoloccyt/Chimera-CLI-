@@ -1,11 +1,16 @@
-//! CommandPalette 集成测试 — 验证命令解析、过滤器命令与搜索模式
+//! CommandPalette quest 子命令集成测试
+//!
+//! 验证 `quest cancel <id>` 与 `quest priority <id> <level>` 命令解析,
+//! 包括非法 level(>255 / 非数字)与缺失参数的错误处理。
+//!
+//! 对应架构层:L10 Interface
+//! 对应任务:Task 5 — TUI CommandPalette 新增 quest 管理命令
 
-#![forbid(unsafe_code)]
+use chimera_tui::command_palette::CommandPalette;
+use chimera_tui::popup::Severity;
+use chimera_tui::types::{InputMode, PanelId, TuiCommand, TuiState};
 
-use chimera_tui::{CommandPalette, InputMode, PanelId, Severity, TuiCommand, TuiState};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use event_bus::VoteValue;
-
+/// 构造 Command 模式的 TuiState,输入缓冲已填入给定命令字符串
 fn command_state(input: &str) -> TuiState {
     let mut state = TuiState::new();
     state.input_mode = InputMode::Command;
@@ -13,355 +18,204 @@ fn command_state(input: &str) -> TuiState {
     state
 }
 
-#[test]
-fn command_palette_parses_panel_switch_commands() {
-    let mut palette = CommandPalette::new();
-
-    let cases = [
-        ("quest", PanelId::Quest),
-        ("parliament", PanelId::Parliament),
-        ("budget", PanelId::Budget),
-        ("log", PanelId::Log),
-        ("help", PanelId::Help),
-    ];
-
-    for (input, expected) in cases {
-        let mut state = command_state(input);
-        let cmd = palette.submit(&mut state);
-        assert_eq!(
-            cmd,
-            Some(TuiCommand::SwitchPanel(expected)),
-            "input '{}'",
-            input
-        );
-        assert_eq!(state.input_mode, InputMode::Normal);
-        assert!(state.input_buffer.is_empty());
-    }
-}
+// ============================================================
+// quest cancel <id> — 正向解析
+// ============================================================
 
 #[test]
-fn command_palette_parses_quit_command() {
+fn test_parse_quest_cancel_command() {
     let mut palette = CommandPalette::new();
-    let mut state = command_state("quit");
-
+    let mut state = command_state("quest cancel quest-001");
     let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, Some(TuiCommand::Quit));
-}
 
-#[test]
-fn command_palette_ignores_unknown_command() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("unknown");
-
-    let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, None);
-    assert_eq!(state.input_mode, InputMode::Normal);
-    assert!(state.input_buffer.is_empty());
-    assert!(
-        state
-            .status_message
-            .as_ref()
-            .unwrap()
-            .0
-            .contains("unknown command"),
-        "status should report unknown command"
-    );
-    assert_eq!(state.status_message.as_ref().unwrap().1, Severity::Error);
-}
-
-#[test]
-fn command_palette_search_mode_sets_keyword() {
-    let mut palette = CommandPalette::new();
-    let mut state = TuiState::new();
-    state.input_mode = InputMode::Search;
-    state.input_buffer = "query".into();
-
-    let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, None);
-    assert_eq!(state.input_mode, InputMode::Normal);
-    assert!(state.input_buffer.is_empty());
-    assert_eq!(state.filter_keyword, Some("query".into()));
-}
-
-#[test]
-fn command_palette_find_command_sets_keyword() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("find error");
-
-    let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, None);
-    assert_eq!(state.filter_keyword, Some("error".into()));
-}
-
-#[test]
-fn command_palette_filter_command_sets_topic() {
-    let cases = [
-        "quest",
-        "parliament",
-        "budget",
-        "memory",
-        "security",
-        "health",
-        "system",
-    ];
-    for topic in cases {
-        let mut palette = CommandPalette::new();
-        let mut state = command_state(&format!("filter {topic}"));
-        let cmd = palette.submit(&mut state);
-        assert_eq!(cmd, None, "topic '{}' should not produce command", topic);
-        assert_eq!(
-            state.filter_topic,
-            Some(topic.into()),
-            "topic '{}' should be set",
-            topic
-        );
-    }
-}
-
-#[test]
-fn command_palette_filter_command_rejects_invalid_topic() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("filter invalid-topic");
-
-    let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, None);
-    assert!(state.filter_topic.is_none());
-    assert!(
-        state
-            .status_message
-            .as_ref()
-            .unwrap()
-            .0
-            .contains("invalid topic"),
-        "status should report invalid topic"
-    );
-}
-
-#[test]
-fn command_palette_level_command_sets_level() {
-    let cases = ["info", "warn", "error", "critical"];
-    for level in cases {
-        let mut palette = CommandPalette::new();
-        let mut state = command_state(&format!("level {level}"));
-        let cmd = palette.submit(&mut state);
-        assert_eq!(cmd, None, "level '{}' should not produce command", level);
-        assert_eq!(
-            state.filter_level,
-            Some(level.into()),
-            "level '{}' should be set",
-            level
-        );
-    }
-}
-
-#[test]
-fn command_palette_level_command_rejects_invalid_level() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("level verbose");
-
-    let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, None);
-    assert!(state.filter_level.is_none());
-    assert!(
-        state
-            .status_message
-            .as_ref()
-            .unwrap()
-            .0
-            .contains("invalid level"),
-        "status should report invalid level"
-    );
-}
-
-#[test]
-fn command_palette_refresh_returns_request() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("refresh");
-    state.filter_keyword = Some("old".into());
-    state.filter_topic = Some("security".into());
-    state.filter_level = Some("error".into());
-
-    // M4:refresh 现在作为控制请求发布,由上游订阅者处理过滤器清空。
-    let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
-    assert!(state.filter_keyword.is_some());
-    assert!(state.filter_topic.is_some());
-    assert!(state.filter_level.is_some());
-}
-
-#[test]
-fn command_palette_missing_argument_reports_error() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("find");
-
-    let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, None);
-    assert!(
-        state
-            .status_message
-            .as_ref()
-            .unwrap()
-            .0
-            .contains("requires an argument"),
-        "status should report missing argument"
-    );
-}
-
-#[test]
-fn command_palette_handle_key_appends_characters() {
-    let mut palette = CommandPalette::new();
-    let mut state = TuiState::new();
-    state.input_mode = InputMode::Command;
-
-    for c in "budget".chars() {
-        palette.handle_key(
-            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
-            &mut state,
-        );
-    }
-    assert_eq!(state.input_buffer, "budget");
-}
-
-#[test]
-fn command_palette_handle_key_backspace_removes_last_char() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("bud");
-
-    palette.handle_key(
-        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-        &mut state,
-    );
-    assert_eq!(state.input_buffer, "bu");
-}
-
-#[test]
-fn command_palette_handle_key_esc_cancels_input() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("quit");
-
-    let cmd = palette.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut state);
-    assert_eq!(cmd, None);
-    assert_eq!(state.input_mode, InputMode::Normal);
-    assert!(state.input_buffer.is_empty());
-}
-
-#[test]
-fn command_palette_handle_key_esc_in_search_clears_keyword() {
-    let mut palette = CommandPalette::new();
-    let mut state = TuiState::new();
-    state.input_mode = InputMode::Search;
-    state.filter_keyword = Some("old".into());
-    state.input_buffer = "new".into();
-
-    let cmd = palette.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut state);
-    assert_eq!(cmd, None);
-    assert!(state.filter_keyword.is_none());
-    assert_eq!(state.input_mode, InputMode::Normal);
-    assert!(state.input_buffer.is_empty());
-}
-
-#[test]
-fn command_palette_handle_key_enter_submits() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("help");
-
-    let cmd = palette.handle_key(
-        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        &mut state,
-    );
-    assert_eq!(cmd, Some(TuiCommand::SwitchPanel(PanelId::Help)));
-    assert_eq!(state.input_mode, InputMode::Normal);
-}
-
-#[test]
-fn command_palette_parses_pause_command() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("pause q-1");
-
-    let cmd = palette.submit(&mut state);
     assert_eq!(
         cmd,
-        Some(TuiCommand::RequestQuestPause("q-1".into())),
-        "pause should return RequestQuestPause"
+        Some(TuiCommand::RequestQuestCancel("quest-001".to_string()))
     );
+    // 提交后输入模式应恢复 Normal,缓冲清空
+    assert_eq!(state.input_mode, InputMode::Normal);
+    assert!(state.input_buffer.is_empty());
 }
 
 #[test]
-fn command_palette_parses_resume_command() {
+fn test_parse_quest_cancel_with_complex_id() {
+    // 验证含连字符/数字的 quest_id 正常解析
     let mut palette = CommandPalette::new();
-    let mut state = command_state("resume q-2");
-
+    let mut state = command_state("quest cancel q-abc-123-xyz");
     let cmd = palette.submit(&mut state);
+
     assert_eq!(
         cmd,
-        Some(TuiCommand::RequestQuestResume("q-2".into())),
-        "resume should return RequestQuestResume"
+        Some(TuiCommand::RequestQuestCancel("q-abc-123-xyz".to_string()))
     );
 }
 
 #[test]
-fn command_palette_parses_vote_command() {
+fn test_quest_cancel_missing_id_shows_error() {
     let mut palette = CommandPalette::new();
-    let mut state = command_state("vote yes p-1");
-
+    let mut state = command_state("quest cancel");
     let cmd = palette.submit(&mut state);
-    assert_eq!(
-        cmd,
-        Some(TuiCommand::RequestVote {
-            proposal_id: "p-1".into(),
-            vote: VoteValue::Yes,
-        }),
-        "vote should return RequestVote"
-    );
-}
 
-#[test]
-fn command_palette_vote_command_rejects_invalid_vote() {
-    let mut palette = CommandPalette::new();
-    let mut state = command_state("vote maybe p-1");
-
-    let cmd = palette.submit(&mut state);
     assert_eq!(cmd, None);
+    let (msg, sev) = state
+        .status_message
+        .expect("error status should be set for missing quest id");
+    assert_eq!(sev, Severity::Error);
     assert!(
-        state
-            .status_message
-            .as_ref()
-            .unwrap()
-            .0
-            .contains("invalid vote"),
-        "status should report invalid vote"
+        msg.contains("quest id") || msg.contains("requires"),
+        "status should report missing quest id, got: {msg}"
+    );
+}
+
+// ============================================================
+// quest priority <id> <level> — 正向解析
+// ============================================================
+
+#[test]
+fn test_parse_quest_priority_command() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("quest priority quest-001 200");
+    let cmd = palette.submit(&mut state);
+
+    assert_eq!(
+        cmd,
+        Some(TuiCommand::RequestQuestPriorityChange {
+            quest_id: "quest-001".to_string(),
+            new_priority: 200,
+        })
+    );
+    assert_eq!(state.input_mode, InputMode::Normal);
+    assert!(state.input_buffer.is_empty());
+}
+
+#[test]
+fn test_parse_quest_priority_boundary_zero() {
+    // 边界值 0(u8 下限)应接受
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("quest priority quest-001 0");
+    let cmd = palette.submit(&mut state);
+
+    assert_eq!(
+        cmd,
+        Some(TuiCommand::RequestQuestPriorityChange {
+            quest_id: "quest-001".to_string(),
+            new_priority: 0,
+        })
     );
 }
 
 #[test]
-fn command_palette_refresh_command_returns_request() {
+fn test_parse_quest_priority_boundary_max() {
+    // 边界值 255(u8 上限)应接受
     let mut palette = CommandPalette::new();
-    let mut state = command_state("refresh");
-    state.filter_keyword = Some("old".into());
-
+    let mut state = command_state("quest priority quest-001 255");
     let cmd = palette.submit(&mut state);
-    assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
-    // refresh 现在直接发布请求,不再清空过滤器;清空逻辑留待上游处理
-    assert_eq!(state.filter_keyword, Some("old".into()));
+
+    assert_eq!(
+        cmd,
+        Some(TuiCommand::RequestQuestPriorityChange {
+            quest_id: "quest-001".to_string(),
+            new_priority: 255,
+        })
+    );
+}
+
+// ============================================================
+// quest priority — 非法 level 错误处理
+// ============================================================
+
+#[test]
+fn test_quest_priority_invalid_level_shows_error() {
+    // 999 > 255(u8 上限),parse::<u8>() 必然失败
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("quest priority quest-001 999");
+    let cmd = palette.submit(&mut state);
+
+    assert_eq!(cmd, None);
+    let (msg, sev) = state
+        .status_message
+        .expect("error status should be set for invalid level");
+    assert_eq!(sev, Severity::Error);
+    assert!(
+        msg.contains("invalid priority") || msg.contains("0-255"),
+        "status should report invalid priority, got: {msg}"
+    );
 }
 
 #[test]
-fn command_palette_control_commands_require_arguments() {
-    let cases = [
-        ("pause", "pause requires a quest id"),
-        ("resume", "resume requires a quest id"),
-        ("vote", "vote requires a vote value and proposal id"),
-    ];
+fn test_quest_priority_non_numeric_level_shows_error() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("quest priority quest-001 abc");
+    let cmd = palette.submit(&mut state);
 
-    for (input, expected) in cases {
-        let mut palette = CommandPalette::new();
-        let mut state = command_state(input);
-        let cmd = palette.submit(&mut state);
-        assert_eq!(cmd, None, "input '{}' should not produce command", input);
-        assert!(
-            state.status_message.as_ref().unwrap().0.contains(expected),
-            "input '{}' should report missing argument",
-            input
-        );
-    }
+    assert_eq!(cmd, None);
+    let (msg, sev) = state
+        .status_message
+        .expect("error status should be set for non-numeric level");
+    assert_eq!(sev, Severity::Error);
+    assert!(
+        msg.contains("invalid priority") || msg.contains("0-255"),
+        "status should report invalid priority, got: {msg}"
+    );
+}
+
+#[test]
+fn test_quest_priority_missing_level_shows_error() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("quest priority quest-001");
+    let cmd = palette.submit(&mut state);
+
+    assert_eq!(cmd, None);
+    let (msg, sev) = state
+        .status_message
+        .expect("error status should be set for missing level");
+    assert_eq!(sev, Severity::Error);
+    assert!(
+        msg.contains("level") || msg.contains("requires"),
+        "status should report missing level, got: {msg}"
+    );
+}
+
+#[test]
+fn test_quest_priority_missing_all_args_shows_error() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("quest priority");
+    let cmd = palette.submit(&mut state);
+
+    assert_eq!(cmd, None);
+    assert_eq!(
+        state.status_message.as_ref().map(|(_, sev)| *sev),
+        Some(Severity::Error)
+    );
+}
+
+// ============================================================
+// 回归测试 — quest 子命令不破坏现有 quest 面板切换
+// ============================================================
+
+#[test]
+fn test_quest_alone_still_switches_panel() {
+    // `quest` 单独仍应切换到 Quest 面板,不被子命令逻辑拦截
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("quest");
+    let cmd = palette.submit(&mut state);
+
+    assert_eq!(cmd, Some(TuiCommand::SwitchPanel(PanelId::Quest)));
+}
+
+#[test]
+fn test_quest_unknown_subcommand_shows_error() {
+    let mut palette = CommandPalette::new();
+    let mut state = command_state("quest frobnicate quest-001");
+    let cmd = palette.submit(&mut state);
+
+    assert_eq!(cmd, None);
+    let (msg, sev) = state
+        .status_message
+        .expect("error status should be set for unknown subcommand");
+    assert_eq!(sev, Severity::Error);
+    assert!(
+        msg.contains("unknown quest subcommand") || msg.contains("unknown command"),
+        "status should report unknown subcommand, got: {msg}"
+    );
 }

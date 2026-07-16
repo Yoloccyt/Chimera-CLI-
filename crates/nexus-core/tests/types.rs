@@ -35,6 +35,7 @@ fn make_quest(id: &str) -> Quest {
         ],
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     }
 }
 

@@ -5,10 +5,18 @@ name: Fuzz
 #
 # 触发:推送 v*.*.*-omega 标签 或 手动触发
 # 运行:ubuntu-latest runner + nightly 工具链 + cargo-fuzz
-# 时长:3 target × 300s + 编译 ≈ 15-20min
+# 时长:6 target × 300s + 编译 ≈ 30-40min
 #
 # 本地 Windows GNU 无法运行(libFuzzer C++ 与 g++ 不兼容),
 # 委托 Linux CI 执行,解除限制 1。
+#
+# Fuzz target 清单(6 个,与 fuzz/Cargo.toml [[bin]] 声明一致):
+#   1. quest_parse           — Quest 解析
+#   2. seccore_sandbox       — SecCore 沙箱
+#   3. event_serialize       — 事件序列化
+#   4. cacr_budget_parse     — CACR 预算配置解析
+#   5. checkpoint_deserialize — Checkpoint 反序列化
+#   6. config_section_parse  — 配置段解析
 # ============================================================
 
 on:
@@ -28,7 +36,7 @@ jobs:
   fuzz:
     name: Fuzz (${{ matrix.target }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20  # WHY: 3 target × 300s + 编译 ≈ 15-20min,20min 兜底防止 fuzz hang 占用 nightly runner
+    timeout-minutes: 40  # WHY: 6 target × 300s + 编译 ≈ 30-40min,40min 兜底防止 fuzz hang 占用 nightly runner
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +44,9 @@ jobs:
           - quest_parse
           - seccore_sandbox
           - event_serialize
+          - cacr_budget_parse
+          - checkpoint_deserialize
+          - config_section_parse
 
     steps:
       - name: Checkout

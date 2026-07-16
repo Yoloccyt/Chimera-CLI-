@@ -31,12 +31,14 @@ resolver = "2"
 version = "1.7.0-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
-license = "Apache-2.0"
+license = "MIT"
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full", "tracing"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# serde_yaml:TuiConfig 持久化(Task 15),YAML 格式读写配置文件
+serde_yaml = "0.9"
 anyhow = "1.0"
 tracing = "0.1"
 # tracing-subscriber:日志订阅器,用于格式化输出 tracing 事件
@@ -170,6 +172,19 @@ path = "tests/e2e/stress_test.rs"
 name = "week8_final_acceptance"
 path = "tests/e2e/week8_final_acceptance.rs"
 
+# ============================================================
+# TUI 双向控制闭环 E2E 测试
+#
+# WHY 新增 test target:验证 TUI→EventBus→quest-engine→EventBus→TUI
+# 完整双向控制闭环(取消/优先级调整)。测试不启动真实 TUI(避免阻塞),
+# 而是通过 EventBus 发布控制请求事件模拟 TUI 操作,验证 quest-engine
+# 消费请求并发布反馈事件,再验证 QuestSync 正确消费反馈事件更新状态。
+# ============================================================
+
+[[test]]
+name = "tui_control_loop"
+path = "tests/e2e/tui_control_loop.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。
@@ -197,6 +212,8 @@ efficiency-monitor = { path = "crates/efficiency-monitor" } # L9 Quest(效率监
 seccore = { path = "crates/seccore" }                # L4 Security(沙箱+审计链+ASA)
 # Week 8 Task 6 新增被测 crate(Quest 生命周期 / 全量集成 / 压测 / 8 周验收)
 quest-engine = { path = "crates/quest-engine" }      # L9 Quest(Quest 生命周期 E2E)
+# TUI 双向控制闭环 E2E 测试被测 crate(L10 QuestSync 消费反馈事件)
+chimera-tui = { path = "crates/chimera-tui" }         # L10 Interface(QuestSync apply_event)
 repo-wiki = { path = "crates/repo-wiki" }            # L5 Knowledge(Wiki 沉淀)
 model-router = { path = "crates/model-router" }      # L1 Core(模型路由)
 osa-coordinator = { path = "crates/osa-coordinator" } # L6 Router(OSA 五维度稀疏)

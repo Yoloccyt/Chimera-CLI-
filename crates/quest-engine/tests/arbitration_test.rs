@@ -271,6 +271,7 @@ async fn test_select_mode_with_arbitration_uses_arbitrated_tier() {
             .collect(),
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     };
 
     // 发布 ACB L0 → 仲裁为 Degraded → 应选 Fast(即使 fallback 为 HighTier)

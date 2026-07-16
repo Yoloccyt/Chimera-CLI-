@@ -7,7 +7,7 @@
 //! - 辅助函数接收原始数值与主题色,返回可直接 `render` 的 widget,
 //!   保持面板代码聚焦于业务布局。
 
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Sparkline};
 
@@ -160,6 +160,144 @@ pub fn virtual_scroll_window(
     (start, end)
 }
 
+/// 渲染条形热图 — 将标量值映射为带颜色编码的 Line
+///
+/// 用于 OsaSparse 面板(稀疏度热图)与 ClvVector 面板(分块均值热图)。
+/// 颜色编码策略:
+/// - 值 < min + 25% 范围: 蓝色(低值,使用 '░' 浅字符)
+/// - 值在 25%-75% 范围: 灰色(中值,使用 '▒' 中字符)
+/// - 值 > 75% 范围: 红色(高值,使用 '▓' 深字符)
+///
+/// WHY 字符渐进:使用 '░'(浅) → '▒'(中) → '▓'(深) 表示强度递增,
+/// 比纯色块更直观,且在非彩色终端也能区分强度。
+///
+/// # 参数
+/// - `value`: 要渲染的标量值
+/// - `min`: 值域下界(用于归一化)
+/// - `max`: 值域上界(用于归一化)
+/// - `width`: 条形图字符宽度(建议 10)
+///
+/// # 返回
+/// ratatui::text::Line<'static>,包含样式化的 Span
+///
+/// # 边界处理
+/// - value < min: 钳位为 min
+/// - value > max: 钳位为 max
+/// - min == max: 取中值 0.5,返回灰色中字符约 50% 填充(避免除零)
+pub fn heat_bar(value: f64, min: f64, max: f64, width: usize) -> Line<'static> {
+    // 钳位到 [min, max] 范围,避免值域越界
+    let clamped = value.clamp(min, max);
+
+    // 计算归一化比例 [0.0, 1.0];min == max 时取中值 0.5 避免除零
+    let ratio = if (max - min).abs() < f64::EPSILON {
+        0.5
+    } else {
+        (clamped - min) / (max - min)
+    };
+
+    // 计算填充字符数(至少 1 个避免空条;最多 width 个)
+    let filled = ((ratio * width as f64).round() as usize).clamp(1, width);
+    let empty = width - filled;
+
+    // 颜色与字符三档编码:低值蓝/浅字符,中值灰/中字符,高值红/深字符
+    let (color, filled_char, empty_char) = if ratio < 0.25 {
+        (Color::Blue, "░", "·")
+    } else if ratio < 0.75 {
+        (Color::DarkGray, "▒", "·")
+    } else {
+        (Color::Red, "▓", "·")
+    };
+
+    let filled_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+    let empty_style = Style::default().fg(Color::DarkGray);
+
+    Line::from(vec![
+        Span::styled(filled_char.repeat(filled), filled_style),
+        Span::styled(empty_char.repeat(empty), empty_style),
+    ])
+}
+
+/// 阈值着色阈值定义 — 用于 gauge_thresholded 的三档颜色分界
+///
+/// WHY 独立结构体:Health 评分等指标需要语义化颜色(绿好/黄警告/红危险),
+/// 现有 gauge 需调用方手动算颜色,此结构体封装阈值配置,便于复用与测试。
+#[derive(Debug, Clone, Copy)]
+pub struct GaugeThreshold {
+    /// 绿色阈值上限(0-100 百分比,低于此值显示绿色)
+    pub green_max: f64,
+    /// 黄色阈值上限(green_max 到此值显示黄色)
+    pub yellow_max: f64,
+    // 超过 yellow_max 显示红色
+}
+
+/// 构造双系列 Sparkline widget — 用于叠加显示两个相关趋势
+///
+/// 返回主系列与次系列两个 Sparkline 的元组,调用方分别渲染到上下两行。
+///
+/// # 参数
+/// - `data1`: 主系列数据点
+/// - `data2`: 次系列数据点
+/// - `title`: 图表标题
+/// - `color1`: 主系列颜色
+/// - `color2`: 次系列颜色
+///
+/// # 设计决策(WHY)
+/// Health 面板需同时展示事件速率与慢消费者数,单系列 sparkline 无法表达相关性。
+/// ratatui 不支持单 widget 内多系列叠加,因此返回元组由调用方在相邻区域渲染,
+/// 保持 widget 职责单一(一个 Sparkline = 一条数据线)。
+pub fn sparkline_dual(
+    data1: &[u64],
+    data2: &[u64],
+    title: &str,
+    color1: Color,
+    color2: Color,
+) -> (Sparkline<'static>, Sparkline<'static>) {
+    (
+        sparkline(data1, title, color1),
+        sparkline(data2, &format!("{} (secondary)", title), color2),
+    )
+}
+
+/// 构造阈值着色 Gauge widget — 根据值区间自动选颜色
+///
+/// 颜色分档逻辑(基于 value/max 的百分比):
+/// - 低于 `green_max`:绿色(健康)
+/// - `green_max` 到 `yellow_max`:黄色(警告)
+/// - 不低于 `yellow_max`:红色(危险)
+///
+/// # 参数
+/// - `value`: 当前值
+/// - `max`: 最大值(必须 > 0,否则按 0% 处理)
+/// - `thresholds`: 阈值定义(green_max/yellow_max, 0-100 百分比)
+/// - `label`: 中心标签
+///
+/// # 设计决策(WHY)
+/// Health 评分等指标需要语义化颜色(绿好/黄警告/红危险),现有 gauge 需调用方
+/// 手动算颜色,此函数封装阈值逻辑,消除重复的 if-else 颜色判断。
+/// 边界语义:percent < green_max 为绿,percent < yellow_max 为黄(此处 green_max
+/// 已落入黄色区间),其余为红 — 与 severity() 风格一致(左闭右开)。
+pub fn gauge_thresholded(
+    value: f64,
+    max: f64,
+    thresholds: GaugeThreshold,
+    label: &str,
+) -> Gauge<'static> {
+    let ratio = if max > 0.0 {
+        (value / max).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let percent = ratio * 100.0;
+    let color = if percent < thresholds.green_max {
+        Color::Green
+    } else if percent < thresholds.yellow_max {
+        Color::Yellow
+    } else {
+        Color::Red
+    };
+    gauge(value, max, label, color)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +426,82 @@ mod tests {
         let (start, end) = virtual_scroll_window(50, 100, 20);
         assert_eq!(start, 44, "offset clamped to 49, start = 49 - 5");
         assert_eq!(end, 50, "end clamped to total_items");
+    }
+
+    // ============================================================
+    // heat_bar 条形热图测试
+    // ============================================================
+
+    #[test]
+    fn test_heat_bar_min_value() {
+        // 极小值:应显示蓝色 + 浅字符
+        let line = heat_bar(0.0, 0.0, 100.0, 10);
+        // Line 应包含 2 个 Span(filled + empty)
+        assert_eq!(line.spans.len(), 2);
+        // 值为 0 时,filled 至少 1 个字符(避免空条)
+        let filled = &line.spans[0];
+        assert!(!filled.content.is_empty());
+    }
+
+    #[test]
+    fn test_heat_bar_max_value() {
+        // 极大值:应显示红色 + 深字符,全填充
+        let line = heat_bar(100.0, 0.0, 100.0, 10);
+        assert_eq!(line.spans.len(), 2);
+        // 最大值时 filled 应为 width 个字符
+        let filled = &line.spans[0];
+        assert_eq!(filled.content.chars().count(), 10);
+        // empty 应为 0 个字符
+        let empty = &line.spans[1];
+        assert!(empty.content.is_empty());
+    }
+
+    #[test]
+    fn test_heat_bar_mid_value() {
+        // 中值(50%):应显示灰色 + 中字符
+        let line = heat_bar(50.0, 0.0, 100.0, 10);
+        assert_eq!(line.spans.len(), 2);
+        let filled = &line.spans[0];
+        // 50% 应填充约 5 个字符
+        assert_eq!(filled.content.chars().count(), 5);
+    }
+
+    #[test]
+    fn test_heat_bar_clamp_below_min() {
+        // 值低于 min:应钳位为 min(蓝色 + 最少填充)
+        let line = heat_bar(-10.0, 0.0, 100.0, 10);
+        assert_eq!(line.spans.len(), 2);
+        let filled = &line.spans[0];
+        // 钳位后 ratio=0,filled 至少 1 个字符
+        assert!(!filled.content.is_empty());
+    }
+
+    #[test]
+    fn test_heat_bar_clamp_above_max() {
+        // 值高于 max:应钳位为 max(红色 + 全填充)
+        let line = heat_bar(150.0, 0.0, 100.0, 10);
+        assert_eq!(line.spans.len(), 2);
+        let filled = &line.spans[0];
+        assert_eq!(filled.content.chars().count(), 10);
+    }
+
+    #[test]
+    fn test_heat_bar_min_equals_max() {
+        // min == max:避免除零,返回中值(灰色 + 50% 填充)
+        let line = heat_bar(5.0, 5.0, 5.0, 10);
+        assert_eq!(line.spans.len(), 2);
+        // 中值应填充约 5 个字符(ratio=0.5)
+        let filled = &line.spans[0];
+        assert_eq!(filled.content.chars().count(), 5);
+    }
+
+    #[test]
+    fn test_heat_bar_negative_range() {
+        // 负值范围:-1.0 到 1.0,值 0.0 应为中值(50%)
+        let line = heat_bar(0.0, -1.0, 1.0, 10);
+        assert_eq!(line.spans.len(), 2);
+        let filled = &line.spans[0];
+        // 0.0 在 [-1.0, 1.0] 范围中是中值,应填充约 5 个字符
+        assert_eq!(filled.content.chars().count(), 5);
     }
 }

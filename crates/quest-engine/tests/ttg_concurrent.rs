@@ -30,6 +30,7 @@ fn make_quest(quest_id: &str, task_count: usize) -> Quest {
         tasks,
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     }
 }
 

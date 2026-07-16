@@ -24,6 +24,7 @@
 //!     }],
 //!     thinking_mode: ThinkingMode::Standard,
 //!     checkpoint_id: None,
+//!     priority: 128,
 //! };
 //! state.register_quest(quest).unwrap();
 //! assert_eq!(state.list_quests().len(), 1);

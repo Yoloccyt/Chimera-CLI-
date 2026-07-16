@@ -200,6 +200,7 @@ fn test_parliament_consensus() {
             }],
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         };
         let proposal = Proposal::new("p-1", "q-parliament-1", "执行计划", 0.2);
         let consensus = parliament

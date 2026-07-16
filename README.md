@@ -31,7 +31,7 @@
 | **Ω-Evolve** | GRPO 风格进化 + DPO 偏好优化 | 运行时自适应 |
 | **Ω-Event** | 事件驱动架构 | Tokio broadcast 跨层解耦 |
 
-核心组件：Event Bus 跨层通信 · SecCore 零信任沙箱 · 三层语义路由 · 14 面板终端仪表盘 · Merkle 审计链 · 能力衰减引擎 · 35 crates · 10 层架构。
+核心组件：Event Bus 跨层通信 · SecCore 零信任沙箱 · 三层语义路由 · 14 面板终端仪表盘 · Merkle 审计链 · 能力衰减引擎 · 34 crates · 10 层架构。
 
 ---
 
@@ -41,15 +41,11 @@
 
 | 文档 | 路径 | 用途 |
 |------|------|------|
-| 架构文档索引 | [docs/architecture/INDEX.md](docs/architecture/INDEX.md) | 架构手册、设计文档、深研报告的统一入口 |
-| 文件命名规范 | [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | 文件命名与存放规则，新成员必读 |
+| ⭐ **Code Wiki (权威源)** | [docs/architecture/CODE_WIKI.md](docs/architecture/CODE_WIKI.md) | **架构权威参考** — 34 crate索引、核心类型、事件系统、依赖铁律、设计模式、工程红线、构建指南 |
+| 架构文档索引 | [docs/architecture/INDEX.md](docs/architecture/INDEX.md) | 架构文档统一索引（7 分类导航） |
 | 项目规则 | [.trae/rules/nuxus规则.md](.trae/rules/nuxus规则.md) | 全局规则、架构硬约束、依赖铁律、async/SQLite/安全红线 |
 | 项目命令 | [.claude/CLAUDE.md](.claude/CLAUDE.md) | 环境设置、常用命令、CI/CD 与发布、本地限制 |
 | 版本演进史 | [CHANGELOG.md](CHANGELOG.md) | Week 1-8 验收记录 + v1.0.0-omega GA + 后续版本 |
-
-### 缺失文档警示
-
-- `CODE_WIKI.md` 与 `AETHER_NEXUS_OMEGA_ULTIMATE.md` 当前缺失，详见 [docs/architecture/INDEX.md](docs/architecture/INDEX.md) 缺失文档恢复建议。
 
 ---
 
@@ -144,8 +140,8 @@ cargo build --release -p chimera-cli
 
 | 维度 | 状态 |
 |------|------|
-| 架构 | 10 层 · 35 crates · 129k+ 行 Rust |
-| 测试 | 1142 单元测试 + 44 proptest + 26 benckmarks |
+| 架构 | 10 层 · 34 crates · 129k+ 行 Rust |
+| 测试 | 1142 单元测试 + 44 proptest + 26 benchmarks |
 | 安全 | OWASP A01-A10 全覆盖 · `#![forbid(unsafe_code)]` |
 | CI/CD | 8 条流水线 · 5 平台自动发布 · Docker distroless |
 | 许可证 | MIT |

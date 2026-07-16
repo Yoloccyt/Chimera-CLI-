@@ -21,7 +21,11 @@
 
 use std::collections::HashMap;
 
+// Windows-GNU 下使用 stub 宏(chimera_fuzz),非 Windows 使用 libfuzzer_sys
+#[cfg(not(windows))]
 use libfuzzer_sys::fuzz_target;
+#[cfg(windows)]
+use chimera_fuzz::fuzz_target;
 use seccore::{validate_command, validate_env, Command, CommandPolicy, EnvPolicy};
 
 fuzz_target!(|data: &[u8]| {

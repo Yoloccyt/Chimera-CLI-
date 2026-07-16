@@ -312,6 +312,26 @@ impl Default for TuiConfig {
     }
 }
 
+// ============================================================
+// 持久化配置结构(Task 15 TDD-GREEN)
+// ============================================================
+
+/// 持久化配置结构 — 只包含需要保存到文件的字段
+///
+/// WHY 单独结构: TuiConfig 有 10 个字段,但只有 4 个需要持久化
+/// (theme/colors/main_panel_ratio/tick_interval_ms)。运行时字段
+/// (frame_rate/enable_mouse/max_event_history/max_snapshots/
+/// snapshot_interval_s/log_panel_height)不应持久化,因为它们与
+/// 硬件环境或性能调优相关,每次启动应使用默认值,持久化会导致
+/// 跨环境配置污染。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistentConfig {
+    theme: Theme,
+    colors: ColorScheme,
+    main_panel_ratio: f32,
+    tick_interval_ms: u16,
+}
+
 impl TuiConfig {
     /// 校验配置合法性
     ///
@@ -389,6 +409,100 @@ impl TuiConfig {
             });
         }
         Ok(())
+    }
+
+    // ============================================================
+    // TuiConfig 持久化(Task 15 TDD-GREEN)
+    // ============================================================
+
+    /// 保存配置到 YAML 文件
+    ///
+    /// 持久化字段: theme / colors / main_panel_ratio / tick_interval_ms
+    /// 不持久化: frame_rate / enable_mouse / max_event_history /
+    ///           max_snapshots / snapshot_interval_s / log_panel_height
+    ///
+    /// WHY 只持久化 4 个字段: 运行时字段与硬件环境或性能调优相关,
+    /// 每次启动应使用默认值,持久化会导致跨环境配置污染。
+    pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), crate::error::TuiError> {
+        let persistent = PersistentConfig {
+            theme: self.theme,
+            colors: self.colors.clone(),
+            main_panel_ratio: self.main_panel_ratio,
+            tick_interval_ms: self.tick_interval_ms,
+        };
+
+        // 确保父目录存在(如 ~/.chimera/),避免写入时因目录缺失失败
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| crate::error::TuiError::ConfigError {
+                detail: format!("Failed to create config directory: {}", e),
+            })?;
+        }
+
+        let yaml = serde_yaml::to_string(&persistent).map_err(|e| {
+            crate::error::TuiError::ConfigError {
+                detail: format!("Failed to serialize config: {}", e),
+            }
+        })?;
+
+        std::fs::write(path, yaml).map_err(|e| crate::error::TuiError::ConfigError {
+            detail: format!("Failed to write config file: {}", e),
+        })?;
+
+        Ok(())
+    }
+
+    /// 从 YAML 文件加载配置
+    ///
+    /// - 文件不存在时返回 Ok(TuiConfig::default()),不报错
+    /// - 文件损坏时返回 Err(TuiError::ConfigError)
+    ///
+    /// WHY 文件不存在返回默认值: 首次启动时配置文件尚未创建,
+    /// 应静默回退到默认配置而非报错,符合 Figment 多源合并的
+    /// "内置默认 → 配置文件"优先级语义。
+    pub fn load_from_file(path: &std::path::Path) -> Result<Self, crate::error::TuiError> {
+        // 文件不存在时返回默认配置,不报错(首次启动场景)
+        if !path.exists() {
+            return Ok(TuiConfig::default());
+        }
+
+        let content =
+            std::fs::read_to_string(path).map_err(|e| crate::error::TuiError::ConfigError {
+                detail: format!("Failed to read config file: {}", e),
+            })?;
+
+        let persistent: PersistentConfig =
+            serde_yaml::from_str(&content).map_err(|e| crate::error::TuiError::ConfigError {
+                detail: format!("Failed to parse config YAML: {}", e),
+            })?;
+
+        // 用加载的持久化字段覆盖默认值,运行时字段保持默认(struct update 语法)
+        let config = TuiConfig {
+            theme: persistent.theme,
+            colors: persistent.colors,
+            main_panel_ratio: persistent.main_panel_ratio,
+            tick_interval_ms: persistent.tick_interval_ms,
+            ..Default::default()
+        };
+
+        Ok(config)
+    }
+
+    /// 返回默认配置文件路径
+    ///
+    /// - Linux/macOS: ~/.chimera/tui.yaml
+    /// - Windows: %USERPROFILE%\.chimera\tui.yaml
+    ///
+    /// WHY 优先 HOME 回退 USERPROFILE: Unix 系统使用 HOME,
+    /// Windows 使用 USERPROFILE。回退到 "." 保证极端环境下不 panic,
+    /// 虽然路径可能不合理但调用方可检测。
+    pub fn default_path() -> std::path::PathBuf {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+
+        std::path::PathBuf::from(home)
+            .join(".chimera")
+            .join("tui.yaml")
     }
 }
 
@@ -766,5 +880,133 @@ mod tests {
         let cfg: TuiConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.theme, Theme::Light);
         assert_eq!(cfg.colors, ColorScheme::default());
+    }
+
+    // ============================================================
+    // TUI v1.8-omega: TuiConfig 持久化测试(TDD-RED)
+    // Task 15 将实现 save_to_file / load_from_file / default_path
+    // ============================================================
+
+    #[test]
+    fn test_config_save_and_load_roundtrip() {
+        // 保存配置到临时文件,再加载回来,验证字段一致
+        let config = TuiConfig {
+            theme: Theme::Light,
+            main_panel_ratio: 0.6,
+            tick_interval_ms: 200,
+            ..TuiConfig::default()
+        };
+
+        // 使用临时目录
+        let temp_dir = std::env::temp_dir();
+        let config_path = temp_dir.join("chimera_tui_test_roundtrip.yaml");
+
+        // 清理可能存在的旧文件
+        let _ = std::fs::remove_file(&config_path);
+
+        // 保存
+        config
+            .save_to_file(&config_path)
+            .expect("save should succeed");
+
+        // 加载
+        let loaded = TuiConfig::load_from_file(&config_path).expect("load should succeed");
+
+        // 验证持久化字段
+        assert_eq!(loaded.theme, config.theme);
+        assert!((loaded.main_panel_ratio - config.main_panel_ratio).abs() < 1e-5);
+        assert_eq!(loaded.tick_interval_ms, config.tick_interval_ms);
+
+        // 清理
+        let _ = std::fs::remove_file(&config_path);
+    }
+
+    #[test]
+    fn test_config_load_nonexistent_returns_default() {
+        // 文件不存在时返回 Ok(TuiConfig::default())
+        let temp_dir = std::env::temp_dir();
+        let nonexistent = temp_dir.join("chimera_tui_nonexistent_12345.yaml");
+        let _ = std::fs::remove_file(&nonexistent);
+
+        let result = TuiConfig::load_from_file(&nonexistent);
+        assert!(result.is_ok(), "nonexistent file should return Ok(default)");
+        let loaded = result.unwrap();
+        assert_eq!(loaded.theme, TuiConfig::default().theme);
+    }
+
+    #[test]
+    fn test_config_load_corrupted_returns_error() {
+        // 文件存在但 YAML 损坏时返回 Err
+        let temp_dir = std::env::temp_dir();
+        let corrupted_path = temp_dir.join("chimera_tui_corrupted.yaml");
+
+        // 写入无效 YAML
+        std::fs::write(&corrupted_path, "invalid: yaml: content: [unclosed").unwrap();
+
+        let result = TuiConfig::load_from_file(&corrupted_path);
+        assert!(result.is_err(), "corrupted YAML should return Err");
+
+        // 清理
+        let _ = std::fs::remove_file(&corrupted_path);
+    }
+
+    #[test]
+    fn test_config_default_path_ends_with_tui_yaml() {
+        // 默认路径应以 tui.yaml 结尾
+        let path = TuiConfig::default_path();
+        assert!(
+            path.ends_with("tui.yaml") || path.ends_with("tui.yml"),
+            "default path should end with tui.yaml, got: {:?}",
+            path
+        );
+    }
+
+    #[test]
+    fn test_config_save_creates_file() {
+        // 保存后文件应存在
+        let config = TuiConfig::default();
+        let temp_dir = std::env::temp_dir();
+        let config_path = temp_dir.join("chimera_tui_test_create.yaml");
+
+        let _ = std::fs::remove_file(&config_path);
+
+        config
+            .save_to_file(&config_path)
+            .expect("save should succeed");
+
+        assert!(config_path.exists(), "file should exist after save");
+
+        // 清理
+        let _ = std::fs::remove_file(&config_path);
+    }
+
+    #[test]
+    fn test_config_persistence_excludes_runtime_fields() {
+        // 验证不持久化字段:max_event_history / max_snapshots / snapshot_interval_s
+        // 保存时修改这些字段,加载后应恢复为默认值
+        let config = TuiConfig {
+            max_event_history: 999,
+            max_snapshots: 999,
+            snapshot_interval_s: 999,
+            ..TuiConfig::default()
+        };
+
+        let temp_dir = std::env::temp_dir();
+        let config_path = temp_dir.join("chimera_tui_test_exclude.yaml");
+        let _ = std::fs::remove_file(&config_path);
+
+        config
+            .save_to_file(&config_path)
+            .expect("save should succeed");
+        let loaded = TuiConfig::load_from_file(&config_path).expect("load should succeed");
+
+        // 运行时字段应恢复为默认值,不持久化
+        let default = TuiConfig::default();
+        assert_eq!(loaded.max_event_history, default.max_event_history);
+        assert_eq!(loaded.max_snapshots, default.max_snapshots);
+        assert_eq!(loaded.snapshot_interval_s, default.snapshot_interval_s);
+
+        // 清理
+        let _ = std::fs::remove_file(&config_path);
     }
 }

@@ -196,8 +196,93 @@ impl CommandPalette {
                 Some(TuiCommand::RequestQuestResume(arg.to_string()))
             }
             "vote" => Self::parse_vote_command(arg, state),
+            // Task 5:quest 子命令(cancel/priority)
+            // WHY 委托到独立方法:`quest` 既是面板切换命令(无参数,已在上方 match 处理),
+            // 又是子命令前缀(`quest cancel <id>`/`quest priority <id> <level>`)。
+            // 此处 arg 非空(否则上方无参数 match 已拦截),交给子命令解析器分派。
+            "quest" => Self::parse_quest_subcommand(arg, state),
             _ => {
                 state.set_status(format!("unknown command '{}'", cmd), Severity::Error);
+                None
+            }
+        }
+    }
+
+    /// 解析 `quest <subcommand> [args]` 子命令(Task 5)
+    ///
+    /// 支持的子命令:
+    /// - `cancel <quest_id>`:请求取消 Quest(破坏性操作,由 `apply_command` 弹确认框)
+    /// - `priority <quest_id> <level>`:调整优先级(level 为 0-255 整数,直接发布)
+    ///
+    /// WHY 独立方法:`quest` 作为子命令前缀需要二级 splitn 解析,
+    /// 与单层参数命令(find/filter/level/pause/resume/vote)结构不同,
+    /// 集中处理避免 parse_command 主体膨胀(§6.1 单函数 ≤200 行红线)。
+    fn parse_quest_subcommand(arg: &str, state: &mut TuiState) -> Option<TuiCommand> {
+        // arg 非空保证:parse_command 上方无参数 match 已拦截裸 `quest` 命令
+        let mut parts = arg.splitn(2, ' ');
+        let sub = parts.next().unwrap_or("");
+        let rest = parts.next().unwrap_or("").trim();
+
+        match sub {
+            "cancel" => {
+                if rest.is_empty() {
+                    state.set_status("quest cancel requires a quest id", Severity::Error);
+                    return None;
+                }
+                Some(TuiCommand::RequestQuestCancel(rest.to_string()))
+            }
+            "priority" => Self::parse_quest_priority(rest, state),
+            _ => {
+                state.set_status(
+                    format!("unknown quest subcommand '{}'", sub),
+                    Severity::Error,
+                );
+                None
+            }
+        }
+    }
+
+    /// 解析 `quest priority <quest_id> <level>` 的参数(Task 5)
+    ///
+    /// level 必须是 0-255 的整数(u8 范围),`parse::<u8>()` 同时拒绝:
+    /// - 非数字字符串(如 "abc")
+    /// - 超出 u8 范围的数字(如 "999" > 255)
+    ///
+    /// WHY 用 u8 而非 u16 + 手动范围检查:u8 的 parse 天然实现 0-255 边界,
+    /// 避免重复校验逻辑(§4.1 "避免防御性代码"原则)。
+    fn parse_quest_priority(arg: &str, state: &mut TuiState) -> Option<TuiCommand> {
+        if arg.is_empty() {
+            state.set_status(
+                "quest priority requires a quest id and level",
+                Severity::Error,
+            );
+            return None;
+        }
+
+        let mut parts = arg.splitn(2, ' ');
+        let quest_id = parts.next().unwrap_or("").trim();
+        let level_str = parts.next().unwrap_or("").trim();
+
+        if quest_id.is_empty() {
+            state.set_status("quest priority requires a quest id", Severity::Error);
+            return None;
+        }
+
+        if level_str.is_empty() {
+            state.set_status("quest priority requires a level (0-255)", Severity::Error);
+            return None;
+        }
+
+        match level_str.parse::<u8>() {
+            Ok(level) => Some(TuiCommand::RequestQuestPriorityChange {
+                quest_id: quest_id.to_string(),
+                new_priority: level,
+            }),
+            Err(_) => {
+                state.set_status(
+                    format!("invalid priority '{}': expected 0-255 integer", level_str),
+                    Severity::Error,
+                );
                 None
             }
         }

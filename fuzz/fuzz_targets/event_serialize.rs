@@ -19,7 +19,11 @@
 // fuzz_target! 宏内部展开为 FFI 调用(unsafe),与 forbid 冲突。
 // fuzz crate 独立于主 workspace,不影响 34 crate 的 forbid 覆盖率。
 
+// Windows-GNU 下使用 stub 宏(chimera_fuzz),非 Windows 使用 libfuzzer_sys
+#[cfg(not(windows))]
 use libfuzzer_sys::fuzz_target;
+#[cfg(windows)]
+use chimera_fuzz::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     // === 目标1:NexusEvent JSON 反序列化不 panic ===

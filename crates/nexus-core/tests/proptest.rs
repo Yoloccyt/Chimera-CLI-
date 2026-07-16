@@ -184,6 +184,7 @@ proptest! {
             tasks,
             thinking_mode,
             checkpoint_id: if has_checkpoint { Some(format!("cp-{quest_id}")) } else { None },
+            priority: 128,
         };
         let bytes = rmp_serde::to_vec(&quest).expect("msgpack serialize quest");
         let decoded: Quest = rmp_serde::from_slice(&bytes).expect("msgpack deserialize quest");

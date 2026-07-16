@@ -103,7 +103,9 @@ impl NexusEvent {
             | Self::ContextWindowSwitched { .. }
             | Self::ContextCompressed { .. }
             | Self::CapabilityTiered { .. }
-            | Self::NmcEncoded { .. } => EventTopic::Memory,
+            | Self::NmcEncoded { .. }
+            // TUI v1.8-omega:CLV 快照报告(NMC 编码器发布,携带 CLV 摘要)
+            | Self::ClvSnapshotReported { .. } => EventTopic::Memory,
 
             // === Security (8 + P2.1 1 个) === L4 Security 安全审计与干预
             Self::CapabilityFrozen { .. }
@@ -144,7 +146,7 @@ impl NexusEvent {
             // M4 双向控制:投票请求
             | Self::VoteCastRequested { .. } => EventTopic::Parliament,
 
-            // === Quest (7 + P1.2 2 + M4 4 个) === L9 Quest 意图/任务/检查点
+            // === Quest (7 + P1.2 2 + M4 8 个) === L9 Quest 意图/任务/检查点
             Self::UserIntentEncoded { .. }
             | Self::QuestCreated { .. }
             | Self::QuestProgressUpdated { .. }
@@ -160,7 +162,12 @@ impl NexusEvent {
             | Self::QuestResumeRequested { .. }
             | Self::RefreshStateRequested { .. }
             | Self::QuestPaused { .. }
-            | Self::QuestResumed { .. } => EventTopic::Quest,
+            | Self::QuestResumed { .. }
+            // M4 扩展(Task 1):Quest 取消与优先级控制双向事件
+            | Self::QuestCancelRequested { .. }
+            | Self::QuestCancelled { .. }
+            | Self::QuestPriorityChanged { .. }
+            | Self::QuestPriorityAdjusted { .. } => EventTopic::Quest,
 
             // === System (6 + P2.4 1 + P2.5 1 个) === L10 Interface + 跨层系统告警
             Self::McpMessageReceived { .. }

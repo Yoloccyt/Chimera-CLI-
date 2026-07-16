@@ -46,7 +46,7 @@ pub use error::EventBusError;
 pub use logging::BusLogger;
 pub use topic::{EventTopic, FilteredSubscriber};
 pub use types::{
-    BudgetMetricsPayload, EventMetadata, EventSeverity, NexusEvent, QuestStatus,
+    BudgetMetricsPayload, ClvSummary, EventMetadata, EventSeverity, NexusEvent, QuestStatus,
     RouterStatsPayload, VoteValue,
 };
 

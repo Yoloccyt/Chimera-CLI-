@@ -254,6 +254,7 @@ impl QuestEngine {
             tasks,
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         };
         let task_count = quest.tasks.len() as u32;
 
@@ -642,6 +643,77 @@ impl QuestEngine {
         Ok(())
     }
 
+    /// 取消指定 Quest,从活跃注册表移除并发布 QuestCancelled 状态变更事件
+    ///
+    /// WHY M5:消费 TUI 发布的 QuestCancelRequested 请求,将 Quest 从注册表移除,
+    /// 并通过 EventBus 反馈状态变更,完成取消控制闭环。
+    ///
+    /// # 幂等语义(与 pause_quest 的 Err 行为不同)
+    /// 取消不存在的 quest_id 时记录 warn 并返回 Ok:取消操作的目标状态
+    /// (Quest 不存在)在 ID 缺失时已经达成,视为幂等成功,不影响其他 Quest。
+    /// 这与 resume_quest 中 `remove` 的幂等性一致,避免上层重试时误报失败。
+    pub async fn cancel_quest(&self, quest_id: &str, requested_by: &str) -> Result<(), QuestError> {
+        // 从注册表移除 Quest(remove 原子返回 Option<Quest>,不持锁跨 await)
+        if self.quests.remove(quest_id).is_none() {
+            // 幂等语义:取消不存在的 Quest 视为成功,目标状态(Quest 不存在)已达成,
+            // 不影响其他 Quest,避免上层重试时误报失败
+            warn!(
+                quest_id = %quest_id,
+                "取消请求针对不存在的 Quest,视为幂等成功"
+            );
+            return Ok(());
+        }
+        // 清理可能的暂停状态标记(避免遗留状态,remove 幂等)
+        self.paused_quests.remove(quest_id);
+
+        let event = NexusEvent::QuestCancelled {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest_id.to_string(),
+            requested_by: requested_by.to_string(),
+        };
+        self.event_bus.publish(event).await?;
+        info!(quest_id = %quest_id, "Quest 已取消");
+        Ok(())
+    }
+
+    /// 调整指定 Quest 的优先级,并发布 QuestPriorityAdjusted 状态变更事件
+    ///
+    /// WHY M5:消费 TUI 发布的 QuestPriorityChanged 请求,修改 Quest 的 priority 字段,
+    /// 并通过 EventBus 反馈状态变更,供 TUI 刷新 Quest 列表排序,完成优先级控制闭环。
+    ///
+    /// # 错误处理
+    /// quest_id 不存在时返回 `QuestNotFound`(与 pause_quest 一致):
+    /// 优先级调整不是幂等操作,无法对不存在的 Quest 修改字段。
+    pub async fn adjust_priority(
+        &self,
+        quest_id: &str,
+        new_priority: u8,
+        requested_by: &str,
+    ) -> Result<(), QuestError> {
+        // 在 DashMap 写锁内修改 priority(§4.4 反模式 #1:禁止持锁跨 .await)
+        let mut entry = self
+            .quests
+            .get_mut(quest_id)
+            .ok_or_else(|| QuestError::QuestNotFound(quest_id.to_string()))?;
+        entry.priority = new_priority;
+        // 显式释放写锁后再 publish,避免持锁 await 导致死锁(与 switch_thinking_mode 一致)
+        drop(entry);
+
+        let event = NexusEvent::QuestPriorityAdjusted {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest_id.to_string(),
+            new_priority,
+            requested_by: requested_by.to_string(),
+        };
+        self.event_bus.publish(event).await?;
+        info!(
+            quest_id = %quest_id,
+            new_priority,
+            "Quest 优先级已调整"
+        );
+        Ok(())
+    }
+
     /// 查询 Quest 是否处于暂停状态
     pub fn is_paused(&self, quest_id: &str) -> bool {
         self.paused_quests.contains_key(quest_id)
@@ -964,6 +1036,7 @@ mod tests {
                 .collect(),
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         };
         let (mode, _reason) = governor.select_mode(&quest_with_tasks, BudgetTier::HighTier);
         assert_eq!(
@@ -1073,5 +1146,130 @@ mod tests {
         let bus = EventBus::new();
         let engine = QuestEngine::new(bus);
         assert!(!engine.is_paused("any-quest"));
+    }
+
+    // ============================================================
+    // M5 扩展测试:Quest 取消与优先级调整
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_cancel_quest_removes_and_publishes_event() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = QuestEngine::new(bus);
+        let quest = engine
+            .create_quest(make_intent("分析需求。"))
+            .await
+            .unwrap();
+        // 消费 QuestCreated 事件
+        let _ = rx.recv().await.unwrap();
+
+        engine
+            .cancel_quest(&quest.quest_id, "operator")
+            .await
+            .unwrap();
+
+        // Quest 应已从注册表移除
+        assert!(engine.get_quest(&quest.quest_id).is_none());
+
+        // 应发布 QuestCancelled 事件
+        let event = rx.recv().await.unwrap();
+        match event {
+            NexusEvent::QuestCancelled {
+                quest_id,
+                requested_by,
+                ..
+            } => {
+                assert_eq!(quest_id, quest.quest_id);
+                assert_eq!(requested_by, "operator");
+            }
+            other => panic!("expected QuestCancelled, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cancel_unknown_quest_is_idempotent() {
+        // 幂等语义:取消不存在的 Quest 返回 Ok(不发布事件)
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus);
+        let result = engine.cancel_quest("nonexistent", "operator").await;
+        assert!(result.is_ok(), "取消不存在的 Quest 应幂等成功");
+    }
+
+    #[tokio::test]
+    async fn test_cancel_quest_clears_paused_state() {
+        // 取消已暂停的 Quest 应同时清理暂停标记,避免遗留状态
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = QuestEngine::new(bus);
+        let quest = engine
+            .create_quest(make_intent("分析需求。"))
+            .await
+            .unwrap();
+        let _ = rx.recv().await.unwrap(); // QuestCreated
+
+        engine
+            .pause_quest(&quest.quest_id, "operator")
+            .await
+            .unwrap();
+        let _ = rx.recv().await.unwrap(); // QuestPaused
+        assert!(engine.is_paused(&quest.quest_id));
+
+        engine
+            .cancel_quest(&quest.quest_id, "operator")
+            .await
+            .unwrap();
+        let _ = rx.recv().await.unwrap(); // QuestCancelled
+
+        // 取消后暂停标记应被清理(虽然 Quest 已移除,is_paused 也应返回 false)
+        assert!(!engine.is_paused(&quest.quest_id));
+        assert!(engine.get_quest(&quest.quest_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_adjust_priority_updates_and_publishes_event() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = QuestEngine::new(bus);
+        let quest = engine
+            .create_quest(make_intent("分析需求。"))
+            .await
+            .unwrap();
+        let _ = rx.recv().await.unwrap(); // QuestCreated
+        assert_eq!(quest.priority, 128);
+
+        engine
+            .adjust_priority(&quest.quest_id, 200, "operator")
+            .await
+            .unwrap();
+
+        // 优先级应已更新
+        let stored = engine.get_quest(&quest.quest_id).unwrap();
+        assert_eq!(stored.priority, 200);
+
+        // 应发布 QuestPriorityAdjusted 事件
+        let event = rx.recv().await.unwrap();
+        match event {
+            NexusEvent::QuestPriorityAdjusted {
+                quest_id,
+                new_priority,
+                requested_by,
+                ..
+            } => {
+                assert_eq!(quest_id, quest.quest_id);
+                assert_eq!(new_priority, 200);
+                assert_eq!(requested_by, "operator");
+            }
+            other => panic!("expected QuestPriorityAdjusted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_adjust_priority_unknown_quest_returns_error() {
+        // 不存在 ID 返回 QuestNotFound(与 pause_quest 一致)
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus);
+        let result = engine.adjust_priority("nonexistent", 200, "operator").await;
+        assert!(matches!(result, Err(QuestError::QuestNotFound(_))));
     }
 }

@@ -13,7 +13,8 @@
 //! # 消费的事件变体
 //!
 //! `DataPipeline` 直接消费 `event-bus` 中已有的以下 `NexusEvent` 变体:
-//! - `QuestListUpdated` / `QuestCompleted`:维护 Quest 列表。
+//! - `QuestListUpdated` / `QuestCompleted` / `QuestCancelled` /
+//!   `QuestPriorityAdjusted`:维护 Quest 列表(含移除与优先级更新)。
 //! - `BudgetMetricsUpdated`:更新 Budget 面板指标。
 //! - `MemoryMetricsReported` / `ContextWindowSwitched` / `ContextCompressed` /
 //!   `CacheStatsReported` / `CacheHit` / `CacheMiss`:更新 Memory 面板指标。
@@ -28,7 +29,7 @@ use chrono::{DateTime, Utc};
 use event_bus::{EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
@@ -44,6 +45,16 @@ pub struct DataSnapshot {
     /// 来源:聚合 `QuestListUpdated`(替换整个列表)与 `QuestCompleted`
     /// (按 quest_id 移除)事件。使用 `nexus_core::Quest` 保证与 L1 领域模型一致。
     pub quest_list: Vec<Quest>,
+
+    /// 暂停 Quest 数(从 `QuestPaused`/`QuestResumed` 事件派生)
+    ///
+    /// WHY 派生字段:`Quest` 本身无 paused 字段(nexus-core 领域类型稳定性约束,
+    /// §3.3.1 变更需 ADR),因此 `QuestSync` 订阅已有的 `QuestPaused`/`QuestResumed`
+    /// 事件维护 `paused_quest_ids` 集合,生成快照时计算 quest_list 中同时处于
+    /// 暂停状态的 Quest 数量。这复用已有事件变体,不新增事件,符合 L10 只读
+    /// EventBus 的约束。
+    #[serde(default)]
+    pub paused_quest_count: usize,
 
     /// 最近接收到的 NexusEvent,按时间顺序,旧在前
     ///
@@ -83,6 +94,18 @@ pub struct DataSnapshot {
     pub chtc_state: crate::types::ChtcState,
     /// 衰减历史 sparkline 数据点
     pub decay_history: Vec<u64>,
+
+    // === P7 TUI v1.8-omega 新增字段(OsaSparse/ClvVector/Timeline 面板数据接入) ===
+    /// Timeline 面板的历史快照列表(按 snapshot_interval_s 周期生成,FIFO max_snapshots 容量)
+    pub timeline_snapshots: Vec<crate::types::TimelineSnapshot>,
+    /// OSA 平均稀疏度 [0.0, 1.0](None = 未收到事件)
+    pub osa_sparsity: Option<f32>,
+    /// OSA context 维度活跃文件 ID 列表
+    pub osa_context_mask: Vec<String>,
+    /// OSA 稀疏度历史(容量 256,FIFO,存 sparsity * 1000 为 u64)
+    pub osa_sparsity_history: Vec<u64>,
+    /// CLV 摘要(None = 未收到事件)
+    pub clv_summary: Option<event_bus::ClvSummary>,
 }
 
 /// 预算指标 — TUI Budget 面板的轻量级本地视图
@@ -249,6 +272,31 @@ impl HealthMetrics {
         let score = 100i64 - 10 * slow_consumer_count as i64;
         score.clamp(0, 100) as u8
     }
+
+    /// 根据慢消费者数量与活跃 Quest 数计算健康评分(含积压因子)
+    ///
+    /// 公式:起始 100,每个慢消费者扣 10 分;活跃 Quest > 10 时额外扣 10 分
+    /// (积压因子),最低 0 分。
+    ///
+    /// WHY 新增方法而非修改 `compute_health_score`:原方法有 5 个单元测试与
+    /// 1 个集成测试断言其语义,修改签名会破坏向后兼容(§3.3.1 SemVer 友好)。
+    /// 新方法扩展积压因子,由 `DataPipeline` 在生成快照时调用,将活跃 Quest
+    /// 积压对系统健康的影响纳入评分。
+    ///
+    /// # 参数
+    /// - `slow_consumer_count`:慢消费者数量(每个扣 10 分)
+    /// - `active_quest_count`:活跃 Quest 数(> 10 时扣 10 分积压因子)
+    pub fn compute_health_score_with_backlog(
+        slow_consumer_count: u64,
+        active_quest_count: usize,
+    ) -> u8 {
+        let mut score = 100i64 - 10 * slow_consumer_count as i64;
+        // 积压因子:活跃 Quest 超过 10 个时扣 10 分
+        if active_quest_count > 10 {
+            score -= 10;
+        }
+        score.clamp(0, 100) as u8
+    }
 }
 
 /// TUI 数据源配置 — 控制缓存大小与行为
@@ -272,6 +320,13 @@ pub struct DataSourceConfig {
     pub max_security_summaries: usize,
     /// 冻结能力列表最大长度
     pub max_frozen_capabilities: usize,
+    /// Timeline 快照间隔(秒),控制 TimelineSnapshot 生成频率(P7 历史回放)
+    ///
+    /// WHY 从 TuiConfig 桥接:DataPipeline 需按此周期生成 TimelineSnapshot,
+    /// 供 Timeline 面板回放历史系统状态。
+    pub snapshot_interval_s: u16,
+    /// Timeline 快照最大保留数(FIFO,超出则丢弃最旧)
+    pub max_snapshots: usize,
 }
 
 impl Default for DataSourceConfig {
@@ -288,6 +343,9 @@ impl Default for DataSourceConfig {
             max_history_len: 64,
             max_security_summaries: 10,
             max_frozen_capabilities: 20,
+            // WHY 与 TuiConfig 默认值对齐:30s × 100 = 50 分钟历史回放窗口
+            snapshot_interval_s: 30,
+            max_snapshots: 100,
         }
     }
 }
@@ -307,6 +365,9 @@ impl DataSourceConfig {
     pub fn from_tui_config(tui: &crate::config::TuiConfig) -> Self {
         Self {
             tick_interval_ms: u64::from(tui.tick_interval_ms),
+            // P7:桥接 Timeline 回放配置,让 TuiConfig 成为唯一真实来源
+            snapshot_interval_s: tui.snapshot_interval_s,
+            max_snapshots: tui.max_snapshots,
             ..Self::default()
         }
     }
@@ -328,13 +389,21 @@ pub trait TuiDataSource {
     fn config(&self) -> &DataSourceConfig;
 }
 
-/// Quest 同步器 — 从 NexusEvent 维护本地 Quest 列表
+/// Quest 同步器 — 从 NexusEvent 维护本地 Quest 列表与暂停状态
 ///
 /// WHY 独立结构体:将事件→状态的转换逻辑隔离,`DataPipeline`(P1.3)
 /// 可组合多个同步器生成统一快照,同时方便单元测试直接喂事件。
+///
+/// # 暂停状态跟踪
+/// `Quest` 本身无 paused 字段(nexus-core 领域类型稳定性约束),因此
+/// `QuestSync` 订阅已有的 `QuestPaused`/`QuestResumed` 事件维护
+/// `paused_quest_ids` 集合。只跟踪 quest_list 中存在的 Quest ID,
+/// 避免计数不在活动列表中的暂停 Quest。
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct QuestSync {
     quests: Vec<Quest>,
+    /// 暂停 Quest ID 集合(从 QuestPaused/QuestResumed 事件派生)
+    paused_quest_ids: HashSet<String>,
 }
 
 impl QuestSync {
@@ -345,8 +414,15 @@ impl QuestSync {
 
     /// 应用单个 NexusEvent,若事件影响 Quest 列表则返回更新后的列表副本
     ///
-    /// - `QuestListUpdated`:替换整个列表(冷启动/lag 后对齐)。
-    /// - `QuestCompleted`:按 quest_id 从活动列表移除。
+    /// - `QuestListUpdated`:替换整个列表(冷启动/lag 后对齐)。暂停集合保留,
+    ///   因为新列表中仍存在的暂停 Quest 应继续被计数。
+    /// - `QuestCompleted`:按 quest_id 从活动列表移除,并从暂停集合清理。
+    /// - `QuestCancelled`:按 quest_id 从活动列表移除,并从暂停集合清理。
+    ///   与 `QuestCompleted` 对称,确保取消的 Quest 不残留暂停状态(内存泄漏防护)。
+    /// - `QuestPriorityAdjusted`:按 quest_id 原地更新 priority 字段。
+    ///   不影响其他状态(暂停集合、任务列表等),仅刷新优先级。
+    /// - `QuestPaused`:若 quest_id 在活动列表中,加入暂停集合。
+    /// - `QuestResumed`:从暂停集合移除。
     /// - 其他事件:返回 `None`,状态不变。
     pub fn apply_event(&mut self, event: &NexusEvent) -> Option<Vec<Quest>> {
         match event {
@@ -356,7 +432,39 @@ impl QuestSync {
             }
             NexusEvent::QuestCompleted { quest_id, .. } => {
                 self.quests.retain(|q| q.quest_id != *quest_id);
+                // Quest 完成后从暂停集合清理,防止内存泄漏
+                self.paused_quest_ids.remove(quest_id);
                 Some(self.quests.clone())
+            }
+            NexusEvent::QuestCancelled { quest_id, .. } => {
+                self.quests.retain(|q| q.quest_id != *quest_id);
+                // Quest 取消后从暂停集合清理,与 QuestCompleted 对称,防止内存泄漏
+                self.paused_quest_ids.remove(quest_id);
+                Some(self.quests.clone())
+            }
+            NexusEvent::QuestPriorityAdjusted {
+                quest_id,
+                new_priority,
+                ..
+            } => {
+                // 静默更新:找不到 quest_id 时不操作,避免为未知 ID 引入 panic 路径
+                if let Some(quest) = self.quests.iter_mut().find(|q| q.quest_id == *quest_id) {
+                    quest.priority = *new_priority;
+                    Some(self.quests.clone())
+                } else {
+                    None
+                }
+            }
+            NexusEvent::QuestPaused { quest_id, .. } => {
+                // 只跟踪活动列表中存在的 Quest,避免计数无效暂停
+                if self.quests.iter().any(|q| q.quest_id == *quest_id) {
+                    self.paused_quest_ids.insert(quest_id.clone());
+                }
+                None
+            }
+            NexusEvent::QuestResumed { quest_id, .. } => {
+                self.paused_quest_ids.remove(quest_id);
+                None
             }
             _ => None,
         }
@@ -365,6 +473,17 @@ impl QuestSync {
     /// 获取当前活动 Quest 列表副本
     pub fn quests(&self) -> Vec<Quest> {
         self.quests.clone()
+    }
+
+    /// 获取当前暂停 Quest 数(quest_list 中同时处于暂停状态的 Quest 数量)
+    ///
+    /// WHY 交叉过滤:只统计 quest_list 中存在的暂停 Quest,确保暂停 Quest 数
+    /// 不会因 quest_list 更新(如 QuestCompleted 移除)而虚高。
+    pub fn paused_quest_count(&self) -> usize {
+        self.quests
+            .iter()
+            .filter(|q| self.paused_quest_ids.contains(&q.quest_id))
+            .count()
     }
 }
 
@@ -918,6 +1037,131 @@ impl ChtcSync {
     }
 }
 
+// ============================================================
+// P7 TUI v1.8-omega 新增同步器 — OsaSparse / ClvVector 面板数据接入
+// ============================================================
+//
+// WHY 独立同步器:与 DecaySync/RouterSync 等保持对称,将事件→状态
+// 转换逻辑隔离。每个同步器只处理一个 NexusEvent 变体,职责单一,
+// 便于单元测试直接喂事件验证状态变化。
+
+/// OSA 稀疏度同步器 — 从 `OmniSparseMasksComputed` 事件维护本地 OSA 状态
+///
+/// 发布者:L6 osa-coordinator。消费:L10 TUI OsaSparse 面板。
+///
+/// WHY 独立同步器: OSA 事件的消费逻辑与预算/健康同步器解耦,
+/// 便于独立测试和未来扩展(如五维独立稀疏度展示)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct OsaSync {
+    /// 平均稀疏度 [0.0, 1.0](None = 未收到事件)
+    sparsity: Option<f32>,
+    /// context 维度活跃文件 ID 列表
+    context_mask: Vec<String>,
+    /// 稀疏度历史(容量 256,FIFO,存 sparsity * 1000 为 u64)
+    sparsity_history: Vec<u64>,
+    /// 稀疏度历史容量(FIFO)
+    max_history: usize,
+}
+
+impl Default for OsaSync {
+    fn default() -> Self {
+        Self {
+            sparsity: None,
+            context_mask: Vec::new(),
+            sparsity_history: Vec::new(),
+            // WHY 256:与 OSA 稀疏度 sparkline 展示需求匹配,
+            // 256 个点在 80 列终端上足够平滑,同时内存占用可忽略。
+            max_history: 256,
+        }
+    }
+}
+
+impl OsaSync {
+    /// 创建 OSA 稀疏度同步器,默认历史容量 256
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 应用单个 NexusEvent,若事件为 OSA 稀疏度计算则更新本地状态
+    ///
+    /// - `OmniSparseMasksComputed`:更新 sparsity / context_mask,并追加历史点。
+    ///   历史存储为 `sparsity * 1000` 的 u64 值,避免 f32 序列化精度问题。
+    /// - 其他事件:返回 `None`,状态不变。
+    pub fn apply_event(&mut self, event: &NexusEvent) -> Option<()> {
+        match event {
+            NexusEvent::OmniSparseMasksComputed {
+                sparsity,
+                context_mask,
+                ..
+            } => {
+                self.sparsity = Some(*sparsity);
+                self.context_mask = context_mask.clone();
+                // 追加历史点(sparsity * 1000 存为 u64,FIFO 容量控制)
+                let history_value = (*sparsity * 1000.0) as u64;
+                self.sparsity_history.push(history_value);
+                while self.sparsity_history.len() > self.max_history {
+                    self.sparsity_history.remove(0);
+                }
+                Some(())
+            }
+            _ => None,
+        }
+    }
+
+    /// 获取当前平均稀疏度
+    pub fn sparsity(&self) -> Option<f32> {
+        self.sparsity
+    }
+
+    /// 获取当前 context 维度活跃文件 ID 列表副本
+    pub fn context_mask(&self) -> Vec<String> {
+        self.context_mask.clone()
+    }
+
+    /// 获取稀疏度历史副本
+    pub fn sparsity_history(&self) -> Vec<u64> {
+        self.sparsity_history.clone()
+    }
+}
+
+/// CLV 摘要同步器 — 从 `ClvSnapshotReported` 事件维护本地 CLV 摘要
+///
+/// 发布者:L2 nmc-encoder。消费:L10 TUI ClvVector 面板。
+///
+/// WHY 独立同步器: CLV 摘要的更新逻辑简单(直接覆盖),
+/// 但独立同步器保持与其他同步器的一致性,便于统一管理。
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ClvSync {
+    /// CLV 摘要(None = 未收到事件)
+    summary: Option<event_bus::ClvSummary>,
+}
+
+impl ClvSync {
+    /// 创建 CLV 摘要同步器
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 应用单个 NexusEvent,若事件为 CLV 快照报告则更新本地摘要
+    ///
+    /// - `ClvSnapshotReported`:直接覆盖本地 CLV 摘要(最新覆盖旧值)。
+    /// - 其他事件:返回 `None`,状态不变。
+    pub fn apply_event(&mut self, event: &NexusEvent) -> Option<()> {
+        match event {
+            NexusEvent::ClvSnapshotReported { clv_summary, .. } => {
+                self.summary = Some(clv_summary.clone());
+                Some(())
+            }
+            _ => None,
+        }
+    }
+
+    /// 获取当前 CLV 摘要副本
+    pub fn summary(&self) -> Option<event_bus::ClvSummary> {
+        self.summary.clone()
+    }
+}
+
 /// 内存桩数据源 — 返回包含示例 Quest 与 Budget 数据的快照
 ///
 /// WHY: TUI 默认启动时不强制要求真实 event-bus 连接；提供一个无依赖的
@@ -968,6 +1212,8 @@ impl TuiDataSource for StubDataSource {
             ],
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            // 与 Quest::default() 保持一致:默认优先级 128
+            priority: 128,
         });
 
         // 提供非零预算指标，让 Budget 面板展示进度条与状态。
@@ -1148,6 +1394,9 @@ impl DataPipeline {
         let max_history_len = config.max_history_len;
         let max_security_summaries = config.max_security_summaries;
         let max_frozen_capabilities = config.max_frozen_capabilities;
+        // P7:Timeline 快照配置
+        let snapshot_interval_s = config.snapshot_interval_s;
+        let max_snapshots = config.max_snapshots;
 
         let task = tokio::spawn(async move {
             // WHY interval 而非 sleep:interval 会自动追钟，避免任务处理耗时导致 tick 漂移。
@@ -1162,6 +1411,9 @@ impl DataPipeline {
             let mut router_sync = RouterSync::new();
             let mut mcp_nodes_sync = McpNodesSync::new();
             let mut chtc_sync = ChtcSync::new();
+            // P7 新增同步器:OsaSparse / ClvVector 面板数据接入
+            let mut osa_sync = OsaSync::new();
+            let mut clv_sync = ClvSync::new();
             let mut latest_events: VecDeque<NexusEvent> = VecDeque::new();
 
             // Sparkline 历史缓存
@@ -1169,6 +1421,17 @@ impl DataPipeline {
             let mut memory_history: Vec<u64> = Vec::with_capacity(max_history_len);
             let mut event_rate_history: Vec<u64> = Vec::with_capacity(max_history_len);
             let mut decay_history: Vec<u64> = Vec::with_capacity(max_history_len);
+
+            // P7:Timeline 快照状态(周期生成,非事件驱动)
+            // - timeline_snapshots:历史快照列表(FIFO max_snapshots 容量)
+            // - total_event_count:累计事件总数(用于 TimelineSnapshot.event_count)
+            // - events_since_last_snapshot:自上次快照以来的事件数(用于计算 event_rate)
+            // - last_timeline_snapshot:上次快照时间(用于判断是否到达 snapshot_interval_s)
+            let mut timeline_snapshots: Vec<crate::types::TimelineSnapshot> =
+                Vec::with_capacity(max_snapshots);
+            let mut total_event_count: u64 = 0;
+            let mut events_since_last_snapshot: u64 = 0;
+            let mut last_timeline_snapshot: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
 
             loop {
                 interval.tick().await;
@@ -1228,6 +1491,9 @@ impl DataPipeline {
                     router_sync.apply_event(event);
                     mcp_nodes_sync.apply_event(event);
                     chtc_sync.apply_event(event);
+                    // P7 新增同步器:OSA 稀疏度 / CLV 摘要
+                    osa_sync.apply_event(event);
+                    clv_sync.apply_event(event);
                     latest_events.push_back(event.clone());
                 }
 
@@ -1242,6 +1508,10 @@ impl DataPipeline {
                 let budget = budget_sync.metrics();
                 let memory = memory_sync.metrics();
                 let decay = decay_sync.metrics();
+
+                // P7:累计事件总数,供 TimelineSnapshot.event_count 使用
+                total_event_count += events_this_tick as u64;
+                events_since_last_snapshot += events_this_tick as u64;
 
                 push_history(
                     &mut budget_history,
@@ -1261,13 +1531,56 @@ impl DataPipeline {
                     max_history_len,
                 );
 
+                // 提前 truncate quest_list,供健康评分积压因子与快照共用
+                let quest_list = truncate_quests(quest_sync.quests(), max_quest_list_size);
+                let paused_quest_count = quest_sync.paused_quest_count();
+                let health_sync_metrics = health_sync.metrics();
+                // 健康评分纳入积压因子:活跃 Quest > 10 时扣 10 分
                 let health = HealthMetrics {
                     events_per_second: eps,
-                    ..health_sync.metrics()
+                    health_score: HealthMetrics::compute_health_score_with_backlog(
+                        health_sync_metrics.slow_consumer_count,
+                        quest_list.len(),
+                    ),
+                    ..health_sync_metrics
                 };
 
+                // P7:按 snapshot_interval_s 周期生成 TimelineSnapshot(非事件驱动)
+                //
+                // WHY 在构造 DataSnapshot 前生成:Timeline 快照需要引用本 tick 的
+                // budget/health/decay 指标,生成后追加到 timeline_snapshots,
+                // 再随 DataSnapshot 一起写入共享状态。
+                let now = chrono::Utc::now();
+                let elapsed_secs = now
+                    .signed_duration_since(last_timeline_snapshot)
+                    .num_seconds();
+                if elapsed_secs >= snapshot_interval_s as i64 {
+                    // 计算自上次快照以来的事件速率(每秒事件数)
+                    let rate = if elapsed_secs > 0 {
+                        events_since_last_snapshot / elapsed_secs as u64
+                    } else {
+                        0
+                    };
+                    let timeline_entry = crate::types::TimelineSnapshot {
+                        timestamp: now,
+                        event_count: total_event_count,
+                        event_rate: rate,
+                        budget_utilization: budget.utilization_rate,
+                        health_score: health.health_score,
+                        decay_coefficient: decay.coefficient,
+                    };
+                    timeline_snapshots.push(timeline_entry);
+                    // FIFO 容量控制:超出 max_snapshots 则丢弃最旧
+                    while timeline_snapshots.len() > max_snapshots {
+                        timeline_snapshots.remove(0);
+                    }
+                    last_timeline_snapshot = now;
+                    events_since_last_snapshot = 0;
+                }
+
                 let snap = DataSnapshot {
-                    quest_list: truncate_quests(quest_sync.quests(), max_quest_list_size),
+                    quest_list,
+                    paused_quest_count,
                     latest_events: latest_events.clone(),
                     budget_metrics: budget,
                     memory_metrics: memory,
@@ -1282,6 +1595,12 @@ impl DataPipeline {
                     mcp_nodes: mcp_nodes_sync.nodes(),
                     chtc_state: chtc_sync.state(),
                     decay_history: decay_history.clone(),
+                    // P7 新增字段:OsaSparse / ClvVector / Timeline 面板数据
+                    timeline_snapshots: timeline_snapshots.clone(),
+                    osa_sparsity: osa_sync.sparsity(),
+                    osa_context_mask: osa_sync.context_mask(),
+                    osa_sparsity_history: osa_sync.sparsity_history(),
+                    clv_summary: clv_sync.summary(),
                 };
                 let mut guard = snapshot_clone.lock().unwrap_or_else(|poisoned| {
                     tracing::warn!(
@@ -1438,6 +1757,7 @@ mod tests {
             }],
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         }
     }
 
@@ -1619,6 +1939,23 @@ mod tests {
     }
 
     #[test]
+    fn test_health_score_with_backlog_formula() {
+        // 积压因子:活跃 Quest > 10 时额外扣 10 分,最低 0
+        // 无慢消费者 + 无积压
+        assert_eq!(HealthMetrics::compute_health_score_with_backlog(0, 0), 100);
+        // 无慢消费者 + 恰好 10 个 Quest(阈值边界,不扣分)
+        assert_eq!(HealthMetrics::compute_health_score_with_backlog(0, 10), 100);
+        // 无慢消费者 + 11 个 Quest(超阈值,扣 10 分)
+        assert_eq!(HealthMetrics::compute_health_score_with_backlog(0, 11), 90);
+        // 无慢消费者 + 15 个 Quest
+        assert_eq!(HealthMetrics::compute_health_score_with_backlog(0, 15), 90);
+        // 1 个慢消费者 + 15 个 Quest(100 - 10 - 10 = 80)
+        assert_eq!(HealthMetrics::compute_health_score_with_backlog(1, 15), 80);
+        // 10 个慢消费者 + 15 个 Quest(clamp 到 0)
+        assert_eq!(HealthMetrics::compute_health_score_with_backlog(10, 15), 0);
+    }
+
+    #[test]
     fn test_data_source_config_default() {
         let cfg = DataSourceConfig::default();
         assert_eq!(cfg.max_event_history, 256);
@@ -1663,6 +2000,220 @@ mod tests {
         };
         let result = sync.apply_event(&unrelated);
         assert!(result.is_none());
+        assert_eq!(sync.quests(), vec![q1]);
+    }
+
+    // ============================================================
+    // QuestSync 暂停状态跟踪测试 — 从 QuestPaused/QuestResumed 事件派生
+    // ============================================================
+    //
+    // WHY 独立测试组:Quest 本身无 paused 字段(nexus-core 领域类型稳定
+    // 性约束),QuestSync 通过订阅已有的 QuestPaused/QuestResumed 事件
+    // 维护 paused_quest_ids 集合,生成快照时计算 paused_quest_count。
+    // 这复用已有事件变体,不新增事件,符合"从 quest_list 派生"约束。
+
+    /// 构造 QuestPaused 事件
+    fn quest_paused_event(quest_id: &str) -> NexusEvent {
+        NexusEvent::QuestPaused {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest_id.into(),
+            requested_by: "tui".into(),
+        }
+    }
+
+    /// 构造 QuestResumed 事件
+    fn quest_resumed_event(quest_id: &str) -> NexusEvent {
+        NexusEvent::QuestResumed {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest_id.into(),
+            requested_by: "tui".into(),
+        }
+    }
+
+    #[test]
+    fn test_quest_sync_paused_tracking() {
+        let mut sync = QuestSync::new();
+        sync.apply_event(&quest_list_event(vec![
+            quest("q1", "first"),
+            quest("q2", "second"),
+        ]));
+
+        // 初始无暂停
+        assert_eq!(sync.paused_quest_count(), 0);
+
+        // 暂停 q1
+        sync.apply_event(&quest_paused_event("q1"));
+        assert_eq!(sync.paused_quest_count(), 1);
+
+        // 暂停 q2
+        sync.apply_event(&quest_paused_event("q2"));
+        assert_eq!(sync.paused_quest_count(), 2);
+    }
+
+    #[test]
+    fn test_quest_sync_resumed_clears_paused() {
+        let mut sync = QuestSync::new();
+        sync.apply_event(&quest_list_event(vec![
+            quest("q1", "first"),
+            quest("q2", "second"),
+        ]));
+        sync.apply_event(&quest_paused_event("q1"));
+        sync.apply_event(&quest_paused_event("q2"));
+        assert_eq!(sync.paused_quest_count(), 2);
+
+        // 恢复 q1
+        sync.apply_event(&quest_resumed_event("q1"));
+        assert_eq!(sync.paused_quest_count(), 1);
+    }
+
+    #[test]
+    fn test_quest_sync_paused_id_not_in_quest_list_ignored() {
+        // 暂停一个不在 quest_list 中的 Quest ID,不应计入 paused_quest_count
+        let mut sync = QuestSync::new();
+        sync.apply_event(&quest_list_event(vec![quest("q1", "first")]));
+        sync.apply_event(&quest_paused_event("q-unknown"));
+        assert_eq!(
+            sync.paused_quest_count(),
+            0,
+            "paused Quest not in quest_list should not be counted"
+        );
+    }
+
+    #[test]
+    fn test_quest_sync_quest_list_updated_preserves_paused_ids() {
+        // QuestListUpdated 替换整个列表时,paused_quest_ids 应保留
+        // (新列表中仍存在的暂停 Quest 继续被计数)
+        let mut sync = QuestSync::new();
+        sync.apply_event(&quest_list_event(vec![
+            quest("q1", "first"),
+            quest("q2", "second"),
+        ]));
+        sync.apply_event(&quest_paused_event("q1"));
+
+        // 列表更新(移除 q2,保留 q1)
+        sync.apply_event(&quest_list_event(vec![quest("q1", "first")]));
+        assert_eq!(
+            sync.paused_quest_count(),
+            1,
+            "paused Quest q1 should still be counted after list update"
+        );
+    }
+
+    #[test]
+    fn test_quest_sync_quest_completed_removes_from_paused() {
+        // QuestCompleted 移除 Quest 时,若该 Quest 在 paused 集合中,应一并清理
+        let mut sync = QuestSync::new();
+        sync.apply_event(&quest_list_event(vec![
+            quest("q1", "first"),
+            quest("q2", "second"),
+        ]));
+        sync.apply_event(&quest_paused_event("q1"));
+        assert_eq!(sync.paused_quest_count(), 1);
+
+        // q1 完成,从列表移除,paused 集合也应清理 q1
+        sync.apply_event(&quest_completed_event("q1", QuestStatus::Completed));
+        assert_eq!(
+            sync.paused_quest_count(),
+            0,
+            "completed Quest should be removed from paused set"
+        );
+    }
+
+    // ============================================================
+    // QuestSync 取消与优先级调整测试 — Task M4 扩展
+    // ============================================================
+    //
+    // WHY 独立测试组:QuestCancelled 与 QuestCompleted 行为对称(移除+清理暂停),
+    // QuestPriorityAdjusted 仅更新 priority 字段。内联单元测试直接验证 QuestSync
+    // 状态,不依赖 DataPipeline 的 tokio tick 时序,覆盖更精准。
+
+    /// 构造 QuestCancelled 事件
+    fn quest_cancelled_event(quest_id: &str) -> NexusEvent {
+        NexusEvent::QuestCancelled {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest_id.into(),
+            requested_by: "test".into(),
+        }
+    }
+
+    /// 构造 QuestPriorityAdjusted 事件
+    fn quest_priority_adjusted_event(quest_id: &str, new_priority: u8) -> NexusEvent {
+        NexusEvent::QuestPriorityAdjusted {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest_id.into(),
+            new_priority,
+            requested_by: "test".into(),
+        }
+    }
+
+    #[test]
+    fn test_quest_sync_cancelled_removes_quest() {
+        let mut sync = QuestSync::new();
+        let q1 = quest("q1", "first");
+        let q2 = quest("q2", "second");
+        sync.apply_event(&quest_list_event(vec![q1.clone(), q2.clone()]));
+
+        let updated = sync.apply_event(&quest_cancelled_event("q1"));
+        assert_eq!(updated, Some(vec![q2.clone()]));
+        assert_eq!(sync.quests(), vec![q2]);
+    }
+
+    #[test]
+    fn test_quest_sync_cancelled_removes_from_paused() {
+        // QuestCancelled 移除 Quest 时,若该 Quest 在 paused 集合中,应一并清理
+        // 与 QuestCompleted 对称,防止内存泄漏
+        let mut sync = QuestSync::new();
+        sync.apply_event(&quest_list_event(vec![
+            quest("q1", "first"),
+            quest("q2", "second"),
+        ]));
+        sync.apply_event(&quest_paused_event("q1"));
+        assert_eq!(sync.paused_quest_count(), 1);
+
+        // q1 取消,从列表移除,paused 集合也应清理 q1
+        sync.apply_event(&quest_cancelled_event("q1"));
+        assert_eq!(
+            sync.paused_quest_count(),
+            0,
+            "cancelled Quest should be removed from paused set"
+        );
+    }
+
+    #[test]
+    fn test_quest_sync_cancelled_unknown_id_no_change() {
+        // 取消不存在的 quest_id 不应 panic,也不应改变列表
+        let mut sync = QuestSync::new();
+        let q1 = quest("q1", "first");
+        sync.apply_event(&quest_list_event(vec![q1.clone()]));
+
+        let updated = sync.apply_event(&quest_cancelled_event("nonexistent"));
+        // retain 对不存在的 ID 是 no-op,返回 Some(列表副本) 表示状态已"处理"
+        assert!(updated.is_some());
+        assert_eq!(sync.quests(), vec![q1]);
+    }
+
+    #[test]
+    fn test_quest_sync_priority_adjusted_updates_field() {
+        let mut sync = QuestSync::new();
+        let q1 = quest("q1", "first");
+        sync.apply_event(&quest_list_event(vec![q1]));
+
+        let updated = sync.apply_event(&quest_priority_adjusted_event("q1", 200));
+        assert!(updated.is_some());
+        let quests = sync.quests();
+        assert_eq!(quests.len(), 1);
+        assert_eq!(quests[0].priority, 200);
+    }
+
+    #[test]
+    fn test_quest_sync_priority_adjusted_unknown_id_ignored() {
+        // 调整不存在的 quest_id 应静默返回 None,不 panic,不改变列表
+        let mut sync = QuestSync::new();
+        let q1 = quest("q1", "first");
+        sync.apply_event(&quest_list_event(vec![q1.clone()]));
+
+        let updated = sync.apply_event(&quest_priority_adjusted_event("nonexistent", 200));
+        assert!(updated.is_none(), "unknown quest_id should return None");
         assert_eq!(sync.quests(), vec![q1]);
     }
 
@@ -2074,5 +2625,134 @@ mod tests {
         assert!(snap.mcp_nodes.is_empty());
         assert!(snap.chtc_state.adapters.is_empty());
         assert!(snap.decay_history.is_empty());
+    }
+
+    // ============================================================
+    // P7 新增同步器测试 — OsaSync / ClvSync / DataSnapshot 新字段
+    // ============================================================
+
+    /// 构造 OmniSparseMasksComputed 事件
+    fn osa_event(sparsity: f32, context_mask: Vec<&str>) -> NexusEvent {
+        NexusEvent::OmniSparseMasksComputed {
+            metadata: EventMetadata::new("osa-coordinator"),
+            mask_hash: format!("mask-{sparsity}"),
+            sparsity,
+            context_mask: context_mask.into_iter().map(String::from).collect(),
+        }
+    }
+
+    /// 构造 ClvSnapshotReported 事件
+    fn clv_event(l2_norm: f32, block_count: usize) -> NexusEvent {
+        NexusEvent::ClvSnapshotReported {
+            metadata: EventMetadata::new("nmc-encoder"),
+            modality: "Text".into(),
+            content_hash: format!("hash-{l2_norm}"),
+            clv_summary: event_bus::ClvSummary {
+                block_means: vec![0.1; block_count],
+                l2_norm,
+                top_dims: vec![(0, 0.8)],
+            },
+        }
+    }
+
+    #[test]
+    fn test_osa_sync_omni_sparse_masks_computed() {
+        let mut sync = OsaSync::new();
+        // 默认状态:无稀疏度数据
+        assert!(sync.sparsity().is_none());
+        assert!(sync.context_mask().is_empty());
+        assert!(sync.sparsity_history().is_empty());
+
+        let updated = sync.apply_event(&osa_event(0.45, vec!["file1.rs", "file2.rs"]));
+        assert!(updated.is_some());
+        assert_eq!(sync.sparsity(), Some(0.45));
+        assert_eq!(sync.context_mask().len(), 2);
+        assert_eq!(sync.sparsity_history().len(), 1);
+        // sparsity * 1000 = 450
+        assert_eq!(sync.sparsity_history()[0], 450);
+    }
+
+    #[test]
+    fn test_osa_sync_history_fifo() {
+        let mut sync = OsaSync::new();
+        // 填充超过 256 个,验证 FIFO 容量控制
+        for i in 0..300 {
+            sync.apply_event(&osa_event(i as f32 / 1000.0, vec![]));
+        }
+        // FIFO 容量控制:应只保留最后 256 个
+        assert_eq!(sync.sparsity_history().len(), 256);
+        // 最后一个值应为 299 * 1000 / 1000 = 299 → 存为 299
+        assert_eq!(sync.sparsity_history()[255], 299);
+    }
+
+    #[test]
+    fn test_osa_sync_unrelated_event_unchanged() {
+        let mut sync = OsaSync::new();
+        sync.apply_event(&osa_event(0.45, vec!["file1.rs"]));
+
+        let unrelated = NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        };
+        let result = sync.apply_event(&unrelated);
+        assert!(result.is_none());
+        assert_eq!(sync.sparsity(), Some(0.45));
+    }
+
+    #[test]
+    fn test_clv_sync_snapshot_reported() {
+        let mut sync = ClvSync::new();
+        assert!(sync.summary().is_none());
+
+        let updated = sync.apply_event(&clv_event(2.5, 8));
+        assert!(updated.is_some());
+        let s = sync.summary().unwrap();
+        assert_eq!(s.block_means.len(), 8);
+        assert!((s.l2_norm - 2.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_clv_sync_overwrites_previous() {
+        let mut sync = ClvSync::new();
+        // 第一次更新
+        sync.apply_event(&clv_event(1.0, 8));
+        // 第二次更新(覆盖)
+        sync.apply_event(&clv_event(2.0, 8));
+        let s = sync.summary().unwrap();
+        // 应为第二次的值
+        assert!((s.l2_norm - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_clv_sync_unrelated_event_unchanged() {
+        let mut sync = ClvSync::new();
+        sync.apply_event(&clv_event(2.5, 8));
+
+        let unrelated = NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        };
+        let result = sync.apply_event(&unrelated);
+        assert!(result.is_none());
+        assert!(sync.summary().is_some());
+    }
+
+    #[test]
+    fn test_data_snapshot_p7_fields_default() {
+        // P7 新增字段在 Default 实现中应正确初始化
+        let snap = DataSnapshot::default();
+        assert!(snap.timeline_snapshots.is_empty());
+        assert!(snap.osa_sparsity.is_none());
+        assert!(snap.osa_context_mask.is_empty());
+        assert!(snap.osa_sparsity_history.is_empty());
+        assert!(snap.clv_summary.is_none());
+    }
+
+    #[test]
+    fn test_data_source_config_p7_fields_default() {
+        // P7 新增配置字段默认值与 TuiConfig 对齐
+        let cfg = DataSourceConfig::default();
+        assert_eq!(cfg.snapshot_interval_s, 30);
+        assert_eq!(cfg.max_snapshots, 100);
     }
 }

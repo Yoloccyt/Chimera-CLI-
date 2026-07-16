@@ -226,6 +226,7 @@ impl TuiApp {
                 self.mark_dirty_panels_from_snapshot(&snapshot);
 
                 self.state.quest_list = snapshot.quest_list;
+                self.state.paused_quest_count = snapshot.paused_quest_count;
                 self.state.budget = snapshot.budget_metrics;
                 self.state.memory_metrics = snapshot.memory_metrics;
                 self.state.security_state = snapshot.security_state;
@@ -256,7 +257,8 @@ impl TuiApp {
     /// 臃肿;同时便于测试针对单个字段的变化进行断言。
     ///
     /// # 字段 → 面板映射
-    /// - `quest_list` → Quest
+    /// - `quest_list` → Quest + Health(Active Quests 从 quest_list.len() 派生)
+    /// - `paused_quest_count` → Health(Paused Quests 指标)
     /// - `budget_metrics` / `budget_history` → Budget
     /// - `memory_metrics` / `memory_history` → Memory
     /// - `security_state` → Security
@@ -271,6 +273,8 @@ impl TuiApp {
         // 结构化比较更易读,且无需额外引入哈希依赖。
         if self.state.quest_list != snapshot.quest_list {
             self.state.mark_dirty(PanelId::Quest);
+            // quest_list 变化也影响 Health 面板的 Active Quests 指标
+            self.state.mark_dirty(PanelId::Health);
         }
         if self.state.budget != snapshot.budget_metrics
             || self.state.budget_history != snapshot.budget_history
@@ -287,6 +291,7 @@ impl TuiApp {
         }
         if self.state.health_metrics != snapshot.health_metrics
             || self.state.event_rate_history != snapshot.event_rate_history
+            || self.state.paused_quest_count != snapshot.paused_quest_count
         {
             self.state.mark_dirty(PanelId::Health);
         }
@@ -540,6 +545,8 @@ impl TuiApp {
             self.publish_pause(quest_id);
         } else if let Some(quest_id) = cmd.strip_prefix("resume:") {
             self.publish_resume(quest_id);
+        } else if let Some(quest_id) = cmd.strip_prefix("cancel:") {
+            self.publish_cancel_request(quest_id);
         } else if let Some(rest) = cmd.strip_prefix("vote:") {
             let mut parts = rest.splitn(2, ':');
             let vote_str = parts.next().unwrap_or("");
@@ -569,6 +576,31 @@ impl TuiApp {
         self.publish_control_event(NexusEvent::QuestResumeRequested {
             metadata: EventMetadata::new("chimera-tui"),
             quest_id: quest_id.to_string(),
+            requested_by: "operator".to_string(),
+        });
+    }
+
+    /// 发布 Quest 取消请求(M4 扩展)
+    ///
+    /// WHY 与 pause/resume 同构:复用 EventMetadata + requested_by 模式,
+    /// 由 quest-engine 消费后发布 QuestCancelled 状态变更事件。
+    fn publish_cancel_request(&mut self, quest_id: &str) {
+        self.publish_control_event(NexusEvent::QuestCancelRequested {
+            metadata: EventMetadata::new("chimera-tui"),
+            quest_id: quest_id.to_string(),
+            requested_by: "operator".to_string(),
+        });
+    }
+
+    /// 发布 Quest 优先级变更请求(M4 扩展)
+    ///
+    /// WHY new_priority 由面板边界检查后传入:app 层不再重复校验,
+    /// 保持职责单一(面板=输入校验,app=事件发布)。
+    fn publish_priority_change(&mut self, quest_id: &str, new_priority: u8) {
+        self.publish_control_event(NexusEvent::QuestPriorityChanged {
+            metadata: EventMetadata::new("chimera-tui"),
+            quest_id: quest_id.to_string(),
+            new_priority,
             requested_by: "operator".to_string(),
         });
     }
@@ -674,6 +706,22 @@ impl TuiApp {
                     &quest_id,
                     format!("resume:{quest_id}"),
                 ));
+            }
+            // M4 扩展:cancel 是破坏性操作,与 pause/resume 一致走确认流程
+            TuiCommand::RequestQuestCancel(quest_id) => {
+                self.state.popup_stack.push(PopupKind::control_confirm(
+                    "Cancel quest",
+                    &quest_id,
+                    format!("cancel:{quest_id}"),
+                ));
+            }
+            // M4 扩展:priority 调整是非破坏性操作,直接发布事件
+            // WHY 不走确认流程:优先级 +/- 可逆,二次确认会增加操作摩擦
+            TuiCommand::RequestQuestPriorityChange {
+                quest_id,
+                new_priority,
+            } => {
+                self.publish_priority_change(&quest_id, new_priority);
             }
             TuiCommand::RequestVote { proposal_id, vote } => {
                 let vote_str = vote.as_str();
@@ -965,7 +1013,24 @@ impl TuiApp {
         // WHY 用 result 变量:确保终端恢复在 return 前执行,即使事件循环出错
         let result = self.event_loop(&mut terminal);
 
-        // 步骤 4:恢复终端(无论事件循环成功与否)
+        // 步骤 4:退出时保存 TuiConfig 到 ~/.chimera/tui.yaml(最佳努力)
+        // WHY 在终端恢复前保存:此时 self.config 仍持有运行时修改
+        // (主题切换 `t`、tick 间隔调整),保存可持久化用户偏好。
+        // WHY 同步 main_panel_ratio:运行时比例调整(Ctrl+Up/Down)更新的是
+        // self.main_panel_ratio 而非 self.config.main_panel_ratio,
+        // 保存前需同步回 config 以持久化用户调整。
+        // WHY 保存失败不阻塞退出:配置持久化是最佳努力,失败仅记录警告。
+        self.config.main_panel_ratio = self.main_panel_ratio;
+        let config_path = TuiConfig::default_path();
+        if let Err(e) = self.config.save_to_file(&config_path) {
+            tracing::warn!(
+                path = %config_path.display(),
+                error = %e,
+                "Failed to save TuiConfig on exit (non-blocking)"
+            );
+        }
+
+        // 步骤 5:恢复终端(无论事件循环成功与否)
         // WHY 恢复在 result 返回前:确保终端状态不残留,即使出错也要恢复
         let stdout = terminal.backend_mut();
         if self.config.enable_mouse {
@@ -1111,6 +1176,7 @@ mod tests {
             }],
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         }
     }
 

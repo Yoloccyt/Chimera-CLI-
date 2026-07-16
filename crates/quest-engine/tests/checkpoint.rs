@@ -290,6 +290,7 @@ async fn test_load_latest_returns_most_recent() {
         tasks: vec![],
         thinking_mode: nexus_core::ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     };
 
     let mut newest_time = chrono::DateTime::<chrono::Utc>::MIN_UTC;
@@ -557,6 +558,7 @@ fn make_large_quest(id: &str, task_count: usize) -> Quest {
         tasks,
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     }
 }
 

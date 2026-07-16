@@ -11,6 +11,8 @@ nexus-core = { path = "../nexus-core" }
 tokio = { workspace = true, features = ["sync", "time"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# serde_yaml:TuiConfig 持久化(Task 15),save_to_file/load_from_file YAML 读写
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 # 事件元数据中的时间戳格式化(已存在于 workspace 依赖)

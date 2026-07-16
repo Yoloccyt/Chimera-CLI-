@@ -54,6 +54,7 @@ fn make_quest_with_completed_tasks(quest_id: &str, count: usize) -> Quest {
         tasks,
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     }
 }
 
@@ -403,6 +404,7 @@ fn test_generator_empty_quest() {
         tasks: vec![],
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     };
 
     let entries = WikiGenerator::from_quest_result(&quest);
@@ -430,6 +432,7 @@ fn test_generator_no_completed_tasks() {
         ],
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     };
 
     let entries = WikiGenerator::from_quest_result(&quest);

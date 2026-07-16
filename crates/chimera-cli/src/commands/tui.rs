@@ -25,12 +25,35 @@ pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
         chimera_tui::DataSourceConfig::default(),
     ));
 
+    // 加载 TUI 专用持久化配置(~/.chimera/tui.yaml)
+    // WHY 在 TuiApp 构造前加载: tui.yaml 持久化 TUI 专用字段
+    // (theme/colors/main_panel_ratio/tick_interval_ms),覆盖默认值;
+    // 文件不存在时 load_from_file 静默返回默认配置(首次启动场景)。
+    let tui_config = {
+        let tui_path = chimera_tui::TuiConfig::default_path();
+        match chimera_tui::TuiConfig::load_from_file(&tui_path) {
+            Ok(persisted) => {
+                tracing::debug!(
+                    path = %tui_path.display(),
+                    "Loaded persisted TuiConfig"
+                );
+                persisted
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %tui_path.display(),
+                    error = %e,
+                    "Failed to load TuiConfig, using defaults"
+                );
+                chimera_tui::TuiConfig::default()
+            }
+        }
+    };
+
     // 创建 TUI 应用，使用实时数据管道而非空桩。
-    let mut app = chimera_tui::TuiApp::with_data_source(
-        chimera_tui::TuiConfig::default(),
-        Box::new(Arc::clone(&pipeline)),
-    )
-    .context("TUI 初始化失败")?;
+    let mut app =
+        chimera_tui::TuiApp::with_data_source(tui_config, Box::new(Arc::clone(&pipeline)))
+            .context("TUI 初始化失败")?;
 
     // M4:将 EventBus 注入 TUI,使控制面板可发布请求事件。
     // 保留 bus 所有权,后续仍需要克隆给上游控制订阅者。

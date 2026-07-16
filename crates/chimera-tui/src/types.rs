@@ -39,6 +39,8 @@ use serde::{Deserialize, Serialize};
 /// - `McpNodes`:MCP 节点面板,节点状态与心跳(P2.4)
 /// - `Chtc`:CHTC 适配器面板,跨平台兼容性评分(P2.5)
 /// - `Timeline`:时间轴面板,P7 历史回放(v1.8+ 接口占位)
+/// - `OsaSparse`:OSA 稀疏度可视化面板,OMEGA Ω-Sparse 定律可视化
+/// - `ClvVector`:CLV 向量可视化面板,512 维潜在向量摘要展示
 ///
 /// WHY Copy + PartialEq:面板标识频繁参与比较与传递,Copy 避免克隆开销。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -71,6 +73,14 @@ pub enum PanelId {
     Chtc,
     /// 时间轴面板 — P7 历史回放(v1.8+ 接口占位)
     Timeline,
+    /// OSA 稀疏度可视化面板 — OMEGA Ω-Sparse 定律可视化
+    ///
+    /// 展示 OmniSparseMasksComputed 事件的平均稀疏度 + context 维度活跃文件列表。
+    OsaSparse,
+    /// CLV 向量可视化面板 — 512 维潜在向量摘要展示
+    ///
+    /// 展示 ClvSnapshotReported 事件的 8 分块热图 + L2 范数 + Top-8 维度。
+    ClvVector,
 }
 
 impl PanelId {
@@ -91,6 +101,8 @@ impl PanelId {
             PanelId::McpNodes => "McpNodes",
             PanelId::Chtc => "Chtc",
             PanelId::Timeline => "Timeline",
+            PanelId::OsaSparse => "OsaSparse",
+            PanelId::ClvVector => "ClvVector",
         }
     }
 
@@ -111,14 +123,17 @@ impl PanelId {
             PanelId::McpNodes => " MCP Nodes ",
             PanelId::Chtc => " CHTC Adapters ",
             PanelId::Timeline => " Timeline ",
+            PanelId::OsaSparse => " OSA Sparse ",
+            PanelId::ClvVector => " CLV Vector ",
         }
     }
 
     /// 切换到下一个面板(循环顺序)
     ///
-    /// 完整循环(14 面板):
+    /// 完整循环(16 面板):
     /// Quest → Parliament → Budget → Memory → Security → Health → Log → Help
-    /// → Decay → EventStream → Router → McpNodes → Chtc → Timeline → Quest
+    /// → Decay → EventStream → Router → McpNodes → Chtc → Timeline
+    /// → OsaSparse → ClvVector → Quest
     pub fn next(&self) -> PanelId {
         match self {
             PanelId::Quest => PanelId::Parliament,
@@ -134,14 +149,16 @@ impl PanelId {
             PanelId::Router => PanelId::McpNodes,
             PanelId::McpNodes => PanelId::Chtc,
             PanelId::Chtc => PanelId::Timeline,
-            PanelId::Timeline => PanelId::Quest,
+            PanelId::Timeline => PanelId::OsaSparse,
+            PanelId::OsaSparse => PanelId::ClvVector,
+            PanelId::ClvVector => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
     pub fn prev(&self) -> PanelId {
         match self {
-            PanelId::Quest => PanelId::Timeline,
+            PanelId::Quest => PanelId::ClvVector,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
             PanelId::Memory => PanelId::Budget,
@@ -155,6 +172,8 @@ impl PanelId {
             PanelId::McpNodes => PanelId::Router,
             PanelId::Chtc => PanelId::McpNodes,
             PanelId::Timeline => PanelId::Chtc,
+            PanelId::OsaSparse => PanelId::Timeline,
+            PanelId::ClvVector => PanelId::OsaSparse,
         }
     }
 }
@@ -256,6 +275,23 @@ pub enum TuiCommand {
     RequestQuestPause(String),
     /// 请求恢复指定 Quest(M4 双向控制)
     RequestQuestResume(String),
+    /// 请求取消指定 Quest(M4 双向控制扩展 — 破坏性操作,需二次确认)
+    ///
+    /// WHY 独立变体:cancel 是不可逆操作,`apply_command` 会弹出 Confirm 弹窗,
+    /// 操作员确认后才通过 `apply_confirm_command` 发布 `QuestCancelRequested`。
+    /// 与 pause/resume 一致走确认流程,避免误触导致任务丢失。
+    RequestQuestCancel(String),
+    /// 请求调整 Quest 优先级(M4 双向控制扩展 — 非破坏性操作,直接发布)
+    ///
+    /// WHY 直接发布:优先级调整可逆(+/- 互补),无需二次确认摩擦,
+    /// `apply_command` 直接调用 `publish_priority_change` 发布事件。
+    /// 边界检查(0/255)由面板在构造命令时完成,避免无效请求占用带宽。
+    RequestQuestPriorityChange {
+        /// 目标 Quest ID
+        quest_id: String,
+        /// 新优先级(0-255,边界检查由面板在构造命令时完成)
+        new_priority: u8,
+    },
     /// 请求对提案投票(M4 双向控制)
     RequestVote {
         /// 目标提案 ID
@@ -407,16 +443,42 @@ pub struct ChtcState {
     pub adapters: Vec<ChtcAdapterInfo>,
 }
 
-/// 时间轴快照 — P7 历史回放的接口占位(v1.8+ 实现)
+/// Timeline 面板的历史快照 — 周期性记录系统关键指标
 ///
-/// WHY 现在定义:让 TuiState 与 DataSnapshot 提前预留字段,
-/// v1.8 实现历史回放时无需再破坏性扩展结构体。
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+/// 由 DataPipeline 按 snapshot_interval_s 周期生成,
+/// 容量上限 max_snapshots(默认 100),FIFO 丢弃最旧快照。
+///
+/// WHY 含 f32 字段(budget_utilization/decay_coefficient):仅派生 PartialEq,
+/// 不派生 Eq(项目红线:浮点字段不满足 Eq)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimelineSnapshot {
-    /// 快照时间戳,None 表示尚未生成
-    pub timestamp: Option<DateTime<Utc>>,
-    /// 快照时点的事件总数
+    /// 快照时间戳
+    pub timestamp: DateTime<Utc>,
+    /// 事件总数(累计)
     pub event_count: u64,
+    /// 事件速率(每秒事件数,自上一快照以来)
+    pub event_rate: u64,
+    /// 预算利用率 [0.0, 1.0]
+    pub budget_utilization: f32,
+    /// 健康分 [0, 100]
+    pub health_score: u8,
+    /// 衰减系数 [0.0, 1.0]
+    pub decay_coefficient: f32,
+}
+
+impl Default for TimelineSnapshot {
+    fn default() -> Self {
+        // WHY health_score=100 / decay_coefficient=1.0:与 DecayMetrics::default 保持一致,
+        // 无数据时显示"满血"状态,避免面板误导性低分。
+        Self {
+            timestamp: Utc::now(),
+            event_count: 0,
+            event_rate: 0,
+            budget_utilization: 0.0,
+            health_score: 100,
+            decay_coefficient: 1.0,
+        }
+    }
 }
 
 // ============================================================
@@ -445,6 +507,8 @@ pub struct TuiState {
     pub frame_count: u64,
     /// 当前 Quest 列表(数据驱动 Quest 面板)
     pub quest_list: Vec<Quest>,
+    /// 暂停 Quest 数(从 QuestPaused/QuestResumed 事件派生,数据驱动 Health 面板)
+    pub paused_quest_count: usize,
     /// 当前预算指标(数据驱动 Budget 面板)
     pub budget: BudgetMetrics,
     /// 当前记忆指标(数据驱动 Memory 面板)
@@ -501,6 +565,15 @@ pub struct TuiState {
     /// WHY 默认 DualPane:启动时显示完整界面(tabs + main + status_bar),
     /// 用户按 `l` 可切换到 TriplePane(全监控)或 SinglePane(专注模式)。
     pub layout_mode: LayoutMode,
+    // === P7 OsaSparse / ClvVector 面板新增字段 ===
+    /// OSA 平均稀疏度 [0.0, 1.0](None = 未收到事件)
+    pub osa_sparsity: Option<f32>,
+    /// OSA context 维度活跃文件 ID 列表
+    pub osa_context_mask: Vec<String>,
+    /// OSA 稀疏度历史(容量 256,FIFO)
+    pub osa_sparsity_history: Vec<u64>,
+    /// CLV 摘要(None = 未收到事件)
+    pub clv_summary: Option<event_bus::ClvSummary>,
 }
 
 impl TuiState {
@@ -512,6 +585,7 @@ impl TuiState {
             input_buffer: String::new(),
             frame_count: 0,
             quest_list: Vec::new(),
+            paused_quest_count: 0,
             budget: BudgetMetrics::default(),
             memory_metrics: MemoryMetrics::default(),
             security_state: SecurityState::default(),
@@ -538,6 +612,11 @@ impl TuiState {
             decay_history: Vec::new(),
             // P6.2 布局模板默认值(DualPane,见 LayoutMode::default 的 WHY 注释)
             layout_mode: LayoutMode::default(),
+            // P7 OsaSparse / ClvVector 面板默认值(未收到事件时为 None / 空)
+            osa_sparsity: None,
+            osa_context_mask: Vec::new(),
+            osa_sparsity_history: Vec::new(),
+            clv_summary: None,
         }
     }
 
@@ -661,8 +740,11 @@ mod tests {
         assert_eq!(PanelId::Router.next(), PanelId::McpNodes);
         assert_eq!(PanelId::McpNodes.next(), PanelId::Chtc);
         assert_eq!(PanelId::Chtc.next(), PanelId::Timeline);
-        // 循环:Timeline → Quest
-        assert_eq!(PanelId::Timeline.next(), PanelId::Quest);
+        // P3 扩展:Timeline → OsaSparse(不再是 Timeline → Quest)
+        assert_eq!(PanelId::Timeline.next(), PanelId::OsaSparse);
+        assert_eq!(PanelId::OsaSparse.next(), PanelId::ClvVector);
+        // 循环:ClvVector → Quest
+        assert_eq!(PanelId::ClvVector.next(), PanelId::Quest);
     }
 
     #[test]
@@ -681,13 +763,16 @@ mod tests {
         assert_eq!(PanelId::McpNodes.prev(), PanelId::Router);
         assert_eq!(PanelId::Chtc.prev(), PanelId::McpNodes);
         assert_eq!(PanelId::Timeline.prev(), PanelId::Chtc);
-        // 循环:Quest → Timeline
-        assert_eq!(PanelId::Quest.prev(), PanelId::Timeline);
+        // P3 扩展:OsaSparse → Timeline,ClvVector → OsaSparse
+        assert_eq!(PanelId::OsaSparse.prev(), PanelId::Timeline);
+        assert_eq!(PanelId::ClvVector.prev(), PanelId::OsaSparse);
+        // 循环:Quest → ClvVector(不再是 Quest → Timeline)
+        assert_eq!(PanelId::Quest.prev(), PanelId::ClvVector);
     }
 
     #[test]
     fn test_panel_id_next_prev_roundtrip() {
-        // next 再 prev 应回到原面板(P2 扩展至 14 面板)
+        // next 再 prev 应回到原面板(P3 扩展至 16 面板)
         for panel in [
             PanelId::Quest,
             PanelId::Parliament,
@@ -703,6 +788,8 @@ mod tests {
             PanelId::McpNodes,
             PanelId::Chtc,
             PanelId::Timeline,
+            PanelId::OsaSparse,
+            PanelId::ClvVector,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);
@@ -720,6 +807,26 @@ mod tests {
         let json = serde_json::to_string(&panel).unwrap();
         let restored: PanelId = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, panel);
+    }
+
+    #[test]
+    fn test_panel_id_osa_sparse() {
+        let p = PanelId::OsaSparse;
+        assert_eq!(p.as_str(), "OsaSparse");
+        assert_eq!(p.title(), " OSA Sparse ");
+        // 验证循环:OsaSparse 的下一个是 ClvVector,前一个是 Timeline
+        assert_eq!(p.next(), PanelId::ClvVector);
+        assert_eq!(p.prev(), PanelId::Timeline);
+    }
+
+    #[test]
+    fn test_panel_id_clv_vector() {
+        let p = PanelId::ClvVector;
+        assert_eq!(p.as_str(), "ClvVector");
+        assert_eq!(p.title(), " CLV Vector ");
+        // 验证循环:ClvVector 的下一个是 Quest,前一个是 OsaSparse
+        assert_eq!(p.next(), PanelId::Quest);
+        assert_eq!(p.prev(), PanelId::OsaSparse);
     }
 
     #[test]
@@ -824,7 +931,16 @@ mod tests {
 
     #[test]
     fn test_state_serde_roundtrip() {
-        let state = TuiState::new();
+        let mut state = TuiState::new();
+        // 设置 P7 新字段非默认值,验证 OSA/CLV 字段序列化往返一致
+        state.osa_sparsity = Some(0.45);
+        state.osa_context_mask = vec!["file1.rs".into(), "file2.rs".into()];
+        state.osa_sparsity_history = vec![100, 200];
+        state.clv_summary = Some(event_bus::ClvSummary {
+            block_means: vec![0.1; 8],
+            l2_norm: 2.5,
+            top_dims: vec![(0, 0.8)],
+        });
         let json = serde_json::to_string(&state).unwrap();
         let restored: TuiState = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, state);
@@ -861,5 +977,53 @@ mod tests {
     fn test_tui_state_layout_mode_default() {
         let state = TuiState::new();
         assert_eq!(state.layout_mode, LayoutMode::DualPane);
+    }
+
+    // ============================================================
+    // P7 TimelineSnapshot / OsaSparse / ClvVector 测试
+    // ============================================================
+
+    #[test]
+    fn test_timeline_snapshot_default() {
+        let snap = TimelineSnapshot::default();
+        assert_eq!(snap.event_count, 0);
+        assert_eq!(snap.event_rate, 0);
+        assert_eq!(snap.health_score, 100);
+        assert_eq!(snap.decay_coefficient, 1.0);
+    }
+
+    #[test]
+    fn test_tui_state_new_has_osa_clv_fields() {
+        let state = TuiState::new();
+        assert!(state.osa_sparsity.is_none());
+        assert!(state.osa_context_mask.is_empty());
+        assert!(state.osa_sparsity_history.is_empty());
+        assert!(state.clv_summary.is_none());
+    }
+
+    #[test]
+    fn test_tui_state_osa_sparsity_update() {
+        let mut state = TuiState::new();
+        state.osa_sparsity = Some(0.45);
+        state.osa_context_mask = vec!["file1.rs".into(), "file2.rs".into()];
+        state.osa_sparsity_history.push(100);
+        assert_eq!(state.osa_sparsity, Some(0.45));
+        assert_eq!(state.osa_context_mask.len(), 2);
+        assert_eq!(state.osa_sparsity_history.len(), 1);
+    }
+
+    #[test]
+    fn test_tui_state_clv_summary_update() {
+        let mut state = TuiState::new();
+        let summary = event_bus::ClvSummary {
+            block_means: vec![0.1; 8],
+            l2_norm: 2.5,
+            top_dims: vec![(0, 0.8)],
+        };
+        state.clv_summary = Some(summary);
+        assert!(state.clv_summary.is_some());
+        let s = state.clv_summary.as_ref().unwrap();
+        assert_eq!(s.block_means.len(), 8);
+        assert!((s.l2_norm - 2.5).abs() < 1e-5);
     }
 }

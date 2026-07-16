@@ -419,6 +419,7 @@ mod tests {
             tasks,
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         }
     }
 
@@ -651,6 +652,7 @@ mod tests {
             }],
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         };
         let cp = cm.save(&quest).await.unwrap();
         let loaded = cm.load("q-mm", &cp.checkpoint_id).await.unwrap();

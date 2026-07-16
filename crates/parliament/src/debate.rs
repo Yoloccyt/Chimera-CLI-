@@ -784,6 +784,7 @@ mod tests {
             tasks,
             thinking_mode,
             checkpoint_id: None,
+            priority: 128,
         }
     }
 

@@ -37,6 +37,7 @@ fn make_quest(task_count: usize, thinking_mode: ThinkingMode) -> Quest {
         tasks,
         thinking_mode,
         checkpoint_id: None,
+        priority: 128,
     }
 }
 

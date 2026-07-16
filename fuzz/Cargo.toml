@@ -12,6 +12,9 @@
 #   cargo +nightly fuzz run quest_parse
 #   cargo +nightly fuzz run seccore_sandbox
 #   cargo +nightly fuzz run event_serialize
+#   cargo +nightly fuzz run cacr_budget_parse
+#   cargo +nightly fuzz run checkpoint_deserialize
+#   cargo +nightly fuzz run config_section_parse
 #
 # 当前环境仅有 stable 工具链,无法实际运行,详见
 # docs/security/week8_security_report.md
@@ -30,10 +33,23 @@ description = "NEXUS-OMEGA 模糊测试 target 集合(cargo-fuzz)"
 [package.metadata]
 cargo-fuzz = true
 
+# ============================================================
+# [lib] 声明:Windows-GNU stub 宏方案
+#
+# WHY:fuzz/src/lib.rs 提供 fuzz_target! stub 宏替代品,
+# 使 Windows-GNU + stable 下 `cargo check --manifest-path fuzz/Cargo.toml` 能通过。
+# 非 Windows 平台使用真正的 libfuzzer-sys,此 lib 不参与编译。
+# ============================================================
+[lib]
+name = "chimera_fuzz"
+path = "src/lib.rs"
+
 [dependencies]
 # libfuzzer-sys:cargo-fuzz 的核心运行时,提供 fuzz_target! 宏
 # 需要 nightly 工具链(-Zsanitizer=address)
-libfuzzer-sys = "0.4"
+# Windows-GNU 下无法编译(FuzzerExtFunctionsWindows.cpp 仅适配 MSVC)
+# Windows 上改用本地 stub 宏(fuzz/src/lib.rs),通过 target-specific 依赖切换
+libfuzzer-sys = { version = "0.4", optional = true }
 
 # 被测 crate(通过 path 引用主 workspace,版本与 workspace 一致)
 nexus-core = { path = "../crates/nexus-core" }
@@ -46,6 +62,17 @@ model-router = { path = "../crates/model-router" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rmp-serde = "1.3"
+
+# ============================================================
+# 平台条件依赖
+#
+# WHY 仅非 Windows 启用 libfuzzer-sys:
+# Windows-GNU(g++)无法编译 libfuzzer-sys 的 C++ 源码,
+# 改用 fuzz/src/lib.rs 的 stub 宏替代,使 `cargo check` 能通过语法验证。
+# 实际 fuzz 运行委托 Linux CI(.github/workflows/fuzz.yml)。
+# ============================================================
+[target.'cfg(not(windows))'.dependencies]
+libfuzzer-sys = "0.4"
 
 # ============================================================
 # Fuzz target 二进制声明

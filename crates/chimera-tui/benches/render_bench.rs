@@ -77,6 +77,7 @@ fn sample_quest(id: &str, title: &str) -> Quest {
         ],
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     }
 }
 

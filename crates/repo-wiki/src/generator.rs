@@ -104,6 +104,7 @@ mod tests {
             tasks,
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         }
     }
 

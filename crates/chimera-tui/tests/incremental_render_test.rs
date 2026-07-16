@@ -286,6 +286,7 @@ fn test_quest_change_marks_quest_only() {
         }],
         thinking_mode: ThinkingMode::Standard,
         checkpoint_id: None,
+        priority: 128,
     };
     let snapshot = DataSnapshot {
         quest_list: vec![quest],

@@ -18,6 +18,7 @@ use crate::types::{PanelId, TuiCommand, TuiState};
 
 pub mod budget;
 pub mod chtc;
+pub mod clv_vector;
 pub mod decay;
 pub mod event_stream;
 pub mod health;
@@ -26,13 +27,16 @@ pub(crate) mod list_state;
 pub mod log;
 pub mod mcp_nodes;
 pub mod memory;
+pub mod osa_sparse;
 pub mod parliament;
 pub mod quest;
 pub mod router;
 pub mod security;
+pub mod timeline;
 
 pub use budget::BudgetPanel;
 pub use chtc::ChtcPanel;
+pub use clv_vector::ClvVectorPanel;
 pub use decay::DecayPanel;
 pub use event_stream::EventStreamPanel;
 pub use health::HealthPanel;
@@ -40,10 +44,12 @@ pub use help::HelpPanel;
 pub use log::LogPanel;
 pub use mcp_nodes::McpNodesPanel;
 pub use memory::MemoryPanel;
+pub use osa_sparse::OsaSparsePanel;
 pub use parliament::ParliamentPanel;
 pub use quest::QuestPanel;
 pub use router::RouterPanel;
 pub use security::SecurityPanel;
+pub use timeline::TimelinePanel;
 
 /// 面板 trait — 所有 TUI 面板的统一接口
 ///

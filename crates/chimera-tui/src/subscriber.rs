@@ -68,6 +68,8 @@ impl EventSubscriber {
                     event = rx.recv() => {
                         match event {
                             Ok(event) => {
+                                // P7: 记录特定事件接收日志(debug 级别,仅对新事件变体输出)
+                                EventSubscriber::handle_event(&event);
                                 let mut buf = buffer_clone.lock().unwrap_or_else(|poisoned| {
                                     tracing::warn!("TUI event subscriber buffer mutex was poisoned; recovering state");
                                     poisoned.into_inner()
@@ -110,6 +112,42 @@ impl EventSubscriber {
         }
     }
 
+    /// 处理单个 NexusEvent,记录特定事件变体的接收日志
+    ///
+    /// WHY 关联函数: 后台转发任务只持有 buffer 的 `Arc<Mutex<...>>`,
+    /// 不持有 `EventSubscriber` 的 `&self`,因此使用关联函数避免生命周期约束。
+    ///
+    /// P7 新增: 为 `OmniSparseMasksComputed` 和 `ClvSnapshotReported` 事件
+    /// 添加 debug 级别日志,便于调试 OSA/CLV 面板数据流。
+    /// 其他事件变体走通配符分支,不记录日志(避免高频事件刷屏)。
+    ///
+    /// WHY 不在此调用 OsaSync/ClvSync: EventSubscriber 的职责仅是缓冲事件,
+    /// 事件→状态的转换由 `DataPipeline`(data.rs)调用各同步器 `apply_event` 完成。
+    /// 此处日志仅用于验证事件已进入订阅管道,不承担状态更新职责。
+    fn handle_event(event: &NexusEvent) {
+        match event {
+            NexusEvent::OmniSparseMasksComputed {
+                sparsity,
+                context_mask,
+                ..
+            } => {
+                tracing::debug!(
+                    sparsity,
+                    context_mask_count = context_mask.len(),
+                    "OmniSparseMasksComputed event received"
+                );
+            }
+            NexusEvent::ClvSnapshotReported { clv_summary, .. } => {
+                tracing::debug!(
+                    l2_norm = clv_summary.l2_norm,
+                    block_means_count = clv_summary.block_means.len(),
+                    "ClvSnapshotReported event received"
+                );
+            }
+            _ => {}
+        }
+    }
+
     /// 非阻塞地从缓冲区取出一条事件
     ///
     /// 返回 `None` 表示当前缓冲区为空。
@@ -149,6 +187,136 @@ impl Drop for EventSubscriber {
         // 若未显式 shutdown,至少 abort 转发任务,避免 orphan task。
         if let Some(handle) = self.handle.take() {
             handle.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use event_bus::{ClvSummary, EventMetadata, NexusEvent};
+    use tokio::time::{sleep, Duration};
+
+    /// 构造 OmniSparseMasksComputed 事件
+    fn osa_event(sparsity: f32, context_mask: Vec<&str>) -> NexusEvent {
+        NexusEvent::OmniSparseMasksComputed {
+            metadata: EventMetadata::new("osa-coordinator"),
+            mask_hash: format!("mask-{sparsity}"),
+            sparsity,
+            context_mask: context_mask.into_iter().map(String::from).collect(),
+        }
+    }
+
+    /// 构造 ClvSnapshotReported 事件
+    fn clv_event(l2_norm: f32, block_count: usize) -> NexusEvent {
+        NexusEvent::ClvSnapshotReported {
+            metadata: EventMetadata::new("nmc-encoder"),
+            modality: "Text".into(),
+            content_hash: format!("hash-{l2_norm}"),
+            clv_summary: ClvSummary {
+                block_means: vec![0.1; block_count],
+                l2_norm,
+                top_dims: vec![(0, 0.8)],
+            },
+        }
+    }
+
+    /// 等待并取出订阅者缓冲区中的事件(带重试,避免时序依赖)
+    ///
+    /// WHY 重试: 后台转发任务与测试主循环并发执行,事件从 broadcast receiver
+    /// 到 buffer 的转发存在微秒级延迟。固定 sleep 容易 flaky,轮询重试更稳健。
+    async fn recv_with_retry(subscriber: &mut EventSubscriber) -> Option<NexusEvent> {
+        for _ in 0..20 {
+            if let Some(event) = subscriber.try_recv() {
+                return Some(event);
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+        subscriber.try_recv()
+    }
+
+    /// 验证 handle_event 对 OmniSparseMasksComputed 不 panic
+    #[test]
+    fn test_handle_event_omni_sparse_masks_computed() {
+        let event = osa_event(0.45, vec!["file1.rs", "file2.rs"]);
+        EventSubscriber::handle_event(&event);
+    }
+
+    /// 验证 handle_event 对 ClvSnapshotReported 不 panic
+    #[test]
+    fn test_handle_event_clv_snapshot_reported() {
+        let event = clv_event(2.5, 8);
+        EventSubscriber::handle_event(&event);
+    }
+
+    /// 验证 handle_event 对其他事件变体不 panic(走通配符分支)
+    #[test]
+    fn test_handle_event_other_variants() {
+        let event = NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        };
+        EventSubscriber::handle_event(&event);
+    }
+
+    /// 端到端验证: OmniSparseMasksComputed 事件经 EventSubscriber 缓冲后可被取出
+    ///
+    /// 验证链路: EventBus.publish_blocking → broadcast → 后台任务 handle_event
+    /// → buffer.push_back → try_recv 取出。
+    #[tokio::test]
+    async fn test_subscriber_buffers_omni_sparse_masks_computed() {
+        let bus = EventBus::new();
+        let mut subscriber = EventSubscriber::new(bus.clone());
+
+        bus.publish_blocking(osa_event(0.45, vec!["file1.rs", "file2.rs"]))
+            .expect("publish should succeed");
+
+        let received = recv_with_retry(&mut subscriber).await;
+        subscriber.shutdown().await;
+
+        assert!(
+            received.is_some(),
+            "OmniSparseMasksComputed 事件应被 EventSubscriber 缓冲"
+        );
+        match received.unwrap() {
+            NexusEvent::OmniSparseMasksComputed {
+                sparsity,
+                context_mask,
+                ..
+            } => {
+                assert!((sparsity - 0.45).abs() < 1e-5);
+                assert_eq!(context_mask.len(), 2);
+                assert_eq!(context_mask[0], "file1.rs");
+            }
+            other => panic!("期望 OmniSparseMasksComputed, 实际收到 {:?}", other),
+        }
+    }
+
+    /// 端到端验证: ClvSnapshotReported 事件经 EventSubscriber 缓冲后可被取出
+    ///
+    /// 验证链路: EventBus.publish_blocking → broadcast → 后台任务 handle_event
+    /// → buffer.push_back → try_recv 取出。
+    #[tokio::test]
+    async fn test_subscriber_buffers_clv_snapshot_reported() {
+        let bus = EventBus::new();
+        let mut subscriber = EventSubscriber::new(bus.clone());
+
+        bus.publish_blocking(clv_event(2.5, 8))
+            .expect("publish should succeed");
+
+        let received = recv_with_retry(&mut subscriber).await;
+        subscriber.shutdown().await;
+
+        assert!(
+            received.is_some(),
+            "ClvSnapshotReported 事件应被 EventSubscriber 缓冲"
+        );
+        match received.unwrap() {
+            NexusEvent::ClvSnapshotReported { clv_summary, .. } => {
+                assert_eq!(clv_summary.block_means.len(), 8);
+                assert!((clv_summary.l2_norm - 2.5).abs() < 1e-5);
+            }
+            other => panic!("期望 ClvSnapshotReported, 实际收到 {:?}", other),
         }
     }
 }

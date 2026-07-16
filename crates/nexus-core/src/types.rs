@@ -106,6 +106,31 @@ pub struct Quest {
     pub thinking_mode: ThinkingMode,
     /// 最近检查点 ID(无检查点时为 None)
     pub checkpoint_id: Option<String>,
+    /// Quest 优先级 (0=最低, 255=最高, 默认 128)
+    /// WHY u8: 足够 256 级优先级,内存占用最小
+    /// WHY #[serde(default)]: 保证旧数据(无 priority 字段)反序列化时取默认值 128
+    #[serde(default = "default_priority")]
+    pub priority: u8,
+}
+
+/// Quest.priority 的 serde 默认值函数
+/// WHY 独立函数:`#[serde(default = "...")]` 需要具名函数路径,不能用闭包或常量
+fn default_priority() -> u8 {
+    128
+}
+
+impl Default for Quest {
+    fn default() -> Self {
+        Self {
+            quest_id: String::new(),
+            title: String::new(),
+            tasks: vec![],
+            // ThinkingMode 无 Default impl,Standard 是语义上的默认(平衡速度与深度)
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+            priority: default_priority(),
+        }
+    }
 }
 
 /// 检查点 — Quest 执行状态的持久化快照
@@ -182,5 +207,34 @@ mod tests {
         let after = Utc::now();
         assert!(cp.created_at >= before);
         assert!(cp.created_at <= after);
+    }
+
+    #[test]
+    fn quest_default_priority_is_128() {
+        let quest = Quest::default();
+        assert_eq!(quest.priority, 128, "默认优先级应为 128");
+    }
+
+    #[test]
+    fn quest_with_priority_serde_roundtrip() {
+        let quest = Quest {
+            quest_id: "q1".into(),
+            title: "Test".into(),
+            tasks: vec![],
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+            priority: 200,
+        };
+        let json = serde_json::to_string(&quest).unwrap();
+        let decoded: Quest = serde_json::from_str(&json).unwrap();
+        assert_eq!(quest, decoded);
+    }
+
+    #[test]
+    fn quest_old_data_without_priority_deserializes_to_default() {
+        // 模拟旧数据(无 priority 字段),验证 #[serde(default = "default_priority")] 兼容
+        let old_json = r#"{"quest_id":"q1","title":"Old","tasks":[],"thinking_mode":"Standard","checkpoint_id":null}"#;
+        let decoded: Quest = serde_json::from_str(old_json).unwrap();
+        assert_eq!(decoded.priority, 128, "旧数据应取默认优先级 128");
     }
 }

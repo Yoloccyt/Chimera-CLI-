@@ -69,6 +69,22 @@ impl HealthPanel {
                 ),
                 Span::from(format!("{:.1} ms", hm.average_latency_ms)),
             ]),
+            // Active/Paused Quests 指标:从 quest_list 与 paused_quest_count 派生,
+            // 反映系统当前 Quest 负载与暂停状态(不新增事件,复用已有 QuestPaused/QuestResumed)
+            Line::from(vec![
+                Span::styled(
+                    "Active Quests: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::from(state.quest_list.len().to_string()),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "Paused Quests: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::from(state.paused_quest_count.to_string()),
+            ]),
             Line::from(vec![
                 Span::styled(
                     "Health Score: ",

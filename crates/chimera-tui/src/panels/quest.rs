@@ -266,11 +266,12 @@ impl Panel for QuestPanel {
                         quest_id: quest.quest_id.clone(),
                     })
             }
-            // `d` 键打开 Quest 详情弹窗(原 Enter 功能,P5 迁移到此键)
+            // `i` 键打开 Quest 详情弹窗(原 `d` 键功能,P5 迁移到此键,M4 再迁移)
             //
-            // WHY 迁移到 `d`:`d` 是 "detail" 的首字母,语义直观;
-            // 与 EventStream 面板的 Enter(事件详情)保持键位区分,避免混淆。
-            KeyCode::Char('d') => {
+            // WHY 迁移历史:Enter(detail) → `d`(P5) → `i`(M4)。
+            // M4 将 `d` 重新分配给 cancel(破坏性操作需显眼键位),
+            // `i` 是 "info" 的首字母,语义直观,且当前未被使用。
+            KeyCode::Char('i') => {
                 let quests = Self::filtered_quests(state);
                 quests.get(self.selected).map(|quest| {
                     let content = Self::detail_content(quest);
@@ -279,6 +280,53 @@ impl Panel for QuestPanel {
                         content,
                         scroll: 0,
                     })
+                })
+            }
+            // `d` 键取消选中 Quest(破坏性操作,弹出确认弹窗)
+            //
+            // WHY `d` = "cancel/destroy":破坏性操作需高显眼键位,`d` 与 vim 的
+            // delete 语义一致,操作员肌肉记忆强。返回 RequestQuestCancel 后由
+            // TuiApp::apply_command 弹出 Confirm 弹窗,操作员确认(Enter)后
+            // 才发布 QuestCancelRequested 事件,防误触导致任务丢失。
+            KeyCode::Char('d') => {
+                let quests = Self::filtered_quests(state);
+                quests
+                    .get(self.selected)
+                    .map(|quest| TuiCommand::RequestQuestCancel(quest.quest_id.clone()))
+            }
+            // `+` 键:优先级 +1(上限 255,边界保护)
+            //
+            // WHY 直接返回命令而非发布事件:面板不持有 EventBus(L10 面板保持
+            // 无状态),由 TuiApp::apply_command 统一发布。边界检查在面板完成,
+            // 避免无效请求(priority=255 时 +1 溢出)进入事件总线。
+            KeyCode::Char('+') => {
+                let quests = Self::filtered_quests(state);
+                quests.get(self.selected).and_then(|quest| {
+                    if quest.priority < u8::MAX {
+                        Some(TuiCommand::RequestQuestPriorityChange {
+                            quest_id: quest.quest_id.clone(),
+                            new_priority: quest.priority + 1,
+                        })
+                    } else {
+                        None
+                    }
+                })
+            }
+            // `-` 键:优先级 -1(下限 0,边界保护)
+            //
+            // WHY 边界检查在面板:与 `+` 对称,priority=0 时不返回命令,
+            // TuiApp 不会发布事件,操作员无感知(无弹窗、无状态栏错误)。
+            KeyCode::Char('-') => {
+                let quests = Self::filtered_quests(state);
+                quests.get(self.selected).and_then(|quest| {
+                    if quest.priority > 0 {
+                        Some(TuiCommand::RequestQuestPriorityChange {
+                            quest_id: quest.quest_id.clone(),
+                            new_priority: quest.priority - 1,
+                        })
+                    } else {
+                        None
+                    }
                 })
             }
             KeyCode::Char('g') => {
@@ -333,6 +381,7 @@ mod tests {
             }],
             thinking_mode: ThinkingMode::Standard,
             checkpoint_id: None,
+            priority: 128,
         }
     }
 
@@ -393,6 +442,7 @@ mod tests {
                 }],
                 thinking_mode: ThinkingMode::Standard,
                 checkpoint_id: None,
+                priority: 128,
             },
             Quest {
                 quest_id: "q2".into(),
@@ -405,6 +455,7 @@ mod tests {
                 }],
                 thinking_mode: ThinkingMode::Standard,
                 checkpoint_id: None,
+                priority: 128,
             },
         ];
         state.filter_keyword = Some("special".into());
@@ -446,13 +497,14 @@ mod tests {
 
     #[test]
     fn test_quest_panel_detail_popup() {
-        // P5:detail popup 迁移到 `d` 键(原 Enter 已改为跳转 EventStream)
+        // P5→M4:detail popup 从 `d` 键迁移到 `i` 键(info)
+        // WHY `d` 在 M4 重新分配给 cancel(破坏性操作),detail 改用 `i`
         let mut panel = QuestPanel::new();
         let mut state = TuiState::new();
         state.quest_list = vec![sample_quest("q1", "Detail Quest")];
 
         let cmd = panel.handle_key(
-            KeyEvent::new(KeyCode::Char('d'), crossterm::event::KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('i'), crossterm::event::KeyModifiers::NONE),
             &mut state,
         );
         match cmd {

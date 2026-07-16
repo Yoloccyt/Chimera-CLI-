@@ -61,11 +61,12 @@ pub use focus::FocusManager;
 pub use panels::{
     BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
     McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, SecurityPanel,
+    TimelinePanel,
 };
 pub use popup::{PopupKind, PopupStack, Severity};
 pub use render::{
-    gauge, latency_line, sparkline, utilization_bar, virtual_scroll_window, FOOTER_TEXT,
-    VIRTUAL_SCROLL_BUFFER,
+    gauge, gauge_thresholded, latency_line, sparkline, sparkline_dual, utilization_bar,
+    virtual_scroll_window, GaugeThreshold, FOOTER_TEXT, VIRTUAL_SCROLL_BUFFER,
 };
 pub use subscriber::EventSubscriber;
 pub use types::{
@@ -88,6 +89,7 @@ pub mod prelude {
     pub use crate::panels::{
         BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
         McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, SecurityPanel,
+        TimelinePanel,
     };
     pub use crate::popup::{PopupKind, PopupStack, Severity};
     pub use crate::subscriber::EventSubscriber;

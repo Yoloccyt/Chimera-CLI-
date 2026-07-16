@@ -45,6 +45,13 @@ impl EventMetadata {
 pub enum EventSeverity {
     /// 普通事件:可被背压策略丢弃
     Normal,
+    /// 信息级事件:控制请求/反馈等,不阻断系统但优先级高于 Normal
+    ///
+    /// WHY 新增(Task 1):TUI 双向控制事件(Quest 取消/优先级调整)属于
+    /// 操作员意图传达,重要性高于普通遥测事件,但非安全关键(不会触发
+    /// mpsc 旁路投递)。现有 `== Critical` 判定自动将其视为非关键,
+    /// 与"不阻断系统"语义一致,无需改动 backpressure/bus/logging。
+    Info,
     /// 关键事件:检查点、共识、安全告警等,不可丢弃
     ///
     /// WHY:CheckpointSaved 等事件丢失会导致 Quest 无法恢复,
@@ -149,6 +156,112 @@ pub struct RouterStatsPayload {
     pub p99_latency_us: u64,
     /// 热点能力列表(能力 ID,调用次数),按热度降序
     pub hot_capabilities: Vec<(String, u64)>,
+}
+
+/// CLV 摘要载荷 — TUI ClvVector 面板的结构化数据
+///
+/// WHY 定义在 event-bus:chimera-tui(L10)需要展示 CLV 摘要,
+/// 但不能携带完整 512 维向量(性能负担),通过此摘要结构传递
+/// 8 分块均值 + L2 范数 + Top-8 维度索引,足以可视化向量分布。
+/// ClvSummary::from_clv 计算方法将在 Task 2 中实现(event-bus 已依赖 nexus-core)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ClvSummary {
+    /// 8 分块均值(每块 64 维,512/8=64)
+    /// 索引 0 = 维度 [0..64),索引 7 = 维度 [448..512)
+    pub block_means: Vec<f32>,
+    /// L2 范数 = sqrt(sum(v_i^2))
+    pub l2_norm: f32,
+    /// Top-8 维度(维度索引, 值),按 |值| 降序排列
+    /// 长度 ≤ 8(向量维度不足 8 时返回全部)
+    pub top_dims: Vec<(usize, f32)>,
+}
+
+impl ClvSummary {
+    /// 从 CLV 512 维向量计算摘要
+    ///
+    /// 计算:
+    /// 1. **8 分块均值**: 将 512 维分为 8 块(每块 64 维),计算每块算术均值
+    /// 2. **L2 范数**: sqrt(sum(v_i^2))
+    /// 3. **Top-8 维度**: 按 |v_i| 降序选取前 8 个(维度索引, 值)
+    ///
+    /// WHY 在 event-bus 实现: ClvSummary 定义在 event-bus(事件载荷),
+    /// event-bus 已依赖 nexus-core,可直接访问 CLV::as_slice()。
+    /// 避免在 nexus-core 定义 ClvSummary 造成类型重复。
+    ///
+    /// # 算法选择
+    /// - 分块均值: O(n) 遍历,每块 64 维累加后除以 64
+    /// - L2 范数: O(n) 遍历,累加 v_i^2 后开方
+    /// - Top-8: 使用 `select_nth_unstable_by` O(n) 算法(架构红线要求,
+    ///   禁止 sort_by O(n log n) 做 Top-K);Top-k 内部排序(k ≤ 8,成本可忽略)
+    ///
+    /// # 零向量边界
+    /// CLV::zero() 返回 l2_norm = 0.0 + 全 0 block_means + 空 top_dims。
+    /// 当 l2_norm == 0 时跳过 Top-8 计算(无显著维度)。
+    ///
+    /// # 参数
+    /// clv: CLV 引用(nexus-core 的 512 维向量)
+    ///
+    /// # 返回
+    /// ClvSummary 实例
+    pub fn from_clv(clv: &nexus_core::clv::CLV) -> Self {
+        let slice = clv.as_slice();
+        let dim = nexus_core::clv::CLV::DIMENSION; // 512
+
+        // 1. 计算 8 分块均值(每块 64 维)
+        let block_size = dim / 8; // 64
+        let block_means: Vec<f32> = (0..8)
+            .map(|i| {
+                let start = i * block_size;
+                let end = start + block_size;
+                let sum: f32 = slice[start..end].iter().sum();
+                sum / block_size as f32
+            })
+            .collect();
+
+        // 2. 计算 L2 范数 = sqrt(sum(v_i^2))
+        let sum_sq: f32 = slice.iter().map(|&v| v * v).sum();
+        let l2_norm = sum_sq.sqrt();
+
+        // 3. 计算 Top-8 维度(按 |值| 降序)
+        // 零向量边界:l2_norm == 0 表示全零,无显著维度,返回空
+        let top_dims = if l2_norm == 0.0 {
+            Vec::new()
+        } else {
+            // 构造 (维度索引, |值|, 值) 元组向量
+            let mut indexed: Vec<(usize, f32, f32)> = slice
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| (i, v.abs(), v))
+                .collect();
+
+            let k = 8.min(indexed.len());
+            if k == 0 {
+                Vec::new()
+            } else {
+                // select_nth_unstable_by 按 |值| 降序分区到第 k-1 位:
+                // before(k-1 个最大) + mid(第 k 个) = Top-k(无序)
+                let (before, mid, _) = indexed.select_nth_unstable_by(k - 1, |a, b| {
+                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                // 收集 Top-k:前 k-1 个 + mid
+                let mut top: Vec<(usize, f32, f32)> = before.to_vec();
+                top.push(*mid);
+
+                // Top-k 内部按 |值| 降序排序(k ≤ 8,排序成本可忽略)
+                top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+                // 转换为 (维度索引, 值) 格式
+                top.into_iter().take(8).map(|(i, _abs, v)| (i, v)).collect()
+            }
+        };
+
+        ClvSummary {
+            block_means,
+            l2_norm,
+            top_dims,
+        }
+    }
 }
 
 /// NEXUS-OMEGA 核心事件枚举 — 跨层通信的唯一契约
@@ -1317,6 +1430,75 @@ pub enum NexusEvent {
         requested_by: String,
     },
 
+    // ============================================================
+    // M4 扩展(续):Quest 取消与优先级控制双向事件
+    //
+    // WHY 新增(Task 1):补齐 TUI 双向控制闭环 — 除暂停/恢复外,操作员
+    // 还需取消 Quest 与调整优先级。沿用 M4 既有模式:请求语义变体
+    // (L10→L9)与状态变更反馈变体(L9→L10)成对出现,字段加
+    // #[serde(default)] 保证未来扩展或旧数据反序列化兼容。
+    // severity 统一为 Info:控制事件不阻断系统,不触发 mpsc 旁路投递。
+    // ============================================================
+    /// Quest 取消请求 — L10 Interface → L9 Quest
+    QuestCancelRequested {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 目标 Quest ID
+        #[serde(default)]
+        quest_id: String,
+        /// 请求者标识
+        #[serde(default)]
+        requested_by: String,
+    },
+
+    /// Quest 已取消 — L9 Quest → L10 Interface
+    ///
+    /// WHY:quest-engine 消费 QuestCancelRequested 后发布状态变更事件,
+    /// 供 TUI 数据管道感知并反馈给操作员,完成取消控制闭环。
+    QuestCancelled {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 已取消的 Quest ID
+        #[serde(default)]
+        quest_id: String,
+        /// 请求者标识
+        #[serde(default)]
+        requested_by: String,
+    },
+
+    /// Quest 优先级变更请求 — L10 Interface → L9 Quest
+    QuestPriorityChanged {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 目标 Quest ID
+        #[serde(default)]
+        quest_id: String,
+        /// 新优先级(0-255,数值越大优先级越高)
+        #[serde(default)]
+        new_priority: u8,
+        /// 请求者标识
+        #[serde(default)]
+        requested_by: String,
+    },
+
+    /// Quest 优先级已调整 — L9 Quest → L10 Interface
+    ///
+    /// WHY:quest-engine 消费 QuestPriorityChanged 后发布状态变更事件,
+    /// 供 TUI 数据管道刷新 Quest 列表排序,完成优先级控制闭环。
+    QuestPriorityAdjusted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 已调整的 Quest ID
+        #[serde(default)]
+        quest_id: String,
+        /// 生效后的新优先级(0-255)
+        #[serde(default)]
+        new_priority: u8,
+        /// 请求者标识
+        #[serde(default)]
+        requested_by: String,
+    },
+
     /// 衰减指标报告 — L4 decay-engine 发布,L10 TUI Decay 面板消费
     ///
     /// WHY 新增(P2.1 TUI v1.7-omega):TUI 无法直接依赖 L4 decay-engine,
@@ -1381,6 +1563,24 @@ pub enum NexusEvent {
         recent_requests: Vec<(String, u32)>,
         /// 是否在线
         is_online: bool,
+    },
+
+    /// CLV 快照报告 — L2 Memory → L10 Interface
+    ///
+    /// WHY 新增(TUI v1.8-omega):chimera-tui 的 ClvVector 面板需要展示
+    /// CLV 512 维向量的运行时摘要,但不能携带完整向量(性能负担)。
+    /// NMC 编码器在完成编码后发布此事件,携带 ClvSummary 摘要
+    /// (8 分块均值 + L2 范数 + Top-8 维度索引)。
+    /// Normal 级别:丢失仅导致本次摘要未展示,可由下次编码补偿。
+    ClvSnapshotReported {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 编码模态(与 NmcEncoded 一致,如 "Text"/"Image")
+        modality: String,
+        /// 内容哈希(与 NmcEncoded 一致,供去重或检索)
+        content_hash: String,
+        /// CLV 摘要(8 分块均值 + L2 范数 + Top-8 维度索引)
+        clv_summary: ClvSummary,
     },
 }
 
@@ -1467,7 +1667,12 @@ impl NexusEvent {
             | Self::DecayMetricsReported { metadata, .. }
             | Self::RouterStatsReported { metadata, .. }
             | Self::McpNodeHeartbeat { metadata, .. }
-            | Self::ChtcAdapterStatus { metadata, .. } => metadata,
+            | Self::ChtcAdapterStatus { metadata, .. }
+            | Self::ClvSnapshotReported { metadata, .. }
+            | Self::QuestCancelRequested { metadata, .. }
+            | Self::QuestCancelled { metadata, .. }
+            | Self::QuestPriorityChanged { metadata, .. }
+            | Self::QuestPriorityAdjusted { metadata, .. } => metadata,
         }
     }
 
@@ -1505,6 +1710,11 @@ impl NexusEvent {
             | Self::VetoOverridden { .. }
             | Self::RedTeamAudit { .. }
             | Self::BudgetExceeded { .. } => EventSeverity::Critical,
+            // 控制事件(请求/反馈):不阻断系统,不触发 mpsc 旁路投递
+            Self::QuestCancelRequested { .. }
+            | Self::QuestCancelled { .. }
+            | Self::QuestPriorityChanged { .. }
+            | Self::QuestPriorityAdjusted { .. } => EventSeverity::Info,
             _ => EventSeverity::Normal,
         }
     }
@@ -1592,6 +1802,11 @@ impl NexusEvent {
             Self::RouterStatsReported { .. } => "RouterStatsReported",
             Self::McpNodeHeartbeat { .. } => "McpNodeHeartbeat",
             Self::ChtcAdapterStatus { .. } => "ChtcAdapterStatus",
+            Self::ClvSnapshotReported { .. } => "ClvSnapshotReported",
+            Self::QuestCancelRequested { .. } => "QuestCancelRequested",
+            Self::QuestCancelled { .. } => "QuestCancelled",
+            Self::QuestPriorityChanged { .. } => "QuestPriorityChanged",
+            Self::QuestPriorityAdjusted { .. } => "QuestPriorityAdjusted",
         }
     }
 }
@@ -2306,5 +2521,213 @@ mod tests {
             let restored: VoteValue = serde_json::from_str(&json).unwrap();
             assert_eq!(value, restored);
         }
+    }
+
+    // ============================================================
+    // TUI v1.8-omega 扩展测试:验证 ClvSnapshotReported 事件变体
+    // ============================================================
+
+    #[test]
+    fn test_clv_snapshot_reported_normal_severity() {
+        let summary = ClvSummary {
+            block_means: vec![0.1; 8],
+            l2_norm: 2.5,
+            top_dims: vec![(0, 0.8), (64, 0.6)],
+        };
+        let e = NexusEvent::ClvSnapshotReported {
+            metadata: EventMetadata::new("nmc-encoder"),
+            modality: "Text".into(),
+            content_hash: "abc123".into(),
+            clv_summary: summary,
+        };
+        assert_eq!(e.severity(), EventSeverity::Normal);
+        assert_eq!(e.type_name(), "ClvSnapshotReported");
+        assert_eq!(e.metadata().source, "nmc-encoder");
+    }
+
+    #[test]
+    fn test_clv_snapshot_reported_serialization_json() {
+        let summary = ClvSummary {
+            block_means: vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+            l2_norm: 1.234,
+            top_dims: vec![(0, 0.9), (128, 0.7), (256, 0.5)],
+        };
+        let e = NexusEvent::ClvSnapshotReported {
+            metadata: EventMetadata::new("nmc-encoder"),
+            modality: "Image".into(),
+            content_hash: "deadbeef".into(),
+            clv_summary: summary,
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let restored: NexusEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, restored);
+    }
+
+    #[test]
+    fn test_clv_snapshot_reported_msgpack_roundtrip() {
+        let summary = ClvSummary {
+            block_means: vec![-0.5; 8],
+            l2_norm: 0.0,
+            top_dims: vec![],
+        };
+        let e = NexusEvent::ClvSnapshotReported {
+            metadata: EventMetadata::new("nmc-encoder"),
+            modality: "Audio".into(),
+            content_hash: "cafebabe".into(),
+            clv_summary: summary,
+        };
+        let bytes = crate::bus::serialize_msgpack(&e).unwrap();
+        let decoded = crate::bus::deserialize_msgpack(&bytes).unwrap();
+        assert_eq!(e, decoded);
+    }
+
+    #[test]
+    fn test_clv_summary_partial_eq() {
+        let s1 = ClvSummary {
+            block_means: vec![0.1; 8],
+            l2_norm: 1.0,
+            top_dims: vec![(1, 0.5)],
+        };
+        let s2 = ClvSummary {
+            block_means: vec![0.1; 8],
+            l2_norm: 1.0,
+            top_dims: vec![(1, 0.5)],
+        };
+        assert_eq!(s1, s2);
+
+        let s3 = ClvSummary {
+            block_means: vec![0.2; 8],
+            l2_norm: 1.0,
+            top_dims: vec![(1, 0.5)],
+        };
+        assert_ne!(s1, s3);
+    }
+
+    #[test]
+    fn test_clv_snapshot_reported_metadata_extraction() {
+        let summary = ClvSummary {
+            block_means: vec![0.0; 8],
+            l2_norm: 0.0,
+            top_dims: vec![],
+        };
+        let metadata = EventMetadata::new("test-source");
+        let expected_id = metadata.event_id;
+        let e = NexusEvent::ClvSnapshotReported {
+            metadata,
+            modality: "Text".into(),
+            content_hash: "test".into(),
+            clv_summary: summary,
+        };
+        assert_eq!(e.metadata().event_id, expected_id);
+        assert_eq!(e.metadata().source, "test-source");
+    }
+
+    // ============================================================
+    // TUI v1.8-omega: ClvSummary::from_clv 计算方法测试
+    // ============================================================
+
+    #[test]
+    fn test_clv_summary_from_clv_zero_vector() {
+        // 零向量:l2_norm = 0.0, block_means 全 0, top_dims 空
+        let clv = nexus_core::clv::CLV::zero();
+        let summary = ClvSummary::from_clv(&clv);
+        assert_eq!(summary.block_means.len(), 8);
+        assert!(summary.block_means.iter().all(|&v| v == 0.0));
+        assert_eq!(summary.l2_norm, 0.0);
+        assert!(summary.top_dims.is_empty());
+    }
+
+    #[test]
+    fn test_clv_summary_from_clv_uniform_vector() {
+        // 均匀向量(全 1.0):所有分块均值 = 1.0, l2_norm = sqrt(512) ≈ 22.63
+        let v = vec![1.0_f32; 512];
+        let clv = nexus_core::clv::CLV::from_vec(v).unwrap();
+        let summary = ClvSummary::from_clv(&clv);
+        assert_eq!(summary.block_means.len(), 8);
+        assert!(summary.block_means.iter().all(|&m| (m - 1.0).abs() < 1e-5));
+        let expected_norm = (512.0_f32).sqrt();
+        assert!((summary.l2_norm - expected_norm).abs() < 1e-3);
+        // Top-8: 所有维度值相同,取前 8 个(索引 0-7)
+        assert_eq!(summary.top_dims.len(), 8);
+        // 所有 |值| = 1.0,排序后前 8 个任意,但值都应为 1.0
+        assert!(summary
+            .top_dims
+            .iter()
+            .all(|&(_, v)| (v - 1.0).abs() < 1e-5));
+    }
+
+    #[test]
+    fn test_clv_summary_from_clv_known_vector() {
+        // 已知向量:前 64 维 = 2.0,其余 = 0.0
+        // block_means[0] = 2.0, block_means[1..8] = 0.0
+        // l2_norm = sqrt(64 * 4) = sqrt(256) = 16.0
+        // top_dims: 前 8 个应是维度 0-7(值 2.0)
+        let mut v = vec![0.0_f32; 512];
+        for val in v.iter_mut().take(64) {
+            *val = 2.0;
+        }
+        let clv = nexus_core::clv::CLV::from_vec(v).unwrap();
+        let summary = ClvSummary::from_clv(&clv);
+        assert!((summary.block_means[0] - 2.0).abs() < 1e-5);
+        for i in 1..8 {
+            assert!((summary.block_means[i] - 0.0).abs() < 1e-5);
+        }
+        assert!((summary.l2_norm - 16.0).abs() < 1e-3);
+        assert_eq!(summary.top_dims.len(), 8);
+        // 前 8 个应是维度 0-7(值 2.0)
+        assert!(summary
+            .top_dims
+            .iter()
+            .all(|&(_, v)| (v - 2.0).abs() < 1e-5));
+    }
+
+    #[test]
+    fn test_clv_summary_from_clv_block_means_length() {
+        // 验证 block_means 长度始终为 8
+        let clv = nexus_core::clv::CLV::zero();
+        let summary = ClvSummary::from_clv(&clv);
+        assert_eq!(summary.block_means.len(), 8);
+    }
+
+    #[test]
+    fn test_clv_summary_from_clv_top_dims_sorted_desc() {
+        // 验证 top_dims 按 |值| 降序排列
+        let mut v = vec![0.0_f32; 512];
+        v[0] = 5.0; // |5.0|
+        v[1] = 3.0; // |3.0|
+        v[2] = -4.0; // |4.0|
+        v[3] = 1.0; // |1.0|
+        v[4] = -2.0; // |2.0|
+        let clv = nexus_core::clv::CLV::from_vec(v).unwrap();
+        let summary = ClvSummary::from_clv(&clv);
+        assert!(!summary.top_dims.is_empty());
+        // 验证降序:|v[0]| >= |v[1]| >= ...
+        for i in 1..summary.top_dims.len() {
+            let prev_abs = summary.top_dims[i - 1].1.abs();
+            let curr_abs = summary.top_dims[i].1.abs();
+            assert!(
+                prev_abs >= curr_abs || (prev_abs - curr_abs).abs() < 1e-5,
+                "top_dims not sorted desc: |{}| < |{}|",
+                prev_abs,
+                curr_abs
+            );
+        }
+        // 第一个应是维度 0(值 5.0)
+        assert_eq!(summary.top_dims[0].0, 0);
+    }
+
+    #[test]
+    fn test_clv_summary_from_clv_negative_values() {
+        // 负值向量:验证 |值| 正确排序
+        let mut v = vec![0.0_f32; 512];
+        v[0] = -5.0; // |-5.0| = 5.0
+        v[1] = 3.0; // |3.0| = 3.0
+        let clv = nexus_core::clv::CLV::from_vec(v).unwrap();
+        let summary = ClvSummary::from_clv(&clv);
+        // 第一个应是维度 0(值 -5.0,|值|最大)
+        assert_eq!(summary.top_dims[0].0, 0);
+        assert!((summary.top_dims[0].1 - (-5.0)).abs() < 1e-5);
+        // 第二个应是维度 1(值 3.0)
+        assert_eq!(summary.top_dims[1].0, 1);
     }
 }

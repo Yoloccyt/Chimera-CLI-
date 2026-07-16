@@ -45,6 +45,29 @@ pub async fn handle_control_event(
             info!(quest_id = %quest_id, "收到 Quest 恢复请求");
             engine.resume_quest(&quest_id, &requested_by).await
         }
+        NexusEvent::QuestCancelRequested {
+            quest_id,
+            requested_by,
+            ..
+        } => {
+            info!(quest_id = %quest_id, "收到 Quest 取消请求");
+            engine.cancel_quest(&quest_id, &requested_by).await
+        }
+        NexusEvent::QuestPriorityChanged {
+            quest_id,
+            new_priority,
+            requested_by,
+            ..
+        } => {
+            info!(
+                quest_id = %quest_id,
+                new_priority,
+                "收到 Quest 优先级调整请求"
+            );
+            engine
+                .adjust_priority(&quest_id, new_priority, &requested_by)
+                .await
+        }
         _ => Ok(()),
     }
 }
@@ -175,5 +198,89 @@ mod tests {
         // 终止后台任务:engine 与 bus 仍持有 EventBus 克隆,receiver 不会自然关闭,
         // 因此通过 abort 结束测试任务,避免挂起。
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_handle_cancel_request() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = QuestEngine::new(bus.clone());
+        let quest = engine.create_quest(make_intent("分析。")).await.unwrap();
+        let _ = rx.recv().await.unwrap(); // QuestCreated
+
+        let request = NexusEvent::QuestCancelRequested {
+            metadata: EventMetadata::new("chimera-tui"),
+            quest_id: quest.quest_id.clone(),
+            requested_by: "operator".into(),
+        };
+        handle_control_event(&engine, request).await.unwrap();
+
+        // Quest 应已从注册表移除
+        assert!(
+            engine.get_quest(&quest.quest_id).is_none(),
+            "取消后 Quest 应从注册表移除"
+        );
+
+        // 应发布 QuestCancelled 事件
+        // 超时保护:骨架实现不会 publish,测试将超时失败(TDD 红灯阶段)
+        let event = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("应在超时前收到 QuestCancelled 事件")
+            .unwrap();
+        match event {
+            NexusEvent::QuestCancelled {
+                quest_id,
+                requested_by,
+                ..
+            } => {
+                assert_eq!(quest_id, quest.quest_id);
+                assert_eq!(requested_by, "operator");
+            }
+            other => panic!("expected QuestCancelled, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_priority_change() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = QuestEngine::new(bus.clone());
+        let quest = engine.create_quest(make_intent("分析。")).await.unwrap();
+        let _ = rx.recv().await.unwrap(); // QuestCreated
+        assert_eq!(quest.priority, 128, "新 Quest 默认优先级应为 128");
+
+        let request = NexusEvent::QuestPriorityChanged {
+            metadata: EventMetadata::new("chimera-tui"),
+            quest_id: quest.quest_id.clone(),
+            new_priority: 200,
+            requested_by: "operator".into(),
+        };
+        handle_control_event(&engine, request).await.unwrap();
+
+        // Quest 优先级应已更新
+        let stored = engine
+            .get_quest(&quest.quest_id)
+            .expect("adjust_priority 不应移除 Quest");
+        assert_eq!(stored.priority, 200, "优先级应更新为 200");
+
+        // 应发布 QuestPriorityAdjusted 事件
+        // 超时保护:骨架实现不会 publish,测试将超时失败(TDD 红灯阶段)
+        let event = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("应在超时前收到 QuestPriorityAdjusted 事件")
+            .unwrap();
+        match event {
+            NexusEvent::QuestPriorityAdjusted {
+                quest_id,
+                new_priority,
+                requested_by,
+                ..
+            } => {
+                assert_eq!(quest_id, quest.quest_id);
+                assert_eq!(new_priority, 200);
+                assert_eq!(requested_by, "operator");
+            }
+            other => panic!("expected QuestPriorityAdjusted, got {other:?}"),
+        }
     }
 }
