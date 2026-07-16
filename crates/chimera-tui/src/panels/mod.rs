@@ -34,6 +34,7 @@ pub mod quest;
 pub mod resource_monitor;
 pub mod router;
 pub mod security;
+pub mod sysinfo;
 pub mod task_manager;
 pub mod timeline;
 
@@ -54,6 +55,7 @@ pub use quest::QuestPanel;
 pub use resource_monitor::ResourceMonitorPanel;
 pub use router::RouterPanel;
 pub use security::SecurityPanel;
+pub use sysinfo::SysinfoPanel;
 pub use task_manager::TaskManagerPanel;
 pub use timeline::TimelinePanel;
 
