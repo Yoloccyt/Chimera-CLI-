@@ -325,8 +325,7 @@ impl Panel for MetricsDashboardPanel {
                 }
             }
             KeyCode::Right | KeyCode::Char('l')
-                if self.selected % GRID_COLS < GRID_COLS - 1
-                    && self.selected + 1 < GRID_SIZE =>
+                if self.selected % GRID_COLS < GRID_COLS - 1 && self.selected + 1 < GRID_SIZE =>
             {
                 self.selected += 1;
             }
