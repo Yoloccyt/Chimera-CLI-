@@ -40,6 +40,7 @@
 //!     }],
 //!     thinking_mode: ThinkingMode::Standard,
 //!     checkpoint_id: None,
+//!     priority: 128,
 //! };
 //! let proposal = Proposal::new("p-1", "q-1", "执行计划", 0.3);
 //! let consensus = parliament.deliberate(&quest, &proposal).await.unwrap();

@@ -35,6 +35,7 @@
 - **运行时自适应进化**：无需重新训练的在线优化
 - **事件驱动架构**：跨层解耦的通信系统
 - **安全沙箱**：零信任执行环境，能力衰减机制
+- **多 Agent 协同**：根协调器委托、并行执行、上下文隔离(v2.0.0-omega)
 - **TUI 仪表盘**：实时系统监控与交互界面
 
 ---
@@ -107,8 +108,8 @@ curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.
 ### Docker
 
 ```bash
-docker pull ghcr.io/yoloccyt/chimera-cli:v1.8.0-omega
-docker run --rm ghcr.io/yoloccyt/chimera-cli:v1.8.0-omega --version
+docker pull ghcr.io/yoloccyt/chimera-cli:v2.0.0-omega
+docker run --rm ghcr.io/yoloccyt/chimera-cli:v2.0.0-omega --version
 ```
 
 ### 源码构建

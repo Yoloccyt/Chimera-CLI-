@@ -202,7 +202,20 @@ impl ResourceMonitorPanel {
                 // 趋势图模式:使用中位数滤波后数据 + 阈值着色
                 // WHY sparkline_thresholded:按值(已 ×10 u64)映射到阈值颜色,
                 // 70% → 700, 90% → 900,自然契合 sparkline 数据约定
-                let filtered = self.cpu_history.filtered_values();
+                //
+                // 兼容性 fallback:测试与部分调用方将历史数据写入
+                // `state.sys_metrics_history` 而非调用 `push_cpu_sample`;
+                // 当面板自身历史为空时,复用 state 历史保证 sparkline 仍可渲染。
+                let filtered: Vec<f32> =
+                    if self.cpu_history.is_empty() && !state.sys_metrics_history.is_empty() {
+                        state
+                            .sys_metrics_history
+                            .iter()
+                            .map(|v| (*v as f32 / 10.0).clamp(0.0, 100.0))
+                            .collect()
+                    } else {
+                        self.cpu_history.filtered_values()
+                    };
                 let data: Vec<u64> = filtered
                     .iter()
                     .map(|v| (v * 10.0).clamp(0.0, 1000.0) as u64)

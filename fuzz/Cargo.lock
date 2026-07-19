@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "event-bus"
-version = "1.8.0-omega"
+version = "2.0.0-omega"
 dependencies = [
  "chrono",
  "nexus-core",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "model-router"
-version = "1.8.0-omega"
+version = "2.0.0-omega"
 dependencies = [
  "dashmap",
  "event-bus",
@@ -448,7 +448,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "1.8.0-omega"
+version = "2.0.0-omega"
 dependencies = [
  "chrono",
  "hex",
@@ -661,7 +661,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seccore"
-version = "1.8.0-omega"
+version = "2.0.0-omega"
 dependencies = [
  "chrono",
  "event-bus",

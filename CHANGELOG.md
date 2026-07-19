@@ -1,5 +1,116 @@
 # Changelog
 
+## v2.0.0-omega (2026-07-18)
+
+**版本代号**: NEXUS-OMEGA (CHIMERA-MAS · Multi-Agent Orchestration)
+**Spec**: [add-chimera-mas-subsystem](.trae/specs/add-chimera-mas-subsystem/spec.md)
+**架构基线**: v1.8.0-omega → v2.0.0-omega(GA 后演进 Stage A,第三阶段深度演进里程碑)
+**ADR**: [ADR-026-chimera-mas-subsystem](docs/architecture/adr/ADR-026-chimera-mas-subsystem.md)
+
+### 重大变更
+
+- **新增 `crates/chimera-mas` crate**(L9 Quest 层,workspace 第 35 个 crate),引入多 Agent 协同工作能力,支持根协调器委托、并行执行、上下文隔离、Token 预算管理与心跳监控
+- **event-bus 扩展 7 个 Agent 相关 NexusEvent 变体**(67 → 74),新增 `EventTopic::Agent` 主题与 3 个辅助类型(`TaskPriority`/`ConsultUrgency`/`AgentStatus`)
+- **SemVer major 版本升级**(v1.8.0-omega → v2.0.0-omega),按 §3.3.1 第 5 条向后兼容规则标记 GA 后演进里程碑
+
+### Added
+
+#### chimera-mas crate(L9 Quest 层)
+
+- 新增 `crates/chimera-mas` crate,3 子模块结构:
+  - `orchestrator/` — RootOrchestrator 根协调器(任务分发 + 心跳订阅 + `max_agent_depth=5` 深度限制)
+  - `agent/` — AgentMeta/AgentType/AgentStatus/AgentFactory/AgentLifecycle(`Idle→Running→Paused→Completed/Failed/Terminated` 状态机)
+  - `context/` — AgentContext/ContextBlock/ContextPriority/ContextIsolationGuard/TokenBudget
+- 新增 `delegation.rs` 实现 `AgentTask` wrapper(包装 `nexus_core::Task` 不修改核心类型,§3.3.1 领域类型稳定性) + `DelegationExecutor`(`FuturesUnordered` 并行委托,§4.1 规范替代 `join_all`)
+- 新增 `MasError` thiserror enum(25 变体 + `test_error_variant_count_at_least_25` 静态断言)
+- 新增测试 **219 个**(47 unit + 15 context + 37 factory + 20 meta + 18 task + 16 delegation + 11 integration + 22 orchestrator + 6 proptest + 18 budget + 9 doctest)
+- 新增 benchmark `crates/chimera-mas/benches/mas_benchmark.rs`(4 个 criterion benchmark:Agent 创建/消息路由/任务拆分/上下文构建)
+- 新增 proptest `crates/chimera-mas/tests/proptest.rs`(6 个属性测试:JSON/MessagePack 序列化往返、ThinkingMode 映射、ContextIsolationGuard 跨 Agent 拒绝、委托深度不变量)
+
+#### event-bus 扩展(L1 Core)
+
+- 在 `NexusEvent` enum 新增 7 个 Agent 相关变体(均含 `metadata: EventMetadata` 字段维持 API 兼容):
+  - `AgentTaskDelegated { metadata, from, to, task_id, deadline: DateTime<Utc>, priority: TaskPriority }`
+  - `AgentTaskCompleted { metadata, from, to, task_id, result_summary }`
+  - `AgentTaskFailed { metadata, from, to, task_id, error, retry_count: u32 }` — **severity = Critical**(§6.2 红线,走 mpsc 旁路通道)
+  - `AgentConsultRequested { metadata, from, to, question, context, urgency: ConsultUrgency }`
+  - `AgentConsultResponded { metadata, from, to, answer, references: Vec<String> }`
+  - `AgentHeartbeat { metadata, from, status: AgentStatus, current_task: Option<String>, token_usage: u64, memory_usage_mb: u64 }`
+  - `AgentContextOverflow { metadata, agent_id, current_tokens: usize, max_tokens: usize }`
+- 在 `crates/event-bus/src/topic.rs` 新增 `EventTopic::Agent` 变体 + 7 个 match 分支(返回 `EventTopic::Agent`)
+- 在 `crates/event-bus/src/logging.rs` 新增 `TopicLabel::Agent` + `From<EventTopic> for TopicLabel` impl(Prometheus 标签同步)
+- 在 `crates/event-bus/src/lib.rs` 导出 3 个新类型(`TaskPriority`/`ConsultUrgency`/`AgentStatus`)+ prelude
+- 新增测试 **39 个**(34 个 agent_events_test + 5 个 filtered_subscriber_test 新增函数),event-bus 全量 **177 测试通过**
+
+#### ADR 与文档
+
+- 新增 ADR-026 记录 MAS 子系统决策(`docs/architecture/adr/ADR-026-chimera-mas-subsystem.md`,254 行):
+  - 决策 1: chimera-mas 归属 L9 Quest 层(与 quest-engine/gea-activator/efficiency-monitor 同层)
+  - 决策 2: AgentMessageBus 合并到 event-bus(§2.2 唯一通道铁律)
+  - 决策 3: AgentTask wrapper 包装 `nexus_core::Task`,不修改核心类型
+  - 决策 4: 不引入 Kuzu/LanceDB/Cognee,用 petgraph + 内存 KNN + 自实现 KG(保持 `#![forbid(unsafe_code)]` 全覆盖)
+  - 决策 5: 复用 `nexus_core::ThinkingMode`(不新建 ThinkingMode::Max)
+  - 决策 6: Duration 类型用 `tokio::time::Duration`(非 `chrono::Duration`)
+- 新增 `docs/architecture/adr_index.md` ADR-026 条目
+
+### Changed
+
+- `Cargo.toml` workspace.package.version `1.8.0-omega` → `2.0.0-omega`;workspace.members 新增 `"crates/chimera-mas"`;workspace.dependencies 新增 `chimera-mas = { path = "crates/chimera-mas" }`
+- `crates/event-bus/src/types.rs` NexusEvent 变体数 67 → 74(新增 7 个 Agent 变体),`severity()`/`metadata()`/`type_name()` match 分支同步更新
+- `crates/event-bus/src/topic.rs` 新增 `EventTopic::Agent` 变体 + `all()`/`topic()` match 同步更新,测试函数 rename `nine` → `ten`
+- `crates/event-bus/src/logging.rs` 新增 `TopicLabel::Agent` + `From` impl
+- `crates/event-bus/src/lib.rs` 导出 3 个新类型 + prelude 同步
+- `crates/event-bus/tests/filtered_subscriber_test.rs` 变体总数断言 67 → 74 + 5 个新测试函数(`test_subscribe_agent_topic_receives_all_7_variants` / `test_agent_task_failed_has_critical_severity` / `test_agent_events_filtered_by_topic` / `test_recv_matching_agent_task_delegated` / `test_agent_heartbeat_topic_is_agent`)
+- `crates/event-bus/tests/metrics_test.rs` EventTopic 计数断言 9 → 10
+- `docs/architecture/CODE_WIKI.md` §1.1/§2.1/§3.1/§3.9/§11 + TOC + 目录树同步(34 → 35 crate,版本号 1.7.0-omega → 2.0.0-omega)
+- `docs/architecture/adr_index.md` 新增 ADR-026 条目
+
+### 设计文档微调(spec.md §"设计文档微调"13 项差异落地)
+
+- **不新建 AgentMessageBus** — 合并到 event-bus(§2.2 唯一通道铁律;Ω-Event 单一实现)
+- **AgentContext 不自实现压缩** — 委托 `hcw-window::HcwWindow`(Ω-Compress 单一实现;1M = 128K 实际 + 8× 稀疏压缩,不暴力加载)
+- **AgentTask wrapper 包装 `nexus_core::Task`** — 不修改核心类型(§3.3.1 领域类型稳定性;AgentTask 含 inner + complexity + estimated_tokens + acceptable_latency + quality_requirement)
+- **不引入 Kuzu/LanceDB/Cognee** — 用 petgraph + 内存 KNN + 自实现 KG(保持 `#![forbid(unsafe_code)]` 35/35 crate 全覆盖;ADR-005 sqlite-vec 禁用教训延续)
+- **复用 `nexus_core::ThinkingMode`** — 不新建 ThinkingMode::Max(`TaskComplexity::From<ThinkingMode>` 映射:Simple→Fast, Medium→Standard, Complex/VeryComplex→Deep)
+- **Duration 类型用 `tokio::time::Duration`** — 非 `chrono::Duration`(委托超时 `tokio::time::timeout` 包装,§6.1 零孤儿调用红线)
+- **设计文档 11 子模块精简为 3 子模块** — 8/11 子模块与现有 crate 重复(orchestrator + agent + context 三模块覆盖 Stage A 全部需求)
+- **6 Phase 42 天拆分为 Stage A(2-3 周)+ Stage B(待评估)** — Stage A 完成 Task 1-17 核心框架,Stage B 待 Stage A 验收后启动(深度集成 quest-engine/gqep-executor/qeep-protocol 三方协同)
+
+### Compliance
+
+- ✅ `#![forbid(unsafe_code)]` 全覆盖(35/35 crate,chimera-mas 顶层声明 + event-bus 维持)
+- ✅ 依赖铁律零违规(chimera-mas L9 → 仅依赖 L1-L8 现有 crate,无向上依赖 L10)
+- ✅ TDD RED-GREEN 强制(每个 Task 先写失败测试再实现,Task 3/7/8/9/10/11/12/13/14/15 全部遵循)
+- ✅ 0 clippy warning,0 fmt 差异(`cargo clippy -p chimera-mas --all-targets --jobs 2 -- -D warnings` + `cargo fmt --all -- --check` 通过)
+- ✅ Critical 事件走 mpsc 旁路(`AgentTaskFailed` 用 `publish_critical_blocking`,§6.2 红线)
+- ✅ broadcast subscribe 在 spawn 之前同步调用(§4.4 反模式 3)
+- ✅ `FuturesUnordered` 替代 `join_all`(§4.1 规范,DelegationExecutor)
+- ✅ `tokio::time::Duration` 而非 `chrono::Duration`(§4.4 反模式规避)
+- ✅ f32 不隐式转 f64(Task 10 WARNING_THRESHOLD 全程 f64)
+- ✅ proptest block-named 语法(§4.1 `fn name(arg in strategy) { body }`)
+
+### 测试矩阵
+
+| 测试套件 | 通过率 | 备注 |
+|---------|--------|------|
+| chimera-mas 全量 | ✅ 219/219 | 47 unit + 15 context + 37 factory + 20 meta + 18 task + 16 delegation + 11 integration + 22 orchestrator + 6 proptest + 18 budget + 9 doctest |
+| event-bus 全量 | ✅ 177/177 | 75 unit + 34 agent_events + 11 control + 4 critical + 27 bus + 10 filtered + 6 integration + 6 metrics + 4 doctest |
+| clippy(chimera-mas) | ✅ 0 warning | `--all-targets --jobs 2 -- -D warnings` |
+| clippy(event-bus) | ✅ 0 warning | `--all-targets --jobs 2 -- -D warnings` |
+| fmt check | ✅ 通过 | `cargo fmt --all -- --check` |
+| benchmark 编译 | ✅ 通过 | `cargo check -p chimera-mas --benches`(4 benchmark 函数) |
+| **合计新增** | **+258 测试** | chimera-mas 219 + event-bus 39 |
+
+### 升级路径(从 v1.8.0-omega)
+
+1. **自动兼容**: chimera-mas 为新增 crate,不影响既有 34 crate 的 API 与运行时行为
+2. **event-bus 变体扩展**: NexusEvent 新增 7 个变体,`match` 父分支需补充 `_ => ...` 或显式处理(本项目内已全量同步)
+3. **新依赖**: workspace.dependencies 新增 `chimera-mas = { path = "crates/chimera-mas" }`,成员 crate 通过 `workspace = true` 引用
+4. **配置**: chimera-mas 当前无外部配置文件需求,所有运行时参数通过构造器注入
+5. **Stage B 衔接**: Stage A 完成核心框架,Stage B 将集成 quest-engine/gqep-executor/qeep-protocol 三方协同 + 专家咨询路由 + 记忆归档 + Wiki 知识共享 + CircuitBreaker + GSOE 进化
+
+---
+
 ## v1.8.0-omega (2026-07-16)
 
 **版本代号**: NEXUS-OMEGA (Enterprise TUI Monitoring · Task · Visualization)

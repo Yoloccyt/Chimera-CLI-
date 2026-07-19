@@ -264,6 +264,69 @@ impl ClvSummary {
     }
 }
 
+// ============================================================
+// CHIMERA-MAS Agent 辅助类型(ADR-026,Task 4)
+// ============================================================
+
+/// 任务优先级 — Agent 任务委派(AgentTaskDelegated)的调度优先级
+///
+/// WHY 独立定义在 event-bus(L1)而非 chimera-mas(L9):
+/// §2.2 依赖铁律禁止 L1→L9 向上依赖。chimera-mas(L9)发布
+/// AgentTaskDelegated 事件时需要此类型作为 payload 字段。若将
+/// TaskPriority 定义在 chimera-mas,event-bus 无法引用(会触发
+/// L1→L9 违规)。将轻量级枚举下沉到 event-bus(L1),chimera-mas
+/// 通过向下依赖 event-bus 复用,符合依赖方向。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum TaskPriority {
+    /// 低优先级,空闲时调度
+    Low,
+    /// 中等优先级,正常调度队列
+    Medium,
+    /// 高优先级,优先调度
+    High,
+    /// 最高优先级,立即调度(可能抢占低优先级任务)
+    Critical,
+}
+
+/// 咨询紧急度 — Agent 咨询请求(AgentConsultRequested)的紧急级别
+///
+/// WHY 独立定义在 event-bus:同 TaskPriority,避免 L1→L9 向上依赖。
+/// 用于 Agent 间咨询请求的优先级标注,影响被咨询 Agent 的响应顺序。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ConsultUrgency {
+    /// 低紧急度
+    Low,
+    /// 中等紧急度
+    Medium,
+    /// 高紧急度
+    High,
+    /// 最高紧急度(立即响应)
+    Critical,
+}
+
+/// Agent 生命周期状态 — AgentHeartbeat 事件携带的 Agent 运行时状态
+///
+/// WHY 独立定义在 event-bus:同 TaskPriority,避免 L1→L9 向上依赖。
+/// 变体语义与 chimera-mas::AgentStatus 保持一致(Idle/Running/Paused/
+/// Completed/Failed/Crashed),但为独立类型定义,避免 event-bus 对
+/// chimera-mas 的循环依赖。chimera-mas 在发布心跳事件时通过
+/// `From<chimera_mas::AgentStatus> for event_bus::AgentStatus` 转换。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum AgentStatus {
+    /// 空闲状态,等待任务分配
+    Idle,
+    /// 运行中,正在执行任务
+    Running,
+    /// 已暂停,可恢复
+    Paused,
+    /// 任务已完成
+    Completed,
+    /// 任务执行失败
+    Failed,
+    /// Agent 崩溃,不可恢复
+    Crashed,
+}
+
 /// NEXUS-OMEGA 核心事件枚举 — 跨层通信的唯一契约
 ///
 /// 设计原则:
@@ -1582,6 +1645,144 @@ pub enum NexusEvent {
         /// CLV 摘要(8 分块均值 + L2 范数 + Top-8 维度索引)
         clv_summary: ClvSummary,
     },
+
+    // ============================================================
+    // CHIMERA-MAS Agent 协作事件(ADR-026,Task 4)
+    //
+    // WHY:7 个新变体覆盖 Agent 间协作的全部通信场景:任务委派/完成/失败、
+    // 咨询请求/回复、心跳、上下文溢出。所有变体均携带 metadata 字段
+    // (与现有 85 个变体保持一致),使 metadata() 方法能统一返回 &EventMetadata。
+    // severity 分配:仅 AgentTaskFailed 为 Critical(任务失败可能影响
+    // Quest 完整性),其余 6 个为 Normal(由通配符覆盖)。
+    // ============================================================
+    /// Agent 任务委派 — L9 chimera-mas 内部通信
+    ///
+    /// WHY:RootOrchestrator 将子任务委派给子 Agent 时发布此事件。
+    /// 携带 deadline 与 priority 供调度器排序。Normal 级别,丢失仅
+    /// 导致本次委派未记录,可由 AgentTaskCompleted/Failed 补偿。
+    AgentTaskDelegated {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 委派方 Agent ID
+        from: String,
+        /// 被委派方 Agent ID
+        to: String,
+        /// 任务 ID
+        task_id: String,
+        /// 截止时间
+        deadline: DateTime<Utc>,
+        /// 任务优先级
+        priority: TaskPriority,
+    },
+
+    /// Agent 任务完成 — L9 chimera-mas 内部通信
+    ///
+    /// WHY:子 Agent 完成任务后发布此事件,RootOrchestrator 据此
+    /// 聚集结果并推进 Quest。Normal 级别,丢失仅导致本次完成未记录,
+    /// 可由 AgentHeartbeat 补偿。
+    AgentTaskCompleted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 完成方 Agent ID
+        from: String,
+        /// 委托方 Agent ID
+        to: String,
+        /// 任务 ID
+        task_id: String,
+        /// 结果摘要
+        result_summary: String,
+    },
+
+    /// Agent 任务失败 `[Critical]` — L9 chimera-mas 内部通信
+    ///
+    /// WHY Critical:任务失败可能影响 Quest 完整性,必须保证投递到
+    /// SecCore 与 Parliament 进行补救决策。若标为 Normal,在背压场景下
+    /// 可能被丢弃,导致失败无人响应、Quest 持续等待已死 Agent 的结果。
+    AgentTaskFailed {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 失败方 Agent ID
+        from: String,
+        /// 委托方 Agent ID
+        to: String,
+        /// 任务 ID
+        task_id: String,
+        /// 错误信息
+        error: String,
+        /// 已重试次数
+        retry_count: u32,
+    },
+
+    /// Agent 咨询请求 — L9 chimera-mas 内部通信
+    ///
+    /// WHY:Agent 遇到不确定问题时向其他 Agent 发起咨询。Normal 级别,
+    /// 丢失仅导致本次咨询未送达,可由超时重试补偿。
+    AgentConsultRequested {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 咨询方 Agent ID
+        from: String,
+        /// 被咨询方 Agent ID
+        to: String,
+        /// 咨询问题
+        question: String,
+        /// 咨询上下文
+        context: String,
+        /// 紧急度
+        urgency: ConsultUrgency,
+    },
+
+    /// Agent 咨询回复 — L9 chimera-mas 内部通信
+    ///
+    /// WHY:被咨询 Agent 返回答案。Normal 级别,丢失仅导致本次回复
+    /// 未送达,可由超时重试补偿。
+    AgentConsultResponded {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 回复方 Agent ID
+        from: String,
+        /// 咨询方 Agent ID
+        to: String,
+        /// 回答内容
+        answer: String,
+        /// 参考资料链接列表
+        references: Vec<String>,
+    },
+
+    /// Agent 心跳 — L9 chimera-mas 内部通信
+    ///
+    /// WHY:Agent 定期发布心跳报告状态与资源占用。Normal 级别,
+    /// 丢失仅导致本次心跳未记录,可由下次心跳补偿。
+    AgentHeartbeat {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// Agent ID
+        from: String,
+        /// Agent 运行时状态
+        status: AgentStatus,
+        /// 当前任务 ID(空闲时为 None)
+        current_task: Option<String>,
+        /// Token 使用量
+        token_usage: u64,
+        /// 内存使用量(MB)
+        memory_usage_mb: u64,
+    },
+
+    /// Agent 上下文溢出 — L9 chimera-mas 内部通信
+    ///
+    /// WHY:Agent 的上下文 token 数达到上限。severity() 返回 Normal
+    /// (同步函数不依赖运行时值),但语义上是告警,发布者应通过
+    /// Critical 通道发送以确保投递(类似 AsaIntervention Block 场景)。
+    AgentContextOverflow {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// Agent ID
+        agent_id: String,
+        /// 当前 token 数
+        current_tokens: usize,
+        /// 最大 token 数
+        max_tokens: usize,
+    },
 }
 
 impl NexusEvent {
@@ -1672,7 +1873,15 @@ impl NexusEvent {
             | Self::QuestCancelRequested { metadata, .. }
             | Self::QuestCancelled { metadata, .. }
             | Self::QuestPriorityChanged { metadata, .. }
-            | Self::QuestPriorityAdjusted { metadata, .. } => metadata,
+            | Self::QuestPriorityAdjusted { metadata, .. }
+            // CHIMERA-MAS Agent 事件(Task 4,ADR-026)
+            | Self::AgentTaskDelegated { metadata, .. }
+            | Self::AgentTaskCompleted { metadata, .. }
+            | Self::AgentTaskFailed { metadata, .. }
+            | Self::AgentConsultRequested { metadata, .. }
+            | Self::AgentConsultResponded { metadata, .. }
+            | Self::AgentHeartbeat { metadata, .. }
+            | Self::AgentContextOverflow { metadata, .. } => metadata,
         }
     }
 
@@ -1709,7 +1918,11 @@ impl NexusEvent {
             | Self::SkepticVeto { .. }
             | Self::VetoOverridden { .. }
             | Self::RedTeamAudit { .. }
-            | Self::BudgetExceeded { .. } => EventSeverity::Critical,
+            | Self::BudgetExceeded { .. }
+            // CHIMERA-MAS:AgentTaskFailed 为 Critical(Task 4,ADR-026)
+            // WHY:任务失败可能影响 Quest 完整性,必须保证投递到 SecCore 与
+            // Parliament 进行补救决策。丢失会导致失败无人响应、Quest 持续等待已死 Agent 结果。
+            | Self::AgentTaskFailed { .. } => EventSeverity::Critical,
             // 控制事件(请求/反馈):不阻断系统,不触发 mpsc 旁路投递
             Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }
@@ -1807,6 +2020,14 @@ impl NexusEvent {
             Self::QuestCancelled { .. } => "QuestCancelled",
             Self::QuestPriorityChanged { .. } => "QuestPriorityChanged",
             Self::QuestPriorityAdjusted { .. } => "QuestPriorityAdjusted",
+            // CHIMERA-MAS Agent 事件(Task 4,ADR-026)
+            Self::AgentTaskDelegated { .. } => "AgentTaskDelegated",
+            Self::AgentTaskCompleted { .. } => "AgentTaskCompleted",
+            Self::AgentTaskFailed { .. } => "AgentTaskFailed",
+            Self::AgentConsultRequested { .. } => "AgentConsultRequested",
+            Self::AgentConsultResponded { .. } => "AgentConsultResponded",
+            Self::AgentHeartbeat { .. } => "AgentHeartbeat",
+            Self::AgentContextOverflow { .. } => "AgentContextOverflow",
         }
     }
 }

@@ -299,6 +299,19 @@ pub fn sync_fts_insert(conn: &Connection, entry: &WikiEntry) -> Result<(), WikiE
     Ok(())
 }
 
+/// 同步插入全新条目的 FTS5 索引(跳过 DELETE,用于已知 entry_id 不存在的场景)。
+///
+/// WHY:高频批量写入新条目时,先 DELETE 再 INSERT 会触发两次 FTS5 索引更新;
+/// 调用方已确认 entry_id 不存在,直接 INSERT 可将索引维护开销减半,
+/// 显著降低累积性能退化。
+pub fn sync_fts_insert_new(conn: &Connection, entry: &WikiEntry) -> Result<(), WikiError> {
+    conn.execute(
+        &format!("INSERT INTO {FTS_TABLE}(entry_id, title, content) VALUES (?1, ?2, ?3);"),
+        params![entry.entry_id, entry.title, entry.content],
+    )?;
+    Ok(())
+}
+
 /// 同步删除 FTS5 索引(delete 时调用)。
 ///
 /// 幂等:无匹配行时 DELETE 不报错。

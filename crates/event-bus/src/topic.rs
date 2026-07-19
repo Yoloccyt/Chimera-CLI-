@@ -49,6 +49,11 @@ pub enum EventTopic {
     Knowledge,
     /// 存储层事件 (L3 Storage)：SCC/LSCT 缓存与分层
     Storage,
+    /// Agent 协作事件 (L9 Quest)：CHIMERA-MAS 多 Agent 委托/咨询/心跳
+    ///
+    /// WHY 新增(Task 4,ADR-026):CHIMERA-MAS 子系统的 7 个 Agent 事件
+    /// 需要独立 topic,使 FilteredSubscriber 可选择性订阅 Agent 协作事件。
+    Agent,
 }
 
 impl EventTopic {
@@ -67,6 +72,7 @@ impl EventTopic {
             EventTopic::System,
             EventTopic::Knowledge,
             EventTopic::Storage,
+            EventTopic::Agent,
         ]
         .into_iter()
         .collect()
@@ -193,6 +199,15 @@ impl NexusEvent {
             | Self::CachePrefetched { .. }
             | Self::CacheStatsReported { .. }
             | Self::LsctTierSwitched { .. } => EventTopic::Storage,
+
+            // === Agent (7) === L9 CHIMERA-MAS 多 Agent 协作(Task 4,ADR-026)
+            Self::AgentTaskDelegated { .. }
+            | Self::AgentTaskCompleted { .. }
+            | Self::AgentTaskFailed { .. }
+            | Self::AgentConsultRequested { .. }
+            | Self::AgentConsultResponded { .. }
+            | Self::AgentHeartbeat { .. }
+            | Self::AgentContextOverflow { .. } => EventTopic::Agent,
         }
     }
 }
@@ -294,9 +309,9 @@ mod tests {
     use crate::types::EventMetadata;
 
     #[test]
-    fn test_event_topic_all_returns_nine_topics() {
+    fn test_event_topic_all_returns_ten_topics() {
         let all = EventTopic::all();
-        assert_eq!(all.len(), 9, "EventTopic::all() 应返回 9 个 topic");
+        assert_eq!(all.len(), 10, "EventTopic::all() 应返回 10 个 topic");
         // 验证每个 topic 都在集合内
         for topic in [
             EventTopic::Routing,
@@ -308,6 +323,7 @@ mod tests {
             EventTopic::System,
             EventTopic::Knowledge,
             EventTopic::Storage,
+            EventTopic::Agent,
         ] {
             assert!(all.contains(&topic), "all() 应包含 {topic:?}");
         }

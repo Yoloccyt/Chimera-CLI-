@@ -53,9 +53,14 @@ use crate::types::{WikiConfig, WikiEntry};
 /// 又不必在写入线程里处理 async runtime。
 enum WriteOp {
     /// 插入或替换 Wiki 条目
-    Insert(WikiEntry, oneshot::Sender<Result<(), WikiError>>),
+    /// bool 表示是否真实新增(UPSERT 已存在条目时返回 false)
+    Insert(WikiEntry, oneshot::Sender<Result<bool, WikiError>>),
     /// 删除条目并联动标记悬空锚点
-    Delete(String, oneshot::Sender<Result<(), WikiError>>),
+    /// bool 表示是否真实删除(幂等删除不存在条目时返回 false)
+    Delete(String, oneshot::Sender<Result<bool, WikiError>>),
+    /// 批量插入或替换 Wiki 条目
+    /// usize 表示本次真实新增的条目数
+    InsertBatch(Vec<WikiEntry>, oneshot::Sender<Result<usize, WikiError>>),
     /// 创建 ISCM 锚点
     CreateAnchor {
         anchor: IscmAnchor,
@@ -101,6 +106,12 @@ pub struct WikiStore {
     /// WHY Arc 共享:WikiStore::clone 共享同一写线程与读连接池,
     /// 指标也必须共享同一实例,否则不同 clone 的 gauge 值会不一致。
     metrics: Arc<WikiMetrics>,
+    /// 条目数缓存(通过 Arc 在所有 clone 间共享)
+    ///
+    /// WHY:insert/delete 后无需再执行 SELECT COUNT(*) 即可更新 Prometheus gauge,
+    /// 将 O(1) 的 spawn_blocking 查询从每次写操作的热路径移除。
+    /// 计数由写入线程返回的实际影响结果驱动,保证与 DB 一致(UPSERT/幂等删除正确)。
+    entry_count: Arc<AtomicUsize>,
 }
 
 impl Clone for WikiStore {
@@ -113,6 +124,7 @@ impl Clone for WikiStore {
             config: self.config.clone(),
             fts_capability: self.fts_capability,
             metrics: Arc::clone(&self.metrics),
+            entry_count: Arc::clone(&self.entry_count),
         }
     }
 }
@@ -191,6 +203,16 @@ impl WikiStore {
             FtsCapability::Unavailable
         };
 
+        // 同步查询当前条目数,用于初始化计数缓存与 Prometheus gauge。
+        // WHY:在 writer_conn 被移入写入线程之前完成,避免 open 后首次 insert
+        // 再执行一次 SELECT COUNT(*),且已有数据库的 gauge 能从启动就反映真实状态。
+        let initial_count: u32 = {
+            let count: i64 = writer_conn
+                .query_row("SELECT COUNT(*) FROM entries;", [], |row| row.get(0))
+                .unwrap_or(0);
+            u32::try_from(count).unwrap_or(0)
+        };
+
         let (tx, rx) = mpsc::channel();
         let handle = std::thread::spawn(move || run_writer(writer_conn, rx, fts_capability));
 
@@ -209,11 +231,8 @@ impl WikiStore {
             read_conns.push(Mutex::new(conn));
         }
 
-        // 初始化 Prometheus 指标:Gauge 默认值为 0(AtomicI64::default()),
-        // 无需显式 set(0)。对于已有数据的数据库,调用方应在 open 后手动调用
-        // refresh_metrics() 刷新到真实计数(open_with_config 是同步函数,无法调用
-        // async 的 count())。
         let metrics = Arc::new(WikiMetrics::new());
+        metrics.set_entries(initial_count);
 
         Ok(Self {
             write_tx: tx,
@@ -223,6 +242,7 @@ impl WikiStore {
             config,
             fts_capability,
             metrics,
+            entry_count: Arc::new(AtomicUsize::new(initial_count as usize)),
         })
     }
 
@@ -257,24 +277,51 @@ impl WikiStore {
     /// 若 `entry_id` 已存在,则更新所有字段(含 `created_at` 重置);
     /// 否则插入新记录。
     ///
-    /// WHY insert 后调用 refresh_metrics:保证 `wiki_entries_total` gauge
-    /// 与实际数据库条目数一致。refresh 失败不阻断主操作(insert 已成功),
-    /// 仅记录 warning — 指标滞后是可接受的(下次 insert/delete 会再次刷新)。
+    /// WHY 不再调用 `refresh_metrics`:`refresh_metrics` 会触发一次
+    /// `SELECT COUNT(*)` + `spawn_blocking`,在持续高频写入场景下成为热路径瓶颈。
+    /// 写入线程返回是否真实新增,调用方据此原子更新计数缓存与 gauge,
+    /// 既保证指标准确,又避免额外查询。
     pub async fn insert(&self, entry: WikiEntry) -> Result<(), WikiError> {
         let (tx, rx) = oneshot::channel();
         self.write_tx
             .send(WriteOp::Insert(entry, tx))
             .map_err(|_| WikiError::WriteChannelClosed)?;
-        // WHY 双 ??:rx.await 返回 Result<Result<(), WikiError>, RecvError>。
+        // WHY 双 ??:rx.await 返回 Result<Result<bool, WikiError>, RecvError>。
         // 第一个 ? 展开 RecvError,第二个 ? 展开写入线程返回的 WikiError。
-        // 原实现仅单 ?(作为函数最后表达式直接返回内层 Result),现在需在
-        // 后续调用 refresh_metrics,必须完全展开为 ()。
-        rx.await.map_err(|_| WikiError::WriteChannelClosed)??;
+        // bool 表示是否真实新增(UPSERT 已存在条目时返回 false)。
+        let is_new = rx.await.map_err(|_| WikiError::WriteChannelClosed)??;
 
-        // 刷新 Prometheus 指标(失败不阻断已成功的 insert)
-        if let Err(e) = self.refresh_metrics().await {
-            tracing::warn!(error = %e, "refresh_metrics after insert failed");
+        // 更新计数缓存与 Prometheus gauge(失败不阻断已成功的 insert)
+        if is_new {
+            self.entry_count.fetch_add(1, Ordering::Relaxed);
         }
+        let count = self.entry_count.load(Ordering::Relaxed) as u32;
+        self.metrics.set_entries(count);
+        Ok(())
+    }
+
+    /// 异步批量插入或更新 Wiki 条目(UPSERT 语义)
+    ///
+    /// 将多个条目打包为单次写线程任务,在 SQLite 事务中串行写入,
+    /// 只刷新一次 Prometheus 指标。适用于需要一次性沉淀多条 Wiki 条目的场景,
+    /// 可显著降低每次 insert 的事务提交与指标刷新开销。
+    ///
+    /// 注意:FTS5 索引同步失败按 warning 处理,不会导致事务回滚
+    /// (与单条 insert 行为一致)。
+    pub async fn insert_batch(&self, entries: Vec<WikiEntry>) -> Result<(), WikiError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let (tx, rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteOp::InsertBatch(entries, tx))
+            .map_err(|_| WikiError::WriteChannelClosed)?;
+        let newly_inserted = rx.await.map_err(|_| WikiError::WriteChannelClosed)??;
+
+        self.entry_count
+            .fetch_add(newly_inserted, Ordering::Relaxed);
+        let count = self.entry_count.load(Ordering::Relaxed) as u32;
+        self.metrics.set_entries(count);
         Ok(())
     }
 
@@ -302,20 +349,23 @@ impl WikiStore {
     /// 注意:此方法仅删除 SQLite 中的记录,不删除 VectorIndex 中的向量;
     /// 调用方需同步调用 `VectorIndex::delete` 保持一致性。
     ///
-    /// WHY delete 后调用 refresh_metrics:与 insert 对称,保证 gauge 反映
-    /// delete 后的实际条目数(条目数减少是 Gauge 而非 Counter 的关键场景)。
+    /// WHY 不再调用 `refresh_metrics`:与 insert 对称,通过写入线程返回的
+    /// 真实删除结果原子更新计数缓存与 gauge,避免 delete 热路径上的 SELECT COUNT(*)。
     pub async fn delete(&self, entry_id: String) -> Result<(), WikiError> {
         let (tx, rx) = oneshot::channel();
         self.write_tx
             .send(WriteOp::Delete(entry_id, tx))
             .map_err(|_| WikiError::WriteChannelClosed)?;
         // WHY 双 ??:同 insert,展开 oneshot 的 RecvError + 写入线程的 WikiError。
-        rx.await.map_err(|_| WikiError::WriteChannelClosed)??;
+        // bool 表示是否真实删除(幂等删除不存在条目时返回 false)。
+        let is_deleted = rx.await.map_err(|_| WikiError::WriteChannelClosed)??;
 
-        // 刷新 Prometheus 指标(失败不阻断已成功的 delete)
-        if let Err(e) = self.refresh_metrics().await {
-            tracing::warn!(error = %e, "refresh_metrics after delete failed");
+        // 更新计数缓存与 Prometheus gauge(失败不阻断已成功的 delete)
+        if is_deleted {
+            self.entry_count.fetch_sub(1, Ordering::Relaxed);
         }
+        let count = self.entry_count.load(Ordering::Relaxed) as u32;
+        self.metrics.set_entries(count);
         Ok(())
     }
 
@@ -640,7 +690,7 @@ fn init_schema(conn: &Connection) -> Result<(), WikiError> {
 ///
 /// `fts` 为 FTS5 可用性状态,用于决定 insert/delete 时是否同步 FTS5 索引。
 /// `Copy` 语义,每次循环复制无需担心所有权。
-fn run_writer(conn: Connection, rx: mpsc::Receiver<WriteOp>, fts: FtsCapability) {
+fn run_writer(mut conn: Connection, rx: mpsc::Receiver<WriteOp>, fts: FtsCapability) {
     while let Ok(op) = rx.recv() {
         match op {
             WriteOp::Insert(entry, respond) => {
@@ -648,6 +698,9 @@ fn run_writer(conn: Connection, rx: mpsc::Receiver<WriteOp>, fts: FtsCapability)
             }
             WriteOp::Delete(entry_id, respond) => {
                 let _ = respond.send(writer_delete(&conn, entry_id, fts));
+            }
+            WriteOp::InsertBatch(entries, respond) => {
+                let _ = respond.send(writer_insert_batch(&mut conn, entries, fts));
             }
             WriteOp::CreateAnchor { anchor, respond } => {
                 let _ = respond.send(writer_create_anchor(&conn, anchor));
@@ -662,47 +715,99 @@ fn run_writer(conn: Connection, rx: mpsc::Receiver<WriteOp>, fts: FtsCapability)
     }
 }
 
-/// 写入线程:执行 insert
+/// 写入线程:执行 entries 表写入(INSERT OR IGNORE + UPDATE),返回是否真实新增。
 ///
-/// `fts` 决定是否同步 FTS5 索引。FTS5 可用时,entries 写入成功后调用
-/// `sync_fts_insert` 同步索引(先删后插,保证 UPSERT 不产生重复行)。
-fn writer_insert(conn: &Connection, entry: WikiEntry, fts: FtsCapability) -> Result<(), WikiError> {
+/// 不处理 FTS5 索引同步,由调用方根据场景选择 `sync_fts_insert` 或
+/// `sync_fts_insert_new`。这样批量写入可对已知新条目跳过 DELETE 步骤。
+///
+/// 实现采用 `INSERT OR IGNORE` + `UPDATE` 而非 `INSERT OR REPLACE`:
+/// - 新条目:一次 INSERT 完成,避免 REPLACE 的"先删后插"带来的索引抖动;
+/// - 已存在条目:INSERT 被忽略,再执行 UPDATE 覆盖字段,仍保持 UPSERT 语义。
+///
+/// 这显著降低高频唯一写入场景下的累积性能退化。
+fn writer_insert_core(conn: &Connection, entry: &WikiEntry) -> Result<bool, WikiError> {
     let tags_json = serde_json::to_string(&entry.tags)?;
     let embedding_blob = embedding_to_blob(&entry.embedding);
     let created_iso = entry.created_at.to_rfc3339();
     let updated_iso = entry.updated_at.to_rfc3339();
 
+    // 第一步:尝试插入;若 entry_id 已存在则静默忽略。
     conn.execute(
-        "INSERT OR REPLACE INTO entries
+        "INSERT OR IGNORE INTO entries
             (entry_id, title, content, tags, embedding, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
         params![
-            entry.entry_id,
-            entry.title,
-            entry.content,
-            tags_json,
-            embedding_blob,
-            created_iso,
-            updated_iso,
+            &entry.entry_id,
+            &entry.title,
+            &entry.content,
+            &tags_json,
+            &embedding_blob,
+            &created_iso,
+            &updated_iso,
         ],
     )?;
+    let is_new = conn.changes() > 0;
+
+    // 第二步:仅当为 UPSERT 时执行 UPDATE,覆盖除 entry_id/created_at 外的字段。
+    if !is_new {
+        conn.execute(
+            "UPDATE entries
+             SET title = ?2,
+                 content = ?3,
+                 tags = ?4,
+                 embedding = ?5,
+                 updated_at = ?6
+             WHERE entry_id = ?1;",
+            params![
+                &entry.entry_id,
+                &entry.title,
+                &entry.content,
+                &tags_json,
+                &embedding_blob,
+                &updated_iso,
+            ],
+        )?;
+    }
+
+    Ok(is_new)
+}
+
+/// 写入线程:执行 insert
+///
+/// `fts` 决定是否同步 FTS5 索引。FTS5 可用时,entries 写入成功后调用
+/// `sync_fts_insert` 同步索引(先删后插,保证 UPSERT 不产生重复行)。
+///
+/// 返回 `true` 表示真实新增条目,`false` 表示仅为 UPSERT 替换。
+fn writer_insert(
+    conn: &Connection,
+    entry: WikiEntry,
+    fts: FtsCapability,
+) -> Result<bool, WikiError> {
+    let is_new = writer_insert_core(conn, &entry)?;
 
     // FTS5 可用时同步索引(先删后插,保证 UPSERT 不产生重复行)
     if fts.is_available() {
         fts::sync_fts_insert(conn, &entry)?;
     }
-    Ok(())
+    Ok(is_new)
 }
 
 /// 写入线程:执行 delete 并联动标记悬空锚点
 ///
 /// `fts` 决定是否同步删除 FTS5 索引。FTS5 可用时,entries 删除后调用
 /// `sync_fts_delete` 同步清除索引,保持索引与数据一致。
-fn writer_delete(conn: &Connection, entry_id: String, fts: FtsCapability) -> Result<(), WikiError> {
+///
+/// 返回 `true` 表示真实删除条目,`false` 表示条目不存在(幂等删除)。
+fn writer_delete(
+    conn: &Connection,
+    entry_id: String,
+    fts: FtsCapability,
+) -> Result<bool, WikiError> {
     conn.execute(
         "DELETE FROM entries WHERE entry_id = ?1;",
-        params![entry_id],
+        params![&entry_id],
     )?;
+    let deleted = conn.changes() > 0;
 
     let now_iso = Utc::now().to_rfc3339();
     conn.execute(
@@ -710,11 +815,47 @@ fn writer_delete(conn: &Connection, entry_id: String, fts: FtsCapability) -> Res
         params![now_iso, entry_id],
     )?;
 
-    // FTS5 可用时同步删除索引(entry_id 借用已释放,&String deref 到 &str)
-    if fts.is_available() {
+    // FTS5 可用时同步删除索引(仅真实删除时才有必要)
+    if deleted && fts.is_available() {
         fts::sync_fts_delete(conn, &entry_id)?;
     }
-    Ok(())
+    Ok(deleted)
+}
+
+/// 写入线程:批量 insert
+///
+/// 在单一 SQLite 事务中执行所有条目写入,只提交一次,降低事务开销。
+/// 返回本次真实新增的条目数(UPSERT 已存在的条目不计入)。
+///
+/// # FTS5 索引同步优化
+/// 调用 `writer_insert_core` 获取 `is_new`,对真实新增条目使用
+/// `sync_fts_insert_new`(跳过 DELETE),对已存在条目使用 `sync_fts_insert`
+/// (先删后插保持 UPSERT 幂等)。在批量写入新条目场景下,可将 FTS5 索引
+/// 维护开销再降低约 50%,进一步缓解累积性能退化。
+fn writer_insert_batch(
+    conn: &mut Connection,
+    entries: Vec<WikiEntry>,
+    fts: FtsCapability,
+) -> Result<usize, WikiError> {
+    let tx = conn.transaction()?;
+    let mut newly_inserted: usize = 0;
+    for entry in entries {
+        let is_new = writer_insert_core(&tx, &entry)?;
+        if is_new {
+            newly_inserted += 1;
+            // 真实新增:FTS5 索引直接 INSERT,跳过幂等 DELETE
+            if fts.is_available() {
+                fts::sync_fts_insert_new(&tx, &entry)?;
+            }
+        } else {
+            // UPSERT 替换:必须 DELETE + INSERT 保持 FTS5 无重复行
+            if fts.is_available() {
+                fts::sync_fts_insert(&tx, &entry)?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(newly_inserted)
 }
 
 /// 写入线程:创建锚点

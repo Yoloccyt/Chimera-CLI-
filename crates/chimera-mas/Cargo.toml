@@ -1,0 +1,71 @@
+[package]
+name = "chimera-mas"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "CHIMERA Multi-Agent Synergy subsystem — hierarchical recursive delegation, isolated context, expert consultation"
+
+[dependencies]
+# === workspace 共享依赖 ===
+# tokio:异步运行时,Agent 生命周期管理 + 委托执行 spawn + EventBus::publish().await
+tokio = { workspace = true }
+# serde:配置与领域类型序列化(#[derive(Serialize, Deserialize)])
+serde = { workspace = true, features = ["derive"] }
+# serde_json:JSON 序列化(配置 + Agent 元数据持久化)
+serde_json = { workspace = true }
+# anyhow:应用层错误(顶层调用方使用,库层用 thiserror,§4.1 规范)
+anyhow = { workspace = true }
+# tracing:结构化日志,记录 Agent 生命周期与委托执行事件(审计追溯)
+tracing = { workspace = true }
+# thiserror:库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# chrono:时间戳(Agent 创建时间、任务截止时间、心跳时间戳)
+chrono = { workspace = true }
+# uuid:UUIDv7 生成 agent_id(时间有序,便于因果追踪)
+uuid = { workspace = true }
+# dashmap:并发安全哈希表;Agent 注册表读多写少场景下分片锁并发性能优于 RwLock<HashMap>
+dashmap = { workspace = true }
+# rmp-serde:MessagePack 序列化(ADR-004,与 Event Bus 一致),用于 Agent 状态持久化
+# WHY 显式声明:error.rs 的 MasError 含 rmp_serde::encode::Error / decode::Error 的 From 转换
+rmp-serde = { workspace = true }
+# futures:异步流处理,FuturesUnordered 用于并行委托执行(§4.1 规范:并发收集用 FuturesUnordered 优于 join_all)
+# WHY 直接声明版本:workspace.dependencies 未收录 futures
+futures = "0.3"
+# async-trait:异步 trait 定义,Agent 工厂与委托执行器的 trait 接口
+# WHY 直接声明版本:workspace.dependencies 未收录 async-trait
+async-trait = "0.1"
+
+# === workspace 内部 crate 依赖(L9→L1-L8 向下依赖 + L9 同层,§2.2 依赖铁律)===
+# L1 Core:领域类型(UserIntent / Quest / Task / TaskStatus / ThinkingMode / Checkpoint)
+nexus-core = { path = "../nexus-core" }
+# L1 Core:跨层通信唯一通道,发布 7 个 Agent 相关 NexusEvent 变体(ADR-026 决策 2)
+event-bus = { path = "../event-bus" }
+# L2 Memory:AgentContext 包装 HierarchicalWindow,1M 上下文经 HCW 稀疏化(ADR-026 决策 7)
+hcw-window = { path = "../hcw-window" }
+# L6 Router:OmniSparseCoordinator::compute_masks() 计算稀疏掩码(ADR-026 决策 7)
+osa-coordinator = { path = "../osa-coordinator" }
+# L9 Quest(同层):复用 Quest DAG + Checkpoint(ADR-026 决策 5,§2.2 同层互引允许)
+quest-engine = { path = "../quest-engine" }
+# L7 Execution:委托执行通过 gqep-executor 包装超时(零孤儿调用,§6.1 红线)
+gqep-executor = { path = "../gqep-executor" }
+# L4 Security:委托执行通过 qeep-protocol 实现量子纠缠零孤儿(§6.1 红线)
+qeep-protocol = { path = "../qeep-protocol" }
+
+[dev-dependencies]
+# tokio 测试支持(完整 features + test-util 用于 pause/freezing 时间)
+tokio = { workspace = true, features = ["full", "test-util"] }
+# proptest:属性测试框架,用于不变量验证(SubTask 15.x,§4.1 block-named 语法)
+proptest = { workspace = true }
+# tempfile:测试用临时文件/目录,跨平台安全
+tempfile = { workspace = true }
+# tracing-test:测试中捕获 tracing 日志,用于验证 warn/error 日志输出
+tracing-test = { workspace = true }
+# criterion:基准测试框架,用于 mas_benchmark(SubTask 16.x,性能可证伪 §3.4.1 第 6 条)
+criterion = { workspace = true }
+
+# criterion 基准测试目标 — 对应 SubTask 16.x(Task 16 实现具体 bench 函数)
+# WHY harness = false:使用 criterion 自定义 main,而非默认 test harness
+[[bench]]
+name = "mas_benchmark"
+harness = false

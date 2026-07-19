@@ -5,8 +5,16 @@
 //!
 //! 对应架构层：L1 Core（event-bus）
 //! 设计决策（2026-07-09）：9 类 EventTopic 分类，架构纯净度优先
+//!
+//! Task 5 扩展(CHIMERA-MAS,ADR-026):新增 EventTopic::Agent 主题测试,
+//! 覆盖 7 个 Agent 协作变体 + recv_matching 谓词选择性订阅验证。
 
-use event_bus::{EventBus, EventMetadata, EventTopic, NexusEvent};
+#![forbid(unsafe_code)]
+
+use event_bus::{
+    AgentStatus, ConsultUrgency, EventBus, EventMetadata, EventSeverity, EventTopic, NexusEvent,
+    TaskPriority,
+};
 use std::collections::HashSet;
 
 // ============================================================
@@ -59,6 +67,14 @@ fn execution_event() -> NexusEvent {
         n: 3,
         avg_confidence: 0.85,
     }
+}
+
+/// 获取一个 `DateTime<Utc>` 值用于 AgentTaskDelegated 的 deadline 字段
+///
+/// WHY 不直接 `use chrono::Utc`：`event-bus` 的 dev-dependencies 未显式声明 chrono,
+/// 通过 `EventMetadata::timestamp` 间接获取,与 agent_events_test.rs 保持一致。
+fn test_deadline() -> chrono::DateTime<chrono::Utc> {
+    EventMetadata::new("test").timestamp
 }
 
 // ============================================================
@@ -179,18 +195,20 @@ async fn test_subscribe_remains_backward_compatible() {
 }
 
 // ============================================================
-// 测试 5：遍历全部 67 个 NexusEvent 变体，验证 topic() 返回有效 EventTopic
+// 测试 5：遍历全部 74 个 NexusEvent 变体，验证 topic() 返回有效 EventTopic
 //
 // WHY 此测试：Rust match 的穷尽性保证编译期覆盖所有变体，但运行时仍需
 // 验证每个变体实例化后调用 topic() 不 panic 且返回 all() 集合内的值。
-// 此测试同时是"67 变体映射完整性"的守护测试。
+// 此测试同时是"74 变体映射完整性"的守护测试。
+//
+// Task 5 更新：原 67 变体 + 7 个 Agent 变体(ADR-026) = 74 变体。
 // ============================================================
 
 #[test]
 fn test_topic_mapping_covers_all_variants() {
     let all_topics = EventTopic::all();
 
-    // 构造全部 67 个变体的实例，逐个验证 topic() 返回有效值
+    // 构造全部 74 个变体的实例，逐个验证 topic() 返回有效值
     let variants: Vec<NexusEvent> = vec![
         // === Quest (7) ===
         NexusEvent::UserIntentEncoded {
@@ -593,13 +611,67 @@ fn test_topic_mapping_covers_all_variants() {
             to_tier: "Hot".into(),
             reason: "test".into(),
         },
+        // === Agent (7) === Task 4 CHIMERA-MAS 多 Agent 协作(ADR-026)
+        // 7 个变体均映射到 EventTopic::Agent,severity 仅 AgentTaskFailed 为 Critical
+        NexusEvent::AgentTaskDelegated {
+            metadata: EventMetadata::new("test-source"),
+            from: "agent-1".into(),
+            to: "agent-2".into(),
+            task_id: "t-1".into(),
+            deadline: test_deadline(),
+            priority: TaskPriority::High,
+        },
+        NexusEvent::AgentTaskCompleted {
+            metadata: EventMetadata::new("test-source"),
+            from: "agent-1".into(),
+            to: "agent-2".into(),
+            task_id: "t-1".into(),
+            result_summary: "done".into(),
+        },
+        NexusEvent::AgentTaskFailed {
+            metadata: EventMetadata::new("test-source"),
+            from: "agent-1".into(),
+            to: "agent-2".into(),
+            task_id: "t-1".into(),
+            error: "timeout".into(),
+            retry_count: 3,
+        },
+        NexusEvent::AgentConsultRequested {
+            metadata: EventMetadata::new("test-source"),
+            from: "agent-1".into(),
+            to: "agent-2".into(),
+            question: "how?".into(),
+            context: "ctx".into(),
+            urgency: ConsultUrgency::Medium,
+        },
+        NexusEvent::AgentConsultResponded {
+            metadata: EventMetadata::new("test-source"),
+            from: "agent-2".into(),
+            to: "agent-1".into(),
+            answer: "answer".into(),
+            references: vec![],
+        },
+        NexusEvent::AgentHeartbeat {
+            metadata: EventMetadata::new("test-source"),
+            from: "agent-1".into(),
+            status: AgentStatus::Running,
+            current_task: Some("t-1".into()),
+            token_usage: 4096,
+            memory_usage_mb: 128,
+        },
+        NexusEvent::AgentContextOverflow {
+            metadata: EventMetadata::new("test-source"),
+            agent_id: "agent-1".into(),
+            current_tokens: 131072,
+            max_tokens: 131072,
+        },
     ];
 
-    // 守护：变体总数必须等于 67（与 NexusEvent 当前定义一致）
+    // 守护：变体总数必须等于 74（67 原有 + 7 个 Agent 变体,与 NexusEvent 当前定义一致）
     assert_eq!(
         variants.len(),
-        67,
-        "测试构造的变体数应为 67（与 NexusEvent 当前定义一致）"
+        74,
+        "测试构造的变体数应为 74（67 原有 + 7 个 Agent 变体,与 NexusEvent 当前定义一致）"
     );
 
     // 遍历每个变体，验证 topic() 返回值在 all_topics 集合内（无 panic）
@@ -612,4 +684,265 @@ fn test_topic_mapping_covers_all_variants() {
             topic
         );
     }
+}
+
+// ============================================================
+// 测试 6：订阅 EventTopic::Agent,验证接收全部 7 个 Agent 变体
+//
+// WHY 此测试:FilteredSubscriber 基于 topic 集合订阅,验证 7 个 Agent 变体
+// 均映射到 EventTopic::Agent,且通过 subscribe_filtered 可全部接收。
+// ============================================================
+
+#[tokio::test]
+async fn test_subscribe_agent_topic_receives_all_7_variants() {
+    let bus = EventBus::new();
+
+    // 订阅 EventTopic::Agent(单 topic 集合)
+    let topics: HashSet<EventTopic> = [EventTopic::Agent].into_iter().collect();
+    let mut rx = bus.subscribe_filtered(topics);
+
+    // 构造 7 个 Agent 变体
+    let delegated = NexusEvent::AgentTaskDelegated {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        to: "agent-002".into(),
+        task_id: "task-001".into(),
+        deadline: test_deadline(),
+        priority: TaskPriority::High,
+    };
+    let completed = NexusEvent::AgentTaskCompleted {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        to: "agent-002".into(),
+        task_id: "task-001".into(),
+        result_summary: "已完成代码审查".into(),
+    };
+    let failed = NexusEvent::AgentTaskFailed {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        to: "agent-002".into(),
+        task_id: "task-001".into(),
+        error: "工具调用超时".into(),
+        retry_count: 3,
+    };
+    let consult_req = NexusEvent::AgentConsultRequested {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        to: "agent-002".into(),
+        question: "如何处理 UTF-8?".into(),
+        context: "用户输入含 emoji".into(),
+        urgency: ConsultUrgency::Medium,
+    };
+    let consult_resp = NexusEvent::AgentConsultResponded {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-002".into(),
+        to: "agent-001".into(),
+        answer: "使用 graphemes()".into(),
+        references: vec!["https://unicode.org/reports/tr29/".into()],
+    };
+    let heartbeat = NexusEvent::AgentHeartbeat {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        status: AgentStatus::Running,
+        current_task: Some("task-001".into()),
+        token_usage: 4096,
+        memory_usage_mb: 128,
+    };
+    let overflow = NexusEvent::AgentContextOverflow {
+        metadata: EventMetadata::new("chimera-mas"),
+        agent_id: "agent-001".into(),
+        current_tokens: 131072,
+        max_tokens: 131072,
+    };
+
+    // 按顺序发布 7 个 Agent 变体
+    bus.publish(delegated.clone()).await.unwrap();
+    bus.publish(completed.clone()).await.unwrap();
+    bus.publish(failed.clone()).await.unwrap();
+    bus.publish(consult_req.clone()).await.unwrap();
+    bus.publish(consult_resp.clone()).await.unwrap();
+    bus.publish(heartbeat.clone()).await.unwrap();
+    bus.publish(overflow.clone()).await.unwrap();
+
+    // 全部应收到(broadcast FIFO 顺序)
+    let r1 = rx.recv().await.unwrap();
+    let r2 = rx.recv().await.unwrap();
+    let r3 = rx.recv().await.unwrap();
+    let r4 = rx.recv().await.unwrap();
+    let r5 = rx.recv().await.unwrap();
+    let r6 = rx.recv().await.unwrap();
+    let r7 = rx.recv().await.unwrap();
+
+    assert_eq!(r1, delegated);
+    assert_eq!(r2, completed);
+    assert_eq!(r3, failed);
+    assert_eq!(r4, consult_req);
+    assert_eq!(r5, consult_resp);
+    assert_eq!(r6, heartbeat);
+    assert_eq!(r7, overflow);
+
+    // 缓冲区应已空
+    assert!(rx.try_recv().unwrap().is_none());
+}
+
+// ============================================================
+// 测试 7：AgentTaskFailed severity 必须为 Critical
+//
+// WHY 此测试:任务失败可能影响 Quest 完整性,必须保证投递到 SecCore 与
+// Parliament 进行补救决策。severity() 显式分支返回 Critical,此测试
+// 守护该分支防止未来重构时被通配符误判为 Normal。
+// ============================================================
+
+#[test]
+fn test_agent_task_failed_has_critical_severity() {
+    let event = NexusEvent::AgentTaskFailed {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        to: "agent-002".into(),
+        task_id: "task-001".into(),
+        error: "工具调用超时(30s 未响应)".into(),
+        retry_count: 3,
+    };
+    assert_eq!(
+        event.severity(),
+        EventSeverity::Critical,
+        "AgentTaskFailed 必须为 Critical(任务失败可能影响 Quest 完整性)"
+    );
+    assert_eq!(event.type_name(), "AgentTaskFailed");
+}
+
+// ============================================================
+// 测试 8：订阅 EventTopic::Agent,发布混合事件(Agent + 非 Agent),验证只接收 Agent 事件
+//
+// WHY 此测试:验证 FilteredSubscriber 的 topic 过滤正确性 — 非 Agent 事件
+// 应被消费丢弃,不占用 Agent 订阅者缓冲区。与测试 2(多 topic 过滤)互补,
+// 此测试专注 Agent topic 的过滤行为。
+// ============================================================
+
+#[tokio::test]
+async fn test_agent_events_filtered_by_topic() {
+    let bus = EventBus::new();
+
+    // 订阅 EventTopic::Agent
+    let topics: HashSet<EventTopic> = [EventTopic::Agent].into_iter().collect();
+    let mut rx = bus.subscribe_filtered(topics);
+
+    // 发布混合事件:Agent + 非 Agent(Routing/Memory/Security)
+    let routing = routing_event(); // 非 Agent — 应被消费丢弃
+    let heartbeat = NexusEvent::AgentHeartbeat {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        status: AgentStatus::Running,
+        current_task: None,
+        token_usage: 0,
+        memory_usage_mb: 32,
+    };
+    let memory = memory_event(); // 非 Agent — 应被消费丢弃
+    let delegated = NexusEvent::AgentTaskDelegated {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        to: "agent-002".into(),
+        task_id: "task-001".into(),
+        deadline: test_deadline(),
+        priority: TaskPriority::High,
+    };
+    let security = security_event(); // 非 Agent — 应被消费丢弃
+
+    bus.publish(routing.clone()).await.unwrap(); // 不匹配,被消费
+    bus.publish(heartbeat.clone()).await.unwrap(); // 匹配
+    bus.publish(memory.clone()).await.unwrap(); // 不匹配,被消费
+    bus.publish(delegated.clone()).await.unwrap(); // 匹配
+    bus.publish(security.clone()).await.unwrap(); // 不匹配,被消费
+
+    // 只收到 Agent 事件(按发布顺序)
+    let first = rx.recv().await.unwrap();
+    let second = rx.recv().await.unwrap();
+
+    assert_eq!(first, heartbeat);
+    assert_eq!(second, delegated);
+
+    // 缓冲区应已空(3 个非 Agent 事件已被消费丢弃)
+    assert!(rx.try_recv().unwrap().is_none());
+}
+
+// ============================================================
+// 测试 9：recv_matching 谓词精确匹配 AgentTaskDelegated 变体
+//
+// WHY 此测试:验证 EventReceiver::recv_matching 谓词过滤能正确匹配
+// AgentTaskDelegated 变体。与 FilteredSubscriber(topic 级过滤)互补,
+// recv_matching 基于谓词的临时过滤,适合一次性精确匹配场景。
+// ============================================================
+
+#[tokio::test]
+async fn test_recv_matching_agent_task_delegated() {
+    let bus = EventBus::new();
+    // 使用 subscribe()(非 subscribe_filtered)获取 EventReceiver,
+    // 因为 recv_matching 是 EventReceiver 的方法,FilteredSubscriber 不直接暴露。
+    let mut rx = bus.subscribe();
+
+    // 发布混合 Agent 事件:heartbeat + delegated + completed
+    let heartbeat = NexusEvent::AgentHeartbeat {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        status: AgentStatus::Idle,
+        current_task: None,
+        token_usage: 0,
+        memory_usage_mb: 0,
+    };
+    let delegated = NexusEvent::AgentTaskDelegated {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        to: "agent-002".into(),
+        task_id: "task-001".into(),
+        deadline: test_deadline(),
+        priority: TaskPriority::High,
+    };
+    let completed = NexusEvent::AgentTaskCompleted {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        to: "agent-002".into(),
+        task_id: "task-001".into(),
+        result_summary: "done".into(),
+    };
+
+    bus.publish(heartbeat.clone()).await.unwrap(); // 不匹配谓词,被消费
+    bus.publish(delegated.clone()).await.unwrap(); // 匹配谓词
+    bus.publish(completed.clone()).await.unwrap(); // 不匹配谓词,留在缓冲区
+
+    // recv_matching 只接收 AgentTaskDelegated 变体
+    let received = rx
+        .recv_matching(|e| matches!(e, NexusEvent::AgentTaskDelegated { .. }))
+        .await
+        .unwrap();
+    assert_eq!(received, delegated);
+
+    // 后续 recv 应拿到 completed(heartbeat 已被 recv_matching 消费)
+    let remaining = rx.recv().await.unwrap();
+    assert_eq!(remaining, completed);
+}
+
+// ============================================================
+// 测试 10：AgentHeartbeat 的 topic() 返回 EventTopic::Agent
+//
+// WHY 此测试:验证 AgentHeartbeat 变体正确映射到 EventTopic::Agent 主题。
+// 此测试是 topic() 映射的单元级守护,与测试 5(全变体覆盖)互补 —
+// 测试 5 验证全部变体 topic() 返回值在 all() 集合内,此测试显式断言
+// AgentHeartbeat 返回 EventTopic::Agent(而非其他 topic)。
+// ============================================================
+
+#[test]
+fn test_agent_heartbeat_topic_is_agent() {
+    let event = NexusEvent::AgentHeartbeat {
+        metadata: EventMetadata::new("chimera-mas"),
+        from: "agent-001".into(),
+        status: AgentStatus::Running,
+        current_task: Some("task-001".into()),
+        token_usage: 4096,
+        memory_usage_mb: 128,
+    };
+    assert_eq!(
+        event.topic(),
+        EventTopic::Agent,
+        "AgentHeartbeat 必须映射到 EventTopic::Agent"
+    );
 }

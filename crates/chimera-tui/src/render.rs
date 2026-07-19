@@ -289,21 +289,32 @@ pub fn sparkline_thresholded(
         return;
     }
     let max = max_value.unwrap_or_else(|| data.iter().copied().max().unwrap_or(1).max(1));
-    let bar_width = area.width as usize / data.len().max(1);
-    if bar_width == 0 {
-        return;
-    }
 
     let warn_color = Color::Yellow;
     let crit_color = Color::Red;
 
-    for (i, &value) in data.iter().enumerate() {
-        let height = if max > 0 {
-            ((value as f64 / max as f64) * area.height as f64) as usize
+    // 7 级 sparkline 字符,从低到高表达趋势幅度,与传统 Sparkline widget 一致。
+    const SPARKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+    // 数据点多于可用列时,每个列取子窗口最大值进行下采样;
+    // 数据点少于可用列时,每个数据点占据一列,剩余列留白。
+    let cols = area.width as usize;
+    let len = data.len();
+    for col in 0..cols {
+        let value = if len <= cols {
+            // 一列一个数据点,超出数据范围的列不渲染
+            let idx = col;
+            if idx >= len {
+                continue;
+            }
+            data[idx]
         } else {
-            0
+            // 下采样:当前列对应数据子窗口的最大值
+            let start = (col * len) / cols;
+            let end = ((col + 1) * len) / cols;
+            let end = end.max(start + 1).min(len);
+            data[start..end].iter().copied().max().unwrap_or(0)
         };
-        let capped_height = height.min(area.height as usize);
 
         let bar_color = if value >= crit_threshold {
             crit_color
@@ -313,15 +324,19 @@ pub fn sparkline_thresholded(
             fg
         };
 
-        let x = area.x + (i * bar_width) as u16;
-        for bar_x in x..x.saturating_add(bar_width as u16).min(area.right()) {
-            for row in 0..capped_height {
-                let y = area.bottom().saturating_sub(1 + row as u16);
-                if let Some(cell) = buf.cell_mut((bar_x, y)) {
-                    cell.set_char('▀');
-                    cell.set_fg(bar_color);
-                }
-            }
+        // 将值映射到 8 级 sparkline 字符之一
+        let spark_idx = if max > 0 {
+            ((value as f64 / max as f64) * (SPARKS.len() - 1) as f64)
+                .round()
+                .clamp(0.0, (SPARKS.len() - 1) as f64) as usize
+        } else {
+            0
+        };
+
+        let y = area.y + area.height.saturating_sub(1);
+        if let Some(cell) = buf.cell_mut((area.x + col as u16, y)) {
+            cell.set_char(SPARKS[spark_idx]);
+            cell.set_fg(bar_color);
         }
     }
 }

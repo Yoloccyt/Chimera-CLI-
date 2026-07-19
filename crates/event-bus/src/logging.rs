@@ -73,6 +73,7 @@ enum TopicLabel {
     System,
     Knowledge,
     Storage,
+    Agent,
 }
 
 impl From<EventTopic> for TopicLabel {
@@ -87,6 +88,7 @@ impl From<EventTopic> for TopicLabel {
             EventTopic::System => TopicLabel::System,
             EventTopic::Knowledge => TopicLabel::Knowledge,
             EventTopic::Storage => TopicLabel::Storage,
+            EventTopic::Agent => TopicLabel::Agent,
         }
     }
 }

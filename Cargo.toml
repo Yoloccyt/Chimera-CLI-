@@ -23,12 +23,14 @@ members = [
     "crates/decb-governor", "crates/acb-governor", "crates/efficiency-monitor",
     "crates/gsoe-evolution", "crates/auto-dpo", "crates/mcp-mesh",
     "crates/nmc-encoder", "crates/chtc-bridge", "crates/chimera-tui",
-    "crates/chimera-cli",
+    "crates/chimera-cli", "crates/chimera-mas",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "1.8.0-omega"
+# v2.0.0-omega: CHIMERA-MAS 多 Agent 协同子系统引入(ADR-026,workspace 第 35 个 crate)
+# SemVer major 升级: GA 后演进里程碑,L9 Quest 层新增 chimera-mas + event-bus 扩展 7 Agent 变体
+version = "2.0.0-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"
@@ -82,6 +84,8 @@ tracing-test = "0.2.5"
 # 版本号由 workspace.package 集中管理。
 event-bus = { path = "crates/event-bus" }
 chimera-tui = { path = "crates/chimera-tui" }
+# chimera-mas:L9 Quest 多 Agent 协同子系统(ADR-026,workspace 第 35 个 crate)
+chimera-mas = { path = "crates/chimera-mas" }
 
 # ============================================================
 # E2E 集成测试配置(Week 6 Task 6)

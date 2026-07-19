@@ -24,6 +24,7 @@ tmp_podman/
 # === IDE / 编辑器 ===
 .idea/
 .vscode/
+.qoder/
 *.swp
 *.swo
 *~

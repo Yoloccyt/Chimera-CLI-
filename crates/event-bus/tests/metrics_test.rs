@@ -205,12 +205,12 @@ async fn test_no_logger_no_metrics() {
 }
 
 // ============================================================
-// 补充测试: EventTopic::all() 验证 9 类 topic 完整性
+// 补充测试: EventTopic::all() 验证 10 类 topic 完整性
 // ============================================================
 
 #[test]
 fn test_event_topic_count_matches_labels() {
-    // 确保 EventTopic 有 9 个变体,与 Prometheus 标签值一一对应
+    // 确保 EventTopic 有 10 个变体,与 Prometheus 标签值一一对应
     let all = EventTopic::all();
-    assert_eq!(all.len(), 9, "EventTopic 应有 9 个变体");
+    assert_eq!(all.len(), 10, "EventTopic 应有 10 个变体");
 }
