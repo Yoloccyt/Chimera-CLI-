@@ -1,5 +1,138 @@
 # Changelog
 
+## v2.2.0-omega (2026-07-20)
+
+**版本代号**: NEXUS-OMEGA (CHIMERA-MAS · Part II Closure)
+**Spec**: [complete-chimera-mas-part2](.trae/specs/complete-chimera-mas-part2/spec.md)
+**架构基线**: v2.1.0-omega → v2.2.0-omega(Stage B 主体能力补齐,append-only minor,无 BREAKING)
+**ADR**: [ADR-028-chimera-mas-part2-closure](docs/architecture/ADR-028-chimera-mas-part2-closure.md)
+
+### 重大变更
+
+- **Part II 七项闭环能力补齐**(§15-§21):新增 7 个子模块覆盖上下文预算 / 分块调度 / 三级归档 / 知识协同 / 稳定闭环 / PDCA 基准 / INV-7/INV-8 不变量,Stage B 主体能力闭环
+- **append-only 策略**(ADR-028 决策 1):Part I 公共签名(`Quadrant` / `PriorityScheduler` / `ExpertRegistry` / `AgentTask.priority`)零变更,全部为新增类型 / 方法 / 字段
+- **80% 能力复用**(ADR-028 决策 2):复用 hcw-window / osa-coordinator / event-bus / quest-engine / gqep-executor / qeep-protocol / repo-wiki / mlc-engine / cmt-tiering / efficiency-monitor / parliament 等 11 个现有 crate
+- **INV-7/INV-8 不变量**(ADR-028 决策 3):上下文预算界 + 归档单调性,proptest 1000 次无违反
+- **三类压力源降级链**(ADR-028 决策 4):MemoryNearBudget / ExpertOverload / ArchiveIoContention → 降级步骤序列
+- **5 项 criterion 基准**(ADR-028 决策 5):window_select < 1ms / mlc_l2_knn < 5ms / wiki_knn@1000 < 10ms / wiki_knn@10 < 1ms / decay_compute < 1μs / 50agent_mem_peak ≤ 130MB
+- **SemVer minor 升级**(v2.1.0-omega → v2.2.0-omega):严格向后兼容,无 BREAKING 变更
+
+### Added
+
+#### chimera-mas Part II 子模块(L9 Quest 层)
+
+- **§15 独立上下文管理 + HCW 稀疏化 + INV-7 准入闸**
+  - 新增 `src/context/budget_model.rs`:`MemoryBudgetModel`(50 Agent + 1M 上下文 = 130MB 预算模型)+ `AdmissionGate::check()`(派生准入闸,违反 INV-7 时返回 `AdmissionGateDenied` 并发布 Critical 事件)
+  - 复用 `hcw-window::HierarchicalWindow::select()` 四级窗口分层 + `osa-coordinator::compute_masks()` 五维稀疏掩码
+  - INV-7 不变量:任意时刻 `m_total ≤ MEMORY_BUDGET_MB × MEMORY_BUDGET_UTILIZATION`(130MB × 0.9 = 117MB)
+
+- **§16 任务复杂度分块与分批调度**
+  - 新增 `src/chunker.rs`:`TaskChunker::chunk()`(按 TaskComplexity 切块)+ `BatchExecutor`(分批调度)+ `BatchConfig` / `ChunkOutput` / `BatchResult`
+  - 复用 `quest-engine::Quest` DAG 与 `TaskComplexity` 映射
+  - 切块深度上限保护:`delegation_depth >= MAX_AGENT_DEPTH`(5)时返回 `ChunkingFailed`
+
+- **§17 Agent 记忆三级归档(1mo/3mo/6mo)+ INV-8**
+  - 新增 `src/archive/` 目录:`compressor.rs`(归档压缩)+ `scheduler.rs`(归档调度)+ `tier.rs`(归档层级)+ `mod.rs`
+  - 三级归档:Hot(1mo)→ Warm(3mo)→ Cold(6mo)→ Ice(永久),复用 `mlc-engine` L0-L3 + `cmt-tiering` Hot/Warm/Cold/Ice + `scc-cache` 推测缓存
+  - INV-8 不变量:归档沿 Hot→Warm→Cold→Ice 单向降级,`InvariantChecker::check_inv8_archive_monotonicity()` 检查每次操作
+
+- **§18 知识协同:专家咨询 + 互询 + Wiki 检索**
+  - 新增 `src/knowledge/` 目录:`expert_consult.rs`(专家咨询)+ `mutual_inquiry.rs`(同僚互询)+ `wiki_retrieval.rs`(Wiki 检索)+ `mod.rs`
+  - `ExpertConsultant`:复用 `model-router` 选择专家旗舰模型 + `faae-router` Function-as-Expert 语义路由
+  - `MutualInquirer`:同象限专家互询,正则脱敏(§5.5 ContextIsolation)
+  - `WikiRetriever`:复用 `repo-wiki` FTS5 全文检索 + 内存 KNN,三级检索链短路
+
+- **§19 系统稳定运行与功能完整闭环(零孤儿)**
+  - 新增 `src/stability.rs`:`StabilityGuard`(故障隔离,复用 `parliament::RoleRegistry`)+ `CircuitBreaker`(Closed/Open/HalfOpen 三态机)+ `DegradationChain`(三类压力源降级链)+ `DegradationStep` / `PressureSource` / `TerminalState`
+  - 三类压力源:`MemoryNearBudget`(INV-7 阈值)/ `ExpertOverload`(咨询超时率 > 5%)/ `ArchiveIoContention`(IO 等待)
+  - 降级链协同 `acb-governor` + `decb-governor` + `efficiency-monitor`,Critical 事件走 mpsc 通道
+
+- **§20 PDCA 端到端闭环强化 + criterion 基准**
+  - 新增 `src/pdca.rs`(930 行):`PdcaLoop`(check/act/plan_reflux 三方法)+ `PdcaMetrics`(6 项度量)+ `PdcaAdjustments`(tier 分布 / tau / pool_size / wsjf 权重)+ `PlanReflux` + `PdcaAlert` + `AlertThresholds`(4 条告警规则)
+  - 新增 5 项 criterion 基准(从 4 项扩展到 9 项):`window_select` / `mlc_l2_knn_top10@4096` / `wiki_knn@1000` / `wiki_knn@10` / `decay_compute` / `50agent_mem_peak`
+
+- **§21 合规增补与 INV-7/INV-8 不变量编码**
+  - 新增 `src/invariants.rs`:`InvariantChecker`(INV-7/INV-8 检查器)+ `ArchiveTier` 枚举 + `MEMORY_BUDGET_MB`(130)/ `MEMORY_BUDGET_UTILIZATION`(0.9)常量
+  - proptest 1000 次属性测试覆盖 INV-7(随机派生序列不超预算)+ INV-8(随机归档序列满足单调性)
+
+#### 新增 MasError 变体(5 个,共 33 个)
+
+- `ChunkingFailed`(§16)— 任务切块失败(深度超限等)
+- `ArchiveTierInvalid`(§17)— 归档层级字符串未识别
+- `ArchiveMonotonicityViolated`(§17 / §21 INV-8)— 归档违反 Hot→Warm→Cold→Ice 单调性
+- `KnowledgeRetrievalFailed`(§18,Stage A 已有,核验保留)— 知识检索全部失败
+- `CircuitBreakerOpen`(§19)— 熔断器 Open 态拒绝新请求
+- `AdmissionGateDenied`(§15 / §21 INV-7)— 派生准入闸拒绝(全局内存预算超限)
+
+#### 测试覆盖
+
+- 新增 ~80 个测试用例(单元 + 集成 + proptest)
+- proptest 1000 次属性测试:INV-7 上下文预算界 + INV-8 归档单调性
+- 所有测试通过 `cargo test --workspace`
+
+### Changed
+
+- `workspace.package.version`:`2.1.0-omega` → `2.2.0-omega`(SemVer minor,append-only 非破坏性)
+- `crates/chimera-mas/Cargo.toml` description 字段补 §15-§21 闭环能力描述
+- `crates/chimera-mas/src/lib.rs` 新增 7 个模块声明 + 重导出 + prelude 更新
+- `crates/chimera-mas/benches/mas_benchmark.rs` 从 4 项基准扩展到 9 项(新增 5 项 Part II 基准)
+- `MasError` 变体数:27 → 33(新增 5 个 Part II 变体 + 1 个 AdmissionGateDenied,静态断言更新)
+
+### ADR
+
+- **ADR-028**: CHIMERA-MAS Part II 闭环能力补齐(8 项决策:append-only / 80% 复用映射 / INV-7/INV-8 / 降级链 / criterion 基准 / 版本号策略 / 否决方案规避 / Stage B 主体完成)
+
+### Compatibility
+
+- **无 BREAKING 变更**:Part I 公共签名(`Quadrant` / `PriorityScheduler` / `ExpertRegistry` / `AgentTask.priority` / `RootOrchestrator::delegate()` / `delegate_quadrants()`)不变
+- **append-only minor 版本升级**:2.1.0-omega → 2.2.0-omega
+- **承接 ADR-027 决策 6**:3.0.0-omega 留给未来真正的破坏性 API 变更里程碑
+- **不新建 crate / 不新建消息总线 / 不自实现压缩 / 不引入 unsafe 依赖 / 不修改核心领域类型**(ADR-028 决策 7)
+
+### 合规性
+
+- 保持 `#![forbid(unsafe_code)]`;不新建消息总线;不引入外部依赖;不修改 `AgentType` / `nexus_core::Task` / `ThinkingMode` / `Quadrant` / `AgentTask`
+- 八道质量门全绿:`cargo fmt --check` / `cargo check --workspace` / `clippy -D warnings` / `cargo test --workspace` / `cargo test --ignored`(release) / `cargo audit --deny warnings` / `cargo bench --no-run` / `cargo check --manifest-path fuzz/Cargo.toml`
+- 承接 ADR-026 八项决策 + ADR-027 六项决策,全部保持
+
+## v2.1.0-omega (2026-07-20)
+
+**版本代号**: NEXUS-OMEGA (CHIMERA-MAS-Q · 四象限稳定分工)
+**Spec**: [add-chimera-mas-quadrant](.trae/specs/add-chimera-mas-quadrant/spec.md)
+**架构基线**: v2.0.0-omega → v2.1.0-omega(Stage A → Stage B 结构增量,非破坏性 minor)
+**ADR**: [ADR-027-chimera-mas-quadrant](docs/architecture/ADR-027-chimera-mas-quadrant.md)
+
+### 重大变更
+
+- **孙代理四象限稳定分工**(§3):新增 `Quadrant` 四象限模型(Q1 实现 / Q2 集成 / Q3 验证 / Q4 加固),把无界孙层扇出收敛为固定 ≤4 分工,引入 INV-3(扇出界)/ INV-4(象限唯一)不变量
+- **WSJF 优先级驱动调度**(§8):新增 `PriorityScheduler` + WSJF 评分模型,以 `TaskPriority` 为调度一等公民,支持动态重排、Critical 抢占 Low、饥饿线性提权
+- **精英专家团队 E01-E08 显式编制**(§6):新增 `ExpertRegistry`,含 8 位 10+ 年经验专家的角色/象限/工具白名单/三级权限(L0/L1/L2)
+- **SemVer minor 升级**(v2.0.0-omega → v2.1.0-omega):严格向后兼容,仅新增类型/方法/字段,现有公共签名与测试零回归
+
+### Added
+
+#### chimera-mas 结构增量(L9 Quest 层)
+
+- 新增 `src/quadrant.rs`:`Quadrant` 枚举 + `axis()`/`tag()`/`encode_scope()`/`from_task_scope()`/`quality_dimensions()`/`validation_step()`;`activated_quadrants()` 复杂度激活矩阵;`QuadrantPlan`(强制 INV-3/INV-4)
+- 新增 `src/scheduler.rs`:`WsjfWeights`/`WsjfInput`/`wsjf_score()`/`score_to_priority()`/`PriorityScheduler`(优先级队列 + 动态重排 + 抢占 + 饥饿老化)
+- 新增 `src/experts.rs`:`PermissionTier`(L0/L1/L2)+ `ExpertProfile` + `ExpertRegistry`(内置 E01-E08)
+- 扩展 `src/orchestrator.rs`:新增 `delegate_quadrants()` 象限感知孙层编排路径(保留 `delegate()` 现有语义)
+- 扩展 `src/delegation.rs`:`AgentTask` 新增 `priority: TaskPriority` 字段(`new()` 默认 Medium + `with_priority()` builder,非破坏性)
+- 扩展 `src/error.rs`:新增 `QuadrantFanoutExceeded` / `QuadrantConflict` 变体(25 → 27)
+- 新增测试 **62+ 个**:24 quadrant + 19 scheduler + 13 experts + 6 orchestrator(delegate_quadrants)+ 5 proptest(INV-3/INV-4/Critical>Low)
+- 新增 ADR-027 + spec `add-chimera-mas-quadrant`
+
+### Changed
+
+- `workspace.package.version`:`2.0.0-omega` → `2.1.0-omega`(SemVer minor,非破坏性)
+- `MasError` 变体数:25 → 27(新增两个象限约束变体,附静态计数断言更新)
+
+### 合规性
+
+- 保持 `#![forbid(unsafe_code)]`;不新建消息总线;不引入外部依赖;不修改 `AgentType`/`nexus_core::Task`/`ThinkingMode`
+- 六道质量门全绿:`cargo check --workspace` / `clippy -D warnings` / `fmt --check` / `test` / 零 unsafe / 关键路径 O(1)
+- 承接 ADR-026 八项决策;调和其决策 8 的版本标注(完整 Stage B 3.0.0-omega 留待未来破坏性里程碑)
+
 ## v2.0.0-omega (2026-07-18)
 
 **版本代号**: NEXUS-OMEGA (CHIMERA-MAS · Multi-Agent Orchestration)

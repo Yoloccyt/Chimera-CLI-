@@ -43,24 +43,56 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod agent;
+pub mod archive;
+pub mod chunker;
 pub mod context;
 pub mod delegation;
 pub mod error;
+pub mod experts;
+pub mod invariants;
+pub mod knowledge;
 pub mod orchestrator;
+pub mod pdca;
+pub mod quadrant;
+pub mod scheduler;
+pub mod stability;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use agent::{
     Agent, AgentFactory, AgentLifecycle, AgentMeta, AgentStatus, AgentType, LifecycleState,
     ModelConfig,
 };
+pub use chunker::{BatchConfig, BatchExecutor, BatchResult, ChunkOutput, TaskChunker};
 pub use context::{
-    AgentContext, ContextBlock, ContextIsolationGuard, ContextPriority, TokenBudget,
+    should_compress_at, AdmissionGate, AgentContext, ContextBlock, ContextIsolationGuard,
+    ContextPriority, ContextTier, MemoryBudgetModel, TokenBudget, COMPRESSION_THRESHOLD,
+    SPARSE_FACTOR,
 };
 pub use delegation::{
     AgentTask, DelegationExecutor, QualityLevel, TaskComplexity, TaskResult, TaskRunner,
 };
 pub use error::{MasError, Result};
+pub use experts::{ExpertProfile, ExpertRegistry, PermissionTier, ToolPermission};
+pub use invariants::{ArchiveTier, InvariantChecker, MEMORY_BUDGET_MB, MEMORY_BUDGET_UTILIZATION};
+pub use knowledge::{ConsultSla, ExpertConsultant, KnowledgeChain, MutualInquirer, WikiRetriever};
 pub use orchestrator::{AgentHandle, HeartbeatInfo, RootOrchestrator, MAX_AGENT_DEPTH};
+pub use pdca::{
+    AlertThresholds, PdcaAdjustments, PdcaAlert, PdcaAlertSeverity, PdcaLoop, PdcaMetrics,
+    PlanReflux, TierDistribution, ALERT_CONSULT_TIMEOUT_RATE_WARNING, ALERT_MEMORY_CRITICAL_MB,
+    ALERT_SINGLE_AGENT_WARNING_MB, ALERT_WIKI_COUNT_WARNING, PDCA_ALERT_COOLDOWN_SECS,
+};
+pub use quadrant::{
+    activated_quadrants, CoreCross, ProduceAssure, Quadrant, QuadrantPlan, QualityDimension,
+    ValidationStep, MAX_QUADRANT_FANOUT,
+};
+pub use scheduler::{
+    score_to_priority, should_preempt, wsjf_score, PriorityScheduler, PriorityThresholds,
+    WsjfInput, WsjfWeights,
+};
+pub use stability::{
+    CircuitBreaker, DegradationChain, DegradationStep, PressureSource, StabilityGuard,
+    TerminalState, STATE_CLOSED, STATE_HALF_OPEN, STATE_OPEN,
+};
 
 /// 预导入模块 — 提供最常用类型
 ///
@@ -71,13 +103,35 @@ pub mod prelude {
             Agent, AgentFactory, AgentLifecycle, AgentMeta, AgentStatus, AgentType, LifecycleState,
             ModelConfig,
         },
+        chunker::{BatchConfig, BatchExecutor, BatchResult, ChunkOutput, TaskChunker},
         context::{
-            AgentContext, ContextBlock, ContextIsolationGuard, ContextPriority, TokenBudget,
+            should_compress_at, AdmissionGate, AgentContext, ContextBlock, ContextIsolationGuard,
+            ContextPriority, ContextTier, MemoryBudgetModel, TokenBudget, COMPRESSION_THRESHOLD,
+            SPARSE_FACTOR,
         },
         delegation::{
             AgentTask, DelegationExecutor, QualityLevel, TaskComplexity, TaskResult, TaskRunner,
         },
         error::{MasError, Result},
+        experts::{ExpertProfile, ExpertRegistry, PermissionTier, ToolPermission},
+        invariants::{ArchiveTier, InvariantChecker, MEMORY_BUDGET_MB, MEMORY_BUDGET_UTILIZATION},
+        knowledge::{ConsultSla, ExpertConsultant, KnowledgeChain, MutualInquirer, WikiRetriever},
         orchestrator::{AgentHandle, HeartbeatInfo, RootOrchestrator, MAX_AGENT_DEPTH},
+        pdca::{
+            AlertThresholds, PdcaAdjustments, PdcaAlert, PdcaAlertSeverity, PdcaLoop, PdcaMetrics,
+            PlanReflux, TierDistribution,
+        },
+        quadrant::{
+            activated_quadrants, CoreCross, ProduceAssure, Quadrant, QuadrantPlan,
+            QualityDimension, ValidationStep, MAX_QUADRANT_FANOUT,
+        },
+        scheduler::{
+            score_to_priority, should_preempt, wsjf_score, PriorityScheduler, PriorityThresholds,
+            WsjfInput, WsjfWeights,
+        },
+        stability::{
+            CircuitBreaker, DegradationChain, DegradationStep, PressureSource, StabilityGuard,
+            TerminalState, STATE_CLOSED, STATE_HALF_OPEN, STATE_OPEN,
+        },
     };
 }

@@ -20,9 +20,10 @@
 #![forbid(unsafe_code)]
 
 use chimera_mas::prelude::*;
+use chimera_mas::scheduler::priority_rank;
 use chimera_mas::MAX_AGENT_DEPTH;
-use event_bus::EventBus;
-use nexus_core::ThinkingMode;
+use event_bus::{EventBus, TaskPriority};
+use nexus_core::{Task, TaskStatus, ThinkingMode};
 use proptest::prelude::*;
 
 // ============================================================
@@ -499,5 +500,331 @@ proptest! {
                 result
             );
         }
+    }
+}
+
+// ============================================================
+// ADR-027: 四象限 INV-3/INV-4 + 优先级排序不变量
+// ============================================================
+
+/// 构造指定优先级的 AgentTask(用于调度器属性测试)。
+fn make_prio_task(id: &str, priority: TaskPriority) -> AgentTask {
+    let task = Task {
+        task_id: id.into(),
+        description: format!("task {id}"),
+        status: TaskStatus::Pending,
+        dependencies: vec![],
+    };
+    AgentTask::new(
+        task,
+        TaskComplexity::Medium,
+        1000,
+        std::time::Duration::from_secs(60),
+        QualityLevel::Standard,
+    )
+    .with_priority(priority)
+}
+
+proptest! {
+    /// 不变量(INV-3 + INV-4): 任意复杂度, 激活象限数 ≤ 4 且无重复
+    ///
+    /// WHY 属性测试: 单元测试仅验证 4 个固定复杂度, 本测试确保对 TaskComplexity
+    /// 全空间, `activated_quadrants` 返回的象限集恒满足孙层扇出上界与唯一性。
+    #[test]
+    fn quadrant_activation_respects_inv3_and_inv4(complexity_idx in 0u8..=3u8) {
+        let complexity = match complexity_idx {
+            0 => TaskComplexity::Simple,
+            1 => TaskComplexity::Medium,
+            2 => TaskComplexity::Complex,
+            _ => TaskComplexity::VeryComplex,
+        };
+        let quadrants = activated_quadrants(complexity);
+        // INV-3: 扇出 ≤ 4
+        prop_assert!(
+            quadrants.len() <= MAX_QUADRANT_FANOUT,
+            "INV-3: 激活象限数 {} 应 ≤ {}",
+            quadrants.len(),
+            MAX_QUADRANT_FANOUT
+        );
+        // INV-4: 无重复
+        let mut seen = std::collections::HashSet::new();
+        for q in &quadrants {
+            prop_assert!(seen.insert(*q), "INV-4: 激活象限不应重复");
+        }
+        // QuadrantPlan 与 activated_quadrants 一致
+        let plan = QuadrantPlan::from_complexity("base", complexity);
+        prop_assert_eq!(plan.fanout(), quadrants.len(), "QuadrantPlan 扇出应与激活集一致");
+    }
+}
+
+proptest! {
+    /// 不变量: 任意 base 字符串 + 任意象限, encode_scope 后 from_task_scope 可无损还原
+    ///
+    /// base 不含 '#'(正则排除), 保证尾缀 `#Qn` 唯一可解。
+    #[test]
+    fn quadrant_scope_encode_decode_roundtrip(
+        base in "[a-zA-Z0-9_-]{0,40}",
+        q_idx in 0usize..4
+    ) {
+        let quadrant = Quadrant::ALL[q_idx];
+        let scope = quadrant.encode_scope(&base);
+        prop_assert_eq!(
+            Quadrant::from_task_scope(&scope),
+            Some(quadrant),
+            "encode/decode 往返应还原同一象限"
+        );
+    }
+}
+
+proptest! {
+    /// INV-4 强制: 任意象限的重复显式构造必被拒绝
+    #[test]
+    fn quadrant_plan_rejects_duplicate_quadrant(q_idx in 0usize..4) {
+        let quadrant = Quadrant::ALL[q_idx];
+        let result = QuadrantPlan::from_quadrants("t", vec![quadrant, quadrant]);
+        prop_assert!(
+            matches!(result, Err(MasError::QuadrantConflict { .. })),
+            "重复象限应返回 QuadrantConflict"
+        );
+    }
+}
+
+proptest! {
+    /// 不变量: priority_rank 严格保序 — 任意成对优先级, 高优先级秩严格更大
+    #[test]
+    fn priority_rank_is_total_order(a in 0u8..=3u8, b in 0u8..=3u8) {
+        let to_priority = |i: u8| match i {
+            0 => TaskPriority::Low,
+            1 => TaskPriority::Medium,
+            2 => TaskPriority::High,
+            _ => TaskPriority::Critical,
+        };
+        let pa = to_priority(a);
+        let pb = to_priority(b);
+        if a > b {
+            prop_assert!(priority_rank(pa) > priority_rank(pb), "高档优先级秩应更大");
+        } else if a == b {
+            prop_assert_eq!(priority_rank(pa), priority_rank(pb), "同档优先级秩应相等");
+        }
+    }
+}
+
+proptest! {
+    /// 核心排序不变量: Critical 与 Low 同队时, Critical 永远先出队
+    ///
+    /// 不受入队顺序与 WSJF 影响(即使故意让 Low 的 WSJF 更高, 优先级仍主导排序)。
+    #[test]
+    fn scheduler_critical_dequeues_before_low(
+        crit_enqueued_first in any::<bool>(),
+        low_has_higher_wsjf in any::<bool>()
+    ) {
+        let mut scheduler = PriorityScheduler::new();
+        // 故意让 Low 的 WSJF 可能更高, 验证优先级主导(非 WSJF 主导)
+        let low_input = if low_has_higher_wsjf {
+            WsjfInput::new(10.0, 10.0, 10.0, 10.0, 1.0)
+        } else {
+            WsjfInput::new(1.0, 1.0, 1.0, 1.0, 10.0)
+        };
+        let crit_input = WsjfInput::new(1.0, 1.0, 1.0, 1.0, 10.0);
+        let low = make_prio_task("low", TaskPriority::Low);
+        let crit = make_prio_task("crit", TaskPriority::Critical);
+        if crit_enqueued_first {
+            scheduler.enqueue(crit, &crit_input);
+            scheduler.enqueue(low, &low_input);
+        } else {
+            scheduler.enqueue(low, &low_input);
+            scheduler.enqueue(crit, &crit_input);
+        }
+        let first = scheduler.dequeue().expect("非空队列应能出队");
+        prop_assert_eq!(
+            first.inner.task_id,
+            "crit",
+            "Critical 应永远先于 Low 出队"
+        );
+    }
+}
+
+// ============================================================
+// Task 21: INV-7 / INV-8 不变量属性测试
+// ============================================================
+//
+// 对应设计文档 §21.2 + §15.4(INV-7)+ §17.5(INV-8)。
+// 属性测试验证"对任意输入,不变量恒成立",而非重复单元测试的固定 case。
+// 每个属性测试默认 256 cases,覆盖边界值与随机组合。
+//
+// ## 语法约束(§4.1 规范)
+// proptest 1.11+ 用 block-named 语法:`fn name(arg in strategy) { body }`
+// 禁止 closure 形式(某些 pattern 解析失败)
+//
+// ## 红线对齐
+// - §4.4 反模式 6: f32 禁止隐式转 f64,全程 f64
+// - §15.4: INV-7 失败复用 MasError::TokenBudgetExceeded
+// - §17.5: INV-8 失败返回 MasError::ArchiveMonotonicityViolated
+
+use chimera_mas::invariants::{ArchiveTier, InvariantChecker, MEMORY_BUDGET_MB};
+
+/// 生成任意 ArchiveTier 策略 — 覆盖全部 4 个层级
+fn arb_archive_tier() -> impl Strategy<Value = ArchiveTier> {
+    prop_oneof![
+        Just(ArchiveTier::Hot),
+        Just(ArchiveTier::Warm),
+        Just(ArchiveTier::Cold),
+        Just(ArchiveTier::Ice),
+    ]
+}
+
+proptest! {
+    /// INV-7 不变量:任意 resident > capacity 时必须返回 Err(TokenBudgetExceeded)
+    ///
+    /// 验证单 Agent 驻留约束(§15.4):resident ≤ effective_capacity 是硬上界,
+    /// 超限必拒绝,且错误变体为 TokenBudgetExceeded(§15.4 复用既有变体)。
+    #[test]
+    fn inv7_resident_above_capacity_always_rejected(
+        resident in 1usize..100_000,
+        capacity in 0usize..100_000
+    ) {
+        // 跳过 resident <= capacity 的合法 case(本测试聚焦超限)
+        prop_assume!(resident > capacity, "本测试仅验证 resident > capacity");
+        let result = InvariantChecker::check_inv7_context_budget(
+            resident,
+            capacity,
+            0, // m_total=0:排除全局约束干扰
+            MEMORY_BUDGET_MB,
+        );
+        match result {
+            Err(MasError::TokenBudgetExceeded { current_tokens, max_tokens, .. }) => {
+                prop_assert_eq!(current_tokens, resident, "current_tokens 应为输入 resident");
+                prop_assert_eq!(max_tokens, capacity, "max_tokens 应为输入 capacity");
+            }
+            other => prop_assert!(
+                false,
+                "resident={resident} > capacity={capacity} 应返回 TokenBudgetExceeded, 实际: {other:?}"
+            ),
+        }
+    }
+}
+
+proptest! {
+    /// INV-7 不变量:任意 m_total > m_budget×0.9 时必须返回 Err(TokenBudgetExceeded)
+    ///
+    /// 验证全局派生准入闸(§15.3):M_total ≤ 130MB×0.9 是派生硬上界。
+    /// 全程 f64 计算(§4.4 反模式 6),避免 f32 精度膨胀。
+    #[test]
+    fn inv7_global_above_threshold_always_rejected(
+        m_total in 100usize..200,
+        m_budget in 100usize..200
+    ) {
+        // 跳过 m_total <= m_budget*0.9 的合法 case
+        let threshold = (m_budget as f64 * 0.9) as usize;
+        prop_assume!(m_total > threshold, "本测试仅验证 m_total > m_budget×0.9");
+        // resident=0:排除单 Agent 约束干扰
+        let result = InvariantChecker::check_inv7_context_budget(0, 100_000, m_total, m_budget);
+        match result {
+            Err(MasError::TokenBudgetExceeded { current_tokens, max_tokens, .. }) => {
+                prop_assert_eq!(current_tokens, m_total, "current_tokens 应为输入 m_total");
+                prop_assert_eq!(max_tokens, threshold, "max_tokens 应为阈值 m_budget×0.9");
+            }
+            other => prop_assert!(
+                false,
+                "m_total={m_total} > threshold={threshold} 应返回 TokenBudgetExceeded, 实际: {other:?}"
+            ),
+        }
+    }
+}
+
+proptest! {
+    /// INV-7 不变量:resident ≤ capacity 且 m_total ≤ m_budget×0.9 时必返回 Ok
+    ///
+    /// 这是 INV-7 的"正向"属性:两个约束均满足时,派生准入闸必须放行。
+    /// 验证 AND 关系的两侧均通过时,不会因副作用误拒。
+    #[test]
+    fn inv7_both_constraints_satisfied_always_ok(
+        capacity in 1usize..100_000,
+        resident_pct in 0u8..=100,
+        m_budget in 100usize..200,
+        m_total_pct in 0u8..=90
+    ) {
+        // resident = capacity × (resident_pct / 100),保证 resident ≤ capacity
+        let resident = capacity * resident_pct as usize / 100;
+        // m_total = m_budget × (m_total_pct / 100),m_total_pct ≤ 90 保证 m_total ≤ m_budget×0.9
+        let m_total = m_budget * m_total_pct as usize / 100;
+        let result = InvariantChecker::check_inv7_context_budget(resident, capacity, m_total, m_budget);
+        prop_assert!(
+            result.is_ok(),
+            "resident={resident} ≤ capacity={capacity}, m_total={m_total} ≤ m_budget×0.9 应通过, 实际: {result:?}"
+        );
+    }
+}
+
+proptest! {
+    /// INV-8 不变量:from.level() < to.level() 时必返回 Ok(合法降级)
+    ///
+    /// 验证 Hot→Warm→Cold→Ice 单向降级恒成立(§17.5)。
+    /// 跨级降级(如 Hot→Ice)也合法,因为 level 严格递增。
+    #[test]
+    fn inv8_monotonic_demotion_always_ok(
+        from_idx in 0u8..=2,
+        delta in 1u8..=3
+    ) {
+        // 构造合法降级:from_idx + delta ≤ 3,to_idx 严格大于 from_idx
+        let to_idx = from_idx + delta;
+        prop_assume!(to_idx <= 3, "to_idx 不超过 Ice(3)");
+        let from_tier = tier_from_idx(from_idx);
+        let to_tier = tier_from_idx(to_idx);
+        let result = InvariantChecker::check_inv8_archive_monotonicity(from_tier, to_tier);
+        prop_assert!(
+            result.is_ok(),
+            "{from_tier:?}→{to_tier:?} (level {}→{}) 应通过",
+            from_tier.level(),
+            to_tier.level()
+        );
+    }
+}
+
+proptest! {
+    /// INV-8 不变量:from.level() >= to.level() 时必返回 Err(同层或反向膨胀)
+    ///
+    /// 验证记忆不可反向膨胀(§17.5)。覆盖:
+    /// - 同层(Hot→Hot 等)
+    /// - 反向(Ice→Hot 等,跨多级反向)
+    /// 错误变体必为 ArchiveMonotonicityViolated,且字段正确反映输入 tier 名。
+    #[test]
+    fn inv8_non_monotonic_always_rejected(
+        from in arb_archive_tier(),
+        to in arb_archive_tier()
+    ) {
+        // 跳过合法降级 case
+        prop_assume!(to.level() <= from.level(), "本测试仅验证非单调");
+        let result = InvariantChecker::check_inv8_archive_monotonicity(from, to);
+        match result {
+            Err(MasError::ArchiveMonotonicityViolated { from_tier, to_tier: tt }) => {
+                let expected_from = format!("{from:?}");
+                let expected_to = format!("{to:?}");
+                prop_assert_eq!(
+                    from_tier, expected_from,
+                    "from_tier 字段应等于 {:?} 的 Debug 格式",
+                    from
+                );
+                prop_assert_eq!(
+                    tt, expected_to,
+                    "to_tier 字段应等于 {:?} 的 Debug 格式",
+                    to
+                );
+            }
+            other => prop_assert!(
+                false,
+                "{from:?}→{to:?} 应返回 ArchiveMonotonicityViolated, 实际: {other:?}"
+            ),
+        }
+    }
+}
+
+/// 索引到 ArchiveTier 的辅助函数(0=Hot, 1=Warm, 2=Cold, 3=Ice)
+fn tier_from_idx(idx: u8) -> ArchiveTier {
+    match idx {
+        0 => ArchiveTier::Hot,
+        1 => ArchiveTier::Warm,
+        2 => ArchiveTier::Cold,
+        _ => ArchiveTier::Ice,
     }
 }

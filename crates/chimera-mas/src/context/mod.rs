@@ -23,10 +23,15 @@
 //! - Task 10: 实现 TokenBudget 预算管理(budget.rs)
 
 pub mod budget;
+pub mod budget_model;
 pub mod isolation;
 pub mod manager;
 
 // === 关键类型重导出 ===
 pub use budget::TokenBudget;
+pub use budget_model::{
+    should_compress_at, AdmissionGate, ContextTier, MemoryBudgetModel, COMPRESSION_THRESHOLD,
+    SPARSE_FACTOR,
+};
 pub use isolation::ContextIsolationGuard;
 pub use manager::{AgentContext, ContextBlock, ContextPriority};

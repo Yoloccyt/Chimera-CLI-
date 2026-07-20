@@ -8,19 +8,23 @@
 //!
 //! - **上下文隔离违规**: ContextIsolationViolation / TokenBudgetExceeded / ContextCompressionFailed
 //! - **委托深度与执行**: MaxDepthExceeded / DelegationFailed / NoAvailableSubAgent / TaskTimeout / TaskFailed
+//! - **象限约束**: QuadrantFanoutExceeded(INV-3) / QuadrantConflict(INV-4)
+//! - **归档单调性**: ArchiveMonotonicityViolated(INV-8,Task 21 §21.2) / ArchiveTierInvalid(Task 17 §17.2)
 //! - **Agent 生命周期**: AgentNotFound / InvalidAgentState / AgentAlreadyExists / AgentCreationFailed /
 //!   AgentStartupFailed / AgentShutdownFailed
 //! - **任务状态**: TaskNotFound / TaskAlreadyCompleted
-//! - **专家咨询**: ConsultationFailed / ExpertUnavailable
+//! - **专家咨询**: ConsultationFailed / ExpertUnavailable(扩展 reason 字段,Task 18 §18.3)/ KnowledgeRetrievalFailed(Task 18 §18.10)
 //! - **消息传递**: MessageSendFailed / MessageTimeout
 //! - **配置与序列化**: InvalidConfig / SerializationFailed / MessagePackFailed / MessagePackDecodeFailed
+//! - **稳定性(Task 19 §19.7)**: CircuitBreakerOpen
+//! - **分块调度(Task 16 §16.10)**: ChunkingFailed
 //! - **系统**: IoError / Internal
 
 use thiserror::Error;
 
 /// MAS 子系统错误类型
 ///
-/// 共 25 个变体,覆盖 MAS 特有错误场景。
+/// 共 33 个变体,覆盖 MAS 特有错误场景。
 /// 所有变体均通过 `#[error("...")]` 提供人类可读的 Display 实现。
 #[derive(Debug, Error)]
 pub enum MasError {
@@ -122,6 +126,86 @@ pub enum MasError {
         retry_count: u32,
     },
 
+    // === 象限约束相关(2 个,ADR-027 决策 1)===
+    /// 象限扇出超限 — 孙代理扇出超过四象限上界(INV-3)
+    ///
+    /// 触发场景:`QuadrantPlan::from_quadrants()` 检测到象限数 > `MAX_QUADRANT_FANOUT`(4)。
+    /// 处理策略:拒绝构造分工计划,防止无界委托爆炸(回应推理悖论)。
+    #[error("Quadrant fanout exceeded: requested {requested}, max {max}")]
+    QuadrantFanoutExceeded {
+        /// 请求的象限数
+        requested: usize,
+        /// 允许的最大象限数(恒为 4)
+        max: usize,
+    },
+
+    /// 象限冲突 — 同一子代理下象限重复(INV-4)
+    ///
+    /// 触发场景:`QuadrantPlan::from_quadrants()` 检测到重复象限。
+    /// 处理策略:拒绝构造分工计划,保证每个象限至多一个活跃孙代理。
+    #[error("Quadrant conflict: quadrant {quadrant} already active")]
+    QuadrantConflict {
+        /// 冲突的象限名称(如 "Implementation")
+        quadrant: String,
+    },
+
+    /// 归档单调性违反 — INV-8(Task 21 §21.2 / §17.5)
+    ///
+    /// 触发场景:`InvariantChecker::check_inv8_archive_monotonicity()` 检测到
+    /// 记忆试图沿非 Hot→Warm→Cold→Ice 方向移动(如反向 Ice→Hot 或同层 Hot→Hot)。
+    ///
+    /// 处理策略:拒绝归档操作,返回带 `from_tier`/`to_tier` 的诊断信息。
+    /// 调用方应发布 Critical 事件(§6.2 红线)并保留原 tier 不变。
+    ///
+    /// WHY 复用 String 而非 ArchiveTier:错误类型应自描述,避免要求调用方
+    /// 导入 `ArchiveTier` 类型即可理解错误上下文。`from_tier`/`to_tier`
+    /// 存储 `"Hot"`/`"Warm"`/`"Cold"`/`"Ice"` 字符串。
+    #[error("Archive monotonicity violated: cannot demote from {from_tier:?} to {to_tier:?}")]
+    ArchiveMonotonicityViolated {
+        /// 源归档级(如 "Hot"/"Warm"/"Cold"/"Ice")
+        from_tier: String,
+        /// 目标归档级(如 "Warm"/"Cold"/"Ice"/"Hot")
+        to_tier: String,
+    },
+
+    /// 归档层级无效 — Task 17 §17.2 SubTask 17.11
+    ///
+    /// 触发场景:调用方传入未定义的归档层级字符串(如 `"Unknown"`)。
+    /// 处理策略:拒绝操作并返回带 `tier` 字段的诊断信息,调用方应回滚或使用默认层级。
+    ///
+    /// WHY 复用 String 而非 ArchiveTier:错误类型应自描述,避免要求调用方
+    /// 导入 `ArchiveTier` 类型即可理解错误上下文。`tier` 存储原始字符串。
+    #[error("Archive tier invalid: {tier:?} is not a recognized archive tier")]
+    ArchiveTierInvalid {
+        /// 未识别的归档层级字符串
+        tier: String,
+    },
+
+    /// 派生准入闸拒绝 — Task 15 §15.3 派生准入闸
+    ///
+    /// 触发场景:`AdmissionGate::check()` 检测到派生新 Agent 后全局内存预算
+    /// 超出 `MEMORY_BUDGET_MB × MEMORY_BUDGET_UTILIZATION`(130MB × 0.9 = 117MB)。
+    ///
+    /// 处理策略:拒绝派生,调用方应发布 `NexusEvent::AgentContextOverflow`
+    /// Critical 事件(走 mpsc,§6.2 红线),并降级 tier 或等待内存释放。
+    ///
+    /// WHY 独立变体而非复用 TokenBudgetExceeded:INV-7 失败时复用 TokenBudgetExceeded,
+    /// 但 AdmissionGate 作为派生准入语义层,失败原因可能是单 Agent 驻留超限或全局
+    /// 预算超限两种,需要明确区分。`reason` 字段保留 INV-7 原始错误信息用于诊断。
+    #[error(
+        "Admission gate denied: m_total={m_total}MB exceeds m_budget={m_budget}MB, new_agent_tier={new_agent_tier:?}, reason: {reason}"
+    )]
+    AdmissionGateDenied {
+        /// 当前全 Agent 池聚合内存(MB)
+        m_total: usize,
+        /// 全局内存预算上限(MB,通常为 130)
+        m_budget: usize,
+        /// 新 Agent 的 tier 名称(如 "L0"/"L1"/"L2"/"L3")
+        new_agent_tier: String,
+        /// INV-7 失败原因(诊断用)
+        reason: String,
+    },
+
     // === Agent 生命周期相关(6 个)===
     /// Agent 未找到 — Agent ID 不存在
     ///
@@ -207,7 +291,7 @@ pub enum MasError {
         task_id: String,
     },
 
-    // === 专家咨询相关(2 个)===
+    // === 专家咨询相关(3 个)===
     /// 专家咨询失败 — 专家 Agent 咨询过程出错
     ///
     /// 触发场景:专家 Agent 处理 `AgentConsultRequested` 事件时出错。
@@ -217,13 +301,41 @@ pub enum MasError {
         reason: String,
     },
 
-    /// 专家不可用 — 指定专家 Agent 不存在或未注册
+    /// 专家不可用 — 指定专家 Agent 不存在、未注册或咨询超时(Task 18 §18.3)
     ///
-    /// 触发场景:咨询请求的目标 expert_id 不存在或已下线。
-    #[error("Expert agent unavailable: {expert_id}")]
+    /// 触发场景:
+    /// - 咨询请求的目标 expert_id 不存在或已下线
+    /// - 咨询超过 SLA 时限(Critical < 5s / High < 15s / Medium < 30s)
+    ///
+    /// 处理策略:发布 `NexusEvent::AgentTaskFailed`(Critical,走 mpsc,§6.2 红线),
+    /// 由 Parliament 进行补救决策(重试 / 降级 / 转交其他专家)。
+    ///
+    /// WHY 扩展 reason 字段(Task 18):原变体仅含 expert_id,无法区分"未注册"与
+    /// "咨询超时"两种失败模式。扩展 reason 字段携带诊断信息("unregistered" /
+    /// "timeout after Xs" / "overloaded"),便于 Parliament 决策与告警图表分类。
+    #[error("Expert unavailable: expert_id={expert_id}, reason={reason}")]
     ExpertUnavailable {
         /// 专家 Agent ID
         expert_id: String,
+        /// 不可用原因(超时 / 未注册 / 过载)
+        reason: String,
+    },
+
+    /// 知识检索失败 — Task 18 §18.10
+    ///
+    /// 触发场景:`WikiRetriever::search()` 调用 `wiki.search_fulltext()` 失败,
+    /// 或 `MutualInquirer::inquire()` 同僚互询全部失败且无可用兜底。
+    ///
+    /// 处理策略:调用方应降级到本地 mlc L0/L1 检索(三级检索链短路),
+    /// 并发布 Normal 级事件记录检索失败原因,供 PDCA 度量统计。
+    ///
+    /// WHY 独立变体而非复用 ConsultationFailed:知识检索包含 Wiki 全文检索 +
+    /// 内存 KNN + 同僚互询三种语义,与专家咨询语义不同,需独立分类便于
+    /// PDCA §20.8 度量"咨询超时率"与"知识检索失败率"两个独立指标。
+    #[error("Knowledge retrieval failed: {reason}")]
+    KnowledgeRetrievalFailed {
+        /// 失败原因
+        reason: String,
     },
 
     // === 消息传递相关(2 个)===
@@ -280,6 +392,47 @@ pub enum MasError {
     /// 触发场景:Agent 状态恢复时 MessagePack 解码失败(ADR-004)。
     #[error("MessagePack deserialization failed: {0}")]
     MessagePackDecodeFailed(#[from] rmp_serde::decode::Error),
+
+    // === 稳定性相关(1 个,Task 19 §19.7)===
+    /// 熔断器已打开 — CircuitBreaker 处于 Open 态,拒绝新请求通过
+    ///
+    /// 触发场景:`CircuitBreaker::record_failure()` 累计失败次数达到 `threshold`
+    /// 后熔断器从 Closed → Open,后续调用方检查到 Open 态时返回本错误,
+    /// 拒绝继续派发任务直到 `reset_timeout_ms` 后切换到 HalfOpen 试探。
+    ///
+    /// 处理策略:调用方应触发 `DegradationChain::apply(PressureSource::*)`
+    /// 降级链(如 HCW 压缩 / tier 降级 / 拒新 Agent 排队),并发布
+    /// `NexusEvent::AgentContextOverflow` Critical 事件(走 mpsc,§6.2 红线)。
+    ///
+    /// WHY 独立变体而非复用 DelegationFailed:CircuitBreaker 是稳定性子系统
+    /// 的状态机错误,与单次委托执行失败语义不同,需明确区分以便降级链精准响应。
+    /// `failure_count` / `threshold` 字段保留诊断信息供告警与图表使用。
+    #[error("Circuit breaker open: failures={failure_count}, threshold={threshold}")]
+    CircuitBreakerOpen {
+        /// 当前累计失败次数
+        failure_count: u32,
+        /// 触发熔断的失败次数阈值
+        threshold: u32,
+    },
+
+    // === 分块调度相关(1 个,Task 16 §16.10)===
+    /// 任务切块失败 — Task 16 §16.10
+    ///
+    /// 触发场景:`TaskChunker::chunk()` 检测到无法安全切块的条件:
+    /// - `delegation_depth >= MAX_AGENT_DEPTH`(5):继续切块会突破委托深度上限,
+    ///   违反 §6.2 红线(递归爆炸防护)
+    /// - 后续可能扩展:零字节任务、负数 token 等边界场景
+    ///
+    /// 处理策略:调用方应停止切块,改用降级策略(如直接执行原任务或返回错误)。
+    /// `reason` 字段携带诊断信息便于告警与图表分类。
+    ///
+    /// WHY 独立变体而非复用 DelegationFailed:切块是分块调度子系统的语义,
+    /// 与单次委托执行失败不同,需明确区分以便 §16 调度链精准响应。
+    #[error("Chunking failed: {reason}")]
+    ChunkingFailed {
+        /// 失败原因(如 "delegation_depth 5 >= MAX_AGENT_DEPTH 5")
+        reason: String,
+    },
 
     // === 系统级(2 个)===
     /// IO 错误 — 文件读写、网络等底层 IO 错误
@@ -372,7 +525,7 @@ mod tests {
         use serde::de::Error as _;
         use serde::ser::Error as _;
 
-        // 列举所有变体,确保数量 >= 25
+        // 列举所有变体,确保数量 >= 33(当前实际 33 个变体,Task 16 新增 ChunkingFailed)
         let variants: Vec<MasError> = vec![
             MasError::ContextIsolationViolation {
                 agent_id: "a".into(),
@@ -403,6 +556,26 @@ mod tests {
                 error: "e".into(),
                 retry_count: 0,
             },
+            MasError::QuadrantFanoutExceeded {
+                requested: 5,
+                max: 4,
+            },
+            MasError::QuadrantConflict {
+                quadrant: "Implementation".into(),
+            },
+            MasError::ArchiveMonotonicityViolated {
+                from_tier: "Ice".into(),
+                to_tier: "Hot".into(),
+            },
+            MasError::ArchiveTierInvalid {
+                tier: "Unknown".into(),
+            },
+            MasError::AdmissionGateDenied {
+                m_total: 120,
+                m_budget: 130,
+                new_agent_tier: "L3".into(),
+                reason: "r".into(),
+            },
             MasError::AgentNotFound {
                 agent_id: "a".into(),
             },
@@ -432,7 +605,9 @@ mod tests {
             MasError::ConsultationFailed { reason: "r".into() },
             MasError::ExpertUnavailable {
                 expert_id: "e".into(),
+                reason: "timeout".into(),
             },
+            MasError::KnowledgeRetrievalFailed { reason: "r".into() },
             MasError::MessageSendFailed {
                 from: "a".into(),
                 to: "b".into(),
@@ -448,12 +623,19 @@ mod tests {
             ),
             MasError::MessagePackFailed(rmp_serde::encode::Error::custom("test encode")),
             MasError::MessagePackDecodeFailed(rmp_serde::decode::Error::custom("test decode")),
+            MasError::CircuitBreakerOpen {
+                failure_count: 5,
+                threshold: 5,
+            },
+            MasError::ChunkingFailed {
+                reason: "delegation_depth 5 >= MAX_AGENT_DEPTH 5".into(),
+            },
             MasError::IoError(std::io::Error::other("io")),
             MasError::Internal("internal".into()),
         ];
         assert!(
-            variants.len() >= 25,
-            "MasError 变体数量 = {},应 >= 25",
+            variants.len() >= 33,
+            "MasError 变体数量 = {},应 >= 33",
             variants.len()
         );
     }

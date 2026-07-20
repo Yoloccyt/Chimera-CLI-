@@ -19,7 +19,7 @@
 //! - `Complex` / `VeryComplex` → `ThinkingMode::Deep`(深度推理)
 
 use crate::error::{MasError, Result};
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::{EventBus, EventMetadata, NexusEvent, TaskPriority};
 use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -116,6 +116,12 @@ pub struct AgentTask {
     pub acceptable_latency: Duration,
     /// 质量要求(决定是否需要重试或专家咨询)
     pub quality_requirement: QualityLevel,
+    /// 任务调度优先级(§8 调度一等公民,ADR-027 决策 4)
+    ///
+    /// WHY 复用 `event_bus::TaskPriority`(L1)而非新建:§2.2 依赖铁律,
+    /// 轻量枚举下沉 L1 供 L9 向下复用;`new()` 默认 `Medium`,可经
+    /// `with_priority()` builder 覆盖。
+    pub priority: TaskPriority,
     /// 委托方 Agent ID(None 表示由 RootOrchestrator 直接发起)
     pub parent_agent_id: Option<String>,
     /// 委托深度(0=RootOrchestrator 直接执行,1=MainAgent 委托,...)
@@ -153,6 +159,9 @@ impl AgentTask {
             estimated_tokens,
             acceptable_latency,
             quality_requirement,
+            // WHY 默认 Medium:多数任务为常规优先级;Critical/High/Low 经
+            // with_priority() 显式设置,保持 new() 5 参数签名不变(非破坏性)。
+            priority: TaskPriority::Medium,
             // 默认值:RootOrchestrator 直接发起,深度 0
             parent_agent_id: None,
             delegation_depth: 0,
@@ -197,6 +206,39 @@ impl AgentTask {
     /// - `depth`: 委托深度(0=RootOrchestrator 直接执行,1=MainAgent 委托,...)
     pub fn with_depth(mut self, depth: usize) -> Self {
         self.delegation_depth = depth;
+        self
+    }
+
+    /// 设置任务调度优先级(builder 模式)— §8 调度一等公民
+    ///
+    /// ## 参数
+    /// - `priority`: 任务优先级(Low/Medium/High/Critical)
+    ///
+    /// ## 示例
+    ///
+    /// ```no_run
+    /// use chimera_mas::prelude::*;
+    /// use event_bus::TaskPriority;
+    /// use nexus_core::{Task, TaskStatus};
+    /// use std::time::Duration;
+    ///
+    /// let task = Task {
+    ///     task_id: "t-1".into(),
+    ///     description: "示例".into(),
+    ///     status: TaskStatus::Pending,
+    ///     dependencies: vec![],
+    /// };
+    /// let agent_task = AgentTask::new(
+    ///     task,
+    ///     TaskComplexity::Medium,
+    ///     1000,
+    ///     Duration::from_secs(60),
+    ///     QualityLevel::Standard,
+    /// )
+    /// .with_priority(TaskPriority::Critical);
+    /// ```
+    pub fn with_priority(mut self, priority: TaskPriority) -> Self {
+        self.priority = priority;
         self
     }
 }
@@ -423,6 +465,95 @@ impl DelegationExecutor {
                     warn!(error = %join_err, "子任务 JoinHandle 异常");
                     return Err(MasError::DelegationFailed {
                         reason: format!("子任务 spawn 异常: {join_err}"),
+                    });
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// 批量执行委托 — 切块后的子任务批量并行执行(Task 16 §16.9)
+    ///
+    /// 与 `execute_delegation` 的语义区别:
+    /// - `execute_delegation`: 通用委托执行(子任务未切块,来自 RootOrchestrator::delegate)
+    /// - `execute_batch_delegation`: 接收 `TaskChunker::chunk` 切块后的 chunks,
+    ///   agent_id 后缀 `::batch::` 标识批量切块路径,便于审计追溯
+    ///
+    /// # 设计约束
+    ///
+    /// - **保留 `execute_delegation` 语义不变**(非破坏性扩展)
+    /// - **复用 `execute_single_task`**(零代码重复,与 `BatchExecutor::execute_batch`
+    ///   代码相似但解耦,后者独立实现以支持 `metadata.source` 差异化)
+    /// - **零孤儿包装**: `tokio::time::timeout` + `FuturesUnordered`(§6.1 + §4.1)
+    /// - **Critical 事件走 mpsc**: `AgentTaskFailed` 经 `publish_critical`(§6.2 红线)
+    ///
+    /// # 参数
+    ///
+    /// - `parent_id`: 委托方 Agent ID
+    /// - `chunks`: `TaskChunker::chunk` 产生的切块子任务列表
+    ///
+    /// # 返回
+    ///
+    /// - `Ok(Vec<TaskResult>)`: 各块执行结果(成功/失败均包含,超时转为失败)
+    /// - `Err(MasError::DelegationFailed)`: 委托执行框架错误(spawn JoinError)
+    ///
+    /// # 示例
+    ///
+    /// ```no_run
+    /// use chimera_mas::prelude::*;
+    /// use event_bus::EventBus;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example(parent_id: &str, chunks: Vec<AgentTask>) -> chimera_mas::Result<Vec<TaskResult>> {
+    /// let executor = DelegationExecutor::new(EventBus::new(), Duration::from_secs(60));
+    /// executor.execute_batch_delegation(parent_id, chunks).await
+    /// # }
+    /// ```
+    pub async fn execute_batch_delegation(
+        &self,
+        parent_id: &str,
+        chunks: Vec<AgentTask>,
+    ) -> Result<Vec<TaskResult>> {
+        // 空切块列表直接返回(避免无意义的 spawn)
+        if chunks.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 复用 execute_delegation 的 FuturesUnordered + tokio::time::timeout 模式
+        // WHY 不依赖 BatchExecutor: DelegationExecutor 自包含,避免引入额外耦合;
+        // BatchExecutor 提供独立的批量执行能力(事件 source 不同),两者解耦。
+        let mut futures: FuturesUnordered<tokio::task::JoinHandle<TaskResult>> =
+            FuturesUnordered::new();
+
+        for task in chunks {
+            let runner = Arc::clone(&self.task_runner);
+            let bus = self.event_bus.clone();
+            let timeout = effective_timeout(&task, self.default_timeout);
+            // WHY agent_id 后缀 ::batch::: 与 execute_delegation 的 ::sub:: 区分,
+            // 便于审计追溯区分批量切块与普通委托
+            let agent_id = format!("{parent_id}::batch::{}", task.inner.task_id);
+            let parent_id_owned = parent_id.to_string();
+
+            let handle = tokio::spawn(execute_single_task(
+                task,
+                runner,
+                bus,
+                timeout,
+                agent_id,
+                parent_id_owned,
+            ));
+            futures.push(handle);
+        }
+
+        let mut results = Vec::with_capacity(futures.len());
+        while let Some(join_result) = futures.next().await {
+            match join_result {
+                Ok(task_result) => results.push(task_result),
+                Err(join_err) => {
+                    warn!(error = %join_err, "批量委托子任务 JoinHandle 异常");
+                    return Err(MasError::DelegationFailed {
+                        reason: format!("批量委托 spawn 异常: {join_err}"),
                     });
                 }
             }

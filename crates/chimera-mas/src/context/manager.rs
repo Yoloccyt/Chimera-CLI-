@@ -37,6 +37,7 @@ use osa_coordinator::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::context::budget_model::{ContextTier, SPARSE_FACTOR};
 use crate::error::{MasError, Result};
 
 // ============================================================
@@ -178,6 +179,30 @@ impl fmt::Debug for AgentContext {
 }
 
 impl AgentContext {
+    /// 标准上下文窗口大小(1M Token 可寻址)— ADR-026 决策 7 / Task 15 §15.3
+    ///
+    /// 1M Token = `ContextTier::L3.context_window()` = 1_048_576。
+    /// 通过 HCW + OSA 稀疏化,实际加载仅 `STANDARD_EFFECTIVE_CAPACITY`(128K)。
+    ///
+    /// WHY 关联常量而非字段:1M 是 ADR-026 决策 7 的固定标准,
+    /// 不随实例变化,用 const 表达"不变性"。添加字段会破坏 `new()` 签名
+    /// (Part I 公共签名保护,§3.3.1 第 5 条向后兼容)。
+    pub const STANDARD_CONTEXT_WINDOW: usize = ContextTier::L3.context_window();
+
+    /// 标准有效容量(128K Token,稀疏后实际加载)— ADR-026 决策 7 / Task 15 §15.3
+    ///
+    /// 128K Token = `ContextTier::L3.effective_capacity()` = 131_072。
+    /// HCW 模式下 1M 上下文经 8× 稀疏压缩,实际驻留 ≤ 128K。
+    ///
+    /// WHY 关联常量:与 `STANDARD_CONTEXT_WINDOW` 对应,显式声明热工作集上限。
+    pub const STANDARD_EFFECTIVE_CAPACITY: usize = ContextTier::L3.effective_capacity();
+
+    /// 稀疏因子(8×)— ADR-026 决策 7
+    ///
+    /// 1M / 128K = 8,L3 层级通过 8× 稀疏压缩实现 1M 可寻址。
+    /// 复用 `budget_model::SPARSE_FACTOR`,避免重复定义(§3.3.1 第 9 条)。
+    pub const SPARSE_FACTOR: u32 = SPARSE_FACTOR;
+
     /// 创建新的 Agent 上下文
     ///
     /// ## 参数

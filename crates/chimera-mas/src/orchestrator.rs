@@ -32,6 +32,8 @@ use crate::agent::factory::AgentFactory;
 use crate::agent::meta::AgentType;
 use crate::delegation::{AgentTask, TaskComplexity};
 use crate::error::{MasError, Result};
+use crate::quadrant::QuadrantPlan;
+use crate::stability::{StabilityGuard, TerminalState};
 use chrono::{DateTime, Utc};
 use event_bus::{EventBus, EventTopic, NexusEvent};
 use serde::{Deserialize, Serialize};
@@ -163,6 +165,12 @@ pub struct RootOrchestrator {
     event_bus: EventBus,
     /// 心跳注册表(monitor 后台任务写入,Arc<Mutex> 跨任务共享)
     heartbeats: Arc<Mutex<HashMap<String, HeartbeatInfo>>>,
+    /// 稳定性守护器(零孤儿终态保证 + 故障隔离,Task 19 §19.10)
+    ///
+    /// WHY Arc 包装:monitor() 后台任务需要共享 StabilityGuard,
+    /// 后台任务在 spawn 时 Arc::clone,处理 AgentTaskCompleted/Failed 时
+    /// 调用 record_terminal() 注册终态,调用 ensure_terminal_state() 校验。
+    stability_guard: Arc<StabilityGuard>,
 }
 
 impl RootOrchestrator {
@@ -190,6 +198,7 @@ impl RootOrchestrator {
             factory,
             event_bus,
             heartbeats: Arc::new(Mutex::new(HashMap::new())),
+            stability_guard: Arc::new(StabilityGuard::new()),
         }
     }
 
@@ -206,6 +215,34 @@ impl RootOrchestrator {
     /// 返回 Agent 工厂引用(供外部直接创建 Agent)
     pub fn factory(&self) -> &AgentFactory {
         &self.factory
+    }
+
+    /// 返回稳定性守护器引用(供外部校验零孤儿终态 / 故障隔离,Task 19 §19.10)
+    ///
+    /// ## 使用场景
+    ///
+    /// - 外部调用方主动校验任务终态:`orchestrator.stability_guard().ensure_terminal_state(task_id)`
+    /// - 查询隔离子树:`orchestrator.stability_guard().is_isolated(subtree_id)`
+    /// - 注册终态(通常由 monitor 后台任务自动处理,外部一般不需要手动调用)
+    pub fn stability_guard(&self) -> &StabilityGuard {
+        &self.stability_guard
+    }
+
+    /// 校验任务终态已注册(零孤儿校验,§6.1 红线 + Task 19 §19.10)
+    ///
+    /// ## 参数
+    /// - `task_id`: 任务 ID
+    ///
+    /// ## 返回
+    /// - `Ok(())`: 任务终态已注册(Completed 或 Failed)
+    /// - `Err(MasError::Internal)`: 任务未注册终态(孤儿任务)
+    ///
+    /// ## 使用场景
+    ///
+    /// - Quest 收尾时校验所有子任务终态已注册
+    /// - 测试中验证零孤儿不变量
+    pub fn check_terminal_state(&self, task_id: &str) -> Result<()> {
+        self.stability_guard.ensure_terminal_state(task_id)
     }
 
     /// 委托任务 — 根据 `task.complexity` 创建子 Agent 并返回句柄列表
@@ -273,6 +310,76 @@ impl RootOrchestrator {
         Ok(handles)
     }
 
+    /// 象限感知的孙层编排 (§3.3 / §5.4 / ADR-027 决策 1-3)
+    ///
+    /// 由子代理专家(SubAgent, depth 2)调用, 按任务复杂度激活四象限中的
+    /// `≤ 4` 个, 为每个激活象限创建一个 `GrandAgent`(depth 3), 象限经
+    /// `task_scope` 尾缀 `#Q1..#Q4` 编码, 强制 INV-3(扇出≤4) 与 INV-4(象限唯一)。
+    ///
+    /// ## 与 `delegate()` 的区别
+    ///
+    /// `delegate()` 按 `sub_agent_count` 创建同质子 Agent(主层/子层, 扇出无象限约束);
+    /// 本方法在**孙层**按四象限稳定分工创建孙代理, 每个归属唯一象限, 扇出
+    /// 恒 `≤ MAX_QUADRANT_FANOUT`。两者职责解耦, `delegate()` 语义保持不变。
+    ///
+    /// ## 参数
+    /// - `sub_agent_id`: 发起编排的子代理专家 ID(作为孙代理 parent_id)
+    /// - `task`: 待分工任务; 其 `complexity` 决定激活哪些象限(§3.4),
+    ///   `delegation_depth` 为发起子代理的深度
+    ///
+    /// ## 返回
+    /// - `Ok(Vec<AgentHandle>)`: 每个激活象限一个 `GrandAgent` 句柄(≤4),
+    ///   句柄顺序遵循 Q1→Q2→Q3→Q4 稳定序
+    /// - `Err(MasError::MaxDepthExceeded)`: `delegation_depth >= max_depth`(与 `delegate()` 一致)
+    /// - `Err(MasError::AgentAlreadyExists)`: 同一 sub_agent_id 重复编排同象限
+    ///
+    /// ## 深度语义
+    ///
+    /// 与 `delegate()` 一致: 校验发起方深度 `check_depth(task.delegation_depth)`,
+    /// 孙代理 `depth = task.delegation_depth + 1`。
+    pub fn delegate_quadrants(
+        &self,
+        sub_agent_id: &str,
+        task: &AgentTask,
+    ) -> Result<Vec<AgentHandle>> {
+        // 1. 深度校验(与 delegate 同语义: 发起方深度须 < max_depth)
+        self.check_depth(task.delegation_depth)?;
+        let grand_depth = task.delegation_depth + 1;
+
+        // 2. 按复杂度构造象限分工计划(自动满足 INV-3/INV-4)
+        let plan = QuadrantPlan::from_complexity(task.inner.task_id.clone(), task.complexity);
+
+        // 3. 逐象限创建 GrandAgent, 象限编码进 task_scope
+        let mut handles = Vec::with_capacity(plan.fanout());
+        for (quadrant, scoped_scope) in plan.scoped_assignments() {
+            let agent_type = AgentType::GrandAgent {
+                parent_id: sub_agent_id.to_string(),
+                task_scope: scoped_scope,
+            };
+            // WHY agent_id 含象限标签: 保证同一子代理下各象限孙代理 ID 唯一(天然满足 INV-4),
+            // 且可从 agent_id 反推所属象限(便于调试与审计)。
+            let agent_id = format!("{sub_agent_id}::{}", quadrant.tag().trim_start_matches('#'));
+            let _agent = self.factory.create_agent(agent_type.clone(), &agent_id)?;
+            handles.push(AgentHandle {
+                agent_id,
+                agent_type,
+                depth: grand_depth,
+                current_task_id: Some(task.inner.task_id.clone()),
+            });
+        }
+
+        debug!(
+            sub_agent_id = %sub_agent_id,
+            task_id = %task.inner.task_id,
+            complexity = ?task.complexity,
+            quadrant_count = plan.fanout(),
+            grand_depth = grand_depth,
+            "delegate_quadrants 成功创建象限孙代理"
+        );
+
+        Ok(handles)
+    }
+
     /// 监控 Agent 心跳 — 订阅 `EventTopic::Agent` 并收集 `AgentHeartbeat` 事件
     ///
     /// ## 实现细节(§4.4 反模式 3)
@@ -285,8 +392,19 @@ impl RootOrchestrator {
     ///
     /// 后台任务从 `FilteredSubscriber::recv()` 接收事件:
     /// - `NexusEvent::AgentHeartbeat`: 提取字段,更新 `heartbeats` 注册表(同 agent_id 覆盖)
-    /// - 其他 Agent 主题事件(如 AgentTaskDelegated/Completed): 忽略,不记入注册表
+    /// - `NexusEvent::AgentTaskCompleted`: 注册终态 Completed 到 `stability_guard`,
+    ///   并调用 `ensure_terminal_state()` 校验(零孤儿,Task 19 §19.10)
+    /// - `NexusEvent::AgentTaskFailed`: 注册终态 Failed 到 `stability_guard`,
+    ///   并调用 `ensure_terminal_state()` 校验(零孤儿,Task 19 §19.10)
+    /// - 其他 Agent 主题事件(如 AgentTaskDelegated): 忽略,不记入注册表
     /// - 通道错误(ChannelClosed/SlowConsumerDropped): 记录 warn 日志,终止收集
+    ///
+    /// ## StabilityGuard 集成(Task 19 §19.10)
+    ///
+    /// 后台任务在处理 AgentTaskCompleted/Failed 时:
+    /// 1. 调用 `record_terminal(task_id, state)` 注册终态
+    /// 2. 调用 `ensure_terminal_state(task_id)` 校验注册成功(应返回 Ok)
+    /// 3. 校验失败(不应发生)记 warn 日志,标记孤儿任务
     ///
     /// ## 返回
     /// - `Ok(JoinHandle)`: 后台任务已 spawn,调用方可 abort 或 await
@@ -297,6 +415,10 @@ impl RootOrchestrator {
             .event_bus
             .subscribe_filtered(HashSet::from([EventTopic::Agent]));
         let heartbeats = self.heartbeats.clone();
+        // WHY Arc::clone 而非 clone:StabilityGuard 内部 DashMap 已并发安全,
+        // Arc::clone 共享同一实例,后台任务注册终态后主线程可立即通过
+        // `stability_guard()` 访问器查询(零拷贝,无锁一致)
+        let stability_guard = self.stability_guard.clone();
 
         let handle = tokio::spawn(async move {
             loop {
@@ -324,9 +446,30 @@ impl RootOrchestrator {
                         guard.insert(from.clone(), info);
                         debug!(agent_id = %from, "monitor 收到 AgentHeartbeat");
                     }
+                    Ok(NexusEvent::AgentTaskCompleted { task_id, .. }) => {
+                        // Task 19 §19.10: 零孤儿终态注册 + 校验
+                        stability_guard.record_terminal(task_id.clone(), TerminalState::Completed);
+                        // 校验注册成功(应返回 Ok,失败则记 warn 标记孤儿)
+                        if let Err(e) = stability_guard.ensure_terminal_state(&task_id) {
+                            warn!(task_id = %task_id, error = %e, "零孤儿校验失败:AgentTaskCompleted 注册后仍报孤儿(不应发生)");
+                        }
+                        debug!(task_id = %task_id, "monitor 收到 AgentTaskCompleted,已注册终态");
+                    }
+                    Ok(NexusEvent::AgentTaskFailed { task_id, .. }) => {
+                        // Task 19 §19.10: 零孤儿终态注册 + 校验
+                        // AgentTaskFailed 是 Critical 级事件(§6.2 红线,走 mpsc),
+                        // 但本订阅是 broadcast 旁路,仅用于注册终态,
+                        // 不影响 Critical 事件的 mpsc 投递
+                        stability_guard.record_terminal(task_id.clone(), TerminalState::Failed);
+                        if let Err(e) = stability_guard.ensure_terminal_state(&task_id) {
+                            warn!(task_id = %task_id, error = %e, "零孤儿校验失败:AgentTaskFailed 注册后仍报孤儿(不应发生)");
+                        }
+                        debug!(task_id = %task_id, "monitor 收到 AgentTaskFailed,已注册终态");
+                    }
                     Ok(_) => {
-                        // 非 AgentHeartbeat 的 Agent 主题事件(AgentTaskDelegated 等),
-                        // FilteredSubscriber 已过滤非 Agent 主题,此处仅跳过非心跳变体
+                        // 非 AgentHeartbeat/AgentTaskCompleted/AgentTaskFailed 的 Agent 主题事件
+                        // (如 AgentTaskDelegated/AgentConsultRequested 等),
+                        // FilteredSubscriber 已过滤非 Agent 主题,此处仅跳过非终态变体
                         continue;
                     }
                     Err(e) => {

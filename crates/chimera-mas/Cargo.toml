@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "CHIMERA Multi-Agent Synergy subsystem — hierarchical recursive delegation, isolated context, expert consultation"
+description = "CHIMERA Multi-Agent Synergy (MAS) subsystem with Part II closure capabilities (context budgeting, task chunking, three-tier archiving, knowledge synergy, stability closure, PDCA benchmarks, invariants)"
 
 [dependencies]
 # === workspace 共享依赖 ===
@@ -43,6 +43,12 @@ nexus-core = { path = "../nexus-core" }
 event-bus = { path = "../event-bus" }
 # L2 Memory:AgentContext 包装 HierarchicalWindow,1M 上下文经 HCW 稀疏化(ADR-026 决策 7)
 hcw-window = { path = "../hcw-window" }
+# L2 Memory:四级神经形态记忆 L0-L3,Agent 记忆归档复用(§17.1,Task 17)
+mlc-engine = { path = "../mlc-engine" }
+# L3 Storage:Hot/Warm/Cold/Ice 冷热分层,三级归档存储层(§17.2,Task 17)
+cmt-tiering = { path = "../cmt-tiering" }
+# L3 Storage:推测缓存,归档缓存复用(§17.1,Task 17)
+scc-cache = { path = "../scc-cache" }
 # L6 Router:OmniSparseCoordinator::compute_masks() 计算稀疏掩码(ADR-026 决策 7)
 osa-coordinator = { path = "../osa-coordinator" }
 # L9 Quest(同层):复用 Quest DAG + Checkpoint(ADR-026 决策 5,§2.2 同层互引允许)
@@ -51,6 +57,30 @@ quest-engine = { path = "../quest-engine" }
 gqep-executor = { path = "../gqep-executor" }
 # L4 Security:委托执行通过 qeep-protocol 实现量子纠缠零孤儿(§6.1 红线)
 qeep-protocol = { path = "../qeep-protocol" }
+# L8 Parliament:StabilityGuard 故障隔离复用 Parliament RoleRegistry(Task 19 §19.8)
+# WHY 用 path 而非 workspace=true:parliament 仅在根 [dev-dependencies] 注册,
+# 未进入 [workspace.dependencies],沿用现有内部 crate path 引用约定(§4.1)
+parliament = { path = "../parliament" }
+# L8 Parliament:StabilityGuard 降级链协同 ACB 治理器(Task 19 §19.9)
+acb-governor = { path = "../acb-governor" }
+# L8 Parliament:StabilityGuard 降级链协同 DECB 治理器(Task 19 §19.9)
+decb-governor = { path = "../decb-governor" }
+# L9 Quest(同层):StabilityGuard 与 efficiency-monitor 协同上报 Critical 事件(Task 19 §19.10)
+efficiency-monitor = { path = "../efficiency-monitor" }
+# L1 Core:ExpertConsultant 复用 model-router 选择专家旗舰模型(Task 18 §18.8)
+# WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定(§4.1,
+# 与 nexus-core/event-bus/hcw-window 等所有内部 crate 一致)
+model-router = { path = "../model-router" }
+# L6 Router:ExpertConsultant 经 faae-router Function-as-Expert 语义路由(Task 18 §18.8)
+# WHY 用 path 而非 workspace=true:faae-router 未进入 [workspace.dependencies],
+# 沿用现有内部 crate path 引用约定(§4.1,与 parliament/acb-governor 一致)
+faae-router = { path = "../faae-router" }
+# L5 Knowledge:WikiRetriever 复用 repo-wiki FTS5 全文检索 + 内存 KNN(Task 18 §18.10)
+# WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定
+repo-wiki = { path = "../repo-wiki" }
+# regex:MutualInquirer::create_safe_summary 正则脱敏(Task 18 §18.9,§5.5 ContextIsolation)
+# WHY 直接声明版本:workspace.dependencies 未收录 regex
+regex = "1"
 
 [dev-dependencies]
 # tokio 测试支持(完整 features + test-util 用于 pause/freezing 时间)

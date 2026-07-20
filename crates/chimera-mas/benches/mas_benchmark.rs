@@ -1,14 +1,24 @@
 //! CHIMERA-MAS 多 Agent 协同子系统性能基准测试
 //!
-//! 对应任务:Task 16(SubTask 16.1 - 16.5)
+//! 对应任务:Task 16(SubTask 16.1 - 16.5)+ Task 20(SubTask 20.2 - 20.7)
 //! 架构层归属:L9 Quest(chimera-mas 性能验证)
 //!
 //! # 基准场景
+//!
+//! ## Task 16(原有,SubTask 16.1 - 16.4)
 //!
 //! - **SubTask 16.1**:Agent 创建/销毁延迟(5 种 AgentType)
 //! - **SubTask 16.2**:消息路由延迟(NexusEvent::AgentTaskDelegated 发布/订阅)
 //! - **SubTask 16.3**:任务拆分延迟(RootOrchestrator::delegate × 4 种 TaskComplexity)
 //! - **SubTask 16.4**:上下文构建延迟(AgentContext::build_prompt × 4 种 token 规模)
+//!
+//! ## Task 20(新增,SubTask 20.2 - 20.7,§20 PDCA 端到端闭环强化)
+//!
+//! - **SubTask 20.3** `window_select`:HCW 窗口选择器延迟(< 1ms,§3.4.4 验收)
+//! - **SubTask 20.4** `mlc_l2_knn_top10@4096`:MLC L2 KNN Top-10 召回(< 5ms,4096 条目)
+//! - **SubTask 20.5** `wiki_knn@1000` / `wiki_knn@10`:Wiki 向量 KNN(< 10ms / < 1ms)
+//! - **SubTask 20.6** `decay_compute`:CMT 衰减计算(< 1μs,纯数学运算)
+//! - **SubTask 20.7** `50agent_mem_peak`:50 Agent 稳态内存峰值(≤ 130MB,§15.3)
 //!
 //! # 性能可证伪(§3.4.1 第 6 条)
 //!
@@ -32,11 +42,11 @@ use std::time::Duration;
 use chrono::Utc;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::{EventBus, EventMetadata, EventTopic, NexusEvent, TaskPriority};
-use nexus_core::{Task, TaskStatus};
+use nexus_core::{Task, TaskStatus, CLV};
 
 use chimera_mas::{
-    AgentContext, AgentFactory, AgentTask, AgentType, ContextBlock, ContextPriority, QualityLevel,
-    RootOrchestrator, TaskComplexity,
+    AgentContext, AgentFactory, AgentTask, AgentType, ContextBlock, ContextPriority, ContextTier,
+    MemoryBudgetModel, QualityLevel, RootOrchestrator, TaskComplexity,
 };
 
 // ============================================================
@@ -366,6 +376,229 @@ fn bench_context_build_prompt(c: &mut Criterion) {
 }
 
 // ============================================================
+// SubTask 20.3: window_select — HCW 窗口选择器延迟
+// ============================================================
+
+/// `window_select` 基准 — HCW WindowSelector::select(complexity) 延迟
+///
+/// 目标:< 1ms(§3.4.4 验收)。实际为 O(1) 比较,耗时通常 < 1μs。
+///
+/// 测试 4 种复杂度档位(L0/L1/L2/L3):
+/// - 0.1 → L0(4K,Simple)
+/// - 0.3 → L1(32K,Regular)
+/// - 0.6 → L2(128K,Complex)
+/// - 0.8 → L3(1M 等效,UltraComplex)
+fn bench_window_select(c: &mut Criterion) {
+    let mut group = c.benchmark_group("window_select");
+
+    let complexities: [(&str, f32); 4] = [
+        ("l0_simple", 0.1),
+        ("l1_regular", 0.3),
+        ("l2_complex", 0.6),
+        ("l3_ultra_complex", 0.8),
+    ];
+
+    for (name, complexity) in complexities {
+        group.bench_with_input(BenchmarkId::from_parameter(name), &complexity, |b, cx| {
+            b.iter(|| {
+                let tier = hcw_window::WindowSelector::select(*cx);
+                criterion::black_box(tier);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ============================================================
+// SubTask 20.4: mlc_l2_knn_top10@4096 — MLC L2 KNN Top-10 召回
+// ============================================================
+
+/// `mlc_l2_knn_top10@4096` 基准 — 4096 条目 L2 语义记忆 KNN Top-10 召回延迟
+///
+/// 目标:< 5ms(§3.4.4 验收)。
+///
+/// 预填充 4096 个 MemoryEntry(均携带 CLV),然后 recall_by_clv Top-10。
+/// 实测 L2 KNN 为 O(n) 线性扫描 + O(n) Top-K 选择 + O(K log K) 局部排序。
+fn bench_mlc_l2_knn_top10_4096(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mlc_l2_knn_top10_4096");
+    // 4096 条目 KNN 较慢,降低 sample_size 避免 benchmark 超时
+    group.sample_size(20);
+
+    // 预填充 4096 条目(L2 容量上限)
+    let mem = mlc_engine::SemanticMemory::new(4096);
+    let query_clv = CLV::zero();
+    for i in 0..4096u64 {
+        // 每个 CLV 第 i%512 维设为 1.0,其余 0.0,确保不同条目向量不同
+        let mut v = vec![0.0f32; CLV::DIMENSION];
+        v[(i as usize) % CLV::DIMENSION] = 1.0;
+        let clv = CLV::from_vec(v).expect("CLV 创建成功");
+        let entry = mlc_engine::MemoryEntry::new(
+            format!("m-{i}"),
+            format!("content-{i}"),
+            mlc_engine::MemoryTier::L2Semantic,
+        )
+        .with_clv(clv);
+        mem.insert(entry).expect("L2 插入成功");
+    }
+
+    group.bench_function("top10", |b| {
+        b.iter(|| {
+            let results = mem.recall_by_clv(&query_clv, 10).expect("KNN 召回成功");
+            criterion::black_box(results);
+        });
+    });
+
+    group.finish();
+}
+
+// ============================================================
+// SubTask 20.5: wiki_knn@1000 / wiki_knn@10 — Wiki 向量 KNN
+// ============================================================
+
+/// `wiki_knn` 基准 — repo-wiki VectorIndex::search 在不同规模下的 KNN 延迟
+///
+/// 目标:
+/// - `wiki_knn@1000` < 10ms(1000 条目 KNN,内存降级实现性能上限)
+/// - `wiki_knn@10` < 1ms(10 条目 KNN,小规模性能基线)
+///
+/// 预填充 N 个向量(512-dim,与 CLV::DIMENSION 对齐),然后 search Top-K。
+/// VectorIndex 使用 RwLock<HashMap>,search 为 O(n) 遍历。
+fn bench_wiki_knn(c: &mut Criterion) {
+    let mut group = c.benchmark_group("wiki_knn");
+
+    let sizes: [(&str, usize); 2] = [("at_1000", 1000), ("at_10", 10)];
+
+    for (name, size) in sizes {
+        // 1000 规模较大,降低 sample_size
+        group.sample_size(if size >= 1000 { 20 } else { 50 });
+
+        // 预填充向量索引
+        let idx = repo_wiki::VectorIndex::new(CLV::DIMENSION);
+        for i in 0..size {
+            let mut v = vec![0.0f32; CLV::DIMENSION];
+            v[i % CLV::DIMENSION] = 1.0;
+            idx.upsert(&format!("e-{i}"), &v).expect("upsert 成功");
+        }
+        // query 向量:零向量(触发零向量边界,返回 0.0 相似度)
+        let query = vec![0.0f32; CLV::DIMENSION];
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(name),
+            &(idx, query),
+            |b, (idx, query)| {
+                b.iter(|| {
+                    let results = idx.search(query, 10).expect("KNN 检索成功");
+                    criterion::black_box(results);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ============================================================
+// SubTask 20.6: decay_compute — CMT 衰减计算
+// ============================================================
+
+/// `decay_compute` 基准 — CMT DecayCalculator::compute_priority 延迟
+///
+/// 目标:< 1μs(纯数学运算,无 I/O)。
+///
+/// 测试 4 种 Δt 场景(刚访问 / 1h 前 / 24h 前 / 72h 前),
+/// 覆盖正常衰减与触发降级阈值(< 0.1)的边界场景。
+fn bench_decay_compute(c: &mut Criterion) {
+    let mut group = c.benchmark_group("decay_compute");
+    // 衰减计算极快(目标 < 1μs),提高 sample_size 提升测量精度
+    group.sample_size(200);
+
+    let calculator = cmt_tiering::DecayCalculator::new(86_400).expect("DecayCalculator 创建成功");
+    let now = Utc::now();
+
+    // 4 种 Δt 场景
+    let scenarios: [(&str, i64); 4] = [
+        ("delta_0s", 0),
+        ("delta_1h", 3600),
+        ("delta_24h", 86_400),
+        ("delta_72h", 86_400 * 3),
+    ];
+
+    for (name, delta_secs) in scenarios {
+        let entry = cmt_tiering::CapabilityEntry::new(
+            format!("cap-{name}"),
+            format!("content-{name}"),
+            cmt_tiering::Tier::Hot,
+        );
+        // 修改 last_accessed_at 为 delta_secs 秒前
+        let mut entry = entry;
+        entry.last_accessed_at = now - chrono::Duration::seconds(delta_secs);
+        entry.access_count = 10;
+
+        group.bench_with_input(BenchmarkId::from_parameter(name), &entry, |b, entry| {
+            b.iter(|| {
+                let priority = calculator.compute_priority(entry, now);
+                criterion::black_box(priority);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ============================================================
+// SubTask 20.7: 50agent_mem_peak — §15.3 预算模型
+// ============================================================
+
+/// `50agent_mem_peak` 基准 — 50 Agent 稳态内存峰值估算
+///
+/// 目标:≤ 130MB(§15.3 INV-7 全局约束,ADR-026 决策 7)。
+///
+/// 50 Agent 稳态分布(30×L0 + 12×L1 + 5×L2 + 3×L3):
+/// - L0: 4K × 4 bytes × 30 = 480 KB
+/// - L1: 32K × 4 bytes × 12 = 1.5 MB
+/// - L2: 128K × 4 bytes × 5 = 2.5 MB
+/// - L3: 128K × 4 bytes × 3 = 1.5 MB(实际驻留,8× 稀疏后)
+/// - 总计: ≈ 6 MB(远低于 130MB 上限)
+///
+/// 本基准不直接测量内存,而是估算 50 Agent 聚合内存并断言 < 130MB。
+/// 性能基准为计算耗时(< 1ms,纯数学运算)。
+fn bench_50agent_mem_peak(c: &mut Criterion) {
+    let mut group = c.benchmark_group("50agent_mem_peak");
+    group.sample_size(100);
+
+    // 50 Agent 稳态分布(30×L0 + 12×L1 + 5×L2 + 3×L3)
+    let distribution = [
+        (ContextTier::L0, 30u32),
+        (ContextTier::L1, 12u32),
+        (ContextTier::L2, 5u32),
+        (ContextTier::L3, 3u32),
+    ];
+
+    group.bench_function("aggregate", |b| {
+        b.iter(|| {
+            let model = MemoryBudgetModel::default_model();
+            let mut total_bytes: usize = 0;
+            for (tier, count) in distribution {
+                let resident = model.estimate_resident(tier);
+                // 不溢出:usize 乘 u32(转 usize),内存估算场景不会超 usize 上界
+                total_bytes = total_bytes.saturating_add(resident.saturating_mul(count as usize));
+            }
+            let total_mb = total_bytes / (1024 * 1024);
+            // 断言 50 Agent 稳态分布 ≤ 130MB(§15.3 红线)
+            // 用 black_box 防止编译器优化掉断言
+            assert!(
+                total_mb <= 130,
+                "50 Agent memory peak {total_mb}MB exceeds 130MB budget"
+            );
+            criterion::black_box(total_mb);
+        });
+    });
+
+    group.finish();
+}
+
+// ============================================================
 // criterion 注册
 // ============================================================
 
@@ -380,6 +613,11 @@ criterion_group! {
         bench_message_routing,
         bench_task_delegation,
         bench_context_build_prompt,
+        bench_window_select,
+        bench_mlc_l2_knn_top10_4096,
+        bench_wiki_knn,
+        bench_decay_compute,
+        bench_50agent_mem_peak,
 }
 
 criterion_main!(benches);

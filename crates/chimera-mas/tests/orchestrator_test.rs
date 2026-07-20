@@ -525,3 +525,102 @@ async fn test_monitor_multiple_heartbeats_overwrite() {
 
     handle.abort();
 }
+
+// ============================================================
+// ADR-027: delegate_quadrants 象限感知孙层编排测试 (§3.3 / INV-3 / INV-4)
+// ============================================================
+
+#[test]
+fn test_delegate_quadrants_simple_activates_one() {
+    let orch = RootOrchestrator::new(EventBus::new());
+    // delegation_depth=2(子代理) → 孙代理 depth=3
+    let task = make_agent_task_with_depth("q-simple", TaskComplexity::Simple, 2);
+    let handles = orch
+        .delegate_quadrants("sub-simple", &task)
+        .expect("Simple 象限编排应成功");
+    assert_eq!(handles.len(), 1, "Simple 仅激活 Q1");
+    assert_eq!(handles[0].depth, 3, "delegation_depth=2 → 孙代理 depth=3");
+}
+
+#[test]
+fn test_delegate_quadrants_very_complex_activates_four() {
+    let orch = RootOrchestrator::new(EventBus::new());
+    let task = make_agent_task_with_depth("q-vc", TaskComplexity::VeryComplex, 2);
+    let handles = orch
+        .delegate_quadrants("sub-vc", &task)
+        .expect("VeryComplex 象限编排应成功");
+    assert_eq!(handles.len(), 4, "VeryComplex 激活全部四象限");
+}
+
+#[test]
+fn test_delegate_quadrants_never_exceeds_four() {
+    // INV-3: 任何复杂度下孙层扇出 ≤ 4
+    for (id, complexity) in [
+        ("s", TaskComplexity::Simple),
+        ("m", TaskComplexity::Medium),
+        ("c", TaskComplexity::Complex),
+        ("v", TaskComplexity::VeryComplex),
+    ] {
+        let orch = RootOrchestrator::new(EventBus::new());
+        let task = make_agent_task_with_depth(&format!("q-{id}"), complexity, 2);
+        let handles = orch
+            .delegate_quadrants(&format!("sub-{id}"), &task)
+            .expect("编排应成功");
+        assert!(
+            handles.len() <= 4,
+            "INV-3: 孙层扇出 ≤ 4，实际 = {}",
+            handles.len()
+        );
+    }
+}
+
+#[test]
+fn test_delegate_quadrants_encodes_quadrant_in_scope() {
+    let orch = RootOrchestrator::new(EventBus::new());
+    let task = make_agent_task_with_depth("q-enc", TaskComplexity::VeryComplex, 2);
+    let handles = orch
+        .delegate_quadrants("sub-enc", &task)
+        .expect("编排应成功");
+    // 句柄顺序 Q1→Q2→Q3→Q4, task_scope 尾缀应依次编码
+    let tags = ["#Q1", "#Q2", "#Q3", "#Q4"];
+    for (handle, tag) in handles.iter().zip(tags.iter()) {
+        match &handle.agent_type {
+            AgentType::GrandAgent {
+                task_scope,
+                parent_id,
+            } => {
+                assert!(
+                    task_scope.ends_with(tag),
+                    "task_scope {task_scope} 应以 {tag} 结尾"
+                );
+                assert_eq!(parent_id, "sub-enc", "parent_id 应为发起子代理");
+            }
+            other => panic!("应为 GrandAgent, 实际 {other:?}"),
+        }
+        assert_eq!(handle.depth, 3, "孙代理 depth 应为 3");
+    }
+}
+
+#[test]
+fn test_delegate_quadrants_respects_max_depth() {
+    let orch = RootOrchestrator::new(EventBus::new());
+    // delegation_depth=5 >= max_depth=5 → MaxDepthExceeded(与 delegate 一致)
+    let task = make_agent_task_with_depth("q-deep", TaskComplexity::Simple, 5);
+    let result = orch.delegate_quadrants("sub-deep", &task);
+    assert!(
+        matches!(result, Err(MasError::MaxDepthExceeded { .. })),
+        "发起方深度 5 应拒绝, 实际 = {result:?}"
+    );
+}
+
+#[test]
+fn test_delegate_quadrants_unique_ids_per_quadrant() {
+    let orch = RootOrchestrator::new(EventBus::new());
+    let task = make_agent_task_with_depth("q-ids", TaskComplexity::Complex, 2);
+    let handles = orch
+        .delegate_quadrants("sub-ids", &task)
+        .expect("编排应成功");
+    let ids: std::collections::HashSet<&str> =
+        handles.iter().map(|h| h.agent_id.as_str()).collect();
+    assert_eq!(ids.len(), handles.len(), "各象限孙代理 ID 应唯一(INV-4)");
+}
