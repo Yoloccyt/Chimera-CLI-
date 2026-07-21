@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.1-omega (2026-07-21)
+
+**版本代号**: NEXUS-OMEGA (Release Pipeline Remediation)
+**架构基线**: v2.3.0-omega → v2.3.1-omega(patch,发布流程补救)
+**关联 Spec**: [v2-3-0-omega-release-finalization](.trae/specs/v2-3-0-omega-release-finalization/spec.md)
+
+### 发布流程补救
+
+- **Commit message 编码修复**: v2.3.0-omega tag 因 GitHub 仓库规则被锁定且包含编码损坏的 commit message(PowerShell 沙箱 GBK 编码问题),无法更新或强制推送
+- **新 tag 触发 release workflow**: 创建 v2.3.1-omega tag 触发 release.yml 工作流,确保 5 平台构建 + Docker 镜像 + GitHub Release 正常生成
+- **版本号 SemVer patch 递增**: 代码内容与 v2.3.0-omega 完全一致,仅包含版本号递增与 CHANGELOG 同步
+- **完整性验证**: 2877 tests passed, clippy 零警告, fmt 一致, cargo audit 零漏洞, release binary 3.44MB
+
 ## v2.3.0-omega (2026-07-20)
 
 **版本代号**: NEXUS-OMEGA (Comprehensive Audit · TUI Finalization · Governance)

@@ -28,11 +28,11 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# v2.2.0-omega: CHIMERA-MAS Part II 闭环能力补齐(ADR-028)
-# SemVer minor 升级: append-only, 仅新增 §15-§21 七项能力(上下文预算/分块调度/三级归档/
-# 知识协同/稳定闭环/PDCA 基准/INV-7/INV-8 不变量),不改现有公共签名(Part I 保持兼容)
-# 承接 v2.1.0-omega 四象限稳定分工,不改 Quadrant/PriorityScheduler/ExpertRegistry/AgentTask.priority
-version = "2.3.0-omega"
+# v2.3.1-omega: 发布流程补救 + commit message 修复
+# SemVer patch 升级: v2.3.0-omega tag 已被 GitHub 仓库规则锁定且包含编码损坏的 commit message,
+# 无法更新。本次发布仅包含版本号递增与 CHANGELOG 同步,代码内容与 v2.3.0-omega 完全一致。
+# 修复 v2.3.0-omega 乱码问题: 通过新 tag v2.3.1-omega 触发 release workflow。
+version = "2.3.1-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"

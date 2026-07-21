@@ -1,9 +1,10 @@
 # v2.3.0-omega 发布就绪与最终验证 Spec
 
 > **change-id**: v2-3-0-omega-release-finalization
-> **版本**: v2.3.0-omega
+> **版本**: v2.3.0-omega → v2.3.1-omega (patch 补救)
 > **日期**: 2026-07-20
 > **状态**: Active
+> **备注**: v2.3.0-omega tag 因 commit message 编码损坏 + GitHub 仓库规则锁定,无法修复;通过 v2.3.1-omega patch 发布完成补救
 
 ## Why
 
