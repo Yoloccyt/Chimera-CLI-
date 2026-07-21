@@ -62,6 +62,9 @@ fn fps_within_display_max() {
 /// 验证状态栏包含 FPS 文本
 #[test]
 fn status_bar_contains_fps_text() {
+    // i18n:状态栏标签随 locale 切换(默认中文为"帧率",CJK 双宽不利断言);
+    // 固定英文 locale 以稳定断言 ASCII "FPS" 标签。本二进制内其余测试不断言 chrome,不受影响。
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = TuiApp::new(TuiConfig::default()).unwrap();
 
     // 渲染几帧让 FPS 有值
@@ -75,4 +78,5 @@ fn status_bar_contains_fps_text() {
         content.contains("FPS") || content.contains("fps"),
         "Status bar should contain FPS text"
     );
+    chimera_tui::set_locale(chimera_tui::Locale::Zh); // 复位默认中文
 }

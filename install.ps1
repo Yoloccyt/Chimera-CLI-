@@ -184,6 +184,30 @@ function Set-Environment {
         Write-WarnMsg "$toolchainCargo 已在 PATH 中"
     }
 
+    # ------------------ 工具链 channel 选择(GNU) ------------------
+    # WHY: 本项目必须用 GNU 工具链(stable-x86_64-pc-windows-gnu)——.cargo/config.toml 的
+    #      [target.x86_64-pc-windows-gnu] linker="gcc" 仅对 GNU 目标生效。但多数 Windows 机器
+    #      rustup 的"默认宿主"是 MSVC(见 rustup show → Default host),仅靠系统默认会选到 MSVC
+    #      目标导致链接失败。故在项目本地 RUSTUP_HOME 内显式把默认工具链设为 GNU。
+    # WHY 不用 rust-toolchain.toml: 它是全局单值、按"默认宿主"展开——在 MSVC 宿主上 channel="stable"
+    #      会解析成 MSVC;而写死 GNU 三元组又会让 release.yml 的 Linux/macOS runner 无法安装该
+    #      Windows 宿主工具链而失败。项目本地 rustup default 既确定,又不污染跨平台 CI。
+    $gnuToolchain = 'stable-x86_64-pc-windows-gnu'
+    if (Get-Command rustup -ErrorAction SilentlyContinue) {
+        if ((& rustup toolchain list 2>$null) -notmatch [regex]::Escape($gnuToolchain)) {
+            Write-WarnMsg "未检测到 $gnuToolchain,尝试安装(需网络)..."
+            & rustup toolchain install $gnuToolchain 2>&1 | Out-Null
+        }
+        & rustup default $gnuToolchain 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "已将默认工具链设为 $gnuToolchain"
+        } else {
+            Write-WarnMsg "设置默认工具链失败,请手动执行: rustup default $gnuToolchain"
+        }
+    } else {
+        Write-WarnMsg "未找到 rustup,跳过 channel 设置;装好 rustup 后请执行: rustup default $gnuToolchain"
+    }
+
     Write-Host ""
     Write-Host "用户级环境变量已持久化,当前会话也已同步。" -ForegroundColor Cyan
     Write-Host "如仍无法识别 cargo/rustup,请重新打开 PowerShell 终端。" -ForegroundColor Cyan

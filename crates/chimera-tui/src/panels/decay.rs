@@ -114,7 +114,7 @@ impl Panel for DecayPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Decay ")
+        Line::from(crate::t!("panel.border.decay"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
@@ -171,8 +171,11 @@ mod tests {
     #[test]
     fn test_decay_panel_title() {
         let panel = DecayPanel::new();
-        let title = panel.title();
-        assert_eq!(title.to_string(), " Decay ");
+        // i18n:title() 已本地化;固定英文捕获后复位,断言 ASCII 标题。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
+        let title = panel.title().to_string();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+        assert_eq!(title, " Decay ");
     }
 
     #[test]

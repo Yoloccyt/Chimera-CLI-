@@ -102,7 +102,7 @@ impl Panel for BudgetPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Budget ")
+        Line::from(crate::t!("panel.border.budget"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {

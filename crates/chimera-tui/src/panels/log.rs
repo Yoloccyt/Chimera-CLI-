@@ -108,7 +108,7 @@ impl Panel for LogPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" System Log ")
+        Line::from(crate::t!("panel.border.log"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {

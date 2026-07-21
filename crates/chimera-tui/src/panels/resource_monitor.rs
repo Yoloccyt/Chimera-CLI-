@@ -447,7 +447,7 @@ impl Panel for ResourceMonitorPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Resources ").style(
+        Line::from(crate::t!("panel.border.resources")).style(
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
@@ -521,8 +521,11 @@ mod tests {
     #[test]
     fn test_resource_monitor_panel_title() {
         let panel = ResourceMonitorPanel::new();
-        let title = panel.title();
-        assert!(title.to_string().contains("Resources"));
+        // i18n:title() 已本地化;固定英文捕获后复位,断言 ASCII 标题。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
+        let title = panel.title().to_string();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+        assert!(title.contains("Resources"));
     }
 
     #[test]

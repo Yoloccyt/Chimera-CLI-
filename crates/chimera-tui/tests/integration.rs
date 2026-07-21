@@ -108,8 +108,12 @@ fn full_snapshot(
 #[test]
 fn test_tui_layout_rendering() {
     // WHY TestBackend:验证 render() 产出非空内容,包含核心 UI 元素
+    // i18n:状态栏标签随 locale 切换;固定英文捕获后立即复位,
+    // 使后续断言基于已捕获的英文快照(ASCII "Panel:" 可靠),且 panic 也不泄露 locale。
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
     let content = render_to_string(&mut app, 80, 24);
+    chimera_tui::set_locale(chimera_tui::Locale::Zh); // 立即复位默认中文(content 已捕获)
 
     // 验证:渲染内容包含面板标签(顶部 Tabs)
     assert!(
@@ -145,6 +149,9 @@ fn test_tui_layout_rendering_all_panels() {
         PanelId::Help,
     ];
 
+    // i18n:面板边框标题已本地化;固定英文以稳定断言 ASCII 标题
+    // (PanelId::title 为英文参考,面板在英文下亦为 ASCII,contains 可靠)。
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     for panel in panels {
         let mut app = make_app();
         app.switch_panel_to(panel);
@@ -158,6 +165,7 @@ fn test_tui_layout_rendering_all_panels() {
             panel.title().trim()
         );
     }
+    chimera_tui::set_locale(chimera_tui::Locale::Zh); // 复位默认中文
 }
 
 #[test]

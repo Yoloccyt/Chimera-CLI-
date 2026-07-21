@@ -266,7 +266,7 @@ impl Panel for ChtcPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" CHTC Adapters ")
+        Line::from(crate::t!("panel.border.chtc"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
@@ -379,8 +379,11 @@ mod tests {
     #[test]
     fn test_chtc_panel_title() {
         let panel = ChtcPanel::new();
-        let title = panel.title();
-        assert_eq!(title.to_string(), " CHTC Adapters ");
+        // i18n:title() 已本地化;固定英文捕获后复位,断言 ASCII 标题。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
+        let title = panel.title().to_string();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+        assert_eq!(title, " CHTC Adapters ");
     }
 
     #[test]

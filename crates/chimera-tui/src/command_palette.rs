@@ -15,6 +15,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
+use crate::actions::codegen::{palette_entries, PaletteEntry};
+use crate::actions::ActionRegistry;
 use crate::popup::Severity;
 use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
 use event_bus::VoteValue;
@@ -337,6 +339,117 @@ fn is_valid_topic(topic: &str) -> bool {
     )
 }
 
+// ============================================================
+// CommandPaletteModel — 统一命令面板数据模型(v3.1 M1.5,用户北极星)
+// ============================================================
+
+/// 统一命令面板数据模型 — Registry 驱动的模糊检索面板
+///
+/// # 设计决策(WHY)
+/// - **单一事实源驱动**:候选项由 `ActionRegistry` 经 `codegen::palette_entries`
+///   生成,与斜杠命令/帮助同源,杜绝"所有命令集成于一个面板"时的清单漂移。
+/// - **纯逻辑、不接线渲染/输入**:M1.5 只提供数据模型 + 状态迁移(query/选择),
+///   渲染与 InputRouter 接线留 M2;便于单测穷举验证可发现性(§8.3)。
+/// - **自持 Registry 副本**:`ActionRegistry` 派生 Clone(约 21 条描述,克隆廉价),
+///   模型自持一份避免生命周期纠缠,重过滤时本地查询。
+#[derive(Debug, Clone)]
+pub struct CommandPaletteModel {
+    /// 当前检索输入
+    query: String,
+    /// 当前 query 下的过滤结果(Registry 驱动)
+    entries: Vec<PaletteEntry>,
+    /// 当前选中项下标(钳制在 [0, entries.len()))
+    selected: usize,
+    /// 动作注册表(单一事实源)
+    registry: ActionRegistry,
+}
+
+impl CommandPaletteModel {
+    /// 以指定注册表构造(初始空 query,展示全部动作)
+    pub fn new(registry: ActionRegistry) -> Self {
+        let mut model = Self {
+            query: String::new(),
+            entries: Vec::new(),
+            selected: 0,
+            registry,
+        };
+        model.refilter();
+        model
+    }
+
+    /// 以内建六域注册表构造(生产入口)
+    pub fn with_builtin_domains() -> Self {
+        Self::new(ActionRegistry::with_builtin_domains())
+    }
+
+    /// 打开面板:清空 query、复位选择、展示全部动作
+    pub fn open(&mut self) {
+        self.query.clear();
+        self.selected = 0;
+        self.refilter();
+    }
+
+    /// 追加一个检索字符并重新过滤
+    pub fn on_input(&mut self, c: char) {
+        self.query.push(c);
+        self.selected = 0;
+        self.refilter();
+    }
+
+    /// 删除末尾字符并重新过滤(退格)
+    pub fn on_backspace(&mut self) {
+        self.query.pop();
+        self.selected = 0;
+        self.refilter();
+    }
+
+    /// 移动选择(down=true 下移,false 上移),两端钳制不回绕
+    pub fn move_selection(&mut self, down: bool) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let last = self.entries.len() - 1;
+        self.selected = if down {
+            (self.selected + 1).min(last)
+        } else {
+            self.selected.saturating_sub(1)
+        };
+    }
+
+    /// 当前检索输入
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// 当前过滤结果
+    pub fn entries(&self) -> &[PaletteEntry] {
+        &self.entries
+    }
+
+    /// 当前选中项下标
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
+    /// 当前选中的条目(空结果时 None)
+    pub fn selected_entry(&self) -> Option<&PaletteEntry> {
+        self.entries.get(self.selected)
+    }
+
+    /// 当前选中的动作 id(供 Enter 执行 → DispatchAction)
+    pub fn selected_action(&self) -> Option<&'static str> {
+        self.selected_entry().map(|e| e.action_id)
+    }
+
+    /// 按当前 query 重新过滤,并将选择下标钳制到有效范围
+    fn refilter(&mut self) {
+        self.entries = palette_entries(&self.registry, &self.query);
+        if self.selected >= self.entries.len() {
+            self.selected = self.entries.len().saturating_sub(1);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,5 +703,73 @@ mod tests {
         assert!(state.filter_keyword.is_none());
         assert_eq!(state.input_mode, InputMode::Normal);
         assert!(state.input_buffer.is_empty());
+    }
+
+    // ===== CommandPaletteModel(M1.5 统一命令面板数据模型)=====
+
+    #[test]
+    fn palette_model_open_shows_all_actions() {
+        let reg = ActionRegistry::with_builtin_domains();
+        let n = reg.len();
+        let model = CommandPaletteModel::new(reg);
+        assert_eq!(model.entries().len(), n, "空 query 应展示全部动作");
+        assert_eq!(model.query(), "");
+    }
+
+    #[test]
+    fn palette_model_filters_by_query() {
+        let mut model = CommandPaletteModel::with_builtin_domains();
+        let all = model.entries().len();
+        for c in "export".chars() {
+            model.on_input(c);
+        }
+        assert!(model.entries().iter().any(|e| e.action_id == "export.run"));
+        assert!(model.entries().len() < all, "过滤后应少于全量");
+    }
+
+    #[test]
+    fn palette_model_backspace_restores_all() {
+        let mut model = CommandPaletteModel::with_builtin_domains();
+        let all = model.entries().len();
+        // 输入不太可能匹配的字符,再逐一退格清空
+        model.on_input('z');
+        model.on_input('q');
+        model.on_input('x');
+        model.on_backspace();
+        model.on_backspace();
+        model.on_backspace();
+        assert_eq!(model.query(), "");
+        assert_eq!(model.entries().len(), all, "退格清空后应恢复全部");
+    }
+
+    #[test]
+    fn palette_model_selection_clamps_at_both_ends() {
+        let mut model = CommandPaletteModel::with_builtin_domains();
+        // 上移到顶不越界
+        model.move_selection(false);
+        assert_eq!(model.selected_index(), 0);
+        // 下移多次钳制在末项
+        for _ in 0..100 {
+            model.move_selection(true);
+        }
+        assert_eq!(model.selected_index(), model.entries().len() - 1);
+        assert!(model.selected_action().is_some());
+    }
+
+    #[test]
+    fn palette_model_every_action_discoverable_by_id() {
+        // §8.3 可发现性:每个动作都能被其 id 在命令面板检索命中
+        let reg = ActionRegistry::with_builtin_domains();
+        let ids: Vec<&'static str> = reg.all().iter().map(|d| d.id).collect();
+        for id in ids {
+            let mut model = CommandPaletteModel::with_builtin_domains();
+            for c in id.chars() {
+                model.on_input(c);
+            }
+            assert!(
+                model.entries().iter().any(|e| e.action_id == id),
+                "动作 {id} 应能被其 id 在命令面板检索命中"
+            );
+        }
     }
 }

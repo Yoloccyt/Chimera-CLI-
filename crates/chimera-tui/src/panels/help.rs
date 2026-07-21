@@ -50,23 +50,23 @@ impl HelpPanel {
     /// 返回全局快捷键条目
     fn global_shortcuts() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("Tab", "Next panel"),
-            ("Shift+Tab", "Previous panel"),
-            ("1-8", "Jump to panel"),
-            (":", "Command mode"),
-            ("/", "Search mode (keyword filter)"),
-            ("Enter", "Submit command/search"),
-            ("Esc", "Cancel input / close popup"),
-            ("Ctrl+Up", "Increase main panel ratio"),
-            ("Ctrl+Down", "Decrease main panel ratio"),
-            ("q / Esc", "Quit (normal mode)"),
-            ("?", "Show this help"),
-            ("t", "Switch theme"),
-            ("l", "Switch layout"),
-            ("g+1-6", "Jump to extended panels"),
-            ("g g", "Scroll to top"),
-            ("G", "Scroll to bottom"),
-            ("F1-F8", "Jump to panel (F-keys)"),
+            ("Tab", crate::t!("help.sc.next")),
+            ("Shift+Tab", crate::t!("help.sc.prev")),
+            ("1-8", crate::t!("help.sc.jump")),
+            (":", crate::t!("help.sc.command")),
+            ("/", crate::t!("help.sc.search")),
+            ("Enter", crate::t!("help.sc.submit")),
+            ("Esc", crate::t!("help.sc.cancel")),
+            ("Ctrl+Up", crate::t!("help.sc.ratio_up")),
+            ("Ctrl+Down", crate::t!("help.sc.ratio_down")),
+            ("q / Esc", crate::t!("help.sc.quit")),
+            ("?", crate::t!("help.sc.help")),
+            ("t", crate::t!("help.sc.theme")),
+            ("l", crate::t!("help.sc.layout")),
+            ("g+1-6", crate::t!("help.sc.gjump")),
+            ("g g", crate::t!("help.sc.top")),
+            ("G", crate::t!("help.sc.bottom")),
+            ("F1-F8", crate::t!("help.sc.fkeys")),
         ]
     }
 
@@ -79,10 +79,10 @@ impl HelpPanel {
         panel_shortcuts: &[(&'static str, &'static str)],
     ) -> Text<'static> {
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from("Help"),
+            Line::from(crate::t!("help.header")),
             Line::from("────────────────────────────────────────"),
             Line::from(""),
-            Line::from("Global Shortcuts"),
+            Line::from(crate::t!("help.section.global")),
             Line::from("─────────────"),
         ];
 
@@ -104,7 +104,8 @@ impl HelpPanel {
             if !panel_shortcuts.is_empty() {
                 lines.push(Line::from(""));
                 lines.push(Line::from(format!(
-                    "Panel Shortcuts — {}",
+                    "{} — {}",
+                    crate::t!("help.section.panel"),
                     panel_id.as_str()
                 )));
                 lines.push(Line::from("─────────────"));
@@ -127,7 +128,7 @@ impl Panel for HelpPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Help ")
+        Line::from(crate::t!("panel.border.help"))
     }
 
     fn render(&mut self, _state: &TuiState, area: Rect, buf: &mut Buffer) {
@@ -170,7 +171,10 @@ mod tests {
 
     #[test]
     fn test_help_panel_content_no_context() {
+        // i18n:content 已本地化;固定英文捕获后复位,断言 ASCII 文案。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
         let content = HelpPanel::content(None, &[]).to_string();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         assert!(content.contains("Help"));
         assert!(content.contains("Global Shortcuts"));
         assert!(content.contains("Tab"));
@@ -187,7 +191,10 @@ mod tests {
     #[test]
     fn test_help_panel_content_with_context() {
         let panel_shortcuts = vec![("↑/↓", "Navigate"), ("Enter", "Detail"), ("/", "Search")];
+        // i18n:content 已本地化;固定英文捕获后复位,断言 ASCII 文案。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
         let content = HelpPanel::content(Some(PanelId::Quest), &panel_shortcuts).to_string();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         assert!(content.contains("Help"));
         assert!(content.contains("Global Shortcuts"));
         assert!(content.contains("Panel Shortcuts"));
@@ -200,7 +207,10 @@ mod tests {
     #[test]
     fn test_help_panel_content_with_context_empty_shortcuts() {
         // 有上下文但快捷键为空时,不应显示"Panel Shortcuts"章节
+        // i18n:content 已本地化;固定英文捕获后复位,断言 ASCII 文案。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
         let content = HelpPanel::content(Some(PanelId::Budget), &[]).to_string();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         assert!(content.contains("Global Shortcuts"));
         // 空快捷键列表不追加 Panel Shortcuts 章节
         assert!(!content.contains("Panel Shortcuts"));

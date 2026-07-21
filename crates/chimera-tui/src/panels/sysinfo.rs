@@ -240,7 +240,7 @@ impl Panel for SysinfoPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" System Info ").style(
+        Line::from(crate::t!("panel.border.sysinfo")).style(
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -465,9 +465,12 @@ mod tests {
     #[test]
     fn test_panel_trait_title() {
         let panel = SysinfoPanel::new();
-        let title = panel.title();
-        assert!(!title.to_string().is_empty());
-        assert!(title.to_string().contains("System"));
+        // i18n:title() 已本地化;固定英文捕获后复位,断言 ASCII 标题。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
+        let title = panel.title().to_string();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+        assert!(!title.is_empty());
+        assert!(title.contains("System"));
     }
 
     /// 验证 render 不 panic 且产生预期内容

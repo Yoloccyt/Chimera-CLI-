@@ -33,11 +33,19 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod app;
+// === v3.1 交互式重构(ADR-029)新增模块 ===
+// Action 统一层 / 组件系统 / 自研渲染引擎 / i18n / 输入路由
+// M0-M1 默认编译供 CI 类型检查,M2 起经 v3-engine feature 切换实际渲染路径。
+pub mod actions;
 pub mod command_palette;
+pub mod components;
 pub mod config;
 pub mod data;
+pub mod engine;
 pub mod error;
 pub mod focus;
+pub mod i18n;
+pub mod input;
 pub mod panels;
 pub mod popup;
 pub mod render;
@@ -87,6 +95,14 @@ pub use types::{
 // NOTE: viz::gauge 名称与 render::gauge 冲突,不在 lib.rs 顶层重导出,
 // 调用方通过 `chimera_tui::viz::gauge` 访问(避免命名空间污染)
 pub use viz::{bar_chart, heatmap, histogram, line_chart, VizChartKind, VizWidget};
+
+// === v3.1 交互式重构(ADR-029)关键类型重导出 ===
+// engine 的 Rect/Style/Color/Buffer 与 ratatui 同名,不在顶层重导出以避免命名
+// 空间污染,调用方经 `chimera_tui::engine::*` 访问;此处只导出无歧义的高层类型。
+pub use actions::{ActionDescriptor, ActionDomain, ActionRegistry};
+pub use components::{ComponentPanel, LayoutNode, ViewContext};
+pub use i18n::{current_locale, set_locale, toggle_locale, Locale};
+pub use input::{InputRouter, RouteTarget, RouterMode};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {

@@ -154,7 +154,7 @@ impl Panel for ClvVectorPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" CLV Vector ")
+        Line::from(crate::t!("panel.border.clv"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
@@ -411,7 +411,11 @@ mod tests {
     #[test]
     fn test_clv_vector_panel_title() {
         let panel = ClvVectorPanel::new();
-        assert_eq!(panel.title().to_string(), " CLV Vector ");
+        // i18n:title() 已本地化;固定英文捕获后立即复位,断言 ASCII 标题(与 en 表一致)。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
+        let title = panel.title().to_string();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+        assert_eq!(title, " CLV Vector ");
     }
 
     #[test]

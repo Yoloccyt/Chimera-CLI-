@@ -120,6 +120,34 @@ fn help_overlay_contains_expected_shortcuts() {
 }
 
 #[test]
+fn help_overlay_includes_registry_commands() {
+    // M2 增量3:`?` 帮助浮层应追加与命令面板同源的 Registry 命令章节。
+    let mut app = make_app();
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+
+    let popup = app.state().popup_stack.current().unwrap();
+    let entries: Vec<(String, String)> = match popup {
+        chimera_tui::popup::PopupKind::HelpOverlay { entries, .. } => entries.clone(),
+        _ => panic!("expected HelpOverlay popup"),
+    };
+    let content = entries
+        .iter()
+        .map(|(k, d)| format!("{k} {d}"))
+        .collect::<String>();
+
+    // "Ctrl+P" 仅出现于新增的命令章节标题,基础全局键不含它 → 稳定证明命令章节已追加。
+    assert!(
+        content.contains("Ctrl+P"),
+        "Help overlay should include the Registry command section (Ctrl+P header)"
+    );
+    // 回归保护:命令章节为追加而非替换,基础导航键仍在。
+    assert!(
+        content.to_lowercase().contains("tab"),
+        "Registry command section must be additive, base nav keys must remain"
+    );
+}
+
+#[test]
 fn help_overlay_can_be_scrolled() {
     let mut app = make_app();
     app.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));

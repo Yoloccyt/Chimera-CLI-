@@ -27,13 +27,13 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
 use ratatui::{Frame, Terminal};
 use std::collections::VecDeque;
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
 
-use crate::command_palette::CommandPalette;
+use crate::command_palette::{CommandPalette, CommandPaletteModel};
 use crate::config::Theme;
 use crate::config::TuiConfig;
 use crate::data::{DataSnapshot, ExportFormat, StubDataSource, TuiDataSource};
@@ -46,7 +46,7 @@ use crate::panels::{
 };
 use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, LayoutMode, PanelId, TuiCommand, TuiState};
-use event_bus::{EventBus, EventMetadata, NexusEvent, VoteValue};
+use event_bus::{ActionSource, EventBus, EventMetadata, NexusEvent, VoteValue};
 
 /// 主面板比例调整步长
 const RATIO_STEP: f32 = 0.05;
@@ -63,6 +63,10 @@ const FPS_WINDOW_SIZE: usize = 60;
 ///
 /// WHY 999:三位数可保证 `FPS: <n>` 文本宽度稳定,配合 80 列状态栏约束。
 const FPS_DISPLAY_MAX: u16 = 999;
+/// 伴随面板宽度(字符),与引擎 Chat 模式 CHAT_CONTEXT_WIDTH 对齐(M2 增量3)
+const COMPANION_WIDTH: u16 = 30;
+/// 触发伴随面板并排的最小视口宽度(低于此不切分,避免主区被挤压)
+const COMPANION_MIN_WIDTH: u16 = 60;
 
 /// TUI 应用 — Chimera 终端用户界面核心
 ///
@@ -94,6 +98,29 @@ pub struct TuiApp {
     focus_manager: FocusManager,
     /// 命令面板
     command_palette: CommandPalette,
+    /// 统一命令面板 overlay 状态(M2.2,用户北极星)
+    ///
+    /// WHY `Option` 表达开关:`Some` = 面板已打开(键盘路由与渲染都据此分流),
+    /// `None` = 关闭。模型自持 `ActionRegistry` 副本,复用同一实例避免每次
+    /// 打开都重建注册表;候选项经 `codegen::palette_entries` 与斜杠命令/帮助同源。
+    palette: Option<CommandPaletteModel>,
+    /// 伴随面板可见性(M2 增量3 Stage 1,opt-in,默认关闭)
+    ///
+    /// WHY 默认关闭:开启时主区右侧并排渲染伴随面板;关闭时 `render_main_panel`
+    /// 行为与现状逐字节一致,保证既有 render/layout 测试零回归。
+    companion_visible: bool,
+    /// 伴随面板目标 = 最近使用的面板(切换焦点时记录切换前的面板)
+    prev_panel: Option<PanelId>,
+    /// 显式绑定的伴随面板(M2 增量3 Stage 2,None = 回退 Stage1 自动"最近使用")
+    ///
+    /// WHY 与 prev_panel 分离:`]` 循环绑定写入本字段并优先于自动逻辑;
+    /// 未绑定时保持 Stage1 行为,零回归。
+    bound_companion: Option<PanelId>,
+    /// 活跃窗格是否为伴随窗格(M2 增量3 Stage 2,默认 false = 主区活跃)
+    ///
+    /// WHY 仅在 companion_visible 时有意义:为 true 时面板级键路由到伴随面板,
+    /// 且渲染高亮伴随窗格;主区切换焦点时复位为 false。
+    companion_focused: bool,
     /// 上一帧的焦点面板,用于避免每帧重复调用 `focus(true/false)`
     ///
     /// WHY M1 清理项 #5:仅在实际变化时通知面板焦点变化,减少无效回调。
@@ -177,6 +204,14 @@ impl TuiApp {
             panels,
             focus_manager,
             command_palette: CommandPalette::new(),
+            // M2.2:命令面板 overlay 初始关闭,首次 Ctrl+P 时惰性构建模型
+            palette: None,
+            // M2 增量3:伴随面板默认关闭(opt-in),prev_panel 首次切换面板后填充
+            companion_visible: false,
+            prev_panel: None,
+            // M2 增量3 Stage 2:未绑定伴随 + 主区活跃(默认行为同 Stage 1)
+            bound_companion: None,
+            companion_focused: false,
             last_focused: None,
             last_area: Rect::default(),
             event_bus: None,
@@ -345,17 +380,35 @@ impl TuiApp {
 
     /// 切换到下一个面板
     pub fn switch_panel_next(&mut self) {
+        let before = self.focus_manager.focused();
         self.focus_manager.next();
+        self.record_prev_panel(before);
     }
 
     /// 切换到上一个面板
     pub fn switch_panel_prev(&mut self) {
+        let before = self.focus_manager.focused();
         self.focus_manager.prev();
+        self.record_prev_panel(before);
     }
 
     /// 切换到指定面板
     pub fn switch_panel_to(&mut self, panel: PanelId) {
+        let before = self.focus_manager.focused();
         self.focus_manager.jump_to(panel);
+        self.record_prev_panel(before);
+    }
+
+    /// 记录切换前的焦点面板为伴随面板目标(仅当焦点确实变化时)
+    ///
+    /// WHY 仅在变化时记录:重复切到同一面板不应把伴随目标覆盖为自身,
+    /// 保证 `companion_target` 始终指向"上一个不同面板"。
+    fn record_prev_panel(&mut self, before: PanelId) {
+        if self.focus_manager.focused() != before {
+            self.prev_panel = Some(before);
+            // Stage 2:主区焦点变化时复位跨窗格焦点,避免焦点滞留旧伴随面板。
+            self.companion_focused = false;
+        }
     }
 
     /// 退出应用
@@ -385,6 +438,13 @@ impl TuiApp {
             return;
         }
 
+        // M2.2:统一命令面板打开时,键盘事件全部路由给面板(模糊检索/导航/执行),
+        // 与 InputRouter 的 Command 模式语义一致(Esc 关闭 / ↑↓ 选择 / Enter 执行)。
+        if self.palette.is_some() {
+            self.handle_palette_key(key);
+            return;
+        }
+
         // 命令/搜索模式:委托给命令面板
         if self.state.input_mode != InputMode::Normal {
             if let Some(cmd) = self.command_palette.handle_key(key, &mut self.state) {
@@ -397,8 +457,15 @@ impl TuiApp {
         // WHY 全局键优先:面板无需重复实现退出/切换面板/帮助等通用语义,
         // 同时保证 `q`/`Tab`/`?` 等键在所有面板行为一致。
         if !self.handle_global_key(key) {
-            let focused = self.focus_manager.focused();
-            if let Some(idx) = self.panel_index(focused) {
+            // Stage 2:活跃窗格为伴随时,面板级键路由到伴随面板;否则主焦点面板。
+            // 全局键已在 handle_global_key 处理(仍作用于主焦点),此处仅面板级按键。
+            let target = if self.companion_focused && self.companion_visible {
+                self.companion_target()
+                    .unwrap_or_else(|| self.focus_manager.focused())
+            } else {
+                self.focus_manager.focused()
+            };
+            if let Some(idx) = self.panel_index(target) {
                 if let Some(cmd) = self.panels[idx].handle_key(key, &mut self.state) {
                     self.apply_command(cmd);
                 }
@@ -445,6 +512,16 @@ impl TuiApp {
 
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit(),
+            // M2.1:Ctrl+L 运行时切换中英 locale。
+            // WHY 置于 match 顶部(先于无修饰符的 `l` 布局键):带 CONTROL guard 的
+            // 分支必须先于普通 `Char('l')` 匹配,否则 Ctrl+L 会被布局切换截胡。
+            KeyCode::Char('l') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                self.toggle_locale_action();
+            }
+            // M2.2:Ctrl+P 打开统一命令面板(用户北极星:所有命令集成于一处)
+            KeyCode::Char('p') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                self.open_palette();
+            }
             KeyCode::Tab => self.switch_panel_next(),
             KeyCode::BackTab => self.switch_panel_prev(),
             KeyCode::Char('1') => self.switch_panel_to(PanelId::Quest),
@@ -481,17 +558,7 @@ impl TuiApp {
             }
             // WHY P3.2:`?` 作为全局快捷键直接触发 Help overlay,
             // 不切换当前焦点面板,并传递当前面板的快捷键列表。
-            KeyCode::Char('?') => {
-                let shortcuts = self
-                    .panels
-                    .iter()
-                    .find(|p| p.id() == self.focus_manager.focused())
-                    .map(|p| p.shortcuts())
-                    .unwrap_or_default();
-                self.state
-                    .popup_stack
-                    .push(PopupKind::help_overlay_with_context(&shortcuts));
-            }
+            KeyCode::Char('?') => self.open_help_action(),
             // P6.1:循环切换主题 Dark → Light → HighContrast → Dark
             //
             // WHY `t` 键:与 vim 的 `:set background` 语义一致,t=theme 易记。
@@ -503,8 +570,10 @@ impl TuiApp {
                 for panel_id in self.focus_manager.panels() {
                     self.state.mark_dirty(*panel_id);
                 }
-                self.state.status_message =
-                    Some((format!("Theme: {}", new_theme.as_str()), Severity::Info));
+                self.state.status_message = Some((
+                    format!("{}: {}", crate::t!("status.theme"), new_theme.as_str()),
+                    Severity::Info,
+                ));
             }
             // P6.2:循环切换布局 SinglePane → DualPane → TriplePane → SinglePane
             //
@@ -513,12 +582,12 @@ impl TuiApp {
             // - SinglePane:当前面板全屏(专注模式)
             // - DualPane:tabs + main + status_bar(默认对比模式)
             // - TriplePane:tabs + main + status_bar(main 更小,预留 log_panel)
-            KeyCode::Char('l') => {
-                let new_mode = self.state.layout_mode.next();
-                self.state.layout_mode = new_mode;
-                self.state.status_message =
-                    Some((format!("Layout: {}", new_mode.as_str()), Severity::Info));
-            }
+            KeyCode::Char('l') => self.cycle_layout_action(),
+            // M2 增量3:\ 切换伴随面板(主区右侧并排渲染最近使用面板)
+            KeyCode::Char('\\') => self.toggle_companion_action(),
+            // M2 增量3 Stage 2:] 循环绑定伴随面板,w 切换窗格焦点
+            KeyCode::Char(']') => self.cycle_companion_action(),
+            KeyCode::Char('w') => self.focus_pane_action(),
             // E: 导出当前面板数据
             KeyCode::Char('E') => {
                 self.handle_export_command();
@@ -535,6 +604,272 @@ impl TuiApp {
             _ => return false,
         }
         true
+    }
+
+    /// 打开统一命令面板(M2.2)
+    ///
+    /// WHY 复用既有模型:若已存在(之前打开过)则仅 `open()` 复位 query/选择,
+    /// 保留其 `ActionRegistry` 副本;首次打开才用内建六域注册表构造,
+    /// 避免每次打开都重建注册表(约 21 条描述)。
+    fn open_palette(&mut self) {
+        let mut model = self
+            .palette
+            .take()
+            .unwrap_or_else(CommandPaletteModel::with_builtin_domains);
+        model.open();
+        self.palette = Some(model);
+    }
+
+    /// 命令面板打开时的键盘处理(M2.2)
+    ///
+    /// 语义对齐 `InputRouter` 的 Command 模式:Esc 关闭 / ↑↓ 选择 / Enter 执行
+    /// 选中动作(经 `DispatchAction` 统一派发,source=Palette)/ 退格 / 字符过滤。
+    ///
+    /// WHY 逐分支分别借用 `self.palette`:Esc/Enter 需写 `self.palette = None`,
+    /// 而导航键需 `&mut` 模型;分开借用避免在同一作用域同时持有可变
+    /// 引用与重赋值的借用冲突。
+    fn handle_palette_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.palette = None;
+            }
+            KeyCode::Enter => {
+                // 先取选中动作 id(&'static str,不借用模型),关闭面板后统一派发。
+                let action_id = self
+                    .palette
+                    .as_ref()
+                    .and_then(|m| m.selected_action())
+                    .map(str::to_string);
+                self.palette = None;
+                if let Some(action_id) = action_id {
+                    self.apply_command(TuiCommand::DispatchAction {
+                        action_id,
+                        payload: "{}".to_string(),
+                        source: ActionSource::Palette,
+                    });
+                }
+            }
+            KeyCode::Up => {
+                if let Some(m) = self.palette.as_mut() {
+                    m.move_selection(false);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(m) = self.palette.as_mut() {
+                    m.move_selection(true);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(m) = self.palette.as_mut() {
+                    m.on_backspace();
+                }
+            }
+            // 排除 Ctrl 组合:仅纯字符进入检索缓冲,Ctrl+X 类快捷键在面板内忽略。
+            KeyCode::Char(c) if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                if let Some(m) = self.palette.as_mut() {
+                    m.on_input(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 命令面板是否打开(测试与外部查询用)
+    pub fn palette_is_open(&self) -> bool {
+        self.palette.is_some()
+    }
+
+    /// 伴随面板是否可见(测试与外部查询用)
+    pub fn companion_visible(&self) -> bool {
+        self.companion_visible
+    }
+
+    /// 活跃窗格是否为伴随窗格(测试与外部查询用)
+    pub fn companion_focused(&self) -> bool {
+        self.companion_focused
+    }
+
+    /// 当前伴随面板目标(测试与外部查询用;不含可见性判断)
+    pub fn companion_panel(&self) -> Option<PanelId> {
+        self.companion_target()
+    }
+
+    /// 计算伴随面板目标:显式绑定优先,否则最近使用面板(且非当前焦点),
+    /// 无历史则回退到焦点顺序中首个非焦点面板
+    ///
+    /// WHY 回退链:保证伴随面板开启时总有内容可显示,且永不等于主区面板。
+    fn companion_target(&self) -> Option<PanelId> {
+        let focused = self.focus_manager.focused();
+        // Stage 2:显式绑定优先(且不等于主区面板)
+        if let Some(bound) = self.bound_companion {
+            if bound != focused {
+                return Some(bound);
+            }
+        }
+        if let Some(prev) = self.prev_panel {
+            if prev != focused {
+                return Some(prev);
+            }
+        }
+        self.focus_manager
+            .panels()
+            .iter()
+            .copied()
+            .find(|&p| p != focused)
+    }
+
+    /// 切换伴随面板可见性(M2 增量3,供 `\` 键与命令面板 `view.toggle_companion` 共用)
+    fn toggle_companion_action(&mut self) {
+        self.companion_visible = !self.companion_visible;
+        let state_label = if self.companion_visible { "on" } else { "off" };
+        self.state.status_message = Some((
+            format!(
+                "{}: {}",
+                crate::t!("action.view.toggle_companion"),
+                state_label
+            ),
+            Severity::Info,
+        ));
+    }
+
+    /// 循环绑定伴随面板到下一个非焦点面板(M2 增量3 Stage 2,供 `]` 与命令面板共用)
+    ///
+    /// 以焦点面板顺序从当前伴随目标起环形查找下一个 `!= 主焦点` 的面板写入
+    /// `bound_companion`,并置 `companion_visible = true`(循环即意图显示)。
+    fn cycle_companion_action(&mut self) {
+        let focused = self.focus_manager.focused();
+        // WHY 克隆为 Vec:既将读面板顺序又要随后可变写 bound_companion,
+        // 克隆断开 self 借用(约 19 个 PanelId,Copy,廉价)。
+        let panels: Vec<PanelId> = self.focus_manager.panels().to_vec();
+        if panels.len() < 2 {
+            return;
+        }
+        // 起点:当前伴随目标位置(无则从主焦点位置起)
+        let start = self
+            .companion_target()
+            .and_then(|c| panels.iter().position(|&p| p == c))
+            .unwrap_or_else(|| panels.iter().position(|&p| p == focused).unwrap_or(0));
+        let n = panels.len();
+        let next = (1..=n)
+            .map(|off| panels[(start + off) % n])
+            .find(|&p| p != focused);
+        if let Some(target) = next {
+            self.bound_companion = Some(target);
+            self.companion_visible = true;
+            self.state.status_message = Some((
+                format!(
+                    "{}: {}",
+                    crate::t!("action.view.cycle_companion"),
+                    target.as_str()
+                ),
+                Severity::Info,
+            ));
+        }
+    }
+
+    /// 切换主/伴随窗格焦点(M2 增量3 Stage 2,供 `w` 与命令面板共用)
+    ///
+    /// 仅当伴随面板可见且有目标时翻转 `companion_focused`;否则 no-op 并提示。
+    fn focus_pane_action(&mut self) {
+        if !(self.companion_visible && self.companion_target().is_some()) {
+            self.state.status_message = Some((
+                format!("{}: n/a", crate::t!("action.view.focus_pane")),
+                Severity::Warning,
+            ));
+            return;
+        }
+        self.companion_focused = !self.companion_focused;
+        let pane = if self.companion_focused {
+            "companion"
+        } else {
+            "main"
+        };
+        self.state.status_message = Some((
+            format!("{}: {}", crate::t!("action.view.focus_pane"), pane),
+            Severity::Info,
+        ));
+    }
+
+    /// 切换界面语言(中英)并刷新(M2.1 提取,供 Ctrl+L 与命令面板共用)
+    ///
+    /// WHY 提取:Ctrl+L 快捷键与命令面板 `system.toggle_locale` 动作行为必须一致,
+    /// 集中一处避免两条入口逻辑漂移(三入口统一派发)。
+    fn toggle_locale_action(&mut self) {
+        let locale = crate::i18n::toggle_locale();
+        // 切换后全体面板文案需重绘,标记 dirty 触发下一帧重绘
+        for panel_id in self.focus_manager.panels() {
+            self.state.mark_dirty(*panel_id);
+        }
+        self.state.status_message = Some((
+            format!("{}: {}", crate::t!("status.locale"), locale.short_label()),
+            Severity::Info,
+        ));
+    }
+
+    /// 循环切换布局模式(M2 提取,供 `l` 键与命令面板 `view.switch_layout` 共用)
+    fn cycle_layout_action(&mut self) {
+        let new_mode = self.state.layout_mode.next();
+        self.state.layout_mode = new_mode;
+        self.state.status_message = Some((
+            format!("{}: {}", crate::t!("status.layout"), new_mode.as_str()),
+            Severity::Info,
+        ));
+    }
+
+    /// 打开帮助 overlay(M2 提取,供 `?` 键与命令面板 `system.open_help` 共用)
+    ///
+    /// 传入当前焦点面板的快捷键列表,帮助按上下文动态生成(§4.6 渐进披露)。
+    fn open_help_action(&mut self) {
+        let shortcuts = self
+            .panels
+            .iter()
+            .find(|p| p.id() == self.focus_manager.focused())
+            .map(|p| p.shortcuts())
+            .unwrap_or_default();
+        // M2 增量3:帮助浮层追加 Registry 驱动的命令清单(与命令面板 Ctrl+P 同源),
+        // 随 locale 动态生成。构造成本低(约 21 条),`?` 为低频操作,按需构建即可。
+        let registry = crate::actions::ActionRegistry::with_builtin_domains();
+        let action_lines: Vec<(String, String)> =
+            crate::actions::codegen::help_lines(&registry, None)
+                .into_iter()
+                .map(|line| (line.key, line.title))
+                .collect();
+        self.state
+            .popup_stack
+            .push(PopupKind::help_overlay_with_context_and_actions(
+                &shortcuts,
+                &action_lines,
+            ));
+    }
+
+    /// 统一派发 action_id 为具体行为(M2 增量2:三入口统一派发桥接)
+    ///
+    /// WHY 桥接而非仅发事件:命令面板 Enter 需产生"真实效果",但既有可用路径分两类——
+    /// - **本地即时效果**(无参数):切换语言/布局、打开帮助,直接调用既有本地方法;
+    /// - **需编排器消费的动作**(agent.chat/quest.*/task.* 等,多含参数):当前无本地
+    ///   通路,回退发布 `TuiActionRequested`,交 chimera-cli QueryLoop 编排(M3 落地)。
+    ///
+    /// 面板上下文动作仍走各自的 `TuiCommand` 变体(带 quest_id 等参数),不经此桥接;
+    /// 本方法只服务"无参数、来源为命令面板/斜杠"的统一入口。
+    fn dispatch_action(&mut self, action_id: &str, payload: String, source: ActionSource) {
+        match action_id {
+            // —— 本地即时效果(无参数,已有实现路径)——
+            "system.toggle_locale" => self.toggle_locale_action(),
+            "view.switch_layout" => self.cycle_layout_action(),
+            "view.toggle_companion" => self.toggle_companion_action(),
+            "view.cycle_companion" => self.cycle_companion_action(),
+            "view.focus_pane" => self.focus_pane_action(),
+            "system.open_help" => self.open_help_action(),
+            // —— 其余动作:回退到统一事件,交 chimera-cli 编排器消费(M3)——
+            _ => {
+                self.publish_control_event(NexusEvent::TuiActionRequested {
+                    metadata: EventMetadata::new("chimera-tui"),
+                    action_id: action_id.to_string(),
+                    payload,
+                    source,
+                });
+            }
+        }
     }
 
     /// 处理弹窗激活时的键盘事件
@@ -924,6 +1259,15 @@ impl TuiApp {
             TuiCommand::Export => {
                 self.handle_export_command();
             }
+            TuiCommand::DispatchAction {
+                action_id,
+                payload,
+                source,
+            } => {
+                // v3.1(ADR-029)M2 增量2:三入口统一派发桥接 —— 本地即时动作直接执行,
+                // 其余回退发布 TuiActionRequested,经 EventBus 交 chimera-cli 编排(M3)。
+                self.dispatch_action(&action_id, payload, source);
+            }
         }
     }
 
@@ -989,9 +1333,97 @@ impl TuiApp {
             self.state.popup_stack.render(area, frame.buffer_mut());
         }
 
+        // M2.2:统一命令面板作为居中 overlay,渲染在最上层(高于面板与状态栏)
+        if self.palette.is_some() {
+            self.render_palette(frame, area);
+        }
+
         // P4.1:本帧渲染完成,重置 dirty 集合。下一帧的 `update` 会基于
         // 新一轮快照比较重新填充。
         self.state.clear_dirty();
+    }
+
+    /// 渲染统一命令面板 overlay(M2.2,用户北极星)
+    ///
+    /// WHY 复用自研布局引擎的 `centered_overlay`(M1.4):将 M1 的布局原语接线到
+    /// M2 的实际渲染,overlay 尺寸为视口的 60%×60% 居中;标题/提示取自 i18n,
+    /// 随 `Ctrl+L` 实时切换语言。渲染仍走 ratatui widget(引擎渲染路径切换属
+    /// 后续 `v3-engine` 里程碑),此处只用引擎做几何计算。
+    fn render_palette(&self, frame: &mut Frame<'_>, area: Rect) {
+        let Some(model) = self.palette.as_ref() else {
+            return;
+        };
+        // 用自研布局引擎计算居中 overlay 区域(engine::Rect → ratatui::Rect)
+        let eng_overlay =
+            crate::engine::layout::centered_overlay(crate::engine::from_ratatui_rect(area), 60, 60);
+        let overlay = crate::engine::to_ratatui_rect(eng_overlay);
+        // 视口过小(边框 + 三行内容至少需 3 行 4 列):放弃渲染,避免挤压
+        if overlay.width < 4 || overlay.height < 3 {
+            return;
+        }
+
+        // 先清空 overlay 区域,确保面板浮于底层内容之上
+        frame.render_widget(Clear, overlay);
+
+        // 外框:标题取自 i18n(随 Ctrl+L 实时切换)
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", crate::t!("palette.title")));
+        let inner = block.inner(overlay);
+        frame.render_widget(block, overlay);
+
+        // 内部纵向切分:查询行(1)+ 候选列表(其余)+ 提示行(1)
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+
+        // 查询行:`> <query>`
+        let query_line = Paragraph::new(format!("> {}", model.query()))
+            .style(Style::default().fg(Color::Yellow));
+        frame.render_widget(query_line, rows[0]);
+
+        // 候选列表:滚动窗口保证选中项始终可见,选中项高亮 + ▶ 标记
+        let list_area = rows[1];
+        let visible = list_area.height as usize;
+        let sel = model.selected_index();
+        let entries = model.entries();
+        // WHY 滚动偏移:当选中项超出可视高度时,下滑窗口使其贴底可见
+        let offset = if visible > 0 && sel >= visible {
+            sel + 1 - visible
+        } else {
+            0
+        };
+        let items: Vec<ListItem> = entries
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(visible)
+            .map(|(i, e)| {
+                let marker = if i == sel { "▶ " } else { "  " };
+                let text = format!("{marker}{}  —  {}", e.title, e.subtitle);
+                let style = if i == sel {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                ListItem::new(Line::from(Span::styled(text, style)))
+            })
+            .collect();
+        frame.render_widget(List::new(items), list_area);
+
+        // 提示行:操作说明(随 locale 切换)
+        let hint = Paragraph::new(crate::t!("palette.hint"))
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        frame.render_widget(hint, rows[2]);
     }
 
     /// 计算当前布局,返回 [tabs, main, bottom] 三个区域
@@ -1099,9 +1531,68 @@ impl TuiApp {
             self.last_focused = Some(focused);
         }
 
+        // M2 增量3:伴随面板开启且当前模式有 context 区且视口够宽时,主区右侧并排渲染
+        // 伴随面板;否则走整块渲染,与既有行为逐字节一致(零回归)。
+        let (main_area, companion_area) = self.companion_split(area);
+
         if let Some(idx) = focused_idx {
-            self.panels[idx].render(&self.state, area, frame.buffer_mut());
+            self.panels[idx].render(&self.state, main_area, frame.buffer_mut());
         }
+        // 伴随面板:渲染内容(焦点由 companion_focused 控制键盘路由)
+        if let Some(companion_rect) = companion_area {
+            if let Some(cidx) = self
+                .companion_target()
+                .and_then(|cid| self.panel_index(cid))
+            {
+                self.panels[cidx].render(&self.state, companion_rect, frame.buffer_mut());
+            }
+            // Stage 2:在活跃窗格边框叠加 accent 色高亮,让用户可见焦点所在。
+            let active_rect = if self.companion_focused {
+                companion_rect
+            } else {
+                main_area
+            };
+            let highlight = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(self.theme_accent()));
+            frame.render_widget(highlight, active_rect);
+        }
+    }
+
+    /// 计算主区在伴随面板开启时的两栏切分(复用引擎 `split` 原语,M1.4→M2 接线)
+    ///
+    /// 返回 `(主区, Some(伴随区))`;伴随面板关闭 / Focus 模式(无 context 区)/
+    /// 视口过窄 / 无伴随目标时返回 `(整块, None)`,渲染路径与既有行为逐字节一致。
+    fn companion_split(
+        &self,
+        area: ratatui::layout::Rect,
+    ) -> (ratatui::layout::Rect, Option<ratatui::layout::Rect>) {
+        // Focus 模式(SinglePane 别名)无 context 区,伴随面板不显示
+        let has_context =
+            self.state.layout_mode.to_pane_mode() != crate::engine::layout::PaneMode::Focus;
+        if !self.companion_visible
+            || !has_context
+            || area.width < COMPANION_MIN_WIDTH
+            || self.companion_target().is_none()
+        {
+            return (area, None);
+        }
+        // 复用自研引擎 split:左主区(Flex)+ 右伴随栏(固定宽),把 M1.4 布局原语接入真实渲染
+        let cols = crate::engine::layout::split(
+            crate::engine::from_ratatui_rect(area),
+            crate::engine::layout::Direction::Horizontal,
+            &[
+                crate::engine::layout::Constraint::Flex(1),
+                crate::engine::layout::Constraint::Fixed(COMPANION_WIDTH),
+            ],
+        );
+        let main = cols
+            .first()
+            .copied()
+            .map(crate::engine::to_ratatui_rect)
+            .unwrap_or(area);
+        let companion = cols.get(1).copied().map(crate::engine::to_ratatui_rect);
+        (main, companion)
     }
 
     /// 渲染状态栏
@@ -1109,9 +1600,12 @@ impl TuiApp {
         let (status, fg) = match &self.state.status_message {
             Some((msg, severity)) => (
                 format!(
-                    " Panel: {} | Tick: {} | FPS: {} | {} ",
+                    " {}: {} | {}: {} | {}: {} | {} ",
+                    crate::t!("status.panel"),
                     self.current_panel().as_str(),
+                    crate::t!("status.tick"),
                     self.state.tick_mode.display(),
+                    crate::t!("status.fps"),
                     self.state.fps,
                     msg
                 ),
@@ -1119,11 +1613,16 @@ impl TuiApp {
             ),
             None => (
                 format!(
-                    " Panel: {} | Tick: {} | FPS: {} | Frame: {} | Ratio: {:.0}% ",
+                    " {}: {} | {}: {} | {}: {} | {}: {} | {}: {:.0}% ",
+                    crate::t!("status.panel"),
                     self.current_panel().as_str(),
+                    crate::t!("status.tick"),
                     self.state.tick_mode.display(),
+                    crate::t!("status.fps"),
                     self.state.fps,
+                    crate::t!("status.frame"),
                     self.state.frame_count,
+                    crate::t!("status.ratio"),
                     self.main_panel_ratio * 100.0
                 ),
                 Color::Black,
@@ -1147,8 +1646,7 @@ impl TuiApp {
     /// WHY 独立方法:用户首次使用 TUI 时不知道有哪些快捷键,
     /// 底部提示栏可降低学习曲线,同时不会挤占状态信息空间。
     fn render_hint_bar(&self, frame: &mut Frame<'_>, area: ratatui::layout::Rect) {
-        let hints = " q:Quit  Tab:Next  /:Search  ::Cmd  ?:Help  t:Theme  l:Layout  g+1-6:Panel ";
-        let span = Span::styled(hints, Style::default().fg(Color::DarkGray));
+        let span = Span::styled(crate::t!("hint.bar"), Style::default().fg(Color::DarkGray));
         let paragraph = Paragraph::new(Line::from(span)).alignment(Alignment::Right);
         frame.render_widget(paragraph, area);
     }
@@ -1803,6 +2301,8 @@ mod tests {
         app.switch_panel_to(PanelId::Health);
 
         let backend = TestBackend::new(80, 24);
+        // i18n:面板文案随 locale 切换;固定英文捕获后复位,断言 ASCII 文案。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| app.render(f)).unwrap();
 
@@ -1812,6 +2312,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol().chars().next().unwrap_or(' '))
             .collect();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         assert!(
             content.contains("Health") || content.contains("Events/sec"),
             "rendered output should contain Health panel"
@@ -1918,10 +2419,8 @@ mod tests {
             .status_message
             .clone()
             .expect("status_message should be set");
-        assert!(
-            msg.contains("Theme:"),
-            "status_message should contain 'Theme:', got: {msg}"
-        );
+        // status_message 标签已 i18n 化(见 tests/i18n_chrome_test.rs);
+        // 此处只断言 locale 无关的主题值,避免并行测试切换 locale 造成拖动。
         assert!(
             msg.contains("light"),
             "status_message should contain 'light', got: {msg}"
@@ -1963,10 +2462,8 @@ mod tests {
             .status_message
             .clone()
             .expect("status_message should be set");
-        assert!(
-            msg.contains("Layout:"),
-            "status_message should contain 'Layout:', got: {msg}"
-        );
+        // status_message 标签已 i18n 化(见 tests/i18n_chrome_test.rs);
+        // 此处只断言 locale 无关的布局值。
         assert!(
             msg.contains("triple"),
             "status_message should contain 'triple', got: {msg}"

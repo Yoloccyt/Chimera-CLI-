@@ -212,7 +212,7 @@ impl Panel for SecurityPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Security ")
+        Line::from(crate::t!("panel.border.security"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {

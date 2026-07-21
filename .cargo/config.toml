@@ -10,7 +10,7 @@ linker = "gcc"
 # 报告伪 warning(mlc-engine/auto-dpo/mcp-mesh/acb-governor)。源码实际干净
 # (clippy -D warnings 通过)。禁用 incremental 根治该 ICE,同时与 CLAUDE.md §9
 # clippy OOM 缓解(CARGO_INCREMENTAL=0)对齐,避免开发者重复设置环境变量。
-# 代价:日常增量编译速度变慢,但项目规模(34 crates)下全量 check 仅 ~7s,可接受。
+# 代价:日常增量编译速度变慢,但项目规模(35 crates)下全量 check 仅 ~7s,可接受。
 [build]
 incremental = false
 

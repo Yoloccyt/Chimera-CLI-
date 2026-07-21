@@ -195,7 +195,10 @@ fn test_health_panel_shows_active_quests() {
     app.update();
     app.switch_panel_to(PanelId::Health);
 
+    // i18n:固定英文捕获后复位,断言 ASCII 标签。
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let content = render_to_string(&mut app, 80, 24);
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
     assert!(
         content.contains("Active Quests: 3"),
         "Health panel should show 'Active Quests: 3', got: {content}"
@@ -223,7 +226,10 @@ fn test_health_panel_shows_paused_quests() {
     app.update();
     app.switch_panel_to(PanelId::Health);
 
+    // i18n:固定英文捕获后复位,断言 ASCII 标签。
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let content = render_to_string(&mut app, 80, 24);
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
     assert!(
         content.contains("Paused Quests: 1"),
         "Health panel should show 'Paused Quests: 1', got: {content}"

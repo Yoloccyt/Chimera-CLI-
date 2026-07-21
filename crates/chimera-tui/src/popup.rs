@@ -124,6 +124,19 @@ impl PopupKind {
     /// 在全局快捷键之后追加"面板快捷键"章节,展示当前焦点面板的 `shortcuts()` 返回值。
     /// 若 `panel_shortcuts` 为空,则不显示面板快捷键章节。
     pub fn help_overlay_with_context(panel_shortcuts: &[(&'static str, &'static str)]) -> Self {
+        // 委托到带命令章节的构造器(空 action_lines 与旧行为等价),避免重复表定义。
+        Self::help_overlay_with_context_and_actions(panel_shortcuts, &[])
+    }
+
+    /// 创建带面板快捷键 + Registry 命令清单的帮助浮层(v3.1 M2 增量3)
+    ///
+    /// 在全局键、面板快捷键之后追加"命令"章节,列出 `ActionRegistry` 动态生成的
+    /// 命令清单(与命令面板 Ctrl+P 同源),随 locale 切换。`action_lines` 为空时
+    /// 不显示命令章节(与旧 `help_overlay_with_context` 行为等价,保证既有调用者不受影响)。
+    pub fn help_overlay_with_context_and_actions(
+        panel_shortcuts: &[(&'static str, &'static str)],
+        action_lines: &[(String, String)],
+    ) -> Self {
         let mut entries = vec![
             ("q / Esc".into(), "退出应用".into()),
             ("Tab / Shift+Tab".into(), "切换下/上一个面板".into()),
@@ -141,6 +154,14 @@ impl PopupKind {
             entries.push(("── 面板快捷键 ──".into(), String::new()));
             for (key, desc) in panel_shortcuts {
                 entries.push((key.to_string(), desc.to_string()));
+            }
+        }
+
+        // 追加 Registry 命令章节(如有)——与命令面板同源,可发现全部命令
+        if !action_lines.is_empty() {
+            entries.push(("── 命令(Ctrl+P 命令面板)──".into(), String::new()));
+            for (key, title) in action_lines {
+                entries.push((key.clone(), title.clone()));
             }
         }
 
@@ -572,6 +593,47 @@ impl PopupKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 提取 HelpOverlay 的 entries(非 HelpOverlay 则 panic),供帮助浮层测试复用。
+    fn help_entries(popup: &PopupKind) -> Vec<(String, String)> {
+        match popup {
+            PopupKind::HelpOverlay { entries, .. } => entries.clone(),
+            _ => panic!("expected HelpOverlay"),
+        }
+    }
+
+    #[test]
+    fn help_overlay_appends_registry_command_section() {
+        let actions = vec![
+            ("Ctrl+E".to_string(), "导出数据".to_string()),
+            ("/chat".to_string(), "与 Agent 对话".to_string()),
+        ];
+        let popup = PopupKind::help_overlay_with_context_and_actions(&[("x", "示例键")], &actions);
+        let flat: String = help_entries(&popup)
+            .iter()
+            .map(|(k, d)| format!("{k}{d}"))
+            .collect();
+        // 基础全局键仍在
+        assert!(flat.contains("q / Esc"), "基础全局键应保留");
+        // 面板章节 + 命令章节均追加
+        assert!(flat.contains("面板快捷键"), "应含面板快捷键章节");
+        assert!(flat.contains("命令(Ctrl+P"), "应含 Registry 命令章节");
+        assert!(
+            flat.contains("Ctrl+E") && flat.contains("导出数据"),
+            "应展示传入的命令行"
+        );
+    }
+
+    #[test]
+    fn help_overlay_without_actions_has_no_command_section() {
+        // 空 action_lines:不显示命令章节(与旧 help_overlay_with_context 行为等价)
+        let popup = PopupKind::help_overlay_with_context_and_actions(&[], &[]);
+        let flat: String = help_entries(&popup)
+            .iter()
+            .map(|(k, _)| k.clone())
+            .collect();
+        assert!(!flat.contains("命令(Ctrl+P"), "空动作不应有命令章节");
+    }
 
     #[test]
     fn test_popup_stack_push_pop() {

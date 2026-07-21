@@ -23,8 +23,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 fn test_clv_vector_panel_initialization() {
     let panel = ClvVectorPanel::new();
     assert_eq!(panel.id(), PanelId::ClvVector);
-    // title 返回 Line<'static>,用 to_string() 比较
-    assert_eq!(panel.title().to_string(), " CLV Vector ");
+    // title 返回 Line<'static>;i18n 后本地化,固定英文捕获后复位再断言。
+    chimera_tui::set_locale(chimera_tui::Locale::En);
+    let title = panel.title().to_string();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    assert_eq!(title, " CLV Vector ");
 }
 
 #[test]

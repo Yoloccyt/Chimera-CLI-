@@ -88,7 +88,7 @@ impl Panel for MemoryPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Memory ")
+        Line::from(crate::t!("panel.border.memory"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {

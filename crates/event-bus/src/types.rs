@@ -327,6 +327,37 @@ pub enum AgentStatus {
     Crashed,
 }
 
+/// TUI 交互动作来源 — `TuiActionRequested` 事件的触发入口标识(ADR-029)
+///
+/// WHY 独立定义在 event-bus:TUI 交互协议(Action)是 L10 与编排层
+/// (chimera-cli)之间经 L1 EventBus 通信的契约,来源标识用于审计与
+/// UI 反馈定位(区分同一 Action 由哪个入口触发)。三入口共享同一
+/// Action 协议,行为一致性由 chimera-tui 的 ActionRegistry 单源保证。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ActionSource {
+    /// 来自 Chat 面板的斜杠命令
+    Chat,
+    /// 来自命令面板(模糊搜索)
+    Palette,
+    /// 来自面板上下文动作(焦点面板 Enter/Space 唤出)
+    Panel,
+}
+
+/// TUI 交互式对话状态 — `TuiChatStatusChanged` 事件携带的 Agent 会话状态(ADR-029)
+///
+/// WHY 独立定义在 event-bus:与 `AgentStatus`(chimera-mas 多 Agent 生命周期)
+/// 区分——`ChatStatus` 面向单条交互式会话的 UI 呈现(思考中/工具执行中/空闲),
+/// 由 chimera-cli 编排器在流式回答过程中广播,驱动 Chat 面板状态指示器。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ChatStatus {
+    /// 思考中(已提交查询,等待/生成首 token)
+    Thinking,
+    /// 工具执行中(Agent 调用工具,暂停 token 流)
+    ToolExecuting,
+    /// 空闲(本轮完成,等待下一次输入)
+    Idle,
+}
+
 /// NEXUS-OMEGA 核心事件枚举 — 跨层通信的唯一契约
 ///
 /// 设计原则:
@@ -1783,6 +1814,121 @@ pub enum NexusEvent {
         /// 最大 token 数
         max_tokens: usize,
     },
+
+    // ============================================================
+    // TUI 交互式动作协议(ADR-029,v3.1)
+    //
+    // WHY:统一 Action 协议覆盖 TUI 内全部可交互功能,三入口(Chat 斜杠命令/
+    // 命令面板/面板上下文动作)共享同一契约。TUI(L10)只发起请求、接收反馈,
+    // Agent/域编排在 chimera-cli(bin,可依赖下层),经 L1 EventBus 双向通信,
+    // 不违反 L10 依赖铁律。所有变体携带 metadata,severity 均为 Info/Normal
+    // (非 Critical:不占用 mpsc 旁路,该旁路仅留给稀有安全告警事件)。
+    // ============================================================
+    /// TUI 动作请求 — 三入口统一派发点(TUI → 编排层)
+    ///
+    /// WHY payload 为 JSON 字符串:event-bus(L1)不感知具体 Action 语义,
+    /// 各 Action 的结构化参数由 chimera-tui 的 ActionDescriptor 定义 schema
+    /// 并序列化,保持 L1 与 TUI 动作语义解耦。
+    TuiActionRequested {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 动作标识(如 "quest.pause"/"export.run"/"agent.chat")
+        action_id: String,
+        /// 动作参数(JSON 编码,schema 由 ActionDescriptor 定义)
+        payload: String,
+        /// 触发入口(Chat/Palette/Panel),用于审计与 UI 反馈定位
+        source: ActionSource,
+    },
+
+    /// TUI 动作进度 — 流式反馈(编排层 → TUI)
+    ///
+    /// WHY Normal 级别:进度增量为高频事件,走 broadcast 通道;
+    /// `TuiChatResponseChunk` 是本变体面向 token 流的高频特化。
+    TuiActionProgressed {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 关联的动作标识
+        action_id: String,
+        /// 增量内容(语义由 action_id 决定,如进度文本/百分比 JSON)
+        delta: String,
+    },
+
+    /// TUI 动作完成 — 终态反馈(编排层 → TUI)
+    TuiActionCompleted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 关联的动作标识
+        action_id: String,
+        /// 结果摘要(JSON 编码或纯文本)
+        result: String,
+    },
+
+    /// TUI 动作失败 — 错误反馈(编排层 → TUI)
+    ///
+    /// WHY Info 而非 Critical:动作失败是操作员可感知的交互结果,
+    /// 由 UI 呈现给用户重试,不属于必须旁路投递的系统安全事件。
+    TuiActionFailed {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 关联的动作标识
+        action_id: String,
+        /// 错误信息(面向用户的可读描述)
+        error: String,
+    },
+
+    /// TUI 对话提交 — `agent.chat` 动作的语义特化(TUI → 编排层)
+    ///
+    /// WHY 保留独立变体而非全走 TuiActionRequested:对话是最高频交互,
+    /// 独立变体让编排器可零成本模式匹配路由到 QueryLoop,且携带 session_id
+    /// 支持多会话。语义等价于 `TuiActionRequested{ action_id:"agent.chat" }`。
+    TuiChatSubmitted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 会话标识(支持多轮对话上下文关联)
+        session_id: String,
+        /// 用户查询原文
+        query: String,
+        /// 若为斜杠命令,携带命令名(如 "plan"/"clear");纯对话为 None
+        slash_command: Option<String>,
+    },
+
+    /// TUI 对话流式分块 — token 增量(编排层 → TUI)
+    ///
+    /// WHY Normal 级别且禁止 Critical:token 流为高频事件,若走 mpsc 旁路
+    /// 会冲垮仅为稀有安全告警保留的点对点通道。走 broadcast + 低延迟 drain,
+    /// TUI 侧只标记光标行 dirty 实现增量渲染。
+    TuiChatResponseChunk {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 会话标识
+        session_id: String,
+        /// 本次 token 增量文本
+        delta: String,
+        /// 光标行提示(供 TUI 定位增量渲染的脏行,减少全量重绘)
+        cursor_hint: u32,
+    },
+
+    /// TUI 对话完成 — 本轮回答终态(编排层 → TUI)
+    TuiChatCompleted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 会话标识
+        session_id: String,
+        /// 若本轮触发工具调用,携带工具调用摘要(JSON);否则 None
+        tool_use: Option<String>,
+    },
+
+    /// TUI 对话状态变更 — 会话状态机(编排层 → TUI)
+    ///
+    /// WHY Normal 级别:状态指示器更新非关键,丢失可由下次状态事件纠正。
+    TuiChatStatusChanged {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 会话标识
+        session_id: String,
+        /// 新状态(Thinking/ToolExecuting/Idle)
+        status: ChatStatus,
+    },
 }
 
 impl NexusEvent {
@@ -1881,7 +2027,16 @@ impl NexusEvent {
             | Self::AgentConsultRequested { metadata, .. }
             | Self::AgentConsultResponded { metadata, .. }
             | Self::AgentHeartbeat { metadata, .. }
-            | Self::AgentContextOverflow { metadata, .. } => metadata,
+            | Self::AgentContextOverflow { metadata, .. }
+            // TUI 交互式动作协议(ADR-029)
+            | Self::TuiActionRequested { metadata, .. }
+            | Self::TuiActionProgressed { metadata, .. }
+            | Self::TuiActionCompleted { metadata, .. }
+            | Self::TuiActionFailed { metadata, .. }
+            | Self::TuiChatSubmitted { metadata, .. }
+            | Self::TuiChatResponseChunk { metadata, .. }
+            | Self::TuiChatCompleted { metadata, .. }
+            | Self::TuiChatStatusChanged { metadata, .. } => metadata,
         }
     }
 
@@ -1927,7 +2082,15 @@ impl NexusEvent {
             Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }
             | Self::QuestPriorityChanged { .. }
-            | Self::QuestPriorityAdjusted { .. } => EventSeverity::Info,
+            | Self::QuestPriorityAdjusted { .. }
+            // TUI 交互式动作协议(ADR-029):请求/终态为 Info,高频流式为 Normal
+            | Self::TuiActionRequested { .. }
+            | Self::TuiActionCompleted { .. }
+            | Self::TuiActionFailed { .. }
+            | Self::TuiChatSubmitted { .. }
+            | Self::TuiChatCompleted { .. } => EventSeverity::Info,
+            // TuiActionProgressed / TuiChatResponseChunk / TuiChatStatusChanged
+            // 为高频流式事件,走 Normal(broadcast),由通配符分支覆盖
             _ => EventSeverity::Normal,
         }
     }
@@ -2028,6 +2191,15 @@ impl NexusEvent {
             Self::AgentConsultResponded { .. } => "AgentConsultResponded",
             Self::AgentHeartbeat { .. } => "AgentHeartbeat",
             Self::AgentContextOverflow { .. } => "AgentContextOverflow",
+            // TUI 交互式动作协议(ADR-029)
+            Self::TuiActionRequested { .. } => "TuiActionRequested",
+            Self::TuiActionProgressed { .. } => "TuiActionProgressed",
+            Self::TuiActionCompleted { .. } => "TuiActionCompleted",
+            Self::TuiActionFailed { .. } => "TuiActionFailed",
+            Self::TuiChatSubmitted { .. } => "TuiChatSubmitted",
+            Self::TuiChatResponseChunk { .. } => "TuiChatResponseChunk",
+            Self::TuiChatCompleted { .. } => "TuiChatCompleted",
+            Self::TuiChatStatusChanged { .. } => "TuiChatStatusChanged",
         }
     }
 }
@@ -2058,6 +2230,70 @@ mod tests {
             cache_key: "k1".into(),
         };
         assert_eq!(normal.severity(), EventSeverity::Normal);
+    }
+
+    /// ADR-029:TUI 交互式动作协议事件的 severity 分级验证
+    ///
+    /// 请求/终态(Requested/Completed/Failed/ChatSubmitted/ChatCompleted)为 Info;
+    /// 高频流式(Progressed/ResponseChunk/StatusChanged)为 Normal——
+    /// 确保高频事件不占用仅为稀有安全告警保留的 mpsc 旁路通道。
+    #[test]
+    fn test_tui_action_protocol_severity() {
+        let requested = NexusEvent::TuiActionRequested {
+            metadata: EventMetadata::new("chimera-tui"),
+            action_id: "quest.pause".into(),
+            payload: "{\"quest_id\":\"q1\"}".into(),
+            source: ActionSource::Palette,
+        };
+        assert_eq!(requested.severity(), EventSeverity::Info);
+
+        let chunk = NexusEvent::TuiChatResponseChunk {
+            metadata: EventMetadata::new("chimera-cli"),
+            session_id: "s1".into(),
+            delta: "hello".into(),
+            cursor_hint: 0,
+        };
+        assert_eq!(
+            chunk.severity(),
+            EventSeverity::Normal,
+            "高频 token 流必须为 Normal,避免冲垮 mpsc 旁路"
+        );
+
+        let submitted = NexusEvent::TuiChatSubmitted {
+            metadata: EventMetadata::new("chimera-tui"),
+            session_id: "s1".into(),
+            query: "实现登录".into(),
+            slash_command: None,
+        };
+        assert_eq!(submitted.severity(), EventSeverity::Info);
+    }
+
+    /// ADR-029:新增事件的 type_name 稳定性与 metadata 可取性验证
+    #[test]
+    fn test_tui_action_protocol_type_name_and_metadata() {
+        let events = [
+            NexusEvent::TuiActionRequested {
+                metadata: EventMetadata::new("chimera-tui"),
+                action_id: "a".into(),
+                payload: "{}".into(),
+                source: ActionSource::Chat,
+            },
+            NexusEvent::TuiActionProgressed {
+                metadata: EventMetadata::new("chimera-cli"),
+                action_id: "a".into(),
+                delta: "d".into(),
+            },
+            NexusEvent::TuiChatStatusChanged {
+                metadata: EventMetadata::new("chimera-cli"),
+                session_id: "s".into(),
+                status: ChatStatus::Thinking,
+            },
+        ];
+        // metadata() 对所有新变体可取,source 非空;type_name 以 "Tui" 前缀一致
+        for e in &events {
+            assert!(!e.metadata().source.is_empty());
+            assert!(e.type_name().starts_with("Tui"));
+        }
     }
 
     #[test]

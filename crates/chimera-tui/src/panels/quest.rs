@@ -309,7 +309,7 @@ impl Panel for QuestPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Quest Tasks ")
+        Line::from(crate::t!("panel.border.quest"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {

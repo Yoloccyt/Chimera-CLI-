@@ -1,0 +1,58 @@
+# CI 前置闸门 — PR / push 到 main 时运行 fmt/check/clippy/test
+# WHY: 此前仅 audit.yml 在 PR 上触发(且只做 cargo audit 依赖扫描),而
+# cargo check/clippy/test 只在 tag 发布(release.yml,受 refs/tags/v 限定)时才跑,
+# 即"合并进 main 之后"。缺少合并前的机械校验,会破坏编译或测试的改动可能直接落到 main。
+# 本 workflow 把 CLAUDE.md §5 发布前清单中的 fmt/check/clippy/test 前移为合并前的必需闸门。
+# 注: Windows-GNU 与 5 平台构建由 release.yml 在 tag 时覆盖;此闸门在 ubuntu-latest 上做
+# 跨平台无关的快速校验(编译/单测/lint/格式),以获得最快反馈,不与 release 矩阵重复。
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# WHY: 同一 ref 的新 push 取消仍在排队/运行的旧 CI,避免 runner 资源浪费。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # WHY: 与 .cargo/config.toml 对齐 —— CI 无增量复用价值,关闭以规避历史 GNU ICE 并加速。
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  check:
+    name: fmt · check · clippy · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+
+      # WHY: 先跑零编译依赖的文档一致性巡检，若架构文档 crate 数与 Cargo.toml 漂移则快速失败(F4)。
+      - name: Doc consistency (crate count vs Cargo.toml)
+        run: bash scripts/check_doc_consistency.sh
+
+      # WHY: ubuntu-latest 预装 stable 工具链;显式补齐 rustfmt/clippy 组件以防缺失。
+      - name: Ensure rustfmt & clippy components
+        run: rustup component add rustfmt clippy
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Type check (workspace, all targets)
+        run: cargo check --workspace --all-targets
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test (workspace)
+        run: cargo test --workspace

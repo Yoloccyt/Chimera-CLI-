@@ -3,6 +3,14 @@ name = "chimera-tui"
 version.workspace = true
 edition.workspace = true
 
+# v3.1 重构:自研渲染引擎特性开关(ADR-029)
+# WHY feature flag:自研引擎与现有 ratatui 路径双轨并存,逐面板迁移,
+# 每个里程碑可 cargo test --workspace 全绿、随时回滚。M0-M1 引擎骨架
+# 默认编译(供 CI 类型检查),v3-engine 开启后在 M2 切换实际渲染路径。
+[features]
+# 启用自研渲染引擎作为实际渲染后端(默认关闭,渐进迁移期用)
+v3-engine = []
+
 [dependencies]
 # L10 Interface → L1 Core(向下依赖,event-bus 是唯一跨层通道,§2.2 依赖铁律)
 event-bus = { path = "../event-bus" }
@@ -47,4 +55,19 @@ harness = false
 
 [[bench]]
 name = "render_bench"
+harness = false
+
+# v3.1 M0 benchmark-first(先 RED):diff_engine 测量双缓冲差异计算延迟,
+# streaming 测量 token 增量渲染延迟。阈值见各 bench 文件头注释。
+[[bench]]
+name = "diff_engine_bench"
+harness = false
+
+[[bench]]
+name = "streaming_bench"
+harness = false
+
+# v3.1 M1.2:测量 writer 样式去重 + Span 合并后的输出渲染耗时(低带宽关键路径)。
+[[bench]]
+name = "writer_ansi_bench"
 harness = false

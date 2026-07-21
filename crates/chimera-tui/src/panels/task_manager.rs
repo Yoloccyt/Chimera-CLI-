@@ -440,7 +440,7 @@ impl Panel for TaskManagerPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Task Manager ")
+        Line::from(crate::t!("panel.border.task"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {

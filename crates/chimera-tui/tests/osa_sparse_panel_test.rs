@@ -21,8 +21,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 fn test_osa_sparse_panel_initialization() {
     let panel = OsaSparsePanel::new();
     assert_eq!(panel.id(), PanelId::OsaSparse);
-    // title 返回 Line<'static>,用 to_string() 比较
-    assert_eq!(panel.title().to_string(), " OSA Sparse ");
+    // title 返回 Line<'static>;i18n 后本地化,固定英文捕获后复位再断言。
+    chimera_tui::set_locale(chimera_tui::Locale::En);
+    let title = panel.title().to_string();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    assert_eq!(title, " OSA Sparse ");
 }
 
 #[test]

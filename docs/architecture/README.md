@@ -9,7 +9,7 @@
 
 | 优先级 | 文档 | 说明 | 状态 |
 |--------|------|------|------|
-| ⭐⭐⭐ **权威源** | [CODE_WIKI.md](./CODE_WIKI.md) | **唯一权威参考** — 34 crate完整索引、核心类型、事件系统、依赖铁律、数据流、设计模式、工程红线、构建指南 | ✅ v1.7.0-omega 已更新 |
+| ⭐⭐⭐ **权威源** | [CODE_WIKI.md](./CODE_WIKI.md) | **唯一权威参考** — 35 crate完整索引、核心类型、事件系统、依赖铁律、数据流、设计模式、工程红线、构建指南 | ✅ 已同步至 35 crate(v2.3.1-omega) |
 | ⭐⭐⭐ **文档索引** | [INDEX.md](./INDEX.md) | 架构文档统一索引（7 分类组织所有架构文档） | ✅ 已更新 |
 | ⭐⭐ 辅助参考 | [nuxus规则.md](../../.trae/rules/nuxus规则.md) | 全局规则、架构硬约束、async/SQLite/安全红线 | ✅ 已同步 |
 | ⭐⭐ 辅助参考 | [CLAUDE.md](../../.claude/CLAUDE.md) | 环境设置、常用命令、CI/CD与发布 | ✅ 已同步 |
@@ -20,7 +20,7 @@
 
 1. **首先阅读** → [CODE_WIKI.md](./CODE_WIKI.md) (本目录)
    - §1 项目概览 + §2 十层架构 → 建立整体认知
-   - §3 34 Crate索引 → 了解模块职责
+   - §3 35 Crate索引 → 了解模块职责
    - §9 工程红线 → 避免踩坑
 
 2. **然后查看** → [CLAUDE.md](../../.claude/CLAUDE.md)
@@ -37,7 +37,7 @@
 |------|------|
 | §1 | 项目概览、OMEGA四定律、术语速查 |
 | §2 | 十层架构详解与分层映射 |
-| §3 | **34个crate完整索引**(架构层/职责/关键类型/关键文件/依赖) |
+| §3 | **35个crate完整索引**(架构层/职责/关键类型/关键文件/依赖) |
 | §4 | 核心领域类型(UserIntent/Quest/Task/Checkpoint/CLV/ThinkingMode) |
 | §5 | 事件系统(双通道架构/Critical事件清单/核心事件表) |
 | §6 | 依赖关系铁律(方向规则/硬约束/已修正违规) |
@@ -55,7 +55,7 @@
 1. **依赖方向**: L(N) → L(N-1) 允许; L(N) → L(N+1) 禁止
 2. **跨层通信**: 只能走 Event Bus (`event-bus` crate)
 3. **跨进程通信**: 只能走 MCP Mesh (`mcp-mesh` crate)
-4. **内存安全**: `#![forbid(unsafe_code)]` 34/34 crate 全覆盖
+4. **内存安全**: `#![forbid(unsafe_code)]` 35/35 crate 全覆盖
 5. **单函数 ≤ 200 行**: 超过必须拆模块
 6. **禁止持锁.await**: DashMap/Mutex写锁必须在.await前释放
 7. **rusqlite必须spawn_blocking**: 禁止在async上下文直接调用
@@ -65,5 +65,5 @@
 
 ---
 
-> **文档版本**: v1.7.0-omega (2026-07-15)
+> **文档版本**: v2.3.1-omega (2026-07-21) — crate 数已对齐 Cargo.toml(35)
 > **权威源**: [CODE_WIKI.md](./CODE_WIKI.md)

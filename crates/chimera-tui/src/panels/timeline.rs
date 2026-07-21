@@ -251,7 +251,7 @@ impl Panel for TimelinePanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Timeline ")
+        Line::from(crate::t!("panel.border.timeline"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
@@ -303,7 +303,11 @@ impl Panel for TimelinePanel {
         // WHY 从 timeline_snapshots 提取 event_rate 作为 sparkline 数据点:
         // 展示历史事件速率趋势,与顶部摘要的"当前速率"互补。
         let rate_data: Vec<u64> = snapshots.iter().map(|s| s.event_rate).collect();
-        let sparkline = render::sparkline(&rate_data, "Event Rate History", Color::Yellow);
+        let sparkline = render::sparkline(
+            &rate_data,
+            crate::t!("chart.event_rate_history"),
+            Color::Yellow,
+        );
         sparkline.render(chunks[2], buf);
     }
 
@@ -407,7 +411,11 @@ mod tests {
     #[test]
     fn test_timeline_panel_title() {
         let panel = TimelinePanel::new();
-        assert_eq!(panel.title().to_string(), " Timeline ");
+        // i18n:title() 已本地化;固定英文捕获后立即复位,断言 ASCII 标题。
+        crate::i18n::set_locale(crate::i18n::Locale::En);
+        let title = panel.title().to_string();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+        assert_eq!(title, " Timeline ");
     }
 
     #[test]

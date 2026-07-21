@@ -13,10 +13,11 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::data::{BudgetMetrics, HealthMetrics, MemoryMetrics, SecurityState};
+use crate::engine::layout::PaneMode;
 use crate::error::TuiError;
 use crate::popup::{PopupStack, Severity};
 use chrono::{DateTime, Utc};
-use event_bus::{NexusEvent, VoteValue};
+use event_bus::{ActionSource, NexusEvent, VoteValue};
 use nexus_core::Quest;
 use serde::{Deserialize, Serialize};
 
@@ -280,6 +281,23 @@ impl LayoutMode {
             LayoutMode::TriplePane => LayoutMode::SinglePane,
         }
     }
+
+    /// 将旧布局模式别名映射到 v3 `PaneMode`(M2 增量3,别名共存)
+    ///
+    /// WHY 别名而非替换:`LayoutMode` 保留为存储与 `l` 键循环驱动,`PaneMode` 作为
+    /// 展示层派生——伴随面板等多窗格特性据此判断是否有 context 区。
+    /// - `SinglePane => Focus`(全屏,无 context)
+    /// - `DualPane => Chat`(主区 + 单一 context)
+    /// - `TriplePane => Ide`(主区 + context;Stage 1 暂只用 context 栏)
+    ///
+    /// `PaneMode::VimSplit` 为保留态,当前不由 `LayoutMode` 映射(留后续/命令面板可达)。
+    pub fn to_pane_mode(self) -> PaneMode {
+        match self {
+            LayoutMode::SinglePane => PaneMode::Focus,
+            LayoutMode::DualPane => PaneMode::Chat,
+            LayoutMode::TriplePane => PaneMode::Ide,
+        }
+    }
 }
 
 // ============================================================
@@ -445,6 +463,21 @@ pub enum TuiCommand {
     },
     /// 导出当前面板数据
     Export,
+    /// 派发一个 Action(v3.1 三入口统一派发点,ADR-029)
+    ///
+    /// WHY 统一派发:Chat 斜杠命令 / 命令面板 / 面板上下文动作三入口最终都
+    /// 归结为"派发某个 action_id + payload",由 `apply_command` 统一发布
+    /// `NexusEvent::TuiActionRequested`,经 EventBus 交 chimera-cli 编排。
+    /// `source` 标识触发入口,用于审计与 UI 反馈定位。既有 Quest 控制变体
+    /// (RequestQuestPause 等)将在 M3 逐步迁移为本变体调用,当前并存兼容。
+    DispatchAction {
+        /// 动作标识(须存在于 ActionRegistry,如 "quest.pause")
+        action_id: String,
+        /// 动作参数(JSON 编码;无参数为 "{}")
+        payload: String,
+        /// 触发入口(Chat/Palette/Panel)
+        source: ActionSource,
+    },
 }
 
 // ============================================================
@@ -993,6 +1026,14 @@ pub struct NetworkMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_mode_aliases_to_pane_mode() {
+        // M2 增量3:LayoutMode → PaneMode 别名映射(别名共存)
+        assert_eq!(LayoutMode::SinglePane.to_pane_mode(), PaneMode::Focus);
+        assert_eq!(LayoutMode::DualPane.to_pane_mode(), PaneMode::Chat);
+        assert_eq!(LayoutMode::TriplePane.to_pane_mode(), PaneMode::Ide);
+    }
 
     // ============================================================
     // PanelId 测试

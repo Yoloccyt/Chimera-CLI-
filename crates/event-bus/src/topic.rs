@@ -185,7 +185,16 @@ impl NexusEvent {
             // P2.4 TUI v1.7-omega:MCP 节点心跳(L10 mcp-mesh 发布)
             | Self::McpNodeHeartbeat { .. }
             // P2.5 TUI v1.7-omega:CHTC 适配器状态(L10 chtc-bridge 发布)
-            | Self::ChtcAdapterStatus { .. } => EventTopic::System,
+            | Self::ChtcAdapterStatus { .. }
+            // TUI 交互式动作协议(ADR-029,v3.1):L10 Interface 交互事件
+            | Self::TuiActionRequested { .. }
+            | Self::TuiActionProgressed { .. }
+            | Self::TuiActionCompleted { .. }
+            | Self::TuiActionFailed { .. }
+            | Self::TuiChatSubmitted { .. }
+            | Self::TuiChatResponseChunk { .. }
+            | Self::TuiChatCompleted { .. }
+            | Self::TuiChatStatusChanged { .. } => EventTopic::System,
 
             // === Knowledge (4) === L5 Knowledge 知识沉淀与进化
             Self::WikiUpdated { .. }

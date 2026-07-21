@@ -254,7 +254,7 @@ impl Panel for ParliamentPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Parliament ")
+        Line::from(crate::t!("panel.border.parliament"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {

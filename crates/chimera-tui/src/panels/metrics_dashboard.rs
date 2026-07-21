@@ -252,7 +252,7 @@ impl Panel for MetricsDashboardPanel {
 
     fn title(&self) -> Line<'static> {
         // WHY BOLD 修饰:5×2 网格是密集视图,标题需醒目
-        Line::from(" Metrics Dashboard ").style(
+        Line::from(crate::t!("panel.border.metrics")).style(
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),

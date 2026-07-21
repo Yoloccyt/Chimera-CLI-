@@ -96,21 +96,21 @@ impl HealthPanel {
         let lines = vec![
             Line::from(vec![
                 Span::styled(
-                    "Events/sec: ",
+                    crate::t!("health.events"),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(format!("{:.1}", hm.events_per_second)),
             ]),
             Line::from(vec![
                 Span::styled(
-                    "Slow Consumers: ",
+                    crate::t!("health.slow_consumers"),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(hm.slow_consumer_count.to_string()),
             ]),
             Line::from(vec![
                 Span::styled(
-                    "Avg Latency: ",
+                    crate::t!("health.avg_latency"),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(format!("{:.1} ms", hm.average_latency_ms)),
@@ -119,21 +119,21 @@ impl HealthPanel {
             // 反映系统当前 Quest 负载与暂停状态(不新增事件,复用已有 QuestPaused/QuestResumed)
             Line::from(vec![
                 Span::styled(
-                    "Active Quests: ",
+                    crate::t!("health.active_quests"),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(state.quest_list.len().to_string()),
             ]),
             Line::from(vec![
                 Span::styled(
-                    "Paused Quests: ",
+                    crate::t!("health.paused_quests"),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(state.paused_quest_count.to_string()),
             ]),
             Line::from(vec![
                 Span::styled(
-                    "Health Score: ",
+                    crate::t!("health.score"),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
@@ -230,7 +230,7 @@ impl Panel for HealthPanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(" Health ")
+        Line::from(crate::t!("panel.border.health"))
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
@@ -266,8 +266,11 @@ impl Panel for HealthPanel {
         );
         gauge.render(right_chunks[0], buf);
 
-        let sparkline =
-            render::sparkline(&state.event_rate_history, "Event Rate History", Color::Cyan);
+        let sparkline = render::sparkline(
+            &state.event_rate_history,
+            crate::t!("chart.event_rate_history"),
+            Color::Cyan,
+        );
         sparkline.render(right_chunks[1], buf);
 
         // 底部系统资源摘要行
