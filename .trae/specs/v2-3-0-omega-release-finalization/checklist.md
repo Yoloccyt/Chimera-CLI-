@@ -1,7 +1,9 @@
 # Checklist: v2.3.0-omega 发布就绪
 
 > **change-id**: v2-3-0-omega-release-finalization
-> **版本**: v2.3.0-omega
+> **版本**: v2.3.0-omega → v2.3.1-omega (patch 补救)
+> **状态**: ✅ v2.3.0-omega tag 已推送但 commit message 编码损坏(GBK 乱码),GitHub 仓库规则锁定无法修复
+> **补救**: v2.3.1-omega 通过新 tag 触发 release workflow,代码内容与 v2.3.0-omega 完全一致
 
 ---
 
@@ -39,5 +41,5 @@
 
 ## 发布
 
-- [ ] `git tag v2.3.0-omega` 已创建
-- [ ] `git push origin v2.3.0-omega` 已推送
+- [x] `git tag v2.3.0-omega` 已创建
+- [x] `git push origin v2.3.0-omega` 已推送
