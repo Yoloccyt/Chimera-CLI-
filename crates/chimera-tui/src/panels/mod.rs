@@ -105,4 +105,24 @@ pub trait Panel: Send {
     /// 默认空实现;列表型面板应覆盖以将选中项移到最后一项。
     /// 需要 `state` 参数的原因同 `scroll_to_top`。
     fn scroll_to_bottom(&mut self, _state: &mut TuiState) {}
+
+    /// 返回当前面板支持的快捷键列表（键名, 描述）
+    ///
+    /// 默认返回空列表；面板可覆盖以提供上下文感知的快捷键帮助。
+    /// 返回值用于 `PopupKind::HelpOverlay` 在 `?` 键触发时展示
+    /// "面板快捷键"章节。
+    ///
+    /// # 示例
+    /// ```ignore
+    /// fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+    ///     vec![
+    ///         ("↑/↓", "导航"),
+    ///         ("Enter", "查看详情"),
+    ///         ("P", "暂停任务"),
+    ///     ]
+    /// }
+    /// ```
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![]
+    }
 }

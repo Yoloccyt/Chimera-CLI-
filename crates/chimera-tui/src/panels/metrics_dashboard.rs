@@ -338,4 +338,8 @@ impl Panel for MetricsDashboardPanel {
         // M1 不启用鼠标处理(与既有 16 面板一致)
         None
     }
+
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("↑/↓", "导航"), ("R", "刷新")]
+    }
 }

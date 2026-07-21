@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 use crate::command_palette::CommandPalette;
 use crate::config::Theme;
 use crate::config::TuiConfig;
-use crate::data::{DataSnapshot, StubDataSource, TuiDataSource};
+use crate::data::{DataSnapshot, ExportFormat, StubDataSource, TuiDataSource};
 use crate::error::TuiError;
 use crate::focus::FocusManager;
 use crate::panels::{
@@ -162,7 +162,11 @@ impl TuiApp {
         ];
         let panel_ids: Vec<PanelId> = panels.iter().map(|p| p.id()).collect();
         let focus_manager = FocusManager::new(panel_ids);
-        let state = TuiState::new();
+        let state = if config.persist_state {
+            TuiState::load_from_file(&config.state_file_path)
+        } else {
+            TuiState::new()
+        };
         let main_panel_ratio = config.main_panel_ratio;
 
         Ok(Self {
@@ -252,6 +256,8 @@ impl TuiApp {
                 // P8 ResourceMonitor 面板字段同步:DataSnapshot → TuiState
                 self.state.sys_metrics = snapshot.sys_metrics.clone();
                 self.state.sys_metrics_history = snapshot.sys_metrics_history.clone();
+                // Task 6:同步 tick 模式,供状态栏展示
+                self.state.tick_mode = snapshot.tick_mode;
             }
             Err(e) => {
                 // M1 清理项 #4:数据源失败时向用户展示状态栏警告,而非静默忽略。
@@ -474,10 +480,17 @@ impl TuiApp {
                 self.state.input_buffer.clear();
             }
             // WHY P3.2:`?` 作为全局快捷键直接触发 Help overlay,
-            // 不再交给面板处理,确保在任何面板都能一致地弹出帮助浮层,
-            // 且不会切换当前焦点面板。
+            // 不切换当前焦点面板,并传递当前面板的快捷键列表。
             KeyCode::Char('?') => {
-                self.state.popup_stack.push(PopupKind::help_overlay());
+                let shortcuts = self
+                    .panels
+                    .iter()
+                    .find(|p| p.id() == self.focus_manager.focused())
+                    .map(|p| p.shortcuts())
+                    .unwrap_or_default();
+                self.state
+                    .popup_stack
+                    .push(PopupKind::help_overlay_with_context(&shortcuts));
             }
             // P6.1:循环切换主题 Dark → Light → HighContrast → Dark
             //
@@ -505,6 +518,10 @@ impl TuiApp {
                 self.state.layout_mode = new_mode;
                 self.state.status_message =
                     Some((format!("Layout: {}", new_mode.as_str()), Severity::Info));
+            }
+            // E: 导出当前面板数据
+            KeyCode::Char('E') => {
+                self.handle_export_command();
             }
             KeyCode::F(1) => self.switch_panel_to(PanelId::Quest),
             KeyCode::F(2) => self.switch_panel_to(PanelId::Parliament),
@@ -573,6 +590,16 @@ impl TuiApp {
             for quest_id in ids_str.split(',') {
                 self.publish_pause(quest_id);
             }
+        } else if let Some(ids_str) = cmd.strip_prefix("batch_resume:") {
+            // 批量恢复:遍历逗号分隔的 quest_id 列表,逐个发布恢复请求
+            for quest_id in ids_str.split(',') {
+                self.publish_resume(quest_id);
+            }
+        } else if let Some(ids_str) = cmd.strip_prefix("batch_terminate:") {
+            // 批量终止:遍历逗号分隔的 quest_id 列表,逐个发布终止请求
+            for quest_id in ids_str.split(',') {
+                self.publish_terminate(quest_id);
+            }
         } else if let Some(ids_str) = cmd.strip_prefix("batch_cancel:") {
             // 批量取消:遍历逗号分隔的 quest_id 列表,逐个发布取消请求
             // WHY 逐条发布而非单事件:event-bus 的 QuestCancelRequested 事件
@@ -591,6 +618,53 @@ impl TuiApp {
                     format!("invalid vote in confirm command: {cmd}"),
                     Severity::Error,
                 );
+            }
+        } else if let Some(format_str) = cmd.strip_prefix("export:") {
+            let format = if format_str.contains("csv") {
+                ExportFormat::Csv
+            } else {
+                ExportFormat::Json
+            };
+            self.perform_export(format);
+        }
+    }
+
+    /// 处理导出命令 — 弹出格式选择弹窗
+    fn handle_export_command(&mut self) {
+        self.state.popup_stack.push(PopupKind::Confirm {
+            prompt: "Export as CSV?".into(),
+            on_confirm: "export:csv".into(),
+            confirmed: true,
+        });
+    }
+
+    /// 执行导出操作
+    fn perform_export(&mut self, format: ExportFormat) {
+        let data_source = &self.data_source;
+        match data_source.snapshot() {
+            Ok(snapshot) => {
+                let now = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+                let home = std::env::var("USERPROFILE")
+                    .or_else(|_| std::env::var("HOME"))
+                    .unwrap_or_else(|_| ".".to_string());
+                let export_dir = std::path::PathBuf::from(home)
+                    .join(".chimera")
+                    .join("exports");
+                let filename = format!("quests_{}.{}", now, format.extension());
+                let path = export_dir.join(&filename);
+                match snapshot.export_quests_to(format, &path) {
+                    Ok(()) => {
+                        self.state.status_message =
+                            Some((format!("Exported: {}", path.display()), Severity::Info));
+                    }
+                    Err(e) => {
+                        self.state.status_message =
+                            Some((format!("Export failed: {e}"), Severity::Error));
+                    }
+                }
+            }
+            Err(e) => {
+                self.state.status_message = Some((format!("Cannot export: {e}"), Severity::Error));
             }
         }
     }
@@ -618,6 +692,18 @@ impl TuiApp {
     /// WHY 与 pause/resume 同构:复用 EventMetadata + requested_by 模式,
     /// 由 quest-engine 消费后发布 QuestCancelled 状态变更事件。
     fn publish_cancel_request(&mut self, quest_id: &str) {
+        self.publish_control_event(NexusEvent::QuestCancelRequested {
+            metadata: EventMetadata::new("chimera-tui"),
+            quest_id: quest_id.to_string(),
+            requested_by: "operator".to_string(),
+        });
+    }
+
+    /// 发布 Quest 终止请求(Task 7.2 批量操作)
+    ///
+    /// WHY 与 pause/resume/cancel 同构:复用 EventMetadata + requested_by 模式,
+    /// 由 quest-engine 消费后终止 Quest 执行。
+    fn publish_terminate(&mut self, quest_id: &str) {
         self.publish_control_event(NexusEvent::QuestCancelRequested {
             metadata: EventMetadata::new("chimera-tui"),
             quest_id: quest_id.to_string(),
@@ -835,6 +921,9 @@ impl TuiApp {
                     }
                 }
             }
+            TuiCommand::Export => {
+                self.handle_export_command();
+            }
         }
     }
 
@@ -1020,8 +1109,9 @@ impl TuiApp {
         let (status, fg) = match &self.state.status_message {
             Some((msg, severity)) => (
                 format!(
-                    " Panel: {} | FPS: {} | {} ",
+                    " Panel: {} | Tick: {} | FPS: {} | {} ",
                     self.current_panel().as_str(),
+                    self.state.tick_mode.display(),
                     self.state.fps,
                     msg
                 ),
@@ -1029,8 +1119,9 @@ impl TuiApp {
             ),
             None => (
                 format!(
-                    " Panel: {} | FPS: {} | Frame: {} | Ratio: {:.0}% ",
+                    " Panel: {} | Tick: {} | FPS: {} | Frame: {} | Ratio: {:.0}% ",
                     self.current_panel().as_str(),
+                    self.state.tick_mode.display(),
                     self.state.fps,
                     self.state.frame_count,
                     self.main_panel_ratio * 100.0
@@ -1132,6 +1223,17 @@ impl TuiApp {
                 error = %e,
                 "Failed to save TuiConfig on exit (non-blocking)"
             );
+        }
+
+        // 步骤 4.5:退出时保存 TuiState (最佳努力)
+        if self.config.persist_state {
+            if let Err(e) = self.state.save_to_file(&self.config.state_file_path) {
+                tracing::warn!(
+                    path = %self.config.state_file_path.display(),
+                    error = %e,
+                    "Failed to save TuiState on exit (non-blocking)"
+                );
+            }
         }
 
         // 步骤 5:恢复终端(无论事件循环成功与否)

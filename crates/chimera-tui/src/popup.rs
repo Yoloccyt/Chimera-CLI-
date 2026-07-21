@@ -116,20 +116,35 @@ impl PopupKind {
     /// WHY P3.2:将帮助表集中维护在弹窗类型内部,避免 app.rs 与各面板重复
     /// 定义。新增全局快捷键时只需修改此处即可同步到所有触发点。
     pub fn help_overlay() -> Self {
-        Self::HelpOverlay {
-            entries: vec![
-                ("q / Esc".into(), "退出应用".into()),
-                ("Tab / Shift+Tab".into(), "切换下/上一个面板".into()),
-                ("1-9".into(), "跳转到对应序号的面板".into()),
-                (":".into(), "打开命令面板".into()),
-                ("/".into(), "打开搜索过滤器".into()),
-                ("?".into(), "显示本帮助浮层".into()),
-                ("j / k".into(), "向下/向上滚动列表或弹窗".into()),
-                ("Enter".into(), "查看选中项详情或确认操作".into()),
-                ("Ctrl+↑ / Ctrl+↓".into(), "调整主面板显示比例".into()),
-            ],
-            scroll: 0,
+        Self::help_overlay_with_context(&[])
+    }
+
+    /// 创建带面板快捷键的上下文感知帮助浮层
+    ///
+    /// 在全局快捷键之后追加"面板快捷键"章节,展示当前焦点面板的 `shortcuts()` 返回值。
+    /// 若 `panel_shortcuts` 为空,则不显示面板快捷键章节。
+    pub fn help_overlay_with_context(panel_shortcuts: &[(&'static str, &'static str)]) -> Self {
+        let mut entries = vec![
+            ("q / Esc".into(), "退出应用".into()),
+            ("Tab / Shift+Tab".into(), "切换下/上一个面板".into()),
+            ("1-9".into(), "跳转到对应序号的面板".into()),
+            (":".into(), "打开命令面板".into()),
+            ("/".into(), "打开搜索过滤器".into()),
+            ("?".into(), "显示本帮助浮层".into()),
+            ("j / k".into(), "向下/向上滚动列表或弹窗".into()),
+            ("Enter".into(), "查看选中项详情或确认操作".into()),
+            ("Ctrl+↑ / Ctrl+↓".into(), "调整主面板显示比例".into()),
+        ];
+
+        // 追加面板快捷键章节(如有)
+        if !panel_shortcuts.is_empty() {
+            entries.push(("── 面板快捷键 ──".into(), String::new()));
+            for (key, desc) in panel_shortcuts {
+                entries.push((key.to_string(), desc.to_string()));
+            }
         }
+
+        Self::HelpOverlay { entries, scroll: 0 }
     }
 
     /// 从 `NexusEvent` 构造事件详情弹窗

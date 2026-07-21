@@ -13,6 +13,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::data::{BudgetMetrics, HealthMetrics, MemoryMetrics, SecurityState};
+use crate::error::TuiError;
 use crate::popup::{PopupStack, Severity};
 use chrono::{DateTime, Utc};
 use event_bus::{NexusEvent, VoteValue};
@@ -442,6 +443,8 @@ pub enum TuiCommand {
         /// 控制动作
         action: QuestAction,
     },
+    /// 导出当前面板数据
+    Export,
 }
 
 // ============================================================
@@ -605,6 +608,34 @@ impl Default for TimelineSnapshot {
 }
 
 // ============================================================
+// TickMode — DataPipeline 低带宽自适应 tick 模式
+// ============================================================
+
+/// DataPipeline tick 模式 — 用于低带宽自适应
+///
+/// WHY 自适应 tick:当事件积压量超过阈值时自动从 Normal(250ms)切换到
+/// Eco(1000ms),降低 CPU 占用与渲染压力。积压量回落到阈值一半以下
+/// 且连续 3 tick 稳定后,自动切回 Normal 模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TickMode {
+    /// 正常模式(250ms tick)
+    #[default]
+    Normal,
+    /// 节能模式(1000ms tick),高负载时自动切换
+    Eco,
+}
+
+impl TickMode {
+    /// 返回状态栏展示文本
+    pub fn display(&self) -> &'static str {
+        match self {
+            TickMode::Normal => "Normal",
+            TickMode::Eco => "Eco",
+        }
+    }
+}
+
+// ============================================================
 // TUI 状态 — 应用运行时状态
 // ============================================================
 
@@ -702,6 +733,9 @@ pub struct TuiState {
     pub sys_metrics: SystemMetrics,
     /// 系统资源指标历史(sparkline: CPU 使用率 × 10 的 u64 表示)
     pub sys_metrics_history: Vec<u64>,
+    /// 当前 tick 模式(Normal/Eco),状态栏展示用
+    #[serde(default)]
+    pub tick_mode: TickMode,
 }
 
 impl TuiState {
@@ -748,6 +782,61 @@ impl TuiState {
             // P8 ResourceMonitor 面板默认值
             sys_metrics: SystemMetrics::default(),
             sys_metrics_history: Vec::new(),
+            tick_mode: TickMode::default(),
+        }
+    }
+
+    /// 将 TuiState 的布局相关字段序列化保存到 YAML 文件
+    ///
+    /// WHY 只保存布局字段:运行时数据(quest_list/latest_events/metrics)由
+    /// DataPipeline 从 event-bus 重新填充,无需持久化。
+    pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), TuiError> {
+        // 创建父目录（最佳努力,目录已存在时忽略错误）
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let yaml = serde_yaml::to_string(self).map_err(|e| TuiError::ConfigError {
+            detail: format!("YAML serialize failed: {e}"),
+        })?;
+        std::fs::write(path, yaml).map_err(|e| TuiError::ConfigError {
+            detail: format!("write state file failed: {e}"),
+        })?;
+        Ok(())
+    }
+
+    /// 从 YAML 文件加载 TuiState 的布局字段
+    ///
+    /// WHY 只恢复布局字段:运行时数据由 DataPipeline 重新填充。
+    /// 加载失败时降级为默认状态,不阻塞启动。
+    pub fn load_from_file(path: &std::path::Path) -> Self {
+        match std::fs::read_to_string(path) {
+            Ok(yaml) => match serde_yaml::from_str::<Self>(&yaml) {
+                Ok(state) => {
+                    tracing::info!(
+                        path = %path.display(),
+                        "TuiState restored from file"
+                    );
+                    // 确保关键运行时字段为初始值
+                    Self {
+                        running: true,
+                        latest_events: VecDeque::new(),
+                        popup_stack: crate::popup::PopupStack::new(),
+                        ..state
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to deserialize TuiState, falling back to default"
+                    );
+                    Self::new()
+                }
+            },
+            Err(_) => {
+                // 文件不存在是正常情况(首次启动),不记录警告
+                Self::new()
+            }
         }
     }
 
@@ -1243,5 +1332,101 @@ mod tests {
         let s = state.clv_summary.as_ref().unwrap();
         assert_eq!(s.block_means.len(), 8);
         assert!((s.l2_norm - 2.5).abs() < 1e-5);
+    }
+
+    // ============================================================
+    // TickMode 测试
+    // ============================================================
+
+    #[test]
+    fn test_tick_mode_default() {
+        assert_eq!(TickMode::default(), TickMode::Normal);
+    }
+
+    #[test]
+    fn test_tick_mode_display() {
+        assert_eq!(TickMode::Normal.display(), "Normal");
+        assert_eq!(TickMode::Eco.display(), "Eco");
+    }
+
+    #[test]
+    fn test_tick_mode_serialization() {
+        // Normal 序列化/反序列化
+        let mode = TickMode::Normal;
+        let json = serde_json::to_string(&mode).unwrap();
+        let restored: TickMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, TickMode::Normal);
+
+        // Eco 序列化/反序列化
+        let mode = TickMode::Eco;
+        let json = serde_json::to_string(&mode).unwrap();
+        let restored: TickMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, TickMode::Eco);
+    }
+
+    #[test]
+    fn test_tui_state_tick_mode_default() {
+        let state = TuiState::new();
+        assert_eq!(state.tick_mode, TickMode::Normal);
+    }
+
+    #[test]
+    fn test_tick_mode_serde_roundtrip() {
+        // Normal ↔ JSON 往返
+        let mode = TickMode::Normal;
+        let json = serde_json::to_string(&mode).unwrap();
+        let restored: TickMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, TickMode::Normal);
+
+        // Eco ↔ JSON 往返
+        let mode = TickMode::Eco;
+        let json = serde_json::to_string(&mode).unwrap();
+        let restored: TickMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, TickMode::Eco);
+    }
+}
+
+#[cfg(test)]
+mod state_persistence_tests {
+    use super::*;
+
+    /// 测试正常保存/恢复往返
+    #[test]
+    fn test_state_roundtrip() {
+        let mut state = TuiState::new();
+        state.layout_mode = LayoutMode::TriplePane;
+        state.filter_keyword = Some("test".to_string());
+        state.running = false;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tui_state.yaml");
+        state.save_to_file(&path).unwrap();
+        assert!(path.exists());
+
+        let loaded = TuiState::load_from_file(&path);
+        assert_eq!(loaded.layout_mode, LayoutMode::TriplePane);
+        assert_eq!(loaded.filter_keyword, Some("test".to_string()));
+        // 运行时字段应重置
+        assert!(loaded.running);
+    }
+
+    /// 测试文件不存在时降级为默认状态
+    #[test]
+    fn test_load_nonexistent_file() {
+        let state = TuiState::load_from_file(std::path::Path::new("/nonexistent/tui_state.yaml"));
+        assert!(state.running);
+        assert_eq!(state.layout_mode, LayoutMode::DualPane);
+    }
+
+    /// 测试反序列化失败时降级且不 panic
+    #[test]
+    fn test_load_corrupted_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tui_state.yaml");
+        std::fs::write(&path, "{{{ invalid yaml").unwrap();
+
+        let state = TuiState::load_from_file(&path);
+        assert!(state.running);
+        assert_eq!(state.layout_mode, LayoutMode::DualPane);
     }
 }

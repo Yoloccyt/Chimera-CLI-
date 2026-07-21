@@ -32,7 +32,7 @@ resolver = "2"
 # SemVer minor 升级: append-only, 仅新增 §15-§21 七项能力(上下文预算/分块调度/三级归档/
 # 知识协同/稳定闭环/PDCA 基准/INV-7/INV-8 不变量),不改现有公共签名(Part I 保持兼容)
 # 承接 v2.1.0-omega 四象限稳定分工,不改 Quadrant/PriorityScheduler/ExpertRegistry/AgentTask.priority
-version = "2.2.0-omega"
+version = "2.3.0-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"

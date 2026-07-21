@@ -531,6 +531,15 @@ impl Panel for QuestPanel {
         self.scroll_offset = self.selected;
     }
 
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("↑/↓", "导航"),
+            ("Enter", "详情"),
+            ("g g", "跳顶"),
+            ("G", "跳底"),
+        ]
+    }
+
     fn handle_mouse(&mut self, mouse: MouseEvent, state: &mut TuiState) -> Option<TuiCommand> {
         let count = Self::filtered_quests(state).len();
         if let Some(new_selected) =

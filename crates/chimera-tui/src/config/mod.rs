@@ -15,6 +15,8 @@
 
 pub mod tui_bible;
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::TuiError;
@@ -326,6 +328,13 @@ pub struct TuiConfig {
     /// WHY 5000ms:5s 刷新足够展示进程变化趋势,避免 sysinfo 调用过于频繁
     /// 导致 CPU 占用(spec §Scenario "系统信息面板启动加载")。
     pub sysinfo_refresh_interval_ms: u64,
+    /// 是否启用视图状态持久化（默认 true）
+    ///
+    /// WHY 默认 true:退出时保存布局模式/过滤器等用户偏好,
+    /// 下次启动自动恢复,减少用户重复操作。用户可通过配置文件关闭。
+    pub persist_state: bool,
+    /// 状态文件路径（默认 ~/.chimera/tui_state.yaml）
+    pub state_file_path: PathBuf,
 }
 
 impl Default for TuiConfig {
@@ -354,6 +363,8 @@ impl Default for TuiConfig {
             metrics_history_retention_days: 7,
             task_manager_default_sort: SortMode::default(), // = Priority
             sysinfo_refresh_interval_ms: 5000,
+            persist_state: true,
+            state_file_path: Self::default_state_path(),
         }
     }
 }
@@ -576,6 +587,21 @@ impl TuiConfig {
         std::path::PathBuf::from(home)
             .join(".chimera")
             .join("tui.yaml")
+    }
+
+    /// 返回默认状态文件路径 ~/.chimera/tui_state.yaml
+    ///
+    /// - Linux/macOS: ~/.chimera/tui_state.yaml
+    /// - Windows: %USERPROFILE%\.chimera\tui_state.yaml
+    ///
+    /// WHY 与 `default_path` 共享同一目录:配置文件和状态文件应放在同一
+    /// 配置目录下,便于用户备份/迁移/清理。
+    pub fn default_state_path() -> PathBuf {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+
+        PathBuf::from(home).join(".chimera").join("tui_state.yaml")
     }
 }
 

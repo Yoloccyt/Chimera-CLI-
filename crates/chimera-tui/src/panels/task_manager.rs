@@ -19,14 +19,19 @@
 //!
 //! # 键位
 //! - `C`:创建 Quest(占位,本期返回 None;后续 Task 接入创建命令)
-//! - `P`:暂停(走 `TuiCommand::QuestControl { Pause }`)
-//! - `T`:终止(走 `TuiCommand::QuestControl { Terminate }`)
+//! - `P`:暂停(单选,走 `TuiCommand::QuestControl { Pause }`)
+//! - `B`:批量暂停(多选时批量弹窗确认;无多选时回退单选暂停)
+//! - `R`:恢复(多选时批量弹窗确认;无多选时回退单选恢复)
+//! - `T`:终止(多选时批量弹窗确认;无多选时回退单选终止)
 //! - `+` / `=`:优先级 +1(上限 10)
 //! - `-`:优先级 -1(下限 0)
 //! - `Enter`:查看详情(沿用既有 OpenPopup 模式)
 //! - `/`:关键字过滤(沿用 `state.filter_keyword`)
 //! - `↑` / `↓`:导航
 //! - `S`:循环切换排序模式(Priority → Status → CreatedAt → Priority,P4.3)
+//! - `Space`:切换当前项的多选状态
+//! - `Ctrl+A`:全选当前过滤列表中所有 Quest
+//! - `Esc`:清空所有多选(测试场景;生产环境 Esc 由全局拦截为 quit)
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -69,8 +74,7 @@ pub struct TaskManagerPanel {
     selected: usize,
     /// 滚动偏移
     scroll_offset: usize,
-    /// 批量选中的索引集合(为未来 batch 操作预留,本 Task 未启用)
-    #[allow(dead_code)]
+    /// 批量选中的索引集合(多选模式,Space 切换/Ctrl+A 全选/Esc 清除)
     selected_indices: HashSet<usize>,
     /// 当前排序模式(P4.3 新增,默认 Priority)
     sort_mode: SortMode,
@@ -80,6 +84,17 @@ pub struct TaskManagerPanel {
     /// L10 自治追踪"首次观察时间"作为 TUI 上下文的创建时间代理。
     /// 缺失项(Quest 未在面板登记过时间)用 `Utc::now()` 兜底,排在末位。
     created_at_index: HashMap<String, DateTime<Utc>>,
+    /// 过滤关键字(实时搜索)
+    ///
+    /// WHY 面板本地状态:过滤是视图层概念,与 `TuiState.filter_keyword`
+    /// (Log/Quest 面板全局过滤)职责不同,本字段仅影响 TaskManagerPanel 的
+    /// Quest 列表渲染,不污染全局状态。
+    filter_keyword: String,
+    /// 是否处于搜索模式
+    ///
+    /// WHY 独立标志:搜索模式下抑制所有非搜索键(P/R/T/+/-/S/Space/Ctrl+A),
+    /// 避免误触发 Quest 控制操作。
+    is_searching: bool,
 }
 
 impl TaskManagerPanel {
@@ -160,12 +175,14 @@ impl TaskManagerPanel {
     /// WHY 独立方法:与 `render` 解耦,便于纯逻辑单元测试,
     /// 避免依赖 ratatui TestBackend 与 Buffer 比较。
     pub fn render_text(&self, state: &TuiState) -> String {
-        let quests = self.sorted_quests(state);
-        Self::content(
+        let quests = self.filtered_quests(state);
+        self.content(
+            state,
             &quests,
             self.selected,
             &self.selected_indices,
             self.sort_mode,
+            self.selected_indices.len(),
         )
         .to_string()
     }
@@ -173,6 +190,59 @@ impl TaskManagerPanel {
     /// 按 `self.sort_mode` 排序 Quest 列表(P4.3 主排序入口)
     fn sorted_quests<'a>(&self, state: &'a TuiState) -> Vec<&'a Quest> {
         self.sort_quests(state, self.sort_mode)
+    }
+
+    /// 返回按过滤关键字筛选后的 Quest 列表
+    ///
+    /// WHY 独立方法:排序 + 过滤是两个正交维度,先排序再过滤保证
+    /// 过滤后的列表仍保持排序顺序,且过滤逻辑集中在一处,便于测试。
+    /// 大小写不敏感匹配 quest_id 和 title。
+    fn filtered_quests<'a>(&self, state: &'a TuiState) -> Vec<&'a Quest> {
+        let quests = self.sorted_quests(state);
+        if self.filter_keyword.is_empty() {
+            return quests;
+        }
+        let keyword = self.filter_keyword.to_lowercase();
+        quests
+            .into_iter()
+            .filter(|q| {
+                q.quest_id.to_lowercase().contains(&keyword)
+                    || q.title.to_lowercase().contains(&keyword)
+            })
+            .collect()
+    }
+
+    /// 统计 Quest 列表中各状态的数量
+    ///
+    /// WHY 关联函数(不依赖 self):统计逻辑仅依赖 `TuiState` 的
+    /// `quest_list` 和 `paused_quest_count`,与面板本地状态无关,
+    /// 保持纯函数语义便于测试。
+    ///
+    /// 返回 (pending, running, paused, completed)
+    fn compute_status_counts(state: &TuiState) -> (usize, usize, usize, usize) {
+        let mut pending = 0usize;
+        let mut running = 0usize;
+        let mut completed = 0usize;
+        for quest in &state.quest_list {
+            if quest.tasks.is_empty() {
+                pending += 1;
+                continue;
+            }
+            let has_running = quest.tasks.iter().any(|t| t.status == TaskStatus::Running);
+            let has_failed = quest.tasks.iter().any(|t| t.status == TaskStatus::Failed);
+            let all_completed = quest
+                .tasks
+                .iter()
+                .all(|t| t.status == TaskStatus::Completed);
+            if has_running || has_failed {
+                running += 1;
+            } else if all_completed {
+                completed += 1;
+            } else {
+                pending += 1;
+            }
+        }
+        (pending, running, state.paused_quest_count, completed)
     }
 
     /// P4.3 排序分发器:按 `mode` 分发到对应排序策略
@@ -232,32 +302,61 @@ impl TaskManagerPanel {
     /// 调用方(`render` / `render_text`)负责 `self.sorted_quests(state)` 排序。
     /// 职责单一原则:`content` 只负责文本格式化,`sort_quests` 负责排序。
     ///
-    /// 标题行追加 `[sort_mode]` 显示当前排序模式(如 `Task Manager [priority]`)
+    /// 标题行:普通模式 `Task Manager [sort_mode]`,搜索模式追加 `(filter: keyword)`
+    ///
+    /// 底部统计行:显示 Pending/Running/Paused/Completed 计数 + 批量选中数。
     fn content(
+        &self,
+        state: &TuiState,
         quests: &[&Quest],
         cursor: usize,
-        _selected_indices: &HashSet<usize>,
+        selected_indices: &HashSet<usize>,
         sort_mode: SortMode,
+        selected_count: usize,
     ) -> Text<'static> {
-        // P4.3:面板标题显示当前排序模式,便于用户感知
-        let mut lines: Vec<Line<'static>> = vec![
-            Line::from(format!("Task Manager [{}]", sort_mode)),
-            Line::from("──────────────"),
-        ];
+        // P4.3:面板标题显示当前排序模式;搜索模式下追加过滤关键字
+        let title = if self.is_searching {
+            format!(
+                "Task Manager [{}] (filter: {})",
+                sort_mode, self.filter_keyword
+            )
+        } else {
+            format!("Task Manager [{}]", sort_mode)
+        };
+        let mut lines: Vec<Line<'static>> = vec![Line::from(title), Line::from("──────────────")];
 
         if quests.is_empty() {
-            lines.push(Line::from("No quests"));
+            // WHY "No matching quests":过滤后列表为空说明关键字无匹配,
+            // 与"没有任何 Quest"的语义不同,提示用户调整过滤关键字。
+            lines.push(Line::from("No matching quests"));
         } else {
             for (idx, quest) in quests.iter().enumerate() {
                 let is_cursor = idx == cursor;
-                let prefix = if is_cursor { "> " } else { "  " };
-                let style = if is_cursor {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
+                let is_selected = selected_indices.contains(&idx);
+                // 多选视觉:选中行用 [*] 前缀 + 青色背景,光标行用 > 前缀 + 黄色背景
+                let (prefix, style) = match (is_cursor, is_selected) {
+                    (true, true) => (
+                        "[*]",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    (true, false) => (
+                        "> ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    (false, true) => (
+                        "[*]",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    (false, false) => ("  ", Style::default()),
                 };
                 // WHY 显示 quest_id + 标题 + 优先级(便于操作员快速定位)
                 // 优先级列固定宽度 2 字符,左对齐
@@ -272,6 +371,16 @@ impl TaskManagerPanel {
         }
 
         lines.push(Line::from(""));
+        // 状态统计行:显示各状态 Quest 计数 + 批量选中数
+        let (pending, running, paused, completed) = Self::compute_status_counts(state);
+        let mut status_line = format!(
+            "Pending:{} | Running:{} | Paused:{} | Completed:{}",
+            pending, running, paused, completed
+        );
+        if selected_count > 0 {
+            status_line.push_str(&format!(" | Selected:{}", selected_count));
+        }
+        lines.push(Line::from(status_line));
         lines.push(Line::from(FOOTER_TEXT));
         Text::from(lines)
     }
@@ -335,7 +444,8 @@ impl Panel for TaskManagerPanel {
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
-        let count = Self::sorted_quest_count(state);
+        let quests = self.filtered_quests(state);
+        let count = quests.len();
         self.selected = list_state::clamp_selected(self.selected, count);
 
         let block = Block::default().borders(Borders::ALL).title(self.title());
@@ -346,29 +456,102 @@ impl Panel for TaskManagerPanel {
         self.scroll_offset =
             list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
-        // P4.3:content 接受已排序的 quests slice,避免重复排序逻辑
-        let quests = self.sorted_quests(state);
-        let paragraph = Paragraph::new(Self::content(
+        let selected_count = self.selected_indices.len();
+        let paragraph = Paragraph::new(self.content(
+            state,
             &quests,
             self.selected,
             &self.selected_indices,
             self.sort_mode,
+            selected_count,
         ))
         .scroll((self.scroll_offset as u16, 0));
         paragraph.render(inner, buf);
     }
 
     fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {
-        // Up/Down 导航(复用 list_state 工具)
-        let count = Self::sorted_quest_count(state);
+        // 搜索模式:仅处理搜索专用键,抑制所有其他键以避免误触 Quest 控制
+        if self.is_searching {
+            match key.code {
+                // Esc 退出搜索模式并清除关键字
+                KeyCode::Esc => {
+                    self.is_searching = false;
+                    self.filter_keyword.clear();
+                    return None;
+                }
+                // Enter 退出搜索模式但保留关键字
+                KeyCode::Enter => {
+                    self.is_searching = false;
+                    return None;
+                }
+                // Backspace 删除最后一个字符
+                KeyCode::Backspace => {
+                    self.filter_keyword.pop();
+                    return None;
+                }
+                // 普通字符追加到过滤关键字
+                KeyCode::Char(c) => {
+                    self.filter_keyword.push(c);
+                    return None;
+                }
+                // 搜索模式下抑制所有其他键
+                _ => return None,
+            }
+        }
+
+        // Up/Down 导航(复用 list_state 工具,使用过滤后列表长度)
+        let filtered_count = self.filtered_quests(state).len();
         if let Some(new_selected) =
-            list_state::handle_key_navigation(key.code, self.selected, count)
+            list_state::handle_key_navigation(key.code, self.selected, filtered_count)
         {
             self.selected = new_selected;
             return None;
         }
 
         match key.code {
+            // Space 键:切换当前高亮项的多选状态
+            //
+            // WHY Space:与文件管理器/邮件客户端的多选语义一致,
+            // 操作员直觉式操作无需学习。不影响单行光标导航。
+            KeyCode::Char(' ') => {
+                let quests = self.filtered_quests(state);
+                if quests.is_empty() {
+                    return None;
+                }
+                let idx = list_state::clamp_selected(self.selected, quests.len());
+                if self.selected_indices.contains(&idx) {
+                    self.selected_indices.remove(&idx);
+                } else {
+                    self.selected_indices.insert(idx);
+                }
+                None
+            }
+            // Ctrl+A:全选当前过滤列表中所有 Quest
+            //
+            // WHY Ctrl+A:与编辑器全选语义一致,减少逐项选择的操作成本。
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let quests = self.filtered_quests(state);
+                for i in 0..quests.len() {
+                    self.selected_indices.insert(i);
+                }
+                None
+            }
+            // Esc:清空所有批量选择,退出多选模式
+            //
+            // 注意:生产环境中 Esc 由 app.rs 全局拦截为 quit,
+            // 面板级 Esc 仅在测试场景中生效。
+            KeyCode::Esc => {
+                self.selected_indices.clear();
+                None
+            }
+            // `/` 键:进入搜索模式,不清除已有关键字(支持增量搜索)
+            //
+            // WHY 不清除关键字:用户可能在过滤后调整排序模式,
+            // 然后按 `/` 继续在同一关键字上追加搜索,清除会丢失上下文。
+            KeyCode::Char('/') => {
+                self.is_searching = true;
+                None
+            }
             // P4.3:`S` 键循环切换排序模式(Priority → Status → CreatedAt → Priority)
             //
             // WHY 无副作用:排序模式是面板本地状态,不发 TuiCommand,
@@ -377,14 +560,10 @@ impl Panel for TaskManagerPanel {
                 self.sort_mode = self.sort_mode.next();
                 None
             }
-            // WHY 排序后列表用 `sorted_quests` 而非 `quest_list`:
-            // 选中项在排序后视图中的索引,需要访问排序后的列表。
-            // 性能上每次按键 clone 整个列表在小规模(< 100)Quest 下可接受;
-            // 后续如需优化可缓存排序结果(数据未变时复用)。
-            // `get_quest_id` 闭包:从排序后列表取出选中项的 quest_id
+            // P 键:单选暂停(始终走确认弹窗)
             KeyCode::Char('P') => {
                 let quest_id = self
-                    .sorted_quests(state)
+                    .filtered_quests(state)
                     .get(self.selected)
                     .map(|q| q.quest_id.clone());
                 quest_id.map(|id| TuiCommand::QuestControl {
@@ -392,9 +571,62 @@ impl Panel for TaskManagerPanel {
                     action: QuestAction::Pause,
                 })
             }
-            KeyCode::Char('T') => {
+            // B 键:批量暂停(多选时批量;无多选时回退单选暂停,与 P 键一致)
+            //
+            // WHY B 键独立:操作员多选后按 B 批量暂停,无多选时 B 退化为单选暂停,
+            // 与 P 键语义一致,互不冲突。
+            KeyCode::Char('B') => {
+                if !self.selected_indices.is_empty() {
+                    let quests = self.filtered_quests(state);
+                    let quest_ids: Vec<String> = self
+                        .selected_indices
+                        .iter()
+                        .filter_map(|&i| quests.get(i))
+                        .map(|q| q.quest_id.clone())
+                        .collect();
+                    if quest_ids.is_empty() {
+                        return None;
+                    }
+                    let batch_ids = quest_ids.join(",");
+                    return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                        &format!("Batch pause {} quests", quest_ids.len()),
+                        &batch_ids,
+                        format!("batch_pause:{batch_ids}"),
+                    )));
+                }
+                // 无多选时回退单选暂停
                 let quest_id = self
-                    .sorted_quests(state)
+                    .filtered_quests(state)
+                    .get(self.selected)
+                    .map(|q| q.quest_id.clone());
+                quest_id.map(|id| TuiCommand::QuestControl {
+                    id,
+                    action: QuestAction::Pause,
+                })
+            }
+            // T 键:终止 Quest(多选时批量;无多选时回退单选终止)
+            KeyCode::Char('T') => {
+                if !self.selected_indices.is_empty() {
+                    let quests = self.filtered_quests(state);
+                    let quest_ids: Vec<String> = self
+                        .selected_indices
+                        .iter()
+                        .filter_map(|&i| quests.get(i))
+                        .map(|q| q.quest_id.clone())
+                        .collect();
+                    if quest_ids.is_empty() {
+                        return None;
+                    }
+                    let batch_ids = quest_ids.join(",");
+                    return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                        &format!("Batch terminate {} quests", quest_ids.len()),
+                        &batch_ids,
+                        format!("batch_terminate:{batch_ids}"),
+                    )));
+                }
+                // 无多选时回退单选终止
+                let quest_id = self
+                    .filtered_quests(state)
                     .get(self.selected)
                     .map(|q| q.quest_id.clone());
                 quest_id.map(|id| TuiCommand::QuestControl {
@@ -406,12 +638,9 @@ impl Panel for TaskManagerPanel {
             //
             // WHY 边界检查在面板:与 spec 一致(0-10 范围),
             // priority=10 时不返回命令,避免无效 SetPriority(11) 进入事件总线。
-            // Quest.priority 实际为 0-255,此处 +1 是用户面步进,与桥接公式无关。
             KeyCode::Char('+') => {
-                let quest = self.sorted_quests(state).get(self.selected).copied();
+                let quest = self.filtered_quests(state).get(self.selected).copied();
                 quest.and_then(|q| {
-                    // WHY saturating_add + 二次钳制:u8::saturating_add(255) = 255,
-                    // 不会越界;然后与 PRIORITY_MAX 比较做用户面范围保护。
                     let current_user = user_priority_from_internal(q.priority);
                     if current_user < PRIORITY_MAX {
                         Some(TuiCommand::QuestControl {
@@ -424,12 +653,8 @@ impl Panel for TaskManagerPanel {
                 })
             }
             // `-` 键:优先级 -1(下限 0,边界保护)
-            //
-            // WHY 不区分用户面/内部映射:由于 `user_priority_from_internal` 是
-            // 单调函数(priority_255 = level * 25),内部值 -1 对应用户面 -1,
-            // 直接比较 PRIORITY_MIN 即可。
             KeyCode::Char('-') => {
-                let quest = self.sorted_quests(state).get(self.selected).copied();
+                let quest = self.filtered_quests(state).get(self.selected).copied();
                 quest.and_then(|q| {
                     let current_user = user_priority_from_internal(q.priority);
                     if current_user > PRIORITY_MIN {
@@ -444,7 +669,7 @@ impl Panel for TaskManagerPanel {
             }
             // Enter 键:打开 Quest 详情弹窗(沿用 OpenPopup 模式)
             KeyCode::Enter => {
-                let quest = self.sorted_quests(state).get(self.selected).copied();
+                let quest = self.filtered_quests(state).get(self.selected).copied();
                 quest.map(|q| {
                     TuiCommand::OpenPopup(PopupKind::Detail {
                         title: format!("Task: {}", q.title),
@@ -453,16 +678,31 @@ impl Panel for TaskManagerPanel {
                     })
                 })
             }
-            // C/R 键:Create/Resume 预留(本期 C 键返回 None,Resume 实际处理)
-            //
-            // WHY C 键为 no-op:Quest 创建需要接收用户输入(spec 提到「C 创建」,
-            // 但完整的创建流程需要命令面板交互,本 Task 暂占位为 None,
-            // 避免误触发空 Quest)。
+            // C 键:创建 Quest 预留(本期返回 None)
             KeyCode::Char('C') => None,
-            // R 键:恢复已暂停 Quest(对称于 P 键的 Pause)
+            // R 键:恢复 Quest(多选时批量;无多选时回退单选恢复)
             KeyCode::Char('R') => {
+                if !self.selected_indices.is_empty() {
+                    let quests = self.filtered_quests(state);
+                    let quest_ids: Vec<String> = self
+                        .selected_indices
+                        .iter()
+                        .filter_map(|&i| quests.get(i))
+                        .map(|q| q.quest_id.clone())
+                        .collect();
+                    if quest_ids.is_empty() {
+                        return None;
+                    }
+                    let batch_ids = quest_ids.join(",");
+                    return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                        &format!("Batch resume {} quests", quest_ids.len()),
+                        &batch_ids,
+                        format!("batch_resume:{batch_ids}"),
+                    )));
+                }
+                // 无多选时回退单选恢复
                 let quest_id = self
-                    .sorted_quests(state)
+                    .filtered_quests(state)
                     .get(self.selected)
                     .map(|q| q.quest_id.clone());
                 quest_id.map(|id| TuiCommand::QuestControl {
@@ -470,6 +710,8 @@ impl Panel for TaskManagerPanel {
                     action: QuestAction::Resume,
                 })
             }
+            // E: 导出任务数据
+            KeyCode::Char('E') => Some(TuiCommand::Export),
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
@@ -481,13 +723,13 @@ impl Panel for TaskManagerPanel {
     }
 
     fn scroll_to_bottom(&mut self, state: &mut TuiState) {
-        let count = Self::sorted_quest_count(state);
+        let count = self.filtered_quests(state).len();
         self.selected = if count == 0 { 0 } else { count - 1 };
         self.scroll_offset = self.selected;
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, state: &mut TuiState) -> Option<TuiCommand> {
-        let count = Self::sorted_quest_count(state);
+        let count = self.filtered_quests(state).len();
         if let Some(new_selected) =
             list_state::handle_mouse_scroll(mouse.kind, self.selected, count)
         {
@@ -496,6 +738,24 @@ impl Panel for TaskManagerPanel {
         // consume Ctrl modifier 警告(避免未使用 import)
         let _ = KeyModifiers::NONE;
         None
+    }
+
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("↑/↓", "导航"),
+            ("/", "过滤搜索"),
+            ("P", "暂停"),
+            ("B", "批量暂停"),
+            ("R", "恢复"),
+            ("T", "终止"),
+            ("+/-", "优先级"),
+            ("S", "排序"),
+            ("E", "导出"),
+            ("Enter", "详情"),
+            ("Esc", "清除选择"),
+            ("Space", "多选"),
+            ("Ctrl+A", "全选"),
+        ]
     }
 }
 
@@ -654,5 +914,581 @@ mod tests {
             }
             other => panic!("expected QuestControl Terminate, got {other:?}"),
         }
+    }
+
+    // ── 辅助函数 ──
+
+    /// 创建带自定义任务列表的 Quest（测试用）
+    fn quest_with_tasks(id: &str, title: &str, priority: u8, tasks: Vec<Task>) -> Quest {
+        Quest {
+            quest_id: id.into(),
+            title: title.into(),
+            tasks,
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+            priority,
+        }
+    }
+
+    /// 创建单个 Task（测试用）
+    fn make_task(id: &str, status: TaskStatus) -> Task {
+        Task {
+            task_id: id.into(),
+            description: "test task".into(),
+            status,
+            dependencies: vec![],
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 多选模式测试
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_space_toggles_selection() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            sample_quest("q-1", "Alpha", 5),
+            sample_quest("q-2", "Beta", 3),
+        ];
+
+        // 第一次 Space:选中索引 0
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            &mut state,
+        );
+        assert!(panel.selected_indices.contains(&0), "Space 应选中当前索引");
+        assert_eq!(panel.selected_indices.len(), 1);
+
+        // 第二次 Space:取消选中索引 0
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            &mut state,
+        );
+        assert!(
+            !panel.selected_indices.contains(&0),
+            "再次 Space 应取消选中"
+        );
+        assert!(panel.selected_indices.is_empty());
+    }
+
+    #[test]
+    fn test_ctrl_a_selects_all() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        // 3 个 Quest:关键字 "a" 匹配 quest_id 含 "a" 的 2 个
+        state.quest_list = vec![
+            sample_quest("q-apple", "Apple", 5),
+            sample_quest("q-banana", "Banana", 5),
+            sample_quest("q-cherry", "Cherry", 5),
+        ];
+        // 过滤:quest_id 含 "a" → q-apple、q-banana（q-cherry 不含）
+        panel.filter_keyword = "a".to_string();
+
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            &mut state,
+        );
+
+        assert_eq!(
+            panel.selected_indices.len(),
+            2,
+            "Ctrl+A 应全选过滤后的 2 个 Quest"
+        );
+        assert!(panel.selected_indices.contains(&0));
+        assert!(panel.selected_indices.contains(&1));
+    }
+
+    #[test]
+    fn test_esc_clears_selection() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        panel.selected_indices.insert(0);
+        panel.selected_indices.insert(2);
+        panel.selected_indices.insert(5);
+        assert_eq!(panel.selected_indices.len(), 3);
+
+        panel.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut state);
+
+        assert!(panel.selected_indices.is_empty(), "Esc 应清空所有选中");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 批量操作测试
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_batch_pause_generates_confirm_popup() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            sample_quest("q-1", "Alpha", 5),
+            sample_quest("q-2", "Beta", 3),
+        ];
+
+        // 先选中第 1 个 Quest
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        // 按 B 触发批量暂停
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        match cmd {
+            Some(TuiCommand::OpenPopup(PopupKind::Confirm {
+                prompt, on_confirm, ..
+            })) => {
+                assert!(
+                    prompt.contains("Batch pause"),
+                    "弹窗提示应包含 'Batch pause': {prompt}"
+                );
+                assert!(
+                    on_confirm.contains("batch_pause:"),
+                    "on_confirm 应包含 'batch_pause:': {on_confirm}"
+                );
+            }
+            other => panic!("批量暂停应生成 OpenPopup(Confirm), 实际: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_batch_terminate_generates_confirm_popup() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            sample_quest("q-1", "Alpha", 5),
+            sample_quest("q-2", "Beta", 3),
+        ];
+
+        // 先选中第 1 个 Quest
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        // 按 T 触发批量终止
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        match cmd {
+            Some(TuiCommand::OpenPopup(PopupKind::Confirm {
+                prompt, on_confirm, ..
+            })) => {
+                assert!(
+                    prompt.contains("Batch terminate"),
+                    "弹窗提示应包含 'Batch terminate': {prompt}"
+                );
+                assert!(
+                    on_confirm.contains("batch_terminate:"),
+                    "on_confirm 应包含 'batch_terminate:': {on_confirm}"
+                );
+            }
+            other => panic!("批量终止应生成 OpenPopup(Confirm), 实际: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_empty_selection_batch_does_nothing() {
+        // 空选中时 B 键回退为单选暂停，不生成批量弹窗
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![sample_quest("q-1", "Alpha", 5)];
+
+        // selected_indices 为空，按 B 应回退单选暂停
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        match cmd {
+            Some(TuiCommand::QuestControl { id, action }) => {
+                assert_eq!(id, "q-1");
+                assert_eq!(action, QuestAction::Pause);
+            }
+            Some(TuiCommand::OpenPopup(_)) => {
+                panic!("空选中时不应生成批量弹窗, 应回退单选暂停");
+            }
+            other => panic!("空选中按 B 应回退单选暂停, 实际: {other:?}"),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 过滤搜索测试
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_filter_search_matches_quest_id() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            sample_quest("alpha", "A", 5),
+            sample_quest("beta", "B", 3),
+            sample_quest("gamma", "C", 4),
+        ];
+
+        panel.filter_keyword = "bet".to_string();
+        let filtered = panel.filtered_quests(&state);
+
+        assert_eq!(filtered.len(), 1, "关键字 'bet' 应只匹配 'beta'");
+        assert_eq!(filtered[0].quest_id, "beta");
+    }
+
+    #[test]
+    fn test_filter_search_case_insensitive() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![sample_quest("alpha", "A", 5), sample_quest("beta", "B", 3)];
+
+        panel.filter_keyword = "ALPHA".to_string();
+        let filtered = panel.filtered_quests(&state);
+
+        assert_eq!(filtered.len(), 1, "大小写不敏感: 'ALPHA' 应匹配 'alpha'");
+        assert_eq!(filtered[0].quest_id, "alpha");
+    }
+
+    #[test]
+    fn test_filter_search_no_match() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![sample_quest("alpha", "A", 5), sample_quest("beta", "B", 3)];
+
+        panel.filter_keyword = "xyz".to_string();
+        let filtered = panel.filtered_quests(&state);
+
+        assert!(filtered.is_empty(), "关键字 'xyz' 不应匹配任何 Quest");
+    }
+
+    #[test]
+    fn test_filter_search_matches_title() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            sample_quest("q-1", "Deploy Production", 5),
+            sample_quest("q-2", "Run Tests", 3),
+            sample_quest("q-3", "Deploy Backup", 4),
+        ];
+
+        panel.filter_keyword = "Deploy".to_string();
+        let filtered = panel.filtered_quests(&state);
+
+        assert_eq!(
+            filtered.len(),
+            2,
+            "关键字 'Deploy' 应匹配 title 含 'Deploy' 的 2 个 Quest"
+        );
+        let ids: Vec<&str> = filtered.iter().map(|q| q.quest_id.as_str()).collect();
+        assert!(ids.contains(&"q-1"));
+        assert!(ids.contains(&"q-3"));
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 状态统计测试
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_status_counts_correct() {
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            // Pending:空任务列表
+            Quest {
+                quest_id: "q-pending-empty".into(),
+                title: "PE".into(),
+                tasks: vec![],
+                thinking_mode: ThinkingMode::Standard,
+                checkpoint_id: None,
+                priority: 5,
+            },
+            // Running:有 Running 任务
+            quest_with_tasks(
+                "q-running",
+                "R",
+                5,
+                vec![
+                    make_task("t1", TaskStatus::Running),
+                    make_task("t2", TaskStatus::Pending),
+                ],
+            ),
+            // Completed:全 Completed
+            quest_with_tasks(
+                "q-completed",
+                "C",
+                5,
+                vec![
+                    make_task("t1", TaskStatus::Completed),
+                    make_task("t2", TaskStatus::Completed),
+                ],
+            ),
+            // Pending:有 Pending 任务
+            sample_quest("q-pending", "P", 5),
+        ];
+
+        let (pending, running, paused, completed) = TaskManagerPanel::compute_status_counts(&state);
+
+        assert_eq!(pending, 2, "2 个 Pending(q-pending-empty + q-pending)");
+        assert_eq!(running, 1, "1 个 Running(q-running)");
+        assert_eq!(paused, 0, "paused_quest_count 默认为 0");
+        assert_eq!(completed, 1, "1 个 Completed(q-completed)");
+    }
+
+    #[test]
+    fn test_status_counts_with_paused() {
+        let mut state = TuiState::new();
+        state.paused_quest_count = 3;
+
+        let (pending, running, paused, completed) = TaskManagerPanel::compute_status_counts(&state);
+
+        assert_eq!(pending, 0);
+        assert_eq!(running, 0);
+        assert_eq!(paused, 3, "paused 字段应反映 state.paused_quest_count");
+        assert_eq!(completed, 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 多选视觉前缀测试
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_multiselect_visual_prefix() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            sample_quest("q-1", "Alpha", 5),
+            sample_quest("q-2", "Beta", 3),
+        ];
+        // 选中索引 0,验证渲染输出包含 [*] 前缀
+        panel.selected_indices.insert(0);
+        let text = panel.render_text(&state);
+        assert!(text.contains("[*]"), "选中行应渲染 [*] 前缀:\n{text}");
+        // 验证未选中行不含 [*]
+        let star_count = text.matches("[*]").count();
+        assert_eq!(star_count, 1, "应只有 1 个 [*] 前缀(选中 1 项)");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 批量操作补充测试
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_batch_resume_generates_confirm_popup() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            sample_quest("q-1", "Alpha", 5),
+            sample_quest("q-2", "Beta", 3),
+        ];
+
+        // 先选中第 1 个 Quest
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        // 按 R 触发批量恢复
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        match cmd {
+            Some(TuiCommand::OpenPopup(PopupKind::Confirm {
+                prompt, on_confirm, ..
+            })) => {
+                assert!(
+                    prompt.contains("Batch resume"),
+                    "弹窗提示应包含 'Batch resume': {prompt}"
+                );
+                assert!(
+                    on_confirm.contains("batch_resume:"),
+                    "on_confirm 应包含 'batch_resume:': {on_confirm}"
+                );
+            }
+            other => panic!("批量恢复应生成 OpenPopup(Confirm), 实际: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_empty_selection_r_falls_back_to_single_resume() {
+        // 空选中时 R 键回退为单选恢复,不生成批量弹窗
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![sample_quest("q-1", "Alpha", 5)];
+
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        match cmd {
+            Some(TuiCommand::QuestControl { id, action }) => {
+                assert_eq!(id, "q-1");
+                assert_eq!(action, QuestAction::Resume);
+            }
+            Some(TuiCommand::OpenPopup(_)) => {
+                panic!("空选中时不应生成批量弹窗, 应回退单选恢复");
+            }
+            other => panic!("空选中按 R 应回退单选恢复, 实际: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_empty_selection_t_falls_back_to_single_terminate() {
+        // 空选中时 T 键回退为单选终止,不生成批量弹窗
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![sample_quest("q-1", "Alpha", 5)];
+
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        match cmd {
+            Some(TuiCommand::QuestControl { id, action }) => {
+                assert_eq!(id, "q-1");
+                assert_eq!(action, QuestAction::Terminate);
+            }
+            Some(TuiCommand::OpenPopup(_)) => {
+                panic!("空选中时不应生成批量弹窗, 应回退单选终止");
+            }
+            other => panic!("空选中按 T 应回退单选终止, 实际: {other:?}"),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 过滤搜索补充测试
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_filter_search_slash_enters_mode() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        assert!(cmd.is_none(), "/ 键不应返回命令");
+        assert!(panel.is_searching, "/ 键应进入搜索模式");
+    }
+
+    #[test]
+    fn test_filter_search_backspace() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        // 模拟已进入搜索模式并输入了关键字
+        panel.is_searching = true;
+        panel.filter_keyword = "test".to_string();
+
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+            &mut state,
+        );
+
+        assert!(cmd.is_none());
+        assert_eq!(panel.filter_keyword, "tes", "Backspace 应删除最后一个字符");
+    }
+
+    #[test]
+    fn test_filter_search_esc_clears() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        // 模拟已进入搜索模式并输入了关键字
+        panel.is_searching = true;
+        panel.filter_keyword = "test".to_string();
+
+        let cmd = panel.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut state);
+
+        assert!(cmd.is_none());
+        assert!(!panel.is_searching, "Esc 应退出搜索模式");
+        assert!(panel.filter_keyword.is_empty(), "Esc 应清除过滤关键字");
+    }
+
+    #[test]
+    fn test_filter_search_enter_exits_mode_keeps_keyword() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        // 模拟已进入搜索模式并输入了关键字
+        panel.is_searching = true;
+        panel.filter_keyword = "alpha".to_string();
+
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut state,
+        );
+
+        assert!(cmd.is_none());
+        assert!(!panel.is_searching, "Enter 应退出搜索模式");
+        assert_eq!(panel.filter_keyword, "alpha", "Enter 应保留过滤关键字");
+    }
+
+    #[test]
+    fn test_filter_search_char_append() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        panel.is_searching = true;
+        panel.filter_keyword = "ab".to_string();
+
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        assert_eq!(panel.filter_keyword, "abc", "搜索模式下字符应追加到关键字");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 状态统计补充测试
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_status_counts_empty() {
+        let state = TuiState::new();
+        let (pending, running, paused, completed) = TaskManagerPanel::compute_status_counts(&state);
+
+        assert_eq!(pending, 0, "空列表 pending 应为 0");
+        assert_eq!(running, 0, "空列表 running 应为 0");
+        assert_eq!(paused, 0, "空列表 paused 应为 0");
+        assert_eq!(completed, 0, "空列表 completed 应为 0");
+    }
+
+    #[test]
+    fn test_status_counts_selected_display() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            sample_quest("q-1", "Alpha", 5),
+            sample_quest("q-2", "Beta", 3),
+        ];
+
+        // 无选中时不显示 Selected
+        let text_no_selection = panel.render_text(&state);
+        assert!(
+            !text_no_selection.contains("Selected:"),
+            "无选中时不应显示 Selected"
+        );
+
+        // 选中 1 项
+        panel.selected_indices.insert(0);
+        let text_one = panel.render_text(&state);
+        assert!(
+            text_one.contains("Selected:1"),
+            "选中 1 项时统计行应显示 'Selected:1':\n{text_one}"
+        );
+
+        // 选中 2 项
+        panel.selected_indices.insert(1);
+        let text_two = panel.render_text(&state);
+        assert!(
+            text_two.contains("Selected:2"),
+            "选中 2 项时统计行应显示 'Selected:2':\n{text_two}"
+        );
     }
 }

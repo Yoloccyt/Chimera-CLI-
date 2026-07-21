@@ -169,6 +169,10 @@ impl Panel for RouterPanel {
         // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
         None
     }
+
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("↑/↓", "导航"), ("R", "刷新")]
+    }
 }
 
 /// 合并三路由器的 hot_capabilities 列表,相同 capability_id 的 hits 累加

@@ -72,6 +72,8 @@ fn test_config() -> DataSourceConfig {
         max_frozen_capabilities: 20,
         snapshot_interval_s: 30,
         max_snapshots: 100,
+        eco_tick_interval_ms: 1000,
+        event_backlog_threshold: 100,
     }
 }
 
