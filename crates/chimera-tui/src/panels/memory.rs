@@ -132,6 +132,10 @@ impl Panel for MemoryPanel {
         // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
         None
     }
+
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("R", "刷新")]
+    }
 }
 
 #[cfg(test)]

@@ -31,7 +31,7 @@ pub mod metrics_history;
 pub mod resource_history;
 use crate::error::TuiError;
 use crate::subscriber::EventSubscriber;
-use crate::types::{CpuMetrics, DiskMetrics, MemMetrics, NetworkMetrics, SystemMetrics};
+use crate::types::{CpuMetrics, DiskMetrics, MemMetrics, NetworkMetrics, SystemMetrics, TickMode};
 use chrono::{DateTime, Utc};
 use event_bus::{EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
@@ -119,6 +119,9 @@ pub struct DataSnapshot {
     pub sys_metrics: crate::types::SystemMetrics,
     /// 系统资源指标历史(sparkline 数据)
     pub sys_metrics_history: Vec<u64>,
+    /// 当前 tick 模式,状态栏展示用
+    #[serde(default)]
+    pub tick_mode: TickMode,
 }
 
 /// 预算指标 — TUI Budget 面板的轻量级本地视图
@@ -340,6 +343,10 @@ pub struct DataSourceConfig {
     pub snapshot_interval_s: u16,
     /// Timeline 快照最大保留数(FIFO,超出则丢弃最旧)
     pub max_snapshots: usize,
+    /// Eco 模式 tick 间隔(毫秒),高负载时降低 CPU 占用
+    pub eco_tick_interval_ms: u64,
+    /// 事件积压阈值,超过此值自动切换到 Eco 模式
+    pub event_backlog_threshold: usize,
 }
 
 impl Default for DataSourceConfig {
@@ -359,7 +366,118 @@ impl Default for DataSourceConfig {
             // WHY 与 TuiConfig 默认值对齐:30s × 100 = 50 分钟历史回放窗口
             snapshot_interval_s: 30,
             max_snapshots: 100,
+            // WHY 1000ms:大幅降低 CPU 占用,适合高负载场景
+            eco_tick_interval_ms: 1000,
+            // WHY 100:256 条事件上限的 ~40%,超过此值视为积压
+            event_backlog_threshold: 100,
         }
+    }
+}
+
+// ============================================================
+// 数据导出 — CSV/JSON 格式导出 Quest 列表
+// ============================================================
+
+/// 导出格式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    /// CSV 格式
+    Csv,
+    /// JSON 格式
+    Json,
+}
+
+impl ExportFormat {
+    /// 返回文件扩展名
+    pub fn extension(&self) -> &'static str {
+        match self {
+            ExportFormat::Csv => "csv",
+            ExportFormat::Json => "json",
+        }
+    }
+}
+
+/// CSV 字段转义:包含逗号/引号/换行的字段用双引号包裹
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// 从 Quest 任务状态派生可读标签
+fn quest_status_label(quest: &Quest) -> &'static str {
+    if quest.tasks.is_empty() {
+        return "Pending";
+    }
+    let has_running = quest.tasks.iter().any(|t| t.status == TaskStatus::Running);
+    if has_running {
+        return "Running";
+    }
+    let has_failed = quest.tasks.iter().any(|t| t.status == TaskStatus::Failed);
+    if has_failed {
+        return "Failed";
+    }
+    let all_completed = quest
+        .tasks
+        .iter()
+        .all(|t| t.status == TaskStatus::Completed);
+    if all_completed {
+        return "Completed";
+    }
+    "Pending"
+}
+
+impl DataSnapshot {
+    /// 将 Quest 列表导出为 CSV 或 JSON 文件
+    ///
+    /// WHY 仅导出 Quest:当前面板中最具导出价值的数据是 Quest 列表,
+    /// 其他面板(metrics/history)的导出可在后续扩展。
+    pub fn export_quests_to(
+        &self,
+        format: ExportFormat,
+        path: &std::path::Path,
+    ) -> Result<(), TuiError> {
+        // 创建父目录
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+
+        match format {
+            ExportFormat::Csv => self.export_quests_csv(path),
+            ExportFormat::Json => self.export_quests_json(path),
+        }
+    }
+
+    fn export_quests_csv(&self, path: &std::path::Path) -> Result<(), TuiError> {
+        let mut wtr = String::new();
+        // CSV header
+        wtr.push_str("quest_id,title,priority,task_count,status\n");
+        for quest in &self.quest_list {
+            let status = quest_status_label(quest);
+            wtr.push_str(&format!(
+                "{},{},{},{},{}\n",
+                csv_escape(&quest.quest_id),
+                csv_escape(&quest.title),
+                quest.priority,
+                quest.tasks.len(),
+                csv_escape(status)
+            ));
+        }
+        std::fs::write(path, wtr).map_err(|e| TuiError::ConfigError {
+            detail: format!("CSV write failed: {e}"),
+        })
+    }
+
+    fn export_quests_json(&self, path: &std::path::Path) -> Result<(), TuiError> {
+        let json =
+            serde_json::to_string_pretty(&self.quest_list).map_err(|e| TuiError::ConfigError {
+                detail: format!("JSON serialize failed: {e}"),
+            })?;
+        std::fs::write(path, json).map_err(|e| TuiError::ConfigError {
+            detail: format!("JSON write failed: {e}"),
+        })
     }
 }
 
@@ -1544,6 +1662,8 @@ impl DataPipeline {
         let subscriber = Arc::new(Mutex::new(Some(subscriber)));
         let subscriber_clone = Arc::clone(&subscriber);
         let tick_ms = config.tick_interval_ms;
+        let eco_tick_ms = config.eco_tick_interval_ms;
+        let event_backlog_threshold = config.event_backlog_threshold;
         let max_event_history = config.max_event_history;
         let max_quest_list_size = config.max_quest_list_size;
         let max_history_len = config.max_history_len;
@@ -1554,8 +1674,14 @@ impl DataPipeline {
         let max_snapshots = config.max_snapshots;
 
         let task = tokio::spawn(async move {
-            // WHY interval 而非 sleep:interval 会自动追钟，避免任务处理耗时导致 tick 漂移。
-            let mut interval = time::interval(Duration::from_millis(tick_ms));
+            // Task 6:动态 tick 切换 — 根据事件积压量在 Normal(250ms) 和 Eco(1000ms) 之间切换
+            // WHY sleep 而非 interval:tick 间隔需要动态变化,interval 创建后固定不可变;
+            // sleep 允许根据 backlog 实时调整等待时长,降低高负载下的 CPU 占用。
+            let mut current_tick_ms = tick_ms;
+            // Eco 模式倒计时:进入 Eco 后等待 5 个 tick 再尝试切回 Normal,
+            // 避免频繁切换导致的 tick 间隔抖动。
+            let mut eco_countdown: u32 = 0;
+            let mut tick_mode = TickMode::Normal;
             let mut quest_sync = QuestSync::new();
             let mut budget_sync = BudgetSync::new();
             let mut memory_sync = MemorySync::new();
@@ -1599,7 +1725,11 @@ impl DataPipeline {
             let mut last_timeline_snapshot: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
 
             loop {
-                interval.tick().await;
+                // Task 6:动态 tick 间隔 — 用 sleep 替代 interval 以支持运行时切换
+                // WHY 不使用 interval.tick():interval 创建后周期固定,无法在运行时
+                // 根据事件积压量切换 Normal/Eco 模式。sleep 每次按 current_tick_ms
+                // 等待,支持在每次 tick 结束时动态调整下次等待时长。
+                time::sleep(Duration::from_millis(current_tick_ms)).await;
 
                 // 取出订阅者引用;若已被 shutdown 取走,则退出循环。
                 let mut guard = subscriber_clone.lock().unwrap_or_else(|poisoned| {
@@ -1779,6 +1909,7 @@ impl DataPipeline {
                     // P8:系统资源指标(由 SysMetricsCollector 实时采集)
                     sys_metrics,
                     sys_metrics_history: sys_metrics_history.clone(),
+                    tick_mode,
                 };
                 let mut guard = snapshot_clone.lock().unwrap_or_else(|poisoned| {
                     tracing::warn!(
@@ -1787,6 +1918,41 @@ impl DataPipeline {
                     poisoned.into_inner()
                 });
                 *guard = snap;
+
+                // Task 6:动态 tick 模式切换 — 根据事件积压量决定下次 tick 间隔
+                // WHY 在快照写入后切换:避免切换逻辑影响本 tick 的 DataSnapshot 内容,
+                // 确保 tick_mode 字段反映的是"本 tick 处理时的模式"而非"切换后的模式"。
+                let backlog = latest_events.len();
+                match tick_mode {
+                    TickMode::Normal => {
+                        if backlog >= event_backlog_threshold {
+                            // 积压超阈值:切换到 Eco 模式,降低 CPU 占用
+                            tick_mode = TickMode::Eco;
+                            current_tick_ms = eco_tick_ms;
+                            eco_countdown = 5;
+                            tracing::info!(
+                                "DataPipeline tick mode switched to Eco (backlog={backlog} >= threshold={event_backlog_threshold})"
+                            );
+                        }
+                    }
+                    TickMode::Eco => {
+                        if backlog >= event_backlog_threshold {
+                            // 持续积压:重置倒计时,不提前退出 Eco
+                            eco_countdown = 5;
+                        } else {
+                            // 积压缓解:倒计时递减
+                            eco_countdown = eco_countdown.saturating_sub(1);
+                            if eco_countdown == 0 {
+                                // 倒计时归零且积压低于阈值:切回 Normal 模式
+                                tick_mode = TickMode::Normal;
+                                current_tick_ms = tick_ms;
+                                tracing::info!(
+                                    "DataPipeline tick mode switched back to Normal (backlog={backlog})"
+                                );
+                            }
+                        }
+                    }
+                }
             }
         });
 
@@ -2084,6 +2250,14 @@ mod tests {
         assert_eq!(snap.memory_metrics.hit_rate_percent, 0.0);
         assert!(snap.security_state.active_vetoes.is_empty());
         assert_eq!(snap.health_metrics.health_score, 100);
+        // Task 6:tick_mode 默认值为 Normal
+        assert_eq!(snap.tick_mode, TickMode::Normal);
+    }
+
+    #[test]
+    fn test_data_snapshot_default_tick_mode() {
+        let snap = DataSnapshot::default();
+        assert_eq!(snap.tick_mode, TickMode::Normal);
     }
 
     #[test]
@@ -2141,6 +2315,16 @@ mod tests {
         assert_eq!(cfg.budget_metrics_ttl_ms, 5000);
         assert_eq!(cfg.tick_interval_ms, 250);
         assert_eq!(cfg.max_history_len, 64);
+        // Task 6:动态 tick 配置默认值
+        assert_eq!(cfg.eco_tick_interval_ms, 1000);
+        assert_eq!(cfg.event_backlog_threshold, 100);
+    }
+
+    #[test]
+    fn test_datasource_config_default_eco_fields() {
+        let cfg = DataSourceConfig::default();
+        assert_eq!(cfg.eco_tick_interval_ms, 1000);
+        assert_eq!(cfg.event_backlog_threshold, 100);
     }
 
     #[test]
@@ -2924,6 +3108,8 @@ mod tests {
         assert!(snap.osa_context_mask.is_empty());
         assert!(snap.osa_sparsity_history.is_empty());
         assert!(snap.clv_summary.is_none());
+        // Task 6:tick_mode 默认值为 Normal
+        assert_eq!(snap.tick_mode, TickMode::Normal);
     }
 
     #[test]
@@ -2932,5 +3118,141 @@ mod tests {
         let cfg = DataSourceConfig::default();
         assert_eq!(cfg.snapshot_interval_s, 30);
         assert_eq!(cfg.max_snapshots, 100);
+    }
+
+    // ============================================================
+    // 导出测试 — CSV/JSON 格式导出 Quest 列表
+    // ============================================================
+
+    fn make_test_quest(id: &str, title: &str, priority: u8) -> Quest {
+        Quest {
+            quest_id: id.to_string(),
+            title: title.to_string(),
+            priority,
+            tasks: vec![Task {
+                task_id: format!("{id}-t1"),
+                description: "test task".to_string(),
+                status: TaskStatus::Running,
+                dependencies: vec![],
+            }],
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+        }
+    }
+
+    #[test]
+    fn test_csv_export_format() {
+        let snapshot = DataSnapshot {
+            quest_list: vec![
+                make_test_quest("q1", "Build API", 5),
+                make_test_quest("q2", "Test, with comma", 3),
+            ],
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.csv");
+        snapshot.export_quests_to(ExportFormat::Csv, &path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with("quest_id,title,priority,task_count,status"));
+        assert!(content.contains("q1,Build API,5,1,Running"));
+        // 含逗号的字段应被引号包裹
+        assert!(content.contains("\"Test, with comma\""));
+    }
+
+    #[test]
+    fn test_json_export_format() {
+        let snapshot = DataSnapshot {
+            quest_list: vec![make_test_quest("q1", "Build API", 5)],
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+        snapshot
+            .export_quests_to(ExportFormat::Json, &path)
+            .unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed[0]["quest_id"], "q1");
+    }
+
+    #[test]
+    fn test_csv_escape_quotes() {
+        let escaped = csv_escape("say \"hello\"");
+        assert_eq!(escaped, "\"say \"\"hello\"\"\"");
+    }
+
+    #[test]
+    fn test_csv_escape_no_special_chars() {
+        let escaped = csv_escape("simple_field");
+        assert_eq!(escaped, "simple_field");
+    }
+
+    #[test]
+    fn test_quest_status_label_all_states() {
+        // 空任务 → Pending
+        let empty = Quest {
+            quest_id: "e1".into(),
+            title: "empty".into(),
+            tasks: vec![],
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+            priority: 128,
+        };
+        assert_eq!(quest_status_label(&empty), "Pending");
+
+        // 有 Running → Running
+        let running = Quest {
+            quest_id: "r1".into(),
+            title: "running".into(),
+            tasks: vec![Task {
+                task_id: "t1".into(),
+                description: "".into(),
+                status: TaskStatus::Running,
+                dependencies: vec![],
+            }],
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+            priority: 128,
+        };
+        assert_eq!(quest_status_label(&running), "Running");
+
+        // 全部 Completed → Completed
+        let completed = Quest {
+            quest_id: "c1".into(),
+            title: "completed".into(),
+            tasks: vec![Task {
+                task_id: "t1".into(),
+                description: "".into(),
+                status: TaskStatus::Completed,
+                dependencies: vec![],
+            }],
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+            priority: 128,
+        };
+        assert_eq!(quest_status_label(&completed), "Completed");
+
+        // 有 Failed → Failed
+        let failed = Quest {
+            quest_id: "f1".into(),
+            title: "failed".into(),
+            tasks: vec![Task {
+                task_id: "t1".into(),
+                description: "".into(),
+                status: TaskStatus::Failed,
+                dependencies: vec![],
+            }],
+            thinking_mode: ThinkingMode::Standard,
+            checkpoint_id: None,
+            priority: 128,
+        };
+        assert_eq!(quest_status_label(&failed), "Failed");
+    }
+
+    #[test]
+    fn test_export_format_extension() {
+        assert_eq!(ExportFormat::Csv.extension(), "csv");
+        assert_eq!(ExportFormat::Json.extension(), "json");
     }
 }

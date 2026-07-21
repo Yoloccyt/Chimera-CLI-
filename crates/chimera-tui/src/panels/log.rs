@@ -180,6 +180,16 @@ impl Panel for LogPanel {
         }
         None
     }
+
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("↑/↓", "导航"),
+            ("PgUp/PgDn", "翻页"),
+            ("g g", "跳顶"),
+            ("G", "跳底"),
+            ("/", "过滤"),
+        ]
+    }
 }
 
 /// 构造带过滤器指示器的标题

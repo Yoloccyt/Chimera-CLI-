@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.3.0-omega (2026-07-20)
+
+**版本代号**: NEXUS-OMEGA (Comprehensive Audit · TUI Finalization · Governance)
+**架构基线**: v2.2.0-omega → v2.3.0-omega(minor,发布就绪验证)
+**关联文档**:
+- 架构审计: [architecture-audit-2026-07-20](docs/architecture/audit/architecture-audit-2026-07-20.md)
+- 专家团队: [expert-team-framework](docs/architecture/governance/expert-team-framework.md)
+- 任务优先级: [task-priority-system](docs/architecture/governance/task-priority-system.md)
+
+### Phase A: 架构审计
+
+- **10 层架构系统性审计**: 35 crate 全覆盖,L1-L10 各层实现状态评估,零 Stub
+- **依赖铁律合规验证**: 零向上依赖违规,`nexus-core` 最小依赖,`event-bus` 唯一跨层通道
+- **`#![forbid(unsafe_code)]` 核验**: 35/35 crate = 100% 合规
+- **测试覆盖率统计**: ~1039 单元测试 + 88 proptest + 42 criterion bench + 11 E2E + 6 fuzz target
+- **已知风险清单**: 4 项(3 低风险 + 1 中风险),含缓解建议
+
+### Phase B: TUI 收尾
+
+- **动态 tick 模式**: `DataSourceConfig` 新增 `eco_tick_interval_ms`/`event_backlog_threshold`,`TickMode` 枚举(Normal/Eco),`DataPipeline` 根据事件积压量自动切换
+- **TaskManagerPanel 综合测试**: 新增 12 项单元测试覆盖多选(Space/Ctrl+A/Esc)、批量操作(B/R/T)、过滤搜索(/?/Backspace/Enter)、状态统计(Pending/Running/Paused/Completed)
+
+### Phase C: 治理规范化
+
+- **专家团队协作框架**: E01-E05 五角色定义(首席架构师/全栈后端/全栈前端/测试专家/DevOps),7 阶段协作流程
+- **任务优先级量化体系**: P0-P4 五级优先级定义,资源分配策略(P0:100%→P4:10%),技术债务管理(每迭代 ≥ 20%)
+
 ## v2.2.0-omega (2026-07-20)
 
 **版本代号**: NEXUS-OMEGA (CHIMERA-MAS · Part II Closure)

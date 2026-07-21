@@ -311,6 +311,10 @@ impl Panel for OsaSparsePanel {
         }
         None
     }
+
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("R", "刷新")]
+    }
 }
 
 #[cfg(test)]

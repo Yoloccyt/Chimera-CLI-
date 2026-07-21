@@ -325,6 +325,15 @@ impl Panel for ParliamentPanel {
         }
         None
     }
+
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("↑/↓", "导航"),
+            ("Enter", "投票"),
+            ("V", "投票"),
+            ("Y/N/A", "是/否/弃权"),
+        ]
+    }
 }
 
 #[cfg(test)]

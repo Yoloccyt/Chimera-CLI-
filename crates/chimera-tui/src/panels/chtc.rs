@@ -350,6 +350,10 @@ impl Panel for ChtcPanel {
         }
         None
     }
+
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("↑/↓", "导航"), ("R", "刷新")]
+    }
 }
 
 #[cfg(test)]

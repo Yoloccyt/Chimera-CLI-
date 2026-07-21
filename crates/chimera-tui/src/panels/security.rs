@@ -324,6 +324,10 @@ impl Panel for SecurityPanel {
         self.selected = if count == 0 { 0 } else { count - 1 };
         self.scroll_offset = self.selected;
     }
+
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("↑/↓", "导航"), ("Enter", "详情")]
+    }
 }
 
 #[cfg(test)]
