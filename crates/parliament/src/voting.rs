@@ -211,7 +211,14 @@ impl VoteCounter {
 ///
 /// WHY SHA-256:决议哈希用于审计日志去重与 GSOE 进化追踪,
 /// SHA-256 提供抗碰撞保证,hex 编码便于日志与序列化
-fn compute_decision_hash(proposal: &Proposal, opinions: &[Opinion]) -> String {
+///
+/// # P4-W14.3 S5 接缝扩展(可见性提升)
+///
+/// 此函数从 `fn`(模块私有)提升为 `pub(crate)`,供 `debate.rs` 中
+/// `deliberate_with_policy` 的 FastPath 分支调用。FastPath 跳过辩论,
+/// 无 Opinion 列表,但仍需生成 `decision_hash` 供审计与去重。
+/// 调用 `compute_decision_hash(proposal, &[])` 即可仅哈希提案字段。
+pub(crate) fn compute_decision_hash(proposal: &Proposal, opinions: &[Opinion]) -> String {
     let mut hasher = Sha256::new();
 
     // 将提案内容与所有意见纳入哈希

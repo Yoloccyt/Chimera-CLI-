@@ -41,6 +41,7 @@ pub mod control;
 pub mod dag;
 pub mod engine;
 pub mod error;
+pub mod trajectory_exporter;
 pub mod ttg;
 pub mod types;
 
@@ -53,6 +54,11 @@ pub use control::{
 };
 pub use engine::QuestEngine;
 pub use error::QuestError;
+// P4-W16.1.3: Quest 轨迹导出器类型重导出(供 L5 omega-learner / L9 efficiency-monitor 使用)
+pub use trajectory_exporter::{
+    export_trajectory, export_trajectory_from_quest, ContextSummary, QuestTrajectory, TaskProgress,
+    TrajectoryAction, TrajectoryReward, TrajectoryState,
+};
 pub use ttg::{ComplexityScore, ModeSwitchReason, TtgConfig, TtgGovernor};
 pub use types::{CheckpointMeta, TaskResult};
 

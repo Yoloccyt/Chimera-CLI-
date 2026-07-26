@@ -42,6 +42,8 @@
 
 /// 归档压缩器与降级判定纯函数(compute_priority / should_demote_metadata)
 pub mod compressor;
+/// 跨 Agent 去重引擎(P3-W11.2.3 D12 修复)— DedupEngine + 三级去重(精确/语义/近似)
+pub mod dedup;
 /// 归档调度器(事件驱动)+ cron / τ 常量
 pub mod scheduler;
 /// 归档层级与压缩策略定义(ArchiveScheduleLevel / CompressionStrategy)
@@ -61,6 +63,15 @@ pub use tier::{
 pub use compressor::{
     compute_priority, should_demote_metadata, ArchiveCompressor, CompressedContent,
     CompressionMetadata, DEMOTION_THRESHOLD_F64,
+};
+
+// 来自 dedup.rs — 跨 Agent 去重引擎(P3-W11.2.3)
+//
+// WHY 独立类型而非复用 repo-wiki:§2.2 铁律,L9 chimera-mas 不能依赖 L5 repo-wiki。
+// 调用方(repo-wiki/上层编排器)自行将 WikiEntry 映射为 DedupEntry。
+pub use dedup::{
+    DedupEngine, DedupEntry, DedupReason, DedupRelation, DedupResult, CONFIDENCE_EQUAL_TOLERANCE,
+    NEAR_DEDUP_THRESHOLD, SEMANTIC_DEDUP_THRESHOLD,
 };
 
 // 来自 scheduler.rs — 归档调度器与 τ 常量

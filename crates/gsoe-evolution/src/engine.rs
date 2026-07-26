@@ -13,6 +13,19 @@
 //! # 事件订阅
 //! - `ConsensusReached`:议会共识作为进化奖励,提升下次采样的 reward 基线
 //! - `RedTeamAudit`:红队审计作为对抗信号,提升下次变异的 mutation_rate
+//!
+//! # R2 冻结声明(ADR-042)
+//!
+//! **冻结状态**:R2(GSOE×AutoDPO 约束 RL)路径在 FormalVerifier 落地前无条件冻结。
+//!
+//! - **冻结依据**:[ADR-042](docs/architecture/ADR-042-r2-freeze-before-formal-verifier.md)(2026-07-25 批准)
+//! - **冻结范围**:本 crate 禁止实现 R2 约束 RL 训练路径(包括但不限于 `evolve_with_constrained_rl()` 方法、`ConstrainedRLPolicy` 类型、`train_r2_path()` 函数等)
+//! - **解冻条件**:FormalVerifier 落地 + 新 ADR 评审通过 + 影子模式 2 周验证(ADR-042 决策 3)
+//! - **违反处置**:自动回滚 + `NexusEvent::R2FreezeViolation` Critical 告警 + 事故复盘(ADR-042 决策 4)
+//! - **关联 ADR**:[ADR-032 决策 4](docs/architecture/ADR-032-dual-channel-evaluator.md)(验证器层级跃迁路径)
+//!
+//! 本文件的 `evolve_once()` 是 L3 进化主路径(基于执行反馈),不在冻结范围。
+//! R2 路径(GSOE×AutoDPO 约束 RL)在 FormalVerifier 落地前完全不存在于运行时。
 
 use crate::config::GsoeConfig;
 use crate::error::GsoeError;

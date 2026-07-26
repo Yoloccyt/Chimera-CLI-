@@ -23,6 +23,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use nexus_contracts::{TemporalMeta, TransitionType};
 use nexus_core::CLV;
 use serde::{Deserialize, Serialize};
 
@@ -181,6 +182,18 @@ impl MemoryTier {
 /// - L0/L1:`content` 必填,`clv` 可选,`quest_id` 可选(L0 通常无)
 /// - L2:`content` 必填,`clv` 必填(用于向量召回)
 /// - L3:不使用此结构,改用 `ProceduralEntry`(含模式签名与执行统计)
+///
+/// # P3-W11.1 D12 修复:时间有效性维度
+///
+/// `temporal_meta` 字段为记忆条目附加时间有效性信息(`TemporalMeta`),
+/// 用于解决 D12"幽灵记忆"病理——静态稀疏掩码无法区分新旧事实的时间有效性,
+/// 导致任务阶段切换时过时事实与当前事实共召回。
+///
+/// - `None`(默认):视为 `Current` 状态(向后兼容,老条目无此字段)
+/// - `Some(TemporalMeta)`:按 `transition_type` 区分 Current/Historical/Transition
+///
+/// WHY(P3-W11.1):`#[serde(default)]` 确保老数据(无此字段)反序列化为 `None`,
+/// 不破坏现有持久化数据与测试。`None` 在召回时按 `Current` 处理(向后兼容)。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MemoryEntry {
     /// 记忆条目唯一标识(UUIDv7,由调用方生成)
@@ -202,6 +215,19 @@ pub struct MemoryEntry {
     pub last_accessed_at: DateTime<Utc>,
     /// 访问次数(用于热度统计与降级决策)
     pub access_count: u64,
+    /// 时间元数据 — 记忆的时间有效性信息(P3-W11.1 D12 修复)
+    ///
+    /// WHY(P3-W11.1 D12):为每条记忆附加时间区间(valid_from/valid_until)、
+    /// 时间状态(transition_type)与置信度,使 HCW-Sparse v2.0 召回能按时间状态过滤,
+    /// 避免幽灵记忆(过时事实与当前事实共召回)。
+    ///
+    /// - `None`(默认):视为 `Current` 状态(向后兼容,老条目无此字段)
+    /// - `Some(TemporalMeta)`:按 `transition_type` 区分 Current/Historical/Transition
+    ///
+    /// WHY `#[serde(default)]`:确保老数据(无此字段)反序列化为 `None`,
+    /// 不破坏现有持久化数据与测试。`None` 在召回时按 `Current` 处理(向后兼容)。
+    #[serde(default)]
+    pub temporal_meta: Option<TemporalMeta>,
 }
 
 impl MemoryEntry {
@@ -211,6 +237,11 @@ impl MemoryEntry {
     /// - `id`:条目唯一标识(接受 `MemoryId`/`String`/`&str`,通过 `Into<MemoryId>` 转换)
     /// - `content`:记忆内容
     /// - `tier`:初始层级
+    ///
+    /// # P3-W11.1 D12 修复
+    ///
+    /// `temporal_meta` 默认为 `None`(向后兼容)。需要时间有效性时通过
+    /// `with_temporal_meta` 链式设置。`None` 在召回时按 `Current` 处理。
     pub fn new(id: impl Into<MemoryId>, content: impl Into<String>, tier: MemoryTier) -> Self {
         let now = Utc::now();
         Self {
@@ -222,6 +253,7 @@ impl MemoryEntry {
             created_at: now,
             last_accessed_at: now,
             access_count: 0,
+            temporal_meta: None, // P3-W11.1: 默认 None(向后兼容,视为 Current)
         }
     }
 
@@ -237,10 +269,165 @@ impl MemoryEntry {
         self
     }
 
+    /// 附带时间元数据(用于 P3-W11.1 D12 修复 — 幽灵记忆免疫)
+    ///
+    /// WHY(P3-W11.1 D12):为记忆条目附加时间有效性(valid_from/valid_until)、
+    /// 时间状态(transition_type)与置信度,使召回能按时间状态过滤。
+    /// - `Current`:当前有效,默认召回
+    /// - `Historical`:历史归档,需显式历史查询
+    /// - `Transition`:迁移中,附时间证据包且降置信度
+    ///
+    /// # 示例
+    /// ```
+    /// use mlc_engine::{MemoryEntry, MemoryTier};
+    /// use nexus_contracts::{TemporalMeta, TransitionType};
+    ///
+    /// let now_ts = 1700000000_i64; // UTC 秒
+    /// let meta = TemporalMeta::with_expiry(now_ts, now_ts + 3600, 0.9);
+    /// let entry = MemoryEntry::new("m-1", "内容", MemoryTier::L2Semantic)
+    ///     .with_temporal_meta(meta);
+    /// assert!(entry.is_current());
+    /// ```
+    pub fn with_temporal_meta(mut self, meta: TemporalMeta) -> Self {
+        self.temporal_meta = Some(meta);
+        self
+    }
+
+    /// 判断记忆是否为 `Current` 状态(默认召回)
+    ///
+    /// WHY(P3-W11.1 D12):`temporal_meta` 为 `None` 时视为 `Current`(向后兼容),
+    /// 避免老条目(无此字段)被误过滤为 Historical/Transition。
+    pub fn is_current(&self) -> bool {
+        match &self.temporal_meta {
+            None => true, // 向后兼容:无 temporal_meta 视为 Current
+            Some(meta) => meta.transition_type.is_current(),
+        }
+    }
+
+    /// 判断记忆是否为 `Historical` 状态(需显式历史查询)
+    ///
+    /// WHY(P3-W11.1 D12):Historical 状态的记忆已过期,默认召回跳过,
+    /// 仅 `recall_historical` 显式查询时返回。
+    pub fn is_historical(&self) -> bool {
+        match &self.temporal_meta {
+            None => false,
+            Some(meta) => matches!(meta.transition_type, TransitionType::Historical),
+        }
+    }
+
+    /// 判断记忆是否为 `Transition` 状态(迁移中,附时间证据包且降置信度)
+    ///
+    /// WHY(P3-W11.1 D12):Transition 状态的记忆正在归档迁移中,
+    /// 召回时需附时间证据包(valid_from/valid_until)并降低置信度。
+    pub fn is_transition(&self) -> bool {
+        match &self.temporal_meta {
+            None => false,
+            Some(meta) => matches!(meta.transition_type, TransitionType::Transition),
+        }
+    }
+
+    /// 判断在指定时间点(UTC 秒)是否有效
+    ///
+    /// WHY(P3-W11.1 D12):检查 `valid_from ≤ now < valid_until`(若 `valid_until` 为 None 则永久有效)。
+    /// `temporal_meta` 为 `None` 时视为永久有效(向后兼容)。
+    ///
+    /// # 参数
+    /// - `now`:当前时间(UTC 秒)
+    pub fn is_valid_at(&self, now: i64) -> bool {
+        match &self.temporal_meta {
+            None => true, // 向后兼容:无 temporal_meta 视为永久有效
+            Some(meta) => meta.is_valid_at(now),
+        }
+    }
+
+    /// 返回时间元数据,若为 `None` 则返回默认 `Current` 状态的 `TemporalMeta`
+    ///
+    /// WHY(P3-W11.1 D12):召回路径(如 `recall_transition`)需要访问 `TemporalMeta`
+    /// 的 valid_from/valid_until/confidence 字段。`None` 时构造默认 Current 状态,
+    /// 避免调用方重复处理 Option 分支。
+    ///
+    /// # 参数
+    /// - `default_valid_from`:`None` 时使用的默认生效时间(UTC 秒,通常为 `created_at` 的 UTC 秒)
+    pub fn temporal_meta_or_default(&self, default_valid_from: i64) -> TemporalMeta {
+        match &self.temporal_meta {
+            None => TemporalMeta::new(default_valid_from, 1.0), // 默认完全可信
+            Some(meta) => meta.clone(),
+        }
+    }
+
+    /// 返回置信度(P3-W11.1 D12)
+    ///
+    /// WHY:`Transition` 状态的记忆置信度应降低(由调用方在归档迁移时设置)。
+    /// `temporal_meta` 为 `None` 时返回 1.0(向后兼容,完全可信)。
+    pub fn confidence(&self) -> f32 {
+        match &self.temporal_meta {
+            None => 1.0,
+            Some(meta) => meta.confidence,
+        }
+    }
+
     /// 标记被访问:更新 `last_accessed_at` 与 `access_count`
+    ///
+    /// WHY(P3-W11.1):不修改 `temporal_meta` — 访问时间与时间有效性分离,
+    /// `last_accessed_at` 用于 LRU 驱逐,`temporal_meta.transition_type` 用于时间状态过滤。
     pub fn touch(&mut self) {
         self.last_accessed_at = Utc::now();
         self.access_count = self.access_count.saturating_add(1);
+    }
+
+    /// 标记为 `Historical` 状态(归档迁移完成)
+    ///
+    /// WHY(P3-W11.1 D12 + INV-8 单调性):`Current` → `Historical` 单向降级。
+    /// 若 `temporal_meta` 为 `None`,先构造默认 Current 再降级。
+    /// 若已是 `Historical`,操作为 no-op(幂等)。
+    ///
+    /// # INV-8 约束
+    /// `Historical` → `Current` 禁止(逆向升级违反 INV-8)。
+    /// 本方法仅处理 `→ Historical` 方向,不提供 `Historical` → `Current` 升级。
+    pub fn mark_historical(&mut self) {
+        let now_ts = Utc::now().timestamp();
+        let meta = self
+            .temporal_meta
+            .take()
+            .unwrap_or_else(|| TemporalMeta::new(now_ts, 1.0));
+        if meta.transition_type != TransitionType::Historical {
+            self.temporal_meta = Some(TemporalMeta {
+                transition_type: TransitionType::Historical,
+                ..meta
+            });
+        } else {
+            self.temporal_meta = Some(meta); // 已是 Historical,no-op
+        }
+    }
+
+    /// 标记为 `Transition` 状态(归档迁移开始,降置信度)
+    ///
+    /// WHY(P3-W11.1 D12 + INV-8 单调性):`Current` → `Transition` → `Historical` 迁移链。
+    /// `Transition` 状态附时间证据包(valid_from/valid_until)并降低置信度,
+    /// 使召回路径能识别"迁移中"记忆并降权处理。
+    ///
+    /// # 参数
+    /// - `new_confidence`:迁移中的降权置信度(通常 < 原 confidence,如 0.5)
+    ///
+    /// # INV-8 约束
+    /// `Historical` → `Transition` 禁止(从终态回退迁移态违反单调性)。
+    /// 若当前已是 `Historical`,操作为 no-op(幂等,拒绝逆向)。
+    pub fn mark_transition(&mut self, new_confidence: f32) {
+        let now_ts = Utc::now().timestamp();
+        let meta = self
+            .temporal_meta
+            .take()
+            .unwrap_or_else(|| TemporalMeta::new(now_ts, 1.0));
+        if matches!(meta.transition_type, TransitionType::Historical) {
+            // INV-8: Historical → Transition 禁止,no-op
+            self.temporal_meta = Some(meta);
+            return;
+        }
+        self.temporal_meta = Some(TemporalMeta {
+            transition_type: TransitionType::Transition,
+            confidence: new_confidence,
+            ..meta
+        });
     }
 }
 
@@ -421,6 +608,290 @@ mod tests {
         entry.touch();
         entry.touch();
         assert_eq!(entry.access_count, 2);
+    }
+
+    // ============================================================
+    // P3-W11.1 D12 修复验收测试(spec.md:291 TemporalMeta 全链)
+    // ============================================================
+
+    #[test]
+    fn test_p3_w11_1_temporal_meta_default_none_backward_compat() {
+        // P3-W11.1: 新建条目默认 temporal_meta = None(向后兼容)
+        let entry = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working);
+        assert!(entry.temporal_meta.is_none());
+        // None 视为 Current(向后兼容,老条目无此字段)
+        assert!(entry.is_current());
+        assert!(!entry.is_historical());
+        assert!(!entry.is_transition());
+        // None 视为永久有效
+        assert!(entry.is_valid_at(0));
+        assert!(entry.is_valid_at(i64::MAX));
+        // None 的置信度为 1.0(完全可信)
+        assert!((entry.confidence() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_p3_w11_1_with_temporal_meta_current() {
+        // P3-W11.1: with_temporal_meta 设置 Current 状态
+        let meta = TemporalMeta::with_expiry(1000, 2000, 0.9);
+        let entry =
+            MemoryEntry::new("m-1", "内容", MemoryTier::L2Semantic).with_temporal_meta(meta);
+        assert!(entry.temporal_meta.is_some());
+        assert!(entry.is_current());
+        assert!(!entry.is_historical());
+        assert!(!entry.is_transition());
+        assert!(entry.is_valid_at(1000));
+        assert!(entry.is_valid_at(1500));
+        assert!(!entry.is_valid_at(2000)); // exclusive 边界
+        assert!(!entry.is_valid_at(999)); // 生效前
+        assert!((entry.confidence() - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_p3_w11_1_with_temporal_meta_historical() {
+        // P3-W11.1: Historical 状态(历史归档,需显式历史查询)
+        let meta = TemporalMeta {
+            valid_from: 1000,
+            valid_until: Some(2000),
+            transition_type: TransitionType::Historical,
+            confidence: 0.5,
+        };
+        let entry =
+            MemoryEntry::new("m-1", "内容", MemoryTier::L1Episodic).with_temporal_meta(meta);
+        assert!(!entry.is_current());
+        assert!(entry.is_historical());
+        assert!(!entry.is_transition());
+        assert!((entry.confidence() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_p3_w11_1_with_temporal_meta_transition() {
+        // P3-W11.1: Transition 状态(迁移中,附时间证据包且降置信度)
+        let meta = TemporalMeta {
+            valid_from: 1000,
+            valid_until: Some(2000),
+            transition_type: TransitionType::Transition,
+            confidence: 0.3, // 降置信度
+        };
+        let entry = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working).with_temporal_meta(meta);
+        assert!(!entry.is_current());
+        assert!(!entry.is_historical());
+        assert!(entry.is_transition());
+        assert!((entry.confidence() - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_p3_w11_1_mark_historical_from_current() {
+        // P3-W11.1 + INV-8: Current → Historical 单向降级
+        let mut entry = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working)
+            .with_temporal_meta(TemporalMeta::new(1000, 0.9));
+        assert!(entry.is_current());
+
+        entry.mark_historical();
+        assert!(!entry.is_current());
+        assert!(entry.is_historical());
+        // 置信度保留(降级不改置信度,仅改状态)
+        assert!((entry.confidence() - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_p3_w11_1_mark_historical_from_none() {
+        // P3-W11.1: temporal_meta = None 时 mark_historical 先构造默认 Current 再降级
+        let mut entry = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working);
+        assert!(entry.temporal_meta.is_none());
+
+        entry.mark_historical();
+        assert!(entry.temporal_meta.is_some());
+        assert!(entry.is_historical());
+        assert!(!entry.is_current());
+    }
+
+    #[test]
+    fn test_p3_w11_1_mark_historical_idempotent() {
+        // P3-W11.1: 已是 Historical 时 mark_historical 为 no-op(幂等)
+        let mut entry = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working).with_temporal_meta(
+            TemporalMeta {
+                valid_from: 1000,
+                valid_until: Some(2000),
+                transition_type: TransitionType::Historical,
+                confidence: 0.5,
+            },
+        );
+        entry.mark_historical(); // no-op
+        assert!(entry.is_historical());
+        assert!((entry.confidence() - 0.5).abs() < 1e-6); // 置信度不变
+    }
+
+    #[test]
+    fn test_p3_w11_1_mark_transition_from_current() {
+        // P3-W11.1 + INV-8: Current → Transition(降置信度)
+        let mut entry = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working)
+            .with_temporal_meta(TemporalMeta::new(1000, 1.0));
+        assert!(entry.is_current());
+
+        entry.mark_transition(0.5); // 降置信度到 0.5
+        assert!(entry.is_transition());
+        assert!(!entry.is_current());
+        assert!(!entry.is_historical());
+        assert!((entry.confidence() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_p3_w11_1_inv8_historical_to_transition_forbidden() {
+        // P3-W11.1 + INV-8: Historical → Transition 禁止(逆向升级违反单调性)
+        let mut entry = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working).with_temporal_meta(
+            TemporalMeta {
+                valid_from: 1000,
+                valid_until: Some(2000),
+                transition_type: TransitionType::Historical,
+                confidence: 0.5,
+            },
+        );
+        // 尝试从 Historical 回退到 Transition — 应被拒绝(no-op)
+        entry.mark_transition(0.3);
+        assert!(entry.is_historical()); // 状态不变
+        assert!(!entry.is_transition());
+        // 置信度不变(no-op)
+        assert!((entry.confidence() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_p3_w11_1_inv8_full_migration_chain() {
+        // P3-W11.1 + INV-8: 完整迁移链 Current → Transition → Historical
+        let mut entry = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working)
+            .with_temporal_meta(TemporalMeta::new(1000, 1.0));
+        assert!(entry.is_current());
+
+        // Step 1: Current → Transition(降置信度)
+        entry.mark_transition(0.4);
+        assert!(entry.is_transition());
+        assert!((entry.confidence() - 0.4).abs() < 1e-6);
+
+        // Step 2: Transition → Historical(归档完成)
+        entry.mark_historical();
+        assert!(entry.is_historical());
+        assert!(!entry.is_transition());
+        // 置信度保留(Transition 的 0.4 延续到 Historical)
+        assert!((entry.confidence() - 0.4).abs() < 1e-6);
+
+        // Step 3: Historical → Transition 禁止(INV-8 逆向)
+        entry.mark_transition(0.1);
+        assert!(entry.is_historical()); // 状态不变
+        assert!((entry.confidence() - 0.4).abs() < 1e-6); // 置信度不变
+    }
+
+    #[test]
+    fn test_p3_w11_1_temporal_meta_or_default() {
+        // P3-W11.1: temporal_meta_or_default 返回 TemporalMeta 或默认 Current
+        let entry_with = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working)
+            .with_temporal_meta(TemporalMeta::with_expiry(1000, 2000, 0.7));
+        let meta = entry_with.temporal_meta_or_default(0);
+        assert_eq!(meta.valid_from, 1000);
+        assert_eq!(meta.valid_until, Some(2000));
+        assert!((meta.confidence - 0.7).abs() < 1e-6);
+
+        // None 时返回默认 Current
+        let entry_without = MemoryEntry::new("m-2", "内容", MemoryTier::L0Working);
+        let meta = entry_without.temporal_meta_or_default(1500);
+        assert_eq!(meta.valid_from, 1500);
+        assert!(meta.is_permanent());
+        assert_eq!(meta.transition_type, TransitionType::Current);
+        assert!((meta.confidence - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_p3_w11_1_touch_preserves_temporal_meta() {
+        // P3-W11.1: touch 不修改 temporal_meta(访问时间与时间有效性分离)
+        let mut entry = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working)
+            .with_temporal_meta(TemporalMeta::with_expiry(1000, 2000, 0.8));
+        let meta_before = entry.temporal_meta.clone();
+        entry.touch();
+        // temporal_meta 不变
+        assert_eq!(entry.temporal_meta, meta_before);
+        // access_count 递增
+        assert_eq!(entry.access_count, 1);
+    }
+
+    #[test]
+    fn test_p3_w11_1_serde_backward_compat_old_data() {
+        // P3-W11.1: 老数据(无 temporal_meta 字段)反序列化为 None(向后兼容)
+        // 模拟老格式 JSON:无 temporal_meta 字段
+        let old_json = r#"{
+            "id": "m-1",
+            "content": "内容",
+            "clv": null,
+            "tier": "L0Working",
+            "quest_id": null,
+            "created_at": "2026-07-24T00:00:00Z",
+            "last_accessed_at": "2026-07-24T00:00:00Z",
+            "access_count": 0
+        }"#;
+        let entry: MemoryEntry = serde_json::from_str(old_json).expect("反序列化老格式失败");
+        assert!(entry.temporal_meta.is_none());
+        // None 视为 Current(向后兼容)
+        assert!(entry.is_current());
+    }
+
+    #[test]
+    fn test_p3_w11_1_serde_roundtrip_with_temporal_meta() {
+        // P3-W11.1: 新数据(含 temporal_meta)序列化/反序列化往返一致
+        let entry = MemoryEntry::new("m-1", "内容", MemoryTier::L2Semantic)
+            .with_temporal_meta(TemporalMeta::with_expiry(1000, 2000, 0.85));
+        let json = serde_json::to_string(&entry).expect("序列化失败");
+        let restored: MemoryEntry = serde_json::from_str(&json).expect("反序列化失败");
+        assert_eq!(entry, restored);
+        assert!(restored.temporal_meta.is_some());
+        assert!(restored.is_current());
+    }
+
+    #[test]
+    fn test_p3_w11_1_three_transition_types_coverage() {
+        // P3-W11.1 验收:召回测试覆盖三种 TransitionType
+        // 此测试验证三种状态的 is_current/is_historical/is_transition 互斥性
+        let current = MemoryEntry::new("m-1", "内容", MemoryTier::L0Working)
+            .with_temporal_meta(TemporalMeta::new(1000, 1.0));
+        let historical = MemoryEntry::new("m-2", "内容", MemoryTier::L0Working).with_temporal_meta(
+            TemporalMeta {
+                valid_from: 1000,
+                valid_until: Some(2000),
+                transition_type: TransitionType::Historical,
+                confidence: 0.5,
+            },
+        );
+        let transition = MemoryEntry::new("m-3", "内容", MemoryTier::L0Working).with_temporal_meta(
+            TemporalMeta {
+                valid_from: 1000,
+                valid_until: Some(2000),
+                transition_type: TransitionType::Transition,
+                confidence: 0.3,
+            },
+        );
+
+        // Current
+        assert!(current.is_current());
+        assert!(!current.is_historical());
+        assert!(!current.is_transition());
+
+        // Historical
+        assert!(!historical.is_current());
+        assert!(historical.is_historical());
+        assert!(!historical.is_transition());
+
+        // Transition
+        assert!(!transition.is_current());
+        assert!(!transition.is_historical());
+        assert!(transition.is_transition());
+
+        // 互斥性:同一时刻只有一个状态为 true
+        for entry in [current, historical, transition] {
+            let states = [
+                entry.is_current(),
+                entry.is_historical(),
+                entry.is_transition(),
+            ];
+            let true_count = states.iter().filter(|&&b| b).count();
+            assert_eq!(true_count, 1, "三种状态应互斥,只有一个为 true");
+        }
     }
 
     #[test]

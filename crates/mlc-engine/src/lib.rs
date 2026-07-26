@@ -45,6 +45,8 @@ pub mod l0_working;
 pub mod l1_episodic;
 pub mod l2_semantic;
 pub mod l3_procedural;
+/// 记忆策略学习器持有器 — S2 接缝策略异步下发 + 本地 fallback（P4-W14.1）
+pub mod memory_strategy_learner;
 pub mod storage_impl;
 pub mod types;
 
@@ -56,6 +58,8 @@ pub use l0_working::WorkingMemory;
 pub use l1_episodic::EpisodicMemory;
 pub use l2_semantic::SemanticMemory;
 pub use l3_procedural::ProceduralMemory;
+// P4-W14.1: S2 接缝记忆策略学习器持有器
+pub use memory_strategy_learner::MemoryStrategyLearnerHolder;
 pub use storage_impl::PragmaConn;
 pub use types::{
     ExecutionStats, MemoryEntry, MemoryId, MemoryTier, PatternSignature, ProceduralEntry, QuestId,
@@ -67,6 +71,8 @@ pub mod prelude {
     pub use crate::config::MlcConfig;
     pub use crate::engine::MlcEngine;
     pub use crate::error::MlcError;
+    // P4-W14.1: S2 接缝记忆策略学习器持有器
+    pub use crate::memory_strategy_learner::MemoryStrategyLearnerHolder;
     pub use crate::types::{
         ExecutionStats, MemoryEntry, MemoryId, MemoryTier, PatternSignature, ProceduralEntry,
         QuestId,

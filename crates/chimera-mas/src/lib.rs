@@ -73,7 +73,9 @@ pub use delegation::{
 };
 pub use error::{MasError, Result};
 pub use experts::{ExpertProfile, ExpertRegistry, PermissionTier, ToolPermission};
-pub use invariants::{ArchiveTier, InvariantChecker, MEMORY_BUDGET_MB, MEMORY_BUDGET_UTILIZATION};
+pub use invariants::{
+    ArchiveTier, DelegationEdge, InvariantChecker, MEMORY_BUDGET_MB, MEMORY_BUDGET_UTILIZATION,
+};
 pub use knowledge::{ConsultSla, ExpertConsultant, KnowledgeChain, MutualInquirer, WikiRetriever};
 pub use orchestrator::{AgentHandle, HeartbeatInfo, RootOrchestrator, MAX_AGENT_DEPTH};
 pub use pdca::{
@@ -114,7 +116,10 @@ pub mod prelude {
         },
         error::{MasError, Result},
         experts::{ExpertProfile, ExpertRegistry, PermissionTier, ToolPermission},
-        invariants::{ArchiveTier, InvariantChecker, MEMORY_BUDGET_MB, MEMORY_BUDGET_UTILIZATION},
+        invariants::{
+            ArchiveTier, DelegationEdge, InvariantChecker, MEMORY_BUDGET_MB,
+            MEMORY_BUDGET_UTILIZATION,
+        },
         knowledge::{ConsultSla, ExpertConsultant, KnowledgeChain, MutualInquirer, WikiRetriever},
         orchestrator::{AgentHandle, HeartbeatInfo, RootOrchestrator, MAX_AGENT_DEPTH},
         pdca::{

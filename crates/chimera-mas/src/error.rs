@@ -10,6 +10,7 @@
 //! - **委托深度与执行**: MaxDepthExceeded / DelegationFailed / NoAvailableSubAgent / TaskTimeout / TaskFailed
 //! - **象限约束**: QuadrantFanoutExceeded(INV-3) / QuadrantConflict(INV-4)
 //! - **归档单调性**: ArchiveMonotonicityViolated(INV-8,Task 21 §21.2) / ArchiveTierInvalid(Task 17 §17.2)
+//! - **委托图无环**: DelegationCycleDetected(INV-9,P3-W11.3 §21.2)
 //! - **Agent 生命周期**: AgentNotFound / InvalidAgentState / AgentAlreadyExists / AgentCreationFailed /
 //!   AgentStartupFailed / AgentShutdownFailed
 //! - **任务状态**: TaskNotFound / TaskAlreadyCompleted
@@ -24,7 +25,7 @@ use thiserror::Error;
 
 /// MAS 子系统错误类型
 ///
-/// 共 33 个变体,覆盖 MAS 特有错误场景。
+/// 共 34 个变体,覆盖 MAS 特有错误场景。
 /// 所有变体均通过 `#[error("...")]` 提供人类可读的 Display 实现。
 #[derive(Debug, Error)]
 pub enum MasError {
@@ -179,6 +180,24 @@ pub enum MasError {
     ArchiveTierInvalid {
         /// 未识别的归档层级字符串
         tier: String,
+    },
+
+    /// 委托图有环 — INV-9 委托图无环不变量违反(P3-W11.3 §21.2)
+    ///
+    /// 触发场景:`InvariantChecker::check_inv9_delegation_acyclic()` 检测到委托关系
+    /// 构成的有向图存在环(DFS 三色标记法遇到 GRAY 节点 = 回边)。
+    ///
+    /// 处理策略:拒绝继续委托,调用方应发布 Critical 事件(§6.2 红线)并阻断
+    /// 涉环 Agent 的进一步派生,防止递归委托死循环(§6.2 红线:零循环委托)。
+    ///
+    /// WHY 独立变体而非复用 DelegationFailed:循环委托是图结构层面的不变量违反,
+    /// 与单次委托执行失败语义不同。独立分类便于告警图表区分"图结构异常"与"执行失败"。
+    ///
+    /// `cycle_path` 携带环路径(Agent ID 序列,首尾相同),供诊断与审计追溯。
+    #[error("Delegation cycle detected (INV-9): cycle_path = {cycle_path:?}")]
+    DelegationCycleDetected {
+        /// 检测到的环路径(Agent ID 序列,首尾相同构成环,如 ["A", "B", "C", "A"])
+        cycle_path: Vec<String>,
     },
 
     /// 派生准入闸拒绝 — Task 15 §15.3 派生准入闸
@@ -441,6 +460,18 @@ pub enum MasError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
+    /// R1 影子模式回滚失败 — 回滚操作执行失败（P4-W16.2.2 步骤 6）
+    ///
+    /// 触发场景:R1 召回配额策略在影子模式期间触发回滚（连续退化/AsaIntervention/
+    /// EWMA 崩塌/召回率下降）但执行失败,可能导致退化策略持续生效。
+    /// 此错误对应 `NexusEvent::R1ShadowRollbackFailed` Critical 事件,
+    /// 需要 SecCore 与 Parliament 紧急干预（ADR-043 决策 4）。
+    #[error("R1 shadow mode rollback failed: {reason}")]
+    R1ShadowRollbackFailed {
+        /// 回滚失败原因（ConsecutiveRegression / AsaIntervention / EwmaCollapse / RecallRateDrop）
+        reason: String,
+    },
+
     /// 内部错误 — 兜底变体,用于未分类的内部错误
     ///
     /// 触发场景:不应发生的内部不变量违反、状态机不一致等。
@@ -525,7 +556,7 @@ mod tests {
         use serde::de::Error as _;
         use serde::ser::Error as _;
 
-        // 列举所有变体,确保数量 >= 33(当前实际 33 个变体,Task 16 新增 ChunkingFailed)
+        // 列举所有变体,确保数量 >= 34(当前实际 34 个变体,P3-W11.3 新增 DelegationCycleDetected)
         let variants: Vec<MasError> = vec![
             MasError::ContextIsolationViolation {
                 agent_id: "a".into(),
@@ -569,6 +600,9 @@ mod tests {
             },
             MasError::ArchiveTierInvalid {
                 tier: "Unknown".into(),
+            },
+            MasError::DelegationCycleDetected {
+                cycle_path: vec!["A".into(), "B".into(), "A".into()],
             },
             MasError::AdmissionGateDenied {
                 m_total: 120,
@@ -634,8 +668,8 @@ mod tests {
             MasError::Internal("internal".into()),
         ];
         assert!(
-            variants.len() >= 33,
-            "MasError 变体数量 = {},应 >= 33",
+            variants.len() >= 34,
+            "MasError 变体数量 = {},应 >= 34",
             variants.len()
         );
     }

@@ -17,11 +17,14 @@
 //! ```
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use std::sync::Arc;
+use std::time::Instant;
 
 use crate::cacr::{CacrConfig, CacrDecision, CacrGuard};
 use crate::error::RouterError;
 use crate::registry::ModelRegistry;
 use crate::strategies;
+use crate::trajectory::{RouteHook, TrajectoryEvent, TrajectoryOutcome};
 use crate::types::{RoutingDecision, RoutingRequest, RoutingStrategy};
 
 /// 事件源标识 — 用于 `EventMetadata.source`,标识事件发布者
@@ -35,11 +38,17 @@ const ROUTER_SOURCE: &str = "model-router";
 /// # 向后兼容
 /// `ModelRouter::new` 不启用 CACR,行为与 Task 6 完全一致。
 /// 需要成本保护时使用 `ModelRouter::with_cacr`。
+///
+/// P4-W16.1.1 扩展:`hooks` 字段允许上层注入 `RouteHook` trait 实现,
+/// 在 route() 边界捕获轨迹(请求/响应/延迟/token 成本/路由决策)。
+/// 默认为空 Vec,行为与既有完全一致(向后兼容)。
 pub struct ModelRouter {
     registry: ModelRegistry,
     event_bus: EventBus,
     /// CACR 守卫 — `None` 表示禁用成本保护(向后兼容)
     cacr_guard: Option<CacrGuard>,
+    /// P4-W16.1.1: 轨迹捕获 hook 列表 — 默认空,route() 末尾依次调用
+    hooks: Vec<Arc<dyn RouteHook>>,
 }
 
 impl ModelRouter {
@@ -51,6 +60,7 @@ impl ModelRouter {
             registry,
             event_bus,
             cacr_guard: None,
+            hooks: Vec::new(),
         }
     }
 
@@ -67,10 +77,80 @@ impl ModelRouter {
             registry,
             event_bus,
             cacr_guard: Some(CacrGuard::new(cacr_config)),
+            hooks: Vec::new(),
         }
     }
 
-    /// 路由请求:按策略分发 → CACR 拦截 → 发布事件
+    /// P4-W16.1.1: 创建带单个轨迹捕获 hook 的 ModelRouter
+    ///
+    /// # 设计意图
+    /// 提供便捷的单 hook 注入入口。多 hook 场景请使用 `with_hooks()`。
+    ///
+    /// # 向后兼容
+    /// hook 注入仅观察路由轨迹,不修改路由决策,与既有行为兼容。
+    pub fn with_hook(
+        registry: ModelRegistry,
+        event_bus: EventBus,
+        hook: Arc<dyn RouteHook>,
+    ) -> Self {
+        Self {
+            registry,
+            event_bus,
+            cacr_guard: None,
+            hooks: vec![hook],
+        }
+    }
+
+    /// P4-W16.1.1: 创建带多个轨迹捕获 hook 的 ModelRouter
+    ///
+    /// # 调用顺序
+    /// hooks 按 Vec 顺序依次调用 `on_route_completed`。
+    /// 单个 hook panic 不应影响其他 hook,但当前实现未隔离 panic(留待后续增强)。
+    pub fn with_hooks(
+        registry: ModelRegistry,
+        event_bus: EventBus,
+        hooks: Vec<Arc<dyn RouteHook>>,
+    ) -> Self {
+        Self {
+            registry,
+            event_bus,
+            cacr_guard: None,
+            hooks,
+        }
+    }
+
+    /// P4-W16.1.1: 创建同时带 CACR 守卫与单个 hook 的 ModelRouter
+    ///
+    /// # 使用场景
+    /// 当既需要成本保护又需要轨迹捕获时使用。
+    pub fn with_cacr_and_hook(
+        registry: ModelRegistry,
+        event_bus: EventBus,
+        cacr_config: CacrConfig,
+        hook: Arc<dyn RouteHook>,
+    ) -> Self {
+        Self {
+            registry,
+            event_bus,
+            cacr_guard: Some(CacrGuard::new(cacr_config)),
+            hooks: vec![hook],
+        }
+    }
+
+    /// P4-W16.1.1: 追加单个 hook 到现有 router
+    ///
+    /// # 使用场景
+    /// 路由器构造后追加 hook(如运行时动态注册观测组件)。
+    pub fn add_hook(&mut self, hook: Arc<dyn RouteHook>) {
+        self.hooks.push(hook);
+    }
+
+    /// P4-W16.1.1: 获取已注册 hook 数量(便于测试与诊断)
+    pub fn hook_count(&self) -> usize {
+        self.hooks.len()
+    }
+
+    /// 路由请求:按策略分发 → CACR 拦截 → 发布事件 → 触发 hook
     ///
     /// # 处理流程
     /// 1. 校验注册表非空(提前返回,避免策略函数重复检查)
@@ -80,22 +160,58 @@ impl ModelRouter {
     ///    - `Downgrade`:切换到次优模型(`candidates[0]`),重算成本
     ///    - `Block`:发布 `BudgetExceeded` 事件,返回 `BudgetExceeded` 错误
     /// 4. 发布 `ModelRouteSelected` 事件
+    /// 5. **P4-W16.1.1**:构造 `TrajectoryEvent` 并依次调用 hooks(成功与错误路径均触发)
     ///
     /// # 错误处理
     /// - 注册表为空 → `RouterError::NoModelsRegistered`
     /// - CACR Block → `RouterError::BudgetExceeded`(同时发布事件)
     /// - 事件发布失败 → `RouterError::EventBusError`
+    ///
+    /// # P4-W16.1.1 hook 行为
+    /// - hooks 在事件发布之后调用(确保事件已广播)
+    /// - 错误路径也触发 hooks(便于追溯失败路由)
+    /// - hooks 仅观察,不可修改决策(不可变借用契约)
+    /// - 单个 hook panic 会传播(后续可考虑 catch_unwind 隔离)
     pub async fn route(&self, request: RoutingRequest) -> Result<RoutingDecision, RouterError> {
+        // P4-W16.1.1: 计时起点 — 端到端延迟计量
+        let start = Instant::now();
+
         // 1. 前置校验:注册表非空
         if self.registry.count() == 0 {
-            return Err(RouterError::NoModelsRegistered);
+            let result = Err(RouterError::NoModelsRegistered);
+            // P4-W16.1.1: 错误路径也触发 hook(便于追溯失败路由)
+            self.emit_trajectory(&request, start, &result);
+            return result;
         }
 
         // 2. 按策略分发,获得初始决策
         let mut decision = match request.strategy {
-            RoutingStrategy::Lite => strategies::route_lite(&self.registry, &request)?,
-            RoutingStrategy::Efficient => strategies::route_efficient(&self.registry, &request)?,
-            RoutingStrategy::Auto => strategies::route_auto(&self.registry, &request)?,
+            RoutingStrategy::Lite => match strategies::route_lite(&self.registry, &request) {
+                Ok(d) => d,
+                Err(e) => {
+                    let result = Err(e);
+                    self.emit_trajectory(&request, start, &result);
+                    return result;
+                }
+            },
+            RoutingStrategy::Efficient => {
+                match strategies::route_efficient(&self.registry, &request) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let result = Err(e);
+                        self.emit_trajectory(&request, start, &result);
+                        return result;
+                    }
+                }
+            }
+            RoutingStrategy::Auto => match strategies::route_auto(&self.registry, &request) {
+                Ok(d) => d,
+                Err(e) => {
+                    let result = Err(e);
+                    self.emit_trajectory(&request, start, &result);
+                    return result;
+                }
+            },
         };
 
         // 3. CACR 拦截检查(若启用)
@@ -137,14 +253,22 @@ impl ModelRouter {
                         current: decision.estimated_cost,
                         limit: guard.budget_limit(),
                     };
-                    self.event_bus.publish(event).await?;
+                    if let Err(e) = self.event_bus.publish(event).await {
+                        let result: Result<RoutingDecision, RouterError> =
+                            Err(RouterError::from(e));
+                        self.emit_trajectory(&request, start, &result);
+                        return result;
+                    }
 
                     // WHY:reason 的详细信息(成本/预算/阈值)已通过 BudgetExceeded
                     // 事件的 current/limit 字段传递,此处返回错误时携带 cost/limit 供调用方决策
-                    return Err(RouterError::BudgetExceeded {
+                    let result = Err(RouterError::BudgetExceeded {
                         cost: decision.estimated_cost,
                         limit: guard.budget_limit(),
                     });
+                    // P4-W16.1.1: 错误路径触发 hook
+                    self.emit_trajectory(&request, start, &result);
+                    return result;
                 }
             }
         }
@@ -152,13 +276,54 @@ impl ModelRouter {
         // 4. 发布 ModelRouteSelected 事件,供 Quest Engine 等订阅者消费
         let event = NexusEvent::ModelRouteSelected {
             metadata: EventMetadata::new(ROUTER_SOURCE),
-            quest_id: request.quest_id,
+            quest_id: request.quest_id.clone(),
             model_id: decision.model_id.clone(),
             route_reason: decision.route_reason.clone(),
         };
-        self.event_bus.publish(event).await?;
+        let publish_result = self
+            .event_bus
+            .publish(event)
+            .await
+            .map_err(RouterError::from);
 
-        Ok(decision)
+        // 5. P4-W16.1.1: 构造 TrajectoryEvent 并触发 hooks
+        let result = match publish_result {
+            Ok(()) => Ok(decision),
+            Err(e) => Err(e),
+        };
+        self.emit_trajectory(&request, start, &result);
+
+        result
+    }
+
+    /// P4-W16.1.1: 内部辅助 — 构造 TrajectoryEvent 并依次调用 hooks
+    ///
+    /// # 设计决策
+    /// - 抽取为独立方法避免 route() 主体过长(符合 §6.1 单函数 ≤200 行)
+    /// - 所有错误路径均调用此方法,确保 hook 全覆盖
+    /// - hook 在已发布的 event 之后调用(事件优先,hook 观察次要)
+    /// - 即使 hooks 为空也调用(零成本抽象,Vec::iter 空迭代开销 ~0ns)
+    fn emit_trajectory(
+        &self,
+        request: &RoutingRequest,
+        start: Instant,
+        result: &Result<RoutingDecision, RouterError>,
+    ) {
+        if self.hooks.is_empty() {
+            return;
+        }
+
+        let event = TrajectoryEvent {
+            quest_id: request.quest_id.clone(),
+            strategy: request.strategy,
+            estimated_tokens: request.estimated_tokens,
+            latency: start.elapsed(),
+            outcome: TrajectoryOutcome::from_result(result),
+        };
+
+        for hook in &self.hooks {
+            hook.on_route_completed(event.clone());
+        }
     }
 
     /// 获取注册表引用(用于动态注册/注销模型)
@@ -337,5 +502,92 @@ mod tests {
         assert_eq!(decision.model_id, "lite-model");
         // route_reason 不应包含 CACR 标识
         assert!(!decision.route_reason.contains("CACR"));
+    }
+
+    // ============================================================
+    // P4-W16.1.1: RouteHook trait 集成测试(单元层)
+    // ============================================================
+
+    /// 测试用 hook — 计数 on_route_completed 调用次数
+    #[derive(Debug, Default)]
+    struct CountingHook {
+        count: std::sync::Arc<std::sync::Mutex<usize>>,
+    }
+
+    impl CountingHook {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn get(&self) -> usize {
+            *self.count.lock().expect("count mutex poisoned")
+        }
+    }
+
+    impl RouteHook for CountingHook {
+        fn on_route_completed(&self, _event: TrajectoryEvent) {
+            *self.count.lock().expect("count mutex poisoned") += 1;
+        }
+    }
+
+    #[test]
+    fn test_new_router_has_zero_hooks() {
+        let (router, _bus) = make_router();
+        assert_eq!(router.hook_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_hook_triggered_on_success() {
+        let bus = EventBus::new();
+        let registry = ModelRegistry::from_config(&RouterConfig::default());
+        let hook = std::sync::Arc::new(CountingHook::new());
+        let router = ModelRouter::with_hook(registry, bus, hook.clone());
+
+        let _ = router
+            .route(make_request(RoutingStrategy::Lite))
+            .await
+            .unwrap();
+
+        assert_eq!(hook.get(), 1, "成功路径必须触发 1 次 hook");
+    }
+
+    #[tokio::test]
+    async fn test_hook_triggered_on_error() {
+        let bus = EventBus::new();
+        let registry = ModelRegistry::new(); // 空注册表
+        let hook = std::sync::Arc::new(CountingHook::new());
+        let router = ModelRouter::with_hook(registry, bus, hook.clone());
+
+        let _ = router.route(make_request(RoutingStrategy::Lite)).await;
+        // 空注册表错误路径也触发 hook
+        assert_eq!(hook.get(), 1, "错误路径必须触发 1 次 hook");
+    }
+
+    #[tokio::test]
+    async fn test_hook_triggered_on_cacr_block() {
+        let bus = EventBus::new();
+        let registry = ModelRegistry::from_config(&RouterConfig::default());
+        let cacr_config = CacrConfig {
+            budget_limit: 0, // 预算为 0,任何 cost > 0 都会 Block
+            ..Default::default()
+        };
+        let hook = std::sync::Arc::new(CountingHook::new());
+        let router = ModelRouter::with_cacr_and_hook(registry, bus, cacr_config, hook.clone());
+
+        let _ = router.route(make_request(RoutingStrategy::Lite)).await;
+        assert_eq!(hook.get(), 1, "CACR Block 错误路径必须触发 hook");
+    }
+
+    #[test]
+    fn test_add_hook_appends_to_existing() {
+        let bus = EventBus::new();
+        let registry = ModelRegistry::from_config(&RouterConfig::default());
+        let hook1 = std::sync::Arc::new(CountingHook::new());
+        let mut router = ModelRouter::with_hook(registry, bus, hook1.clone());
+        assert_eq!(router.hook_count(), 1);
+
+        let hook2 = std::sync::Arc::new(CountingHook::new());
+        router.add_hook(hook2.clone() as std::sync::Arc<dyn RouteHook>);
+        assert_eq!(router.hook_count(), 2);
     }
 }

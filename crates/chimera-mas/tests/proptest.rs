@@ -828,3 +828,219 @@ fn tier_from_idx(idx: u8) -> ArchiveTier {
         _ => ArchiveTier::Ice,
     }
 }
+
+// ============================================================
+// Task P3-W11.3: INV-9 委托图无环不变量属性测试
+// ============================================================
+//
+// 对应 spec.md §21.2 + P3-W11.3,验证 INV-9 三性质:
+// 1. 无环: 任意 DAG(有向无环图)INV-9 检查通过
+// 2. 全可达: 任意树形委托图(所有节点从根可达)INV-9 检查通过
+// 3. 无意外循环: 任意含环委托图 INV-9 检查拒绝(无漏检)
+//
+// ## 语法约束(§4.1 规范)
+// proptest 1.11+ 用 block-named 语法
+// ProptestConfig 1000 cases 对齐 spec 要求(spec.md:560)
+//
+// ## 红线对齐
+// - §6.2: 零循环委托(INV-9 无环)
+
+use chimera_mas::invariants::DelegationEdge;
+use std::collections::HashSet;
+
+/// 生成随机 DAG(有向无环图)边列表
+///
+/// 策略: N 个节点(n0..n{N-1}), 仅生成 from_idx < to_idx 的边。
+/// 由于所有边从小索引指向大索引,图天然无环(拓扑序 = 索引序)。
+/// 这是 INV-9 "无环" 性质的输入:合法委托图。
+fn arb_dag_edges() -> impl Strategy<Value = Vec<DelegationEdge>> {
+    (
+        2u8..=15,
+        prop::collection::vec((0u8..=14, 0u8..=14), 0..=30),
+    )
+        .prop_map(|(n, pairs)| {
+            let mut seen = HashSet::new();
+            let mut edges = Vec::new();
+            for (i, j) in pairs {
+                // 仅保留 i < j < n 的边(DAG 保证:拓扑序 = 索引序)
+                // 合并嵌套 if:clippy collapsible_if,逻辑等价但更简洁
+                if i < j && j < n && seen.insert((i, j)) {
+                    edges.push(DelegationEdge::new(format!("n{i}"), format!("n{j}")));
+                }
+            }
+            edges
+        })
+}
+
+/// 生成随机树形委托边列表(所有节点从根 n0 可达)
+///
+/// 策略: N 个节点(n0 为根), 节点 i(i >= 1)的父节点从 0..i 中随机选取。
+/// 这保证:① 图无环(树的性质);② 所有节点从 n0 可达。
+/// 这是 INV-9 "全可达" 性质的输入:树形委托图是 DAG 的特例。
+fn arb_tree_edges() -> impl Strategy<Value = Vec<DelegationEdge>> {
+    (2u8..=15, prop::collection::vec(0u8..=14, 14)).prop_map(|(n, parents)| {
+        let mut edges = Vec::new();
+        // 用迭代器替代 range 索引:clippy needless_range_loop,语义等价
+        for (idx, &parent_raw) in parents.iter().enumerate().take((n - 1) as usize) {
+            let child = (idx + 1) as u8; // 节点 1..n
+            let parent = parent_raw % child; // 0..child, 保证 parent < child
+            edges.push(DelegationEdge::new(
+                format!("n{parent}"),
+                format!("n{child}"),
+            ));
+        }
+        edges
+    })
+}
+
+/// 生成含环委托边列表(保证存在至少一个环)
+///
+/// 策略: N 个节点, 创建完整环 n0→n1→...→n{N-1}→n0。
+/// 这是 INV-9 "无意外循环" 性质的输入:含环图必须被检测到。
+fn arb_cyclic_edges() -> impl Strategy<Value = Vec<DelegationEdge>> {
+    (3u8..=15).prop_map(|n| {
+        // 创建环: n0→n1→...→n{n-1}→n0
+        let mut edges: Vec<DelegationEdge> = (0..n - 1)
+            .map(|i| DelegationEdge::new(format!("n{i}"), format!("n{}", i + 1)))
+            .collect();
+        edges.push(DelegationEdge::new(format!("n{}", n - 1), "n0"));
+        edges
+    })
+}
+
+/// 生成 DAG + 回边(保证存在环)
+///
+/// 策略: 先生成随机 DAG 边, 再强制添加 n0→n1 和 n1→n0(回边)构成 2 节点环。
+/// 验证即使图中大部分是 DAG 结构, 只要存在一条回边就被检测到。
+fn arb_dag_plus_back_edge() -> impl Strategy<Value = Vec<DelegationEdge>> {
+    (
+        3u8..=15,
+        prop::collection::vec((0u8..=14, 0u8..=14), 0..=20),
+    )
+        .prop_map(|(n, pairs)| {
+            let mut seen = HashSet::new();
+            let mut edges = Vec::new();
+            // 1. 添加 DAG 边(i < j < n)
+            for (i, j) in &pairs {
+                if *i < *j && *j < n && seen.insert((*i, *j)) {
+                    edges.push(DelegationEdge::new(format!("n{i}"), format!("n{j}")));
+                }
+            }
+            // 2. 强制添加 n0→n1 + n1→n0(回边)构成环
+            if seen.insert((0, 1)) {
+                edges.push(DelegationEdge::new("n0", "n1"));
+            }
+            edges.push(DelegationEdge::new("n1", "n0"));
+            edges
+        })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 1000,
+        .. ProptestConfig::default()
+    })]
+
+    /// INV-9 性质 1 — 无环: 任意 DAG, INV-9 检查必通过
+    ///
+    /// DAG(有向无环图)是合法委托图的最一般形式。
+    /// 任意随机生成的 DAG(仅 i→j, i < j 边), INV-9 必须返回 Ok。
+    #[test]
+    fn inv9_dag_always_acyclic(edges in arb_dag_edges()) {
+        let result = InvariantChecker::check_inv9_delegation_acyclic(&edges);
+        prop_assert!(
+            result.is_ok(),
+            "DAG 应无环, 实际: {result:?}, edges: {edges:?}"
+        );
+    }
+
+    /// INV-9 性质 2 — 全可达: 任意树形委托图, INV-9 检查必通过
+    ///
+    /// 树是 DAG 的特例: 每个节点(除根)恰好有一个父, 所有节点从根可达。
+    /// 这是最常见的委托模式(RootOrchestrator → MainAgent → SubAgent)。
+    /// 任意随机生成的树, INV-9 必须返回 Ok。
+    #[test]
+    fn inv9_tree_always_acyclic_and_reachable(edges in arb_tree_edges()) {
+        let result = InvariantChecker::check_inv9_delegation_acyclic(&edges);
+        prop_assert!(
+            result.is_ok(),
+            "树形委托图应无环, 实际: {result:?}, edges: {edges:?}"
+        );
+    }
+
+    /// INV-9 性质 3a — 无意外循环: 任意含环委托图, INV-9 检查必拒绝
+    ///
+    /// 含完整环(n0→n1→...→n{N-1}→n0)的图必须被检测到,
+    /// 返回 DelegationCycleDetected 且环路径首尾相同(闭合)。
+    #[test]
+    fn inv9_cyclic_graph_always_rejected(edges in arb_cyclic_edges()) {
+        let result = InvariantChecker::check_inv9_delegation_acyclic(&edges);
+        match result {
+            Err(MasError::DelegationCycleDetected { cycle_path }) => {
+                // 环路径必须非空且首尾相同(闭合)
+                // WHY 用显式传参 {:?}, cycle_path 而非 {cycle_path:?}:
+                // prop_assert_eq! 宏内部展开为 format_args!,而 format_args!
+                // 在宏展开上下文中无法捕获周围作用域变量(仅对直接字面量生效)。
+                prop_assert!(
+                    !cycle_path.is_empty(),
+                    "环路径不应为空"
+                );
+                prop_assert_eq!(
+                    cycle_path.first(),
+                    cycle_path.last(),
+                    "环路径首尾应相同(闭合), 实际: {:?}",
+                    cycle_path
+                );
+            }
+            Ok(()) => {
+                prop_assert!(
+                    false,
+                    "含环委托图应被拒绝, 实际返回 Ok, edges: {edges:?}"
+                );
+            }
+            Err(other) => {
+                prop_assert!(
+                    false,
+                    "应返回 DelegationCycleDetected, 实际: {other:?}"
+                );
+            }
+        }
+    }
+
+    /// INV-9 性质 3b — 无意外循环: DAG + 回边, INV-9 检查必拒绝
+    ///
+    /// 即使图中大部分是 DAG 结构, 只要存在一条回边(back edge)
+    /// 就构成环, 必须被检测到。这验证 DFS 三色标记法对回边的敏感度。
+    #[test]
+    fn inv9_dag_plus_back_edge_always_rejected(edges in arb_dag_plus_back_edge()) {
+        let result = InvariantChecker::check_inv9_delegation_acyclic(&edges);
+        match result {
+            Err(MasError::DelegationCycleDetected { cycle_path }) => {
+                // 必须检测到环, 且环路径闭合
+                // WHY 显式传参:同 inv9_cyclic_graph_always_rejected, format_args! 限制
+                prop_assert!(
+                    !cycle_path.is_empty(),
+                    "环路径不应为空"
+                );
+                prop_assert_eq!(
+                    cycle_path.first(),
+                    cycle_path.last(),
+                    "环路径首尾应相同(闭合), 实际: {:?}",
+                    cycle_path
+                );
+            }
+            Ok(()) => {
+                prop_assert!(
+                    false,
+                    "DAG+回边(含环)应被拒绝, 实际返回 Ok, edges: {edges:?}"
+                );
+            }
+            Err(other) => {
+                prop_assert!(
+                    false,
+                    "应返回 DelegationCycleDetected, 实际: {other:?}"
+                );
+            }
+        }
+    }
+}

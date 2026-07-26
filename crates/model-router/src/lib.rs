@@ -46,6 +46,7 @@ pub mod moe;
 pub mod registry;
 pub mod router;
 pub mod strategies;
+pub mod trajectory;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
@@ -58,6 +59,11 @@ pub use history::{HistoryStore, InMemoryHistoryStore, SqliteHistoryStore};
 pub use moe::{HistoryRecord, MoeGate};
 pub use registry::ModelRegistry;
 pub use router::ModelRouter;
+// P4-W16.1.1: RouteHook trait + TrajectoryEvent/Outcome 轨迹捕获类型重导出
+// P4-W16.1.2: RecordingHook 生产级实现 + TrajectoryStats 统计快照重导出
+pub use trajectory::{
+    RecordingHook, RouteHook, TrajectoryEvent, TrajectoryOutcome, TrajectoryStats,
+};
 pub use types::{ModelInfo, RoutingDecision, RoutingRequest, RoutingStrategy};
 
 /// 预导入模块 — 提供最常用类型
@@ -69,5 +75,9 @@ pub mod prelude {
     pub use crate::moe::{HistoryRecord, MoeGate};
     pub use crate::registry::ModelRegistry;
     pub use crate::router::ModelRouter;
+    // P4-W16.1.1 + P4-W16.1.2: 轨迹捕获类型 + 生产级 RecordingHook 加入 prelude
+    pub use crate::trajectory::{
+        RecordingHook, RouteHook, TrajectoryEvent, TrajectoryOutcome, TrajectoryStats,
+    };
     pub use crate::types::{ModelInfo, RoutingDecision, RoutingRequest, RoutingStrategy};
 }

@@ -367,6 +367,43 @@ impl CheckpointManager {
     pub fn max_keep(&self) -> usize {
         self.max_keep
     }
+
+    /// 从已加载的 Checkpoint 导出轨迹四元组(P4-W16.1.3 捕获点 2)
+    ///
+    /// 对应 spec.md §Scenario "model-router 轨迹捕获" 捕获点 2:
+    /// quest-engine Checkpoint(MessagePack 快照)→ 轨迹导出器
+    /// (状态/动作/奖励/上下文摘要四元组)
+    ///
+    /// # 设计决策
+    /// - **同步方法**:导出是纯内存转换(MessagePack 解码 + 字段提取),
+    ///   无 I/O,无需 spawn_blocking
+    /// - **不可变借用**:仅观察 Checkpoint,不修改状态(与 RouteHook 契约一致)
+    /// - **错误隔离**:解码失败返回 `TrajectoryExportFailed`,不阻断调用方
+    ///
+    /// # 参数
+    /// - `checkpoint`:已通过 `load` / `load_latest` 加载的检查点
+    ///
+    /// # 返回
+    /// `QuestTrajectory` 四元组(state/action/reward/context),供 P4-W16.2 经验回放池消费
+    ///
+    /// # 使用示例
+    /// ```rust,ignore
+    /// use quest_engine::CheckpointManager;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let cm = CheckpointManager::new("/tmp/cps".into());
+    /// let checkpoint = cm.load_latest("quest-123").await?.expect("存在检查点");
+    /// let trajectory = cm.export_trajectory(&checkpoint)?;
+    /// println!("net_reward = {:.3}", trajectory.reward.net_reward);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn export_trajectory(
+        &self,
+        checkpoint: &Checkpoint,
+    ) -> Result<crate::trajectory_exporter::QuestTrajectory, QuestError> {
+        crate::trajectory_exporter::export_trajectory(checkpoint)
+    }
 }
 
 /// 计算 SHA-256 哈希并返回十六进制字符串

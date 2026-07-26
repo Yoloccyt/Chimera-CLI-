@@ -27,13 +27,19 @@ use uuid::Uuid;
 
 use crate::config::ParliamentConfig;
 use crate::error::ParliamentError;
+// P4-W14.3 S5 接缝:ParliamentLearnerHolder 承载 omega-learner 异步下发的策略
+use crate::learner_holder::ParliamentLearnerHolder;
 use crate::roles::RoleRegistry;
 use crate::types::{Consensus, Opinion, Proposal, Role};
 use crate::veto::{Skeptic, VetoOverrideTicket};
 use crate::voting::{
-    publish_capability_frozen_event, publish_consensus_event, publish_debate_started_event,
-    publish_skeptic_veto_event, publish_veto_overridden_event, publish_vote_event, VoteCounter,
+    compute_decision_hash, publish_capability_frozen_event, publish_consensus_event,
+    publish_debate_started_event, publish_skeptic_veto_event, publish_veto_overridden_event,
+    publish_vote_event, VoteCounter,
 };
+// P4-W14.3 S5 接缝:Parliament 激活策略类型(L0 契约,跨层共享)
+// WHY L8 → L0 ✓(§2.2 依赖铁律):parliament 仅依赖 L0 类型,不直接依赖 L6 omega-learner
+use nexus_contracts::{ActivationStrategy, ParliamentPolicy};
 
 // ============================================================
 // DPO 训练对 — 共识达成后生成的偏好优化训练数据
@@ -167,6 +173,12 @@ pub struct Parliament {
     skeptic: Skeptic,
     /// DPO 训练对生成器(共识达成后生成 chosen/rejected 对)
     dpo_generator: DpoPairGenerator,
+    /// P4-W14.3 S5 接缝:Parliament 激活策略学习器持有器
+    ///
+    /// 承载 `omega-learner` 异步下发的 `ParliamentPolicy`,为
+    /// `deliberate_with_policy` 提供策略感知能力。C4 合规:
+    /// 默认 `Static(Full)` = 既有行为,无策略注入时行为与 P4 修复前一致。
+    learner_holder: ParliamentLearnerHolder,
 }
 
 impl Parliament {
@@ -185,20 +197,38 @@ impl Parliament {
             vote_counter,
             skeptic: Skeptic::default(),
             dpo_generator: DpoPairGenerator::new(),
+            learner_holder: ParliamentLearnerHolder::new(),
         }
+    }
+
+    /// P4-W14.3 S5 接缝:获取 Parliament 学习器持有器引用
+    ///
+    /// 上层编排器(chimera-cli / quest-engine)通过此访问器获取
+    /// `&ParliamentLearnerHolder`,调用 `update_policy()` 异步下发
+    /// `omega-learner` 学习到的策略,或调用 `fallback_to_static()` 触发熔断。
+    ///
+    /// # 设计(WHY 引用而非 owned)
+    ///
+    /// 返回引用保证:
+    /// - 调用方无法 `take` holder,避免 Parliament 内部状态失效
+    /// - `ParliamentLearnerHolder` 内部 `RwLock` 支持并发读写,引用足够
+    /// - 与 ` skeptic()` / `vote_counter()` 等访问器模式一致
+    pub fn learner_holder(&self) -> &ParliamentLearnerHolder {
+        &self.learner_holder
     }
 
     /// 审议提案:提案 → 辩论 → 投票 → 共识
     ///
+    /// P4-W14.3 S5 接缝重构:此方法现为薄包装,委托给 `deliberate_with_policy`,
+    /// 使用 `ParliamentLearnerHolder` 当前激活的 `ParliamentPolicy`。
+    ///
+    /// 默认行为(C4 合规):`ParliamentLearnerHolder::new()` 初始化为
+    /// `ParliamentPolicy::Static(ActivationStrategy::Full)`,与 P4 修复前
+    /// 完全一致(5 角色完整辩论 + Skeptic 否决)。
+    ///
     /// # 流程
-    /// 0. Skeptic 恶意意图检测(辩论前):若检测到,立即返回 Vetoed,跳过辩论
-    /// 1. 发起提案,记录 `DebateStarted` 日志(携带 quest_id/proposal_id)
-    /// 2. 5 角色并行辩论,各角色生成 `Opinion`(占位实现:规则化生成)
-    /// 3. 使用 `FuturesUnordered` 并发收集 5 个角色的 Opinion,超时 5 秒
-    /// 4. 加权投票,发布 `VoteCast` 事件
-    /// 5. 共识判定(调用 VoteCounter)
-    /// 6. 若共识达成,生成 DPO 训练对,更新 consensus.dpo_pair_id
-    /// 7. 若共识达成,发布 `ConsensusReached` 事件 `[Critical]`
+    /// 1. 从 `learner_holder` 读取当前 `ParliamentPolicy`
+    /// 2. 委托给 `deliberate_with_policy` 执行策略感知审议
     ///
     /// # 参数
     /// - `quest`:关联的 Quest(提供任务数、思考模式等特征)
@@ -206,21 +236,76 @@ impl Parliament {
     ///
     /// # 返回
     /// 共识判定结果,或辩论超时错误
-    ///
-    /// # 错误
-    /// - `DebateTimeout`:5 角色未在 `debate_timeout_ms` 内全部完成
     pub async fn deliberate(
         &self,
         quest: &Quest,
         proposal: &Proposal,
     ) -> Result<Consensus, ParliamentError> {
-        // 步骤 0:Skeptic 恶意意图检测(辩论前,红队防线)
-        // WHY 辩论前检测:恶意意图应在进入辩论流程前被拦截,
-        // 避免恶意提案消耗辩论资源(5 角色 Opinion 生成)
+        // 读取当前策略快照(Copy 枚举,~10ns,无锁竞争)
+        let policy = self.learner_holder.current_policy();
+        self.deliberate_with_policy(quest, proposal, &policy).await
+    }
+
+    /// P4-W14.3 S5 接缝:策略感知审议提案
+    ///
+    /// 根据 `ParliamentPolicy` 携带的 `ActivationStrategy` 分派三路径:
+    /// - `FastPath`:跳过 Opinion 生成,仅做 Skeptic 否决检查后直接返回共识
+    /// - `Simplified`:仅 Architect + Skeptic + Optimizer 三关键角色辩论
+    /// - `Full`:5 角色完整辩论(既有行为,向后兼容)
+    ///
+    /// # 三重悖论"推理悖论"修复(WHY 策略感知)
+    ///
+    /// 10 层架构跨层协调成本存在阈值。Parliament 辩论是典型的
+    /// "协调成本 vs 推理增益"权衡:S5 接缝通过 LinUCB 学习上下文 →
+    /// 策略映射,使辩论强度随场景自适应:
+    /// - 低风险 + 只读 + 历史推翻率低 → `FastPath`(协调成本 < 推理增益)
+    /// - 中等风险或不确定 → `Simplified`(三关键角色即可决策)
+    /// - 高风险 + 写操作 + 历史推翻率高 → `Full`(全面审议必要)
+    ///
+    /// # 安全保证(三策略共同)
+    ///
+    /// **Skeptic 否决检查始终执行**(红队防线不可绕过):
+    /// - 即使 `FastPath` 跳过 Opinion 生成,仍先做 Skeptic 检测
+    /// - WHY:恶意意图检测是安全机制,不能因策略优化而绕过
+    /// - 触发否决时返回 `Consensus::Vetoed`,与 `Full` 行为一致
+    ///
+    /// # C4 合规(能力场灰度)
+    ///
+    /// - `policy = Static(Full)`(默认):行为与 P4 修复前 `deliberate()` 完全一致
+    /// - `policy = Learned(...)`:使用 omega-learner 下发的策略,行为由学习驱动
+    /// - 任何异常(panic/超时)由调用方 fallback 到 `Static(Full)` 后再调用
+    ///
+    /// # 流程
+    /// 0. Skeptic 恶意意图检测(三策略共同前置)
+    /// 1. 按 `policy.strategy()` 分派:
+    ///    - `FastPath`:发布 DebateStarted(0 参与者)→ 直接生成共识 → 发布 ConsensusReached
+    ///    - `Simplified`:发布 DebateStarted(3 参与者)→ 收集 3 角色 Opinion → 投票 → 共识
+    ///    - `Full`:发布 DebateStarted(5 参与者)→ 收集 5 角色 Opinion → 投票 → 共识
+    /// 2. 若共识达成,生成 DPO 训练对(仅 Simplified/Full 有 Opinion 可提取)
+    /// 3. 若共识达成,发布 ConsensusReached 事件 [Critical]
+    ///
+    /// # 参数
+    /// - `quest`:关联的 Quest
+    /// - `proposal`:待审议的提案
+    /// - `policy`:Parliament 激活策略(承载 `ActivationStrategy`)
+    ///
+    /// # 返回
+    /// 共识判定结果,或辩论超时错误(仅 Simplified/Full 路径)
+    pub async fn deliberate_with_policy(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+        policy: &ParliamentPolicy,
+    ) -> Result<Consensus, ParliamentError> {
+        // ============================================================
+        // 步骤 0:Skeptic 恶意意图检测(三策略共同前置,红队防线)
+        // ============================================================
+        // WHY 始终执行:恶意意图检测是安全机制,即使 FastPath 也不能绕过。
+        // 若检测到恶意模式,立即返回 Vetoed 并发布 SkepticVeto/CapabilityFrozen
+        // 事件,跳过后续所有审议流程(无论策略如何)。
         if let Some((veto_reason, frozen_capabilities)) =
             self.skeptic.exercise_veto(&quest.quest_id, proposal)
         {
-            // 构造完整否决原因(同时用于事件发布与返回值,避免重复 format)
             let veto_reason_str = format!(
                 "Skeptic 否决:{:?} 检测到恶意模式 '{}'({:?})— {}",
                 veto_reason.intent_type,
@@ -229,7 +314,6 @@ impl Parliament {
                 veto_reason.detail
             );
 
-            // 本地诊断日志(保留,供运维排查)
             error!(
                 quest_id = %quest.quest_id,
                 proposal_id = %proposal.proposal_id,
@@ -240,8 +324,6 @@ impl Parliament {
             );
 
             // 发布 SkepticVeto 事件 [Critical]
-            // WHY Critical:丢失会导致 SecCore 收不到冻结指令,恶意提案继续执行,
-            // 违反架构红线"所有外部调用经 SecCore 沙箱 + Decay 衰减"
             publish_skeptic_veto_event(
                 &self.event_bus,
                 &quest.quest_id,
@@ -251,8 +333,6 @@ impl Parliament {
             .await;
 
             // 发布 CapabilityFrozen 事件(每个冻结能力一条)
-            // WHY:SecCore 订阅此事件撤销对应权限;与 SkepticVeto(Critical)互补,
-            // 前者兜底保证投递,后者提供细粒度单能力冻结通知
             for cap in &frozen_capabilities {
                 warn!(
                     capability_id = %cap,
@@ -269,36 +349,121 @@ impl Parliament {
             });
         }
 
-        // 步骤 1:发起提案,记录 DebateStarted 日志并发布事件
+        // ============================================================
+        // 步骤 1:按策略分派(三路径互斥)
+        // ============================================================
+        let strategy = policy.strategy();
+        match strategy {
+            ActivationStrategy::FastPath => self.deliberate_fastpath(quest, proposal).await,
+            ActivationStrategy::Simplified => self.deliberate_simplified(quest, proposal).await,
+            ActivationStrategy::Full => self.deliberate_full(quest, proposal).await,
+        }
+    }
+
+    /// FastPath 路径 — 跳过 Opinion 生成,直接返回共识
+    ///
+    /// # 流程
+    /// 1. 发布 `DebateStarted` 事件(participant_count=0,审计用)
+    /// 2. 生成决议哈希(空 Opinion 列表,仅哈希提案字段)
+    /// 3. 发布 `ConsensusReached` 事件 [Critical]
+    /// 4. 返回 `Consensus::Reached`(无 DPO 训练对,因无 Opinion 可提取)
+    ///
+    /// # WHY 跳过 VoteCast
+    /// FastPath 无角色投票,不发布 VoteCast 事件。审计通过
+    /// DebateStarted + ConsensusReached 两个事件即可还原决策路径。
+    ///
+    /// # WHY 仍生成 decision_hash
+    /// 决议哈希用于 GSOE 进化追踪与审计去重,即使无 Opinion 也需生成。
+    /// `compute_decision_hash(proposal, &[])` 仅哈希提案字段。
+    async fn deliberate_fastpath(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+    ) -> Result<Consensus, ParliamentError> {
+        // 发布 DebateStarted 事件(participant_count=0,标记 FastPath)
         info!(
             quest_id = %quest.quest_id,
             proposal_id = %proposal.proposal_id,
-            "辩论开始 (DebateStarted)"
+            strategy = "FastPath",
+            "辩论开始 (DebateStarted, FastPath — 0 参与者)"
         );
-        // 发布 DebateStarted 事件
-        // WHY:通知内部议员角色准备投票,L9 Quest 据此追踪审议进度;
-        // participant_count 取已注册角色数(默认 5)
         publish_debate_started_event(
             &self.event_bus,
             &quest.quest_id,
             &proposal.proposal_id,
-            self.registry.count() as u8,
+            0, // FastPath 无参与者
         )
         .await;
 
-        // 步骤 2-3:5 角色并行辩论,并发收集 Opinion
-        let opinions = self.collect_opinions(quest, proposal).await?;
+        // 生成决议哈希(空 Opinion 列表)
+        let decision_hash = compute_decision_hash(proposal, &[]);
 
-        // 步骤 4:发布 VoteCast 事件(每个角色的投票)
+        // 构造共识(FastPath 直接达成,无 DPO 训练对)
+        let consensus = Consensus::Reached {
+            decision_hash: decision_hash.clone(),
+            dpo_pair_id: None, // FastPath 无 Opinion,DPO 生成器无法提取 chosen/rejected
+        };
+
+        // 发布 ConsensusReached 事件 [Critical]
+        publish_consensus_event(&self.event_bus, &proposal.quest_id, &decision_hash, None).await;
+
+        Ok(consensus)
+    }
+
+    /// Simplified 路径 — 仅 Architect + Skeptic + Optimizer 三关键角色辩论
+    ///
+    /// # 流程
+    /// 1. 发布 `DebateStarted` 事件(participant_count=3)
+    /// 2. 并发收集 3 关键角色 Opinion(Architect/Skeptic/Optimizer)
+    /// 3. 发布 VoteCast 事件(3 个角色)
+    /// 4. 共识判定(使用 `count_votes`,total_roles=3)
+    /// 5. 若共识达成,生成 DPO 训练对
+    /// 6. 若共识达成,发布 ConsensusReached 事件 [Critical]
+    ///
+    /// # WHY 仅 3 关键角色
+    /// - **Architect**:架构合理性(系统设计维度)
+    /// - **Skeptic**:红队风险审查(安全维度,含否决权)
+    /// - **Optimizer**:性能与资源效率(执行维度)
+    /// - 跳过 Librarian(知识检索)与 Bard(创意发散):中等风险场景下
+    ///   这两个维度的推理增益小于协调成本
+    async fn deliberate_simplified(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+    ) -> Result<Consensus, ParliamentError> {
+        // 简化辩论的 3 个关键角色
+        const SIMPLIFIED_ROLES: [Role; 3] = [Role::Architect, Role::Skeptic, Role::Optimizer];
+
+        // 发布 DebateStarted 事件(participant_count=3)
+        info!(
+            quest_id = %quest.quest_id,
+            proposal_id = %proposal.proposal_id,
+            strategy = "Simplified",
+            "辩论开始 (DebateStarted, Simplified — 3 参与者)"
+        );
+        publish_debate_started_event(
+            &self.event_bus,
+            &quest.quest_id,
+            &proposal.proposal_id,
+            SIMPLIFIED_ROLES.len() as u8,
+        )
+        .await;
+
+        // 并发收集 3 关键角色 Opinion
+        let opinions = self
+            .collect_opinions_filtered(quest, proposal, &SIMPLIFIED_ROLES)
+            .await?;
+
+        // 发布 VoteCast 事件(3 个角色)
         self.publish_vote_events(proposal, &opinions).await;
 
-        // 步骤 5:共识判定
-        let total_roles = self.registry.count();
+        // 共识判定(total_roles=3,参与率 = 3/3 = 1.0)
+        let total_roles = SIMPLIFIED_ROLES.len();
         let result = self
             .vote_counter
             .count_votes(&opinions, total_roles, proposal);
 
-        // 步骤 6:若共识达成,生成 DPO 训练对并更新 dpo_pair_id
+        // DPO 训练对生成(3 角色 Opinion 仍可提取 chosen/rejected)
         let mut consensus = result.consensus;
         if let Consensus::Reached { decision_hash, .. } = &consensus {
             let dpo_pair_id = self
@@ -311,7 +476,83 @@ impl Parliament {
             };
         }
 
-        // 步骤 7:若共识达成,发布 ConsensusReached 事件 [Critical]
+        // 发布 ConsensusReached 事件 [Critical]
+        if let Consensus::Reached {
+            decision_hash,
+            dpo_pair_id,
+        } = &consensus
+        {
+            publish_consensus_event(
+                &self.event_bus,
+                &proposal.quest_id,
+                decision_hash,
+                dpo_pair_id.as_deref(),
+            )
+            .await;
+        }
+
+        Ok(consensus)
+    }
+
+    /// Full 路径 — 5 角色完整辩论(既有行为,向后兼容)
+    ///
+    /// # 流程
+    /// 1. 发布 `DebateStarted` 事件(participant_count=5)
+    /// 2. 并发收集 5 角色 Opinion(Architect/Skeptic/Optimizer/Librarian/Bard)
+    /// 3. 发布 VoteCast 事件(5 个角色)
+    /// 4. 共识判定(使用 `count_votes`,total_roles=5)
+    /// 5. 若共识达成,生成 DPO 训练对
+    /// 6. 若共识达成,发布 ConsensusReached 事件 [Critical]
+    ///
+    /// # WHY 保留为独立方法
+    /// 将 Full 路径从 `deliberate_with_policy` 主体抽离,使三策略
+    /// (FastPath/Simplified/Full)各自独立方法,便于单测与未来扩展。
+    async fn deliberate_full(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+    ) -> Result<Consensus, ParliamentError> {
+        // 发布 DebateStarted 事件(5 参与者)
+        info!(
+            quest_id = %quest.quest_id,
+            proposal_id = %proposal.proposal_id,
+            strategy = "Full",
+            "辩论开始 (DebateStarted, Full — 5 参与者)"
+        );
+        publish_debate_started_event(
+            &self.event_bus,
+            &quest.quest_id,
+            &proposal.proposal_id,
+            self.registry.count() as u8,
+        )
+        .await;
+
+        // 5 角色并行辩论,并发收集 Opinion
+        let opinions = self.collect_opinions(quest, proposal).await?;
+
+        // 发布 VoteCast 事件(5 个角色)
+        self.publish_vote_events(proposal, &opinions).await;
+
+        // 共识判定
+        let total_roles = self.registry.count();
+        let result = self
+            .vote_counter
+            .count_votes(&opinions, total_roles, proposal);
+
+        // DPO 训练对生成
+        let mut consensus = result.consensus;
+        if let Consensus::Reached { decision_hash, .. } = &consensus {
+            let dpo_pair_id = self
+                .dpo_generator
+                .generate(&proposal.quest_id, &opinions, &consensus)
+                .map(|p| p.pair_id);
+            consensus = Consensus::Reached {
+                decision_hash: decision_hash.clone(),
+                dpo_pair_id,
+            };
+        }
+
+        // 发布 ConsensusReached 事件 [Critical]
         if let Consensus::Reached {
             decision_hash,
             dpo_pair_id,
@@ -568,10 +809,41 @@ impl Parliament {
         quest: &Quest,
         proposal: &Proposal,
     ) -> Result<Vec<Opinion>, ParliamentError> {
-        let timeout = Duration::from_millis(self.config.debate_timeout_ms);
+        // 委托给 collect_opinions_filtered,传入全部 5 角色
+        // WHY 委托:避免 5 角色路径与 filtered 路径逻辑重复,
+        // collect_opinions_filtered 是统一的并发收集实现
+        self.collect_opinions_filtered(quest, proposal, &Role::all())
+            .await
+    }
 
-        // 构建 5 角色 Opinion 生成 future
-        let mut stream: FuturesUnordered<_> = Role::all()
+    /// P4-W14.3 S5 接缝:并发收集指定角色集合的 Opinion,带超时
+    ///
+    /// `Simplified` 策略仅需 Architect + Skeptic + Optimizer 三角色 Opinion,
+    /// 此方法支持传入任意角色子集,复用 `FuturesUnordered` 并发收集逻辑。
+    ///
+    /// # 流程
+    /// 1. 为每个角色构建 Opinion 生成 future(clone quest/proposal)
+    /// 2. `FuturesUnordered` 并发执行,带超时(`debate_timeout_ms`)
+    /// 3. 超时后已收集的 Opinion 保留,未完成角色视为弃权
+    ///
+    /// # 参数
+    /// - `quest`:关联的 Quest
+    /// - `proposal`:待审议的提案
+    /// - `roles`:参与辩论的角色集合(Full=5 角色,Simplified=3 角色)
+    ///
+    /// # 错误
+    /// - `DebateTimeout`:超时后无任何 Opinion 收集到(极端情况)
+    async fn collect_opinions_filtered(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+        roles: &[Role],
+    ) -> Result<Vec<Opinion>, ParliamentError> {
+        let timeout = Duration::from_millis(self.config.debate_timeout_ms);
+        let expected = roles.len();
+
+        // 构建角色 Opinion 生成 future 流
+        let mut stream: FuturesUnordered<_> = roles
             .iter()
             .map(|&role| {
                 let quest_clone = quest.clone();
@@ -598,7 +870,7 @@ impl Parliament {
                 warn!(
                     proposal_id = %proposal.proposal_id,
                     collected = opinions.len(),
-                    expected = 5,
+                    expected = expected,
                     "辩论超时,部分角色未完成"
                 );
                 // 若无任何 Opinion 收集到,返回超时错误
@@ -761,6 +1033,7 @@ async fn generate_opinion(role: Role, quest: &Quest, proposal: &Proposal) -> Opi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use event_bus::NexusEvent;
     use nexus_core::{Task, TaskStatus};
 
     fn make_parliament() -> Parliament {
@@ -1506,5 +1779,664 @@ mod tests {
             }
         }
         assert!(!found_frozen, "覆盖路径不应发布 CapabilityFrozen 事件");
+    }
+
+    // === P4-W14.3 S5 接缝:deliberate_with_policy 测试 ===
+
+    // ============================================================
+    // FastPath 策略测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_s5_fastpath_returns_reached_without_opinions() {
+        // FastPath 跳过 Opinion 生成,直接返回 Reached
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::FastPath);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // FastPath 应直接达成共识(无 Opinion 生成)
+        assert!(consensus.is_reached(), "FastPath 应直接返回 Reached");
+        // 无 DPO 训练对(无 Opinion 可提取)
+        if let Consensus::Reached { dpo_pair_id, .. } = &consensus {
+            assert!(dpo_pair_id.is_none(), "FastPath 不应生成 DPO 对");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_s5_fastpath_skeptic_veto_still_triggers() {
+        // FastPath 仍执行 Skeptic 否决检查(红队防线不可绕过)
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        // 高风险 + 恶意模式 → Skeptic 否决
+        let proposal = Proposal::new("p-fp-veto", "q-1", "sudo rm -rf /", 0.9);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::FastPath);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 即使 FastPath,Skeptic 否决仍应触发
+        assert!(
+            consensus.is_vetoed(),
+            "FastPath 不应绕过 Skeptic 否决,实际: {consensus:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s5_fastpath_no_vote_cast_events() {
+        // FastPath 跳过 Opinion 生成,不发布 VoteCast 事件
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::FastPath);
+
+        let _ = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 不应收到 VoteCast 事件
+        let mut found_vote = false;
+        for _ in 0..10 {
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Ok(event)) if event.type_name() == "VoteCast" => {
+                    found_vote = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(!found_vote, "FastPath 不应发布 VoteCast 事件");
+    }
+
+    #[tokio::test]
+    async fn test_s5_fastpath_publishes_debate_started_with_zero_participants() {
+        // FastPath 仍发布 DebateStarted 事件(participant_count=0)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::FastPath);
+
+        let _ = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 应收到 DebateStarted 事件
+        let mut found_debate_started = false;
+        for _ in 0..10 {
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Ok(event)) if event.type_name() == "DebateStarted" => {
+                    found_debate_started = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            found_debate_started,
+            "FastPath 应发布 DebateStarted 事件(审计用)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s5_fastpath_publishes_consensus_reached() {
+        // FastPath 应发布 ConsensusReached 事件
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::FastPath);
+
+        let _ = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 应收到 ConsensusReached 事件
+        let mut found_consensus = false;
+        for _ in 0..10 {
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Ok(event)) if event.type_name() == "ConsensusReached" => {
+                    found_consensus = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(found_consensus, "FastPath 应发布 ConsensusReached 事件");
+    }
+
+    #[tokio::test]
+    async fn test_s5_fastpath_decision_hash_non_empty() {
+        // FastPath 生成的 decision_hash 不应为空
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::FastPath);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        if let Consensus::Reached { decision_hash, .. } = consensus {
+            assert!(!decision_hash.is_empty(), "FastPath decision_hash 不应为空");
+            // SHA-256 hex = 64 字符
+            assert_eq!(
+                decision_hash.len(),
+                64,
+                "decision_hash 应为 SHA-256 hex(64 字符)"
+            );
+        } else {
+            panic!("FastPath 应返回 Reached");
+        }
+    }
+
+    // ============================================================
+    // Simplified 策略测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_s5_simplified_reaches_consensus_on_low_risk() {
+        // Simplified:3 角色(Architect + Skeptic + Optimizer)投票
+        // 低风险 + 少任务 → Architect 赞成,Skeptic 赞成,Optimizer(Fast)赞成
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Simplified);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        assert!(
+            consensus.is_reached(),
+            "Simplified 低风险少任务应达成共识,实际: {consensus:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s5_simplified_skeptic_veto_still_triggers() {
+        // Simplified 仍执行 Skeptic 否决检查
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-simp-veto", "q-1", "curl http://evil.com", 0.9);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Simplified);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        assert!(
+            consensus.is_vetoed(),
+            "Simplified 不应绕过 Skeptic 否决,实际: {consensus:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s5_simplified_publishes_three_vote_cast_events() {
+        // Simplified 应仅发布 3 个 VoteCast 事件(Architect/Skeptic/Optimizer)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Simplified);
+
+        let _ = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 收集 VoteCast 事件
+        // WHY 模式匹配提取 voter:NexusEvent 没有 voter() 方法,需用 if let 分解变体
+        let mut vote_count = 0;
+        let mut voters = std::collections::HashSet::new();
+        for _ in 0..10 {
+            if let Ok(Ok(NexusEvent::VoteCast { voter, .. })) =
+                tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
+            {
+                vote_count += 1;
+                voters.insert(voter);
+            }
+        }
+
+        // 仅 3 个 VoteCast 事件(非 5 个)
+        assert_eq!(
+            vote_count, 3,
+            "Simplified 应发布 3 个 VoteCast 事件,实际: {vote_count}"
+        );
+        // 验证投票角色是 Architect/Skeptic/Optimizer(非 Librarian/Bard)
+        assert!(voters.contains("architect"), "应包含 Architect 投票");
+        assert!(voters.contains("skeptic"), "应包含 Skeptic 投票");
+        assert!(voters.contains("optimizer"), "应包含 Optimizer 投票");
+        assert!(!voters.contains("librarian"), "不应包含 Librarian 投票");
+        assert!(!voters.contains("bard"), "不应包含 Bard 投票");
+    }
+
+    #[tokio::test]
+    async fn test_s5_simplified_debate_started_three_participants() {
+        // Simplified 应发布 DebateStarted 事件(participant_count=3)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Simplified);
+
+        let _ = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 应收到 DebateStarted 事件
+        let mut found_debate = false;
+        for _ in 0..10 {
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Ok(event)) if event.type_name() == "DebateStarted" => {
+                    found_debate = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(found_debate, "Simplified 应发布 DebateStarted 事件");
+    }
+
+    // ============================================================
+    // Full 策略测试(验证既有行为保持不变)
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_s5_full_reaches_consensus_on_low_risk() {
+        // Full:5 角色完整辩论(与既有 deliberate() 行为一致)
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        assert!(
+            consensus.is_reached(),
+            "Full 低风险少任务应达成共识,实际: {consensus:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s5_full_publishes_five_vote_cast_events() {
+        // Full 应发布 5 个 VoteCast 事件(全部 5 角色)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+
+        let _ = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 收集 VoteCast 事件
+        // WHY 模式匹配提取 voter:NexusEvent 没有 voter() 方法,需用 if let 分解变体
+        let mut vote_count = 0;
+        let mut voters = std::collections::HashSet::new();
+        for _ in 0..15 {
+            if let Ok(Ok(NexusEvent::VoteCast { voter, .. })) =
+                tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
+            {
+                vote_count += 1;
+                voters.insert(voter);
+            }
+        }
+
+        assert_eq!(
+            vote_count, 5,
+            "Full 应发布 5 个 VoteCast 事件,实际: {vote_count}"
+        );
+        // 验证全部 5 角色投票
+        assert!(voters.contains("architect"));
+        assert!(voters.contains("skeptic"));
+        assert!(voters.contains("optimizer"));
+        assert!(voters.contains("librarian"));
+        assert!(voters.contains("bard"));
+    }
+
+    #[tokio::test]
+    async fn test_s5_full_high_risk_vetoes() {
+        // Full 高风险应触发 Skeptic 否决
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.8);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        assert!(consensus.is_vetoed(), "Full 高风险应触发否决");
+    }
+
+    // ============================================================
+    // deliberate() 与 learner_holder 集成测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_s5_deliberate_uses_holder_default_full_policy() {
+        // 默认 holder = Static(Full),deliberate() 应使用 Full 路径
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        // 验证默认策略
+        assert_eq!(
+            parliament.learner_holder().strategy(),
+            ActivationStrategy::Full
+        );
+
+        let consensus = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(consensus.is_reached(), "默认 Full 策略应达成共识");
+    }
+
+    #[tokio::test]
+    async fn test_s5_deliberate_uses_holder_updated_fastpath_policy() {
+        // 更新 holder 为 Learned(FastPath),deliberate() 应使用 FastPath 路径
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        // 更新策略为 FastPath
+        parliament
+            .learner_holder()
+            .update_policy(ParliamentPolicy::learned(1, ActivationStrategy::FastPath));
+        assert_eq!(
+            parliament.learner_holder().strategy(),
+            ActivationStrategy::FastPath
+        );
+
+        let consensus = parliament.deliberate(&quest, &proposal).await.unwrap();
+        // FastPath 直接返回 Reached(无 Opinion 生成)
+        assert!(consensus.is_reached(), "FastPath 应直接返回 Reached");
+        // 无 DPO 对(无 Opinion 可提取)
+        if let Consensus::Reached { dpo_pair_id, .. } = consensus {
+            assert!(dpo_pair_id.is_none(), "FastPath 不应生成 DPO 对");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_s5_deliberate_fallback_to_static_after_learned() {
+        // Learned → fallback_to_static → 应回到 Full 行为
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        // 1. 切换到 Learned(Simplified)
+        parliament
+            .learner_holder()
+            .update_policy(ParliamentPolicy::learned(1, ActivationStrategy::Simplified));
+        assert!(parliament.learner_holder().is_learned());
+
+        // 2. 触发熔断:fallback_to_static
+        parliament.learner_holder().fallback_to_static();
+        assert!(!parliament.learner_holder().is_learned());
+        assert_eq!(
+            parliament.learner_holder().strategy(),
+            ActivationStrategy::Full
+        );
+
+        // 3. deliberate() 应回到 Full 行为(5 角色,生成 DPO 对)
+        let consensus = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(consensus.is_reached(), "Full 策略应达成共识");
+    }
+
+    // ============================================================
+    // C4 合规测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_s5_c4_default_static_full_backward_compatible() {
+        // C4 合规:默认 Static(Full) = P4 修复前行为
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        // 默认策略 = Static(Full)
+        let policy = parliament.learner_holder().current_policy();
+        assert!(policy.is_static());
+        assert_eq!(policy.strategy(), ActivationStrategy::Full);
+
+        // 行为应与 P4 修复前 deliberate() 一致
+        let consensus = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(consensus.is_reached());
+    }
+
+    #[tokio::test]
+    async fn test_s5_c4_local_fallback_on_learner_panic() {
+        // 模拟: learner 下发 Learned 后 panic,调用方 fallback_to_static
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        // 1. learner 下发 Learned(FastPath)
+        parliament
+            .learner_holder()
+            .update_policy(ParliamentPolicy::learned(1, ActivationStrategy::FastPath));
+        assert!(parliament.learner_holder().is_learned());
+
+        // 2. 模拟 panic:调用方触发 fallback
+        parliament.learner_holder().fallback_to_static();
+        assert!(!parliament.learner_holder().is_learned());
+
+        // 3. deliberate() 应正常工作(回到 Full 行为)
+        let consensus = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(consensus.is_reached(), "fallback 后应正常审议");
+    }
+
+    #[tokio::test]
+    async fn test_s5_c4_no_runtime_flag_query() {
+        // C4 合规:策略值从 Copy 枚举获取,无运行时旗标查询
+        let parliament = make_parliament();
+
+        // current_policy() 返回 Copy 枚举,无全局 static 查询
+        let policy1 = parliament.learner_holder().current_policy();
+        let policy2 = parliament.learner_holder().current_policy();
+        assert_eq!(policy1, policy2); // 同一快照
+
+        // 策略值通过 const 常量获取
+        assert_eq!(policy1.strategy(), ActivationStrategy::Full);
+    }
+
+    // ============================================================
+    // 三策略对比测试(验证策略确实影响行为)
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_s5_three_strategies_produce_different_vote_counts() {
+        // 同一提案 + 同一 quest,三种策略应产生不同数量的 VoteCast 事件
+        let bus1 = EventBus::new();
+        let mut rx1 = bus1.subscribe();
+        let p1 = Parliament::new(ParliamentConfig::default(), bus1);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        // FastPath
+        let policy_fp = ParliamentPolicy::static_policy(ActivationStrategy::FastPath);
+        let _ = p1
+            .deliberate_with_policy(&quest, &proposal, &policy_fp)
+            .await
+            .unwrap();
+        let fp_votes = count_vote_cast_events(&mut rx1, 10).await;
+
+        // Simplified
+        let bus2 = EventBus::new();
+        let mut rx2 = bus2.subscribe();
+        let p2 = Parliament::new(ParliamentConfig::default(), bus2);
+        let policy_s = ParliamentPolicy::static_policy(ActivationStrategy::Simplified);
+        let _ = p2
+            .deliberate_with_policy(&quest, &proposal, &policy_s)
+            .await
+            .unwrap();
+        let s_votes = count_vote_cast_events(&mut rx2, 10).await;
+
+        // Full
+        let bus3 = EventBus::new();
+        let mut rx3 = bus3.subscribe();
+        let p3 = Parliament::new(ParliamentConfig::default(), bus3);
+        let policy_f = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+        let _ = p3
+            .deliberate_with_policy(&quest, &proposal, &policy_f)
+            .await
+            .unwrap();
+        let f_votes = count_vote_cast_events(&mut rx3, 15).await;
+
+        // FastPath=0,Simplified=3,Full=5
+        assert_eq!(fp_votes, 0, "FastPath 应无 VoteCast 事件");
+        assert_eq!(s_votes, 3, "Simplified 应有 3 个 VoteCast 事件");
+        assert_eq!(f_votes, 5, "Full 应有 5 个 VoteCast 事件");
+    }
+
+    /// 辅助函数:统计 VoteCast 事件数量
+    ///
+    /// WHY 使用 EventReceiver 而非 mpsc::Receiver:
+    /// `bus.subscribe()` 返回 `EventReceiver`,其 `recv()` 返回
+    /// `Result<NexusEvent, EventBusError>`(非 `Option<NexusEvent>`)。
+    /// 此函数统一三策略测试中的 VoteCast 事件计数逻辑。
+    async fn count_vote_cast_events(rx: &mut event_bus::EventReceiver, max_polls: usize) -> usize {
+        let mut count = 0;
+        for _ in 0..max_polls {
+            if let Ok(Ok(NexusEvent::VoteCast { .. })) =
+                tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    // ============================================================
+    // Learned 策略测试(版本号 + 学习路径)
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_s5_learned_policy_carries_version() {
+        // Learned 策略携带版本号,便于 A/B 测试与回滚
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        // 下发 Learned(v=42, FastPath)
+        parliament
+            .learner_holder()
+            .update_policy(ParliamentPolicy::learned(42, ActivationStrategy::FastPath));
+        assert_eq!(parliament.learner_holder().version(), Some(42));
+
+        let consensus = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(
+            consensus.is_reached(),
+            "Learned(FastPath) 应直接返回 Reached"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s5_learned_policy_versioned_for_ab_test() {
+        // 不同版本的 Learned 策略可独立追踪
+        let parliament = make_parliament();
+
+        parliament
+            .learner_holder()
+            .update_policy(ParliamentPolicy::learned(1, ActivationStrategy::Simplified));
+        let v1 = parliament.learner_holder().version();
+        assert_eq!(v1, Some(1));
+
+        parliament
+            .learner_holder()
+            .update_policy(ParliamentPolicy::learned(2, ActivationStrategy::Full));
+        let v2 = parliament.learner_holder().version();
+        assert_eq!(v2, Some(2));
+
+        assert_ne!(v1, v2, "不同版本号应不同");
+    }
+
+    #[tokio::test]
+    async fn test_s5_static_vs_learned_distinct_paths() {
+        // Static 与 Learned 同策略应走相同路径,但 holder 状态不同
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        // Static(Full)
+        let static_policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+        assert!(static_policy.is_static());
+
+        // Learned(v=1, Full)
+        let learned_policy = ParliamentPolicy::learned(1, ActivationStrategy::Full);
+        assert!(learned_policy.is_learned());
+
+        // 两者策略值相同,deliberate_with_policy 行为应一致
+        let c1 = parliament
+            .deliberate_with_policy(&quest, &proposal, &static_policy)
+            .await
+            .unwrap();
+        let c2 = parliament
+            .deliberate_with_policy(&quest, &proposal, &learned_policy)
+            .await
+            .unwrap();
+
+        // 同策略(Full)→ 同结果(均 Reached)
+        assert_eq!(c1.is_reached(), c2.is_reached());
+    }
+
+    // ============================================================
+    // 端到端生命周期测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_s5_lifecycle_static_to_learned_to_fallback() {
+        // 完整生命周期:Static → Learned(v1) → Learned(v2) → 熔断 → Static
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        // 1. 初始 Static(Full)
+        assert!(!parliament.learner_holder().is_learned());
+        let c1 = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(c1.is_reached(), "Static(Full) 应达成共识");
+
+        // 2. 下发 Learned(v1, Simplified)
+        parliament
+            .learner_holder()
+            .update_policy(ParliamentPolicy::learned(1, ActivationStrategy::Simplified));
+        assert!(parliament.learner_holder().is_learned());
+        let c2 = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(c2.is_reached(), "Learned(Simplified) 应达成共识");
+
+        // 3. 下发 Learned(v2, FastPath)
+        parliament
+            .learner_holder()
+            .update_policy(ParliamentPolicy::learned(2, ActivationStrategy::FastPath));
+        let c3 = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(c3.is_reached(), "Learned(FastPath) 应达成共识");
+
+        // 4. 灰度指标不达标,触发熔断
+        parliament.learner_holder().fallback_to_static();
+        assert!(!parliament.learner_holder().is_learned());
+        let c4 = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(c4.is_reached(), "熔断后 Static(Full) 应达成共识");
     }
 }

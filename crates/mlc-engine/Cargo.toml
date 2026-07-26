@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "mlc-engine"
 version.workspace = true
 edition.workspace = true
@@ -6,6 +6,9 @@ edition.workspace = true
 [dependencies]
 # L1 Core:使用 CLV(512-dim 潜在向量)作为语义记忆的统一表示
 nexus-core = { path = "../nexus-core" }
+# L0 Contracts:TemporalMeta / TransitionType 时间元数据(P3-W11.1 D12 修复)
+# WHY(P3-W11.1):TemporalMeta 定义在 L0 nexus-contracts,mlc-engine(L2)向下依赖符合 §2.2 铁律
+nexus-contracts = { path = "../nexus-contracts" }
 # L1 Core:EventBus 跨层通信,发布 MemoryMetricsReported/MemoryTiered 事件
 event-bus = { path = "../event-bus" }
 # L3 ProceduralMemory 持久化(WAL 模式提升并发读写性能)

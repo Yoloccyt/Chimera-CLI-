@@ -29,6 +29,10 @@ pub mod config;
 pub mod engine;
 pub mod error;
 pub mod policy;
+/// P4-W15.1.2: HarnessSpec 加载器（TOML 反序列化 + 字段校验 + 不可进化面检查）
+pub mod spec_loader;
+/// P4-W15.2.1: HarnessSpec 版本化注册表（谱系追踪 + A/B 测试 + 一键回滚 + 不可进化面守护）
+pub mod spec_registry;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
@@ -38,6 +42,10 @@ pub use error::GsoeError;
 pub use policy::fitness::{evaluate_fitness, evaluate_population};
 pub use policy::grpo::{compute_advantage, sample_rollouts};
 pub use policy::mutation::{apply_mutation, mutate};
+// P4-W15.1.2: SpecLoader 公开 API 重导出
+pub use spec_loader::{SpecLoader, SpecLoaderError};
+// P4-W15.2.1: SpecRegistry 公开 API 重导出
+pub use spec_registry::{SpecRegistry, SpecRegistryError};
 pub use types::{
     EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout, MutationCandidate, MutationType,
 };
@@ -47,6 +55,10 @@ pub mod prelude {
     pub use crate::config::GsoeConfig;
     pub use crate::engine::GsoeEvolutionEngine;
     pub use crate::error::GsoeError;
+    // P4-W15.1.2: SpecLoader 加入 prelude
+    pub use crate::spec_loader::{SpecLoader, SpecLoaderError};
+    // P4-W15.2.1: SpecRegistry 加入 prelude
+    pub use crate::spec_registry::{SpecRegistry, SpecRegistryError};
     pub use crate::types::{
         EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout, MutationCandidate,
         MutationType,

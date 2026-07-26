@@ -10,6 +10,14 @@
 //!
 //! 冻结/解冻 API 对应 Skeptic 否决权(Week 5 Parliament 实现)
 //!
+//! # P4-W14.4 S6 接缝扩展
+//!
+//! 新增 `decay_with_policy` 方法支持策略感知衰减(详见 `learner_holder` 模块):
+//! - `DecayLearnerHolder`: 运行时可变 `DecayPolicy` 容器(RwLock 保护)
+//! - `decay_with_policy(id, event, policy)`: 接收 L0 契约层 `DecayPolicy`,
+//!   从中提取 `DecayProfile` 转换为临时 `DecayConfig` 应用到本次衰减
+//! - C4 合规三层 fallback: 默认 Static(Standard) + PoisonError 自动回退 + 熔断入口
+//!
 //! # 快速示例
 //! WHY 选此示例:展示最常用路径 —— 注册能力 + 事件驱动惩罚衰减,体现双驱动模型的核心。
 //! ```
@@ -28,12 +36,18 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// P4-W14.5: 能力场令牌注册表（C4 合规灰度授权管理）
+pub mod capability_registry;
 pub mod engine;
 pub mod error;
+/// P4-W14.4: DecayEngine 学习器持有器（S6 接缝策略异步下发 + 本地 fallback）
+pub mod learner_holder;
 pub mod types;
 
+pub use capability_registry::{current_utc_secs, CapabilityTokenRegistry};
 pub use engine::DecayEngine;
 pub use error::DecayError;
+pub use learner_holder::DecayLearnerHolder;
 pub use types::{Capability, CapabilityLevel, DecayConfig, DecayEvent};
 
 /// 默认衰减配置

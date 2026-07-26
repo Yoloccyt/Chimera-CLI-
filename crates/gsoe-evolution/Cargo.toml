@@ -12,12 +12,20 @@ tracing = { workspace = true }
 ndarray = { workspace = true }
 event-bus = { path = "../event-bus" }
 nexus-core = { path = "../nexus-core" }
+# P4-W15.1.2: SpecLoader 依赖
+# nexus-contracts:L0 契约层(HarnessSpec 类型定义,ADR-033)
+# toml:TOML 反序列化(spec 加载器解析 HarnessSpec DSL,设计文档 §7.2)
+# WHY 两者新增:gsoe-evolution 需读取并校验 HarnessSpec TOML 文件
+nexus-contracts = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# P4-W15.1.2 测试:临时文件用 tempfile
+tempfile = { workspace = true }
 
 [[bench]]
 name = "evolution_benchmark"

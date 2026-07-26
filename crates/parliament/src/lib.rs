@@ -54,6 +54,12 @@ pub mod ahirt;
 pub mod config;
 pub mod debate;
 pub mod error;
+/// P4-W14.3 S5 接缝 — Parliament 激活策略学习器持有器
+///
+/// 承载 `omega-learner` 异步下发的 `ParliamentPolicy`,为 `Parliament::deliberate_with_policy`
+/// 提供策略感知能力。所有方法线程安全(`RwLock` 保护),C4 合规三层 fallback。
+pub mod learner_holder;
+pub mod reasoning;
 pub mod roles;
 pub mod types;
 pub mod veto;
@@ -67,6 +73,9 @@ pub use ahirt::{
 pub use config::{AhirtConfig, ParliamentConfig};
 pub use debate::{DpoPair, DpoPairGenerator, Parliament};
 pub use error::ParliamentError;
+// P4-W14.3 S5 接缝:Parliament 激活策略学习器持有器
+pub use learner_holder::ParliamentLearnerHolder;
+pub use reasoning::{transition, ReasoningEvent, ReasoningState};
 pub use roles::RoleRegistry;
 pub use types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
 pub use veto::{
@@ -84,6 +93,7 @@ pub mod prelude {
     pub use crate::config::{AhirtConfig, ParliamentConfig};
     pub use crate::debate::{DpoPair, DpoPairGenerator, Parliament};
     pub use crate::error::ParliamentError;
+    pub use crate::reasoning::{transition, ReasoningEvent, ReasoningState};
     pub use crate::roles::RoleRegistry;
     pub use crate::types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
     pub use crate::veto::{

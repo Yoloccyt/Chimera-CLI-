@@ -6,6 +6,10 @@ edition.workspace = true
 [dependencies]
 # L1 Core:提供 id_newtype! 宏(生成 RoleId newtype)与 Quest 领域类型
 nexus-core = { path = "../nexus-core" }
+# L0 Contracts:跨层共享纯类型契约(S5 接缝 ParliamentPolicy/ActivationStrategy)
+# WHY L8 → L0 ✓(§2.2 依赖铁律):parliament 不直接依赖 L6 omega-learner,
+# 仅依赖 L0 的 ParliamentPolicy 类型,策略由上层编排器注入
+nexus-contracts = { path = "../nexus-contracts" }
 # L1 Core:跨层通信唯一通道,发布 ConsensusReached/VoteCast 事件
 event-bus = { path = "../event-bus" }
 # L4 Security:AHIRT 调用 validate_command 探测命令注入/提权/沙箱逃逸(L8→L4 向下依赖允许)

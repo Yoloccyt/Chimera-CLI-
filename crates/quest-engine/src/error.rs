@@ -48,6 +48,13 @@ pub enum QuestError {
     #[error("checkpoint not found: {0}")]
     CheckpointNotFound(String),
 
+    /// WAL(写前日志)错误 — append/commit/recover 失败(P2-W7.2.4)
+    ///
+    /// WHY 独立变体:WAL 错误需与普通 CheckpointSaveFailed 区分,
+    /// 便于调用方针对性处理(如重试 WAL append 而非整个 save 流程)
+    #[error("wal error: {0}")]
+    WalError(String),
+
     /// TTG 手动覆盖被拒绝 — 当前预算档位不允许切换到目标思考模式
     ///
     /// WHY:Degraded 档位下预算接近耗尽,Deep 模式会消耗更多 token,
@@ -63,6 +70,14 @@ pub enum QuestError {
         /// 拒绝原因(人类可读)
         reason: String,
     },
+
+    /// 轨迹导出失败 — P4-W16.1.3 捕获点 2
+    ///
+    /// WHY 独立变体:与 SerializationError 区分,便于上层(L5 omega-learner)
+    /// 针对性处理(如跳过单条轨迹而非终止整个回放池填充流程)。
+    /// 触发场景:Checkpoint 序列化状态损坏、Quest 字段缺失等。
+    #[error("trajectory export failed: {0}")]
+    TrajectoryExportFailed(String),
 }
 
 /// 从 serde_json 错误转换 — 检查点序列化等场景
@@ -114,5 +129,13 @@ mod tests {
         assert!(msg.contains("Deep"));
         assert!(msg.contains("degraded"));
         assert!(msg.contains("budget degraded"));
+    }
+
+    #[test]
+    fn test_trajectory_export_failed_display() {
+        let e = QuestError::TrajectoryExportFailed("msgpack decode failed".into());
+        let msg = e.to_string();
+        assert!(msg.contains("trajectory export failed"));
+        assert!(msg.contains("msgpack decode failed"));
     }
 }

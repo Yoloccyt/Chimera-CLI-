@@ -7,6 +7,19 @@
 //! - `pair_counter` 用 `AtomicU64`:无锁计数,生成 pair_id,避免引入 uuid 依赖
 //! - `event_bus` 为 `EventBus`:发布 `DpoPairGenerated` 事件,供 GSOE/Parliament 消费
 //! - generate 方法选择最高分为 chosen、最低分为 rejected,确保偏好信号最强
+//!
+//! # R2 冻结声明(ADR-042)
+//!
+//! **冻结状态**:R2(GSOE×AutoDPO 约束 RL)路径在 FormalVerifier 落地前无条件冻结。
+//!
+//! - **冻结依据**:[ADR-042](docs/architecture/ADR-042-r2-freeze-before-formal-verifier.md)(2026-07-25 批准)
+//! - **冻结范围**:本 crate 禁止将生成的 `PreferencePair` 用于 R2 约束 RL 训练(仅可用于 RHI-CG 通道 A 提议,见 ADR-032)
+//! - **解冻条件**:FormalVerifier 落地 + 新 ADR 评审通过 + 影子模式 2 周验证(ADR-042 决策 3)
+//! - **违反处置**:自动回滚 + `NexusEvent::R2FreezeViolation` Critical 告警 + 事故复盘(ADR-042 决策 4)
+//! - **关联 ADR**:[ADR-032 决策 1](docs/architecture/ADR-032-dual-channel-evaluator.md)(通道 A 复用 PreferencePairGenerator)
+//!
+//! 本文件的 `generate()` 用于生成 DPO 偏好对(通道 A 提议),不在冻结范围。
+//! R2 路径(GSOE×AutoDPO 约束 RL)在 FormalVerifier 落地前完全不存在于运行时。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
