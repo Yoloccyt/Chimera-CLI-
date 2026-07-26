@@ -22,11 +22,6 @@ use osa_coordinator::{
 };
 use proptest::prelude::*;
 
-/// 将任意可显示错误转换为 TestCaseError(避免 unwrap,用 ? 传播)
-fn fail<E: std::fmt::Display>(e: E) -> TestCaseError {
-    TestCaseError::fail(format!("{e}"))
-}
-
 /// 构造测试用 TaskProfile,固定候选集大小,仅 complexity 变化
 ///
 /// WHY 固定候选集:隔离 complexity_score 的影响,确保 active_count 变化仅由档位驱动
@@ -140,7 +135,8 @@ proptest! {
         let audit = coord.compute_audit_mask(&profile);
         let budget = coord.compute_budget_mask(&profile);
 
-        let masks = OmniSparseMasks::new(routing, context, memory, audit, budget).map_err(fail)?;
+        // ADR-033 P2-W5.2:OmniSparseMasks::new() 迁移至 L0 后不再返回 Result
+        let masks = OmniSparseMasks::new(routing, context, memory, audit, budget);
         let avg = masks.average_sparsity();
 
         prop_assert!(
@@ -203,7 +199,8 @@ proptest! {
             let memory = coord.compute_memory_mask(&profile);
             let audit = coord.compute_audit_mask(&profile);
             let budget = coord.compute_budget_mask(&profile);
-            let masks = OmniSparseMasks::new(routing, context, memory, audit, budget).map_err(fail)?;
+            // ADR-033 P2-W5.2:OmniSparseMasks::new() 迁移至 L0 后不再返回 Result
+            let masks = OmniSparseMasks::new(routing, context, memory, audit, budget);
             Ok(masks.average_sparsity())
         };
 

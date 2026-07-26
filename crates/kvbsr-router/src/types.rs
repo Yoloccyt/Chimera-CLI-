@@ -23,10 +23,12 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-// 使用 nexus_core 共享的 id_newtype! 宏(SubTask 21.1)
-// WHY:消除与 mlc-engine / osa-coordinator 的 newtype 实现重复(约 50 行手动实现),
-// 统一 ID 类型行为(Deref / AsRef / Borrow / From / Display / serde(transparent))
-nexus_core::id_newtype!(ToolId, "工具唯一标识 — 与 OSA/FaaE 共享同一命名空间");
+// ToolId 从 L0 nexus-contracts 统一导入(ADR-033, P2-W5.2)
+// WHY:原用 nexus_core::id_newtype! 宏在本地展开,每次调用生成独立名义类型,
+// 导致 kvbsr_router::ToolId ≠ osa_coordinator::ToolId ≠ faae_router::ToolId,
+// 跨 crate 传递需 String 转换。改为 re-export nexus_contracts::ToolId 后,
+// 三 crate 共享同一类型,消除星型耦合(Insight 2 消解)。
+pub use nexus_contracts::ToolId;
 
 /// 工具向量 — 工具的语义表示,块构建与二级路由的基础单元
 ///

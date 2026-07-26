@@ -1,6 +1,14 @@
-//! 向量检索层 — 内存 KNN 检索(降级实现)
+//! 向量检索层 — 内存 KNN 检索(降级实现) + HNSW 生产路径
 //!
 //! 对应架构层:L5 Knowledge
+//!
+//! # 模块组成
+//! - `vector`(本文件): `VectorIndex` — 内存 KNN(降级实现,≤1000 entry)
+//! - `vector::hnsw_store`: `HnswStore` — HNSW 生产路径(10K-100K entry)
+//! - `vector::memory_knn_store`: `MemoryKnnStore` — `VectorIndex` 的 `VectorStore` trait 适配器(P2-W8.2)
+//!
+//! `MemoryKnnStore` 内部组合 `VectorIndex`,通过 `VectorStore` trait 提供统一接口,
+//! 可与 `HnswStore` 互换。`VectorIndex` 保留固有 API 向后兼容。
 //!
 //! # 降级说明(WHY)
 //! 原计划使用 `sqlite-vec` 扩展提供 SQLite 原生向量检索,但:
@@ -10,9 +18,8 @@
 //! 4. 因此触发任务预设的降级分支:内存向量检索
 //!
 //! # 性能特征
-//! - 10 条目规模:KNN 检索 < 1ms(远低于 50ms 要求)
-//! - 1000 条目规模:KNN 检索 < 10ms(可接受)
-//! - 10000+ 条目规模:应迁移至 sqlite-vec 或专用向量数据库
+//! - `VectorIndex`(本文件): 10 条目 < 1ms,1000 条目 < 10ms
+//! - `HnswStore`(子模块): 10K 条目 p95 < 50ms,100K 条目不 OOM
 //!
 //! # 后续演进
 //! Week 6 NMC 编码器实现后,本层可替换为基于 `nexus_core::CLV` 的
@@ -23,6 +30,12 @@ use std::sync::RwLock;
 
 use crate::error::WikiError;
 
+/// HNSW 生产路径实现(P2-W8.1)
+pub mod hnsw_store;
+
+/// 内存 KNN fallback 路径实现(P2-W8.2,VectorStore trait 适配器)
+pub mod memory_knn_store;
+
 /// 向量索引 — 内存 KNN 检索(降级实现)
 ///
 /// 使用 `RwLock<HashMap<String, Vec<f32>>>` 存储向量,
@@ -30,6 +43,10 @@ use crate::error::WikiError;
 ///
 /// WHY RwLock 而非 Mutex:B1 优化,search 是高频读操作(KNN 遍历),
 /// RwLock 允许多个并发 search 同时执行,仅在写入时互斥。
+///
+/// # 向后兼容
+/// `VectorIndex` 保留固有 API(`new`/`upsert`/`search`/`delete`/`len`/`is_empty`),
+/// 新代码应优先使用 `MemoryKnnStore`(通过 `VectorStore` trait 提供统一接口)。
 pub struct VectorIndex {
     /// 向量维度(应与 WikiConfig.vector_dim 一致)
     dim: usize,

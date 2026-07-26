@@ -196,11 +196,15 @@ impl NexusEvent {
             | Self::TuiChatCompleted { .. }
             | Self::TuiChatStatusChanged { .. } => EventTopic::System,
 
-            // === Knowledge (4) === L5 Knowledge 知识沉淀与进化
+            // === Knowledge (4 + P4-W16.2.2 3 个) === L5 Knowledge 知识沉淀与进化
             Self::WikiUpdated { .. }
             | Self::EvolutionTriggered { .. }
             | Self::DpoPairGenerated { .. }
-            | Self::GsoePolicyUpdated { .. } => EventTopic::Knowledge,
+            | Self::GsoePolicyUpdated { .. }
+            // P4-W16.2.2:R1 影子模式事件（学习策略生命周期：退化/解冻/回滚）
+            | Self::R1ShadowRegressionDetected { .. }
+            | Self::R1ShadowPromotionReady { .. }
+            | Self::R1ShadowRollbackFailed { .. } => EventTopic::Knowledge,
 
             // === Storage (5) === L3 Storage 缓存与分层
             Self::CacheHit { .. }

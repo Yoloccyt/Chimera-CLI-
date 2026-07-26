@@ -8,12 +8,25 @@
 //! - `WikiConfig`:Wiki 存储配置,含数据库路径、向量维度、WAL 开关
 
 use chrono::{DateTime, Utc};
+use nexus_contracts::{TemporalMeta, TransitionType};
 use serde::{Deserialize, Serialize};
 
 /// Wiki 条目 — 知识沉淀的最小单元
 ///
 /// `embedding` 在 Week 2 阶段为占位哈希向量(SHA-256 扩展为 512-dim),
 /// Week 6 NMC 编码器实现后替换为真实 CLV 嵌入。
+///
+/// # P3-W11.2 D12 修复:时间有效性维度
+///
+/// `temporal_meta` 字段为 Wiki 条目附加时间有效性信息(`TemporalMeta`),
+/// 用于解决 D12"幽灵记忆"病理——矛盾检测时旧条目被标记为 `Historical`(归档),
+/// 而非删除,保留谱系完整性供时间感知召回。
+///
+/// - `None`(默认):视为 `Current` 状态(向后兼容,老条目无此字段)
+/// - `Some(TemporalMeta)`:按 `transition_type` 区分 Current/Historical/Transition
+///
+/// WHY(P3-W11.2):`#[serde(default)]` 确保老数据(无此字段)反序列化为 `None`,
+/// 不破坏现有持久化数据与测试。`None` 在矛盾检测时按 `Current` 处理(向后兼容)。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WikiEntry {
     /// 条目唯一标识(通常为 UUIDv7 字符串)
@@ -30,16 +43,31 @@ pub struct WikiEntry {
     pub created_at: DateTime<Utc>,
     /// 最后更新时间(UTC,插入/更新时自动刷新)
     pub updated_at: DateTime<Utc>,
+    /// 时间元数据 — 记忆的时间有效性信息(P3-W11.2 D12 修复)
+    ///
+    /// WHY(P3-W11.2 D12):矛盾检测时旧条目被标记为 `Historical`(归档,不删除),
+    /// 新条目保持 `Current`。`None` 视为 `Current`(向后兼容)。
+    ///
+    /// WHY `#[serde(default)]`:确保老数据(无此字段)反序列化为 `None`,
+    /// 不破坏现有持久化数据与测试。
+    #[serde(default)]
+    pub temporal_meta: Option<TemporalMeta>,
 }
 
 impl WikiEntry {
     /// 创建新条目,`created_at` 与 `updated_at` 自动设为当前 UTC 时间
+    ///
+    /// # P3-W11.2 D12 修复
+    ///
+    /// `temporal_meta` 默认为 `None`(向后兼容)。需要时间有效性时通过
+    /// `with_temporal_meta` 链式设置。`None` 在矛盾检测时按 `Current` 处理。
     ///
     /// # 示例
     /// ```
     /// use repo_wiki::WikiEntry;
     /// let entry = WikiEntry::new("e-1", "标题", "内容", vec!["t".into()], vec![0.0; 512]);
     /// assert_eq!(entry.entry_id, "e-1");
+    /// assert!(entry.is_current()); // 默认 Current(向后兼容)
     /// ```
     pub fn new(
         entry_id: impl Into<String>,
@@ -57,7 +85,80 @@ impl WikiEntry {
             embedding,
             created_at: now,
             updated_at: now,
+            temporal_meta: None, // P3-W11.2: 默认 None(向后兼容,视为 Current)
         }
+    }
+
+    /// 附带时间元数据(用于 P3-W11.2 D12 修复 — 矛盾检测标记过渡期)
+    ///
+    /// WHY(P3-W11.2 D12):为 Wiki 条目附加时间有效性(valid_from/valid_until)、
+    /// 时间状态(transition_type)与置信度,使矛盾检测能标记旧条目为 Historical。
+    ///
+    /// # 示例
+    /// ```
+    /// use repo_wiki::WikiEntry;
+    /// use nexus_contracts::TemporalMeta;
+    ///
+    /// let meta = TemporalMeta::new(1700000000, 0.9);
+    /// let entry = WikiEntry::new("e-1", "标题", "内容", vec![], vec![0.0; 512])
+    ///     .with_temporal_meta(meta);
+    /// assert!(entry.is_current());
+    /// ```
+    pub fn with_temporal_meta(mut self, meta: TemporalMeta) -> Self {
+        self.temporal_meta = Some(meta);
+        self
+    }
+
+    /// 判断条目是否为 `Current` 状态(默认召回)
+    ///
+    /// WHY(P3-W11.2 D12):`temporal_meta` 为 `None` 时视为 `Current`(向后兼容),
+    /// 避免老条目(无此字段)被误过滤。
+    pub fn is_current(&self) -> bool {
+        match &self.temporal_meta {
+            None => true, // 向后兼容:无 temporal_meta 视为 Current
+            Some(meta) => meta.transition_type.is_current(),
+        }
+    }
+
+    /// 判断条目是否为 `Historical` 状态(已被矛盾检测归档)
+    ///
+    /// WHY(P3-W11.2 D12):矛盾检测标记旧条目为 Historical,默认召回跳过,
+    /// 保留谱系完整性但不影响当前决策。
+    pub fn is_historical(&self) -> bool {
+        match &self.temporal_meta {
+            None => false,
+            Some(meta) => matches!(meta.transition_type, TransitionType::Historical),
+        }
+    }
+
+    /// 标记条目为 `Historical` 状态(矛盾检测归档,INV-8 单调性)
+    ///
+    /// WHY(P3-W11.2 D12 + INV-8 单调性):`Current` → `Historical` 单向降级。
+    /// 矛盾检测发现旧条目与新条目矛盾时,调用此方法归档旧条目(不删除)。
+    /// 若已是 `Historical`,操作为 no-op(幂等)。
+    ///
+    /// # INV-8 约束
+    /// `Historical` → `Current` 禁止(逆向升级违反 INV-8)。
+    /// 本方法仅处理 `→ Historical` 方向。
+    pub fn mark_historical(&mut self) {
+        let now_ts = Utc::now().timestamp();
+        let meta = self
+            .temporal_meta
+            .take()
+            .unwrap_or_else(|| TemporalMeta::new(now_ts, 1.0));
+        if meta.transition_type != TransitionType::Historical {
+            self.temporal_meta = Some(TemporalMeta {
+                transition_type: TransitionType::Historical,
+                ..meta
+            });
+        } else {
+            self.temporal_meta = Some(meta); // 已是 Historical,no-op
+        }
+    }
+
+    /// 返回时间元数据的引用(若存在)
+    pub fn temporal_meta(&self) -> Option<&TemporalMeta> {
+        self.temporal_meta.as_ref()
     }
 }
 

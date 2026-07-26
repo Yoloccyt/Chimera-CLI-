@@ -44,33 +44,53 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod config;
+pub mod contradiction;
 pub mod error;
 pub mod fts;
 pub mod generator;
 pub mod iscm;
 pub mod metrics;
+pub mod relation;
 pub mod store;
 pub mod types;
 pub mod vector;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use contradiction::{
+    ContradictionDetector, ContradictionResult, DEFAULT_CONTRADICTION_THRESHOLD,
+};
 pub use error::WikiError;
 pub use fts::FtsCapability;
 pub use generator::WikiGenerator;
 pub use iscm::{IscmAnchor, Layer};
 pub use metrics::WikiMetrics;
+pub use relation::{EntryRelation, RelationKind};
 pub use store::WikiStore;
 pub use types::{WikiConfig, WikiEntry};
+/// HNSW 向量存储生产路径实现(P2-W8.1)
+pub use vector::hnsw_store::HnswStore;
+/// 内存 KNN 向量存储 fallback 路径实现(P2-W8.2)
+pub use vector::memory_knn_store::MemoryKnnStore;
+/// 向量索引 — 历史类型名,现为 `MemoryKnnStore` 的类型别名(向后兼容)
 pub use vector::VectorIndex;
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
+    pub use crate::contradiction::{
+        ContradictionDetector, ContradictionResult, DEFAULT_CONTRADICTION_THRESHOLD,
+    };
     pub use crate::error::WikiError;
     pub use crate::fts::FtsCapability;
     pub use crate::generator::WikiGenerator;
     pub use crate::iscm::{IscmAnchor, Layer};
     pub use crate::metrics::WikiMetrics;
+    pub use crate::relation::{EntryRelation, RelationKind};
     pub use crate::store::WikiStore;
     pub use crate::types::{WikiConfig, WikiEntry};
+    /// HNSW 向量存储生产路径实现(P2-W8.1)
+    pub use crate::vector::hnsw_store::HnswStore;
+    /// 内存 KNN 向量存储 fallback 路径实现(P2-W8.2)
+    pub use crate::vector::memory_knn_store::MemoryKnnStore;
+    /// 向量索引 — 历史类型名(向后兼容)
     pub use crate::vector::VectorIndex;
 }

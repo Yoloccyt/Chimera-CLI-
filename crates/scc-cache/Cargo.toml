@@ -6,6 +6,9 @@ edition.workspace = true
 [dependencies]
 # L1 Core: nexus-core 提供 id_newtype! 宏
 nexus-core = { path = "../nexus-core" }
+# L0 Contracts: PrefetchPolicy / PrefetchStrategy 预取策略契约（P4-W14.2 S3 接缝）
+# WHY(P4-W14.2): PrefetchPolicy 定义在 L0 nexus-contracts,scc-cache(L3)向下依赖符合 §2.2 铁律
+nexus-contracts = { path = "../nexus-contracts" }
 # L1 Core: EventBus 跨层通信,发布 CacheHit/CacheMiss/CachePrefetched/CacheStatsReported 事件
 event-bus = { path = "../event-bus" }
 # 异步运行时(预取后台任务 tokio::spawn)

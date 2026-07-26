@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# L0 Contracts:共享类型(ToolId/FileId/SparseMask/OmniSparseMasks 等,ADR-033)
+# WHY 排在首位:osa-coordinator 原定义的 ID/SparseMask/OmniSparseMasks 上提至 L0,
+# 本 crate 改为 re-export,消除星型耦合(Insight 2 消解)
+nexus-contracts = { path = "../nexus-contracts" }
 # L1 Core:基础类型(如 CLV,本 crate 暂未直接使用,保留以备扩展)
 nexus-core = { path = "../nexus-core" }
 # L1 Core:EventBus 跨层通信,发布 OmniSparseMasksComputed 事件(修正 V1 违规)

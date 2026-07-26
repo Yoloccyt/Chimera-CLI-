@@ -34,6 +34,8 @@ fn make_entry(
         embedding,
         created_at: now,
         updated_at: now,
+        // P3-W11.2: 测试辅助条目默认无 temporal_meta(视为 Current,向后兼容)
+        temporal_meta: None,
     }
 }
 
@@ -165,6 +167,8 @@ async fn test_cross_layer_consistency() {
             embedding: vec![0.0; 512],
             created_at: entry_v1.created_at,
             updated_at: now,
+            // P3-W11.2: 测试条目默认无 temporal_meta(视为 Current,向后兼容)
+            temporal_meta: None,
         }
     };
     store.insert(entry_v2.clone()).await.unwrap();

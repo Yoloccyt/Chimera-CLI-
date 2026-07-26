@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# L0 Contracts:ToolId 共享类型(ADR-033,从本地 id_newtype! 宏切换为 L0 统一类型)
+# WHY:消除与 osa-coordinator/kvbsr-router 的 ToolId 类型分裂(星型耦合消解)
+nexus-contracts = { path = "../nexus-contracts" }
 # L1 Core:CLV 余弦相似度计算 + id_newtype! 宏
 nexus-core = { path = "../nexus-core" }
 # L1 Core:EventBus 跨层通信,发布 ExpertRouted/EntropyBalanced 等事件

@@ -377,7 +377,7 @@ pub fn search_fts(conn: &Connection, query: &str) -> Result<Vec<WikiEntry>, Wiki
     }
 
     let sql = format!(
-        "SELECT e.entry_id, e.title, e.content, e.tags, e.embedding, e.created_at, e.updated_at
+        "SELECT e.entry_id, e.title, e.content, e.tags, e.embedding, e.created_at, e.updated_at, e.temporal_meta
          FROM entries e
          JOIN {FTS_TABLE} f ON e.entry_id = f.entry_id
          WHERE {FTS_TABLE} MATCH ?1
@@ -399,7 +399,7 @@ pub fn search_fts(conn: &Connection, query: &str) -> Result<Vec<WikiEntry>, Wiki
 pub fn search_like(conn: &Connection, query: &str) -> Result<Vec<WikiEntry>, WikiError> {
     let pattern = format!("%{query}%");
     let mut stmt = conn.prepare(
-        "SELECT entry_id, title, content, tags, embedding, created_at, updated_at
+        "SELECT entry_id, title, content, tags, embedding, created_at, updated_at, temporal_meta
          FROM entries
          WHERE title LIKE ?1 OR content LIKE ?1;",
     )?;

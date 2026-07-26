@@ -10,7 +10,9 @@
 
 use crate::error::EventBusError;
 use crate::logging::BusLogger;
+use crate::membrane::{MembraneFilter, PermeationDecision};
 use crate::types::{EventSeverity, NexusEvent};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
@@ -21,6 +23,14 @@ use tracing::warn;
 /// WHY:1024 平衡内存占用与突发流量。每个 NexusEvent 约 200-500 字节,
 /// 1024 容量约占 0.5MB,可吸收短时突发;持续高吞吐应增大容量或加背压策略。
 pub const DEFAULT_CAPACITY: usize = 1024;
+
+/// Critical 旁路通道容量 — P1-W2.1(D3 改造)
+///
+/// WHY 4096:spec.md L84 明确要求 "改有界 Sender<4096>"。
+/// 4096 容量可吸收短时突发(如 Quest 启动初期多个安全告警并发),
+/// 同时提供硬上限防止慢消费者导致 OOM(§6.1 红线 "1M Token 暴力加载")。
+/// 容量满时按优先级采样丢弃(见 `send_critical_mpsc` 的 try_send 策略)。
+pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 
 /// 判断事件是否走 mpsc 旁路通道(Critical 安全告警事件)
 ///
@@ -57,6 +67,14 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
 /// 仍能被订阅者接收。订阅者通过 [`subscribe_critical_events`](Self::subscribe_critical_events)
 /// 获取 mpsc Receiver。旁路通道按需初始化(首次订阅时创建),无订阅者时
 /// `publish` 仅走 broadcast 不报错。
+///
+/// # P1-W2.1 有界化改造(D3 修复,2026-07-23)
+/// Critical 旁路通道从 `Vec<UnboundedSender>` 改为 `Vec<mpsc::Sender<4096>>`,
+/// 提供硬上限防止慢消费者导致 OOM(§6.1 红线)。容量满时按优先级采样丢弃
+/// (见 `send_critical_mpsc` 的 try_send 策略),丢弃计数累计在
+/// `critical_dropped_count` 字段(Arc<AtomicU64>,避免持锁跨 await)。
+/// `subscribe_critical_events` 返回类型从 `UnboundedReceiver` 改为有界
+/// `mpsc::Receiver`,调用方仅需 `.recv().await`(两类型此方法签名兼容,零改动)。
 #[derive(Clone)]
 pub struct EventBus {
     sender: broadcast::Sender<NexusEvent>,
@@ -64,17 +82,27 @@ pub struct EventBus {
     capacity: usize,
     /// 可选日志记录器(Arc 共享,跨 Clone 共享同一计数器)
     logger: Option<Arc<BusLogger>>,
-    /// Critical 事件 mpsc 旁路通道(§6.2 红线双通道化)
+    /// Critical 事件 mpsc 旁路通道(§6.2 红线双通道化,P1-W2.1 有界化)
     ///
-    /// WHY Arc<Mutex<Vec<UnboundedSender>>>:
-    /// - `Vec<UnboundedSender>` fan-out 模式:每个 subscribe_critical_events
-    ///   调用创建独立 mpsc channel,Sender 入 Vec,Receiver 返回给订阅者
-    /// - `Mutex` 同步 Vec 修改(订阅/发送互斥)
+    /// WHY Arc<Mutex<Vec<mpsc::Sender>>>:
+    /// - `Vec<mpsc::Sender>` fan-out 模式:每个 subscribe_critical_events
+    ///   调用创建独立有界 mpsc channel(容量 CRITICAL_CHANNEL_CAPACITY=4096),
+    ///   Sender 入 Vec,Receiver 返回给订阅者
+    /// - `Mutex` 同步 Vec 修改(订阅/发送互斥),仅在 push/retain 时短暂持有,
+    ///   不跨 await(§4.4 红线 1)
     /// - `Arc` 使 EventBus 保留 Clone 派生(所有 Clone 副本共享同一 Vec)
-    /// - `UnboundedSender` 实现 Clone,EventBus Clone 副本可向同一 Vec 投递
-    /// - receiver drop 时 send 返回 Err,send_critical_mpsc 静默忽略并定期
-    ///   清理失效 sender(避免 Vec 无限增长)
-    critical_tx: Arc<Mutex<Vec<mpsc::UnboundedSender<NexusEvent>>>>,
+    /// - `mpsc::Sender` 实现 Clone,EventBus Clone 副本可向同一 Vec 投递
+    /// - receiver drop 时 try_send 返回 Err(Closed),send_critical_mpsc
+    ///   静默忽略并定期清理失效 sender(避免 Vec 无限增长)
+    /// - 容量满时 try_send 返回 Err(Full),递增 critical_dropped_count 并丢弃
+    critical_tx: Arc<Mutex<Vec<mpsc::Sender<NexusEvent>>>>,
+    /// Critical 通道累计丢弃事件数(P1-W2.1 优先级采样丢弃策略)
+    ///
+    /// WHY Arc<AtomicU64> 而非 Mutex<u64>:
+    /// - 避免 §4.4 红线 1 "持锁跨 await"(AtomicU64 无锁,store/load 不跨 await)
+    /// - 单调递增,不重置(运维观察累计丢弃趋势)
+    /// - Relaxed 内存序:丢弃计数为统计指标,非控制流信号,无需强一致性
+    critical_dropped_count: Arc<AtomicU64>,
 }
 
 impl EventBus {
@@ -91,6 +119,7 @@ impl EventBus {
             capacity,
             logger: None,
             critical_tx: Arc::new(Mutex::new(Vec::new())),
+            critical_dropped_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -104,6 +133,7 @@ impl EventBus {
             capacity,
             logger: Some(Arc::new(logger)),
             critical_tx: Arc::new(Mutex::new(Vec::new())),
+            critical_dropped_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -242,22 +272,106 @@ impl EventBus {
         Ok(())
     }
 
+    // ============================================================
+    // P2-W7.1.1:膜感知发布(选择性渗透集成)
+    // ============================================================
+
+    /// 膜感知异步发布 — 通过 MembraneFilter 决策事件是否穿膜入内环
+    ///
+    /// 将膜过滤集成到发布路径(spec.md L423 "膜深化:选择性渗透"):
+    /// - `PassToCore`:走正常发布路径(broadcast + Critical mpsc 旁路)
+    /// - `LocalConsume`:不发布到任何 channel,在膜边界直接消化
+    ///
+    /// 返回 [`PermeationDecision`] 让调用方知道事件是否穿膜,可用于指标统计
+    /// (如统计被膜拒绝的事件数、按 EventCategory 分类等)。
+    ///
+    /// # 零 BREAKING(spec.md L421)
+    /// 既有 [`publish`](Self::publish) / [`publish_critical`](Self::publish_critical)
+    /// 签名与行为不变。调用方显式选择 `publish_membrane` 才启用膜过滤。
+    /// `publish_critical()` 始终穿膜(Critical 事件在膜分类中恒为 `PassToCore`)。
+    ///
+    /// # 背压语义(两层协同)
+    /// - 第一层(膜):InnerLoad::Critical 档拒绝非 Critical 事件穿膜,
+    ///   减少 channel 投递量(入口过滤)
+    /// - 第二层(channel):P1-W2.1 有界 mpsc(4096 容量)防止 Critical 通道 OOM
+    ///   (出口背压);容量满时优先级采样丢弃并递增 `critical_dropped_count`
+    ///
+    /// # 使用示例
+    /// ```
+    /// use event_bus::{EventBus, EventMetadata, NexusEvent};
+    /// use event_bus::membrane::{InnerLoad, MembraneFilter};
+    ///
+    /// let bus = EventBus::new();
+    /// let membrane = MembraneFilter::with_load(InnerLoad::High);
+    ///
+    /// let cache_hit = NexusEvent::CacheHit {
+    ///     metadata: EventMetadata::new("scc-cache"),
+    ///     cache_key: "k1".into(),
+    /// };
+    /// // 同步版本:不需 tokio runtime
+    /// let decision = bus.publish_membrane_blocking(cache_hit, &membrane).unwrap();
+    /// assert!(decision.is_local_consume()); // CacheLocal 在 High 档被本地消化
+    /// ```
+    pub async fn publish_membrane(
+        &self,
+        event: NexusEvent,
+        membrane: &MembraneFilter,
+    ) -> Result<PermeationDecision, EventBusError> {
+        let decision = membrane.decide(&event);
+        if decision.is_local_consume() {
+            // 外环本地消化:不发布到任何 channel
+            // WHY 不记录 warn:LocalConsume 是预期行为(如 CacheHit/ReadMetric),
+            // 非异常丢弃;调用方可通过返回值统计
+            return Ok(decision);
+        }
+        // PassToCore:走正常发布路径(broadcast + Critical mpsc 旁路)
+        self.publish(event).await?;
+        Ok(decision)
+    }
+
+    /// 膜感知同步发布 — [`publish_membrane`](Self::publish_membrane) 的同步版本
+    ///
+    /// 供不便 await 的场景使用(如 Drop 实现、sync 方法内调用)。
+    /// 语义与异步版本完全一致:膜决策 → PassToCore 走 publish_blocking /
+    /// LocalConsume 跳过。
+    pub fn publish_membrane_blocking(
+        &self,
+        event: NexusEvent,
+        membrane: &MembraneFilter,
+    ) -> Result<PermeationDecision, EventBusError> {
+        let decision = membrane.decide(&event);
+        if decision.is_local_consume() {
+            return Ok(decision);
+        }
+        self.publish_blocking(event)?;
+        Ok(decision)
+    }
+
     /// 订阅 Critical 事件 mpsc 旁路通道
     ///
     /// §6.2 红线:Critical 安全事件(SkepticVeto/RedTeamAudit/AsaIntervention/
     /// BudgetExceeded)必须用 mpsc channel 确保送达。此方法返回 mpsc Receiver,
     /// 订阅者通过它接收 Critical 事件,即使在 broadcast Lagged 场景下也不会丢失。
     ///
+    /// # P1-W2.1 有界化改造(D3 修复,2026-07-23)
+    /// 返回类型从 `mpsc::UnboundedReceiver` 改为有界 `mpsc::Receiver`(容量
+    /// [`CRITICAL_CHANNEL_CAPACITY`] = 4096)。提供硬上限防止慢消费者导致 OOM。
+    /// 容量满时 `publish_critical` 内部 `try_send` 失败,按优先级采样丢弃并
+    /// 递增 `critical_dropped_count`(见 [`critical_dropped_count`](Self::critical_dropped_count))。
+    /// 调用方仅需 `.recv().await`,此方法在 `mpsc::Receiver` 与
+    /// `mpsc::UnboundedReceiver` 上签名兼容,零改动。
+    ///
     /// # fan-out 多订阅者
-    /// 每次调用创建独立 mpsc channel,Sender 入 `Vec` 内部状态,Receiver 返回。
-    /// 后续发布的 Critical 事件会向 `Vec` 中所有 Sender 投递(fan-out 广播)。
-    /// receiver drop 后,对应 Sender 的 `send` 返回 Err,下次发送时被清理。
+    /// 每次调用创建独立有界 mpsc channel(容量 4096),Sender 入 `Vec` 内部状态,
+    /// Receiver 返回。后续发布的 Critical 事件会向 `Vec` 中所有 Sender 投递
+    /// (fan-out 广播)。receiver drop 后,对应 Sender 的 `try_send` 返回
+    /// `Closed` 错误,下次发送时被清理。
     ///
     /// # 调用时机(§4.4 反模式 3)
     /// 必须在 `tokio::spawn()` **之前同步调用**此方法,确保不会错过后续发布的
     /// Critical 事件。在 spawn 的 async block 内调用可能导致事件静默丢失。
-    pub fn subscribe_critical_events(&self) -> mpsc::UnboundedReceiver<NexusEvent> {
-        let (tx, rx) = mpsc::unbounded_channel();
+    pub fn subscribe_critical_events(&self) -> mpsc::Receiver<NexusEvent> {
+        let (tx, rx) = mpsc::channel(CRITICAL_CHANNEL_CAPACITY);
         // WHY unwrap_or_else: 中毒锁降级访问内部数据而非 panic。
         // EventBus 是核心组件,前任持有者 panic 导致 poison 后,
         // 继续抛 panic 会中断所有事件发布,降级为访问中毒数据更稳健(§4.1 红线)。
@@ -267,20 +381,97 @@ impl EventBus {
         rx
     }
 
+    /// 获取 Critical 旁路通道容量(P1-W2.1 新增)
+    ///
+    /// 返回固定值 [`CRITICAL_CHANNEL_CAPACITY`] = 4096,用于测试断言与
+    /// 运维监控。容量为编译时常量,不随实例变化。
+    pub fn critical_channel_capacity(&self) -> usize {
+        CRITICAL_CHANNEL_CAPACITY
+    }
+
+    /// 获取 Critical 通道累计丢弃事件数(P1-W2.1 新增)
+    ///
+    /// 返回因容量满(Critical 旁路通道 4096 全满)而被优先级采样丢弃的
+    /// Critical 事件总数。单调递增,不重置。供 efficiency-monitor 拉取并
+    /// 发布 `EfficiencyAlertTriggered` 告警,同时供 TUI 显示丢弃计数
+    /// (spec.md L188:丢弃事件计入 CriticalEventDropped 指标 + TUI 告警)。
+    ///
+    /// WHY Relaxed 内存序:丢弃计数为统计指标,非控制流信号,无需强一致性。
+    /// 即使读到稍旧的值,仅影响告警时机的毫秒级延迟,不影响系统正确性。
+    pub fn critical_dropped_count(&self) -> u64 {
+        self.critical_dropped_count.load(Ordering::Relaxed)
+    }
+
     /// 向 mpsc 旁路通道投递 Critical 事件(内部辅助方法)
     ///
-    /// fan-out 投递:遍历 `Vec<UnboundedSender>`,向每个 Sender 投递事件 clone。
-    /// `send` 返回 Err 的 Sender(receiver 已 drop)被从 Vec 中移除,避免无限增长。
-    /// Vec 为空(无 Critical 订阅者)时静默跳过,不报错。
+    /// fan-out 投递:遍历 `Vec<mpsc::Sender>`,向每个 Sender 投递事件 clone。
+    /// 使用 `try_send` 替代 `send().await`(本方法为同步,不可 await),
+    /// 容量满时丢弃事件并递增 `critical_dropped_count`(优先级采样丢弃策略)。
+    ///
+    /// # 优先级采样丢弃策略(P1-W2.1.2)
+    /// - `try_send` 返回 `Ok(())`:投递成功,保留 Sender
+    /// - `try_send` 返回 `Err(Full)`:容量满,丢弃本事件 + 递增计数,
+    ///   保留 Sender(下次发送可能成功,避免误清理可用 Sender)
+    /// - `try_send` 返回 `Err(Closed)`:receiver 已 drop,移除 Sender
+    ///
+    /// WHY 保留 Full 状态的 Sender:容量满是临时状态(消费者可能很快赶上),
+    /// 不应因临时满载就移除订阅者。仅 Closed 才真正移除。
+    /// WHY retain 而非 filter:retain 原地修改,O(n) 一次遍历完成发送 + 清理。
+    ///
+    /// # P1-W4.1 tracing 贯穿观测
+    /// span 携带 `event_type` / `severity` / `event_id` 三个字段,供 efficiency-monitor
+    /// 关联丢弃事件与原始 Critical 事件。`event_id`(UUIDv7)是跨进程因果追踪的唯一
+    /// 标识,即使事件被丢弃也能通过 event_id 在审计日志中定位原始发布点。
+    /// `event` 含完整载荷(可能含敏感数据),故 `skip(self, event)` 仅记录类型、
+    /// 级别与 ID,避免泄露事件内容。丢弃日志在 retain 之后单次发出(避免在闭包内
+    /// 多次记录),用 `dropped_count` 字段表示本次发送导致的累计丢弃增量,而非全局累计值。
+    #[tracing::instrument(
+        skip(self, event),
+        fields(
+            event_type = %event.type_name(),
+            severity = ?event.severity(),
+            event_id = %event.metadata().event_id
+        )
+    )]
     fn send_critical_mpsc(&self, event: &NexusEvent) {
         // WHY unwrap_or_else: 中毒锁降级访问而非 panic(见 subscribe_critical_events 注释)。
         let mut guard = self.critical_tx.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_empty() {
             return;
         }
-        // 保留 send 成功的 sender,移除 send 失败的(receiver 已 drop)
-        // WHY retain:O(n) 一次遍历完成发送 + 清理,避免两次遍历
-        guard.retain(|tx| tx.send(event.clone()).is_ok());
+        // P1-W4.1: 所有路径发出 debug 事件,确保 span 字段(event_type / severity / event_id)
+        // 被 tracing-test 捕获。WHY debug 而非 info:Critical 事件投递是高频常态,
+        // info 级会产生日志噪声;debug 级在生产环境默认被 env-filter 过滤,仅测试与调试时可见。
+        // 此事件使 event_type / severity / event_id 字段进入日志,供 efficiency-monitor
+        // 跨日志关联丢弃事件与原始 Critical 事件(即使事件被丢弃也能通过 event_id 定位)。
+        tracing::debug!(
+            subscriber_count = guard.len(),
+            "Critical 事件投递到 mpsc 旁路通道"
+        );
+        // P1-W4.1: 记录 retain 前的累计丢弃数,用于计算本次发送导致的丢弃增量
+        // WHY 在 retain 之前采样:retain 闭包内会 fetch_add 多次(每个满 Sender 一次),
+        // 闭包后用差值得到本次发送的总丢弃数,单次 warn 记录避免日志噪声
+        let dropped_before = self.critical_dropped_count.load(Ordering::Relaxed);
+        // 优先级采样丢弃:遍历所有 Sender,try_send 失败时按错误类型处理
+        // - Full:递增丢弃计数,保留 Sender(临时满载)
+        // - Closed:移除 Sender(receiver 已 drop)
+        guard.retain(|tx| match tx.try_send(event.clone()) {
+            Ok(()) => true, // 投递成功,保留
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                // 容量满:按优先级采样丢弃,递增计数,保留 Sender
+                // WHY fetch_add 而非 store(load + 1):原子操作避免读改写竞态
+                self.critical_dropped_count.fetch_add(1, Ordering::Relaxed);
+                true // 保留 Sender(临时满载,下次可能成功)
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => false, // receiver 已 drop,移除
+        });
+        // P1-W4.1: 丢弃增量结构化日志 — 在 retain 闭包外单次发出,避免多次 warn 噪声
+        // WHY 用差值而非全局累计值:全局累计值是单调递增的运维指标(由 efficiency-monitor
+        // 周期性采样),而 warn 日志应反映"本次发送导致多少事件被丢弃",差值更精确
+        let dropped_count = self.critical_dropped_count.load(Ordering::Relaxed) - dropped_before;
+        if dropped_count > 0 {
+            tracing::warn!(dropped_count, "Critical 事件被丢弃(订阅者通道满)");
+        }
     }
 
     /// 订阅事件流,返回新的接收者
@@ -343,6 +534,50 @@ impl EventBus {
             self.logger.clone(),
         );
         crate::topic::FilteredSubscriber::new(receiver, topics)
+    }
+
+    /// 创建普通事件订阅构建器 — 强制 subscribe-then-spawn 顺序(P1-W4.2)
+    ///
+    /// 返回 [`SubscriberBuilder`](crate::subscriber::SubscriberBuilder)`<Unsubscribed>`,
+    /// 调用方必须先 `.subscribe()` 再 `.spawn()`,TypeState 在编译期保证顺序。
+    ///
+    /// WHY: Week 6 SSRA 教训 — `bus.subscribe()` 必须在 `tokio::spawn()` 之前
+    /// 同步调用,否则事件静默丢失。此 API 将人为纪律升级为 API 结构保证。
+    ///
+    /// # 示例
+    /// ```
+    /// use event_bus::EventBus;
+    /// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+    /// let bus = EventBus::new();
+    /// let handle = bus.subscriber()
+    ///     .subscribe()           // 同步订阅
+    ///     .spawn(|mut rx| async move {
+    ///         rx.recv().await
+    ///     });
+    /// # handle.await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use = "subscriber() 返回构建器,需调用 subscribe() 完成订阅"]
+    pub fn subscriber(
+        &self,
+    ) -> crate::subscriber::SubscriberBuilder<'_, crate::subscriber::Unsubscribed> {
+        crate::subscriber::SubscriberBuilder::new(self)
+    }
+
+    /// 创建 Critical 事件订阅构建器 — 强制 subscribe-then-spawn 顺序(P1-W4.2)
+    ///
+    /// 返回 [`CriticalSubscriberBuilder`](crate::subscriber::CriticalSubscriberBuilder)`<Unsubscribed>`,
+    /// 用于订阅 §6.2 红线定义的 4 类 Critical 安全告警事件(SkepticVeto/RedTeamAudit/
+    /// AsaIntervention/BudgetExceeded)的 mpsc 旁路通道。
+    ///
+    /// 与 [`subscriber`](Self::subscriber) 区别:返回 `mpsc::Receiver` 而非 `EventReceiver`,
+    /// 确保在 broadcast Lagged 场景下仍能收到 Critical 事件。
+    #[must_use = "critical_subscriber() 返回构建器,需调用 subscribe() 完成订阅"]
+    pub fn critical_subscriber(
+        &self,
+    ) -> crate::subscriber::CriticalSubscriberBuilder<'_, crate::subscriber::Unsubscribed> {
+        crate::subscriber::CriticalSubscriberBuilder::new(self)
     }
 
     /// 获取当前订阅者数量

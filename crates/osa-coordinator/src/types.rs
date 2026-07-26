@@ -19,14 +19,12 @@
 
 use serde::{Deserialize, Serialize};
 
-// 使用 nexus_core 共享的 id_newtype! 宏(SubTask 21.1)
-// WHY:消除与 mlc-engine / kvbsr-router 的 newtype 实现重复,
-// 统一五维度 ID 类型行为(Deref / AsRef / Borrow / From / Display / serde(transparent))
-nexus_core::id_newtype!(ToolId, "工具唯一标识 — routing 维度的稀疏化对象");
-nexus_core::id_newtype!(FileId, "文件唯一标识 — context 维度的稀疏化对象");
-nexus_core::id_newtype!(MemoryId, "记忆条目唯一标识 — memory 维度的稀疏化对象");
-nexus_core::id_newtype!(OperationId, "操作唯一标识 — audit 维度的稀疏化对象");
-nexus_core::id_newtype!(TaskId, "任务唯一标识 — budget 维度的稀疏化对象");
+// 五维度 ID 类型从 L0 nexus-contracts 统一导入(ADR-033, P2-W5.2)
+// WHY:原用 nexus_core::id_newtype! 宏在本地展开生成独立名义类型,
+// 导致 osa_coordinator::ToolId ≠ kvbsr_router::ToolId ≠ faae_router::ToolId。
+// 改为 re-export nexus_contracts 类型后,跨 crate 共享同一类型,
+// 消除星型耦合(Insight 2 消解),mask_hash 计算逻辑仍保留在本 crate(L6 依赖 sha2/hex)。
+pub use nexus_contracts::{FileId, MemoryId, OperationId, TaskId, ToolId};
 
 /// 风险等级 — 影响审计采样率与预算保护策略
 ///

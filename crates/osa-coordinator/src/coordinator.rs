@@ -14,13 +14,18 @@
 //! 修正后:OSA 发布 `OmniSparseMasksComputed` 事件,HCW 订阅消费
 //! OSA 不持有 HCW 的引用,仅通过事件传递 `context_mask`
 //!
+//! # ADR-033 类型上提(P2-W5.2)
+//! `OmniSparseMasks` / `SparseMask<T>` / 五维度 ID 类型已上提至 L0 `nexus-contracts`,
+//! 本 crate 改为 re-export,消除星型耦合(L6 3 router 共享同一类型)。
+//! `mask_hash` 计算逻辑保留在本 crate(L6 依赖 sha2/hex),通过 `compute_omni_mask_hash`
+//! 自由函数提供,因 L0 禁止依赖 sha2/hex。
+//!
 //! # 架构红线
 //! - 所有跨层通信走 EventBus(§2.2 依赖铁律)
 //! - 单函数 ≤ 200 行,禁止 unwrap()/expect()
 //! - 所有 async fn 满足 Send 约束
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, info};
 
@@ -29,119 +34,58 @@ use crate::error::OsaError;
 use crate::masks::SparseMask;
 use crate::types::{ComplexityBand, FileId, MemoryId, OperationId, TaskId, TaskProfile, ToolId};
 
-/// 全维稀疏掩码 — 五维度掩码的聚合体
+// OmniSparseMasks 从 L0 nexus-contracts 统一导入(ADR-033, P2-W5.2)
+//
+// WHY:原定义在本 crate,被 L6 3 router(kvbsr-router/faae-router/sesa-router)依赖,
+// 形成星型耦合。上提至 L0 后,3 router 可直接依赖 nexus-contracts 获取同一类型,
+// 消除 osa_coordinator::OmniSparseMasks ≠ nexus_contracts::OmniSparseMasks 的类型分裂。
+//
+// 迁移说明:
+// - L0 版本移除了 `mask_hash` 缓存字段(L0 禁止依赖 sha2/hex)
+// - L0 版本的 `new()` 不再返回 Result(纯构造,无哈希计算)
+// - `mask_hash` 计算逻辑保留在本 crate 的 `compute_omni_mask_hash` 自由函数
+// - `average_sparsity()` / `routing_ids()` 等纯计算方法保留在 L0 类型上
+pub use nexus_contracts::OmniSparseMasks;
+
+/// 计算 OmniSparseMasks 的 SHA-256 哈希(原 mask_hash 字段逻辑迁移,ADR-033 P2-W5.2)
 ///
-/// 由 `OmniSparseCoordinator::compute_all_masks` 返回,包含:
-/// - `routing`:工具稀疏掩码(Top-K 工具)
-/// - `context`:文件稀疏掩码(Top-K 文件)
-/// - `memory`:记忆稀疏掩码(Top-K 记忆)
-/// - `audit`:操作稀疏掩码(按采样率选取)
-/// - `budget`:任务稀疏掩码(按保护比例选取)
-/// - `mask_hash`:预计算的 SHA-256 hex,构造时一次性计算,O(1) 访问
+/// 将五维度掩码序列化为 JSON,然后计算 SHA-256 hex 字符串。
+/// 消费者(如 HCW)据此哈希去重,避免重复处理相同掩码。
 ///
-/// WHY:聚合为单一结构体,便于一次性传递给下游消费者(如 HCW),
-/// 避免五维度分多次传递导致的状态不一致
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OmniSparseMasks {
-    /// routing 维度:工具稀疏掩码
-    pub routing: SparseMask<ToolId>,
-    /// context 维度:文件稀疏掩码
-    pub context: SparseMask<FileId>,
-    /// memory 维度:记忆稀疏掩码
-    pub memory: SparseMask<MemoryId>,
-    /// audit 维度:操作稀疏掩码
-    pub audit: SparseMask<OperationId>,
-    /// budget 维度:任务稀疏掩码
-    pub budget: SparseMask<TaskId>,
-    /// 预计算的 mask_hash(SHA-256 hex),构造时一次性计算
-    ///
-    /// WHY:避免每次调用 mask_hash() 都重新序列化 + SHA-256,
-    /// 重复 TaskProfile 的 mask_hash 计算从 O(n) 降到 O(1)。
-    /// `#[serde(skip)]` 确保不参与序列化(避免循环依赖:hash 依赖序列化)
-    #[serde(skip)]
-    mask_hash: String,
-}
-
-/// 手动实现 PartialEq:仅比较五维度掩码,忽略 mask_hash 缓存字段
+/// WHY:L0 `nexus-contracts` 禁止依赖 `sha2` / `hex`(仅允许 serde derive),
+/// 因此 `mask_hash` 计算逻辑保留在 L6 `osa-coordinator`。本函数为纯函数,
+/// 相同输入产生相同输出,可在并发环境安全调用。
 ///
-/// WHY:反序列化的 OmniSparseMasks 的 mask_hash 为空(serde skip),
-/// 但五维度掩码相同即应判定为相等
-impl PartialEq for OmniSparseMasks {
-    fn eq(&self, other: &Self) -> bool {
-        self.routing == other.routing
-            && self.context == other.context
-            && self.memory == other.memory
-            && self.audit == other.audit
-            && self.budget == other.budget
-    }
-}
-
-impl OmniSparseMasks {
-    /// 构造 OmniSparseMasks 并预计算 mask_hash
-    ///
-    /// 在构造时一次性计算 SHA-256 hex 并缓存到 `mask_hash` 字段,
-    /// 后续 `mask_hash()` 调用为 O(1) 访问,无需重新序列化 + 哈希。
-    pub fn new(
-        routing: SparseMask<ToolId>,
-        context: SparseMask<FileId>,
-        memory: SparseMask<MemoryId>,
-        audit: SparseMask<OperationId>,
-        budget: SparseMask<TaskId>,
-    ) -> Result<Self, OsaError> {
-        let masks = Self {
-            routing,
-            context,
-            memory,
-            audit,
-            budget,
-            mask_hash: String::new(),
-        };
-        let mut masks = masks;
-        masks.mask_hash = masks.compute_mask_hash()?;
-        Ok(masks)
-    }
-
-    /// 计算五维度掩码的平均稀疏度 [0.0, 1.0]
-    ///
-    /// WHY:平均稀疏度作为 `OmniSparseMasksComputed` 事件的 `sparsity` 字段,
-    /// 消费者据此快速判断整体稀疏程度,无需解析具体掩码
-    pub fn average_sparsity(&self) -> f32 {
-        (self.routing.sparsity_ratio
-            + self.context.sparsity_ratio
-            + self.memory.sparsity_ratio
-            + self.audit.sparsity_ratio
-            + self.budget.sparsity_ratio)
-            / 5.0
-    }
-
-    /// 序列化为 JSON 字符串(用于 mask_hash 计算)
-    ///
-    /// WHY:使用 JSON 而非 MessagePack,确保哈希跨平台稳定。
-    /// serde_json 按结构体字段顺序输出,保证相同掩码产生相同哈希。
-    /// `mask_hash` 字段有 `#[serde(skip)]`,不参与序列化(避免循环依赖)
-    pub fn to_json(&self) -> Result<String, OsaError> {
-        serde_json::to_string(self).map_err(OsaError::from)
-    }
-
-    /// 返回预计算的 mask_hash(O(1) 访问)
-    ///
-    /// mask_hash 在构造时一次性计算并缓存,后续调用直接返回引用。
-    /// 消费者(如 HCW)据此哈希去重,避免重复处理相同掩码。
-    pub fn mask_hash(&self) -> &str {
-        &self.mask_hash
-    }
-
-    /// 计算 mask_hash(SHA-256 hex)— 内部方法
-    ///
-    /// 将五维度掩码序列化为 JSON,然后计算 SHA-256 hex 字符串。
-    /// 仅在 `new()` 构造时调用一次,后续通过 `mask_hash()` O(1) 访问。
-    fn compute_mask_hash(&self) -> Result<String, OsaError> {
-        let json = self.to_json()?;
-        let mut hasher = Sha256::new();
-        hasher.update(json.as_bytes());
-        let hash = hasher.finalize();
-        Ok(hex::encode(hash))
-    }
+/// # 参数
+/// - `masks`:从 nexus-contracts 导入的 OmniSparseMasks 实例
+///
+/// # 返回
+/// SHA-256 哈希的 hex 字符串(64 字符),或序列化失败错误
+///
+/// # 错误
+/// - `OsaError::MaskComputationFailed`:JSON 序列化失败(理论上不会发生,除非类型定义变化)
+///
+/// # 示例
+/// ```
+/// use nexus_contracts::{FileId, MemoryId, OmniSparseMasks, OperationId, SparseMask, TaskId, ToolId};
+/// use osa_coordinator::compute_omni_mask_hash;
+///
+/// let masks = OmniSparseMasks::new(
+///     SparseMask::full(vec![ToolId::new("t1")]),
+///     SparseMask::empty(),
+///     SparseMask::empty(),
+///     SparseMask::empty(),
+///     SparseMask::empty(),
+/// );
+/// let hash = compute_omni_mask_hash(&masks).unwrap();
+/// assert_eq!(hash.len(), 64); // SHA-256 hex = 64 字符
+/// ```
+pub fn compute_omni_mask_hash(masks: &OmniSparseMasks) -> Result<String, OsaError> {
+    let json = serde_json::to_string(masks)?;
+    let mut hasher = Sha256::new();
+    hasher.update(json.as_bytes());
+    let hash = hasher.finalize();
+    Ok(hex::encode(hash))
 }
 
 /// OmniSparseCoordinator — 全维稀疏协调器主结构
@@ -189,12 +133,16 @@ impl OmniSparseCoordinator {
     /// 1. 校验 TaskProfile 合法性(complexity_score ∈ [0.0, 1.0])
     /// 2. 判定复杂度档位(Simple/Regular/Complex/UltraComplex)
     /// 3. 并行计算五维度掩码(routing/context/memory/audit/budget)
-    /// 4. 聚合为 OmniSparseMasks
-    /// 5. 计算 mask_hash(SHA-256 hex)
+    /// 4. 聚合为 OmniSparseMasks(L0 类型,无 mask_hash 缓存)
+    /// 5. 计算 mask_hash(SHA-256 hex,通过 `compute_omni_mask_hash` 自由函数)
     /// 6. 发布 OmniSparseMasksComputed 事件(携带 mask_hash、sparsity、context_mask)
     ///
     /// WHY:五维度独立计算,O(N) 复杂度(N=活跃项数),无性能瓶颈。
     /// 事件发布失败不阻断掩码返回(掩码是核心产出,事件是副作用)。
+    ///
+    /// # ADR-033 迁移说明(P2-W5.2)
+    /// `OmniSparseMasks::new()` 迁移至 L0 后不再返回 Result(纯构造),
+    /// `mask_hash` 从缓存字段改为通过 `compute_omni_mask_hash(&masks)?` 现算。
     ///
     /// # 性能基准
     /// 掩码计算 < 10ms(测试中断言)
@@ -221,11 +169,12 @@ impl OmniSparseCoordinator {
         let audit = self.compute_audit_mask(profile);
         let budget = self.compute_budget_mask(profile);
 
-        // 4. 聚合为 OmniSparseMasks(构造时预计算 mask_hash)
-        let masks = OmniSparseMasks::new(routing, context, memory, audit, budget)?;
+        // 4. 聚合为 OmniSparseMasks(L0 类型,纯构造不返回 Result)
+        let masks = OmniSparseMasks::new(routing, context, memory, audit, budget);
 
-        // 5. 获取预计算的 mask_hash(O(1) 访问)
-        let mask_hash = masks.mask_hash();
+        // 5. 计算 mask_hash(通过自由函数,L6 依赖 sha2/hex)
+        // WHY:L0 禁止依赖 sha2/hex,哈希逻辑留在 L6
+        let mask_hash = compute_omni_mask_hash(&masks)?;
         let sparsity = masks.average_sparsity();
 
         // SubTask 14.3:将 context 维度活跃 FileId 转换为 Vec<String> 携带在事件中
@@ -242,7 +191,8 @@ impl OmniSparseCoordinator {
         // SubTask 14.3:事件携带 context_mask,HCW 订阅后直接使用
         let event = NexusEvent::OmniSparseMasksComputed {
             metadata: EventMetadata::new("osa-coordinator"),
-            mask_hash: mask_hash.to_string(),
+            // clone 避免 move:info! 宏后续仍需借用 mask_hash 做日志记录
+            mask_hash: mask_hash.clone(),
             sparsity,
             context_mask,
         };
@@ -475,6 +425,11 @@ mod tests {
         assert!(matches!(err, OsaError::InvalidTaskProfile(_)));
     }
 
+    /// ADR-033 P2-W5.2:验证 compute_omni_mask_hash 的确定性(相同掩码 → 相同哈希)
+    ///
+    /// 迁移后 mask_hash 不再是 OmniSparseMasks 的缓存字段,
+    /// 而是通过 `compute_omni_mask_hash` 自由函数现算。
+    /// 相同的 OmniSparseMasks 实例应产生相同的哈希。
     #[test]
     fn test_mask_hash_deterministic() {
         let masks1 = OmniSparseMasks::new(
@@ -483,12 +438,14 @@ mod tests {
             SparseMask::select_top_k(&["m1".into()], &[0.9], 1),
             SparseMask::select_top_k(&["o1".into()], &[0.9], 1),
             SparseMask::select_top_k(&["tk1".into()], &[0.9], 1),
-        )
-        .unwrap();
+        );
         let masks2 = masks1.clone();
-        assert_eq!(masks1.mask_hash(), masks2.mask_hash());
+        let hash1 = compute_omni_mask_hash(&masks1).unwrap();
+        let hash2 = compute_omni_mask_hash(&masks2).unwrap();
+        assert_eq!(hash1, hash2, "相同掩码的哈希应一致");
     }
 
+    /// ADR-033 P2-W5.2:验证不同掩码产生不同哈希
     #[test]
     fn test_mask_hash_differs() {
         let masks1 = OmniSparseMasks::new(
@@ -497,19 +454,20 @@ mod tests {
             SparseMask::empty(),
             SparseMask::empty(),
             SparseMask::empty(),
-        )
-        .unwrap();
+        );
         let masks2 = OmniSparseMasks::new(
             SparseMask::select_top_k(&["t2".into()], &[0.9], 1),
             SparseMask::empty(),
             SparseMask::empty(),
             SparseMask::empty(),
             SparseMask::empty(),
-        )
-        .unwrap();
-        assert_ne!(masks1.mask_hash(), masks2.mask_hash());
+        );
+        let hash1 = compute_omni_mask_hash(&masks1).unwrap();
+        let hash2 = compute_omni_mask_hash(&masks2).unwrap();
+        assert_ne!(hash1, hash2, "不同掩码的哈希应不同");
     }
 
+    /// ADR-033 P2-W5.2:验证 average_sparsity(从 L0 类型继承)
     #[test]
     fn test_average_sparsity() {
         let masks = OmniSparseMasks::new(
@@ -518,8 +476,25 @@ mod tests {
             SparseMask::empty(), // sparsity 1.0
             SparseMask::empty(), // sparsity 1.0
             SparseMask::empty(), // sparsity 1.0
-        )
-        .unwrap();
+        );
         assert!((masks.average_sparsity() - 1.0).abs() < 1e-6);
+    }
+
+    /// ADR-033 P2-W5.2:验证 compute_omni_mask_hash 返回 64 字符的 hex 字符串
+    #[test]
+    fn test_compute_omni_mask_hash_returns_hex_64_chars() {
+        let masks = OmniSparseMasks::new(
+            SparseMask::select_top_k(&["t1".into()], &[0.9], 1),
+            SparseMask::empty(),
+            SparseMask::empty(),
+            SparseMask::empty(),
+            SparseMask::empty(),
+        );
+        let hash = compute_omni_mask_hash(&masks).unwrap();
+        assert_eq!(hash.len(), 64, "SHA-256 hex 应为 64 字符");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "哈希应为纯 hex 字符"
+        );
     }
 }

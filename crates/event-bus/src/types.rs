@@ -348,13 +348,17 @@ pub enum ActionSource {
 /// WHY 独立定义在 event-bus:与 `AgentStatus`(chimera-mas 多 Agent 生命周期)
 /// 区分——`ChatStatus` 面向单条交互式会话的 UI 呈现(思考中/工具执行中/空闲),
 /// 由 chimera-cli 编排器在流式回答过程中广播,驱动 Chat 面板状态指示器。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum ChatStatus {
     /// 思考中(已提交查询,等待/生成首 token)
     Thinking,
     /// 工具执行中(Agent 调用工具,暂停 token 流)
     ToolExecuting,
     /// 空闲(本轮完成,等待下一次输入)
+    ///
+    /// WHY `#[default]`:`DataSnapshot`/`TuiState` 派生 `Default`,对话初始态
+    /// 天然为"空闲"(尚未提交任何查询)。
+    #[default]
     Idle,
 }
 
@@ -1184,10 +1188,15 @@ pub enum NexusEvent {
     /// ASA 安全干预动作 — L4 Security → L7 Execution
     ///
     /// WHY:ASA 对操作进行安全评分并执行干预(Allow/Warn/Block),
-    /// 发布此事件通知 Execution 层采取对应动作。severity() 统一
-    /// 返回 Normal(因为 severity() 是同步函数且不依赖运行时值);
-    /// 但 Block 级别干预在语义上等价于 Critical,发布者应通过
-    /// Critical 通道发送 Block 事件以确保投递。
+    /// 发布此事件通知 Execution 层采取对应动作。
+    ///
+    /// P1-W2.1.4 修复(2026-07-23):severity() 统一返回 Critical,
+    /// 对齐 spec.md L186 红线(AsaIntervention 是 6 个 Critical 事件之一)
+    /// 与 §6.2 红线(Critical 安全事件用 mpsc 确保送达)。
+    /// 历史设计曾返回 Normal(认为 severity() 不应依赖运行时值 action),
+    /// 但 W1.2 TDD 测试暴露 spec/code 偏差,故统一提升为 Critical。
+    /// 保守策略:所有 ASA 干预(含 Allow/Warn)走 Critical 通道,
+    /// Allow/Warn 低频不会产生大量 Critical 事件。
     AsaIntervention {
         /// 事件元数据
         metadata: EventMetadata,
@@ -1929,6 +1938,81 @@ pub enum NexusEvent {
         /// 新状态(Thinking/ToolExecuting/Idle)
         status: ChatStatus,
     },
+
+    /// R1 影子模式退化检测 — 连续显著退化触发预警（P4-W16.2.2 步骤 5）
+    ///
+    /// WHY Normal 级别:退化检测是诊断信号,非阻断性事件。丢失仅导致本次
+    /// 退化未被记录,可由下一日对比报告补偿。编排器根据 `regression_streak`
+    /// 自行决定是否触发回滚（连续 3 天才回滚，ADR-043 决策 4）。
+    R1ShadowRegressionDetected {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 报告日期（UTC，每日一份对比报告）
+        report_date: DateTime<Utc>,
+        /// 连续显著退化天数（达到 3 触发回滚）
+        regression_streak: u32,
+    },
+
+    /// R1 影子模式解冻就绪 — 4 项解冻条件全部满足（P4-W16.2.2 步骤 5）
+    ///
+    /// WHY Normal 级别:解冻就绪是状态通知,非紧急事件。丢失仅导致本次
+    /// 解冻信号未送达,可由下一日报告补偿（解冻需三方评审，非自动生效）。
+    R1ShadowPromotionReady {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 报告日期（UTC）
+        report_date: DateTime<Utc>,
+        /// 14 天观察期内的胜率（R1 优于 L3 的天数比例）
+        win_rate: f64,
+        /// 当前 EWMA 成功率（≥ 0.7 解冻条件 1）
+        ewma_level: f32,
+    },
+
+    /// R1 影子模式回滚失败 — 回滚操作执行失败（P4-W16.2.2 步骤 5）
+    ///
+    /// WHY Critical 级别:回滚失败意味着 R1 策略可能仍在生效但已退化,
+    /// 必须保证投递到 SecCore 与 Parliament 进行紧急干预。若标为 Normal,
+    /// 在背压场景下可能被丢弃,导致退化策略持续生效、Quest 质量下降。
+    /// 对齐 §6.2 红线 5（Critical 安全事件用 mpsc 旁路通道）。
+    R1ShadowRollbackFailed {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 回滚失败原因（ConsecutiveRegression / AsaIntervention / EwmaCollapse / RecallRateDrop）
+        reason: String,
+    },
+}
+
+/// Critical 通道丢弃事件指标载荷 — P1-W2.1(D3 改造)
+///
+/// 当 Critical 通道(有界 mpsc::Sender<4096>)因消费者跟不上而满载时,
+/// `publish_critical` 内部 `try_send` 失败会丢弃事件并递增计数。此结构体
+/// 作为指标载荷,供 efficiency-monitor 拉取并发布 `EfficiencyAlertTriggered`
+/// 告警,同时供 TUI 显示丢弃计数(spec.md L188:丢弃事件计入
+/// CriticalEventDropped 指标 + TUI 告警)。
+///
+/// # 设计约束
+/// - 轻量级(u64 单字段),实现 Copy 以便廉价传递
+/// - 不持有 Mutex(计数由 EventBus 内部 Arc<AtomicU64> 维护,
+///   此结构体仅为快照,避免 §4.4 红线 1 "持锁跨 await")
+/// - 实现 Serialize/Deserialize 以支持跨进程指标传递(MCP Mesh)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CriticalEventDropped {
+    /// 累计丢弃的 Critical 事件数(单调递增,不重置)
+    dropped_count: u64,
+}
+
+impl CriticalEventDropped {
+    /// 创建指标载荷快照
+    ///
+    /// `count` 通常来自 `EventBus::critical_dropped_count()` 的当前快照值。
+    pub fn new(dropped_count: u64) -> Self {
+        Self { dropped_count }
+    }
+
+    /// 获取累计丢弃的 Critical 事件数
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped_count
+    }
 }
 
 impl NexusEvent {
@@ -2036,7 +2120,11 @@ impl NexusEvent {
             | Self::TuiChatSubmitted { metadata, .. }
             | Self::TuiChatResponseChunk { metadata, .. }
             | Self::TuiChatCompleted { metadata, .. }
-            | Self::TuiChatStatusChanged { metadata, .. } => metadata,
+            | Self::TuiChatStatusChanged { metadata, .. }
+            // P4-W16.2.2 步骤 5:R1 影子模式事件（3 个新变体均含 metadata）
+            | Self::R1ShadowRegressionDetected { metadata, .. }
+            | Self::R1ShadowPromotionReady { metadata, .. }
+            | Self::R1ShadowRollbackFailed { metadata, .. } => metadata,
         }
     }
 
@@ -2077,7 +2165,20 @@ impl NexusEvent {
             // CHIMERA-MAS:AgentTaskFailed 为 Critical(Task 4,ADR-026)
             // WHY:任务失败可能影响 Quest 完整性,必须保证投递到 SecCore 与
             // Parliament 进行补救决策。丢失会导致失败无人响应、Quest 持续等待已死 Agent 结果。
-            | Self::AgentTaskFailed { .. } => EventSeverity::Critical,
+            | Self::AgentTaskFailed { .. }
+            // P1-W2.1.4:AsaIntervention 统一标记为 Critical(对齐 spec.md L186 红线)
+            // WHY 历史:原设计认为 severity() 是同步函数不应依赖运行时值(action
+            // 字段),故走通配符返回 Normal。但 spec.md L186 与 §6.2 红线均将
+            // AsaIntervention 列为 6 个 Critical 事件之一(W1.2 TDD 暴露偏差)。
+            // 修复策略:统一返回 Critical,无论 action 是 Allow/Warn/Block。
+            // 保守策略确保所有 ASA 安全干预走 Critical 通道,Allow/Warn 为低频
+            // 事件(每个安全操作最多一个干预),不会产生大量 Critical 事件。
+            // Block 级别更需 Critical 投递保证(丢失导致高风险操作继续执行)。
+            | Self::AsaIntervention { .. }
+            // P4-W16.2.2 步骤 5:R1 影子模式回滚失败为 Critical
+            // WHY:回滚失败意味着退化策略可能仍在生效,必须保证投递到 SecCore
+            // 与 Parliament 进行紧急干预。丢失导致 Quest 持续受退化策略影响。
+            | Self::R1ShadowRollbackFailed { .. } => EventSeverity::Critical,
             // 控制事件(请求/反馈):不阻断系统,不触发 mpsc 旁路投递
             Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }
@@ -2200,6 +2301,10 @@ impl NexusEvent {
             Self::TuiChatResponseChunk { .. } => "TuiChatResponseChunk",
             Self::TuiChatCompleted { .. } => "TuiChatCompleted",
             Self::TuiChatStatusChanged { .. } => "TuiChatStatusChanged",
+            // P4-W16.2.2 步骤 5:R1 影子模式事件（3 个新变体）
+            Self::R1ShadowRegressionDetected { .. } => "R1ShadowRegressionDetected",
+            Self::R1ShadowPromotionReady { .. } => "R1ShadowPromotionReady",
+            Self::R1ShadowRollbackFailed { .. } => "R1ShadowRollbackFailed",
         }
     }
 }
@@ -2418,10 +2523,10 @@ mod tests {
             block_reason: Some("unsafe".into()),
             alternative_suggestion: None,
         };
-        // WHY:AsaIntervention 即使 action=Block 也返回 Normal,
-        // 因为 severity() 是同步函数不依赖运行时值。
-        // Block 级别应通过 Critical 通道发送(由发布者负责)。
-        assert_eq!(asa.severity(), EventSeverity::Normal);
+        // P1-W2.1.4 修复:AsaIntervention 统一返回 Critical(对齐 spec.md L186 红线)。
+        // 历史设计曾返回 Normal,W1.2 TDD 测试暴露 spec/code 偏差后修复。
+        // 详见 severity() 方法中 AsaIntervention 分支注释。
+        assert_eq!(asa.severity(), EventSeverity::Critical);
 
         let ahirt = NexusEvent::AhirtProbeCompleted {
             metadata: meta.clone(),

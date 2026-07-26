@@ -47,7 +47,7 @@ pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use config::OsaConfig;
-pub use coordinator::{OmniSparseCoordinator, OmniSparseMasks};
+pub use coordinator::{compute_omni_mask_hash, OmniSparseCoordinator, OmniSparseMasks};
 pub use error::OsaError;
 pub use masks::SparseMask;
 pub use types::{
@@ -58,7 +58,7 @@ pub use types::{
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::config::OsaConfig;
-    pub use crate::coordinator::{OmniSparseCoordinator, OmniSparseMasks};
+    pub use crate::coordinator::{compute_omni_mask_hash, OmniSparseCoordinator, OmniSparseMasks};
     pub use crate::error::OsaError;
     pub use crate::masks::SparseMask;
     pub use crate::types::{

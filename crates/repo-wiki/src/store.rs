@@ -32,7 +32,8 @@
 //! ```
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use nexus_contracts::{TemporalMeta, TransitionType};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -40,10 +41,12 @@ use tokio::sync::oneshot;
 use tokio::task::spawn_blocking;
 use uuid::Uuid;
 
+use crate::contradiction::ContradictionDetector;
 use crate::error::WikiError;
 use crate::fts::{self, FtsCapability};
 use crate::iscm::{IscmAnchor, Layer};
 use crate::metrics::WikiMetrics;
+use crate::relation::EntryRelation;
 use crate::types::{WikiConfig, WikiEntry};
 
 /// 写入线程接收的操作。
@@ -70,6 +73,24 @@ enum WriteOp {
     ResolveAnchor(Uuid, oneshot::Sender<Result<WikiEntry, WikiError>>),
     /// 将锚点标记为悬空
     MarkDangling(Uuid, oneshot::Sender<Result<(), WikiError>>),
+    /// 带矛盾检测的插入(P3-W11.2)— 事务内原子执行:
+    /// 标记旧条目 Historical + 写入矛盾关系 + 写入新条目
+    ///
+    /// WHY(P3-W11.2 D12):spec.md:298 "写入路径检测 Contradicts 关系 → 标记过渡期不删旧记录"
+    /// 矛盾检测在 async 调用方完成(用读连接池查相似候选),结果发送到写入线程
+    /// 事务执行,避免 TOCTOU 且保证原子性。
+    ///
+    /// bool 返回值表示新条目是否真实新增
+    InsertWithContradictionCheck {
+        /// 待插入的新条目(保持 Current 状态)
+        entry: WikiEntry,
+        /// 需标记 Historical 的旧条目 ID 列表(被矛盾的旧条目,不删除)
+        target_ids: Vec<String>,
+        /// 矛盾关系记录(写入 entry_relations 表)
+        relations: Vec<EntryRelation>,
+        /// 响应通道
+        respond: oneshot::Sender<Result<bool, WikiError>>,
+    },
 }
 
 /// Wiki 存储器 — 封装 SQLite Connection,提供线程安全的条目 CRUD
@@ -325,6 +346,89 @@ impl WikiStore {
         Ok(())
     }
 
+    /// 带矛盾检测的插入(P3-W11.2 D12 修复)
+    ///
+    /// 写入路径检测 `Contradicts` 关系:
+    /// 1. 用读连接池查所有 Current 状态条目的 embedding
+    /// 2. 用 `ContradictionDetector` 检测矛盾(向量相似度 > 阈值 0.9)
+    /// 3. 检测到的矛盾关系 + 旧条目标记 Historical,在写入线程事务内原子执行
+    ///
+    /// WHY(P3-W11.2 D12):spec.md:298 "写入路径检测 Contradicts 关系 → 标记过渡期不删旧记录"
+    /// - 旧条目标记 Historical(归档,不删除),保留谱系完整性
+    /// - 新条目保持 Current
+    /// - 矛盾关系记录到 `entry_relations` 表
+    ///
+    /// # 与 `insert` 的区别
+    /// - `insert`:普通 UPSERT,无矛盾检测开销(向后兼容,现有调用方不受影响)
+    /// - `insert_with_contradiction_check`:多一次 O(n) 相似度扫描,用于需要矛盾检测的场景
+    ///
+    /// # 返回
+    /// `ContradictionResult` 包含:
+    /// - `inserted`:新条目是否真实新增
+    /// - `contradictions`:检测到的矛盾关系列表(可能为空)
+    pub async fn insert_with_contradiction_check(
+        &self,
+        entry: WikiEntry,
+    ) -> Result<crate::contradiction::ContradictionResult, WikiError> {
+        // 1. 查找相似候选(用读连接池,仅 Current 状态条目)
+        let candidates = self.find_contradiction_candidates().await?;
+
+        // 2. 检测矛盾(向量相似度 > 阈值)
+        let detector = ContradictionDetector::new();
+        let contradictions = detector.detect(&entry, &candidates);
+
+        // 3. 提取需标记 Historical 的旧条目 ID(被矛盾的旧条目,不删除)
+        let target_ids: Vec<String> = contradictions.iter().map(|r| r.target_id.clone()).collect();
+
+        // 4. 发送写入命令 — 事务内原子执行:标记旧条目 + 写入关系 + 写入新条目
+        let (tx, rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteOp::InsertWithContradictionCheck {
+                entry,
+                target_ids,
+                relations: contradictions.clone(),
+                respond: tx,
+            })
+            .map_err(|_| WikiError::WriteChannelClosed)?;
+        let is_new = rx.await.map_err(|_| WikiError::WriteChannelClosed)??;
+
+        // 更新计数缓存与 Prometheus gauge(与 insert 一致)
+        if is_new {
+            self.entry_count.fetch_add(1, Ordering::Relaxed);
+        }
+        let count = self.entry_count.load(Ordering::Relaxed) as u32;
+        self.metrics.set_entries(count);
+
+        Ok(crate::contradiction::ContradictionResult {
+            inserted: is_new,
+            contradictions,
+        })
+    }
+
+    /// 查找矛盾候选 — 用读连接池查询所有 Current 状态条目(P3-W11.2)
+    ///
+    /// WHY:MVP 方案用 O(n) 全表扫描,适用于 ≤1000 entry 规模。
+    /// P4 学习层可替换为 HnswStore 近似最近邻搜索(O(log n))。
+    ///
+    /// 只查询 Current 状态条目(temporal_meta 为 NULL 或 transition_type = Current),
+    /// 跳过已归档(Historical)的条目,避免对已归档条目重复标记矛盾。
+    async fn find_contradiction_candidates(&self) -> Result<Vec<WikiEntry>, WikiError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT entry_id, title, content, tags, embedding, created_at, updated_at, temporal_meta
+                 FROM entries;",
+            )?;
+            let rows = stmt.query_map([], row_to_entry)?;
+            // 过滤:只保留 Current 状态条目(含 None 向后兼容)
+            let entries: Vec<WikiEntry> = rows
+                .filter_map(|r| r.ok())
+                .filter(|e| e.is_current())
+                .collect();
+            Ok(entries)
+        })
+        .await
+    }
+
     /// 异步按 entry_id 精确查找
     ///
     /// 返回 `None` 表示条目不存在。
@@ -332,7 +436,7 @@ impl WikiStore {
         self.with_read_conn(move |conn| {
             let result = conn
                 .query_row(
-                    "SELECT entry_id, title, content, tags, embedding, created_at, updated_at
+                    "SELECT entry_id, title, content, tags, embedding, created_at, updated_at, temporal_meta
                      FROM entries WHERE entry_id = ?1;",
                     params![entry_id],
                     row_to_entry,
@@ -377,7 +481,7 @@ impl WikiStore {
         self.with_read_conn(move |conn| {
             let pattern = format!("%\"{tag}\"%");
             let mut stmt = conn.prepare(
-                "SELECT entry_id, title, content, tags, embedding, created_at, updated_at
+                "SELECT entry_id, title, content, tags, embedding, created_at, updated_at, temporal_meta
                  FROM entries WHERE tags LIKE ?1;",
             )?;
             let rows = stmt.query_map(params![pattern], row_to_entry)?;
@@ -479,7 +583,7 @@ impl WikiStore {
     pub async fn list_all(&self) -> Result<Vec<WikiEntry>, WikiError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT entry_id, title, content, tags, embedding, created_at, updated_at
+                "SELECT entry_id, title, content, tags, embedding, created_at, updated_at, temporal_meta
                  FROM entries ORDER BY created_at ASC;",
             )?;
             let rows = stmt.query_map([], row_to_entry)?;
@@ -648,18 +752,26 @@ impl WikiStore {
 }
 
 /// 初始化 schema — 创建 entries 表、tags 索引与 anchors 表/索引
+///
+/// P3-W11.2:扩展 entries 表添加 `temporal_meta` 列(向后兼容 migration),
+/// 新增 `entry_relations` 表存储矛盾关系
 fn init_schema(conn: &Connection) -> Result<(), WikiError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS entries (
-            entry_id   TEXT PRIMARY KEY,
-            title      TEXT NOT NULL,
-            content    TEXT NOT NULL,
-            tags       TEXT NOT NULL,
-            embedding  BLOB NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            entry_id      TEXT PRIMARY KEY,
+            title         TEXT NOT NULL,
+            content       TEXT NOT NULL,
+            tags          TEXT NOT NULL,
+            embedding     BLOB NOT NULL,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            temporal_meta TEXT
         );",
     )?;
+
+    // P3-W11.2: 已有数据库 migration — 添加 temporal_meta 列(若不存在)
+    // WHY:`CREATE TABLE IF NOT EXISTS` 不会修改已有表结构,需 ALTER TABLE 补列
+    migrate_add_temporal_meta_column(conn)?;
 
     // 创建 tags 索引(加速 list_by_tag 的 LIKE 查询)
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_entries_tags ON entries(tags);")?;
@@ -682,6 +794,51 @@ fn init_schema(conn: &Connection) -> Result<(), WikiError> {
         "CREATE INDEX IF NOT EXISTS idx_anchors_entity ON anchors(entity_id);
          CREATE INDEX IF NOT EXISTS idx_anchors_layer ON anchors(layer);",
     )?;
+
+    // P3-W11.2: 创建 entry_relations 表(矛盾关系图谱)
+    // WHY(P3-W11.2 D12):spec.md:298 "写入路径检测 Contradicts 关系 → 标记过渡期不删旧记录"
+    // 关系记录保留谱系完整性,旧条目被标记 Historical 后仍可通过关系追溯
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS entry_relations (
+            relation_id TEXT PRIMARY KEY,
+            source_id   TEXT NOT NULL,
+            target_id   TEXT NOT NULL,
+            kind        TEXT NOT NULL,
+            evidence    TEXT NOT NULL,
+            confidence  REAL NOT NULL,
+            created_at  TEXT NOT NULL,
+            FOREIGN KEY (source_id) REFERENCES entries(entry_id),
+            FOREIGN KEY (target_id) REFERENCES entries(entry_id)
+        );",
+    )?;
+
+    // 创建关系索引(加速按 source/target 查询矛盾关系)
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_relations_source ON entry_relations(source_id);
+         CREATE INDEX IF NOT EXISTS idx_relations_target ON entry_relations(target_id);",
+    )?;
+
+    Ok(())
+}
+
+/// Migration:为已有 entries 表添加 `temporal_meta` 列(P3-W11.2 向后兼容)
+///
+/// WHY:已有数据库的 entries 表无 temporal_meta 列,需 ALTER TABLE 补列。
+/// 用 `PRAGMA table_info` 检查列是否存在,避免重复 ADD COLUMN 报错。
+/// 新列默认 NULL,老条目反序列化为 `temporal_meta = None`(视为 Current)。
+fn migrate_add_temporal_meta_column(conn: &Connection) -> Result<(), WikiError> {
+    let has_temporal_meta: bool = {
+        let mut stmt = conn.prepare("PRAGMA table_info(entries);")?;
+        let column_names: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        column_names.iter().any(|c| c == "temporal_meta")
+    };
+
+    if !has_temporal_meta {
+        conn.execute_batch("ALTER TABLE entries ADD COLUMN temporal_meta TEXT;")?;
+    }
 
     Ok(())
 }
@@ -711,6 +868,17 @@ fn run_writer(mut conn: Connection, rx: mpsc::Receiver<WriteOp>, fts: FtsCapabil
             WriteOp::MarkDangling(anchor_id, respond) => {
                 let _ = respond.send(writer_mark_dangling(&conn, anchor_id));
             }
+            // P3-W11.2: 带矛盾检测的插入 — 事务内原子执行
+            WriteOp::InsertWithContradictionCheck {
+                entry,
+                target_ids,
+                relations,
+                respond,
+            } => {
+                let _ = respond.send(writer_insert_with_contradiction_check(
+                    &mut conn, entry, target_ids, relations, fts,
+                ));
+            }
         }
     }
 }
@@ -730,12 +898,17 @@ fn writer_insert_core(conn: &Connection, entry: &WikiEntry) -> Result<bool, Wiki
     let embedding_blob = embedding_to_blob(&entry.embedding);
     let created_iso = entry.created_at.to_rfc3339();
     let updated_iso = entry.updated_at.to_rfc3339();
+    // P3-W11.2: temporal_meta 序列化为 JSON(Some → JSON 字符串,None → NULL)
+    let temporal_meta_json: Option<String> = match &entry.temporal_meta {
+        Some(meta) => Some(serde_json::to_string(meta)?),
+        None => None,
+    };
 
     // 第一步:尝试插入;若 entry_id 已存在则静默忽略。
     conn.execute(
         "INSERT OR IGNORE INTO entries
-            (entry_id, title, content, tags, embedding, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+            (entry_id, title, content, tags, embedding, created_at, updated_at, temporal_meta)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
         params![
             &entry.entry_id,
             &entry.title,
@@ -744,6 +917,7 @@ fn writer_insert_core(conn: &Connection, entry: &WikiEntry) -> Result<bool, Wiki
             &embedding_blob,
             &created_iso,
             &updated_iso,
+            &temporal_meta_json,
         ],
     )?;
     let is_new = conn.changes() > 0;
@@ -756,7 +930,8 @@ fn writer_insert_core(conn: &Connection, entry: &WikiEntry) -> Result<bool, Wiki
                  content = ?3,
                  tags = ?4,
                  embedding = ?5,
-                 updated_at = ?6
+                 updated_at = ?6,
+                 temporal_meta = ?7
              WHERE entry_id = ?1;",
             params![
                 &entry.entry_id,
@@ -765,6 +940,7 @@ fn writer_insert_core(conn: &Connection, entry: &WikiEntry) -> Result<bool, Wiki
                 &tags_json,
                 &embedding_blob,
                 &updated_iso,
+                &temporal_meta_json,
             ],
         )?;
     }
@@ -790,6 +966,153 @@ fn writer_insert(
         fts::sync_fts_insert(conn, &entry)?;
     }
     Ok(is_new)
+}
+
+/// 写入线程:带矛盾检测的插入(P3-W11.2)— 事务内原子执行
+///
+/// 操作序列(单事务,保证原子性):
+/// 1. 标记旧条目(target_ids)为 Historical(更新 temporal_meta,INV-8 单调性)
+/// 2. 写入矛盾关系(relations)到 `entry_relations` 表
+/// 3. 写入新条目(entry,保持 Current,复用 `writer_insert_core`)
+/// 4. FTS5 索引同步(若可用)
+///
+/// WHY 事务:避免 TOCTOU + 保证原子性(部分失败回滚,谱系完整性)
+///
+/// # INV-8 归档单调性
+///
+/// 标记 Historical 是单向降级(Current → Historical),不可逆向。
+/// `mark_entry_historical` 对已是 Historical 的条目为 no-op,保证幂等。
+///
+/// 返回 `true` 表示新条目真实新增(UPSERT 已存在条目时返回 false)
+fn writer_insert_with_contradiction_check(
+    conn: &mut Connection,
+    entry: WikiEntry,
+    target_ids: Vec<String>,
+    relations: Vec<EntryRelation>,
+    fts: FtsCapability,
+) -> Result<bool, WikiError> {
+    // 开启事务 — 所有操作原子执行(部分失败自动回滚)
+    let tx = conn.transaction()?;
+
+    // 1. 写入新条目(保持 Current,复用 writer_insert_core)
+    //
+    // WHY 先写新条目(P3-W11.2.4 修复):
+    // entry_relations 表有 FOREIGN KEY 约束引用 entries(entry_id),
+    // 矛盾关系的 source_id(新条目)必须先存在于 entries 表才能写入关系记录。
+    // 原顺序(先标记 Historical → 写关系 → 写新条目)导致 source_id 尚未存在,
+    // 触发 "FOREIGN KEY constraint failed"(SQLite extended_code 787)。
+    // 调整为:先写新条目 → 标记旧条目 Historical → 写矛盾关系,确保 FK 完整性。
+    // Transaction: Deref<Target=Connection>,&tx 自动解引用为 &Connection
+    let is_new = writer_insert_core(&tx, &entry)?;
+
+    // 2. 标记旧条目为 Historical(P3-W11.2 INV-8 单调性)
+    for target_id in &target_ids {
+        mark_entry_historical(&tx, target_id)?;
+    }
+
+    // 3. 写入矛盾关系到 entry_relations 表(INSERT OR REPLACE 保证幂等)
+    //
+    // WHY 此时写入:新条目(步骤 1)与旧条目(步骤 2 标记 Historical 但仍存在于 entries 表)
+    // 均已存在,FOREIGN KEY 约束(source_id/target_id → entries.entry_id)可满足。
+    for rel in &relations {
+        tx.execute(
+            "INSERT OR REPLACE INTO entry_relations
+                (relation_id, source_id, target_id, kind, evidence, confidence, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+            params![
+                &rel.relation_id,
+                &rel.source_id,
+                &rel.target_id,
+                rel.kind.as_str(),
+                &rel.evidence,
+                rel.confidence,
+                rel.created_at.to_rfc3339(),
+            ],
+        )?;
+    }
+
+    // 4. FTS5 索引同步(若可用,保证全文检索与数据一致)
+    if fts.is_available() {
+        fts::sync_fts_insert(&tx, &entry)?;
+    }
+
+    tx.commit()?;
+    Ok(is_new)
+}
+
+/// 在事务内标记条目为 Historical(P3-W11.2 INV-8 单调性)
+///
+/// 逻辑(与 `WikiEntry::mark_historical` 一致,作用于数据库行):
+/// - 现有 temporal_meta 存在 → 保留 `valid_from`/`confidence`,仅改 `transition_type = Historical`
+/// - 现有 temporal_meta 为 None → 创建新的 Historical meta(`valid_from=now`, `confidence=0.5`)
+///
+/// WHY confidence=0.5:被矛盾的旧条目置信度降低,但保留谱系(不删除,INV-8)
+///
+/// # 幂等性
+///
+/// 对已是 Historical 的条目为 no-op(`transition_type` 不变),保证幂等。
+///
+/// # 参数
+///
+/// - `tx`:事务引用(确保在事务内执行,避免部分更新)
+/// - `entry_id`:待标记的条目 ID
+fn mark_entry_historical(tx: &Transaction, entry_id: &str) -> Result<(), WikiError> {
+    // 读取现有 temporal_meta(Option<String>,NULL → None)
+    //
+    // WHY 用 Option<String> 而非 String 读取(P3-W11.2.4 修复):
+    // `row.get::<_, String>(0)` 对 NULL 值返回 `Err(InvalidColumnType)`,
+    // 而 `.optional()` 只处理 `QueryReturnedNoRows`,不处理 `InvalidColumnType`,
+    // 导致老条目(temporal_meta=NULL)的矛盾检测写入失败。
+    // 用 `Option<String>` 让 NULL 返回 `Ok(None)`,`.flatten()` 展平 `Option<Option<String>>`。
+    let current_meta_json: Option<String> = tx
+        .query_row(
+            "SELECT temporal_meta FROM entries WHERE entry_id = ?1;",
+            params![entry_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+
+    // 构造 Historical 状态的 temporal_meta
+    let now_ts = Utc::now().timestamp();
+    let new_meta = match current_meta_json {
+        Some(json) => {
+            // 解析现有 meta,更新 transition_type(保留 valid_from/confidence)
+            // WHY unwrap_or_else:JSON 损坏时降级为新 meta,不阻断写入(防御性边界)
+            let mut meta: TemporalMeta =
+                serde_json::from_str(&json).unwrap_or_else(|_| TemporalMeta::new(now_ts, 1.0));
+            // INV-8 单调性:已是 Historical 则 no-op;否则改 transition_type
+            if meta.transition_type != TransitionType::Historical {
+                meta.transition_type = TransitionType::Historical;
+            }
+            meta
+        }
+        None => {
+            // 老条目无 temporal_meta,创建 Historical meta
+            // WHY confidence=0.5:被矛盾的旧条目置信度降低(从默认 1.0 降级)
+            TemporalMeta {
+                valid_from: now_ts,
+                valid_until: Some(now_ts),
+                transition_type: TransitionType::Historical,
+                confidence: 0.5,
+            }
+        }
+    };
+    let new_meta_json = serde_json::to_string(&new_meta)?;
+
+    // UPDATE 写回(若条目不存在,updated=0,仅 warning 不阻断)
+    // WHY 不返回错误:矛盾检测基于读连接池快照,写入时可能已被其他操作删除
+    let updated = tx.execute(
+        "UPDATE entries SET temporal_meta = ?2 WHERE entry_id = ?1;",
+        params![entry_id, &new_meta_json],
+    )?;
+    if updated == 0 {
+        tracing::warn!(
+            entry_id,
+            "mark_entry_historical: target entry not found, skipping"
+        );
+    }
+    Ok(())
 }
 
 /// 写入线程:执行 delete 并联动标记悬空锚点
@@ -904,7 +1227,7 @@ fn writer_resolve_anchor(conn: &Connection, anchor_id: Uuid) -> Result<WikiEntry
 
     let entry_result = conn
         .query_row(
-            "SELECT entry_id, title, content, tags, embedding, created_at, updated_at
+            "SELECT entry_id, title, content, tags, embedding, created_at, updated_at, temporal_meta
              FROM entries WHERE entry_id = ?1;",
             params![entity_id],
             row_to_entry,
@@ -974,6 +1297,8 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<WikiEntr
     let embedding_blob: Vec<u8> = row.get(4)?;
     let created_iso: String = row.get(5)?;
     let updated_iso: String = row.get(6)?;
+    // P3-W11.2: temporal_meta 可空(老条目为 NULL,向后兼容视为 None→Current)
+    let temporal_meta_json: Option<String> = row.get(7).ok();
 
     // tags JSON 反序列化,失败时降级为空数组(不阻断查询)
     let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
@@ -986,6 +1311,11 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<WikiEntr
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now());
 
+    // P3-W11.2: temporal_meta JSON 反序列化,失败或为空时降级为 None(向后兼容)
+    let temporal_meta = temporal_meta_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<TemporalMeta>(s).ok());
+
     Ok(WikiEntry {
         entry_id,
         title,
@@ -994,6 +1324,7 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<WikiEntr
         embedding: blob_to_embedding(&embedding_blob),
         created_at,
         updated_at,
+        temporal_meta,
     })
 }
 

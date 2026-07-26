@@ -51,6 +51,9 @@ impl WikiGenerator {
                     embedding,
                     created_at: now,
                     updated_at: now,
+                    // P3-W11.2: 新生成条目默认无 temporal_meta(视为 Current,向后兼容)
+                    // WHY None: is_current() 对 None 返回 true,语义等价于 Current 状态
+                    temporal_meta: None,
                 }
             })
             .collect()

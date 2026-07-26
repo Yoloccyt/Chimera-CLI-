@@ -63,7 +63,8 @@ async fn test_omni_sparse_masks_computed_event_published() {
             // sparsity 应在 [0.0, 1.0] 范围内
             assert!((0.0..=1.0).contains(&sparsity), "sparsity 应在 [0.0, 1.0]");
             // mask_hash 应与掩码自身计算的哈希一致
-            let expected_hash = masks.mask_hash();
+            // ADR-033 P2-W5.2:mask_hash 通过自由函数现算(L0 类型无缓存字段)
+            let expected_hash = osa_coordinator::compute_omni_mask_hash(&masks).unwrap();
             assert_eq!(mask_hash, expected_hash, "事件中的 mask_hash 应与掩码一致");
             // sparsity 应与掩码的平均稀疏度一致
             let expected_sparsity = masks.average_sparsity();
@@ -140,7 +141,11 @@ async fn test_different_profiles_produce_different_mask_hashes() {
 
     // 不同复杂度应产生不同掩码哈希
     assert_ne!(hash1, hash2, "不同复杂度的掩码哈希应不同");
-    assert_ne!(masks1.mask_hash(), masks2.mask_hash());
+    // ADR-033 P2-W5.2:mask_hash 通过自由函数现算
+    assert_ne!(
+        osa_coordinator::compute_omni_mask_hash(&masks1).unwrap(),
+        osa_coordinator::compute_omni_mask_hash(&masks2).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -160,10 +165,10 @@ async fn test_same_profile_produces_same_mask_hash() {
     let _event2 = rx.recv_timeout(Duration::from_secs(1)).await.unwrap();
 
     // 相同 profile 应产生相同掩码哈希
-    // mask_hash() 返回 &str(构造时预计算),无需 unwrap
+    // ADR-033 P2-W5.2:mask_hash 通过自由函数现算(L0 类型无缓存字段)
     assert_eq!(
-        masks1.mask_hash(),
-        masks2.mask_hash(),
+        osa_coordinator::compute_omni_mask_hash(&masks1).unwrap(),
+        osa_coordinator::compute_omni_mask_hash(&masks2).unwrap(),
         "相同 profile 的掩码哈希应相同"
     );
 }

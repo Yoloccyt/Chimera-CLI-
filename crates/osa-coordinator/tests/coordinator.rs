@@ -297,7 +297,7 @@ async fn test_concurrent_compute_masks() {
     let mut mask_hashes = Vec::with_capacity(10);
     for handle in handles {
         let masks = handle.await.unwrap().unwrap();
-        mask_hashes.push(masks.mask_hash().to_string());
+        mask_hashes.push(osa_coordinator::compute_omni_mask_hash(&masks).unwrap());
     }
 
     // 验证所有 mask_hash 一致(纯函数,相同输入应产生相同输出)

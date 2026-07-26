@@ -13,6 +13,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 rmp-serde = { workspace = true }
+# arc-swap:P2-W7.2.3 RCU 原语(内环最终一致 + 单调读)
+arc-swap = { workspace = true }
 # L1 Core 共享领域类型(Quest 等),event-bus 与 nexus-core 同层互引允许(§2.2)
 nexus-core = { path = "../nexus-core" }
 # Prometheus 指标注册表与文本编码(Phase V Task V-8:/metrics 端点导出)
@@ -27,4 +29,9 @@ criterion = { workspace = true }
 
 [[bench]]
 name = "bus_bench"
+harness = false
+
+# P2-W7.1.2: 膜投递性能基准(跨膜事件投递 p95<10ms 验收)
+[[bench]]
+name = "membrane_delivery_bench"
 harness = false
