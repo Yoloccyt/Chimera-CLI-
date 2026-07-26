@@ -63,6 +63,7 @@
 //!   active/candidate 指针，不修改 spec 内容本身
 
 use crate::error::GsoeError;
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::{HarnessSpec, HarnessSpecError, ImmutableSurface};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -224,43 +225,109 @@ pub struct SpecRegistry {
     active: HashMap<String, u32>,
     /// 按 name 索引的候选版本号（A/B 测试用）
     candidates: HashMap<String, u32>,
+    /// P5.2.3: 可选的 EventBus 连接,用于在注册成功后发布 SpecRegistered 事件
+    ///
+    /// WHY Option<EventBus>:保持向后兼容(P4-W15.2.1 既有测试用 new() 创建
+    /// 无 bus 的注册表)。需要发布事件的调用方使用 with_event_bus(bus)。
+    event_bus: Option<EventBus>,
 }
 
 impl SpecRegistry {
-    /// 创建空注册表
+    /// 创建空注册表（无 EventBus 连接）
     pub fn new() -> Self {
         Self {
             specs: HashMap::new(),
             active: HashMap::new(),
             candidates: HashMap::new(),
+            event_bus: None,
         }
     }
 
-    /// 注册新 spec 版本
+    /// P5.2.3: 创建带 EventBus 连接的 SpecRegistry
+    ///
+    /// 注册成功后会通过 `publish_blocking` 发布 `SpecRegistered` 事件,
+    /// 通知下游订阅者(parliament / efficiency-monitor / repo-wiki)。
+    ///
+    /// WHY 与 GsoeEvolutionEngine::with_event_bus 模式一致:
+    /// 构造器 consume bus by value(EventBus 内部 Arc,克隆廉价),
+    /// 调用方在 `with_event_bus` 之前无需 subscribe(因 register 是 sync 方法,
+    /// publish_blocking 立即返回,订阅者可异步消费)。
+    ///
+    /// # 参数
+    /// - `bus`: EventBus 连接(将被持有,用于后续 register 时发布事件)
+    pub fn with_event_bus(bus: EventBus) -> Self {
+        let mut registry = Self::new();
+        registry.event_bus = Some(bus);
+        registry
+    }
+
+    /// P5.2.3: 返回 EventBus 连接的引用(供测试与审计)
+    pub fn event_bus(&self) -> Option<&EventBus> {
+        self.event_bus.as_ref()
+    }
+
+    /// 注册新 spec 版本(默认 source="spec-registry")
+    ///
+    /// P5.2.3:委托给 `register_with_source(spec, "spec-registry")`,
+    /// 保持 P4-W15.2.1 既有调用方向后兼容(无需指定 source)。
+    ///
+    /// # 参数
+    /// - `spec`: 待注册的 HarnessSpec(必须通过 validate)
+    ///
+    /// # 返回
+    /// - `Ok(u32)`: 注册成功,返回版本号
+    /// - `Err(SpecRegistryError)`: 注册失败
+    pub fn register(&mut self, spec: HarnessSpec) -> Result<u32, SpecRegistryError> {
+        self.register_with_source(spec, "spec-registry")
+    }
+
+    /// P5.2.3: 注册新 spec 版本(显式指定 source)
+    ///
+    /// source 字段用于在 `SpecRegistered` 事件中标注注册来源,下游订阅者
+    /// 可据此区分不同注册路径:
+    /// - `"spec-registry"`:默认(由 `register` 调用)
+    /// - `"rhi-cg-channel-b"`:通道 B 否决通过后注册(本任务 P5.2.3 主路径)
+    /// - `"manual"`:手动注册(如运维人员介入)
+    /// - `"ab-test"`:A/B 测试场景
     ///
     /// # 流程
     /// 1. 调用 `spec.validate()` 确保不可进化面合规
     /// 2. 检查 (name, version) 是否已存在 → VersionConflict
-    /// 3. 检查 parent 链存在性 → ParentMissing
-    /// 4. 检查同名旧版本 immutable 标记 → ImmutableSpecOverwrite
+    /// 3. 检查同名旧版本 immutable 标记 → ImmutableSpecOverwrite
+    /// 4. 检查 parent 链存在性 → ParentMissing
     /// 5. 插入到 `specs[name][version]`
-    /// 6. 若 parent=None（初始版本），设置 active[name] = version
+    /// 6. 若 parent=None(初始版本),设置 active[name] = version
+    /// 7. **P5.2.3 新增**:若已连接 EventBus,发布 SpecRegistered 事件
+    ///
+    /// # 不可进化面守护(P4-W15.2.3 + P5.2.3 强化)
+    ///
+    /// 三层守护:
+    /// 1. **compile-time**:`HarnessSpec::validate()` 的 `ImmutableSurfaceViolation`
+    /// 2. **runtime-register**:同名旧版本 `immutable=true` 时 `ImmutableSpecOverwrite`
+    /// 3. **runtime-channel-B**(P5.2.3 强化):`into_gsoe_error` 将上述错误映射为
+    ///    `GsoeError::ImmutableSurfaceViolated`,供通道 B 否决路径统一处理
     ///
     /// # 参数
-    /// - `spec`: 待注册的 HarnessSpec（必须通过 validate）
+    /// - `spec`: 待注册的 HarnessSpec(必须通过 validate)
+    /// - `source`: 注册来源标识(写入 SpecRegistered.source 字段)
     ///
     /// # 返回
-    /// - `Ok(u32)`: 注册成功，返回版本号
-    /// - `Err(SpecRegistryError)`: 注册失败
+    /// - `Ok(u32)`: 注册成功,返回版本号
+    /// - `Err(SpecRegistryError)`: 注册失败(校验/冲突/parent 缺失/不可进化面覆盖)
     ///
     /// # 防注入保证
-    /// - 仅接受已 validate 的 HarnessSpec，不解析 TOML
-    /// - 不修改 spec 内容（append-only 插入）
-    pub fn register(&mut self, spec: HarnessSpec) -> Result<u32, SpecRegistryError> {
-        // 1. 调用 validate() 确保不可进化面合规（P4-W15.2.3 不可进化面硬编码）
+    /// - 仅接受已 validate 的 HarnessSpec,不解析 TOML
+    /// - 不修改 spec 内容(append-only 插入)
+    /// - source 字段长度受 String 限制,无注入风险
+    pub fn register_with_source(
+        &mut self,
+        spec: HarnessSpec,
+        source: &str,
+    ) -> Result<u32, SpecRegistryError> {
+        // 1. 调用 validate() 确保不可进化面合规(P4-W15.2.3 不可进化面硬编码)
         spec.validate()?;
 
-        // 2. 提取字段信息
+        // 2. 提取字段信息(在 move 之前完成,供后续事件发布使用)
         let name = spec.meta.name.clone();
         let version = spec.meta.version;
         let parent = spec.meta.parent;
@@ -275,7 +342,7 @@ impl SpecRegistry {
         }
 
         // 4. 检查同名旧版本的 immutable 标记
-        // WHY: 若任何已注册版本 immutable=true，禁止注册新版本
+        // WHY: 若任何已注册版本 immutable=true,禁止注册新版本
         //      这是不可进化面的运行时守护
         if let Some(versions) = self.specs.get(&name) {
             for existing in versions.values() {
@@ -285,7 +352,7 @@ impl SpecRegistry {
             }
         }
 
-        // 5. 检查 parent 链存在性（若 parent=Some(p)）
+        // 5. 检查 parent 链存在性(若 parent=Some(p))
         if let Some(parent_version) = parent {
             let parent_exists = self
                 .specs
@@ -305,9 +372,39 @@ impl SpecRegistry {
             .or_default()
             .insert(version, spec);
 
-        // 7. 若 parent=None（初始版本），设为 active
+        // 7. 若 parent=None(初始版本),设为 active
         if parent.is_none() {
-            self.active.insert(name, version);
+            self.active.insert(name.clone(), version);
+        }
+
+        // 8. P5.2.3: 发布 SpecRegistered 事件(若已连接 EventBus)
+        //
+        // WHY publish_blocking 而非 publish: register_with_source 是 sync 方法,
+        //     无法 await(§4.4 红线 8:sync 方法用 publish_blocking,async 用 publish().await)
+        // WHY 失败仅 warn: 注册本身是 source of truth(已写入 specs 表),
+        //     事件丢失仅导致下游未通知,可由下次注册或主动查询 SpecRegistry 补偿。
+        //     与 GsoeEvolutionEngine::publish_evolution_event 模式一致。
+        // WHY 在所有校验通过后才发布:确保事件语义 truthful(注册确实成功),
+        //     避免发布"虚假成功"事件误导下游
+        if let Some(bus) = &self.event_bus {
+            // WHY name.clone():event 构造 move name,但失败日志仍需引用 name,
+            //     故先 clone 一份供日志使用(避免 move 后借用编译错误)
+            let name_for_log = name.clone();
+            let event = NexusEvent::SpecRegistered {
+                metadata: EventMetadata::new("gsoe-evolution"),
+                spec_name: name,
+                spec_version: version,
+                parent_version: parent,
+                source: source.to_string(),
+            };
+            if let Err(e) = bus.publish_blocking(event) {
+                tracing::warn!(
+                    error = %e,
+                    spec_name = %name_for_log,
+                    spec_version = version,
+                    "发布 SpecRegistered 事件失败"
+                );
+            }
         }
 
         Ok(version)
@@ -495,12 +592,46 @@ impl SpecRegistry {
         HarnessSpec::immutable_surfaces()
     }
 
-    /// 将 SpecRegistryError 转换为 GsoeError（向后兼容，供 engine 调用）
+    /// 将 SpecRegistryError 转换为 GsoeError(P5.2.3 强化:不可进化面违反映射)
     ///
-    /// WHY 提供: GsoeEvolutionEngine 未来可能使用 SpecRegistry，需统一错误类型
+    /// P5.2.3 增强:三层不可进化面守护的第三层(runtime-channel-B),
+    /// 将以下 SpecRegistryError 变体映射为 `GsoeError::ImmutableSurfaceViolated`,
+    /// 供通道 B 否决路径统一处理:
+    /// - `ImmutableSpecOverwrite`:同名旧版本 immutable=true
+    /// - `ValidationFailed(ImmutableSurfaceViolation)`:spec 触碰不可进化面资源
+    /// - `ValidationFailed(ImmutableMetaNotMarked)`:不可进化面 spec 未标记 immutable=true
+    ///
+    /// 其他 SpecRegistryError(VersionConflict / ParentMissing / SpecNotFound 等)
+    /// 仍归类为 `GsoeError::ConfigError`,这些与不可进化面无关。
     pub fn into_gsoe_error(err: SpecRegistryError) -> GsoeError {
-        GsoeError::ConfigError {
-            reason: err.to_string(),
+        match err {
+            SpecRegistryError::ImmutableSpecOverwrite { name } => GsoeError::ImmutableSurfaceViolated {
+                reason: format!(
+                    "spec '{}' 同名旧版本 immutable=true,不允许注册新版本",
+                    name
+                ),
+            },
+            SpecRegistryError::ValidationFailed(HarnessSpecError::ImmutableSurfaceViolation {
+                location,
+                surface,
+            }) => GsoeError::ImmutableSurfaceViolated {
+                reason: format!(
+                    "spec 触碰不可进化面: location={}, surface={}",
+                    location,
+                    surface.as_str()
+                ),
+            },
+            SpecRegistryError::ValidationFailed(HarnessSpecError::ImmutableMetaNotMarked {
+                name,
+            }) => GsoeError::ImmutableSurfaceViolated {
+                reason: format!(
+                    "spec '{}' 在不可进化面清单中但未标记 immutable=true",
+                    name
+                ),
+            },
+            other => GsoeError::ConfigError {
+                reason: other.to_string(),
+            },
         }
     }
 
@@ -531,6 +662,7 @@ impl Default for SpecRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use event_bus::{EventBus, NexusEvent};
     use nexus_contracts::{ContractSpec, HarnessMeta, HopSpec, RetryPolicy};
 
     // ============================================================
@@ -1276,5 +1408,367 @@ mod tests {
         // active=1，但 v2 仍应存在
         assert!(registry.get("quest-parse", 2).is_some());
         assert_eq!(registry.version_count("quest-parse"), 2);
+    }
+
+    // ============================================================
+    // P5.2.3: EventBus 集成 + SpecRegistered 事件测试
+    // ============================================================
+
+    #[test]
+    fn test_new_creates_registry_without_event_bus() {
+        // P5.2.3: 验证 new() 不连接 EventBus(向后兼容)
+        let registry = SpecRegistry::new();
+        assert!(registry.event_bus().is_none());
+    }
+
+    #[test]
+    fn test_with_event_bus_creates_registry_with_bus() {
+        // P5.2.3: 验证 with_event_bus() 连接 EventBus
+        let bus = EventBus::new();
+        let registry = SpecRegistry::with_event_bus(bus);
+        assert!(registry.event_bus().is_some());
+    }
+
+    #[test]
+    fn test_register_without_event_bus_still_works() {
+        // P5.2.3: 向后兼容性验证 — 无 EventBus 时 register 仍正常工作
+        let mut registry = SpecRegistry::new();
+        let spec = make_spec("quest-parse", 1, None);
+        let version = registry.register(spec).expect("无 EventBus 时应正常注册");
+        assert_eq!(version, 1);
+        assert_eq!(registry.total_specs(), 1);
+    }
+
+    #[test]
+    fn test_register_with_event_bus_publishes_spec_registered_event() {
+        // P5.2.3: 验证 register 在有 EventBus 时发布 SpecRegistered 事件
+        //
+        // §4.4 红线 3: subscribe 必须在 publish 之前同步调用,
+        // 否则事件会被静默丢弃(broadcast 不缓存历史)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe(); // 先订阅,确保收到事件
+        let mut registry = SpecRegistry::with_event_bus(bus);
+
+        // 注册一个初始版本 spec
+        let spec = make_spec("quest-parse", 1, None);
+        let version = registry.register(spec).expect("注册应成功");
+        assert_eq!(version, 1);
+
+        // 验证 SpecRegistered 事件已发布
+        let event = rx
+            .try_recv()
+            .expect("应有 SpecRegistered 事件")
+            .expect("事件不应为 None");
+
+        match event {
+            NexusEvent::SpecRegistered {
+                spec_name,
+                spec_version,
+                parent_version,
+                source,
+                ..
+            } => {
+                assert_eq!(spec_name, "quest-parse");
+                assert_eq!(spec_version, 1);
+                assert_eq!(parent_version, None); // 初始版本无 parent
+                assert_eq!(source, "spec-registry"); // 默认 source
+            }
+            other => panic!("期望 SpecRegistered 事件,实际: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_register_child_version_event_contains_parent() {
+        // P5.2.3: 验证注册子版本时,事件的 parent_version 字段正确填充
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut registry = SpecRegistry::with_event_bus(bus);
+
+        // 注册 v1(初始版本)
+        registry.register(make_spec("quest-parse", 1, None)).unwrap();
+        // 消费 v1 的事件
+        let _v1_event = rx.try_recv().unwrap().unwrap();
+
+        // 注册 v2(parent=1)
+        registry
+            .register(make_spec("quest-parse", 2, Some(1)))
+            .unwrap();
+
+        // 验证 v2 的事件
+        let event = rx.try_recv().unwrap().unwrap();
+        match event {
+            NexusEvent::SpecRegistered {
+                spec_name,
+                spec_version,
+                parent_version,
+                source,
+                ..
+            } => {
+                assert_eq!(spec_name, "quest-parse");
+                assert_eq!(spec_version, 2);
+                assert_eq!(parent_version, Some(1)); // 子版本的 parent 应为 1
+                assert_eq!(source, "spec-registry");
+            }
+            other => panic!("期望 SpecRegistered 事件,实际: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_register_with_source_channel_b() {
+        // P5.2.3: 验证 register_with_source 可指定 source="rhi-cg-channel-b"
+        //
+        // 这是通道 B 否决通过后的主注册路径
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut registry = SpecRegistry::with_event_bus(bus);
+
+        let spec = make_spec("quest-parse", 1, None);
+        registry
+            .register_with_source(spec, "rhi-cg-channel-b")
+            .expect("注册应成功");
+
+        let event = rx.try_recv().unwrap().unwrap();
+        match event {
+            NexusEvent::SpecRegistered { source, .. } => {
+                assert_eq!(source, "rhi-cg-channel-b");
+            }
+            other => panic!("期望 SpecRegistered 事件,实际: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_register_validation_failure_does_not_publish_event() {
+        // P5.2.3: 验证 validate() 失败时不发布事件(避免虚假成功通知)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut registry = SpecRegistry::with_event_bus(bus);
+
+        // version=0 违反 validate() 的 InvalidVersion 规则
+        let mut bad_spec = make_spec("quest-parse", 0, None);
+        bad_spec.meta.version = 0;
+
+        let result = registry.register(bad_spec);
+        assert!(result.is_err());
+
+        // 验证没有事件被发布
+        let event = rx.try_recv().expect("try_recv 不应报错");
+        assert!(
+            event.is_none(),
+            "validate 失败时不应发布 SpecRegistered 事件"
+        );
+    }
+
+    #[test]
+    fn test_register_version_conflict_does_not_publish_event() {
+        // P5.2.3: 验证 VersionConflict 失败时不发布事件
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut registry = SpecRegistry::with_event_bus(bus);
+
+        // 第一次注册成功(发布事件)
+        registry.register(make_spec("quest-parse", 1, None)).unwrap();
+        let _first_event = rx.try_recv().unwrap().unwrap();
+
+        // 第二次重复注册(版本冲突)
+        let result = registry.register(make_spec("quest-parse", 1, None));
+        assert!(matches!(
+            result,
+            Err(SpecRegistryError::VersionConflict { .. })
+        ));
+
+        // 验证没有新事件被发布
+        let event = rx.try_recv().expect("try_recv 不应报错");
+        assert!(
+            event.is_none(),
+            "VersionConflict 失败时不应发布 SpecRegistered 事件"
+        );
+    }
+
+    #[test]
+    fn test_register_immutable_overwrite_does_not_publish_event() {
+        // P5.2.3: 验证 ImmutableSpecOverwrite 失败时不发布事件
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut registry = SpecRegistry::with_event_bus(bus);
+
+        // 注册不可进化 v1(成功,发布事件)
+        registry
+            .register(make_immutable_spec("critical-rule", 1))
+            .unwrap();
+        let _first_event = rx.try_recv().unwrap().unwrap();
+
+        // 尝试注册 v2(被不可进化面守护拒绝)
+        let result = registry.register(make_spec("critical-rule", 2, Some(1)));
+        assert!(matches!(
+            result,
+            Err(SpecRegistryError::ImmutableSpecOverwrite { .. })
+        ));
+
+        // 验证没有新事件被发布
+        let event = rx.try_recv().expect("try_recv 不应报错");
+        assert!(
+            event.is_none(),
+            "ImmutableSpecOverwrite 失败时不应发布 SpecRegistered 事件"
+        );
+    }
+
+    #[test]
+    fn test_register_parent_missing_does_not_publish_event() {
+        // P5.2.3: 验证 ParentMissing 失败时不发布事件
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut registry = SpecRegistry::with_event_bus(bus);
+
+        // parent=5 但 v5 未注册
+        let result = registry.register(make_spec("quest-parse", 6, Some(5)));
+        assert!(matches!(
+            result,
+            Err(SpecRegistryError::ParentMissing { .. })
+        ));
+
+        // 验证没有事件被发布
+        let event = rx.try_recv().expect("try_recv 不应报错");
+        assert!(
+            event.is_none(),
+            "ParentMissing 失败时不应发布 SpecRegistered 事件"
+        );
+    }
+
+    #[test]
+    fn test_multiple_registrations_publish_multiple_events() {
+        // P5.2.3: 验证多次注册会发布多个事件(无事件合并/丢失)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut registry = SpecRegistry::with_event_bus(bus);
+
+        // 注册 3 个不同 spec
+        registry.register(make_spec("spec-a", 1, None)).unwrap();
+        registry.register(make_spec("spec-b", 1, None)).unwrap();
+        registry.register(make_spec("spec-c", 1, None)).unwrap();
+
+        // 应收到 3 个 SpecRegistered 事件
+        for expected_name in ["spec-a", "spec-b", "spec-c"] {
+            let event = rx.try_recv().unwrap().unwrap();
+            match event {
+                NexusEvent::SpecRegistered { spec_name, .. } => {
+                    assert_eq!(spec_name, expected_name);
+                }
+                other => panic!("期望 SpecRegistered,实际: {:?}", other),
+            }
+        }
+
+        // 验证无更多事件
+        assert!(rx.try_recv().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_event_metadata_source_is_gsoe_evolution() {
+        // P5.2.3: 验证事件 metadata.source 为 "gsoe-evolution"(发布者标识)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut registry = SpecRegistry::with_event_bus(bus);
+
+        registry.register(make_spec("quest-parse", 1, None)).unwrap();
+
+        let event = rx.try_recv().unwrap().unwrap();
+        match event {
+            NexusEvent::SpecRegistered { metadata, .. } => {
+                assert_eq!(metadata.source, "gsoe-evolution");
+            }
+            other => panic!("期望 SpecRegistered,实际: {:?}", other),
+        }
+    }
+
+    // ============================================================
+    // P5.2.3: into_gsoe_error 不可进化面违反映射测试
+    // ============================================================
+
+    #[test]
+    fn test_into_gsoe_error_maps_immutable_overwrite() {
+        // P5.2.3: ImmutableSpecOverwrite 应映射为 ImmutableSurfaceViolated
+        let err = SpecRegistryError::ImmutableSpecOverwrite {
+            name: "critical-rule".to_string(),
+        };
+        let gsoe_err = SpecRegistry::into_gsoe_error(err);
+        match gsoe_err {
+            GsoeError::ImmutableSurfaceViolated { reason } => {
+                assert!(reason.contains("critical-rule"));
+                assert!(reason.contains("immutable=true"));
+            }
+            other => panic!("期望 ImmutableSurfaceViolated,实际: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_into_gsoe_error_maps_immutable_surface_violation() {
+        // P5.2.3: ValidationFailed(ImmutableSurfaceViolation) 应映射为 ImmutableSurfaceViolated
+        // 使用 nexus_contracts::ImmutableSurface 的第一个变体做测试
+        let surface = ImmutableSurface::RedlineLockAcrossAwait;
+        let err = SpecRegistryError::ValidationFailed(
+            HarnessSpecError::ImmutableSurfaceViolation {
+                location: "contracts[0].from".to_string(),
+                surface,
+            },
+        );
+        let gsoe_err = SpecRegistry::into_gsoe_error(err);
+        match gsoe_err {
+            GsoeError::ImmutableSurfaceViolated { reason } => {
+                assert!(reason.contains("contracts[0].from"));
+                assert!(reason.contains("不可进化面"));
+            }
+            other => panic!("期望 ImmutableSurfaceViolated,实际: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_into_gsoe_error_preserves_other_errors_as_config() {
+        // P5.2.3: 非不可进化面错误仍归类为 ConfigError(向后兼容)
+        let err = SpecRegistryError::NoCandidate {
+            name: "test".to_string(),
+        };
+        let gsoe_err = SpecRegistry::into_gsoe_error(err);
+        match gsoe_err {
+            GsoeError::ConfigError { reason } => {
+                assert!(reason.contains("test"));
+                assert!(reason.contains("候选"));
+            }
+            other => panic!("期望 ConfigError,实际: {:?}", other),
+        }
+
+        // 验证 VersionConflict 也归类为 ConfigError
+        let err = SpecRegistryError::VersionConflict {
+            name: "spec-x".to_string(),
+            version: 5,
+        };
+        let gsoe_err = SpecRegistry::into_gsoe_error(err);
+        assert!(matches!(gsoe_err, GsoeError::ConfigError { .. }));
+    }
+
+    #[test]
+    fn test_into_gsoe_error_maps_immutable_meta_not_marked() {
+        // P5.2.3: ValidationFailed(ImmutableMetaNotMarked) 应映射为 ImmutableSurfaceViolated
+        let err = SpecRegistryError::ValidationFailed(HarnessSpecError::ImmutableMetaNotMarked {
+            name: "critical-redline".to_string(),
+        });
+        let gsoe_err = SpecRegistry::into_gsoe_error(err);
+        match gsoe_err {
+            GsoeError::ImmutableSurfaceViolated { reason } => {
+                assert!(reason.contains("critical-redline"));
+                assert!(reason.contains("immutable=true"));
+            }
+            other => panic!("期望 ImmutableSurfaceViolated,实际: {:?}", other),
+        }
+    }
+
+    // ============================================================
+    // P5.2.3: Default trait 测试(向后兼容)
+    // ============================================================
+
+    #[test]
+    fn test_default_creates_registry_without_event_bus() {
+        // P5.2.3: Default 实现应保持 new() 语义(无 EventBus)
+        let registry = SpecRegistry::default();
+        assert!(registry.event_bus().is_none());
+        assert_eq!(registry.total_specs(), 0);
     }
 }

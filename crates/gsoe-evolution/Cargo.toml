@@ -30,3 +30,11 @@ tempfile = { workspace = true }
 [[bench]]
 name = "evolution_benchmark"
 harness = false
+
+# P5.2.5: RHI-CG 通道 B criterion 基准(3 项)
+# - ci_gate_execute: CiGate 执行性能(MockCiGate + CargoCiGate INV-9 路径)
+# - significance_detection: SignificanceDetector p-value 计算性能
+# - spec_registry_register: SpecRegistry::register_with_source 性能(含事件发布)
+[[bench]]
+name = "channel_b_benchmark"
+harness = false
