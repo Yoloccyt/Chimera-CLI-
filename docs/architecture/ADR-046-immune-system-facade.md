@@ -33,7 +33,7 @@
 
 ### P5.3 待启动现状
 
-当前代码基线(v2.3.1-omega → v3.2.0-omega 目标,2026-07-26 核实):
+当前代码基线(v2.3.1-omega → v2.4.0-omega 实际发布,2026-07-26 核实):
 
 - [crates/chimera-mas/src/stability.rs](file:///D:/Chimera CLI/crates/chimera-mas/src/stability.rs) 已实现 `StabilityGuard`(零孤儿终态保证 + 故障隔离)、`CircuitBreaker`(三态机 Closed/Open/HalfOpen,基于 AtomicU8 CAS)、`DegradationChain`(三压力源 MemoryNearBudget/ExpertOverload/ArchiveIoContention)— 100% GREEN,SubTask 19.7-19.9 验收通过。
 - [crates/parliament/src/ahirt.rs](file:///D:/Chimera CLI/crates/parliament/src/ahirt.rs) 已实现 `AhirtRedTeam`(4 类攻击载荷 × 25 = 100 探测,探测率 >95% 阈值,周期 5 分钟)— 复用既有,作为 ReasoningTrap 探针的"自白通道"载体。

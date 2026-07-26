@@ -6,7 +6,7 @@
 > **创建日期**：2026-07-26
 > **最近更新**：2026-07-26（P5.5 完整验收通过：3 轮 × 5 任务 = 15 次评判全胜，KPI-01 = 100% / KPI-02 = 0%，复用 P5.1/P5.2/P5.3 既有组件，复杂度预算净增长 = 0；审计报告 `tests/e2e/reports/rhi_cg_audit.md`）
 > **基线代码**：v2.4.0-omega WIP（37 crate / 12 ADR / 6 v5.0 commit 已落地）
-> **目标版本**：v3.2.0-omega（按 ADR-031 附录 C 版本号协调策略）
+> **目标版本**：v2.4.0-omega（用户指定，原 v2.4.0-omega 按 ADR-031 附录 C 版本号协调策略，后由用户重命名为 v2.4.0-omega）
 > **关联设计文档**：
 >
 > * 上游：[`NEXUS-OMEGA_v5.0_系统性完整设计文档.md`](../../NEXUS-OMEGA_v5.0_系统性完整设计文档.md)（v5.0-omega CONVERGENCE）
@@ -37,11 +37,11 @@
 
 ### 0.1 文档目的
 
-本计划文档基于 [`NEXUS-OMEGA_v5.0_系统性完整设计文档.md`](../../NEXUS-OMEGA_v5.0_系统性完整设计文档.md) 第 §14 节路线图，结合 v5.0 P1-P4 阶段已落地实施情况（6 commit + 9 ADR + 37 crate），制定 **P5 阶段（进化闭环收尾）** 的详细实施计划，并以 v3.2.0-omega 完成整体发布。
+本计划文档基于 [`NEXUS-OMEGA_v5.0_系统性完整设计文档.md`](../../NEXUS-OMEGA_v5.0_系统性完整设计文档.md) 第 §14 节路线图，结合 v5.0 P1-P4 阶段已落地实施情况（6 commit + 9 ADR + 37 crate），制定 **P5 阶段（进化闭环收尾）** 的详细实施计划，并以 v2.4.0-omega 完成整体发布。
 
 ### 0.2 核心命题
 
-**收敛**：v5.0 设计文档的核心使命"收敛四份文档"在 P1-P4 已基本完成；P5 阶段需完成最后 20% 工作 —— **RHI-CG 双通道嫁接 + ImmuneSystem facade 合并 + §5.2 九项裁决对账 + 5 任务集进化 3 轮验收**，达成北极星指标（Harness lineage 相邻版本累计胜率 ≥60%），完成 v3.2.0-omega 发布。
+**收敛**：v5.0 设计文档的核心使命"收敛四份文档"在 P1-P4 已基本完成；P5 阶段需完成最后 20% 工作 —— **RHI-CG 双通道嫁接 + ImmuneSystem facade 合并 + §5.2 九项裁决对账 + 5 任务集进化 3 轮验收**，达成北极星指标（Harness lineage 相邻版本累计胜率 ≥60%），完成 v2.4.0-omega 发布。
 
 ### 0.3 P5 阶段六项核心交付物
 
@@ -52,7 +52,7 @@
 | 3 | **ImmuneSystem facade**（悖论三探针）     | `crates/parliament/src/immune_system.rs`                           | MemoryParadox + ReasoningTrap + EvolutionHack 三探针 + 复用既有 stability.rs |
 | 4 | **§5.2 九项裁决对账**                    | `.trae/specs/nexus-omega-v5-implementation-plan/reconciliation.md` | 9 项裁决逐条 PR 对账完成                                                       |
 | 5 | **5 任务集进化 3 轮验收**                  | `tests/e2e/rhi_cg_validation.rs`                                   | Harness lineage 累计胜率 ≥60%；通道 B 误杀 <5%                                 |
-| 6 | **v3.2.0-omega 整体发布**              | `CHANGELOG.md` + tag `v3.2.0-omega`                                | 2877+ 测试全绿 + clippy 零警告 + cargo audit 零漏洞 + 5 平台 matrix build         |
+| 6 | **v2.4.0-omega 整体发布**              | `CHANGELOG.md` + tag `v2.4.0-omega`                                | 2877+ 测试全绿 + clippy 零警告 + cargo audit 零漏洞 + 5 平台 matrix build         |
 
 ### 0.4 关键约束
 
@@ -100,20 +100,20 @@
 
 #### 已批准 ADR（12 份）
 
-| ADR     | 主题                                             | 状态         |
-| ------- | ---------------------------------------------- | ---------- |
-| ADR-030 | unsafe 红线不特批，安全等价物重写                           | ✅ Accepted |
-| ADR-031 | Harness-as-Spec + omega-learner 边界（含附录 C 版本协调） | ✅ Accepted |
-| ADR-032 | 双通道评估器（RHI-CG 通道 A 提议 + 通道 B 否决）               | ✅ Accepted |
-| ADR-033 | L0 nexus-contracts（依赖铁律扩展 `L(N) → L(0)` 恒允许）   | ✅ Accepted |
-| ADR-034 | 灰度=能力场 + 编译期 feature（否决运行时 Feature Flag）       | ✅ Accepted |
-| ADR-035 | 威胁模型下修 + wasmtime 沙箱重启路径                       | ✅ Accepted |
-| ADR-037 | 能力场灰度工程化方案（CapabilityToken 四态 + EWMA α=0.1）    | ✅ Accepted |
-| ADR-042 | R2 FormalVerifier 落地前无条件冻结                     | ✅ Accepted |
-| ADR-043 | R1 召回配额 CQL/IQL 影子模式设计                         | ✅ Accepted |
-| **ADR-044** | **RHI-CG 双通道工程实施**（P5.1 实施决策回溯 + P5.2 通道 B 预留章节，含 JudgeClient/LlmInvoker/CiGate trait） | ✅ Accepted（2026-07-26） |
+| ADR         | 主题                                                                                                             | 状态                     |
+| ----------- | -------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| ADR-030     | unsafe 红线不特批，安全等价物重写                                                                                           | ✅ Accepted             |
+| ADR-031     | Harness-as-Spec + omega-learner 边界（含附录 C 版本协调）                                                                 | ✅ Accepted             |
+| ADR-032     | 双通道评估器（RHI-CG 通道 A 提议 + 通道 B 否决）                                                                               | ✅ Accepted             |
+| ADR-033     | L0 nexus-contracts（依赖铁律扩展 `L(N) → L(0)` 恒允许）                                                                   | ✅ Accepted             |
+| ADR-034     | 灰度=能力场 + 编译期 feature（否决运行时 Feature Flag）                                                                       | ✅ Accepted             |
+| ADR-035     | 威胁模型下修 + wasmtime 沙箱重启路径                                                                                       | ✅ Accepted             |
+| ADR-037     | 能力场灰度工程化方案（CapabilityToken 四态 + EWMA α=0.1）                                                                    | ✅ Accepted             |
+| ADR-042     | R2 FormalVerifier 落地前无条件冻结                                                                                     | ✅ Accepted             |
+| ADR-043     | R1 召回配额 CQL/IQL 影子模式设计                                                                                         | ✅ Accepted             |
+| **ADR-044** | **RHI-CG 双通道工程实施**（P5.1 实施决策回溯 + P5.2 通道 B 预留章节，含 JudgeClient/LlmInvoker/CiGate trait）                         | ✅ Accepted（2026-07-26） |
 | **ADR-045** | **INV-9 命名调和**（P3 实现 vs ADR-032/044 描述偏差，8 项决策确认 `check_inv9_delegation_acyclic` 为权威命名，正式解除 ADR-044 决策 8 前置约束） | ✅ Accepted（2026-07-26） |
-| **ADR-046** | **ImmuneSystem facade 三探针设计**（含依赖铁律裁决：event subscription mirroring 方案，9 项决策，三探针算法 + 膜厚控制 + KPI-03 合规） | ✅ Accepted（2026-07-26） |
+| **ADR-046** | **ImmuneSystem facade 三探针设计**（含依赖铁律裁决：event subscription mirroring 方案，9 项决策，三探针算法 + 膜厚控制 + KPI-03 合规）          | ✅ Accepted（2026-07-26） |
 
 #### 当前 workspace 状态
 
@@ -133,10 +133,10 @@ P5 阶段是 v5.0 设计文档 §14 路线图的最后 20% 工作，当前进度
 
 1. **P5.1 ✅ 已完成**（2026-07-26）：RHI-CG 通道 A 全部实施完成，144 测试全绿，KPI-04 远超达标
 2. **P5.2 ✅ 已完成**（2026-07-26）：RHI-CG 通道 B 全部实施完成，272 测试全绿（255 lib + 17 integration），KPI-02 达标（5 次连续回归 P=0.03125 << 5% 误杀门槛）。交付物：`ci_gate.rs` (40KB) + `significance.rs` (28KB) + `integration.rs` (30KB) + `channel_b_benchmark.rs` (12KB)。3 项设计偏差已记录：(1) INV-9 在 L5 层独立实现避免依赖铁律违规；(2) 5 次回归而非 3 次（数学门槛更严格）；(3) lineage() 语义澄清
-3. **P5.3 ✅ 已完成**（2026-07-26）：ImmuneSystem facade 全部实施完成，397 测试全绿（343 lib + 46 integration + 8 doc），KPI-03 远超达标（`full_immune_system_assessment` 708 ns << 100ms，余量 141,243×）。交付物：`immune_system.rs` (31KB) + `memory_paradox.rs` (10KB) + `reasoning_trap.rs` (11KB) + `evolution_hack.rs` (11KB) + `immune_system_probe.rs` (9KB)。ADR-046 决策 1/5/7/8/9 全部落地。3 项工程偏差已记录（append-only）：(1) ContextRetrieved/AgentArchived 事件未扩展，采用 degradation_level + budget_exceeded 作为代理信号；(2) SystemTime::now() 改为 mirror.last_update_ts()；(3) Severity 边界值用 `>` 严格大于
+3. **P5.3 ✅ 已完成**（2026-07-26）：ImmuneSystem facade 全部实施完成，397 测试全绿（343 lib + 46 integration + 8 doc），KPI-03 远超达标（`full_immune_system_assessment` 708 ns << 100ms，余量 141,243×）。交付物：`immune_system.rs` (31KB) + `memory_paradox.rs` (10KB) + `reasoning_trap.rs` (11KB) + `evolution_hack.rs` (11KB) + `immune_system_probe.rs` (9KB)。ADR-046 决策 1/5/7/8/9 全部落地。3 项工程偏差已记录（append-only）：(1) ContextRetrieved/AgentArchived 事件未扩展，采用 degradation\_level + budget\_exceeded 作为代理信号；(2) SystemTime::now() 改为 mirror.last\_update\_ts()；(3) Severity 边界值用 `>` 严格大于
 4. **P5.4 🔄 部分完成**：§5.2 九项裁决对账文档已创建（[reconciliation.md](../../.trae/specs/nexus-omega-v5-implementation-plan/reconciliation.md)，6/9 → **7/9** 对账一致，裁决 #5 ImmuneSystem facade 随 P5.3 落地），剩 1 项差距修复（裁决 #4 proptest 用例数对齐）+ 2 项待实施（裁决 #6/#9 随 P5-W19.2 落地）
 5. **P5.5 ✅ 已完成**（2026-07-26）：5 任务集 × 4 版本 × 3 轮 = 15 次评判全胜，KPI-01 = 100% (≥60%) + KPI-02 = 0% (<5%) 双达标。审计报告 `tests/e2e/reports/rhi_cg_audit.md` 完整生成，32 测试全绿，复用 P5.1/P5.2/P5.3 既有组件，复杂度预算净增长 = 0
-6. **P5.6 🔄 进行中**：v3.2.0-omega 整体发布（CHANGELOG 回填 + ADR 索引同步 + tag 推送 + 5 平台 matrix build 验证）
+6. **P5.6 🔄 进行中**：v2.4.0-omega 整体发布（CHANGELOG 回填 + ADR 索引同步 + tag 推送 + 5 平台 matrix build 验证）
 
 **R2 冻结策略**（ADR-042）：R2 在 FormalVerifier 落地前无条件冻结，P5 只能完成 RHI-CG 通道 A + 通道 B + ImmuneSystem，**不能**完成 R2 解冻
 
@@ -144,13 +144,13 @@ P5 阶段是 v5.0 设计文档 §14 路线图的最后 20% 工作，当前进度
 
 设计文档 §3.1 的四环收敛架构（环外学习 + 内环认知 + 膜 + 外环执行 + L0 契约）落地状态：
 
-| 环          | 设计目标                                   | 当前实现                        | P5 收尾                            |
-| ---------- | -------------------------------------- | --------------------------- | -------------------------------- |
-| **L0 契约层** | nexus-contracts 纯类型零依赖                 | ✅ 已建立                       | 补 HarnessSpec v0 → v1 演进         |
-| **内环认知**   | Memory + Reasoning + Evolution 三环      | ✅ P1-P3 已落地                 | 补 TemporalMeta mlc-engine 四级扩展验证 |
-| **膜**      | event-bus 深化为渗透 + 背压 + 因果              | ✅ P2 已落地                    | 验证级联联动 + 动态厚度                    |
-| **外环执行**   | chimera-mas 收敛 + L7/L10 + ImmuneSystem | ⚠️ ImmuneSystem 未实现（**ADR-046 设计已就绪**） | **P5 重点**：ImmuneSystem facade（P5.3 实施）    |
-| **环外学习**   | omega-learner + RHI-CG + 回放池           | ⚠️ RHI-CG 通道 A ✅ / 通道 B 未实现（**ADR-044/045 设计已就绪**） | **P5 重点**：RHI-CG 通道 B（P5.2 实施，通道 A 已完成）  |
+| 环          | 设计目标                                   | 当前实现                                               | P5 收尾                                   |
+| ---------- | -------------------------------------- | -------------------------------------------------- | --------------------------------------- |
+| **L0 契约层** | nexus-contracts 纯类型零依赖                 | ✅ 已建立                                              | 补 HarnessSpec v0 → v1 演进                |
+| **内环认知**   | Memory + Reasoning + Evolution 三环      | ✅ P1-P3 已落地                                        | 补 TemporalMeta mlc-engine 四级扩展验证        |
+| **膜**      | event-bus 深化为渗透 + 背压 + 因果              | ✅ P2 已落地                                           | 验证级联联动 + 动态厚度                           |
+| **外环执行**   | chimera-mas 收敛 + L7/L10 + ImmuneSystem | ⚠️ ImmuneSystem 未实现（**ADR-046 设计已就绪**）             | **P5 重点**：ImmuneSystem facade（P5.3 实施）  |
+| **环外学习**   | omega-learner + RHI-CG + 回放池           | ⚠️ RHI-CG 通道 A ✅ / 通道 B 未实现（**ADR-044/045 设计已就绪**） | **P5 重点**：RHI-CG 通道 B（P5.2 实施，通道 A 已完成） |
 
 ***
 
@@ -209,18 +209,18 @@ P5 阶段是 v5.0 设计文档 §14 路线图的最后 20% 工作，当前进度
 
 ### 2.4 量化 KPI 矩阵
 
-| KPI 编号 | 指标名称                 | 当前值                         | P5 目标           | 测量方法                     | 验收节点                  |
-| ------ | -------------------- | --------------------------- | --------------- | ------------------------ | --------------------- |
-| KPI-01 | Harness lineage 累计胜率 | 未基线 → ✅ **已达标**（15/15 优胜 = 100%） | ≥60%            | 5 任务集 × 3 轮验收            | ✅ P5.5 完成（2026-07-26）               |
-| KPI-02 | 通道 B 误杀率             | 未基线 → ✅ **已达标**（5 次连续回归 P=0.03125 << 5% 门槛） | <5%             | 连续 3 次显著回归统计（实际升级为 5 次回归，数学门槛更严格）             | ✅ P5.2 完成（2026-07-26） |
-| KPI-03 | ImmuneSystem 探针延迟    | 未基线 → ✅ **已达标**（708 ns << 100ms，余量 141,243×） | <100ms          | criterion 基准（`full_immune_system_assessment`）             | ✅ P5.3 完成（2026-07-26） |
-| KPI-04 | RHI 通道 A 评判延迟        | ✅ **已达标**（最差 44.38µs）       | <2s（Deep 模型）    | criterion 基准             | ✅ P5.1 完成（2026-07-26） |
-| KPI-05 | cargo test 总数        | 2877+ + 144（P5.1）+ 272（P5.2）+ 397（P5.3）= 3690+ | 3100+（新增 \~200） | `cargo test --workspace` | ✅ 已超目标（P5.1 + P5.2 + P5.3 完成） |
-| KPI-06 | Block 召回率            | 未基线                         | ≥95%            | 1M 影子集测试                 | P5.4 对账               |
-| KPI-07 | 50agent\_mem\_peak   | ≤130MB                      | 维持              | criterion 基准             | P5.6 验收               |
-| KPI-08 | §5.2 九项裁决对账完成度       | 0/9 → ✅ **7/9**（裁决 #5 ImmuneSystem facade 随 P5.3 落地） | 9/9             | reconciliation.md        | P5-W19.2 完成 #6/#9 |
-| KPI-09 | ADR 总数               | 9（v5.0 新增）→ ✅ **12**（ADR-044/045/046 已批准） | 12（P5 新增 3 份）   | docs/architecture/       | ✅ P5 设计阶段完成（2026-07-26） |
-| KPI-10 | crate 总数             | 37                          | 37（不新增）         | Cargo.toml workspace     | P5.6 验收               |
+| KPI 编号 | 指标名称                 | 当前值                                                  | P5 目标           | 测量方法                                          | 验收节点                          |
+| ------ | -------------------- | ---------------------------------------------------- | --------------- | --------------------------------------------- | ----------------------------- |
+| KPI-01 | Harness lineage 累计胜率 | 未基线 → ✅ **已达标**（15/15 优胜 = 100%）                     | ≥60%            | 5 任务集 × 3 轮验收                                 | ✅ P5.5 完成（2026-07-26）         |
+| KPI-02 | 通道 B 误杀率             | 未基线 → ✅ **已达标**（5 次连续回归 P=0.03125 << 5% 门槛）          | <5%             | 连续 3 次显著回归统计（实际升级为 5 次回归，数学门槛更严格）             | ✅ P5.2 完成（2026-07-26）         |
+| KPI-03 | ImmuneSystem 探针延迟    | 未基线 → ✅ **已达标**（708 ns << 100ms，余量 141,243×）         | <100ms          | criterion 基准（`full_immune_system_assessment`） | ✅ P5.3 完成（2026-07-26）         |
+| KPI-04 | RHI 通道 A 评判延迟        | ✅ **已达标**（最差 44.38µs）                                | <2s（Deep 模型）    | criterion 基准                                  | ✅ P5.1 完成（2026-07-26）         |
+| KPI-05 | cargo test 总数        | 2877+ + 144（P5.1）+ 272（P5.2）+ 397（P5.3）= 3690+       | 3100+（新增 \~200） | `cargo test --workspace`                      | ✅ 已超目标（P5.1 + P5.2 + P5.3 完成） |
+| KPI-06 | Block 召回率            | 未基线                                                  | ≥95%            | 1M 影子集测试                                      | P5.4 对账                       |
+| KPI-07 | 50agent\_mem\_peak   | ≤130MB                                               | 维持              | criterion 基准                                  | P5.6 验收                       |
+| KPI-08 | §5.2 九项裁决对账完成度       | 0/9 → ✅ **7/9**（裁决 #5 ImmuneSystem facade 随 P5.3 落地） | 9/9             | reconciliation.md                             | P5-W19.2 完成 #6/#9             |
+| KPI-09 | ADR 总数               | 9（v5.0 新增）→ ✅ **12**（ADR-044/045/046 已批准）            | 12（P5 新增 3 份）   | docs/architecture/                            | ✅ P5 设计阶段完成（2026-07-26）       |
+| KPI-10 | crate 总数             | 37                                                   | 37（不新增）         | Cargo.toml workspace                          | P5.6 验收                       |
 
 ***
 
@@ -258,9 +258,9 @@ P5.5 5 任务集进化 3 轮验收 (W19-W20, 5 工作日)
   └─ 北极星指标验证（胜率 ≥60% + 误杀 <5%）
        ↓
 P5.6 整体发布 (W20, 2 工作日)
-  ├─ CHANGELOG.md v3.2.0-omega 回填
+  ├─ CHANGELOG.md v2.4.0-omega 回填
   ├─ 9 + 3 = 12 ADR 索引同步
-  ├─ tag v3.2.0-omega 推送
+  ├─ tag v2.4.0-omega 推送
   └─ 5 平台 matrix build 验证
 ```
 
@@ -416,23 +416,33 @@ pub use self_history::{
 **ADR-044 已批准**（[ADR-044-rhi-cg-engineering.md](../../docs/architecture/ADR-044-rhi-cg-engineering.md)，2026-07-26 19:36）：
 
 * P5.1 通道 A 实施决策回溯完成（8 项决策）
+
 * JudgeClient / LlmInvoker / CiGate trait 接缝模式定义
-* self_history.rs 位置调整决策（auto-dpo 而非 mlc-engine，模块内聚原则）
+
+* self\_history.rs 位置调整决策（auto-dpo 而非 mlc-engine，模块内聚原则）
+
 * KPI-04 验证结果记录（7 基准全绿，最差 44.38µs）
+
 * 通道 B 预留章节已就绪（决策 8 设前置约束：需先完成 ADR-045）
 
 **ADR-045 已批准**（[ADR-045-inv9-naming-reconciliation.md](../../docs/architecture/ADR-045-inv9-naming-reconciliation.md)，2026-07-26）：
 
 * **决策 8 正式解除 ADR-044 决策 8 的前置约束**
+
 * `check_inv9_delegation_acyclic` 命名为权威命名（与 INV-7/8 同构 `check_inv<N>_<descriptor>`）
+
 * 接口 `&[DelegationEdge] -> Result<(), MasError>` 稳定，P5.2 通道 B 可放心调用
+
 * proptest 规格 4 个性质测试 × 1000 cases 已对齐 ADR-028 决策 3
+
 * 错误类型 `MasError::DelegationCycleDetected { cycle_path: Vec<String> }` 确认
 
 **通道 B 关键澄清**（ADR-045 决策 8）：
 
 * INV-9 检查（委托图无环）= `InvariantChecker::check_inv9_delegation_acyclic(&delegation_edges)`
+
 * 否决证据检查（`regression_streak` 逻辑）= 独立 `CiGate::check_veto_evidence` 实现
+
 * **两者不混淆**，P5.2 实施时分别在 `ci_gate.rs` 与 `significance.rs` 模块实现
 
 #### 📋 P5.2 详细实施规划（基于 ADR-044，已就绪）
@@ -450,14 +460,19 @@ pub use self_history::{
 > **算法选型**（ADR-044 决策 5-7）：
 >
 > * 显著性检测：连续 3 次统计显著回归（p < 0.05，单尾二项检验）才否决
-> * EvolutionRecord 谱系存储：复用既有 `SpecRegistry`（gsoe-evolution/src/spec_registry.rs，lineage 链式存储）
+>
+> * EvolutionRecord 谱系存储：复用既有 `SpecRegistry`（gsoe-evolution/src/spec\_registry.rs，lineage 链式存储）
+>
 > * 不可进化面守护：`SpecRegistry::register()` 校验新 spec 不触碰 13 红线 / Critical 清单 / INV-7/8/9
 >
 > **测试矩阵**（ADR-044 决策 4）：
 >
 > * 单元测试：mock CI 结果通过/失败 + 显著性检测算法验证
+>
 > * 集成测试：3 次连续回归 → 否决 + bench 抖动防误杀
+>
 > * E2E 测试：通道 A 提议 → 通道 B 否决/通过 → EvolutionRecord 谱系更新
+>
 > * criterion 基准：CI 执行延迟 + 显著性检测延迟
 
 ### 3.4 P5.3 ImmuneSystem facade — 悖论三探针（W18）
@@ -502,9 +517,13 @@ pub use self_history::{
 **ADR-046 已批准**（[ADR-046-immune-system-facade.md](../../docs/architecture/ADR-046-immune-system-facade.md)，2026-07-26）：
 
 * **方案 A：事件订阅镜像** 正式采纳（9 项决策）
+
 * parliament 通过 event-bus 订阅 chimera-mas 的 StabilityGuard 事件，内部维护 `StabilityMirror` 状态
+
 * 不破坏既有依赖关系（chimera-mas L9 已稳定，parliament L8 不向上依赖）
+
 * 符合"跨层通信只走 event-bus"铁律（§2.2）
+
 * ImmuneSystem 作为 facade 本就应通过事件解耦
 
 **关键设计**（ADR-046 决策 2-4）：
@@ -534,15 +553,16 @@ impl ImmuneSystem {
 
 **三探针算法**（ADR-046 决策 5-7）：
 
-| 探针 | 检测目标 | 算法 | KPI-03 阈值 |
-|------|---------|------|------------|
-| MemoryParadoxProbe | 幽灵矛盾率（新旧事实共存） | TemporalFilter + 时间戳对比 | <100ms |
-| ReasoningTrapProbe | SkepticVeto 模式化绕过 | 模式识别 + 频率统计 | <100ms |
-| EvolutionHackProbe | 通道 B 否决率异常（>30%） | 滑动窗口 + 阈值告警 | <100ms |
+| 探针                 | 检测目标              | 算法                     | KPI-03 阈值 |
+| ------------------ | ----------------- | ---------------------- | --------- |
+| MemoryParadoxProbe | 幽灵矛盾率（新旧事实共存）     | TemporalFilter + 时间戳对比 | <100ms    |
+| ReasoningTrapProbe | SkepticVeto 模式化绕过 | 模式识别 + 频率统计            | <100ms    |
+| EvolutionHackProbe | 通道 B 否决率异常（>30%）  | 滑动窗口 + 阈值告警            | <100ms    |
 
 **膜厚控制**（ADR-046 决策 8）：
 
 * ImmuneSystem 级联风险 >0.7 → 膜自动增厚（替代 v3.0-extreme 独立 AdaptiveMembrane）
+
 * 探针输出 → chimera-mas/src/membrane.rs 的 `set_thickness()` 接口（经事件广播）
 
 #### 📋 P5.3 详细实施规划（基于 ADR-046，已就绪）
@@ -559,18 +579,21 @@ impl ImmuneSystem {
 > **测试矩阵**：
 >
 > * 单元测试：facade 接口 + 三探针算法 + 镜像状态一致性
+>
 > * 集成测试：探针 → 熔断 → 降级链级联联动
+>
 > * E2E 测试：3 次连续悖论检测 → ImmuneSystem 触发 → 膜增厚
+>
 > * criterion 基准：探针延迟 <100ms（KPI-03）
 
 ### 3.5 P5.4 §5.2 九项收敛裁决对账（W19）
 
 #### 任务分解
 
-| SubTask ID | 任务            | 文件                                                                 | 工时 | 依赖     | 验证           | 状态 |
-| ---------- | ------------- | ------------------------------------------------------------------ | -- | ------ | ------------ | ---- |
+| SubTask ID | 任务            | 文件                                                                 | 工时 | 依赖     | 验证           | 状态                                                     |
+| ---------- | ------------- | ------------------------------------------------------------------ | -- | ------ | ------------ | ------------------------------------------------------ |
 | P5.4.1     | 9 项裁决逐条 PR 对账 | `.trae/specs/nexus-omega-v5-implementation-plan/reconciliation.md` | 2d | P5.1-3 | 9/9 裁决全部对账完成 | ✅ **已完成**（2026-07-26，6/9 对账一致，3 项待 P5.3 + P5-W19.2 实施） |
-| P5.4.2     | 差距修复（如有）      | 视对账结果                                                              | 1d | P5.4.1 | 差距归零         | 🔄 部分完成（4 项差距已识别，1 项待 P5-W19.2 实施） |
+| P5.4.2     | 差距修复（如有）      | 视对账结果                                                              | 1d | P5.4.1 | 差距归零         | 🔄 部分完成（4 项差距已识别，1 项待 P5-W19.2 实施）                     |
 
 #### ✅ P5.4.1 对账完成状态（2026-07-26）
 
@@ -578,26 +601,28 @@ impl ImmuneSystem {
 
 **对账结果汇总**：
 
-| 对账状态 | 数量 | 裁决项编号 | 备注 |
-|---------|------|-----------|------|
-| ✅ **已对账一致** | 6 项 | #1, #2, #3, #4, #7, #8 | #4 含 proptest 用例数补裁决；#7/#8 在 P2/P3 阶段已落地 |
-| ⚠️ **待实施** | 3 项 | #5(P5.3), #6(P5-W19.2), #9(P5-W19.2) | 按优先级分阶段实施 |
-| **合计** | **9 项** | — | **6/9 已对账（66.7%），3/9 待实施** |
+| 对账状态        | 数量      | 裁决项编号                                | 备注                                       |
+| ----------- | ------- | ------------------------------------ | ---------------------------------------- |
+| ✅ **已对账一致** | 6 项     | #1, #2, #3, #4, #7, #8               | #4 含 proptest 用例数补裁决；#7/#8 在 P2/P3 阶段已落地 |
+| ⚠️ **待实施**  | 3 项     | #5(P5.3), #6(P5-W19.2), #9(P5-W19.2) | 按优先级分阶段实施                                |
+| **合计**      | **9 项** | —                                    | **6/9 已对账（66.7%），3/9 待实施**               |
 
 **与 ADR-031 附录 B 的差异**（基线 v2.3.1-omega → 当前 v2.4.0-omega WIP）：
 
 * ADR-031 附录 B（2026-07-23 首次对账）：4/9 对账一致 + 5/9 补裁决待实施
+
 * 当前状态（2026-07-26 第二次对账）：6/9 对账一致 + 3/9 待实施
+
 * **关键变化**：裁决 #7（NamespaceQuota）+ 裁决 #8（INV-9）在 P2-P3 阶段已落地，对账完成度从 4/9（44.4%）提升至 6/9（66.7%）
 
 #### P5.4.2 差距修复计划
 
-| 差距 # | 描述 | 影响范围 | 修复方案 | 优先级 | 状态 |
-|--------|------|---------|---------|--------|------|
-| #1 | 裁决 #4 proptest 用例数 256 vs 1000 | `crates/chimera-mas/tests/proptest.rs` | 显式 `ProptestConfig::with_cases(1000)` | P2 | ⏳ 待启动（0.5d） |
-| #2 | 裁决 #5 ImmuneSystem facade 未实施 | `crates/parliament/src/immune_system.rs` | P5.3 实施（依赖 ADR-046，已批准） | P1 | ⏳ P5.3 启动后实施（3d） |
-| #3 | 裁决 #6 AgentStatus TypeState 未实施 | `crates/chimera-mas/src/agent/meta.rs` | 引入 `AgentStatus<S>` 类型参数，10 态扩展 | P2 | ⏳ P5-W19.2 实施（2d） |
-| #4 | 裁决 #9 AgentMessage 11 类未实施 | `crates/event-bus/src/types.rs` | 新增 4 个 Agent 事件变体（append-only） | P2 | ⏳ P5-W19.2 实施（1d） |
+| 差距 # | 描述                              | 影响范围                                     | 修复方案                                  | 优先级 | 状态                |
+| ---- | ------------------------------- | ---------------------------------------- | ------------------------------------- | --- | ----------------- |
+| #1   | 裁决 #4 proptest 用例数 256 vs 1000  | `crates/chimera-mas/tests/proptest.rs`   | 显式 `ProptestConfig::with_cases(1000)` | P2  | ⏳ 待启动（0.5d）       |
+| #2   | 裁决 #5 ImmuneSystem facade 未实施   | `crates/parliament/src/immune_system.rs` | P5.3 实施（依赖 ADR-046，已批准）               | P1  | ⏳ P5.3 启动后实施（3d）  |
+| #3   | 裁决 #6 AgentStatus TypeState 未实施 | `crates/chimera-mas/src/agent/meta.rs`   | 引入 `AgentStatus<S>` 类型参数，10 态扩展       | P2  | ⏳ P5-W19.2 实施（2d） |
+| #4   | 裁决 #9 AgentMessage 11 类未实施      | `crates/event-bus/src/types.rs`          | 新增 4 个 Agent 事件变体（append-only）        | P2  | ⏳ P5-W19.2 实施（1d） |
 
 #### 九项裁决清单（设计 §5.2）
 
@@ -666,9 +691,9 @@ impl ImmuneSystem {
 
 | SubTask ID | 任务                           | 文件                               | 工时   | 依赖       | 验证                     |
 | ---------- | ---------------------------- | -------------------------------- | ---- | -------- | ---------------------- |
-| P5.6.1     | CHANGELOG.md v3.2.0-omega 回填 | `CHANGELOG.md`                   | 0.5d | P5.1-5   | v3.2.0-omega 段落完整      |
+| P5.6.1     | CHANGELOG.md v2.4.0-omega 回填 | `CHANGELOG.md`                   | 0.5d | P5.1-5   | v2.4.0-omega 段落完整      |
 | P5.6.2     | 12 ADR 索引同步                  | `docs/architecture/adr_index.md` | 0.5d | P5.6.1   | 12 ADR 全部索引            |
-| P5.6.3     | tag v3.2.0-omega 推送          | git tag                          | 0.5d | P5.6.1-2 | tag 推送成功               |
+| P5.6.3     | tag v2.4.0-omega 推送          | git tag                          | 0.5d | P5.6.1-2 | tag 推送成功               |
 | P5.6.4     | 5 平台 matrix build 验证         | `.github/workflows/release.yml`  | 0.5d | P5.6.3   | Win/Linux/macOS 全 pass |
 
 #### 发布前八道质量门（设计 §7.2 + §10.3）
@@ -695,8 +720,8 @@ cargo audit --deny warnings \
 # 7. release 构建
 cargo build --workspace --release
 # 8. tag 推送
-git tag v3.2.0-omega
-git push origin v3.2.0-omega
+git tag v2.4.0-omega
+git push origin v2.4.0-omega
 ```
 
 ### 3.8 P5 新增 ADR（3 份）
@@ -918,7 +943,7 @@ L10 chimera-cli ── TUI 监控面板（ImmuneSystem 探针可视化）
 | 节点 3 | ADR-046 §5.2 对账规范          | E01/E03/E07         | P1  |
 | 节点 4 | 5 任务集定义评审                  | E06/E07             | P1  |
 | 节点 5 | 北极星指标达成评审                  | E01/E04/E05/E06/E07 | P0  |
-| 节点 6 | v3.2.0-omega 发布前评审         | E01-E08 全员          | P0  |
+| 节点 6 | v2.4.0-omega 发布前评审         | E01-E08 全员          | P0  |
 
 ### 6.5 依赖铁律（设计 §2.2）
 
@@ -1025,7 +1050,7 @@ W20 │ ░░░ P5.5 5 任务集进化（完成，3 工作日）             �
   W18 末  M2: ImmuneSystem facade 完成（KPI-03 验收）
   W19 末  M3: §5.2 对账完成（KPI-08 验收）
   W20 末  M4: 北极星指标达成（KPI-01/02 验收）
-  W20 末  M5: v3.2.0-omega 发布（5 平台 matrix build 验证）
+  W20 末  M5: v2.4.0-omega 发布（5 平台 matrix build 验证）
 ```
 
 ### 7.2 关键里程碑
@@ -1036,7 +1061,7 @@ W20 │ ░░░ P5.5 5 任务集进化（完成，3 工作日）             �
 | **M2** | W18 末 | ImmuneSystem facade 完成               | KPI-03：探针延迟 <100ms；三探针单元测试通过                                                           |
 | **M3** | W19 末 | §5.2 对账完成                            | KPI-08：9/9 裁决全部对账完成；reconciliation.md 文档化                                              |
 | **M4** | W20 中 | 北极星指标达成                              | KPI-01：累计胜率 ≥60%；KPI-02：误杀 <5%                                                         |
-| **M5** | W20 末 | v3.2.0-omega 发布                      | 5 平台 matrix build 全 pass；2877+ 测试全绿；cargo audit 零漏洞                                    |
+| **M5** | W20 末 | v2.4.0-omega 发布                      | 5 平台 matrix build 全 pass；2877+ 测试全绿；cargo audit 零漏洞                                    |
 
 ### 7.3 验收节点
 
@@ -1046,7 +1071,7 @@ W20 │ ░░░ P5.5 5 任务集进化（完成，3 工作日）             �
 | V2 | W18 末 | ImmuneSystem facade 评审 | E01/E02/E03 |
 | V3 | W19 末 | §5.2 对账评审 + 5 任务集启动评审  | E01/E03/E07 |
 | V4 | W20 中 | 北极星指标达成评审              | E01-E08 全员  |
-| V5 | W20 末 | v3.2.0-omega 发布前评审     | E01-E08 全员  |
+| V5 | W20 末 | v2.4.0-omega 发布前评审     | E01-E08 全员  |
 
 ### 7.4 关键路径
 
@@ -1077,33 +1102,33 @@ W20 │ ░░░ P5.5 5 任务集进化（完成，3 工作日）             �
 
 ### 8.1 P5 任务总览（按 ID 排序）
 
-| SubTask ID | 任务                     | 工时      | 依赖       | 验证                |
-| ---------- | ---------------------- | ------- | -------- | ----------------- |
-| P5.1.1 ✅   | PreferencePair 扩展      | 1d      | 无        | 单元测试（27 passed）  |
-| P5.1.2 ✅   | 评判器 LLM 调用接口           | 1d      | P5.1.1   | 集成测试（lib passed）|
-| P5.1.3 ✅   | 自比较历史持久化               | 1.5d    | P5.1.1   | 单元测试（10 passed）|
-| P5.1.4 ✅   | 通道 A 端到端测试             | 1d      | P5.1.1-3 | E2E（22 passed）  |
-| P5.1.5 ✅   | criterion 基准           | 0.5d    | P5.1.4   | KPI-04（5 基准全绿）   |
-| P5.2.1     | CI 执行门接口               | 1.5d    | 无        | 单元测试              |
-| P5.2.2     | 显著性检测                  | 1.5d    | P5.2.1   | 单元测试              |
-| P5.2.3     | EvolutionRecord 谱系集成   | 1d      | P5.2.1-2 | 单元测试              |
-| P5.2.4     | 通道 B 端到端测试             | 1d      | P5.2.1-3 | E2E               |
-| P5.3.1     | ImmuneSystem facade 接口 | 1d      | 无        | 单元测试              |
-| P5.3.2     | MemoryParadox 探针       | 1d      | P5.3.1   | 单元测试              |
-| P5.3.3     | ReasoningTrap 探针       | 1d      | P5.3.1   | 单元测试              |
-| P5.3.4     | EvolutionHack 探针       | 1d      | P5.3.1   | 单元测试              |
-| P5.3.5     | 复用 stability.rs        | 0.5d    | P5.3.1-4 | 集成测试              |
-| P5.3.6     | criterion 基准           | 0.5d    | P5.3.5   | KPI-03            |
-| P5.4.1     | 9 项裁决对账                | 2d      | P5.1-3   | reconciliation.md |
-| P5.4.2     | 差距修复                   | 1d      | P5.4.1   | 差距归零              |
-| P5.5.1     | 5 任务集定义                | 1d      | P5.1-3   | 评审                |
-| P5.5.2     | 3 轮进化执行                | 2d      | P5.5.1   | E2E               |
-| P5.5.3     | 北极星指标验证                | 1d      | P5.5.2   | KPI-01/02         |
-| P5.5.4     | 进化结果审计报告               | 1d      | P5.5.3   | 审计报告              |
-| P5.6.1     | CHANGELOG 回填           | 0.5d    | P5.1-5   | v3.2.0 段落         |
-| P5.6.2     | ADR 索引同步               | 0.5d    | P5.6.1   | 12 ADR            |
-| P5.6.3     | tag 推送                 | 0.5d    | P5.6.1-2 | tag 成功            |
-| P5.6.4     | 5 平台 matrix build      | 0.5d    | P5.6.3   | 全 pass            |
+| SubTask ID | 任务                     | 工时                   | 依赖       | 验证                |
+| ---------- | ---------------------- | -------------------- | -------- | ----------------- |
+| P5.1.1 ✅   | PreferencePair 扩展      | 1d                   | 无        | 单元测试（27 passed）   |
+| P5.1.2 ✅   | 评判器 LLM 调用接口           | 1d                   | P5.1.1   | 集成测试（lib passed）  |
+| P5.1.3 ✅   | 自比较历史持久化               | 1.5d                 | P5.1.1   | 单元测试（10 passed）   |
+| P5.1.4 ✅   | 通道 A 端到端测试             | 1d                   | P5.1.1-3 | E2E（22 passed）    |
+| P5.1.5 ✅   | criterion 基准           | 0.5d                 | P5.1.4   | KPI-04（5 基准全绿）    |
+| P5.2.1     | CI 执行门接口               | 1.5d                 | 无        | 单元测试              |
+| P5.2.2     | 显著性检测                  | 1.5d                 | P5.2.1   | 单元测试              |
+| P5.2.3     | EvolutionRecord 谱系集成   | 1d                   | P5.2.1-2 | 单元测试              |
+| P5.2.4     | 通道 B 端到端测试             | 1d                   | P5.2.1-3 | E2E               |
+| P5.3.1     | ImmuneSystem facade 接口 | 1d                   | 无        | 单元测试              |
+| P5.3.2     | MemoryParadox 探针       | 1d                   | P5.3.1   | 单元测试              |
+| P5.3.3     | ReasoningTrap 探针       | 1d                   | P5.3.1   | 单元测试              |
+| P5.3.4     | EvolutionHack 探针       | 1d                   | P5.3.1   | 单元测试              |
+| P5.3.5     | 复用 stability.rs        | 0.5d                 | P5.3.1-4 | 集成测试              |
+| P5.3.6     | criterion 基准           | 0.5d                 | P5.3.5   | KPI-03            |
+| P5.4.1     | 9 项裁决对账                | 2d                   | P5.1-3   | reconciliation.md |
+| P5.4.2     | 差距修复                   | 1d                   | P5.4.1   | 差距归零              |
+| P5.5.1     | 5 任务集定义                | 1d                   | P5.1-3   | 评审                |
+| P5.5.2     | 3 轮进化执行                | 2d                   | P5.5.1   | E2E               |
+| P5.5.3     | 北极星指标验证                | 1d                   | P5.5.2   | KPI-01/02         |
+| P5.5.4     | 进化结果审计报告               | 1d                   | P5.5.3   | 审计报告              |
+| P5.6.1     | CHANGELOG 回填           | 0.5d                 | P5.1-5   | v3.2.0 段落         |
+| P5.6.2     | ADR 索引同步               | 0.5d                 | P5.6.1   | 12 ADR            |
+| P5.6.3     | tag 推送                 | 0.5d                 | P5.6.1-2 | tag 成功            |
+| P5.6.4     | 5 平台 matrix build      | 0.5d                 | P5.6.3   | 全 pass            |
 | **合计**     | —                      | **25d**（P5.1 已完成 5d） | —        | —                 |
 
 ### 8.2 新增 ADR 索引（P5 阶段）
@@ -1167,7 +1192,7 @@ docs/audit/
   quality_review_18.md               # 双周质量审查
   quality_review_20.md
 
-CHANGELOG.md                          # P5.6.1 回填 v3.2.0-omega
+CHANGELOG.md                          # P5.6.1 回填 v2.4.0-omega
 ```
 
 ### 8.4 学术引用（P5 学术支撑）
@@ -1209,15 +1234,15 @@ CHANGELOG.md                          # P5.6.1 回填 v3.2.0-omega
 
 **P5 完成证据要求**：
 
-| 证据类别 | 具体证据                                 | 验证方法                             | P5.1 当前状态 |
-| ---- | ------------------------------------ | -------------------------------- | ---------- |
-| 代码证据 | 25 SubTask 全部 commit                 | `git log --oneline`              | ⏳ P5.1 5 SubTask 已实施（待 commit） |
+| 证据类别 | 具体证据                                 | 验证方法                             | P5.1 当前状态                         |
+| ---- | ------------------------------------ | -------------------------------- | --------------------------------- |
+| 代码证据 | 25 SubTask 全部 commit                 | `git log --oneline`              | ⏳ P5.1 5 SubTask 已实施（待 commit）    |
 | 测试证据 | cargo test --workspace 全绿            | `cargo test --workspace` × 3 次连续 | ✅ P5.1：144 测试全绿（122 lib + 22 E2E） |
-| 性能证据 | 5 新增 criterion 基准全绿                  | `cargo bench --workspace`        | ✅ P5.1：5 基准全绿（KPI-04 最差 44.38µs） |
-| 安全证据 | cargo audit + OWASP A01-A10          | `cargo audit --deny warnings`    | ⏳ P5.6 阶段验证 |
-| 文档证据 | 3 新增 ADR + reconciliation.md         | 文档评审记录                           | ⏳ ADR-044/045/046 待创建 |
-| 指标证据 | KPI-01 至 KPI-10 全部达标                 | 量化测量报告                           | ✅ KPI-04 已达标；⏳ 其余待 P5.2-5 验证 |
-| 发布证据 | v3.2.0-omega tag + 5 平台 matrix build | GitHub Release URL               | ⏳ P5.6 阶段验证 |
+| 性能证据 | 5 新增 criterion 基准全绿                  | `cargo bench --workspace`        | ✅ P5.1：5 基准全绿（KPI-04 最差 44.38µs）  |
+| 安全证据 | cargo audit + OWASP A01-A10          | `cargo audit --deny warnings`    | ⏳ P5.6 阶段验证                       |
+| 文档证据 | 3 新增 ADR + reconciliation.md         | 文档评审记录                           | ⏳ ADR-044/045/046 待创建             |
+| 指标证据 | KPI-01 至 KPI-10 全部达标                 | 量化测量报告                           | ✅ KPI-04 已达标；⏳ 其余待 P5.2-5 验证      |
+| 发布证据 | v2.4.0-omega tag + 5 平台 matrix build | GitHub Release URL               | ⏳ P5.6 阶段验证                       |
 
 **完成判定**：上述 7 类证据全部齐备，方可标记 P5 阶段完成。
 **P5.1 当前进度**：3/7 类证据已收集（测试证据 + 性能证据 + 部分指标证据），剩余 4 类待后续阶段完成。
@@ -1228,7 +1253,7 @@ CHANGELOG.md                          # P5.6.1 回填 v3.2.0-omega
 **创建日期**：2026-07-26
 **最近更新**：2026-07-26（P5.1.1-P5.1.5 全部完成，144 测试全绿，KPI-04 远超达标）
 **基线**：v2.4.0-omega WIP（37 crate / 9 ADR / 6 v5.0 commit）
-**目标版本**：v3.2.0-omega
+**目标版本**：v2.4.0-omega
 **执行哲学**：收敛先于创新、嫁接先于新建、长期主义、TDD 守恒、性能可证伪、学术支撑落地
 **稳定性目标**：99.9% 任务完成率，零死锁，零循环委托，零级联故障，红线全绿
 **下次迭代**：P5.2 RHI-CG 通道 B 启动 → 先补 ADR-044 文档（记录通道 A 实施决策与设计偏差） → CI 否决门 + 显著性检测实施

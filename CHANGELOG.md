@@ -1,9 +1,9 @@
 # Changelog
 
-## v3.2.0-omega (2026-07-26, NEXUS-OMEGA v5.0 P5 进化闭环完整落地)
+## v2.4.0-omega (2026-07-26, NEXUS-OMEGA v5.0 P5 进化闭环完整落地)
 
 **版本代号**: NEXUS-OMEGA (CONVERGENCE · 四环收敛架构落地)
-**架构基线**: v3.1.0-omega → v3.2.0-omega(minor,append-only,无 BREAKING)
+**架构基线**: v2.3.1-omega → v2.4.0-omega(minor,append-only,无 BREAKING)
 **关联 Spec**: [nexus-omega-v5-implementation-plan](.trae/specs/nexus-omega-v5-implementation-plan/spec.md)
 **关联 ADR**: ADR-030(unsafe 红线不特批) / ADR-031(Harness-as-Spec + omega-learner 边界) / ADR-032(双通道评估器) / ADR-033(L0 nexus-contracts) / ADR-034(灰度=能力场+编译期 feature) / ADR-035(威胁模型下修 + wasmtime 重启路径) / ADR-037(能力场灰度工程化方案) / ADR-042(R2 GSOE×AutoDPO 约束 RL FormalVerifier 落地前无条件冻结) / ADR-043(R1 召回配额 CQL/IQL 影子模式设计) / ADR-044(RHI-CG 双通道工程实施) / ADR-045(INV-9 命名调和) / ADR-046(ImmuneSystem facade 设计)
 
@@ -48,12 +48,12 @@
 - **谱系完整性**: lineage = [1, 2, 3, 4]，active = v4，15 条 SelfComparisonRecord 全部持久化
 - **复杂度预算**: 净增长 = 0（所有组件均复用 P5.1/P5.2/P5.3 既有实现，仅测试编排代码新增）
 
-#### P5.6 ✅ v3.2.0-omega 整体发布
+#### P5.6 ✅ v2.4.0-omega 整体发布
 
-- **CHANGELOG**: v2.4.0-omega WIP → v3.2.0-omega 正式版（本条目）
+- **CHANGELOG**: v2.4.0-omega WIP → v2.4.0-omega 正式版（本条目）
 - **ADR 索引**: 同步至 41 个（新增 ADR-044/045/046）
 - **P5 实施计划文档**: v1.2 → v1.3（标记 P5.5 完成 + P5.6 启动）
-- **tag 推送**: v3.2.0-omega 触发 release.yml + fuzz.yml CI
+- **tag 推送**: v2.4.0-omega 触发 release.yml + fuzz.yml CI
 
 ### 新增 crate(2 个)
 
@@ -75,7 +75,7 @@
 - ADR-045: INV-9 命名调和（`check_inv9_delegation_acyclic` 为权威名，解除 Channel B 实施约束）
 - ADR-046: ImmuneSystem facade 设计（悖论三探针 + 事件订阅镜像 + 不可进化面定义）
 
-### KPI 达标汇总（v3.2.0-omega 发布门槛）
+### KPI 达标汇总（v2.4.0-omega 发布门槛）
 
 | KPI | 阈值 | 实际值 | 达标 | 验收节点 |
 |-----|------|--------|------|---------|

@@ -2,7 +2,7 @@
 
 > **文档编号**: P5.5-AUDIT-001
 > **生成时间**: 2026-07-26
-> **对应版本**: v3.2.0-omega（NEXUS-OMEGA v5.0 P5.5 验收）
+> **对应版本**: v2.4.0-omega（NEXUS-OMEGA v5.0 P5.5 验收）
 > **审计主体**: E01 首席架构师 + E06 认知科学专家
 > **审计对象**: RHI-CG 5 任务集进化 3 轮验收（P5.5.1 ~ P5.5.4）
 > **权威源**: `docs/architecture/NEXUS_OMEGA_v5_P5_实施计划文档.md` §3.6 + `NEXUS-OMEGA_v5.0_系统性完整设计文档.md` §13.3 / §14
@@ -348,16 +348,16 @@ NEXUS-OMEGA v5.0 P5.5 5 任务集进化 3 轮验收全部通过:
 | `tests/e2e/reports/rhi_cg_audit.md` | 审计报告 | — | 本文档 |
 | `Cargo.toml`（修改） | 配置 | +6 | 新增 `rhi_cg_validation` test target + `nexus-contracts` dev-dependency |
 
-### 8.5 v3.2.0-omega 发布门槛
+### 8.5 v2.4.0-omega 发布门槛
 
-P5.5 验收通过后，v3.2.0-omega 发布门槛已全部满足:
+P5.5 验收通过后，v2.4.0-omega 发布门槛已全部满足:
 
 - ✅ P5.1 通道 A（JudgeClient + SelfComparisonHistory）
 - ✅ P5.2 通道 B（CiGate + SignificanceDetector + SpecRegistry）
 - ✅ P5.3 ImmuneSystem facade
 - ✅ P5.5 5 任务集进化 3 轮验收（KPI-01 + KPI-02 双达标）
 
-**建议**: 进入 v3.2.0-omega release 流程（tag 推送 + release.yml + fuzz.yml CI 触发）。
+**建议**: 进入 v2.4.0-omega release 流程（tag 推送 + release.yml + fuzz.yml CI 触发）。
 
 ---
 
@@ -468,4 +468,4 @@ cargo check --workspace --tests
 
 **报告生成完毕**
 
-> 本审计报告由 E01 首席架构师 + E06 认知科学专家于 2026-07-26 生成，作为 v3.2.0-omega 发布前的最终验收凭据。所有 KPI 验证结果可由 `cargo test --test rhi_cg_validation` 复现。
+> 本审计报告由 E01 首席架构师 + E06 认知科学专家于 2026-07-26 生成，作为 v2.4.0-omega 发布前的最终验收凭据。所有 KPI 验证结果可由 `cargo test --test rhi_cg_validation` 复现。
