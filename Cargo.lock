@@ -180,8 +180,13 @@ dependencies = [
 name = "auto-dpo"
 version = "2.3.1-omega"
 dependencies = [
+ "chrono",
  "criterion",
  "event-bus",
+ "mlc-engine",
+ "model-router",
+ "nexus-contracts",
+ "nexus-core",
  "proptest",
  "serde",
  "serde_json",
@@ -365,6 +370,7 @@ dependencies = [
  "mlc-engine",
  "model-router",
  "mtpe-executor",
+ "nexus-contracts",
  "nexus-core",
  "nmc-encoder",
  "osa-coordinator",
