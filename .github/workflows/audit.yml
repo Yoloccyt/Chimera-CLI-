@@ -30,13 +30,19 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run security audit
-        # WHY --ignore 3 个经评估确认不影响项目的 RUSTSEC 警告:
+        # WHY --ignore 4 个经评估确认不影响项目的 RUSTSEC 警告:
         #   RUSTSEC-2026-0190 (anyhow unsound): 影响 Error::downcast_mut(),
         #     项目用 ? 和 match 处理错误,未调用此方法
         #   RUSTSEC-2026-0002 (lru unsound): 影响 IterMut,
         #     间接依赖(ratatui→lru),ratatui 不使用 IterMut
         #   RUSTSEC-2024-0436 (paste unmaintained): 间接依赖(ratatui→paste),
         #     仅用于宏拼接,无安全影响
+        #   RUSTSEC-2025-0141 (bincode unmaintained): 间接依赖(repo-wiki→hnsw_rs→bincode),
+        #     仅用于 HNSW 序列化,无安全漏洞,bincode 项目已 archived 无修复版本
+        #     跟踪:待 hnsw_rs 升级替换 bincode 后移除此 --ignore
+        # wasmtime 47.0.2 升级(2026-07-25 P3-W12.3.3):消除 16 个 wasmtime RUSTSEC 漏洞
+        #   (含 2 个 critical 沙箱逃逸 RUSTSEC-2026-0095/0096),原 22.0 的漏洞全部不再触发
         # 跟踪计划:待 anyhow 发布修复版本后移除对应 --ignore;
-        #   待 ratatui 升级 lru/paste 后移除对应 --ignore
-        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0002 --ignore RUSTSEC-2024-0436
+        #   待 ratatui 升级 lru/paste 后移除对应 --ignore;
+        #   待 hnsw_rs 替换 bincode 后移除对应 --ignore
+        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0002 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141

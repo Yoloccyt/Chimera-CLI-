@@ -12,6 +12,8 @@ description = "Chimera CLI NEXUS-OMEGA E2E integration tests (workspace root)"
 
 [workspace]
 members = [
+    # L0 Contracts (ADR-033): 纯类型零依赖契约层，必须最先编译
+    "crates/nexus-contracts",
     "crates/nexus-core", "crates/event-bus", "crates/quest-engine",
     "crates/repo-wiki", "crates/model-router", "crates/parliament",
     "crates/pvl-layer", "crates/osa-coordinator", "crates/kvbsr-router",
@@ -24,6 +26,10 @@ members = [
     "crates/gsoe-evolution", "crates/auto-dpo", "crates/mcp-mesh",
     "crates/nmc-encoder", "crates/chtc-bridge", "crates/chimera-tui",
     "crates/chimera-cli", "crates/chimera-mas",
+    # L6 Router: omega-learner Bandit 六接缝(P4-W13.1,workspace 第 37 个 crate)
+    # WHY 排在最后: 学习层为环外新增,通过异步下发 SelectorPolicy::Learned 给调用方,
+    # 不参与现有 crate 依赖环;依赖方向 L6 → L0(nexus-contracts)/L1(event-bus) 合规
+    "crates/omega-learner",
 ]
 resolver = "2"
 
@@ -55,7 +61,10 @@ ratatui = "0.29"
 # WHY 添加到 workspace:chimera-tui(L10)需要终端 IO,ratatui 默认依赖 crossterm,
 # 统一在 workspace 声明版本避免 crate 间版本冲突
 crossterm = "0.28"
-wasmtime = "22.0"
+# wasmtime 已下沉到 seccore/Cargo.toml 直接声明(ADR-035 决策 3):
+# seccore 是唯一使用 wasmtime 的 crate,且通过 `wasm-sandbox` feature gate 隔离,
+# 在 workspace 级声明会导致孤儿依赖(seccore 用 `version = "22.0"` 而非 `workspace = true`)。
+# 保持 wasmtime 版本单一源(seccore/Cargo.toml),避免 workspace 级误导。
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 ndarray = { version = "0.16", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
@@ -67,6 +76,14 @@ sha2 = "0.10"
 hex = "0.4"
 once_cell = "1.20"
 dashmap = "6.1"
+# arc-swap:RCU(Read-Copy-Update)原语,P2-W7.2.3 内环最终一致 + 单调读
+# WHY 添加到 workspace:event-bus 因果一致性三层(L251-255)第二层需要 RCU 保护内环共享状态;
+# 读性能 ~5ns,写性能 ~50ns(§9.1),纯 safe 封装,符合 forbid(unsafe_code) 哲学(unsafe 在依赖内不传播)
+arc-swap = "1.7"
+# hnsw_rs:HNSW 近似最近邻搜索(P2-W8.1 HnswStore 生产路径)
+# WHY 添加到 workspace:repo-wiki VectorStore trait 的生产实现,10K-100K entry 规模;
+# 纯 Rust 实现(依赖 anndists 距离计算库),无系统库依赖,符合 forbid(unsafe_code) 哲学(unsafe 在依赖内不传播)
+hnsw_rs = "0.3.4"
 criterion = { version = "0.5", features = ["html_reports"] }
 # 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
 thiserror = "1.0"
@@ -81,13 +98,24 @@ proptest = { version = "1.5", features = ["alloc"] }
 # (Task 11),统一在 workspace 声明版本避免 crate 间版本冲突
 rand = "0.8"
 # tracing-test:测试中捕获 tracing 日志,用于验证 warn/error 日志输出(SubTask 17.2)
-tracing-test = "0.2.5"
+tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
+# toml:TOML 格式反序列化(P4-W15.1.2 HarnessSpec spec 加载器)
+# WHY 添加到 workspace:gsoe-evolution 的 SpecLoader 需解析 TOML 格式 HarnessSpec 文件
+# (设计文档 §7.2 完整 DSL 以 TOML 形式存储),统一版本避免 crate 间冲突
+toml = "0.8"
 # 本地 workspace crate:供成员通过 `workspace = true` 统一引用,
 # 版本号由 workspace.package 集中管理。
+# nexus-contracts:L0 Contracts 契约层(ADR-033,纯类型零依赖,workspace 第 36 个 crate)
+# WHY 排在首位:L0 是最低层,所有上层 crate 可依赖 L0(L(N) → L(0) 恒允许)
+nexus-contracts = { path = "crates/nexus-contracts" }
 event-bus = { path = "crates/event-bus" }
 chimera-tui = { path = "crates/chimera-tui" }
 # chimera-mas:L9 Quest 多 Agent 协同子系统(ADR-026,workspace 第 35 个 crate)
 chimera-mas = { path = "crates/chimera-mas" }
+# omega-learner:L6 学习层 Bandit 六接缝(ADR-031,workspace 第 37 个 crate)
+# WHY 工作区第 36 个 crate(nexus-contracts 已先于 P2-W5.1 加入);
+# 排在末位因学习层为环外新增,不参与现有依赖环
+omega-learner = { path = "crates/omega-learner" }
 
 # ============================================================
 # E2E 集成测试配置(Week 6 Task 6)

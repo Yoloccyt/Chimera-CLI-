@@ -163,7 +163,13 @@ fn test_week3_memory_storage_router() {
             .compute_all_masks(&profile)
             .await
             .expect("OSA 掩码计算失败");
-        assert!(!masks.mask_hash().is_empty(), "OSA 应计算非空 mask_hash");
+        // ADR-033 P2-W5.2:mask_hash 通过自由函数现算(L0 类型无缓存字段)
+        assert!(
+            !osa_coordinator::compute_omni_mask_hash(&masks)
+                .unwrap()
+                .is_empty(),
+            "OSA 应计算非空 mask_hash"
+        );
 
         // L6 Router:KVBSR 两级块语义路由器
         let _router = kvbsr_router::KVBlockSemanticRouter::new(bus);

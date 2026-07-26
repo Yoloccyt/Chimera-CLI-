@@ -40,7 +40,47 @@
 
 ---
 
-## 🖥️ TUI 企业级监控套件 (v1.8.0-omega)
+## 🆕 v3.1 TUI 自研引擎骨架(ADR-029 — WIP M0)
+
+[v3.1.0-omega(commit `bf9aa75`,2026-07-21)](docs/architecture/ADR-029-tui-v3-interactive-refactor.md) 在 v1.8 企业级监控套件之上启动自研渲染引擎 + Action 统一协议的重构(M0 已完整落地,M1-M5 进行中)。**当前默认仍走 ratatui(v3-engine feature off)**,M2 起逐步切换。
+
+### 5 个新模块(纯 safe Rust,`#![forbid(unsafe_code)]`)
+
+| 模块 | 关键能力 | 决策 |
+|------|----------|------|
+| `chimera-tui/src/engine/` | L3 双缓冲 diff + L4 Flexbox + StylePool + DiffEngine(proptest 幂等) | 决策 1 自研渲染 |
+| `chimera-tui/src/actions/` | Registry 单一事实源 + 6 域分包(quest/task/export/view/system/config) + `MAX_ACTIONS=40` 熔断 + codegen | 决策 5 单一入口 |
+| `chimera-tui/src/input/router.rs` | 5 态 `RouterMode{Normal,Insert,Command,GPrefix,WPrefix}` + 22 `RouteTarget` + 14 D 类快照测试 | 决策 6 输入路由 |
+| `chimera-tui/src/i18n/` | 默认中文 + `t!` 宏 + `Ctrl+L` 切换 + zh 120 keys 与 en 编译期静态表 | 决策 7 i18n |
+| `chimera-tui/src/components/` | L5 组件骨架 `LayoutNode` 树 + `ComponentPanel` trait | 决策 1 组件化 |
+
+### Action 统一协议 8 个事件变体(`event-bus` append-only,`types.rs:1836-1935`)
+
+- `TuiAction{Requested,Progressed,Completed,Failed}` — 4 变体(决策 2)
+- `TuiChat{Submitted,ResponseChunk,Completed,StatusChanged}` — 4 变体(决策 2)
+- 配套枚举:`ActionSource{Chat,Palette,Panel}` + `ChatStatus{Thinking,ToolExecuting,Idle}`
+
+### 5 个新 bench
+
+`diff_engine_bench` / `streaming_bench` / `writer_ansi_bench` / `render_bench` / `data_pipeline_bench`
+
+### 启用方法(M2 阶段)
+
+```toml
+# crates/chimera-tui/Cargo.toml
+[features]
+v3-engine = []  # 默认 off,M2 起切换实际渲染路径
+```
+
+```bash
+cargo build -p chimera-tui --features v3-engine
+```
+
+> **进度跟踪**: 详见 [CHANGELOG.md](CHANGELOG.md) `v3.1.0-omega` 章节 + [INDEX.md](docs/architecture/INDEX.md) 第九类。
+
+---
+
+## 🖥️ TUI 企业级监控套件 (v1.8.0-omega → v3.1.0-omega ADR-029 WIP)
 
 v1.8.0-omega 在既有 TUI 仪表盘之上引入企业级监控能力,覆盖趋势可视化、任务管理、指标仪表盘、历史持久化、系统信息与可配置主题六大维度。
 
@@ -108,8 +148,8 @@ curl -fsSL https://raw.githubusercontent.com/Yoloccyt/Chimera-CLI-/main/install.
 ### Docker
 
 ```bash
-docker pull ghcr.io/yoloccyt/chimera-cli:v2.0.0-omega
-docker run --rm ghcr.io/yoloccyt/chimera-cli:v2.0.0-omega --version
+docker pull ghcr.io/yoloccyt/chimera-cli:v2.3.1-omega
+docker run --rm ghcr.io/yoloccyt/chimera-cli:v2.3.1-omega --version
 ```
 
 ### 源码构建

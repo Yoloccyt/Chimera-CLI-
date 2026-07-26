@@ -126,7 +126,13 @@ fn test_stress_1000_iterations() {
                 .await
                 .expect("OSA 掩码计算失败");
             // 空候选集时 active_count 可能为 0,只验证 mask_hash 存在
-            assert!(!masks.mask_hash().is_empty(), "mask_hash 不应为空");
+            // ADR-033 P2-W5.2:mask_hash 通过自由函数现算
+            assert!(
+                !osa_coordinator::compute_omni_mask_hash(&masks)
+                    .unwrap()
+                    .is_empty(),
+                "mask_hash 不应为空"
+            );
 
             // 4. 推进所有 Task 至 Completed(L9 状态机)
             for j in 0..quest.tasks.len() {

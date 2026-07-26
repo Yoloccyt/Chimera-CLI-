@@ -162,8 +162,11 @@ fn test_osa_sparse_routing() {
             "memory 维度应至少激活 1 个记忆"
         );
         // mask_hash 应为 64 字符的 SHA-256 hex
+        // ADR-033 P2-W5.2:mask_hash 通过自由函数现算(L0 类型无缓存字段)
         assert_eq!(
-            masks.mask_hash().len(),
+            osa_coordinator::compute_omni_mask_hash(&masks)
+                .unwrap()
+                .len(),
             64,
             "mask_hash 应为 64 字符 SHA-256 hex"
         );

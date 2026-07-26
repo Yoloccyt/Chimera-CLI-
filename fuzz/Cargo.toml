@@ -15,6 +15,7 @@
 #   cargo +nightly fuzz run cacr_budget_parse
 #   cargo +nightly fuzz run checkpoint_deserialize
 #   cargo +nightly fuzz run config_section_parse
+#   cargo +nightly fuzz run harness_spec_parse
 #
 # 当前环境仅有 stable 工具链,无法实际运行,详见
 # docs/security/week8_security_report.md
@@ -57,6 +58,11 @@ event-bus = { path = "../crates/event-bus" }
 seccore = { path = "../crates/seccore" }
 # model-router: CACR 预算配置解析 fuzz(cacr_budget_parse target)
 model-router = { path = "../crates/model-router" }
+# P4-W15.3.1: gsoe-evolution + nexus-contracts 用于 harness_spec_parse fuzz target
+# gsoe-evolution: SpecLoader（TOML 反序列化 + 字段校验 + 不可进化面检查）
+# nexus-contracts: HarnessSpec/HarnessSpecError/ImmutableSurface 类型（L0 契约层）
+gsoe-evolution = { path = "../crates/gsoe-evolution" }
+nexus-contracts = { path = "../crates/nexus-contracts" }
 
 # 序列化依赖(直接指定版本,fuzz crate 不在 workspace 内无法用 workspace = true)
 serde = { version = "1.0", features = ["derive"] }
@@ -114,6 +120,14 @@ doc = false
 [[bin]]
 name = "config_section_parse"
 path = "fuzz_targets/config_section_parse.rs"
+test = false
+doc = false
+
+# P4-W15.3.1: harness_spec_parse fuzz target
+# 测试 SpecLoader 在任意输入下不 panic + 不可进化面攻击被拒绝
+[[bin]]
+name = "harness_spec_parse"
+path = "fuzz_targets/harness_spec_parse.rs"
 test = false
 doc = false
 

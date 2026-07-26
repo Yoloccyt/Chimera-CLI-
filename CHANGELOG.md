@@ -1,5 +1,83 @@
 # Changelog
 
+## v2.4.0-omega (WIP — v5.0 实施计划 Spec 批准,待 P1-P5 实施完成后发布)
+
+**版本代号**: NEXUS-OMEGA (CONVERGENCE · 四环收敛架构落地)
+**架构基线**: v3.1.0-omega → v3.2.0-omega(minor,append-only,无 BREAKING)
+**关联 Spec**: [nexus-omega-v5-implementation-plan](.trae/specs/nexus-omega-v5-implementation-plan/spec.md)
+**关联 ADR**: ADR-030(unsafe 红线不特批) / ADR-031(Harness-as-Spec + omega-learner 边界) / ADR-032(双通道评估器) / ADR-033(L0 nexus-contracts) / ADR-034(灰度=能力场+编译期 feature) / ADR-035(威胁模型下修 + wasmtime 重启路径) / ADR-037(能力场灰度工程化方案) / ADR-042(R2 GSOE×AutoDPO 约束 RL FormalVerifier 落地前无条件冻结) / ADR-043(R1 召回配额 CQL/IQL 影子模式设计)
+
+### 版本号协调策略(用户裁决方案 A,2026-07-23)
+
+- **问题**: CHANGELOG 已有 v3.1.0-omega WIP(TUI v3.1 M0),v5.0 设计文档目标 v3.0.0-omega 与之冲突
+- **裁决**: ✅ 方案 A(已采纳)— v5.0 目标改为 **v3.2.0-omega**(minor,承接 v3.1.0-omega append-only minor 链)
+- **策略**: 先完成 v3.1.0-omega WIP(TUI v3.1 M1-M5)合并,再启动 v5.0 P1,最终以 v3.2.0-omega 发布
+- **依据**: ADR-031 附录 C(已裁决)
+
+### 预期交付物(20 周五阶段 P1-P5)
+
+> 以下为本版本计划交付物占位,各阶段完成后回填实施记录。详见 `.trae/specs/nexus-omega-v5-implementation-plan/tasks.md`。
+
+- **P1 安全与基线**(W1-4): Critical 通道有界化(修复 D3) + 威胁模型下修(修复 D6) + tracing 贯穿 + 高危操作强制升级通道 + Merkle 审计链全覆盖
+- **P2 契约与膜**(W5-8): `nexus-contracts` L0 crate 建立 + OmniSparseMasks 上提(3 router 依赖切换) + Membrane 深化(渗透/背压/因果时钟) + VectorStore trait + HnswStore
+- **P3 内环升级**(W9-12): HCW-Sparse v2.0 三级召回流水线 + TemporalMeta 全链 + wasmtime 沙箱重启 PoC + INV-9 委托图无环不变量
+- **P4 学习层**(W13-16): `omega-learner` L6 crate 建立 + LinUCB 六接缝灰度 + Harness-as-Spec DSL v0 + SpecRegistry + model-router 轨迹捕获 + 经验回放池(≥10K)
+- **P5 进化闭环**(W17-20): RHI-CG 双通道(通道 A 提议 + 通道 B CI 否决) + ImmuneSystem facade(悖论三探针) + §5.2 九项收敛裁决对账完成 + 5 任务集进化 3 轮验收(北极星指标)
+
+### 新增 crate(2 个)
+
+- `nexus-contracts`(L0 合约层)— 纯类型 + 零逻辑 + 零依赖;OmniSparseMasks / HarnessSpec / TemporalMeta / NamespaceQuota / SelectorPolicy
+- `omega-learner`(L6 Router 层)— LinUCB Bandit 学习;嫁接 gsoe-evolution / auto-dpo;异步下发 + 本地 fallback
+
+### 新增 ADR(9 份)
+
+- ADR-030: unsafe 红线不特批,安全等价物重写(arc-swap/crossbeam/bumpalo)
+- ADR-031: Harness-as-Spec + omega-learner 边界(含 C2 嫁接点命名映射表 + §5.2 九项裁决对账附录 + 版本号协调策略附录 C)
+- ADR-032: 双通道评估器(RHI-CG 通道 A 提议 + 通道 B 否决)
+- ADR-033: L0 nexus-contracts(依赖铁律扩展 `L(N) → L(0)` 恒允许)
+- ADR-034: 灰度=能力场 + 编译期 feature(否决运行时 Feature Flag)
+- ADR-035: 威胁模型下修 + wasmtime 沙箱重启路径
+- ADR-037: 能力场灰度工程化方案(CapabilityToken 四态 + EWMA α=0.1 + AsaIntervention 安全闭环,P4-W14.5 落地)
+- ADR-042: R2(GSOE×AutoDPO 约束 RL)FormalVerifier 落地前无条件冻结(P4-W16.2.3 落地,5 项工程实施决策:冻结范围 + 冻结期限 + 三阶递进式解冻 + 违反处置预案 + 工程硬约束)
+- ADR-043: R1 召回配额 CQL/IQL 影子模式设计(P4-W16.2.4 落地,5 项工程实施决策:影子模式开关机制 + 对比报告类型 + 2 周解冻条件 EWMA≥0.7/胜率≥71.4% + 回滚预案 4 项触发 + 工程硬约束 S7 接缝扩展)
+
+***
+
+## v3.1.0-omega (2026-07-22, WIP — M0 完整落地,M1-M2 进行中)
+
+**版本代号**: NEXUS-OMEGA (TUI v3.1 Interactive Refactor · M0)
+**架构基线**: v2.3.1-omega → v3.1.0-omega(minor,无 BREAKING,append-only)
+**关联 ADR**: [ADR-029-tui-v3-interactive-refactor](docs/architecture/ADR-029-tui-v3-interactive-refactor.md)
+**核心 Commit**: `bf9aa75 feat(chimera-tui): 添加自研渲染引擎特性标志与统一命令面板`
+
+### M0 落地(8 项决策全部实装)
+
+- **自研渲染引擎骨架**: `chimera-tui/src/engine/{buffer,diff,style,writer,rect,compat}.rs` + `engine/layout/{presets,flex,constraint,node,engine}.rs`;纯 safe Rust,保留 crossterm L1/L2 后端(其 unsafe 封装在自身 crate,不违反 `#![forbid(unsafe_code)]`)
+- **Action 统一协议**: `event-bus/src/types.rs` append-only +8 变体(`TuiAction{Requested,Progressed,Completed,Failed}` + `TuiChat{Submitted,ResponseChunk,Completed,StatusChanged}`,行 1836-1935) + 2 枚举(`ActionSource{Chat,Palette,Panel}` · `ChatStatus{Thinking,ToolExecuting,Idle}`);`metadata()`/`severity()`/`type_name()` 全部正确扩展(行 2043/2091-2095/2199-2206)
+- **Action Registry 单一事实源**: `actions/{registry,descriptor,codegen,panel_menu}.rs` + `actions/domains/{quest,task,export,view,system,config}.rs`;`with_builtin_domains()` 聚合六域;`MAX_ACTIONS=40` 熔断;首期约 30 个 Action
+- **InputRouter 路由**: `input/router.rs` 5 态 `RouterMode{Normal,Insert,Command,GPrefix,WPrefix}` + 22 变体 `RouteTarget`;14 项 D 类快照测试
+- **i18n 默认中文**: `i18n/{mod,zh,en}.rs` + `Locale` + `AtomicU8` + `set_locale`/`toggle_locale`/`tr`/`t!` 宏 + Ctrl+L 切换;zh 120 keys 与 en 一一对齐(单测强制)
+- **`v3-engine`** **feature 双轨**: `chimera-tui/Cargo.toml:10-12` 默认 off,渐进迁移;`engine/compat.rs` ratatui 兼容桥就绪(M2 启用)
+- **5 benches**: `data_pipeline_bench` / `render_bench` / `diff_engine_bench` / `streaming_bench` / `writer_ansi_bench`
+- **chimera-cli 订阅编排**: `chimera-cli/src/action_orchestrator.rs:40` 订阅 `TuiActionRequested`、`orchestrator.rs` 订阅 `TuiChatSubmitted`(L10 依赖铁律合规)
+
+### 验证
+
+- ✅ 2877 tests + 5 新增 benches 全绿
+- ✅ `cargo check --workspace` 35/35 crate 零错误
+- ✅ `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` 零警告
+- ✅ 8 项决策代码全部就位 + 测试覆盖完整
+
+### 后续里程碑
+
+- **M1** (进行中): Action 域继续扩展(目标 40 熔断线内);InputRouter D 类测试补全
+- **M2**: `v3-engine` feature 启用,经 compat 层桥接 ratatui 渲染快照
+- **M3**: `chimera-cli` 编排 Agent(M3 起订阅)
+- **M4**: 交互式面板全部迁移
+- **M5**: 移除 ratatui 与兼容层,引擎成为唯一渲染路径
+
+***
+
 ## v2.3.1-omega (2026-07-21)
 
 **版本代号**: NEXUS-OMEGA (Release Pipeline Remediation)
@@ -18,6 +96,7 @@
 **版本代号**: NEXUS-OMEGA (Comprehensive Audit · TUI Finalization · Governance)
 **架构基线**: v2.2.0-omega → v2.3.0-omega(minor,发布就绪验证)
 **关联文档**:
+
 - 架构审计: [architecture-audit-2026-07-20](docs/architecture/audit/architecture-audit-2026-07-20.md)
 - 专家团队: [expert-team-framework](docs/architecture/governance/expert-team-framework.md)
 - 任务优先级: [task-priority-system](docs/architecture/governance/task-priority-system.md)
@@ -26,8 +105,8 @@
 
 - **10 层架构系统性审计**: 35 crate 全覆盖,L1-L10 各层实现状态评估,零 Stub
 - **依赖铁律合规验证**: 零向上依赖违规,`nexus-core` 最小依赖,`event-bus` 唯一跨层通道
-- **`#![forbid(unsafe_code)]` 核验**: 35/35 crate = 100% 合规
-- **测试覆盖率统计**: ~1039 单元测试 + 88 proptest + 42 criterion bench + 11 E2E + 6 fuzz target
+- **`#![forbid(unsafe_code)]`** **核验**: 35/35 crate = 100% 合规
+- **测试覆盖率统计**: \~1039 单元测试 + 88 proptest + 42 criterion bench + 11 E2E + 6 fuzz target
 - **已知风险清单**: 4 项(3 低风险 + 1 中风险),含缓解建议
 
 ### Phase B: TUI 收尾
@@ -54,7 +133,7 @@
 - **80% 能力复用**(ADR-028 决策 2):复用 hcw-window / osa-coordinator / event-bus / quest-engine / gqep-executor / qeep-protocol / repo-wiki / mlc-engine / cmt-tiering / efficiency-monitor / parliament 等 11 个现有 crate
 - **INV-7/INV-8 不变量**(ADR-028 决策 3):上下文预算界 + 归档单调性,proptest 1000 次无违反
 - **三类压力源降级链**(ADR-028 决策 4):MemoryNearBudget / ExpertOverload / ArchiveIoContention → 降级步骤序列
-- **5 项 criterion 基准**(ADR-028 决策 5):window_select < 1ms / mlc_l2_knn < 5ms / wiki_knn@1000 < 10ms / wiki_knn@10 < 1ms / decay_compute < 1μs / 50agent_mem_peak ≤ 130MB
+- **5 项 criterion 基准**(ADR-028 决策 5):window\_select < 1ms / mlc\_l2\_knn < 5ms / wiki\_knn\@1000 < 10ms / wiki\_knn\@10 < 1ms / decay\_compute < 1μs / 50agent\_mem\_peak ≤ 130MB
 - **SemVer minor 升级**(v2.1.0-omega → v2.2.0-omega):严格向后兼容,无 BREAKING 变更
 
 ### Added
@@ -65,32 +144,26 @@
   - 新增 `src/context/budget_model.rs`:`MemoryBudgetModel`(50 Agent + 1M 上下文 = 130MB 预算模型)+ `AdmissionGate::check()`(派生准入闸,违反 INV-7 时返回 `AdmissionGateDenied` 并发布 Critical 事件)
   - 复用 `hcw-window::HierarchicalWindow::select()` 四级窗口分层 + `osa-coordinator::compute_masks()` 五维稀疏掩码
   - INV-7 不变量:任意时刻 `m_total ≤ MEMORY_BUDGET_MB × MEMORY_BUDGET_UTILIZATION`(130MB × 0.9 = 117MB)
-
 - **§16 任务复杂度分块与分批调度**
   - 新增 `src/chunker.rs`:`TaskChunker::chunk()`(按 TaskComplexity 切块)+ `BatchExecutor`(分批调度)+ `BatchConfig` / `ChunkOutput` / `BatchResult`
   - 复用 `quest-engine::Quest` DAG 与 `TaskComplexity` 映射
   - 切块深度上限保护:`delegation_depth >= MAX_AGENT_DEPTH`(5)时返回 `ChunkingFailed`
-
 - **§17 Agent 记忆三级归档(1mo/3mo/6mo)+ INV-8**
   - 新增 `src/archive/` 目录:`compressor.rs`(归档压缩)+ `scheduler.rs`(归档调度)+ `tier.rs`(归档层级)+ `mod.rs`
   - 三级归档:Hot(1mo)→ Warm(3mo)→ Cold(6mo)→ Ice(永久),复用 `mlc-engine` L0-L3 + `cmt-tiering` Hot/Warm/Cold/Ice + `scc-cache` 推测缓存
   - INV-8 不变量:归档沿 Hot→Warm→Cold→Ice 单向降级,`InvariantChecker::check_inv8_archive_monotonicity()` 检查每次操作
-
 - **§18 知识协同:专家咨询 + 互询 + Wiki 检索**
   - 新增 `src/knowledge/` 目录:`expert_consult.rs`(专家咨询)+ `mutual_inquiry.rs`(同僚互询)+ `wiki_retrieval.rs`(Wiki 检索)+ `mod.rs`
   - `ExpertConsultant`:复用 `model-router` 选择专家旗舰模型 + `faae-router` Function-as-Expert 语义路由
   - `MutualInquirer`:同象限专家互询,正则脱敏(§5.5 ContextIsolation)
   - `WikiRetriever`:复用 `repo-wiki` FTS5 全文检索 + 内存 KNN,三级检索链短路
-
 - **§19 系统稳定运行与功能完整闭环(零孤儿)**
   - 新增 `src/stability.rs`:`StabilityGuard`(故障隔离,复用 `parliament::RoleRegistry`)+ `CircuitBreaker`(Closed/Open/HalfOpen 三态机)+ `DegradationChain`(三类压力源降级链)+ `DegradationStep` / `PressureSource` / `TerminalState`
   - 三类压力源:`MemoryNearBudget`(INV-7 阈值)/ `ExpertOverload`(咨询超时率 > 5%)/ `ArchiveIoContention`(IO 等待)
   - 降级链协同 `acb-governor` + `decb-governor` + `efficiency-monitor`,Critical 事件走 mpsc 通道
-
 - **§20 PDCA 端到端闭环强化 + criterion 基准**
-  - 新增 `src/pdca.rs`(930 行):`PdcaLoop`(check/act/plan_reflux 三方法)+ `PdcaMetrics`(6 项度量)+ `PdcaAdjustments`(tier 分布 / tau / pool_size / wsjf 权重)+ `PlanReflux` + `PdcaAlert` + `AlertThresholds`(4 条告警规则)
+  - 新增 `src/pdca.rs`(930 行):`PdcaLoop`(check/act/plan\_reflux 三方法)+ `PdcaMetrics`(6 项度量)+ `PdcaAdjustments`(tier 分布 / tau / pool\_size / wsjf 权重)+ `PlanReflux` + `PdcaAlert` + `AlertThresholds`(4 条告警规则)
   - 新增 5 项 criterion 基准(从 4 项扩展到 9 项):`window_select` / `mlc_l2_knn_top10@4096` / `wiki_knn@1000` / `wiki_knn@10` / `decay_compute` / `50agent_mem_peak`
-
 - **§21 合规增补与 INV-7/INV-8 不变量编码**
   - 新增 `src/invariants.rs`:`InvariantChecker`(INV-7/INV-8 检查器)+ `ArchiveTier` 枚举 + `MEMORY_BUDGET_MB`(130)/ `MEMORY_BUDGET_UTILIZATION`(0.9)常量
   - proptest 1000 次属性测试覆盖 INV-7(随机派生序列不超预算)+ INV-8(随机归档序列满足单调性)
@@ -106,7 +179,7 @@
 
 #### 测试覆盖
 
-- 新增 ~80 个测试用例(单元 + 集成 + proptest)
+- 新增 \~80 个测试用例(单元 + 集成 + proptest)
 - proptest 1000 次属性测试:INV-7 上下文预算界 + INV-8 归档单调性
 - 所有测试通过 `cargo test --workspace`
 
@@ -159,7 +232,7 @@
 - 扩展 `src/orchestrator.rs`:新增 `delegate_quadrants()` 象限感知孙层编排路径(保留 `delegate()` 现有语义)
 - 扩展 `src/delegation.rs`:`AgentTask` 新增 `priority: TaskPriority` 字段(`new()` 默认 Medium + `with_priority()` builder,非破坏性)
 - 扩展 `src/error.rs`:新增 `QuadrantFanoutExceeded` / `QuadrantConflict` 变体(25 → 27)
-- 新增测试 **62+ 个**:24 quadrant + 19 scheduler + 13 experts + 6 orchestrator(delegate_quadrants)+ 5 proptest(INV-3/INV-4/Critical>Low)
+- 新增测试 **62+ 个**:24 quadrant + 19 scheduler + 13 experts + 6 orchestrator(delegate\_quadrants)+ 5 proptest(INV-3/INV-4/Critical>Low)
 - 新增 ADR-027 + spec `add-chimera-mas-quadrant`
 
 ### Changed
@@ -182,7 +255,7 @@
 
 ### 重大变更
 
-- **新增 `crates/chimera-mas` crate**(L9 Quest 层,workspace 第 35 个 crate),引入多 Agent 协同工作能力,支持根协调器委托、并行执行、上下文隔离、Token 预算管理与心跳监控
+- **新增** **`crates/chimera-mas`** **crate**(L9 Quest 层,workspace 第 35 个 crate),引入多 Agent 协同工作能力,支持根协调器委托、并行执行、上下文隔离、Token 预算管理与心跳监控
 - **event-bus 扩展 7 个 Agent 相关 NexusEvent 变体**(67 → 74),新增 `EventTopic::Agent` 主题与 3 个辅助类型(`TaskPriority`/`ConsultUrgency`/`AgentStatus`)
 - **SemVer major 版本升级**(v1.8.0-omega → v2.0.0-omega),按 §3.3.1 第 5 条向后兼容规则标记 GA 后演进里程碑
 
@@ -213,7 +286,7 @@
 - 在 `crates/event-bus/src/topic.rs` 新增 `EventTopic::Agent` 变体 + 7 个 match 分支(返回 `EventTopic::Agent`)
 - 在 `crates/event-bus/src/logging.rs` 新增 `TopicLabel::Agent` + `From<EventTopic> for TopicLabel` impl(Prometheus 标签同步)
 - 在 `crates/event-bus/src/lib.rs` 导出 3 个新类型(`TaskPriority`/`ConsultUrgency`/`AgentStatus`)+ prelude
-- 新增测试 **39 个**(34 个 agent_events_test + 5 个 filtered_subscriber_test 新增函数),event-bus 全量 **177 测试通过**
+- 新增测试 **39 个**(34 个 agent\_events\_test + 5 个 filtered\_subscriber\_test 新增函数),event-bus 全量 **177 测试通过**
 
 #### ADR 与文档
 
@@ -242,10 +315,10 @@
 
 - **不新建 AgentMessageBus** — 合并到 event-bus(§2.2 唯一通道铁律;Ω-Event 单一实现)
 - **AgentContext 不自实现压缩** — 委托 `hcw-window::HcwWindow`(Ω-Compress 单一实现;1M = 128K 实际 + 8× 稀疏压缩,不暴力加载)
-- **AgentTask wrapper 包装 `nexus_core::Task`** — 不修改核心类型(§3.3.1 领域类型稳定性;AgentTask 含 inner + complexity + estimated_tokens + acceptable_latency + quality_requirement)
+- **AgentTask wrapper 包装** **`nexus_core::Task`** — 不修改核心类型(§3.3.1 领域类型稳定性;AgentTask 含 inner + complexity + estimated\_tokens + acceptable\_latency + quality\_requirement)
 - **不引入 Kuzu/LanceDB/Cognee** — 用 petgraph + 内存 KNN + 自实现 KG(保持 `#![forbid(unsafe_code)]` 35/35 crate 全覆盖;ADR-005 sqlite-vec 禁用教训延续)
-- **复用 `nexus_core::ThinkingMode`** — 不新建 ThinkingMode::Max(`TaskComplexity::From<ThinkingMode>` 映射:Simple→Fast, Medium→Standard, Complex/VeryComplex→Deep)
-- **Duration 类型用 `tokio::time::Duration`** — 非 `chrono::Duration`(委托超时 `tokio::time::timeout` 包装,§6.1 零孤儿调用红线)
+- **复用** **`nexus_core::ThinkingMode`** — 不新建 ThinkingMode::Max(`TaskComplexity::From<ThinkingMode>` 映射:Simple→Fast, Medium→Standard, Complex/VeryComplex→Deep)
+- **Duration 类型用** **`tokio::time::Duration`** — 非 `chrono::Duration`(委托超时 `tokio::time::timeout` 包装,§6.1 零孤儿调用红线)
 - **设计文档 11 子模块精简为 3 子模块** — 8/11 子模块与现有 crate 重复(orchestrator + agent + context 三模块覆盖 Stage A 全部需求)
 - **6 Phase 42 天拆分为 Stage A(2-3 周)+ Stage B(待评估)** — Stage A 完成 Task 1-17 核心框架,Stage B 待 Stage A 验收后启动(深度集成 quest-engine/gqep-executor/qeep-protocol 三方协同)
 
@@ -259,20 +332,20 @@
 - ✅ broadcast subscribe 在 spawn 之前同步调用(§4.4 反模式 3)
 - ✅ `FuturesUnordered` 替代 `join_all`(§4.1 规范,DelegationExecutor)
 - ✅ `tokio::time::Duration` 而非 `chrono::Duration`(§4.4 反模式规避)
-- ✅ f32 不隐式转 f64(Task 10 WARNING_THRESHOLD 全程 f64)
+- ✅ f32 不隐式转 f64(Task 10 WARNING\_THRESHOLD 全程 f64)
 - ✅ proptest block-named 语法(§4.1 `fn name(arg in strategy) { body }`)
 
 ### 测试矩阵
 
-| 测试套件 | 通过率 | 备注 |
-|---------|--------|------|
-| chimera-mas 全量 | ✅ 219/219 | 47 unit + 15 context + 37 factory + 20 meta + 18 task + 16 delegation + 11 integration + 22 orchestrator + 6 proptest + 18 budget + 9 doctest |
-| event-bus 全量 | ✅ 177/177 | 75 unit + 34 agent_events + 11 control + 4 critical + 27 bus + 10 filtered + 6 integration + 6 metrics + 4 doctest |
-| clippy(chimera-mas) | ✅ 0 warning | `--all-targets --jobs 2 -- -D warnings` |
-| clippy(event-bus) | ✅ 0 warning | `--all-targets --jobs 2 -- -D warnings` |
-| fmt check | ✅ 通过 | `cargo fmt --all -- --check` |
-| benchmark 编译 | ✅ 通过 | `cargo check -p chimera-mas --benches`(4 benchmark 函数) |
-| **合计新增** | **+258 测试** | chimera-mas 219 + event-bus 39 |
+| 测试套件                | 通过率         | 备注                                                                                                                                            |
+| ------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| chimera-mas 全量      | ✅ 219/219   | 47 unit + 15 context + 37 factory + 20 meta + 18 task + 16 delegation + 11 integration + 22 orchestrator + 6 proptest + 18 budget + 9 doctest |
+| event-bus 全量        | ✅ 177/177   | 75 unit + 34 agent\_events + 11 control + 4 critical + 27 bus + 10 filtered + 6 integration + 6 metrics + 4 doctest                           |
+| clippy(chimera-mas) | ✅ 0 warning | `--all-targets --jobs 2 -- -D warnings`                                                                                                       |
+| clippy(event-bus)   | ✅ 0 warning | `--all-targets --jobs 2 -- -D warnings`                                                                                                       |
+| fmt check           | ✅ 通过        | `cargo fmt --all -- --check`                                                                                                                  |
+| benchmark 编译        | ✅ 通过        | `cargo check -p chimera-mas --benches`(4 benchmark 函数)                                                                                        |
+| **合计新增**            | **+258 测试** | chimera-mas 219 + event-bus 39                                                                                                                |
 
 ### 升级路径(从 v1.8.0-omega)
 
@@ -282,7 +355,7 @@
 4. **配置**: chimera-mas 当前无外部配置文件需求,所有运行时参数通过构造器注入
 5. **Stage B 衔接**: Stage A 完成核心框架,Stage B 将集成 quest-engine/gqep-executor/qeep-protocol 三方协同 + 专家咨询路由 + 记忆归档 + Wiki 知识共享 + CircuitBreaker + GSOE 进化
 
----
+***
 
 ## v1.8.0-omega (2026-07-16)
 
@@ -341,7 +414,7 @@
 #### 🔧 TuiConfig 5 字段扩展(向后兼容)
 
 - `enable_trend_charts: bool`(默认 false,需显式开启)
-- `metrics_sample_interval_ms: u64`(默认 1000,范围 [100, 60000])
+- `metrics_sample_interval_ms: u64`(默认 1000,范围 \[100, 60000])
 - `metrics_history_retention_days: u32`(默认 7,范围 ≥ 1)
 - `task_manager_default_sort: SortMode`(默认 Priority)
 - `sysinfo_refresh_interval_ms: u64`(默认 5000,范围 ≥ 100)
@@ -349,20 +422,20 @@
 
 ### 测试矩阵
 
-| 测试套件 | 通过率 | 备注 |
-|---------|--------|------|
-| `color_gradient_test` | ✅ 11/11 | P4.1 新增 |
-| `task_manager_test` | ✅ 10/10 | 5 原有 + 4 排序 + 1 公共 |
-| `sysinfo_panel_test` | ✅ 4/4 | P3.1 |
-| `tui_bible_config_test` | ✅ 3/3 | P3.2 |
-| `metrics_history_persistence_test` | ✅ 3/3 | P1.3 |
-| `viz_components_test` | ✅ 5/5 | P1.1 |
-| `metrics_dashboard_test` | ✅ 3/3 | P1.2 |
-| `trend_charts_test` | ⚠️ 8/9 | 1 视觉测试预存在失败,与本任务无关 |
-| `resource_monitor_panel_test` | ✅ 4/4 | 零破坏 |
-| `config_persistence_integration` | ✅ 3/3 | 零破坏 |
-| lib 单元测试 | ✅ 426/426 | 零破坏 |
-| **合计新增** | **+30+ 测试** | P0/P1/P2/P3 全覆盖 |
+| 测试套件                               | 通过率         | 备注                 |
+| ---------------------------------- | ----------- | ------------------ |
+| `color_gradient_test`              | ✅ 11/11     | P4.1 新增            |
+| `task_manager_test`                | ✅ 10/10     | 5 原有 + 4 排序 + 1 公共 |
+| `sysinfo_panel_test`               | ✅ 4/4       | P3.1               |
+| `tui_bible_config_test`            | ✅ 3/3       | P3.2               |
+| `metrics_history_persistence_test` | ✅ 3/3       | P1.3               |
+| `viz_components_test`              | ✅ 5/5       | P1.1               |
+| `metrics_dashboard_test`           | ✅ 3/3       | P1.2               |
+| `trend_charts_test`                | ⚠️ 8/9      | 1 视觉测试预存在失败,与本任务无关 |
+| `resource_monitor_panel_test`      | ✅ 4/4       | 零破坏                |
+| `config_persistence_integration`   | ✅ 3/3       | 零破坏                |
+| lib 单元测试                           | ✅ 426/426   | 零破坏                |
+| **合计新增**                           | **+30+ 测试** | P0/P1/P2/P3 全覆盖    |
 
 ### 架构约束保持
 
@@ -394,7 +467,7 @@
 4. **新面板**: `TaskManagerPanel` / `SysinfoPanel` / `MetricsDashboardPanel` 通过 `PanelId` 自动注册,无破坏既有焦点循环
 5. **数据库**: `~/.chimera/metrics_history.sqlite` 自动创建,无需手工初始化
 
----
+***
 
 ## v1.7.0-omega (2026-07-14)
 
@@ -442,19 +515,19 @@
 
 #### ✅ 测试
 
-| 类型 | 通过率 |
-|------|--------|
-| 单元测试 | ✅ 100% |
-| 集成测试 | ✅ 100% |
-| OWASP Top 10 | ✅ 20/20 |
-| 压力测试 (1000 次) | ✅ 零失败 |
+| 类型            | 通过率     |
+| ------------- | ------- |
+| 单元测试          | ✅ 100%  |
+| 集成测试          | ✅ 100%  |
+| OWASP Top 10  | ✅ 20/20 |
+| 压力测试 (1000 次) | ✅ 零失败   |
 
----
+***
 
 ## v1.5.8-omega (2026-07-13)
 
 - Cargo.lock 版本同步 + workspace 稳定性增强
-- 发布物包含 Windows/Linux/macOS × x86_64/aarch64 五平台二进制
+- 发布物包含 Windows/Linux/macOS × x86\_64/aarch64 五平台二进制
 
 ## v1.5.7-omega (2026-07-12)
 
@@ -465,7 +538,7 @@
 
 - 持续集成与依赖更新
 
-## v1.5.5-omega — v1.5.0-omega (2026-07-09 ~ 2026-07-11)
+## v1.5.5-omega — v1.5.0-omega (2026-07-09 \~ 2026-07-11)
 
 - MCP Mesh 量子网格迭代
 - CSN 降级链完善
@@ -479,7 +552,7 @@
 - MCP 量子网格原型
 - E2E 测试体系建立
 
-## v1.0.2-omega — v1.0.0-omega (2026-06-27 ~ 2026-06-28)
+## v1.0.2-omega — v1.0.0-omega (2026-06-27 \~ 2026-06-28)
 
 - **首周启动**: L0-L1 基础设施、Event Bus、SecCore、Decay、QEEP、CLI 入口
 - L9+L5+L1: Quest Engine、Repo Wiki、Model Router
@@ -487,3 +560,4 @@
 - L7: GEA、GQEP、PVL、MTPE、SCC
 - L8+L4+L3: Parliament、ASA、AHIRT、TTG、DECB
 - **v1.0.0-omega 初始发布** (2026-06-28): 34 crate 全覆盖，3000+ 测试全绿
+
