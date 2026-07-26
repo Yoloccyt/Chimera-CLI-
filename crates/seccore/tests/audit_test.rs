@@ -18,6 +18,7 @@ fn make_spec() -> CommandSpec {
         allowed_args: vec!["hello".to_string()],
         env_whitelist: HashMap::new(),
         risk_level: RiskLevel::Low,
+        risk_score: 10,
     }
 }
 

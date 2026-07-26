@@ -199,6 +199,21 @@ impl AsaAuditor {
     /// - `history_failure_rate`:历史失败次数 / 历史总次数
     ///
     /// 此方法是同步的(基于规则评分,无 I/O),满足 < 5ms 延迟要求。
+    ///
+    /// # P1-W4.1 tracing 贯穿观测
+    /// span 携带 `operation_id` / `safety_score` / `intervention` / `risk_level` 字段,
+    /// `safety_score` 与 `intervention` 在函数内部计算后通过 `Span::current().record()`
+    /// 填充(instrument fields 不能引用局部变量)。`input.content` 可能含敏感信息,
+    /// 故 `skip(self, input)` 仅记录显式声明的字段。
+    #[tracing::instrument(
+        skip(self, input),
+        fields(
+            operation_id = %input.operation_id,
+            safety_score,
+            intervention,
+            risk_level
+        )
+    )]
     pub fn audit(&self, input: &OperationAuditInput) -> AuditResult {
         // 读取历史失败率(RwLock 读锁)
         // WHY: unwrap_or_else 处理 PoisonError,避免 expect/unwrap,poisoned 时仍可访问数据
@@ -250,6 +265,29 @@ impl AsaAuditor {
         // 干预分级
         let intervention = self.classify_intervention(safety_score);
 
+        // P1-W4.1: 填充 instrument span 的延迟字段(safety_score / intervention / risk_level
+        // 在函数内计算后才能确定)。这些字段供 efficiency-monitor 关联同一审计的
+        // 评分与最终干预决策,支持事后回放分析。
+        // WHY tracing::field::debug:intervention / risk_level 是自定义 enum,未实现
+        // tracing::Value,用 debug() 包装为 Debug Value(?value 是宏语法,record 不接受)
+        tracing::Span::current()
+            .record("safety_score", safety_score)
+            .record("intervention", tracing::field::debug(&intervention))
+            .record("risk_level", tracing::field::debug(&risk_level));
+
+        // P1-W4.1: 所有路径(含 Allow)发出 debug 事件,确保 span 字段被 tracing-test 捕获。
+        // WHY debug 而非 info:Allow 路径是高频常态(大多数操作安全),info 级会产生日志噪声;
+        // debug 级在 生产环境默认被 env-filter 过滤,仅测试与调试时可见,兼顾可观测性与低噪声。
+        // 此事件使 operation_id / safety_score / intervention / risk_level 字段进入日志,
+        // 供 efficiency-monitor 跨日志关联同一审计的完整决策链。
+        tracing::debug!(
+            safety_score = safety_score,
+            intervention = ?intervention,
+            risk_level = ?risk_level,
+            keyword_count = keyword_count,
+            "ASA 审计完成"
+        );
+
         // 生成审计原因
         let audit_reason =
             format_audit_reason(intervention, keyword_count, history_rate, safety_score);
@@ -290,11 +328,29 @@ impl AsaAuditor {
     ///
     /// Block 级别使用 tracing::error! 记录,Warn 级别使用 tracing::warn!。
     /// AsaIntervention 事件已在 `audit()` 中通过 `publish_blocking` 发布,无需在此重复发布。
+    ///
+    /// # P1-W4.1 tracing 贯穿观测
+    /// 顶层 span 携带 `operation_id` 与 `intervention` 字段。`intervention` 在
+    /// `audit()` 返回后才能确定,通过 `Span::current().record()` 填充。
+    /// 此 span 是 `audit()` span 的父级,形成 audit → audit_and_intervene
+    /// 的 tracing 父子链,便于 efficiency-monitor 追溯完整 ASA 决策路径。
+    #[tracing::instrument(
+        skip(self, input),
+        fields(
+            operation_id = %input.operation_id,
+            intervention
+        )
+    )]
     pub fn audit_and_intervene(
         &self,
         input: &OperationAuditInput,
     ) -> Result<AuditResult, SecCoreError> {
         let result = self.audit(input);
+
+        // P1-W4.1: 填充 instrument span 的延迟字段(intervention 在 audit() 后才能确定)
+        // WHY tracing::field::debug:result.intervention 是自定义 enum,用 debug() 包装
+        tracing::Span::current()
+            .record("intervention", tracing::field::debug(&result.intervention));
 
         match result.intervention {
             InterventionAction::Allow => {
@@ -306,6 +362,7 @@ impl AsaAuditor {
                 warn!(
                     operation_id = %input.operation_id,
                     safety_score = result.safety_score,
+                    intervention = ?result.intervention,
                     reason = %result.audit_reason,
                     "ASA 告警:操作存在风险,继续执行"
                 );
@@ -316,6 +373,7 @@ impl AsaAuditor {
                 error!(
                     operation_id = %input.operation_id,
                     safety_score = result.safety_score,
+                    intervention = ?result.intervention,
                     reason = %result.audit_reason,
                     "ASA 拦截:操作被阻断"
                 );

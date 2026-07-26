@@ -76,4 +76,39 @@ pub enum SecCoreError {
         /// 阻断原因(人类可读,用于审计追溯)
         block_reason: String,
     },
+
+    /// 高危操作强制升级人工 — `risk_score ∈ [91,100]`,操作被拒绝执行。
+    ///
+    /// WHY: spec.md D6 修复要求 risk_score ≥ 91 的操作不自动执行,必须升级人工决策。
+    /// seccore 不执行该操作,返回此错误由上层(chimera-cli / quest-engine)处理,
+    /// 例如提示用户确认或转入人工审核队列。
+    ///
+    /// 触发场景:`EscalationTier::EscalateToHuman` 档位(risk_score ∈ [91,100]),
+    /// 例如 `dd` / `mkfs` / `fdisk` 等不可恢复的灾难性操作。
+    ///
+    /// NOTE: ADR-035 决策 4 提议的 `EscalationRequired` 语义已由此变体完全覆盖
+    /// (risk_score + program + reason 三元组),无需重复声明。
+    #[error("高危操作升级人工: 程序 '{program}' risk_score={risk_score} (≥91), 原因: {reason}")]
+    EscalateToHuman {
+        /// 风险评分 (0-100,调用时保证 ≥ 91)
+        risk_score: u8,
+        /// 被拒绝的程序名
+        program: String,
+        /// 升级原因(人类可读,用于审计追溯与用户提示)
+        reason: String,
+    },
+
+    /// WASM 沙箱执行错误(ADR-035 决策 2,仅 `wasm-sandbox` feature 启用时产生)。
+    ///
+    /// WHY: wasmtime safe API 的失败路径(模块编译/实例化/调用/fuel 耗尽)需统一错误类型,
+    /// 与进程级隔离的 `SandboxError` 区分,便于上层诊断是 WASM 后端失败还是进程后端失败。
+    ///
+    /// 触发场景:
+    /// - WASM 模块字节码无效(`Module::new` 失败)
+    /// - 实例化失败(导入不匹配,`Instance::new` 失败)
+    /// - 函数调用失败(`Func::call` 返回 trap)
+    /// - Fuel 耗尽(`Trap::OutOfFuel`)
+    /// - 超时(执行超过 `WasmSandbox::execution_timeout`)
+    #[error("WASM 沙箱执行错误: {0}")]
+    WasmSandboxError(String),
 }

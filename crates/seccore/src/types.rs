@@ -36,6 +36,66 @@ pub enum RiskLevel {
     Unknown,
 }
 
+impl RiskLevel {
+    /// 从 0-100 风险评分派生 `RiskLevel` — 保持向后兼容的派生映射。
+    ///
+    /// WHY: D6 修复引入 `risk_score: u8` 作为升级主信号,但旧 API 仍依赖
+    /// `RiskLevel` 枚举。此方法提供从数值评分到枚举的映射,避免破坏既有消费者
+    /// (审计、限流、ASA 等)。映射规则与 `EscalationTier::from_score` 对齐:
+    /// - ReadOnly (0-30)   → Low
+    /// - Normal (31-70)    → Medium
+    /// - Parliament (71-90) → High
+    /// - EscalateToHuman (91-100) → Critical
+    pub fn from_score(score: u8) -> Self {
+        match EscalationTier::from_score(score) {
+            EscalationTier::ReadOnly => Self::Low,
+            EscalationTier::Normal => Self::Medium,
+            EscalationTier::Parliament => Self::High,
+            EscalationTier::EscalateToHuman => Self::Critical,
+        }
+    }
+}
+
+/// 升级档位 — 基于 `risk_score` (0-100) 的 4 级分类,决定操作的执行路径。
+///
+/// WHY: spec.md D6 修复要求按 risk_score 分级处理高危操作:
+/// - `ReadOnly` (0-30): 只读操作,直接执行
+/// - `Normal` (31-70): 常规操作,直接执行
+/// - `Parliament` (71-90): 高危操作,强制 Parliament 辩论 + 自白通道复核
+/// - `EscalateToHuman` (91-100): 极高危操作,拒绝执行并升级人工处理
+///
+/// 与 `RiskLevel` 的区别:`EscalationTier` 是**执行路径决策信号**(决定走哪条通道),
+/// `RiskLevel` 是**审计/限流分类标签**(向后兼容旧消费者)。两者通过
+/// `RiskLevel::from_score` 保持映射一致。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EscalationTier {
+    /// 只读档 (risk_score 0-30):无副作用,直接执行
+    ReadOnly,
+    /// 常规档 (risk_score 31-70):有副作用但可控,直接执行
+    Normal,
+    /// 议会档 (risk_score 71-90):高危,强制 Parliament 辩论 + 自白通道复核
+    Parliament,
+    /// 人工升级档 (risk_score 91-100):极高危,拒绝执行并升级人工决策
+    EscalateToHuman,
+}
+
+impl EscalationTier {
+    /// 从 0-100 风险评分推导升级档位。
+    ///
+    /// 防御性:超过 100 的评分(理论不应出现)归入 `EscalateToHuman`,
+    /// 避免异常评分漏过人工升级通道。
+    pub fn from_score(score: u8) -> Self {
+        match score {
+            0..=30 => Self::ReadOnly,
+            31..=70 => Self::Normal,
+            71..=90 => Self::Parliament,
+            91..=100 => Self::EscalateToHuman,
+            // WHY: 超 100 的评分视为极高危,确保异常输入不漏过人工升级
+            _ => Self::EscalateToHuman,
+        }
+    }
+}
+
 /// 攻击类型 — 对应 6 种需拦截的攻击向量(对齐验收标准)。
 ///
 /// 每个变体对应一类尸检教训:
@@ -109,7 +169,8 @@ impl Command {
 /// 这是 `Command` 通过策略校验后的产物,携带校验时确定的:
 /// - `allowed_args`:已确认安全的参数列表
 /// - `env_whitelist`:已通过环境变量白名单过滤的映射
-/// - `risk_level`:基于程序名与参数评估的风险等级
+/// - `risk_level`:基于程序名与参数评估的风险等级(向后兼容,由 `risk_score` 派生)
+/// - `risk_score`:0-100 数值风险评分(D6 修复:升级通道的主信号)
 ///
 /// 沙箱执行层只接受 `CommandSpec`,不接受原始 `Command`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,8 +181,14 @@ pub struct CommandSpec {
     pub allowed_args: Vec<String>,
     /// 白名单过滤后的环境变量
     pub env_whitelist: HashMap<String, String>,
-    /// 风险等级(用于审计与限流)
+    /// 风险等级(用于审计与限流,由 `risk_score` 经 `RiskLevel::from_score` 派生)
     pub risk_level: RiskLevel,
+    /// 风险评分 (0-100) — D6 修复:高危操作强制升级通道的主信号。
+    ///
+    /// WHY: `risk_level` 枚举只有 4 档粗粒度,无法区分"破坏性但可恢复"(rm,71-90)
+    /// 与"不可恢复的灾难性操作"(dd/mkfs,91-100)。引入数值评分作为升级决策主信号,
+    /// `risk_level` 保留用于向后兼容旧消费者(审计/限流)。
+    pub risk_score: u8,
 }
 
 /// 执行结果 — 沙箱执行后的结构化输出。

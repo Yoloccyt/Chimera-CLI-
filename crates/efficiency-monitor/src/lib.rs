@@ -63,10 +63,23 @@ pub use error::MonitorError;
 pub use types::{AlertEvent, AlertRule, AlertSeverity, Comparison, MetricSample};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use std::time::Duration;
 use tracing::warn;
 
 /// efficiency-monitor 的 source 标识(用于 EventMetadata)
 const MONITOR_SOURCE: &str = "efficiency-monitor";
+
+/// Critical 旁路通道丢弃事件数指标名(P1-W2.2 新增)
+///
+/// 该指标在 /metrics 输出中作为 counter 暴露,同时作为
+/// `EfficiencyAlertTriggered` 事件的 `metric_name` 字段值,
+/// 供 TUI 的 CriticalDroppedSync 同步器识别并更新告警显示。
+///
+/// WHY 常量定义在此处而非 event-bus:event-bus 仅提供
+/// `CriticalEventDropped` 载荷类型与 `critical_dropped_count()` API,
+/// 指标命名与 Prometheus 暴露是 efficiency-monitor(L9)的职责。
+/// TUI(L10)在 `CriticalDroppedSync` 中硬编码同一字符串识别事件。
+pub const CRITICAL_DROPPED_METRIC_NAME: &str = "nexus_critical_event_dropped_total";
 
 /// 判断事件是否为 Critical 告警事件(必须立即告警)
 ///
@@ -231,6 +244,9 @@ impl EfficiencyMonitor {
         let collectors = self.collectors.clone();
         let bus_for_alerts = bus.clone();
         let critical_enabled = self.config.critical_instant_alert;
+        // P1-W2.2:周期性采样 Critical 旁路通道丢弃事件数的间隔
+        // 复用 collect_interval_ms(默认 1s),平衡监控实时性与系统开销
+        let collect_interval_ms = self.config.collect_interval_ms;
 
         // 在 spawn 之前同步订阅两个通道,确保不会错过后续发布的事件
         // WHY: tokio::broadcast 仅投递给发布时已存在的 receiver;
@@ -245,10 +261,19 @@ impl EfficiencyMonitor {
         // 随进程退出自动终止。panic 时 tokio 运行时回收资源,不影响监控数据完整性
         // (collectors 为 Arc 共享,下一轮订阅周期会重新记录)。
         tokio::spawn(async move {
-            // 双通道消费循环:broadcast 主流 + mpsc 旁路兜底
-            // WHY tokio::select!:同时 await broadcast recv 与 mpsc recv,
-            // 哪个先就绪就处理哪个,实现双通道并行消费。select! 是 tokio 标准
-            // 模式,无需额外依赖,符合 §4.1 workspace 依赖规范。
+            // P1-W2.2:周期性采样 Critical 旁路通道丢弃事件数
+            // WHY tokio::time::interval:与事件接收并行,不阻塞 broadcast/mpsc 消费。
+            // interval 第一次 tick 立即返回(采样初始值,通常为 0,无害),后续按
+            // collect_interval_ms 周期触发。select! 随机选择就绪分支,即使错过
+            // 一次 tick,下次仍会采样到正确的累计值(单调递增,非增量)。
+            let mut sample_interval =
+                tokio::time::interval(Duration::from_millis(collect_interval_ms));
+            // 上次采样的累计丢弃数,用于检测是否有新增丢弃
+            let mut last_dropped_count: u64 = 0;
+
+            // 双通道消费循环:broadcast 主流 + mpsc 旁路兜底 + 周期采样
+            // WHY tokio::select!:同时 await broadcast recv、mpsc recv 与 interval tick,
+            // 哪个先就绪就处理哪个。select! 是 tokio 标准模式,无需额外依赖。
             // WHY mpsc 旁路处理:即使在 broadcast Lagged 场景下,Critical 事件
             // 仍需触发告警记录与 EfficiencyAlertTriggered 发布,确保运维感知
             loop {
@@ -282,6 +307,19 @@ impl EfficiencyMonitor {
                             }
                         }
                     }
+                    // P1-W2.2:周期性采样 Critical 旁路通道丢弃事件数
+                    // WHY 独立分支:采样不依赖事件到达,即使无事件也需周期刷新指标,
+                    // 确保 /metrics 端点与 TUI 告警显示反映最新的丢弃累计值。
+                    _ = sample_interval.tick() => {
+                        let current = bus_for_alerts.critical_dropped_count();
+                        collectors.record_critical_dropped(current);
+                        // 仅当累计丢弃数增加时发布告警事件,避免每 tick 重复发布
+                        // WHY 比较 > 而非 !=:EventBus 计数单调递增,> 涵盖所有增长场景
+                        if current > last_dropped_count {
+                            publish_critical_dropped_alert(&bus_for_alerts, current);
+                            last_dropped_count = current;
+                        }
+                    }
                 }
             }
         });
@@ -302,6 +340,33 @@ impl EfficiencyMonitor {
     /// 获取告警引擎引用(用于直接管理规则)
     pub fn alert_engine(&self) -> &AlertRuleEngine {
         &self.alert_engine
+    }
+
+    /// 采样 Critical 旁路通道累计丢弃事件数(P1-W2.2 新增)
+    ///
+    /// 从绑定的 EventBus 拉取 `critical_dropped_count()` 当前累计值,
+    /// 更新采集器的 `nexus_critical_event_dropped_total` 指标快照,
+    /// 返回最新采样值。
+    ///
+    /// # 设计决策(WHY 选项 1:直接调用 bus API)
+    /// efficiency-monitor 持有 `Option<EventBus>` 引用(EventBus 内部为 Arc,
+    /// Clone 廉价),可直接调用 `bus.critical_dropped_count()` 采样。
+    /// 这是最简单的方案,无需新增事件变体或共享 AtomicU64。
+    ///
+    /// # 调用时机
+    /// - **自动**:`start_event_subscriber` 在 select! 循环中加入周期性 tick
+    ///   分支(间隔 = `config.collect_interval_ms`,默认 1s),自动调用此方法
+    /// - **手动**:调用方可在任意时刻调用此方法强制刷新快照(用于测试或
+    ///   未启用 `start_event_subscriber` 的场景)
+    ///
+    /// # 返回
+    /// - `Some(count)`:采样成功,返回当前累计丢弃数
+    /// - `None`:未绑定 EventBus,无法采样
+    pub fn sample_critical_dropped_count(&self) -> Option<u64> {
+        let bus = self.event_bus.as_ref()?;
+        let current = bus.critical_dropped_count();
+        self.collectors.record_critical_dropped(current);
+        Some(current)
     }
 
     /// 发布 Critical 事件立即告警(同步,使用 publish_blocking)
@@ -422,6 +487,37 @@ fn publish_critical_alert_blocking(bus: &EventBus, event: &NexusEvent) {
 
     if let Err(e) = bus.publish_blocking(alert_event) {
         warn!(error = %e, event_type = type_name, "后台任务发布 Critical 告警事件失败");
+    }
+}
+
+/// 发布 Critical 旁路通道丢弃事件数告警(P1-W2.2 新增)
+///
+/// 当 `EventBus::critical_dropped_count()` 检测到累计丢弃数增加时,构造
+/// `EfficiencyAlertTriggered` 事件并通过 `publish_blocking` 发布。
+/// TUI 的 `CriticalDroppedSync` 同步器通过 `metric_name ==
+/// CRITICAL_DROPPED_METRIC_NAME` 识别此事件,更新告警显示。
+///
+/// WHY 使用 publish_blocking:与 `publish_critical_alert_blocking` 一致,
+/// 后台订阅循环中不便 await,publish_blocking 是同步发送,不阻塞事件循环。
+///
+/// WHY triggered_value 为累计值而非增量:TUI 需要显示累计丢弃总数,
+/// 传递累计值避免 TUI 端维护额外的累加状态。`threshold` 设为 0 表示
+/// 任何丢弃都应告警(> 0 即触发)。
+fn publish_critical_dropped_alert(bus: &EventBus, dropped_count: u64) {
+    let alert_event = NexusEvent::EfficiencyAlertTriggered {
+        metadata: EventMetadata::new(MONITOR_SOURCE),
+        rule_id: "critical-event-dropped".into(),
+        metric_name: CRITICAL_DROPPED_METRIC_NAME.to_string(),
+        triggered_value: dropped_count as f64,
+        threshold: 0.0,
+    };
+
+    if let Err(e) = bus.publish_blocking(alert_event) {
+        warn!(
+            error = %e,
+            dropped_count,
+            "后台任务发布 Critical 丢弃告警事件失败"
+        );
     }
 }
 
@@ -747,5 +843,143 @@ mod tests {
         let monitor = EfficiencyMonitor::default();
         assert_eq!(monitor.config().collect_interval_ms, 1000);
         assert!(monitor.config().critical_instant_alert);
+    }
+
+    // ============================================================
+    // P1-W2.2 新增:Critical 旁路通道丢弃事件数采样与告警
+    // ============================================================
+
+    #[test]
+    fn test_sample_critical_dropped_count_without_bus_returns_none() {
+        // 未绑定 EventBus 时,sample_critical_dropped_count 应返回 None
+        let monitor = EfficiencyMonitor::new(MonitorConfig::default());
+        assert_eq!(monitor.sample_critical_dropped_count(), None);
+    }
+
+    #[test]
+    fn test_sample_critical_dropped_count_with_bus_returns_zero_initially() {
+        // 绑定 EventBus 后,初始 dropped_count 应为 0
+        let bus = EventBus::new();
+        let monitor = EfficiencyMonitor::with_event_bus(MonitorConfig::default(), bus);
+        assert_eq!(monitor.sample_critical_dropped_count(), Some(0));
+        // 采集器应反映采样值
+        assert_eq!(monitor.collectors().critical_dropped_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_sample_critical_dropped_count_updates_collector() {
+        // 触发 Critical 通道丢弃后,采样应反映新的累计值
+        let bus = EventBus::new();
+        // 订阅但不消费,模拟慢消费者填满 4096 容量
+        let _stale_rx = bus.subscribe_critical_events();
+
+        let capacity = bus.critical_channel_capacity();
+        let publish_count: u64 = (capacity + 100) as u64;
+
+        for i in 0..publish_count {
+            // publish_critical 显式走 mpsc 旁路,容量满时 try_send 失败丢弃并递增计数
+            let _ = bus
+                .publish_critical(NexusEvent::CacheHit {
+                    metadata: event_bus::EventMetadata::new("test"),
+                    cache_key: format!("k-{i}"),
+                })
+                .await;
+        }
+
+        let monitor = EfficiencyMonitor::with_event_bus(MonitorConfig::default(), bus);
+        let sampled = monitor
+            .sample_critical_dropped_count()
+            .expect("应返回采样值");
+        // 应有丢弃发生(具体数量取决于 try_send 时序,但应 > 0)
+        assert!(
+            sampled > 0,
+            "发布 {publish_count} 个事件到容量 {capacity} 的通道,应有丢弃发生"
+        );
+        assert_eq!(monitor.collectors().critical_dropped_count(), sampled);
+    }
+
+    #[test]
+    fn test_render_metrics_contains_critical_dropped_total() {
+        // /metrics 输出应包含 nexus_critical_event_dropped_total 指标
+        let bus = EventBus::new();
+        let monitor = EfficiencyMonitor::with_event_bus(MonitorConfig::default(), bus);
+        monitor.sample_critical_dropped_count();
+
+        let output = monitor.render_metrics();
+        assert!(output.contains("# HELP nexus_critical_event_dropped_total"));
+        assert!(output.contains("# TYPE nexus_critical_event_dropped_total counter"));
+        assert!(output.contains("nexus_critical_event_dropped_total"));
+    }
+
+    #[tokio::test]
+    async fn test_start_event_subscriber_publishes_dropped_alert() {
+        // 后台订阅器应周期性采样 dropped_count 并在增加时发布告警事件
+        //
+        // WHY 大容量 broadcast(16384):publish_critical 会向 broadcast + mpsc 双通道
+        // 投递 4146 个 CacheHit 事件;后台任务的 critical_rx 消费后会对每个事件调用
+        // handle_critical_event → publish_critical_alert_blocking,再向 broadcast 投递
+        // 4146 个 EfficiencyAlertTriggered 事件。总计 ~8293 事件远超默认容量 1024,
+        // 会导致 test rx Lagged → rx.recv() 返回 Err → while 循环提前退出。
+        // 16384 容量可吸收全部事件,确保 test rx 不丢 dropped alert。
+        let bus = EventBus::with_capacity(16384);
+        let mut rx = bus.subscribe();
+
+        // 使用极短采样间隔加速测试(10ms)
+        let config = MonitorConfig {
+            collect_interval_ms: 10,
+            ..MonitorConfig::default()
+        };
+        let monitor = EfficiencyMonitor::with_event_bus(config, bus.clone());
+        monitor.start_event_subscriber().expect("启动订阅失败");
+
+        // 给后台任务时间启动
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 触发 Critical 通道丢弃:订阅但不消费,填满 4096 容量
+        let _stale_rx = bus.subscribe_critical_events();
+        let capacity = bus.critical_channel_capacity();
+        for i in 0..(capacity + 50) as u64 {
+            let _ = bus
+                .publish_critical(NexusEvent::CacheHit {
+                    metadata: event_bus::EventMetadata::new("test"),
+                    cache_key: format!("k-{i}"),
+                })
+                .await;
+        }
+
+        // 等待至少一个采样周期(10ms × 2 = 20ms,加余量)
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // 应收到至少一个 EfficiencyAlertTriggered 事件(metric_name = nexus_critical_event_dropped_total)
+        let mut found_dropped_alert = false;
+        // 排空已有事件(可能包含 mpsc 旁路的 Critical 告警)
+        // WHY 处理 Err(Lagged):即使 16384 容量,极端时序下仍可能 Lagged,
+        // 此时 continue 继续排空而非退出循环,确保不遗漏后续的 dropped alert 事件。
+        while let Ok(recv_result) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
+        {
+            match recv_result {
+                Ok(event) => {
+                    if let NexusEvent::EfficiencyAlertTriggered { metric_name, .. } = &event {
+                        if metric_name == CRITICAL_DROPPED_METRIC_NAME {
+                            found_dropped_alert = true;
+                            break;
+                        }
+                    }
+                }
+                // Lagged/SlowConsumerDropped:继续排空,不退出循环
+                Err(_) => continue,
+            }
+        }
+        assert!(
+            found_dropped_alert,
+            "应发布 metric_name = {CRITICAL_DROPPED_METRIC_NAME} 的告警事件"
+        );
+
+        // 采集器应反映丢弃计数
+        assert!(
+            monitor.collectors().critical_dropped_count() > 0,
+            "采集器应记录丢弃计数"
+        );
     }
 }

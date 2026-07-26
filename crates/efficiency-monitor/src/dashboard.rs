@@ -55,6 +55,12 @@ fn get_metric_meta(name: &str) -> MetricMeta {
             help: "Total alerts triggered",
             metric_type: "counter",
         },
+        // P1-W2.2 新增:Critical 旁路通道累计丢弃事件数
+        // 与 event-bus 的 CriticalEventDropped 指标载荷对齐(spec.md L188)
+        "nexus_critical_event_dropped_total" => MetricMeta {
+            help: "Total Critical events dropped by bounded mpsc bypass channel (capacity 4096)",
+            metric_type: "counter",
+        },
         _ => MetricMeta {
             help: "Unknown metric",
             metric_type: "untyped",

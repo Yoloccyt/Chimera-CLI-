@@ -144,6 +144,7 @@ fn test_tamper_detected() {
         allowed_args: vec!["hello".to_string()],
         env_whitelist: HashMap::new(),
         risk_level: RiskLevel::Low,
+        risk_score: 10,
     };
     let result = ExecutionResult {
         exit_code: 0,

@@ -3,6 +3,15 @@ name = "seccore"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# 默认构建:仅进程级隔离(tokio::process::Command),零额外依赖,契合单机 CLI 零依赖部署。
+default = []
+# WASM 沙箱 PoC(ADR-035 决策 2):启用 wasmtime 后端,为高风险场景提供 VM 级隔离。
+# 启用方式:`cargo check -p seccore --features wasm-sandbox`。
+# WHY feature gate:wasmtime 编译时间约 5+ 分钟,体积大;默认构建不应承担此成本。
+#     ADR-035 明确"Windows 仅作 PoC 验证可编译性,不强制启用"。
+wasm-sandbox = ["dep:wasmtime"]
+
 [dependencies]
 # SHA-256 审计链哈希计算
 sha2 = { workspace = true }
@@ -20,12 +29,28 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 # Event Bus:L1 事件总线,发布 AsaIntervention 事件通知 Parliament 干预决策(§2.2 跨层通信唯一通道)
 event-bus = { path = "../event-bus" }
+# WASM 沙箱后端(ADR-035 决策 2,可选):仅在 `wasm-sandbox` feature 启用时引入。
+# WHY 直接版本声明而非 workspace 级:ADR-035 决策 3 明确要求避免 workspace 级孤儿声明,
+#     由 seccore 自身显式声明,避免再次孤儿化(根 Cargo.toml L60 的孤儿声明已在 P1 阶段清理)。
+# WHY optional:默认构建不引入 wasmtime(编译时间与体积成本),仅 PoC 与高风险场景启用。
+# WHY 不设 default-features = false:wasmtime 默认 features 含 "runtime"(提供 Engine/Store/Module/
+#      Instance/TypedFunc/Trap 等核心 safe API),禁用会导致类型不可用。cache 与 parallel-compilation
+#      对 PoC 性能有正面作用,保留默认值。
+# WHY 版本 47.0.2(2026-07-25 P3-W12.3.3 升级):原 22.0 含 16 个 RUSTSEC 漏洞(含 2 个 critical 沙箱
+#      逃逸 RUSTSEC-2026-0095/0096),升级到 47.0.2 修复全部已知漏洞。API 迁移:`Instance::new` →
+#      `Linker::new` + `linker.instantiate`(`Instance::new` 在 25.0+ 弃用);
+#      `get_typed_func` 签名调整;`set_fuel`/`get_fuel` 保持稳定。
+wasmtime = { version = "47.0.2", optional = true }
 
 [dev-dependencies]
 # criterion 基准测试框架(ASA 审计延迟基准)
 criterion = { workspace = true }
 # proptest:属性测试框架,用于 ASA 不变量验证(SubTask 37.7)
 proptest = { workspace = true }
+# serde_json:JSON 序列化/反序列化,用于 DecisionStepType 序列化往返测试(P1-W3.3)
+serde_json = { workspace = true }
+# tracing-test:捕获 tracing 日志,验证 audit_and_execute / ASA 审计的 span 与结构化字段(P1-W4.1)
+tracing-test = { workspace = true }
 
 # criterion 基准测试配置:避免与单元测试冲突
 [[bench]]

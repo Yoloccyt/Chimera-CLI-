@@ -15,6 +15,7 @@
 use chrono::Utc;
 use dashmap::DashMap;
 use event_bus::{EventSeverity, NexusEvent};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::types::MetricSample;
@@ -30,12 +31,13 @@ pub trait MetricCollector: Send + Sync {
 
 /// 事件指标采集器 — 订阅 NexusEvent 并统计发布次数
 ///
-/// 维护三个维度的计数器:
+/// 维护四个维度的计数器:
 /// - `event_counts`:按事件类型(type_name)统计发布次数
 /// - `critical_counts`:按事件类型统计 Critical 严重级别事件次数
 /// - `alert_counts`:按告警严重级别统计告警触发次数
+/// - `critical_dropped_count`:Critical 旁路通道累计丢弃事件数(P1-W2.2)
 ///
-/// 所有计数器基于 `Arc<DashMap>`,`Clone` 后共享同一份数据,
+/// 所有计数器基于 `Arc<DashMap>` 或 `Arc<AtomicU64>`,`Clone` 后共享同一份数据,
 /// 适合在 `start_event_subscriber` 的后台任务与主线程间共享。
 #[derive(Clone)]
 pub struct EventMetricCollector {
@@ -48,6 +50,14 @@ pub struct EventMetricCollector {
     critical_counts: Arc<DashMap<&'static str, u64>>,
     /// 按告警严重级别统计触发次数:severity -> count
     alert_counts: Arc<DashMap<&'static str, u64>>,
+    /// Critical 旁路通道累计丢弃事件数(P1-W2.2 新增)
+    ///
+    /// WHY Arc<AtomicU64>:与 event-bus 内部 `critical_dropped_count` 一致,
+    /// 使用无锁原子计数避免 §4.4 红线 1 "持锁跨 await"。该字段存储的是
+    /// 从 `EventBus::critical_dropped_count()` 采样到的累计快照值
+    /// (单调递增,不重置),由 `EfficiencyMonitor::sample_critical_dropped_count()`
+    /// 周期性更新。供 /metrics 输出与 TUI 告警显示。
+    critical_dropped_count: Arc<AtomicU64>,
 }
 
 impl EventMetricCollector {
@@ -57,6 +67,7 @@ impl EventMetricCollector {
             event_counts: Arc::new(DashMap::new()),
             critical_counts: Arc::new(DashMap::new()),
             alert_counts: Arc::new(DashMap::new()),
+            critical_dropped_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -83,6 +94,27 @@ impl EventMetricCollector {
     pub fn record_alert(&self, severity: &'static str) {
         let mut entry = self.alert_counts.entry(severity).or_insert(0);
         *entry += 1;
+    }
+
+    /// 更新 Critical 旁路通道累计丢弃事件数快照(P1-W2.2 新增)
+    ///
+    /// `snapshot` 来自 `EventBus::critical_dropped_count()` 的当前累计值。
+    /// 该方法仅 store 快照值(单调递增),不累加 — 调用方应传入 EventBus
+    /// 的当前累计值,而非增量。
+    ///
+    /// WHY store 而非 fetch_add:EventBus 内部已是单调递增累计计数,
+    /// 此处仅需镜像其当前值,避免重复累加导致指标虚高。
+    pub fn record_critical_dropped(&self, snapshot: u64) {
+        self.critical_dropped_count
+            .store(snapshot, Ordering::Relaxed);
+    }
+
+    /// 获取 Critical 旁路通道累计丢弃事件数快照(P1-W2.2 新增)
+    ///
+    /// 返回最近一次 `record_critical_dropped()` 写入的累计值。
+    /// WHY Relaxed 内存序:丢弃计数为统计指标,非控制流信号,无需强一致性。
+    pub fn critical_dropped_count(&self) -> u64 {
+        self.critical_dropped_count.load(Ordering::Relaxed)
     }
 
     /// 获取所有事件的总发布次数(所有类型求和)
@@ -152,6 +184,17 @@ impl MetricCollector for EventMetricCollector {
                 timestamp: now,
             });
         }
+
+        // 采集 Critical 旁路通道累计丢弃事件数(P1-W2.2 新增)
+        // WHY 无标签:该指标为全局聚合(EventBus 级别单例),无需按 type/severity 分桶。
+        // 与 event-bus 的 CriticalEventDropped 指标载荷对齐(spec.md L188)。
+        let dropped = self.critical_dropped_count.load(Ordering::Relaxed);
+        samples.push(MetricSample {
+            name: "nexus_critical_event_dropped_total".to_string(),
+            value: dropped as f64,
+            labels: vec![],
+            timestamp: now,
+        });
 
         samples
     }
@@ -290,5 +333,69 @@ mod tests {
         assert_eq!(collector.event_count("BudgetExceeded"), 1);
         // critical_counts 也应记录(severity() == Critical,F-001 修复)
         assert_eq!(collector.total_critical_events(), 1);
+    }
+
+    // ============================================================
+    // P1-W2.2 新增:Critical 旁路通道丢弃事件数指标
+    // ============================================================
+
+    #[test]
+    fn test_critical_dropped_count_default_zero() {
+        let collector = EventMetricCollector::new();
+        assert_eq!(collector.critical_dropped_count(), 0);
+    }
+
+    #[test]
+    fn test_record_critical_dropped_stores_snapshot() {
+        let collector = EventMetricCollector::new();
+        collector.record_critical_dropped(42);
+        assert_eq!(collector.critical_dropped_count(), 42);
+    }
+
+    #[test]
+    fn test_record_critical_dropped_overwrites_with_higher_value() {
+        // 模拟 EventBus 累计计数单调递增:每次采样写入更大的累计值
+        let collector = EventMetricCollector::new();
+        collector.record_critical_dropped(10);
+        assert_eq!(collector.critical_dropped_count(), 10);
+        collector.record_critical_dropped(15);
+        assert_eq!(collector.critical_dropped_count(), 15);
+    }
+
+    #[test]
+    fn test_record_critical_dropped_clone_shares_state() {
+        // WHY 验证 Clone 共享 Arc<AtomicU64>:后台任务通过 clone 的 collector
+        // 调用 record_critical_dropped,主线程通过原 collector 读取应可见
+        let collector = EventMetricCollector::new();
+        let cloned = collector.clone();
+        cloned.record_critical_dropped(99);
+        assert_eq!(collector.critical_dropped_count(), 99);
+    }
+
+    #[test]
+    fn test_collect_includes_critical_dropped_sample() {
+        let collector = EventMetricCollector::new();
+        collector.record_critical_dropped(7);
+
+        let samples = collector.collect();
+        let dropped_sample = samples
+            .iter()
+            .find(|s| s.name == "nexus_critical_event_dropped_total")
+            .expect("应包含 nexus_critical_event_dropped_total 样本");
+
+        assert_eq!(dropped_sample.labels, vec![]);
+        assert!((dropped_sample.value - 7.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_collect_critical_dropped_sample_default_zero() {
+        // 未调用 record_critical_dropped 时,collect 应输出 0 值样本
+        let collector = EventMetricCollector::new();
+        let samples = collector.collect();
+        let dropped_sample = samples
+            .iter()
+            .find(|s| s.name == "nexus_critical_event_dropped_total")
+            .expect("即使为 0 也应输出样本,便于 Prometheus 抓取");
+        assert!((dropped_sample.value - 0.0).abs() < f64::EPSILON);
     }
 }

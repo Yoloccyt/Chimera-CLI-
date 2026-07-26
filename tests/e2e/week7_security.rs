@@ -922,9 +922,10 @@ async fn test_monitor_suppress_empty_metrics_render_safe() {
 
     let output = monitor.render_metrics();
     // 应输出有效的 Prometheus 文本格式(即使无数据)
+    // P1-W2.2 后空 monitor 也会输出 nexus_critical_event_dropped_total 0,放宽断言为任意 nexus_ 指标
     assert!(
-        output.contains("nexus_event_total") || output.is_empty(),
-        "空 metrics 应输出有效格式或空字符串,不应 panic"
+        output.contains("nexus_") || output.is_empty(),
+        "空 metrics 应输出有效格式或空字符串,不应 panic,实际输出: {output}"
     );
 
     assert!(start.elapsed().as_millis() < CSA_THRESHOLD_MS);

@@ -16,6 +16,8 @@
 //! 3. 沙箱执行(`sandbox::Sandbox`):进程隔离(Windows 降级)/gVisor(Linux)
 //! 4. 审计记录(`audit::AuditChain`):SHA-256 Merkle 链,不可篡改
 //! 5. ASA 审计(`asa::AsaAuditor`):基于规则的实时评分,干预分级时发布 `AsaIntervention` 事件
+//! 6. 高危操作强制升级通道(`escalation::EscalationHandler`,D6 修复):
+//!    `risk_score ∈ [71,90]` 强制 Parliament 辩论;`risk_score ∈ [91,100]` 拒绝执行并升级人工
 //!
 //! # 快速示例
 //! ```no_run
@@ -37,8 +39,12 @@
 pub mod asa;
 pub mod audit;
 pub mod error;
+pub mod escalation;
+/// P4-W15.1.3: Spec Merkle 完整性校验（复用 audit.rs SHA-256 实现）
+pub mod merkle;
 pub mod policy;
 pub mod sandbox;
+pub mod sandbox_wasm;
 pub mod types;
 
 // === 公开 API 导出 ===
@@ -46,8 +52,21 @@ pub use asa::{
     AsaAuditor, AsaConfig, AsaSandboxCoordinator, AuditResult, InterventionAction,
     OperationAuditInput,
 };
-pub use audit::{AuditBlock, AuditChain, AuditRecordStatus, RecordId};
+pub use audit::{
+    AuditBlock, AuditChain, AuditRecordStatus, DecisionChainBuilder, DecisionStep,
+    DecisionStepType, RecordId,
+};
 pub use error::SecCoreError;
+pub use escalation::{DefaultEscalationHandler, EscalationHandler};
+// P4-W15.1.3: Merkle 完整性校验公共 API
+pub use merkle::{
+    compute_merkle_root, hash_spec_canonical_input, verify_merkle_root, verify_spec_integrity,
+};
 pub use policy::{validate_command, validate_env, BlockedPattern, CommandPolicy, EnvPolicy};
 pub use sandbox::Sandbox;
-pub use types::{AttackType, Command, CommandSpec, ExecutionResult, RiskLevel};
+// SandboxBackend 始终可用(默认 Process 变体);Wasm 变体仅 wasm-sandbox feature 启用时可用
+pub use sandbox_wasm::SandboxBackend;
+// WasmSandbox / WasmExecutionResult 仅 wasm-sandbox feature 启用时可用(ADR-035 决策 2)
+#[cfg(feature = "wasm-sandbox")]
+pub use sandbox_wasm::{WasmExecutionResult, WasmSandbox};
+pub use types::{AttackType, Command, CommandSpec, EscalationTier, ExecutionResult, RiskLevel};

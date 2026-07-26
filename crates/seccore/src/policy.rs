@@ -243,14 +243,14 @@ impl Default for EnvPolicy {
 /// 检查顺序(WHY:拦截模式优先,确保攻击类型正确分类):
 /// 1. 拦截模式匹配(Injection → PrivilegeEscalation → SandboxEscape → DataLeak → Tamper)
 /// 2. 白名单检查(非白名单 → Abuse)
-/// 3. 风险评估
+/// 3. 风险评估(返回 `risk_score: u8`,同时派生 `risk_level` 保持向后兼容)
 ///
 /// # 参数
 /// - `cmd`:原始命令(不可信)
 /// - `policy`:命令策略
 ///
 /// # 返回
-/// - `Ok(CommandSpec)`:校验通过的安全命令规格
+/// - `Ok(CommandSpec)`:校验通过的安全命令规格(含 `risk_score` 与派生的 `risk_level`)
 /// - `Err(SecCoreError::CommandBlocked)`:检测到攻击,携带攻击类型
 pub fn validate_command(
     cmd: &Command,
@@ -290,14 +290,17 @@ pub fn validate_command(
         });
     }
 
-    // 步骤3:风险评估(用于审计与限流,不拦截)
-    let risk_level = assess_risk(&cmd.program, &cmd.args);
+    // 步骤3:风险评估(D6 修复:返回 0-100 数值评分作为升级主信号)
+    // WHY: risk_score 是单一真相源,risk_level 由它派生,避免双源不一致
+    let risk_score = assess_risk(&cmd.program, &cmd.args);
+    let risk_level = RiskLevel::from_score(risk_score);
 
     Ok(CommandSpec {
         program: cmd.program.clone(),
         allowed_args: cmd.args.clone(),
         env_whitelist: HashMap::new(),
         risk_level,
+        risk_score,
     })
 }
 
@@ -370,32 +373,54 @@ fn build_full_command_string(program: &str, args: &[String]) -> String {
     s
 }
 
-/// 评估命令风险等级 — 基于程序名与参数模式。
+/// 评估命令风险评分 — 基于程序名与参数模式返回 0-100 数值。
 ///
-/// 此函数不拦截命令,仅用于审计与限流决策。
-fn assess_risk(program: &str, args: &[String]) -> RiskLevel {
+/// D6 修复:返回 `u8` 数值评分(取代旧 `RiskLevel` 枚举),作为升级通道的主信号。
+/// `RiskLevel` 由 `validate_command` 经 `RiskLevel::from_score` 派生,保持向后兼容。
+///
+/// 评分映射(覆盖 4 级 `EscalationTier`):
+/// | 程序/模式          | risk_score | Tier            | RiskLevel  |
+/// |-------------------|------------|-----------------|------------|
+/// | dd / mkfs / fdisk | 95         | EscalateToHuman | Critical   |
+/// | rm / wipe         | 80         | Parliament      | High       |
+/// | args 含 `>` / `>>`| 50         | Normal          | Medium     |
+/// | args 含 `*` / `?` | 40         | Normal          | Medium     |
+/// | 默认(白名单安全)  | 10         | ReadOnly        | Low        |
+///
+/// WHY 评分分级:
+/// - `rm`/`wipe` (80):破坏性但潜在可恢复(备份/版本控制),由 Parliament 辩论决定
+/// - `dd`/`mkfs`/`fdisk` (95):原始磁盘/文件系统/分区操作,不可恢复的灾难性,
+///   必须升级人工决策(Parliament 辩论不足以承担此风险)
+/// - `shred` 已被 `default_secure` 拦截模式阻断(Tamper),不会到达此函数
+fn assess_risk(program: &str, args: &[String]) -> u8 {
     let program_lower = program.to_lowercase();
 
-    // 高危命令:破坏性操作
+    // 高危命令:按破坏性分级
     match program_lower.as_str() {
-        "rm" | "dd" | "mkfs" | "fdisk" | "shred" | "wipe" => {
-            return RiskLevel::High;
+        // 极高危(91-100):不可恢复的灾难性操作 → 升级人工
+        "dd" | "mkfs" | "fdisk" => {
+            return 95;
+        }
+        // 高危(71-90):破坏性但潜在可恢复 → Parliament 辩论
+        "rm" | "wipe" => {
+            return 80;
         }
         _ => {}
     }
 
     // 检查参数中的危险模式
     let full = args.join(" ");
-    if full.contains(">") || full.contains(">>") {
-        // 输出重定向:可能覆盖文件
-        return RiskLevel::Medium;
+    if full.contains('>') {
+        // 输出重定向(含 `>` 与 `>>`):可能覆盖文件
+        return 50;
     }
-    if full.contains("*") || full.contains("?") {
+    if full.contains('*') || full.contains('?') {
         // 通配符:可能匹配意外文件
-        return RiskLevel::Medium;
+        return 40;
     }
 
-    RiskLevel::Low
+    // 默认:白名单内安全命令(只读、无副作用)
+    10
 }
 
 #[cfg(test)]

@@ -470,6 +470,8 @@ fn test_a08_data_integrity_tamper_detected() {
         allowed_args: vec!["hello".to_string()],
         env_whitelist: HashMap::new(),
         risk_level: RiskLevel::Low,
+        // P1-W3.1 新增字段:echo hello 为安全只读命令,risk_score=10(ReadOnly 档 0-30)
+        risk_score: 10,
     };
     let result = ExecutionResult {
         exit_code: 0,
@@ -500,6 +502,8 @@ fn test_a08_data_integrity_index_tamper() {
         allowed_args: vec!["test".to_string()],
         env_whitelist: HashMap::new(),
         risk_level: RiskLevel::Low,
+        // P1-W3.1 新增字段:echo test 为安全只读命令,risk_score=10(ReadOnly 档 0-30)
+        risk_score: 10,
     };
     let result = ExecutionResult {
         exit_code: 0,
