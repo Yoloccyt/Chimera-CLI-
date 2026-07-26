@@ -46,15 +46,23 @@
 // === 模块声明 ===
 pub mod compressor;
 pub mod config;
+/// P4-W13.2.2: 密度学习器持有器 — S1 接缝策略异步下发 + 本地 fallback（C4 合规）
+pub mod density_learner;
 pub mod error;
+pub mod recall;
 pub mod selector;
+/// P4-W13.3.2: 选择器学习器持有器 — S4 接缝策略异步下发 + 本地 fallback（C4 合规）
+pub mod selector_learner;
 pub mod types;
 pub mod window;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use compressor::ContextCompressor;
+pub use density_learner::DensityLearnerHolder;
 pub use error::HcwError;
 pub use selector::WindowSelector;
+// P4-W13.3.2: S4 接缝（HCW selector 权重系数）学习器持有器
+pub use selector_learner::SelectorLearnerHolder;
 pub use types::{CompressionReport, ContextEntry, HcwConfig, HcwState, WindowTier};
 pub use window::HcwWindow;
 
@@ -63,8 +71,26 @@ pub use window::HcwWindow;
 /// 使用方式:`use hcw_window::prelude::*;`
 pub mod prelude {
     pub use crate::compressor::ContextCompressor;
+    // P4-W13.2.2: 密度学习器持有器（S1 接缝异步策略下发 + 本地 fallback）
+    pub use crate::density_learner::DensityLearnerHolder;
     pub use crate::error::HcwError;
+    pub use crate::recall::coarse::{CoarseRecall, CoarseRecallBuilder};
+    pub use crate::recall::fine::{FineRecall, FineRecallInput};
+    pub use crate::recall::rerank::{
+        RerankFill, RerankFillConfig, RerankFillInput, RerankFillOutput, SparseAttentionPattern,
+        WindowBudget,
+    };
+    pub use crate::recall::streaming::{
+        StreamingFill, StreamingFillConfig, StreamingFillInput, StreamingFillOutput, StreamingMode,
+    };
+    pub use crate::recall::types::{
+        BlockId, BlockScore, CoChangeMatrix, CoarseRecallInput, CoarseRecallOutput,
+        FineRecallConfig, FineRecallOutput, ModuleGraph, ModuleId, ModuleScore, RecallError,
+        RecallWeights,
+    };
     pub use crate::selector::WindowSelector;
+    // P4-W13.3.2: 选择器学习器持有器（S4 接缝异步策略下发 + 本地 fallback）
+    pub use crate::selector_learner::SelectorLearnerHolder;
     pub use crate::types::{CompressionReport, ContextEntry, HcwConfig, HcwState, WindowTier};
     pub use crate::window::HcwWindow;
 }

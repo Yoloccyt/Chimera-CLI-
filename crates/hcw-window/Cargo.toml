@@ -6,6 +6,10 @@ edition.workspace = true
 [dependencies]
 # L1 Core:CLV 类型(任务相关性计算,基于 CLV 余弦相似度)
 nexus-core = { path = "../nexus-core" }
+# L0 Contracts:VectorStore trait 契约(P3-W9.2 精排依赖,面向 trait 编程解耦 L5 repo-wiki)
+# WHY:hcw-window (L2) 不能向上依赖 repo-wiki (L5) 的 HnswStore,
+# 通过 nexus-contracts (L0) 的 VectorStore trait 实现依赖倒置(ADR-033)
+nexus-contracts = { path = "../nexus-contracts" }
 # L1 Core:EventBus 跨层通信
 # - 发布 ContextWindowSwitched/ContextCompressed 事件(Week 3 Task 6 新增)
 # - 订阅 OmniSparseMasksComputed 事件(Week 1 定义,修正 V1 违规)
@@ -41,4 +45,29 @@ scc-cache = { path = "../scc-cache" }
 
 [[bench]]
 name = "compress"
+harness = false
+
+# P3-W9.1.2: HCW-Sparse v2.0 粗召回基准（Project 图联合传播 → 100 模块, p95<10ms 红线）
+[[bench]]
+name = "coarse_recall"
+harness = false
+
+# P3-W9.2.2: HCW-Sparse v2.0 精排基准（HNSW + 精确 CLV 重排 → 500 Block, p95<50ms 红线）
+[[bench]]
+name = "fine_recall"
+harness = false
+
+# P3-W10.1.2: HCW-Sparse v2.0 重排填充基准（密度贪心 → 1M 等效窗口, p95<100ms 红线）
+[[bench]]
+name = "rerank_fill"
+harness = false
+
+# P3-W10.2.2: HCW-Sparse v2.0 增量流式基准（Top-10% 关键块同步放行, p95<500ms 红线）
+[[bench]]
+name = "streaming_fill"
+harness = false
+
+# P3-W12.3.1: HCW-Sparse v2.0 1M 影子集召回率基准（5000 Block + L3_1M 预算, 召回率≥95% + p95<200ms 红线）
+[[bench]]
+name = "shadow_recall_1m"
 harness = false

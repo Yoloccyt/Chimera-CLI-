@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use nexus_contracts::SelectorPolicy;
 use nexus_core::CLV;
 use serde::{Deserialize, Serialize};
 
@@ -465,6 +466,16 @@ pub struct CompressionReport {
 /// - `l2_capacity`:131072(128K Token,复杂任务)
 /// - `l3_capacity`:1048576(1M Token 等效,128K 实际加载 + 8× 稀疏化)
 /// - `compression_threshold`:0.9(容量利用率达 90% 触发压缩,留 10% 余量)
+/// - `selector_policy`:`Static(0.4, 0.3, 0.3)`(P3-W10.3 D1 修复,默认 fallback 编译进二进制)
+///
+/// # D1 修复(P3-W10.3)
+/// `selector_policy` 字段取代原 `compressor_weights: (f32, f32, f32)` 常量,
+/// 将重要性评分权重 `w1/w2/w3` 从硬编码升级为注入式 `SelectorPolicy` 策略:
+/// - **Static 变体**(默认):编译进二进制的常量(fallback,C4 合规)
+/// - **Learned 变体**:`omega-learner` 异步下发的版本化权重(P4 Bandit 接缝 S4)
+///
+/// `SelectorPolicy::default()` = `Static(SelectorWeights::DEFAULT)` = `Static(0.4, 0.3, 0.3)`,
+/// 等于原 `compressor_weights` 默认值,行为零变化(仅字段名变更,向后兼容)。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HcwConfig {
     /// L0 窗口容量(默认 4096 = 4K Token)
@@ -477,16 +488,19 @@ pub struct HcwConfig {
     pub l3_capacity: usize,
     /// 压缩触发阈值(默认 0.9,容量利用率达 90% 触发压缩)
     pub compression_threshold: f32,
-    /// 压缩器重要性评分权重 (recency, frequency, relevance)
+    /// 选择器策略 — 重要性评分权重(recency/frequency/relevance)的注入式策略(P3-W10.3 D1 修复)
     ///
-    /// 三个权重之和应为 1.0。默认值 (0.4, 0.3, 0.3) 对应架构手册推荐。
-    /// 调优示例:对时近性敏感的场景可设为 (0.6, 0.2, 0.2)。
-    #[serde(default = "default_compressor_weights")]
-    pub compressor_weights: (f32, f32, f32),
-}
-
-fn default_compressor_weights() -> (f32, f32, f32) {
-    (0.4, 0.3, 0.3)
+    /// 取代原 `compressor_weights: (f32, f32, f32)` 常量,将 `w1/w2/w3` 从硬编码
+    /// 升级为可注入策略。默认 `SelectorPolicy::default()` = `Static(0.4, 0.3, 0.3)`,
+    /// 等于原常量值(fallback 编译进二进制,C4 合规)。
+    ///
+    /// WHY(C4 合规):`omega-learner` panic/超时时调用方本地 fallback 到
+    /// `SelectorPolicy::Static(常量)`,无跨 crate 旗标传播(spec.md:289-290)。
+    ///
+    /// WHY(serde default):用 `#[serde(default)]` 标注,旧配置文件(无此字段)
+    /// 反序列化时自动用 `SelectorPolicy::default()`,向后兼容。
+    #[serde(default)]
+    pub selector_policy: SelectorPolicy,
 }
 
 #[cfg(test)]
