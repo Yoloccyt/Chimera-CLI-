@@ -151,6 +151,13 @@ fn current_ts_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// 返回切片尾部最多 `n` 个元素(monitor.time_window 时间窗:sparkline 仅显示最近 N 点)
+///
+/// WHY 尾部:sparkline 时间轴左旧右新,取尾部即"最近 N 点";`n >= len` 时返回全部。
+fn window_tail(v: &[u64], n: usize) -> &[u64] {
+    &v[v.len().saturating_sub(n)..]
+}
+
 impl Default for ResourceMonitorPanel {
     fn default() -> Self {
         Self::new()
@@ -181,8 +188,13 @@ impl ResourceMonitorPanel {
             level.color()
         };
 
-        // 标题行
-        let title = format!(" CPU: {:.1}% ", cpu.global_usage);
+        // 标题行(monitor.pause_sampling 暂停时追加 [PAUSED] 标记)
+        let paused_tag = if state.monitor_paused {
+            " [PAUSED]"
+        } else {
+            ""
+        };
+        let title = format!(" CPU: {:.1}%{} ", cpu.global_usage, paused_tag);
         let title_span = Span::styled(
             &title,
             Style::default()
@@ -220,8 +232,10 @@ impl ResourceMonitorPanel {
                     .iter()
                     .map(|v| (v * 10.0).clamp(0.0, 1000.0) as u64)
                     .collect();
+                // monitor.time_window:仅取尾部 N 点(近况聚焦 / 全窗)
+                let data = window_tail(&data, state.monitor_window.points());
                 sparkline_thresholded(
-                    &data,
+                    data,
                     spark_area,
                     buf,
                     Color::Green,
@@ -230,8 +244,9 @@ impl ResourceMonitorPanel {
                     Some(1000),
                 );
             } else {
-                // 默认模式:复用原有 sparkline
-                let spark = sparkline(&state.sys_metrics_history, "", Color::Green);
+                // 默认模式:monitor.time_window 取尾部 N 点
+                let hist = window_tail(&state.sys_metrics_history, state.monitor_window.points());
+                let spark = sparkline(hist, "", Color::Green);
                 spark.render(spark_area, buf);
             }
         }
@@ -519,9 +534,22 @@ mod tests {
     }
 
     #[test]
+    fn window_tail_takes_recent_n() {
+        let v: Vec<u64> = (0..100).collect();
+        // 尾部 16 点 = 84..=99
+        assert_eq!(window_tail(&v, 16).len(), 16);
+        assert_eq!(window_tail(&v, 16)[0], 84);
+        // n >= len 返回全部
+        assert_eq!(window_tail(&v, 200).len(), 100);
+        // 空切片安全
+        assert_eq!(window_tail(&[] as &[u64], 16).len(), 0);
+    }
+
+    #[test]
     fn test_resource_monitor_panel_title() {
         let panel = ResourceMonitorPanel::new();
         // i18n:title() 已本地化;固定英文捕获后复位,断言 ASCII 标题。
+        let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::En);
         let title = panel.title().to_string();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);

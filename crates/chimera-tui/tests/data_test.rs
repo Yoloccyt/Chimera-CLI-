@@ -74,6 +74,7 @@ fn test_config() -> DataSourceConfig {
         max_snapshots: 100,
         eco_tick_interval_ms: 1000,
         event_backlog_threshold: 100,
+        max_chat_messages: 500,
     }
 }
 
@@ -213,6 +214,8 @@ async fn pipeline_handles_1000_events_per_second() {
     let bus = EventBus::with_capacity(4096);
     let subscriber = EventSubscriber::new(bus.clone());
     let config = DataSourceConfig {
+        // 覆盖 test_config() 默认值 256 → 1000,确保 1000 个事件全部保留在 latest_events 中
+        max_event_history: 1000,
         tick_interval_ms: 250,
         ..test_config()
     };

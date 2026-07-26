@@ -31,9 +31,12 @@ pub mod metrics_history;
 pub mod resource_history;
 use crate::error::TuiError;
 use crate::subscriber::EventSubscriber;
-use crate::types::{CpuMetrics, DiskMetrics, MemMetrics, NetworkMetrics, SystemMetrics, TickMode};
+use crate::types::{
+    ChatMessage, ChatRole, CpuMetrics, DiskMetrics, MemMetrics, NetworkMetrics, SystemMetrics,
+    TickMode,
+};
 use chrono::{DateTime, Utc};
-use event_bus::{EventMetadata, NexusEvent};
+use event_bus::{ChatStatus, EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -41,6 +44,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
+
+/// Critical 旁路通道丢弃事件数指标名(P1-W2.2)
+///
+/// 该字符串与 `efficiency-monitor::CRITICAL_DROPPED_METRIC_NAME` 保持一致,
+/// 用于识别 `EfficiencyAlertTriggered` 事件中代表 Critical 旁路通道丢弃计数的事件。
+///
+/// WHY 在 L10 重新定义而非依赖 L9:§2.2 依赖铁律禁止 L10 → L9 向上依赖,
+/// efficiency-monitor 位于 L9,chimera-tui 不能直接 import 其常量。
+/// efficiency-monitor 侧的 `CRITICAL_DROPPED_METRIC_NAME` 注释已明确指出
+/// "TUI(L10)在 CriticalDroppedSync 中硬编码同一字符串识别事件"。
+const CRITICAL_DROPPED_METRIC_NAME: &str = "nexus_critical_event_dropped_total";
 
 /// 数据快照 — TUI 各面板渲染所需数据的统一视图
 ///
@@ -122,6 +136,32 @@ pub struct DataSnapshot {
     /// 当前 tick 模式,状态栏展示用
     #[serde(default)]
     pub tick_mode: TickMode,
+    // === M3b Chat 面板字段 ===
+    /// 对话历史(由 ChatSync 拥有,同步到 TuiState)
+    #[serde(default)]
+    pub chat_messages: Vec<ChatMessage>,
+    /// 对话会话状态(思考中/工具执行中/空闲)
+    #[serde(default)]
+    pub chat_status: ChatStatus,
+    // === P0 交互链:Action 反馈字段 ===
+    /// 最近一次 Action 终态反馈(消息, 是否错误);None = 尚无反馈
+    #[serde(default)]
+    pub action_feedback: Option<(String, bool)>,
+    /// Action 反馈序号(单调递增,app 据此判定新反馈,避免每 tick 重复上屏)
+    #[serde(default)]
+    pub action_feedback_seq: u64,
+    // === P1-W2.2 Critical 旁路通道丢弃计数 ===
+    /// Critical 旁路通道(mpsc 4096)累计丢弃事件数(单调递增,0 = 无丢弃)
+    ///
+    /// 来源:efficiency-monitor 周期性采样 `EventBus::critical_dropped_count()`
+    /// 并发布 `EfficiencyAlertTriggered` 事件(metric_name =
+    /// `CRITICAL_DROPPED_METRIC_NAME`),由 `CriticalDroppedSync` 解析
+    /// `triggered_value` 字段同步。EventStream 面板顶部据此显示告警。
+    ///
+    /// WHY 镜像累计值而非增量:TUI 仅显示当前累计丢弃总数,无需维护额外累加状态;
+    /// efficiency-monitor 的 `publish_critical_dropped_alert` 传出的就是累计值。
+    #[serde(default)]
+    pub critical_event_dropped_count: u64,
 }
 
 /// 预算指标 — TUI Budget 面板的轻量级本地视图
@@ -347,6 +387,8 @@ pub struct DataSourceConfig {
     pub eco_tick_interval_ms: u64,
     /// 事件积压阈值,超过此值自动切换到 Eco 模式
     pub event_backlog_threshold: usize,
+    /// Chat 对话历史保留的最大条数(FIFO,超出丢弃最旧)
+    pub max_chat_messages: usize,
 }
 
 impl Default for DataSourceConfig {
@@ -370,6 +412,8 @@ impl Default for DataSourceConfig {
             eco_tick_interval_ms: 1000,
             // WHY 100:256 条事件上限的 ~40%,超过此值视为积压
             event_backlog_threshold: 100,
+            // WHY 500:对话历史上限,足够一次会话的多轮交互,超出 FIFO 淘汰
+            max_chat_messages: 500,
         }
     }
 }
@@ -1294,6 +1338,213 @@ impl ClvSync {
 }
 
 // ============================================================
+// M3b Chat 同步器 — ChatSync
+// ============================================================
+
+/// Chat 同步器 — 对话历史与状态的单一所有权(M3b)
+///
+/// WHY 单一所有权:app.rs 只发布 `TuiChatSubmitted`,该事件经 EventBus 回环
+/// 到本同步器追加"用户消息";响应事件由编排器(M3c)产生。历史仅此一处拥有,
+/// 经 DataSnapshot 同步到 TuiState,与其余面板"事件→Sync→Snapshot→State"一致,
+/// 避免 app.rs 直写 TuiState 被 snapshot 覆盖的双所有权冲突。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatSync {
+    /// 对话历史(用户 + Agent 交替)
+    messages: Vec<ChatMessage>,
+    /// 当前会话状态(纯由 TuiChatStatusChanged 驱动)
+    status: ChatStatus,
+    /// 是否存在进行中的 Assistant 流式消息(chunk 追加末条 vs 起新条)
+    streaming: bool,
+    /// 历史最大条数(FIFO 淘汰上限)
+    max_messages: usize,
+}
+
+impl ChatSync {
+    /// 创建 Chat 同步器
+    pub fn new(max_messages: usize) -> Self {
+        Self {
+            messages: Vec::new(),
+            status: ChatStatus::Idle,
+            streaming: false,
+            max_messages,
+        }
+    }
+
+    /// 应用单个 NexusEvent,消费对话相关事件更新历史/状态
+    ///
+    /// - `TuiChatSubmitted`:追加用户消息;复位 streaming(下个 chunk 起新 Assistant 条)。
+    ///   不改 status——状态纯由编排器 `TuiChatStatusChanged` 驱动,M3b 无编排器时保持 Idle。
+    /// - `TuiChatResponseChunk`:首个 chunk 起新 Assistant 条,后续 chunk 追加 delta。
+    /// - `TuiChatCompleted`:结束本轮流式(下个 chunk 另起新条)。
+    /// - `TuiChatStatusChanged`:更新会话状态指示器。
+    /// - 其他事件:状态不变。
+    pub fn apply_event(&mut self, event: &NexusEvent) {
+        match event {
+            NexusEvent::TuiChatSubmitted { query, .. } => {
+                self.messages.push(ChatMessage {
+                    role: ChatRole::User,
+                    content: query.clone(),
+                });
+                self.streaming = false;
+                self.enforce_cap();
+            }
+            NexusEvent::TuiChatResponseChunk { delta, .. } => {
+                if !self.streaming {
+                    self.messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: String::new(),
+                    });
+                    self.streaming = true;
+                    self.enforce_cap();
+                }
+                if let Some(last) = self.messages.last_mut() {
+                    last.content.push_str(delta);
+                }
+            }
+            NexusEvent::TuiChatCompleted { .. } => {
+                self.streaming = false;
+            }
+            NexusEvent::TuiChatStatusChanged { status, .. } => {
+                self.status = *status;
+            }
+            _ => {}
+        }
+    }
+
+    /// 按 max_messages FIFO 淘汰最旧消息(仿 latest_events 上限策略)
+    fn enforce_cap(&mut self) {
+        while self.messages.len() > self.max_messages {
+            self.messages.remove(0);
+        }
+    }
+
+    /// 获取对话历史副本
+    pub fn messages(&self) -> Vec<ChatMessage> {
+        self.messages.clone()
+    }
+
+    /// 获取当前会话状态
+    pub fn status(&self) -> ChatStatus {
+        self.status
+    }
+}
+
+/// Action 反馈同步器 — 消费编排层回发的 Action 终态,供 TUI 状态栏呈现(P0 交互链)
+///
+/// WHY 独立同步器 + 单调序号:`TuiActionCompleted/Failed` 是一次性终态(非累积历史),
+/// 用 `seq` 单调递增标记每条新反馈,app 侧比对 seq 只上屏一次,避免每 tick 重复刷。
+/// 与 `ChatSync` 同属"事件→Sync→Snapshot→State"数据流,不由 app 直写(避免双所有权)。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ActionFeedbackSync {
+    /// 最近一次反馈(消息, 是否错误)
+    latest: Option<(String, bool)>,
+    /// 单调递增序号(每条新反馈 +1)
+    seq: u64,
+}
+
+impl ActionFeedbackSync {
+    /// 创建 Action 反馈同步器
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 应用单个 NexusEvent:消费 Action 终态反馈事件
+    ///
+    /// - `TuiActionCompleted`:记录成功结果摘要(is_error = false),seq += 1
+    /// - `TuiActionFailed`:记录错误描述(is_error = true),seq += 1
+    /// - 其他事件:状态不变
+    pub fn apply_event(&mut self, event: &NexusEvent) {
+        match event {
+            NexusEvent::TuiActionCompleted { result, .. } => {
+                self.latest = Some((result.clone(), false));
+                self.seq += 1;
+            }
+            NexusEvent::TuiActionFailed { error, .. } => {
+                self.latest = Some((error.clone(), true));
+                self.seq += 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// 当前反馈副本(供 DataSnapshot 同步)
+    pub fn latest(&self) -> Option<(String, bool)> {
+        self.latest.clone()
+    }
+
+    /// 当前反馈序号(app 据此判定是否为新反馈)
+    pub fn seq(&self) -> u64 {
+        self.seq
+    }
+}
+
+// ============================================================
+// P1-W2.2 Critical 旁路通道丢弃计数同步器
+// ============================================================
+//
+// WHY 独立同步器:与 ActionFeedbackSync 模式一致,将特定
+// EfficiencyAlertTriggered 事件的 metric_name 过滤逻辑隔离,
+// 避免污染其他同步器。L10 不依赖 L9 efficiency-monitor,
+// 通过事件流间接获取丢弃计数(§2.2 依赖铁律)。
+
+/// Critical 旁路通道丢弃计数同步器(P1-W2.2 新增)
+///
+/// 从 `EfficiencyAlertTriggered` 事件(metric_name ==
+/// [`CRITICAL_DROPPED_METRIC_NAME`])维护本地累计丢弃计数。
+///
+/// # 数据流
+/// 1. L9 efficiency-monitor 后台任务周期性采样
+///    `EventBus::critical_dropped_count()`(单调递增 AtomicU64)
+/// 2. 检测到计数增加时,发布 `EfficiencyAlertTriggered` 事件,
+///    `metric_name = "nexus_critical_event_dropped_total"`,
+///    `triggered_value = 累计丢弃数`(非增量)
+/// 3. L10 DataPipeline 将事件分发给本同步器
+/// 4. 本同步器提取 `triggered_value` 更新本地计数
+/// 5. DataSnapshot 携带计数 → TuiState → EventStream 面板顶部告警
+///
+/// # 设计约束
+/// - `count` 存储累计值而非增量(与 efficiency-monitor 一致),
+///   TUI 仅显示当前总数,无需额外累加状态
+/// - `apply_event` 对不匹配的事件静默跳过(返回 `()`,与其他 Sync 一致)
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct CriticalDroppedSync {
+    /// 累计丢弃事件数(单调递增,镜像 efficiency-monitor 的采样值)
+    count: u64,
+}
+
+impl CriticalDroppedSync {
+    /// 创建空的 Critical 丢弃同步器(count = 0)
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 应用单个 NexusEvent:消费 Critical 旁路通道丢弃告警事件
+    ///
+    /// 仅处理 `EfficiencyAlertTriggered` 事件且 `metric_name` 匹配
+    /// [`CRITICAL_DROPPED_METRIC_NAME`] 的子集。匹配时将 `triggered_value`
+    /// (累计丢弃数)存入 `count`;不匹配的事件状态不变。
+    pub fn apply_event(&mut self, event: &NexusEvent) {
+        if let NexusEvent::EfficiencyAlertTriggered {
+            metric_name,
+            triggered_value,
+            ..
+        } = event
+        {
+            if metric_name == CRITICAL_DROPPED_METRIC_NAME {
+                // WHY store 而非 +=:triggered_value 是 efficiency-monitor
+                // 传出的累计值(非增量),直接镜像避免重复累加导致虚高
+                self.count = *triggered_value as u64;
+            }
+        }
+    }
+
+    /// 当前累计丢弃事件数(供 DataSnapshot 同步)
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+}
+
+// ============================================================
 // P8 系统资源指标采集器 — SysMetricsCollector
 // ============================================================
 //
@@ -1665,6 +1916,7 @@ impl DataPipeline {
         let eco_tick_ms = config.eco_tick_interval_ms;
         let event_backlog_threshold = config.event_backlog_threshold;
         let max_event_history = config.max_event_history;
+        let max_chat_messages = config.max_chat_messages;
         let max_quest_list_size = config.max_quest_list_size;
         let max_history_len = config.max_history_len;
         let max_security_summaries = config.max_security_summaries;
@@ -1695,6 +1947,14 @@ impl DataPipeline {
             // P7 新增同步器:OsaSparse / ClvVector 面板数据接入
             let mut osa_sync = OsaSync::new();
             let mut clv_sync = ClvSync::new();
+            // M3b:Chat 同步器(对话历史 + 状态单一所有权)
+            let mut chat_sync = ChatSync::new(max_chat_messages);
+            // P0 交互链:Action 反馈同步器(消费 TuiActionCompleted/Failed)
+            let mut action_feedback_sync = ActionFeedbackSync::new();
+            // P1-W2.2:Critical 旁路通道丢弃计数同步器
+            // 消费 efficiency-monitor 发布的 EfficiencyAlertTriggered 事件
+            // (metric_name = CRITICAL_DROPPED_METRIC_NAME),供 EventStream 面板告警
+            let mut critical_dropped_sync = CriticalDroppedSync::new();
             // P8:系统资源采集器,延迟到第一次 tick 时初始化
             // WHY 延迟初始化: SysMetricsCollector::new() 调用
             // sysinfo::System::new_all() + refresh_all() 是同步阻塞操作
@@ -1789,6 +2049,13 @@ impl DataPipeline {
                     // P7 新增同步器:OSA 稀疏度 / CLV 摘要
                     osa_sync.apply_event(event);
                     clv_sync.apply_event(event);
+                    // M3b:消费对话事件(包括回环的 TuiChatSubmitted)
+                    chat_sync.apply_event(event);
+                    // P0 交互链:消费 Action 终态反馈(TuiActionCompleted/Failed)
+                    action_feedback_sync.apply_event(event);
+                    // P1-W2.2:消费 Critical 旁路通道丢弃告警
+                    // (EfficiencyAlertTriggered with metric_name = CRITICAL_DROPPED_METRIC_NAME)
+                    critical_dropped_sync.apply_event(event);
                     latest_events.push_back(event.clone());
                 }
 
@@ -1910,6 +2177,14 @@ impl DataPipeline {
                     sys_metrics,
                     sys_metrics_history: sys_metrics_history.clone(),
                     tick_mode,
+                    // M3b Chat 面板数据
+                    chat_messages: chat_sync.messages(),
+                    chat_status: chat_sync.status(),
+                    // P0 交互链:Action 反馈(seq 单调,app 比对只上屏一次)
+                    action_feedback: action_feedback_sync.latest(),
+                    action_feedback_seq: action_feedback_sync.seq(),
+                    // P1-W2.2:Critical 旁路通道累计丢弃事件数(EventStream 面板告警)
+                    critical_event_dropped_count: critical_dropped_sync.count(),
                 };
                 let mut guard = snapshot_clone.lock().unwrap_or_else(|poisoned| {
                     tracing::warn!(
@@ -3254,5 +3529,223 @@ mod tests {
     fn test_export_format_extension() {
         assert_eq!(ExportFormat::Csv.extension(), "csv");
         assert_eq!(ExportFormat::Json.extension(), "json");
+    }
+
+    // ===== M3b ChatSync 单测 =====
+
+    /// 构造 TuiChatSubmitted 事件
+    fn chat_submitted(query: &str) -> NexusEvent {
+        NexusEvent::TuiChatSubmitted {
+            metadata: EventMetadata::new("chimera-tui"),
+            session_id: "s1".into(),
+            query: query.into(),
+            slash_command: None,
+        }
+    }
+
+    /// 构造 TuiChatResponseChunk 事件
+    fn chat_chunk(delta: &str) -> NexusEvent {
+        NexusEvent::TuiChatResponseChunk {
+            metadata: EventMetadata::new("orchestrator"),
+            session_id: "s1".into(),
+            delta: delta.into(),
+            cursor_hint: 0,
+        }
+    }
+
+    #[test]
+    fn chat_sync_submit_appends_user_message() {
+        let mut sync = ChatSync::new(500);
+        sync.apply_event(&chat_submitted("hi"));
+        let msgs = sync.messages();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, ChatRole::User);
+        assert_eq!(msgs[0].content, "hi");
+    }
+
+    #[test]
+    fn chat_sync_chunks_accumulate_into_one_assistant() {
+        let mut sync = ChatSync::new(500);
+        sync.apply_event(&chat_submitted("hi"));
+        sync.apply_event(&chat_chunk("Hel"));
+        sync.apply_event(&chat_chunk("lo"));
+        let msgs = sync.messages();
+        assert_eq!(msgs.len(), 2, "用户 1 条 + Assistant 1 条(chunk 拼接)");
+        assert_eq!(msgs[1].role, ChatRole::Assistant);
+        assert_eq!(msgs[1].content, "Hello");
+    }
+
+    #[test]
+    fn chat_sync_completed_starts_new_assistant_for_next_chunk() {
+        let mut sync = ChatSync::new(500);
+        sync.apply_event(&chat_submitted("hi"));
+        sync.apply_event(&chat_chunk("a"));
+        sync.apply_event(&NexusEvent::TuiChatCompleted {
+            metadata: EventMetadata::new("orchestrator"),
+            session_id: "s1".into(),
+            tool_use: None,
+        });
+        sync.apply_event(&chat_chunk("b"));
+        let msgs = sync.messages();
+        assert_eq!(msgs.len(), 3, "completed 后新 chunk 应另起 Assistant 条");
+        assert_eq!(msgs[1].content, "a");
+        assert_eq!(msgs[2].content, "b");
+    }
+
+    #[test]
+    fn chat_sync_status_changed_updates_status() {
+        let mut sync = ChatSync::new(500);
+        assert_eq!(sync.status(), ChatStatus::Idle, "默认空闲");
+        sync.apply_event(&NexusEvent::TuiChatStatusChanged {
+            metadata: EventMetadata::new("orchestrator"),
+            session_id: "s1".into(),
+            status: ChatStatus::Thinking,
+        });
+        assert_eq!(sync.status(), ChatStatus::Thinking);
+    }
+
+    #[test]
+    fn chat_sync_submit_does_not_touch_status() {
+        // 状态纯由 TuiChatStatusChanged 驱动;submit 不应改状态(M3b 无编排器时保持 Idle)
+        let mut sync = ChatSync::new(500);
+        sync.apply_event(&chat_submitted("hi"));
+        assert_eq!(sync.status(), ChatStatus::Idle);
+    }
+
+    #[test]
+    fn chat_sync_enforces_max_messages_fifo() {
+        let mut sync = ChatSync::new(2);
+        sync.apply_event(&chat_submitted("a"));
+        sync.apply_event(&chat_submitted("b"));
+        sync.apply_event(&chat_submitted("c"));
+        let msgs = sync.messages();
+        assert_eq!(msgs.len(), 2, "超上限应 FIFO 淘汰最旧");
+        assert_eq!(msgs[0].content, "b");
+        assert_eq!(msgs[1].content, "c");
+    }
+
+    // ===== P0 交互链 ActionFeedbackSync 单测 =====
+
+    #[test]
+    fn action_feedback_sync_completed_records_success() {
+        let mut sync = ActionFeedbackSync::new();
+        assert_eq!(sync.seq(), 0);
+        assert_eq!(sync.latest(), None);
+        sync.apply_event(&NexusEvent::TuiActionCompleted {
+            metadata: EventMetadata::new("chimera-cli"),
+            action_id: "quest.pause".into(),
+            result: "已暂停 Quest q-1".into(),
+        });
+        assert_eq!(sync.seq(), 1, "反馈序号应递增");
+        assert_eq!(
+            sync.latest(),
+            Some(("已暂停 Quest q-1".to_string(), false)),
+            "成功反馈 is_error 应为 false"
+        );
+    }
+
+    #[test]
+    fn action_feedback_sync_failed_marks_error() {
+        let mut sync = ActionFeedbackSync::new();
+        sync.apply_event(&NexusEvent::TuiActionFailed {
+            metadata: EventMetadata::new("chimera-cli"),
+            action_id: "task.pause".into(),
+            error: "尚未实现".into(),
+        });
+        assert_eq!(sync.seq(), 1);
+        assert_eq!(
+            sync.latest(),
+            Some(("尚未实现".to_string(), true)),
+            "失败反馈应标记 is_error=true"
+        );
+    }
+
+    #[test]
+    fn action_feedback_sync_seq_monotonic_and_ignores_non_action() {
+        let mut sync = ActionFeedbackSync::new();
+        for i in 0..3 {
+            sync.apply_event(&NexusEvent::TuiActionCompleted {
+                metadata: EventMetadata::new("chimera-cli"),
+                action_id: "quest.resume".into(),
+                result: format!("r{i}"),
+            });
+        }
+        assert_eq!(sync.seq(), 3, "每条反馈 seq 单调 +1");
+        // 非 Action 事件不应改变反馈状态
+        sync.apply_event(&chat_submitted("hi"));
+        assert_eq!(sync.seq(), 3, "非 Action 事件不应改变反馈序号");
+    }
+
+    // === P1-W2.2 CriticalDroppedSync 测试 ===
+
+    /// 构造 Critical 旁路通道丢弃告警事件(EfficiencyAlertTriggered with matching metric_name)
+    fn critical_dropped_alert(count: u64) -> NexusEvent {
+        NexusEvent::EfficiencyAlertTriggered {
+            metadata: EventMetadata::new("efficiency-monitor"),
+            rule_id: "critical-event-dropped".into(),
+            metric_name: CRITICAL_DROPPED_METRIC_NAME.to_string(),
+            triggered_value: count as f64,
+            threshold: 0.0,
+        }
+    }
+
+    /// 构造无关的 EfficiencyAlertTriggered 事件(metric_name 不匹配)
+    fn unrelated_alert() -> NexusEvent {
+        NexusEvent::EfficiencyAlertTriggered {
+            metadata: EventMetadata::new("efficiency-monitor"),
+            rule_id: "critical-CacheHit".into(),
+            metric_name: "CacheHit".to_string(),
+            triggered_value: 1.0,
+            threshold: 1.0,
+        }
+    }
+
+    #[test]
+    fn critical_dropped_sync_default_count_zero() {
+        let sync = CriticalDroppedSync::new();
+        assert_eq!(sync.count(), 0, "新建同步器 count 应为 0");
+    }
+
+    #[test]
+    fn critical_dropped_sync_applies_matching_event() {
+        let mut sync = CriticalDroppedSync::new();
+        sync.apply_event(&critical_dropped_alert(42));
+        assert_eq!(
+            sync.count(),
+            42,
+            "匹配的 EfficiencyAlertTriggered 应更新 count 为 triggered_value"
+        );
+    }
+
+    #[test]
+    fn critical_dropped_sync_ignores_unrelated_alert() {
+        let mut sync = CriticalDroppedSync::new();
+        sync.apply_event(&critical_dropped_alert(10));
+        sync.apply_event(&unrelated_alert());
+        assert_eq!(sync.count(), 10, "metric_name 不匹配的事件不应改变 count");
+    }
+
+    #[test]
+    fn critical_dropped_sync_ignores_non_alert_event() {
+        let mut sync = CriticalDroppedSync::new();
+        sync.apply_event(&critical_dropped_alert(5));
+        // 非 EfficiencyAlertTriggered 事件应被忽略
+        sync.apply_event(&NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        });
+        assert_eq!(sync.count(), 5, "非告警事件不应改变 count");
+    }
+
+    #[test]
+    fn critical_dropped_sync_count_monotonic_mirror() {
+        // WHY 验证 store 语义:多次事件应镜像最新累计值,而非累加
+        let mut sync = CriticalDroppedSync::new();
+        sync.apply_event(&critical_dropped_alert(10));
+        assert_eq!(sync.count(), 10);
+        sync.apply_event(&critical_dropped_alert(15));
+        assert_eq!(sync.count(), 15, "应镜像最新累计值(非累加)");
+        sync.apply_event(&critical_dropped_alert(15));
+        assert_eq!(sync.count(), 15, "相同累计值不变");
     }
 }

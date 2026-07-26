@@ -63,6 +63,7 @@ impl HelpPanel {
             ("?", crate::t!("help.sc.help")),
             ("t", crate::t!("help.sc.theme")),
             ("l", crate::t!("help.sc.layout")),
+            ("a", crate::t!("help.sc.panel_actions")),
             ("g+1-6", crate::t!("help.sc.gjump")),
             ("g g", crate::t!("help.sc.top")),
             ("G", crate::t!("help.sc.bottom")),
@@ -171,6 +172,7 @@ mod tests {
 
     #[test]
     fn test_help_panel_content_no_context() {
+        let _locale_guard = crate::i18n::locale_test_guard();
         // i18n:content 已本地化;固定英文捕获后复位,断言 ASCII 文案。
         crate::i18n::set_locale(crate::i18n::Locale::En);
         let content = HelpPanel::content(None, &[]).to_string();
@@ -191,6 +193,7 @@ mod tests {
     #[test]
     fn test_help_panel_content_with_context() {
         let panel_shortcuts = vec![("↑/↓", "Navigate"), ("Enter", "Detail"), ("/", "Search")];
+        let _locale_guard = crate::i18n::locale_test_guard();
         // i18n:content 已本地化;固定英文捕获后复位,断言 ASCII 文案。
         crate::i18n::set_locale(crate::i18n::Locale::En);
         let content = HelpPanel::content(Some(PanelId::Quest), &panel_shortcuts).to_string();
@@ -207,6 +210,7 @@ mod tests {
     #[test]
     fn test_help_panel_content_with_context_empty_shortcuts() {
         // 有上下文但快捷键为空时,不应显示"Panel Shortcuts"章节
+        let _locale_guard = crate::i18n::locale_test_guard();
         // i18n:content 已本地化;固定英文捕获后复位,断言 ASCII 文案。
         crate::i18n::set_locale(crate::i18n::Locale::En);
         let content = HelpPanel::content(Some(PanelId::Budget), &[]).to_string();

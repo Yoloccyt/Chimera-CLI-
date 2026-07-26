@@ -36,6 +36,7 @@ use chimera_tui::{
     BudgetMetrics, HealthMetrics, MemoryMetrics, PanelId, SecurityState, TuiApp, TuiConfig,
 };
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use event_bus::{BudgetMetricsPayload, EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
@@ -231,5 +232,35 @@ fn render_each_panel(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, render_all_panels, render_each_panel);
+/// bench 3:IDE 三窗格完整渲染帧时间(M3d 多窗格)
+///
+/// 切换到 TriplePane(Ide)后主区并排渲染三窗格(主 + context + 侧栏),
+/// 验证多窗格渲染仍守 16ms 帧预算(engine split 为 O(窗格数) 廉价,
+/// 逐窗格 Widget 构造是主要增量)。用 80×24 最坏尺寸对齐 render_all_panels。
+fn render_ide_three_panes(c: &mut Criterion) {
+    let mut app = make_app_with_data();
+    // 造出确定的 context 与侧栏目标:Quest → Parliament(prev=Quest)
+    app.switch_panel_to(PanelId::Quest);
+    app.switch_panel_to(PanelId::Parliament);
+    // Dual → Triple(Ide,一次 l):IDE 内在三窗格
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+
+    let mut group = c.benchmark_group("render_ide_three_panes");
+    group.bench_function("80x24_3panes", |b| {
+        b.iter(|| {
+            let backend = TestBackend::new(TERM_WIDTH, TERM_HEIGHT);
+            let mut terminal = Terminal::new(backend).expect("Terminal 构造失败");
+            terminal.draw(|f| app.render(f)).expect("draw 失败");
+            black_box(terminal);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    render_all_panels,
+    render_each_panel,
+    render_ide_three_panes
+);
 criterion_main!(benches);

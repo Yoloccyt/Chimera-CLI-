@@ -13,4 +13,4 @@
 
 pub mod router;
 
-pub use router::{InputRouter, RouteTarget, RouterMode};
+pub use router::{InputRouter, PaneDir, RouteTarget, RouterMode};

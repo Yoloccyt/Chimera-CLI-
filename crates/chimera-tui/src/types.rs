@@ -17,7 +17,7 @@ use crate::engine::layout::PaneMode;
 use crate::error::TuiError;
 use crate::popup::{PopupStack, Severity};
 use chrono::{DateTime, Utc};
-use event_bus::{ActionSource, NexusEvent, VoteValue};
+use event_bus::{ActionSource, ChatStatus, NexusEvent, VoteValue};
 use nexus_core::Quest;
 use serde::{Deserialize, Serialize};
 
@@ -99,6 +99,12 @@ pub enum PanelId {
     /// 主机信息仅构造时采集,进程信息按 `TuiConfig.sysinfo_refresh_interval_ms`
     /// 周期刷新(默认 5s)。数据源:`sysinfo` 0.32 crate(纯 Rust 跨平台)。
     Sysinfo,
+    /// 对话面板 — 交互式 Agent 对话(M3b):渲染对话历史 + 会话状态指示器。
+    ///
+    /// 输入经全局 Insert 模式(`i` 进入)在底部输入行完成,Enter 提交发布
+    /// `TuiChatSubmitted`;响应经 `ChatSync` 消费 `TuiChatResponseChunk`/
+    /// `TuiChatCompleted`/`TuiChatStatusChanged` 驱动。
+    Chat,
 }
 
 impl PanelId {
@@ -124,6 +130,7 @@ impl PanelId {
             PanelId::ResourceMonitor => "ResourceMonitor",
             PanelId::MetricsDashboard => "MetricsDashboard",
             PanelId::Sysinfo => "Sysinfo",
+            PanelId::Chat => "Chat",
         }
     }
 
@@ -149,6 +156,7 @@ impl PanelId {
             PanelId::ResourceMonitor => " Resources ",
             PanelId::MetricsDashboard => " Metrics Dashboard ",
             PanelId::Sysinfo => " System Info ",
+            PanelId::Chat => " Chat ",
         }
     }
 
@@ -178,14 +186,15 @@ impl PanelId {
             PanelId::ClvVector => PanelId::ResourceMonitor,
             PanelId::ResourceMonitor => PanelId::MetricsDashboard,
             PanelId::MetricsDashboard => PanelId::Sysinfo,
-            PanelId::Sysinfo => PanelId::Quest,
+            PanelId::Sysinfo => PanelId::Chat,
+            PanelId::Chat => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
     pub fn prev(&self) -> PanelId {
         match self {
-            PanelId::Quest => PanelId::Sysinfo,
+            PanelId::Quest => PanelId::Chat,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
             PanelId::Memory => PanelId::Budget,
@@ -204,6 +213,7 @@ impl PanelId {
             PanelId::ResourceMonitor => PanelId::ClvVector,
             PanelId::MetricsDashboard => PanelId::ResourceMonitor,
             PanelId::Sysinfo => PanelId::MetricsDashboard,
+            PanelId::Chat => PanelId::Sysinfo,
         }
     }
 }
@@ -215,14 +225,40 @@ impl std::fmt::Display for PanelId {
 }
 
 // ============================================================
+// 对话消息 — Chat 面板历史条目(M3b)
+// ============================================================
+
+/// 对话消息角色 — 区分用户输入与 Agent 回答(M3b)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChatRole {
+    /// 用户提交的查询
+    User,
+    /// Agent 流式回答
+    Assistant,
+}
+
+/// 对话消息 — Chat 面板的单条历史(M3b)
+///
+/// WHY 仅 role + content:M3b 只需区分角色与文本;时间戳/工具调用摘要等
+/// 留待 M3c 编排器接入后按需扩展(YAGNI)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatMessage {
+    /// 消息角色(用户/Agent)
+    pub role: ChatRole,
+    /// 消息文本内容(Assistant 流式追加)
+    pub content: String,
+}
+
+// ============================================================
 // 输入模式 — 命令面板/搜索面板/普通模式
 // ============================================================
 
 /// 输入模式 — 控制底部输入栏的行为
 ///
 /// - `Normal`:普通模式,底部显示状态栏
-/// - `Command`:命令模式(由 `:` 触发),解析并执行面板切换/退出等命令
-/// - `Search`:搜索模式(由 `/` 触发),M1 为占位,仅接受输入
+/// - `Command`:命令模式(由 `:` 触发),解析并执行面板切换/过滤/投票等带参命令
+/// - `Search`:搜索模式(由 `/` 触发),关键字过滤
+/// - `Insert`:插入模式(由 `i` 触发,M3a),原始文本输入(为 M3b Chat 提交铺路)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InputMode {
     /// 普通模式
@@ -231,6 +267,8 @@ pub enum InputMode {
     Command,
     /// 搜索模式
     Search,
+    /// 插入模式(原始文本输入,M3a 引入;Submit 于 M3b 接入 Chat)
+    Insert,
 }
 
 // ============================================================
@@ -239,10 +277,11 @@ pub enum InputMode {
 
 /// 布局模式 — 控制主区域的 panel 排列方式
 ///
-/// WHY 三种布局:
+/// WHY 四种布局:
 /// - SinglePane:专注模式,当前面板全屏,适合深度查看单一面板(如 EventStream 万级事件)
 /// - DualPane:对比模式,主面板 + 侧边栏,适合边查看边监控(默认布局)
 /// - TriplePane:全监控模式,主面板 + 侧边栏 + 底部日志,适合多面板协同观察
+/// - VimSplit:分屏模式,左右两等分窗格,适合并排对照(M3d Vim 风格多窗格)
 ///
 /// WHY 派生 Serialize/Deserialize:`TuiState` 派生了 serde,作为其字段的
 /// `LayoutMode` 必须同步派生,否则 `#[derive(Serialize)]` 缺少 trait bound 编译失败。
@@ -259,6 +298,11 @@ pub enum LayoutMode {
     DualPane,
     /// 三面板:主面板 + 侧边栏 + 底部日志(全监控模式)
     TriplePane,
+    /// 分屏:左右两等分窗格(M3d,Vim 风格双分屏)
+    ///
+    /// WHY 第 4 变体:M3d 多窗格将 VimSplit 纳入 `l` 键循环,映射到
+    /// `PaneMode::VimSplit`(左右等分);serde 附加变体,旧配置正常加载。
+    VimSplit,
 }
 
 impl LayoutMode {
@@ -268,17 +312,20 @@ impl LayoutMode {
             LayoutMode::SinglePane => "single",
             LayoutMode::DualPane => "dual",
             LayoutMode::TriplePane => "triple",
+            LayoutMode::VimSplit => "vim",
         }
     }
 
-    /// 循环切换到下一个布局模式(SinglePane → DualPane → TriplePane → SinglePane)
+    /// 循环切换到下一个布局模式(Single → Dual → Triple → VimSplit → Single)
     ///
-    /// WHY 循环顺序:从专注 → 对比 → 全监控 → 回到专注,符合用户逐步增加信息密度的需求
+    /// WHY 循环顺序:专注 → 对比 → 全监控 → 分屏 → 回到专注,符合用户逐步增加
+    /// 信息密度、最后进入 Vim 风格分屏协作的需求(M3d 将 VimSplit 纳入循环)
     pub fn next(&self) -> Self {
         match self {
             LayoutMode::SinglePane => LayoutMode::DualPane,
             LayoutMode::DualPane => LayoutMode::TriplePane,
-            LayoutMode::TriplePane => LayoutMode::SinglePane,
+            LayoutMode::TriplePane => LayoutMode::VimSplit,
+            LayoutMode::VimSplit => LayoutMode::SinglePane,
         }
     }
 
@@ -288,14 +335,14 @@ impl LayoutMode {
     /// 展示层派生——伴随面板等多窗格特性据此判断是否有 context 区。
     /// - `SinglePane => Focus`(全屏,无 context)
     /// - `DualPane => Chat`(主区 + 单一 context)
-    /// - `TriplePane => Ide`(主区 + context;Stage 1 暂只用 context 栏)
-    ///
-    /// `PaneMode::VimSplit` 为保留态,当前不由 `LayoutMode` 映射(留后续/命令面板可达)。
+    /// - `TriplePane => Ide`(主区 + 侧栏 + context,M3d 三窗格)
+    /// - `VimSplit => VimSplit`(左右等分,M3d 双分屏)
     pub fn to_pane_mode(self) -> PaneMode {
         match self {
             LayoutMode::SinglePane => PaneMode::Focus,
             LayoutMode::DualPane => PaneMode::Chat,
             LayoutMode::TriplePane => PaneMode::Ide,
+            LayoutMode::VimSplit => PaneMode::VimSplit,
         }
     }
 }
@@ -668,6 +715,51 @@ impl TickMode {
     }
 }
 
+/// 监控面板 sparkline 显示时间窗 — `monitor.time_window` 循环切换
+///
+/// WHY 三档:16/32/64 点对应"近况/中期/全窗"三种时间跨度,循环切换让
+/// 操作员在窄 sparkline 上按需聚焦最近趋势或查看完整历史
+///(数据源 `sys_metrics_history` 上限 64)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MonitorWindow {
+    /// 近况:最近 16 点
+    Short,
+    /// 中期:最近 32 点
+    Medium,
+    /// 全窗:最近 64 点(默认,= sys_metrics_history 上限,零回归)
+    #[default]
+    Long,
+}
+
+impl MonitorWindow {
+    /// 返回显示点数
+    pub fn points(&self) -> usize {
+        match self {
+            MonitorWindow::Short => 16,
+            MonitorWindow::Medium => 32,
+            MonitorWindow::Long => 64,
+        }
+    }
+
+    /// 循环到下一档(Short → Medium → Long → Short)
+    pub fn next(&self) -> Self {
+        match self {
+            MonitorWindow::Short => MonitorWindow::Medium,
+            MonitorWindow::Medium => MonitorWindow::Long,
+            MonitorWindow::Long => MonitorWindow::Short,
+        }
+    }
+
+    /// 返回状态栏展示标签(点数)
+    pub fn label(&self) -> &'static str {
+        match self {
+            MonitorWindow::Short => "16",
+            MonitorWindow::Medium => "32",
+            MonitorWindow::Long => "64",
+        }
+    }
+}
+
 // ============================================================
 // TUI 状态 — 应用运行时状态
 // ============================================================
@@ -744,6 +836,9 @@ pub struct TuiState {
     /// - `g` + `g`:调用当前面板 scroll_to_top(gg 跳顶,与 vim 一致)
     /// - `g` + 其他键:重置前缀,将后续键委托给当前面板处理,避免卡死
     pub g_prefix: bool,
+    /// Ctrl+W 前缀状态(M3 后续):按下 `Ctrl+W` 后进入等待,下一键(h/j/k/l/w)
+    /// 决定方向窗格焦点或循环;其他键取消前缀。与 `g_prefix` 同为瞬态路由前缀。
+    pub w_prefix: bool,
     /// 衰减历史 sparkline 数据点(系数 × 1000 的整型表示)
     pub decay_history: Vec<u64>,
     // === P6.2 布局模板新增字段 ===
@@ -769,6 +864,38 @@ pub struct TuiState {
     /// 当前 tick 模式(Normal/Eco),状态栏展示用
     #[serde(default)]
     pub tick_mode: TickMode,
+    // === M3b Chat 面板字段 ===
+    /// 对话历史(数据驱动 Chat 面板,由 ChatSync 单一拥有并经 DataSnapshot 同步)
+    #[serde(default)]
+    pub chat_messages: Vec<ChatMessage>,
+    /// 当前对话会话状态(思考中/工具执行中/空闲,驱动 Chat 状态指示器)
+    #[serde(default)]
+    pub chat_status: ChatStatus,
+    /// 已上屏的 Action 反馈序号(P0 交互链;与 DataSnapshot.action_feedback_seq 比对,
+    /// 仅当快照序号更大时才把 Action 结果/错误刷到 status_message,避免每 tick 重复)
+    #[serde(default)]
+    pub last_action_feedback_seq: u64,
+    /// 监控采样是否暂停(monitor.pause_sampling;UI 本地冻结显示)
+    ///
+    /// WHY UI 本地:暂停时 `app.update()` 跳过覆盖 `sys_metrics`/`sys_metrics_history`,
+    /// 保留冻结快照供检视;采样管线继续运行(廉价),不改 pipeline/event-bus(§2.2)。
+    #[serde(default)]
+    pub monitor_paused: bool,
+    /// 监控 sparkline 显示时间窗(monitor.time_window 循环切换)
+    #[serde(default)]
+    pub monitor_window: MonitorWindow,
+    /// CLV 热图值域是否自适应(viz.switch_dimension 焦点为 ClvVector 时)
+    ///
+    /// false = 固定[-1,1](默认);true = 按 block_means 实际 min/max 自适应着色。
+    #[serde(default)]
+    pub clv_heatmap_autoscale: bool,
+    // === P1-W2.2 Critical 旁路通道丢弃计数 ===
+    /// Critical 旁路通道(mpsc 4096)累计丢弃事件数(0 = 无丢弃,> 0 触发告警)
+    ///
+    /// 来源:DataSnapshot.critical_event_dropped_count → app.update() 同步。
+    /// EventStream 面板顶部据此显示 "CRITICAL 事件丢弃: N" 告警行。
+    #[serde(default)]
+    pub critical_event_dropped_count: u64,
 }
 
 impl TuiState {
@@ -804,6 +931,7 @@ impl TuiState {
             dirty_panels: HashSet::new(),
             auto_scroll: true,
             g_prefix: false,
+            w_prefix: false,
             decay_history: Vec::new(),
             // P6.2 布局模板默认值(DualPane,见 LayoutMode::default 的 WHY 注释)
             layout_mode: LayoutMode::default(),
@@ -816,6 +944,16 @@ impl TuiState {
             sys_metrics: SystemMetrics::default(),
             sys_metrics_history: Vec::new(),
             tick_mode: TickMode::default(),
+            // M3b Chat 面板默认值(空历史 + 空闲状态)
+            chat_messages: Vec::new(),
+            chat_status: ChatStatus::default(),
+            last_action_feedback_seq: 0,
+            // M3 监控/视图控制默认值(= 当前行为,零回归)
+            monitor_paused: false,
+            monitor_window: MonitorWindow::default(),
+            clv_heatmap_autoscale: false,
+            // P1-W2.2:Critical 旁路通道丢弃计数(0 = 无丢弃)
+            critical_event_dropped_count: 0,
         }
     }
 
@@ -854,6 +992,8 @@ impl TuiState {
                         running: true,
                         latest_events: VecDeque::new(),
                         popup_stack: crate::popup::PopupStack::new(),
+                        // P1-W2.2:丢弃计数从事件流重新填充,不持久化
+                        critical_event_dropped_count: 0,
                         ..state
                     }
                 }
@@ -1033,6 +1173,21 @@ mod tests {
         assert_eq!(LayoutMode::SinglePane.to_pane_mode(), PaneMode::Focus);
         assert_eq!(LayoutMode::DualPane.to_pane_mode(), PaneMode::Chat);
         assert_eq!(LayoutMode::TriplePane.to_pane_mode(), PaneMode::Ide);
+        assert_eq!(LayoutMode::VimSplit.to_pane_mode(), PaneMode::VimSplit);
+    }
+
+    #[test]
+    fn monitor_window_cycles_and_maps_points() {
+        // 默认 Long(= 全 64 点,零回归)
+        assert_eq!(MonitorWindow::default(), MonitorWindow::Long);
+        // 循环:Short → Medium → Long → Short
+        assert_eq!(MonitorWindow::Short.next(), MonitorWindow::Medium);
+        assert_eq!(MonitorWindow::Medium.next(), MonitorWindow::Long);
+        assert_eq!(MonitorWindow::Long.next(), MonitorWindow::Short);
+        // 点数映射
+        assert_eq!(MonitorWindow::Short.points(), 16);
+        assert_eq!(MonitorWindow::Medium.points(), 32);
+        assert_eq!(MonitorWindow::Long.points(), 64);
     }
 
     // ============================================================
@@ -1083,8 +1238,9 @@ mod tests {
         assert_eq!(PanelId::ResourceMonitor.next(), PanelId::MetricsDashboard);
         // 循环:MetricsDashboard → Sysinfo(Task 3.1 新增)
         assert_eq!(PanelId::MetricsDashboard.next(), PanelId::Sysinfo);
-        // 循环:Sysinfo → Quest(Task 3.1 新增)
-        assert_eq!(PanelId::Sysinfo.next(), PanelId::Quest);
+        // M3b:Sysinfo → Chat → Quest(Chat 追加到循环末尾)
+        assert_eq!(PanelId::Sysinfo.next(), PanelId::Chat);
+        assert_eq!(PanelId::Chat.next(), PanelId::Quest);
     }
 
     #[test]
@@ -1111,8 +1267,9 @@ mod tests {
         assert_eq!(PanelId::MetricsDashboard.prev(), PanelId::ResourceMonitor);
         // 循环:Sysinfo → MetricsDashboard(Task 3.1 新增)
         assert_eq!(PanelId::Sysinfo.prev(), PanelId::MetricsDashboard);
-        // 循环:Quest → Sysinfo(不再是 Quest → ResourceMonitor)
-        assert_eq!(PanelId::Quest.prev(), PanelId::Sysinfo);
+        // M3b:Chat → Sysinfo,Quest → Chat(Chat 追加到循环末尾)
+        assert_eq!(PanelId::Chat.prev(), PanelId::Sysinfo);
+        assert_eq!(PanelId::Quest.prev(), PanelId::Chat);
     }
 
     #[test]
@@ -1308,17 +1465,19 @@ mod tests {
         assert_eq!(LayoutMode::SinglePane.as_str(), "single");
         assert_eq!(LayoutMode::DualPane.as_str(), "dual");
         assert_eq!(LayoutMode::TriplePane.as_str(), "triple");
+        assert_eq!(LayoutMode::VimSplit.as_str(), "vim");
     }
 
     #[test]
     fn test_layout_mode_next_cycle() {
-        // SinglePane → DualPane → TriplePane → SinglePane
+        // Single → Dual → Triple → VimSplit → Single(M3d 4 态循环)
         assert_eq!(LayoutMode::SinglePane.next(), LayoutMode::DualPane);
         assert_eq!(LayoutMode::DualPane.next(), LayoutMode::TriplePane);
-        assert_eq!(LayoutMode::TriplePane.next(), LayoutMode::SinglePane);
-        // 完整循环验证:连续 next 三次回到起点
+        assert_eq!(LayoutMode::TriplePane.next(), LayoutMode::VimSplit);
+        assert_eq!(LayoutMode::VimSplit.next(), LayoutMode::SinglePane);
+        // 完整循环验证:连续 next 四次回到起点
         let mode = LayoutMode::SinglePane;
-        assert_eq!(mode.next().next().next(), mode);
+        assert_eq!(mode.next().next().next().next(), mode);
     }
 
     #[test]

@@ -28,6 +28,7 @@ use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use std::collections::VecDeque;
+use std::sync::Mutex;
 
 use chimera_tui::config::Theme;
 use chimera_tui::{
@@ -38,6 +39,12 @@ use chimera_tui::{
 // ============================================================
 // 辅助函数与可配置静态数据源
 // ============================================================
+
+/// 串行化所有会读写全局 locale 的测试(与 i18n_chrome_test.rs 同范式)
+///
+/// WHY:界面语言为进程级全局静态,涉及 locale 的测试并行时会互相复位(En↔Zh),
+/// 导致 render 捕获到错误语言。用同一 Mutex 互斥这些测试,消除竞态 flaky。
+static LOCALE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 构造测试用 TUI 应用(默认配置)
 fn make_app() -> TuiApp {
@@ -107,6 +114,8 @@ fn full_snapshot(
 
 #[test]
 fn test_tui_layout_rendering() {
+    // locale 为全局静态,串行化避免与其他 En 测试并行时被复位为 Zh
+    let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // WHY TestBackend:验证 render() 产出非空内容,包含核心 UI 元素
     // i18n:状态栏标签随 locale 切换;固定英文捕获后立即复位,
     // 使后续断言基于已捕获的英文快照(ASCII "Panel:" 可靠),且 panic 也不泄露 locale。
@@ -137,6 +146,8 @@ fn test_tui_layout_rendering() {
 
 #[test]
 fn test_tui_layout_rendering_all_panels() {
+    // locale 为全局静态,串行化避免与其他 En 测试并行时被复位为 Zh
+    let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // WHY 全面板渲染:验证 8 个面板都能正确渲染各自内容
     let panels = [
         PanelId::Quest,
@@ -229,12 +240,11 @@ fn test_tui_input_mode_switching() {
 
 #[test]
 fn test_tui_input_mode_circular_navigation() {
-    // WHY 循环导航:验证 Quest → ... → MetricsDashboard → Quest 的完整循环(16 面板)
-    // P9 TUI v1.8-omega Task 2.2:MetricsDashboardPanel 加入主循环后,从 15 面板扩展
-    // 到 16 面板(新增 MetricsDashboard 监控类展示面板,Timeline 仍未注册故不含)。
+    // WHY 循环导航:验证 Quest → ... → MetricsDashboard → Chat → Quest 的完整循环(17 面板)
+    // M3b:Chat 面板追加到主循环末尾,从 16 面板扩展到 17 面板(Timeline 仍未注册故不含)。
     let mut app = make_app();
 
-    // 连续 Tab 15 次应回到原点(16 面板循环:起点 Quest + 15 个后续)
+    // 连续 Tab 17 次应回到原点(17 面板循环:起点 Quest + 16 个后续)
     for expected in [
         PanelId::Parliament,
         PanelId::Budget,
@@ -251,6 +261,7 @@ fn test_tui_input_mode_circular_navigation() {
         PanelId::ClvVector,
         PanelId::ResourceMonitor,
         PanelId::MetricsDashboard,
+        PanelId::Chat,
         PanelId::Quest,
     ] {
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -262,8 +273,9 @@ fn test_tui_input_mode_circular_navigation() {
         );
     }
 
-    // Shift+Tab 反向循环 15 次也应回到原点
+    // Shift+Tab 反向循环也应回到原点(17 面板:Quest 的上一个 = 末尾 Chat)
     for expected in [
+        PanelId::Chat,
         PanelId::MetricsDashboard,
         PanelId::ResourceMonitor,
         PanelId::ClvVector,
@@ -991,12 +1003,12 @@ fn test_mouse_tab_click_switches_panel_integration() {
     // 先渲染以设置 last_area
     let _ = render_to_string(&mut app, 80, 24);
 
-    // P2 TUI v1.7-omega:标签栏宽度 80,13 个面板,每个标签约 6 列。
-    // 点击第 2 个标签(Parliament)需落在 column 6-11 范围内。
-    // WHY column=8:避开标签边界(6/12),确保命中 Parliament 标签内部。
+    // M3b:标签栏宽度 80,17 个面板(含 Chat),每标签约 4 列。
+    // WHY column=5:落在第 2 个标签(index 1 = Parliament)内——tab_width 为 4 或 5 时
+    // 5/tab_width 均 = 1,避开边界且不受面板数微调影响。
     app.handle_mouse_event(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 8,
+        column: 5,
         row: 1,
         modifiers: KeyModifiers::NONE,
     });

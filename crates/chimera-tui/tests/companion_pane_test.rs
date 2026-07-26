@@ -92,13 +92,14 @@ fn companion_noop_in_focus_mode() {
     let mut app = make_app();
     focus_parliament_with_quest_companion(&mut app);
 
-    // `l` 循环布局:DualPane → TriplePane → SinglePane(Focus 别名)
+    // `l` 循环布局:Dual → Triple → VimSplit → Single(Focus 别名,M3d 4 循环)
+    app.handle_key_event(key(KeyCode::Char('l')));
     app.handle_key_event(key(KeyCode::Char('l')));
     app.handle_key_event(key(KeyCode::Char('l')));
     assert_eq!(
         app.state().layout_mode.as_str(),
         "single",
-        "两次 l 应到达 SinglePane"
+        "三次 l 应到达 SinglePane(M3d 纳入 VimSplit 后为 4 态循环)"
     );
 
     // Focus 模式无 context 区:开启伴随仍不渲染第二面板

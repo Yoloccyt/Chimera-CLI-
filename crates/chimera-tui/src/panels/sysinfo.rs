@@ -466,6 +466,7 @@ mod tests {
     fn test_panel_trait_title() {
         let panel = SysinfoPanel::new();
         // i18n:title() 已本地化;固定英文捕获后复位,断言 ASCII 标题。
+        let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::En);
         let title = panel.title().to_string();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);

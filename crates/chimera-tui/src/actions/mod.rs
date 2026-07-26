@@ -16,8 +16,10 @@
 pub mod codegen;
 pub mod descriptor;
 pub mod domains;
+pub mod panel_menu;
 pub mod registry;
 
 pub use codegen::{HelpLine, PaletteEntry, SlashCommand};
 pub use descriptor::{ActionDescriptor, ActionDomain};
+pub use panel_menu::panel_context_actions;
 pub use registry::{ActionRegistry, MAX_ACTIONS};

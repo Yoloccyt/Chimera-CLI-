@@ -45,3 +45,8 @@ path = "src/main.rs"
 [[bench]]
 name = "config_concurrency_bench"
 harness = false
+
+# Quest 编排器高频 chunk 生产性能基线(build_quest_reply + plan_chunks 吞吐量)
+[[bench]]
+name = "quest_orchestrator_bench"
+harness = false

@@ -95,6 +95,29 @@ pub enum PopupKind {
         /// 垂直滚动偏移(行数)
         scroll: u16,
     },
+    /// 面板上下文动作菜单 — 焦点面板按 `a` 唤出的精选动作列表(§4.5 入口三)
+    ///
+    /// WHY 独立于 HelpOverlay:HelpOverlay 只读展示,本菜单可上下选择 + Enter 执行
+    /// (派发 selected 对应 action_id 经 DispatchAction)。entries 为 (action_id, i18n 标题)。
+    ActionMenu {
+        /// 菜单标题(通常为焦点面板名)
+        title: String,
+        /// 候选动作:(action_id, 已解析 i18n 标题)
+        entries: Vec<(String, String)>,
+        /// 当前选中项下标(钳制在 [0, entries.len()))
+        selected: usize,
+    },
+    /// 配置速调菜单 — `config.edit` 唤出的运行时配置项就地循环编辑(§4.5 收尾)
+    ///
+    /// WHY 独立于 ActionMenu:ActionMenu 语义"选中→派发→关闭",本菜单"选中→就地循环→常驻"
+    /// (连续调多项)。entries 为 (设置名, 当前值显示),由 app 从 `TuiConfig` 组装并在每次
+    /// 循环后刷新。
+    ConfigMenu {
+        /// 配置项:(设置名, 当前值显示)—— 固定顺序 [主题, 占比, Tick]
+        entries: Vec<(String, String)>,
+        /// 当前选中项下标(钳制在 [0, entries.len()))
+        selected: usize,
+    },
 }
 
 impl PopupKind {
@@ -166,6 +189,26 @@ impl PopupKind {
         }
 
         Self::HelpOverlay { entries, scroll: 0 }
+    }
+
+    /// 创建面板上下文动作菜单(§4.5 入口三)
+    ///
+    /// `title` 为焦点面板名,`entries` 为 (action_id, i18n 标题) 列表(由
+    /// `actions::panel_context_actions` + `ActionRegistry` 组装);selected 初始 0。
+    pub fn action_menu(title: impl Into<String>, entries: Vec<(String, String)>) -> Self {
+        Self::ActionMenu {
+            title: title.into(),
+            entries,
+            selected: 0,
+        }
+    }
+
+    /// 创建配置速调菜单(config.edit)—— entries 为 (设置名, 当前值) 列表,由 app 组装
+    pub fn config_menu(entries: Vec<(String, String)>) -> Self {
+        Self::ConfigMenu {
+            entries,
+            selected: 0,
+        }
     }
 
     /// 从 `NexusEvent` 构造事件详情弹窗
@@ -411,6 +454,71 @@ impl PopupStack {
         }
     }
 
+    /// 移动动作菜单选中项(down=true 下移,false 上移;钳制边界不环绕)
+    ///
+    /// 仅对栈顶 `ActionMenu` 生效;空列表或非菜单弹窗忽略。
+    pub fn move_action_menu_selection(&mut self, down: bool) {
+        if let Some(PopupKind::ActionMenu {
+            entries, selected, ..
+        }) = self.current_mut()
+        {
+            if entries.is_empty() {
+                return;
+            }
+            let last = entries.len() - 1;
+            *selected = if down {
+                (*selected + 1).min(last)
+            } else {
+                selected.saturating_sub(1)
+            };
+        }
+    }
+
+    /// 返回动作菜单当前选中的 action_id(非菜单/空列表时 None)
+    pub fn action_menu_selected_id(&self) -> Option<String> {
+        match self.current() {
+            Some(PopupKind::ActionMenu {
+                entries, selected, ..
+            }) => entries.get(*selected).map(|(id, _)| id.clone()),
+            _ => None,
+        }
+    }
+
+    /// 移动配置菜单选中项(down=true 下移,false 上移;钳制边界不环绕)
+    ///
+    /// 仅对栈顶 `ConfigMenu` 生效;空列表或非配置菜单忽略。
+    pub fn move_config_menu_selection(&mut self, down: bool) {
+        if let Some(PopupKind::ConfigMenu {
+            entries, selected, ..
+        }) = self.current_mut()
+        {
+            if entries.is_empty() {
+                return;
+            }
+            let last = entries.len() - 1;
+            *selected = if down {
+                (*selected + 1).min(last)
+            } else {
+                selected.saturating_sub(1)
+            };
+        }
+    }
+
+    /// 返回配置菜单当前选中下标(非配置菜单时 None)
+    pub fn config_menu_selected(&self) -> Option<usize> {
+        match self.current() {
+            Some(PopupKind::ConfigMenu { selected, .. }) => Some(*selected),
+            _ => None,
+        }
+    }
+
+    /// 刷新配置菜单条目显示(循环编辑后更新当前值);非配置菜单忽略
+    pub fn set_config_menu_entries(&mut self, new_entries: Vec<(String, String)>) {
+        if let Some(PopupKind::ConfigMenu { entries, .. }) = self.current_mut() {
+            *entries = new_entries;
+        }
+    }
+
     /// 渲染当前弹窗到缓冲区
     ///
     /// WHY 接收 `area`:调用者传入整个终端区域,弹窗自行居中计算。
@@ -559,6 +667,64 @@ impl PopupStack {
                     .block(block)
                     .wrap(Wrap { trim: true })
                     .scroll((*scroll, 0));
+                paragraph.render(popup_area, buf);
+            }
+            PopupKind::ActionMenu {
+                title,
+                entries,
+                selected,
+            } => {
+                // 与命令面板同视觉:选中项 ▶ 标记 + accent 高亮,深色背景区分于面板
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" {title} 动作 (Enter 执行 / Esc 关闭) "))
+                    .style(Style::default().bg(Color::Rgb(30, 30, 46)));
+                let lines: Vec<Line> = entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_id, label))| {
+                        let marker = if i == *selected { "▶ " } else { "  " };
+                        let style = if i == *selected {
+                            Style::default()
+                                .fg(Color::Black)
+                                .bg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::White)
+                        };
+                        Line::from(Span::styled(format!("{marker}{label}"), style))
+                    })
+                    .collect();
+                let paragraph = Paragraph::new(Text::from(lines))
+                    .block(block)
+                    .wrap(Wrap { trim: true });
+                paragraph.render(popup_area, buf);
+            }
+            PopupKind::ConfigMenu { entries, selected } => {
+                // 配置速调菜单:每行 "设置名: 当前值",选中项 ▶ 高亮;菜单常驻多次编辑
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(" 配置 (Enter 切换 / Esc 关闭) ")
+                    .style(Style::default().bg(Color::Rgb(30, 30, 46)));
+                let lines: Vec<Line> = entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, value))| {
+                        let marker = if i == *selected { "▶ " } else { "  " };
+                        let style = if i == *selected {
+                            Style::default()
+                                .fg(Color::Black)
+                                .bg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::White)
+                        };
+                        Line::from(Span::styled(format!("{marker}{name}: {value}"), style))
+                    })
+                    .collect();
+                let paragraph = Paragraph::new(Text::from(lines))
+                    .block(block)
+                    .wrap(Wrap { trim: true });
                 paragraph.render(popup_area, buf);
             }
         }
@@ -738,5 +904,56 @@ mod tests {
         assert!(!stack.current().unwrap().is_confirmed());
         stack.toggle_confirm();
         assert!(stack.current().unwrap().is_confirmed());
+    }
+
+    #[test]
+    fn action_menu_selection_clamps_and_reads_selected_id() {
+        let mut stack = PopupStack::new();
+        stack.push(PopupKind::action_menu(
+            "Quest",
+            vec![
+                ("quest.pause".into(), "暂停".into()),
+                ("quest.resume".into(), "恢复".into()),
+                ("panel.drill_down".into(), "详情".into()),
+            ],
+        ));
+        // 初始选中首项
+        assert_eq!(
+            stack.action_menu_selected_id().as_deref(),
+            Some("quest.pause")
+        );
+        // 上移在顶部钳制不越界
+        stack.move_action_menu_selection(false);
+        assert_eq!(
+            stack.action_menu_selected_id().as_deref(),
+            Some("quest.pause")
+        );
+        // 下移两次到末项
+        stack.move_action_menu_selection(true);
+        stack.move_action_menu_selection(true);
+        assert_eq!(
+            stack.action_menu_selected_id().as_deref(),
+            Some("panel.drill_down")
+        );
+        // 末项继续下移钳制不越界
+        stack.move_action_menu_selection(true);
+        assert_eq!(
+            stack.action_menu_selected_id().as_deref(),
+            Some("panel.drill_down")
+        );
+    }
+
+    #[test]
+    fn action_menu_selected_id_none_for_non_menu_popup() {
+        let mut stack = PopupStack::new();
+        // 非菜单弹窗返回 None
+        stack.push(PopupKind::Notification {
+            message: "hi".into(),
+            severity: Severity::Info,
+        });
+        assert!(stack.action_menu_selected_id().is_none());
+        // 菜单导航方法对非菜单弹窗无副作用(不 panic)
+        stack.move_action_menu_selection(true);
+        assert!(stack.action_menu_selected_id().is_none());
     }
 }

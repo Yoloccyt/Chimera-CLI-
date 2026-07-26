@@ -116,6 +116,22 @@ macro_rules! t {
     };
 }
 
+/// 测试专用 locale 序列化锁 — 消除并行测试对全局 `LOCALE` 的竞争
+///
+/// WHY:生产为单线程(仅主线程读写 locale,无竞态);但 `cargo test` 默认多线程并行,
+/// 多个测试同时 En-pin(set En → 捕获 → reset Zh)会互相污染窗口。所有会修改全局
+/// locale 的测试在段首获取此锁并持有至复位完成,保证互斥。返回的 guard 需绑定到
+/// 局部变量(如 `let _g = ...`)以在整个测试作用域内持锁。锁中毒时降级取用内部值
+/// (测试已 panic 失败,不因中毒再连锁 panic 掩盖真实失败)。
+#[cfg(test)]
+pub(crate) fn locale_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::Mutex;
+    static LOCALE_TEST_LOCK: Mutex<()> = Mutex::new(());
+    LOCALE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +143,7 @@ mod tests {
 
     #[test]
     fn default_locale_is_chinese() {
+        let _locale_guard = locale_test_guard();
         reset();
         assert_eq!(current_locale(), Locale::Zh);
         assert_eq!(tr("panel.quest.title"), "任务");
@@ -134,6 +151,7 @@ mod tests {
 
     #[test]
     fn toggle_switches_between_zh_and_en() {
+        let _locale_guard = locale_test_guard();
         reset();
         assert_eq!(toggle_locale(), Locale::En);
         assert_eq!(tr("panel.quest.title"), "Quests");
@@ -143,6 +161,7 @@ mod tests {
 
     #[test]
     fn missing_key_falls_back_to_key_itself() {
+        let _locale_guard = locale_test_guard();
         reset();
         // 未定义的 key 返回自身,不 panic
         assert_eq!(tr("nonexistent.key.xyz"), "nonexistent.key.xyz");

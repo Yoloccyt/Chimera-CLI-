@@ -37,6 +37,27 @@ pub enum RouterMode {
     /// "已按下 g"状态由调用方(app)以模式形式持有,次键经本模式解析。
     /// 注意:GPrefix 非用户可见输入模式,仅为路由的瞬态前缀态。
     GPrefix,
+    /// Ctrl+W 前缀等待态(瞬态):`Ctrl+W` 之后的次键(h/j/k/l/w)在此模式解析。
+    ///
+    /// WHY 独立态:与 GPrefix 同理,"已按下 Ctrl+W"状态由 app 以 `w_prefix` 持有,
+    /// 次键经本模式解析为方向窗格焦点或循环。
+    WPrefix,
+}
+
+/// 窗格方向(Ctrl+W 前缀方向导航)
+///
+/// WHY 独立枚举:方向导航目标与窗格几何相关,由 app 按矩形位置解析为最近邻
+/// 窗格;路由器只表达"往哪个方向",不涉及几何。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneDir {
+    /// 左
+    Left,
+    /// 右
+    Right,
+    /// 上
+    Up,
+    /// 下
+    Down,
 }
 
 /// 路由目标 — 一个按键应交由谁处理(§4.3 按键归属)
@@ -52,6 +73,23 @@ pub enum RouteTarget {
     EnterMode(RouterMode),
     /// 退出当前模式返回 Normal(Esc)
     ExitMode,
+    /// 打开统一命令面板 overlay(Normal: Ctrl+P)
+    ///
+    /// WHY 独立于 `EnterCommandBar`:overlay 是 Registry 驱动的"模糊选一个动作",
+    /// 而 `:` 命令栏是"带参文本命令解析"(find/filter/vote 等),二者交互不同,
+    /// 路由目标必须区分,否则同一 `EnterMode(Command)` 无法表达两种入口(M3a 决策 B)。
+    OpenPalette,
+    /// 打开焦点面板的上下文动作菜单 overlay(Normal: `a`)
+    ///
+    /// WHY 独立于 OpenPalette:命令面板是全局模糊搜索,本目标是"焦点面板精选动作"
+    /// 的上下文菜单(§4.5),动作集由 `actions::panel_context_actions(焦点面板)` 决定,
+    /// 需运行时焦点上下文,故不用静态 `GlobalAction`。
+    OpenActionMenu,
+    /// 进入 `:` 命令栏(Normal: `:`)—— app `InputMode::Command`,
+    /// 支持 find/filter/level/vote/pause/quest 等带参命令(保留既有能力,不丢功能)。
+    EnterCommandBar,
+    /// 进入 `/` 搜索模式(Normal: `/`)—— app `InputMode::Search`,关键字过滤。
+    EnterSearch,
     /// 焦点轮转(Tab 正向 / Shift+Tab 反向)
     FocusCycle {
         /// true = 下一个面板,false = 上一个面板
@@ -59,6 +97,8 @@ pub enum RouteTarget {
     },
     /// 交由当前焦点面板处理(Enter 下钻 / Space 切换 / 列表导航等)
     FocusPanel,
+    /// Ctrl+W 前缀方向导航:按方向切换活跃窗格(几何解析在 app)
+    FocusPaneDir(PaneDir),
     /// Insert 模式:输入一个字符到输入缓冲
     InsertChar(char),
     /// Command 模式:输入一个字符到命令面板检索缓冲
@@ -113,6 +153,7 @@ impl InputRouter {
             RouterMode::Insert => Self::route_insert(key),
             RouterMode::Command => Self::route_command(key),
             RouterMode::GPrefix => Self::route_gprefix(key),
+            RouterMode::WPrefix => Self::route_wprefix(key),
         }
     }
 
@@ -131,12 +172,13 @@ impl InputRouter {
             // 全局快捷键(Action 支持,最高优先级;带 CONTROL guard 先于同字符普通键)
             KeyCode::Char('l') if ctrl => RouteTarget::GlobalAction("system.toggle_locale"),
             KeyCode::Char('e') if ctrl => RouteTarget::GlobalAction("export.run"),
-            KeyCode::Char('p') if ctrl => RouteTarget::EnterMode(RouterMode::Command),
+            KeyCode::Char('p') if ctrl => RouteTarget::OpenPalette,
             // Ctrl+方向:主面板比例调整
             KeyCode::Up if ctrl => RouteTarget::RatioAdjust { increase: true },
             KeyCode::Down if ctrl => RouteTarget::RatioAdjust { increase: false },
-            // 模式切换
-            KeyCode::Char(':') => RouteTarget::EnterMode(RouterMode::Command),
+            // 模式切换(`:` 命令栏 / `/` 搜索 / `i` Insert 各自专用目标,与 Ctrl+P palette 区分)
+            KeyCode::Char(':') => RouteTarget::EnterCommandBar,
+            KeyCode::Char('/') => RouteTarget::EnterSearch,
             KeyCode::Char('i') => RouteTarget::EnterMode(RouterMode::Insert),
             KeyCode::Char('?') => RouteTarget::GlobalAction("system.open_help"),
             // g 前缀 / 滚动到底
@@ -163,7 +205,14 @@ impl InputRouter {
             KeyCode::Char('t') => RouteTarget::ThemeCycle,
             KeyCode::Char('l') => RouteTarget::GlobalAction("view.switch_layout"),
             KeyCode::Char('\\') => RouteTarget::GlobalAction("view.toggle_companion"),
+            // Stage 2 伴随面板键:] 循环绑定,w 切换窗格焦点(与 handle_global_key 对齐)
+            KeyCode::Char(']') => RouteTarget::GlobalAction("view.cycle_companion"),
+            // Ctrl+W 前缀:进入方向窗格导航态(h/l 方向 + w 循环);plain w 保留循环
+            KeyCode::Char('w') if ctrl => RouteTarget::EnterMode(RouterMode::WPrefix),
+            KeyCode::Char('w') => RouteTarget::GlobalAction("view.focus_pane"),
             KeyCode::Char('E') => RouteTarget::GlobalAction("export.run"),
+            // 面板上下文动作菜单:bare `a` 唤出焦点面板精选动作(Ctrl+A 归面板多选,不匹配此 arm)
+            KeyCode::Char('a') if !ctrl => RouteTarget::OpenActionMenu,
             // 焦点轮转
             KeyCode::Tab => RouteTarget::FocusCycle { forward: true },
             KeyCode::BackTab => RouteTarget::FocusCycle { forward: false },
@@ -186,6 +235,23 @@ impl InputRouter {
             KeyCode::Char('4') => RouteTarget::PanelJump(PanelId::Chtc),
             KeyCode::Char('5') => RouteTarget::PanelJump(PanelId::Timeline),
             KeyCode::Char('6') => RouteTarget::PanelJump(PanelId::ResourceMonitor),
+            _ => RouteTarget::ExitMode,
+        }
+    }
+
+    /// WPrefix 模式路由:`Ctrl+W` 之后的次键(方向窗格导航 + 循环)
+    ///
+    /// - `h`/`l` → 左/右方向窗格焦点(几何解析在 app)
+    /// - `j`/`k` → 下/上方向(当前横向布局无垂直邻居,app 侧 no-op)
+    /// - `w` → 循环切换活跃窗格(与 Normal `w` 一致)
+    /// - 其余 → 退出前缀态(取消,不触发动作)
+    fn route_wprefix(key: KeyEvent) -> RouteTarget {
+        match key.code {
+            KeyCode::Char('h') => RouteTarget::FocusPaneDir(PaneDir::Left),
+            KeyCode::Char('l') => RouteTarget::FocusPaneDir(PaneDir::Right),
+            KeyCode::Char('j') => RouteTarget::FocusPaneDir(PaneDir::Down),
+            KeyCode::Char('k') => RouteTarget::FocusPaneDir(PaneDir::Up),
+            KeyCode::Char('w') => RouteTarget::GlobalAction("view.focus_pane"),
             _ => RouteTarget::ExitMode,
         }
     }
@@ -248,7 +314,7 @@ mod tests {
         );
         assert_eq!(
             InputRouter::route(RouterMode::Normal, ctrl_key(KeyCode::Char('p'))),
-            RouteTarget::EnterMode(RouterMode::Command)
+            RouteTarget::OpenPalette
         );
     }
 
@@ -256,7 +322,11 @@ mod tests {
     fn normal_mode_switches_and_focus_cycle() {
         assert_eq!(
             InputRouter::route(RouterMode::Normal, key(KeyCode::Char(':'))),
-            RouteTarget::EnterMode(RouterMode::Command)
+            RouteTarget::EnterCommandBar
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Normal, key(KeyCode::Char('/'))),
+            RouteTarget::EnterSearch
         );
         assert_eq!(
             InputRouter::route(RouterMode::Normal, key(KeyCode::Char('i'))),
@@ -423,6 +493,33 @@ mod tests {
     }
 
     #[test]
+    fn normal_stage2_companion_keys_route_to_actions() {
+        // Stage 2 新增键:] 循环绑定伴随,w 切换窗格焦点——经 GlobalAction 桥接到
+        // dispatch_action 本地方法(view.cycle_companion / view.focus_pane),与 handle_global_key 对齐。
+        assert_eq!(
+            InputRouter::route(RouterMode::Normal, key(KeyCode::Char(']'))),
+            RouteTarget::GlobalAction("view.cycle_companion")
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Normal, key(KeyCode::Char('w'))),
+            RouteTarget::GlobalAction("view.focus_pane")
+        );
+    }
+
+    #[test]
+    fn normal_colon_and_ctrl_p_are_distinct_targets() {
+        // M3a 决策 B:`:` 命令栏与 Ctrl+P palette overlay 为两个独立入口,不可混同。
+        assert_eq!(
+            InputRouter::route(RouterMode::Normal, key(KeyCode::Char(':'))),
+            RouteTarget::EnterCommandBar
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Normal, ctrl_key(KeyCode::Char('p'))),
+            RouteTarget::OpenPalette
+        );
+    }
+
+    #[test]
     fn normal_ctrl_arrows_adjust_ratio() {
         assert_eq!(
             InputRouter::route(RouterMode::Normal, ctrl_key(KeyCode::Up)),
@@ -502,6 +599,59 @@ mod tests {
         assert_eq!(
             InputRouter::route(RouterMode::Command, release),
             RouteTarget::Ignored
+        );
+    }
+
+    #[test]
+    fn normal_ctrl_w_enters_wprefix_plain_w_cycles() {
+        // Ctrl+W → 方向导航前缀态;plain w → 循环(二者共存,与 Vim 一致)
+        assert_eq!(
+            InputRouter::route(RouterMode::Normal, ctrl_key(KeyCode::Char('w'))),
+            RouteTarget::EnterMode(RouterMode::WPrefix)
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Normal, key(KeyCode::Char('w'))),
+            RouteTarget::GlobalAction("view.focus_pane")
+        );
+    }
+
+    #[test]
+    fn wprefix_routes_directions_and_cycle() {
+        let dirs = [
+            ('h', PaneDir::Left),
+            ('l', PaneDir::Right),
+            ('j', PaneDir::Down),
+            ('k', PaneDir::Up),
+        ];
+        for (c, dir) in dirs {
+            assert_eq!(
+                InputRouter::route(RouterMode::WPrefix, key(KeyCode::Char(c))),
+                RouteTarget::FocusPaneDir(dir),
+                "Ctrl+W {c} 应解析为方向 {dir:?}"
+            );
+        }
+        // w → 循环(与 Normal w 一致)
+        assert_eq!(
+            InputRouter::route(RouterMode::WPrefix, key(KeyCode::Char('w'))),
+            RouteTarget::GlobalAction("view.focus_pane")
+        );
+        // 非预期次键:退出前缀态(取消)
+        assert_eq!(
+            InputRouter::route(RouterMode::WPrefix, key(KeyCode::Char('z'))),
+            RouteTarget::ExitMode
+        );
+    }
+
+    #[test]
+    fn normal_bare_a_opens_action_menu_ctrl_a_falls_to_panel() {
+        // bare `a` → 面板动作菜单;Ctrl+A 不匹配(归面板多选,零回归)
+        assert_eq!(
+            InputRouter::route(RouterMode::Normal, key(KeyCode::Char('a'))),
+            RouteTarget::OpenActionMenu
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Normal, ctrl_key(KeyCode::Char('a'))),
+            RouteTarget::FocusPanel
         );
     }
 }

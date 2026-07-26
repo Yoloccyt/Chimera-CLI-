@@ -38,6 +38,8 @@ impl CommandPalette {
         let (prefix, title) = match state.input_mode {
             InputMode::Command => (":", " Command "),
             InputMode::Search => ("/", " Search "),
+            // Insert(M3a):底部显示聊天输入行 `> {buffer}`(复用同一渲染路径)
+            InputMode::Insert => ("> ", " Chat "),
             InputMode::Normal => return,
         };
 
@@ -96,6 +98,8 @@ impl CommandPalette {
                 }
                 None
             }
+            // Insert 不经命令面板提交(由 TuiApp::handle_insert_key 处理),此处仅为穷尽匹配
+            InputMode::Insert => None,
             InputMode::Normal => None,
         };
 
@@ -130,6 +134,7 @@ impl CommandPalette {
             "log" => return Some(TuiCommand::SwitchPanel(PanelId::Log)),
             "help" => return Some(TuiCommand::SwitchPanel(PanelId::Help)),
             "monitor" => return Some(TuiCommand::SwitchPanel(PanelId::ResourceMonitor)),
+            "chat" => return Some(TuiCommand::SwitchPanel(PanelId::Chat)),
             "quit" => return Some(TuiCommand::Quit),
             "refresh" => return Some(TuiCommand::RequestRefresh),
             _ => {}

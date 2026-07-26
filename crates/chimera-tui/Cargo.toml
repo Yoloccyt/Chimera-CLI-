@@ -39,6 +39,8 @@ crossterm = { workspace = true }
 # WHY rusqlite: 复合主键 (unix_ts, metric) + ON CONFLICT REPLACE 幂等写入
 # 是 SQLite 标准用法;bundled 模式不依赖系统 SQLite,跨平台一致
 rusqlite = { workspace = true }
+# M3b:Chat 会话 session_id 生成(uuid v7 时间有序,复用 workspace 声明)
+uuid = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

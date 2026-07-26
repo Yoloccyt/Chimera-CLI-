@@ -88,6 +88,27 @@ impl ClvVectorPanel {
         }
     }
 
+    /// 计算 8-block 热图值域(viz.switch_dimension):固定 [-1,1] 或按实际 min/max 自适应
+    ///
+    /// WHY autoscale:block_means 常集中在小区间,固定 [-1,1] 下全部淡色难辨;
+    /// 自适应按实际 min/max 拉伸着色,凸显块间相对差异。按 8 块(不足补 0.0)
+    /// 与渲染循环取值一致;退化(全相等/空)回退固定值域避免 heat_bar 除零。
+    fn heatmap_range(block_means: &[f32], autoscale: bool) -> (f64, f64) {
+        if !autoscale {
+            return (-1.0, 1.0);
+        }
+        let vals: Vec<f32> = (0..8usize)
+            .map(|i| block_means.get(i).copied().unwrap_or(0.0))
+            .collect();
+        let mn = vals.iter().copied().fold(f32::INFINITY, f32::min);
+        let mx = vals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        if mx - mn > f32::EPSILON {
+            (mn as f64, mx as f64)
+        } else {
+            (-1.0, 1.0)
+        }
+    }
+
     /// 格式化 Top-8 维度行
     ///
     /// # 参数
@@ -221,13 +242,16 @@ impl Panel for ClvVectorPanel {
 
         match summary {
             Some(s) => {
+                // viz.switch_dimension:热图值域 — 固定 [-1,1] 或按 block_means 实际 min/max 自适应
+                let (heat_lo, heat_hi) =
+                    Self::heatmap_range(&s.block_means, state.clv_heatmap_autoscale);
                 // WHY 安全遍历 8 块:ClvSummary.block_means 理论上为 8 元素,
                 // 但运行时可能因同步延迟少于 8 个,用 .get(i) 防御性访问避免越界。
                 for i in 0..8usize {
                     let mean = s.block_means.get(i).copied().unwrap_or(0.0);
                     // heat_bar 返回 Line<'static>(含 2 个 Span:filled + empty),
                     // 需用 .spans 展开到当前行的 Span 列表中,不能直接放入 vec![Span, ...]。
-                    let heat = render::heat_bar(mean as f64, -1.0, 1.0, 20);
+                    let heat = render::heat_bar(mean as f64, heat_lo, heat_hi, 20);
                     let mean_color = Self::color_for_block_mean(mean);
                     let mut spans = vec![Span::styled(
                         format!("B{} ", i),
@@ -409,9 +433,25 @@ mod tests {
     }
 
     #[test]
+    fn heatmap_range_fixed_vs_autoscale() {
+        // 固定模式:恒 [-1,1]
+        assert_eq!(
+            ClvVectorPanel::heatmap_range(&[0.1, 0.2, 0.3], false),
+            (-1.0, 1.0)
+        );
+        // 自适应:按 8 块(不足补 0.0)取实际值域 → min=0.0(含补零), max=0.5
+        let (lo, hi) = ClvVectorPanel::heatmap_range(&[0.2, 0.5], true);
+        assert!((lo - 0.0).abs() < 1e-6, "min 应含补零 0.0, got {lo}");
+        assert!((hi - 0.5).abs() < 1e-6, "max 应为 0.5, got {hi}");
+        // 退化(空/全相等)回退固定值域
+        assert_eq!(ClvVectorPanel::heatmap_range(&[], true), (-1.0, 1.0));
+    }
+
+    #[test]
     fn test_clv_vector_panel_title() {
         let panel = ClvVectorPanel::new();
         // i18n:title() 已本地化;固定英文捕获后立即复位,断言 ASCII 标题(与 en 表一致)。
+        let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::En);
         let title = panel.title().to_string();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);

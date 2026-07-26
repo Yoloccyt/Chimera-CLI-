@@ -41,12 +41,16 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// Action 编排器(消费 TuiActionRequested,路由 quest.* 域到 QuestEngine 真实执行)
+pub mod action_orchestrator;
 /// Clap 子命令定义
 pub mod cli;
 /// 子命令业务骨架
 pub mod commands;
 /// Figment 多源配置加载
 pub mod config;
+/// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)
+pub mod orchestrator;
 
 // === 公开 API 重导出 ===
 pub use cli::{Cli, Commands, ConfigAction, QuestAction};

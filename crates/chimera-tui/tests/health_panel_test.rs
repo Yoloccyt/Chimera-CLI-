@@ -11,6 +11,13 @@ use chimera_tui::{
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use std::sync::Mutex;
+
+/// 串行化所有会读写全局 locale 的测试(与 i18n_chrome_test.rs 同范式)
+///
+/// WHY:界面语言为进程级全局静态,涉及 locale 的测试并行时会互相复位(En↔Zh),
+/// 导致 render 捕获到错误语言。用同一 Mutex 互斥这些测试,消除竞态 flaky。
+static LOCALE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 构造简单 Quest(集成测试辅助函数,与 quest_event_jump_test.rs 保持一致)
 fn sample_quest(id: &str, title: &str) -> Quest {
@@ -177,6 +184,8 @@ fn test_health_panel_low_score_uses_red_color() {
 
 #[test]
 fn test_health_panel_shows_active_quests() {
+    // locale 为全局静态,串行化避免与其他 En 测试并行时被复位为 Zh
+    let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 构造 3 个 Quest 的快照,验证 Health 面板渲染 "Active Quests: 3"
     let snapshot = DataSnapshot {
         quest_list: vec![
@@ -207,6 +216,8 @@ fn test_health_panel_shows_active_quests() {
 
 #[test]
 fn test_health_panel_shows_paused_quests() {
+    // locale 为全局静态,串行化避免与其他 En 测试并行时被复位为 Zh
+    let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 构造 2 个 Quest 且 paused_quest_count = 1 的快照,
     // 验证 Health 面板渲染 "Paused Quests: 1"
     let snapshot = DataSnapshot {

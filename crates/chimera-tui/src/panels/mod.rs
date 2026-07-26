@@ -17,6 +17,7 @@ use ratatui::text::Line;
 use crate::types::{PanelId, TuiCommand, TuiState};
 
 pub mod budget;
+pub mod chat;
 pub mod chtc;
 pub mod clv_vector;
 pub mod decay;
@@ -39,6 +40,7 @@ pub mod task_manager;
 pub mod timeline;
 
 pub use budget::BudgetPanel;
+pub use chat::ChatPanel;
 pub use chtc::ChtcPanel;
 pub use clv_vector::ClvVectorPanel;
 pub use decay::DecayPanel;
@@ -124,5 +126,13 @@ pub trait Panel: Send {
     /// ```
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         vec![]
+    }
+
+    /// 返回当前选中项的上下文 id(如选中 Quest 的 quest_id),供 quest.* 动作精确定位(§1.3b)。
+    ///
+    /// 默认 None(展示型面板无选中上下文);列表型面板(Quest/TaskManager)覆写返回选中项 id,
+    /// 使命令面板/面板动作菜单派发的 quest.* 精确作用于焦点面板选中的 Quest。
+    fn selected_context_id(&self, _state: &TuiState) -> Option<String> {
+        None
     }
 }

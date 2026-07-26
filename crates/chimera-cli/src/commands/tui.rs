@@ -13,7 +13,8 @@ use crate::config::ChimeraConfig;
 pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
     tracing::info!("启动 TUI 交互界面");
 
-    // M0: 为当前 TUI 会话创建本地事件总线；真正的全系统 EventBus 共享将在后续里程碑接入。
+    // M0: 为当前 TUI 会话创建本地事件总线;Quest 编排器亦订阅此同一总线,
+    // 形成 TUI ↔ 编排器的对话事件回环(全系统 EventBus 共享仍待后续里程碑)。
     // EventSubscriber::new 内部先同步 subscribe，再 spawn 后台转发任务，
     // 遵循 subscribe-before-spawn 规则(§4.4 反模式 #3)。
     let bus = event_bus::EventBus::new();
@@ -66,6 +67,21 @@ pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
     let engine = Arc::new(quest_engine::QuestEngine::new(bus.clone()));
     let control_handle = quest_engine::spawn_control_subscriber(Arc::clone(&engine), bus.clone());
 
+    // Quest 分解管线:启动 Quest 编排器,消费 TUI 发布的 TuiChatSubmitted,经真实 L9
+    // QuestEngine 分解为任务 DAG 并逐字符流式回发。复用上方 engine(与控制订阅者共享),
+    // create_quest 内部广播的 QuestCreated 经同一 bus 同步点亮 Quest 面板。
+    let quest_handle = crate::orchestrator::spawn_quest_orchestrator(
+        bus.clone(),
+        Arc::clone(&engine),
+        crate::orchestrator::OrchestratorConfig::default(),
+    );
+
+    // P0 交互链:启动 Action 编排器,消费命令面板/斜杠/面板派发的 TuiActionRequested,
+    // 按 action_id 域前缀路由:quest.* 驱动同一 engine 真实执行,回发 TuiActionCompleted/Failed。
+    // UI 本地态动作由 TUI 本地 dispatch_action 处理,不到达此处(误达则回 Failed)。
+    let action_handle =
+        crate::action_orchestrator::spawn_action_orchestrator(bus.clone(), Arc::clone(&engine));
+
     // 启动 TUI 事件循环(阻塞直到用户退出)
     // WHY 先保存结果再 shutdown:即使 run() 返回 Err,也必须清理 DataPipeline
     // 后台任务,避免 orphan task(§4.4 反模式 #7)。
@@ -73,6 +89,10 @@ pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
 
     // 中止上游控制订阅者;EventBus 仍由 pipeline 等持有,不会提前关闭。
     control_handle.abort();
+    // 中止 Quest 编排器后台任务(避免 orphan task,§4.4 #7)。
+    quest_handle.abort();
+    // 中止 Action 编排器后台任务(避免 orphan task,§4.4 #7)。
+    action_handle.abort();
 
     // 中止并清理数据管道后台任务。
     pipeline.shutdown().await;

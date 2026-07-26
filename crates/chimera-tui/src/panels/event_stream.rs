@@ -112,6 +112,19 @@ impl EventStreamPanel {
         let mut lines: Vec<Line<'static>> =
             vec![Line::from("Event Stream"), Line::from("─────────────")];
 
+        // P1-W2.2:Critical 旁路通道丢弃告警(红色高亮,显示在事件列表顶部)
+        // WHY 在 auto_scroll 提示之前:丢弃告警是安全红线,优先级高于浏览提示,
+        // 用户视线从标题下移时首先看到丢弃计数,确保不会被新事件流冲走。
+        if state.critical_event_dropped_count > 0 {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "[ALERT] CRITICAL 事件丢弃: {} (旁路通道容量满)",
+                    state.critical_event_dropped_count
+                ),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+        }
+
         // auto_scroll 暂停时,在事件列表顶部显示新事件累积提示(Claude Code 风格)
         // WHY 放在事件列表之前:用户视线从标题自然下移时首先看到提示,
         // 且不会与底部的页脚/虚拟滚动提示混淆。
@@ -489,6 +502,7 @@ mod tests {
     fn test_event_stream_panel_title() {
         let panel = EventStreamPanel::new();
         // i18n:title() 已本地化;固定英文捕获后复位,断言 ASCII 标题。
+        let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::En);
         let title = panel.title().to_string();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
@@ -724,5 +738,67 @@ mod tests {
         // selected=0,有 3 条事件 → 应显示 "[新事件 2 条]"
         let content = EventStreamPanel::content(&state, 0).to_string();
         assert!(content.contains("新事件"));
+    }
+
+    // === P1-W2.2 Critical 旁路通道丢弃告警显示测试 ===
+
+    #[test]
+    fn test_event_stream_panel_no_alert_when_zero_drops() {
+        // count = 0(默认)时不应显示告警行
+        let state = TuiState::new();
+        assert_eq!(state.critical_event_dropped_count, 0);
+        let content = EventStreamPanel::content(&state, 0).to_string();
+        assert!(
+            !content.contains("CRITICAL 事件丢弃"),
+            "count=0 时不应显示丢弃告警"
+        );
+    }
+
+    #[test]
+    fn test_event_stream_panel_shows_alert_when_drops_positive() {
+        // count > 0 时应在顶部显示红色告警行
+        let mut state = TuiState::new();
+        state.critical_event_dropped_count = 42;
+        let content = EventStreamPanel::content(&state, 0).to_string();
+        assert!(
+            content.contains("CRITICAL 事件丢弃: 42"),
+            "count>0 时应显示丢弃告警与计数"
+        );
+        assert!(content.contains("旁路通道容量满"), "告警行应包含原因说明");
+    }
+
+    #[test]
+    fn test_event_stream_panel_alert_appears_before_events() {
+        // 告警行应在事件列表之前(标题之后)
+        let mut state = TuiState::new();
+        state.critical_event_dropped_count = 5;
+        state.latest_events = VecDeque::from([NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        }]);
+        let content = EventStreamPanel::content(&state, 0).to_string();
+        let alert_pos = content.find("CRITICAL 事件丢弃").expect("应包含告警行");
+        let event_pos = content.find("CacheHit").expect("应包含事件");
+        assert!(
+            alert_pos < event_pos,
+            "告警行应在事件列表之前(标题→告警→事件)"
+        );
+    }
+
+    #[test]
+    fn test_event_stream_panel_alert_count_updates() {
+        // 验证告警计数随 state.critical_event_dropped_count 变化
+        let mut state = TuiState::new();
+        state.critical_event_dropped_count = 10;
+        let content1 = EventStreamPanel::content(&state, 0).to_string();
+        assert!(content1.contains("CRITICAL 事件丢弃: 10"));
+
+        state.critical_event_dropped_count = 99;
+        let content2 = EventStreamPanel::content(&state, 0).to_string();
+        assert!(
+            content2.contains("CRITICAL 事件丢弃: 99"),
+            "告警应反映最新计数"
+        );
+        assert!(!content2.contains("CRITICAL 事件丢弃: 10"));
     }
 }

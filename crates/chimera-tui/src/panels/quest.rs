@@ -308,6 +308,15 @@ impl Panel for QuestPanel {
         PanelId::Quest
     }
 
+    /// 返回选中 Quest 的 quest_id(§1.3b,供 quest.* 精确定位)
+    ///
+    /// 实时读过滤列表,selected 越界经 `.get()` 返回 None 安全。
+    fn selected_context_id(&self, state: &TuiState) -> Option<String> {
+        Self::filtered_quests(state)
+            .get(self.selected)
+            .map(|q| q.quest_id.clone())
+    }
+
     fn title(&self) -> Line<'static> {
         Line::from(crate::t!("panel.border.quest"))
     }
@@ -702,6 +711,18 @@ mod tests {
             }
             _ => panic!("expected Detail popup command, got {:?}", cmd),
         }
+    }
+
+    #[test]
+    fn selected_context_id_returns_selected_quest_id() {
+        // §1.3b:selected_context_id 供 quest.* 精确定位
+        let panel = QuestPanel::new();
+        let mut state = TuiState::new();
+        // 空列表:无选中上下文
+        assert_eq!(panel.selected_context_id(&state), None);
+        // 多 Quest:默认 selected=0 → 首个 quest_id
+        state.quest_list = vec![sample_quest("q1", "First"), sample_quest("q2", "Second")];
+        assert_eq!(panel.selected_context_id(&state).as_deref(), Some("q1"));
     }
 
     #[test]

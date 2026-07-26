@@ -66,16 +66,17 @@ pub use config::{
 pub use data::{
     metrics_history::MetricsHistory,
     resource_history::{gradient_color, MetricSample, ResourceHistory, ThresholdLevel},
-    AsaInterventionSummary, BudgetMetrics, BudgetSync, DataPipeline, DataSnapshot,
-    DataSourceConfig, HealthMetrics, MemoryMetrics, MemorySync, QuestSync, RedTeamAuditSummary,
-    SecurityState, SecuritySync, SkepticVetoSummary, StubDataSource, TuiDataSource,
+    AsaInterventionSummary, BudgetMetrics, BudgetSync, CriticalDroppedSync, DataPipeline,
+    DataSnapshot, DataSourceConfig, HealthMetrics, MemoryMetrics, MemorySync, QuestSync,
+    RedTeamAuditSummary, SecurityState, SecuritySync, SkepticVetoSummary, StubDataSource,
+    TuiDataSource,
 };
 pub use error::TuiError;
 pub use focus::FocusManager;
 pub use panels::{
-    BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
-    McpNodesPanel, MemoryPanel, MetricsDashboardPanel, Panel, ParliamentPanel, QuestPanel,
-    ResourceMonitorPanel, RouterPanel, SecurityPanel, SysinfoPanel, TaskManagerPanel,
+    BudgetPanel, ChatPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel,
+    LogPanel, McpNodesPanel, MemoryPanel, MetricsDashboardPanel, Panel, ParliamentPanel,
+    QuestPanel, ResourceMonitorPanel, RouterPanel, SecurityPanel, SysinfoPanel, TaskManagerPanel,
     TimelinePanel,
 };
 pub use popup::{PopupKind, PopupStack, Severity};
@@ -86,9 +87,9 @@ pub use render::{
 };
 pub use subscriber::EventSubscriber;
 pub use types::{
-    ChtcAdapterInfo, ChtcState, DecayMetrics, InputMode, LayoutMode, McpNodeStatus, NodeStatus,
-    PanelId, QuestAction, RouterMetrics, RouterStatsInfo, SortMode, TimelineSnapshot, TuiCommand,
-    TuiState,
+    ChatMessage, ChatRole, ChtcAdapterInfo, ChtcState, DecayMetrics, InputMode, LayoutMode,
+    McpNodeStatus, NodeStatus, PanelId, QuestAction, RouterMetrics, RouterStatsInfo, SortMode,
+    TimelineSnapshot, TuiCommand, TuiState,
 };
 // P9.1:重导出 viz 公共 API(5 个高阶图表 widget + VizChartKind 枚举 + VizWidget trait),
 // 供 MetricsDashboardPanel / 外部测试 / 命令面板预览使用
@@ -118,9 +119,9 @@ pub mod prelude {
     pub use crate::error::TuiError;
     pub use crate::focus::FocusManager;
     pub use crate::panels::{
-        BudgetPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel, LogPanel,
-        McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel, ResourceMonitorPanel,
-        RouterPanel, SecurityPanel, TimelinePanel,
+        BudgetPanel, ChatPanel, ChtcPanel, DecayPanel, EventStreamPanel, HealthPanel, HelpPanel,
+        LogPanel, McpNodesPanel, MemoryPanel, Panel, ParliamentPanel, QuestPanel,
+        ResourceMonitorPanel, RouterPanel, SecurityPanel, TimelinePanel,
     };
     pub use crate::popup::{PopupKind, PopupStack, Severity};
     pub use crate::subscriber::EventSubscriber;
