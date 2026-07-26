@@ -35,12 +35,27 @@
 pub mod config;
 pub mod error;
 pub mod generator;
+pub mod rhi_channel_a;
+pub mod rhi_judge_client;
+// P5.1.3: 自比较历史持久化（wrap mlc-engine L2 SemanticMemory）
+pub mod self_history;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use config::AutoDpoConfig;
 pub use error::AutoDpoError;
 pub use generator::PreferencePairGenerator;
+// P5.1.1: RHI-CG 通道 A 核心类型（JudgeClient trait + JudgeVerdict + RhiChannelA 编排器）
+pub use rhi_channel_a::{JudgeClient, JudgeVerdict, RhiChannelA, SpecVersion, StubJudgeClient};
+// P5.1.2: 评判器 LLM 调用接口（ModelRouterJudgeClient + LlmInvoker trait + StubLlmInvoker）
+pub use rhi_judge_client::{
+    FailingLlmInvoker, JudgeClientConfig, JudgePromptTemplate, JudgeResponseParser, LlmInvoker,
+    LlmResponse, ModelRouterJudgeClient, StubLlmInvoker, TokenUsage,
+};
+// P5.1.3: 自比较历史持久化（SelfComparisonRecord + SelfComparisonHistory + 确定性 CLV 生成）
+pub use self_history::{
+    generate_deterministic_clv, SelfComparisonHistory, SelfComparisonRecord, DEFAULT_CAPACITY,
+};
 pub use types::{ModelOutput, PreferencePair, SampleQuality};
 
 /// 预导入模块 — 提供最常用类型
@@ -48,5 +63,15 @@ pub mod prelude {
     pub use crate::config::AutoDpoConfig;
     pub use crate::error::AutoDpoError;
     pub use crate::generator::PreferencePairGenerator;
+    pub use crate::rhi_channel_a::{
+        JudgeClient, JudgeVerdict, RhiChannelA, SpecVersion, StubJudgeClient,
+    };
+    pub use crate::rhi_judge_client::{
+        FailingLlmInvoker, JudgeClientConfig, JudgePromptTemplate, JudgeResponseParser, LlmInvoker,
+        LlmResponse, ModelRouterJudgeClient, StubLlmInvoker, TokenUsage,
+    };
+    pub use crate::self_history::{
+        generate_deterministic_clv, SelfComparisonHistory, SelfComparisonRecord, DEFAULT_CAPACITY,
+    };
     pub use crate::types::{ModelOutput, PreferencePair, SampleQuality};
 }

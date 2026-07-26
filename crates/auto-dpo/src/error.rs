@@ -50,6 +50,53 @@ pub enum AutoDpoError {
         /// 配置错误详情
         detail: String,
     },
+
+    // ============================================================
+    // P5.1 RHI-CG 通道 A 新增错误变体（ADR-032 决策 1）
+    // ============================================================
+    /// 评判器调用失败 — LLM 评判器返回错误或不可达
+    ///
+    /// WHY:P5.1 RHI-CG 通道 A 的 JudgeClient::judge() 失败时返回此错误。
+    /// 携带原因便于排查（如 LLM 服务不可达、返回格式非法、超时等）。
+    /// 解析失败时使用 InvalidVerdict 而非此变体。
+    #[error("judge client invocation failed: {reason}")]
+    JudgeFailed {
+        /// 失败原因（人类可读，如 "LLM service unreachable" / "timeout after 30s"）
+        reason: String,
+    },
+
+    /// 评判结果非法 — 评判器返回的 JudgeVerdict 字段越界或逻辑不一致
+    ///
+    /// WHY:评判器（特别是外部 LLM）可能返回非法数据（如 confidence > 1.0、
+    /// winner_score < loser_score）。此错误在 from_adjacent_specs 校验时触发。
+    /// 携带字段名与实际值便于定位。
+    #[error("invalid judge verdict: field={field}, value={value}")]
+    InvalidVerdict {
+        /// 非法字段名（如 "confidence" / "winner_score"）
+        field: String,
+        /// 实际值（已格式化为字符串，避免 f32 精度问题）
+        value: String,
+    },
+
+    // ============================================================
+    // P5.1.3 自比较历史持久化新增错误变体（ADR-044 决策 3）
+    // ============================================================
+    /// 存储错误 — mlc-engine L2 语义记忆操作失败
+    ///
+    /// WHY:P5.1.3 `SelfComparisonHistory` 包装 `mlc_engine::SemanticMemory`，
+    /// 任何 `insert` / `get` / `recall_by_clv` 失败均向上传播为此错误。
+    /// 携带原因便于定位（如 "L2 rwlock poisoned" / "CLV dimension mismatch"）。
+    ///
+    /// # 与 MlcError 的关系
+    /// `MlcError` 的所有变体（EntryNotFound / StorageError / VectorDimensionMismatch 等）
+    /// 统一转换为此变体，避免上层依赖 mlc-engine 的具体错误类型。EntryNotFound
+    /// 在 `SelfComparisonHistory::get()` 中特判为 `Ok(None)`（语义为"未找到记录"），
+    /// 不触发此错误。
+    #[error("storage error: {reason}")]
+    StorageError {
+        /// 失败原因（人类可读，如 "L2 rwlock poisoned" / "CLV dimension mismatch"）
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -87,5 +134,56 @@ mod tests {
             detail: "threshold negative".into(),
         };
         assert!(err.to_string().contains("threshold negative"));
+    }
+
+    // ============================================================
+    // P5.1 RHI-CG 通道 A 新增错误变体测试
+    // ============================================================
+
+    #[test]
+    fn test_judge_failed_display() {
+        let err = AutoDpoError::JudgeFailed {
+            reason: "LLM service unreachable".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("LLM service unreachable"));
+        assert!(msg.contains("judge client invocation failed"));
+    }
+
+    #[test]
+    fn test_invalid_verdict_display() {
+        let err = AutoDpoError::InvalidVerdict {
+            field: "confidence".into(),
+            value: "1.5".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("confidence"));
+        assert!(msg.contains("1.5"));
+    }
+
+    // ============================================================
+    // P5.1.3 自比较历史持久化新增错误变体测试
+    // ============================================================
+
+    #[test]
+    fn test_storage_error_display() {
+        let err = AutoDpoError::StorageError {
+            reason: "L2 rwlock poisoned: lock poisoned".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("storage error"));
+        assert!(msg.contains("L2 rwlock poisoned"));
+    }
+
+    #[test]
+    fn test_storage_error_with_clv_dimension_mismatch() {
+        // 模拟 mlc-engine CLV 维度错误转换后的 StorageError
+        let err = AutoDpoError::StorageError {
+            reason: "CLV dimension mismatch: expected 512, actual 256".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("CLV dimension mismatch"));
+        assert!(msg.contains("512"));
+        assert!(msg.contains("256"));
     }
 }

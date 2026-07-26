@@ -155,6 +155,61 @@ impl PreferencePair {
     pub fn score_gap(&self) -> f32 {
         self.chosen_score - self.rejected_score
     }
+
+    /// P5.1.1: 从相邻 spec 版本与评判结果构造偏好对
+    ///
+    /// # RHI-CG 通道 A 复用机制（C2 决策 / ADR-032 决策 1）
+    ///
+    /// v5.0 设计文档 §7.4 规定 RHI-CG 通道 A 复用既有 PreferencePair 机制：
+    /// - chosen = 胜出版本的 `HarnessSpec::canonical_merkle_input()` 规范化字符串
+    /// - rejected = 失败版本的 `canonical_merkle_input()`
+    /// - chosen_score = winner_score（评判器返回的胜出者质量分）
+    /// - rejected_score = loser_score（评判器返回的失败者质量分）
+    ///
+    /// # 设计决策（WHY）
+    ///
+    /// - **pair_id 由调用方传入**：与 `PreferencePairGenerator::next_pair_id()` 解耦，
+    ///   允许 RHI-CG 编排器使用自己的 ID 命名空间（如 "rhi-pair-{version_i}-{version_i_minus_1}"）
+    /// - **canonical_merkle_input 作为 chosen/rejected 内容**：保证 Merkle 完整性
+    ///   （ADR-031 防注入设计），spec 任何字段变化都会反映在 hash 输入中
+    /// - **不修改 spec**：仅 `&self` 借用，符合 spec "无写路径" 红线
+    ///
+    /// # 参数
+    /// - `pair_id`: 偏好对唯一标识（由调用方生成，如 "rhi-pair-47-46"）
+    /// - `spec_v_i`: 当前版本 spec（v_i，被提议的新版本）
+    /// - `spec_v_i_minus_1`: 上一版本 spec（v_{i-1}，基线版本）
+    /// - `verdict`: 评判结果，决定哪个版本为 chosen
+    ///
+    /// # 返回
+    /// 新构造的 PreferencePair，chosen 为胜出版本的 merkle input
+    pub fn from_adjacent_specs(
+        pair_id: impl Into<String>,
+        spec_v_i: &nexus_contracts::HarnessSpec,
+        spec_v_i_minus_1: &nexus_contracts::HarnessSpec,
+        verdict: &crate::rhi_channel_a::JudgeVerdict,
+    ) -> Self {
+        use crate::rhi_channel_a::SpecVersion;
+
+        // 根据评判结果选择 chosen/rejected
+        let (chosen, rejected) = match verdict.winner {
+            SpecVersion::Current => (
+                spec_v_i.canonical_merkle_input(),
+                spec_v_i_minus_1.canonical_merkle_input(),
+            ),
+            SpecVersion::Previous => (
+                spec_v_i_minus_1.canonical_merkle_input(),
+                spec_v_i.canonical_merkle_input(),
+            ),
+        };
+
+        Self::new(
+            pair_id,
+            chosen,
+            rejected,
+            verdict.winner_score,
+            verdict.loser_score,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -277,5 +332,147 @@ mod tests {
         let json = serde_json::to_string(&pair).unwrap();
         let restored: PreferencePair = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, pair);
+    }
+
+    // ============================================================
+    // P5.1.1: from_adjacent_specs 测试
+    // ============================================================
+
+    /// 构造最小合法 HarnessSpec 用于 from_adjacent_specs 测试
+    fn make_minimal_spec(version: u32, name_suffix: &str) -> nexus_contracts::HarnessSpec {
+        use nexus_contracts::{ContractSpec, HarnessMeta, HopSpec, RetryPolicy};
+        nexus_contracts::HarnessSpec {
+            meta: HarnessMeta {
+                name: format!("rhi-test-{name_suffix}"),
+                version,
+                immutable: false,
+                parent: if version > 1 { Some(version - 1) } else { None },
+                task_type: Some("code_refactor".to_string()),
+            },
+            contracts: vec![ContractSpec {
+                name: "no_panic".to_string(),
+                property: "must_not_panic".to_string(),
+                description: None,
+                from: None,
+                to: None,
+                fields: Vec::new(),
+            }],
+            hops: vec![HopSpec {
+                name: "execute".to_string(),
+                input_type: None,
+                output_type: None,
+                contracts: Vec::new(),
+                description: None,
+                order: Vec::new(),
+                on_veto: None,
+                fallback: None,
+            }],
+            retry: RetryPolicy::default(),
+            auxiliary: None,
+        }
+    }
+
+    #[test]
+    fn test_from_adjacent_specs_current_wins() {
+        // 评判器裁决当前版本 v_i 胜出
+        let spec_v_i = make_minimal_spec(2, "v2");
+        let spec_v_i_minus_1 = make_minimal_spec(1, "v1");
+        let verdict = crate::rhi_channel_a::JudgeVerdict {
+            winner: crate::rhi_channel_a::SpecVersion::Current,
+            winner_score: 0.85,
+            loser_score: 0.45,
+            confidence: 0.9,
+            rationale: "v2 wins".to_string(),
+        };
+
+        let pair = PreferencePair::from_adjacent_specs(
+            "rhi-pair-2-1",
+            &spec_v_i,
+            &spec_v_i_minus_1,
+            &verdict,
+        );
+
+        // 验证 chosen = v_i 的 merkle input
+        assert_eq!(pair.pair_id, "rhi-pair-2-1");
+        assert_eq!(pair.chosen, spec_v_i.canonical_merkle_input());
+        assert_eq!(pair.rejected, spec_v_i_minus_1.canonical_merkle_input());
+        assert!((pair.chosen_score - 0.85).abs() < 1e-6);
+        assert!((pair.rejected_score - 0.45).abs() < 1e-6);
+        // 验证 chosen 与 rejected 不同（不同版本 spec 产生不同 merkle input）
+        assert_ne!(pair.chosen, pair.rejected);
+    }
+
+    #[test]
+    fn test_from_adjacent_specs_previous_wins() {
+        // 评判器裁决上一版本 v_{i-1} 胜出（通道 B 否决的典型场景）
+        let spec_v_i = make_minimal_spec(2, "v2");
+        let spec_v_i_minus_1 = make_minimal_spec(1, "v1");
+        let verdict = crate::rhi_channel_a::JudgeVerdict {
+            winner: crate::rhi_channel_a::SpecVersion::Previous,
+            winner_score: 0.8,
+            loser_score: 0.3,
+            confidence: 0.85,
+            rationale: "v1 wins".to_string(),
+        };
+
+        let pair = PreferencePair::from_adjacent_specs(
+            "rhi-pair-2-1",
+            &spec_v_i,
+            &spec_v_i_minus_1,
+            &verdict,
+        );
+
+        // 验证 chosen = v_{i-1} 的 merkle input（胜出版本）
+        assert_eq!(pair.chosen, spec_v_i_minus_1.canonical_merkle_input());
+        assert_eq!(pair.rejected, spec_v_i.canonical_merkle_input());
+        assert!((pair.chosen_score - 0.8).abs() < 1e-6);
+        assert!((pair.rejected_score - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_from_adjacent_specs_score_gap_reflects_verdict() {
+        // 验证 score_gap 反映评判差异（用于下游加权训练）
+        let spec_v_i = make_minimal_spec(2, "v2");
+        let spec_v_i_minus_1 = make_minimal_spec(1, "v1");
+        let verdict = crate::rhi_channel_a::JudgeVerdict {
+            winner: crate::rhi_channel_a::SpecVersion::Current,
+            winner_score: 0.9,
+            loser_score: 0.2,
+            confidence: 0.95,
+            rationale: "strong win".to_string(),
+        };
+
+        let pair = PreferencePair::from_adjacent_specs(
+            "rhi-pair-2-1",
+            &spec_v_i,
+            &spec_v_i_minus_1,
+            &verdict,
+        );
+
+        // score_gap = 0.9 - 0.2 = 0.7（强偏好信号）
+        assert!((pair.score_gap() - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_from_adjacent_specs_quality_derived_from_winner_score() {
+        // 验证 quality 由 winner_score 派生（保持既有 PreferencePair 语义）
+        let spec_v_i = make_minimal_spec(2, "v2");
+        let spec_v_i_minus_1 = make_minimal_spec(1, "v1");
+        let verdict = crate::rhi_channel_a::JudgeVerdict {
+            winner: crate::rhi_channel_a::SpecVersion::Current,
+            winner_score: 0.85, // >= 0.8 → High
+            loser_score: 0.3,
+            confidence: 0.9,
+            rationale: "quality test".to_string(),
+        };
+
+        let pair = PreferencePair::from_adjacent_specs(
+            "rhi-pair-2-1",
+            &spec_v_i,
+            &spec_v_i_minus_1,
+            &verdict,
+        );
+
+        assert_eq!(pair.quality, SampleQuality::High);
     }
 }
