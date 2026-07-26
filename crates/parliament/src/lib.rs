@@ -54,6 +54,12 @@ pub mod ahirt;
 pub mod config;
 pub mod debate;
 pub mod error;
+/// ImmuneSystem facade — 适应性免疫接口层（v5.0 §8.1 D7 / ADR-046）
+///
+/// 三探针（MemoryParadox/ReasoningTrap/EvolutionHack）+ 级联风险评估 + 膜厚控制。
+/// 通过 event-bus 订阅 chimera-mas StabilityGuard 事件维护镜像状态，
+/// 避免向 L9 向上依赖（§2.2 依赖铁律）。
+pub mod immune_system;
 /// P4-W14.3 S5 接缝 — Parliament 激活策略学习器持有器
 ///
 /// 承载 `omega-learner` 异步下发的 `ParliamentPolicy`,为 `Parliament::deliberate_with_policy`
@@ -73,6 +79,18 @@ pub use ahirt::{
 pub use config::{AhirtConfig, ParliamentConfig};
 pub use debate::{DpoPair, DpoPairGenerator, Parliament};
 pub use error::ParliamentError;
+// ImmuneSystem facade（ADR-046）：关键类型重导出,简化外部导入
+// WHY 不重导出 `ProbeType` / `Severity`：前者与 `ahirt::ProbeType` 冲突,
+// 后者与 `veto::Severity` 冲突,需通过 `parliament::immune_system::types::` 全路径访问。
+// WHY 从子模块路径 re-export：immune_system.rs 私有 `use` 已将同名符号引入作用域,
+// 若在 immune_system.rs 内 `pub use` 会触发 E0252,故 lib.rs 直接从子模块路径导入。
+pub use immune_system::evolution_hack::EvolutionHackProbe;
+pub use immune_system::membrane::MembraneController;
+pub use immune_system::memory_paradox::MemoryParadoxProbe;
+pub use immune_system::reasoning_trap::ReasoningTrapProbe;
+pub use immune_system::types::{ImmuneSystemError, ParadoxProbe, ParadoxReport, ParadoxRiskReport};
+// 直接定义在 immune_system.rs 的符号（非子模块重导出）,可直接导入
+pub use immune_system::{compute_cascade_risk, ImmuneSystem, StabilityMirror};
 // P4-W14.3 S5 接缝:Parliament 激活策略学习器持有器
 pub use learner_holder::ParliamentLearnerHolder;
 pub use reasoning::{transition, ReasoningEvent, ReasoningState};

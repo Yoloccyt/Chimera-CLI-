@@ -364,7 +364,11 @@ impl MembraneFilter {
             | NexusEvent::RoleRegistered { .. }
             // P4-W16.2.2:R1 影子模式策略生命周期（退化检测/解冻就绪，Normal 级策略通知）
             | NexusEvent::R1ShadowRegressionDetected { .. }
-            | NexusEvent::R1ShadowPromotionReady { .. } => EventCategory::PolicyUpdate,
+            | NexusEvent::R1ShadowPromotionReady { .. }
+            // P5.2.3:Spec 版本注册完成(L5 Knowledge → 任意订阅者,策略级通知)
+            // WHY 归入 PolicyUpdate:与 GsoePolicyUpdated 同属策略/配置生命周期事件,
+            //    下游(parliament / efficiency-monitor)需更新 spec 版本快照
+            | NexusEvent::SpecRegistered { .. } => EventCategory::PolicyUpdate,
 
             // === HighRisk:自描述 high-risk 事件(不含 UserIntentEncoded,已上面处理) ===
             // SandboxViolation:沙箱违规,安全告警(虽 severity==Normal,但语义高风险)

@@ -53,3 +53,11 @@ decb-governor = { path = "../decb-governor" }
 [[bench]]
 name = "debate"
 harness = false
+
+# P5.3.6 / ADR-046 决策 8:ImmuneSystem facade 性能基准
+# WHY 独立 [[bench]] 条目:criterion 需自定义 main,harness=false 启用
+# 4 个基准:memory_paradox/reasoning_trap/evolution_hack 探针延迟 + full_immune_system_assessment
+# ADR-046 验收基准:full_immune_system_assessment p95 < 100ms（KPI-03,§9.5 SLO）
+[[bench]]
+name = "immune_system_probe"
+harness = false

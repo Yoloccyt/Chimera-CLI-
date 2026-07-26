@@ -1980,6 +1980,35 @@ pub enum NexusEvent {
         /// 回滚失败原因（ConsecutiveRegression / AsaIntervention / EwmaCollapse / RecallRateDrop）
         reason: String,
     },
+
+    /// P5.2.3: Spec 版本注册完成 — L5 Knowledge(gsoe-evolution)→ 任意订阅者
+    ///
+    /// 通道 B 否决通过后,候选 spec 通过 SpecRegistry::register 纳入谱系,
+    /// 同时发布此事件通知下游(parliament / efficiency-monitor / repo-wiki):
+    /// - Parliament 据此更新 spec 版本快照
+    /// - efficiency-monitor 据此追踪 RHI-CG 进化指标
+    /// - repo-wiki 据此记录 spec 版本历史
+    ///
+    /// WHY Normal 级别:spec 注册是常规进化操作,非阻断性事件。丢失仅导致
+    /// 本次注册未通知下游,可由下次注册或主动查询补偿。Critical 路径
+    /// (如不可进化面违反)通过 SpecRegistryError 返回值传播,不走事件。
+    ///
+    /// WHY 不携带完整 spec:HarnessSpec 是 nexus-contracts 类型,event-bus
+    /// (L1)不能依赖 nexus-contracts(会破坏分层),且完整 spec 体积较大。
+    /// 仅携带 (name, version, parent_version) 标识字段,完整 spec 通过
+    /// SpecRegistry::get(name, version) 查询。
+    SpecRegistered {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// spec 名称(如 "quest-parse")
+        spec_name: String,
+        /// spec 版本号
+        spec_version: u32,
+        /// 父版本号(None 表示初始版本)
+        parent_version: Option<u32>,
+        /// 注册来源(如 "rhi-cg-channel-b" / "manual" / "ab-test")
+        source: String,
+    },
 }
 
 /// Critical 通道丢弃事件指标载荷 — P1-W2.1(D3 改造)
@@ -2124,7 +2153,9 @@ impl NexusEvent {
             // P4-W16.2.2 步骤 5:R1 影子模式事件（3 个新变体均含 metadata）
             | Self::R1ShadowRegressionDetected { metadata, .. }
             | Self::R1ShadowPromotionReady { metadata, .. }
-            | Self::R1ShadowRollbackFailed { metadata, .. } => metadata,
+            | Self::R1ShadowRollbackFailed { metadata, .. }
+            // P5.2.3: SpecRegistered 事件含 metadata
+            | Self::SpecRegistered { metadata, .. } => metadata,
         }
     }
 
@@ -2305,6 +2336,8 @@ impl NexusEvent {
             Self::R1ShadowRegressionDetected { .. } => "R1ShadowRegressionDetected",
             Self::R1ShadowPromotionReady { .. } => "R1ShadowPromotionReady",
             Self::R1ShadowRollbackFailed { .. } => "R1ShadowRollbackFailed",
+            // P5.2.3: SpecRegistered 事件
+            Self::SpecRegistered { .. } => "SpecRegistered",
         }
     }
 }
