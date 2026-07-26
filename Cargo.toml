@@ -219,6 +219,19 @@ path = "tests/e2e/week8_final_acceptance.rs"
 name = "tui_control_loop"
 path = "tests/e2e/tui_control_loop.rs"
 
+# ============================================================
+# P5.5 — RHI-CG 进化执行器 E2E 验收测试
+#
+# WHY 新增 test target:P5.5 验收任务位于 tests/e2e/ 子目录,
+# Cargo 默认 autodiscovery 不扫描子目录文件,必须通过 [[test]]
+# 显式注册。测试覆盖 P5.5.1 任务集定义 + P5.5.2 进化执行器 +
+# P5.5.3 北极星指标验证(KPI-01 累计胜率 ≥60% / KPI-02 误杀率 <5%)。
+# ============================================================
+
+[[test]]
+name = "rhi_cg_validation"
+path = "tests/e2e/rhi_cg_validation.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。
@@ -263,6 +276,8 @@ mtpe-executor = { path = "crates/mtpe-executor" }    # L7 Execution(多步预测
 scc-cache = { path = "crates/scc-cache" }            # L3 Storage(推测缓存+WAL)
 acb-governor = { path = "crates/acb-governor" }      # L8 Parliament(自适应预算)
 auto-dpo = { path = "crates/auto-dpo" }              # L5 Knowledge(偏好对生成)
+# P5.5: nexus-contracts 用于 HarnessSpec/ContractSpec/HopSpec 类型(P5.5.1 任务集定义)
+nexus-contracts = { path = "crates/nexus-contracts" } # L0 Contracts(契约层)
 # 共享依赖(从 workspace 继承版本)
 tokio = { workspace = true }
 serde_json = { workspace = true }
