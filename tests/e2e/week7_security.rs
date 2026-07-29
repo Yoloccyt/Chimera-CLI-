@@ -305,16 +305,20 @@ async fn test_mcp_injection_null_byte_in_op_string() {
 
 #[tokio::test]
 async fn test_csn_hijack_dimension_mismatch_attack() {
-    // 攻击:注册 49 维向量(与配置 50 维不匹配),试图破坏相似度计算
-    // 防御:cosine_similarity 对长度不匹配返回 0.0(similarity.rs:36-38),
-    //       malformed 向量虽被注册但相似度为 0.0,永远不会成为高优候选
+    // 攻击:注册维度不匹配且内容正交的恶意向量,试图破坏相似度计算
+    // 防御:cosine_similarity_slices 截断到 min(len_a, len_b) 后计算,
+    //       49 维全零向量截断后点积仍为 0.0 → 相似度=0.0,永远不会成为高优候选
+    // NOTE:此处使用全零向量而非全 1.0 向量,因为 cosine_similarity_slices 的截断语义
+    //       会使 49 维全 1.0 vs 50 维全 1.0 截断后相似度=1.0(截断后完全相同)。
+    //       全零向量才能确保截断后点积=0,真正验证维度不匹配 + 正交内容的防御路径。
     // WHY 不在注册层校验:CSN register 仅校验 capability_id 非空与容量上限,
     //       维度校验推迟到查询时由 cosine_similarity 自然中和(系统边界校验)
     let pipeline = setup_week7_pipeline().expect("管线装配失败");
     let start = Instant::now();
 
-    let malformed = CapabilityDescriptor::new("cap-malformed", vec![1.0; 49]); // 49 维,少 1 维
-                                                                               // 注册成功(register 不校验维度),但 malformed 的相似度会被中和为 0.0
+    // 49 维全零向量:维度少 1 维且内容正交,截断后点积=0 → 相似度=0.0
+    let malformed = CapabilityDescriptor::new("cap-malformed", vec![0.0; 49]);
+    // 注册成功(register 不校验维度),但 malformed 的相似度会被中和为 0.0
     let _ = pipeline.substitutor.register_capability(malformed);
 
     // 验证:查询 cap-shell(50 维)的替代候选
@@ -332,14 +336,14 @@ async fn test_csn_hijack_dimension_mismatch_attack() {
         if c.candidate_id == "cap-malformed" {
             assert_eq!(
                 c.similarity_score, 0.0,
-                "维度不匹配的 malformed 相似度必须为 0.0(长度不匹配保护)"
+                "维度不匹配的 malformed 相似度必须为 0.0(截断后正交保护)"
             );
         }
     }
 
     assert!(start.elapsed().as_millis() < CSA_THRESHOLD_MS);
     println!(
-        "[SEC-CSN-1] 维度不匹配攻击被中和(相似度=0.0),耗时 {}ms",
+        "[SEC-CSN-1] 维度不匹配攻击被中和(截断后正交→相似度=0.0),耗时 {}ms",
         start.elapsed().as_millis()
     );
 }

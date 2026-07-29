@@ -265,9 +265,7 @@ impl RhiCgEvolutionExecutor {
     ) -> Result<EvolutionRoundResult, String> {
         // 校验 round 范围（1-3）
         if !(1..=3).contains(&round) {
-            return Err(format!(
-                "round 必须在 1..=3 范围内，得到 {round}"
-            ));
+            return Err(format!("round 必须在 1..=3 范围内，得到 {round}"));
         }
 
         let mut verdicts: Vec<EvolutionVerdict> = Vec::with_capacity(tasks.len());
@@ -289,11 +287,9 @@ impl RhiCgEvolutionExecutor {
                 .map_err(|e| format!("任务 {} round {} 评判失败: {}", task.task_id(), round, e))?;
 
             // 步骤 2: 通道 B — CI 执行门
-            let ci_result = self
-                .ci_gate
-                .execute(spec_v_i)
-                .await
-                .map_err(|e| format!("任务 {} round {} CI 执行失败: {}", task.task_id(), round, e))?;
+            let ci_result = self.ci_gate.execute(spec_v_i).await.map_err(|e| {
+                format!("任务 {} round {} CI 执行失败: {}", task.task_id(), round, e)
+            })?;
 
             // 步骤 3: 显著性检测器状态更新
             // WHY 根据 CI 结果维护 streak:通过则重置，失败则累积
@@ -465,7 +461,8 @@ pub async fn validate_north_star_metric(
     // 步骤 2-4: 执行 3 轮进化
     let mut rounds: Vec<EvolutionRoundResult> = Vec::with_capacity(3);
     for round in 1..=3u32 {
-        let round_result: EvolutionRoundResult = executor.execute_evolution_round(&tasks, round).await?;
+        let round_result: EvolutionRoundResult =
+            executor.execute_evolution_round(&tasks, round).await?;
         rounds.push(round_result);
     }
 
@@ -901,7 +898,8 @@ mod tests {
                 .expect("应有 active 版本");
 
             assert_eq!(
-                active.meta.version, 4,
+                active.meta.version,
+                4,
                 "任务 {} active 应为 v4",
                 task.task_id()
             );
@@ -924,10 +922,7 @@ mod tests {
             .await
             .expect("3 轮进化失败");
 
-        let history_len: usize = executor
-            .history()
-            .len()
-            .expect("history.len() 失败");
+        let history_len: usize = executor.history().len().expect("history.len() 失败");
 
         assert_eq!(
             history_len, 15,
@@ -953,10 +948,8 @@ mod tests {
         // WHY pair_id 格式包含 task_id: 不同任务的相同版本对（如 T1 v2 vs v1 和 T2 v2 vs v1）
         // 若共享 pair_id 会互相覆盖。包含 task_id 后保证 15 条记录各有唯一 pair_id。
         let pair_id = "rhi-pair-T1-2-1";
-        let record: Option<SelfComparisonRecord> = executor
-            .history()
-            .get(pair_id)
-            .expect("history.get() 失败");
+        let record: Option<SelfComparisonRecord> =
+            executor.history().get(pair_id).expect("history.get() 失败");
 
         assert!(record.is_some(), "应能检索到 pair_id={}", pair_id);
         let record = record.unwrap();
@@ -1002,10 +995,7 @@ mod tests {
         );
 
         // 不应触发否决（streak < 3）
-        assert!(
-            !detector.is_veto_justified(),
-            "不应触发否决（streak < 3）"
-        );
+        assert!(!detector.is_veto_justified(), "不应触发否决（streak < 3）");
     }
 
     // ============================================================

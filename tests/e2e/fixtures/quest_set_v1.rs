@@ -249,25 +249,26 @@ fn make_t2_versions() -> [HarnessSpec; 4] {
     let base_name = "severity-bug-fix";
     let base_order = ["Architect.propose", "Tester.verify"];
 
-    let make_spec = |version: u32, parent: Option<u32>, contracts: Vec<ContractSpec>, retry_attempts: u32| {
-        HarnessSpec {
-            meta: HarnessMeta {
-                name: base_name.to_string(),
-                version,
-                immutable: false,
-                parent,
-                task_type: Some("bug_fix".to_string()),
-            },
-            contracts,
-            hops: vec![hop("verify_severity", &base_order, &["severity_correct"])],
-            retry: RetryPolicy {
-                max_attempts: retry_attempts,
-                backoff_ms: 100 * (2_u64.pow(version - 1)),
-                exponential: true,
-            },
-            auxiliary: Some(ACCEPTANCE_GATES_AUX.to_string()),
-        }
-    };
+    let make_spec =
+        |version: u32, parent: Option<u32>, contracts: Vec<ContractSpec>, retry_attempts: u32| {
+            HarnessSpec {
+                meta: HarnessMeta {
+                    name: base_name.to_string(),
+                    version,
+                    immutable: false,
+                    parent,
+                    task_type: Some("bug_fix".to_string()),
+                },
+                contracts,
+                hops: vec![hop("verify_severity", &base_order, &["severity_correct"])],
+                retry: RetryPolicy {
+                    max_attempts: retry_attempts,
+                    backoff_ms: 100 * (2_u64.pow(version - 1)),
+                    exponential: true,
+                },
+                auxiliary: Some(ACCEPTANCE_GATES_AUX.to_string()),
+            }
+        };
 
     let v1 = make_spec(
         1,
@@ -318,21 +319,22 @@ fn make_t3_versions() -> [HarnessSpec; 4] {
     let base_name = "select-arm-exploration";
     let base_order = ["Architect.design", "Tester.validate"];
 
-    let make_spec = |version: u32, parent: Option<u32>, contracts: Vec<ContractSpec>, hops: Vec<HopSpec>| {
-        HarnessSpec {
-            meta: HarnessMeta {
-                name: base_name.to_string(),
-                version,
-                immutable: false,
-                parent,
-                task_type: Some("feature_add".to_string()),
-            },
-            contracts,
-            hops,
-            retry: retry_policy(3),
-            auxiliary: Some(ACCEPTANCE_GATES_AUX.to_string()),
-        }
-    };
+    let make_spec =
+        |version: u32, parent: Option<u32>, contracts: Vec<ContractSpec>, hops: Vec<HopSpec>| {
+            HarnessSpec {
+                meta: HarnessMeta {
+                    name: base_name.to_string(),
+                    version,
+                    immutable: false,
+                    parent,
+                    task_type: Some("feature_add".to_string()),
+                },
+                contracts,
+                hops,
+                retry: retry_policy(3),
+                auxiliary: Some(ACCEPTANCE_GATES_AUX.to_string()),
+            }
+        };
 
     let v1 = make_spec(
         1,
@@ -364,7 +366,11 @@ fn make_t3_versions() -> [HarnessSpec; 4] {
             contract("explores_when_cold", "must_explore_when_uncertain"),
         ],
         vec![
-            hop("select_arm", &base_order, &["returns_valid_arm", "epsilon_in_range"]),
+            hop(
+                "select_arm",
+                &base_order,
+                &["returns_valid_arm", "epsilon_in_range"],
+            ),
             hop("verify_exploration", &base_order, &["explores_when_cold"]),
         ],
     );
@@ -379,7 +385,11 @@ fn make_t3_versions() -> [HarnessSpec; 4] {
             contract("logs_selection", "must_log_arm_selection"),
         ],
         vec![
-            hop("select_arm", &base_order, &["returns_valid_arm", "epsilon_in_range"]),
+            hop(
+                "select_arm",
+                &base_order,
+                &["returns_valid_arm", "epsilon_in_range"],
+            ),
             hop("verify_exploration", &base_order, &["explores_when_cold"]),
             hop("verify_logging", &base_order, &["logs_selection"]),
         ],
@@ -403,23 +413,25 @@ fn make_t4_versions() -> [HarnessSpec; 4] {
     let base_name = "immune-boundary-tests";
     let base_order = ["Tester.write", "Reviewer.audit"];
 
-    let make_spec = |version: u32, parent: Option<u32>, contracts: Vec<ContractSpec>| {
-        HarnessSpec {
-            meta: HarnessMeta {
-                name: base_name.to_string(),
-                version,
-                immutable: false,
-                parent,
-                task_type: Some("test_write".to_string()),
-            },
-            contracts,
-            hops: vec![hop("run_boundary_tests", &base_order, &["test_passes"])],
-            retry: retry_policy(2),
-            auxiliary: Some(ACCEPTANCE_GATES_AUX.to_string()),
-        }
+    let make_spec = |version: u32, parent: Option<u32>, contracts: Vec<ContractSpec>| HarnessSpec {
+        meta: HarnessMeta {
+            name: base_name.to_string(),
+            version,
+            immutable: false,
+            parent,
+            task_type: Some("test_write".to_string()),
+        },
+        contracts,
+        hops: vec![hop("run_boundary_tests", &base_order, &["test_passes"])],
+        retry: retry_policy(2),
+        auxiliary: Some(ACCEPTANCE_GATES_AUX.to_string()),
     };
 
-    let v1 = make_spec(1, None, vec![contract("test_passes", "boundary_test_must_pass")]);
+    let v1 = make_spec(
+        1,
+        None,
+        vec![contract("test_passes", "boundary_test_must_pass")],
+    );
 
     let v2 = make_spec(
         2,
@@ -470,21 +482,22 @@ fn make_t5_versions() -> [HarnessSpec; 4] {
     let base_name = "adr-draft-generation";
     let base_order = ["Architect.draft", "Reviewer.audit"];
 
-    let make_spec = |version: u32, parent: Option<u32>, contracts: Vec<ContractSpec>, hops: Vec<HopSpec>| {
-        HarnessSpec {
-            meta: HarnessMeta {
-                name: base_name.to_string(),
-                version,
-                immutable: false,
-                parent,
-                task_type: Some("docs_gen".to_string()),
-            },
-            contracts,
-            hops,
-            retry: retry_policy(2),
-            auxiliary: Some(ACCEPTANCE_GATES_AUX.to_string()),
-        }
-    };
+    let make_spec =
+        |version: u32, parent: Option<u32>, contracts: Vec<ContractSpec>, hops: Vec<HopSpec>| {
+            HarnessSpec {
+                meta: HarnessMeta {
+                    name: base_name.to_string(),
+                    version,
+                    immutable: false,
+                    parent,
+                    task_type: Some("docs_gen".to_string()),
+                },
+                contracts,
+                hops,
+                retry: retry_policy(2),
+                auxiliary: Some(ACCEPTANCE_GATES_AUX.to_string()),
+            }
+        };
 
     let v1 = make_spec(
         1,
@@ -515,7 +528,11 @@ fn make_t5_versions() -> [HarnessSpec; 4] {
             contract("adr_has_context", "adr_must_include_context"),
         ],
         vec![
-            hop("generate_draft", &base_order, &["adr_has_title", "adr_has_context"]),
+            hop(
+                "generate_draft",
+                &base_order,
+                &["adr_has_title", "adr_has_context"],
+            ),
             hop("review_draft", &base_order, &["adr_has_title"]),
         ],
     );
@@ -529,7 +546,11 @@ fn make_t5_versions() -> [HarnessSpec; 4] {
             contract("adr_has_consequences", "adr_must_document_consequences"),
         ],
         vec![
-            hop("generate_draft", &base_order, &["adr_has_title", "adr_has_context"]),
+            hop(
+                "generate_draft",
+                &base_order,
+                &["adr_has_title", "adr_has_context"],
+            ),
             hop("review_draft", &base_order, &["adr_has_consequences"]),
         ],
     );
@@ -701,19 +722,17 @@ mod tests {
             for (idx, spec) in task.versions.iter().enumerate() {
                 let expected_version = (idx + 1) as u32;
                 assert_eq!(
-                    spec.meta.version, expected_version,
+                    spec.meta.version,
+                    expected_version,
                     "任务 {} 版本[{}] 的 meta.version 应为 {}",
                     task.task_id(),
                     idx,
                     expected_version
                 );
-                let expected_parent = if idx == 0 {
-                    None
-                } else {
-                    Some(idx as u32)
-                };
+                let expected_parent = if idx == 0 { None } else { Some(idx as u32) };
                 assert_eq!(
-                    spec.meta.parent, expected_parent,
+                    spec.meta.parent,
+                    expected_parent,
                     "任务 {} 版本[{}] 的 meta.parent 应为 {:?}",
                     task.task_id(),
                     idx,

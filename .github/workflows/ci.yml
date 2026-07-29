@@ -56,3 +56,29 @@ jobs:
 
       - name: Test (workspace)
         run: cargo test --workspace
+
+  # ============================================================
+  # P1-7: repo-wiki CI benchmark 阈值断言(可选,不阻塞合并)
+  # WHY: benchmark 在 CI 环境波动较大,设为 continue-on-error 避免误报阻塞 PR。
+  # 主要目的是捕获数量级退化(如 10× 以上),而非精确性能回归。
+  # 仅运行 10K entry 快速 benchmark(~30s),100K 在 release/local 验证。
+  # 阈值表见 scripts/check_repo_wiki_benchmark.sh 头部注释。
+  # ============================================================
+  benchmark:
+    name: repo-wiki benchmark 阈值
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+
+      # WHY: benchmark 阈值断言脚本(P1-7)
+      # 运行 repo-wiki vector_bench 的 10K entry benchmark 并断言阈值
+      # 退出码:0=通过 / 1=超阈值 / 2=脚本错误
+      - name: repo-wiki benchmark threshold check (10K)
+        run: bash scripts/check_repo_wiki_benchmark.sh
