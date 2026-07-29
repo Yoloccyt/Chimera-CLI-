@@ -109,7 +109,11 @@ foreach ($rl in $redlines) {
 # 每个 SLO 用 80% 宽松阈值作为 CI redline (CI 环境波动缓冲)
 # 格式: SLO 名称 -> crate / bench 文件 / bench 函数过滤 / SLO 阈值(秒) / redline 阈值(秒)
 $sloRedlines = @(
-    @{ Name='window_select';     Crate='hcw-window';    BenchFile='window_select';  Filter='bench_window_select';       SloSec=0.001;   RedlineSec=0.0008;   Unit='ms'; SloDisplay='1ms';   RedlineDisplay='0.8ms'  },
+    # WHY Filter 用 criterion 组名前缀而非 bench 函数名(closure C-13 修复):
+    # criterion 命令行过滤匹配的是 benchmark ID("window_select/L0_4K"),
+    # 函数名 'bench_window_select' 零匹配时 criterion 跑全部 bench,
+    # 解析器取到首个 time: 行造成 1.39ms 伪影(实测单次 select 为 ~1ns)
+    @{ Name='window_select';     Crate='hcw-window';    BenchFile='window_select';  Filter='window_select/';            SloSec=0.001;   RedlineSec=0.0008;   Unit='ms'; SloDisplay='1ms';   RedlineDisplay='0.8ms'  },
     @{ Name='mlc_l2_knn';       Crate='mlc-engine';    BenchFile='mlc_l2_knn';     Filter='bench_l2_knn_slo_assert';   SloSec=0.005;   RedlineSec=0.004;    Unit='ms'; SloDisplay='5ms';   RedlineDisplay='4ms'   },
     @{ Name='decay_compute';    Crate='decay-engine';  BenchFile='decay_compute';  Filter='single_decay_by_profile';   SloSec=0.000001;RedlineSec=0.0000008;Unit='us'; SloDisplay='1us';   RedlineDisplay='0.8us' },
     @{ Name='wiki_knn_100k';    Crate='repo-wiki';     BenchFile='wiki_knn_slo';   Filter='wiki_knn_100k_p95';         SloSec=0.050;   RedlineSec=0.040;    Unit='ms'; SloDisplay='50ms';  RedlineDisplay='40ms'  },

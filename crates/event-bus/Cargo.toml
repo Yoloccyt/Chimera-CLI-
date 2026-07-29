@@ -15,6 +15,9 @@ thiserror = { workspace = true }
 rmp-serde = { workspace = true }
 # arc-swap:P2-W7.2.3 RCU 原语(内环最终一致 + 单调读)
 arc-swap = { workspace = true }
+# L0 Contracts:formal_props 验证结果类型(FormalVerifier M1 P7-T4,ADR-047)
+# WHY 合规:L1 → L0 恒允许(§2.2 依赖铁律扩展);nexus-contracts 纯类型零依赖,不引入环
+nexus-contracts = { path = "../nexus-contracts" }
 # L1 Core 共享领域类型(Quest 等),event-bus 与 nexus-core 同层互引允许(§2.2)
 nexus-core = { path = "../nexus-core" }
 # Prometheus 指标注册表与文本编码(Phase V Task V-8:/metrics 端点导出)

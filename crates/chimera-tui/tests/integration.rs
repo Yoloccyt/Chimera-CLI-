@@ -240,11 +240,13 @@ fn test_tui_input_mode_switching() {
 
 #[test]
 fn test_tui_input_mode_circular_navigation() {
-    // WHY 循环导航:验证 Quest → ... → MetricsDashboard → Chat → Quest 的完整循环(17 面板)
-    // M3b:Chat 面板追加到主循环末尾,从 16 面板扩展到 17 面板(Timeline 仍未注册故不含)。
+    // WHY 循环导航:验证 Quest → ... → Chat → SelfAssessment → DagViz → Quest
+    // 的完整循环(19 面板)。closure Stage B-10:SelfAssessment(P1-5)与
+    // DagViz(B-10)先后追加到主循环末尾,从 17 面板扩展到 19 面板
+    // (Timeline 仍未注册故不含)。
     let mut app = make_app();
 
-    // 连续 Tab 17 次应回到原点(17 面板循环:起点 Quest + 16 个后续)
+    // 连续 Tab 19 次应回到原点(19 面板循环:起点 Quest + 18 个后续)
     for expected in [
         PanelId::Parliament,
         PanelId::Budget,
@@ -262,6 +264,8 @@ fn test_tui_input_mode_circular_navigation() {
         PanelId::ResourceMonitor,
         PanelId::MetricsDashboard,
         PanelId::Chat,
+        PanelId::SelfAssessment,
+        PanelId::DagViz,
         PanelId::Quest,
     ] {
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -273,8 +277,10 @@ fn test_tui_input_mode_circular_navigation() {
         );
     }
 
-    // Shift+Tab 反向循环也应回到原点(17 面板:Quest 的上一个 = 末尾 Chat)
+    // Shift+Tab 反向循环也应回到原点(19 面板:Quest 的上一个 = 末尾 DagViz)
     for expected in [
+        PanelId::DagViz,
+        PanelId::SelfAssessment,
         PanelId::Chat,
         PanelId::MetricsDashboard,
         PanelId::ResourceMonitor,

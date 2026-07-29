@@ -298,6 +298,18 @@ path = "tests/e2e/variant_governance_e2e.rs"
 name = "formal_verifier_e2e"
 path = "tests/e2e/formal_verifier_e2e.rs"
 
+# ============================================================
+# P7-T6: FormalVerifier M1 五属性 E2E 闭环测试(closure Stage D)
+#
+# WHY 新增 test target: M1 新增三属性(AutoDPO 偏好对一致性 /
+# 事件因果一致性 / 学习单调性)与既有 M0 两属性(谱系 DAG / Critic
+# 单调性)构成 5/5 属性验证器矩阵,含 S8 学习器真实轨迹集成验证。
+# ============================================================
+
+[[test]]
+name = "formal_verifier_m1_e2e"
+path = "tests/e2e/formal_verifier_m1_e2e.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。
@@ -346,6 +358,8 @@ auto-dpo = { path = "crates/auto-dpo" }              # L5 Knowledge(偏好对生
 nexus-contracts = { path = "crates/nexus-contracts" } # L0 Contracts(契约层)
 # P1-9: chimera-mas 用于 MasError::R2FreezeViolation 变体验证(ADR-042 决策 4)
 chimera-mas = { path = "crates/chimera-mas" }         # L9 Quest(MAS 错误类型)
+# P7-T6: omega-learner 用于 M1 属性 #5(学习单调性)与 S8 学习器真实轨迹集成
+omega-learner = { path = "crates/omega-learner" }     # L6 Router(学习层)
 # 共享依赖(从 workspace 继承版本)
 tokio = { workspace = true }
 serde_json = { workspace = true }

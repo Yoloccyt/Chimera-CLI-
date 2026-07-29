@@ -34,6 +34,11 @@
 
 pub mod config;
 pub mod error;
+/// FormalVerifier M1:偏好对一致性形式化验证(P7-T3,ADR-047)
+///
+/// R2 解冻阶段 1 前置:在 R2(GSOE×AutoDPO 约束 RL)解冻前,
+/// 先形式化保证其训练数据源(偏好对)的一致性与反奖励黑客性质。
+pub mod formal;
 pub mod generator;
 pub mod rhi_channel_a;
 pub mod rhi_judge_client;
@@ -44,6 +49,8 @@ pub mod types;
 // === 关键类型重导出,简化外部导入 ===
 pub use config::AutoDpoConfig;
 pub use error::AutoDpoError;
+// FormalVerifier M1:偏好对一致性验证器重导出(P7-T3)
+pub use formal::PreferenceConsistencyChecker;
 pub use generator::PreferencePairGenerator;
 // P5.1.1: RHI-CG 通道 A 核心类型（JudgeClient trait + JudgeVerdict + RhiChannelA 编排器）
 pub use rhi_channel_a::{JudgeClient, JudgeVerdict, RhiChannelA, SpecVersion, StubJudgeClient};

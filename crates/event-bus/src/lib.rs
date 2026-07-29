@@ -51,6 +51,11 @@ pub mod error;
 /// NexusEvent 变体结构保持不变(消费方零改动),子枚举作为分类
 /// 参考与未来迁移目标。
 pub mod event_types;
+/// FormalVerifier M1 — 事件因果一致性形式化验证(P7-T4,ADR-047 Property #4)
+///
+/// 验证 EventMetadata 序列(event_id 时序/同 source 时间戳/唯一性),
+/// 与 107+ 事件变体载荷解耦;类型复用 `nexus_contracts::formal_props`(L0)。
+pub mod formal;
 pub mod logging;
 /// 膜渗透过滤器(P2-W6.1,ADR-033 后续膜深化)
 ///
@@ -76,11 +81,13 @@ pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use backpressure::{is_critical_event, BackpressurePolicy, SlowConsumerDetector};
+// FormalVerifier M1:事件因果一致性验证器重导出(P7-T4)
 pub use bus::{
     deserialize_json, deserialize_msgpack, serialize_json, serialize_msgpack, EventBus,
     EventReceiver, DEFAULT_CAPACITY,
 };
 pub use error::EventBusError;
+pub use formal::CausalConsistencyChecker;
 pub use logging::BusLogger;
 // P2-W7.2.3: RCU 单调读状态容器(内环最终一致 + 单调读)
 pub use rcu::MonotonicState;

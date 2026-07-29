@@ -59,11 +59,8 @@ proptest! {
             let entry = make_entry(&format!("cap-{}", i));
             let _ = hot.insert(entry);
         }
-        let expected_evictions = if insert_count > capacity {
-            insert_count - capacity
-        } else {
-            0
-        };
+        // clippy::implicit_saturating_sub 修复:饱和减法等价于原 if 分支
+        let expected_evictions = insert_count.saturating_sub(capacity);
         prop_assert_eq!(
             hot.evictions(),
             expected_evictions as u64,

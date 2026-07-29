@@ -54,3 +54,8 @@ harness = false
 [[bench]]
 name = "replay_sample"
 harness = false
+
+# closure Stage C-12:SumTree PER 采样门禁固化(KPI-P4:100K/batch32 p99<100µs)
+[[bench]]
+name = "per_buffer_sample"
+harness = false

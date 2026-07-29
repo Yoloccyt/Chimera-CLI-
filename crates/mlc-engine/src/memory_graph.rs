@@ -10,7 +10,10 @@
 //!   方案文档参考实现对每对节点建边(1 万节点 = 5000 万次比较 + 潜在
 //!   百万级边)。本实现每节点仅连接 Top-K 最相似近邻中超阈值者,
 //!   边数上界 O(n·k);Top-K 选择用 `select_nth_unstable`(§4.1 红线)。
-//!   规模 >10K 节点时应切换 hnsw_rs 索引(后续增量,见 repo-wiki 先例)
+//!   ⚠️ 相似度打分仍为 O(n²·512 维),criterion 实测 1K 节点建边 464ms、
+//!   2K 节点 2.15s(平方增长,见 docs/performance/closure_stage_c_baseline.md);
+//!   **规模 >1K 节点时应切换 hnsw_rs 索引**(阈值经实测从 10K 下修,
+//!   repo-wiki 有生产先例,列为后续增量)
 //! - **图谱召回 = 种子 + BFS 扩展**:先向量检索种子节点,再沿边扩展
 //!   depth 层,比纯向量检索多召回"语义不相似但共现相关"的记忆
 
@@ -269,7 +272,7 @@ mod tests {
 
         // a↔b 双向语义边;c 无边
         assert_eq!(graph.edge_count(), 2);
-        assert!(graph.adjacency.get("c").is_none());
+        assert!(!graph.adjacency.contains_key("c"));
     }
 
     #[test]

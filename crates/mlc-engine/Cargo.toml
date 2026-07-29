@@ -48,3 +48,8 @@ harness = false
 [[bench]]
 name = "mlc_l2_knn"
 harness = false
+
+# closure Stage C-12:记忆图谱建边规模曲线(ADR-049 决策 6,O(n·k) 验证)
+[[bench]]
+name = "memory_graph_edges"
+harness = false

@@ -42,3 +42,8 @@ harness = false
 [[bench]]
 name = "pragma_capable_bench"
 harness = false
+
+# closure Stage C-12:分层回放池采样基准(ADR-049,分层 vs 均匀采样开销对照)
+[[bench]]
+name = "rl_replay_sample"
+harness = false

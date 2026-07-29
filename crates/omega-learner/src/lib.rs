@@ -88,6 +88,12 @@ pub mod context;
 /// 错误类型 — 库层 thiserror enum
 pub mod error;
 
+/// FormalVerifier M1 — 学习单调性形式化验证（P7-T5,ADR-047 Property #5）
+///
+/// 验证观测轨迹（步数/奖励/后悔率）而非 LinUCB 内部矩阵状态,
+/// 类型复用 `nexus_contracts::formal_props`（L0 契约层）。
+pub mod formal;
+
 /// LinUCB 算法核心 — 上下文线性 bandit
 pub mod linucb;
 
@@ -140,6 +146,8 @@ pub use arm::{ArmId, ArmIndex, ArmSet, DiscreteArmSet};
 // polish-v2.7 P4-1: PER 公开 API 重导出
 pub use context::SeamContext;
 pub use error::{LearnerError, Result};
+// FormalVerifier M1:学习单调性验证器重导出（P7-T5）
+pub use formal::LearningMonotonicityChecker;
 pub use linucb::LinUCB;
 pub use per_buffer::{PerBuffer, PerSample};
 // P4-W16.2.1: 经验回放池类型重导出(供 L9/L10 上层实例化与填充)
