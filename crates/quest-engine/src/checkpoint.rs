@@ -235,9 +235,8 @@ impl CheckpointManager {
                 }
             }
         }
-        // 按 created_at 降序,取最新
-        checkpoints.sort_by_key(|cp| std::cmp::Reverse(cp.created_at));
-        Ok(checkpoints.into_iter().next())
+        // O(n) 替代 O(n log n): 仅需最大值,无需全排序
+        Ok(checkpoints.into_iter().max_by_key(|cp| cp.created_at))
     }
 
     /// 校验检查点完整性 — 重新计算 SHA-256 与存储的 hash 比对
@@ -653,6 +652,31 @@ mod tests {
 
         let ids = cm.list_checkpoints("q-1").unwrap();
         assert_eq!(ids.len(), 2);
+    }
+
+    /// 验证 max_by_key 在 created_at 相同时的行为确定性:
+    /// 两个相同 created_at 的 checkpoint,应返回其中一个(不 panic,且结果有效)
+    #[tokio::test]
+    async fn test_latest_checkpoint_tie_breaker() {
+        let tmp = tempdir().unwrap();
+        let cm = CheckpointManager::new(tmp.path().to_path_buf());
+        let quest = make_quest("q-tie", 1);
+
+        // 连续保存两个检查点(极短时间内 created_at 可能相同)
+        let cp1 = cm.save(&quest).await.unwrap();
+        let cp2 = cm.save(&quest).await.unwrap();
+
+        let latest = cm.load_latest("q-tie").await.unwrap();
+        assert!(latest.is_some(), "应返回某个检查点");
+        let latest = latest.unwrap();
+        // 结果必须是 cp1 或 cp2 之一(不会是凭空出现的)
+        assert!(
+            latest.checkpoint_id == cp1.checkpoint_id || latest.checkpoint_id == cp2.checkpoint_id,
+            "tie 情况下应返回已存在的某个 checkpoint"
+        );
+        // 返回的 created_at 必须 >= 两者中较小的(即确实是最大值)
+        assert!(latest.created_at >= cp1.created_at);
+        assert!(latest.created_at >= cp2.created_at);
     }
 
     /// 验证 UserIntent 与 Quest 的 MessagePack 序列化兼容性

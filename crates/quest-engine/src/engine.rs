@@ -21,6 +21,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use dashmap::DashMap;
 use decb_governor::BudgetTier;
@@ -31,6 +32,10 @@ use uuid::Uuid;
 
 use crate::checkpoint::CheckpointManager;
 use crate::config::QuestConfig;
+use crate::coordination_metrics::{
+    CoordinationCostSample, CoordinationMetricsCollector, CoordinationMetricsConfig,
+    InferenceGainSample,
+};
 use crate::dag::validate_dag;
 use crate::error::QuestError;
 use crate::ttg::TtgGovernor;
@@ -64,6 +69,12 @@ pub struct QuestEngine {
     /// None 时 create_quest 使用默认 ThinkingMode::Standard,
     /// Some 时 create_quest 自动调用 select_mode_and_publish 选择最优模式。
     ttg_governor: Option<TtgGovernor>,
+    /// P2-1: 协调成本/推理增益比值度量收集器(三重悖论推理悖论红线)
+    ///
+    /// 默认启用,记录 Quest 生命周期中的协调成本(Event Bus 延迟、TTG 切换延迟)
+    /// 与推理增益(任务成功率),定期计算比值评估推理悖论风险。
+    /// 内部使用 `std::sync::Mutex`,线程安全且不跨 `.await` 点(§4.4 反模式 #1)。
+    metrics: CoordinationMetricsCollector,
 }
 
 impl QuestEngine {
@@ -74,6 +85,9 @@ impl QuestEngine {
 
     /// 创建 QuestEngine,使用自定义配置(不启用检查点与 TTG)
     pub fn with_config(event_bus: EventBus, config: QuestConfig) -> Self {
+        // P2-1 后续增强:克隆 EventBus 给协调度量收集器,使 record_and_compute
+        // 能自动发布 CoordinationRatioReported 事件(EventBus 内部为 Arc,Clone 廉价)
+        let metrics_bus = event_bus.clone();
         Self {
             quests: Arc::new(DashMap::new()),
             paused_quests: Arc::new(DashMap::new()),
@@ -81,6 +95,10 @@ impl QuestEngine {
             config,
             checkpoint_manager: None,
             ttg_governor: None,
+            metrics: CoordinationMetricsCollector::with_event_bus(
+                CoordinationMetricsConfig::default(),
+                metrics_bus,
+            ),
         }
     }
 
@@ -99,6 +117,7 @@ impl QuestEngine {
             config,
             checkpoint_manager: Some(CheckpointManager::new(checkpoint_dir)),
             ttg_governor: None,
+            metrics: CoordinationMetricsCollector::new(),
         }
     }
 
@@ -116,6 +135,7 @@ impl QuestEngine {
             config,
             checkpoint_manager: Some(CheckpointManager::with_max_keep(checkpoint_dir, max_keep)),
             ttg_governor: None,
+            metrics: CoordinationMetricsCollector::new(),
         }
     }
 
@@ -141,6 +161,7 @@ impl QuestEngine {
             config,
             checkpoint_manager: Some(CheckpointManager::new(checkpoint_dir)),
             ttg_governor: Some(ttg_governor),
+            metrics: CoordinationMetricsCollector::new(),
         }
     }
 
@@ -160,6 +181,36 @@ impl QuestEngine {
     /// 获取检查点管理器引用(若已配置)
     pub fn checkpoint_manager(&self) -> Option<&CheckpointManager> {
         self.checkpoint_manager.as_ref()
+    }
+
+    /// 设置自定义协调度量配置(builder 模式)
+    ///
+    /// 用于调整推理悖论告警阈值、成本归一化基准与 EWMA 衰减系数。
+    /// 注意:此方法会重置度量收集器(清空历史 EWMA 状态),因为配置变更后
+    /// 旧的 EWMA 值不再适用于新的归一化基准。
+    pub fn with_metrics_config(&mut self, config: CoordinationMetricsConfig) -> &mut Self {
+        self.metrics = CoordinationMetricsCollector::with_config(config);
+        self
+    }
+
+    /// 获取协调度量收集器引用(P2-1 三重悖论推理悖论红线)
+    ///
+    /// 通过收集器可查询当前的协调成本/推理增益比值与 EWMA 状态:
+    /// - `metrics().last_ratio()` — 最近一次计算的比值
+    /// - `metrics().snapshot()` — 当前 EWMA 状态快照
+    /// - `metrics().sample_count()` — 已采集样本数
+    pub fn metrics(&self) -> &CoordinationMetricsCollector {
+        &self.metrics
+    }
+
+    /// 查询最近一次协调成本/推理增益比值(P2-1 便捷方法)
+    ///
+    /// 返回 `None` 表示尚未采集任何样本。
+    /// `Some(ratio)` 中 `ratio.is_paradox_risk` 为 `true` 时表示推理悖论风险。
+    pub fn last_coordination_ratio(
+        &self,
+    ) -> Option<crate::coordination_metrics::CoordinationToGainRatio> {
+        self.metrics.last_ratio()
     }
 
     /// 保存检查点 — 序列化当前 Quest 状态并发布 CheckpointSaved 事件 `[Critical]`
@@ -451,6 +502,9 @@ impl QuestEngine {
     /// WHY:result_hash 使用 Quest 标题的简单哈希作为占位,
     /// 后续阶段由 GQEP 执行器提供真实产出哈希
     pub async fn complete_quest(&self, quest_id: &str) -> Result<(), QuestError> {
+        // P2-1: 测量 Event Bus 发布延迟(协调成本的核心组成部分)
+        let publish_start = Instant::now();
+
         let result_hash = simple_hash(quest_id);
         let event = NexusEvent::ExecutionCompleted {
             metadata: EventMetadata::new("quest-engine"),
@@ -458,7 +512,43 @@ impl QuestEngine {
             result_hash,
         };
         self.event_bus.publish(event).await?;
-        info!(quest_id = %quest_id, "ExecutionCompleted 事件已发布");
+        let event_bus_latency_ms = publish_start.elapsed().as_secs_f64() * 1000.0;
+
+        // P2-1: 记录协调成本/推理增益比值(若 Quest 存在于注册表)
+        // WHY 仅在 Quest 存在时记录:complete_quest 是 pub 方法,可能被外部直接调用,
+        // 此时 Quest 可能不在注册表中(如测试场景),保持向后兼容不返回错误。
+        if let Some(quest) = self.quests.get(quest_id) {
+            let total = quest.tasks.len();
+            let completed = quest
+                .tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Completed)
+                .count();
+            let task_success_rate = if total > 0 {
+                completed as f32 / total as f32
+            } else {
+                0.0
+            };
+            drop(quest); // 释放 DashMap 读锁,遵循 §4.4 反模式 #1(不持锁跨 await)
+
+            // 构造协调成本样本:Event Bus 延迟(TTG 切换延迟由 switch_thinking_mode 单独记录)
+            let cost = CoordinationCostSample::new(event_bus_latency_ms, 0.0);
+            // 构造推理增益样本:任务成功率(质量分数/共识质量由下游 PVL/Parliament 单独上报)
+            let gain = InferenceGainSample::new(task_success_rate);
+            // 记录并计算协调成本/推理增益比值(EWMA 增量更新)
+            let ratio = self.metrics.record_and_compute(&cost, &gain);
+
+            info!(
+                quest_id = %quest_id,
+                task_total = total,
+                task_success_rate,
+                coordination_ratio = %ratio.description(),
+                "ExecutionCompleted 事件已发布 + P2-1 协调度量已记录"
+            );
+        } else {
+            info!(quest_id = %quest_id, "ExecutionCompleted 事件已发布(Quest 不在注册表,跳过度量记录)");
+        }
+
         Ok(())
     }
 

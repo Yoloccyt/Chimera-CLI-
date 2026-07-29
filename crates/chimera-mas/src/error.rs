@@ -25,7 +25,7 @@ use thiserror::Error;
 
 /// MAS 子系统错误类型
 ///
-/// 共 34 个变体,覆盖 MAS 特有错误场景。
+/// 共 37 个变体,覆盖 MAS 特有错误场景(含 ADR-042 R2FreezeViolation)。
 /// 所有变体均通过 `#[error("...")]` 提供人类可读的 Display 实现。
 #[derive(Debug, Error)]
 pub enum MasError {
@@ -192,6 +192,11 @@ pub enum MasError {
     ///
     /// WHY 独立变体而非复用 DelegationFailed:循环委托是图结构层面的不变量违反,
     /// 与单次委托执行失败语义不同。独立分类便于告警图表区分"图结构异常"与"执行失败"。
+    ///
+    /// P2-7: L5 镜像变体 — `gsoe_evolution::GsoeError::DelegationCycleDetected`
+    /// 在 L5 层独立承载 INV-9 语义(gsoe-evolution 不能依赖 chimera-mas (L9),
+    /// 违反 §2.2 依赖铁律)。两变体语义镜像但实现分离,修改任一方时必须同步审查另一方。
+    /// 详见 `gsoe-evolution/src/error.rs` + `gsoe-evolution/src/ci_gate.rs` §2。
     ///
     /// `cycle_path` 携带环路径(Agent ID 序列,首尾相同),供诊断与审计追溯。
     #[error("Delegation cycle detected (INV-9): cycle_path = {cycle_path:?}")]
@@ -466,10 +471,58 @@ pub enum MasError {
     /// EWMA 崩塌/召回率下降）但执行失败,可能导致退化策略持续生效。
     /// 此错误对应 `NexusEvent::R1ShadowRollbackFailed` Critical 事件,
     /// 需要 SecCore 与 Parliament 紧急干预（ADR-043 决策 4）。
-    #[error("R1 shadow mode rollback failed: {reason}")]
+    ///
+    /// # P2-13 结构化理由记录
+    ///
+    /// 扩展为结构化记录,与 `NexusEvent::R1ShadowRollbackFailed` 保持字段对齐:
+    /// - `trigger_type`:机器可读的触发条件枚举(4 种 + Unknown)
+    /// - `details`:底层错误详情(如 CapabilityTokenRegistry 内部错误消息)
+    /// - `diagnostic`:诊断上下文快照(EWMA 水平、观察期天数等)
+    ///
+    /// `reason` 字段保留为人类可读描述,向后兼容。
+    #[error(
+        "R1 shadow mode rollback failed: {reason} (trigger={trigger_type:?}, details={details})"
+    )]
     R1ShadowRollbackFailed {
-        /// 回滚失败原因（ConsecutiveRegression / AsaIntervention / EwmaCollapse / RecallRateDrop）
+        /// 回滚失败原因(人类可读描述,向后兼容保留)
+        ///
+        /// 旧版字段,保留用于日志展示与向后兼容。
         reason: String,
+        /// P2-13: 结构化触发条件类型(ADR-043 决策 4)
+        ///
+        /// 对应 4 种回滚触发条件 + Unknown 兜底。
+        trigger_type: event_bus::types::RollbackTriggerType,
+        /// P2-13: 详细错误消息
+        ///
+        /// 承载回滚操作失败的底层错误详情,如 CapabilityTokenRegistry
+        /// 内部错误的具体消息。空字符串表示无详细错误信息。
+        details: String,
+        /// P2-13: 诊断上下文(EWMA 水平、观察期天数等)
+        ///
+        /// 承载回滚失败时的诊断快照,便于专家团队复盘根因。
+        diagnostic: event_bus::types::RollbackDiagnosticContext,
+    },
+
+    /// R2 冻结违反 — 冻结期内检测到 R2(GSOE×AutoDPO 约束 RL)路径激活(ADR-042 决策 4)
+    ///
+    /// 触发场景:
+    /// - CI 检测:`r2-freeze-guard` job 扫描 gsoe-evolution / auto-dpo 源码发现 R2 路径实现
+    /// - 运行时检测:`evolve_once()` 入口 `debug_assert!(!cfg!(feature = "r2_path"))` panic
+    /// - 审计检测:AsaAuditor 周期性扫描进化路径发现 R2 激活痕迹
+    ///
+    /// 处理策略:立即触发自动回滚 + 告警广播 + 事故复盘三步流程(ADR-042 决策 4)。
+    /// 此错误对应 `NexusEvent::R2FreezeViolation` Critical 事件(走 mpsc 旁路通道,
+    /// §6.2 红线 5),需要 SecCore 与 Parliament 紧急干预。
+    ///
+    /// WHY 独立变体而非复用 Internal:R2 冻结违反是 ADR-042 硬约束的安全事件,
+    /// 需明确分类以便告警图表区分"R2 冻结违反"与"通用内部错误",并触发针对性的
+    /// 自动回滚流程(Internal 不会触发回滚)。
+    #[error("R2 freeze violation (ADR-042): type={violation_type}, evidence={evidence}")]
+    R2FreezeViolation {
+        /// 违反类型(CiDetection / RuntimeAssertion / AuditScan)
+        violation_type: String,
+        /// 违反证据(如匹配的源码片段 / panic 信息 / 审计日志)
+        evidence: String,
     },
 
     /// 内部错误 — 兜底变体,用于未分类的内部错误
@@ -546,7 +599,7 @@ mod tests {
         assert!(matches!(mas_err, MasError::IoError(_)));
     }
 
-    /// 验证 MasError 变体数量 >= 25(任务清单要求 25+ 变体)
+    /// 验证 MasError 变体数量 >= 37(含 ADR-042 R2FreezeViolation)
     ///
     /// WHY 静态断言:错误变体数量是 Task 6 验收标准,变体增减需 ADR 评审。
     /// 通过遍历所有变体确保数量充足。
@@ -556,7 +609,7 @@ mod tests {
         use serde::de::Error as _;
         use serde::ser::Error as _;
 
-        // 列举所有变体,确保数量 >= 34(当前实际 34 个变体,P3-W11.3 新增 DelegationCycleDetected)
+        // 列举所有变体,确保数量 >= 37(ADR-042 新增 R2FreezeViolation 后为 37 个变体)
         let variants: Vec<MasError> = vec![
             MasError::ContextIsolationViolation {
                 agent_id: "a".into(),
@@ -665,12 +718,90 @@ mod tests {
                 reason: "delegation_depth 5 >= MAX_AGENT_DEPTH 5".into(),
             },
             MasError::IoError(std::io::Error::other("io")),
+            MasError::R1ShadowRollbackFailed {
+                reason: "ConsecutiveRegression".into(),
+                trigger_type: event_bus::types::RollbackTriggerType::ConsecutiveRegression,
+                details: "test details".into(),
+                diagnostic: event_bus::types::RollbackDiagnosticContext::default(),
+            },
+            MasError::R2FreezeViolation {
+                violation_type: "CiDetection".into(),
+                evidence: "r2_policy found in engine.rs".into(),
+            },
             MasError::Internal("internal".into()),
         ];
         assert!(
-            variants.len() >= 34,
-            "MasError 变体数量 = {},应 >= 34",
+            variants.len() >= 37,
+            "MasError 变体数量 = {},应 >= 37(含 ADR-042 R2FreezeViolation)",
             variants.len()
         );
+    }
+
+    // ============================================================
+    // P2-13: MasError::R1ShadowRollbackFailed 结构化字段测试
+    // ============================================================
+
+    /// 验证 `MasError::R1ShadowRollbackFailed` Display 实现包含结构化字段
+    ///
+    /// P2-13 扩展后,Display 应包含 `reason` / `trigger_type` / `details` 三个字段,
+    /// 便于日志展示与调试。`diagnostic` 不在 Display 中(结构体太冗长)。
+    #[test]
+    fn test_p2_13_r1_shadow_rollback_failed_display() {
+        let err = MasError::R1ShadowRollbackFailed {
+            reason: "EWMA collapsed from 0.7 to 0.35".to_string(),
+            trigger_type: event_bus::types::RollbackTriggerType::EwmaCollapse,
+            details: "CapabilityTokenRegistry internal error".to_string(),
+            diagnostic: event_bus::types::RollbackDiagnosticContext::empty()
+                .with_ewma_level(0.35)
+                .with_observation_days(7),
+        };
+        let display = format!("{}", err);
+        // 验证 reason 字段
+        assert!(
+            display.contains("EWMA collapsed from 0.7 to 0.35"),
+            "Display should contain reason, got: {}",
+            display
+        );
+        // 验证 trigger_type 字段(Debug 格式)
+        assert!(
+            display.contains("EwmaCollapse"),
+            "Display should contain trigger_type, got: {}",
+            display
+        );
+        // 验证 details 字段
+        assert!(
+            display.contains("CapabilityTokenRegistry internal error"),
+            "Display should contain details, got: {}",
+            display
+        );
+    }
+
+    /// 验证 `MasError::R1ShadowRollbackFailed` 不同 trigger_type 的 Display
+    ///
+    /// 覆盖 4 种触发条件 + Unknown,确保 Display 在所有变体下都正确。
+    #[test]
+    fn test_p2_13_r1_shadow_rollback_failed_all_trigger_types() {
+        let triggers = [
+            event_bus::types::RollbackTriggerType::ConsecutiveRegression,
+            event_bus::types::RollbackTriggerType::AsaIntervention,
+            event_bus::types::RollbackTriggerType::EwmaCollapse,
+            event_bus::types::RollbackTriggerType::RecallRateDrop,
+            event_bus::types::RollbackTriggerType::Unknown,
+        ];
+        for trigger in triggers {
+            let err = MasError::R1ShadowRollbackFailed {
+                reason: "test".to_string(),
+                trigger_type: trigger.clone(),
+                details: "test details".to_string(),
+                diagnostic: event_bus::types::RollbackDiagnosticContext::default(),
+            };
+            let display = format!("{}", err);
+            assert!(
+                display.contains(&format!("{:?}", trigger)),
+                "Display should contain trigger_type {:?}, got: {}",
+                trigger,
+                display
+            );
+        }
     }
 }

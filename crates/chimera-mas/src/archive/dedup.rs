@@ -50,6 +50,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+// 统一使用 nexus-core 权威实现,避免多副本优化不一致
+use nexus_core::cosine_similarity_slices;
 
 // ============================================================
 // 常量 — 三级去重阈值
@@ -410,33 +412,39 @@ impl DedupEngine {
         }
 
         // 对每个 hash 组(>=2 个条目)执行精确去重
-        for (_, indices) in groups {
+        for (_, mut indices) in groups {
             if indices.len() < 2 {
                 continue;
             }
 
-            // 按 confidence 降序 + created_at 升序排序(稳定排序)
-            // WHY: 第一个为保留条目(高 confidence,早创建)
-            let mut sorted = indices.clone();
-            sorted.sort_by(|&a, &b| {
-                let ea = &entries[a];
-                let eb = &entries[b];
-                // confidence 降序(高优先)
-                let conf_cmp = eb
-                    .confidence
-                    .partial_cmp(&ea.confidence)
-                    .unwrap_or(std::cmp::Ordering::Equal);
-                if conf_cmp != std::cmp::Ordering::Equal {
-                    return conf_cmp;
+            // 找出保留条目(最高 confidence,最早 created_at)。
+            // WHY 仅找 Top-1 而非全排序:后续只需 indices[0] 作为 kept 条目,
+            // indices[1..] 仅用于遍历检查跨 Agent 去重,无需有序。
+            // 用 O(n) 线性扫描替代 O(n log n) 全排序(§6.2: Top-K 用 select_nth)。
+            let is_better = |candidate: usize, current_best: usize| -> bool {
+                let ec = &entries[candidate];
+                let eb = &entries[current_best];
+                let conf_diff = ec.confidence - eb.confidence;
+                if conf_diff.abs() > CONFIDENCE_EQUAL_TOLERANCE {
+                    return conf_diff > 0.0; // 高 confidence 更好
                 }
-                // created_at 升序(早优先)
-                ea.created_at.cmp(&eb.created_at)
-            });
+                ec.created_at < eb.created_at // 早创建更好
+            };
+            let mut best_pos = 0;
+            for pos in 1..indices.len() {
+                if is_better(indices[pos], indices[best_pos]) {
+                    best_pos = pos;
+                }
+            }
+            // 将最佳移到 indices[0]
+            if best_pos != 0 {
+                indices.swap(0, best_pos);
+            }
 
-            // 保留 sorted[0],其余跨 Agent 的标记去重
-            let kept_idx = sorted[0];
+            // 保留 indices[0](最佳),其余跨 Agent 的标记去重
+            let kept_idx = indices[0];
             let kept = &entries[kept_idx];
-            for &ridx in &sorted[1..] {
+            for &ridx in indices.iter().skip(1) {
                 let removed = &entries[ridx];
                 // 跨 Agent 判定(核心语义)
                 if kept.agent_id == removed.agent_id {
@@ -503,7 +511,7 @@ impl DedupEngine {
                 if a.agent_id == b.agent_id {
                     continue;
                 }
-                let sim = cosine_similarity(&a.embedding, &b.embedding);
+                let sim = cosine_similarity_slices(&a.embedding, &b.embedding);
                 if sim >= self.semantic_threshold {
                     pairs.push((
                         candidates[i],
@@ -522,7 +530,10 @@ impl DedupEngine {
             }
         }
 
-        // 按相似度降序排序(高相似度优先去重)
+        // 按相似度降序排序(高相似度优先去重)。
+        // WHY 此处必须全排序而非 Top-K:贪心去重算法依赖按相似度降序处理配对,
+        // 确保最高相似度的配对优先去重,避免低相似度配对抢先占用条目导致
+        // 高相似度配对被跳过(去重质量下降)。全排序 O(n² log n) 是算法正确性所需。
         pairs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
         // 贪心去重:遍历配对,若两个都未被去重,去重 confidence 较低的
@@ -559,38 +570,8 @@ impl DedupEngine {
 // 辅助函数
 // ============================================================
 
-/// 计算两个向量的余弦相似度(全程 f32,§4.4 反模式 6)
-///
-/// 公式:`cos(a, b) = (a · b) / (|a| × |b|)`
-///
-/// # 边界场景
-///
-/// - 向量长度不等:返回 0.0(防御性,不应发生;调用方应保证 embedding 维度一致)
-/// - 空向量:返回 0.0(避免除零)
-/// - 零向量(|a|=0 或 |b|=0):返回 0.0(避免除零)
-///
-/// # 红线对齐
-///
-/// - §4.4 反模式 6: 全程 f32,禁止隐式转 f64
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0f32;
-    let mut norm_a = 0.0f32;
-    let mut norm_b = 0.0f32;
-    for (x, y) in a.iter().zip(b.iter()) {
-        dot += x * y;
-        norm_a += x * x;
-        norm_b += y * y;
-    }
-    let denom = norm_a.sqrt() * norm_b.sqrt();
-    if denom > 0.0 {
-        dot / denom
-    } else {
-        0.0
-    }
-}
+// 统一使用 nexus-core 权威实现,避免多副本优化不一致
+// cosine_similarity_slices 已覆盖:零向量返回 0.0、clamp [-1.0, 1.0]、不等长输入兼容
 
 /// 判断 `a` 是否应保留而非 `b`(保留策略)
 ///
@@ -683,13 +664,13 @@ mod tests {
     }
 
     // ============================================================
-    // cosine_similarity 测试
+    // cosine_similarity_slices 测试
     // ============================================================
 
     #[test]
     fn test_cosine_similarity_identical() {
         let a = vec![0.1, 0.2, 0.3];
-        let sim = cosine_similarity(&a, &a);
+        let sim = cosine_similarity_slices(&a, &a);
         assert!(
             (sim - 1.0).abs() < 1e-5,
             "相同向量相似度应为 1.0,实际: {sim}"
@@ -700,24 +681,29 @@ mod tests {
     fn test_cosine_similarity_orthogonal() {
         let a = vec![1.0, 0.0];
         let b = vec![0.0, 1.0];
-        let sim = cosine_similarity(&a, &b);
+        let sim = cosine_similarity_slices(&a, &b);
         assert!(sim.abs() < 1e-5, "正交向量相似度应为 0,实际: {sim}");
     }
 
     #[test]
     fn test_cosine_similarity_empty() {
-        assert_eq!(cosine_similarity(&[], &[]), 0.0);
-        assert_eq!(cosine_similarity(&[1.0], &[]), 0.0);
+        assert_eq!(cosine_similarity_slices(&[], &[]), 0.0);
+        assert_eq!(cosine_similarity_slices(&[1.0], &[]), 0.0);
     }
 
     #[test]
-    fn test_cosine_similarity_length_mismatch() {
-        assert_eq!(cosine_similarity(&[1.0, 2.0], &[1.0]), 0.0);
+    fn test_cosine_similarity_unequal_length() {
+        // 权威实现取 min 长度计算:仅用首元素,dot=1.0, norm_a=1.0, norm_b=1.0 → 1.0
+        let sim = cosine_similarity_slices(&[1.0, 2.0], &[1.0]);
+        assert!(
+            (sim - 1.0).abs() < 1e-5,
+            "不等长输入取 min 长度,预期 1.0,实际: {sim}"
+        );
     }
 
     #[test]
     fn test_cosine_similarity_zero_vector() {
-        assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
+        assert_eq!(cosine_similarity_slices(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
     }
 
     // ============================================================

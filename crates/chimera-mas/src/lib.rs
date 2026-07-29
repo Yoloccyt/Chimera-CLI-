@@ -95,6 +95,19 @@ pub use stability::{
     CircuitBreaker, DegradationChain, DegradationStep, PressureSource, StabilityGuard,
     TerminalState, STATE_CLOSED, STATE_HALF_OPEN, STATE_OPEN,
 };
+// ImmuneSystem facade（ADR-046 命名对齐 P1-5）— 从 L8 parliament 重新导出
+//
+// WHY 重新导出而非自实现：ADR-046 决策 5 裁决 ImmuneSystem 落地于 parliament crate,
+// 通过 event-bus 订阅 chimera-mas StabilityGuard 事件维护镜像状态（方案 A 事件订阅镜像）。
+// chimera-mas（L9）向下依赖 parliament（L8）合规（§2.2 依赖铁律,Cargo.toml 已声明依赖）,
+// 此处仅为命名对齐 — 让 `chimera_mas::ImmuneSystem` 可访问,为下游消费者（如 chimera-cli L10）
+// 提供统一的免疫/稳定性入口,避免消费者需同时依赖 parliament + chimera-mas 两个 crate。
+//
+// 导出清单（适度导出原则）：facade 主类型 + 公开方法签名涉及的关联类型;
+// 不导出内部实现细节（StabilityMirror / compute_cascade_risk / 三探针具体类型 / MembraneController）。
+pub use parliament::{
+    ImmuneSystem, ImmuneSystemError, ParadoxProbe, ParadoxReport, ParadoxRiskReport,
+};
 
 /// 预导入模块 — 提供最常用类型
 ///
@@ -138,5 +151,12 @@ pub mod prelude {
             CircuitBreaker, DegradationChain, DegradationStep, PressureSource, StabilityGuard,
             TerminalState, STATE_CLOSED, STATE_HALF_OPEN, STATE_OPEN,
         },
+    };
+
+    // ImmuneSystem facade（ADR-046 P1-5 命名对齐）— 与顶层 pub use 同步
+    // WHY 单独 pub use 而非放入 crate::{...} 块:这些类型来自 L8 parliament 外部 crate,
+    // 通过顶层 re-export 已成为 crate 根级符号,此处为 prelude 消费者提供便捷访问。
+    pub use parliament::{
+        ImmuneSystem, ImmuneSystemError, ParadoxProbe, ParadoxReport, ParadoxRiskReport,
     };
 }

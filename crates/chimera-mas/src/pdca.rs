@@ -69,6 +69,14 @@ pub const ALERT_WIKI_COUNT_WARNING: u32 = 10_000;
 /// 5% 超时率表示每 20 次咨询有 1 次超时,影响专家协作效率。
 pub const ALERT_CONSULT_TIMEOUT_RATE_WARNING: f64 = 0.05;
 
+/// P2-8: VeryComplex 任务占比告警阈值(0.0-1.0)— 超过触发 Warning 告警
+///
+/// 来源:ADR-027 决策 3,VeryComplex 任务激活全部 4 个象限(`MAX_QUADRANT_FANOUT`),
+/// 资源消耗是 Simple 任务(1 象限)的 4 倍。30% 占比意味着每 10 个任务中有 3 个
+/// 消耗 4× 资源,系统持续高负载,PDCA 应告警并考虑降级(如将部分 VeryComplex
+/// 拆分为 Complex,降低象限扇出)。
+pub const ALERT_VERYCOMPLEX_RATIO_WARNING: f64 = 0.3;
+
 /// PDCA 默认 cooldown 时间(秒)— 复用 efficiency-monitor AlertRule 默认值
 ///
 /// WHY 60s:与 efficiency-monitor `AlertRule::new` 默认 cooldown 一致,
@@ -89,6 +97,7 @@ pub const PDCA_ALERT_COOLDOWN_SECS: u64 = 60;
 /// - `consult_timeout_rate`: 咨询超时率(0.0-1.0,ExpertUnavailable::reason="timeout" / total_consults)
 /// - `wiki_entry_count`: Wiki 条目总数(用于告警阈值检查)
 /// - `max_single_agent_mb`: 单 Agent 最大驻留(MB,用于告警阈值检查)
+/// - `verycomplex_task_ratio`: VeryComplex 任务占比(P2-8 新增,0.0-1.0)
 ///
 /// WHY 用 f64 而非 f32:§4.4 反模式 6,全程 f64 避免精度膨胀
 #[derive(Debug, Clone, PartialEq)]
@@ -105,10 +114,19 @@ pub struct PdcaMetrics {
     pub wiki_entry_count: u32,
     /// 单 Agent 最大驻留(MB)
     pub max_single_agent_mb: f64,
+    /// P2-8: VeryComplex 任务占比(0.0-1.0)
+    ///
+    /// VeryComplex 任务激活全部 4 个象限(`MAX_QUADRANT_FANOUT`),
+    /// 资源消耗是 Simple 任务(1 象限)的 4 倍。占比过高意味着系统持续高负载,
+    /// PDCA 应告警并考虑降级(如将部分 VeryComplex 拆分为 Complex)。
+    pub verycomplex_task_ratio: f64,
 }
 
 impl PdcaMetrics {
     /// 创建新的度量快照
+    ///
+    /// 注意:`verycomplex_task_ratio` 默认为 0.0(无 VeryComplex 任务)。
+    /// 如需设置,链式调用 `.with_verycomplex_ratio(ratio)`。
     pub fn new(
         memory_usage_mb: f64,
         failure_rate: f64,
@@ -124,7 +142,17 @@ impl PdcaMetrics {
             consult_timeout_rate: consult_timeout_rate.clamp(0.0, 1.0),
             wiki_entry_count,
             max_single_agent_mb,
+            verycomplex_task_ratio: 0.0,
         }
+    }
+
+    /// P2-8: 设置 VeryComplex 任务占比(builder 模式,链式调用)
+    ///
+    /// WHY builder 而非修改 `new()` 签名:向后兼容既有调用方
+    /// (20+ 处测试 + 可能的外部调用),新增字段通过 builder 设置。
+    pub fn with_verycomplex_ratio(mut self, ratio: f64) -> Self {
+        self.verycomplex_task_ratio = ratio.clamp(0.0, 1.0);
+        self
     }
 
     /// 创建零度量(用于测试与初始化)
@@ -136,6 +164,7 @@ impl PdcaMetrics {
             consult_timeout_rate: 0.0,
             wiki_entry_count: 0,
             max_single_agent_mb: 0.0,
+            verycomplex_task_ratio: 0.0,
         }
     }
 
@@ -382,7 +411,7 @@ impl PdcaAlert {
 
 /// PDCA 闭环告警阈值配置 — 复用 efficiency-monitor AlertRule cooldown 60s 防抖
 ///
-/// ## 告警规则(§20.11)
+/// ## 告警规则(§20.11 + P2-8)
 ///
 /// | 指标 | 阈值 | 严重级别 | 规则 ID |
 /// |------|------|---------|---------|
@@ -390,6 +419,7 @@ impl PdcaAlert {
 /// | 单 Agent 驻留 | > 2.6MB | Warning | `single_agent_warning` |
 /// | Wiki 条目数 | > 10000 | Warning | `wiki_count_warning` |
 /// | 咨询超时率 | > 5% | Warning | `consult_timeout_warning` |
+/// | VeryComplex 占比 | > 30% | Warning | `verycomplex_ratio_warning` (P2-8) |
 ///
 /// ## 使用方式
 ///
@@ -411,6 +441,11 @@ pub struct AlertThresholds {
     pub wiki_count_warning: u32,
     /// 咨询超时率告警阈值(0.0-1.0,默认 0.05)
     pub consult_timeout_rate_warning: f64,
+    /// P2-8: VeryComplex 任务占比告警阈值(0.0-1.0,默认 0.3)
+    ///
+    /// VeryComplex 任务激活全部 4 个象限,资源消耗是 Simple 的 4 倍。
+    /// 占比超过此阈值表示系统持续高负载,应考虑任务拆分降级。
+    pub verycomplex_ratio_warning: f64,
 }
 
 impl Default for AlertThresholds {
@@ -426,12 +461,17 @@ impl Default for AlertThresholds {
             single_agent_warning_mb: ALERT_SINGLE_AGENT_WARNING_MB,
             wiki_count_warning: ALERT_WIKI_COUNT_WARNING,
             consult_timeout_rate_warning: ALERT_CONSULT_TIMEOUT_RATE_WARNING,
+            verycomplex_ratio_warning: ALERT_VERYCOMPLEX_RATIO_WARNING,
         }
     }
 }
 
 impl AlertThresholds {
     /// 创建自定义告警阈值
+    ///
+    /// WHY 保持 4 参数签名不变:向后兼容既有调用方(§3.4.1 第 5 条)。
+    /// `verycomplex_ratio_warning` 默认初始化为 `ALERT_VERYCOMPLEX_RATIO_WARNING`,
+    /// 如需自定义通过 `with_verycomplex_ratio_warning()` builder 设置。
     pub fn new(
         memory_critical_mb: f64,
         single_agent_warning_mb: f64,
@@ -443,7 +483,17 @@ impl AlertThresholds {
             single_agent_warning_mb,
             wiki_count_warning,
             consult_timeout_rate_warning: consult_timeout_rate_warning.clamp(0.0, 1.0),
+            verycomplex_ratio_warning: ALERT_VERYCOMPLEX_RATIO_WARNING,
         }
+    }
+
+    /// P2-8: 设置 VeryComplex 任务占比告警阈值(builder 模式,链式调用)
+    ///
+    /// WHY builder 而非修改 `new()` 签名:向后兼容既有调用方,
+    /// 新增字段通过 builder 设置,符合 §3.4.1 第 5 条向后兼容原则。
+    pub fn with_verycomplex_ratio_warning(mut self, ratio: f64) -> Self {
+        self.verycomplex_ratio_warning = ratio.clamp(0.0, 1.0);
+        self
     }
 
     /// 评估当前度量,返回触发的告警列表
@@ -513,6 +563,25 @@ impl AlertThresholds {
                     "Consult timeout rate {:.2}% exceeds warning threshold {:.2}%",
                     metrics.consult_timeout_rate * 100.0,
                     self.consult_timeout_rate_warning * 100.0
+                ),
+            ));
+        }
+
+        // P2-8 规则 5:VeryComplex 任务占比 > 30% → Warning
+        //
+        // VeryComplex 任务激活全部 4 个象限(MAX_QUADRANT_FANOUT),资源消耗是 Simple
+        // 任务(1 象限)的 4 倍。占比过高意味着系统持续高负载,应考虑将部分 VeryComplex
+        // 任务拆分为 Complex(3 象限)以降低资源压力。
+        if metrics.verycomplex_task_ratio > self.verycomplex_ratio_warning {
+            alerts.push(PdcaAlert::new(
+                "verycomplex_ratio_warning",
+                PdcaAlertSeverity::Warning,
+                metrics.verycomplex_task_ratio,
+                self.verycomplex_ratio_warning,
+                format!(
+                    "VeryComplex task ratio {:.1}% exceeds warning threshold {:.1}% (consider decomposing to Complex)",
+                    metrics.verycomplex_task_ratio * 100.0,
+                    self.verycomplex_ratio_warning * 100.0
                 ),
             ));
         }
@@ -651,6 +720,15 @@ impl PdcaLoop {
             pool_size = pool_size.saturating_sub(10);
         }
 
+        // P2-8: VeryComplex 占比高(> 30%):减小 pool_size 限制并发 VeryComplex 执行
+        //
+        // WHY 减 5 而非 10:VeryComplex 任务虽资源密集(4 象限),但减少过多 pool_size
+        // 会导致任务排队延迟升高。5 的减幅平衡资源压力与吞吐量,配合 plan_reflux 的
+        // 拆分建议渐进降级。
+        if metrics.verycomplex_task_ratio > ALERT_VERYCOMPLEX_RATIO_WARNING {
+            pool_size = pool_size.saturating_sub(5);
+        }
+
         // 校验调整后的分布总 Agent 数与 pool_size 一致
         // WHY 校验:确保 tier_distribution.total() <= pool_size,避免派生超限
         let total = distribution.total();
@@ -709,7 +787,9 @@ impl PdcaLoop {
             current_metrics.wiki_entry_count,
             // 单 Agent 驻留目标:降低 30%
             (current_metrics.max_single_agent_mb * 0.7).max(0.0),
-        );
+        )
+        // P2-8: VeryComplex 占比目标:降低 30%(与单 Agent 驻留目标一致)
+        .with_verycomplex_ratio((current_metrics.verycomplex_task_ratio * 0.7).clamp(0.0, 1.0));
 
         // 生成行动项列表
         let mut action_items = Vec::new();
@@ -750,6 +830,14 @@ impl PdcaLoop {
                 "Schedule archive migration: consider sqlite-vec or dedicated vector DB"
                     .to_string(),
             );
+        }
+
+        // P2-8: VeryComplex 占比高 → 建议拆分任务降低象限扇出
+        if current_metrics.verycomplex_task_ratio > ALERT_VERYCOMPLEX_RATIO_WARNING {
+            action_items.push(format!(
+                "Decompose VeryComplex tasks to Complex (reduce quadrant fanout 4→3, target ratio {:.1}%)",
+                current_metrics.verycomplex_task_ratio * 0.7 * 100.0
+            ));
         }
 
         if action_items.is_empty() {
@@ -806,6 +894,8 @@ mod tests {
         assert_eq!(m.consult_timeout_rate, 0.0);
         assert_eq!(m.wiki_entry_count, 0);
         assert_eq!(m.max_single_agent_mb, 0.0);
+        // P2-8: verycomplex_task_ratio 也应初始化为 0.0
+        assert_eq!(m.verycomplex_task_ratio, 0.0);
     }
 
     #[test]
@@ -865,6 +955,8 @@ mod tests {
         assert!((t.single_agent_warning_mb - 2.6).abs() < f64::EPSILON);
         assert_eq!(t.wiki_count_warning, 10_000);
         assert!((t.consult_timeout_rate_warning - 0.05).abs() < f64::EPSILON);
+        // P2-8: verycomplex_ratio_warning 默认值应为 0.3
+        assert!((t.verycomplex_ratio_warning - 0.3).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -917,10 +1009,93 @@ mod tests {
     #[test]
     fn test_evaluate_multiple_alerts_combined() {
         let t = AlertThresholds::default();
-        // 触发全部 4 条规则
-        let m = PdcaMetrics::new(140.0, 0.2, 5.0, 0.1, 15_000, 3.0);
+        // P2-8: 触发全部 5 条规则(含 VeryComplex 占比 > 30%)
+        let m = PdcaMetrics::new(140.0, 0.2, 5.0, 0.1, 15_000, 3.0).with_verycomplex_ratio(0.5);
         let alerts = t.evaluate(&m);
-        assert_eq!(alerts.len(), 4);
+        assert_eq!(alerts.len(), 5);
+        // 确认包含 VeryComplex 告警
+        assert!(alerts
+            .iter()
+            .any(|a| a.rule_id == "verycomplex_ratio_warning"));
+    }
+
+    // --- P2-8: VeryComplex 占比告警测试 ---
+
+    #[test]
+    fn test_evaluate_verycomplex_ratio_warning_alert() {
+        // P2-8 规则 5:VeryComplex 占比 > 30% → Warning
+        let t = AlertThresholds::default();
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 1.0).with_verycomplex_ratio(0.5); // 50% > 30% 阈值
+        let alerts = t.evaluate(&m);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].rule_id, "verycomplex_ratio_warning");
+        assert_eq!(alerts[0].severity, PdcaAlertSeverity::Warning);
+        assert!(alerts[0].message.contains("VeryComplex"));
+        assert!(alerts[0].message.contains("decomposing"));
+    }
+
+    #[test]
+    fn test_evaluate_verycomplex_ratio_at_threshold_no_alert() {
+        // 边界:占比恰好等于阈值(30%)不触发告警(> 而非 >=)
+        let t = AlertThresholds::default();
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 1.0).with_verycomplex_ratio(0.3); // 30% = 阈值,不触发
+        let alerts = t.evaluate(&m);
+        assert!(alerts.is_empty());
+    }
+
+    #[test]
+    fn test_evaluate_verycomplex_ratio_zero_no_alert() {
+        // 边界:占比为 0(无 VeryComplex 任务)不触发告警
+        let t = AlertThresholds::default();
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 1.0);
+        // verycomplex_task_ratio 默认为 0.0
+        let alerts = t.evaluate(&m);
+        assert!(alerts.is_empty());
+    }
+
+    #[test]
+    fn test_with_verycomplex_ratio_clamps_to_range() {
+        // P2-8: builder 应 clamp 到 [0.0, 1.0]
+        let m_low = PdcaMetrics::zero().with_verycomplex_ratio(-0.5);
+        assert_eq!(m_low.verycomplex_task_ratio, 0.0);
+
+        let m_high = PdcaMetrics::zero().with_verycomplex_ratio(1.5);
+        assert_eq!(m_high.verycomplex_task_ratio, 1.0);
+
+        let m_normal = PdcaMetrics::zero().with_verycomplex_ratio(0.42);
+        assert!((m_normal.verycomplex_task_ratio - 0.42).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_alert_thresholds_with_verycomplex_ratio_warning_builder() {
+        // P2-8: AlertThresholds builder 方法测试
+        let t = AlertThresholds::default().with_verycomplex_ratio_warning(0.15);
+        assert!((t.verycomplex_ratio_warning - 0.15).abs() < f64::EPSILON);
+
+        // 验证自定义阈值生效:15% 阈值下,20% 占比应触发告警
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 1.0).with_verycomplex_ratio(0.2);
+        let alerts = t.evaluate(&m);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].rule_id, "verycomplex_ratio_warning");
+    }
+
+    #[test]
+    fn test_alert_thresholds_with_verycomplex_ratio_warning_clamps() {
+        // P2-8: builder 应 clamp 到 [0.0, 1.0]
+        let t_low = AlertThresholds::default().with_verycomplex_ratio_warning(-0.1);
+        assert_eq!(t_low.verycomplex_ratio_warning, 0.0);
+
+        let t_high = AlertThresholds::default().with_verycomplex_ratio_warning(2.0);
+        assert_eq!(t_high.verycomplex_ratio_warning, 1.0);
+    }
+
+    #[test]
+    fn test_alert_thresholds_new_initializes_verycomplex_default() {
+        // P2-8: new() 应将 verycomplex_ratio_warning 初始化为默认常量
+        let t = AlertThresholds::new(100.0, 2.0, 5000, 0.03);
+        assert!(
+            (t.verycomplex_ratio_warning - ALERT_VERYCOMPLEX_RATIO_WARNING).abs() < f64::EPSILON
+        );
     }
 
     // --- PdcaLoop::check() 测试 ---
@@ -1002,6 +1177,26 @@ mod tests {
         assert_eq!(adj.pool_size, 40);
     }
 
+    #[test]
+    fn test_pdca_loop_act_high_verycomplex_ratio_reduces_pool() {
+        // P2-8: VeryComplex 占比 > 30% 时,pool_size 应减小 5
+        let loop_ = PdcaLoop::new();
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 0.5).with_verycomplex_ratio(0.5); // 50% > 30% 阈值
+        let adj = loop_.act(&m).expect("Act 成功");
+        // pool_size 应减小 5(50 → 45)
+        assert_eq!(adj.pool_size, 45);
+    }
+
+    #[test]
+    fn test_pdca_loop_act_verycomplex_at_threshold_no_reduction() {
+        // P2-8 边界:占比恰好等于阈值(30%)时不触发 pool_size 缩减
+        let loop_ = PdcaLoop::new();
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 0.5).with_verycomplex_ratio(0.3); // 30% = 阈值,不触发
+        let adj = loop_.act(&m).expect("Act 成功");
+        // pool_size 应保持 50
+        assert_eq!(adj.pool_size, 50);
+    }
+
     // --- PdcaLoop::plan_reflux() 测试 ---
 
     #[test]
@@ -1052,6 +1247,33 @@ mod tests {
 
         // 应包含 sqlite-vec 迁移建议
         assert!(reflux.action_items.iter().any(|s| s.contains("sqlite-vec")));
+    }
+
+    #[test]
+    fn test_plan_reflux_verycomplex_high_ratio_action() {
+        // P2-8: VeryComplex 占比高时,plan_reflux 应生成拆分建议行动项
+        let loop_ = PdcaLoop::new();
+        let current = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 0.5).with_verycomplex_ratio(0.5); // 50% > 30% 阈值
+        let adj = PdcaAdjustments::default_50agent();
+        let reflux = loop_.plan_reflux(&current, &adj).expect("Plan 成功");
+
+        // 应包含 VeryComplex 拆分建议
+        assert!(reflux
+            .action_items
+            .iter()
+            .any(|s| s.contains("Decompose VeryComplex")));
+    }
+
+    #[test]
+    fn test_plan_reflux_verycomplex_target_ratio_reduction() {
+        // P2-8: target_metrics 的 verycomplex_task_ratio 应降低 30%
+        let loop_ = PdcaLoop::new();
+        let current = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 0.5).with_verycomplex_ratio(0.5);
+        let adj = PdcaAdjustments::default_50agent();
+        let reflux = loop_.plan_reflux(&current, &adj).expect("Plan 成功");
+
+        // 0.5 × 0.7 = 0.35
+        assert!((reflux.target_metrics.verycomplex_task_ratio - 0.35).abs() < 1e-9);
     }
 
     // --- PdcaAlertSeverity 测试 ---

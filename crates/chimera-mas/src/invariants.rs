@@ -37,6 +37,24 @@
 //! - **非法图**: 含任意环(自环 / 多节点环),返回 `MasError::DelegationCycleDetected { cycle_path }`
 //! - **失败处理**: 返回带环路径的错误,调用方发布 Critical 事件并阻断涉环 Agent 派生
 //!
+//! #### P2-7: L5/L9 双实现说明(关键设计偏差)
+//!
+//! INV-9 在项目中存在**两处独立实现**,语义镜像但实现分离:
+//!
+//! | 层级 | crate | 调用场景 | 实现位置 |
+//! |------|-------|---------|---------|
+//! | **L9**(本模块) | `chimera-mas` | MAS 子系统运行时不变量,委托派生前调用 | `invariants.rs::check_inv9_delegation_acyclic()` |
+//! | **L5**(镜像) | `gsoe-evolution` | 通道 B CI 执行门,检查 spec 候选对应的委托图无环 | `ci_gate.rs::check_delegation_graph_acyclic()` |
+//!
+//! **WHY 双实现**:ADR-045 决策 8 示例代码暗示通道 B 调用
+//! `chimera_mas::invariants::InvariantChecker::check_inv9_delegation_acyclic`。但
+//! gsoe-evolution (L5) 依赖 chimera-mas (L9) 违反 §2.2 依赖铁律(L(N)→L(N+1) 禁止)。
+//! 按代码基线优先 + 架构铁律不可妥协原则,L5 层独立实现 INV-9 DFS 三色标记法环检测。
+//!
+//! **同步维护约定**:两处实现必须保持算法语义一致(DFS 三色标记法 + O(V+E) 复杂度 +
+//! 环路径返回格式)。修改任一实现时,必须同步审查另一实现,防止语义漂移。
+//! 详见 `gsoe-evolution/src/ci_gate.rs` §2(双实现偏差记录)+ ADR-045 决策 1。
+//!
 //! ## 设计原则
 //!
 //! - **纯函数**: `check_inv7_*` / `check_inv8_*` / `check_inv9_*` 不持有状态,不发布事件,

@@ -38,6 +38,7 @@ pub mod arbitration;
 pub mod checkpoint;
 pub mod config;
 pub mod control;
+pub mod coordination_metrics;
 pub mod dag;
 pub mod engine;
 pub mod error;
@@ -49,8 +50,13 @@ pub mod types;
 pub use arbitration::ArbitrationLayer;
 pub use checkpoint::CheckpointManager;
 pub use config::QuestConfig;
+// P2-1: 协调成本/推理增益比值度量(三重悖论推理悖论红线)
 pub use control::{
     handle_control_event, spawn_control_subscriber, spawn_control_subscriber_with_receiver,
+};
+pub use coordination_metrics::{
+    CoordinationCostSample, CoordinationMetricsCollector, CoordinationMetricsConfig,
+    CoordinationToGainRatio, InferenceGainSample,
 };
 pub use engine::QuestEngine;
 pub use error::QuestError;
