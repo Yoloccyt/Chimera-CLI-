@@ -423,9 +423,52 @@ fn assess_risk(program: &str, args: &[String]) -> u8 {
     10
 }
 
+/// 不可学习的安全绝对红线 — 任何学习/进化机制均不得覆盖的安全底线清单
+///
+/// 对应 ADR:ADR-049 决策 3(R2 合规策略)+ ADR-042(R2 冻结)
+/// 对应设计源:`chimera_ultimate_polish_v2.7.md` §8.3(安全层绝对红线)
+///
+/// # 消费方
+///
+/// - **L5 gsoe-evolution(AEGIS Critic,Phase 2)**:变体候选若触碰任一红线即丢弃
+/// - **L8 parliament(Variant 审议,Phase 3)**:Security 角色审查的否决依据
+/// - **L9 efficiency-monitor(RuntimeAuditor)**:审计发现的对照基准
+///
+/// # WHY 常量表而非配置
+///
+/// 红线的不可变性本身就是约束的一部分:若红线可由配置/运行时修改,
+/// 则存在被奖励黑客(reward hacking)游戏化的风险。编译期常量确保
+/// 任何变更必须经代码审查 + ADR 记录(同 `ImmutableSurface` 设计哲学)。
+pub const UNLEARNABLE_SECURITY_RULES: &[&str] = &[
+    "seccomp/gVisor 沙箱策略不可降低",
+    "Merkle 审计链完整性不可篡改",
+    "零孤儿调用保证(QEEP)不可绕过",
+    "最小权限底线不可突破",
+    "#![forbid(unsafe_code)] 不可移除",
+    "BudgetExceeded severity = Critical 不可降级",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// polish-v2.7 P1-4:红线常量表的完整性守护
+    ///
+    /// WHY 断言条数与内容:防止后续重构无意删减红线条目
+    /// (删减必须同步修改本测试,强制触发代码审查关注)。
+    #[test]
+    fn test_unlearnable_rules_completeness() {
+        assert_eq!(UNLEARNABLE_SECURITY_RULES.len(), 6);
+        assert!(UNLEARNABLE_SECURITY_RULES
+            .iter()
+            .any(|r| r.contains("forbid(unsafe_code)")));
+        assert!(UNLEARNABLE_SECURITY_RULES
+            .iter()
+            .any(|r| r.contains("BudgetExceeded")));
+        assert!(UNLEARNABLE_SECURITY_RULES
+            .iter()
+            .any(|r| r.contains("Merkle")));
+    }
 
     #[test]
     fn test_default_policy_blocks_injection() {

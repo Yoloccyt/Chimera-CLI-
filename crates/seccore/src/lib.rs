@@ -40,7 +40,9 @@ pub mod asa;
 pub mod audit;
 pub mod error;
 pub mod escalation;
-/// P4-W15.1.3: Spec Merkle 完整性校验（复用 audit.rs SHA-256 实现）
+/// gVisor runsc 运行时检测与子进程启动(ADR-001)
+pub mod gvisor;
+/// P4-W15.1.3: Spec Merkle 完整性校验(复用 audit.rs SHA-256 实现)
 pub mod merkle;
 pub mod policy;
 pub mod sandbox;
@@ -58,15 +60,20 @@ pub use audit::{
 };
 pub use error::SecCoreError;
 pub use escalation::{DefaultEscalationHandler, EscalationHandler};
+pub use gvisor::GvisorRuntime;
 // P4-W15.1.3: Merkle 完整性校验公共 API
 pub use merkle::{
     compute_merkle_root, hash_spec_canonical_input, verify_merkle_root, verify_spec_integrity,
 };
 pub use policy::{validate_command, validate_env, BlockedPattern, CommandPolicy, EnvPolicy};
+// polish-v2.7 P1-4: 不可学习安全红线常量表(ADR-049 决策 3,AEGIS/Variant 审议否决依据)
+pub use policy::UNLEARNABLE_SECURITY_RULES;
 pub use sandbox::Sandbox;
 // SandboxBackend 始终可用(默认 Process 变体);Wasm 变体仅 wasm-sandbox feature 启用时可用
 pub use sandbox_wasm::SandboxBackend;
 // WasmSandbox / WasmExecutionResult 仅 wasm-sandbox feature 启用时可用(ADR-035 决策 2)
 #[cfg(feature = "wasm-sandbox")]
 pub use sandbox_wasm::{WasmExecutionResult, WasmSandbox};
-pub use types::{AttackType, Command, CommandSpec, EscalationTier, ExecutionResult, RiskLevel};
+pub use types::{
+    AttackType, Command, CommandSpec, EscalationTier, ExecutionResult, GvisorConfig, RiskLevel,
+};

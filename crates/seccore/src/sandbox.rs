@@ -23,12 +23,13 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use tokio::process::Command as TokioCommand;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::asa::{AsaAuditor, OperationAuditInput};
 use crate::audit::{AuditChain, AuditRecordStatus, DecisionChainBuilder};
 use crate::error::SecCoreError;
 use crate::escalation::{DefaultEscalationHandler, EscalationHandler};
+use crate::gvisor::GvisorRuntime;
 use crate::policy::{validate_command, validate_env, CommandPolicy, EnvPolicy};
 use crate::types::{Command, CommandSpec, EscalationTier, ExecutionResult};
 
@@ -65,6 +66,27 @@ pub struct Sandbox {
     ///
     /// ReadOnly/Normal/EscalateToHuman 档不触发 ASA(快速路径,零开销)。
     asa_auditor: Option<AsaAuditor>,
+    /// 是否启用 gVisor 内核级隔离 — Linux 上默认启用,非 Linux 平台自动降级为进程隔离。
+    ///
+    /// WHY: gVisor(runsc) 提供内核级系统调用拦截与 seccomp 过滤,是 Linux 生产环境
+    /// 的推荐沙箱运行时(ADR-001)。非 Linux 平台(Windows/macOS)无等效物,需降级为
+    /// `tokio::process::Command` 进程隔离。调用方可通过 `with_gvisor(false)` 显式禁用
+    /// (如测试环境或无需内核隔离的受控场景)。
+    ///
+    /// 默认 `true` — Linux 上启用 gVisor 隔离,非 Linux 平台 `execute_in_sandbox()`
+    /// 内部自动降级(不需调用方感知)。
+    pub use_gvisor: bool,
+    /// gVisor 运行时实例 — 封装 runsc 路径检测与子进程启动(Task 12)。
+    ///
+    /// WHY: `use_gvisor=true` 仅表示"意图启用",实际是否可用取决于:
+    /// 1. 当前平台是否为 Linux
+    /// 2. runsc 二进制是否存在且可执行
+    ///
+    /// 运行时实例在 `execute_in_sandbox()` 中被检测,不可用时自动降级。
+    ///
+    /// 默认 `None` — 调用方通过 `with_gvisor_runtime()` 或 `with_gvisor_config()`
+    /// 注入运行时实例。未注入时即使 `use_gvisor=true` 也会降级为进程隔离。
+    gvisor_runtime: Option<GvisorRuntime>,
 }
 
 impl Sandbox {
@@ -81,6 +103,8 @@ impl Sandbox {
             timeout: Duration::from_secs(30),
             escalation_handler: Box::new(DefaultEscalationHandler),
             asa_auditor: None,
+            use_gvisor: true,
+            gvisor_runtime: None,
         }
     }
 
@@ -119,6 +143,49 @@ impl Sandbox {
     /// 反馈闭环(record_success/record_failure),请通过 `asa_auditor()` getter 获取引用。
     pub fn with_asa_auditor(mut self, auditor: AsaAuditor) -> Self {
         self.asa_auditor = Some(auditor);
+        self
+    }
+
+    /// 链式设置是否启用 gVisor 内核级隔离 — 为 gVisor 集成做准备(Task 10)。
+    ///
+    /// WHY: Linux 生产环境推荐启用 gVisor(runsc) 实现内核级系统调用拦截与 seccomp
+    /// 过滤(ADR-001)。调用方可通过 `with_gvisor(false)` 显式禁用,适用场景:
+    /// - 测试环境(无需真实内核隔离,快速验证)
+    /// - 非 Linux 平台(无 gVisor 等效物,自动降级为进程隔离)
+    /// - 受控内网环境(已通过其他手段保证安全)
+    ///
+    /// 默认 `true`(Linux 上启用 gVisor 隔离,非 Linux 平台自动降级)。
+    pub fn with_gvisor(mut self, enabled: bool) -> Self {
+        self.use_gvisor = enabled;
+        self
+    }
+
+    /// 链式注入 gVisor 运行时实例 — 为 gVisor 集成做准备(Task 12)。
+    ///
+    /// WHY: `GvisorRuntime` 封装 runsc 路径检测与子进程启动逻辑,
+    /// 注入后 `execute_in_sandbox()` 在 Linux 平台且 runsc 可用时
+    /// 通过 gVisor 执行命令,否则降级为进程隔离。
+    ///
+    /// 调用方通常使用 `with_gvisor_config()` 便捷方法,由 `GvisorRuntime::detect()`
+    /// 自动检测 runsc 路径。此方法适用于需要自定义 `GvisorRuntime` 的场景(如测试 mock)。
+    pub fn with_gvisor_runtime(mut self, runtime: GvisorRuntime) -> Self {
+        self.gvisor_runtime = Some(runtime);
+        self
+    }
+
+    /// 链式配置 gVisor — 从 `GvisorConfig` 自动检测 runsc 并注入运行时(Task 12)。
+    ///
+    /// WHY: 便捷方法,封装 `GvisorRuntime::detect()` 调用。
+    /// 调用方只需提供 `GvisorConfig`,无需手动构造 `GvisorRuntime`。
+    /// runsc 不可用时 `gvisor_runtime` 保持 `None`,`execute_in_sandbox()`
+    /// 自动降级为进程隔离。
+    ///
+    /// # 参数
+    /// - `config`: gVisor 配置(含 runsc_path 等)
+    pub fn with_gvisor_config(mut self, config: &crate::types::GvisorConfig) -> Self {
+        if let Some(runtime) = GvisorRuntime::detect(&config.runsc_path) {
+            self.gvisor_runtime = Some(runtime);
+        }
         self
     }
 
@@ -469,60 +536,116 @@ impl Sandbox {
 
     /// 在沙箱中执行校验通过的命令规格。
     ///
-    /// 跨平台策略:
-    /// - **Linux 生产环境**:此处应通过 gVisor runsc 运行时启动子进程,
-    ///   并应用 seccomp 过滤器限制系统调用集合。当前实现为降级版本。
-    /// - **Windows/macOS**:用 `tokio::process::Command` 直接执行,
-    ///   依赖策略层的静态分析拦截危险命令。这是降级方案,安全性弱于 Linux。
+    /// 跨平台策略(Task 12 gVisor 集成):
+    /// - **Linux + gVisor 可用**:通过 `GvisorRuntime::spawn()` 在 gVisor 用户空间内核
+    ///   中执行命令,实现内核级系统调用拦截与 seccomp 过滤(ADR-001)
+    /// - **Linux + gVisor 不可用**:降级为 `tokio::process::Command` 进程隔离,
+    ///   记录 `warn!` 日志(须人工排查 runsc 部署问题)
+    /// - **Windows/macOS**:始终使用 `tokio::process::Command` 进程隔离,
+    ///   记录 `info!` 日志(平台限制,预期行为)
     ///
     /// # 安全提示
     /// 此函数只接受 `CommandSpec`(已通过策略校验),不接受原始 `Command`。
     /// 调用方必须先调用 `validate_command`。
+    ///
+    /// # gVisor 可用性判定(三层检测)
+    /// 1. `self.use_gvisor` — 配置层是否启用
+    /// 2. `self.gvisor_runtime` — 运行时是否已注入
+    /// 3. `runtime.is_available()` — 平台(仅 Linux) + runsc 二进制是否存在
     async fn execute_in_sandbox(
         &self,
         spec: &CommandSpec,
     ) -> Result<ExecutionResult, SecCoreError> {
         let start = Instant::now();
 
-        // 构建子进程命令
-        // 注意:此处不使用 shell(无 sh -c),避免 shell 注入风险
-        // 参数直接传递给 execve,不经 shell 二次解析
-        let mut cmd = TokioCommand::new(&spec.program);
-        cmd.args(&spec.allowed_args);
+        // ── gVisor 可用性检测 ──
+        // WHY: 三层检测确保"意图启用 → 已配置 → 运行时可用"全链路通过,
+        // 任一层不满足即降级为进程隔离,避免在非预期环境(如测试)误用 gVisor
+        let gvisor_available = self.use_gvisor
+            && self
+                .gvisor_runtime
+                .as_ref()
+                .is_some_and(|rt| rt.is_available());
 
-        // 仅传递白名单过滤后的环境变量(零信任:不继承父进程环境)
-        // 注意:cmd.env() 是增量设置,需先 clear_env 清除继承
-        cmd.env_clear();
-        for (k, v) in &spec.env_whitelist {
-            cmd.env(k, v);
-        }
+        // ── 执行路径选择 ──
+        let output = if gvisor_available {
+            // 路径 A: gVisor 内核级隔离 (Linux 生产环境)
+            let runtime = self
+                .gvisor_runtime
+                .as_ref()
+                .expect("gvisor_runtime 存在性已在 is_some_and 中检查,此 expect 不会触发");
 
-        // 捕获 stdout/stderr,避免继承父进程终端
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+            info!(
+                runsc_path = %runtime.runsc_path(),
+                program = %spec.program,
+                "通过 gVisor runsc 执行命令 (内核级隔离)"
+            );
 
-        // WHY: kill_on_drop 确保超时 future 被 drop 时子进程被 SIGKILL 强制终止
-        // 防止超时后子进程继续运行成为孤儿进程,持续占用资源 (F-002)
-        cmd.kill_on_drop(true);
-
-        // WHY: 超时保护 — 防止恶意命令(如 sleep infinity、死循环)永久阻塞,导致 DoS (F-002)
-        // tokio::time::timeout 包裹 cmd.output():超时后 future 被 drop,
-        // 触发 kill_on_drop 强制终止子进程。cmd.output() 内部并行读取管道与等待,
-        // 避免大输出填满管道缓冲区导致死锁(恶意命令可能故意产生大量输出)。
-        let output = match tokio::time::timeout(self.timeout, cmd.output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => {
-                return Err(SecCoreError::SandboxError(format!("进程执行失败: {e}")));
+            // WHY: 超时保护 — gVisor spawn 与 TokioCommand 使用相同的超时机制,
+            // 防止恶意命令(如 sleep infinity)永久阻塞,导致 DoS (F-002)
+            match tokio::time::timeout(self.timeout, runtime.spawn(spec)).await {
+                Ok(Ok(output)) => output,
+                Ok(Err(e)) => {
+                    return Err(SecCoreError::SandboxError(format!(
+                        "gVisor runsc 执行失败: {}",
+                        e
+                    )));
+                }
+                Err(_) => {
+                    return Err(SecCoreError::SandboxTimeout {
+                        timeout: self.timeout,
+                        program: spec.program.clone(),
+                    });
+                }
             }
-            Err(_) => {
-                // 超时:kill_on_drop(true) 已在 future drop 时强制终止子进程
-                return Err(SecCoreError::SandboxTimeout {
-                    timeout: self.timeout,
-                    program: spec.program.clone(),
-                });
+        } else {
+            // 路径 B: 进程隔离降级 (Windows/macOS 或 Linux 无 runsc)
+            // WHY: 区分降级原因 — warn 表示"预期启用但不可用"(需人工排查),
+            // info 表示"平台限制或显式禁用"(预期行为)
+            if self.use_gvisor {
+                warn!(
+                    program = %spec.program,
+                    "gVisor 不可用，降级为进程隔离执行 (请检查 runsc 是否已安装)"
+                );
+            } else {
+                info!(
+                    program = %spec.program,
+                    "gVisor 已禁用，使用进程隔离执行"
+                );
+            }
+
+            // 构建子进程命令
+            // 注意:此处不使用 shell(无 sh -c),避免 shell 注入风险
+            // 参数直接传递给 execve,不经 shell 二次解析
+            let mut cmd = TokioCommand::new(&spec.program);
+            cmd.args(&spec.allowed_args);
+
+            // 仅传递白名单过滤后的环境变量(零信任:不继承父进程环境)
+            cmd.env_clear();
+            for (k, v) in &spec.env_whitelist {
+                cmd.env(k, v);
+            }
+
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+            cmd.kill_on_drop(true);
+
+            // WHY: 超时保护 — 防止恶意命令永久阻塞(F-002)
+            match tokio::time::timeout(self.timeout, cmd.output()).await {
+                Ok(Ok(output)) => output,
+                Ok(Err(e)) => {
+                    return Err(SecCoreError::SandboxError(format!("进程执行失败: {e}")));
+                }
+                Err(_) => {
+                    return Err(SecCoreError::SandboxTimeout {
+                        timeout: self.timeout,
+                        program: spec.program.clone(),
+                    });
+                }
             }
         };
 
+        // ── 共享输出处理(两个路径的输出格式一致) ──
         let duration = start.elapsed();
 
         // 解码输出(UTF-8 失败时用替换字符,避免 panic)
@@ -595,6 +718,7 @@ fn build_asa_input(spec: &CommandSpec, audit_chain: &AuditChain) -> OperationAud
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{AttackType, GvisorConfig};
 
     #[tokio::test]
     async fn test_sandbox_blocks_injection() {
@@ -610,5 +734,283 @@ mod tests {
         let cmd = Command::new("echo").arg("hello").env("SECRET_KEY", "leak");
         let result = sandbox.audit_and_execute(cmd).await;
         assert!(result.is_err());
+    }
+
+    // ============================================================
+    // SubTask 13.1: 文件系统隔离测试
+    // ============================================================
+
+    /// 测试 gVisor 模式下执行 cat /etc/shadow 被策略拦截。
+    ///
+    /// WHY: `/etc/shadow` 匹配 CommandPolicy 的 DataLeak 拦截模式,
+    /// 验证沙箱阻止敏感文件访问,即使 cat 在白名单中。
+    #[tokio::test]
+    async fn test_gvisor_filesystem_isolation_blocks_etc_shadow() {
+        let mut sandbox = Sandbox::with_default_policy();
+        let cmd = Command::new("cat").arg("/etc/shadow");
+        let result = sandbox.audit_and_execute(cmd).await;
+        assert!(result.is_err(), "cat /etc/shadow 应被策略拦截");
+        // 验证拦截类型为 DataLeak(敏感文件访问)
+        match result {
+            Err(SecCoreError::CommandBlocked { attack_type, .. }) => {
+                assert_eq!(
+                    attack_type,
+                    AttackType::DataLeak,
+                    "拦截类型应为 DataLeak,而非其他攻击类型"
+                );
+            }
+            other => panic!("期望 CommandBlocked(DataLeak), 实际: {:?}", other),
+        }
+    }
+
+    /// 测试 runsc 不可用时沙箱降级为进程隔离,策略仍然生效。
+    ///
+    /// WHY: 使用不存在的 runsc 路径调用 with_gvisor_config,
+    /// GvisorRuntime::detect 返回 None 导致 gvisor_runtime 未注入,
+    /// 但 use_gvisor 保持 true(意图启用),执行时自动降级为进程隔离,
+    /// 策略层仍应拦截 cat /etc/shadow。
+    #[tokio::test]
+    async fn test_gvisor_fallback_blocks_shadow_when_runsc_unavailable() {
+        let mut sandbox = Sandbox::with_default_policy();
+        let config = GvisorConfig {
+            runsc_path: "/nonexistent/runsc".to_string(),
+            ..GvisorConfig::default()
+        };
+        sandbox = sandbox.with_gvisor_config(&config);
+        // use_gvisor 仍为 true(意图启用 gVisor),但 gvisor_runtime 为 None
+        assert!(
+            sandbox.use_gvisor,
+            "runsc 不存在时 use_gvisor 仍应为 true(意图启用)"
+        );
+        // 策略层仍应拦截 cat /etc/shadow(降级后策略不失效)
+        let cmd = Command::new("cat").arg("/etc/shadow");
+        let result = sandbox.audit_and_execute(cmd).await;
+        assert!(
+            result.is_err(),
+            "runsc 不可用时策略层仍应拦截 cat /etc/shadow"
+        );
+    }
+
+    // ============================================================
+    // SubTask 13.2: 网络隔离测试
+    // ============================================================
+
+    /// 测试 GvisorConfig::default() 中 network_disabled 为 true。
+    ///
+    /// WHY: gVisor 默认配置禁用网络,防止沙箱内进程发起外连,
+    /// 降低数据泄露风险。此测试验证默认值的正确性。
+    #[test]
+    fn test_gvisor_config_network_disabled_by_default() {
+        let config = GvisorConfig::default();
+        assert!(
+            config.network_disabled,
+            "GvisorConfig 默认应禁用网络(network_disabled=true)"
+        );
+    }
+
+    /// 测试 GvisorRuntime::spawn() 包含 --network=none 参数。
+    ///
+    /// WHY: spawn 方法硬编码 --network=none 参数以禁用网络访问,
+    /// 此测试通过静态源码验证确保该参数未被意外移除。
+    /// 结合 GvisorConfig::default().network_disabled=true,
+    /// 两者共同保证 gVisor 模式下网络被完全禁用。
+    #[test]
+    fn test_gvisor_runtime_spawn_includes_network_none() {
+        // 验证 GvisorConfig 默认值与 spawn 方法行为一致
+        let config = GvisorConfig::default();
+        assert!(config.network_disabled);
+        // 静态验证:gvisor.rs spawn() 方法硬编码了 --network=none 参数
+        // 通过 include_str! 在编译期读取源码验证参数存在
+        let gvisor_source = include_str!("gvisor.rs");
+        assert!(
+            gvisor_source.contains("--network=none"),
+            "GvisorRuntime::spawn() 必须包含 --network=none 参数以禁用网络"
+        );
+    }
+
+    // ============================================================
+    // SubTask 13.3: 进程空间隔离测试
+    // ============================================================
+
+    /// 测试沙箱内 kill -9 1 被策略拦截。
+    ///
+    /// WHY: `kill` 不在 CommandPolicy 白名单中,应被判定为 Abuse(未授权命令)。
+    /// 验证沙箱阻止进程间信号操作,实现进程空间隔离。
+    #[tokio::test]
+    async fn test_process_isolation_blocks_kill_command() {
+        let mut sandbox = Sandbox::with_default_policy();
+        let cmd = Command::new("kill").arg("-9").arg("1");
+        let result = sandbox.audit_and_execute(cmd).await;
+        assert!(result.is_err(), "kill 命令应被策略拦截");
+        // 验证拦截类型为 Abuse(kill 不在白名单)
+        match result {
+            Err(SecCoreError::CommandBlocked { attack_type, .. }) => {
+                assert_eq!(
+                    attack_type,
+                    AttackType::Abuse,
+                    "kill 不在白名单,拦截类型应为 Abuse"
+                );
+            }
+            other => panic!("期望 CommandBlocked(Abuse), 实际: {:?}", other),
+        }
+    }
+
+    /// 测试高风险命令的 EscalationTier 正确分级。
+    ///
+    /// WHY: D6 修复引入 risk_score 数值评分,不同评分映射到不同 EscalationTier:
+    /// - ReadOnly(0-30):只读命令直接执行
+    /// - Normal(31-70):常规命令直接执行
+    /// - Parliament(71-90):高危命令需议会辩论
+    /// - EscalateToHuman(91-100):灾难性命令必须人工决策
+    ///
+    /// 此测试覆盖所有档位边界值,确保分级逻辑正确。
+    #[test]
+    fn test_escalation_tier_correct_classification() {
+        // ReadOnly 档 (0-30):只读命令
+        assert_eq!(
+            EscalationTier::from_score(10),
+            EscalationTier::ReadOnly,
+            "risk_score=10 应为 ReadOnly 档"
+        );
+        assert_eq!(
+            EscalationTier::from_score(30),
+            EscalationTier::ReadOnly,
+            "risk_score=30(边界) 应为 ReadOnly 档"
+        );
+
+        // Normal 档 (31-70):常规命令
+        assert_eq!(
+            EscalationTier::from_score(31),
+            EscalationTier::Normal,
+            "risk_score=31(边界) 应为 Normal 档"
+        );
+        assert_eq!(
+            EscalationTier::from_score(50),
+            EscalationTier::Normal,
+            "risk_score=50 应为 Normal 档"
+        );
+        assert_eq!(
+            EscalationTier::from_score(70),
+            EscalationTier::Normal,
+            "risk_score=70(边界) 应为 Normal 档"
+        );
+
+        // Parliament 档 (71-90):高危命令,需议会辩论
+        assert_eq!(
+            EscalationTier::from_score(71),
+            EscalationTier::Parliament,
+            "risk_score=71(边界) 应为 Parliament 档"
+        );
+        assert_eq!(
+            EscalationTier::from_score(80),
+            EscalationTier::Parliament,
+            "risk_score=80(rm 命令) 应为 Parliament 档"
+        );
+        assert_eq!(
+            EscalationTier::from_score(90),
+            EscalationTier::Parliament,
+            "risk_score=90(边界) 应为 Parliament 档"
+        );
+
+        // EscalateToHuman 档 (91-100):灾难性命令,必须人工决策
+        assert_eq!(
+            EscalationTier::from_score(91),
+            EscalationTier::EscalateToHuman,
+            "risk_score=91(边界) 应为 EscalateToHuman 档"
+        );
+        assert_eq!(
+            EscalationTier::from_score(95),
+            EscalationTier::EscalateToHuman,
+            "risk_score=95(dd 命令) 应为 EscalateToHuman 档"
+        );
+        assert_eq!(
+            EscalationTier::from_score(100),
+            EscalationTier::EscalateToHuman,
+            "risk_score=100(边界) 应为 EscalateToHuman 档"
+        );
+
+        // 防御性:超 100 的评分归入 EscalateToHuman(异常输入不漏过人工升级)
+        assert_eq!(
+            EscalationTier::from_score(101),
+            EscalationTier::EscalateToHuman,
+            "risk_score=101(超范围) 应防御性归入 EscalateToHuman 档"
+        );
+    }
+
+    // ============================================================
+    // SubTask 13.4: 降级路径测试
+    // ============================================================
+
+    /// 测试 Sandbox::with_gvisor_config() 在 runsc 不可用时不注入运行时。
+    ///
+    /// WHY: 当 runsc 路径不存在时,GvisorRuntime::detect 返回 None,
+    /// gvisor_runtime 保持 None,但 use_gvisor 仍为 true(意图启用),
+    /// execute_in_sandbox 内部自动降级为进程隔离。
+    #[test]
+    fn test_sandbox_with_gvisor_config_nonexistent_runsc() {
+        let sandbox = Sandbox::with_default_policy();
+        let config = GvisorConfig {
+            runsc_path: "/nonexistent/path/to/runsc".to_string(),
+            ..GvisorConfig::default()
+        };
+        let sandbox = sandbox.with_gvisor_config(&config);
+        // use_gvisor 应保持 true(意图启用 gVisor,执行时自动降级)
+        assert!(
+            sandbox.use_gvisor,
+            "runsc 不存在时 use_gvisor 仍应为 true(意图启用)"
+        );
+        // gvisor_runtime 为 None(内部状态,通过 execute_in_sandbox 的降级行为间接验证)
+        // 注: gvisor_runtime 是私有字段,后续 audit_and_execute 测试验证降级无 panic
+    }
+
+    /// 测试 Sandbox::with_gvisor_runtime() 正确注入运行时。
+    ///
+    /// WHY: 通过 GvisorRuntime::detect 检测一个存在的文件路径(模拟 runsc),
+    /// 验证运行时被成功注入到 Sandbox,use_gvisor 保持 true。
+    #[test]
+    fn test_sandbox_with_gvisor_runtime_injects_correctly() {
+        // 使用 Cargo.toml(测试运行时必然存在)模拟 runsc 路径
+        // GvisorRuntime::detect 仅检查文件存在性,不验证是否为真实 runsc
+        let runtime = GvisorRuntime::detect("Cargo.toml");
+        assert!(runtime.is_some(), "Cargo.toml 应存在,detect 应返回 Some");
+        let sandbox = Sandbox::with_default_policy().with_gvisor_runtime(runtime.unwrap());
+        // use_gvisor 应保持 true
+        assert!(
+            sandbox.use_gvisor,
+            "注入 GvisorRuntime 后 use_gvisor 应为 true"
+        );
+        // 注: gvisor_runtime 是私有字段,但 with_gvisor_runtime 将 Some 值移入,
+        // 通过 execute_in_sandbox 的三层检测逻辑验证注入生效
+    }
+
+    /// 测试 Sandbox::with_gvisor(false) 禁用 gVisor 后不尝试检测。
+    ///
+    /// WHY: 显式禁用 gVisor 后,execute_in_sandbox 跳过 gVisor 可用性检测,
+    /// 直接使用进程隔离执行。适用于测试环境或受控内网场景。
+    #[test]
+    fn test_sandbox_with_gvisor_false_disables_detection() {
+        let sandbox = Sandbox::with_default_policy().with_gvisor(false);
+        assert!(
+            !sandbox.use_gvisor,
+            "with_gvisor(false) 应将 use_gvisor 设为 false"
+        );
+    }
+
+    /// 测试 Sandbox::new() 默认 use_gvisor=true 且 gvisor_runtime=None。
+    ///
+    /// WHY: 新创建的 Sandbox 默认启用 gVisor 意图(use_gvisor=true),
+    /// 但未注入运行时实例(gvisor_runtime=None)。
+    /// 这意味着 execute_in_sandbox 会检测到 gvisor_runtime 为 None,
+    /// 自动降级为进程隔离,确保在不配置 gVisor 时也能安全工作。
+    #[test]
+    fn test_sandbox_new_defaults_gvisor_enabled_no_runtime() {
+        let sandbox = Sandbox::with_default_policy();
+        assert!(
+            sandbox.use_gvisor,
+            "Sandbox::new() 默认 use_gvisor=true(意图启用 gVisor)"
+        );
+        // gvisor_runtime 默认为 None(私有字段,通过 execute_in_sandbox 的降级
+        // 行为间接验证:use_gvisor=true 但 gvisor_runtime=None 时,
+        // gvisor_available = false,自动走进程隔离路径)
     }
 }

@@ -102,6 +102,7 @@
 //! assert_eq!(policy.profile(), DecayProfile::Strict);
 //! ```
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 use nexus_contracts::{DecayPolicy, DecayProfile};
@@ -158,6 +159,21 @@ pub struct DecayLearnerHolder {
     /// - 写路径（`update_policy`）低频（每秒 < 1 次）
     /// - `RwLock` 允许并发读，避免读路径串行化
     policy: RwLock<DecayPolicy>,
+
+    /// P2-11: fallback 触发次数计数器(metrics 埋点)
+    ///
+    /// 三层 fallback 触发点均会递增:
+    /// - 异常回退层: `update_policy()` 中 `PoisonError` 自动回退
+    /// - 熔断入口层: `fallback_to_static()` 主动回退
+    ///
+    /// WHY `AtomicU64` 而非 `Mutex<u64>`:
+    /// - fallback 可能在 panic 恢复路径触发,无锁更安全
+    /// - 读路径(`fallback_count`)高频且无副作用,原子读取即可
+    /// - 写路径原子 `fetch_add` 无需持锁,符合 §4.4 反模式 1(禁止持锁 .await)合规
+    ///
+    /// 调用方通过 `take_fallback_count()` 周期性取出增量并发布
+    /// `DecayMetricsReported` 事件,用于监控 learner 健康度。
+    fallback_count: AtomicU64,
 }
 
 impl DecayLearnerHolder {
@@ -170,6 +186,7 @@ impl DecayLearnerHolder {
     pub fn new() -> Self {
         Self {
             policy: RwLock::new(DecayPolicy::fallback()),
+            fallback_count: AtomicU64::new(0),
         }
     }
 
@@ -179,6 +196,7 @@ impl DecayLearnerHolder {
     pub fn with_policy(policy: DecayPolicy) -> Self {
         Self {
             policy: RwLock::new(policy),
+            fallback_count: AtomicU64::new(0),
         }
     }
 
@@ -211,10 +229,13 @@ impl DecayLearnerHolder {
     pub fn update_policy(&self, policy: DecayPolicy) {
         // WHY unwrap_or_else: RwLock poison 时 fallback 到 Static(Standard)
         // 避免调用方处理 PoisonError（C4 合规：本地 fallback，无错误传播）
+        // P2-11: PoisonError 路径属于"异常回退层" fallback,计数 +1
         let mut guard = self.policy.write().unwrap_or_else(|p| {
             // PoisonError 时恢复锁并写入 fallback
             let mut guard = p.into_inner();
             *guard = DecayPolicy::fallback();
+            // 记录异常回退层 fallback(metrics 埋点)
+            self.fallback_count.fetch_add(1, Ordering::Relaxed);
             guard
         });
         *guard = policy;
@@ -224,6 +245,12 @@ impl DecayLearnerHolder {
     ///
     /// WHY 提供：`omega-learner` 触发学习熔断（spec.md:335 S6 灰度阶段目标
     /// 达成率降 >2%）时，上层调用方调用此方法立即回退到静态策略。
+    ///
+    /// # P2-11 计数说明
+    ///
+    /// 此方法对应"熔断入口层" fallback,计数 +1。
+    /// 不复用 `update_policy()` 以避免双重计数(熔断 + PoisonError 路径)
+    /// —— 本方法是 sync 正常路径,不会触发 PoisonError。
     ///
     /// # 示例
     ///
@@ -237,7 +264,74 @@ impl DecayLearnerHolder {
     /// assert_eq!(holder.profile(), DecayProfile::Standard);
     /// ```
     pub fn fallback_to_static(&self) {
-        self.update_policy(DecayPolicy::fallback());
+        // 直接操作锁,不复用 update_policy(避免计数歧义)
+        let mut guard = self.policy.write().unwrap_or_else(|p| {
+            // 极端情况:熔断时锁已 poison,同时计数
+            let mut guard = p.into_inner();
+            *guard = DecayPolicy::fallback();
+            self.fallback_count.fetch_add(1, Ordering::Relaxed);
+            guard
+        });
+        *guard = DecayPolicy::fallback();
+        // 记录熔断入口层 fallback(metrics 埋点)
+        self.fallback_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 返回累计 fallback 触发次数(P2-11 metrics 埋点)
+    ///
+    /// 计数范围:自创建以来所有 fallback 触发(含异常回退层 + 熔断入口层)
+    ///
+    /// # 性能
+    ///
+    /// `AtomicU64::load` 无锁,~1ns。可安全在热路径调用。
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// use nexus_contracts::DecayPolicy;
+    /// use nexus_contracts::DecayProfile;
+    /// use decay_engine::learner_holder::DecayLearnerHolder;
+    ///
+    /// let holder = DecayLearnerHolder::new();
+    /// assert_eq!(holder.fallback_count(), 0);
+    ///
+    /// holder.fallback_to_static();
+    /// assert_eq!(holder.fallback_count(), 1);
+    /// ```
+    pub fn fallback_count(&self) -> u64 {
+        self.fallback_count.load(Ordering::Relaxed)
+    }
+
+    /// 取出累计 fallback 次数并重置为 0(P2-11 metrics 埋点)
+    ///
+    /// 用于周期性上报场景:调用方定期 `take` 并发布 `DecayMetricsReported` 事件,
+    /// 避免 fallback 高频时事件风暴(单次事件携带 delta 而非累计值)。
+    ///
+    /// # 原子语义
+    ///
+    /// `swap(0)` 是原子读-改-写操作,保证:
+    /// - 并发 `take` 不会丢失计数
+    /// - `take` 与 `fallback_to_static` 并发时计数准确
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// use nexus_contracts::DecayPolicy;
+    /// use nexus_contracts::DecayProfile;
+    /// use decay_engine::learner_holder::DecayLearnerHolder;
+    ///
+    /// let holder =
+    ///     DecayLearnerHolder::with_policy(DecayPolicy::learned(1, DecayProfile::Aggressive));
+    ///
+    /// holder.fallback_to_static();
+    /// holder.fallback_to_static();
+    ///
+    /// let delta = holder.take_fallback_count();
+    /// assert_eq!(delta, 2);
+    /// assert_eq!(holder.fallback_count(), 0);
+    /// ```
+    pub fn take_fallback_count(&self) -> u64 {
+        self.fallback_count.swap(0, Ordering::Relaxed)
     }
 
     /// 返回当前激活的策略（快照）
@@ -300,8 +394,18 @@ impl Clone for DecayLearnerHolder {
     ///
     /// WHY 提供：上层编排器可能需要克隆 `DecayLearnerHolder`
     /// 用于快照或并行处理。克隆后两者策略独立演化，互不影响。
+    ///
+    /// # P2-11 计数器独立性
+    ///
+    /// 克隆时 `fallback_count` 重置为 0(独立计数):
+    /// - 克隆产生的新 holder 是独立监控单元
+    /// - 避免原 holder 的历史 fallback 计数污染新 holder 的 metrics
+    /// - 调用方若需保留累计计数,应显式 `take_fallback_count()` 后合并
     fn clone(&self) -> Self {
-        Self::with_policy(self.current_policy())
+        Self {
+            policy: RwLock::new(self.current_policy()),
+            fallback_count: AtomicU64::new(0),
+        }
     }
 }
 
@@ -640,5 +744,119 @@ mod tests {
         holder.update_policy(DecayPolicy::static_policy(DecayProfile::Lenient));
         assert!(!holder.is_learned());
         assert_eq!(holder.profile(), DecayProfile::Lenient);
+    }
+
+    // ============================================================
+    // P2-11: fallback_count metrics 埋点测试
+    // ============================================================
+    // 对应任务: decay-engine learner_holder fallback 策略缺乏 metrics 埋点
+    // 设计: 三层 fallback 触发点均计数,提供 fallback_count() / take_fallback_count()
+    // WHY: 调用方/运维方需感知 fallback 何时发生、发生次数,以监控 learner 健康度
+
+    #[test]
+    fn test_fallback_count_initial_zero() {
+        // 初始化时 fallback_count 必须为 0(未触发任何 fallback)
+        let holder = DecayLearnerHolder::new();
+        assert_eq!(holder.fallback_count(), 0);
+    }
+
+    #[test]
+    fn test_fallback_count_increments_on_fallback_to_static() {
+        // fallback_to_static() 触发熔断入口层 fallback,计数 +1
+        let holder =
+            DecayLearnerHolder::with_policy(DecayPolicy::learned(1, DecayProfile::Aggressive));
+        assert_eq!(holder.fallback_count(), 0);
+
+        holder.fallback_to_static();
+        assert_eq!(holder.fallback_count(), 1);
+
+        // 多次 fallback 累加
+        holder.fallback_to_static();
+        assert_eq!(holder.fallback_count(), 2);
+    }
+
+    #[test]
+    fn test_fallback_count_no_increment_on_normal_update() {
+        // 正常 update_policy(非 fallback 路径)不应增加 fallback_count
+        let holder = DecayLearnerHolder::new();
+        assert_eq!(holder.fallback_count(), 0);
+
+        holder.update_policy(DecayPolicy::learned(1, DecayProfile::Strict));
+        assert_eq!(holder.fallback_count(), 0, "正常 Learned 更新不应计数");
+
+        holder.update_policy(DecayPolicy::learned(2, DecayProfile::Aggressive));
+        assert_eq!(holder.fallback_count(), 0, "正常版本升级不应计数");
+
+        holder.update_policy(DecayPolicy::static_policy(DecayProfile::Lenient));
+        assert_eq!(holder.fallback_count(), 0, "正常 Static 更新不应计数");
+    }
+
+    #[test]
+    fn test_take_fallback_count_resets_counter() {
+        // take_fallback_count() 返回累计计数并重置为 0
+        // 用于周期性上报场景:调用方定期 take 并发布 metrics 事件
+        let holder =
+            DecayLearnerHolder::with_policy(DecayPolicy::learned(1, DecayProfile::Aggressive));
+
+        holder.fallback_to_static();
+        holder.fallback_to_static();
+        assert_eq!(holder.fallback_count(), 2);
+
+        // take 返回 2 并重置
+        let taken = holder.take_fallback_count();
+        assert_eq!(taken, 2);
+        assert_eq!(holder.fallback_count(), 0, "take 后计数应重置");
+
+        // 再次 take 返回 0(无新增 fallback)
+        let taken_again = holder.take_fallback_count();
+        assert_eq!(taken_again, 0);
+    }
+
+    #[test]
+    fn test_take_fallback_count_delta_after_period() {
+        // 模拟周期性上报场景:两次 take 之间的增量为 delta
+        let holder = DecayLearnerHolder::new();
+
+        // 第一次周期:无 fallback
+        let delta1 = holder.take_fallback_count();
+        assert_eq!(delta1, 0);
+
+        // 第二次周期:触发 3 次 fallback
+        holder.fallback_to_static();
+        holder.fallback_to_static();
+        holder.fallback_to_static();
+        let delta2 = holder.take_fallback_count();
+        assert_eq!(delta2, 3, "第二次周期 delta 应为 3");
+
+        // 第三次周期:无新增
+        let delta3 = holder.take_fallback_count();
+        assert_eq!(delta3, 0);
+    }
+
+    #[test]
+    fn test_fallback_count_thread_safe_concurrent() {
+        // 并发场景:多线程同时 fallback_to_static,计数必须准确
+        // WHY AtomicU64:无锁并发安全,符合 §4.4 反模式 1(禁止持锁 .await)合规
+        use std::sync::Arc;
+        use std::thread;
+
+        let holder = Arc::new(DecayLearnerHolder::new());
+        let mut handles = vec![];
+
+        for _ in 0..8 {
+            let h = Arc::clone(&holder);
+            handles.push(thread::spawn(move || {
+                for _ in 0..100 {
+                    h.fallback_to_static();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // 8 线程 × 100 次 = 800 次 fallback
+        assert_eq!(holder.fallback_count(), 800);
     }
 }

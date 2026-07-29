@@ -27,6 +27,8 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 # 审计/拦截事件日志
 tracing = { workspace = true }
+# UUID v4 生成(gVisor 沙箱名防冲突)
+uuid = { workspace = true, features = ["v4"] }
 # Event Bus:L1 事件总线,发布 AsaIntervention 事件通知 Parliament 干预决策(§2.2 跨层通信唯一通道)
 event-bus = { path = "../event-bus" }
 # WASM 沙箱后端(ADR-035 决策 2,可选):仅在 `wasm-sandbox` feature 启用时引入。

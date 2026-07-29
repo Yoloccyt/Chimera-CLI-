@@ -208,3 +208,34 @@ pub struct ExecutionResult {
     /// 执行结果摘要(SHA-256 十六进制)
     pub audit_hash: String,
 }
+
+/// gVisor 运行时配置 — 为 gVisor 集成做准备(Task 10)。
+///
+/// 定义 gVisor(runsc) 运行时的路径、沙箱命名、网络策略和平台限制。
+/// Linux 上通过 `Sandbox::use_gvisor` 控制是否启用 gVisor 隔离,
+/// 非 Linux 平台自动降级为进程隔离(参考 `Sandbox` 文档注释)。
+///
+/// 对应 ADR-001:沙箱运行时选择 gVisor,Linux 优先。
+#[derive(Debug, Clone)]
+pub struct GvisorConfig {
+    /// runsc 二进制路径(默认 "/usr/local/bin/runsc")
+    pub runsc_path: String,
+    /// 沙箱名称前缀(默认 "chimera"),实际沙箱名称为 `{prefix}-{uuid}`
+    pub sandbox_name_prefix: String,
+    /// 是否禁用网络(默认 true)。禁用网络可防止沙箱内进程发起外连,
+    /// 降低数据泄露风险,适用于大多数命令执行场景。
+    pub network_disabled: bool,
+    /// 平台限制:仅 Linux 可用(预留字段,用于运行时平台检测)
+    pub platform: String,
+}
+
+impl Default for GvisorConfig {
+    fn default() -> Self {
+        Self {
+            runsc_path: "/usr/local/bin/runsc".into(),
+            sandbox_name_prefix: "chimera".into(),
+            network_disabled: true,
+            platform: "linux".into(),
+        }
+    }
+}

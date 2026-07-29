@@ -53,7 +53,7 @@
 //! }
 //!
 //! // 2. 查询激活状态（初始全部未激活）
-//! assert!(!registry.should_activate_learned(SeamId::S6Decay, 0));
+//! assert!(!registry.should_activate_learned(SeamId::S6Decay, 0).unwrap());
 //!
 //! // 3. S6 接缝记录多次成功 outcome + 提升
 //! for _ in 0..20 {
@@ -62,8 +62,8 @@
 //! }
 //!
 //! // 4. S6 接缝激活，其他接缝仍为初始状态
-//! assert!(registry.should_activate_learned(SeamId::S6Decay, 0));
-//! assert!(!registry.should_activate_learned(SeamId::S1Density, 0));
+//! assert!(registry.should_activate_learned(SeamId::S6Decay, 0).unwrap());
+//! assert!(!registry.should_activate_learned(SeamId::S1Density, 0).unwrap());
 //! ```
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -126,7 +126,7 @@ pub fn current_utc_secs() -> Result<i64, DecayError> {
 /// registry.register_capability_token(SeamId::S6Decay).unwrap();
 ///
 /// // 初始状态：Provisional，不允许 Learned
-/// assert!(!registry.should_activate_learned(SeamId::S6Decay, 0));
+/// assert!(!registry.should_activate_learned(SeamId::S6Decay, 0).unwrap());
 /// ```
 #[derive(Debug)]
 pub struct CapabilityTokenRegistry {
@@ -523,10 +523,10 @@ mod tests {
     }
 
     #[test]
-    fn test_with_all_seams_registers_six() {
+    fn test_with_all_seams_registers_seven() {
         let registry = CapabilityTokenRegistry::with_all_seams();
         let tokens = registry.list_tokens();
-        assert_eq!(tokens.len(), 6);
+        assert_eq!(tokens.len(), 7);
         for seam in SeamId::all() {
             assert!(
                 tokens.iter().any(|(s, _, _, _, _)| *s == seam),
