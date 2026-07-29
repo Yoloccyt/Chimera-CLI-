@@ -372,6 +372,9 @@ mod tests {
     }
 
     #[test]
+    // WHY allow: 本测试专为验证 Default trait 实现可用,必须显式调用 default()
+    // (clippy 建议的 `CriticMonotonicityChecker` 字面量恰恰绕过了被测路径)
+    #[allow(clippy::default_constructed_unit_structs)]
     fn test_default_trait_impl() {
         let c = CriticMonotonicityChecker::default();
         let result = c.verify_monotonicity(&[1.0], &[0.5]);

@@ -63,6 +63,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// polish-v2.7 closure Stage B-7:AutoBuilder 双智能体环境构建骨架(快手 KAT,ADR-049 降级档)
+///
+/// 骨架期默认不接线:沙箱执行器经 `SandboxExec` trait 由调用方注入,
+/// 真实接线时由上层编排器提供 seccore Sandbox 适配层。
+pub mod auto_builder;
 pub mod config;
 pub mod error;
 pub mod feedback;
@@ -75,6 +80,11 @@ pub mod types;
 pub mod verifier;
 
 // === 关键类型重导出,简化外部导入 ===
+// polish-v2.7 closure Stage B-7:AutoBuilder 骨架公开 API 重导出
+pub use auto_builder::{
+    AutoBuilder, BuildAgent, BuildFailure, BuildResult, BuildScript, ExecReport, ManifestKind,
+    RepoLayout, SandboxExec, Verification, VerifyAgent,
+};
 pub use config::PvlConfig;
 pub use error::PvlError;
 pub use feedback::FeedbackChannel;

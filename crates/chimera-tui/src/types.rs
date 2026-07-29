@@ -111,6 +111,12 @@ pub enum PanelId {
     /// (任务理解/可控执行/变更验证/可靠交付/经验沉淀)
     /// 与最近 `AuditFindingRaised` 审计发现列表,数据从 `latest_events` 派生。
     SelfAssessment,
+
+    /// DAG 可视化面板(polish-v2.7 closure Stage B-10,北大 DataFlow)
+    ///
+    /// 展示 `quest_list` 中各 Quest 的任务 DAG 层级树
+    /// (依赖深度缩进 + 状态标记 + 依赖边标注),数据零管道侵入。
+    DagViz,
 }
 
 impl PanelId {
@@ -138,6 +144,7 @@ impl PanelId {
             PanelId::Sysinfo => "Sysinfo",
             PanelId::Chat => "Chat",
             PanelId::SelfAssessment => "SelfAssessment",
+            PanelId::DagViz => "DagViz",
         }
     }
 
@@ -165,6 +172,7 @@ impl PanelId {
             PanelId::Sysinfo => " System Info ",
             PanelId::Chat => " Chat ",
             PanelId::SelfAssessment => " Self Assessment ",
+            PanelId::DagViz => " DAG Viz ",
         }
     }
 
@@ -197,14 +205,16 @@ impl PanelId {
             PanelId::Sysinfo => PanelId::Chat,
             // polish-v2.7 P1-5:SelfAssessment 插入 Chat 与 Quest 之间(循环末尾)
             PanelId::Chat => PanelId::SelfAssessment,
-            PanelId::SelfAssessment => PanelId::Quest,
+            // closure Stage B-10:DagViz 插入 SelfAssessment 与 Quest 之间(循环末尾)
+            PanelId::SelfAssessment => PanelId::DagViz,
+            PanelId::DagViz => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
     pub fn prev(&self) -> PanelId {
         match self {
-            PanelId::Quest => PanelId::SelfAssessment,
+            PanelId::Quest => PanelId::DagViz,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
             PanelId::Memory => PanelId::Budget,
@@ -226,6 +236,8 @@ impl PanelId {
             PanelId::Chat => PanelId::Sysinfo,
             // polish-v2.7 P1-5:SelfAssessment 位于循环末尾(Chat 之后)
             PanelId::SelfAssessment => PanelId::Chat,
+            // closure Stage B-10:DagViz 位于 SelfAssessment 之后(循环末尾)
+            PanelId::DagViz => PanelId::SelfAssessment,
         }
     }
 }
@@ -1263,9 +1275,11 @@ mod tests {
         assert_eq!(PanelId::MetricsDashboard.next(), PanelId::Sysinfo);
         // M3b:Sysinfo → Chat(Chat 追加到循环末尾)
         assert_eq!(PanelId::Sysinfo.next(), PanelId::Chat);
-        // polish-v2.7 P1-5:Chat → SelfAssessment → Quest(SelfAssessment 插入循环末尾)
+        // polish-v2.7 P1-5:Chat → SelfAssessment(SelfAssessment 插入循环末尾)
         assert_eq!(PanelId::Chat.next(), PanelId::SelfAssessment);
-        assert_eq!(PanelId::SelfAssessment.next(), PanelId::Quest);
+        // closure Stage B-10:SelfAssessment → DagViz → Quest(DagViz 插入循环末尾)
+        assert_eq!(PanelId::SelfAssessment.next(), PanelId::DagViz);
+        assert_eq!(PanelId::DagViz.next(), PanelId::Quest);
     }
 
     #[test]
@@ -1294,9 +1308,11 @@ mod tests {
         assert_eq!(PanelId::Sysinfo.prev(), PanelId::MetricsDashboard);
         // M3b:Chat → Sysinfo(Chat 位于 Sysinfo 之后)
         assert_eq!(PanelId::Chat.prev(), PanelId::Sysinfo);
-        // polish-v2.7 P1-5:SelfAssessment → Chat,Quest → SelfAssessment(循环末尾)
+        // polish-v2.7 P1-5:SelfAssessment → Chat(循环末尾)
         assert_eq!(PanelId::SelfAssessment.prev(), PanelId::Chat);
-        assert_eq!(PanelId::Quest.prev(), PanelId::SelfAssessment);
+        // closure Stage B-10:DagViz → SelfAssessment,Quest → DagViz(循环末尾)
+        assert_eq!(PanelId::DagViz.prev(), PanelId::SelfAssessment);
+        assert_eq!(PanelId::Quest.prev(), PanelId::DagViz);
     }
 
     #[test]

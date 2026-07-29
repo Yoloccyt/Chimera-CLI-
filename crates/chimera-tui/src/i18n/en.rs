@@ -41,6 +41,8 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.border.chat" => " Chat ",
         // polish-v2.7 P1-5: 自评仪表盘面板
         "panel.border.self_assessment" => " Self Assessment ",
+        // closure Stage B-10: DAG 可视化面板
+        "panel.border.dag_viz" => " DAG Viz ",
         "help.header" => "Help",
         "help.section.global" => "Global Shortcuts",
         "help.section.panel" => "Panel Shortcuts",

@@ -44,6 +44,8 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.border.chat",
     // polish-v2.7 P1-5:自评仪表盘面板
     "panel.border.self_assessment",
+    // closure Stage B-10:DAG 可视化面板
+    "panel.border.dag_viz",
     // 帮助面板体(M2 i18n Slice 3)
     "help.header",
     "help.section.global",
@@ -156,6 +158,8 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.border.chat" => " 对话 ",
         // polish-v2.7 P1-5:自评仪表盘面板
         "panel.border.self_assessment" => " 自我评估 ",
+        // closure Stage B-10:DAG 可视化面板
+        "panel.border.dag_viz" => " DAG 可视化 ",
         "help.header" => "帮助",
         "help.section.global" => "全局快捷键",
         "help.section.panel" => "面板快捷键",

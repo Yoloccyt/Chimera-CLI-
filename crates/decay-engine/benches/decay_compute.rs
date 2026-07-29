@@ -64,7 +64,8 @@ fn single_decay_by_profile(c: &mut Criterion) {
                     .decay_with_policy(
                         black_box("cap-slo"),
                         black_box(DecayEvent::TimeDecay),
-                        black_box(policy.clone()),
+                        // DecayPolicy 实现 Copy,直接按值传递(clippy::clone_on_copy)
+                        black_box(policy),
                     )
                     .expect("decay_with_policy 失败");
                 black_box(level);

@@ -43,6 +43,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// polish-v2.7 closure Stage B-9:Agent Grep 双通道结构化搜索(jcode,ADR-049)
+///
+/// 知识通道(FTS5→LIKE 降级)+ 代码通道(BGPD 三级披露)合成,零新增索引。
+pub mod agent_grep;
 /// polish-v2.7 P4-8:行为定位(BGPD 三级渐进披露导航,腾讯 Handbook,ADR-049)
 pub mod behavior_localization;
 pub mod config;

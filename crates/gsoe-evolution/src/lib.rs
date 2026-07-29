@@ -41,6 +41,11 @@ pub mod error;
 ///
 /// 对应架构层: L4 FormalVerifier
 pub mod formal;
+/// polish-v2.7 closure Stage B-8: Meta-Agent 适配器(外部 Harness 描述规范化,ADR-049 降级档)
+///
+/// 规则式规范化:外部描述 → HarnessSpec TOML → SpecLoader 全量校验(强制门自动注入)。
+/// R2 冻结声明(ADR-042):纯文本规范化,无学习/训练路径。
+pub mod meta_adapter;
 pub mod policy;
 /// P5.2.2: RHI-CG 通道 B 显著性检测(单尾二项检验 + SignificanceDetector)
 ///
@@ -67,6 +72,10 @@ pub use ci_gate::{
 pub use config::GsoeConfig;
 pub use engine::GsoeEvolutionEngine;
 pub use error::GsoeError;
+// polish-v2.7 closure Stage B-8: Meta-Agent 适配器公开 API 重导出
+pub use meta_adapter::{
+    ExternalHarnessDescriptor, ExternalStep, MetaAdapterError, MetaAgentAdapter,
+};
 pub use policy::fitness::{evaluate_fitness, evaluate_population};
 pub use policy::grpo::{compute_advantage, sample_rollouts};
 pub use policy::mutation::{apply_mutation, mutate};

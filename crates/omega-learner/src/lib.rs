@@ -20,6 +20,8 @@
 //! | S4 | selector 权重系数 | hcw-window selector w1/w2/w3 | 权重向量 | 后悔率 | ✅ P4-W13.3 |
 //! | S5 | Parliament 激活 | parliament Fast Path | 跳过/精简/完整 | 推翻率 × 辩论成本 | ✅ P4-W14.3 |
 //! | S6 | 衰减参数 | decay-engine DecayProfile | profile 参数 | 误拦率 vs 漏拦率 | ✅ P4-W14.4 |
+//! | S7 | 召回配额（R1） | omega-learner r1_recall_quota | k∈{5,10,20,50,100} | 召回率 − 误杀 − 延迟 | ✅ P4-W16.2.2 |
+//! | S8 | Mem-π 记忆决策 | omega-learner s8_mem_pi | Generate/Retrieve/Abstain | 下游达成率 − 噪声惩罚 | ✅ closure-B6（影子期） |
 //!
 //! # 设计约束(ADR-031)
 //!
@@ -107,7 +109,13 @@ pub mod s5_parliament;
 /// S6 接缝 — decay-engine 衰减参数学习器（P4-W14.4）
 pub mod s6_decay;
 
-/// 六接缝标识 — v5.0 §7.3 学习接缝枚举
+/// S8 接缝 — Mem-π 记忆决策策略学习器（polish-v2.7 closure Stage B-6）
+///
+/// 影子期约束（ADR-043）：仅记录决策与奖励，不向 mlc-engine 注入策略；
+/// Abstain 保守护栏（uncertainty > 0.7）不可被学习绕过。
+pub mod s8_mem_pi;
+
+/// 八接缝标识 — v5.0 §7.3 学习接缝枚举
 pub mod seam;
 
 /// P4-W16.2.1: 经验回放池 — off-policy RL 训练的轨迹存储与采样基础设施
@@ -186,6 +194,15 @@ pub use s6_decay::{
     arm_index_to_profile, profile_to_arm_index, s6_arm_set, OperationType, S6Context, S6Learner,
     S6Reward, S6RewardParams, DEFAULT_FALSE_BLOCK_WEIGHT, DEFAULT_FALSE_PASS_WEIGHT,
     DEFAULT_S6_ALPHA, S6_ARM_COUNT, S6_CONTEXT_DIM,
+};
+// closure Stage B-6: S8 接缝（Mem-π 记忆决策）学习器
+//
+// WHY 重命名导入: `arm_index_to_decision` 等映射函数名与其他接缝模式一致，
+// S8 的决策映射无同名冲突可直接导出
+pub use s8_mem_pi::{
+    arm_index_to_decision, decision_to_arm_index, s8_arm_set, MemPiDecision, S8Context, S8Learner,
+    S8Reward, S8RewardParams, ABSTAIN_UNCERTAINTY_THRESHOLD, DEFAULT_NOISE_PENALTY_LAMBDA,
+    DEFAULT_S8_ALPHA, S8_ARM_COUNT, S8_CONTEXT_DIM,
 };
 pub use seam::SeamId;
 

@@ -26,9 +26,10 @@ use crate::data::{StubDataSource, TuiDataSource};
 use crate::error::TuiError;
 use crate::focus::FocusManager;
 use crate::panels::{
-    BudgetPanel, ChatPanel, ChtcPanel, ClvVectorPanel, DecayPanel, EventStreamPanel, HealthPanel,
-    HelpPanel, LogPanel, McpNodesPanel, MemoryPanel, MetricsDashboardPanel, Panel, ParliamentPanel,
-    QuestPanel, ResourceMonitorPanel, RouterPanel, SecurityPanel, SelfAssessmentPanel,
+    BudgetPanel, ChatPanel, ChtcPanel, ClvVectorPanel, DagVizPanel, DecayPanel, EventStreamPanel,
+    HealthPanel, HelpPanel, LogPanel, McpNodesPanel, MemoryPanel, MetricsDashboardPanel, Panel,
+    ParliamentPanel, QuestPanel, ResourceMonitorPanel, RouterPanel, SecurityPanel,
+    SelfAssessmentPanel,
 };
 use crate::types::{PanelId, TuiState};
 use event_bus::EventBus;
@@ -188,6 +189,9 @@ impl TuiApp {
             // polish-v2.7 P1-5:自评仪表盘面板(五维度 Harness 自我评估,ADR-049);
             // 追加到循环末尾,数据从 latest_events 派生,零管道侵入
             Box::new(SelfAssessmentPanel::new()),
+            // closure Stage B-10:DAG 可视化面板(Quest 任务 DAG 层级树);
+            // 追加到循环末尾,数据从 quest_list 派生,零管道侵入
+            Box::new(DagVizPanel::new()),
         ];
         let panel_ids: Vec<PanelId> = panels.iter().map(|p| p.id()).collect();
         let focus_manager = FocusManager::new(panel_ids);
@@ -371,9 +375,9 @@ mod tests {
     fn test_switch_panel_prev() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = make_app()?;
         app.switch_panel_prev();
-        // polish-v2.7 P1-5:FocusManager 现注册 18 面板(SelfAssessment 追加到末尾);
-        // Quest 的上一个 = 列表末尾的 SelfAssessment 面板。
-        assert_eq!(app.current_panel(), PanelId::SelfAssessment);
+        // closure Stage B-10:FocusManager 现注册 19 面板(DagViz 追加到末尾);
+        // Quest 的上一个 = 列表末尾的 DagViz 面板。
+        assert_eq!(app.current_panel(), PanelId::DagViz);
         Ok(())
     }
 

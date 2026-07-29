@@ -1,10 +1,12 @@
-//! 七接缝标识 — v5.0 §7.3 omega-learner 的七个学习接缝
+//! 八接缝标识 — v5.0 §7.3 omega-learner 的八个学习接缝
 //!
 //! 对应任务: **P4-W13.1.2**（模块骨架）+ **P4-W16.2.2**（S7 R1 接缝扩展）
+//! + **closure Stage B-6**（S8 Mem-π 接缝扩展）
 //! 对应设计源: `NEXUS-OMEGA_v5.0_系统性完整设计文档.md` §7.3 + §7.5
+//! + `chimera_ultimate_polish_v2.7.md` §6.1（Mem-π）
 //! 对应 ADR: **ADR-031**（omega-learner 边界）+ **ADR-043**（R1 影子模式）
 //!
-//! # 七接缝概览
+//! # 八接缝概览
 //!
 //! | # | 接缝 | 真实代码锚点 | 臂 | 奖励 | 算法 |
 //! |---|------|------------|-----|------|------|
@@ -15,6 +17,7 @@
 //! | S5 | Parliament 激活 | parliament Fast Path | 跳过/精简/完整辩论 | 推翻率 × 辩论成本 | LinUCB |
 //! | S6 | 衰减参数 | decay-engine DecayProfile | profile 参数 | 误拦率 vs 漏拦率加权 | LinUCB |
 //! | S7 | 召回配额（R1） | omega-learner r1_recall_quota | k∈{5,10,20,50,100} | 召回率 − 误杀 − 延迟 | CQL/IQL 离线 RL |
+//! | S8 | Mem-π 记忆决策 | omega-learner s8_mem_pi | Generate/Retrieve/Abstain | 下游达成率 − 噪声惩罚 | LinUCB + Abstain 护栏 |
 //!
 //! # S7 接缝特殊性（ADR-043）
 //!
@@ -31,7 +34,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 七接缝标识枚举
+/// 八接缝标识枚举
 ///
 /// WHY 用枚举而非字符串:
 /// - 编译期穷尽性检查(match 必须覆盖所有变体)
@@ -92,10 +95,21 @@ pub enum SeamId {
     /// 上下文: 任务阶段 + 任务复杂度 + 内存压力（6 维）
     /// 奖励: 召回率 − 0.5×误杀率 − 0.3×延迟惩罚
     S7RecallQuota = 7,
+
+    /// S8: Mem-π 记忆决策策略（omega-learner s8_mem_pi，closure Stage B-6）
+    ///
+    /// 方案文档 §6.1 Mem-π 两阶段决策的规则化降级（ADR-049 决策 1）：
+    /// LinUCB 学习 Generate/Retrieve/Abstain 三档记忆操作决策，
+    /// 高不确定性（>0.7）时强制 Abstain（保守护栏，避免有害生成）。
+    ///
+    /// 臂: Generate/Retrieve/Abstain（3 档决策）
+    /// 上下文: 任务阶段 + 不确定性 + 预测未来访问 + 内存压力（7 维）
+    /// 奖励: 下游任务达成率 − λ×噪声占比
+    S8MemPi = 8,
 }
 
 impl SeamId {
-    /// 返回接缝编号(1-7)
+    /// 返回接缝编号(1-8)
     pub const fn number(self) -> u8 {
         self as u8
     }
@@ -110,6 +124,7 @@ impl SeamId {
             Self::S5ParliamentActivation => "S5-parliament",
             Self::S6DecayProfile => "S6-decay",
             Self::S7RecallQuota => "S7-recall-quota",
+            Self::S8MemPi => "S8-mem-pi",
         }
     }
 
@@ -123,6 +138,7 @@ impl SeamId {
             Self::S5ParliamentActivation => "Parliament activation",
             Self::S6DecayProfile => "decay profile parameters",
             Self::S7RecallQuota => "recall quota (R1 offline RL)",
+            Self::S8MemPi => "Mem-pi memory decision",
         }
     }
 
@@ -136,6 +152,7 @@ impl SeamId {
             Self::S5ParliamentActivation => "crates/parliament/src/",
             Self::S6DecayProfile => "crates/decay-engine/src/",
             Self::S7RecallQuota => "crates/omega-learner/src/r1_recall_quota.rs",
+            Self::S8MemPi => "crates/omega-learner/src/s8_mem_pi.rs",
         }
     }
 
@@ -149,13 +166,14 @@ impl SeamId {
             Self::S5ParliamentActivation => "P4-W14.3",
             Self::S6DecayProfile => "P4-W14.4",
             Self::S7RecallQuota => "P4-W16.2.2",
+            Self::S8MemPi => "closure-B6",
         }
     }
 
-    /// 返回所有七接缝(用于遍历初始化)
+    /// 返回所有八接缝(用于遍历初始化)
     ///
-    /// WHY 7 而非 6: S7 为 P4-W16.2.2 新增 R1 离线 RL 接缝
-    pub const fn all() -> [SeamId; 7] {
+    /// WHY 8 而非 7: S8 为 polish-v2.7 closure Stage B-6 新增 Mem-π 接缝
+    pub const fn all() -> [SeamId; 8] {
         [
             Self::S1Density,
             Self::S2MemoryStrategy,
@@ -164,6 +182,7 @@ impl SeamId {
             Self::S5ParliamentActivation,
             Self::S6DecayProfile,
             Self::S7RecallQuota,
+            Self::S8MemPi,
         ]
     }
 }
@@ -188,6 +207,8 @@ mod tests {
         assert_eq!(SeamId::S6DecayProfile.number(), 6);
         // P4-W16.2.2: S7 召回配额（R1 离线 RL 接缝）
         assert_eq!(SeamId::S7RecallQuota.number(), 7);
+        // closure Stage B-6: S8 Mem-π 记忆决策接缝
+        assert_eq!(SeamId::S8MemPi.number(), 8);
     }
 
     #[test]
@@ -196,6 +217,8 @@ mod tests {
         assert_eq!(SeamId::S6DecayProfile.short_name(), "S6-decay");
         // P4-W16.2.2: S7 简称
         assert_eq!(SeamId::S7RecallQuota.short_name(), "S7-recall-quota");
+        // closure Stage B-6: S8 简称
+        assert_eq!(SeamId::S8MemPi.short_name(), "S8-mem-pi");
     }
 
     #[test]
@@ -210,6 +233,8 @@ mod tests {
             SeamId::S7RecallQuota.full_name(),
             "recall quota (R1 offline RL)"
         );
+        // closure Stage B-6: S8 全称
+        assert_eq!(SeamId::S8MemPi.full_name(), "Mem-pi memory decision");
     }
 
     #[test]
@@ -227,6 +252,11 @@ mod tests {
             SeamId::S7RecallQuota.code_anchor(),
             "crates/omega-learner/src/r1_recall_quota.rs"
         );
+        // closure Stage B-6: S8 代码锚点
+        assert_eq!(
+            SeamId::S8MemPi.code_anchor(),
+            "crates/omega-learner/src/s8_mem_pi.rs"
+        );
     }
 
     #[test]
@@ -236,16 +266,20 @@ mod tests {
         assert_eq!(SeamId::S2MemoryStrategy.task_id(), "P4-W14.1");
         // P4-W16.2.2: S7 任务编号
         assert_eq!(SeamId::S7RecallQuota.task_id(), "P4-W16.2.2");
+        // closure Stage B-6: S8 任务编号
+        assert_eq!(SeamId::S8MemPi.task_id(), "closure-B6");
     }
 
     #[test]
-    fn test_seam_id_all_returns_seven() {
+    fn test_seam_id_all_returns_eight() {
         let all = SeamId::all();
-        assert_eq!(all.len(), 7);
+        assert_eq!(all.len(), 8);
         assert!(all.contains(&SeamId::S1Density));
         assert!(all.contains(&SeamId::S6DecayProfile));
         // P4-W16.2.2: S7 必须在 all() 中
         assert!(all.contains(&SeamId::S7RecallQuota));
+        // closure Stage B-6: S8 必须在 all() 中
+        assert!(all.contains(&SeamId::S8MemPi));
     }
 
     #[test]

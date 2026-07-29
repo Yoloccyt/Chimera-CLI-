@@ -83,12 +83,12 @@ use serde::{Deserialize, Serialize};
 // SeamId 枚举（六接缝标识）
 // ============================================================
 
-/// 六接缝标识 — 学习策略灰度授权的目标接缝
+/// 八接缝标识 — 学习策略灰度授权的目标接缝
 ///
 /// WHY 独立定义（与 `omega_learner::SeamId` 语义对齐）:
 /// - L0 nexus-contracts 禁止依赖 L6 omega-learner（依赖铁律向上禁止）
 /// - 当前任务 P4-W14.5 聚焦 CapabilityToken，SeamId 统一上提作为 P4-W14.6 后续任务
-/// - 物理独立但语义对齐：6 变体一一对应，未来上提时可直接替换
+/// - 物理独立但语义对齐：8 变体一一对应，未来上提时可直接替换
 ///
 /// WHY 用枚举而非字符串:
 /// - 编译期穷尽性检查（match 必须覆盖所有变体）
@@ -116,10 +116,18 @@ pub enum SeamId {
     /// 与 S1-S6 在线 bandit 不同，S7 使用离线 RL（CQL/IQL），
     /// 从 ReplayPool<RecallQuotaTransition> 采样训练。
     S7RecallQuota = 7,
+
+    /// S8: Mem-π 记忆决策策略（omega-learner s8_mem_pi，polish-v2.7 closure Stage B-6）
+    ///
+    /// Mem-π 接缝：LinUCB 学习记忆操作决策（Generate/Retrieve/Abstain 三档），
+    /// 对应方案文档 §6.1 Mem-π 两阶段决策的规则化降级（ADR-049 决策 1）。
+    /// 高不确定性时强制 Abstain（保守护栏，避免有害生成）；
+    /// 解冻前置 = CapabilityToken 灰度 + ADR-043 影子模式 2 周。
+    S8MemPi = 8,
 }
 
 impl SeamId {
-    /// 返回接缝编号（1-7）
+    /// 返回接缝编号（1-8）
     pub const fn number(self) -> u8 {
         self as u8
     }
@@ -134,13 +142,14 @@ impl SeamId {
             Self::S5Parliament => "S5-parliament",
             Self::S6Decay => "S6-decay",
             Self::S7RecallQuota => "S7-recall-quota",
+            Self::S8MemPi => "S8-mem-pi",
         }
     }
 
-    /// 返回所有七接缝（用于遍历初始化）
+    /// 返回所有八接缝（用于遍历初始化）
     ///
-    /// WHY 7 而非 6: S7 为 P4-W16.2.2 新增 R1 离线 RL 接缝
-    pub const fn all() -> [SeamId; 7] {
+    /// WHY 8 而非 7: S8 为 polish-v2.7 closure Stage B-6 新增 Mem-π 接缝
+    pub const fn all() -> [SeamId; 8] {
         [
             Self::S1Density,
             Self::S2Memory,
@@ -149,6 +158,7 @@ impl SeamId {
             Self::S5Parliament,
             Self::S6Decay,
             Self::S7RecallQuota,
+            Self::S8MemPi,
         ]
     }
 }
@@ -787,6 +797,8 @@ mod tests {
         assert_eq!(SeamId::S6Decay.number(), 6);
         // P4-W16.2.2: S7 召回配额（R1 离线 RL 接缝）
         assert_eq!(SeamId::S7RecallQuota.number(), 7);
+        // closure Stage B-6: S8 Mem-π 记忆决策接缝
+        assert_eq!(SeamId::S8MemPi.number(), 8);
     }
 
     #[test]
@@ -799,16 +811,20 @@ mod tests {
         assert_eq!(SeamId::S6Decay.short_name(), "S6-decay");
         // P4-W16.2.2: S7 简称
         assert_eq!(SeamId::S7RecallQuota.short_name(), "S7-recall-quota");
+        // closure Stage B-6: S8 简称
+        assert_eq!(SeamId::S8MemPi.short_name(), "S8-mem-pi");
     }
 
     #[test]
-    fn test_seam_id_all_returns_seven() {
+    fn test_seam_id_all_returns_eight() {
         let all = SeamId::all();
-        assert_eq!(all.len(), 7);
+        assert_eq!(all.len(), 8);
         assert!(all.contains(&SeamId::S1Density));
         assert!(all.contains(&SeamId::S6Decay));
         // P4-W16.2.2: S7 必须在 all() 中
         assert!(all.contains(&SeamId::S7RecallQuota));
+        // closure Stage B-6: S8 必须在 all() 中
+        assert!(all.contains(&SeamId::S8MemPi));
     }
 
     #[test]

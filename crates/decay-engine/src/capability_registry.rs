@@ -523,10 +523,12 @@ mod tests {
     }
 
     #[test]
-    fn test_with_all_seams_registers_seven() {
+    fn test_with_all_seams_registers_all() {
         let registry = CapabilityTokenRegistry::with_all_seams();
         let tokens = registry.list_tokens();
-        assert_eq!(tokens.len(), 7);
+        // WHY 动态长度断言:接缝数随 SeamId 枚举演进(S7 R1/S8 Mem-π 先后新增),
+        // 与 SeamId::all() 对齐避免每次扩展接缝都需修改硬编码计数
+        assert_eq!(tokens.len(), SeamId::all().len());
         for seam in SeamId::all() {
             assert!(
                 tokens.iter().any(|(s, _, _, _, _)| *s == seam),

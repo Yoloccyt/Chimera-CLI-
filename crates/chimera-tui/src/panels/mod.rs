@@ -20,6 +20,8 @@ pub mod budget;
 pub mod chat;
 pub mod chtc;
 pub mod clv_vector;
+/// polish-v2.7 closure Stage B-10:DAG 可视化面板(Quest 任务 DAG 层级树,北大 DataFlow)
+pub mod dag_viz;
 pub mod decay;
 pub mod event_stream;
 pub mod health;
@@ -45,6 +47,7 @@ pub use budget::BudgetPanel;
 pub use chat::ChatPanel;
 pub use chtc::ChtcPanel;
 pub use clv_vector::ClvVectorPanel;
+pub use dag_viz::DagVizPanel;
 pub use decay::DecayPanel;
 pub use event_stream::EventStreamPanel;
 pub use health::HealthPanel;
