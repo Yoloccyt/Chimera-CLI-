@@ -47,6 +47,11 @@ pub mod error;
 pub mod formal;
 /// P4-W14.4: DecayEngine 学习器持有器（S6 接缝策略异步下发 + 本地 fallback）
 pub mod learner_holder;
+/// R2 解冻阶段③ 前置 3 — 影子模式熔断开关（fail-closed 安全护栏，ADR-052 待办 3）
+///
+/// 消费 FormalVerifier 验证结果流，任一属性 Violated 即永久跳闸拒绝 RL 更新，
+/// 复用 decay-engine Freeze 不可逆哲学。不执行 RL 训练，不含 R2 扫描关键词。
+pub mod shadow_breaker;
 pub mod types;
 
 pub use capability_registry::{current_utc_secs, CapabilityTokenRegistry};
@@ -55,6 +60,8 @@ pub use error::DecayError;
 // FormalVerifier M2:衰减一致性验证器重导出（Phase 8.1）
 pub use formal::{DecayConsistencyChecker, DecayEventKind, LevelTransition};
 pub use learner_holder::DecayLearnerHolder;
+// R2 解冻阶段③ 前置 3:影子模式熔断开关重导出
+pub use shadow_breaker::{BreakerState, RlGateVerdict, ShadowModeCircuitBreaker};
 pub use types::{Capability, CapabilityLevel, DecayConfig, DecayEvent};
 
 /// 默认衰减配置

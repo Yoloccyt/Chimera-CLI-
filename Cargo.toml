@@ -334,6 +334,18 @@ path = "tests/e2e/formal_verifier_m2_e2e.rs"
 name = "invariant_health_closure_e2e"
 path = "tests/e2e/invariant_health_closure_e2e.rs"
 
+# ============================================================
+# R2 解冻阶段③ 前置 3: 影子模式熔断开关 E2E
+#
+# WHY 新增 test target: 验证 ShadowModeCircuitBreaker 消费真实 FormalVerifier
+# 输出(属性 #6 decay + 属性 #7 invariant closure)的 fail-closed 门控行为,
+# 覆盖正常许可/边界证据不足/异常永久跳闸三路径。R2 解冻前的安全护栏。
+# ============================================================
+
+[[test]]
+name = "shadow_breaker_e2e"
+path = "tests/e2e/shadow_breaker_e2e.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。
