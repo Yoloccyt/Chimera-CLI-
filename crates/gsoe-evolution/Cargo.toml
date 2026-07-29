@@ -35,6 +35,12 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # P4-W15.1.2 测试:临时文件用 tempfile
 tempfile = { workspace = true }
 
+# R2 解冻阶段③ 前置 2:FormalVerifierGate 聚合开销基线
+# WHY SLO:CI 门禁每次进化提交调用,聚合 7 属性需 <10µs 快速反馈
+[[bench]]
+name = "formal_gate_eval"
+harness = false
+
 [[bench]]
 name = "evolution_benchmark"
 harness = false

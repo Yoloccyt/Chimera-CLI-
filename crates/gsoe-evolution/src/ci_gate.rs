@@ -238,6 +238,12 @@ pub enum CiFailureKind {
     Inv9Violated,
     /// criterion 基准回归
     BenchRegression,
+    /// 形式化属性被违反（R2 解冻前置 2:FormalVerifierGate 聚合 7 验证器裁决）
+    ///
+    /// WHY 独立变体:形式化属性违规(如衰减一致性/不变量传递闭包被违反)与
+    /// test/lint/INV 是不同性质的 CI 失败——它是 R2 解冻的形式化质量门,
+    /// 违反表示进化/学习行为不满足形式化安全保证,须阻断合并。
+    FormalPropertyViolated,
 }
 
 impl CiFailureKind {
@@ -250,6 +256,7 @@ impl CiFailureKind {
             Self::Inv8Violated => "inv8_violated",
             Self::Inv9Violated => "inv9_violated",
             Self::BenchRegression => "bench_regression",
+            Self::FormalPropertyViolated => "formal_property_violated",
         }
     }
 }

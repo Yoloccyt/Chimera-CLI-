@@ -41,6 +41,11 @@ pub mod error;
 ///
 /// 对应架构层: L4 FormalVerifier
 pub mod formal;
+/// R2 解冻阶段③ 前置 2 — 形式化验证器 CI 门禁化(ADR-052 待办 2)
+///
+/// 聚合 7 个验证器的 VerificationResult 为 CiGateResult,复用既有 CI 门禁基础设施。
+/// 消费切片(不持有验证器实例)以规避 L5→L6 向上依赖;不含 R2 扫描关键词。
+pub mod formal_gate;
 /// polish-v2.7 closure Stage B-8: Meta-Agent 适配器(外部 Harness 描述规范化,ADR-049 降级档)
 ///
 /// 规则式规范化:外部描述 → HarnessSpec TOML → SpecLoader 全量校验(强制门自动注入)。
@@ -69,9 +74,13 @@ pub use ci_gate::{
     check_inv9_delegation_acyclic, CargoCiGate, CiFailure, CiFailureKind, CiGate, CiGateError,
     CiGateResult, DelegationEdge, MockCiGate,
 };
+// R2 解冻阶段③ 前置 2:FormalVerifierGate 公开 API 重导出
 pub use config::GsoeConfig;
 pub use engine::GsoeEvolutionEngine;
 pub use error::GsoeError;
+pub use formal_gate::{
+    FormalGateSummary, FormalVerifierGate, NamedPropertyResult, DEFAULT_MIN_SATISFIED,
+};
 // polish-v2.7 closure Stage B-8: Meta-Agent 适配器公开 API 重导出
 pub use meta_adapter::{
     ExternalHarnessDescriptor, ExternalStep, MetaAdapterError, MetaAgentAdapter,

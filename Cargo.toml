@@ -358,6 +358,18 @@ path = "tests/e2e/shadow_breaker_e2e.rs"
 name = "regret_collection_e2e"
 path = "tests/e2e/regret_collection_e2e.rs"
 
+# ============================================================
+# R2 解冻阶段③ 前置 2: 形式化验证器 CI 门禁 E2E
+#
+# WHY 新增 test target: 验证 FormalVerifierGate 聚合真实验证器输出
+# (decay + invariant_closure + preference)为 CI 裁决的完整接线,覆盖正常
+# 通过/边界证据不足/异常违规三路径,并验证门禁与熔断器裁决一致性。
+# ============================================================
+
+[[test]]
+name = "formal_verifier_gate_e2e"
+path = "tests/e2e/formal_verifier_gate_e2e.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。
