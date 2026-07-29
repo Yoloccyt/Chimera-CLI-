@@ -346,6 +346,18 @@ path = "tests/e2e/invariant_health_closure_e2e.rs"
 name = "shadow_breaker_e2e"
 path = "tests/e2e/shadow_breaker_e2e.rs"
 
+# ============================================================
+# R2 解冻阶段③ 前置 1: 后悔率采集管线 E2E(前置1→前置3 信号链)
+#
+# WHY 新增 test target: 验证 RegretCollector(omega-learner)采集后悔率 →
+# assess_trend 产出真实 VerificationResult → ShadowModeCircuitBreaker(decay-engine)
+# 门控的完整信号链,覆盖正常收敛/边界证据不足/异常发散跳闸三路径。
+# ============================================================
+
+[[test]]
+name = "regret_collection_e2e"
+path = "tests/e2e/regret_collection_e2e.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。

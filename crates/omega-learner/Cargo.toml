@@ -59,3 +59,9 @@ harness = false
 [[bench]]
 name = "per_buffer_sample"
 harness = false
+
+# R2 解冻阶段③ 前置 1:后悔率采集管线开销基线
+# WHY SLO:record 每学习步调用需 <1µs;assess_trend 周期性评估需 <100µs
+[[bench]]
+name = "regret_collection"
+harness = false

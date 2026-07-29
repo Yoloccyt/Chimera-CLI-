@@ -138,6 +138,13 @@ pub mod r1_recall_quota;
 /// P4-W16.2.2: R1 影子模式 — 2 周观察期对比报告与解冻条件评估（ADR-043）
 pub mod shadow_mode;
 
+/// R2 解冻阶段③ 前置 1 — 后悔率自动采集管线（ADR-052 待办 1,纯可观测性）
+///
+/// 滑动窗口聚合后悔率观测,复用 `verify_regret_non_increasing` 产出趋势
+/// `VerificationResult`,喂给 decay-engine `ShadowModeCircuitBreaker`（前置1→前置3
+/// 信号链）。仅记录观测,无 RL 训练,不含 R2 扫描关键词。
+pub mod regret_pipeline;
+
 // ============================================================
 // 公开 API 导出
 // ============================================================
@@ -148,8 +155,12 @@ pub use context::SeamContext;
 pub use error::{LearnerError, Result};
 // FormalVerifier M1:学习单调性验证器重导出（P7-T5）
 pub use formal::LearningMonotonicityChecker;
+// R2 解冻阶段③ 前置 1:后悔率采集管线重导出
 pub use linucb::LinUCB;
 pub use per_buffer::{PerBuffer, PerSample};
+pub use regret_pipeline::{
+    RegretCollector, RegretSample, DEFAULT_CAPACITY, DEFAULT_TREND_TOLERANCE, DEFAULT_TREND_WINDOW,
+};
 // P4-W16.2.1: 经验回放池类型重导出(供 L9/L10 上层实例化与填充)
 pub use replay_pool::{ReplayPool, ReplayPoolStats, ReplaySample, TrajectorySource};
 // P4-W16.2.2: R1 召回配额离线 RL（CQL/IQL）类型重导出
