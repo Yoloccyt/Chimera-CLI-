@@ -103,6 +103,22 @@ pub struct EventBus {
     /// - 单调递增,不重置(运维观察累计丢弃趋势)
     /// - Relaxed 内存序:丢弃计数为统计指标,非控制流信号,无需强一致性
     critical_dropped_count: Arc<AtomicU64>,
+    /// Broadcast 通道 Lagged 丢弃的总事件数(背压监控,A3 容量监控)
+    ///
+    /// WHY Arc<AtomicU64> 而非 Mutex<u64>:
+    /// - publish 路径为热路径,不能有锁竞争(AtomicU64 无锁,~1ns vs Mutex ~25ns)
+    /// - 需在 EventReceiver 的 recv 路径递增(跨 struct 共享),Arc 提供共享所有权
+    /// - 单调递增,Relaxed 内存序足够(统计指标,非控制流信号)
+    /// - 接收端发现 Lagged 时递增,记录被丢弃的事件数量(非 Lagged 次数)
+    lagged_count: Arc<AtomicU64>,
+    /// 背压告警触发次数(背压监控,A3 容量监控)
+    ///
+    /// WHY Arc<AtomicU64> 而非 AtomicU64:
+    /// - publish 热路径不能有锁竞争(同 lagged_count 理由)
+    /// - 仅在 publish 端使用,但 EventBus 派生 Clone,AtomicU64 不实现 Clone
+    /// - 使用 Arc 共享使 Clone 派生正常工作(所有副本共享同一计数器)
+    /// - 当 sender.len() > capacity * 3/4 时递增,配合 tracing::warn! 记录告警
+    backpressure_warning_count: Arc<AtomicU64>,
 }
 
 impl EventBus {
@@ -120,6 +136,8 @@ impl EventBus {
             logger: None,
             critical_tx: Arc::new(Mutex::new(Vec::new())),
             critical_dropped_count: Arc::new(AtomicU64::new(0)),
+            lagged_count: Arc::new(AtomicU64::new(0)),
+            backpressure_warning_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -134,6 +152,8 @@ impl EventBus {
             logger: Some(Arc::new(logger)),
             critical_tx: Arc::new(Mutex::new(Vec::new())),
             critical_dropped_count: Arc::new(AtomicU64::new(0)),
+            lagged_count: Arc::new(AtomicU64::new(0)),
+            backpressure_warning_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -201,9 +221,40 @@ impl EventBus {
             self.send_critical_mpsc(&event);
         }
 
-        // broadcast::Sender::send 仅在无活跃接收者时返回 Err;
-        // 按设计无订阅者时事件被静默丢弃,不视为错误。
-        let _ = self.sender.send(event);
+        // A3 背压监控:发送前检查 broadcast 缓冲区占用率
+        // WHY sender.len() 是 AtomicUsize load,开销极低(~1ns),不影响 publish 吞吐
+        // 阈值 3/4:提前告警,留给运维反应缓冲;满容量时才告警已太晚(事件即将被丢弃)
+        let queued = self.sender.len();
+        let threshold = self.capacity * 3 / 4;
+        if queued > threshold {
+            self.backpressure_warning_count
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(
+                queued,
+                threshold,
+                capacity = self.capacity,
+                "broadcast 通道背压告警:缓冲区占用超过 75%"
+            );
+        }
+
+        // broadcast::Sender::send 返回 Ok(receiver_count) 表示有多少接收者收到了消息。
+        // 若 receiver_count < subscriber_count(发送前采样),说明有慢消费者 lag
+        // (其内部缓冲区已满,send 跳过了它)。Err(SendError) 表示无接收者。
+        // WHY 零成本:send 返回值本身是 usize,仅需一次整数比较 + 原子 load,
+        // 不影响 publish 热路径性能(~1ns 额外开销)。
+        let expected = subscriber_count;
+        match self.sender.send(event) {
+            Ok(receivers) if receivers < expected => {
+                warn!(
+                    expected_subscribers = expected,
+                    actual_receivers = receivers,
+                    lagged_count = expected - receivers,
+                    "broadcast 发送者 lag 检测:部分订阅者缓冲区已满,事件被跳过"
+                );
+            }
+            Ok(_) => {}  // 所有订阅者正常接收
+            Err(_) => {} // 无接收者,已在上方 Critical 告警路径处理
+        }
         Ok(())
     }
 
@@ -239,8 +290,34 @@ impl EventBus {
             self.send_critical_mpsc(&event);
         }
 
-        // 与 publish 保持一致:无订阅者时静默丢弃事件。
-        let _ = self.sender.send(event);
+        // A3 背压监控:与 publish 保持一致的发送前缓冲区占用检查
+        let queued = self.sender.len();
+        let threshold = self.capacity * 3 / 4;
+        if queued > threshold {
+            self.backpressure_warning_count
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(
+                queued,
+                threshold,
+                capacity = self.capacity,
+                "broadcast 通道背压告警:缓冲区占用超过 75%(同步发布)"
+            );
+        }
+
+        // 与 publish 保持一致:broadcast lag 检测(零成本,仅一次整数比较)
+        let expected = subscriber_count;
+        match self.sender.send(event) {
+            Ok(receivers) if receivers < expected => {
+                warn!(
+                    expected_subscribers = expected,
+                    actual_receivers = receivers,
+                    lagged_count = expected - receivers,
+                    "broadcast 发送者 lag 检测:部分订阅者缓冲区已满,事件被跳过(同步发布)"
+                );
+            }
+            Ok(_) => {}
+            Err(_) => {}
+        }
         Ok(())
     }
 
@@ -489,7 +566,12 @@ impl EventBus {
 
         // WHY 复用 from_broadcast:与 subscribe_filtered 共享构造逻辑,
         // 避免两处分别拼装 EventReceiver 导致字段初始化不一致风险
-        EventReceiver::from_broadcast(self.sender.subscribe(), subscriber_id, self.logger.clone())
+        EventReceiver::from_broadcast(
+            self.sender.subscribe(),
+            subscriber_id,
+            self.logger.clone(),
+            self.lagged_count.clone(),
+        )
     }
 
     /// 订阅指定 topic 集合的事件,返回 [`FilteredSubscriber`](crate::topic::FilteredSubscriber)
@@ -532,6 +614,7 @@ impl EventBus {
             self.sender.subscribe(),
             subscriber_id,
             self.logger.clone(),
+            self.lagged_count.clone(),
         );
         crate::topic::FilteredSubscriber::new(receiver, topics)
     }
@@ -589,6 +672,25 @@ impl EventBus {
     pub fn capacity(&self) -> usize {
         self.capacity
     }
+
+    /// 获取背压监控统计(A3 容量监控)
+    ///
+    /// 返回 `(lagged_count, backpressure_warning_count)`:
+    /// - `lagged_count`:broadcast 通道因慢消费者 Lagged 而丢弃的累计事件数
+    ///   (接收端递增,反映实际丢失的事件数量)
+    /// - `backpressure_warning_count`:缓冲区占用超过 75% 阈值的累计告警次数
+    ///   (发送端递增,反映背压触发频率)
+    ///
+    /// 两个计数器均单调递增,不重置。供 efficiency-monitor 周期性拉取并
+    /// 发布告警,同时供 TUI 显示背压趋势。
+    ///
+    /// WHY 返回元组而非 struct:轻量 API,两个 u64 语义清晰,无需额外类型定义。
+    /// WHY Relaxed 内存序:统计指标,非控制流信号,毫秒级读取偏差可容忍。
+    pub fn backpressure_stats(&self) -> (u64, u64) {
+        let lagged = self.lagged_count.load(Ordering::Relaxed);
+        let warnings = self.backpressure_warning_count.load(Ordering::Relaxed);
+        (lagged, warnings)
+    }
 }
 
 impl Default for EventBus {
@@ -607,6 +709,11 @@ pub struct EventReceiver {
     subscriber_id: String,
     /// 日志记录器(与总线共享)
     logger: Option<Arc<BusLogger>>,
+    /// Broadcast Lagged 丢弃事件计数器(与 EventBus 共享,A3 背压监控)
+    ///
+    /// WHY Arc<AtomicU64>:接收端发现 Lagged 时递增,与 EventBus 共享同一计数器,
+    /// AtomicU64 避免 recv 路径锁竞争(热路径,同 publish 理由)。
+    lagged_count: Arc<AtomicU64>,
 }
 
 impl EventReceiver {
@@ -619,11 +726,13 @@ impl EventReceiver {
         inner: broadcast::Receiver<NexusEvent>,
         subscriber_id: String,
         logger: Option<Arc<BusLogger>>,
+        lagged_count: Arc<AtomicU64>,
     ) -> Self {
         EventReceiver {
             inner,
             subscriber_id,
             logger,
+            lagged_count,
         }
     }
 
@@ -654,6 +763,14 @@ impl EventReceiver {
                             logger.log_slow_consumer_dropped(&self.subscriber_id, *lag, *lag);
                         }
                         _ => {}
+                    }
+                }
+                // A3 背压监控:递增 lagged_count(记录被丢弃的事件数量)
+                // WHY 在接收端递增:broadcast::Sender::send 不返回 Lagged,
+                // Lagged 仅在接收端 recv 时检测到(发送方无法感知单个接收者的 lag)
+                if matches!(&eb_err, EventBusError::SlowConsumerDropped { .. }) {
+                    if let EventBusError::SlowConsumerDropped { lag, .. } = &eb_err {
+                        self.lagged_count.fetch_add(*lag, Ordering::Relaxed);
                     }
                 }
                 Err(eb_err)
@@ -687,6 +804,10 @@ impl EventReceiver {
                         }
                         _ => {}
                     }
+                }
+                // A3 背压监控:与 recv 保持一致,递增 lagged_count
+                if let EventBusError::SlowConsumerDropped { lag, .. } = &eb_err {
+                    self.lagged_count.fetch_add(*lag, Ordering::Relaxed);
                 }
                 Err(eb_err)
             }
@@ -723,6 +844,8 @@ impl EventReceiver {
                 if let Some(logger) = &self.logger {
                     logger.log_slow_consumer_dropped(&self.subscriber_id, lag, lag);
                 }
+                // A3 背压监控:递增 lagged_count(与 recv 保持一致)
+                self.lagged_count.fetch_add(lag, Ordering::Relaxed);
                 Err(EventBusError::SlowConsumerDropped {
                     subscriber_id: self.subscriber_id.clone(),
                     lag,
@@ -1061,5 +1184,75 @@ mod tests {
             .try_recv_matching(|e| matches!(e, NexusEvent::QuestCreated { .. }))
             .unwrap();
         assert_eq!(result, None, "缓冲区中没有匹配事件");
+    }
+
+    // ============================================================
+    // A3: 背压监控测试
+    // ============================================================
+
+    #[test]
+    fn test_backpressure_monitor_initial_zero() {
+        // 验证初始计数器为 0
+        let bus = EventBus::new();
+        let (lagged, warnings) = bus.backpressure_stats();
+        assert_eq!(lagged, 0, "初始 lagged_count 应为 0");
+        assert_eq!(warnings, 0, "初始 backpressure_warning_count 应为 0");
+    }
+
+    #[tokio::test]
+    async fn test_backpressure_monitor_tracks_lagged() {
+        // 使用极小容量(4)模拟 broadcast 满容量场景
+        let bus = EventBus::with_capacity(4);
+        let mut rx = bus.subscribe();
+
+        // 发布超过容量的事件,使 receiver 的缓冲区溢出
+        // broadcast::channel(4) 最多保留 4 条,发布 10 条后 receiver 会 Lagged
+        for i in 0..10 {
+            bus.publish(NexusEvent::QuestProgressUpdated {
+                metadata: EventMetadata::new("test"),
+                quest_id: format!("q-{i}"),
+                completed: i as u32,
+                total: 10,
+            })
+            .await
+            .unwrap();
+        }
+
+        // 接收端应触发 Lagged(慢消费者丢弃)
+        let result = rx.recv().await;
+        assert!(
+            matches!(result, Err(EventBusError::SlowConsumerDropped { .. })),
+            "应触发 SlowConsumerDropped,实际: {result:?}"
+        );
+
+        // 验证 lagged_count 已递增(丢弃的事件数 > 0)
+        let (lagged, _warnings) = bus.backpressure_stats();
+        assert!(lagged > 0, "lagged_count 应递增,实际: {lagged}");
+    }
+
+    #[tokio::test]
+    async fn test_backpressure_monitor_tracks_warnings() {
+        // 使用小容量(8)触发背压告警(> 75% = 6)
+        let bus = EventBus::with_capacity(8);
+        let _rx = bus.subscribe(); // 保持订阅者,防止 send 返回 Err
+
+        // 发布 8 个事件(第 8 次 publish 时,send 前 sender.len() == 7 > 6 = 8*3/4)
+        // 注意:背压检查在 send() 之前,所以需要 queued > threshold 即 queued >= 7
+        for i in 0..8 {
+            bus.publish(NexusEvent::QuestProgressUpdated {
+                metadata: EventMetadata::new("test"),
+                quest_id: format!("q-{i}"),
+                completed: i as u32,
+                total: 8,
+            })
+            .await
+            .unwrap();
+        }
+
+        let (_lagged, warnings) = bus.backpressure_stats();
+        assert!(
+            warnings > 0,
+            "backpressure_warning_count 应递增,实际: {warnings}"
+        );
     }
 }

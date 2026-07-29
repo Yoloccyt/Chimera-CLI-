@@ -398,7 +398,13 @@ impl MembraneFilter {
             | NexusEvent::McpNodeHeartbeat { .. }
             | NexusEvent::ChtcAdapterStatus { .. }
             | NexusEvent::AgentHeartbeat { .. }
-            | NexusEvent::McpMessageReceived { .. } => EventCategory::ReadMetric,
+            | NexusEvent::McpMessageReceived { .. }
+            // P2-1:协调成本/推理增益比值报告(L9 quest-engine 发布,只读指标)
+            | NexusEvent::CoordinationRatioReported { .. }
+            // polish-v2.7 P1-2:RuntimeAuditor 审计发现与五维度报告(L9 efficiency-monitor 发布,
+            // 观察性事实陈述,外环本地消化即可,不需穿膜进内环)
+            | NexusEvent::AuditFindingRaised { .. }
+            | NexusEvent::HarnessReportGenerated { .. } => EventCategory::ReadMetric,
 
             // === NormalLow:剩余 Normal 事件(默认本地消化) ===
             // 包括 Quest 生命周期/控制请求/路由执行结果/Agent 协作等
@@ -480,7 +486,11 @@ impl MembraneFilter {
             | NexusEvent::AgentTaskFailed { .. }
             | NexusEvent::AsaIntervention { .. }
             // P4-W16.2.2:R1 影子模式回滚失败为 Critical（与 AsaIntervention 同级）
-            | NexusEvent::R1ShadowRollbackFailed { .. } => EventCategory::Critical,
+            | NexusEvent::R1ShadowRollbackFailed { .. }
+            // ADR-042 决策 4:R2 冻结违反及回滚失败为 Critical(奖励黑客风险立即生效,
+            // 必须走 mpsc 旁路通道投递到 SecCore/Parliament 进行处置)
+            | NexusEvent::R2FreezeViolation { .. }
+            | NexusEvent::R2FreezeRollbackFailed { .. } => EventCategory::Critical,
         }
     }
 

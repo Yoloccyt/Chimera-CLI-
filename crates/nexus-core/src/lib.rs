@@ -36,7 +36,9 @@
 pub mod clv;
 pub mod config;
 pub mod error;
+#[macro_use]
 pub mod newtype;
+pub mod ids;
 pub mod path_util;
 pub mod state;
 pub mod storage_traits;
@@ -46,6 +48,7 @@ pub mod types;
 pub use clv::{cosine_similarity_slices, CLV};
 pub use config::ChimeraConfig;
 pub use error::NexusError;
+pub use ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, TaskId};
 pub use state::NexusState;
 pub use storage_traits::{apply_performance_pragmas, PragmaCapable};
 pub use types::{Checkpoint, MultimodalInput, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
@@ -55,6 +58,7 @@ pub mod prelude {
     pub use crate::clv::{cosine_similarity_slices, CLV};
     pub use crate::config::ChimeraConfig;
     pub use crate::error::NexusError;
+    pub use crate::ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, TaskId};
     pub use crate::state::NexusState;
     pub use crate::storage_traits::{apply_performance_pragmas, PragmaCapable};
     pub use crate::types::{

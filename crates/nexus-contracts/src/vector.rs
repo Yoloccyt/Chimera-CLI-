@@ -314,6 +314,8 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::HashMap;
+    // 统一使用 nexus-core 权威实现,避免多副本优化不一致
+    use nexus_core::cosine_similarity_slices;
 
     /// 测试用 mock 实现 — 真实存储数据的内存 HashMap，验证 trait 契约
     ///
@@ -370,7 +372,7 @@ mod tests {
             let vectors = self.vectors.borrow();
             let mut scored: Vec<VectorHit> = vectors
                 .iter()
-                .map(|(id, vec)| VectorHit::new(id.clone(), cosine_similarity(query, vec)))
+                .map(|(id, vec)| VectorHit::new(id.clone(), cosine_similarity_slices(query, vec)))
                 .collect();
             // Top-K 用 select_nth_unstable_by（O(n)），符合工程约定
             if k < scored.len() {
@@ -448,17 +450,6 @@ mod tests {
         }
     }
 
-    /// 简化版余弦相似度（测试用，生产用 nexus_core::cosine_similarity_slices）
-    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm_a == 0.0 || norm_b == 0.0 {
-            return 0.0;
-        }
-        dot / (norm_a * norm_b)
-    }
-
     // ============================================================
     // VectorHit 契约测试
     // ============================================================
@@ -479,12 +470,14 @@ mod tests {
         assert_ne!(h1, h3);
     }
 
+    // 统一使用 Result 返回模式，便于定位序列化/反序列化失败点
     #[test]
-    fn test_vector_hit_serde_roundtrip() {
+    fn test_vector_hit_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let hit = VectorHit::new("entry-1", 0.95);
-        let json = serde_json::to_string(&hit).expect("serialize");
-        let decoded: VectorHit = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&hit)?;
+        let decoded: VectorHit = serde_json::from_str(&json)?;
         assert_eq!(hit, decoded);
+        Ok(())
     }
 
     #[test]
@@ -499,10 +492,11 @@ mod tests {
     // ============================================================
 
     #[test]
-    fn test_vector_store_default_returns_usable_instance() {
+    fn test_vector_store_default_returns_usable_instance() -> Result<(), String> {
         let store = InMemoryVectorStore::default();
         // default() 返回的实例应立即可用
-        assert!(store.top_k(&[0.0; 512], 10, "").unwrap().is_empty());
+        assert!(store.top_k(&[0.0; 512], 10, "")?.is_empty());
+        Ok(())
     }
 
     #[test]
@@ -520,17 +514,18 @@ mod tests {
     }
 
     #[test]
-    fn test_vector_store_upsert_overwrites_existing() {
+    fn test_vector_store_upsert_overwrites_existing() -> Result<(), String> {
         // UPSERT 语义：相同 id 覆盖旧向量
         let store = InMemoryVectorStore::with_dim(2);
-        store.upsert("a", &[1.0, 0.0], ()).unwrap();
-        store.upsert("a", &[0.0, 1.0], ()).unwrap();
+        store.upsert("a", &[1.0, 0.0], ())?;
+        store.upsert("a", &[0.0, 1.0], ())?;
 
         // 查询 [0.0, 1.0] 应命中 "a"（score ≈ 1.0）
-        let results = store.top_k(&[0.0, 1.0], 1, "").unwrap();
+        let results = store.top_k(&[0.0, 1.0], 1, "")?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "a");
         assert!((results[0].score - 1.0).abs() < 1e-5);
+        Ok(())
     }
 
     #[test]
@@ -541,44 +536,48 @@ mod tests {
     }
 
     #[test]
-    fn test_vector_store_remove_deletes_entry() {
+    fn test_vector_store_remove_deletes_entry() -> Result<(), String> {
         let store = InMemoryVectorStore::with_dim(3);
-        store.upsert("a", &[1.0, 0.0, 0.0], ()).unwrap();
-        assert_eq!(store.stats().unwrap().entry_count, 1);
+        store.upsert("a", &[1.0, 0.0, 0.0], ())?;
+        assert_eq!(store.stats()?.entry_count, 1);
 
-        store.remove("a").unwrap();
-        assert_eq!(store.stats().unwrap().entry_count, 0);
+        store.remove("a")?;
+        assert_eq!(store.stats()?.entry_count, 0);
+        Ok(())
     }
 
     #[test]
-    fn test_vector_store_top_k_empty_returns_empty() {
+    fn test_vector_store_top_k_empty_returns_empty() -> Result<(), String> {
         let store = InMemoryVectorStore::with_dim(3);
-        let results = store.top_k(&[1.0, 0.0, 0.0], 5, "").unwrap();
+        let results = store.top_k(&[1.0, 0.0, 0.0], 5, "")?;
         assert!(results.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn test_vector_store_top_k_returns_sorted_by_score_desc() {
+    fn test_vector_store_top_k_returns_sorted_by_score_desc() -> Result<(), String> {
         let store = InMemoryVectorStore::with_dim(2);
-        store.upsert("a", &[1.0, 0.0], ()).unwrap(); // 最相似
-        store.upsert("b", &[0.9, 0.1], ()).unwrap(); // 次相似
-        store.upsert("c", &[0.0, 1.0], ()).unwrap(); // 正交
+        store.upsert("a", &[1.0, 0.0], ())?; // 最相似
+        store.upsert("b", &[0.9, 0.1], ())?; // 次相似
+        store.upsert("c", &[0.0, 1.0], ())?; // 正交
 
-        let results = store.top_k(&[1.0, 0.0], 2, "").unwrap();
+        let results = store.top_k(&[1.0, 0.0], 2, "")?;
         assert_eq!(results.len(), 2);
         // 按分数降序
         assert_eq!(results[0].id, "a");
         assert_eq!(results[1].id, "b");
         assert!(results[0].score > results[1].score);
+        Ok(())
     }
 
     #[test]
-    fn test_vector_store_top_k_k_larger_than_size() {
+    fn test_vector_store_top_k_k_larger_than_size() -> Result<(), String> {
         let store = InMemoryVectorStore::with_dim(2);
-        store.upsert("a", &[1.0, 0.0], ()).unwrap();
+        store.upsert("a", &[1.0, 0.0], ())?;
 
-        let results = store.top_k(&[1.0, 0.0], 10, "").unwrap();
+        let results = store.top_k(&[1.0, 0.0], 10, "")?;
         assert_eq!(results.len(), 1); // 返回全部条目
+        Ok(())
     }
 
     #[test]
@@ -602,15 +601,16 @@ mod tests {
     // ============================================================
 
     #[test]
-    fn test_vector_store_ext_insert_batch_inserts_all() {
+    fn test_vector_store_ext_insert_batch_inserts_all() -> Result<(), String> {
         let store = InMemoryVectorStore::with_dim(2);
         let entries = vec![
             ("a".to_string(), vec![1.0, 0.0], ()),
             ("b".to_string(), vec![0.0, 1.0], ()),
             ("c".to_string(), vec![0.5, 0.5], ()),
         ];
-        store.insert_batch(entries).unwrap();
-        assert_eq!(store.stats().unwrap().entry_count, 3);
+        store.insert_batch(entries)?;
+        assert_eq!(store.stats()?.entry_count, 3);
+        Ok(())
     }
 
     #[test]
@@ -628,35 +628,38 @@ mod tests {
     }
 
     #[test]
-    fn test_vector_store_ext_compact_returns_ok() {
+    fn test_vector_store_ext_compact_returns_ok() -> Result<(), String> {
         let store = InMemoryVectorStore::with_dim(2);
-        store.upsert("a", &[1.0, 0.0], ()).unwrap();
-        store.remove("a").unwrap();
+        store.upsert("a", &[1.0, 0.0], ())?;
+        store.remove("a")?;
         // compact 应幂等返回 Ok
         assert!(store.compact().is_ok());
+        Ok(())
     }
 
     #[test]
-    fn test_vector_store_ext_stats_returns_correct_count() {
+    fn test_vector_store_ext_stats_returns_correct_count() -> Result<(), String> {
         let store = InMemoryVectorStore::with_dim(3);
-        store.upsert("a", &[1.0, 0.0, 0.0], ()).unwrap();
-        store.upsert("b", &[0.0, 1.0, 0.0], ()).unwrap();
+        store.upsert("a", &[1.0, 0.0, 0.0], ())?;
+        store.upsert("b", &[0.0, 1.0, 0.0], ())?;
 
-        let stats = store.stats().unwrap();
+        let stats = store.stats()?;
         assert_eq!(stats.entry_count, 2);
         assert_eq!(stats.dimension, 3);
         assert_eq!(stats.backend, VectorBackend::Memory);
         // 2 entries × 3 dims × 4 bytes/f32 = 24 bytes
         assert_eq!(stats.memory_bytes, 24);
+        Ok(())
     }
 
     #[test]
-    fn test_vector_store_ext_stats_empty_store() {
+    fn test_vector_store_ext_stats_empty_store() -> Result<(), String> {
         let store = InMemoryVectorStore::with_dim(512);
-        let stats = store.stats().unwrap();
+        let stats = store.stats()?;
         assert_eq!(stats.entry_count, 0);
         assert!(stats.is_empty());
         assert_eq!(stats.memory_bytes, 0);
+        Ok(())
     }
 
     #[test]
@@ -695,11 +698,12 @@ mod tests {
     }
 
     #[test]
-    fn test_vector_backend_serde_roundtrip() {
+    fn test_vector_backend_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let backend = VectorBackend::Hnsw;
-        let json = serde_json::to_string(&backend).expect("serialize");
-        let decoded: VectorBackend = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&backend)?;
+        let decoded: VectorBackend = serde_json::from_str(&json)?;
         assert_eq!(backend, decoded);
+        Ok(())
     }
 
     #[test]
@@ -767,16 +771,17 @@ mod tests {
     }
 
     #[test]
-    fn test_vector_store_stats_serde_roundtrip() {
+    fn test_vector_store_stats_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let stats = VectorStoreStats {
             entry_count: 42,
             dimension: 512,
             memory_bytes: 1024,
             backend: VectorBackend::Hnsw,
         };
-        let json = serde_json::to_string(&stats).expect("serialize");
-        let decoded: VectorStoreStats = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&stats)?;
+        let decoded: VectorStoreStats = serde_json::from_str(&json)?;
         assert_eq!(stats, decoded);
+        Ok(())
     }
 
     #[test]
@@ -796,55 +801,56 @@ mod tests {
     // ============================================================
 
     #[test]
-    fn test_combined_vector_store_and_ext_traits() {
+    fn test_combined_vector_store_and_ext_traits() -> Result<(), String> {
         // 验证 impl VectorStore + VectorStoreExt 约束的泛型函数可用
         // 通过 trait bound 约束验证两种 trait 可同时用于同一类型
-        fn use_store<S>(store: &S)
+        fn use_store<S>(store: &S) -> Result<(), S::Error>
         where
             S: VectorStore<Meta = ()> + VectorStoreExt,
             S::Error: std::fmt::Debug,
         {
-            store.upsert("a", &[1.0, 0.0], ()).unwrap();
-            store.upsert("b", &[0.0, 1.0], ()).unwrap();
-            let results = store.top_k(&[1.0, 0.0], 1, "").unwrap();
+            store.upsert("a", &[1.0, 0.0], ())?;
+            store.upsert("b", &[0.0, 1.0], ())?;
+            let results = store.top_k(&[1.0, 0.0], 1, "")?;
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].id, "a");
-            let stats = store.stats().unwrap();
+            let stats = store.stats()?;
             assert_eq!(stats.entry_count, 2);
             assert_eq!(store.backend(), VectorBackend::Memory);
+            Ok(())
         }
 
         let store = InMemoryVectorStore::with_dim(2);
-        use_store(&store);
+        use_store(&store)?;
+        Ok(())
     }
 
     #[test]
-    fn test_full_lifecycle_upsert_search_remove_compact() {
+    fn test_full_lifecycle_upsert_search_remove_compact() -> Result<(), String> {
         // 端到端生命周期：upsert → top_k → remove → compact → stats
         let store = InMemoryVectorStore::with_dim(3);
-        assert!(store.stats().unwrap().is_empty());
+        assert!(store.stats()?.is_empty());
 
         // 批量插入
-        store
-            .insert_batch(vec![
-                ("a".to_string(), vec![1.0, 0.0, 0.0], ()),
-                ("b".to_string(), vec![0.0, 1.0, 0.0], ()),
-                ("c".to_string(), vec![0.0, 0.0, 1.0], ()),
-            ])
-            .unwrap();
-        assert_eq!(store.stats().unwrap().entry_count, 3);
+        store.insert_batch(vec![
+            ("a".to_string(), vec![1.0, 0.0, 0.0], ()),
+            ("b".to_string(), vec![0.0, 1.0, 0.0], ()),
+            ("c".to_string(), vec![0.0, 0.0, 1.0], ()),
+        ])?;
+        assert_eq!(store.stats()?.entry_count, 3);
 
         // 检索
-        let results = store.top_k(&[1.0, 0.0, 0.0], 2, "").unwrap();
+        let results = store.top_k(&[1.0, 0.0, 0.0], 2, "")?;
         assert_eq!(results[0].id, "a");
         assert!((results[0].score - 1.0).abs() < 1e-5);
 
         // 删除
-        store.remove("b").unwrap();
-        assert_eq!(store.stats().unwrap().entry_count, 2);
+        store.remove("b")?;
+        assert_eq!(store.stats()?.entry_count, 2);
 
         // 压缩（幂等）
-        store.compact().unwrap();
-        assert_eq!(store.stats().unwrap().entry_count, 2);
+        store.compact()?;
+        assert_eq!(store.stats()?.entry_count, 2);
+        Ok(())
     }
 }

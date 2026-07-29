@@ -173,7 +173,9 @@ impl NexusEvent {
             | Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }
             | Self::QuestPriorityChanged { .. }
-            | Self::QuestPriorityAdjusted { .. } => EventTopic::Quest,
+            | Self::QuestPriorityAdjusted { .. }
+            // P2-1:协调成本/推理增益比值报告(L9 quest-engine 发布,三重悖论推理悖论红线度量)
+            | Self::CoordinationRatioReported { .. } => EventTopic::Quest,
 
             // === System (6 + P2.4 1 + P2.5 1 个) === L10 Interface + 跨层系统告警
             Self::McpMessageReceived { .. }
@@ -182,6 +184,11 @@ impl NexusEvent {
             | Self::McpMeshTransactionCompleted { .. }
             | Self::CsnSubstitutionTriggered { .. }
             | Self::EfficiencyAlertTriggered { .. }
+            // polish-v2.7 P1-2:RuntimeAuditor 审计事件(L9 efficiency-monitor 发布)
+            // WHY 归 System:与 EfficiencyAlertTriggered 同属跨层监控/自评类事件,
+            // 订阅者(TUI 仪表盘/AEGIS)按 System 主题过滤即可获取全部自评信号
+            | Self::AuditFindingRaised { .. }
+            | Self::HarnessReportGenerated { .. }
             // P2.4 TUI v1.7-omega:MCP 节点心跳(L10 mcp-mesh 发布)
             | Self::McpNodeHeartbeat { .. }
             // P2.5 TUI v1.7-omega:CHTC 适配器状态(L10 chtc-bridge 发布)
@@ -205,6 +212,10 @@ impl NexusEvent {
             | Self::R1ShadowRegressionDetected { .. }
             | Self::R1ShadowPromotionReady { .. }
             | Self::R1ShadowRollbackFailed { .. }
+            // ADR-042 决策 4:R2 冻结违反处置事件(L5 gsoe-evolution 进化路径守护,
+            // 归入 Knowledge 与 R1 影子模式事件同级)
+            | Self::R2FreezeViolation { .. }
+            | Self::R2FreezeRollbackFailed { .. }
             // P5.2.3:Spec 版本注册完成(L5 gsoe-evolution 发布,通知下游 spec 谱系更新)
             | Self::SpecRegistered { .. } => EventTopic::Knowledge,
 

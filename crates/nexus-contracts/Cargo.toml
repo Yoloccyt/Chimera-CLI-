@@ -17,6 +17,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 proptest = { workspace = true }
+# 测试用:统一使用 nexus-core 权威 cosine_similarity_slices,避免多副本优化不一致
+nexus-core = { path = "../nexus-core" }
 
 # ============================================================
 # ADR-033: L0 nexus-contracts 契约层
