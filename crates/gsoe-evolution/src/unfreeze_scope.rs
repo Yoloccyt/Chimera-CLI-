@@ -104,6 +104,23 @@ impl UnfreezeScope {
         self.allowed.remove(target);
     }
 
+    /// 原子全量重冻结 — 一次性清空白名单,回到 `frozen()` 全冻结态
+    ///
+    /// # WHY 需要原子操作(评审 S-2.2)
+    ///
+    /// 中止协议(ADR-053 决策 4)要求"立即 revoke 全部目标"。若靠调用方
+    /// 逐个 `revoke` 遍历,存在两个安全隐患:①调用方需先知晓有哪些目标已纳入,
+    /// 遗漏即残留解冻窗口;②遍历过程非原子,并发下可能出现"清了一半"的中间态。
+    /// 本方法一次 `clear()` 保证要么全冻结要么不变,消除中间态窗口。
+    ///
+    /// # 返回
+    /// 被清空的目标数(供审计记录本次重冻结影响面)。
+    pub fn revoke_all(&mut self) -> usize {
+        let revoked = self.allowed.len();
+        self.allowed.clear();
+        revoked
+    }
+
     /// 判定目标是否在解冻范围内(fail-closed)
     ///
     /// # 返回
@@ -225,6 +242,32 @@ mod tests {
         scope.allow(RlUpdateTarget::GsoeVariantSelection);
         scope.allow(RlUpdateTarget::GsoeVariantSelection); // 重复纳入
         assert_eq!(scope.allowed_count(), 1, "重复纳入不应增加计数");
+    }
+
+    #[test]
+    fn test_revoke_all_atomic_refreeze() {
+        // 评审 S-2.2:原子全量重冻结
+        let mut scope = UnfreezeScope::frozen()
+            .with_target(RlUpdateTarget::GsoeVariantSelection)
+            .with_target(RlUpdateTarget::SeamPolicy(4))
+            .with_target(RlUpdateTarget::AutoDpoPreference);
+        assert_eq!(scope.allowed_count(), 3);
+        // 一次 revoke_all 清空全部,返回被清空数
+        let revoked = scope.revoke_all();
+        assert_eq!(revoked, 3, "应返回被清空的目标数");
+        assert!(scope.is_fully_frozen(), "revoke_all 后应全冻结");
+        // 逐个探测:全部 OutOfScope
+        assert!(!scope.contains(&RlUpdateTarget::GsoeVariantSelection));
+        assert!(!scope.contains(&RlUpdateTarget::SeamPolicy(4)));
+        assert!(!scope.contains(&RlUpdateTarget::AutoDpoPreference));
+    }
+
+    #[test]
+    fn test_revoke_all_on_empty_is_noop() {
+        // 已全冻结时 revoke_all 返回 0 且保持全冻结(幂等)
+        let mut scope = UnfreezeScope::frozen();
+        assert_eq!(scope.revoke_all(), 0);
+        assert!(scope.is_fully_frozen());
     }
 
     #[test]

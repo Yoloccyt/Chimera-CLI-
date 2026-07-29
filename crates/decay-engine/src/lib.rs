@@ -62,6 +62,8 @@ pub use formal::{DecayConsistencyChecker, DecayEventKind, LevelTransition};
 pub use learner_holder::DecayLearnerHolder;
 // R2 解冻阶段③ 前置 3:影子模式熔断开关重导出
 pub use shadow_breaker::{BreakerState, RlGateVerdict, ShadowModeCircuitBreaker};
+// 评审 S-2.1:复位授权凭证重导出
+pub use shadow_breaker::{ResetAuthError, ResetAuthorization};
 pub use types::{Capability, CapabilityLevel, DecayConfig, DecayEvent};
 
 /// 默认衰减配置

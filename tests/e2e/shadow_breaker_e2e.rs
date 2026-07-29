@@ -114,8 +114,11 @@ fn test_exception_trip_irreversible_then_reset_recovers() {
         "跳闸不可逆:后续通过仍拒绝"
     );
 
-    // 人工复位(模拟排查修复后)→ 恢复许可
-    cb.reset();
+    // 人工复位(模拟排查修复后)→ 恢复许可(评审 S-2.1:须携带授权凭证)
+    cb.reset(
+        decay_engine::shadow_breaker::ResetAuthorization::new("E01+E02", "跳闸根因已修复")
+            .expect("授权凭证非空"),
+    );
     assert!(cb.observe(&good_result).is_permitted(), "复位后应恢复许可");
 }
 

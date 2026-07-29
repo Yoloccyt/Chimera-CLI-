@@ -37,6 +37,73 @@
 //! - **跳闸原因留档**:`trip_cause` 记录首次触发跳闸的违规反例,供审计追溯
 
 use nexus_contracts::formal_props::VerificationResult;
+use thiserror::Error;
+
+/// 复位授权构造错误(评审 S-2.1)
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ResetAuthError {
+    /// 授权方或理由为空 — 复位必须留下可追溯的问责记录
+    #[error("复位授权无效: authorized_by 与 reason 均不可为空(复位须可问责)")]
+    EmptyField,
+}
+
+/// 熔断器复位授权凭证(评审 S-2.1)
+///
+/// # WHY 需要授权凭证(安全边界的诚实声明)
+///
+/// 评审 S-2.1 指出:裸 `reset()` 使任何持 `&mut` 者可静默复位,"永久跳闸"名不副实。
+/// 本凭证把复位从"无参数动作"改为"必须携带非空问责记录的动作":
+///
+/// - **强制问责**:`authorized_by`(授权方,应为治理法定人数如 "E01+E02")+
+///   `reason`(复位理由)均不可为空,构造期即校验——杜绝"无记录静默复位"。
+/// - **审计留存**:凭证被熔断器留存(`last_reset`),复位事实与授权者可事后追溯。
+///
+/// # 边界诚实声明
+///
+/// 单进程 Rust 库层面**无法密码学阻止**持 `&mut` 的代码构造本凭证并复位——
+/// 真正的密码学授权需外部签名基础设施(超出本层)。本凭证提供的是**可问责性
+/// 防线**:复位不可能匿名/意外发生,必留下 who+why 记录。密码学级授权由上层
+/// 特权审批流(阶段③ 编排器)在此凭证之上叠加。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResetAuthorization {
+    /// 授权方标识(应代表治理法定人数,如 "E01+E02")
+    authorized_by: String,
+    /// 复位理由(审计追溯,如已排查的跳闸根因与修复措施)
+    reason: String,
+}
+
+impl ResetAuthorization {
+    /// 构造复位授权凭证,`authorized_by` 与 `reason` 均不可为空(去空白后非空)
+    ///
+    /// # 错误
+    /// 任一字段去除首尾空白后为空 → [`ResetAuthError::EmptyField`]。
+    pub fn new(
+        authorized_by: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Result<Self, ResetAuthError> {
+        let authorized_by = authorized_by.into();
+        let reason = reason.into();
+        if authorized_by.trim().is_empty() || reason.trim().is_empty() {
+            return Err(ResetAuthError::EmptyField);
+        }
+        Ok(Self {
+            authorized_by,
+            reason,
+        })
+    }
+
+    /// 授权方标识
+    #[must_use]
+    pub fn authorized_by(&self) -> &str {
+        &self.authorized_by
+    }
+
+    /// 复位理由
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+}
 
 /// 熔断器状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +146,8 @@ pub struct ShadowModeCircuitBreaker {
     trip_cause: Option<String>,
     /// 累计观测周期数(审计用)
     observations: u64,
+    /// 最近一次复位的授权凭证(评审 S-2.1,审计留存;从未复位为 None)
+    last_reset: Option<ResetAuthorization>,
 }
 
 impl Default for ShadowModeCircuitBreaker {
@@ -94,6 +163,7 @@ impl ShadowModeCircuitBreaker {
             state: BreakerState::Armed,
             trip_cause: None,
             observations: 0,
+            last_reset: None,
         }
     }
 
@@ -171,17 +241,28 @@ impl ShadowModeCircuitBreaker {
         self.observations
     }
 
-    /// 人工复位熔断器 → 回到武装态
+    /// 人工复位熔断器 → 回到武装态(评审 S-2.1:须携带授权凭证)
     ///
     /// # 安全考量
     ///
     /// 复位是**人工干预动作**:调用方必须先排查跳闸根因(`trip_cause`)、
-    /// 确认形式化违规已修复,再复位。调用方须审计记录复位事件(§6.2)。
+    /// 确认形式化违规已修复,再复位。复位须携带 [`ResetAuthorization`] 凭证
+    /// (非空 who+why),凭证被留存供审计(`last_reset`)——杜绝匿名/意外复位。
     /// 不提供"自动复位"——防止瞬时抖动掩盖真实安全问题。
-    pub fn reset(&mut self) {
+    ///
+    /// # 参数
+    /// - `authorization`: 复位授权凭证(非空授权方 + 理由,构造期已校验)
+    pub fn reset(&mut self, authorization: ResetAuthorization) {
         self.state = BreakerState::Armed;
         self.trip_cause = None;
         // observations 累计不清零(审计连续性)
+        self.last_reset = Some(authorization);
+    }
+
+    /// 最近一次复位的授权凭证(从未复位为 None)— 审计查询用
+    #[must_use]
+    pub fn last_reset(&self) -> Option<&ResetAuthorization> {
+        self.last_reset.as_ref()
     }
 }
 
@@ -244,7 +325,7 @@ mod tests {
         assert!(cb.is_tripped());
 
         // 人工复位后恢复武装态
-        cb.reset();
+        cb.reset(ResetAuthorization::new("E01+E02", "已排查跳闸根因并修复").unwrap());
         assert_eq!(cb.state(), BreakerState::Armed);
         assert!(cb.trip_cause().is_none());
         // 复位后重新许可
@@ -282,10 +363,54 @@ mod tests {
         let mut cb = ShadowModeCircuitBreaker::new();
         cb.observe(&[satisfied()]);
         cb.observe(&[violated("x")]);
-        cb.reset();
+        cb.reset(ResetAuthorization::new("E01+E02", "测试复位").unwrap());
         cb.observe(&[satisfied()]);
         // 复位不清零观测计数(审计连续性)
         assert_eq!(cb.observations(), 3);
+    }
+
+    // ============================================================
+    // 评审 S-2.1:复位授权凭证约束
+    // ============================================================
+
+    #[test]
+    fn test_reset_authorization_rejects_empty_fields() {
+        // 空授权方或空理由 → 构造失败(杜绝无问责复位)
+        assert_eq!(
+            ResetAuthorization::new("", "理由"),
+            Err(ResetAuthError::EmptyField)
+        );
+        assert_eq!(
+            ResetAuthorization::new("E01", ""),
+            Err(ResetAuthError::EmptyField)
+        );
+        assert_eq!(
+            ResetAuthorization::new("   ", "理由"),
+            Err(ResetAuthError::EmptyField),
+            "纯空白应视为空"
+        );
+    }
+
+    #[test]
+    fn test_reset_records_authorization_for_audit() {
+        let mut cb = ShadowModeCircuitBreaker::new();
+        cb.observe(&[violated("属性违反")]);
+        assert!(cb.is_tripped());
+        assert!(cb.last_reset().is_none(), "复位前无授权记录");
+
+        let auth = ResetAuthorization::new("E01+E02", "根因已修复:XX").unwrap();
+        cb.reset(auth);
+        // 复位后授权凭证被留存供审计
+        let recorded = cb.last_reset().expect("复位后应有授权记录");
+        assert_eq!(recorded.authorized_by(), "E01+E02");
+        assert!(recorded.reason().contains("根因已修复"));
+    }
+
+    #[test]
+    fn test_valid_authorization_accessors() {
+        let auth = ResetAuthorization::new("E02", "安全复核通过").unwrap();
+        assert_eq!(auth.authorized_by(), "E02");
+        assert_eq!(auth.reason(), "安全复核通过");
     }
 
     #[test]
