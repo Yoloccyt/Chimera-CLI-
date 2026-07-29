@@ -382,6 +382,18 @@ path = "tests/e2e/formal_verifier_gate_e2e.rs"
 name = "unfreeze_scope_e2e"
 path = "tests/e2e/unfreeze_scope_e2e.rs"
 
+# ============================================================
+# R2 解冻前置收敛 capstone: 统一决策闸门 E2E
+#
+# WHY 新增 test target: 验证 UnfreezeGovernor 把 4 项前置(后悔率采集 → 熔断 →
+# 范围 → 统一决策)串成完整链路的组合裁决,覆盖 4 前置全通过/某维度失败/
+# 全冻结/渐进解冻三路径,是 4 前置的组合封套权威验证。
+# ============================================================
+
+[[test]]
+name = "unfreeze_governor_e2e"
+path = "tests/e2e/unfreeze_governor_e2e.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。

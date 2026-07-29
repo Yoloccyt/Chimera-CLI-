@@ -61,6 +61,11 @@ pub mod spec_loader;
 /// P4-W15.2.1: HarnessSpec 版本化注册表（谱系追踪 + A/B 测试 + 一键回滚 + 不可进化面守护）
 pub mod spec_registry;
 pub mod types;
+/// R2 解冻统一决策闸门 — 4 项前置的组合封套(capstone)
+///
+/// 组合范围(WHAT,UnfreezeScope)与验证(WHETHER,调用方传入)为单一 fail-closed
+/// 决策入口,Denied 指明失败维度;审计计数。决策闸门 ≠ 解冻,不含 R2 扫描关键词。
+pub mod unfreeze_governor;
 /// R2 解冻阶段③ 前置 4 — 解冻范围界定守卫(ADR-052 待办 4)
 ///
 /// fail-closed 白名单:未显式纳入范围的 RL 更新目标一律拒绝(默认全冻结)。
@@ -88,6 +93,8 @@ pub use formal_gate::{
 };
 // R2 解冻阶段③ 前置 4:UnfreezeScope 公开 API 重导出
 pub use unfreeze_scope::{RlUpdateTarget, ScopeVerdict, UnfreezeScope};
+// R2 解冻统一决策闸门:UnfreezeGovernor 公开 API 重导出
+pub use unfreeze_governor::{DenialDimension, UnfreezeDecision, UnfreezeGovernor};
 // polish-v2.7 closure Stage B-8: Meta-Agent 适配器公开 API 重导出
 pub use meta_adapter::{
     ExternalHarnessDescriptor, ExternalStep, MetaAdapterError, MetaAgentAdapter,
