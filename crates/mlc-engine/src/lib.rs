@@ -45,8 +45,12 @@ pub mod l0_working;
 pub mod l1_episodic;
 pub mod l2_semantic;
 pub mod l3_procedural;
+/// polish-v2.7 P4-3:记忆图谱(语义边 + 共现边,Top-K 近邻建边,ADR-049)
+pub mod memory_graph;
 /// 记忆策略学习器持有器 — S2 接缝策略异步下发 + 本地 fallback（P4-W14.1）
 pub mod memory_strategy_learner;
+/// polish-v2.7 P4-4:记忆 Sideagent 二次验证(四检查项加权,幽灵记忆防线,ADR-049)
+pub mod sideagent;
 pub mod storage_impl;
 pub mod types;
 

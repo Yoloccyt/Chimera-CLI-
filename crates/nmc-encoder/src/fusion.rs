@@ -178,9 +178,9 @@ impl NmcEncoder {
         config.validate()?;
         Ok(Self {
             text_perceptor: TextPerceptor::new(config.clone()),
-            image_perceptor: ImagePerceptor::new(),
-            video_perceptor: VideoPerceptor::new(),
-            audio_perceptor: AudioPerceptor::new(),
+            image_perceptor: ImagePerceptor::new(config.clone()),
+            video_perceptor: VideoPerceptor::new(config.clone()),
+            audio_perceptor: AudioPerceptor::new(config.clone()),
             desktop_perceptor: DesktopPerceptor::new(config.clone()),
             fusion: MultimodalFusionEngine::new(config),
             event_bus: None,
@@ -192,9 +192,9 @@ impl NmcEncoder {
         config.validate()?;
         Ok(Self {
             text_perceptor: TextPerceptor::new(config.clone()),
-            image_perceptor: ImagePerceptor::new(),
-            video_perceptor: VideoPerceptor::new(),
-            audio_perceptor: AudioPerceptor::new(),
+            image_perceptor: ImagePerceptor::new(config.clone()),
+            video_perceptor: VideoPerceptor::new(config.clone()),
+            audio_perceptor: AudioPerceptor::new(config.clone()),
             desktop_perceptor: DesktopPerceptor::new(config.clone()),
             fusion: MultimodalFusionEngine::new(config),
             event_bus: Some(bus),

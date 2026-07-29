@@ -25,6 +25,7 @@ use crate::types::{CognitiveElement, Modality, PerceptionInput};
 pub mod audio;
 pub mod desktop;
 pub mod image;
+pub mod onnx_backend;
 pub mod text;
 pub mod video;
 
@@ -33,6 +34,8 @@ pub use desktop::DesktopPerceptor;
 pub use image::ImagePerceptor;
 pub use text::TextPerceptor;
 pub use video::VideoPerceptor;
+
+pub use onnx_backend::{ModelType, OnnxBackend};
 
 /// 感知器 trait — 将多模态输入编码为认知元素
 ///
@@ -95,19 +98,19 @@ mod tests {
 
     #[test]
     fn test_image_perceptor_modality() {
-        let p = ImagePerceptor::new();
+        let p = ImagePerceptor::new(NmcConfig::default());
         assert_eq!(p.modality(), Modality::Image);
     }
 
     #[test]
     fn test_video_perceptor_modality() {
-        let p = VideoPerceptor::new();
+        let p = VideoPerceptor::new(NmcConfig::default());
         assert_eq!(p.modality(), Modality::Video);
     }
 
     #[test]
     fn test_audio_perceptor_modality() {
-        let p = AudioPerceptor::new();
+        let p = AudioPerceptor::new(NmcConfig::default());
         assert_eq!(p.modality(), Modality::Audio);
     }
 

@@ -4,8 +4,11 @@
 //!
 //! # 设计决策(WHY)
 //! - 使用 `thiserror` 而非 `anyhow`:库层错误需明确变体,便于调用方按错误类型决策
-//! - 4 个变体覆盖模态校验、编码失败、配置错误、维度不匹配的所有失败场景
+//! - 7 个变体覆盖模态校验、编码失败、配置错误、维度不匹配、模型加载、推理、预处理的全部失败场景
 //! - `EncodingFailed` 携带 modality 与 reason,便于定位是哪个感知器失败
+//! - `ModelLoadError`/`InferenceError`/`PreprocessError` 为 ONNX 推理流程专用,
+//!   分别对应模型加载、推理执行、输入预处理三个阶段,便于调用方区分错误来源
+//! - 新增变体不影响现有 `From<EventBusError>` / `From<NexusError>` 转换逻辑
 
 use thiserror::Error;
 
@@ -42,6 +45,33 @@ pub enum NmcError {
         expected: usize,
         /// 实际维度
         actual: usize,
+    },
+
+    /// 模型加载失败 — ONNX 模型文件不存在、损坏或格式不兼容
+    #[error("模型加载失败(模型={model_name}): {reason}")]
+    ModelLoadError {
+        /// 模型名称(含模态标签,如 "图像(clip-vit-b32.onnx)")
+        model_name: String,
+        /// 失败原因(如 "文件不存在"、"格式不兼容")
+        reason: String,
+    },
+
+    /// 推理失败 — ONNX 推理过程中出错
+    #[error("推理失败(模态={modality}): {reason}")]
+    InferenceError {
+        /// 模态名称(如 "Image"/"Video"/"Audio")
+        modality: String,
+        /// 失败原因(如 "会话创建失败"、"张量形状不匹配")
+        reason: String,
+    },
+
+    /// 预处理失败 — 输入数据格式不正确或无法解码
+    #[error("预处理失败(模态={modality}): {reason}")]
+    PreprocessError {
+        /// 模态名称(如 "Image"/"Video"/"Audio")
+        modality: String,
+        /// 失败原因(如 "解码失败"、"尺寸不匹配")
+        reason: String,
     },
 }
 
@@ -110,6 +140,42 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("512"));
         assert!(msg.contains("256"));
+    }
+
+    #[test]
+    fn test_model_load_error_display() {
+        let err = NmcError::ModelLoadError {
+            model_name: "clip-vit-b32.onnx".into(),
+            reason: "文件不存在".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("clip-vit-b32.onnx"));
+        assert!(msg.contains("文件不存在"));
+        assert!(msg.contains("模型加载失败"));
+    }
+
+    #[test]
+    fn test_inference_error_display() {
+        let err = NmcError::InferenceError {
+            modality: "Image".into(),
+            reason: "会话创建失败".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Image"));
+        assert!(msg.contains("会话创建失败"));
+        assert!(msg.contains("推理失败"));
+    }
+
+    #[test]
+    fn test_preprocess_error_display() {
+        let err = NmcError::PreprocessError {
+            modality: "Video".into(),
+            reason: "解码失败:不支持的编码格式".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Video"));
+        assert!(msg.contains("解码失败"));
+        assert!(msg.contains("预处理失败"));
     }
 
     #[test]

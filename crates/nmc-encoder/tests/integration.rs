@@ -103,7 +103,7 @@ fn test_image_perceptor_returns_encoding_failed() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.to_string().contains("Image"));
-    assert!(err.to_string().contains("Week 7/8"));
+    assert!(err.to_string().contains("ONNX"));
 }
 
 #[test]

@@ -20,6 +20,16 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 # 内容哈希(SHA256,生成 CognitiveElement.content_hash)
 sha2 = { workspace = true }
+# tract: 纯 Rust ONNX 推理引擎，加载预训练多模态模型 (CLIP ViT-B/32, Whisper, VideoMAE)
+# WHY: ImagePerceptor/VideoPerceptor/AudioPerceptor 从占位升级为语义级嵌入推理，
+# ort 仅支持 MSVC 工具链，tract 为纯 Rust 实现，跨平台兼容且与 forbid(unsafe_code) 一致
+tract-onnx = { workspace = true }
+# 图像解码: PNG/JPEG/WebP 解码 + 缩放为模型输入尺寸 (224x224)
+# WHY: 图像预处理需将原始字节解码为 RGB 像素矩阵，再缩放归一化
+image = { workspace = true, features = ["png", "jpeg", "webp"] }
+# ndarray: 多维数组张量，ONNX 推理输入/输出的数据载体
+# WHY: ort crate 的输入/输出为 ndarray::Array，需在 nmc-encoder 中直接使用
+ndarray = { workspace = true }
 
 [dev-dependencies]
 # 属性测试框架(嵌入不变量验证)

@@ -49,7 +49,8 @@ pub use config::{FusionStrategy, NmcConfig};
 pub use error::NmcError;
 pub use fusion::{MultimodalFusionEngine, NmcEncoder};
 pub use perceptors::{
-    AudioPerceptor, DesktopPerceptor, ImagePerceptor, Perceptor, TextPerceptor, VideoPerceptor,
+    AudioPerceptor, DesktopPerceptor, ImagePerceptor, ModelType, OnnxBackend, Perceptor,
+    TextPerceptor, VideoPerceptor,
 };
 pub use types::{ClvOutput, CognitiveElement, DesktopCapture, Modality, PerceptionInput};
 

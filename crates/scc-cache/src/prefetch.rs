@@ -337,27 +337,33 @@ impl AccessPatternLearner {
     /// # 概率计算
     /// `P(next | current) = count(current → next) / Σ count(current → *)`
     pub fn predict_next(&self, current: &ContextId) -> Vec<(ContextId, f32)> {
-        let patterns = self.patterns.read().unwrap_or_else(|e| {
-            tracing::warn!("patterns RwLock poisoned, recovering");
-            e.into_inner()
-        });
+        // 锁内仅 collect 到 Vec,排序在锁外执行,缩短读锁持有时间。
+        // WHY:sort_by 是 O(n log n) CPU 密集操作,在读锁内执行会阻塞并发写请求
+        //(record_access)。将排序移到锁外后,读锁持有时间从 O(n log n) 降至 O(n),
+        // 显著降低写锁等待延迟。
+        let mut predictions: Vec<(ContextId, f32)> = {
+            let patterns = self.patterns.read().unwrap_or_else(|e| {
+                tracing::warn!("patterns RwLock poisoned, recovering");
+                e.into_inner()
+            });
 
-        let transitions = match patterns.get_transitions(current) {
-            Some(t) => t,
-            None => return Vec::new(),
-        };
+            let transitions = match patterns.get_transitions(current) {
+                Some(t) => t,
+                None => return Vec::new(),
+            };
 
-        let total: u32 = transitions.values().sum();
-        if total == 0 {
-            return Vec::new();
-        }
+            let total: u32 = transitions.values().sum();
+            if total == 0 {
+                return Vec::new();
+            }
 
-        let mut predictions: Vec<(ContextId, f32)> = transitions
-            .iter()
-            .map(|(id, &count)| (id.clone(), count as f32 / total as f32))
-            .collect();
+            transitions
+                .iter()
+                .map(|(id, &count)| (id.clone(), count as f32 / total as f32))
+                .collect()
+        }; // 读锁在此释放
 
-        // 按概率降序排列(partial_cmp 安全处理 NaN)
+        // 锁外排序:按概率降序(partial_cmp 安全处理 NaN)
         predictions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         predictions
@@ -1215,7 +1221,7 @@ mod tests {
         let ctx_a = ContextId::new("ctx-a");
         // 训练 5 个转移:a → b1..b5,每个概率 0.2
         for i in 1..=5 {
-            learner.record_access(&ctx_a, &ContextId::new(&format!("ctx-b{i}")));
+            learner.record_access(&ctx_a, &ContextId::new(format!("ctx-b{i}")));
         }
 
         // TopK3 策略：threshold=0.0（无阈值），top_k=3

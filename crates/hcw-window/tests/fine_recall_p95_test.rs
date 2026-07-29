@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 use hcw_window::recall::{CoarseRecallOutput, FineRecall, FineRecallConfig, FineRecallInput};
 use nexus_contracts::{VectorHit, VectorStore};
 use nexus_core::CLV;
+// 统一使用 nexus-core 权威实现,避免多副本优化不一致
+use nexus_core::cosine_similarity_slices;
 
 // ============================================================
 // 测试参数
@@ -96,7 +98,7 @@ impl VectorStore for InMemoryVectorStore {
         let vectors = self.vectors.read().expect("rwlock not poisoned");
         let mut scored: Vec<VectorHit> = vectors
             .iter()
-            .map(|(id, vec)| VectorHit::new(id.clone(), cosine_similarity(query, vec)))
+            .map(|(id, vec)| VectorHit::new(id.clone(), cosine_similarity_slices(query, vec)))
             .collect();
         if k < scored.len() {
             scored.select_nth_unstable_by(k, |a, b| {
@@ -128,17 +130,6 @@ impl VectorStore for InMemoryVectorStore {
             vectors: RwLock::new(HashMap::new()),
         }
     }
-}
-
-/// 简化版余弦相似度
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-    (dot / (norm_a * norm_b)).max(0.0)
 }
 
 // ============================================================

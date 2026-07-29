@@ -15,6 +15,9 @@ dashmap = { workspace = true }
 # 序列化:条目持久化与事件 payload
 serde = { workspace = true }
 serde_json = { workspace = true }
+# rand:分层经验回放池均匀采样(polish-v2.7 P4-2,rl_replay_pool)
+# WHY workspace 已声明:omega-learner 回放池同款采样需求,统一版本
+rand = { workspace = true }
 # 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }
 # 时间戳:CapabilityEntry 访问时间与衰减计算
