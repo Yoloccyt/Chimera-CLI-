@@ -39,6 +39,9 @@ async-trait = "0.1"
 # === workspace 内部 crate 依赖(L9→L1-L8 向下依赖 + L9 同层,§2.2 依赖铁律)===
 # L1 Core:领域类型(UserIntent / Quest / Task / TaskStatus / ThinkingMode / Checkpoint)
 nexus-core = { path = "../nexus-core" }
+# L0 Contracts:formal_props::VerificationResult(InvariantHealthReporter 汇总属性 #7
+# 三验证结果,Phase 8.4)。L9→L0 向下依赖恒允许(§2.2)。
+nexus-contracts = { path = "../nexus-contracts" }
 # L1 Core:跨层通信唯一通道,发布 7 个 Agent 相关 NexusEvent 变体(ADR-026 决策 2)
 event-bus = { path = "../event-bus" }
 # L2 Memory:AgentContext 包装 HierarchicalWindow,1M 上下文经 HCW 稀疏化(ADR-026 决策 7)
@@ -78,6 +81,11 @@ faae-router = { path = "../faae-router" }
 # L5 Knowledge:WikiRetriever 复用 repo-wiki FTS5 全文检索 + 内存 KNN(Task 18 §18.10)
 # WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定
 repo-wiki = { path = "../repo-wiki" }
+# L5 Knowledge:InvariantHealthReporter 复用 gsoe-evolution FormalVerifier M2 属性 #7
+# (InvariantClosureChecker)对 INV-7/8/9 检查结果做全系统传递闭包元验证(Phase 8.4)。
+# WHY L9→L5 向下依赖合规(§2.2):gsoe-evolution 不依赖 chimera-mas(见 invariants.rs
+# §P2-7 双实现说明),无循环依赖风险。
+gsoe-evolution = { path = "../gsoe-evolution" }
 # regex:MutualInquirer::create_safe_summary 正则脱敏(Task 18 §18.9,§5.5 ContextIsolation)
 # WHY 直接声明版本:workspace.dependencies 未收录 regex
 regex = "1"

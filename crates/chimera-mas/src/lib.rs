@@ -49,6 +49,7 @@ pub mod context;
 pub mod delegation;
 pub mod error;
 pub mod experts;
+pub mod invariant_report;
 pub mod invariants;
 pub mod knowledge;
 pub mod orchestrator;
