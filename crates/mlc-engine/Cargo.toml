@@ -30,6 +30,9 @@ chrono = { workspace = true }
 tokio = { workspace = true }
 # 结构化日志(操作追踪与调试)
 tracing = { workspace = true }
+# HNSW 近似最近邻(Phase 8.3:memory_graph >1K 节点建边候选生成,
+# 替代 O(n²·512) 全对打分;repo-wiki HnswStore 生产先例,workspace 版本 0.3.4)
+hnsw_rs = { workspace = true }
 
 [dev-dependencies]
 # 测试用临时文件/目录(跨平台安全),用于 L3 SQLite 持久化测试

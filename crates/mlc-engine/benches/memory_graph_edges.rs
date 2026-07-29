@@ -1,10 +1,12 @@
-//! 记忆图谱建边与召回性能基准(closure Stage C-12)
+//! 记忆图谱建边与召回性能基准(closure Stage C-12 + Phase 8.3 HNSW 改造)
 //!
 //! 对应架构层: L2 Memory(mlc-engine)
 //! 对应 ADR: ADR-049 决策 6(图谱建边拒绝 O(n²) 全对比较)
-//! 对应验收门禁: **1 万节点建边 < 1s**(实施计划 P4-9);
-//! 本 bench 记录 1K/2K/4K 规模曲线,验证 Top-K 建边的 O(n·k) 特性
-//! (增长应近似线性而非平方),>10K 规模切换 hnsw_rs 的触发阈值据此评估。
+//! 对应验收门禁: **1 万节点建边 < 1s**(实施计划 P4-9)
+//!
+//! Phase 8.3:build_semantic_edges 按节点数路由——≤1K 精确路径、
+//! 超过 1K 走 HNSW 候选路径(O(n·log n))。本 bench 覆盖 1K(精确)/ 2K / 10K
+//! (HNSW),实证 10K 建边 <1s 门禁(此前精确路径平方增长外推 50s+ 不可达)。
 //!
 //! # 运行
 //!
@@ -42,16 +44,15 @@ fn graph_with_nodes(n: usize) -> MemoryGraph {
     graph
 }
 
-/// 语义建边规模曲线(1K/2K/4K)— 验证 O(n·k) 近线性增长
+/// 语义建边规模曲线(1K 精确 / 2K、10K HNSW)— 实证 10K <1s 门禁
 ///
-/// WHY 上限 4K 而非 10K:全对相似度计算部分仍是 O(n²) 打分
-/// (Top-K 选择是 O(n)),4K 已足以观察增长曲线;10K 建边 <1s 门禁
-/// 由曲线外推评估,超阈值即触发 hnsw_rs 切换(模块头注释既定路线)。
+/// Phase 8.3:1K 走精确路径(基线 464ms);2K、10K 走 HNSW 路径
+/// (O(n·log n)),验证 10K 建边跌破 <1s 门禁(此前精确平方增长不可达)。
 fn build_semantic_edges_scale(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_graph/build_semantic_edges");
     // bench 内重复建边开销大,降低采样量保证总时长可控
     group.sample_size(10);
-    for &n in &[1_000usize, 2_000, 4_000] {
+    for &n in &[1_000usize, 2_000, 10_000] {
         group.bench_function(BenchmarkId::from_parameter(n), |b| {
             b.iter_batched(
                 || graph_with_nodes(n),
