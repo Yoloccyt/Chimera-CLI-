@@ -310,6 +310,18 @@ path = "tests/e2e/formal_verifier_e2e.rs"
 name = "formal_verifier_m1_e2e"
 path = "tests/e2e/formal_verifier_m1_e2e.rs"
 
+# ============================================================
+# Phase 8.1: FormalVerifier M2 属性 #6 E2E 闭环测试
+#
+# WHY 新增 test target: M2 在 M1 五属性基础上新增属性 #6(能力衰减一致性,
+# decay-engine),含真实 DecayEngine 轨迹集成验证;是 ADR-042 R2 解冻
+# 三阶递进阶段① 的形式化前置。
+# ============================================================
+
+[[test]]
+name = "formal_verifier_m2_e2e"
+path = "tests/e2e/formal_verifier_m2_e2e.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。

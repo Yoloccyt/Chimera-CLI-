@@ -40,6 +40,11 @@
 pub mod capability_registry;
 pub mod engine;
 pub mod error;
+/// FormalVerifier M2 — 能力衰减一致性形式化验证（Phase 8.1,ADR-047 Property #6）
+///
+/// 验证衰减观测轨迹（衰减单调性/有界性/Freeze 归零不可逆）而非引擎内部状态,
+/// 类型复用 `nexus_contracts::formal_props`（L0 契约层）。是 R2 解冻阶段① 前置。
+pub mod formal;
 /// P4-W14.4: DecayEngine 学习器持有器（S6 接缝策略异步下发 + 本地 fallback）
 pub mod learner_holder;
 pub mod types;
@@ -47,6 +52,8 @@ pub mod types;
 pub use capability_registry::{current_utc_secs, CapabilityTokenRegistry};
 pub use engine::DecayEngine;
 pub use error::DecayError;
+// FormalVerifier M2:衰减一致性验证器重导出（Phase 8.1）
+pub use formal::{DecayConsistencyChecker, DecayEventKind, LevelTransition};
 pub use learner_holder::DecayLearnerHolder;
 pub use types::{Capability, CapabilityLevel, DecayConfig, DecayEvent};
 
