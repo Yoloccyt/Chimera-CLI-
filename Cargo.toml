@@ -34,11 +34,13 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# v2.3.1-omega: 发布流程补救 + commit message 修复
-# SemVer patch 升级: v2.3.0-omega tag 已被 GitHub 仓库规则锁定且包含编码损坏的 commit message,
-# 无法更新。本次发布仅包含版本号递增与 CHANGELOG 同步,代码内容与 v2.3.0-omega 完全一致。
-# 修复 v2.3.0-omega 乱码问题: 通过新 tag v2.3.1-omega 触发 release workflow。
-version = "2.3.1-omega"
+# v2.4.1-omega: 版本对账补救(polish-v2.7 Phase 0)
+# WHY patch 升级: git tag v2.4.0-omega 已于 2026-07-26 发布(P5 进化闭环),
+# 但发版时遗漏 bump workspace version(仍为 2.3.1-omega),造成 tag 与
+# Cargo.toml 版本号失调。本次对账递增至 2.4.1-omega 作为 polish-v2.7
+# 实施计划(ADR-049)的版本起点,后续按 v2.5.0/v2.6.0/v2.7.0-omega 三个
+# minor 递进发布。历史背景见 CHANGELOG v2.3.1-omega/v2.4.0-omega 条目。
+version = "2.4.1-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"
@@ -67,6 +69,14 @@ crossterm = "0.28"
 # 保持 wasmtime 版本单一源(seccore/Cargo.toml),避免 workspace 级误导。
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 ndarray = { version = "0.16", features = ["serde"] }
+# tract: 纯 Rust ONNX 推理引擎，无 C 依赖，跨平台兼容
+# WHY 添加到 workspace: nmc-encoder 需 ONNX Runtime 执行图像/视频/音频语义嵌入推理，
+# ort 仅支持 MSVC 工具链，tract 为纯 Rust 实现，与 forbid(unsafe_code) 哲学一致
+tract-onnx = "0.21"
+# image: 图像解码库，支持 PNG/JPEG/WebP 格式解码与缩放
+# WHY 添加到 workspace: nmc-encoder 的图像预处理需将原始字节解码为 RGB 像素矩阵，
+# 统一在 workspace 声明版本避免与其他 crate 冲突
+image = "0.25"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 axum = "0.7"
 prometheus-client = "0.22"
@@ -232,6 +242,60 @@ path = "tests/e2e/tui_control_loop.rs"
 name = "rhi_cg_validation"
 path = "tests/e2e/rhi_cg_validation.rs"
 
+# ============================================================
+# ADR-042 R2 冻结违反处置 E2E 测试(P1-9)
+#
+# WHY 新增 test target:验证 ADR-042 决策 4 的 R2 冻结违反处置预案
+# 在端到端场景下的完整性。测试覆盖:
+# - R2 冻结声明存在性(engine.rs / auto-dpo / omega-learner 模块注释)
+# - R2 路径未实现(无 evolve_with_constrained_rl 方法)
+# - R2FreezeViolation 事件可发布且 severity = Critical
+# - R2FreezeRollbackFailed 事件可发布且 severity = Critical
+# - MasError::R2FreezeViolation 可构造且 Display 正确
+# - debug_assert 守护在 r2_path feature 启用时触发(debug build)
+# - R2 冻结 CI 关键词扫描(gsoe-evolution + auto-dpo 源码无 R2 路径实现)
+# ============================================================
+
+[[test]]
+name = "r2_freeze_violation_e2e"
+path = "tests/e2e/r2_freeze_violation_e2e.rs"
+
+# ============================================================
+# polish-v2.7 P1-6 — RuntimeAuditor 自我评估 E2E 测试(ADR-049)
+#
+# WHY 新增 test target:验证证据纪律(静态配置 ≠ 已验证)与
+# 五维度报告的端到端链路:RuntimeAuditor → EventBus → 订阅者/TUI 面板。
+# 测试文件位于 tests/e2e/ 子目录,必须显式注册。
+# ============================================================
+
+[[test]]
+name = "runtime_auditor_e2e"
+path = "tests/e2e/runtime_auditor_e2e.rs"
+
+# ============================================================
+# polish-v2.7 P3-7 — 变体治理闭环 E2E 测试(ADR-050/051)
+#
+# WHY 新增 test target:验证评估-进化-协同闭环的端到端链路:
+# AEGIS 四阶段 → Parliament 三角色审议 → SpecRegistry 谱系/回滚,
+# 含 Security 一票否决与奖励欺骗守护两条否决路径。
+# ============================================================
+
+[[test]]
+name = "variant_governance_e2e"
+path = "tests/e2e/variant_governance_e2e.rs"
+
+# ============================================================
+# T6-7: FormalVerifier E2E 闭环测试
+#
+# WHY 新增 test target: 验证属性定义 → 验证执行 → 结果报告全链路闭环。
+# 覆盖 GSOE 谱系 DAG / AEGIS Critic 单调性 / Parliament 共识安全性
+# 三个形式化验证器的端到端集成。
+# ============================================================
+
+[[test]]
+name = "formal_verifier_e2e"
+path = "tests/e2e/formal_verifier_e2e.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。
@@ -278,6 +342,8 @@ acb-governor = { path = "crates/acb-governor" }      # L8 Parliament(自适应�
 auto-dpo = { path = "crates/auto-dpo" }              # L5 Knowledge(偏好对生成)
 # P5.5: nexus-contracts 用于 HarnessSpec/ContractSpec/HopSpec 类型(P5.5.1 任务集定义)
 nexus-contracts = { path = "crates/nexus-contracts" } # L0 Contracts(契约层)
+# P1-9: chimera-mas 用于 MasError::R2FreezeViolation 变体验证(ADR-042 决策 4)
+chimera-mas = { path = "crates/chimera-mas" }         # L9 Quest(MAS 错误类型)
 # 共享依赖(从 workspace 继承版本)
 tokio = { workspace = true }
 serde_json = { workspace = true }

@@ -54,6 +54,11 @@ pub mod ahirt;
 pub mod config;
 pub mod debate;
 pub mod error;
+/// FormalVerifier L4 骨架 — Parliament 形式化验证模块
+///
+/// 共识安全性的形式化验证：Security 一票否决不可覆盖 + 2/3 多数阈值正确性。
+/// 类型复用 `nexus_contracts::formal_props`（L0 契约层）。
+pub mod formal;
 /// ImmuneSystem facade — 适应性免疫接口层（v5.0 §8.1 D7 / ADR-046）
 ///
 /// 三探针（MemoryParadox/ReasoningTrap/EvolutionHack）+ 级联风险评估 + 膜厚控制。
@@ -68,6 +73,10 @@ pub mod learner_holder;
 pub mod reasoning;
 pub mod roles;
 pub mod types;
+/// polish-v2.7 P3-3:变体隔离池与规则式任务路由(ADR-051 决策 1/2/4)
+pub mod variant_pool;
+/// polish-v2.7 P3-4:变体三角色审议(Security 一票否决 + 2/3 多数,ADR-051 决策 3)
+pub mod variant_review;
 pub mod veto;
 pub mod voting;
 
@@ -96,6 +105,9 @@ pub use learner_holder::ParliamentLearnerHolder;
 pub use reasoning::{transition, ReasoningEvent, ReasoningState};
 pub use roles::RoleRegistry;
 pub use types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
+// polish-v2.7 P3:变体池与审议公开 API 重导出(ADR-051)
+pub use variant_pool::VariantPool;
+pub use variant_review::{ReviewDecision, VariantReview};
 pub use veto::{
     IntentRule, MaliciousIntentRuleBook, MaliciousIntentType, RuleAction, Severity, Skeptic,
     VetoOverrideTicket, VetoReason,

@@ -88,7 +88,8 @@ impl ChtcBridge {
 
     /// 执行工具调用 — 根据 ide_source 选择适配器
     ///
-    /// 本周仅 VSCode 完整实现,其余返回 `NotImplemented`。
+    /// 5 大 IDE(VSCode/IntelliJ/Vim/Emacs/Zed)均已实现模拟执行,
+    /// 真实 IDE 集成通过 MCP Mesh 跨进程通信。
     pub fn execute(&self, call: &UnifiedToolCall) -> Result<ToolCallResult, ChtcError> {
         let adapter = IdeAdapterKind::for_source(&call.ide_source);
         adapter.execute(call)
@@ -101,7 +102,13 @@ impl ChtcBridge {
 /// 经 EventBus 传播;消费者据哈希去重或拉取具体参数。
 fn sha256_hex(value: &serde_json::Value) -> String {
     // serde_json::Value 序列化几乎不会失败;失败时哈希空字节,仍是稳定摘要
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = match serde_json::to_vec(value) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "sha256_hex 序列化失败,使用空字节兜底");
+            Vec::new()
+        }
+    };
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     hex::encode(hasher.finalize())
@@ -184,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bridge_execute_intellij_not_implemented() {
+    fn test_bridge_execute_intellij_returns_success() {
         let bridge = ChtcBridge::new(ChtcConfig::default());
         let call = bridge
             .receive(
@@ -192,8 +199,10 @@ mod tests {
                 IdeSource::intellij(),
             )
             .unwrap();
-        let err = bridge.execute(&call).unwrap_err();
-        assert!(matches!(err, ChtcError::NotImplemented { .. }));
+        let result = bridge.execute(&call).expect("IntelliJ execute 应成功");
+        assert!(result.success);
+        assert_eq!(result.result["ide"], "intellij");
+        assert!(result.error.is_none());
     }
 
     #[test]

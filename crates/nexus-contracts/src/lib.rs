@@ -104,11 +104,37 @@ pub mod capability_token;
 /// 与灰度授权载体 `RecallQuotaPolicy`，供 L6 omega-learner 与 L9 编排器共享。
 pub mod recall_quota;
 
+/// 行为契约 — 类型使用规范契约(polish-v2.7 P1-3,ADR-049)
+///
+/// 承载 BehaviorContract(前置/后置/不变量断言)与 ContractExample,
+/// 供 L9 RuntimeAuditor 审计与 L5 AEGIS Evolver 约束输入。
+pub mod behavior_contract;
+
+/// 变体契约 — Harness 变体标识与性能契约(polish-v2.7 P3-2,ADR-051)
+///
+/// 承载 VariantId(spec 主键复用)与 VariantContract(任务类型适用域 +
+/// 性能承诺),供 L8 parliament 变体池与 L5 AEGIS 变体登记共享。
+pub mod variant;
+
+/// 流程蓝图契约 — 隐性流程经验载体(polish-v2.7 P4-7,ADR-049)
+///
+/// 承载 ProceduralBlueprint(步骤/前置/成功率)与纯函数计划校验,
+/// 供 L5 repo-wiki 轨迹提取与 L9 quest-engine 计划预检共享。
+pub mod blueprint;
+
+/// 形式化属性定义框架 — FormalVerifier L4 骨架基础类型(T6-2)
+///
+/// 承载 PropertyCategory / VerificationResult / InvariantSpec / FormalProperty,
+/// 供 L4 formal-verifier 验证器实现与 L8 parliament 审议时查询属性满足状态共享。
+pub mod formal_props;
+
 // ============================================================
 // 公开 API 导出
 // ============================================================
 
 pub use capability_token::{CapabilityToken, CapabilityTokenStatus, SeamId};
+// polish-v2.7 P1-3: 行为契约(BehaviorContract + ContractContext + ContractExample,ADR-049)
+pub use behavior_contract::{BehaviorContract, ContractContext, ContractExample};
 // P4-W16.2.2: R1 召回配额（RecallQuota + RecallQuotaPolicy，S7 接缝）
 pub use density::{DensityPolicy, DensityTier};
 pub use recall_quota::{RecallQuota, RecallQuotaPolicy};
@@ -132,8 +158,16 @@ pub use strategy::{MemoryStrategy, MemoryStrategyPolicy};
 pub use policy::{SelectorPolicy, SelectorWeights};
 pub use quota::{NamespaceQuota, QuotaLimits};
 pub use temporal::{TemporalMeta, TransitionType};
+// polish-v2.7 P3-2: 变体契约(VariantId + VariantContract,ADR-051)
+pub use variant::{VariantContract, VariantId};
+// polish-v2.7 P4-7: 流程蓝图(ProceduralBlueprint + 计划校验,ADR-049)
+pub use blueprint::{BlueprintSource, BlueprintStep, PlanViolation, ProceduralBlueprint};
 // P2-W7.3: 向量存储契约（VectorStore trait + VectorHit + 扩展 trait）
 pub use vector::{VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats};
+// T6-2: 形式化属性定义框架（FormalVerifier L4 骨架基础类型）
+pub use formal_props::{
+    FormalProperty, InvariantSpec, PropertyCategory, VerificationMethod, VerificationResult,
+};
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
@@ -171,5 +205,9 @@ pub mod prelude {
     pub use crate::temporal::{TemporalMeta, TransitionType};
     pub use crate::vector::{
         VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats,
+    };
+    // T6-2: 形式化属性定义框架
+    pub use crate::formal_props::{
+        FormalProperty, InvariantSpec, PropertyCategory, VerificationMethod, VerificationResult,
     };
 }

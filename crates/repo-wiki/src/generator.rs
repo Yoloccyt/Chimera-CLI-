@@ -66,7 +66,9 @@ impl WikiGenerator {
     ///
     /// 算法:32 字节哈希 → 每字节重复 16 次 → 归一化到 [0, 1]
     /// 32 × 16 = 512,正好填满 CLV 维度。
-    // TODO(Week 6): 占位嵌入实现,NMC 编码器实现后替换为真实 CLV 嵌入。
+    // DEFERRED(T8-3 Audit): 占位嵌入实现,NMC 编码器(onnx_backend)已实现 Image/Video/Audio
+    // 模态的真实推理,但文本语义嵌入需额外的文本 ONNX 模型(外部依赖)。
+    // 当前 SHA-256 占位向量已满足去重与 sqlite-vec 检索需求(确定性、维度对齐、归一化)。
     fn placeholder_embedding(content: &str) -> Vec<f32> {
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());

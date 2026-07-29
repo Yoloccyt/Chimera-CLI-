@@ -8,359 +8,11 @@
 //! - V2(MLC→efficiency-monitor 跨层):`MemoryMetricsReported` 事件
 //! - V3/V4(Parliament→GSOE/AutoDPO 向上依赖):`ConsensusReached` 事件
 
+// 辅助载荷类型从 `payloads` 模块导入,保持向后兼容
+pub use crate::payloads::*;
 use chrono::{DateTime, Utc};
 use nexus_core::Quest;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
-/// 事件元数据 — 每个事件携带,用于追踪、审计与因果排序
-///
-/// WHY 字段说明:
-/// - `event_id`:UUIDv7(时间有序),便于跨进程因果追踪与去重
-/// - `timestamp`:单调时钟来源,审计日志按此排序
-/// - `source`:发布者 crate 名(如 "osa-coordinator"),用于依赖方向校验
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct EventMetadata {
-    /// 事件唯一标识(UUIDv7,时间有序)
-    pub event_id: Uuid,
-    /// 事件产生时刻(UTC)
-    pub timestamp: DateTime<Utc>,
-    /// 发布者 crate 名,用于依赖方向校验与审计
-    pub source: String,
-}
-
-impl EventMetadata {
-    /// 以指定 source 创建元数据,event_id 与 timestamp 自动生成
-    pub fn new(source: impl Into<String>) -> Self {
-        Self {
-            event_id: Uuid::now_v7(),
-            timestamp: Utc::now(),
-            source: source.into(),
-        }
-    }
-}
-
-/// 事件严重级别 — 用于背压策略决定是否优先投递
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum EventSeverity {
-    /// 普通事件:可被背压策略丢弃
-    Normal,
-    /// 信息级事件:控制请求/反馈等,不阻断系统但优先级高于 Normal
-    ///
-    /// WHY 新增(Task 1):TUI 双向控制事件(Quest 取消/优先级调整)属于
-    /// 操作员意图传达,重要性高于普通遥测事件,但非安全关键(不会触发
-    /// mpsc 旁路投递)。现有 `== Critical` 判定自动将其视为非关键,
-    /// 与"不阻断系统"语义一致,无需改动 backpressure/bus/logging。
-    Info,
-    /// 关键事件:检查点、共识、安全告警等,不可丢弃
-    ///
-    /// WHY:CheckpointSaved 等事件丢失会导致 Quest 无法恢复,
-    /// 必须标注 Critical 以触发 mpsc 点对点通道或保留优先级
-    Critical,
-}
-
-/// Quest 完成状态 — 用于 `QuestCompleted` 事件(P1.2 实时数据驱动面板)
-///
-/// WHY 定义在 event-bus 而非 nexus-core:原 nexus-core 仅有 `TaskStatus`,
-/// 没有 Quest 级别的结束状态。为不修改核心领域类型(§3.3.1 要求 ADR),
-/// 在 event-bus 这一跨层通信契约层定义轻量级状态枚举。
-/// 注:此类型属于 P1.2 实时数据面板契约,非 M4 双向控制新增。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum QuestStatus {
-    /// Quest 成功完成
-    Completed,
-    /// Quest 执行失败
-    Failed,
-    /// Quest 被取消
-    Cancelled,
-}
-
-/// 投票值 — 议会投票的赞成/反对/弃权选项
-///
-/// WHY 定义在 event-bus:VoteCast 原使用 bool,但控制面板的 :vote 命令
-/// 需要显式表达 Abstain,因此在跨层通信契约层定义三值枚举。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum VoteValue {
-    /// 赞成
-    Yes,
-    /// 反对
-    No,
-    /// 弃权
-    Abstain,
-}
-
-impl VoteValue {
-    /// 返回投票值的小写字符串表示,用于 UI 展示与命令编码。
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            VoteValue::Yes => "yes",
-            VoteValue::No => "no",
-            VoteValue::Abstain => "abstain",
-        }
-    }
-}
-
-impl std::str::FromStr for VoteValue {
-    type Err = ();
-
-    /// 从字符串解析投票值,大小写不敏感。
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "yes" => Ok(VoteValue::Yes),
-            "no" => Ok(VoteValue::No),
-            "abstain" => Ok(VoteValue::Abstain),
-            _ => Err(()),
-        }
-    }
-}
-
-/// 预算指标载荷 — TUI Budget 面板的结构化数据(P1.2 实时数据驱动面板)
-///
-/// WHY 定义在 event-bus:chimera-tui(L10)无法直接依赖 efficiency-monitor(L9),
-/// 通过 event-bus(L1)传递结构化预算指标,避免面板侧从多个事件拼合。
-/// 字段与 `chimera_tui::data::BudgetMetrics` 保持一致。
-/// 注:此类型属于 P1.2 实时数据面板契约,非 M4 双向控制新增。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct BudgetMetricsPayload {
-    /// 总消耗量(单位由预算类型决定)
-    pub total_consumption: f64,
-    /// 剩余预算
-    pub remaining_budget: f64,
-    /// 利用率 [0.0, 1.0]
-    pub utilization_rate: f32,
-    /// 当前预算档位(如 "High"/"Medium"/"Low")
-    pub current_tier: String,
-    /// 档位系数,1.0 为基准
-    pub coefficient: f32,
-    /// 是否已触发预算超限
-    pub is_exceeded: bool,
-    /// 最新告警信息(无告警为 None)
-    pub alert: Option<String>,
-}
-
-/// 路由器统计载荷 — 三路由器(KVBSR/SESA/FaaE)的统一统计格式
-///
-/// WHY 定义在 event-bus:chimera-tui(L10)无法直接依赖 L6 的 kvbsr-router/
-/// sesa-router/faae-router,通过 event-bus(L1)传递结构化路由统计,
-/// 避免面板侧从多个事件拼合,也避免 L10→L6 类型泄漏。
-/// 由 L9 efficiency-monitor 聚合三路由器指标后统一发布。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RouterStatsPayload {
-    /// 命中率 [0.0, 1.0]
-    pub hit_rate: f32,
-    /// P50 延迟(微秒)
-    pub p50_latency_us: u64,
-    /// P95 延迟(微秒)
-    pub p95_latency_us: u64,
-    /// P99 延迟(微秒)
-    pub p99_latency_us: u64,
-    /// 热点能力列表(能力 ID,调用次数),按热度降序
-    pub hot_capabilities: Vec<(String, u64)>,
-}
-
-/// CLV 摘要载荷 — TUI ClvVector 面板的结构化数据
-///
-/// WHY 定义在 event-bus:chimera-tui(L10)需要展示 CLV 摘要,
-/// 但不能携带完整 512 维向量(性能负担),通过此摘要结构传递
-/// 8 分块均值 + L2 范数 + Top-8 维度索引,足以可视化向量分布。
-/// ClvSummary::from_clv 计算方法将在 Task 2 中实现(event-bus 已依赖 nexus-core)。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ClvSummary {
-    /// 8 分块均值(每块 64 维,512/8=64)
-    /// 索引 0 = 维度 [0..64),索引 7 = 维度 [448..512)
-    pub block_means: Vec<f32>,
-    /// L2 范数 = sqrt(sum(v_i^2))
-    pub l2_norm: f32,
-    /// Top-8 维度(维度索引, 值),按 |值| 降序排列
-    /// 长度 ≤ 8(向量维度不足 8 时返回全部)
-    pub top_dims: Vec<(usize, f32)>,
-}
-
-impl ClvSummary {
-    /// 从 CLV 512 维向量计算摘要
-    ///
-    /// 计算:
-    /// 1. **8 分块均值**: 将 512 维分为 8 块(每块 64 维),计算每块算术均值
-    /// 2. **L2 范数**: sqrt(sum(v_i^2))
-    /// 3. **Top-8 维度**: 按 |v_i| 降序选取前 8 个(维度索引, 值)
-    ///
-    /// WHY 在 event-bus 实现: ClvSummary 定义在 event-bus(事件载荷),
-    /// event-bus 已依赖 nexus-core,可直接访问 CLV::as_slice()。
-    /// 避免在 nexus-core 定义 ClvSummary 造成类型重复。
-    ///
-    /// # 算法选择
-    /// - 分块均值: O(n) 遍历,每块 64 维累加后除以 64
-    /// - L2 范数: O(n) 遍历,累加 v_i^2 后开方
-    /// - Top-8: 使用 `select_nth_unstable_by` O(n) 算法(架构红线要求,
-    ///   禁止 sort_by O(n log n) 做 Top-K);Top-k 内部排序(k ≤ 8,成本可忽略)
-    ///
-    /// # 零向量边界
-    /// CLV::zero() 返回 l2_norm = 0.0 + 全 0 block_means + 空 top_dims。
-    /// 当 l2_norm == 0 时跳过 Top-8 计算(无显著维度)。
-    ///
-    /// # 参数
-    /// clv: CLV 引用(nexus-core 的 512 维向量)
-    ///
-    /// # 返回
-    /// ClvSummary 实例
-    pub fn from_clv(clv: &nexus_core::clv::CLV) -> Self {
-        let slice = clv.as_slice();
-        let dim = nexus_core::clv::CLV::DIMENSION; // 512
-
-        // 1. 计算 8 分块均值(每块 64 维)
-        let block_size = dim / 8; // 64
-        let block_means: Vec<f32> = (0..8)
-            .map(|i| {
-                let start = i * block_size;
-                let end = start + block_size;
-                let sum: f32 = slice[start..end].iter().sum();
-                sum / block_size as f32
-            })
-            .collect();
-
-        // 2. 计算 L2 范数 = sqrt(sum(v_i^2))
-        let sum_sq: f32 = slice.iter().map(|&v| v * v).sum();
-        let l2_norm = sum_sq.sqrt();
-
-        // 3. 计算 Top-8 维度(按 |值| 降序)
-        // 零向量边界:l2_norm == 0 表示全零,无显著维度,返回空
-        let top_dims = if l2_norm == 0.0 {
-            Vec::new()
-        } else {
-            // 构造 (维度索引, |值|, 值) 元组向量
-            let mut indexed: Vec<(usize, f32, f32)> = slice
-                .iter()
-                .enumerate()
-                .map(|(i, &v)| (i, v.abs(), v))
-                .collect();
-
-            let k = 8.min(indexed.len());
-            if k == 0 {
-                Vec::new()
-            } else {
-                // select_nth_unstable_by 按 |值| 降序分区到第 k-1 位:
-                // before(k-1 个最大) + mid(第 k 个) = Top-k(无序)
-                let (before, mid, _) = indexed.select_nth_unstable_by(k - 1, |a, b| {
-                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-                });
-
-                // 收集 Top-k:前 k-1 个 + mid
-                let mut top: Vec<(usize, f32, f32)> = before.to_vec();
-                top.push(*mid);
-
-                // Top-k 内部按 |值| 降序排序(k ≤ 8,排序成本可忽略)
-                top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-                // 转换为 (维度索引, 值) 格式
-                top.into_iter().take(8).map(|(i, _abs, v)| (i, v)).collect()
-            }
-        };
-
-        ClvSummary {
-            block_means,
-            l2_norm,
-            top_dims,
-        }
-    }
-}
-
-// ============================================================
-// CHIMERA-MAS Agent 辅助类型(ADR-026,Task 4)
-// ============================================================
-
-/// 任务优先级 — Agent 任务委派(AgentTaskDelegated)的调度优先级
-///
-/// WHY 独立定义在 event-bus(L1)而非 chimera-mas(L9):
-/// §2.2 依赖铁律禁止 L1→L9 向上依赖。chimera-mas(L9)发布
-/// AgentTaskDelegated 事件时需要此类型作为 payload 字段。若将
-/// TaskPriority 定义在 chimera-mas,event-bus 无法引用(会触发
-/// L1→L9 违规)。将轻量级枚举下沉到 event-bus(L1),chimera-mas
-/// 通过向下依赖 event-bus 复用,符合依赖方向。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum TaskPriority {
-    /// 低优先级,空闲时调度
-    Low,
-    /// 中等优先级,正常调度队列
-    Medium,
-    /// 高优先级,优先调度
-    High,
-    /// 最高优先级,立即调度(可能抢占低优先级任务)
-    Critical,
-}
-
-/// 咨询紧急度 — Agent 咨询请求(AgentConsultRequested)的紧急级别
-///
-/// WHY 独立定义在 event-bus:同 TaskPriority,避免 L1→L9 向上依赖。
-/// 用于 Agent 间咨询请求的优先级标注,影响被咨询 Agent 的响应顺序。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum ConsultUrgency {
-    /// 低紧急度
-    Low,
-    /// 中等紧急度
-    Medium,
-    /// 高紧急度
-    High,
-    /// 最高紧急度(立即响应)
-    Critical,
-}
-
-/// Agent 生命周期状态 — AgentHeartbeat 事件携带的 Agent 运行时状态
-///
-/// WHY 独立定义在 event-bus:同 TaskPriority,避免 L1→L9 向上依赖。
-/// 变体语义与 chimera-mas::AgentStatus 保持一致(Idle/Running/Paused/
-/// Completed/Failed/Crashed),但为独立类型定义,避免 event-bus 对
-/// chimera-mas 的循环依赖。chimera-mas 在发布心跳事件时通过
-/// `From<chimera_mas::AgentStatus> for event_bus::AgentStatus` 转换。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum AgentStatus {
-    /// 空闲状态,等待任务分配
-    Idle,
-    /// 运行中,正在执行任务
-    Running,
-    /// 已暂停,可恢复
-    Paused,
-    /// 任务已完成
-    Completed,
-    /// 任务执行失败
-    Failed,
-    /// Agent 崩溃,不可恢复
-    Crashed,
-}
-
-/// TUI 交互动作来源 — `TuiActionRequested` 事件的触发入口标识(ADR-029)
-///
-/// WHY 独立定义在 event-bus:TUI 交互协议(Action)是 L10 与编排层
-/// (chimera-cli)之间经 L1 EventBus 通信的契约,来源标识用于审计与
-/// UI 反馈定位(区分同一 Action 由哪个入口触发)。三入口共享同一
-/// Action 协议,行为一致性由 chimera-tui 的 ActionRegistry 单源保证。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum ActionSource {
-    /// 来自 Chat 面板的斜杠命令
-    Chat,
-    /// 来自命令面板(模糊搜索)
-    Palette,
-    /// 来自面板上下文动作(焦点面板 Enter/Space 唤出)
-    Panel,
-}
-
-/// TUI 交互式对话状态 — `TuiChatStatusChanged` 事件携带的 Agent 会话状态(ADR-029)
-///
-/// WHY 独立定义在 event-bus:与 `AgentStatus`(chimera-mas 多 Agent 生命周期)
-/// 区分——`ChatStatus` 面向单条交互式会话的 UI 呈现(思考中/工具执行中/空闲),
-/// 由 chimera-cli 编排器在流式回答过程中广播,驱动 Chat 面板状态指示器。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
-pub enum ChatStatus {
-    /// 思考中(已提交查询,等待/生成首 token)
-    Thinking,
-    /// 工具执行中(Agent 调用工具,暂停 token 流)
-    ToolExecuting,
-    /// 空闲(本轮完成,等待下一次输入)
-    ///
-    /// WHY `#[default]`:`DataSnapshot`/`TuiState` 派生 `Default`,对话初始态
-    /// 天然为"空闲"(尚未提交任何查询)。
-    #[default]
-    Idle,
-}
 
 /// NEXUS-OMEGA 核心事件枚举 — 跨层通信的唯一契约
 ///
@@ -1606,6 +1258,14 @@ pub enum NexusEvent {
     ///
     /// WHY 新增(P2.1 TUI v1.7-omega):TUI 无法直接依赖 L4 decay-engine,
     /// 通过 event-bus 传递衰减系数与最近事件,供 Decay 面板绘制 sparkline。
+    ///
+    /// # P2-11 扩展(2026-07-28)
+    ///
+    /// 新增 `fallback_count_delta` 字段,携带本周期内 `DecayLearnerHolder`
+    /// 触发 fallback 的次数(异常回退层 + 熔断入口层)。用于监控 learner
+    /// 健康度:delta 持续 > 0 表明 learner 不稳定,需排查 omega-learner
+    /// 或 PoisonError 根因。`#[serde(default)]` 保持向后兼容(旧消费者
+    /// 反序列化时默认为 0)。
     DecayMetricsReported {
         /// 事件元数据
         metadata: EventMetadata,
@@ -1615,6 +1275,12 @@ pub enum NexusEvent {
         recent_events: Vec<String>,
         /// 本衰减周期开始时间
         cycle_start: DateTime<Utc>,
+        /// P2-11: 本周期 fallback 触发次数(异常回退层 + 熔断入口层)
+        ///
+        /// 由发布者通过 `DecayLearnerHolder::take_fallback_count()` 获取。
+        /// 向后兼容:`#[serde(default)]` 确保旧格式数据反序列化为 0。
+        #[serde(default)]
+        fallback_count_delta: u64,
     },
 
     /// 路由器统计报告 — L9 efficiency-monitor 聚合发布,L10 TUI Router 面板消费
@@ -1974,11 +1640,49 @@ pub enum NexusEvent {
     /// 必须保证投递到 SecCore 与 Parliament 进行紧急干预。若标为 Normal,
     /// 在背压场景下可能被丢弃,导致退化策略持续生效、Quest 质量下降。
     /// 对齐 §6.2 红线 5（Critical 安全事件用 mpsc 旁路通道）。
+    ///
+    /// # P2-13 结构化理由记录
+    ///
+    /// 旧版仅有 `reason: String`(自由文本),P2-13 扩展为结构化记录:
+    /// - `trigger_type`:机器可读的触发条件枚举(4 种 + Unknown)
+    /// - `triggered_at`:触发时间戳(UTC)
+    /// - `details`:底层错误详情(如 CapabilityTokenRegistry 内部错误消息)
+    /// - `diagnostic`:诊断上下文快照(EWMA 水平、观察期天数等)
+    ///
+    /// `reason` 字段保留为人类可读描述,向后兼容。所有新字段带 `#[serde(default)]`,
+    /// 确保旧版本序列化的事件能被反序列化(SemVer minor 兼容)。
     R1ShadowRollbackFailed {
         /// 事件元数据
         metadata: EventMetadata,
-        /// 回滚失败原因（ConsecutiveRegression / AsaIntervention / EwmaCollapse / RecallRateDrop）
+        /// 回滚失败原因(人类可读描述,向后兼容保留)
+        ///
+        /// 旧版字段,保留用于日志展示与向后兼容。新增 `trigger_type` 字段
+        /// 提供机器可读的结构化分类标签,避免字符串模糊匹配的歧义。
         reason: String,
+        /// P2-13: 结构化触发条件类型(ADR-043 决策 4)
+        ///
+        /// 对应 4 种回滚触发条件 + Unknown 兜底。`#[serde(default)]`
+        /// 确保旧版本序列化的事件(无此字段)能被反序列化为 Unknown。
+        #[serde(default)]
+        trigger_type: RollbackTriggerType,
+        /// P2-13: 触发时间戳(UTC)
+        ///
+        /// 记录回滚失败发生的精确时间,用于审计时间线重建。
+        /// None 表示时间戳未知(旧版本事件兼容)。
+        #[serde(default)]
+        triggered_at: Option<DateTime<Utc>>,
+        /// P2-13: 详细错误消息
+        ///
+        /// 承载回滚操作失败的底层错误详情,如 CapabilityTokenRegistry
+        /// 内部错误的具体消息。空字符串表示无详细错误信息。
+        #[serde(default)]
+        details: String,
+        /// P2-13: 诊断上下文(EWMA 水平、观察期天数等)
+        ///
+        /// 承载回滚失败时的诊断快照,便于专家团队复盘根因。
+        /// 默认为全 None 的空上下文(旧版本事件兼容)。
+        #[serde(default)]
+        diagnostic: RollbackDiagnosticContext,
     },
 
     /// P5.2.3: Spec 版本注册完成 — L5 Knowledge(gsoe-evolution)→ 任意订阅者
@@ -2009,153 +1713,278 @@ pub enum NexusEvent {
         /// 注册来源(如 "rhi-cg-channel-b" / "manual" / "ab-test")
         source: String,
     },
-}
 
-/// Critical 通道丢弃事件指标载荷 — P1-W2.1(D3 改造)
-///
-/// 当 Critical 通道(有界 mpsc::Sender<4096>)因消费者跟不上而满载时,
-/// `publish_critical` 内部 `try_send` 失败会丢弃事件并递增计数。此结构体
-/// 作为指标载荷,供 efficiency-monitor 拉取并发布 `EfficiencyAlertTriggered`
-/// 告警,同时供 TUI 显示丢弃计数(spec.md L188:丢弃事件计入
-/// CriticalEventDropped 指标 + TUI 告警)。
-///
-/// # 设计约束
-/// - 轻量级(u64 单字段),实现 Copy 以便廉价传递
-/// - 不持有 Mutex(计数由 EventBus 内部 Arc<AtomicU64> 维护,
-///   此结构体仅为快照,避免 §4.4 红线 1 "持锁跨 await")
-/// - 实现 Serialize/Deserialize 以支持跨进程指标传递(MCP Mesh)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CriticalEventDropped {
-    /// 累计丢弃的 Critical 事件数(单调递增,不重置)
-    dropped_count: u64,
-}
-
-impl CriticalEventDropped {
-    /// 创建指标载荷快照
+    /// R2 冻结违反 — 冻结期内检测到 R2(GSOE×AutoDPO 约束 RL)路径激活(ADR-042 决策 4)
     ///
-    /// `count` 通常来自 `EventBus::critical_dropped_count()` 的当前快照值。
-    pub fn new(dropped_count: u64) -> Self {
-        Self { dropped_count }
-    }
+    /// WHY Critical 级别:R2 违反等同于安全事件——奖励黑客风险可能立即生效,
+    /// 进化策略学会绕过 L3 验证器而非真正改进代码质量(§3.4.5 进化悖论红线)。
+    /// 必须保证投递到 SecCore 与 Parliament 进行紧急干预(自动回滚 + 告警广播)。
+    /// 对齐 §6.2 红线 5(Critical 安全事件用 mpsc 旁路通道)。
+    ///
+    /// # 触发场景
+    /// - CI 检测:扫描 gsoe-evolution / auto-dpo 源码发现 R2 路径实现
+    /// - 运行时检测:`evolve_once()` 入口 `debug_assert!(!cfg!(feature = "r2_path"))` panic
+    /// - 审计检测:AsaAuditor 周期性扫描进化路径发现 R2 激活痕迹
+    R2FreezeViolation {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 违反类型(CiDetection / RuntimeAssertion / AuditScan)
+        violation_type: String,
+        /// 违反证据(如匹配的源码片段 / panic 信息 / 审计日志)
+        evidence: String,
+    },
 
-    /// 获取累计丢弃的 Critical 事件数
-    pub fn dropped_count(&self) -> u64 {
-        self.dropped_count
-    }
+    /// R2 冻结回滚失败 — 自动回滚操作执行失败(ADR-042 决策 4 步骤 1)
+    ///
+    /// WHY Critical 级别:回滚失败意味着 R2 路径代码可能仍在生效,必须保证
+    /// 投递到 SecCore 与 Parliament 进行升级干预(从自动回滚升级为人工介入)。
+    /// 若标为 Normal,在背压场景下可能被丢弃,导致 R2 违反持续生效。
+    /// 对齐 §6.2 红线 5(Critical 安全事件用 mpsc 旁路通道)。
+    R2FreezeRollbackFailed {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 回滚失败原因(如 "git revert 冲突" / "cargo build 失败")
+        reason: String,
+    },
+
+    /// P2-1: 协调成本/推理增益比值报告 — L9 Quest(quest-engine)→ 任意订阅者
+    ///
+    /// 由 `CoordinationMetricsCollector::record_and_compute` 在 Quest 完成(或周期性
+    /// 评估)时发布,携带当前 EWMA 比值快照。订阅者据此:
+    /// - **efficiency-monitor**:订阅后若 `is_paradox_risk == true` 则触发
+    ///   `EfficiencyAlertTriggered` 告警(推理悖论红线)
+    /// - **Parliament**:据此调整 TTG 策略(高比值时降低协调开销,如跳过议会审议)
+    /// - **TUI**:实时展示协调成本/推理增益比值趋势
+    ///
+    /// WHY Normal 级别:这是周期性指标报告,非阻断性事件。推理悖论风险告警
+    /// 由 efficiency-monitor 订阅后通过 `EfficiencyAlertTriggered` 事件二次发布,
+    /// 不需要走 mpsc 旁路通道(告警语义在订阅者处理,非事件本身)。这遵循
+    /// "事件本身是事实陈述,告警是订阅者的解释"的设计原则。
+    ///
+    /// WHY 携带完整比值字段:虽然事件总线不应承载大量数据,但比值快照仅 7 个
+    /// 标量字段(约 80 字节),远小于事件总线的消息上限。完整字段便于订阅者
+    /// 直接消费,无需反向查询 quest-engine,降低耦合。
+    ///
+    /// 对应架构红线:§3.4.5 三重悖论推理悖论红线——"当协调成本超过推理增益时,
+    /// 多 Agent 反而不如单 Agent"。此事件是该红线的可观测指标载体。
+    CoordinationRatioReported {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// EWMA 协调成本(毫秒)
+        ///
+        /// 经过 EWMA 平滑后的协调成本,包含 Event Bus 延迟、TTG 切换延迟、
+        /// 议会审议延迟、多 Agent 委托开销的加权和。
+        coordination_cost_ms: f64,
+        /// EWMA 推理增益 [0.0, 1.0]
+        ///
+        /// 经过 EWMA 平滑后的推理增益,加权融合任务成功率、PVL 质量分数、
+        /// 议会共识质量。
+        inference_gain: f32,
+        /// 归一化成本指数 [0.0, 1.0]
+        ///
+        /// `cost_index = min(coordination_cost_ms / cost_baseline_ms, 1.0)`,
+        /// `cost_baseline_ms` 默认 1000ms。
+        cost_index: f64,
+        /// 归一化增益指数 [0.0, 1.0]
+        ///
+        /// 等于 `inference_gain`(增益本身已是 [0,1] 归一化分数)。
+        gain_index: f64,
+        /// 协调成本/推理增益比值
+        ///
+        /// `ratio = cost_index / gain_index`。`gain_index = 0` 时为 `f64::INFINITY`,
+        /// 表示推理增益为零但协调成本非零,必然触发推理悖论风险。
+        ratio: f64,
+        /// 是否触发推理悖论风险(`ratio > threshold`)
+        ///
+        /// `true` 表示协调成本超过推理增益,多 Agent 协同的收益为负,
+        /// 应考虑降级为单 Agent 模式或减少协调开销。
+        is_paradox_risk: bool,
+        /// 推理悖论告警阈值
+        ///
+        /// 默认 1.0(成本指数 = 增益指数为临界点)。可由 `CoordinationMetricsConfig`
+        /// 自定义,降低阈值更敏感,升高阈值更宽松。
+        threshold: f64,
+        /// 已采集样本数
+        ///
+        /// 从收集器创建或上次 `reset()` 起累积的样本数,反映 EWMA 的置信度。
+        /// 样本数 < 10 时比值波动较大,应谨慎用于决策。
+        sample_count: u64,
+    },
+
+    /// polish-v2.7 P1-2: 运行时审计发现 — L9 efficiency-monitor(RuntimeAuditor)→ 任意订阅者
+    ///
+    /// 由 `RuntimeAuditor` 在审计能力/配置时发布,携带单条审计发现。订阅者据此:
+    /// - **chimera-tui**:自评仪表盘展示待处理 Finding 列表
+    /// - **repo-wiki**:沉淀高频 Finding 模式为知识条目
+    ///
+    /// WHY Normal 级别:审计发现是观察性事实陈述,非阻断事件。告警语义由订阅者
+    /// 解释(同 `CoordinationRatioReported` 的设计原则"事件是事实,告警是解释")。
+    ///
+    /// WHY 字符串标签而非枚举:遵循 `R2FreezeViolation.violation_type: String` 先例,
+    /// 避免在 L1 event-bus 引入 L9 专属枚举造成反向语义耦合。
+    /// 合法取值见 `efficiency-monitor/src/auditor.rs` 的 `FindingSeverity`/`FindingCategory`。
+    AuditFindingRaised {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 发现严重度标签("info" / "low" / "medium" / "high")
+        finding_severity: String,
+        /// 发现类别标签("unused_capability" / "verified_capability" / "evidence_gap")
+        category: String,
+        /// 人类可读描述(如 "Capability 'x' configured but never used")
+        message: String,
+        /// 证据种类("static_only" = 仅静态配置 / "runtime_events" = 有运行时事件证据)
+        ///
+        /// 对应 Qoder 证据纪律:静态发现 ≠ 已执行验证,只有 runtime_events
+        /// 才计入五维度评分的"已验证"正证据。
+        evidence_kind: String,
+        /// 修复建议(无需动作时为描述性文本)
+        fix_hint: String,
+    },
+
+    /// polish-v2.7 P1-2: 五维度 Harness 报告生成 — L9 efficiency-monitor(RuntimeAuditor)→ 任意订阅者
+    ///
+    /// 由 `RuntimeAuditor::generate_report` 周期性(或按需)发布,携带 Qoder Better
+    /// Harness 五个维度的实时评分快照。订阅者据此:
+    /// - **chimera-tui**:五维度 Gauge 仪表盘实时刷新
+    /// - **gsoe-evolution(AEGIS)**:低分维度作为 Digester 的适应方向输入
+    ///
+    /// WHY 携带完整五维字段:仅 5 个 f32 + 1 个 u32(约 24 字节),远小于消息上限,
+    /// 完整字段便于订阅者直接消费无需反向查询(同 CoordinationRatioReported 先例)。
+    HarnessReportGenerated {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 任务理解维度评分 [0.0, 1.0]
+        task_comprehension: f32,
+        /// 可控执行维度评分 [0.0, 1.0]
+        controllable_execution: f32,
+        /// 变更验证维度评分 [0.0, 1.0]
+        change_verification: f32,
+        /// 可靠交付维度评分 [0.0, 1.0]
+        reliable_delivery: f32,
+        /// 经验沉淀维度评分 [0.0, 1.0]
+        experience_accumulation: f32,
+        /// 本次报告携带的审计发现数
+        findings_count: u32,
+    },
 }
 
 impl NexusEvent {
     /// 获取事件元数据引用
+    ///
+    /// 委托给子枚举的 `EventClassification::metadata()` 实现。
     pub fn metadata(&self) -> &EventMetadata {
         match self {
-            Self::UserIntentEncoded { metadata, .. }
-            | Self::NexusStateChanged { metadata, .. }
-            | Self::ModelRouteSelected { metadata, .. }
-            | Self::QuestCreated { metadata, .. }
-            | Self::QuestProgressUpdated { metadata, .. }
-            | Self::QuestListUpdated { metadata, .. }
-            | Self::QuestCompleted { metadata, .. }
-            | Self::ThinkingModeSwitched { metadata, .. }
-            | Self::CheckpointSaved { metadata, .. }
-            | Self::CheckpointLoaded { metadata, .. }
-            | Self::ConsensusReached { metadata, .. }
-            | Self::VoteCast { metadata, .. }
-            | Self::CapabilityFrozen { metadata, .. }
-            | Self::BudgetExceeded { metadata, .. }
-            | Self::SandboxViolation { metadata, .. }
-            | Self::OperationProduced { metadata, .. }
-            | Self::PredictionVerified { metadata, .. }
-            | Self::OmniSparseMasksComputed { metadata, .. }
-            | Self::ToolsRouted { metadata, .. }
-            | Self::ExecutionCompleted { metadata, .. }
-            | Self::MemoryMetricsReported { metadata, .. }
-            | Self::MemoryTiered { metadata, .. }
-            | Self::CacheHit { metadata, .. }
-            | Self::CacheMiss { metadata, .. }
-            | Self::WikiUpdated { metadata, .. }
-            | Self::EvolutionTriggered { metadata, .. }
-            | Self::DpoPairGenerated { metadata, .. }
-            | Self::AuditLogged { metadata, .. }
-            | Self::McpMessageReceived { metadata, .. }
-            | Self::SlowConsumerDropped { metadata, .. }
-            | Self::ContextWindowSwitched { metadata, .. }
-            | Self::ContextCompressed { metadata, .. }
-            | Self::CapabilityTiered { metadata, .. }
-            | Self::BlocksRebalanced { metadata, .. }
-            | Self::ExpertActivated { metadata, .. }
-            | Self::ActivationThresholdAdjusted { metadata, .. }
-            | Self::ActivationCacheStats { metadata, .. }
-            | Self::GatherCompleted { metadata, .. }
-            | Self::OperationTimedOut { metadata, .. }
-            | Self::GatherTimedOut { metadata, .. }
-            | Self::OrphanCallDetected { metadata, .. }
-            | Self::ProducerStrategyAdjusted { metadata, .. }
-            | Self::PredictionMade { metadata, .. }
-            | Self::PredictionStatsReported { metadata, .. }
-            | Self::PredictionRolledBack { metadata, .. }
-            | Self::CachePrefetched { metadata, .. }
-            | Self::CacheStatsReported { metadata, .. }
-            | Self::ExpertRouted { metadata, .. }
-            | Self::EntropyBalanced { metadata, .. }
-            | Self::ExpertRegistered { metadata, .. }
-            | Self::ExpertUnregistered { metadata, .. }
-            | Self::DebateStarted { metadata, .. }
-            | Self::SkepticVeto { metadata, .. }
-            | Self::VetoOverridden { metadata, .. }
-            | Self::RedTeamAudit { metadata, .. }
-            | Self::BudgetAdjusted { metadata, .. }
-            | Self::AsaIntervention { metadata, .. }
-            | Self::AhirtProbeCompleted { metadata, .. }
-            | Self::RoleRegistered { metadata, .. }
-            | Self::BudgetStatsReported { metadata, .. }
-            | Self::BudgetMetricsUpdated { metadata, .. }
-            | Self::NmcEncoded { metadata, .. }
-            | Self::ChtcToolCallReceived { metadata, .. }
-            | Self::SsraFusionCompleted { metadata, .. }
-            | Self::GsoePolicyUpdated { metadata, .. }
-            | Self::LsctTierSwitched { metadata, .. }
-            | Self::McpMeshTransactionCompleted { metadata, .. }
-            | Self::CsnSubstitutionTriggered { metadata, .. }
-            | Self::SesaActivationCompleted { metadata, .. }
-            | Self::EfficiencyAlertTriggered { metadata, .. }
-            | Self::QuestPauseRequested { metadata, .. }
-            | Self::QuestResumeRequested { metadata, .. }
-            | Self::VoteCastRequested { metadata, .. }
-            | Self::RefreshStateRequested { metadata, .. }
-            | Self::QuestPaused { metadata, .. }
-            | Self::QuestResumed { metadata, .. }
-            | Self::DecayMetricsReported { metadata, .. }
-            | Self::RouterStatsReported { metadata, .. }
-            | Self::McpNodeHeartbeat { metadata, .. }
-            | Self::ChtcAdapterStatus { metadata, .. }
-            | Self::ClvSnapshotReported { metadata, .. }
-            | Self::QuestCancelRequested { metadata, .. }
-            | Self::QuestCancelled { metadata, .. }
-            | Self::QuestPriorityChanged { metadata, .. }
-            | Self::QuestPriorityAdjusted { metadata, .. }
-            // CHIMERA-MAS Agent 事件(Task 4,ADR-026)
-            | Self::AgentTaskDelegated { metadata, .. }
-            | Self::AgentTaskCompleted { metadata, .. }
-            | Self::AgentTaskFailed { metadata, .. }
-            | Self::AgentConsultRequested { metadata, .. }
-            | Self::AgentConsultResponded { metadata, .. }
-            | Self::AgentHeartbeat { metadata, .. }
-            | Self::AgentContextOverflow { metadata, .. }
-            // TUI 交互式动作协议(ADR-029)
-            | Self::TuiActionRequested { metadata, .. }
-            | Self::TuiActionProgressed { metadata, .. }
-            | Self::TuiActionCompleted { metadata, .. }
-            | Self::TuiActionFailed { metadata, .. }
-            | Self::TuiChatSubmitted { metadata, .. }
-            | Self::TuiChatResponseChunk { metadata, .. }
-            | Self::TuiChatCompleted { metadata, .. }
-            | Self::TuiChatStatusChanged { metadata, .. }
-            // P4-W16.2.2 步骤 5:R1 影子模式事件（3 个新变体均含 metadata）
-            | Self::R1ShadowRegressionDetected { metadata, .. }
-            | Self::R1ShadowPromotionReady { metadata, .. }
-            | Self::R1ShadowRollbackFailed { metadata, .. }
-            // P5.2.3: SpecRegistered 事件含 metadata
-            | Self::SpecRegistered { metadata, .. } => metadata,
+            Self::UserIntentEncoded { metadata, .. } => metadata,
+            Self::NexusStateChanged { metadata, .. } => metadata,
+            Self::ModelRouteSelected { metadata, .. } => metadata,
+            Self::SlowConsumerDropped { metadata, .. } => metadata,
+            Self::AuditLogged { metadata, .. } => metadata,
+            Self::MemoryMetricsReported { metadata, .. } => metadata,
+            Self::MemoryTiered { metadata, .. } => metadata,
+            Self::ContextWindowSwitched { metadata, .. } => metadata,
+            Self::ContextCompressed { metadata, .. } => metadata,
+            Self::NmcEncoded { metadata, .. } => metadata,
+            Self::ClvSnapshotReported { metadata, .. } => metadata,
+            Self::CacheHit { metadata, .. } => metadata,
+            Self::CacheMiss { metadata, .. } => metadata,
+            Self::CapabilityTiered { metadata, .. } => metadata,
+            Self::CachePrefetched { metadata, .. } => metadata,
+            Self::CacheStatsReported { metadata, .. } => metadata,
+            Self::LsctTierSwitched { metadata, .. } => metadata,
+            Self::SandboxViolation { metadata, .. } => metadata,
+            Self::CapabilityFrozen { metadata, .. } => metadata,
+            Self::BudgetExceeded { metadata, .. } => metadata,
+            Self::BudgetAdjusted { metadata, .. } => metadata,
+            Self::AsaIntervention { metadata, .. } => metadata,
+            Self::BudgetStatsReported { metadata, .. } => metadata,
+            Self::BudgetMetricsUpdated { metadata, .. } => metadata,
+            Self::OmniSparseMasksComputed { metadata, .. } => metadata,
+            Self::ToolsRouted { metadata, .. } => metadata,
+            Self::ExpertActivated { metadata, .. } => metadata,
+            Self::ActivationThresholdAdjusted { metadata, .. } => metadata,
+            Self::ActivationCacheStats { metadata, .. } => metadata,
+            Self::ExpertRouted { metadata, .. } => metadata,
+            Self::EntropyBalanced { metadata, .. } => metadata,
+            Self::ExpertRegistered { metadata, .. } => metadata,
+            Self::ExpertUnregistered { metadata, .. } => metadata,
+            Self::BlocksRebalanced { metadata, .. } => metadata,
+            Self::SesaActivationCompleted { metadata, .. } => metadata,
+            Self::OperationProduced { metadata, .. } => metadata,
+            Self::PredictionVerified { metadata, .. } => metadata,
+            Self::ExecutionCompleted { metadata, .. } => metadata,
+            Self::GatherCompleted { metadata, .. } => metadata,
+            Self::OperationTimedOut { metadata, .. } => metadata,
+            Self::GatherTimedOut { metadata, .. } => metadata,
+            Self::OrphanCallDetected { metadata, .. } => metadata,
+            Self::ProducerStrategyAdjusted { metadata, .. } => metadata,
+            Self::PredictionMade { metadata, .. } => metadata,
+            Self::PredictionStatsReported { metadata, .. } => metadata,
+            Self::PredictionRolledBack { metadata, .. } => metadata,
+            Self::QuestCreated { metadata, .. } => metadata,
+            Self::QuestProgressUpdated { metadata, .. } => metadata,
+            Self::QuestListUpdated { metadata, .. } => metadata,
+            Self::QuestCompleted { metadata, .. } => metadata,
+            Self::ThinkingModeSwitched { metadata, .. } => metadata,
+            Self::CheckpointSaved { metadata, .. } => metadata,
+            Self::CheckpointLoaded { metadata, .. } => metadata,
+            Self::ConsensusReached { metadata, .. } => metadata,
+            Self::VoteCast { metadata, .. } => metadata,
+            Self::DebateStarted { metadata, .. } => metadata,
+            Self::SkepticVeto { metadata, .. } => metadata,
+            Self::VetoOverridden { metadata, .. } => metadata,
+            Self::RedTeamAudit { metadata, .. } => metadata,
+            Self::AhirtProbeCompleted { metadata, .. } => metadata,
+            Self::RoleRegistered { metadata, .. } => metadata,
+            Self::QuestPauseRequested { metadata, .. } => metadata,
+            Self::QuestResumeRequested { metadata, .. } => metadata,
+            Self::VoteCastRequested { metadata, .. } => metadata,
+            Self::QuestPaused { metadata, .. } => metadata,
+            Self::QuestResumed { metadata, .. } => metadata,
+            Self::QuestCancelRequested { metadata, .. } => metadata,
+            Self::QuestCancelled { metadata, .. } => metadata,
+            Self::QuestPriorityChanged { metadata, .. } => metadata,
+            Self::QuestPriorityAdjusted { metadata, .. } => metadata,
+            Self::R1ShadowRegressionDetected { metadata, .. } => metadata,
+            Self::R1ShadowPromotionReady { metadata, .. } => metadata,
+            Self::R1ShadowRollbackFailed { metadata, .. } => metadata,
+            Self::SsraFusionCompleted { metadata, .. } => metadata,
+            Self::GsoePolicyUpdated { metadata, .. } => metadata,
+            Self::McpMessageReceived { metadata, .. } => metadata,
+            Self::ChtcToolCallReceived { metadata, .. } => metadata,
+            Self::McpMeshTransactionCompleted { metadata, .. } => metadata,
+            Self::CsnSubstitutionTriggered { metadata, .. } => metadata,
+            Self::EfficiencyAlertTriggered { metadata, .. } => metadata,
+            Self::DecayMetricsReported { metadata, .. } => metadata,
+            Self::RouterStatsReported { metadata, .. } => metadata,
+            Self::McpNodeHeartbeat { metadata, .. } => metadata,
+            Self::ChtcAdapterStatus { metadata, .. } => metadata,
+            Self::AgentTaskDelegated { metadata, .. } => metadata,
+            Self::AgentTaskCompleted { metadata, .. } => metadata,
+            Self::AgentTaskFailed { metadata, .. } => metadata,
+            Self::AgentConsultRequested { metadata, .. } => metadata,
+            Self::AgentConsultResponded { metadata, .. } => metadata,
+            Self::AgentHeartbeat { metadata, .. } => metadata,
+            Self::AgentContextOverflow { metadata, .. } => metadata,
+            Self::TuiActionRequested { metadata, .. } => metadata,
+            Self::TuiActionProgressed { metadata, .. } => metadata,
+            Self::TuiActionCompleted { metadata, .. } => metadata,
+            Self::TuiActionFailed { metadata, .. } => metadata,
+            Self::TuiChatSubmitted { metadata, .. } => metadata,
+            Self::TuiChatResponseChunk { metadata, .. } => metadata,
+            Self::TuiChatCompleted { metadata, .. } => metadata,
+            Self::TuiChatStatusChanged { metadata, .. } => metadata,
+            Self::RefreshStateRequested { metadata, .. } => metadata,
+            Self::SpecRegistered { metadata, .. } => metadata,
+            Self::R2FreezeViolation { metadata, .. } => metadata,
+            Self::R2FreezeRollbackFailed { metadata, .. } => metadata,
+            // P2-1: 协调成本/推理增益比值报告
+            Self::CoordinationRatioReported { metadata, .. } => metadata,
+            // polish-v2.7 P1-2: RuntimeAuditor 审计事件(2 个新变体)
+            Self::AuditFindingRaised { metadata, .. } => metadata,
+            Self::HarnessReportGenerated { metadata, .. } => metadata,
+            Self::WikiUpdated { metadata, .. } => metadata,
+            Self::EvolutionTriggered { metadata, .. } => metadata,
+            Self::DpoPairGenerated { metadata, .. } => metadata,
         }
     }
 
@@ -2209,7 +2038,12 @@ impl NexusEvent {
             // P4-W16.2.2 步骤 5:R1 影子模式回滚失败为 Critical
             // WHY:回滚失败意味着退化策略可能仍在生效,必须保证投递到 SecCore
             // 与 Parliament 进行紧急干预。丢失导致 Quest 持续受退化策略影响。
-            | Self::R1ShadowRollbackFailed { .. } => EventSeverity::Critical,
+            | Self::R1ShadowRollbackFailed { .. }
+            // ADR-042 决策 4:R2 冻结违反 + 回滚失败为 Critical
+            // WHY:R2 违反等同于安全事件(奖励黑客风险立即生效),回滚失败意味着
+            // R2 路径代码可能仍在生效。必须走 mpsc 旁路通道确保投递,对齐 §6.2 红线 5。
+            | Self::R2FreezeViolation { .. }
+            | Self::R2FreezeRollbackFailed { .. } => EventSeverity::Critical,
             // 控制事件(请求/反馈):不阻断系统,不触发 mpsc 旁路投递
             Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }
@@ -2338,6 +2172,14 @@ impl NexusEvent {
             Self::R1ShadowRollbackFailed { .. } => "R1ShadowRollbackFailed",
             // P5.2.3: SpecRegistered 事件
             Self::SpecRegistered { .. } => "SpecRegistered",
+            // ADR-042 决策 4:R2 冻结违反处置事件(2 个新变体)
+            Self::R2FreezeViolation { .. } => "R2FreezeViolation",
+            Self::R2FreezeRollbackFailed { .. } => "R2FreezeRollbackFailed",
+            // P2-1: 协调成本/推理增益比值报告(三重悖论推理悖论红线度量)
+            Self::CoordinationRatioReported { .. } => "CoordinationRatioReported",
+            // polish-v2.7 P1-2: RuntimeAuditor 审计事件(2 个新变体)
+            Self::AuditFindingRaised { .. } => "AuditFindingRaised",
+            Self::HarnessReportGenerated { .. } => "HarnessReportGenerated",
         }
     }
 }
@@ -3324,5 +3166,434 @@ mod tests {
         assert!((summary.top_dims[0].1 - (-5.0)).abs() < 1e-5);
         // 第二个应是维度 1(值 3.0)
         assert_eq!(summary.top_dims[1].0, 1);
+    }
+
+    // ============================================================
+    // P2-13: R1ShadowRollbackFailed 结构化理由记录测试
+    // ============================================================
+
+    /// 验证 `RollbackTriggerType` 默认值为 Unknown
+    ///
+    /// WHY 默认 Unknown:确保未显式设置 trigger_type 的旧版本事件反序列化后
+    /// 不会误归类为某一具体触发条件。
+    #[test]
+    fn test_p2_13_rollback_trigger_type_default_is_unknown() {
+        let default_trigger: RollbackTriggerType = Default::default();
+        assert_eq!(default_trigger, RollbackTriggerType::Unknown);
+    }
+
+    /// 验证 `RollbackTriggerType::description()` 返回非空人类可读描述
+    ///
+    /// 每个变体应有唯一的描述字符串,用于日志与 TUI 展示。
+    #[test]
+    fn test_p2_13_rollback_trigger_type_description() {
+        let cases = [
+            (
+                RollbackTriggerType::ConsecutiveRegression,
+                "R1 significantly worse than L3 for 3 consecutive days",
+            ),
+            (
+                RollbackTriggerType::AsaIntervention,
+                "ASA intervention triggered on R1 seam",
+            ),
+            (
+                RollbackTriggerType::EwmaCollapse,
+                "EWMA collapsed by >=0.3 within 24h",
+            ),
+            (
+                RollbackTriggerType::RecallRateDrop,
+                "Recall rate dropped >=5% vs L3 baseline",
+            ),
+            (RollbackTriggerType::Unknown, "Unknown rollback trigger"),
+        ];
+        for (trigger, expected_desc) in cases {
+            assert_eq!(
+                trigger.description(),
+                expected_desc,
+                "RollbackTriggerType::{:?} description mismatch",
+                trigger
+            );
+        }
+    }
+
+    /// 验证 `RollbackTriggerType` 序列化为 snake_case(ADR-043 决策 4 对齐)
+    ///
+    /// WHY snake_case:对齐 Rust serde 惯例与 JSON 字段命名规范,
+    /// 便于审计日志解析与 efficiency-monitor 告警规则匹配。
+    #[test]
+    fn test_p2_13_rollback_trigger_type_serialization_snake_case() {
+        let cases = [
+            (
+                RollbackTriggerType::ConsecutiveRegression,
+                "consecutive_regression",
+            ),
+            (RollbackTriggerType::AsaIntervention, "asa_intervention"),
+            (RollbackTriggerType::EwmaCollapse, "ewma_collapse"),
+            (RollbackTriggerType::RecallRateDrop, "recall_rate_drop"),
+            (RollbackTriggerType::Unknown, "unknown"),
+        ];
+        for (trigger, expected_json) in cases {
+            let json = serde_json::to_string(&trigger).unwrap();
+            assert_eq!(json, format!("\"{}\"", expected_json));
+            let restored: RollbackTriggerType = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, trigger);
+        }
+    }
+
+    /// 验证 `RollbackDiagnosticContext::default()` 所有字段为 None
+    #[test]
+    fn test_p2_13_rollback_diagnostic_context_default_all_none() {
+        let ctx = RollbackDiagnosticContext::default();
+        assert_eq!(ctx.ewma_level, None);
+        assert_eq!(ctx.observation_days, None);
+        assert_eq!(ctx.regression_streak, None);
+        assert_eq!(ctx.recall_rate_drop, None);
+        assert_eq!(ctx.rollback_target_version, None);
+    }
+
+    /// 验证 `RollbackDiagnosticContext` builder 模式正确设置字段
+    ///
+    /// builder 模式用于 R1 回滚失败时构造诊断快照,便于专家团队复盘根因。
+    #[test]
+    fn test_p2_13_rollback_diagnostic_context_builder() {
+        let ctx = RollbackDiagnosticContext::empty()
+            .with_ewma_level(0.35)
+            .with_observation_days(7)
+            .with_regression_streak(3)
+            .with_recall_rate_drop(0.08)
+            .with_rollback_target_version(42);
+        assert_eq!(ctx.ewma_level, Some(0.35));
+        assert_eq!(ctx.observation_days, Some(7));
+        assert_eq!(ctx.regression_streak, Some(3));
+        assert_eq!(ctx.recall_rate_drop, Some(0.08));
+        assert_eq!(ctx.rollback_target_version, Some(42));
+    }
+
+    /// 验证 `RollbackDiagnosticContext` 序列化/反序列化往返一致
+    #[test]
+    fn test_p2_13_rollback_diagnostic_context_serialization() {
+        let ctx = RollbackDiagnosticContext::empty()
+            .with_ewma_level(0.42)
+            .with_observation_days(14)
+            .with_regression_streak(5);
+        let json = serde_json::to_string(&ctx).unwrap();
+        let restored: RollbackDiagnosticContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctx, restored);
+    }
+
+    /// 验证 `R1ShadowRollbackFailed` 事件可构造且新字段正确(P2-13 结构化字段)
+    ///
+    /// 覆盖完整字段构造,模拟真实回滚失败场景:
+    /// - trigger_type = EwmaCollapse(EWMA 24h 内下降 ≥ 0.3)
+    /// - triggered_at = 精确时间戳
+    /// - details = CapabilityTokenRegistry 内部错误消息
+    /// - diagnostic = EWMA 水平 0.35 + 观察期 7 天
+    #[test]
+    fn test_p2_13_r1_shadow_rollback_failed_with_structured_fields() {
+        let triggered_at = chrono::Utc::now();
+        let diagnostic = RollbackDiagnosticContext::empty()
+            .with_ewma_level(0.35)
+            .with_observation_days(7);
+        let event = NexusEvent::R1ShadowRollbackFailed {
+            metadata: EventMetadata::new("omega-learner"),
+            reason: "EWMA collapsed from 0.7 to 0.35 within 24h".to_string(),
+            trigger_type: RollbackTriggerType::EwmaCollapse,
+            triggered_at: Some(triggered_at),
+            details: "CapabilityTokenRegistry::trigger_asa_intervention failed: internal error"
+                .to_string(),
+            diagnostic,
+        };
+        assert_eq!(event.severity(), EventSeverity::Critical);
+        // 使用模式匹配解构枚举变体字段
+        match &event {
+            NexusEvent::R1ShadowRollbackFailed {
+                trigger_type,
+                triggered_at: ta,
+                details,
+                diagnostic,
+                ..
+            } => {
+                assert_eq!(*trigger_type, RollbackTriggerType::EwmaCollapse);
+                assert_eq!(*ta, Some(triggered_at));
+                assert!(details.contains("CapabilityTokenRegistry"));
+                assert_eq!(diagnostic.ewma_level, Some(0.35));
+                assert_eq!(diagnostic.observation_days, Some(7));
+            }
+            other => panic!(
+                "Expected R1ShadowRollbackFailed, got {:?}",
+                other.type_name()
+            ),
+        }
+    }
+
+    /// 验证 `R1ShadowRollbackFailed` 事件序列化/反序列化往返一致
+    ///
+    /// 确保结构化字段(trigger_type / triggered_at / details / diagnostic)
+    /// 在 JSON 序列化后能完整恢复。
+    #[test]
+    fn test_p2_13_r1_shadow_rollback_failed_serialization() {
+        let triggered_at = chrono::Utc::now();
+        let diagnostic = RollbackDiagnosticContext::empty()
+            .with_regression_streak(3)
+            .with_rollback_target_version(10);
+        let event = NexusEvent::R1ShadowRollbackFailed {
+            metadata: EventMetadata::new("omega-learner"),
+            reason: "ConsecutiveRegression detected".to_string(),
+            trigger_type: RollbackTriggerType::ConsecutiveRegression,
+            triggered_at: Some(triggered_at),
+            details: "R1 worse than L3 for 3 consecutive days".to_string(),
+            diagnostic,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: NexusEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, restored);
+    }
+
+    /// 验证向后兼容性:旧格式 JSON(仅有 reason 字段)能被反序列化
+    ///
+    /// P2-13 之前的事件只有 `metadata` + `reason` 字段。新增的 4 个字段
+    /// (trigger_type / triggered_at / details / diagnostic)都有 `#[serde(default)]`,
+    /// 确保旧格式 JSON 能被反序列化为默认值。
+    ///
+    /// 这是 SemVer minor 兼容性的关键验证。
+    ///
+    /// NOTE: `NexusEvent` 使用 `#[serde(tag = "type", content = "data")]` internally
+    /// tagged 表示,JSON 格式为 `{"type": "VariantName", "data": {fields}}`。
+    #[test]
+    fn test_p2_13_r1_shadow_rollback_failed_backward_compatibility() {
+        // 模拟旧格式 JSON(无 trigger_type / triggered_at / details / diagnostic 字段)
+        let old_json = r#"{
+            "type": "R1ShadowRollbackFailed",
+            "data": {
+                "metadata": {
+                    "event_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "source": "omega-learner",
+                    "timestamp": "2026-07-25T10:00:00Z"
+                },
+                "reason": "ConsecutiveRegression"
+            }
+        }"#;
+        let restored: NexusEvent = serde_json::from_str(old_json).unwrap();
+        match restored {
+            NexusEvent::R1ShadowRollbackFailed {
+                reason,
+                trigger_type,
+                triggered_at,
+                details,
+                diagnostic,
+                ..
+            } => {
+                assert_eq!(reason, "ConsecutiveRegression");
+                // 新字段应有默认值
+                assert_eq!(trigger_type, RollbackTriggerType::Unknown);
+                assert_eq!(triggered_at, None);
+                assert_eq!(details, "");
+                assert_eq!(diagnostic, RollbackDiagnosticContext::default());
+            }
+            other => panic!(
+                "Expected R1ShadowRollbackFailed, got {:?}",
+                other.type_name()
+            ),
+        }
+    }
+
+    /// 验证 `R1ShadowRollbackFailed` 的 type_name 稳定性(序列化兼容性)
+    ///
+    /// type_name 必须保持 "R1ShadowRollbackFailed",不允许因 P2-13 扩展而变更,
+    /// 否则会破坏 efficiency-monitor 的告警规则匹配与 TUI 事件分类。
+    #[test]
+    fn test_p2_13_r1_shadow_rollback_failed_type_name_stable() {
+        let event = NexusEvent::R1ShadowRollbackFailed {
+            metadata: EventMetadata::new("test"),
+            reason: "test".to_string(),
+            trigger_type: RollbackTriggerType::Unknown,
+            triggered_at: None,
+            details: String::new(),
+            diagnostic: RollbackDiagnosticContext::default(),
+        };
+        assert_eq!(event.type_name(), "R1ShadowRollbackFailed");
+    }
+
+    // ============================================================
+    // P2-1 后续增强:CoordinationRatioReported 事件测试
+    // ============================================================
+
+    /// 验证 `CoordinationRatioReported` 的 type_name 稳定性
+    ///
+    /// type_name 必须保持 "CoordinationRatioReported",不允许变更,
+    /// 否则会破坏 efficiency-monitor 的告警规则匹配与 TUI 事件分类。
+    #[test]
+    fn test_p2_1_coordination_ratio_reported_type_name_stable() {
+        let event = NexusEvent::CoordinationRatioReported {
+            metadata: EventMetadata::new("quest-engine"),
+            coordination_cost_ms: 500.0,
+            inference_gain: 0.8,
+            cost_index: 0.5,
+            gain_index: 0.8,
+            ratio: 0.625,
+            is_paradox_risk: false,
+            threshold: 1.0,
+            sample_count: 10,
+        };
+        assert_eq!(event.type_name(), "CoordinationRatioReported");
+    }
+
+    /// 验证 `CoordinationRatioReported` 的 metadata 可取性
+    ///
+    /// metadata.source 必须与构造时传入的 "quest-engine" 一致,
+    /// 确保事件溯源信息不丢失。
+    #[test]
+    fn test_p2_1_coordination_ratio_reported_metadata_accessible() {
+        let event = NexusEvent::CoordinationRatioReported {
+            metadata: EventMetadata::new("quest-engine"),
+            coordination_cost_ms: 500.0,
+            inference_gain: 0.8,
+            cost_index: 0.5,
+            gain_index: 0.8,
+            ratio: 0.625,
+            is_paradox_risk: false,
+            threshold: 1.0,
+            sample_count: 10,
+        };
+        assert_eq!(event.metadata().source, "quest-engine");
+    }
+
+    /// 验证 `CoordinationRatioReported` 为 Normal 严重级别
+    ///
+    /// WHY Normal:这是周期性指标报告,非阻断性事件。推理悖论风险告警
+    /// 由 efficiency-monitor 订阅后通过 EfficiencyAlertTriggered 二次发布,
+    /// 不走 mpsc 旁路通道(§6.2 红线 5 仅适用于 Critical 安全事件)。
+    #[test]
+    fn test_p2_1_coordination_ratio_reported_severity_normal() {
+        let event = NexusEvent::CoordinationRatioReported {
+            metadata: EventMetadata::new("quest-engine"),
+            coordination_cost_ms: 1000.0,
+            inference_gain: 0.1,
+            cost_index: 1.0,
+            gain_index: 0.1,
+            ratio: 10.0,
+            is_paradox_risk: true, // 即使触发推理悖论风险,事件本身仍为 Normal
+            threshold: 1.0,
+            sample_count: 5,
+        };
+        assert_eq!(
+            event.severity(),
+            crate::EventSeverity::Normal,
+            "CoordinationRatioReported 必须为 Normal,告警由订阅者处理"
+        );
+    }
+
+    /// 验证 `CoordinationRatioReported` 归入 Quest 主题
+    ///
+    /// 该事件由 L9 quest-engine 发布,归入 Quest 主题组,
+    /// 与 ThinkingModeSwitched / QuestCompleted 等同级。
+    #[test]
+    fn test_p2_1_coordination_ratio_reported_topic_quest() {
+        let event = NexusEvent::CoordinationRatioReported {
+            metadata: EventMetadata::new("quest-engine"),
+            coordination_cost_ms: 300.0,
+            inference_gain: 0.9,
+            cost_index: 0.3,
+            gain_index: 0.9,
+            ratio: 0.333,
+            is_paradox_risk: false,
+            threshold: 1.0,
+            sample_count: 1,
+        };
+        assert_eq!(
+            event.topic(),
+            crate::topic::EventTopic::Quest,
+            "CoordinationRatioReported 应归入 Quest 主题"
+        );
+    }
+
+    /// 验证 `CoordinationRatioReported` 的序列化/反序列化往返
+    ///
+    /// 确保事件的 serde tag="type" content="data" 格式正确,
+    /// 且所有字段(包括 f64 的 ratio / INFINITY 边界)都能正确往返。
+    #[test]
+    fn test_p2_1_coordination_ratio_reported_serialization_roundtrip() {
+        let event = NexusEvent::CoordinationRatioReported {
+            metadata: EventMetadata::new("quest-engine"),
+            coordination_cost_ms: 750.0,
+            inference_gain: 0.65,
+            cost_index: 0.75,
+            gain_index: 0.65,
+            ratio: 1.153846,
+            is_paradox_risk: true,
+            threshold: 1.0,
+            sample_count: 42,
+        };
+        let json = serde_json::to_string(&event).expect("序列化失败");
+        assert!(
+            json.contains("CoordinationRatioReported"),
+            "JSON 应包含 type tag: {json}"
+        );
+        let decoded: NexusEvent = serde_json::from_str(&json).expect("反序列化失败");
+        match decoded {
+            NexusEvent::CoordinationRatioReported {
+                coordination_cost_ms,
+                inference_gain,
+                cost_index,
+                gain_index,
+                ratio,
+                is_paradox_risk,
+                threshold,
+                sample_count,
+                ..
+            } => {
+                assert!((coordination_cost_ms - 750.0).abs() < 1e-6);
+                assert!((inference_gain - 0.65).abs() < 1e-6);
+                assert!((cost_index - 0.75).abs() < 1e-6);
+                assert!((gain_index - 0.65).abs() < 1e-6);
+                assert!((ratio - 1.153846).abs() < 1e-6);
+                assert!(is_paradox_risk);
+                assert!((threshold - 1.0).abs() < 1e-6);
+                assert_eq!(sample_count, 42);
+            }
+            other => panic!(
+                "Expected CoordinationRatioReported, got {:?}",
+                other.type_name()
+            ),
+        }
+    }
+
+    /// 验证 `CoordinationRatioReported` 能承载 INFINITY ratio(增益为零的边界)
+    ///
+    /// 当 gain_index = 0.0 时 ratio = f64::INFINITY,必须能正确构造与访问。
+    /// 这是推理悖论的极端场景:有协调成本但无推理增益。
+    ///
+    /// WHY 不测试 JSON 序列化往返:serde_json 将 f64::INFINITY 序列化为 null,
+    /// 反序列化时 null 无法还原为 f64::INFINITY(JSON 规范不支持 Infinity)。
+    /// 生产环境使用 MessagePack(rmp-serde,ADR-004)序列化,支持 INFINITY。
+    /// 此处仅验证事件构造与字段访问,序列化兼容性由 MessagePack 保证。
+    #[test]
+    fn test_p2_1_coordination_ratio_reported_infinity_ratio() {
+        let event = NexusEvent::CoordinationRatioReported {
+            metadata: EventMetadata::new("quest-engine"),
+            coordination_cost_ms: 500.0,
+            inference_gain: 0.0,
+            cost_index: 0.5,
+            gain_index: 0.0,
+            ratio: f64::INFINITY,
+            is_paradox_risk: true,
+            threshold: 1.0,
+            sample_count: 3,
+        };
+        // 验证事件可正确构造与字段访问
+        match event {
+            NexusEvent::CoordinationRatioReported {
+                ratio,
+                is_paradox_risk,
+                gain_index,
+                ..
+            } => {
+                assert!(ratio.is_infinite(), "ratio 应为 INFINITY");
+                assert!(ratio.is_sign_positive(), "ratio 应为正无穷");
+                assert!(is_paradox_risk, "增益为零时必然触发推理悖论风险");
+                assert_eq!(gain_index, 0.0);
+            }
+            _ => panic!("Expected CoordinationRatioReported"),
+        }
     }
 }

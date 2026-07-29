@@ -40,6 +40,17 @@ pub mod bus;
 /// 详见 [`causal::VectorClock`]。
 pub mod causal;
 pub mod error;
+/// 分层子枚举 — NexusEvent 按架构层拆分的分类实现
+///
+/// 将 88+ 变体的 NexusEvent 按架构层拆分为 8 个子枚举:
+/// CoreEvent/MemoryEvent/StorageEvent/SecurityEvent/RouterEvent/
+/// ExecutionEvent/QuestEvent/InterfaceEvent。每个子枚举实现
+/// `EventClassification` trait(metadata/severity/type_name)。
+///
+/// # 渐进式方案
+/// NexusEvent 变体结构保持不变(消费方零改动),子枚举作为分类
+/// 参考与未来迁移目标。
+pub mod event_types;
 pub mod logging;
 /// 膜渗透过滤器(P2-W6.1,ADR-033 后续膜深化)
 ///
@@ -47,6 +58,12 @@ pub mod logging;
 /// (InnerLoad)与膜厚度(MembraneThickness)三维度决策事件是否穿膜入内环。
 /// 详见 [`membrane::MembraneFilter`]。
 pub mod membrane;
+/// 事件载荷与辅助类型 — NexusEvent 枚举依赖的结构化数据类型
+///
+/// 将 `EventMetadata`、`BudgetMetricsPayload`、`ClvSummary` 等辅助类型
+/// 独立为 payloads 模块,减少 types.rs 膨胀。通过 types 模块的 `pub use`
+/// 重导出保持向后兼容。
+pub mod payloads;
 /// RCU 单调读状态容器(P2-W7.2.3,§9.1 arc-swap)
 ///
 /// 因果一致性三层之二:内环共享状态的最终一致 + 单调读。
@@ -82,6 +99,11 @@ pub use types::{
     ActionSource, AgentStatus, BudgetMetricsPayload, ChatStatus, ClvSummary, ConsultUrgency,
     CriticalEventDropped, EventMetadata, EventSeverity, NexusEvent, QuestStatus,
     RouterStatsPayload, TaskPriority, VoteValue,
+};
+// 分层子枚举与分类 trait(渐进式拆分,消费方可按需导入)
+pub use event_types::{
+    CoreEvent, EventClassification, ExecutionEvent, InterfaceEvent, MemoryEvent, QuestEvent,
+    RouterEvent, SecurityEvent, StorageEvent,
 };
 
 /// 预导入模块 — 提供最常用类型

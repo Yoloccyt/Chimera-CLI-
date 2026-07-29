@@ -54,6 +54,25 @@ impl Default for CsnConfig {
     }
 }
 
+impl CsnConfig {
+    /// 校验配置合法性
+    ///
+    /// WHY:防御性编程(P4-5)—`default_degradation_levels` 为空会导致降级链无法创建,
+    /// 在配置构造阶段提前拦截而非运行时静默失败。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.default_degradation_levels.is_empty() {
+            return Err("default_degradation_levels 不能为空(架构红线:≥ 3 级降级)".into());
+        }
+        if self.default_degradation_levels.len() < 3 {
+            return Err(format!(
+                "default_degradation_levels 至少需要 3 级,当前:{}",
+                self.default_degradation_levels.len()
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +125,29 @@ mod tests {
             config.default_degradation_levels,
             cloned.default_degradation_levels
         );
+    }
+
+    #[test]
+    fn test_validate_default_config_ok() {
+        let config = CsnConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_degradation_levels_err() {
+        let config = CsnConfig {
+            default_degradation_levels: vec![],
+            ..CsnConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_insufficient_degradation_levels_err() {
+        let config = CsnConfig {
+            default_degradation_levels: vec!["L1".into(), "L2".into()],
+            ..CsnConfig::default()
+        };
+        assert!(config.validate().is_err());
     }
 }

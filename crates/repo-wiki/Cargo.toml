@@ -76,3 +76,7 @@ harness = false
 [[bench]]
 name = "fts_bench"
 harness = false
+
+[[bench]]
+name = "wiki_knn_slo"
+harness = false

@@ -16,7 +16,10 @@ use crate::types::{CognitiveElement, Modality, PerceptionInput};
 
 /// 文本感知器 — 基于字符频率统计的占位实现
 ///
-/// TODO(Week 7/8): 接入 ort ONNX Runtime 实现语义嵌入
+/// DEFERRED(T8-3 Audit): 接入 ort ONNX Runtime 实现语义嵌入需要文本语义 ONNX 模型文件(外部依赖)。
+/// onnx_backend.rs 已实现 Image/Video/Audio 模态的 tract-onnx 推理,
+/// 文本模态需额外的文本编码器模型(如 sentence-transformers),待模型就绪后接入。
+/// 当前字符频率嵌入已满足确定性、归一化、维度对齐的基本需求。
 pub struct TextPerceptor {
     /// 配置(含 text_dim 维度参数)
     config: NmcConfig,
@@ -53,7 +56,8 @@ impl Perceptor for TextPerceptor {
         let content_hash = sha256_hex(text.as_bytes());
 
         // embedding: 字符频率统计(text_dim 维)
-        // TODO(Week 7/8): 接入 ort ONNX Runtime 实现语义嵌入
+        // DEFERRED(T8-3 Audit): 接入 ONNX 文本语义嵌入需外部模型文件,
+        // 当前 byte_frequency 占位实现满足确定性 + 归一化需求
         let embedding = byte_frequency_embedding(text.as_bytes(), self.config.text_dim);
 
         Ok(CognitiveElement::new(

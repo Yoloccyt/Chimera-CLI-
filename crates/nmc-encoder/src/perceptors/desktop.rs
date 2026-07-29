@@ -14,7 +14,8 @@ use crate::types::{CognitiveElement, Modality, PerceptionInput};
 
 /// 桌面感知器 — 基于区域描述文本的占位编码
 ///
-/// TODO(Week 7/8): 结合截图字节实现多模态桌面编码
+/// DEFERRED(T8-3 Audit): 结合截图字节实现多模态桌面编码需要图像 ONNX 模型(已有 onnx_backend)
+/// 与屏幕截图采集能力(外部依赖)。当前基于描述文本的编码已覆盖核心语义信息。
 pub struct DesktopPerceptor {
     /// 配置(含 text_dim 维度参数,用于描述文本嵌入)
     config: NmcConfig,

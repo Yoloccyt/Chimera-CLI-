@@ -26,6 +26,8 @@ tokio = { workspace = true }
 tracing-test = { workspace = true }
 # criterion:性能基准测试框架(§7.1 测试矩阵约定)
 criterion = { workspace = true }
+# proptest:属性测试框架,用于 NexusEvent severity/type_name/topic 不变量验证
+proptest = { workspace = true }
 
 [[bench]]
 name = "bus_bench"

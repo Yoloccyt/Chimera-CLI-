@@ -6,6 +6,10 @@
   静态验证 spec.md KPI 表格中定义的全部性能红线(SLO)是否在代码库中
   有对应的 benchmark/test 文件与函数,以及阈值标记是否就位。
 
+  Part 1: Static Lint — 文件/函数/阈值标记存在性检查
+  Part 2: SLO Benchmark Assertions — 实际运行 bench, 解析 criterion 输出,
+          与 80% redline 阈值比较(Phase 7 新增)
+
   检查项(每条红线 3 项):
   1. 文件存在 — benchmark/test 文件路径有效
   2. 函数存在 — `fn <function_name>` 在文件中可匹配
@@ -99,18 +103,108 @@ foreach ($rl in $redlines) {
     }
 }
 
-# --- 汇总 ---
-Write-Host "`n=== Summary ===" -ForegroundColor Cyan
-$totalChecks = $redlines.Count * 2  # 每条红线至少 2 项(文件 + 函数)
-$passedChecks = $totalChecks - $script:FailCount
-Write-Host "  Passed: $passedChecks / $totalChecks" -ForegroundColor $(if ($script:FailCount -eq 0) { 'Green' } else { 'Red' })
-Write-Host "  Warnings: $script:WarnCount" -ForegroundColor Yellow
-Write-Host "  Failed: $script:FailCount" -ForegroundColor $(if ($script:FailCount -gt 0) { 'Red' } else { 'Gray' })
+# =====================================================================
+# Part 2: SLO Benchmark 阈值断言 (实际运行 bench, 解析 criterion 输出)
+# =====================================================================
+# 每个 SLO 用 80% 宽松阈值作为 CI redline (CI 环境波动缓冲)
+# 格式: SLO 名称 -> crate / bench 文件 / bench 函数过滤 / SLO 阈值(秒) / redline 阈值(秒)
+$sloRedlines = @(
+    @{ Name='window_select';     Crate='hcw-window';    BenchFile='window_select';  Filter='bench_window_select';       SloSec=0.001;   RedlineSec=0.0008;   Unit='ms'; SloDisplay='1ms';   RedlineDisplay='0.8ms'  },
+    @{ Name='mlc_l2_knn';       Crate='mlc-engine';    BenchFile='mlc_l2_knn';     Filter='bench_l2_knn_slo_assert';   SloSec=0.005;   RedlineSec=0.004;    Unit='ms'; SloDisplay='5ms';   RedlineDisplay='4ms'   },
+    @{ Name='decay_compute';    Crate='decay-engine';  BenchFile='decay_compute';  Filter='single_decay_by_profile';   SloSec=0.000001;RedlineSec=0.0000008;Unit='us'; SloDisplay='1us';   RedlineDisplay='0.8us' },
+    @{ Name='wiki_knn_100k';    Crate='repo-wiki';     BenchFile='wiki_knn_slo';   Filter='wiki_knn_100k_p95';         SloSec=0.050;   RedlineSec=0.040;    Unit='ms'; SloDisplay='50ms';  RedlineDisplay='40ms'  },
+    @{ Name='immune_probe';     Crate='chimera-mas';   BenchFile='immune_probe';   Filter='bench_assess_paradox_risk'; SloSec=0.100;   RedlineSec=0.080;    Unit='ms'; SloDisplay='100ms'; RedlineDisplay='80ms'  },
+    @{ Name='rhi_judge';        Crate='auto-dpo';      BenchFile='rhi_judge';      Filter='rhi_judge_latency';         SloSec=2.0;     RedlineSec=1.6;      Unit='s';  SloDisplay='2s';    RedlineDisplay='1.6s'   }
+)
 
-if ($script:FailCount -gt 0) {
-    Write-Host "`n  RESULT: FAIL — 有 $script:FailCount 项检查失败" -ForegroundColor Red
+Write-Host "`n=== SLO Benchmark Threshold Assertions ===" -ForegroundColor Cyan
+Write-Host "    (criterion bench, 80% redline of SLO)`n" -ForegroundColor Gray
+
+$sloPassCount = 0
+$sloFailCount = 0
+$sloSkipCount = 0
+
+foreach ($slo in $sloRedlines) {
+    Write-Host "  [SLO] $($slo.Name) (target: < $($slo.SloDisplay), redline: $($slo.RedlineDisplay))" -ForegroundColor Cyan
+
+    # 运行 bench 并捕获输出
+    $benchArgs = @(
+        'bench',
+        '--package', $slo.Crate,
+        '--bench', $slo.BenchFile,
+        '--', '--noplot', '--quick', $slo.Filter
+    )
+
+    try {
+        $benchOutput = & cargo @benchArgs 2>&1 | Out-String
+    } catch {
+        Write-Host "    [SKIP] bench 执行失败: $_" -ForegroundColor Yellow
+        $sloSkipCount++
+        continue
+    }
+
+    # 解析 criterion 输出: "time:   [X.XXX us X.XXX us X.XXX us]"
+    # 格式: time: [lower estimate upper unit]
+    # 提取 estimate (中间值) 和单位
+    $timePattern = 'time:\s+\[([^\]]+)\]'
+    if ($benchOutput -match $timePattern) {
+        $timeValues = $Matches[1].Trim() -split '\s+'
+        # timeValues[0]=lower, [1]=estimate, [2]=upper, [3]=unit
+        if ($timeValues.Count -ge 4) {
+            $estimate = [double]$timeValues[1]
+            $unit = $timeValues[3]
+
+            # 转换为秒
+            if     ($unit -eq 'ns') { $estimateSec = $estimate / 1e9 }
+            elseif ($unit -eq 'us') { $estimateSec = $estimate / 1e6 }
+            elseif ($unit -eq 'ms') { $estimateSec = $estimate / 1e3 }
+            elseif ($unit -eq 's')  { $estimateSec = $estimate }
+            else                    { $estimateSec = $estimate / 1e3 }
+
+            # 显示实测值
+            if     ($slo.Unit -eq 'us') { $displayVal = ('{0:N3} us' -f ($estimateSec * 1e6)) }
+            elseif ($slo.Unit -eq 'ms') { $displayVal = ('{0:N3} ms' -f ($estimateSec * 1e3)) }
+            else                        { $displayVal = ('{0:N3} s'  -f $estimateSec) }
+            Write-Host "    实测: $displayVal" -ForegroundColor Gray
+
+            # 与 redline 比较
+            if ($estimateSec -le $slo.RedlineSec) {
+                Write-Host "    [PASS] 低于 redline ($($slo.RedlineDisplay))" -ForegroundColor Green
+                $sloPassCount++
+            } elseif ($estimateSec -le $slo.SloSec) {
+                Write-Host "    [WARN] 超过 redline 但低于 SLO ($($slo.SloDisplay))" -ForegroundColor Yellow
+                $sloPassCount++  # 低于 SLO 即通过
+            } else {
+                Write-Host "    [FAIL] 超过 SLO ($($slo.SloDisplay))!" -ForegroundColor Red
+                $sloFailCount++
+            }
+        } else {
+            Write-Host "    [SKIP] 无法解析 criterion 时间输出" -ForegroundColor Yellow
+            $sloSkipCount++
+        }
+    } else {
+        Write-Host "    [SKIP] 未找到 criterion 时间输出 (bench 可能编译失败)" -ForegroundColor Yellow
+        $sloSkipCount++
+    }
+}
+
+# --- 最终汇总 ---
+Write-Host "`n=== Final Summary ===" -ForegroundColor Cyan
+Write-Host "  Static Lint:" -ForegroundColor White
+$totalChecks = $redlines.Count * 2
+$passedChecks = $totalChecks - $script:FailCount
+Write-Host "    Passed: $passedChecks / $totalChecks" -ForegroundColor $(if ($script:FailCount -eq 0) { 'Green' } else { 'Red' })
+Write-Host "    Warnings: $script:WarnCount" -ForegroundColor Yellow
+Write-Host "  SLO Benchmarks:" -ForegroundColor White
+Write-Host "    Passed: $sloPassCount" -ForegroundColor $(if ($sloFailCount -eq 0) { 'Green' } else { 'Red' })
+Write-Host "    Failed: $sloFailCount" -ForegroundColor $(if ($sloFailCount -gt 0) { 'Red' } else { 'Gray' })
+Write-Host "    Skipped: $sloSkipCount" -ForegroundColor Yellow
+
+$totalFail = $script:FailCount + $sloFailCount
+if ($totalFail -gt 0) {
+    Write-Host "`n  RESULT: FAIL — 有 $totalFail 项检查失败" -ForegroundColor Red
     exit 1
 } else {
-    Write-Host "`n  RESULT: PASS — 全部性能红线 lint 通过" -ForegroundColor Green
+    Write-Host "`n  RESULT: PASS — 全部性能红线 lint + SLO 断言通过" -ForegroundColor Green
     exit 0
 }

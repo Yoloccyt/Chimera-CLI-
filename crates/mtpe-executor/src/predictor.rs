@@ -26,8 +26,9 @@ use crate::types::{PredictionContext, PredictionResult, PredictionStats, Token};
 /// token 的开销,且此开销与 N 无关(一次推理可产出 N 个 token)。
 /// MTPE 的核心优势就是减少推理启动次数。伪预测中加入此延迟,
 /// 使加速比测试能反映真实场景的加速效果(1000×N=5 vs 5000×N=1)
-// TODO(Week 7): SIMULATED_INFERENCE_DELAY 与 generate_pseudo_predictions 为伪实现,
-// 替换为真实模型推理延迟与多步预测。
+// DEFERRED(T8-3 Audit): SIMULATED_INFERENCE_DELAY 与 generate_pseudo_predictions 为伪实现,
+// 替换为真实模型推理延迟与多步预测需要 NMC ONNX 模型文件(外部依赖)。
+// 当前伪实现已验证架构正确性(确定性输出、置信度递减、事件发布)。
 const SIMULATED_INFERENCE_DELAY: Duration = Duration::from_micros(50);
 
 /// MTPE 执行器 — 多步预测执行的核心组件
@@ -245,7 +246,8 @@ fn compute_context_hash(context: &PredictionContext) -> u32 {
 ///
 /// WHY 置信度递减:多步预测存在误差累积,后续 token 置信度自然降低,
 /// 此模型与真实 LLM 预测的行为特征一致
-// TODO(Week 7): 伪预测实现,替换为真实模型多步预测。
+// DEFERRED(T8-3 Audit): 伪预测实现,替换为真实模型多步预测需要 NMC ONNX 模型文件(外部依赖),
+// 当前基于上下文哈希的伪预测已验证 MTPE 架构(验证/回退/统计)的端到端正确性。
 fn generate_pseudo_predictions(n: usize, context_hash: u32) -> Vec<Token> {
     (0..n)
         .map(|i| {

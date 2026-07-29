@@ -191,3 +191,75 @@ proptest! {
         prop_assert_eq!(quest, decoded, "Quest should roundtrip through MessagePack");
     }
 }
+
+// ================================================================
+// proptest: cosine_similarity_slices 补充不变量(T6-6)
+//
+// 已有测试覆盖了 CLV 层面的对称性/自相似性/值域,
+// 此处补充 slices API 层面的边界性质:
+// 1. 空切片返回 0.0(避免除零 panic)
+// 2. 不等长切片取 min 长度(兼容行为)
+// 3. slices 层面的对称性(独立于 CLV 方法)
+// ================================================================
+
+proptest! {
+    /// 不变量: 空切片输入返回 0.0(不 panic,不返回 NaN)
+    ///
+    /// WHY: cosine_similarity_slices 对空输入返回 0.0 是防御性设计,
+    /// 避免除零 panic。proptest 验证任意长度 a + 空 b 均返回 0.0。
+    #[test]
+    fn slices_empty_input_returns_zero(
+        a in prop::collection::vec(-1.0f32..1.0f32, 0..50)
+    ) {
+        let empty: Vec<f32> = vec![];
+        prop_assert_eq!(cosine_similarity_slices(&a, &empty), 0.0);
+        prop_assert_eq!(cosine_similarity_slices(&empty, &a), 0.0);
+        prop_assert_eq!(cosine_similarity_slices(&empty, &empty), 0.0);
+    }
+}
+
+proptest! {
+    /// 不变量: 不等长切片取 min 长度 — cosine_similarity_slices(a, b)
+    /// 等价于 cosine_similarity_slices(a[..min_len], b[..min_len])
+    ///
+    /// WHY: 不等长输入是 API 文档明确声明的兼容行为(取最小长度),
+    /// proptest 验证此语义在任意长度组合下一致。
+    #[test]
+    fn slices_unequal_length_uses_min(
+        len_a in 1usize..20,
+        len_b in 1usize..20,
+    ) {
+        let a: Vec<f32> = (0..len_a).map(|i| (i as f32) * 0.1).collect();
+        let b: Vec<f32> = (0..len_b).map(|i| (i as f32) * 0.05 + 0.1).collect();
+        let min_len = len_a.min(len_b);
+
+        let sim_full = cosine_similarity_slices(&a, &b);
+        let sim_truncated = cosine_similarity_slices(&a[..min_len], &b[..min_len]);
+        prop_assert!(
+            (sim_full - sim_truncated).abs() < 1e-6,
+            "unequal length: full={} should equal truncated={} (len_a={}, len_b={})",
+            sim_full, sim_truncated, len_a, len_b
+        );
+    }
+}
+
+proptest! {
+    /// 不变量: cosine_similarity_slices 对称性 — cos(a,b) == cos(b,a)
+    ///
+    /// 独立于 CLV 层面的对称性测试,直接验证 slices API。
+    #[test]
+    fn slices_symmetry(
+        a in prop::collection::vec(-1.0f32..1.0f32, 1..50)
+            .prop_filter("a-non-zero", |v| v.iter().any(|&x| x != 0.0)),
+        b in prop::collection::vec(-1.0f32..1.0f32, 1..50)
+            .prop_filter("b-non-zero", |v| v.iter().any(|&x| x != 0.0))
+    ) {
+        let sim_ab = cosine_similarity_slices(&a, &b);
+        let sim_ba = cosine_similarity_slices(&b, &a);
+        prop_assert!(
+            (sim_ab - sim_ba).abs() < 1e-6,
+            "slices symmetry: cos(a,b)={} != cos(b,a)={}",
+            sim_ab, sim_ba
+        );
+    }
+}

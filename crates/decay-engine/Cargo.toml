@@ -17,7 +17,13 @@ nexus-contracts = { path = "../nexus-contracts" }
 [dev-dependencies]
 # criterion:性能基准测试框架(§7.1 测试矩阵约定)
 criterion = { workspace = true }
+# proptest:属性测试框架,用于衰减函数单调性/有界性/连续性不变量验证
+proptest = { workspace = true }
 
 [[bench]]
 name = "decay_bench"
+harness = false
+
+[[bench]]
+name = "decay_compute"
 harness = false

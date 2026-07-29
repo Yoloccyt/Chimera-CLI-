@@ -44,3 +44,10 @@ harness = false
 [[bench]]
 name = "rhi_channel_a_bench"
 harness = false
+
+# T7-6: RHI Judge SLO 基准（KPI-04：<2s）
+# WHY 独立 bench 文件:聚焦 ModelRouterJudgeClient.judge() SLO 验收,
+# 与 rhi_channel_a_bench（通道 A 全流程）互补,专门测量 judge 操作延迟
+[[bench]]
+name = "rhi_judge"
+harness = false

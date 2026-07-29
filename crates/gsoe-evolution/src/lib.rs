@@ -25,6 +25,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// polish-v2.7 Phase 2: AEGIS-lite 四阶段进化流水线(Digester→Planner→Evolver→Critic)
+///
+/// 对应 ADR: ADR-050(AEGIS-lite 降级设计)+ ADR-049 决策 1(落点裁决)
+/// R2 冻结声明(ADR-042):规则/统计驱动,无 RL 参数更新
+pub mod aegis;
 /// P5.2.1: RHI-CG 通道 B CI 执行门(CiGate trait + CargoCiGate + MockCiGate)
 ///
 /// 对应 ADR: ADR-044 决策 5(CI 执行门接口设计)
@@ -32,6 +37,10 @@ pub mod ci_gate;
 pub mod config;
 pub mod engine;
 pub mod error;
+/// 形式化验证模块 — AEGIS Critic 单调性等不变量的形式化保证
+///
+/// 对应架构层: L4 FormalVerifier
+pub mod formal;
 pub mod policy;
 /// P5.2.2: RHI-CG 通道 B 显著性检测(单尾二项检验 + SignificanceDetector)
 ///
@@ -44,6 +53,12 @@ pub mod spec_registry;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
+// polish-v2.7 Phase 2: AEGIS-lite 公开 API 重导出
+pub use aegis::{
+    AdaptationDirection, AdaptationPlan, AdaptationPlanner, AegisCritic, AegisPipeline,
+    CriticVerdict, DigestedTrajectories, FailurePattern, RejectedCandidate, SpecCandidate,
+    SpecEvolver, TrajectoryDigester, TrajectoryOutcome,
+};
 // P5.2.1: CiGate 公开 API 重导出
 pub use ci_gate::{
     check_inv9_delegation_acyclic, CargoCiGate, CiFailure, CiFailureKind, CiGate, CiGateError,

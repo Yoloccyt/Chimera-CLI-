@@ -99,3 +99,8 @@ criterion = { workspace = true }
 [[bench]]
 name = "mas_benchmark"
 harness = false
+
+# T7-5: ImmuneSystem probe SLO benchmark（SLO < 100ms）
+[[bench]]
+name = "immune_probe"
+harness = false

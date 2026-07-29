@@ -496,8 +496,10 @@ impl AhirtRedTeam {
     }
 
     /// 报告漏洞 — 记录未拦截的攻击载荷
+    ///
+    /// WHY 不发布事件:调用方 `verify_security()` 已在汇总后发布 `RedTeamAudit` [Critical] 事件,
+    /// 此方法仅负责逐类型的详细日志记录,避免重复发布事件。
     pub fn report_vulnerability(&self, probe_type: ProbeType, failed_probes: &[ProbeResult]) {
-        // TODO(Week 5 Task 37):集成到 event-bus,发布 RedTeamAudit 事件
         error!(
             probe_type = probe_type.as_str(),
             failed_count = failed_probes.len(),
@@ -567,17 +569,41 @@ impl AhirtRedTeam {
     }
 
     /// 事件触发探测 — 供外部事件总线调用
+    ///
+    /// 执行指定类型的探测后发布 `AhirtProbeCompleted` 事件,
+    /// 使 Parliament/SecCore 可通过事件总线感知事件触发的探测结果。
     pub fn trigger_probe(&self, probe_type: ProbeType) {
         let results = self.probe(probe_type);
         let passed = results.iter().filter(|r| r.passed).count();
         let total = results.len();
-        // TODO(Week 5 Task 37):集成到 event-bus,发布 AhirtProbeCompleted 事件
+        let failed = total - passed;
+        let detection_rate = if total > 0 {
+            failed as f32 / total as f32
+        } else {
+            0.0
+        };
+
         info!(
             probe_type = probe_type.as_str(),
             passed = passed,
             total = total,
             "AHIRT 事件触发探测完成"
         );
+
+        // 发布 AhirtProbeCompleted 事件
+        // WHY:事件触发探测与周期探测保持一致的事件发布行为,
+        // 使下游消费者(Parliament 安全态势评估)能统一订阅
+        let event = NexusEvent::AhirtProbeCompleted {
+            metadata: EventMetadata::new("parliament"),
+            probe_type: probe_type.as_str().to_string(),
+            total: total as u32,
+            passed: passed as u32,
+            failed: failed as u32,
+            detection_rate,
+        };
+        if let Err(e) = self.event_bus.publish_blocking(event) {
+            warn!(error = %e, "发布 AhirtProbeCompleted 事件失败");
+        }
     }
 
     /// 提示注入探测 — 基于规则检测

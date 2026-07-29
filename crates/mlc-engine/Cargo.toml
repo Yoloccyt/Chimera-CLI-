@@ -44,3 +44,7 @@ proptest = { workspace = true }
 [[bench]]
 name = "l2_recall"
 harness = false
+
+[[bench]]
+name = "mlc_l2_knn"
+harness = false

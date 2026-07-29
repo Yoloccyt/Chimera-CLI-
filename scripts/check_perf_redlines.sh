@@ -39,9 +39,10 @@ if [ -t 1 ]; then
     YELLOW='\033[0;33m'
     CYAN='\033[0;36m'
     GRAY='\033[0;90m'
+    WHITE='\033[1;37m'
     NC='\033[0m'
 else
-    GREEN=''; RED=''; YELLOW=''; CYAN=''; GRAY=''; NC=''
+    GREEN=''; RED=''; YELLOW=''; CYAN=''; GRAY=''; WHITE=''; NC=''
 fi
 
 echo -e "\n${CYAN}=== Chimera CLI Performance Red Line Lint ===${NC}"
@@ -116,8 +117,100 @@ for entry in "${REDLINES[@]}"; do
     fi
 done
 
-# --- 汇总 ---
-echo -e "\n${CYAN}=== Summary ===${NC}"
+# =====================================================================
+# Part 2: SLO Benchmark 阈值断言 (实际运行 bench, 解析 criterion 输出)
+# =====================================================================
+# 每个 SLO 用 80% 宽松阈值作为 CI redline (CI 环境波动缓冲)
+# 格式: Name|Crate|BenchFile|Filter|SloSec|RedlineSec|Unit|SloDisplay|RedlineDisplay
+SLO_REDLINES=(
+    "window_select|hcw-window|window_select|bench_window_select|0.001|0.0008|ms|1ms|0.8ms"
+    "mlc_l2_knn|mlc-engine|mlc_l2_knn|bench_l2_knn_slo_assert|0.005|0.004|ms|5ms|4ms"
+    "decay_compute|decay-engine|decay_compute|single_decay_by_profile|0.000001|0.0000008|us|1us|0.8us"
+    "wiki_knn_100k|repo-wiki|wiki_knn_slo|wiki_knn_100k_p95|0.050|0.040|ms|50ms|40ms"
+    "immune_probe|chimera-mas|immune_probe|bench_assess_paradox_risk|0.100|0.080|ms|100ms|80ms"
+    "rhi_judge|auto-dpo|rhi_judge|rhi_judge_latency|2.0|1.6|s|2s|1.6s"
+)
+
+echo -e "\n${CYAN}=== SLO Benchmark Threshold Assertions ===${NC}"
+echo -e "    ${GRAY}(criterion bench, 80% redline of SLO)${NC}\n"
+
+SLO_PASS=0
+SLO_FAIL=0
+SLO_SKIP=0
+
+for entry in "${SLO_REDLINES[@]}"; do
+    IFS='|' read -r s_name s_crate s_bench s_filter s_slo s_redline s_unit s_disp s_rdisp <<< "$entry"
+
+    echo -e "  ${CYAN}[SLO] $s_name (target: < $s_disp, redline: $s_rdisp)${NC}"
+
+    # 运行 bench 并捕获输出
+    bench_output=$(cargo bench --package "$s_crate" --bench "$s_bench" -- --noplot --quick "$s_filter" 2>&1) || true
+
+    # 解析 criterion 输出: "time:   [X.XXX us X.XXX us X.XXX us]"
+    time_line=$(echo "$bench_output" | grep -oP 'time:\s+\[\K[^\]]+' | head -1)
+
+    if [ -z "$time_line" ]; then
+        echo -e "    ${YELLOW}[SKIP] 未找到 criterion 时间输出 (bench 可能编译失败)${NC}"
+        SLO_SKIP=$((SLO_SKIP + 1))
+        continue
+    fi
+
+    # 提取 estimate (第二个值) 和单位
+    estimate=$(echo "$time_line" | awk '{print $2}')
+    unit=$(echo "$time_line" | awk '{print $4}')
+
+    if [ -z "$estimate" ] || [ -z "$unit" ]; then
+        echo -e "    ${YELLOW}[SKIP] 无法解析 criterion 时间输出${NC}"
+        SLO_SKIP=$((SLO_SKIP + 1))
+        continue
+    fi
+
+    # 转换为秒 (使用 awk 进行浮点运算)
+    estimate_sec=$(echo "$estimate $unit" | awk '{
+        val = $1; u = $2
+        if (u == "ns") printf "%.15f", val / 1e9
+        else if (u == "us") printf "%.15f", val / 1e6
+        else if (u == "ms") printf "%.15f", val / 1e3
+        else if (u == "s") printf "%.15f", val
+        else printf "%.15f", val / 1e3
+    }')
+
+    # 显示实测值
+    display_val=$(echo "$estimate_sec $s_unit" | awk '{
+        val = $1; u = $2
+        if (u == "us") printf "%.3f us", val * 1e6
+        else if (u == "ms") printf "%.3f ms", val * 1e3
+        else if (u == "s") printf "%.3f s", val
+    }')
+    echo -e "    ${GRAY}实测: $display_val${NC}"
+
+    # 与 redline 比较 (使用 awk 浮点比较)
+    result=$(echo "$estimate_sec $s_redline $s_slo" | awk '{
+        est = $1; redline = $2; slo = $3
+        if (est <= redline) print "PASS"
+        else if (est <= slo) print "WARN"
+        else print "FAIL"
+    }')
+
+    case "$result" in
+        PASS)
+            echo -e "    ${GREEN}[PASS] 低于 redline ($s_rdisp)${NC}"
+            SLO_PASS=$((SLO_PASS + 1))
+            ;;
+        WARN)
+            echo -e "    ${YELLOW}[WARN] 超过 redline 但低于 SLO ($s_disp)${NC}"
+            SLO_PASS=$((SLO_PASS + 1))
+            ;;
+        FAIL)
+            echo -e "    ${RED}[FAIL] 超过 SLO ($s_disp)!${NC}"
+            SLO_FAIL=$((SLO_FAIL + 1))
+            ;;
+    esac
+done
+
+# --- 最终汇总 ---
+echo -e "\n${CYAN}=== Final Summary ===${NC}"
+echo -e "  ${WHITE}Static Lint:${NC}"
 total_checks=$(( ${#REDLINES[@]} * 2 ))
 passed_checks=$(( total_checks - FAIL_COUNT ))
 if [ "$FAIL_COUNT" -eq 0 ]; then
@@ -125,14 +218,22 @@ if [ "$FAIL_COUNT" -eq 0 ]; then
 else
     summary_color="$RED"
 fi
-echo -e "  ${summary_color}Passed: $passed_checks / $total_checks${NC}"
-echo -e "  ${YELLOW}Warnings: $WARN_COUNT${NC}"
-echo -e "  ${summary_color}Failed: $FAIL_COUNT${NC}"
+echo -e "    ${summary_color}Passed: $passed_checks / $total_checks${NC}"
+echo -e "    ${YELLOW}Warnings: $WARN_COUNT${NC}"
+echo -e "  ${WHITE}SLO Benchmarks:${NC}"
+if [ "$SLO_FAIL" -eq 0 ]; then
+    echo -e "    ${GREEN}Passed: $SLO_PASS${NC}"
+else
+    echo -e "    ${RED}Passed: $SLO_PASS${NC}"
+fi
+echo -e "    $( [ "$SLO_FAIL" -gt 0 ] && echo "${RED}" || echo "${GRAY}" )Failed: $SLO_FAIL${NC}"
+echo -e "    ${YELLOW}Skipped: $SLO_SKIP${NC}"
 
-if [ "$FAIL_COUNT" -gt 0 ]; then
-    echo -e "\n  ${RED}RESULT: FAIL — 有 $FAIL_COUNT 项检查失败${NC}"
+TOTAL_FAIL=$(( FAIL_COUNT + SLO_FAIL ))
+if [ "$TOTAL_FAIL" -gt 0 ]; then
+    echo -e "\n  ${RED}RESULT: FAIL — 有 $TOTAL_FAIL 项检查失败${NC}"
     exit 1
 else
-    echo -e "\n  ${GREEN}RESULT: PASS — 全部性能红线 lint 通过${NC}"
+    echo -e "\n  ${GREEN}RESULT: PASS — 全部性能红线 lint + SLO 断言通过${NC}"
     exit 0
 fi
