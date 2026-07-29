@@ -452,6 +452,8 @@ const KNOWN_VIOLATIONS: &[(&str, &str)] = &[
     ("panels/security.rs", "详情"),
     // panels/self_assessment.rs
     ("panels/self_assessment.rs", "切换面板"),
+    // panels/dag_viz.rs(closure Stage B-10,同 self_assessment 的展示型快捷键文案)
+    ("panels/dag_viz.rs", "切换面板"),
     // panels/sysinfo.rs
     ("panels/sysinfo.rs", "刷新"),
     // panels/task_manager.rs
