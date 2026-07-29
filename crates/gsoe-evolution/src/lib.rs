@@ -61,6 +61,11 @@ pub mod spec_loader;
 /// P4-W15.2.1: HarnessSpec 版本化注册表（谱系追踪 + A/B 测试 + 一键回滚 + 不可进化面守护）
 pub mod spec_registry;
 pub mod types;
+/// R2 解冻阶段③ 前置 4 — 解冻范围界定守卫(ADR-052 待办 4)
+///
+/// fail-closed 白名单:未显式纳入范围的 RL 更新目标一律拒绝(默认全冻结)。
+/// 把"解冻范围"从文档承诺升级为运行时可强制。纯策略判定,不含 R2 扫描关键词。
+pub mod unfreeze_scope;
 
 // === 关键类型重导出,简化外部导入 ===
 // polish-v2.7 Phase 2: AEGIS-lite 公开 API 重导出
@@ -81,6 +86,8 @@ pub use error::GsoeError;
 pub use formal_gate::{
     FormalGateSummary, FormalVerifierGate, NamedPropertyResult, DEFAULT_MIN_SATISFIED,
 };
+// R2 解冻阶段③ 前置 4:UnfreezeScope 公开 API 重导出
+pub use unfreeze_scope::{RlUpdateTarget, ScopeVerdict, UnfreezeScope};
 // polish-v2.7 closure Stage B-8: Meta-Agent 适配器公开 API 重导出
 pub use meta_adapter::{
     ExternalHarnessDescriptor, ExternalStep, MetaAdapterError, MetaAgentAdapter,

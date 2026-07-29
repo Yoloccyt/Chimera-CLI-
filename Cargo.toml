@@ -370,6 +370,18 @@ path = "tests/e2e/regret_collection_e2e.rs"
 name = "formal_verifier_gate_e2e"
 path = "tests/e2e/formal_verifier_gate_e2e.rs"
 
+# ============================================================
+# R2 解冻阶段③ 前置 4: 解冻范围守卫 E2E(范围 × 熔断安全封套)
+#
+# WHY 新增 test target: 验证 UnfreezeScope(WHAT 范围)× ShadowModeCircuitBreaker
+# (WHETHER 验证)组合的完整解冻决策,覆盖范围内+验证通过/范围内但验证失败/
+# 验证通过但范围外/全冻结/渐进解冻等三路径,是 R2 解冻的最终安全封套。
+# ============================================================
+
+[[test]]
+name = "unfreeze_scope_e2e"
+path = "tests/e2e/unfreeze_scope_e2e.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。
