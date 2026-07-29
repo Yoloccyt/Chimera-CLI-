@@ -34,13 +34,15 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# v2.4.1-omega: 版本对账补救(polish-v2.7 Phase 0)
-# WHY patch 升级: git tag v2.4.0-omega 已于 2026-07-26 发布(P5 进化闭环),
-# 但发版时遗漏 bump workspace version(仍为 2.3.1-omega),造成 tag 与
-# Cargo.toml 版本号失调。本次对账递增至 2.4.1-omega 作为 polish-v2.7
-# 实施计划(ADR-049)的版本起点,后续按 v2.5.0/v2.6.0/v2.7.0-omega 三个
-# minor 递进发布。历史背景见 CHANGELOG v2.3.1-omega/v2.4.0-omega 条目。
-version = "2.4.1-omega"
+# v2.8.0-omega: polish-v2.7 Phase 1-6 合并发布(closure 计划 Stage A-4)
+# WHY 单 minor 合并承载: ADR-049 决策 5 原规划 v2.5.0/v2.6.0/v2.7.0-omega 三个
+# minor 递进,但 Phase 1-6 代码已于 2026-07-28 合并交付不可拆分(CHANGELOG
+# polish-v2.7 Phase 0-5 条目),补发历史 tag 只能指向同一 commit 使 SemVer 失去
+# 语义。故由单个 minor v2.8.0-omega 合并承载(对齐 V3 计划 Phase 6 编号预期,
+# 后续 v2.9.0/v2.10.0-omega 无缝衔接)。裁决详见
+# docs/architecture/IMPLEMENTATION_PLAN_polish_v2.7_closure.md §3/§10.4。
+# 历史背景: v2.4.1-omega 为版本对账补救起点,见 CHANGELOG v2.3.1/v2.4.0-omega 条目。
+version = "2.8.0-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"

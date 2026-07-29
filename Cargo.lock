@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acb-governor"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "auto-dpo"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -473,7 +473,7 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chimera-cli"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "chimera-tui",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-e2e-tests"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "acb-governor",
  "anyhow",
@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-mas"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "acb-governor",
  "anyhow",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-tui"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "chtc-bridge"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
@@ -704,7 +704,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cmt-tiering"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1062,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "csn-substitutor"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1137,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "decay-engine"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
@@ -1149,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "decb-governor"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1274,7 +1274,7 @@ checksum = "15401da73a9ed8c80e3b2d4dc05fe10e7b72d7243b9f614e516a44fa99986e88"
 
 [[package]]
 name = "efficiency-monitor"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "event-bus"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "faae-router"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1648,7 +1648,7 @@ dependencies = [
 
 [[package]]
 name = "gea-activator"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "gqep-executor"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1758,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "gsoe-evolution"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1836,7 +1836,7 @@ dependencies = [
 
 [[package]]
 name = "hcw-window"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2172,7 +2172,7 @@ dependencies = [
 
 [[package]]
 name = "kvbsr-router"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "lsct-tiering"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "cmt-tiering",
@@ -2421,7 +2421,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-mesh"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2491,7 +2491,7 @@ dependencies = [
 
 [[package]]
 name = "mlc-engine"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2530,7 +2530,7 @@ dependencies = [
 
 [[package]]
 name = "model-router"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "mtpe-executor"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2598,7 +2598,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexus-contracts"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "nexus-core",
  "proptest",
@@ -2609,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2640,7 +2640,7 @@ dependencies = [
 
 [[package]]
 name = "nmc-encoder"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "criterion",
@@ -2800,7 +2800,7 @@ dependencies = [
 
 [[package]]
 name = "omega-learner"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2837,7 +2837,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "osa-coordinator"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "cmt-tiering",
  "criterion",
@@ -2882,7 +2882,7 @@ dependencies = [
 
 [[package]]
 name = "parliament"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "criterion",
  "decb-governor",
@@ -3255,7 +3255,7 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
 name = "pvl-layer"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3280,7 +3280,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qeep-protocol"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3302,7 +3302,7 @@ dependencies = [
 
 [[package]]
 name = "quest-engine"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3614,7 +3614,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-wiki"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3773,7 +3773,7 @@ dependencies = [
 
 [[package]]
 name = "scc-cache"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3800,7 +3800,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seccore"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3904,7 +3904,7 @@ dependencies = [
 
 [[package]]
 name = "sesa-router"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "criterion",
@@ -4020,7 +4020,7 @@ dependencies = [
 
 [[package]]
 name = "ssra-fusion"
-version = "2.4.1-omega"
+version = "2.8.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
