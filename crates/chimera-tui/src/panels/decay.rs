@@ -209,6 +209,7 @@ mod tests {
             coefficient: 0.85,
             recent_events: vec!["capability_frozen:cap-1".into()],
             cycle_start: Some(Utc::now()),
+            fallback_count_delta: 0,
         };
         let content = DecayPanel::content(&state).to_string();
         assert!(
@@ -236,6 +237,7 @@ mod tests {
             coefficient: 0.25,
             recent_events: vec!["critical_decay_event".into()],
             cycle_start: Some(Utc::now()),
+            fallback_count_delta: 0,
         };
         let content = DecayPanel::content(&state).to_string();
         assert!(
@@ -278,6 +280,7 @@ mod tests {
             coefficient: 0.5,
             recent_events: vec![],
             cycle_start: Some(Utc::now()),
+            fallback_count_delta: 0,
         };
         let content = DecayPanel::content(&state).to_string();
         assert!(

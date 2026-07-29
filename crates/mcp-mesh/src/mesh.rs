@@ -3,11 +3,19 @@
 //! 对应架构层:L10 Interface
 //!
 //! ## 核心职责
-//! - `execute_transaction`:2PC 占位实现,跨多服务器原子提交
+//! - `execute_transaction`:2PC 跨多服务器原子提交(P1-6:已替换占位实现)
 //! - `superposition_query`:委托至 `quantum::superposition` 模块
 //! - `register_server` / `unregister_server` / `heartbeat`:委托至 `ServerRegistry`
 //! - 发布 `McpMeshTransactionCompleted` 事件
 //! - 订阅 `ChtcToolCallReceived` 事件(后台 spawn 处理)
+//!
+//! ## P1-6:2PC 占位实现替换
+//!
+//! 原 `prepare_phase` / `commit_phase` / `rollback_phase` 直接用 `tokio::time::sleep`
+//! 模拟网络往返。P1-6 引入 `ParticipantClient` trait,将网络通信抽象化:
+//! - 默认使用 `InProcessClient`(保持原 sleep-based 行为,向后兼容)
+//! - 生产环境可通过 `with_participant_client` 注入 `TcpParticipantClient`
+//! - 测试环境可注入 `MockParticipantClient` 验证失败场景
 //!
 //! ## Week 6 教训:broadcast 时序
 //! `bus.subscribe()` 必须在 `tokio::spawn` 之前同步调用,不能在 async 块内订阅。
@@ -18,12 +26,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::config::MeshConfig;
 use crate::error::McpError;
+use crate::quantum::participant_client::{InProcessClient, ParticipantClient};
 use crate::quantum::superposition::{execute_superposition_query, QueryResult, SuperpositionQuery};
 use crate::quantum::transaction::{QuantumTransaction, TransactionState};
 use crate::server_registry::{MeshServer, ServerRegistry};
@@ -31,7 +41,8 @@ use crate::types::TransactionResult;
 
 /// MCP Mesh — 量子网格的核心入口
 ///
-/// 持有服务器注册表(`Arc<ServerRegistry>`)、可选的 EventBus 与配置。
+/// 持有服务器注册表(`Arc<ServerRegistry>`)、可选的 EventBus、配置与
+/// 参与者客户端(`Arc<dyn ParticipantClient>`)。
 /// 所有方法通过 `&self` 调用,内部状态基于 `Arc` + `DashMap`,线程安全。
 pub struct McpMesh {
     /// Mesh 配置(事务超时、心跳阈值等)
@@ -40,20 +51,29 @@ pub struct McpMesh {
     registry: Arc<ServerRegistry>,
     /// 可选事件总线(事务完成时发布事件)
     event_bus: Option<EventBus>,
+    /// 参与者客户端 — 抽象 2PC 各阶段的网络通信
+    ///
+    /// 默认为 `InProcessClient`(sleep-based mock,向后兼容);
+    /// 生产环境通过 `with_participant_client` 注入 `TcpParticipantClient`。
+    participant_client: Arc<dyn ParticipantClient>,
 }
 
 impl McpMesh {
-    /// 创建 MCP Mesh(无 EventBus,不发布事件)
+    /// 创建 MCP Mesh(无 EventBus,默认 InProcessClient)
+    ///
+    /// 使用 `InProcessClient` 作为参与者客户端,保持与原占位实现一致的行为
+    /// (sleep-based 网络模拟),向后兼容现有测试。
     pub fn new(config: MeshConfig) -> Self {
         let registry = Arc::new(ServerRegistry::new(config.registry_capacity));
         Self {
             config,
             registry,
             event_bus: None,
+            participant_client: Arc::new(InProcessClient::new()),
         }
     }
 
-    /// 创建 MCP Mesh 并绑定 EventBus
+    /// 创建 MCP Mesh 并绑定 EventBus(默认 InProcessClient)
     ///
     /// 绑定后,`execute_transaction` 成功完成会发布 `McpMeshTransactionCompleted` 事件。
     /// 调用 `start_event_subscriber` 可订阅 `ChtcToolCallReceived` 处理 IDE 工具调用。
@@ -63,6 +83,45 @@ impl McpMesh {
             config,
             registry,
             event_bus: Some(bus),
+            participant_client: Arc::new(InProcessClient::new()),
+        }
+    }
+
+    /// 创建 MCP Mesh 并注入自定义参与者客户端(生产路径)
+    ///
+    /// 用于生产环境注入 `TcpParticipantClient`(真实 TCP 通信),
+    /// 或测试环境注入 `MockParticipantClient`(可注入失败)。
+    ///
+    /// # 参数
+    /// - `config`:Mesh 配置
+    /// - `bus`:事件总线(可选,传 `None` 则不发布事件)
+    /// - `client`:参与者客户端(`Arc<dyn ParticipantClient>`)
+    ///
+    /// # 示例
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use mcp_mesh::{McpMesh, MeshConfig, TcpParticipantClient, ParticipantClient};
+    ///
+    /// # async fn run() {
+    /// let client: Arc<dyn ParticipantClient> = Arc::new(TcpParticipantClient::new());
+    /// let mesh = McpMesh::with_participant_client(
+    ///     MeshConfig::default(),
+    ///     None,
+    ///     client,
+    /// );
+    /// # }
+    /// ```
+    pub fn with_participant_client(
+        config: MeshConfig,
+        bus: Option<EventBus>,
+        client: Arc<dyn ParticipantClient>,
+    ) -> Self {
+        let registry = Arc::new(ServerRegistry::new(config.registry_capacity));
+        Self {
+            config,
+            registry,
+            event_bus: bus,
+            participant_client: client,
         }
     }
 
@@ -91,13 +150,13 @@ impl McpMesh {
         self.registry.heartbeat(server_id)
     }
 
-    /// 执行量子事务 — 2PC 占位实现
+    /// 执行量子事务 — 2PC 跨多服务器原子提交
     ///
     /// # 流程
     /// 1. 校验 participants:已注册且 alive
     /// 2. 创建 `QuantumTransaction`(Init)
     /// 3. `tokio::time::timeout` 包装整体执行,超时即 Abort+Rollback
-    /// 4. Prepare 阶段:并发向所有参与者发 prepare(sleep 模拟网络往返)
+    /// 4. Prepare 阶段:并发向所有参与者发 prepare(通过 `ParticipantClient`)
     /// 5. 全部 ACK → Commit 阶段 → 返回 success=true
     /// 6. 任一失败 → Abort + Rollback 阶段 → 返回 success=false
     /// 7. 发布 `McpMeshTransactionCompleted` 事件
@@ -166,7 +225,7 @@ impl McpMesh {
                     "事务超时,触发回滚"
                 );
                 timed_out = true;
-                let _ = self.rollback_phase(&participants).await;
+                let _ = self.rollback_phase(&tx).await;
                 TransactionResult::failed(tx_id.clone(), start.elapsed().as_millis() as u64)
             }
         };
@@ -197,11 +256,11 @@ impl McpMesh {
         tx.transition(TransactionState::Prepare)?;
 
         // Prepare 阶段:并发向所有参与者发 prepare
-        match self.prepare_phase(&tx.participant_servers, op).await {
+        match self.prepare_phase(tx, op).await {
             Ok(()) => {
                 // 全部 ACK → Commit
                 tx.transition(TransactionState::Commit)?;
-                self.commit_phase(&tx.participant_servers).await?;
+                self.commit_phase(tx).await?;
                 Ok(Some(tx.participant_servers.clone()))
             }
             Err(e) => {
@@ -212,7 +271,7 @@ impl McpMesh {
                     "Prepare 阶段失败,触发回滚"
                 );
                 tx.transition(TransactionState::Abort)?;
-                self.rollback_phase(&tx.participant_servers).await?;
+                self.rollback_phase(tx).await?;
                 tx.transition(TransactionState::Rollback)?;
                 Ok(None)
             }
@@ -221,62 +280,107 @@ impl McpMesh {
 
     /// Prepare 阶段 — 并发向所有参与者发送 prepare 请求
     ///
-    /// in-process mock:用 `tokio::time::sleep` 模拟网络往返(1-2ms/服务器)。
-    /// 任一参与者失败则整体失败(此处 mock 始终成功)。
-    async fn prepare_phase(&self, participants: &[String], _op: &str) -> Result<(), McpError> {
-        use tokio::task::JoinSet;
-        let mut set: JoinSet<Result<(), McpError>> = JoinSet::new();
-        for sid in participants {
-            let sid = sid.clone();
-            set.spawn(async move {
-                // 模拟 prepare 网络往返(1-2ms,基于 server_id 哈希)
-                let delay_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 2);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                Ok(())
-            });
-        }
-        // 收集所有结果,任一失败则返回错误
-        while let Some(res) = set.join_next().await {
-            if let Ok(Err(e)) = res {
-                return Err(e);
-            }
+    /// 通过 `ParticipantClient::prepare` 发送请求,用 `FuturesUnordered` 并发 fanout。
+    /// 任一参与者失败(Nack / 网络错误)则整体失败,触发 Abort+Rollback。
+    ///
+    /// # 参数
+    /// - `tx`:量子事务(提供 transaction_id 和 participant_servers)
+    /// - `op`:操作描述
+    async fn prepare_phase(&self, tx: &QuantumTransaction, op: &str) -> Result<(), McpError> {
+        let mut futures: FuturesUnordered<_> = tx
+            .participant_servers
+            .iter()
+            .map(|sid| {
+                let sid = sid.clone();
+                async move {
+                    let server =
+                        self.registry
+                            .get(&sid)
+                            .ok_or_else(|| McpError::ServerNotFound {
+                                server_id: sid.clone(),
+                            })?;
+                    self.participant_client
+                        .prepare(&server, &tx.transaction_id, op)
+                        .await
+                }
+            })
+            .collect();
+
+        while let Some(result) = futures.next().await {
+            result?;
         }
         Ok(())
     }
 
     /// Commit 阶段 — 并发向所有参与者发送 commit 请求
-    async fn commit_phase(&self, participants: &[String]) -> Result<(), McpError> {
-        use tokio::task::JoinSet;
-        let mut set: JoinSet<Result<(), McpError>> = JoinSet::new();
-        for sid in participants {
-            let sid = sid.clone();
-            set.spawn(async move {
-                let delay_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 2);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                Ok(())
-            });
-        }
-        while let Some(res) = set.join_next().await {
-            if let Ok(Err(e)) = res {
-                return Err(e);
-            }
+    ///
+    /// 通过 `ParticipantClient::commit` 发送请求,用 `FuturesUnordered` 并发 fanout。
+    /// 任一参与者失败则返回错误(但事务已在 Prepare 阶段达成一致,此处失败需人工补偿)。
+    async fn commit_phase(&self, tx: &QuantumTransaction) -> Result<(), McpError> {
+        let mut futures: FuturesUnordered<_> = tx
+            .participant_servers
+            .iter()
+            .map(|sid| {
+                let sid = sid.clone();
+                async move {
+                    let server =
+                        self.registry
+                            .get(&sid)
+                            .ok_or_else(|| McpError::ServerNotFound {
+                                server_id: sid.clone(),
+                            })?;
+                    self.participant_client
+                        .commit(&server, &tx.transaction_id)
+                        .await
+                }
+            })
+            .collect();
+
+        while let Some(result) = futures.next().await {
+            result?;
         }
         Ok(())
     }
 
-    /// Rollback 阶段 — 并发向所有参与者发送 rollback 请求(best-effort,失败仅告警)
-    async fn rollback_phase(&self, participants: &[String]) -> Result<(), McpError> {
-        use tokio::task::JoinSet;
-        let mut set: JoinSet<()> = JoinSet::new();
-        for sid in participants {
-            let sid = sid.clone();
-            set.spawn(async move {
-                let delay_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 2);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-            });
-        }
-        // 等待所有回滚完成(忽略错误)
-        while set.join_next().await.is_some() {}
+    /// Rollback 阶段 — 并发向所有参与者发送 rollback 请求(best-effort)
+    ///
+    /// 通过 `ParticipantClient::rollback` 发送请求,用 `FuturesUnordered` 并发 fanout。
+    /// best-effort:任一参与者失败仅记录告警,不阻塞事务终结(回滚是尽力而为)。
+    async fn rollback_phase(&self, tx: &QuantumTransaction) -> Result<(), McpError> {
+        let mut futures: FuturesUnordered<_> = tx
+            .participant_servers
+            .iter()
+            .map(|sid| {
+                let sid = sid.clone();
+                async move {
+                    let server = match self.registry.get(&sid) {
+                        Some(s) => s,
+                        None => {
+                            warn!(
+                                server_id = %sid,
+                                transaction_id = %tx.transaction_id,
+                                "Rollback 阶段服务器未注册(best-effort,跳过)"
+                            );
+                            return;
+                        }
+                    };
+                    let result = self
+                        .participant_client
+                        .rollback(&server, &tx.transaction_id)
+                        .await;
+                    if let Err(e) = &result {
+                        warn!(
+                            server_id = %sid,
+                            transaction_id = %tx.transaction_id,
+                            error = %e,
+                            "Rollback 阶段参与者失败(best-effort,继续)"
+                        );
+                    }
+                }
+            })
+            .collect();
+
+        while futures.next().await.is_some() {}
         Ok(())
     }
 

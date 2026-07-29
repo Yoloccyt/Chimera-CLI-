@@ -45,8 +45,8 @@ mod tests {
     use super::*;
     use crate::actions::ActionRegistry;
 
-    /// 全部 20 个 PanelId(与 types.rs 保持同步)
-    const ALL_PANELS: [PanelId; 20] = [
+    /// 全部 21 个 PanelId(与 types.rs 保持同步)
+    const ALL_PANELS: [PanelId; 21] = [
         PanelId::Quest,
         PanelId::Parliament,
         PanelId::Budget,
@@ -67,6 +67,8 @@ mod tests {
         PanelId::MetricsDashboard,
         PanelId::Sysinfo,
         PanelId::Chat,
+        // polish-v2.7 P1-5:自评仪表盘面板
+        PanelId::SelfAssessment,
     ];
 
     #[test]

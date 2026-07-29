@@ -3,10 +3,12 @@
 //! 对应架构层:L10 Interface
 //!
 //! ## 子模块
-//! - `transaction`:量子事务状态机(2PC 占位)
+//! - `transaction`:量子事务状态机(2PC 状态转换契约)
+//! - `participant_client`:2PC 参与者客户端抽象(P1-6,替换占位实现)
 //! - `superposition`:超位置查询并发 fanout
 //! - `entanglement`:纠缠链接与同步策略
 
 pub mod entanglement;
+pub mod participant_client;
 pub mod superposition;
 pub mod transaction;

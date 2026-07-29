@@ -69,6 +69,7 @@ fn normal_decay_snapshot() -> DataSnapshot {
                 "sandbox_violation:op-2".into(),
             ],
             cycle_start: Some(Utc::now()),
+            fallback_count_delta: 0,
         },
         decay_history: vec![1000, 980, 950, 920, 880, 860, 850],
         ..Default::default()
@@ -82,6 +83,7 @@ fn high_decay_snapshot() -> DataSnapshot {
             coefficient: 0.25,
             recent_events: vec!["capability_frozen:cap-critical".into()],
             cycle_start: Some(Utc::now()),
+            fallback_count_delta: 0,
         },
         decay_history: vec![1000, 800, 600, 400, 300, 280, 250],
         ..Default::default()
@@ -244,6 +246,7 @@ fn test_decay_panel_empty_history_renders() {
             coefficient: 0.5,
             recent_events: vec![],
             cycle_start: Some(Utc::now()),
+            fallback_count_delta: 0,
         },
         decay_history: vec![],
         ..Default::default()

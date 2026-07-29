@@ -42,6 +42,8 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.border.sysinfo",
     "panel.border.task",
     "panel.border.chat",
+    // polish-v2.7 P1-5:自评仪表盘面板
+    "panel.border.self_assessment",
     // 帮助面板体(M2 i18n Slice 3)
     "help.header",
     "help.section.global",
@@ -152,6 +154,8 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.border.sysinfo" => " 系统信息 ",
         "panel.border.task" => " 任务管理 ",
         "panel.border.chat" => " 对话 ",
+        // polish-v2.7 P1-5:自评仪表盘面板
+        "panel.border.self_assessment" => " 自我评估 ",
         "help.header" => "帮助",
         "help.section.global" => "全局快捷键",
         "help.section.panel" => "面板快捷键",

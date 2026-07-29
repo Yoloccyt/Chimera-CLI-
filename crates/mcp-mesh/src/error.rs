@@ -101,6 +101,42 @@ pub enum McpError {
         /// 被拦截的 endpoint(原样回显,便于排查)
         endpoint: String,
     },
+
+    /// 网络通信失败:TCP 连接建立或读写失败
+    ///
+    /// 由 `TcpParticipantClient` 在以下场景抛出:
+    /// - TCP 连接建立失败(参与者离线 / 端口未监听 / DNS 解析失败)
+    /// - 连接建立后读写失败(网络中断 / RST)
+    /// - 单阶段超时(`phase_timeout_ms` 内未收到响应)
+    ///
+    /// 调用方应区分:
+    /// - Prepare 阶段网络错误 → 触发 Abort+Rollback
+    /// - Commit/Rollback 阶段网络错误 → 记录告警(需人工补偿)
+    #[error("网络通信失败: {server_id} endpoint={endpoint} reason={reason}")]
+    NetworkError {
+        /// 通信目标服务器 ID
+        server_id: String,
+        /// 通信目标 endpoint
+        endpoint: String,
+        /// 失败原因(连接拒绝 / 超时 / RST 等)
+        reason: String,
+    },
+
+    /// 协议错误:参与者返回了非法或无法解析的响应
+    ///
+    /// 由 `TcpParticipantClient` 在以下场景抛出:
+    /// - 响应 JSON 反序列化失败(协议版本不匹配 / 格式损坏)
+    /// - 响应载荷超过 `MAX_FRAME_SIZE`(防止恶意参与者在 length 前缀中谎报超大长度)
+    /// - 参与者返回 `Nack`(prepare 被拒绝)
+    ///
+    /// 调用方处理同 `NetworkError`:prepare 阶段触发回滚,commit 阶段需人工介入。
+    #[error("协议错误: {server_id} reason={reason}")]
+    ProtocolError {
+        /// 通信目标服务器 ID
+        server_id: String,
+        /// 失败原因(反序列化失败 / Nack / 超长帧等)
+        reason: String,
+    },
 }
 
 #[cfg(test)]

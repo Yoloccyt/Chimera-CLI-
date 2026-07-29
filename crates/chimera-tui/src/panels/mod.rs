@@ -35,6 +35,8 @@ pub mod quest;
 pub mod resource_monitor;
 pub mod router;
 pub mod security;
+/// polish-v2.7 P1-5:自评仪表盘面板(五维度 Harness 自我评估,ADR-049)
+pub mod self_assessment;
 pub mod sysinfo;
 pub mod task_manager;
 pub mod timeline;
@@ -57,6 +59,7 @@ pub use quest::QuestPanel;
 pub use resource_monitor::ResourceMonitorPanel;
 pub use router::RouterPanel;
 pub use security::SecurityPanel;
+pub use self_assessment::SelfAssessmentPanel;
 pub use sysinfo::SysinfoPanel;
 pub use task_manager::TaskManagerPanel;
 pub use timeline::TimelinePanel;

@@ -4,7 +4,7 @@
 //! 对应创新点:无(跨进程通信唯一通道,符合 §2.2 依赖铁律)
 //!
 //! ## 核心机制
-//! - **量子事务(Quantum Transaction)**:2PC 占位实现,跨多服务器原子提交
+//! - **量子事务(Quantum Transaction)**:2PC 跨多服务器原子提交(P1-6 已替换占位实现)
 //! - **超位置查询(Superposition Query)**:并发 fanout 至多服务器,聚合结果
 //! - **纠缠链接(Entanglement Link)**:服务器间状态同步策略(Eager/Lazy/BestEffort)
 //! - **服务器注册与心跳**:DashMap-based 注册表,周期性探活
@@ -41,6 +41,10 @@ pub use config::MeshConfig;
 pub use error::McpError;
 pub use mesh::McpMesh;
 pub use quantum::entanglement::{EntanglementLink, EntanglementManager, SyncStrategy};
+pub use quantum::participant_client::{
+    InProcessClient, MockParticipantClient, MockPhase, ParticipantClient, TcpParticipantClient,
+    TwoPcRequest, TwoPcResponse,
+};
 pub use quantum::superposition::{QueryResult, SuperpositionQuery};
 pub use quantum::transaction::{QuantumTransaction, TransactionState};
 pub use server_registry::{MeshServer, ServerRegistry};
@@ -52,6 +56,9 @@ pub mod prelude {
     pub use crate::error::McpError;
     pub use crate::mesh::McpMesh;
     pub use crate::quantum::entanglement::{EntanglementLink, EntanglementManager, SyncStrategy};
+    pub use crate::quantum::participant_client::{
+        InProcessClient, MockParticipantClient, ParticipantClient, TcpParticipantClient,
+    };
     pub use crate::quantum::superposition::{QueryResult, SuperpositionQuery};
     pub use crate::quantum::transaction::{QuantumTransaction, TransactionState};
     pub use crate::server_registry::{MeshServer, ServerRegistry};

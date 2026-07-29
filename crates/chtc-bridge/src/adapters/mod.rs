@@ -31,7 +31,7 @@ pub trait IdeAdapter: Send + Sync {
     fn convert_to_unified(&self, raw: Value) -> Result<UnifiedToolCall, ChtcError>;
     /// 将统一工具调用反向转换为原生格式
     fn convert_from_unified(&self, call: &UnifiedToolCall) -> Value;
-    /// 执行工具调用(本周仅 VSCode 完整实现,其余返回 NotImplemented)
+    /// 执行工具调用(5 大 IDE 均已实现模拟执行,真实 IDE 集成走 MCP Mesh)
     fn execute(&self, call: &UnifiedToolCall) -> Result<ToolCallResult, ChtcError>;
 }
 
@@ -189,59 +189,71 @@ mod tests {
     }
 
     #[test]
-    fn test_intellij_execute_not_implemented() {
+    fn test_intellij_execute_returns_success() {
         let a = IdeAdapterKind::for_source(&IdeSource::intellij());
         let call = UnifiedToolCall {
-            tool_id: "x".into(),
+            tool_id: "editor.open".into(),
             parameters: serde_json::json!({}),
             ide_source: IdeSource::intellij(),
             deadline_ms: 5000,
             call_id: "c2".into(),
         };
-        let err = a.execute(&call).unwrap_err();
-        assert!(matches!(err, ChtcError::NotImplemented { .. }));
+        let result = a.execute(&call).expect("IntelliJ execute 应成功");
+        assert!(result.success);
+        assert_eq!(result.call_id, "c2");
+        assert_eq!(result.result["ide"], "intellij");
+        assert!(result.error.is_none());
     }
 
     #[test]
-    fn test_vim_execute_not_implemented() {
+    fn test_vim_execute_returns_success() {
         let a = IdeAdapterKind::for_source(&IdeSource::vim());
         let call = UnifiedToolCall {
-            tool_id: "x".into(),
+            tool_id: "editor.open".into(),
             parameters: serde_json::json!({}),
             ide_source: IdeSource::vim(),
             deadline_ms: 5000,
             call_id: "c3".into(),
         };
-        let err = a.execute(&call).unwrap_err();
-        assert!(matches!(err, ChtcError::NotImplemented { .. }));
+        let result = a.execute(&call).expect("Vim execute 应成功");
+        assert!(result.success);
+        assert_eq!(result.call_id, "c3");
+        assert_eq!(result.result["ide"], "vim");
+        assert!(result.error.is_none());
     }
 
     #[test]
-    fn test_emacs_execute_not_implemented() {
+    fn test_emacs_execute_returns_success() {
         let a = IdeAdapterKind::for_source(&IdeSource::emacs());
         let call = UnifiedToolCall {
-            tool_id: "x".into(),
+            tool_id: "editor.open".into(),
             parameters: serde_json::json!({}),
             ide_source: IdeSource::emacs(),
             deadline_ms: 5000,
             call_id: "c4".into(),
         };
-        let err = a.execute(&call).unwrap_err();
-        assert!(matches!(err, ChtcError::NotImplemented { .. }));
+        let result = a.execute(&call).expect("Emacs execute 应成功");
+        assert!(result.success);
+        assert_eq!(result.call_id, "c4");
+        assert_eq!(result.result["ide"], "emacs");
+        assert!(result.error.is_none());
     }
 
     #[test]
-    fn test_zed_execute_not_implemented() {
+    fn test_zed_execute_returns_success() {
         let a = IdeAdapterKind::for_source(&IdeSource::zed());
         let call = UnifiedToolCall {
-            tool_id: "x".into(),
+            tool_id: "editor.open".into(),
             parameters: serde_json::json!({}),
             ide_source: IdeSource::zed(),
             deadline_ms: 5000,
             call_id: "c5".into(),
         };
-        let err = a.execute(&call).unwrap_err();
-        assert!(matches!(err, ChtcError::NotImplemented { .. }));
+        let result = a.execute(&call).expect("Zed execute 应成功");
+        assert!(result.success);
+        assert_eq!(result.call_id, "c5");
+        assert_eq!(result.result["ide"], "zed");
+        assert!(result.error.is_none());
     }
 
     #[test]

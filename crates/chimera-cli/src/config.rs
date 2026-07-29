@@ -48,12 +48,170 @@ pub fn default_config() -> ChimeraConfig {
     ChimeraConfig::default()
 }
 
+/// P2-3: 校验并规范化配置文件路径(防路径穿越越权读取)
+///
+/// 安全检查链:
+/// 1. 展开 `~` 为用户 home 目录(便于用户输入)
+/// 2. **拒绝含 `..` 组件的路径**(路径穿越防护核心,在规范化前检查)
+/// 3. 规范化 `.` 组件(消除冗余的当前目录引用)
+/// 4. 若文件存在,canonicalize 解析符号链接(审计追踪)
+///
+/// # 安全模型
+///
+/// 采用 **OWASP 路径穿越防护标准做法**:配置文件路径中根本不应出现 `..` 组件。
+/// 这比"规范化后检查残留 `..`"更安全,因为后者可能因 `..` 被成功解析
+/// (如 `~/../etc/passwd` → `C:\Users\etc\passwd`)而绕过检查。
+///
+/// - **显式绝对路径**(如 `--config /opt/myapp/config.yaml`):允许,用户明确指定
+/// - **Tilde 展开后穿越**(如 `~/../etc/passwd`):拒绝,`..` 穿越到 home 之外
+/// - **相对路径穿越**(如 `../../etc/passwd`):拒绝,`..` 穿越到 cwd 之外
+/// - **路径内合法 `..`**(如 `foo/bar/..`):拒绝(用户应直接写 `foo`,YAGNI)
+/// - **符号链接**:若文件存在,canonicalize 解析后记录日志(审计追踪)
+///
+/// # 时间复杂度
+///
+/// O(n),n = 路径组件数。canonicalize 在文件存在时触发一次 syscall。
+///
+/// # 错误
+///
+/// - 路径含 `..` 组件(穿越尝试,无论是否可解析)
+/// - canonicalize 失败(文件存在但无法解析符号链接,如权限不足)
+pub fn validate_config_path(path: &Path) -> Result<PathBuf> {
+    // 步骤 1: 展开 tilde(~ → home 目录)
+    let expanded = expand_tilde(path);
+
+    // 步骤 2: 拒绝含 `..` 组件的路径(路径穿越防护核心)
+    // WHY 在规范化前检查:规范化会"成功解析" `..`,导致 `~/../etc/passwd`
+    // 变成 `<home_parent>/etc/passwd`,反而绕过检查。直接拒绝 `..` 组件
+    // 是 OWASP 推荐的标准做法,消除解析绕过风险。
+    if expanded
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        anyhow::bail!(
+            "配置路径包含非法的 '..' 穿越组件: {} (原始: {}). \
+             请使用绝对路径或当前目录下的相对路径,禁止通过 '..' 访问上级目录",
+            expanded.display(),
+            path.display()
+        );
+    }
+
+    // 步骤 3: 规范化 `.` 组件(消除冗余的当前目录引用,如 `./config.yaml` → `config.yaml`)
+    let normalized = normalize_path(&expanded);
+
+    // 步骤 4: 文件存在时 canonicalize(解析符号链接,审计追踪)
+    if normalized.exists() {
+        let canonical = normalized
+            .canonicalize()
+            .with_context(|| format!("路径规范化(canonicalize)失败: {}", normalized.display()))?;
+        tracing::debug!(
+            original = %path.display(),
+            canonical = %canonical.display(),
+            "配置路径已规范化(含符号链接解析)"
+        );
+        Ok(canonical)
+    } else {
+        tracing::debug!(
+            original = %path.display(),
+            normalized = %normalized.display(),
+            "配置文件不存在,使用规范化路径(无符号链接解析)"
+        );
+        Ok(normalized)
+    }
+}
+
+/// 展开 `~` 为用户 home 目录
+///
+/// 支持以下形式:
+/// - `~` → home 目录
+/// - `~/path/to/file` → home/path/to/file
+/// - `~\path\to\file` → home\path\to\file (Windows)
+///
+/// 不展开 `~user` 形式(需 getpwuid,跨平台复杂,YAGNI)
+fn expand_tilde(path: &Path) -> PathBuf {
+    let path_str = match path.to_str() {
+        Some(s) => s,
+        None => return path.to_path_buf(),
+    };
+
+    if path_str == "~" {
+        return home_dir();
+    }
+
+    // Unix 风格: ~/...
+    if let Some(rest) = path_str.strip_prefix("~/") {
+        return home_dir().join(rest);
+    }
+
+    // Windows 风格: ~\...
+    if let Some(rest) = path_str.strip_prefix("~\\") {
+        return home_dir().join(rest);
+    }
+
+    path.to_path_buf()
+}
+
+/// 获取用户 home 目录(与 default_config_path 一致的跨平台逻辑)
+fn home_dir() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string())
+        .into()
+}
+
+/// 规范化路径组件(解析 `.` 和 `..`)
+///
+/// 逐组件处理:
+/// - `.` (CurDir):跳过
+/// - `..` (ParentDir):弹出最后一个 Normal 组件;若无法弹出(RootDir/PrefixDir)则保留 `..`
+/// - 其他(RootDir/PrefixDir/Normal):直接追加
+///
+/// 返回的路径可能仍含 `..` 组件(当 `..` 数量超过 Normal 组件时),
+/// 调用方应检查并拒绝此类路径(路径穿越防护)。
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => { /* 跳过 `.` */ }
+            std::path::Component::ParentDir => {
+                // 尝试弹出最后一个 Normal 组件
+                if result
+                    .components()
+                    .next_back()
+                    .is_some_and(|c| matches!(c, std::path::Component::Normal(_)))
+                {
+                    result.pop();
+                } else {
+                    // 无法弹出(RootDir/PrefixDir 或已有 `..`),保留 `..` 供调用方检测
+                    result.push("..");
+                }
+            }
+            other => result.push(other.as_os_str()),
+        }
+    }
+    result
+}
+
 /// 从多源加载配置(优先级:CLI > env > file > defaults)
 ///
 /// `config_path` 为 `None` 时使用 [`default_config_path`]。
 /// 配置文件不存在时不报错,仅使用默认值 + 环境变量。
+///
+/// # 安全
+///
+/// 调用 [`validate_config_path`] 对用户提供的路径进行安全校验:
+/// - 展开 `~` 为 home 目录
+/// - 规范化路径组件(解析 `.` 和 `..`)
+/// - 拒绝含未解析 `..` 的路径穿越尝试
+/// - 文件存在时 `canonicalize` 解析符号链接(审计追踪)
+///
+/// 校验失败立即返回错误,阻止后续 figment 加载。
 pub fn load(config_path: Option<PathBuf>) -> Result<ChimeraConfig> {
-    let path = config_path.unwrap_or_else(default_config_path);
+    let raw_path = config_path.unwrap_or_else(default_config_path);
+
+    // P2-3: 路径安全校验(防路径穿越越权读取)
+    // 在 figment 加载前完成校验,确保恶意路径不会触及文件 IO。
+    let path = validate_config_path(&raw_path)?;
 
     // 优先级链:defaults -> file -> env(后者覆盖前者)
     // 注:CLI 参数目前仅影响 config_path,未直接进入 Figment;
@@ -502,5 +660,173 @@ mod tests {
         assert!(tpl.contains("nexus:"));
         assert!(tpl.contains("model_router:"));
         assert!(tpl.contains("seccore:"));
+    }
+
+    // === P2-3: 路径安全校验测试(防路径穿越越权读取) ===
+
+    #[test]
+    fn test_expand_tilde_bare() {
+        // `~` 单独使用 → 展开为 home 目录
+        let expanded = expand_tilde(std::path::Path::new("~"));
+        // home 目录应非空(至少包含 HOME 或 USERPROFILE 之一)
+        assert!(expanded.components().count() >= 1);
+        // 不应再含 `~` 字符
+        assert!(!expanded.to_string_lossy().contains('~'));
+    }
+
+    #[test]
+    fn test_expand_tilde_unix_style() {
+        // `~/foo/bar` → home/foo/bar
+        let expanded = expand_tilde(std::path::Path::new("~/foo/bar"));
+        let s = expanded.to_string_lossy();
+        assert!(!s.contains('~'));
+        assert!(s.ends_with("foo/bar") || s.ends_with("foo\\bar"));
+    }
+
+    #[test]
+    fn test_expand_tilde_windows_style() {
+        // `~\foo\bar` → home\foo\bar(Windows 风格)
+        let expanded = expand_tilde(std::path::Path::new("~\\foo\\bar"));
+        let s = expanded.to_string_lossy();
+        assert!(!s.contains('~'));
+    }
+
+    #[test]
+    fn test_expand_tilde_no_tilde() {
+        // 不以 `~` 开头 → 原样返回
+        let path = std::path::Path::new("/etc/passwd");
+        let expanded = expand_tilde(path);
+        assert_eq!(expanded, path.to_path_buf());
+    }
+
+    #[test]
+    fn test_expand_tilde_tildeuser_not_expanded() {
+        // `~user` 形式不展开(YAGNI,跨平台不支持)
+        let path = std::path::Path::new("~root/config");
+        let expanded = expand_tilde(path);
+        // 应原样返回(不展开 ~user)
+        assert_eq!(expanded, path.to_path_buf());
+    }
+
+    #[test]
+    fn test_normalize_path_dots_only() {
+        // `.` 应被跳过
+        let normalized = normalize_path(std::path::Path::new("./foo/./bar"));
+        // 不应含 `.` 组件(规范化后 CurDir 应被消除)
+        assert!(!normalized
+            .components()
+            .any(|c| c == std::path::Component::CurDir));
+    }
+
+    #[test]
+    fn test_normalize_path_parent_dir_resolvable() {
+        // `foo/bar/..` → `foo`
+        let normalized = normalize_path(std::path::Path::new("foo/bar/.."));
+        let s = normalized.to_string_lossy();
+        // `..` 应被弹出,结果为 `foo`
+        assert_eq!(s, "foo");
+    }
+
+    #[test]
+    fn test_normalize_path_parent_dir_not_resolvable() {
+        // `../..` → 保留 `../..`(无法弹出,留给调用方拒绝)
+        let normalized = normalize_path(std::path::Path::new("../.."));
+        // 应仍含 `..` 组件
+        let has_parent = normalized
+            .components()
+            .any(|c| c == std::path::Component::ParentDir);
+        assert!(has_parent, "未解析的 `..` 应保留以供调用方检测");
+    }
+
+    #[test]
+    fn test_validate_config_path_rejects_traversal() {
+        // `~/../etc/passwd` → 展开后含 `..` 穿越组件,应被拒绝
+        let result = validate_config_path(std::path::Path::new("~/../etc/passwd"));
+        assert!(
+            result.is_err(),
+            "路径穿越尝试应被拒绝,实际结果: {:?}",
+            result
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains(".."),
+            "错误信息应提及 `..` 穿越组件: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_validate_config_path_rejects_relative_traversal() {
+        // `../../etc/passwd` → 相对路径穿越,应被拒绝
+        let result = validate_config_path(std::path::Path::new("../../etc/passwd"));
+        assert!(result.is_err(), "相对路径穿越应被拒绝");
+    }
+
+    #[test]
+    fn test_validate_config_path_accepts_normal_relative() {
+        // `config.yaml`(当前目录下)→ 允许
+        let result = validate_config_path(std::path::Path::new("config.yaml"));
+        assert!(result.is_ok(), "当前目录下的相对路径应允许: {:?}", result);
+    }
+
+    #[test]
+    fn test_validate_config_path_accepts_absolute() {
+        // 绝对路径(可能不存在)→ 允许
+        // 使用一个肯定不存在的路径,避免与真实文件冲突
+        let path = if cfg!(windows) {
+            std::path::Path::new("C:\\nonexistent\\config.yaml")
+        } else {
+            std::path::Path::new("/nonexistent/config.yaml")
+        };
+        let result = validate_config_path(path);
+        assert!(result.is_ok(), "绝对路径应允许: {:?}", result);
+    }
+
+    #[test]
+    fn test_validate_config_path_accepts_tilde() {
+        // `~/.chimera/omega.yaml` → 展开后允许(假设 home 目录存在)
+        let result = validate_config_path(std::path::Path::new("~/.chimera/omega.yaml"));
+        assert!(result.is_ok(), "Tilde 展开后的路径应允许: {:?}", result);
+        // 结果不应含 `~`
+        let path = result.unwrap();
+        assert!(!path.to_string_lossy().contains('~'));
+    }
+
+    #[test]
+    fn test_validate_config_path_canonicalizes_existing() {
+        // 创建临时文件,验证 canonicalize 解析符号链接
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join("chimera_test_validate_config.yaml");
+        std::fs::write(&temp_file, "nexus:\n  version: \"test\"\n").unwrap();
+
+        let result = validate_config_path(&temp_file);
+        assert!(result.is_ok(), "存在的文件应成功校验: {:?}", result);
+
+        // 清理临时文件
+        let _ = std::fs::remove_file(&temp_file);
+    }
+
+    #[test]
+    fn test_load_rejects_traversal_path() {
+        // 集成测试:load 函数应拒绝路径穿越
+        let result = load(Some(std::path::PathBuf::from("~/../etc/passwd")));
+        assert!(result.is_err(), "load 应拒绝路径穿越尝试: {:?}", result);
+    }
+
+    #[test]
+    fn test_load_accepts_nonexistent_normal_path() {
+        // 集成测试:load 应允许不存在的正常路径(配置文件可选)
+        let path = if cfg!(windows) {
+            std::path::PathBuf::from("C:\\nonexistent\\chimera\\omega.yaml")
+        } else {
+            std::path::PathBuf::from("/nonexistent/chimera/omega.yaml")
+        };
+        let result = load(Some(path));
+        // 配置文件不存在时,figment 使用默认值 + env,应成功
+        assert!(
+            result.is_ok(),
+            "不存在的正常路径应允许加载(使用默认值): {:?}",
+            result
+        );
     }
 }

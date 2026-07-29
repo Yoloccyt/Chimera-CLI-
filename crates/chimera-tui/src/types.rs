@@ -105,6 +105,12 @@ pub enum PanelId {
     /// `TuiChatSubmitted`;响应经 `ChatSync` 消费 `TuiChatResponseChunk`/
     /// `TuiChatCompleted`/`TuiChatStatusChanged` 驱动。
     Chat,
+    /// 自评仪表盘面板 — 五维度 Harness 自我评估(polish-v2.7 P1-5,ADR-049)
+    ///
+    /// 展示 RuntimeAuditor 发布的 `HarnessReportGenerated` 五维评分
+    /// (任务理解/可控执行/变更验证/可靠交付/经验沉淀)
+    /// 与最近 `AuditFindingRaised` 审计发现列表,数据从 `latest_events` 派生。
+    SelfAssessment,
 }
 
 impl PanelId {
@@ -131,6 +137,7 @@ impl PanelId {
             PanelId::MetricsDashboard => "MetricsDashboard",
             PanelId::Sysinfo => "Sysinfo",
             PanelId::Chat => "Chat",
+            PanelId::SelfAssessment => "SelfAssessment",
         }
     }
 
@@ -157,6 +164,7 @@ impl PanelId {
             PanelId::MetricsDashboard => " Metrics Dashboard ",
             PanelId::Sysinfo => " System Info ",
             PanelId::Chat => " Chat ",
+            PanelId::SelfAssessment => " Self Assessment ",
         }
     }
 
@@ -187,14 +195,16 @@ impl PanelId {
             PanelId::ResourceMonitor => PanelId::MetricsDashboard,
             PanelId::MetricsDashboard => PanelId::Sysinfo,
             PanelId::Sysinfo => PanelId::Chat,
-            PanelId::Chat => PanelId::Quest,
+            // polish-v2.7 P1-5:SelfAssessment 插入 Chat 与 Quest 之间(循环末尾)
+            PanelId::Chat => PanelId::SelfAssessment,
+            PanelId::SelfAssessment => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
     pub fn prev(&self) -> PanelId {
         match self {
-            PanelId::Quest => PanelId::Chat,
+            PanelId::Quest => PanelId::SelfAssessment,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
             PanelId::Memory => PanelId::Budget,
@@ -214,6 +224,8 @@ impl PanelId {
             PanelId::MetricsDashboard => PanelId::ResourceMonitor,
             PanelId::Sysinfo => PanelId::MetricsDashboard,
             PanelId::Chat => PanelId::Sysinfo,
+            // polish-v2.7 P1-5:SelfAssessment 位于循环末尾(Chat 之后)
+            PanelId::SelfAssessment => PanelId::Chat,
         }
     }
 }
@@ -541,6 +553,11 @@ pub enum TuiCommand {
 /// 衰减指标 — Decay 面板的数据视图(P2.1)
 ///
 /// 镜像 `NexusEvent::DecayMetricsReported` 的载荷,由 `DecaySync` 填充。
+///
+/// # P2-11 扩展(2026-07-28)
+///
+/// 新增 `fallback_count_delta` 字段,反映本周期 `DecayLearnerHolder`
+/// 触发 fallback 的次数。TUI 可据此显示 learner 健康度告警。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecayMetrics {
     /// 当前衰减系数 [0.0, 1.0],1.0 表示无衰减
@@ -549,6 +566,11 @@ pub struct DecayMetrics {
     pub recent_events: Vec<String>,
     /// 本衰减周期开始时间,None 表示尚未收到任何衰减事件
     pub cycle_start: Option<DateTime<Utc>>,
+    /// P2-11: 本周期 fallback 触发次数(异常回退层 + 熔断入口层)
+    ///
+    /// 持续 > 0 表明 learner 不稳定,TUI 可显示告警提示运维介入。
+    #[serde(default)]
+    pub fallback_count_delta: u64,
 }
 
 impl Default for DecayMetrics {
@@ -558,6 +580,7 @@ impl Default for DecayMetrics {
             coefficient: 1.0,
             recent_events: Vec::new(),
             cycle_start: None,
+            fallback_count_delta: 0,
         }
     }
 }
@@ -1238,9 +1261,11 @@ mod tests {
         assert_eq!(PanelId::ResourceMonitor.next(), PanelId::MetricsDashboard);
         // 循环:MetricsDashboard → Sysinfo(Task 3.1 新增)
         assert_eq!(PanelId::MetricsDashboard.next(), PanelId::Sysinfo);
-        // M3b:Sysinfo → Chat → Quest(Chat 追加到循环末尾)
+        // M3b:Sysinfo → Chat(Chat 追加到循环末尾)
         assert_eq!(PanelId::Sysinfo.next(), PanelId::Chat);
-        assert_eq!(PanelId::Chat.next(), PanelId::Quest);
+        // polish-v2.7 P1-5:Chat → SelfAssessment → Quest(SelfAssessment 插入循环末尾)
+        assert_eq!(PanelId::Chat.next(), PanelId::SelfAssessment);
+        assert_eq!(PanelId::SelfAssessment.next(), PanelId::Quest);
     }
 
     #[test]
@@ -1267,9 +1292,11 @@ mod tests {
         assert_eq!(PanelId::MetricsDashboard.prev(), PanelId::ResourceMonitor);
         // 循环:Sysinfo → MetricsDashboard(Task 3.1 新增)
         assert_eq!(PanelId::Sysinfo.prev(), PanelId::MetricsDashboard);
-        // M3b:Chat → Sysinfo,Quest → Chat(Chat 追加到循环末尾)
+        // M3b:Chat → Sysinfo(Chat 位于 Sysinfo 之后)
         assert_eq!(PanelId::Chat.prev(), PanelId::Sysinfo);
-        assert_eq!(PanelId::Quest.prev(), PanelId::Chat);
+        // polish-v2.7 P1-5:SelfAssessment → Chat,Quest → SelfAssessment(循环末尾)
+        assert_eq!(PanelId::SelfAssessment.prev(), PanelId::Chat);
+        assert_eq!(PanelId::Quest.prev(), PanelId::SelfAssessment);
     }
 
     #[test]
@@ -1295,6 +1322,9 @@ mod tests {
             PanelId::ResourceMonitor,
             PanelId::MetricsDashboard,
             PanelId::Sysinfo,
+            PanelId::Chat,
+            // polish-v2.7 P1-5:SelfAssessment 加入往返验证
+            PanelId::SelfAssessment,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);

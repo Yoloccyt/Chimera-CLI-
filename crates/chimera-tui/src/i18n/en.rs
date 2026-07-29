@@ -39,6 +39,8 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.border.sysinfo" => " System Info ",
         "panel.border.task" => " Task Manager ",
         "panel.border.chat" => " Chat ",
+        // polish-v2.7 P1-5: 自评仪表盘面板
+        "panel.border.self_assessment" => " Self Assessment ",
         "help.header" => "Help",
         "help.section.global" => "Global Shortcuts",
         "help.section.panel" => "Panel Shortcuts",
