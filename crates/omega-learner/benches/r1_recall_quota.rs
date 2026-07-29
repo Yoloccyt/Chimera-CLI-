@@ -13,9 +13,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use nexus_contracts::RecallQuota;
-use omega_learner::r1_recall_quota::{
-    R1Context, RecallQuotaLearner, RecallQuotaTransition,
-};
+use omega_learner::r1_recall_quota::{R1Context, RecallQuotaLearner, RecallQuotaTransition};
 use omega_learner::replay_pool::ReplayPool;
 use omega_learner::s2_memory::TaskPhase;
 use rand::thread_rng;
@@ -46,7 +44,9 @@ fn bench_cql_train_step(c: &mut Criterion) {
     c.bench_function("r1_cql_train_step", |b| {
         b.iter(|| {
             let mut rng = thread_rng();
-            black_box(learner.train(black_box(&pool), black_box(&mut rng)).unwrap())
+            learner
+                .train(black_box(&pool), black_box(&mut rng))
+                .unwrap()
         })
     });
 }
@@ -58,7 +58,9 @@ fn bench_iql_train_step(c: &mut Criterion) {
     c.bench_function("r1_iql_train_step", |b| {
         b.iter(|| {
             let mut rng = thread_rng();
-            black_box(learner.train(black_box(&pool), black_box(&mut rng)).unwrap())
+            learner
+                .train(black_box(&pool), black_box(&mut rng))
+                .unwrap()
         })
     });
 }
@@ -95,7 +97,9 @@ fn bench_cql_full_train_100_iters(c: &mut Criterion) {
             let mut learner = RecallQuotaLearner::default_cql().unwrap();
             let mut rng = thread_rng();
             for _ in 0..100 {
-                black_box(learner.train(black_box(&pool), black_box(&mut rng)).unwrap());
+                learner
+                    .train(black_box(&pool), black_box(&mut rng))
+                    .unwrap();
             }
         })
     });

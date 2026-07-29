@@ -113,6 +113,11 @@ pub mod seam;
 /// P4-W16.2.1: 经验回放池 — off-policy RL 训练的轨迹存储与采样基础设施
 pub mod replay_pool;
 
+/// polish-v2.7 P4-1: PER 优先经验回放 — SumTree O(log n) 优先级采样(ADR-049 决策 4)
+///
+/// R2 冻结声明(ADR-042):经验数据仅供 R1 路径,禁止 R2 约束 RL。
+pub mod per_buffer;
+
 /// P4-W16.2.2: R1 召回配额离线 RL（CQL/IQL）— S7 接缝
 pub mod r1_recall_quota;
 
@@ -124,9 +129,11 @@ pub mod shadow_mode;
 // ============================================================
 
 pub use arm::{ArmId, ArmIndex, ArmSet, DiscreteArmSet};
+// polish-v2.7 P4-1: PER 公开 API 重导出
 pub use context::SeamContext;
 pub use error::{LearnerError, Result};
 pub use linucb::LinUCB;
+pub use per_buffer::{PerBuffer, PerSample};
 // P4-W16.2.1: 经验回放池类型重导出(供 L9/L10 上层实例化与填充)
 pub use replay_pool::{ReplayPool, ReplayPoolStats, ReplaySample, TrajectorySource};
 // P4-W16.2.2: R1 召回配额离线 RL（CQL/IQL）类型重导出

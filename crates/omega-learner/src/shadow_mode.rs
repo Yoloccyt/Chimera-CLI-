@@ -554,9 +554,9 @@ impl ShadowModeTracker {
         self.observation_days.saturating_sub(self.elapsed_days(now))
     }
 
-    /// 观察期是否完成
+    /// 观察期是否完成(需至少一份报告 + 已过观察天数,避免无数据误判)
     pub fn observation_period_complete(&self, now: i64) -> bool {
-        self.elapsed_days(now) >= self.observation_days
+        !self.reports.is_empty() && self.elapsed_days(now) >= self.observation_days
     }
 
     /// 评估 4 项解冻条件是否全部满足
@@ -574,7 +574,8 @@ impl ShadowModeTracker {
         PromotionReadiness {
             ewma达标: current_ewma >= EWMA_PROMOTION_THRESHOLD,
             win_rate_达标: win_rate >= self.win_rate_threshold,
-            observation_complete: elapsed >= self.observation_days,
+            // 复用 observation_period_complete 保证"无报告则观察期未完成"语义一致
+            observation_complete: self.observation_period_complete(now),
             no_asa_intervention: self.asa_count == 0,
             current_ewma,
             current_win_rate: win_rate,
@@ -824,7 +825,8 @@ mod tests {
 
     #[test]
     fn test_tracker_observation_period_complete() {
-        let tracker = ShadowModeTracker::new(0);
+        let mut tracker = ShadowModeTracker::new(0);
+        tracker.record_daily_report(make_report(0.15, 0));
         assert!(!tracker.observation_period_complete(86400 * 13));
         assert!(tracker.observation_period_complete(86400 * 14));
         assert!(tracker.observation_period_complete(86400 * 30));
@@ -1054,7 +1056,9 @@ mod tests {
 
     #[test]
     fn test_tracker_with_custom_config() {
-        let tracker = ShadowModeTracker::with_config(0, 7, 0.8);
+        let mut tracker = ShadowModeTracker::with_config(0, 7, 0.8);
+        // 观察期完成需至少一份报告(避免无数据误判,见 observation_period_complete 文档)
+        tracker.record_daily_report(make_report(0.15, 0));
         // 7 天观察期 + 0.8 胜率阈值
         assert!(!tracker.observation_period_complete(86400 * 6));
         assert!(tracker.observation_period_complete(86400 * 7));

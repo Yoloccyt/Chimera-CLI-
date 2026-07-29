@@ -66,6 +66,10 @@
 pub mod config;
 pub mod error;
 pub mod feedback;
+/// polish-v2.7 P3-6:Hint-Boosted Recovery 过程级提示引导恢复(快手 KAT,ADR-049)
+pub mod hint_recovery;
+/// polish-v2.7 P3-5:Process-Score 九维度过程评分(快手 KAT,ADR-049)
+pub mod process_score;
 pub mod producer;
 pub mod types;
 pub mod verifier;
@@ -74,6 +78,9 @@ pub mod verifier;
 pub use config::PvlConfig;
 pub use error::PvlError;
 pub use feedback::FeedbackChannel;
+// polish-v2.7 P3:过程评分与提示恢复公开 API 重导出
+pub use hint_recovery::{HintCategory, HintRecovery, RecoveryHint};
+pub use process_score::{check_real_execution, ProcessObservation, ProcessScore, ProcessScorer};
 pub use producer::Producer;
 pub use types::{
     FeedbackMessage, Operation, OperationId, OperationStatus, ProducerStrategy, VerificationResult,

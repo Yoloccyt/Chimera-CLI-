@@ -13,13 +13,11 @@
 
 use chrono::Utc;
 use nexus_contracts::{RecallQuota, RecallQuotaPolicy};
-use omega_learner::r1_recall_quota::{
-    R1Context, RecallQuotaLearner, RecallQuotaTransition,
-};
+use omega_learner::r1_recall_quota::{R1Context, RecallQuotaLearner, RecallQuotaTransition};
 use omega_learner::replay_pool::ReplayPool;
 use omega_learner::s2_memory::TaskPhase;
 use omega_learner::shadow_mode::{
-    ComparisonResult, PromotionReadiness, ShadowComparisonReport, ShadowModeTracker, StrategyMetrics,
+    ComparisonResult, ShadowComparisonReport, ShadowModeTracker, StrategyMetrics,
     DEFAULT_OBSERVATION_DAYS, EWMA_PROMOTION_THRESHOLD,
 };
 use rand::thread_rng;
@@ -44,7 +42,8 @@ fn fill_pool(pool: &ReplayPool<RecallQuotaTransition>, n: usize) {
     let next_ctx = make_next_ctx();
     for _ in 0..n {
         pool.push(
-            RecallQuotaTransition::new(&ctx, RecallQuota::K20, 0.75, &next_ctx, false, "q-1").unwrap(),
+            RecallQuotaTransition::new(&ctx, RecallQuota::K20, 0.75, &next_ctx, false, "q-1")
+                .unwrap(),
         );
     }
 }
@@ -93,7 +92,11 @@ fn test_r1_cql_learner_end_to_end() {
     // 5. 验证输出的 quota 是有效的 5 档之一
     assert!(matches!(
         quota,
-        RecallQuota::K5 | RecallQuota::K10 | RecallQuota::K20 | RecallQuota::K50 | RecallQuota::K100
+        RecallQuota::K5
+            | RecallQuota::K10
+            | RecallQuota::K20
+            | RecallQuota::K50
+            | RecallQuota::K100
     ));
 
     // 6. 验证策略输出为 Learned
@@ -120,7 +123,11 @@ fn test_r1_iql_learner_end_to_end() {
     let quota = learner.select_quota(&ctx).unwrap();
     assert!(matches!(
         quota,
-        RecallQuota::K5 | RecallQuota::K10 | RecallQuota::K20 | RecallQuota::K50 | RecallQuota::K100
+        RecallQuota::K5
+            | RecallQuota::K10
+            | RecallQuota::K20
+            | RecallQuota::K50
+            | RecallQuota::K100
     ));
 
     // 5. 验证策略输出
@@ -172,7 +179,6 @@ fn test_r1_shadow_mode_promotion_to_authorized() {
 
     // 14 天 R1 显著优于 L3
     for day in 0..DEFAULT_OBSERVATION_DAYS {
-        let now = start_time + (day as i64 + 1) * day_seconds;
         let report = make_report(0.15, DEFAULT_OBSERVATION_DAYS - 1 - day);
         let rollback = tracker.record_daily_report(report);
         assert!(rollback.is_none(), "全胜期间不应触发回滚");
@@ -198,7 +204,6 @@ fn test_r1_shadow_mode_asa_intervention_resets() {
 
     // 14 天全胜
     for day in 0..DEFAULT_OBSERVATION_DAYS {
-        let now = start_time + (day as i64 + 1) * day_seconds;
         let report = make_report(0.15, DEFAULT_OBSERVATION_DAYS - 1 - day);
         let _ = tracker.record_daily_report(report);
     }
@@ -309,7 +314,6 @@ fn test_r1_promotion_readiness_partial_conditions() {
 
     // 仅 7 天数据（观察期未满 14 天）
     for day in 0..7u16 {
-        let now = start_time + (day as i64 + 1) * day_seconds;
         let report = make_report(0.15, DEFAULT_OBSERVATION_DAYS - 1 - day);
         let _ = tracker.record_daily_report(report);
     }
@@ -335,7 +339,6 @@ fn test_r1_promotion_readiness_low_ewma() {
 
     // 14 天数据但 EWMA 低
     for day in 0..DEFAULT_OBSERVATION_DAYS {
-        let now = start_time + (day as i64 + 1) * day_seconds;
         let report = make_report(0.15, DEFAULT_OBSERVATION_DAYS - 1 - day);
         let _ = tracker.record_daily_report(report);
     }
@@ -372,6 +375,7 @@ fn test_r1_recall_quota_policy_learned_requires_version() {
 // ============================================================
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn test_r1_ewma_promotion_threshold_constant() {
     // 验证 EWMA 解冻阈值常量（ADR-043 决策 3 条件 1）
     assert_eq!(EWMA_PROMOTION_THRESHOLD, 0.7);

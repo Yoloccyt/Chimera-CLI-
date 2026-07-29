@@ -104,10 +104,12 @@ impl GeaActivator {
     ///
     /// 若专家 ID 已存在,覆盖旧画像。
     pub fn register_expert(&self, profile: ExpertProfile) {
-        let mut registry = self
-            .expert_registry
-            .write()
-            .expect("expert_registry poisoned");
+        // P2-2: PoisonError 恢复 — 与 decay-engine learner_holder 模式一致
+        // (§4.1 红线:避免 expect(),用 unwrap_or_else 处理锁 poison)
+        let mut registry = self.expert_registry.write().unwrap_or_else(|p| {
+            warn!("expert_registry write lock poisoned, recovering with inner data");
+            p.into_inner()
+        });
         registry.insert(profile.expert_id.clone(), profile);
     }
 
@@ -115,10 +117,10 @@ impl GeaActivator {
     ///
     /// 若专家不存在,静默忽略(幂等)。
     pub fn unregister_expert(&self, expert_id: &ExpertId) {
-        let mut registry = self
-            .expert_registry
-            .write()
-            .expect("expert_registry poisoned");
+        let mut registry = self.expert_registry.write().unwrap_or_else(|p| {
+            warn!("expert_registry write lock poisoned, recovering with inner data");
+            p.into_inner()
+        });
         registry.remove(expert_id);
     }
 
@@ -151,10 +153,10 @@ impl GeaActivator {
         // 步骤 2-4:持读锁完成门控计算与冲突消解
         // WHY 块作用域:确保 RwLockReadGuard 在 await 之前释放(clippy::await_holding_lock)
         let result = {
-            let registry = self
-                .expert_registry
-                .read()
-                .expect("expert_registry poisoned");
+            let registry = self.expert_registry.read().unwrap_or_else(|p| {
+                warn!("expert_registry read lock poisoned, recovering with inner data");
+                p.into_inner()
+            });
 
             // 动态阈值:基于当前注册表规模估算负载因子
             let load_factor = self.estimate_load_factor(&registry);
@@ -287,7 +289,10 @@ impl GeaActivator {
     pub fn expert_count(&self) -> usize {
         self.expert_registry
             .read()
-            .expect("expert_registry poisoned")
+            .unwrap_or_else(|p| {
+                warn!("expert_registry read lock poisoned, recovering with inner data");
+                p.into_inner()
+            })
             .len()
     }
 }

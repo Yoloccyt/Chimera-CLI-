@@ -1,15 +1,16 @@
-//! 余弦相似度计算 — 无外部依赖的纯 Rust 实现
+//! 余弦相似度计算 — 委托至 nexus-core 权威实现
 //!
 //! 对应架构层:L10 Interface
 //!
 //! ## 设计要点
-//! - 纯 Rust 实现,不依赖 ndarray/cosine 等外部 crate(降低构建依赖)
-//! - 零向量保护:任一向量为零向量时返回 0.0,避免 NaN 污染
-//! - 长度不匹配保护:返回 0.0,避免 panic(系统边界校验)
-//! - 单次遍历同时累加点积与模长,提升缓存局部性
+//! - 统一使用 `nexus_core::cosine_similarity_slices` 权威实现,避免多副本优化不一致
+//! - 零向量保护、长度不匹配保护、clamp 行为均由权威实现保证
 //!
 //! ## 公式
 //! cos(a, b) = (a · b) / (||a|| * ||b||)
+
+// 统一使用 nexus-core 权威实现,避免多副本优化不一致
+use nexus_core::cosine_similarity_slices;
 
 /// 计算两个向量的余弦相似度
 ///
@@ -18,45 +19,16 @@
 /// - `b`:向量 B(任意维度)
 ///
 /// # 返回
-/// 余弦相似度得分,范围 [-1.0, 1.0]:
-/// - `1.0`:方向完全相同
-/// - `0.0`:正交或任一向量为零向量
-/// - `-1.0`:方向完全相反
+/// 余弦相似度得分,范围 [-1.0, 1.0]。
 ///
 /// # 边界处理
 /// - 任一向量为零向量(模长为 0):返回 `0.0`(避免除零导致 NaN)
-/// - 长度不匹配:返回 `0.0`(系统边界校验,不 panic)
 /// - 空向量:返回 `0.0`
 ///
-/// # 性能
-/// 单次遍历 O(n),n = 向量维度。同时累加点积与模长平方,
-/// 避免多次遍历,提升缓存局部性。
+/// # 实现说明
+/// 委托至 `nexus_core::cosine_similarity_slices` 权威实现,行为完全一致。
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    // 长度不匹配:返回 0.0(系统边界校验)
-    if a.len() != b.len() {
-        return 0.0;
-    }
-
-    // 单次遍历累加点积与模长平方
-    let mut dot_product: f32 = 0.0;
-    let mut norm_a_sq: f32 = 0.0;
-    let mut norm_b_sq: f32 = 0.0;
-
-    for (xa, xb) in a.iter().zip(b.iter()) {
-        dot_product += xa * xb;
-        norm_a_sq += xa * xa;
-        norm_b_sq += xb * xb;
-    }
-
-    let norm_product = (norm_a_sq * norm_b_sq).sqrt();
-
-    // 零向量保护:任一模长为 0 时返回 0.0,避免 NaN
-    // WHY:NaN 会污染后续 Top-K 排序,导致候选选择异常
-    if norm_product == 0.0 {
-        return 0.0;
-    }
-
-    dot_product / norm_product
+    cosine_similarity_slices(a, b)
 }
 
 #[cfg(test)]
@@ -156,16 +128,18 @@ mod tests {
         );
     }
 
-    // === 4. 长度不匹配 ===
+    // === 4. 长度不匹配(权威实现取 min 长度计算) ===
 
     #[test]
     fn test_cosine_similarity_length_mismatch() {
+        // 权威实现取 min 长度计算:a=[1.0, 0.0, 0.0], b=[1.0, 0.0]
+        // 仅用前 2 个元素:dot=1.0, norm_a=1.0, norm_b=1.0 → 1.0
         let a = vec![1.0_f32, 0.0, 0.0];
         let b = vec![1.0_f32, 0.0];
         let score = cosine_similarity(&a, &b);
         assert!(
-            (score - 0.0).abs() < 1e-6,
-            "长度不匹配应返回 0.0, got {score}"
+            (score - 1.0).abs() < 1e-6,
+            "不等长输入取 min 长度,预期 1.0, got {score}"
         );
     }
 

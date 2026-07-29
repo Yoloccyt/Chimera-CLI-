@@ -278,25 +278,29 @@ mod tests {
         CapabilityDescriptor::new(id, vector)
     }
 
-    fn make_registry_with_caps(caps: Vec<(&str, Vec<f32>)>) -> SubstitutionCandidateRegistry {
+    /// 辅助函数返回 Result，统一错误处理，便于定位注册失败点
+    fn make_registry_with_caps(
+        caps: Vec<(&str, Vec<f32>)>,
+    ) -> Result<SubstitutionCandidateRegistry, CsnError> {
         let registry = SubstitutionCandidateRegistry::new(100);
         for (id, v) in caps {
-            registry.register(make_descriptor(id, v)).expect("注册失败");
+            registry.register(make_descriptor(id, v))?;
         }
-        registry
+        Ok(registry)
     }
 
     // === 1. 注册与查找基础 ===
 
     #[test]
-    fn test_register_and_get() {
+    fn test_register_and_get() -> Result<(), Box<dyn std::error::Error>> {
         let registry = SubstitutionCandidateRegistry::new(16);
         let cap = make_descriptor("cap-1", vec![1.0; 50]);
-        registry.register(cap.clone()).expect("注册失败");
+        registry.register(cap.clone())?;
 
         let found = registry.get("cap-1").expect("应找到能力");
         assert_eq!(found.capability_id, "cap-1");
         assert_eq!(registry.hits(), 1);
+        Ok(())
     }
 
     #[test]
@@ -318,45 +322,40 @@ mod tests {
     }
 
     #[test]
-    fn test_register_capacity_full_returns_error() {
+    fn test_register_capacity_full_returns_error() -> Result<(), Box<dyn std::error::Error>> {
         let registry = SubstitutionCandidateRegistry::new(2);
-        registry
-            .register(make_descriptor("cap-1", vec![1.0; 50]))
-            .expect("注册 cap-1 失败");
-        registry
-            .register(make_descriptor("cap-2", vec![1.0; 50]))
-            .expect("注册 cap-2 失败");
+        registry.register(make_descriptor("cap-1", vec![1.0; 50]))?;
+        registry.register(make_descriptor("cap-2", vec![1.0; 50]))?;
 
         let result = registry.register(make_descriptor("cap-3", vec![1.0; 50]));
         assert!(matches!(result, Err(CsnError::RegistryFull { .. })));
+        Ok(())
     }
 
     #[test]
-    fn test_register_overwrite_existing() {
+    fn test_register_overwrite_existing() -> Result<(), Box<dyn std::error::Error>> {
         let registry = SubstitutionCandidateRegistry::new(16);
-        registry
-            .register(make_descriptor("cap-1", vec![1.0; 50]))
-            .expect("首次注册失败");
+        registry.register(make_descriptor("cap-1", vec![1.0; 50]))?;
         // 覆盖:更新向量
-        registry
-            .register(make_descriptor("cap-1", vec![0.5; 50]))
-            .expect("覆盖注册失败");
+        registry.register(make_descriptor("cap-1", vec![0.5; 50]))?;
 
         let found = registry.get("cap-1").expect("应找到能力");
         assert_eq!(registry.len(), 1, "覆盖不应增加条目数");
         assert!((found.semantic_vector[0] - 0.5).abs() < 1e-6);
+        Ok(())
     }
 
     // === 3. find_substitutes Top-K 选择 ===
 
     #[test]
-    fn test_find_substitutes_excludes_self() {
+    fn test_find_substitutes_excludes_self() -> Result<(), Box<dyn std::error::Error>> {
         let registry =
-            make_registry_with_caps(vec![("cap-1", vec![1.0; 50]), ("cap-2", vec![0.9; 50])]);
+            make_registry_with_caps(vec![("cap-1", vec![1.0; 50]), ("cap-2", vec![0.9; 50])])?;
 
         let candidates = registry.find_substitutes("cap-1", 5);
         assert_eq!(candidates.len(), 1, "仅 cap-2 是候选(排除自身)");
         assert_eq!(candidates[0].candidate_id, "cap-2");
+        Ok(())
     }
 
     #[test]
@@ -367,68 +366,84 @@ mod tests {
     }
 
     #[test]
-    fn test_find_substitutes_top_k_ordering() {
-        // 三个候选:cap-2 最相似(0.99),cap-3 次之(0.9),cap-4 最远(0.5)
+    fn test_find_substitutes_top_k_ordering() -> Result<(), Box<dyn std::error::Error>> {
+        // 构造不同方向的 50 维向量,使余弦相似度有区分度:
+        // cap-1 沿 dim-0 方向,cap-2/3/4 与 cap-1 的夹角递增
+        let mut v1 = vec![0.0_f32; 50];
+        v1[0] = 1.0;
+        let mut v2 = vec![0.0_f32; 50];
+        v2[0] = 0.99;
+        v2[1] = 0.1;
+        let mut v3 = vec![0.0_f32; 50];
+        v3[0] = 0.7;
+        v3[1] = 0.7;
+        let mut v4 = vec![0.0_f32; 50];
+        v4[1] = 1.0;
+
         let registry = make_registry_with_caps(vec![
-            ("cap-1", vec![1.0; 50]),
-            ("cap-2", vec![0.99; 50]),
-            ("cap-3", vec![0.9; 50]),
-            ("cap-4", vec![0.5; 50]),
-        ]);
+            ("cap-1", v1),
+            ("cap-2", v2),
+            ("cap-3", v3),
+            ("cap-4", v4),
+        ])?;
 
         let candidates = registry.find_substitutes("cap-1", 3);
         assert_eq!(candidates.len(), 3);
-        // 应按相似度降序排列
+        // 应按相似度降序排列:cap-2 最相似,cap-3 次之,cap-4 正交(≈0)
         assert_eq!(candidates[0].candidate_id, "cap-2");
         assert_eq!(candidates[1].candidate_id, "cap-3");
         assert_eq!(candidates[2].candidate_id, "cap-4");
         // 相似度应递减
         assert!(candidates[0].similarity_score >= candidates[1].similarity_score);
         assert!(candidates[1].similarity_score >= candidates[2].similarity_score);
+        Ok(())
     }
 
     #[test]
-    fn test_find_substitutes_top_k_limit() {
+    fn test_find_substitutes_top_k_limit() -> Result<(), Box<dyn std::error::Error>> {
         let registry = make_registry_with_caps(vec![
             ("cap-1", vec![1.0; 50]),
             ("cap-2", vec![0.9; 50]),
             ("cap-3", vec![0.8; 50]),
             ("cap-4", vec![0.7; 50]),
-        ]);
+        ])?;
 
         let candidates = registry.find_substitutes("cap-1", 2);
         assert_eq!(candidates.len(), 2, "应只返回 Top-2");
+        Ok(())
     }
 
     #[test]
-    fn test_find_substitutes_top_k_zero() {
+    fn test_find_substitutes_top_k_zero() -> Result<(), Box<dyn std::error::Error>> {
         let registry =
-            make_registry_with_caps(vec![("cap-1", vec![1.0; 50]), ("cap-2", vec![0.9; 50])]);
+            make_registry_with_caps(vec![("cap-1", vec![1.0; 50]), ("cap-2", vec![0.9; 50])])?;
 
         let candidates = registry.find_substitutes("cap-1", 0);
         assert!(candidates.is_empty(), "top_k=0 应返回空");
+        Ok(())
     }
 
     #[test]
-    fn test_find_substitutes_top_k_exceeds_available() {
+    fn test_find_substitutes_top_k_exceeds_available() -> Result<(), Box<dyn std::error::Error>> {
         let registry =
-            make_registry_with_caps(vec![("cap-1", vec![1.0; 50]), ("cap-2", vec![0.9; 50])]);
+            make_registry_with_caps(vec![("cap-1", vec![1.0; 50]), ("cap-2", vec![0.9; 50])])?;
 
         let candidates = registry.find_substitutes("cap-1", 100);
         assert_eq!(candidates.len(), 1, "仅 1 个候选可用");
+        Ok(())
     }
 
     // === 4. tier 分配 ===
 
     #[test]
-    fn test_find_substitutes_tier_assignment() {
+    fn test_find_substitutes_tier_assignment() -> Result<(), Box<dyn std::error::Error>> {
         let registry = make_registry_with_caps(vec![
             ("cap-1", vec![1.0; 50]),
             ("cap-2", vec![0.99; 50]),
             ("cap-3", vec![0.9; 50]),
             ("cap-4", vec![0.8; 50]),
             ("cap-5", vec![0.7; 50]),
-        ]);
+        ])?;
 
         let candidates = registry.find_substitutes("cap-1", 5);
         assert_eq!(candidates.len(), 4);
@@ -437,6 +452,7 @@ mod tests {
         assert_eq!(candidates[1].tier, 1, "rank 1 → tier 1 (secondary)");
         assert_eq!(candidates[2].tier, 2, "rank 2 → tier 2 (tertiary)");
         assert_eq!(candidates[3].tier, 2, "rank 3 → tier 2 (capped)");
+        Ok(())
     }
 
     // === 5. select_top_k_desc 单元测试 ===
@@ -467,9 +483,9 @@ mod tests {
     // === 6. 监控统计 ===
 
     #[test]
-    fn test_stats_snapshot() {
+    fn test_stats_snapshot() -> Result<(), Box<dyn std::error::Error>> {
         let registry =
-            make_registry_with_caps(vec![("cap-1", vec![1.0; 50]), ("cap-2", vec![0.9; 50])]);
+            make_registry_with_caps(vec![("cap-1", vec![1.0; 50]), ("cap-2", vec![0.9; 50])])?;
         let _ = registry.get("cap-1"); // hit
         let _ = registry.get("missing"); // miss
 
@@ -479,6 +495,7 @@ mod tests {
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 1);
         assert!((stats.hit_rate() - 0.5).abs() < 1e-6);
+        Ok(())
     }
 
     #[test]
@@ -491,21 +508,22 @@ mod tests {
     // === 7. 并发安全 ===
 
     #[test]
-    fn test_concurrent_register_and_find() {
+    fn test_concurrent_register_and_find() -> Result<(), Box<dyn std::error::Error>> {
         let registry = std::sync::Arc::new(SubstitutionCandidateRegistry::new(100));
         let mut handles = Vec::new();
 
         // 多线程并发注册不同能力
         for i in 0..20 {
             let reg = std::sync::Arc::clone(&registry);
-            handles.push(thread::spawn(move || {
+            handles.push(thread::spawn(move || -> Result<(), CsnError> {
                 let id = format!("cap-{i}");
                 let v: Vec<f32> = (0..50).map(|_| (i as f32) * 0.05).collect();
-                reg.register(make_descriptor(&id, v)).expect("并发注册失败");
+                reg.register(make_descriptor(&id, v))?;
+                Ok(())
             }));
         }
         for h in handles {
-            h.join().expect("线程 panic");
+            h.join().map_err(|_| "thread panicked")??;
         }
 
         assert_eq!(registry.len(), 20);
@@ -520,9 +538,10 @@ mod tests {
             }));
         }
         for h in read_handles {
-            let candidates = h.join().expect("线程 panic");
+            let candidates = h.join().map_err(|_| "thread panicked")?;
             assert!(candidates.len() <= 5);
         }
+        Ok(())
     }
 
     // === 8. TOCTOU 竞态修复验证(B-Maj-1)===
@@ -534,7 +553,8 @@ mod tests {
     // 使用 Barrier 同步所有线程同时启动,最大化竞态窗口。
 
     #[test]
-    fn test_concurrent_register_unique_keys_respects_capacity() {
+    fn test_concurrent_register_unique_keys_respects_capacity(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // 100 线程并发注册不同 key,容量上限 50
         // 验证:注册表条目数严格不超过容量上限
         let capacity = 50;
@@ -554,7 +574,7 @@ mod tests {
             }));
         }
         for h in handles {
-            h.join().expect("线程 panic");
+            h.join().map_err(|_| "thread panicked")?;
         }
 
         assert!(
@@ -568,10 +588,11 @@ mod tests {
             capacity,
             "应注册满容量(100 线程竞争 50 槽位)"
         );
+        Ok(())
     }
 
     #[test]
-    fn test_concurrent_register_same_key_no_duplicate() {
+    fn test_concurrent_register_same_key_no_duplicate() -> Result<(), Box<dyn std::error::Error>> {
         // 100 线程并发注册相同 key
         // 验证:最终只有 1 个条目(无重复插入)
         let registry = std::sync::Arc::new(SubstitutionCandidateRegistry::new(100));
@@ -581,16 +602,17 @@ mod tests {
         for _ in 0..100 {
             let reg = std::sync::Arc::clone(&registry);
             let b = std::sync::Arc::clone(&barrier);
-            handles.push(thread::spawn(move || {
+            handles.push(thread::spawn(move || -> Result<(), CsnError> {
                 b.wait();
-                reg.register(make_descriptor("same-cap", vec![1.0; 50]))
-                    .expect("注册失败");
+                reg.register(make_descriptor("same-cap", vec![1.0; 50]))?;
+                Ok(())
             }));
         }
         for h in handles {
-            h.join().expect("线程 panic");
+            h.join().map_err(|_| "thread panicked")??;
         }
 
         assert_eq!(registry.len(), 1, "相同 key 并发注册不应产生重复条目");
+        Ok(())
     }
 }
