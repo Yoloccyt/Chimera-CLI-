@@ -51,9 +51,7 @@
 #![forbid(unsafe_code)]
 
 use auto_dpo::rhi_judge_client::{JudgePromptTemplate, ModelRouterJudgeClient};
-use auto_dpo::{
-    LlmInvoker, LlmResponse, RhiChannelA, StubJudgeClient, StubLlmInvoker, TokenUsage,
-};
+use auto_dpo::{LlmInvoker, LlmResponse, RhiChannelA, StubJudgeClient, StubLlmInvoker, TokenUsage};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::EventBus;
 use model_router::{ModelRegistry, ModelRouter, RouterConfig};
@@ -107,9 +105,7 @@ fn make_spec_with_complexity(version: u32, contract_count: usize) -> HarnessSpec
 }
 
 /// 构造 ModelRouterJudgeClient + StubLlmInvoker 链路
-fn make_model_router_judge_client(
-    invoker: Arc<dyn LlmInvoker>,
-) -> Arc<ModelRouterJudgeClient> {
+fn make_model_router_judge_client(invoker: Arc<dyn LlmInvoker>) -> Arc<ModelRouterJudgeClient> {
     let bus = EventBus::new();
     let registry = ModelRegistry::from_config(&RouterConfig::default());
     let router = Arc::new(ModelRouter::new(registry, bus));
@@ -147,11 +143,11 @@ fn stub_judge_latency(c: &mut Criterion) {
         b.iter(|| {
             // WHY block_on:criterion 0.5 默认未启用 async_tokio feature，
             // 用 Runtime::block_on 驱动 async Future
-            let pair = rt.block_on(channel_a.generate_preference_pair(
-                black_box(&spec_v2),
-                black_box(&spec_v1),
-            ))
-            .expect("Stub 评判器不应失败");
+            let pair = rt
+                .block_on(
+                    channel_a.generate_preference_pair(black_box(&spec_v2), black_box(&spec_v1)),
+                )
+                .expect("Stub 评判器不应失败");
             black_box(pair);
         });
     });
@@ -180,11 +176,11 @@ fn model_router_judge_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("rhi_channel_a_model_router_judge_latency");
     group.bench_function("generate_preference_pair", |b| {
         b.iter(|| {
-            let pair = rt.block_on(channel_a.generate_preference_pair(
-                black_box(&spec_v2),
-                black_box(&spec_v1),
-            ))
-            .expect("ModelRouter + StubLlmInvoker 路径应成功");
+            let pair = rt
+                .block_on(
+                    channel_a.generate_preference_pair(black_box(&spec_v2), black_box(&spec_v1)),
+                )
+                .expect("ModelRouter + StubLlmInvoker 路径应成功");
             black_box(pair);
         });
     });
@@ -222,11 +218,12 @@ fn spec_complexity_scaling(c: &mut Criterion) {
             &contract_count,
             |b, _| {
                 b.iter(|| {
-                    let pair = rt.block_on(channel_a.generate_preference_pair(
-                        black_box(&spec_v2),
-                        black_box(&spec_v1),
-                    ))
-                    .expect("评判应成功");
+                    let pair = rt
+                        .block_on(
+                            channel_a
+                                .generate_preference_pair(black_box(&spec_v2), black_box(&spec_v1)),
+                        )
+                        .expect("评判应成功");
                     black_box(pair);
                 });
             },
@@ -298,11 +295,11 @@ fn dynamic_response_judge_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("rhi_channel_a_dynamic_response_latency");
     group.bench_function("generate_preference_pair", |b| {
         b.iter(|| {
-            let pair = rt.block_on(channel_a.generate_preference_pair(
-                black_box(&spec_v2),
-                black_box(&spec_v1),
-            ))
-            .expect("动态响应路径应成功");
+            let pair = rt
+                .block_on(
+                    channel_a.generate_preference_pair(black_box(&spec_v2), black_box(&spec_v1)),
+                )
+                .expect("动态响应路径应成功");
             black_box(pair);
         });
     });

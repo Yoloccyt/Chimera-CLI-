@@ -192,6 +192,13 @@ pub struct WikiConfig {
     /// 保证功能可用性。显式设为 false 可强制走 LIKE 路径(兼容性/测试)。
     #[serde(default = "default_fts_enabled")]
     pub fts_enabled: bool,
+
+    /// HNSW 索引参数(P2-5 配置化,默认使用 HnswConfig::default)
+    ///
+    /// WHY:原 HNSW 参数(M/ef_construction/ef_search 等)硬编码为常量,
+    /// 无法通过配置调优。P2-5 提升为可配置项,支持不同规模/精度需求的场景。
+    #[serde(default)]
+    pub hnsw: HnswConfig,
 }
 
 /// 默认读连接池大小 — 与 `WikiConfig::default` 保持一致
@@ -204,6 +211,67 @@ const fn default_fts_enabled() -> bool {
     true
 }
 
+/// HNSW 索引参数配置 — 控制 ANN 检索的精度/速度/内存权衡
+///
+/// P2-5: 将原硬编码常量提升为可配置项,支持通过 WikiConfig 调优。
+///
+/// # 参数说明(参考 HNSW 论文 Malkov & Yashunin 2016)
+/// - `max_nb_connection`(M):每层最大连接数,控制图连通性。M↑ → 召回率↑ 内存↑。
+///   论文推荐 M ∈ [16, 48],默认 16。
+/// - `max_elements`:预分配容量提示(非硬性限制),仅优化内存分配。默认 10000。
+/// - `max_layer`:最大层级,控制层次结构深度。默认 16。
+/// - `ef_construction`:构建时 ef 参数,控制索引构建质量。ef↑ → 精度↑ 构建耗时↑。
+///   论文推荐 ef_construction ∈ [100, 500],默认 200。
+/// - `ef_search`:搜索时 ef 参数,控制搜索宽度,必须 > k。ef↑ → 召回率↑ 延迟↑。
+///   对于 10K-100K entry 规模,ef=50 足以保证 >95% 召回率。默认 50。
+///
+/// # 向后兼容
+/// 所有字段使用 `#[serde(default)]`,旧配置文件(无 hnsw 段)反序列化为默认值。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HnswConfig {
+    /// 每层最大连接数(M 参数),控制图连通性
+    pub max_nb_connection: usize,
+    /// 预分配容量提示(非硬性限制,仅优化分配)
+    pub max_elements: usize,
+    /// 最大层级,控制层次结构深度
+    pub max_layer: usize,
+    /// 构建时 ef 参数,控制索引构建质量
+    pub ef_construction: usize,
+    /// 搜索时 ef 参数,控制搜索宽度(必须 > k)
+    pub ef_search: usize,
+}
+
+impl Default for HnswConfig {
+    fn default() -> Self {
+        Self {
+            max_nb_connection: 16,
+            max_elements: 10_000,
+            max_layer: 16,
+            ef_construction: 200,
+            ef_search: 50,
+        }
+    }
+}
+
+impl HnswConfig {
+    /// 创建自定义 HNSW 参数配置
+    pub fn new(
+        max_nb_connection: usize,
+        max_elements: usize,
+        max_layer: usize,
+        ef_construction: usize,
+        ef_search: usize,
+    ) -> Self {
+        Self {
+            max_nb_connection,
+            max_elements,
+            max_layer,
+            ef_construction,
+            ef_search,
+        }
+    }
+}
+
 impl Default for WikiConfig {
     fn default() -> Self {
         Self {
@@ -212,6 +280,7 @@ impl Default for WikiConfig {
             wal_enabled: true,
             read_pool_size: default_read_pool_size(),
             fts_enabled: default_fts_enabled(),
+            hnsw: HnswConfig::default(),
         }
     }
 }

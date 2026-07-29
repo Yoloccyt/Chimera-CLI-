@@ -111,7 +111,8 @@ fn bench_ci_gate_mock_execute(c: &mut Criterion) {
     c.bench_function("ci_gate_mock_execute", |b| {
         b.iter(|| {
             let spec_ref = black_box(&spec);
-            rt.block_on(gate.execute(spec_ref)).expect("MockCiGate 不应失败")
+            rt.block_on(gate.execute(spec_ref))
+                .expect("MockCiGate 不应失败")
         });
     });
 }
@@ -247,8 +248,7 @@ fn bench_spec_registry_register_no_bus(c: &mut Criterion) {
             let name = format!("bench-spec-{counter}");
             counter = counter.wrapping_add(1);
             let spec = make_bench_spec(&name, 1, None);
-            black_box(registry.register_with_source(spec, "channel-b-bench"))
-                .expect("注册应成功")
+            black_box(registry.register_with_source(spec, "channel-b-bench")).expect("注册应成功")
         });
     });
 }
@@ -274,8 +274,7 @@ fn bench_spec_registry_register_with_bus(c: &mut Criterion) {
             let name = format!("bench-spec-{counter}");
             counter = counter.wrapping_add(1);
             let spec = make_bench_spec(&name, 1, None);
-            black_box(registry.register_with_source(spec, "channel-b-bench"))
-                .expect("注册应成功")
+            black_box(registry.register_with_source(spec, "channel-b-bench")).expect("注册应成功")
         });
     });
 }

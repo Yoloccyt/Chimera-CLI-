@@ -315,7 +315,11 @@ impl SignificanceDetector {
     /// - streak = 0 时返回 1.0(必然事件,不显著)
     /// - streak = observed_runs = 3 时返回 0.125(随机抖动概率)
     pub fn p_value(&self) -> f64 {
-        binomial_sf(self.regression_streak, self.observed_runs, NULL_HYPOTHESIS_P)
+        binomial_sf(
+            self.regression_streak,
+            self.observed_runs,
+            NULL_HYPOTHESIS_P,
+        )
     }
 
     /// 判断当前回归是否统计显著(p < `SIGNIFICANCE_THRESHOLD`)

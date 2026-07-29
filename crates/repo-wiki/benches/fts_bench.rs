@@ -41,7 +41,7 @@
 use std::path::Path;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use repo_wiki::{WikiConfig, WikiEntry, WikiStore};
+use repo_wiki::{HnswConfig, WikiConfig, WikiEntry, WikiStore};
 use rusqlite::{params, Connection};
 use tokio::runtime::Runtime;
 
@@ -68,13 +68,16 @@ fn make_entry(i: usize) -> WikiEntry {
 }
 
 /// 构建 WikiStore(指定 FTS5 启用状态)
+///
+/// WHY 使用 `..Default::default()`(结构体更新语法):P2-5 为 `WikiConfig` 新增了
+/// `hnsw` 字段,后续可能继续扩展。使用 `..Default::default()` 让此处的初始化
+/// 自动继承默认值,避免每次新增字段都要修改 benchmark 代码(降低维护成本)。
 fn setup_store(db_path: &Path, fts_enabled: bool) -> WikiStore {
     let config = WikiConfig {
         db_path: db_path.to_path_buf(),
-        vector_dim: 512,
-        wal_enabled: true,
-        read_pool_size: 2,
         fts_enabled,
+        hnsw: HnswConfig::default(),
+        ..Default::default()
     };
     WikiStore::open_with_config(config).expect("打开 WikiStore 失败")
 }

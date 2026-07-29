@@ -159,6 +159,21 @@ pub enum SpecRegistryError {
     /// （如 ImmutableSurfaceViolation 用于安全审计）
     #[error("spec 校验失败: {0}")]
     ValidationFailed(#[from] HarnessSpecError),
+
+    /// 内部不变式违反 — 注册表内部数据结构不一致
+    ///
+    /// WHY 独立变体: 这些场景理论上不可能发生（由 register 的不变式保证），
+    /// 但为避免生产代码 panic，使用 Result 传播而非 .expect()。
+    /// 若此错误触发，说明存在 bug（如 specs 表与 active 指针不一致）。
+    #[error("内部不变式违反: {invariant}（name={name}, version={version}）")]
+    InternalInvariant {
+        /// 被违反的不变式描述
+        invariant: String,
+        /// 相关 spec 名称
+        name: String,
+        /// 相关版本号
+        version: u32,
+    },
 }
 
 // ============================================================
@@ -507,9 +522,16 @@ impl SpecRegistry {
                     name: name.to_string(),
                 })?;
 
-        let active_spec = self
-            .get(name, active_version)
-            .expect("active 版本必须存在于 specs 表");
+        // WHY ok_or_else + ?: active_version 来自 self.active 表，而 register 保证
+        // 写入 active 前已将 spec 插入 specs 表（不变式保证）。但为避免 panic，
+        // 使用 InternalInvariant 传播错误，若触发则说明存在 bug。
+        let active_spec =
+            self.get(name, active_version)
+                .ok_or_else(|| SpecRegistryError::InternalInvariant {
+                    invariant: "active 版本必须存在于 specs 表".to_string(),
+                    name: name.to_string(),
+                    version: active_version,
+                })?;
 
         let parent_version =
             active_spec
@@ -564,7 +586,17 @@ impl SpecRegistry {
         // 从 active 向前追溯 parent 链
         loop {
             chain.push(current);
-            let spec = self.get(name, current).expect("lineage 追溯的版本必须存在");
+            // WHY ok_or_else + ?: current 来自 specs 表中已注册的版本号
+            // （初始来自 active，后续来自 parent 字段），register 的不变式保证
+            // 这些版本一定存在于 specs 表。但为避免 panic，使用 InternalInvariant
+            // 传播错误，若触发则说明数据结构不一致（bug）。
+            let spec =
+                self.get(name, current)
+                    .ok_or_else(|| SpecRegistryError::InternalInvariant {
+                        invariant: "lineage 追溯的版本必须存在于 specs 表".to_string(),
+                        name: name.to_string(),
+                        version: current,
+                    })?;
             match spec.meta.parent {
                 Some(parent) => current = parent,
                 None => break, // 到达初始版本
@@ -605,12 +637,11 @@ impl SpecRegistry {
     /// 仍归类为 `GsoeError::ConfigError`,这些与不可进化面无关。
     pub fn into_gsoe_error(err: SpecRegistryError) -> GsoeError {
         match err {
-            SpecRegistryError::ImmutableSpecOverwrite { name } => GsoeError::ImmutableSurfaceViolated {
-                reason: format!(
-                    "spec '{}' 同名旧版本 immutable=true,不允许注册新版本",
-                    name
-                ),
-            },
+            SpecRegistryError::ImmutableSpecOverwrite { name } => {
+                GsoeError::ImmutableSurfaceViolated {
+                    reason: format!("spec '{}' 同名旧版本 immutable=true,不允许注册新版本", name),
+                }
+            }
             SpecRegistryError::ValidationFailed(HarnessSpecError::ImmutableSurfaceViolation {
                 location,
                 surface,
@@ -624,10 +655,7 @@ impl SpecRegistry {
             SpecRegistryError::ValidationFailed(HarnessSpecError::ImmutableMetaNotMarked {
                 name,
             }) => GsoeError::ImmutableSurfaceViolated {
-                reason: format!(
-                    "spec '{}' 在不可进化面清单中但未标记 immutable=true",
-                    name
-                ),
+                reason: format!("spec '{}' 在不可进化面清单中但未标记 immutable=true", name),
             },
             other => GsoeError::ConfigError {
                 reason: other.to_string(),
@@ -1485,7 +1513,9 @@ mod tests {
         let mut registry = SpecRegistry::with_event_bus(bus);
 
         // 注册 v1(初始版本)
-        registry.register(make_spec("quest-parse", 1, None)).unwrap();
+        registry
+            .register(make_spec("quest-parse", 1, None))
+            .unwrap();
         // 消费 v1 的事件
         let _v1_event = rx.try_recv().unwrap().unwrap();
 
@@ -1566,7 +1596,9 @@ mod tests {
         let mut registry = SpecRegistry::with_event_bus(bus);
 
         // 第一次注册成功(发布事件)
-        registry.register(make_spec("quest-parse", 1, None)).unwrap();
+        registry
+            .register(make_spec("quest-parse", 1, None))
+            .unwrap();
         let _first_event = rx.try_recv().unwrap().unwrap();
 
         // 第二次重复注册(版本冲突)
@@ -1668,7 +1700,9 @@ mod tests {
         let mut rx = bus.subscribe();
         let mut registry = SpecRegistry::with_event_bus(bus);
 
-        registry.register(make_spec("quest-parse", 1, None)).unwrap();
+        registry
+            .register(make_spec("quest-parse", 1, None))
+            .unwrap();
 
         let event = rx.try_recv().unwrap().unwrap();
         match event {
@@ -1704,12 +1738,11 @@ mod tests {
         // P5.2.3: ValidationFailed(ImmutableSurfaceViolation) 应映射为 ImmutableSurfaceViolated
         // 使用 nexus_contracts::ImmutableSurface 的第一个变体做测试
         let surface = ImmutableSurface::RedlineLockAcrossAwait;
-        let err = SpecRegistryError::ValidationFailed(
-            HarnessSpecError::ImmutableSurfaceViolation {
+        let err =
+            SpecRegistryError::ValidationFailed(HarnessSpecError::ImmutableSurfaceViolation {
                 location: "contracts[0].from".to_string(),
                 surface,
-            },
-        );
+            });
         let gsoe_err = SpecRegistry::into_gsoe_error(err);
         match gsoe_err {
             GsoeError::ImmutableSurfaceViolated { reason } => {

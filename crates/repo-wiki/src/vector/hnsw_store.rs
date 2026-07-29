@@ -53,6 +53,7 @@ use hnsw_rs::prelude::DistCosine;
 use nexus_contracts::{VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats};
 
 use crate::error::WikiError;
+use crate::types::HnswConfig;
 
 // ============================================================
 // 常量定义
@@ -150,6 +151,26 @@ pub struct HnswStore {
 
     /// HNSW 搜索 ef 参数(控制搜索宽度)
     ef_search: usize,
+
+    /// P2-5: 构造时使用的 HNSW 参数(供 compact 重建索引时复用)
+    ///
+    /// WHY 存储:原 compact() 使用硬编码常量(DEFAULT_MAX_NB_CONNECTION 等)
+    /// 重建索引,导致自定义参数(M=32 等)在 compact 后回退为默认值(M=16)。
+    /// 存储原始参数确保 compact 后索引参数一致。
+    build_params: HnswBuildParams,
+}
+
+/// P2-5: HNSW 构造参数快照 — 供 compact() 重建索引时复用
+#[derive(Debug, Clone, Copy)]
+struct HnswBuildParams {
+    /// 每层最大连接数(M 参数)
+    max_nb_connection: usize,
+    /// 预分配容量提示
+    max_elements: usize,
+    /// 最大层级
+    max_layer: usize,
+    /// 构建时 ef 参数
+    ef_construction: usize,
 }
 
 // ============================================================
@@ -205,7 +226,43 @@ impl HnswStore {
             next_dataid: AtomicUsize::new(0),
             dim,
             ef_search,
+            build_params: HnswBuildParams {
+                max_nb_connection,
+                max_elements,
+                max_layer,
+                ef_construction,
+            },
         }
+    }
+
+    /// P2-5: 从 HnswConfig 创建 HNSW 存储
+    ///
+    /// 将 `HnswConfig`(可通过 `WikiConfig` 配置)转换为 `HnswStore` 构造参数,
+    /// 替代原硬编码常量路径。供上层通过配置文件调优 HNSW 参数。
+    ///
+    /// # 参数
+    /// - `dim`: 向量维度
+    /// - `config`: HNSW 参数配置(来自 `WikiConfig.hnsw`)
+    ///
+    /// # 示例
+    /// ```
+    /// use nexus_contracts::{VectorBackend, VectorStoreExt};
+    /// use repo_wiki::types::HnswConfig;
+    /// use repo_wiki::vector::hnsw_store::HnswStore;
+    ///
+    /// let config = HnswConfig::new(32, 50_000, 20, 300, 100);
+    /// let store = HnswStore::with_config(512, &config);
+    /// assert_eq!(store.backend(), VectorBackend::Hnsw);
+    /// ```
+    pub fn with_config(dim: usize, config: &HnswConfig) -> Self {
+        Self::with_params(
+            dim,
+            config.max_nb_connection,
+            config.max_elements,
+            config.max_layer,
+            config.ef_construction,
+            config.ef_search,
+        )
     }
 
     /// 分配下一个 DataId(单调递增)
@@ -505,12 +562,15 @@ impl VectorStoreExt for HnswStore {
             return Ok(());
         }
 
-        // 2. 构建新 Hnsw 实例(使用原始参数)
+        // 2. 构建新 Hnsw 实例(P2-5: 使用存储的构造参数,而非硬编码常量)
+        //    WHY: 原 compact() 使用 DEFAULT_MAX_NB_CONNECTION 等常量重建索引,
+        //    导致自定义参数(M=32 等)在 compact 后回退为默认值(M=16)。
+        //    P2-5 修复:复用 build_params 确保参数一致性。
         let new_hnsw = Hnsw::new(
-            DEFAULT_MAX_NB_CONNECTION,
-            snapshot.len().max(DEFAULT_MAX_ELEMENTS),
-            DEFAULT_MAX_LAYER,
-            DEFAULT_EF_CONSTRUCTION,
+            self.build_params.max_nb_connection,
+            snapshot.len().max(self.build_params.max_elements),
+            self.build_params.max_layer,
+            self.build_params.ef_construction,
             DistCosine,
         );
 
@@ -1056,5 +1116,90 @@ mod tests {
         assert_eq!(results.len(), 5);
         assert_eq!(results[0].id, "entry-0");
         assert!((results[0].score - 1.0).abs() < 1e-4);
+    }
+
+    // ============================================================
+    // P2-5: HnswConfig 配置化测试
+    // ============================================================
+
+    #[test]
+    fn test_with_config_uses_custom_params() {
+        // P2-5: with_config 应正确应用 HnswConfig 的自定义参数
+        let config = HnswConfig::new(32, 50_000, 20, 300, 100);
+        let store = HnswStore::with_config(512, &config);
+
+        assert_eq!(store.dim, 512);
+        assert_eq!(store.ef_search, 100);
+        assert_eq!(store.build_params.max_nb_connection, 32);
+        assert_eq!(store.build_params.max_elements, 50_000);
+        assert_eq!(store.build_params.max_layer, 20);
+        assert_eq!(store.build_params.ef_construction, 300);
+    }
+
+    #[test]
+    fn test_with_config_default_params() {
+        // P2-5: HnswConfig::default() 应等价于 with_dim 的默认参数
+        let config = HnswConfig::default();
+        let store = HnswStore::with_config(512, &config);
+
+        assert_eq!(store.ef_search, DEFAULT_EF_SEARCH);
+        assert_eq!(
+            store.build_params.max_nb_connection,
+            DEFAULT_MAX_NB_CONNECTION
+        );
+        assert_eq!(store.build_params.ef_construction, DEFAULT_EF_CONSTRUCTION);
+    }
+
+    #[test]
+    fn test_compact_preserves_custom_params() {
+        // P2-5: compact() 应使用存储的构造参数重建索引,而非硬编码常量
+        // WHY: 原 compact() 使用 DEFAULT_MAX_NB_CONNECTION 等常量,
+        // 导致自定义参数(M=32 等)在 compact 后回退为默认值(M=16)。
+        // P2-5 修复后,build_params 确保 compact 后参数一致。
+        let config = HnswConfig::new(32, 100, 10, 150, 80);
+        let store = HnswStore::with_config(4, &config);
+
+        // 插入条目后 compact
+        store.upsert("a", &[1.0, 0.0, 0.0, 0.0], ()).unwrap();
+        store.upsert("b", &[0.0, 1.0, 0.0, 0.0], ()).unwrap();
+        store.remove("a").unwrap();
+        store.compact().unwrap();
+
+        // compact 后应仍能正常检索
+        let results = store.top_k(&[0.0, 1.0, 0.0, 0.0], 1, "").unwrap();
+        assert_eq!(results[0].id, "b");
+        assert!((results[0].score - 1.0).abs() < 1e-4);
+
+        // 验证 build_params 仍保持自定义值(compact 未修改)
+        assert_eq!(store.build_params.max_nb_connection, 32);
+        assert_eq!(store.build_params.ef_construction, 150);
+    }
+
+    #[test]
+    fn test_with_config_functional_search() {
+        // P2-5: with_config 构造的 store 功能等价于 with_params
+        //
+        // WHY 插入 10 个条目(而非 2 个):HNSW 在极小数据集(≤3 entries)上,
+        // 随机分层可能导致图不连通,搜索偶尔只返回部分结果(已知 HNSW 特性,
+        // 非 bug)。使用 10 个条目确保图连通性,消除偶发失败。
+        let config = HnswConfig::new(16, 100, 6, 50, 100);
+        let store = HnswStore::with_config(4, &config);
+
+        // 插入 10 个条目:基向量 + 正交扰动变体,确保图连通
+        store.upsert("a", &[1.0, 0.0, 0.0, 0.0], ()).unwrap();
+        store.upsert("b", &[0.0, 1.0, 0.0, 0.0], ()).unwrap();
+        store.upsert("c", &[0.0, 0.0, 1.0, 0.0], ()).unwrap();
+        store.upsert("d", &[0.0, 0.0, 0.0, 1.0], ()).unwrap();
+        store.upsert("e", &[0.9, 0.1, 0.0, 0.0], ()).unwrap();
+        store.upsert("f", &[0.1, 0.9, 0.0, 0.0], ()).unwrap();
+        store.upsert("g", &[0.0, 0.1, 0.9, 0.0], ()).unwrap();
+        store.upsert("h", &[0.0, 0.0, 0.1, 0.9], ()).unwrap();
+        store.upsert("i", &[0.5, 0.5, 0.0, 0.0], ()).unwrap();
+        store.upsert("j", &[0.0, 0.0, 0.5, 0.5], ()).unwrap();
+
+        // 搜索 top-2:查询 [1,0,0,0],最近邻应为 "a"(完全匹配)
+        let results = store.top_k(&[1.0, 0.0, 0.0, 0.0], 2, "").unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "a");
     }
 }

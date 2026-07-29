@@ -348,7 +348,10 @@ async fn p524_happy_path_ci_passes_registers_spec() {
     assert_eq!(version, 1);
 
     // 步骤 5: 验证 SpecRegistered 事件发布
-    let event = rx.recv_timeout(Duration::from_secs(1)).await.expect("应有事件");
+    let event = rx
+        .recv_timeout(Duration::from_secs(1))
+        .await
+        .expect("应有事件");
     // WHY 先取 severity:match 模式会 move String/EventMetadata 字段,
     //    若先 match 再调用 event.severity() 会触发 "use of partially moved value" 错误。
     //    severity() 是 &self 方法,在 match 之前调用规避 move 问题。
@@ -406,20 +409,14 @@ async fn p524_bench_jitter_false_veto_prevention() {
     assert_eq!(detector.regression_streak(), 1);
     assert_eq!(detector.observed_runs(), 1);
     let p1 = detector.p_value();
-    assert!(
-        p1 > 0.05,
-        "1 次回归 p-value={p1} 应 > 0.05,不足以否决"
-    );
+    assert!(p1 > 0.05, "1 次回归 p-value={p1} 应 > 0.05,不足以否决");
     assert!(!detector.is_veto_justified(), "1 次回归不应触发否决");
 
     // 步骤 2: 2 次回归 — 仍不足以否决(p=0.25 > 0.05)
     detector.record_regression();
     assert_eq!(detector.regression_streak(), 2);
     let p2 = detector.p_value();
-    assert!(
-        p2 > 0.05,
-        "2 次回归 p-value={p2} 应 > 0.05,不足以否决"
-    );
+    assert!(p2 > 0.05, "2 次回归 p-value={p2} 应 > 0.05,不足以否决");
     assert!(!detector.is_veto_justified(), "2 次回归不应触发否决");
 
     // 步骤 3: 1 次 pass — streak 重置为 0(避免累积旧噪声)
@@ -521,19 +518,9 @@ async fn p524_inv9_violation_triggers_veto() {
 
     // 步骤 4: 验证 CI 失败,且为 INV-9 违反
     assert!(!ci_result.passed, "带环委托图 CI 应失败");
-    assert!(
-        ci_result.has_inv9_violation(),
-        "应有 INV-9 委托图有环违反"
-    );
-    assert_eq!(
-        ci_result.failures.len(),
-        1,
-        "应有 1 条失败记录(INV-9)"
-    );
-    assert_eq!(
-        ci_result.failures[0].kind,
-        CiFailureKind::Inv9Violated
-    );
+    assert!(ci_result.has_inv9_violation(), "应有 INV-9 委托图有环违反");
+    assert_eq!(ci_result.failures.len(), 1, "应有 1 条失败记录(INV-9)");
+    assert_eq!(ci_result.failures[0].kind, CiFailureKind::Inv9Violated);
 
     // 步骤 5: 验证通道 B 应否决(不注册 spec)
     // 模拟通道 B 决策逻辑:CI 失败 → 不调用 register
@@ -542,11 +529,7 @@ async fn p524_inv9_violation_triggers_veto() {
         // 如果 CI 通过才会注册(此处不会执行)
         registry.register(candidate).unwrap();
     }
-    assert_eq!(
-        registry.total_specs(),
-        0,
-        "CI 失败时不应注册 spec"
-    );
+    assert_eq!(registry.total_specs(), 0, "CI 失败时不应注册 spec");
 
     // 步骤 6: 验证 check_inv9_delegation_acyclic 直接调用也检测到环
     let direct_check = gsoe_evolution::check_inv9_delegation_acyclic(&[
@@ -559,11 +542,7 @@ async fn p524_inv9_violation_triggers_veto() {
         cycle_path.len() >= 3,
         "环路径应至少 3 个节点(首尾相同),实际: {cycle_path:?}"
     );
-    assert_eq!(
-        cycle_path.first(),
-        cycle_path.last(),
-        "环路径首尾应相同"
-    );
+    assert_eq!(cycle_path.first(), cycle_path.last(), "环路径首尾应相同");
 }
 
 /// P5.2.4 场景 4: 不可进化面违反 — 注册拒绝 + 错误映射
@@ -624,11 +603,7 @@ async fn p524_immutable_surface_blocks_registration() {
     );
 
     // 步骤 6: 验证 v2 未被注册(total_specs 仍为 1)
-    assert_eq!(
-        registry.total_specs(),
-        1,
-        "不可进化面违反时 v2 不应被注册"
-    );
+    assert_eq!(registry.total_specs(), 1, "不可进化面违反时 v2 不应被注册");
     assert_eq!(
         registry.version_count("critical-redline"),
         1,
@@ -654,9 +629,7 @@ async fn p524_channel_a_to_b_end_to_end() {
 
     // 步骤 1: 通道 A 已有 v1(初始版本,模拟通道 A 历史提议)
     let v1_spec = make_candidate_spec("quest-parse", 1, None);
-    registry
-        .register(v1_spec)
-        .expect("v1 初始版本应注册成功");
+    registry.register(v1_spec).expect("v1 初始版本应注册成功");
     // 消费 v1 的事件
     let _v1_event = rx.recv_timeout(Duration::from_secs(1)).await.unwrap();
 
@@ -665,10 +638,7 @@ async fn p524_channel_a_to_b_end_to_end() {
 
     // 步骤 3: 通道 B 执行 CiGate(使用 MockCiGate 模拟通过)
     let ci_gate = MockCiGate::with_passing_result();
-    let ci_result = ci_gate
-        .execute(&v2_candidate)
-        .await
-        .expect("CI 执行应成功");
+    let ci_result = ci_gate.execute(&v2_candidate).await.expect("CI 执行应成功");
     assert!(ci_result.passed, "CI 应通过");
 
     // 步骤 4: 通道 B 显著性检测(无回归 → 无需否决)
@@ -735,11 +705,7 @@ async fn p524_channel_a_to_b_end_to_end() {
 
     // 步骤 11: promote 后 lineage 应为 [v1, v2](active=v2 → parent=v1)
     let lineage_v2 = registry.lineage("quest-parse").expect("lineage 应存在");
-    assert_eq!(
-        lineage_v2,
-        vec![1, 2],
-        "promote 后 lineage 应为 [v1, v2]"
-    );
+    assert_eq!(lineage_v2, vec![1, 2], "promote 后 lineage 应为 [v1, v2]");
 
     // 步骤 12: 验证可回滚到 v1(谱系完整性)
     let rolled_back = registry.rollback("quest-parse").unwrap();
@@ -793,8 +759,5 @@ async fn p524_veto_path_ci_failure_skips_registration() {
 
     // 步骤 6: 验证无 SpecRegistered 事件
     let event = rx.try_recv().expect("try_recv 不应报错");
-    assert!(
-        event.is_none(),
-        "CI 失败时不应发布 SpecRegistered 事件"
-    );
+    assert!(event.is_none(), "CI 失败时不应发布 SpecRegistered 事件");
 }

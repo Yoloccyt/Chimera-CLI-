@@ -117,6 +117,20 @@ impl GsoeEvolutionEngine {
     ///
     /// 完整流程:采样 → 评估 → 选择 → 变异 → 发布事件
     pub async fn evolve_once(&mut self) -> Result<EvolutionResult, GsoeError> {
+        // ADR-042 决策 4 运行时检测:断言 R2 路径未激活
+        // WHY cfg(debug_assertions) + if cfg!:在 debug build 中 panic 阻止 R2 路径激活
+        // (奖励黑客风险立即生效),release build 中整段代码编译期消除无开销。
+        // 配合 CI 静态扫描 + 审计检测构成三重防护。
+        // `r2_path` feature 默认关闭(Cargo.toml 声明),任何启用行为会立即触发 panic。
+        // 注:不用 debug_assert!(!cfg!(...))是因为 cfg! 返回编译期常量,
+        // 会触发 clippy::assertions_on_constants 警告;改用 if + panic! 保留语义。
+        #[cfg(debug_assertions)]
+        if cfg!(feature = "r2_path") {
+            panic!(
+                "R2 冻结违反(ADR-042):r2_path feature 已启用,但 R2 路径在 FormalVerifier 落地前无条件冻结"
+            );
+        }
+
         // 检查世代上限(架构红线:避免无限进化消耗资源)
         if self.generation >= self.config.max_generation {
             return Err(GsoeError::MaxGenerationReached {

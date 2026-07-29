@@ -22,6 +22,8 @@
 
 use crate::relation::EntryRelation;
 use crate::types::WikiEntry;
+// 统一使用 nexus-core 权威实现,避免多副本优化不一致
+use nexus_core::cosine_similarity_slices;
 
 /// 矛盾检测默认相似度阈值
 ///
@@ -79,7 +81,7 @@ impl ContradictionDetector {
             // 跳过自身(UPSERT 场景下 entry_id 可能已存在)
             .filter(|c| c.entry_id != new_entry.entry_id)
             .filter_map(|c| {
-                let sim = cosine_similarity(&new_entry.embedding, &c.embedding);
+                let sim = cosine_similarity_slices(&new_entry.embedding, &c.embedding);
                 if sim >= self.threshold {
                     Some(EntryRelation::new_contradiction(
                         &new_entry.entry_id,
@@ -127,19 +129,6 @@ impl ContradictionResult {
     pub fn contradiction_count(&self) -> usize {
         self.contradictions.len()
     }
-}
-
-/// 计算两个 f32 向量的余弦相似度
-///
-/// 公式:dot(a, b) / (|a| * |b|)
-///
-/// WHY 复用 `nexus_core::cosine_similarity_slices`:避免重复实现,
-/// 保持与 CLV/SharedCLV 的相似度计算语义一致(零向量返回 0.0)。
-///
-/// # 零向量边界
-/// 若任一向量为零向量,返回 0.0(不会被判为矛盾候选,避免 NaN 污染)
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    nexus_core::cosine_similarity_slices(a, b)
 }
 
 // ============================================================

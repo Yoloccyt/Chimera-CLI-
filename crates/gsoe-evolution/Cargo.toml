@@ -3,6 +3,14 @@ name = "gsoe-evolution"
 version.workspace = true
 edition.workspace = true
 
+# ADR-042 决策 4 + 决策 5:r2_path feature 默认关闭
+# WHY 显式声明:使 `debug_assert!(!cfg!(feature = "r2_path"))` 在运行时检测可工作。
+# 任何启用 `--features r2_path` 的构建会触发 debug build panic + CI 静态扫描告警。
+# 解冻条件:FormalVerifier 落地 + 新 ADR 评审通过 + 影子模式 2 周验证(ADR-042 决策 3)
+[features]
+default = []
+r2_path = []
+
 [dependencies]
 tokio = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

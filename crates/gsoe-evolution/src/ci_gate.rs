@@ -141,7 +141,9 @@ pub fn check_inv9_delegation_acyclic(edges: &[DelegationEdge]) -> Result<(), Vec
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     let mut nodes: HashSet<&str> = HashSet::new();
     for edge in edges {
-        adj.entry(edge.from.as_str()).or_default().push(edge.to.as_str());
+        adj.entry(edge.from.as_str())
+            .or_default()
+            .push(edge.to.as_str());
         nodes.insert(edge.from.as_str());
         nodes.insert(edge.to.as_str());
     }
@@ -679,10 +681,7 @@ impl CiGate for MockCiGate {
                 return Err(err);
             }
             // 复制 result(Clone 已派生)返回
-            Ok(self
-                .result
-                .clone()
-                .unwrap_or_else(CiGateResult::passed))
+            Ok(self.result.clone().unwrap_or_else(CiGateResult::passed))
         })
     }
 }
@@ -781,10 +780,7 @@ mod tests {
 
     #[test]
     fn test_inv9_two_node_cycle_rejected() {
-        let edges = vec![
-            DelegationEdge::new("a", "b"),
-            DelegationEdge::new("b", "a"),
-        ];
+        let edges = vec![DelegationEdge::new("a", "b"), DelegationEdge::new("b", "a")];
         let result = check_inv9_delegation_acyclic(&edges);
         assert!(result.is_err());
         let cycle = result.unwrap_err();
@@ -860,10 +856,7 @@ mod tests {
     #[test]
     fn test_inv9_duplicate_edges_passes() {
         // 重复边 A→B, A→B 不构成环
-        let edges = vec![
-            DelegationEdge::new("a", "b"),
-            DelegationEdge::new("a", "b"),
-        ];
+        let edges = vec![DelegationEdge::new("a", "b"), DelegationEdge::new("a", "b")];
         assert!(check_inv9_delegation_acyclic(&edges).is_ok());
     }
 
@@ -930,10 +923,7 @@ mod tests {
 
     #[test]
     fn test_ci_gate_result_has_inv9_violation() {
-        let r = CiGateResult::failed(
-            CiFailure::new(CiFailureKind::Inv9Violated, "cycle"),
-            1,
-        );
+        let r = CiGateResult::failed(CiFailure::new(CiFailureKind::Inv9Violated, "cycle"), 1);
         assert!(r.has_inv9_violation());
         assert!(!r.has_bench_regression());
     }
@@ -1016,13 +1006,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_cargo_ci_gate_fails_with_cycle_no_subprocess() {
-        let edges = vec![
-            DelegationEdge::new("a", "b"),
-            DelegationEdge::new("b", "a"),
-        ];
+        let edges = vec![DelegationEdge::new("a", "b"), DelegationEdge::new("b", "a")];
         let gate = CargoCiGate::new(edges).with_subprocess_enabled(false);
         let spec = make_test_spec();
-        let result = gate.execute(&spec).await.expect("CI 执行应成功(非子进程故障)");
+        let result = gate
+            .execute(&spec)
+            .await
+            .expect("CI 执行应成功(非子进程故障)");
         assert!(!result.passed);
         assert!(result.has_inv9_violation());
         assert_eq!(result.failures.len(), 1);

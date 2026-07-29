@@ -43,6 +43,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// polish-v2.7 P4-8:行为定位(BGPD 三级渐进披露导航,腾讯 Handbook,ADR-049)
+pub mod behavior_localization;
 pub mod config;
 pub mod contradiction;
 pub mod error;
@@ -50,7 +52,11 @@ pub mod fts;
 pub mod generator;
 pub mod iscm;
 pub mod metrics;
+/// polish-v2.7 P4-7:流程蓝图提取器(轨迹→蓝图沉淀,北大 DataFlow,ADR-049)
+pub mod procedural_blueprint;
 pub mod relation;
+/// polish-v2.7 P4-6:技能依赖图与复用率优先推荐(Ω₆ Reuse,ADR-049)
+pub mod skill_graph;
 pub mod store;
 pub mod types;
 pub mod vector;
@@ -66,7 +72,7 @@ pub use iscm::{IscmAnchor, Layer};
 pub use metrics::WikiMetrics;
 pub use relation::{EntryRelation, RelationKind};
 pub use store::WikiStore;
-pub use types::{WikiConfig, WikiEntry};
+pub use types::{HnswConfig, WikiConfig, WikiEntry};
 /// HNSW 向量存储生产路径实现(P2-W8.1)
 pub use vector::hnsw_store::HnswStore;
 /// 内存 KNN 向量存储 fallback 路径实现(P2-W8.2)
@@ -86,7 +92,7 @@ pub mod prelude {
     pub use crate::metrics::WikiMetrics;
     pub use crate::relation::{EntryRelation, RelationKind};
     pub use crate::store::WikiStore;
-    pub use crate::types::{WikiConfig, WikiEntry};
+    pub use crate::types::{HnswConfig, WikiConfig, WikiEntry};
     /// HNSW 向量存储生产路径实现(P2-W8.1)
     pub use crate::vector::hnsw_store::HnswStore;
     /// 内存 KNN 向量存储 fallback 路径实现(P2-W8.2)

@@ -83,9 +83,7 @@ fn make_test_spec(version: u32, name_suffix: &str) -> HarnessSpec {
 }
 
 /// 构造一个完整的评判器链路：ModelRouter + StubLlmInvoker → ModelRouterJudgeClient
-fn make_judge_client_with_stub_llm(
-    invoker: Arc<dyn LlmInvoker>,
-) -> Arc<ModelRouterJudgeClient> {
+fn make_judge_client_with_stub_llm(invoker: Arc<dyn LlmInvoker>) -> Arc<ModelRouterJudgeClient> {
     let bus = EventBus::new();
     let registry = ModelRegistry::from_config(&RouterConfig::default());
     let router = Arc::new(ModelRouter::new(registry, bus));
@@ -269,27 +267,29 @@ async fn test_model_router_judge_client_with_lite_strategy() {
 async fn test_model_router_judge_client_with_dynamic_response() {
     // 动态响应：根据 prompt 内容返回不同评判结果
     // 规则：v3 永远胜出（无论作为 current 还是 previous）
-    let invoker = Arc::new(StubLlmInvoker::with_dynamic_response(|_model_id, prompt| {
-        // WHY 检查 "Current Version (v3)"：prompt 同时包含 current 与 previous 版本号，
-        // 仅检查 "v3" 会匹配两者。需精确匹配 "Current Version (v3)" 头部以区分。
-        // prompt 模板格式："## Current Version (v{N}):\n```\n{content}\n```"
-        let v3_is_current = prompt.contains("Current Version (v3)");
-        let json = if v3_is_current {
-            // v3 是 current → current 胜出
-            make_valid_json_response("current", 0.88, 0.42, 0.92, "dynamic: v3 current wins")
-        } else {
-            // v3 是 previous → previous 胜出
-            make_valid_json_response("previous", 0.82, 0.38, 0.88, "dynamic: v3 previous wins")
-        };
-        LlmResponse {
-            content: json,
-            model_id: "dynamic-stub".to_string(),
-            usage: TokenUsage {
-                prompt_tokens: 200,
-                completion_tokens: 80,
-            },
-        }
-    }));
+    let invoker = Arc::new(StubLlmInvoker::with_dynamic_response(
+        |_model_id, prompt| {
+            // WHY 检查 "Current Version (v3)"：prompt 同时包含 current 与 previous 版本号，
+            // 仅检查 "v3" 会匹配两者。需精确匹配 "Current Version (v3)" 头部以区分。
+            // prompt 模板格式："## Current Version (v{N}):\n```\n{content}\n```"
+            let v3_is_current = prompt.contains("Current Version (v3)");
+            let json = if v3_is_current {
+                // v3 是 current → current 胜出
+                make_valid_json_response("current", 0.88, 0.42, 0.92, "dynamic: v3 current wins")
+            } else {
+                // v3 是 previous → previous 胜出
+                make_valid_json_response("previous", 0.82, 0.38, 0.88, "dynamic: v3 previous wins")
+            };
+            LlmResponse {
+                content: json,
+                model_id: "dynamic-stub".to_string(),
+                usage: TokenUsage {
+                    prompt_tokens: 200,
+                    completion_tokens: 80,
+                },
+            }
+        },
+    ));
 
     let judge_client = make_judge_client_with_stub_llm(invoker);
     let channel_a = RhiChannelA::new(judge_client);
@@ -299,14 +299,20 @@ async fn test_model_router_judge_client_with_dynamic_response() {
         .generate_preference_pair(&make_test_spec(3, "v3"), &make_test_spec(2, "v2"))
         .await
         .unwrap();
-    assert_eq!(pair_v3.chosen, make_test_spec(3, "v3").canonical_merkle_input());
+    assert_eq!(
+        pair_v3.chosen,
+        make_test_spec(3, "v3").canonical_merkle_input()
+    );
 
     // v4 vs v3：previous (v3) 胜出 → chosen = v3
     let pair_v4 = channel_a
         .generate_preference_pair(&make_test_spec(4, "v4"), &make_test_spec(3, "v3"))
         .await
         .unwrap();
-    assert_eq!(pair_v4.chosen, make_test_spec(3, "v3").canonical_merkle_input());
+    assert_eq!(
+        pair_v4.chosen,
+        make_test_spec(3, "v3").canonical_merkle_input()
+    );
 }
 
 // ============================================================
@@ -484,14 +490,20 @@ async fn test_mixed_win_loses_in_evolution_chain() {
         .generate_preference_pair(&make_test_spec(2, "v2"), &make_test_spec(1, "v1"))
         .await
         .unwrap();
-    assert_eq!(pair_2_1.chosen, make_test_spec(2, "v2").canonical_merkle_input());
+    assert_eq!(
+        pair_2_1.chosen,
+        make_test_spec(2, "v2").canonical_merkle_input()
+    );
 
     // v3 vs v2：previous (v2) 胜出
     let pair_3_2 = channel_a
         .generate_preference_pair(&make_test_spec(3, "v3"), &make_test_spec(2, "v2"))
         .await
         .unwrap();
-    assert_eq!(pair_3_2.chosen, make_test_spec(2, "v2").canonical_merkle_input());
+    assert_eq!(
+        pair_3_2.chosen,
+        make_test_spec(2, "v2").canonical_merkle_input()
+    );
 
     // 持久化两条记录
     let v1 = JudgeVerdict::new(SpecVersion::Current, 0.85, 0.40, 0.90, "v2 wins").unwrap();
@@ -508,8 +520,14 @@ async fn test_mixed_win_loses_in_evolution_chain() {
     let r2 = history.get("rhi-pair-3-2").unwrap().unwrap();
 
     // 验证两条记录的 chosen 不同（不同的胜出者）
-    assert_eq!(r1.pair.chosen, make_test_spec(2, "v2").canonical_merkle_input());
-    assert_eq!(r2.pair.chosen, make_test_spec(2, "v2").canonical_merkle_input());
+    assert_eq!(
+        r1.pair.chosen,
+        make_test_spec(2, "v2").canonical_merkle_input()
+    );
+    assert_eq!(
+        r2.pair.chosen,
+        make_test_spec(2, "v2").canonical_merkle_input()
+    );
     // 但 pair_id 不同
     assert_ne!(r1.pair.pair_id, r2.pair.pair_id);
 }
@@ -540,7 +558,8 @@ async fn test_concurrent_stores_thread_safety() {
                 let v_i = (task_id * per_task + j + 2) as u32;
                 let v_i_minus_1 = v_i - 1;
                 let spec_v_i = make_test_spec(v_i, &format!("task{task_id}-v{v_i}"));
-                let spec_v_i_minus_1 = make_test_spec(v_i_minus_1, &format!("task{task_id}-v{v_i_minus_1}"));
+                let spec_v_i_minus_1 =
+                    make_test_spec(v_i_minus_1, &format!("task{task_id}-v{v_i_minus_1}"));
 
                 let pair = channel_a_clone
                     .generate_preference_pair(&spec_v_i, &spec_v_i_minus_1)

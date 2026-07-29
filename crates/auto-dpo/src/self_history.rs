@@ -340,11 +340,9 @@ impl SelfComparisonHistory {
 
     /// 返回当前记录数
     pub fn len(&self) -> Result<usize, AutoDpoError> {
-        self.inner
-            .len()
-            .map_err(|e| AutoDpoError::StorageError {
-                reason: format!("L2 SemanticMemory len() failed: {e}"),
-            })
+        self.inner.len().map_err(|e| AutoDpoError::StorageError {
+            reason: format!("L2 SemanticMemory len() failed: {e}"),
+        })
     }
 
     /// 是否为空
@@ -394,7 +392,10 @@ impl SelfComparisonHistory {
     ///
     /// 此方法是同步的（`SemanticMemory::insert` 非 async），但调用方应使用
     /// `tokio::spawn` 包装以避免阻塞 async runtime。失败仅记日志，不阻塞主流程。
-    pub fn store(&self, record: SelfComparisonRecord) -> Result<Option<SelfComparisonRecord>, AutoDpoError> {
+    pub fn store(
+        &self,
+        record: SelfComparisonRecord,
+    ) -> Result<Option<SelfComparisonRecord>, AutoDpoError> {
         // 步骤 1: 生成确定性 CLV
         let clv = generate_deterministic_clv(&record.pair.pair_id)?;
 
@@ -494,12 +495,12 @@ impl SelfComparisonHistory {
     ) -> Result<Vec<(String, f32)>, AutoDpoError> {
         let clv = generate_deterministic_clv(query_pair_id)?;
 
-        let results = self
-            .inner
-            .recall_by_clv(&clv, top_k)
-            .map_err(|e| AutoDpoError::StorageError {
-                reason: format!("L2 SemanticMemory recall_by_clv failed: {e}"),
-            })?;
+        let results =
+            self.inner
+                .recall_by_clv(&clv, top_k)
+                .map_err(|e| AutoDpoError::StorageError {
+                    reason: format!("L2 SemanticMemory recall_by_clv failed: {e}"),
+                })?;
 
         // 将 MemoryId 转换为 pair_id 字符串
         Ok(results
@@ -734,7 +735,10 @@ mod tests {
         // 非零向量检查：避免所有维度都是 0.0（会导致余弦相似度 NaN）
         let clv = generate_deterministic_clv("rhi-pair-1-0").unwrap();
         let has_nonzero = clv.as_slice().iter().any(|&v| v != 0.0);
-        assert!(has_nonzero, "CLV should have at least one non-zero dimension");
+        assert!(
+            has_nonzero,
+            "CLV should have at least one non-zero dimension"
+        );
     }
 
     // ============================================================
@@ -1061,7 +1065,10 @@ mod tests {
             // 第一次：v1 → v2
             let spec_v1 = make_spec(1);
             let spec_v2 = make_spec(2);
-            let pair1 = channel_a.generate_preference_pair(&spec_v2, &spec_v1).await.unwrap();
+            let pair1 = channel_a
+                .generate_preference_pair(&spec_v2, &spec_v1)
+                .await
+                .unwrap();
 
             // 持久化（需要 JudgeVerdict，但 RhiChannelA 只返回 PreferencePair）
             // 实际场景中 JudgeVerdict 由 channel_a 内部产生，但接口未暴露
@@ -1079,7 +1086,10 @@ mod tests {
 
             // 第二次：v2 → v3
             let spec_v3 = make_spec(3);
-            let pair2 = channel_a.generate_preference_pair(&spec_v3, &spec_v2).await.unwrap();
+            let pair2 = channel_a
+                .generate_preference_pair(&spec_v3, &spec_v2)
+                .await
+                .unwrap();
             let verdict2 = JudgeVerdict::new(
                 SpecVersion::Current,
                 pair2.chosen_score,
