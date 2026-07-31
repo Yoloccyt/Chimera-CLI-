@@ -110,6 +110,12 @@ impl SelfAssessmentPanel {
             }
         }
 
+        // Task 3.2: L2 Memory 协同 — 显示当前记忆策略阶段(全局快照)
+        // 调用 mlc_engine::current_memory_stage() 获取 MlcEngine 策略变化时
+        // 同步的全局快照,实现 L10 Panel ↔ L2 Memory 真实数据闭环。
+        let stage = mlc_engine::current_memory_stage();
+        lines.push(Line::from(format!("Memory Strategy Stage: {stage}")));
+
         // 最近审计发现(反向扫描,最新在前)
         lines.push(Line::from(""));
         lines.push(Line::from("Recent Findings"));

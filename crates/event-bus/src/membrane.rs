@@ -365,6 +365,8 @@ impl MembraneFilter {
             // P4-W16.2.2:R1 影子模式策略生命周期（退化检测/解冻就绪，Normal 级策略通知）
             | NexusEvent::R1ShadowRegressionDetected { .. }
             | NexusEvent::R1ShadowPromotionReady { .. }
+            // L8 推理悖论风控:策略封顶变更(与 GsoePolicyUpdated 同属策略生命周期通知)
+            | NexusEvent::ParliamentStrategyCapChanged { .. }
             // P5.2.3:Spec 版本注册完成(L5 Knowledge → 任意订阅者,策略级通知)
             // WHY 归入 PolicyUpdate:与 GsoePolicyUpdated 同属策略/配置生命周期事件,
             //    下游(parliament / efficiency-monitor)需更新 spec 版本快照
@@ -404,7 +406,11 @@ impl MembraneFilter {
             // polish-v2.7 P1-2:RuntimeAuditor 审计发现与五维度报告(L9 efficiency-monitor 发布,
             // 观察性事实陈述,外环本地消化即可,不需穿膜进内环)
             | NexusEvent::AuditFindingRaised { .. }
-            | NexusEvent::HarnessReportGenerated { .. } => EventCategory::ReadMetric,
+            | NexusEvent::HarnessReportGenerated { .. }
+            // L8 协调度量接线闭环:审议完成/委托批次完成观测事件
+            // (只读延迟/质量指标,外环 quest-engine 本地消化,不需穿膜进内环)
+            | NexusEvent::DebateCompleted { .. }
+            | NexusEvent::DelegationCompleted { .. } => EventCategory::ReadMetric,
 
             // === NormalLow:剩余 Normal 事件(默认本地消化) ===
             // 包括 Quest 生命周期/控制请求/路由执行结果/Agent 协作等

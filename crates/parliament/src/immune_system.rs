@@ -99,6 +99,13 @@ pub struct StabilityMirror {
     capability_frozen_count: AtomicU32,
     /// BudgetExceeded 滑动窗口计数（用于级联风险评估）
     budget_exceeded_window: RwLock<VecDeque<u64>>,
+    /// ParliamentStrategyCapChanged 时间戳滑动窗口（M3-T3.3 观测联动）
+    ///
+    /// WHY 纳入观测:StrategyCapGuard 封顶升降档是推理悖论风险的佐证信号
+    /// (ratio 持续越阈才会降档)。**严格 observation-not-control**:仅计入
+    /// 异常观测窗口供 ReasoningTrap 探针佐证,不触发任何降档/膜厚控制动作,
+    /// 避免封顶线(StrategyCapGuard)与膜厚线(ImmuneSystem)双控制器振荡。
+    strategy_cap_change_window: RwLock<VecDeque<u64>>,
     /// 最后更新时间戳（Unix 毫秒,用于检测镜像陈旧）
     last_update_ts: AtomicU64,
 }
@@ -114,6 +121,9 @@ impl StabilityMirror {
             veto_overridden_window: RwLock::new(VecDeque::with_capacity(SLIDING_WINDOW_CAPACITY)),
             capability_frozen_count: AtomicU32::new(0),
             budget_exceeded_window: RwLock::new(VecDeque::with_capacity(SLIDING_WINDOW_CAPACITY)),
+            strategy_cap_change_window: RwLock::new(VecDeque::with_capacity(
+                SLIDING_WINDOW_CAPACITY,
+            )),
             last_update_ts: AtomicU64::new(0),
         }
     }
@@ -162,6 +172,12 @@ impl StabilityMirror {
             }
             NexusEvent::BudgetExceeded { .. } => {
                 self.push_to_window(&self.budget_exceeded_window, timestamp_ms);
+                self.last_update_ts.store(timestamp_ms, Ordering::Release);
+            }
+            // M3-T3.3 观测联动:策略封顶变更作为推理悖论风险佐证信号
+            // (observation-not-control:仅计入窗口,不触发任何控制动作)
+            NexusEvent::ParliamentStrategyCapChanged { .. } => {
+                self.push_to_window(&self.strategy_cap_change_window, timestamp_ms);
                 self.last_update_ts.store(timestamp_ms, Ordering::Release);
             }
             _ => {}
@@ -222,6 +238,16 @@ impl StabilityMirror {
         self.capability_frozen_count.load(Ordering::Acquire)
     }
 
+    /// 返回策略封顶变更滑动窗口大小（M3-T3.3,供 ReasoningTrap 探针佐证）
+    ///
+    /// 封顶频繁变更(升降档振荡)本身也是推理悖论风险的观测信号。
+    pub fn strategy_cap_change_count(&self) -> usize {
+        self.strategy_cap_change_window
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
     /// 返回最近 BudgetExceeded 计数（供级联风险评估使用）
     pub fn budget_exceeded_recent_count(&self, since_ms: u64, now_ms: u64) -> u32 {
         let w = self
@@ -275,6 +301,11 @@ impl Clone for StabilityMirror {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let strategy_cap_changes = self
+            .strategy_cap_change_window
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         Self {
             breakers: RwLock::new(breakers),
             degradation_level: AtomicU32::new(self.degradation_level.load(Ordering::Acquire)),
@@ -285,6 +316,7 @@ impl Clone for StabilityMirror {
                 self.capability_frozen_count.load(Ordering::Acquire),
             ),
             budget_exceeded_window: RwLock::new(budget_exceeded),
+            strategy_cap_change_window: RwLock::new(strategy_cap_changes),
             last_update_ts: AtomicU64::new(self.last_update_ts.load(Ordering::Acquire)),
         }
     }
@@ -581,7 +613,51 @@ pub fn compute_cascade_risk(
 }
 
 // ============================================================
-// 单元测试
+// ImmuneSystemStatus — 免疫系统状态静态快照（Task 3.8:L10 → L8 向下依赖）
+// ============================================================
+
+/// 免疫系统状态静态快照（Task 3.8:L10 → L8 向下依赖）
+///
+/// 为 TUI ParliamentPanel 提供无需异步上下文的静态快照，
+/// 展示三探针（MemoryParadox/ReasoningTrap/EvolutionHack）状态、
+/// 级联风险评分与膜厚控制状态。
+///
+/// 真实免疫状态由 `ImmuneSystem::assess_paradox_risk` 运行时动态更新，
+/// 本函数为 TUI 面板提供占位快照，避免面板渲染阻塞。
+///
+/// TODO: v3.x 接入 RuntimeAuditor 实时采集后替换为真实 ImmuneSystem 状态。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImmuneSystemStatus {
+    /// 记忆悖论探针状态（paradox_rate 0.0-1.0）
+    pub memory_paradox_rate: f32,
+    /// 推理陷阱探针状态（paradox_rate 0.0-1.0）
+    pub reasoning_trap_rate: f32,
+    /// 进化黑客探针状态（paradox_rate 0.0-1.0）
+    pub evolution_hack_rate: f32,
+    /// 级联风险评分 [0.0, 1.0]
+    pub cascade_risk: f32,
+    /// 膜厚控制状态（0-7）
+    pub membrane_thickness: u8,
+    /// 断路器开放比例 [0.0, 1.0]
+    pub circuit_open_ratio: f32,
+}
+
+/// 返回免疫系统状态的静态快照（占位实现）
+pub fn immune_system_status() -> ImmuneSystemStatus {
+    // 占位:返回默认健康状态（真实状态由 ImmuneSystem::assess_paradox_risk 运行时产生）
+    ImmuneSystemStatus {
+        memory_paradox_rate: 0.0,
+        reasoning_trap_rate: 0.0,
+        evolution_hack_rate: 0.0,
+        cascade_risk: 0.0,
+        membrane_thickness: 0,
+        circuit_open_ratio: 0.0,
+    }
+}
+
+// ============================================================
+// 单元测试(ImmuneSystemStatus)
+// ============================================================
 // ============================================================
 
 #[cfg(test)]
@@ -638,6 +714,34 @@ mod tests {
         };
         mirror.update_from_event(&event, 2000);
         assert_eq!(mirror.capability_frozen_count(), 1);
+    }
+
+    #[test]
+    fn test_stability_mirror_strategy_cap_change_observation_only() {
+        // M3-T3.3:封顶变更仅计入观测窗口,无任何控制副作用
+        // (observation-not-control:degradation_level/断路器状态均不变)
+        let mirror = StabilityMirror::new();
+        let event = NexusEvent::ParliamentStrategyCapChanged {
+            metadata: event_bus::EventMetadata::new("parliament:StrategyCapGuard"),
+            old_cap: "full".into(),
+            new_cap: "simplified".into(),
+            ratio: 1.5,
+            threshold: 1.0,
+        };
+
+        mirror.update_from_event(&event, 3000);
+        mirror.update_from_event(&event, 3100);
+
+        // 观测信号递增
+        assert_eq!(mirror.strategy_cap_change_count(), 2);
+        assert_eq!(mirror.last_update_ts(), 3100);
+        // 零控制副作用:降级层级/断路器/否决窗口均不受影响
+        assert_eq!(mirror.degradation_level(), 0, "不得触发降级");
+        assert!(
+            (mirror.circuit_open_ratio() - 0.0).abs() < 1e-6,
+            "不得改变断路器状态"
+        );
+        assert_eq!(mirror.skeptic_veto_count(), 0, "不得污染否决窗口");
     }
 
     #[test]

@@ -210,6 +210,7 @@ mod tests {
             participant_count: 3,
             latency_ms,
             success: true,
+            capability_id: None,
         }
     }
 

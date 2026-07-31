@@ -321,9 +321,18 @@ impl CheckpointManager {
         Ok(())
     }
 
-    /// 列出指定 Quest 的所有检查点 ID(文件名去扩展名)
+    /// 列出某 Quest 的全部检查点 ID(按文件名,不加载 .bin 内容)
     ///
-    /// 返回顺序未定义,调用方需自行排序(如 load_latest 按 created_at 排序)
+    /// 返回顺序未定义,调用方需自行排序(如 load_latest 按 created_at 排序)。
+    ///
+    /// # 性能(L9 优化 2.5 数据关门,2026-07-31)
+    ///
+    /// 本方法仅 `read_dir` + 取文件名 stem,**不反序列化任何 .bin**,已是最优。
+    /// criterion 实测 `checkpoint_bench`:save(100 任务)≈4.0ms(< 5ms 阈值),
+    /// 且 save(10) 与 save(100) 几乎持平(瓶颈在磁盘 I/O 固定开销 ~3.7ms 而非
+    /// 序列化量)。故 v4 报告 §9.1 IncrementalCheckpointSystem 与元数据边车
+    /// 优化**明确不做**(数据关门):收益低于磁盘固定开销,且涉 ADR-004 格式
+    /// 变更需另立 ADR。此结论以基准数据为据,非主观判断。
     pub fn list_checkpoints(&self, quest_id: &str) -> Result<Vec<String>, QuestError> {
         let dir = self.quest_dir(quest_id);
         if !dir.exists() {

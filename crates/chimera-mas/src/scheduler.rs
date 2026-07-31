@@ -202,18 +202,33 @@ pub fn should_preempt(running: TaskPriority, incoming: TaskPriority) -> bool {
     )
 }
 
-/// 调度队列条目 — 任务 + 其 WSJF 评分 + 入队时刻(用于饥饿老化)。
+/// 调度队列条目 — 任务 + 其 WSJF 评分 + 入队时刻(用于饥饿老化)+ 入队序号。
 #[derive(Debug, Clone)]
 struct ScheduleEntry {
     task: AgentTask,
     wsjf: f64,
     enqueued_at: Instant,
+    /// 单调递增入队序号 — 三维键全平局时的确定性最终保障（L9 优化第二轮）。
+    ///
+    /// WHY:`Instant` 分辨率内同刻入队使 `enqueued_at` 平局,而 swap_remove
+    /// 打乱物理顺序 → 平局胜者取决于布局(非确定)。seq 作第四键(小者=
+    /// 先入队)保证完全确定的出队序,不依赖存储布局。
+    seq: u64,
 }
 
 /// 优先级调度器 (§8) — 按 (有效优先级秩, WSJF) 出队, 支持动态重排与饥饿保护。
 ///
 /// 采用「惰性最佳选择」: 出队时按当前有效秩(含饥饿老化)+ WSJF 选出最优条目,
 /// 因此队列始终返回当下最应调度的任务, 无需维护堆的键稳定性。
+///
+/// ## 三维排序键不可约简为分桶(L9 优化 2.3 分析结论)
+///
+/// 出队序由三维键决定:(有效秩 = 基础秩 + 饥饿老化, WSJF 降序, enqueued_at 升序)。
+/// 曾试图按基础秩分 4 桶 + 桶内 FIFO 降低出队至 O(桶数),但发现**根本冲突**:
+/// 桶内若按 WSJF 排序(满足同秩 WSJF 次序契约),则老化最久条目(有效秩最高)
+/// 不在队头,跨桶老化比较无法 O(桶数) 完成;桶内若按 FIFO(满足老化),则丢失
+/// WSJF 次序。两需求共存必须全扫。故 `best_index` 保留 O(n)(仅整数比较,
+/// 常数极小),仅将 `Vec::remove` O(n) 优化为 `swap_remove` O(1)。
 #[derive(Debug)]
 pub struct PriorityScheduler {
     /// WSJF 权重
@@ -224,6 +239,8 @@ pub struct PriorityScheduler {
     starvation_threshold: Duration,
     /// 待调度条目
     entries: Vec<ScheduleEntry>,
+    /// 下一个入队序号 — 单调递增,为每次 enqueue 分配唯一 seq(饥饿平局确定性)。
+    next_seq: u64,
 }
 
 impl Default for PriorityScheduler {
@@ -259,6 +276,7 @@ impl PriorityScheduler {
             thresholds,
             starvation_threshold,
             entries: Vec::new(),
+            next_seq: 0,
         }
     }
 
@@ -272,15 +290,19 @@ impl PriorityScheduler {
         self.entries.is_empty()
     }
 
-    /// 入队 — 计算 WSJF 评分并记录入队时刻。
+    /// 入队 — 计算 WSJF 评分、记录入队时刻与单调序号。
     ///
-    /// 任务自身的 `priority` 字段保留为主排序键;WSJF 作为同优先级内的次排序键。
+    /// 任务自身的 `priority` 字段保留为主排序键;WSJF 作为同优先级内的次排序键;
+    /// seq 为完全平局时的确定性终键(递增,先入队者 seq 更小)。
     pub fn enqueue(&mut self, task: AgentTask, wsjf_input: &WsjfInput) {
         let wsjf = wsjf_score(wsjf_input, &self.weights);
+        let seq = self.next_seq;
+        self.next_seq += 1;
         self.entries.push(ScheduleEntry {
             task,
             wsjf,
             enqueued_at: Instant::now(),
+            seq,
         });
     }
 
@@ -288,10 +310,15 @@ impl PriorityScheduler {
     ///
     /// 选择规则: 先比较有效优先级秩(含饥饿老化), 秩相同再比 WSJF(高者先),
     /// 仍相同则取先入队者(稳定)。队列为空返回 `None`。
+    ///
+    /// WHY swap_remove(L9 优化 2.3): 选中条目与末尾交换后弹出,O(1) 替代
+    /// `Vec::remove` 的 O(n) 搬移。swap_remove 打乱剩余条目物理顺序,但
+    /// 出队序由 `best_index` 的三维键(含 enqueued_at)重新定义,物理顺序
+    /// 无关——同秩同 WSJF 的先入队者仍因 enqueued_at 更早而胜出(稳定性保留)。
     pub fn dequeue(&mut self) -> Option<AgentTask> {
         let now = Instant::now();
         let best = self.best_index(now)?;
-        Some(self.entries.remove(best).task)
+        Some(self.entries.swap_remove(best).task)
     }
 
     /// 查看(不移除)当前最应调度任务的有效优先级。
@@ -301,7 +328,7 @@ impl PriorityScheduler {
         let entry = &self.entries[best];
         let rank = aged_priority_rank(
             entry.task.priority,
-            now - entry.enqueued_at,
+            now.saturating_duration_since(entry.enqueued_at),
             self.starvation_threshold,
         );
         Some(priority_from_rank(rank))
@@ -318,6 +345,9 @@ impl PriorityScheduler {
     }
 
     /// 内部: 返回当前最优条目的下标(含饥饿老化), 空则 `None`。
+    ///
+    /// O(n) 扫描不可避免(三维排序键,见结构体文档);仅为整数秩 + f64 比较,
+    /// 常数极小,与出队的 swap_remove O(1) 共同使单次出队从旧版双 O(n) 降为单 O(n)。
     fn best_index(&self, now: Instant) -> Option<usize> {
         if self.entries.is_empty() {
             return None;
@@ -325,16 +355,39 @@ impl PriorityScheduler {
         let mut best_idx = 0usize;
         let mut best_rank = self.effective_rank(0, now);
         let mut best_wsjf = self.entries[0].wsjf;
+        let mut best_enqueued = self.entries[0].enqueued_at;
+        let mut best_seq = self.entries[0].seq;
         for (idx, entry) in self.entries.iter().enumerate().skip(1) {
             let rank = self.effective_rank(idx, now);
-            // 主键: 秩更高优先; 次键: 秩相同则 WSJF 更高优先。
-            let higher = rank > best_rank
-                || (rank == best_rank
-                    && entry.wsjf.partial_cmp(&best_wsjf) == Some(std::cmp::Ordering::Greater));
+            // 四维键: 秩高者优先 → WSJF 高者优先 → enqueued_at 早者优先 → seq 小者优先。
+            // WHY 显式比 enqueued_at + seq: swap_remove 打乱物理顺序后,不能靠下标隔定
+            // 先入队者;时间戳保 FIFO,seq 在 Instant 分辨率内同刻入队时提供完全确定性。
+            // WHY partial_cmp 而非 `>`/`==`: 避免 clippy::float_cmp 对 f64 直接比较告警。
+            let higher = match rank.cmp(&best_rank) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Equal => match entry
+                    .wsjf
+                    .partial_cmp(&best_wsjf)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                {
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Less => false,
+                    // WSJF 平局 → 先入队者(enqueued_at 更早)胜出;enqueued_at 也平局时比 seq
+                    std::cmp::Ordering::Equal => match entry.enqueued_at.cmp(&best_enqueued) {
+                        std::cmp::Ordering::Less => true,
+                        std::cmp::Ordering::Greater => false,
+                        // 时间戳同刻(Instant 分辨率内)→ seq 小者(先入队)胜出,完全确定
+                        std::cmp::Ordering::Equal => entry.seq < best_seq,
+                    },
+                },
+            };
             if higher {
                 best_idx = idx;
                 best_rank = rank;
                 best_wsjf = entry.wsjf;
+                best_enqueued = entry.enqueued_at;
+                best_seq = entry.seq;
             }
         }
         Some(best_idx)

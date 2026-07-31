@@ -35,6 +35,7 @@
 
 pub mod clv;
 pub mod config;
+pub mod decay;
 pub mod error;
 #[macro_use]
 pub mod newtype;

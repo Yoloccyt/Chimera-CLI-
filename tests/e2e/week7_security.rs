@@ -168,6 +168,7 @@ async fn test_mcp_injection_transaction_id_tampering() {
         participant_count: 1,
         latency_ms: 10,
         success: true,
+        capability_id: None,
     };
     pipeline
         .bus

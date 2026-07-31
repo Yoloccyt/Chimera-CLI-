@@ -40,3 +40,10 @@ harness = false
 [[bench]]
 name = "membrane_delivery_bench"
 harness = false
+
+# Task 3.1:TuiAction 协议分发延迟基准(8 变体 publish_blocking < 10µs 验收)
+# WHY 独立 bench:8 变体 payload 形态不同,参数化测量可识别偏高频次;
+# 全部走 broadcast 路径(非 Critical),不触发 mpsc 旁路
+[[bench]]
+name = "tui_action_dispatch_bench"
+harness = false

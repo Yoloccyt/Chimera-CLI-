@@ -72,7 +72,11 @@ async fn test_week7_mcp_mesh_full_chain() {
         .bridge
         .receive(raw, IdeSource::vscode())
         .expect("CHTC receive 失败");
-    let exec_result = pipeline.bridge.execute(&call).expect("CHTC execute 失败");
+    let exec_result = pipeline
+        .bridge
+        .execute(&call)
+        .await
+        .expect("CHTC execute 失败");
     assert!(exec_result.success, "VSCode execute 应成功");
 
     // 4. MCP Mesh 执行量子事务(L10 → execute_transaction,发布 McpMeshTransactionCompleted)
@@ -140,6 +144,7 @@ async fn test_week7_mcp_failure_csn_substitution() {
         participant_count: 2,
         latency_ms: 50,
         success: false,
+        capability_id: None,
     };
     pipeline
         .bus
@@ -348,6 +353,7 @@ async fn test_week7_quest_lsct_ssra_chtc_mcp_chain() {
         pipeline
             .bridge
             .execute(&call)
+            .await
             .expect("CHTC execute 失败")
             .success
     );

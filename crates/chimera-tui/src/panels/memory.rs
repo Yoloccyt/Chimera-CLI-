@@ -76,6 +76,21 @@ impl MemoryPanel {
                 Span::from(mm.tier.clone()),
             ]),
             Line::from(""),
+            // Task 3.3: L3 Storage 协同 — 显示四层存储分布(全局快照)
+            // 调用 cmt_tiering::tier_distribution() 获取 CMT 四级存储层字节数,
+            // 实现 L10 Panel ↔ L3 Storage 真实数据闭环。
+            {
+                let dist = cmt_tiering::tier_distribution();
+                let to_mb = |bytes: u64| -> f64 { bytes as f64 / 1_048_576.0 };
+                Line::from(format!(
+                    "Storage: Hot:{:.1}MB | Warm:{:.1}MB | Cold:{:.1}MB | Frozen:{:.1}MB",
+                    to_mb(dist.hot),
+                    to_mb(dist.warm),
+                    to_mb(dist.cold),
+                    to_mb(dist.frozen)
+                ))
+            },
+            Line::from(""),
             Line::from(FOOTER_TEXT),
         ];
         Text::from(lines)

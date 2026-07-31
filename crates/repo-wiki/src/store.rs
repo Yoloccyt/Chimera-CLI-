@@ -1416,6 +1416,7 @@ mod tests {
             read_pool_size: 0,
             fts_enabled: false,
             hnsw: crate::types::HnswConfig::default(),
+            hybrid_search: crate::search::HybridSearchConfig::default(),
         };
         match WikiStore::open_with_config(config) {
             Err(err) => assert!(err.to_string().contains(":memory:")),

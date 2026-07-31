@@ -126,6 +126,14 @@ pub struct AgentTask {
     pub parent_agent_id: Option<String>,
     /// 委托深度(0=RootOrchestrator 直接执行,1=MainAgent 委托,...)
     pub delegation_depth: usize,
+    /// 关联的 Quest ID(可选,协调度量接线闭环)
+    ///
+    /// WHY 新增:`DelegationCompleted` 事件需携带 quest_id 供 quest-engine
+    /// 按 Quest 归因委托开销(delegation_overhead_ms)。调用方通过
+    /// `with_quest()` 设置;未设置时事件 quest_id 为 None,无法归因仅记日志。
+    /// `#[serde(default)]` 保证旧序列化数据(无此字段)反序列化兼容。
+    #[serde(default)]
+    pub quest_id: Option<String>,
 }
 
 impl AgentTask {
@@ -162,9 +170,10 @@ impl AgentTask {
             // WHY 默认 Medium:多数任务为常规优先级;Critical/High/Low 经
             // with_priority() 显式设置,保持 new() 5 参数签名不变(非破坏性)。
             priority: TaskPriority::Medium,
-            // 默认值:RootOrchestrator 直接发起,深度 0
+            // 默认值:RootOrchestrator 直接发起,深度 0,无 Quest 关联
             parent_agent_id: None,
             delegation_depth: 0,
+            quest_id: None,
         }
     }
 
@@ -206,6 +215,18 @@ impl AgentTask {
     /// - `depth`: 委托深度(0=RootOrchestrator 直接执行,1=MainAgent 委托,...)
     pub fn with_depth(mut self, depth: usize) -> Self {
         self.delegation_depth = depth;
+        self
+    }
+
+    /// 设置关联的 Quest ID(builder 模式,协调度量接线闭环)
+    ///
+    /// 设置后,本批委托完成时 `DelegationCompleted` 事件携带此 quest_id,
+    /// quest-engine 据此将委托开销归因到对应 Quest 的协调成本样本。
+    ///
+    /// ## 参数
+    /// - `quest_id`: 关联的 Quest ID
+    pub fn with_quest(mut self, quest_id: impl Into<String>) -> Self {
+        self.quest_id = Some(quest_id.into());
         self
     }
 
@@ -422,55 +443,10 @@ impl DelegationExecutor {
         parent_id: &str,
         sub_tasks: Vec<AgentTask>,
     ) -> Result<Vec<TaskResult>> {
-        // 空任务列表直接返回空 Vec(避免无意义的 spawn)
-        if sub_tasks.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // 并行 spawn 每个子任务,用 FuturesUnordered 收集 JoinHandle
-        // WHY FuturesUnordered:§4.1 规范,优于 join_all,支持流式结果收集
-        let mut futures: FuturesUnordered<tokio::task::JoinHandle<TaskResult>> =
-            FuturesUnordered::new();
-
-        for task in sub_tasks {
-            // 每个 spawn 的子任务 Arc::clone 一份 task_runner + EventBus
-            // WHY Arc::clone:§4.4 反模式 5,async 任务共享状态必须用 Arc::clone 而非 clone
-            let runner = Arc::clone(&self.task_runner);
-            let bus = self.event_bus.clone();
-            // effective_timeout 在 spawn 之前同步调用(借用 task),之后 task 被 move
-            let timeout = effective_timeout(&task, self.default_timeout);
-            let agent_id = format!("{parent_id}::sub::{}", task.inner.task_id);
-            let parent_id_owned = parent_id.to_string();
-
-            let handle = tokio::spawn(execute_single_task(
-                task,
-                runner,
-                bus,
-                timeout,
-                agent_id,
-                parent_id_owned,
-            ));
-            futures.push(handle);
-        }
-
-        // 流式收集所有子任务结果
-        // WHY while + next():任意子任务完成即取出,避免等待最慢任务才开始处理
-        let mut results = Vec::with_capacity(futures.len());
-        while let Some(join_result) = futures.next().await {
-            match join_result {
-                Ok(task_result) => results.push(task_result),
-                Err(join_err) => {
-                    // JoinError 仅在 spawn 的 task panic 或被 cancel 时出现
-                    // 返回框架错误,因为无法关联具体 task_id
-                    warn!(error = %join_err, "子任务 JoinHandle 异常");
-                    return Err(MasError::DelegationFailed {
-                        reason: format!("子任务 spawn 异常: {join_err}"),
-                    });
-                }
-            }
-        }
-
-        Ok(results)
+        // M4 去重复:与 execute_batch_delegation 共用 run_delegation_batch,
+        // 仅 agent_id 中缀(::sub::)与 JoinError 文案前缀参数化
+        self.run_delegation_batch(parent_id, sub_tasks, "sub", "子任务")
+            .await
     }
 
     /// 批量执行委托 — 切块后的子任务批量并行执行(Task 16 §16.9)
@@ -515,24 +491,61 @@ impl DelegationExecutor {
         parent_id: &str,
         chunks: Vec<AgentTask>,
     ) -> Result<Vec<TaskResult>> {
-        // 空切块列表直接返回(避免无意义的 spawn)
-        if chunks.is_empty() {
+        // M4 去重复:与 execute_delegation 共用 run_delegation_batch。
+        // WHY agent_id 中缀 "batch":与 ::sub:: 区分,便于审计追溯区分
+        // 批量切块与普通委托;不依赖 BatchExecutor(事件 source 不同,两者解耦)。
+        self.run_delegation_batch(parent_id, chunks, "batch", "批量委托")
+            .await
+    }
+
+    /// 委托批次执行内核(M4 去重复:execute_delegation / execute_batch_delegation 共用)
+    ///
+    /// 两个公开入口此前主体高度重复(仅 agent_id 后缀与日志文案差异),
+    /// 抽为私有内核后公开 API 签名与行为完全不变(零破坏)。
+    ///
+    /// # 流程(与原两方法逐行等价)
+    /// 1. 空列表早退(避免无意义 spawn 与零样本事件)
+    /// 2. 批次 wall-clock 计时 + quest_id 归因(协调度量接线闭环)
+    /// 3. 每任务 tokio::spawn + FuturesUnordered 流式收集(§4.1)
+    /// 4. 汇聚完成后发布 DelegationCompleted 观测事件
+    ///
+    /// # 参数
+    /// - `agent_id_infix`:agent_id 中缀("sub" 普通委托 / "batch" 切块批量),
+    ///   拼为 `{parent_id}::{infix}::{task_id}`,供审计追溯区分来源
+    /// - `err_label`:JoinError 日志/错误文案前缀(保持与原两方法一致)
+    async fn run_delegation_batch(
+        &self,
+        parent_id: &str,
+        tasks: Vec<AgentTask>,
+        agent_id_infix: &str,
+        err_label: &str,
+    ) -> Result<Vec<TaskResult>> {
+        // 空任务列表直接返回空 Vec(避免无意义的 spawn 与零样本事件)
+        if tasks.is_empty() {
             return Ok(Vec::new());
         }
 
-        // 复用 execute_delegation 的 FuturesUnordered + tokio::time::timeout 模式
-        // WHY 不依赖 BatchExecutor: DelegationExecutor 自包含,避免引入额外耦合;
-        // BatchExecutor 提供独立的批量执行能力(事件 source 不同),两者解耦。
+        // 协调度量接线闭环:批次 wall-clock 计时起点。
+        // WHY wall-clock 而非各子任务 duration 求和:子任务并行执行,
+        // 求和会重复计费;wall-clock 才是委托对 Quest 生命周期的真实开销。
+        let batch_start = std::time::Instant::now();
+        // 取首个携带 quest_id 的子任务作为批次归因(同批子任务属同一 Quest)
+        let quest_id = tasks.iter().find_map(|t| t.quest_id.clone());
+        let sub_task_count = tasks.len() as u32;
+
+        // 并行 spawn 每个子任务,用 FuturesUnordered 收集 JoinHandle
+        // WHY FuturesUnordered:§4.1 规范,优于 join_all,支持流式结果收集
         let mut futures: FuturesUnordered<tokio::task::JoinHandle<TaskResult>> =
             FuturesUnordered::new();
 
-        for task in chunks {
+        for task in tasks {
+            // 每个 spawn 的子任务 Arc::clone 一份 task_runner + EventBus
+            // WHY Arc::clone:§4.4 反模式 5,async 任务共享状态必须用 Arc::clone 而非 clone
             let runner = Arc::clone(&self.task_runner);
             let bus = self.event_bus.clone();
+            // effective_timeout 在 spawn 之前同步调用(借用 task),之后 task 被 move
             let timeout = effective_timeout(&task, self.default_timeout);
-            // WHY agent_id 后缀 ::batch::: 与 execute_delegation 的 ::sub:: 区分,
-            // 便于审计追溯区分批量切块与普通委托
-            let agent_id = format!("{parent_id}::batch::{}", task.inner.task_id);
+            let agent_id = format!("{parent_id}::{agent_id_infix}::{}", task.inner.task_id);
             let parent_id_owned = parent_id.to_string();
 
             let handle = tokio::spawn(execute_single_task(
@@ -546,20 +559,62 @@ impl DelegationExecutor {
             futures.push(handle);
         }
 
+        // 流式收集所有子任务结果
+        // WHY while + next():任意子任务完成即取出,避免等待最慢任务才开始处理
         let mut results = Vec::with_capacity(futures.len());
         while let Some(join_result) = futures.next().await {
             match join_result {
                 Ok(task_result) => results.push(task_result),
                 Err(join_err) => {
-                    warn!(error = %join_err, "批量委托子任务 JoinHandle 异常");
+                    // JoinError 仅在 spawn 的 task panic 或被 cancel 时出现
+                    // 返回框架错误,因为无法关联具体 task_id
+                    warn!(error = %join_err, "{err_label}子任务 JoinHandle 异常");
                     return Err(MasError::DelegationFailed {
-                        reason: format!("批量委托 spawn 异常: {join_err}"),
+                        reason: format!("{err_label} spawn 异常: {join_err}"),
                     });
                 }
             }
         }
 
+        // 协调度量接线闭环:汇聚完成后发布 DelegationCompleted 观测事件
+        self.publish_delegation_completed(
+            parent_id,
+            quest_id,
+            batch_start,
+            sub_task_count,
+            &results,
+        )
+        .await;
+
         Ok(results)
+    }
+
+    /// 发布 DelegationCompleted 观测事件(协调度量接线闭环)
+    ///
+    /// WHY Normal 级 + 失败不传播:这是只读开销观测事件,丢失仅影响单次
+    /// 度量样本(quest-engine 侧 delegation_overhead_ms 保持 None),
+    /// 不影响委托结果返回。发布失败仅记 warn 日志。
+    async fn publish_delegation_completed(
+        &self,
+        parent_id: &str,
+        quest_id: Option<String>,
+        batch_start: std::time::Instant,
+        sub_task_count: u32,
+        results: &[TaskResult],
+    ) {
+        let total_overhead_ms = batch_start.elapsed().as_secs_f64() * 1000.0;
+        let success_count = results.iter().filter(|r| r.success).count() as u32;
+        let event = NexusEvent::DelegationCompleted {
+            metadata: EventMetadata::new("chimera-mas:DelegationExecutor"),
+            parent_id: parent_id.to_string(),
+            quest_id,
+            total_overhead_ms,
+            sub_task_count,
+            success_count,
+        };
+        if let Err(e) = self.event_bus.publish(event).await {
+            warn!(error = %e, "发布 DelegationCompleted 事件失败,委托结果不受影响");
+        }
     }
 }
 

@@ -118,6 +118,12 @@ pub struct TuiConfig {
     pub persist_state: bool,
     /// 状态文件路径（默认 ~/.chimera/tui_state.yaml）
     pub state_file_path: std::path::PathBuf,
+    /// v2.9.0-omega Task 2.6:响应式折叠阈值(终端宽度低于此值时自动隐藏伴随面板)
+    ///
+    /// WHY 默认 100:终端宽度 < 100 列时,主面板 + 伴随面板(30 字符)会挤压主内容
+    /// 至 70 列以下,可读性下降。折叠伴随面板让主面板独占宽度,符合响应式设计原则。
+    /// 用户可在配置文件 `tui.responsive_collapse_threshold` 调整(设为 0 禁用折叠)。
+    pub responsive_collapse_threshold: u16,
 }
 
 impl Default for TuiConfig {
@@ -148,6 +154,8 @@ impl Default for TuiConfig {
             sysinfo_refresh_interval_ms: 5000,
             persist_state: true,
             state_file_path: Self::default_state_path(),
+            // v2.9.0-omega Task 2.6:响应式折叠阈值默认 100 列
+            responsive_collapse_threshold: 100,
         }
     }
 }

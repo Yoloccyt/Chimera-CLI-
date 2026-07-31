@@ -19,13 +19,15 @@
 //! - **配置与序列化**: InvalidConfig / SerializationFailed / MessagePackFailed / MessagePackDecodeFailed
 //! - **稳定性(Task 19 §19.7)**: CircuitBreakerOpen
 //! - **分块调度(Task 16 §16.10)**: ChunkingFailed
+//! - **影子模式(ADR-053 备忘录 §五 B-4)**: ShadowGovernanceConfigInvalid / ShadowGateRejected
 //! - **系统**: IoError / Internal
 
 use thiserror::Error;
 
 /// MAS 子系统错误类型
 ///
-/// 共 37 个变体,覆盖 MAS 特有错误场景(含 ADR-042 R2FreezeViolation)。
+/// 共 39 个变体,覆盖 MAS 特有错误场景(含 ADR-042 R2FreezeViolation
+/// 与 ADR-053 影子模式 2 变体)。
 /// 所有变体均通过 `#[error("...")]` 提供人类可读的 Display 实现。
 #[derive(Debug, Error)]
 pub enum MasError {
@@ -525,6 +527,36 @@ pub enum MasError {
         evidence: String,
     },
 
+    // === 影子模式治理相关(2 个,ADR-053 备忘录 §五 B-4)===
+    /// 影子模式治理配置非法 — 签署缺失或参数违反预注册约束(ADR-053-rev4)
+    ///
+    /// 触发场景:治理签署凭证字段为空、s_min 低于治理签署锚点、
+    /// N_probe 低于 100 固定下限、权重违反 w_min/单维上限/归一约束等。
+    ///
+    /// WHY 独立变体:fail-closed 构造是影子模式的第一道治理防线
+    /// (无签署即无实例),需与通用配置错误区分以便审计图表追溯
+    /// "谁在未签署情况下尝试构造编排器"。
+    #[error("Shadow governance config invalid (ADR-053): {reason}")]
+    ShadowGovernanceConfigInvalid {
+        /// 拒绝原因(人类可读,供审计)
+        reason: String,
+    },
+
+    /// 影子模式门禁拒绝 — fail-closed 短路或预注册约束拦截(ADR-053-rev4)
+    ///
+    /// 触发场景:熔断器已跳闸、评估目标超出解冻范围白名单、
+    /// 检查点外终判/加批(防 optional stopping)、批次 ID 重复等。
+    ///
+    /// WHY 独立变体:门禁拒绝是预期内的安全行为(非故障),审计面需
+    /// 将其与 Internal 错误区分——频繁的门禁拒绝可能指示熔断跳闸或
+    /// 范围配置错误,需人工介入而非自动重试。
+    #[error("Shadow gate rejected (ADR-053): {reason}")]
+    ShadowGateRejected {
+        /// 拒绝原因(人类可读,供审计)
+        reason: String,
+    },
+
+    // === 系统兜底(1 个)===
     /// 内部错误 — 兜底变体,用于未分类的内部错误
     ///
     /// 触发场景:不应发生的内部不变量违反、状态机不一致等。

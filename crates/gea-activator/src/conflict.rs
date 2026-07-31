@@ -70,10 +70,16 @@ pub fn resolve_conflicts(
     scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
     // 步骤 3:贪心冲突检测 — 重叠度 > threshold 则抑制
+    // WHY 早停(L9 优化第二轮,O(n²·d)→O(n·k·d)):scored 已按综合评分降序,
+    // 一旦 activated 集满 top_k,剩余候选(评分更低)即使无冲突也必被后续
+    // select_top_k 裁掉 → 直接全部抑制并 break。旧版对每个候选检查全部已激活
+    // (可能 >top_k),早停后每候选只检查 ≤top_k 个已激活。最终 activated/suppressed
+    // 集合与旧实现等价(activated = 最高分的 top_k 个无冲突候选,与 select_top_k 一致)。
     let mut activated_with_score: Vec<ScoredCandidate> = Vec::new();
     let mut suppressed: Vec<ExpertId> = Vec::new();
 
-    for candidate in scored {
+    let mut scored_iter = scored.into_iter();
+    for candidate in scored_iter.by_ref() {
         let profile =
             expert_profiles
                 .get(&candidate.0)
@@ -81,7 +87,7 @@ pub fn resolve_conflicts(
                     expert_id: candidate.0.to_string(),
                 })?;
 
-        // 检查与所有已激活专家的重叠度
+        // 检查与所有已激活专家的重叠度(早停后 activated 恒 ≤ top_k,故此内循环 O(k·d))
         let mut conflict = false;
         for activated in &activated_with_score {
             let activated_profile =
@@ -105,8 +111,15 @@ pub fn resolve_conflicts(
             suppressed.push(candidate.0);
         } else {
             activated_with_score.push(candidate);
+            // 早停:已集满 top_k,剩余候选分更低必被裁掉,无需再检查重叠
+            // (top_k=0 退化时此条件不成立,交由下方 select_top_k 正确处理)
+            if activated_with_score.len() == config.top_k {
+                break;
+            }
         }
     }
+    // 剩余未处理候选(分更低)全部抑制——不可能进 top_k
+    suppressed.extend(scored_iter.map(|c| c.0));
 
     // 步骤 4:Top-K 选择 — 使用 select_nth_unstable 优化(O(n))
     // WHY:已通过冲突检测的列表可能超过 top_k,只需前 K 个,无需全排序

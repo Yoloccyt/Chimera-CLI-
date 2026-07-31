@@ -11,6 +11,8 @@ use chrono::{DateTime, Utc};
 use nexus_contracts::{TemporalMeta, TransitionType};
 use serde::{Deserialize, Serialize};
 
+use crate::search::HybridSearchConfig;
+
 /// Wiki 条目 — 知识沉淀的最小单元
 ///
 /// `embedding` 在 Week 2 阶段为占位哈希向量(SHA-256 扩展为 512-dim),
@@ -199,6 +201,16 @@ pub struct WikiConfig {
     /// 无法通过配置调优。P2-5 提升为可配置项,支持不同规模/精度需求的场景。
     #[serde(default)]
     pub hnsw: HnswConfig,
+
+    /// RAG 混合检索融合配置(v2.9.0-omega,Task 3)
+    ///
+    /// 控制 HNSW(dense)与 FTS5(sparse)检索结果的 RRF 融合参数。
+    /// 默认使用 `HybridSearchConfig::default()`(rrf_k=60,dense/sparse 等权)。
+    ///
+    /// WHY `#[serde(default)]`:旧配置文件(无 hybrid_search 段)反序列化为
+    /// 默认值,不破坏现有持久化数据与测试。
+    #[serde(default)]
+    pub hybrid_search: HybridSearchConfig,
 }
 
 /// 默认读连接池大小 — 与 `WikiConfig::default` 保持一致
@@ -223,10 +235,15 @@ const fn default_fts_enabled() -> bool {
 /// - `ef_construction`:构建时 ef 参数,控制索引构建质量。ef↑ → 精度↑ 构建耗时↑。
 ///   论文推荐 ef_construction ∈ [100, 500],默认 200。
 /// - `ef_search`:搜索时 ef 参数,控制搜索宽度,必须 > k。ef↑ → 召回率↑ 延迟↑。
-///   对于 10K-100K entry 规模,ef=50 足以保证 >95% 召回率。默认 50。
+///   **自适应模式**(`None`,默认):根据索引规模动态调整
+///   (<10K → 50 / 10K-100K → 100 / >100K → 200),保证 >95% 召回率。
+///   **显式模式**(`Some(n)`):用户指定固定值,适用于已知规模的调优场景。
 ///
 /// # 向后兼容
 /// 所有字段使用 `#[serde(default)]`,旧配置文件(无 hnsw 段)反序列化为默认值。
+/// `ef_search` 字段为 `Option<usize>`:
+/// - 旧配置文件中 `ef_search: 50` 反序列化为 `Some(50)`(显式模式)
+/// - 缺失字段反序列化为 `None`(自适应模式,与 Default 一致)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HnswConfig {
     /// 每层最大连接数(M 参数),控制图连通性
@@ -238,7 +255,16 @@ pub struct HnswConfig {
     /// 构建时 ef 参数,控制索引构建质量
     pub ef_construction: usize,
     /// 搜索时 ef 参数,控制搜索宽度(必须 > k)
-    pub ef_search: usize,
+    ///
+    /// WHY Option<usize>(v2.9.0-omega 自适应):
+    /// - `None`(默认)= 自适应模式,根据索引规模动态调整 ef_search,
+    ///   解决 100K+ 规模下固定 ef=50 召回率 <95% 的问题
+    /// - `Some(n)` = 用户显式指定,适用于已知规模的调优场景
+    ///
+    /// 自适应档位见 `HnswStore::adaptive_ef_search`:
+    /// <10K → 50 / 10K-100K → 100 / >100K → 200
+    #[serde(default)]
+    pub ef_search: Option<usize>,
 }
 
 impl Default for HnswConfig {
@@ -248,13 +274,19 @@ impl Default for HnswConfig {
             max_elements: 10_000,
             max_layer: 16,
             ef_construction: 200,
-            ef_search: 50,
+            // WHY None(自适应模式):默认根据索引规模动态调整 ef_search,
+            // <10K 时返回 50,与原固定值 50 行为一致(向后兼容)
+            ef_search: None,
         }
     }
 }
 
 impl HnswConfig {
     /// 创建自定义 HNSW 参数配置
+    ///
+    /// `ef_search` 参数内部转为 `Some(ef_search)`(显式模式)。
+    /// 若需自适应模式,使用 `HnswConfig::default()` 后修改其他字段,
+    /// 或直接构造结构体字面量 `ef_search: None`。
     pub fn new(
         max_nb_connection: usize,
         max_elements: usize,
@@ -267,7 +299,9 @@ impl HnswConfig {
             max_elements,
             max_layer,
             ef_construction,
-            ef_search,
+            // WHY 转 Some:保留 usize 签名向后兼容现有调用方,
+            // 显式指定的 ef_search 不走自适应路径
+            ef_search: Some(ef_search),
         }
     }
 }
@@ -281,6 +315,7 @@ impl Default for WikiConfig {
             read_pool_size: default_read_pool_size(),
             fts_enabled: default_fts_enabled(),
             hnsw: HnswConfig::default(),
+            hybrid_search: HybridSearchConfig::default(),
         }
     }
 }

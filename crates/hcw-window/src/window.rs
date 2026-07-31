@@ -250,7 +250,11 @@ impl HcwWindow {
             }
 
             let total_size = state.total_size();
-            let target_capacity = self.config.effective_capacity_for(target_tier);
+            // Task 4:传入 OSA 动态稀疏度,使 L3 实际容量随稀疏度自适应
+            // WHY:state 是写锁,可直接读 last_sparsity 字段(无需额外锁操作)
+            let target_capacity = self
+                .config
+                .effective_capacity_for(target_tier, state.last_sparsity);
 
             if target_tier > current_tier || total_size <= target_capacity {
                 // 升级或容量足够:直接切换(不压缩)
@@ -478,11 +482,14 @@ impl HcwWindow {
     /// - L3 溢出 → 压缩到 L3 实际加载容量(128K)
     async fn handle_overflow(&self) -> Result<(), HcwError> {
         loop {
-            let (current_tier, total_size) = {
+            // Task 4:同时读取 last_sparsity,用于 L3 动态容量计算
+            // WHY:在同一个读锁作用域内取出 3 个字段,避免多次获取锁
+            let (current_tier, total_size, sparsity) = {
                 let state = self.state.read().await;
-                (state.current_tier, state.total_size())
+                (state.current_tier, state.total_size(), state.last_sparsity)
             };
-            let capacity = self.config.effective_capacity_for(current_tier);
+            // 传入 OSA 动态稀疏度,使 L3 实际容量随稀疏度自适应
+            let capacity = self.config.effective_capacity_for(current_tier, sparsity);
 
             if total_size <= capacity {
                 return Ok(());

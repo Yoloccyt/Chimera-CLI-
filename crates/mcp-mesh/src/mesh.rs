@@ -22,20 +22,23 @@
 //! WHY:`tokio::broadcast` 仅投递给发布时已存在的 receiver;若在 spawn 的 async
 //! block 内 subscribe,后台任务调度时机不确定,可能晚于 publish 导致事件静默丢失。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use dashmap::DashMap;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::config::MeshConfig;
 use crate::error::McpError;
 use crate::quantum::participant_client::{InProcessClient, ParticipantClient};
 use crate::quantum::superposition::{execute_superposition_query, QueryResult, SuperpositionQuery};
-use crate::quantum::transaction::{QuantumTransaction, TransactionState};
+use crate::quantum::transaction::{QuantumTransaction, TransactionState, WalEntry};
+use crate::quantum::wal::WalStore;
 use crate::server_registry::{MeshServer, ServerRegistry};
 use crate::types::TransactionResult;
 
@@ -56,6 +59,49 @@ pub struct McpMesh {
     /// 默认为 `InProcessClient`(sleep-based mock,向后兼容);
     /// 生产环境通过 `with_participant_client` 注入 `TcpParticipantClient`。
     participant_client: Arc<dyn ParticipantClient>,
+    /// WAL 持久化存储(Task 0.7 v2.9.0-omega)
+    ///
+    /// `Some` 时 2PC 各阶段切换会追加 WAL entry,协调者崩溃后可通过
+    /// `recover_from_wal()` 重建未完成事务。`None` 表示禁用持久化
+    /// (`config.durable == false`),适合纯内存测试场景。
+    wal_store: Option<Arc<WalStore>>,
+    /// 待补偿事务队列(Task 0.7 v2.9.0-omega)
+    ///
+    /// Commit 阶段部分参与者失败时,事务 ID + 失败参与者入队,
+    /// 由 `reconcile_pending_transactions()` 周期重试。
+    /// WHY DashMap:并发安全,允许 reconcile 任务与 execute_transaction 并行访问。
+    pending_compensations: DashMap<String, PendingCompensation>,
+}
+
+/// 待补偿事务记录(Task 0.7 v2.9.0-omega)
+///
+/// Commit 阶段部分参与者失败时创建,记录失败的参与者与已重试次数,
+/// 由 `reconcile_pending_transactions` 按 `max_retries` 重试。
+#[derive(Debug, Clone)]
+pub struct PendingCompensation {
+    /// 事务 ID
+    pub transaction_id: String,
+    /// Commit 阶段失败的参与者 ID 列表
+    pub failed_participants: Vec<String>,
+    /// 已重试次数(达 `MeshConfig::max_retries` 后放弃)
+    pub retries: u32,
+    /// 入队时刻(UTC),用于 TTL 与日志
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// 根据 `MeshConfig::durable` 与 `wal_path` 初始化 WalStore(自由函数)
+///
+/// WHY 抽出为函数:三个构造函数共用相同逻辑,避免重复。
+/// - `durable == false` → 返回 `None`(禁用持久化)
+/// - `durable == true` + `wal_path == Some(p)` → 使用 `p`
+/// - `durable == true` + `wal_path == None` → 使用 `WalStore::default_path()`,
+///   若 `default_path()` 返回 `None`(HOME/USERPROFILE 都不存在)则降级为 `None`
+fn init_wal_store(config: &MeshConfig) -> Option<Arc<WalStore>> {
+    if !config.durable {
+        return None;
+    }
+    let path = config.wal_path.clone().or_else(WalStore::default_path)?;
+    Some(Arc::new(WalStore::new(path)))
 }
 
 impl McpMesh {
@@ -65,11 +111,14 @@ impl McpMesh {
     /// (sleep-based 网络模拟),向后兼容现有测试。
     pub fn new(config: MeshConfig) -> Self {
         let registry = Arc::new(ServerRegistry::new(config.registry_capacity));
+        let wal_store = init_wal_store(&config);
         Self {
             config,
             registry,
             event_bus: None,
             participant_client: Arc::new(InProcessClient::new()),
+            wal_store,
+            pending_compensations: DashMap::new(),
         }
     }
 
@@ -79,11 +128,14 @@ impl McpMesh {
     /// 调用 `start_event_subscriber` 可订阅 `ChtcToolCallReceived` 处理 IDE 工具调用。
     pub fn with_event_bus(config: MeshConfig, bus: EventBus) -> Self {
         let registry = Arc::new(ServerRegistry::new(config.registry_capacity));
+        let wal_store = init_wal_store(&config);
         Self {
             config,
             registry,
             event_bus: Some(bus),
             participant_client: Arc::new(InProcessClient::new()),
+            wal_store,
+            pending_compensations: DashMap::new(),
         }
     }
 
@@ -117,11 +169,14 @@ impl McpMesh {
         client: Arc<dyn ParticipantClient>,
     ) -> Self {
         let registry = Arc::new(ServerRegistry::new(config.registry_capacity));
+        let wal_store = init_wal_store(&config);
         Self {
             config,
             registry,
             event_bus: bus,
             participant_client: client,
+            wal_store,
+            pending_compensations: DashMap::new(),
         }
     }
 
@@ -278,15 +333,26 @@ impl McpMesh {
         }
     }
 
-    /// Prepare 阶段 — 并发向所有参与者发送 prepare 请求
+    /// Prepare 阶段 — 并发向所有参与者发送 prepare 请求(带 max_retries 重试)
     ///
     /// 通过 `ParticipantClient::prepare` 发送请求,用 `FuturesUnordered` 并发 fanout。
-    /// 任一参与者失败(Nack / 网络错误)则整体失败,触发 Abort+Rollback。
+    /// 任一参与者失败(Nack / 网络错误)按指数退避(200ms / 400ms)重试,达 `max_retries`
+    /// 仍失败则整体失败,触发 Abort+Rollback。
+    ///
+    /// Task 0.7 v2.9.0-omega 新增:
+    /// - 指数退避重试(`max_retries` 控制,默认 2,退避 200ms / 400ms)
+    /// - Prepare 成功后写 WAL `Prepare` entry(含已 ACK 参与者列表)
     ///
     /// # 参数
     /// - `tx`:量子事务(提供 transaction_id 和 participant_servers)
     /// - `op`:操作描述
     async fn prepare_phase(&self, tx: &QuantumTransaction, op: &str) -> Result<(), McpError> {
+        let max_retries = self.config.max_retries;
+        let mut acked: Vec<String> = Vec::with_capacity(tx.participant_servers.len());
+
+        // WHY 逐个参与者串行重试而非并发重试:并发重试需要复杂的状态机跟踪每个参与者的
+        // 重试次数,且 prepare 阶段允许部分慢参与者。这里采用并发首次 + 失败者串行重试
+        // 的混合策略:首次并发 fanout,失败的参与者按指数退避串行重试。
         let mut futures: FuturesUnordered<_> = tx
             .participant_servers
             .iter()
@@ -302,43 +368,206 @@ impl McpMesh {
                     self.participant_client
                         .prepare(&server, &tx.transaction_id, op)
                         .await
+                        .map(|_| sid.clone())
                 }
             })
             .collect();
 
+        // 收集首次失败的参与者(网络错误才重试;Nack 协议错误直接放弃)
+        let mut failed_participants: Vec<(String, McpError)> = Vec::new();
         while let Some(result) = futures.next().await {
-            result?;
+            match result {
+                Ok(sid) => acked.push(sid),
+                Err(e) => {
+                    // ProtocolError(Nack)不重试 — 参与者明确拒绝,重试无意义
+                    if matches!(e, McpError::ProtocolError { .. }) {
+                        return Err(e);
+                    }
+                    // NetworkError 收集后重试
+                    failed_participants.push((String::new(), e)); // sid 在下面填回
+                }
+            }
         }
+
+        // WHY 重新收集失败的参与者 sid:上面的 async move 块消耗了 sid,需从原列表找回
+        // 这里简化:首次并发失败的参与者通过 acked 集合差集计算
+        let failed_sids: Vec<String> = tx
+            .participant_servers
+            .iter()
+            .filter(|sid| !acked.contains(sid))
+            .cloned()
+            .collect();
+
+        // 指数退避重试失败的参与者(仅 NetworkError)
+        for sid in failed_sids {
+            let mut last_err = failed_participants
+                .iter()
+                .find(|(_, _)| true)
+                .map(|(_, e)| e.clone())
+                .unwrap_or_else(|| McpError::NetworkError {
+                    server_id: sid.clone(),
+                    endpoint: String::new(),
+                    reason: "unknown".into(),
+                });
+
+            for attempt in 0..max_retries {
+                // 指数退避:200ms * 2^attempt(200ms / 400ms / 800ms...)
+                let backoff_ms = 200u64 * (1 << attempt);
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+
+                let server = self
+                    .registry
+                    .get(&sid)
+                    .ok_or_else(|| McpError::ServerNotFound {
+                        server_id: sid.clone(),
+                    })?;
+
+                match self
+                    .participant_client
+                    .prepare(&server, &tx.transaction_id, op)
+                    .await
+                {
+                    Ok(()) => {
+                        acked.push(sid.clone());
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            transaction_id = %tx.transaction_id,
+                            server_id = %sid,
+                            attempt = attempt + 1,
+                            max_retries,
+                            error = %e,
+                            "Prepare 重试失败"
+                        );
+                        // ProtocolError 不再重试
+                        if matches!(e, McpError::ProtocolError { .. }) {
+                            return Err(e);
+                        }
+                        last_err = e;
+                    }
+                }
+            }
+
+            // 检查最终是否成功(若 acked 中已包含 sid,说明重试成功)
+            if !acked.contains(&sid) {
+                return Err(last_err);
+            }
+        }
+
+        // Task 0.7 SubTask 0.7.3: Prepare 成功后写 WAL Prepare entry
+        // WHY best-effort:WAL 失败不阻塞主流程,仅告警(数据可能未持久化,崩溃后无法恢复)
+        if let Some(wal) = &self.wal_store {
+            let entry = WalEntry::new(&tx.transaction_id, TransactionState::Prepare, acked.clone());
+            if let Err(e) = wal.append(&entry).await {
+                warn!(
+                    transaction_id = %tx.transaction_id,
+                    error = %e,
+                    "WAL Prepare entry 写入失败(继续,崩溃后可能无法恢复)"
+                );
+            }
+        }
+
         Ok(())
     }
 
-    /// Commit 阶段 — 并发向所有参与者发送 commit 请求
+    /// Commit 阶段 — 并发向所有参与者发送 commit 请求(带 max_retries 重试)
     ///
     /// 通过 `ParticipantClient::commit` 发送请求,用 `FuturesUnordered` 并发 fanout。
-    /// 任一参与者失败则返回错误(但事务已在 Prepare 阶段达成一致,此处失败需人工补偿)。
+    /// 任一参与者失败按指数退避重试;达 `max_retries` 仍失败则记录到待补偿队列
+    /// (`pending_compensations`),由 `reconcile_pending_transactions()` 后续处理。
+    ///
+    /// Task 0.7 v2.9.0-omega 新增:
+    /// - 指数退避重试
+    /// - 失败参与者入待补偿队列(2PC 经典问题:Commit 阶段失败需人工介入)
+    /// - Commit 成功后写 WAL `Commit` entry
     async fn commit_phase(&self, tx: &QuantumTransaction) -> Result<(), McpError> {
-        let mut futures: FuturesUnordered<_> = tx
-            .participant_servers
-            .iter()
-            .map(|sid| {
-                let sid = sid.clone();
-                async move {
-                    let server =
-                        self.registry
-                            .get(&sid)
-                            .ok_or_else(|| McpError::ServerNotFound {
-                                server_id: sid.clone(),
-                            })?;
-                    self.participant_client
-                        .commit(&server, &tx.transaction_id)
-                        .await
-                }
-            })
-            .collect();
+        let max_retries = self.config.max_retries;
+        let mut committed: Vec<String> = Vec::with_capacity(tx.participant_servers.len());
+        let mut failed_participants: Vec<String> = Vec::new();
 
-        while let Some(result) = futures.next().await {
-            result?;
+        for sid in &tx.participant_servers {
+            let server = self
+                .registry
+                .get(sid)
+                .ok_or_else(|| McpError::ServerNotFound {
+                    server_id: sid.clone(),
+                })?;
+
+            let mut last_err: Option<McpError> = None;
+            for attempt in 0..=max_retries {
+                if attempt > 0 {
+                    // 指数退避:200ms * 2^(attempt-1)
+                    let backoff_ms = 200u64 * (1 << (attempt - 1));
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                }
+                match self
+                    .participant_client
+                    .commit(&server, &tx.transaction_id)
+                    .await
+                {
+                    Ok(()) => {
+                        committed.push(sid.clone());
+                        last_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            transaction_id = %tx.transaction_id,
+                            server_id = %sid,
+                            attempt,
+                            max_retries,
+                            error = %e,
+                            "Commit 重试失败"
+                        );
+                        last_err = Some(e);
+                    }
+                }
+            }
+
+            if let Some(err) = last_err {
+                failed_participants.push(sid.clone());
+                // 入待补偿队列:Commit 阶段失败需人工介入或后续 reconcile
+                self.pending_compensations
+                    .entry(tx.transaction_id.clone())
+                    .or_insert_with(|| PendingCompensation {
+                        transaction_id: tx.transaction_id.clone(),
+                        failed_participants: Vec::new(),
+                        retries: 0,
+                        created_at: chrono::Utc::now(),
+                    })
+                    .failed_participants
+                    .push(sid.clone());
+                // 不立即返回 Err — 继续尝试其他参与者,让失败范围最小化
+                let _ = err;
+            }
         }
+
+        if !failed_participants.is_empty() {
+            // 部分参与者 Commit 失败:返回错误但已写入待补偿队列
+            return Err(McpError::CompensationFailed {
+                transaction_id: tx.transaction_id.clone(),
+                retries: 0,
+                failed_participants,
+            });
+        }
+
+        // Task 0.7 SubTask 0.7.4: Commit 全部成功后写 WAL Commit entry
+        if let Some(wal) = &self.wal_store {
+            let entry = WalEntry::new(
+                &tx.transaction_id,
+                TransactionState::Commit,
+                committed.clone(),
+            );
+            if let Err(e) = wal.append(&entry).await {
+                warn!(
+                    transaction_id = %tx.transaction_id,
+                    error = %e,
+                    "WAL Commit entry 写入失败(事务已成功,但崩溃后可能重复恢复)"
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -405,6 +634,8 @@ impl McpMesh {
                 },
                 latency_ms: result.latency_ms,
                 success: result.success,
+                // Task 0.7 v2.9.0-omega: 默认 None,Task 0.5 csn-substitutor 重设计后填充
+                capability_id: None,
             };
             if let Err(e) = bus.publish(event).await {
                 warn!(error = %e, "McpMeshTransactionCompleted 事件发布失败");
@@ -452,6 +683,289 @@ impl McpMesh {
                 }
             }
             info!("McpMesh 后台订阅任务退出");
+        }))
+    }
+
+    /// 从 WAL 恢复未完成事务(Task 0.7 v2.9.0-omega SubTask 0.7.5)
+    ///
+    /// 协调者重启后调用,扫描 WAL 重建未完成事务状态:
+    /// - 仅有 Prepare entry 的事务(无 Commit/Rollback):参与者已 ACK,必须重新
+    ///   发起 Commit(2PC 协议要求:Prepare ACK 后参与者锁定了资源,协调者必须 Commit)
+    /// - 有 Commit 或 Rollback entry 的事务:已完成,跳过
+    ///
+    /// # 流程
+    /// 1. `WalStore::read_all()` 读取所有 entry
+    /// 2. 按 transaction_id 分组,记录每个事务的最后状态(按 timestamp 取最新)
+    /// 3. 对最后状态为 Prepare 的事务:重建 QuantumTransaction 并调用 `commit_phase`
+    /// 4. Commit 失败的事务入 `pending_compensations` 队列等待后续 reconcile
+    /// 5. 恢复完成后调用 `WalStore::truncate()` 清空 WAL(避免无限增长)
+    ///
+    /// # 错误处理
+    /// - WAL 未启用(`durable = false`):返回 `WalIoError`(调用方应决定是否继续)
+    /// - WAL 读取失败:返回 `WalIoError`(启动失败)
+    /// - 单个事务 Commit 失败:入待补偿队列,继续处理下一个事务(不阻塞恢复)
+    ///
+    /// # 返回
+    /// 需要重新 Commit 的事务 ID 列表(用于日志与监控)
+    pub async fn recover_from_wal(&self) -> Result<Vec<String>, McpError> {
+        let wal_store = self
+            .wal_store
+            .as_ref()
+            .ok_or_else(|| McpError::WalIoError {
+                reason: "WAL 未启用(config.durable = false),无法恢复".into(),
+            })?;
+
+        // 1. 读取所有 WAL entry
+        let entries = wal_store.read_all().await?;
+        if entries.is_empty() {
+            debug!("WAL 为空,无需恢复");
+            return Ok(Vec::new());
+        }
+
+        // 2. 按 transaction_id 分组,记录每个事务的最终状态(取 timestamp 最大的 entry)
+        // WHY 取最新:同一事务可能有多条 entry(Prepare → Commit),只关心最后状态
+        let mut tx_final_state: HashMap<String, &WalEntry> = HashMap::new();
+        for entry in &entries {
+            let should_update = match tx_final_state.get(&entry.transaction_id) {
+                None => true,
+                Some(existing) => existing.timestamp < entry.timestamp,
+            };
+            if should_update {
+                tx_final_state.insert(entry.transaction_id.clone(), entry);
+            }
+        }
+
+        // 3. 筛选需要恢复的事务(最终状态为 Prepare)
+        let needs_commit: Vec<(&String, &&WalEntry)> = tx_final_state
+            .iter()
+            .filter(|(_, e)| e.state == TransactionState::Prepare)
+            .collect();
+
+        info!(
+            total_entries = entries.len(),
+            total_transactions = tx_final_state.len(),
+            needs_recovery = needs_commit.len(),
+            "WAL 恢复扫描完成"
+        );
+
+        let mut recovered_tx_ids = Vec::with_capacity(needs_commit.len());
+
+        // 4. 对每个需要恢复的事务重新发起 Commit
+        for (tx_id, entry) in needs_commit {
+            // WHY 用 participants_ack 而非 participant_servers:WAL Prepare entry 记录
+            // 的是已 ACK 的参与者(未 ACK 的不应 Commit),确保只对已锁定资源的参与者提交
+            let mut tx = QuantumTransaction::with_id(tx_id.clone(), entry.participants_ack.clone());
+            // 已在 Prepare 状态,直接转换到 Commit(跳过 Init→Prepare,因 WAL 已记录 Prepare)
+            tx.state = TransactionState::Prepare;
+            if let Err(e) = tx.transition(TransactionState::Commit) {
+                warn!(
+                    transaction_id = %tx_id,
+                    error = %e,
+                    "WAL 恢复:状态转换 Prepare→Commit 失败,跳过"
+                );
+                continue;
+            }
+
+            match self.commit_phase(&tx).await {
+                Ok(()) => {
+                    info!(transaction_id = %tx_id, "WAL 恢复:Commit 成功");
+                    recovered_tx_ids.push(tx_id.clone());
+                }
+                Err(e) => {
+                    // commit_phase 内部已将失败参与者入 pending_compensations
+                    warn!(
+                        transaction_id = %tx_id,
+                        error = %e,
+                        "WAL 恢复:Commit 失败,已入待补偿队列等待 reconcile"
+                    );
+                    recovered_tx_ids.push(tx_id.clone());
+                }
+            }
+        }
+
+        // 5. 恢复完成后 truncate WAL(避免无限增长)
+        // WHY truncate:已恢复的事务不再需要 WAL entry;未恢复的已在 pending_compensations,
+        // 由 reconcile_pending_transactions 后续处理,不依赖 WAL
+        if let Err(e) = wal_store.truncate().await {
+            warn!(error = %e, "WAL 恢复后 truncate 失败(下次启动会重复恢复)");
+        }
+
+        Ok(recovered_tx_ids)
+    }
+
+    /// 重试待补偿事务(Task 0.7 v2.9.0-omega SubTask 0.7.8)
+    ///
+    /// 周期性调用(如每 30s),从 `pending_compensations` 队列取出 Commit 阶段
+    /// 失败的事务,对失败参与者重试 Commit。
+    ///
+    /// # 流程
+    /// 1. 遍历 `pending_compensations` 中的每条记录
+    /// 2. 对每条记录的 `failed_participants` 重新发送 commit 请求
+    /// 3. 成功的参与者从 failed 列表移除
+    /// 4. 仍失败的参与者:递增 `retries`,若达 `max_retries` 则放弃并返回
+    /// 5. 全部成功的记录从队列移除
+    ///
+    /// # 错误处理
+    /// - 单条事务重试失败:不阻塞其他事务,继续处理下一条
+    /// - 达 `max_retries` 仍失败:加入返回列表(调用方人工介入或告警)
+    ///
+    /// # 返回
+    /// 已达 `max_retries` 仍失败的事务列表(需人工介入)。空 Vec 表示全部重试成功或无待补偿事务。
+    pub async fn reconcile_pending_transactions(&self) -> Vec<PendingCompensation> {
+        let max_retries = self.config.max_retries;
+        let mut still_failing = Vec::new();
+
+        // 收集需要处理的 transaction_id(避免持锁跨 await,§4.4 反模式 #1)
+        let tx_ids: Vec<String> = self
+            .pending_compensations
+            .iter()
+            .map(|r| r.key().clone())
+            .collect();
+
+        for tx_id in tx_ids {
+            // 取出条目快照(避免持锁跨 await,§4.4 反模式 #1)
+            // WHY 用 block scope:DashMap 读锁(get 返回的 Ref)必须在 await 前 drop,
+            // 否则持锁跨 await 会阻塞其他写操作(如同 endpoint 的连接池操作)
+            let (failed_participants, retries) = {
+                let e = match self.pending_compensations.get(&tx_id) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                (e.failed_participants.clone(), e.retries)
+                // e(DashMap Ref guard)在 block 结束时自动 drop
+            };
+
+            // 对每个失败参与者重试 commit
+            let mut still_failed: Vec<String> = Vec::new();
+            for sid in &failed_participants {
+                let server = match self.registry.get(sid) {
+                    Some(s) => s,
+                    None => {
+                        warn!(
+                            transaction_id = %tx_id,
+                            server_id = %sid,
+                            "Reconcile:服务器已注销,从失败列表移除"
+                        );
+                        continue;
+                    }
+                };
+
+                match self.participant_client.commit(&server, &tx_id).await {
+                    Ok(()) => {
+                        info!(
+                            transaction_id = %tx_id,
+                            server_id = %sid,
+                            "Reconcile:Commit 重试成功"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            transaction_id = %tx_id,
+                            server_id = %sid,
+                            error = %e,
+                            "Reconcile:Commit 重试失败"
+                        );
+                        still_failed.push(sid.clone());
+                    }
+                }
+            }
+
+            // 更新或移除待补偿记录
+            if still_failed.is_empty() {
+                // 全部成功:移除记录
+                self.pending_compensations.remove(&tx_id);
+                info!(transaction_id = %tx_id, "Reconcile:全部参与者 Commit 成功,移除待补偿记录");
+            } else {
+                // 仍有失败:更新记录
+                let new_retries = retries + 1;
+                if new_retries >= max_retries {
+                    // 达 max_retries:移除并加入 still_failing 列表
+                    if let Some((_, mut pc)) = self.pending_compensations.remove(&tx_id) {
+                        pc.retries = new_retries;
+                        pc.failed_participants = still_failed.clone();
+                        warn!(
+                            transaction_id = %tx_id,
+                            retries = new_retries,
+                            failed = ?still_failed,
+                            "Reconcile:达 max_retries,放弃重试(需人工介入)"
+                        );
+                        still_failing.push(pc);
+                    }
+                } else if let Some(mut entry) = self.pending_compensations.get_mut(&tx_id) {
+                    entry.retries = new_retries;
+                    entry.failed_participants = still_failed;
+                }
+            }
+        }
+
+        still_failing
+    }
+
+    /// 待补偿事务数量(用于测试与监控)
+    pub fn pending_compensation_count(&self) -> usize {
+        self.pending_compensations.len()
+    }
+
+    /// 启动后台探活任务(Task 0.7 v2.9.0-omega SubTask 0.7.13)
+    ///
+    /// `tokio::spawn` 一个周期任务,每隔 `config.background_probe_interval_ms`
+    /// 遍历注册表,注销超过 `heartbeat_timeout_ms` 未心跳的僵尸服务器。
+    ///
+    /// # fire-and-forget 评估(§4.4 反模式 #7)
+    ///
+    /// 此任务符合 fire-and-forget 适用条件:
+    /// - **幂等**:注销僵尸服务器是幂等操作(已注销的再次注销无副作用)
+    /// - **非关键路径**:不参与 2PC 事务流程,失败仅导致僵尸服务器占用注册表
+    ///   更长时间(下次探活仍会清理)
+    /// - **不影响数据一致性**:注册表状态可由心跳重建(服务器重新注册即可)
+    ///
+    /// 因此 fire-and-forget 模式可接受,失败仅记日志。`JoinHandle` 返回给调用方
+    /// 以便测试时主动 abort(避免泄漏)。
+    ///
+    /// # 返回
+    /// `Some(JoinHandle)` 表示后台任务已启动;`None` 表示 `background_probe_interval_ms = 0`(禁用)。
+    pub fn start_background_probe(&self) -> Option<JoinHandle<()>> {
+        let interval_ms = self.config.background_probe_interval_ms;
+        if interval_ms == 0 {
+            debug!("background_probe_interval_ms = 0,后台探活禁用");
+            return None;
+        }
+
+        let registry = Arc::clone(&self.registry);
+        let heartbeat_timeout_ms = self.config.heartbeat_timeout_ms;
+
+        Some(tokio::spawn(async move {
+            let interval = Duration::from_millis(interval_ms);
+            info!(
+                interval_ms,
+                heartbeat_timeout_ms, "McpMesh 后台探活任务启动"
+            );
+
+            loop {
+                tokio::time::sleep(interval).await;
+
+                // 遍历所有已注册服务器,注销僵尸
+                let all_ids = registry.list_all();
+                let mut dead_count = 0;
+                for sid in &all_ids {
+                    if let Some(server) = registry.get(sid) {
+                        if !server.is_alive(heartbeat_timeout_ms) {
+                            let _ = registry.unregister(sid);
+                            dead_count += 1;
+                        }
+                    }
+                }
+
+                if dead_count > 0 {
+                    warn!(
+                        cleaned = dead_count,
+                        remaining = registry.len(),
+                        "后台探活清理僵尸服务器"
+                    );
+                } else {
+                    debug!(alive = registry.len(), "后台探活:所有服务器心跳正常");
+                }
+            }
         }))
     }
 }

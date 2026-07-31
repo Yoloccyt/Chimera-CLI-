@@ -1,6 +1,8 @@
 //! 门控专家激活 — 基于门控机制的专家网络激活调度
 //!
-//! 对应架构层:L6 Router
+//! 对应架构层:L9 Quest(与 quest-engine / efficiency-monitor / chimera-mas 同层)
+//!   — 权威源规则 §2.1 / CODE_WIKI §2.1 将 gea-activator 归 L9;旧注释误标 L6 Router
+//!     与 chimera-mas lib.rs L3 “gea-activator 同层”声明矛盾,2026-07-31 订正。
 //! 对应创新点:GEA(Gated Expert Activation)
 //!
 //! # 核心职责

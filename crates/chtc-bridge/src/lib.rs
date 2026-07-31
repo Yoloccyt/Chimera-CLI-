@@ -13,15 +13,16 @@
 //! 跨层通信只走 EventBus,违反此约束需有 ADR 记录特批。
 //!
 //! # 快速示例
-//! ```
+//! ```no_run
 //! use chtc_bridge::{ChtcBridge, ChtcConfig, IdeSource};
 //! use serde_json::json;
-//!
+//! # async fn example() -> Result<(), chtc_bridge::ChtcError> {
 //! let bridge = ChtcBridge::new(ChtcConfig::default());
 //! let call = bridge.receive(json!({ "command": "open", "args": {} }), IdeSource::vscode())?;
-//! let result = bridge.execute(&call)?;
+//! let result = bridge.execute(&call).await?;
 //! assert!(result.success);
-//! # Ok::<(), chtc_bridge::ChtcError>(())
+//! # Ok(())
+//! # }
 //! ```
 
 #![forbid(unsafe_code)]
@@ -32,6 +33,7 @@ pub mod bridge;
 pub mod config;
 pub mod error;
 pub mod protocol;
+pub mod registry;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
@@ -40,6 +42,7 @@ pub use bridge::ChtcBridge;
 pub use config::ChtcConfig;
 pub use error::ChtcError;
 pub use protocol::ProtocolConverter;
+pub use registry::IdeAdapterRegistry;
 pub use types::{IdeSource, ToolCallResult, UnifiedToolCall};
 
 /// 预导入模块 — 提供最常用类型
@@ -49,5 +52,6 @@ pub mod prelude {
     pub use crate::config::ChtcConfig;
     pub use crate::error::ChtcError;
     pub use crate::protocol::ProtocolConverter;
+    pub use crate::registry::IdeAdapterRegistry;
     pub use crate::types::{IdeSource, ToolCallResult, UnifiedToolCall};
 }

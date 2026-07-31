@@ -206,7 +206,10 @@ pub(crate) fn validate_endpoint(endpoint: &str) -> Result<(), McpError> {
 /// - `host:port` → `host`
 /// - `scheme://host:port/path` → `host`
 /// - `scheme://[ipv6]:port/path` → `ipv6`(不含方括号)
-fn extract_host(endpoint: &str) -> Result<String, McpError> {
+///
+/// WHY `pub(crate)`:Task 0.7 v2.9.0-omega SubTask 0.7.12 需在 `participant_client`
+/// 中复用此函数做 DNS rebinding 防御(connect 前对域名解析结果二次校验)。
+pub(crate) fn extract_host(endpoint: &str) -> Result<String, McpError> {
     // 剥离 scheme:取 `://` 之后的部分;若无 scheme,原样使用
     let after_scheme = endpoint.split("://").nth(1).unwrap_or(endpoint);
     // 取 authority 段(第一个 `/` 之前)
@@ -262,7 +265,10 @@ fn is_reserved_domain(domain: &str) -> bool {
 ///   172.16.0.0/12(私有)、192.168.0.0/16(私有)、224.0.0.0/4(组播)、
 ///   255.255.255.255(广播)
 /// - IPv6: ::1(回环)、::(未指定)、fc00::/7(唯一本地)、fe80::/10(链路本地)
-fn is_reserved_ip(ip: IpAddr) -> bool {
+///
+/// WHY `pub(crate)`:Task 0.7 v2.9.0-omega SubTask 0.7.12 需在 `participant_client`
+/// 的 DNS rebinding 防御中复用此函数,对 DNS 解析后的 IP 做保留地址二次校验。
+pub(crate) fn is_reserved_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_reserved_ipv4(v4),
         IpAddr::V6(v6) => is_reserved_ipv6(v6),

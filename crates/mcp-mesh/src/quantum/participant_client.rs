@@ -42,6 +42,7 @@
 //! 两者层次不同:单阶段超时让快速失败(单个参与者无响应)触发 Abort,
 //! 避免等待事务总超时才回滚。
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -55,7 +56,7 @@ use tokio::time::timeout;
 use tracing::{debug, warn};
 
 use crate::error::McpError;
-use crate::server_registry::MeshServer;
+use crate::server_registry::{extract_host, is_reserved_ip, MeshServer};
 
 // ============================================================
 // 2PC 协议消息类型
@@ -96,6 +97,25 @@ pub enum TwoPcResponse {
         /// 拒绝原因(如 "资源锁定失败" / "约束冲突")
         reason: String,
     },
+}
+
+/// 查询请求 — 非事务只读操作(Task 0.7 v2.9.0-omega SubTask 0.7.10)
+///
+/// 与 `TwoPcRequest` 分离,因查询不参与 2PC 状态机,无需 prepare/commit。
+/// 用于超位置查询(superposition)的 fanout,复用 TCP 连接池。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QueryRequest {
+    /// 查询 ID(与 SuperpositionQuery.query_id 对应)
+    pub query_id: String,
+    /// 查询语句(语义由具体 MCP 服务器解释)
+    pub query: String,
+}
+
+/// 查询响应 — 参与者返回查询结果
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QueryResponse {
+    /// 响应负载(成功时为查询产出,失败时由 McpError 传递错误)
+    pub payload: String,
 }
 
 // ============================================================
@@ -166,6 +186,27 @@ pub trait ParticipantClient: Send + Sync {
         server: &'a MeshServer,
         transaction_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>>;
+
+    /// 向指定参与者发送查询请求(非事务只读操作)
+    ///
+    /// WHY Task 0.7 v2.9.0-omega SubTask 0.7.10:
+    /// 超位置查询(superposition)需通过统一抽象访问参与者,而非直接 in-process 模拟。
+    /// 此方法不参与 2PC 状态机,仅做只读查询,可复用 TCP 连接池(SubTask 0.7.11)。
+    ///
+    /// # 参数
+    /// - `server`:目标参与者
+    /// - `query_id`:查询 ID(用于关联 SuperpositionQuery)
+    /// - `query`:查询语句
+    ///
+    /// # 返回
+    /// - `Ok(payload)`:查询成功,payload 为响应数据
+    /// - `Err`:网络/协议错误
+    fn query<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        query_id: &'a str,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>>;
 }
 
 // ============================================================
@@ -245,6 +286,20 @@ impl ParticipantClient for InProcessClient {
             Ok(())
         })
     }
+
+    fn query<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        query_id: &'a str,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        let delay_ms = Self::simulated_delay_ms(&server.server_id);
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            // 模拟查询响应(与 superposition.rs 原 in-process mock 一致的格式)
+            Ok(format!("result@{query}@{query_id}@{}", server.server_id))
+        })
+    }
 }
 
 // ============================================================
@@ -285,16 +340,34 @@ const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 /// |---------|---------|-----------|
 /// | `NetworkError` | 连接拒绝 / 读写超时 / RST | Prepare→Abort;Commit→告警 |
 /// | `ProtocolError` | JSON 解析失败 / Nack / 超长帧 | Prepare→Abort;Commit→告警 |
+/// | `DnsRebindingBlocked` | DNS 解析后 IP 为保留地址 | Prepare→Abort;Commit→告警 |
 ///
-/// # SSRF 安全
+/// # SSRF 安全 + DNS rebinding 防御(Task 0.7 v2.9.0-omega SubTask 0.7.12)
 ///
 /// `MeshServer::endpoint` 在 `register` 阶段已通过 SSRF 校验(拒绝内网/保留地址)。
-/// `TcpParticipantClient` 不做二次校验,信任注册表已过滤。
-/// 若未来支持 DNS 域名 endpoint,需在 `connect` 前对解析后的 IP 做二次校验
-/// (防 DNS rebinding)。
+/// Task 0.7 引入 DNS rebinding 二次校验:若 endpoint 含域名(非 IP 字面量),
+/// `send_request_inner` 在 `connect` 前会通过 `tokio::net::lookup_host` 解析域名,
+/// 对解析出的每个 IP 调用 `is_reserved_ip` 校验。任一 IP 为保留地址则拒绝连接,
+/// 返回 `McpError::DnsRebindingBlocked`。
+///
+/// WHY 二次校验:`register` 阶段只校验字面量 IP/已知内网域名,实际 connect 时
+/// DNS 可能返回不同的 IP(DNS rebinding 攻击)。二次校验在 connect 前拦截,
+/// 彻底切断 DNS rebinding 路径。
 pub struct TcpParticipantClient {
     /// 单阶段单服务器超时(毫秒),默认 50ms
     phase_timeout_ms: u64,
+    /// TCP 连接池 — 复用已建立的连接,降低 TCP 握手开销
+    ///
+    /// WHY Task 0.7 v2.9.0-omega SubTask 0.7.11:
+    /// 2PC 多阶段(prepare/commit/rollback)对同一参与者连续请求,每次新建 TCP
+    /// 连接会引入额外 RTT(握手 ~1ms LAN / ~30ms WAN)。连接池按 endpoint 缓存
+    /// TcpStream,后续请求直接复用。
+    ///
+    /// WHY `Arc<Mutex<HashMap>>`:`TcpStream` 非 `Clone`,且 `tokio::net::TcpStream`
+    /// 的并发读写需互斥(同一 stream 不能同时 write_all 和 read_exact)。
+    /// `Mutex` 保证同一 endpoint 的 stream 串行使用,避免数据混乱。
+    /// 替代方案 `deadpool-tokio` 引入额外依赖,自维护 HashMap 足够轻量。
+    connection_pool: Arc<std::sync::Mutex<HashMap<String, TcpStream>>>,
 }
 
 impl TcpParticipantClient {
@@ -305,6 +378,7 @@ impl TcpParticipantClient {
     pub fn new() -> Self {
         Self {
             phase_timeout_ms: 50,
+            connection_pool: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -313,7 +387,10 @@ impl TcpParticipantClient {
     /// # 参数
     /// - `phase_timeout_ms`:单次 TCP 往返超时(毫秒),建议 20-500ms
     pub fn with_phase_timeout(phase_timeout_ms: u64) -> Self {
-        Self { phase_timeout_ms }
+        Self {
+            phase_timeout_ms,
+            connection_pool: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
     }
 
     /// 发送 2PC 请求并等待响应(核心网络通信方法)
@@ -347,22 +424,44 @@ impl TcpParticipantClient {
         }
     }
 
+    /// 发送查询请求并等待响应(带超时包装)
+    ///
+    /// Task 0.7 v2.9.0-omega SubTask 0.7.10
+    ///
+    /// 与 `send_request` 对称,但使用 `QueryRequest`/`QueryResponse` 协议消息,
+    /// 返回查询负载字符串。超时语义与 `send_request` 一致(单阶段超时)。
+    async fn send_query(
+        &self,
+        server: &MeshServer,
+        query_request: QueryRequest,
+    ) -> Result<String, McpError> {
+        let deadline = Duration::from_millis(self.phase_timeout_ms);
+        let result = timeout(deadline, self.send_query_inner(server, &query_request)).await;
+
+        match result {
+            Ok(inner) => inner,
+            Err(_) => Err(McpError::NetworkError {
+                server_id: server.server_id.clone(),
+                endpoint: server.endpoint.clone(),
+                reason: format!("查询单阶段超时({}ms,参与者无响应)", self.phase_timeout_ms),
+            }),
+        }
+    }
+
     /// `send_request` 的内部实现(无超时包装,由 `send_request` 统一包装)
+    ///
+    /// Task 0.7 v2.9.0-omega 新增:
+    /// - DNS rebinding 防御(SubTask 0.7.12):connect 前对域名解析结果做 is_reserved_ip 校验
+    /// - TCP 连接池(SubTask 0.7.11):优先复用缓存的 TcpStream,失败时新建
     async fn send_request_inner(
         &self,
         server: &MeshServer,
         request: TwoPcRequest,
     ) -> Result<(), McpError> {
-        // 1. 建立 TCP 连接
-        let mut stream = TcpStream::connect(&server.endpoint)
-            .await
-            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
-
-        debug!(
-            server_id = %server.server_id,
-            endpoint = %server.endpoint,
-            "TCP 连接建立成功"
-        );
+        // 1. DNS rebinding 防御:若 endpoint 含域名,解析后校验 IP
+        // WHY: register 阶段只校验字面量 IP,connect 时 DNS 可能返回内网 IP
+        self.validate_endpoint_dns(&server.server_id, &server.endpoint)
+            .await?;
 
         // 2. 序列化请求为 JSON
         let payload = serde_json::to_vec(&request).map_err(|e| McpError::ProtocolError {
@@ -370,50 +469,17 @@ impl TcpParticipantClient {
             reason: format!("请求序列化失败: {e}"),
         })?;
 
-        // 3. 发送长度前缀帧(4 字节大端长度 + JSON 载荷)
-        let frame_len = payload.len() as u32;
-        stream
-            .write_all(&frame_len.to_be_bytes())
-            .await
-            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
-        stream
-            .write_all(&payload)
-            .await
-            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
+        // 3. 发送请求并接收响应(复用连接池)
+        let resp_data = self.send_frame_and_recv(server, &payload).await?;
 
-        // 4. 接收响应长度前缀(4 字节大端)
-        let mut resp_len_buf = [0u8; 4];
-        stream
-            .read_exact(&mut resp_len_buf)
-            .await
-            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
-        let resp_len = u32::from_be_bytes(resp_len_buf) as usize;
-
-        // 5. 防御:超长帧拦截(防止恶意参与者谎报超大长度导致 OOM)
-        if resp_len > MAX_FRAME_SIZE {
-            return Err(McpError::ProtocolError {
-                server_id: server.server_id.clone(),
-                reason: format!(
-                    "响应帧超长: {resp_len} bytes > MAX_FRAME_SIZE({MAX_FRAME_SIZE} bytes)"
-                ),
-            });
-        }
-
-        // 6. 接收响应 JSON 载荷
-        let mut resp_data = vec![0u8; resp_len];
-        stream
-            .read_exact(&mut resp_data)
-            .await
-            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
-
-        // 7. 反序列化响应
+        // 4. 反序列化响应
         let response: TwoPcResponse =
             serde_json::from_slice(&resp_data).map_err(|e| McpError::ProtocolError {
                 server_id: server.server_id.clone(),
                 reason: format!("响应反序列化失败: {e}"),
             })?;
 
-        // 8. 根据响应类型返回
+        // 5. 根据响应类型返回
         match response {
             TwoPcResponse::Ack => {
                 debug!(
@@ -434,6 +500,207 @@ impl TcpParticipantClient {
                 })
             }
         }
+    }
+
+    /// 发送查询请求并等待响应
+    ///
+    /// 与 `send_request_inner` 类似,但使用 `QueryRequest`/`QueryResponse` 协议消息,
+    /// 返回查询负载字符串。
+    async fn send_query_inner(
+        &self,
+        server: &MeshServer,
+        query_request: &QueryRequest,
+    ) -> Result<String, McpError> {
+        // 1. DNS rebinding 防御
+        self.validate_endpoint_dns(&server.server_id, &server.endpoint)
+            .await?;
+
+        // 2. 序列化查询请求
+        let payload = serde_json::to_vec(query_request).map_err(|e| McpError::ProtocolError {
+            server_id: server.server_id.clone(),
+            reason: format!("查询请求序列化失败: {e}"),
+        })?;
+
+        // 3. 发送请求并接收响应
+        let resp_data = self.send_frame_and_recv(server, &payload).await?;
+
+        // 4. 反序列化查询响应
+        let response: QueryResponse =
+            serde_json::from_slice(&resp_data).map_err(|e| McpError::ProtocolError {
+                server_id: server.server_id.clone(),
+                reason: format!("查询响应反序列化失败: {e}"),
+            })?;
+
+        Ok(response.payload)
+    }
+
+    /// 发送帧并接收响应(复用连接池)
+    ///
+    /// Task 0.7 SubTask 0.7.11: 优先从连接池取已建立的 TcpStream,
+    /// 若无或复用失败则新建连接。请求完成后将 stream 归还连接池。
+    ///
+    /// WHY 短锁策略:锁内仅做 HashMap get/remove(微秒级),不持锁跨 await。
+    /// 这遵循 §4.4 反模式 #1(禁止持锁跨 .await)。
+    ///
+    /// WHY 连接池失败回退:对端可能在上次请求后关闭连接(如 HTTP/1.1 keep-alive
+    /// 超时),复用的 stream 首次 write/read 会失败。此时丢弃旧 stream,
+    /// 用新连接重试一次,避免因连接池缓存过期连接而误报网络错误。
+    async fn send_frame_and_recv(
+        &self,
+        server: &MeshServer,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, McpError> {
+        // 尝试从连接池取已建立的 stream
+        let pooled = self
+            .connection_pool
+            .lock()
+            .ok()
+            .and_then(|mut pool| pool.remove(&server.endpoint).map(Some).unwrap_or(None));
+
+        // 1. 若有 pooled stream,先尝试复用
+        if let Some(stream) = pooled {
+            debug!(
+                server_id = %server.server_id,
+                endpoint = %server.endpoint,
+                "复用连接池中的 TCP 连接"
+            );
+            match self.try_send_on_stream(server, stream, payload).await {
+                Ok((resp_data, stream)) => {
+                    // 成功:将 stream 归还连接池
+                    if let Ok(mut pool) = self.connection_pool.lock() {
+                        pool.insert(server.endpoint.clone(), stream);
+                    }
+                    return Ok(resp_data);
+                }
+                Err(e) => {
+                    // 复用失败:丢弃旧 stream,回退到新建连接
+                    debug!(
+                        server_id = %server.server_id,
+                        endpoint = %server.endpoint,
+                        error = %e,
+                        "连接池复用失败,回退到新连接"
+                    );
+                }
+            }
+        }
+
+        // 2. 新建 TCP 连接(无 pooled 或 pooled 失败后)
+        let stream = TcpStream::connect(&server.endpoint)
+            .await
+            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
+        debug!(
+            server_id = %server.server_id,
+            endpoint = %server.endpoint,
+            "TCP 连接建立成功(新连接)"
+        );
+
+        // 3. 在新连接上发送/接收(失败直接返回,不再重试)
+        let (resp_data, stream) = self.try_send_on_stream(server, stream, payload).await?;
+
+        // 4. 成功:将 stream 归还连接池
+        if let Ok(mut pool) = self.connection_pool.lock() {
+            pool.insert(server.endpoint.clone(), stream);
+        }
+
+        Ok(resp_data)
+    }
+
+    /// 在给定 stream 上发送帧并接收响应
+    ///
+    /// 返回 `(响应数据, stream)` — 成功时 stream 可归还连接池;
+    /// 失败时 stream 已损坏,调用方应丢弃。
+    async fn try_send_on_stream(
+        &self,
+        server: &MeshServer,
+        mut stream: TcpStream,
+        payload: &[u8],
+    ) -> Result<(Vec<u8>, TcpStream), McpError> {
+        // 发送长度前缀帧
+        let frame_len = payload.len() as u32;
+        stream
+            .write_all(&frame_len.to_be_bytes())
+            .await
+            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
+        stream
+            .write_all(payload)
+            .await
+            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
+
+        // 接收响应长度前缀(4 字节大端)
+        let mut resp_len_buf = [0u8; 4];
+        stream
+            .read_exact(&mut resp_len_buf)
+            .await
+            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
+        let resp_len = u32::from_be_bytes(resp_len_buf) as usize;
+
+        // 防御:超长帧拦截
+        if resp_len > MAX_FRAME_SIZE {
+            return Err(McpError::ProtocolError {
+                server_id: server.server_id.clone(),
+                reason: format!(
+                    "响应帧超长: {resp_len} bytes > MAX_FRAME_SIZE({MAX_FRAME_SIZE} bytes)"
+                ),
+            });
+        }
+
+        // 接收响应 JSON 载荷
+        let mut resp_data = vec![0u8; resp_len];
+        stream
+            .read_exact(&mut resp_data)
+            .await
+            .map_err(|e| Self::io_to_network_error(&server.server_id, &server.endpoint, &e))?;
+
+        Ok((resp_data, stream))
+    }
+
+    /// DNS rebinding 防御 — 解析 endpoint 中的域名,校验解析后的 IP
+    ///
+    /// Task 0.7 v2.9.0-omega SubTask 0.7.12
+    ///
+    /// # 流程
+    /// 1. 从 endpoint 提取 host(剥离 scheme/port)
+    /// 2. 若 host 为 IP 字面量,跳过(register 阶段已校验)
+    /// 3. 若 host 为域名,通过 `tokio::net::lookup_host` 解析
+    /// 4. 对每个解析出的 IP 调用 `is_reserved_ip`,任一保留则拒绝
+    ///
+    /// # WHY 同步解析改为异步
+    /// `tokio::net::lookup_host` 是异步 DNS 解析,不阻塞 runtime 工作线程。
+    /// 标准库 `std::net::ToSocketAddrs` 是同步阻塞,会阻塞 async runtime。
+    async fn validate_endpoint_dns(&self, server_id: &str, endpoint: &str) -> Result<(), McpError> {
+        // 提取 host(复用 server_registry 的 extract_host 逻辑)
+        // WHY `?`:`extract_host` 对格式异常的 endpoint 返回 `SsrfBlocked`,
+        // 此处直接传播(格式异常的 endpoint 不应到达 connect 阶段)
+        let host = extract_host(endpoint)?;
+
+        // 若 host 可解析为 IP 字面量,register 阶段已校验,跳过
+        if host.parse::<std::net::IpAddr>().is_ok() {
+            return Ok(());
+        }
+
+        // host 为域名:异步 DNS 解析
+        // WHY lookup_host:tokio 异步 DNS 解析,不阻塞 runtime
+        let target = format!("{}:0", host); // lookup_host 需要 host:port 格式
+        let resolved =
+            tokio::net::lookup_host(&target)
+                .await
+                .map_err(|e| McpError::NetworkError {
+                    server_id: server_id.to_string(),
+                    endpoint: endpoint.to_string(),
+                    reason: format!("DNS 解析失败: {e}"),
+                })?;
+
+        for addr in resolved {
+            let ip = addr.ip();
+            if is_reserved_ip(ip) {
+                return Err(McpError::DnsRebindingBlocked {
+                    hostname: host.clone(),
+                    resolved_ip: ip.to_string(),
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// 将 `io::Error` 转换为 `McpError::NetworkError`
@@ -486,6 +753,21 @@ impl ParticipantClient for TcpParticipantClient {
             transaction_id: transaction_id.to_string(),
         };
         Box::pin(async move { self.send_request(server, request).await })
+    }
+
+    /// Task 0.7 v2.9.0-omega SubTask 0.7.10
+    /// 超位置查询接入 ParticipantClient,复用 TCP 连接池与 DNS rebinding 防御。
+    fn query<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        query_id: &'a str,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        let request = QueryRequest {
+            query_id: query_id.to_string(),
+            query: query.to_string(),
+        };
+        Box::pin(async move { self.send_query(server, request).await })
     }
 }
 
@@ -671,6 +953,23 @@ impl ParticipantClient for MockParticipantClient {
             } else {
                 Ok(())
             }
+        })
+    }
+
+    /// Task 0.7 v2.9.0-omega SubTask 0.7.10
+    /// Mock 查询实现 — 立即返回模拟结果,不注入失败(查询为只读操作,无事务状态)
+    fn query<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        query_id: &'a str,
+        query: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        Box::pin(async move {
+            // 查询不记录到 call_log(非 2PC 阶段),仅返回模拟结果
+            Ok(format!(
+                "mock_result@{query}@{query_id}@{}",
+                server.server_id
+            ))
         })
     }
 }

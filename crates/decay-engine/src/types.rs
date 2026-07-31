@@ -69,6 +69,7 @@ pub struct Capability {
 pub struct DecayConfig {
     /// 时间驱动衰减速率(每秒衰减比例)
     /// 如 0.001 表示每秒减 0.1%,生产环境推荐值
+    /// 仅在 `use_exponential_decay = false`(线性模式)时生效
     pub time_decay_rate: f32,
     /// 违规事件衰减惩罚基数
     /// 实际惩罚 = penalty × severity
@@ -79,6 +80,19 @@ pub struct DecayConfig {
     pub freeze_threshold: f32,
     /// 恢复速率(每秒恢复比例,解冻后逐步恢复权限)
     pub restore_rate: f32,
+    /// P1-4: 启用指数衰减模式(替代线性衰减)
+    ///
+    /// 默认 false(线性衰减,向后兼容)。启用后,`TimeDecay` 事件使用
+    /// `level = level × exp(-Δt / decay_tau_seconds)` 替代
+    /// `level = level - elapsed × time_decay_rate`。
+    /// 指数衰减更符合自然遗忘曲线,与 cmt-tiering(L3)共享同一数学基础。
+    pub use_exponential_decay: bool,
+    /// P1-4: 指数衰减时间常数 τ(秒),默认 86400(24 小时)
+    ///
+    /// 仅在 `use_exponential_decay = true` 时生效。
+    /// τ 越大衰减越慢(适合长期稳定权限),τ 越小衰减越快(适合高风险场景)。
+    /// 与 cmt-tiering 的 `decay_tau_seconds` 语义一致,共享 nexus_core::decay 公式。
+    pub decay_tau_seconds: f32,
 }
 
 impl Default for DecayConfig {
@@ -89,6 +103,8 @@ impl Default for DecayConfig {
             min_level: 0.0,
             freeze_threshold: 0.05,
             restore_rate: 0.01,
+            use_exponential_decay: false,
+            decay_tau_seconds: 86400.0,
         }
     }
 }

@@ -192,10 +192,19 @@ impl PolicyOscillationDetector {
         }
     }
 
-    /// 记录一个事件,如果是 TTG 切换或 GSOE 更新则加入滑动窗口
+    /// 记录一个事件到滑动窗口(仅处理 ThinkingModeSwitched / GsoePolicyUpdated)
     ///
     /// 该方法是同步的,可在 `handle_broadcast_event` 中直接调用。
     /// 遵循 §4.4 反模式 #1:Mutex 写锁在方法返回时自动释放,不跨 `.await`。
+    ///
+    /// # 锁设计(L9 优化 2.6 关门结论,2026-07-31)
+    ///
+    /// 临界区仅一次 `push_back`(O(1) 摊销)。曾评估改无锁环形缓冲降低
+    /// 锁争用,但本方法**仅由 EfficiencyMonitor 的单一后台订阅任务**
+    /// (monitor.rs `start_event_subscriber` 的 select! 循环)调用——单写者场景下
+    /// Mutex 无争用,未争用锁 lock/unlock 约 20ns。无锁化零可测收益且增并发
+    /// 正确性风险,故**明确不做**(收益<3% 关门)。`Arc<Mutex>` 仅为让
+    /// `detect()` 可从其他上下文读取窗口快照,非为并发写入。
     pub fn record_event(&self, event: &NexusEvent) {
         match event {
             NexusEvent::ThinkingModeSwitched {
@@ -238,7 +247,7 @@ impl PolicyOscillationDetector {
         let window = self.config.window;
 
         // 清理并统计 TTG 切换窗口
-        let ttg_patterns = {
+        let (ttg_count, oscillation_patterns) = {
             let mut guard = self.ttg_switches.lock().unwrap_or_else(|e| e.into_inner());
             // 惰性清理过期记录
             while let Some(front) = guard.front() {
@@ -249,18 +258,29 @@ impl PolicyOscillationDetector {
                 }
             }
             // 统计 (from_mode, to_mode) 对的出现次数
-            // WHY 使用 Vec 而非 HashMap:窗口内记录数通常 <50,
-            // Vec 线性扫描足够快且无堆分配开销
-            let mut patterns: Vec<((String, String), usize)> = Vec::new();
+            // WHY 借用 &str 键(L9 优化第二轮):旧版每条记录 clone 两个 String 作键,
+            // 改为在锁作用域内用 &str 借用键统计,消除循环内 clone;仅最终达阈值
+            // 对(量小)才 clone 为 owned。WHY Vec 而非 HashMap:窗口内模式对 ≤25(5×5),
+            // 线性 find 开销可忽,且 Vec 保插入序→oscillation_patterns 确定性
+            // (OscillationReport derive PartialEq,HashMap 迭代序会破坏相等比较)。
+            let mut patterns: Vec<((&str, &str), usize)> = Vec::new();
             for record in guard.iter() {
-                let key = (record.from_mode.clone(), record.to_mode.clone());
+                let key = (record.from_mode.as_str(), record.to_mode.as_str());
                 if let Some((_, count)) = patterns.iter_mut().find(|(k, _)| *k == key) {
                     *count += 1;
                 } else {
                     patterns.push((key, 1));
                 }
             }
-            patterns
+            let ttg_count: usize = patterns.iter().map(|(_, c)| *c).sum();
+            // 识别震荡对:出现次数 ≥ oscillation_threshold 的 (from, to) 对
+            // 仅此处 clone 为 owned(达阈值对量小),序与 patterns 插入序一致(确定性)
+            let oscillation_patterns: Vec<(String, String, usize)> = patterns
+                .iter()
+                .filter(|(_, count)| *count >= self.config.oscillation_threshold)
+                .map(|((from, to), count)| (from.to_string(), to.to_string(), *count))
+                .collect();
+            (ttg_count, oscillation_patterns)
         };
 
         // 清理并统计 GSOE 更新窗口
@@ -276,14 +296,6 @@ impl PolicyOscillationDetector {
             guard.len()
         };
 
-        let ttg_count: usize = ttg_patterns.iter().map(|(_, c)| *c).sum();
-
-        // 识别震荡对:出现次数 ≥ oscillation_threshold 的 (from, to) 对
-        let oscillation_patterns: Vec<(String, String, usize)> = ttg_patterns
-            .iter()
-            .filter(|(_, count)| *count >= self.config.oscillation_threshold)
-            .map(|((from, to), count)| (from.clone(), to.clone(), *count))
-            .collect();
         let oscillation_pairs = oscillation_patterns.len();
 
         // 计算复合严重度(0.0-1.0)

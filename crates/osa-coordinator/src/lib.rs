@@ -55,11 +55,27 @@ pub use types::{
     TaskType, TimePressure, ToolId,
 };
 
+/// 返回五维稀疏掩码的静态快照（全空掩码，占位实现）
+///
+/// 真实 OSA 数据由 `OmniSparseCoordinator::compute_all_masks` 按 TaskProfile 动态计算。
+/// 本函数为 TUI 面板提供无需异步上下文的静态快照，避免面板渲染阻塞。
+/// TODO: v3.x 实装后替换为从 RuntimeAuditor 实时采集的 OSA 状态。
+pub fn five_dimension_masks() -> OmniSparseMasks {
+    OmniSparseMasks::new(
+        SparseMask::empty(), // routing 维度：全空（工具掩码）
+        SparseMask::empty(), // context 维度：全空（文件掩码）
+        SparseMask::empty(), // memory 维度：全空（记忆掩码）
+        SparseMask::empty(), // audit 维度：全空（操作掩码）
+        SparseMask::empty(), // budget 维度：全空（任务掩码）
+    )
+}
+
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::config::OsaConfig;
     pub use crate::coordinator::{compute_omni_mask_hash, OmniSparseCoordinator, OmniSparseMasks};
     pub use crate::error::OsaError;
+    pub use crate::five_dimension_masks;
     pub use crate::masks::SparseMask;
     pub use crate::types::{
         AffectedScope, ComplexityBand, FileId, MemoryId, OperationId, RiskLevel, TaskId,

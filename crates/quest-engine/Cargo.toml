@@ -49,3 +49,13 @@ proptest = { workspace = true }
 [[bench]]
 name = "ttg_select"
 harness = false
+
+# DAG 校验/拓扑排序基准 — L9 优化 2.1(O(V²·D)→O(V+E) 证伪与回归守护)
+[[bench]]
+name = "dag_bench"
+harness = false
+
+# Checkpoint save/list 基准 — L9 优化 2.5(数据关门:save<5ms 则不做增量检查点)
+[[bench]]
+name = "checkpoint_bench"
+harness = false

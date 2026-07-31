@@ -19,6 +19,7 @@ fn setup_engine() -> DecayEngine {
         min_level: 0.0,
         freeze_threshold: 0.05,
         restore_rate: 1.0, // 每秒恢复 100%
+        ..Default::default()
     };
     DecayEngine::new(config)
 }
@@ -387,6 +388,7 @@ fn test_restore_exceeds_limit() {
         min_level: 0.0,
         freeze_threshold: 0.05,
         restore_rate: 100.0, // 每秒恢复 1000%,短 sleep 即可饱和
+        ..Default::default()
     };
     let engine = DecayEngine::new(config);
     engine.register_capability("cap1", "测试能力", 0.5).unwrap();

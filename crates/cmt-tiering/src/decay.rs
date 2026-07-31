@@ -13,6 +13,8 @@
 //!   - 例:τ=24h,Δt=24h 时,exp(-1) ≈ 0.3679,若 access_count=1 则 priority ≈ 0.3679 > 0.1
 //! - **τ 可配置**:通过 `CmtConfig.decay_tau_seconds` 配置,
 //!   τ 越大衰减越慢(适合长期保留场景),τ 越小衰减越快(适合频繁更新场景)
+//! - **P1-4 统一**:指数衰减因子委托给 `nexus_core::decay::exponential_decay_factor`,
+//!   与 decay-engine(L4)共享同一数学基础,避免公式重复实现
 //!
 //! # 性能基准
 //! - 衰减计算 < 1μs(纯数学运算,无 I/O)
@@ -78,11 +80,12 @@ impl DecayCalculator {
         let delta = now.signed_duration_since(entry.last_accessed_at);
         let delta_seconds = delta.num_seconds().max(0) as f64;
 
-        // 计算衰减因子:exp(-Δt / τ)
-        let tau = self.tau_seconds as f64;
-        let decay_factor = (-delta_seconds / tau).exp();
+        // P1-4: 指数衰减因子委托给 nexus-core 共享函数,
+        // 与 decay-engine(L4)共享同一数学基础,避免公式重复实现
+        let decay_factor =
+            nexus_core::decay::exponential_decay_factor(delta_seconds, self.tau_seconds as f64);
 
-        // priority = access_count × exp(-Δt / τ)
+        // priority = access_count × decay_factor
         let priority = entry.access_count as f32 * decay_factor as f32;
 
         trace!(
@@ -127,11 +130,11 @@ impl DecayCalculator {
         let delta = now.signed_duration_since(last_accessed_at);
         let delta_seconds = delta.num_seconds().max(0) as f64;
 
-        // 计算衰减因子:exp(-Δt / τ)
-        let tau = self.tau_seconds as f64;
-        let decay_factor = (-delta_seconds / tau).exp();
+        // P1-4: 指数衰减因子委托给 nexus-core 共享函数
+        let decay_factor =
+            nexus_core::decay::exponential_decay_factor(delta_seconds, self.tau_seconds as f64);
 
-        // priority = access_count × exp(-Δt / τ)
+        // priority = access_count × decay_factor
         let priority = access_count as f32 * decay_factor as f32;
         priority < DEMOTION_THRESHOLD
     }

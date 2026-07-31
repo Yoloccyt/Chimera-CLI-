@@ -195,6 +195,8 @@ impl TaskChunker {
                 priority: task.priority,
                 parent_agent_id: task.parent_agent_id.clone(),
                 delegation_depth: task.delegation_depth + 1,
+                // 继承父任务的 Quest 关联(协调度量接线闭环:切块不改变归因)
+                quest_id: task.quest_id.clone(),
             };
             chunks.push(chunk_task);
         }

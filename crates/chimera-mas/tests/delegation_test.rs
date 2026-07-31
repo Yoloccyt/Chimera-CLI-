@@ -399,3 +399,151 @@ async fn test_execute_delegation_task_result_fields_populated() {
     // duration 应被填充(执行有耗时,即便极短,>= 0)
     assert!(r.duration >= Duration::ZERO, "duration 应被填充(>= 0)");
 }
+
+// ============================================================
+// 协调度量接线闭环:DelegationCompleted 事件测试
+// ============================================================
+
+/// 从 broadcast 接收器中非阻塞提取首个 DelegationCompleted 事件
+///
+/// WHY try_recv:execute_delegation 返回时事件已入 broadcast 通道,
+/// 同步遍历即可取出,避免 recv().await 在无事件时永久挂起。
+fn drain_delegation_completed(rx: &mut event_bus::EventReceiver) -> Option<NexusEvent> {
+    while let Ok(Some(event)) = rx.try_recv() {
+        if matches!(event, NexusEvent::DelegationCompleted { .. }) {
+            return Some(event);
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn test_delegation_completed_event_published_with_overhead() {
+    // 注入固定延迟 runner:验证批次 wall-clock ≥ 单任务延迟(并行不求和)
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let delay_runner: TaskRunner = Arc::new(|task: AgentTask| {
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            Ok(format!("done-{}", task.inner.task_id))
+        })
+    });
+    let executor = DelegationExecutor::with_runner(bus, Duration::from_secs(10), delay_runner);
+
+    // 4 子任务,均关联同一 Quest
+    let tasks: Vec<AgentTask> = (0..4)
+        .map(|i| make_task(&format!("t-{i}"), Duration::from_secs(10)).with_quest("q-metric"))
+        .collect();
+
+    let results = executor
+        .execute_delegation("parent-1", tasks)
+        .await
+        .expect("应成功");
+    assert_eq!(results.len(), 4);
+
+    let event = drain_delegation_completed(&mut rx).expect("应收到 DelegationCompleted 事件");
+    match event {
+        NexusEvent::DelegationCompleted {
+            parent_id,
+            quest_id,
+            total_overhead_ms,
+            sub_task_count,
+            success_count,
+            ..
+        } => {
+            assert_eq!(parent_id, "parent-1");
+            assert_eq!(quest_id.as_deref(), Some("q-metric"), "应携带 Quest 归因");
+            // 并行执行:wall-clock ≥ 单任务延迟(30ms),但远小于串行求和(120ms 只是上界参考)
+            assert!(
+                total_overhead_ms >= 30.0,
+                "批次 wall-clock 应 ≥ 单任务延迟,实际: {total_overhead_ms}ms"
+            );
+            assert_eq!(sub_task_count, 4);
+            assert_eq!(success_count, 4, "全部成功");
+        }
+        _ => panic!("Expected DelegationCompleted"),
+    }
+}
+
+#[tokio::test]
+async fn test_delegation_completed_counts_failures_and_none_quest() {
+    // 失败 runner + 未设置 quest_id:success_count=0,quest_id=None
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let executor = DelegationExecutor::with_runner(bus, Duration::from_secs(10), failure_runner());
+
+    let tasks = vec![
+        make_task("t-f1", Duration::from_secs(10)),
+        make_task("t-f2", Duration::from_secs(10)),
+    ];
+    let results = executor
+        .execute_delegation("parent-2", tasks)
+        .await
+        .expect("框架层应成功(子任务失败不是框架错误)");
+    assert_eq!(results.len(), 2);
+
+    let event = drain_delegation_completed(&mut rx).expect("应收到 DelegationCompleted 事件");
+    match event {
+        NexusEvent::DelegationCompleted {
+            quest_id,
+            sub_task_count,
+            success_count,
+            ..
+        } => {
+            assert!(quest_id.is_none(), "未设置 quest_id 时事件应为 None");
+            assert_eq!(sub_task_count, 2);
+            assert_eq!(success_count, 0, "全部失败");
+        }
+        _ => panic!("Expected DelegationCompleted"),
+    }
+}
+
+#[tokio::test]
+async fn test_delegation_completed_not_published_for_empty_batch() {
+    // 空任务列表:早退,不发布零样本观测事件
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let executor = DelegationExecutor::new(bus, Duration::from_secs(10));
+
+    let results = executor
+        .execute_delegation("parent-3", vec![])
+        .await
+        .expect("空列表应成功");
+    assert!(results.is_empty());
+    assert!(
+        drain_delegation_completed(&mut rx).is_none(),
+        "空批次不应发布 DelegationCompleted"
+    );
+}
+
+#[tokio::test]
+async fn test_batch_delegation_also_publishes_delegation_completed() {
+    // execute_batch_delegation 路径同样发布观测事件(口径一致)
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let executor = DelegationExecutor::with_runner(bus, Duration::from_secs(10), success_runner());
+
+    let chunks = vec![
+        make_task("c-0", Duration::from_secs(10)).with_quest("q-batch"),
+        make_task("c-1", Duration::from_secs(10)).with_quest("q-batch"),
+    ];
+    executor
+        .execute_batch_delegation("parent-4", chunks)
+        .await
+        .expect("应成功");
+
+    let event = drain_delegation_completed(&mut rx).expect("批量路径也应发布事件");
+    match event {
+        NexusEvent::DelegationCompleted {
+            quest_id,
+            sub_task_count,
+            success_count,
+            ..
+        } => {
+            assert_eq!(quest_id.as_deref(), Some("q-batch"));
+            assert_eq!(sub_task_count, 2);
+            assert_eq!(success_count, 2);
+        }
+        _ => panic!("Expected DelegationCompleted"),
+    }
+}

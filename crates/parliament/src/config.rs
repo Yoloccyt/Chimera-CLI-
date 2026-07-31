@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::ParliamentError;
+use crate::strategy_cap::StrategyCapConfig;
 
 /// Parliament 配置 — 5 角色权重、共识阈值与辩论超时
 ///
@@ -46,6 +47,12 @@ pub struct ParliamentConfig {
     /// 要求比常规 consensus_threshold(0.6)更高的门槛,防止轻率绕过。
     /// 常规 deliberate() 路径不受此阈值影响,仍使用 consensus_threshold。
     pub override_consensus_threshold: f32,
+    /// 策略封顶守卫配置(推理悖论红线风控,滞后带阈值与驻留时间)
+    ///
+    /// WHY `#[serde(default)]`:旧配置文件无此字段,反序列化时回退到
+    /// 默认值(enter=3/exit=5/factor=0.8/dwell=30s),保持向后兼容。
+    #[serde(default)]
+    pub strategy_cap: StrategyCapConfig,
 }
 
 impl Default for ParliamentConfig {
@@ -60,6 +67,7 @@ impl Default for ParliamentConfig {
             quorum_threshold: 0.6,
             debate_timeout_ms: 5000,
             override_consensus_threshold: 0.667,
+            strategy_cap: StrategyCapConfig::default(),
         }
     }
 }
@@ -117,6 +125,9 @@ impl ParliamentConfig {
                 detail: "debate_timeout_ms must be > 0".into(),
             });
         }
+
+        // 策略封顶守卫配置校验(连续计数/滞后带系数合法性)
+        self.strategy_cap.validate()?;
 
         Ok(())
     }

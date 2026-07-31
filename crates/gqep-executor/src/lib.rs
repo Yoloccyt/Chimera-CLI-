@@ -58,6 +58,33 @@ pub use gatherer::GqepExecutor;
 pub use timeout::with_timeout;
 pub use types::{GatherResult, GqepFuture, OperationId};
 
+/// 双层超时防护统计快照（Task 3.7:L10 → L7 向下依赖）
+///
+/// 为 TUI MetricsDashboard 面板提供无需异步上下文的静态快照，
+/// 展示 GQEP 双层超时治理（单操作超时 + 全局 gather 超时）的累计统计。
+/// 真实 GQEP 数据由 `GqepExecutor::gather` 运行时动态更新，
+/// 本函数为 TUI 面板提供占位快照，避免面板渲染阻塞。
+///
+/// TODO: v3.x 接入 RuntimeAuditor 实时采集后替换为真实 GQEP 统计。
+#[derive(Debug, Clone, Copy)]
+pub struct TimeoutStats {
+    /// 单操作超时累计次数
+    pub per_op_timeouts: u64,
+    /// 全局 gather 超时累计次数
+    pub global_timeouts: u64,
+    /// 双层超时防护覆盖率（已防护操作数 / 总操作数）
+    pub coverage: f32,
+}
+
+/// 返回 GQEP 双层超时防护统计的静态快照（占位实现）
+pub fn timeout_stats() -> TimeoutStats {
+    TimeoutStats {
+        per_op_timeouts: 0,
+        global_timeouts: 0,
+        coverage: 1.0, // 占位:全部操作已受双层超时防护
+    }
+}
+
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::batch::RollbackFn;

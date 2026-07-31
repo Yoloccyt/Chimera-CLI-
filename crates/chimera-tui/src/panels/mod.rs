@@ -14,7 +14,33 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
+use crate::actions::{ActionDomain, ActionRegistry};
 use crate::types::{PanelId, TuiCommand, TuiState};
+
+/// 从 ActionRegistry 按 domain 自动生成面板快捷键列表(Task 2.5)
+///
+/// 返回 `Vec<(key_name, title_key)>` 用于渲染。每条 action 的展示规则:
+/// - 优先使用 `default_key`(如 "Ctrl+L")
+/// - 其次使用斜杠词(如 "quest pause")
+/// - 两者皆无则回退到 action id(如 "quest.pause")
+///
+/// WHY 自动生成:新增面板只需在 `domains/` 注册 action 并覆写 `action_domain()`,
+/// `shortcuts_with_registry` 默认实现会自动调用本 helper,无需手写 shortcuts 清单。
+/// 学术支撑:单一事实源原则(ADR-029 §4.2),与 codegen 三入口一致性对齐。
+pub fn shortcuts_from_domain(
+    registry: &ActionRegistry,
+    domain: ActionDomain,
+) -> Vec<(&'static str, &'static str)> {
+    registry
+        .by_domain(domain)
+        .into_iter()
+        .map(|action| {
+            // default_key > slash > id:键位最直观,斜杠词次之,id 兜底
+            let key = action.default_key.or(action.slash).unwrap_or(action.id);
+            (key, action.title_key)
+        })
+        .collect()
+}
 
 pub mod budget;
 pub mod chat;
@@ -33,6 +59,8 @@ pub mod memory;
 pub mod metrics_dashboard;
 pub mod osa_sparse;
 pub mod parliament;
+/// Task 3.7:PVL 过程评分面板 — 九维度过程评分（L10 → L7 向下依赖）
+pub mod pvl_score;
 pub mod quest;
 pub mod resource_monitor;
 pub mod router;
@@ -58,6 +86,7 @@ pub use memory::MemoryPanel;
 pub use metrics_dashboard::MetricsDashboardPanel;
 pub use osa_sparse::OsaSparsePanel;
 pub use parliament::ParliamentPanel;
+pub use pvl_score::PvlScorePanel;
 pub use quest::QuestPanel;
 pub use resource_monitor::ResourceMonitorPanel;
 pub use router::RouterPanel;
@@ -132,6 +161,41 @@ pub trait Panel: Send {
     /// ```
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         vec![]
+    }
+
+    /// 返回面板关联的 Action 域(Task 2.5)
+    ///
+    /// 默认 `None`:展示型面板无关联域,`shortcuts_with_registry` 回退到 `shortcuts()`。
+    /// 面板覆写返回 `Some(domain)` 后,`shortcuts_with_registry` 默认实现会调用
+    /// `shortcuts_from_domain(&registry, domain)` 自动派生快捷键,无需手写 `shortcuts()`。
+    ///
+    /// WHY Option 而非 ActionDomain:并非所有面板都有对应域(如 HelpPanel/ChatPanel),
+    /// 强制返回 domain 会迫使面板虚构域归属,违背 §4.2 分域原则。
+    fn action_domain(&self) -> Option<ActionDomain> {
+        None
+    }
+
+    /// 返回面板快捷键,可访问 ActionRegistry 自动派生(Task 2.5)
+    ///
+    /// 默认实现(渐进增强):
+    /// - 先取 `shortcuts()`(面板特定的 UI 键位,如 "↑/↓" 导航)
+    /// - 若 `action_domain()` 返回 `Some(d)`,追加 `shortcuts_from_domain(&registry, d)`
+    ///   自动派生的功能动作快捷键(如 "Ctrl+L" 切换 locale)
+    ///
+    /// WHY 合并而非替换:面板 UI 键位(导航/翻页)与 ActionRegistry 功能动作
+    /// (quest.pause / system.toggle_locale)语义不同,两者互补。新面板可只覆写
+    /// `action_domain()`,功能动作自动接入;UI 键位按需手写 `shortcuts()`。
+    ///
+    /// 调用方(如 `open_help_action`)应优先使用本方法,以便新面板自动接入。
+    fn shortcuts_with_registry(
+        &self,
+        registry: &ActionRegistry,
+    ) -> Vec<(&'static str, &'static str)> {
+        let mut all = self.shortcuts();
+        if let Some(domain) = self.action_domain() {
+            all.extend(shortcuts_from_domain(registry, domain));
+        }
+        all
     }
 
     /// 返回当前选中项的上下文 id(如选中 Quest 的 quest_id),供 quest.* 动作精确定位(§1.3b)。

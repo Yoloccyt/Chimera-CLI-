@@ -324,8 +324,43 @@ impl QuadrantPlan {
 }
 
 // ============================================================
-// 单元测试(公开 API 的集成级验证见 tests/quadrant_test.rs)
+// QuadrantStatus — 四象限状态静态快照（Task 3.9:L10 → L9 向下依赖）
 // ============================================================
+
+/// 四象限状态静态快照（Task 3.9:L10 → L9 向下依赖）
+///
+/// 为 TUI TaskManagerPanel 提供无需异步上下文的静态快照，
+/// 展示四象限稳定分工（ADR-027）的 Agent 数量、任务数量与 WSJF 分数。
+///
+/// 真实象限状态由 `RootOrchestrator` 运行时动态更新，
+/// 本函数为 TUI 面板提供占位快照，避免面板渲染阻塞。
+///
+/// TODO: v3.x 接入 RuntimeAuditor 实时采集后替换为真实象限统计。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuadrantStatus {
+    /// 各象限 Agent 数量（Q1/Q2/Q3/Q4）
+    pub agent_counts: [usize; 4],
+    /// 各象限任务数量（Q1/Q2/Q3/Q4）
+    pub task_counts: [usize; 4],
+    /// 各象限 WSJF 分数（Q1/Q2/Q3/Q4）
+    pub wsjf_scores: [f32; 4],
+}
+
+/// 返回四象限状态的静态快照（占位实现）
+pub fn quadrant_status() -> QuadrantStatus {
+    // 占位:返回默认空状态（真实状态由 RootOrchestrator 运行时产生）
+    QuadrantStatus {
+        agent_counts: [0, 0, 0, 0],
+        task_counts: [0, 0, 0, 0],
+        wsjf_scores: [0.0, 0.0, 0.0, 0.0],
+    }
+}
+
+// ============================================================
+// 单元测试(QuadrantStatus)
+// ============================================================
+
+// 注意:以下测试追加到现有 #[cfg(test)] mod tests 中（文件末尾）。
 
 #[cfg(test)]
 mod tests {

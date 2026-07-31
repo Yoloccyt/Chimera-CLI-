@@ -10,7 +10,7 @@
 //! - **audit_rate_by_risk [0.1, 0.3, 0.7, 1.0]**:audit 维度按风险等级的采样率,
 //!   实际采样率取复杂度档位默认值与风险等级配置值的最大值(更保守)
 //! - **budget_protection_threshold 0.8**:budget 维度的保护比例上限,
-//!   复杂度越高,保护比例越低(保留更多任务以避免预算耗尽)
+//!   复杂度越高,保护比例越高(保留更多任务预算用于并行执行)
 
 use serde::{Deserialize, Serialize};
 
@@ -48,8 +48,8 @@ pub struct OsaConfig {
     /// budget 维度的保护比例上限(默认 0.8)
     ///
     /// WHY:0.8 表示最多保留 80% 的活跃任务。
-    /// 复杂度越高,实际保护比例越低(保留更多任务以避免预算耗尽):
-    /// protection = threshold × (1.0 - complexity × 0.5)
+    /// 复杂度越高,实际保护比例越高(保留更多任务预算用于并行执行):
+    /// protection = threshold × (0.5 + complexity × 0.5)
     pub budget_protection_threshold: f32,
 
     /// 复杂度档位阈值(默认 (0.25, 0.5, 0.75))

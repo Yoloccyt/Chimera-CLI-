@@ -63,8 +63,9 @@
 //!   active/candidate 指针，不修改 spec 内容本身
 
 use crate::error::GsoeError;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
-use nexus_contracts::{HarnessSpec, HarnessSpecError, ImmutableSurface};
+// Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
+use event_bus::{EventBus, NexusEvent};
+use nexus_contracts::{EventMetadata, HarnessSpec, HarnessSpecError, ImmutableSurface};
 use std::collections::HashMap;
 use thiserror::Error;
 

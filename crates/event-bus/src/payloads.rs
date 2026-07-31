@@ -11,40 +11,16 @@
 //! - **回滚诊断**: [`RollbackTriggerType`]、[`RollbackDiagnosticContext`] — ADR-043 回滚决策
 //! - **指标**: [`CriticalEventDropped`] — Critical 通道丢弃计数
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+
+// Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
+// WHY re-export: 保持向后兼容,100+ 文件现有 `use event_bus::EventMetadata` 路径不破坏
+// 类型 + impl(new())均来自 nexus-contracts,re-export 完整保留构造方法
+pub use nexus_contracts::EventMetadata;
 
 // ============================================================
 // 事件元数据与严重级别
 // ============================================================
-
-/// 事件元数据 — 每个事件携带,用于追踪、审计与因果排序
-///
-/// WHY 字段说明:
-/// - `event_id`:UUIDv7(时间有序),便于跨进程因果追踪与去重
-/// - `timestamp`:单调时钟来源,审计日志按此排序
-/// - `source`:发布者 crate 名(如 "osa-coordinator"),用于依赖方向校验
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct EventMetadata {
-    /// 事件唯一标识(UUIDv7,时间有序)
-    pub event_id: Uuid,
-    /// 事件产生时刻(UTC)
-    pub timestamp: DateTime<Utc>,
-    /// 发布者 crate 名,用于依赖方向校验与审计
-    pub source: String,
-}
-
-impl EventMetadata {
-    /// 以指定 source 创建元数据,event_id 与 timestamp 自动生成
-    pub fn new(source: impl Into<String>) -> Self {
-        Self {
-            event_id: Uuid::now_v7(),
-            timestamp: Utc::now(),
-            source: source.into(),
-        }
-    }
-}
 
 /// 事件严重级别 — 用于背压策略决定是否优先投递
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

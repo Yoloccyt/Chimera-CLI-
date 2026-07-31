@@ -8,6 +8,7 @@ use chimera_tui::{
     DataSnapshot, DataSourceConfig, MemoryMetrics, PanelId, TuiApp, TuiConfig, TuiDataSource,
     TuiError,
 };
+use cmt_tiering::tier_distribution;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
@@ -117,4 +118,49 @@ fn test_memory_panel_empty_data_renders_defaults() {
         "Memory panel should render even with default data"
     );
     assert!(content.contains("L0"));
+}
+
+// ============================================================
+// Task 3.3: L3 Storage 协同 — 四层存储分布测试
+// ============================================================
+
+#[test]
+fn test_memory_panel_displays_tier_distribution() {
+    // 验证面板渲染包含 tier_distribution() 返回的四层存储分布
+    let snapshot = DataSnapshot {
+        memory_metrics: MemoryMetrics {
+            hit_rate_percent: 92.5,
+            evictions: 3,
+            context_window_size: 8192,
+            compressed_ratio: 0.65,
+            cache_hits: 500,
+            cache_misses: 42,
+            tier: "L2".into(),
+        },
+        memory_history: vec![80, 82, 85, 88, 90, 92],
+        ..Default::default()
+    };
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig::default(),
+        Box::new(MemoryTestSource::new(snapshot)),
+    )
+    .unwrap();
+    app.update();
+    app.switch_panel_to(PanelId::Memory);
+
+    let content = render_to_string(&mut app, 80, 24);
+    // 面板应包含 "Storage: Hot:" 行(四层分布)
+    assert!(
+        content.contains("Storage: Hot:"),
+        "面板应显示四层存储分布,实际内容前 300 字符: {}",
+        &content[..content.len().min(300)]
+    );
+
+    // 验证 cmt_tiering::tier_distribution() 返回值与默认一致
+    let dist = tier_distribution();
+    assert_eq!(dist.hot, 0);
+    assert_eq!(dist.warm, 0);
+    assert_eq!(dist.cold, 0);
+    assert_eq!(dist.frozen, 0);
 }

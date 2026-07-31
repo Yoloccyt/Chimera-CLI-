@@ -34,13 +34,14 @@ use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::data::TuiDataSource;
 use crate::panels::Panel;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use crate::viz::{bar_chart, gauge as viz_gauge, heatmap, histogram, line_chart, VizChartKind};
+use gqep_executor::timeout_stats;
 
 /// 5×2 网格行数(spec Task 2.2 明确:5 个 sparkline / 5 个 gauge)
 const GRID_ROWS: usize = 5;
@@ -260,13 +261,42 @@ impl Panel for MetricsDashboardPanel {
     }
 
     fn render(&mut self, _state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // 0) 顶部 GQEP 超时防护统计摘要（Task 3.7:L10 → L7 向下依赖）
+        let stats = timeout_stats();
+        let gqep_summary = Line::from(vec![Span::styled(
+            format!(
+                "GQEP Timeout: per_op={}  global={}  coverage={:.1}%",
+                stats.per_op_timeouts,
+                stats.global_timeouts,
+                stats.coverage * 100.0,
+            ),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]);
+
+        // 垂直切分:顶部摘要行(1 行) + 5×2 网格(剩余)
+        let v_split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // GQEP 摘要行
+                Constraint::Min(0),    // 5×2 网格
+            ])
+            .split(area);
+
+        // 渲染 GQEP 摘要行
+        let summary_p = Paragraph::new(gqep_summary);
+        Widget::render(summary_p, v_split[0], buf);
+
+        let grid_area = v_split[1];
+
         // 1) 水平切分为 2 列(左 sparkline 列,右 gauge 列)
         //    WHY Percentage(50/50):与 spec "5×2 网格 左列 + 右列" 一致
         //    等宽划分,无侧重点(spec 未指定权重,等宽最自然)
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
+            .split(grid_area);
 
         // 2) 每列垂直切分为 5 行
         //    WHY Percentage(20):5 行等高,避免首行/末行 cell 因高度

@@ -313,9 +313,9 @@ async fn test_l3_effective_capacity_is_128k() {
         "L3 标称容量应为 1M"
     );
     assert_eq!(
-        config.effective_capacity_for(WindowTier::L3),
+        config.effective_capacity_for(WindowTier::L3, None),
         131_072,
-        "L3 实际加载容量应为 128K(1M/8)"
+        "L3 实际加载容量应为 128K(1M/8,fallback 模式)"
     );
 }
 

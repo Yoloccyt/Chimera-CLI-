@@ -689,6 +689,8 @@ pub enum InterfaceEvent {
         participant_count: u32,
         latency_ms: u64,
         success: bool,
+        /// 关联能力 ID(Task 0.7 v2.9.0-omega 引入,csn-substitutor 降级链精准推进)
+        capability_id: Option<String>,
     },
     /// CSN 替代触发
     CsnSubstitutionTriggered {

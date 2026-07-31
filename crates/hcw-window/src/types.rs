@@ -108,18 +108,51 @@ impl WindowTier {
         }
     }
 
-    /// 返回该层级的实际加载容量(Token 数)
+    /// 返回该层级的实际加载容量(Token 数,支持 OSA 动态稀疏度)
     ///
-    /// WHY:L3 的实际加载容量 = l3_capacity / 8 = 128K,
-    /// 通过 OSA 稀疏化(8× 压缩比)实现 1M 等效,避免暴力加载(架构红线)。
-    /// L0/L1/L2 的实际容量 = 标称容量(无稀疏化)
-    pub fn effective_capacity(self, config: &HcwConfig) -> usize {
+    /// WHY(Task 4 HCW L3 动态容量):L3 的实际加载容量不再硬编码 `/8`,
+    /// 而是根据 OSA 实时稀疏度自适应:
+    /// - `sparsity=Some(s)`(动态模式):容量 = `l3_capacity × (1.0 - s)`,
+    ///   稀疏度越高实际加载越少,实现 1M 等效(架构红线:禁止 1M 暴力加载)。
+    /// - `sparsity=None`(fallback 模式):容量 = `l3_capacity / 8`(硬编码 8× 压缩比),
+    ///   对应 OSA 尚未下发掩码的初始状态,等价于稀疏度 0.875(87.5% 跳过)。
+    ///
+    /// L0/L1/L2 的实际容量 = 标称容量(无稀疏化,忽略 `sparsity` 参数)。
+    ///
+    /// # 参数
+    /// - `sparsity`:OSA 动态稀疏度 `Option<f32>`,`Some(s)` ∈ [0.0, 1.0]:
+    ///   - `0.0`:无稀疏,全加载(L3 容量 = l3_capacity)
+    ///   - `0.875`:8× 压缩比(L3 容量 = l3_capacity / 8,与 fallback 一致)
+    ///   - `0.99`:最大稀疏,仅加载 1%(clamp 上限,避免容量为 0)
+    ///   - `None`:fallback 到硬编码 `l3_capacity / 8`
+    ///
+    /// # 安全约束
+    /// `sparsity` 被 clamp 到 `[0.0, 0.99]`,确保 L3 容量至少为 `l3_capacity` 的 1%,
+    /// 避免 100% 稀疏导致空窗口(实际 OSA 不会 100% 稀疏,此处为防御性边界)。
+    pub fn effective_capacity(self, config: &HcwConfig, sparsity: Option<f32>) -> usize {
         match self {
             Self::L0 => config.l0_capacity,
             Self::L1 => config.l1_capacity,
             Self::L2 => config.l2_capacity,
-            // L3:1M 等效,128K 实际加载 + 8× 稀疏化压缩比
-            Self::L3 => config.l3_capacity / 8,
+            // L3:动态容量 — 优先用 OSA 实时稀疏度,fallback 到硬编码 8× 压缩比
+            Self::L3 => match sparsity {
+                Some(s) if !s.is_nan() => {
+                    // clamp 到 [0.0, 0.99]:避免负值/超界/100% 稀疏导致空窗口
+                    // WHY NaN 检查:f32::NAN.clamp 不生效(NaN 比较全为 false),
+                    // 会导致 1.0 - NaN = NaN,容量 = NaN as usize = 0(空窗口)。
+                    // NaN 视为异常值,走下面的 None fallback 分支
+                    let clamped = s.clamp(0.0, 0.99);
+                    // 容量 = l3_capacity × (1 - 稀疏度),全程 f32 计算后转 usize
+                    // WHY f32 全程:sparsity 是 f32,中间转 f64 会引入精度膨胀(§4.4 教训 #6)
+                    let load_ratio = 1.0_f32 - clamped;
+                    ((config.l3_capacity as f32) * load_ratio) as usize
+                }
+                _ => {
+                    // fallback:OSA 尚未下发掩码(None)或 sparsity 为 NaN(异常值),
+                    // 用硬编码 8× 压缩比(等价于 sparsity=0.875)
+                    config.l3_capacity / 8
+                }
+            },
         }
     }
 }

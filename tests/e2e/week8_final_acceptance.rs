@@ -301,7 +301,11 @@ fn test_week6_multimodal_evolution() {
             .bridge
             .receive(raw, chtc_bridge::IdeSource::vscode())
             .expect("CHTC receive 失败");
-        let exec = pipeline.bridge.execute(&call).expect("CHTC execute 失败");
+        let exec = pipeline
+            .bridge
+            .execute(&call)
+            .await
+            .expect("CHTC execute 失败");
         assert!(exec.success, "CHTC execute 应成功");
 
         // L3 Storage:LSCT 任务感知能力分层(注册能力验证)

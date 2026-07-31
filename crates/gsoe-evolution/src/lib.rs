@@ -115,6 +115,65 @@ pub use types::{
     EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout, MutationCandidate, MutationType,
 };
 
+// === Task 3.5: L10 TUI 跨层协同 — 谱系 DAG 快照 ===
+
+/// 谱系节点 — Spec DAG 中的单个规范版本节点(Task 3.5)
+///
+/// WHY 独立 struct 而非复用 SpecRegistry: SpecRegistry 是运行时变异结构,
+/// TUI 面板只需只读快照,用简单 struct 避免持有锁或引用复杂状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecNode {
+    /// 节点唯一标识(如 spec id)
+    pub id: String,
+    /// 版本号(单调递增)
+    pub version: u64,
+    /// 状态简述(如 "active"/"deprecated"/"experimental")
+    pub status: String,
+}
+
+/// 谱系边 — Spec DAG 中的有向关系边(Task 3.5)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecEdge {
+    /// 源节点 id
+    pub from: String,
+    /// 目标节点 id
+    pub to: String,
+    /// 关系类型(如 "evolves"/"deprecates"/"forks")
+    pub relation: String,
+}
+
+/// 谱系 DAG 快照 — 规范版本演化有向无环图(Task 3.5)
+///
+/// TUI DagVizPanel 调用 `spec_dag_snapshot()` 获取节点/边计数,
+/// 展示谱系演化规模。当前返回空快照(TODO: 真实 GSOE DAG 待 v3.x 实装)。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpecDagSnapshot {
+    /// 谱系节点列表
+    pub nodes: Vec<SpecNode>,
+    /// 谱系边列表
+    pub edges: Vec<SpecEdge>,
+}
+
+/// 返回谱系 DAG 快照(Task 3.5 跨层 Panel 数据管道)
+///
+/// TUI DagVizPanel 调用此函数显示"谱系"节点/边计数。
+/// 当前返回空快照(TODO: 真实 GSOE DAG 待 v3.x 实装)。
+///
+/// # 示例
+///
+/// ```
+/// use gsoe_evolution::{spec_dag_snapshot, SpecDagSnapshot};
+///
+/// let snapshot = spec_dag_snapshot();
+/// assert!(snapshot.nodes.is_empty());
+/// assert!(snapshot.edges.is_empty());
+/// ```
+pub fn spec_dag_snapshot() -> SpecDagSnapshot {
+    // TODO: 真实接入 GSOE 进化引擎的谱系 DAG(规范版本演化图)
+    // 当前返回空快照,待 v3.x SpecRegistry 全量版本化后接入
+    SpecDagSnapshot::default()
+}
+
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     // P5.2.1: CiGate 加入 prelude

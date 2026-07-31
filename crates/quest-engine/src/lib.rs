@@ -42,6 +42,7 @@ pub mod coordination_metrics;
 pub mod dag;
 pub mod engine;
 pub mod error;
+pub mod metrics_sync;
 pub mod trajectory_exporter;
 pub mod ttg;
 pub mod types;
@@ -60,6 +61,11 @@ pub use coordination_metrics::{
 };
 pub use engine::QuestEngine;
 pub use error::QuestError;
+// 协调度量接线闭环:待合并样本与观测事件订阅器
+// (消费 DebateCompleted / DelegationCompleted,填充协调成本 Option 字段)
+pub use metrics_sync::{
+    spawn_metrics_subscriber, spawn_metrics_subscriber_with_receiver, PendingCoordSample,
+};
 // P4-W16.1.3: Quest 轨迹导出器类型重导出(供 L5 omega-learner / L9 efficiency-monitor 使用)
 pub use trajectory_exporter::{
     export_trajectory, export_trajectory_from_quest, ContextSummary, QuestTrajectory, TaskProgress,

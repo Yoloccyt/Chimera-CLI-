@@ -86,6 +86,8 @@ impl DagVizPanel {
             TaskStatus::Running => ("◐", Color::Yellow),
             TaskStatus::Completed => ("●", Color::Green),
             TaskStatus::Failed => ("✗", Color::Red),
+            TaskStatus::Cancelled => ("⊗", Color::Red),
+            TaskStatus::Paused => ("⏸", Color::Yellow),
         }
     }
 
@@ -95,6 +97,23 @@ impl DagVizPanel {
             Line::from("Quest Task DAG (depth-indented)"),
             Line::from("──────────────────────────────────────"),
         ];
+
+        // Task 3.5: L5 Knowledge 协同 — 显示谱系 DAG 节点/边计数
+        // 调用 gsoe_evolution::spec_dag_snapshot() 获取 GSOE 谱系演化图,
+        // 实现 L10 Panel ↔ L5 Knowledge 真实数据闭环。
+        // WHY 在 quest_list 判断之前:空 quest 时仍显示谱系信息,确保面板始终有内容。
+        {
+            let snapshot = gsoe_evolution::spec_dag_snapshot();
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Spec DAG: {} nodes, {} edges",
+                    snapshot.nodes.len(),
+                    snapshot.edges.len()
+                ),
+                Style::default().fg(Color::Gray),
+            )));
+            lines.push(Line::from(""));
+        }
 
         if state.quest_list.is_empty() {
             lines.push(Line::from(Span::styled(

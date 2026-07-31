@@ -54,8 +54,6 @@ cmt-tiering = { path = "../cmt-tiering" }
 scc-cache = { path = "../scc-cache" }
 # L6 Router:OmniSparseCoordinator::compute_masks() 计算稀疏掩码(ADR-026 决策 7)
 osa-coordinator = { path = "../osa-coordinator" }
-# L9 Quest(同层):复用 Quest DAG + Checkpoint(ADR-026 决策 5,§2.2 同层互引允许)
-quest-engine = { path = "../quest-engine" }
 # L7 Execution:委托执行通过 gqep-executor 包装超时(零孤儿调用,§6.1 红线)
 gqep-executor = { path = "../gqep-executor" }
 # L4 Security:委托执行通过 qeep-protocol 实现量子纠缠零孤儿(§6.1 红线)
@@ -85,7 +83,20 @@ repo-wiki = { path = "../repo-wiki" }
 # (InvariantClosureChecker)对 INV-7/8/9 检查结果做全系统传递闭包元验证(Phase 8.4)。
 # WHY L9→L5 向下依赖合规(§2.2):gsoe-evolution 不依赖 chimera-mas(见 invariants.rs
 # §P2-7 双实现说明),无循环依赖风险。
+# 另:shadow 模块复用 UnfreezeScope(R2 解冻范围 fail-closed 白名单,ADR-053
+# 备忘录 §五 B-4 "编排范围"职责)。
 gsoe-evolution = { path = "../gsoe-evolution" }
+# L7 Execution:shadow 模块消费 pvl-layer 的 Verification/ProcessScore 作为外部
+# 证据门 A/B 维证据源(ADR-053 备忘录 §五 B-5:chimera-mas 新增 pvl-layer 依赖
+# + AHIRT 门禁语义接线)。WHY L9→L7 向下依赖合规(§2.2,先例:gqep-executor)。
+pvl-layer = { path = "../pvl-layer" }
+# L4 Security:shadow 模块复用 ShadowModeCircuitBreaker(fail-closed 熔断,含 S-2.1
+# ResetAuthorization 问责凭证),不重实现熔断逻辑(ADR-053 备忘录 §五 B-4
+# "编排熔断"职责)。WHY L9→L4 向下依赖合规(§2.2,先例:qeep-protocol)。
+decay-engine = { path = "../decay-engine" }
+# rand:shadow 模块 moving block bootstrap 重采样(ADR-053-rev3 决策 3A′-P:
+# L=3/B=10000/percentile 单侧);注入式固定种子保证测试可复现。
+rand = { workspace = true }
 # regex:MutualInquirer::create_safe_summary 正则脱敏(Task 18 §18.9,§5.5 ContextIsolation)
 # WHY 直接声明版本:workspace.dependencies 未收录 regex
 regex = "1"
@@ -111,4 +122,21 @@ harness = false
 # T7-5: ImmuneSystem probe SLO benchmark（SLO < 100ms）
 [[bench]]
 name = "immune_probe"
+harness = false
+
+# shadow 模块统计热路径 benchmark(Wilson 解析式 + moving block bootstrap B=10000)
+# WHY:§3.4.1 性能可证伪 — bootstrap 是晋级门唯一重计算路径,需基线守护
+[[bench]]
+name = "shadow_stats"
+harness = false
+
+# 归档语义去重热路径 benchmark(L9 优化 2.4:dedup_semantic 配对降常数)
+[[bench]]
+name = "dedup_bench"
+harness = false
+
+# M0-T0.2: DelegationExecutor 委托编排开销基准(fan-out 1/4/16 扩展性,
+# 协调度量接线闭环的埋点开销回归对照基线)
+[[bench]]
+name = "delegation_bench"
 harness = false

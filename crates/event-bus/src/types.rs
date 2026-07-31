@@ -1054,6 +1054,12 @@ pub enum NexusEvent {
         latency_ms: u64,
         /// 是否成功
         success: bool,
+        /// 关联的能力 ID(可选)— 用于 csn-substitutor 精准推进降级链
+        ///
+        /// WHY Option:Task 0.7 v2.9.0-omega 引入。旧调用方(mcp-mesh 主流程)
+        /// 不一定知道触发事务的能力 ID,默认 None;Task 0.5 csn-substitutor
+        /// 重设计后将填充此字段,使降级链只推进相关条目而非全部(避免误伤)。
+        capability_id: Option<String>,
     },
 
     /// CSN 替代触发 — L10 Interface(csn-substitutor)→ 任意订阅者
@@ -1866,6 +1872,108 @@ pub enum NexusEvent {
         /// 本次报告携带的审计发现数
         findings_count: u32,
     },
+
+    /// L8 议会审议完成 — Parliament → L9 quest-engine / 任意订阅者
+    ///
+    /// 由 `Parliament::deliberate_with_policy` 在每次审议结束时发布
+    /// (Reached / Rejected / Vetoed 全路径),携带审议端到端 wall-clock 延迟
+    /// 与投票质量指标,供 quest-engine 填充 `CoordinationCostSample` 的
+    /// `parliament_debate_latency_ms` 与 `InferenceGainSample` 的
+    /// `consensus_quality`(协调度量接线闭环)。
+    ///
+    /// WHY 新增 Normal 事件而非扩容 Critical 级 `ConsensusReached`:
+    /// ConsensusReached 走 mpsc 旁路且被 GSOE/AutoDPO/SecCore 多方消费,
+    /// 扩字段回归面大;观测数据与治理决策事件分离更干净
+    /// (同 `CoordinationRatioReported` 的设计原则"事件是事实,告警是解释")。
+    DebateCompleted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 关联的 Quest ID(quest-engine 按此键合并待采样指标)
+        quest_id: String,
+        /// 提案 ID(审计追溯)
+        proposal_id: String,
+        /// 审议端到端延迟(毫秒)
+        ///
+        /// 口径:`deliberate_with_policy` 入口到共识返回的 wall-clock,
+        /// 含 Skeptic 检测 + Opinion 收集 + 投票 + 事件发布串行 await 开销。
+        debate_latency_ms: f64,
+        /// 激活策略标签("fast-path" / "simplified" / "full",
+        /// 取自 `ActivationStrategy::short_name()`)
+        strategy: String,
+        /// 加权赞成率 [0.0, 1.0](可选)
+        ///
+        /// 作为议会共识质量的 proxy(共识置信度),取自 `VoteResult`。
+        /// `None` 表示该路径无投票(FastPath 直通 / Skeptic 前置否决)。
+        /// 注意:这是置信度代理而非决策正确率 ground truth,
+        /// 真实"决策正确率复盘"留待未来 GSOE 反馈闭环。
+        weighted_approval_rate: Option<f32>,
+        /// 参与率 [0.0, 1.0](可选,已投票角色数 / 总角色数)
+        ///
+        /// `None` 语义同 `weighted_approval_rate`。
+        participation_rate: Option<f32>,
+        /// 意见分歧度 [0.0, 1.0](可选,M2-T2.1 多维共识质量)
+        ///
+        /// 加权 position 方差归一化:全体一致=0,半赞成半反对=1。
+        /// `#[serde(default)]` 保证旧序列化数据(无此字段)反序列化兼容。
+        /// `None` 同 `weighted_approval_rate`(无投票路径)。
+        #[serde(default)]
+        divergence: Option<f32>,
+        /// 弃权率 [0.0, 1.0](可选,弃权权重和 / 全部投票权重和)
+        #[serde(default)]
+        abstention_rate: Option<f32>,
+        /// 共识裕度 [-1.0, 1.0](可选,approval_rate − consensus_threshold)
+        #[serde(default)]
+        consensus_margin: Option<f32>,
+        /// 审议结果标签("Reached" / "Rejected" / "Vetoed")
+        outcome: String,
+    },
+
+    /// 多 Agent 委托批次完成 — L9 chimera-mas(DelegationExecutor)→ 任意订阅者
+    ///
+    /// 由 `DelegationExecutor::execute_delegation` / `execute_batch_delegation`
+    /// 在整批子任务汇聚完成后发布,携带批次 wall-clock 总开销,供 quest-engine
+    /// 填充 `CoordinationCostSample.delegation_overhead_ms`(协调度量接线闭环)。
+    ///
+    /// WHY 批次 wall-clock 而非各子任务 duration 求和:子任务并行执行,
+    /// 求和会重复计费;wall-clock 才是委托对 Quest 生命周期的真实时间开销。
+    DelegationCompleted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 委托方 Agent ID
+        parent_id: String,
+        /// 关联的 Quest ID(可选)
+        ///
+        /// 取自子任务的 `AgentTask.quest_id` 关联字段;调用方未设置时为
+        /// `None`,quest-engine 无法归因,仅记 debug 日志跳过合并。
+        quest_id: Option<String>,
+        /// 批次总开销(毫秒,派发到全部结果汇聚的 wall-clock)
+        total_overhead_ms: f64,
+        /// 子任务总数
+        sub_task_count: u32,
+        /// 成功子任务数
+        success_count: u32,
+    },
+
+    /// L8 议会策略封顶变更 — Parliament(StrategyCapGuard)→ 任意订阅者
+    ///
+    /// 由 `StrategyCapGuard` 在协调成本/推理增益比值(ratio)连续越阈/回落
+    /// 触发封顶升降时发布,供 TUI/efficiency-monitor 展示推理悖论风控动作。
+    ///
+    /// WHY Normal 级:封顶只影响审议深度上限(Full→Simplified→FastPath),
+    /// Skeptic 否决检查在任何封顶档位照常执行(红队防线不变量),
+    /// 事件丢失仅影响观测展示,不影响安全决策。
+    ParliamentStrategyCapChanged {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 变更前封顶("fast-path" / "simplified" / "full")
+        old_cap: String,
+        /// 变更后封顶(同上取值)
+        new_cap: String,
+        /// 触发变更的协调成本/推理增益比值
+        ratio: f64,
+        /// 推理悖论告警阈值(来自 CoordinationRatioReported)
+        threshold: f64,
+    },
 }
 
 impl NexusEvent {
@@ -1982,6 +2090,11 @@ impl NexusEvent {
             // polish-v2.7 P1-2: RuntimeAuditor 审计事件(2 个新变体)
             Self::AuditFindingRaised { metadata, .. } => metadata,
             Self::HarnessReportGenerated { metadata, .. } => metadata,
+            // L8 协调度量接线闭环:议会审议完成 + 委托批次完成(2 个新变体)
+            Self::DebateCompleted { metadata, .. } => metadata,
+            Self::DelegationCompleted { metadata, .. } => metadata,
+            // L8 推理悖论风控:策略封顶变更
+            Self::ParliamentStrategyCapChanged { metadata, .. } => metadata,
             Self::WikiUpdated { metadata, .. } => metadata,
             Self::EvolutionTriggered { metadata, .. } => metadata,
             Self::DpoPairGenerated { metadata, .. } => metadata,
@@ -2180,6 +2293,11 @@ impl NexusEvent {
             // polish-v2.7 P1-2: RuntimeAuditor 审计事件(2 个新变体)
             Self::AuditFindingRaised { .. } => "AuditFindingRaised",
             Self::HarnessReportGenerated { .. } => "HarnessReportGenerated",
+            // L8 协调度量接线闭环:观测事件(2 个新变体,Normal 级走通配符)
+            Self::DebateCompleted { .. } => "DebateCompleted",
+            Self::DelegationCompleted { .. } => "DelegationCompleted",
+            // L8 推理悖论风控:策略封顶变更(Normal 级走通配符)
+            Self::ParliamentStrategyCapChanged { .. } => "ParliamentStrategyCapChanged",
         }
     }
 }
@@ -3594,6 +3712,186 @@ mod tests {
                 assert_eq!(gain_index, 0.0);
             }
             _ => panic!("Expected CoordinationRatioReported"),
+        }
+    }
+
+    // ============================================================
+    // L8 协调度量接线闭环:DebateCompleted / DelegationCompleted 事件测试
+    // ============================================================
+
+    /// 构造测试用 DebateCompleted 事件(Full 策略共识达成场景)
+    fn make_debate_completed() -> NexusEvent {
+        NexusEvent::DebateCompleted {
+            metadata: EventMetadata::new("parliament"),
+            quest_id: "q-1".into(),
+            proposal_id: "p-1".into(),
+            debate_latency_ms: 42.5,
+            strategy: "full".into(),
+            weighted_approval_rate: Some(0.85),
+            participation_rate: Some(1.0),
+            divergence: Some(0.2),
+            abstention_rate: Some(0.1),
+            consensus_margin: Some(0.25),
+            outcome: "Reached".into(),
+        }
+    }
+
+    /// 构造测试用 DelegationCompleted 事件(4 子任务 3 成功场景)
+    fn make_delegation_completed() -> NexusEvent {
+        NexusEvent::DelegationCompleted {
+            metadata: EventMetadata::new("chimera-mas:DelegationExecutor"),
+            parent_id: "root-1".into(),
+            quest_id: Some("q-1".into()),
+            total_overhead_ms: 120.0,
+            sub_task_count: 4,
+            success_count: 3,
+        }
+    }
+
+    /// 验证两个新观测事件的 type_name 稳定性与 metadata 可取性
+    ///
+    /// type_name 不允许变更,否则会破坏 quest-engine 订阅器的事件匹配
+    /// 与 TUI 事件分类(同 CoordinationRatioReported 稳定性要求)。
+    #[test]
+    fn test_debate_delegation_completed_type_name_and_metadata() {
+        let debate = make_debate_completed();
+        assert_eq!(debate.type_name(), "DebateCompleted");
+        assert_eq!(debate.metadata().source, "parliament");
+
+        let delegation = make_delegation_completed();
+        assert_eq!(delegation.type_name(), "DelegationCompleted");
+        assert_eq!(
+            delegation.metadata().source,
+            "chimera-mas:DelegationExecutor"
+        );
+    }
+
+    /// 验证两个新观测事件为 Normal 严重级别
+    ///
+    /// WHY Normal:它们是只读延迟/质量观测事件,丢失仅影响单次度量样本
+    /// (Option 字段保持 None,EWMA 不阻塞),不影响共识/安全决策,
+    /// 不得占用仅为稀有安全告警保留的 mpsc 旁路通道(§6.2 红线 5)。
+    #[test]
+    fn test_debate_delegation_completed_severity_normal() {
+        assert_eq!(make_debate_completed().severity(), EventSeverity::Normal);
+        assert_eq!(
+            make_delegation_completed().severity(),
+            EventSeverity::Normal
+        );
+    }
+
+    /// 验证两个新观测事件的主题归类
+    ///
+    /// DebateCompleted 归 Parliament(与 DebateStarted/ConsensusReached 同组),
+    /// DelegationCompleted 归 Agent(与 AgentTaskCompleted 同组),
+    /// 使订阅者按主题过滤即可获取完整生命周期事件。
+    #[test]
+    fn test_debate_delegation_completed_topic() {
+        assert_eq!(
+            make_debate_completed().topic(),
+            crate::topic::EventTopic::Parliament
+        );
+        assert_eq!(
+            make_delegation_completed().topic(),
+            crate::topic::EventTopic::Agent
+        );
+    }
+
+    /// 验证 DebateCompleted 的序列化/反序列化往返(含 Option 字段两态)
+    #[test]
+    fn test_debate_completed_serialization_roundtrip() {
+        // 态 1:有投票数据(Simplified/Full 路径)
+        let json = serde_json::to_string(&make_debate_completed()).expect("序列化失败");
+        assert!(
+            json.contains("DebateCompleted"),
+            "JSON 应含 type tag: {json}"
+        );
+        let decoded: NexusEvent = serde_json::from_str(&json).expect("反序列化失败");
+        match decoded {
+            NexusEvent::DebateCompleted {
+                quest_id,
+                debate_latency_ms,
+                strategy,
+                weighted_approval_rate,
+                participation_rate,
+                divergence,
+                abstention_rate,
+                consensus_margin,
+                outcome,
+                ..
+            } => {
+                assert_eq!(quest_id, "q-1");
+                assert!((debate_latency_ms - 42.5).abs() < 1e-6);
+                assert_eq!(strategy, "full");
+                assert!((weighted_approval_rate.expect("应有赞成率") - 0.85).abs() < 1e-6);
+                assert!((participation_rate.expect("应有参与率") - 1.0).abs() < 1e-6);
+                // M2-T2.2:多维质量字段往返
+                assert!((divergence.expect("应有分歧度") - 0.2).abs() < 1e-6);
+                assert!((abstention_rate.expect("应有弃权率") - 0.1).abs() < 1e-6);
+                assert!((consensus_margin.expect("应有共识裕度") - 0.25).abs() < 1e-6);
+                assert_eq!(outcome, "Reached");
+            }
+            other => panic!("Expected DebateCompleted, got {:?}", other.type_name()),
+        }
+
+        // 态 2:无投票数据(FastPath/Vetoed 路径,Option 字段为 None)
+        let vetoed = NexusEvent::DebateCompleted {
+            metadata: EventMetadata::new("parliament"),
+            quest_id: "q-2".into(),
+            proposal_id: "p-2".into(),
+            debate_latency_ms: 3.2,
+            strategy: "fast-path".into(),
+            weighted_approval_rate: None,
+            participation_rate: None,
+            divergence: None,
+            abstention_rate: None,
+            consensus_margin: None,
+            outcome: "Vetoed".into(),
+        };
+        let json = serde_json::to_string(&vetoed).expect("序列化失败");
+        let decoded: NexusEvent = serde_json::from_str(&json).expect("反序列化失败");
+        match decoded {
+            NexusEvent::DebateCompleted {
+                weighted_approval_rate,
+                participation_rate,
+                divergence,
+                outcome,
+                ..
+            } => {
+                assert!(weighted_approval_rate.is_none(), "否决路径无投票数据");
+                assert!(participation_rate.is_none());
+                assert!(divergence.is_none(), "无投票路径多维质量也为 None");
+                assert_eq!(outcome, "Vetoed");
+            }
+            _ => panic!("Expected DebateCompleted"),
+        }
+    }
+
+    /// 验证 DelegationCompleted 的序列化/反序列化往返
+    #[test]
+    fn test_delegation_completed_serialization_roundtrip() {
+        let json = serde_json::to_string(&make_delegation_completed()).expect("序列化失败");
+        assert!(
+            json.contains("DelegationCompleted"),
+            "JSON 应含 type tag: {json}"
+        );
+        let decoded: NexusEvent = serde_json::from_str(&json).expect("反序列化失败");
+        match decoded {
+            NexusEvent::DelegationCompleted {
+                parent_id,
+                quest_id,
+                total_overhead_ms,
+                sub_task_count,
+                success_count,
+                ..
+            } => {
+                assert_eq!(parent_id, "root-1");
+                assert_eq!(quest_id.as_deref(), Some("q-1"));
+                assert!((total_overhead_ms - 120.0).abs() < 1e-6);
+                assert_eq!(sub_task_count, 4);
+                assert_eq!(success_count, 3);
+            }
+            other => panic!("Expected DelegationCompleted, got {:?}", other.type_name()),
         }
     }
 }

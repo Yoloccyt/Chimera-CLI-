@@ -151,17 +151,20 @@ impl CapabilityTokenRegistry {
 
     /// 创建并预注册所有六接缝的 token
     ///
-    /// WHY 提供: 便于编排器初始化时一键注册所有接缝
-    pub fn with_all_seams() -> Self {
+    /// WHY 提供: 便于编排器初始化时一键注册所有接缝。
+    /// 返回 `Result` 而非 `Self` 遵循 §4.1 "避免 unwrap/expect" 规范，
+    /// 即使逻辑上预注册时注册表为空不会冲突，类型系统也应表达此契约。
+    ///
+    /// # 错误
+    /// - [`DecayError::ConfigError`][]: 理论上不会触发（注册表为空时无冲突），
+    ///   但保留错误传播以符合 §4.1 规范
+    pub fn with_all_seams() -> Result<Self, DecayError> {
         let registry = Self::new();
         for seam in SeamId::all() {
-            // WHY unwrap 安全: register_capability_token 仅在已存在时返回错误，
-            // 预注册时注册表为空，不会冲突
-            registry
-                .register_capability_token(seam)
-                .expect("预注册时注册表为空，不会冲突");
+            // 注册表为空时不会冲突，但用 ? 传播错误以符合 §4.1 规范
+            registry.register_capability_token(seam)?;
         }
-        registry
+        Ok(registry)
     }
 
     /// 注册新接缝的 token（初始低能力 + Provisional 状态）
@@ -524,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_with_all_seams_registers_all() {
-        let registry = CapabilityTokenRegistry::with_all_seams();
+        let registry = CapabilityTokenRegistry::with_all_seams().unwrap();
         let tokens = registry.list_tokens();
         // WHY 动态长度断言:接缝数随 SeamId 枚举演进(S7 R1/S8 Mem-π 先后新增),
         // 与 SeamId::all() 对齐避免每次扩展接缝都需修改硬编码计数
@@ -607,7 +610,7 @@ mod tests {
 
     #[test]
     fn test_should_activate_learned_initial_false() {
-        let registry = CapabilityTokenRegistry::with_all_seams();
+        let registry = CapabilityTokenRegistry::with_all_seams().unwrap();
         for seam in SeamId::all() {
             assert!(
                 !registry.should_activate_learned(seam, 0).unwrap(),
@@ -817,7 +820,7 @@ mod tests {
 
     #[test]
     fn test_freeze_all_learned_tokens_freezes_authorized_and_cooldown() {
-        let registry = CapabilityTokenRegistry::with_all_seams();
+        let registry = CapabilityTokenRegistry::with_all_seams().unwrap();
 
         // S6 提升到 Authorized
         for _ in 0..20 {
@@ -847,7 +850,7 @@ mod tests {
 
     #[test]
     fn test_freeze_all_learned_tokens_idempotent() {
-        let registry = CapabilityTokenRegistry::with_all_seams();
+        let registry = CapabilityTokenRegistry::with_all_seams().unwrap();
         registry.freeze_all_learned_tokens();
         registry.freeze_all_learned_tokens(); // 二次调用不应 panic
 
@@ -865,7 +868,7 @@ mod tests {
 
     #[test]
     fn test_maybe_recover_all_from_cooldown_recovers_expired() {
-        let registry = CapabilityTokenRegistry::with_all_seams();
+        let registry = CapabilityTokenRegistry::with_all_seams().unwrap();
 
         // S1 提升到 Authorized
         for _ in 0..20 {
@@ -1016,7 +1019,7 @@ mod tests {
     #[test]
     fn test_scenario_multi_seam_independent() {
         // 验证多接缝 token 操作互不影响
-        let registry = CapabilityTokenRegistry::with_all_seams();
+        let registry = CapabilityTokenRegistry::with_all_seams().unwrap();
 
         // 仅 S6 提升到 Authorized
         for _ in 0..20 {
@@ -1069,7 +1072,7 @@ mod tests {
     #[test]
     fn test_scenario_freeze_all_emergency() {
         // 模拟紧急熔断场景
-        let registry = CapabilityTokenRegistry::with_all_seams();
+        let registry = CapabilityTokenRegistry::with_all_seams().unwrap();
 
         // S1/S2/S3 提升到 Authorized
         for seam in [SeamId::S1Density, SeamId::S2Memory, SeamId::S3Prefetch] {

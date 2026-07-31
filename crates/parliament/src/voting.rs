@@ -19,6 +19,37 @@ use tracing::warn;
 use crate::config::ParliamentConfig;
 use crate::types::{Consensus, Opinion, Proposal, Role};
 
+/// 多维共识质量指标 — 单次审议共识的质量画像(M2-T2.1)
+///
+/// 在单一 weighted_approval_rate proxy 之外,额外提供弃权率/分歧度/
+/// 共识裕度/Skeptic 立场四个维度,供下游(quest-engine/TUI)更全面地
+/// 评估议会共识的“结构”。
+///
+/// # 诚实边界(proxy 声明)
+/// 全部指标基于 `Opinion.position`/`confidence` 派生,而当前 `generate_opinion`
+/// 为规则 stub(confidence 未参与、position 规则化),故这些指标是共识
+/// “结构”的 proxy 而非决策正确率 ground truth。真实正确率复盘留待 GSOE 反馈闭环。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConsensusQualityMetrics {
+    /// 加权赞成率 [0.0, 1.0](= `VoteResult.weighted_approval_rate`,弃权不计入分母)
+    pub approval_rate: f32,
+    /// 弃权率 [0.0, 1.0](弃权角色权重和 / 全部投票角色权重和)
+    pub abstention_rate: f32,
+    /// 意见分歧度 [0.0, 1.0](加权 position 方差 / 0.25 归一化)
+    ///
+    /// 全体一致 → 0.0;半赞成半反对(最大分歧)→ 1.0。
+    /// WHY /0.25:Popoviciu 不等式——position∈[0,1] 时方差上界为 0.25。
+    pub divergence: f32,
+    /// 共识裕度 [-1.0, 1.0](approval_rate − consensus_threshold)
+    ///
+    /// 正=超过共识阈值的余量,负=不足。反映共识的“牢固程度”。
+    pub consensus_margin: f32,
+    /// Skeptic 立场 [0.0, 1.0](Skeptic 的 position;无 Skeptic 意见时默认 0.5 中立弃权)
+    ///
+    /// 红队视角的单独暴露:Skeptic 强反对(接近 0.0)但未触发否决时的风险信号。
+    pub skeptic_stance: f32,
+}
+
 /// 投票结果 — 加权计票的完整产出
 ///
 /// 包含加权赞成率、参与率与共识判定,用于审计日志与事件发布。
@@ -30,6 +61,12 @@ pub struct VoteResult {
     pub participation_rate: f32,
     /// 共识判定
     pub consensus: Consensus,
+    /// 多维共识质量指标(M2-T2.1)
+    ///
+    /// WHY 新增字段而非新方法:计票与质量派生共享同一次 opinions 遍历,
+    /// 随 VoteResult 一并返回最自然;VoteResult 仅在 crate 内部构造(count_votes*
+    /// 返回),无外部字面量构造,加字段零实际破坏。
+    pub quality: ConsensusQualityMetrics,
 }
 
 /// 投票计数器 — 加权计票与共识判定
@@ -117,6 +154,8 @@ impl VoteCounter {
                         participation_rate, self.config.quorum_threshold
                     ),
                 },
+                // 法定人数不足也从已有意见派生质量画像(approval_rate=0.0)
+                quality: self.compute_quality(opinions, 0.0, consensus_threshold),
             };
         }
 
@@ -136,6 +175,8 @@ impl VoteCounter {
                         // 冻结能力列表:当前为空,Week 5 Task 31 接入 SecCore 后填充
                         frozen_capabilities: Vec::new(),
                     },
+                    // 否决路径仍派生质量画像(Skeptic 立场、分歧度对审计有价值)
+                    quality: self.compute_quality(opinions, 0.0, consensus_threshold),
                 };
             }
         }
@@ -165,6 +206,67 @@ impl VoteCounter {
             weighted_approval_rate,
             participation_rate,
             consensus,
+            // 常规路径:以实际赞成率派生完整多维质量
+            quality: self.compute_quality(opinions, weighted_approval_rate, consensus_threshold),
+        }
+    }
+
+    /// 计算多维共识质量指标(M2-T2.1,单次遍历)
+    ///
+    /// WHY 单次遍历:在计票 O(n) 同量级内派生弃权率、意见分歧度(加权
+    /// position 方差)、Skeptic 立场,零额外渐进成本(n ≤ 角色数)。
+    /// 方差用 E[X²]−E[X]² 单趟计算(fp 负值用 max(0.0) 兜底)。
+    ///
+    /// # 参数
+    /// - `approval_rate`:该路径的加权赞成率(早退路径传 0.0)
+    /// - `consensus_threshold`:共识阈值(用于 consensus_margin)
+    fn compute_quality(
+        &self,
+        opinions: &[Opinion],
+        approval_rate: f32,
+        consensus_threshold: f32,
+    ) -> ConsensusQualityMetrics {
+        let mut total_weight = 0.0f32;
+        let mut abstain_weight = 0.0f32;
+        let mut w_pos_sum = 0.0f32; // Σ w·p
+        let mut w_pos_sq_sum = 0.0f32; // Σ w·p²
+        let mut skeptic_stance = 0.5f32; // 无 Skeptic 意见默认中立弃权
+        for o in opinions {
+            let w = self.config.weight_of(o.role);
+            total_weight += w;
+            if o.is_abstain() {
+                abstain_weight += w;
+            }
+            w_pos_sum += w * o.position;
+            w_pos_sq_sum += w * o.position * o.position;
+            if o.role == Role::Skeptic {
+                skeptic_stance = o.position;
+            }
+        }
+
+        let abstention_rate = if total_weight > 0.0 {
+            abstain_weight / total_weight
+        } else {
+            0.0
+        };
+
+        // 加权 position 方差(E[X²]−E[X]²);Popoviciu:position∈[0,1] 时 variance≤0.25,
+        // 除以 0.25 归一化到 [0,1];全体一致 → 0,半赞成半反对 → 1。
+        let divergence = if total_weight > 0.0 {
+            let mean = w_pos_sum / total_weight;
+            let mean_sq = w_pos_sq_sum / total_weight;
+            let variance = (mean_sq - mean * mean).max(0.0);
+            (variance / 0.25).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        ConsensusQualityMetrics {
+            approval_rate,
+            abstention_rate,
+            divergence,
+            consensus_margin: approval_rate - consensus_threshold,
+            skeptic_stance,
         }
     }
 
@@ -370,6 +472,49 @@ pub async fn publish_veto_overridden_event(
     };
     if let Err(e) = bus.publish(event).await {
         warn!(error = %e, "发布 VetoOverridden 事件失败");
+    }
+}
+
+/// 发布 DebateCompleted 事件(协调度量接线闭环 + M2 多维质量)
+///
+/// WHY Normal 级:这是只读延迟/质量观测事件,丢失仅影响单次度量样本
+/// (quest-engine 侧 Option 字段保持 None,EWMA 不阻塞),不影响共识决策。
+/// quest-engine 订阅后据此填充 `parliament_debate_latency_ms` 与
+/// `consensus_quality`(以 weighted_approval_rate 作为共识质量 proxy)。
+///
+/// # 参数
+/// - `vote_rates`:`Some((加权赞成率, 参与率))`,无投票路径
+///   (FastPath 直通 / Skeptic 前置否决)传 `None`
+/// - `quality`:多维共识质量(M2-T2.1),无投票路径传 `None`;
+///   其 divergence/abstention_rate/consensus_margin 随事件上报供下游观测
+/// - `outcome`:审议结果标签("Reached" / "Rejected" / "Vetoed")
+#[allow(clippy::too_many_arguments)]
+pub async fn publish_debate_completed_event(
+    bus: &EventBus,
+    quest_id: &str,
+    proposal_id: &str,
+    debate_latency_ms: f64,
+    strategy: &str,
+    vote_rates: Option<(f32, f32)>,
+    quality: Option<&ConsensusQualityMetrics>,
+    outcome: &str,
+) {
+    let event = NexusEvent::DebateCompleted {
+        metadata: EventMetadata::new("parliament"),
+        quest_id: quest_id.to_string(),
+        proposal_id: proposal_id.to_string(),
+        debate_latency_ms,
+        strategy: strategy.to_string(),
+        weighted_approval_rate: vote_rates.map(|(approval, _)| approval),
+        participation_rate: vote_rates.map(|(_, participation)| participation),
+        // M2-T2.2:多维质量随事件上报(无投票路径 quality=None → 全 None)
+        divergence: quality.map(|q| q.divergence),
+        abstention_rate: quality.map(|q| q.abstention_rate),
+        consensus_margin: quality.map(|q| q.consensus_margin),
+        outcome: outcome.to_string(),
+    };
+    if let Err(e) = bus.publish(event).await {
+        warn!(error = %e, "发布 DebateCompleted 事件失败");
     }
 }
 
@@ -687,5 +832,109 @@ mod tests {
 
         assert!(result.consensus.is_rejected());
         assert!((result.participation_rate - 0.0).abs() < 1e-6);
+    }
+
+    // ============================================================
+    // M2-T2.1:多维共识质量 ConsensusQualityMetrics 测试
+    // ============================================================
+
+    #[test]
+    fn test_quality_all_agree_zero_divergence() {
+        // 全体赞成(一致)→ 分歧度=0、弃权率=0、赞成率=1
+        let counter = make_counter();
+        let opinions = make_all_approve_opinions();
+        let result = counter.count_votes(&opinions, 5, &make_proposal());
+        let q = result.quality;
+        assert!(
+            q.divergence.abs() < 1e-6,
+            "全体一致分歧度应为 0,实际 {}",
+            q.divergence
+        );
+        assert!(q.abstention_rate.abs() < 1e-6, "无弃权");
+        assert!((q.approval_rate - 1.0).abs() < 1e-6);
+        // 共识裕度 = 1.0 - 0.6 = 0.4
+        assert!((q.consensus_margin - 0.4).abs() < 1e-6);
+        assert!(
+            (q.skeptic_stance - 1.0).abs() < 1e-6,
+            "Skeptic 赞成 position=1.0"
+        );
+    }
+
+    #[test]
+    fn test_quality_all_abstain_full_abstention_rate() {
+        // 全体弃权 → 弃权率=1、分歧度=0(所有 position 均为 0.5)
+        let counter = make_counter();
+        let opinions: Vec<Opinion> = Role::all()
+            .iter()
+            .map(|&role| Opinion::new(role, 0.5, 0.5, "弃权"))
+            .collect();
+        let result = counter.count_votes(&opinions, 5, &make_proposal());
+        let q = result.quality;
+        assert!((q.abstention_rate - 1.0).abs() < 1e-6, "全弃权时弃权率=1");
+        assert!(q.divergence.abs() < 1e-6, "position 全为 0.5,方差=0");
+    }
+
+    #[test]
+    fn test_quality_max_divergence_split_vote() {
+        // 半赞成半反对(最大分歧):分歧度应接近 1.0
+        // Architect(0.25)+Optimizer(0.20)赞成(w=0.45),Librarian(0.15)+Bard(0.10)+Skeptic(0.30)反对(w=0.55)
+        // 为使均值接近 0.5 以最大化方差,用接近均衡的拆分
+        let counter = make_counter();
+        let opinions = vec![
+            Opinion::new(Role::Architect, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Skeptic, 1.0, 0.9, "赞成"), // 不触发否决
+            Opinion::new(Role::Optimizer, 0.0, 0.8, "反对"),
+            Opinion::new(Role::Librarian, 0.0, 0.7, "反对"),
+            Opinion::new(Role::Bard, 0.0, 0.6, "反对"),
+        ];
+        let result = counter.count_votes(&opinions, 5, &make_proposal());
+        // 分歧度显著大于 0(存在对立立场);不断言精确值因权重不对称
+        assert!(
+            result.quality.divergence > 0.5,
+            "对立立场分歧度应显著,实际 {}",
+            result.quality.divergence
+        );
+    }
+
+    #[test]
+    fn test_quality_skeptic_stance_default_when_absent() {
+        // 无 Skeptic 意见时 skeptic_stance 默认 0.5(中立弃权)
+        let counter = make_counter();
+        let opinions = vec![
+            Opinion::new(Role::Architect, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Optimizer, 1.0, 0.8, "赞成"),
+            Opinion::new(Role::Librarian, 1.0, 0.7, "赞成"),
+        ];
+        // 3/5 参与率=0.6 ≥ quorum 0.6
+        let result = counter.count_votes(&opinions, 5, &make_proposal());
+        assert!(
+            (result.quality.skeptic_stance - 0.5).abs() < 1e-6,
+            "无 Skeptic 意见时应默认中立 0.5"
+        );
+    }
+
+    proptest::proptest! {
+        /// 属性:任意 position/confidence 组合下,多维质量指标均在合法区间
+        #[test]
+        fn prop_quality_metrics_bounded(
+            positions in proptest::collection::vec(
+                proptest::sample::select(vec![0.0f32, 0.5, 1.0]), 5
+            )
+        ) {
+            let counter = make_counter();
+            let roles = Role::all();
+            let opinions: Vec<Opinion> = roles
+                .iter()
+                .zip(positions.iter())
+                .map(|(&role, &pos)| Opinion::new(role, pos, 0.8, "prop"))
+                .collect();
+            let result = counter.count_votes(&opinions, 5, &make_proposal());
+            let q = result.quality;
+            proptest::prop_assert!((0.0..=1.0).contains(&q.divergence), "divergence ∈ [0,1]");
+            proptest::prop_assert!((0.0..=1.0).contains(&q.abstention_rate), "abstention_rate ∈ [0,1]");
+            proptest::prop_assert!((0.0..=1.0).contains(&q.approval_rate), "approval_rate ∈ [0,1]");
+            proptest::prop_assert!((-1.0..=1.0).contains(&q.consensus_margin), "consensus_margin ∈ [-1,1]");
+            proptest::prop_assert!((0.0..=1.0).contains(&q.skeptic_stance), "skeptic_stance ∈ [0,1]");
+        }
     }
 }

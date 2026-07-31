@@ -117,6 +117,17 @@ pub enum PanelId {
     /// 展示 `quest_list` 中各 Quest 的任务 DAG 层级树
     /// (依赖深度缩进 + 状态标记 + 依赖边标注),数据零管道侵入。
     DagViz,
+    /// PVL 过程评分面板（Task 3.7:L10 → L7 向下依赖）
+    ///
+    /// 展示 PVL 九维度过程评分（快手 KAT,ADR-049）：
+    /// 真实执行/覆盖率/验证通过/置信度/效率/重试纪律/产出实质性/零孤儿/沙箱清洁。
+    /// 数据来源：`pvl_layer::pvl_score()`。
+    PvlScore,
+    /// 任务管理面板（Task 3.9:L10 → L9 向下依赖）
+    ///
+    /// 展示 Quest CRUD 控制台 + 四象限稳定分工（ADR-027）状态。
+    /// 数据来源：`chimera_mas::quadrant_status()`。
+    TaskManager,
 }
 
 impl PanelId {
@@ -145,6 +156,8 @@ impl PanelId {
             PanelId::Chat => "Chat",
             PanelId::SelfAssessment => "SelfAssessment",
             PanelId::DagViz => "DagViz",
+            PanelId::PvlScore => "PvlScore",
+            PanelId::TaskManager => "TaskManager",
         }
     }
 
@@ -173,6 +186,8 @@ impl PanelId {
             PanelId::Chat => " Chat ",
             PanelId::SelfAssessment => " Self Assessment ",
             PanelId::DagViz => " DAG Viz ",
+            PanelId::PvlScore => " PVL Score ",
+            PanelId::TaskManager => " Task Manager ",
         }
     }
 
@@ -207,14 +222,16 @@ impl PanelId {
             PanelId::Chat => PanelId::SelfAssessment,
             // closure Stage B-10:DagViz 插入 SelfAssessment 与 Quest 之间(循环末尾)
             PanelId::SelfAssessment => PanelId::DagViz,
-            PanelId::DagViz => PanelId::Quest,
+            PanelId::DagViz => PanelId::PvlScore,
+            PanelId::PvlScore => PanelId::TaskManager,
+            PanelId::TaskManager => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
     pub fn prev(&self) -> PanelId {
         match self {
-            PanelId::Quest => PanelId::DagViz,
+            PanelId::Quest => PanelId::TaskManager,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
             PanelId::Memory => PanelId::Budget,
@@ -238,6 +255,10 @@ impl PanelId {
             PanelId::SelfAssessment => PanelId::Chat,
             // closure Stage B-10:DagViz 位于 SelfAssessment 之后(循环末尾)
             PanelId::DagViz => PanelId::SelfAssessment,
+            // Task 3.7:PvlScore 位于 DagViz 之后(循环末尾)
+            PanelId::PvlScore => PanelId::DagViz,
+            // Task 3.9:TaskManager 位于 PvlScore 之后(循环末尾)
+            PanelId::TaskManager => PanelId::PvlScore,
         }
     }
 }

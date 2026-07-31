@@ -122,9 +122,50 @@ fn concurrent_subscribe_throughput(c: &mut Criterion) {
     group.finish();
 }
 
+/// bench 3:publish_batch vs N 次 publish 摊销对照(M1-T1.3)
+///
+/// WHY:`publish` 内部纯同步(send 无 await 点),故并发化无益;真实可
+/// 摊销的是每次 publish 重复的 receiver_count()/sender.len() 背压采样。
+/// 本 bench 对比"N 次 publish"与"1 次 publish_batch(N)",量化摊销收益。
+/// N=5/10/20 对应议会 Simplified(3)/Full(5)/未来更多角色的 VoteCast 发布规模。
+fn publish_batch_vs_serial(c: &mut Criterion) {
+    let rt = Runtime::new().expect("创建 tokio runtime 失败");
+    let mut group = c.benchmark_group("publish_batch_vs_serial");
+
+    for &n in &[5usize, 10, 20] {
+        // 对照组:串行 N 次 publish(现 publish_vote_events 的行为)
+        group.bench_with_input(BenchmarkId::new("serial", n), &n, |b, &n| {
+            let bus = EventBus::new();
+            let _rx = bus.subscribe();
+            b.iter(|| {
+                rt.block_on(async {
+                    for _ in 0..n {
+                        bus.publish(black_box(make_event())).await.expect("publish");
+                    }
+                });
+            });
+        });
+        // 实验组:1 次 publish_batch(N)(摊销采样)
+        group.bench_with_input(BenchmarkId::new("batch", n), &n, |b, &n| {
+            let bus = EventBus::new();
+            let _rx = bus.subscribe();
+            b.iter(|| {
+                let events: Vec<NexusEvent> = (0..n).map(|_| make_event()).collect();
+                rt.block_on(async {
+                    bus.publish_batch(black_box(events))
+                        .await
+                        .expect("publish_batch");
+                });
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     single_publish_latency,
-    concurrent_subscribe_throughput
+    concurrent_subscribe_throughput,
+    publish_batch_vs_serial
 );
 criterion_main!(benches);

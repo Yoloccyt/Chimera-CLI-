@@ -25,7 +25,10 @@
 //! - 单函数 ≤ 200 行,禁止 unwrap()/expect()
 //! - 所有 async fn 满足 Send 约束
 
+use std::sync::Arc;
+
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use nexus_contracts::{MemoryStrategy, MemoryStrategyProvider};
 use sha2::{Digest, Sha256};
 use tracing::{debug, info};
 
@@ -102,6 +105,12 @@ pub struct OmniSparseCoordinator {
     event_bus: EventBus,
     /// 协调器配置
     config: OsaConfig,
+    /// S2 记忆策略提供者(可选)— 用于 memory 维度自适应记忆策略选择(Task 2)
+    ///
+    /// WHY Option<Arc<dyn>>: 通过 L0 trait 解耦,避免 L6→L6 直接依赖
+    /// (osa-coordinator 不直接依赖 omega-learner,依赖铁律 §2.2 合规)。
+    /// None 时 fallback 到 StandardTopK(k_multiplier=1.0,当前行为,向后兼容)。
+    memory_strategy_provider: Option<Arc<dyn MemoryStrategyProvider>>,
 }
 
 impl OmniSparseCoordinator {
@@ -114,7 +123,25 @@ impl OmniSparseCoordinator {
     ///
     /// 配置在创建时校验,非法配置返回 `OsaError::InvalidConfig`
     pub fn with_config(event_bus: EventBus, config: OsaConfig) -> Self {
-        Self { event_bus, config }
+        Self {
+            event_bus,
+            config,
+            // Task 2: 默认无 S2 provider,fallback 到 StandardTopK(向后兼容)
+            memory_strategy_provider: None,
+        }
+    }
+
+    /// 设置记忆策略提供者(Task 2:用于集成 omega-learner S2)
+    ///
+    /// WHY builder 模式: OSA 构造时通常无 S2 provider(omega-learner 尚未启动),
+    /// 通过 builder 方法在 S2 学习器就绪后注入,避免构造函数参数膨胀。
+    /// 注入后 memory 维度将根据 task_phase 自适应选择记忆策略。
+    pub fn with_memory_strategy_provider(
+        mut self,
+        provider: Arc<dyn MemoryStrategyProvider>,
+    ) -> Self {
+        self.memory_strategy_provider = Some(provider);
+        self
     }
 
     /// 获取配置引用(用于测试与调试)
@@ -132,7 +159,7 @@ impl OmniSparseCoordinator {
     /// 流程:
     /// 1. 校验 TaskProfile 合法性(complexity_score ∈ [0.0, 1.0])
     /// 2. 判定复杂度档位(Simple/Regular/Complex/UltraComplex)
-    /// 3. 并行计算五维度掩码(routing/context/memory/audit/budget)
+    /// 3. 并行计算五维度掩码(routing/context/memory/audit/budget)— Task 6
     /// 4. 聚合为 OmniSparseMasks(L0 类型,无 mask_hash 缓存)
     /// 5. 计算 mask_hash(SHA-256 hex,通过 `compute_omni_mask_hash` 自由函数)
     /// 6. 发布 OmniSparseMasksComputed 事件(携带 mask_hash、sparsity、context_mask)
@@ -140,12 +167,28 @@ impl OmniSparseCoordinator {
     /// WHY:五维度独立计算,O(N) 复杂度(N=活跃项数),无性能瓶颈。
     /// 事件发布失败不阻断掩码返回(掩码是核心产出,事件是副作用)。
     ///
+    /// # Task 6: 五维度并行计算(std::thread::scope)
+    ///
+    /// 原实现顺序调用 5 个 compute_*_mask 方法(O(5N) 顺序开销),Task 6 改为
+    /// `std::thread::scope` 并行计算,5 个维度在独立 OS 线程中同时计算。
+    ///
+    /// WHY thread::scope 而非 tokio::join!:compute_*_mask 是同步纯函数,
+    /// thread::scope 比 async 更轻量(无需 runtime 切换,直接 OS 线程并行)。
+    /// `std::thread::scope`(Rust 1.63+)是 safe API,`#![forbid(unsafe_code)]` 合规,
+    /// 且 scope 保证所有派生线程在 scope 结束前 join,引用生命周期由编译器保证。
+    ///
+    /// WHY 纯函数前提:5 个 compute_*_mask 方法均只读 `&self` 和 `&profile`,
+    /// 无 `&mut self`,无外部副作用(无 event_bus.publish),tracing 日志线程安全。
+    /// `OmniSparseCoordinator` 字段(event_bus/config/memory_strategy_provider)
+    /// 均为 `Send + Sync`,可在多线程间共享 `&self`。
+    ///
     /// # ADR-033 迁移说明(P2-W5.2)
     /// `OmniSparseMasks::new()` 迁移至 L0 后不再返回 Result(纯构造),
     /// `mask_hash` 从缓存字段改为通过 `compute_omni_mask_hash(&masks)?` 现算。
     ///
     /// # 性能基准
-    /// 掩码计算 < 10ms(测试中断言)
+    /// 掩码计算 < 10ms(测试中断言);并行版在 50 工具 + 2000 文件规模下
+    /// 相比顺序版有显著延迟降低(见 benches/parallel_vs_sequential.rs)
     pub async fn compute_all_masks(
         &self,
         profile: &TaskProfile,
@@ -162,12 +205,50 @@ impl OmniSparseCoordinator {
             "开始计算全维稀疏掩码"
         );
 
-        // 3. 计算五维度掩码
-        let routing = self.compute_routing_mask(profile);
-        let context = self.compute_context_mask(profile);
-        let memory = self.compute_memory_mask(profile);
-        let audit = self.compute_audit_mask(profile);
-        let budget = self.compute_budget_mask(profile);
+        // 3. 并行计算五维度掩码(Task 6: std::thread::scope)
+        //
+        // 5 个 compute_*_mask 方法均为纯函数(只读 &self 和 &profile),无 &mut self,
+        // 无外部副作用(事件发布移到并行计算之后,见步骤 6)。5 个维度在独立 OS 线程中
+        // 同时计算,消解 O(5N) 顺序开销。
+        //
+        // WHY thread::scope 而非 tokio::join!:compute_*_mask 是同步纯函数,
+        // thread::scope 直接派生 OS 线程并行,无需 async runtime 切换开销。
+        // scope 保证所有派生线程在 scope 结束前 join,引用生命周期由编译器保证。
+        //
+        // WHY expect 而非 ? :spawn 返回的 JoinResult::join() 失败表示计算线程 panic,
+        // 属于不可恢复的程序错误(非业务错误),用 expect 直接 panic 符合"内部代码信任"原则。
+        // 闭包内调用的是纯函数,无外部 IO,panic 仅可能来自底层分配失败(已超出 OsaError 范畴)。
+        let (routing, context, memory, audit, budget) = std::thread::scope(|s| {
+            // 每个闭包捕获 &self 和 &profile,scope 保证引用在 scope 内有效
+            // WHY 五个 spawn 而非 rayon::join:五维度计算相互独立,无需工作窃取,
+            // std::thread::scope 直接派生 5 个 OS 线程,开销最低
+            let r_routing = s.spawn(|| self.compute_routing_mask(profile));
+            let r_context = s.spawn(|| self.compute_context_mask(profile));
+            let r_memory = s.spawn(|| self.compute_memory_mask(profile));
+            let r_audit = s.spawn(|| self.compute_audit_mask(profile));
+            let r_budget = s.spawn(|| self.compute_budget_mask(profile));
+
+            // 顺序 join(顺序无关,5 个线程已并行启动)
+            // WHY join 顺序不影响结果:5 个线程已通过 spawn 并行启动,
+            // join 顺序仅影响主线程等待顺序,不改变并行性
+            let routing = r_routing
+                .join()
+                .expect("routing mask 计算线程 panic:纯函数不应失败,检查底层分配");
+            let context = r_context
+                .join()
+                .expect("context mask 计算线程 panic:纯函数不应失败,检查底层分配");
+            let memory = r_memory
+                .join()
+                .expect("memory mask 计算线程 panic:纯函数不应失败,检查底层分配");
+            let audit = r_audit
+                .join()
+                .expect("audit mask 计算线程 panic:纯函数不应失败,检查底层分配");
+            let budget = r_budget
+                .join()
+                .expect("budget mask 计算线程 panic:纯函数不应失败,检查底层分配");
+
+            (routing, context, memory, audit, budget)
+        });
 
         // 4. 聚合为 OmniSparseMasks(L0 类型,纯构造不返回 Result)
         let masks = OmniSparseMasks::new(routing, context, memory, audit, budget);
@@ -240,13 +321,22 @@ impl OmniSparseCoordinator {
     /// - Complex(档位 2):Top-24 工具
     /// - UltraComplex(档位 3):Top-32 工具
     ///
+    /// 评分来源:
+    /// - `profile.routing_scores = Some(vec)` 时用真实评分做 Top-K(基于相关性)
+    /// - `profile.routing_scores = None` 时 fallback 到 `heuristic_scores`(前 K 个)
+    ///
     /// WHY:复杂度越高,保留更多工具以应对多样化需求。
     /// Top-K 由 `routing_top_k_bounds` 配置,默认 (8, 32)。
+    /// 评分字段让上游可注入语义相关性分数,实现真正的 Top-K 而非"前 K 个"。
     pub fn compute_routing_mask(&self, profile: &TaskProfile) -> SparseMask<ToolId> {
         let band = profile.complexity_band_with_thresholds(self.config.complexity_thresholds());
         let k = self.config.routing_top_k_for(band);
-        let scores = heuristic_scores(profile.available_tools.len());
-        SparseMask::select_top_k(&profile.available_tools, &scores, k)
+        // 评分来源:优先用 profile.routing_scores,None 时 fallback 到 heuristic_scores
+        // WHY:heuristic_scores 用索引负相关评分使 Top-K 退化为"前 K 个",
+        // profile 携带真实评分时用真实评分,实现基于相关性的 Top-K
+        let heuristic = heuristic_scores(profile.available_tools.len());
+        let scores = profile.routing_scores.as_ref().unwrap_or(&heuristic);
+        SparseMask::select_top_k(&profile.available_tools, scores, k)
     }
 
     /// 计算 context 维度掩码 — 按复杂度档位选取 Top-K 文件
@@ -257,30 +347,80 @@ impl OmniSparseCoordinator {
     /// - Complex(档位 2):100 文件
     /// - UltraComplex(档位 3):1000 文件
     ///
+    /// 评分来源:
+    /// - `profile.context_scores = Some(vec)` 时用真实评分做 Top-K(基于相关性)
+    /// - `profile.context_scores = None` 时 fallback 到 `heuristic_scores`(前 K 个)
+    ///
     /// WHY:复杂度越高,需加载更多上下文文件以理解任务全貌。
     /// Top-K 由 `context_scope_multipliers` 配置,默认 [1, 10, 100, 1000]。
+    /// 评分字段让上游可注入语义相关性分数,实现真正的 Top-K 而非"前 K 个"。
     pub fn compute_context_mask(&self, profile: &TaskProfile) -> SparseMask<FileId> {
         let band = profile.complexity_band_with_thresholds(self.config.complexity_thresholds());
         let k = self.config.context_scope_for(band);
-        let scores = heuristic_scores(profile.available_files.len());
-        SparseMask::select_top_k(&profile.available_files, &scores, k)
+        // 评分来源:优先用 profile.context_scores,None 时 fallback 到 heuristic_scores
+        // WHY:heuristic_scores 用索引负相关评分使 Top-K 退化为"前 K 个",
+        // profile 携带真实评分时用真实评分,实现基于相关性的 Top-K
+        let heuristic = heuristic_scores(profile.available_files.len());
+        let scores = profile.context_scores.as_ref().unwrap_or(&heuristic);
+        SparseMask::select_top_k(&profile.available_files, scores, k)
     }
 
-    /// 计算 memory 维度掩码 — 按复杂度档位选取 Top-K 记忆
+    /// 计算 memory 维度掩码 — 按复杂度档位选取 Top-K 记忆(Task 2: S2 自适应)
     ///
-    /// 策略:与 routing 维度联动,使用相同的 Top-K 策略
-    /// - Simple:Top-8 记忆
-    /// - Regular:Top-16 记忆
-    /// - Complex:Top-24 记忆
-    /// - UltraComplex:Top-32 记忆
+    /// 策略:
+    /// - 基础 Top-K 由复杂度档位决定(与 routing 联动:Simple=8/Regular=16/Complex=24/UltraComplex=32)
+    /// - Task 2 集成 S2: 若注入了 `memory_strategy_provider`,根据 `task_phase`
+    ///   自适应选择记忆策略,用策略的 `k_multiplier()` 调整基础 K:
+    ///   - MinimalRecall(Initial): K × 0.5(快速响应,减少噪声)
+    ///   - StandardTopK(默认): K × 1.0(当前行为,向后兼容)
+    ///   - QueryReformulation(Stuck): K × 1.5(多角度查询,扩大召回)
+    ///   - AggressivePruning(LongRun): K × 0.25(长跑抑制噪声累积)
+    ///   - TimeFocused: K × 1.0(K 不变,差异在时间过滤而非数量)
+    /// - 未注入 provider 时,fallback 到 StandardTopK(K × 1.0,当前行为)
     ///
-    /// WHY:记忆维度与工具维度共享 Top-K 策略,因为复杂任务需要更多历史记忆
-    /// 辅助决策,与工具需求量正相关
+    /// 评分来源:
+    /// - `profile.memory_scores = Some(vec)` 时用真实评分做 Top-K(基于相关性)
+    /// - `profile.memory_scores = None` 时 fallback 到 `heuristic_scores`(前 K 个)
+    ///
+    /// WHY S2 集成: 三重悖论"记忆悖论"修复 — 固定 top-k 召回在任务阶段切换时
+    /// 产生"幽灵记忆",S2 通过 task_phase 驱动的自适应 k_multiplier 使记忆策略
+    /// 随任务阶段动态调整。
     pub fn compute_memory_mask(&self, profile: &TaskProfile) -> SparseMask<MemoryId> {
         let band = profile.complexity_band_with_thresholds(self.config.complexity_thresholds());
-        let k = self.config.routing_top_k_for(band);
-        let scores = heuristic_scores(profile.available_memories.len());
-        SparseMask::select_top_k(&profile.available_memories, &scores, k)
+        let base_k = self.config.routing_top_k_for(band);
+
+        // Task 2: S2 自适应记忆策略 — 根据 task_phase 调整基础 Top-K
+        // WHY: 三重悖论"记忆悖论"修复,记忆策略随任务阶段自适应
+        let strategy = self.select_memory_strategy(profile);
+        let adjusted_k = apply_k_multiplier(base_k, strategy.k_multiplier());
+
+        // 评分来源:优先用 profile.memory_scores,None 时 fallback 到 heuristic_scores
+        // WHY:heuristic_scores 用索引负相关评分使 Top-K 退化为"前 K 个",
+        // profile 携带真实评分时用真实评分,实现基于相关性的 Top-K
+        let heuristic = heuristic_scores(profile.available_memories.len());
+        let scores = profile.memory_scores.as_ref().unwrap_or(&heuristic);
+        SparseMask::select_top_k(&profile.available_memories, scores, adjusted_k)
+    }
+
+    /// 根据 task_phase 选择记忆策略(Task 2: S2 桥接)
+    ///
+    /// - 注入了 `memory_strategy_provider` 时:调用 provider 根据 phase 选择策略
+    /// - 未注入 provider 时:fallback 到 `StandardTopK`(k_multiplier=1.0,向后兼容)
+    /// - `profile.task_phase = None` 时:用 `MemoryTaskPhase::default()`(Initial)
+    ///
+    /// WHY 分离为独立方法: 便于测试验证策略选择逻辑,且 compute_memory_mask
+    /// 关注 Top-K 选择,策略选择是正交关注点
+    fn select_memory_strategy(&self, profile: &TaskProfile) -> MemoryStrategy {
+        match &self.memory_strategy_provider {
+            // C4 合规: 未注入 provider 时 fallback 到 StandardTopK(编译进二进制的 const)
+            None => MemoryStrategy::StandardTopK,
+            // S2 集成: 调用 provider 根据 task_phase 选择策略
+            // phase 为 None 时用 MemoryTaskPhase::default()(Initial,保守召回)
+            Some(provider) => {
+                let phase = profile.task_phase.unwrap_or_default();
+                provider.select_strategy(phase)
+            }
+        }
     }
 
     /// 计算 audit 维度掩码 — 按复杂度档位与风险等级选取操作
@@ -321,7 +461,7 @@ impl OmniSparseCoordinator {
     ///
     /// 策略:
     /// - 保护比例 = threshold × (0.5 + complexity × 0.5)
-    /// - 复杂度越高,保护比例越高(保留更多任务以避免预算耗尽)
+    /// - 复杂度越高,保护比例越高(保留更多任务预算用于并行执行)
     /// - 保留数量 = ceil(active_tasks.len() × protection_ratio)
     ///
     /// WHY:复杂任务消耗更多预算,需保留更多活跃任务以并行执行,
@@ -374,6 +514,34 @@ fn heuristic_scores(len: usize) -> Vec<f32> {
     (0..len).map(|i| 1.0 - (i as f32 / len as f32)).collect()
 }
 
+/// 应用 S2 策略的 k_multiplier 调整基础 Top-K(Task 2)
+///
+/// 公式: `adjusted_k = ceil(base_k × multiplier)`,最小为 1(当 base_k ≥ 1 时)
+///
+/// WHY 独立函数: 将策略调整逻辑与 Top-K 选择逻辑分离,便于单元测试验证
+/// k_multiplier 的正确应用,且 compute_memory_mask 关注掩码生成而非数值计算。
+///
+/// WHY ceil 而非 floor: AggressivePruning(multiplier=0.25)在 base_k=8 时
+/// 得到 2.0,ceil=2 与 floor=2 相同;但 base_k=7 时得到 1.75,ceil=2 保留
+/// 更多记忆(保守策略偏向召回),floor=1 可能过度剪枝。
+///
+/// # 参数
+/// - `base_k`: 基础 Top-K(由复杂度档位决定,8/16/24/32)
+/// - `multiplier`: S2 策略的调整因子(0.25/0.5/1.0/1.5)
+///
+/// # 返回
+/// 调整后的 K 值,至少为 1(当 base_k ≥ 1 时),不超过 base_k × 2(合理上界)
+fn apply_k_multiplier(base_k: usize, multiplier: f32) -> usize {
+    if base_k == 0 {
+        return 0;
+    }
+    // f32 全程保持 f32(§4.4 教训 6: f32 禁止隐式转 f64 比较)
+    let adjusted = (base_k as f32) * multiplier;
+    // ceil 向上取整,最小为 1
+    let k = adjusted.ceil() as usize;
+    k.max(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,6 +565,12 @@ mod tests {
                 .map(|i| OperationId::new(format!("op-{i}")))
                 .collect(),
             active_tasks: (0..10).map(|i| TaskId::new(format!("task-{i}"))).collect(),
+            // 评分字段默认 None:测试 fallback 到 heuristic_scores 的行为
+            routing_scores: None,
+            context_scores: None,
+            memory_scores: None,
+            // Task 2: task_phase 默认 None,测试 fallback 到 Initial 的行为
+            task_phase: None,
         }
     }
 
@@ -496,5 +670,200 @@ mod tests {
             hash.chars().all(|c| c.is_ascii_hexdigit()),
             "哈希应为纯 hex 字符"
         );
+    }
+
+    // ============================================================
+    // Task 2: apply_k_multiplier 单元测试
+    // ============================================================
+
+    #[test]
+    fn test_apply_k_multiplier_standard() {
+        // StandardTopK: multiplier=1.0,K 不变
+        assert_eq!(apply_k_multiplier(8, 1.0), 8);
+        assert_eq!(apply_k_multiplier(16, 1.0), 16);
+        assert_eq!(apply_k_multiplier(32, 1.0), 32);
+    }
+
+    #[test]
+    fn test_apply_k_multiplier_minimal_recall() {
+        // MinimalRecall: multiplier=0.5,K 减半
+        assert_eq!(apply_k_multiplier(8, 0.5), 4);
+        assert_eq!(apply_k_multiplier(16, 0.5), 8);
+    }
+
+    #[test]
+    fn test_apply_k_multiplier_aggressive_pruning() {
+        // AggressivePruning: multiplier=0.25,K 四分之一
+        assert_eq!(apply_k_multiplier(8, 0.25), 2);
+        assert_eq!(apply_k_multiplier(16, 0.25), 4);
+    }
+
+    #[test]
+    fn test_apply_k_multiplier_query_reformulation() {
+        // QueryReformulation: multiplier=1.5,K 扩大
+        assert_eq!(apply_k_multiplier(8, 1.5), 12);
+        assert_eq!(apply_k_multiplier(16, 1.5), 24);
+    }
+
+    #[test]
+    fn test_apply_k_multiplier_ceil_behavior() {
+        // ceil 向上取整: 7 × 0.5 = 3.5 → ceil = 4
+        assert_eq!(apply_k_multiplier(7, 0.5), 4);
+        // 7 × 0.25 = 1.75 → ceil = 2
+        assert_eq!(apply_k_multiplier(7, 0.25), 2);
+    }
+
+    #[test]
+    fn test_apply_k_multiplier_minimum_one() {
+        // base_k ≥ 1 时,adjusted_k 至少为 1
+        // 1 × 0.25 = 0.25 → ceil = 1
+        assert_eq!(apply_k_multiplier(1, 0.25), 1);
+    }
+
+    #[test]
+    fn test_apply_k_multiplier_zero_base() {
+        // base_k = 0 时返回 0(空候选集场景)
+        assert_eq!(apply_k_multiplier(0, 1.0), 0);
+        assert_eq!(apply_k_multiplier(0, 0.5), 0);
+    }
+
+    // ============================================================
+    // Task 2: select_memory_strategy 单元测试
+    // ============================================================
+
+    /// Mock provider: 返回固定策略(用于测试策略注入)
+    struct MockFixedStrategyProvider {
+        strategy: MemoryStrategy,
+    }
+
+    impl nexus_contracts::MemoryStrategyProvider for MockFixedStrategyProvider {
+        fn select_strategy(&self, _phase: nexus_contracts::MemoryTaskPhase) -> MemoryStrategy {
+            self.strategy
+        }
+    }
+
+    #[test]
+    fn test_select_strategy_no_provider_falls_back_to_standard() {
+        // 未注入 provider → fallback 到 StandardTopK
+        let bus = EventBus::new();
+        let coord = OmniSparseCoordinator::new(bus);
+        let profile = make_profile(0.5, RiskLevel::Medium);
+        let strategy = coord.select_memory_strategy(&profile);
+        assert_eq!(strategy, MemoryStrategy::StandardTopK);
+    }
+
+    #[test]
+    fn test_select_strategy_with_provider_returns_provider_strategy() {
+        // 注入 mock provider(返回 AggressivePruning)→ 返回 AggressivePruning
+        let bus = EventBus::new();
+        let provider: Arc<dyn nexus_contracts::MemoryStrategyProvider> =
+            Arc::new(MockFixedStrategyProvider {
+                strategy: MemoryStrategy::AggressivePruning,
+            });
+        let coord = OmniSparseCoordinator::new(bus).with_memory_strategy_provider(provider);
+        let profile = make_profile(0.5, RiskLevel::Medium);
+        let strategy = coord.select_memory_strategy(&profile);
+        assert_eq!(strategy, MemoryStrategy::AggressivePruning);
+    }
+
+    #[test]
+    fn test_select_strategy_none_phase_uses_default_initial() {
+        // task_phase = None 时用 MemoryTaskPhase::default()(Initial)
+        // mock provider 记录收到的 phase,验证 None → Initial
+        use std::sync::Mutex as StdMutex;
+
+        struct PhaseRecordingProvider {
+            received_phase: StdMutex<Option<nexus_contracts::MemoryTaskPhase>>,
+        }
+
+        impl nexus_contracts::MemoryStrategyProvider for PhaseRecordingProvider {
+            fn select_strategy(&self, phase: nexus_contracts::MemoryTaskPhase) -> MemoryStrategy {
+                *self.received_phase.lock().unwrap() = Some(phase);
+                MemoryStrategy::StandardTopK
+            }
+        }
+
+        let bus = EventBus::new();
+        let provider = Arc::new(PhaseRecordingProvider {
+            received_phase: StdMutex::new(None),
+        });
+        let provider_weak = Arc::downgrade(&provider);
+        let coord = OmniSparseCoordinator::new(bus).with_memory_strategy_provider(provider);
+        let profile = make_profile(0.5, RiskLevel::Medium);
+        // task_phase = None(默认)
+        let _ = coord.select_memory_strategy(&profile);
+
+        // 验证 provider 收到的是 Initial(MemoryTaskPhase::default())
+        let received = provider_weak.upgrade().unwrap();
+        let recorded = received.received_phase.lock().unwrap();
+        assert_eq!(*recorded, Some(nexus_contracts::MemoryTaskPhase::Initial));
+    }
+
+    // ============================================================
+    // Task 2: compute_memory_mask 集成测试(有/无 provider)
+    // ============================================================
+
+    #[test]
+    fn test_compute_memory_mask_no_provider_uses_base_k() {
+        // 未注入 provider → StandardTopK(k_multiplier=1.0)→ memory mask 大小 = base_k
+        let bus = EventBus::new();
+        let coord = OmniSparseCoordinator::new(bus);
+        // Regular 档位(complexity=0.4 ∈ [0.25, 0.5))→ base_k = 16
+        let mut profile = make_profile(0.4, RiskLevel::Medium);
+        profile.available_memories = (0..50).map(|i| MemoryId::new(format!("mem-{i}"))).collect();
+        let mask = coord.compute_memory_mask(&profile);
+        // base_k=16,k_multiplier=1.0 → adjusted_k=16
+        assert_eq!(mask.active_ids.len(), 16);
+    }
+
+    #[test]
+    fn test_compute_memory_mask_with_aggressive_pruning_reduces_k() {
+        // 注入 provider(返回 AggressivePruning)→ k_multiplier=0.25 → adjusted_k=4
+        let bus = EventBus::new();
+        let provider: Arc<dyn nexus_contracts::MemoryStrategyProvider> =
+            Arc::new(MockFixedStrategyProvider {
+                strategy: MemoryStrategy::AggressivePruning,
+            });
+        let coord = OmniSparseCoordinator::new(bus).with_memory_strategy_provider(provider);
+        // Regular 档位(complexity=0.4 ∈ [0.25, 0.5))→ base_k = 16
+        let mut profile = make_profile(0.4, RiskLevel::Medium);
+        profile.available_memories = (0..50).map(|i| MemoryId::new(format!("mem-{i}"))).collect();
+        let mask = coord.compute_memory_mask(&profile);
+        // base_k=16,k_multiplier=0.25 → 16×0.25=4.0 → ceil=4
+        assert_eq!(mask.active_ids.len(), 4);
+    }
+
+    #[test]
+    fn test_compute_memory_mask_with_query_reformulation_increases_k() {
+        // 注入 provider(返回 QueryReformulation)→ k_multiplier=1.5 → adjusted_k=24
+        let bus = EventBus::new();
+        let provider: Arc<dyn nexus_contracts::MemoryStrategyProvider> =
+            Arc::new(MockFixedStrategyProvider {
+                strategy: MemoryStrategy::QueryReformulation,
+            });
+        let coord = OmniSparseCoordinator::new(bus).with_memory_strategy_provider(provider);
+        // Regular 档位(complexity=0.4 ∈ [0.25, 0.5))→ base_k = 16
+        let mut profile = make_profile(0.4, RiskLevel::Medium);
+        profile.available_memories = (0..50).map(|i| MemoryId::new(format!("mem-{i}"))).collect();
+        let mask = coord.compute_memory_mask(&profile);
+        // base_k=16,k_multiplier=1.5 → 16×1.5=24.0 → ceil=24
+        assert_eq!(mask.active_ids.len(), 24);
+    }
+
+    #[test]
+    fn test_compute_memory_mask_with_minimal_recall_halves_k() {
+        // 注入 provider(返回 MinimalRecall)→ k_multiplier=0.5 → adjusted_k=8
+        let bus = EventBus::new();
+        let provider: Arc<dyn nexus_contracts::MemoryStrategyProvider> =
+            Arc::new(MockFixedStrategyProvider {
+                strategy: MemoryStrategy::MinimalRecall,
+            });
+        let coord = OmniSparseCoordinator::new(bus).with_memory_strategy_provider(provider);
+        // Regular 档位(complexity=0.4 ∈ [0.25, 0.5))→ base_k = 16
+        let mut profile = make_profile(0.4, RiskLevel::Medium);
+        profile.available_memories = (0..50).map(|i| MemoryId::new(format!("mem-{i}"))).collect();
+        let mask = coord.compute_memory_mask(&profile);
+        // base_k=16,k_multiplier=0.5 → 16×0.5=8.0 → ceil=8
+        assert_eq!(mask.active_ids.len(), 8);
     }
 }

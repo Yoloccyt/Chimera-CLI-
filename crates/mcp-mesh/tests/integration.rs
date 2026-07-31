@@ -20,7 +20,13 @@ use tokio::sync::Barrier;
 
 /// 辅助:创建带 5 个服务器的 Mesh(无 EventBus)
 fn make_mesh_with_5_servers() -> McpMesh {
-    let mesh = McpMesh::new(MeshConfig::default());
+    // WHY durable=false:集成测试为 in-process mock,无需 WAL 持久化,
+    // 禁用文件 IO 避免磁盘写入延迟影响性能断言(< 100ms)
+    let config = MeshConfig {
+        durable: false,
+        ..Default::default()
+    };
+    let mesh = McpMesh::new(config);
     for i in 0..5 {
         let sid = format!("s-{i}");
         // 使用 RFC 5737 TEST-NET-3 地址,绕过 SSRF 校验
@@ -33,7 +39,12 @@ fn make_mesh_with_5_servers() -> McpMesh {
 /// 辅助:创建带 5 个服务器的 Mesh + EventBus
 fn make_mesh_with_5_servers_and_bus() -> (McpMesh, EventBus) {
     let bus = EventBus::new();
-    let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus.clone());
+    // WHY durable=false:同上,禁用 WAL 避免 IO 延迟
+    let config = MeshConfig {
+        durable: false,
+        ..Default::default()
+    };
+    let mesh = McpMesh::with_event_bus(config, bus.clone());
     for i in 0..5 {
         let sid = format!("s-{i}");
         // 使用 RFC 5737 TEST-NET-3 地址,绕过 SSRF 校验
@@ -147,6 +158,7 @@ async fn test_transaction_timeout_triggers_rollback() {
     // 用极短的超时配置触发超时
     let config = MeshConfig {
         transaction_timeout_ms: 1, // 1ms 必然超时
+        durable: false,            // 禁用 WAL,避免 IO 干扰超时测试
         ..Default::default()
     };
     let mesh = McpMesh::new(config);
@@ -234,6 +246,7 @@ async fn test_1000_transactions_all_publish_events() {
     // 串行 1000 次事务总耗时约 5s,需配置更长的心跳超时避免服务器被判定离线
     let config = MeshConfig {
         heartbeat_timeout_ms: 60_000, // 60s,远大于 1000 次事务总耗时
+        durable: false,               // 禁用 WAL,1000 次事务避免磁盘 IO 累积延迟
         ..Default::default()
     };
     let bus = EventBus::new();

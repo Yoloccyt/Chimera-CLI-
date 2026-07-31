@@ -40,13 +40,14 @@ pub mod types;
 pub use config::MeshConfig;
 pub use error::McpError;
 pub use mesh::McpMesh;
-pub use quantum::entanglement::{EntanglementLink, EntanglementManager, SyncStrategy};
+pub use quantum::entanglement::{EntanglementLink, EntanglementManager, PendingSync, SyncStrategy};
 pub use quantum::participant_client::{
     InProcessClient, MockParticipantClient, MockPhase, ParticipantClient, TcpParticipantClient,
     TwoPcRequest, TwoPcResponse,
 };
 pub use quantum::superposition::{QueryResult, SuperpositionQuery};
-pub use quantum::transaction::{QuantumTransaction, TransactionState};
+pub use quantum::transaction::{QuantumTransaction, TransactionState, WalEntry};
+pub use quantum::wal::WalStore;
 pub use server_registry::{MeshServer, ServerRegistry};
 pub use types::TransactionResult;
 
@@ -55,12 +56,15 @@ pub mod prelude {
     pub use crate::config::MeshConfig;
     pub use crate::error::McpError;
     pub use crate::mesh::McpMesh;
-    pub use crate::quantum::entanglement::{EntanglementLink, EntanglementManager, SyncStrategy};
+    pub use crate::quantum::entanglement::{
+        EntanglementLink, EntanglementManager, PendingSync, SyncStrategy,
+    };
     pub use crate::quantum::participant_client::{
         InProcessClient, MockParticipantClient, ParticipantClient, TcpParticipantClient,
     };
     pub use crate::quantum::superposition::{QueryResult, SuperpositionQuery};
-    pub use crate::quantum::transaction::{QuantumTransaction, TransactionState};
+    pub use crate::quantum::transaction::{QuantumTransaction, TransactionState, WalEntry};
+    pub use crate::quantum::wal::WalStore;
     pub use crate::server_registry::{MeshServer, ServerRegistry};
     pub use crate::types::TransactionResult;
 }

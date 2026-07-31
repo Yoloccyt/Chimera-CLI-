@@ -59,6 +59,8 @@ pub mod metrics;
 /// polish-v2.7 P4-7:流程蓝图提取器(轨迹→蓝图沉淀,北大 DataFlow,ADR-049)
 pub mod procedural_blueprint;
 pub mod relation;
+/// RAG 混合检索融合 — Reciprocal Rank Fusion (RRF),融合 HNSW dense 与 FTS5 sparse 结果
+pub mod search;
 /// polish-v2.7 P4-6:技能依赖图与复用率优先推荐(Ω₆ Reuse,ADR-049)
 pub mod skill_graph;
 pub mod store;
@@ -75,6 +77,8 @@ pub use generator::WikiGenerator;
 pub use iscm::{IscmAnchor, Layer};
 pub use metrics::WikiMetrics;
 pub use relation::{EntryRelation, RelationKind};
+/// RAG 混合检索融合 — RRF 算法融合 HNSW dense 与 FTS5 sparse 结果(Task 3)
+pub use search::{hybrid_search, rrf_fuse, HybridSearchConfig, HybridSearchResult};
 pub use store::WikiStore;
 pub use types::{HnswConfig, WikiConfig, WikiEntry};
 /// HNSW 向量存储生产路径实现(P2-W8.1)
@@ -95,6 +99,8 @@ pub mod prelude {
     pub use crate::iscm::{IscmAnchor, Layer};
     pub use crate::metrics::WikiMetrics;
     pub use crate::relation::{EntryRelation, RelationKind};
+    /// RAG 混合检索融合 — RRF 算法融合 HNSW dense 与 FTS5 sparse 结果(Task 3)
+    pub use crate::search::{hybrid_search, rrf_fuse, HybridSearchConfig, HybridSearchResult};
     pub use crate::store::WikiStore;
     pub use crate::types::{HnswConfig, WikiConfig, WikiEntry};
     /// HNSW 向量存储生产路径实现(P2-W8.1)

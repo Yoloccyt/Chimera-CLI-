@@ -10,8 +10,13 @@
 //! - `Checkpoint`:检查点,用于 Quest 断点恢复
 //! - `ThinkingMode`:TTG 三级思考模式(Fast/Standard/Deep)
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+// Task 3.10: TaskStatus + Checkpoint 已下沉至 L0 nexus-contracts(ADR-033 扩展)
+// WHY re-export: 保持向后兼容,65+ 文件现有 `use nexus_core::types::TaskStatus` 路径不破坏,
+// 42+ 文件现有 `use nexus_core::types::Checkpoint` 路径不破坏。类型 + impl(new())均来自
+// nexus-contracts,re-export 完整保留构造方法。
+pub use nexus_contracts::{Checkpoint, TaskStatus};
 
 /// 用户意图 — NMC 编码后的多模态用户输入
 ///
@@ -45,18 +50,8 @@ pub enum MultimodalInput {
     // Audio(Vec<u8>),
 }
 
-/// 任务状态 — Task 生命周期
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum TaskStatus {
-    /// 待执行:尚未开始
-    Pending,
-    /// 执行中:已启动但未完成
-    Running,
-    /// 已完成:成功结束
-    Completed,
-    /// 已失败:执行出错或被中止
-    Failed,
-}
+// Task 3.10: TaskStatus 已下沉至 L0 nexus-contracts,此处 re-export
+// 原定义迁移至 crates/nexus-contracts/src/task.rs(纯 enum,4 变体:Pending/Running/Completed/Failed)
 
 /// 思考模式 — TTG(Thinking Toggle Governance)三级切换
 ///
@@ -133,42 +128,9 @@ impl Default for Quest {
     }
 }
 
-/// 检查点 — Quest 执行状态的持久化快照
-///
-/// WHY:`serialized_state` 存储 MessagePack 序列化的 Quest 状态,
-/// 而非直接存储 Quest 结构,以支持版本演进(字段增减不破坏旧检查点)。
-/// `memory_snapshot_hash` 用于恢复时校验完整性,防止状态漂移。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Checkpoint {
-    /// 所属 Quest ID
-    pub quest_id: String,
-    /// 检查点唯一标识
-    pub checkpoint_id: String,
-    /// 记忆快照哈希(SHA-256 hex),恢复时校验完整性
-    pub memory_snapshot_hash: String,
-    /// MessagePack 序列化的 Quest 状态(版本无关的持久化表示)
-    pub serialized_state: Vec<u8>,
-    /// 创建时间(UTC,自动生成)
-    pub created_at: DateTime<Utc>,
-}
-
-impl Checkpoint {
-    /// 创建新检查点,`created_at` 自动设为当前 UTC 时间
-    pub fn new(
-        quest_id: impl Into<String>,
-        checkpoint_id: impl Into<String>,
-        memory_snapshot_hash: impl Into<String>,
-        serialized_state: Vec<u8>,
-    ) -> Self {
-        Self {
-            quest_id: quest_id.into(),
-            checkpoint_id: checkpoint_id.into(),
-            memory_snapshot_hash: memory_snapshot_hash.into(),
-            serialized_state,
-            created_at: Utc::now(),
-        }
-    }
-}
+// Task 3.10: Checkpoint 已下沉至 L0 nexus-contracts,此处 re-export(见文件顶部 pub use)
+// 原定义迁移至 crates/nexus-contracts/src/checkpoint.rs
+// (quest_id / checkpoint_id / memory_snapshot_hash / serialized_state / created_at + impl new())
 
 #[cfg(test)]
 mod tests {
@@ -202,6 +164,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint_new_auto_timestamp() {
+        use chrono::Utc;
         let before = Utc::now();
         let cp = Checkpoint::new("q1", "c1", "hash123", vec![1, 2, 3]);
         let after = Utc::now();

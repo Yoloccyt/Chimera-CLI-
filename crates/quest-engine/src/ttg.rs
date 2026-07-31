@@ -53,7 +53,6 @@ use nexus_core::{Quest, ThinkingMode};
 // 同步方法内的 info! 与已发布事件重复(违反 DRY)。降级为 debug! 保留诊断信息,
 // 避免生产日志噪声;下游消费者订阅 EventBus 获取结构化切换通知,不依赖 tracing。
 use tracing::debug;
-use uuid::Uuid;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 
@@ -778,12 +777,6 @@ impl TtgGovernor {
             bus.publish(event).await?;
         }
         Ok(())
-    }
-
-    /// 生成唯一 ID(用于测试辅助,复用 UUIDv7)
-    #[allow(dead_code)]
-    fn generate_id() -> String {
-        format!("ttg-{}", Uuid::now_v7())
     }
 }
 

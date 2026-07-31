@@ -80,3 +80,8 @@ harness = false
 [[bench]]
 name = "wiki_knn_slo"
 harness = false
+
+# Task 3.6: RAG 混合检索(RRF) vs dense-only 延迟对比基准
+[[bench]]
+name = "hybrid_search_bench"
+harness = false

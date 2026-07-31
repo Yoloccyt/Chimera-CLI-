@@ -33,6 +33,12 @@ fn make_profile() -> TaskProfile {
             .map(|i| OperationId::new(format!("op-{i}")))
             .collect(),
         active_tasks: (0..10).map(|i| TaskId::new(format!("task-{i}"))).collect(),
+        // 评分字段默认 None:基准测试 fallback 到 heuristic_scores 的行为
+        routing_scores: None,
+        context_scores: None,
+        memory_scores: None,
+        // Task 2: task_phase 默认 None,基准测试不涉及 S2 自适应
+        task_phase: None,
     }
 }
 

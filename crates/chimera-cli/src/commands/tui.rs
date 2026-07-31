@@ -2,6 +2,10 @@
 //!
 //! 调用 `chimera-tui` crate 启动 ratatui 终端界面。
 //! 生产环境通过 EventBus 订阅实时数据，替代默认的 StubDataSource。
+//!
+//! # v3-engine M2 切换(ADR-061)
+//! 自研渲染路径默认启用,通过 `--no-v3-engine` flag 或 `CHIMERA_NO_V3_ENGINE=1`
+//! 环境变量可回退到 ratatui 路径。回退机制保留 2 个版本周期(v2.11.0-omega 移除)。
 
 use std::sync::Arc;
 
@@ -10,8 +14,20 @@ use anyhow::{Context, Result};
 use crate::config::ChimeraConfig;
 
 /// 执行 tui 命令
-pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
-    tracing::info!("启动 TUI 交互界面");
+///
+/// `no_v3_engine`:来自 CLI `--no-v3-engine` flag,true 时设置
+/// `CHIMERA_NO_V3_ENGINE=1` 环境变量,使 `TuiApp::render` 走 ratatui 回退路径。
+pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> {
+    // v3-engine M2(ADR-061):CLI flag 优先,设置 env var 让 TuiApp 在渲染时
+    // 通过 `v3_engine_disabled_by_env()` 检测到回退意图。WHY env var 而非直接
+    // 传参:TuiApp 已封装好双路径分发,env var 是最小侵入式回退通道,且支持
+    // 不修改 CLI 时通过环境变量回退(CI/运维场景友好)。
+    if no_v3_engine {
+        std::env::set_var("CHIMERA_NO_V3_ENGINE", "1");
+        tracing::info!("v3-engine 已通过 --no-v3-engine flag 禁用,回退到 ratatui 路径");
+    } else {
+        tracing::info!("启动 TUI 交互界面(v3-engine 默认启用)");
+    }
 
     // M0: 为当前 TUI 会话创建本地事件总线;Quest 编排器亦订阅此同一总线,
     // 形成 TUI ↔ 编排器的对话事件回环(全系统 EventBus 共享仍待后续里程碑)。

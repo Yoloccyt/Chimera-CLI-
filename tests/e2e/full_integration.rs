@@ -100,7 +100,11 @@ fn test_layer_dependencies() {
             .bridge
             .receive(raw, chtc_bridge::IdeSource::vscode())
             .expect("CHTC receive 失败");
-        let exec_result = pipeline.bridge.execute(&call).expect("CHTC execute 失败");
+        let exec_result = pipeline
+            .bridge
+            .execute(&call)
+            .await
+            .expect("CHTC execute 失败");
         assert!(exec_result.success, "VSCode execute 应成功");
 
         // L10 Interface:MCP Mesh 量子事务,发布 McpMeshTransactionCompleted 事件

@@ -7,7 +7,8 @@
 //! - **专家注册表**:基于 `DashMap`,O(1) 分片查找,并发安全
 //! - **激活评分**:CLV 余弦相似度,复用 `nexus_core::cosine_similarity_slices`
 //! - **Top-K 选择**:使用 `select_nth_unstable_by` 实现 O(n) 平均复杂度
-//! - **稀疏度强制**:`enforce_sparsity` 确保激活专家数 < 40%
+//! - **稀疏度强制**:`enforce_sparsity` 确保激活专家数 < max_sparsity_ratio
+//!   (支持 TaskPhase 动态自适应: Coding→20% / Execute→40% / Debug→60%)
 //! - **EventBus 集成**:激活完成发布 `SesaActivationCompleted`
 //!   订阅 `ConsensusReached` 触发稀疏激活策略调整
 //!
@@ -39,6 +40,8 @@ use crate::error::SesaError;
 use crate::mask::{SesaMask, MASK_TOTAL_BITS};
 use crate::prerequisite::PrerequisiteChecker;
 use crate::sparsity::{enforce_sparsity, SparsityProfile};
+#[cfg(test)]
+use crate::types::TaskPhase;
 use crate::types::{ActivationRequest, ExpertDescriptor};
 
 /// SESA 激活路由器 — 子专家稀疏激活核心组件
@@ -242,6 +245,14 @@ impl SesaRouter {
     /// 2. 用 `select_nth_unstable_by` 选 Top-K(评分最高的 K 个)
     /// 3. 构造 SesaMask,激活 Top-K 对应位
     /// 4. 调用 `enforce_sparsity` 强制稀疏度 < max_sparsity_ratio
+    ///
+    /// # 动态稀疏度(ADR-055)
+    /// 若 `request.task_phase` 指定了任务阶段,使用该阶段对应的稀疏度阈值;
+    /// 否则回退到 `SesaConfig.max_sparsity_ratio` 静态默认值。
+    /// 映射关系:
+    /// - `Coding` → 20%(激进稀疏)
+    /// - `Execute` → 40%(标准稀疏)
+    /// - `Debug` → 60%(宽松稀疏)
     fn activate_inner(
         &self,
         request: &ActivationRequest,
@@ -277,8 +288,12 @@ impl SesaRouter {
             }
         }
 
-        // 强制稀疏度 < max_sparsity_ratio
-        self.enforce_sparsity(&mut mask, &scores, total, self.config.max_sparsity_ratio);
+        // 动态稀疏度阈值(ADR-055):TaskPhase 优先于静态配置
+        let max_ratio = request
+            .task_phase
+            .and_then(|p| p.max_sparsity_ratio())
+            .unwrap_or(self.config.max_sparsity_ratio);
+        self.enforce_sparsity(&mut mask, &scores, total, max_ratio);
 
         let profile = SparsityProfile::from_mask(&mask, total);
         Ok((mask, profile))
@@ -730,5 +745,71 @@ mod tests {
                 p.sparsity_ratio
             );
         }
+    }
+
+    // === 7. 动态稀疏度测试(ADR-055) ===
+
+    #[tokio::test]
+    async fn test_activate_dynamic_sparsity_coding_phase() {
+        // Coding 阶段:20% 激进稀疏
+        let router = make_router(100);
+        let req = make_request(100, 5).with_task_phase(TaskPhase::Coding);
+        let (_mask, profile) = router.activate(req).await.expect("激活失败");
+
+        // 100 × 0.2 = 20,20/100 = 0.2 >= 0.2,所以 max_allowed = 19(严格 < 20%)
+        assert_eq!(profile.active_experts, 19);
+        assert!(
+            profile.sparsity_ratio < 0.2,
+            "Coding 阶段稀疏度应严格 < 20%, got {}",
+            profile.sparsity_ratio
+        );
+    }
+
+    #[tokio::test]
+    async fn test_activate_dynamic_sparsity_debug_phase() {
+        // Debug 阶段:60% 宽松稀疏
+        let router = make_router(100);
+        let req = make_request(100, 5).with_task_phase(TaskPhase::Debug);
+        let (_mask, profile) = router.activate(req).await.expect("激活失败");
+
+        // 100 × 0.6 = 60,60/100 = 0.6 >= 0.6,所以 max_allowed = 59(严格 < 60%)
+        assert_eq!(profile.active_experts, 59);
+        assert!(
+            profile.sparsity_ratio < 0.6,
+            "Debug 阶段稀疏度应严格 < 60%, got {}",
+            profile.sparsity_ratio
+        );
+    }
+
+    #[tokio::test]
+    async fn test_activate_dynamic_sparsity_no_phase_falls_back_to_config() {
+        // 不指定 TaskPhase 时回退到 SesaConfig 默认值(40%)
+        let router = make_router(100);
+        let req = make_request(100, 5); // task_phase = None
+        let (_mask, profile) = router.activate(req).await.expect("激活失败");
+
+        // 100 × 0.4 = 40,40/100 = 0.4 >= 0.4,所以 max_allowed = 39(严格 < 40%)
+        assert_eq!(profile.active_experts, 39);
+        assert!(
+            profile.sparsity_ratio < 0.4,
+            "无 TaskPhase 时应回退到 config 默认 40%, got {}",
+            profile.sparsity_ratio
+        );
+    }
+
+    #[tokio::test]
+    async fn test_activate_dynamic_sparsity_execute_phase() {
+        // Execute 阶段:40% 标准稀疏,与默认配置一致
+        let router = make_router(100);
+        let req = make_request(100, 5).with_task_phase(TaskPhase::Execute);
+        let (_mask, profile) = router.activate(req).await.expect("激活失败");
+
+        // 100 × 0.4 = 40,40/100 = 0.4 >= 0.4,所以 max_allowed = 39(严格 < 40%)
+        assert_eq!(profile.active_experts, 39);
+        assert!(
+            profile.sparsity_ratio < 0.4,
+            "Execute 阶段稀疏度应严格 < 40%, got {}",
+            profile.sparsity_ratio
+        );
     }
 }

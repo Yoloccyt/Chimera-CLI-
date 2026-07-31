@@ -18,12 +18,15 @@
 //! - immutable_surface_blocks_registration:不可进化面违反 → 注册拒绝 + 错误映射
 //! - channel_a_to_b_end_to_end:通道 A 提议 → 通道 B CI 门 + 显著性 → 注册
 
-use event_bus::{EventBus, EventMetadata, EventSeverity, NexusEvent};
+// Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
+use event_bus::{EventBus, EventSeverity, NexusEvent};
 use gsoe_evolution::{
     CargoCiGate, CiFailure, CiFailureKind, CiGate, DelegationEdge, GsoeConfig, GsoeError,
     GsoeEvolutionEngine, MockCiGate, SignificanceDetector, SpecRegistry, SpecRegistryError,
 };
-use nexus_contracts::{ContractSpec, HarnessMeta, HarnessSpec, HopSpec, RetryPolicy};
+use nexus_contracts::{
+    ContractSpec, EventMetadata, HarnessMeta, HarnessSpec, HopSpec, RetryPolicy,
+};
 use std::time::Duration;
 
 /// 验证 evolve_once 正确发布 GsoePolicyUpdated 事件

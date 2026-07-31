@@ -28,13 +28,26 @@ pub enum ChtcError {
         reason: String,
     },
 
-    /// 功能未实现 — 本周仅 VSCode 适配器完整实现 execute
-    #[error("功能未实现: ide={ide} feature={feature}")]
-    NotImplemented {
-        /// IDE 标识
-        ide: String,
-        /// 未实现的功能名
-        feature: String,
+    /// 调用载荷过大 — 超过 receive 入口的 1MB 大小上限
+    ///
+    /// WHY:防止恶意 IDE 注入超大 JSON 耗尽内存(系统边界校验,§4.1)
+    #[error("调用载荷过大: size={size} bytes, 上限={limit} bytes")]
+    PayloadTooLarge {
+        /// 实际字节数
+        size: usize,
+        /// 大小上限
+        limit: usize,
+    },
+
+    /// JSON 嵌套深度超限 — 超过 receive 入口的 32 层深度上限
+    ///
+    /// WHY:防止恶意构造的深层嵌套 JSON 触发解析栈溢出(系统边界校验)
+    #[error("JSON 嵌套深度超限: depth={depth}, 上限={limit}")]
+    PayloadDepthExceeded {
+        /// 实际深度
+        depth: usize,
+        /// 深度上限
+        limit: usize,
     },
 }
 
@@ -71,13 +84,24 @@ mod tests {
     }
 
     #[test]
-    fn test_not_implemented_display() {
-        let e = ChtcError::NotImplemented {
-            ide: "vim".into(),
-            feature: "execute".into(),
+    fn test_payload_too_large_display() {
+        let e = ChtcError::PayloadTooLarge {
+            size: 2_000_000,
+            limit: 1_048_576,
         };
         let msg = e.to_string();
-        assert!(msg.contains("vim"));
-        assert!(msg.contains("execute"));
+        assert!(msg.contains("2000000"));
+        assert!(msg.contains("1048576"));
+    }
+
+    #[test]
+    fn test_payload_depth_exceeded_display() {
+        let e = ChtcError::PayloadDepthExceeded {
+            depth: 64,
+            limit: 32,
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("64"));
+        assert!(msg.contains("32"));
     }
 }

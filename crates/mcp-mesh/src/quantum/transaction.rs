@@ -139,6 +139,52 @@ impl QuantumTransaction {
     }
 }
 
+/// WAL 日志条目 — 2PC 协调者崩溃恢复用
+///
+/// WHY: 当前 2PC 状态仅存 in-memory,协调者崩溃后无法判断事务是否已 Commit,
+/// 可能造成参与者状态不一致。WAL 在每阶段切换时追加一条 entry,崩溃后扫描
+/// 即可重建未完成事务(Gray & Reuter《Transaction Processing》第 7 章)。
+///
+/// # 设计
+/// - `participants_ack`:prepare 阶段已 ACK 的参与者 ID(Commit entry 全部)
+/// - `timestamp`:UNIX 毫秒时间戳(便于按时间排序恢复)
+/// - 用 `TransactionState`(Prepare/Commit/Rollback)而非完整状态机,因 WAL
+///   只关心"事务推进到哪一步",Init 不写日志(无副作用可恢复)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct WalEntry {
+    /// 事务 ID(与 QuantumTransaction.transaction_id 一致)
+    pub transaction_id: String,
+    /// 事务推进到的状态(Prepare / Commit / Rollback)
+    pub state: TransactionState,
+    /// 已 ACK 的参与者 ID 列表(便于恢复时知道哪些参与者需重发 commit)
+    pub participants_ack: Vec<String>,
+    /// 写入时刻(UNIX 毫秒时间戳)
+    pub timestamp: u64,
+}
+
+impl WalEntry {
+    /// 创建 WAL 条目,timestamp 取当前系统时间(UNIX 毫秒)
+    ///
+    /// WHY 用 SystemTime 而非 chrono::Utc:WAL 是磁盘格式,SystemTime 不引入
+    /// 时区歧义,且 chrono::Utc::now().timestamp_millis() 内部也是 SystemTime
+    pub fn new(
+        transaction_id: impl Into<String>,
+        state: TransactionState,
+        participants_ack: Vec<String>,
+    ) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        Self {
+            transaction_id: transaction_id.into(),
+            state,
+            participants_ack,
+            timestamp,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +271,51 @@ mod tests {
         assert_eq!(TransactionState::Commit.as_str(), "Commit");
         assert_eq!(TransactionState::Abort.as_str(), "Abort");
         assert_eq!(TransactionState::Rollback.as_str(), "Rollback");
+    }
+
+    // === WalEntry 测试 ===
+
+    #[test]
+    fn test_wal_entry_new_sets_timestamp() {
+        let entry = WalEntry::new(
+            "tx-001",
+            TransactionState::Prepare,
+            vec!["s-1".into(), "s-2".into()],
+        );
+        assert_eq!(entry.transaction_id, "tx-001");
+        assert_eq!(entry.state, TransactionState::Prepare);
+        assert_eq!(
+            entry.participants_ack,
+            vec!["s-1".to_string(), "s-2".to_string()]
+        );
+        // timestamp 应为合理的 UNIX 毫秒(2026 年后)
+        assert!(entry.timestamp > 1_700_000_000_000);
+    }
+
+    #[test]
+    fn test_wal_entry_serde_roundtrip() {
+        let entry = WalEntry::new(
+            "tx-002",
+            TransactionState::Commit,
+            vec!["s-1".into(), "s-2".into(), "s-3".into()],
+        );
+        let json = serde_json::to_string(&entry).expect("序列化失败");
+        let restored: WalEntry = serde_json::from_str(&json).expect("反序列化失败");
+        assert_eq!(entry, restored);
+    }
+
+    #[test]
+    fn test_wal_entry_state_variants() {
+        // 验证三种 WAL 状态均可序列化
+        for state in [
+            TransactionState::Prepare,
+            TransactionState::Commit,
+            TransactionState::Rollback,
+        ] {
+            let entry = WalEntry::new("tx", state, vec![]);
+            let json = serde_json::to_string(&entry).expect("序列化失败");
+            let restored: WalEntry = serde_json::from_str(&json).expect("反序列化失败");
+            assert_eq!(entry.state, restored.state);
+        }
     }
 }

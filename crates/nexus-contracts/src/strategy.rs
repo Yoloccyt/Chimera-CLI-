@@ -167,6 +167,29 @@ impl MemoryStrategy {
         }
     }
 
+    /// 返回 Top-K 调整因子（用于 OSA memory 维度自适应调整基础 Top-K）
+    ///
+    /// OSA memory 维度的基础 Top-K 由复杂度档位决定（8/16/24/32），
+    /// S2 集成后用此因子调整基础 K 得到实际 K：
+    /// - `MinimalRecall`: 0.5（召回减半，快速响应，减少噪声）
+    /// - `StandardTopK`: 1.0（当前行为，向后兼容）
+    /// - `QueryReformulation`: 1.5（多角度查询，扩大召回）
+    /// - `AggressivePruning`: 0.25（仅保留最高相关记忆，长跑抑制噪声）
+    /// - `TimeFocused`: 1.0（K 不变，差异在时间过滤而非数量）
+    ///
+    /// WHY 乘法因子而非绝对值: OSA memory 维度的基础 K 由复杂度档位驱动（8/16/24/32），
+    /// S2 策略应在此基础上**调整**而非覆盖，保留复杂度联动稀疏化的核心逻辑。
+    /// 与 `default_top_k`（mlc-engine 召回路径的绝对 k 值）语义不同，互不干扰。
+    pub const fn k_multiplier(self) -> f32 {
+        match self {
+            Self::MinimalRecall => 0.5,
+            Self::StandardTopK => 1.0,
+            Self::QueryReformulation => 1.5,
+            Self::AggressivePruning => 0.25,
+            Self::TimeFocused => 1.0,
+        }
+    }
+
     /// 返回相似度阈值（用于 AggressivePruning 高阈值剪枝）
     ///
     /// 默认 0.0（无过滤），AggressivePruning 提升至 0.5 抑制噪声。

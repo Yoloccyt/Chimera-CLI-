@@ -42,7 +42,8 @@ impl TuiApp {
 
         // M2.2:统一命令面板打开时,键盘事件全部路由给面板(模糊检索/导航/执行),
         // 与 InputRouter 的 Command 模式语义一致(Esc 关闭 / ↑↓ 选择 / Enter 执行)。
-        if self.palette.is_some() {
+        // Task 1.15.4:palette 移至 chat_session
+        if self.chat_session.palette.is_some() {
             self.handle_palette_key(key);
             return;
         }
@@ -192,7 +193,8 @@ impl TuiApp {
                         .map(|rest| rest.split_whitespace().next().unwrap_or("").to_string());
                     self.publish_control_event(NexusEvent::TuiChatSubmitted {
                         metadata: EventMetadata::new("chimera-tui"),
-                        session_id: self.chat_session_id.clone(),
+                        // Task 1.15.4:chat_session_id 移至 chat_session
+                        session_id: self.chat_session.chat_session_id.clone(),
                         query: text,
                         slash_command,
                     });
@@ -230,9 +232,10 @@ impl TuiApp {
     fn delegate_key_to_active_panel(&mut self, key: KeyEvent) {
         // M3d:路由到当前活跃窗格对应的面板(active_pane 是 pane_panels 循环序下标);
         // 越界(窗格数收缩未及钳制)兜底回主焦点面板。
+        // Task 1.15.4:active_pane 移至 pane_manager
         let panes = self.pane_panels();
         let target = panes
-            .get(self.active_pane)
+            .get(self.pane_manager.active_pane)
             .copied()
             .unwrap_or_else(|| self.focus_manager.focused());
         if let Some(idx) = self.panel_index(target) {
@@ -248,12 +251,14 @@ impl TuiApp {
     /// 保留其 `ActionRegistry` 副本;首次打开才用内建六域注册表构造,
     /// 避免每次打开都重建注册表(约 21 条描述)。
     fn open_palette(&mut self) {
+        // Task 1.15.4:palette 移至 chat_session
         let mut model = self
+            .chat_session
             .palette
             .take()
             .unwrap_or_else(CommandPaletteModel::with_builtin_domains);
         model.open();
-        self.palette = Some(model);
+        self.chat_session.palette = Some(model);
     }
 
     /// 打开焦点面板的上下文动作菜单(§4.5 入口三:面板动作)
@@ -291,16 +296,18 @@ impl TuiApp {
     fn handle_palette_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
-                self.palette = None;
+                // Task 1.15.4:palette 移至 chat_session
+                self.chat_session.palette = None;
             }
             KeyCode::Enter => {
                 // 先取选中动作 id(&'static str,不借用模型),关闭面板后统一派发。
                 let action_id = self
+                    .chat_session
                     .palette
                     .as_ref()
                     .and_then(|m| m.selected_action())
                     .map(str::to_string);
-                self.palette = None;
+                self.chat_session.palette = None;
                 if let Some(action_id) = action_id {
                     self.apply_command(TuiCommand::DispatchAction {
                         action_id,
@@ -310,23 +317,23 @@ impl TuiApp {
                 }
             }
             KeyCode::Up => {
-                if let Some(m) = self.palette.as_mut() {
+                if let Some(m) = self.chat_session.palette.as_mut() {
                     m.move_selection(false);
                 }
             }
             KeyCode::Down => {
-                if let Some(m) = self.palette.as_mut() {
+                if let Some(m) = self.chat_session.palette.as_mut() {
                     m.move_selection(true);
                 }
             }
             KeyCode::Backspace => {
-                if let Some(m) = self.palette.as_mut() {
+                if let Some(m) = self.chat_session.palette.as_mut() {
                     m.on_backspace();
                 }
             }
             // 排除 Ctrl 组合:仅纯字符进入检索缓冲,Ctrl+X 类快捷键在面板内忽略。
             KeyCode::Char(c) if !key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                if let Some(m) = self.palette.as_mut() {
+                if let Some(m) = self.chat_session.palette.as_mut() {
                     m.on_input(c);
                 }
             }
@@ -336,12 +343,14 @@ impl TuiApp {
 
     /// 命令面板是否打开(测试与外部查询用)
     pub fn palette_is_open(&self) -> bool {
-        self.palette.is_some()
+        // Task 1.15.4:palette 移至 chat_session
+        self.chat_session.palette.is_some()
     }
 
     /// 伴随面板是否可见(测试与外部查询用)
     pub fn companion_visible(&self) -> bool {
-        self.companion_visible
+        // Task 1.15.4:companion_visible 移至 pane_manager
+        self.pane_manager.companion_visible
     }
 
     /// 活跃窗格是否为伴随(次)窗格(测试与外部查询用)
@@ -349,7 +358,8 @@ impl TuiApp {
     /// WHY 保留 bool 语义:M3d 后活跃窗格为索引,此访问器映射"活跃窗格是否为第 2 窗格"
     /// (`active_pane == 1`,2 窗格时即 companion),保持 Stage 2 测试与外部契约等价。
     pub fn companion_focused(&self) -> bool {
-        self.active_pane == 1
+        // Task 1.15.4:active_pane 移至 pane_manager
+        self.pane_manager.active_pane == 1
     }
 
     /// 当前伴随面板目标(测试与外部查询用;不含可见性判断)
@@ -359,7 +369,8 @@ impl TuiApp {
 
     /// 当前活跃窗格索引(M3d,0 = 主窗格;测试与外部查询用)
     pub fn active_pane(&self) -> usize {
-        self.active_pane
+        // Task 1.15.4:active_pane 移至 pane_manager
+        self.pane_manager.active_pane
     }
 
     /// 当前可见窗格数(M3d,由 PaneMode + companion_visible 决定;测试与外部查询用)
@@ -372,8 +383,9 @@ impl TuiApp {
     /// WHY 复位而非饱和:切布局 / 开关伴随是显式的视图上下文切换,回到主窗格(0)
     /// 符合直觉且避免焦点滞留已消失的次窗格;`get(active).unwrap_or` 兜底不 panic。
     fn clamp_active_pane(&mut self) {
-        if self.active_pane >= self.pane_panels().len() {
-            self.active_pane = 0;
+        // Task 1.15.4:active_pane 移至 pane_manager
+        if self.pane_manager.active_pane >= self.pane_panels().len() {
+            self.pane_manager.active_pane = 0;
         }
     }
 
@@ -384,12 +396,13 @@ impl TuiApp {
     fn companion_target(&self) -> Option<PanelId> {
         let focused = self.focus_manager.focused();
         // Stage 2:显式绑定优先(且不等于主区面板)
-        if let Some(bound) = self.bound_companion {
+        // Task 1.15.4:bound_companion / prev_panel 移至 pane_manager
+        if let Some(bound) = self.pane_manager.bound_companion {
             if bound != focused {
                 return Some(bound);
             }
         }
-        if let Some(prev) = self.prev_panel {
+        if let Some(prev) = self.pane_manager.prev_panel {
             if prev != focused {
                 return Some(prev);
             }
@@ -424,7 +437,8 @@ impl TuiApp {
         use crate::engine::layout::PaneMode;
         match self.state.layout_mode.to_pane_mode() {
             PaneMode::Focus => false,
-            PaneMode::Chat => self.companion_visible,
+            // Task 1.15.4:companion_visible 移至 pane_manager
+            PaneMode::Chat => self.pane_manager.companion_visible,
             PaneMode::VimSplit | PaneMode::Ide => true,
         }
     }
@@ -513,10 +527,15 @@ impl TuiApp {
 
     /// 切换伴随面板可见性(M2 增量3,供 `\` 键与命令面板 `view.toggle_companion` 共用)
     fn toggle_companion_action(&mut self) {
-        self.companion_visible = !self.companion_visible;
+        // Task 1.15.4:companion_visible 移至 pane_manager
+        self.pane_manager.companion_visible = !self.pane_manager.companion_visible;
         // M3d:关闭伴随会使 Chat 窗格数 2→1,钳制活跃窗格避免停留已消失的 context。
         self.clamp_active_pane();
-        let state_label = if self.companion_visible { "on" } else { "off" };
+        let state_label = if self.pane_manager.companion_visible {
+            "on"
+        } else {
+            "off"
+        };
         self.state.status_message = Some((
             format!(
                 "{}: {}",
@@ -549,8 +568,9 @@ impl TuiApp {
             .map(|off| panels[(start + off) % n])
             .find(|&p| p != focused);
         if let Some(target) = next {
-            self.bound_companion = Some(target);
-            self.companion_visible = true;
+            // Task 1.15.4:bound_companion / companion_visible 移至 pane_manager
+            self.pane_manager.bound_companion = Some(target);
+            self.pane_manager.companion_visible = true;
             self.state.status_message = Some((
                 format!(
                     "{}: {}",
@@ -575,12 +595,13 @@ impl TuiApp {
             ));
             return;
         }
-        self.active_pane = (self.active_pane + 1) % n;
+        // Task 1.15.4:active_pane 移至 pane_manager
+        self.pane_manager.active_pane = (self.pane_manager.active_pane + 1) % n;
         // 窗格标签:0 = 主区,其余按序号提示(2 窗格时 1 = companion,语义等价 Stage 2)
-        let pane = if self.active_pane == 0 {
+        let pane = if self.pane_manager.active_pane == 0 {
             "main".to_string()
         } else {
-            format!("pane {}", self.active_pane + 1)
+            format!("pane {}", self.pane_manager.active_pane + 1)
         };
         self.state.status_message = Some((
             format!("{}: {}", crate::t!("action.view.focus_pane"), pane),
@@ -594,7 +615,8 @@ impl TuiApp {
     /// 当前预设布局均为横向列,故 h/l 生效;j/k(上下)当前无候选时 no-op。
     /// 单窗格(rects<=1)或该方向无邻居时 no-op 并提示。
     fn focus_pane_dir(&mut self, dir: PaneDir) {
-        let main = self.layout(self.last_area)[1];
+        // Task 1.15.4:last_area / active_pane 移至 pane_manager
+        let main = self.layout(self.pane_manager.last_area)[1];
         let rects = self.pane_rects(main);
         if rects.len() <= 1 {
             self.state.status_message = Some((
@@ -603,13 +625,16 @@ impl TuiApp {
             ));
             return;
         }
-        let cur = rects.get(self.active_pane).copied().unwrap_or(rects[0]);
+        let cur = rects
+            .get(self.pane_manager.active_pane)
+            .copied()
+            .unwrap_or(rects[0]);
         let cur_cx = cur.x as i32 + cur.width as i32 / 2;
         let cur_cy = cur.y as i32 + cur.height as i32 / 2;
         // 在指定方向上找中心坐标最近的窗格(水平比 x,垂直比 y)
         let mut best: Option<(usize, i32)> = None;
         for (idx, r) in rects.iter().enumerate() {
-            if idx == self.active_pane {
+            if idx == self.pane_manager.active_pane {
                 continue;
             }
             let cx = r.x as i32 + r.width as i32 / 2;
@@ -632,7 +657,8 @@ impl TuiApp {
         }
         match best {
             Some((idx, _)) => {
-                self.active_pane = idx;
+                // Task 1.15.4:active_pane 移至 pane_manager
+                self.pane_manager.active_pane = idx;
                 self.state.status_message = Some((
                     format!("{}: pane {}", crate::t!("action.view.focus_pane"), idx + 1),
                     Severity::Info,
@@ -679,15 +705,16 @@ impl TuiApp {
     ///
     /// 传入当前焦点面板的快捷键列表,帮助按上下文动态生成(§4.6 渐进披露)。
     fn open_help_action(&mut self) {
+        // Task 2.5:registry 构造提前,供 shortcuts_with_registry 自动派生功能动作快捷键
+        let registry = crate::actions::ActionRegistry::with_builtin_domains();
         let shortcuts = self
             .panels
             .iter()
             .find(|p| p.id() == self.focus_manager.focused())
-            .map(|p| p.shortcuts())
+            .map(|p| p.shortcuts_with_registry(&registry))
             .unwrap_or_default();
         // M2 增量3:帮助浮层追加 Registry 驱动的命令清单(与命令面板 Ctrl+P 同源),
         // 随 locale 动态生成。构造成本低(约 21 条),`?` 为低频操作,按需构建即可。
-        let registry = crate::actions::ActionRegistry::with_builtin_domains();
         let action_lines: Vec<(String, String)> =
             crate::actions::codegen::help_lines(&registry, None)
                 .into_iter()
@@ -1032,7 +1059,8 @@ impl TuiApp {
             ),
             (
                 crate::t!("status.ratio").to_string(),
-                format!("{:.0}%", self.main_panel_ratio * 100.0),
+                // Task 1.15.4:main_panel_ratio 经 getter 方法读取(委托 pane_manager)
+                format!("{:.0}%", self.main_panel_ratio() * 100.0),
             ),
             (
                 crate::t!("status.tick").to_string(),
@@ -1078,7 +1106,8 @@ impl TuiApp {
                     self.state.mark_dirty(*panel_id);
                 }
             }
-            1 => self.main_panel_ratio = ratio_preset_next(self.main_panel_ratio),
+            // Task 1.15.4:main_panel_ratio 写入经 pane_manager(读取用 getter 方法)
+            1 => self.pane_manager.main_panel_ratio = ratio_preset_next(self.main_panel_ratio()),
             2 => self.config.tick_interval_ms = tick_preset_next(self.config.tick_interval_ms),
             _ => {}
         }
@@ -1453,10 +1482,11 @@ impl TuiApp {
         // WHY 在终端恢复前保存:此时 self.config 仍持有运行时修改
         // (主题切换 `t`、tick 间隔调整),保存可持久化用户偏好。
         // WHY 同步 main_panel_ratio:运行时比例调整(Ctrl+Up/Down)更新的是
-        // self.main_panel_ratio 而非 self.config.main_panel_ratio,
+        // pane_manager.main_panel_ratio 而非 self.config.main_panel_ratio,
         // 保存前需同步回 config 以持久化用户调整。
         // WHY 保存失败不阻塞退出:配置持久化是最佳努力,失败仅记录警告。
-        self.config.main_panel_ratio = self.main_panel_ratio;
+        // Task 1.15.4:main_panel_ratio 经 getter 方法读取(委托 pane_manager)
+        self.config.main_panel_ratio = self.main_panel_ratio();
         let config_path = TuiConfig::default_path();
         if let Err(e) = self.config.save_to_file(&config_path) {
             tracing::warn!(
@@ -1508,10 +1538,10 @@ impl TuiApp {
                 .map_err(|e| TuiError::Render(e.to_string()))?;
             self.state.tick_frame();
 
-            // 轮询事件(100ms 超时,避免阻塞渲染)
-            if !event::poll(Duration::from_millis(100))
-                .map_err(|e| TuiError::EventRead(e.to_string()))?
-            {
+            // 轮询事件(Task 1.16:poll 间隔随 tick_mode 联动)
+            // - Normal:100ms(高响应,默认)
+            // - Eco:1000ms(低 CPU 占用,适合后台监控场景)
+            if !event::poll(self.poll_duration()).map_err(|e| TuiError::EventRead(e.to_string()))? {
                 continue;
             }
 
@@ -1524,6 +1554,23 @@ impl TuiApp {
             }
         }
         Ok(())
+    }
+
+    /// 根据当前 tick_mode 计算事件轮询间隔(Task 1.16)
+    ///
+    /// - `Normal`:100ms(高响应,默认)—— 适合交互式使用,保证按键延迟 < 100ms
+    /// - `Eco`:1000ms(低 CPU 占用)—— 适合后台监控/长时间挂机,降低空转开销
+    ///
+    /// WHY 联动 tick_mode:Eco 模式下数据刷新频率本就降至 1Hz,
+    /// 事件轮询保持 100ms 会造成 90% 的空轮询浪费 CPU;联动后 Eco 模式
+    /// 真正实现低功耗,Normal 模式保持高响应。
+    ///
+    /// 抽取为独立方法便于单元测试断言两种模式的 poll 间隔。
+    pub(crate) fn poll_duration(&self) -> Duration {
+        match self.state.tick_mode {
+            crate::types::TickMode::Normal => Duration::from_millis(100),
+            crate::types::TickMode::Eco => Duration::from_millis(1000),
+        }
     }
 }
 

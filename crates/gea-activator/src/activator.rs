@@ -1,6 +1,6 @@
 //! GEA 激活器主逻辑 — 门控计算、冲突消解、事件发布与缓存
 //!
-//! 对应架构层:L6 Router
+//! 对应架构层:L9 Quest(权威源规则 §2.1,与 lib.rs 一致;旧标 L6 已于 2026-07-31 订正)
 //! 对应创新点:GEA(Gated Expert Activation)
 //!
 //! # 设计决策(WHY)
@@ -28,6 +28,13 @@ use crate::types::{ActivationResult, ExpertId, ExpertProfile, TaskProfile};
 
 /// 每 N 次激活发布一次缓存统计事件
 const CACHE_STATS_INTERVAL: u64 = 100;
+
+/// 近似 LRU 驱逐采样数(L9 优化 2.2,Redis 风格)
+///
+/// WHY 8:Redis maxmemory-policy 默认采样数也是 5-10——采样 8 条驱逐其中
+/// 最旧者,命中真正最旧条目的期望接近严格 LRU(容量 128 时采样 8
+/// 条命中最旧 ~6% 的尾部),且 evict 仅在容量满时触发,近似足够。
+const EVICT_SAMPLE_SIZE: usize = 8;
 
 /// 缓存统计计数器(原子,线程安全)
 #[derive(Debug, Default)]
@@ -222,18 +229,31 @@ impl GeaActivator {
         self.activation_cache.insert(key, (result, Instant::now()));
     }
 
-    /// 驱逐最旧的缓存条目(LRU)
+    /// 驱逐一个缓存条目(近似 LRU)
     ///
-    /// WHY 简单实现:遍历找最旧的移除。DashMap 无序,需全遍历。
-    /// 缓存容量 128,遍历成本可接受。后续可换 LRU 专用数据结构优化。
+    /// WHY 采样近似而非全遍历(L9 优化 2.2):旧实现遍历整个 DashMap 找
+    /// 严格最旧条目——容量满后每次插入触发 O(n) 全扫描,且循环内对
+    /// "当前最旧" key 反复 clone(单调递减序列最坏 O(n) 次深拷贝,含 64 维
+    /// f32 向量)。改为 Redis 风格采样近似 LRU:只检查迭代器前
+    /// `EVICT_SAMPLE_SIZE` 个条目,驱逐其中最旧者,复杂度降为 O(sample),
+    /// 且全程只 clone 一次 key(最终选中者)。
+    ///
+    /// # 近似语义(WHY 可接受)
+    /// activate() 已在读取时按 TTL 过滤过期条目,evict 仅在容量满时触发,
+    /// 无需严格 LRU;采样近似是缓存驱逐的行业标准(Redis maxmemory-policy)。
+    /// DashMap 的 remove 会改变内部分片布局,使后续采样窗口自然轮换,
+    /// 避免固定驱逐同一批条目。
     fn evict_oldest(&self) {
         let mut oldest_key: Option<TaskProfile> = None;
         let mut oldest_time = Instant::now();
 
-        for entry in self.activation_cache.iter() {
+        // 只采样前 EVICT_SAMPLE_SIZE 个条目(O(sample) 替代 O(n) 全遍历)
+        for entry in self.activation_cache.iter().take(EVICT_SAMPLE_SIZE) {
             let (_, written_at) = entry.value();
-            if *written_at < oldest_time {
+            if *written_at <= oldest_time {
                 oldest_time = *written_at;
+                // WHY 循环内仍可能多次 clone,但采样上限 EVICT_SAMPLE_SIZE
+                // 使其为 O(sample) 常数级,远优于旧版最坏 O(n)
                 oldest_key = Some(entry.key().clone());
             }
         }

@@ -32,7 +32,9 @@
 //!
 //! // Cli 实现 clap::Parser,可从字符串切片解析(便于测试与脚本调用)
 //! let cli = Cli::parse_from(["chimera", "quest", "list"]);
-//! assert!(matches!(cli.command, Some(Commands::Quest { action: QuestAction::List })));
+//! // Quest 变体含子命令级 `json` flag(Task 1.7 引入,与全局 --json 兼容回退),
+//! // matches! 模式用 `..` 忽略其他字段,保持 doctest 对字段扩展的健壮性
+//! assert!(matches!(cli.command, Some(Commands::Quest { action: QuestAction::List, .. })));
 //!
 //! // ChimeraConfig 实现 Default,提供内置兜底配置(对应 omega.yaml 缺省值)
 //! let _config = ChimeraConfig::default();
@@ -49,12 +51,19 @@ pub mod cli;
 pub mod commands;
 /// Figment 多源配置加载
 pub mod config;
+/// CLI 错误类型(结构化错误码,Task 0.2 将据此映射 ExitCode 矩阵)
+pub mod error;
 /// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)
 pub mod orchestrator;
+/// 统一输出 helper(Task 1.7 JSON / Task 1.12 彩色 + 表格 + 进度)
+pub mod output;
+/// Permission prompt 机制(Task 1.11)
+pub mod permission;
 
 // === 公开 API 重导出 ===
 pub use cli::{Cli, Commands, ConfigAction, QuestAction};
 pub use config::{ChimeraConfig, LazyConfig};
+pub use error::ChimeraCliError;
 
 /// Crate 版本(从 workspace.package.version 派生)
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

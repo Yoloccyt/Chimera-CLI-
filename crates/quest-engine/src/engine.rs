@@ -38,6 +38,7 @@ use crate::coordination_metrics::{
 };
 use crate::dag::validate_dag;
 use crate::error::QuestError;
+use crate::metrics_sync::PendingCoordSample;
 use crate::ttg::TtgGovernor;
 
 /// Quest Engine — 长期任务分解与生命周期管理
@@ -75,6 +76,12 @@ pub struct QuestEngine {
     /// 与推理增益(任务成功率),定期计算比值评估推理悖论风险。
     /// 内部使用 `std::sync::Mutex`,线程安全且不跨 `.await` 点(§4.4 反模式 #1)。
     metrics: CoordinationMetricsCollector,
+    /// 协调度量接线闭环:按 quest_id 索引的待合并样本缓存
+    ///
+    /// 由 `metrics_sync::ingest_metrics_event` 填充(审议延迟/委托开销/
+    /// 共识质量/TTG 延迟),`complete_quest` 时 take 并经 builder 合入
+    /// 度量样本;`cancel_quest` 同步清理防泄漏。
+    pending_samples: Arc<DashMap<String, PendingCoordSample>>,
 }
 
 impl QuestEngine {
@@ -99,6 +106,7 @@ impl QuestEngine {
                 CoordinationMetricsConfig::default(),
                 metrics_bus,
             ),
+            pending_samples: Arc::new(DashMap::new()),
         }
     }
 
@@ -118,6 +126,7 @@ impl QuestEngine {
             checkpoint_manager: Some(CheckpointManager::new(checkpoint_dir)),
             ttg_governor: None,
             metrics: CoordinationMetricsCollector::new(),
+            pending_samples: Arc::new(DashMap::new()),
         }
     }
 
@@ -136,6 +145,7 @@ impl QuestEngine {
             checkpoint_manager: Some(CheckpointManager::with_max_keep(checkpoint_dir, max_keep)),
             ttg_governor: None,
             metrics: CoordinationMetricsCollector::new(),
+            pending_samples: Arc::new(DashMap::new()),
         }
     }
 
@@ -162,6 +172,7 @@ impl QuestEngine {
             checkpoint_manager: Some(CheckpointManager::new(checkpoint_dir)),
             ttg_governor: Some(ttg_governor),
             metrics: CoordinationMetricsCollector::new(),
+            pending_samples: Arc::new(DashMap::new()),
         }
     }
 
@@ -188,9 +199,21 @@ impl QuestEngine {
     /// 用于调整推理悖论告警阈值、成本归一化基准与 EWMA 衰减系数。
     /// 注意:此方法会重置度量收集器(清空历史 EWMA 状态),因为配置变更后
     /// 旧的 EWMA 值不再适用于新的归一化基准。
+    ///
+    /// WHY 保留 EventBus 绑定:收集器的 `event_bus()` 访问器即为此场景设计
+    /// ——更换配置不应静默断开 `CoordinationRatioReported` 事件发布链路
+    /// (否则 efficiency-monitor 的推理悖论告警会失去数据源)。
     pub fn with_metrics_config(&mut self, config: CoordinationMetricsConfig) -> &mut Self {
-        self.metrics = CoordinationMetricsCollector::with_config(config);
+        self.metrics = match self.metrics.event_bus().cloned() {
+            Some(bus) => CoordinationMetricsCollector::with_event_bus(config, bus),
+            None => CoordinationMetricsCollector::with_config(config),
+        };
         self
+    }
+
+    /// 获取待合并样本缓存引用(crate 内部,供 metrics_sync 模块读写)
+    pub(crate) fn pending_samples(&self) -> &DashMap<String, PendingCoordSample> {
+        &self.pending_samples
     }
 
     /// 获取协调度量收集器引用(P2-1 三重悖论推理悖论红线)
@@ -215,8 +238,12 @@ impl QuestEngine {
 
     /// 保存检查点 — 序列化当前 Quest 状态并发布 CheckpointSaved 事件 `[Critical]`
     ///
-    /// WHY:CheckpointSaved 标注 Critical,丢失将导致 Quest 无法恢复,
-    /// EventBus 背压策略据此保护(见 event-bus backpressure 模块)
+    /// WHY Critical 与通道选择(2026-07-31 核对):CheckpointSaved 的
+    /// `severity()` = Critical 仅驱动 EventBus **背压优先级**保护(见 event-bus
+    /// backpressure 模块);它不走 mpsc 旁路——旁路专属 4 类安全告警事件
+    /// (见 bus.rs `is_critical_mpsc_event`)。事件丢失不丢检查点:检查点在
+    /// 发布前已由 `cm.save()` 落盘,恢复路径读磁盘而非事件;事件仅供
+    /// 审计/TUI 观测,Lagged 丢失只损失一次通知。
     pub async fn save_checkpoint(&self, quest_id: &str) -> Result<Checkpoint, QuestError> {
         let cm = self
             .checkpoint_manager
@@ -531,10 +558,36 @@ impl QuestEngine {
             };
             drop(quest); // 释放 DashMap 读锁,遵循 §4.4 反模式 #1(不持锁跨 await)
 
-            // 构造协调成本样本:Event Bus 延迟(TTG 切换延迟由 switch_thinking_mode 单独记录)
-            let cost = CoordinationCostSample::new(event_bus_latency_ms, 0.0);
-            // 构造推理增益样本:任务成功率(质量分数/共识质量由下游 PVL/Parliament 单独上报)
-            let gain = InferenceGainSample::new(task_success_rate);
+            // 协调度量接线闭环:take 待合并样本(remove 防泄漏,缺失时用默认空样本)
+            // 缓存由 metrics_sync 订阅器从 DebateCompleted/DelegationCompleted 事件填充,
+            // 尚未接线/事件丢失时各字段保持 None(尽力合并语义,不阻塞)。
+            let pending = self
+                .pending_samples
+                .remove(quest_id)
+                .map(|(_, sample)| sample)
+                .unwrap_or_default();
+
+            // 构造协调成本样本:Event Bus 延迟 + TTG 切换延迟(缓存累加值)
+            // + 议会审议延迟 / 委托开销(Option,经 builder 按需填充)
+            let mut cost = CoordinationCostSample::new(
+                event_bus_latency_ms,
+                pending.ttg_switch_latency_ms.unwrap_or(0.0),
+            );
+            if let Some(latency) = pending.parliament_debate_latency_ms {
+                cost = cost.with_parliament_debate(latency);
+            }
+            if let Some(overhead) = pending.delegation_overhead_ms {
+                cost = cost.with_delegation_overhead(overhead);
+            }
+
+            // 构造推理增益样本:任务成功率 + 共识质量 proxy
+            // (加权赞成率,来自 DebateCompleted;无审议时保持 None,
+            // total_gain 权重自动归一化到 task_success_rate)
+            let mut gain = InferenceGainSample::new(task_success_rate);
+            if let Some(quality) = pending.consensus_quality {
+                gain = gain.with_consensus_quality(quality);
+            }
+
             // 记录并计算协调成本/推理增益比值(EWMA 增量更新)
             let ratio = self.metrics.record_and_compute(&cost, &gain);
 
@@ -542,8 +595,11 @@ impl QuestEngine {
                 quest_id = %quest_id,
                 task_total = total,
                 task_success_rate,
+                parliament_debate_latency_ms = ?cost.parliament_debate_latency_ms,
+                delegation_overhead_ms = ?cost.delegation_overhead_ms,
+                consensus_quality = ?gain.consensus_quality,
                 coordination_ratio = %ratio.description(),
-                "ExecutionCompleted 事件已发布 + P2-1 协调度量已记录"
+                "ExecutionCompleted 事件已发布 + P2-1 协调度量已记录(含接线样本)"
             );
         } else {
             info!(quest_id = %quest_id, "ExecutionCompleted 事件已发布(Quest 不在注册表,跳过度量记录)");
@@ -568,6 +624,9 @@ impl QuestEngine {
         quest_id: &str,
         new_mode: ThinkingMode,
     ) -> Result<(), QuestError> {
+        // 协调度量接线闭环:TTG 切换延迟计时(此前 complete_quest 硬编码 0.0)
+        let switch_start = Instant::now();
+
         // TTG 集成路径:委托给治理器,自动记录覆盖 + 发布事件
         if let Some(governor) = &self.ttg_governor {
             let mode = governor
@@ -575,6 +634,7 @@ impl QuestEngine {
                 .await?;
             // 同步更新 DashMap 中的 Quest 状态
             self.apply_thinking_mode(quest_id, mode)?;
+            self.record_ttg_latency(quest_id, switch_start.elapsed().as_secs_f64() * 1000.0);
             return Ok(());
         }
 
@@ -647,10 +707,14 @@ impl QuestEngine {
             None => return Ok(quest.thinking_mode),
         };
 
-        match governor
+        // 协调度量接线闭环:TTG 自动选择延迟计时
+        let select_start = Instant::now();
+        let selected = governor
             .select_mode_and_publish(quest_id, &quest, budget_tier)
-            .await?
-        {
+            .await?;
+        self.record_ttg_latency(quest_id, select_start.elapsed().as_secs_f64() * 1000.0);
+
+        match selected {
             Some((mode, _reason)) => {
                 self.apply_thinking_mode(quest_id, mode)?;
                 Ok(mode)
@@ -755,6 +819,8 @@ impl QuestEngine {
         }
         // 清理可能的暂停状态标记(避免遗留状态,remove 幂等)
         self.paused_quests.remove(quest_id);
+        // 协调度量接线闭环:清理待合并样本缓存(Quest 不会再 complete,防泄漏)
+        self.pending_samples.remove(quest_id);
 
         let event = NexusEvent::QuestCancelled {
             metadata: EventMetadata::new("quest-engine"),

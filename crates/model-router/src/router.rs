@@ -22,6 +22,8 @@ use std::time::Instant;
 
 use crate::cacr::{CacrConfig, CacrDecision, CacrGuard};
 use crate::error::RouterError;
+use crate::history::HistoryStore;
+use crate::moe::MoeGate;
 use crate::registry::ModelRegistry;
 use crate::strategies;
 use crate::trajectory::{RouteHook, TrajectoryEvent, TrajectoryOutcome};
@@ -49,6 +51,14 @@ pub struct ModelRouter {
     cacr_guard: Option<CacrGuard>,
     /// P4-W16.1.1: 轨迹捕获 hook 列表 — 默认空,route() 末尾依次调用
     hooks: Vec<Arc<dyn RouteHook>>,
+    /// 历史路由存储(可选)— 用于 MoE 五维门控评分
+    ///
+    /// WHY Option<Arc<dyn HistoryStore>>:Send + Sync + Clone 廉价,
+    /// spawn_blocking 需要 'static 生命周期,Arc 满足此约束。
+    /// 设置后,`route()` 在 Auto 策略下会用 `spawn_blocking` 包装
+    /// `SqliteHistoryStore` 的同步 rusqlite 调用,避免阻塞 tokio runtime
+    /// (§4.4 #2 反模式:rusqlite 必须 spawn_blocking)。
+    history_store: Option<Arc<dyn HistoryStore>>,
 }
 
 impl ModelRouter {
@@ -61,6 +71,7 @@ impl ModelRouter {
             event_bus,
             cacr_guard: None,
             hooks: Vec::new(),
+            history_store: None,
         }
     }
 
@@ -78,6 +89,7 @@ impl ModelRouter {
             event_bus,
             cacr_guard: Some(CacrGuard::new(cacr_config)),
             hooks: Vec::new(),
+            history_store: None,
         }
     }
 
@@ -98,6 +110,7 @@ impl ModelRouter {
             event_bus,
             cacr_guard: None,
             hooks: vec![hook],
+            history_store: None,
         }
     }
 
@@ -116,6 +129,7 @@ impl ModelRouter {
             event_bus,
             cacr_guard: None,
             hooks,
+            history_store: None,
         }
     }
 
@@ -134,6 +148,7 @@ impl ModelRouter {
             event_bus,
             cacr_guard: Some(CacrGuard::new(cacr_config)),
             hooks: vec![hook],
+            history_store: None,
         }
     }
 
@@ -143,6 +158,31 @@ impl ModelRouter {
     /// 路由器构造后追加 hook(如运行时动态注册观测组件)。
     pub fn add_hook(&mut self, hook: Arc<dyn RouteHook>) {
         self.hooks.push(hook);
+    }
+
+    /// P1-3: 设置历史路由存储(用于 MoE 五维门控评分)
+    ///
+    /// 设置后,`route()` 在 Auto 策略下会用 `spawn_blocking` 包装
+    /// `SqliteHistoryStore` 的同步 rusqlite 调用,避免阻塞 tokio runtime
+    /// (§4.4 #2 反模式:rusqlite 必须 spawn_blocking)。
+    /// `InMemoryHistoryStore` 无需 spawn_blocking(DashMap 纯内存,纳秒级),
+    /// 但统一使用 spawn_blocking 可简化分支逻辑,且开销可忽略
+    /// (一次 spawn_blocking 调度 ~1-5μs)。
+    ///
+    /// # 使用示例
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use model_router::{ModelRouter, ModelRegistry, SqliteHistoryStore};
+    /// use event_bus::EventBus;
+    ///
+    /// let bus = EventBus::new();
+    /// let registry = ModelRegistry::new();
+    /// let store = Arc::new(SqliteHistoryStore::new(std::path::Path::new("history.db")).unwrap());
+    /// let router = ModelRouter::new(registry, bus).with_history_store(store);
+    /// ```
+    pub fn with_history_store(mut self, store: Arc<dyn HistoryStore>) -> Self {
+        self.history_store = Some(store);
+        self
     }
 
     /// P4-W16.1.1: 获取已注册 hook 数量(便于测试与诊断)
@@ -204,14 +244,53 @@ impl ModelRouter {
                     }
                 }
             }
-            RoutingStrategy::Auto => match strategies::route_auto(&self.registry, &request) {
-                Ok(d) => d,
-                Err(e) => {
-                    let result = Err(e);
-                    self.emit_trajectory(&request, start, &result);
-                    return result;
+            RoutingStrategy::Auto => {
+                if let Some(ref store) = self.history_store {
+                    // WHY spawn_blocking:SqliteHistoryStore 的 rusqlite 调用是同步阻塞的,
+                    // 在 async 上下文中直接调用会阻塞 tokio runtime 工作线程(§4.4 #2 反模式)。
+                    // spawn_blocking 将同步操作移到专用阻塞线程池,不阻塞 async 工作线程。
+                    // 即使使用 InMemoryHistoryStore(DashMap 纯内存),统一走 spawn_blocking
+                    // 可简化分支逻辑,开销可忽略(一次调度 ~1-5μs)。
+                    let store = Arc::clone(store);
+                    let registry = self.registry.clone();
+                    let req = request.clone();
+                    let gate = MoeGate::default();
+                    match tokio::task::spawn_blocking(move || {
+                        strategies::route_auto_with_gate(
+                            &registry,
+                            &req,
+                            &gate,
+                            Some(store.as_ref()),
+                        )
+                    })
+                    .await
+                    {
+                        Ok(Ok(d)) => d,
+                        Ok(Err(e)) => {
+                            let result = Err(e);
+                            self.emit_trajectory(&request, start, &result);
+                            return result;
+                        }
+                        Err(join_err) => {
+                            let result = Err(RouterError::SpawnBlockingError(format!(
+                                "route_auto_with_gate join error: {}",
+                                join_err
+                            )));
+                            self.emit_trajectory(&request, start, &result);
+                            return result;
+                        }
+                    }
+                } else {
+                    match strategies::route_auto(&self.registry, &request) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            let result = Err(e);
+                            self.emit_trajectory(&request, start, &result);
+                            return result;
+                        }
+                    }
                 }
-            },
+            }
         };
 
         // 3. CACR 拦截检查(若启用)

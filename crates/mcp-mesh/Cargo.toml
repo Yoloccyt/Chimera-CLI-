@@ -31,8 +31,15 @@ event-bus = { path = "../event-bus" }
 [dev-dependencies]
 # 性能基准框架(SubTask 1.7)
 criterion = { workspace = true }
+# 临时文件/目录用于 WAL 测试(Task 0.7)
+tempfile = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]
 name = "mesh_benchmark"
+harness = false
+
+# Task 0.7 v2.9.0-omega SubTask 0.7.15:WAL 恢复延迟基准
+[[bench]]
+name = "wal_recovery"
 harness = false

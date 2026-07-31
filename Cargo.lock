@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acb-governor"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -19,11 +19,20 @@ dependencies = [
 
 [[package]]
 name = "addr2line"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b5d307320b3181d6d7954e663bd7c774a838b8220fe0593c86d9fb09f498b4b"
+dependencies = [
+ "gimli 0.32.3",
+]
+
+[[package]]
+name = "addr2line"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59317f77929f0e679d39364702289274de2f0f0b22cbf50b2b8cff2169a0b27a"
 dependencies = [
- "gimli",
+ "gimli 0.33.0",
 ]
 
 [[package]]
@@ -240,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "auto-dpo"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -304,6 +313,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7178fe5f7d460b13895ebb9dcb28a3a6216d2df2574a0806cb51b555d297f38"
 dependencies = [
  "arrayvec",
+]
+
+[[package]]
+name = "backtrace"
+version = "0.3.76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb531853791a215d7c62a30daf0dde835f381ab5de4589cfe7c649d2cbe92bd6"
+dependencies = [
+ "addr2line 0.25.1",
+ "cfg-if",
+ "libc",
+ "miniz_oxide",
+ "object 0.37.3",
+ "rustc-demangle",
+ "windows-link",
 ]
 
 [[package]]
@@ -473,28 +497,39 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chimera-cli"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
+ "chimera-mas",
  "chimera-tui",
  "clap",
+ "clap_complete",
+ "comfy-table",
  "criterion",
  "event-bus",
  "figment",
+ "human-panic",
+ "indicatif",
+ "mcp-mesh",
  "nexus-core",
+ "nu-ansi-term",
+ "parliament",
  "proptest",
  "quest-engine",
+ "repo-wiki",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
 name = "chimera-e2e-tests"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "acb-governor",
  "anyhow",
@@ -539,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-mas"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "acb-governor",
  "anyhow",
@@ -548,6 +583,7 @@ dependencies = [
  "cmt-tiering",
  "criterion",
  "dashmap",
+ "decay-engine",
  "decb-governor",
  "efficiency-monitor",
  "event-bus",
@@ -563,8 +599,9 @@ dependencies = [
  "osa-coordinator",
  "parliament",
  "proptest",
+ "pvl-layer",
  "qeep-protocol",
- "quest-engine",
+ "rand 0.8.6",
  "regex",
  "repo-wiki",
  "rmp-serde",
@@ -581,22 +618,31 @@ dependencies = [
 
 [[package]]
 name = "chimera-tui"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
+ "chimera-mas",
  "chrono",
+ "cmt-tiering",
  "criterion",
- "crossterm",
+ "crossterm 0.28.1",
+ "decay-engine",
  "event-bus",
  "figment",
+ "gqep-executor",
+ "gsoe-evolution",
+ "mlc-engine",
  "nexus-core",
+ "osa-coordinator",
+ "parliament",
  "proptest",
+ "pvl-layer",
  "ratatui",
  "rmp-serde",
  "rusqlite",
  "serde",
  "serde_json",
  "serde_yaml",
- "sysinfo",
+ "sysinfo 0.32.1",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -620,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "chtc-bridge"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
@@ -688,6 +734,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap_complete"
+version = "4.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f84a88507dbd05c695f2cb5e8558e747179134005e9893882dec964190ed89"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clap_derive"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -707,7 +762,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cmt-tiering"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -757,6 +812,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "comfy-table"
+version = "7.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "958c5d6ecf1f214b4c2bbbbf6ab9523a864bd136dcf71a7e8904799acfe1ad47"
+dependencies = [
+ "crossterm 0.29.0",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
 name = "compact_str"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -768,6 +834,19 @@ dependencies = [
  "rustversion",
  "ryu",
  "static_assertions",
+]
+
+[[package]]
+name = "console"
+version = "0.15.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054ccb5b10f9f2cbf51eb355ca1d05c2d279ce1804688d0db74b4733a5aeafd8"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "once_cell",
+ "unicode-width 0.2.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -858,7 +937,7 @@ dependencies = [
  "cranelift-control",
  "cranelift-entity",
  "cranelift-isle",
- "gimli",
+ "gimli 0.33.0",
  "hashbrown 0.17.1",
  "libm",
  "log",
@@ -1039,6 +1118,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossterm"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8b9f2e4c67f833b660cdb0a3523065869fb35570177239812ed4c905aeff87b"
+dependencies = [
+ "bitflags 2.13.0",
+ "crossterm_winapi",
+ "document-features",
+ "parking_lot",
+ "rustix 1.1.4",
+ "winapi",
+]
+
+[[package]]
 name = "crossterm_winapi"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1065,7 +1158,7 @@ dependencies = [
 
 [[package]]
 name = "csn-substitutor"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1140,11 +1233,12 @@ dependencies = [
 
 [[package]]
 name = "decay-engine"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
  "nexus-contracts",
+ "nexus-core",
  "proptest",
  "thiserror 1.0.69",
  "tracing",
@@ -1152,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "decb-governor"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1252,6 +1346,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "780955b8b195a21ab8e4ac6b60dd1dbdcec1dc6c51c0617964b08c81785e12c9"
 
 [[package]]
+name = "document-features"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
+dependencies = [
+ "litrs",
+]
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1277,7 +1380,7 @@ checksum = "15401da73a9ed8c80e3b2d4dc05fe10e7b72d7243b9f614e516a44fa99986e88"
 
 [[package]]
 name = "efficiency-monitor"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1286,6 +1389,7 @@ dependencies = [
  "event-bus",
  "nexus-core",
  "prometheus-client",
+ "proptest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -1311,6 +1415,12 @@ name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+
+[[package]]
+name = "encode_unicode"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "encoding_rs"
@@ -1394,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "event-bus"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -1432,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "faae-router"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1652,7 +1762,7 @@ dependencies = [
 
 [[package]]
 name = "gea-activator"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1730,6 +1840,12 @@ dependencies = [
 
 [[package]]
 name = "gimli"
+version = "0.32.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
+
+[[package]]
+name = "gimli"
 version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf7f043f89559805f8c7cacc432749b2fa0d0a0a9ee46ce47164ed5ba7f126c"
@@ -1742,7 +1858,7 @@ dependencies = [
 
 [[package]]
 name = "gqep-executor"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1762,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "gsoe-evolution"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1840,7 +1956,7 @@ dependencies = [
 
 [[package]]
 name = "hcw-window"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1899,6 +2015,22 @@ dependencies = [
  "rand 0.9.4",
  "rayon",
  "serde",
+]
+
+[[package]]
+name = "human-panic"
+version = "2.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2815d0c49773c6e0a9753960b3d0e50b822e48e08c77bcb4780be8474c9cc3d"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "backtrace",
+ "serde",
+ "serde_derive",
+ "sysinfo 0.38.4",
+ "toml 1.1.4+spec-1.1.0",
+ "uuid",
 ]
 
 [[package]]
@@ -1987,6 +2119,19 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "indicatif"
+version = "0.17.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "183b3088984b400f4cfac3620d5e076c84da5364016b4f49473de574b2586235"
+dependencies = [
+ "console",
+ "number_prefix",
+ "portable-atomic",
+ "unicode-width 0.2.0",
+ "web-time",
 ]
 
 [[package]]
@@ -2176,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "kvbsr-router"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
@@ -2322,6 +2467,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "litrs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2356,7 +2507,7 @@ dependencies = [
 
 [[package]]
 name = "lsct-tiering"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
  "cmt-tiering",
@@ -2425,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-mesh"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2435,6 +2586,7 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -2495,7 +2647,7 @@ dependencies = [
 
 [[package]]
 name = "mlc-engine"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2535,7 +2687,7 @@ dependencies = [
 
 [[package]]
 name = "model-router"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
@@ -2564,7 +2716,7 @@ dependencies = [
 
 [[package]]
 name = "mtpe-executor"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2603,23 +2755,27 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexus-contracts"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
+ "chrono",
  "nexus-core",
  "proptest",
+ "rmp-serde",
  "serde",
  "serde_json",
  "serde_yaml",
+ "uuid",
 ]
 
 [[package]]
 name = "nexus-core"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
  "hex",
  "ndarray",
+ "nexus-contracts",
  "proptest",
  "rmp-serde",
  "serde",
@@ -2645,7 +2801,7 @@ dependencies = [
 
 [[package]]
 name = "nmc-encoder"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
  "criterion",
@@ -2792,6 +2948,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "number_prefix"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
+
+[[package]]
+name = "objc2-core-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
+dependencies = [
+ "bitflags 2.13.0",
+]
+
+[[package]]
+name = "objc2-io-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
+dependencies = [
+ "libc",
+ "objc2-core-foundation",
+]
+
+[[package]]
+name = "object"
+version = "0.37.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "object"
 version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2805,7 +2995,7 @@ dependencies = [
 
 [[package]]
 name = "omega-learner"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2842,7 +3032,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "osa-coordinator"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "cmt-tiering",
  "criterion",
@@ -2853,6 +3043,7 @@ dependencies = [
  "mlc-engine",
  "nexus-contracts",
  "nexus-core",
+ "omega-learner",
  "proptest",
  "serde",
  "serde_json",
@@ -2887,7 +3078,7 @@ dependencies = [
 
 [[package]]
 name = "parliament"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "criterion",
  "decb-governor",
@@ -3260,7 +3451,7 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
 name = "pvl-layer"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3285,7 +3476,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qeep-protocol"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3307,7 +3498,7 @@ dependencies = [
 
 [[package]]
 name = "quest-engine"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3450,7 +3641,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cassowary",
  "compact_str",
- "crossterm",
+ "crossterm 0.28.1",
  "indoc",
  "instability",
  "itertools 0.13.0",
@@ -3619,7 +3810,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-wiki"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3778,7 +3969,7 @@ dependencies = [
 
 [[package]]
 name = "scc-cache"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3805,7 +3996,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seccore"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3909,7 +4100,7 @@ dependencies = [
 
 [[package]]
 name = "sesa-router"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
  "criterion",
@@ -4025,7 +4216,7 @@ dependencies = [
 
 [[package]]
 name = "ssra-fusion"
-version = "2.8.0-omega"
+version = "2.11.0-omega"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4158,6 +4349,20 @@ dependencies = [
  "ntapi",
  "rayon",
  "windows 0.57.0",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.38.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92ab6a2f8bfe508deb3c6406578252e491d299cbbf3bc0529ecc3313aee4a52f"
+dependencies = [
+ "libc",
+ "memchr",
+ "ntapi",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -4396,6 +4601,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml"
+version = "1.1.4+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+dependencies = [
+ "serde_core",
+ "serde_spanned 1.1.1",
+ "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_writer",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4409,6 +4626,15 @@ name = "toml_datetime"
 version = "0.7.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "1.1.1+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
 dependencies = [
  "serde_core",
 ]
@@ -4937,7 +5163,7 @@ version = "47.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06d9f263ccb212017dae1d109b9997f218a7675db1e9a7bedf07ae1643322bf3"
 dependencies = [
- "addr2line",
+ "addr2line 0.26.1",
  "async-trait",
  "bitflags 2.13.0",
  "bumpalo",
@@ -4946,13 +5172,13 @@ dependencies = [
  "encoding_rs",
  "futures",
  "fxprof-processed-profile",
- "gimli",
+ "gimli 0.33.0",
  "ittapi",
  "libc",
  "log",
  "mach2 0.6.0",
  "memfd",
- "object",
+ "object 0.39.1",
  "once_cell",
  "postcard",
  "pulley-interpreter",
@@ -4995,11 +5221,11 @@ dependencies = [
  "cranelift-bforest",
  "cranelift-bitset",
  "cranelift-entity",
- "gimli",
+ "gimli 0.33.0",
  "hashbrown 0.17.1",
  "indexmap",
  "log",
- "object",
+ "object 0.39.1",
  "postcard",
  "rustc-demangle",
  "semver",
@@ -5080,10 +5306,10 @@ dependencies = [
  "cranelift-entity",
  "cranelift-frontend",
  "cranelift-native",
- "gimli",
+ "gimli 0.33.0",
  "itertools 0.14.0",
  "log",
- "object",
+ "object 0.39.1",
  "pulley-interpreter",
  "smallvec",
  "target-lexicon",
@@ -5117,7 +5343,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1f60ecba3497cfc26284903c2e79023fd5ea991b95b0e8dafe994fd9fca4c4e"
 dependencies = [
  "cc",
- "object",
+ "object 0.39.1",
  "rustix 1.1.4",
  "wasmtime-internal-versioned-export-macros",
 ]
@@ -5143,7 +5369,7 @@ dependencies = [
  "cfg-if",
  "cranelift-codegen",
  "log",
- "object",
+ "object 0.39.1",
  "wasmtime-environ",
 ]
 
@@ -5198,6 +5424,16 @@ name = "web-sys"
 version = "0.3.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6430a72df5eb332242960fe84b3002a241163998241eb596d4f739b9757061d"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -5266,6 +5502,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows"
+version = "0.62.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "527fadee13e0c05939a6a05d5bd6eec6cd2e3dbd648b9f8e447c6518133d8580"
+dependencies = [
+ "windows-collections",
+ "windows-core 0.62.2",
+ "windows-future",
+ "windows-numerics",
+]
+
+[[package]]
+name = "windows-collections"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b2d95af1a8a14a3c7367e1ed4fc9c20e0a26e79551b1454d72583c97cc6610"
+dependencies = [
+ "windows-core 0.62.2",
+]
+
+[[package]]
 name = "windows-core"
 version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5288,6 +5545,17 @@ dependencies = [
  "windows-link",
  "windows-result 0.4.1",
  "windows-strings",
+]
+
+[[package]]
+name = "windows-future"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1d6f90251fe18a279739e78025bd6ddc52a7e22f921070ccdc67dde84c605cb"
+dependencies = [
+ "windows-core 0.62.2",
+ "windows-link",
+ "windows-threading",
 ]
 
 [[package]]
@@ -5339,6 +5607,16 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-numerics"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
+dependencies = [
+ "windows-core 0.62.2",
+ "windows-link",
+]
 
 [[package]]
 name = "windows-result"
@@ -5414,6 +5692,15 @@ dependencies = [
  "windows_x86_64_gnu 0.52.6",
  "windows_x86_64_gnullvm 0.52.6",
  "windows_x86_64_msvc 0.52.6",
+]
+
+[[package]]
+name = "windows-threading"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
+dependencies = [
+ "windows-link",
 ]
 
 [[package]]

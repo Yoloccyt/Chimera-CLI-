@@ -321,6 +321,88 @@ impl EventBus {
         Ok(())
     }
 
+    /// 批量发布多个事件到所有订阅者(摊销固定采样开销)
+    ///
+    /// WHY(M1-T1.3):`publish` 每次调用重复 `receiver_count()` / `sender.len()`
+    /// 背压采样等固定开销;当调用方需连续发布 N 条事件(如议会 N 个 VoteCast)时,
+    /// `publish_batch` 将这些采样摊销为一次,减少 N-1 次重复固定开销。
+    ///
+    /// # 语义一致性(与 `publish` 完全对齐)
+    /// 逐条保留:Critical 无订阅者告警、4 类 Critical 安全事件 mpsc 旁路双通道、
+    /// broadcast lag 检测。仅 `receiver_count` 与背压采样摊销为一次。
+    ///
+    /// # 空 Vec 早退
+    /// `events` 为空时直接返回 Ok(())(避免无意义采样)。
+    ///
+    /// WHY async 签名:与 `publish` 一致,内部纯同步 send,保留 async 以稳定 API。
+    #[allow(clippy::unused_async)]
+    pub async fn publish_batch(&self, events: Vec<NexusEvent>) -> Result<(), EventBusError> {
+        self.dispatch_batch(events);
+        Ok(())
+    }
+
+    /// 同步批量发布 — [`publish_batch`](Self::publish_batch) 的同步版本
+    ///
+    /// 供不便 await 的场景使用(如 sync 方法内批量发布)。
+    pub fn publish_batch_blocking(&self, events: Vec<NexusEvent>) -> Result<(), EventBusError> {
+        self.dispatch_batch(events);
+        Ok(())
+    }
+
+    /// 批量发布内部实现(async/blocking 共用,内部纯同步 send)
+    ///
+    /// 摊销点:`receiver_count()` 与 `sender.len()` 背压采样各仅一次;
+    /// 逐条事件的 send / mpsc 旁路 / Critical 判定为固有开销,无法摊销。
+    fn dispatch_batch(&self, events: Vec<NexusEvent>) {
+        if events.is_empty() {
+            return; // 空批次早退,避免无意义采样
+        }
+        let start = Instant::now();
+        // 摊销点 1:receiver_count 仅采样一次(原子 load)
+        let subscriber_count = self.sender.receiver_count();
+        // 摊销点 2:背压检查仅一次(sender.len 原子 load + 阈值比较)
+        let queued = self.sender.len();
+        let threshold = self.capacity * 3 / 4;
+        if queued > threshold {
+            self.backpressure_warning_count
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(
+                queued,
+                threshold,
+                capacity = self.capacity,
+                "broadcast 通道背压告警:缓冲区占用超过 75%(批量发布)"
+            );
+        }
+        // 逐条发布:与 publish 语义一致,仅采样已摊销到循环外
+        for event in events {
+            if let Some(logger) = &self.logger {
+                logger.log_publish(&event, subscriber_count, start.elapsed());
+            }
+            if subscriber_count == 0 && event.severity() == EventSeverity::Critical {
+                warn!(
+                    event_type = event.type_name(),
+                    "Critical 事件无订阅者,事件将被丢弃(批量发布)"
+                );
+            }
+            // §6.2 红线双通道:4 类 Critical 安全事件额外走 mpsc 旁路(逐条判定,不破坏语义)
+            if is_critical_mpsc_event(&event) {
+                self.send_critical_mpsc(&event);
+            }
+            match self.sender.send(event) {
+                Ok(receivers) if receivers < subscriber_count => {
+                    warn!(
+                        expected_subscribers = subscriber_count,
+                        actual_receivers = receivers,
+                        lagged_count = subscriber_count - receivers,
+                        "broadcast 发送者 lag 检测:部分订阅者缓冲区已满,事件被跳过(批量发布)"
+                    );
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+    }
+
     /// 显式发布 Critical 事件到双通道(broadcast + mpsc 旁路)
     ///
     /// 调用方明确知道事件为 Critical 时使用此方法,语义清晰。
@@ -1017,6 +1099,71 @@ mod tests {
         let mut rx = bus.subscribe();
         let result = rx.recv_timeout(Duration::from_millis(50)).await;
         assert!(matches!(result, Err(EventBusError::RecvTimeout(_))));
+    }
+
+    // ============================================================
+    // M1-T1.3:publish_batch 批量发布测试
+    // ============================================================
+
+    fn make_indexed_event(i: usize) -> NexusEvent {
+        NexusEvent::QuestCreated {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: format!("q-{i}"),
+            title: format!("任务 {i}"),
+            task_count: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_publish_batch_delivers_all_events() {
+        // 批量发布后所有事件均被订阅者接收(计数与内容完整)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let events: Vec<NexusEvent> = (0..5).map(make_indexed_event).collect();
+
+        bus.publish_batch(events.clone()).await.unwrap();
+
+        for expected in &events {
+            let received = rx.recv().await.unwrap();
+            assert_eq!(&received, expected, "批量发布应保留逐条内容与顺序");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_publish_batch_empty_early_return() {
+        // 空 Vec 早退:不发布任何事件,不 panic
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        bus.publish_batch(Vec::new()).await.unwrap();
+        // 超时无事件可收
+        let result = rx.recv_timeout(Duration::from_millis(50)).await;
+        assert!(matches!(result, Err(EventBusError::RecvTimeout(_))));
+    }
+
+    #[tokio::test]
+    async fn test_publish_batch_critical_mpsc_bypass_preserved() {
+        // 批量中含 Critical 安全事件(SkepticVeto)时,mpsc 旁路仍投递
+        let bus = EventBus::new();
+        let mut critical_rx = bus.subscribe_critical_events();
+        let events = vec![
+            make_indexed_event(0),
+            NexusEvent::SkepticVeto {
+                metadata: EventMetadata::new("parliament"),
+                quest_id: "q-veto".into(),
+                veto_reason: "恶意意图".into(),
+                frozen_capabilities: vec!["cap-x".into()],
+            },
+            make_indexed_event(1),
+        ];
+
+        bus.publish_batch(events).await.unwrap();
+
+        // Critical 旁路应收到 SkepticVeto(不被普通事件淹没)
+        let received = tokio::time::timeout(Duration::from_millis(200), critical_rx.recv())
+            .await
+            .expect("不应超时")
+            .expect("Critical 旁路应收到 SkepticVeto");
+        assert_eq!(received.type_name(), "SkepticVeto");
     }
 
     #[test]

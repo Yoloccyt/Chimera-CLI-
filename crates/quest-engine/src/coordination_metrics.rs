@@ -451,14 +451,23 @@ impl CoordinationMetricsCollector {
         }
     }
 
+    /// 获取内部状态锁(毒锁降级恢复)
+    ///
+    /// WHY unwrap_or_else 而非 expect:指标采集非关键路径,前任持有者 panic
+    /// 导致 poison 后,继续抛 panic 会把崩溃传染给 Quest 主流程(§4.1 红线:
+    /// 避免 unwrap/expect)。降级访问中毒数据更稳健:MetricsState 仅含 EWMA
+    /// 标量与计数器,即使前任持有者在写入中途 panic,残留值也只造成单次采样
+    /// 偏差,后续 EWMA 会指数衰减掉影响。与 event-bus bus.rs 的中毒锁降级
+    /// 处理方式保持一致。
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, MetricsState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// 记录协调成本样本(更新 EWMA)
     ///
     /// 时间复杂度:O(1)
     pub fn record_cost(&self, sample: &CoordinationCostSample) {
-        let mut state = self
-            .state
-            .lock()
-            .expect("coordination metrics mutex poisoned");
+        let mut state = self.lock_state();
         let total_ms = sample.total_ms();
         let alpha = self.config.ewma_alpha;
 
@@ -475,10 +484,7 @@ impl CoordinationMetricsCollector {
     ///
     /// 时间复杂度:O(1)
     pub fn record_gain(&self, sample: &InferenceGainSample) {
-        let mut state = self
-            .state
-            .lock()
-            .expect("coordination metrics mutex poisoned");
+        let mut state = self.lock_state();
         let gain = sample.total_gain() as f64;
         let alpha = self.config.ewma_alpha;
 
@@ -516,10 +522,7 @@ impl CoordinationMetricsCollector {
         // WHY 块作用域:将锁持有范围限定在计算块内,确保 publish_blocking
         // 在锁释放后执行(§4.4 反模式 1:禁止持锁跨 await / 阻塞调用)。
         let (result, sample_count) = {
-            let mut state = self
-                .state
-                .lock()
-                .expect("coordination metrics mutex poisoned");
+            let mut state = self.lock_state();
             let alpha = self.config.ewma_alpha;
             let total_ms = cost.total_ms();
             let gain = gain.total_gain() as f64;
@@ -595,10 +598,7 @@ impl CoordinationMetricsCollector {
     ///
     /// 时间复杂度:O(1)
     pub fn last_ratio(&self) -> Option<CoordinationToGainRatio> {
-        let state = self
-            .state
-            .lock()
-            .expect("coordination metrics mutex poisoned");
+        let state = self.lock_state();
         state.last_ratio.clone()
     }
 
@@ -606,10 +606,7 @@ impl CoordinationMetricsCollector {
     ///
     /// 时间复杂度:O(1)
     pub fn snapshot(&self) -> (f64, f64, u64) {
-        let state = self
-            .state
-            .lock()
-            .expect("coordination metrics mutex poisoned");
+        let state = self.lock_state();
         (state.cost_ewma_ms, state.gain_ewma, state.sample_count)
     }
 
@@ -617,10 +614,7 @@ impl CoordinationMetricsCollector {
     ///
     /// 时间复杂度:O(1)
     pub fn sample_count(&self) -> u64 {
-        let state = self
-            .state
-            .lock()
-            .expect("coordination metrics mutex poisoned");
+        let state = self.lock_state();
         state.sample_count
     }
 
@@ -640,10 +634,7 @@ impl CoordinationMetricsCollector {
     ///
     /// WHY:测试场景或系统重启后需要清空历史数据重新采集。
     pub fn reset(&self) {
-        let mut state = self
-            .state
-            .lock()
-            .expect("coordination metrics mutex poisoned");
+        let mut state = self.lock_state();
         *state = MetricsState::default();
     }
 }
@@ -1131,5 +1122,45 @@ mod tests {
         // 确认没有更多事件
         let extra = rx.try_recv().expect("try_recv 不应出错");
         assert!(extra.is_none(), "不应有额外事件");
+    }
+
+    /// 验证毒锁降级:前任持有者 panic 后采集器仍可用而非传染 panic
+    ///
+    /// 对应 lock_state 的 unwrap_or_else 降级语义(§4.1 红线:避免
+    /// unwrap/expect):另一线程持锁 panic 使 Mutex 中毒后,record_and_compute/
+    /// snapshot/reset 应继续工作(降级访问中毒数据),而不是把崩溃传染给调用方。
+    ///
+    /// WHY 用 record_and_compute 而非 record_cost:sample_count 语义为"比值计算次数",
+    /// 仅 record_and_compute 递增它;record_cost/record_gain 仅更新 EWMA 累加器不计数。
+    #[test]
+    fn test_poisoned_lock_degrades_instead_of_panic() {
+        use std::sync::Arc;
+        let collector = Arc::new(CoordinationMetricsCollector::new());
+        collector.record_and_compute(
+            &CoordinationCostSample::new(100.0, 50.0),
+            &InferenceGainSample::new(0.8),
+        );
+
+        // 在另一线程持锁 panic,使 Mutex 中毒
+        let poisoner = Arc::clone(&collector);
+        let handle = std::thread::spawn(move || {
+            let _guard = poisoner.state.lock().expect("测试线程首次加锁不应失败");
+            panic!("故意 panic 使锁中毒");
+        });
+        assert!(handle.join().is_err(), "毒化线程应以 panic 退出");
+
+        // 毒锁后各方法应降级继续工作而非 panic
+        collector.record_and_compute(
+            &CoordinationCostSample::new(200.0, 100.0),
+            &InferenceGainSample::new(0.8),
+        );
+        let (_cost_ewma, _gain_ewma, count) = collector.snapshot();
+        assert_eq!(count, 2, "毒锁降级后应继续采集样本");
+        assert!(
+            collector.last_ratio().is_some(),
+            "record_and_compute 后应有比值"
+        );
+        collector.reset();
+        assert_eq!(collector.sample_count(), 0, "毒锁降级后 reset 仍生效");
     }
 }

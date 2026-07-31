@@ -22,18 +22,21 @@ use std::time::{Duration, Instant};
 
 // === 辅助函数 ===
 
-/// 创建 50 维向量,索引 i 处为 1.0,其余为 0.0(用于正交场景)
-fn make_unit_vector(dim: usize, idx: usize) -> Vec<f32> {
-    let mut v = vec![0.0; dim];
-    if idx < dim {
-        v[idx] = 1.0;
-    }
-    v
-}
-
 /// 创建 50 维全 1.0 向量(用于高相似度场景)
 fn make_uniform_vector(dim: usize, value: f32) -> Vec<f32> {
     vec![value; dim]
+}
+
+/// 创建前 `active` 维为 1.0、其余为 0.0 的向量(用于可控相似度场景)
+///
+/// 与全 1.0 向量的余弦相似度 = sqrt(active/dim),
+/// 例如 make_partial_vector(50, 30) 与 [1.0; 50] 的余弦 ≈ 0.775
+fn make_partial_vector(dim: usize, active: usize) -> Vec<f32> {
+    let mut v = vec![0.0; dim];
+    for item in v.iter_mut().take(active.min(dim)) {
+        *item = 1.0;
+    }
+    v
 }
 
 /// 注册多个能力到替代器
@@ -53,14 +56,20 @@ fn test_register_and_find_substitutes_top_k() {
         &sub,
         vec![
             ("cap-1", make_uniform_vector(50, 1.0)),
-            ("cap-2", make_uniform_vector(50, 0.99)), // 与 cap-1 极相似
-            ("cap-3", make_uniform_vector(50, 0.9)),
-            ("cap-4", make_unit_vector(50, 0)), // 与 cap-1 正交
+            ("cap-2", make_uniform_vector(50, 0.99)), // 与 cap-1 极相似(余弦=1.0)
+            ("cap-3", make_uniform_vector(50, 0.9)),  // 与 cap-1 极相似(余弦=1.0)
+            // v2.9.0-omega: cap-4 改用 partial 向量,确保余弦 > 0.5(通过 similarity_threshold 过滤)
+            // make_partial_vector(50, 30) 与 [1.0;50] 的余弦 ≈ 0.775 > 0.5
+            ("cap-4", make_partial_vector(50, 30)),
         ],
     );
 
     let candidates = sub.find_substitutes("cap-1", 3);
-    assert_eq!(candidates.len(), 3, "应返回 Top-3 候选");
+    assert_eq!(
+        candidates.len(),
+        3,
+        "应返回 Top-3 候选(所有候选相似度 > 0.5)"
+    );
 
     // 验证降序排列
     assert!(candidates[0].similarity_score >= candidates[1].similarity_score);
@@ -355,6 +364,7 @@ async fn test_mcp_mesh_failure_advances_chain() {
         participant_count: 3,
         latency_ms: 100,
         success: false,
+        capability_id: None,
     })
     .await
     .expect("发布失败");
@@ -397,6 +407,7 @@ async fn test_mcp_mesh_success_does_not_advance_chain() {
         participant_count: 3,
         latency_ms: 50,
         success: true,
+        capability_id: None,
     })
     .await
     .expect("发布失败");

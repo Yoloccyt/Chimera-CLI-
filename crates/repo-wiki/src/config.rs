@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use crate::search::HybridSearchConfig;
 use crate::types::{HnswConfig, WikiConfig};
 
 impl WikiConfig {
@@ -18,6 +19,7 @@ impl WikiConfig {
             read_pool_size: 2,
             fts_enabled: true,
             hnsw: HnswConfig::default(),
+            hybrid_search: HybridSearchConfig::default(),
         }
     }
 
@@ -52,6 +54,9 @@ impl WikiConfig {
     /// P2-5: 允许通过 builder 链式调用自定义 HNSW 参数(M/ef_construction/ef_search 等),
     /// 替代原硬编码常量。未调用此方法时使用 `HnswConfig::default()`。
     ///
+    /// v2.9.0-omega: `HnswConfig::new(.., ef_search: usize)` 内部转 `Some(ef_search)`
+    /// (显式模式);`HnswConfig::default()` 的 `ef_search` 为 `None`(自适应模式)。
+    ///
     /// # 示例
     /// ```
     /// use repo_wiki::types::{HnswConfig, WikiConfig};
@@ -59,10 +64,30 @@ impl WikiConfig {
     /// let config = WikiConfig::with_path("wiki.db")
     ///     .hnsw_config(HnswConfig::new(32, 50_000, 20, 300, 100));
     /// assert_eq!(config.hnsw.max_nb_connection, 32);
-    /// assert_eq!(config.hnsw.ef_search, 100);
+    /// assert_eq!(config.hnsw.ef_search, Some(100));
     /// ```
     pub fn hnsw_config(mut self, config: HnswConfig) -> Self {
         self.hnsw = config;
+        self
+    }
+
+    /// 设置混合检索融合参数(builder 风格)
+    ///
+    /// 控制 HNSW(dense)与 FTS5(sparse)检索结果的 RRF 融合参数。
+    /// 未调用此方法时使用 `HybridSearchConfig::default()`(rrf_k=60,等权融合)。
+    ///
+    /// # 示例
+    /// ```
+    /// use repo_wiki::search::HybridSearchConfig;
+    /// use repo_wiki::WikiConfig;
+    ///
+    /// let config = WikiConfig::with_path("wiki.db")
+    ///     .hybrid_search_config(HybridSearchConfig::new(30, 1.5, 0.8));
+    /// assert_eq!(config.hybrid_search.rrf_k, 30);
+    /// assert!((config.hybrid_search.dense_weight - 1.5).abs() < 1e-6);
+    /// ```
+    pub fn hybrid_search_config(mut self, config: HybridSearchConfig) -> Self {
+        self.hybrid_search = config;
         self
     }
 }
@@ -92,7 +117,11 @@ mod tests {
         // P2-5: 默认 HNSW 参数
         assert_eq!(config.hnsw.max_nb_connection, 16);
         assert_eq!(config.hnsw.ef_construction, 200);
-        assert_eq!(config.hnsw.ef_search, 50);
+        // v2.9.0-omega: 默认 ef_search = None(自适应模式)
+        assert_eq!(config.hnsw.ef_search, None);
+        // Task 3: 默认混合检索配置
+        assert_eq!(config.hybrid_search, HybridSearchConfig::default());
+        assert_eq!(config.hybrid_search.rrf_k, 60);
     }
 
     #[test]
@@ -103,7 +132,8 @@ mod tests {
         assert_eq!(config.hnsw.max_elements, 50_000);
         assert_eq!(config.hnsw.max_layer, 20);
         assert_eq!(config.hnsw.ef_construction, 300);
-        assert_eq!(config.hnsw.ef_search, 100);
+        // v2.9.0-omega: HnswConfig::new(.., 100) 内部转 Some(100)(显式模式)
+        assert_eq!(config.hnsw.ef_search, Some(100));
     }
 
     #[test]
@@ -127,5 +157,25 @@ mod tests {
         }"#;
         let config: WikiConfig = serde_json::from_str(old_json).unwrap();
         assert_eq!(config.hnsw, HnswConfig::default());
+        // Task 3: 旧配置文件(无 hybrid_search 段)也应反序列化为默认值
+        assert_eq!(config.hybrid_search, HybridSearchConfig::default());
+    }
+
+    #[test]
+    fn test_hybrid_search_config_builder() {
+        let config = WikiConfig::with_path("wiki.db")
+            .hybrid_search_config(HybridSearchConfig::new(30, 1.5, 0.8));
+        assert_eq!(config.hybrid_search.rrf_k, 30);
+        assert!((config.hybrid_search.dense_weight - 1.5).abs() < 1e-6);
+        assert!((config.hybrid_search.sparse_weight - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_hybrid_search_config_serde_roundtrip() {
+        let config = WikiConfig::with_path("wiki.db")
+            .hybrid_search_config(HybridSearchConfig::new(45, 1.2, 0.9));
+        let json = serde_json::to_string(&config).unwrap();
+        let de: WikiConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.hybrid_search, config.hybrid_search);
     }
 }

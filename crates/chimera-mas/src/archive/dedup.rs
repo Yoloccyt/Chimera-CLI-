@@ -76,6 +76,14 @@ pub const NEAR_DEDUP_THRESHOLD: f32 = 0.85;
 /// 与 §4.4 反模式 6 一致:全程 f32,比较时用容差而非精确相等。
 pub const CONFIDENCE_EQUAL_TOLERANCE: f32 = 1e-6;
 
+/// 语义去重配对缓冲的预留容量上限(L9 优化第二轮：修复过度分配回归)
+///
+/// WHY 钳制上限:旧实现按 n(n-1)/4 预分配,n=1000 即 6MB、n=10000 即 600MB 一次性
+/// 分配——与实际配对数(经跨 Agent 过滤 + near_threshold 过滤后)严重不成比例。
+/// ADR-005 明确 dedup 规模为 10-1000 entry,4096 上限充分覆盖典型批量;超出部分
+/// 靠 Vec 双倍增长摊销 O(1),避免大 n 下的堆内存尖峰。
+const DEDUP_PAIRS_CAPACITY_CAP: usize = 4096;
+
 // ============================================================
 // 输入/输出类型
 // ============================================================
@@ -502,31 +510,34 @@ impl DedupEngine {
         }
 
         // 计算所有跨 Agent 配对的相似度
-        let mut pairs: Vec<(usize, usize, f32, DedupReason)> = Vec::new();
+        // WHY 预留容量钳制(L9 优化第二轮):旧版按 n(n-1)/4 预分配在大 n 时造成
+        // 数百 MB 堆内存尖峰(n=10000 → 600MB),而实际配对数经跨 Agent + 阈值过滤
+        // 后远小于此。钳制到 DEDUP_PAIRS_CAPACITY_CAP:覆盖典型批量(ADR-005 规模
+        // 10-1000),超出靠 Vec 双倍增长摊销 O(1)。
+        let n = candidates.len();
+        let estimated_pairs = n.saturating_mul(n.saturating_sub(1)) / 4;
+        let mut pairs: Vec<(usize, usize, f32, DedupReason)> =
+            Vec::with_capacity(estimated_pairs.min(DEDUP_PAIRS_CAPACITY_CAP));
         for i in 0..candidates.len() {
+            let a = &entries[candidates[i]];
             for j in (i + 1)..candidates.len() {
-                let a = &entries[candidates[i]];
                 let b = &entries[candidates[j]];
-                // 跨 Agent 判定(核心语义)
+                // 跨 Agent 判定(核心语义)—— 同 Agent 提前跳过,省去余弦计算
                 if a.agent_id == b.agent_id {
                     continue;
                 }
                 let sim = cosine_similarity_slices(&a.embedding, &b.embedding);
-                if sim >= self.semantic_threshold {
-                    pairs.push((
-                        candidates[i],
-                        candidates[j],
-                        sim,
-                        DedupReason::SemanticDuplicate,
-                    ));
-                } else if sim >= self.near_threshold {
-                    pairs.push((
-                        candidates[i],
-                        candidates[j],
-                        sim,
-                        DedupReason::NearDuplicate,
-                    ));
+                // WHY 先比低阈值早停:低于 near_threshold 的配对既非语义也非近似重复,
+                // 直接跳过不入 pairs,减少后续排序与遍历的常数(near ≤ semantic)。
+                if sim < self.near_threshold {
+                    continue;
                 }
+                let reason = if sim >= self.semantic_threshold {
+                    DedupReason::SemanticDuplicate
+                } else {
+                    DedupReason::NearDuplicate
+                };
+                pairs.push((candidates[i], candidates[j], sim, reason));
             }
         }
 

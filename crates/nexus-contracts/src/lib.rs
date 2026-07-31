@@ -29,6 +29,7 @@
 //! | `SelectorPolicy` / `SelectorWeights` | 新建（P3-W10.3 D1 修复） | L2 hcw-window / L6 omega-learner |
 //! | `DensityPolicy` / `DensityTier` | 新建（P4-W13.2 S1 接缝） | L2 hcw-window / L6 omega-learner |
 //! | `MemoryStrategy` / `MemoryStrategyPolicy` | 新建（P4-W14.1 S2 接缝） | L2 mlc-engine / L6 omega-learner |
+//! | `MemoryTaskPhase` / `MemoryStrategyProvider` | 新建（Task 2 OSA S2 桥接） | L6 osa-coordinator / L6 omega-learner |
 //! | `ActivationStrategy` / `ParliamentPolicy` | 新建（P4-W14.3 S5 接缝） | L8 parliament / L6 omega-learner |
 //! | `DecayProfile` / `DecayPolicy` | 新建（P4-W14.4 S6 接缝） | L4 decay-engine / L6 omega-learner |
 //!
@@ -83,6 +84,12 @@ pub mod density;
 /// 记忆策略契约 — S2 接缝（mlc-engine 记忆策略选择，P4-W14.1）
 pub mod strategy;
 
+/// OSA memory 维度自适应记忆策略契约 — S2 桥接层（Task 2）
+///
+/// 承载 `MemoryTaskPhase` 任务阶段枚举与 `MemoryStrategyProvider` trait，
+/// 供 OSA memory 维度通过 L0 trait 调用 omega-learner S2（依赖铁律 §2.2 合规）。
+pub mod memory_strategy;
+
 /// 预取策略契约 — S3 接缝（scc-cache 预取策略选择，P4-W14.2）
 pub mod prefetch;
 
@@ -128,6 +135,26 @@ pub mod blueprint;
 /// 供 L4 formal-verifier 验证器实现与 L8 parliament 审议时查询属性满足状态共享。
 pub mod formal_props;
 
+/// 事件元数据契约 — L0 共享的事件追踪元信息(Task 3.10,ADR-033 扩展)
+///
+/// 承载 `EventMetadata`(event_id / timestamp / source),从 L1 `event-bus/src/payloads.rs`
+/// 上提至 L0,缓解 L1 上帝 crate 病理(被 100+ 文件依赖)。
+/// 依赖: chrono + uuid(ADR-033 Task 3.10 新增例外,基础类型库)。
+pub mod event_metadata;
+
+/// 任务状态契约 — L0 共享的 Task 生命周期枚举(Task 3.10,ADR-033 扩展)
+///
+/// 承载 `TaskStatus`(Pending/Running/Completed/Failed),从 L1 `nexus-core/src/types.rs`
+/// 上提至 L0,缓解 L1 上帝 crate 病理(被 65+ 文件依赖)。纯 enum,仅 serde derive 依赖。
+pub mod task;
+
+/// 检查点契约 — L0 共享的 Quest 断点恢复快照(Task 3.10,ADR-033 扩展)
+///
+/// 承载 `Checkpoint`(quest_id / checkpoint_id / memory_snapshot_hash / serialized_state / created_at),
+/// 从 L1 `nexus-core/src/types.rs` 上提至 L0,缓解 L1 上帝 crate 病理(被 42+ 文件依赖)。
+/// 依赖: chrono(ADR-033 Task 3.10 新增例外,基础类型库)。
+pub mod checkpoint;
+
 // ============================================================
 // 公开 API 导出
 // ============================================================
@@ -154,6 +181,8 @@ pub use decay_profile::{DecayPolicy, DecayProfile};
 // P4-W14.2: 预取策略（PrefetchStrategy + PrefetchPolicy，S3 接缝）
 pub use prefetch::{PrefetchPolicy, PrefetchStrategy};
 pub use strategy::{MemoryStrategy, MemoryStrategyPolicy};
+// Task 2: OSA memory 维度 S2 桥接契约（MemoryTaskPhase + MemoryStrategyProvider trait）
+pub use memory_strategy::{MemoryStrategyProvider, MemoryTaskPhase};
 // P3-W10.3: 选择器策略（SelectorPolicy + SelectorWeights，D1 修复）
 pub use policy::{SelectorPolicy, SelectorWeights};
 pub use quota::{NamespaceQuota, QuotaLimits};
@@ -168,6 +197,11 @@ pub use vector::{VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorSt
 pub use formal_props::{
     FormalProperty, InvariantSpec, PropertyCategory, VerificationMethod, VerificationResult,
 };
+// Task 3.10: L0 共享类型扩展(EventMetadata / TaskStatus / Checkpoint)
+// 从 L1 nexus-core / event-bus 下沉,缓解 L1 上帝 crate 病理(100+/65+/42+ 文件依赖)
+pub use checkpoint::Checkpoint;
+pub use event_metadata::EventMetadata;
+pub use task::TaskStatus;
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
@@ -202,6 +236,8 @@ pub mod prelude {
     pub use crate::quota::{NamespaceQuota, QuotaLimits};
     // P4-W14.1: 记忆策略（S2 接缝）
     pub use crate::strategy::{MemoryStrategy, MemoryStrategyPolicy};
+    // Task 2: OSA memory 维度 S2 桥接契约
+    pub use crate::memory_strategy::{MemoryStrategyProvider, MemoryTaskPhase};
     pub use crate::temporal::{TemporalMeta, TransitionType};
     pub use crate::vector::{
         VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats,
@@ -210,4 +246,8 @@ pub mod prelude {
     pub use crate::formal_props::{
         FormalProperty, InvariantSpec, PropertyCategory, VerificationMethod, VerificationResult,
     };
+    // Task 3.10: L0 共享类型扩展(EventMetadata / TaskStatus / Checkpoint)
+    pub use crate::checkpoint::Checkpoint;
+    pub use crate::event_metadata::EventMetadata;
+    pub use crate::task::TaskStatus;
 }

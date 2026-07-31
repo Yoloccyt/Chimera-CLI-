@@ -183,9 +183,10 @@ pub use s1_density::{
     S1RewardParams, TaskType, DEFAULT_S1_ALPHA,
 };
 // P4-W14.1: S2 接缝（mlc-engine 记忆策略选择）学习器
+// Task 2: S2StrategyAdapter 桥接 S2Learner 到 OSA MemoryStrategyProvider trait
 pub use s2_memory::{
     arm_index_to_strategy, s2_arm_set, strategy_to_arm_index, S2Context, S2Learner, S2Reward,
-    S2RewardParams, TaskPhase, DEFAULT_S2_ALPHA, S2_ARM_COUNT, S2_CONTEXT_DIM,
+    S2RewardParams, S2StrategyAdapter, TaskPhase, DEFAULT_S2_ALPHA, S2_ARM_COUNT, S2_CONTEXT_DIM,
 };
 // P4-W14.2: S3 接缝（scc-cache 预取策略）学习器
 pub use s3_prefetch::{

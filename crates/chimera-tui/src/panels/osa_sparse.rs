@@ -42,6 +42,7 @@ use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::render::{self, virtual_scroll_window};
 use crate::types::{PanelId, TuiCommand, TuiState};
+use osa_coordinator::five_dimension_masks;
 
 /// OSA 稀疏度可视化面板
 ///
@@ -185,21 +186,22 @@ impl Panel for OsaSparsePanel {
         block.render(area, buf);
 
         // 终端过小时不渲染内容,避免布局计算溢出
-        if inner.height < 6 || inner.width < 20 {
+        if inner.height < 14 || inner.width < 20 {
             return;
         }
 
-        // 三段式纵向布局:顶部 Gauge(3 行) + 中部列表(弹性) + 底部 sparkline(5 行)
+        // Task 3.6: 四段式纵向布局:顶部 Gauge(3) + 五维掩码(4) + 中部列表(弹性) + 底部(5+1)
         //
-        // WHY 固定顶部 3 行:Gauge 需要边框 2 行 + 内容 1 行;
-        // 底部 sparkline 5 行(边框 2 + 内容 3),与 Timeline 面板底部一致;
-        // 中部列表取剩余空间,最少 5 行保证可读性。
+        // WHY 新增五维掩码段:OsaSparsePanel 展示 OSA 五维度(Routing/Context/
+        // Memory/Audit/Budget)的活跃/总数统计,与 Gauge 平均稀疏度互补.
+        // 底部 sparkline 5 行 + omega-learner 占位 1 行 = 6 行.
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
-                Constraint::Min(5),
-                Constraint::Length(5),
+                Constraint::Length(3), // 顶部 Gauge
+                Constraint::Length(4), // 五维掩码统计(Task 3.6)
+                Constraint::Min(5),    // 中部文件列表
+                Constraint::Length(6), // 底部 sparkline + omega-learner
             ])
             .split(inner);
 
@@ -230,8 +232,60 @@ impl Panel for OsaSparsePanel {
             .label(label);
         gauge.render(chunks[0], buf);
 
+        // === 五维掩码统计(Task 3.6) ===
+        //
+        // 调用 osa_coordinator::five_dimension_masks() 获取静态快照,
+        // 显示每维度的活跃数/总数。全空掩码时 active=0,总数=0.
+        // 格式: Routing: {active}/{total} | Context: {active}/{total} | ...
+        let masks = five_dimension_masks();
+        let mask_lines = vec![
+            Line::from(Span::styled(
+                "五维掩码状态",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(vec![
+                Span::raw(format!(
+                    "Routing: {}/{}",
+                    masks.routing.active_count(),
+                    masks.routing.active_ids.len()
+                )),
+                Span::raw(" | "),
+                Span::raw(format!(
+                    "Context: {}/{}",
+                    masks.context.active_count(),
+                    masks.context.active_ids.len()
+                )),
+                Span::raw(" | "),
+                Span::raw(format!(
+                    "Memory: {}/{}",
+                    masks.memory.active_count(),
+                    masks.memory.active_ids.len()
+                )),
+            ]),
+            Line::from(vec![
+                Span::raw(format!(
+                    "Audit: {}/{}",
+                    masks.audit.active_count(),
+                    masks.audit.active_ids.len()
+                )),
+                Span::raw(" | "),
+                Span::raw(format!(
+                    "Budget: {}/{}",
+                    masks.budget.active_count(),
+                    masks.budget.active_ids.len()
+                )),
+            ]),
+            Line::from(Span::styled(
+                "omega-learner 六接缝状态: 暂未实现",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let mask_text = Text::from(mask_lines);
+        let mask_paragraph = Paragraph::new(mask_text);
+        mask_paragraph.render(chunks[1], buf);
+
         // === 中部:context 活跃文件列表(虚拟滚动) ===
-        let content_height = chunks[1].height as usize;
+        let content_height = chunks[2].height as usize;
         // 列表内容高度需扣除虚拟滚动提示行(1 行)
         let visible_rows = content_height.saturating_sub(1);
         self.scroll_offset =
@@ -240,7 +294,7 @@ impl Panel for OsaSparsePanel {
         let list_content =
             Self::render_window(state, self.selected, self.scroll_offset, visible_rows);
         let list_paragraph = Paragraph::new(list_content);
-        list_paragraph.render(chunks[1], buf);
+        list_paragraph.render(chunks[2], buf);
 
         // === 底部:稀疏度历史 sparkline ===
         // WHY 直接使用 osa_sparsity_history 作为 sparkline 数据点:
@@ -250,7 +304,7 @@ impl Panel for OsaSparsePanel {
             "Sparsity History",
             Color::Magenta,
         );
-        sparkline.render(chunks[2], buf);
+        sparkline.render(chunks[3], buf);
     }
 
     fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {

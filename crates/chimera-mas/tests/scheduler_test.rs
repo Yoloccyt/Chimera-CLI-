@@ -272,3 +272,28 @@ fn test_scheduler_peek_reflects_top_priority() {
     // peek 不移除
     assert_eq!(s.len(), 2);
 }
+
+/// 完全平局(同秩 + 同 WSJF)时按入队序确定性出队(L9 优化第二轮:seq 第四键)
+///
+/// WHY:同秩同 WSJF 多任务时,enqueued_at 可能在 Instant 分辨率内平局;
+/// 旧实现依赖物理顺序(swap_remove 后非确定),新增 seq 第四键保证
+/// 出队序严格按入队先后(FIFO),不依赖存储布局。
+#[test]
+fn test_scheduler_full_tie_dequeues_in_fifo_order() {
+    let mut s = PriorityScheduler::new();
+    // 全部同秩(Medium)同 WSJF(相同输入 → 相同得分),仅入队先后不同
+    let same = WsjfInput::new(5.0, 5.0, 5.0, 5.0, 5.0);
+    for id in ["t0", "t1", "t2", "t3", "t4"] {
+        s.enqueue(make_task(id, TaskPriority::Medium), &same);
+    }
+    // 完全平局时按 seq(先入队者 seq 小)出队,即 FIFO:t0→t1→t2→t3→t4
+    let mut order = Vec::new();
+    while let Some(task) = s.dequeue() {
+        order.push(task.inner.task_id);
+    }
+    assert_eq!(
+        order,
+        vec!["t0", "t1", "t2", "t3", "t4"],
+        "完全平局应按入队序(FIFO)确定性出队"
+    );
+}

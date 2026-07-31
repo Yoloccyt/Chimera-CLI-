@@ -44,7 +44,7 @@ proptest! {
         verbose in prop::bool::ANY,
         config_path in "[a-z][a-z0-9_./-]{0,29}\\.yaml",
     ) {
-        let mut args: Vec<String> = vec!["aether".to_string()];
+        let mut args: Vec<String> = vec!["chimera".to_string()];
         if verbose {
             args.push("-v".to_string());
         }
@@ -74,7 +74,7 @@ proptest! {
         ]),
     ) {
         let args: Vec<String> = vec![
-            "aether".to_string(),
+            "chimera".to_string(),
             subcommand.to_string(),
             "--help".to_string(),
         ];
@@ -102,7 +102,7 @@ proptest! {
         // WHY:用 --invalid- 前缀保证生成的 flag 绝非已知参数
         // (如 --version/--help/--config),从而稳定触发 UnknownArgument
         let invalid_flag = format!("--invalid-{suffix}");
-        let args: Vec<String> = vec!["aether".to_string(), invalid_flag.clone()];
+        let args: Vec<String> = vec!["chimera".to_string(), invalid_flag.clone()];
 
         let result = Cli::try_parse_from(args);
         prop_assert!(result.is_err(), "无效参数 {} 应触发错误", invalid_flag);
@@ -124,7 +124,7 @@ proptest! {
         path in "[a-z][a-z0-9_./-]{0,39}",
     ) {
         let args: Vec<String> = vec![
-            "aether".to_string(),
+            "chimera".to_string(),
             "--config".to_string(),
             path.clone(),
             "run".to_string(),
@@ -145,7 +145,7 @@ proptest! {
         input_prompt in "[a-zA-Z][a-zA-Z0-9 .,!?]{0,49}",
     ) {
         let args: Vec<String> = vec![
-            "aether".to_string(),
+            "chimera".to_string(),
             "run".to_string(),
             input_prompt.clone(),
         ];

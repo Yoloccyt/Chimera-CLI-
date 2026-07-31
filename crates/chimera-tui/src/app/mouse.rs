@@ -11,7 +11,8 @@ use crate::types::InputMode;
 impl TuiApp {
     /// 处理鼠标事件,按当前布局区域路由到面板交互(滚动/点击/拖拽)。
     pub fn handle_mouse_event(&mut self, mouse: MouseEvent) {
-        let area = self.last_area;
+        // Task 1.15.4:last_area 移至 pane_manager,经 pane_manager 字段访问
+        let area = self.pane_manager.last_area;
         if area.width == 0 || area.height == 0 {
             return;
         }

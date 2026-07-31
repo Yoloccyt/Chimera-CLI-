@@ -25,18 +25,23 @@
 //! - 复用 `hcw-window` 实现 1M 上下文分层加载(不自实现压缩,Ω-Compress 单一实现)
 //! - 复用 `osa-coordinator` 计算稀疏掩码(Ω-Sparse 单一实现)
 //! - 复用 `event-bus` 的 NexusEvent(新增 7 个 Agent 变体,**不新建 AgentMessageBus**)
-//! - 复用 `quest-engine` 的 Quest DAG + Checkpoint
+//! - 直接复用 `nexus-core` 的 Quest / Task / Checkpoint 领域类型(L1,非 quest-engine)
+//!   — 2026-07-31 订正:ADR-026 决策 5 原拟复用 quest-engine DAG,实现态直接用
+//!   nexus-core 类型,src 零 quest_engine 引用,故移除僵尸同层依赖。
 //! - 复用 `gqep-executor` + `qeep-protocol` 实现零孤儿调用(§6.1 红线)
 //!
 //! ## 快速示例
 //!
 //! ```no_run
-//! // Task 7-13 将填充具体实现,当前为骨架占位
 //! use chimera_mas::prelude::*;
+//! use event_bus::EventBus;
 //!
-//! // RootOrchestrator 将在 Task 12 实现
-//! // let orchestrator = RootOrchestrator::new();
-//! // let result = orchestrator.delegate(task).await?;
+//! # fn run() {
+//! // RootOrchestrator 管理层级递归委托(最大深度 MAX_AGENT_DEPTH)
+//! let orchestrator = RootOrchestrator::new(EventBus::new());
+//! // 具体 delegate/四象限调度 API 见 orchestrator 模块文档
+//! # let _ = orchestrator;
+//! # }
 //! ```
 
 #![forbid(unsafe_code)]
@@ -56,6 +61,7 @@ pub mod orchestrator;
 pub mod pdca;
 pub mod quadrant;
 pub mod scheduler;
+pub mod shadow;
 pub mod stability;
 
 // === 关键类型重导出,简化外部导入 ===
@@ -85,12 +91,19 @@ pub use pdca::{
     ALERT_SINGLE_AGENT_WARNING_MB, ALERT_WIKI_COUNT_WARNING, PDCA_ALERT_COOLDOWN_SECS,
 };
 pub use quadrant::{
-    activated_quadrants, CoreCross, ProduceAssure, Quadrant, QuadrantPlan, QualityDimension,
-    ValidationStep, MAX_QUADRANT_FANOUT,
+    activated_quadrants, quadrant_status, CoreCross, ProduceAssure, Quadrant, QuadrantPlan,
+    QuadrantStatus, QualityDimension, ValidationStep, MAX_QUADRANT_FANOUT,
 };
 pub use scheduler::{
     score_to_priority, should_preempt, wsjf_score, PriorityScheduler, PriorityThresholds,
     WsjfInput, WsjfWeights,
+};
+// 影子模式子系统(ADR-053 备忘录 §五 B-4/B-5)— 适度导出:
+// 编排入口 + 治理配置 + 证据类型 + 终判建议;统计纯函数与批次账本
+// 细节经 `shadow::` 路径访问,不在 crate 根污染命名空间。
+pub use shadow::{
+    AhirtEvidenceCollector, BatchEvidence, BatchVerdict, GovernanceSignoff, PromotionAdvice,
+    ShadowModeConfig, ShadowModeOrchestrator, Stage3Prerequisites,
 };
 pub use stability::{
     CircuitBreaker, DegradationChain, DegradationStep, PressureSource, StabilityGuard,
@@ -147,6 +160,10 @@ pub mod prelude {
         scheduler::{
             score_to_priority, should_preempt, wsjf_score, PriorityScheduler, PriorityThresholds,
             WsjfInput, WsjfWeights,
+        },
+        shadow::{
+            AhirtEvidenceCollector, BatchEvidence, BatchVerdict, GovernanceSignoff,
+            PromotionAdvice, ShadowModeConfig, ShadowModeOrchestrator, Stage3Prerequisites,
         },
         stability::{
             CircuitBreaker, DegradationChain, DegradationStep, PressureSource, StabilityGuard,

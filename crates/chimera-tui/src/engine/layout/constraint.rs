@@ -7,6 +7,9 @@
 //!   不留空),这是布局正确性的根本不变量——由 proptest 强校验。
 //! - **flexbox 语义**:Fixed/Percent 为刚性基准;Min 提供下界并可增长;Max 提供
 //!   上界的弹性段;Flex(w) 按权重瓜分剩余空间。与 ratatui `Constraint` 语义对齐。
+//! - **v2.9.0-omega Task 2.6 扩展**:新增 `FlexBasis` / `Grow` / `Shrink` 三变体,
+//!   对齐 CSS Flexible Box Layout Module Level 1 §9.7(W3C CR-flexbox-1-20181119)
+//!   主轴分配算法:剩余空间 > 0 按 grow 因子分配,< 0 按 shrink × base 加权收缩。
 //! - **纯 safe + 整数运算**:用 `u32` 中间量避免 `u16` 乘法溢出,末段吸收取整余量。
 
 /// 布局主轴方向
@@ -31,14 +34,28 @@ pub enum Constraint {
     Max(u16),
     /// 弹性段:按权重 `w`(≥1)瓜分剩余空间
     Flex(u16),
+    /// v2.9.0-omega Task 2.6:CSS flex-basis — 初始尺寸,可增长(grow=1)可收缩(shrink=1)
+    ///
+    /// 与 `Min` 的区别:`Min` 不可收缩(下界),`FlexBasis` 在空间不足时按 shrink 收缩。
+    /// 学术参考:W3C CSS Flexbox §9.7 "Resolving Flexible Lengths"。
+    FlexBasis(u16),
+    /// v2.9.0-omega Task 2.6:CSS flex-grow — 增长因子,base=0,空间剩余时按因子比例分配
+    Grow(u32),
+    /// v2.9.0-omega Task 2.6:CSS flex-shrink — 收缩因子,base=0,空间不足时按因子标记可收缩
+    ///
+    /// 单独使用时 base=0 不主动收缩;与 `FlexBasis` 组合时由 `FlexBasis` 提供 base,
+    /// `Shrink` 作为收缩权重标记。简化语义:shrink>0 的段在空间不足时优先承担收缩。
+    Shrink(u32),
 }
 
 /// 沿一维轴求解各约束段的长度,返回值之和恒等于 `total`
 ///
-/// # 算法
-/// 1. 计算每段基准 `base`、增长权重 `weight`、上限 `cap`;
-/// 2. 若基准之和 ≥ total → 按比例收缩到 total(整数,余量逐一补);
-/// 3. 否则将剩余空间按权重分配给可增长段(尊重 cap),末段吸收最终余量。
+/// # 算法(CSS Flexbox §9.7 简化版)
+/// 1. 计算每段基准 `base`、增长权重 `weight`、上限 `cap`、收缩因子 `shrink`;
+/// 2. 若基准之和 > total → 按 `shrink × base` 加权收缩(shrink=0 的段不收缩);
+///    若所有 shrink=0,回退到按比例收缩全部段(保证和 == total);
+/// 3. 若基准之和 < total → 按 `weight` 分配剩余空间给可增长段(尊重 cap);
+/// 4. 末段吸收取整余量,保证和精确等于 total。
 pub fn solve(total: u16, constraints: &[Constraint]) -> Vec<u16> {
     let n = constraints.len();
     if n == 0 {
@@ -48,11 +65,13 @@ pub fn solve(total: u16, constraints: &[Constraint]) -> Vec<u16> {
     let mut base = vec![0u32; n];
     let mut weight = vec![0u32; n];
     let mut cap = vec![u32::MAX; n];
+    let mut shrink = vec![0u32; n];
     for (i, c) in constraints.iter().enumerate() {
         match *c {
             Constraint::Fixed(v) => {
                 base[i] = v as u32;
                 cap[i] = v as u32;
+                // Fixed 不可收缩(shrink=0),空间不足时按比例回退收缩
             }
             Constraint::Percent(p) => {
                 let v = total * (p.min(100) as u32) / 100;
@@ -62,6 +81,7 @@ pub fn solve(total: u16, constraints: &[Constraint]) -> Vec<u16> {
             Constraint::Min(v) => {
                 base[i] = v as u32;
                 weight[i] = 1;
+                // Min 不可收缩(下界保证)
             }
             Constraint::Max(v) => {
                 weight[i] = 1;
@@ -70,28 +90,45 @@ pub fn solve(total: u16, constraints: &[Constraint]) -> Vec<u16> {
             Constraint::Flex(w) => {
                 weight[i] = (w as u32).max(1);
             }
+            Constraint::FlexBasis(v) => {
+                // flex-basis:初始尺寸,可增长(weight=1)可收缩(shrink=1)
+                base[i] = v as u32;
+                weight[i] = 1;
+                shrink[i] = 1;
+            }
+            Constraint::Grow(g) => {
+                // flex-grow:base=0,按因子增长,不收缩
+                weight[i] = g.max(1);
+            }
+            Constraint::Shrink(s) => {
+                // flex-shrink:base=0,标记可收缩,不主动增长
+                shrink[i] = s;
+            }
         }
     }
 
     let base_sum: u32 = base.iter().sum();
     let mut sizes = base.clone();
 
-    if base_sum >= total {
-        // 基准超出可用空间:按比例收缩到 total,取整余量逐一补齐
-        if base_sum > 0 {
-            let mut assigned = 0u32;
+    if base_sum > total {
+        // 基准超出可用空间:按 shrink × base 加权收缩
+        shrink_distribute(&mut sizes, &base, &shrink, total);
+        // 收缩后若仍超出(全部 shrink=0 的回退场景),按比例收缩全部段
+        let assigned: u32 = sizes.iter().sum();
+        if assigned > total && base_sum > 0 {
+            let mut acc = 0u32;
             for (i, s) in sizes.iter_mut().enumerate() {
                 *s = (base[i] as u64 * total as u64 / base_sum as u64) as u32;
-                assigned += *s;
+                acc += *s;
             }
             let mut idx = 0usize;
-            while assigned < total {
+            while acc < total {
                 sizes[idx % n] += 1;
-                assigned += 1;
+                acc += 1;
                 idx += 1;
             }
         }
-    } else {
+    } else if base_sum < total {
         // 有剩余空间:按权重分配给可增长段(尊重 cap)
         grow_distribute(&mut sizes, &weight, &cap, total - base_sum);
         // 若仍有余量(全刚性段且未填满),末段吸收,保证和 == total
@@ -150,6 +187,55 @@ fn grow_distribute(sizes: &mut [u32], weight: &[u32], cap: &[u32], mut leftover:
             break; // 全部封顶,无法继续
         }
         leftover -= moved;
+    }
+}
+
+/// 按 `shrink × base` 加权收缩各段,使总和收敛到 `total`(CSS Flexbox §9.7)
+///
+/// WHY shrink × base 加权:CSS 规范要求收缩量按 `shrink_factor × base_size` 比例
+/// 分配,而非纯 shrink_factor。这样大 base 的段承担更多收缩,避免小段被压扁。
+/// shrink=0 的段(Fixed/Min)不参与收缩,保持原 base。
+///
+/// # 算法
+/// 1. 计算每段收缩权重 `sw = shrink × base`;
+/// 2. 总收缩量 `deficit = base_sum - total`;
+/// 3. 每段收缩 `deficit × sw_i / sum(sw)`,下界 0;
+/// 4. 取整余量逐一扣减,保证总和精确 == total。
+fn shrink_distribute(sizes: &mut [u32], base: &[u32], shrink: &[u32], total: u32) {
+    let n = sizes.len();
+    let base_sum: u32 = base.iter().sum();
+    let deficit = base_sum.saturating_sub(total);
+    if deficit == 0 {
+        return;
+    }
+    // 收缩权重 = shrink × base;shrink=0 的段不参与
+    let sw: Vec<u32> = (0..n).map(|i| shrink[i] * base[i]).collect();
+    let total_sw: u32 = sw.iter().sum();
+    if total_sw == 0 {
+        return; // 无可收缩段,交由调用方回退处理
+    }
+    let mut remaining = deficit;
+    for i in 0..n {
+        if sw[i] == 0 {
+            continue;
+        }
+        let cut = (deficit * sw[i]) / total_sw;
+        let cut = cut.min(sizes[i]); // 不下溢
+        sizes[i] -= cut;
+        remaining = remaining.saturating_sub(cut);
+    }
+    // 取整余量:从 sw>0 的段继续扣减 1,直至耗尽
+    let mut idx = 0usize;
+    while remaining > 0 {
+        let i = idx % n;
+        if sw[i] > 0 && sizes[i] > 0 {
+            sizes[i] -= 1;
+            remaining -= 1;
+        }
+        idx += 1;
+        if idx > n * 4 {
+            break; // 安全熔断:避免极端输入下死循环
+        }
     }
 }
 
@@ -214,14 +300,82 @@ mod tests {
         assert_eq!(sizes.iter().sum::<u16>(), 40);
     }
 
+    // === v2.9.0-omega Task 2.6 新增:flex-grow/shrink 测试 ===
+
+    #[test]
+    fn flex_grow_distributes_remaining_space() {
+        // 总宽 100,Fixed(20) 占 20,剩 80 按 Grow(1):Grow(2) = 1:2 分配
+        // 期望:[20, 26, 53](整数,和=99,末段补 1 → [20, 26, 54] 或类似,和=100)
+        let sizes = solve(
+            100,
+            &[
+                Constraint::Fixed(20),
+                Constraint::Grow(1),
+                Constraint::Grow(2),
+            ],
+        );
+        assert_eq!(sizes.iter().sum::<u16>(), 100, "和必须等于 total");
+        assert_eq!(sizes[0], 20, "Fixed 段保持 20");
+        // Grow(2) 应是 Grow(1) 的 2 倍左右
+        assert!(
+            sizes[2] >= sizes[1],
+            "Grow(2) 分配应不少于 Grow(1):{} >= {}",
+            sizes[2],
+            sizes[1]
+        );
+        // 近似比例:80 按 1:2 分 → 26.67 : 53.33
+        let total_grow = sizes[1] + sizes[2];
+        assert_eq!(total_grow, 80, "两个 Grow 段应瓜分剩余 80");
+    }
+
+    #[test]
+    fn flex_shrink_contracts_when_overflow() {
+        // 总宽 50,FlexBasis(30) + FlexBasis(30) base_sum=60 > 50,按 shrink 收缩
+        let sizes = solve(50, &[Constraint::FlexBasis(30), Constraint::FlexBasis(30)]);
+        assert_eq!(sizes.iter().sum::<u16>(), 50, "收缩后和必须等于 total");
+        // 两个 FlexBasis 等权收缩:各 25
+        assert_eq!(sizes[0], 25);
+        assert_eq!(sizes[1], 25);
+    }
+
+    #[test]
+    fn flex_basis_grows_with_remaining_space() {
+        // FlexBasis(20) + Grow(1) 总宽 100:FlexBasis base=20 可增长,Grow base=0 可增长
+        // 剩余 80 按 weight 1:1 分配 → [60, 40]
+        let sizes = solve(100, &[Constraint::FlexBasis(20), Constraint::Grow(1)]);
+        assert_eq!(sizes.iter().sum::<u16>(), 100);
+        // FlexBasis 应从 20 增长(吸收部分剩余)
+        assert!(
+            sizes[0] >= 20,
+            "FlexBasis 应至少保持 base 20,实际 {}",
+            sizes[0]
+        );
+        assert_eq!(sizes[1], 40, "Grow(1) 应分得一半剩余 40");
+    }
+
+    #[test]
+    fn grow_respects_max_bound() {
+        // Max(15) 限制 Grow 段最多 15,剩余归 Flex
+        let sizes = solve(
+            100,
+            &[
+                Constraint::Max(15), // 最多 15
+                Constraint::Flex(1), // 吸收剩余
+            ],
+        );
+        assert_eq!(sizes.iter().sum::<u16>(), 100);
+        assert_eq!(sizes[0], 15, "Max(15) 封顶");
+        assert_eq!(sizes[1], 85);
+    }
+
     proptest! {
         /// 核心不变量:任意约束组合,各段长度之和恒等于 total(填满不溢出)
         #[test]
         fn sum_always_equals_total(
             total in 0u16..500,
-            specs in prop::collection::vec(0u8..5, 1..8),
+            specs in prop::collection::vec(0u8..8, 1..8),
         ) {
-            // 将随机判别值映射为不同约束类型,构造随机约束序列
+            // 将随机判别值映射为不同约束类型(含 v2.9 flex 变体),构造随机约束序列
             let constraints: Vec<Constraint> = specs
                 .iter()
                 .map(|&k| match k {
@@ -229,7 +383,10 @@ mod tests {
                     1 => Constraint::Percent(25),
                     2 => Constraint::Min(5),
                     3 => Constraint::Max(30),
-                    _ => Constraint::Flex(2),
+                    4 => Constraint::Flex(2),
+                    5 => Constraint::FlexBasis(15),
+                    6 => Constraint::Grow(2),
+                    _ => Constraint::Shrink(1),
                 })
                 .collect();
             let sizes = solve(total, &constraints);

@@ -97,6 +97,29 @@ pub use types::{
 };
 pub use verifier::Verifier;
 
+/// 九维度过程评分静态快照（Task 3.7:L10 → L7 向下依赖）
+///
+/// 为 TUI PvlScorePanel 提供无需异步上下文的静态快照，
+/// 展示最近一次 PVL 过程评分（九维度 + 总分），
+/// 供 TUI 面板直接调用，避免面板渲染阻塞。
+///
+/// TODO: v3.x 接入 RuntimeAuditor 实时采集后替换为真实 PVL 评分。
+pub fn pvl_score() -> ProcessScore {
+    // 占位:返回默认满分评分（真实评分由 Producer/Verifier 运行时产生）
+    ProcessScore {
+        real_execution: 1.0,
+        coverage: 1.0,
+        verification: 1.0,
+        confidence: 1.0,
+        efficiency: 1.0,
+        retry_discipline: 1.0,
+        output_substance: 1.0,
+        orphan_free: 1.0,
+        sandbox_clean: 1.0,
+        total: 1.0,
+    }
+}
+
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::config::PvlConfig;

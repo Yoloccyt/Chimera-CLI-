@@ -150,7 +150,12 @@ impl NexusEvent {
             // P1.2 实时数据驱动面板:结构化预算指标
             | Self::BudgetMetricsUpdated { .. }
             // M4 双向控制:投票请求
-            | Self::VoteCastRequested { .. } => EventTopic::Parliament,
+            | Self::VoteCastRequested { .. }
+            // L8 协调度量接线闭环:审议完成观测事件(Parliament 发布,
+            // 与 DebateStarted/ConsensusReached 同属议会审议生命周期)
+            | Self::DebateCompleted { .. }
+            // L8 推理悖论风控:策略封顶变更(StrategyCapGuard 发布)
+            | Self::ParliamentStrategyCapChanged { .. } => EventTopic::Parliament,
 
             // === Quest (7 + P1.2 2 + M4 8 个) === L9 Quest 意图/任务/检查点
             Self::UserIntentEncoded { .. }
@@ -233,7 +238,10 @@ impl NexusEvent {
             | Self::AgentConsultRequested { .. }
             | Self::AgentConsultResponded { .. }
             | Self::AgentHeartbeat { .. }
-            | Self::AgentContextOverflow { .. } => EventTopic::Agent,
+            | Self::AgentContextOverflow { .. }
+            // L8 协调度量接线闭环:委托批次完成观测事件(chimera-mas 发布,
+            // 与 AgentTaskCompleted 同属多 Agent 协作生命周期)
+            | Self::DelegationCompleted { .. } => EventTopic::Agent,
         }
     }
 }

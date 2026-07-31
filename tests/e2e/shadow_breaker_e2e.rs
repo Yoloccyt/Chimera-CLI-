@@ -9,7 +9,7 @@
 //! 本 E2E 验证熔断器消费**真实验证器输出**而非手构造:
 //! - 属性 #6 DecayConsistencyChecker(decay-engine)的真实 VerificationResult
 //! - 属性 #7 InvariantClosureChecker(gsoe-evolution)的真实 VerificationResult
-//! → 喂给 ShadowModeCircuitBreaker → 验证 fail-closed 门控行为
+//!   → 喂给 ShadowModeCircuitBreaker → 验证 fail-closed 门控行为
 //!
 //! # 三路径覆盖(用户要求 1)
 //!

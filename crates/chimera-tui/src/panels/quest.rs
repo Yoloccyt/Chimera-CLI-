@@ -256,6 +256,9 @@ fn task_status_symbol(status: &TaskStatus) -> &'static str {
         TaskStatus::Running => "●",
         TaskStatus::Pending => "○",
         TaskStatus::Failed => "✗",
+        // Task 3.10: 新增变体 — Cancelled 用 ⊘(禁止符号),Paused 用 ⏸(暂停符号)
+        TaskStatus::Cancelled => "⊘",
+        TaskStatus::Paused => "⏸",
     }
 }
 
@@ -541,12 +544,20 @@ impl Panel for QuestPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        // Task 2.5:QuestPanel 手写 UI 键位(导航/详情/跳顶/跳底)保留为面板内交互提示。
+        // 功能动作快捷键(agent.chat / quest.pause 等)经 `shortcuts_with_registry`
+        // 从 ActionRegistry::by_domain(Quest) 自动派生,新增 quest.* 动作零手写接入。
         vec![
             ("↑/↓", "导航"),
             ("Enter", "详情"),
             ("g g", "跳顶"),
             ("G", "跳底"),
         ]
+    }
+
+    fn action_domain(&self) -> Option<crate::actions::ActionDomain> {
+        // 声明 Quest 域:shortcuts_with_registry 默认实现会合并本域 action 的快捷键
+        Some(crate::actions::ActionDomain::Quest)
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, state: &mut TuiState) -> Option<TuiCommand> {

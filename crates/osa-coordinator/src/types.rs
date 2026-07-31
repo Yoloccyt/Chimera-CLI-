@@ -26,6 +26,11 @@ use serde::{Deserialize, Serialize};
 // 消除星型耦合(Insight 2 消解),mask_hash 计算逻辑仍保留在本 crate(L6 依赖 sha2/hex)。
 pub use nexus_contracts::{FileId, MemoryId, OperationId, TaskId, ToolId};
 
+// Task 2: 从 L0 nexus-contracts 导入 MemoryTaskPhase(OSA memory 维度 S2 桥接)
+// WHY: TaskProfile 携带 task_phase 供 compute_memory_mask 查询 S2 策略,
+// 类型定义在 L0 避免 OSA 直接依赖 omega-learner (L6),依赖铁律 §2.2 合规
+pub use nexus_contracts::MemoryTaskPhase;
+
 /// 风险等级 — 影响审计采样率与预算保护策略
 ///
 /// WHY:高风险任务需更密集审计(全审计)与更严格预算保护,
@@ -201,6 +206,21 @@ impl ComplexityBand {
 /// - **元信息**:task_id / task_type / complexity_score / risk_level / time_pressure / affected_scope
 /// - **五维度候选集**:available_tools / available_files / available_memories /
 ///   recent_operations / active_tasks
+/// - **五维度评分**(可选):routing_scores / context_scores / memory_scores
+///
+/// # 评分字段语义与 None fallback 行为
+///
+/// `routing_scores` / `context_scores` / `memory_scores` 为可选评分向量,
+/// 分别与 `available_tools` / `available_files` / `available_memories` 一一对应
+/// (长度必须一致,否则 OSA 会安全降级为空掩码)。
+///
+/// - **Some(vec)**:OSA 用这些分数做 Top-K 选择,实现基于真实相关性的稀疏化
+/// - **None**:OSA fallback 到 `heuristic_scores`(索引负相关评分,退化为"前 K 个"),
+///   保持与旧签名相同的行为,确保向后兼容
+///
+/// WHY:原 `heuristic_scores` 用 `1.0 - i/len` 使 Top-K 退化为"前 K 个",
+/// 无法基于真实相关性选择。新增评分字段让上游(NMC 编码或 Quest Engine)
+/// 可注入语义相关性分数,实现真正的 Top-K。`Option` 包装区分"未提供"与"空向量"。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskProfile {
     /// 任务唯一标识
@@ -227,6 +247,33 @@ pub struct TaskProfile {
     pub recent_operations: Vec<OperationId>,
     /// 活跃任务列表(budget 维度候选集,OSA 按保护比例选取)
     pub active_tasks: Vec<TaskId>,
+    /// routing 维度评分(与 available_tools 一一对应,可选)
+    ///
+    /// WHY:Some 时用真实评分做 Top-K,None 时 fallback 到 heuristic_scores。
+    /// `#[serde(default)]` 保证旧数据(无此字段)反序列化为 None,向后兼容
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_scores: Option<Vec<f32>>,
+    /// context 维度评分(与 available_files 一一对应,可选)
+    ///
+    /// WHY:Some 时用真实评分做 Top-K,None 时 fallback 到 heuristic_scores。
+    /// `#[serde(default)]` 保证旧数据(无此字段)反序列化为 None,向后兼容
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_scores: Option<Vec<f32>>,
+    /// memory 维度评分(与 available_memories 一一对应,可选)
+    ///
+    /// WHY:Some 时用真实评分做 Top-K,None 时 fallback 到 heuristic_scores。
+    /// `#[serde(default)]` 保证旧数据(无此字段)反序列化为 None,向后兼容
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_scores: Option<Vec<f32>>,
+    /// 任务阶段(Task 2:OSA memory 维度 S2 自适应记忆策略输入)
+    ///
+    /// WHY: OSA memory 维度通过 `MemoryStrategyProvider` 根据 task_phase 选择
+    /// 记忆策略(MinimalRecall/StandardTopK/QueryReformulation/AggressivePruning/TimeFocused),
+    /// 再用策略的 `k_multiplier()` 调整基础 Top-K,实现记忆策略随任务阶段自适应。
+    /// None 时 OSA fallback 到 `MemoryTaskPhase::default()`(Initial),保守召回。
+    /// `#[serde(default)]` 保证旧数据(无此字段)反序列化为 None,向后兼容
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_phase: Option<MemoryTaskPhase>,
 }
 
 impl TaskProfile {
@@ -250,6 +297,12 @@ impl TaskProfile {
             available_memories: Vec::new(),
             recent_operations: Vec::new(),
             active_tasks: Vec::new(),
+            // 评分字段默认 None:调用方未提供时 OSA fallback 到 heuristic_scores
+            routing_scores: None,
+            context_scores: None,
+            memory_scores: None,
+            // Task 2: task_phase 默认 None,调用方未提供时 OSA fallback 到 Initial
+            task_phase: None,
         }
     }
 

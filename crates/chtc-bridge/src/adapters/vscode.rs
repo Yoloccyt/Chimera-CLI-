@@ -1,4 +1,6 @@
 //! VSCode 适配器 — 完整实现(本周唯一完整 execute 路径)
+//!
+//! MOCK-ONLY: 真实 IDE 集成待 v3.x MCP Mesh 实装后替换
 
 use crate::adapters::IdeAdapter;
 use crate::error::ChtcError;

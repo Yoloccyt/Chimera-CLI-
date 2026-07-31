@@ -17,9 +17,9 @@
 //! - `DebateStarted`/`SkepticVeto`/`CapabilityFrozen` 事件经 EventBus 发布,
 //!   供 L9 Quest 与 L4 SecCore 订阅(Week 5 Task 37 已集成)
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use event_bus::EventBus;
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 use futures::stream::{FuturesUnordered, StreamExt};
 use nexus_core::{Quest, ThinkingMode};
 use tracing::{error, info, warn};
@@ -30,16 +30,52 @@ use crate::error::ParliamentError;
 // P4-W14.3 S5 接缝:ParliamentLearnerHolder 承载 omega-learner 异步下发的策略
 use crate::learner_holder::ParliamentLearnerHolder;
 use crate::roles::RoleRegistry;
+use crate::strategy_cap::StrategyCapGuard;
 use crate::types::{Consensus, Opinion, Proposal, Role};
 use crate::veto::{Skeptic, VetoOverrideTicket};
 use crate::voting::{
     compute_decision_hash, publish_capability_frozen_event, publish_consensus_event,
-    publish_debate_started_event, publish_skeptic_veto_event, publish_veto_overridden_event,
-    publish_vote_event, VoteCounter,
+    publish_debate_completed_event, publish_debate_started_event, publish_skeptic_veto_event,
+    publish_veto_overridden_event, ConsensusQualityMetrics, VoteCounter,
 };
 // P4-W14.3 S5 接缝:Parliament 激活策略类型(L0 契约,跨层共享)
 // WHY L8 → L0 ✓(§2.2 依赖铁律):parliament 仅依赖 L0 类型,不直接依赖 L6 omega-learner
 use nexus_contracts::{ActivationStrategy, ParliamentPolicy};
+
+// ============================================================
+// 审议投票度量载体(内部)
+// ============================================================
+
+/// 审议投票度量载体 — 三路径回传给 `deliberate_with_policy` 的投票与质量数据
+///
+/// WHY 内部 struct 而非多元组:携带 weighted_approval_rate/participation_rate/
+/// 多维质量三组数据,命名字段比 3-tuple 可读;仅供统一发布 DebateCompleted 使用。
+/// `Copy`:字段均为 f32 + Copy 的 ConsensusQualityMetrics,零成本传递。
+#[derive(Debug, Clone, Copy)]
+struct DebateVoteMetrics {
+    /// 加权赞成率(共识质量 proxy)
+    weighted_approval_rate: f32,
+    /// 参与率
+    participation_rate: f32,
+    /// 多维共识质量(M2-T2.1)
+    quality: ConsensusQualityMetrics,
+}
+
+impl DebateVoteMetrics {
+    /// 从 VoteResult 提取度量载体
+    fn from_result(result: &crate::voting::VoteResult) -> Self {
+        Self {
+            weighted_approval_rate: result.weighted_approval_rate,
+            participation_rate: result.participation_rate,
+            quality: result.quality,
+        }
+    }
+
+    /// 投票率元组(供 publish_debate_completed_event 的 vote_rates 参数)
+    fn vote_rates(&self) -> (f32, f32) {
+        (self.weighted_approval_rate, self.participation_rate)
+    }
+}
 
 // ============================================================
 // DPO 训练对 — 共识达成后生成的偏好优化训练数据
@@ -179,6 +215,13 @@ pub struct Parliament {
     /// `deliberate_with_policy` 提供策略感知能力。C4 合规:
     /// 默认 `Static(Full)` = 既有行为,无策略注入时行为与 P4 修复前一致。
     learner_holder: ParliamentLearnerHolder,
+    /// 策略封顶守卫(推理悖论红线风控,ratio 反馈驱动的审议深度上限)
+    ///
+    /// WHY Arc:订阅器(`spawn_strategy_cap_subscriber`)需与 Parliament
+    /// 共享同一守卫实例,上层编排器通过 `strategy_cap()` 访问器
+    /// Arc::clone 后启动后台订阅任务。与 LinUCB 互补:封顶仅做 min 上界,
+    /// 学习器输出不被改写。
+    strategy_cap: std::sync::Arc<StrategyCapGuard>,
 }
 
 impl Parliament {
@@ -190,6 +233,8 @@ impl Parliament {
     pub fn new(config: ParliamentConfig, event_bus: EventBus) -> Self {
         let registry = RoleRegistry::new(&config);
         let vote_counter = VoteCounter::new(&config);
+        // 封顶守卫使用配置中的滞后带参数(初始封顶 Full = 不设限)
+        let strategy_cap = std::sync::Arc::new(StrategyCapGuard::new(config.strategy_cap.clone()));
         Self {
             config,
             registry,
@@ -198,7 +243,17 @@ impl Parliament {
             skeptic: Skeptic::default(),
             dpo_generator: DpoPairGenerator::new(),
             learner_holder: ParliamentLearnerHolder::new(),
+            strategy_cap,
         }
+    }
+
+    /// 获取策略封顶守卫引用(推理悖论红线风控)
+    ///
+    /// 上层编排器(chimera-cli / quest-engine)通过此访问器 `Arc::clone`
+    /// 后调用 `spawn_strategy_cap_subscriber` 启动 ratio 反馈订阅任务;
+    /// 测试可直接调用 `observe()` 驱动状态机。
+    pub fn strategy_cap(&self) -> &std::sync::Arc<StrategyCapGuard> {
+        &self.strategy_cap
     }
 
     /// P4-W14.3 S5 接缝:获取 Parliament 学习器持有器引用
@@ -297,6 +352,15 @@ impl Parliament {
         proposal: &Proposal,
         policy: &ParliamentPolicy,
     ) -> Result<Consensus, ParliamentError> {
+        // 协调度量接线闭环:审议端到端 wall-clock 计时起点。
+        // 口径覆盖 Skeptic 检测 + Opinion 收集 + 投票 + 事件发布串行 await,
+        // 审议结束时随 DebateCompleted 事件上报(parliament_debate_latency_ms 数据源)。
+        let debate_start = Instant::now();
+        // 推理悖论红线风控:策略与封顶取 min(FastPath < Simplified < Full)。
+        // 封顶由 StrategyCapGuard 消费 CoordinationRatioReported 反馈维护,
+        // 仅做上界不改写学习器输出;Skeptic 检测(下方步骤 0)不受封顶影响。
+        let strategy = self.strategy_cap.apply(policy.strategy());
+
         // ============================================================
         // 步骤 0:Skeptic 恶意意图检测(三策略共同前置,红队防线)
         // ============================================================
@@ -343,6 +407,19 @@ impl Parliament {
                 publish_capability_frozen_event(&self.event_bus, cap, &veto_reason.detail).await;
             }
 
+            // 否决短路路径也上报审议延迟(无投票,vote_rates 与 quality 均为 None)
+            publish_debate_completed_event(
+                &self.event_bus,
+                &quest.quest_id,
+                &proposal.proposal_id,
+                debate_start.elapsed().as_secs_f64() * 1000.0,
+                strategy.short_name(),
+                None,
+                None,
+                "Vetoed",
+            )
+            .await;
+
             return Ok(Consensus::Vetoed {
                 veto_reason: veto_reason_str,
                 frozen_capabilities,
@@ -352,12 +429,30 @@ impl Parliament {
         // ============================================================
         // 步骤 1:按策略分派(三路径互斥)
         // ============================================================
-        let strategy = policy.strategy();
-        match strategy {
-            ActivationStrategy::FastPath => self.deliberate_fastpath(quest, proposal).await,
-            ActivationStrategy::Simplified => self.deliberate_simplified(quest, proposal).await,
-            ActivationStrategy::Full => self.deliberate_full(quest, proposal).await,
-        }
+        // 各路径额外返回度量载体(FastPath 无投票为 None),供下方统一
+        // 发布 DebateCompleted 时携带投票率与多维共识质量。
+        let (consensus, metrics) = match strategy {
+            ActivationStrategy::FastPath => self.deliberate_fastpath(quest, proposal).await?,
+            ActivationStrategy::Simplified => self.deliberate_simplified(quest, proposal).await?,
+            ActivationStrategy::Full => self.deliberate_full(quest, proposal).await?,
+        };
+
+        // ============================================================
+        // 步骤 2:发布 DebateCompleted 观测事件(协调度量接线闭环 + M2 多维质量)
+        // ============================================================
+        publish_debate_completed_event(
+            &self.event_bus,
+            &quest.quest_id,
+            &proposal.proposal_id,
+            debate_start.elapsed().as_secs_f64() * 1000.0,
+            strategy.short_name(),
+            metrics.as_ref().map(DebateVoteMetrics::vote_rates),
+            metrics.as_ref().map(|m| &m.quality),
+            consensus_outcome_label(&consensus),
+        )
+        .await;
+
+        Ok(consensus)
     }
 
     /// FastPath 路径 — 跳过 Opinion 生成,直接返回共识
@@ -375,11 +470,15 @@ impl Parliament {
     /// # WHY 仍生成 decision_hash
     /// 决议哈希用于 GSOE 进化追踪与审计去重,即使无 Opinion 也需生成。
     /// `compute_decision_hash(proposal, &[])` 仅哈希提案字段。
+    ///
+    /// # 返回
+    /// `(共识, None)` — FastPath 无投票,投票率恒为 `None`
+    /// (DebateCompleted 事件的 weighted_approval_rate 随之为 None)。
     async fn deliberate_fastpath(
         &self,
         quest: &Quest,
         proposal: &Proposal,
-    ) -> Result<Consensus, ParliamentError> {
+    ) -> Result<(Consensus, Option<DebateVoteMetrics>), ParliamentError> {
         // 发布 DebateStarted 事件(participant_count=0,标记 FastPath)
         info!(
             quest_id = %quest.quest_id,
@@ -407,7 +506,7 @@ impl Parliament {
         // 发布 ConsensusReached 事件 [Critical]
         publish_consensus_event(&self.event_bus, &proposal.quest_id, &decision_hash, None).await;
 
-        Ok(consensus)
+        Ok((consensus, None))
     }
 
     /// Simplified 路径 — 仅 Architect + Skeptic + Optimizer 三关键角色辩论
@@ -426,11 +525,15 @@ impl Parliament {
     /// - **Optimizer**:性能与资源效率(执行维度)
     /// - 跳过 Librarian(知识检索)与 Bard(创意发散):中等风险场景下
     ///   这两个维度的推理增益小于协调成本
+    ///
+    /// # 返回
+    /// `(共识, Some((加权赞成率, 参与率)))` — 投票率取自 `VoteResult`,
+    /// 供 DebateCompleted 事件携带(共识质量 proxy,协调度量接线闭环)。
     async fn deliberate_simplified(
         &self,
         quest: &Quest,
         proposal: &Proposal,
-    ) -> Result<Consensus, ParliamentError> {
+    ) -> Result<(Consensus, Option<DebateVoteMetrics>), ParliamentError> {
         // 简化辩论的 3 个关键角色
         const SIMPLIFIED_ROLES: [Role; 3] = [Role::Architect, Role::Skeptic, Role::Optimizer];
 
@@ -462,6 +565,9 @@ impl Parliament {
         let result = self
             .vote_counter
             .count_votes(&opinions, total_roles, proposal);
+        // 保留投票率(协调度量接线闭环:此前被丢弃,现随事件上报)
+        // M2-T2.2:从 VoteResult 提取度量载体(投票率 + 多维质量),随 DebateCompleted 上报
+        let metrics = DebateVoteMetrics::from_result(&result);
 
         // DPO 训练对生成(3 角色 Opinion 仍可提取 chosen/rejected)
         let mut consensus = result.consensus;
@@ -491,7 +597,7 @@ impl Parliament {
             .await;
         }
 
-        Ok(consensus)
+        Ok((consensus, Some(metrics)))
     }
 
     /// Full 路径 — 5 角色完整辩论(既有行为,向后兼容)
@@ -507,11 +613,14 @@ impl Parliament {
     /// # WHY 保留为独立方法
     /// 将 Full 路径从 `deliberate_with_policy` 主体抽离,使三策略
     /// (FastPath/Simplified/Full)各自独立方法,便于单测与未来扩展。
+    ///
+    /// # 返回
+    /// `(共识, Some((加权赞成率, 参与率)))` — 语义同 `deliberate_simplified`。
     async fn deliberate_full(
         &self,
         quest: &Quest,
         proposal: &Proposal,
-    ) -> Result<Consensus, ParliamentError> {
+    ) -> Result<(Consensus, Option<DebateVoteMetrics>), ParliamentError> {
         // 发布 DebateStarted 事件(5 参与者)
         info!(
             quest_id = %quest.quest_id,
@@ -538,6 +647,9 @@ impl Parliament {
         let result = self
             .vote_counter
             .count_votes(&opinions, total_roles, proposal);
+        // 保留投票率(协调度量接线闭环:此前被丢弃,现随事件上报)
+        // M2-T2.2:从 VoteResult 提取度量载体(投票率 + 多维质量),随 DebateCompleted 上报
+        let metrics = DebateVoteMetrics::from_result(&result);
 
         // DPO 训练对生成
         let mut consensus = result.consensus;
@@ -567,7 +679,7 @@ impl Parliament {
             .await;
         }
 
-        Ok(consensus)
+        Ok((consensus, Some(metrics)))
     }
 
     /// 审议提案(带否决覆盖)— 提案 → [Skeptic 否决 → 覆盖] → 辩论 → 投票 → 共识
@@ -604,6 +716,11 @@ impl Parliament {
         proposal: &Proposal,
         override_ticket: Option<&VetoOverrideTicket>,
     ) -> Result<Consensus, ParliamentError> {
+        // M1-T1.1 协调度量接线闭环:override/reopen-veto 复审端到端 wall-clock 计时起点。
+        // 此前该路径无计时、无 DebateCompleted 发布,复审延迟完全不进协调度量(度量盲区)。
+        // strategy 标签统一用 "full-override" 区分常规 deliberate 路径,避免混淆 EWMA 统计。
+        let debate_start = Instant::now();
+
         // 覆盖标志:记录本次审议是否触发了否决覆盖
         // WHY 独立标志:覆议路径需使用 override_consensus_threshold(0.667),
         // 而常规路径使用 consensus_threshold(0.6)。此标志决定计票时选用哪个阈值。
@@ -690,6 +807,19 @@ impl Parliament {
                         .await;
                 }
 
+                // M1-T1.1:否决短路(无有效票据)也上报审议延迟(无投票,vote_rates 与 quality 均为 None)
+                publish_debate_completed_event(
+                    &self.event_bus,
+                    &quest.quest_id,
+                    &proposal.proposal_id,
+                    debate_start.elapsed().as_secs_f64() * 1000.0,
+                    "full-override",
+                    None,
+                    None,
+                    "Vetoed",
+                )
+                .await;
+
                 return Ok(Consensus::Vetoed {
                     veto_reason: veto_reason_str,
                     frozen_capabilities,
@@ -730,6 +860,9 @@ impl Parliament {
                 .count_votes(&opinions, total_roles, proposal)
         };
 
+        // M1-T1.1 / M2-T2.2:提取度量载体供 DebateCompleted 上报(result.consensus 即将被 move)
+        let metrics = DebateVoteMetrics::from_result(&result);
+
         let mut consensus = result.consensus;
         if let Consensus::Reached { decision_hash, .. } = &consensus {
             let dpo_pair_id = self
@@ -755,6 +888,19 @@ impl Parliament {
             )
             .await;
         }
+
+        // M1-T1.1:override 路径发布 DebateCompleted(消除复审延迟度量盲区 + M2 多维质量)
+        publish_debate_completed_event(
+            &self.event_bus,
+            &quest.quest_id,
+            &proposal.proposal_id,
+            debate_start.elapsed().as_secs_f64() * 1000.0,
+            "full-override",
+            Some(metrics.vote_rates()),
+            Some(&metrics.quality),
+            consensus_outcome_label(&consensus),
+        )
+        .await;
 
         Ok(consensus)
     }
@@ -842,13 +988,21 @@ impl Parliament {
         let timeout = Duration::from_millis(self.config.debate_timeout_ms);
         let expected = roles.len();
 
+        // M1-T1.2:Arc 共享 quest/proposal,消除每角色深拷贝(O(R×T) → 仅一次 O(T))。
+        // WHY:此前每个角色 future 各 clone 整个 Quest(含全部 Task Vec),
+        // Full=5 角色 × T 任务 = O(R×T) 深拷贝;改为仅一次深拷贝 + 每 future
+        // 克隆 Arc(refcount ~ns)。generate_opinion 签名不变(仍收 &Quest/&Proposal),
+        // 通过 deref 强制从 &Arc<T> 得到 &T;收集后计票语义零改动。
+        let quest_arc = std::sync::Arc::new(quest.clone());
+        let proposal_arc = std::sync::Arc::new(proposal.clone());
+
         // 构建角色 Opinion 生成 future 流
         let mut stream: FuturesUnordered<_> = roles
             .iter()
             .map(|&role| {
-                let quest_clone = quest.clone();
-                let proposal_clone = proposal.clone();
-                async move { generate_opinion(role, &quest_clone, &proposal_clone).await }
+                let quest = std::sync::Arc::clone(&quest_arc);
+                let proposal = std::sync::Arc::clone(&proposal_arc);
+                async move { generate_opinion(role, &quest, &proposal).await }
             })
             .collect();
 
@@ -887,15 +1041,28 @@ impl Parliament {
     }
 
     /// 发布所有角色的 VoteCast 事件
+    ///
+    /// M1-T1.4:改为构造 Vec<VoteCast> 后单次 `publish_batch`,摊销每次
+    /// publish 重复的 receiver_count/背压采样固定开销。
+    ///
+    /// # 顺序安全性(已核实)
+    /// VoteCast 下游无相对顺序依赖:TUI 仅倒序展示、immune_system 不消费
+    /// VoteCast,唯一契约是"全部 VoteCast 先于 ConsensusReached"——由调用点在
+    /// 投票段完成后才发 ConsensusReached 的时序边界天然保证。
+    /// publish_batch 严格做 ≤ 串行的工作(仅摊销采样),不会更慢。
     async fn publish_vote_events(&self, proposal: &Proposal, opinions: &[Opinion]) {
-        for opinion in opinions {
-            publish_vote_event(
-                &self.event_bus,
-                &proposal.proposal_id,
-                opinion.role.as_str(),
-                opinion.is_approve(),
-            )
-            .await;
+        // 构造批量 VoteCast 事件(空 opinions 时 publish_batch 早退,行为等价空循环)
+        let events: Vec<NexusEvent> = opinions
+            .iter()
+            .map(|opinion| NexusEvent::VoteCast {
+                metadata: EventMetadata::new("parliament"),
+                proposal_id: proposal.proposal_id.clone(),
+                voter: opinion.role.as_str().to_string(),
+                vote: opinion.is_approve(),
+            })
+            .collect();
+        if let Err(e) = self.event_bus.publish_batch(events).await {
+            warn!(error = %e, "批量发布 VoteCast 事件失败");
         }
     }
 
@@ -922,6 +1089,18 @@ impl Parliament {
     /// 获取 DPO 训练对生成器引用(测试用)
     pub fn dpo_generator(&self) -> &DpoPairGenerator {
         &self.dpo_generator
+    }
+}
+
+/// 共识结果→审议结果标签(DebateCompleted 事件的 outcome 字段)
+///
+/// WHY 独立函数:标签取值("Reached"/"Rejected"/"Vetoed")是事件契约的
+/// 一部分,集中定义避免各调用点字符串漂移。
+fn consensus_outcome_label(consensus: &Consensus) -> &'static str {
+    match consensus {
+        Consensus::Reached { .. } => "Reached",
+        Consensus::Rejected { .. } => "Rejected",
+        Consensus::Vetoed { .. } => "Vetoed",
     }
 }
 
@@ -1753,6 +1932,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_override_path_publishes_debate_completed() {
+        // M1-T1.1 度量盲区修复:deliberate_with_override 达成共识后应发布 DebateCompleted
+        // (此前该路径无计时、无 DebateCompleted,reopen-veto 复审延迟不进协调度量)。
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-ovr-metric", "q-1", "执行代码审查任务", 0.2);
+        let ticket =
+            VetoOverrideTicket::new("p-ovr-metric", "precautionary", "system:auto").unwrap();
+
+        let consensus = parliament
+            .deliberate_with_override(&quest, &proposal, Some(&ticket))
+            .await
+            .unwrap();
+        assert!(consensus.is_reached());
+
+        // 应能收到 DebateCompleted 事件,strategy 标签区分 override 场景
+        match recv_debate_completed(&mut rx).await {
+            NexusEvent::DebateCompleted {
+                strategy,
+                debate_latency_ms,
+                outcome,
+                ..
+            } => {
+                assert!(
+                    strategy.contains("override"),
+                    "override 路径 strategy 标签应含 override,实际: {strategy}"
+                );
+                assert!(debate_latency_ms >= 0.0, "应携带审议延迟");
+                assert_eq!(outcome, "Reached");
+            }
+            other => panic!("Expected DebateCompleted, got {:?}", other.type_name()),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_override_veto_no_ticket_publishes_debate_completed() {
+        // 无票据否决短路:也应发布 DebateCompleted(outcome=Vetoed,无投票率)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-ovr-noticket", "q-1", "sudo rm -rf /", 0.9);
+
+        // 不传票据 → Skeptic 否决短路
+        let consensus = parliament
+            .deliberate_with_override(&quest, &proposal, None)
+            .await
+            .unwrap();
+        assert!(consensus.is_vetoed());
+
+        match recv_debate_completed(&mut rx).await {
+            NexusEvent::DebateCompleted {
+                strategy,
+                weighted_approval_rate,
+                outcome,
+                ..
+            } => {
+                assert_eq!(strategy, "full-override");
+                assert!(weighted_approval_rate.is_none(), "否决短路无投票数据");
+                assert_eq!(outcome, "Vetoed");
+            }
+            other => panic!("Expected DebateCompleted, got {:?}", other.type_name()),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_override_applied_but_vetoed_at_voting_publishes_debate_completed() {
+        // override 生效(票据有效)→ 继续辩论,但 Skeptic 在投票阶段仍否决
+        // → 验证 override_active=true 分支也发布 DebateCompleted(携带投票率)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-ovr-voting", "q-1", "sudo rm -rf /", 0.9);
+        let ticket = VetoOverrideTicket::new("p-ovr-voting", "emergency", "admin:root").unwrap();
+
+        let _ = parliament
+            .deliberate_with_override(&quest, &proposal, Some(&ticket))
+            .await
+            .unwrap();
+
+        // override 生效路径的 DebateCompleted 应携带投票率(经历了完整辩论+计票)
+        match recv_debate_completed(&mut rx).await {
+            NexusEvent::DebateCompleted {
+                strategy,
+                weighted_approval_rate,
+                debate_latency_ms,
+                ..
+            } => {
+                assert_eq!(strategy, "full-override");
+                assert!(
+                    weighted_approval_rate.is_some(),
+                    "override 生效路径经历计票,应携带投票率"
+                );
+                assert!(debate_latency_ms >= 0.0);
+            }
+            other => panic!("Expected DebateCompleted, got {:?}", other.type_name()),
+        }
+    }
+
+    #[tokio::test]
     async fn test_override_no_capability_frozen_on_override() {
         // 覆盖路径不应发布 CapabilityFrozen 事件
         let bus = EventBus::new();
@@ -2438,5 +2720,170 @@ mod tests {
         assert!(!parliament.learner_holder().is_learned());
         let c4 = parliament.deliberate(&quest, &proposal).await.unwrap();
         assert!(c4.is_reached(), "熔断后 Static(Full) 应达成共识");
+    }
+
+    // ============================================================
+    // 协调度量接线闭环:DebateCompleted 埋点测试
+    // ============================================================
+
+    /// 从事件流中提取首个 DebateCompleted 事件(跳过其他事件)
+    ///
+    /// WHY 轮询提取:deliberate 会依次发布 DebateStarted/VoteCast/
+    /// ConsensusReached/DebateCompleted 等多个事件,测试只关心最后的观测事件。
+    async fn recv_debate_completed(rx: &mut event_bus::EventReceiver) -> NexusEvent {
+        for _ in 0..30 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(event)) if event.type_name() == "DebateCompleted" => return event,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        panic!("未收到 DebateCompleted 事件");
+    }
+
+    #[tokio::test]
+    async fn test_debate_completed_full_path_carries_latency_and_rates() {
+        // Full 路径:事件应携带 latency>0、strategy="full"、投票率 Some
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        let consensus = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(consensus.is_reached());
+
+        match recv_debate_completed(&mut rx).await {
+            NexusEvent::DebateCompleted {
+                quest_id,
+                debate_latency_ms,
+                strategy,
+                weighted_approval_rate,
+                participation_rate,
+                outcome,
+                ..
+            } => {
+                assert_eq!(quest_id, "q-1");
+                assert!(debate_latency_ms > 0.0, "审议延迟应 > 0");
+                assert_eq!(strategy, "full");
+                let approval = weighted_approval_rate.expect("Full 路径应有赞成率");
+                assert!((0.0..=1.0).contains(&approval), "赞成率应在 [0,1]");
+                let participation = participation_rate.expect("Full 路径应有参与率");
+                assert!((participation - 1.0).abs() < 1e-6, "5/5 角色参与率应为 1.0");
+                assert_eq!(outcome, "Reached");
+            }
+            other => panic!("Expected DebateCompleted, got {:?}", other.type_name()),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_debate_completed_fastpath_has_no_vote_rates() {
+        // FastPath 路径:无投票,事件的投票率字段应为 None
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::FastPath);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+        assert!(consensus.is_reached());
+
+        match recv_debate_completed(&mut rx).await {
+            NexusEvent::DebateCompleted {
+                strategy,
+                weighted_approval_rate,
+                participation_rate,
+                outcome,
+                debate_latency_ms,
+                ..
+            } => {
+                assert_eq!(strategy, "fast-path");
+                assert!(weighted_approval_rate.is_none(), "FastPath 无投票数据");
+                assert!(participation_rate.is_none());
+                assert_eq!(outcome, "Reached");
+                assert!(debate_latency_ms >= 0.0);
+            }
+            other => panic!("Expected DebateCompleted, got {:?}", other.type_name()),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_debate_completed_simplified_path_strategy_label() {
+        // Simplified 路径:strategy 标签应为 "simplified",投票率 Some
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Simplified);
+
+        parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        match recv_debate_completed(&mut rx).await {
+            NexusEvent::DebateCompleted {
+                strategy,
+                weighted_approval_rate,
+                ..
+            } => {
+                assert_eq!(strategy, "simplified");
+                assert!(
+                    weighted_approval_rate.is_some(),
+                    "Simplified 路径应携带赞成率"
+                );
+            }
+            other => panic!("Expected DebateCompleted, got {:?}", other.type_name()),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_debate_completed_veto_path_outcome_vetoed() {
+        // Skeptic 前置否决短路路径:也应发布 DebateCompleted(outcome=Vetoed,无投票率)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let quest = make_quest(2, ThinkingMode::Fast);
+        // 恶意模式触发 Skeptic 前置否决(不进入辩论)
+        let proposal = Proposal::new("p-veto-metric", "q-1", "sudo rm -rf /", 0.9);
+
+        let consensus = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(consensus.is_vetoed());
+
+        match recv_debate_completed(&mut rx).await {
+            NexusEvent::DebateCompleted {
+                outcome,
+                weighted_approval_rate,
+                participation_rate,
+                ..
+            } => {
+                assert_eq!(outcome, "Vetoed");
+                assert!(weighted_approval_rate.is_none(), "否决短路无投票数据");
+                assert!(participation_rate.is_none());
+            }
+            other => panic!("Expected DebateCompleted, got {:?}", other.type_name()),
+        }
+    }
+
+    #[test]
+    fn test_consensus_outcome_label_all_variants() {
+        // 标签是事件契约的一部分,三变体全覆盖验证
+        let reached = Consensus::Reached {
+            decision_hash: "h".into(),
+            dpo_pair_id: None,
+        };
+        let rejected = Consensus::Rejected { reason: "r".into() };
+        let vetoed = Consensus::Vetoed {
+            veto_reason: "v".into(),
+            frozen_capabilities: vec![],
+        };
+        assert_eq!(consensus_outcome_label(&reached), "Reached");
+        assert_eq!(consensus_outcome_label(&rejected), "Rejected");
+        assert_eq!(consensus_outcome_label(&vetoed), "Vetoed");
     }
 }

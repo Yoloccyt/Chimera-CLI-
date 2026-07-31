@@ -75,3 +75,41 @@ pub use types::{Capability, CapabilityLevel, DecayConfig, DecayEvent};
 pub fn default_config() -> DecayConfig {
     DecayConfig::default()
 }
+
+// === Task 3.4: L10 TUI 跨层协同 — 影子模式熔断开关状态快照 ===
+
+/// 影子模式熔断开关状态 — 3 个熔断维度(Task 3.4)
+///
+/// WHY 三个独立 bool 而非 bitmask: TUI 面板直接渲染 ON/OFF 文本,
+/// 独立字段比位运算更直观,且熔断维度固定 3 个,不会膨胀。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ShadowBreakerStatus {
+    /// Token 燃烧熔断(能力衰减过速触发)
+    pub token_burn: bool,
+    /// 记忆冻结熔断(形式化属性违规触发)
+    pub memory_freeze: bool,
+    /// 网络隔离熔断(安全审计异常触发)
+    pub network_isolate: bool,
+}
+
+/// 返回影子模式熔断开关状态(Task 3.4 跨层 Panel 数据管道)
+///
+/// TUI DecayPanel 调用此函数显示"熔断开关"状态行。
+/// 当前返回默认全 false 值(TODO: 真实接入 ShadowModeCircuitBreaker 状态)。
+///
+/// # 示例
+///
+/// ```
+/// use decay_engine::{shadow_breaker_status, ShadowBreakerStatus};
+///
+/// let status = shadow_breaker_status();
+/// assert!(!status.token_burn);
+/// assert!(!status.memory_freeze);
+/// assert!(!status.network_isolate);
+/// ```
+pub fn shadow_breaker_status() -> ShadowBreakerStatus {
+    // TODO: 真实接入 ShadowModeCircuitBreaker 全局实例状态
+    // 当前返回默认值(全 false,即未触发熔断),待 R2 解冻阶段③
+    // ShadowModeCircuitBreaker 全局实例就位后替换
+    ShadowBreakerStatus::default()
+}

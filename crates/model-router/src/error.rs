@@ -38,6 +38,14 @@ pub enum RouterError {
     /// 与配置语义错误不同源;独立变体便于调用方按错误类型降级(如回退 Memory)。
     #[error("sqlite history store error: {0}")]
     SqliteHistoryError(String),
+
+    /// 阻塞任务执行失败 — spawn_blocking 内部 panic 或 join 失败
+    ///
+    /// WHY 独立变体:spawn_blocking join 错误与路由逻辑错误不同源,
+    /// 表明 tokio 阻塞线程池中的任务 panic 或被取消,需要不同降级策略。
+    /// P1-3 修复:model-router rusqlite 包装 spawn_blocking 时引入。
+    #[error("spawn_blocking task failed: {0}")]
+    SpawnBlockingError(String),
 }
 
 #[cfg(test)]

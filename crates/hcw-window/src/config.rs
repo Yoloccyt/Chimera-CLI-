@@ -139,13 +139,21 @@ impl HcwConfig {
         tier.capacity(self)
     }
 
-    /// 获取指定层级的实际加载容量
+    /// 获取指定层级的实际加载容量(支持 OSA 动态稀疏度)
     ///
-    /// WHY:L3 的实际加载容量 = l3_capacity / 8 = 128K,
-    /// 通过 OSA 稀疏化(8× 压缩比)实现 1M 等效,避免暴力加载(架构红线)。
-    /// L0/L1/L2 的实际容量 = 标称容量(无稀疏化)
-    pub fn effective_capacity_for(&self, tier: WindowTier) -> usize {
-        tier.effective_capacity(self)
+    /// WHY(Task 4 HCW L3 动态容量):L3 的实际加载容量不再硬编码 `/8`,
+    /// 而是根据 OSA 实时稀疏度自适应:
+    /// - `sparsity=Some(s)`:动态模式,容量 = `l3_capacity × (1.0 - s)`,稀疏度越高加载越少。
+    /// - `sparsity=None`:fallback 模式,容量 = `l3_capacity / 8`(硬编码 8× 压缩比)。
+    ///
+    /// 通过 OSA 稀疏化实现 1M 等效,避免暴力加载(架构红线)。
+    /// L0/L1/L2 的实际容量 = 标称容量(无稀疏化,忽略 `sparsity` 参数)。
+    ///
+    /// # 参数
+    /// - `tier`:窗口层级
+    /// - `sparsity`:OSA 动态稀疏度,`Some(s)` ∈ [0.0, 1.0],`None` 表示 fallback
+    pub fn effective_capacity_for(&self, tier: WindowTier, sparsity: Option<f32>) -> usize {
+        tier.effective_capacity(self, sparsity)
     }
 }
 
@@ -233,12 +241,12 @@ mod tests {
     #[test]
     fn test_effective_capacity_for() {
         let config = HcwConfig::default();
-        // L0/L1/L2:实际容量 = 标称容量
-        assert_eq!(config.effective_capacity_for(WindowTier::L0), 4096);
-        assert_eq!(config.effective_capacity_for(WindowTier::L1), 32768);
-        assert_eq!(config.effective_capacity_for(WindowTier::L2), 131072);
-        // L3:实际加载容量 = 1M / 8 = 128K(通过 8× 稀疏化实现 1M 等效)
-        assert_eq!(config.effective_capacity_for(WindowTier::L3), 131072);
+        // L0/L1/L2:实际容量 = 标称容量(sparsity 参数被忽略)
+        assert_eq!(config.effective_capacity_for(WindowTier::L0, None), 4096);
+        assert_eq!(config.effective_capacity_for(WindowTier::L1, None), 32768);
+        assert_eq!(config.effective_capacity_for(WindowTier::L2, None), 131072);
+        // L3:实际加载容量 = 1M / 8 = 128K(fallback 模式,通过 8× 稀疏化实现 1M 等效)
+        assert_eq!(config.effective_capacity_for(WindowTier::L3, None), 131072);
     }
 
     #[test]

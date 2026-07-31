@@ -341,6 +341,12 @@ impl AgentContext {
             available_memories: Vec::new(),
             recent_operations: Vec::new(),
             active_tasks: Vec::new(),
+            // 评分字段默认 None:MAS 上下文管理 fallback 到 heuristic_scores
+            routing_scores: None,
+            context_scores: None,
+            memory_scores: None,
+            // 任务阶段未指定,MAS 上下文管理 fallback 到 StandardTopK
+            task_phase: None,
         };
 
         let masks = coord.compute_all_masks(&profile).await.map_err(|e| {
@@ -365,9 +371,12 @@ impl AgentContext {
         }
 
         // 6. apply_sparse_mask(HCW 实际执行稀疏化,发布 ContextCompressed 事件)
+        // WHY 移动而非克隆(L9 优化第二轮):active_file_ids 直接 move 进 apply_sparse_mask,
+        // 消除旧版 `active_file_ids.clone()` 的整表克隆;查找集(下方 active_set)改从
+        // active_names(未被移动)借用,不再依赖已消费的 active_file_ids。
         let active_file_ids: Vec<String> = active_names.iter().cloned().collect();
         temp_window
-            .apply_sparse_mask(active_file_ids.clone())
+            .apply_sparse_mask(active_file_ids)
             .await
             .map_err(|e| MasError::ContextCompressionFailed {
                 agent_id: self.agent_id.clone(),
@@ -375,20 +384,23 @@ impl AgentContext {
             })?;
 
         // 7. 按优先级降序拼接保留的 blocks 内容
-        // WHY 用 HashSet 查找:O(1) 替代 Vec::contains O(n),大量块时性能更优
-        let active_set: HashSet<&str> = active_file_ids.iter().map(|s| s.as_str()).collect();
-        let mut retained_blocks: Vec<&ContextBlock> = self
-            .blocks
+        // WHY active_set 借用 active_names(仍存活):避免第三次整表克隆(§4.4 内存优化)。
+        let active_set: HashSet<&str> = active_names.iter().map(|s| s.as_str()).collect();
+        // WHY 5 桶计数排序(L9 优化第二轮):ContextPriority 仅 5 档,计数排序 O(n) 替代
+        // sort_by_key O(n log n),且过滤 + 分桶单遍完成,省去中间 retained_blocks Vec 分配。
+        // 桶下标 = priority as usize(Optional=0..Critical=4),桶内按 self.blocks 原序
+        // 追加保持稳定性;输出按 Critical→Optional 降序拼接(iter().rev())。
+        let mut buckets: [Vec<&str>; 5] = std::array::from_fn(|_| Vec::new());
+        for block in &self.blocks {
+            if active_set.contains(block.name.as_str()) {
+                buckets[block.priority as usize].push(block.content.as_str());
+            }
+        }
+        let prompt = buckets
             .iter()
-            .filter(|b| active_set.contains(b.name.as_str()))
-            .collect();
-        // 按 priority 降序排列(Critical 在前,Optional 在后)
-        retained_blocks.sort_by_key(|b| std::cmp::Reverse(b.priority));
-
-        let prompt = retained_blocks
-            .iter()
-            .map(|b| b.content.as_str())
-            .collect::<Vec<_>>()
+            .rev()
+            .flat_map(|bucket| bucket.iter().copied())
+            .collect::<Vec<&str>>()
             .join("\n\n");
 
         Ok(prompt)

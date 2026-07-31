@@ -72,6 +72,43 @@ pub use storage_impl::PragmaConn;
 pub use types::{CapabilityEntry, CapabilityId, MigrationReason, Tier};
 pub use warm::WarmTier;
 
+// === Task 3.3: L10 TUI 跨层协同 — 四层存储分布快照 ===
+
+/// 四层存储分布 — 热/温/冷/冰四层字节数快照(Task 3.3)
+///
+/// WHY 结构体而非元组: 四层语义明确,命名字段避免混淆(热/温/冷/冰易记混位置)。
+/// 所有字段标注 `#[doc]` 以保持 `missing_docs` lint 合规。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TierDistribution {
+    /// 热层字节数(Hot Tier: DashMap + LRU,容量 256)
+    pub hot: u64,
+    /// 温层字节数(Warm Tier: SQLite WAL,容量 4096)
+    pub warm: u64,
+    /// 冷层字节数(Cold Tier: SQLite 附加数据库,容量 65536)
+    pub cold: u64,
+    /// 冰层字节数(Ice Tier: 归档只读文件,无容量上限)
+    pub frozen: u64,
+}
+
+/// 返回四层存储分布快照(Task 3.3 跨层 Panel 数据管道)
+///
+/// TUI MemoryPanel 调用此函数显示"存储分布"字段。
+/// 当前返回默认全零值(TODO: 真实接入 CmtCoordinator 统计各层字节数)。
+///
+/// # 示例
+///
+/// ```
+/// use cmt_tiering::{tier_distribution, TierDistribution};
+///
+/// let dist = tier_distribution();
+/// assert_eq!(dist.hot + dist.warm + dist.cold + dist.frozen, 0);
+/// ```
+pub fn tier_distribution() -> TierDistribution {
+    // TODO: 真实接入 CmtCoordinator 统计各层条目大小
+    // 当前返回默认值(全零),待 CmtCoordinator 暴露 per-tier byte count 后替换
+    TierDistribution::default()
+}
+
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::cold::ColdTier;

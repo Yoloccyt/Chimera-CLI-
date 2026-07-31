@@ -34,15 +34,9 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# v2.8.0-omega: polish-v2.7 Phase 1-6 合并发布(closure 计划 Stage A-4)
-# WHY 单 minor 合并承载: ADR-049 决策 5 原规划 v2.5.0/v2.6.0/v2.7.0-omega 三个
-# minor 递进,但 Phase 1-6 代码已于 2026-07-28 合并交付不可拆分(CHANGELOG
-# polish-v2.7 Phase 0-5 条目),补发历史 tag 只能指向同一 commit 使 SemVer 失去
-# 语义。故由单个 minor v2.8.0-omega 合并承载(对齐 V3 计划 Phase 6 编号预期,
-# 后续 v2.9.0/v2.10.0-omega 无缝衔接)。裁决详见
-# docs/architecture/IMPLEMENTATION_PLAN_polish_v2.7_closure.md §3/§10.4。
-# 历史背景: v2.4.1-omega 为版本对账补救起点,见 CHANGELOG v2.3.1/v2.4.0-omega 条目。
-version = "2.8.0-omega"
+# v2.11.0-omega: L8 Parliament 深度优化第二轮 — 算法级打磨与多维共识质量(ADR-064)
+# 详见 CHANGELOG.md v2.11.0-omega 章节
+version = "2.11.0-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"
@@ -128,6 +122,27 @@ chimera-mas = { path = "crates/chimera-mas" }
 # WHY 工作区第 36 个 crate(nexus-contracts 已先于 P2-W5.1 加入);
 # 排在末位因学习层为环外新增,不参与现有依赖环
 omega-learner = { path = "crates/omega-learner" }
+
+# === v2.9.0-omega Task 1.12: CLI 输出增强依赖 ===
+# nu-ansi-term:轻量 ANSI 颜色渲染库,用于 output.rs 的 print_success/error/warning/info
+# WHY 添加到 workspace:chimera-cli 的统一输出 helper 需要颜色支持,统一版本避免冲突
+nu-ansi-term = "0.50"
+# indicatif:进度条/spinner 库,长任务时显示进度反馈
+# WHY 添加到 workspace:chimera-cli 的 print_progress helper 需要进度指示能力
+indicatif = "0.17"
+# comfy-table:终端表格渲染库,quest list / mcp list / agent list 等命令使用
+# WHY 添加到 workspace:chimera-cli 的 print_table helper 需要表格渲染,纯 Rust 无 unsafe
+comfy-table = "7.1"
+# clap_complete:shell 补全脚本生成库(Task 1.14 chimera completions 命令)
+# WHY 添加到 workspace:chimera-cli 的 completions 命令需要生成 bash/zsh/fish/powershell/elvish 补全脚本,
+# 与 clap 4.5 版本兼容,统一在 workspace 声明避免版本冲突
+clap_complete = "4.5"
+# human-panic:友好的 panic 报告库(Task 2.3 panic hook)
+# WHY 添加到 workspace:chimera-cli 的 main.rs 需要在 release 模式输出用户友好的 panic 提示
+# (含"请将以下信息提交给开发者"提示 + 简化 backtrace),debug 模式退化为默认 handler 便于开发
+# 纯 safe Rust 实现,与 #![forbid(unsafe_code)] 哲学兼容
+# WHY 2.0 而非 1.2:2.0 支持 setup_panic!() 无参数调用,API 更简洁;1.2 需 metadata 参数
+human-panic = "2.0"
 
 # ============================================================
 # E2E 集成测试配置(Week 6 Task 6)
@@ -393,6 +408,36 @@ path = "tests/e2e/unfreeze_scope_e2e.rs"
 [[test]]
 name = "unfreeze_governor_e2e"
 path = "tests/e2e/unfreeze_governor_e2e.rs"
+
+# ============================================================
+# ADR-053 备忘录 §五 B-4/B-5: 影子模式编排器 E2E
+#
+# WHY 新增 test target: 验证 ShadowModeOrchestrator(chimera-mas L9)组合
+# 四道护栏(L4 熔断/L5 范围/外部证据门/批次胜率门)的 fail-closed 裁决链,
+# 含真实 EventBus 双通道 AHIRT 接线(AhirtProbeCompleted broadcast +
+# RedTeamAudit Critical mpsc)。覆盖正常晋级建议/边界扩批与前置门/
+# 异常告警与熔断短路三路径。**实现 ≠ 解冻**:终判仅产出建议,
+# 真正解冻须阶段③ 实跑 + ADR-054 治理签署。
+# ============================================================
+
+[[test]]
+name = "shadow_orchestrator_e2e"
+path = "tests/e2e/shadow_orchestrator_e2e.rs"
+
+# ============================================================
+# L8 协调度量接线闭环 E2E(推理悖论红线度量体系落地)
+#
+# WHY 新增 test target: 验证 Parliament.deliberate → DebateCompleted /
+# DelegationExecutor → DelegationCompleted → quest-engine 订阅合并 →
+# CoordinationRatioReported 携带真实审议/委托成本 → efficiency-monitor
+# 真实触发 paradox-risk-coordination-ratio 告警的全链路闭环
+# (此前三指标仅有类型无接线,告警需手动注入才能触发)。
+# 覆盖正常/无审议/Vetoed 三分支。
+# ============================================================
+
+[[test]]
+name = "coordination_metrics_closure_e2e"
+path = "tests/e2e/coordination_metrics_closure_e2e.rs"
 
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,

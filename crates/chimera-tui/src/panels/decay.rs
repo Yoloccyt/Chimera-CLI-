@@ -104,6 +104,26 @@ impl DecayPanel {
         lines.push(Line::from(""));
         lines.push(Line::from(FOOTER_TEXT));
 
+        // Task 3.4: L4 Security 协同 — 显示影子模式熔断开关状态
+        // 调用 decay_engine::shadow_breaker_status() 获取 3 个熔断维度,
+        // 实现 L10 Panel ↔ L4 Security 真实数据闭环。
+        {
+            let status = decay_engine::shadow_breaker_status();
+            let on_off = |v: bool| -> &str {
+                if v {
+                    "ON "
+                } else {
+                    "OFF"
+                }
+            };
+            lines.push(Line::from(format!(
+                "Breakers: TokenBurn:{} | MemoryFreeze:{} | NetworkIsolate:{}",
+                on_off(status.token_burn),
+                on_off(status.memory_freeze),
+                on_off(status.network_isolate)
+            )));
+        }
+
         Text::from(lines)
     }
 }

@@ -49,6 +49,7 @@ use crate::panels::Panel;
 use crate::popup::PopupKind;
 use crate::render::FOOTER_TEXT;
 use crate::types::{PanelId, QuestAction, SortMode, TuiCommand, TuiState};
+use chimera_mas::quadrant_status;
 use nexus_core::{Quest, TaskStatus};
 
 /// 优先级上限(用户面 0-10 范围)
@@ -432,11 +433,9 @@ impl TaskManagerPanel {
 
 impl Panel for TaskManagerPanel {
     fn id(&self) -> PanelId {
-        // WHY 复用 PanelId::Quest:TaskManagerPanel 与 QuestPanel 共享数据源
-        // (state.quest_list),但提供不同的视图(CRUD vs 监视)。
-        // 复用同一 PanelId 避免焦点循环膨胀,后续如需独立焦点
-        // 再扩展 PanelId::TaskManager 变体(会破坏既有 17 面板契约)。
-        PanelId::Quest
+        // Task 3.9.2:注册为独立 PanelId::TaskManager,修复"未注册"问题。
+        // 与 QuestPanel 共享数据源(state.quest_list),但提供不同视图(CRUD vs 监视)。
+        PanelId::TaskManager
     }
 
     fn title(&self) -> Line<'static> {
@@ -452,7 +451,40 @@ impl Panel for TaskManagerPanel {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let content_height = inner.height.saturating_sub(3) as usize;
+        // Task 3.9:L10 → L9 向下依赖 — 四象限稳定分工状态（ADR-027）
+        let qs = quadrant_status();
+        let quadrant_footer = vec![Line::from(vec![
+            Span::styled("Quadrants: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!(
+                    "Q1(Impl): A={} T={} WSJF={:.1} | Q2(Int): A={} T={} WSJF={:.1} | Q3(Ver): A={} T={} WSJF={:.1} | Q4(Hard): A={} T={} WSJF={:.1}",
+                    qs.agent_counts[0], qs.task_counts[0], qs.wsjf_scores[0],
+                    qs.agent_counts[1], qs.task_counts[1], qs.wsjf_scores[1],
+                    qs.agent_counts[2], qs.task_counts[2], qs.wsjf_scores[2],
+                    qs.agent_counts[3], qs.task_counts[3], qs.wsjf_scores[3],
+                ),
+                Style::default().fg(Color::Cyan),
+            ),
+        ])];
+        let footer_height = quadrant_footer.len() as u16;
+
+        // 垂直切分:任务列表 + 四象限状态
+        let list_area = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: inner.height.saturating_sub(footer_height),
+        };
+        let footer_area = Rect {
+            x: inner.x,
+            y: inner
+                .y
+                .saturating_add(inner.height.saturating_sub(footer_height)),
+            width: inner.width,
+            height: footer_height.min(inner.height),
+        };
+
+        let content_height = list_area.height.saturating_sub(3) as usize;
         self.scroll_offset =
             list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
@@ -466,7 +498,11 @@ impl Panel for TaskManagerPanel {
             selected_count,
         ))
         .scroll((self.scroll_offset as u16, 0));
-        paragraph.render(inner, buf);
+        paragraph.render(list_area, buf);
+
+        // 渲染四象限状态 footer
+        let footer_p = Paragraph::new(Text::from(quadrant_footer));
+        Widget::render(footer_p, footer_area, buf);
     }
 
     fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {

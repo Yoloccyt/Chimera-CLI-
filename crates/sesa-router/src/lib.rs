@@ -58,7 +58,7 @@ pub use error::SesaError;
 pub use mask::SesaMask;
 pub use prerequisite::PrerequisiteChecker;
 pub use sparsity::{enforce_sparsity, max_allowed_active, SparsityProfile};
-pub use types::{ActivationRequest, ExpertDescriptor};
+pub use types::{ActivationRequest, ExpertDescriptor, TaskPhase};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
@@ -68,5 +68,5 @@ pub mod prelude {
     pub use crate::mask::SesaMask;
     pub use crate::prerequisite::PrerequisiteChecker;
     pub use crate::sparsity::{enforce_sparsity, max_allowed_active, SparsityProfile};
-    pub use crate::types::{ActivationRequest, ExpertDescriptor};
+    pub use crate::types::{ActivationRequest, ExpertDescriptor, TaskPhase};
 }

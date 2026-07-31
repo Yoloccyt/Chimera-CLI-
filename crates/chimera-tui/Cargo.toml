@@ -3,12 +3,18 @@ name = "chimera-tui"
 version.workspace = true
 edition.workspace = true
 
-# v3.1 重构:自研渲染引擎特性开关(ADR-029)
+# TUI 面板总览:19 面板循环(22 PanelId 枚举,3 个标注'暂不注册'原因:
+# Timeline/OsaSparse/Sysinfo,详见 app/mod.rs 注册逻辑)
+# v3.1 重构:自研渲染引擎特性开关(ADR-029 / ADR-061)
 # WHY feature flag:自研引擎与现有 ratatui 路径双轨并存,逐面板迁移,
-# 每个里程碑可 cargo test --workspace 全绿、随时回滚。M0-M1 引擎骨架
-# 默认编译(供 CI 类型检查),v3-engine 开启后在 M2 切换实际渲染路径。
+# 每个里程碑可 cargo test --workspace 全绿、随时回滚。
+# M0-M1 引擎骨架默认编译(供 CI 类型检查);M2 起 v3-engine 默认启用,
+# 经 `default = ["v3-engine"]` 切换实际渲染路径(ADR-061,2026-07-30)。
+# 回退机制:运行时 `CHIMERA_NO_V3_ENGINE=1` env var 或 CLI `--no-v3-engine`
+# flag 可禁用 v3 路径走 ratatui 回退(2 个版本周期兼容窗口)。
 [features]
-# 启用自研渲染引擎作为实际渲染后端(默认关闭,渐进迁移期用)
+default = ["v3-engine"]
+# 启用自研渲染引擎作为实际渲染后端(M2 起默认启用,见 ADR-061)
 v3-engine = []
 
 [dependencies]
@@ -16,6 +22,33 @@ v3-engine = []
 event-bus = { path = "../event-bus" }
 # nexus-core 为 L1 Core 共享领域类型(Quest/Task 等),L10 向下依赖允许
 nexus-core = { path = "../nexus-core" }
+# Task 3.2: L10 → L2 向下依赖,SelfAssessmentPanel 调用 current_memory_stage()
+# 显示记忆策略阶段(MLC 四级记忆引擎全局快照)
+mlc-engine = { path = "../mlc-engine" }
+# Task 3.3: L10 → L3 向下依赖,MemoryPanel 调用 tier_distribution()
+# 显示四层存储分布(热/温/冷/冰)
+cmt-tiering = { path = "../cmt-tiering" }
+# Task 3.4: L10 → L4 向下依赖,DecayPanel 调用 shadow_breaker_status()
+# 显示影子模式熔断开关状态(TokenBurn/MemoryFreeze/NetworkIsolate)
+decay-engine = { path = "../decay-engine" }
+# Task 3.5: L10 → L5 向下依赖,DagVizPanel 调用 spec_dag_snapshot()
+# 显示谱系 DAG 节点/边计数(规范版本演化图)
+gsoe-evolution = { path = "../gsoe-evolution" }
+# Task 3.6: L10 → L6 向下依赖,OsaSparsePanel 调用 five_dimension_masks()
+# 显示五维稀疏掩码状态(OSA Ω-Sparse 定律可视化)
+osa-coordinator = { path = "../osa-coordinator" }
+# Task 3.7: L10 → L7 向下依赖,MetricsDashboard 调用 timeout_stats()
+# 显示 GQEP 双层超时防护统计(单操作超时 + 全局超时)
+gqep-executor = { path = "../gqep-executor" }
+# Task 3.7: L10 → L7 向下依赖,PvlScorePanel 调用 pvl_score()
+# 显示 PVL 九维度过程评分(快手 KAT,ADR-049)
+pvl-layer = { path = "../pvl-layer" }
+# Task 3.9: L10 → L9 向下依赖,TaskManagerPanel 调用 quadrant_status()
+# 显示四象限稳定分工 + WSJF 调度(ADR-027)
+chimera-mas = { path = "../chimera-mas" }
+# Task 3.8: L10 → L8 向下依赖,ParliamentPanel 调用 immune_system_status()
+# 显示三探针免疫系统状态(ADR-046)
+parliament = { path = "../parliament" }
 tokio = { workspace = true, features = ["sync", "time"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

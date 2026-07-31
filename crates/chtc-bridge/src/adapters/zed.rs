@@ -1,5 +1,7 @@
 //! Zed 适配器 — 完整实现(execute 返回模拟执行结果)
 //!
+//! MOCK-ONLY: 真实 IDE 集成待 v3.x MCP Mesh 实装后替换
+//!
 //! P2-4: 补全 execute 实现,对齐 VSCode 适配器的模拟执行模式。
 //! Zed 通过 action-based 协议与 IDE 交互,execute 返回携带
 //! tool_id 与 ide 标识的成功结果,供上层 CHTC 桥接消费。

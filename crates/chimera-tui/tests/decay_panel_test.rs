@@ -16,6 +16,7 @@ use chimera_tui::{
     TuiError,
 };
 use chrono::Utc;
+use decay_engine::shadow_breaker_status;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
@@ -306,4 +307,46 @@ fn test_decay_panel_renders_cycle_start() {
         content.contains("Cycle") || content.contains("20"),
         "cycle start timestamp should be rendered"
     );
+}
+
+// ============================================================
+// Task 3.4: L4 Security 协同 — 影子模式熔断开关测试
+// ============================================================
+
+#[test]
+fn test_decay_panel_displays_shadow_breaker_status() {
+    // 验证面板渲染包含 3 个熔断开关状态
+    let mut app = TuiApp::with_data_source(
+        TuiConfig::default(),
+        Box::new(DecayTestSource::new(normal_decay_snapshot())),
+    )
+    .unwrap();
+    app.update();
+    app.switch_panel_to(PanelId::Decay);
+
+    let content = render_to_string(&mut app, 80, 30);
+    // 面板应包含 "Breakers:" 行(熔断开关)
+    assert!(
+        content.contains("Breakers:"),
+        "面板应显示熔断开关状态行,实际内容全文:\n{}",
+        content
+    );
+    assert!(
+        content.contains("TokenBurn:"),
+        "面板应显示 TokenBurn 熔断状态"
+    );
+    assert!(
+        content.contains("MemoryFreeze:"),
+        "面板应显示 MemoryFreeze 熔断状态"
+    );
+    assert!(
+        content.contains("NetworkIsolate:"),
+        "面板应显示 NetworkIsolate 熔断状态"
+    );
+
+    // 验证 decay_engine::shadow_breaker_status() 默认全 false
+    let status = shadow_breaker_status();
+    assert!(!status.token_burn, "默认 TokenBurn 应为 false");
+    assert!(!status.memory_freeze, "默认 MemoryFreeze 应为 false");
+    assert!(!status.network_isolate, "默认 NetworkIsolate 应为 false");
 }

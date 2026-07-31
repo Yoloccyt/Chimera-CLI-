@@ -8,10 +8,18 @@ description = "NEXUS-OMEGA L0 契约层 — 纯类型定义，零逻辑，零 cr
 
 [dependencies]
 # ADR-033: nexus-contracts 禁止依赖任何 workspace crate（含 nexus-core）
-# 唯一例外: serde 派生宏（编译期代码生成，非运行时逻辑）
-# WHY: OmniSparseMasks / SparseMask / HarnessSpec 等类型需跨 crate 序列化（EventBus 传输 + TOML 反序列化），
-# serde 是 Rust 生态的事实标准，仅 derive 宏不引入运行时逻辑
+# Task 3.10 扩展例外清单: serde + chrono + uuid(基础类型库,无运行时业务逻辑)
+#
+# 例外说明:
+# - serde: 派生宏(编译期代码生成,非运行时逻辑),OmniSparseMasks/SparseMask/HarnessSpec
+#   等类型需跨 crate 序列化(EventBus 传输 + TOML 反序列化)
+# - chrono: DateTime<Utc> 类型,Task 3.10 下沉的 EventMetadata/Checkpoint 字段需时间戳
+#   (纯类型库,无运行时业务逻辑,与 serde 同级例外)
+# - uuid: Uuid 类型,Task 3.10 下沉的 EventMetadata.event_id 字段需 UUIDv7
+#   (纯类型库,无运行时业务逻辑,与 serde 同级例外)
 serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -19,6 +27,8 @@ serde_yaml = { workspace = true }
 proptest = { workspace = true }
 # 测试用:统一使用 nexus-core 权威 cosine_similarity_slices,避免多副本优化不一致
 nexus-core = { path = "../nexus-core" }
+# Task 3.10: 测试用 MessagePack 序列化 roundtrip 验证(ADR-004 消息序列化协议)
+rmp-serde = { workspace = true }
 
 # ============================================================
 # ADR-033: L0 nexus-contracts 契约层

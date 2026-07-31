@@ -33,6 +33,9 @@ hcw-window = { path = "../hcw-window" }
 mlc-engine = { path = "../mlc-engine" }
 cmt-tiering = { path = "../cmt-tiering" }
 kvbsr-router = { path = "../kvbsr-router" }
+# Task 2: S2 端到端集成测试(memory_s2_tests.rs)需用 S2StrategyAdapter
+# WHY dev-dependencies 可绕过依赖铁律(§2.2),仅限 tests/ 目录
+omega-learner = { path = "../omega-learner" }
 # 基准测试框架(SubTask 11.1:Week 3 复审扩展)
 criterion = { workspace = true }
 # 属性测试框架(SubTask 15.12:sparsity/complexity 不变量验证)
@@ -40,4 +43,11 @@ proptest = { workspace = true }
 
 [[bench]]
 name = "compute_masks"
+harness = false
+
+# Task 6: 五维度并行 vs 顺序延迟对比基准
+# WHY 独立 bench 文件:与 compute_masks.rs(单一 compute_all_masks 延迟)解耦,
+# 专注测量 std::thread::scope 并行 vs 顺序调用的延迟差异
+[[bench]]
+name = "parallel_vs_sequential"
 harness = false

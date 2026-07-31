@@ -46,7 +46,8 @@ use nexus_core::{Task, TaskStatus, CLV};
 
 use chimera_mas::{
     AgentContext, AgentFactory, AgentTask, AgentType, ContextBlock, ContextPriority, ContextTier,
-    MemoryBudgetModel, QualityLevel, RootOrchestrator, TaskComplexity,
+    MemoryBudgetModel, PriorityScheduler, QualityLevel, RootOrchestrator, TaskComplexity,
+    WsjfInput,
 };
 
 // ============================================================
@@ -599,6 +600,58 @@ fn bench_50agent_mem_peak(c: &mut Criterion) {
 }
 
 // ============================================================
+// L9 优化 2.3:PriorityScheduler 出队延迟(scheduler_dequeue)
+// ============================================================
+
+/// 调度器出队延迟基准 — 证伪 best_index 线性扫描 + Vec::remove 的 O(n)
+///
+/// 队列规模 10/100/1000/10000,混合四档优先级。dequeue 是破坏性操作,
+/// 用 iter_batched 每次重建满队列后出一个,隔离 setup 开销。
+fn bench_scheduler_dequeue(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scheduler_dequeue");
+    for &size in &[10usize, 100, 1000, 10000] {
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
+            b.iter_batched(
+                // WHY 重建满队列:dequeue 移除条目,需每次从满队列开始才能稳定度量 O(n) 出队
+                || build_scheduler(size),
+                |mut sched| {
+                    criterion::black_box(sched.dequeue());
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+/// 构造填满 `size` 条目的调度器(四档优先级轮流 + WSJF 差异化,贴近真实分布)
+///
+/// WHY 每次重建而非 clone:PriorityScheduler 未派生 Clone(entries 含 Instant);
+/// WSJF 输入随下标变化使同档内次排序键不全相等,避免退化为纯 FIFO。
+fn build_scheduler(size: usize) -> PriorityScheduler {
+    const PRIORITIES: [TaskPriority; 4] = [
+        TaskPriority::Low,
+        TaskPriority::Medium,
+        TaskPriority::High,
+        TaskPriority::Critical,
+    ];
+    let mut sched = PriorityScheduler::new();
+    for i in 0..size {
+        let task = make_agent_task(TaskComplexity::Simple, next_bench_id("sched"))
+            .with_priority(PRIORITIES[i % 4]);
+        let wsjf = WsjfInput::new(
+            (i % 10 + 1) as f64,
+            (i % 7 + 1) as f64,
+            (i % 5 + 1) as f64,
+            (i % 3 + 1) as f64,
+            (i % 4 + 1) as f64,
+        );
+        sched.enqueue(task, &wsjf);
+    }
+    sched
+}
+
+// ============================================================
 // criterion 注册
 // ============================================================
 
@@ -618,6 +671,7 @@ criterion_group! {
         bench_wiki_knn,
         bench_decay_compute,
         bench_50agent_mem_peak,
+        bench_scheduler_dequeue,
 }
 
 criterion_main!(benches);

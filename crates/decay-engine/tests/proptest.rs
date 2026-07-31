@@ -26,6 +26,7 @@ fn make_engine(penalty: f32, min_level: f32) -> DecayEngine {
         min_level,
         freeze_threshold: 0.0, // 禁用自动冻结(避免干扰单调性验证)
         restore_rate: 0.0,
+        ..Default::default()
     };
     DecayEngine::new(config)
 }

@@ -72,6 +72,12 @@ pub mod immune_system;
 pub mod learner_holder;
 pub mod reasoning;
 pub mod roles;
+/// 策略封顶守卫 — ratio 反馈驱动的审议深度降级封顶(推理悖论红线风控)
+///
+/// 消费 `CoordinationRatioReported` 事件,滞后带状态机维护审议策略上界
+/// (Full→Simplified→FastPath);与 LinUCB S5 接缝互补(封顶为 min 上界,
+/// 不替代学习);Skeptic 否决检查在任何封顶档位照常执行。
+pub mod strategy_cap;
 pub mod types;
 /// polish-v2.7 P3-3:变体隔离池与规则式任务路由(ADR-051 决策 1/2/4)
 pub mod variant_pool;
@@ -99,11 +105,17 @@ pub use immune_system::memory_paradox::MemoryParadoxProbe;
 pub use immune_system::reasoning_trap::ReasoningTrapProbe;
 pub use immune_system::types::{ImmuneSystemError, ParadoxProbe, ParadoxReport, ParadoxRiskReport};
 // 直接定义在 immune_system.rs 的符号（非子模块重导出）,可直接导入
-pub use immune_system::{compute_cascade_risk, ImmuneSystem, StabilityMirror};
+pub use immune_system::{
+    compute_cascade_risk, immune_system_status, ImmuneSystem, ImmuneSystemStatus, StabilityMirror,
+};
 // P4-W14.3 S5 接缝:Parliament 激活策略学习器持有器
 pub use learner_holder::ParliamentLearnerHolder;
 pub use reasoning::{transition, ReasoningEvent, ReasoningState};
 pub use roles::RoleRegistry;
+// 推理悖论红线风控:策略封顶守卫公开 API
+pub use strategy_cap::{
+    spawn_strategy_cap_subscriber, CapChange, StrategyCapConfig, StrategyCapGuard,
+};
 pub use types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
 // polish-v2.7 P3:变体池与审议公开 API 重导出(ADR-051)
 pub use variant_pool::VariantPool;
@@ -112,7 +124,7 @@ pub use veto::{
     IntentRule, MaliciousIntentRuleBook, MaliciousIntentType, RuleAction, Severity, Skeptic,
     VetoOverrideTicket, VetoReason,
 };
-pub use voting::{VoteCounter, VoteResult};
+pub use voting::{ConsensusQualityMetrics, VoteCounter, VoteResult};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {

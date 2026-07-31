@@ -20,6 +20,7 @@ use crate::popup::PopupKind;
 use crate::render::{virtual_scroll_window, FOOTER_TEXT};
 use crate::types::{PanelId, TuiCommand, TuiState};
 use event_bus::NexusEvent;
+use parliament::immune_system_status;
 
 /// Parliament 面板
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -265,7 +266,51 @@ impl Panel for ParliamentPanel {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let content_height = inner.height.saturating_sub(3) as usize;
+        // Task 3.8:L10 → L8 向下依赖 — 免疫系统状态摘要（三探针 + 级联风险 + 膜厚）
+        let status = immune_system_status();
+        let immune_header = vec![
+            Line::from(vec![
+                Span::styled("Immune: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(
+                        "Mem={:.0}%  Reason={:.0}%  Evol={:.0}%  Cascade={:.0}%  Membrane={}/7",
+                        status.memory_paradox_rate * 100.0,
+                        status.reasoning_trap_rate * 100.0,
+                        status.evolution_hack_rate * 100.0,
+                        status.cascade_risk * 100.0,
+                        status.membrane_thickness,
+                    ),
+                    Style::default().fg(if status.cascade_risk > 0.7 {
+                        Color::Red
+                    } else if status.cascade_risk > 0.3 {
+                        Color::Yellow
+                    } else {
+                        Color::Green
+                    }),
+                ),
+            ]),
+            Line::from(""),
+        ];
+        let header_height = immune_header.len() as u16;
+
+        // 垂直切分:免疫状态摘要 + 事件列表
+        let header_area = Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: header_height.min(inner.height),
+        };
+        let list_area = Rect {
+            x: inner.x,
+            y: inner.y.saturating_add(header_height),
+            width: inner.width,
+            height: inner.height.saturating_sub(header_height),
+        };
+
+        let header_p = Paragraph::new(Text::from(immune_header));
+        Widget::render(header_p, header_area, buf);
+
+        let content_height = list_area.height.saturating_sub(3) as usize;
         self.scroll_offset =
             list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
@@ -273,7 +318,7 @@ impl Panel for ParliamentPanel {
         let window = virtual_scroll_window(events.len(), self.scroll_offset, content_height);
         let paragraph = Paragraph::new(Self::content(state, self.selected, window))
             .scroll((self.scroll_offset as u16, 0));
-        paragraph.render(inner, buf);
+        paragraph.render(list_area, buf);
     }
 
     fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {

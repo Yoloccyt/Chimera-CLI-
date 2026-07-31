@@ -7,6 +7,10 @@
 //!
 //! 1. **CircuitBreaker** — 三态断路器(Closed/Open/HalfOpen),基于 `AtomicU8` CAS,
 //!    防止级联故障(§4.4 反模式 1:不持锁跨 `.await`)
+//!    - ≠ `decay_engine::ShadowModeCircuitBreaker`:后者是 L4 形式验证**永久跳闸**
+//!      门控(任一属性 Violated 即不可逆跳闸,需授权凭证复位);本类是 L9 级联
+//!      故障防护的**三态自恢复**断路器(Open 后可经 HalfOpen 探测自动恢复)。
+//!      两者语义正交,命名相近但职责不同,勿混淆。
 //! 2. **StabilityGuard** — 零孤儿终态保证 + 故障隔离
 //!    - `ensure_terminal_state(task_id)`:校验任务终态(Completed/Failed)
 //!    - `isolate_failure(subtree_id)`:故障隔离,防止级联(INV-3/INV-4)
@@ -285,6 +289,11 @@ impl CircuitBreaker {
     /// ## 返回
     /// - `true`: 失败次数达到阈值,触发 `trip_open()`(Closed→Open)
     /// - `false`: 失败次数尚未达阈值
+    ///
+    /// ## 并发语义(WHY 非原子对仍安全)
+    /// `fetch_add` 与阈值判断 + `trip_open` 非原子对:极端并发下多线程可能
+    /// 均观测到 count ≥ threshold 而多次调 `trip_open`。但 `trip_open` 是幂等
+    /// store(都写入 Open),多次触发最终状态一致,无安全影响——无需 CAS 保护。
     pub fn record_failure(&self) -> bool {
         // fetch_add 返回旧值,+1 得到本次累加后的值
         let count = self.failure_count.fetch_add(1, Ordering::AcqRel) + 1;
@@ -297,6 +306,9 @@ impl CircuitBreaker {
     }
 
     /// 返回重置超时(毫秒)
+    ///
+    /// WHY #[allow(dead_code)]:公开访问器补全 API 面(供外部诊断 Open→HalfOpen
+    /// 重置时序),当前 workspace 内无消费方但属合理公开接口,保留不删。
     #[allow(dead_code)]
     pub fn reset_timeout_ms(&self) -> u64 {
         self.reset_timeout_ms

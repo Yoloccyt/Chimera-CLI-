@@ -35,3 +35,8 @@ serde_json = { workspace = true }
 [[bench]]
 name = "substitutor_benchmark"
 harness = false
+
+# SubTask 0.5.11:降级链推进延迟基准(验证 < 1µs)
+[[bench]]
+name = "degradation_chain"
+harness = false

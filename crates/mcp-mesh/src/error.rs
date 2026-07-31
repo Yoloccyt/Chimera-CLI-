@@ -137,6 +137,60 @@ pub enum McpError {
         /// 失败原因(反序列化失败 / Nack / 超长帧等)
         reason: String,
     },
+
+    /// WAL 持久化错误 — 文件 IO 失败
+    ///
+    /// WHY Task 0.7 v2.9.0-omega:2PC 协调者崩溃恢复依赖 WAL,文件写入/读取/
+    /// fsync 失败需明确报错。WAL 失败不阻塞主流程(prepare/commit 仍可进行),
+    /// 但调用方应告警(数据可能未持久化,崩溃后无法恢复)。
+    #[error("WAL IO 错误: {reason}")]
+    WalIoError {
+        /// 失败原因(打开/写入/fsync/truncate 失败等)
+        reason: String,
+    },
+
+    /// 补偿事务错误 — Commit 失败后需人工介入或重试
+    ///
+    /// WHY Task 0.7 v2.9.0-omega:Commit 阶段部分参与者失败时,事务进入"待补偿"
+    /// 队列等待重试。`reconcile_pending_transactions` 全部重试仍失败时抛出此错误,
+    /// 调用方应记录告警并人工介入(2PC 经典问题:Commit 阶段失败需运维介入)。
+    // WHY `{:?}`:`Vec<String>` 未实现 `Display`,用 Debug 格式化输出列表
+    #[error(
+        "补偿事务失败: {transaction_id} 已重试 {retries} 次,失败参与者: {failed_participants:?}"
+    )]
+    CompensationFailed {
+        /// 事务 ID
+        transaction_id: String,
+        /// 已重试次数
+        retries: u32,
+        /// 仍失败的参与者 ID 列表
+        failed_participants: Vec<String>,
+    },
+
+    /// DNS rebinding 防御 — 解析后的 IP 指向内网/保留地址
+    ///
+    /// WHY Task 0.7 v2.9.0-omega:`TcpParticipantClient` 在 connect 前对 DNS 解析后
+    /// 的 IP 做二次校验,防止 DNS rebinding 攻击(注册时域名解析为公网 IP 通过校验,
+    /// 连接时 DNS 返回内网 IP)。`register` 阶段只校验字面量 IP/已知内网域名,
+    /// 实际 connect 时必须再次校验解析结果。
+    #[error("DNS rebinding 拦截: {hostname} 解析为保留 IP {resolved_ip}")]
+    DnsRebindingBlocked {
+        /// 被查询的域名
+        hostname: String,
+        /// 解析出的保留 IP(原样回显,便于排查)
+        resolved_ip: String,
+    },
+
+    /// EventBus 发布失败 — EntanglementManager Eager 状态同步失败
+    ///
+    /// WHY Task 0.7 v2.9.0-omega SubTask 0.7.9:`EntanglementManager::sync_state_change`
+    /// 在 `Eager` 策略下直接 `bus.publish().await`,发布失败时返回此错误。
+    /// `Lazy` / `BestEffort` 策略不传播此错误(Lazy 入缓冲区,BestEffort fire-and-forget)。
+    #[error("EventBus 发布失败: {reason}")]
+    EventBusPublish {
+        /// 失败原因(广播通道关闭 / 无订阅者等)
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -193,5 +247,41 @@ mod tests {
             server_id: "s-1".into(),
         };
         let _cloned = e.clone();
+    }
+
+    #[test]
+    fn test_error_display_wal_io_error() {
+        let e = McpError::WalIoError {
+            reason: "fsync failed: No space left on device".into(),
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("WAL IO 错误"));
+        assert!(msg.contains("fsync failed"));
+    }
+
+    #[test]
+    fn test_error_display_compensation_failed() {
+        let e = McpError::CompensationFailed {
+            transaction_id: "tx-1".into(),
+            retries: 3,
+            failed_participants: vec!["s-2".into(), "s-3".into()],
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("补偿事务失败"));
+        assert!(msg.contains("tx-1"));
+        assert!(msg.contains("s-2"));
+        assert!(msg.contains("s-3"));
+    }
+
+    #[test]
+    fn test_error_display_dns_rebinding_blocked() {
+        let e = McpError::DnsRebindingBlocked {
+            hostname: "evil.example.com".into(),
+            resolved_ip: "169.254.169.254".into(),
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("DNS rebinding"));
+        assert!(msg.contains("evil.example.com"));
+        assert!(msg.contains("169.254.169.254"));
     }
 }

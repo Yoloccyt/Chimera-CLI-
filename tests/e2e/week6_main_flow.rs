@@ -59,7 +59,11 @@ async fn test_main_flow_text_to_chtc_under_400ms() {
         .bridge
         .receive(raw, IdeSource::vscode())
         .expect("CHTC receive 失败");
-    let exec_result = pipeline.bridge.execute(&call).expect("CHTC execute 失败");
+    let exec_result = pipeline
+        .bridge
+        .execute(&call)
+        .await
+        .expect("CHTC execute 失败");
     assert!(exec_result.success, "VSCode execute 应成功");
 
     let elapsed = start.elapsed();
@@ -369,7 +373,11 @@ async fn test_week6_full_event_chain_all_five_events() {
         .bridge
         .receive(raw, IdeSource::vscode())
         .expect("CHTC receive 失败");
-    let exec_result = pipeline.bridge.execute(&call).expect("CHTC execute 失败");
+    let exec_result = pipeline
+        .bridge
+        .execute(&call)
+        .await
+        .expect("CHTC execute 失败");
     assert!(exec_result.success, "VSCode execute 应成功");
 
     // 验证 Week 6 主链路的 5 个关键事件全部被正确发布

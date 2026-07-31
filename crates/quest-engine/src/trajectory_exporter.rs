@@ -126,6 +126,10 @@ impl TaskProgress {
                 TaskStatus::Running => progress.running += 1,
                 TaskStatus::Completed => progress.completed += 1,
                 TaskStatus::Failed => progress.failed += 1,
+                // Task 3.10: Cancelled 视为非成功终止(归入 failed),
+                // Paused 视为进行中(归入 running)
+                TaskStatus::Cancelled => progress.failed += 1,
+                TaskStatus::Paused => progress.running += 1,
             }
         }
         progress

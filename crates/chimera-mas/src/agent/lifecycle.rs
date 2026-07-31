@@ -243,6 +243,12 @@ impl AgentLifecycle {
     /// `Failed → Failed` 幂等(任务描述: Running/Failed → Failed),
     /// 允许重复调用 fail 而不报错。
     ///
+    /// ## 设计权衡:Paused 不能直接 fail(需经 crash 中转)
+    /// `Paused` 态调 fail 返回 `InvalidAgentState`——暂停中的 Agent 无正在执行
+    /// 的任务可"失败",语义上应先 resume 到 Running 再 fail,或由 crash(非终态→Failed,
+    /// 静默)处理不可恢复崩溃。此为权衡而非缺陷:保持 fail 语义严格(仅“正在运行
+    /// 的任务失败"),避免 Paused→Failed 掩盖"暂停后未恢复就失败"的语义歧义。
+    ///
     /// ## 错误
     /// - `MasError::InvalidAgentState`: 当前状态既非 `Running` 也非 `Failed`
     pub fn fail(&mut self, agent_id: &str) -> Result<()> {

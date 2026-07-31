@@ -23,7 +23,10 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+// Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
+// WHY 直接从 L0 导入:示范新路径,EventBus/NexusEvent 仍需 event-bus,故拆分 import
+use event_bus::{EventBus, NexusEvent};
+use nexus_contracts::EventMetadata;
 use tracing::{info, warn};
 
 use crate::config::AutoDpoConfig;

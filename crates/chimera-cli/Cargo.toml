@@ -11,7 +11,25 @@ event-bus = { workspace = true }
 # chimera-tui:L10 Interface 层 TUI 界面(ratatui + crossterm)
 chimera-tui = { workspace = true }
 # quest-engine:L9 Quest 层,为 tui 命令提供控制事件上游消费示例(§2.2 向下依赖)
+# Task 1.1/1.2: chimera run / quest 命令真实接入 QuestEngine API
 quest-engine = { path = "../quest-engine" }
+# repo-wiki:L5 Knowledge 层,Task 1.3 chimera wiki 真实接入语义检索(§2.2 L10→L5 允许)
+repo-wiki = { path = "../repo-wiki" }
+# parliament:L8 Parliament 层,Task 1.4 chimera parliament 真实接入审议 API(§2.2 L10→L8 允许)
+parliament = { path = "../parliament" }
+# mcp-mesh:L10 Interface 层,Task 1.8 chimera mcp 真实接入 MCP 网格(§2.2 L10→L10 同层允许)
+# 提供 McpMesh / ServerRegistry / MeshServer 类型供 mcp list/serve/call/inspect 子命令使用
+mcp-mesh = { path = "../mcp-mesh" }
+# chimera-mas:L9 Quest 层,Task 1.10 chimera agent 真实接入多 Agent 协同子系统(§2.2 L10→L9 允许)
+# 提供 RootOrchestrator / AgentTask / AgentHandle / HeartbeatInfo 类型供 agent list/spawn/inspect/cancel 使用
+chimera-mas = { path = "../chimera-mas" }
+# nexus-core:L1 核心类型,Task 1.10 agent spawn 构造 Task / TaskStatus 领域对象
+# 已通过上方 nexus-core 依赖间接可用,显式注释提醒
+# event-bus:L1 事件总线,Task 1.10 agent 命令构造 EventBus 共享给 RootOrchestrator(已在上方声明)
+# nexus-core:L1 核心类型(UserIntent/Quest/Task 等),Task 1.1/1.4 构造领域对象
+# 已通过上方 nexus-core 依赖间接可用,显式注释提醒
+# uuid:UUIDv7 生成 intent_id / proposal_id / quest_id(Task 1.1/1.4)
+uuid = { workspace = true }
 # Clap:子命令式 CLI 框架,启用 derive 宏、env 变量支持、cargo 元信息
 clap = { workspace = true }
 # Figment:多源配置合并(默认 > File > Env > CLI 优先级)
@@ -23,9 +41,24 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # anyhow:应用层错误处理(库层应使用 thiserror)
 anyhow = { workspace = true }
+# thiserror:CLI 入口结构化错误码(§4.1 延伸应用,Task 0.1 引入以映射 ExitCode 矩阵)
+thiserror = { workspace = true }
 # tracing:结构化日志,避免 println! 滥用
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# === v2.9.0-omega Task 1.12: CLI 输出增强依赖 ===
+# nu-ansi-term:轻量 ANSI 颜色渲染,print_success/error/warning/info 使用
+nu-ansi-term = { workspace = true }
+# indicatif:进度条/spinner,长任务 print_progress helper 使用
+indicatif = { workspace = true }
+# comfy-table:终端表格渲染,print_table helper 使用(quest list / config list 等)
+comfy-table = { workspace = true }
+# clap_complete:shell 补全脚本生成(Task 1.14 chimera completions 命令)
+# WHY workspace 级声明:与 clap 4.5 版本绑定,生成 bash/zsh/fish/powershell/elvish 5 种 shell 补全
+clap_complete = { workspace = true }
+# human-panic:友好的 panic 报告库(Task 2.3 panic hook)
+# WHY workspace 级声明:main.rs 在 release 模式输出用户友好 panic 提示,debug 模式退化为默认 handler
+human-panic = { workspace = true }
 
 [dev-dependencies]
 # tempfile:集成测试中生成临时配置文件
@@ -49,4 +82,9 @@ harness = false
 # Quest 编排器高频 chunk 生产性能基线(build_quest_reply + plan_chunks 吞吐量)
 [[bench]]
 name = "quest_orchestrator_bench"
+harness = false
+
+# ExitCode 矩阵 7 变体分发延迟基准(Task 0.2,验证 < 10µs)
+[[bench]]
+name = "exit_code_matrix"
 harness = false

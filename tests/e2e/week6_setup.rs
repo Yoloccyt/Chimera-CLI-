@@ -271,7 +271,11 @@ async fn test_setup_chtc_receives_and_executes() {
         .bridge
         .receive(raw, IdeSource::vscode())
         .expect("CHTC receive 失败");
-    let result = pipeline.bridge.execute(&call).expect("CHTC execute 失败");
+    let result = pipeline
+        .bridge
+        .execute(&call)
+        .await
+        .expect("CHTC execute 失败");
     assert!(result.success, "VSCode execute 应成功");
 
     // receive 应发布 ChtcToolCallReceived 事件

@@ -547,6 +547,7 @@ fn test_topic_mapping_covers_all_variants() {
             participant_count: 3,
             latency_ms: 100,
             success: true,
+            capability_id: None,
         },
         NexusEvent::CsnSubstitutionTriggered {
             metadata: EventMetadata::new("test-source"),
