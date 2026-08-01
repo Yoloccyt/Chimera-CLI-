@@ -61,6 +61,35 @@ fn get_metric_meta(name: &str) -> MetricMeta {
             help: "Total Critical events dropped by bounded mpsc bypass channel (capacity 4096)",
             metric_type: "counter",
         },
+        // MCA 亲和指标(ADR-065/066,A5 体验对等不变量)
+        "mca_ttft_p50_ms" => MetricMeta {
+            help: "Per-channel TTFT p50 in milliseconds (E1 experience invariant)",
+            metric_type: "gauge",
+        },
+        "mca_ttft_p95_ms" => MetricMeta {
+            help: "Per-channel TTFT p95 in milliseconds (E1 experience invariant)",
+            metric_type: "gauge",
+        },
+        "mca_cache_hit_rate" => MetricMeta {
+            help: "Per-channel cache hit ratio (cache_hit_tokens / input_tokens)",
+            metric_type: "gauge",
+        },
+        "mca_feature_enablement_rate" => MetricMeta {
+            help: "Per-channel feature enablement rate (Full / (Full + Degraded), A2 denominator >= 0.95)",
+            metric_type: "gauge",
+        },
+        "mca_cost_micro_total" => MetricMeta {
+            help: "Per-channel accumulated cost in micro-units",
+            metric_type: "counter",
+        },
+        "mca_sessions_total" => MetricMeta {
+            help: "Per-channel total completed sessions",
+            metric_type: "counter",
+        },
+        "mca_provider_degraded_total" => MetricMeta {
+            help: "Per-channel total ProviderDegraded events triggered",
+            metric_type: "counter",
+        },
         _ => MetricMeta {
             help: "Unknown metric",
             metric_type: "untyped",

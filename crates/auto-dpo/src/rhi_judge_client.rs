@@ -75,6 +75,7 @@
 use crate::error::AutoDpoError;
 use crate::rhi_channel_a::{JudgeClient, JudgeVerdict, SpecVersion};
 use model_router::{ModelRouter, RoutingRequest, RoutingStrategy};
+use nexus_contracts::affinity::ThinkingPreference;
 use nexus_contracts::HarnessSpec;
 use nexus_core::{MultimodalInput, UserIntent};
 use serde::Deserialize;
@@ -641,6 +642,8 @@ impl ModelRouterJudgeClient {
             },
             estimated_tokens: self.config.estimated_tokens,
             strategy: self.config.routing_strategy,
+            // MCA P2:rhi 评判器使用标准思考模式(平衡延迟与质量)
+            thinking_pref: ThinkingPreference::Standard,
         }
     }
 }

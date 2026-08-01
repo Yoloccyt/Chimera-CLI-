@@ -8,6 +8,7 @@
 //! - `RoutingRequest`:路由请求,携带意图、预估 token 数与策略
 //! - `RoutingDecision`:路由决策结果,含选中模型、原因、预估成本与候选列表
 
+use nexus_contracts::affinity::ThinkingPreference;
 use serde::{Deserialize, Serialize};
 
 /// 模型信息 — 描述一个可路由的底层模型
@@ -56,6 +57,11 @@ pub struct RoutingRequest {
     pub estimated_tokens: u32,
     /// 路由策略
     pub strategy: RoutingStrategy,
+    /// 思考偏好(仅 Auto 策略使用,影响权重分配)
+    ///
+    /// 当 `thinking_pref == Deep` 时,quality 权重从 0.2 提升到 0.35,
+    /// cost 从 0.4 降到 0.25,以适应需要深度推理能力的场景。
+    pub thinking_pref: ThinkingPreference,
 }
 
 /// 路由决策 — 路由器返回的选择结果

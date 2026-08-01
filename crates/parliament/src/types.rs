@@ -276,6 +276,9 @@ pub struct DebateResult {
     pub weighted_approval_rate: f32,
     /// 参与率 [0.0, 1.0](已投票角色数 / 总角色数,含弃权)
     pub participation_rate: f32,
+    /// 跨厂商辩论角色分配（可选，启用时记录每个角色使用的厂商通道）
+    /// MCA P2-1:记录 Skeptic 与 Producer 的异厂商分配，供审计与去相关校验使用。
+    pub cross_vendor_assignment: Option<crate::cross_vendor::CrossVendorAssignment>,
 }
 
 impl DebateResult {
@@ -285,12 +288,14 @@ impl DebateResult {
         opinions: Vec<Opinion>,
         weighted_approval_rate: f32,
         participation_rate: f32,
+        cross_vendor_assignment: Option<crate::cross_vendor::CrossVendorAssignment>,
     ) -> Self {
         Self {
             consensus,
             opinions,
             weighted_approval_rate,
             participation_rate,
+            cross_vendor_assignment,
         }
     }
 }
@@ -519,11 +524,13 @@ mod tests {
             opinions.clone(),
             0.25,
             0.2,
+            None, // cross_vendor_assignment
         );
         assert!(result.consensus.is_reached());
         assert_eq!(result.opinions.len(), 1);
         assert!((result.weighted_approval_rate - 0.25).abs() < 1e-6);
         assert!((result.participation_rate - 0.2).abs() < 1e-6);
+        assert!(result.cross_vendor_assignment.is_none());
     }
 
     #[test]

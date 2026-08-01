@@ -14,13 +14,15 @@
 //! 反序列化整体),绝不因未知字段报错中断——Claude Code"报错或静默"两难教训。
 
 use nexus_contracts::affinity::{
-    AffinityRequest, ContentBlock, FinishReason, MessageRole, ModelAffinitySpec, ProtocolDialect,
-    UsageReport,
+    AffinityRequest, CacheSupport, ContentBlock, FinishReason, MessageRole, ModelAffinitySpec,
+    ProtocolDialect, UsageReport,
 };
 use serde_json::{json, Value};
-
+// L3 缓存亲和:CacheAffinityIntegration 缓存策略决策(CacheSupport 已由 L0 nexus-contracts 提供)
 use super::DecodedResponse;
+use crate::capability::{negotiate_thinking, ThinkingDirective};
 use crate::error::AffinityError;
+use scc_cache::CacheAffinityIntegration;
 
 /// OpenAI Chat Completions 无状态码器
 #[derive(Debug, Clone, Copy, Default)]
@@ -37,7 +39,7 @@ impl OpenAiChatCodec {
         spec: &ModelAffinitySpec,
         request: &AffinityRequest,
     ) -> Result<Value, AffinityError> {
-        let messages = build_messages(request)?;
+        let messages = build_messages(request, spec)?;
         let mut body = json!({
             "model": spec.model.as_ref(),
             "messages": messages,
@@ -45,6 +47,61 @@ impl OpenAiChatCodec {
         if !request.tools.is_empty() {
             body["tools"] = build_tools(request)?;
         }
+
+        // 思考参数映射:能力协商产出 → 方言原生参数(P0-3 厂商 thinking 参数原生映射)
+        //   - DeepSeek 风格:enable_thinking=true(OnOff 通道)
+        //   - GLM 风格:reasoning_effort=level(EffortLevels 通道)
+        //   - 不支持思考(OnOff 下 Fast 偏好)或 None 通道:不发 thinking 参数(P3:未声明的字段一律不发)
+        let (thinking_dir, _degraded) =
+            negotiate_thinking(&spec.capabilities.thinking, request.thinking_pref);
+        match thinking_dir {
+            ThinkingDirective::Off => { /* 不发 thinking 参数 */ }
+            ThinkingDirective::On => {
+                body["enable_thinking"] = json!(true);
+            }
+            ThinkingDirective::Effort(level) => {
+                body["reasoning_effort"] = json!(level.as_ref());
+            }
+        }
+
+        // 缓存亲和参数注入:cache_control 断点(MCA A3,P0-2)
+        //   - ExplicitControl 族(Anthropic 族):在系统消息中注入 cache_control
+        //   - None/Implicit 族:不注入(隐式族靠会话粘性)
+        //   - cache_control 仅对系统提示生效(最稳定前缀,见 scc-cache plan_breakpoints)
+        // WHY 仅系统消息:Anthropic 最多 4 个断点配额,系统提示是最长公共前缀,
+        // 对系统提示加 cache_control 即可覆盖所有请求的相同前缀部分。
+        // 用户消息的动态内容随轮次变化,打断点收益低且消耗配额。
+        if CacheAffinityIntegration::should_inject_cache_control(spec.capabilities.prompt_caching) {
+            // 系统消息是顶层字段(OpenAI Chat 中 system 是 messages 数组的第一项)
+            // 在系统消息的 content 中添加 cache_control: { "type": "ephemeral" }
+            if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
+                if let Some(first) = messages.first_mut() {
+                    if first.get("role").and_then(Value::as_str) == Some("system") {
+                        if let Some(content) = first.get_mut("content") {
+                            // 如果 content 是字符串,转换为块数组格式
+                            if content.is_string() {
+                                let text = content.take();
+                                *content = json!([{
+                                    "type": "text",
+                                    "text": text,
+                                    "cache_control": { "type": "ephemeral" }
+                                }]);
+                            } else if let Some(blocks) = content.as_array_mut() {
+                                // content 已是块数组,在第一个文本块上添加 cache_control
+                                if let Some(first_block) = blocks.first_mut() {
+                                    if first_block.get("type").and_then(Value::as_str)
+                                        == Some("text")
+                                    {
+                                        first_block["cache_control"] = json!({"type": "ephemeral"});
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(body)
     }
 
@@ -100,12 +157,17 @@ impl OpenAiChatCodec {
 /// 会话历史 → OpenAI messages 数组
 ///
 /// 块模型到方言的映射规则:
-/// - System/User: 文本块拼接为 content 字符串
+/// - System: 文本块拼接为 content 字符串;当 `ExplicitControl` 时转为块数组并注入
+///   `cache_control`(P0-2 缓存亲和,MiniMax/GLM 显式缓存族)
+/// - User: 文本块拼接为 content 字符串
 /// - Assistant: Text 块 → content;ToolUse 块 → tool_calls;Thinking 块在
 ///   OpenAI 方言 M0 不回传(VerbatimThinking 守恒属 M1 session 专项)
 /// - Tool: 每个 ToolResult 块展开为一条 role=tool 消息(OpenAI 方言要求
 ///   工具结果逐条对应 tool_call_id)
-fn build_messages(request: &AffinityRequest) -> Result<Value, AffinityError> {
+fn build_messages(
+    request: &AffinityRequest,
+    spec: &ModelAffinitySpec,
+) -> Result<Value, AffinityError> {
     let mut messages = Vec::new();
     for msg in &request.messages {
         match msg.role {
@@ -115,7 +177,28 @@ fn build_messages(request: &AffinityRequest) -> Result<Value, AffinityError> {
                 } else {
                     "user"
                 };
-                messages.push(json!({ "role": role, "content": join_text(&msg.blocks) }));
+                let is_explicit = spec.capabilities.prompt_caching == CacheSupport::ExplicitControl
+                    && msg.role == MessageRole::System;
+                let content = if is_explicit {
+                    // ExplicitControl 族:系统消息转为块数组并注入 cache_control
+                    // 使厂商缓存系统提示前缀,降低重复输入 token 消耗
+                    let blocks: Vec<Value> = msg
+                        .blocks
+                        .iter()
+                        .map(|b| match b {
+                            ContentBlock::Text { text } => json!({
+                                "type": "text",
+                                "text": text.as_ref(),
+                                "cache_control": {"type": "ephemeral"}
+                            }),
+                            _ => json!({"type": "text", "text": ""}),
+                        })
+                        .collect();
+                    Value::Array(blocks)
+                } else {
+                    Value::String(join_text(&msg.blocks))
+                };
+                messages.push(json!({ "role": role, "content": content }));
             }
             MessageRole::Assistant => {
                 let mut entry = json!({ "role": "assistant" });
@@ -434,5 +517,87 @@ mod tests {
             OpenAiChatCodec.parse_response(br#"{"no_choices": true}"#),
             Err(AffinityError::Protocol { .. })
         ));
+    }
+
+    // ── 缓存亲和集成测试(P0-2) ──
+
+    #[test]
+    fn openai_chat_explicit_control_injects_cache_control() {
+        // ExplicitControl 族:系统消息应注入 cache_control
+        let mut spec =
+            ModelAffinitySpec::minimal(ProviderId::Zhipu, "glm-5.2", ProtocolDialect::OpenAiChat);
+        spec.capabilities.prompt_caching = CacheSupport::ExplicitControl;
+        let request = simple_affinity_request("test", "你好");
+        let codec = OpenAiChatCodec;
+        let body = codec.build_request(&spec, &request).unwrap();
+        let messages = body.get("messages").and_then(Value::as_array).unwrap();
+        let system_msg = messages.first().unwrap();
+        let content = system_msg.get("content").unwrap();
+        // ExplicitControl 下 content 应为块数组
+        assert!(content.is_array(), "ExplicitControl 下 content 应为块数组");
+        let blocks = content.as_array().unwrap();
+        if let Some(first_block) = blocks.first() {
+            assert_eq!(
+                first_block.get("type").and_then(Value::as_str),
+                Some("text")
+            );
+            assert!(
+                first_block.get("cache_control").is_some(),
+                "ExplicitControl 下应注入 cache_control"
+            );
+        }
+    }
+
+    #[test]
+    fn openai_chat_none_does_not_inject_cache_control() {
+        // None 族:不注入 cache_control
+        let mut spec = ModelAffinitySpec::minimal(
+            ProviderId::DeepSeek,
+            "deepseek-v4-flash",
+            ProtocolDialect::OpenAiChat,
+        );
+        spec.capabilities.prompt_caching = CacheSupport::None;
+        let request = simple_affinity_request("test", "你好");
+        let codec = OpenAiChatCodec;
+        let body = codec.build_request(&spec, &request).unwrap();
+        let messages = body.get("messages").and_then(Value::as_array).unwrap();
+        let system_msg = messages.first().unwrap();
+        let content = system_msg.get("content").unwrap();
+        // None 下 content 保持字符串(不转为块数组)
+        assert!(content.is_string(), "None 下 content 应为字符串");
+    }
+
+    #[test]
+    fn openai_chat_implicit_does_not_inject_cache_control() {
+        // Implicit 族:不注入 cache_control(隐式缓存靠会话粘性)
+        let mut spec = ModelAffinitySpec::minimal(
+            ProviderId::DeepSeek,
+            "deepseek-v4-flash",
+            ProtocolDialect::OpenAiChat,
+        );
+        spec.capabilities.prompt_caching = CacheSupport::Implicit;
+        let request = simple_affinity_request("test", "你好");
+        let codec = OpenAiChatCodec;
+        let body = codec.build_request(&spec, &request).unwrap();
+        let messages = body.get("messages").and_then(Value::as_array).unwrap();
+        let system_msg = messages.first().unwrap();
+        let content = system_msg.get("content").unwrap();
+        // Implicit 下 content 保持字符串
+        assert!(content.is_string(), "Implicit 下 content 应为字符串");
+    }
+
+    /// 创建简单亲和请求:单条系统消息 + 默认思考偏好
+    fn simple_affinity_request(intent_id: &str, text: &str) -> AffinityRequest {
+        AffinityRequest {
+            intent_id: intent_id.into(),
+            messages: vec![AffinityMessage {
+                role: MessageRole::System,
+                blocks: vec![ContentBlock::Text { text: text.into() }],
+            }],
+            tools: Vec::new(),
+            thinking_pref: ThinkingPreference::Standard,
+            budget_hint_micro: None,
+            overrides: AffinityOverrides::default(),
+        }
     }
 }

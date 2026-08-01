@@ -261,6 +261,7 @@ impl ModelRouter {
                             &req,
                             &gate,
                             Some(store.as_ref()),
+                            req.thinking_pref,
                         )
                     })
                     .await
@@ -426,6 +427,7 @@ mod tests {
     use super::*;
     use crate::config::RouterConfig;
     use crate::types::ModelInfo;
+    use nexus_contracts::affinity::ThinkingPreference;
     use nexus_core::{MultimodalInput, UserIntent};
 
     fn make_intent() -> UserIntent {
@@ -443,6 +445,7 @@ mod tests {
             intent: make_intent(),
             estimated_tokens: 1000,
             strategy,
+            thinking_pref: ThinkingPreference::Standard,
         }
     }
 

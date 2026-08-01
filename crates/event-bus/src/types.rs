@@ -2001,6 +2001,33 @@ pub enum NexusEvent {
         peak_factor_percent: u16,
     },
 
+    /// 跨厂商辩论通道选择 — parliament → mca-gateway/efficiency-monitor
+    ///
+    /// MCA P2-1 跨厂商辩论的通道选择留痕，记录每个角色在辩论中使用的
+    /// 厂商通道，用于审计跨厂商去相关合规性(P7)与体验对等验收(E1-E5)。
+    ///
+    /// WHY Normal 级(非 Critical):跨厂商通道选择是辩论的准备阶段，
+    /// 通道选择失败不会导致会话中断，降级为同厂商后仍可继续辩论。
+    /// 丢失此事件不影响核心辩论流程，仅影响审计与体验分析。
+    CrossVendorNegotiation {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 辩论会话 ID(与 DebateStarted 的 session_id 一致)
+        session_id: String,
+        /// 关联的 Quest ID
+        quest_id: String,
+        /// 生产者使用的厂商(ProviderId::as_str)
+        producer_provider: String,
+        /// 验证者使用的厂商
+        verifier_provider: String,
+        /// 怀疑者使用的厂商
+        skeptic_provider: String,
+        /// 是否强制了跨厂商去相关
+        cross_vendor_enforced: bool,
+        /// 去相关状态("enforced"/"fallback_same"/"fallback_skip")
+        decorrelation_status: String,
+    },
+
     /// 通道健康恶化 — mca-gateway → csn-substitutor/model-router
     ///
     /// 健康探针(TTFT/成功率 EWMA)跨过阈值或熔断器开闸时发布,
@@ -2082,6 +2109,49 @@ pub enum NexusEvent {
         cost_actual_micro: u64,
         /// 首 token 延迟(毫秒,E1 体验不变量度量)
         ttft_ms: u64,
+    },
+
+    /// 窗口亲和折减结果 — mca-gateway hcw_integration → hcw-window
+    ///
+    /// MCA P5 承诺不超发:模型实际上限折减后,网关发布此事件告知 HCW
+    /// 实际允许的窗口档位。`hcw-window` 消费后调整 `HcwWindow.current_tier`,
+    /// 确保 1M 等效承诺不超出模型上限。
+    ///
+    /// # 跨层通信(C6)
+    /// L10(mca-gateway) → L2(hcw-window),经 event-bus 解耦。
+    /// 本事件为 Normal 级别(观测面),不触发 mpsc 旁路。
+    WindowAffinityApplied {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 路由键 `provider/model`(与 ModelAffinitySelected 一致)
+        route_key: String,
+        /// 是否发生了折减(请求 L3 但模型上限不足)
+        folded: bool,
+        /// 是否需要任务分块(折减到 L2 封顶的中等窗口)
+        needs_chunking: bool,
+        /// 折减后的实际档位("L0"/"L1"/"L2"/"L3")
+        tier: String,
+    },
+
+    /// 缓存亲和策略应用结果 — mca-gateway codec → scc-cache
+    ///
+    /// MCA A3 缓存亲和:记录当前请求使用的缓存策略(显式/隐式/无)及
+    /// cache_control 断点位置。`scc-cache` 消费后调整缓存预取策略。
+    ///
+    /// # 跨层通信(C6)
+    /// L10(mca-gateway) → L3(scc-cache),经 event-bus 解耦。
+    /// 本事件为 Normal 级别(观测面),不触发 mpsc 旁路。
+    CacheAffinityApplied {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 路由键 `provider/model`(与 ModelAffinitySelected 一致)
+        route_key: String,
+        /// 缓存策略: "none" / "implicit" / "explicit_control"
+        strategy: String,
+        /// 是否注入了 cache_control 断点(仅 ExplicitControl 族)
+        cache_control_injected: bool,
+        /// 断点数量(ExplicitControl 族,否则 0)
+        breakpoint_count: u32,
     },
 }
 
@@ -2209,11 +2279,17 @@ impl NexusEvent {
             Self::DpoPairGenerated { metadata, .. } => metadata,
             // MCA M0(ADR-065):mca-gateway 会话级/治理级事件(6 个新变体)
             Self::ModelAffinitySelected { metadata, .. } => metadata,
+            // MCA P2-1:跨厂商辩论通道选择
+            Self::CrossVendorNegotiation { metadata, .. } => metadata,
             Self::ProviderDegraded { metadata, .. } => metadata,
             Self::AffinityCapabilityNegotiated { metadata, .. } => metadata,
             Self::AffinityQuotaExhausted { metadata, .. } => metadata,
             Self::AffinityUnknownField { metadata, .. } => metadata,
             Self::StreamSessionCompleted { metadata, .. } => metadata,
+            // MCA P5:窗口亲和折减结果(观测面事件,不影响系统状态投递)
+            Self::WindowAffinityApplied { metadata, .. } => metadata,
+            // MCA A3:缓存亲和策略应用结果(观测面事件,不影响系统状态投递)
+            Self::CacheAffinityApplied { metadata, .. } => metadata,
         }
     }
 
@@ -2291,6 +2367,13 @@ impl NexusEvent {
             | Self::TuiChatCompleted { .. } => EventSeverity::Info,
             // TuiActionProgressed / TuiChatResponseChunk / TuiChatStatusChanged
             // 为高频流式事件,走 Normal(broadcast),由通配符分支覆盖
+            // MCA P5:窗口亲和折减结果 + MCA A3:缓存亲和策略应用结果 + MCA M0:跨厂商协商(均为观测面事件)
+            // WHY Normal:CrossVendorNegotiation 记录 PVL 辩论中的跨厂商去相关决策,
+            // 同 WindowAffinityApplied 等观测面事件,仅用于审计与监控留痕,
+            // 不阻塞系统关键路径,无需 mpsc 旁路投递。
+            Self::WindowAffinityApplied { .. }
+            | Self::CacheAffinityApplied { .. }
+            | Self::CrossVendorNegotiation { .. } => EventSeverity::Normal,
             _ => EventSeverity::Normal,
         }
     }
@@ -2421,11 +2504,17 @@ impl NexusEvent {
             Self::ParliamentStrategyCapChanged { .. } => "ParliamentStrategyCapChanged",
             // MCA M0(ADR-065):mca-gateway 事件(6 个新变体,仅 AffinityQuotaExhausted 为 Critical)
             Self::ModelAffinitySelected { .. } => "ModelAffinitySelected",
+            // MCA P2-1:跨厂商辩论通道选择
+            Self::CrossVendorNegotiation { .. } => "CrossVendorNegotiation",
             Self::ProviderDegraded { .. } => "ProviderDegraded",
             Self::AffinityCapabilityNegotiated { .. } => "AffinityCapabilityNegotiated",
             Self::AffinityQuotaExhausted { .. } => "AffinityQuotaExhausted",
             Self::AffinityUnknownField { .. } => "AffinityUnknownField",
             Self::StreamSessionCompleted { .. } => "StreamSessionCompleted",
+            // MCA P5:窗口亲和折减结果
+            Self::WindowAffinityApplied { .. } => "WindowAffinityApplied",
+            // MCA A3:缓存亲和策略应用结果
+            Self::CacheAffinityApplied { .. } => "CacheAffinityApplied",
         }
     }
 }

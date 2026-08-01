@@ -21,7 +21,12 @@ use nexus_contracts::affinity::{
 };
 
 /// 构造能力集(测试辅助)
-fn caps(tool_calling: bool, thinking: ThinkingSupport, window: u32, state: StatePreservationPolicy) -> CapabilitySet {
+fn caps(
+    tool_calling: bool,
+    thinking: ThinkingSupport,
+    window: u32,
+    state: StatePreservationPolicy,
+) -> CapabilitySet {
     let mut c = CapabilitySet::minimal_text(window, 8192);
     c.tool_calling = tool_calling;
     c.thinking = thinking;
@@ -70,7 +75,12 @@ async fn quota_switch_full_chain_preserves_session_continuity() {
 
     // ---- 步骤 2:csn 按能力相似度选替代通道 ----
     // 耗尽通道能力:工具 + OnOff 思考 + 1M 窗口 + None 守恒(DeepSeek)
-    let exhausted_caps = caps(true, ThinkingSupport::OnOff, 1_000_000, StatePreservationPolicy::None);
+    let exhausted_caps = caps(
+        true,
+        ThinkingSupport::OnOff,
+        1_000_000,
+        StatePreservationPolicy::None,
+    );
     let candidates = vec![
         // 候选 A:GLM(工具 + EffortLevels + 1M + BlockPreservation)—— 能力接近
         (
@@ -85,11 +95,16 @@ async fn quota_switch_full_chain_preserves_session_continuity() {
         // 候选 B:Step(缺工具 + 256K 小窗口)—— 能力差,距离大
         (
             "step_fun/step-3.5-flash-2603".to_string(),
-            caps(false, ThinkingSupport::OnOff, 262_144, StatePreservationPolicy::None),
+            caps(
+                false,
+                ThinkingSupport::OnOff,
+                262_144,
+                StatePreservationPolicy::None,
+            ),
         ),
     ];
-    let substitute = csn_substitutor::select_substitute(&exhausted_caps, &candidates)
-        .expect("必须选出替代通道");
+    let substitute =
+        csn_substitutor::select_substitute(&exhausted_caps, &candidates).expect("必须选出替代通道");
     assert_eq!(substitute, "zhipu/glm-5.2", "应选能力最相似的 GLM 接管");
 
     // ---- 步骤 3:会话状态按新通道(GLM,BlockPreservation)迁移 ----
@@ -117,19 +132,26 @@ async fn quota_switch_full_chain_preserves_session_continuity() {
     ];
     // 新通道 GLM 为 BlockPreservation:思考块保留
     let migrated = migrate_history(&history, StatePreservationPolicy::BlockPreservation);
-    assert_eq!(migrated.dropped_thinking_blocks, 0, "BlockPreservation 不丢思考块");
+    assert_eq!(
+        migrated.dropped_thinking_blocks, 0,
+        "BlockPreservation 不丢思考块"
+    );
 
     // ---- 步骤 4:会话连续性校验 ----
     // 用户消息(含哨兵)逐字幸存;可见文本跨通道切换不丢
-    let user_survived = migrated.messages[0].blocks.iter().any(|b| matches!(
-        b,
-        ContentBlock::Text { text } if text.contains(sentinel)
-    ));
+    let user_survived = migrated.messages[0].blocks.iter().any(|b| {
+        matches!(
+            b,
+            ContentBlock::Text { text } if text.contains(sentinel)
+        )
+    });
     assert!(user_survived, "用户消息哨兵必须跨通道切换幸存(会话连续性)");
-    let assistant_text_survived = migrated.messages[1].blocks.iter().any(|b| matches!(
-        b,
-        ContentBlock::Text { text } if text.as_ref() == "耗尽前的回答"
-    ));
+    let assistant_text_survived = migrated.messages[1].blocks.iter().any(|b| {
+        matches!(
+            b,
+            ContentBlock::Text { text } if text.as_ref() == "耗尽前的回答"
+        )
+    });
     assert!(assistant_text_survived, "助手可见文本必须跨通道幸存");
 }
 

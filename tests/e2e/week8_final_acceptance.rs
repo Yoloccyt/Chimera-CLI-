@@ -121,6 +121,8 @@ fn test_week2_quest_repo_router() {
             },
             estimated_tokens: 100,
             strategy: model_router::RoutingStrategy::Lite,
+            // MCA P2: 端到端验收测试使用标准思考模式
+            thinking_pref: nexus_contracts::affinity::ThinkingPreference::Standard,
         };
         let decision = router.route(req).await.expect("Model Router 路由失败");
         assert!(!decision.model_id.is_empty(), "Model Router 应选中非空模型");

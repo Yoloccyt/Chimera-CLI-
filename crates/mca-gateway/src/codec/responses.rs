@@ -22,6 +22,7 @@ use nexus_contracts::affinity::{
 use serde_json::{json, Value};
 
 use super::DecodedResponse;
+use crate::capability::{negotiate_thinking, ThinkingDirective};
 use crate::error::AffinityError;
 
 /// OpenAI Responses API 无状态码器
@@ -41,6 +42,21 @@ impl ResponsesCodec {
         });
         if !request.tools.is_empty() {
             body["tools"] = build_tools(request)?;
+        }
+
+        // 思考参数映射:能力协商产出 → Responses 方言原生参数(P0-3)
+        //   - Responses 方言:reasoning={} 开启思考,reasoning={effort:level} 指定档位
+        //   - 不支持思考或 Fast 偏好:不发 reasoning 参数(P3:未声明的字段一律不发)
+        let (thinking_dir, _degraded) =
+            negotiate_thinking(&spec.capabilities.thinking, request.thinking_pref);
+        match thinking_dir {
+            ThinkingDirective::Off => { /* 不发 reasoning 参数 */ }
+            ThinkingDirective::On => {
+                body["reasoning"] = json!({});
+            }
+            ThinkingDirective::Effort(level) => {
+                body["reasoning"] = json!({"effort": level.as_ref()});
+            }
         }
         Ok(body)
     }
@@ -421,5 +437,39 @@ mod tests {
             ResponsesCodec.parse_response(br#"{"no_output": true}"#),
             Err(AffinityError::Protocol { .. })
         ));
+    }
+
+    // ── thinking 参数映射测试(P0-3) ──
+
+    #[test]
+    fn build_request_with_reasoning_effort() {
+        // EffortLevels 通道 + Deep 偏好 → reasoning.effort=最高档
+        let mut spec = spec();
+        spec.capabilities.thinking =
+            nexus_contracts::affinity::ThinkingSupport::EffortLevels(vec![
+                "low".into(),
+                "medium".into(),
+                "high".into(),
+            ]);
+        let mut req = sample_request(false);
+        req.thinking_pref = ThinkingPreference::Deep;
+        let body = ResponsesCodec.build_request(&spec, &req).unwrap();
+        assert_eq!(
+            body["reasoning"]["effort"], "high",
+            "Responses 方言 reasoning.effort 应为最高档"
+        );
+    }
+
+    #[test]
+    fn build_request_without_thinking_skips_reasoning() {
+        // None 通道 + Fast 偏好 → 不发 reasoning 参数
+        let spec = spec(); // spec() 默认 ThinkingSupport::None
+        let mut req = sample_request(false);
+        req.thinking_pref = ThinkingPreference::Fast;
+        let body = ResponsesCodec.build_request(&spec, &req).unwrap();
+        assert!(
+            body.get("reasoning").is_none(),
+            "None 通道不应发 reasoning 参数"
+        );
     }
 }

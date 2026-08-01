@@ -277,10 +277,10 @@ pub enum HarnessSpecError {
     /// spec 试图修改不可进化面（contracts/hops 引用不可进化面资源）
     ///
     /// 字段: (位置, 不可进化面标识)
-    /// - 位置: 字段在 spec 中的位置描述（如 "contracts[0].from"）
+    /// - 位置: 字段在 spec 中的位置描述（如 "contracts\[0\].from"）
     /// - 不可进化面标识: ImmutableSurface::as_str() 返回值
     ImmutableSurfaceViolation {
-        /// 字段位置描述（如 "contracts[0].from"）
+        /// 字段位置描述（如 "contracts\[0\].from"）
         location: String,
         /// 不可进化面标识
         surface: ImmutableSurface,
@@ -377,7 +377,7 @@ impl std::error::Error for HarnessSpecError {}
 /// task_type = "code_refactor"      # 任务类型（可选）
 /// immutable = false
 ///
-/// [[contracts]]
+/// \[\[contracts\]\]
 /// name = "no_panic"                # P2-W5.1 简化字段（向后兼容）
 /// property = "fuzz_target_must_not_panic"
 /// description = "Fuzz target must not panic on any input"
@@ -386,9 +386,9 @@ impl std::error::Error for HarnessSpecError {}
 /// to = "orchestrator"              # 契约目标 Agent
 /// fields = ["veto_reason", "evidence_block_ids"]
 ///
-/// [[hops]]
+/// \[\[hops\]\]
 /// name = "generate_input"
-/// input_type = "Vec<u8>"
+/// input_type = "`Vec<u8>`"
 /// output_type = "ParseResult"
 /// contracts = ["no_panic"]
 /// description = "Generate fuzz input"
@@ -486,7 +486,7 @@ pub struct ContractSpec {
 
     /// 契约来源 Agent（设计文档 §7.2 扩展字段，P4-W15.1.1）
     ///
-    /// WHY: 设计文档 §7.2 [[contracts]] from = "Skeptic"
+    /// WHY: 设计文档 §7.2 \[\[contracts\]\] from = "Skeptic"
     /// - 标识契约的发起方 Agent
     /// - validate() 检查 from 是否引用不可进化面（如 "AsaIntervention"）
     #[serde(default)]
@@ -494,7 +494,7 @@ pub struct ContractSpec {
 
     /// 契约目标 Agent（设计文档 §7.2 扩展字段，P4-W15.1.1）
     ///
-    /// WHY: 设计文档 §7.2 [[contracts]] to = "orchestrator"
+    /// WHY: 设计文档 §7.2 \[\[contracts\]\] to = "orchestrator"
     /// - 标识契约的接收方 Agent
     /// - validate() 检查 to 是否引用不可进化面
     #[serde(default)]
@@ -502,7 +502,7 @@ pub struct ContractSpec {
 
     /// 契约字段列表（设计文档 §7.2 扩展字段，P4-W15.1.1）
     ///
-    /// WHY: 设计文档 §7.2 [[contracts]] fields = ["veto_reason", ...]
+    /// WHY: 设计文档 §7.2 \[\[contracts\]\] fields = ["veto_reason", ...]
     /// - 契约涉及的字段名列表
     /// - validate() 检查 fields 是否引用不可进化面资源
     #[serde(default)]
@@ -518,7 +518,7 @@ pub struct ContractSpec {
 pub struct HopSpec {
     /// 步骤名称(在 HarnessSpec 内唯一，如 "generate_input")
     pub name: String,
-    /// 输入类型(DSL 类型表达式，如 "Vec<u8>")
+    /// 输入类型(DSL 类型表达式，如 "`Vec<u8>`")
     #[serde(default)]
     pub input_type: Option<String>,
     /// 输出类型(DSL 类型表达式，如 "ParseResult")
@@ -533,7 +533,7 @@ pub struct HopSpec {
 
     /// 执行顺序（设计文档 §7.2 扩展字段，P4-W15.1.1）
     ///
-    /// WHY: 设计文档 §7.2 [[hops]] order = ["Architect.propose", ...]
+    /// WHY: 设计文档 §7.2 \[\[hops\]\] order = ["Architect.propose", ...]
     /// - Agent 调用顺序列表（"Agent.role" 格式）
     /// - validate() 检查 order 是否为空，且每个元素是否引用不可进化面
     #[serde(default)]
@@ -541,7 +541,7 @@ pub struct HopSpec {
 
     /// 否决处理策略（设计文档 §7.2 扩展字段，P4-W15.1.1）
     ///
-    /// WHY: 设计文档 §7.2 [[hops]] on_veto = "replan(max=2)"
+    /// WHY: 设计文档 §7.2 \[\[hops\]\] on_veto = "replan(max=2)"
     /// - 否决时的处理策略（如 "replan(max=2)" / "abort" / "EscalateToHuman"）
     /// - validate() 检查 on_veto 是否引用不可进化面操作
     #[serde(default)]
@@ -549,7 +549,7 @@ pub struct HopSpec {
 
     /// 回退策略（设计文档 §7.2 扩展字段，P4-W15.1.1）
     ///
-    /// WHY: 设计文档 §7.2 [[hops]] fallback = "EscalateToHuman"
+    /// WHY: 设计文档 §7.2 \[\[hops\]\] fallback = "EscalateToHuman"
     /// - 失败时的回退策略
     /// - validate() 检查 fallback 是否引用不可进化面操作
     #[serde(default)]
@@ -990,7 +990,7 @@ mod tests {
             }],
             hops: vec![HopSpec {
                 name: "generate_input".to_string(),
-                input_type: Some("Vec<u8>".to_string()),
+                input_type: Some("`Vec<u8>`".to_string()),
                 output_type: Some("ParseResult".to_string()),
                 contracts: vec!["no_panic".to_string()],
                 description: None,
@@ -1179,11 +1179,11 @@ mod tests {
         assert!(format!("{}", err).contains("meta.version"));
 
         let err = HarnessSpecError::ImmutableSurfaceViolation {
-            location: "contracts[0].from".to_string(),
+            location: "contracts\\[0\\].from".to_string(),
             surface: ImmutableSurface::CriticalSkepticVeto,
         };
         let msg = format!("{}", err);
-        assert!(msg.contains("contracts[0].from"));
+        assert!(msg.contains("contracts\\[0\\].from"));
         assert!(msg.contains("critical-skeptic-veto"));
     }
 
@@ -1219,7 +1219,7 @@ mod tests {
             }],
             hops: vec![HopSpec {
                 name: "generate_input".to_string(),
-                input_type: Some("Vec<u8>".to_string()),
+                input_type: Some("`Vec<u8>`".to_string()),
                 output_type: Some("ParseResult".to_string()),
                 contracts: vec!["no_panic".to_string()],
                 description: None,
@@ -1309,7 +1309,7 @@ mod tests {
         let err = spec.validate().unwrap_err();
         match err {
             HarnessSpecError::ImmutableSurfaceViolation { location, surface } => {
-                assert_eq!(location, "contracts[0].from");
+                assert_eq!(location, "contracts\\[0\\].from");
                 assert_eq!(surface, ImmutableSurface::CriticalSkepticVeto);
             }
             other => panic!("期望 ImmutableSurfaceViolation，实际: {:?}", other),
@@ -1469,7 +1469,7 @@ mod tests {
             }],
             hops: vec![HopSpec {
                 name: "generate_input".to_string(),
-                input_type: Some("Vec<u8>".to_string()),
+                input_type: Some("`Vec<u8>`".to_string()),
                 output_type: Some("ParseResult".to_string()),
                 contracts: vec!["no_panic".to_string()],
                 description: None,
@@ -1527,7 +1527,7 @@ mod tests {
         assert!(input.contains("meta.task_type=fuzz"));
         assert!(input.contains("contracts[0].name=no_panic"));
         assert!(input.contains("contracts[0].property=fuzz_target_must_not_panic"));
-        assert!(input.contains("contracts[0].from=Architect"));
+        assert!(input.contains("contracts\\[0\\].from=Architect"));
         assert!(input.contains("contracts[0].to=orchestrator"));
         assert!(input.contains("contracts[0].fields=veto_reason"));
         assert!(input.contains("hops[0].name=generate_input"));

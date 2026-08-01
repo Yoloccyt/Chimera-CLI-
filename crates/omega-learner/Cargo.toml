@@ -30,6 +30,11 @@ uuid = { workspace = true }
 # rand:经验回放池随机采样(P4-W16.2.1)— off-policy RL 训练需均匀采样
 # WHY workspace 已声明:proptest 等 crate 间接使用,直接声明确保版本一致
 rand = { workspace = true }
+# tokio:异步事件订阅(s9_integration 后台任务订阅 StreamSessionCompleted)
+# WHY 生产依赖:s9_integration 使用 tokio::spawn 启动后台事件订阅任务,
+# 不在关键路径同步调用(§3.4.1 原则 1:OMEGA 四定律守恒,Ω-Event 异步通信)。
+# 与 dev-dependencies 的 tokio 共享 workspace 版本。
+tokio = { workspace = true }
 
 [dev-dependencies]
 # 异步测试运行器(LinUCB select_arm 非 async,但 feedback 订阅器集成测试需 tokio)
@@ -64,4 +69,11 @@ harness = false
 # WHY SLO:record 每学习步调用需 <1µs;assess_trend 周期性评估需 <100µs
 [[bench]]
 name = "regret_collection"
+harness = false
+
+# P1-2: S9 63 臂场景下查询性能基准(7 厂商 × 3 模型 × 3 思考档)
+# WHY 新增:验证 63 臂 select_route/observe 延迟 < 100μs,
+# 超过 ~40 臂典型场景,压力测试确保性能红线合规。
+[[bench]]
+name = "s9_bench"
 harness = false

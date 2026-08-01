@@ -418,7 +418,13 @@ impl MembraneFilter {
             // 陈述(喂 efficiency-monitor/acb-governor/repo-wiki),外环本地消化
             | NexusEvent::AffinityCapabilityNegotiated { .. }
             | NexusEvent::AffinityUnknownField { .. }
-            | NexusEvent::StreamSessionCompleted { .. } => EventCategory::ReadMetric,
+            | NexusEvent::StreamSessionCompleted { .. }
+            // MCA P5:窗口亲和折减结果(HCW 集成模块发布,观察性事实陈述,
+            // 外环本地消化,不需穿膜进内环)
+            | NexusEvent::WindowAffinityApplied { .. }
+            // MCA A3:缓存亲和策略应用结果(mca-gateway codec 发布,
+            // 观察性事实陈述,外环本地消化,不需穿膜进内环)
+            | NexusEvent::CacheAffinityApplied { .. } => EventCategory::ReadMetric,
 
             // === NormalLow:剩余 Normal 事件(默认本地消化) ===
             // 包括 Quest 生命周期/控制请求/路由执行结果/Agent 协作等
@@ -434,6 +440,9 @@ impl MembraneFilter {
             // MCA M0(ADR-065):通道路由决策留痕(与 ModelRouteSelected 同族,
             // L6/L1 路由层产物,不直接影响内环状态)
             | NexusEvent::ModelAffinitySelected { .. }
+            // MCA P2-1:跨厂商辩论通道选择(parliament 发布,辩论准备阶段,
+            // 不直接影响内环记忆/策略/安全状态)
+            | NexusEvent::CrossVendorNegotiation { .. }
             | NexusEvent::QuestCreated { .. }
             | NexusEvent::QuestProgressUpdated { .. }
             | NexusEvent::QuestListUpdated { .. }

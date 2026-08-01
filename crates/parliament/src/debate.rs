@@ -26,6 +26,8 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::config::ParliamentConfig;
+// MCA P2-1:跨厂商辩论策略 — Skeptic 与 Producer 异厂商通道
+use crate::cross_vendor::CrossVendorDebate;
 use crate::error::ParliamentError;
 // ADR-064:质量趋势分析器 — 滑动窗口跟踪共识质量趋势
 use crate::quality_trend::QualityTrendAnalyzer;
@@ -246,6 +248,12 @@ pub struct Parliament {
     /// Mutex 保护：同步访问，不跨 .await 持锁(§4.1 约定)。
     /// 毒锁降级:使用 `unwrap_or_else(|e| e.into_inner())` 恢复。
     quality_trend: std::sync::Mutex<QualityTrendAnalyzer>,
+    /// MCA P2-1:跨厂商辩论策略 — Skeptic 与 Producer 异厂商通道(ADR-067)
+    ///
+    /// 当 Some 时，在辩论前通过 `prepare_debate` 确定每个角色的厂商分配，
+    /// 确保 Skeptic 与 Producer 使用不同厂商通道，修复同源相关失败(病理 D3)。
+    /// None = 未启用(向后兼容)，既有的 deliberate 行为不受影响。
+    cross_vendor_debate: Option<CrossVendorDebate>,
 }
 
 impl Parliament {
@@ -280,6 +288,8 @@ impl Parliament {
             )),
             deliberation_cache: std::sync::Mutex::new(DeliberationCache::new(None)),
             quality_trend: std::sync::Mutex::new(QualityTrendAnalyzer::new(None)),
+            // MCA P2-1:默认禁用跨厂商辩论(向后兼容，既有的 deliberate 行为不受影响)
+            cross_vendor_debate: None,
         }
     }
 
@@ -512,14 +522,51 @@ impl Parliament {
         }
 
         // ============================================================
+        // 步骤 0.5:跨厂商辩论准备(MCA P2-1)
+        // ============================================================
+        // 如果启用了跨厂商辩论，在辩论前确定每个角色的厂商分配
+        // 确保 Skeptic 与 Producer 使用不同厂商通道
+        let cross_vendor_assignment = if let Some(ref cvd) = self.cross_vendor_debate {
+            match cvd.prepare_debate(quest, proposal) {
+                Ok(assignment) => {
+                    info!(
+                        quest_id = %quest.quest_id,
+                        producer = ?assignment.producer_provider,
+                        skeptic = ?assignment.skeptic_provider,
+                        enforced = assignment.cross_vendor_enforced,
+                        "跨厂商辩论:角色分配完成"
+                    );
+                    Some(assignment)
+                }
+                Err(e) => {
+                    warn!(error = %e, "跨厂商辩论准备失败，使用默认通道");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // ============================================================
         // 步骤 1:按策略分派(三路径互斥)
         // ============================================================
         // 各路径额外返回度量载体(FastPath 无投票为 None),供下方统一
         // 发布 DebateCompleted 时携带投票率与多维共识质量。
+        // MCA P2-1:传递 cross_vendor_assignment 确保 Skeptic 角色解析
+        // 使用 AffinityRouter 的跨厂商分配(异厂商通道影响 Skeptic 置信度)。
         let (consensus, metrics) = match effective_strategy {
-            ActivationStrategy::FastPath => self.deliberate_fastpath(quest, proposal).await?,
-            ActivationStrategy::Simplified => self.deliberate_simplified(quest, proposal).await?,
-            ActivationStrategy::Full => self.deliberate_full(quest, proposal).await?,
+            ActivationStrategy::FastPath => {
+                self.deliberate_fastpath(quest, proposal, cross_vendor_assignment.as_ref())
+                    .await?
+            }
+            ActivationStrategy::Simplified => {
+                self.deliberate_simplified(quest, proposal, cross_vendor_assignment.as_ref())
+                    .await?
+            }
+            ActivationStrategy::Full => {
+                self.deliberate_full(quest, proposal, cross_vendor_assignment.as_ref())
+                    .await?
+            }
         };
 
         // ============================================================
@@ -615,6 +662,9 @@ impl Parliament {
     /// 决议哈希用于 GSOE 进化追踪与审计去重,即使无 Opinion 也需生成。
     /// `compute_decision_hash(proposal, &[])` 仅哈希提案字段。
     ///
+    /// # 参数
+    /// - `_cross_vendor`:跨厂商辩论角色分配（FastPath 无 Opinion 生成，仅接收保持签名一致）
+    ///
     /// # 返回
     /// `(共识, None)` — FastPath 无投票,投票率恒为 `None`
     /// (DebateCompleted 事件的 weighted_approval_rate 随之为 None)。
@@ -622,6 +672,7 @@ impl Parliament {
         &self,
         quest: &Quest,
         proposal: &Proposal,
+        _cross_vendor: Option<&crate::cross_vendor::CrossVendorAssignment>,
     ) -> Result<(Consensus, Option<DebateVoteMetrics>), ParliamentError> {
         // 发布 DebateStarted 事件(participant_count=0,标记 FastPath)
         info!(
@@ -670,6 +721,9 @@ impl Parliament {
     /// - 跳过 Librarian(知识检索)与 Bard(创意发散):中等风险场景下
     ///   这两个维度的推理增益小于协调成本
     ///
+    /// # 参数
+    /// - `cross_vendor`:跨厂商辩论角色分配（用于 Skeptic 角色解析，确保异厂商通道影响置信度）
+    ///
     /// # 返回
     /// `(共识, Some((加权赞成率, 参与率)))` — 投票率取自 `VoteResult`,
     /// 供 DebateCompleted 事件携带(共识质量 proxy,协调度量接线闭环)。
@@ -677,6 +731,7 @@ impl Parliament {
         &self,
         quest: &Quest,
         proposal: &Proposal,
+        cross_vendor: Option<&crate::cross_vendor::CrossVendorAssignment>,
     ) -> Result<(Consensus, Option<DebateVoteMetrics>), ParliamentError> {
         // 简化辩论的 3 个关键角色
         const SIMPLIFIED_ROLES: [Role; 3] = [Role::Architect, Role::Skeptic, Role::Optimizer];
@@ -696,9 +751,9 @@ impl Parliament {
         )
         .await;
 
-        // 并发收集 3 关键角色 Opinion
+        // 并发收集 3 关键角色 Opinion（传递 cross_vendor 用于 Skeptic 角色解析）
         let opinions = self
-            .collect_opinions_filtered(quest, proposal, &SIMPLIFIED_ROLES)
+            .collect_opinions_filtered(quest, proposal, &SIMPLIFIED_ROLES, cross_vendor)
             .await?;
 
         // 发布 VoteCast 事件(3 个角色)
@@ -758,12 +813,16 @@ impl Parliament {
     /// 将 Full 路径从 `deliberate_with_policy` 主体抽离,使三策略
     /// (FastPath/Simplified/Full)各自独立方法,便于单测与未来扩展。
     ///
+    /// # 参数
+    /// - `cross_vendor`:跨厂商辩论角色分配（用于 Skeptic 角色解析，确保异厂商通道影响置信度）
+    ///
     /// # 返回
     /// `(共识, Some((加权赞成率, 参与率)))` — 语义同 `deliberate_simplified`。
     async fn deliberate_full(
         &self,
         quest: &Quest,
         proposal: &Proposal,
+        cross_vendor: Option<&crate::cross_vendor::CrossVendorAssignment>,
     ) -> Result<(Consensus, Option<DebateVoteMetrics>), ParliamentError> {
         // 发布 DebateStarted 事件(5 参与者)
         info!(
@@ -780,8 +839,8 @@ impl Parliament {
         )
         .await;
 
-        // 5 角色并行辩论,并发收集 Opinion
-        let opinions = self.collect_opinions(quest, proposal).await?;
+        // 5 角色并行辩论,并发收集 Opinion（传递 cross_vendor 用于 Skeptic 角色解析）
+        let opinions = self.collect_opinions(quest, proposal, cross_vendor).await?;
 
         // 发布 VoteCast 事件(5 个角色)
         self.publish_vote_events(proposal, &opinions).await;
@@ -985,7 +1044,7 @@ impl Parliament {
         )
         .await;
 
-        let opinions = self.collect_opinions(quest, proposal).await?;
+        let opinions = self.collect_opinions(quest, proposal, None).await?;
         self.publish_vote_events(proposal, &opinions).await;
 
         let total_roles = self.registry.count();
@@ -1092,17 +1151,21 @@ impl Parliament {
     /// 使用 `FuturesUnordered` 流式处理,5 角色 Opinion 生成并发执行。
     /// 超时后已收集的 Opinion 保留,未完成角色视为弃权(不参与投票)。
     ///
+    /// # 参数
+    /// - `cross_vendor`:跨厂商辩论角色分配（传递到 generate_opinion 用于 Skeptic 角色解析）
+    ///
     /// # 错误
     /// - `DebateTimeout`:超时后无任何 Opinion 收集到(极端情况)
     async fn collect_opinions(
         &self,
         quest: &Quest,
         proposal: &Proposal,
+        cross_vendor: Option<&crate::cross_vendor::CrossVendorAssignment>,
     ) -> Result<Vec<Opinion>, ParliamentError> {
         // 委托给 collect_opinions_filtered,传入全部 5 角色
         // WHY 委托:避免 5 角色路径与 filtered 路径逻辑重复,
         // collect_opinions_filtered 是统一的并发收集实现
-        self.collect_opinions_filtered(quest, proposal, &Role::all())
+        self.collect_opinions_filtered(quest, proposal, &Role::all(), cross_vendor)
             .await
     }
 
@@ -1120,6 +1183,7 @@ impl Parliament {
     /// - `quest`:关联的 Quest
     /// - `proposal`:待审议的提案
     /// - `roles`:参与辩论的角色集合(Full=5 角色,Simplified=3 角色)
+    /// - `cross_vendor`:跨厂商辩论角色分配（传递到 generate_opinion 用于 Skeptic 角色解析）
     ///
     /// # 错误
     /// - `DebateTimeout`:超时后无任何 Opinion 收集到(极端情况)
@@ -1128,6 +1192,7 @@ impl Parliament {
         quest: &Quest,
         proposal: &Proposal,
         roles: &[Role],
+        cross_vendor: Option<&crate::cross_vendor::CrossVendorAssignment>,
     ) -> Result<Vec<Opinion>, ParliamentError> {
         let timeout = Duration::from_millis(self.config.debate_timeout_ms);
         let expected = roles.len();
@@ -1139,16 +1204,23 @@ impl Parliament {
         // 通过 deref 强制从 &Arc<T> 得到 &T;收集后计票语义零改动。
         let quest_arc = std::sync::Arc::new(quest.clone());
         let proposal_arc = std::sync::Arc::new(proposal.clone());
+        // MCA P2-1:Arc 共享 cross_vendor assignment（若存在），避免每角色深拷贝
+        // 先 cloned() 解引用再 Arc::new，避免 `Arc::new(&T)` 产生双重引用
+        let cross_vendor_arc = cross_vendor.cloned().map(std::sync::Arc::new);
 
         // 构建角色 Opinion 生成 future 流
-        let mut stream: FuturesUnordered<_> = roles
-            .iter()
-            .map(|&role| {
-                let quest = std::sync::Arc::clone(&quest_arc);
-                let proposal = std::sync::Arc::clone(&proposal_arc);
-                async move { generate_opinion(role, &quest, &proposal).await }
-            })
-            .collect();
+        let mut stream: FuturesUnordered<_> =
+            roles
+                .iter()
+                .map(|&role| {
+                    let quest = std::sync::Arc::clone(&quest_arc);
+                    let proposal = std::sync::Arc::clone(&proposal_arc);
+                    let cross_vendor = cross_vendor_arc.as_ref().map(std::sync::Arc::clone);
+                    async move {
+                        generate_opinion(role, &quest, &proposal, cross_vendor.as_deref()).await
+                    }
+                })
+                .collect();
 
         // 并发收集,带超时
         let mut opinions = Vec::new();
@@ -1225,6 +1297,46 @@ impl Parliament {
         &self.event_bus
     }
 
+    /// 启用跨厂商辩论（MCA P2-1）
+    ///
+    /// 在辩论前通过 `AffinityRouter` 确定每个角色的厂商分配，
+    /// 确保 Skeptic 与 Producer 使用不同厂商通道，修复同源相关失败(病理 D3)。
+    ///
+    /// # 参数
+    /// - `config`:跨厂商辩论配置（启用/禁用、回退策略）
+    ///
+    /// # 设计
+    /// 使用 `ProviderAffinityRegistry::default()` 创建空注册表（无预设绑定）。
+    /// 外部调用方可通过 `registry()` 获取注册表引用后手动绑定角色。
+    /// 默认空注册表时，`resolve_provider` 会从 proposal 上下文推断默认 provider。
+    pub fn enable_cross_vendor_debate(&mut self, config: crate::cross_vendor::CrossVendorConfig) {
+        use crate::cross_vendor::AffinityRouter;
+        use std::sync::Arc;
+
+        let registry = Arc::new(crate::provider_affinity::ProviderAffinityRegistry::default());
+        let router = AffinityRouter::new(config, registry);
+        self.cross_vendor_debate = Some(CrossVendorDebate::new(router, self.event_bus.clone()));
+    }
+
+    /// 启用跨厂商辩论并注入预配置的 ProviderAffinityRegistry（MCA P2-1 E2E 测试用）
+    ///
+    /// 与 `enable_cross_vendor_debate` 的区别：允许外部传入已绑定角色的注册表，
+    /// 使测试可以设置特定的厂商绑定而无需通过 `infer_default_provider` 推断。
+    ///
+    /// # 参数
+    /// - `config`:跨厂商辩论配置
+    /// - `registry`:预配置的 ProviderAffinityRegistry（已绑定角色）
+    pub fn enable_cross_vendor_debate_with_registry(
+        &mut self,
+        config: crate::cross_vendor::CrossVendorConfig,
+        registry: std::sync::Arc<crate::provider_affinity::ProviderAffinityRegistry>,
+    ) {
+        use crate::cross_vendor::AffinityRouter;
+
+        let router = AffinityRouter::new(config, registry);
+        self.cross_vendor_debate = Some(CrossVendorDebate::new(router, self.event_bus.clone()));
+    }
+
     /// 获取 Skeptic 否决者引用(测试与监控用)
     pub fn skeptic(&self) -> &Skeptic {
         &self.skeptic
@@ -1259,16 +1371,30 @@ fn consensus_outcome_label(consensus: &Consensus) -> &'static str {
 /// # 各角色决策规则(占位)
 /// - **Architect**:任务数少(≤3)→ 赞成(架构简单),多 → 反对(复杂度高)
 /// - **Skeptic**:risk_level > 0.5 → 反对(风险厌恶),0.3-0.5 → 弃权,< 0.3 → 赞成
+///   若跨厂商辩论启用且 cross_vendor_enforced=true,置信度 +0.05(异厂商通道独立性更强)
 /// - **Optimizer**:Fast 模式 → 赞成(快速),Standard → 弃权,Deep → 反对(慢)
 /// - **Librarian**:任务数 ≤ 5 → 赞成(有先例),> 5 → 弃权(无先例)
 /// - **Bard**:总是赞成(创意发散,鼓励尝试)
-async fn generate_opinion(role: Role, quest: &Quest, proposal: &Proposal) -> Opinion {
+///
+/// # 参数
+/// - `cross_vendor`:跨厂商辩论角色分配（可选，Skeptic 角色使用异厂商通道时置信度提升）
+async fn generate_opinion(
+    role: Role,
+    quest: &Quest,
+    proposal: &Proposal,
+    cross_vendor: Option<&crate::cross_vendor::CrossVendorAssignment>,
+) -> Opinion {
     // 模拟异步 Opinion 生成(Week 6 接入真实模型后替换)
     // WHY yield:让出调度,允许 FuturesUnordered 并发处理其他角色
     tokio::task::yield_now().await;
 
     let task_count = quest.tasks.len();
     let risk = proposal.risk_level;
+
+    // MCA P2-1:判断 Skeptic 是否使用异厂商通道（跨厂商辩论启用且强制去相关）
+    let skeptic_cross_vendor = cross_vendor
+        .filter(|cv| cv.cross_vendor_enforced)
+        .map(|cv| cv.skeptic_provider.as_str().to_string());
 
     match role {
         Role::Architect => {
@@ -1291,26 +1417,39 @@ async fn generate_opinion(role: Role, quest: &Quest, proposal: &Proposal) -> Opi
         }
         Role::Skeptic => {
             // 怀疑者:风险厌恶,red team 视角
+            // 若跨厂商辩论启用且强制去相关,使用异厂商通道的 Skeptic 置信度更高
+            let base_confidence = if skeptic_cross_vendor.is_some() {
+                0.98 // 异厂商通道独立性更强,置信度更高
+            } else {
+                0.95
+            };
+
+            // 在 rationale 中注明跨厂商状态（如果启用）
+            let cross_vendor_note = match &skeptic_cross_vendor {
+                Some(provider) => format!("[跨厂商:Skeptic 来自 {provider},与 Producer 异厂商] "),
+                None => String::new(),
+            };
+
             if risk > 0.5 {
                 Opinion::new(
                     Role::Skeptic,
                     0.0,
-                    0.95,
-                    format!("高风险(risk={risk:.2}),否决"),
+                    base_confidence,
+                    format!("{cross_vendor_note}高风险(risk={risk:.2}),否决"),
                 )
             } else if risk > 0.3 {
                 Opinion::new(
                     Role::Skeptic,
                     0.5,
-                    0.70,
-                    format!("中风险(risk={risk:.2}),弃权"),
+                    (base_confidence - 0.25).max(0.5), // 弃权时置信度适中
+                    format!("{cross_vendor_note}中风险(risk={risk:.2}),弃权"),
                 )
             } else {
                 Opinion::new(
                     Role::Skeptic,
                     1.0,
-                    0.75,
-                    format!("低风险(risk={risk:.2}),赞成"),
+                    base_confidence - 0.03, // 赞成时信心略低于否决
+                    format!("{cross_vendor_note}低风险(risk={risk:.2}),赞成"),
                 )
             }
         }
@@ -1550,7 +1689,7 @@ mod tests {
         let proposal = make_proposal(0.2);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let opinion = rt.block_on(generate_opinion(Role::Architect, &quest, &proposal));
+        let opinion = rt.block_on(generate_opinion(Role::Architect, &quest, &proposal, None));
 
         // 2 任务 ≤ 3 → 赞成
         assert!(opinion.is_approve());
@@ -1562,7 +1701,7 @@ mod tests {
         let proposal = make_proposal(0.2);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let opinion = rt.block_on(generate_opinion(Role::Architect, &quest, &proposal));
+        let opinion = rt.block_on(generate_opinion(Role::Architect, &quest, &proposal, None));
 
         // 5 任务 > 3 → 反对
         assert!(opinion.is_reject());
@@ -1574,7 +1713,7 @@ mod tests {
         let proposal = make_proposal(0.8);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let opinion = rt.block_on(generate_opinion(Role::Skeptic, &quest, &proposal));
+        let opinion = rt.block_on(generate_opinion(Role::Skeptic, &quest, &proposal, None));
 
         // 高风险 → 反对
         assert!(opinion.is_reject());
@@ -1586,7 +1725,7 @@ mod tests {
         let proposal = make_proposal(0.4);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let opinion = rt.block_on(generate_opinion(Role::Skeptic, &quest, &proposal));
+        let opinion = rt.block_on(generate_opinion(Role::Skeptic, &quest, &proposal, None));
 
         // 中风险 → 弃权
         assert!(opinion.is_abstain());
@@ -1598,7 +1737,7 @@ mod tests {
         let proposal = make_proposal(0.2);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let opinion = rt.block_on(generate_opinion(Role::Skeptic, &quest, &proposal));
+        let opinion = rt.block_on(generate_opinion(Role::Skeptic, &quest, &proposal, None));
 
         // 低风险 → 赞成
         assert!(opinion.is_approve());
@@ -1610,7 +1749,7 @@ mod tests {
         let proposal = make_proposal(0.2);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let opinion = rt.block_on(generate_opinion(Role::Optimizer, &quest, &proposal));
+        let opinion = rt.block_on(generate_opinion(Role::Optimizer, &quest, &proposal, None));
 
         assert!(opinion.is_approve());
     }
@@ -1621,7 +1760,7 @@ mod tests {
         let proposal = make_proposal(0.2);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let opinion = rt.block_on(generate_opinion(Role::Optimizer, &quest, &proposal));
+        let opinion = rt.block_on(generate_opinion(Role::Optimizer, &quest, &proposal, None));
 
         assert!(opinion.is_reject());
     }
@@ -1632,7 +1771,7 @@ mod tests {
         let proposal = make_proposal(0.9);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let opinion = rt.block_on(generate_opinion(Role::Bard, &quest, &proposal));
+        let opinion = rt.block_on(generate_opinion(Role::Bard, &quest, &proposal, None));
 
         // Bard 总是赞成
         assert!(opinion.is_approve());
@@ -3214,5 +3353,474 @@ mod tests {
             // 策略必须是三选一
             proptest::prop_assert!(matches!(strategy, ActivationStrategy::FastPath | ActivationStrategy::Simplified | ActivationStrategy::Full));
         }
+    }
+
+    // ============================================================
+    // MCA P2-1:跨厂商辩论集成测试(ADR-067)
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_deliberate_with_policy_cross_vendor_skeptic_different() {
+        // 启用跨厂商辩论，调用 deliberate_with_policy(Full) 后验证 Skeptic 异厂商
+        // P7 硬约束：Skeptic 必须与 Producer 使用不同厂商通道
+        let bus = EventBus::new();
+        // WHY 先 subscribe 再创建 Parliament:避免 broadcast 静默丢失事件
+        // (bus.subscribe() 必须在 tokio::spawn() 之前同步调用)
+        let mut rx = bus.subscribe();
+
+        let mut parliament = Parliament::new(ParliamentConfig::default(), bus);
+        // 启用跨厂商辩论（默认配置：enabled=true, fallback=FallbackToSame）
+        parliament.enable_cross_vendor_debate(crate::cross_vendor::CrossVendorConfig::default());
+
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+
+        let _consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 从事件流中查找 CrossVendorNegotiation 事件
+        let mut found_event = false;
+        let mut skeptic_provider = String::new();
+        let mut producer_provider = String::new();
+        let mut cross_vendor_enforced = false;
+
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(NexusEvent::CrossVendorNegotiation {
+                    skeptic_provider: sp,
+                    producer_provider: pp,
+                    cross_vendor_enforced: cve,
+                    ..
+                })) => {
+                    found_event = true;
+                    skeptic_provider = sp;
+                    producer_provider = pp;
+                    cross_vendor_enforced = cve;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            found_event,
+            "跨厂商辩论启用时应发布 CrossVendorNegotiation 事件"
+        );
+        assert!(
+            cross_vendor_enforced,
+            "跨厂商辩论应强制 Skeptic 与 Producer 异厂商"
+        );
+        assert_ne!(
+            skeptic_provider, producer_provider,
+            "P7 硬约束违反:Skeptic provider({skeptic_provider}) 应与 Producer provider({producer_provider}) 不同"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_deliberate_cross_vendor_skeptic_different() {
+        // 启用跨厂商辩论，调用 deliberate() 后验证 Skeptic 异厂商
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        let mut parliament = Parliament::new(ParliamentConfig::default(), bus);
+        parliament.enable_cross_vendor_debate(crate::cross_vendor::CrossVendorConfig::default());
+
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+
+        let _consensus = parliament.deliberate(&quest, &proposal).await.unwrap();
+
+        // 从事件流中查找 CrossVendorNegotiation 事件
+        let mut found_event = false;
+        let mut skeptic_provider = String::new();
+        let mut producer_provider = String::new();
+
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(NexusEvent::CrossVendorNegotiation {
+                    skeptic_provider: sp,
+                    producer_provider: pp,
+                    ..
+                })) => {
+                    found_event = true;
+                    skeptic_provider = sp;
+                    producer_provider = pp;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            found_event,
+            "deliberate() 启用跨厂商辩论时应发布 CrossVendorNegotiation 事件"
+        );
+        assert_ne!(
+            skeptic_provider, producer_provider,
+            "P7 硬约束违反:Skeptic provider({skeptic_provider}) 应与 Producer provider({producer_provider}) 不同"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_deliberate_with_policy_cross_vendor_disabled() {
+        // 不启用跨厂商辩论，验证不发布 CrossVendorNegotiation 事件
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 不调用 enable_cross_vendor_debate，默认 cross_vendor_debate=None
+        let parliament = Parliament::new(ParliamentConfig::default(), bus);
+
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.2);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+
+        let _consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 验证不发布 CrossVendorNegotiation 事件
+        let mut found_event = false;
+        for _ in 0..10 {
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Ok(NexusEvent::CrossVendorNegotiation { .. })) => {
+                    found_event = true;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+
+        assert!(
+            !found_event,
+            "跨厂商辩论禁用时不应发布 CrossVendorNegotiation 事件"
+        );
+    }
+
+    // ============================================================
+    // MCA P2-1 E2E:跨厂商辩论端到端场景验证(Parliament 级)
+    //
+    // 场景 1:ProviderBinding 创建 → Registry 绑定 → AffinityRouter 路由
+    //        → CrossVendorDebate prepare_debate → Parliament deliberate_with_policy
+    // 场景 2:至少 3 种不同厂商对组合(Zhipu→DeepSeek、DeepSeek→Zhipu、Moonshot→Zhipu)
+    // 场景 3:禁用跨厂商场景(Skeptic 与 Producer 同厂商)
+    // 场景 4:验证 CrossVendorNegotiation 事件通过 EventBus 正确送达
+    // ============================================================
+
+    /// 辅助：创建三方互异的 ProviderAffinityRegistry（含 producer/verifier/skeptic 三角色绑定）
+    fn make_e2e_registry(
+        producer: &nexus_contracts::affinity::ProviderId,
+        verifier: &nexus_contracts::affinity::ProviderId,
+        skeptic: &nexus_contracts::affinity::ProviderId,
+    ) -> std::sync::Arc<crate::provider_affinity::ProviderAffinityRegistry> {
+        use std::sync::Arc;
+
+        let registry = Arc::new(crate::provider_affinity::ProviderAffinityRegistry::new());
+
+        // 绑定 producer 角色：producer 厂商 = producer
+        let p_binding = crate::provider_affinity::ProviderBinding::new(
+            producer.clone(),
+            verifier.clone(),
+            skeptic.clone(),
+        );
+        registry
+            .bind_provider(crate::types::RoleId::new("role-producer"), p_binding)
+            .unwrap();
+
+        // 绑定 verifier 角色：producer 厂商 = verifier
+        let v_binding = crate::provider_affinity::ProviderBinding::new(
+            verifier.clone(),
+            producer.clone(),
+            skeptic.clone(),
+        );
+        registry
+            .bind_provider(crate::types::RoleId::new("role-verifier"), v_binding)
+            .unwrap();
+
+        // 绑定 skeptic 角色：producer 厂商 = skeptic
+        let s_binding = crate::provider_affinity::ProviderBinding::new(
+            skeptic.clone(),
+            producer.clone(),
+            verifier.clone(),
+        );
+        registry
+            .bind_provider(crate::types::RoleId::new("role-skeptic"), s_binding)
+            .unwrap();
+
+        registry
+    }
+
+    /// 场景 1+4:Parliament 级 E2E — Zhipu→DeepSeek 绑定
+    ///
+    /// 验证完整的端到端流程：
+    /// 1. ProviderBinding 创建 → Registry 绑定（通过 make_e2e_registry 辅助）
+    /// 2. AffinityRouter 路由（通过 enable_cross_vendor_debate_with_registry 注入）
+    /// 3. CrossVendorDebate prepare_debate（在 deliberate_with_policy 内部调用）
+    /// 4. CrossVendorNegotiation 事件通过 EventBus 送达且字段与 assignment 一致
+    /// 5. 辩论正常完成（共识达成）
+    #[tokio::test]
+    async fn test_e2e_cross_vendor_parliament_zhipu_deepseek() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        let mut parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let registry = make_e2e_registry(
+            &nexus_contracts::affinity::ProviderId::Zhipu,
+            &nexus_contracts::affinity::ProviderId::DeepSeek,
+            &nexus_contracts::affinity::ProviderId::MiniMax,
+        );
+        parliament.enable_cross_vendor_debate_with_registry(
+            crate::cross_vendor::CrossVendorConfig::default(),
+            registry,
+        );
+
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.5);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+        assert!(
+            consensus.is_reached(),
+            "E2E Zhipu→DeepSeek:正常提案应达成共识"
+        );
+
+        // 验证 CrossVendorNegotiation 事件通过 EventBus 送达
+        let mut found = false;
+        let mut event_producer = String::new();
+        let mut event_skeptic = String::new();
+        let mut event_cve = false;
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(NexusEvent::CrossVendorNegotiation {
+                    producer_provider,
+                    skeptic_provider,
+                    cross_vendor_enforced,
+                    ..
+                })) => {
+                    found = true;
+                    event_producer = producer_provider;
+                    event_skeptic = skeptic_provider;
+                    event_cve = cross_vendor_enforced;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            found,
+            "E2E Zhipu→DeepSeek:启用跨厂商时应发布 CrossVendorNegotiation 事件"
+        );
+        // 验证事件字段：producer 应为 zhipu
+        assert_eq!(
+            event_producer, "zhipu",
+            "E2E Zhipu→DeepSeek:producer 应为 zhipu"
+        );
+        // 验证事件字段：Skeptic 与 Producer 异厂商
+        assert_ne!(
+            event_skeptic, "zhipu",
+            "E2E Zhipu→DeepSeek:Skeptic 应与 Producer 异厂商"
+        );
+        // 验证事件字段：cross_vendor_enforced 应为 true
+        assert!(event_cve, "E2E Zhipu→DeepSeek:跨厂商应强制");
+    }
+
+    /// 场景 2:Parliament 级 E2E — DeepSeek→Zhipu 组合
+    #[tokio::test]
+    async fn test_e2e_cross_vendor_parliament_deepseek_zhipu() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        let mut parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let registry = make_e2e_registry(
+            &nexus_contracts::affinity::ProviderId::DeepSeek,
+            &nexus_contracts::affinity::ProviderId::Zhipu,
+            &nexus_contracts::affinity::ProviderId::MiniMax,
+        );
+        parliament.enable_cross_vendor_debate_with_registry(
+            crate::cross_vendor::CrossVendorConfig::default(),
+            registry,
+        );
+
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.5);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+        assert!(
+            consensus.is_reached(),
+            "E2E DeepSeek→Zhipu:正常提案应达成共识"
+        );
+
+        // 验证事件
+        let mut found = false;
+        let mut event_producer = String::new();
+        let mut event_skeptic = String::new();
+        let mut event_cve = false;
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(NexusEvent::CrossVendorNegotiation {
+                    producer_provider,
+                    skeptic_provider,
+                    cross_vendor_enforced,
+                    ..
+                })) => {
+                    found = true;
+                    event_producer = producer_provider;
+                    event_skeptic = skeptic_provider;
+                    event_cve = cross_vendor_enforced;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            found,
+            "E2E DeepSeek→Zhipu:应发布 CrossVendorNegotiation 事件"
+        );
+        assert_eq!(
+            event_producer, "deep_seek",
+            "E2E DeepSeek→Zhipu:producer 应为 deep_seek"
+        );
+        assert_ne!(
+            event_skeptic, "deep_seek",
+            "E2E DeepSeek→Zhipu:Skeptic 应与 Producer 异厂商"
+        );
+        assert!(event_cve, "E2E DeepSeek→Zhipu:跨厂商应强制");
+    }
+
+    /// 场景 2:Parliament 级 E2E — Moonshot→Zhipu 组合
+    #[tokio::test]
+    async fn test_e2e_cross_vendor_parliament_moonshot_zhipu() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        let mut parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let registry = make_e2e_registry(
+            &nexus_contracts::affinity::ProviderId::Moonshot,
+            &nexus_contracts::affinity::ProviderId::Zhipu,
+            &nexus_contracts::affinity::ProviderId::DeepSeek,
+        );
+        parliament.enable_cross_vendor_debate_with_registry(
+            crate::cross_vendor::CrossVendorConfig::default(),
+            registry,
+        );
+
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.5);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+
+        let consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+        assert!(
+            consensus.is_reached(),
+            "E2E Moonshot→Zhipu:正常提案应达成共识"
+        );
+
+        let mut found = false;
+        let mut event_producer = String::new();
+        let mut event_skeptic = String::new();
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(NexusEvent::CrossVendorNegotiation {
+                    producer_provider,
+                    skeptic_provider,
+                    ..
+                })) => {
+                    found = true;
+                    event_producer = producer_provider;
+                    event_skeptic = skeptic_provider;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            found,
+            "E2E Moonshot→Zhipu:应发布 CrossVendorNegotiation 事件"
+        );
+        assert_eq!(
+            event_producer, "moonshot",
+            "E2E Moonshot→Zhipu:producer 应为 moonshot"
+        );
+        assert_ne!(
+            event_skeptic, "moonshot",
+            "E2E Moonshot→Zhipu:Skeptic 应与 Producer 异厂商"
+        );
+    }
+
+    /// 场景 3:禁用跨厂商场景（prepare_debate 仍发布事件，但 cross_vendor_enforced = false）
+    ///
+    /// 注意：即使 `CrossVendorConfig::enabled = false`，`prepare_debate` 仍会发布
+    /// `CrossVendorNegotiation` 事件（仅留痕目的），但 `cross_vendor_enforced = false`。
+    /// 真正的不发布事件测试：`cross_vendor_debate = None`（不调用 enable 方法），
+    /// 已在 `test_deliberate_with_policy_cross_vendor_disabled` 测试。
+    #[tokio::test]
+    async fn test_e2e_cross_vendor_parliament_disabled_with_registry() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        let mut parliament = Parliament::new(ParliamentConfig::default(), bus);
+        let registry = make_e2e_registry(
+            &nexus_contracts::affinity::ProviderId::Zhipu,
+            &nexus_contracts::affinity::ProviderId::DeepSeek,
+            &nexus_contracts::affinity::ProviderId::MiniMax,
+        );
+        // 禁用跨厂商辩论（enabled=false）
+        parliament.enable_cross_vendor_debate_with_registry(
+            crate::cross_vendor::CrossVendorConfig {
+                enabled: false,
+                fallback: crate::cross_vendor::CrossVendorFallback::FallbackToSame,
+            },
+            registry,
+        );
+
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = make_proposal(0.5);
+        let policy = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+
+        let _consensus = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy)
+            .await
+            .unwrap();
+
+        // 验证 publish 事件但 cross_vendor_enforced = false
+        let mut found = false;
+        let mut event_cve = true; // 默认为 true，期望被改为 false
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(NexusEvent::CrossVendorNegotiation {
+                    cross_vendor_enforced,
+                    ..
+                })) => {
+                    found = true;
+                    event_cve = cross_vendor_enforced;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            found,
+            "禁用跨厂商时仍应发布 CrossVendorNegotiation 事件（留痕目的）"
+        );
+        assert!(!event_cve, "禁用跨厂商时 cross_vendor_enforced 应为 false");
     }
 }

@@ -56,6 +56,11 @@ pub mod ahirt;
 /// 单厂商流量占比 EWMA > 70% 告警;独立模块(不并入 ImmuneSystem 固定三探针数组)。
 pub mod concentration_probe;
 pub mod config;
+/// MCA P2-1:跨厂商辩论 — Skeptic 与 Producer 异厂商通道(ADR-067)
+///
+/// 基于 `AffinityRouter` 在辩论前确定每个角色的厂商分配，
+/// 确保 Skeptic 与 Producer 使用不同厂商通道，修复同源相关失败(病理 D3)。
+pub mod cross_vendor;
 pub mod debate;
 pub mod error;
 /// FormalVerifier L4 骨架 — Parliament 形式化验证模块
@@ -122,6 +127,11 @@ pub use config::{AhirtConfig, ParliamentConfig};
 pub use debate::{DpoPair, DpoPairGenerator, Parliament};
 pub use error::ParliamentError;
 pub use provider_affinity::{validate_cross_provider, ProviderAffinityRegistry, ProviderBinding};
+// MCA P2-1:跨厂商辩论公开 API
+pub use cross_vendor::{
+    AffinityRouter, CrossVendorAssignment, CrossVendorConfig, CrossVendorDebate,
+    CrossVendorFallback,
+};
 // ImmuneSystem facade（ADR-046）：关键类型重导出,简化外部导入
 // WHY 不重导出 `ProbeType` / `Severity`：前者与 `ahirt::ProbeType` 冲突,
 // 后者与 `veto::Severity` 冲突,需通过 `parliament::immune_system::types::` 全路径访问。

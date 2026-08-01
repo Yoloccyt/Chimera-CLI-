@@ -33,6 +33,14 @@ rmp-serde = { workspace = true }
 nexus-contracts = { workspace = true }
 # L1 事件总线: 6 个 MCA 会话级/治理级事件的唯一跨层通道
 event-bus = { path = "../event-bus" }
+# L2 窗口亲和折减器:WindowAffinity::fold() 纯函数 O(1) 查表
+# WHY 跨层(MCA P5):折减逻辑是纯函数,不涉及 HCW 运行时状态。
+# 经 event-bus 发布 WindowAffinityApplied 事件供 HCW 消费。
+hcw-window = { path = "../hcw-window" }
+# L3 缓存亲和:CacheAffinityIntegration 缓存策略决策(CacheSupport 已由 L0 nexus-contracts 提供)
+# WHY 依赖 scc-cache:codec 调用 CacheAffinityIntegration::should_inject_cache_control()
+# 判断是否注入 cache_control 断点。此调用是纯函数(无状态),不涉及 scc-cache 运行时。
+scc-cache = { path = "../scc-cache" }
 
 [dev-dependencies]
 proptest = { workspace = true }

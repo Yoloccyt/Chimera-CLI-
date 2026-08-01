@@ -129,6 +129,62 @@ impl SessionAffinityTracker {
     }
 }
 
+/// 缓存亲和集成 — 统一缓存策略决策入口(MCA A3,ADR-065)
+///
+/// 为 mca-gateway codec 层提供三个决策:
+/// 1. 是否注入 cache_control 断点(仅 ExplicitControl 族)
+/// 2. 当前缓存策略描述(用于 CacheAffinityApplied 事件留痕)
+/// 3. 预估缓存命中收益(路由调优用)
+///
+/// # 设计考量
+/// 本类型是纯函数集合(无状态),不持有任何数据。三族缓存策略:
+/// - None: 无缓存
+/// - Implicit: 隐式自动缓存(厂商自动命中),无需注入 cache_control
+/// - ExplicitControl: 显式控制(Anthropic 族 cache_control 断点)
+#[derive(Debug, Clone, Copy)]
+pub struct CacheAffinityIntegration;
+
+impl CacheAffinityIntegration {
+    /// 根据缓存支持度决定是否注入 cache_control 断点
+    ///
+    /// 仅 `ExplicitControl` 族需要注入;`None`/`Implicit` 族返回 false,
+    /// 前者因无缓存,后者由厂商自动缓存不需显式注入。
+    pub fn should_inject_cache_control(support: CacheSupport) -> bool {
+        support == CacheSupport::ExplicitControl
+    }
+
+    /// 获取缓存策略的字符串描述(用于事件留痕和日志)
+    ///
+    /// 返回值是 `CacheAffinityApplied` 事件的 `strategy` 字段的枚举值:
+    /// - "none": 无缓存
+    /// - "implicit": 隐式自动缓存(厂商自动命中)
+    /// - "explicit_control": 显式控制(cache_control 断点)
+    pub fn strategy_name(support: CacheSupport) -> &'static str {
+        match support {
+            CacheSupport::None => "none",
+            CacheSupport::Implicit => "implicit",
+            CacheSupport::ExplicitControl => "explicit_control",
+        }
+    }
+
+    /// 预估缓存命中收益(百分数,0-100)
+    ///
+    /// 用于路由调优的辅信号:
+    /// - ExplicitControl: 80%(显式断点通常针对稳定前缀,命中率高)
+    /// - Implicit: 50%(隐式自动缓存依赖会话粘性,中等命中率)
+    /// - None: 0%(无缓存)
+    ///
+    /// WHY 硬编码而非动态: 动态命中率需要运行时统计(属 M1+ 度量),
+    /// M0 阶段使用保守估值,后续由 `AffinityMetrics` 采集器替换。
+    pub fn estimated_hit_rate(support: CacheSupport) -> u8 {
+        match support {
+            CacheSupport::ExplicitControl => 80,
+            CacheSupport::Implicit => 50,
+            CacheSupport::None => 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

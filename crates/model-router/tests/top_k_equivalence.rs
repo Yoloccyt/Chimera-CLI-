@@ -10,6 +10,7 @@
 //! (types.rs 文档:"按策略优先级降序排序")。
 
 use model_router::{ModelInfo, ModelRegistry, RoutingRequest, RoutingStrategy};
+use nexus_contracts::affinity::ThinkingPreference;
 use nexus_core::{MultimodalInput, UserIntent};
 use std::cmp::Ordering;
 
@@ -30,6 +31,7 @@ fn make_request(tokens: u32) -> RoutingRequest {
         intent: make_intent(),
         estimated_tokens: tokens,
         strategy: RoutingStrategy::Auto,
+        thinking_pref: ThinkingPreference::Standard,
     }
 }
 

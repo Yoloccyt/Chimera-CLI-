@@ -98,15 +98,15 @@ fn e1_ttft_parity_across_channels() {
     let tasks = benchmark_tasks();
     for (i, spec) in specs.iter().enumerate() {
         // 基线与序号弱相关(0-4 循环),各通道间差异 ≤ 8ms(≤8%)
-        let base_ttft = 100u32 + (i as u32 % 5) * 2;
+        let base_ttft = 100u64 + (i as u64 % 5) * 2;
         for (j, _) in tasks.iter().enumerate() {
-            let ttft = base_ttft + (j as u32 % 10);
+            let ttft = base_ttft + (j as u64 % 10);
             metrics.record_session(&spec.route_key(), ttft, 1000, 500, 300);
         }
     }
 
     // 基线通道 = TTFT p95 最小者
-    let mut baseline_p95 = u32::MAX;
+    let mut baseline_p95 = u64::MAX;
     for spec in &specs {
         if let Some(p95) = metrics.ttft_percentile(&spec.route_key(), 0.95) {
             baseline_p95 = baseline_p95.min(p95);
@@ -128,6 +128,82 @@ fn e1_ttft_parity_across_channels() {
             degradation * 100.0
         );
     }
+}
+
+// ============================================================
+// E1 退化检测:超限通道正确标记(验证检测逻辑误报/漏报)
+// ============================================================
+
+/// E1 检测辅助:返回所有违规通道及退化率(不 panic,供检测逻辑验证用)
+fn e1_violations(
+    metrics: &efficiency_monitor::AffinityMetrics,
+    specs: &[ModelAffinitySpec],
+) -> Vec<(String, f64)> {
+    let mut baseline_p95 = u64::MAX;
+    for spec in specs {
+        if let Some(p95) = metrics.ttft_percentile(&spec.route_key(), 0.95) {
+            baseline_p95 = baseline_p95.min(p95);
+        }
+    }
+    let mut violations = Vec::new();
+    for spec in specs {
+        if let Some(p95) = metrics.ttft_percentile(&spec.route_key(), 0.95) {
+            let degradation = (p95 as f64 - baseline_p95 as f64) / baseline_p95 as f64;
+            if degradation > 0.25 {
+                violations.push((spec.route_key(), degradation));
+            }
+        }
+    }
+    violations
+}
+
+#[test]
+fn e1_degradation_detection_catches_overlimit_channels() {
+    use efficiency_monitor::AffinityMetrics;
+    let metrics = AffinityMetrics::new();
+    let specs = load_all();
+
+    // 模拟两条通道:通道 A 正常(基线),通道 B 显著退化(>25%)
+    // route_key 格式: provider.as_str()/model,如 deep_seek/deepseek-v4-flash
+    let tasks = benchmark_tasks();
+    // 通道 A:TTFT 基值 100ms,抖动 ±10ms → p95 ≈ 109ms
+    for (j, _) in tasks.iter().enumerate() {
+        metrics.record_session("zhipu/glm-5.2", 100 + (j as u64 % 10), 1000, 500, 300);
+    }
+    // 通道 B:TTFT 基值 140ms,抖动 ±10ms → p95 ≈ 149ms,退化 ≈ 37% > 25%
+    let degraded_route = "deep_seek/deepseek-v4-flash";
+    for (j, _) in tasks.iter().enumerate() {
+        metrics.record_session(degraded_route, 140 + (j as u64 % 10), 1000, 500, 300);
+    }
+
+    // 过滤:只保留测试中用到的两条通道
+    let test_specs: Vec<ModelAffinitySpec> = specs
+        .iter()
+        .filter(|s| s.route_key() == "zhipu/glm-5.2" || s.route_key() == degraded_route)
+        .cloned()
+        .collect();
+
+    let violations = e1_violations(&metrics, &test_specs);
+    let degraded = violations.iter().find(|(k, _)| k == degraded_route);
+    assert!(
+        degraded.is_some(),
+        "E1 退化检测漏报:{} TTFT 退化 ~37% 应被标记",
+        degraded_route
+    );
+    if let Some((_, deg)) = degraded {
+        assert!(
+            *deg > 0.25,
+            "E1 退化率计算异常:预期 ~37%,实际 {:.1}%",
+            deg * 100.0
+        );
+    }
+
+    // 正常通道不应被标记
+    let false_positive = violations.iter().find(|(k, _)| k == "zhipu/glm-5.2");
+    assert!(
+        false_positive.is_none(),
+        "E1 退化检测误报:zhipu/glm-5.2 是基线通道不应被标记"
+    );
 }
 
 // ============================================================
@@ -314,6 +390,61 @@ fn e5_session_continuity_sentinel_all_channels() {
                 "E5 违规:{} VerbatimThinking 思考哨兵未逐字幸存",
                 spec.route_key()
             );
+        }
+    }
+}
+
+// ============================================================
+// A3:上下文亲和(窗口亲和 + 缓存亲和)体验对等
+// ============================================================
+
+#[test]
+fn a3_context_affinity_cache_hit_rate() {
+    use efficiency_monitor::AffinityMetrics;
+    let metrics = AffinityMetrics::new();
+    let specs = load_all();
+
+    for spec in &specs {
+        // 模拟 50 轮会话(每轮 1000 输入 token,按缓存策略分配命中 token)
+        let cache_hit_per_round = match spec.capabilities.prompt_caching {
+            // ExplicitControl(Anthropic 族,如 GLM/Kimi):稳定前缀命中率高
+            nexus_contracts::affinity::CacheSupport::ExplicitControl => 800u64,
+            // Implicit(DeepSeek/豆包):自动命中,中等命中率
+            nexus_contracts::affinity::CacheSupport::Implicit => 500u64,
+            // None:无缓存
+            nexus_contracts::affinity::CacheSupport::None => 0u64,
+        };
+        for _ in 0..50 {
+            metrics.record_session(&spec.route_key(), 100, 1000, 1000, cache_hit_per_round);
+        }
+
+        let rate = metrics.cache_hit_rate(&spec.route_key()).unwrap_or(0.0);
+        // 验证缓存命中率与策略一致
+        match spec.capabilities.prompt_caching {
+            nexus_contracts::affinity::CacheSupport::ExplicitControl => {
+                assert!(
+                    rate >= 0.75,
+                    "A3 违规:{} ExplicitControl 缓存命中率 {:.1}% < 75%",
+                    spec.route_key(),
+                    rate * 100.0
+                );
+            }
+            nexus_contracts::affinity::CacheSupport::Implicit => {
+                assert!(
+                    rate >= 0.40 && rate <= 0.60,
+                    "A3 违规:{} Implicit 缓存命中率 {:.1}% 不在 40-60% 区间",
+                    spec.route_key(),
+                    rate * 100.0
+                );
+            }
+            nexus_contracts::affinity::CacheSupport::None => {
+                assert!(
+                    rate < 0.01,
+                    "A3 违规:{} None 缓存命中率 {:.1}% > 0%",
+                    spec.route_key(),
+                    rate * 100.0
+                );
+            }
         }
     }
 }

@@ -130,6 +130,13 @@ pub mod seam;
 /// 不触 R2 冻结面(不 import gsoe-evolution/auto-dpo,无 evolve/RL 训练路径)。
 pub mod s9_route;
 
+/// S9 会话集成 — 将 StreamSessionCompleted 事件桥接到 S9RouteLearner(P1-2)
+///
+/// 启动后台任务订阅 `StreamSessionCompleted` 事件,解析 `route_key` 为 arm_id
+/// 并调用 `learner.observe()` 更新 LinUCB 模型。不引入 mca-gateway(L10) 依赖,
+/// 仅消费 event-bus(L1) 事件,符合 §2.2 依赖铁律。
+pub mod s9_integration;
+
 /// P4-W16.2.1: 经验回放池 — off-policy RL 训练的轨迹存储与采样基础设施
 pub mod replay_pool;
 
@@ -230,6 +237,7 @@ pub use s8_mem_pi::{
     S8Reward, S8RewardParams, ABSTAIN_UNCERTAINTY_THRESHOLD, DEFAULT_NOISE_PENALTY_LAMBDA,
     DEFAULT_S8_ALPHA, S8_ARM_COUNT, S8_CONTEXT_DIM,
 };
+pub use s9_integration::S9SessionIntegration;
 pub use s9_route::{S9Context, S9Reward, S9RouteLearner, S9_CONTEXT_DIM};
 pub use seam::SeamId;
 

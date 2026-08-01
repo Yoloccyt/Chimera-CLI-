@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # ============================================================
 # Chimera CLI 性能红线 lint 静态验证脚本(Linux/macOS / Bash)
 #
@@ -10,15 +10,18 @@
 # 2. 函数存在 — `fn <function_name>` 在文件中可匹配
 # 3. 阈值标记 — 阈值字符串(阈值常量名或阈值描述)在文件中可匹配
 #
-# 红线全集(8 条,来自 spec.md KPI 表格"性能 SLO 分层"):
+# 红线全集(11 条,来自 spec.md KPI 表格"性能 SLO 分层"):
 # - RL-01: window_select <1ms(内环本地,维持)
 # - RL-02: mlc_l2_knn <5ms(内环本地,维持)
-# - RL-03: decay <1μs(内环本地,维持,阈值仅在 spec 中,代码无断言)
+# - RL-03: decay <1us(内环本地,维持,阈值仅在 spec 中,代码无断言)
 # - RL-04: wiki_knn @1000 <10ms(索引,既有)
 # - RL-05: wiki_knn @10K p95<50ms(索引,P2-W8.1.3)
 # - RL-06: wiki_knn @100K p95<50ms(索引,P2-W8.3.1 新增)
 # - RL-07: 跨膜事件投递 p95<10ms(跨膜,P1-W2 新增)
-# - RL-08: 50agent_mem_peak ≤130MB(MAS,维持)
+# - RL-08: 50agent_mem_peak <=130MB(MAS,维持)
+# - RL-09: linucb 40arm select p99<50us(MCA M3 s9 路由臂,新增)
+# - RL-10: cost_estimate <1us(MCA M3 路由热路径,新增)
+# - RL-11: sse normalize <5us/event(MCA M0 SSE 归一器,新增)
 #
 # 退出码: 0=全部通过, 1=有检查项失败
 # 使用方式: bash scripts/check_perf_redlines.sh
@@ -46,7 +49,7 @@ else
 fi
 
 echo -e "\n${CYAN}=== Chimera CLI Performance Red Line Lint ===${NC}"
-echo -e "    ${GRAY}(spec.md KPI: 性能 SLO 分层, 8 red lines)${NC}\n"
+echo -e "    ${GRAY}(spec.md KPI: 性能 SLO 分层, 11 red lines)${NC}\n"
 
 check() {
     local name="$1"
@@ -81,6 +84,9 @@ REDLINES=(
     "RL-06|wiki_knn @100K p95<50ms|crates/repo-wiki/tests/hnsw_p95_test.rs|test_hnsw_100k_p95_below_50ms|ENTRY_COUNT_100K"
     "RL-07|membrane delivery p95<10ms|crates/event-bus/benches/membrane_delivery_bench.rs|membrane_e2e_delivery|10ms"
     "RL-08|50agent_mem_peak <=130MB|crates/chimera-mas/benches/mas_benchmark.rs|bench_50agent_mem_peak|130"
+    "RL-09|linucb 40arm select p99<50us|crates/omega-learner/benches/linucb_select.rs|bench_s9_route_40arm_select|P99_TARGET_US"
+    "RL-10|cost_estimate <1us|crates/mca-gateway/benches/mca_hot_paths.rs|bench_cost_estimate|COST_ESTIMATE_TARGET_US"
+    "RL-11|sse normalize <5us/event|crates/mca-gateway/benches/mca_hot_paths.rs|bench_sse_normalize|SSE_EVENT_TARGET_US"
 )
 
 for entry in "${REDLINES[@]}"; do
@@ -129,6 +135,7 @@ SLO_REDLINES=(
     "wiki_knn_100k|repo-wiki|wiki_knn_slo|wiki_knn_100k_p95|0.050|0.040|ms|50ms|40ms"
     "immune_probe|chimera-mas|immune_probe|bench_assess_paradox_risk|0.100|0.080|ms|100ms|80ms"
     "rhi_judge|auto-dpo|rhi_judge|rhi_judge_latency|2.0|1.6|s|2s|1.6s"
+    "linucb_40arm|omega-learner|linucb_select|select_arm_40arms_6dim_s9route|0.00005|0.00004|us|50us|40us"
 )
 
 echo -e "\n${CYAN}=== SLO Benchmark Threshold Assertions ===${NC}"
@@ -156,7 +163,7 @@ for entry in "${SLO_REDLINES[@]}"; do
     fi
 
     # 提取 estimate (第二个值) 和单位
-    estimate=$(echo "$time_line" | awk '{print $2}')
+    estimate=$(echo "$time_line" | awk '{print $3}')
     unit=$(echo "$time_line" | awk '{print $4}')
 
     if [ -z "$estimate" ] || [ -z "$unit" ]; then

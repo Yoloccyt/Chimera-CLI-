@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Chimera CLI 性能红线 lint 静态验证脚本(Windows / PowerShell)
 
@@ -164,7 +164,7 @@ foreach ($slo in $sloRedlines) {
         $timeValues = $Matches[1].Trim() -split '\s+'
         # timeValues[0]=lower, [1]=estimate, [2]=upper, [3]=unit
         if ($timeValues.Count -ge 4) {
-            $estimate = [double]$timeValues[1]
+            $estimate = [double]$timeValues[2]
             $unit = $timeValues[3]
 
             # 转换为秒
@@ -221,3 +221,4 @@ if ($totalFail -gt 0) {
     Write-Host "`n  RESULT: PASS — 全部性能红线 lint + SLO 断言通过" -ForegroundColor Green
     exit 0
 }
+

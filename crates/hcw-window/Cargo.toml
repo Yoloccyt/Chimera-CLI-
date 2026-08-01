@@ -76,3 +76,8 @@ harness = false
 [[bench]]
 name = "shadow_recall_1m"
 harness = false
+
+# MCA P5:窗口亲和折减基准(WindowAffinity::fold O(1) 查表,目标单次 < 50ns)
+[[bench]]
+name = "window_affinity"
+harness = false

@@ -20,6 +20,7 @@ use model_router::{
     HistoryStore, InMemoryHistoryStore, ModelInfo, ModelRegistry, MoeGate, RoutingRequest,
     RoutingStrategy,
 };
+use nexus_contracts::affinity::ThinkingPreference;
 use nexus_core::{MultimodalInput, UserIntent};
 use proptest::prelude::*;
 
@@ -65,6 +66,7 @@ fn make_request(tokens: u32) -> RoutingRequest {
         },
         estimated_tokens: tokens,
         strategy: RoutingStrategy::Auto,
+        thinking_pref: ThinkingPreference::Standard,
     }
 }
 
@@ -79,8 +81,14 @@ fn test_moe_gate_activates_top_k_only() {
     let req = make_request(1000);
     let gate = MoeGate::default(); // threshold=50, top_k=5
 
-    let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
-        .expect("路由应成功");
+    let decision = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("路由应成功");
 
     // selected(1) + candidates(K-1) = K ≤ top_k
     assert!(
@@ -105,8 +113,14 @@ fn test_moe_gate_activates_top_k_only_100_models() {
     let req = make_request(1000);
     let gate = MoeGate::default();
 
-    let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
-        .expect("路由应成功");
+    let decision = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("路由应成功");
 
     assert!(
         decision.candidates.len() < 5,
@@ -123,8 +137,14 @@ fn test_moe_gate_activates_top_k_only_200_models() {
     let req = make_request(1000);
     let gate = MoeGate::default();
 
-    let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
-        .expect("路由应成功");
+    let decision = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("路由应成功");
 
     assert!(
         decision.candidates.len() < 5,
@@ -141,8 +161,14 @@ fn test_moe_gate_custom_top_k() {
     let req = make_request(1000);
     let gate = MoeGate::new(50, 3);
 
-    let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
-        .expect("路由应成功");
+    let decision = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("路由应成功");
 
     assert!(
         decision.candidates.len() < 3,
@@ -162,8 +188,14 @@ fn test_moe_gate_degrades_when_below_threshold() {
     let req = make_request(1000);
     let gate = MoeGate::default(); // threshold=50
 
-    let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
-        .expect("路由应成功");
+    let decision = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("路由应成功");
 
     assert_eq!(
         decision.candidates.len(),
@@ -181,8 +213,14 @@ fn test_moe_gate_degrades_default_config() {
     let req = make_request(1000);
     let gate = MoeGate::default();
 
-    let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
-        .expect("路由应成功");
+    let decision = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("路由应成功");
 
     // 3 模型 < 50,退化,candidates = 2
     assert_eq!(decision.candidates.len(), 2);
@@ -197,15 +235,25 @@ fn test_moe_gate_recalls_best_model() {
 
     // 全量评估(threshold 极大,强制退化)
     let full_gate = MoeGate::new(usize::MAX, 5);
-    let full_decision =
-        model_router::strategies::route_auto_with_gate(&registry, &req, &full_gate, None)
-            .expect("全量评估应成功");
+    let full_decision = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &full_gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("全量评估应成功");
 
     // 门控评估(默认 threshold=50)
     let moe_gate = MoeGate::default();
-    let moe_decision =
-        model_router::strategies::route_auto_with_gate(&registry, &req, &moe_gate, None)
-            .expect("门控评估应成功");
+    let moe_decision = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &moe_gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("门控评估应成功");
 
     // 门控应选中与全量评估相同的模型(召回保证)
     assert_eq!(
@@ -227,9 +275,14 @@ fn test_route_auto_backward_compatible_below_threshold() {
 
     // 显式退化 gate
     let degrade_gate = MoeGate::new(usize::MAX, 5);
-    let decision_degrade =
-        model_router::strategies::route_auto_with_gate(&registry, &req, &degrade_gate, None)
-            .expect("退化 gate 应成功");
+    let decision_degrade = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &degrade_gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("退化 gate 应成功");
 
     // 两者行为应完全一致(退化 = 全量)
     assert_eq!(decision_default.model_id, decision_degrade.model_id);
@@ -255,7 +308,7 @@ proptest! {
         let req = make_request(1000);
         let gate = MoeGate::new(50, top_k);
 
-        let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
+        let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None, ThinkingPreference::Standard)
             .expect("路由应成功");
 
         // 不变量:selected(1) + candidates ≤ top_k
@@ -314,7 +367,7 @@ proptest! {
         let req = make_request(1000);
         let gate = MoeGate::new(threshold, 5);
 
-        let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
+        let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None, ThinkingPreference::Standard)
             .expect("路由应成功");
 
         // 退化模式:candidates = n - 1(全量)
@@ -381,6 +434,7 @@ fn test_five_dim_score_when_history_sufficient() {
         &req,
         &gate,
         Some(&history as &dyn HistoryStore),
+        ThinkingPreference::Standard,
     )
     .expect("五维路由应成功");
 
@@ -409,12 +463,18 @@ fn test_three_dim_fallback_when_history_insufficient() {
         &req,
         &gate,
         Some(&history_insufficient as &dyn HistoryStore),
+        ThinkingPreference::Standard,
     )
     .expect("历史不足路由应成功");
 
-    let decision_none =
-        model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
-            .expect("history=None 路由应成功");
+    let decision_none = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("history=None 路由应成功");
 
     // 历史不足时降级三维,选中模型应与 history=None 一致
     assert_eq!(
@@ -433,8 +493,14 @@ fn test_history_none_degrades_to_three_dim() {
     let gate = MoeGate::default();
 
     // history=None:退化三维,Top-K 选择应与 v1.2.0 一致
-    let decision = model_router::strategies::route_auto_with_gate(&registry, &req, &gate, None)
-        .expect("history=None 路由应成功");
+    let decision = model_router::strategies::route_auto_with_gate(
+        &registry,
+        &req,
+        &gate,
+        None,
+        ThinkingPreference::Standard,
+    )
+    .expect("history=None 路由应成功");
 
     // 门控激活 Top-5
     assert!(
@@ -479,6 +545,7 @@ fn test_success_rate_affects_ranking() {
         &req,
         &gate,
         Some(&history as &dyn HistoryStore),
+        ThinkingPreference::Standard,
     )
     .expect("成功率排名路由应成功");
 
@@ -533,6 +600,7 @@ fn test_latency_variance_penalizes_unstable() {
         &req,
         &gate,
         Some(&history as &dyn HistoryStore),
+        ThinkingPreference::Standard,
     )
     .expect("方差惩罚路由应成功");
 
@@ -572,6 +640,7 @@ proptest! {
             &req,
             &gate,
             Some(&history as &dyn HistoryStore),
+            ThinkingPreference::Standard,
         )
         .expect("五维 proptest 路由应成功");
 

@@ -114,7 +114,7 @@ pub enum SeamId {
     /// R1 离线 RL 接缝：CQL/IQL 算法学习召回配额 k ∈ {5,10,20,50,100}，
     /// 在 FormalVerifier 落地前需满足影子模式 2 周前置（ADR-043）。
     /// 与 S1-S6 在线 bandit 不同，S7 使用离线 RL（CQL/IQL），
-    /// 从 ReplayPool<RecallQuotaTransition> 采样训练。
+    /// 从 `ReplayPool<RecallQuotaTransition>` 采样训练。
     S7RecallQuota = 7,
 
     /// S8: Mem-π 记忆决策策略（omega-learner s8_mem_pi，polish-v2.7 closure Stage B-6）

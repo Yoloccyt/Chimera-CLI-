@@ -23,6 +23,7 @@ use event_bus::{EventBus, NexusEvent};
 use model_router::{
     CacrConfig, ModelRegistry, ModelRouter, RouterConfig, RoutingRequest, RoutingStrategy,
 };
+use nexus_contracts::affinity::ThinkingPreference;
 use nexus_core::{MultimodalInput, TaskStatus, ThinkingMode, UserIntent};
 use quest_engine::{QuestConfig, QuestEngine};
 use repo_wiki::{Layer, VectorIndex, WikiGenerator, WikiStore};
@@ -108,6 +109,8 @@ async fn test_e2e_full_pipeline_happy_path() {
         intent: make_intent(),
         estimated_tokens: 1000,
         strategy: RoutingStrategy::Auto,
+        // MCA P2: 端到端测试使用标准思考模式
+        thinking_pref: ThinkingPreference::Standard,
     };
     let decision = router.route(routing_req).await.unwrap();
     assert!(!decision.model_id.is_empty(), "路由应选中非空模型");
@@ -377,6 +380,8 @@ async fn test_e2e_no_orphan_events() {
         intent: make_intent(),
         estimated_tokens: 1000,
         strategy: RoutingStrategy::Lite,
+        // MCA P2: 端到端测试使用标准思考模式
+        thinking_pref: ThinkingPreference::Standard,
     };
     router.route(routing_req).await.unwrap();
 
@@ -432,6 +437,8 @@ async fn test_e2e_cacr_allow_path() {
         intent: make_intent(),
         estimated_tokens: 1000,
         strategy: RoutingStrategy::Lite,
+        // MCA P2: CACR 测试使用标准思考模式
+        thinking_pref: ThinkingPreference::Standard,
     };
     let decision = router.route(req).await.unwrap();
     assert!(!decision.model_id.is_empty(), "CACR Allow 应放行路由");

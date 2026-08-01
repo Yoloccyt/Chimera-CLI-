@@ -32,15 +32,21 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod config;
+/// 路由成本模型集成 — 路由决策前置预检与后置回算(ADR-068)
+pub mod cost_integration;
 /// MCA 成本模型 — 通道成本 EWMA + 预算否决 + service_tier 授权(ADR-068)
 pub mod cost_model;
+/// 预算超限降级策略 — 成本超限时的通道切换决策(ADR-068)
+pub mod downgrade;
 pub mod error;
 pub mod governor;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use config::AcbGovernorConfig;
+pub use cost_integration::CostModelIntegration;
 pub use cost_model::{AffinityCostModel, CostVerdict};
+pub use downgrade::{DowngradeAction, DowngradeController};
 pub use error::AcbError;
 pub use governor::AcbGovernor;
 pub use types::{BudgetAllocation, BudgetRequest, BudgetStatus, BudgetTier, TierSwitchResult};

@@ -8,6 +8,7 @@
 //! - Critical 旁路通道丢弃事件数采样 (`sample_critical_dropped_count`)
 //! - 后台辅助函数 (`handle_broadcast_event`, `handle_critical_event` 等)
 
+use crate::affinity_metrics::AffinityMetrics;
 use crate::alerts::AlertRuleEngine;
 use crate::collectors::{EventMetricCollector, MetricCollector};
 use crate::config::MonitorConfig;
@@ -62,6 +63,7 @@ fn is_critical_alert_event(event: &NexusEvent) -> bool {
 /// - `collectors`：事件指标采集器（按 type_name 统计发布次数）
 /// - `alert_engine`：告警规则引擎（配置化阈值检测 + cooldown 防抖）
 /// - `oscillation_detector`：策略抖振检测器（P2-14,GSOE↔Quest 逻辑循环监测）
+/// - `affinity_metrics`：MCA 亲和指标采集器（A5 体验对等不变量，ADR-065/066）
 /// - `event_bus`：可选事件总线（订阅 NexusEvent + 发布 EfficiencyAlertTriggered）
 pub struct EfficiencyMonitor {
     /// 监控配置
@@ -75,6 +77,12 @@ pub struct EfficiencyMonitor {
     /// WHY Arc:后台订阅任务与主线程需共享同一检测器实例。
     /// `PolicyOscillationDetector` 内部用 `Mutex<VecDeque>`,Clone 需 Arc 包装。
     oscillation_detector: std::sync::Arc<PolicyOscillationDetector>,
+    /// MCA 亲和指标采集器 — 每通道体验度量(A5)
+    ///
+    /// 消费 StreamSessionCompleted/AffinityCapabilityNegotiated/ProviderDegraded
+    /// 事件,产出 TTFT p50/p95、缓存命中率、特性启用率等指标。
+    /// Clone 廉价(Arc 共享),后台订阅任务与主线程共享同一实例。
+    affinity_metrics: AffinityMetrics,
     /// 可选事件总线（订阅事件 + 发布告警）
     event_bus: Option<EventBus>,
 }
@@ -89,6 +97,7 @@ impl EfficiencyMonitor {
             collectors: EventMetricCollector::new(),
             alert_engine: AlertRuleEngine::new(),
             oscillation_detector: std::sync::Arc::new(PolicyOscillationDetector::new()),
+            affinity_metrics: AffinityMetrics::new(),
             event_bus: None,
         }
     }
@@ -105,6 +114,7 @@ impl EfficiencyMonitor {
             collectors: EventMetricCollector::new(),
             alert_engine: AlertRuleEngine::new(),
             oscillation_detector: std::sync::Arc::new(PolicyOscillationDetector::new()),
+            affinity_metrics: AffinityMetrics::new(),
             event_bus: Some(bus),
         }
     }
@@ -122,6 +132,9 @@ impl EfficiencyMonitor {
     /// 为 true 时记录推理悖论风险告警并发布 `EfficiencyAlertTriggered`。
     ///
     /// 该方法是同步的，适合在不便 await 的场景调用。
+    ///
+    /// MCA 亲和事件(StreamSessionCompleted/AffinityCapabilityNegotiated/
+    /// ProviderDegraded)同时喂入 affinity_metrics 采集器,更新每通道体验度量。
     pub fn record_event(&self, event: &NexusEvent) {
         // 记录事件指标
         self.collectors.record_event(event);
@@ -129,6 +142,9 @@ impl EfficiencyMonitor {
         // P2-14: 将事件喂入策略抖振检测器
         // WHY 在 record_event 中调用:这是所有事件的统一入口点,确保不遗漏
         self.oscillation_detector.record_event(event);
+
+        // MCA 亲和事件:喂入 affinity_metrics 采集器
+        self.affinity_metrics.handle_mca_event(event);
 
         // Critical 事件立即告警（绕过规则引擎，直接触发）
         if self.config.critical_instant_alert && is_critical_alert_event(event) {
@@ -198,8 +214,16 @@ impl EfficiencyMonitor {
     /// - `nexus_event_total`：按事件类型分桶的发布次数
     /// - `nexus_critical_event_total`：按事件类型分桶的 Critical 事件次数
     /// - `nexus_alert_triggered_total`：按严重级别分桶的告警触发次数
+    /// - `mca_*`：MCA 亲和指标（TTFT p50/p95、缓存命中率、特性启用率等）
     pub fn render_metrics(&self) -> String {
-        crate::dashboard::render_metrics(&self.collectors)
+        let mut event_metrics = crate::dashboard::render_metrics(&self.collectors);
+        let affinity_metrics = crate::dashboard::render_metrics(&self.affinity_metrics);
+        // 合并输出:事件指标在前,亲和指标在后
+        // 若亲和指标非空,追加到事件指标后
+        if !affinity_metrics.is_empty() {
+            event_metrics.push_str(&affinity_metrics);
+        }
+        event_metrics
     }
 
     /// 启动后台事件订阅循环
@@ -241,6 +265,9 @@ impl EfficiencyMonitor {
         // WHY Arc::clone:PolicyOscillationDetector 内部用 Mutex<VecDeque>,
         // 通过 Arc 共享同一实例,后台任务与主线程记录到同一滑动窗口。
         let oscillation_detector = std::sync::Arc::clone(&self.oscillation_detector);
+
+        // 共享亲和指标采集器,后台订阅中消费 MCA 事件
+        let affinity_metrics = self.affinity_metrics.clone();
 
         // 在 spawn 之前同步订阅两个通道，确保不会错过后续发布的事件
         // WHY: tokio::broadcast 仅投递给发布时已存在的 receiver；
@@ -290,6 +317,7 @@ impl EfficiencyMonitor {
                                     &bus_for_alerts,
                                     critical_enabled,
                                     &oscillation_detector,
+                                    &affinity_metrics,
                                     &event,
                                 );
                             }
@@ -350,6 +378,13 @@ impl EfficiencyMonitor {
     /// 用于需要在后台任务或其他位置共享检测器的场景。
     pub fn oscillation_detector_arc(&self) -> std::sync::Arc<PolicyOscillationDetector> {
         std::sync::Arc::clone(&self.oscillation_detector)
+    }
+
+    /// 获取 MCA 亲和指标采集器引用
+    ///
+    /// 通过此引用可查询每通道的 TTFT 百分位、缓存命中率、特性启用率等体验度量。
+    pub fn affinity_metrics(&self) -> &AffinityMetrics {
+        &self.affinity_metrics
     }
 
     /// 执行策略抖振检测,返回当前时间窗口的检测报告(P2-14)
@@ -487,6 +522,9 @@ impl Default for EfficiencyMonitor {
 ///
 /// P2-14 新增:同时将事件喂入策略抖振检测器,记录 TTG/GSOE 事件到滑动窗口。
 ///
+/// MCA 亲和事件(StreamSessionCompleted/AffinityCapabilityNegotiated/
+/// ProviderDegraded)同时喂入 affinity_metrics 采集器,更新每通道体验度量。
+///
 /// WHY 拆分职责：broadcast 主流负责事件指标记录（所有事件），
 /// mpsc 旁路负责 Critical 告警触发（仅 4 类事件）。两条通道职责互斥，
 /// 即使 broadcast Lagged 导致事件指标缺失，Critical 告警仍由 mpsc 旁路
@@ -496,6 +534,7 @@ fn handle_broadcast_event(
     _bus: &EventBus,
     _critical_enabled: bool,
     oscillation_detector: &PolicyOscillationDetector,
+    affinity_metrics: &AffinityMetrics,
     event: &NexusEvent,
 ) {
     // 仅记录事件指标，告警逻辑委托给 handle_critical_event（mpsc 旁路）
@@ -503,6 +542,9 @@ fn handle_broadcast_event(
     // P2-14: 将事件喂入抖振检测器
     // WHY 在 broadcast 路径记录:与 event 指标记录同路径,确保不遗漏
     oscillation_detector.record_event(event);
+    // MCA 亲和事件:喂入 affinity_metrics 采集器
+    // WHY 在 broadcast 路径记录:与 event 指标记录同路径,确保不遗漏
+    affinity_metrics.handle_mca_event(event);
 }
 
 /// 在后台任务中处理 mpsc 旁路 Critical 事件（Critical 告警触发）
@@ -651,6 +693,40 @@ mod tests {
             improvement: imp,
             new_mutation_rate: 0.1,
             new_selection_pressure: 0.5,
+        }
+    }
+
+    // MCA 测试辅助:构造 StreamSessionCompleted 事件
+    fn make_stream_session(route_key: &str, ttft_ms: u64) -> NexusEvent {
+        NexusEvent::StreamSessionCompleted {
+            metadata: EventMetadata::new("mca-gateway"),
+            intent_id: "i-1".into(),
+            route_key: route_key.into(),
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_hit_tokens: 30,
+            cost_actual_micro: 500,
+            ttft_ms,
+        }
+    }
+
+    // MCA 测试辅助:构造 AffinityCapabilityNegotiated 事件
+    fn make_affinity_negotiation(route_key: &str, fidelity: &str) -> NexusEvent {
+        NexusEvent::AffinityCapabilityNegotiated {
+            metadata: EventMetadata::new("mca-gateway"),
+            route_key: route_key.into(),
+            fidelity: fidelity.into(),
+            degraded_capabilities: vec![],
+        }
+    }
+
+    // MCA 测试辅助:构造 ProviderDegraded 事件
+    fn make_provider_degraded(route_key: &str) -> NexusEvent {
+        NexusEvent::ProviderDegraded {
+            metadata: EventMetadata::new("mca-gateway"),
+            route_key: route_key.into(),
+            reason: "timeout".into(),
+            health_score: 30,
         }
     }
 
@@ -998,9 +1074,9 @@ mod tests {
         //
         // WHY 大容量 broadcast（16384）：publish_critical 会向 broadcast + mpsc 双通道
         // 投递 4146 个 CacheHit 事件；后台任务的 critical_rx 消费后会对每个事件调用
-        // handle_critical_event → publish_critical_alert_blocking，再向 broadcast 投递
+        // handle_critical_event -> publish_critical_alert_blocking，再向 broadcast 投递
         // 4146 个 EfficiencyAlertTriggered 事件。总计 ~8293 事件远超默认容量 1024，
-        // 会导致 test rx Lagged → rx.recv() 返回 Err → while 循环提前退出。
+        // 会导致 test rx Lagged -> rx.recv() 返回 Err -> while 循环提前退出。
         // 16384 容量可吸收全部事件，确保 test rx 不丢 dropped alert。
         let bus = EventBus::with_capacity(16384);
         let mut rx = bus.subscribe();
@@ -1028,7 +1104,7 @@ mod tests {
                 .await;
         }
 
-        // 等待至少一个采样周期（10ms × 2 = 20ms，加余量）
+        // 等待至少一个采样周期（10ms x 2 = 20ms，加余量）
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // 应收到至少一个 EfficiencyAlertTriggered 事件（metric_name = nexus_critical_event_dropped_total）
@@ -1073,14 +1149,14 @@ mod tests {
         // EfficiencyMonitor::record_event 应将 TTG 切换事件喂入抖振检测器
         let monitor = EfficiencyMonitor::new(MonitorConfig::default());
 
-        // 记录 3 次 Fast→Deep 切换(达到震荡阈值)
+        // 记录 3 次 Fast->Deep 切换(达到震荡阈值)
         for _ in 0..3 {
             monitor.record_event(&make_ttg_switch("Fast", "Deep"));
         }
 
         let report = monitor.detect_oscillation();
         assert_eq!(report.ttg_switches_in_window, 3);
-        assert_eq!(report.oscillation_pairs, 1); // Fast→Deep 出现 3 次
+        assert_eq!(report.oscillation_pairs, 1); // Fast->Deep 出现 3 次
     }
 
     #[test]
@@ -1100,7 +1176,7 @@ mod tests {
         // 当抖振严重度超过阈值(0.7)时,should_alert 应为 true
         let monitor = EfficiencyMonitor::new(MonitorConfig::default());
 
-        // 制造足够多震荡:3 个震荡对 + 21 次切换 → severity = 1.0
+        // 制造足够多震荡:3 个震荡对 + 21 次切换 -> severity = 1.0
         for _ in 0..7 {
             monitor.record_event(&make_ttg_switch("Fast", "Deep"));
         }
@@ -1201,5 +1277,138 @@ mod tests {
         assert!(samples
             .iter()
             .any(|s| s.name == "policy_oscillation_ttg_switches_in_window"));
+    }
+
+    // ============================================================
+    // MCA 亲和指标集成测试
+    // ============================================================
+
+    #[test]
+    fn test_new_initializes_affinity_metrics() {
+        // EfficiencyMonitor::new() 应初始化 affinity_metrics
+        let monitor = EfficiencyMonitor::new(MonitorConfig::default());
+        let am = monitor.affinity_metrics();
+        // 查询未记录的通道应返回 None
+        assert_eq!(am.ttft_percentile("test/t-model", 0.50), None);
+    }
+
+    #[test]
+    fn test_record_event_feeds_affinity_metrics() {
+        // record_event 应将 MCA 事件喂入 affinity_metrics 采集器
+        let monitor = EfficiencyMonitor::new(MonitorConfig::default());
+
+        // 记录 StreamSessionCompleted 事件
+        monitor.record_event(&make_stream_session("zhipu/glm-5.2", 150));
+
+        // 验证 TTFT 被记录
+        let am = monitor.affinity_metrics();
+        assert_eq!(am.ttft_percentile("zhipu/glm-5.2", 0.50), Some(150));
+        assert!((am.cache_hit_rate("zhipu/glm-5.2").unwrap() - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_record_event_feeds_affinity_negotiation() {
+        // record_event 应将 AffinityCapabilityNegotiated 事件喂入采集器
+        let monitor = EfficiencyMonitor::new(MonitorConfig::default());
+
+        monitor.record_event(&make_affinity_negotiation("zhipu/glm-5.2", "full_fidelity"));
+
+        let am = monitor.affinity_metrics();
+        let rate = am.feature_enablement_rate("zhipu/glm-5.2").unwrap();
+        assert!((rate - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_record_event_feeds_affinity_degraded() {
+        // record_event 应将 ProviderDegraded 事件喂入采集器
+        let monitor = EfficiencyMonitor::new(MonitorConfig::default());
+
+        monitor.record_event(&make_provider_degraded("zhipu/glm-5.2"));
+
+        // 验证降级计数
+        let samples = monitor.affinity_metrics().collect();
+        let degraded = samples
+            .iter()
+            .find(|s| s.name == "mca_provider_degraded_total")
+            .expect("应有降级计数样本");
+        assert!((degraded.value - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_render_metrics_contains_mca_metrics() {
+        // render_metrics 输出应包含 mca_* 亲和指标
+        let monitor = EfficiencyMonitor::new(MonitorConfig::default());
+        monitor.record_event(&make_stream_session("zhipu/glm-5.2", 150));
+
+        let output = monitor.render_metrics();
+        assert!(
+            output.contains("mca_ttft_p50_ms"),
+            "应包含 mca_ttft_p50_ms 指标"
+        );
+        assert!(
+            output.contains("mca_ttft_p95_ms"),
+            "应包含 mca_ttft_p95_ms 指标"
+        );
+        assert!(
+            output.contains("mca_cache_hit_rate"),
+            "应包含 mca_cache_hit_rate 指标"
+        );
+        assert!(
+            output.contains("mca_feature_enablement_rate"),
+            "应包含 mca_feature_enablement_rate 指标"
+        );
+        // 验证标签含 route 维度
+        assert!(
+            output.contains(r#"route="zhipu/glm-5.2""#),
+            "指标标签应含 route 维度"
+        );
+    }
+
+    #[test]
+    fn test_affinity_metrics_accessible_via_monitor() {
+        // affinity_metrics() 访问器应返回有效引用
+        let monitor = EfficiencyMonitor::new(MonitorConfig::default());
+        let am = monitor.affinity_metrics();
+
+        // 通过引用记录事件
+        am.record_session("test/t-model", 100, 0, 0, 0);
+        assert_eq!(am.ttft_percentile("test/t-model", 0.50), Some(100));
+    }
+
+    #[tokio::test]
+    async fn test_background_subscriber_feeds_affinity_metrics() {
+        // 后台订阅路径应将 MCA 事件喂入 affinity_metrics 采集器
+        let bus = EventBus::new();
+        let monitor = EfficiencyMonitor::with_event_bus(MonitorConfig::default(), bus.clone());
+
+        // 启动后台订阅
+        monitor.start_event_subscriber().expect("启动订阅失败");
+
+        // 给后台任务时间启动
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 发布 MCA 事件
+        bus.publish(make_stream_session("zhipu/glm-5.2", 200))
+            .await
+            .expect("发布失败");
+        bus.publish(make_affinity_negotiation("zhipu/glm-5.2", "full_fidelity"))
+            .await
+            .expect("发布失败");
+
+        // 给后台任务时间处理
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // 验证亲和度量被记录
+        let am = monitor.affinity_metrics();
+        assert_eq!(
+            am.ttft_percentile("zhipu/glm-5.2", 0.50),
+            Some(200),
+            "后台订阅应将 StreamSessionCompleted 事件喂入 affinity_metrics"
+        );
+        let rate = am.feature_enablement_rate("zhipu/glm-5.2").unwrap();
+        assert!(
+            (rate - 1.0).abs() < 1e-6,
+            "后台订阅应将 AffinityCapabilityNegotiated 事件喂入 affinity_metrics"
+        );
     }
 }

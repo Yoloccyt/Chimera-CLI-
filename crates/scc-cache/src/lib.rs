@@ -55,7 +55,9 @@ pub mod types;
 pub mod wal;
 
 // === 关键类型重导出,简化外部导入 ===
-pub use affinity::{CacheBreakpoint, CachePrefix, PrefixKind, SessionAffinityTracker};
+pub use affinity::{
+    CacheAffinityIntegration, CacheBreakpoint, CachePrefix, PrefixKind, SessionAffinityTracker,
+};
 pub use cache::SccCache;
 pub use config::SccConfig;
 pub use error::SccError;

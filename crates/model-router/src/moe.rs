@@ -190,6 +190,7 @@ impl Default for HistoryRecord {
 /// # 使用示例
 /// ```
 /// use model_router::{MoeGate, ModelRegistry, RouterConfig, RoutingRequest, RoutingStrategy};
+/// use nexus_contracts::affinity::ThinkingPreference;
 /// use nexus_core::{UserIntent, MultimodalInput};
 ///
 /// let registry = ModelRegistry::from_config(&RouterConfig::default());
@@ -204,6 +205,7 @@ impl Default for HistoryRecord {
 ///     },
 ///     estimated_tokens: 1000,
 ///     strategy: RoutingStrategy::Auto,
+///     thinking_pref: ThinkingPreference::Standard,
 /// };
 /// let models = registry.list();
 /// // history=None:退化三维评分(向后兼容 v1.2.0)

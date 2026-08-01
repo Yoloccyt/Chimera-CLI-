@@ -84,6 +84,43 @@ impl WindowAffinity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+        #[test]
+        fn fold_reduces_to_max_allowed_tier(
+            requested in 0u8..4,  // 0=L0, 1=L1, 2=L2, 3=L3
+            context_window in 1u32..=2_000_000,
+        ) {
+            let tiers = [WindowTier::L0, WindowTier::L1, WindowTier::L2, WindowTier::L3];
+            let req = tiers[requested as usize];
+            let result = WindowAffinity::fold(req, context_window);
+            let max_allowed = WindowAffinity::max_tier_for_window(context_window);
+            // 折减后档位不能超过模型允许的最高档
+            prop_assert!(result.tier <= max_allowed, "tier must not exceed max_allowed");
+            // 如果没有折减,档位应等于请求档位
+            if !result.folded {
+                prop_assert_eq!(result.tier, req, "not folded => tier == requested");
+            }
+            // 分块标记仅当折减到 L2 时成立
+            if result.needs_chunking {
+                prop_assert_eq!(result.tier, WindowTier::L2, "chunking only when capped at L2");
+            }
+        }
+
+        #[test]
+        fn fold_is_deterministic(
+            requested in 0u8..4,
+            context_window in 1u32..=2_000_000,
+        ) {
+            let tiers = [WindowTier::L0, WindowTier::L1, WindowTier::L2, WindowTier::L3];
+            let req = tiers[requested as usize];
+            let a = WindowAffinity::fold(req, context_window);
+            let b = WindowAffinity::fold(req, context_window);
+            prop_assert_eq!(a, b, "折减必须幂等");
+        }
+    }
 
     #[test]
     fn one_million_window_allows_all_tiers() {

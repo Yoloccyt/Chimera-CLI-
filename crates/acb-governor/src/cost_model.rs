@@ -149,6 +149,11 @@ impl AffinityCostModel {
     pub fn total_spend_micro(&self) -> u64 {
         self.total_spend_micro.load(Ordering::Acquire)
     }
+
+    /// 日预算上限(微元;0 = 不限)
+    pub fn daily_budget_micro(&self) -> u64 {
+        self.daily_budget_micro
+    }
 }
 
 /// EWMA 更新(首样本直取,避免 0 基线拖低)

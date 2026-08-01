@@ -32,6 +32,7 @@ use model_router::{
     HistoryStore, InMemoryHistoryStore, ModelInfo, ModelRegistry, MoeGate, RoutingRequest,
     RoutingStrategy, SqliteHistoryStore,
 };
+use nexus_contracts::affinity::ThinkingPreference;
 use nexus_core::{MultimodalInput, UserIntent};
 
 /// 批量生成 n 个差异化模型(与 `tests/moe_test.rs::make_models` 同构)
@@ -73,6 +74,7 @@ fn make_request() -> RoutingRequest {
         },
         estimated_tokens: 1000,
         strategy: RoutingStrategy::Auto,
+        thinking_pref: ThinkingPreference::Standard,
     }
 }
 
@@ -125,6 +127,7 @@ fn route_latency_bench(c: &mut Criterion) {
                     black_box(&req),
                     black_box(&full_gate),
                     None,
+                    black_box(ThinkingPreference::Standard),
                 )
                 .expect("全量路由不应失败");
             });
@@ -137,6 +140,7 @@ fn route_latency_bench(c: &mut Criterion) {
                     black_box(&req),
                     black_box(&moe_gate),
                     None,
+                    black_box(ThinkingPreference::Standard),
                 )
                 .expect("三维门控路由不应失败");
             });
@@ -149,6 +153,7 @@ fn route_latency_bench(c: &mut Criterion) {
                     black_box(&req),
                     black_box(&moe_gate),
                     Some(black_box(&history) as &dyn HistoryStore),
+                    black_box(ThinkingPreference::Standard),
                 )
                 .expect("五维门控路由不应失败");
             });

@@ -214,7 +214,16 @@ impl NexusEvent {
             | Self::AffinityCapabilityNegotiated { .. }
             | Self::AffinityQuotaExhausted { .. }
             | Self::AffinityUnknownField { .. }
-            | Self::StreamSessionCompleted { .. } => EventTopic::System,
+            | Self::StreamSessionCompleted { .. }
+            // MCA P2-1:跨厂商辩论通道选择(parliament 发布,与 ModelAffinitySelected
+            // 同属 MCA 通道层事件,归入 System 主题)
+            | Self::CrossVendorNegotiation { .. }
+            // MCA P5:窗口亲和折减结果(hcw_integration 发布,与 ModelAffinitySelected
+            // 同属 MCA 通道层事件,归入 System 主题)
+            | Self::WindowAffinityApplied { .. }
+            // MCA A3:缓存亲和策略应用结果(mca-gateway codec 发布,
+            // 与 ModelAffinitySelected 同属 MCA 通道层事件,归入 System 主题)
+            | Self::CacheAffinityApplied { .. } => EventTopic::System,
 
             // === Knowledge (4 + P4-W16.2.2 3 个 + P5.2.3 1 个) === L5 Knowledge 知识沉淀与进化
             Self::WikiUpdated { .. }

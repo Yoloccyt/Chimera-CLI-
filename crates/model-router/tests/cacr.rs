@@ -15,6 +15,7 @@ use model_router::{
     CacrConfig, CacrDecision, CacrGuard, ModelRegistry, ModelRouter, RouterConfig, RouterError,
     RoutingRequest, RoutingStrategy,
 };
+use nexus_contracts::affinity::ThinkingPreference;
 use nexus_core::{MultimodalInput, UserIntent};
 
 // ============================================================
@@ -38,6 +39,7 @@ fn make_request(strategy: RoutingStrategy, tokens: u32) -> RoutingRequest {
         intent: make_intent(),
         estimated_tokens: tokens,
         strategy,
+        thinking_pref: ThinkingPreference::Standard,
     }
 }
 

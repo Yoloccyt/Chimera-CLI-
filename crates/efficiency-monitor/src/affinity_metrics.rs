@@ -16,7 +16,7 @@
 //! **不依赖** L10 mca-gateway。所有 MCA 事件在 event-bus L1 定义。
 //!
 //! # 线程安全
-//! 每通道统计走 `DashMap<String, Mutex<ChannelAffinityStats>>`;record 同步
+//! 每通道统计走 `DashMap<String, ChannelAffinityStats>`;record 同步
 //! 更新,collect 计算百分位,均不跨 await(C7)。TTFT 百分位用
 //! `select_nth_unstable`(O(n),§4.1 Top-K 红线,禁 sort_by)。
 
@@ -33,7 +33,9 @@ const TTFT_RING_CAP: usize = 256;
 #[derive(Debug, Default, Clone)]
 struct ChannelAffinityStats {
     /// TTFT 采样环(最近 TTFT_RING_CAP 个,FIFO 覆盖)
-    ttft_samples: Vec<u32>,
+    /// WHY u64:与 StreamSessionCompleted.ttft_ms(u64) 类型一致,避免在事件
+    /// 处理路径中做截断转换。TTFT 值典型 < 10000ms,u64 可安全承载。
+    ttft_samples: Vec<u64>,
     /// 会话数
     sessions: u64,
     /// 累计输入 token
@@ -54,7 +56,7 @@ struct ChannelAffinityStats {
 
 impl ChannelAffinityStats {
     /// 推入 TTFT 样本(环形覆盖:满则移除最旧)
-    fn push_ttft(&mut self, ttft_ms: u32) {
+    fn push_ttft(&mut self, ttft_ms: u64) {
         if self.ttft_samples.len() >= TTFT_RING_CAP {
             self.ttft_samples.remove(0);
         }
@@ -62,7 +64,7 @@ impl ChannelAffinityStats {
     }
 
     /// 百分位(0.0-1.0)——用 select_nth_unstable O(n)(§4.1 Top-K 红线)
-    fn percentile(&self, p: f64) -> Option<u32> {
+    fn percentile(&self, p: f64) -> Option<u64> {
         if self.ttft_samples.is_empty() {
             return None;
         }
@@ -117,7 +119,7 @@ impl AffinityMetrics {
     pub fn record_session(
         &self,
         route_key: &str,
-        ttft_ms: u32,
+        ttft_ms: u64,
         cost_micro: u64,
         input_tokens: u64,
         cache_hit_tokens: u64,
@@ -150,7 +152,7 @@ impl AffinityMetrics {
     }
 
     /// 查询通道 TTFT 百分位(E1 验收数据源)
-    pub fn ttft_percentile(&self, route_key: &str, p: f64) -> Option<u32> {
+    pub fn ttft_percentile(&self, route_key: &str, p: f64) -> Option<u64> {
         self.channels.get(route_key).and_then(|s| s.percentile(p))
     }
 
@@ -159,11 +161,49 @@ impl AffinityMetrics {
         self.channels.get(route_key).map(|s| s.cache_hit_rate())
     }
 
-    /// 查询通道特性启用率(A2 达标判据 ≥ 0.95)
+    /// 查询通道特性启用率(A2 达标判据 >= 0.95)
     pub fn feature_enablement_rate(&self, route_key: &str) -> Option<f64> {
         self.channels
             .get(route_key)
             .map(|s| s.feature_enablement_rate())
+    }
+
+    /// 处理 MCA 事件 — 由 `EfficiencyMonitor` 的 `handle_broadcast_event` 调用
+    ///
+    /// 根据事件类型分发到对应的 record 方法:
+    /// - `StreamSessionCompleted` -> `record_session`
+    /// - `AffinityCapabilityNegotiated` -> `record_negotiation`
+    /// - `ProviderDegraded` -> `record_degraded`
+    pub fn handle_mca_event(&self, event: &event_bus::NexusEvent) {
+        match event {
+            event_bus::NexusEvent::StreamSessionCompleted {
+                route_key,
+                ttft_ms,
+                cost_actual_micro,
+                input_tokens,
+                cache_hit_tokens,
+                ..
+            } => {
+                self.record_session(
+                    route_key,
+                    *ttft_ms,
+                    *cost_actual_micro,
+                    *input_tokens,
+                    *cache_hit_tokens,
+                );
+            }
+            event_bus::NexusEvent::AffinityCapabilityNegotiated {
+                route_key,
+                fidelity,
+                ..
+            } => {
+                self.record_negotiation(route_key, fidelity);
+            }
+            event_bus::NexusEvent::ProviderDegraded { route_key, .. } => {
+                self.record_degraded(route_key);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -228,10 +268,10 @@ mod tests {
     fn ttft_percentile_selects_correctly() {
         let m = AffinityMetrics::new();
         // 注入 100 个样本 1..=100 ms
-        for i in 1..=100u32 {
+        for i in 1..=100u64 {
             m.record_session("zhipu/glm-5.2", i, 0, 0, 0);
         }
-        // p50 ≈ 50,p95 ≈ 95(select_nth_unstable 精确选择)
+        // p50 ~= 50,p95 ~= 95(select_nth_unstable 精确选择)
         assert_eq!(m.ttft_percentile("zhipu/glm-5.2", 0.50), Some(50));
         assert_eq!(m.ttft_percentile("zhipu/glm-5.2", 0.95), Some(95));
     }
@@ -249,7 +289,7 @@ mod tests {
     #[test]
     fn feature_enablement_rate_tracks_negotiation() {
         let m = AffinityMetrics::new();
-        // 9 次全保真 + 1 次降级 → 启用率 0.9
+        // 9 次全保真 + 1 次降级 -> 启用率 0.9
         for _ in 0..9 {
             m.record_negotiation("zhipu/glm-5.2", "full_fidelity");
         }
@@ -262,7 +302,7 @@ mod tests {
     fn feature_enablement_optimistic_when_no_negotiation() {
         let m = AffinityMetrics::new();
         m.record_session("x/y", 10, 0, 0, 0);
-        // 无协商记录 → 乐观 1.0
+        // 无协商记录 -> 乐观 1.0
         assert_eq!(m.feature_enablement_rate("x/y"), Some(1.0));
     }
 
@@ -270,7 +310,7 @@ mod tests {
     fn ttft_ring_bounded() {
         let m = AffinityMetrics::new();
         // 注入超过环容量的样本,p95 仍可计算(不 OOM)
-        for i in 0..(TTFT_RING_CAP as u32 + 100) {
+        for i in 0..(TTFT_RING_CAP as u64 + 100) {
             m.record_session("x/y", i % 1000, 0, 0, 0);
         }
         assert!(m.ttft_percentile("x/y", 0.95).is_some());
@@ -293,5 +333,55 @@ mod tests {
         assert!(samples
             .iter()
             .all(|s| s.labels.iter().any(|(k, _)| k == "route")));
+    }
+
+    #[test]
+    fn handle_mca_event_stream_session() {
+        let m = AffinityMetrics::new();
+        let event = event_bus::NexusEvent::StreamSessionCompleted {
+            metadata: event_bus::EventMetadata::new("test"),
+            intent_id: "i-1".into(),
+            route_key: "test/t-model".into(),
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_hit_tokens: 30,
+            cost_actual_micro: 500,
+            ttft_ms: 150,
+        };
+        m.handle_mca_event(&event);
+        assert_eq!(m.ttft_percentile("test/t-model", 0.50), Some(150));
+        assert!((m.cache_hit_rate("test/t-model").unwrap() - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn handle_mca_event_negotiation() {
+        let m = AffinityMetrics::new();
+        let event = event_bus::NexusEvent::AffinityCapabilityNegotiated {
+            metadata: event_bus::EventMetadata::new("test"),
+            route_key: "test/t-model".into(),
+            fidelity: "full_fidelity".into(),
+            degraded_capabilities: vec![],
+        };
+        m.handle_mca_event(&event);
+        let rate = m.feature_enablement_rate("test/t-model").unwrap();
+        assert!((rate - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn handle_mca_event_degraded() {
+        let m = AffinityMetrics::new();
+        let event = event_bus::NexusEvent::ProviderDegraded {
+            metadata: event_bus::EventMetadata::new("test"),
+            route_key: "test/t-model".into(),
+            reason: "timeout".into(),
+            health_score: 30,
+        };
+        m.handle_mca_event(&event);
+        let samples = m.collect();
+        let degraded = samples
+            .iter()
+            .find(|s| s.name == "mca_provider_degraded_total")
+            .expect("应有降级计数样本");
+        assert!((degraded.value - 1.0).abs() < 1e-6);
     }
 }

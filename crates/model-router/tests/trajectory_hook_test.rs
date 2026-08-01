@@ -30,6 +30,7 @@ use model_router::{
     ModelRegistry, ModelRouter, RecordingHook, RouteHook, RouterConfig, RouterError,
     RoutingRequest, RoutingStrategy, TrajectoryEvent, TrajectoryOutcome, TrajectoryStats,
 };
+use nexus_contracts::affinity::ThinkingPreference;
 use nexus_core::{MultimodalInput, UserIntent};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -53,6 +54,7 @@ fn make_request(strategy: RoutingStrategy) -> RoutingRequest {
         intent: make_intent(),
         estimated_tokens: 1000,
         strategy,
+        thinking_pref: ThinkingPreference::Standard,
     }
 }
 

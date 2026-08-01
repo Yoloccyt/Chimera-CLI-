@@ -40,6 +40,9 @@ tempfile = { workspace = true }
 repo-wiki = { path = "../repo-wiki" }
 # model-router:L1 模型路由,端到端集成测试需验证 Quest 创建后可路由至执行模型
 model-router = { path = "../model-router" }
+# nexus-contracts:L0 契约,提供 MCA ThinkingPreference 类型(RoutingRequest 字段)
+# dev-dependencies 可绕过生产依赖方向(§2.2),仅 tests/ 目录使用
+nexus-contracts = { path = "../nexus-contracts" }
 # criterion:基准测试框架,用于 TTG 模式选择延迟基准(SubTask 35.6)
 criterion = { workspace = true }
 # proptest:属性测试框架,用于 TTG 不变量验证(SubTask 37.7)

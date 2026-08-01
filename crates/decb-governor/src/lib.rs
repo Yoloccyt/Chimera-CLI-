@@ -33,6 +33,8 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod config;
+/// DECB 成本回算 — 将实际成本回写到 decb-governor 的预算核算
+pub mod cost_callback;
 pub mod error;
 pub mod governor;
 pub mod overflow;
@@ -40,6 +42,7 @@ pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use config::DecbConfig;
+pub use cost_callback::DecbCostCallback;
 pub use error::DecbError;
 pub use governor::DecbGovernor;
 pub use overflow::OverflowDetector;

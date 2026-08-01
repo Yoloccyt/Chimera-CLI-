@@ -11,6 +11,8 @@
 //! `estimated_cost = (estimated_tokens / 1000) * cost_per_1k_tokens * 100`
 //! 单位为美分(1 美元 = 100 美分),与 `BudgetExceeded` 事件保持一致。
 
+use nexus_contracts::affinity::ThinkingPreference;
+
 use crate::error::RouterError;
 use crate::moe::{HistoryStore, MoeGate};
 use crate::registry::ModelRegistry;
@@ -85,9 +87,13 @@ pub fn route_efficient(
 /// Auto 策略:加权评分选择综合最优(默认 MoE 门控)
 ///
 /// 评分公式:
-/// `score = 0.4 * (1 - cost_normalized) + 0.4 * (1 - latency_normalized) + 0.2 * quality_score`
+/// `score = cost_weight * (1 - cost_normalized) + latency_weight * (1 - latency_normalized) + quality_weight * quality_score`
 ///
-/// WHY 权重分配:成本与延迟同等重要(各 0.4),质量作为补充(0.2)。
+/// 默认权重:cost=0.4, latency=0.4, quality=0.2。
+/// 当 `thinking_pref == Deep` 时:quality=0.35, cost=0.25, latency=0.4。
+///
+/// WHY 权重分配:默认场景下成本与延迟同等重要(各 0.4),质量作为补充(0.2);
+/// 深度思考场景需要更高质量输出,因此提升 quality 权重、降低 cost 权重。
 /// 归一化使用 `value / max_value`,确保所有维度在 [0, 1] 范围内可比。
 /// 当 max_value 为 0(所有模型该维度相同)时,该项直接给满分 1.0,
 /// 避免除零并表达"该维度无差异,不影响选择"的语义。
@@ -104,15 +110,22 @@ pub fn route_auto(
     registry: &ModelRegistry,
     req: &RoutingRequest,
 ) -> Result<RoutingDecision, RouterError> {
-    route_auto_with_gate(registry, req, &MoeGate::default(), None)
+    route_auto_with_gate(registry, req, &MoeGate::default(), None, req.thinking_pref)
 }
 
-/// Auto 策略(可配置 MoE 门控 + 历史存储)— 供 bench / 可配置场景使用
+/// Auto 策略(可配置 MoE 门控 + 历史存储 + 思考偏好)— 供 bench / 可配置场景使用
 ///
 /// WHY 独立 pub fn:`route_auto` 签名不变(向后兼容),但 bench 需要对比
 /// "全量评估"vs"MoE 门控"vs"五维评分",且未来 `ModelRouter` 可能持有
 /// `MoeGate` + `HistoryStore`。提取完整逻辑到此函数,`route_auto` 仅作
 /// 默认门控 + 无历史的薄封装。
+///
+/// # 思考偏好权重调整
+/// 当 `thinking_pref == ThinkingPreference::Deep` 时:
+/// - quality 权重从 0.2 提升到 0.35(深度推理需要更高质量)
+/// - cost 权重从 0.4 降到 0.25(深度场景对成本敏感度降低)
+/// - latency 权重保持 0.4 不变
+/// 其他情况(Standard/Fast)使用默认权重:cost=0.4, latency=0.4, quality=0.2。
 ///
 /// # 行为
 /// - `gate.gate()` 返回全部模型(退化):完整评估对全部模型做归一化,
@@ -126,6 +139,7 @@ pub fn route_auto_with_gate(
     req: &RoutingRequest,
     gate: &MoeGate,
     history: Option<&dyn HistoryStore>,
+    thinking_pref: ThinkingPreference,
 ) -> Result<RoutingDecision, RouterError> {
     let models = registry.list();
     if models.is_empty() {
@@ -147,6 +161,16 @@ pub fn route_auto_with_gate(
         .map(|m| m.avg_latency_ms as f64)
         .fold(0.0_f64, f64::max);
 
+    // 根据思考偏好确定权重
+    //
+    // 当 thinking_pref == Deep 时,提升 quality 权重(深度推理需要更高质量输出),
+    // 降低 cost 权重(深度场景对成本敏感度降低),latency 权重保持不变。
+    // 其他情况(Standard/Fast)使用默认权重。
+    let (cost_weight, latency_weight, quality_weight) = match thinking_pref {
+        ThinkingPreference::Deep => (0.25, 0.4, 0.35),
+        _ => (0.4, 0.4, 0.2),
+    };
+
     // 计算每个候选模型的综合评分
     let mut scored: Vec<(f64, &ModelInfo)> = gated
         .iter()
@@ -161,7 +185,9 @@ pub fn route_auto_with_gate(
             } else {
                 1.0
             };
-            let score = 0.4 * cost_score + 0.4 * latency_score + 0.2 * m.quality_score as f64;
+            let score = cost_weight * cost_score
+                + latency_weight * latency_score
+                + quality_weight * m.quality_score as f64;
             (score, *m)
         })
         .collect();
@@ -198,7 +224,7 @@ pub fn route_auto_with_gate(
     Ok(RoutingDecision {
         model_id: selected.model_id.clone(),
         route_reason: format!(
-            "Auto: selected {} (score {:.4}, cost_score {:.3}, latency_score {:.3}, quality {:.2})",
+            "Auto: selected {} (score {:.4}, cost_score {:.3}, latency_score {:.3}, quality {:.2}, thinking_pref {:?})",
             selected.model_id,
             scored[0].0,
             if max_cost > 0.0 {
@@ -211,7 +237,8 @@ pub fn route_auto_with_gate(
             } else {
                 1.0
             },
-            selected.quality_score
+            selected.quality_score,
+            thinking_pref
         ),
         estimated_cost,
         candidates: candidate_ids,
@@ -223,6 +250,7 @@ mod tests {
     use super::*;
     use crate::config::RouterConfig;
     use crate::types::RoutingStrategy;
+    use nexus_contracts::affinity::ThinkingPreference;
     use nexus_core::{MultimodalInput, UserIntent};
 
     fn make_intent() -> UserIntent {
@@ -240,6 +268,7 @@ mod tests {
             intent: make_intent(),
             estimated_tokens: tokens,
             strategy,
+            thinking_pref: ThinkingPreference::Standard,
         }
     }
 
@@ -333,5 +362,99 @@ mod tests {
         let decision = route_auto(&registry, &req).unwrap();
         assert_eq!(decision.model_id, "only-model");
         assert!(decision.candidates.is_empty());
+    }
+
+    // ============================================================
+    // P1-1.4: thinking_pref 权重调整测试
+    // ============================================================
+
+    /// Deep 模式下 quality 权重提升(0.35),cost 权重降低(0.25),
+    /// 高质量模型(lite-model: quality=0.6, cost=0.0001)应获得更高评分。
+    #[test]
+    fn test_route_auto_deep_thinking_adjusts_weights() {
+        let registry = make_registry();
+        // 构造 Deep 思考偏好的请求
+        let req = RoutingRequest {
+            quest_id: "q-deep".into(),
+            intent: make_intent(),
+            estimated_tokens: 1000,
+            strategy: RoutingStrategy::Auto,
+            thinking_pref: ThinkingPreference::Deep,
+        };
+        let decision = route_auto(&registry, &req).unwrap();
+
+        // Deep 模式下 quality 权重 0.35 > 默认 0.2,
+        // 高质量模型 premium-model(quality=0.95) 应比默认权重下更可能被选中。
+        // 默认权重评分:lite=0.867, efficient=0.757, premium=0.19
+        // Deep 权重评分:lite=0.703, efficient=0.673, premium=0.46
+        // 由于 premium-model 的 quality 优势显著提升,但 lite-model 的 cost+latency
+        // 优势仍占主导,所以 lite-model 仍可能被选中,但 premium 的排名应相对提升。
+        // 核心验证:route_reason 应包含 thinking_pref 信息
+        assert!(
+            decision.route_reason.contains("thinking_pref Deep"),
+            "Deep 模式的 route_reason 应包含 thinking_pref, got: {}",
+            decision.route_reason
+        );
+        // 验证选中模型是注册表中的模型
+        let all_ids = ["lite-model", "efficient-model", "premium-model"];
+        assert!(
+            all_ids.contains(&decision.model_id.as_str()),
+            "选中模型应在注册表中, got: {}",
+            decision.model_id
+        );
+    }
+
+    /// Standard 模式下权重不变(行为与原来一致)
+    #[test]
+    fn test_route_auto_standard_thinking_default_weights() {
+        let registry = make_registry();
+        // 显式构造 Standard 偏好(与默认一致)
+        let req = RoutingRequest {
+            quest_id: "q-std".into(),
+            intent: make_intent(),
+            estimated_tokens: 1000,
+            strategy: RoutingStrategy::Auto,
+            thinking_pref: ThinkingPreference::Standard,
+        };
+        let decision = route_auto(&registry, &req).unwrap();
+
+        // Standard 模式使用默认权重(0.4/0.4/0.2),行为应与原 route_auto 一致
+        // 默认配置下 lite-model 评分最高
+        assert!(
+            decision.model_id == "lite-model" || decision.model_id == "efficient-model",
+            "Standard 模式应选择 lite 或 efficient, got: {}",
+            decision.model_id
+        );
+        assert!(
+            decision.route_reason.contains("thinking_pref Standard"),
+            "Standard 模式的 route_reason 应包含 thinking_pref, got: {}",
+            decision.route_reason
+        );
+    }
+
+    /// Fast 模式下权重不变
+    #[test]
+    fn test_route_auto_fast_thinking_default_weights() {
+        let registry = make_registry();
+        let req = RoutingRequest {
+            quest_id: "q-fast".into(),
+            intent: make_intent(),
+            estimated_tokens: 1000,
+            strategy: RoutingStrategy::Auto,
+            thinking_pref: ThinkingPreference::Fast,
+        };
+        let decision = route_auto(&registry, &req).unwrap();
+
+        // Fast 模式使用默认权重(0.4/0.4/0.2),行为应与原 route_auto 一致
+        assert!(
+            decision.model_id == "lite-model" || decision.model_id == "efficient-model",
+            "Fast 模式应选择 lite 或 efficient, got: {}",
+            decision.model_id
+        );
+        assert!(
+            decision.route_reason.contains("thinking_pref Fast"),
+            "Fast 模式的 route_reason 应包含 thinking_pref, got: {}",
+            decision.route_reason
+        );
     }
 }

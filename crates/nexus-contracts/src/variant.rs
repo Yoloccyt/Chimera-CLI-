@@ -49,7 +49,7 @@ impl std::fmt::Display for VariantId {
 /// # 语义
 ///
 /// - `task_types`:变体的适用范围(规则路由的匹配键,ADR-051)
-/// - `expected_performance`:预期成功率 [0.0, 1.0](审议时的基线承诺)
+/// - `expected_performance`:预期成功率 \[0\.0, 1\.0\](审议时的基线承诺)
 /// - `max_regression`:允许的最大回归幅度(超过即触发回滚评估)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VariantContract {
@@ -57,14 +57,14 @@ pub struct VariantContract {
     pub variant_id: VariantId,
     /// 适用任务类型集合(空 = 通用变体,兜底路由)
     pub task_types: Vec<String>,
-    /// 预期成功率 [0.0, 1.0]
+    /// 预期成功率 \[0\.0, 1\.0\]
     pub expected_performance: f32,
-    /// 允许的最大回归幅度 [0.0, 1.0](相对 expected_performance)
+    /// 允许的最大回归幅度 \[0\.0, 1\.0\](相对 expected_performance)
     pub max_regression: f32,
 }
 
 impl VariantContract {
-    /// 构造变体契约(性能字段 clamp 至 [0,1],防御越界输入)
+    /// 构造变体契约(性能字段 clamp 至 \[0,1\],防御越界输入)
     pub fn new(
         variant_id: VariantId,
         task_types: Vec<String>,

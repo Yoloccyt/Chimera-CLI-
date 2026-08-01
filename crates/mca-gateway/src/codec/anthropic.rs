@@ -15,12 +15,15 @@
 //! `AffinityUnknownField` 事件留痕,驱动 spec 更新)。
 
 use nexus_contracts::affinity::{
-    AffinityRequest, ContentBlock, FinishReason, MessageRole, ModelAffinitySpec, ProtocolDialect,
-    UsageReport,
+    AffinityRequest, CacheSupport, ContentBlock, FinishReason, MessageRole, ModelAffinitySpec,
+    ProtocolDialect, UsageReport,
 };
 use serde_json::{json, Value};
+// L3 缓存亲和:CacheAffinityIntegration 缓存策略决策(CacheSupport 已由 L0 nexus-contracts 提供)
+use scc_cache::CacheAffinityIntegration;
 
 use super::DecodedResponse;
+use crate::capability::{negotiate_thinking, ThinkingDirective};
 use crate::error::AffinityError;
 
 /// Anthropic Messages 无状态码器
@@ -40,14 +43,54 @@ impl AnthropicCodec {
             "max_tokens": spec.capabilities.max_output,
             "messages": build_messages(request)?,
         });
-        // system 提示是顶层字段:从消息历史中提取全部 System 消息文本拼接
-        let system = collect_system_text(request);
-        if !system.is_empty() {
-            body["system"] = Value::String(system);
+        // system 提示是顶层字段:从消息历史中提取全部 System 消息文本
+        // ExplicitControl 族:转为块数组并注入 cache_control(P0-2 缓存亲和)
+        let system = build_system_field(request, spec);
+        if !system.is_null() {
+            body["system"] = system;
         }
         if !request.tools.is_empty() {
             body["tools"] = build_tools(request)?;
         }
+
+        // 思考参数映射:能力协商产出 → Anthropic 方言原生参数(P0-3)
+        //   - Anthropic 方言:thinking.type=enabled + budget_tokens(Effort 时用 spec 输出上限)
+        //   - 不支持思考或 Fast 偏好:不发 thinking 参数(P3:未声明的字段一律不发)
+        let (thinking_dir, _degraded) =
+            negotiate_thinking(&spec.capabilities.thinking, request.thinking_pref);
+        match thinking_dir {
+            ThinkingDirective::Off => { /* 不发 thinking 参数 */ }
+            ThinkingDirective::On => {
+                body["thinking"] = json!({"type": "enabled"});
+            }
+            ThinkingDirective::Effort(_level) => {
+                // Anthropic 方言:thinking.type=enabled + 使用 spec 的 max_output 作为 budget_tokens
+                // 对于 GLM Anthropic 端点,thinking.budget_tokens 控制思考深度
+                // 注意:Anthropic 原生不支持 effort 档位概念,但兼容 GLM 端点的 effort 语义
+                body["thinking"] = json!({
+                    "type": "enabled",
+                    "budget_tokens": spec.capabilities.max_output.min(65536)
+                });
+            }
+        }
+
+        // 缓存亲和参数注入:cache_control 断点(MCA A3,P0-2)
+        //   - Anthropic 方言:system 字段是顶层字符串,改为块数组并加 cache_control
+        //   - 仅 ExplicitControl 族注入;None/Implicit 族不注入
+        //   - Anthropic 最多 4 个断点配额,仅对 system 层打断点
+        if CacheAffinityIntegration::should_inject_cache_control(spec.capabilities.prompt_caching) {
+            if let Some(system) = body.get_mut("system") {
+                if system.is_string() {
+                    let text = system.take();
+                    *system = json!([{
+                        "type": "text",
+                        "text": text,
+                        "cache_control": { "type": "ephemeral" }
+                    }]);
+                }
+            }
+        }
+
         Ok(body)
     }
 
@@ -169,8 +212,12 @@ fn blocks_to_dialect(blocks: &[ContentBlock]) -> Result<Value, AffinityError> {
     Ok(Value::Array(out))
 }
 
-/// 提取全部 System 消息文本(多条拼接,Anthropic 顶层 system 字段)
-fn collect_system_text(request: &AffinityRequest) -> String {
+/// 构建 system 顶层字段 — 根据缓存策略返回字符串或块数组
+///
+/// - `None` / `Implicit`: 返回 `Value::String`(文本拼接,兼容现有行为)
+/// - `ExplicitControl`: 返回 `Value::Array`(块数组 + `cache_control` 注入)
+fn build_system_field(request: &AffinityRequest, spec: &ModelAffinitySpec) -> Value {
+    let is_explicit = spec.capabilities.prompt_caching == CacheSupport::ExplicitControl;
     let mut out = String::new();
     for msg in &request.messages {
         if msg.role == MessageRole::System {
@@ -181,7 +228,18 @@ fn collect_system_text(request: &AffinityRequest) -> String {
             }
         }
     }
-    out
+    if out.is_empty() {
+        return Value::Null;
+    }
+    if is_explicit {
+        Value::Array(vec![json!({
+            "type": "text",
+            "text": out,
+            "cache_control": {"type": "ephemeral"}
+        })])
+    } else {
+        Value::String(out)
+    }
 }
 
 /// 工具声明 → Anthropic tools 数组(input_schema 形态)
@@ -411,5 +469,85 @@ mod tests {
             AnthropicCodec.parse_response(br#"{"no_content": true}"#),
             Err(AffinityError::Protocol { .. })
         ));
+    }
+
+    // ── 缓存亲和集成测试(P0-2) ──
+
+    #[test]
+    fn anthropic_explicit_control_injects_cache_control() {
+        // ExplicitControl 族:system 字段应注入 cache_control
+        let mut spec = ModelAffinitySpec::minimal(
+            ProviderId::Moonshot,
+            "kimi-k3",
+            ProtocolDialect::AnthropicMessages,
+        );
+        spec.capabilities.prompt_caching = CacheSupport::ExplicitControl;
+        let mut request = simple_affinity_request("test", "你好");
+        request.messages.insert(
+            0,
+            AffinityMessage {
+                role: MessageRole::System,
+                blocks: vec![ContentBlock::Text {
+                    text: "You are a helpful assistant.".into(),
+                }],
+            },
+        );
+        let codec = AnthropicCodec;
+        let body = codec.build_request(&spec, &request).unwrap();
+        let system = body.get("system").unwrap();
+        // ExplicitControl 下 system 应为块数组
+        assert!(system.is_array(), "ExplicitControl 下 system 应为块数组");
+        let blocks = system.as_array().unwrap();
+        if let Some(first_block) = blocks.first() {
+            assert_eq!(
+                first_block.get("type").and_then(Value::as_str),
+                Some("text")
+            );
+            assert!(
+                first_block.get("cache_control").is_some(),
+                "ExplicitControl 下 system 应注入 cache_control"
+            );
+        }
+    }
+
+    #[test]
+    fn anthropic_none_keeps_system_as_string() {
+        // None 族:system 保持字符串
+        let mut spec = ModelAffinitySpec::minimal(
+            ProviderId::Moonshot,
+            "kimi-k3",
+            ProtocolDialect::AnthropicMessages,
+        );
+        spec.capabilities.prompt_caching = CacheSupport::None;
+        let mut request = simple_affinity_request("test", "你好");
+        request.messages.insert(
+            0,
+            AffinityMessage {
+                role: MessageRole::System,
+                blocks: vec![ContentBlock::Text {
+                    text: "You are a helpful assistant.".into(),
+                }],
+            },
+        );
+        let codec = AnthropicCodec;
+        let body = codec.build_request(&spec, &request).unwrap();
+        let system = body.get("system").unwrap();
+        // None 下 system 保持字符串
+        assert!(system.is_string(), "None 下 system 应为字符串");
+    }
+
+    /// 创建简单亲和请求:单条用户消息 + 默认思考偏好
+    fn simple_affinity_request(intent_id: &str, text: &str) -> AffinityRequest {
+        AffinityRequest {
+            intent_id: intent_id.into(),
+            messages: vec![AffinityMessage {
+                role: MessageRole::User,
+                blocks: vec![ContentBlock::Text { text: text.into() }],
+            }],
+            tools: Vec::new(),
+            thinking_pref: ThinkingPreference::Standard,
+            budget_hint_micro: None,
+            overrides: AffinityOverrides::default(),
+        }
     }
 }

@@ -13,6 +13,7 @@ use model_router::{
     ModelInfo, ModelRegistry, ModelRouter, RouterConfig, RouterError, RoutingRequest,
     RoutingStrategy,
 };
+use nexus_contracts::affinity::ThinkingPreference;
 use nexus_core::{MultimodalInput, UserIntent};
 
 /// 构造测试用 UserIntent
@@ -32,6 +33,7 @@ fn make_request(quest_id: &str, strategy: RoutingStrategy, tokens: u32) -> Routi
         intent: make_test_intent(10),
         estimated_tokens: tokens,
         strategy,
+        thinking_pref: ThinkingPreference::Standard,
     }
 }
 
