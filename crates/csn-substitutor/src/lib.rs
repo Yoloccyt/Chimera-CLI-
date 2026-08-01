@@ -38,6 +38,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// MCA 降级链通道亲和 — CapabilitySet 加权距离 + 配额耗尽降级选择(ADR-068)
+pub mod channel_affinity;
 pub mod config;
 pub mod degradation_chain;
 pub mod error;
@@ -46,6 +48,7 @@ pub mod substitutor;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use channel_affinity::{capability_distance, select_substitute};
 pub use config::CsnConfig;
 pub use degradation_chain::DegradationChain;
 pub use error::CsnError;

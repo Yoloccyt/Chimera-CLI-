@@ -59,6 +59,10 @@ pub enum MultimodalInput {
 /// - `Fast`:简单任务,快速响应(如查询、格式化)
 /// - `Standard`:常规任务,平衡速度与深度
 /// - `Deep`:复杂任务,深度推理(如架构设计、调试)
+///
+/// # 镜像关系(ADR-065)
+/// L0 `nexus_contracts::affinity::ThinkingPreference` 是本类型的镜像
+/// (L0 零 crate 依赖铁律禁止 L0 → L1 引用),两处三档语义必须保持同步。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ThinkingMode {
     /// 快速模式:低延迟,适合简单任务

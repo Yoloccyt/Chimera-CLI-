@@ -26,11 +26,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
 // WHY 直接从 L0 导入:示范新路径,EventBus/NexusEvent 仍需 event-bus,故拆分 import
 use event_bus::{EventBus, NexusEvent};
+use nexus_contracts::formal_props::VerificationResult;
 use nexus_contracts::EventMetadata;
 use tracing::{info, warn};
 
 use crate::config::AutoDpoConfig;
 use crate::error::AutoDpoError;
+use crate::formal::PreferenceConsistencyChecker;
 use crate::types::{ModelOutput, PreferencePair};
 
 /// 偏好对生成器 — 自动构造 DPO 训练样本
@@ -159,6 +161,42 @@ impl PreferencePairGenerator {
             chosen.score,
             rejected.score,
         );
+
+        // 步骤 5.5: FormalVerifier M1 偏好对一致性验证(P1-3,ADR-047)
+        // WHY:作为 R2 解冻(ADR-042)阶段 1 前置,在偏好对进入下游管道前
+        // 先形式化验证其一致性与反奖励黑客性质。
+        // 验证后立即拒绝,不进入事件发布或下游消费,防止污染训练数据。
+        if self.config.enable_formal_verification {
+            let checker = PreferenceConsistencyChecker::new();
+            let mut violations: Vec<String> = Vec::new();
+
+            // 反自偏好验证:chosen 与 rejected 内容不得相同
+            // (自偏好对的 margin 恒为 0,是奖励黑客"刷对数"的典型手法)
+            let pair_slice = [pair.clone()];
+            if let VerificationResult::Violated { counterexample, .. } =
+                checker.verify_no_self_preference(&pair_slice)
+            {
+                violations.push(counterexample);
+            }
+
+            // margin 有界性验证:差值在 [min_margin, max_margin] 范围内
+            // (过小 = 噪声对无训练价值;过大 = 疑似评分被操纵)
+            if let VerificationResult::Violated { counterexample, .. } = checker
+                .verify_margin_bounded(&pair_slice, self.config.min_margin, self.config.max_margin)
+            {
+                violations.push(counterexample);
+            }
+
+            if !violations.is_empty() {
+                return Err(AutoDpoError::GenerationFailed {
+                    reason: format!(
+                        "M1 形式化验证失败(共 {} 项违规): {}",
+                        violations.len(),
+                        violations.join("; ")
+                    ),
+                });
+            }
+        }
 
         info!(
             pair_id = %pair_id,
@@ -383,5 +421,92 @@ mod tests {
             ..Default::default()
         };
         assert!(PreferencePairGenerator::new(config).is_err());
+    }
+
+    // ============================================================
+    // P1-3: FormalVerifier M1 集成测试
+    // ============================================================
+
+    #[test]
+    fn test_m1_self_preference_rejected() {
+        // chosen 与 rejected 内容相同 → M1 反自偏好验证失败
+        let generator = make_generator();
+        let outputs = vec![
+            ModelOutput::new("same-content", 0.9),
+            ModelOutput::new("same-content", 0.3),
+        ];
+        let result = generator.generate(&outputs);
+        assert!(
+            matches!(result, Err(AutoDpoError::GenerationFailed { ref reason }) if reason.contains("M1")),
+            "should reject self-preference pair with M1 violation, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_m1_margin_too_small_rejected() {
+        // margin = 0.005 < min_margin (0.01) → M1 margin 越界验证失败
+        let generator = make_generator();
+        let outputs = vec![
+            ModelOutput::new("output-a", 0.505),
+            ModelOutput::new("output-b", 0.500),
+        ];
+        let result = generator.generate(&outputs);
+        assert!(
+            matches!(result, Err(AutoDpoError::GenerationFailed { ref reason }) if reason.contains("M1")),
+            "should reject tiny margin pair with M1 violation, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_m1_margin_too_large_rejected() {
+        // margin = 0.96 > max_margin (0.95) → M1 margin 越界验证失败
+        let generator = make_generator();
+        let outputs = vec![
+            ModelOutput::new("output-a", 0.99),
+            ModelOutput::new("output-b", 0.03),
+        ];
+        let result = generator.generate(&outputs);
+        assert!(
+            matches!(result, Err(AutoDpoError::GenerationFailed { ref reason }) if reason.contains("M1")),
+            "should reject excessive margin pair with M1 violation, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_m1_disabled_skips_verification() {
+        // enable_formal_verification = false → 即使 pair 有 margin 问题也能通过
+        let config = AutoDpoConfig {
+            enable_formal_verification: false,
+            ..Default::default()
+        };
+        let generator = PreferencePairGenerator::new(config).unwrap();
+        // margin = 0.86 > max_margin (0.95),但 M1 已关闭
+        let outputs = vec![
+            ModelOutput::new("output-a", 0.90),
+            ModelOutput::new("output-b", 0.04),
+        ];
+        let result = generator.generate(&outputs);
+        assert!(
+            result.is_ok(),
+            "should generate pair when M1 is disabled, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_m1_valid_pair_passes() {
+        // 正常偏好对(不同内容 + 合理 margin) → M1 验证通过
+        let generator = make_generator();
+        let outputs = vec![
+            ModelOutput::new("good-output", 0.9),
+            ModelOutput::new("bad-output", 0.3),
+        ];
+        let pair = generator.generate(&outputs).unwrap();
+        assert_eq!(pair.chosen, "good-output");
+        assert_eq!(pair.rejected, "bad-output");
+        assert!((pair.score_gap() - 0.6).abs() < 1e-6);
     }
 }

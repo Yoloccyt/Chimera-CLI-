@@ -6,6 +6,9 @@ edition.workspace = true
 [dependencies]
 # 异步运行时:timeout 超时控制 + spawn 后台订阅任务
 tokio = { workspace = true }
+# L0 Contracts: MCA 降级链能力相似度(ADR-065/068)的 CapabilitySet 加权距离
+# WHY L10 → L0 合规(依赖铁律 §2.2)
+nexus-contracts = { path = "../nexus-contracts" }
 # 配置与类型序列化(#[derive(Serialize, Deserialize)])
 serde = { workspace = true, features = ["derive"] }
 # 应用层错误(顶层调用方使用,库层用 thiserror)

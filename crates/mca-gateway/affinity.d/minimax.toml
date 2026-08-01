@@ -1,0 +1,50 @@
+# MiniMax 模型亲和描述符(affinity.d/minimax.toml)
+#
+# 数据来源:Morph《MiniMax M3: Architecture, Benchmarks, API》(2026-07-12)+
+#          MiniMax 开放平台《Anthropic SDK 兼容性说明》(2026-06-10)
+# 最高优先级怪癖:state_preservation = "verbatim_thinking"
+#   —— interleaved thinking 逐字回传,strip 即多轮工具调用退化(C9 硬约束)
+
+schema_version = 1
+
+[[models]]
+provider = "mini_max"
+model = "MiniMax-M3"
+# 双协议;quirk 钉住 anthropic_messages(thinking adaptive 原生)
+dialects = ["anthropic_messages", "open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+# Anthropic 路径 thinking adaptive 开启;M3 OpenAI 路径默认关
+thinking = "on_off"
+# 1M 上下文,API 保证 ≥512K
+context_window = 1048576
+max_output = 65536
+prompt_caching = "explicit_control"
+# priority 档 1.5× 价(必须 BudgetMask 显式授权,禁止默认开启)
+service_tiers = ["standard", "priority"]
+# 最高优先级 quirk:interleaved thinking 逐字回传(strip 即断链)
+state_preservation = "verbatim_thinking"
+# 多模态(图/视频输入)为七家独有优势,NMC 编码器可直通
+modalities = ["text", "image", "video"]
+structured_output = true
+
+[models.pricing]
+currency = "usd"
+# $0.30/$1.20(≤512K);微元口径(以 USD 计,1 USD ≈ 1e6 微元)
+input_micro_per_mtok = 300000
+output_micro_per_mtok = 1200000
+cache_hit_micro_per_mtok = 30000
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://api.minimaxi.com/anthropic"
+api_key_env = "MINIMAX_API_KEY"
+timeout_ms = 180000
+connect_timeout_ms = 10000
+rpm_limit = 300
+
+[[models.quirks]]
+rule = "prefer_dialect"
+dialect = "anthropic_messages"

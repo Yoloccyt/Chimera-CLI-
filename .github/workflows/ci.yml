@@ -58,6 +58,34 @@ jobs:
         run: cargo test --workspace
 
   # ============================================================
+  # MCA 双轨旁路 job(ADR-065 决策 6,PANTHEON 计划 M0 PR-4)
+  # WHY: feature `mca` 默认 off,默认 CI 不编译不测试下游 crate 中
+  # `#[cfg(feature = "mca")]` 门控的接线代码,存在"门控代码腐化、
+  # 转 on 时集中爆雷"风险(风险清单 R5)。本 job 以 --features mca
+  # 双轨验证门控面,与默认轨互补,保证两条轨道恒绿。
+  # 不设 continue-on-error:门控代码编译/测试失败必须阻塞合入。
+  # ============================================================
+  mca-feature:
+    name: check · test (--features mca)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+          # WHY 独立缓存键: feature 集不同,target 产物与默认轨不可混用
+          key: mca-feature
+
+      - name: Type check (workspace, --features mca)
+        run: cargo check --workspace --all-targets --features mca
+
+      - name: Test (workspace, --features mca)
+        run: cargo test --workspace --features mca
+
+  # ============================================================
   # P1-7: repo-wiki CI benchmark 阈值断言(可选,不阻塞合并)
   # WHY: benchmark 在 CI 环境波动较大,设为 continue-on-error 避免误报阻塞 PR。
   # 主要目的是捕获数量级退化(如 10× 以上),而非精确性能回归。

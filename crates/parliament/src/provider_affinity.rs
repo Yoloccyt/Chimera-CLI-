@@ -88,7 +88,10 @@ impl ProviderAffinityRegistry {
 
     /// 查询角色的 provider 绑定(未绑定返回 None)
     pub fn binding_of(&self, role_id: &RoleId) -> Option<ProviderBinding> {
-        self.bindings.read().ok().and_then(|m| m.get(role_id).cloned())
+        self.bindings
+            .read()
+            .ok()
+            .and_then(|m| m.get(role_id).cloned())
     }
 
     /// 校验某角色的绑定是否满足去相关(审议前调用)
@@ -154,7 +157,11 @@ mod tests {
     #[test]
     fn validate_rejects_producer_eq_skeptic() {
         // Skeptic 与生产者同厂商 → 红队形同虚设(同源相关失败)
-        let b = binding(ProviderId::MiniMax, ProviderId::DeepSeek, ProviderId::MiniMax);
+        let b = binding(
+            ProviderId::MiniMax,
+            ProviderId::DeepSeek,
+            ProviderId::MiniMax,
+        );
         assert!(validate_cross_provider(&b).is_err());
     }
 
@@ -164,7 +171,11 @@ mod tests {
         let b = binding(ProviderId::Zhipu, ProviderId::DeepSeek, ProviderId::MiniMax);
         assert!(validate_cross_provider(&b).is_ok());
         // verifier == skeptic 但都与 producer 异厂商:允许
-        let b2 = binding(ProviderId::Zhipu, ProviderId::DeepSeek, ProviderId::DeepSeek);
+        let b2 = binding(
+            ProviderId::Zhipu,
+            ProviderId::DeepSeek,
+            ProviderId::DeepSeek,
+        );
         assert!(validate_cross_provider(&b2).is_ok());
     }
 
@@ -172,7 +183,9 @@ mod tests {
     fn bind_rejects_correlated_binding() {
         let reg = ProviderAffinityRegistry::new();
         let bad = binding(ProviderId::Zhipu, ProviderId::Zhipu, ProviderId::DeepSeek);
-        assert!(reg.bind_provider(RoleId::new("role-architect"), bad).is_err());
+        assert!(reg
+            .bind_provider(RoleId::new("role-architect"), bad)
+            .is_err());
         // 拒绝后未写入
         assert!(reg.binding_of(&RoleId::new("role-architect")).is_none());
     }
@@ -181,7 +194,8 @@ mod tests {
     fn bind_and_query_decorrelated() {
         let reg = ProviderAffinityRegistry::new();
         let good = binding(ProviderId::Zhipu, ProviderId::DeepSeek, ProviderId::MiniMax);
-        reg.bind_provider(RoleId::new("role-skeptic"), good.clone()).unwrap();
+        reg.bind_provider(RoleId::new("role-skeptic"), good.clone())
+            .unwrap();
         assert_eq!(reg.binding_of(&RoleId::new("role-skeptic")), Some(good));
         assert!(reg.is_decorrelated(&RoleId::new("role-skeptic")));
     }

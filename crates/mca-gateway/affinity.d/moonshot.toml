@@ -1,0 +1,48 @@
+# Kimi(Moonshot)模型亲和描述符(affinity.d/moonshot.toml)
+#
+# 数据来源:Evolink API 文档《Kimi K3 - Anthropic 兼容接口》(2026-07-16)+
+#          51CTO Claude Code 工作流(2026-03-16,api.moonshot.cn/anthropic 实测配置)
+# 关键事实:Anthropic 块协议原生(thinking 块/工具块完整);OpenAI 转换路径
+#          降级留痕(工具链特性丢失风险)—— quirk 钉住 Anthropic 优先
+
+schema_version = 1
+
+[[models]]
+provider = "moonshot"
+model = "kimi-k3"
+# 双方言;quirk 钉住 anthropic_messages(工具链保真)
+dialects = ["anthropic_messages", "open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+# thinking 块(OnOff:开/关);K3 多轮要求回传完整 assistant 内容块
+thinking = "on_off"
+# 256K 级(待 M1 W5 实测确认,设计文档标注 [待核实])
+context_window = 262144
+max_output = 65536
+prompt_caching = "explicit_control"
+service_tiers = ["standard"]
+# BlockPreservation:多轮回传完整 assistant 内容块(Kimi K3 明确要求)
+state_preservation = "block_preservation"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+input_micro_per_mtok = 2000000
+output_micro_per_mtok = 10000000
+cache_hit_micro_per_mtok = 500000
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://api.moonshot.cn/anthropic"
+api_key_env = "MOONSHOT_API_KEY"
+timeout_ms = 120000
+connect_timeout_ms = 10000
+rpm_limit = 500
+
+# 怪癖:钉住 Anthropic 路径(OpenAI 转换路径丢工具链特性,降级留痕)
+[[models.quirks]]
+rule = "prefer_dialect"
+dialect = "anthropic_messages"

@@ -1,0 +1,44 @@
+# 阶跃星辰 Step 模型亲和描述符(affinity.d/stepfun.toml)
+#
+# 数据来源:腾讯新闻/钛媒体(2026-04-02)+ AI工具集(2026-03-04)
+# 关键事实:上下文仅 256K(七家最小窗口,P5 窗口亲和最严样本 → HCW 封顶 128K 档)
+#          low think mode(token -56%);350 TPS 高吞吐 → 批量任务优先臂
+
+schema_version = 1
+
+[[models]]
+provider = "step_fun"
+model = "step-3.5-flash-2603"
+dialects = ["open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+# low/high think mode(OnOff:low=关档节省 token,high=开档)
+thinking = "on_off"
+# 256K —— 七家最小窗口(HCW 折减封顶 128K 档,禁 1M 等效)
+context_window = 262144
+max_output = 32768
+prompt_caching = "implicit"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+input_micro_per_mtok = 800000
+output_micro_per_mtok = 2400000
+cache_hit_micro_per_mtok = 160000
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://api.stepfun.com/v1"
+api_key_env = "STEPFUN_API_KEY"
+timeout_ms = 60000
+connect_timeout_ms = 10000
+rpm_limit = 3000
+
+# 怪癖:高吞吐批量优先(350 TPS,批量任务路由权重上调)
+[[models.quirks]]
+rule = "high_throughput_batch_preferred"

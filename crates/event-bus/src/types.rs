@@ -1974,6 +1974,115 @@ pub enum NexusEvent {
         /// 推理悖论告警阈值(来自 CoordinationRatioReported)
         threshold: f64,
     },
+
+    // ============================================================
+    // MCA M0(ADR-065):L10 mca-gateway 会话级/治理级事件(6 个新变体)
+    //
+    // WHY 只有会话级事件入 event-bus:流式数据面(per-token delta)走
+    // 专用 bounded mpsc 直连调用方(ADR-065 决策 4),broadcast 1024 容量
+    // 承载不了 per-token 流,Lagged 丢弃会破坏 TUI 体验。
+    // ============================================================
+    /// 路由决策留痕 — mca-gateway → model-router/omega-learner
+    ///
+    /// 每次通道选择发布,携带预估成本(P6 成本先行):路由历史与
+    /// 学习臂(M3 s9 接缝)的数据源。
+    ModelAffinitySelected {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 关联的用户意图标识(全链路追踪)
+        intent_id: String,
+        /// 路由键 `provider/model`(ProviderId::as_str 稳定形态)
+        route_key: String,
+        /// 实际使用的协议方言("open_ai_chat"/"anthropic_messages"/"open_ai_responses")
+        dialect: String,
+        /// 预估成本(微元,整数化禁浮点中间态)
+        cost_estimate_micro: u64,
+        /// 生效的峰谷系数百分比(100 = 1×,DeepSeek 高峰 200)
+        peak_factor_percent: u16,
+    },
+
+    /// 通道健康恶化 — mca-gateway → csn-substitutor/model-router
+    ///
+    /// 健康探针(TTFT/成功率 EWMA)跨过阈值或熔断器开闸时发布,
+    /// 触发降级链评估与路由权重下调。
+    ProviderDegraded {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 受影响的路由键 `provider/model`
+        route_key: String,
+        /// 恶化原因(如 "circuit_open: 5 consecutive 5xx")
+        reason: String,
+        /// 当前健康分(0-100,EWMA 折算)
+        health_score: u8,
+    },
+
+    /// 能力协商结果 — mca-gateway → efficiency-monitor
+    ///
+    /// 三态降级协议(ADR-065/设计文档 §7 Round 3)的留痕:降级必须
+    /// 明确告知(E4 不变量),特性启用率 = 实际启用/声明特性的分母数据源。
+    AffinityCapabilityNegotiated {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 路由键 `provider/model`
+        route_key: String,
+        /// 协商保真度("full_fidelity"/"degraded_notified"/"channel_rejected")
+        fidelity: String,
+        /// 被降级的能力名清单(空 = 全保真)
+        degraded_capabilities: Vec<String>,
+    },
+
+    /// [Critical] 厂商额度耗尽 — mca-gateway → decb-governor/csn-substitutor
+    ///
+    /// WHY Critical:额度耗尽意味着该通道即刻不可用,必须立即切换
+    /// 通道才能保障会话连续性(E5 不变量)。丢失导致降级链无人触发、
+    /// 请求持续打向死通道,语义对齐 BudgetExceeded Critical 红线。
+    /// 必须同时列入 severity() 与 bus.rs is_critical_mpsc_event() 双清单。
+    AffinityQuotaExhausted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 耗尽的路由键 `provider/model`
+        route_key: String,
+        /// 厂商限流/额度错误原文(申诉与排查用)
+        reason: String,
+    },
+
+    /// 未知字段/事件留痕 — mca-gateway → repo-wiki/efficiency-monitor
+    ///
+    /// P3 双向容错的可观测面:响应中不认识的字段/事件类型吞掉不报错,
+    /// 但必须留痕驱动 affinity.d spec 更新(厂商 API 演进信号源)。
+    AffinityUnknownField {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 来源路由键 `provider/model`
+        route_key: String,
+        /// 协议方言(同 ModelAffinitySelected.dialect 取值)
+        dialect: String,
+        /// 未知内容摘录(截断后的原文,避免大 payload 进 broadcast)
+        raw_excerpt: String,
+    },
+
+    /// 流式会话闭环 — mca-gateway → acb-governor/auto-dpo
+    ///
+    /// 会话结束时发布真实计量:成本回写(EWMA α=0.1)、缓存命中率
+    /// 回读、DPO 偏好对轨迹的数据源;TTFT 喂入健康探针与 E1 验收。
+    StreamSessionCompleted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 关联的用户意图标识
+        intent_id: String,
+        /// 服务本会话的路由键 `provider/model`
+        route_key: String,
+        /// 输入 token 数
+        input_tokens: u64,
+        /// 输出 token 数
+        output_tokens: u64,
+        /// 缓存命中 token 数(隐式/显式缓存族统一口径)
+        cache_hit_tokens: u64,
+        /// 实际成本(微元,基于 usage 回算)
+        cost_actual_micro: u64,
+        /// 首 token 延迟(毫秒,E1 体验不变量度量)
+        ttft_ms: u64,
+    },
 }
 
 impl NexusEvent {
@@ -2098,6 +2207,13 @@ impl NexusEvent {
             Self::WikiUpdated { metadata, .. } => metadata,
             Self::EvolutionTriggered { metadata, .. } => metadata,
             Self::DpoPairGenerated { metadata, .. } => metadata,
+            // MCA M0(ADR-065):mca-gateway 会话级/治理级事件(6 个新变体)
+            Self::ModelAffinitySelected { metadata, .. } => metadata,
+            Self::ProviderDegraded { metadata, .. } => metadata,
+            Self::AffinityCapabilityNegotiated { metadata, .. } => metadata,
+            Self::AffinityQuotaExhausted { metadata, .. } => metadata,
+            Self::AffinityUnknownField { metadata, .. } => metadata,
+            Self::StreamSessionCompleted { metadata, .. } => metadata,
         }
     }
 
@@ -2156,7 +2272,12 @@ impl NexusEvent {
             // WHY:R2 违反等同于安全事件(奖励黑客风险立即生效),回滚失败意味着
             // R2 路径代码可能仍在生效。必须走 mpsc 旁路通道确保投递,对齐 §6.2 红线 5。
             | Self::R2FreezeViolation { .. }
-            | Self::R2FreezeRollbackFailed { .. } => EventSeverity::Critical,
+            | Self::R2FreezeRollbackFailed { .. }
+            // MCA M0(ADR-065):厂商额度耗尽为 Critical
+            // WHY:额度耗尽 = 通道即刻不可用,丢失导致降级链(csn-substitutor)
+            // 无人触发、请求持续打向死通道。语义对齐 BudgetExceeded(资源红线
+            // 必须确保投递);bus.rs is_critical_mpsc_event() 已同步列入(双清单)。
+            | Self::AffinityQuotaExhausted { .. } => EventSeverity::Critical,
             // 控制事件(请求/反馈):不阻断系统,不触发 mpsc 旁路投递
             Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }
@@ -2298,6 +2419,13 @@ impl NexusEvent {
             Self::DelegationCompleted { .. } => "DelegationCompleted",
             // L8 推理悖论风控:策略封顶变更(Normal 级走通配符)
             Self::ParliamentStrategyCapChanged { .. } => "ParliamentStrategyCapChanged",
+            // MCA M0(ADR-065):mca-gateway 事件(6 个新变体,仅 AffinityQuotaExhausted 为 Critical)
+            Self::ModelAffinitySelected { .. } => "ModelAffinitySelected",
+            Self::ProviderDegraded { .. } => "ProviderDegraded",
+            Self::AffinityCapabilityNegotiated { .. } => "AffinityCapabilityNegotiated",
+            Self::AffinityQuotaExhausted { .. } => "AffinityQuotaExhausted",
+            Self::AffinityUnknownField { .. } => "AffinityUnknownField",
+            Self::StreamSessionCompleted { .. } => "StreamSessionCompleted",
         }
     }
 }

@@ -380,6 +380,9 @@ impl MembraneFilter {
             NexusEvent::SandboxViolation { .. }
             | NexusEvent::OperationProduced { .. }
             | NexusEvent::CsnSubstitutionTriggered { .. }
+            // MCA M0(ADR-065):通道健康恶化,容灾信号(与 CsnSubstitutionTriggered
+            // 同属降级链生命周期,可能是级联故障前兆)
+            | NexusEvent::ProviderDegraded { .. }
             | NexusEvent::EfficiencyAlertTriggered { .. } => EventCategory::HighRisk,
 
             // === CacheLocal:缓存命中/未命中/统计(外环本地消化) ===
@@ -410,7 +413,12 @@ impl MembraneFilter {
             // L8 协调度量接线闭环:审议完成/委托批次完成观测事件
             // (只读延迟/质量指标,外环 quest-engine 本地消化,不需穿膜进内环)
             | NexusEvent::DebateCompleted { .. }
-            | NexusEvent::DelegationCompleted { .. } => EventCategory::ReadMetric,
+            | NexusEvent::DelegationCompleted { .. }
+            // MCA M0(ADR-065):能力协商/未知字段/会话计量均为观察性事实
+            // 陈述(喂 efficiency-monitor/acb-governor/repo-wiki),外环本地消化
+            | NexusEvent::AffinityCapabilityNegotiated { .. }
+            | NexusEvent::AffinityUnknownField { .. }
+            | NexusEvent::StreamSessionCompleted { .. } => EventCategory::ReadMetric,
 
             // === NormalLow:剩余 Normal 事件(默认本地消化) ===
             // 包括 Quest 生命周期/控制请求/路由执行结果/Agent 协作等
@@ -423,6 +431,9 @@ impl MembraneFilter {
             NexusEvent::OmniSparseMasksComputed { .. }
             | NexusEvent::PredictionVerified { .. }
             | NexusEvent::ModelRouteSelected { .. }
+            // MCA M0(ADR-065):通道路由决策留痕(与 ModelRouteSelected 同族,
+            // L6/L1 路由层产物,不直接影响内环状态)
+            | NexusEvent::ModelAffinitySelected { .. }
             | NexusEvent::QuestCreated { .. }
             | NexusEvent::QuestProgressUpdated { .. }
             | NexusEvent::QuestListUpdated { .. }
@@ -496,7 +507,10 @@ impl MembraneFilter {
             // ADR-042 决策 4:R2 冻结违反及回滚失败为 Critical(奖励黑客风险立即生效,
             // 必须走 mpsc 旁路通道投递到 SecCore/Parliament 进行处置)
             | NexusEvent::R2FreezeViolation { .. }
-            | NexusEvent::R2FreezeRollbackFailed { .. } => EventCategory::Critical,
+            | NexusEvent::R2FreezeRollbackFailed { .. }
+            // MCA M0(ADR-065):厂商额度耗尽为 Critical(与 BudgetExceeded 同级,
+            // 运行时由顶部 severity() 早退覆盖,此处仅保证 match 穷尽)
+            | NexusEvent::AffinityQuotaExhausted { .. } => EventCategory::Critical,
         }
     }
 

@@ -17,7 +17,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::{ActivationStrategy, ParliamentPolicy};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
-use parliament::{Parliament, ParliamentConfig, Proposal};
+use parliament::{ParadoxRiskDashboard, Parliament, ParliamentConfig, Proposal};
 use std::time::Duration;
 
 /// 构造测试用 Quest
@@ -289,6 +289,110 @@ fn bench_deliberate_full_50tasks(c: &mut Criterion) {
     });
 }
 
+/// 基准:自适应策略选择延迟(应 ≤ 5µs)
+fn bench_adaptive_strategy(c: &mut Criterion) {
+    use nexus_contracts::ActivationStrategy;
+    use parliament::adaptive_strategy::AdaptiveStrategySelector;
+
+    let selector = AdaptiveStrategySelector::new(None);
+
+    c.bench_function("adaptive_strategy_select", |b| {
+        b.iter(|| selector.select(0.3, 0.8, 0.5, 50, ActivationStrategy::Full));
+    });
+}
+
+/// 基准:缓存命中延迟(应 ≤ 10µs)
+///
+/// 先执行一次审议写入缓存,再测量第二次审议(缓存命中)的延迟。
+/// 缓存命中跳过 Skeptic 检测 + Opinion 生成 + 事件发布,仅做
+/// Mutex lock + Vec 查找 + Consensus clone,期望 ≤ 10µs。
+fn bench_deliberate_cache_hit(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let bus = EventBus::new();
+    let parliament = Parliament::new(ParliamentConfig::default(), bus);
+    let quest = make_quest(2, ThinkingMode::Fast);
+    // 首次审议(写入缓存)
+    let proposal = Proposal::new("p-cache", "q-bench", "缓存命中提案", 0.2);
+    rt.block_on(parliament.deliberate(&quest, &proposal))
+        .unwrap();
+
+    c.bench_function("deliberate_cache_hit", |b| {
+        b.iter(|| {
+            let proposal = Proposal::new("p-cache", "q-bench", "缓存命中提案", 0.2);
+            rt.block_on(parliament.deliberate(&quest, &proposal))
+                .unwrap()
+        });
+    });
+}
+
+/// 基准:质量趋势分析器延迟(应 ≤ 50µs)
+///
+/// 测量 20 条窗口 + 异常检测的总延迟，确保不成为性能瓶颈。
+fn bench_quality_trend_analyzer(c: &mut Criterion) {
+    use parliament::quality_trend::QualityTrendAnalyzer;
+    use parliament::ConsensusQualityMetrics;
+
+    let mut analyzer = QualityTrendAnalyzer::new(None);
+    // 预填充 20 条指标
+    for i in 0..20 {
+        let metrics = ConsensusQualityMetrics {
+            approval_rate: 0.5 + (i as f32 * 0.02),
+            abstention_rate: 0.3 + (i as f32 * 0.01),
+            divergence: 0.6 + (i as f32 * 0.01),
+            consensus_margin: 0.1,
+            skeptic_stance: 0.5,
+        };
+        analyzer.push(metrics);
+    }
+
+    c.bench_function("quality_trend_analyzer", |b| {
+        b.iter(|| {
+            // 推入一条新指标并触发异常检测
+            let metrics = ConsensusQualityMetrics {
+                approval_rate: 0.5,
+                abstention_rate: 0.3,
+                divergence: 0.6,
+                consensus_margin: 0.1,
+                skeptic_stance: 0.5,
+            };
+            analyzer.push(metrics);
+            analyzer.consensus_health_score()
+        });
+    });
+}
+
+// ============================================================
+// 悖论风险仪表盘基准(ADR-064 推理悖论红线监控性能门禁)
+// ============================================================
+
+/// 基准:悖论仪表盘 update 延迟(应 ≤ 5µs)
+///
+/// 模拟三信号更新,包括 ratio 超标场景(触发 Yellow 预警逻辑)。
+/// 无 EventBus/StrategyCapGuard 以排除外部依赖延迟干扰。
+fn bench_paradox_dashboard_update(c: &mut Criterion) {
+    let mut dashboard = ParadoxRiskDashboard::new(None, None);
+
+    c.bench_function("paradox_dashboard_update", |b| {
+        b.iter(|| {
+            // 三信号值:ratio=2.0(超标),veto_anomaly=0.1(正常),health_score=80(正常)
+            // 结果:Yellow 预警(单信号超标)
+            dashboard.update(2.0, 0.1, 80);
+        });
+    });
+}
+
+/// 基准:悖论仪表盘 compute_risk_level 延迟(应 ≤ 1µs)
+///
+/// 纯静态计算,无状态修改,测量三个阈值判断 + 计数的开销。
+fn bench_paradox_dashboard_risk_level(c: &mut Criterion) {
+    c.bench_function("paradox_dashboard_risk_level", |b| {
+        b.iter(|| {
+            // 三信号超标 → Red(两信号以上)
+            let _ = ParadoxRiskDashboard::compute_risk_level(2.0, 0.5, 30);
+        });
+    });
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
@@ -298,7 +402,9 @@ criterion_group! {
         bench_deliberate_concurrent, bench_deliberate_fastpath, bench_deliberate_simplified,
         bench_deliberate_veto_path, bench_deliberate_full_with_subscriber,
         bench_deliberate_simplified_with_subscriber, bench_publish_votecast_serial,
-        bench_deliberate_full_50tasks
+        bench_deliberate_full_50tasks, bench_deliberate_cache_hit, bench_adaptive_strategy,
+        bench_quality_trend_analyzer, bench_paradox_dashboard_update,
+        bench_paradox_dashboard_risk_level
 }
 
 criterion_main!(benches);

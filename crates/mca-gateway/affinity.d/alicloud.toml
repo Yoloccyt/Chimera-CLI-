@@ -1,0 +1,72 @@
+# Qwen(阿里云百炼)模型亲和描述符(affinity.d/alicloud.toml)
+#
+# 数据来源:阿里云通义千问 API 接入指南(2026-07-10)
+# 关键事实:DashScope OpenAI 兼容模式;兼容层丢原生 System Prompt/工具调用/
+#          文件 API 特性(官方明示)—— M2 阶段补 DashScope 原生 Codec 为可选第四方言
+
+schema_version = 1
+
+# 旗舰:Qwen-Max
+[[models]]
+provider = "alibaba_cloud"
+model = "qwen-max"
+dialects = ["open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+# enable_thinking 开关(OnOff)
+thinking = "on_off"
+context_window = 1000000
+max_output = 32768
+prompt_caching = "implicit"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+input_micro_per_mtok = 2400000
+output_micro_per_mtok = 9600000
+cache_hit_micro_per_mtok = 480000
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key_env = "DASHSCOPE_API_KEY"
+timeout_ms = 120000
+connect_timeout_ms = 10000
+rpm_limit = 1200
+
+# 性价比档:Qwen-Plus(中文任务性价比高)
+[[models]]
+provider = "alibaba_cloud"
+model = "qwen-plus"
+dialects = ["open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+thinking = "on_off"
+context_window = 1000000
+max_output = 32768
+prompt_caching = "implicit"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+input_micro_per_mtok = 800000
+output_micro_per_mtok = 2000000
+cache_hit_micro_per_mtok = 160000
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key_env = "DASHSCOPE_API_KEY"
+timeout_ms = 60000
+connect_timeout_ms = 10000
+rpm_limit = 2400

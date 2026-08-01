@@ -48,6 +48,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// MCA A5 亲和指标采集 — 体验对等不变量(E1-E5)度量(ADR-065/066)
+pub mod affinity_metrics;
 pub mod alerts;
 /// polish-v2.7 P1-1: RuntimeAuditor 运行时自我评估(ADR-049 决策 1)
 ///
@@ -62,6 +64,7 @@ pub mod oscillation_detector;
 pub mod types;
 
 // === 关键类型重导出，简化外部导入 ===
+pub use affinity_metrics::AffinityMetrics;
 pub use alerts::AlertRuleEngine;
 // polish-v2.7 P1-1: RuntimeAuditor 公开 API 重导出
 pub use auditor::{

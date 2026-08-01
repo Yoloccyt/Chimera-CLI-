@@ -49,6 +49,8 @@ jobs:
           - checkpoint_deserialize
           - config_section_parse
           - harness_spec_parse
+          # MCA M0 PR-6: SSE 归一器模糊防线(ADR-065,任意切割不变量)
+          - sse_parse
 
     steps:
       - name: Checkout

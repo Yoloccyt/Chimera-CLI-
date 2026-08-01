@@ -1,0 +1,14 @@
+data: {"choices":[{"delta":{"role":"assistant","content":""}}]}
+
+data: {"choices":[{"delta":{"reasoning_content":"先分析问题"}}]}
+
+data: {"choices":[{"delta":{"content":"快速排序"}}]}
+
+data: {"choices":[{"delta":{"content":"实现如下"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":8,"prompt_cache_hit_tokens":6}}
+
+data: [DONE]
+

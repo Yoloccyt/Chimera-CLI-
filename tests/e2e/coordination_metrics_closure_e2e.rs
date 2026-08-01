@@ -315,7 +315,11 @@ async fn test_e2e_vetoed_debate_reports_latency_without_quality() {
 // ============================================================
 
 /// 构造指定任务数与思考模式的 Quest(直接用于 Parliament.deliberate)
-fn make_quest(quest_id: &str, task_count: usize, mode: nexus_core::ThinkingMode) -> nexus_core::Quest {
+fn make_quest(
+    quest_id: &str,
+    task_count: usize,
+    mode: nexus_core::ThinkingMode,
+) -> nexus_core::Quest {
     let tasks: Vec<nexus_core::Task> = (0..task_count)
         .map(|i| nexus_core::Task {
             task_id: format!("t-{i}"),

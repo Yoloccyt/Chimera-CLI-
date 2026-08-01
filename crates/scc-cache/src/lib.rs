@@ -44,6 +44,8 @@
 #![warn(missing_docs, clippy::all)]
 
 // === 模块声明 ===
+/// MCA A3 缓存亲和 — 显式 cache_control 断点规划 + 隐式会话粘性(ADR-065)
+pub mod affinity;
 pub mod cache;
 pub mod config;
 pub mod error;
@@ -53,6 +55,7 @@ pub mod types;
 pub mod wal;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use affinity::{CacheBreakpoint, CachePrefix, PrefixKind, SessionAffinityTracker};
 pub use cache::SccCache;
 pub use config::SccConfig;
 pub use error::SccError;

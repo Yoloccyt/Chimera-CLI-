@@ -44,6 +44,8 @@ pub mod error;
 pub mod history;
 pub mod moe;
 pub mod registry;
+/// MCA M3: 通道化路由目标三元组(ADR-065,不动 RoutingDecision)
+pub mod route_target;
 pub mod router;
 pub mod strategies;
 pub mod trajectory;
@@ -56,8 +58,10 @@ pub use error::RouterError;
 // v1.4.0 P1:HistoryStore/InMemoryHistoryStore/SqliteHistoryStore 从 history 模块重导出
 // HistoryRecord/MoeGate 仍从 moe 模块导出(权威定义源)
 pub use history::{HistoryStore, InMemoryHistoryStore, SqliteHistoryStore};
+pub use history::{RouteHistoryStore, RouteRecord};
 pub use moe::{HistoryRecord, MoeGate};
 pub use registry::ModelRegistry;
+pub use route_target::RouteTarget;
 pub use router::ModelRouter;
 // P4-W16.1.1: RouteHook trait + TrajectoryEvent/Outcome 轨迹捕获类型重导出
 // P4-W16.1.2: RecordingHook 生产级实现 + TrajectoryStats 统计快照重导出
@@ -72,8 +76,10 @@ pub mod prelude {
     pub use crate::config::{HistoryPersistence, RouterConfig};
     pub use crate::error::RouterError;
     pub use crate::history::{HistoryStore, InMemoryHistoryStore, SqliteHistoryStore};
+    pub use crate::history::{RouteHistoryStore, RouteRecord};
     pub use crate::moe::{HistoryRecord, MoeGate};
     pub use crate::registry::ModelRegistry;
+    pub use crate::route_target::RouteTarget;
     pub use crate::router::ModelRouter;
     // P4-W16.1.1 + P4-W16.1.2: 轨迹捕获类型 + 生产级 RecordingHook 加入 prelude
     pub use crate::trajectory::{

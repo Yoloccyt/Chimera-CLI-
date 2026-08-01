@@ -44,6 +44,8 @@
 #![warn(missing_docs, clippy::all)]
 
 // === 模块声明 ===
+/// MCA P5 窗口亲和折减 — HCW 分层窗口按模型实际上限折减(ADR-065/066)
+pub mod affinity;
 pub mod compressor;
 pub mod config;
 /// P4-W13.2.2: 密度学习器持有器 — S1 接缝策略异步下发 + 本地 fallback（C4 合规）
@@ -57,6 +59,7 @@ pub mod types;
 pub mod window;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use affinity::{FoldResult, WindowAffinity};
 pub use compressor::ContextCompressor;
 pub use density_learner::DensityLearnerHolder;
 pub use error::HcwError;

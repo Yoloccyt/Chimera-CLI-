@@ -5,6 +5,9 @@ edition.workspace = true
 
 [dependencies]
 nexus-core = { path = "../nexus-core" }
+# L0 Contracts: MCA 通道化(ADR-065 M3)的 ProviderId/ThinkingPreference 三元组路由键
+# WHY L1 → L0 合规(依赖铁律 §2.2);RouteTarget 仅用 affinity 纯类型
+nexus-contracts = { path = "../nexus-contracts" }
 event-bus = { path = "../event-bus" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

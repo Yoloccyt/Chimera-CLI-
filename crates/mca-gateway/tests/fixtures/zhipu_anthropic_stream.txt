@@ -1,0 +1,21 @@
+event: message_start
+data: {"type":"message_start","message":{"id":"msg-stream-1","usage":{"input_tokens":14,"output_tokens":0}}}
+
+event: content_block_start
+data: {"index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_delta
+data: {"index":0,"delta":{"type":"thinking_delta","thinking":"分析所有权"}}
+
+event: content_block_delta
+data: {"index":0,"delta":{"type":"text_delta","text":"Rust 所有权"}}
+
+event: content_block_delta
+data: {"index":0,"delta":{"type":"text_delta","text":"三条规则"}}
+
+event: message_delta
+data: {"delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":14,"output_tokens":9,"cache_read_input_tokens":8}}
+
+event: message_stop
+data: {"type":"message_stop"}
+

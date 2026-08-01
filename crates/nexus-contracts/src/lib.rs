@@ -155,6 +155,13 @@ pub mod task;
 /// 依赖: chrono(ADR-033 Task 3.10 新增例外,基础类型库)。
 pub mod checkpoint;
 
+/// 模型亲和契约 — MCA 体系 L0 类型(ADR-065,PANTHEON 计划)
+///
+/// 承载 ProviderId / ProtocolDialect / CapabilitySet / ModelAffinitySpec /
+/// AffinityRequest / AffinityResponse 等"能力协商取代名字嗅探"（原则 P1）
+/// 契约类型,供 L10 mca-gateway / L1 model-router / L6 omega-learner 共享。
+pub mod affinity;
+
 // ============================================================
 // 公开 API 导出
 // ============================================================
@@ -202,6 +209,13 @@ pub use formal_props::{
 pub use checkpoint::Checkpoint;
 pub use event_metadata::EventMetadata;
 pub use task::TaskStatus;
+// ADR-065: MCA 模型亲和契约(能力协商唯一事实源 + 统一请求/响应)
+// WHY 不导出全部子类型: PricingSpec/EndpointSpec/QuirkRule 等仅 spec 装配方
+// (L10 spec_loader)使用,走 affinity:: 路径引用,避免顶层命名空间膨胀。
+pub use affinity::{
+    AffinityRequest, AffinityResponse, CapabilitySet, ContentBlock, ModelAffinitySpec,
+    NegotiationFidelity, ProtocolDialect, ProviderId, ThinkingPreference, UsageReport,
+};
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
@@ -250,4 +264,9 @@ pub mod prelude {
     pub use crate::checkpoint::Checkpoint;
     pub use crate::event_metadata::EventMetadata;
     pub use crate::task::TaskStatus;
+    // ADR-065: MCA 模型亲和契约(与顶层导出同集)
+    pub use crate::affinity::{
+        AffinityRequest, AffinityResponse, CapabilitySet, ContentBlock, ModelAffinitySpec,
+        NegotiationFidelity, ProtocolDialect, ProviderId, ThinkingPreference, UsageReport,
+    };
 }

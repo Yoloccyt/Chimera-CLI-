@@ -1,0 +1,50 @@
+[package]
+name = "mca-gateway"
+version.workspace = true
+edition.workspace = true
+
+# MCA 多通道亲和网关(ADR-065,PANTHEON 计划)
+# 架构层: L10 Interface,与 chtc-bridge/mcp-mesh 同级同构
+# 依赖面: 仅 L0(nexus-contracts)+ L1(event-bus),跨层信息全部走 event-bus
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# toml: affinity.d/*.toml 厂商描述符加载(P8 元数据外置)
+toml = { workspace = true }
+# arc-swap: 通道注册表 spec 快照(RCU 读 ~5ns,热更新低频写,ADR-065 决策 4)
+arc-swap = { workspace = true }
+# dashmap: 通道健康状态高频写(与 spec 快照读写分离)
+dashmap = { workspace = true }
+# reqwest: 真实 LLM 通道的 HTTP 客户端(rustls 纯 safe,stream 供 SSE 流式)
+# WHY 本 crate 是 workspace 首个 reqwest 消费者:印证病理 D1"全系统无 LLM 通道"
+reqwest = { workspace = true, features = ["stream"] }
+# chrono: 峰谷计价的小时桶查表(P6 成本先行)
+chrono = { workspace = true }
+# rusqlite: 会话状态守恒持久化(P4,spawn_blocking 包装,C7 红线)
+# WHY bundled: 静态链接 SQLite,免系统库依赖;复用 scc-cache wal.rs 范式
+rusqlite = { workspace = true }
+# rmp-serde: 会话块序列化(ADR-004 MessagePack)
+rmp-serde = { workspace = true }
+# L0 契约: ProviderId/CapabilitySet/ModelAffinitySpec/AffinityRequest/Response
+nexus-contracts = { workspace = true }
+# L1 事件总线: 6 个 MCA 会话级/治理级事件的唯一跨层通道
+event-bus = { path = "../event-bus" }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+tempfile = { workspace = true }
+# axum: 本地 mock 厂商端点(双通道 E2E 零外部网络依赖)
+axum = { workspace = true }
+# efficiency-monitor: 体验对等验收(T4.3)驱动 AffinityMetrics 采集器
+# WHY dev-dep: 仅测试使用(依赖铁律 dev-dependencies 可绕过生产依赖方向,仅限 tests/)
+efficiency-monitor = { path = "../efficiency-monitor" }
+
+# MCA 热路径基准(成本估算 <1μs / SSE 归一 <5μs,check_perf_redlines RL-10/11)
+[[bench]]
+name = "mca_hot_paths"
+harness = false

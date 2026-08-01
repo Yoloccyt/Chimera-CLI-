@@ -9,6 +9,12 @@
 //! - **10 臂 / 8 维上下文**: 中等规模(覆盖 S2/S3 接缝)
 //! - **20 臂 / 16 维上下文**: 大规模(压力测试)
 //! - **update 性能**: Sherman-Morrison 增量更新延迟
+//! - **40 臂 / 6 维上下文**(MCA M3 s9 路由臂,ADR-065/068):
+//!   `select_arm` p99 目标 < 50μs(arm.rs L23 设计假设 ~10 臂,40 臂需性能证据;
+//!   超过 50μs 才引入 θ 缓存优化——证据驱动,不预先优化)。
+
+/// 40 臂路由选择延迟红线(μs)——MCA M3 s9 臂(ADR-068 决策 2)
+pub const P99_TARGET_US: u64 = 50;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use omega_learner::arm::{ArmId, ArmIndex, DiscreteArmSet};
@@ -57,6 +63,32 @@ fn bench_select_arm_large(c: &mut Criterion) {
     });
 }
 
+/// 40 臂 s9 通道路由选择基准(provider × model × thinking_mode ≈ 40 臂)
+///
+/// 6 维上下文(任务复杂度/预算水位/延迟敏感度/缓存命中/风险/bias),
+/// 与 S9RouteLearner 生产配置一致。目标 p99 < 50μs(P99_TARGET_US)。
+fn bench_s9_route_40arm_select(c: &mut Criterion) {
+    // 8 个 provider-model × 3 思考档 ≈ 24 臂代表集 + 扩展 = 40 臂
+    let arms: Vec<ArmId> = (0..40)
+        .map(|i| {
+            let providers = ["zhipu", "deep_seek", "moonshot", "mini_max"];
+            let models = ["glm-5.2", "deepseek-v4-flash", "kimi-k3", "MiniMax-M3"];
+            let modes = ["fast", "standard", "deep"];
+            let p = providers[(i / 10) % 4];
+            let m = models[(i / 3) % 4];
+            let mode = modes[i % 3];
+            ArmId::new(format!("{p}/{m}/{mode}"))
+        })
+        .collect();
+    let arm_set = DiscreteArmSet::new(arms);
+    let linucb = LinUCB::new(6, &arm_set, 1.0).unwrap();
+    let ctx = make_context(6);
+
+    c.bench_function("select_arm_40arms_6dim_s9route", |b| {
+        b.iter(|| black_box(linucb.select_arm(black_box(&ctx)).unwrap()))
+    });
+}
+
 fn bench_update(c: &mut Criterion) {
     let mut linucb = make_linucb(4, 3);
     let ctx = make_context(3);
@@ -86,6 +118,7 @@ criterion_group!(
     bench_select_arm_small,
     bench_select_arm_medium,
     bench_select_arm_large,
+    bench_s9_route_40arm_select,
     bench_update,
     bench_full_cycle,
 );

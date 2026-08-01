@@ -24,6 +24,9 @@
   - RL-06: wiki_knn @100K p95<50ms(索引,P2-W8.3.1 新增)
   - RL-07: 跨膜事件投递 p95<10ms(跨膜,P1-W2 新增)
   - RL-08: 50agent_mem_peak ≤130MB(MAS,维持)
+  - RL-09: linucb 40arm select p99<50μs(MCA M3 s9 路由臂,新增)
+  - RL-10: cost_estimate <1μs(MCA M3 路由热路径,新增)
+  - RL-11: sse normalize <5μs/event(MCA M0 SSE 归一器,新增)
 
 .NOTES
   退出码:0=全部通过, 1=有检查项失败
@@ -70,7 +73,11 @@ $redlines = @(
     @{ Id='RL-05'; Name='wiki_knn @10K p95<50ms'; File='crates/repo-wiki/tests/hnsw_p95_test.rs'; Func='test_hnsw_10k_p95_below_50ms'; Threshold='P95_THRESHOLD_MS' },
     @{ Id='RL-06'; Name='wiki_knn @100K p95<50ms'; File='crates/repo-wiki/tests/hnsw_p95_test.rs'; Func='test_hnsw_100k_p95_below_50ms'; Threshold='ENTRY_COUNT_100K' },
     @{ Id='RL-07'; Name='membrane delivery p95<10ms'; File='crates/event-bus/benches/membrane_delivery_bench.rs'; Func='membrane_e2e_delivery'; Threshold='10ms' },
-    @{ Id='RL-08'; Name='50agent_mem_peak <=130MB'; File='crates/chimera-mas/benches/mas_benchmark.rs'; Func='bench_50agent_mem_peak'; Threshold='130' }
+    @{ Id='RL-08'; Name='50agent_mem_peak <=130MB'; File='crates/chimera-mas/benches/mas_benchmark.rs'; Func='bench_50agent_mem_peak'; Threshold='130' },
+    # MCA M3/M4 热路径红线(ADR-065/068):路由选择/成本估算/SSE 归一
+    @{ Id='RL-09'; Name='linucb 40arm select p99<50us'; File='crates/omega-learner/benches/linucb_select.rs'; Func='bench_s9_route_40arm_select'; Threshold='P99_TARGET_US' },
+    @{ Id='RL-10'; Name='cost_estimate <1us'; File='crates/mca-gateway/benches/mca_hot_paths.rs'; Func='bench_cost_estimate'; Threshold='COST_ESTIMATE_TARGET_US' },
+    @{ Id='RL-11'; Name='sse normalize <5us/event'; File='crates/mca-gateway/benches/mca_hot_paths.rs'; Func='bench_sse_normalize'; Threshold='SSE_EVENT_TARGET_US' }
 )
 
 foreach ($rl in $redlines) {
@@ -118,7 +125,9 @@ $sloRedlines = @(
     @{ Name='decay_compute';    Crate='decay-engine';  BenchFile='decay_compute';  Filter='single_decay_by_profile';   SloSec=0.000001;RedlineSec=0.0000008;Unit='us'; SloDisplay='1us';   RedlineDisplay='0.8us' },
     @{ Name='wiki_knn_100k';    Crate='repo-wiki';     BenchFile='wiki_knn_slo';   Filter='wiki_knn_100k_p95';         SloSec=0.050;   RedlineSec=0.040;    Unit='ms'; SloDisplay='50ms';  RedlineDisplay='40ms'  },
     @{ Name='immune_probe';     Crate='chimera-mas';   BenchFile='immune_probe';   Filter='bench_assess_paradox_risk'; SloSec=0.100;   RedlineSec=0.080;    Unit='ms'; SloDisplay='100ms'; RedlineDisplay='80ms'  },
-    @{ Name='rhi_judge';        Crate='auto-dpo';      BenchFile='rhi_judge';      Filter='rhi_judge_latency';         SloSec=2.0;     RedlineSec=1.6;      Unit='s';  SloDisplay='2s';    RedlineDisplay='1.6s'   }
+    @{ Name='rhi_judge';        Crate='auto-dpo';      BenchFile='rhi_judge';      Filter='rhi_judge_latency';         SloSec=2.0;     RedlineSec=1.6;      Unit='s';  SloDisplay='2s';    RedlineDisplay='1.6s'   },
+    # MCA M3 s9 路由臂 40 臂选择延迟(ADR-068 决策 2:p99 < 50μs,红线上浮 80%)
+    @{ Name='linucb_40arm';     Crate='omega-learner'; BenchFile='linucb_select';  Filter='select_arm_40arms_6dim_s9route'; SloSec=0.00005; RedlineSec=0.00004; Unit='us'; SloDisplay='50us';  RedlineDisplay='40us' }
 )
 
 Write-Host "`n=== SLO Benchmark Threshold Assertions ===" -ForegroundColor Cyan

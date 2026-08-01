@@ -43,6 +43,12 @@ pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 ///
 /// WHY 单独定义:AsaIntervention 的 severity() 返回 Normal,但 Block 级别在语义上
 /// 等价于 Critical(见 types.rs:807-810 注释),必须通过 mpsc 旁路确保投递。
+///
+/// # 双清单同步红线(MCA M0 起显式声明)
+/// 本函数与 `NexusEvent::severity()` 是两张独立清单:新增 Critical 事件
+/// **必须同时修改两处**,只改 severity() 会导致"标 Critical 但 broadcast
+/// Lagged 时丢失"(旁路不生效)。同步性由 types.rs 测试
+/// `test_critical_severity_implies_mpsc_bypass` 属性断言守护。
 fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
     matches!(
         event,
@@ -50,6 +56,9 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
             | NexusEvent::RedTeamAudit { .. }
             | NexusEvent::AsaIntervention { .. }
             | NexusEvent::BudgetExceeded { .. }
+            // MCA M0(ADR-065):厂商额度耗尽必须确保投递(触发降级链切换,
+            // 与 types.rs severity() 双清单同步)
+            | NexusEvent::AffinityQuotaExhausted { .. }
     )
 }
 
@@ -1164,6 +1173,69 @@ mod tests {
             .expect("不应超时")
             .expect("Critical 旁路应收到 SkepticVeto");
         assert_eq!(received.type_name(), "SkepticVeto");
+    }
+
+    #[tokio::test]
+    async fn test_affinity_quota_exhausted_mpsc_delivery() {
+        // MCA M0(ADR-065):AffinityQuotaExhausted 必须走 mpsc 旁路确保投递
+        // (丢失导致降级链无人触发,请求持续打向死通道)
+        let bus = EventBus::new();
+        let mut critical_rx = bus.subscribe_critical_events();
+        let event = NexusEvent::AffinityQuotaExhausted {
+            metadata: EventMetadata::new("mca-gateway"),
+            route_key: "deep_seek/deepseek-v4-flash".into(),
+            reason: "429 quota exceeded for this month".into(),
+        };
+
+        bus.publish(event).await.unwrap();
+
+        let received = tokio::time::timeout(Duration::from_millis(200), critical_rx.recv())
+            .await
+            .expect("不应超时")
+            .expect("Critical 旁路应收到 AffinityQuotaExhausted");
+        assert_eq!(received.type_name(), "AffinityQuotaExhausted");
+        assert_eq!(received.severity(), crate::EventSeverity::Critical);
+    }
+
+    #[test]
+    fn test_critical_severity_implies_mpsc_bypass() {
+        // 双清单同步守护(MCA M0 起):§6.2 红线要求的安全/资源类 Critical
+        // 事件必须同时在 severity() 与 is_critical_mpsc_event() 两张清单中。
+        // WHY 不断言全部 Critical 变体:CheckpointSaved/ConsensusReached 等
+        // 历史 Critical 事件按既定设计只走 broadcast(背压保护级别),
+        // 本测试只锁定"必须确保投递"的安全/资源事件子集不回退。
+        let mpsc_required = [
+            NexusEvent::SkepticVeto {
+                metadata: EventMetadata::new("t"),
+                quest_id: "q".into(),
+                veto_reason: "r".into(),
+                frozen_capabilities: vec![],
+            },
+            NexusEvent::BudgetExceeded {
+                metadata: EventMetadata::new("t"),
+                budget_type: "token".into(),
+                current: 2,
+                limit: 1,
+            },
+            NexusEvent::AffinityQuotaExhausted {
+                metadata: EventMetadata::new("t"),
+                route_key: "zhipu/glm-5.2".into(),
+                reason: "quota".into(),
+            },
+        ];
+        for event in &mpsc_required {
+            assert!(
+                is_critical_mpsc_event(event),
+                "{} 必须在 mpsc 旁路清单中(双清单同步红线)",
+                event.type_name()
+            );
+        }
+        // AffinityQuotaExhausted 双清单一致性:severity 也必须是 Critical
+        assert_eq!(
+            mpsc_required[2].severity(),
+            crate::EventSeverity::Critical,
+            "AffinityQuotaExhausted 的 severity() 必须为 Critical"
+        );
     }
 
     #[test]

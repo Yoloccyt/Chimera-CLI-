@@ -1,0 +1,28 @@
+{
+  "_fixture_note": "合成 fixture(OpenAI Responses API 格式,DeepSeek V4-Flash 原生支持);真实录制待 Action Item 1(M1 W5)",
+  "id": "resp-ds-basic-001",
+  "object": "response",
+  "status": "completed",
+  "model": "deepseek-v4-flash",
+  "output": [
+    {
+      "type": "reasoning",
+      "summary": [
+        { "type": "summary_text", "text": "用户要求生成测试,先分析被测函数签名。" }
+      ]
+    },
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        { "type": "output_text", "text": "已生成 3 个测试用例覆盖正常/边界/异常路径。" }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 40,
+    "output_tokens": 60,
+    "input_tokens_details": { "cached_tokens": 20 },
+    "output_tokens_details": { "reasoning_tokens": 18 }
+  }
+}

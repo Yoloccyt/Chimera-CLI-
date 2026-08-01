@@ -27,6 +27,30 @@ pub struct AutoDpoConfig {
     pub max_pairs_per_batch: usize,
     /// 是否启用 EventBus 事件发布(测试时可关闭)
     pub enable_event_publish: bool,
+
+    // ============================================================
+    // P1-3: FormalVerifier M1 偏好对一致性验证配置(ADR-047)
+    // ============================================================
+    /// 是否启用 FormalVerifier M1 偏好对一致性验证
+    ///
+    /// WHY 默认 true:作为 R2 解冻前置条件,所有生产路径必须通过 M1 验证。
+    /// 测试场景可关闭以验证旧路径行为。
+    pub enable_formal_verification: bool,
+
+    /// 最小偏好差值 — 低于此值的偏好对视为噪声(无训练价值)
+    ///
+    /// WHY:过小的 margin 表明 chosen 与 rejected 几乎无差异,
+    /// 这类偏好对会引入噪声到 DPO 训练中,浪费计算资源。
+    #[doc = "默认值: 0.01"]
+    pub min_margin: f32,
+
+    /// 最大偏好差值 — 超过此值的偏好对视为疑似评分操纵
+    ///
+    /// WHY:过大的 margin(如 0.99)表明评分可能被操纵,
+    /// 是奖励黑客(Reward Hacking)的典型信号。
+    /// 正值 RHI-CG 双通道评估的抗奖励黑客设计。
+    #[doc = "默认值: 0.95"]
+    pub max_margin: f32,
 }
 
 impl Default for AutoDpoConfig {
@@ -39,6 +63,13 @@ impl Default for AutoDpoConfig {
             // WHY 100:单批上限,防止大批量生成导致内存爆炸
             max_pairs_per_batch: 100,
             enable_event_publish: true,
+            // P1-3: M1 形式化验证默认启用(R2 解冻前置条件)
+            enable_formal_verification: true,
+            // WHY 0.01:低于 1% 的 margin 在实用上不可区分,视为噪声
+            min_margin: 0.01,
+            // WHY 0.95:score 域 [0,1],0.95 对应 chosen ≈ 1.0,rejected ≈ 0.05,
+            // 超过此限的 margin 极不可能由真实质量差异产生
+            max_margin: 0.95,
         }
     }
 }
@@ -74,6 +105,21 @@ impl AutoDpoConfig {
                 detail: "max_pairs_per_batch must be > 0".into(),
             });
         }
+
+        // P1-3: M1 formali verifier margin 参数校验
+        if self.min_margin.is_nan() || self.min_margin <= 0.0 {
+            return Err(AutoDpoError::ConfigError {
+                detail: format!("min_margin must be > 0.0, got {}", self.min_margin),
+            });
+        }
+        if self.max_margin.is_nan() || self.max_margin <= self.min_margin {
+            return Err(AutoDpoError::ConfigError {
+                detail: format!(
+                    "max_margin ({}) must be > min_margin ({})",
+                    self.max_margin, self.min_margin
+                ),
+            });
+        }
         Ok(())
     }
 }
@@ -89,6 +135,10 @@ mod tests {
         assert!((cfg.quality_threshold - 0.5).abs() < 1e-6);
         assert_eq!(cfg.max_pairs_per_batch, 100);
         assert!(cfg.enable_event_publish);
+        // P1-3: M1 形式化验证默认配置
+        assert!(cfg.enable_formal_verification);
+        assert!((cfg.min_margin - 0.01).abs() < 1e-6);
+        assert!((cfg.max_margin - 0.95).abs() < 1e-6);
     }
 
     #[test]
@@ -140,5 +190,47 @@ mod tests {
         let restored: AutoDpoConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.min_samples, cfg.min_samples);
         assert_eq!(restored.max_pairs_per_batch, cfg.max_pairs_per_batch);
+    }
+
+    // ============================================================
+    // P1-3: M1 形式化验证配置测试
+    // ============================================================
+
+    #[test]
+    fn test_validate_min_margin_negative() {
+        let cfg = AutoDpoConfig {
+            min_margin: -0.1,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_min_margin_zero() {
+        let cfg = AutoDpoConfig {
+            min_margin: 0.0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_max_margin_less_than_min() {
+        let cfg = AutoDpoConfig {
+            min_margin: 0.5,
+            max_margin: 0.3,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_margin_equal() {
+        let cfg = AutoDpoConfig {
+            min_margin: 0.5,
+            max_margin: 0.5,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
     }
 }

@@ -206,7 +206,15 @@ impl NexusEvent {
             | Self::TuiChatSubmitted { .. }
             | Self::TuiChatResponseChunk { .. }
             | Self::TuiChatCompleted { .. }
-            | Self::TuiChatStatusChanged { .. } => EventTopic::System,
+            | Self::TuiChatStatusChanged { .. }
+            // MCA M0(ADR-065):mca-gateway 事件(L10 Interface 通道层,
+            // 与 McpNodeHeartbeat/ChtcAdapterStatus 同属 L10 适配器家族)
+            | Self::ModelAffinitySelected { .. }
+            | Self::ProviderDegraded { .. }
+            | Self::AffinityCapabilityNegotiated { .. }
+            | Self::AffinityQuotaExhausted { .. }
+            | Self::AffinityUnknownField { .. }
+            | Self::StreamSessionCompleted { .. } => EventTopic::System,
 
             // === Knowledge (4 + P4-W16.2.2 3 个 + P5.2.3 1 个) === L5 Knowledge 知识沉淀与进化
             Self::WikiUpdated { .. }

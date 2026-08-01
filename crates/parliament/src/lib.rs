@@ -51,6 +51,10 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod ahirt;
+/// MCA N7 厂商集中度免疫探针 — 供应商锁定的系统级免疫(ADR-067 决策 2)
+///
+/// 单厂商流量占比 EWMA > 70% 告警;独立模块(不并入 ImmuneSystem 固定三探针数组)。
+pub mod concentration_probe;
 pub mod config;
 pub mod debate;
 pub mod error;
@@ -70,6 +74,11 @@ pub mod immune_system;
 /// 承载 `omega-learner` 异步下发的 `ParliamentPolicy`,为 `Parliament::deliberate_with_policy`
 /// 提供策略感知能力。所有方法线程安全(`RwLock` 保护),C4 合规三层 fallback。
 pub mod learner_holder;
+/// MCA P7 跨厂商去相关 — Parliament 角色的 provider 绑定侧表(ADR-067)
+///
+/// Producer/Verifier/Skeptic 三方厂商绑定 + 去相关校验(同源相关失败修复),
+/// 侧表方案不动 RoleProfile 与 5 角色默认配置(R8 构造点雪崩规避)。
+pub mod provider_affinity;
 pub mod reasoning;
 pub mod roles;
 /// 策略封顶守卫 — ratio 反馈驱动的审议深度降级封顶(推理悖论红线风控)
@@ -86,14 +95,33 @@ pub mod variant_review;
 pub mod veto;
 pub mod voting;
 
+/// 自适应策略选择器 — 基于 ratio + 共识质量 + 系统负载的动态策略选择
+///
+/// 与 `StrategyCapGuard` 互补:Selector 是"建议"，CapGuard 是"强制上界"。
+/// 最终策略 = min(selector 建议, cap 封顶)。
+pub mod adaptive_strategy;
+
+/// ADR-064:质量趋势分析器 — 滑动窗口跟踪共识质量趋势
+///
+/// 跟踪最近 N 次审议的 ConsensusQualityMetrics 滑动窗口，
+/// 检测分歧度异常、弃权趋势，计算综合健康评分(0-100)。
+pub mod quality_trend;
+
+/// 悖论风险实时监控仪表盘 — 三信号融合(ratio/否决异常率/共识健康分)
+///
+/// 单信号超标→Yellow 预警降档，两信号超标→Red 熔断。
+pub mod paradox_dashboard;
+
 // === 关键类型重导出,简化外部导入 ===
 pub use ahirt::{
     AhirtRedTeam, AhirtStats, ProbePayload, ProbePayloadLibrary, ProbeResult, ProbeType,
     SecurityReport, TypeStats,
 };
+pub use concentration_probe::ProviderConcentrationProbe;
 pub use config::{AhirtConfig, ParliamentConfig};
 pub use debate::{DpoPair, DpoPairGenerator, Parliament};
 pub use error::ParliamentError;
+pub use provider_affinity::{validate_cross_provider, ProviderAffinityRegistry, ProviderBinding};
 // ImmuneSystem facade（ADR-046）：关键类型重导出,简化外部导入
 // WHY 不重导出 `ProbeType` / `Severity`：前者与 `ahirt::ProbeType` 冲突,
 // 后者与 `veto::Severity` 冲突,需通过 `parliament::immune_system::types::` 全路径访问。
@@ -116,7 +144,18 @@ pub use roles::RoleRegistry;
 pub use strategy_cap::{
     spawn_strategy_cap_subscriber, CapChange, StrategyCapConfig, StrategyCapGuard,
 };
-pub use types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
+// 自适应策略选择器公开 API
+pub use adaptive_strategy::{AdaptiveStrategyConfig, AdaptiveStrategySelector, SystemLoadProbe};
+// ADR-064:质量趋势分析器公开 API
+pub use quality_trend::{QualityReport, QualityTrendAnalyzer};
+// 悖论风险实时监控仪表盘公开 API
+// WHY 不重导出 ParadoxRiskReport:与 immune_system::types::ParadoxRiskReport 冲突(E0252),
+// 外部需通过 `parliament::paradox_dashboard::ParadoxRiskReport` 全路径访问。
+pub use paradox_dashboard::{AlertSeverity, ParadoxRiskAlert, ParadoxRiskDashboard, RiskLevel};
+pub use types::{
+    Consensus, DebateResult, DeliberationCache, Opinion, Proposal, ProposalKey, Role, RoleId,
+    RoleProfile,
+};
 // polish-v2.7 P3:变体池与审议公开 API 重导出(ADR-051)
 pub use variant_pool::VariantPool;
 pub use variant_review::{ReviewDecision, VariantReview};
@@ -137,10 +176,15 @@ pub mod prelude {
     pub use crate::error::ParliamentError;
     pub use crate::reasoning::{transition, ReasoningEvent, ReasoningState};
     pub use crate::roles::RoleRegistry;
-    pub use crate::types::{Consensus, DebateResult, Opinion, Proposal, Role, RoleId, RoleProfile};
+    pub use crate::types::{
+        Consensus, DebateResult, DeliberationCache, Opinion, Proposal, ProposalKey, Role, RoleId,
+        RoleProfile,
+    };
     pub use crate::veto::{
         IntentRule, MaliciousIntentRuleBook, MaliciousIntentType, RuleAction, Severity, Skeptic,
         VetoOverrideTicket, VetoReason,
     };
     pub use crate::voting::{VoteCounter, VoteResult};
+    // ADR-064:质量趋势分析器
+    pub use crate::quality_trend::{QualityReport, QualityTrendAnalyzer};
 }

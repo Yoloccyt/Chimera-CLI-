@@ -1,0 +1,86 @@
+# 智谱 GLM 模型亲和描述符(affinity.d/zhipu.toml)
+#
+# 数据来源:阿里云帮助文档《GLM系列混合推理模型调用》(2026-07-26)+
+#          智谱开放平台 Coding Plan 模型切换指南(2026-07-30)
+# 定价/端点随厂商调整,一律走本 TOML 不改代码(原则 P8 元数据外置)
+#
+# WHY base_url 为 Anthropic 端点:glm-5.2 声明双方言,但 quirks 钉住
+# anthropic_messages 优先(Anthropic 路径 thinking 块原生,工具链保真)
+
+schema_version = 1
+
+[[models]]
+provider = "zhipu"
+model = "glm-5.2"
+# 双方言:OpenAI 兼容端点 + Anthropic 兼容端点;preferred 由 quirk 钉选
+dialects = ["anthropic_messages", "open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+# reasoning_effort 七档(OpenAI 路径);Anthropic 路径用 thinking budget(见 quirk)
+thinking = { effort_levels = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] }
+context_window = 1000000
+max_output = 131072
+prompt_caching = "explicit_control"
+service_tiers = ["standard"]
+state_preservation = "block_preservation"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+# 占位价(Coding Plan 订阅制,按量参考值);实测成本以 usage 回写为准(P6)
+input_micro_per_mtok = 2000000
+output_micro_per_mtok = 8000000
+cache_hit_micro_per_mtok = 400000
+peak_periods = []
+
+[models.endpoint]
+# Anthropic 兼容端点(preferred);base_url host 即域名白名单来源(R9 零信任)
+base_url = "https://open.bigmodel.cn/api/anthropic"
+api_key_env = "ZHIPU_API_KEY"
+timeout_ms = 120000
+connect_timeout_ms = 10000
+rpm_limit = 600
+
+# 怪癖 1:钉住 Anthropic 路径优先(OpenAI 转换路径丢工具链特性)
+[[models.quirks]]
+rule = "prefer_dialect"
+dialect = "anthropic_messages"
+
+# 怪癖 2:Anthropic 路径不支持 reasoning_effort,TTG Deep → thinking budget 高档
+[[models.quirks]]
+rule = "anthropic_thinking_budget"
+
+# 级联廉价档:glm-5.2-fast-preview(FrugalGPT 三级级联的 L1 提议档)
+[[models]]
+provider = "zhipu"
+model = "glm-5.2-fast-preview"
+dialects = ["open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+thinking = { effort_levels = ["none", "low", "medium"] }
+context_window = 1000000
+max_output = 65536
+prompt_caching = "implicit"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+input_micro_per_mtok = 500000
+output_micro_per_mtok = 2000000
+cache_hit_micro_per_mtok = 100000
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+api_key_env = "ZHIPU_API_KEY"
+timeout_ms = 60000
+connect_timeout_ms = 10000
+rpm_limit = 1200

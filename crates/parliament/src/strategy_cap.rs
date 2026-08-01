@@ -180,6 +180,23 @@ impl StrategyCapGuard {
         min_strategy(strategy, self.current_cap())
     }
 
+    /// 直接设置策略封顶(用于悖论风险仪表盘紧急降档/熔断/恢复)
+    ///
+    /// 此方法绕过滞后带状态机直接设置 cap,适用于悖论风险仪表盘
+    /// 的紧急响应场景。会重置滞后带计数器与驻留时间。
+    ///
+    /// # 与 `observe` 的区别
+    /// - `observe` 基于 ratio 反馈通过滞后带状态机渐进调整,适合常规风控
+    /// - `set_max_strategy` 直接设置 cap,绕过滞后带,适合紧急响应
+    /// - 两者互补:仪表盘紧急响应后,`observe` 继续处理常规 ratio 反馈
+    pub fn set_max_strategy(&self, cap: ActivationStrategy) {
+        let mut state = self.lock_state();
+        state.cap = cap;
+        state.consecutive_over = 0;
+        state.consecutive_under = 0;
+        state.last_transition = Instant::now();
+    }
+
     /// 消费一次 ratio 报告,更新滞后带状态机
     ///
     /// # 返回
@@ -270,7 +287,7 @@ impl Default for StrategyCapGuard {
 ///
 /// 依赖 `ActivationStrategy` 的 repr(u8) 判别值序:
 /// FastPath=1 < Simplified=2 < Full=3。
-fn min_strategy(a: ActivationStrategy, b: ActivationStrategy) -> ActivationStrategy {
+pub(crate) fn min_strategy(a: ActivationStrategy, b: ActivationStrategy) -> ActivationStrategy {
     if (a as u8) <= (b as u8) {
         a
     } else {

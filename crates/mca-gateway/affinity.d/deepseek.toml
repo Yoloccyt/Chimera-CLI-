@@ -1,0 +1,89 @@
+# DeepSeek 模型亲和描述符(affinity.d/deepseek.toml)
+#
+# 数据来源:七牛云转 DeepSeek 官方邮件(2026-06-30)+ 新浪科技
+#          《DeepSeek V4 Flash 正式版》(2026-07-31)
+# 关键事实:峰谷定价(高峰 2×)、缓存命中 ¥0.01/M、旧名 deepseek-chat/reasoner
+#          已于 2026-07-24 废弃(DeprecatedModelNames 怪癖拒绝注册)
+#
+# WHY 三协议:DeepSeek 支持 OpenAI + Anthropic + Responses;M0 preferred
+# open_ai_chat(Responses 码器属 M1 交付,声明后回落 OpenAI)
+
+schema_version = 1
+
+# 级联廉价档:V4-Flash(FrugalGPT L1 提议档,Terminal Bench 2.1 82.7)
+[[models]]
+provider = "deep_seek"
+model = "deepseek-v4-flash"
+# 声明三方言;M0 preferred open_ai_chat(Responses 码器 M1 落地后自动升级)
+dialects = ["open_ai_chat", "anthropic_messages", "open_ai_responses"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+# thinking 默认开启可关(OnOff 语义)
+thinking = "on_off"
+context_window = 1000000
+max_output = 393216
+# 隐式缓存族:自动命中,返回 prompt_cache_hit_tokens(会话粘性权重最高)
+prompt_caching = "implicit"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+# Flash 输入 ¥1/M(微元:1_000_000);缓存命中 ¥0.01/M(微元:10_000)
+input_micro_per_mtok = 1000000
+output_micro_per_mtok = 2000000
+cache_hit_micro_per_mtok = 10000
+# 峰谷定价:高峰时段(8:00-20:00)2×(factor_percent = 200)
+peak_periods = [{ start_hour = 8, end_hour = 20, factor_percent = 200 }]
+
+[models.endpoint]
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout_ms = 120000
+connect_timeout_ms = 10000
+rpm_limit = 1000
+
+# 怪癖:旧模型名废弃拒绝注册(2026-07-24 起)
+[[models.quirks]]
+rule = "deprecated_model_names"
+names = ["deepseek-chat", "deepseek-reasoner"]
+
+# 主力档:V4-Pro(FrugalGPT L2 主力档)
+[[models]]
+provider = "deep_seek"
+model = "deepseek-v4-pro"
+dialects = ["open_ai_chat", "anthropic_messages", "open_ai_responses"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+thinking = "on_off"
+context_window = 1000000
+max_output = 393216
+prompt_caching = "implicit"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+input_micro_per_mtok = 4000000
+output_micro_per_mtok = 12000000
+cache_hit_micro_per_mtok = 40000
+peak_periods = [{ start_hour = 8, end_hour = 20, factor_percent = 200 }]
+
+[models.endpoint]
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout_ms = 180000
+connect_timeout_ms = 10000
+rpm_limit = 500
+
+[[models.quirks]]
+rule = "deprecated_model_names"
+names = ["deepseek-chat", "deepseek-reasoner"]

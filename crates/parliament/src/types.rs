@@ -295,6 +295,97 @@ impl DebateResult {
     }
 }
 
+// ============================================================
+// 审议缓存
+// ============================================================
+
+/// 审议缓存键 — 标识一次审议的唯一性
+///
+/// 包含 `proposal_id`、`strategy`(影响审议深度)和 `risk_level_bucket`
+/// (量化到 ±0.05,使相近风险共享缓存)。
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ProposalKey {
+    /// 提案 ID
+    pub proposal_id: String,
+    /// 策略(影响审议深度)
+    pub strategy: String,
+    /// 风险等级桶(量化到 ±0.05,使相近风险共享缓存)
+    pub risk_level_bucket: u32,
+}
+
+/// 审议结果 LRU 缓存 — 最多 10 条
+///
+/// 使用 `Vec<(ProposalKey, Consensus)>` 实现简单 LRU,
+/// 最近访问的条目在末尾,淘汰时移除头部。
+///
+/// WHY 手写 LRU 而非 `lru` crate:避免引入新依赖(Vec 手写足够
+/// 处理 10 条规模,符合 §4.1 零新依赖铁律)。
+#[derive(Debug)]
+pub struct DeliberationCache {
+    /// 缓存条目(最近使用在末尾)
+    entries: Vec<(ProposalKey, Consensus)>,
+    /// 最大条目数
+    max_entries: usize,
+}
+
+impl DeliberationCache {
+    /// 创建新的审议结果缓存
+    ///
+    /// # 参数
+    /// - `max_entries`:最大条目数,`None` 时默认为 10
+    pub fn new(max_entries: Option<usize>) -> Self {
+        Self {
+            entries: Vec::new(),
+            max_entries: max_entries.unwrap_or(10),
+        }
+    }
+
+    /// 查找缓存条目,并将命中条目移动到末尾(LRU 保序)
+    ///
+    /// # 返回
+    /// - `Some(&Consensus)`:命中,返回缓存结果的引用
+    /// - `None`:未命中
+    pub fn get(&mut self, key: &ProposalKey) -> Option<&Consensus> {
+        let pos = self.entries.iter().position(|(k, _)| k == key)?;
+        // 将命中条目移到末尾(最近使用)
+        let entry = self.entries.remove(pos);
+        self.entries.push(entry);
+        // 安全:pos 来自 position() 找到的有效索引,entries.last() 必定为 Some
+        Some(
+            &self
+                .entries
+                .last()
+                .expect("entries.last() after push 不应为 None")
+                .1,
+        )
+    }
+
+    /// 插入或覆盖缓存条目
+    ///
+    /// 若键已存在,更新值并移动到末尾;超限时淘汰头部(最久未使用)。
+    pub fn insert(&mut self, key: ProposalKey, consensus: Consensus) {
+        // 若已存在,移除旧条目(后续 push 新条目到末尾)
+        if let Some(pos) = self.entries.iter().position(|(k, _)| *k == key) {
+            self.entries.remove(pos);
+        }
+        self.entries.push((key, consensus));
+        // 淘汰最久未使用的条目(头部)
+        while self.entries.len() > self.max_entries {
+            self.entries.remove(0);
+        }
+    }
+
+    /// 返回当前缓存条目数
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// 缓存是否为空
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,5 +551,171 @@ mod tests {
         let json = serde_json::to_string(&consensus).unwrap();
         let restored: Consensus = serde_json::from_str(&json).unwrap();
         assert_eq!(consensus, restored);
+    }
+
+    // ============================================================
+    // DeliberationCache 单元测试
+    // ============================================================
+
+    #[test]
+    fn test_deliberation_cache_new_default_max_entries() {
+        let cache = DeliberationCache::new(None);
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_deliberation_cache_new_custom_max_entries() {
+        let cache = DeliberationCache::new(Some(5));
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_deliberation_cache_insert_and_get() {
+        let mut cache = DeliberationCache::new(None);
+        let key = ProposalKey {
+            proposal_id: "p-1".into(),
+            strategy: "full".into(),
+            risk_level_bucket: 4,
+        };
+        let consensus = Consensus::Reached {
+            decision_hash: "abc".into(),
+            dpo_pair_id: None,
+        };
+
+        cache.insert(key.clone(), consensus.clone());
+        assert_eq!(cache.len(), 1);
+        assert!(!cache.is_empty());
+
+        let cached = cache.get(&key);
+        assert!(cached.is_some());
+        assert_eq!(*cached.unwrap(), consensus);
+    }
+
+    #[test]
+    fn test_deliberation_cache_get_miss() {
+        let mut cache = DeliberationCache::new(None);
+        let key = ProposalKey {
+            proposal_id: "p-miss".into(),
+            strategy: "full".into(),
+            risk_level_bucket: 4,
+        };
+        assert!(cache.get(&key).is_none());
+    }
+
+    #[test]
+    fn test_deliberation_cache_insert_overwrite_same_key() {
+        let mut cache = DeliberationCache::new(None);
+        let key = ProposalKey {
+            proposal_id: "p-1".into(),
+            strategy: "full".into(),
+            risk_level_bucket: 4,
+        };
+        let consensus1 = Consensus::Reached {
+            decision_hash: "hash1".into(),
+            dpo_pair_id: None,
+        };
+        let consensus2 = Consensus::Rejected {
+            reason: "覆盖测试".into(),
+        };
+
+        cache.insert(key.clone(), consensus1);
+        assert_eq!(cache.len(), 1);
+
+        cache.insert(key.clone(), consensus2);
+        assert_eq!(cache.len(), 1);
+        let cached = cache.get(&key).unwrap();
+        assert!(cached.is_rejected());
+    }
+
+    #[test]
+    fn test_deliberation_cache_lru_eviction() {
+        let mut cache = DeliberationCache::new(Some(3));
+        let keys: Vec<ProposalKey> = (0..4)
+            .map(|i| ProposalKey {
+                proposal_id: format!("p-{i}"),
+                strategy: "full".into(),
+                risk_level_bucket: 4,
+            })
+            .collect();
+        let consensus = Consensus::Reached {
+            decision_hash: "hash".into(),
+            dpo_pair_id: None,
+        };
+
+        for key in &keys {
+            cache.insert(key.clone(), consensus.clone());
+        }
+
+        assert_eq!(cache.len(), 3);
+        assert!(cache.get(&keys[0]).is_none(), "p-0 应被淘汰");
+        assert!(cache.get(&keys[1]).is_some(), "p-1 应仍在缓存");
+        assert!(cache.get(&keys[2]).is_some(), "p-2 应仍在缓存");
+        assert!(cache.get(&keys[3]).is_some(), "p-3 应仍在缓存");
+    }
+
+    #[test]
+    fn test_deliberation_cache_lru_reorder_on_get() {
+        let mut cache = DeliberationCache::new(Some(3));
+        let keys: Vec<ProposalKey> = (0..3)
+            .map(|i| ProposalKey {
+                proposal_id: format!("p-{i}"),
+                strategy: "full".into(),
+                risk_level_bucket: 4,
+            })
+            .collect();
+        let consensus = Consensus::Reached {
+            decision_hash: "hash".into(),
+            dpo_pair_id: None,
+        };
+
+        for key in &keys {
+            cache.insert(key.clone(), consensus.clone());
+        }
+        assert_eq!(cache.len(), 3);
+
+        // 访问 keys[0](最旧),使其移到末尾
+        cache.get(&keys[0]).unwrap();
+
+        let key4 = ProposalKey {
+            proposal_id: "p-3".into(),
+            strategy: "full".into(),
+            risk_level_bucket: 4,
+        };
+        cache.insert(key4, consensus.clone());
+        assert_eq!(cache.len(), 3);
+
+        assert!(cache.get(&keys[0]).is_some(), "被访问的 p-0 应保留");
+        assert!(cache.get(&keys[1]).is_none(), "未访问的 p-1 应被淘汰");
+        assert!(cache.get(&keys[2]).is_some(), "p-2 应保留");
+    }
+
+    #[test]
+    fn test_proposal_key_hash_eq() {
+        let k1 = ProposalKey {
+            proposal_id: "p-1".into(),
+            strategy: "full".into(),
+            risk_level_bucket: 4,
+        };
+        let k2 = ProposalKey {
+            proposal_id: "p-1".into(),
+            strategy: "full".into(),
+            risk_level_bucket: 4,
+        };
+        let k3 = ProposalKey {
+            proposal_id: "p-2".into(),
+            strategy: "full".into(),
+            risk_level_bucket: 4,
+        };
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher1 = DefaultHasher::new();
+        let mut hasher2 = DefaultHasher::new();
+        k1.hash(&mut hasher1);
+        k2.hash(&mut hasher2);
+        assert_eq!(hasher1.finish(), hasher2.finish());
     }
 }

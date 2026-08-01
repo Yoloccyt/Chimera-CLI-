@@ -32,12 +32,15 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod config;
+/// MCA 成本模型 — 通道成本 EWMA + 预算否决 + service_tier 授权(ADR-068)
+pub mod cost_model;
 pub mod error;
 pub mod governor;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use config::AcbGovernorConfig;
+pub use cost_model::{AffinityCostModel, CostVerdict};
 pub use error::AcbError;
 pub use governor::AcbGovernor;
 pub use types::{BudgetAllocation, BudgetRequest, BudgetStatus, BudgetTier, TierSwitchResult};

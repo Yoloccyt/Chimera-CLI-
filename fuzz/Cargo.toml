@@ -16,6 +16,7 @@
 #   cargo +nightly fuzz run checkpoint_deserialize
 #   cargo +nightly fuzz run config_section_parse
 #   cargo +nightly fuzz run harness_spec_parse
+#   cargo +nightly fuzz run sse_parse
 #
 # 当前环境仅有 stable 工具链,无法实际运行,详见
 # docs/security/week8_security_report.md
@@ -63,6 +64,8 @@ model-router = { path = "../crates/model-router" }
 # nexus-contracts: HarnessSpec/HarnessSpecError/ImmutableSurface 类型（L0 契约层）
 gsoe-evolution = { path = "../crates/gsoe-evolution" }
 nexus-contracts = { path = "../crates/nexus-contracts" }
+# MCA M0 PR-6: sse_parse fuzz target(SSE 归一器,最热路径模糊防线,ADR-065)
+mca-gateway = { path = "../crates/mca-gateway" }
 
 # 序列化依赖(直接指定版本,fuzz crate 不在 workspace 内无法用 workspace = true)
 serde = { version = "1.0", features = ["derive"] }
@@ -128,6 +131,14 @@ doc = false
 [[bin]]
 name = "harness_spec_parse"
 path = "fuzz_targets/harness_spec_parse.rs"
+test = false
+doc = false
+
+# MCA M0 PR-6: sse_parse fuzz target(ADR-065)
+# 测试 SSE 归一器在任意字节流下不 panic + 任意切割不变量(跨 chunk 边界)
+[[bin]]
+name = "sse_parse"
+path = "fuzz_targets/sse_parse.rs"
 test = false
 doc = false
 

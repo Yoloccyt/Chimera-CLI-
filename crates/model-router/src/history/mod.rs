@@ -31,9 +31,12 @@
 #![forbid(unsafe_code)]
 
 pub mod memory;
+/// MCA M3: 通道化路由历史(route_history 新表,与 history 并存,ADR-065)
+pub mod route_history;
 pub mod sqlite;
 
 pub use memory::InMemoryHistoryStore;
+pub use route_history::{RouteHistoryStore, RouteRecord};
 pub use sqlite::SqliteHistoryStore;
 
 // WHY `pub use`:从 moe 模块重导出 HistoryRecord,使 `crate::history::HistoryRecord`

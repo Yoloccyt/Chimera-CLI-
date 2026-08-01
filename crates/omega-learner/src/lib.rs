@@ -121,8 +121,14 @@ pub mod s6_decay;
 /// Abstain 保守护栏（uncertainty > 0.7）不可被学习绕过。
 pub mod s8_mem_pi;
 
-/// 八接缝标识 — v5.0 §7.3 学习接缝枚举
+/// 接缝标识 — v5.0 §7.3 学习接缝枚举
 pub mod seam;
+
+/// S9 接缝 — 通道路由学习器(MCA M3,RouteLLM 落点,ADR-065)
+///
+/// LinUCB 臂空间 = provider × model × thinking_mode(~40 臂),影子模式合规;
+/// 不触 R2 冻结面(不 import gsoe-evolution/auto-dpo,无 evolve/RL 训练路径)。
+pub mod s9_route;
 
 /// P4-W16.2.1: 经验回放池 — off-policy RL 训练的轨迹存储与采样基础设施
 pub mod replay_pool;
@@ -224,6 +230,7 @@ pub use s8_mem_pi::{
     S8Reward, S8RewardParams, ABSTAIN_UNCERTAINTY_THRESHOLD, DEFAULT_NOISE_PENALTY_LAMBDA,
     DEFAULT_S8_ALPHA, S8_ARM_COUNT, S8_CONTEXT_DIM,
 };
+pub use s9_route::{S9Context, S9Reward, S9RouteLearner, S9_CONTEXT_DIM};
 pub use seam::SeamId;
 
 // ============================================================

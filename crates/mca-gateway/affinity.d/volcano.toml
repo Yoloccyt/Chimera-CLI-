@@ -1,0 +1,110 @@
+# 豆包(火山方舟)模型亲和描述符(affinity.d/volcano.toml)
+#
+# 数据来源:腾讯新闻/华尔街见闻(2026-06-23/24,豆包 2.1 Pro/Turbo/Evolving 发布)
+# 关键事实:Coding/Agent 综合成本宣传 ¥1.96/M —— 以实测回写为准,不信宣传值(P6)
+#          Evolving 版每月 2-4 次滚动更新,质量探针重点监控(QualityDriftWatch)
+
+schema_version = 1
+
+# 主力档:Doubao-Seed-2.1-Pro
+[[models]]
+provider = "volcano_ark"
+model = "doubao-seed-2.1-pro"
+dialects = ["open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+# 深度思考开关(OnOff)
+thinking = "on_off"
+context_window = 262144
+max_output = 32768
+# 隐式缓存族(缓存命中价 ¥1.2)
+prompt_caching = "implicit"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+# Pro 输入 ¥6/输出 ¥30,缓存命中 ¥1.2
+input_micro_per_mtok = 6000000
+output_micro_per_mtok = 30000000
+cache_hit_micro_per_mtok = 1200000
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+api_key_env = "VOLCANO_API_KEY"
+timeout_ms = 120000
+connect_timeout_ms = 10000
+rpm_limit = 1000
+
+# 高频档:Turbo(半价)
+[[models]]
+provider = "volcano_ark"
+model = "doubao-seed-2.1-turbo"
+dialects = ["open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+thinking = "on_off"
+context_window = 262144
+max_output = 32768
+prompt_caching = "implicit"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+input_micro_per_mtok = 3000000
+output_micro_per_mtok = 15000000
+cache_hit_micro_per_mtok = 600000
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+api_key_env = "VOLCANO_API_KEY"
+timeout_ms = 60000
+connect_timeout_ms = 10000
+rpm_limit = 2000
+
+# 漂移观察位:Evolving(月更 2-4 次,质量探针重点监控)
+[[models]]
+provider = "volcano_ark"
+model = "doubao-seed-evolving"
+dialects = ["open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+thinking = "on_off"
+context_window = 262144
+max_output = 32768
+prompt_caching = "implicit"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = true
+
+[models.pricing]
+currency = "cny"
+input_micro_per_mtok = 3000000
+output_micro_per_mtok = 15000000
+cache_hit_micro_per_mtok = 600000
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+api_key_env = "VOLCANO_API_KEY"
+timeout_ms = 60000
+connect_timeout_ms = 10000
+rpm_limit = 2000
+
+# 怪癖:质量漂移观察(月更 2-4 次,行为漂移由质量分触发自动降权)
+[[models.quirks]]
+rule = "quality_drift_watch"

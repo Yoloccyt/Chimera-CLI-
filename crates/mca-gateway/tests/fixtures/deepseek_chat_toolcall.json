@@ -1,0 +1,27 @@
+{
+  "_fixture_note": "合成 fixture(DeepSeek OpenAI 方言工具调用场景);真实录制待 Action Item 1(M0 W3)",
+  "id": "chatcmpl-ds-tool-001",
+  "object": "chat.completion",
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_ds_001",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"path\":\"src/main.rs\"}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": { "prompt_tokens": 88, "completion_tokens": 21, "total_tokens": 109 }
+}

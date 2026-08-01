@@ -1,0 +1,22 @@
+{
+  "_fixture_note": "合成 fixture(GLM Anthropic 端点工具调用场景);真实录制待 Action Item 1(M0 W3)",
+  "id": "msg-glm-tool-001",
+  "type": "message",
+  "role": "assistant",
+  "model": "glm-5.2",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "需要先查看文件内容才能重构。",
+      "signature": "glm-sig-0002"
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_glm_001",
+      "name": "read_file",
+      "input": { "path": "src/lib.rs" }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": { "input_tokens": 120, "output_tokens": 40, "cache_read_input_tokens": 0 }
+}

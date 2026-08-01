@@ -1,0 +1,74 @@
+# ============================================================
+# 通用 Custom 通道模板(affinity.d/custom.toml.example)
+#
+# WHY 扩展名 .example:spec_loader 只加载 *.toml,本模板不被自动装载。
+# 用户复制为 <name>.toml 填入真实参数即可注册——新厂商接入零代码(P8/§6.8)。
+#
+# 适用:任何 OpenAI 兼容端点(OpenRouter / 聚合网关 / 自部署 vLLM / Ollama /
+#       sglang)。Step 3.5 Flash 与 MiniMax M3 均为开源权重可自部署。
+# ============================================================
+
+schema_version = 1
+
+# 示例 1:OpenRouter 聚合网关(填入实际模型名)
+[[models]]
+# Custom 变体载荷为通道命名标识(路由键前缀:openrouter/<model>)
+provider = { custom = "openrouter" }
+model = "example/model-name"
+dialects = ["open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+thinking = "none"          # 未知能力保守起步(协商只降不升)
+context_window = 131072
+max_output = 32768
+prompt_caching = "none"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = false
+
+[models.pricing]
+currency = "usd"
+input_micro_per_mtok = 0   # 聚合网关计费另计;实测回写为准(P6)
+output_micro_per_mtok = 0
+cache_hit_micro_per_mtok = 0
+peak_periods = []
+
+[models.endpoint]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+timeout_ms = 120000
+connect_timeout_ms = 10000
+
+# 示例 2:本地自部署 vLLM(无鉴权,api_key_env 留空即不加鉴权头)
+[[models]]
+provider = { custom = "local-vllm" }
+model = "MiniMax-M3"
+dialects = ["open_ai_chat"]
+
+[models.capabilities]
+streaming = true
+tool_calling = true
+thinking = "none"
+context_window = 524288
+max_output = 65536
+prompt_caching = "none"
+service_tiers = ["standard"]
+state_preservation = "none"
+modalities = ["text"]
+structured_output = false
+
+[models.pricing]
+currency = "cny"
+input_micro_per_mtok = 0   # 自部署零 API 计费(算力成本另计)
+output_micro_per_mtok = 0
+cache_hit_micro_per_mtok = 0
+peak_periods = []
+
+[models.endpoint]
+base_url = "http://localhost:8000/v1"
+api_key_env = ""           # 空 = 不加鉴权头(本地无鉴权)
+timeout_ms = 300000
+connect_timeout_ms = 5000

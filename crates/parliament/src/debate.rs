@@ -27,11 +27,15 @@ use uuid::Uuid;
 
 use crate::config::ParliamentConfig;
 use crate::error::ParliamentError;
+// ADR-064:质量趋势分析器 — 滑动窗口跟踪共识质量趋势
+use crate::quality_trend::QualityTrendAnalyzer;
+// 悖论风险实时监控仪表盘 — 三信号融合风险监控
+use crate::paradox_dashboard::ParadoxRiskDashboard;
 // P4-W14.3 S5 接缝:ParliamentLearnerHolder 承载 omega-learner 异步下发的策略
 use crate::learner_holder::ParliamentLearnerHolder;
 use crate::roles::RoleRegistry;
-use crate::strategy_cap::StrategyCapGuard;
-use crate::types::{Consensus, Opinion, Proposal, Role};
+use crate::strategy_cap::{min_strategy, StrategyCapGuard};
+use crate::types::{Consensus, DeliberationCache, Opinion, Proposal, ProposalKey, Role};
 use crate::veto::{Skeptic, VetoOverrideTicket};
 use crate::voting::{
     compute_decision_hash, publish_capability_frozen_event, publish_consensus_event,
@@ -222,6 +226,26 @@ pub struct Parliament {
     /// Arc::clone 后启动后台订阅任务。与 LinUCB 互补:封顶仅做 min 上界,
     /// 学习器输出不被改写。
     strategy_cap: std::sync::Arc<StrategyCapGuard>,
+    /// 悖论风险实时监控仪表盘(Mutex 保护,不跨 .await 持锁)
+    ///
+    /// 监测三信号(ratio/否决异常率/共识健康分)融合,
+    /// 单信号超标→Yellow 预警降档,两信号超标→Red 熔断。
+    /// 与 StrategyCapGuard 互补:仪表盘是上层指挥官,Guard 是执行者。
+    /// 毒锁降级:使用 `unwrap_or_else(|e| e.into_inner())` 恢复(§4.1 约定)。
+    paradox_dashboard: std::sync::Mutex<ParadoxRiskDashboard>,
+    /// 审议结果缓存(Mutex 保护,不跨 .await 持锁)
+    ///
+    /// 缓存相同 Quest+Proposal 的审议结果,避免重复审议。
+    /// 使用 Mutex 而非 RwLock:读写比例均衡(一次查+一次写),Mutex 更轻量。
+    /// 毒锁降级:使用 `unwrap_or_else(|e| e.into_inner())` 恢复(§4.1 约定)。
+    deliberation_cache: std::sync::Mutex<DeliberationCache>,
+    /// ADR-064:质量趋势分析器 — 滑动窗口跟踪共识质量趋势
+    ///
+    /// 在每次审议完成后推送 ConsensusQualityMetrics 到分析器，
+    /// 通过滑动窗口 + 连续计数检测分歧异常/弃权趋势。
+    /// Mutex 保护：同步访问，不跨 .await 持锁(§4.1 约定)。
+    /// 毒锁降级:使用 `unwrap_or_else(|e| e.into_inner())` 恢复。
+    quality_trend: std::sync::Mutex<QualityTrendAnalyzer>,
 }
 
 impl Parliament {
@@ -235,6 +259,12 @@ impl Parliament {
         let vote_counter = VoteCounter::new(&config);
         // 封顶守卫使用配置中的滞后带参数(初始封顶 Full = 不设限)
         let strategy_cap = std::sync::Arc::new(StrategyCapGuard::new(config.strategy_cap.clone()));
+        // 克隆 event_bus 和 strategy_cap 供悖论仪表盘使用：
+        // - event_bus 用于发布预警事件(EfficiencyAlertTriggered)
+        // - strategy_cap 用于紧急降档/熔断/恢复(绕过滞后带)
+        // 克隆在 Self 块之前完成，避免 move 后所有权丢失(E0382)。
+        let paradox_bus = event_bus.clone();
+        let paradox_cap = std::sync::Arc::clone(&strategy_cap);
         Self {
             config,
             registry,
@@ -244,6 +274,12 @@ impl Parliament {
             dpo_generator: DpoPairGenerator::new(),
             learner_holder: ParliamentLearnerHolder::new(),
             strategy_cap,
+            paradox_dashboard: std::sync::Mutex::new(ParadoxRiskDashboard::new(
+                Some(paradox_bus),
+                Some(paradox_cap),
+            )),
+            deliberation_cache: std::sync::Mutex::new(DeliberationCache::new(None)),
+            quality_trend: std::sync::Mutex::new(QualityTrendAnalyzer::new(None)),
         }
     }
 
@@ -361,6 +397,46 @@ impl Parliament {
         // 仅做上界不改写学习器输出;Skeptic 检测(下方步骤 0)不受封顶影响。
         let strategy = self.strategy_cap.apply(policy.strategy());
 
+        // 自适应策略选择(当配置启用时)
+        // 计算实时 ratio = debate_latency_ms / max(1, opinions_count)
+        // 注意:此处仅在首次调用时使用默认 ratio,实际 ratio 在辩论完成后更新
+        // StrategyCapGuard::observe 会在后续报告周期中处理
+        let selector = crate::adaptive_strategy::AdaptiveStrategySelector::new(None);
+        let system_load = crate::adaptive_strategy::SystemLoadProbe::probe();
+        let suggested_strategy = selector.select(
+            proposal.risk_level,
+            0.0, // 首次 ratio 未知,使用 0.0(不触发降级)
+            system_load,
+            50, // 默认健康分 50(不触发提升)
+            strategy,
+        );
+        // 最终策略 = min(自适应建议, 封顶)
+        let effective_strategy = min_strategy(
+            suggested_strategy,
+            self.strategy_cap.apply(policy.strategy()),
+        );
+
+        // ============================================================
+        // 步骤 0(前置):审议结果缓存查询
+        // ============================================================
+        // WHY 在 Skeptic 检测之前:缓存键包含 proposal_id/strategy/risk_level_bucket,
+        // 若相同提案+策略+风险桶已审议过,直接返回缓存结果,避免重复编排。
+        // 毒锁降级:使用 unwrap_or_else(|e| e.into_inner()) 恢复(§4.1 约定)。
+        let cache_key = ProposalKey {
+            proposal_id: proposal.proposal_id.clone(),
+            strategy: effective_strategy.short_name().to_string(),
+            risk_level_bucket: (proposal.risk_level * 20.0) as u32,
+        };
+        {
+            let mut cache = self
+                .deliberation_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(cached) = cache.get(&cache_key) {
+                return Ok(cached.clone());
+            }
+        }
+
         // ============================================================
         // 步骤 0:Skeptic 恶意意图检测(三策略共同前置,红队防线)
         // ============================================================
@@ -420,10 +496,19 @@ impl Parliament {
             )
             .await;
 
-            return Ok(Consensus::Vetoed {
+            let veto_consensus = Consensus::Vetoed {
                 veto_reason: veto_reason_str,
                 frozen_capabilities,
-            });
+            };
+            // 缓存否决结果,避免相同提案再次走 Skeptic 检测
+            {
+                let mut cache = self
+                    .deliberation_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                cache.insert(cache_key, veto_consensus.clone());
+            }
+            return Ok(veto_consensus);
         }
 
         // ============================================================
@@ -431,7 +516,7 @@ impl Parliament {
         // ============================================================
         // 各路径额外返回度量载体(FastPath 无投票为 None),供下方统一
         // 发布 DebateCompleted 时携带投票率与多维共识质量。
-        let (consensus, metrics) = match strategy {
+        let (consensus, metrics) = match effective_strategy {
             ActivationStrategy::FastPath => self.deliberate_fastpath(quest, proposal).await?,
             ActivationStrategy::Simplified => self.deliberate_simplified(quest, proposal).await?,
             ActivationStrategy::Full => self.deliberate_full(quest, proposal).await?,
@@ -445,12 +530,71 @@ impl Parliament {
             &quest.quest_id,
             &proposal.proposal_id,
             debate_start.elapsed().as_secs_f64() * 1000.0,
-            strategy.short_name(),
+            effective_strategy.short_name(),
             metrics.as_ref().map(DebateVoteMetrics::vote_rates),
             metrics.as_ref().map(|m| &m.quality),
             consensus_outcome_label(&consensus),
         )
         .await;
+
+        // ============================================================
+        // ADR-064:推送质量指标到趋势分析器(共识判定完成后,缓存写入之前)
+        // ============================================================
+        // WHY 在缓存写入之前:避免缓存命中时跳过趋势分析,确保每次实际
+        // 审议都参与趋势统计。FastPath 路径 metrics=None,不推送。
+        // 毒锁降级:使用 unwrap_or_else(|e| e.into_inner()) 恢复(§4.1 约定)。
+        if let Some(ref m) = metrics {
+            let mut trend = self.quality_trend.lock().unwrap_or_else(|e| e.into_inner());
+            trend.push(m.quality);
+        }
+
+        // ============================================================
+        // 步骤 3:缓存审议结果,避免相同提案+策略重复编排
+        // ============================================================
+        {
+            let mut cache = self
+                .deliberation_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            cache.insert(cache_key, consensus.clone());
+        }
+
+        // ============================================================
+        // 悖论风险仪表盘:三信号融合更新(ADR-063/064 推理悖论红线监控)
+        // ============================================================
+        // WHY 在缓存写入之后:避免缓存命中路径跳过仪表盘更新,但缓存写入是
+        // 轻量 Vec 操作(~5µs),仪表盘更新(~2µs)顺序无关紧要。
+        //
+        // 三信号提取:
+        // - ratio: 审议 wall-clock 耗时(秒),作为协调成本/inference_gain proxy
+        //   (花费 5 秒审议 → ratio=5,远超阈值 1.5)
+        // - veto_anomaly_rate: 否决时 1.0(最大异常),否则从 quality 的
+        //   skeptic_stance 推导(skeptic 立场越接近 0.0,否决倾向越高)
+        // - health_score: 质量趋势分析器的综合健康评分(0-100,<40 为异常)
+        {
+            let ratio = debate_start.elapsed().as_secs_f64();
+
+            let veto_anomaly_rate = if matches!(consensus, Consensus::Vetoed { .. }) {
+                1.0f32
+            } else {
+                // skeptic_stance ∈ [0,1],接近 0 = 反对倾向高
+                // 1.0 - skeptic_stance 转换:反对倾向高 → veto_anomaly 高
+                metrics.as_ref().map_or(0.0f32, |m| {
+                    (1.0f32 - m.quality.skeptic_stance).clamp(0.0, 1.0)
+                })
+            };
+
+            let health_score = {
+                let trend = self.quality_trend.lock().unwrap_or_else(|e| e.into_inner());
+                trend.consensus_health_score()
+            };
+
+            let mut dashboard = self
+                .paradox_dashboard
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            dashboard.update(ratio, veto_anomaly_rate, health_score);
+        }
 
         Ok(consensus)
     }
@@ -2885,5 +3029,190 @@ mod tests {
         assert_eq!(consensus_outcome_label(&reached), "Reached");
         assert_eq!(consensus_outcome_label(&rejected), "Rejected");
         assert_eq!(consensus_outcome_label(&vetoed), "Vetoed");
+    }
+
+    // ============================================================
+    // DeliberationCache 集成测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_cache_hit_returns_cached_result() {
+        // 同一提案两次审议,第二次应命中缓存,结果相同
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-cache-hit", "q-1", "测试缓存命中", 0.2);
+
+        // 首次审议(写入缓存)
+        let result1 = parliament.deliberate(&quest, &proposal).await.unwrap();
+        // 验证缓存有 1 条
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            1,
+            "首次审议后缓存应有 1 条"
+        );
+
+        // 第二次审议(应命中缓存)
+        let result2 = parliament.deliberate(&quest, &proposal).await.unwrap();
+
+        // 两次结果应相同(缓存命中)
+        assert_eq!(result1, result2, "缓存命中应返回相同结果");
+        // 缓存条目数仍为 1(未新增)
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            1,
+            "缓存命中不应新增条目"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cache_miss_different_proposal() {
+        // 不同提案应不命中缓存,缓存条目增加
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal1 = Proposal::new("p-miss-1", "q-1", "提案一", 0.2);
+        let proposal2 = Proposal::new("p-miss-2", "q-1", "提案二", 0.3);
+
+        // 首次审议
+        let _ = parliament.deliberate(&quest, &proposal1).await.unwrap();
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            1,
+            "首次审议后缓存应有 1 条"
+        );
+
+        // 不同提案应不命中缓存
+        let _ = parliament.deliberate(&quest, &proposal2).await.unwrap();
+        // 缓存应新增一条
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            2,
+            "不同提案应新增缓存条目"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cache_eviction() {
+        // 超过 10 条缓存后,最早条目被淘汰
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+
+        // 插入 11 条不同提案(超过最大 10 条)
+        for i in 0..11 {
+            let proposal = Proposal::new(
+                format!("p-evict-{i}"),
+                "q-1",
+                format!("缓存淘汰测试提案 {i}"),
+                0.2,
+            );
+            let _ = parliament.deliberate(&quest, &proposal).await.unwrap();
+        }
+
+        // 缓存应不超过 10 条
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            10,
+            "缓存应不超过 10 条"
+        );
+
+        // 最早的条目(p-evict-0)应被淘汰,重新审议时缓存未命中
+        let proposal0 = Proposal::new("p-evict-0", "q-1", "缓存淘汰测试提案 0", 0.2);
+        let _ = parliament.deliberate(&quest, &proposal0).await.unwrap();
+        // 重新审议被淘汰的条目,缓存应重新插入(仍为 10 条)
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            10,
+            "重新审议淘汰条目后缓存仍为 10 条(LRU 淘汰)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cache_hit_different_strategy() {
+        // 相同提案但不同策略,应不命中缓存(策略不同,键不同)
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-strategy", "q-1", "策略测试提案", 0.2);
+
+        // Full 策略审议
+        let policy_full = ParliamentPolicy::static_policy(ActivationStrategy::Full);
+        let result_full = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy_full)
+            .await
+            .unwrap();
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            1,
+            "Full 策略审议后缓存应有 1 条"
+        );
+
+        // Simplified 策略审议(不同策略,应不命中缓存)
+        let policy_sim = ParliamentPolicy::static_policy(ActivationStrategy::Simplified);
+        let _result_sim = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy_sim)
+            .await
+            .unwrap();
+        // 不同策略,缓存应新增 1 条
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            2,
+            "不同策略应新增缓存条目"
+        );
+
+        // 再次 Full 策略审议(应命中缓存)
+        let result_full2 = parliament
+            .deliberate_with_policy(&quest, &proposal, &policy_full)
+            .await
+            .unwrap();
+        assert_eq!(result_full, result_full2, "Full 策略缓存命中应返回相同结果");
+        // 缓存条目数不变(命中不新增)
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            2,
+            "缓存命中不应新增条目"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cache_veto_result_cached() {
+        // Skeptic 否决结果也应缓存,相同提案再次审议直接返回 Vetoed
+        let parliament = make_parliament();
+        let quest = make_quest(2, ThinkingMode::Fast);
+        let proposal = Proposal::new("p-veto-cache", "q-1", "echo $(whoami)", 0.2);
+
+        // 首次审议(Skeptic 否决)
+        let result1 = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(result1.is_vetoed(), "首次应被 Skeptic 否决");
+        // 缓存应有 1 条
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            1,
+            "否决结果应写入缓存"
+        );
+
+        // 第二次审议(应命中缓存)
+        let result2 = parliament.deliberate(&quest, &proposal).await.unwrap();
+        assert!(result2.is_vetoed(), "第二次仍应为否决(缓存命中)");
+        assert_eq!(result1, result2, "缓存命中应返回相同否决结果");
+        assert_eq!(
+            parliament.deliberation_cache.lock().unwrap().len(),
+            1,
+            "缓存命中不应新增条目"
+        );
+    }
+
+    proptest::proptest! {
+        /// 属性:自适应策略选择器在所有合法输入下不 panic
+        #[test]
+        fn prop_adaptive_strategy_never_panics(
+            risk_level in 0.0f32..1.0,
+            ratio in 0.0f64..10.0,
+            system_load in 0.0f32..1.0,
+            health_score in 0u8..=100,
+        ) {
+            use crate::adaptive_strategy::AdaptiveStrategySelector;
+            let selector = AdaptiveStrategySelector::new(None);
+            let strategy = selector.select(risk_level, ratio, system_load, health_score, ActivationStrategy::Full);
+            // 策略必须是三选一
+            proptest::prop_assert!(matches!(strategy, ActivationStrategy::FastPath | ActivationStrategy::Simplified | ActivationStrategy::Full));
+        }
     }
 }

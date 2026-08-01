@@ -1,0 +1,24 @@
+{
+  "_fixture_note": "合成 fixture(GLM Anthropic 端点 open.bigmodel.cn/api/anthropic 块格式);真实录制待 Action Item 1(M0 W3)",
+  "id": "msg-glm-basic-001",
+  "type": "message",
+  "role": "assistant",
+  "model": "glm-5.2",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "用户要求解释所有权机制,从移动语义讲起。",
+      "signature": "glm-sig-0001"
+    },
+    {
+      "type": "text",
+      "text": "Rust 所有权三条规则:每个值有唯一所有者;同一时刻只有一个所有者;所有者离开作用域时值被释放。"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 32,
+    "output_tokens": 96,
+    "cache_read_input_tokens": 24
+  }
+}
