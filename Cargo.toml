@@ -46,9 +46,9 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# v3.0.0-omega: MCA 全模型亲和适配体系(PANTHEON 计划 M0-M4 全部完成,ADR-065~068)
-# 详见 CHANGELOG.md v3.0.0-omega 章节
-version = "3.0.0-omega"
+# v2.12.0-omega: MCA 全模型亲和适配体系(PANTHEON 计划 M0-M4 全部完成,ADR-065~068)
+# 详见 CHANGELOG.md v2.12.0-omega 章节
+version = "2.12.0-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"
