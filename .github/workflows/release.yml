@@ -177,7 +177,7 @@ jobs:
           key: linux-test-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: linux-test-cargo-
       - name: Setup sccache
-        uses: mozilla/sccache-action@v0
+        uses: mozilla/sccache-action@v0.0.11
       # WHY: 保持全量验证语义 —— 含 doc-tests 与 backpressure 60s spec 验收
       # (不设 CHIMERA_BACKPRESSURE_SECS,缺省 60s),发布前完整性不降级。
       - name: Run workspace tests
