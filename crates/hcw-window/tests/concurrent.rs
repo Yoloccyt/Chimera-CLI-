@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use event_bus::EventBus;
 use hcw_window::{ContextEntry, HcwWindow};
+use nexus_contracts::scaled_timeout;
 
 /// 构造测试条目:id/file_id/content 均由索引决定,token_size 固定 100
 fn make_entry(index: usize) -> ContextEntry {
@@ -187,7 +188,6 @@ async fn test_concurrent_apply_sparse_mask_no_data_corruption() {
 #[tokio::test]
 async fn test_concurrent_insert_with_sparse_mask_no_loss() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
 
     let bus = EventBus::new();
     let window = Arc::new(HcwWindow::with_default_config(bus).unwrap());
@@ -216,7 +216,8 @@ async fn test_concurrent_insert_with_sparse_mask_no_loss() {
     // WHY:保留所有文件,确保稀疏化不丢弃条目,仅验证并发安全性
     let window_for_mask = window.clone();
     let mask_handle = tokio::spawn(async move {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        // P9-T2: 5s mask loop deadline 缩放(CI fast 档 → 0.5s)
+        let deadline = tokio::time::Instant::now() + scaled_timeout!(5);
         let mut round = 0u32;
         while tokio::time::Instant::now() < deadline {
             // 每轮保留不同的文件子集,触发 retain_by_file_ids

@@ -5,15 +5,15 @@ edition.workspace = true
 
 [dependencies]
 # L1 Core:CLV 类型(任务相关性计算,基于 CLV 余弦相似度)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # L0 Contracts:VectorStore trait 契约(P3-W9.2 精排依赖,面向 trait 编程解耦 L5 repo-wiki)
 # WHY:hcw-window (L2) 不能向上依赖 repo-wiki (L5) 的 HnswStore,
 # 通过 nexus-contracts (L0) 的 VectorStore trait 实现依赖倒置(ADR-033)
-nexus-contracts = { path = "../nexus-contracts" }
+nexus-contracts = { workspace = true }
 # L1 Core:EventBus 跨层通信
 # - 发布 ContextWindowSwitched/ContextCompressed 事件(Week 3 Task 6 新增)
 # - 订阅 OmniSparseMasksComputed 事件(Week 1 定义,修正 V1 违规)
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # 序列化:状态持久化与事件 payload(CompressionReport/HcwState 序列化)
 # WHY(SubTask 13.6):启用 "rc" feature,使 serde 为 Arc<str> 实现 Serialize/Deserialize
 # (ContextEntry.content 改为 Arc<str> 共享,serde 默认不为 Arc/Rc 实现反序列化)
@@ -41,7 +41,15 @@ criterion = { workspace = true }
 proptest = { workspace = true }
 # SCC 推测上下文缓存 — HCW×SCC 跨周集成测试
 # WHY:HCW 压缩上下文后 SCC 缓存压缩结果,供 PVL Producer/Verifier 共享
-scc-cache = { path = "../scc-cache" }
+scc-cache = { workspace = true }
+
+# PROBE P0: 召回评测 harness 编译期门控（ADR-034 合规：非运行时旗）
+# - `hcw-recall`: `recall/eval/` 子模块（needle/position/multihop/report 四类评测）
+# - `default`: 默认开启，release 构建可用 `--no-default-features` 关闭
+# WHY 默认 on: 评测 harness 是开发期资产（P0 尺子），release 关闭可减小体积
+[features]
+default = ["hcw-recall"]
+hcw-recall = []
 
 [[bench]]
 name = "compress"
@@ -80,4 +88,10 @@ harness = false
 # MCA P5:窗口亲和折减基准(WindowAffinity::fold O(1) 查表,目标单次 < 50ns)
 [[bench]]
 name = "window_affinity"
+harness = false
+
+# PROBE P1.7:探针装窗基准(256 块装窗全链路 + 吞吐 ≥10K 块/秒 + 增量重打分对照)
+# 红线断言在独立 #[ignore] release 测试(probe_select_p95_test.rs),bench 只输出分布
+[[bench]]
+name = "probe_select"
 harness = false

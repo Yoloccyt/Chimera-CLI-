@@ -11,6 +11,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use nexus_contracts::scaled_timeout;
+
 use qeep_protocol::{CallState, QeepError, QeepProtocol};
 
 /// 测试完整 QEEP 三元组生命周期
@@ -25,7 +27,8 @@ use qeep_protocol::{CallState, QeepError, QeepProtocol};
 /// 通过 completed_count/pending_count 间接验证,而非 `call_state`。
 #[tokio::test]
 async fn test_full_triplet_request_ack_receipt() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let worker_barrier = barrier.clone();
 
@@ -84,7 +87,8 @@ async fn test_full_triplet_request_ack_receipt() {
 /// Pending → Completed 的绕过路径。
 #[tokio::test]
 async fn test_ack_missing_blocks_receipt() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     let handle = protocol.entangle_spawn(async {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -117,7 +121,8 @@ async fn test_ack_missing_blocks_receipt() {
 #[tokio::test]
 async fn test_call_state_terminal_cannot_transition() {
     // Completed
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
     let result = protocol.entangle(async { Ok(42) }).await;
     assert_eq!(result.unwrap(), 42);
     assert!(
@@ -140,7 +145,8 @@ async fn test_call_state_terminal_cannot_transition() {
     );
 
     // Failed
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
     let result: Result<(), QeepError> =
         protocol.entangle(async { Err(QeepError::Cancelled) }).await;
     assert!(matches!(result, Err(QeepError::Cancelled)));

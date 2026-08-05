@@ -17,6 +17,17 @@
 //! bounded mpsc 直连调用方,不进 event-bus**(ADR-065 决策 4:broadcast 1024
 //! 容量承载不了 per-token 流,Lagged 丢弃会破坏 TUI 体验)。
 //!
+//! # 模块职责矩阵
+//! | 模块 | 职责 | 关键类型 |
+//! |------|------|--------|
+//! | capability | 能力协商(TTG→指令→三态保真度) | NegotiationOutcome, ThinkingDirective |
+//! | cost | 成本预估/回算纯函数(无状态) | CostEstimate |
+//! | cost_guard | 成本熔断状态机(原子无锁) | CostGuard |
+//! | adapters | 请求全周期编排(invoke 流水线) | VendorAdapter |
+//! | codec | 三协议方言编解码(enum 分发) | Codec, DecodedResponse |
+//! | spec_loader | affinity.d/*.toml 装载与边界校验 | parse_spec_toml |
+//! | gateway | 通道注册/查找/路由(McaGateway) | McaGateway |
+//!
 //! # 快速示例
 //! ```
 //! use mca_gateway::{McaGateway, McaGatewayConfig};
@@ -38,23 +49,38 @@
 pub mod adapters;
 pub mod capability;
 pub mod codec;
+pub mod conversation_trim;
+pub(crate) mod cost;
+pub mod cost_guard;
+pub mod early_stop;
 pub mod error;
 pub mod gateway;
 pub mod hcw_integration;
 pub mod health;
+pub mod prompt_compress;
+pub mod prompt_norm;
+pub mod semantic_fingerprint;
 pub mod session;
 pub mod spec_loader;
 pub mod sse;
 pub mod transport;
 
 // === 关键类型重导出,简化外部导入 ===
-pub use adapters::VendorAdapter;
-pub use capability::{negotiate, NegotiationOutcome, ThinkingDirective};
+pub use adapters::{AdapterOptions, VendorAdapter};
+pub use capability::{negotiate, negotiate_budget, NegotiationOutcome, ThinkingDirective};
 pub use codec::{Codec, DecodedResponse};
+pub use conversation_trim::{conversation_budget, estimate_tokens, trim_to_budget};
+pub use cost_guard::{CostGuard, CostGuardError};
+pub use early_stop::{EarlyStopController, StopDecision, StopReason};
 pub use error::AffinityError;
 pub use gateway::{McaGateway, McaGatewayConfig};
 pub use hcw_integration::spawn_hcw_integration;
 pub use health::{ChannelHealth, HealthRegistry};
+pub use prompt_compress::PromptCompressor;
+pub use prompt_norm::{
+    build_token_cache_key, compute_system_prompt_hash, compute_tool_schema_hash, NormalizedPrompt,
+};
+pub use semantic_fingerprint::{semantic_fingerprint, FINGERPRINT_DIM};
 pub use session::{apply_preservation_policy, migrate_history, MigrationResult, SessionStore};
 pub use spec_loader::{load_spec_dir, parse_spec_toml};
 pub use sse::{SseParser, StreamEvent, StreamNormalizer};

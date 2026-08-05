@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-nexus-core = { path = "../nexus-core" }
-event-bus = { path = "../event-bus" }
+nexus-core = { workspace = true }
+event-bus = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -21,11 +21,11 @@ proptest = { workspace = true }
 tempfile = { workspace = true }
 # 跨 crate 集成测试依赖(SubTask 29.2/29.3 端到端流程与 CSA 延迟验证)
 # WHY dev-dependencies:仅测试编译时引入,不影响运行时依赖方向(§2.2 依赖铁律)
-faae-router = { path = "../faae-router" }
-pvl-layer = { path = "../pvl-layer" }
-mtpe-executor = { path = "../mtpe-executor" }
-gqep-executor = { path = "../gqep-executor" }
-scc-cache = { path = "../scc-cache" }
+faae-router = { workspace = true }
+pvl-layer = { workspace = true }
+mtpe-executor = { workspace = true }
+gqep-executor = { workspace = true }
+scc-cache = { workspace = true }
 
 # criterion 基准测试目标 — 对应 SubTask 23.6
 [[bench]]

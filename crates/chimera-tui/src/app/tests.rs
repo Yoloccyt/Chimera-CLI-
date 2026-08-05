@@ -112,9 +112,9 @@ fn test_switch_panel_next() -> Result<(), Box<dyn std::error::Error>> {
 fn test_switch_panel_prev() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_prev();
-    // closure Stage B-10:FocusManager 现注册 19 面板(DagViz 追加到末尾);
-    // Quest 的上一个 = 列表末尾的 DagViz 面板。
-    assert_eq!(app.current_panel(), PanelId::DagViz);
+    // Task 3.7/3.9:FocusManager 现注册 22 面板(PvlScore/TaskManager 追加到末尾);
+    // Quest 的上一个 = 列表末尾的 TaskManager 面板。
+    assert_eq!(app.current_panel(), PanelId::TaskManager);
     Ok(())
 }
 

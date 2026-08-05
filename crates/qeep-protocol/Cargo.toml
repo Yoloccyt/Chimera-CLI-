@@ -16,6 +16,8 @@ dashmap = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# P9-T3: 协议超时参数缩放测试
+nexus-contracts = { workspace = true }
 # 测试用 tokio(多线程 runtime)
 tokio = { workspace = true }
 # 测试用:构造 EntangledCallId 与 OrphanReport
@@ -24,7 +26,7 @@ chrono = { workspace = true }
 # 属性测试框架,用于 QEEP 核心不变量验证(W7-3)
 proptest = { workspace = true }
 # criterion:性能基准测试框架(§7.1 测试矩阵约定)
-criterion = { workspace = true }
+criterion = { workspace = true, features = ["async_tokio"] }
 
 [[bench]]
 name = "protocol_bench"

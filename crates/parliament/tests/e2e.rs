@@ -22,16 +22,27 @@
 #![warn(missing_docs, clippy::all)]
 
 use std::error::Error;
+use std::sync::Arc;
 
 use decb_governor::{BudgetConsumption, BudgetTier, DecbConfig, DecbGovernor, QuestBudgetInput};
 use event_bus::EventBus;
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use parliament::{AhirtRedTeam, Consensus, Parliament, ParliamentConfig, ProbeType, Proposal};
 use quest_engine::{TtgConfig, TtgGovernor};
-use seccore::{AsaAuditor, InterventionAction, OperationAuditInput, SecCoreError};
+use seccore::{
+    AsaAuditor, InterventionAction, OperationAuditInput, SecCoreCommandValidator, SecCoreError,
+};
 
 /// 测试结果类型:支持 `?` 操作符与任意错误类型转换
 type TestResult = Result<(), Box<dyn Error + Send + Sync>>;
+
+/// 注入 SecCoreCommandValidator 的 AHIRT 红队(测试辅助)
+///
+/// WHY 注入:ADR-054 决策 3(P9-T4)后命令类探测依赖 L0 validator,
+/// 未注入时优雅降级为 skipped,探测率断言测试需注入以保持语义。
+fn red_team_with_validator() -> AhirtRedTeam {
+    AhirtRedTeam::default().with_validator(Arc::new(SecCoreCommandValidator))
+}
 
 // ============================================================
 // 辅助函数 — 构造测试 Quest 与预算输入
@@ -115,7 +126,7 @@ async fn test_e2e_benign_quest_consensus() -> TestResult {
     );
 
     // 步骤 6:AHIRT 主动探测(验证系统安全态势)
-    let red_team = AhirtRedTeam::default();
+    let red_team = red_team_with_validator();
     let report = red_team.verify_security();
     assert!(
         report.stats.detection_rate > 0.95,
@@ -305,7 +316,7 @@ async fn test_e2e_budget_degradation_flow() -> TestResult {
 #[tokio::test]
 async fn test_e2e_ahirt_security_audit() -> TestResult {
     // 步骤 1:创建 AHIRT 红队(默认 100 个载荷,4 类 × 25 个)
-    let red_team = AhirtRedTeam::default();
+    let red_team = red_team_with_validator();
 
     // 步骤 2:执行全量探测
     let stats = red_team.probe_all();

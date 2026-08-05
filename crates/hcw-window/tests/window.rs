@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use hcw_window::{ContextEntry, HcwConfig, HcwWindow, WindowTier};
+use nexus_contracts::scaled_timeout;
 
 fn make_entry(id: &str, token_size: usize) -> ContextEntry {
     ContextEntry::new(
@@ -410,7 +411,8 @@ async fn test_select_window_concurrent_safety() {
 
     let window_for_select = window.clone();
     let select_handle = tokio::spawn(async move {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        // P9-T2: 5s select loop deadline 缩放(CI fast 档 → 0.5s)
+        let deadline = tokio::time::Instant::now() + scaled_timeout!(5);
         while tokio::time::Instant::now() < deadline {
             let _ = window_for_select.select_window(0.9).await;
         }
@@ -809,7 +811,8 @@ async fn test_osa_hcw_event_driven_sparsification() {
     bus.publish(event).await.unwrap();
 
     // 4. 自旋等待 listener 处理(避免 thread::sleep,使用 Instant + yield_now)
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    // P9-T2: 2s spin deadline 缩放(CI fast 档 → 0.2s)
+    let deadline = tokio::time::Instant::now() + scaled_timeout!(2);
     loop {
         if window.entry_count().await == 2 {
             break;
@@ -869,7 +872,8 @@ async fn test_osa_hcw_sparsification_publishes_compressed_event() {
     bus.publish(event).await.unwrap();
 
     // 自旋等待 ContextCompressed 事件(listener 应用稀疏化后发布)
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    // P9-T2: 2s spin deadline 缩放
+    let deadline = tokio::time::Instant::now() + scaled_timeout!(2);
     let mut found_compressed = false;
     loop {
         match rx.recv_timeout(Duration::from_millis(100)).await {

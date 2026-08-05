@@ -5,9 +5,9 @@ edition.workspace = true
 
 [dependencies]
 # L1 Core:使用 CLV(512-dim 潜在向量)作为多模态编码的统一输出
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # L1 Core:EventBus 跨层通信,发布 NmcEncoded 事件
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # 异步运行时(事件总线 publish_blocking 同步调用,但保留 tokio 供未来扩展)
 tokio = { workspace = true }
 # 序列化:配置与类型派生
@@ -30,6 +30,18 @@ image = { workspace = true, features = ["png", "jpeg", "webp"] }
 # ndarray: 多维数组张量，ONNX 推理输入/输出的数据载体
 # WHY: ort crate 的输入/输出为 ndarray::Array，需在 nmc-encoder 中直接使用
 ndarray = { workspace = true }
+# 分词器: 为 TextPerceptor ONNX 推理提供 tokenizers 分词 (all-MiniLM-L6-v2)
+# WHY: tokenizers 0.21 在 Rust 生态中提供高性能 SentencePiece/BPE 分词，
+# 与 tract-onnx 纯 Rust 推理栈一致，支持 #![forbid(unsafe_code)]
+tokenizers = "0.21"
+# Mel 频谱生成: 为 Whisper encoder 计算 log-mel 频谱
+# WHY: 当前 preprocess_audio 生成零填充占位张量，mel_spec 库提供纯 Rust
+# Mel 频谱计算，与 #![forbid(unsafe_code)] 哲学一致
+mel_spec = "0.4"
+# WAV 音频解码: 解析 WAV 文件头部与 PCM 数据
+# WHY: 当前 preprocess_audio 无法生成非零 Mel 频谱，需要 hound 解码
+# WAV 文件为 f32 PCM 数据
+hound = "3.5"
 
 [dev-dependencies]
 # 属性测试框架(嵌入不变量验证)

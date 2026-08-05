@@ -91,8 +91,9 @@ pub use pdca::{
     ALERT_SINGLE_AGENT_WARNING_MB, ALERT_WIKI_COUNT_WARNING, PDCA_ALERT_COOLDOWN_SECS,
 };
 pub use quadrant::{
-    activated_quadrants, quadrant_status, CoreCross, ProduceAssure, Quadrant, QuadrantPlan,
-    QuadrantStatus, QualityDimension, ValidationStep, MAX_QUADRANT_FANOUT,
+    activated_quadrants, quadrant_status, ConfigurableQuadrantSelector, CoreCross, ProduceAssure,
+    Quadrant, QuadrantPlan, QuadrantSelector, QuadrantStatus, QualityDimension, ValidationStep,
+    MAX_QUADRANT_FANOUT,
 };
 pub use scheduler::{
     score_to_priority, should_preempt, wsjf_score, PriorityScheduler, PriorityThresholds,
@@ -154,8 +155,8 @@ pub mod prelude {
             PlanReflux, TierDistribution,
         },
         quadrant::{
-            activated_quadrants, CoreCross, ProduceAssure, Quadrant, QuadrantPlan,
-            QualityDimension, ValidationStep, MAX_QUADRANT_FANOUT,
+            activated_quadrants, ConfigurableQuadrantSelector, CoreCross, ProduceAssure, Quadrant,
+            QuadrantPlan, QuadrantSelector, QualityDimension, ValidationStep, MAX_QUADRANT_FANOUT,
         },
         scheduler::{
             score_to_priority, should_preempt, wsjf_score, PriorityScheduler, PriorityThresholds,

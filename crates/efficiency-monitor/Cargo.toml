@@ -23,9 +23,9 @@ dashmap = { workspace = true }
 # Prometheus 指标注册表与文本编码(用于 /metrics 端点标准格式输出)
 prometheus-client = { workspace = true }
 # L1 Core:跨层通信唯一通道,订阅 NexusEvent + 发布 EfficiencyAlertTriggered
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # L1 Core:领域类型(架构依赖规则要求,本 crate 仅依赖 event-bus + nexus-core)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 
 [dev-dependencies]
 # 性能基准框架(SubTask 4.7)

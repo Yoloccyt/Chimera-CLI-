@@ -5,20 +5,20 @@ edition.workspace = true
 
 [dependencies]
 # L5 Knowledge → L1 Core(向下依赖,event-bus 是唯一跨层通道,§2.2 依赖铁律)
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # L5 Knowledge → L0 Contracts(ADR-033 依赖铁律扩展:L(N) → L(0) 恒允许)
 # WHY:P5.1 RHI-CG 通道 A 需要 HarnessSpec 类型作为评判器输入
-nexus-contracts = { path = "../nexus-contracts" }
+nexus-contracts = { workspace = true }
 # P5.1.2: L5 Knowledge → L1 Core(model-router 用于评判器路由决策)
 # WHY:RHI-CG 通道 A 评判器经 model-router 选择评判模型,实现"经 model-router"路径
-model-router = { path = "../model-router" }
+model-router = { workspace = true }
 # P5.1.2: L5 Knowledge → L1 Core(nexus-core 提供 UserIntent/MultimodalInput,构造 RoutingRequest)
 # WHY:ModelRouter::route() 接收 RoutingRequest,其 intent 字段为 nexus_core::UserIntent
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # P5.1.3: L5 Knowledge → L2 Memory(mlc-engine L2 语义记忆持久化自比较历史)
 # WHY:RHI-CG 通道 A 生成的 PreferencePair 需持久化到 mlc-engine L2 SemanticMemory,
 # 供后续 spec 进化决策时按版本对检索历史比较结果
-mlc-engine = { path = "../mlc-engine" }
+mlc-engine = { workspace = true }
 # P5.1.3: 时间戳生成(SelfComparisonRecord.created_at 与 MemoryEntry 时间字段)
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
@@ -30,7 +30,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 # criterion:性能基准测试框架(§7.1 测试矩阵约定)
-criterion = { workspace = true }
+# async_tokio:启用 Bencher::to_async 方法，用于异步基准测试
+criterion = { workspace = true, features = ["async_tokio"] }
 # tokio 测试宏(#[tokio::test] 用于异步测试)
 tokio = { workspace = true, features = ["macros", "rt"] }
 
@@ -50,4 +51,11 @@ harness = false
 # 与 rhi_channel_a_bench（通道 A 全流程）互补,专门测量 judge 操作延迟
 [[bench]]
 name = "rhi_judge"
+harness = false
+
+# P1-4: LLM Judge 响应解析重试与降级策略基准
+# WHY 独立 bench 文件:聚焦重试循环的延迟开销,
+# 测量无重试/重试成功/重试降级三种场景的延迟
+[[bench]]
+name = "judge_retry"
 harness = false

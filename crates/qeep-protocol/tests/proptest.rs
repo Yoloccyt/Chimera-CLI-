@@ -29,6 +29,8 @@
 
 use std::time::Duration;
 
+use nexus_contracts::scaled_timeout;
+
 use chrono::Utc;
 use proptest::prelude::*;
 use qeep_protocol::{
@@ -89,7 +91,8 @@ proptest! {
     fn test_completed_count_equals_op_count(op_count in 1u32..20) {
         let rt = tokio::runtime::Runtime::new().map_err(fail)?;
         rt.block_on(async {
-            let protocol = QeepProtocol::new(Duration::from_secs(5));
+            // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+            let protocol = QeepProtocol::new(scaled_timeout!(5));
             for _ in 0..op_count {
                 let _: Result<(), QeepError> = protocol.entangle(async { Ok(()) }).await;
             }
@@ -112,7 +115,8 @@ proptest! {
     fn test_zero_orphans_on_normal_completion(op_count in 1u32..15) {
         let rt = tokio::runtime::Runtime::new().map_err(fail)?;
         rt.block_on(async {
-            let protocol = QeepProtocol::new(Duration::from_secs(5));
+            // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+            let protocol = QeepProtocol::new(scaled_timeout!(5));
             for _ in 0..op_count {
                 let _: Result<(), QeepError> = protocol.entangle(async { Ok(()) }).await;
             }
@@ -165,6 +169,10 @@ proptest! {
         op_ms in 30u64..100,
         margin_ms in 30u64..100,
     ) {
+        // WHY 保持 30-100ms:曾收窄至 10-40ms 试图缩短 sleep,但 margin 余量
+        // 最小仅 10ms,高负载(nextest 并行/CI 慢机)下 tokio timer 精度不足,
+        // 导致操作先于超时完成,断言 flaky 失败(2026-08-05 实测)。
+        // 30ms 最小余量保障断言语义稳定;此测试全量仅 ~2-3s,收益远小于风险。
         let rt = tokio::runtime::Runtime::new().map_err(fail)?;
         rt.block_on(async {
             let timeout_ms = op_ms;
@@ -369,5 +377,127 @@ proptest! {
             "clear 后 detect_orphans 应为空,n={}",
             n
         );
+    }
+
+    /// 不变量 10:协议状态机完整转移闭合性 — DashMap 并发读写计数守恒
+    ///
+    /// 任意并发操作数 N(1..50),全部正常完成后:
+    /// - completed_count == N
+    /// - orphan_count == 0
+    /// - pending_count == 0
+    ///
+    /// 此不变量验证 DashMap 在高并发读写下的计数守恒:
+    /// 每次 entangle 操作在 pending_calls 中创建一条记录,
+    /// 完成后原子递增 completed_count 并从 pending_calls 移除,
+    /// 最终 pending_calls 应为空,所有操作被正确记账。
+    #[test]
+    fn test_concurrent_count_conservation(n in 1u32..50) {
+        let rt = tokio::runtime::Runtime::new().map_err(fail)?;
+        rt.block_on(async {
+            // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+            let protocol = QeepProtocol::new(scaled_timeout!(5));
+            let mut handles = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                let p = protocol.clone();
+                handles.push(tokio::spawn(async move {
+                    p.entangle(async { Ok(()) }).await
+                }));
+            }
+            for h in handles {
+                h.await.map_err(fail)?.unwrap();
+            }
+            // 计数守恒:completed_count == N
+            prop_assert_eq!(
+                protocol.completed_count(),
+                n as usize,
+                "completed_count 应等于并发操作数 {},n={}",
+                n,
+                n
+            );
+            // 零孤儿
+            prop_assert_eq!(
+                protocol.orphan_count(),
+                0,
+                "并发操作不应产生孤儿,n={}",
+                n
+            );
+            // pending 归零
+            prop_assert_eq!(
+                protocol.pending_count(),
+                0,
+                "并发操作完成后 pending 应归零,n={}",
+                n
+            );
+            Ok::<(), TestCaseError>(())
+        })?;
+    }
+
+    /// 不变量 11:协议克隆隔离性 — 克隆实例的状态互不影响
+    ///
+    /// 原始协议与克隆协议各自执行操作后:
+    /// - 两个实例都能独立操作(不互相阻塞)
+    /// - 共享的 completed_count 正确反映所有操作的总和
+    /// - 零孤儿
+    ///
+    /// 注:QeepProtocol 的 clone 共享 Arc<Inner>,因此 completed_count
+    /// 是共享的原子计数器,两个实例的 completed_count 始终相等。
+    /// 核心验证是操作互不阻塞(DashMap 分片写锁不会导致死锁)。
+    #[test]
+    fn test_clone_isolation(op_count in 1u32..10) {
+        let rt = tokio::runtime::Runtime::new().map_err(fail)?;
+        rt.block_on(async {
+            // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+            let protocol = QeepProtocol::new(scaled_timeout!(5));
+            let cloned = protocol.clone();
+            let mut handles = Vec::with_capacity(op_count as usize * 2);
+            // 原始协议执行操作
+            for _ in 0..op_count {
+                let p = protocol.clone();
+                handles.push(tokio::spawn(async move {
+                    p.entangle(async { Ok(()) }).await
+                }));
+            }
+            // 克隆协议并行执行操作
+            for _ in 0..op_count {
+                let p = cloned.clone();
+                handles.push(tokio::spawn(async move {
+                    p.entangle(async { Ok(()) }).await
+                }));
+            }
+            for h in handles {
+                h.await.map_err(fail)?.unwrap();
+            }
+            // 共享计数器反映所有操作
+            let total = (op_count * 2) as usize;
+            prop_assert_eq!(
+                protocol.completed_count(),
+                total,
+                "原始协议 completed_count 应 = {},op_count={}",
+                total,
+                op_count
+            );
+            prop_assert_eq!(
+                cloned.completed_count(),
+                total,
+                "克隆协议 completed_count 也应 = {},op_count={}",
+                total,
+                op_count
+            );
+            // 零孤儿
+            prop_assert_eq!(
+                protocol.orphan_count(),
+                0,
+                "克隆隔离场景不应产生孤儿,op_count={}",
+                op_count
+            );
+            // pending 归零
+            prop_assert_eq!(
+                protocol.pending_count(),
+                0,
+                "克隆隔离场景完成后 pending 应归零,op_count={}",
+                op_count
+            );
+            Ok::<(), TestCaseError>(())
+        })?;
     }
 }

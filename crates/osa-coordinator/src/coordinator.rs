@@ -483,6 +483,31 @@ impl OmniSparseCoordinator {
         let scores = heuristic_scores(profile.active_tasks.len());
         SparseMask::select_top_k(&profile.active_tasks, &scores, k)
     }
+
+    /// 计算上下文 token 预算 — 复杂度档位 → 可用 token 数（ADR-069 Token 效率优化）
+    ///
+    /// 与 `compute_budget_mask`（任务级稀疏）互补：
+    /// - `compute_budget_mask`: 决定保留哪些任务（TaskId 维度）
+    /// - `compute_token_budget`: 决定上下文窗口可用 token 数（供 HCW trim_to_budget 消费）
+    ///
+    /// 复杂度越高，分配更多 token 预算（复杂任务需要更多上下文）。
+    /// BudgetExceeded 事件触发时，调用方可降低 budget_ratio 实现紧急裁剪。
+    pub fn compute_token_budget(
+        &self,
+        complexity: ComplexityBand,
+        base_context_window: u32,
+        budget_ratio: f32,
+    ) -> u32 {
+        // 复杂度档位 → 上下文利用率（简单任务不需填满窗口）
+        let utilization = match complexity {
+            ComplexityBand::Simple => 0.25,
+            ComplexityBand::Regular => 0.50,
+            ComplexityBand::Complex => 0.75,
+            ComplexityBand::UltraComplex => 1.0,
+        };
+        let raw = (base_context_window as f32) * utilization * budget_ratio.clamp(0.0, 1.0);
+        (raw as u32).max(1024) // 最少 1K token，避免过度裁剪
+    }
 }
 
 /// 按复杂度档位返回默认 audit 采样率

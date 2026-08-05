@@ -5,9 +5,9 @@ edition.workspace = true
 
 [dependencies]
 # L1 Core:提供 id_newtype! 宏(生成 OperationId newtype)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 OperationProduced/PredictionVerified/ProducerStrategyAdjusted 事件
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # 异步运行时:tokio::sync::mpsc 通道(Producer→Verifier→Feedback 单向流)
 tokio = { workspace = true }
 # 配置与类型序列化(#[derive(Serialize, Deserialize)])
@@ -22,6 +22,12 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 # 内容哈希(置信度评分占位实现:基于内容哈希计算置信度)
 sha2 = { workspace = true }
+# 动态黑名单:集成 SecCore 运行时黑名单,替代静态关键词列表
+seccore = { workspace = true, optional = true }
+
+[features]
+# 动态黑名单:启用后通过 SecCore 策略引擎获取运行时更新的危险命令黑名单
+dynamic-blacklist = ["seccore"]
 
 [dev-dependencies]
 # 性能基准框架(SubTask 25.6)
@@ -30,9 +36,11 @@ criterion = { workspace = true, features = ["async_tokio"] }
 # 属性测试框架(SubTask 25.5)
 proptest = { workspace = true }
 # tokio 测试工具
-tokio-test = "0.4"
+tokio-test = { workspace = true }
 # JSON 序列化测试(config.rs serde 往返测试)
 serde_json = { workspace = true }
+# P9-T2: 测试等待缩放工具(CHIMERA_TEST_TIMEOUT_SCALE 协议)
+nexus-contracts = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]

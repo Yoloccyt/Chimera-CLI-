@@ -18,28 +18,12 @@ use serde::{Deserialize, Serialize};
 // 类型 + impl(new())均来自 nexus-contracts,re-export 完整保留构造方法
 pub use nexus_contracts::EventMetadata;
 
-// ============================================================
-// 事件元数据与严重级别
-// ============================================================
-
-/// 事件严重级别 — 用于背压策略决定是否优先投递
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum EventSeverity {
-    /// 普通事件:可被背压策略丢弃
-    Normal,
-    /// 信息级事件:控制请求/反馈等,不阻断系统但优先级高于 Normal
-    ///
-    /// WHY 新增(Task 1):TUI 双向控制事件(Quest 取消/优先级调整)属于
-    /// 操作员意图传达,重要性高于普通遥测事件,但非安全关键(不会触发
-    /// mpsc 旁路投递)。现有 `== Critical` 判定自动将其视为非关键,
-    /// 与"不阻断系统"语义一致,无需改动 backpressure/bus/logging。
-    Info,
-    /// 关键事件:检查点、共识、安全告警等,不可丢弃
-    ///
-    /// WHY:CheckpointSaved 等事件丢失会导致 Quest 无法恢复,
-    /// 必须标注 Critical 以触发 mpsc 点对点通道或保留优先级
-    Critical,
-}
+// ADR-054 决策 6(P9-T7 Task 4):EventSeverity/TaskPriority/AgentStatus 已下沉 L0
+// WHY re-export(原位替换本地定义):外部 `use event_bus::{EventSeverity, TaskPriority,
+// AgentStatus}` 路径保持兼容,无需改 100+ 消费方;变体/derive 与 L0
+// `nexus_contracts::event_payload` 定义逐字一致(线格式冻结,跨进程契约不破坏)。
+// severity() 判定逻辑仍留在本 crate(架构红线:Critical 事件 mpsc 保障,见 types.rs)。
+pub use nexus_contracts::event_payload::{AgentStatus, EventSeverity, TaskPriority};
 
 // ============================================================
 // Quest / 投票辅助枚举
@@ -257,26 +241,9 @@ impl ClvSummary {
 // ============================================================
 // CHIMERA-MAS Agent 辅助类型(ADR-026,Task 4)
 // ============================================================
-
-/// 任务优先级 — Agent 任务委派(AgentTaskDelegated)的调度优先级
-///
-/// WHY 独立定义在 event-bus(L1)而非 chimera-mas(L9):
-/// §2.2 依赖铁律禁止 L1→L9 向上依赖。chimera-mas(L9)发布
-/// AgentTaskDelegated 事件时需要此类型作为 payload 字段。若将
-/// TaskPriority 定义在 chimera-mas,event-bus 无法引用(会触发
-/// L1→L9 违规)。将轻量级枚举下沉到 event-bus(L1),chimera-mas
-/// 通过向下依赖 event-bus 复用,符合依赖方向。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum TaskPriority {
-    /// 低优先级,空闲时调度
-    Low,
-    /// 中等优先级,正常调度队列
-    Medium,
-    /// 高优先级,优先调度
-    High,
-    /// 最高优先级,立即调度(可能抢占低优先级任务)
-    Critical,
-}
+// 注:TaskPriority / AgentStatus 已下沉 L0 nexus-contracts(ADR-054 决策 6,P9-T7 Task 4),
+// 经文件顶部 re-export 保持 `event_bus::TaskPriority` / `event_bus::AgentStatus` 路径兼容。
+// 本分节保留仍本地定义的 ConsultUrgency / ActionSource / ChatStatus。
 
 /// 咨询紧急度 — Agent 咨询请求(AgentConsultRequested)的紧急级别
 ///
@@ -294,28 +261,7 @@ pub enum ConsultUrgency {
     Critical,
 }
 
-/// Agent 生命周期状态 — AgentHeartbeat 事件携带的 Agent 运行时状态
-///
-/// WHY 独立定义在 event-bus:同 TaskPriority,避免 L1→L9 向上依赖。
-/// 变体语义与 chimera-mas::AgentStatus 保持一致(Idle/Running/Paused/
-/// Completed/Failed/Crashed),但为独立类型定义,避免 event-bus 对
-/// chimera-mas 的循环依赖。chimera-mas 在发布心跳事件时通过
-/// `From<chimera_mas::AgentStatus> for event_bus::AgentStatus` 转换。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum AgentStatus {
-    /// 空闲状态,等待任务分配
-    Idle,
-    /// 运行中,正在执行任务
-    Running,
-    /// 已暂停,可恢复
-    Paused,
-    /// 任务已完成
-    Completed,
-    /// 任务执行失败
-    Failed,
-    /// Agent 崩溃,不可恢复
-    Crashed,
-}
+// AgentStatus 已下沉 L0(ADR-054 决策 6,P9-T7 Task 4),见文件顶部 re-export。
 
 /// TUI 交互动作来源 — `TuiActionRequested` 事件的触发入口标识(ADR-029)
 ///

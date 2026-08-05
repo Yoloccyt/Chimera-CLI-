@@ -149,6 +149,110 @@ proptest! {
 }
 
 // ============================================================
+// P1-6: update_config 属性测试
+// ============================================================
+
+proptest! {
+    /// 不变量: update_config 合法输入后 current_cap 保持不变
+    #[test]
+    fn prop_update_config_keeps_cap_unchanged(
+        enter in 1u32..10u32,
+        exit in 1u32..10u32,
+        factor in 0.1f64..1.0f64,
+    ) {
+        let guard = StrategyCapGuard::new(fast_cap_config());
+
+        // 可能已降档，先降档几次
+        for _ in 0..6 {
+            guard.observe(2.0, 1.0);
+        }
+        let cap_after_observe = guard.current_cap();
+
+        let new_config = StrategyCapConfig {
+            enter_consecutive: enter,
+            exit_consecutive: exit,
+            exit_ratio_factor: factor,
+            min_dwell_ms: 0,
+        };
+        prop_assert!(new_config.validate().is_ok());
+
+        guard.update_config(new_config).unwrap();
+        prop_assert_eq!(
+            guard.current_cap(),
+            cap_after_observe,
+            "update_config 不应改变当前封顶档位"
+        );
+    }
+
+    /// 不变量: update_config 非法输入后 config 不变
+    #[test]
+    fn prop_update_config_rejects_invalid_input(
+        enter in 0u32..10u32,
+        exit in 0u32..10u32,
+        factor in 0.0f64..2.0f64,
+    ) {
+        let guard = StrategyCapGuard::new(fast_cap_config());
+        let original_enter = guard.config().enter_consecutive;
+        let original_exit = guard.config().exit_consecutive;
+        let original_factor = guard.config().exit_ratio_factor;
+
+        let new_config = StrategyCapConfig {
+            enter_consecutive: enter,
+            exit_consecutive: exit,
+            exit_ratio_factor: factor,
+            min_dwell_ms: 0,
+        };
+
+        let is_valid = new_config.validate().is_ok();
+        let result = guard.update_config(new_config);
+
+        if is_valid {
+            prop_assert!(result.is_ok(), "合法输入应更新成功");
+            prop_assert_eq!(guard.config().enter_consecutive, enter);
+            prop_assert_eq!(guard.config().exit_consecutive, exit);
+            prop_assert!((guard.config().exit_ratio_factor - factor).abs() < 1e-9);
+        } else {
+            prop_assert!(result.is_err(), "非法输入应拒绝");
+            prop_assert_eq!(guard.config().enter_consecutive, original_enter);
+            prop_assert_eq!(guard.config().exit_consecutive, original_exit);
+            prop_assert!((guard.config().exit_ratio_factor - original_factor).abs() < 1e-9);
+        }
+    }
+}
+
+/// 集成测试: update_config 后 observe 状态机按新配置工作
+///
+/// 场景: 旧配置(enter=3)下累积 2 次越阈 →
+///       update_config 新配置(enter=2) → 计数器重置 →
+///       再 2 次越阈 → 应降档(按新配置)
+#[test]
+fn test_config_update_resets_then_new_config_takes_effect() {
+    let guard = StrategyCapGuard::new(fast_cap_config());
+    assert_eq!(guard.config().enter_consecutive, 3);
+
+    // 旧配置下累积 2 次越阈
+    guard.observe(1.5, 1.0);
+    guard.observe(1.5, 1.0);
+
+    // update_config 新配置(enter=2)，计数器重置
+    let new_config = StrategyCapConfig {
+        enter_consecutive: 2,
+        exit_consecutive: 5,
+        exit_ratio_factor: 0.8,
+        min_dwell_ms: 0,
+    };
+    guard.update_config(new_config).unwrap();
+    assert_eq!(guard.config().enter_consecutive, 2);
+
+    // 计数器已重置(update_config 重置了计数器)，所以需要再 2 次越阈才能降档
+    // 按新配置(enter=2): 第 1 次越阈计数中，第 2 次降档
+    assert!(guard.observe(1.5, 1.0).is_none(), "第 1 次越阈计数中");
+    let change = guard.observe(1.5, 1.0).expect("第 2 次越阈应降档");
+    assert_eq!(change.old_cap, ActivationStrategy::Full);
+    assert_eq!(change.new_cap, ActivationStrategy::Simplified);
+}
+
+// ============================================================
 // 审议集成测试(Skeptic 不变量 + 封顶生效)
 // ============================================================
 

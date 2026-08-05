@@ -20,6 +20,7 @@ use chimera_mas::delegation::{DelegationExecutor, TaskRunner};
 use chimera_mas::prelude::*;
 use efficiency_monitor::{EfficiencyMonitor, MonitorConfig};
 use event_bus::{EventBus, NexusEvent};
+use nexus_contracts::scaled_timeout;
 use nexus_core::{MultimodalInput, TaskStatus, UserIntent};
 use parliament::{Parliament, ParliamentConfig, Proposal};
 use quest_engine::{spawn_metrics_subscriber, CoordinationMetricsConfig, QuestEngine};
@@ -57,7 +58,9 @@ fn make_agent_task(task_id: &str, quest_id: &str) -> AgentTask {
         },
         TaskComplexity::Simple,
         100,
-        Duration::from_secs(10),
+        // P9-T2: 测试 fixture 用的 10s deadline 替换为 scaled_timeout! 缩放;
+        // 缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1 → 1s。
+        scaled_timeout!(10),
         QualityLevel::Standard,
     )
     .with_quest(quest_id)
@@ -120,8 +123,12 @@ async fn test_e2e_full_closure_debate_delegation_to_paradox_alert() {
     assert!(consensus.is_reached(), "低风险提案应达成共识");
 
     // 3. 真实委托执行(2 子任务 × 20ms)→ DelegationCompleted
-    let executor =
-        DelegationExecutor::with_runner(bus.clone(), Duration::from_secs(10), delay_runner(20));
+    let executor = DelegationExecutor::with_runner(
+        bus.clone(),
+        // P9-T2: 同上,委托 runner 总 deadline 10s 缩放
+        scaled_timeout!(10),
+        delay_runner(20),
+    );
     let tasks = vec![
         make_agent_task("t-a", &quest.quest_id),
         make_agent_task("t-b", &quest.quest_id),

@@ -8,7 +8,9 @@
 #![forbid(unsafe_code)]
 
 use proptest::prelude::*;
-use seccore::{AsaAuditor, AsaConfig, InterventionAction, OperationAuditInput};
+use seccore::{
+    AsaAuditor, AsaConfig, InterventionAction, OperationAuditInput, PpoCritic, ScoreFusion,
+};
 
 /// 构造测试用 OperationAuditInput
 fn make_input(content: &str, keywords: Vec<String>, complexity: f32) -> OperationAuditInput {
@@ -189,6 +191,175 @@ fn proptest_keyword_count_monotonicity() {
             "更多关键字 safety_score ({}) 应 ≤ 基准 safety_score ({})",
             result_more.safety_score,
             result_base.safety_score
+        );
+    });
+}
+
+// =============================================================================
+// P3-3: PPO Critic 不变量属性测试
+// =============================================================================
+//
+// 验证 PPO 核心不变量:
+// 1. 前向推理输出非 NaN(所有合法输入)
+// 2. Q 值转评分 ∈ [0, 1]
+// 3. 置信度 ∈ [0, 1]
+// 4. 训练后损失为有限值
+
+// 不变量:PPO 前向推理输出非 NaN
+//
+// 对所有合法状态输入,前向推理输出必须为有限值(非 NaN/Inf)。
+// 此不变量防止权重初始化或计算过程中产生非法值(§6 架构红线:安全防线)
+#[test]
+fn proptest_ppo_forward_no_nan() {
+    proptest!(|(
+        kw in 0.0f32..=1.0,
+        rate in 0.0f32..=1.0,
+        complexity in 0.0f32..=1.0,
+        op_type in 0.0f32..=1.0,
+    )| {
+        let critic = PpoCritic::new();
+        let state = [kw, rate, complexity, op_type];
+        let output = critic.forward(&state);
+        for (i, v) in output.iter().enumerate() {
+            prop_assert!(
+                v.is_finite(),
+                "PPO forward output[{}] = {} 应为有限值(state={:?})",
+                i,
+                v,
+                state
+            );
+        }
+    });
+}
+
+// 不变量:Q 值转评分 ∈ [0, 1]
+//
+// 对所有可能的 Q 值输出,转换后的评分必须在 [0, 1] 区间。
+// 此不变量确保 PPO 评分与规则评分兼容(§6 架构红线:安全防线)
+#[test]
+fn proptest_ppo_q_values_to_score_in_range() {
+    proptest!(|(
+        allow_q in -10.0f32..=10.0,
+        warn_q in -10.0f32..=10.0,
+        block_q in -10.0f32..=10.0,
+    )| {
+        let output = [allow_q, warn_q, block_q];
+        let score = PpoCritic::q_values_to_score(&output);
+        prop_assert!(
+            (0.0..=1.0).contains(&score),
+            "Q值转评分 {} 应在 [0,1] (Q={:?})",
+            score,
+            output
+        );
+    });
+}
+
+// 不变量:置信度 ∈ [0, 1]
+//
+// 对所有可能的 Q 值输出,置信度必须在 [0, 1] 区间。
+// 此不变量确保置信度判断不会越界(§6 架构红线:安全防线)
+#[test]
+fn proptest_ppo_confidence_in_range() {
+    proptest!(|(
+        allow_q in -10.0f32..=10.0,
+        warn_q in -10.0f32..=10.0,
+        block_q in -10.0f32..=10.0,
+    )| {
+        let critic = PpoCritic::new();
+        let output = [allow_q, warn_q, block_q];
+        let conf = critic.confidence(&output);
+        prop_assert!(
+            (0.0..=1.0).contains(&conf),
+            "置信度 {} 应在 [0,1] (Q={:?})",
+            conf,
+            output
+        );
+    });
+}
+
+// 不变量:训练后损失为有限值
+//
+// 对所有合法状态输入和目标 Q 值,训练产生的损失必须为有限值。
+// 此不变量确保反向传播数值稳定,不会产生 NaN/Inf(§6 架构红线:安全防线)
+#[test]
+fn proptest_ppo_training_loss_finite() {
+    proptest!(|(
+        kw in 0.0f32..=1.0,
+        rate in 0.0f32..=1.0,
+        complexity in 0.0f32..=1.0,
+        target0 in -5.0f32..=5.0,
+        target1 in -5.0f32..=5.0,
+        target2 in -5.0f32..=5.0,
+    )| {
+        let mut critic = PpoCritic::new();
+        let state = [kw, rate, complexity, 0.5];
+        let target = [target0, target1, target2];
+        let loss = critic.train(&state, &target);
+        prop_assert!(
+            loss.is_finite(),
+            "训练损失 {} 应为有限值(state={:?}, target={:?})",
+            loss,
+            state,
+            target
+        );
+        prop_assert!(
+            critic.is_initialized(),
+            "训练后 is_initialized() 应为 true"
+        );
+        prop_assert_eq!(
+            critic.trained_steps(),
+            1,
+            "训练后 trained_steps 应为 1"
+        );
+    });
+}
+
+// 不变量:融合评分 ∈ [0, 1]
+//
+// 对所有可能的规则评分、PPO 评分和置信度组合,
+// 融合评分必须在 [0, 1] 区间(§6 架构红线:安全防线)
+#[test]
+fn proptest_score_fusion_output_in_range() {
+    proptest!(|(
+        rule_score in -1.0f32..=2.0,
+        ppo_score in -1.0f32..=2.0,
+        confidence in -0.5f32..=1.5,
+    )| {
+        let fusion = ScoreFusion::new();
+        let score = fusion.fuse(rule_score, Some(ppo_score), confidence);
+        prop_assert!(
+            (0.0..=1.0).contains(&score),
+            "融合评分 {} 应在 [0,1] (rule={}, ppo={}, conf={})",
+            score,
+            rule_score,
+            ppo_score,
+            confidence
+        );
+    });
+}
+
+// 不变量:安全优先 — 高置信度时规则评分 < 0.5 则融合评分 ≤ 规则评分
+//
+// 当 PPO 置信度高(≥ 0.6)且规则评分检测到 Block 级别(< 0.5)时,
+// 融合评分不得高于规则评分(安全优先,PPO 不降级安全阈值)。
+// 低置信度时使用加权平均,融合评分可能高于规则评分,但不足以改变 Block 等级。
+// 此不变量确保 PPO 在高置信度下不能降低安全阈值(§6 架构红线:安全防线)
+#[test]
+fn proptest_score_fusion_safety_priority() {
+    proptest!(|(
+        rule_score in 0.0f32..0.5, // 规则评分 Block 区间
+        ppo_score in 0.0f32..=1.0,
+        confidence in 0.6f32..=1.0, // 仅高置信度适用安全优先
+    )| {
+        let fusion = ScoreFusion::new();
+        let score = fusion.fuse(rule_score, Some(ppo_score), confidence);
+        // 安全优先:高置信度 + 规则评分 < 0.5 → 融合评分 ≤ 规则评分
+        prop_assert!(
+            score <= rule_score + 1e-6,
+            "安全优先违反:规则评分 Block({}), 融合评分({}) > 规则评分(conf={})",
+            rule_score,
+            score,
+            confidence
         );
     });
 }

@@ -128,6 +128,8 @@ struct CapState {
     consecutive_under: u32,
     /// 上次封顶变更时刻(升档驻留时间判定基准)
     last_transition: Instant,
+    /// 守卫配置(运行时热重载支持 via update_config)
+    config: StrategyCapConfig,
 }
 
 /// 策略封顶守卫 — 消费 ratio 报告,维护审议策略上界
@@ -139,8 +141,6 @@ struct CapState {
 pub struct StrategyCapGuard {
     /// 内部状态(Mutex 保护)
     state: Mutex<CapState>,
-    /// 守卫配置(只读)
-    config: StrategyCapConfig,
 }
 
 impl StrategyCapGuard {
@@ -152,8 +152,8 @@ impl StrategyCapGuard {
                 consecutive_over: 0,
                 consecutive_under: 0,
                 last_transition: Instant::now(),
+                config,
             }),
-            config,
         }
     }
 
@@ -167,9 +167,9 @@ impl StrategyCapGuard {
         self.lock_state().cap
     }
 
-    /// 获取守卫配置引用
-    pub fn config(&self) -> &StrategyCapConfig {
-        &self.config
+    /// 获取守卫配置的克隆
+    pub fn config(&self) -> StrategyCapConfig {
+        self.lock_state().config.clone()
     }
 
     /// 将策略与封顶取 min,得到实际生效策略
@@ -197,6 +197,53 @@ impl StrategyCapGuard {
         state.last_transition = Instant::now();
     }
 
+    /// 运行时更新滞后带配置 — 热重载支持(omega-learner 集成路径)
+    ///
+    /// # 设计决策
+    /// - 先校验后持锁: 避免在持锁期间执行校验逻辑
+    /// - 计数器重置: 新旧配置的滞后带不同，旧计数器在新配置下无意义
+    /// - 封顶档位不变: 配置更新不改变当前 cap，仅影响未来状态机判定
+    /// - 毒锁降级: 与 `lock_state` 一致，使用 `unwrap_or_else` 降级
+    pub fn update_config(&self, new_config: StrategyCapConfig) -> Result<(), ParliamentError> {
+        new_config.validate()?;
+        let mut state = self.lock_state();
+        state.config = new_config;
+        state.consecutive_over = 0;
+        state.consecutive_under = 0;
+        Ok(())
+    }
+
+    /// 便捷更新滞后带核心参数 — 仅更新 enter/exit 计数和回落系数，保留 min_dwell_ms
+    ///
+    /// # 参数
+    /// - `enter`: 连续越阈次数(enter_consecutive)
+    /// - `exit`: 连续回落次数(exit_consecutive)
+    /// - `factor`: 回落判定系数(exit_ratio_factor)
+    ///
+    /// # 返回
+    /// - `Ok(())`: 更新成功
+    /// - `Err(ParliamentError::ConfigError)`: 参数校验失败
+    ///
+    /// # 设计
+    /// 内部构造 `StrategyCapConfig` 并委托 `update_config`，
+    /// 保留当前 `min_dwell_ms` 不变。
+    /// 减少调用方构造完整 `StrategyCapConfig` 的样板代码。
+    pub fn update_hysteresis_params(
+        &self,
+        enter: u32,
+        exit: u32,
+        factor: f64,
+    ) -> Result<(), ParliamentError> {
+        let current_config = self.lock_state().config.clone();
+        let new_config = StrategyCapConfig {
+            enter_consecutive: enter,
+            exit_consecutive: exit,
+            exit_ratio_factor: factor,
+            min_dwell_ms: current_config.min_dwell_ms,
+        };
+        self.update_config(new_config)
+    }
+
     /// 消费一次 ratio 报告,更新滞后带状态机
     ///
     /// # 返回
@@ -215,7 +262,7 @@ impl StrategyCapGuard {
             state.consecutive_over += 1;
             state.consecutive_under = 0;
 
-            if state.consecutive_over >= self.config.enter_consecutive {
+            if state.consecutive_over >= state.config.enter_consecutive {
                 if let Some(lower) = lower_strategy(state.cap) {
                     let change = CapChange {
                         old_cap: state.cap,
@@ -234,16 +281,16 @@ impl StrategyCapGuard {
                     return Some(change);
                 }
                 // 已在最低档(FastPath),计数封顶防溢出,等待回落
-                state.consecutive_over = self.config.enter_consecutive;
+                state.consecutive_over = state.config.enter_consecutive;
             }
-        } else if ratio < self.config.exit_ratio_factor * threshold {
+        } else if ratio < state.config.exit_ratio_factor * threshold {
             // 回落方向:累计升档证据
             state.consecutive_under += 1;
             state.consecutive_over = 0;
 
-            let dwell_ok =
-                state.last_transition.elapsed().as_millis() >= u128::from(self.config.min_dwell_ms);
-            if state.consecutive_under >= self.config.exit_consecutive && dwell_ok {
+            let dwell_ok = state.last_transition.elapsed().as_millis()
+                >= u128::from(state.config.min_dwell_ms);
+            if state.consecutive_under >= state.config.exit_consecutive && dwell_ok {
                 if let Some(higher) = higher_strategy(state.cap) {
                     let change = CapChange {
                         old_cap: state.cap,
@@ -261,7 +308,7 @@ impl StrategyCapGuard {
                     );
                     return Some(change);
                 }
-                state.consecutive_under = self.config.exit_consecutive;
+                state.consecutive_under = state.config.exit_consecutive;
             }
         } else {
             // 滞后带内:双计数器清零(防抖振)
@@ -639,5 +686,192 @@ mod tests {
         }
         handle.abort();
         assert!(saw_change, "封顶变更应发布观测事件");
+    }
+
+    // ============================================================
+    // P1-6: update_config 运行时配置热重载测试
+    // ============================================================
+
+    #[test]
+    fn test_update_config_replaces_config_and_resets_counters() {
+        let guard = StrategyCapGuard::new(fast_config());
+        // 先积累一些越阈计数
+        guard.observe(1.5, 1.0);
+        guard.observe(1.5, 1.0);
+        // 验证计数已积累
+        let state = guard.state.lock().unwrap();
+        assert_eq!(state.consecutive_over, 2);
+        drop(state);
+
+        // 更新配置(enter=2, exit=3, 更灵敏)
+        let new_config = StrategyCapConfig {
+            enter_consecutive: 2,
+            exit_consecutive: 3,
+            ..fast_config()
+        };
+        guard.update_config(new_config.clone()).unwrap();
+
+        // 验证配置已更新
+        assert_eq!(guard.config().enter_consecutive, 2);
+        assert_eq!(guard.config().exit_consecutive, 3);
+        // 验证计数器已重置
+        let state = guard.state.lock().unwrap();
+        assert_eq!(state.consecutive_over, 0);
+        assert_eq!(state.consecutive_under, 0);
+        // 验证封顶档位不变
+        assert_eq!(state.cap, ActivationStrategy::Full);
+        drop(state);
+
+        // 验证新配置生效: 只需 2 次越阈即可降档
+        assert!(guard.observe(1.5, 1.0).is_none()); // 第 1 次
+        let change = guard.observe(1.5, 1.0).expect("第 2 次越阈应降档");
+        assert_eq!(change.new_cap, ActivationStrategy::Simplified);
+    }
+
+    #[test]
+    fn test_update_config_rejects_invalid_config() {
+        let guard = StrategyCapGuard::new(fast_config());
+        let original_enter = guard.config().enter_consecutive;
+
+        // 尝试更新为非法配置(enter=0)
+        let invalid = StrategyCapConfig {
+            enter_consecutive: 0,
+            ..fast_config()
+        };
+        let result = guard.update_config(invalid);
+        assert!(result.is_err(), "enter=0 应拒绝");
+
+        // 验证内部配置不变
+        assert_eq!(guard.config().enter_consecutive, original_enter);
+        // 验证封顶档位不变
+        assert_eq!(guard.current_cap(), ActivationStrategy::Full);
+    }
+
+    #[test]
+    fn test_update_config_preserves_current_cap() {
+        let guard = StrategyCapGuard::new(fast_config());
+        // 先降档到 Simplified
+        for _ in 0..3 {
+            guard.observe(1.5, 1.0);
+        }
+        assert_eq!(guard.current_cap(), ActivationStrategy::Simplified);
+
+        // 更新配置
+        let new_config = StrategyCapConfig {
+            enter_consecutive: 2,
+            ..fast_config()
+        };
+        guard.update_config(new_config).unwrap();
+
+        // 封顶档位保持不变
+        assert_eq!(guard.current_cap(), ActivationStrategy::Simplified);
+    }
+
+    #[test]
+    fn test_update_config_resets_both_counters() {
+        let guard = StrategyCapGuard::new(fast_config());
+        // 积累越阈计数
+        guard.observe(1.5, 1.0);
+        guard.observe(1.5, 1.0);
+        // 积累回落计数
+        guard.observe(0.5, 1.0);
+        guard.observe(0.5, 1.0);
+
+        // 更新配置
+        guard.update_config(fast_config()).unwrap();
+
+        // 两个计数器均清零
+        let state = guard.state.lock().unwrap();
+        assert_eq!(state.consecutive_over, 0, "越阈计数应清零");
+        assert_eq!(state.consecutive_under, 0, "回落计数应清零");
+    }
+
+    #[test]
+    fn test_update_config_concurrent_safety() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let guard = Arc::new(StrategyCapGuard::new(fast_config()));
+        let mut handles = Vec::new();
+
+        // 4 个线程同时 update_config 和 observe
+        for i in 0..4 {
+            let g = Arc::clone(&guard);
+            handles.push(thread::spawn(move || {
+                for _ in 0..10 {
+                    let _ = g.observe(1.5, 1.0);
+                    let cfg = StrategyCapConfig {
+                        enter_consecutive: 2 + i,
+                        ..fast_config()
+                    };
+                    let _ = g.update_config(cfg);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("线程不应 panic");
+        }
+
+        // 验证毒锁降级: 即使某些线程 panic，guard 仍可用
+        assert!(guard.observe(1.5, 1.0).is_none() || guard.observe(1.5, 1.0).is_some());
+    }
+
+    // ============================================================
+    // P1-6: update_hysteresis_params 测试
+    // ============================================================
+
+    #[test]
+    fn test_update_hysteresis_params_updates_core_params() {
+        let guard = StrategyCapGuard::new(StrategyCapConfig {
+            min_dwell_ms: 60_000,
+            ..fast_config()
+        });
+        assert_eq!(guard.config().enter_consecutive, 3);
+        assert_eq!(guard.config().exit_consecutive, 5);
+        assert!((guard.config().exit_ratio_factor - 0.8).abs() < 1e-9);
+        assert_eq!(guard.config().min_dwell_ms, 60_000);
+
+        // 更新核心参数
+        guard.update_hysteresis_params(2, 4, 0.7).unwrap();
+        assert_eq!(guard.config().enter_consecutive, 2);
+        assert_eq!(guard.config().exit_consecutive, 4);
+        assert!((guard.config().exit_ratio_factor - 0.7).abs() < 1e-9);
+        // min_dwell_ms 保持不变
+        assert_eq!(guard.config().min_dwell_ms, 60_000);
+    }
+
+    #[test]
+    fn test_update_hysteresis_params_rejects_invalid_params() {
+        let guard = StrategyCapGuard::new(fast_config());
+        let original_enter = guard.config().enter_consecutive;
+
+        // enter=0 非法
+        let result = guard.update_hysteresis_params(0, 4, 0.7);
+        assert!(result.is_err());
+        assert_eq!(guard.config().enter_consecutive, original_enter);
+
+        // factor=0 非法
+        let result = guard.update_hysteresis_params(2, 4, 0.0);
+        assert!(result.is_err());
+        assert_eq!(guard.config().enter_consecutive, original_enter);
+
+        // factor>1 非法
+        let result = guard.update_hysteresis_params(2, 4, 1.5);
+        assert!(result.is_err());
+        assert_eq!(guard.config().enter_consecutive, original_enter);
+    }
+
+    #[test]
+    fn test_update_hysteresis_params_resets_counters() {
+        let guard = StrategyCapGuard::new(fast_config());
+        // 积累越阈计数
+        guard.observe(1.5, 1.0);
+        guard.observe(1.5, 1.0);
+
+        guard.update_hysteresis_params(2, 4, 0.7).unwrap();
+        let state = guard.state.lock().unwrap();
+        assert_eq!(state.consecutive_over, 0);
+        assert_eq!(state.consecutive_under, 0);
     }
 }

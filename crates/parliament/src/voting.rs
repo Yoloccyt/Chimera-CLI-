@@ -35,10 +35,12 @@ pub struct ConsensusQualityMetrics {
     pub approval_rate: f32,
     /// 弃权率 [0.0, 1.0](弃权角色权重和 / 全部投票角色权重和)
     pub abstention_rate: f32,
-    /// 意见分歧度 [0.0, 1.0](加权 position 方差 / 0.25 归一化)
+    /// 意见分歧度 [0.0, 1.0](熵基归一化)
     ///
-    /// 全体一致 → 0.0;半赞成半反对(最大分歧)→ 1.0。
-    /// WHY /0.25:Popoviciu 不等式——position∈[0,1] 时方差上界为 0.25。
+    /// 对 position ∈ {0, 1} 两个非弃权离散值计算信息熵
+    /// H = -(p0·log₂(p0) + p1·log₂(p1)), 最大值 log₂(2) = 1, 直接归一化到 [0, 1]。
+    /// 全体一致 → 0.0; 半赞成半反对(最大分歧)→ 1.0; 全弃权 → 0.0。
+    /// WHY 熵基归一化:熵对分布形状更敏感,能更好反映实际分歧度。
     pub divergence: f32,
     /// 共识裕度 [-1.0, 1.0](approval_rate − consensus_threshold)
     ///
@@ -213,9 +215,8 @@ impl VoteCounter {
 
     /// 计算多维共识质量指标(M2-T2.1,单次遍历)
     ///
-    /// WHY 单次遍历:在计票 O(n) 同量级内派生弃权率、意见分歧度(加权
-    /// position 方差)、Skeptic 立场,零额外渐进成本(n ≤ 角色数)。
-    /// 方差用 E[X²]−E[X]² 单趟计算(fp 负值用 max(0.0) 兜底)。
+    /// WHY 单次遍历:在计票 O(n) 同量级内派生弃权率、意见分歧度(熵基
+    /// 归一化)、Skeptic 立场,零额外渐进成本(n ≤ 角色数)。
     ///
     /// # 参数
     /// - `approval_rate`:该路径的加权赞成率(早退路径传 0.0)
@@ -228,8 +229,8 @@ impl VoteCounter {
     ) -> ConsensusQualityMetrics {
         let mut total_weight = 0.0f32;
         let mut abstain_weight = 0.0f32;
-        let mut w_pos_sum = 0.0f32; // Σ w·p
-        let mut w_pos_sq_sum = 0.0f32; // Σ w·p²
+        let mut w0 = 0.0f32; // position=0 的权重(反对)
+        let mut w1 = 0.0f32; // position=1 的权重(赞成)
         let mut skeptic_stance = 0.5f32; // 无 Skeptic 意见默认中立弃权
         for o in opinions {
             let w = self.config.weight_of(o.role);
@@ -237,8 +238,12 @@ impl VoteCounter {
             if o.is_abstain() {
                 abstain_weight += w;
             }
-            w_pos_sum += w * o.position;
-            w_pos_sq_sum += w * o.position * o.position;
+            if o.position == 0.0 {
+                w0 += w;
+            } else if o.position == 1.0 {
+                w1 += w;
+            }
+            // position=0.5(弃权)不计入分歧度
             if o.role == Role::Skeptic {
                 skeptic_stance = o.position;
             }
@@ -250,13 +255,21 @@ impl VoteCounter {
             0.0
         };
 
-        // 加权 position 方差(E[X²]−E[X]²);Popoviciu:position∈[0,1] 时 variance≤0.25,
-        // 除以 0.25 归一化到 [0,1];全体一致 → 0,半赞成半反对 → 1。
+        // 熵基归一化:对 position ∈ {0, 1} 两个非弃权离散值计算信息熵
+        // H = -(p0·log₂(p0) + p1·log₂(p1)), 最大值 log₂(2) = 1, 直接归一化到 [0, 1]。
+        // 全体一致 → 0.0; 半赞成半反对 → 1.0; 全弃权 → 0.0。
         let divergence = if total_weight > 0.0 {
-            let mean = w_pos_sum / total_weight;
-            let mean_sq = w_pos_sq_sum / total_weight;
-            let variance = (mean_sq - mean * mean).max(0.0);
-            (variance / 0.25).clamp(0.0, 1.0)
+            let non_abstain = w0 + w1;
+            if non_abstain > 0.0 {
+                let p0 = w0 / non_abstain;
+                let p1 = w1 / non_abstain;
+                // 0·log₂(0) = 0, 避免 NaN
+                let h_p0 = if p0 > 0.0 { p0 * p0.log2() } else { 0.0 };
+                let h_p1 = if p1 > 0.0 { p1 * p1.log2() } else { 0.0 };
+                (-(h_p0 + h_p1)).clamp(0.0, 1.0)
+            } else {
+                0.0 // 全弃权 → 无分歧
+            }
         } else {
             0.0
         };
@@ -893,6 +906,60 @@ mod tests {
             result.quality.divergence > 0.5,
             "对立立场分歧度应显著,实际 {}",
             result.quality.divergence
+        );
+    }
+
+    #[test]
+    fn test_entropy_half_approve_half_reject_divergence_near_one() {
+        // AC8-3: 半赞成半反对 → divergence≈1
+        // 使用等权重的赞成(1.0)和反对(0.0),无弃权
+        let counter = make_counter();
+        let opinions = vec![
+            Opinion::new(Role::Architect, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Skeptic, 0.0, 0.95, "反对"),
+            Opinion::new(Role::Optimizer, 1.0, 0.8, "赞成"),
+            Opinion::new(Role::Librarian, 0.0, 0.7, "反对"),
+            // Bard(0.10) 弃权,不计入分歧度
+            Opinion::new(Role::Bard, 0.5, 0.5, "弃权"),
+        ];
+        let result = counter.count_votes(&opinions, 5, &make_proposal());
+        let q = result.quality;
+        // 非弃权权重:Architect(0.25)+Skeptic(0.30)+Optimizer(0.20)+Librarian(0.15)=0.90
+        // 赞成:0.25+0.20=0.45, 反对:0.30+0.15=0.45 → p1=0.5, p0=0.5 → H=1.0
+        assert!(
+            (q.divergence - 1.0).abs() < 1e-6,
+            "半赞成半反对分歧度应≈1,实际 {}",
+            q.divergence
+        );
+    }
+
+    #[test]
+    fn test_entropy_two_thirds_approve_one_third_reject() {
+        // AC8-5: 2/3 赞成,1/3 反对 → 0 < divergence < 1
+        let counter = make_counter();
+        // Architect(0.25)+Skeptic(0.30)+Optimizer(0.20)=0.75 赞成
+        // Librarian(0.15)+Bard(0.10)=0.25 反对
+        // p1=0.75, p0=0.25 → H=-(0.75·log₂(0.75)+0.25·log₂(0.25))=-(0.75·(-0.415)+0.25·(-2.0))
+        //   = -(-0.311-0.5)=0.811
+        let opinions = vec![
+            Opinion::new(Role::Architect, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Skeptic, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Optimizer, 1.0, 0.8, "赞成"),
+            Opinion::new(Role::Librarian, 0.0, 0.7, "反对"),
+            Opinion::new(Role::Bard, 0.0, 0.6, "反对"),
+        ];
+        let result = counter.count_votes(&opinions, 5, &make_proposal());
+        let q = result.quality;
+        assert!(
+            q.divergence > 0.0 && q.divergence < 1.0,
+            "2/3赞成1/3反对分歧度应在(0,1)区间,实际 {}",
+            q.divergence
+        );
+        // 验证熵值 ≈ 0.811
+        assert!(
+            (q.divergence - 0.811).abs() < 0.01,
+            "2/3赞成1/3反对熵应≈0.811,实际 {}",
+            q.divergence
         );
     }
 

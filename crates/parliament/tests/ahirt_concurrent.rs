@@ -11,6 +11,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parliament::{AhirtRedTeam, ProbePayloadLibrary, ProbeResult, ProbeType};
+use seccore::SecCoreCommandValidator;
+
+/// 注入 SecCoreCommandValidator 的 AHIRT 红队(测试辅助)
+///
+/// WHY 注入:ADR-054 决策 3(P9-T4)后命令类探测依赖 L0 validator,
+/// 未注入时优雅降级为 skipped,并发测试的 passed/探测率断言需注入以保持语义。
+fn red_team_with_validator() -> AhirtRedTeam {
+    AhirtRedTeam::default().with_validator(Arc::new(SecCoreCommandValidator))
+}
 
 /// 静态断言:AhirtRedTeam 满足 Send + Sync(编译期检查)
 fn _assert_send_sync<T: Send + Sync>() {}
@@ -22,7 +31,7 @@ fn _static_assertions() {
 
 #[tokio::test]
 async fn test_concurrent_probe_no_panic() {
-    let red_team = Arc::new(AhirtRedTeam::default());
+    let red_team = Arc::new(red_team_with_validator());
 
     // 10 线程并发执行不同类型的探测
     let mut handles = Vec::new();
@@ -51,7 +60,7 @@ async fn test_concurrent_probe_no_panic() {
 
 #[tokio::test]
 async fn test_concurrent_probe_all_no_panic() {
-    let red_team = Arc::new(AhirtRedTeam::default());
+    let red_team = Arc::new(red_team_with_validator());
 
     // 10 线程并发执行全量探测
     let mut handles = Vec::new();
@@ -75,7 +84,7 @@ async fn test_concurrent_probe_all_no_panic() {
 
 #[tokio::test]
 async fn test_concurrent_verify_security_no_panic() {
-    let red_team = Arc::new(AhirtRedTeam::default());
+    let red_team = Arc::new(red_team_with_validator());
 
     // 10 线程并发执行安全验证
     let mut handles = Vec::new();
@@ -99,7 +108,7 @@ async fn test_concurrent_verify_security_no_panic() {
 
 #[tokio::test]
 async fn test_concurrent_probe_single_no_panic() {
-    let red_team = Arc::new(AhirtRedTeam::default());
+    let red_team = Arc::new(red_team_with_validator());
     let library = ProbePayloadLibrary::new();
 
     // 10 线程并发执行单个载荷探测
@@ -120,7 +129,7 @@ async fn test_concurrent_probe_single_no_panic() {
 
 #[tokio::test]
 async fn test_concurrent_trigger_probe_no_panic() {
-    let red_team = Arc::new(AhirtRedTeam::default());
+    let red_team = Arc::new(red_team_with_validator());
 
     // 10 线程并发触发不同类型探测
     let mut handles = Vec::new();
@@ -144,7 +153,7 @@ async fn test_concurrent_trigger_probe_no_panic() {
 
 #[tokio::test]
 async fn test_periodic_probe_does_not_block() {
-    let red_team = AhirtRedTeam::default();
+    let red_team = red_team_with_validator();
 
     // 启动周期探测(间隔 1 小时,实际不会触发)
     let handle = red_team.spawn_periodic_probe(Duration::from_secs(3600));
@@ -166,7 +175,7 @@ async fn test_periodic_probe_does_not_block() {
 
 #[tokio::test]
 async fn test_concurrent_mixed_operations_no_panic() {
-    let red_team = Arc::new(AhirtRedTeam::default());
+    let red_team = Arc::new(red_team_with_validator());
 
     // 10 线程混合执行不同操作(probe / probe_all / verify_security / trigger_probe)
     let mut handles = Vec::new();

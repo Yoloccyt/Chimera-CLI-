@@ -79,6 +79,32 @@ pub struct FineRecallInput<'a, S: VectorStore> {
 }
 
 // ============================================================
+// PROBE P1.2: 探针精排输入（独立新类型——严禁给 FineRecallInput 追加字段，
+// 25 处既有字面量构造点零改动，编译破坏面红线）
+// ============================================================
+
+/// 探针精排输入 — 查询探针驱动（PROBE P1.2，SnapKV 平移）
+///
+/// 与 [`FineRecallInput`] 的差异：`seed_clv` 语义扩展为**混合探针向量**
+/// （当前 query + 近 K 轮对话，由 `crate::probe::mix_probe` 构造）。
+/// 字段结构与 FineRecallInput 对齐，但独立类型避免破坏既有构造点。
+///
+/// # 泛型参数
+/// - `S`: VectorStore 实现（约束 `Meta = ()`，与 FineRecallInput 一致）
+pub struct ProbeRecallInput<'a, S: VectorStore> {
+    /// 粗召回输出（供后续重排填充使用）
+    pub coarse_output: &'a CoarseRecallOutput,
+    /// 混合探针 CLV（`crate::probe::mix_probe` 产出）
+    pub probe_clv: &'a CLV,
+    /// Block 级向量索引（HNSW 或 Memory KNN，实现 `VectorStore` trait）
+    pub vector_store: &'a S,
+    /// Block ID → CLV 映射（用于精确重排，None 时退化为仅用 HNSW score）
+    pub block_clvs: Option<&'a HashMap<BlockId, CLV>>,
+    /// 返回 Block 数（默认 500）
+    pub top_k: usize,
+}
+
+// ============================================================
 // 精排引擎
 // ============================================================
 
@@ -175,12 +201,83 @@ impl FineRecall {
         // （String 未实现 StdError），放宽到 Display 让 mock 与生产 WikiError 均满足
         S::Error: std::fmt::Display + Send + Sync + 'static,
     {
+        self.rank_impl(
+            input.seed_clv,
+            input.coarse_output,
+            input.vector_store,
+            input.block_clvs,
+            input.top_k,
+        )
+    }
+
+    /// 执行探针精排 — 用混合探针 CLV 检索 + 精确重排 → Top-K Block（PROBE P1.2）
+    ///
+    /// # 参数
+    /// - `input`: 探针精排输入（`probe_clv` 为 `mix_probe` 产出的混合向量）
+    ///
+    /// # 与 `rank()` 的关系
+    /// 共享 [`Self::rank_impl`] 核心逻辑，仅查询向量语义不同（探针 vs 种子）；
+    /// 探针路径异常（NaN/零向量率 >50%）由调用方先经 `probe_health` 检测后
+    /// 决定是否回退 `rank()`（Static 路径），见 `crate::probe`。
+    ///
+    /// # 错误
+    /// - `VectorStoreError`: VectorStore 检索失败
+    pub fn rank_with_probe<S>(
+        &self,
+        input: ProbeRecallInput<'_, S>,
+    ) -> Result<FineRecallOutput, RecallError>
+    where
+        S: VectorStore<Meta = ()>,
+        S::Error: std::fmt::Display + Send + Sync + 'static,
+    {
+        self.rank_impl(
+            input.probe_clv,
+            input.coarse_output,
+            input.vector_store,
+            input.block_clvs,
+            input.top_k,
+        )
+    }
+
+    /// 精排核心实现（rank 与 rank_with_probe 共享，提取避免复制公式）
+    ///
+    /// # 参数
+    /// - `query_clv`: 查询向量（种子 CLV 或混合探针 CLV）
+    /// - `coarse_output`: 粗召回输出（供后续重排填充使用）
+    /// - `vector_store`: Block 级向量索引
+    /// - `block_clvs`: Block ID → CLV 映射（可选精确重排）
+    /// - `top_k`: 返回 Block 数
+    ///
+    /// # 算法
+    /// 1. over-fetch K = top_k × overfetch_factor
+    /// 2. VectorStore 检索 Top-K 候选
+    /// 3. 精确 CLV 重排（启用且提供 block_clvs 时）
+    /// 4. Top-K 选择（`select_nth_unstable`）+ 降序排序输出
+    ///
+    /// WHY 提取共享: rank() 与 rank_with_probe() 仅查询向量语义不同，
+    /// 复制 80 行逻辑违反"杜绝冗余代码"（compressor.rs L64-75 同哲学）；
+    /// 既有 rank() 测试全绿 = 提取重构的行为等价验证
+    fn rank_impl<S>(
+        &self,
+        query_clv: &CLV,
+        coarse_output: &CoarseRecallOutput,
+        vector_store: &S,
+        block_clvs: Option<&HashMap<BlockId, CLV>>,
+        top_k: usize,
+    ) -> Result<FineRecallOutput, RecallError>
+    where
+        S: VectorStore<Meta = ()>,
+        S::Error: std::fmt::Display + Send + Sync + 'static,
+    {
         let start = Instant::now();
+        // coarse_output 保留在输入中供 P3 模块级密度计算（rank/fill 链路透传），
+        // 精排阶段不消费——显式标注避免 unused 警告
+        let _ = coarse_output;
 
         // 1. 计算 over-fetch K
         // WHY over-fetch: HNSW 是近似检索，返回的 Top-N 可能含误差，
         // 获取更多候选后精确重排可提升 Top-K 精度
-        let fetch_k = if input.top_k == 0 {
+        let fetch_k = if top_k == 0 {
             return Ok(FineRecallOutput {
                 blocks: Vec::new(),
                 elapsed_us: start.elapsed().as_micros() as u64,
@@ -189,13 +286,12 @@ impl FineRecall {
         } else {
             // top_k × overfetch_factor，至少 top_k + 100 保证小规模也有 over-fetch
             let factor = self.config.overfetch_factor.max(1.0) as usize;
-            input.top_k.saturating_mul(factor).max(input.top_k + 100)
+            top_k.saturating_mul(factor).max(top_k + 100)
         };
 
-        // 2. HNSW 检索: 用种子 CLV 在 VectorStore 中检索 Top-K 候选 Block
-        let hits: Vec<VectorHit> = input
-            .vector_store
-            .top_k(input.seed_clv.as_slice(), fetch_k, "")
+        // 2. HNSW 检索: 用查询向量在 VectorStore 中检索 Top-K 候选 Block
+        let hits: Vec<VectorHit> = vector_store
+            .top_k(query_clv.as_slice(), fetch_k, "")
             .map_err(|e| RecallError::VectorStoreError(e.to_string()))?;
 
         let candidate_count = hits.len();
@@ -205,7 +301,7 @@ impl FineRecall {
             .into_iter()
             .map(|hit| {
                 let precise_score = if self.config.precise_rerank {
-                    self.compute_precise_score(&hit, input.seed_clv, input.block_clvs)
+                    self.compute_precise_score(&hit, query_clv, block_clvs)
                 } else {
                     // 未启用精确重排，直接用 HNSW score
                     hit.score
@@ -223,7 +319,7 @@ impl FineRecall {
         //    相同 score 的 block 任意一个都可能被选入 Top-K（P3-W9.1 test_top_k_limit 教训）。
         //    加入 block_id 作为 tiebreaker 后，tie 时字典序小的 block 优先进入 Top-K，
         //    行为确定可复现（与 coarse.rs::recall 的 Top-K 逻辑保持一致）。
-        let top_k = input.top_k.min(blocks.len());
+        let top_k = top_k.min(blocks.len());
         if top_k == 0 {
             blocks.clear();
         } else if top_k < blocks.len() {

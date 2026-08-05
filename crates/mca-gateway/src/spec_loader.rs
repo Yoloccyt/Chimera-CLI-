@@ -109,6 +109,15 @@ fn validate_spec(spec: &ModelAffinitySpec) -> Result<(), AffinityError> {
             capability: "streaming".into(),
         });
     }
+    // 系统边界: max_output=0 使 negotiate_budget 产出 thinking > max_output 不变量违例;
+    // max_output=0 在任何厂商 API 上都无法工作(max_tokens ≥ 1 是通用约束),
+    // 加载期快速失败优于运行期静默产出畸形预算
+    if spec.capabilities.max_output == 0 {
+        return Err(AffinityError::Capability {
+            provider: spec.provider.clone(),
+            capability: "max_output (must be > 0)".into(),
+        });
+    }
     // DeprecatedModelNames 怪癖:废弃模型名禁止注册
     // (DeepSeek 旧名 deepseek-chat/reasoner 已于 2026-07-24 废弃)
     for quirk in &spec.quirks {
@@ -199,6 +208,15 @@ connect_timeout_ms = 10000
         let toml = minimal_toml("glm-5.2").replace("streaming = true", "streaming = false");
         let err = parse_spec_toml(&toml).unwrap_err();
         assert!(matches!(err, AffinityError::Capability { .. }));
+    }
+
+    #[test]
+    fn reject_zero_max_output() {
+        // max_output=0 破坏 negotiate_budget 不变量(thinking ≤ max_output),拒绝注册
+        let toml = minimal_toml("glm-5.2").replace("max_output = 128000", "max_output = 0");
+        let err = parse_spec_toml(&toml).unwrap_err();
+        assert!(matches!(err, AffinityError::Capability { .. }));
+        assert!(err.to_string().contains("max_output"));
     }
 
     #[test]

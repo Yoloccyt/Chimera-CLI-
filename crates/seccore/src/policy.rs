@@ -21,28 +21,22 @@ use crate::error::SecCoreError;
 use crate::types::{AttackType, Command, CommandSpec, RiskLevel};
 
 /// 被拦截的模式 — 关联攻击类型,便于审计追溯。
-#[derive(Debug, Clone)]
-pub struct BlockedPattern {
-    /// 模式字符串(子串匹配,大小写不敏感)
-    pub pattern: String,
-    /// 关联的攻击类型
-    pub attack_type: AttackType,
-    /// 人类可读的拦截描述
-    pub description: String,
-}
+///
+/// ⚠️ ADR-054 决策 3(P9-T4):权威定义已上提至 L0
+/// `nexus_contracts::command_validation`,此处 re-export 保兼容
+/// (对外 API 零破坏,`seccore::policy::BlockedPattern` 路径不变)。
+pub use nexus_contracts::command_validation::BlockedPattern;
 
 /// 命令策略 — 白名单 + 危险模式黑名单。
 ///
 /// 零信任模型下,命令必须同时满足:
 /// 1. 不匹配任何 `blocked_patterns`
 /// 2. `program` 在 `allowed_commands` 白名单内
-#[derive(Debug, Clone)]
-pub struct CommandPolicy {
-    /// 允许的程序名白名单(小写存储,大小写不敏感匹配)
-    pub allowed_commands: HashSet<String>,
-    /// 拦截模式列表(按攻击类型分组,检查顺序敏感)
-    pub blocked_patterns: Vec<BlockedPattern>,
-}
+///
+/// ⚠️ ADR-054 决策 3(P9-T4):权威定义(含 `default_secure()` 语义冻结迁移)已上提
+/// 至 L0 `nexus_contracts::command_validation`,此处 re-export 保兼容
+/// (对外 API 零破坏,`seccore::policy::CommandPolicy` 路径不变)。
+pub use nexus_contracts::command_validation::CommandPolicy;
 
 /// 环境变量策略 — 白名单 + 敏感关键词黑名单。
 ///
@@ -57,124 +51,6 @@ pub struct EnvPolicy {
     pub env_whitelist: HashSet<String>,
     /// 敏感关键词列表(变量名 to_uppercase 后子串匹配)
     pub sensitive_patterns: Vec<String>,
-}
-
-impl CommandPolicy {
-    /// 创建空策略(无白名单、无拦截模式)。
-    pub fn new() -> Self {
-        Self {
-            allowed_commands: HashSet::new(),
-            blocked_patterns: Vec::new(),
-        }
-    }
-
-    /// 链式添加允许的命令(自动转小写,大小写不敏感)。
-    pub fn allow_command(mut self, cmd: impl Into<String>) -> Self {
-        self.allowed_commands.insert(cmd.into().to_lowercase());
-        self
-    }
-
-    /// 链式添加拦截模式。
-    pub fn block_pattern(
-        mut self,
-        pattern: impl Into<String>,
-        attack_type: AttackType,
-        description: impl Into<String>,
-    ) -> Self {
-        self.blocked_patterns.push(BlockedPattern {
-            pattern: pattern.into(),
-            attack_type,
-            description: description.into(),
-        });
-        self
-    }
-
-    /// 默认安全策略 — 包含常见只读命令白名单与 6 类攻击拦截模式。
-    ///
-    /// 拦截模式按以下顺序添加(检查顺序敏感):
-    /// 1. Injection:shell 插值与命令分隔符($(...)、`、|、;、&&、||)
-    /// 2. PrivilegeEscalation:提权命令(sudo、su、chmod)
-    /// 3. SandboxEscape:路径遍历与系统目录(../、/proc/、/sys/)
-    /// 4. DataLeak:敏感数据(/etc/passwd、/etc/shadow、SECRET、PASSWORD)
-    /// 5. Tamper:审计/日志篡改(rm /var/log、shred)
-    ///
-    /// Abuse 由白名单处理(非白名单命令直接拒绝)。
-    pub fn default_secure() -> Self {
-        let mut policy = Self::new();
-
-        // === 安全命令白名单(只读、无副作用) ===
-        // 安全决策(WHY 不含 cmd/PowerShell):
-        // cmd.exe 是通用 shell 启动器,`cmd /c "任意命令"` 可绕过全部 4 层防御
-        // (白名单通过 + 无 blocked_pattern 匹配),构成零信任模型的致命漏洞。
-        // Windows 兼容性测试应使用受限 PowerShell ExecutionPolicy 沙箱,
-        // 而非在白名单中保留 cmd。参见 N1 安全审计报告。
-        for cmd in [
-            "echo", "ls", "cat", "pwd", "whoami", "date", "true", "false", "printf", "head",
-            "tail", "wc", "sort", "uniq", "cut", "tr", "basename", "dirname",
-        ] {
-            policy = policy.allow_command(cmd);
-        }
-
-        // === 1. Injection:shell 插值与命令分隔符 ===
-        // 对应 CVE-2026-35022:命令注入通过 $(...) 或管道链执行任意命令
-        policy = policy.block_pattern("$(", AttackType::Injection, "检测到命令替换 $(...)");
-        policy = policy.block_pattern("`", AttackType::Injection, "检测到反引号命令替换");
-        policy = policy.block_pattern("|", AttackType::Injection, "检测到管道符 |");
-        policy = policy.block_pattern(";", AttackType::Injection, "检测到命令分隔符 ;");
-        policy = policy.block_pattern("&&", AttackType::Injection, "检测到命令链 &&");
-        policy = policy.block_pattern("||", AttackType::Injection, "检测到命令链 ||");
-
-        // === 2. PrivilegeEscalation:提权命令 ===
-        // 子串匹配会误杀 `pseudo`,但零信任下宁可误杀
-        policy = policy.block_pattern("sudo", AttackType::PrivilegeEscalation, "检测到 sudo 提权");
-        policy = policy.block_pattern(" su ", AttackType::PrivilegeEscalation, "检测到 su 提权");
-        policy = policy.block_pattern(
-            "chmod",
-            AttackType::PrivilegeEscalation,
-            "检测到 chmod 权限修改",
-        );
-        policy = policy.block_pattern(
-            "chown",
-            AttackType::PrivilegeEscalation,
-            "检测到 chown 所有者修改",
-        );
-
-        // === 3. SandboxEscape:路径遍历与系统目录 ===
-        policy = policy.block_pattern("../", AttackType::SandboxEscape, "检测到路径遍历 ../");
-        policy = policy.block_pattern("..\\", AttackType::SandboxEscape, "检测到路径遍历 ..\\");
-        policy = policy.block_pattern("/proc/", AttackType::SandboxEscape, "检测到访问 /proc/");
-        policy = policy.block_pattern("/sys/", AttackType::SandboxEscape, "检测到访问 /sys/");
-
-        // === 4. DataLeak:敏感数据访问 ===
-        policy = policy.block_pattern(
-            "/etc/passwd",
-            AttackType::DataLeak,
-            "检测到访问 /etc/passwd",
-        );
-        policy = policy.block_pattern(
-            "/etc/shadow",
-            AttackType::DataLeak,
-            "检测到访问 /etc/shadow",
-        );
-        policy = policy.block_pattern("secret", AttackType::DataLeak, "检测到 SECRET 关键词");
-        policy = policy.block_pattern("password", AttackType::DataLeak, "检测到 PASSWORD 关键词");
-
-        // === 5. Tamper:审计/日志篡改 ===
-        policy = policy.block_pattern(
-            "/var/log",
-            AttackType::Tamper,
-            "检测到访问 /var/log 日志目录",
-        );
-        policy = policy.block_pattern("shred", AttackType::Tamper, "检测到 shred 粉碎命令");
-
-        policy
-    }
-}
-
-impl Default for CommandPolicy {
-    fn default() -> Self {
-        Self::default_secure()
-    }
 }
 
 impl EnvPolicy {

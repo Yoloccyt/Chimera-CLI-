@@ -17,9 +17,13 @@ rmp-serde = { workspace = true }
 arc-swap = { workspace = true }
 # L0 Contracts:formal_props 验证结果类型(FormalVerifier M1 P7-T4,ADR-047)
 # WHY 合规:L1 → L0 恒允许(§2.2 依赖铁律扩展);nexus-contracts 纯类型零依赖,不引入环
-nexus-contracts = { path = "../nexus-contracts" }
+nexus-contracts = { workspace = true }
 # L1 Core 共享领域类型(Quest 等),event-bus 与 nexus-core 同层互引允许(§2.2)
-nexus-core = { path = "../nexus-core" }
+# ADR-054 决策 6(P9-T7 Task 4):Quest 引用已改从 L0 nexus-contracts(domain 模块);
+# 仍保留 nexus-core 生产依赖,原因:ClvSummary::from_clv 生产 API 签名依赖
+# nexus_core::clv::CLV(512 维向量,未下沉 L0,nexus-contracts 零依赖铁律无法承载)。
+# 解除条件:CLV 下沉 L0 或 from_clv 改签,见 P9-T7 Task 4 落地记录。
+nexus-core = { workspace = true }
 # Prometheus 指标注册表与文本编码(Phase V Task V-8:/metrics 端点导出)
 prometheus-client = { workspace = true }
 
@@ -46,4 +50,12 @@ harness = false
 # 全部走 broadcast 路径(非 Critical),不触发 mpsc 旁路
 [[bench]]
 name = "tui_action_dispatch_bench"
+harness = false
+
+# P3-2: 内环跨层集成性能基准
+# 模拟 L1→L2→L6→L7 跨层数据流,测量 EventBus 作为跨层通信唯一通道的
+# 端到端延迟与并发扇出吞吐量。
+# 运行: cargo bench -p event-bus --bench cross_layer_bench
+[[bench]]
+name = "cross_layer_bench"
 harness = false

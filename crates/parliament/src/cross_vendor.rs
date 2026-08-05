@@ -294,8 +294,6 @@ impl CrossVendorDebate {
         // 确定去相关状态描述
         let decorrelation_status = if cross_vendor_enforced {
             "enforced"
-        } else if !self.router.config().enabled {
-            "fallback_same"
         } else {
             "fallback_same"
         };

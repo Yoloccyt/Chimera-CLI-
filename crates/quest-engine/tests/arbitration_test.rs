@@ -9,8 +9,8 @@
 //! - 无事件时返回 None(让调用方使用 fallback)
 //! - TtgGovernor 集成:effective_tier() 方法
 
-use decb_governor::BudgetTier;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use nexus_contracts::BudgetTier;
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use quest_engine::{ArbitrationLayer, TtgConfig, TtgGovernor};
 

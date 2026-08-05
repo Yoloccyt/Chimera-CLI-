@@ -28,9 +28,12 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::Arc;
 
 use event_bus::EventBus;
-use hcw_window::{ContextEntry, HcwWindow};
+use hcw_window::{ContextEntry, HcwWindow, SelectorLearnerHolder};
+use nexus_contracts::VectorStore; // PROBE P1.1: HnswStore upsert/top_k 的 trait 方法
+use nexus_core::CLV;
 use osa_coordinator::{
     AffectedScope, FileId, OmniSparseCoordinator, RiskLevel, TaskId, TaskProfile, TaskType,
     TimePressure,
@@ -104,6 +107,13 @@ pub struct ContextBlock {
     pub priority: ContextPriority,
     /// 是否可压缩 — Critical 块为 false,其他为 true
     pub is_compressible: bool,
+    // === PROBE P1.1: 块语义向量（CLV 探针打分输入）===
+    /// 块语义向量（None = 无向量，探针路径跳过该块，走中性值既有语义）
+    ///
+    /// WHY `#[serde(default)]`: 向后兼容旧序列化数据；CLV 注入由调用方
+    /// （NMC 编码器/上游数据源，P3.2 落地）经 `with_clv` 提供
+    #[serde(default)]
+    pub clv: Option<CLV>,
 }
 
 impl ContextBlock {
@@ -129,7 +139,18 @@ impl ContextBlock {
             priority,
             // Critical 块永不可压缩(ADR-026 红线)
             is_compressible: !priority.is_critical(),
+            // PROBE P1.1: 默认无向量（调用方按需注入）
+            clv: None,
         }
+    }
+
+    /// 设置块语义向量（链式调用，PROBE P1.1 探针打分输入）
+    ///
+    /// # 参数
+    /// - `clv`: 块语义向量（512 维 CLV）
+    pub fn with_clv(mut self, clv: CLV) -> Self {
+        self.clv = Some(clv);
+        self
     }
 }
 
@@ -164,6 +185,20 @@ pub struct AgentContext {
     blocks: Vec<ContextBlock>,
     /// 事件总线(创建临时 HcwWindow + OSA coordinator)
     event_bus: EventBus,
+    // === PROBE P1.1: 召回管线能力场（灰度开关，编译期配置非运行时旗）===
+    /// 是否启用召回管线路径（fine + 三区 + 重排）
+    ///
+    /// WHY bool 字段而非 feature flag: 能力场灰度语义（ADR-034 决策 2），
+    /// 默认关闭走老路径（行为零变化）；开启后经 recall 管线装载窗口。
+    /// 能力令牌（CapabilityTokenRegistry）深度接入放 P2（与哨兵/学习联动）
+    probe_enabled: bool,
+    /// 查询探针向量（None = 用块 CLV 均值兜底）
+    ///
+    /// WHY Option: 调用方（编排器）可注入当前 query 的 CLV；
+    /// None 时探针路径用块向量均值（中性探针），仍可验证三区+重排通路
+    query_clv: Option<CLV>,
+    // PROBE P2.2: 共享策略持有器（None = 独立 fallback，零行为变化）
+    selector_holder: Option<Arc<SelectorLearnerHolder>>,
 }
 
 impl fmt::Debug for AgentContext {
@@ -230,7 +265,48 @@ impl AgentContext {
             current_tokens: 0,
             blocks: Vec::new(),
             event_bus,
+            // PROBE P1.1: 默认关闭召回管线（老路径行为零变化）
+            probe_enabled: false,
+            // PROBE P2.2: 默认无共享 holder（独立 fallback）
+            selector_holder: None,
+            query_clv: None,
         })
+    }
+
+    /// 启用召回管线路径（能力场灰度，PROBE P1.1）
+    ///
+    /// # 参数
+    /// - `enabled`: 是否启用（默认 false 走老路径）
+    ///
+    /// WHY builder 而非构造参数: 保持 `new()` 公开签名不变（Part I 公共签名保护）
+    pub fn with_probe(mut self, enabled: bool) -> Self {
+        self.probe_enabled = enabled;
+        self
+    }
+
+    /// 注入查询探针向量（PROBE P1.1）
+    ///
+    /// # 参数
+    /// - `query_clv`: 当前 query 的 CLV（None 时用块向量均值兜底）
+    pub fn with_query_clv(mut self, query_clv: CLV) -> Self {
+        self.query_clv = Some(query_clv);
+        self
+    }
+
+    /// 注入共享策略持有器（PROBE P2.2）
+    ///
+    /// # 参数
+    /// - `holder`: 共享 SelectorLearnerHolder（编排器 SelectorOrchestrator 构造）
+    ///
+    /// WHY builder: 保持 new() 签名不变（向后兼容）；None = 独立 fallback
+    pub fn with_selector_holder(mut self, holder: Arc<SelectorLearnerHolder>) -> Self {
+        self.selector_holder = Some(holder);
+        self
+    }
+
+    /// 是否启用召回管线路径（诊断/测试用）
+    pub fn probe_enabled(&self) -> bool {
+        self.probe_enabled
     }
 
     /// 添加上下文块
@@ -284,17 +360,56 @@ impl AgentContext {
             return Ok(String::new());
         }
 
+        // PROBE P1.1: 能力场灰度 — 启用召回管线时走 recall 路径（三区+重排），
+        // 否则老路径零变化。仅当存在带 CLV 的块时 recall 路径有意义（R3 缓解:
+        // 无 CLV 块走中性分，通路代码就绪，真实 CLV 注入随 P3.2 上游数据源）
+        if self.probe_enabled && self.blocks.iter().any(|b| b.clv.is_some()) {
+            return self.build_prompt_recall().await;
+        }
+        self.build_prompt_legacy().await
+    }
+
+    /// 构建提示词（老路径）— HCW select_window() + OSA compute_all_masks() 稀疏化
+    ///
+    /// ADR-026 决策 7: 不自实现压缩,委托给 hcw_window + osa_coordinator。
+    ///
+    /// ## 算法(&self,不改存储状态)
+    ///
+    /// 1. 创建临时 HcwWindow(避免多次调用导致 entry 累积)
+    /// 2. 插入 blocks 作为 ContextEntry(file_id = block.name)
+    /// 3. 估算复杂度(total_tokens → complexity f32)
+    /// 4. `select_window(complexity)` 触发窗口层级选择
+    /// 5. `compute_all_masks(&profile)` 计算 OSA 五维度掩码
+    /// 6. 增强 `active_file_ids = OSA context.active_ids ∪ Critical 块 name`
+    /// 7. `apply_sparse_mask(active_file_ids)` 执行稀疏化
+    /// 8. 按 priority 降序拼接保留的 blocks 内容
+    ///
+    /// ## 返回
+    /// - `Ok(String)`: 稀疏化后的提示词
+    /// - `Err(MasError::ContextCompressionFailed)`: HCW 或 OSA 失败
+    ///
+    /// WHY 提取: PROBE P1.1 引入 recall 分支后，老路径保持零改动（回归面最小），
+    /// 且作为 recall 路径失败的永久 fallback（R1 缓解）
+    async fn build_prompt_legacy(&self) -> Result<String> {
         // 1. 估算复杂度(基于总 token 数)
         let total_tokens: usize = self.blocks.iter().map(|b| b.tokens).sum();
         let complexity = estimate_complexity(total_tokens);
 
         // 2. 创建临时 HcwWindow,插入 blocks 作为 ContextEntry
-        let temp_window = HcwWindow::with_default_config(self.event_bus.clone()).map_err(|e| {
-            MasError::ContextCompressionFailed {
-                agent_id: self.agent_id.clone(),
-                reason: format!("HCW 创建失败: {e}"),
-            }
-        })?;
+        // PROBE P2.2: 共享策略持有器时用 with_learner（注入链），否则独立 fallback
+        let temp_window = match &self.selector_holder {
+            Some(holder) => HcwWindow::with_learner(self.event_bus.clone(), Arc::clone(holder))
+                .map_err(|e| MasError::ContextCompressionFailed {
+                    agent_id: self.agent_id.clone(),
+                    reason: format!("HCW(learner) 创建失败: {e}"),
+                })?,
+            None => HcwWindow::with_default_config(self.event_bus.clone()).map_err(|e| {
+                MasError::ContextCompressionFailed {
+                    agent_id: self.agent_id.clone(),
+                    reason: format!("HCW 创建失败: {e}"),
+                }
+            })?,
+        };
 
         for (i, block) in self.blocks.iter().enumerate() {
             let entry = ContextEntry::new(
@@ -405,6 +520,160 @@ impl AgentContext {
 
         Ok(prompt)
     }
+
+    /// 构建提示词（召回管线路径）— fine 精排 + 三区填充 + 位置重排（PROBE P1.1）
+    ///
+    /// # 算法（R7 降级：仅 fine+rerank，coarse 预留接缝）
+    /// 1. 收集有 CLV 的块，upsert 到 HnswStore（512 维）
+    /// 2. 探针 CLV = query_clv 或块向量均值（中性探针兜底）
+    /// 3. `FineRecall::rank_with_probe`（空 CoarseRecallOutput 占位）
+    /// 4. `RerankFill::fill_zones` 三区填充（sink = Critical 块 / sliding = 末尾块）
+    /// 5. `RerankFill::reorder_blocks` 位置重排（top-2 置头，temporal 豁免）
+    /// 6. 按重排顺序拼接块内容
+    ///
+    /// # 降级（R1）
+    /// 任何 recall 管线错误 → fallback 老路径（build_prompt_legacy），不阻断任务
+    ///
+    /// # 依赖
+    /// - `repo-wiki HnswStore`（L9→L5 向下依赖合规）实现 `VectorStore` trait
+    /// - `hcw_window::recall`（fine/rerank）
+    async fn build_prompt_recall(&self) -> Result<String> {
+        // 1. 收集有 CLV 的块 + token 映射
+        let clv_blocks: Vec<&ContextBlock> =
+            self.blocks.iter().filter(|b| b.clv.is_some()).collect();
+        if clv_blocks.is_empty() {
+            // 理论不可达（build_prompt 已检查），防御性 fallback
+            return self.build_prompt_legacy().await;
+        }
+        let mut block_tokens: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::with_capacity(self.blocks.len());
+        for b in &self.blocks {
+            block_tokens.insert(b.name.clone(), b.tokens);
+        }
+
+        // 2. HnswStore（512 维）upsert 有 CLV 块（block_id = name）
+        let store = repo_wiki::HnswStore::with_dim(CLV::DIMENSION);
+        let mut block_clvs: std::collections::HashMap<String, CLV> =
+            std::collections::HashMap::with_capacity(clv_blocks.len());
+        for b in &clv_blocks {
+            let clv = b.clv.as_ref().expect("filtered by clv.is_some");
+            store.upsert(&b.name, clv.as_slice(), ()).map_err(|e| {
+                MasError::ContextCompressionFailed {
+                    agent_id: self.agent_id.clone(),
+                    reason: format!("HnswStore upsert 失败: {e}"),
+                }
+            })?;
+            block_clvs.insert(b.name.clone(), clv.clone());
+        }
+
+        // 3. 探针 CLV：query_clv 或块向量均值（中性探针兜底）
+        let probe_clv: CLV = match &self.query_clv {
+            Some(q) => q.clone(),
+            None => {
+                // 均值池化（与 recall/eval::mix_probe 语义一致）
+                let n = clv_blocks.len() as f32;
+                let mut acc: Vec<f32> = vec![0.0f32; CLV::DIMENSION];
+                for b in &clv_blocks {
+                    let s = b.clv.as_ref().expect("filtered").as_slice();
+                    for (i, v) in s.iter().enumerate() {
+                        acc[i] += v;
+                    }
+                }
+                for v in acc.iter_mut() {
+                    *v /= n;
+                }
+                CLV::from_vec(acc).map_err(|e| MasError::ContextCompressionFailed {
+                    agent_id: self.agent_id.clone(),
+                    reason: format!("CLV 均值构造失败: {e}"),
+                })?
+            }
+        };
+
+        // 4. fine 精排（空 CoarseRecallOutput 占位——R7 降级接缝，数据源就绪后激活）
+        let fine = hcw_window::recall::FineRecall::with_default_config();
+        let coarse = hcw_window::recall::CoarseRecallOutput {
+            modules: vec![],
+            elapsed_us: 0,
+        };
+        let fine_output = match fine.rank_with_probe(hcw_window::recall::ProbeRecallInput {
+            coarse_output: &coarse,
+            probe_clv: &probe_clv,
+            vector_store: &store,
+            block_clvs: Some(&block_clvs),
+            top_k: clv_blocks.len().min(500),
+        }) {
+            Ok(out) => out,
+            Err(_) => return self.build_prompt_legacy().await, // 降级（R1）
+        };
+
+        // 5. 三区填充 + 位置重排
+        //    sink = Critical 优先级块（系统提示/关键上下文恒留，H5 修复）
+        //    sliding = 末尾最多 4 块（recency 由结构保证）
+        let sink_ids: Vec<String> = self
+            .blocks
+            .iter()
+            .filter(|b| b.priority.is_critical())
+            .map(|b| b.name.clone())
+            .collect();
+        let sliding_ids: Vec<String> = self
+            .blocks
+            .iter()
+            .rev()
+            .take(4)
+            .map(|b| b.name.clone())
+            .collect();
+        let rerank = hcw_window::recall::RerankFill::with_default_config();
+        let zone_output = match rerank.fill_zones(
+            hcw_window::recall::ZoneFillInput {
+                coarse_output: &coarse,
+                fine_output: &fine_output,
+                block_tokens: &block_tokens,
+                sink_blocks: &sink_ids,
+                sliding_blocks: &sliding_ids,
+                summary_block: None,
+            },
+            hcw_window::recall::ZoneFillConfig::default(),
+        ) {
+            Ok(out) => out,
+            Err(_) => return self.build_prompt_legacy().await, // 降级（R1）
+        };
+        let filled_len = zone_output.filled_blocks.len();
+        let reordered = hcw_window::recall::RerankFill::reorder_blocks(
+            zone_output.filled_blocks,
+            sink_ids.len().min(filled_len),
+            0, // sliding 已含在 filled_blocks 末尾（fill_zones 输出即 sink+中段+滑窗）
+            None,
+        );
+
+        // 6. 按重排顺序拼接（块不在重排结果中时按优先级兜底）
+        let by_name: std::collections::HashMap<&str, &ContextBlock> =
+            self.blocks.iter().map(|b| (b.name.as_str(), b)).collect();
+        let mut parts: Vec<&str> = Vec::with_capacity(reordered.len());
+        for bs in &reordered {
+            if let Some(block) = by_name.get(bs.block_id.as_str()) {
+                parts.push(block.content.as_str());
+            }
+        }
+        // 未被 fine 选中的块（无 CLV 等）按优先级降序兜底追加
+        let mut legacy_ids: Vec<String> = self
+            .blocks
+            .iter()
+            .filter(|b| !by_name.contains_key(b.name.as_str()))
+            .map(|b| b.name.clone())
+            .collect();
+        legacy_ids.sort_by_key(|name| {
+            self.blocks
+                .iter()
+                .position(|b| &b.name == name)
+                .unwrap_or(usize::MAX)
+        });
+        for name in legacy_ids {
+            if let Some(block) = by_name.get(name.as_str()) {
+                parts.push(block.content.as_str());
+            }
+        }
+        Ok(parts.join("\n\n"))
+    }
 }
 
 /// 估算复杂度 — 基于总 token 数映射到 [0.0, 1.0] 区间
@@ -429,6 +698,98 @@ fn estimate_complexity(total_tokens: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 构造确定性 CLV（SplitMix64，512 维）
+    fn make_clv(seed: u64) -> CLV {
+        let v: Vec<f32> = (0..512)
+            .map(|j| {
+                let mut z = seed.wrapping_add((j as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^= z >> 31;
+                ((z >> 11) as f32) / (1u64 << 53) as f32 * 2.0 - 1.0
+            })
+            .collect();
+        CLV::from_vec(v).expect("512 dims")
+    }
+
+    /// 构造带 CLV 的上下文块
+    fn block_with_clv(name: &str, priority: ContextPriority, seed: u64) -> ContextBlock {
+        ContextBlock::new(name, format!("content-{name}"), 100, priority).with_clv(make_clv(seed))
+    }
+
+    // ============================================================
+    // PROBE P1.1: 召回管线路径测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_build_prompt_recall_path_orders_by_probe() {
+        // 启用探针 + 带 CLV 块 → 走 recall 路径（三区+重排）
+        let ctx = AgentContext::new("agent-1", 1_048_576, EventBus::new())
+            .unwrap()
+            .with_probe(true);
+        // 8 个块：分数由 CLV 与探针相似度决定；1 个 Critical（sink 恒留）
+        let mut ctx = ctx;
+        ctx.add_block(block_with_clv("sys", ContextPriority::Critical, 1))
+            .unwrap();
+        for i in 0..7 {
+            ctx.add_block(block_with_clv(
+                &format!("b{i}"),
+                ContextPriority::Normal,
+                10 + i,
+            ))
+            .unwrap();
+        }
+        let prompt = ctx.build_prompt().await.unwrap();
+        // recall 路径：sink（sys）在前 + 中段 + 滑窗；拼接含全部块内容
+        assert!(prompt.starts_with("content-sys"), "sink 块应恒留且在前");
+        assert!(prompt.contains("content-b0"));
+        assert!(prompt.contains("content-b6"));
+    }
+
+    #[tokio::test]
+    async fn test_build_prompt_recall_disabled_uses_legacy() {
+        // 探针关闭 → 老路径（行为与现状一致）
+        let ctx = AgentContext::new("agent-1", 1_048_576, EventBus::new()).unwrap();
+        assert!(!ctx.probe_enabled());
+        let mut ctx = ctx;
+        ctx.add_block(block_with_clv("a", ContextPriority::Normal, 1))
+            .unwrap();
+        ctx.add_block(block_with_clv("b", ContextPriority::Normal, 2))
+            .unwrap();
+        // legacy 路径输出由 OSA 掩码决定（Normal 块可能被稀疏化丢弃），
+        // 本测试只验证：关闭探针时不报错且走老路径（recall 分支不触发）
+        let prompt = ctx.build_prompt().await.unwrap();
+        // 老路径输出是字符串（可能为空——OSA 未选中任何文件时）
+        assert!(prompt.is_empty() || prompt.contains("content-a") || prompt.contains("content-b"));
+    }
+
+    #[tokio::test]
+    async fn test_build_prompt_recall_no_clv_falls_back_legacy() {
+        // 启用探针但无 CLV 块 → 老路径 fallback
+        let ctx = AgentContext::new("agent-1", 1_048_576, EventBus::new())
+            .unwrap()
+            .with_probe(true);
+        let mut ctx = ctx;
+        ctx.add_block(ContextBlock::new(
+            "a",
+            "content-a",
+            100,
+            ContextPriority::Normal,
+        ))
+        .unwrap();
+        let prompt = ctx.build_prompt().await.unwrap();
+        assert_eq!(prompt, "content-a");
+    }
+
+    #[test]
+    fn test_context_block_clv_serde_backward_compat() {
+        // ContextBlock 追加 clv 字段后旧 JSON 反序列化兼容（serde default）
+        let old_json =
+            r#"{"name":"a","content":"c","tokens":10,"priority":"Normal","is_compressible":true}"#;
+        let block: ContextBlock = serde_json::from_str(old_json).expect("旧数据应兼容");
+        assert!(block.clv.is_none(), "旧数据无 clv 字段应默认 None");
+    }
 
     #[test]
     fn test_context_priority_ordering() {

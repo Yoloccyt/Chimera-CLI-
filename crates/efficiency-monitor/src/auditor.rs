@@ -156,6 +156,47 @@ pub struct HarnessReport {
 /// 分母为零时的中性评分 — 无观测数据既不给满分也不给零分
 const NEUTRAL_SCORE: f32 = 0.5;
 
+/// 贝叶斯平均配置
+///
+/// 用于五维度评分计算,解决小样本场景下简单比率评分波动过大问题。
+/// 公式:`bayesian = (C·m + numerator) / (C + denominator)`,其中:
+/// - `C` = `prior_confidence`:先验置信度(虚拟观测次数)
+/// - `m` = `prior_mean`:先验均值(默认 0.5,与 NEUTRAL_SCORE 一致)
+///
+/// # 效果
+/// - 分母 = 0 时返回中性值 0.5(与 `ratio_or_neutral` 一致)
+/// - 分母 << C 时评分被拉向先验均值,避免小样本极端值
+/// - 分母 >> C 时评分收敛于实际比率(numerator/denominator)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BayesianConfig {
+    /// 先验置信度(虚拟观测次数),默认 10.0
+    pub prior_confidence: f32,
+    /// 先验均值(默认 0.5,中性)
+    pub prior_mean: f32,
+}
+
+impl Default for BayesianConfig {
+    fn default() -> Self {
+        Self {
+            prior_confidence: 10.0,
+            prior_mean: 0.5,
+        }
+    }
+}
+
+/// 贝叶斯平均评分
+///
+/// 将 `ratio_or_neutral` 的简单比率替换为贝叶斯平均,解决小样本评分波动。
+/// 分母为零时返回中性值 0.5,结果 clamp 到 [0.0, 1.0]。
+fn bayesian_average(numerator: f32, denominator: f32, config: &BayesianConfig) -> f32 {
+    if denominator == 0.0 {
+        return NEUTRAL_SCORE;
+    }
+    let score = (config.prior_confidence * config.prior_mean + numerator)
+        / (config.prior_confidence + denominator);
+    score.clamp(0.0, 1.0)
+}
+
 /// 运行时自我评估审计器
 ///
 /// # 线程安全
@@ -168,6 +209,8 @@ pub struct RuntimeAuditor {
     capability_uses: DashMap<String, u64>,
     /// 静态登记的待验证能力清单
     registered_capabilities: DashMap<String, ()>,
+    /// 贝叶斯平均配置(用于五维度评分,可定制先验)
+    bayesian_config: BayesianConfig,
     /// 可选事件总线(绑定后 Finding/Report 自动发布)
     event_bus: Option<EventBus>,
 }
@@ -179,7 +222,16 @@ impl RuntimeAuditor {
             event_counts: DashMap::new(),
             capability_uses: DashMap::new(),
             registered_capabilities: DashMap::new(),
+            bayesian_config: BayesianConfig::default(),
             event_bus: None,
+        }
+    }
+
+    /// 创建独立审计器并指定贝叶斯平均配置
+    pub fn with_bayesian_config(config: BayesianConfig) -> Self {
+        Self {
+            bayesian_config: config,
+            ..Self::new()
         }
     }
 
@@ -280,11 +332,12 @@ impl RuntimeAuditor {
                 .map(|c| *c.value() as f32)
                 .unwrap_or(0.0)
         };
+        let cfg = &self.bayesian_config;
 
-        // 任务理解:意图 → 任务的转化率
+        // 任务理解:意图 → 任务的转化率(贝叶斯平均)
         let intents = count("UserIntentEncoded");
         let quests = count("QuestCreated");
-        let task_comprehension = ratio_or_neutral(quests, intents);
+        let task_comprehension = bayesian_average(quests, intents, cfg);
 
         // 可控执行:1 − 失控事件率(超时 + 孤儿调用 + 沙箱违规)
         let completed = count("ExecutionCompleted");
@@ -296,17 +349,18 @@ impl RuntimeAuditor {
             (1.0 - uncontrolled / completed).clamp(0.0, 1.0)
         };
 
-        // 变更验证:验证通过率
+        // 变更验证:验证通过率(贝叶斯平均)
         let change_verification =
-            ratio_or_neutral(count("PredictionVerified"), count("OperationProduced"));
+            bayesian_average(count("PredictionVerified"), count("OperationProduced"), cfg);
 
-        // 可靠交付:任务完成率
-        let reliable_delivery = ratio_or_neutral(count("QuestCompleted"), quests);
+        // 可靠交付:任务完成率(贝叶斯平均)
+        let reliable_delivery = bayesian_average(count("QuestCompleted"), quests, cfg);
 
-        // 经验沉淀:知识/检查点沉淀率
-        let experience_accumulation = ratio_or_neutral(
+        // 经验沉淀:知识/检查点沉淀率(贝叶斯平均)
+        let experience_accumulation = bayesian_average(
             count("WikiUpdated") + count("CheckpointSaved"),
             count("QuestCompleted"),
+            cfg,
         );
 
         let findings = self.audit_all_capabilities();
@@ -366,18 +420,6 @@ impl RuntimeAuditor {
 impl Default for RuntimeAuditor {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// 比率评分:`numerator / denominator`,cap 到 1.0;分母为零返回中性 0.5
-///
-/// WHY cap 1.0:计数器语义下分子可能大于分母(如一个 Quest 多次 CheckpointSaved),
-/// 评分维度语义上限为"完全达成"。
-fn ratio_or_neutral(numerator: f32, denominator: f32) -> f32 {
-    if denominator == 0.0 {
-        NEUTRAL_SCORE
-    } else {
-        (numerator / denominator).min(1.0)
     }
 }
 
@@ -477,33 +519,108 @@ mod tests {
     }
 
     #[test]
-    fn test_report_reliable_delivery_ratio() {
+    fn test_report_reliable_delivery_bayesian() {
         let auditor = RuntimeAuditor::new();
-        // 4 个 Quest 创建,1 个完成 → 交付率 0.25
+        // 4 个 Quest 创建,1 个完成 → 贝叶斯平均 = (10*0.5 + 1) / (10 + 4) = 6/14
         for i in 0..4 {
             auditor.record_event(&quest_created(&format!("q{i}")));
         }
         auditor.record_event(&quest_completed("q0"));
         let report = auditor.generate_report();
-        assert!((report.reliable_delivery - 0.25).abs() < f32::EPSILON);
+        let expected = (10.0 * 0.5 + 1.0) / (10.0 + 4.0);
+        assert!((report.reliable_delivery - expected).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn test_report_dimension_capped_at_one() {
+    fn test_report_dimension_bayesian_clamped_at_one() {
         let auditor = RuntimeAuditor::new();
         auditor.record_event(&quest_created("q0"));
-        // 1 个 Quest 完成 + 3 次 CheckpointSaved → 沉淀率 cap 到 1.0
+        // 1 个 Quest 完成 + 10 次 CheckpointSaved → 贝叶斯平均 clamp 到 1.0
         auditor.record_event(&quest_completed("q0"));
-        for _ in 0..3 {
+        for i in 0..10 {
             auditor.record_event(&NexusEvent::CheckpointSaved {
                 metadata: EventMetadata::new("test"),
                 quest_id: "q0".into(),
-                checkpoint_id: "c".into(),
+                checkpoint_id: format!("c{i}"),
                 memory_snapshot_hash: "h".into(),
             });
         }
         let report = auditor.generate_report();
         assert_eq!(report.experience_accumulation, 1.0);
+    }
+
+    // --- 贝叶斯平均 ---
+
+    #[test]
+    fn test_bayesian_average_zero_denominator_returns_neutral() {
+        // 分母为零 → 返回中性值 0.5
+        let cfg = BayesianConfig::default();
+        let score = bayesian_average(0.0, 0.0, &cfg);
+        assert_eq!(score, NEUTRAL_SCORE);
+    }
+
+    #[test]
+    fn test_bayesian_average_pulls_toward_prior_with_small_sample() {
+        // 小样本(1/1)被拉向先验均值:bayesian(1,1) = (5+1)/(10+1) = 6/11 ≈ 0.545
+        let cfg = BayesianConfig::default();
+        let score = bayesian_average(1.0, 1.0, &cfg);
+        let expected = (10.0 * 0.5 + 1.0) / (10.0 + 1.0);
+        assert!((score - expected).abs() < f32::EPSILON);
+        // 验证:0/1 的简单比率为 0,但贝叶斯平均应 > 0(被先验拉高)
+        let zero_score = bayesian_average(0.0, 1.0, &cfg);
+        assert!(zero_score > 0.0);
+        assert!(zero_score < NEUTRAL_SCORE);
+    }
+
+    #[test]
+    fn test_bayesian_average_converges_to_ratio_with_large_sample() {
+        // 大样本下评分收敛于实际比率(80/100=0.8)
+        let cfg = BayesianConfig::default();
+        let score = bayesian_average(80.0, 100.0, &cfg);
+        let expected = (10.0 * 0.5 + 80.0) / (10.0 + 100.0);
+        assert!((score - expected).abs() < f32::EPSILON);
+        // 接近实际比率 0.8
+        assert!((score - 0.8).abs() < 0.05);
+    }
+
+    #[test]
+    fn test_bayesian_average_clamped_to_one() {
+        // 分子 >> 分母时 clamp 到 1.0
+        let cfg = BayesianConfig::default();
+        let score = bayesian_average(100.0, 1.0, &cfg);
+        assert_eq!(score, 1.0);
+    }
+
+    #[test]
+    fn test_bayesian_config_custom_prior() {
+        // 高置信度先验(C=1000,m=0.5)使小样本评分几乎等于先验均值
+        let cfg = BayesianConfig {
+            prior_confidence: 1000.0,
+            prior_mean: 0.5,
+        };
+        let score = bayesian_average(1.0, 1.0, &cfg);
+        let expected = (1000.0 * 0.5 + 1.0) / (1000.0 + 1.0);
+        assert!((score - expected).abs() < f32::EPSILON);
+        // 高置信度下评分接近 0.5
+        assert!((score - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_runtime_auditor_with_custom_bayesian_config() {
+        // 使用极低置信度先验(C=0.1,m=0.5),评分几乎退化为简单比率
+        let cfg = BayesianConfig {
+            prior_confidence: 0.1,
+            prior_mean: 0.5,
+        };
+        let auditor = RuntimeAuditor::with_bayesian_config(cfg);
+        for i in 0..4 {
+            auditor.record_event(&quest_created(&format!("q{i}")));
+        }
+        auditor.record_event(&quest_completed("q0"));
+        let report = auditor.generate_report();
+        // 低置信度下评分接近 0.25
+        let expected = (0.1 * 0.5 + 1.0) / (0.1 + 4.0);
+        assert!((report.reliable_delivery - expected).abs() < 1e-5);
     }
 
     // --- 事件发布 ---

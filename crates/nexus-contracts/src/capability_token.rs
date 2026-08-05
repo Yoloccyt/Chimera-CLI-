@@ -124,10 +124,17 @@ pub enum SeamId {
     /// 高不确定性时强制 Abstain（保守护栏，避免有害生成）；
     /// 解冻前置 = CapabilityToken 灰度 + ADR-043 影子模式 2 周。
     S8MemPi = 8,
+
+    /// S9: Token Efficiency 语义缓存/输出预算接缝（ADR-069）
+    ///
+    /// Token 效率优化接缝：控制语义响应缓存与输出预算治理的灰度授权。
+    /// Cooldown/Frozen 态时 `allows_learned_policy()` 返回 false，
+    /// 编排器 bypass 全部缓存逻辑（30s 降级无缓存模式，禁止 feature flag）。
+    S9TokenEfficiency = 9,
 }
 
 impl SeamId {
-    /// 返回接缝编号（1-8）
+    /// 返回接缝编号（1-9）
     pub const fn number(self) -> u8 {
         self as u8
     }
@@ -143,13 +150,14 @@ impl SeamId {
             Self::S6Decay => "S6-decay",
             Self::S7RecallQuota => "S7-recall-quota",
             Self::S8MemPi => "S8-mem-pi",
+            Self::S9TokenEfficiency => "S9-token-efficiency",
         }
     }
 
-    /// 返回所有八接缝（用于遍历初始化）
+    /// 返回所有九接缝（用于遍历初始化）
     ///
-    /// WHY 8 而非 7: S8 为 polish-v2.7 closure Stage B-6 新增 Mem-π 接缝
-    pub const fn all() -> [SeamId; 8] {
+    /// WHY 9: S9 为 ADR-069 Token 效率优化新增语义缓存/输出预算接缝
+    pub const fn all() -> [SeamId; 9] {
         [
             Self::S1Density,
             Self::S2Memory,
@@ -159,6 +167,7 @@ impl SeamId {
             Self::S6Decay,
             Self::S7RecallQuota,
             Self::S8MemPi,
+            Self::S9TokenEfficiency,
         ]
     }
 }
@@ -816,15 +825,17 @@ mod tests {
     }
 
     #[test]
-    fn test_seam_id_all_returns_eight() {
+    fn test_seam_id_all_returns_nine() {
         let all = SeamId::all();
-        assert_eq!(all.len(), 8);
+        assert_eq!(all.len(), 9);
         assert!(all.contains(&SeamId::S1Density));
         assert!(all.contains(&SeamId::S6Decay));
         // P4-W16.2.2: S7 必须在 all() 中
         assert!(all.contains(&SeamId::S7RecallQuota));
         // closure Stage B-6: S8 必须在 all() 中
         assert!(all.contains(&SeamId::S8MemPi));
+        // ADR-069: S9 Token Efficiency 必须在 all() 中
+        assert!(all.contains(&SeamId::S9TokenEfficiency));
     }
 
     #[test]

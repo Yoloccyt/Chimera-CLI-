@@ -74,6 +74,38 @@ impl OsaSparsePanel {
         self.scroll_offset
     }
 
+    /// 构造 HCW 召回读数行（PROBE P0.4）
+    ///
+    /// 展示多针召回率 needle_recall@8 / 位置偏置比 / 链路成功率三指标：
+    /// - 未收到报告（None）: 显示 N/A（灰字）
+    /// - 已收到: 按验收目标着色（needle@8 ≥ 0.90 / bias ≥ 0.85 / chain ≥ 0.80 为绿，否则黄）
+    ///
+    /// WHY 独立函数: 渲染行逻辑与面板布局解耦，便于单元测试与未来扩展。
+    /// 全程 f32 字面量，避免 f32→f64 隐式转换（§4.4 #6 红线）。
+    fn recall_line(state: &TuiState) -> Line<'static> {
+        let fmt_opt = |v: Option<f32>, target: f32| -> Span<'static> {
+            match v {
+                Some(val) => {
+                    let color = if val >= target {
+                        Color::Green
+                    } else {
+                        Color::Yellow
+                    };
+                    Span::styled(format!("{val:.3}"), Style::default().fg(color))
+                }
+                None => Span::styled("N/A", Style::default().fg(Color::DarkGray)),
+            }
+        };
+        Line::from(vec![
+            Span::raw("Recall: needle@8="),
+            fmt_opt(state.recall_needle_at_8, 0.90_f32),
+            Span::raw(" bias="),
+            fmt_opt(state.recall_position_bias, 0.85_f32),
+            Span::raw(" chain="),
+            fmt_opt(state.recall_chain_success, 0.80_f32),
+        ])
+    }
+
     /// 根据稀疏度值返回对应的颜色编码
     ///
     /// WHY 独立函数:将颜色映射逻辑与渲染逻辑解耦,便于未来调整阈值或增加更多档位。
@@ -275,10 +307,10 @@ impl Panel for OsaSparsePanel {
                     masks.budget.active_ids.len()
                 )),
             ]),
-            Line::from(Span::styled(
-                "omega-learner 六接缝状态: 暂未实现",
-                Style::default().fg(Color::DarkGray),
-            )),
+            // === PROBE P0.4:HCW 召回读数（由 HcwRecallReported 事件同步，None = 未收到报告）===
+            // 展示多针召回率 needle_recall@8 / 位置偏置比 / 链路成功率三指标,
+            // 未收到报告时显示 N/A（灰字），收到后按值着色（≥目标绿 / 未达标黄）。
+            Self::recall_line(state),
         ];
         let mask_text = Text::from(mask_lines);
         let mask_paragraph = Paragraph::new(mask_text);

@@ -86,6 +86,17 @@ fn test_critical_channel_bounded_capacity() {
     let _metric = CriticalEventDropped::new(0);
 }
 
+/// 读取环境变量 `CHIMERA_BACKPRESSURE_SECS` 覆盖测试时长;缺省 60s 保持 spec 验收语义。
+/// WHY 参数化:文件头注释 L100-103 预留设计 —— 常规 CI 设 5s 用于快速回归,
+/// Release 验收保留 60s(P1-W4.3.4 spec 验收门槛)。断言均为相对量,
+/// 随时长缩放不受影响(final_count == total_to_publish)。
+fn env_duration_secs() -> u64 {
+    std::env::var("CHIMERA_BACKPRESSURE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60)
+}
+
 // ============================================================
 // 测试 2:10K 事件/秒 × 60s 注入 Critical 通道,无 OOM 且 100% 送达
 //
@@ -146,9 +157,10 @@ async fn test_10k_events_per_second_no_oom() {
     });
 
     // 发布方:10K 事件/秒 × 60s = 600K 事件(spec.md L183 验收门槛)
+    // 时长可由 CHIMERA_BACKPRESSURE_SECS 环境变量覆盖(常规 CI 快速回归用 5s)
     const RATE_PER_SEC: usize = 10_000;
-    const DURATION_SECS: u64 = 60;
-    let total_to_publish: u64 = (RATE_PER_SEC as u64) * DURATION_SECS;
+    let duration_secs: u64 = env_duration_secs();
+    let total_to_publish: u64 = (RATE_PER_SEC as u64) * duration_secs;
 
     let start = Instant::now();
     for i in 0..total_to_publish {
@@ -159,7 +171,7 @@ async fn test_10k_events_per_second_no_oom() {
     }
     let publish_elapsed = start.elapsed();
     println!(
-        "发布 {total_to_publish} 个 Critical 事件,耗时 {:?}(目标速率 {RATE_PER_SEC}/s × {DURATION_SECS}s)",
+        "发布 {total_to_publish} 个 Critical 事件,耗时 {:?}(目标速率 {RATE_PER_SEC}/s × {duration_secs}s)",
         publish_elapsed
     );
 

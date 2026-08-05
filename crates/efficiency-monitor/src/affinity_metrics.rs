@@ -20,6 +20,7 @@
 //! 更新,collect 计算百分位,均不跨 await(C7)。TTFT 百分位用
 //! `select_nth_unstable`(O(n),§4.1 Top-K 红线,禁 sort_by)。
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -107,6 +108,9 @@ impl ChannelAffinityStats {
 #[derive(Clone, Default)]
 pub struct AffinityMetrics {
     channels: Arc<DashMap<String, ChannelAffinityStats>>,
+    /// 语义缓存命中次数(全局原子计数,无锁安全)
+    /// 消费 `SemanticCacheHit` 事件递增,与厂商缓存命中率互补观测。
+    semantic_cache_hits: Arc<AtomicU64>,
 }
 
 impl AffinityMetrics {
@@ -149,6 +153,16 @@ impl AffinityMetrics {
     pub fn record_degraded(&self, route_key: &str) {
         let mut s = self.channels.entry(route_key.to_string()).or_default();
         s.degraded_events += 1;
+    }
+
+    /// 记录一次语义缓存命中(消费 `SemanticCacheHit`)
+    pub fn record_semantic_cache_hit(&self) {
+        self.semantic_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 查询语义缓存命中总次数
+    pub fn semantic_cache_hit_count(&self) -> u64 {
+        self.semantic_cache_hits.load(Ordering::Relaxed)
     }
 
     /// 查询通道 TTFT 百分位(E1 验收数据源)
@@ -201,6 +215,9 @@ impl AffinityMetrics {
             }
             event_bus::NexusEvent::ProviderDegraded { route_key, .. } => {
                 self.record_degraded(route_key);
+            }
+            event_bus::NexusEvent::SemanticCacheHit { .. } => {
+                self.record_semantic_cache_hit();
             }
             _ => {}
         }
@@ -255,6 +272,12 @@ impl crate::collectors::MetricCollector for AffinityMetrics {
                 label,
             ));
         }
+        // 语义缓存命中次数(全局指标,不按通道分片)
+        samples.push(MetricSample::new(
+            "mca_semantic_cache_hits_total",
+            self.semantic_cache_hit_count() as f64,
+            Vec::new(),
+        ));
         samples
     }
 }
@@ -329,9 +352,10 @@ mod tests {
         assert!(samples
             .iter()
             .any(|s| s.name == "mca_provider_degraded_total"));
-        // 标签含 route 维度
+        // 标签含 route 维度(全局指标 mca_semantic_cache_hits_total 除外)
         assert!(samples
             .iter()
+            .filter(|s| s.name != "mca_semantic_cache_hits_total")
             .all(|s| s.labels.iter().any(|(k, _)| k == "route")));
     }
 
@@ -347,6 +371,7 @@ mod tests {
             cache_hit_tokens: 30,
             cost_actual_micro: 500,
             ttft_ms: 150,
+            semantic_cache_hit: false,
         };
         m.handle_mca_event(&event);
         assert_eq!(m.ttft_percentile("test/t-model", 0.50), Some(150));
@@ -383,5 +408,42 @@ mod tests {
             .find(|s| s.name == "mca_provider_degraded_total")
             .expect("应有降级计数样本");
         assert!((degraded.value - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn handle_mca_event_semantic_cache_hit() {
+        let m = AffinityMetrics::new();
+        assert_eq!(m.semantic_cache_hit_count(), 0);
+
+        let event = event_bus::NexusEvent::SemanticCacheHit {
+            metadata: event_bus::EventMetadata::new("test"),
+            namespace: "intent-1".into(),
+            similarity: 0.95,
+        };
+        m.handle_mca_event(&event);
+        assert_eq!(m.semantic_cache_hit_count(), 1);
+
+        // 多次命中累计
+        m.handle_mca_event(&event);
+        m.handle_mca_event(&event);
+        assert_eq!(m.semantic_cache_hit_count(), 3);
+    }
+
+    #[test]
+    fn collect_emits_semantic_cache_hits_metric() {
+        let m = AffinityMetrics::new();
+        m.record_semantic_cache_hit();
+        m.record_semantic_cache_hit();
+        let samples = m.collect();
+        let metric = samples
+            .iter()
+            .find(|s| s.name == "mca_semantic_cache_hits_total")
+            .expect("collect 应产出语义缓存命中指标");
+        assert!((metric.value - 2.0).abs() < 1e-6);
+        // 全局指标不按通道分片,无 route 标签
+        assert!(
+            !metric.labels.iter().any(|(k, _)| k == "route"),
+            "语义缓存命中为全局指标,不应有 route 标签"
+        );
     }
 }

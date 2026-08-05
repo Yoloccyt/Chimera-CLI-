@@ -30,76 +30,73 @@ dashmap = { workspace = true }
 # WHY 显式声明:error.rs 的 MasError 含 rmp_serde::encode::Error / decode::Error 的 From 转换
 rmp-serde = { workspace = true }
 # futures:异步流处理,FuturesUnordered 用于并行委托执行(§4.1 规范:并发收集用 FuturesUnordered 优于 join_all)
-# WHY 直接声明版本:workspace.dependencies 未收录 futures
-futures = "0.3"
+futures = { workspace = true }
 # async-trait:异步 trait 定义,Agent 工厂与委托执行器的 trait 接口
-# WHY 直接声明版本:workspace.dependencies 未收录 async-trait
-async-trait = "0.1"
+async-trait = { workspace = true }
 
 # === workspace 内部 crate 依赖(L9→L1-L8 向下依赖 + L9 同层,§2.2 依赖铁律)===
 # L1 Core:领域类型(UserIntent / Quest / Task / TaskStatus / ThinkingMode / Checkpoint)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # L0 Contracts:formal_props::VerificationResult(InvariantHealthReporter 汇总属性 #7
 # 三验证结果,Phase 8.4)。L9→L0 向下依赖恒允许(§2.2)。
-nexus-contracts = { path = "../nexus-contracts" }
+nexus-contracts = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 7 个 Agent 相关 NexusEvent 变体(ADR-026 决策 2)
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # L2 Memory:AgentContext 包装 HierarchicalWindow,1M 上下文经 HCW 稀疏化(ADR-026 决策 7)
-hcw-window = { path = "../hcw-window" }
+hcw-window = { workspace = true }
 # L2 Memory:四级神经形态记忆 L0-L3,Agent 记忆归档复用(§17.1,Task 17)
-mlc-engine = { path = "../mlc-engine" }
+mlc-engine = { workspace = true }
 # L3 Storage:Hot/Warm/Cold/Ice 冷热分层,三级归档存储层(§17.2,Task 17)
-cmt-tiering = { path = "../cmt-tiering" }
+cmt-tiering = { workspace = true }
 # L3 Storage:推测缓存,归档缓存复用(§17.1,Task 17)
-scc-cache = { path = "../scc-cache" }
+scc-cache = { workspace = true }
 # L6 Router:OmniSparseCoordinator::compute_masks() 计算稀疏掩码(ADR-026 决策 7)
-osa-coordinator = { path = "../osa-coordinator" }
+osa-coordinator = { workspace = true }
 # L7 Execution:委托执行通过 gqep-executor 包装超时(零孤儿调用,§6.1 红线)
-gqep-executor = { path = "../gqep-executor" }
+gqep-executor = { workspace = true }
 # L4 Security:委托执行通过 qeep-protocol 实现量子纠缠零孤儿(§6.1 红线)
-qeep-protocol = { path = "../qeep-protocol" }
+qeep-protocol = { workspace = true }
 # L8 Parliament:StabilityGuard 故障隔离复用 Parliament RoleRegistry(Task 19 §19.8)
 # WHY 用 path 而非 workspace=true:parliament 仅在根 [dev-dependencies] 注册,
 # 未进入 [workspace.dependencies],沿用现有内部 crate path 引用约定(§4.1)
-parliament = { path = "../parliament" }
+parliament = { workspace = true }
 # L8 Parliament:StabilityGuard 降级链协同 ACB 治理器(Task 19 §19.9)
-acb-governor = { path = "../acb-governor" }
+acb-governor = { workspace = true }
 # L8 Parliament:StabilityGuard 降级链协同 DECB 治理器(Task 19 §19.9)
-decb-governor = { path = "../decb-governor" }
+decb-governor = { workspace = true }
 # L9 Quest(同层):StabilityGuard 与 efficiency-monitor 协同上报 Critical 事件(Task 19 §19.10)
-efficiency-monitor = { path = "../efficiency-monitor" }
+efficiency-monitor = { workspace = true }
 # L1 Core:ExpertConsultant 复用 model-router 选择专家旗舰模型(Task 18 §18.8)
 # WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定(§4.1,
 # 与 nexus-core/event-bus/hcw-window 等所有内部 crate 一致)
-model-router = { path = "../model-router" }
+model-router = { workspace = true }
 # L6 Router:ExpertConsultant 经 faae-router Function-as-Expert 语义路由(Task 18 §18.8)
 # WHY 用 path 而非 workspace=true:faae-router 未进入 [workspace.dependencies],
 # 沿用现有内部 crate path 引用约定(§4.1,与 parliament/acb-governor 一致)
-faae-router = { path = "../faae-router" }
+faae-router = { workspace = true }
 # L5 Knowledge:WikiRetriever 复用 repo-wiki FTS5 全文检索 + 内存 KNN(Task 18 §18.10)
 # WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定
-repo-wiki = { path = "../repo-wiki" }
+repo-wiki = { workspace = true }
 # L5 Knowledge:InvariantHealthReporter 复用 gsoe-evolution FormalVerifier M2 属性 #7
 # (InvariantClosureChecker)对 INV-7/8/9 检查结果做全系统传递闭包元验证(Phase 8.4)。
 # WHY L9→L5 向下依赖合规(§2.2):gsoe-evolution 不依赖 chimera-mas(见 invariants.rs
 # §P2-7 双实现说明),无循环依赖风险。
 # 另:shadow 模块复用 UnfreezeScope(R2 解冻范围 fail-closed 白名单,ADR-053
 # 备忘录 §五 B-4 "编排范围"职责)。
-gsoe-evolution = { path = "../gsoe-evolution" }
+gsoe-evolution = { workspace = true }
 # L7 Execution:shadow 模块消费 pvl-layer 的 Verification/ProcessScore 作为外部
 # 证据门 A/B 维证据源(ADR-053 备忘录 §五 B-5:chimera-mas 新增 pvl-layer 依赖
 # + AHIRT 门禁语义接线)。WHY L9→L7 向下依赖合规(§2.2,先例:gqep-executor)。
-pvl-layer = { path = "../pvl-layer" }
+pvl-layer = { workspace = true }
 # L4 Security:shadow 模块复用 ShadowModeCircuitBreaker(fail-closed 熔断,含 S-2.1
 # ResetAuthorization 问责凭证),不重实现熔断逻辑(ADR-053 备忘录 §五 B-4
 # "编排熔断"职责)。WHY L9→L4 向下依赖合规(§2.2,先例:qeep-protocol)。
-decay-engine = { path = "../decay-engine" }
+decay-engine = { workspace = true }
 # rand:shadow 模块 moving block bootstrap 重采样(ADR-053-rev3 决策 3A′-P:
 # L=3/B=10000/percentile 单侧);注入式固定种子保证测试可复现。
 rand = { workspace = true }
 # regex:MutualInquirer::create_safe_summary 正则脱敏(Task 18 §18.9,§5.5 ContextIsolation)
-# WHY 直接声明版本:workspace.dependencies 未收录 regex
-regex = "1"
+regex = { workspace = true }
 
 [dev-dependencies]
 # tokio 测试支持(完整 features + test-util 用于 pause/freezing 时间)
@@ -111,7 +108,9 @@ tempfile = { workspace = true }
 # tracing-test:测试中捕获 tracing 日志,用于验证 warn/error 日志输出
 tracing-test = { workspace = true }
 # criterion:基准测试框架,用于 mas_benchmark(SubTask 16.x,性能可证伪 §3.4.1 第 6 条)
-criterion = { workspace = true }
+# WHY async_tokio feature:mas_benchmark 使用 b.to_async() 异步基准模式,
+# 缺少此 feature 会导致 `b.to_async` 不可用,编译时报错 "method `to_async` not found"
+criterion = { workspace = true, features = ["async_tokio"] }
 
 # criterion 基准测试目标 — 对应 SubTask 16.x(Task 16 实现具体 bench 函数)
 # WHY harness = false:使用 criterion 自定义 main,而非默认 test harness

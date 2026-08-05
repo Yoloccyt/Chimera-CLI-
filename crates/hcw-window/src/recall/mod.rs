@@ -1,4 +1,4 @@
-//! HCW-Sparse v2.0 召回流水线 — 三级召回（粗召回 / 精排 / 重排填充）
+﻿//! HCW-Sparse v2.0 召回流水线 — 三级召回（粗召回 / 精排 / 重排填充）
 //!
 //! 对应架构层: L2 Memory
 //! 对应任务: P3-W9.1 ~ P3-W10.1（spec.md §P3 内环升级）
@@ -29,14 +29,24 @@ pub mod fine;
 pub mod rerank;
 pub mod streaming;
 pub mod types;
+// PROBE P0: 召回评测 harness（needle/position/multihop/report，feature `hcw-recall` 编译期门控，ADR-034 合规）
+// 与 v5.0 三级召回流水线（coarse/fine/rerank/streaming）职责正交：流水线是生产检索，
+// eval 是评测尺子（对给定选中块集计算 recall@tier / needle_recall@8 / position_bias / chain_success_rate）
+#[cfg(feature = "hcw-recall")]
+pub mod eval;
+// PROBE P3.2: 超窗兜底链（kvbsr→repo-wiki→hcw 两级检索）
+pub mod overwindow;
 
 // === 公开类型重导出（简化外部导入）===
 pub use coarse::{CoarseRecall, CoarseRecallBuilder};
-pub use fine::{FineRecall, FineRecallInput};
+// PROBE P1.2: 探针精排输入（独立新类型）
+pub use fine::{FineRecall, FineRecallInput, ProbeRecallInput};
 pub use rerank::{
     RerankFill, RerankFillConfig, RerankFillInput, RerankFillOutput, SparseAttentionPattern,
     WindowBudget, DEFAULT_BLOCK_TOKENS,
 };
+// PROBE P1.3: 三区填充配置与输入（独立新类型）
+pub use rerank::{ZoneFillConfig, ZoneFillInput};
 pub use streaming::{
     StreamingFill, StreamingFillConfig, StreamingFillInput, StreamingFillOutput, StreamingMode,
     DEEP_CRITICAL_RATIO, DEEP_FIRST_TOKEN_TARGET_MS, FAST_CRITICAL_RATIO,

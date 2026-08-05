@@ -33,6 +33,7 @@ use crate::l0_working::WorkingMemory;
 use crate::l1_episodic::EpisodicMemory;
 use crate::l2_semantic::SemanticMemory;
 use crate::l3_procedural::ProceduralMemory;
+use crate::mem_con::{MemConConfig, MemConController};
 use crate::memory_strategy_learner::MemoryStrategyLearnerHolder;
 use crate::types::{MemoryEntry, MemoryId, MemoryTier, ProceduralEntry};
 
@@ -84,6 +85,16 @@ pub struct MlcEngine {
     /// 注入学习策略;recall 路径通过 `recall_by_clv_with_strategy()` 或
     /// `recall_by_clv_with_current_policy()` 使用策略参数。
     memory_strategy_holder: MemoryStrategyLearnerHolder,
+
+    /// P2-8 MemCon 自适应控制器 — 幽灵记忆检测与策略自适应调整
+    ///
+    /// 通过滑动窗口跟踪最近 N 次召回结果,检测幽灵记忆模式并动态调整记忆策略。
+    /// 初始化为 `MemConConfig::default()`(启用状态),可通过 `mem_con()` 访问。
+    ///
+    /// # 使用方式
+    /// 调用方在每次 recall 后,通过 `engine.mem_con().on_recall(is_ghost)`
+    /// 记录召回结果,MemCon 控制器自动检测幽灵率并在超过阈值时调整策略。
+    mem_con_controller: crate::mem_con::MemConController,
 }
 
 impl MlcEngine {
@@ -107,6 +118,9 @@ impl MlcEngine {
         }
         let l3 = ProceduralMemory::open(&db_path)?;
 
+        let mem_con_controller =
+            MemConController::new(MemConConfig::default(), Some(event_bus.clone()));
+
         Ok(Self {
             l0: WorkingMemory::new(config.l0_capacity),
             l1: EpisodicMemory::new(config.l1_capacity),
@@ -120,6 +134,8 @@ impl MlcEngine {
             migration_locks: DashMap::new(),
             // P4-W14.1: 初始化为 Static(StandardTopK) fallback(C4 合规)
             memory_strategy_holder: MemoryStrategyLearnerHolder::default(),
+            // P2-8: MemCon 自适应控制器(默认启用,连接 EventBus 用于事件发布)
+            mem_con_controller,
         })
     }
 
@@ -134,6 +150,9 @@ impl MlcEngine {
     pub fn new_in_memory(event_bus: EventBus) -> Result<Self, MlcError> {
         let config = MlcConfig::default();
         let l3 = ProceduralMemory::open_in_memory()?;
+        let mem_con_controller =
+            MemConController::new(MemConConfig::default(), Some(event_bus.clone()));
+
         Ok(Self {
             l0: WorkingMemory::new(config.l0_capacity),
             l1: EpisodicMemory::new(config.l1_capacity),
@@ -147,6 +166,8 @@ impl MlcEngine {
             migration_locks: DashMap::new(),
             // P4-W14.1: 初始化为 Static(StandardTopK) fallback(C4 合规)
             memory_strategy_holder: MemoryStrategyLearnerHolder::default(),
+            // P2-8: MemCon 自适应控制器(默认启用,连接 EventBus 用于事件发布)
+            mem_con_controller,
         })
     }
 
@@ -157,6 +178,9 @@ impl MlcEngine {
     ) -> Result<Self, MlcError> {
         config.validate()?;
         let l3 = ProceduralMemory::open_in_memory()?;
+        let mem_con_controller =
+            MemConController::new(MemConConfig::default(), Some(event_bus.clone()));
+
         Ok(Self {
             l0: WorkingMemory::new(config.l0_capacity),
             l1: EpisodicMemory::new(config.l1_capacity),
@@ -170,6 +194,8 @@ impl MlcEngine {
             migration_locks: DashMap::new(),
             // P4-W14.1: 初始化为 Static(StandardTopK) fallback(C4 合规)
             memory_strategy_holder: MemoryStrategyLearnerHolder::default(),
+            // P2-8: MemCon 自适应控制器(默认启用,连接 EventBus 用于事件发布)
+            mem_con_controller,
         })
     }
 
@@ -196,6 +222,31 @@ impl MlcEngine {
     /// 获取 L3 程序记忆引用
     pub fn l3(&self) -> &ProceduralMemory {
         &self.l3
+    }
+
+    /// P2-8:获取 MemCon 自适应控制器引用
+    ///
+    /// 调用方在每次 recall 后,通过 `engine.mem_con().on_recall(is_ghost)`
+    /// 记录召回结果,MemCon 控制器自动检测幽灵率并在超过阈值时调整策略。
+    ///
+    /// # 示例
+    /// ```no_run
+    /// # use mlc_engine::{MlcEngine, MemoryEntry, MemoryTier};
+    /// # use event_bus::EventBus;
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let bus = EventBus::new();
+    /// let engine = MlcEngine::new_in_memory(bus)?;
+    ///
+    /// // 执行 recall 后,记录是否为幽灵记忆
+    /// if let Some(entry) = engine.recall("some-id").await? {
+    ///     let is_ghost = /* 调用方逻辑判断是否为幽灵记忆 */ false;
+    ///     engine.mem_con().on_recall(is_ghost);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn mem_con(&self) -> &crate::mem_con::MemConController {
+        &self.mem_con_controller
     }
 
     /// 存储记忆条目(根据 entry.tier 自动路由到对应层级)

@@ -161,6 +161,10 @@ jobs:
     timeout-minutes: 30  # WHY: workspace 全量测试典型 5-12min,30min 兜底防卡死
     # WHY: 仅 tag 推送时触发测试,避免 workflow_dispatch 调试时重复跑全量测试
     if: startsWith(github.ref, 'refs/tags/v')
+    # WHY: sccache 加速发布前全量测试编译(与 ci.yml check job 共享缓存)
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_CACHE: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -172,6 +176,10 @@ jobs:
             target
           key: linux-test-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: linux-test-cargo-
+      - name: Setup sccache
+        uses: mozilla/sccache-action@v0
+      # WHY: 保持全量验证语义 —— 含 doc-tests 与 backpressure 60s spec 验收
+      # (不设 CHIMERA_BACKPRESSURE_SECS,缺省 60s),发布前完整性不降级。
       - name: Run workspace tests
         run: cargo test --workspace
 

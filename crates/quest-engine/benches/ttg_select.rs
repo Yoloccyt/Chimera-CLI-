@@ -8,7 +8,7 @@
 //! ```
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use decb_governor::BudgetTier;
+use nexus_contracts::BudgetTier;
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use quest_engine::{TtgConfig, TtgGovernor};
 

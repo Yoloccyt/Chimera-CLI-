@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "omega-learner"
 version.workspace = true
 edition.workspace = true
@@ -7,11 +7,11 @@ edition.workspace = true
 # L0 Contracts:共享类型(SelectorPolicy / SelectorWeights / TemporalMeta 等,ADR-033)
 # WHY 排在首位:omega-learner 输出 SelectorPolicy::Learned 给 hcw-window selector,
 # 复用 nexus-contracts 的契约类型,避免类型分裂(§4.1:库层避免 Box<dyn Trait>)
-nexus-contracts = { path = "../nexus-contracts" }
+nexus-contracts = { workspace = true }
 # L1 Core:EventBus 跨层通信,订阅 AgentTaskCompleted/Failed/CheckpointSaved 作为奖励信号
 # WHY 合规:omega-learner 位于 L6,event-bus 位于 L1,L6 → L1 向下依赖允许(§2.2 依赖铁律)
 # 学习器只异步订阅反馈事件,不在推理关键路径同步调用(spec.md §7.3 "learner 只异步下发策略")
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # ndarray:LinUCB 算法核心矩阵运算(A_a d×d 矩阵 + b_a d 向量 + θ_a 计算)
 # WHY workspace 已声明:mlc-engine/osa-coordinator 等同层 crate 使用,LinUCB 与 CLV 共享同一线性代数栈
 ndarray = { workspace = true }
@@ -76,4 +76,9 @@ harness = false
 # 超过 ~40 臂典型场景,压力测试确保性能红线合规。
 [[bench]]
 name = "s9_bench"
+harness = false
+
+# PROBE P2.3: S4 29 臂探针配比选择基准（select p99 < 50μs 红线）
+[[bench]]
+name = "s4_select"
 harness = false

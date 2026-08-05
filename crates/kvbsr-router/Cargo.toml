@@ -6,11 +6,11 @@ edition.workspace = true
 [dependencies]
 # L0 Contracts:ToolId 共享类型(ADR-033,从本地 id_newtype! 宏切换为 L0 统一类型)
 # WHY:消除与 osa-coordinator/faae-router 的 ToolId 类型分裂(星型耦合消解)
-nexus-contracts = { path = "../nexus-contracts" }
+nexus-contracts = { workspace = true }
 # L1 Core:CLV 类型(512 维向量,余弦相似度计算)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # L1 Core:EventBus 跨层通信,发布 ToolsRouted/BlocksRebalanced 事件
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # 向量运算:CLV 内部基于 ndarray,本 crate 通过 clv.as_slice() 获取 &[f32],
 # 保留 ndarray 依赖以备未来性能优化(如改用 ndarray 向量运算替代手写循环)
 ndarray = { workspace = true }

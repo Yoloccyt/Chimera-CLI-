@@ -155,7 +155,39 @@ impl WindowTier {
             },
         }
     }
+
+    // === PROBE P3.1: 有效窗口折减（装窗/检索分流判定）===
+
+    /// 有效窗口折减 — 模型宣称窗口 × 60%
+    ///
+    /// # 参数
+    /// - `model_claimed`: 模型宣称的上下文窗口（token，如 1M）
+    ///
+    /// # 返回
+    /// `model_claimed × EFFECTIVE_FOLD_FACTOR`（f32 中间值防溢出——
+    /// u64/usize 大数百分比必须用 f32 中间值，红线 §4.3）
+    ///
+    /// # 语义（P3 设计：结构兜底）
+    /// 只影响**装窗/检索分流判定**：语料 > 有效窗口 → 走 P3.2 两级检索
+    /// 兜底链（kvbsr 候选 → repo-wiki 精排 → 三区装窗）；
+    /// **L3 实际加载语义零变化**（加载仍由 `effective_capacity` 决定）。
+    ///
+    /// 与 `effective_capacity_for` 正交叠加取 min：
+    /// `min(effective_capacity_for(tier, sparsity), effective_fold(claimed))`
+    /// ——折减是模型侧上限（宣称不可全信），稀疏度是系统侧上限（OSA 预算），
+    /// 两者语义正交，取 min 即最保守可用窗口。
+    pub fn effective_fold(model_claimed: usize) -> usize {
+        ((model_claimed as f32) * EFFECTIVE_FOLD_FACTOR) as usize
+    }
 }
+
+// === PROBE P3.1: 有效窗口折减常量 ===
+
+/// 有效窗口折减系数（PROBE P3.1）— 模型宣称窗口 × 60%
+///
+/// WHY 60%: 宣称窗口含系统/格式/推理预留，实际可用约 6 成
+/// （设计文档 §2.5 P3.1：宣称×60%，保守结构兜底）
+pub const EFFECTIVE_FOLD_FACTOR: f32 = 0.6;
 
 /// 上下文条目 — HCW 管理的最小单元
 ///
@@ -272,7 +304,7 @@ impl ContextEntry {
 ///   桥接字段。listener 收到 `OmniSparseMasksComputed` 事件后将 `context_mask` 存入此字段,
 ///   随后由 listener(立即)或 insert/select_window(惰性兜底)调用 `apply_sparse_mask` 消费。
 ///   WHY 用 Option:事件未携带 context_mask 时为 None,避免空 Vec 误触发稀疏化
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HcwState {
     /// 当前窗口层级
     pub current_tier: WindowTier,
@@ -301,6 +333,33 @@ pub struct HcwState {
     /// 随后由 `apply_pending_mask` 消费(取走并设为 None)。
     /// 取走而非读取:确保同一掩码仅应用一次,避免重复稀疏化
     pub pending_context_mask: Option<Vec<String>>,
+    // === PROBE P1.5: repr_clv 写时预计算缓存 ===
+    /// Block ID → 块代表向量(CLV)缓存 — 写入即缓存,查询期零嵌入计算
+    ///
+    /// WHY(设计文档 §4.2.4): 打分从 O(语料×嵌入) 降为 O(语料×512 维点积)。
+    /// - `#[serde(skip)]`: 缓存是运行时派生数据,反序列化后为空可惰性重建,
+    ///   避免 Arc<CLV> 序列化冗余与 PartialEq 派生含缓存导致相等性误判
+    /// - `Arc<CLV>` 共享: 256 块 ≈512KB / L3 5000 块 ≈10MB,引用计数防复制放大
+    /// - 失效策略: 任何 entries 结构性变更调用 [`HcwState::invalidate_repr_clv_cache`]
+    ///   (保守全清,避免逐点失效遗漏——R9 缓存一致性红线)
+    #[serde(skip)]
+    pub repr_clv_cache: HashMap<String, Arc<CLV>>,
+}
+
+impl PartialEq for HcwState {
+    /// 手动实现 PartialEq — 忽略 `repr_clv_cache`（运行时派生冗余）
+    ///
+    /// WHY 不派生: derive 会把缓存字段纳入相等性判定,两个 entries 相同但
+    /// 缓存状态不同的 state 会被误判不等（如反序列化后缓存为空 vs 热路径缓存全）;
+    /// 忽略缓存后与 P1.5 之前的派生行为完全一致（既有测试零回归）
+    fn eq(&self, other: &Self) -> bool {
+        self.current_tier == other.current_tier
+            && self.entries == other.entries
+            && self.entries_index == other.entries_index
+            && self.last_mask_hash == other.last_mask_hash
+            && self.last_sparsity == other.last_sparsity
+            && self.pending_context_mask == other.pending_context_mask
+    }
 }
 
 impl HcwState {
@@ -314,7 +373,43 @@ impl HcwState {
             last_mask_hash: None,
             last_sparsity: None,
             pending_context_mask: None,
+            // PROBE P1.5: 空缓存初始化
+            repr_clv_cache: HashMap::new(),
         }
+    }
+
+    /// 使 repr_clv 缓存整体失效（entries 结构性变更后调用，保守全清）
+    ///
+    /// WHY 全清而非逐点失效: entries 变更点分散（remove/retain/compress/掩码应用），
+    /// 逐点维护易遗漏导致陈旧向量污染打分（R9）；缓存重建成本 O(N) 点积,
+    /// 惰性重算不阻塞装窗（速度红线）,全清是正确性优先的保守策略
+    pub fn invalidate_repr_clv_cache(&mut self) {
+        self.repr_clv_cache.clear();
+    }
+
+    /// 更新单条 repr_clv 缓存（insert/更新路径调用）
+    ///
+    /// # 参数
+    /// - `id`: 条目 ID
+    /// - `clv`: 条目 CLV（`None` 时移除缓存——无向量条目不缓存）
+    pub fn update_repr_clv_cache(&mut self, id: &str, clv: Option<&CLV>) {
+        match clv {
+            Some(v) => {
+                self.repr_clv_cache
+                    .insert(id.to_string(), Arc::new(v.clone()));
+            }
+            None => {
+                self.repr_clv_cache.remove(id);
+            }
+        }
+    }
+
+    /// 读取 repr_clv 缓存（查询路径，O(1)）
+    ///
+    /// # 返回
+    /// 缓存命中时返回 CLV 引用；miss 返回 None（调用方走惰性重算）
+    pub fn repr_clv(&self, id: &str) -> Option<&CLV> {
+        self.repr_clv_cache.get(id).map(|v| v.as_ref())
     }
 
     /// 计算所有条目的总 Token 大小
@@ -344,8 +439,12 @@ impl HcwState {
     /// 能通过 `Arc::clone` 以 O(1) 引用计数共享条目,避免热路径深拷贝。
     pub fn push_entry(&mut self, entry: ContextEntry) {
         let idx = self.entries.len();
-        self.entries_index.insert(entry.id.clone(), idx);
+        // PROBE P1.5: 写入即缓存（entry 有 CLV 时；None 时移除旧缓存）
+        let entry_clv = entry.clv.clone();
+        let id = entry.id.clone();
+        self.entries_index.insert(id.clone(), idx);
         self.entries.push(Arc::new(entry));
+        self.update_repr_clv_cache(&id, entry_clv.as_ref());
     }
 
     /// 按 ID 查找条目(只读)— O(1) HashMap 索引查找
@@ -416,6 +515,8 @@ impl HcwState {
             let moved_id = self.entries[pos].id.clone();
             self.entries_index.insert(moved_id, pos);
         }
+        // PROBE P1.5: 删除条目后失效其缓存（保守移除单条）
+        self.repr_clv_cache.remove(id);
         Some(removed)
     }
 
@@ -439,6 +540,8 @@ impl HcwState {
         let removed = original_count - self.entries.len();
         // SubTask 19.5:retain 后索引失效,全量重建
         self.rebuild_index();
+        // PROBE P1.5: 结构性变更后保守全清缓存（R9 一致性红线）
+        self.invalidate_repr_clv_cache();
         removed
     }
 }
@@ -539,6 +642,93 @@ pub struct HcwConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 构造带 CLV 的条目（SplitMix64 确定性，非零）
+    fn entry_with_clv(id: &str, seed: u64) -> ContextEntry {
+        let v: Vec<f32> = (0..512)
+            .map(|j| {
+                let mut z = seed.wrapping_add((j as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^= z >> 31;
+                ((z >> 11) as f32) / (1u64 << 53) as f32 * 2.0 - 1.0
+            })
+            .collect();
+        let clv = CLV::from_vec(v).expect("512 dims");
+        ContextEntry::new(id, id, format!("content-{id}"), 100).with_clv(clv)
+    }
+
+    // ============================================================
+    // PROBE P1.5: repr_clv 缓存测试
+    // ============================================================
+
+    #[test]
+    fn test_push_entry_caches_clv() {
+        // 写入即缓存：带 CLV 的条目 push 后缓存命中
+        let mut state = HcwState::new(WindowTier::L0);
+        state.push_entry(entry_with_clv("a", 1));
+        assert!(state.repr_clv("a").is_some(), "带 CLV 条目应写入缓存");
+        // 缓存值 = 条目 CLV
+        assert_eq!(
+            state.repr_clv("a"),
+            state.get("a").and_then(|e| e.clv.as_ref())
+        );
+    }
+
+    #[test]
+    fn test_push_entry_without_clv_not_cached() {
+        // 无 CLV 条目不缓存（中性值路径）
+        let mut state = HcwState::new(WindowTier::L0);
+        state.push_entry(ContextEntry::new("b", "b", "content-b", 100));
+        assert!(state.repr_clv("b").is_none(), "无 CLV 条目不应缓存");
+    }
+
+    #[test]
+    fn test_remove_invalidates_cache() {
+        // 删除条目后缓存失效（单条移除）
+        let mut state = HcwState::new(WindowTier::L0);
+        state.push_entry(entry_with_clv("a", 1));
+        state.push_entry(entry_with_clv("c", 2));
+        assert!(state.repr_clv("a").is_some());
+        let removed = state.remove("a");
+        assert!(removed.is_some());
+        assert!(state.repr_clv("a").is_none(), "remove 后缓存应失效");
+        // 未删除条目缓存保留
+        assert!(state.repr_clv("c").is_some());
+    }
+
+    #[test]
+    fn test_retain_invalidates_all_cache() {
+        // 结构性变更（retain）后保守全清
+        let mut state = HcwState::new(WindowTier::L0);
+        state.push_entry(entry_with_clv("a", 1));
+        state.push_entry(entry_with_clv("c", 2));
+        state.retain_by_file_ids(&["c".to_string()]);
+        assert!(state.repr_clv("a").is_none(), "retain 后缓存应全清");
+        assert!(
+            state.repr_clv("c").is_none(),
+            "retain 后缓存应全清（惰性重建）"
+        );
+        // entries 正确保留
+        assert_eq!(state.entries.len(), 1);
+        assert_eq!(state.entries[0].id, "c");
+    }
+
+    #[test]
+    fn test_partial_eq_ignores_cache() {
+        // 手动 PartialEq 忽略缓存：同 entries 不同缓存状态相等
+        let mut s1 = HcwState::new(WindowTier::L0);
+        let mut s2 = HcwState::new(WindowTier::L0);
+        // 共享同一 entry 构造（时间戳一致，entries 才能相等）
+        let e = entry_with_clv("a", 1);
+        s1.push_entry(e.clone());
+        s2.push_entry(e);
+        // s2 缓存手动清除（模拟反序列化后空缓存）
+        s2.invalidate_repr_clv_cache();
+        assert!(s1.repr_clv("a").is_some());
+        assert!(s2.repr_clv("a").is_none());
+        assert_eq!(s1, s2, "缓存状态不应影响 HcwState 相等性");
+    }
 
     #[test]
     fn test_window_tier_as_str() {

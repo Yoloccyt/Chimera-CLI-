@@ -5,9 +5,9 @@ edition.workspace = true
 
 [dependencies]
 # L1 Core:EventBus 跨层通信,发布 CapabilityTiered 事件(Week 3 Task 6 新增)
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # L1 Core:nexus-core(SubTask 21.2 — 共享 sqlite_pragma 模块,消除 PRAGMA 重复实现)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # Warm/Cold 层 SQLite 持久化(WAL 模式与附加数据库,避免新依赖)
 rusqlite = { workspace = true }
 # Hot 层线程安全分片锁(支持并发读写)

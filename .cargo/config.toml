@@ -19,3 +19,28 @@ incremental = false
 # 不设置时 FTS5 不可用,repo-wiki 自动降级到 LIKE 全表扫描(降级策略见 fts.rs)。
 [env]
 SQLITE_ENABLE_FTS5 = "1"
+
+# ============================================================
+# 编译阶段优化(Task 3):test profile 加速
+#
+# WHY:测试编译占 CI 总时长大头(303 test target)。默认 test profile 继承 dev
+# (opt-level=0 已是默认),但 debug=2 全量调试信息 + codegen-units=256 默认值
+# 仍拖慢编译。显式收紧:
+# - opt-level = 0:跳过优化(最快编译),与默认一致,显式声明防 toolchain 默认变更
+# - codegen-units = 16:最大化并行度(default dev=256 已是并行,16 平衡并行/优化)
+# - debug = 0:跳过调试符号生成(test 二进制无需 gdb/lldb 调试,符号生成耗 IO/CPU)
+# 注:此为 config 级 profile 覆盖(见 Cargo reference config.html [profile.<name>]),
+# 优先级高于 Cargo.toml 中的同名 profile,仅影响 test profile,不触碰 release/bench。
+# ============================================================
+[profile.test]
+opt-level = 0
+codegen-units = 16
+debug = 0
+
+# WHY:build-override 应用到 build script 与 proc-macro 编译。
+# 默认 build script 继承 host profile(dev),debug=2 全量符号拖慢编译。
+# 显式 debug=0 + opt-level=0 加速 build script/proc-macro 编译,
+# 对 303 test target 的依赖树(build script 数百个)累计收益显著。
+[profile.test.build-override]
+opt-level = 0
+debug = 0

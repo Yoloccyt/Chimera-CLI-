@@ -19,36 +19,36 @@ v3-engine = []
 
 [dependencies]
 # L10 Interface → L1 Core(向下依赖,event-bus 是唯一跨层通道,§2.2 依赖铁律)
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # nexus-core 为 L1 Core 共享领域类型(Quest/Task 等),L10 向下依赖允许
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # Task 3.2: L10 → L2 向下依赖,SelfAssessmentPanel 调用 current_memory_stage()
 # 显示记忆策略阶段(MLC 四级记忆引擎全局快照)
-mlc-engine = { path = "../mlc-engine" }
+mlc-engine = { workspace = true }
 # Task 3.3: L10 → L3 向下依赖,MemoryPanel 调用 tier_distribution()
 # 显示四层存储分布(热/温/冷/冰)
-cmt-tiering = { path = "../cmt-tiering" }
+cmt-tiering = { workspace = true }
 # Task 3.4: L10 → L4 向下依赖,DecayPanel 调用 shadow_breaker_status()
 # 显示影子模式熔断开关状态(TokenBurn/MemoryFreeze/NetworkIsolate)
-decay-engine = { path = "../decay-engine" }
+decay-engine = { workspace = true }
 # Task 3.5: L10 → L5 向下依赖,DagVizPanel 调用 spec_dag_snapshot()
 # 显示谱系 DAG 节点/边计数(规范版本演化图)
-gsoe-evolution = { path = "../gsoe-evolution" }
+gsoe-evolution = { workspace = true }
 # Task 3.6: L10 → L6 向下依赖,OsaSparsePanel 调用 five_dimension_masks()
 # 显示五维稀疏掩码状态(OSA Ω-Sparse 定律可视化)
-osa-coordinator = { path = "../osa-coordinator" }
+osa-coordinator = { workspace = true }
 # Task 3.7: L10 → L7 向下依赖,MetricsDashboard 调用 timeout_stats()
 # 显示 GQEP 双层超时防护统计(单操作超时 + 全局超时)
-gqep-executor = { path = "../gqep-executor" }
+gqep-executor = { workspace = true }
 # Task 3.7: L10 → L7 向下依赖,PvlScorePanel 调用 pvl_score()
 # 显示 PVL 九维度过程评分(快手 KAT,ADR-049)
-pvl-layer = { path = "../pvl-layer" }
+pvl-layer = { workspace = true }
 # Task 3.9: L10 → L9 向下依赖,TaskManagerPanel 调用 quadrant_status()
 # 显示四象限稳定分工 + WSJF 调度(ADR-027)
-chimera-mas = { path = "../chimera-mas" }
+chimera-mas = { workspace = true }
 # Task 3.8: L10 → L8 向下依赖,ParliamentPanel 调用 immune_system_status()
 # 显示三探针免疫系统状态(ADR-046)
-parliament = { path = "../parliament" }
+parliament = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -64,7 +64,7 @@ chrono = { workspace = true }
 # MessagePack 编码/解码,用于事件详情弹窗(P3.1)
 rmp-serde = { workspace = true }
 # 系统资源指标采集(CPU/内存/磁盘/网络)
-sysinfo = "0.32"
+sysinfo = { workspace = true }
 # TUI 渲染与终端 IO
 ratatui = { workspace = true }
 crossterm = { workspace = true }

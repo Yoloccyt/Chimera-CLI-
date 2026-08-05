@@ -28,6 +28,7 @@ use std::time::Duration;
 
 use chimera_tui::data::QuestSync;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use nexus_contracts::scaled_timeout;
 use nexus_core::{MultimodalInput, UserIntent};
 use quest_engine::{spawn_control_subscriber, QuestEngine};
 
@@ -47,11 +48,13 @@ fn make_intent(intent_id: &str, text: &str) -> UserIntent {
 /// 用 50ms 超时轮询避免永久阻塞,2 秒总超时防止测试挂起。
 /// 匹配到目标事件立即返回 true,非目标事件继续轮询(broadcast 下所有
 /// subscriber 都会收到所有事件,需要用 predicate 过滤)。
+///
+/// P9-T2: 总 deadline 2s 改为 `scaled_timeout!(2)`,CI fast 档 scale=0.1 → 0.2s。
 async fn wait_for_event(
     rx: &mut event_bus::EventReceiver,
     predicate: impl Fn(&NexusEvent) -> bool,
 ) -> bool {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + scaled_timeout!(2);
     while tokio::time::Instant::now() < deadline {
         match rx.recv_timeout(Duration::from_millis(50)).await {
             Ok(event) => {

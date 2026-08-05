@@ -98,71 +98,20 @@ impl EscalationTier {
 
 /// 攻击类型 — 对应 6 种需拦截的攻击向量(对齐验收标准)。
 ///
-/// 每个变体对应一类尸检教训:
-/// - `Injection`:Claude CVE-2026-35022 命令注入($(...)、|、;、&&)
-/// - `PrivilegeEscalation`:sudo/su/chmod 提权
-/// - `DataLeak`:SECRET/PASSWORD/敏感文件泄露
-/// - `SandboxEscape`:路径遍历(../)、/proc//sys 逃逸
-/// - `Tamper`:审计链/日志篡改
-/// - `Abuse`:未授权命令(白名单外)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum AttackType {
-    /// 命令注入:shell 插值、管道、分隔符
-    Injection,
-    /// 权限提升:sudo/su/chmod
-    PrivilegeEscalation,
-    /// 数据泄露:SECRET/敏感文件
-    DataLeak,
-    /// 沙箱逃逸:路径遍历、系统目录
-    SandboxEscape,
-    /// 审计篡改:日志删除、链损坏
-    Tamper,
-    /// 滥用:未授权命令
-    Abuse,
-}
+/// ⚠️ ADR-054 决策 3(P9-T4):权威定义已上提至 L0
+/// `nexus_contracts::command_validation`,此处 re-export 保兼容
+/// (对外 API 零破坏,`seccore::types::AttackType` 路径不变)。
+pub use nexus_contracts::command_validation::AttackType;
 
 /// 原始命令 — 用户或上层提交的待执行命令。
 ///
 /// 零信任模型下,此结构的内容**不可信**,必须经 `policy::validate_command`
 /// 与 `policy::validate_env` 校验后才能进入沙箱执行层。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Command {
-    /// 可执行程序名(如 "echo"、"ls")
-    pub program: String,
-    /// 命令参数列表(已拆分,禁止 shell 二次解析)
-    pub args: Vec<String>,
-    /// 环境变量映射(用户显式设置,非继承)
-    pub env: HashMap<String, String>,
-}
-
-impl Command {
-    /// 创建新命令,仅指定程序名。
-    pub fn new(program: impl Into<String>) -> Self {
-        Self {
-            program: program.into(),
-            args: Vec::new(),
-            env: HashMap::new(),
-        }
-    }
-
-    /// 链式添加单个参数。
-    pub fn arg(mut self, arg: impl Into<String>) -> Self {
-        self.args.push(arg.into());
-        self
-    }
-
-    /// 链式添加多个参数。
-    pub fn args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.args.extend(args.into_iter().map(Into::into));
-        self
-    }
-
-    /// 链式设置环境变量。
-    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env.insert(key.into(), value.into());
-        self
-    }
-}
+///
+/// ⚠️ ADR-054 决策 3(P9-T4):权威定义已上提至 L0
+/// `nexus_contracts::command_validation`,此处 re-export 保兼容
+/// (对外 API 零破坏,`seccore::types::Command` 路径不变)。
+pub use nexus_contracts::command_validation::Command;
 
 /// 命令规格 — 经策略校验后的安全命令表示。
 ///
@@ -216,7 +165,7 @@ pub struct ExecutionResult {
 /// 非 Linux 平台自动降级为进程隔离(参考 `Sandbox` 文档注释)。
 ///
 /// 对应 ADR-001:沙箱运行时选择 gVisor,Linux 优先。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GvisorConfig {
     /// runsc 二进制路径(默认 "/usr/local/bin/runsc")
     pub runsc_path: String,
@@ -227,6 +176,16 @@ pub struct GvisorConfig {
     pub network_disabled: bool,
     /// 平台限制:仅 Linux 可用(预留字段,用于运行时平台检测)
     pub platform: String,
+    /// OCI bundle 根目录路径（默认: None，使用临时目录）
+    ///
+    /// 设置此字段后，OCI bundle 将在指定目录下创建而非临时目录。
+    /// 主要用于测试和调试场景。
+    pub bundle_dir: Option<String>,
+    /// rootfs 路径（默认: None，使用 "/tmp/chimera-rootfs" 作为最小 rootfs）
+    ///
+    /// 指向包含 Linux 最小文件系统的目录（如 busybox 根文件系统）。
+    /// 当为 None 时，使用预设的最小 rootfs 路径。
+    pub rootfs_path: Option<String>,
 }
 
 impl Default for GvisorConfig {
@@ -236,6 +195,47 @@ impl Default for GvisorConfig {
             sandbox_name_prefix: "chimera".into(),
             network_disabled: true,
             platform: "linux".into(),
+            bundle_dir: None,
+            rootfs_path: None,
         }
+    }
+}
+
+impl GvisorConfig {
+    /// 获取生效的 bundle 目录路径
+    ///
+    /// 如果 `bundle_dir` 为 None，返回临时目录路径（`std::env::temp_dir()` + "chimera-bundles"）。
+    pub fn effective_bundle_dir(&self) -> std::path::PathBuf {
+        self.bundle_dir
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("chimera-bundles"))
+    }
+
+    /// 获取生效的 rootfs 路径
+    ///
+    /// 如果 `rootfs_path` 为 None，返回 "/tmp/chimera-rootfs"。
+    /// 注意：此路径仅用于 runsc 的 OCI bundle 配置，不保证文件系统存在。
+    pub fn effective_rootfs(&self) -> std::path::PathBuf {
+        self.rootfs_path
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/chimera-rootfs"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gvisor_config_default() {
+        let config = GvisorConfig::default();
+        assert_eq!(config.runsc_path, "/usr/local/bin/runsc");
+        assert_eq!(config.sandbox_name_prefix, "chimera");
+        assert!(config.network_disabled);
+        assert_eq!(config.platform, "linux");
+        assert!(config.bundle_dir.is_none(), "bundle_dir 默认为 None");
+        assert!(config.rootfs_path.is_none(), "rootfs_path 默认为 None");
     }
 }

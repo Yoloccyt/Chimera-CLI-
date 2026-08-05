@@ -87,6 +87,16 @@ pub struct DataSnapshot {
     pub osa_sparsity_history: Vec<u64>,
     /// CLV 摘要(None = 未收到事件)
     pub clv_summary: Option<event_bus::ClvSummary>,
+    // === PROBE P0.4:HCW 召回读数(由 HcwRecallReported 事件同步) ===
+    /// 多针召回率 needle_recall@8 ∈ [0,1]
+    #[serde(default)]
+    pub recall_needle_at_8: Option<f32>,
+    /// 位置偏置比 ∈ [0,1]
+    #[serde(default)]
+    pub recall_position_bias: Option<f32>,
+    /// 链路成功率 ∈ [0,1]
+    #[serde(default)]
+    pub recall_chain_success: Option<f32>,
     // === P8 ResourceMonitor 面板新增字段 ===
     /// 系统资源指标(由 SysMetricsCollector 采集)
     pub sys_metrics: crate::types::SystemMetrics,

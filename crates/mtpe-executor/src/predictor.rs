@@ -8,6 +8,7 @@
 //! - N ∈ [1, 10],N=1 退化为单步预测(基准),N=10 为上限
 //! - Week 4 占位实现:基于上下文哈希的伪预测,验证架构
 //! - Week 6 NMC 实现后接入真实模型
+//! - P2-10:集成 NMC 编码器,模型可用时使用真实预测,否则降级伪预测
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -16,8 +17,11 @@ use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tokio::sync::RwLock;
 use tracing::debug;
 
+use nmc_encoder::Perceptor;
+
 use crate::config::MtpeConfig;
 use crate::error::MtpeError;
+use crate::model::MtpeModel;
 use crate::types::{PredictionContext, PredictionResult, PredictionStats, Token};
 
 /// 模拟推理启动开销 — 每次 predict 调用的固定延迟
@@ -41,6 +45,7 @@ const SIMULATED_INFERENCE_DELAY: Duration = Duration::from_micros(50);
 /// - `event_bus`:事件总线,发布 `PredictionMade`/`PredictionStatsReported` 事件
 /// - `stats`:按 N 值分组的成功率统计,读写锁保护
 /// - `prediction_count`:预测计数器,每 100 次触发统计事件发布
+/// - `model`:可选的 NMC 模型,模型可用时提供真实预测,否则降级伪预测
 pub struct MtpeExecutor {
     /// 执行器配置
     config: MtpeConfig,
@@ -50,6 +55,8 @@ pub struct MtpeExecutor {
     stats: RwLock<PredictionStats>,
     /// 预测计数器(用于触发周期性统计事件)
     prediction_count: AtomicU64,
+    /// 可选的 NMC ONNX 模型(模型加载失败时降级伪预测)
+    model: Option<MtpeModel>,
 }
 
 /// 上下文哈希的稳定种子 — 用于伪预测生成确定性 token
@@ -58,13 +65,51 @@ pub struct MtpeExecutor {
 const CONTEXT_HASH_SEED: u32 = 0x4D54_5045; // "MTPE" 的 ASCII
 
 impl MtpeExecutor {
-    /// 创建 MTPE 执行器
+    /// 创建 MTPE 执行器(无模型,使用伪预测)
+    ///
+    /// 向后兼容:保持与现有代码一致的 API 签名。
+    /// 如需启用模型预测,请使用 `with_model` 方法设置。
     pub fn new(config: MtpeConfig, event_bus: EventBus) -> Self {
         Self {
             config,
             event_bus,
             stats: RwLock::new(PredictionStats::new()),
             prediction_count: AtomicU64::new(0),
+            model: None,
+        }
+    }
+
+    /// 创建 MTPE 执行器并附加 NMC 模型
+    ///
+    /// # 参数
+    /// - `config`:执行器配置
+    /// - `event_bus`:事件总线
+    /// - `model`:NMC ONNX 模型(模型不存在或加载失败时自动降级伪预测)
+    ///
+    /// # 示例
+    /// ```no_run
+    /// use mtpe_executor::{MtpeExecutor, MtpeConfig, MtpeModel};
+    /// use event_bus::EventBus;
+    /// use std::path::PathBuf;
+    ///
+    /// # async fn run() {
+    /// let bus = EventBus::new();
+    /// let model = MtpeModel::new(PathBuf::from("/path/to/model.onnx"));
+    /// let executor = MtpeExecutor::with_model(MtpeConfig::default(), bus, model);
+    /// # }
+    /// ```
+    pub fn with_model(config: MtpeConfig, event_bus: EventBus, model: MtpeModel) -> Self {
+        if model.is_loaded() {
+            debug!("MTPE 执行器已附加 NMC 模型,将使用真实预测");
+        } else {
+            debug!("MTPE 执行器附加的模型未加载,将使用伪预测降级");
+        }
+        Self {
+            config,
+            event_bus,
+            stats: RwLock::new(PredictionStats::new()),
+            prediction_count: AtomicU64::new(0),
+            model: Some(model),
         }
     }
 
@@ -76,6 +121,11 @@ impl MtpeExecutor {
     /// 获取事件总线引用
     pub fn event_bus(&self) -> &EventBus {
         &self.event_bus
+    }
+
+    /// 获取模型引用(如果有)
+    pub fn model(&self) -> Option<&MtpeModel> {
+        self.model.as_ref()
     }
 
     /// 多步预测 — 一次推理预测 N 个 token
@@ -91,10 +141,9 @@ impl MtpeExecutor {
     /// # 事件
     /// 预测完成后发布 `PredictionMade` 事件(携带 quest_id/n/avg_confidence)
     ///
-    /// # 占位实现说明
-    /// Week 4 使用基于上下文哈希的伪预测:
-    /// - Token.text = format!("pred_{}_{}", i, hash_of_context)
-    /// - Token.confidence = 1.0 - (i * 0.05),步数越高置信度越低
+    /// # 预测策略
+    /// 1. 模型可用且已加载 → 使用 NMC ONNX 模型进行真实预测
+    /// 2. 模型未加载或不可用 → 降级到基于上下文哈希的伪预测
     pub async fn predict(
         &self,
         context: &PredictionContext,
@@ -110,14 +159,36 @@ impl MtpeExecutor {
 
         let start = Instant::now();
 
-        // 模拟推理启动开销(与 N 无关的固定延迟)
-        // WHY:真实推理中,模型启动/上下文编码开销远大于生成单个 token,
-        // 且此开销与 N 无关。MTPE 通过一次推理产出 N 个 token 来摊薄此开销
-        tokio::time::sleep(SIMULATED_INFERENCE_DELAY).await;
-
-        // 伪预测:基于上下文哈希生成 N 个确定性 token
-        let context_hash = compute_context_hash(context);
-        let predicted_tokens = generate_pseudo_predictions(n, context_hash);
+        // 尝试使用模型进行真实预测
+        let predicted_tokens = if let Some(model) = &self.model {
+            if model.is_loaded() {
+                // 使用 ONNX 模型进行真实预测
+                // 1. 将 PredictionContext 编码为输入张量
+                let input_tensor = encode_context(context);
+                // 2. 调用模型推理
+                if let Some(output) = model.predict(input_tensor) {
+                    // 3. 将输出张量解码为 N 个预测 token
+                    decode_predictions(&output, n)
+                } else {
+                    // 模型推理失败，降级到伪预测
+                    tracing::warn!("MTPE 模型推理失败，降级到伪预测");
+                    let context_hash = compute_context_hash(context);
+                    generate_pseudo_predictions(n, context_hash)
+                }
+            } else {
+                // 模型未加载，使用伪预测
+                let context_hash = compute_context_hash(context);
+                generate_pseudo_predictions(n, context_hash)
+            }
+        } else {
+            // 无模型，使用伪预测
+            // 模拟推理启动开销(与 N 无关的固定延迟)
+            // WHY:真实推理中,模型启动/上下文编码开销远大于生成单个 token,
+            // 且此开销与 N 无关。MTPE 通过一次推理产出 N 个 token 来摊薄此开销
+            tokio::time::sleep(SIMULATED_INFERENCE_DELAY).await;
+            let context_hash = compute_context_hash(context);
+            generate_pseudo_predictions(n, context_hash)
+        };
 
         let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
 
@@ -269,10 +340,162 @@ fn compute_avg_confidence(tokens: &[Token]) -> f32 {
     sum / tokens.len() as f32
 }
 
+/// 将 PredictionContext 编码为输入张量
+///
+/// 使用 NMC 的文本编码器(TextPerceptor)将上下文编码为嵌入向量,
+/// 作为 ONNX 模型的输入张量。
+///
+/// # 编码策略
+/// 将 quest_id + history + clv 序列化为文本后,通过 TextPerceptor
+/// 生成嵌入向量。当 NMC 文本感知器不可用时,回退到基于哈希的编码。
+///
+/// # 返回
+/// 固定长度的 f32 向量(TextPerceptor 输出维度,默认 256 维)
+fn encode_context(context: &PredictionContext) -> Vec<f32> {
+    // 将上下文序列化为文本
+    let mut text = format!("quest:{}", context.quest_id);
+
+    // 附加历史记录(最多取最后 3 条)
+    for h in context.history.iter().rev().take(3) {
+        text.push_str("|hist:");
+        text.push_str(h);
+    }
+
+    // 附加 clv 的前 8 维摘要
+    text.push_str("|clv:");
+    for v in context.clv.iter().take(8) {
+        text.push_str(&format!("{:.4}", v));
+        text.push(',');
+    }
+
+    // 使用 NMC TextPerceptor 编码
+    // WHY 使用文本感知器:将非结构化上下文映射为固定维度嵌入,
+    // 与 ONNX 模型输入格式兼容
+    let config = nmc_encoder::config::NmcConfig::default();
+    let perceptor = nmc_encoder::perceptors::TextPerceptor::new(config);
+    let input = nmc_encoder::types::PerceptionInput::Text(text);
+
+    match perceptor.perceive(&input) {
+        Ok(element) => {
+            let embedding = element.embedding;
+            if embedding.is_empty() {
+                // 空嵌入不应当发生,降级到简单哈希编码
+                fallback_encode_context(context)
+            } else {
+                embedding
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "NMC 文本编码失败,降级到哈希编码"
+            );
+            fallback_encode_context(context)
+        }
+    }
+}
+
+/// 上下文编码的降级实现 — 基于哈希的简单编码
+///
+/// 当 NMC TextPerceptor 不可用或编码失败时使用。
+/// 将上下文哈希和 CLV 特征组合为固定维度的向量。
+fn fallback_encode_context(context: &PredictionContext) -> Vec<f32> {
+    let hash = compute_context_hash(context);
+    let mut tensor = Vec::with_capacity(256);
+
+    // 前 8 维:哈希值分解
+    tensor.push(((hash >> 24) & 0xFF) as f32 / 255.0);
+    tensor.push(((hash >> 16) & 0xFF) as f32 / 255.0);
+    tensor.push(((hash >> 8) & 0xFF) as f32 / 255.0);
+    tensor.push((hash & 0xFF) as f32 / 255.0);
+    tensor.push(((hash >> 16) ^ (hash & 0xFFFF)) as f32 / 65535.0);
+    tensor.push((hash as f32) / u32::MAX as f32);
+    tensor.push((hash ^ 0x4D54_5045) as f32 / u32::MAX as f32);
+    tensor.push((hash.wrapping_mul(0x0100_0193)) as f32 / u32::MAX as f32);
+
+    // 中间维度:CLV 特征(最多 248 维)
+    let clv_features = context.clv.len().min(248);
+    for &v in context.clv.iter().take(clv_features) {
+        tensor.push(v);
+    }
+
+    // 剩余维度零填充
+    while tensor.len() < 256 {
+        tensor.push(0.0);
+    }
+
+    tensor
+}
+
+/// 将输出张量解码为 N 个预测 token
+///
+/// # 解码策略
+/// 将 ONNX 模型输出的 512 维向量分段映射为 N 个 token,
+/// 每段生成一个 token 及其置信度。
+///
+/// # 参数
+/// - `output`: ONNX 模型输出(512 维 L2 归一化向量)
+/// - `n`: 目标 token 数量
+///
+/// # 返回
+/// N 个预测 token,置信度从高到低排列
+fn decode_predictions(output: &[f32], n: usize) -> Vec<Token> {
+    if output.is_empty() || n == 0 {
+        return Vec::new();
+    }
+
+    // 每个 token 分配的维度数(至少 2 维)
+    let dims_per_token = (output.len() / n).max(2);
+
+    (0..n)
+        .map(|i| {
+            let start = i * dims_per_token;
+            let end = (start + dims_per_token).min(output.len());
+
+            // 提取当前 token 对应的输出段
+            let segment = if start < output.len() {
+                &output[start..end]
+            } else {
+                &[]
+            };
+
+            // 计算该段统计量作为置信度
+            let segment_sum: f32 = segment.iter().map(|v| v.abs()).sum();
+            let segment_mean = if !segment.is_empty() {
+                segment_sum / segment.len() as f32
+            } else {
+                0.0
+            };
+
+            // 置信度:使用 segment 的 L2 范数,步数越高衰减
+            let confidence = (segment_mean * (1.0 - i as f32 * 0.05)).clamp(0.0, 1.0);
+
+            // 生成文本:使用段内主要值的哈希
+            let token_hash = if !segment.is_empty() {
+                let mut h: u32 = 0x4D54_5045;
+                for &v in segment.iter().take(8) {
+                    let bits = v.to_bits();
+                    h ^= bits;
+                    h = h.wrapping_mul(0x0100_0193);
+                }
+                h
+            } else {
+                0
+            };
+
+            Token {
+                text: format!("tok_{}_{}", i, token_hash),
+                confidence,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     fn make_context(quest_id: &str, history: Vec<&str>) -> PredictionContext {
         PredictionContext {
@@ -498,5 +721,187 @@ mod tests {
         let map: HashMap<usize, f32> = stats.to_rate_map();
         assert_eq!(map.get(&1), Some(&1.0));
         assert_eq!(map.get(&5), Some(&0.0));
+    }
+
+    // ============================================================
+    // P2-10: MTPE 真实预测 — 向后兼容性测试
+    // ============================================================
+
+    /// 验证无模型时 predict 行为与修改前一致(伪预测)
+    #[tokio::test]
+    async fn test_predict_without_model_fallback() {
+        let executor = MtpeExecutor::new(MtpeConfig::default(), EventBus::new());
+        let ctx = make_context("q-fallback", vec!["hello"]);
+
+        // 不带模型时应使用伪预测
+        let result = executor.predict(&ctx, 3).await.unwrap();
+        assert_eq!(result.n, 3);
+        assert_eq!(result.predicted_tokens.len(), 3);
+        // 验证是伪预测格式: text 以 "pred_" 开头
+        assert!(result.predicted_tokens[0].text.starts_with("pred_"));
+        // 置信度递减: 1.0, 0.95, 0.9
+        assert!((result.predicted_tokens[0].confidence - 1.0).abs() < f32::EPSILON);
+        assert!((result.predicted_tokens[1].confidence - 0.95).abs() < f32::EPSILON);
+        assert!((result.predicted_tokens[2].confidence - 0.90).abs() < f32::EPSILON);
+    }
+
+    /// 验证模型未加载时优雅降级
+    #[tokio::test]
+    async fn test_predict_with_unloaded_model_degradation() {
+        let model = MtpeModel::new(PathBuf::from("/nonexistent/model.onnx"));
+        assert!(!model.is_loaded(), "模型文件不存在时不应加载");
+
+        let executor = MtpeExecutor::with_model(MtpeConfig::default(), EventBus::new(), model);
+        let ctx = make_context("q-degrade", vec!["hello"]);
+
+        // 模型未加载时应降级到伪预测
+        let result = executor.predict(&ctx, 3).await.unwrap();
+        assert_eq!(result.n, 3);
+        assert_eq!(result.predicted_tokens.len(), 3);
+        // 验证降级到伪预测格式
+        assert!(result.predicted_tokens[0].text.starts_with("pred_"));
+    }
+
+    /// 验证 with_model 构造器
+    #[tokio::test]
+    async fn test_with_model_constructor() {
+        let model = MtpeModel::new(PathBuf::from("/nonexistent/model.onnx"));
+        let executor = MtpeExecutor::with_model(MtpeConfig::default(), EventBus::new(), model);
+        assert!(executor.model().is_some());
+        assert!(!executor.model().unwrap().is_loaded());
+    }
+
+    // ============================================================
+    // encode_context 测试
+    // ============================================================
+
+    #[test]
+    fn test_encode_context_non_empty() {
+        let ctx = make_context("q-encode", vec!["hello world"]);
+        let tensor = encode_context(&ctx);
+        // 输出应为非空向量
+        assert!(!tensor.is_empty(), "encode_context 不应返回空向量");
+        // 输出应为 256 维(TextPerceptor 默认文本维度)
+        assert_eq!(tensor.len(), 256, "encode_context 输出应为 256 维");
+    }
+
+    #[test]
+    fn test_encode_context_deterministic() {
+        let ctx1 = make_context("q-det", vec!["hello"]);
+        let ctx2 = make_context("q-det", vec!["hello"]);
+        let t1 = encode_context(&ctx1);
+        let t2 = encode_context(&ctx2);
+        // 相同上下文应产生相同编码
+        assert_eq!(t1, t2, "相同上下文的编码应一致");
+    }
+
+    #[test]
+    fn test_encode_context_differs_for_different_context() {
+        let ctx1 = make_context("q-1", vec!["hello"]);
+        let ctx2 = make_context("q-2", vec!["world"]);
+        let t1 = encode_context(&ctx1);
+        let t2 = encode_context(&ctx2);
+        // 不同上下文应产生不同编码(极低概率碰撞)
+        assert_ne!(t1, t2, "不同上下文的编码应不同");
+    }
+
+    #[test]
+    fn test_encode_context_empty_clv() {
+        let ctx = PredictionContext {
+            quest_id: "q-empty".into(),
+            history: vec![],
+            clv: vec![],
+        };
+        let tensor = encode_context(&ctx);
+        assert!(!tensor.is_empty(), "空 CLV 也应产生非空编码");
+        assert_eq!(tensor.len(), 256, "空 CLV 编码也应为 256 维");
+    }
+
+    // ============================================================
+    // decode_predictions 测试
+    // ============================================================
+
+    #[test]
+    fn test_decode_predictions_basic() {
+        // 512 维输出 → 解码为 5 个 token
+        let output = vec![0.1f32; 512];
+        let tokens = decode_predictions(&output, 5);
+        assert_eq!(tokens.len(), 5, "解码 5 个 token 应返回 5 个");
+        // 置信度应递减
+        for i in 1..tokens.len() {
+            assert!(
+                tokens[i].confidence <= tokens[i - 1].confidence,
+                "置信度应递减: token[{}]={} > token[{}]={}",
+                i - 1,
+                tokens[i - 1].confidence,
+                i,
+                tokens[i].confidence
+            );
+        }
+    }
+
+    #[test]
+    fn test_decode_predictions_empty_output() {
+        let tokens = decode_predictions(&[], 5);
+        assert!(tokens.is_empty(), "空输出应返回空 token 列表");
+    }
+
+    #[test]
+    fn test_decode_predictions_n_zero() {
+        let output = vec![0.1f32; 512];
+        let tokens = decode_predictions(&output, 0);
+        assert!(tokens.is_empty(), "N=0 应返回空列表");
+    }
+
+    #[test]
+    fn test_decode_predictions_single() {
+        let output = vec![0.5f32; 512];
+        let tokens = decode_predictions(&output, 1);
+        assert_eq!(tokens.len(), 1, "N=1 应返回 1 个 token");
+        // 单步置信度 = segment_mean * (1.0 - 0 * 0.05) = 0.5 * 1.0 = 0.5
+        assert!(
+            (tokens[0].confidence - 0.5).abs() < f32::EPSILON,
+            "单步预测置信度应为 0.5, 实际 {}",
+            tokens[0].confidence
+        );
+    }
+
+    // ============================================================
+    // fallback_encode_context 测试
+    // ============================================================
+
+    #[test]
+    fn test_fallback_encode_context_basic() {
+        let ctx = make_context("q-fallback", vec!["test"]);
+        let tensor = fallback_encode_context(&ctx);
+        assert_eq!(tensor.len(), 256, "降级编码应为 256 维");
+        // 前 8 维应非零(基于哈希)
+        let front_sum: f32 = tensor[..8].iter().map(|v| v.abs()).sum();
+        assert!(front_sum > 0.0, "哈希部分应非零");
+    }
+
+    #[test]
+    fn test_fallback_encode_context_empty_clv() {
+        let ctx = PredictionContext {
+            quest_id: "q-empty".into(),
+            history: vec![],
+            clv: vec![],
+        };
+        let tensor = fallback_encode_context(&ctx);
+        assert_eq!(tensor.len(), 256, "空 CLV 降级编码也应为 256 维");
+        // 前 8 维基于哈希应非零
+        let front_sum: f32 = tensor[..8].iter().map(|v| v.abs()).sum();
+        assert!(front_sum > 0.0, "空 CLV 的哈希部分也应非零");
+    }
+
+    #[test]
+    fn test_fallback_encode_context_deterministic() {
+        let ctx1 = make_context("q-det", vec!["hello"]);
+        let ctx2 = make_context("q-det", vec!["hello"]);
+        assert_eq!(
+            fallback_encode_context(&ctx1),
+            fallback_encode_context(&ctx2),
+            "降级编码也应是确定性的"
+        );
     }
 }

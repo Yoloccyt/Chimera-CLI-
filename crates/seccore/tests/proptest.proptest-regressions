@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc fac9c072da9805f690bc02345874f63edf5cb3546fe27139136244d88666c0e1 # shrinks to rule_score = 0.0, ppo_score = 0.5420866, confidence = 0.2811734

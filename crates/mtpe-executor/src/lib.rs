@@ -33,12 +33,14 @@
 pub mod config;
 pub mod error;
 pub mod fallback;
+pub mod model;
 pub mod predictor;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use config::MtpeConfig;
 pub use error::MtpeError;
+pub use model::MtpeModel;
 pub use predictor::MtpeExecutor;
 pub use types::{PredictionContext, PredictionResult, PredictionStats, Token};
 
@@ -46,6 +48,7 @@ pub use types::{PredictionContext, PredictionResult, PredictionStats, Token};
 pub mod prelude {
     pub use crate::config::MtpeConfig;
     pub use crate::error::MtpeError;
+    pub use crate::model::MtpeModel;
     pub use crate::predictor::MtpeExecutor;
     pub use crate::types::{PredictionContext, PredictionResult, PredictionStats, Token};
 }

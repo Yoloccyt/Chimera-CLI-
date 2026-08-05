@@ -568,6 +568,10 @@ impl DataPipeline {
                     osa_context_mask: osa_sync.context_mask(),
                     osa_sparsity_history: osa_sync.sparsity_history(),
                     clv_summary: clv_sync.summary(),
+                    // PROBE P0.4:HCW 召回读数(由 HcwRecallReported 事件同步)
+                    recall_needle_at_8: osa_sync.recall_needle_at_8(),
+                    recall_position_bias: osa_sync.recall_position_bias(),
+                    recall_chain_success: osa_sync.recall_chain_success(),
                     sys_metrics,
                     sys_metrics_history: sys_metrics_history.clone(),
                     tick_mode,

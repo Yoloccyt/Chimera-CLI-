@@ -1,0 +1,10 @@
+{
+  "enabledPlugins": {
+    "superpowers@qoder-marketplace": true,
+    "alibabacloud-core@qoder-marketplace": true,
+    "qmind-knowledge@qoder-marketplace": true,
+    "architecture-visualization@qoder-marketplace": true,
+    "alibabacloud-spec-ops@qoder-marketplace": true,
+    "starops-qoder@qoder-marketplace": true
+  }
+}

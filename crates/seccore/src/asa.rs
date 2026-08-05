@@ -22,6 +22,8 @@ use chrono::{DateTime, Utc};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tracing::{error, warn};
 
+use crate::asa_ppo::PpoCritic;
+use crate::asa_score_fusion::ScoreFusion;
 use crate::error::SecCoreError;
 use crate::sandbox::Sandbox;
 use crate::types::{Command, ExecutionResult, RiskLevel};
@@ -151,8 +153,12 @@ impl Default for OperationHistory {
 /// ASA 审计器 — 基于 Critic PPO 思想的实时审计与介入。
 ///
 /// Week 5 占位实现:基于规则的评分模型。
-/// DEFERRED(T8-3 Audit): 替换为 Critic PPO 模型需要外部 ONNX 训练模型文件,
-/// 当前基于规则的评分模型已满足安全审计需求(评分公式见模块文档)。
+/// P3-3 增强:集成 PPO Critic 模型和 ScoreFusion 评分融合器。
+///
+/// # 评分融合策略
+/// - PPO 未初始化(冷启动):仅使用规则评分
+/// - PPO 高置信度:使用 PPO 评分(规则评分 Block 时优先)
+/// - PPO 低置信度:规则评分与 PPO 评分加权平均
 pub struct AsaAuditor {
     /// ASA 配置(阈值与权重)
     config: AsaConfig,
@@ -160,6 +166,10 @@ pub struct AsaAuditor {
     history: RwLock<OperationHistory>,
     /// 事件总线(发布 AsaIntervention 事件,通知 Parliament 干预决策)
     event_bus: EventBus,
+    /// PPO Critic 模型(可选,RwLock 支持内部可变性用于在线学习)
+    pub(crate) ppocritic: Option<RwLock<PpoCritic>>,
+    /// 评分融合器(协调规则评分与 PPO 评分)
+    score_fusion: ScoreFusion,
 }
 
 impl AsaAuditor {
@@ -185,6 +195,22 @@ impl AsaAuditor {
             config,
             history: RwLock::new(OperationHistory::new()),
             event_bus: bus,
+            ppocritic: None,
+            score_fusion: ScoreFusion::new(),
+        }
+    }
+
+    /// 创建带 PPO Critic 模型和共享 EventBus 的 ASA 审计器
+    ///
+    /// PPO 模型初始化后即可使用(随机权重),冷启动时通过 `record_success`/
+    /// `record_failure` 反馈闭环在线学习。
+    pub fn with_ppo(config: AsaConfig, bus: EventBus, ppocritic: PpoCritic) -> Self {
+        Self {
+            config,
+            history: RwLock::new(OperationHistory::new()),
+            event_bus: bus,
+            ppocritic: Some(RwLock::new(ppocritic)),
+            score_fusion: ScoreFusion::new(),
         }
     }
 
@@ -193,13 +219,20 @@ impl AsaAuditor {
         &self.event_bus
     }
 
-    /// 审计操作 — 基于规则的评分模型(Week 5 占位)。
+    /// 审计操作 — 基于规则评分 + 可选 PPO 强化学习评分
     ///
-    /// 评分公式:`safety_score = 1.0 - risk_weight × keyword_count - history_failure_rate`
-    /// - `keyword_count`:content 中匹配的 risk_keywords 数量(大小写不敏感)
-    /// - `history_failure_rate`:历史失败次数 / 历史总次数
+    /// 评分公式(规则):`safety_score = 1.0 - risk_weight × keyword_count - history_failure_rate`
     ///
-    /// 此方法是同步的(基于规则评分,无 I/O),满足 < 5ms 延迟要求。
+    /// P3-3 增强:当 PPO Critic 模型可用时,通过 ScoreFusion 将规则评分与 PPO 评分融合,
+    /// 提供更准确的安全评估。PPO 未初始化时退化为纯规则评分(冷启动保底)。
+    ///
+    /// # 评分融合流程
+    /// 1. 计算规则评分(现有公式)
+    /// 2. 如果 PPO 已初始化,构建状态向量,执行前向推理
+    /// 3. ScoreFusion::fuse(规则评分, PPO 评分, PPO 置信度)
+    /// 4. 使用融合评分确定干预动作
+    ///
+    /// 此方法是同步的(基于规则评分 + 纯 Rust 前向推理,无 I/O),满足 < 50μs 延迟要求。
     ///
     /// # P1-W4.1 tracing 贯穿观测
     /// span 携带 `operation_id` / `safety_score` / `intervention` / `risk_level` 字段,
@@ -253,10 +286,28 @@ impl AsaAuditor {
 
         // safety_score = 1.0 - risk_weight × keyword_count - history_failure_rate
         // Week 5 占位:history_failure_rate 直接使用(不加权)
-        // DEFERRED(T8-3 Audit): history_failure_weight 用于 Critic PPO 模型加权,
-        // 需外部训练模型文件,当前直接使用 failure_rate 作为安全因子
-        let safety_score = 1.0 - self.config.risk_weight * keyword_count as f32 - history_rate;
-        let safety_score = safety_score.clamp(0.0, 1.0);
+        let rule_score = 1.0 - self.config.risk_weight * keyword_count as f32 - history_rate;
+        let rule_score = rule_score.clamp(0.0, 1.0);
+
+        // P3-3: PPO 评分融合
+        let (fused_score, ppo_used) = if let Some(ref critic_lock) = self.ppocritic {
+            if let Ok(critic) = critic_lock.read() {
+                // 构建状态向量: (keyword_count, history_failure_rate, complexity_score, op_type)
+                let state = build_ppo_state(keyword_count, history_rate, input.complexity_score);
+                let ppo_output = critic.forward(&state);
+                let ppo_confidence = critic.confidence(&ppo_output);
+                let ppo_score = PpoCritic::q_values_to_score(&ppo_output);
+                let fused = self
+                    .score_fusion
+                    .fuse(rule_score, Some(ppo_score), ppo_confidence);
+                (fused, true)
+            } else {
+                // RwLock poisoned,退化为规则评分
+                (rule_score, false)
+            }
+        } else {
+            (rule_score, false)
+        };
 
         // correctness_score 占位:基于括号匹配的简单语法检查
         let correctness_score = compute_correctness_score(&input.content);
@@ -264,8 +315,8 @@ impl AsaAuditor {
         // efficiency_score 占位:1.0 - complexity × 0.5
         let efficiency_score = 1.0 - input.complexity_score.clamp(0.0, 1.0) * 0.5;
 
-        // 干预分级
-        let intervention = self.classify_intervention(safety_score);
+        // 使用融合评分确定干预动作
+        let intervention = self.classify_intervention(fused_score);
 
         // P1-W4.1: 填充 instrument span 的延迟字段(safety_score / intervention / risk_level
         // 在函数内计算后才能确定)。这些字段供 efficiency-monitor 关联同一审计的
@@ -273,7 +324,7 @@ impl AsaAuditor {
         // WHY tracing::field::debug:intervention / risk_level 是自定义 enum,未实现
         // tracing::Value,用 debug() 包装为 Debug Value(?value 是宏语法,record 不接受)
         tracing::Span::current()
-            .record("safety_score", safety_score)
+            .record("safety_score", fused_score)
             .record("intervention", tracing::field::debug(&intervention))
             .record("risk_level", tracing::field::debug(&risk_level));
 
@@ -283,16 +334,17 @@ impl AsaAuditor {
         // 此事件使 operation_id / safety_score / intervention / risk_level 字段进入日志,
         // 供 efficiency-monitor 跨日志关联同一审计的完整决策链。
         tracing::debug!(
-            safety_score = safety_score,
+            safety_score = fused_score,
             intervention = ?intervention,
             risk_level = ?risk_level,
             keyword_count = keyword_count,
+            ppo_used = ppo_used,
             "ASA 审计完成"
         );
 
         // 生成审计原因
         let audit_reason =
-            format_audit_reason(intervention, keyword_count, history_rate, safety_score);
+            format_audit_reason(intervention, keyword_count, history_rate, fused_score);
 
         // 仅在 intervention != Allow 时发布(避免事件风暴)
         // WHY publish_blocking:audit() 是同步方法,不能 await。
@@ -303,7 +355,7 @@ impl AsaAuditor {
                 metadata: EventMetadata::new("seccore"),
                 operation_id: input.operation_id.clone(),
                 action: format!("{:?}", intervention),
-                safety_score,
+                safety_score: fused_score,
                 block_reason: (intervention == InterventionAction::Block)
                     .then(|| audit_reason.clone()),
                 alternative_suggestion: None,
@@ -314,7 +366,7 @@ impl AsaAuditor {
         }
 
         AuditResult {
-            safety_score,
+            safety_score: fused_score,
             correctness_score,
             efficiency_score,
             intervention,
@@ -389,30 +441,64 @@ impl AsaAuditor {
         Ok(result)
     }
 
-    /// 记录操作成功 — 更新历史(反馈闭环)。
+    /// 记录操作成功 — 更新历史(反馈闭环),同时训练 PPO 模型。
+    ///
+    /// P3-3:成功时训练 PPO 的目标 Q 值为 `[0.9, 0.1, 0.0]`(高 Allow,低 Block),
+    /// 使用默认状态(低风险特征)。
     pub fn record_success(&self) {
-        let mut history = self
-            .history
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        history.total_count += 1;
+        let (history_rate, keyword_count, complexity) = {
+            let mut history = self
+                .history
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            history.total_count += 1;
+            let rate = history.failure_rate();
+            // 记录成功时使用默认状态:低风险(0 关键字,中复杂度)
+            (rate, 0usize, 0.3f32)
+        };
+
+        // P3-3: 训练 PPO 模型(如果可用)
+        if let Some(ref critic_lock) = self.ppocritic {
+            if let Ok(mut critic) = critic_lock.write() {
+                let state = build_ppo_state(keyword_count, history_rate, complexity);
+                let target = [0.9, 0.1, 0.0]; // 高 Allow,低 Warn,低 Block
+                critic.train(&state, &target);
+            }
+        }
     }
 
-    /// 记录操作失败 — 更新历史(反馈闭环)。
+    /// 记录操作失败 — 更新历史(反馈闭环),同时训练 PPO 模型。
+    ///
+    /// P3-3:失败时训练 PPO 的目标 Q 值为 `[0.0, 0.3, 0.9]`(低 Allow,高 Block),
+    /// 使用默认状态(根据历史失败率估计风险特征)。
     pub fn record_failure(&self, operation_id: &str) {
-        let mut history = self
-            .history
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        history.total_count += 1;
-        history.failure_count += 1;
-        history
-            .recent_failures
-            .push_back((operation_id.to_string(), Utc::now()));
+        let (history_rate, keyword_count, complexity) = {
+            let mut history = self
+                .history
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            history.total_count += 1;
+            history.failure_count += 1;
+            history
+                .recent_failures
+                .push_back((operation_id.to_string(), Utc::now()));
 
-        // 限制 recent_failures 长度,防止内存无限增长
-        while history.recent_failures.len() > self.config.max_history_records {
-            history.recent_failures.pop_front();
+            // 限制 recent_failures 长度,防止内存无限增长
+            while history.recent_failures.len() > self.config.max_history_records {
+                history.recent_failures.pop_front();
+            }
+            let rate = history.failure_rate();
+            // 记录失败时使用中等风险状态
+            (rate, 2usize, 0.6f32)
+        };
+
+        // P3-3: 训练 PPO 模型(如果可用)
+        if let Some(ref critic_lock) = self.ppocritic {
+            if let Ok(mut critic) = critic_lock.write() {
+                let state = build_ppo_state(keyword_count, history_rate, complexity);
+                let target = [0.0, 0.3, 0.9]; // 低 Allow,中 Warn,高 Block
+                critic.train(&state, &target);
+            }
         }
     }
 
@@ -470,6 +556,23 @@ fn format_audit_reason(
         "{}: 安全分数 {:.3}(关键字 {} 个, 历史失败率 {:.3})",
         action_str, safety_score, keyword_count, history_rate
     )
+}
+
+/// 构建 PPO 状态向量 — 将审计输入编码为 4 维状态
+///
+/// 状态向量: `(keyword_count_norm, history_failure_rate, complexity_score, operation_type_embedding)`
+///
+/// - `keyword_count_norm`: 关键字数归一化到 [0, 1](除以 10,上限 1.0)
+/// - `history_failure_rate`: 历史失败率,直接使用
+/// - `complexity_score`: 操作复杂度,直接使用
+/// - `operation_type_embedding`: 操作类型嵌入,默认 0.5(通用)
+fn build_ppo_state(keyword_count: usize, history_rate: f32, complexity: f32) -> [f32; 4] {
+    [
+        (keyword_count as f32 / 10.0).min(1.0),
+        history_rate.clamp(0.0, 1.0),
+        complexity.clamp(0.0, 1.0),
+        0.5, // 操作类型嵌入:默认通用
+    ]
 }
 
 /// ASA-沙箱协同器 — 串联 ASA 审计与沙箱执行。

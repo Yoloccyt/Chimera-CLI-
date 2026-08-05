@@ -11,11 +11,11 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 dashmap = { workspace = true }
 # L1 Core:跨层通信,发布 LsctTierSwitched 事件
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # L1 Core:nexus-core(workspace 共享基础设施)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # L3 同层互引:复用 Tier/CapabilityId 类型(类型重用,非实现重用,§2.2 允许)
-cmt-tiering = { path = "../cmt-tiering" }
+cmt-tiering = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

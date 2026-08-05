@@ -16,6 +16,7 @@
 use std::time::Duration;
 
 use event_bus::EventBus;
+use nexus_contracts::scaled_timeout;
 use pvl_layer::{FeedbackChannel, Operation, Producer, ProducerStrategy, PvlConfig, Verifier};
 use tokio::sync::mpsc;
 
@@ -132,19 +133,20 @@ async fn test_concurrent_no_deadlock() {
         verifier.run(&mut rx, &fb_tx).await
     });
 
-    // 设置 5 秒超时,验证无死锁
+    // 设置超时,验证无死锁
+    // P9-T2: 5s 三处超时替换为 scaled_timeout! 缩放
     let result = tokio::time::timeout(
-        Duration::from_secs(5),
+        scaled_timeout!(5),
         producer.produce("quest-deadlock", 100, &op_tx),
     )
     .await;
 
-    assert!(result.is_ok(), "produce 应在 5 秒内完成(无死锁)");
+    assert!(result.is_ok(), "produce 应在超时内完成(无死锁)");
     result.unwrap().unwrap();
     drop(op_tx);
 
     // 处理反馈也设置超时
-    let feedback_result = tokio::time::timeout(Duration::from_secs(5), async {
+    let feedback_result = tokio::time::timeout(scaled_timeout!(5), async {
         let mut count = 0;
         let mut fb_rx = fb_rx;
         while let Some(fb) = fb_rx.recv().await {
@@ -155,12 +157,12 @@ async fn test_concurrent_no_deadlock() {
     })
     .await;
 
-    assert!(feedback_result.is_ok(), "反馈处理应在 5 秒内完成(无死锁)");
+    assert!(feedback_result.is_ok(), "反馈处理应在超时内完成(无死锁)");
     assert_eq!(feedback_result.unwrap(), 100);
 
     // 验证者也应能完成
-    let verifier_result = tokio::time::timeout(Duration::from_secs(5), verifier_handle).await;
-    assert!(verifier_result.is_ok(), "验证者应在 5 秒内完成(无死锁)");
+    let verifier_result = tokio::time::timeout(scaled_timeout!(5), verifier_handle).await;
+    assert!(verifier_result.is_ok(), "验证者应在超时内完成(无死锁)");
 }
 
 /// 验证混合有效/危险操作的并发处理

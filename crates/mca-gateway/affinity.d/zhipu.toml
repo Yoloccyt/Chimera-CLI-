@@ -12,6 +12,7 @@ schema_version = 1
 [[models]]
 provider = "zhipu"
 model = "glm-5.2"
+model_version = "2026-07-30"
 # 双方言:OpenAI 兼容端点 + Anthropic 兼容端点;preferred 由 quirk 钉选
 dialects = ["anthropic_messages", "open_ai_chat"]
 

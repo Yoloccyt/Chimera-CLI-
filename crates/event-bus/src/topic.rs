@@ -1,4 +1,4 @@
-//! 事件主题分类 — 9 类 EventTopic 用于 FilteredSubscriber 选择性订阅
+﻿//! 事件主题分类 — 9 类 EventTopic 用于 FilteredSubscriber 选择性订阅
 //!
 //! 对应架构层：L1 Core
 //! 设计决策（2026-07-09）：采用 9 类分类方案，架构纯净度优先
@@ -111,7 +111,10 @@ impl NexusEvent {
             | Self::CapabilityTiered { .. }
             | Self::NmcEncoded { .. }
             // TUI v1.8-omega:CLV 快照报告(NMC 编码器发布,携带 CLV 摘要)
-            | Self::ClvSnapshotReported { .. } => EventTopic::Memory,
+            | Self::ClvSnapshotReported { .. }
+            // P2-8 MemCon:幽灵记忆检测与策略调整(L2 Memory 子系统事件)
+            | Self::GhostMemoryDetected { .. }
+            | Self::MemConStrategyAdjusted { .. } => EventTopic::Memory,
 
             // === Security (8 + P2.1 1 个) === L4 Security 安全审计与干预
             Self::CapabilityFrozen { .. }
@@ -223,7 +226,17 @@ impl NexusEvent {
             | Self::WindowAffinityApplied { .. }
             // MCA A3:缓存亲和策略应用结果(mca-gateway codec 发布,
             // 与 ModelAffinitySelected 同属 MCA 通道层事件,归入 System 主题)
-            | Self::CacheAffinityApplied { .. } => EventTopic::System,
+            | Self::CacheAffinityApplied { .. }
+            // ADR-069: Token 效率优化事件(与 MCA 通道层事件同属 System 主题)
+            | Self::ContextBudgetAllocated { .. }
+            | Self::SemanticCacheHit { .. }
+            // BenchmarkMetricsCollected: 基准模式观测面事件（效率监控器发布，
+            // 遥测数据归入 System 主题，与 StreamSessionCompleted 同族）
+            | Self::BenchmarkMetricsCollected { .. } => EventTopic::System,
+            // PROBE P0:HCW 召回评测事件（观测面遥测，与 BenchmarkMetricsCollected 同族）
+            | Self::HcwRecallReported { .. }
+            | Self::HcwRecallDegraded { .. } => EventTopic::System,
+            Self::OverWindowFallbackTriggered { .. } => EventTopic::System,
 
             // === Knowledge (4 + P4-W16.2.2 3 个 + P5.2.3 1 个) === L5 Knowledge 知识沉淀与进化
             Self::WikiUpdated { .. }

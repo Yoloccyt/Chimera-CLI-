@@ -11,9 +11,17 @@
 //!
 //! # 归一化方法
 //! 协调成本(ms)和推理增益(分数 [0,1])单位不同,采用"成本指数"归一化:
-//! - `cost_index = min(total_ms / cost_baseline_ms, 1.0)`,`cost_baseline_ms` 默认 1000ms
+//! - `cost_index = min(total_ms / baseline, 1.0)`,`baseline` 默认 1000ms(P1-5:支持自适应基线)
 //! - `gain_index = inference_gain`(已经是 [0,1])
 //! - `ratio = cost_index / gain_index`(`gain_index` 为 0 时 `ratio = INFINITY`)
+//!
+//! # P1-5: 自适应基线
+//! 新增 `adaptive_baseline_enabled` / `min_baseline_ms` / `max_baseline_ms` 配置。
+//! 当启用时,`cost_index` 使用 `adaptive_baseline(complexity_score)` 计算:
+//! - `normalized = sigmoid((score - 3.0) / 1.5)` 将 ComplexityScore [0,10] 映射到 [0,1]
+//! - `baseline = min_baseline + (max_baseline - min_baseline) * normalized`
+//!
+//! 当禁用时,回退到 `cost_baseline_ms` 静态基准。
 //!
 //! # 推理悖论阈值
 //! `ratio > threshold`(默认 1.0)表示协调成本超过推理增益,触发推理悖论风险告警。
@@ -28,6 +36,8 @@ use std::sync::Mutex;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use serde::{Deserialize, Serialize};
 
+use crate::ComplexityScore;
+
 // ============================================================
 // 配置类型
 // ============================================================
@@ -36,6 +46,16 @@ use serde::{Deserialize, Serialize};
 ///
 /// WHY 独立于 `QuestConfig`:协调度量是跨 Quest 的全局观测指标,
 /// 而 `QuestConfig` 是单 Quest 的分解/检查点配置,语义层级不同。
+///
+/// # P1-5: 自适应基线
+///
+/// 新增 `adaptive_baseline_enabled` / `min_baseline_ms` / `max_baseline_ms` 配置。
+/// 当启用时,`cost_index` 根据 `ComplexityScore` 自适应计算基线:
+/// - 简单 Quest(score≈0):基线 ≈ `min_baseline_ms`(200ms)
+/// - 中等 Quest(score≈3):基线 ≈ 中间值(~1100ms)
+/// - 复杂 Quest(score≥10):基线 ≈ `max_baseline_ms`(2000ms)
+///
+/// 当禁用时,回退到 `cost_baseline_ms` 静态基准(1000ms)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoordinationMetricsConfig {
     /// 推理悖论告警阈值(默认 1.0)
@@ -47,7 +67,8 @@ pub struct CoordinationMetricsConfig {
 
     /// 成本归一化基准(毫秒,默认 1000ms = 1s)
     ///
-    /// `cost_index = min(total_ms / cost_baseline_ms, 1.0)`。
+    /// `cost_index = min(total_ms / baseline, 1.0)`。
+    /// 当 `adaptive_baseline_enabled = false` 时使用此静态基准。
     /// WHY 默认 1000ms:典型 Quest 生命周期(分解+调度+执行)的协调开销基线,
     /// 超过 1s 的协调成本视为满载(指数 = 1.0)。
     pub cost_baseline_ms: f64,
@@ -59,6 +80,37 @@ pub struct CoordinationMetricsConfig {
     /// WHY 默认 0.3:平衡历史趋势与新样本权重,避免单次异常抖动影响判断。
     /// alpha=1.0 仅看最新样本,alpha=0.0 完全忽略新样本。
     pub ewma_alpha: f64,
+
+    /// 最大样本数上限(默认 u64::MAX,即无限制)
+    ///
+    /// P3-11: 防止 sample_count 无限增长。当 `sample_count >= max_samples` 时,
+    /// 停止递增 `sample_count`(EWMA 仍正常更新,不影响比值计算)。
+    ///
+    /// WHY 默认无限制:保持向后兼容,现有代码不受影响。
+    pub max_samples: u64,
+
+    // ============================================================
+    // P1-5: 自适应基线配置
+    // ============================================================
+    /// 是否启用自适应基线(默认 true)
+    ///
+    /// 启用时根据 `ComplexityScore` 动态计算 `cost_baseline_ms`,
+    /// 禁用时使用 `cost_baseline_ms` 静态基准。
+    pub adaptive_baseline_enabled: bool,
+
+    /// 自适应基线最小值(毫秒,默认 200ms)
+    ///
+    /// 最低复杂度 Quest(ComplexityScore ≈ 0)的协调成本基线。
+    /// WHY 200ms:简单 Quest(1 个任务、无依赖)的协调成本通常 <200ms,
+    /// 设置过低会频繁触发推理悖论误报。
+    pub min_baseline_ms: f64,
+
+    /// 自适应基线最大值(毫秒,默认 2000ms)
+    ///
+    /// 最高复杂度 Quest(ComplexityScore ≥ 10)的协调成本基线。
+    /// WHY 2000ms:复杂 Quest(10+任务、深层依赖图)的协调成本可达 2000ms+,
+    /// 设置过高会掩盖真实的推理悖论风险。
+    pub max_baseline_ms: f64,
 }
 
 impl Default for CoordinationMetricsConfig {
@@ -67,6 +119,12 @@ impl Default for CoordinationMetricsConfig {
             paradox_threshold: 1.0,
             cost_baseline_ms: 1000.0,
             ewma_alpha: 0.3,
+            // P3-11: 默认无上限(保持向后兼容)
+            max_samples: u64::MAX,
+            // P1-5: 默认启用自适应基线
+            adaptive_baseline_enabled: true,
+            min_baseline_ms: 200.0,
+            max_baseline_ms: 2000.0,
         }
     }
 }
@@ -83,6 +141,7 @@ impl CoordinationMetricsConfig {
             paradox_threshold,
             cost_baseline_ms,
             ewma_alpha: ewma_alpha.clamp(0.0, 1.0),
+            ..Default::default()
         }
     }
 
@@ -91,6 +150,75 @@ impl CoordinationMetricsConfig {
         Self {
             paradox_threshold,
             ..Default::default()
+        }
+    }
+
+    /// 计算自适应基线 — 基于 ComplexityScore 的 sigmoid 归一化映射
+    ///
+    /// # 公式
+    /// ```text
+    /// normalized = sigmoid((score - 3.0) / 1.5)
+    ///            = 1.0 / (1.0 + exp(-(score - 3.0) / 1.5))
+    /// baseline = min_baseline + (max_baseline - min_baseline) * normalized
+    /// ```
+    ///
+    /// # 参数
+    /// - `score`:Quest 复杂度评分(来自 `ComplexityScore` 的原始值)
+    ///
+    /// # 返回
+    /// 自适应基线值(毫秒),在 [min_baseline_ms, max_baseline_ms] 范围内。
+    ///
+    /// # 设计决策(WHY)
+    /// - **sigmoid 而非线性映射**:复杂度评分在 [0,10] 范围,但低复杂度 Quest 更常见。
+    ///   sigmoid 在 score=3.0 附近提供平滑过渡,使中等复杂度 Quest 的基线更合理。
+    /// - **中点 3.0**:基于 TTG 的 evaluate_complexity 公式,一个 3 任务+1 层依赖+中等描述
+    ///   的 Quest 评分约为 3.0,是典型"中等复杂度"的参考点。
+    /// - **斜率 1.5**:使 sigmoid 在 [0,10] 范围内覆盖 [0.12, 0.99] 的归一化值,
+    ///   避免极端值过早饱和。
+    ///
+    /// # 时间复杂度
+    /// O(1)(仅含一次 f64::exp 调用)
+    pub fn adaptive_baseline(&self, score: f64) -> f64 {
+        if !self.adaptive_baseline_enabled {
+            return self.cost_baseline_ms;
+        }
+        // sigmoid 归一化:将 score 映射到 [0, 1]
+        // 当 score=0 → normalized ≈ 0.12(接近 min)
+        // 当 score=3 → normalized ≈ 0.50(中点)
+        // 当 score=10 → normalized ≈ 0.99(接近 max)
+        let normalized = 1.0 / (1.0 + f64::exp(-(score - 3.0) / 1.5));
+        let baseline =
+            self.min_baseline_ms + (self.max_baseline_ms - self.min_baseline_ms) * normalized;
+        // 钳制在 [min_baseline_ms, max_baseline_ms] 范围内(防御性编程)
+        baseline.clamp(self.min_baseline_ms, self.max_baseline_ms)
+    }
+
+    /// 设置最大样本数上限(builder 模式)
+    ///
+    /// P3-11: 防止 sample_count 无限增长。当达到上限后停止递增 sample_count,
+    /// EWMA 仍正常更新,不影响比值计算。
+    ///
+    /// # 参数
+    /// - `max`:最大样本数上限
+    pub fn with_max_samples(mut self, max: u64) -> Self {
+        self.max_samples = max;
+        self
+    }
+
+    /// 获取当前有效基线 — 根据自适应配置返回基线值
+    ///
+    /// # 参数
+    /// - `complexity`:可选的复杂度评分。`Some(score)` 且自适应启用时返回自适应基线;
+    ///   `None` 或自适应禁用时返回 `cost_baseline_ms`。
+    ///
+    /// # 时间复杂度
+    /// O(1)
+    pub fn effective_baseline(&self, complexity: Option<ComplexityScore>) -> f64 {
+        match complexity {
+            Some(score) if self.adaptive_baseline_enabled => {
+                self.adaptive_baseline(score.value() as f64)
+            }
+            _ => self.cost_baseline_ms,
         }
     }
 }
@@ -313,14 +441,17 @@ impl CoordinationToGainRatio {
     /// - `cost`:协调成本样本
     /// - `gain`:推理增益样本
     /// - `config`:度量配置(提供归一化基准与阈值)
+    /// - `complexity`:可选的复杂度评分(P1-5:自适应基线用)
     pub fn compute(
         cost: &CoordinationCostSample,
         gain: &InferenceGainSample,
         config: &CoordinationMetricsConfig,
+        complexity: Option<ComplexityScore>,
     ) -> Self {
         let coordination_cost_ms = cost.total_ms();
         let inference_gain = gain.total_gain();
-        let cost_index = cost.cost_index(config.cost_baseline_ms);
+        let baseline = config.effective_baseline(complexity);
+        let cost_index = cost.cost_index(baseline);
         let gain_index = gain.gain_index();
 
         let ratio = if gain_index > 0.0 {
@@ -503,6 +634,11 @@ impl CoordinationMetricsCollector {
     ///
     /// 时间复杂度:O(1)
     ///
+    /// # 参数
+    /// - `cost`:协调成本样本
+    /// - `gain`:推理增益样本
+    /// - `complexity`:可选的复杂度评分(P1-5:自适应基线用,`None` 时使用静态基准)
+    ///
     /// # 事件发布(P2-1 后续增强)
     /// 若绑定了 EventBus,本方法会在计算比值后自动发布
     /// `NexusEvent::CoordinationRatioReported` 事件。事件发布使用
@@ -514,6 +650,7 @@ impl CoordinationMetricsCollector {
         &self,
         cost: &CoordinationCostSample,
         gain: &InferenceGainSample,
+        complexity: Option<ComplexityScore>,
     ) -> CoordinationToGainRatio {
         // WHY 分两步记录而非合并:record_cost / record_gain 可独立调用,
         // 支持协调成本和推理增益在不同时机采集的异步场景。
@@ -534,11 +671,17 @@ impl CoordinationMetricsCollector {
                 state.cost_ewma_ms = alpha * total_ms + (1.0 - alpha) * state.cost_ewma_ms;
                 state.gain_ewma = alpha * gain + (1.0 - alpha) * state.gain_ewma;
             }
-            state.sample_count += 1;
+            // P3-11: 当达到 max_samples 上限时停止递增 sample_count
+            // (EWMA 仍正常更新,不影响比值计算)
+            if state.sample_count < self.config.max_samples {
+                state.sample_count += 1;
+            }
 
             // 基于当前 EWMA 计算比值
-            let cost_index = if self.config.cost_baseline_ms > 0.0 {
-                (state.cost_ewma_ms / self.config.cost_baseline_ms).min(1.0)
+            // P1-5:使用 effective_baseline 支持自适应基线
+            let baseline = self.config.effective_baseline(complexity);
+            let cost_index = if baseline > 0.0 {
+                (state.cost_ewma_ms / baseline).min(1.0)
             } else {
                 1.0
             };
@@ -661,6 +804,10 @@ mod tests {
         assert_eq!(cfg.paradox_threshold, 1.0);
         assert_eq!(cfg.cost_baseline_ms, 1000.0);
         assert_eq!(cfg.ewma_alpha, 0.3);
+        // P1-5: 验证自适应基线默认值
+        assert!(cfg.adaptive_baseline_enabled, "自适应基线默认启用");
+        assert_eq!(cfg.min_baseline_ms, 200.0);
+        assert_eq!(cfg.max_baseline_ms, 2000.0);
     }
 
     #[test]
@@ -669,6 +816,10 @@ mod tests {
         assert_eq!(cfg.ewma_alpha, 1.0); // clamp to [0.0, 1.0]
         assert_eq!(cfg.paradox_threshold, 1.5);
         assert_eq!(cfg.cost_baseline_ms, 500.0);
+        // P1-5: new 使用 ..Default::default()，自适应基线应保留默认值
+        assert!(cfg.adaptive_baseline_enabled);
+        assert_eq!(cfg.min_baseline_ms, 200.0);
+        assert_eq!(cfg.max_baseline_ms, 2000.0);
     }
 
     #[test]
@@ -676,6 +827,201 @@ mod tests {
         let cfg = CoordinationMetricsConfig::with_threshold(0.8);
         assert_eq!(cfg.paradox_threshold, 0.8);
         assert_eq!(cfg.cost_baseline_ms, 1000.0); // 默认值
+                                                  // P1-5: with_threshold 使用 ..Default::default()，自适应基线应保留默认值
+        assert!(cfg.adaptive_baseline_enabled);
+    }
+
+    // ============================================================
+    // P3-11: max_samples 测试
+    // ============================================================
+
+    #[test]
+    fn test_config_with_max_samples() {
+        let cfg = CoordinationMetricsConfig::default().with_max_samples(100);
+        assert_eq!(cfg.max_samples, 100);
+        // 其他字段应保持默认值
+        assert_eq!(cfg.paradox_threshold, 1.0);
+        assert_eq!(cfg.cost_baseline_ms, 1000.0);
+    }
+
+    #[test]
+    fn test_config_max_samples_default_is_max() {
+        let cfg = CoordinationMetricsConfig::default();
+        assert_eq!(cfg.max_samples, u64::MAX);
+    }
+
+    #[test]
+    fn test_collector_max_samples_limits_sample_count() {
+        let config = CoordinationMetricsConfig::default().with_max_samples(3);
+        let collector = CoordinationMetricsCollector::with_config(config);
+
+        // 记录 5 个样本,但 sample_count 应止于 3
+        let cost = CoordinationCostSample::new(100.0, 50.0);
+        let gain = InferenceGainSample::new(0.8);
+
+        for _ in 0..5 {
+            collector.record_and_compute(&cost, &gain, None);
+        }
+
+        // sample_count 应被限制在 3
+        assert_eq!(collector.sample_count(), 3);
+
+        // EWMA 仍应正常更新(不受 max_samples 影响)
+        let (cost_ewma, gain_ewma, _) = collector.snapshot();
+        assert!(
+            (cost_ewma - 150.0).abs() < 1e-3,
+            "EWMA cost 应更新到 150ms,实际: {cost_ewma}"
+        );
+        assert!(
+            (gain_ewma - 0.8).abs() < 1e-3,
+            "EWMA gain 应更新到 0.8,实际: {gain_ewma}"
+        );
+
+        // last_ratio 应存在
+        let ratio = collector.last_ratio();
+        assert!(ratio.is_some(), "last_ratio 应存在");
+    }
+
+    #[test]
+    fn test_collector_max_samples_zero_disables_recording() {
+        // max_samples = 0 时,永不递增 sample_count(永不记录样本数)
+        // 但 EWMA 仍正常更新(首个样本初始化,后续样本增量更新)
+        let config = CoordinationMetricsConfig::default().with_max_samples(0);
+        let collector = CoordinationMetricsCollector::with_config(config);
+
+        let cost = CoordinationCostSample::new(100.0, 50.0);
+        let gain = InferenceGainSample::new(0.8);
+
+        // 记录多个样本
+        for _ in 0..3 {
+            collector.record_and_compute(&cost, &gain, None);
+        }
+
+        // sample_count 应始终为 0
+        assert_eq!(collector.sample_count(), 0);
+
+        // EWMA 仍应正常更新
+        let (cost_ewma, gain_ewma, _) = collector.snapshot();
+        assert!(
+            (cost_ewma - 150.0).abs() < 1e-3,
+            "EWMA cost 应更新到 150ms,实际: {cost_ewma}"
+        );
+        assert!(
+            (gain_ewma - 0.8).abs() < 1e-3,
+            "EWMA gain 应更新到 0.8,实际: {gain_ewma}"
+        );
+    }
+
+    #[test]
+    fn test_collector_max_samples_ewma_still_updates_after_cap() {
+        // 验证达到上限后 EWMA 仍继续更新
+        let config = CoordinationMetricsConfig::default().with_max_samples(2);
+        let collector = CoordinationMetricsCollector::with_config(config);
+
+        // 前 3 个样本用 cost=100ms,后 3 个用 cost=900ms
+        let cost_low = CoordinationCostSample::new(50.0, 50.0); // total=100ms
+        let cost_high = CoordinationCostSample::new(300.0, 600.0); // total=900ms
+        let gain = InferenceGainSample::new(0.8);
+
+        for _ in 0..3 {
+            collector.record_and_compute(&cost_low, &gain, None);
+        }
+        // sample_count 应止于 2
+        assert_eq!(collector.sample_count(), 2);
+        // EWMA 应收敛到 100ms(α=0.3, 3 个相同样本)
+        let (cost_ewma, _, _) = collector.snapshot();
+        assert!(
+            (cost_ewma - 100.0).abs() < 1.0,
+            "EWMA cost 应≈100ms,实际: {cost_ewma}"
+        );
+
+        // 再记录 3 个高成本样本,EWMA 应更新
+        for _ in 0..3 {
+            collector.record_and_compute(&cost_high, &gain, None);
+        }
+        // sample_count 仍为 2(已达上限)
+        assert_eq!(collector.sample_count(), 2);
+        // EWMA 应向 900ms 移动
+        let (cost_ewma, _, _) = collector.snapshot();
+        assert!(
+            cost_ewma > 100.0,
+            "EWMA cost 应向 900ms 移动,实际: {cost_ewma}"
+        );
+    }
+
+    // ============================================================
+    // P1-5: 自适应基线测试
+    // ============================================================
+
+    #[test]
+    fn test_adaptive_baseline_min_complexity() {
+        // 最低复杂度(score=0):基线应接近 min_baseline_ms(200ms)
+        // sigmoid(0) = 1/(1+exp(3/1.5)) ≈ 0.119, baseline ≈ 200 + 1800*0.119 ≈ 414
+        let cfg = CoordinationMetricsConfig::default();
+        let baseline = cfg.adaptive_baseline(0.0);
+        assert!(
+            (baseline - 414.0).abs() < 20.0,
+            "score=0 时基线应 ≈ 414ms,实际: {baseline}"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_baseline_max_complexity() {
+        // 最高复杂度(score=10):基线应接近 max_baseline_ms(2000ms)
+        let cfg = CoordinationMetricsConfig::default();
+        let baseline = cfg.adaptive_baseline(10.0);
+        assert!(
+            (baseline - 2000.0).abs() < 20.0,
+            "score=10 时基线应 ≈ 2000ms,实际: {baseline}"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_baseline_mid_complexity() {
+        // 中等复杂度(score=3):基线应为中间值
+        // sigmoid(3) = 1/(1+exp(0)) = 0.5, baseline = 200 + 1800*0.5 = 1100
+        let cfg = CoordinationMetricsConfig::default();
+        let baseline = cfg.adaptive_baseline(3.0);
+        assert!(
+            (baseline - 1100.0).abs() < 20.0,
+            "score=3 时基线应 ≈ 1100ms,实际: {baseline}"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_baseline_disabled_uses_static() {
+        // 自适应禁用时，无论传入何复杂度，均使用 cost_baseline_ms
+        let cfg = CoordinationMetricsConfig {
+            adaptive_baseline_enabled: false,
+            cost_baseline_ms: 500.0,
+            ..Default::default()
+        };
+        // effective_baseline 应返回 cost_baseline_ms
+        assert_eq!(
+            cfg.effective_baseline(Some(ComplexityScore::new(10.0))),
+            500.0
+        );
+        assert_eq!(cfg.effective_baseline(None), 500.0);
+    }
+
+    #[test]
+    fn test_effective_baseline_none_uses_static() {
+        // 未传入复杂度时，使用静态 cost_baseline_ms
+        let cfg = CoordinationMetricsConfig::default();
+        assert_eq!(cfg.effective_baseline(None), cfg.cost_baseline_ms);
+    }
+
+    #[test]
+    fn test_adaptive_baseline_clamps_to_range() {
+        // 防御性编程:即使用极端值也应钳制在 [min, max] 范围内
+        let cfg = CoordinationMetricsConfig::default();
+        let baseline = cfg.adaptive_baseline(-100.0); // 极低
+        assert!(baseline >= cfg.min_baseline_ms);
+        assert!(baseline <= cfg.max_baseline_ms);
+
+        let baseline = cfg.adaptive_baseline(100.0); // 极高
+        assert!(baseline >= cfg.min_baseline_ms);
+        assert!(baseline <= cfg.max_baseline_ms);
     }
 
     // === CoordinationCostSample 测试 ===
@@ -762,7 +1108,7 @@ mod tests {
         let gain = InferenceGainSample::new(1.0); // gain=1.0, index=1.0
         let config = CoordinationMetricsConfig::default(); // baseline=1000, threshold=1.0
 
-        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config);
+        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config, None);
         assert!((ratio.cost_index - 0.5).abs() < 1e-6);
         assert!((ratio.gain_index - 1.0).abs() < 1e-6);
         assert!((ratio.ratio - 0.5).abs() < 1e-6);
@@ -775,7 +1121,7 @@ mod tests {
         let gain = InferenceGainSample::new(0.5); // gain=0.5, index=0.5
         let config = CoordinationMetricsConfig::default(); // threshold=1.0
 
-        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config);
+        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config, None);
         // ratio = 1.0 / 0.5 = 2.0 > 1.0 → paradox risk
         assert!((ratio.ratio - 2.0).abs() < 1e-6);
         assert!(ratio.is_paradox_risk);
@@ -787,7 +1133,7 @@ mod tests {
         let gain = InferenceGainSample::new(0.0); // gain=0
         let config = CoordinationMetricsConfig::default();
 
-        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config);
+        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config, None);
         assert!(ratio.ratio.is_infinite());
         assert!(ratio.is_paradox_risk); // infinity > 1.0
     }
@@ -798,7 +1144,7 @@ mod tests {
         let gain = InferenceGainSample::new(1.0); // index=1.0
         let config = CoordinationMetricsConfig::with_threshold(0.4); // 更敏感的阈值
 
-        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config);
+        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config, None);
         // ratio = 0.5 > 0.4 → paradox risk
         assert!((ratio.ratio - 0.5).abs() < 1e-6);
         assert!(ratio.is_paradox_risk);
@@ -810,7 +1156,7 @@ mod tests {
         let gain = InferenceGainSample::new(0.5); // index=0.5
         let config = CoordinationMetricsConfig::default();
 
-        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config);
+        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config, None);
         let desc = ratio.description();
         assert!(desc.contains("推理悖论风险"));
         assert!(desc.contains("ratio="));
@@ -822,7 +1168,7 @@ mod tests {
         let gain = InferenceGainSample::new(1.0); // index=1.0
         let config = CoordinationMetricsConfig::default();
 
-        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config);
+        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config, None);
         let desc = ratio.description();
         assert!(desc.contains("正常"));
         assert!(!desc.contains("推理悖论风险"));
@@ -836,7 +1182,7 @@ mod tests {
         let cost = CoordinationCostSample::new(300.0, 200.0); // total=500ms
         let gain = InferenceGainSample::new(0.8);
 
-        let ratio = collector.record_and_compute(&cost, &gain);
+        let ratio = collector.record_and_compute(&cost, &gain, None);
         // 首个样本:EWMA = 样本值
         assert!((ratio.coordination_cost_ms - 500.0).abs() < 1e-6);
         assert!((ratio.inference_gain - 0.8).abs() < 1e-6);
@@ -852,7 +1198,7 @@ mod tests {
         for _ in 0..10 {
             let cost = CoordinationCostSample::new(300.0, 200.0); // total=500ms
             let gain = InferenceGainSample::new(0.8);
-            collector.record_and_compute(&cost, &gain);
+            collector.record_and_compute(&cost, &gain, None);
         }
 
         // 10 个相同样本后,EWMA 应收敛到样本值
@@ -873,7 +1219,7 @@ mod tests {
         let collector = CoordinationMetricsCollector::new();
         let cost = CoordinationCostSample::new(300.0, 200.0);
         let gain = InferenceGainSample::new(0.8);
-        collector.record_and_compute(&cost, &gain);
+        collector.record_and_compute(&cost, &gain, None);
         assert_eq!(collector.sample_count(), 1);
 
         collector.reset();
@@ -916,7 +1262,7 @@ mod tests {
                 for _ in 0..10 {
                     let cost = CoordinationCostSample::new(100.0, 50.0);
                     let gain = InferenceGainSample::new(0.9);
-                    c.record_and_compute(&cost, &gain);
+                    c.record_and_compute(&cost, &gain, None);
                 }
             }));
         }
@@ -937,7 +1283,7 @@ mod tests {
         let cost = CoordinationCostSample::new(600.0, 400.0); // total=1000ms, index=1.0
         let gain = InferenceGainSample::new(0.2); // gain=0.2, index=0.2
 
-        let ratio = collector.record_and_compute(&cost, &gain);
+        let ratio = collector.record_and_compute(&cost, &gain, None);
         assert!(ratio.is_paradox_risk); // ratio = 1.0/0.2 = 5.0 > 1.0
     }
 
@@ -965,7 +1311,7 @@ mod tests {
         assert_eq!(gain, gain_de);
 
         let config = CoordinationMetricsConfig::default();
-        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config);
+        let ratio = CoordinationToGainRatio::compute(&cost, &gain, &config, None);
         let ratio_json = serde_json::to_string(&ratio).unwrap();
         let ratio_de: CoordinationToGainRatio = serde_json::from_str(&ratio_json).unwrap();
         assert_eq!(ratio, ratio_de);
@@ -991,7 +1337,7 @@ mod tests {
 
         let cost = CoordinationCostSample::new(300.0, 200.0); // total=500ms, index=0.5
         let gain = InferenceGainSample::new(1.0); // gain=1.0, index=1.0
-        let ratio = collector.record_and_compute(&cost, &gain);
+        let ratio = collector.record_and_compute(&cost, &gain, None);
 
         // 接收并验证事件
         let event = rx
@@ -1040,7 +1386,7 @@ mod tests {
         // cost = 100+50 = 150ms, cost_index = 150/1000 = 0.15
         // gain = 0.9, gain_index = 0.9
         // ratio = cost_index / gain_index = 0.15 / 0.9 = 0.16666...
-        let ratio = collector.record_and_compute(&cost, &gain);
+        let ratio = collector.record_and_compute(&cost, &gain, None);
         let expected_ratio = 0.15_f64 / 0.9_f64;
         assert!(
             (ratio.ratio - expected_ratio).abs() < 1e-6,
@@ -1066,7 +1412,7 @@ mod tests {
         let gain = InferenceGainSample::new(0.5); // gain=0.5, index=0.5
                                                   // ratio = 1.0 / 0.5 = 2.0 > 1.0 → paradox risk
 
-        let ratio = collector.record_and_compute(&cost, &gain);
+        let ratio = collector.record_and_compute(&cost, &gain, None);
         assert!(ratio.is_paradox_risk, "应触发推理悖论风险");
 
         let event = rx
@@ -1102,7 +1448,7 @@ mod tests {
 
         // 连续记录 3 次
         for _ in 0..3 {
-            collector.record_and_compute(&cost, &gain);
+            collector.record_and_compute(&cost, &gain, None);
         }
 
         // 应收到 3 个事件
@@ -1139,6 +1485,7 @@ mod tests {
         collector.record_and_compute(
             &CoordinationCostSample::new(100.0, 50.0),
             &InferenceGainSample::new(0.8),
+            None,
         );
 
         // 在另一线程持锁 panic,使 Mutex 中毒
@@ -1153,6 +1500,7 @@ mod tests {
         collector.record_and_compute(
             &CoordinationCostSample::new(200.0, 100.0),
             &InferenceGainSample::new(0.8),
+            None,
         );
         let (_cost_ewma, _gain_ewma, count) = collector.snapshot();
         assert_eq!(count, 2, "毒锁降级后应继续采集样本");

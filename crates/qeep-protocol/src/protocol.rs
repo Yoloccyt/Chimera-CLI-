@@ -222,7 +222,9 @@ impl QeepProtocol {
             .inner
             .orphan_detector
             .lock()
-            .expect("orphan_detector mutex poisoned");
+            // WHY unwrap_or_else: Mutex 不会 panic 除非另一线程在持有锁时 panic(poisoned)。
+            // poisoned 后 `into_inner()` 可恢复内部数据,与 AsaAuditor 中已有的处理模式一致。
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         detector.detect_orphans().to_vec()
     }
 
@@ -232,7 +234,8 @@ impl QeepProtocol {
             .inner
             .orphan_detector
             .lock()
-            .expect("orphan_detector mutex poisoned");
+            // WHY unwrap_or_else: Mutex poisoned 后的安全恢复,与 `orphan_reports` 一致。
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         detector.orphan_count()
     }
 
@@ -318,14 +321,14 @@ impl Drop for OrphanGuard {
         };
 
         // 报告到 OrphanDetector
-        // 注:这里用 expect 而非 unwrap,提供更好的 panic 信息
         // Mutex 不会 panic 除非另一线程在持有锁时 panic(poisoned)
         {
             let mut detector = self
                 .inner
                 .orphan_detector
                 .lock()
-                .expect("orphan_detector mutex poisoned");
+                // WHY unwrap_or_else: Mutex poisoned 后的安全恢复,确保孤儿报告不会丢失。
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             detector.report_orphan(report);
         }
         // 显式释放 detector 锁后再操作 pending_calls,避免潜在锁交互
@@ -334,5 +337,141 @@ impl Drop for OrphanGuard {
         // 孤儿调用已"终结"(虽然失败),不再是 pending,应从 pending_calls 移除,
         // 保证 pending_count 只反映"正在执行"的调用。
         self.inner.pending_calls.remove(&self.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic;
+    use std::sync::Mutex;
+    use uuid::Uuid;
+
+    /// 验证 orphan_detector Mutex poisoned 后可恢复
+    ///
+    /// 模拟另一线程在持有 orphan_detector 锁时 panic,导致 Mutex poisoned。
+    /// 验证 poisoned 后 orphan_reports() 和 orphan_count() 仍可正常调用,
+    /// 且返回的数据完整。
+    #[test]
+    fn test_orphan_detector_poison_recovery() {
+        // Arrange: 创建一个 Inner 并 poison 其 orphan_detector Mutex
+        let inner = Arc::new(Inner {
+            pending_calls: DashMap::new(),
+            orphan_detector: Mutex::new(OrphanDetector::new()),
+            completed_count: AtomicUsize::new(0),
+        });
+
+        // Poison the mutex by panicking while holding the lock
+        let inner_clone = Arc::clone(&inner);
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let _guard = inner_clone.orphan_detector.lock().unwrap();
+            panic!("故意 panic 以 poison Mutex");
+        }));
+        assert!(result.is_err(), "Mutex 应已被 poison");
+
+        // Act: 验证 poisoned 后可正常调用 orphan_reports
+        let detector = inner
+            .orphan_detector
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let reports = detector.detect_orphans();
+        let count = detector.orphan_count();
+
+        // Assert: 恢复后数据完整(无孤儿报告)
+        assert!(reports.is_empty(), "poisoned 恢复后报告列表应为空");
+        assert_eq!(count, 0, "poisoned 恢复后孤儿计数应为 0");
+    }
+
+    /// 验证 Mutex poisoned 恢复后 orphan_detector 仍可正常报告孤儿
+    #[test]
+    fn test_orphan_detector_poison_recovery_can_report() {
+        // Arrange
+        let inner = Arc::new(Inner {
+            pending_calls: DashMap::new(),
+            orphan_detector: Mutex::new(OrphanDetector::new()),
+            completed_count: AtomicUsize::new(0),
+        });
+
+        // Poison the mutex
+        let inner_clone = Arc::clone(&inner);
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let _guard = inner_clone.orphan_detector.lock().unwrap();
+            panic!("故意 panic 以 poison Mutex");
+        }));
+
+        // Act: 恢复后报告孤儿
+        {
+            let mut detector = inner
+                .orphan_detector
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let report = OrphanReport {
+                call_id: EntangledCallId(Uuid::now_v7()),
+                created_at: Utc::now(),
+                orphaned_at: Utc::now(),
+                reason: "test poison recovery".to_string(),
+            };
+            detector.report_orphan(report);
+        }
+
+        // Assert: 报告成功,孤儿计数正确
+        {
+            let detector = inner
+                .orphan_detector
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert_eq!(
+                detector.orphan_count(),
+                1,
+                "poisoned 恢复后应可正常报告孤儿"
+            );
+            assert_eq!(detector.detect_orphans()[0].reason, "test poison recovery");
+        }
+    }
+
+    /// 验证 OrphanGuard::drop 在 Mutex poisoned 时不会 panic
+    ///
+    /// 模拟孤儿检测时 Mutex 被 poison,验证 drop 路径使用
+    /// unwrap_or_else 安全恢复。
+    #[test]
+    fn test_orphan_guard_drop_poison_recovery() {
+        // Arrange
+        let inner = Arc::new(Inner {
+            pending_calls: DashMap::new(),
+            orphan_detector: Mutex::new(OrphanDetector::new()),
+            completed_count: AtomicUsize::new(0),
+        });
+
+        // 先 poison Mutex
+        let inner_clone = Arc::clone(&inner);
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let _guard = inner_clone.orphan_detector.lock().unwrap();
+            panic!("故意 panic 以 poison Mutex");
+        }));
+
+        // Act: 模拟 OrphanGuard::drop 行为(在 Mutex poisoned 时报告孤儿)
+        // 此处不应 panic
+        let call_id = EntangledCallId(Uuid::now_v7());
+        {
+            let guard = OrphanGuard {
+                id: call_id, // WHY 直接复制: EntangledCallId 实现 Copy(clippy clone_on_copy)
+                inner: Arc::clone(&inner),
+                completed: Arc::new(AtomicBool::new(false)),
+            };
+            // drop guard 时 completed=false,应触发孤儿报告
+            // 即使 Mutex 被 poison,也不应 panic
+            drop(guard);
+        }
+
+        // Assert: 孤儿报告成功
+        let detector = inner
+            .orphan_detector
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(
+            detector.orphan_count(),
+            1,
+            "OrphanGuard drop 在 Mutex poisoned 时仍应报告孤儿"
+        );
     }
 }

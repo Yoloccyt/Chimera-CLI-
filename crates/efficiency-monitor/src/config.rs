@@ -30,6 +30,12 @@ pub struct MonitorConfig {
     /// 四个 Critical 事件将绕过规则引擎,直接触发告警并发布 EfficiencyAlertTriggered。
     /// WHY true:这些事件代表安全/预算红线,必须立即告警,不应受采集间隔或规则引擎延迟影响。
     pub critical_instant_alert: bool,
+
+    /// 策略抖振检测器滑动窗口长度(秒),可选(P2-12)
+    ///
+    /// 为 `Some(secs)` 时使用自定义窗口长度;为 `None` 时使用默认值 60 秒。
+    /// WHY Option:向后兼容,现有代码不设置此字段时仍使用默认 60s。
+    pub oscillation_window_secs: Option<u64>,
 }
 
 impl Default for MonitorConfig {
@@ -38,6 +44,7 @@ impl Default for MonitorConfig {
             collect_interval_ms: 1000,
             default_cooldown_secs: 60,
             critical_instant_alert: true,
+            oscillation_window_secs: None,
         }
     }
 }
@@ -52,6 +59,7 @@ mod tests {
         assert_eq!(config.collect_interval_ms, 1000);
         assert_eq!(config.default_cooldown_secs, 60);
         assert!(config.critical_instant_alert);
+        assert_eq!(config.oscillation_window_secs, None);
     }
 
     #[test]
@@ -60,12 +68,14 @@ mod tests {
             collect_interval_ms: 500,
             default_cooldown_secs: 30,
             critical_instant_alert: false,
+            oscillation_window_secs: Some(120),
         };
         let json = serde_json::to_string(&config).expect("序列化失败");
         let restored: MonitorConfig = serde_json::from_str(&json).expect("反序列化失败");
         assert_eq!(restored.collect_interval_ms, 500);
         assert_eq!(restored.default_cooldown_secs, 30);
         assert!(!restored.critical_instant_alert);
+        assert_eq!(restored.oscillation_window_secs, Some(120));
     }
 
     #[test]

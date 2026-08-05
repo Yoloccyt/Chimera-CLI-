@@ -15,15 +15,22 @@
 
 use std::sync::Arc;
 
-use chrono::Timelike;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::affinity::{
-    AffinityRequest, AffinityResponse, CostEstimate, ModelAffinitySpec, PricingSpec,
-    ProtocolDialect, ProviderReceipt, UsageReport,
+    AffinityMessage, AffinityRequest, AffinityResponse, ContentBlock, CostEstimate, FinishReason,
+    ModelAffinitySpec, ProtocolDialect, ProviderReceipt, TokenCacheKey, UsageReport,
 };
+use nexus_contracts::CapabilityToken;
+use scc_cache::{CacheHitTracker, CachedResponse, SemanticResponseCache};
+use sha2::{Digest, Sha256};
 
+use crate::capability::{apply_output_budget, negotiate_budget};
 use crate::codec::Codec;
+use crate::cost::{actual_cost, current_hour, estimate_cost};
+use crate::cost_guard::CostGuard;
 use crate::error::AffinityError;
+use crate::prompt_compress::PromptCompressor;
+use crate::semantic_fingerprint::semantic_fingerprint;
 use crate::transport::{CircuitBreaker, RateLimiter, Transport};
 
 /// 事件源标识(EventMetadata.source)
@@ -48,8 +55,46 @@ pub struct VendorAdapter {
     breaker: Arc<CircuitBreaker>,
     /// 通道级限流器(spec.rpm_limit 驱动)
     limiter: Arc<RateLimiter>,
+    /// 厂商缓存命中率跟踪器(None = 不观测,R1 闭环可选挂接)
+    cache_tracker: Option<Arc<CacheHitTracker>>,
+    /// 超长历史消息压缩器(None = 不压缩,R4 可选挂接;sidecar 失败降级原文)
+    compressor: Option<PromptCompressor>,
+    /// 语义响应缓存(None = 不启用 R3 语义缓存热路径,可选挂接)
+    ///
+    /// 挂接后 invoke() 先查缓存:命中直接返回(不发厂商调用),miss 走厂商后回填。
+    /// 命名空间 = intent_id(隐私隔离),精确键 = TokenCacheKey,语义层 = CLV 代理指纹。
+    semantic_cache: Option<Arc<SemanticResponseCache>>,
+    /// S9 Token 效率能力令牌(None = 无灰度约束,默认启用)
+    ///
+    /// Provisional/Cooldown/Frozen 态 `allows_learned_policy()` = false
+    /// → bypass 全部缓存逻辑(Fail-open,仅 token 消耗上升,ADR-069 回滚接缝)。
+    capability_token: Option<Arc<CapabilityToken>>,
+    /// 成本熔断守卫(None = 不设成本上限,ADR-069 Task 6.2 可选挂接)
+    ///
+    /// 挂接后 invoke() 传输前 check(累计成本超限 → Quota 拒绝),
+    /// 解码回算成功后 record(cost.total_micro)。
+    cost_guard: Option<Arc<CostGuard>>,
     /// 事件总线(None = 静默模式,单测/录播回放用)
     bus: Option<EventBus>,
+}
+
+/// 可选挂接依赖集合 — 收敛 assemble 系构造函数(避免参数无限膨胀)
+///
+/// WHY struct 而非逐参追加: assemble 系已有 4 个构造函数,继续加参
+/// 会令调用方签名失读;统一收拢为"必选(spec/bus)+ 可选(options)",
+/// 既有构造函数全部委托 `assemble_with_options`,调用方零改动。
+#[derive(Clone, Default)]
+pub struct AdapterOptions {
+    /// 厂商缓存命中率跟踪器(R1 观测闭环)
+    pub cache_tracker: Option<Arc<CacheHitTracker>>,
+    /// 超长历史消息压缩器(R4)
+    pub compressor: Option<PromptCompressor>,
+    /// 语义响应缓存(R3,挂接后 invoke 走命中热路径)
+    pub semantic_cache: Option<Arc<SemanticResponseCache>>,
+    /// S9 能力令牌(未授权态 bypass 缓存逻辑)
+    pub capability_token: Option<Arc<CapabilityToken>>,
+    /// 成本熔断守卫(累计成本超限熔断,Task 6.2)
+    pub cost_guard: Option<Arc<CostGuard>>,
 }
 
 impl VendorAdapter {
@@ -62,6 +107,77 @@ impl VendorAdapter {
         spec: Arc<ModelAffinitySpec>,
         bus: Option<EventBus>,
     ) -> Result<Self, AffinityError> {
+        Self::assemble_with_tracker(spec, bus, None)
+    }
+
+    /// 装配适配器并可选挂接厂商缓存命中率跟踪器(R1 观测闭环,ADR-069)
+    ///
+    /// tracker 为 None 时与 `assemble` 行为完全一致(静默模式);
+    /// 挂接后每次 invoke() 解码即原子累计分厂商命中率
+    /// (CacheHitTracker::record,与 StreamSessionCompleted 事件同源消费
+    /// usage.cache_hit_tokens / input_tokens)。
+    pub fn assemble_with_tracker(
+        spec: Arc<ModelAffinitySpec>,
+        bus: Option<EventBus>,
+        cache_tracker: Option<Arc<CacheHitTracker>>,
+    ) -> Result<Self, AffinityError> {
+        Self::assemble_full(spec, bus, cache_tracker, None)
+    }
+
+    /// 装配适配器并可选挂接缓存命中率跟踪器与历史消息压缩器(R4,ADR-069)
+    ///
+    /// cache_tracker 为 None 时与 `assemble` 行为完全一致(静默模式);
+    /// compressor 为 None 时不压缩历史消息;两者均可独立挂接。
+    /// 既有 `assemble` / `assemble_with_tracker` 签名保持兼容(委托本函数)。
+    pub fn assemble_full(
+        spec: Arc<ModelAffinitySpec>,
+        bus: Option<EventBus>,
+        cache_tracker: Option<Arc<CacheHitTracker>>,
+        compressor: Option<PromptCompressor>,
+    ) -> Result<Self, AffinityError> {
+        Self::assemble_full_with_semantic(spec, bus, cache_tracker, compressor, None, None)
+    }
+
+    /// 装配适配器并可选挂接语义响应缓存与 S9 能力令牌(R3,ADR-069 Task 5)
+    ///
+    /// 在 `assemble_full` 基础上扩展两个可选参数:
+    /// - `semantic_cache`: 挂接后 invoke() 走语义缓存热路径(命中免厂商调用)
+    /// - `capability_token`: S9 灰度门,未授权态(Provisional/Cooldown/Frozen)
+    ///   bypass 全部缓存逻辑(Fail-open)
+    ///
+    /// 两者均为 None 时与 `assemble_full` 行为完全一致(静默模式);
+    /// 既有 `assemble` / `assemble_with_tracker` / `assemble_full` 委托本函数,
+    /// 调用方无需改动即可沿用旧装配路径。
+    pub fn assemble_full_with_semantic(
+        spec: Arc<ModelAffinitySpec>,
+        bus: Option<EventBus>,
+        cache_tracker: Option<Arc<CacheHitTracker>>,
+        compressor: Option<PromptCompressor>,
+        semantic_cache: Option<Arc<SemanticResponseCache>>,
+        capability_token: Option<Arc<CapabilityToken>>,
+    ) -> Result<Self, AffinityError> {
+        Self::assemble_with_options(
+            spec,
+            bus,
+            AdapterOptions {
+                cache_tracker,
+                compressor,
+                semantic_cache,
+                capability_token,
+                cost_guard: None,
+            },
+        )
+    }
+
+    /// 最完整装配构造 — 必选(spec/bus)+ 可选挂接集合(options)
+    ///
+    /// 新增可选依赖(如成本熔断守卫)只扩 `AdapterOptions` 字段,
+    /// 既有构造函数签名全部保持兼容(委托本函数,调用方零改动)。
+    pub fn assemble_with_options(
+        spec: Arc<ModelAffinitySpec>,
+        bus: Option<EventBus>,
+        options: AdapterOptions,
+    ) -> Result<Self, AffinityError> {
         let codec = Self::pick_codec(&spec)?;
         let transport = Arc::new(Transport::new(&spec.endpoint)?);
         let limiter = Arc::new(RateLimiter::from_rpm(spec.endpoint.rpm_limit));
@@ -71,6 +187,11 @@ impl VendorAdapter {
             transport,
             breaker: Arc::new(CircuitBreaker::new()),
             limiter,
+            cache_tracker: options.cache_tracker,
+            compressor: options.compressor,
+            semantic_cache: options.semantic_cache,
+            capability_token: options.capability_token,
+            cost_guard: options.cost_guard,
             bus,
         })
     }
@@ -113,11 +234,96 @@ impl VendorAdapter {
         let route_key = self.spec.route_key();
         let started = std::time::Instant::now();
 
-        // 1. 方言原生请求构造(P2 保真)
-        let body = self.codec.build_request(&self.spec, request)?;
+        // 每次 invoke 调用记录一次请求（语义缓存命中率分母）
+        if let Some(tracker) = &self.cache_tracker {
+            tracker.record_request();
+        }
 
-        // 2. 路由决策留痕(P6 成本先行:预估成本随事件发布)
-        let estimate = estimate_cost(&self.spec.pricing, request, current_hour());
+        // 0. R3 语义缓存热路径(ADR-069 Task 5):命中直接返回,不发厂商调用。
+        //    顺序固定为"缓存查询 → 裁剪 → 厂商调用 → 回填":缓存键/指纹/上下文
+        //    哈希基于原始 request(裁剪/压缩只影响实际发送内容,不影响缓存面)。
+        let semantic = self.semantic_cache_inputs(request);
+        if let Some(inputs) = &semantic {
+            if let Some(cached) = inputs.lookup() {
+                let namespace = inputs.namespace.clone();
+                let similarity = cached.similarity;
+                let resp = Self::cached_response(&self.spec, self.dialect(), cached);
+                self.publish(NexusEvent::SemanticCacheHit {
+                    metadata: EventMetadata::new(EVENT_SOURCE),
+                    namespace,
+                    similarity,
+                })
+                .await;
+                // 语义缓存命中计数（原子递增，无锁安全）
+                if let Some(tracker) = &self.cache_tracker {
+                    tracker.record_semantic_hit();
+                }
+                // 发布 StreamSessionCompleted(semantic_cache_hit=true)
+                // 零 usage/cost/TTFT(未发厂商调用),efficiency-monitor 据此区分
+                // 语义缓存命中与厂商调用路径,分别统计命中率。
+                self.publish(NexusEvent::StreamSessionCompleted {
+                    metadata: EventMetadata::new(EVENT_SOURCE),
+                    intent_id: request.intent_id.to_string(),
+                    route_key,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_hit_tokens: 0,
+                    cost_actual_micro: 0,
+                    ttft_ms: 0,
+                    semantic_cache_hit: true,
+                })
+                .await;
+                return Ok(resp);
+            }
+        }
+
+        // 0.5 成本熔断前置检查(ADR-069 Task 6.2):熔断中拒绝,不发厂商调用。
+        //    check() 同步无锁(原子),放在传输前保证超限通道零额外成本消耗;
+        //    语义缓存命中已提前返回,缓存命中不消耗预算,不受熔断约束。
+        if let Some(guard) = &self.cost_guard {
+            if let Err(e) = guard.check(unix_now_secs() as i64) {
+                return Err(AffinityError::Quota {
+                    route_key,
+                    reason: e.to_string(),
+                });
+            }
+        }
+
+        // 0. R4 上下文预算与动态裁剪(ADR-069 Task 3):超预算裁剪 + 超长历史压缩。
+        //    不修改原引用——裁剪/压缩作用于副本,原 request 保持不可变;
+        //    预算源为 L6 osa-coordinator compute_token_budget(复杂度档 × 窗口 × 0.6)。
+        let mut effective = std::borrow::Cow::Borrowed(request);
+        let budget = crate::conversation_trim::conversation_budget(&self.spec, request);
+        let estimated = crate::conversation_trim::estimate_tokens(&request.messages);
+        if estimated > budget {
+            effective.to_mut().messages =
+                crate::conversation_trim::trim_to_budget(request.messages.clone(), budget);
+            tracing::debug!(
+                route_key = %route_key,
+                budget,
+                estimated,
+                before = request.messages.len(),
+                after = effective.messages.len(),
+                "conversation trimmed to token budget"
+            );
+        }
+        if self.compressor.is_some() {
+            self.maybe_compress_history(effective.to_mut()).await;
+        }
+
+        // 1. 方言原生请求构造(P2 保真)
+        let mut body = self.codec.build_request(&self.spec, &effective)?;
+
+        // 1.5 输出预算注入(ADR-069: TTG 档 × max_output → 具体 token 数)
+        let budget = negotiate_budget(
+            &self.spec.capabilities,
+            request.thinking_pref,
+            request.budget_hint_micro,
+        );
+        apply_output_budget(&mut body, &budget);
+
+        // 2. 路由决策留痕(P6 成本先行:预估成本随事件发布;基于裁剪后实际发送内容)
+        let estimate = estimate_cost(&self.spec.pricing, &effective, current_hour());
         self.publish(NexusEvent::ModelAffinitySelected {
             metadata: EventMetadata::new(EVENT_SOURCE),
             intent_id: request.intent_id.to_string(),
@@ -168,8 +374,42 @@ impl VendorAdapter {
 
         // 5. 解码 + 成本回算(真实 usage,整数微元)
         let decoded = self.codec.parse_response(&resp.body)?;
+        // 5.1 R3 语义缓存回填:miss 响应写入缓存(键/指纹/上下文哈希与查询段一致)。
+        //     S9 bypass 时 semantic 为 None(查询段已判定),此处同样不写入。
+        if let Some(inputs) = &semantic {
+            inputs.backfill(&decoded.blocks);
+        }
         let cost = actual_cost(&self.spec.pricing, &decoded.usage, current_hour());
         let ttft_ms = started.elapsed().as_millis() as u64;
+
+        // 5.2 成本熔断累计(ADR-069 Task 6.2):实际成本入账(原子累计),
+        //    跨线检测由下次 invoke 的 check() 触发(唯一入口,防重放发布)。
+        if let Some(guard) = &self.cost_guard {
+            guard.record(cost.total_micro);
+        }
+
+        // 5.5 Token 效率观测闭环(ADR-069 Task 1/2):
+        // ① L2 前缀稳定性校验——工具声明含时间戳/UUID 等动态内容时
+        //    稳定前缀每轮漂移,缓存命中率归零;仅观测(warn)不阻断请求;
+        // ② 厂商缓存命中率原子累计(R1,R2 计量口径的同步 side effect);
+        // ③ Token 缓存键构造并留痕(Task 5 语义缓存将复用本键)。
+        let tools_json = crate::prompt_norm::deterministic_tools_json(&request.tools);
+        if let Err(e) = crate::prompt_norm::validate_prefix_stability(&tools_json, "L2") {
+            tracing::warn!(route_key = %route_key, error = %e, "L2 tool declarations unstable, cache hit rate at risk");
+        }
+        if let Some(tracker) = &self.cache_tracker {
+            tracker.record(
+                self.spec.provider.as_str(),
+                decoded.usage.cache_hit_tokens,
+                decoded.usage.input_tokens,
+            );
+        }
+        let cache_key = crate::prompt_norm::build_token_cache_key(&self.spec, &effective);
+        tracing::debug!(
+            route_key = %route_key,
+            model = %cache_key.model,
+            "token cache key computed"
+        );
 
         // 6. 会话闭环事件(成本回写 EWMA/缓存命中率/E1 度量的数据源)
         self.publish(NexusEvent::StreamSessionCompleted {
@@ -181,6 +421,7 @@ impl VendorAdapter {
             cache_hit_tokens: decoded.usage.cache_hit_tokens,
             cost_actual_micro: cost.total_micro,
             ttft_ms,
+            semantic_cache_hit: false,
         })
         .await;
 
@@ -232,6 +473,112 @@ impl VendorAdapter {
             let _ = bus.publish(event).await;
         }
     }
+
+    /// 超长历史消息压缩(R4,ADR-069)— 压缩最长的可压缩历史消息
+    ///
+    /// 可压缩 = 非 System/Tool 且非最后一条(token 估算 > 4K 才触发)。
+    /// sidecar 失败/未实际压缩 → 返回原文不阻塞(graceful degradation)。
+    /// 压缩对象是 conversation 历史消息,不参与 L1+L2 system_prompt_hash,
+    /// 缓存键保持稳定(见 prompt_norm 模块文档)。
+    async fn maybe_compress_history(&self, effective: &mut AffinityRequest) {
+        let compressor = match &self.compressor {
+            Some(c) => c,
+            None => return,
+        };
+        let Some(idx) = crate::conversation_trim::longest_compressible_message(&effective.messages)
+        else {
+            return;
+        };
+        if crate::conversation_trim::estimate_message_tokens(&effective.messages[idx])
+            <= crate::conversation_trim::COMPRESS_THRESHOLD_TOKENS
+        {
+            return;
+        }
+        // 拼接该消息的全部 Text 块作为压缩输入(Thinking/ToolUse 块保留不参与)
+        let text: String = effective.messages[idx]
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_ref()),
+                _ => None,
+            })
+            .collect();
+        let Ok(compressed) = compressor
+            .compress(&text, crate::conversation_trim::COMPRESS_TARGET_RATIO)
+            .await
+        else {
+            return; // compress 契约恒 Ok(失败返回原文),此处为契约防御
+        };
+        if compressed == text {
+            return; // 未实际压缩(sidecar 降级路径,保留原文)
+        }
+        // 替换 Text 块为压缩结果,保留 Thinking/ToolUse/ToolResult 块
+        let after_chars = compressed.len();
+        let msg = &mut effective.messages[idx];
+        msg.blocks
+            .retain(|b| !matches!(b, ContentBlock::Text { .. }));
+        msg.blocks.insert(
+            0,
+            ContentBlock::Text {
+                text: compressed.into(),
+            },
+        );
+        tracing::debug!(
+            route_key = %self.spec.route_key(),
+            before_chars = text.len(),
+            after_chars,
+            "longest history message compressed"
+        );
+    }
+
+    /// R3 语义缓存输入构造 — S9 灰度门 + 键/指纹/上下文哈希一次性计算
+    ///
+    /// 返回 None = 语义缓存未挂接或 S9 未授权(bypass 全部缓存逻辑)。
+    /// 查询与回填共享同一份输入(同一次 invoke 内键/指纹/哈希恒定)。
+    fn semantic_cache_inputs(&self, request: &AffinityRequest) -> Option<SemanticCacheInputs> {
+        let cache = self.semantic_cache.as_ref()?;
+        // S9 灰度门(Fail-open):token 存在且未授权 → bypass 缓存,仅 token 消耗上升。
+        // CapabilityToken 字段全为 Sync,Arc 只读共享即可(无需 Mutex);
+        // allows_learned_policy 是 &self 查询,取布尔快照即用即弃,无持锁跨 await
+        if let Some(token) = &self.capability_token {
+            if !token.allows_learned_policy(unix_now_secs() as i64) {
+                return None;
+            }
+        }
+        Some(SemanticCacheInputs {
+            cache: Arc::clone(cache),
+            namespace: request.intent_id.to_string(),
+            key: crate::prompt_norm::build_token_cache_key(&self.spec, request),
+            clv: semantic_fingerprint(&request.messages, &request.tools),
+            context_hash: context_hash(&request.messages),
+            now_secs: unix_now_secs(),
+        })
+    }
+
+    /// 缓存命中响应构造 — 最小响应:文本块 + 零 usage/cost + Stop 语义
+    ///
+    /// WHY usage/cost 全零:未发厂商调用,无真实计量;命中留痕由
+    /// SemanticCacheHit 事件承载(观测方从事件侧累计命中率,不污染 EWMA)。
+    fn cached_response(
+        spec: &ModelAffinitySpec,
+        dialect: ProtocolDialect,
+        cached: CachedResponse,
+    ) -> AffinityResponse {
+        AffinityResponse {
+            blocks: vec![ContentBlock::Text {
+                text: cached.response.to_string().into(),
+            }],
+            usage: UsageReport::default(),
+            cost: CostEstimate::default(),
+            finish_reason: FinishReason::Stop,
+            receipt: ProviderReceipt {
+                provider: spec.provider.clone(),
+                model: spec.model.clone(),
+                dialect,
+                request_id: None, // 未发厂商请求,无厂商侧请求标识
+            },
+        }
+    }
 }
 
 impl std::fmt::Debug for VendorAdapter {
@@ -242,6 +589,70 @@ impl std::fmt::Debug for VendorAdapter {
             .field("breaker_open", &self.breaker.is_open())
             .finish_non_exhaustive()
     }
+}
+
+/// R3 语义缓存热路径输入 — 一次 invoke 内查询与回填共享的缓存面参数
+///
+/// 查询(miss)与回填(厂商返回后)必须使用同一份键/指纹/上下文哈希,
+/// 否则回填条目永远无法被后续查询命中(键面漂移)。
+struct SemanticCacheInputs {
+    cache: Arc<SemanticResponseCache>,
+    namespace: String,
+    key: TokenCacheKey,
+    clv: Vec<f32>,
+    context_hash: [u8; 32],
+    now_secs: u64,
+}
+
+impl SemanticCacheInputs {
+    /// 语义查询:精确键 + 语义指纹 + Context Ledger 漂移校验
+    fn lookup(&self) -> Option<CachedResponse> {
+        self.cache.lookup_with_context(
+            &self.namespace,
+            &self.key,
+            &self.clv,
+            Some(&self.context_hash),
+        )
+    }
+
+    /// 回填:解码响应 Text 块拼合后插入(空响应不缓存,避免命中空块混淆语义)
+    fn backfill(&self, blocks: &[ContentBlock]) {
+        let mut text = String::new();
+        for b in blocks {
+            if let ContentBlock::Text { text: t } = b {
+                text.push_str(t);
+            }
+        }
+        if text.is_empty() {
+            return; // 空响应无缓存价值
+        }
+        self.cache.insert(
+            &self.namespace,
+            self.key.clone(),
+            self.clv.clone(),
+            &text,
+            self.context_hash,
+            self.now_secs,
+        );
+    }
+}
+
+/// 会话上下文哈希 — SHA-256(消息确定性序列化),Context Ledger 漂移校验哨兵
+///
+/// serde derive 序列化按字段声明序、无随机空白,与 prompt_norm 同确定性契约。
+fn context_hash(messages: &[AffinityMessage]) -> [u8; 32] {
+    let json = serde_json::to_string(messages).unwrap_or_else(|_| "[]".into());
+    let mut hasher = Sha256::new();
+    hasher.update(json.as_bytes());
+    hasher.finalize().into()
+}
+
+/// 当前 Unix 秒(缓存条目时间戳;时钟回拨按 0 兜底,仅影响驱逐序)
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// 响应体摘录(错误信息用,截断避免大 payload 污染日志)
@@ -267,73 +678,14 @@ fn dialect_str(dialect: ProtocolDialect) -> &'static str {
     }
 }
 
-/// 当前小时(0-23,厂商计费时区按本地时钟近似)
-fn current_hour() -> u8 {
-    chrono::Local::now().hour() as u8
-}
-
-/// 峰谷系数查表(小时桶 O(1),命中首条规则;无规则 = 100%)
-fn peak_factor(pricing: &PricingSpec, hour: u8) -> u16 {
-    for p in &pricing.peak_periods {
-        // 常规区间 [start, end);跨零点规则由配置拆两条(spec_loader 文档约定)
-        if p.start_hour <= hour && hour < p.end_hour {
-            return p.factor_percent;
-        }
-    }
-    100
-}
-
-/// 请求前成本预估 — 粗粒度字符启发式(P6:路由决策必须附带预估)
-///
-/// WHY 字符/4 启发式: 请求前无真实 token 数,中英文混排下 1 token ≈ 3-4
-/// 字符是业界通用近似;预估只用于路由权重与预算预检,实际成本以
-/// usage 回算为准(actual_cost),偏差由 acb-governor EWMA 自校正。
-fn estimate_cost(pricing: &PricingSpec, request: &AffinityRequest, hour: u8) -> CostEstimate {
-    let chars: usize = request
-        .messages
-        .iter()
-        .flat_map(|m| &m.blocks)
-        .map(|b| match b {
-            nexus_contracts::affinity::ContentBlock::Text { text } => text.len(),
-            nexus_contracts::affinity::ContentBlock::Thinking { thinking, .. } => thinking.len(),
-            nexus_contracts::affinity::ContentBlock::ToolUse { input_json, .. } => input_json.len(),
-            nexus_contracts::affinity::ContentBlock::ToolResult { content, .. } => content.len(),
-        })
-        .sum();
-    let est_input_tokens = (chars / 4) as u64;
-    let factor = peak_factor(pricing, hour);
-    // 整数微元:tokens × 价(微元/百万) / 1M × 峰谷百分比 / 100
-    let total =
-        est_input_tokens * pricing.input_micro_per_mtok / 1_000_000 * u64::from(factor) / 100;
-    CostEstimate {
-        total_micro: total,
-        peak_factor_percent: factor,
-        cache_discount_micro: 0,
-    }
-}
-
-/// 真实成本回算 — usage 三元组 × 定价(缓存命中按折扣价计)
-fn actual_cost(pricing: &PricingSpec, usage: &UsageReport, hour: u8) -> CostEstimate {
-    let factor = u64::from(peak_factor(pricing, hour));
-    // 缓存命中部分按 cache_hit 价,未命中输入按全价(DeepSeek/豆包计费口径)
-    let cached = usage.cache_hit_tokens.min(usage.input_tokens);
-    let uncached = usage.input_tokens - cached;
-    let input_cost = uncached * pricing.input_micro_per_mtok / 1_000_000;
-    let cache_cost = cached * pricing.cache_hit_micro_per_mtok / 1_000_000;
-    let output_cost = usage.output_tokens * pricing.output_micro_per_mtok / 1_000_000;
-    let full_price_would_be = usage.input_tokens * pricing.input_micro_per_mtok / 1_000_000;
-    CostEstimate {
-        total_micro: (input_cost + cache_cost + output_cost) * factor / 100,
-        peak_factor_percent: factor as u16,
-        cache_discount_micro: full_price_would_be.saturating_sub(input_cost + cache_cost) * factor
-            / 100,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexus_contracts::affinity::{PeakPeriod, ProviderId};
+    use crate::cost::peak_factor;
+    use nexus_contracts::affinity::{
+        AffinityMessage, AffinityOverrides, ContentBlock, MessageRole, PeakPeriod, PricingSpec,
+        ProviderId, ThinkingPreference,
+    };
 
     fn pricing() -> PricingSpec {
         PricingSpec {
@@ -415,5 +767,631 @@ mod tests {
         spec.dialects.clear();
         let err = VendorAdapter::assemble(Arc::new(spec), None).unwrap_err();
         assert!(matches!(err, AffinityError::Capability { .. }));
+    }
+
+    // ============================================================
+    // R1 厂商缓存命中率观测闭环(ADR-069 Task 1)
+    // ============================================================
+
+    use scc_cache::CacheHitTracker;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    /// 启动本地 mock OpenAI Chat 端点,返回 base_url(响应体由 handler 决定)
+    ///
+    /// 零外部网络依赖:allowlist 校验只比对 host,本地环回地址天然通过。
+    async fn spawn_chat_mock<F, B>(handler: F) -> String
+    where
+        F: Fn() -> B + Send + Sync + Clone + 'static,
+        B: axum::response::IntoResponse + Send + 'static,
+    {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move || {
+                let h = handler.clone();
+                async move { h() }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    /// 可捕获请求体的 mock 端点(断言裁剪后实际发送的消息数)
+    async fn spawn_chat_mock_with_body<F, B>(handler: F) -> String
+    where
+        F: Fn(axum::body::Bytes) -> B + Send + Sync + Clone + 'static,
+        B: axum::response::IntoResponse + Send + 'static,
+    {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |body: axum::body::Bytes| {
+                let h = handler.clone();
+                async move { h(body) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    /// OpenAI Chat 方言响应(cache_hit 注入 usage.prompt_cache_hit_tokens)
+    fn chat_response(cache_hit: u64) -> axum::response::Json<serde_json::Value> {
+        axum::response::Json(serde_json::json!({
+            "id": "chatcmpl-mock-001",
+            "object": "chat.completion",
+            "model": "deepseek-v4-flash",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "ok" },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 24,
+                "completion_tokens": 10,
+                "total_tokens": 34,
+                "prompt_cache_hit_tokens": cache_hit
+            }
+        }))
+    }
+
+    /// DeepSeek mock 通道 spec(base_url 指向本地 mock,免鉴权)
+    fn mock_spec(base_url: &str) -> ModelAffinitySpec {
+        let mut spec = ModelAffinitySpec::minimal(
+            ProviderId::DeepSeek,
+            "deepseek-v4-flash",
+            ProtocolDialect::OpenAiChat,
+        );
+        spec.endpoint.base_url = base_url.into();
+        spec.endpoint.timeout_ms = 5_000;
+        spec.endpoint.connect_timeout_ms = 1_000;
+        spec
+    }
+
+    fn mock_request() -> AffinityRequest {
+        AffinityRequest {
+            intent_id: "intent-r1".into(),
+            messages: vec![AffinityMessage {
+                role: MessageRole::User,
+                blocks: vec![ContentBlock::Text { text: "hi".into() }],
+            }],
+            tools: Vec::new(),
+            thinking_pref: ThinkingPreference::Fast,
+            budget_hint_micro: None,
+            overrides: AffinityOverrides::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn tracker_records_cache_hit_and_rate() {
+        // 命中路径:16 缓存命中 / 24 输入 → 命中率 66%
+        let base = spawn_chat_mock(|| chat_response(16)).await;
+        let tracker = Arc::new(CacheHitTracker::new());
+        let adapter = VendorAdapter::assemble_with_tracker(
+            Arc::new(mock_spec(&base)),
+            None,
+            Some(tracker.clone()),
+        )
+        .unwrap();
+
+        let resp = adapter.invoke(&mock_request()).await.unwrap();
+        assert_eq!(resp.usage.cache_hit_tokens, 16);
+        assert_eq!(
+            tracker.hit_rate_percent("deep_seek"),
+            66,
+            "invoke 闭环后 tracker 必须记录命中率"
+        );
+        assert_eq!(tracker.tracked_providers(), 1);
+    }
+
+    #[tokio::test]
+    async fn tracker_zero_hit_path() {
+        // 零命中:cache_hit_tokens=0 → 命中率 0(厂商未命中缓存)
+        let base = spawn_chat_mock(|| chat_response(0)).await;
+        let tracker = Arc::new(CacheHitTracker::new());
+        let adapter = VendorAdapter::assemble_with_tracker(
+            Arc::new(mock_spec(&base)),
+            None,
+            Some(tracker.clone()),
+        )
+        .unwrap();
+
+        adapter.invoke(&mock_request()).await.unwrap();
+        assert_eq!(tracker.hit_rate_percent("deep_seek"), 0, "零命中 → 0%");
+        assert_eq!(tracker.tracked_providers(), 1, "零命中也需记录输入 token");
+    }
+
+    #[tokio::test]
+    async fn tracker_accumulates_mixed_hits() {
+        // 混合路径:首次零命中 + 二次 16/24 命中 → 累计 16/48 = 33%
+        let n = Arc::new(AtomicU64::new(0));
+        let n2 = n.clone();
+        let base = spawn_chat_mock(move || {
+            let hit = if n2.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
+                0
+            } else {
+                16
+            };
+            chat_response(hit)
+        })
+        .await;
+        let tracker = Arc::new(CacheHitTracker::new());
+        let adapter = VendorAdapter::assemble_with_tracker(
+            Arc::new(mock_spec(&base)),
+            None,
+            Some(tracker.clone()),
+        )
+        .unwrap();
+
+        adapter.invoke(&mock_request()).await.unwrap();
+        adapter.invoke(&mock_request()).await.unwrap();
+        assert_eq!(
+            tracker.hit_rate_percent("deep_seek"),
+            33,
+            "累计 16/48 命中率"
+        );
+    }
+
+    // ============================================================
+    // R4 上下文预算与动态裁剪(ADR-069 Task 3)
+    // ============================================================
+
+    use std::sync::atomic::AtomicUsize;
+
+    /// 超预算会话必须在传输前裁剪(Simple 档 4096 窗口 → 预算 1024;
+    /// 10 × 500 字符 ≈ 1250 tokens 超预算 → 实际发送消息数 < 10)
+    #[tokio::test]
+    async fn invoke_trims_over_budget_conversation_before_send() {
+        let sent_count = Arc::new(AtomicUsize::new(0));
+        let c = sent_count.clone();
+        let base = spawn_chat_mock_with_body(move |body: axum::body::Bytes| {
+            let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&body))
+                .unwrap_or_else(|_| serde_json::json!({ "messages": [] }));
+            c.store(
+                parsed["messages"].as_array().map(|a| a.len()).unwrap_or(0),
+                AtomicOrdering::SeqCst,
+            );
+            chat_response(0)
+        })
+        .await;
+
+        let adapter = VendorAdapter::assemble(Arc::new(mock_spec(&base)), None).unwrap();
+        let mut req = mock_request();
+        req.messages = (0..10)
+            .map(|i| AffinityMessage {
+                role: MessageRole::User,
+                blocks: vec![ContentBlock::Text {
+                    text: format!("history message {i} {}", "x".repeat(480)).into(),
+                }],
+            })
+            .collect();
+        adapter.invoke(&req).await.unwrap();
+        assert!(
+            sent_count.load(AtomicOrdering::SeqCst) < 10,
+            "超预算会话必须裁剪后发送, sent = {}",
+            sent_count.load(AtomicOrdering::SeqCst)
+        );
+    }
+
+    /// compressor 配置但 sidecar 不可用 → graceful degradation 返回原文,
+    /// invoke 必须不阻塞(降级路径守护)
+    #[tokio::test]
+    async fn invoke_with_compressor_sidecar_failure_degrades_gracefully() {
+        let base = spawn_chat_mock(|| chat_response(0)).await;
+        let mut spec = mock_spec(&base);
+        // 大窗口:预算 150K tokens,不触发裁剪,只测压缩路径
+        spec.capabilities.context_window = 1_000_000;
+        let compressor =
+            crate::prompt_compress::PromptCompressor::new("nonexistent_python_binary_xyz", "s.py")
+                .with_timeout(std::time::Duration::from_secs(2));
+        let adapter =
+            VendorAdapter::assemble_full(Arc::new(spec), None, None, Some(compressor)).unwrap();
+        let mut req = mock_request();
+        req.messages = vec![
+            AffinityMessage {
+                role: MessageRole::Assistant,
+                // ≈5K tokens > 4K 压缩阈值 → 触发压缩路径(sidecar 失败 → 原文)
+                blocks: vec![ContentBlock::Text {
+                    text: "a".repeat(20_000).into(),
+                }],
+            },
+            AffinityMessage {
+                role: MessageRole::User,
+                blocks: vec![ContentBlock::Text {
+                    text: "final user input".into(),
+                }],
+            },
+        ];
+        let resp = adapter.invoke(&req).await.unwrap();
+        assert!(!resp.blocks.is_empty(), "压缩降级(返回原文)不得阻塞 invoke");
+    }
+
+    // ============================================================
+    // R3 语义响应缓存热路径(ADR-069 Task 5.3)
+    // ============================================================
+
+    use nexus_contracts::{CapabilityToken, SeamId};
+    use scc_cache::SemanticResponseCache;
+
+    /// 提取响应中的全部 Text 块文本(命中/厂商路径对比用)
+    fn text_of(blocks: &[ContentBlock]) -> String {
+        blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 命中路径:首次 miss 走厂商并回填,第二次相同请求命中缓存
+    /// → 不发厂商请求(调用计数不增长),返回缓存响应(零成本)
+    #[tokio::test]
+    async fn semantic_cache_hit_skips_vendor_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let base = spawn_chat_mock_with_body(move |_body: axum::body::Bytes| {
+            c.fetch_add(1, AtomicOrdering::SeqCst);
+            chat_response(0)
+        })
+        .await;
+        let cache = Arc::new(SemanticResponseCache::default());
+        let adapter = VendorAdapter::assemble_full_with_semantic(
+            Arc::new(mock_spec(&base)),
+            None,
+            None,
+            None,
+            Some(cache.clone()),
+            None,
+        )
+        .unwrap();
+        let req = mock_request();
+
+        // 第一次:miss → 走厂商(计数 1)+ 解码后回填缓存
+        let resp1 = adapter.invoke(&req).await.unwrap();
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1, "首次必须走厂商");
+        assert_eq!(text_of(&resp1.blocks), "ok");
+        assert_eq!(cache.namespace_len(&req.intent_id), 1, "miss 后必须回填");
+
+        // 第二次:命中 → 不发厂商请求,直接返回缓存响应
+        let resp2 = adapter.invoke(&req).await.unwrap();
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            1,
+            "命中后不得再发厂商请求"
+        );
+        assert_eq!(text_of(&resp2.blocks), "ok", "命中响应必须与缓存内容一致");
+        assert_eq!(resp2.cost.total_micro, 0, "命中响应零成本(未发厂商调用)");
+        assert_eq!(resp2.usage.input_tokens, 0, "命中响应零计量");
+    }
+
+    /// 跨 namespace(不同 intent_id)不命中:隐私隔离红线,即使键/指纹/哈希全同
+    #[tokio::test]
+    async fn semantic_cache_miss_across_namespace() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let base = spawn_chat_mock_with_body(move |_body: axum::body::Bytes| {
+            c.fetch_add(1, AtomicOrdering::SeqCst);
+            chat_response(0)
+        })
+        .await;
+        let spec = mock_spec(&base);
+        let cache = Arc::new(SemanticResponseCache::default());
+        // 手动预填 namespace "intent-a"(与请求同键/同指纹/同上下文哈希)
+        let req = mock_request();
+        let key = crate::prompt_norm::build_token_cache_key(&Arc::new(spec.clone()), &req);
+        let clv = semantic_fingerprint(&req.messages, &req.tools);
+        let hash = context_hash(&req.messages);
+        cache.insert("intent-a", key, clv, "prefilled", hash, 1);
+
+        // 用不同 intent_id("intent-b")请求 → 跨 namespace miss → 走厂商
+        let adapter = VendorAdapter::assemble_full_with_semantic(
+            Arc::new(spec),
+            None,
+            None,
+            None,
+            Some(cache.clone()),
+            None,
+        )
+        .unwrap();
+        let mut req_b = req;
+        req_b.intent_id = "intent-b".into();
+        let resp = adapter.invoke(&req_b).await.unwrap();
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            1,
+            "跨 namespace 必须 miss 走厂商"
+        );
+        assert_eq!(text_of(&resp.blocks), "ok");
+    }
+
+    /// S9 灰度门:Provisional 未授权 token → bypass 全部缓存逻辑
+    /// (不查缓存也不回填,Fail-open 仅 token 消耗上升)
+    #[tokio::test]
+    async fn s9_provisional_token_bypasses_semantic_cache() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let base = spawn_chat_mock_with_body(move |_body: axum::body::Bytes| {
+            c.fetch_add(1, AtomicOrdering::SeqCst);
+            chat_response(0)
+        })
+        .await;
+        let spec = mock_spec(&base);
+        let cache = Arc::new(SemanticResponseCache::default());
+        // 预填缓存:即使存在可命中条目,bypass 也不得查询
+        let req = mock_request();
+        let key = crate::prompt_norm::build_token_cache_key(&Arc::new(spec.clone()), &req);
+        let clv = semantic_fingerprint(&req.messages, &req.tools);
+        let hash = context_hash(&req.messages);
+        cache.insert(req.intent_id.as_ref(), key, clv, "prefilled", hash, 1);
+
+        // 初始 Provisional(level 0.2 < 激活阈值 0.3)→ allows_learned_policy = false
+        let token = Arc::new(CapabilityToken::new(
+            "s9-token-efficiency",
+            SeamId::S9TokenEfficiency,
+        ));
+        assert!(
+            !token.allows_learned_policy(unix_now_secs() as i64),
+            "Provisional 必须未授权"
+        );
+
+        let adapter = VendorAdapter::assemble_full_with_semantic(
+            Arc::new(spec),
+            None,
+            None,
+            None,
+            Some(cache.clone()),
+            Some(token),
+        )
+        .unwrap();
+        let resp = adapter.invoke(&req).await.unwrap();
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            1,
+            "bypass:必须走厂商(不查缓存)"
+        );
+        assert_eq!(text_of(&resp.blocks), "ok", "响应必须来自厂商而非缓存");
+    }
+
+    /// 命中路径发布 SemanticCacheHit 事件(观测面闭环)
+    #[tokio::test]
+    async fn semantic_cache_hit_publishes_event() {
+        let base = spawn_chat_mock(|| chat_response(0)).await;
+        // broadcast 纪律:subscribe 必须在 invoke(spawn) 之前同步调用
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let cache = Arc::new(SemanticResponseCache::default());
+        let adapter = VendorAdapter::assemble_full_with_semantic(
+            Arc::new(mock_spec(&base)),
+            Some(bus),
+            None,
+            None,
+            Some(cache.clone()),
+            None,
+        )
+        .unwrap();
+        let req = mock_request();
+        adapter.invoke(&req).await.unwrap(); // miss → 回填
+        adapter.invoke(&req).await.unwrap(); // hit → SemanticCacheHit
+
+        let mut hit = false;
+        while let Ok(ev) = rx.recv_timeout(std::time::Duration::from_millis(100)).await {
+            if matches!(ev, NexusEvent::SemanticCacheHit { .. }) {
+                hit = true;
+                break;
+            }
+        }
+        assert!(hit, "命中路径必须发布 SemanticCacheHit 事件");
+    }
+
+    // ============================================================
+    // 6.1 观测接线验证(ADR-069 Task 6.1)
+    // ============================================================
+
+    /// 显式断言 SemanticCacheHit 事件字段:namespace = intent_id、similarity 达标
+    #[tokio::test]
+    async fn semantic_cache_hit_event_carries_namespace_and_similarity() {
+        let base = spawn_chat_mock(|| chat_response(0)).await;
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let cache = Arc::new(SemanticResponseCache::default());
+        let adapter = VendorAdapter::assemble_full_with_semantic(
+            Arc::new(mock_spec(&base)),
+            Some(bus),
+            None,
+            None,
+            Some(cache.clone()),
+            None,
+        )
+        .unwrap();
+        let req = mock_request();
+        adapter.invoke(&req).await.unwrap(); // miss → 回填
+        adapter.invoke(&req).await.unwrap(); // hit → SemanticCacheHit
+
+        let mut seen: Option<(String, f32)> = None;
+        while let Ok(ev) = rx.recv_timeout(std::time::Duration::from_millis(100)).await {
+            if let NexusEvent::SemanticCacheHit {
+                namespace,
+                similarity,
+                ..
+            } = ev
+            {
+                seen = Some((namespace, similarity));
+                break;
+            }
+        }
+        let (ns, sim) = seen.expect("命中路径必须发布 SemanticCacheHit");
+        assert_eq!(ns, req.intent_id.to_string(), "namespace 必须是 intent_id");
+        // 同键同指纹同哈希 → 余弦 = 1.0,必然 >= 缓存相似度阈值
+        assert!(
+            sim >= scc_cache::semantic_cache::DEFAULT_SIMILARITY_THRESHOLD,
+            "similarity {sim} 必须 >= 阈值 {}",
+            scc_cache::semantic_cache::DEFAULT_SIMILARITY_THRESHOLD
+        );
+    }
+
+    /// 断言厂商命中率遥测字段:StreamSessionCompleted 携带
+    /// cache_hit_tokens / input_tokens(R1 计量口径同步)
+    #[tokio::test]
+    async fn stream_session_completed_carries_cache_hit_telemetry() {
+        let base = spawn_chat_mock(|| chat_response(16)).await;
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let adapter = VendorAdapter::assemble(Arc::new(mock_spec(&base)), Some(bus)).unwrap();
+
+        adapter.invoke(&mock_request()).await.unwrap();
+
+        let mut seen: Option<(u64, u64)> = None;
+        while let Ok(ev) = rx.recv_timeout(std::time::Duration::from_millis(100)).await {
+            if let NexusEvent::StreamSessionCompleted {
+                input_tokens,
+                cache_hit_tokens,
+                ..
+            } = ev
+            {
+                seen = Some((input_tokens, cache_hit_tokens));
+                break;
+            }
+        }
+        let (input, hit) = seen.expect("invoke 必须发布 StreamSessionCompleted");
+        assert_eq!(input, 24, "input_tokens 来自 mock usage.prompt_tokens");
+        assert_eq!(
+            hit, 16,
+            "cache_hit_tokens 来自 mock usage.prompt_cache_hit_tokens"
+        );
+    }
+
+    // ============================================================
+    // 6.2 成本熔断接线(ADR-069 Task 6.2)
+    // ============================================================
+
+    use crate::cost_guard::{CostGuard, BUDGET_TYPE};
+
+    /// 累计成本超限后下一次 invoke 被拒(CircuitOpen → Quota),不再发厂商
+    #[tokio::test]
+    async fn cost_guard_rejects_invoke_after_budget_crossed() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let base = spawn_chat_mock_with_body(move |_body: axum::body::Bytes| {
+            c.fetch_add(1, AtomicOrdering::SeqCst);
+            chat_response(0)
+        })
+        .await;
+        let guard = Arc::new(CostGuard::new(Some(1_000_000)));
+        let adapter = VendorAdapter::assemble_with_options(
+            Arc::new(mock_spec(&base)),
+            None,
+            AdapterOptions {
+                cost_guard: Some(guard.clone()),
+                ..AdapterOptions::default()
+            },
+        )
+        .unwrap();
+
+        // invoke #1:未超限 → 放行,厂商被调用
+        adapter.invoke(&mock_request()).await.unwrap();
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1, "未超限必须放行");
+
+        // 测试侧直接累计跨线(模拟后续 invoke 的实际成本入账)
+        guard.record(1_000_000);
+
+        // invoke #2:跨线 → 熔断 → Quota 拒绝,不再发厂商
+        let err = adapter.invoke(&mock_request()).await.unwrap_err();
+        assert!(
+            matches!(err, AffinityError::Quota { .. }),
+            "熔断拒绝必须映射为 Quota 错误, got {err}"
+        );
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            1,
+            "熔断后不得再发厂商请求"
+        );
+    }
+
+    /// 超限时发布 BudgetExceeded(订阅者收到,字段正确)且防重放只发一次
+    #[tokio::test]
+    async fn cost_guard_invoke_publishes_budget_exceeded_once() {
+        let base = spawn_chat_mock(|| chat_response(0)).await;
+        // broadcast 纪律:subscribe 必须在 check(publish) 之前同步调用
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let guard = Arc::new(CostGuard::with_bus(Some(1_000_000), Some(bus)));
+        let adapter = VendorAdapter::assemble_with_options(
+            Arc::new(mock_spec(&base)),
+            None,
+            AdapterOptions {
+                cost_guard: Some(guard.clone()),
+                ..AdapterOptions::default()
+            },
+        )
+        .unwrap();
+
+        adapter.invoke(&mock_request()).await.unwrap(); // 未超限
+        guard.record(1_000_000); // 跨线
+        assert!(adapter.invoke(&mock_request()).await.is_err());
+
+        let mut budget_events = 0;
+        while let Ok(ev) = rx.recv_timeout(std::time::Duration::from_millis(100)).await {
+            if let NexusEvent::BudgetExceeded {
+                budget_type,
+                current,
+                limit,
+                ..
+            } = ev
+            {
+                budget_events += 1;
+                assert_eq!(budget_type, BUDGET_TYPE);
+                assert_eq!(current, guard.spent_micro(), "current 为发布时刻累计成本");
+                assert_eq!(limit, 1_000_000);
+            }
+        }
+        assert_eq!(budget_events, 1, "防重放:只发布一次 BudgetExceeded");
+
+        // 熔断期内第三次 invoke 仍拒绝,且不重发事件
+        assert!(adapter.invoke(&mock_request()).await.is_err());
+        let mut extra = 0;
+        while let Ok(ev) = rx.recv_timeout(std::time::Duration::from_millis(100)).await {
+            if let NexusEvent::BudgetExceeded { .. } = ev {
+                extra += 1;
+            }
+        }
+        assert_eq!(extra, 0, "熔断期内不得重复发布");
+    }
+
+    /// 熔断检查必须发生在传输前:limit = 0 时 invoke 直接拒绝,厂商零调用
+    #[tokio::test]
+    async fn cost_guard_zero_limit_rejects_before_vendor_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let base = spawn_chat_mock_with_body(move |_body: axum::body::Bytes| {
+            c.fetch_add(1, AtomicOrdering::SeqCst);
+            chat_response(0)
+        })
+        .await;
+        let adapter = VendorAdapter::assemble_with_options(
+            Arc::new(mock_spec(&base)),
+            None,
+            AdapterOptions {
+                cost_guard: Some(Arc::new(CostGuard::new(Some(0)))),
+                ..AdapterOptions::default()
+            },
+        )
+        .unwrap();
+
+        let err = adapter.invoke(&mock_request()).await.unwrap_err();
+        assert!(
+            matches!(err, AffinityError::Quota { .. }),
+            "limit=0 首次 check 即跨线熔断, got {err}"
+        );
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            0,
+            "熔断必须发生在传输前(厂商零调用)"
+        );
     }
 }

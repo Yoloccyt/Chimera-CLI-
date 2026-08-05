@@ -5,11 +5,11 @@ edition.workspace = true
 
 [dependencies]
 # L1 Core:提供 id_newtype! 宏(生成 OperationId newtype)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 GatherCompleted/OperationTimedOut/OrphanCallDetected 事件
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # L4 Security:QEEP 协议,提供 OrphanDetector 与 entangle 包裹(零孤儿调用保证)
-qeep-protocol = { path = "../qeep-protocol" }
+qeep-protocol = { workspace = true }
 # 异步运行时:tokio::time::timeout 包装单操作超时
 tokio = { workspace = true }
 # 配置与结果类型序列化(#[derive(Serialize, Deserialize)])
@@ -32,7 +32,7 @@ criterion = { workspace = true, features = ["async_tokio"] }
 # 属性测试框架(SubTask 24.6)
 proptest = { workspace = true }
 # tokio 测试工具
-tokio-test = "0.4"
+tokio-test = { workspace = true }
 # JSON 序列化测试(config.rs serde 往返测试)
 serde_json = { workspace = true }
 

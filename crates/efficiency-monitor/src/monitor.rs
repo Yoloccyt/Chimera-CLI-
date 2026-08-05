@@ -13,7 +13,7 @@ use crate::alerts::AlertRuleEngine;
 use crate::collectors::{EventMetricCollector, MetricCollector};
 use crate::config::MonitorConfig;
 use crate::error::MonitorError;
-use crate::oscillation_detector::PolicyOscillationDetector;
+use crate::oscillation_detector::{OscillationConfig, PolicyOscillationDetector};
 use crate::types::{AlertEvent, AlertRule, AlertSeverity};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use std::time::Duration;
@@ -88,15 +88,34 @@ pub struct EfficiencyMonitor {
 }
 
 impl EfficiencyMonitor {
+    /// 根据配置创建策略抖振检测器(P2-12)
+    ///
+    /// 当 `config.oscillation_window_secs` 为 `Some(secs)` 时使用自定义窗口长度;
+    /// 为 `None` 时使用默认 60s。
+    fn create_oscillation_detector(
+        config: &MonitorConfig,
+    ) -> std::sync::Arc<PolicyOscillationDetector> {
+        match config.oscillation_window_secs {
+            Some(secs) => {
+                std::sync::Arc::new(PolicyOscillationDetector::with_config(OscillationConfig {
+                    window: Duration::from_secs(secs),
+                    ..OscillationConfig::default()
+                }))
+            }
+            None => std::sync::Arc::new(PolicyOscillationDetector::new()),
+        }
+    }
+
     /// 创建效率监控器（无 EventBus，不订阅事件也不发布告警）
     ///
     /// 适用场景：单元测试、仅需要同步记录事件与渲染 /metrics 的场景。
     pub fn new(config: MonitorConfig) -> Self {
+        let oscillation_detector = Self::create_oscillation_detector(&config);
         Self {
             config,
             collectors: EventMetricCollector::new(),
             alert_engine: AlertRuleEngine::new(),
-            oscillation_detector: std::sync::Arc::new(PolicyOscillationDetector::new()),
+            oscillation_detector,
             affinity_metrics: AffinityMetrics::new(),
             event_bus: None,
         }
@@ -109,11 +128,12 @@ impl EfficiencyMonitor {
     /// - `check_alerts` 触发的规则告警会发布 `EfficiencyAlertTriggered` 事件
     /// - `start_event_subscriber` 可启动后台订阅循环
     pub fn with_event_bus(config: MonitorConfig, bus: EventBus) -> Self {
+        let oscillation_detector = Self::create_oscillation_detector(&config);
         Self {
             config,
             collectors: EventMetricCollector::new(),
             alert_engine: AlertRuleEngine::new(),
-            oscillation_detector: std::sync::Arc::new(PolicyOscillationDetector::new()),
+            oscillation_detector,
             affinity_metrics: AffinityMetrics::new(),
             event_bus: Some(bus),
         }
@@ -707,6 +727,7 @@ mod tests {
             cache_hit_tokens: 30,
             cost_actual_micro: 500,
             ttft_ms,
+            semantic_cache_hit: false,
         }
     }
 
@@ -1410,5 +1431,78 @@ mod tests {
             (rate - 1.0).abs() < 1e-6,
             "后台订阅应将 AffinityCapabilityNegotiated 事件喂入 affinity_metrics"
         );
+    }
+
+    // ============================================================
+    // P2-12 新增:策略抖振检测器滑动窗口参数可配置化
+    // ============================================================
+
+    #[test]
+    fn test_default_window_is_60_seconds() {
+        // 不使用自定义窗口时,振荡检测器应使用默认 60s 窗口
+        let monitor = EfficiencyMonitor::new(MonitorConfig::default());
+        let config = monitor.oscillation_detector().config();
+        assert_eq!(config.window.as_secs(), 60);
+    }
+
+    #[test]
+    fn test_custom_window_used_when_configured() {
+        // 使用自定义窗口(120s)时,振荡检测器应使用 120s 窗口
+        let config = MonitorConfig {
+            oscillation_window_secs: Some(120),
+            ..MonitorConfig::default()
+        };
+        let monitor = EfficiencyMonitor::new(config);
+        let detector_config = monitor.oscillation_detector().config();
+        assert_eq!(detector_config.window.as_secs(), 120);
+    }
+
+    #[test]
+    fn test_custom_window_with_event_bus() {
+        // with_event_bus 也应使用自定义窗口
+        let bus = EventBus::new();
+        let config = MonitorConfig {
+            oscillation_window_secs: Some(300),
+            ..MonitorConfig::default()
+        };
+        let monitor = EfficiencyMonitor::with_event_bus(config, bus);
+        let detector_config = monitor.oscillation_detector().config();
+        assert_eq!(detector_config.window.as_secs(), 300);
+    }
+
+    #[test]
+    fn test_custom_window_affects_detection() {
+        // 使用极短窗口(10ms)验证自定义窗口影响检测结果
+        let config = MonitorConfig {
+            oscillation_window_secs: Some(0), // 0秒窗口,事件立即过期
+            ..MonitorConfig::default()
+        };
+        let monitor = EfficiencyMonitor::new(config);
+        monitor.record_event(&make_ttg_switch("Fast", "Deep"));
+        monitor.record_event(&make_ttg_switch("Deep", "Fast"));
+
+        // 由于窗口为 0,事件应立即过期,检测结果应为空
+        let report = monitor.detect_oscillation();
+        assert_eq!(report.ttg_switches_in_window, 0);
+        assert_eq!(report.gsoe_updates_in_window, 0);
+    }
+
+    #[test]
+    fn test_create_oscillation_detector_none_uses_default() {
+        // oscillation_window_secs = None 时,内部方法应创建默认 60s 窗口检测器
+        let config = MonitorConfig::default();
+        let detector = EfficiencyMonitor::create_oscillation_detector(&config);
+        assert_eq!(detector.config().window.as_secs(), 60);
+    }
+
+    #[test]
+    fn test_create_oscillation_detector_some_uses_custom() {
+        // oscillation_window_secs = Some(secs) 时,内部方法应创建自定义窗口检测器
+        let config = MonitorConfig {
+            oscillation_window_secs: Some(200),
+            ..MonitorConfig::default()
+        };
+        let detector = EfficiencyMonitor::create_oscillation_detector(&config);
+        assert_eq!(detector.config().window.as_secs(), 200);
     }
 }

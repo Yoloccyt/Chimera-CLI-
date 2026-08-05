@@ -1,12 +1,13 @@
-//! MCA 热路径基准 — 成本估算 + SSE 归一器(MCA M3/M0,ADR-065/068)
+//! MCA 热路径基准 — 成本估算 + SSE 归一器 + 协商引擎 + 语义指纹
 //!
 //! 对应架构层:L10 Interface(mca-gateway)
 //!
 //! # 基准目标(RED-first,阈值标记供 check_perf_redlines 静态 lint)
 //! - `bench_cost_estimate`: 路由热路径成本估算,目标 < 1μs(COST_ESTIMATE_TARGET_US)
-//!   —— 复刻 cacr.rs 美分整数范式,无浮点中间态(f32 精度红线)
-//! - `bench_sse_normalize`: SSE 单事件归一,目标 < 5μs(SSE_EVENT_TARGET_US);
-//!   64KB chunk 吞吐 ≥ 200MB/s(设计文档 §5.2 TTFT 红线承载者)
+//! - `bench_sse_normalize`: SSE 单事件归一,目标 < 5μs(SSE_EVENT_TARGET_US)
+//! - `bench_negotiate_full`: 能力协商全路径,目标 < 100ns(NEGOTIATE_TARGET_NS)
+//! - `bench_negotiate_budget_deep`: Deep 档预算协商 + 成本护栏,目标 < 100ns
+//! - `bench_semantic_fingerprint_10msg`: 10 消息×3 工具指纹,目标 < 10μs(FINGERPRINT_TARGET_US)
 //!
 //! # 红线标记(静态 lint 锚点)
 //! 阈值常量名即 lint 的 Threshold 标记,勿重命名。
@@ -14,14 +15,25 @@
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use mca_gateway::capability::{negotiate, negotiate_budget};
+use mca_gateway::semantic_fingerprint::semantic_fingerprint;
 use mca_gateway::sse::StreamNormalizer;
-use nexus_contracts::affinity::{PricingSpec, ProtocolDialect};
+use nexus_contracts::affinity::{
+    AffinityMessage, AffinityOverrides, AffinityRequest, CapabilitySet, ContentBlock, MessageRole,
+    PricingSpec, ProtocolDialect, ThinkingPreference, ThinkingSupport, ToolDecl,
+};
 
 /// 成本估算红线(μs)——路由热路径,超限即路由决策拖慢
 pub const COST_ESTIMATE_TARGET_US: u64 = 1;
 
 /// SSE 单事件归一红线(μs)——TTFT 红线承载者
 pub const SSE_EVENT_TARGET_US: u64 = 5;
+
+/// 协商引擎红线(ns)——纯算术 + match,无堆分配
+pub const NEGOTIATE_TARGET_NS: u64 = 100;
+
+/// 语义指纹红线(μs)——10 条消息 × 3 工具,~5000 字符
+pub const FINGERPRINT_TARGET_US: u64 = 10;
 
 /// 构造定价样本(DeepSeek 档:峰谷 2×,缓存命中 ¥0.01/M)
 fn sample_pricing() -> PricingSpec {
@@ -85,5 +97,94 @@ fn bench_sse_normalize(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_cost_estimate, bench_sse_normalize,);
+/// 能力协商全路径基准(三态 × 三档 = 9 组合,纯算术 O(1))
+fn bench_negotiate_full(c: &mut Criterion) {
+    let mut caps = CapabilitySet::minimal_text(131_072, 131_072);
+    caps.thinking = ThinkingSupport::EffortLevels(vec![
+        "none".into(),
+        "low".into(),
+        "medium".into(),
+        "high".into(),
+        "max".into(),
+    ]);
+    let request = AffinityRequest {
+        intent_id: "bench".into(),
+        messages: vec![AffinityMessage {
+            role: MessageRole::User,
+            blocks: vec![ContentBlock::Text {
+                text: "hello".into(),
+            }],
+        }],
+        tools: vec![ToolDecl {
+            name: "read".into(),
+            description: "read file".into(),
+            parameters_schema: "{}".into(),
+        }],
+        thinking_pref: ThinkingPreference::Deep,
+        budget_hint_micro: None,
+        overrides: AffinityOverrides::default(),
+    };
+    c.bench_function("negotiate_full_deep_with_tools", |b| {
+        b.iter(|| black_box(negotiate(black_box(&caps), black_box(&request))))
+    });
+}
+
+/// Deep 档预算协商 + 成本护栏路径基准
+fn bench_negotiate_budget_deep(c: &mut Criterion) {
+    let mut caps = CapabilitySet::minimal_text(131_072, 65_536);
+    caps.thinking = ThinkingSupport::OnOff;
+    c.bench_function("negotiate_budget_deep_k3_with_hint", |b| {
+        b.iter(|| {
+            black_box(negotiate_budget(
+                black_box(&caps),
+                ThinkingPreference::Deep,
+                Some(500_000),
+            ))
+        })
+    });
+}
+
+/// 语义指纹基准(10 条消息 × 3 工具,模拟典型开发会话)
+fn bench_semantic_fingerprint_10msg(c: &mut Criterion) {
+    let messages: Vec<AffinityMessage> = (0..10)
+        .map(|i| AffinityMessage {
+            role: if i % 2 == 0 {
+                MessageRole::User
+            } else {
+                MessageRole::Assistant
+            },
+            blocks: vec![ContentBlock::Text {
+                text: format!(
+                    "这是第{i}条消息,包含一些中文和 English 混合内容,用于测试指纹计算性能。"
+                )
+                .into(),
+            }],
+        })
+        .collect();
+    let tools: Vec<ToolDecl> = (0..3)
+        .map(|i| ToolDecl {
+            name: format!("tool_{i}").into(),
+            description: format!("Tool {i} description with some text").into(),
+            parameters_schema: r#"{"type":"object","properties":{"path":{"type":"string"}}}"#
+                .into(),
+        })
+        .collect();
+    c.bench_function("semantic_fingerprint_10msg_3tools", |b| {
+        b.iter(|| {
+            black_box(semantic_fingerprint(
+                black_box(&messages),
+                black_box(&tools),
+            ))
+        })
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_cost_estimate,
+    bench_sse_normalize,
+    bench_negotiate_full,
+    bench_negotiate_budget_deep,
+    bench_semantic_fingerprint_10msg,
+);
 criterion_main!(benches);

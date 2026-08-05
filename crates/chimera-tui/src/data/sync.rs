@@ -698,6 +698,13 @@ pub struct OsaSync {
     sparsity_history: Vec<u64>,
     /// 稀疏度历史容量(FIFO)
     max_history: usize,
+    // === PROBE P0.4:HCW 召回读数(由 HcwRecallReported 事件同步) ===
+    /// 多针召回率 needle_recall@8 ∈ [0,1](None = 未收到报告)
+    recall_needle_at_8: Option<f32>,
+    /// 位置偏置比 ∈ [0,1](None = 未收到报告)
+    recall_position_bias: Option<f32>,
+    /// 链路成功率 ∈ [0,1](None = 未收到报告)
+    recall_chain_success: Option<f32>,
 }
 
 impl Default for OsaSync {
@@ -707,6 +714,9 @@ impl Default for OsaSync {
             context_mask: Vec::new(),
             sparsity_history: Vec::new(),
             max_history: 256,
+            recall_needle_at_8: None,
+            recall_position_bias: None,
+            recall_chain_success: None,
         }
     }
 }
@@ -738,6 +748,20 @@ impl OsaSync {
                 }
                 Some(())
             }
+            // PROBE P0.4:HCW 召回评测报告 → 更新三项召回读数
+            // WHY 归入 OsaSync: 召回是 HCW 窗口装载质量的核心指标,
+            // 与稀疏度同属 OSA 面板的上下文健康读数(设计文档 §4.1 接线)
+            NexusEvent::HcwRecallReported {
+                needle_recall_at_8,
+                position_bias,
+                chain_success_rate,
+                ..
+            } => {
+                self.recall_needle_at_8 = Some(*needle_recall_at_8);
+                self.recall_position_bias = Some(*position_bias);
+                self.recall_chain_success = Some(*chain_success_rate);
+                Some(())
+            }
             _ => None,
         }
     }
@@ -755,6 +779,21 @@ impl OsaSync {
     /// 获取稀疏度历史副本
     pub fn sparsity_history(&self) -> Vec<u64> {
         self.sparsity_history.clone()
+    }
+
+    /// 获取多针召回率 needle_recall@8（None = 未收到报告）
+    pub fn recall_needle_at_8(&self) -> Option<f32> {
+        self.recall_needle_at_8
+    }
+
+    /// 获取位置偏置比（None = 未收到报告）
+    pub fn recall_position_bias(&self) -> Option<f32> {
+        self.recall_position_bias
+    }
+
+    /// 获取链路成功率（None = 未收到报告）
+    pub fn recall_chain_success(&self) -> Option<f32> {
+        self.recall_chain_success
     }
 }
 

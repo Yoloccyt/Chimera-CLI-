@@ -14,6 +14,36 @@ use nmc_encoder::{
     VideoPerceptor,
 };
 
+/// 生成合成正弦波 WAV 文件字节（用于测试）
+fn generate_sine_wav(
+    sample_rate: u32,
+    duration_secs: f32,
+    frequency: f32,
+    amplitude: f32,
+) -> Vec<u8> {
+    let num_samples = (sample_rate as f32 * duration_secs) as usize;
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut buf = Vec::new();
+    {
+        let mut writer = hound::WavWriter::new(std::io::Cursor::new(&mut buf), spec).unwrap();
+        for i in 0..num_samples {
+            let t = i as f32 / sample_rate as f32;
+            let sample_value = (amplitude
+                * (2.0 * std::f32::consts::PI * frequency * t).sin()
+                * i16::MAX as f32) as i16;
+            writer.write_sample(sample_value).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+    buf
+}
+
 // ============================================================================
 // 跨模态一致性测试
 // ============================================================================
@@ -82,7 +112,8 @@ fn test_cross_modal_embedding_dimension() {
     );
 
     // --- 音频预处理 ---
-    let audio_bytes = [0x00u8; 100];
+    // 生成合成正弦波 WAV (16kHz, 1秒, 440Hz, 振幅0.5)
+    let audio_bytes = generate_sine_wav(16000, 1.0, 440.0, 0.5);
     let aud_tensor = OnnxBackend::preprocess_audio(&audio_bytes).expect("音频预处理应成功");
     assert_eq!(
         aud_tensor.shape(),

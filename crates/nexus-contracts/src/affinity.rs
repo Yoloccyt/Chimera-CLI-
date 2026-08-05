@@ -394,6 +394,13 @@ pub struct ModelAffinitySpec {
     pub provider: ProviderId,
     /// 模型名（厂商 API 侧的真实模型标识）
     pub model: Box<str>,
+    /// 模型版本标识（厂商侧版本快照，如 "2026-07-01"；空 = 未版本化）
+    ///
+    /// WHY `#[serde(default)]`: 既有 TOML 卡片无此字段时默认空串，向后兼容。
+    /// Token 效率缓存键（TokenCacheKey）需覆盖 model_version 维度，
+    /// 防止模型静默升级后命中旧缓存（cache hit ≠ correctness）。
+    #[serde(default)]
+    pub model_version: Box<str>,
     /// 该模型支持的协议方言（可多协议，首个为默认偏好）
     pub dialects: Vec<ProtocolDialect>,
     /// 能力集（能力协商唯一事实源）
@@ -419,6 +426,7 @@ impl ModelAffinitySpec {
         Self {
             provider,
             model: model.into(),
+            model_version: "".into(),
             dialects: vec![dialect],
             capabilities: CapabilitySet::minimal_text(4096, 4096),
             pricing: PricingSpec::free(),
@@ -675,6 +683,50 @@ pub struct AffinityResponse {
     pub receipt: ProviderReceipt,
 }
 
+// ============================================================
+// Token 效率优化契约类型（ADR-069）
+// ============================================================
+
+/// Token 效率缓存键 — 覆盖 {model, model_version, tool_schema_hash, system_prompt_hash, thinking_tier}
+///
+/// 语义缓存与厂商缓存亲和的统一键空间。五维覆盖确保：
+/// - 模型静默升级（model_version 变更）→ 缓存自动失效
+/// - 工具集变更（tool_schema_hash 变更）→ 不命中旧响应
+/// - 系统提示变更（system_prompt_hash 变更）→ 不命中旧响应
+/// - 思考档位切换（thinking_tier 变更）→ 不混淆 Fast/Deep 响应
+///
+/// # 设计约束（ADR-033）
+/// L0 纯类型，SHA-256 计算函数在上层（scc-cache / mca-gateway）实现。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TokenCacheKey {
+    /// 模型名（与 ModelAffinitySpec.model 一致）
+    pub model: Box<str>,
+    /// 模型版本（与 ModelAffinitySpec.model_version 一致）
+    pub model_version: Box<str>,
+    /// 工具声明的 SHA-256 哈希（确定性 JSON 序列化后计算）
+    pub tool_schema_hash: [u8; 32],
+    /// 归一化系统提示的 SHA-256 哈希（Layer 1 + Layer 2 拼接）
+    pub system_prompt_hash: [u8; 32],
+    /// 思考档位（Fast/Standard/Deep）
+    pub thinking_tier: ThinkingPreference,
+}
+
+/// 输出预算指令 — max_tokens + thinking budget 档位
+///
+/// 由 `negotiate_budget()`（mca-gateway capability.rs）协商产出，
+/// Codec 层据此注入方言原生的 max_tokens / thinking.budget_tokens 参数。
+///
+/// # K3 reasoning 按输出计费专项
+/// Deep 档的 `thinking_budget_tokens` 受 `budget_hint_micro` 约束，
+/// 避免深度思考 token 无上限膨胀（Kimi K3 thinking token 按输出价计费）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputBudget {
+    /// 最大输出 token 数（含 thinking token，不超过 CapabilitySet.max_output）
+    pub max_output_tokens: u32,
+    /// 思考预算 token 数（None = 厂商默认，不显式限制）
+    pub thinking_budget_tokens: Option<u32>,
+}
+
 /// 协商保真度 — 三态降级协议（设计文档 §7 Round 3 裁决）
 ///
 /// 降级是产品行为，不是技术兜底：降级必须明确告知（E4 不变量），
@@ -703,6 +755,7 @@ mod tests {
         ModelAffinitySpec {
             provider: ProviderId::Zhipu,
             model: "glm-5.2".into(),
+            model_version: "2026-07-01".into(),
             dialects: vec![
                 ProtocolDialect::OpenAiChat,
                 ProtocolDialect::AnthropicMessages,

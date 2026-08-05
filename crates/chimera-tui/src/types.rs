@@ -912,6 +912,16 @@ pub struct TuiState {
     pub osa_sparsity_history: Vec<u64>,
     /// CLV 摘要(None = 未收到事件)
     pub clv_summary: Option<event_bus::ClvSummary>,
+    // === PROBE P0.4:HCW 召回读数(由 HcwRecallReported 事件同步,None = 未收到报告) ===
+    /// 多针召回率 needle_recall@8 ∈ [0,1]
+    #[serde(default)]
+    pub recall_needle_at_8: Option<f32>,
+    /// 位置偏置比 ∈ [0,1]
+    #[serde(default)]
+    pub recall_position_bias: Option<f32>,
+    /// 链路成功率 ∈ [0,1]
+    #[serde(default)]
+    pub recall_chain_success: Option<f32>,
     // === P8 ResourceMonitor 面板新增字段 ===
     /// 系统资源指标(数据驱动 ResourceMonitor / Health 面板)
     pub sys_metrics: SystemMetrics,
@@ -996,6 +1006,10 @@ impl TuiState {
             osa_context_mask: Vec::new(),
             osa_sparsity_history: Vec::new(),
             clv_summary: None,
+            // PROBE P0.4:HCW 召回读数默认值(未收到报告时为 None)
+            recall_needle_at_8: None,
+            recall_position_bias: None,
+            recall_chain_success: None,
             // P8 ResourceMonitor 面板默认值
             sys_metrics: SystemMetrics::default(),
             sys_metrics_history: Vec::new(),
@@ -1298,9 +1312,12 @@ mod tests {
         assert_eq!(PanelId::Sysinfo.next(), PanelId::Chat);
         // polish-v2.7 P1-5:Chat → SelfAssessment(SelfAssessment 插入循环末尾)
         assert_eq!(PanelId::Chat.next(), PanelId::SelfAssessment);
-        // closure Stage B-10:SelfAssessment → DagViz → Quest(DagViz 插入循环末尾)
+        // closure Stage B-10:SelfAssessment → DagViz(DagViz 插入循环末尾)
         assert_eq!(PanelId::SelfAssessment.next(), PanelId::DagViz);
-        assert_eq!(PanelId::DagViz.next(), PanelId::Quest);
+        // Task 3.7/3.9:DagViz → PvlScore → TaskManager → Quest(循环闭合)
+        assert_eq!(PanelId::DagViz.next(), PanelId::PvlScore);
+        assert_eq!(PanelId::PvlScore.next(), PanelId::TaskManager);
+        assert_eq!(PanelId::TaskManager.next(), PanelId::Quest);
     }
 
     #[test]
@@ -1331,9 +1348,12 @@ mod tests {
         assert_eq!(PanelId::Chat.prev(), PanelId::Sysinfo);
         // polish-v2.7 P1-5:SelfAssessment → Chat(循环末尾)
         assert_eq!(PanelId::SelfAssessment.prev(), PanelId::Chat);
-        // closure Stage B-10:DagViz → SelfAssessment,Quest → DagViz(循环末尾)
+        // closure Stage B-10:DagViz → SelfAssessment(循环末尾)
         assert_eq!(PanelId::DagViz.prev(), PanelId::SelfAssessment);
-        assert_eq!(PanelId::Quest.prev(), PanelId::DagViz);
+        // Task 3.7/3.9:TaskManager → PvlScore → DagViz,Quest → TaskManager(循环闭合)
+        assert_eq!(PanelId::TaskManager.prev(), PanelId::PvlScore);
+        assert_eq!(PanelId::PvlScore.prev(), PanelId::DagViz);
+        assert_eq!(PanelId::Quest.prev(), PanelId::TaskManager);
     }
 
     #[test]
@@ -1362,6 +1382,11 @@ mod tests {
             PanelId::Chat,
             // polish-v2.7 P1-5:SelfAssessment 加入往返验证
             PanelId::SelfAssessment,
+            // closure Stage B-10:DagViz 加入往返验证
+            PanelId::DagViz,
+            // Task 3.7/3.9:PvlScore/TaskManager 加入往返验证(22 面板循环)
+            PanelId::PvlScore,
+            PanelId::TaskManager,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);

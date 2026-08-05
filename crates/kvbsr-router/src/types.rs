@@ -89,12 +89,31 @@ pub struct SemanticBlock {
     pub tools: Vec<ToolId>,
     /// 块内一致性 [0.0, 1.0],块内工具向量与块向量的平均余弦相似度
     pub block_coherence: f32,
+    // === PROBE P1.4: 强时序标记（HCW 位置重排豁免依据）===
+    /// 强时序块标记（diff 序列/对话流等，HCW 重排时保持原序仅区内相对移动）
+    ///
+    /// WHY `#[serde(default)]`: 向后兼容旧序列化数据（默认 false 非时序）
+    #[serde(default)]
+    pub temporal: bool,
 }
 
 impl SemanticBlock {
     /// 获取块内工具数量
     pub fn tool_count(&self) -> usize {
         self.tools.len()
+    }
+
+    /// 设置强时序标记（链式调用，PROBE P1.4 位置重排豁免）
+    ///
+    /// # 参数
+    /// - `temporal`: 强时序标记（diff 序列/对话流等强时序内容）
+    ///
+    /// WHY builder 而非构造参数: 生产构造点（blocks.rs build_single_block）
+    /// 默认非时序；强时序块（diff/对话流）由调用方按块语义显式标记——
+    /// 否则 temporal 永远无法置 true，HCW 位置重排豁免形同虚设（R-P1.4）
+    pub fn with_temporal(mut self, temporal: bool) -> Self {
+        self.temporal = temporal;
+        self
     }
 
     /// 获取块向量维度
@@ -367,6 +386,7 @@ mod tests {
             block_vector: vec![0.0; 64],
             tools: vec!["t1".into(), "t2".into(), "t3".into()],
             block_coherence: 0.85,
+            temporal: false,
         };
         assert_eq!(block.tool_count(), 3);
         assert_eq!(block.dimension(), 64);

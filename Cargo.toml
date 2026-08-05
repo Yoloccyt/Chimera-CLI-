@@ -46,9 +46,12 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# v2.13.0-omega: MCA 全模型亲和适配体系(PANTHEON 计划 M0-M4 全部完成,ADR-065~068)
-# 详见 CHANGELOG.md v2.13.0-omega 章节
-version = "2.13.0-omega"
+# v2.20.0-omega: PROBE HCW-Sparse 深度优化首个里程碑(P-1/P0/P1/P2/P3 全部验收通过)
+# - PROBE 总纲 ADR-070 + 召回基准 ADR-071 已落档预备
+# - NexusEvent 118 → 129 变体(HcwRecallReported/Degraded + OverWindowFallbackTriggered)
+# - 测试基线 4944+ lib tests → 8455 passed (303 个 test target)
+# - 详见 CHANGELOG.md v2.20.0-omega 章节与 docs/planning/PROBE_实施进度报告.md
+version = "2.20.0-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"
@@ -123,20 +126,55 @@ tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 toml = "0.8"
 # 本地 workspace crate:供成员通过 `workspace = true` 统一引用,
 # 版本号由 workspace.package 集中管理。
-# nexus-contracts:L0 Contracts 契约层(ADR-033,纯类型零依赖,workspace 第 36 个 crate)
-# WHY 排在首位:L0 是最低层,所有上层 crate 可依赖 L0(L(N) → L(0) 恒允许)
+# 按 L0→L1→...→L10 顺序排列,确保编译顺序符合依赖铁律。
+# L0 Contracts (ADR-033):纯类型零依赖契约层,所有上层 crate 可依赖 L0
 nexus-contracts = { path = "crates/nexus-contracts" }
+# L1 Core:核心运行时,事件总线,模型路由
+nexus-core = { path = "crates/nexus-core" }
 event-bus = { path = "crates/event-bus" }
-chimera-tui = { path = "crates/chimera-tui" }
-# chimera-mas:L9 Quest 多 Agent 协同子系统(ADR-026,workspace 第 35 个 crate)
-chimera-mas = { path = "crates/chimera-mas" }
-# omega-learner:L6 学习层 Bandit 六接缝(ADR-031,workspace 第 37 个 crate)
-# WHY 工作区第 36 个 crate(nexus-contracts 已先于 P2-W5.1 加入);
-# 排在末位因学习层为环外新增,不参与现有依赖环
+mcp-mesh = { path = "crates/mcp-mesh" }
+model-router = { path = "crates/model-router" }
+# L2 Memory:多模态编码,分层窗口,四级记忆
+nmc-encoder = { path = "crates/nmc-encoder" }
+hcw-window = { path = "crates/hcw-window" }
+mlc-engine = { path = "crates/mlc-engine" }
+# L3 Storage:推测缓存,任务感知分层,能力内存分层
+scc-cache = { path = "crates/scc-cache" }
+lsct-tiering = { path = "crates/lsct-tiering" }
+cmt-tiering = { path = "crates/cmt-tiering" }
+# L4 Security:零信任沙箱,量子纠缠协议,能力衰减
+seccore = { path = "crates/seccore" }
+qeep-protocol = { path = "crates/qeep-protocol" }
+decay-engine = { path = "crates/decay-engine" }
+# L5 Knowledge:仓库知识库,在线进化,自动DPO
+repo-wiki = { path = "crates/repo-wiki" }
+gsoe-evolution = { path = "crates/gsoe-evolution" }
+auto-dpo = { path = "crates/auto-dpo" }
+# L6 Router:全维稀疏协调器,KV块路由,函数即专家,门控激活,子专家稀疏激活,黏液适配,学习器
+osa-coordinator = { path = "crates/osa-coordinator" }
+kvbsr-router = { path = "crates/kvbsr-router" }
+faae-router = { path = "crates/faae-router" }
+gea-activator = { path = "crates/gea-activator" }
+sesa-router = { path = "crates/sesa-router" }
+ssra-fusion = { path = "crates/ssra-fusion" }
 omega-learner = { path = "crates/omega-learner" }
-# mca-gateway:L10 多通道亲和网关(ADR-065,workspace 第 38 个 crate)
-# WHY 入 workspace.dependencies:下游 crate(chimera-cli/chimera-tui)的 mca
-# feature 门控接线需统一 path 引用,版本由 workspace 集中管理
+# L7 Execution:生产验证层,聚集执行,多步预测,降级替代
+pvl-layer = { path = "crates/pvl-layer" }
+gqep-executor = { path = "crates/gqep-executor" }
+mtpe-executor = { path = "crates/mtpe-executor" }
+csn-substitutor = { path = "crates/csn-substitutor" }
+# L8 Parliament:议会系统,自适应预算,双档预算
+parliament = { path = "crates/parliament" }
+acb-governor = { path = "crates/acb-governor" }
+decb-governor = { path = "crates/decb-governor" }
+# L9 Quest:任务引擎,效率监控,多Agent协同
+quest-engine = { path = "crates/quest-engine" }
+efficiency-monitor = { path = "crates/efficiency-monitor" }
+chimera-mas = { path = "crates/chimera-mas" }
+# L10 Interface:CLI入口,TUI,跨平台桥接,多通道亲和网关
+chimera-cli = { path = "crates/chimera-cli" }
+chimera-tui = { path = "crates/chimera-tui" }
+chtc-bridge = { path = "crates/chtc-bridge" }
 mca-gateway = { path = "crates/mca-gateway" }
 
 # === v2.9.0-omega Task 1.12: CLI 输出增强依赖 ===
@@ -159,6 +197,22 @@ clap_complete = "4.5"
 # 纯 safe Rust 实现,与 #![forbid(unsafe_code)] 哲学兼容
 # WHY 2.0 而非 1.2:2.0 支持 setup_panic!() 无参数调用,API 更简洁;1.2 需 metadata 参数
 human-panic = "2.0"
+# futures:异步编程核心库,用于 Future/Stream/Sink 等抽象
+# WHY 统一到 workspace:4 个 crate(chimera-mas/gqep-executor/mcp-mesh/parliament)使用,
+# 统一版本避免版本碎片化
+futures = "0.3"
+# async-trait:为 trait 方法提供 async fn 支持
+# WHY 统一到 workspace:chimera-mas 使用,统一版本管理
+async-trait = "0.1"
+# regex:正则表达式库
+# WHY 统一到 workspace:chimera-mas 使用,统一版本管理
+regex = "1"
+# tokio-test:tokio 测试工具库
+# WHY 统一到 workspace:gqep-executor/pvl-layer 的 dev-dependencies 使用,统一版本管理
+tokio-test = "0.4"
+# sysinfo:系统信息库(CPU/内存/进程等)
+# WHY 统一到 workspace:chimera-tui 使用,保持 0.32 版本不变(API 兼容性)
+sysinfo = "0.32"
 
 # ============================================================
 # E2E 集成测试配置(Week 6 Task 6)
@@ -211,6 +265,8 @@ path = "tests/e2e/week7_security.rs"
 [[test]]
 name = "week7_stress"
 path = "tests/stress/week7_stress.rs"
+# P9-T2: 1000-iter 压测;ci-fast 档通过 -E 'not binary(/stress/)' 排除,
+#        由 stress profile (binary(/stress/)) 集中触发,见 .config/nextest.toml。
 
 # ============================================================
 # Week 8 Task 3 SubTask 3.1 — OWASP Top 10 渗透测试套件
@@ -244,6 +300,8 @@ path = "tests/e2e/full_integration.rs"
 [[test]]
 name = "stress_test"
 path = "tests/e2e/stress_test.rs"
+# P9-T2: stress 集成测试(含 60s 级稳定性场景);
+#        ci-fast 档通过 -E 'not binary(/stress/)' 排除。
 
 [[test]]
 name = "week8_final_acceptance"
@@ -467,6 +525,26 @@ path = "tests/e2e/coordination_metrics_closure_e2e.rs"
 name = "mca_quota_switch_e2e"
 path = "tests/e2e/mca_quota_switch_e2e.rs"
 
+# ADR-069: Token 效率优化 E2E(五项客户端域优化全链路验证)
+[[test]]
+name = "token_efficiency_e2e"
+path = "tests/e2e/token_efficiency_e2e.rs"
+
+# ADR-069: Token 效率优化压测框架(12 场景 × 3 并发 × 4 输入规模)
+[[test]]
+name = "token_efficiency_stress"
+path = "tests/stress/token_efficiency_stress.rs"
+# P9-T2: token 效率压测;ci-fast 档通过 -E 'not binary(/stress/)' 排除,
+#        nightly stress profile 触发。
+
+# ADR-069 Task 4: Token 效率优化 v2 — 50 任务基准集 Driver
+# WHY 新增 test target: 验证 50 个编码任务基准集的模拟执行与指标采集全链路,
+# 产出 JSON 格式基准报告 benchmark_report.json,支持单任务调试模式。
+# 测试文件位于 tests/e2e/ 子目录,必须显式注册。
+[[test]]
+name = "token_efficiency_benchmark_driver"
+path = "tests/e2e/token_efficiency_benchmark_driver.rs"
+
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
 # 版本号由 workspace 统一管理(§4.1 通用约定)。
@@ -524,6 +602,8 @@ tokio = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tempfile = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
 
 # ============================================================
 # Week 8 Task 4 — Release Profile 体积优化

@@ -51,18 +51,27 @@ pub mod config;
 pub mod error;
 pub mod lru;
 pub mod prefetch;
+pub mod semantic_cache;
 pub mod types;
+pub mod vendor_profiles;
 pub mod wal;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use affinity::{
-    CacheAffinityIntegration, CacheBreakpoint, CachePrefix, PrefixKind, SessionAffinityTracker,
+    CacheAffinityIntegration, CacheBreakpoint, CacheHitTracker, CachePrefix, PrefixKind,
+    SessionAffinityTracker,
 };
 pub use cache::SccCache;
 pub use config::SccConfig;
 pub use error::SccError;
 pub use prefetch::AccessPatternLearner;
+pub use semantic_cache::{
+    verify_context_ledger, CachedResponse, SemanticEntry, SemanticResponseCache,
+};
 pub use types::{AccessPattern, CacheStats, ContextEntry, ContextId};
+pub use vendor_profiles::{
+    should_enable_explicit_cache, vendor_profile, BreakpointStrategy, VendorCacheProfile,
+};
 // WHY 顶层导出 SqliteWal:C-02 修复后 SqliteWal 改为 async API(不再实现 WalTrait),
 // 外部调用方需直接引用 SqliteWal 类型以调用 async 方法
 pub use wal::{InMemoryWal, SqliteWal, WalEntry, WalOperation, WalTrait};

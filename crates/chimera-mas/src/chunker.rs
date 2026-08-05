@@ -425,15 +425,28 @@ impl std::fmt::Debug for BatchExecutor {
 // 辅助函数(复用 delegation.rs 模式)
 // ============================================================
 
-/// 计算单块的有效超时(复用 `delegation.rs::effective_timeout` 语义)
+/// 计算单块的有效超时(P3-10: 考虑 TaskComplexity,复用 delegation.rs 语义)
 ///
-/// - `acceptable_latency == 0` → 回退到 `default_timeout`
-/// - `acceptable_latency > 0` → `min(acceptable_latency, default_timeout)`
+/// ## 复杂度映射规则
+///
+/// - `Simple` → `default_timeout / 2`
+/// - `Medium` → `default_timeout`
+/// - `Complex` → `default_timeout * 2`
+/// - `VeryComplex` → `default_timeout * 4`
+///
+/// 最终值仍受 `acceptable_latency` 上限约束(> 0 时取 min)。
+/// `acceptable_latency == 0` 表示未设置自定义超时,直接使用复杂度基值。
 fn effective_timeout(task: &AgentTask, default_timeout: Duration) -> Duration {
+    let base = match task.complexity {
+        TaskComplexity::Simple => default_timeout / 2,
+        TaskComplexity::Medium => default_timeout,
+        TaskComplexity::Complex => default_timeout * 2,
+        TaskComplexity::VeryComplex => default_timeout * 4,
+    };
     if task.acceptable_latency > Duration::ZERO {
-        task.acceptable_latency.min(default_timeout)
+        base.min(task.acceptable_latency)
     } else {
-        default_timeout
+        base
     }
 }
 

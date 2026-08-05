@@ -59,6 +59,13 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
             // MCA M0(ADR-065):厂商额度耗尽必须确保投递(触发降级链切换,
             // 与 types.rs severity() 双清单同步)
             | NexusEvent::AffinityQuotaExhausted { .. }
+            // ADR-042 决策 4:R2 冻结违反 + 回滚失败为 Critical
+            // WHY:severity() 注释已声明"必须走 mpsc 旁路通道确保投递",
+            // 但实际未列入 is_critical_mpsc_event (P3-14 修复)。
+            // R2 违反等同于安全事件(奖励黑客风险立即生效),回滚失败意味着
+            // R2 路径代码可能仍在生效。必须走 mpsc 旁路确保投递,对齐 §6.2 红线 5。
+            | NexusEvent::R2FreezeViolation { .. }
+            | NexusEvent::R2FreezeRollbackFailed { .. }
     )
 }
 

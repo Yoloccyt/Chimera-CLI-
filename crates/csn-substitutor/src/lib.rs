@@ -208,8 +208,18 @@ impl CsnSubstitutor {
         let level = self.advance_or_create_chain(original_id)?;
         let level_idx = level as usize;
 
-        // 2. 根据 level N 选择候选
-        let candidate = self.select_candidate_for_level(original_id, level_idx)?;
+        // 2. 根据 level N 选择候选;失败时回滚本次新建的链
+        let candidate = match self.select_candidate_for_level(original_id, level_idx) {
+            Ok(candidate) => candidate,
+            Err(err) => {
+                // 回滚本次新建的降级链:level 0 恒为新建链(已存在链必被推进至 ≥1)
+                // WHY:未注册能力不应在状态机中留下孤儿链(week7_security SEC-CSN-4 安全语义)
+                if level_idx == 0 {
+                    self.chains.remove(original_id);
+                }
+                return Err(err);
+            }
+        };
 
         // 3. 发布事件(best-effort,失败仅记录日志)
         self.publish_substitution(original_id, &candidate, level)

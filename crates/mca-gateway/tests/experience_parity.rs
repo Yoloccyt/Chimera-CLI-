@@ -431,7 +431,7 @@ fn a3_context_affinity_cache_hit_rate() {
             }
             nexus_contracts::affinity::CacheSupport::Implicit => {
                 assert!(
-                    rate >= 0.40 && rate <= 0.60,
+                    (0.40..=0.60).contains(&rate),
                     "A3 违规:{} Implicit 缓存命中率 {:.1}% 不在 40-60% 区间",
                     spec.route_key(),
                     rate * 100.0

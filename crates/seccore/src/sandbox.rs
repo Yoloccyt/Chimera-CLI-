@@ -26,7 +26,7 @@ use tokio::process::Command as TokioCommand;
 use tracing::{info, warn};
 
 use crate::asa::{AsaAuditor, OperationAuditInput};
-use crate::audit::{AuditChain, AuditRecordStatus, DecisionChainBuilder};
+use crate::audit::{AuditChain, AuditRecordStatus, DecisionChainBuilder, RecordId};
 use crate::error::SecCoreError;
 use crate::escalation::{DefaultEscalationHandler, EscalationHandler};
 use crate::gvisor::GvisorRuntime;
@@ -87,6 +87,21 @@ pub struct Sandbox {
     /// 默认 `None` — 调用方通过 `with_gvisor_runtime()` 或 `with_gvisor_config()`
     /// 注入运行时实例。未注入时即使 `use_gvisor=true` 也会降级为进程隔离。
     gvisor_runtime: Option<GvisorRuntime>,
+}
+
+// ============================================================
+// 升级通道处理结果枚举
+// ============================================================
+
+/// 升级通道处理结果 — `handle_escalation` 的返回值(P2-1 提取)。
+///
+/// WHY: 封装 `audit_and_execute` 步骤3中升级通道的三种分档决策结果,
+/// 使调用方能通过 match 清晰处理"继续执行"与"拒绝返回"两种路径。
+enum EscalationOutcome {
+    /// 升级通过，继续执行流程（ReadOnly/Normal 直接执行，或 Parliament 辩论通过）
+    Proceed,
+    /// 操作被拒绝，含错误原因（EscalateToHuman / ASA Block / Parliament 否决）
+    Rejected(SecCoreError),
 }
 
 impl Sandbox {
@@ -297,144 +312,10 @@ impl Sandbox {
             decision_builder.add_proposal(&spec);
         }
 
-        match tier {
-            EscalationTier::EscalateToHuman => {
-                // risk_score ∈ [91,100]:拒绝执行,升级人工
-                // WHY: 不调用 escalation_handler,直接返回错误。
-                //      此类操作过于危险,Parliament 辩论不足以承担风险。
-                // P1-W4.1: tier / decision_chain_id 与顶层 span 字段对齐
-                // decision_chain_id 在 append_intent_with_chain 后填充(占位 Empty)
-                tracing::warn!(
-                    program = %spec.program,
-                    risk_score = spec.risk_score,
-                    tier = ?tier,
-                    decision_chain_id = tracing::field::Empty,
-                    "高危操作强制升级人工 (risk_score ≥ 91)"
-                );
-                // P1-W3.3:拒绝操作决策链上链 [Proposal, Result(rejected)]
-                decision_builder.add_rejected_result("escalate_to_human");
-                let chain = decision_builder.build();
-                if let Err(e) = self.audit_chain.append_intent_with_chain(&spec, chain) {
-                    tracing::error!(error = %e, "EscalateToHuman 决策链 append 失败");
-                } else if let Err(e) = self.audit_chain.update_status(
-                    (self.audit_chain.len() - 1) as u64,
-                    AuditRecordStatus::Failed,
-                    None,
-                ) {
-                    tracing::error!(error = %e, "EscalateToHuman update_status(Failed) 失败");
-                }
-                return Err(SecCoreError::EscalateToHuman {
-                    risk_score: spec.risk_score,
-                    program: spec.program.clone(),
-                    reason: format!(
-                        "risk_score {} ≥ 91, 操作过于危险, 必须人工确认后执行",
-                        spec.risk_score
-                    ),
-                });
-            }
-            EscalationTier::Parliament => {
-                // risk_score ∈ [71,90]:ASA 前置实时审计 → Parliament 辩论 + 自白通道复核
-                //
-                // WHY(P1-W3.2 / D6 修复): spec.md 要求高危操作在 Parliament 辩论前
-                // 先经 ASA 实时审计。ASA Block → 返回 AsaBlocked(辩论跳过,事中拦截优先);
-                // ASA Allow/Warn → 继续进入 parliament_debate(handler 决定是否批准)。
-                // 未配置 asa_auditor 时回退到 P1-W3.1 既有行为(直接辩论)。
-                tracing::info!(
-                    program = %spec.program,
-                    risk_score = spec.risk_score,
-                    tier = ?tier,
-                    decision_chain_id = tracing::field::Empty,
-                    "高危操作进入 ASA 前置审计 + Parliament 辩论"
-                );
-                // P1-W3.3:ASA 审计结果纳入决策链
-                if let Some(ref asa) = self.asa_auditor {
-                    let input = build_asa_input(&spec, &self.audit_chain);
-                    match asa.audit_and_intervene(&input) {
-                        Ok(asa_result) => {
-                            // ASA 通过(Allow/Warn):记录审计结果,继续进入 Parliament 辩论
-                            decision_builder.add_asa_audit(&asa_result);
-                        }
-                        Err(e) => {
-                            // P1-W3.3:ASA Block 决策链上链 [Proposal, Result(rejected:asa_blocked)]
-                            decision_builder.add_rejected_result("asa_blocked");
-                            let chain = decision_builder.build();
-                            if let Err(audit_err) =
-                                self.audit_chain.append_intent_with_chain(&spec, chain)
-                            {
-                                tracing::error!(error = %audit_err, "ASA Block 决策链 append 失败");
-                            } else if let Err(audit_err) = self.audit_chain.update_status(
-                                (self.audit_chain.len() - 1) as u64,
-                                AuditRecordStatus::Failed,
-                                None,
-                            ) {
-                                tracing::error!(
-                                    error = %audit_err,
-                                    "ASA Block update_status(Failed) 失败"
-                                );
-                            }
-                            return Err(e);
-                        }
-                    }
-                }
-                // Parliament 辩论 + 自白通道复核
-                // P1-W4.1: 嵌套 span 标记 Parliament 辩论阶段,在 tracing 树中
-                // 与外层 audit_and_execute span 形成父子关系,便于效率监控定位辩论耗时
-                let debate_span = tracing::info_span!(
-                    "parliament_debate",
-                    program = %spec.program,
-                    risk_score = spec.risk_score,
-                    tier = ?tier,
-                    decision_chain_id = tracing::field::Empty
-                );
-                let _debate_guard = debate_span.enter();
-                match self
-                    .escalation_handler
-                    .parliament_debate(&spec, spec.risk_score)
-                {
-                    Ok(()) => {
-                        // 辩论通过:记录辩论结果 + 自白,继续执行流程
-                        tracing::info!(decision = "approved", "Parliament 辩论通过");
-                        decision_builder.add_debate(true);
-                        // 自白:操作意图披露(program + risk_score)
-                        decision_builder.add_confession(&format!(
-                            "program={}, risk_score={}",
-                            spec.program, spec.risk_score
-                        ));
-                    }
-                    Err(e) => {
-                        // P1-W3.3:Parliament 否决决策链上链 [Proposal, (AsaAudit), Debate(rejected), Result(rejected)]
-                        tracing::info!(decision = "rejected", "Parliament 辩论否决");
-                        decision_builder.add_debate(false);
-                        decision_builder.add_rejected_result("parliament_rejected");
-                        let chain = decision_builder.build();
-                        if let Err(audit_err) =
-                            self.audit_chain.append_intent_with_chain(&spec, chain)
-                        {
-                            tracing::error!(error = %audit_err, "Parliament 否决决策链 append 失败");
-                        } else if let Err(audit_err) = self.audit_chain.update_status(
-                            (self.audit_chain.len() - 1) as u64,
-                            AuditRecordStatus::Failed,
-                            None,
-                        ) {
-                            tracing::error!(
-                                error = %audit_err,
-                                "Parliament 否决 update_status(Failed) 失败"
-                            );
-                        }
-                        return Err(e);
-                    }
-                }
-            }
-            EscalationTier::ReadOnly | EscalationTier::Normal => {
-                // 直接执行,无需升级(决策链为空,向后兼容)
-                // P1-W4.1: 即使低危路径也记录 tier,与高危路径字段对齐便于过滤聚合
-                tracing::info!(
-                    program = %spec.program,
-                    risk_score = spec.risk_score,
-                    tier = ?tier,
-                    "低危操作直接进入沙箱执行(无需升级通道)"
-                );
-            }
+        if let EscalationOutcome::Rejected(e) =
+            self.handle_escalation(&spec, tier, &mut decision_builder)
+        {
+            return Err(e);
         }
 
         info!(
@@ -461,11 +342,189 @@ impl Sandbox {
         // 步骤5:沙箱执行 — 进程隔离(Windows 降级 / Linux gVisor)
         let exec_result = self.execute_in_sandbox(&spec).await;
 
+        // 步骤5b-6(P1-W3.3 + N5 修复):post-execution audit — 补充决策链 + 更新审计状态
+        // WHY: P1-W3.3:高危操作补充 Execution + Result 步骤到决策链
+        //      N5:无论成功失败都要更新审计链,防止 Intent 记录永久悬挂
+        self.post_execution_audit(record_id, &exec_result, is_high_risk);
+        exec_result
+    }
+
+    /// 升级通道处理 — 按 EscalationTier 分档处理高危操作(P2-1 提取)。
+    ///
+    /// 对应 `audit_and_execute` 步骤3:
+    /// - EscalateToHuman (91-100):拒绝执行,决策链 [Proposal, Result(rejected)] 上链
+    /// - Parliament (71-90):
+    ///   - a. 若配置了 asa_auditor,先做 ASA 前置实时审计(P1-W3.2)
+    ///   - b. 调用 escalation_handler.parliament_debate()
+    /// - ReadOnly/Normal:直接执行(决策链为空,向后兼容)
+    ///
+    /// # 返回
+    /// - `EscalationOutcome::Proceed`:升级通过,继续执行流程
+    /// - `EscalationOutcome::Rejected(e)`:操作被拒绝,含错误原因
+    fn handle_escalation(
+        &mut self,
+        spec: &CommandSpec,
+        tier: EscalationTier,
+        decision_builder: &mut DecisionChainBuilder,
+    ) -> EscalationOutcome {
+        match tier {
+            EscalationTier::EscalateToHuman => {
+                // risk_score ∈ [91,100]:拒绝执行,升级人工
+                // WHY: 不调用 escalation_handler,直接返回错误。
+                //      此类操作过于危险,Parliament 辩论不足以承担风险。
+                // P1-W4.1: tier / decision_chain_id 与顶层 span 字段对齐
+                // decision_chain_id 在 append_intent_with_chain 后填充(占位 Empty)
+                tracing::warn!(
+                    program = %spec.program,
+                    risk_score = spec.risk_score,
+                    tier = ?tier,
+                    decision_chain_id = tracing::field::Empty,
+                    "高危操作强制升级人工 (risk_score ≥ 91)"
+                );
+                // P1-W3.3:拒绝操作决策链上链 [Proposal, Result(rejected)]
+                decision_builder.add_rejected_result("escalate_to_human");
+                let chain = decision_builder.build();
+                if let Err(e) = self.audit_chain.append_intent_with_chain(spec, chain) {
+                    tracing::error!(error = %e, "EscalateToHuman 决策链 append 失败");
+                } else if let Err(e) = self.audit_chain.update_status(
+                    (self.audit_chain.len() - 1) as u64,
+                    AuditRecordStatus::Failed,
+                    None,
+                ) {
+                    tracing::error!(error = %e, "EscalateToHuman update_status(Failed) 失败");
+                }
+                return EscalationOutcome::Rejected(SecCoreError::EscalateToHuman {
+                    risk_score: spec.risk_score,
+                    program: spec.program.clone(),
+                    reason: format!(
+                        "risk_score {} ≥ 91, 操作过于危险, 必须人工确认后执行",
+                        spec.risk_score
+                    ),
+                });
+            }
+            EscalationTier::Parliament => {
+                // risk_score ∈ [71,90]:ASA 前置实时审计 → Parliament 辩论 + 自白通道复核
+                //
+                // WHY(P1-W3.2 / D6 修复): spec.md 要求高危操作在 Parliament 辩论前
+                // 先经 ASA 实时审计。ASA Block → 返回 AsaBlocked(辩论跳过,事中拦截优先);
+                // ASA Allow/Warn → 继续进入 parliament_debate(handler 决定是否批准)。
+                // 未配置 asa_auditor 时回退到 P1-W3.1 既有行为(直接辩论)。
+                tracing::info!(
+                    program = %spec.program,
+                    risk_score = spec.risk_score,
+                    tier = ?tier,
+                    decision_chain_id = tracing::field::Empty,
+                    "高危操作进入 ASA 前置审计 + Parliament 辩论"
+                );
+                // P1-W3.3:ASA 审计结果纳入决策链
+                if let Some(ref asa) = self.asa_auditor {
+                    let input = build_asa_input(spec, &self.audit_chain);
+                    match asa.audit_and_intervene(&input) {
+                        Ok(asa_result) => {
+                            // ASA 通过(Allow/Warn):记录审计结果,继续进入 Parliament 辩论
+                            decision_builder.add_asa_audit(&asa_result);
+                        }
+                        Err(e) => {
+                            // P1-W3.3:ASA Block 决策链上链 [Proposal, Result(rejected:asa_blocked)]
+                            decision_builder.add_rejected_result("asa_blocked");
+                            let chain = decision_builder.build();
+                            if let Err(audit_err) =
+                                self.audit_chain.append_intent_with_chain(spec, chain)
+                            {
+                                tracing::error!(error = %audit_err, "ASA Block 决策链 append 失败");
+                            } else if let Err(audit_err) = self.audit_chain.update_status(
+                                (self.audit_chain.len() - 1) as u64,
+                                AuditRecordStatus::Failed,
+                                None,
+                            ) {
+                                tracing::error!(
+                                    error = %audit_err,
+                                    "ASA Block update_status(Failed) 失败"
+                                );
+                            }
+                            return EscalationOutcome::Rejected(e);
+                        }
+                    }
+                }
+                // Parliament 辩论 + 自白通道复核
+                // P1-W4.1: 嵌套 span 标记 Parliament 辩论阶段,在 tracing 树中
+                // 与外层 audit_and_execute span 形成父子关系,便于效率监控定位辩论耗时
+                let debate_span = tracing::info_span!(
+                    "parliament_debate",
+                    program = %spec.program,
+                    risk_score = spec.risk_score,
+                    tier = ?tier,
+                    decision_chain_id = tracing::field::Empty
+                );
+                let _debate_guard = debate_span.enter();
+                match self
+                    .escalation_handler
+                    .parliament_debate(spec, spec.risk_score)
+                {
+                    Ok(()) => {
+                        // 辩论通过:记录辩论结果 + 自白,继续执行流程
+                        tracing::info!(decision = "approved", "Parliament 辩论通过");
+                        decision_builder.add_debate(true);
+                        // 自白:操作意图披露(program + risk_score)
+                        decision_builder.add_confession(&format!(
+                            "program={}, risk_score={}",
+                            spec.program, spec.risk_score
+                        ));
+                    }
+                    Err(e) => {
+                        // P1-W3.3:Parliament 否决决策链上链 [Proposal, (AsaAudit), Debate(rejected), Result(rejected)]
+                        tracing::info!(decision = "rejected", "Parliament 辩论否决");
+                        decision_builder.add_debate(false);
+                        decision_builder.add_rejected_result("parliament_rejected");
+                        let chain = decision_builder.build();
+                        if let Err(audit_err) =
+                            self.audit_chain.append_intent_with_chain(spec, chain)
+                        {
+                            tracing::error!(error = %audit_err, "Parliament 否决决策链 append 失败");
+                        } else if let Err(audit_err) = self.audit_chain.update_status(
+                            (self.audit_chain.len() - 1) as u64,
+                            AuditRecordStatus::Failed,
+                            None,
+                        ) {
+                            tracing::error!(
+                                error = %audit_err,
+                                "Parliament 否决 update_status(Failed) 失败"
+                            );
+                        }
+                        return EscalationOutcome::Rejected(e);
+                    }
+                }
+            }
+            EscalationTier::ReadOnly | EscalationTier::Normal => {
+                // 直接执行,无需升级(决策链为空,向后兼容)
+                // P1-W4.1: 即使低危路径也记录 tier,与高危路径字段对齐便于过滤聚合
+                tracing::info!(
+                    program = %spec.program,
+                    risk_score = spec.risk_score,
+                    tier = ?tier,
+                    "低危操作直接进入沙箱执行(无需升级通道)"
+                );
+            }
+        }
+        EscalationOutcome::Proceed
+    }
+
+    /// 后执行审计 — 补充决策链 + 更新审计状态(P2-1 提取)。
+    ///
+    /// 对应 `audit_and_execute` 步骤5b-6:
+    /// - P1-W3.3:高危操作补充 Execution + Result 步骤到决策链
+    /// - N5 修复:根据执行结果更新审计状态(Executed/Failed)
+    fn post_execution_audit(
+        &mut self,
+        record_id: RecordId,
+        exec_result: &Result<ExecutionResult, SecCoreError>,
+        is_high_risk: bool,
+    ) {
         // P1-W3.3:执行后补充 Execution + Result 步骤到决策链(仅高危操作)
         if is_high_risk {
             let mut post_builder = DecisionChainBuilder::new();
             post_builder.add_execution();
-            match &exec_result {
+            match exec_result {
                 Ok(result) => {
                     post_builder.add_result(result.exit_code);
                 }
@@ -493,7 +552,7 @@ impl Sandbox {
                 if let Err(e) = self.audit_chain.update_status(
                     record_id,
                     AuditRecordStatus::Executed,
-                    Some(&result),
+                    Some(result),
                 ) {
                     // WHY: update_status 失败不影响已执行的命令结果,但记录错误供审计
                     // 审计链更新失败是严重异常(理论上不会发生),仅记日志不阻塞返回
@@ -509,8 +568,6 @@ impl Sandbox {
                     audit_hash = %result.audit_hash,
                     "命令执行完成,审计记录已更新为 Executed"
                 );
-
-                Ok(result)
             }
             Err(e) => {
                 // 执行失败:更新为 Failed,保持审计链完整(记录失败意图)
@@ -528,8 +585,6 @@ impl Sandbox {
                 }
 
                 info!(error = %e, "命令执行失败,审计记录已更新为 Failed");
-
-                Err(e)
             }
         }
     }
@@ -718,7 +773,9 @@ fn build_asa_input(spec: &CommandSpec, audit_chain: &AuditChain) -> OperationAud
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AttackType, GvisorConfig};
+    use crate::audit::DecisionStepType;
+    use crate::types::{AttackType, GvisorConfig, RiskLevel};
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_sandbox_blocks_injection() {
@@ -1012,5 +1069,170 @@ mod tests {
         // gvisor_runtime 默认为 None(私有字段,通过 execute_in_sandbox 的降级
         // 行为间接验证:use_gvisor=true 但 gvisor_runtime=None 时,
         // gvisor_available = false,自动走进程隔离路径)
+    }
+
+    // ============================================================
+    // P2-1: handle_escalation 和 post_execution_audit 测试
+    // ============================================================
+
+    /// 辅助函数:构造测试用的 CommandSpec
+    fn make_spec(program: &str, risk_score: u8) -> CommandSpec {
+        CommandSpec {
+            program: program.to_string(),
+            allowed_args: Vec::new(),
+            env_whitelist: HashMap::new(),
+            risk_level: RiskLevel::from_score(risk_score),
+            risk_score,
+        }
+    }
+
+    /// 辅助函数:构造测试用的 ExecutionResult
+    fn make_result() -> ExecutionResult {
+        ExecutionResult {
+            exit_code: 0,
+            stdout: "output".to_string(),
+            stderr: String::new(),
+            duration: Duration::from_millis(10),
+            audit_hash: "0".repeat(64),
+        }
+    }
+
+    /// 总是批准的 EscalationHandler mock — 用于测试 Parliament 档位通过路径。
+    struct MockApprovingHandler;
+
+    impl EscalationHandler for MockApprovingHandler {
+        fn parliament_debate(
+            &self,
+            _spec: &CommandSpec,
+            _risk_score: u8,
+        ) -> Result<(), SecCoreError> {
+            Ok(())
+        }
+    }
+
+    /// 测试 handle_escalation: EscalateToHuman 档位返回 Rejected 并增加审计链长度。
+    #[test]
+    fn test_handle_escalation_escalate_to_human_rejected() {
+        let mut sandbox = Sandbox::with_default_policy();
+        let spec = make_spec("dd", 95);
+        let tier = EscalationTier::EscalateToHuman;
+        let mut decision_builder = DecisionChainBuilder::new();
+        decision_builder.add_proposal(&spec);
+
+        let initial_len = sandbox.audit_chain.len();
+        let result = sandbox.handle_escalation(&spec, tier, &mut decision_builder);
+
+        assert!(matches!(result, EscalationOutcome::Rejected(_)));
+        assert_eq!(
+            sandbox.audit_chain.len(),
+            initial_len + 1,
+            "EscalateToHuman 应追加审计记录"
+        );
+    }
+
+    /// 测试 handle_escalation: ReadOnly 和 Normal 档位返回 Proceed。
+    #[test]
+    fn test_handle_escalation_readonly_normal_proceed() {
+        let mut sandbox = Sandbox::with_default_policy();
+        let mut decision_builder = DecisionChainBuilder::new();
+
+        let spec = make_spec("echo", 10);
+        let result =
+            sandbox.handle_escalation(&spec, EscalationTier::ReadOnly, &mut decision_builder);
+        assert!(matches!(result, EscalationOutcome::Proceed));
+
+        let spec2 = make_spec("echo", 50);
+        let mut decision_builder2 = DecisionChainBuilder::new();
+        let result2 =
+            sandbox.handle_escalation(&spec2, EscalationTier::Normal, &mut decision_builder2);
+        assert!(matches!(result2, EscalationOutcome::Proceed));
+    }
+
+    /// 测试 handle_escalation: Parliament 档位 + 总是批准的 handler 返回 Proceed。
+    #[test]
+    fn test_handle_escalation_parliament_with_handler_approved_proceed() {
+        let mut sandbox =
+            Sandbox::with_default_policy().with_escalation_handler(Box::new(MockApprovingHandler));
+        let spec = make_spec("rm", 80);
+        let tier = EscalationTier::Parliament;
+        let mut decision_builder = DecisionChainBuilder::new();
+        decision_builder.add_proposal(&spec);
+
+        let result = sandbox.handle_escalation(&spec, tier, &mut decision_builder);
+        assert!(matches!(result, EscalationOutcome::Proceed));
+    }
+
+    /// 测试 handle_escalation: Parliament 档位 + 默认 handler 返回 Rejected。
+    #[test]
+    fn test_handle_escalation_parliament_default_handler_rejected() {
+        let mut sandbox = Sandbox::with_default_policy();
+        let spec = make_spec("rm", 80);
+        let tier = EscalationTier::Parliament;
+        let mut decision_builder = DecisionChainBuilder::new();
+        decision_builder.add_proposal(&spec);
+
+        let result = sandbox.handle_escalation(&spec, tier, &mut decision_builder);
+        assert!(matches!(result, EscalationOutcome::Rejected(_)));
+    }
+
+    /// 测试 post_execution_audit: 成功执行后更新审计状态为 Executed。
+    #[test]
+    fn test_post_execution_audit_success_updates_executed() {
+        let mut sandbox = Sandbox::with_default_policy();
+        let spec = make_spec("echo", 10);
+        let record_id = sandbox.audit_chain.append_intent(&spec).unwrap();
+        let exec_result = Ok(make_result());
+
+        sandbox.post_execution_audit(record_id, &exec_result, false);
+
+        let block = &sandbox.audit_chain.blocks[record_id as usize];
+        assert_eq!(block.status, AuditRecordStatus::Executed);
+    }
+
+    /// 测试 post_execution_audit: 执行失败后更新审计状态为 Failed。
+    #[test]
+    fn test_post_execution_audit_failure_updates_failed() {
+        let mut sandbox = Sandbox::with_default_policy();
+        let spec = make_spec("echo", 10);
+        let record_id = sandbox.audit_chain.append_intent(&spec).unwrap();
+        let exec_result: Result<ExecutionResult, SecCoreError> =
+            Err(SecCoreError::SandboxError("test failure".to_string()));
+
+        sandbox.post_execution_audit(record_id, &exec_result, false);
+
+        let block = &sandbox.audit_chain.blocks[record_id as usize];
+        assert_eq!(block.status, AuditRecordStatus::Failed);
+    }
+
+    /// 测试 post_execution_audit: 高危操作成功执行后更新状态为 Executed,决策链扩展。
+    #[test]
+    fn test_post_execution_audit_high_risk_extend_chain() {
+        let mut sandbox = Sandbox::with_default_policy();
+        let spec = make_spec("rm", 80);
+        let pre_chain = DecisionChainBuilder::new().add_proposal(&spec).build();
+        let record_id = sandbox
+            .audit_chain
+            .append_intent_with_chain(&spec, pre_chain)
+            .unwrap();
+        let exec_result = Ok(make_result());
+
+        sandbox.post_execution_audit(record_id, &exec_result, true);
+
+        let block = &sandbox.audit_chain.blocks[record_id as usize];
+        assert_eq!(block.status, AuditRecordStatus::Executed);
+        assert!(
+            block
+                .decision_chain
+                .iter()
+                .any(|s| s.step_type == DecisionStepType::Execution),
+            "高危操作决策链应包含 Execution 步骤"
+        );
+        assert!(
+            block
+                .decision_chain
+                .iter()
+                .any(|s| s.step_type == DecisionStepType::Result),
+            "高危操作决策链应包含 Result 步骤"
+        );
     }
 }

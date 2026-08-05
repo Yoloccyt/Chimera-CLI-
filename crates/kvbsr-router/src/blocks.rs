@@ -150,6 +150,8 @@ impl BlockBuilder {
             block_vector,
             tools: tool_ids,
             block_coherence,
+            // PROBE P1.4: 生产构造默认非时序（调用方按块语义显式设置）
+            temporal: false,
         }
     }
 

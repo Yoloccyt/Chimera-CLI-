@@ -5,11 +5,11 @@ edition.workspace = true
 
 [dependencies]
 # L1 Core 依赖(向下依赖允许,§2.2 依赖铁律)
-nexus-core = { path = "../nexus-core" }
-event-bus = { path = "../event-bus" }
+nexus-core = { workspace = true }
+event-bus = { workspace = true }
 # L0 Contracts 依赖(ADR-033:L(N) → L(0) 恒允许)
 # VectorStore trait + VectorHit + VectorStoreExt + VectorBackend + VectorStoreStats 来源
-nexus-contracts = { path = "../nexus-contracts" }
+nexus-contracts = { workspace = true }
 
 # SQLite 持久化(WAL 模式 + Mutex 包装 Connection)
 rusqlite = { workspace = true }

@@ -15,7 +15,7 @@
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_core::{MultimodalInput, TaskStatus, UserIntent};
 use quest_engine::{
-    CoordinationCostSample, CoordinationMetricsConfig, CoordinationToGainRatio,
+    ComplexityScore, CoordinationCostSample, CoordinationMetricsConfig, CoordinationToGainRatio,
     InferenceGainSample, QuestEngine,
 };
 
@@ -141,7 +141,9 @@ async fn test_paradox_risk_with_low_success_rate() {
         .with_delegation_overhead(2000.0); // 多 Agent 委托 2000ms
     let low_gain = InferenceGainSample::new(0.1); // 10% 成功率
 
-    let ratio = engine.metrics().record_and_compute(&high_cost, &low_gain);
+    let ratio = engine
+        .metrics()
+        .record_and_compute(&high_cost, &low_gain, None);
 
     // total_ms = 500+300+1000+2000 = 3800ms
     // cost_index = min(3800/1000, 1.0) = 1.0
@@ -530,6 +532,144 @@ async fn test_cancel_quest_cleans_pending_samples() {
 }
 
 // ============================================================
+// P1-5: 自适应基线集成测试
+// ============================================================
+
+/// 自适应基线在简单 Quest(低复杂度)下产生较低的 cost_index
+///
+/// 验证点:低复杂度 Quest 使用自适应基线时,相同的协调成本产生更高的
+/// cost_index(因为基线更短),从而更易触发推理悖论风险。
+#[tokio::test]
+async fn test_adaptive_baseline_lower_cost_index_for_simple_quest() {
+    let bus = EventBus::new();
+    let engine = QuestEngine::new(bus);
+
+    // 创建一个简单 Quest(1 个任务,低复杂度)
+    let intent = make_intent("简单任务。");
+    let quest = engine.create_quest(intent).await.unwrap();
+
+    // 全部完成
+    for task in &quest.tasks {
+        engine
+            .update_task_status(&quest.quest_id, &task.task_id, TaskStatus::Running)
+            .await
+            .unwrap();
+        engine
+            .update_task_status(&quest.quest_id, &task.task_id, TaskStatus::Completed)
+            .await
+            .unwrap();
+    }
+
+    let ratio = engine
+        .last_coordination_ratio()
+        .expect("Quest 完成后应有比值记录");
+
+    // 默认自适应基线启用,简单 Quest(score≈0.7)的基线 ≈ 414ms
+    // 实际 Event Bus 延迟通常 < 1ms,所以 cost_index 应接近 0
+    assert!(
+        ratio.cost_index >= 0.0,
+        "cost_index 应非负,实际: {}",
+        ratio.cost_index
+    );
+}
+
+#[tokio::test]
+async fn test_adaptive_baseline_affects_cost_index() {
+    // 使用 CoordinationMetricsCollector 直接测试不同复杂度下的 cost_index 差异
+    let config = CoordinationMetricsConfig {
+        adaptive_baseline_enabled: true,
+        min_baseline_ms: 200.0,
+        max_baseline_ms: 2000.0,
+        cost_baseline_ms: 1000.0,
+        ..Default::default()
+    };
+    let collector = quest_engine::CoordinationMetricsCollector::with_config(config);
+
+    let cost = CoordinationCostSample::new(500.0, 0.0); // total=500ms
+    let gain = InferenceGainSample::new(1.0);
+
+    // 使用简单复杂度(score≈0.7):基线 ≈ 414ms, cost_index ≈ 500/414=1.0(满载)
+    let ratio_simple = collector.record_and_compute(&cost, &gain, Some(ComplexityScore::new(0.7)));
+    // 使用复杂复杂度(score≈10):基线 ≈ 2000ms, cost_index ≈ 500/2000=0.25
+    let ratio_complex =
+        collector.record_and_compute(&cost, &gain, Some(ComplexityScore::new(10.0)));
+
+    // 验证:相同成本下,简单 Quest 的 cost_index 应高于复杂 Quest
+    assert!(
+        ratio_simple.cost_index > ratio_complex.cost_index,
+        "简单 Quest 的 cost_index({}) 应高于复杂 Quest 的 cost_index({})",
+        ratio_simple.cost_index,
+        ratio_complex.cost_index
+    );
+}
+
+#[tokio::test]
+async fn test_adaptive_baseline_disabled_fallback_to_static() {
+    // 自适应禁用时,不同复杂度产生相同的 cost_index(使用静态基线)
+    let config = CoordinationMetricsConfig {
+        adaptive_baseline_enabled: false,
+        cost_baseline_ms: 1000.0,
+        ..Default::default()
+    };
+    let collector = quest_engine::CoordinationMetricsCollector::with_config(config);
+
+    let cost = CoordinationCostSample::new(500.0, 0.0); // total=500ms
+    let gain = InferenceGainSample::new(1.0);
+
+    let ratio_simple = collector.record_and_compute(&cost, &gain, Some(ComplexityScore::new(0.0)));
+    let ratio_complex =
+        collector.record_and_compute(&cost, &gain, Some(ComplexityScore::new(10.0)));
+
+    // 自适应禁用时,无论复杂度如何,cost_index 均应相同
+    assert!(
+        (ratio_simple.cost_index - ratio_complex.cost_index).abs() < 1e-9,
+        "自适应禁用时 cost_index 应相同: simple={}, complex={}",
+        ratio_simple.cost_index,
+        ratio_complex.cost_index
+    );
+    // 验证使用静态基线: cost_index = 500/1000 = 0.5
+    assert!(
+        (ratio_simple.cost_index - 0.5).abs() < 1e-6,
+        "使用静态基线 1000ms, cost_index 应为 0.5, 实际: {}",
+        ratio_simple.cost_index
+    );
+}
+
+#[tokio::test]
+async fn test_adaptive_baseline_paradox_risk_sensitivity() {
+    // 自适应基线使简单 Quest 在相同成本下更易触发推理悖论风险
+    let config = CoordinationMetricsConfig {
+        adaptive_baseline_enabled: true,
+        min_baseline_ms: 200.0,
+        max_baseline_ms: 2000.0,
+        paradox_threshold: 1.0,
+        ..Default::default()
+    };
+    let collector = quest_engine::CoordinationMetricsCollector::with_config(config);
+
+    // 构造中高成本(500ms) + 中等增益(0.6)
+    let cost = CoordinationCostSample::new(500.0, 0.0);
+    let gain = InferenceGainSample::new(0.6);
+
+    // 简单 Quest(score=0.7):基线≈414ms, cost_index=1.0, ratio=1.0/0.6≈1.67 > 1.0 → 风险
+    let ratio_simple = collector.record_and_compute(&cost, &gain, Some(ComplexityScore::new(0.7)));
+    assert!(
+        ratio_simple.is_paradox_risk,
+        "简单 Quest(500ms/0.6)应触发推理悖论风险,实际: {}",
+        ratio_simple.description()
+    );
+
+    // 复杂 Quest(score=10.0):基线≈2000ms, cost_index=0.25, ratio=0.25/0.6≈0.42 < 1.0 → 无风险
+    let ratio_complex =
+        collector.record_and_compute(&cost, &gain, Some(ComplexityScore::new(10.0)));
+    assert!(
+        !ratio_complex.is_paradox_risk,
+        "复杂 Quest(500ms/0.6)不应触发推理悖论风险,实际: {}",
+        ratio_complex.description()
+    );
+}
+
+// ============================================================
 // 测试组 10(M3-T3.1):CoordinationMetricsCollector 属性模拟测试
 //
 // 以任意 (cost, gain) 序列模拟长期运行,验证 EWMA 收敛性与
@@ -549,7 +689,7 @@ proptest::proptest! {
         for (cost_ms, gain) in samples {
             let cost = CoordinationCostSample::new(cost_ms, 0.0);
             let gain_sample = InferenceGainSample::new(gain);
-            let ratio = collector.record_and_compute(&cost, &gain_sample);
+            let ratio = collector.record_and_compute(&cost, &gain_sample, None);
 
             proptest::prop_assert!(ratio.coordination_cost_ms >= 0.0, "EWMA 成本恒非负");
             proptest::prop_assert!(
@@ -579,7 +719,7 @@ proptest::proptest! {
         // 30 次恒定输入(alpha=0.3):EWMA 误差 ≤ 0.7^30 ≈ 2e-5,必然收敛
         let mut last = None;
         for _ in 0..30 {
-            last = Some(collector.record_and_compute(&cost, &gain_sample));
+            last = Some(collector.record_and_compute(&cost, &gain_sample, None));
         }
         let last = last.expect("至少一次记录");
         proptest::prop_assert!(

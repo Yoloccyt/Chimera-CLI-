@@ -139,7 +139,7 @@ impl AegisPipeline {
     /// # 错误
     /// - `GsoeError`:CI 门执行本身失败(如 cargo 不可达)时上抛
     pub async fn run_once(
-        &self,
+        &mut self,
         trajectories: &[TrajectoryOutcome],
         base_spec: &HarnessSpec,
         ci_gate: &dyn CiGate,
@@ -194,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pipeline_empty_batch_returns_empty_verdict() {
-        let pipeline = AegisPipeline::new();
+        let mut pipeline = AegisPipeline::new();
         let gate = MockCiGate::with_passing_result();
         let verdict = pipeline
             .run_once(&[], &base_spec(), &gate)
@@ -206,7 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pipeline_full_flow_produces_variant_on_timeout_failures() {
-        let pipeline = AegisPipeline::new();
+        let mut pipeline = AegisPipeline::new();
         let gate = MockCiGate::with_passing_result();
         // 高失败率 + timeout 主导 → 应产出放宽重试的变体
         let trajectories: Vec<TrajectoryOutcome> = (0..10)
@@ -233,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pipeline_healthy_trajectories_no_variant() {
-        let pipeline = AegisPipeline::new();
+        let mut pipeline = AegisPipeline::new();
         let gate = MockCiGate::with_passing_result();
         // 全部成功 → NoChange,不产出变体
         let trajectories: Vec<TrajectoryOutcome> = (0..10)

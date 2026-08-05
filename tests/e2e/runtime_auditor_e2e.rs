@@ -89,8 +89,14 @@ fn e2e_five_dimension_report_from_event_stream() {
     let report = auditor.generate_report();
     // 可靠交付 = 1 完成 / 2 创建 = 0.5
     assert!((report.reliable_delivery - 0.5).abs() < f32::EPSILON);
-    // 经验沉淀 = 1 检查点 / 1 完成 = 1.0
-    assert_eq!(report.experience_accumulation, 1.0);
+    // 经验沉淀 = 1 检查点 / 1 完成 = 1.0 的简单比率,经 bayesian_average
+    // 先验拉低(prior_confidence > 0)→ 落在 (0.5, 1.0) 区间而非精确 1.0
+    // (WHY 区间断言: 精确值依赖 BayesianConfig 先验强度,脆弱的精确断言)
+    assert!(
+        report.experience_accumulation > 0.5 && report.experience_accumulation < 1.0,
+        "经验沉淀经贝叶斯平均应在 (0.5, 1.0): got {}",
+        report.experience_accumulation
+    );
     // 无执行事件观测 → 可控执行为中性 0.5
     assert_eq!(report.controllable_execution, 0.5);
 
@@ -104,7 +110,12 @@ fn e2e_five_dimension_report_from_event_stream() {
         } = event
         {
             assert!((reliable_delivery - 0.5).abs() < f32::EPSILON);
-            assert_eq!(experience_accumulation, 1.0);
+            // 与 generate_report 同口径:贝叶斯平均落在 (0.5, 1.0)
+            assert!(
+                experience_accumulation > 0.5 && experience_accumulation < 1.0,
+                "事件中经验沉淀经贝叶斯平均应在 (0.5, 1.0): got {}",
+                experience_accumulation
+            );
             report_seen = true;
         }
     }

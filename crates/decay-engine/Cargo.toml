@@ -12,10 +12,10 @@ dashmap = { workspace = true }
 tracing = { workspace = true }
 # nexus-contracts: L0 契约层（P4-W14.4 S6 接缝：DecayPolicy/DecayProfile 类型）
 # WHY L4 → L0 依赖铁律合规：decay-engine 仅依赖 L0 的纯类型，不依赖 L6 omega-learner
-nexus-contracts = { path = "../nexus-contracts" }
+nexus-contracts = { workspace = true }
 # nexus-core: L1 Core（P1-4 衰减模型统一：共享指数衰减公式）
 # WHY L4 → L1 依赖铁律合规：向下依赖，仅使用纯数学函数
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 
 [dev-dependencies]
 # criterion:性能基准测试框架(§7.1 测试矩阵约定)

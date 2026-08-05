@@ -13,6 +13,10 @@ default = []
 wasm-sandbox = ["dep:wasmtime"]
 
 [dependencies]
+# ADR-054 决策 3(P9-T4):AttackType/Command/CommandPolicy/CommandValidator 上提 L0,
+# seccore 依赖 L0 契约(经 re-export 保对外 API 兼容)并实现 CommandValidator trait。
+# 依赖方向: L4 → L0 ✓(§2.2 依赖铁律扩展,ADR-033)。
+nexus-contracts = { workspace = true }
 # SHA-256 审计链哈希计算
 sha2 = { workspace = true }
 # 哈希十六进制编码(审计块、执行结果摘要)
@@ -29,8 +33,10 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 # UUID v4 生成(gVisor 沙箱名防冲突)
 uuid = { workspace = true, features = ["v4"] }
+# serde_json:OCI config.json 序列化(gVisor OCI bundle 生成)
+serde_json = { workspace = true }
 # Event Bus:L1 事件总线,发布 AsaIntervention 事件通知 Parliament 干预决策(§2.2 跨层通信唯一通道)
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # WASM 沙箱后端(ADR-035 决策 2,可选):仅在 `wasm-sandbox` feature 启用时引入。
 # WHY 直接版本声明而非 workspace 级:ADR-035 决策 3 明确要求避免 workspace 级孤儿声明,
 #     由 seccore 自身显式声明,避免再次孤儿化(根 Cargo.toml L60 的孤儿声明已在 P1 阶段清理)。
@@ -46,15 +52,28 @@ wasmtime = { version = "47.0.2", optional = true }
 
 [dev-dependencies]
 # criterion 基准测试框架(ASA 审计延迟基准)
-criterion = { workspace = true }
+# WHY async_tokio:gvisor_bench.rs 的异步基准(to_async)需要该 feature,
+# 与 chimera-mas 的 criterion 配置保持一致(P3-6 gVisor benchmark 验证)
+criterion = { workspace = true, features = ["async_tokio"] }
 # proptest:属性测试框架,用于 ASA 不变量验证(SubTask 37.7)
 proptest = { workspace = true }
-# serde_json:JSON 序列化/反序列化,用于 DecisionStepType 序列化往返测试(P1-W3.3)
-serde_json = { workspace = true }
 # tracing-test:捕获 tracing 日志,验证 audit_and_execute / ASA 审计的 span 与结构化字段(P1-W4.1)
 tracing-test = { workspace = true }
 
 # criterion 基准测试配置:避免与单元测试冲突
 [[bench]]
 name = "asa_audit"
+harness = false
+
+# P3-6: gVisor execute vs 降级路径延迟对比
+# 非 Linux 平台仅包含 sandbox 降级路径基准。
+# 默认跳过(需 runsc 环境),运行: cargo bench -p seccore --jobs 1
+[[bench]]
+name = "gvisor_bench"
+harness = false
+
+# ADR-054 决策 3(P9-T4): CommandValidator trait 间接调用 vs 直接 validate_command 延迟对比
+# 运行: cargo bench -p seccore --bench command_validator_bench -- --quick
+[[bench]]
+name = "command_validator_bench"
 harness = false

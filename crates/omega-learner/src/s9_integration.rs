@@ -212,6 +212,7 @@ mod tests {
             cache_hit_tokens: 20,
             cost_actual_micro: 500,
             ttft_ms: 200,
+            semantic_cache_hit: false,
         };
         bus.publish(event).await.unwrap();
 
@@ -271,12 +272,13 @@ mod tests {
             let event = NexusEvent::StreamSessionCompleted {
                 metadata: EventMetadata::new("test"),
                 intent_id: format!("intent-{i}"),
-                route_key: format!("zhipu/glm-5.2"),
+                route_key: "zhipu/glm-5.2".to_string(),
                 input_tokens: 100,
                 output_tokens: 50,
                 cache_hit_tokens: 20,
                 cost_actual_micro: 500 + i as u64 * 100,
                 ttft_ms: 200 + i as u64 * 50,
+                semantic_cache_hit: false,
             };
             bus.publish(event).await.unwrap();
         }
@@ -310,6 +312,7 @@ mod tests {
             cache_hit_tokens: 0,
             cost_actual_micro: 0,
             ttft_ms: 0,
+            semantic_cache_hit: false,
         };
         bus.publish(event).await.unwrap();
 

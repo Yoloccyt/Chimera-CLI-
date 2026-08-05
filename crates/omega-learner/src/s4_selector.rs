@@ -114,6 +114,7 @@ use crate::error::{LearnerError, Result};
 use crate::linucb::LinUCB;
 use nexus_contracts::{SelectorPolicy, SelectorWeights};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 // ============================================================
 // 常量定义
@@ -131,7 +132,7 @@ pub const S4_CONTEXT_DIM: usize = 8;
 pub const DEFAULT_S4_ALPHA: f64 = 1.0;
 
 /// S4 臂数（5 个权重向量采样）
-pub const S4_ARM_COUNT: usize = 5;
+pub const S4_ARM_COUNT: usize = 29;
 
 // ============================================================
 // 块类型枚举
@@ -447,16 +448,42 @@ impl S4Reward {
 ///
 /// 索引顺序与 `s4_arm_set()` 一致，便于 `arm_index_to_weights` / `weights_to_arm_index` 双向映射。
 pub const S4_ARM_WEIGHTS: [SelectorWeights; S4_ARM_COUNT] = [
-    // Arm 0: default — 架构手册推荐基线 (0.4, 0.3, 0.3)
+    // Arm 0: default (0.4, 0.3, 0.3)
     SelectorWeights::new(0.40, 0.30, 0.30),
-    // Arm 1: recency-heavy — 偏向时近性 (0.6, 0.2, 0.2)
+    // Arm 1: recency-heavy (0.6, 0.2, 0.2)
     SelectorWeights::new(0.60, 0.20, 0.20),
-    // Arm 2: frequency-heavy — 偏向频次 (0.2, 0.6, 0.2)
+    // Arm 2: frequency-heavy (0.2, 0.6, 0.2)
     SelectorWeights::new(0.20, 0.60, 0.20),
-    // Arm 3: relevance-heavy — 偏向任务相关性 (0.2, 0.2, 0.6)
+    // Arm 3: relevance-heavy (0.2, 0.2, 0.6)
     SelectorWeights::new(0.20, 0.20, 0.60),
-    // Arm 4: balanced — 极均衡 (0.34, 0.33, 0.33)
+    // Arm 4: balanced (0.34, 0.33, 0.33)
     SelectorWeights::new(0.34, 0.33, 0.33),
+    // === PROBE P2.3: 探针配比臂（Arm 5-28 = alpha 4 x grain 3 x k 2 = 24）===
+    // 权重 = (alpha, 1-alpha, 0.0)：探针分替代 relevance；update 必须用 update_last
+    SelectorWeights::new(0.3, 0.7, 0.0), // arm 5 a0.3-g256-k8
+    SelectorWeights::new(0.3, 0.7, 0.0), // arm 6 a0.3-g256-k16
+    SelectorWeights::new(0.3, 0.7, 0.0), // arm 7 a0.3-g512-k8
+    SelectorWeights::new(0.3, 0.7, 0.0), // arm 8 a0.3-g512-k16
+    SelectorWeights::new(0.3, 0.7, 0.0), // arm 9 a0.3-g1024-k8
+    SelectorWeights::new(0.3, 0.7, 0.0), // arm 10 a0.3-g1024-k16
+    SelectorWeights::new(0.5, 0.5, 0.0), // arm 11 a0.5-g256-k8
+    SelectorWeights::new(0.5, 0.5, 0.0), // arm 12 a0.5-g256-k16
+    SelectorWeights::new(0.5, 0.5, 0.0), // arm 13 a0.5-g512-k8
+    SelectorWeights::new(0.5, 0.5, 0.0), // arm 14 a0.5-g512-k16
+    SelectorWeights::new(0.5, 0.5, 0.0), // arm 15 a0.5-g1024-k8
+    SelectorWeights::new(0.5, 0.5, 0.0), // arm 16 a0.5-g1024-k16
+    SelectorWeights::new(0.7, 0.3, 0.0), // arm 17 a0.7-g256-k8
+    SelectorWeights::new(0.7, 0.3, 0.0), // arm 18 a0.7-g256-k16
+    SelectorWeights::new(0.7, 0.3, 0.0), // arm 19 a0.7-g512-k8
+    SelectorWeights::new(0.7, 0.3, 0.0), // arm 20 a0.7-g512-k16
+    SelectorWeights::new(0.7, 0.3, 0.0), // arm 21 a0.7-g1024-k8
+    SelectorWeights::new(0.7, 0.3, 0.0), // arm 22 a0.7-g1024-k16
+    SelectorWeights::new(0.9, 0.1, 0.0), // arm 23 a0.9-g256-k8
+    SelectorWeights::new(0.9, 0.1, 0.0), // arm 24 a0.9-g256-k16
+    SelectorWeights::new(0.9, 0.1, 0.0), // arm 25 a0.9-g512-k8
+    SelectorWeights::new(0.9, 0.1, 0.0), // arm 26 a0.9-g512-k16
+    SelectorWeights::new(0.9, 0.1, 0.0), // arm 27 a0.9-g1024-k8
+    SelectorWeights::new(0.9, 0.1, 0.0), // arm 28 a0.9-g1024-k16
 ];
 
 /// S4 臂集对应的简称（用于 ArmId 字符串）
@@ -466,6 +493,30 @@ const S4_ARM_SHORT_NAMES: [&str; S4_ARM_COUNT] = [
     "frequency-heavy",
     "relevance-heavy",
     "balanced",
+    "probe-a0.3-g256-k8",
+    "probe-a0.3-g256-k16",
+    "probe-a0.3-g512-k8",
+    "probe-a0.3-g512-k16",
+    "probe-a0.3-g1024-k8",
+    "probe-a0.3-g1024-k16",
+    "probe-a0.5-g256-k8",
+    "probe-a0.5-g256-k16",
+    "probe-a0.5-g512-k8",
+    "probe-a0.5-g512-k16",
+    "probe-a0.5-g1024-k8",
+    "probe-a0.5-g1024-k16",
+    "probe-a0.7-g256-k8",
+    "probe-a0.7-g256-k16",
+    "probe-a0.7-g512-k8",
+    "probe-a0.7-g512-k16",
+    "probe-a0.7-g1024-k8",
+    "probe-a0.7-g1024-k16",
+    "probe-a0.9-g256-k8",
+    "probe-a0.9-g256-k16",
+    "probe-a0.9-g512-k8",
+    "probe-a0.9-g512-k16",
+    "probe-a0.9-g1024-k8",
+    "probe-a0.9-g1024-k16",
 ];
 
 /// 构建 S4 接缝的臂集（5 臂对应权重向量采样）
@@ -493,28 +544,24 @@ pub fn s4_arm_set() -> DiscreteArmSet {
 ///
 /// WHY const fn: 映射是纯函数，编译期可计算，避免运行时开销。
 pub const fn arm_index_to_weights(idx: usize) -> SelectorWeights {
-    match idx {
-        0 => S4_ARM_WEIGHTS[0],
-        1 => S4_ARM_WEIGHTS[1],
-        2 => S4_ARM_WEIGHTS[2],
-        3 => S4_ARM_WEIGHTS[3],
-        _ => S4_ARM_WEIGHTS[4],
+    // PROBE P2.3: 数组索引（29 臂）——越界返回 Arm 0（default）防 panic
+    if idx < S4_ARM_COUNT {
+        S4_ARM_WEIGHTS[idx]
+    } else {
+        S4_ARM_WEIGHTS[0]
     }
 }
-
 /// ArmIndex → 臂简称（用于日志/调试）
+///
+/// PROBE P2.3: 29 臂数组索引，越界返回 default
 pub const fn arm_index_to_short_name(idx: usize) -> &'static str {
-    match idx {
-        0 => S4_ARM_SHORT_NAMES[0],
-        1 => S4_ARM_SHORT_NAMES[1],
-        2 => S4_ARM_SHORT_NAMES[2],
-        3 => S4_ARM_SHORT_NAMES[3],
-        _ => S4_ARM_SHORT_NAMES[4],
+    // PROBE P2.3: 数组索引（29 臂）——越界返回 default 防 panic
+    if idx < S4_ARM_COUNT {
+        S4_ARM_SHORT_NAMES[idx]
+    } else {
+        S4_ARM_SHORT_NAMES[0]
     }
 }
-
-/// SelectorWeights → ArmIndex 映射
-///
 /// 在 S4 臂集中查找匹配的权重向量，返回其索引。
 /// 若无精确匹配（浮点比较），返回 0（default）作为 fallback。
 ///
@@ -533,6 +580,55 @@ pub fn weights_to_arm_index(weights: SelectorWeights) -> usize {
 }
 
 // ============================================================
+/// 探针配比臂参数（PROBE P2.3）
+///
+/// Arm 5-28 的探针融合参数：(alpha, beta) 静态/探针分权重 + grain/k 检索配置。
+///
+/// # 字段
+/// - `alpha`: 静态分权重（探针分权重 = 1 - alpha，配比互补）
+/// - `beta`: 探针分权重（= 1 - alpha，保持 f32 语义对称）
+/// - `grain`: 探针相似度检索粒度（token 窗口）
+/// - `k`: 探针 Top-K 召回数
+///
+/// WHY 独立于 SelectorWeights: (alpha,beta) 是 probe.rs 融合公式参数，
+/// 与 compressor 静态评分三元组正交；omega-learner 无 hcw-window 依赖，
+/// 经本表在 omega-learner 侧承载，生效侧（hcw-window）按臂索引查表
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProbeArmParams {
+    /// 静态分权重 [0,1]
+    pub alpha: f32,
+    /// 探针分权重 = 1 - alpha
+    pub beta: f32,
+    /// 检索粒度（token）
+    pub grain: usize,
+    /// Top-K 召回数
+    pub k: usize,
+}
+
+/// 按臂索引查询探针配比参数（Arm 5-28；原臂 0-4 返回 None）
+///
+/// # 返回
+/// - `Some(params)`: 探针配比臂（索引 5-28）
+/// - `None`: 原 5 权重臂（0-4）或越界
+pub fn probe_arm_params(idx: usize) -> Option<ProbeArmParams> {
+    if !(5..S4_ARM_COUNT).contains(&idx) {
+        return None;
+    }
+    let probe_idx = idx - 5;
+    let alphas = [0.3f32, 0.5, 0.7, 0.9];
+    let grains = [256usize, 512, 1024];
+    let ks = [8usize, 16];
+    let a = alphas[probe_idx / (3 * 2)];
+    let g = grains[(probe_idx / 2) % 3];
+    let k = ks[probe_idx % 2];
+    Some(ProbeArmParams {
+        alpha: a,
+        beta: 1.0 - a,
+        grain: g,
+        k,
+    })
+}
+
 // S4 学习器
 // ============================================================
 
@@ -583,6 +679,31 @@ pub struct S4Learner {
     last_arm_idx: usize,
     /// 已观察到的总步数
     total_steps: u64,
+    // PROBE P2.2: 策略下发回调（编排器注入）
+    policy_sink: Option<PolicySink>,
+}
+
+/// 策略下发回调类型（PROBE P2.2）
+/// WHY struct 包装: S4Learner derive(Debug, Clone)，裸 Arc<dyn Fn> 不实现 Debug/Clone；
+#[derive(Clone)]
+pub struct PolicySink(Arc<dyn Fn(SelectorPolicy) + Send + Sync>);
+
+impl std::fmt::Debug for PolicySink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PolicySink")
+    }
+}
+
+impl PolicySink {
+    /// 创建回调（编排器闭包捕获 holder）
+    pub fn new<F: Fn(SelectorPolicy) + Send + Sync + 'static>(f: F) -> Self {
+        Self(Arc::new(f))
+    }
+
+    /// 触发回调
+    pub fn invoke(&self, policy: SelectorPolicy) {
+        (self.0)(policy)
+    }
 }
 
 impl S4Learner {
@@ -601,12 +722,63 @@ impl S4Learner {
             linucb,
             last_arm_idx: 0,
             total_steps: 0,
+            // PROBE P2.2: 默认无回调（未接线时零行为变化）
+            policy_sink: None,
         })
     }
 
     /// 创建 S4 学习器（使用默认 α=1.0）
     pub fn with_default_alpha() -> Result<Self> {
         Self::new(DEFAULT_S4_ALPHA)
+    }
+
+    /// 设置策略下发回调（PROBE P2.2，append-only）
+    /// # 参数 sink: 策略回调；None 清除回调
+    /// 选择探针配比臂并返回参数（PROBE P2.3）
+    ///
+    /// # 返回
+    /// - `Ok(Some(params))`: 探针臂（5-28）配比参数
+    /// - `Ok(None)`: 选中原权重臂（0-4）——调用方按原权重路径处理
+    /// - `Err`: select 失败（上下文维度/数值异常）
+    ///
+    /// WHY 独立于 `select()`: 探针臂的 (alpha,beta,grain,k) 无法承载进
+    /// SelectorWeights 三元组，经本方法返回结构化参数
+    pub fn select_probe(&mut self, context: &S4Context) -> Result<Option<ProbeArmParams>> {
+        let _weights = self.select(context)?;
+        Ok(probe_arm_params(self.last_arm_idx))
+    }
+
+    /// 用最近选择的臂更新模型（PROBE P2.3，探针臂专用）
+    ///
+    /// # 参数
+    /// - `context`: 选择时的 S4 上下文
+    /// - `reward`: 观察到的奖励（后悔率转换）
+    ///
+    /// WHY 与 `update()` 并行: 探针臂权重非唯一（(alpha,1-alpha,0) 按 alpha 档
+    /// 重复），`weights_to_arm_index` 会映射到同 alpha 档第一个臂——
+    /// 探针臂必须经 last_arm_idx 精确回溯（本方法）；原 5 权重臂仍走 `update()`
+    pub fn update_last(&mut self, context: &S4Context, reward: &S4Reward) -> Result<()> {
+        let seam_ctx = context.to_seam_context()?;
+        let arm_idx = ArmIndex::from(self.last_arm_idx);
+        let reward_value = reward.reward();
+        self.linucb.update(arm_idx, &seam_ctx, reward_value)?;
+        self.total_steps += 1;
+        // PROBE P2.2: 学习更新后自动下发当前策略（有回调时）
+        self.emit_policy();
+        Ok(())
+    }
+
+    /// 设置策略下发回调（PROBE P2.2，append-only）
+    /// # 参数 sink: 策略回调；None 清除回调
+    pub fn set_policy_sink(&mut self, sink: Option<PolicySink>) {
+        self.policy_sink = sink;
+    }
+
+    /// 手动触发策略下发（PROBE P2.2）— version = total_steps 单调递增
+    pub fn emit_policy(&self) {
+        if let Some(sink) = &self.policy_sink {
+            sink.invoke(self.current_policy(self.total_steps));
+        }
     }
 
     /// 选择权重向量 — 基于 S4 上下文
@@ -648,6 +820,8 @@ impl S4Learner {
         let reward_value = reward.reward();
         self.linucb.update(arm_idx, &seam_ctx, reward_value)?;
         self.total_steps += 1;
+        // PROBE P2.2: 学习更新后自动下发当前策略（有回调时）
+        self.emit_policy();
         Ok(())
     }
 
@@ -999,7 +1173,7 @@ mod tests {
     fn test_s4_arm_set_count() {
         let arm_set = s4_arm_set();
         assert_eq!(arm_set.len(), S4_ARM_COUNT);
-        assert_eq!(S4_ARM_COUNT, 5);
+        assert_eq!(S4_ARM_COUNT, 29);
     }
 
     #[test]
@@ -1062,12 +1236,80 @@ mod tests {
 
     #[test]
     fn test_s4_arm_weights_out_of_range_falls_back_to_default() {
-        // 索引越界（≥ 5）应 fallback 到 Arm 4 (balanced)，与 const fn match 一致
+        // 越界（>28）应 fallback 到 Arm 0 (default)，数组索引防 panic
         let weights = arm_index_to_weights(100);
         let (r, f, rel) = weights.as_tuple();
-        assert!((r - 0.34).abs() < 1e-6);
-        assert!((f - 0.33).abs() < 1e-6);
-        assert!((rel - 0.33).abs() < 1e-6);
+        assert!((r - 0.4).abs() < 1e-6);
+        assert!((f - 0.3).abs() < 1e-6);
+        assert!((rel - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_probe_arm_params_full_coverage() {
+        // 24 探针臂全覆盖：alpha 4 档 x grain 3 档 x k 2 档
+        let mut seen = std::collections::HashSet::new();
+        for idx in 5..S4_ARM_COUNT {
+            let params = probe_arm_params(idx).expect("探针臂应有参数");
+            assert!(
+                (params.alpha + params.beta - 1.0).abs() < 1e-6,
+                "alpha+beta=1"
+            );
+            assert!(params.grain > 0 && params.k > 0);
+            assert!((0.3..=0.9).contains(&params.alpha));
+            seen.insert((params.alpha.to_bits(), params.grain, params.k));
+        }
+        assert_eq!(seen.len(), 24, "24 种配比组合应互异");
+    }
+
+    #[test]
+    fn test_probe_arm_params_original_arms_none() {
+        // 原 5 权重臂（0-4）与越界应返回 None
+        for idx in 0..5 {
+            assert!(probe_arm_params(idx).is_none(), "原臂 {idx} 无探针参数");
+        }
+        assert!(probe_arm_params(29).is_none());
+        assert!(probe_arm_params(usize::MAX).is_none());
+    }
+
+    #[test]
+    fn test_probe_arm_params_layout_matches_arm_set() {
+        // 索引布局与 S4_ARM_WEIGHTS 生成顺序一致: alpha 外循环 x grain 中循环 x k 内循环
+        let p0 = probe_arm_params(5).unwrap();
+        assert_eq!(p0.alpha, 0.3);
+        assert_eq!(p0.grain, 256);
+        assert_eq!(p0.k, 8);
+        let p1 = probe_arm_params(6).unwrap();
+        assert_eq!(p1.k, 16, "k 为内循环");
+        let p2 = probe_arm_params(7).unwrap();
+        assert_eq!(p2.grain, 512, "grain 为中循环");
+        let p_last = probe_arm_params(28).unwrap();
+        assert_eq!(p_last.alpha, 0.9);
+        assert_eq!(p_last.grain, 1024);
+        assert_eq!(p_last.k, 16);
+    }
+
+    #[test]
+    fn test_select_probe_and_update_last() {
+        // 探针臂链路: select_probe → update_last（last_arm_idx 回溯，权重非唯一安全）
+        let mut learner = S4Learner::with_default_alpha().unwrap();
+        let ctx = S4Context::new(BlockType::Code, 0.8, 0.5, 0.1).unwrap();
+        let reward = S4Reward::new(0.2).unwrap();
+        let mut saw_probe = false;
+        for _ in 0..40 {
+            if learner.select_probe(&ctx).unwrap().is_some() {
+                saw_probe = true;
+                learner.update_last(&ctx, &reward).unwrap();
+            } else {
+                // 原臂路径仍走既有 update
+                let weights = learner.select(&ctx).unwrap();
+                learner.update(&ctx, weights, &reward).unwrap();
+            }
+        }
+        assert!(
+            saw_probe,
+            "40 次选择应至少命中一次探针臂（29 臂中 24 个探针）"
+        );
+        assert_eq!(learner.total_steps(), 40);
     }
 
     #[test]
@@ -1081,8 +1323,8 @@ mod tests {
 
     #[test]
     fn test_weights_to_arm_index_round_trip() {
-        // 双向映射: arm_index_to_weights ∘ weights_to_arm_index = identity
-        for idx in 0..S4_ARM_COUNT {
+        // PROBE P2.3: 仅原 5 权重臂可 round-trip（探针臂权重非唯一，走 update_last 不依赖本映射）
+        for idx in 0..5 {
             let weights = arm_index_to_weights(idx);
             let recovered_idx = weights_to_arm_index(weights);
             assert_eq!(idx, recovered_idx, "round-trip failed for arm {idx}");

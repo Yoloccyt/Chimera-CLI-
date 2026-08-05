@@ -1,8 +1,8 @@
-﻿# =============================================================================
+# =============================================================================
 # check_doc_consistency.ps1 - Architecture document three-way reconciliation
 # =============================================================================
 # Purpose: detect drift between Cargo.toml (code), docs/ (index), CHANGELOG.md (changelog)
-# Scope:   5 categories / 12 checks; all assertions back to Cargo.toml as canonical truth
+# Scope:   6 categories / 14 checks; all assertions back to Cargo.toml as canonical truth
 # Author:  staff-engineer-mode (documentation-lifecycle specialist)
 # Refs:    docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md
 #
@@ -11,10 +11,13 @@
 #                              - workspace.package.version field present
 #   B. Index document freshness - 5 main docs contain current crate count
 #                                - 5 main docs contain current baseline string
-#   C. Changelog reconciliation - CHANGELOG.md has `## vX.Y.Z-omega` header for current version
+#   C. Changelog reconciliation - CHANGELOG.md has `## [vX.Y.Z-omega]` (bracket) or `## vX.Y.Z-omega` header for current version
 #   D. ADR physical vs index   - ADR-*.md files on disk match adr_index.md declaration
 #   E. Policy compliance       - CONVENTIONS.md-declared subdirs exist
 #                              - DOCUMENT_LIFECYCLE_POLICY.md (SoT) exists
+#   F. NexusEvent reconciliation - enum variant count in types.rs vs CODE_WIKI.md declaration
+#                                 (PROBE P-1.4: closes the blind spot where variant count
+#                                  drift escaped the previous 5-category scan)
 #
 # Exit code: 0 = clean, 1 = gap found
 # Encoding:  all-ASCII to avoid IDE/CJK path corruption (the .trae/rules file
@@ -107,12 +110,15 @@ foreach ($f in $b2Docs) {
 # =============================================================================
 
 # C1. CHANGELOG.md must have ## vX.Y.Z-omega header for current version
+# Dual-format compatible: `## [2.20.0-omega] - date` (CHANGELOG canonical bracket
+# style) and `## v2.20.0-omega` (bare style); lookahead (?=\s|$) anchors the
+# version token so `## [2.20.0-omega]` does not false-positive on prefix matches.
 if (-not (Test-Path 'CHANGELOG.md')) {
     $report += '[GAP-C1] missing document: CHANGELOG.md'
     $status = 1
 } else {
     $changelog = Get-Content 'CHANGELOG.md' -Raw
-    $verHeaderPattern = '^##\s+v' + [regex]::Escape($currentVersion) + '\b'
+    $verHeaderPattern = '^##\s+\[?v?' + [regex]::Escape($currentVersion) + '\]?(?=\s|$)'
     if (-not [regex]::IsMatch($changelog, $verHeaderPattern, 'Multiline')) {
         $report += '[GAP-C1] CHANGELOG.md missing ## v' + $currentVersion + ' header (should be first entry)'
         $status = 1
@@ -150,7 +156,7 @@ if (Test-Path 'docs/architecture/adr_index.md') {
     $declaredTotal = $null
     $adrIndexLines = Get-Content 'docs/architecture/adr_index.md' -Encoding UTF8
     foreach ($line in $adrIndexLines) {
-        if ($line -match '(\d+)\s*个\s*ADR') {
+        if ($line -match '(\d+)\s*\u4E2A\s*ADR') {
             $declaredTotal = [int]$Matches[1]
             break
         }
@@ -198,6 +204,88 @@ if (-not (Test-Path 'docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md')
 }
 
 # =============================================================================
+# F. NexusEvent variant count (types.rs enum vs CODE_WIKI declaration)
+# =============================================================================
+# F1. Parse NexusEvent enum body from types.rs via brace-balanced scan, then
+#     extract top-level variant names. Variant-name heuristic: line starts with
+#     optional whitespace + uppercase CamelCase identifier followed by '{', '(',
+#     ',' or end-of-line. Doc comments ('///') and serde attrs ('#') never match.
+# WHY brace-balanced: struct variants contain nested braces, so naive regex
+#     '.*?\n}' would truncate the enum body prematurely.
+# Encoding pitfall (fixed 2026-08-03): Get-Content defaults to ANSI (GBK) on
+#     Windows PowerShell 5.1, which corrupts UTF-8 CJK sequences and swallows
+#     newlines (observed 3/32 variants instead of 126). Must read as UTF-8.
+#     Strip order matters: comments first, then strings - reversing it lets
+#     stray quotes in doc comments pair across lines and delete code regions.
+$eventTypes = 'crates/event-bus/src/types.rs'
+if (Test-Path $eventTypes) {
+    $ts = [System.IO.File]::ReadAllText((Resolve-Path $eventTypes), [System.Text.Encoding]::UTF8)
+    # Normalize newlines (defensive against CRLF / lone CR)
+    $ts = $ts -replace "`r`n", "`n"
+    $ts = $ts -replace "`r", "`n"
+    # Strip line comments (incl. trailing), then raw/normal strings, then chars
+    $ts = [regex]::Replace($ts, '(?m)//.*$', '')
+    $ts = [regex]::Replace($ts, 'r#*"[\s\S]*?"#*', '""')
+    $ts = [regex]::Replace($ts, '"[^"\\\r\n]*(?:\\.[^"\\\r\n]*)*"', '""')
+    $ts = [regex]::Replace($ts, "'(?![a-zA-Z_])[^'\\\r\n]'", "''")
+    $enumStart = $ts.IndexOf('pub enum NexusEvent')
+    if ($enumStart -ge 0) {
+        $braceStart = $ts.IndexOf('{', $enumStart)
+        $depth = 0
+        $braceEnd = -1
+        for ($i = $braceStart; $i -lt $ts.Length; $i++) {
+            $ch = $ts[$i]
+            if ($ch -eq '{') { $depth++ }
+            elseif ($ch -eq '}') {
+                $depth--
+                if ($depth -eq 0) { $braceEnd = $i; break }
+            }
+        }
+        if ($braceEnd -gt $braceStart) {
+            $body = $ts.Substring($braceStart + 1, $braceEnd - $braceStart - 1)
+            $variants = [regex]::Matches($body, '(?m)^\s*([A-Z][A-Za-z0-9_]*)\s*(?:\{|\,|$|\()') |
+                ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+            $eventVariantCount = $variants.Count
+            $report += '[F1] NexusEvent enum variants (types.rs) = ' + $eventVariantCount
+
+            # F2. CODE_WIKI.md must declare a matching NexusEvent variant count.
+            # GAP only when declared < measured (stale docs). INFO when declared
+            # == measured. WARN when declared > measured (possible doc leading edge).
+            $codeWiki = 'docs/architecture/CODE_WIKI.md'
+            if (Test-Path $codeWiki) {
+                $cw = Get-Content $codeWiki -Raw
+                $declMatch = [regex]::Match($cw, '(\d+)\s*NexusEvent')
+                if (-not $declMatch.Success) { $declMatch = [regex]::Match($cw, 'NexusEvent[^0-9]{0,40}(\d+)') }
+                if ($declMatch.Success) {
+                    $declaredVariants = [int]$declMatch.Groups[1].Value
+                    if ($declaredVariants -lt $eventVariantCount) {
+                        $report += '[GAP-F2] CODE_WIKI.md declares ' + $declaredVariants + ' NexusEvent variants, types.rs has ' + $eventVariantCount + ' (stale, must sync)'
+                        $status = 1
+                    } elseif ($declaredVariants -eq $eventVariantCount) {
+                        $report += '[F2] CODE_WIKI.md declares ' + $declaredVariants + ' NexusEvent variants, matches types.rs'
+                    } else {
+                        $report += '[F2-INFO] CODE_WIKI.md declares ' + $declaredVariants + ' NexusEvent variants, types.rs has ' + $eventVariantCount + ' (docs ahead, expected during release prep)'
+                    }
+                } else {
+                    $report += '[WARN-F2] CODE_WIKI.md has no machine-readable NexusEvent variant count'
+                }
+            } else {
+                $report += '[GAP-F2] missing document: docs/architecture/CODE_WIKI.md'
+                $status = 1
+            }
+        } else {
+            $report += '[WARN-F1] NexusEvent enum body not parseable in ' + $eventTypes
+        }
+    } else {
+        $report += '[GAP-F1] NexusEvent enum not found in ' + $eventTypes
+        $status = 1
+    }
+} else {
+    $report += '[GAP-F1] missing file: ' + $eventTypes
+    $status = 1
+}
+
+# =============================================================================
 # Report output
 # =============================================================================
 
@@ -205,7 +293,7 @@ foreach ($line in $report) { Write-Host $line }
 
 Write-Host ''
 if ($status -eq 0) {
-    Write-Host ('[OK] three-way reconciliation all pass (5 categories / 12 checks): canonical version=' + $currentVersion + ', ' + $nMembers + ' crates, baseline aligned')
+    Write-Host ('[OK] three-way reconciliation all pass (6 categories / 14 checks): canonical version=' + $currentVersion + ', ' + $nMembers + ' crates, baseline aligned')
 } else {
     Write-Host '[FAIL] three-way reconciliation found gaps, see [GAP-*] lines above, fix and rerun'
 }

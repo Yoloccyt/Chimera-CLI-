@@ -18,8 +18,8 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 ndarray = { workspace = true }
-event-bus = { path = "../event-bus" }
-nexus-core = { path = "../nexus-core" }
+event-bus = { workspace = true }
+nexus-core = { workspace = true }
 # P4-W15.1.2: SpecLoader 依赖
 # nexus-contracts:L0 契约层(HarnessSpec 类型定义,ADR-033)
 # toml:TOML 反序列化(spec 加载器解析 HarnessSpec DSL,设计文档 §7.2)

@@ -433,10 +433,25 @@ const KNOWN_VIOLATIONS: &[(&str, &str)] = &[
     // panels/osa_sparse.rs
     ("panels/osa_sparse.rs", "导航"),
     ("panels/osa_sparse.rs", "刷新"),
+    // panels/osa_sparse.rs(2026-08-02 补充:五维掩码标题 + omega-learner 六接缝状态文案)
+    ("panels/osa_sparse.rs", "五维掩码状态"),
+    ("panels/osa_sparse.rs", "omega-learner 六接缝状态: 暂未实现"),
     // panels/parliament.rs
     ("panels/parliament.rs", "导航"),
     ("panels/parliament.rs", "投票"),
     ("panels/parliament.rs", "是/否/弃权"),
+    // panels/pvl_score.rs(2026-08-02 补充:PVL 过程评分九维度标签 + 快捷键文案)
+    ("panels/pvl_score.rs", "真实执行"),
+    ("panels/pvl_score.rs", "覆盖率"),
+    ("panels/pvl_score.rs", "验证通过"),
+    ("panels/pvl_score.rs", "置信度"),
+    ("panels/pvl_score.rs", "效率"),
+    ("panels/pvl_score.rs", "重试纪律"),
+    ("panels/pvl_score.rs", "产出实质性"),
+    ("panels/pvl_score.rs", "零孤儿"),
+    ("panels/pvl_score.rs", "沙箱清洁"),
+    ("panels/pvl_score.rs", "选择维度"),
+    ("panels/pvl_score.rs", "导航"),
     // panels/quest.rs
     ("panels/quest.rs", "导航"),
     ("panels/quest.rs", "详情"),

@@ -7,6 +7,8 @@
 //! - `success_rate_threshold = 0.8`:低于此阈值触发 N 值降级
 //! - `rollback_enabled = true`:默认启用回退,失败步回退到单步预测
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 /// MTPE 执行器配置
@@ -18,6 +20,14 @@ pub struct MtpeConfig {
     pub success_rate_threshold: f32,
     /// 是否启用失败回退(关闭时失败直接返回错误)
     pub rollback_enabled: bool,
+    /// ONNX 模型文件路径(None 表示使用伪预测)
+    pub model_path: Option<PathBuf>,
+    /// ONNX 模型文件所在目录(None 表示未启用 ONNX 模型推理)
+    #[serde(default)]
+    pub model_dir: Option<String>,
+    /// 是否启用 ONNX 模型推理(默认 false,使用伪预测)
+    #[serde(default)]
+    pub enable_onnx: bool,
 }
 
 impl Default for MtpeConfig {
@@ -26,6 +36,9 @@ impl Default for MtpeConfig {
             max_n: 10,
             success_rate_threshold: 0.8,
             rollback_enabled: true,
+            model_path: None,
+            model_dir: None,
+            enable_onnx: false,
         }
     }
 }

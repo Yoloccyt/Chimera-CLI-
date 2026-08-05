@@ -21,9 +21,9 @@ chrono = { workspace = true }
 # 并发安全模板缓存(O(1) 分片查找)
 dashmap = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 SsraFusionCompleted 事件
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # L1 Core:CLV 余弦相似度(可选,用于模板语义匹配扩展)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 
 [dev-dependencies]
 # 性能基准框架(SubTask 1.5)

@@ -22,7 +22,8 @@
 //! WHY 静态注册表: 专家编制是恒定配置, 用 `static` 存储零运行时开销, 可查询、
 //! 可校验、可审计(最小权限原则落地)。
 
-use crate::quadrant::Quadrant;
+use crate::quadrant::{Quadrant, QuadrantSelector};
+use std::sync::Arc;
 
 /// 工具授权级别 (§11.2) —— 排序: ReadOnly < LimitedWrite < HighRiskApproval。
 ///
@@ -266,10 +267,16 @@ static EXPERTS: [ExpertProfile; 8] = [
 ];
 
 /// 精英专家团队注册表 —— 提供对 8 位专家编制的只读查询。
-#[derive(Debug, Clone, Copy)]
+///
+/// 可选支持 `QuadrantSelector`，实现基于任务领域语义的动态象限选择。
+/// 未配置选择器时，行为与修改前完全一致（向后兼容）。
+#[derive(Debug, Clone)]
 pub struct ExpertRegistry {
     /// 静态专家编制表引用。
     experts: &'static [ExpertProfile],
+    /// 象限选择器（可选），用于基于任务领域动态选择激活象限。
+    /// 使用 `Arc` 包装以支持 `Clone`。
+    quadrant_selector: Option<Arc<dyn QuadrantSelector>>,
 }
 
 impl Default for ExpertRegistry {
@@ -280,9 +287,14 @@ impl Default for ExpertRegistry {
 }
 
 impl ExpertRegistry {
-    /// 创建内置 E01-E08 的注册表。
+    /// 创建内置 E01-E08 的注册表（无象限选择器）。
+    ///
+    /// 默认行为与修改前完全一致：使用 `by_quadrant()` 按固定象限映射查询。
     pub fn new() -> Self {
-        Self { experts: &EXPERTS }
+        Self {
+            experts: &EXPERTS,
+            quadrant_selector: None,
+        }
     }
 
     /// 全部专家(只读切片, 稳定顺序 E01→E08)。
@@ -306,11 +318,58 @@ impl ExpertRegistry {
     }
 
     /// 按主责象限查询专家(可能多位, 如 Q4 有 E01/E06/E07/E08)。
+    ///
+    /// 此方法始终使用固定象限映射，不受 `QuadrantSelector` 影响。
+    /// 如需动态象限选择，请使用 `select_experts_by_quadrant()`。
     pub fn by_quadrant(&self, quadrant: Quadrant) -> Vec<&'static ExpertProfile> {
         self.experts
             .iter()
             .filter(|e| e.primary_quadrant == quadrant)
             .collect()
+    }
+
+    /// 配置象限选择器，支持基于任务领域/语义的动态象限选择。
+    ///
+    /// 返回 `Self` 以支持链式调用。
+    ///
+    /// # 示例
+    ///
+    /// ```ignore
+    /// use chimera_mas::experts::ExpertRegistry;
+    /// use chimera_mas::quadrant::ConfigurableQuadrantSelector;
+    ///
+    /// let selector = ConfigurableQuadrantSelector::from_static_mapping();
+    /// let registry = ExpertRegistry::new().with_quadrant_selector(Box::new(selector));
+    /// ```
+    pub fn with_quadrant_selector(mut self, selector: Box<dyn QuadrantSelector>) -> Self {
+        self.quadrant_selector = Some(Arc::from(selector));
+        self
+    }
+
+    /// 基于任务领域和描述选择专家，优先使用象限选择器。
+    ///
+    /// - 当配置了 `QuadrantSelector` 时：使用选择器动态确定激活象限，
+    ///   然后返回这些象限内的专家。
+    /// - 未配置选择器时：返回全部专家（降级行为，与修改前一致）。
+    pub fn select_experts_by_quadrant(
+        &self,
+        domain: &str,
+        description: &str,
+    ) -> Vec<&'static ExpertProfile> {
+        match self.quadrant_selector {
+            Some(ref selector) => {
+                let quadrants = selector.select_quadrants(domain, description);
+                let mut result: Vec<&'static ExpertProfile> = quadrants
+                    .iter()
+                    .flat_map(|q| self.by_quadrant(*q))
+                    .collect();
+                // 去重（同一专家可能出现在多个象限中）
+                result.sort_by_key(|e| e.id);
+                result.dedup_by_key(|e| e.id);
+                result
+            }
+            None => self.experts.iter().collect(),
+        }
     }
 }
 
@@ -351,5 +410,67 @@ mod tests {
         for e in reg.all() {
             assert!(!e.tools.is_empty(), "{} 工具白名单不应为空", e.id);
         }
+    }
+
+    // ============================================================
+    // QuadrantSelector 集成测试
+    // ============================================================
+
+    #[test]
+    fn test_registry_with_quadrant_selector_uses_selector() {
+        use crate::quadrant::ConfigurableQuadrantSelector;
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        map.insert("代码实现域".into(), vec![Quadrant::Implementation]);
+        let selector = ConfigurableQuadrantSelector::new(map, Quadrant::ALL.to_vec());
+        let registry = ExpertRegistry::new().with_quadrant_selector(Box::new(selector));
+
+        // 代码实现域 → Implementation → 只有 E03
+        let experts = registry.select_experts_by_quadrant("代码实现域", "");
+        let ids: Vec<&str> = experts.iter().map(|e| e.id).collect();
+        assert_eq!(ids, ["E03"]);
+    }
+
+    #[test]
+    fn test_registry_with_selector_uses_static_mapping() {
+        use crate::quadrant::ConfigurableQuadrantSelector;
+
+        let selector = ConfigurableQuadrantSelector::from_static_mapping();
+        let registry = ExpertRegistry::new().with_quadrant_selector(Box::new(selector));
+
+        // 测试发布域 → Hardening, Verification → E01, E04, E05, E06, E07, E08
+        let experts = registry.select_experts_by_quadrant("测试发布域", "");
+        let ids: Vec<&str> = experts.iter().map(|e| e.id).collect();
+        assert_eq!(ids, ["E01", "E04", "E05", "E06", "E07", "E08"]);
+    }
+
+    #[test]
+    fn test_registry_without_selector_returns_all_experts() {
+        let registry = ExpertRegistry::new();
+        // 未配置选择器时，select_experts_by_quadrant 返回全部专家
+        let experts = registry.select_experts_by_quadrant("任意领域", "");
+        assert_eq!(experts.len(), 8);
+    }
+
+    #[test]
+    fn test_registry_by_quadrant_unchanged_backward_compat() {
+        // 验证 by_quadrant 行为与修改前一致
+        let registry = ExpertRegistry::new();
+        assert_eq!(registry.by_quadrant(Quadrant::Implementation).len(), 1);
+        assert_eq!(registry.by_quadrant(Quadrant::Integration).len(), 1);
+        assert_eq!(registry.by_quadrant(Quadrant::Verification).len(), 2);
+        assert_eq!(registry.by_quadrant(Quadrant::Hardening).len(), 4);
+    }
+
+    #[test]
+    fn test_registry_clone_after_selector() {
+        // 验证配置了选择器的注册表仍可 Clone
+        use crate::quadrant::ConfigurableQuadrantSelector;
+
+        let selector = ConfigurableQuadrantSelector::from_static_mapping();
+        let registry = ExpertRegistry::new().with_quadrant_selector(Box::new(selector));
+        let cloned = registry.clone();
+        assert_eq!(cloned.len(), 8);
     }
 }

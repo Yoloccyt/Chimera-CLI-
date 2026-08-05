@@ -451,6 +451,13 @@ pub struct BlockScore {
     /// Block 的 token 数（P3-W10.1 重排填充新增，用于密度贪心 score/token_count）
     /// 精排阶段填 0（未知），重排填充阶段由 `RerankFillInput.block_tokens` 注入
     pub token_count: usize,
+    // === PROBE P1.4: 强时序标记（位置重排豁免依据）===
+    /// 强时序块标记（diff 序列/对话流等，重排时保持原序仅区内相对移动）
+    ///
+    /// WHY `#[serde(default)]`: 向后兼容旧序列化数据（默认 false 非时序）；
+    /// 源头在 kvbsr `SemanticBlock.temporal`，经检索链路透传到 BlockScore
+    #[serde(default)]
+    pub temporal: bool,
 }
 
 impl BlockScore {
@@ -472,7 +479,21 @@ impl BlockScore {
             hnsw_score,
             source_module: source_module.into(),
             token_count,
+            // PROBE P1.4: 默认非时序（向后兼容；需豁免时经 with_temporal 设置）
+            temporal: false,
         }
+    }
+
+    /// 设置强时序标记（链式调用，P1.4 位置重排豁免）
+    ///
+    /// # 参数
+    /// - `temporal`: 强时序标记（diff 序列/对话流等）
+    ///
+    /// WHY builder 而非构造参数: 保持 `new()` 5 参签名不变（25+ 处既有
+    /// 构造点零改动，编译破坏面红线）；temporal 是低频附加语义
+    pub fn with_temporal(mut self, temporal: bool) -> Self {
+        self.temporal = temporal;
+        self
     }
 }
 

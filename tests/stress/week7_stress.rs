@@ -67,7 +67,11 @@ const LATENCY_DEGRADATION_THRESHOLD_PCT: f64 = 50.0;
 // - p95 延迟 ≤ CSA 阈值
 // - 1000 次后仍可创建新管线(资源未耗尽)
 
+// P9-T2: 1000-iter 全链路压测 + test-group=stress(见 Cargo.toml [[test]]);
+//        ci-fast 档通过 -E 'not test-group(=stress)' 排除,由 stress profile 集中触发。
+//        保留 #[ignore] 兼容 cargo test 旧调用约定(cargo test -- --ignored)。
 #[tokio::test]
+#[ignore = "slow: 1000 次全链路压测, run with --ignored"]
 async fn test_stress_1000_iterations_no_leak() {
     // Arc 泄漏探针:每次迭代 clone 一份,迭代结束后验证 strong_count 回到 1
     // WHY Arc<()>:零开销,仅追踪引用计数,不引入额外内存占用
@@ -192,7 +196,9 @@ async fn test_stress_1000_iterations_no_leak() {
 // 此测试隔离验证 EventBus 通道本身在 1000 次周期后无累积泄漏。
 // 不创建完整管线,只测 EventBus,开销极小。
 
+// P9-T2: 1000 次 EventBus 周期压测(同样归属 test-group=stress,见 Cargo.toml)。
 #[tokio::test]
+#[ignore = "slow: 1000 次 EventBus 周期压测, run with --ignored"]
 async fn test_stress_event_bus_1000_cycles_no_accumulation() {
     for i in 0..TOTAL_ITERATIONS {
         let bus = EventBus::new();

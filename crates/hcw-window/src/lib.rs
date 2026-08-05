@@ -51,6 +51,8 @@ pub mod config;
 /// P4-W13.2.2: 密度学习器持有器 — S1 接缝策略异步下发 + 本地 fallback（C4 合规）
 pub mod density_learner;
 pub mod error;
+/// PROBE P1.2: 查询探针打分（ProbeWeights / score_with_probe / mix_probe / probe_health）
+pub mod probe;
 pub mod recall;
 pub mod selector;
 /// P4-W13.3.2: 选择器学习器持有器 — S4 接缝策略异步下发 + 本地 fallback（C4 合规）
@@ -63,6 +65,8 @@ pub use affinity::{FoldResult, WindowAffinity};
 pub use compressor::ContextCompressor;
 pub use density_learner::DensityLearnerHolder;
 pub use error::HcwError;
+// PROBE P1.2/P1.6: 查询探针打分 + 增量重打分缓存公开 API
+pub use probe::{mix_probe, probe_health, score_with_probe, ProbeHealth, ProbeWeights, ScoreCache};
 pub use selector::WindowSelector;
 // P4-W13.3.2: S4 接缝（HCW selector 权重系数）学习器持有器
 pub use selector_learner::SelectorLearnerHolder;

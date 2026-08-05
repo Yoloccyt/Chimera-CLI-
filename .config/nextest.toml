@@ -1,0 +1,69 @@
+# =============================================================================
+# .config/nextest.toml — P9-T2 测试档位 profile 配置
+# =============================================================================
+# Purpose: 定义三档 nextest profile,支撑 P9-T2 测试运行时间优化的回归分级。
+#          - ci-fast: PR 快轨(默认),使用 CHIMERA_TEST_TIMEOUT_SCALE=0.1,
+#                     排除根 package E2E/压测 binary,排除 5s+ 串行等待的
+#                     长单测(由 test-group = "stress" 收纳)。
+#          - default (= full): 完整档(开发本地 / Release 验收),
+#                     跑所有非 #[ignore] 测试,scale 缺省 1.0。
+#          - stress: 压测档,仅跑 test-group = "stress" 的目标
+#                    (1000-iter 压测 + bench 阈值验证),由 nightly/manual 触发。
+# Refs:    .trae/specs/p9-t2-test-runtime-optimization/{spec,tasks}.md
+#          .github/workflows/{ci,stress}.yml
+# =============================================================================
+
+# --- 通用 profile 配置 ---
+# threads-policy: 跨 profile 共享的"硬件自适应并行"基线
+[profile.default]
+retries = 0
+fail-fast = false
+# test-threads = "num-cpus" 走 nextest 默认,本项目 2026-08-05 实测 CPU=8 全并行
+# 慢档采用 test-threads = 物理核数/2 防止 stress 跑时压垮磁盘 I/O
+
+# =============================================================================
+# ci-fast 档 —— PR 反馈快轨
+# 目标:总耗时较 baseline-full 减少 ≥ 30%
+# 包含:
+#   - 所有 crates/**/src 内 #[cfg(test)] 单元测试
+#   - 所有 crates/**/tests/*.rs 集成测试(非 stress 组)
+#   - 排除根 package tests/e2e + tests/stress(由独立 e2e job 跑)
+# 排除:
+#   - binary name 包含 "stress" 的测试(由 stress profile 集中管理)
+# 依赖:CI 端设 CHIMERA_TEST_TIMEOUT_SCALE=0.1 收敛 2s+ 硬编码等待
+#
+# 注:nextest 配置项中,profile.<name>.test-group 字段用于"互斥资源管理"
+# (同一组测试不能并行,见 https://nexte.st/docs/configuration/test-groups/),
+# 不用于"按名字排除"。"按名字排除"统一走 -E 'not binary(/stress/)' 表达式。
+# 已在 docs/reports/p9-t2-test-runtime-optimization.md 记录决策与依据。
+# =============================================================================
+[profile.ci-fast]
+inherits = "default"
+# CI 命令: cargo nextest run --profile ci-fast -E 'not binary(/stress/)'
+
+# =============================================================================
+# full 档 —— Release 验收 / 开发本地
+# 目标:包含所有非 #[ignore] 测试,scale = 1.0 保持 spec 语义
+# 包含:所有常规单测 + 集成测试(不包含 #[ignore] 的 stress 测试)
+# 排除:仅 #[ignore] 的 stress 测试
+# =============================================================================
+[profile.full]
+inherits = "default"
+# 不做额外过滤,等同 nextest 默认 + 全 workspace 包含
+# 性能基线:与现有 release.yml 行为一致(没有 CHIMERA_TEST_TIMEOUT_SCALE 注入)
+
+# =============================================================================
+# stress 档 —— 1000-iter 压测 / 性能阈值
+# 目标:本档独立,由 nightly schedule + workflow_dispatch 触发,
+#      不阻塞 PR;CI 端 continue-on-error: true
+# 包含:binary name 包含 "stress" 的测试 + 根 package stress target
+# 排除:全部常规单元/集成测试(已由 ci-fast + full 覆盖)
+# =============================================================================
+[profile.stress]
+inherits = "default"
+# threads-policy: 减半,防压测时打满磁盘
+test-threads = 2
+# 输出含 backtrace,便于压测失败诊断
+final-status-level = "fail"
+# 注:filter 规则由 CI 命令行 -E 'binary(/stress/)' 指定
+# (nextest binary() 过滤器按 test binary name 正则匹配,见 .trae/specs/p9-t2/。)

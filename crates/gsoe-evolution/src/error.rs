@@ -88,6 +88,19 @@ pub enum GsoeError {
         /// 违反原因描述(含 spec name 与具体违反类型)
         reason: String,
     },
+
+    /// P1-2: M0 形式化验证失败 — Critic 候选未通过单调性/反奖励黑客/有界性检查
+    ///
+    /// 触发场景: AEGIS Critic 在 CiGate 前运行 M0 守卫时，候选的复合分数
+    /// 序列违反 CriticMonotonicityChecker 的三项验证之一。
+    /// 处理策略: 拒绝候选（不进入 CiGate），记录违规详情供审计。
+    #[error("M0 形式化验证失败: {property} — {detail}")]
+    FormalVerificationFailed {
+        /// 失败的属性名（如 "critic-monotonicity" / "anti-reward-hacking" / "score-bounded"）
+        property: String,
+        /// 违规详情（来自 VerificationResult::Violated 的 counterexample）
+        detail: String,
+    },
 }
 
 #[cfg(test)]
@@ -165,5 +178,17 @@ mod tests {
         };
         assert!(e.to_string().contains("不可进化面违反"));
         assert!(e.to_string().contains("critical-rule"));
+    }
+
+    #[test]
+    fn test_formal_verification_failed_display() {
+        let e = GsoeError::FormalVerificationFailed {
+            property: "critic-monotonicity".into(),
+            detail: "位置 3: 适应度 0.5→0.6 (不减), 但评分 0.8→0.7 (递减)".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("M0 形式化验证失败"));
+        assert!(msg.contains("critic-monotonicity"));
+        assert!(msg.contains("递减"));
     }
 }

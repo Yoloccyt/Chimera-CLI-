@@ -24,8 +24,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dashmap::DashMap;
-use decb_governor::BudgetTier;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use nexus_contracts::BudgetTier;
 use nexus_core::{Checkpoint, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -556,6 +556,13 @@ impl QuestEngine {
             } else {
                 0.0
             };
+            // P1-5: 在 drop(quest) 前获取复杂度评分(用于自适应基线)
+            // WHY evaluate_complexity:TTG Governor 是 Quest 复杂度的权威评估者,
+            // 基于任务数、依赖深度和描述长度计算。当 ttg_governor=None 时使用 None。
+            let complexity = self
+                .ttg_governor
+                .as_ref()
+                .map(|g| g.evaluate_complexity(&quest));
             drop(quest); // 释放 DashMap 读锁,遵循 §4.4 反模式 #1(不持锁跨 await)
 
             // 协调度量接线闭环:take 待合并样本(remove 防泄漏,缺失时用默认空样本)
@@ -588,8 +595,8 @@ impl QuestEngine {
                 gain = gain.with_consensus_quality(quality);
             }
 
-            // 记录并计算协调成本/推理增益比值(EWMA 增量更新)
-            let ratio = self.metrics.record_and_compute(&cost, &gain);
+            // 记录并计算协调成本/推理增益比值(EWMA 增量更新,含 P1-5 自适应基线)
+            let ratio = self.metrics.record_and_compute(&cost, &gain, complexity);
 
             info!(
                 quest_id = %quest_id,

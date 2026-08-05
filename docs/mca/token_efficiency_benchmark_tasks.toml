@@ -1,0 +1,1537 @@
+# =============================================================================
+# Chimera CLI — Token 效率基准测试任务定义
+# 50 个标准化任务，覆盖 7 个 Provider，3 个复杂度档位
+# =============================================================================
+
+# =============================================================================
+# Zhipu (GLM) — 8 任务
+# =============================================================================
+
+[[tasks]]
+task_id = "zhipu-simple-01"
+provider = "Zhipu"
+model = "glm-5.2"
+complexity = "Simple"
+description = "代码解释: 解释 Rust async/await 工作原理，包括 Future trait 和状态机转换"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请解释 Rust 中 async/await 的工作原理，包括 Future trait 的定义、poll 方法的作用，以及编译器如何将 async 函数转换为状态机。给出一个简单的代码示例。"
+
+[[tasks]]
+task_id = "zhipu-simple-02"
+provider = "Zhipu"
+model = "glm-5.2"
+complexity = "Simple"
+description = "简单问答: 解释 Rust 所有权系统的核心规则（移动、借用、生命周期省略）"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 400
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请用通俗的语言解释 Rust 所有权系统的三条核心规则：移动语义、借用检查器、生命周期省略。用代码示例说明每种规则的实际效果。"
+
+[[tasks]]
+task_id = "zhipu-regular-01"
+provider = "Zhipu"
+model = "glm-5.2"
+complexity = "Regular"
+description = "文件读写: 读取 Cargo.toml 文件，解析其中的依赖项并输出为 Markdown 表格"
+thinking_pref = "Standard"
+expected_max_tokens_min = 400
+expected_max_tokens_max = 1500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请读取当前项目的 Cargo.toml 文件，解析 workspace.members 和 workspace.dependencies 部分，将所有依赖项整理为一个 Markdown 表格，包含依赖名、版本、来源（workspace 或外部）三列，输出到 deps-table.md 文件。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "zhipu-regular-02"
+provider = "Zhipu"
+model = "glm-5.2"
+complexity = "Regular"
+description = "代码搜索: 在项目中搜索所有 pub async fn 函数签名，统计数量并按模块分组"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 1800
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请在 crates/ 目录下搜索所有定义为 pub async fn 的函数签名，统计每个 crate 中的数量，按数量降序排列，将结果写入 async-fn-stats.md。注意区分 pub async fn 和 pub(crate) async fn。"
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"},"glob":{"type":"string","description":"文件过滤 glob"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "zhipu-regular-03"
+provider = "Zhipu"
+model = "glm-5.2"
+complexity = "Regular"
+description = "单元测试生成: 为指定的 Rust 函数编写完整的单元测试，覆盖正常路径和边界条件"
+thinking_pref = "Standard"
+expected_max_tokens_min = 600
+expected_max_tokens_max = 2000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请读取 crates/nexus-core/src/clv.rs 文件，为其中的 cosine_similarity_slices 函数编写完整的单元测试。测试应覆盖：空切片、相同向量、正交向量、不同长度的向量（应 panic）、以及至少 3 组随机生成的 512 维向量。将测试代码添加到 clv.rs 的 #[cfg(test)] 模块中。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "zhipu-complex-01"
+provider = "Zhipu"
+model = "glm-5.2"
+complexity = "Complex"
+description = "多文件重构: 将散落在 3 个 crate 中的重复工具函数提取为公共模块，保持 API 兼容"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2000
+expected_max_tokens_max = 8000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "我发现在 crates/osa-coordinator/src/utils.rs、crates/kvbsr-router/src/helpers.rs 和 crates/faae-router/src/common.rs 中都有几乎相同的 top_k_by_score 函数实现（用 select_nth_unstable 做 O(n) Top-K 选择）。请执行以下重构：1) 在 crates/nexus-core/src/ 下创建 algo.rs 模块，放入公共的 top_k_by_score 函数；2) 更新三个源 crate 的 Cargo.toml 添加 nexus-core 依赖（如果还没有）；3) 替换三个 crate 中的重复实现为 pub use nexus_core::algo::top_k_by_score；4) 确保所有现有测试通过。注意：不要改变函数签名和语义。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"},"glob":{"type":"string","description":"文件过滤 glob"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "zhipu-complex-02"
+provider = "Zhipu"
+model = "glm-5.2"
+complexity = "Complex"
+description = "错误调试: 追踪一个跨 3 个模块的异步死锁问题，定位根因并修复"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2500
+expected_max_tokens_max = 10000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "我们遇到了一个生产环境的 bug：在 chimera-mas 的多 Agent 协作场景中，当 Agent A 通过 event-bus 发布 QuestCompleted 事件后，Agent B 的 handler 中持有一个 DashMap 写锁并调用了一个 async 函数（send_delegation），导致整个系统 hang 住。请分析以下相关文件：crates/chimera-mas/src/orchestrator.rs、crates/event-bus/src/dispatcher.rs、crates/faae-router/src/handler.rs，找出持锁跨 await 的具体位置，给出修复方案（快照→释放→await 模式），并编写一个回归测试来捕获这个死锁场景。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"},"glob":{"type":"string","description":"文件过滤 glob"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "zhipu-complex-03"
+provider = "Zhipu"
+model = "glm-5.2"
+complexity = "Complex"
+description = "依赖分析: 分析 37 个 crate 的依赖图，检测循环依赖和违规的跨层依赖"
+thinking_pref = "Deep"
+expected_max_tokens_min = 3000
+expected_max_tokens_max = 12000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请分析 Chimera CLI 的 37 个 crate 之间的依赖关系，生成一份依赖合规报告。具体要求：1) 读取所有 Cargo.toml 文件，构建依赖图；2) 对照 CODE_WIKI.md 中的十层架构（L1-L10）检查每个 crate 的依赖方向是否违规（L(N)→L(N+1) 禁止）；3) 检测是否存在循环依赖；4) 特别关注 gqep-executor (L7) → qeep-protocol (L4) 的已知跨层依赖（ADR-048）；5) 将报告写入 dependency-audit-report.md，包含违规列表、依赖图和修复建议。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"},"glob":{"type":"string","description":"文件过滤 glob"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+# =============================================================================
+# Moonshot (Kimi) — 7 任务
+# =============================================================================
+
+[[tasks]]
+task_id = "moonshot-simple-01"
+provider = "Moonshot"
+model = "kimi-k2.7"
+complexity = "Simple"
+description = "概念解释: 详细解释 Rust Trait 的定义、实现、关联类型、默认方法，以及 dyn 动态分发和 impl Trait 静态分发的区别"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请详细解释 Rust 中 Trait 系统的核心概念：1) Trait 的定义与实现；2) 关联类型 vs 泛型参数的选择；3) 默认方法的使用场景；4) dyn Trait 动态分发与 impl Trait 静态分发的性能差异和适用场景。用代码示例辅助说明。"
+
+[[tasks]]
+task_id = "moonshot-simple-02"
+provider = "Moonshot"
+model = "kimi-k2.7"
+complexity = "Simple"
+description = "代码审查: 审查一段 Rust 代码，指出潜在的 clippy 警告和代码风格问题"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 450
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请审查以下代码片段，指出其中存在的 clippy 警告、代码风格问题和潜在的 bug：\n```rust\nfn process_data(data: &Vec<String>) -> Vec<String> {\n    let mut result = Vec::new();\n    for i in 0..data.len() {\n        let item = data.get(i).unwrap();\n        if item != \"\" {\n            result.push(item.clone());\n        }\n    }\n    return result;\n}\n```"
+
+[[tasks]]
+task_id = "moonshot-regular-01"
+provider = "Moonshot"
+model = "kimi-k2.7"
+complexity = "Regular"
+description = "文件读写: 批量重命名项目中的测试文件，将 test_ 前缀改为 t_ 前缀，并更新所有 mod 声明"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 1800
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请将 crates/quest-engine/src/tests/ 目录下所有以 test_ 开头的 .rs 文件重命名为 t_ 前缀（如 test_ttg.rs → t_ttg.rs），同时更新 lib.rs 中对应的 mod 声明。确保操作后 cargo check -p quest-engine 通过。"
+
+[[tasks.tools]]
+name = "list_directory"
+description = "列出指定目录下的所有文件和子目录"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目录路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "moonshot-regular-02"
+provider = "Moonshot"
+model = "kimi-k2.7"
+complexity = "Regular"
+description = "代码搜索: 搜索项目中所有 TODO/FIXME/HACK 注释，分类统计并生成技术债务报告"
+thinking_pref = "Standard"
+expected_max_tokens_min = 400
+expected_max_tokens_max = 1500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请在 crates/ 目录下搜索所有包含 TODO、FIXME、HACK、XXX 注释的代码行，按 crate 和标签类型分类统计，识别出高频出现的问题模式，将整理后的技术债务报告写入 tech-debt-report.md。"
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "moonshot-regular-03"
+provider = "Moonshot"
+model = "kimi-k2.7"
+complexity = "Regular"
+description = "集成测试: 为 event-bus 的 publish/subscribe 机制编写端到端集成测试"
+thinking_pref = "Standard"
+expected_max_tokens_min = 600
+expected_max_tokens_max = 2200
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请为 crates/event-bus 编写一个集成测试文件 tests/e2e_pubsub.rs，验证以下场景：1) 单发布者→单订阅者正常收发；2) 单发布者→多订阅者全部收到；3) 订阅者在 publish 之后才 subscribe 时不会收到历史消息（broadcast 语义）；4) Critical 事件的 mpsc channel 确保送达；5) SlowConsumerDropped 事件在慢消费者场景下正确触发。使用 tokio::test 编写异步测试。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "moonshot-complex-01"
+provider = "Moonshot"
+model = "kimi-k2.7"
+complexity = "Complex"
+description = "重构: 将一个同步的 rusqlite 调用模块改造为 spawn_blocking 异步包装，确保不阻塞 tokio runtime"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2000
+expected_max_tokens_max = 8000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "crates/repo-wiki/src/storage.rs 中目前有 12 处 rusqlite 调用直接在 async 上下文中执行，这会阻塞 tokio runtime。请执行以下改造：1) 为每个同步 rusqlite 调用包装 tokio::task::spawn_blocking；2) 将 Database 结构体的方法签名从同步改为 async；3) 更新所有调用方（crates/repo-wiki/src/ 下的其他模块）以适配 async 接口；4) 确保改造后 cargo test -p repo-wiki 全部通过。特别注意：不要改变数据库操作的语义和事务边界。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "moonshot-complex-02"
+provider = "Moonshot"
+model = "kimi-k2.7"
+complexity = "Complex"
+description = "性能优化: 使用 criterion 对 mlc-engine 的 L2 KNN 搜索进行基准测试，分析瓶颈并优化"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2500
+expected_max_tokens_max = 10000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请对 crates/mlc-engine 的 L2 距离 KNN 搜索进行性能优化：1) 先编写 criterion benchmark 测量当前 100/500/1000/5000/10000 条目的查询延迟；2) 分析当前实现（遍历所有条目计算 L2 距离后 sort_by）的瓶颈；3) 将 sort_by 替换为 select_nth_unstable（O(n) Top-K）；4) 考虑使用 SIMD（如 packed_simd）加速 L2 距离计算；5) 重新运行 benchmark 对比优化前后性能，将结果写入 mlc-knn-bench-report.md。优化后的代码必须保持 #![forbid(unsafe_code)] 合规。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+# =============================================================================
+# MiniMax — 7 任务
+# =============================================================================
+
+[[tasks]]
+task_id = "minimax-simple-01"
+provider = "MiniMax"
+model = "MiniMax-M3"
+complexity = "Simple"
+description = "概念解释: 详细解释 Rust 生命周期标注的规则，包括生命周期省略的三条规则和结构体中的生命周期"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请详细解释 Rust 生命周期标注的核心概念：1) 生命周期省略的三条规则（输入生命周期、输出生命周期、&self/&mut self 规则）；2) 结构体中的生命周期标注；3) 生命周期子类型关系（'a: 'b）；4) 静态生命周期 'static 的使用场景和陷阱。用代码示例说明。"
+
+[[tasks]]
+task_id = "minimax-simple-02"
+provider = "MiniMax"
+model = "MiniMax-M3"
+complexity = "Simple"
+description = "简单问答: 解释 Cargo workspace 的最佳实践，包括依赖统一管理和 feature 共享"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 400
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请解释 Cargo workspace 的最佳实践：1) workspace.dependencies 统一管理版本；2) workspace.package 共享元数据；3) 成员 crate 间的依赖声明；4) feature flag 在 workspace 中的传播策略。给出一个包含 5 个 crate 的 workspace 示例。"
+
+[[tasks]]
+task_id = "minimax-regular-01"
+provider = "MiniMax"
+model = "MiniMax-M3"
+complexity = "Regular"
+description = "文件读写: 根据模板生成一个新的 Rust crate 骨架代码，包含 lib.rs、error.rs、types.rs、config.rs"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 2000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请按照 Chimera CLI 项目的 crate 模板规范，在 crates/ 下创建一个名为 my-new-crate 的新 crate，包含以下文件：Cargo.toml（使用 workspace 版本和依赖）、src/lib.rs（#![forbid(unsafe_code)] + 模块导出）、src/error.rs（thiserror enum）、src/types.rs（核心类型）、src/config.rs（Figment 配置）。模版参考 crates/nexus-core/ 的结构。注意：不要修改 Cargo.toml workspace.members，只需生成 crate 文件。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "list_directory"
+description = "列出指定目录下的所有文件和子目录"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目录路径"}},"required":["path"]}'
+
+[[tasks]]
+task_id = "minimax-regular-02"
+provider = "MiniMax"
+model = "MiniMax-M3"
+complexity = "Regular"
+description = "代码搜索: 搜索项目中所有 unwrap() 和 expect() 调用，评估风险等级并生成替换建议"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 1800
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请在 crates/ 目录下搜索所有 .unwrap() 和 .expect() 调用，按风险等级分类：High（用户输入/外部 API 边界）、Medium（内部模块边界）、Low（测试代码/配置加载）。对 High 和 Medium 级别的调用给出替换为 ? 或 match 的具体建议，将结果写入 unwrap-audit-report.md。"
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "minimax-regular-03"
+provider = "MiniMax"
+model = "MiniMax-M3"
+complexity = "Regular"
+description = "文档生成: 为指定模块的所有公开 API 生成缺失的文档注释（/// doc comments）"
+thinking_pref = "Standard"
+expected_max_tokens_min = 600
+expected_max_tokens_max = 2200
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请读取 crates/event-bus/src/types.rs 文件，为所有没有文档注释的 pub 类型、pub 函数和 pub 方法添加 /// 文档注释。文档应包含：功能描述、参数说明、返回值说明、使用示例（如适用）。注意：不要修改任何代码逻辑，只添加文档注释。完成后运行 cargo doc -p event-bus --no-deps 验证文档生成无警告。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "minimax-complex-01"
+provider = "MiniMax"
+model = "MiniMax-M3"
+complexity = "Complex"
+description = "跨 crate 重构: 统一 3 个 crate 的错误处理策略，消除重复的 Error 变体"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2000
+expected_max_tokens_max = 8000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "分析发现 crates/osa-coordinator/src/error.rs、crates/kvbsr-router/src/error.rs 和 crates/sesa-router/src/error.rs 中有大量重复的错误变体（如 IoError、SerializationError、ConfigError）。请执行以下重构：1) 在 crates/nexus-core/src/ 下创建 shared_error.rs，定义公共错误类型 SharedError；2) 三个 crate 的 error.rs 使用 SharedError 替换重复变体；3) 更新三个 crate 的 Cargo.toml 添加 nexus-core 依赖；4) 确保所有引用这些错误的代码（包括测试）正确更新。注意：保持 thiserror 的 #[from] 和 #[error] 语义不变。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "minimax-complex-02"
+provider = "MiniMax"
+model = "MiniMax-M3"
+complexity = "Complex"
+description = "依赖迁移: 将项目中 3 个 crate 的 tokio 依赖从 1.40 升级到 1.42，处理 breaking changes 并更新 API"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2000
+expected_max_tokens_max = 8000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "需要将 crates/chimera-mas、crates/quest-engine 和 crates/gea-activator 的 tokio 依赖从 workspace 当前版本模拟升级到 1.42（假设存在 breaking changes）。请执行：1) 阅读 tokio 1.42 的 CHANGELOG（模拟），识别影响当前代码的 breaking changes；2) 更新三个 crate 中使用已废弃 API 的代码；3) 处理新的 trait bound 要求（如 Runtime 类型参数变更）；4) 运行 cargo test -p chimera-mas -p quest-engine -p gea-activator 确保测试通过；5) 将变更摘要写入 tokio-migration-notes.md。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+# =============================================================================
+# DeepSeek — 8 任务
+# =============================================================================
+
+[[tasks]]
+task_id = "deepseek-simple-01"
+provider = "DeepSeek"
+model = "deepseek-v4-flash"
+complexity = "Simple"
+description = "代码解释: 解释 Rust 声明宏 (macro_rules!) 和过程宏 (proc macro) 的区别与使用场景"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请详细解释 Rust 中宏系统的两个层次：1) 声明宏 macro_rules! 的语法和匹配规则；2) 过程宏（derive、attribute、function-like）的实现原理；3) 两者的性能差异和使用场景选择；4) 给出一个声明宏和一个 derive 过程宏的完整示例。"
+
+[[tasks]]
+task_id = "deepseek-simple-02"
+provider = "DeepSeek"
+model = "deepseek-v4-flash"
+complexity = "Simple"
+description = "简单问答: 解释 Clippy 的 lint 级别分类和项目中常用的 lint 属性配置"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 400
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请解释 Clippy 的 lint 级别分类（allow/warn/deny/forbid）以及在 Cargo.toml 和源码中如何配置。特别说明 #![warn(missing_docs, clippy::all)] 和 #![forbid(unsafe_code)] 的语义和传播规则。"
+
+[[tasks]]
+task_id = "deepseek-regular-01"
+provider = "DeepSeek"
+model = "deepseek-v4-flash"
+complexity = "Regular"
+description = "文件读写: 修改 3 个 crate 的 Cargo.toml，将独立声明的依赖版本统一为 workspace 引用"
+thinking_pref = "Standard"
+expected_max_tokens_min = 400
+expected_max_tokens_max = 1500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请检查 crates/hcw-window/Cargo.toml、crates/scc-cache/Cargo.toml 和 crates/lsct-tiering/Cargo.toml，将其中独立声明版本的依赖（如 tokio = { version = \"1.40\", ... }）统一改为 workspace 引用（tokio = { workspace = true }）。确保修改后 cargo check -p hcw-window -p scc-cache -p lsct-tiering 通过。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "deepseek-regular-02"
+provider = "DeepSeek"
+model = "deepseek-v4-flash"
+complexity = "Regular"
+description = "代码搜索: 搜索项目中所有相似度超过 80% 的代码块，识别可以提取为公共函数的重复代码"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 1800
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请在 crates/ 目录下搜索重复的代码模式（相似函数体、重复的错误处理逻辑、相同的配置解析代码），识别出至少 5 处可以提取为公共函数的重复代码。对每处重复给出：文件位置、相似度估计、建议的公共函数签名。结果写入 code-dedup-report.md。"
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "deepseek-regular-03"
+provider = "DeepSeek"
+model = "deepseek-v4-flash"
+complexity = "Regular"
+description = "测试生成: 为 quest-engine 的 Checkpoint 序列化/反序列化编写 property-based 测试"
+thinking_pref = "Standard"
+expected_max_tokens_min = 600
+expected_max_tokens_max = 2200
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请为 crates/quest-engine 的 Checkpoint 类型编写 property-based 测试（使用 proptest 框架）：1) 生成任意合法的 Checkpoint 实例；2) 验证 MessagePack 序列化→反序列化 roundtrip 一致性；3) 验证序列化后的字节大小不超过 10KB；4) 验证 memory_snapshot_hash 的 SHA256 与内容一致。测试使用 proptest 1.11+ 的 block-named 语法 fn test_name(x in strategy) { ... }。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "deepseek-complex-01"
+provider = "DeepSeek"
+model = "deepseek-v4-flash"
+complexity = "Complex"
+description = "架构重构: 识别并消除 L6 Router 层 4 个 crate 之间的星型耦合，将公共接口下沉到 L1"
+thinking_pref = "Deep"
+expected_max_tokens_min = 3000
+expected_max_tokens_max = 12000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "根据三环重组分析报告，L6 Router 层存在星型耦合：osa-coordinator、kvbsr-router、faae-router、sesa-router 四个 crate 都相互依赖 osa-coordinator 中的类型定义。请执行以下重构：1) 分析四个 crate 的依赖关系，识别可以下沉到 L1 (nexus-core) 的公共类型和 trait；2) 在 nexus-core 中创建 router_types.rs 模块，定义 RouterConfig、RouteResult、RouteError 等公共类型；3) 更新四个 crate 使用 nexus-core 中的类型替代 osa-coordinator 的类型；4) 确保依赖方向合规（L6→L1 允许，L6→L6 交叉依赖减少）。注意：这是架构层面的重构，需要仔细分析所有引用关系。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "deepseek-complex-02"
+provider = "DeepSeek"
+model = "deepseek-v4-flash"
+complexity = "Complex"
+description = "死锁调试: 诊断并修复一个 tokio 多任务并发场景下的死锁，涉及 Mutex 持锁和 channel 等待"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2500
+expected_max_tokens_max = 10000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "我们遇到了一个随机复现的死锁问题：在 chimera-mas 的 orchestrator 中，dispatch_task 函数持有一个 tokio::sync::Mutex 锁，然后通过 mpsc channel 发送消息给 worker，但 worker 的回调也需要获取同一个 Mutex 锁，导致死锁。请诊断并修复：1) 分析 orchestrator.rs 和 worker.rs 中的锁使用模式；2) 识别死锁形成的必要条件（持锁→等待 channel→channel 回调→请求锁）；3) 采用快照→释放→await 模式重构；4) 添加 loom 或 tokio 死锁检测测试；5) 将根因分析和修复总结写入 deadlock-postmortem.md。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "deepseek-complex-03"
+provider = "DeepSeek"
+model = "deepseek-v4-flash"
+complexity = "Complex"
+description = "事件驱动重构: 将 3 个 crate 中的直接函数调用改为通过 event-bus 发布/订阅事件解耦"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2500
+expected_max_tokens_max = 10000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "当前 crates/quest-engine 直接调用 crates/parliament 的 submit_for_review 函数，这违反了依赖铁律（L9 Quest → L8 Parliament 是 L(N)→L(N+1) 向上依赖）。请执行事件驱动重构：1) 在 event-bus 中定义 QuestReviewRequested 和 ReviewCompleted 两个新事件；2) quest-engine 改为发布 QuestReviewRequested 事件；3) parliament 订阅 QuestReviewRequested 事件并处理，完成后发布 ReviewCompleted；4) quest-engine 订阅 ReviewCompleted 事件继续流程；5) 移除 quest-engine 对 parliament 的直接依赖。注意：保持业务流程语义不变，所有测试通过。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+# =============================================================================
+# VolcanoArk (豆包) — 8 任务
+# =============================================================================
+
+[[tasks]]
+task_id = "volcanoark-simple-01"
+provider = "VolcanoArk"
+model = "doubao-1.5-pro-256k"
+complexity = "Simple"
+description = "代码解释: 解释 Rust 中 trait object 的安全规则（object safety），以及 dyn 和 impl 的选择"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请详细解释 Rust 中 trait object 的安全（object safety）规则：1) 哪些 trait 方法会破坏 object safety；2) where Self: Sized 技巧；3) dyn Trait 的内存布局（胖指针）；4) 在性能敏感场景下 impl Trait 静态分发 vs dyn Trait 动态分发的 trade-off。用代码示例说明。"
+
+[[tasks]]
+task_id = "volcanoark-simple-02"
+provider = "VolcanoArk"
+model = "doubao-1.5-pro-256k"
+complexity = "Simple"
+description = "简单问答: 解释 Rust 错误处理的最佳实践，包括 thiserror、anyhow 和自定义错误类型的选择"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 450
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请解释 Rust 错误处理的最佳实践：1) 库层使用 thiserror 定义结构化错误 vs 应用层使用 anyhow 的区分；2) Error trait 的实现和 #[from] 自动转换；3) 何时使用自定义错误枚举 vs 组合现有错误类型；4) 错误上下文传递（anyhow::Context）的使用时机。给出库 crate 和应用 crate 的完整示例。"
+
+[[tasks]]
+task_id = "volcanoark-regular-01"
+provider = "VolcanoArk"
+model = "doubao-1.5-pro-256k"
+complexity = "Regular"
+description = "文件读写: 为 10 个源文件批量添加标准的版权声明头和 #![forbid(unsafe_code)] 属性"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 1800
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请在 crates/model-router/src/ 目录下所有 .rs 文件的头部添加标准的版权声明头（参考 nexus-core 的格式），并确保 lib.rs 包含 #![forbid(unsafe_code)]。如果文件已有部分声明，检查格式是否一致。完成后运行 cargo fmt 确保格式正确。"
+
+[[tasks.tools]]
+name = "list_directory"
+description = "列出指定目录下的所有文件和子目录"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目录路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "volcanoark-regular-02"
+provider = "VolcanoArk"
+model = "doubao-1.5-pro-256k"
+complexity = "Regular"
+description = "代码搜索: 搜索项目中所有已废弃的 API 用法（如 std::sync::Mutex 在 async 上下文中的使用）"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 1800
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请在 crates/ 目录下搜索以下反模式并生成报告：1) 在 async 上下文中使用 std::sync::Mutex 而非 tokio::sync::Mutex；2) 使用 std::thread::sleep 而非 tokio::time::sleep；3) 使用 blocking 文件 I/O (std::fs) 而非 tokio::fs；4) 手动实现 Future 而非使用 async fn。对每个发现给出文件位置和替换建议。结果写入 async-anti-patterns-report.md。"
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "volcanoark-regular-03"
+provider = "VolcanoArk"
+model = "doubao-1.5-pro-256k"
+complexity = "Regular"
+description = "基准测试: 为 nmc-encoder 的编码/解码性能编写 criterion benchmark 并分析瓶颈"
+thinking_pref = "Standard"
+expected_max_tokens_min = 600
+expected_max_tokens_max = 2200
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请为 crates/nmc-encoder 编写 criterion benchmark 测试编码和解码性能：1) 测量不同输入大小（1KB/10KB/100KB/1MB）下的编码延迟和吞吐量；2) 测量解码延迟；3) 测量内存占用峰值；4) 分析是否有明显的性能瓶颈（如不必要的内存分配、数据拷贝）；5) 将 benchmark 结果和性能分析写入 nmc-bench-report.md。benchmark 文件放在 crates/nmc-encoder/benches/ 目录下。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "volcanoark-complex-01"
+provider = "VolcanoArk"
+model = "doubao-1.5-pro-256k"
+complexity = "Complex"
+description = "Trait 抽象重构: 从 3 个 crate 的相似实现中提取公共 trait，实现代码复用"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2000
+expected_max_tokens_max = 8000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "crates/osa-coordinator、crates/kvbsr-router 和 crates/sesa-router 都实现了类似的路由接口（route、batch_route、update_weights），但各自定义了不同的 trait。请执行以下重构：1) 在 nexus-core 中定义统一的 Router trait，包含 route、batch_route、update_weights 三个方法；2) 三个 crate 实现统一的 Router trait；3) 更新调用方使用 trait bound 而非具体类型；4) 确保重构后所有测试通过。注意：Router trait 设计需要考虑异步 trait 方法（使用 #[async_trait] 或 RPITIT）。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "volcanoark-complex-02"
+provider = "VolcanoArk"
+model = "doubao-1.5-pro-256k"
+complexity = "Complex"
+description = "安全审计: 对 3 个 crate 执行 OWASP Top 10 安全审计，识别潜在漏洞并修复"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2500
+expected_max_tokens_max = 10000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请对 crates/seccore、crates/qeep-protocol 和 crates/decay-engine 执行 OWASP Top 10 安全审计：1) 检查命令注入风险（seccore 的沙箱命令执行）；2) 检查敏感数据泄露（qeep-protocol 的密钥管理）；3) 检查权限控制缺陷（decay-engine 的衰减策略绕过）；4) 检查日志注入风险；5) 对发现的问题编写修复代码并进行回归测试；6) 将审计报告写入 security-audit-owasp.md。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "volcanoark-complex-03"
+provider = "VolcanoArk"
+model = "doubao-1.5-pro-256k"
+complexity = "Complex"
+description = "内存优化: 分析并优化 chimera-mas 中 50 个 Agent 并发场景下的内存占用，减少 Arc 克隆开销"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2500
+expected_max_tokens_max = 10000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "在 chimera-mas 的 50 Agent 并发场景下，观察到内存峰值过高（约 2GB）。请分析并优化：1) 使用 heaptrack 或 valgrind 分析内存分配热点；2) 识别不必要的 Arc 克隆（如每次委托都 clone 整个 AgentContext）；3) 将 Arc 克隆替换为引用传递（在安全的生命周期内）；4) 考虑使用 Arc::make_mut 的写时复制策略；5) 编写内存峰值 benchmark（取 10/50/100 Agent 的内存峰值）；6) 将优化结果写入 memory-optimization-report.md。目标：50 Agent 场景内存峰值降低 30% 以上。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+# =============================================================================
+# AlibabaCloud (Qwen) — 7 任务
+# =============================================================================
+
+[[tasks]]
+task_id = "alibabacloud-simple-01"
+provider = "AlibabaCloud"
+model = "qwen-3.7-plus"
+complexity = "Simple"
+description = "代码解释: 深入解释 Rust Pin/Unpin 机制的用途，特别在 async 代码和自引用结构体中的角色"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请深入解释 Rust 的 Pin/Unpin 机制：1) 为什么 async 块生成的 Future 需要 Pin；2) Pin 如何保证内存地址稳定；3) Unpin auto trait 的含义；4) pin! 宏和 Pin::new_unchecked 的安全使用条件。用 async 代码和自引用结构体的示例说明。"
+
+[[tasks]]
+task_id = "alibabacloud-simple-02"
+provider = "AlibabaCloud"
+model = "qwen-3.7-plus"
+complexity = "Simple"
+description = "简单问答: 解释 Cargo feature flag 的设计原则，包括 feature 组合爆炸和互斥 feature 的处理"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 400
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请解释 Cargo feature flag 的设计原则：1) feature 命名规范（使用下划线，避免 negate feature）；2) feature 组合爆炸问题及预防（2^n 问题）；3) 互斥 feature 的处理方式（compile_error! 宏）；4) 在 workspace 中 feature 的传播策略。给出一个包含 5 个 feature 的 crate 设计示例。"
+
+[[tasks]]
+task_id = "alibabacloud-regular-01"
+provider = "AlibabaCloud"
+model = "qwen-3.7-plus"
+complexity = "Regular"
+description = "文件读写: 读取 CHANGELOG.md 并自动生成当前版本的发布摘要（Release Notes）"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 1800
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请读取 CHANGELOG.md 文件，提取最新版本（v2.19.0-omega）的变更内容，整理为结构化的 Release Notes，包含：版本号和日期、新增功能、Bug 修复、性能优化、Breaking Changes、依赖更新。将 Release Notes 写入 release-notes-v2.19.0.md 文件。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "alibabacloud-regular-02"
+provider = "AlibabaCloud"
+model = "qwen-3.7-plus"
+complexity = "Regular"
+description = "代码搜索: 搜索项目中所有未使用的导入（unused imports）和未使用的变量，生成清理建议"
+thinking_pref = "Standard"
+expected_max_tokens_min = 400
+expected_max_tokens_max = 1500
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请在 crates/ 目录下运行 cargo check 并收集所有 unused import、unused variable 和 unused mut 警告，按 crate 分组统计，对每个发现给出清理建议。注意：区分真正的未使用（可以删除）和条件编译下的未使用（需要 cfg 属性）。结果写入 unused-code-report.md。"
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "alibabacloud-regular-03"
+provider = "AlibabaCloud"
+model = "qwen-3.7-plus"
+complexity = "Regular"
+description = "测试修复: 诊断并修复 3 个失败的单元测试，分析是测试代码问题还是被测代码 bug"
+thinking_pref = "Standard"
+expected_max_tokens_min = 600
+expected_max_tokens_max = 2200
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "运行 cargo test 后发现 crates/decay-engine 和 crates/acb-governor 中共有 3 个测试失败。请：1) 运行测试获取完整失败信息；2) 逐个分析失败原因（是测试断言错误、被测代码逻辑变更、还是真正的 bug）；3) 对测试代码问题修复测试断言，对被测代码 bug 修复被测代码；4) 确保修复后所有测试通过。记录每个失败的根因和修复方法到 test-fix-report.md。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "alibabacloud-complex-01"
+provider = "AlibabaCloud"
+model = "qwen-3.7-plus"
+complexity = "Complex"
+description = "模块拆分: 将一个超过 500 行的单文件模块拆分为 4 个子模块，保持 API 兼容"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2000
+expected_max_tokens_max = 8000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "crates/osa-coordinator/src/coordinator.rs 目前有 600+ 行，包含了协调器核心逻辑、稀疏掩码管理、路由决策、审计日志四类功能混在一起。请执行模块拆分：1) 创建 coordinator/ 目录，将 coordinator.rs 拆分为 mod.rs + masks.rs + routing.rs + audit.rs 四个子模块；2) 每个子模块不超过 200 行；3) 保持 pub API 不变（通过 pub use 重新导出）；4) 确保所有引用 osa-coordinator 的 crate 仍能编译通过。注意：拆分后需要保持测试覆盖。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "alibabacloud-complex-02"
+provider = "AlibabaCloud"
+model = "qwen-3.7-plus"
+complexity = "Complex"
+description = "新 crate 集成: 在 workspace 中新增一个 crate 并完成与现有 3 个 crate 的集成"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2000
+expected_max_tokens_max = 8000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "需要在 L4 Security 层新增一个 crate 名为 audit-logger，提供结构化的审计日志功能。请执行：1) 创建 crates/audit-logger/ 骨架（按项目模板规范）；2) 定义 AuditEvent 类型和 AuditLogger trait；3) 在 Cargo.toml workspace.members 中注册；4) 在 crates/seccore、crates/qeep-protocol 和 crates/decay-engine 中集成 audit-logger，将关键操作记录到审计日志；5) 编写集成测试验证审计日志的完整性和不可篡改性；6) 确保 cargo check --workspace 通过。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks.tools]]
+name = "list_directory"
+description = "列出指定目录下的所有文件和子目录"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目录路径"}},"required":["path"]}'
+
+# =============================================================================
+# StepFun — 5 任务
+# =============================================================================
+
+[[tasks]]
+task_id = "stepfun-simple-01"
+provider = "StepFun"
+model = "step-3.5-flash-2603"
+complexity = "Simple"
+description = "代码解释: 解释 Rust Deref 和 DerefMut 的用途，以及 Deref 强制转换（Deref Coercion）的工作原理"
+thinking_pref = "Fast"
+expected_max_tokens_min = 100
+expected_max_tokens_max = 450
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请详细解释 Rust 的 Deref 和 DerefMut trait：1) 智能指针（Box、Rc、Arc）如何通过 Deref 实现透明访问；2) Deref 强制转换（Deref Coercion）在函数调用、方法调用中的自动应用规则；3) 自定义 Deref 实现的场景和注意事项；4) 对比 AsRef 和 Deref 的选择。用代码示例说明。"
+
+[[tasks]]
+task_id = "stepfun-regular-01"
+provider = "StepFun"
+model = "step-3.5-flash-2603"
+complexity = "Regular"
+description = "文件读写: 根据项目结构和代码自动生成一个专业的 README.md 文件"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 2000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请为 crates/sesa-router 生成一个专业的 README.md 文件，包含：项目简介、架构层级归属（L6 Router）、核心功能描述、API 使用示例、配置说明、依赖关系图。参考 crates/nexus-core/README.md 的风格（如果存在）。确保文档内容准确反映 sesa-router 的实际代码。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "list_directory"
+description = "列出指定目录下的所有文件和子目录"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目录路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "stepfun-regular-02"
+provider = "StepFun"
+model = "step-3.5-flash-2603"
+complexity = "Regular"
+description = "代码搜索: 搜索所有 pub 但未在 crate 外部被引用的导出项，识别可降级为 pub(crate) 的 API"
+thinking_pref = "Standard"
+expected_max_tokens_min = 500
+expected_max_tokens_max = 1800
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "请在 crates/ 下搜索所有标记为 pub 但在当前 crate 外部从未被引用的类型、函数和模块。对每个未使用的 pub 项，判断是否应该降级为 pub(crate) 以缩小 API 面。注意：区分真正未使用和可能被下游 crate 通过 re-export 间接使用的项。结果写入 pub-api-audit-report.md。"
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks]]
+task_id = "stepfun-complex-01"
+provider = "StepFun"
+model = "step-3.5-flash-2603"
+complexity = "Complex"
+description = "架构调整: 根据三环重组方案，将指定的 2 个 crate 从外环迁移到内环，调整通信方式"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2500
+expected_max_tokens_max = 10000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "根据三环重组方案，需要将 crates/mlc-engine 和 crates/hcw-window 从外环（事件驱动）迁移到内环（共享内存+直接调用）。请执行：1) 分析这两个 crate 当前通过 event-bus 的通信模式；2) 识别可以改为直接函数调用的交互；3) 重构为直接调用，同时保留事件发布用于外环消费；4) 确保延迟 < 1ms（内环约束）；5) 编写迁移影响分析报告 migration-impact-report.md。注意：内环 crate 不能依赖外环 crate，外环只能通过 event-bus 消费内环事件。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'
+
+[[tasks]]
+task_id = "stepfun-complex-02"
+provider = "StepFun"
+model = "step-3.5-flash-2603"
+complexity = "Complex"
+description = "并发模型优化: 将 chimera-mas 的串行任务调度改为 FuturesUnordered 并发执行，提升吞吐量"
+thinking_pref = "Deep"
+expected_max_tokens_min = 2000
+expected_max_tokens_max = 8000
+
+[[tasks.messages]]
+role = "System"
+content = "You are Chimera, a terminal-first AI coding agent built on the OMEGA architecture."
+
+[[tasks.messages]]
+role = "User"
+content = "当前 chimera-mas 的 orchestrator 使用串行循环逐个处理 Agent 任务，吞吐量受限于单个任务的延迟。请优化为并发模型：1) 将当前的 for task in tasks { process(task).await } 改为使用 FuturesUnordered 并发执行；2) 添加并发度控制（Semaphore 限制最大并发数）；3) 处理并发下的错误传播（第一个失败是否取消其他任务）；4) 编写 benchmark 对比串行和并发的吞吐量（10/50/100 任务）；5) 将优化结果写入 concurrency-optimization-report.md。注意：FuturesUnordered 优于 join_all，减少内存占用。"
+
+[[tasks.tools]]
+name = "read_file"
+description = "读取指定路径的文件内容"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"文件路径"}},"required":["path"]}'
+
+[[tasks.tools]]
+name = "grep_search"
+description = "使用正则表达式在项目中搜索匹配的代码行"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"正则表达式模式"},"path":{"type":"string","description":"搜索路径"}},"required":["pattern"]}'
+
+[[tasks.tools]]
+name = "write_file"
+description = "将内容写入指定文件"
+parameters_schema = '{"type":"object","properties":{"path":{"type":"string","description":"目标文件路径"},"content":{"type":"string","description":"写入内容"}},"required":["path","content"]}'
+
+[[tasks.tools]]
+name = "execute_command"
+description = "在终端中执行 shell 命令"
+parameters_schema = '{"type":"object","properties":{"command":{"type":"string","description":"要执行的命令"},"cwd":{"type":"string","description":"工作目录"}},"required":["command"]}'

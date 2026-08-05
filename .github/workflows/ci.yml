@@ -5,6 +5,7 @@
 # 本 workflow 把 CLAUDE.md §5 发布前清单中的 fmt/check/clippy/test 前移为合并前的必需闸门。
 # 注: Windows-GNU 与 5 平台构建由 release.yml 在 tag 时覆盖;此闸门在 ubuntu-latest 上做
 # 跨平台无关的快速校验(编译/单测/lint/格式),以获得最快反馈,不与 release 矩阵重复。
+# 注: 覆盖率由 coverage.yml 独立 workflow 处理(非阻塞,每周定时),不在 PR 门禁中运行。
 name: CI
 
 on:
@@ -23,12 +24,19 @@ env:
   CARGO_TERM_COLOR: always
   # WHY: 与 .cargo/config.toml 对齐 —— CI 无增量复用价值,关闭以规避历史 GNU ICE 并加速。
   CARGO_INCREMENTAL: '0'
+  # 注: sccache(RUSTC_WRAPPER)为 job 级配置 —— check/e2e job 各自启用,
+  # mca-feature job(ADR-065)不注入,避免影响其独立缓存键语义。
 
 jobs:
   check:
     name: fmt · check · clippy · test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # WHY: sccache 编译缓存(跨 job 共享编译产物,与 CARGO_INCREMENTAL=0 不冲突;
+    # 仅在 CI 启用,本地不硬编码以避免破坏 Windows GNU 工具链)。
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_CACHE: 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +44,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: '.'
+
+      - name: Setup sccache
+        uses: mozilla/sccache-action@v0
 
       # WHY: 先跑零编译依赖的文档一致性巡检，若架构文档 crate 数与 Cargo.toml 漂移则快速失败(F4)。
       - name: Doc consistency (crate count vs Cargo.toml)
@@ -54,8 +65,76 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Test (workspace)
-        run: cargo test --workspace
+      - name: Install cargo-nextest
+        # WHY: nextest 并行执行所有测试 binary(400+ binary 从串行变并行),
+        # 2026-08-05 本地实测运行段 1126.9s → 130.3s(-88%);
+        # taiki-e/install-action 下载预编译二进制,避免 cargo install 16min 编译。
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Test (workspace, 快速回归)
+        # WHY 命令裁剪(2026-08-05 实测,冷全量 ~30min):
+        # - --exclude chimera-e2e-tests:33 个 E2E/压测 [[test]] 独立二进制的
+        #   编译+链接+运行移出快轨,由下方 e2e job 并行承担(门禁不丢失);
+        # - nextest:不运行 doc-tests(~335s,占 cargo test 运行段 55%),
+        #   doc-tests 由 release.yml 全量验证与发布清单步骤覆盖;
+        # - --no-fail-fast:单测试失败不阻塞其余测试运行,汇总全部失败;
+        # - CHIMERA_BACKPRESSURE_SECS=5:背压测试 60s spec 时长降为 5s 快速回归
+        #   (参数化设计见 backpressure_test.rs,Release 验收仍 60s);
+        # - P9-T2: --profile ci-fast + -E 'not binary(/stress/)' 排除 1000-iter 压测
+        #   与 60s 级稳定性测试,由独立 stress.yml 在 nightly 触发;
+        # - P9-T2: CHIMERA_TEST_TIMEOUT_SCALE=0.1 收敛硬编码 2s+ 等待
+        #   (见 nexus-contracts::test_scale 模块,缺省 1.0 与原行为等价)。
+        env:
+          CHIMERA_BACKPRESSURE_SECS: '5'
+          CHIMERA_TEST_TIMEOUT_SCALE: '0.1'
+        run: cargo nextest run --profile ci-fast -E 'not binary(/stress/)' --no-fail-fast
+
+      # WHY: sccache 命中率统计(始终运行,即便测试失败也能观察缓存效果)。
+      # 用于评估跨 job 编译缓存复用率,指导缓存策略调优。
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+  # ============================================================
+  # E2E/压测独立 job(与 check 并行)
+  # WHY: 根 package 33 个 [[test]] target(week5-8 E2E/安全/压测/控制闭环)
+  # 编译+链接成本高、运行耗时长,独立成 job 避免拖慢 PR 快轨反馈;
+  # 仍为 required check,合入门禁完整。独立缓存 key 防与快轨产物混用。
+  # ============================================================
+  e2e:
+    name: test (E2E/压测 target)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_CACHE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+          key: e2e-tests
+
+      - name: Setup sccache
+        uses: mozilla/sccache-action@v0
+
+      # WHY: 与 check job 相同,背压测试降为 5s 快速回归。
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Test (chimera-e2e-tests)
+        # P9-T2: 排除 stress binary(1000-iter 压测),由独立 stress.yml 在 nightly 触发;
+        #        ci-fast 档收敛硬编码等待(scale=0.1)以加速 PR 反馈。
+        env:
+          CHIMERA_BACKPRESSURE_SECS: '5'
+          CHIMERA_TEST_TIMEOUT_SCALE: '0.1'
+        run: cargo nextest run -p chimera-e2e-tests -E 'not binary(/stress/)' --no-fail-fast
 
   # ============================================================
   # MCA 双轨旁路 job(ADR-065 决策 6,PANTHEON 计划 M0 PR-4)

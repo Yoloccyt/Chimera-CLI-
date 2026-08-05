@@ -1309,7 +1309,7 @@ mod tests {
         let err = spec.validate().unwrap_err();
         match err {
             HarnessSpecError::ImmutableSurfaceViolation { location, surface } => {
-                assert_eq!(location, "contracts\\[0\\].from");
+                assert_eq!(location, "contracts[0].from");
                 assert_eq!(surface, ImmutableSurface::CriticalSkepticVeto);
             }
             other => panic!("期望 ImmutableSurfaceViolation，实际: {:?}", other),
@@ -1527,11 +1527,11 @@ mod tests {
         assert!(input.contains("meta.task_type=fuzz"));
         assert!(input.contains("contracts[0].name=no_panic"));
         assert!(input.contains("contracts[0].property=fuzz_target_must_not_panic"));
-        assert!(input.contains("contracts\\[0\\].from=Architect"));
+        assert!(input.contains("contracts[0].from=Architect"));
         assert!(input.contains("contracts[0].to=orchestrator"));
         assert!(input.contains("contracts[0].fields=veto_reason"));
         assert!(input.contains("hops[0].name=generate_input"));
-        assert!(input.contains("hops[0].input_type=Vec<u8>"));
+        assert!(input.contains("hops[0].input_type=`Vec<u8>`"));
         assert!(input.contains("hops[0].output_type=ParseResult"));
         assert!(input.contains("hops[0].contracts=no_panic"));
         assert!(input.contains("hops[0].order=Architect.propose"));

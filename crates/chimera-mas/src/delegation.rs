@@ -645,22 +645,39 @@ impl Default for DelegationExecutor {
 // 辅助函数
 // ============================================================
 
-/// 计算子任务的有效超时(SubTask 13.5)
+/// 计算子任务的有效超时(P3-10: 考虑 TaskComplexity)
 ///
-/// - `acceptable_latency == 0` → 回退到 `default_timeout`(未设置自定义超时)
-/// - `acceptable_latency > 0` → `min(acceptable_latency, default_timeout)`
-///   (子任务可自定义更短超时,但不超过框架上限)
+/// ## 复杂度映射规则
 ///
-/// WHY min:框架设定超时上限(default_timeout),子任务可在上限内自定义更短超时。
-/// 测试验证三场景:
-/// - acceptable_latency=10s, default_timeout=100ms → 用 100ms(框架上限更严)
-/// - acceptable_latency=50ms, default_timeout=10s → 用 50ms(子任务自定义更短)
-/// - acceptable_latency=0 → 用 default_timeout(回退)
+/// - `Simple` → `default_timeout / 2`
+/// - `Medium` → `default_timeout`
+/// - `Complex` → `default_timeout * 2`
+/// - `VeryComplex` → `default_timeout * 4`
+///
+/// 最终值仍受 `acceptable_latency` 上限约束(> 0 时取 min)。
+/// `acceptable_latency == 0` 表示未设置自定义超时,直接使用复杂度基值。
+///
+/// ## 示例
+///
+/// | 复杂度 | default_timeout | acceptable_latency | 结果 |
+/// |--------|----------------|-------------------|------|
+/// | Simple | 60s | 0 | 30s |
+/// | Complex | 60s | 0 | 120s |
+/// | Simple | 60s | 10s | 10s(受 acceptable_latency 约束) |
+/// | VeryComplex | 60s | 500s | 240s(受 4× 上限约束) |
 fn effective_timeout(task: &AgentTask, default_timeout: Duration) -> Duration {
+    // 步骤 1:根据 TaskComplexity 计算基值超时
+    let base = match task.complexity {
+        TaskComplexity::Simple => default_timeout / 2,
+        TaskComplexity::Medium => default_timeout,
+        TaskComplexity::Complex => default_timeout * 2,
+        TaskComplexity::VeryComplex => default_timeout * 4,
+    };
+    // 步骤 2:acceptable_latency 作为上限约束
     if task.acceptable_latency > Duration::ZERO {
-        task.acceptable_latency.min(default_timeout)
+        base.min(task.acceptable_latency)
     } else {
-        default_timeout
+        base
     }
 }
 
@@ -780,5 +797,80 @@ async fn execute_single_task(
                 agent_id,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nexus_core::{Task, TaskStatus};
+
+    fn make_test_task(complexity: TaskComplexity, latency: Duration) -> AgentTask {
+        let inner = Task {
+            task_id: "t-1".into(),
+            description: "test".into(),
+            status: TaskStatus::Pending,
+            dependencies: vec![],
+        };
+        AgentTask::new(inner, complexity, 100, latency, QualityLevel::Standard)
+    }
+
+    // ============================================================
+    // P3-10: TaskComplexity 超时映射测试
+    // ============================================================
+
+    #[test]
+    fn test_effective_timeout_simple() {
+        // AC10-2: Simple → 1/2 default_timeout
+        let task = make_test_task(TaskComplexity::Simple, Duration::ZERO);
+        let timeout = effective_timeout(&task, Duration::from_secs(60));
+        assert_eq!(timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_effective_timeout_medium() {
+        // Medium → default_timeout
+        let task = make_test_task(TaskComplexity::Medium, Duration::ZERO);
+        let timeout = effective_timeout(&task, Duration::from_secs(60));
+        assert_eq!(timeout, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_effective_timeout_complex() {
+        // AC10-3: Complex → 2× default_timeout
+        let task = make_test_task(TaskComplexity::Complex, Duration::ZERO);
+        let timeout = effective_timeout(&task, Duration::from_secs(60));
+        assert_eq!(timeout, Duration::from_secs(120));
+    }
+
+    #[test]
+    fn test_effective_timeout_very_complex() {
+        // AC10-4: VeryComplex → 4× default_timeout
+        let task = make_test_task(TaskComplexity::VeryComplex, Duration::ZERO);
+        let timeout = effective_timeout(&task, Duration::from_secs(60));
+        assert_eq!(timeout, Duration::from_secs(240));
+    }
+
+    #[test]
+    fn test_effective_timeout_acceptable_latency_as_upper_bound() {
+        // AC10-5: acceptable_latency 仍作为上限约束
+        // Simple(30s) + acceptable_latency=10s → 10s
+        let task = make_test_task(TaskComplexity::Simple, Duration::from_secs(10));
+        let timeout = effective_timeout(&task, Duration::from_secs(60));
+        assert_eq!(timeout, Duration::from_secs(10));
+
+        // VeryComplex(240s) + acceptable_latency=500s → 240s(受 4× 上限约束)
+        let task = make_test_task(TaskComplexity::VeryComplex, Duration::from_secs(500));
+        let timeout = effective_timeout(&task, Duration::from_secs(60));
+        assert_eq!(timeout, Duration::from_secs(240));
+    }
+
+    #[test]
+    fn test_effective_timeout_acceptable_latency_greater_than_complexity_base() {
+        // acceptable_latency 大于复杂度基值时,取复杂度基值
+        let task = make_test_task(TaskComplexity::Simple, Duration::from_secs(60));
+        let timeout = effective_timeout(&task, Duration::from_secs(30));
+        // Simple(15s) + acceptable_latency(60s) → 15s
+        assert_eq!(timeout, Duration::from_secs(15));
     }
 }

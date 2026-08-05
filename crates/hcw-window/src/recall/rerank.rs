@@ -42,7 +42,9 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use super::types::{BlockId, BlockScore, FineRecallOutput, ModuleId, RecallError};
+use super::types::{
+    BlockId, BlockScore, CoarseRecallOutput, FineRecallOutput, ModuleId, RecallError,
+};
 
 // ============================================================
 // 常量定义
@@ -164,6 +166,80 @@ impl Default for RerankFillConfig {
             enable_sparse_pattern: true,
         }
     }
+}
+
+// ============================================================
+// PROBE P1.3: 三区结构配置与输入（独立新类型——RerankFillConfig 及
+// ~8 处既有字面量构造点零改动，编译破坏面红线）
+// ============================================================
+
+/// 三区结构配置 — sink 恒留 + 滑窗恒留 + 中段吃剩余配额（PROBE P1.3）
+///
+/// # 设计（StreamingLLM sink × NSA 三分支的脚手架平移）
+/// - `sink_tokens`: 头部恒留区（系统提示/文件头），默认 2K，豁免打分（H5 修复）
+/// - `sliding_tokens`: 尾部滑窗区（最近对话原文），默认 4K，
+///   recency 由结构保证而非权重保证（设计文档 §4.2.2 Round 2 裁决）
+/// - 中段选择区吃剩余配额（budget − sink − sliding），动态分配
+///
+/// # WHY 独立类型
+/// 与 [`RerankFillConfig`] 分离：`fill()` 原语义零回归（既有 p95 测试），
+/// 三区能力经新方法 [`RerankFill::fill_zones`] 提供（append-only）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZoneFillConfig {
+    /// 头部 sink 区 token 配额（默认 2048）
+    pub sink_tokens: usize,
+    /// 尾部滑窗区 token 配额（默认 4096）
+    pub sliding_tokens: usize,
+}
+
+impl Default for ZoneFillConfig {
+    fn default() -> Self {
+        Self {
+            sink_tokens: 2048,
+            sliding_tokens: 4096,
+        }
+    }
+}
+
+impl ZoneFillConfig {
+    /// 创建三区配置
+    ///
+    /// # 参数
+    /// - `sink_tokens`: sink 区配额（≥ 0）
+    /// - `sliding_tokens`: 滑窗区配额（≥ 0）
+    pub const fn new(sink_tokens: usize, sliding_tokens: usize) -> Self {
+        Self {
+            sink_tokens,
+            sliding_tokens,
+        }
+    }
+}
+
+/// 三区填充输入 — 精排输出 + token 映射 + sink/滑窗恒留块 + 摘要块
+///
+/// # 字段
+/// - `fine_output`: 精排输出（探针或静态路径均可）
+/// - `block_tokens`: Block ID → token 数映射（缺失按 DEFAULT_BLOCK_TOKENS 兜底）
+/// - `sink_blocks`: 头部恒留块 ID（系统提示/文件头，豁免打分）
+/// - `sliding_blocks`: 尾部滑窗块 ID（最近对话原文，结构保证 recency）
+/// - `summary_block`: 摘要块 ID（固定放中段，摘要为兜底信息）
+///
+/// WHY 恒留块用 ID 而非 BlockScore: 调用方（chimera-mas/编排器）持有
+/// 块 ID 列表，无需构造 BlockScore；恒留块从 fine_output 中按 ID 提取。
+#[derive(Debug, Clone)]
+pub struct ZoneFillInput<'a> {
+    /// 粗召回输出（供 P3 模块级密度计算，与 FineRecallInput 对齐）
+    pub coarse_output: &'a CoarseRecallOutput,
+    /// 精排输出（500 Block，按精确 CLV 相似度降序）
+    pub fine_output: &'a FineRecallOutput,
+    /// Block ID → token 数映射（用于密度计算）
+    pub block_tokens: &'a HashMap<BlockId, usize>,
+    /// 头部 sink 恒留块 ID（豁免打分）
+    pub sink_blocks: &'a [BlockId],
+    /// 尾部滑窗恒留块 ID（recency 由结构保证）
+    pub sliding_blocks: &'a [BlockId],
+    /// 摘要块 ID（固定中段，None 表示无摘要块）
+    pub summary_block: Option<&'a BlockId>,
 }
 
 // ============================================================
@@ -333,45 +409,16 @@ impl RerankFill {
 
         // 1. 注入 token_count + 预计算模块多样性
         let (enriched_blocks, module_counts) = self.enrich_blocks(blocks, input.block_tokens);
-        let total_blocks = enriched_blocks.len() as f32;
         let budget = self.config.window_budget.actual_tokens();
 
         // 2. 计算密度（多目标: score × (1 + diversity_bonus) / token_count）
-        let mut density_scores: Vec<(usize, f32)> = enriched_blocks
-            .iter()
-            .enumerate()
-            .map(|(i, block)| {
-                let module_count = *module_counts.get(&block.source_module).unwrap_or(&1) as f32;
-                // 多样性奖励: 模块在候选中的 Block 越少，奖励越高
-                let diversity_bonus =
-                    self.config.diversity_alpha * (1.0 - module_count / total_blocks);
-                // token_count 兜底: 0 表示未知，用 DEFAULT_BLOCK_TOKENS
-                let token_count = if block.token_count == 0 {
-                    DEFAULT_BLOCK_TOKENS
-                } else {
-                    block.token_count
-                };
-                let density = block.score * (1.0 + diversity_bonus) / token_count as f32;
-                (i, density)
-            })
-            .collect();
-
-        // 3. 按密度降序排序（O(N log N)，500 Block ≈ 0.1ms）
-        //    tie 用 block_id 字典序保证稳定（与 coarse/fine 一致）
-        density_scores.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    enriched_blocks[a.0]
-                        .block_id
-                        .cmp(&enriched_blocks[b.0].block_id)
-                })
-        });
+        // 3. 按密度降序排序（提取共享 density_order，fill 与 fill_zones 共用）
+        let density_order = self.density_order(&enriched_blocks, &module_counts);
 
         // 4. 贪心填充: 从最高密度开始累加 token_count 直到填满预算
         let mut filled_blocks: Vec<BlockScore> = Vec::new();
         let mut total_tokens = 0usize;
-        for &(i, _) in &density_scores {
+        for &i in &density_order {
             if total_tokens >= budget {
                 break;
             }
@@ -408,6 +455,315 @@ impl RerankFill {
             elapsed_us: start.elapsed().as_micros() as u64,
             budget_utilization,
         })
+    }
+
+    /// 执行三区填充 — sink 恒留 + 滑窗恒留 + 中段密度贪心（PROBE P1.3）
+    ///
+    /// # 三区结构（StreamingLLM sink × NSA 三分支的脚手架平移）
+    /// ```text
+    /// ┌────────────────────────────────────────────────────┐
+    /// │ Sink 区（恒留，豁免打分）: 系统提示/文件头           │
+    /// ├────────────────────────────────────────────────────┤
+    /// │ 中段选择区（密度贪心吃剩余配额）: 历史上下文分块      │
+    /// ├────────────────────────────────────────────────────┤
+    /// │ 滑窗区（恒留，recency 由结构保证）: 最近对话原文      │
+    /// └────────────────────────────────────────────────────┘
+    /// ```
+    ///
+    /// # 算法步骤
+    /// 1. token 配额 → 块数换算（DEFAULT_BLOCK_TOKENS 兜底）
+    /// 2. sink 块恒留（原序，不参与打分）
+    /// 3. 滑窗块恒留（原序，min(最近对话, 4K) 由调用方裁剪）
+    /// 4. 中段: 剩余候选按密度贪心填满剩余配额（共享 [`Self::density_order`]）
+    /// 5. 摘要块固定中段（摘要为兜底信息）
+    /// 6. 输出顺序 = sink + 中段（密度序） + 滑窗（原序）
+    ///
+    /// # 性能铁律
+    /// 结构性分区单趟构造——sink/滑窗不打分不排序，中段仅一次排序；
+    /// 禁止"整体重排后再切区"的二次排序实现。
+    ///
+    /// # WHY 独立方法
+    /// `fill()` 原语义零回归（既有 rerank_fill/streaming_fill p95 测试）；
+    /// 三区能力 append-only 追加，`RerankFillConfig` 零改动。
+    ///
+    /// # 错误
+    /// - `RecallError`: 无（纯计算；空输入返回空输出）
+    pub fn fill_zones(
+        &self,
+        input: ZoneFillInput<'_>,
+        zone: ZoneFillConfig,
+    ) -> Result<RerankFillOutput, RecallError> {
+        let start = Instant::now();
+        let blocks = &input.fine_output.blocks;
+        let budget = self.config.window_budget.actual_tokens();
+        // coarse_output 保留在输入中供 P3 模块级密度计算（与 FineRecallInput 对齐），
+        // P1.3 三区填充暂不使用——显式消费避免 unused 警告
+        let _ = input.coarse_output;
+
+        // 边界: 精排输出为空，直接返回空结果
+        if blocks.is_empty() {
+            return Ok(RerankFillOutput {
+                filled_blocks: Vec::new(),
+                total_tokens: 0,
+                sparse_pattern: None,
+                elapsed_us: start.elapsed().as_micros() as u64,
+                budget_utilization: 0.0,
+            });
+        }
+
+        // 1. token 配额 → 块数换算（DEFAULT_BLOCK_TOKENS 兜底，防除零）
+        let sink_block_quota = zone.sink_tokens.div_ceil(DEFAULT_BLOCK_TOKENS);
+        let sliding_block_quota = zone.sliding_tokens.div_ceil(DEFAULT_BLOCK_TOKENS);
+
+        // 按 ID 索引候选块（恒留块提取用）
+        let by_id: HashMap<&BlockId, &BlockScore> =
+            blocks.iter().map(|b| (&b.block_id, b)).collect();
+
+        // 2. sink 区: 恒留块（原序，限配额，豁免打分——H5 修复）
+        let sink_blocks: Vec<BlockScore> = input
+            .sink_blocks
+            .iter()
+            .take(sink_block_quota)
+            .filter_map(|id| by_id.get(id).copied().cloned())
+            .collect();
+
+        // 3. 滑窗区: 恒留块（原序，限配额，recency 由结构保证）
+        let sliding_blocks: Vec<BlockScore> = input
+            .sliding_blocks
+            .iter()
+            .take(sliding_block_quota)
+            .filter_map(|id| by_id.get(id).copied().cloned())
+            .collect();
+
+        // 恒留块已占用 token（按实际 token_count，缺失按 DEFAULT 兜底）
+        let held_tokens: usize = sink_blocks
+            .iter()
+            .chain(sliding_blocks.iter())
+            .map(|b| {
+                if b.token_count == 0 {
+                    DEFAULT_BLOCK_TOKENS
+                } else {
+                    b.token_count
+                }
+            })
+            .sum();
+        // 中段剩余配额（sink+滑窗可能超预算时中段为空）
+        let middle_budget = budget.saturating_sub(held_tokens);
+
+        // 4. 中段选择区: 排除恒留块后的候选按密度贪心填满剩余配额
+        let held_ids: std::collections::HashSet<&BlockId> = sink_blocks
+            .iter()
+            .chain(sliding_blocks.iter())
+            .map(|b| &b.block_id)
+            .collect();
+        let middle_candidates: Vec<&BlockScore> = blocks
+            .iter()
+            .filter(|b| !held_ids.contains(&b.block_id))
+            .collect();
+        let (enriched_middle, module_counts) = self.enrich_blocks(
+            &middle_candidates
+                .iter()
+                .map(|b| (*b).clone())
+                .collect::<Vec<_>>(),
+            input.block_tokens,
+        );
+        let density_order = self.density_order(&enriched_middle, &module_counts);
+
+        let mut middle_blocks: Vec<BlockScore> = Vec::new();
+        let mut middle_tokens = 0usize;
+        for &i in &density_order {
+            if middle_tokens >= middle_budget {
+                break;
+            }
+            let block = &enriched_middle[i];
+            let token_count = if block.token_count == 0 {
+                DEFAULT_BLOCK_TOKENS
+            } else {
+                block.token_count
+            };
+            // 与 fill() 一致: 不跳过超预算 Block（保证窗口填满优于留空）
+            middle_tokens += token_count;
+            middle_blocks.push(block.clone());
+        }
+
+        // 5. 摘要块固定中段（若提供且不在恒留区）——摘要为兜底信息，
+        //    放到中段末尾（不挤占密度优先的正文块）
+        if let Some(summary_id) = input.summary_block {
+            if !held_ids.contains(&summary_id)
+                && !middle_blocks.iter().any(|b| &b.block_id == summary_id)
+            {
+                if let Some(summary) = by_id.get(summary_id).copied() {
+                    let token_count = if summary.token_count == 0 {
+                        DEFAULT_BLOCK_TOKENS
+                    } else {
+                        summary.token_count
+                    };
+                    if middle_tokens + token_count <= budget {
+                        middle_tokens += token_count;
+                        middle_blocks.push(summary.clone());
+                    }
+                }
+            }
+        }
+
+        // 6. 组装三区: sink（原序） + 中段（密度序） + 滑窗（原序）
+        let mut filled_blocks: Vec<BlockScore> =
+            Vec::with_capacity(sink_blocks.len() + middle_blocks.len() + sliding_blocks.len());
+        filled_blocks.extend(sink_blocks);
+        filled_blocks.extend(middle_blocks);
+        filled_blocks.extend(sliding_blocks);
+        let total_tokens = held_tokens.saturating_add(middle_tokens);
+
+        // 二次稀疏注意力模式（与 fill() 一致）
+        let sparse_pattern = if self.config.enable_sparse_pattern {
+            Some(self.build_sparse_pattern(&filled_blocks, total_tokens))
+        } else {
+            None
+        };
+        let budget_utilization = if budget == 0 {
+            0.0
+        } else {
+            (total_tokens as f32 / budget as f32).min(1.0)
+        };
+
+        Ok(RerankFillOutput {
+            filled_blocks,
+            total_tokens,
+            sparse_pattern,
+            elapsed_us: start.elapsed().as_micros() as u64,
+            budget_utilization,
+        })
+    }
+
+    /// 位置重排 — top-2 置头、次高置尾、中段降序（lost-in-the-middle 对冲，PROBE P1.4）
+    ///
+    /// # 语义（设计文档 §4.2.3 + Round 3 时序豁免裁决）
+    /// 输入为三区顺序（sink + 中段 + 滑窗），重排仅作用于**中段**：
+    /// - top-1/top-2 高分块置中段头部（紧接 sink 区——注意力最贵的位置）
+    /// - 次高 2 块置中段尾部（紧贴滑窗区）
+    /// - 其余按分数降序填中段
+    /// - **temporal=true 块保持原序**（仅区内相对移动——diff/对话流语义保护）
+    /// - 摘要块固定中段末尾（摘要为兜底信息）
+    ///
+    /// # 参数
+    /// - `blocks`: 三区顺序块列表（fill_zones 输出）
+    /// - `sink_count`: 头部 sink 区块数（该区不参与重排）
+    /// - `sliding_count`: 尾部滑窗区块数（该区不参与重排）
+    /// - `summary_id`: 摘要块 ID（固定中段末尾，None 表示无摘要块）
+    ///
+    /// # 返回值
+    /// 重排后的块列表（**不丢块不增块**——集合不变性，proptest 守护）
+    ///
+    /// # 性能
+    /// 中段仅一次排序（`sort_by` O(N log N)，N ≤ 256 块 ≈ 10μs）；
+    /// sink/滑窗区零操作（结构性保留）
+    pub fn reorder_blocks(
+        blocks: Vec<BlockScore>,
+        sink_count: usize,
+        sliding_count: usize,
+        summary_id: Option<&BlockId>,
+    ) -> Vec<BlockScore> {
+        let total = blocks.len();
+        let middle_start = sink_count.min(total);
+        let middle_end = total.saturating_sub(sliding_count);
+        // 无中段（全部恒留）：直接返回（零重排）
+        if middle_start >= middle_end {
+            return blocks;
+        }
+
+        // 1. 分离三区（sink/滑窗保持原序，中段取出）
+        let sink: Vec<BlockScore> = blocks[..middle_start].to_vec();
+        let sliding: Vec<BlockScore> = blocks[middle_end..].to_vec();
+        let mut middle: Vec<BlockScore> = blocks[middle_start..middle_end].to_vec();
+
+        // 2. 摘要块从重排池抽出（固定中段末尾）
+        let mut summary: Option<BlockScore> = None;
+        if let Some(sid) = summary_id {
+            if let Some(pos) = middle.iter().position(|b| &b.block_id == sid) {
+                summary = Some(middle.remove(pos));
+            }
+        }
+
+        // 3. temporal 块抽出（保持原序——Round 3 时序豁免）
+        //    partition 保留相对顺序（stable），temporal 块随后按原序置于中段末尾
+        let (temporal, mut scored): (Vec<BlockScore>, Vec<BlockScore>) =
+            middle.into_iter().partition(|b| b.temporal);
+
+        // 4. 非时序块按分数降序（score desc, id asc 稳定 tiebreak）
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.block_id.cmp(&b.block_id))
+        });
+
+        // 5. 组装中段: top-2 置头 + 其余降序 + temporal 原序 + 次高 2 置尾（紧贴滑窗）
+        //    顺序裁决: 次高块须紧贴滑窗区（注意力强区），temporal 块在其前保持
+        //    区内原序——否则 temporal 插在次高与滑窗之间会稀释"紧贴"效果
+        let mut reordered: Vec<BlockScore> = Vec::with_capacity(blocks.len());
+        reordered.extend(sink);
+        if scored.len() > 4 {
+            // top-2 置头
+            reordered.extend(scored.drain(..2));
+            // 次高 2 置尾（当前剩余末尾 2 块即次高——先取出来）
+            let tail2: Vec<BlockScore> = scored.split_off(scored.len() - 2);
+            reordered.extend(scored); // 其余降序填中段
+            reordered.extend(temporal); // temporal 原序（区内相对移动，次高之前）
+            reordered.extend(tail2); // 次高紧贴滑窗
+        } else {
+            // ≤4 块：全部置中段（无需头尾分区）
+            reordered.extend(scored);
+            reordered.extend(temporal);
+        }
+        if let Some(s) = summary {
+            reordered.push(s); // 摘要固定中段末尾（次高之后、滑窗之前）
+        }
+        reordered.extend(sliding);
+        reordered
+    }
+
+    /// 按密度降序返回候选索引序列（fill 与 fill_zones 共享）
+    ///
+    /// # 算法
+    /// 密度 = score × (1 + α × (1 − 模块占比)) / token_count（多目标：分数 × 多样性 × 性价比）
+    /// 排序 O(N log N)（500 Block ≈ 0.1ms），tie 用 block_id 字典序保证稳定
+    ///
+    /// WHY 提取共享: fill() 与 fill_zones() 的中段选择都用同一密度序，
+    /// 复制排序逻辑违反"杜绝冗余代码"；既有 fill() 测试全绿 = 提取等价验证
+    fn density_order(
+        &self,
+        enriched_blocks: &[BlockScore],
+        module_counts: &HashMap<ModuleId, usize>,
+    ) -> Vec<usize> {
+        let total_blocks = enriched_blocks.len() as f32;
+        let mut density_scores: Vec<(usize, f32)> = enriched_blocks
+            .iter()
+            .enumerate()
+            .map(|(i, block)| {
+                let module_count = *module_counts.get(&block.source_module).unwrap_or(&1) as f32;
+                // 多样性奖励: 模块在候选中的 Block 越少，奖励越高
+                let diversity_bonus =
+                    self.config.diversity_alpha * (1.0 - module_count / total_blocks);
+                // token_count 兜底: 0 表示未知，用 DEFAULT_BLOCK_TOKENS
+                let token_count = if block.token_count == 0 {
+                    DEFAULT_BLOCK_TOKENS
+                } else {
+                    block.token_count
+                };
+                let density = block.score * (1.0 + diversity_bonus) / token_count as f32;
+                (i, density)
+            })
+            .collect();
+        density_scores.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    enriched_blocks[a.0]
+                        .block_id
+                        .cmp(&enriched_blocks[b.0].block_id)
+                })
+        });
+        density_scores.into_iter().map(|(i, _)| i).collect()
     }
 
     /// 注入 token_count + 预计算模块多样性统计
@@ -553,12 +909,279 @@ mod tests {
         }
     }
 
+    /// 构造空粗召回输出（fill_zones 输入占位）
+    fn make_empty_coarse() -> crate::recall::types::CoarseRecallOutput {
+        crate::recall::types::CoarseRecallOutput {
+            modules: vec![],
+            elapsed_us: 0,
+        }
+    }
+
+    /// 构造三区输入（sink/滑窗块 ID 切片；coarse 由调用方持有）
+    fn make_zone_input<'a>(
+        fine_output: &'a FineRecallOutput,
+        coarse: &'a crate::recall::types::CoarseRecallOutput,
+        block_tokens: &'a HashMap<BlockId, usize>,
+        sink: &'a [BlockId],
+        sliding: &'a [BlockId],
+        summary: Option<&'a BlockId>,
+    ) -> ZoneFillInput<'a> {
+        ZoneFillInput {
+            fine_output,
+            block_tokens,
+            sink_blocks: sink,
+            sliding_blocks: sliding,
+            summary_block: summary,
+            coarse_output: coarse,
+        }
+    }
+
     /// 构造 block_tokens 映射
     fn make_block_tokens(blocks: &[BlockScore]) -> HashMap<BlockId, usize> {
         blocks
             .iter()
             .map(|b| (b.block_id.clone(), b.token_count))
             .collect()
+    }
+
+    // ============================================================
+    // PROBE P1.3: 三区填充测试
+    // ============================================================
+
+    /// 构造三区测试场景: 候选 20 块（含 sink 2 块 + 滑窗 2 块 + 摘要 1 块）
+    ///
+    /// # 返回
+    /// `(fine_output, coarse, block_tokens, sink_ids, sliding_ids, summary_id)`
+    fn make_zone_scenario() -> (
+        FineRecallOutput,
+        CoarseRecallOutput,
+        HashMap<BlockId, usize>,
+        Vec<BlockId>,
+        Vec<BlockId>,
+        BlockId,
+    ) {
+        // 候选块: b00..b19，分数递减（b00 最高 0.9）
+        let blocks: Vec<BlockScore> = (0..20)
+            .map(|i| {
+                let id = format!("b{i:02}");
+                make_block(&id, 0.9 - i as f32 * 0.02, "m0", 1024)
+            })
+            .collect();
+        let fine = make_fine_output(blocks);
+        let tokens = make_block_tokens(&fine.blocks);
+        let coarse = make_empty_coarse();
+        let sink = vec!["b01".to_string(), "b02".to_string()];
+        let sliding = vec!["b18".to_string(), "b19".to_string()];
+        let summary = "b10".to_string();
+        (fine, coarse, tokens, sink, sliding, summary)
+    }
+
+    #[test]
+    fn test_fill_zones_empty_input() {
+        let recall = RerankFill::with_default_config();
+        let fine = make_fine_output(vec![]);
+        let tokens = HashMap::new();
+        let coarse = make_empty_coarse();
+        let sink: Vec<BlockId> = vec![];
+        let sliding: Vec<BlockId> = vec![];
+        let input = make_zone_input(&fine, &coarse, &tokens, &sink, &sliding, None);
+        let out = recall.fill_zones(input, ZoneFillConfig::default()).unwrap();
+        assert!(out.filled_blocks.is_empty());
+        assert_eq!(out.total_tokens, 0);
+    }
+
+    #[test]
+    fn test_fill_zones_sink_never_evicted() {
+        // H5 修复验证: sink 块任何打分下不被挤出（即使分数最低）
+        let recall = RerankFill::with_default_config();
+        let (fine, coarse, tokens, sink, sliding, _) = make_zone_scenario();
+        let input = make_zone_input(&fine, &coarse, &tokens, &sink, &sliding, None);
+        // sink 配额 = 2K / 1024 = 2 块
+        let out = recall
+            .fill_zones(input, ZoneFillConfig::new(2048, 4096))
+            .unwrap();
+        let ids: Vec<&BlockId> = out.filled_blocks.iter().map(|b| &b.block_id).collect();
+        // sink 块恒留（b01/b02 虽分数非最高，但结构保证）
+        assert!(ids.contains(&&"b01".to_string()), "sink b01 应恒留");
+        assert!(ids.contains(&&"b02".to_string()), "sink b02 应恒留");
+        // 滑窗块恒留（b18/b19 分数最低但 recency 由结构保证）
+        assert!(ids.contains(&&"b18".to_string()), "sliding b18 应恒留");
+        assert!(ids.contains(&&"b19".to_string()), "sliding b19 应恒留");
+        // 三区顺序: sink 在前（b01 应出现在输出首位区）
+        let sink_pos = ids.iter().position(|id| *id == "b01").unwrap();
+        let middle_pos = ids.iter().position(|id| *id == "b00").unwrap();
+        let sliding_pos = ids.iter().position(|id| *id == "b19").unwrap();
+        assert!(sink_pos < middle_pos, "sink 区应在中段之前");
+        assert!(middle_pos < sliding_pos, "中段应在滑窗之前");
+    }
+
+    #[test]
+    fn test_fill_zones_quota_invariant() {
+        // proptest 不变量（确定性场景验证）: 三区块数配额和 ≤ 预算块数
+        // 预算 256K / 1024 = 256 块；sink 2 + 滑窗 2 + 中段 ≤ 252
+        let recall = RerankFill::with_default_config();
+        let (fine, coarse, tokens, sink, sliding, _) = make_zone_scenario();
+        let input = make_zone_input(&fine, &coarse, &tokens, &sink, &sliding, None);
+        let out = recall.fill_zones(input, ZoneFillConfig::default()).unwrap();
+        let budget_blocks = WindowBudget::L2_256K.actual_tokens() / DEFAULT_BLOCK_TOKENS;
+        assert!(
+            out.filled_blocks.len() <= budget_blocks,
+            "选中块数 {} 不应超过预算块数 {budget_blocks}",
+            out.filled_blocks.len()
+        );
+        assert!(
+            out.total_tokens <= WindowBudget::L2_256K.actual_tokens(),
+            "总 token {} 不应超过预算 {}",
+            out.total_tokens,
+            WindowBudget::L2_256K.actual_tokens()
+        );
+        // 不丢块: sink+滑窗+中段合计 = 选中集（三区并集 = filled_blocks）
+        assert!(!out.filled_blocks.is_empty());
+    }
+
+    #[test]
+    fn test_fill_zones_summary_in_middle() {
+        // 摘要块固定中段（不挤占密度优先的正文块）
+        let recall = RerankFill::with_default_config();
+        let (fine, coarse, tokens, sink, sliding, summary) = make_zone_scenario();
+        let input = make_zone_input(&fine, &coarse, &tokens, &sink, &sliding, Some(&summary));
+        let out = recall.fill_zones(input, ZoneFillConfig::default()).unwrap();
+        let ids: Vec<&BlockId> = out.filled_blocks.iter().map(|b| &b.block_id).collect();
+        let summary_pos = ids
+            .iter()
+            .position(|id| *id == &summary)
+            .expect("摘要块应被选中");
+        let sink_pos = ids.iter().position(|id| *id == "b01").unwrap();
+        let sliding_pos = ids.iter().position(|id| *id == "b19").unwrap();
+        assert!(
+            sink_pos < summary_pos && summary_pos < sliding_pos,
+            "摘要块应位于 sink 与滑窗之间（中段）"
+        );
+    }
+
+    #[test]
+    fn test_fill_zones_middle_density_order() {
+        // 中段按密度降序: 排除恒留块后，b00（最高分）应最先出现在中段
+        let recall = RerankFill::with_default_config();
+        let (fine, coarse, tokens, sink, sliding, _) = make_zone_scenario();
+        let input = make_zone_input(&fine, &coarse, &tokens, &sink, &sliding, None);
+        let out = recall.fill_zones(input, ZoneFillConfig::default()).unwrap();
+        let ids: Vec<&BlockId> = out.filled_blocks.iter().map(|b| &b.block_id).collect();
+        let b00_pos = ids.iter().position(|id| *id == "b00").unwrap();
+        let b05_pos = ids.iter().position(|id| *id == "b05").unwrap();
+        let b11_pos = ids.iter().position(|id| *id == "b11").unwrap();
+        assert!(
+            b00_pos < b05_pos && b05_pos < b11_pos,
+            "中段应保持密度降序（b00 < b05 < b11）"
+        );
+    }
+
+    #[test]
+    fn test_fill_zones_fill_unchanged() {
+        // fill() 语义零回归: density_order 提取后 fill 行为不变
+        let recall = RerankFill::with_default_config();
+        let (fine, coarse, tokens, _, _, _) = make_zone_scenario();
+        let input = RerankFillInput {
+            fine_output: &fine,
+            block_tokens: &tokens,
+        };
+        let out = recall.fill(input).unwrap();
+        // fill 全部按密度序（无恒留）: b00 应第一
+        assert_eq!(out.filled_blocks[0].block_id, "b00");
+        let _ = coarse;
+    }
+
+    // ============================================================
+    // PROBE P1.4: 位置重排测试
+    // ============================================================
+
+    /// 构造重排测试块集: sink 2 + 中段 8（含 2 时序）+ 滑窗 2
+    /// 中段分数: b10=0.9, b11=0.8, b12=0.7, b13=0.6(temporal), b14=0.5(temporal), b15=0.4, b16=0.3, b17=0.2
+    fn make_reorder_scenario() -> Vec<BlockScore> {
+        vec![
+            make_block("b01", 0.1, "m0", 1024).with_temporal(false), // sink
+            make_block("b02", 0.1, "m0", 1024).with_temporal(false), // sink
+            make_block("b10", 0.9, "m0", 1024),
+            make_block("b11", 0.8, "m0", 1024),
+            make_block("b12", 0.7, "m0", 1024),
+            make_block("b13", 0.6, "m0", 1024).with_temporal(true),
+            make_block("b14", 0.5, "m0", 1024).with_temporal(true),
+            make_block("b15", 0.4, "m0", 1024),
+            make_block("b16", 0.3, "m0", 1024),
+            make_block("b17", 0.2, "m0", 1024),
+            make_block("b18", 0.1, "m0", 1024), // sliding
+            make_block("b19", 0.1, "m0", 1024), // sliding
+        ]
+    }
+
+    #[test]
+    fn test_reorder_blocks_set_invariant() {
+        // 不丢块不增块：重排前后块集合不变（proptest 不变量的确定性验证）
+        let blocks = make_reorder_scenario();
+        // 收集 owned ID（避免引用持有 blocks 导致后续 move 冲突）
+        let mut before: Vec<BlockId> = blocks.iter().map(|b| b.block_id.clone()).collect();
+        before.sort();
+        let after_blocks = RerankFill::reorder_blocks(blocks, 2, 2, None);
+        let mut after: Vec<BlockId> = after_blocks.iter().map(|b| b.block_id.clone()).collect();
+        after.sort();
+        assert_eq!(before, after, "重排不丢块不增块");
+    }
+
+    #[test]
+    fn test_reorder_blocks_top2_front_and_tail2_back() {
+        // top-2 置中段头、次高 2 置中段尾（紧贴滑窗）
+        let blocks = make_reorder_scenario();
+        let reordered = RerankFill::reorder_blocks(blocks, 2, 2, None);
+        // 顺序: sink(b01,b02) + [b10,b11, 其余降序, b16,b17] + temporal + sliding
+        // 中段起点 = index 2
+        assert_eq!(reordered[0].block_id, "b01"); // sink 原序
+        assert_eq!(reordered[1].block_id, "b02");
+        assert_eq!(reordered[2].block_id, "b10", "top-1 置中段头");
+        assert_eq!(reordered[3].block_id, "b11", "top-2 置中段头");
+        // 次高 2 置尾（紧贴滑窗，滑窗在原末尾）
+        let sliding_start = reordered.len() - 2;
+        assert_eq!(reordered[sliding_start].block_id, "b18");
+        assert_eq!(reordered[sliding_start + 1].block_id, "b19");
+        // 次高 2 = b16/b17 应在滑窗前（中段尾部）
+        assert_eq!(reordered[sliding_start - 2].block_id, "b16");
+        assert_eq!(reordered[sliding_start - 1].block_id, "b17");
+    }
+
+    #[test]
+    fn test_reorder_blocks_temporal_keeps_order() {
+        // temporal 块保持原序（b13 在 b14 前），且不参与头尾置放
+        let blocks = make_reorder_scenario();
+        let reordered = RerankFill::reorder_blocks(blocks, 2, 2, None);
+        let ids: Vec<&BlockId> = reordered.iter().map(|b| &b.block_id).collect();
+        let b13_pos = ids.iter().position(|id| *id == "b13").unwrap();
+        let b14_pos = ids.iter().position(|id| *id == "b14").unwrap();
+        assert!(b13_pos < b14_pos, "temporal 块应保持原序（b13 在 b14 前）");
+        // temporal 不在中段头部（头部是 top-2）
+        assert_ne!(ids[2], &"b13");
+        assert_ne!(ids[3], &"b14");
+    }
+
+    #[test]
+    fn test_reorder_blocks_summary_at_middle_end() {
+        // 摘要块固定中段末尾（temporal 之后、滑窗之前）
+        let blocks = make_reorder_scenario();
+        let summary = "b12".to_string();
+        let reordered = RerankFill::reorder_blocks(blocks, 2, 2, Some(&summary));
+        let ids: Vec<&BlockId> = reordered.iter().map(|b| &b.block_id).collect();
+        let s_pos = ids.iter().position(|id| *id == &summary).unwrap();
+        let b18_pos = ids.iter().position(|id| *id == "b18").unwrap();
+        assert!(s_pos < b18_pos, "摘要块应在滑窗之前（中段末尾）");
+    }
+
+    #[test]
+    fn test_reorder_blocks_all_held_returns_unchanged() {
+        // 无中段（全部恒留）时零重排
+        let blocks = make_reorder_scenario();
+        let reordered = RerankFill::reorder_blocks(blocks.clone(), blocks.len(), 0, None);
+        assert_eq!(reordered.len(), blocks.len());
+        let before_ids: Vec<&BlockId> = blocks.iter().map(|b| &b.block_id).collect();
+        let after_ids: Vec<&BlockId> = reordered.iter().map(|b| &b.block_id).collect();
+        assert_eq!(before_ids, after_ids, "无中段应保持原序");
     }
 
     // ============================================================

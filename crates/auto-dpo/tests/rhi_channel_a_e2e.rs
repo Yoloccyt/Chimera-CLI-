@@ -90,6 +90,28 @@ fn make_judge_client_with_stub_llm(invoker: Arc<dyn LlmInvoker>) -> Arc<ModelRou
     Arc::new(ModelRouterJudgeClient::new(router, invoker))
 }
 
+/// 构造评判器链路，禁用重试与降级（用于测试错误传播场景）
+///
+/// WHY: P1-4 默认启用了重试+降级，错误传播测试需要显式关闭重试
+/// 以确保 LLM 返回非法数据时直接返回错误而非降级裁决。
+fn make_judge_client_no_retry(invoker: Arc<dyn LlmInvoker>) -> Arc<ModelRouterJudgeClient> {
+    use auto_dpo::rhi_judge_client::JudgeClientConfig;
+    let bus = EventBus::new();
+    let registry = ModelRegistry::from_config(&RouterConfig::default());
+    let router = Arc::new(ModelRouter::new(registry, bus));
+    let config = JudgeClientConfig {
+        max_retries: 0,
+        fallback_on_parse_failure: false,
+        ..Default::default()
+    };
+    Arc::new(ModelRouterJudgeClient::with_config(
+        router,
+        invoker,
+        Default::default(),
+        config,
+    ))
+}
+
 /// 构造一个评判器链路，使用自定义路由策略
 fn make_judge_client_with_strategy(
     invoker: Arc<dyn LlmInvoker>,
@@ -343,11 +365,12 @@ async fn test_failing_llm_invoker_propagates_judge_failed() {
 #[tokio::test]
 async fn test_invalid_json_response_propagates_invalid_verdict() {
     // LLM 返回非法 JSON → InvalidVerdict 错误
+    // (P1-4:使用 make_judge_client_no_retry 禁用重试降级，确保错误传播)
     let invoker = Arc::new(StubLlmInvoker::with_fixed_response(
         "not a valid json",
         "bad-model",
     ));
-    let judge_client = make_judge_client_with_stub_llm(invoker);
+    let judge_client = make_judge_client_no_retry(invoker);
     let channel_a = RhiChannelA::new(judge_client);
 
     let spec_v1 = make_test_spec(1, "v1");
@@ -370,7 +393,8 @@ async fn test_invalid_verdict_score_range_propagates_error() {
         make_valid_json_response("current", 1.5, 0.4, 0.9, "score out of range"),
         "bad-model",
     ));
-    let judge_client = make_judge_client_with_stub_llm(invoker);
+    // (P1-4:使用 make_judge_client_no_retry 禁用重试降级，确保错误传播)
+    let judge_client = make_judge_client_no_retry(invoker);
     let channel_a = RhiChannelA::new(judge_client);
 
     let spec_v1 = make_test_spec(1, "v1");
@@ -383,11 +407,12 @@ async fn test_invalid_verdict_score_range_propagates_error() {
 #[tokio::test]
 async fn test_invalid_verdict_winner_loser_inconsistency() {
     // LLM 返回 winner_score < loser_score → InvalidVerdict 错误
+    // (P1-4:使用 make_judge_client_no_retry 禁用重试降级，确保错误传播)
     let invoker = Arc::new(StubLlmInvoker::with_fixed_response(
         make_valid_json_response("current", 0.3, 0.8, 0.9, "inconsistent scores"),
         "bad-model",
     ));
-    let judge_client = make_judge_client_with_stub_llm(invoker);
+    let judge_client = make_judge_client_no_retry(invoker);
     let channel_a = RhiChannelA::new(judge_client);
 
     let spec_v1 = make_test_spec(1, "v1");

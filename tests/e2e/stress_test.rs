@@ -76,6 +76,8 @@ fn median_u128(values: &[u128]) -> u128 {
 //
 // WHY `#[ignore]`:1000 次迭代耗时较长(约 30-60s),标记为 ignored
 // 避免在日常 `cargo test` 中阻塞,通过 `--ignored` 显式触发。
+// P9-T2: 本测试同时归属 test-group=stress(见 Cargo.toml [[test]]),
+//        ci-fast 档通过 -E 'not test-group(=stress)' 排除,nightly stress profile 集中触发。
 
 #[test]
 #[ignore]

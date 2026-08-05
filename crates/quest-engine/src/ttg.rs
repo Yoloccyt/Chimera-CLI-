@@ -21,7 +21,7 @@
 //!
 //! # 快速示例
 //! ```
-//! use decb_governor::BudgetTier;
+//! use nexus_contracts::BudgetTier;
 //! use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 //! use quest_engine::{TtgGovernor, TtgConfig};
 //!
@@ -47,7 +47,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use chrono::{DateTime, Duration, Utc};
-use decb_governor::BudgetTier;
+use nexus_contracts::BudgetTier;
 use nexus_core::{Quest, ThinkingMode};
 // WHY 降级:ThinkingModeSwitched 事件已通过 EventBus 发布(见 publish_mode_switch),
 // 同步方法内的 info! 与已发布事件重复(违反 DRY)。降级为 debug! 保留诊断信息,

@@ -64,6 +64,12 @@ pub struct NmcConfig {
     /// 音频编码 ONNX 模型文件名(默认 "whisper-encoder.onnx")
     #[serde(default = "default_audio_model")]
     pub audio_model: String,
+    /// 文本编码 ONNX 模型文件名(默认 None,表示使用字节频率嵌入)
+    ///
+    /// 当设置为 `Some("all-MiniLM-L6-v2.onnx")` 且 `model_dir` 非空时,
+    /// TextPerceptor 将使用 ONNX 语义嵌入而非字节频率统计。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_model: Option<String>,
 }
 
 // === 默认值函数,供 serde(default = "...") 使用 ===
@@ -128,6 +134,15 @@ impl NmcConfig {
         self
     }
 
+    /// 设置文本编码 ONNX 模型文件名
+    ///
+    /// 设置为 `None` 时使用字节频率嵌入(默认行为)。
+    /// 设置为 `Some("all-MiniLM-L6-v2.onnx")` 时启用 ONNX 语义嵌入。
+    pub fn with_text_model(mut self, name: impl Into<String>) -> Self {
+        self.text_model = Some(name.into());
+        self
+    }
+
     /// 拼接模型目录与模型文件名,返回完整路径
     ///
     /// 当 `model_dir` 为空字符串时,仅返回模型文件名(视为当前目录)。
@@ -166,6 +181,15 @@ impl NmcConfig {
         }
         // 仅当 model_dir 非空时校验 ONNX 模型文件,空目录表示未启用 ONNX 推理
         if !self.model_dir.is_empty() {
+            // 先校验 text_model 扩展名合法性(不依赖文件系统)
+            if let Some(text_model) = &self.text_model {
+                if !text_model.ends_with(".onnx") {
+                    return Err(NmcError::ConfigError {
+                        reason: format!("text_model 必须是 .onnx 结尾的文件, 当前: {}", text_model),
+                    });
+                }
+            }
+            // 再校验文件存在性
             for (model_name, label) in [
                 (&self.image_model, "图像"),
                 (&self.video_model, "视频"),
@@ -176,6 +200,16 @@ impl NmcConfig {
                     return Err(NmcError::ModelLoadError {
                         model_name: format!("{}({})", label, model_name),
                         reason: format!("文件不存在: {}", full_path),
+                    });
+                }
+            }
+            // 校验 text_model 文件存在性
+            if let Some(text_model) = &self.text_model {
+                let text_path = self.model_path(text_model);
+                if !Path::new(&text_path).exists() {
+                    return Err(NmcError::ModelLoadError {
+                        model_name: format!("文本({})", text_model),
+                        reason: format!("文件不存在: {}", text_path),
                     });
                 }
             }
@@ -195,6 +229,7 @@ impl Default for NmcConfig {
             image_model: default_image_model(),
             video_model: default_video_model(),
             audio_model: default_audio_model(),
+            text_model: None,
         }
     }
 }
@@ -214,6 +249,7 @@ mod tests {
         assert_eq!(config.image_model, "clip-vit-b32.onnx");
         assert_eq!(config.video_model, "videomae-base.onnx");
         assert_eq!(config.audio_model, "whisper-encoder.onnx");
+        assert_eq!(config.text_model, None);
     }
 
     #[test]
@@ -233,11 +269,13 @@ mod tests {
             .with_model_dir("/models/onnx")
             .with_image_model("custom-clip.onnx")
             .with_video_model("custom-video.onnx")
-            .with_audio_model("custom-audio.onnx");
+            .with_audio_model("custom-audio.onnx")
+            .with_text_model("all-MiniLM-L6-v2.onnx");
         assert_eq!(config.model_dir, "/models/onnx");
         assert_eq!(config.image_model, "custom-clip.onnx");
         assert_eq!(config.video_model, "custom-video.onnx");
         assert_eq!(config.audio_model, "custom-audio.onnx");
+        assert_eq!(config.text_model, Some("all-MiniLM-L6-v2.onnx".to_string()));
     }
 
     #[test]
@@ -283,6 +321,28 @@ mod tests {
         let err = config.validate().unwrap_err();
         assert!(matches!(err, NmcError::ModelLoadError { .. }));
         assert!(err.to_string().contains("文件不存在"));
+    }
+
+    #[test]
+    fn test_validate_text_model_invalid_extension() {
+        // text_model 不是 .onnx 结尾,应返回 ConfigError
+        let config = NmcConfig::new()
+            .with_model_dir("/models/onnx")
+            .with_text_model("tokenizer.json");
+        let err = config.validate().unwrap_err();
+        assert!(matches!(err, NmcError::ConfigError { .. }));
+        assert!(err.to_string().contains(".onnx"));
+    }
+
+    #[test]
+    fn test_validate_text_model_none_skips_check() {
+        // text_model 为 None 时,即使 model_dir 非空也不校验文本模型
+        let config = NmcConfig::new().with_model_dir("/nonexistent/onnx/models");
+        // 只校验 image/video/audio 模型,这些会失败
+        let err = config.validate().unwrap_err();
+        assert!(matches!(err, NmcError::ModelLoadError { .. }));
+        // 错误消息不应包含 "文本"
+        assert!(!err.to_string().contains("文本"));
     }
 
     #[test]

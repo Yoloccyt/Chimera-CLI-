@@ -22,8 +22,12 @@
 //! - **报告输出到 stderr,统计摘要到 stdout**:WHY 分流 — 详细报告是诊断信息
 //!   (人类可读),统计摘要是数据(stdout 便于 `jq` 消费)。
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use parliament::ahirt::{AhirtRedTeam, SecurityReport};
+// ADR-054 决策 3(P9-T4):seccore 实现 L0 CommandValidator trait,注入 AHIRT 红队
+use seccore::SecCoreCommandValidator;
 
 use crate::config::ChimeraConfig;
 use crate::output;
@@ -36,7 +40,9 @@ pub async fn execute(_config: &ChimeraConfig, json: bool, severity: Option<&str>
     tracing::info!(?severity, "红队安全审计");
 
     // 1. 构造进程内 ephemeral AhirtRedTeam(默认载荷库 100 个载荷)
-    let red_team = AhirtRedTeam::default();
+    //    ADR-054 决策 3:注入 SecCoreCommandValidator,保持命令类探测能力
+    //    (未注入时 AHIRT 命令类探测降级为 skipped,audit 会误报全量漏洞)
+    let red_team = AhirtRedTeam::default().with_validator(Arc::new(SecCoreCommandValidator));
 
     // 2. 执行全量探测(4 类 × 25 载荷 = 100 探测)
     let report = red_team.verify_security();

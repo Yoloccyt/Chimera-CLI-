@@ -29,12 +29,15 @@ use crate::types::{ActivationResult, ExpertId, ExpertProfile, TaskProfile};
 /// 每 N 次激活发布一次缓存统计事件
 const CACHE_STATS_INTERVAL: u64 = 100;
 
-/// 近似 LRU 驱逐采样数(L9 优化 2.2,Redis 风格)
+/// 根据缓存容量计算 LRU 驱逐采样数
 ///
-/// WHY 8:Redis maxmemory-policy 默认采样数也是 5-10——采样 8 条驱逐其中
-/// 最旧者,命中真正最旧条目的期望接近严格 LRU(容量 128 时采样 8
-/// 条命中最旧 ~6% 的尾部),且 evict 仅在容量满时触发,近似足够。
-const EVICT_SAMPLE_SIZE: usize = 8;
+/// 使用 sqrt(capacity) 策略，使采样数随容量增长而增长。
+/// 容量 128 时 sample=11（原为固定 8），容量 512 时 sample=22。
+/// 限制在 [4, 32] 范围内，避免极端值。
+fn compute_evict_sample_size(capacity: usize) -> usize {
+    let sample = (capacity as f64).sqrt().floor() as usize;
+    sample.clamp(4, 32)
+}
 
 /// 缓存统计计数器(原子,线程安全)
 #[derive(Debug, Default)]
@@ -89,6 +92,8 @@ pub struct GeaActivator {
     activation_cache: DashMap<TaskProfile, (ActivationResult, Instant)>,
     /// 缓存命中统计
     cache_stats: CacheStats,
+    /// LRU 驱逐采样数(根据缓存容量动态计算)
+    evict_sample_size: usize,
 }
 
 impl GeaActivator {
@@ -98,12 +103,14 @@ impl GeaActivator {
     /// - `ConfigError`:配置校验失败(权重和、阈值范围等)
     pub fn new(config: GeaConfig, event_bus: EventBus) -> Result<Self, GeaError> {
         config.validate()?;
+        let evict_sample_size = compute_evict_sample_size(config.cache_capacity);
         Ok(Self {
             expert_registry: RwLock::new(HashMap::new()),
             config,
             event_bus,
             activation_cache: DashMap::new(),
             cache_stats: CacheStats::default(),
+            evict_sample_size,
         })
     }
 
@@ -235,7 +242,7 @@ impl GeaActivator {
     /// 严格最旧条目——容量满后每次插入触发 O(n) 全扫描,且循环内对
     /// "当前最旧" key 反复 clone(单调递减序列最坏 O(n) 次深拷贝,含 64 维
     /// f32 向量)。改为 Redis 风格采样近似 LRU:只检查迭代器前
-    /// `EVICT_SAMPLE_SIZE` 个条目,驱逐其中最旧者,复杂度降为 O(sample),
+    /// `self.evict_sample_size` 个条目,驱逐其中最旧者,复杂度降为 O(sample),
     /// 且全程只 clone 一次 key(最终选中者)。
     ///
     /// # 近似语义(WHY 可接受)
@@ -243,16 +250,20 @@ impl GeaActivator {
     /// 无需严格 LRU;采样近似是缓存驱逐的行业标准(Redis maxmemory-policy)。
     /// DashMap 的 remove 会改变内部分片布局,使后续采样窗口自然轮换,
     /// 避免固定驱逐同一批条目。
+    ///
+    /// # 采样数动态调整
+    /// 采样数由 `compute_evict_sample_size()` 根据 `cache_capacity` 动态计算，
+    /// 使用 sqrt(capacity) 策略，范围 [4, 32]。
     fn evict_oldest(&self) {
         let mut oldest_key: Option<TaskProfile> = None;
         let mut oldest_time = Instant::now();
 
-        // 只采样前 EVICT_SAMPLE_SIZE 个条目(O(sample) 替代 O(n) 全遍历)
-        for entry in self.activation_cache.iter().take(EVICT_SAMPLE_SIZE) {
+        // 只采样前 self.evict_sample_size 个条目(O(sample) 替代 O(n) 全遍历)
+        for entry in self.activation_cache.iter().take(self.evict_sample_size) {
             let (_, written_at) = entry.value();
             if *written_at <= oldest_time {
                 oldest_time = *written_at;
-                // WHY 循环内仍可能多次 clone,但采样上限 EVICT_SAMPLE_SIZE
+                // WHY 循环内仍可能多次 clone,但采样上限 self.evict_sample_size
                 // 使其为 O(sample) 常数级,远优于旧版最坏 O(n)
                 oldest_key = Some(entry.key().clone());
             }
@@ -481,5 +492,48 @@ mod tests {
             .expect("timeout")
             .expect("recv failed");
         assert_eq!(event.type_name(), "ExpertActivated");
+    }
+
+    #[test]
+    fn test_compute_evict_sample_size_default() {
+        // 默认容量 128 时 sample_size = 11
+        assert_eq!(compute_evict_sample_size(128), 11);
+    }
+
+    #[test]
+    fn test_compute_evict_sample_size_larger() {
+        // 容量 512 时 sample_size = 22
+        assert_eq!(compute_evict_sample_size(512), 22);
+    }
+
+    #[test]
+    fn test_compute_evict_sample_size_min() {
+        // 容量 1 时 sample_size = 4（最小值）
+        assert_eq!(compute_evict_sample_size(1), 4);
+    }
+
+    #[test]
+    fn test_compute_evict_sample_size_max() {
+        // 容量 10000 时 sample_size = 32（最大值）
+        assert_eq!(compute_evict_sample_size(10000), 32);
+    }
+
+    #[test]
+    fn test_activator_evict_sample_size_from_config() {
+        // 验证 GeaActivator 的 evict_sample_size 字段与配置容量一致
+        let config = GeaConfig::default();
+        let activator = GeaActivator::new(config, EventBus::new()).unwrap();
+        assert_eq!(activator.evict_sample_size, 11);
+    }
+
+    #[test]
+    fn test_activator_evict_sample_size_custom() {
+        // 验证自定义容量时采样数正确
+        let config = GeaConfig {
+            cache_capacity: 512,
+            ..Default::default()
+        };
+        let activator = GeaActivator::new(config, EventBus::new()).unwrap();
+        assert_eq!(activator.evict_sample_size, 22);
     }
 }

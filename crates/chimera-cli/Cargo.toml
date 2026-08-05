@@ -1,28 +1,38 @@
-[package]
+﻿[package]
 name = "chimera-cli"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 # nexus-core:L1 核心类型(配置类型定义,向下依赖符合 §2.2 铁律)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
+# nexus-contracts:L0 契约层，PROBE P2.2 SelectorOrchestrator 依赖 SelectorPolicy/SelectorWeights（L10→L0 向下允许）
+nexus-contracts = { workspace = true }
 # event-bus:L1 事件总线,TUI 实时数据订阅依赖(向下依赖符合 §2.2 铁律)
 event-bus = { workspace = true }
 # chimera-tui:L10 Interface 层 TUI 界面(ratatui + crossterm)
 chimera-tui = { workspace = true }
 # quest-engine:L9 Quest 层,为 tui 命令提供控制事件上游消费示例(§2.2 向下依赖)
 # Task 1.1/1.2: chimera run / quest 命令真实接入 QuestEngine API
-quest-engine = { path = "../quest-engine" }
+quest-engine = { workspace = true }
 # repo-wiki:L5 Knowledge 层,Task 1.3 chimera wiki 真实接入语义检索(§2.2 L10→L5 允许)
-repo-wiki = { path = "../repo-wiki" }
+repo-wiki = { workspace = true }
+# PROBE P3.2: 超窗兜底链（kvbsr 块路由候选 + repo-wiki RRF 精排；L10→L6/L5 向下允许）
+kvbsr-router = { workspace = true }
 # parliament:L8 Parliament 层,Task 1.4 chimera parliament 真实接入审议 API(§2.2 L10→L8 允许)
-parliament = { path = "../parliament" }
+parliament = { workspace = true }
+# ADR-054 决策 3(P9-T4):chimera audit 注入 SecCoreCommandValidator 到 AHIRT 红队
+# (L10→L4 向下依赖允许),保持命令类探测能力(parliament 生产依赖已不含 seccore)
+seccore = { workspace = true }
 # mcp-mesh:L10 Interface 层,Task 1.8 chimera mcp 真实接入 MCP 网格(§2.2 L10→L10 同层允许)
 # 提供 McpMesh / ServerRegistry / MeshServer 类型供 mcp list/serve/call/inspect 子命令使用
-mcp-mesh = { path = "../mcp-mesh" }
+mcp-mesh = { workspace = true }
 # chimera-mas:L9 Quest 层,Task 1.10 chimera agent 真实接入多 Agent 协同子系统(§2.2 L10→L9 允许)
 # 提供 RootOrchestrator / AgentTask / AgentHandle / HeartbeatInfo 类型供 agent list/spawn/inspect/cancel 使用
-chimera-mas = { path = "../chimera-mas" }
+chimera-mas = { workspace = true }
+# PROBE P2.2: 选择器学习编排器依赖（L10 → 学习层/L2 向下依赖允许）
+omega-learner = { workspace = true }
+hcw-window = { workspace = true }
 # nexus-core:L1 核心类型,Task 1.10 agent spawn 构造 Task / TaskStatus 领域对象
 # 已通过上方 nexus-core 依赖间接可用,显式注释提醒
 # event-bus:L1 事件总线,Task 1.10 agent 命令构造 EventBus 共享给 RootOrchestrator(已在上方声明)
@@ -41,6 +51,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # anyhow:应用层错误处理(库层应使用 thiserror)
 anyhow = { workspace = true }
+# PROBE P2.4: 影子模式报告日期（ShadowComparisonReport 构造）
+chrono = { workspace = true }
 # thiserror:CLI 入口结构化错误码(§4.1 延伸应用,Task 0.1 引入以映射 ExitCode 矩阵)
 thiserror = { workspace = true }
 # tracing:结构化日志,避免 println! 滥用
@@ -87,4 +99,9 @@ harness = false
 # ExitCode 矩阵 7 变体分发延迟基准(Task 0.2,验证 < 10µs)
 [[bench]]
 name = "exit_code_matrix"
+harness = false
+
+# PROBE P5: 超窗兜底路径性能基准（set_corpus 构成 + provider 规模化对照）
+[[bench]]
+name = "overwindow_bridge"
 harness = false

@@ -44,6 +44,11 @@ const DANGEROUS_KEYWORDS: &[&str] = &[
 /// 1. 语法检查:内容非空
 /// 2. 安全检查:内容不含危险关键词(如 "rm -rf")
 /// 3. 依赖检查:内容不含未定义引用(占位:检查 "$undefined")
+///
+/// # 黑名单机制
+/// 支持动态黑名单(运行时更新)与静态关键词回退。
+/// 当 `dynamic_blacklist` 为 `Some` 时,`verify()` 优先使用动态列表;
+/// 为 `None` 时回退到内置 `DANGEROUS_KEYWORDS` 静态列表。
 pub struct Verifier {
     /// 执行配置
     pub(crate) config: PvlConfig,
@@ -53,6 +58,9 @@ pub struct Verifier {
     pub(crate) verified_count: AtomicU64,
     /// 已拒绝的操作数(无锁统计)
     pub(crate) rejected_count: AtomicU64,
+    /// 运行时动态黑名单(优先于静态关键词)。
+    /// 当为 Some 时,verify() 使用此列表;为 None 时回退到 DANGEROUS_KEYWORDS。
+    dynamic_blacklist: Option<Vec<String>>,
 }
 
 impl Verifier {
@@ -67,6 +75,60 @@ impl Verifier {
             event_bus,
             verified_count: AtomicU64::new(0),
             rejected_count: AtomicU64::new(0),
+            dynamic_blacklist: None,
+        }
+    }
+
+    /// 创建使用动态黑名单的验证者
+    ///
+    /// # 参数
+    /// - `config`:执行配置
+    /// - `event_bus`:事件总线,用于发布 `PredictionVerified` 事件
+    /// - `keywords`:运行时黑名单关键词列表,将替代静态 `DANGEROUS_KEYWORDS`
+    pub fn with_dynamic_blacklist(
+        config: PvlConfig,
+        event_bus: EventBus,
+        keywords: Vec<String>,
+    ) -> Self {
+        Self {
+            config,
+            event_bus,
+            verified_count: AtomicU64::new(0),
+            rejected_count: AtomicU64::new(0),
+            dynamic_blacklist: Some(keywords),
+        }
+    }
+
+    /// 更新运行时黑名单
+    ///
+    /// 允许在 `Verifier` 创建后动态更新黑名单。
+    /// 调用后 `verify()` 将使用新的关键词列表进行安全检查。
+    ///
+    /// # 参数
+    /// - `keywords`:新的黑名单关键词列表
+    pub fn update_blacklist(&mut self, keywords: Vec<String>) {
+        self.dynamic_blacklist = Some(keywords);
+    }
+
+    /// 从 SecCore 策略引擎加载动态黑名单(条件编译)
+    ///
+    /// 当 `dynamic-blacklist` feature 启用时,通过 SecCore 的
+    /// 策略引擎获取授权危险命令列表(如 `rm -rf /` 等)。
+    /// 当 feature 未启用时,此方法不可用。
+    ///
+    /// # 参数
+    /// - `_seccore_config`: SecCore gVisor 运行时配置(预留,用于未来从策略引擎加载)
+    #[cfg(feature = "dynamic-blacklist")]
+    pub fn from_seccore(_seccore_config: &seccore::types::GvisorConfig) -> Self {
+        // 简化实现:以静态关键词作为初始黑名单
+        // 实际应从 SecCore 策略引擎的 CommandPolicy::blocked_patterns 加载
+        let blacklist: Vec<String> = DANGEROUS_KEYWORDS.iter().map(|&s| s.to_string()).collect();
+        Self {
+            config: PvlConfig::default(),
+            event_bus: EventBus::new(),
+            verified_count: AtomicU64::new(0),
+            rejected_count: AtomicU64::new(0),
+            dynamic_blacklist: Some(blacklist),
         }
     }
 
@@ -92,13 +154,25 @@ impl Verifier {
         }
 
         // 2. 安全检查:不含危险关键词
+        // 优先使用动态黑名单,回退到静态 DANGEROUS_KEYWORDS
         let content_lower = operation.content.to_lowercase();
-        for keyword in DANGEROUS_KEYWORDS {
-            if content_lower.contains(keyword) {
-                return VerificationResult::rejected(
-                    operation.operation_id.clone(),
-                    format!("安全检查失败:包含危险关键词 '{}'", keyword),
-                );
+        if let Some(blacklist) = &self.dynamic_blacklist {
+            for keyword in blacklist {
+                if content_lower.contains(keyword) {
+                    return VerificationResult::rejected(
+                        operation.operation_id.clone(),
+                        format!("安全检查失败:包含危险关键词 '{}'", keyword),
+                    );
+                }
+            }
+        } else {
+            for keyword in DANGEROUS_KEYWORDS {
+                if content_lower.contains(keyword) {
+                    return VerificationResult::rejected(
+                        operation.operation_id.clone(),
+                        format!("安全检查失败:包含危险关键词 '{}'", keyword),
+                    );
+                }
             }
         }
 
@@ -364,5 +438,134 @@ mod tests {
             "拒绝操作应发布 score=0.0,实际: {:?}",
             event
         );
+    }
+
+    // ─── 动态黑名单测试 ───────────────────────────────────────────────
+
+    #[test]
+    fn test_dynamic_blacklist_replaces_static() {
+        // 验证:动态黑名单替代静态关键词
+        let blacklist = vec!["custom-danger".to_string()];
+        let verifier =
+            Verifier::with_dynamic_blacklist(PvlConfig::default(), EventBus::new(), blacklist);
+
+        // 静态关键词不再拦截(动态黑名单只有 "custom-danger")
+        let op = make_operation("rm -rf /");
+        let result = verifier.verify(&op);
+        assert!(result.passed, "动态黑名单不含 'rm -rf',应通过");
+
+        // 动态黑名单中的关键词被拦截
+        let op = make_operation("contains custom-danger here");
+        let result = verifier.verify(&op);
+        assert!(!result.passed, "动态黑名单含 'custom-danger',应被拒绝");
+        assert!(result.reason.contains("custom-danger"));
+    }
+
+    #[test]
+    fn test_dynamic_blacklist_empty_means_no_filtering() {
+        // 验证:空动态黑名单 = 无过滤
+        let verifier = Verifier::with_dynamic_blacklist(
+            PvlConfig::default(),
+            EventBus::new(),
+            Vec::new(), // 空列表
+        );
+
+        // 所有危险命令都应通过(因为空黑名单)
+        let op = make_operation("rm -rf /");
+        let result = verifier.verify(&op);
+        assert!(result.passed, "空动态黑名单应允许所有内容");
+
+        let op = make_operation("sudo rm -rf /home");
+        let result = verifier.verify(&op);
+        assert!(result.passed, "空动态黑名单应允许所有内容");
+    }
+
+    #[test]
+    fn test_update_blacklist_takes_effect_at_runtime() {
+        // 验证:update_blacklist 运行时更新生效
+        let mut verifier = Verifier::new(PvlConfig::default(), EventBus::new());
+
+        // 初始:使用静态黑名单,"rm -rf" 应被拦截
+        let op = make_operation("rm -rf /");
+        let result = verifier.verify(&op);
+        assert!(!result.passed, "静态黑名单应拦截 'rm -rf'");
+
+        // 更新为空的动态黑名单
+        verifier.update_blacklist(Vec::new());
+
+        // 更新后:动态黑名单(空)生效,"rm -rf" 不再被拦截
+        let op = make_operation("rm -rf /");
+        let result = verifier.verify(&op);
+        assert!(result.passed, "更新为空黑名单后 'rm -rf' 应通过");
+
+        // 再次更新,加入新关键词
+        verifier.update_blacklist(vec!["new-danger".to_string()]);
+        let op = make_operation("contains new-danger");
+        let result = verifier.verify(&op);
+        assert!(!result.passed, "更新后的黑名单应拦截 'new-danger'");
+    }
+
+    #[test]
+    fn test_dynamic_blacklist_case_insensitive() {
+        // 验证:动态黑名单同样不区分大小写
+        let blacklist = vec!["danger-keyword".to_string()];
+        let verifier =
+            Verifier::with_dynamic_blacklist(PvlConfig::default(), EventBus::new(), blacklist);
+
+        let op = make_operation("DANGER-KEYWORD in content");
+        let result = verifier.verify(&op);
+        assert!(!result.passed, "动态黑名单应不区分大小写");
+    }
+
+    #[test]
+    fn test_static_blacklist_still_works_when_no_dynamic() {
+        // 验证:不使用动态黑名单时,静态黑名单仍然有效
+        let verifier = Verifier::new(PvlConfig::default(), EventBus::new());
+        // dynamic_blacklist 为 None,应回退到静态 DANGEROUS_KEYWORDS
+
+        let op = make_operation("rm -rf /");
+        let result = verifier.verify(&op);
+        assert!(!result.passed, "静态黑名单应拦截 'rm -rf'");
+
+        let op = make_operation("chmod 777 /etc/passwd");
+        let result = verifier.verify(&op);
+        assert!(!result.passed, "静态黑名单应拦截 'chmod 777'");
+    }
+
+    #[test]
+    fn test_dynamic_blacklist_with_multiple_keywords() {
+        // 验证:动态黑名单支持多个关键词
+        let blacklist = vec![
+            "keyword1".to_string(),
+            "keyword2".to_string(),
+            "keyword3".to_string(),
+        ];
+        let verifier =
+            Verifier::with_dynamic_blacklist(PvlConfig::default(), EventBus::new(), blacklist);
+
+        // 每个关键词都应被拦截
+        for kw in &["keyword1", "keyword2", "keyword3"] {
+            let op = make_operation(&format!("contains {} here", kw));
+            let result = verifier.verify(&op);
+            assert!(!result.passed, "动态黑名单应拦截 '{}'", kw);
+        }
+
+        // 不在黑名单中的内容应通过
+        let op = make_operation("safe content");
+        let result = verifier.verify(&op);
+        assert!(result.passed, "安全内容应通过");
+    }
+
+    #[cfg(feature = "dynamic-blacklist")]
+    #[test]
+    fn test_from_seccore_creates_verifier_with_dynamic_blacklist() {
+        // 验证:from_seccore 创建带有动态黑名单的 Verifier
+        let config = seccore::types::GvisorConfig::default();
+        let verifier = Verifier::from_seccore(&config);
+
+        // 应使用动态黑名单,包含 DANGEROUS_KEYWORDS 中的关键词
+        let op = make_operation("rm -rf /");
+        let result = verifier.verify(&op);
+        assert!(!result.passed, "from_seccore 创建的验证者应拦截危险命令");
     }
 }

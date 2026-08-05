@@ -5,9 +5,12 @@ edition.workspace = true
 
 [dependencies]
 # nexus-core:L1 核心领域类型(UserIntent/Quest/Task/TaskStatus/ThinkingMode)
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
+# nexus-contracts:L0 契约层,BudgetTier 上提后 TTG/Arbitration 的类型来源
+# (ADR-054 决策 3:消除 L9→L8 生产违规边,L(N)→L(0) 恒允许)
+nexus-contracts = { workspace = true }
 # event-bus:L1 事件总线,跨层通信唯一通道(§2.2 依赖铁律)
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # dashmap:并发安全哈希表;读多写少场景下分片锁并发性能优于 RwLock<HashMap>
 dashmap = { workspace = true }
 # tokio:异步运行时,EventBus::publish 为 async
@@ -30,19 +33,17 @@ rmp-serde = { workspace = true }
 sha2 = { workspace = true }
 # hex:十六进制编码,将 SHA-256 字节转为可读字符串存储
 hex = { workspace = true }
-# decb-governor:L8 预算治理,TTG 订阅 BudgetTier 进行联动切换(L9→L8 跨层依赖)
-decb-governor = { path = "../decb-governor" }
 
 [dev-dependencies]
 # tempfile:测试用临时文件/目录
 tempfile = { workspace = true }
 # repo-wiki:L5 知识沉淀,端到端集成测试需验证 Quest 结果可生成 Wiki 条目
-repo-wiki = { path = "../repo-wiki" }
+repo-wiki = { workspace = true }
 # model-router:L1 模型路由,端到端集成测试需验证 Quest 创建后可路由至执行模型
-model-router = { path = "../model-router" }
-# nexus-contracts:L0 契约,提供 MCA ThinkingPreference 类型(RoutingRequest 字段)
-# dev-dependencies 可绕过生产依赖方向(§2.2),仅 tests/ 目录使用
-nexus-contracts = { path = "../nexus-contracts" }
+model-router = { workspace = true }
+# nexus-contracts:L0 契约,同时为生产依赖(BudgetTier,ADR-054 决策 3)与
+# 测试用类型来源(MCA ThinkingPreference,RoutingRequest 字段);tests/ 目录使用
+nexus-contracts = { workspace = true }
 # criterion:基准测试框架,用于 TTG 模式选择延迟基准(SubTask 35.6)
 criterion = { workspace = true }
 # proptest:属性测试框架,用于 TTG 不变量验证(SubTask 37.7)

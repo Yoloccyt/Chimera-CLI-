@@ -10,6 +10,7 @@ schema_version = 1
 [[models]]
 provider = "moonshot"
 model = "kimi-k3"
+model_version = "2026-07-16"
 # 双方言;quirk 钉住 anthropic_messages(工具链保真)
 dialects = ["anthropic_messages", "open_ai_chat"]
 

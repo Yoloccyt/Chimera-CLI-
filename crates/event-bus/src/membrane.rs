@@ -1,4 +1,4 @@
-//! 膜渗透过滤器 — 内环/外环选择性渗透决策（P2-W6.1, ADR-033 后续膜深化）
+﻿//! 膜渗透过滤器 — 内环/外环选择性渗透决策（P2-W6.1, ADR-033 后续膜深化）
 //!
 //! 对应架构层:L1 Core(event-bus 深化,从"浅双通道总线"演化为"膜")
 //! 对应设计源:`NEXUS-OMEGA_v5.0_系统性完整设计文档.md` §3.3 膜控渗透 +
@@ -424,7 +424,18 @@ impl MembraneFilter {
             | NexusEvent::WindowAffinityApplied { .. }
             // MCA A3:缓存亲和策略应用结果(mca-gateway codec 发布,
             // 观察性事实陈述,外环本地消化,不需穿膜进内环)
-            | NexusEvent::CacheAffinityApplied { .. } => EventCategory::ReadMetric,
+            | NexusEvent::CacheAffinityApplied { .. }
+            // ADR-069: Token 效率优化事件(观测面,外环本地消化)
+            | NexusEvent::ContextBudgetAllocated { .. }
+            | NexusEvent::SemanticCacheHit { .. }
+            // P2-8 MemCon:幽灵记忆检测与策略调整(均为只读观测面事件,外环本地消化)
+            | NexusEvent::GhostMemoryDetected { .. }
+            | NexusEvent::MemConStrategyAdjusted { .. }
+            | NexusEvent::BenchmarkMetricsCollected { .. } => EventCategory::ReadMetric,
+            // PROBE P0:HCW 召回评测事件（观测面指标，与 BenchmarkMetricsCollected 同族）
+            | NexusEvent::HcwRecallReported { .. }
+            | NexusEvent::HcwRecallDegraded { .. } => EventCategory::ReadMetric,
+            NexusEvent::OverWindowFallbackTriggered { .. } => EventCategory::ReadMetric,
 
             // === NormalLow:剩余 Normal 事件(默认本地消化) ===
             // 包括 Quest 生命周期/控制请求/路由执行结果/Agent 协作等

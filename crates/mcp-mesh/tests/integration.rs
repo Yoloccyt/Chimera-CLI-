@@ -243,10 +243,12 @@ async fn test_superposition_query_five_servers_fanout() {
 
 #[tokio::test]
 async fn test_1000_transactions_all_publish_events() {
-    // 串行 1000 次事务总耗时约 5s,需配置更长的心跳超时避免服务器被判定离线
+    // 串行 1000 次事务总耗时:单跑实测约 49s,全量并行(--jobs 2)下可超 60s。
+    // 需配置远超事务总耗时的心跳超时,避免慢速环境下心跳监控误判
+    // ServerUnreachable(2026-08-02 全量验证实证:60s 超时在并行负载下被触发)。
     let config = MeshConfig {
-        heartbeat_timeout_ms: 60_000, // 60s,远大于 1000 次事务总耗时
-        durable: false,               // 禁用 WAL,1000 次事务避免磁盘 IO 累积延迟
+        heartbeat_timeout_ms: 300_000, // 5min,远大于任何负载下的事务总耗时
+        durable: false,                // 禁用 WAL,1000 次事务避免磁盘 IO 累积延迟
         ..Default::default()
     };
     let bus = EventBus::new();

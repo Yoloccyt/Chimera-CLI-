@@ -7,7 +7,7 @@
 
 #![forbid(unsafe_code)]
 
-use decb_governor::BudgetTier;
+use nexus_contracts::BudgetTier;
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use proptest::prelude::*;
 use quest_engine::{TtgConfig, TtgGovernor};

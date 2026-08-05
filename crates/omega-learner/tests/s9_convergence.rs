@@ -43,6 +43,10 @@ fn build_63_arms() -> Vec<String> {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+    // WHY cases=16:每个 case 内部跑 1000 轮 LinUCB(63 臂),默认 256 cases
+    // 导致单测试耗时 ~93s(2026-08-05 实测);16 个随机上下文样本对
+    // "选择概率趋于 1" 的收敛性验证充分,与 qeep-proctocol proptest 对齐。
     #[test]
     fn s9_arm_space_convergence(
         task_complexity in 0.0f32..1.0,

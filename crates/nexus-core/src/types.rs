@@ -1,140 +1,23 @@
-//! 核心领域类型 — NEXUS-OMEGA 全局领域模型
+//! 核心领域类型汇聚点 — NEXUS-OMEGA 全局领域模型(经 L0 nexus-contracts re-export)
 //!
 //! 对应架构层:L1 Core(被 L2-L10 所有上层 crate 依赖)
 //! 对应创新点:CLV(Context Latent Vector)、MLC(多级记忆)、TTG(思考切换)
 //!
 //! # 类型职责
-//! - `UserIntent`:用户意图编码,含多模态输入与风险等级
-//! - `Quest`:长期任务,含任务列表与思考模式
-//! - `Task`:任务节点,含状态与依赖
-//! - `Checkpoint`:检查点,用于 Quest 断点恢复
-//! - `ThinkingMode`:TTG 三级思考模式(Fast/Standard/Deep)
+//! 本文件为**纯 re-export 汇聚点**,所有共享领域类型均下沉至 L0 nexus-contracts:
+//! - `UserIntent` / `Quest` / `Task` / `ThinkingMode` / `MultimodalInput`:ADR-054 决策 6(P9-T7)
+//! - `Checkpoint` / `TaskStatus`:Task 3.10(ADR-033 扩展)
+//!
+//! WHY re-export(而非本地定义): 保持向后兼容——L2-L10 上层 crate 现有
+//! `use nexus_core::types::Quest` / `use nexus_core::Quest` 路径零破坏(30 依赖方)。
 
-use serde::{Deserialize, Serialize};
-
-// Task 3.10: TaskStatus + Checkpoint 已下沉至 L0 nexus-contracts(ADR-033 扩展)
-// WHY re-export: 保持向后兼容,65+ 文件现有 `use nexus_core::types::TaskStatus` 路径不破坏,
-// 42+ 文件现有 `use nexus_core::types::Checkpoint` 路径不破坏。类型 + impl(new())均来自
-// nexus-contracts,re-export 完整保留构造方法。
+// Task 3.10 + P9-T7 Task 3: 共享领域类型已下沉至 L0 nexus-contracts(ADR-033 扩展 / ADR-054 决策 6)
+// WHY re-export: 65+ 文件现有 `use nexus_core::types::TaskStatus` 路径、30 依赖方现有
+// `use nexus_core::{Quest, Task, ThinkingMode}` 路径均不破坏。类型 + impl(Checkpoint::new /
+// Quest::default / default_priority)均来自 nexus-contracts,re-export 完整保留构造方法与
+// serde 行为(含 #[serde(default = "default_priority")] 旧数据兼容语义)。
+pub use nexus_contracts::domain::{MultimodalInput, Quest, Task, ThinkingMode, UserIntent};
 pub use nexus_contracts::{Checkpoint, TaskStatus};
-
-/// 用户意图 — NMC 编码后的多模态用户输入
-///
-/// `risk_level` 范围 0-100,影响后续沙箱策略:
-/// - 0-30:低风险,只读操作
-/// - 31-70:中风险,有副作用但可控
-/// - 71-100:高风险,需 Parliament 审议
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UserIntent {
-    /// 意图唯一标识(UUIDv7,时间有序)
-    pub intent_id: String,
-    /// 用户输入原始文本
-    pub raw_text: String,
-    /// 多模态输入列表(Week 2 仅 Text 变体,Week 6 扩展 Image/Video/Audio)
-    pub multimodal_inputs: Vec<MultimodalInput>,
-    /// 风险等级(0-100),影响沙箱策略与议会审议门槛
-    pub risk_level: u8,
-}
-
-/// 多模态输入枚举 — 支持文本、图像、视频、音频
-///
-/// WHY:Week 2 阶段仅实现 Text 变体,但提前定义完整枚举
-/// 以避免后续扩展时破坏序列化兼容性(serde tag 已固定)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum MultimodalInput {
-    /// 文本输入(Week 2 唯一实现的变体)
-    Text(String),
-    // Week 6 扩展:
-    // Image(Vec<u8>),
-    // Video(Vec<u8>),
-    // Audio(Vec<u8>),
-}
-
-// Task 3.10: TaskStatus 已下沉至 L0 nexus-contracts,此处 re-export
-// 原定义迁移至 crates/nexus-contracts/src/task.rs(纯 enum,4 变体:Pending/Running/Completed/Failed)
-
-/// 思考模式 — TTG(Thinking Toggle Governance)三级切换
-///
-/// Parliament 根据 Quest 复杂度与预算动态切换:
-/// - `Fast`:简单任务,快速响应(如查询、格式化)
-/// - `Standard`:常规任务,平衡速度与深度
-/// - `Deep`:复杂任务,深度推理(如架构设计、调试)
-///
-/// # 镜像关系(ADR-065)
-/// L0 `nexus_contracts::affinity::ThinkingPreference` 是本类型的镜像
-/// (L0 零 crate 依赖铁律禁止 L0 → L1 引用),两处三档语义必须保持同步。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ThinkingMode {
-    /// 快速模式:低延迟,适合简单任务
-    Fast,
-    /// 标准模式:平衡,适合常规任务
-    Standard,
-    /// 深度模式:高延迟高深度,适合复杂任务
-    Deep,
-}
-
-/// 任务节点 — Quest 中的单个执行单元
-///
-/// `dependencies` 存储前置 Task ID 列表,支持 DAG 依赖图。
-/// GQEP 执行器据此拓扑排序,确保依赖先完成。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Task {
-    /// 任务唯一标识
-    pub task_id: String,
-    /// 任务描述(自然语言)
-    pub description: String,
-    /// 当前状态
-    pub status: TaskStatus,
-    /// 前置 Task ID 列表(空表示无依赖,可立即执行)
-    pub dependencies: Vec<String>,
-}
-
-/// 长期任务 — 用户意图分解后的多步骤执行计划
-///
-/// 由 Quest Engine 从 `UserIntent` 分解而来,经 Parliament 审议后执行。
-/// `checkpoint_id` 指向最近一次检查点,支持断点恢复(LHQP)。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Quest {
-    /// Quest 唯一标识
-    pub quest_id: String,
-    /// Quest 标题(人类可读)
-    pub title: String,
-    /// 任务列表(DAG 结构,通过 Task.dependencies 表达)
-    pub tasks: Vec<Task>,
-    /// 思考模式(TTG),影响执行深度与延迟
-    pub thinking_mode: ThinkingMode,
-    /// 最近检查点 ID(无检查点时为 None)
-    pub checkpoint_id: Option<String>,
-    /// Quest 优先级 (0=最低, 255=最高, 默认 128)
-    /// WHY u8: 足够 256 级优先级,内存占用最小
-    /// WHY #[serde(default)]: 保证旧数据(无 priority 字段)反序列化时取默认值 128
-    #[serde(default = "default_priority")]
-    pub priority: u8,
-}
-
-/// Quest.priority 的 serde 默认值函数
-/// WHY 独立函数:`#[serde(default = "...")]` 需要具名函数路径,不能用闭包或常量
-fn default_priority() -> u8 {
-    128
-}
-
-impl Default for Quest {
-    fn default() -> Self {
-        Self {
-            quest_id: String::new(),
-            title: String::new(),
-            tasks: vec![],
-            // ThinkingMode 无 Default impl,Standard 是语义上的默认(平衡速度与深度)
-            thinking_mode: ThinkingMode::Standard,
-            checkpoint_id: None,
-            priority: default_priority(),
-        }
-    }
-}
-
-// Task 3.10: Checkpoint 已下沉至 L0 nexus-contracts,此处 re-export(见文件顶部 pub use)
-// 原定义迁移至 crates/nexus-contracts/src/checkpoint.rs
-// (quest_id / checkpoint_id / memory_snapshot_hash / serialized_state / created_at + impl new())
 
 #[cfg(test)]
 mod tests {

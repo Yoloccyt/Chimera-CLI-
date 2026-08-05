@@ -928,6 +928,59 @@ mod tests {
         assert_eq!(sync.sparsity(), Some(0.45));
     }
 
+    // === PROBE P0.4:HCW 召回读数同步测试 ===
+
+    fn recall_event(needle: f32, bias: f32, chain: f32) -> NexusEvent {
+        NexusEvent::HcwRecallReported {
+            metadata: EventMetadata::new("hcw-window"),
+            tier: "L2".into(),
+            needle_recall_at_8: needle,
+            position_bias: bias,
+            chain_success_rate: chain,
+            selected_count: 100,
+        }
+    }
+
+    #[test]
+    fn test_osa_sync_recall_reported() {
+        let mut sync = OsaSync::new();
+        // 初始无召回读数
+        assert!(sync.recall_needle_at_8().is_none());
+        assert!(sync.recall_position_bias().is_none());
+        assert!(sync.recall_chain_success().is_none());
+        // 收到 HcwRecallReported → 三项读数更新
+        let updated = sync.apply_event(&recall_event(0.90, 0.85, 0.80));
+        assert!(updated.is_some());
+        assert_eq!(sync.recall_needle_at_8(), Some(0.90));
+        assert_eq!(sync.recall_position_bias(), Some(0.85));
+        assert_eq!(sync.recall_chain_success(), Some(0.80));
+        // 稀疏度不受影响
+        assert!(sync.sparsity().is_none());
+    }
+
+    #[test]
+    fn test_osa_sync_recall_overwrites_previous() {
+        let mut sync = OsaSync::new();
+        sync.apply_event(&recall_event(0.90, 0.85, 0.80));
+        sync.apply_event(&recall_event(0.95, 0.90, 0.85));
+        assert_eq!(sync.recall_needle_at_8(), Some(0.95));
+        assert_eq!(sync.recall_position_bias(), Some(0.90));
+        assert_eq!(sync.recall_chain_success(), Some(0.85));
+    }
+
+    #[test]
+    fn test_osa_sync_recall_unrelated_event_unchanged() {
+        let mut sync = OsaSync::new();
+        sync.apply_event(&recall_event(0.90, 0.85, 0.80));
+        let unrelated = NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        };
+        assert!(sync.apply_event(&unrelated).is_none());
+        // 召回读数保持
+        assert_eq!(sync.recall_needle_at_8(), Some(0.90));
+    }
+
     #[test]
     fn test_clv_sync_snapshot_reported() -> Result<(), Box<dyn std::error::Error>> {
         let mut sync = ClvSync::new();

@@ -22,6 +22,11 @@ pub struct GsoeConfig {
     pub default_rollout_count: u32,
     /// 最大进化世代(防止无限进化消耗资源)
     pub max_generation: u64,
+    /// 是否启用 FormalVerifier M0 守卫（Critic 单调性 + 反奖励黑客 + 有界性验证）
+    ///
+    /// WHY 默认 true (fail-closed): 形式化验证是安全门，默认关闭=绕过守卫。
+    /// 测试环境可通过 `GsoeConfig { enable_formal_verification: false, .. }` 关闭。
+    pub enable_formal_verification: bool,
 }
 
 impl Default for GsoeConfig {
@@ -32,6 +37,7 @@ impl Default for GsoeConfig {
             default_elite_ratio: 0.2,
             default_rollout_count: 8,
             max_generation: 1000,
+            enable_formal_verification: true,
         }
     }
 }
@@ -144,5 +150,23 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_formal_verification_enabled_by_default() {
+        let config = GsoeConfig::default();
+        assert!(
+            config.enable_formal_verification,
+            "M0 形式化验证默认必须启用(fail-closed 安全原则)"
+        );
+    }
+
+    #[test]
+    fn test_formal_verification_can_be_disabled_for_testing() {
+        let config = GsoeConfig {
+            enable_formal_verification: false,
+            ..GsoeConfig::default()
+        };
+        assert!(!config.enable_formal_verification);
     }
 }

@@ -4,14 +4,19 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-nexus-core = { path = "../nexus-core" }
-event-bus = { path = "../event-bus" }
+nexus-core = { workspace = true }
+event-bus = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+
+# NMC 编码器:为 MTPE 提供真实模型推理(替换伪预测)
+nmc-encoder = { workspace = true }
+# ndarray:张量操作(与 NMC 编码器交互)
+ndarray = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

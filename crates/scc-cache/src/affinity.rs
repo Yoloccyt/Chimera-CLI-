@@ -18,6 +18,8 @@
 
 use dashmap::DashMap;
 use nexus_contracts::affinity::CacheSupport;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Anthropic cache_control 断点最小可缓存 token 数
 ///
@@ -123,9 +125,148 @@ impl SessionAffinityTracker {
         self.sticky.remove(quest_id);
     }
 
-    /// 当前跟踪的会话数(诊断用)
+    /// 当前跟踪的会话数（诊断用）
     pub fn tracked_sessions(&self) -> usize {
         self.sticky.len()
+    }
+}
+
+/// 厂商缓存命中率跟踪 — 分厂商口径归一（ADR-069 Token 效率度量）
+///
+/// 消费 `StreamSessionCompleted.cache_hit_tokens` 与 `input_tokens`，
+/// 累计分厂商命中率。命中率 = cached_tokens / total_input_tokens。
+///
+/// # 线程安全
+/// DashMap 分片锁 + AtomicU64 无锁计数，guard 立即释放（不跨 await，C7）。
+#[derive(Debug, Default)]
+pub struct CacheHitTracker {
+    /// provider_str → (hit_tokens, total_input_tokens)
+    stats: DashMap<String, (AtomicU64, AtomicU64)>,
+    /// 语义缓存命中次数（原子计数，无锁安全）
+    semantic_hit_count: AtomicU64,
+    /// 总请求次数（原子计数，无锁安全）
+    total_request_count: AtomicU64,
+}
+
+impl CacheHitTracker {
+    /// 创建空跟踪器
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 记录一次响应的缓存命中情况
+    ///
+    /// 由 VendorAdapter invoke() 闭环后调用（消费 UsageReport 字段）。
+    pub fn record(&self, provider: &str, hit_tokens: u64, total_input_tokens: u64) {
+        let entry = self
+            .stats
+            .entry(provider.to_string())
+            .or_insert_with(|| (AtomicU64::new(0), AtomicU64::new(0)));
+        let (hits, total) = entry.value();
+        hits.fetch_add(hit_tokens, Ordering::Relaxed);
+        total.fetch_add(total_input_tokens, Ordering::Relaxed);
+    }
+
+    /// 查询厂商缓存命中率（百分数 0-100；无数据 = 0）
+    pub fn hit_rate_percent(&self, provider: &str) -> u8 {
+        match self.stats.get(provider) {
+            Some(entry) => {
+                let (hits, total) = entry.value();
+                let h = hits.load(Ordering::Relaxed);
+                let t = total.load(Ordering::Relaxed);
+                if t == 0 {
+                    0
+                } else {
+                    // WHY checked_div: 避免 t==0 时除零（clippy manual_checked_division）
+                    ((h * 100).checked_div(t).unwrap_or(0)).min(100) as u8
+                }
+            }
+            None => 0,
+        }
+    }
+
+    /// 查询厂商缓存命中率（浮点比率 0.0-1.0；input_tokens == 0 时返回 None）
+    ///
+    /// 与 `hit_rate_percent` 互补：本方法返回精确浮点比率，适合遥测管道聚合；
+    /// `hit_rate_percent` 返回 u8 整数百分数，适合 TUI 面板展示。
+    pub fn hit_rate(&self, provider: &str) -> Option<f32> {
+        self.stats.get(provider).and_then(|entry| {
+            let (hits, total) = entry.value();
+            let h = hits.load(Ordering::Relaxed);
+            let t = total.load(Ordering::Relaxed);
+            if t == 0 {
+                None
+            } else {
+                // WHY 钳制: 厂商返回异常(cache_hit > input)时命中率不超过 1.0
+                Some((h as f32 / t as f32).min(1.0))
+            }
+        })
+    }
+
+    /// 批量查询所有厂商的缓存命中率（浮点比率 0.0-1.0）
+    ///
+    /// 返回 HashMap<provider_name, hit_rate>，仅包含 input_tokens > 0 的厂商。
+    /// 空 tracker 或无有效数据时返回空 HashMap。
+    pub fn all_hit_rates(&self) -> HashMap<String, f32> {
+        let mut rates = HashMap::with_capacity(self.stats.len());
+        for entry in self.stats.iter() {
+            let (hits, total) = entry.value();
+            let h = hits.load(Ordering::Relaxed);
+            let t = total.load(Ordering::Relaxed);
+            if t > 0 {
+                let rate = (h as f32 / t as f32).min(1.0);
+                rates.insert(entry.key().clone(), rate);
+            }
+        }
+        rates
+    }
+
+    /// 全局缓存命中率（所有厂商汇总，百分数 0-100）
+    pub fn global_hit_rate_percent(&self) -> u8 {
+        let mut total_hits: u64 = 0;
+        let mut total_input: u64 = 0;
+        for entry in self.stats.iter() {
+            let (hits, total) = entry.value();
+            total_hits += hits.load(Ordering::Relaxed);
+            total_input += total.load(Ordering::Relaxed);
+        }
+        if total_input == 0 {
+            0
+        } else {
+            // WHY checked_div: 避免 total_input==0 时除零（clippy manual_checked_division）
+            ((total_hits * 100).checked_div(total_input).unwrap_or(0)).min(100) as u8
+        }
+    }
+
+    /// 已跟踪的厂商数（诊断用）
+    pub fn tracked_providers(&self) -> usize {
+        self.stats.len()
+    }
+
+    /// 记录一次语义缓存命中（原子递增）
+    pub fn record_semantic_hit(&self) {
+        self.semantic_hit_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 记录一次请求（原子递增）
+    pub fn record_request(&self) {
+        self.total_request_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 语义缓存命中率百分数（0-100）
+    pub fn semantic_hit_rate_percent(&self) -> u8 {
+        let hits = self.semantic_hit_count.load(Ordering::Relaxed);
+        let total = self.total_request_count.load(Ordering::Relaxed);
+        if total == 0 {
+            0
+        } else {
+            ((hits * 100).checked_div(total).unwrap_or(0)).min(100) as u8
+        }
+    }
+
+    /// 总请求数
+    pub fn total_requests(&self) -> u64 {
+        self.total_request_count.load(Ordering::Relaxed)
     }
 }
 
@@ -279,5 +420,241 @@ mod tests {
         tracker.clear("q");
         assert!(tracker.preferred("q").is_none());
         assert_eq!(tracker.tracked_sessions(), 0);
+    }
+
+    #[test]
+    fn cache_hit_tracker_records_and_computes_rate() {
+        let tracker = CacheHitTracker::new();
+        // 无数据时命中率 = 0
+        assert_eq!(tracker.hit_rate_percent("zhipu"), 0);
+        assert_eq!(tracker.global_hit_rate_percent(), 0);
+
+        // 记录: 100 命中 / 200 总输入 = 50%
+        tracker.record("zhipu", 100, 200);
+        assert_eq!(tracker.hit_rate_percent("zhipu"), 50);
+
+        // 追加: 150 命中 / 300 总输入 → 累计 250/500 = 50%
+        tracker.record("zhipu", 150, 300);
+        assert_eq!(tracker.hit_rate_percent("zhipu"), 50);
+
+        // 多厂商: deepseek 80/100 = 80%
+        tracker.record("deep_seek", 80, 100);
+        assert_eq!(tracker.hit_rate_percent("deep_seek"), 80);
+
+        // 全局: (250+80) / (500+100) = 330/600 = 55%
+        assert_eq!(tracker.global_hit_rate_percent(), 55);
+        assert_eq!(tracker.tracked_providers(), 2);
+    }
+
+    #[test]
+    fn cache_hit_tracker_zero_total_no_panic() {
+        let tracker = CacheHitTracker::new();
+        tracker.record("test", 0, 0);
+        assert_eq!(tracker.hit_rate_percent("test"), 0);
+    }
+
+    #[test]
+    fn record_semantic_hit_and_request() {
+        let tracker = CacheHitTracker::new();
+        assert_eq!(tracker.total_requests(), 0);
+        assert_eq!(tracker.semantic_hit_rate_percent(), 0);
+
+        // 3 次请求，1 次语义命中
+        tracker.record_request();
+        tracker.record_request();
+        tracker.record_semantic_hit();
+        tracker.record_request();
+        assert_eq!(tracker.total_requests(), 3);
+        assert_eq!(tracker.semantic_hit_rate_percent(), 33);
+    }
+
+    #[test]
+    fn semantic_hit_rate_percent() {
+        let tracker = CacheHitTracker::new();
+        // 无请求时命中率 = 0
+        assert_eq!(tracker.semantic_hit_rate_percent(), 0);
+
+        // 5 次请求，2 次命中 → 40%
+        for _ in 0..5 {
+            tracker.record_request();
+        }
+        tracker.record_semantic_hit();
+        tracker.record_semantic_hit();
+        assert_eq!(tracker.semantic_hit_rate_percent(), 40);
+        assert_eq!(tracker.total_requests(), 5);
+    }
+
+    // ============================================================
+    // hit_rate / all_hit_rates 分厂商口径归一（ADR-069 Task 3）
+    // ============================================================
+
+    #[test]
+    fn hit_rate_returns_correct_float_ratio() {
+        let tracker = CacheHitTracker::new();
+        // 16 缓存命中 / 24 输入 → 命中率 0.666...
+        tracker.record("deep_seek", 16, 24);
+        let rate = tracker
+            .hit_rate("deep_seek")
+            .expect("input_tokens > 0 必须返回 Some");
+        // 浮点比较: 16/24 ≈ 0.6667, 允许 ±0.001 误差
+        assert!((rate - 0.6667).abs() < 0.001, "16/24 ≈ 0.6667, got {rate}");
+
+        // 追加: 34 命中 / 76 输入 → 累计 50/100 = 0.5
+        tracker.record("deep_seek", 34, 76);
+        let rate2 = tracker.hit_rate("deep_seek").unwrap();
+        assert!((rate2 - 0.5).abs() < 0.001, "50/100 = 0.5, got {rate2}");
+    }
+
+    #[test]
+    fn hit_rate_clamps_at_one_when_cache_hit_exceeds_input() {
+        // 厂商返回异常 cache_hit > input 时钳制为 1.0（不产生 >1.0 的荒谬值）
+        let tracker = CacheHitTracker::new();
+        tracker.record("anomaly_vendor", 999, 100);
+        let rate = tracker
+            .hit_rate("anomaly_vendor")
+            .expect("input_tokens > 0 必须返回 Some");
+        assert!(
+            (rate - 1.0).abs() < f32::EPSILON,
+            "钳制后必须为 1.0, got {rate}"
+        );
+    }
+
+    #[test]
+    fn hit_rate_input_tokens_zero_returns_none() {
+        let tracker = CacheHitTracker::new();
+        tracker.record("vendor", 0, 0);
+        assert!(
+            tracker.hit_rate("vendor").is_none(),
+            "input_tokens == 0 时 hit_rate 必须返回 None"
+        );
+    }
+
+    #[test]
+    fn hit_rate_unrecorded_provider_returns_none() {
+        let tracker = CacheHitTracker::new();
+        // 未 record 过的厂商 → None（不是 Some(0.0)）
+        assert!(
+            tracker.hit_rate("nonexistent").is_none(),
+            "未 record 的 provider 必须返回 None"
+        );
+    }
+
+    #[test]
+    fn all_hit_rates_returns_correct_map() {
+        let tracker = CacheHitTracker::new();
+        tracker.record("zhipu", 60, 100); // 0.6
+        tracker.record("deep_seek", 80, 100); // 0.8
+        tracker.record("minimax", 0, 50); // 0.0
+
+        let rates = tracker.all_hit_rates();
+        assert_eq!(rates.len(), 3, "三个厂商均有 input_tokens > 0");
+        assert!((*rates.get("zhipu").unwrap() - 0.6).abs() < 0.001);
+        assert!((*rates.get("deep_seek").unwrap() - 0.8).abs() < 0.001);
+        assert!((*rates.get("minimax").unwrap() - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn all_hit_rates_excludes_zero_input_tokens() {
+        // input_tokens == 0 的厂商不进入结果集（除零保护）
+        let tracker = CacheHitTracker::new();
+        tracker.record("valid", 10, 20); // 0.5
+        tracker.record("zero_input", 0, 0); // 无有效数据
+        let rates = tracker.all_hit_rates();
+        assert_eq!(rates.len(), 1, "只有 valid 进入结果集");
+        assert!(
+            !rates.contains_key("zero_input"),
+            "input_tokens==0 不进入结果集"
+        );
+    }
+
+    #[test]
+    fn all_hit_rates_empty_tracker_returns_empty_map() {
+        let tracker = CacheHitTracker::new();
+        let rates = tracker.all_hit_rates();
+        assert!(rates.is_empty(), "空 tracker 返回空 HashMap");
+    }
+
+    #[test]
+    fn all_hit_rates_providers_independent() {
+        // 各厂商命中率独立累计，互不干扰
+        let tracker = CacheHitTracker::new();
+        tracker.record("a", 10, 100); // 0.1
+        tracker.record("b", 90, 100); // 0.9
+        tracker.record("a", 40, 100); // a 累计 50/200 = 0.25
+        let rates = tracker.all_hit_rates();
+        assert!((*rates.get("a").unwrap() - 0.25).abs() < 0.001);
+        assert!((*rates.get("b").unwrap() - 0.9).abs() < 0.001);
+    }
+
+    // ============================================================
+    // 多厂商并发累计（tokio::spawn 模拟多个 invoke 同时调用 record）
+    // ============================================================
+
+    #[tokio::test]
+    async fn concurrent_multi_vendor_record() {
+        use std::sync::Arc;
+
+        let tracker = Arc::new(CacheHitTracker::new());
+        let mut handles = Vec::new();
+
+        // 3 厂商 × 100 并发 record = 300 并发任务
+        for v in 0..3 {
+            let t = Arc::clone(&tracker);
+            let provider = format!("vendor_{v}");
+            handles.push(tokio::spawn(async move {
+                for _ in 0..100 {
+                    // 每次 record: 命中 50 / 输入 100 = 50% 命中率
+                    t.record(&provider, 50, 100);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        // 每个厂商 100 次 × 50 命中 / 100 输入 = 5000 命中 / 10000 输入 = 50%
+        for v in 0..3 {
+            let rate = tracker
+                .hit_rate(&format!("vendor_{v}"))
+                .expect("并发累计后必须有数据");
+            assert!(
+                (rate - 0.5).abs() < 0.001,
+                "vendor_{v}: expected 0.5, got {rate}"
+            );
+        }
+        assert_eq!(tracker.tracked_providers(), 3);
+    }
+
+    #[tokio::test]
+    async fn concurrent_record_total_consistency() {
+        // 单厂商 1000 次并发 record → 累计值必须 = 1000 × 每次值
+        use std::sync::Arc;
+
+        let tracker = Arc::new(CacheHitTracker::new());
+        let mut handles = Vec::new();
+
+        // 10 个并发任务，每个 record 100 次
+        // 每次 record: 命中 3 / 输入 10
+        for _ in 0..10 {
+            let t = Arc::clone(&tracker);
+            handles.push(tokio::spawn(async move {
+                for _ in 0..100 {
+                    t.record("single", 3, 10);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        // 10 × 100 × 3 = 3000 命中 / 10 × 100 × 10 = 10000 输入 = 0.3
+        let rate = tracker.hit_rate("single").expect("并发累计后必须有数据");
+        assert!(
+            (rate - 0.3).abs() < 0.001,
+            "并发累计 3000/10000 = 0.3, got {rate}"
+        );
+        assert_eq!(tracker.tracked_providers(), 1);
     }
 }

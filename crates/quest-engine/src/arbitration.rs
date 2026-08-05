@@ -35,8 +35,8 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use decb_governor::BudgetTier;
 use event_bus::{EventBus, EventTopic, FilteredSubscriber, NexusEvent};
+use nexus_contracts::BudgetTier;
 use tracing::{debug, warn};
 
 // ============================================================
@@ -45,8 +45,9 @@ use tracing::{debug, warn};
 
 /// ACB 预算级别 — 解析自 ACB BudgetAdjusted 事件的 new_tier 字符串
 ///
-/// WHY 独立枚举而非依赖 acb_governor::BudgetTier:quest-engine 已依赖
-/// decb_governor,再依赖 acb_governor 会增加编译时间与耦合度。
+/// WHY 独立枚举而非依赖 acb_governor::BudgetTier:quest-engine 的 DECB 档位
+/// 已由 L0 nexus-contracts 提供(ADR-054 决策 3),再依赖 acb_governor 会增加
+/// 编译时间与耦合度。
 /// ACB 级别仅需 4 个变体的字符串解析,独立枚举更轻量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AcbTier {

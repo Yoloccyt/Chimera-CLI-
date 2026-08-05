@@ -5,15 +5,15 @@ edition.workspace = true
 
 [dependencies]
 # L1 Core:提供 id_newtype! 宏(生成 RoleId newtype)与 Quest 领域类型
-nexus-core = { path = "../nexus-core" }
+nexus-core = { workspace = true }
 # L0 Contracts:跨层共享纯类型契约(S5 接缝 ParliamentPolicy/ActivationStrategy)
 # WHY L8 → L0 ✓(§2.2 依赖铁律):parliament 不直接依赖 L6 omega-learner,
 # 仅依赖 L0 的 ParliamentPolicy 类型,策略由上层编排器注入
-nexus-contracts = { path = "../nexus-contracts" }
+nexus-contracts = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 ConsensusReached/VoteCast 事件
-event-bus = { path = "../event-bus" }
-# L4 Security:AHIRT 调用 validate_command 探测命令注入/提权/沙箱逃逸(L8→L4 向下依赖允许)
-seccore = { path = "../seccore" }
+event-bus = { workspace = true }
+# ADR-054 决策 3(P9-T4):seccore 移出生产依赖(消除 L8→L4 生产依赖边),
+# 命令类探测改用 L0 CommandValidator trait 注入;seccore 仅测试用(dev-dependencies)
 # 异步运行时:tokio::time::timeout 包装辩论超时,sync::RwLock 保护角色注册表
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 # 配置与结果类型序列化(#[derive(Serialize, Deserialize)])
@@ -23,7 +23,7 @@ thiserror = { workspace = true }
 # 结构化日志(DebateStarted/RoleRegistered 等未集成事件用 tracing 记录)
 tracing = { workspace = true }
 # FuturesUnordered 流式并发收集 5 角色 Opinion(对应 A.2 设计决策)
-futures = "0.3"
+futures = { workspace = true }
 # UUIDv7 ID 生成(提案 ID、决议哈希等,时间有序便于追溯)
 uuid = { workspace = true }
 # SHA-256 决议内容哈希(共识达成后生成 decision_hash)
@@ -32,6 +32,10 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 
 [dev-dependencies]
+# ADR-054 决策 3(P9-T4):AHIRT 测试注入 SecCoreCommandValidator(验证注入路径),
+# security_immunity.rs 直接用 seccore::validate_command 分层验证。
+# WHY dev-dependencies:测试专用依赖,不污染生产依赖图(§2.2 依赖铁律)
+seccore = { workspace = true }
 # 性能基准框架(SubTask 30.5)
 # WHY async_tokio:启用 `Bencher::to_async` 方法,支持异步基准测试
 criterion = { workspace = true, features = ["async_tokio"] }
@@ -45,9 +49,9 @@ tracing-test = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # SubTask 37.2/37.3:E2E 认知治理流程测试与 CSA 延迟验证需要 TTG 模式选择
 # WHY dev-dependencies:测试专用依赖,不污染生产依赖图(§2.2 依赖铁律)
-quest-engine = { path = "../quest-engine" }
+quest-engine = { workspace = true }
 # SubTask 37.2/37.3:E2E 测试需要 DECB 预算计算与档位切换
-decb-governor = { path = "../decb-governor" }
+decb-governor = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]

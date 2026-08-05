@@ -55,10 +55,14 @@ pub mod config;
 pub mod error;
 /// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)
 pub mod orchestrator;
+// PROBE P3.2: 超窗兜底桥（kvbsr→repo-wiki→hcw 两级检索真实链路）
+pub mod overwindow_bridge;
+// PROBE P2.2: 选择器学习编排器（S4 → holder → window 注入链）
 /// 统一输出 helper(Task 1.7 JSON / Task 1.12 彩色 + 表格 + 进度)
 pub mod output;
 /// Permission prompt 机制(Task 1.11)
 pub mod permission;
+pub mod selector_orchestrator;
 
 // === 公开 API 重导出 ===
 pub use cli::{Cli, Commands, ConfigAction, QuestAction};

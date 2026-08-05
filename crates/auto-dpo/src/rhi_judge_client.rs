@@ -497,6 +497,15 @@ impl JudgeResponseParser {
 /// - **配置集中**: 路由策略/quest_id 前缀/预估 token 集中管理
 /// - **Builder 模式**: 通过 `Default` 提供合理默认，可通过字段更新覆盖
 /// - **不可变**: 构造后不可修改（`ModelRouterJudgeClient` 持有 `&Config`）
+///
+/// # P1-4 重试与降级配置
+///
+/// - `max_retries`: JSON 解析失败最大重试次数（默认 2，含首次共 3 次尝试）
+/// - `retry_delay_ms`: 重试间隔（毫秒）（默认 100ms）
+/// - `fallback_on_parse_failure`: 重试耗尽后是否使用保守默认裁决（默认 true）
+///
+/// WHY 默认重试 2 次:LLM 响应解析失败通常是偶发（JSON 格式偶发异常），
+/// 2 次重试在 99% 场景下足够。LLM 调用延迟为秒级，100ms 抖动很小。
 #[derive(Debug, Clone)]
 pub struct JudgeClientConfig {
     /// 路由策略（默认 `Auto`，综合最优）
@@ -505,6 +514,23 @@ pub struct JudgeClientConfig {
     pub quest_id_prefix: String,
     /// 预估 token 数（默认 4096，保守估计 prompt + completion）
     pub estimated_tokens: u32,
+
+    // ============================================================
+    // P1-4: LLM Judge 响应解析降级策略（重试 + 默认裁决）
+    // ============================================================
+    /// JSON 解析失败最大重试次数（默认 2，含首次共 3 次尝试）
+    pub max_retries: u32,
+    /// 重试间隔（毫秒）（默认 100ms）
+    ///
+    /// WHY 100ms:LLM 调用延迟为秒级，100ms 相对很小，不会显著增加总延迟。
+    /// 线性递增:第 N 次重试前等待 N × retry_delay_ms，避免重试风暴。
+    pub retry_delay_ms: u64,
+    /// 重试耗尽后是否使用保守默认裁决（默认 true）
+    ///
+    /// WHY true:LLM 不可用不应阻塞通道 A 的提议流程。保守默认裁决
+    /// （Previous 胜出、中性评分、零置信度）确保系统在 LLM 异常时
+    /// 保持"偏向保守"的行为，而不是直接报错中断整个流程。
+    pub fallback_on_parse_failure: bool,
 }
 
 impl Default for JudgeClientConfig {
@@ -513,6 +539,10 @@ impl Default for JudgeClientConfig {
             routing_strategy: RoutingStrategy::Auto,
             quest_id_prefix: "rhi-judge".to_string(),
             estimated_tokens: 4096,
+            // P1-4: 默认重试 2 次（共 3 次尝试），100ms 间隔，启用降级
+            max_retries: 2,
+            retry_delay_ms: 100,
+            fallback_on_parse_failure: true,
         }
     }
 }
@@ -612,6 +642,30 @@ impl ModelRouterJudgeClient {
         }
     }
 
+    /// 构造保守默认裁决 — 重试耗尽时的降级方案
+    ///
+    /// # 返回
+    ///
+    /// 返回 Previous 胜出、中性评分 0.5/0.5、零置信度的默认裁决。
+    ///
+    /// # 设计决策（WHY）
+    ///
+    /// - **Previous 胜出**:保守策略，LLM 不可用时偏向保留现有版本。
+    ///   通道 B（CI 否决）仍会独立验证，不会因保守默认裁决而引入退化。
+    /// - **中性评分 0.5/0.5**:不引入偏好信号，下游可据此识别降级裁决。
+    /// - **零置信度**:0.0 置信度明确告知下游"此裁决无可靠依据"。
+    /// - **rationale 标记**:包含 "fallback" 关键词，便于审计追溯。
+    fn fallback_verdict() -> JudgeVerdict {
+        JudgeVerdict::new(
+            SpecVersion::Previous,
+            0.5, // winner_score（中性）
+            0.5, // loser_score（中性，平局）
+            0.0, // confidence（零置信度）
+            "fallback: LLM judge response parse failed after all retries".to_string(),
+        )
+        .expect("fallback verdict: hardcoded valid values should not fail")
+    }
+
     /// 构造路由请求 — 评判器的路由特征
     ///
     /// # 设计决策
@@ -655,23 +709,40 @@ impl JudgeClient for ModelRouterJudgeClient {
     /// 1. 构造 `RoutingRequest`（quest_id 命名空间 `rhi-judge-*`）
     /// 2. 调用 `router.route()` 获取 `RoutingDecision`（含 model_id）
     /// 3. 调用 `prompt_template.format()` 构造评判 prompt
-    /// 4. 调用 `invoker.invoke(model_id, prompt)` 获取 `LlmResponse`
-    /// 5. 调用 `JudgeResponseParser::parse(content)` 解析为 `JudgeVerdict`
+    /// 4. - 5. 重试循环：调用 LLM + 解析 JSON，最多 `max_retries + 1` 次尝试
+    ///    - LLM 调用失败（网络/超时）→ 不重试，直接传播错误
+    ///    - JSON 解析失败 → 重试（线性递增等待间隔）
+    /// 6. 重试耗尽：
+    ///    - `fallback_on_parse_failure = true` → 返回保守默认裁决
+    ///    - `fallback_on_parse_failure = false` → 返回最后一次解析错误
+    ///
+    /// # P1-4 重试设计（WHY）
+    ///
+    /// - **仅重试 Invoke+Parsing**:路由决策（步骤 2）不在重试范围内。
+    ///   路由失败通常是配置问题，重试无意义。
+    /// - **LLM 调用失败不重试**:网络/超时是基础设施问题，重试可能立即再次失败。
+    ///   唯一的例外是 JSON 解析失败，这可能是 LLM 偶发输出格式异常，重试可缓解。
+    /// - **线性递增等待**:第 N 次重试前等待 N × retry_delay_ms，避免重试风暴。
+    /// - **降级默认裁决**:Previous 胜出 + 中性评分 + 零置信度，确保系统保守运行。
     ///
     /// # 错误传播
     /// - 路由失败（如空注册表）→ `JudgeFailed`（reason 携带 RouterError 详情）
-    /// - LLM 调用失败 → `JudgeFailed`（reason 来自 LlmInvoker）
-    /// - 响应解析失败 → `InvalidVerdict`（field 携带具体字段名）
+    /// - LLM 调用失败 → `JudgeFailed`（reason 来自 LlmInvoker，不重试）
+    /// - 重试耗尽且 `fallback_on_parse_failure = false` → `InvalidVerdict`
     fn judge<'a>(
         &'a self,
         spec_v_i: &'a HarnessSpec,
         spec_v_i_minus_1: &'a HarnessSpec,
     ) -> Pin<Box<dyn Future<Output = Result<JudgeVerdict, AutoDpoError>> + Send + 'a>> {
-        Box::pin(async move {
-            // 步骤 1: 构造路由请求
-            let request = self.build_routing_request(spec_v_i, spec_v_i_minus_1);
+        // 预计算路由请求与 prompt（在闭包外捕获，避免 'a 生命周期问题）
+        let request = self.build_routing_request(spec_v_i, spec_v_i_minus_1);
+        let prompt = self.prompt_template.format(spec_v_i, spec_v_i_minus_1);
+        let max_retries = self.config.max_retries;
+        let retry_delay_ms = self.config.retry_delay_ms;
+        let fallback_on_parse_failure = self.config.fallback_on_parse_failure;
 
-            // 步骤 2: 调用路由器（model-router 经路由决策选择评估模型）
+        Box::pin(async move {
+            // 步骤 1: 调用路由器（model-router 经路由决策选择评估模型）
             let decision =
                 self.router
                     .route(request)
@@ -680,25 +751,81 @@ impl JudgeClient for ModelRouterJudgeClient {
                         reason: format!("model-router routing failed: {e:?}"),
                     })?;
 
-            // 步骤 3: 构造评判 prompt
-            let prompt = self.prompt_template.format(spec_v_i, spec_v_i_minus_1);
+            let model_id = decision.model_id.clone();
 
-            // 步骤 4: 调用 LLM（经 LlmInvoker trait，stub 或未来 HTTP 实现）
-            let response = self.invoker.invoke(&decision.model_id, &prompt).await?;
+            // 步骤 2-5: 重试循环 — 调用 LLM + 解析，最多重试 max_retries 次
+            let mut last_parse_err: Option<AutoDpoError> = None;
+            let total_attempts = max_retries + 1; // 首次 + max_retries 次重试
+            for attempt in 0..total_attempts {
+                if attempt > 0 {
+                    // 线性递增等待：第 N 次重试前等待 N × retry_delay_ms
+                    // WHY 线性递增:固定间隔在重试次数多时可能造成同时爆发，
+                    // 指数退避对 LLM 调用（秒级延迟）过于激进。线性递增简单有效。
+                    let delay = retry_delay_ms * attempt as u64;
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
 
-            // 步骤 5: 解析 LLM 响应为 JudgeVerdict
-            let verdict = JudgeResponseParser::parse(&response.content)?;
+                // 步骤 2: 调用 LLM（经 LlmInvoker trait）
+                let response = match self.invoker.invoke(&model_id, &prompt).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // LLM 调用失败（网络/超时）不重试——基础设施问题
+                        tracing::warn!(
+                            model_id = %model_id,
+                            attempt = attempt + 1,
+                            total = total_attempts,
+                            error = %e,
+                            "RHI-CG channel A judge: LLM invocation failed"
+                        );
+                        return Err(e);
+                    }
+                };
 
-            tracing::info!(
-                model_id = %response.model_id,
-                prompt_tokens = response.usage.prompt_tokens,
-                completion_tokens = response.usage.completion_tokens,
-                winner = %verdict.winner,
-                confidence = verdict.confidence,
-                "RHI-CG channel A judge: LLM evaluation completed"
-            );
+                // 步骤 3: 解析 LLM 响应为 JudgeVerdict
+                match JudgeResponseParser::parse(&response.content) {
+                    Ok(verdict) => {
+                        tracing::info!(
+                            model_id = %response.model_id,
+                            attempt = attempt + 1,
+                            total = total_attempts,
+                            prompt_tokens = response.usage.prompt_tokens,
+                            completion_tokens = response.usage.completion_tokens,
+                            winner = %verdict.winner,
+                            confidence = verdict.confidence,
+                            "RHI-CG channel A judge: LLM evaluation completed"
+                        );
+                        return Ok(verdict);
+                    }
+                    Err(e) => {
+                        // 解析失败：记录警告并重试
+                        tracing::warn!(
+                            model_id = %response.model_id,
+                            attempt = attempt + 1,
+                            total = total_attempts,
+                            error = %e,
+                            "RHI-CG channel A judge: response parse failed"
+                        );
+                        last_parse_err = Some(e);
+                    }
+                }
+            }
 
-            Ok(verdict)
+            // 步骤 4: 重试耗尽——使用降级策略
+            if fallback_on_parse_failure {
+                tracing::warn!(
+                    model_id = %model_id,
+                    max_retries = max_retries,
+                    "RHI-CG channel A judge: all retries exhausted, using fallback verdict"
+                );
+                Ok(Self::fallback_verdict())
+            } else {
+                Err(
+                    last_parse_err.unwrap_or_else(|| AutoDpoError::InvalidVerdict {
+                        field: "json_parse".to_string(),
+                        value: "retry exhausted without parse error (unreachable)".to_string(),
+                    }),
+                )
+            }
         })
     }
 }
@@ -1007,6 +1134,207 @@ mod tests {
         assert_eq!(config.routing_strategy, RoutingStrategy::Auto);
         assert_eq!(config.quest_id_prefix, "rhi-judge");
         assert_eq!(config.estimated_tokens, 4096);
+        // P1-4: 验证重试配置默认值
+        assert_eq!(config.max_retries, 2, "默认重试 2 次");
+        assert_eq!(config.retry_delay_ms, 100, "默认重试间隔 100ms");
+        assert!(config.fallback_on_parse_failure, "默认启用降级裁决");
+    }
+
+    // ============================================================
+    // P1-4: 重试与降级策略测试
+    // ============================================================
+
+    /// 构造一个动态 LLM 调用器，前 `fail_count` 次调用返回非法 JSON，
+    /// 之后返回合法 JSON（裁决 Current 胜出）
+    ///
+    /// WHY 使用 `Arc<AtomicU32>`:闭包是 `Fn`（非 `FnMut`），
+    /// 需通过原子变量实现可变的调用计数。
+    fn make_retryable_invoker(fail_count: u32) -> StubLlmInvoker {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let call_counter = Arc::new(AtomicU32::new(0));
+        let fail_count_arc = Arc::new(fail_count);
+
+        StubLlmInvoker::with_dynamic_response(move |_model_id, _prompt| {
+            let current = call_counter.fetch_add(1, Ordering::SeqCst);
+            if current < *fail_count_arc {
+                // 返回非法 JSON（解析失败）
+                LlmResponse {
+                    content: "this is not valid json".to_string(),
+                    model_id: "retry-model".to_string(),
+                    usage: TokenUsage {
+                        prompt_tokens: 100,
+                        completion_tokens: 10,
+                    },
+                }
+            } else {
+                // 返回合法 JSON
+                LlmResponse {
+                    content: r#"{"winner":"current","winner_score":0.85,"loser_score":0.45,"confidence":0.9,"rationale":"retry succeeded"}"#.to_string(),
+                    model_id: "retry-model".to_string(),
+                    usage: TokenUsage {
+                        prompt_tokens: 100,
+                        completion_tokens: 50,
+                    },
+                }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn test_judge_retry_success_after_parse_failure() {
+        // 前 1 次调用失败，第 2 次成功（使用默认配置 max_retries=2）
+        let router = make_test_router();
+        let invoker = Arc::new(make_retryable_invoker(1));
+        let config = JudgeClientConfig {
+            max_retries: 2,
+            retry_delay_ms: 1, // 1ms 避免测试延迟
+            ..Default::default()
+        };
+        let client = ModelRouterJudgeClient::with_config(
+            router,
+            invoker,
+            JudgePromptTemplate::default(),
+            config,
+        );
+
+        let spec_v_i = make_test_spec(2, "v2");
+        let spec_v_i_minus_1 = make_test_spec(1, "v1");
+
+        let verdict = client.judge(&spec_v_i, &spec_v_i_minus_1).await.unwrap();
+        assert_eq!(verdict.winner, SpecVersion::Current);
+        assert!((verdict.winner_score - 0.85).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn test_judge_retry_exhausted_fallback() {
+        // 所有 3 次尝试都失败（max_retries=2，共 3 次），使用降级默认裁决
+        let router = make_test_router();
+        let invoker = Arc::new(make_retryable_invoker(3)); // 前 3 次都失败
+        let config = JudgeClientConfig {
+            max_retries: 2,
+            retry_delay_ms: 1,
+            fallback_on_parse_failure: true,
+            ..Default::default()
+        };
+        let client = ModelRouterJudgeClient::with_config(
+            router,
+            invoker,
+            JudgePromptTemplate::default(),
+            config,
+        );
+
+        let spec_v_i = make_test_spec(2, "v2");
+        let spec_v_i_minus_1 = make_test_spec(1, "v1");
+
+        let verdict = client.judge(&spec_v_i, &spec_v_i_minus_1).await.unwrap();
+        // 降级裁决：Previous 胜出，中性评分，零置信度
+        assert_eq!(verdict.winner, SpecVersion::Previous);
+        assert!((verdict.winner_score - 0.5).abs() < 1e-6);
+        assert!((verdict.loser_score - 0.5).abs() < 1e-6);
+        assert!((verdict.confidence - 0.0).abs() < 1e-6);
+        assert!(verdict.rationale.contains("fallback"));
+    }
+
+    #[tokio::test]
+    async fn test_judge_retry_exhausted_no_fallback() {
+        // 所有重试都失败，且 fallback=false，返回解析错误
+        let router = make_test_router();
+        let invoker = Arc::new(make_retryable_invoker(3));
+        let config = JudgeClientConfig {
+            max_retries: 2,
+            retry_delay_ms: 1,
+            fallback_on_parse_failure: false,
+            ..Default::default()
+        };
+        let client = ModelRouterJudgeClient::with_config(
+            router,
+            invoker,
+            JudgePromptTemplate::default(),
+            config,
+        );
+
+        let spec_v_i = make_test_spec(2, "v2");
+        let spec_v_i_minus_1 = make_test_spec(1, "v1");
+
+        let result = client.judge(&spec_v_i, &spec_v_i_minus_1).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            AutoDpoError::InvalidVerdict { field, .. } => {
+                assert_eq!(field, "json_parse");
+            }
+            other => panic!("期望 InvalidVerdict，实际: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_judge_invoker_failure_no_retry() {
+        // LLM 调用失败（网络/超时）→ 不重试，直接传播错误
+        let router = make_test_router();
+        let invoker = Arc::new(FailingLlmInvoker::new("network timeout"));
+        let config = JudgeClientConfig {
+            max_retries: 3, // 即使配置了重试，LLM 调用失败也不重试
+            retry_delay_ms: 1,
+            ..Default::default()
+        };
+        let client = ModelRouterJudgeClient::with_config(
+            router,
+            invoker,
+            JudgePromptTemplate::default(),
+            config,
+        );
+
+        let spec_v_i = make_test_spec(2, "v2");
+        let spec_v_i_minus_1 = make_test_spec(1, "v1");
+
+        let result = client.judge(&spec_v_i, &spec_v_i_minus_1).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AutoDpoError::JudgeFailed { reason } => {
+                assert_eq!(reason, "network timeout");
+            }
+            other => panic!("期望 JudgeFailed，实际: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_judge_retry_zero_retries_fallback() {
+        // max_retries=0：仅尝试 1 次，失败后立即降级
+        let router = make_test_router();
+        let invoker = Arc::new(make_retryable_invoker(1)); // 第 1 次就失败
+        let config = JudgeClientConfig {
+            max_retries: 0,
+            retry_delay_ms: 1,
+            fallback_on_parse_failure: true,
+            ..Default::default()
+        };
+        let client = ModelRouterJudgeClient::with_config(
+            router,
+            invoker,
+            JudgePromptTemplate::default(),
+            config,
+        );
+
+        let spec_v_i = make_test_spec(2, "v2");
+        let spec_v_i_minus_1 = make_test_spec(1, "v1");
+
+        let verdict = client.judge(&spec_v_i, &spec_v_i_minus_1).await.unwrap();
+        // 降级裁决
+        assert_eq!(verdict.winner, SpecVersion::Previous);
+        assert!(verdict.rationale.contains("fallback"));
+    }
+
+    #[test]
+    fn test_fallback_verdict_values() {
+        // 验证 fallback_verdict 的硬编码值合法
+        let verdict = ModelRouterJudgeClient::fallback_verdict();
+        assert_eq!(verdict.winner, SpecVersion::Previous);
+        assert!((verdict.winner_score - 0.5).abs() < 1e-6);
+        assert!((verdict.loser_score - 0.5).abs() < 1e-6);
+        assert!((verdict.confidence - 0.0).abs() < 1e-6);
+        assert!(verdict.rationale.contains("fallback"));
+        // 验证不变量：winner_score >= loser_score
+        assert!(verdict.winner_score >= verdict.loser_score);
     }
 
     // ============================================================
@@ -1090,12 +1418,23 @@ mod tests {
     #[tokio::test]
     async fn test_model_router_judge_client_invalid_response_propagates() {
         let router = make_test_router();
-        // 返回非 JSON 响应
+        // 返回非 JSON 响应；使用 max_retries=0, fallback=false 确保错误传播
+        // (P1-4:默认配置启用了重试+降级，需显式关闭以验证原始错误传播路径)
         let invoker = Arc::new(StubLlmInvoker::with_fixed_response(
             "this is not json",
             "broken-llm",
         ));
-        let client = ModelRouterJudgeClient::new(router, invoker);
+        let config = JudgeClientConfig {
+            max_retries: 0,
+            fallback_on_parse_failure: false,
+            ..Default::default()
+        };
+        let client = ModelRouterJudgeClient::with_config(
+            router,
+            invoker,
+            JudgePromptTemplate::default(),
+            config,
+        );
 
         let spec_v_i = make_test_spec(2, "v2");
         let spec_v_i_minus_1 = make_test_spec(1, "v1");
@@ -1119,6 +1458,8 @@ mod tests {
             routing_strategy: RoutingStrategy::Lite,
             quest_id_prefix: "test-judge".to_string(),
             estimated_tokens: 2048,
+            // 其余字段使用默认值（P1-4 retry 配置）
+            ..Default::default()
         };
         let client = ModelRouterJudgeClient::with_config(
             router,

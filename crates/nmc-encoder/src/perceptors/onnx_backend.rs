@@ -27,6 +27,7 @@ use tract_onnx::prelude::*;
 /// - `Image` → CLIP ViT-B/32 (图像 → 语义嵌入)
 /// - `Video` → VideoMAE (视频帧 → 时空嵌入)
 /// - `Audio` → Whisper encoder (音频 → Mel 频谱 → 嵌入)
+/// - `Text` → all-MiniLM-L6-v2 (文本 → 语义嵌入)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelType {
     /// 图像编码模型 (CLIP ViT-B/32)
@@ -35,6 +36,8 @@ pub enum ModelType {
     Video,
     /// 音频编码模型 (Whisper encoder)
     Audio,
+    /// 文本编码模型 (all-MiniLM-L6-v2)
+    Text,
 }
 
 impl ModelType {
@@ -44,6 +47,7 @@ impl ModelType {
             Self::Image => "Image",
             Self::Video => "Video",
             Self::Audio => "Audio",
+            Self::Text => "Text",
         }
     }
 
@@ -56,6 +60,10 @@ impl ModelType {
             Self::Image => &config.image_model,
             Self::Video => &config.video_model,
             Self::Audio => &config.audio_model,
+            Self::Text => config
+                .text_model
+                .as_deref()
+                .unwrap_or("all-MiniLM-L6-v2.onnx"),
         }
     }
 }
@@ -68,7 +76,9 @@ impl ModelType {
 ///
 /// WHY 类型别名: 完整泛型签名 `SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<...>>`
 /// 过于冗长，触发 clippy::type_complexity。提取为类型别名提升可读性。
-type TractPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+/// pub(crate): 供 TextPerceptor 在 onnx 推理路径中复用
+pub(crate) type TractPlan =
+    SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
 
 /// ONNX 推理后端 — 封装 tract-onnx 模型加载、预处理、推理、后处理流水线
 ///
@@ -271,18 +281,18 @@ impl OnnxBackend {
 
     /// 视频预处理: 原始字节 → 批处理帧张量
     ///
-    /// 流程: 关键帧采样 (最多 16 帧) → 逐帧图像预处理 → 批处理 (N, 3, 224, 224)
+    /// 流程: 检查 FFmpeg 可用性 → 帧提取 → 逐帧图像预处理 → 批处理 (N, 3, 224, 224)
     ///
-    /// # 注意
-    /// 视频解码较复杂 (需要 ffmpeg/gstreamer 或纯 Rust 解码器)，
-    /// **当前占位实现**: 将原始字节作为单帧图像处理，输出形状为 (1, 3, 224, 224)。
-    /// 后续接入 `ffmpeg-next` 或 `video-rs` 后实现真正的关键帧采样。
+    /// 如果 FFmpeg 不可用，保留占位实现并输出 tracing 警告。
     ///
     /// # 参数
-    /// - `bytes`: 原始视频字节 (占位: 视作单帧图像)
+    /// - `bytes`: 原始视频字节
+    ///
+    /// # 返回
+    /// - `ndarray::ArrayD<f32>` 形状 (N, 3, 224, 224), N ≤ 16
     ///
     /// # 错误
-    /// - `PreprocessError`: 空输入
+    /// - `PreprocessError`: 空输入或解码失败
     pub fn preprocess_video(bytes: &[u8]) -> Result<ndarray::ArrayD<f32>, NmcError> {
         if bytes.is_empty() {
             return Err(NmcError::PreprocessError {
@@ -291,43 +301,163 @@ impl OnnxBackend {
             });
         }
 
-        // 占位: 将原始字节作为单帧图像处理
-        let frame = Self::preprocess_image(bytes)?;
+        // 检查 FFmpeg 是否可用
+        if !is_ffmpeg_available() {
+            // FFmpeg 不可用时，保留占位实现
+            tracing::warn!("FFmpeg 不可用，视频预处理使用占位实现（单帧模式）");
+            let frame = Self::preprocess_image(bytes)?;
+            let shape = frame.shape().to_vec();
+            let flat: Vec<f32> = frame.iter().copied().collect();
+            let mut batch_shape = vec![1usize];
+            batch_shape.extend_from_slice(&shape);
+            let batch = ndarray::ArrayD::from_shape_vec(batch_shape, flat).map_err(|e| {
+                NmcError::PreprocessError {
+                    modality: "Video".to_string(),
+                    reason: format!("批处理形状构造失败: {}", e),
+                }
+            })?;
+            return Ok(batch);
+        }
 
-        // 添加 batch 维度: (3, 224, 224) → (1, 3, 224, 224)
-        let shape = frame.shape().to_vec();
-        let flat: Vec<f32> = frame.iter().copied().collect();
+        // FFmpeg 可用: 使用 ffmpeg 提取帧
+        // 写入临时文件，调用 ffmpeg 提取帧，读取帧数据
+        let tmp_dir = std::env::temp_dir().join(format!("chimera_video_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp_dir);
 
-        let mut batch_shape = vec![1usize];
-        batch_shape.extend_from_slice(&shape);
-
-        let batch = ndarray::ArrayD::from_shape_vec(batch_shape, flat).map_err(|e| {
-            NmcError::PreprocessError {
+        // 写入临时视频文件
+        let video_path = tmp_dir.join("input_video");
+        if let Err(e) = std::fs::write(&video_path, bytes) {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return Err(NmcError::PreprocessError {
                 modality: "Video".to_string(),
-                reason: format!("批处理形状构造失败: {}", e),
-            }
-        })?;
+                reason: format!("写入临时视频文件失败: {}", e),
+            });
+        }
 
-        Ok(batch)
+        // 最多提取 16 帧
+        let max_frames = 16usize;
+        let output_pattern = tmp_dir.join("frame_%04d.png").to_string_lossy().to_string();
+
+        let output = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-i",
+                &video_path.to_string_lossy(),
+                "-vf",
+                &format!("fps={}/1", max_frames as f64),
+                "-frames:v",
+                &max_frames.to_string(),
+                "-q:v",
+                "2",
+                &output_pattern,
+            ])
+            .output();
+
+        match output {
+            Ok(out) => {
+                if !out.status.success() {
+                    // FFmpeg 执行失败，清理临时文件并回退到占位实现
+                    let _ = std::fs::remove_dir_all(&tmp_dir);
+                    tracing::warn!("FFmpeg 帧提取失败, 使用占位实现");
+                    let frame = Self::preprocess_image(bytes)?;
+                    let shape = frame.shape().to_vec();
+                    let flat: Vec<f32> = frame.iter().copied().collect();
+                    let mut batch_shape = vec![1usize];
+                    batch_shape.extend_from_slice(&shape);
+                    let batch =
+                        ndarray::ArrayD::from_shape_vec(batch_shape, flat).map_err(|e| {
+                            NmcError::PreprocessError {
+                                modality: "Video".to_string(),
+                                reason: format!("批处理形状构造失败: {}", e),
+                            }
+                        })?;
+                    return Ok(batch);
+                }
+
+                // 读取提取的帧
+                let mut frames: Vec<ndarray::ArrayD<f32>> = Vec::new();
+                for i in 1..=max_frames {
+                    let frame_path = tmp_dir.join(format!("frame_{:04}.png", i));
+                    if frame_path.exists() {
+                        let frame_bytes = match std::fs::read(&frame_path) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                tracing::warn!("读取帧文件失败: {}", e);
+                                continue;
+                            }
+                        };
+                        match Self::preprocess_image(&frame_bytes) {
+                            Ok(tensor) => frames.push(tensor),
+                            Err(e) => tracing::warn!("帧预处理失败: {}", e),
+                        }
+                    }
+                }
+
+                // 清理临时文件
+                let _ = std::fs::remove_dir_all(&tmp_dir);
+
+                if frames.is_empty() {
+                    // 没有提取到任何帧，回退到占位实现
+                    tracing::warn!("FFmpeg 未提取到任何帧，使用占位实现");
+                    let frame = Self::preprocess_image(bytes)?;
+                    let shape = frame.shape().to_vec();
+                    let flat: Vec<f32> = frame.iter().copied().collect();
+                    let mut batch_shape = vec![1usize];
+                    batch_shape.extend_from_slice(&shape);
+                    let batch =
+                        ndarray::ArrayD::from_shape_vec(batch_shape, flat).map_err(|e| {
+                            NmcError::PreprocessError {
+                                modality: "Video".to_string(),
+                                reason: format!("批处理形状构造失败: {}", e),
+                            }
+                        })?;
+                    return Ok(batch);
+                }
+
+                // 合并为 batch tensor
+                let n_frames = frames.len();
+                let flat: Vec<f32> = frames.iter().flat_map(|f| f.iter().copied()).collect();
+                let batch_shape = vec![n_frames, 3, 224, 224];
+                let batch = ndarray::ArrayD::from_shape_vec(batch_shape, flat).map_err(|e| {
+                    NmcError::PreprocessError {
+                        modality: "Video".to_string(),
+                        reason: format!("批处理形状构造失败: {}", e),
+                    }
+                })?;
+                Ok(batch)
+            }
+            Err(e) => {
+                // FFmpeg 命令执行失败
+                let _ = std::fs::remove_dir_all(&tmp_dir);
+                tracing::warn!("FFmpeg 命令执行失败: {}, 使用占位实现", e);
+                let frame = Self::preprocess_image(bytes)?;
+                let shape = frame.shape().to_vec();
+                let flat: Vec<f32> = frame.iter().copied().collect();
+                let mut batch_shape = vec![1usize];
+                batch_shape.extend_from_slice(&shape);
+                let batch = ndarray::ArrayD::from_shape_vec(batch_shape, flat).map_err(|e| {
+                    NmcError::PreprocessError {
+                        modality: "Video".to_string(),
+                        reason: format!("批处理形状构造失败: {}", e),
+                    }
+                })?;
+                Ok(batch)
+            }
+        }
     }
 
-    /// 音频预处理: 原始字节 → Mel 频谱张量
+    /// 音频预处理: 原始 WAV 字节 → Mel 频谱张量
     ///
-    /// 流程: WAV 解码 → 重采样 16kHz 单声道 → 短时傅里叶变换 → Mel 滤波器组 → 对数压缩
-    ///
-    /// # 注意
-    /// 音频预处理较复杂 (需要 FFT、Mel 滤波器组、重采样等信号处理操作)，
-    /// **当前占位实现**: 生成零填充张量，维度符合 Whisper encoder 输入要求。
-    /// 后续接入 `rustfft` + `hound` 后实现真正的 Mel 频谱提取。
+    /// 流程: WAV 解码 (hound) → 混音为单声道 → 重采样 16kHz → Mel 频谱 (mel_spec)
     ///
     /// # 参数
-    /// - `bytes`: 原始音频字节 (WAV 格式优先)
+    /// - `bytes`: 原始 WAV 音频字节
     ///
     /// # 返回
-    /// - `ndarray::ArrayD<f32>` 形状 (1, 80, 3000): 批大小=1, Mel 频带=80, 时间步=3000
+    /// - `ndarray::ArrayD<f32>` 形状 (1, 80, 3000): batch=1, Mel 频带=80, 时间步=3000
     ///
     /// # 错误
-    /// - `PreprocessError`: 空输入
+    /// - `PreprocessError`: 空输入、WAV 解码失败、频谱计算失败
     pub fn preprocess_audio(bytes: &[u8]) -> Result<ndarray::ArrayD<f32>, NmcError> {
         if bytes.is_empty() {
             return Err(NmcError::PreprocessError {
@@ -336,34 +466,144 @@ impl OnnxBackend {
             });
         }
 
-        // 尝试解析 WAV 头部获取采样率与声道数，用于调整时间步
-        let (n_mels, time_steps) = if bytes.len() >= 44 && &bytes[0..4] == b"RIFF" {
-            // WAV 头部偏移: 声道数@22 (u16 LE), 采样率@24 (u32 LE)
-            let sample_rate = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
-            let channels = u16::from_le_bytes([bytes[22], bytes[23]]);
-            // 按采样率比例调整时间步 (基准: 16kHz → 3000 步)
-            let time_steps = if sample_rate > 0 {
-                ((3000.0 * sample_rate as f32 / 16000.0) as usize).clamp(1, 3000)
-            } else {
-                3000
-            };
-            // 声道数 > 1 时增加时间步以容纳多声道信息
-            let time_steps = time_steps * channels.max(1) as usize;
-            (80, time_steps.min(3000))
-        } else {
-            // 非 WAV 格式: 使用默认维度
-            (80, 3000)
+        // 1. 使用 hound 解码 WAV
+        let mut cursor = std::io::Cursor::new(bytes);
+        let reader = hound::WavReader::new(&mut cursor).map_err(|e| NmcError::PreprocessError {
+            modality: "Audio".to_string(),
+            reason: format!("WAV 解码失败: {}", e),
+        })?;
+
+        let spec = reader.spec();
+        let sample_rate = spec.sample_rate;
+        let channels = spec.channels as usize;
+        let bits_per_sample = spec.bits_per_sample;
+
+        // 2. 读取 PCM 样本并转换为 f32
+        let samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => {
+                // 32-bit float PCM
+                reader
+                    .into_samples::<f32>()
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| NmcError::PreprocessError {
+                        modality: "Audio".to_string(),
+                        reason: format!("读取 float PCM 样本失败: {}", e),
+                    })?
+            }
+            hound::SampleFormat::Int => {
+                // 整数 PCM, 根据位深转换为 f32
+                match bits_per_sample {
+                    16 => {
+                        let max_val = i16::MAX as f32;
+                        reader
+                            .into_samples::<i16>()
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|e| NmcError::PreprocessError {
+                                modality: "Audio".to_string(),
+                                reason: format!("读取 i16 PCM 样本失败: {}", e),
+                            })?
+                            .into_iter()
+                            .map(|s| s as f32 / max_val)
+                            .collect()
+                    }
+                    24 => {
+                        // 24-bit 样本: hound 通过 i32 读取，左对齐
+                        let max_val = i32::MAX as f32;
+                        reader
+                            .into_samples::<i32>()
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|e| NmcError::PreprocessError {
+                                modality: "Audio".to_string(),
+                                reason: format!("读取 i24 PCM 样本失败: {}", e),
+                            })?
+                            .into_iter()
+                            .map(|s| (s >> 8) as f32 / max_val)
+                            .collect()
+                    }
+                    32 => {
+                        let max_val = i32::MAX as f32;
+                        reader
+                            .into_samples::<i32>()
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|e| NmcError::PreprocessError {
+                                modality: "Audio".to_string(),
+                                reason: format!("读取 i32 PCM 样本失败: {}", e),
+                            })?
+                            .into_iter()
+                            .map(|s| s as f32 / max_val)
+                            .collect()
+                    }
+                    _ => {
+                        return Err(NmcError::PreprocessError {
+                            modality: "Audio".to_string(),
+                            reason: format!("不支持的位深: {} bit", bits_per_sample),
+                        });
+                    }
+                }
+            }
         };
 
-        // 零填充占位张量
-        let shape = vec![1usize, n_mels, time_steps];
-        let total = shape.iter().product::<usize>();
-        let data = vec![0.0f32; total];
+        // 3. 混音为单声道 (多声道取平均)
+        let mono: Vec<f32> = if channels > 1 {
+            samples
+                .chunks(channels)
+                .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
+                .collect()
+        } else {
+            samples
+        };
 
-        let array = ndarray::ArrayD::from_shape_vec(shape, data).map_err(|e| {
+        // 4. 重采样到 16kHz (若原始采样率不同)
+        let resampled = if sample_rate != 16000 {
+            resample_audio(&mono, sample_rate, 16000)
+        } else {
+            mono
+        };
+
+        // 5. 计算 Mel 频谱
+        // 使用 mel_spec 库的 compute_mel_spectrogram_cpu 直接计算 Whisper 兼容的 log-mel 频谱
+        // 参数: fft_size=400, hop_size=160, n_mels=80, sampling_rate=16000.0
+        let mel_frames = mel_spec::stft::Spectrogram::compute_mel_spectrogram_cpu(
+            &resampled, 400,     // fft_size
+            160,     // hop_size
+            80,      // n_mels
+            16000.0, // sampling_rate
+        );
+
+        // mel_spec 输出为 Vec<Vec<f32>>, 形状为 (n_mels, n_frames)
+        // 需要重塑为 (1, 80, 3000) — 添加 batch 维度
+        let n_mels = 80usize;
+        let target_time = 3000usize;
+
+        // 找出实际帧数
+        let actual_frames = if mel_frames.is_empty() {
+            0
+        } else {
+            mel_frames[0].len()
+        };
+
+        let mut mel_data = Vec::with_capacity(n_mels * target_time);
+        for m in 0..n_mels {
+            if m < mel_frames.len() {
+                let row = &mel_frames[m];
+                for t in 0..target_time {
+                    if t < actual_frames && t < row.len() {
+                        mel_data.push(row[t]);
+                    } else {
+                        mel_data.push(0.0);
+                    }
+                }
+            } else {
+                mel_data.extend(std::iter::repeat_n(0.0, target_time));
+            }
+        }
+
+        // 最终输出形状 (1, 80, 3000)
+        let shape = vec![1usize, n_mels, target_time];
+        let array = ndarray::ArrayD::from_shape_vec(shape, mel_data).map_err(|e| {
             NmcError::PreprocessError {
                 modality: "Audio".to_string(),
-                reason: format!("Mel频谱形状构造失败: {}", e),
+                reason: format!("Mel 频谱形状构造失败: {}", e),
             }
         })?;
 
@@ -416,6 +656,97 @@ impl OnnxBackend {
     pub fn model_type(&self) -> ModelType {
         self.model_type
     }
+}
+
+// ============================================================================
+// 辅助函数
+// ============================================================================
+
+/// 检查 FFmpeg 系统命令是否可用
+///
+/// 执行 `ffmpeg -version` 检测 FFmpeg 是否已安装。
+/// 不阻塞，使用 `std::process::Command` 快速检查。
+fn is_ffmpeg_available() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// 音频重采样 — 线性插值重采样到目标采样率
+///
+/// # 参数
+/// - `samples`: 输入 PCM f32 样本
+/// - `from_rate`: 原始采样率 (Hz)
+/// - `to_rate`: 目标采样率 (Hz, 通常 16000)
+///
+/// # 返回
+/// - 重采样后的 f32 样本向量
+fn resample_audio(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate == to_rate || samples.is_empty() {
+        return samples.to_vec();
+    }
+
+    let ratio = to_rate as f64 / from_rate as f64;
+    let new_len = (samples.len() as f64 * ratio).ceil() as usize;
+    let mut resampled = Vec::with_capacity(new_len);
+
+    for i in 0..new_len {
+        let src_pos = i as f64 / ratio;
+        let src_idx = src_pos.floor() as usize;
+        let frac = src_pos - src_idx as f64;
+
+        if src_idx + 1 < samples.len() {
+            // 线性插值
+            let val = samples[src_idx] as f64 * (1.0 - frac) + samples[src_idx + 1] as f64 * frac;
+            resampled.push(val as f32);
+        } else {
+            resampled.push(samples[samples.len() - 1]);
+        }
+    }
+
+    resampled
+}
+
+/// 生成合成正弦波 WAV 文件字节（用于测试）
+///
+/// # 参数
+/// - `sample_rate`: 采样率 (Hz)
+/// - `duration_secs`: 持续时间 (秒)
+/// - `frequency`: 正弦波频率 (Hz)
+/// - `amplitude`: 振幅 (0.0-1.0)
+///
+/// # 返回
+/// - WAV 文件字节 (16-bit PCM, 单声道)
+#[cfg(test)]
+fn generate_sine_wav(
+    sample_rate: u32,
+    duration_secs: f32,
+    frequency: f32,
+    amplitude: f32,
+) -> Vec<u8> {
+    let num_samples = (sample_rate as f32 * duration_secs) as usize;
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut buf = Vec::new();
+    {
+        let mut writer = hound::WavWriter::new(std::io::Cursor::new(&mut buf), spec).unwrap();
+        for i in 0..num_samples {
+            let t = i as f32 / sample_rate as f32;
+            let sample_value = (amplitude
+                * (2.0 * std::f32::consts::PI * frequency * t).sin()
+                * i16::MAX as f32) as i16;
+            writer.write_sample(sample_value).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+    buf
 }
 
 // ============================================================================
@@ -516,18 +847,67 @@ mod tests {
         }
     }
 
-    /// 验证非空音频输入生成正确的零填充张量形状
+    /// 验证合成 WAV 文件预处理后输出形状正确且值非零
     #[test]
-    fn test_preprocess_audio_non_empty() {
-        // 非 WAV 格式的任意字节
-        let result = OnnxBackend::preprocess_audio(&[0x42; 100]);
-        assert!(result.is_ok());
+    fn test_preprocess_audio_synthetic_wav() {
+        // 生成 1 秒 440Hz 正弦波 WAV, 16kHz 采样率
+        let wav_bytes = generate_sine_wav(16000, 1.0, 440.0, 0.5);
+        let result = OnnxBackend::preprocess_audio(&wav_bytes);
+        assert!(result.is_ok(), "合成 WAV 预处理应成功: {:?}", result.err());
         let tensor = result.unwrap();
-        // 默认形状: (1, 80, 3000)
+        // 形状: (1, 80, 3000)
         assert_eq!(tensor.shape(), &[1, 80, 3000]);
-        // 所有值应为零
-        for &v in tensor.iter() {
-            assert!((v - 0.0).abs() < 1e-10, "期望零填充, 实际 {}", v);
+        // 值应为非零 (Mel 频谱)
+        let sum: f32 = tensor.iter().map(|v| v.abs()).sum();
+        assert!(sum > 0.0, "Mel 频谱应非零");
+    }
+
+    /// 验证损坏的 WAV 文件返回 PreprocessError
+    #[test]
+    fn test_preprocess_audio_corrupt() {
+        // 损坏的字节序列 (不是有效的 WAV)
+        let corrupt = vec![0x00, 0xFF, 0xDE, 0xAD, 0xBE, 0xEF];
+        let result = OnnxBackend::preprocess_audio(&corrupt);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            NmcError::PreprocessError { modality, reason } => {
+                assert_eq!(modality, "Audio");
+                assert!(reason.contains("解码失败") || reason.contains("WAV"));
+            }
+            _ => panic!("期望 PreprocessError"),
+        }
+    }
+
+    /// 验证非 WAV 格式返回 PreprocessError
+    #[test]
+    fn test_preprocess_audio_non_wav() {
+        // 带有有效 RIFF 头部但无效内容的字节
+        let fake_wav = {
+            let mut bytes = Vec::with_capacity(44);
+            bytes.extend_from_slice(b"RIFF");
+            bytes.extend_from_slice(&[0u8; 4]); // 文件大小
+            bytes.extend_from_slice(b"WAVE");
+            bytes.extend_from_slice(b"fmt ");
+            bytes.extend_from_slice(&[16u8; 4]); // 块大小
+            bytes.extend_from_slice(&[1u8; 2]); // PCM 格式
+            bytes.extend_from_slice(&[1u8; 2]); // 单声道
+            bytes.extend_from_slice(&[0x80, 0x3E, 0x00, 0x00]); // 16000 Hz
+            bytes.extend_from_slice(&[0x00, 0x7D, 0x00, 0x00]); // 字节率
+            bytes.extend_from_slice(&[2u8; 2]); // 块对齐
+            bytes.extend_from_slice(&[16u8; 2]); // 位深
+            bytes.extend_from_slice(b"data");
+            bytes.extend_from_slice(&[0u8; 4]); // 数据大小
+            bytes
+        };
+        let result = OnnxBackend::preprocess_audio(&fake_wav);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            NmcError::PreprocessError { modality, .. } => {
+                assert_eq!(modality, "Audio");
+            }
+            _ => panic!("期望 PreprocessError"),
         }
     }
 
@@ -626,6 +1006,11 @@ mod tests {
             ModelType::Audio.get_model_filename(&config),
             "whisper-encoder.onnx"
         );
+        // 默认 text_model=None, 应返回 fallback 名称
+        assert_eq!(
+            ModelType::Text.get_model_filename(&config),
+            "all-MiniLM-L6-v2.onnx"
+        );
     }
 
     #[test]
@@ -633,7 +1018,8 @@ mod tests {
         let config = NmcConfig::default()
             .with_image_model("custom-clip.onnx")
             .with_video_model("custom-video.onnx")
-            .with_audio_model("custom-audio.onnx");
+            .with_audio_model("custom-audio.onnx")
+            .with_text_model("custom-text.onnx");
         assert_eq!(
             ModelType::Image.get_model_filename(&config),
             "custom-clip.onnx"
@@ -646,6 +1032,10 @@ mod tests {
             ModelType::Audio.get_model_filename(&config),
             "custom-audio.onnx"
         );
+        assert_eq!(
+            ModelType::Text.get_model_filename(&config),
+            "custom-text.onnx"
+        );
     }
 
     #[test]
@@ -653,6 +1043,7 @@ mod tests {
         assert_eq!(ModelType::Image.modality_name(), "Image");
         assert_eq!(ModelType::Video.modality_name(), "Video");
         assert_eq!(ModelType::Audio.modality_name(), "Audio");
+        assert_eq!(ModelType::Text.modality_name(), "Text");
     }
 
     // -----------------------------------------------------------------------
@@ -726,16 +1117,16 @@ mod tests {
         }
     }
 
-    /// Golden 测试: 验证音频预处理输出张量形状为 (1, 80, 3000)。
+    /// Golden 测试: 验证音频预处理输出张量形状为 (1, 80, 3000) 且值非零。
     ///
     /// 关键断言:
     /// - 形状: (1, 80, 3000) — batch=1, Mel 频带=80, 时间步=3000
-    /// - 当前占位实现输出全零填充
+    /// - 值非零: 合成正弦波 WAV 应产生非零 Mel 频谱
     #[test]
     fn test_preprocess_audio_golden() {
-        // 非 WAV 格式的任意字节，使用默认维度
-        let audio_bytes = [0x42u8; 100];
-        let tensor = OnnxBackend::preprocess_audio(&audio_bytes).expect("非空音频字节预处理应成功");
+        // 生成 1 秒 440Hz 正弦波 WAV, 16kHz 采样率
+        let wav_bytes = generate_sine_wav(16000, 1.0, 440.0, 0.5);
+        let tensor = OnnxBackend::preprocess_audio(&wav_bytes).expect("合成 WAV 预处理应成功");
 
         // 形状断言: (1, 80, 3000)
         assert_eq!(
@@ -755,10 +1146,13 @@ mod tests {
             total
         );
 
-        // 占位实现: 当前所有值应为零
-        for &v in tensor.iter() {
-            assert!(v.abs() < 1e-10, "Golden: 音频占位张量应全零，实际值 {}", v);
-        }
+        // 值非零: 合成正弦波应产生非零 Mel 频谱
+        let sum: f32 = tensor.iter().map(|v| v.abs()).sum();
+        assert!(
+            sum > 0.0,
+            "Golden: 合成 WAV 的 Mel 频谱应非零，实际和 {}",
+            sum
+        );
     }
 
     /// Golden 测试: 验证视频预处理输出张量形状为 (1, 3, 224, 224)，
@@ -802,6 +1196,40 @@ mod tests {
                 "Golden: 视频帧像素值 {} 超出预期范围 [0, 1]",
                 v
             );
+        }
+    }
+
+    /// 验证损坏的视频数据返回 PreprocessError
+    #[test]
+    fn test_preprocess_video_corrupt() {
+        // 损坏的字节序列 (不是有效的图像/视频格式)
+        let corrupt = vec![0x00, 0xFF, 0xDE, 0xAD, 0xBE, 0xEF];
+        let result = OnnxBackend::preprocess_video(&corrupt);
+        assert!(result.is_err());
+        // 由于 FFmpeg 不可用时回退到 preprocess_image，modality 可能为 "Image" 或 "Video"
+        // 只要返回 PreprocessError 即可
+        match result.unwrap_err() {
+            NmcError::PreprocessError { .. } => {} // OK
+            other => panic!("期望 PreprocessError, 实际: {:?}", other),
+        }
+    }
+
+    /// 验证 FFmpeg 不可用时使用占位实现
+    /// 由于测试环境一般没有 FFmpeg，此测试验证降级行为
+    #[test]
+    fn test_preprocess_video_ffmpeg_unavailable() {
+        // 使用有效的 PNG 图像字节作为视频输入
+        // 当 FFmpeg 不可用时，应回退到 preprocess_image 并输出 (1, 3, 224, 224)
+        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([200, 100, 50]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .expect("编码 PNG 应成功");
+
+        let tensor = OnnxBackend::preprocess_video(&buf).expect("降级到占位实现应成功");
+        assert_eq!(tensor.shape(), &[1, 3, 224, 224]);
+        // 值范围应在 [0, 1] 内
+        for &v in tensor.iter() {
+            assert!((0.0..=1.0).contains(&v), "像素值 {} 超出范围 [0,1]", v);
         }
     }
 

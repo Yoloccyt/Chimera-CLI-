@@ -12,16 +12,20 @@
 //!
 //! # 设计决策(WHY)
 //! - AHIRT 是 Parliament 的第 6 角色(Red Team),独立于 5 角色辩论
-//! - 直接调用 seccore(L8→L4 向下依赖允许),不直接调用 Decay Engine(事件解耦)
+//! - 命令类探测经 L0 `CommandValidator` trait 注入(ADR-054 决策 3,P9-T4):
+//!   不再直接调用 seccore(消除 L8→L4 生产依赖边),seccore 实现由编排器注入;
+//!   未注入时优雅降级(skipped)。不直接调用 Decay Engine(事件解耦)
 //! - PromptInjection 使用规则检测(Week 6 NMC 接入后升级为模型检测)
 //! - 探测结果经 EventBus 发布 RedTeamAudit/AhirtProbeCompleted 事件(Week 5 Task 37 已集成)
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
-use seccore::policy::{validate_command, CommandPolicy};
-use seccore::types::Command;
+// ADR-054 决策 3(P9-T4):命令类探测改用 L0 契约(Command/CommandPolicy/CommandValidator),
+// 替代原 seccore 直接调用——parliament 生产依赖图不再含 seccore(L8→L0 恒允许)
+use nexus_contracts::command_validation::{Command, CommandPolicy, CommandValidator};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
@@ -267,8 +271,14 @@ impl Default for ProbePayloadLibrary {
 pub struct AhirtRedTeam {
     /// 探测载荷库
     library: ProbePayloadLibrary,
-    /// 命令策略(用于 seccore::validate_command)
+    /// 命令策略(L0 契约)— 由注入的 `CommandValidator` 消费
     policy: CommandPolicy,
+    /// 命令校验器(L0 trait 对象)— ADR-054 决策 3(P9-T4)
+    ///
+    /// 由生产编排器(如 chimera-cli)经 [`with_validator`](Self::with_validator)
+    /// 注入 `seccore::SecCoreCommandValidator`;未注入时命令类探测优雅降级
+    /// (`probe_command` 返回 skipped),不误报拦截也不误报漏洞。
+    validator: Option<Arc<dyn CommandValidator>>,
     /// 事件总线(发布 RedTeamAudit/AhirtProbeCompleted 事件)
     event_bus: EventBus,
     /// AHIRT 配置(探测周期、检测率阈值、批次大小)
@@ -279,9 +289,11 @@ impl std::fmt::Debug for AhirtRedTeam {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // WHY 手动实现:EventBus 未实现 Debug(它是通信通道,非业务状态),
         // 用 finish_non_exhaustive 跳过 event_bus 字段,避免派生 Debug 失败
+        // WHY validator 仅显示注入状态:dyn CommandValidator 无 Debug 实现
         f.debug_struct("AhirtRedTeam")
             .field("library", &self.library)
             .field("policy", &self.policy)
+            .field("validator_injected", &self.validator.is_some())
             .field("config", &self.config)
             .finish_non_exhaustive()
     }
@@ -337,9 +349,22 @@ impl AhirtRedTeam {
         Self {
             library,
             policy: CommandPolicy::default_secure(),
+            // ADR-054 决策 3(P9-T4):默认不注入 validator,命令类探测优雅降级;
+            // 生产经 with_validator 注入 seccore::SecCoreCommandValidator
+            validator: None,
             event_bus: bus,
             config,
         }
+    }
+
+    /// 注入命令校验器(L0 `CommandValidator` trait 对象)— ADR-054 决策 3(P9-T4)
+    ///
+    /// WHY 链式 setter 而非构造器参数:保持既有构造器签名不变(调用方零破坏),
+    /// 生产编排器(chimera-cli audit)构造后注入 `seccore::SecCoreCommandValidator`;
+    /// 未注入时 `probe_command` 优雅降级为 skipped(不误报拦截也不误报漏洞)。
+    pub fn with_validator(mut self, validator: Arc<dyn CommandValidator>) -> Self {
+        self.validator = Some(validator);
+        self
     }
 
     /// 获取当前 AHIRT 配置的只读引用
@@ -618,14 +643,19 @@ impl AhirtRedTeam {
         }
     }
 
-    /// 命令类探测 — 调用 seccore::validate_command
+    /// 命令类探测 — 经注入的 L0 `CommandValidator` 校验
     ///
-    /// WHY 整个载荷作为 program:validate_command 对 program + args 做子串匹配,
+    /// WHY 整个载荷作为 program:validate 对 program + args 做子串匹配,
     /// 将载荷整体作为 program 可确保所有危险模式被扫描到。
+    /// WHY 优雅降级:validator 未注入时返回 `(false, "skipped...")`——命令类探测
+    /// 既不误报拦截也不误报漏洞,由调用方感知探测能力缺失(ADR-054 决策 3)。
     fn probe_command(&self, payload: &str) -> (bool, String) {
+        let Some(validator) = &self.validator else {
+            return (false, "skipped: command validator not injected".to_string());
+        };
         let cmd = Command::new(payload);
-        match validate_command(&cmd, &self.policy) {
-            Ok(_) => (false, "allowed (not blocked)".to_string()),
+        match validator.validate(&cmd, &self.policy) {
+            Ok(()) => (false, "allowed (not blocked)".to_string()),
             Err(e) => (true, format!("blocked: {e}")),
         }
     }
@@ -910,6 +940,21 @@ fn sandbox_escape_payloads() -> Vec<ProbePayload> {
 mod tests {
     use super::*;
 
+    // === ADR-054 决策 3(P9-T4):命令类探测测试辅助 ===
+    // WHY 注入 SecCoreCommandValidator:命令类探测(CommandInjection/PrivilegeEscalation/
+    // SandboxEscape)依赖注入的 L0 validator,未注入时优雅降级为 skipped。
+    // seccore 仅 dev-dependency,不进入 parliament 生产依赖图(§2.2 铁律)。
+
+    /// 注入 SecCoreCommandValidator 的默认红队(测试辅助)
+    fn default_red_team() -> AhirtRedTeam {
+        AhirtRedTeam::default().with_validator(Arc::new(seccore::SecCoreCommandValidator))
+    }
+
+    /// 注入 SecCoreCommandValidator 的红队(自定义载荷库,测试辅助)
+    fn red_team_with(library: ProbePayloadLibrary) -> AhirtRedTeam {
+        AhirtRedTeam::new(library).with_validator(Arc::new(seccore::SecCoreCommandValidator))
+    }
+
     // === SubTask 33.1: 载荷库测试 ===
 
     #[test]
@@ -1056,7 +1101,7 @@ mod tests {
 
     #[test]
     fn test_probe_command_injection_case_1() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::CommandInjection, "$(rm -rf /)");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "命令替换 $(...) 应被拦截");
@@ -1064,7 +1109,7 @@ mod tests {
 
     #[test]
     fn test_probe_command_injection_case_2() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::CommandInjection, "cat /etc/passwd | nc");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "管道符 | 应被拦截");
@@ -1072,7 +1117,7 @@ mod tests {
 
     #[test]
     fn test_probe_command_injection_case_3() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::CommandInjection, "ls; rm -rf /");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "分号 ; 应被拦截");
@@ -1080,7 +1125,7 @@ mod tests {
 
     #[test]
     fn test_probe_command_injection_case_4() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::CommandInjection, "echo test && malicious");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "&& 应被拦截");
@@ -1088,7 +1133,7 @@ mod tests {
 
     #[test]
     fn test_probe_command_injection_case_5() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::CommandInjection, "`whoami`");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "反引号应被拦截");
@@ -1096,7 +1141,7 @@ mod tests {
 
     #[test]
     fn test_probe_privilege_escalation_case_1() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::PrivilegeEscalation, "sudo su");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "sudo 提权应被拦截");
@@ -1104,7 +1149,7 @@ mod tests {
 
     #[test]
     fn test_probe_privilege_escalation_case_2() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::PrivilegeEscalation, "chmod 777 /etc/passwd");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "chmod 应被拦截");
@@ -1112,7 +1157,7 @@ mod tests {
 
     #[test]
     fn test_probe_privilege_escalation_case_3() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::PrivilegeEscalation, "chown root:root");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "chown 应被拦截");
@@ -1120,7 +1165,7 @@ mod tests {
 
     #[test]
     fn test_probe_privilege_escalation_case_4() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::PrivilegeEscalation, "nsenter --target 1");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "nsenter 应被拦截(非白名单)");
@@ -1128,7 +1173,7 @@ mod tests {
 
     #[test]
     fn test_probe_privilege_escalation_case_5() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::PrivilegeEscalation, "unshare --pid");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "unshare 应被拦截(非白名单)");
@@ -1136,7 +1181,7 @@ mod tests {
 
     #[test]
     fn test_probe_sandbox_escape_case_1() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::SandboxEscape, "../../../etc/passwd");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "路径遍历 ../ 应被拦截");
@@ -1144,7 +1189,7 @@ mod tests {
 
     #[test]
     fn test_probe_sandbox_escape_case_2() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::SandboxEscape, "..\\..\\windows\\system32");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "Windows 路径遍历 ..\\ 应被拦截");
@@ -1152,7 +1197,7 @@ mod tests {
 
     #[test]
     fn test_probe_sandbox_escape_case_3() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::SandboxEscape, "/proc/self/exe");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "/proc/ 访问应被拦截");
@@ -1160,7 +1205,7 @@ mod tests {
 
     #[test]
     fn test_probe_sandbox_escape_case_4() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::SandboxEscape, "mount -t proc");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "mount 应被拦截(非白名单)");
@@ -1168,7 +1213,7 @@ mod tests {
 
     #[test]
     fn test_probe_sandbox_escape_case_5() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let payload = ProbePayload::new(ProbeType::SandboxEscape, "ptrace attach");
         let result = red_team.probe_single(&payload);
         assert!(result.passed, "ptrace 应被拦截(非白名单)");
@@ -1197,7 +1242,7 @@ mod tests {
 
     #[test]
     fn test_compute_detection_rate_full() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let results = red_team.probe(ProbeType::CommandInjection);
         let rate = red_team.compute_detection_rate(&results);
         assert!((rate - 1.0).abs() < 1e-6, "命令注入探测率应为 100%");
@@ -1235,7 +1280,7 @@ mod tests {
 
     #[test]
     fn test_verify_security_detection_rate_above_95() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let report = red_team.verify_security();
         assert!(
             report.stats.detection_rate > 0.95,
@@ -1253,7 +1298,7 @@ mod tests {
         // 从而构造探测率 < 95% 的场景验证漏洞检测逻辑
         let safe_payload = ProbePayload::new(ProbeType::CommandInjection, "echo");
         let library = ProbePayloadLibrary::from_config(vec![safe_payload]);
-        let red_team = AhirtRedTeam::new(library);
+        let red_team = red_team_with(library);
         let report = red_team.verify_security();
         assert!(report.stats.detection_rate < 0.95, "探测率应 < 95%");
         assert!(
@@ -1267,7 +1312,7 @@ mod tests {
 
     #[test]
     fn test_100_payloads_detection_rate_above_95() {
-        let red_team = AhirtRedTeam::default();
+        let red_team = default_red_team();
         let stats = red_team.probe_all();
         assert!(
             stats.detection_rate > 0.95,
@@ -1425,8 +1470,9 @@ mod tests {
     fn test_ahirt_default_config_equivalent_to_new() {
         // WHY 等价性:new(library) 与 with_config(library, default) 行为一致
         let library = ProbePayloadLibrary::new();
-        let rt_new = AhirtRedTeam::new(library.clone());
-        let rt_with_default = AhirtRedTeam::with_config(library, AhirtConfig::default());
+        let rt_new = red_team_with(library.clone());
+        let rt_with_default = AhirtRedTeam::with_config(library, AhirtConfig::default())
+            .with_validator(Arc::new(seccore::SecCoreCommandValidator));
 
         // 配置一致
         assert_eq!(rt_new.config(), rt_with_default.config());
@@ -1451,7 +1497,8 @@ mod tests {
             detection_rate_threshold: 0.4,
             ..Default::default()
         };
-        let red_team = AhirtRedTeam::with_config(library, cfg_low);
+        let red_team = AhirtRedTeam::with_config(library, cfg_low)
+            .with_validator(Arc::new(seccore::SecCoreCommandValidator));
         let report = red_team.verify_security();
 
         assert_eq!(report.stats.total, 2, "应有 2 个探测");
@@ -1480,7 +1527,8 @@ mod tests {
             detection_rate_threshold: 0.6,
             ..Default::default()
         };
-        let red_team = AhirtRedTeam::with_config(library, cfg_high);
+        let red_team = AhirtRedTeam::with_config(library, cfg_high)
+            .with_validator(Arc::new(seccore::SecCoreCommandValidator));
         let report = red_team.verify_security();
 
         assert!(
@@ -1523,8 +1571,9 @@ mod tests {
             payload_batch_size: 1,
             ..Default::default()
         };
-        let rt_custom = AhirtRedTeam::with_config(library.clone(), cfg_one);
-        let rt_default = AhirtRedTeam::new(library);
+        let rt_custom = AhirtRedTeam::with_config(library.clone(), cfg_one)
+            .with_validator(Arc::new(seccore::SecCoreCommandValidator));
+        let rt_default = red_team_with(library);
 
         let results_custom = rt_custom.probe(ProbeType::CommandInjection);
         let results_default = rt_default.probe(ProbeType::CommandInjection);
@@ -1577,5 +1626,40 @@ mod tests {
         // 完整构造器应可正常执行探测
         let stats = red_team.probe_all();
         assert_eq!(stats.total, 100, "完整构造器应正常工作");
+    }
+
+    // === ADR-054 决策 3(P9-T4):validator 注入/降级测试 ===
+
+    /// 未注入 validator 时,命令类探测优雅降级为 skipped(不误报拦截也不误报漏洞)
+    #[test]
+    fn test_probe_command_skipped_without_validator() {
+        // WHY 使用默认构造器:default()/new() 均不注入 validator(生产默认降级),
+        // 命令类探测应返回 passed=false + "skipped" 描述
+        let red_team = AhirtRedTeam::default();
+        let payload = ProbePayload::new(ProbeType::CommandInjection, "$(rm -rf /)");
+        let result = red_team.probe_single(&payload);
+        assert!(!result.passed, "未注入 validator 时命令类探测不应通过");
+        assert!(
+            result.actual_result.contains("skipped"),
+            "应返回 skipped 降级描述,实际: {}",
+            result.actual_result
+        );
+        // 提示注入不依赖 validator,仍正常拦截(规则检测)
+        let pi = ProbePayload::new(ProbeType::PromptInjection, "jailbreak");
+        assert!(red_team.probe_single(&pi).passed, "提示注入探测不应降级");
+    }
+
+    /// 注入 SecCoreCommandValidator 后,危险命令载荷被拦截
+    #[test]
+    fn test_probe_command_blocked_with_injected_validator() {
+        let red_team = default_red_team();
+        let payload = ProbePayload::new(ProbeType::CommandInjection, "$(rm -rf /)");
+        let result = red_team.probe_single(&payload);
+        assert!(result.passed, "注入 validator 后 $(rm -rf /) 应被拦截");
+        assert!(
+            result.actual_result.contains("blocked"),
+            "应返回 blocked 描述,实际: {}",
+            result.actual_result
+        );
     }
 }

@@ -125,7 +125,7 @@ pub fn route_auto(
 /// - quality 权重从 0.2 提升到 0.35(深度推理需要更高质量)
 /// - cost 权重从 0.4 降到 0.25(深度场景对成本敏感度降低)
 /// - latency 权重保持 0.4 不变
-/// 其他情况(Standard/Fast)使用默认权重:cost=0.4, latency=0.4, quality=0.2。
+///   其他情况(Standard/Fast)使用默认权重:cost=0.4, latency=0.4, quality=0.2。
 ///
 /// # 行为
 /// - `gate.gate()` 返回全部模型(退化):完整评估对全部模型做归一化,

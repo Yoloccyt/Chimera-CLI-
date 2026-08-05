@@ -37,7 +37,11 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod asa;
+pub mod asa_ppo;
+pub mod asa_score_fusion;
 pub mod audit;
+/// ADR-054 决策 3(P9-T4):L0 CommandValidator trait 的 seccore 实现(parliament 注入载体)
+pub mod command_validator;
 pub mod error;
 pub mod escalation;
 /// gVisor runsc 运行时检测与子进程启动(ADR-001)
@@ -54,10 +58,14 @@ pub use asa::{
     AsaAuditor, AsaConfig, AsaSandboxCoordinator, AuditResult, InterventionAction,
     OperationAuditInput,
 };
+pub use asa_ppo::PpoCritic;
+pub use asa_score_fusion::ScoreFusion;
 pub use audit::{
     AuditBlock, AuditChain, AuditRecordStatus, DecisionChainBuilder, DecisionStep,
     DecisionStepType, RecordId,
 };
+// ADR-054 决策 3(P9-T4):L0 CommandValidator trait 实现(供 L8 parliament 注入)
+pub use command_validator::SecCoreCommandValidator;
 pub use error::SecCoreError;
 pub use escalation::{DefaultEscalationHandler, EscalationHandler};
 pub use gvisor::GvisorRuntime;

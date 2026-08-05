@@ -11,7 +11,9 @@
 // 辅助载荷类型从 `payloads` 模块导入,保持向后兼容
 pub use crate::payloads::*;
 use chrono::{DateTime, Utc};
-use nexus_core::Quest;
+// ADR-054 决策 6(P9-T7 Task 4):Quest 引用改从 L0 nexus-contracts 导入,
+// 消除 event-bus 对 nexus-core 的 Quest 依赖(边解除的一部分)
+use nexus_contracts::domain::Quest;
 use serde::{Deserialize, Serialize};
 
 /// NEXUS-OMEGA 核心事件枚举 — 跨层通信的唯一契约
@@ -2109,6 +2111,8 @@ pub enum NexusEvent {
         cost_actual_micro: u64,
         /// 首 token 延迟(毫秒,E1 体验不变量度量)
         ttft_ms: u64,
+        /// 是否为语义缓存命中(false=厂商调用路径,true=语义缓存热路径)
+        semantic_cache_hit: bool,
     },
 
     /// 窗口亲和折减结果 — mca-gateway hcw_integration → hcw-window
@@ -2152,6 +2156,175 @@ pub enum NexusEvent {
         cache_control_injected: bool,
         /// 断点数量(ExplicitControl 族,否则 0)
         breakpoint_count: u32,
+    },
+
+    // ============================================================
+    // ADR-069 Token 效率优化事件
+    // ============================================================
+    /// 上下文预算分配 — OSA budget_mask 联动结果通知
+    ///
+    /// L6(osa-coordinator) → L2(hcw-window) / L10(mca-gateway)，
+    /// 通知各层当前 token 预算分配。Normal 级别，丢失可由下次周期补偿。
+    ContextBudgetAllocated {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 分配的 token 预算
+        budget_tokens: u32,
+        /// 窗口层级描述
+        tier: String,
+        /// 当前稀疏度
+        sparsity: f32,
+    },
+    /// 语义缓存命中 — 度量用（语义缓存命中率监控）
+    ///
+    /// L3(scc-cache) → 任意订阅者，Normal 级别。
+    SemanticCacheHit {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 命中的命名空间
+        namespace: String,
+        /// 匹配相似度
+        similarity: f32,
+    },
+
+    // ============================================================
+    // P2-8 MemCon:幽灵记忆检测与策略自适应调整
+    // ============================================================
+    /// 幽灵记忆检测事件 — 当 MemCon 控制器检测到幽灵记忆模式时发布
+    ///
+    /// P2-8 MemCon 自适应控制器:当滑动窗口内幽灵记忆检测率超过阈值时,
+    /// GhostMemoryDetector 发布此事件,通知订阅者(如 efficiency-monitor)
+    /// 当前记忆系统中存在幽灵记忆现象。
+    ///
+    /// # 跨层通信(C7)
+    /// L2(mlc-engine) → 任意订阅者,经 event-bus 解耦。
+    /// 本事件为 Normal 级别(观测面),不触发 mpsc 旁路。
+    ///
+    /// # 使用场景
+    /// - efficiency-monitor 订阅后触发告警
+    /// - StrategyAdapter 订阅后触发策略衰减
+    /// - TUI 事件面板显示幽灵记忆状态
+    GhostMemoryDetected {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 幽灵记忆检测率(最近窗口内,范围 [0.0, 1.0])
+        ghost_rate: f32,
+        /// 窗口内检测到的幽灵记忆计数
+        ghost_count: u32,
+        /// 窗口总召回数
+        total_recalls: u32,
+        /// 当前活跃记忆策略(如 "StandardTopK" / "AggressivePruning")
+        current_strategy: String,
+    },
+
+    /// MemCon 策略调整事件 — 当 MemCon 控制器自适应调整记忆策略时发布
+    ///
+    /// P2-8 MemCon 自适应控制器:StrategyAdapter 根据幽灵记忆检测结果
+    /// 动态调整记忆策略时发布此事件,通知订阅者策略变更。
+    ///
+    /// # 跨层通信(C7)
+    /// L2(mlc-engine) → 任意订阅者,经 event-bus 解耦。
+    /// 本事件为 Normal 级别(观测面),不触发 mpsc 旁路。
+    ///
+    /// # 使用场景
+    /// - efficiency-monitor 订阅后记录策略变更
+    /// - TUI 事件面板显示策略调整历史
+    /// - 全局记忆策略快照更新触发
+    MemConStrategyAdjusted {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 调整前策略(如 "StandardTopK")
+        from_strategy: String,
+        /// 调整后策略(如 "AggressivePruning")
+        to_strategy: String,
+        /// 调整原因(如 "ghost_memory_detected" / "stable_recovery" / "circuit_breaker")
+        reason: String,
+        /// 触发调整的幽灵记忆检测率(仅 ghost 相关原因时有值)
+        ghost_rate: Option<f32>,
+    },
+
+    /// 基准指标采集完成（仅基准模式发布，Normal 级别）
+    BenchmarkMetricsCollected {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 等效输入成本（微元，含缓存写入溢价摊销）
+        equivalent_input_cost_micro: u64,
+        /// 厂商缓存命中率（百分数，各厂商归一，0-100）
+        vendor_cache_hit_rate_percent: u8,
+        /// 语义缓存命中率（百分数，0-100）
+        semantic_cache_hit_rate_percent: u8,
+        /// TTFT P95（毫秒）
+        ttft_p95_ms: u64,
+        /// 输出 token 总量
+        total_output_tokens: u64,
+        /// 任务成功率（百分数，0-100）
+        task_success_rate_percent: u8,
+        /// 分厂商指标快照 JSON（provider → { hit_rate, cost, output_tokens }）
+        per_vendor_snapshot_json: String,
+    },
+
+    // ============================================================
+    // PROBE P0:HCW 召回评测事件(观测面,均为 Normal 级,走通配分支)
+    // ============================================================
+    /// HCW 召回评测报告事件 — PROBE P0 评测尺子产出（Normal 级观测面）
+    ///
+    /// # 跨层通信
+    /// L2(hcw-window) → 任意订阅者(如 efficiency-monitor),经 event-bus 解耦。
+    /// 本事件为 Normal 级别(观测面),不触发 mpsc 旁路——与 Critical 清单正交,
+    /// `severity()` 走通配分支返回 Normal,显式 match 零修改(红线验证点)。
+    ///
+    /// # 使用场景
+    /// - efficiency-monitor 召回 collector 订阅后做 EWMA 漂移跟踪(P0.4)
+    /// - TUI OsaSparse 面板显示召回读数(P0.4)
+    /// - P0.5 双基线对照表的持续观测通道
+    HcwRecallReported {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 窗口档标识（L0/L1/L2/L3 或路径对照）
+        tier: String,
+        /// 多针召回率 needle_recall@8 ∈ [0,1]
+        needle_recall_at_8: f32,
+        /// 位置偏置比 ∈ [0,1]
+        position_bias: f32,
+        /// 链路成功率 ∈ [0,1]
+        chain_success_rate: f32,
+        /// 选中块数
+        selected_count: u32,
+    },
+
+    /// HCW 召回退化事件 — PROBE 降级必告知（C6）时发布（Normal 级观测面）
+    ///
+    /// # 触发
+    /// 召回哨兵连续 2 次低于基线 80%（P2 阶段,计划 §4.6 降级链）；
+    /// 本事件通知订阅方自动升档窗口 + TUI 可见,禁止静默降召回。
+    ///
+    /// # 使用场景
+    /// - efficiency-monitor 订阅后触发窗口升档建议
+    /// - TUI OsaSparse 面板显示退化状态
+    HcwRecallDegraded {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 当前档位（如 "L2"）
+        tier: String,
+        /// 当前召回率
+        recall_rate: f32,
+        /// 基线召回率（P0 冻结的对照值）
+        baseline_recall: f32,
+        /// 退化原因（如 "sentinel_2x_below_baseline"）
+        reason: String,
+    },
+    /// PROBE P3.2: 超窗兜底触发（语料 > 有效窗口 → 两级检索链）
+    OverWindowFallbackTriggered {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 语料规模（token）
+        corpus_tokens: u64,
+        /// 有效窗口（折减后，token）
+        effective_window: u64,
+        /// 候选集规模（kvbsr 块路由产出）
+        candidate_count: u32,
+        /// 精排后装窗数
+        loaded_count: u32,
     },
 }
 
@@ -2290,6 +2463,18 @@ impl NexusEvent {
             Self::WindowAffinityApplied { metadata, .. } => metadata,
             // MCA A3:缓存亲和策略应用结果(观测面事件,不影响系统状态投递)
             Self::CacheAffinityApplied { metadata, .. } => metadata,
+            // ADR-069: Token 效率优化事件(观测面)
+            Self::ContextBudgetAllocated { metadata, .. } => metadata,
+            Self::SemanticCacheHit { metadata, .. } => metadata,
+            // P2-8 MemCon:幽灵记忆检测事件(观测面事件,不影响系统状态投递)
+            Self::GhostMemoryDetected { metadata, .. } => metadata,
+            // P2-8 MemCon:策略调整事件(观测面事件,不影响系统状态投递)
+            Self::MemConStrategyAdjusted { metadata, .. } => metadata,
+            Self::BenchmarkMetricsCollected { metadata, .. } => metadata,
+            // PROBE P0:HCW 召回评测事件(观测面,metadata 一致)
+            Self::HcwRecallReported { metadata, .. } => metadata,
+            Self::HcwRecallDegraded { metadata, .. } => metadata,
+            Self::OverWindowFallbackTriggered { metadata, .. } => metadata,
         }
     }
 
@@ -2373,7 +2558,11 @@ impl NexusEvent {
             // 不阻塞系统关键路径,无需 mpsc 旁路投递。
             Self::WindowAffinityApplied { .. }
             | Self::CacheAffinityApplied { .. }
-            | Self::CrossVendorNegotiation { .. } => EventSeverity::Normal,
+            | Self::CrossVendorNegotiation { .. }
+            // P2-8 MemCon:幽灵记忆检测与策略调整(均为观测面事件,不阻断系统)
+            | Self::GhostMemoryDetected { .. }
+            | Self::MemConStrategyAdjusted { .. }
+            | Self::BenchmarkMetricsCollected { .. } => EventSeverity::Normal,
             _ => EventSeverity::Normal,
         }
     }
@@ -2515,6 +2704,18 @@ impl NexusEvent {
             Self::WindowAffinityApplied { .. } => "WindowAffinityApplied",
             // MCA A3:缓存亲和策略应用结果
             Self::CacheAffinityApplied { .. } => "CacheAffinityApplied",
+            // ADR-069: Token 效率优化事件
+            Self::ContextBudgetAllocated { .. } => "ContextBudgetAllocated",
+            Self::SemanticCacheHit { .. } => "SemanticCacheHit",
+            // P2-8 MemCon:幽灵记忆检测
+            Self::GhostMemoryDetected { .. } => "GhostMemoryDetected",
+            // P2-8 MemCon:策略调整
+            Self::MemConStrategyAdjusted { .. } => "MemConStrategyAdjusted",
+            Self::BenchmarkMetricsCollected { .. } => "BenchmarkMetricsCollected",
+            // PROBE P0:HCW 召回评测事件
+            Self::HcwRecallReported { .. } => "HcwRecallReported",
+            Self::HcwRecallDegraded { .. } => "HcwRecallDegraded",
+            Self::OverWindowFallbackTriggered { .. } => "OverWindowFallbackTriggered",
         }
     }
 }
@@ -4110,5 +4311,27 @@ mod tests {
             }
             other => panic!("Expected DelegationCompleted, got {:?}", other.type_name()),
         }
+    }
+
+    /// 验证 BenchmarkMetricsCollected 为 Normal 级别（基准模式观测面事件）
+    #[test]
+    fn test_benchmark_metrics_collected_severity_normal() {
+        let event = NexusEvent::BenchmarkMetricsCollected {
+            metadata: EventMetadata::new("efficiency-monitor"),
+            equivalent_input_cost_micro: 1250,
+            vendor_cache_hit_rate_percent: 66,
+            semantic_cache_hit_rate_percent: 40,
+            ttft_p95_ms: 320,
+            total_output_tokens: 5000,
+            task_success_rate_percent: 95,
+            per_vendor_snapshot_json: "{}".into(),
+        };
+        assert_eq!(
+            event.severity(),
+            EventSeverity::Normal,
+            "基准指标采集必须为 Normal（观测面事件，不阻断系统）"
+        );
+        assert_eq!(event.type_name(), "BenchmarkMetricsCollected");
+        assert!(!event.metadata().source.is_empty());
     }
 }

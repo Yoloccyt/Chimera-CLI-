@@ -118,7 +118,8 @@ if [ ! -f "CHANGELOG.md" ]; then
     report+=("[GAP-C1] missing document: CHANGELOG.md")
     status=1
 else
-    if ! grep -qE "^##\s+v${current_version}\b" CHANGELOG.md; then
+    # Dual-format compatible (PROBE R1): bracket style (## [2.20.0-omega]) and bare style (## v2.20.0-omega)
+    if ! grep -qE "^##\s+\[?v?${current_version}\]?(\s|$)" CHANGELOG.md; then
         report+=("[GAP-C1] CHANGELOG.md missing ## v${current_version} header (should be first entry)")
         status=1
     else

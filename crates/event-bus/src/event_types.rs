@@ -21,7 +21,9 @@
 //! - `InterfaceEvent`(17):L10 界面/TUI/Agent/MCP/监控事件
 
 use chrono::{DateTime, Utc};
-use nexus_core::Quest;
+// ADR-054 决策 6(P9-T7 Task 4):Quest 引用改从 L0 nexus-contracts 导入,
+// 与 types.rs 保持一致,消除 event-bus 对 nexus-core 的 Quest 依赖
+use nexus_contracts::domain::Quest;
 
 use crate::types::{
     ActionSource, AgentStatus, BudgetMetricsPayload, ChatStatus, ClvSummary, ConsultUrgency,
@@ -142,6 +144,32 @@ pub enum MemoryEvent {
         modality: String,
         content_hash: String,
         clv_summary: ClvSummary,
+    },
+
+    /// P2-8 MemCon:幽灵记忆检测事件
+    GhostMemoryDetected {
+        metadata: EventMetadata,
+        /// 幽灵记忆检测率(最近窗口内,范围 [0.0, 1.0])
+        ghost_rate: f32,
+        /// 窗口内检测到的幽灵记忆计数
+        ghost_count: u32,
+        /// 窗口总召回数
+        total_recalls: u32,
+        /// 当前活跃记忆策略
+        current_strategy: String,
+    },
+
+    /// P2-8 MemCon:策略自适应调整事件
+    MemConStrategyAdjusted {
+        metadata: EventMetadata,
+        /// 调整前策略
+        from_strategy: String,
+        /// 调整后策略
+        to_strategy: String,
+        /// 调整原因
+        reason: String,
+        /// 触发调整的幽灵记忆检测率(仅 ghost 相关原因时有值)
+        ghost_rate: Option<f32>,
     },
 }
 
@@ -915,7 +943,10 @@ impl EventClassification for MemoryEvent {
             | Self::ContextWindowSwitched { metadata, .. }
             | Self::ContextCompressed { metadata, .. }
             | Self::NmcEncoded { metadata, .. }
-            | Self::ClvSnapshotReported { metadata, .. } => metadata,
+            | Self::ClvSnapshotReported { metadata, .. }
+            // P2-8 MemCon:幽灵记忆检测与策略调整
+            | Self::GhostMemoryDetected { metadata, .. }
+            | Self::MemConStrategyAdjusted { metadata, .. } => metadata,
         }
     }
 
@@ -931,6 +962,10 @@ impl EventClassification for MemoryEvent {
             Self::ContextCompressed { .. } => "ContextCompressed",
             Self::NmcEncoded { .. } => "NmcEncoded",
             Self::ClvSnapshotReported { .. } => "ClvSnapshotReported",
+            // P2-8 MemCon:幽灵记忆检测
+            Self::GhostMemoryDetected { .. } => "GhostMemoryDetected",
+            // P2-8 MemCon:策略调整
+            Self::MemConStrategyAdjusted { .. } => "MemConStrategyAdjusted",
         }
     }
 }

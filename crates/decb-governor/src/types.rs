@@ -6,6 +6,8 @@
 //! # 设计决策(WHY)
 //! - `BudgetTier` 为 enum:三档(High/Low/Degraded)语义清晰,匹配 §6 架构红线的
 //!   "禁止功能标志,用能力场自然进化替代"——档位是能力场的离散投影,非功能开关
+//!   (⚠️ ADR-054 决策 3 起,`BudgetTier` 定义已上提至 L0 nexus-contracts,
+//!   本模块仅 re-export,此处保留原设计决策作为历史依据)
 //! - `BudgetCoefficient` 用 newtype:类型安全,构造时 clamp 到 `[0,1]`,防止外部
 //!   传入越界值导致档位判定异常(§4.3 newtype 模式)
 //! - `QuestBudgetInput` 为值对象:DECB 是 L8 层,不能向上依赖 L9 Quest Engine
@@ -16,43 +18,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::DecbError;
 
 // ============================================================
-// 预算档位 — 三档枚举
+// 预算档位 — 三档枚举(L0 re-export)
 // ============================================================
 
-/// 预算档位 — DECB 双档 + 降级模式
-///
-/// - `HighTier`:高预算档,复杂/紧急 Quest 可获得更多资源
-/// - `LowTier`:低预算档,常规 Quest 的默认档位
-/// - `Degraded`:降级模式,预算接近耗尽时强制降级,拒绝新 Quest
-///
-/// WHY Copy + PartialEq:档位频繁参与比较与传递,Copy 避免克隆开销,
-/// PartialEq 支持档位切换前后的相等性判断。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum BudgetTier {
-    /// 高预算档 — 复杂/紧急 Quest,资源充足
-    HighTier,
-    /// 低预算档 — 常规 Quest,资源受限
-    LowTier,
-    /// 降级模式 — 预算接近耗尽,拒绝新 Quest
-    Degraded,
-}
-
-impl BudgetTier {
-    /// 返回档位的人类可读名称
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            BudgetTier::HighTier => "high_tier",
-            BudgetTier::LowTier => "low_tier",
-            BudgetTier::Degraded => "degraded",
-        }
-    }
-}
-
-impl std::fmt::Display for BudgetTier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
+// ADR-054 决策 3: BudgetTier 纯枚举已上提至 L0 nexus-contracts(消除 L9→L8
+// 生产违规边,quest-engine 改依赖 L0)。此处 re-export 保持对外 API 零破坏
+// (`decb_governor::BudgetTier` 路径继续可用,governor.rs/overflow.rs 的
+// `use crate::types::BudgetTier` 引用无需改动),语义与实现完全同源(同一类型)。
+pub use nexus_contracts::BudgetTier;
 
 // ============================================================
 // 预算系数 — newtype 模式,类型安全

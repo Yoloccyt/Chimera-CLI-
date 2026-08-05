@@ -532,6 +532,7 @@ async fn test_high_volume_routing() {
 /// 修复后 route 一次性读取完整快照,消除竞态。
 #[tokio::test]
 async fn test_route_build_blocks_concurrency() {
+    use nexus_contracts::scaled_timeout;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -600,7 +601,8 @@ async fn test_route_build_blocks_concurrency() {
     }
 
     // 运行 5 秒
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    // P9-T2: 5s 串行并发测试 sleep 缩放
+    tokio::time::sleep(scaled_timeout!(5)).await;
 
     // 停止所有线程
     stop.store(true, Ordering::Relaxed);

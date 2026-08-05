@@ -32,15 +32,21 @@ rmp-serde = { workspace = true }
 # L0 契约: ProviderId/CapabilitySet/ModelAffinitySpec/AffinityRequest/Response
 nexus-contracts = { workspace = true }
 # L1 事件总线: 6 个 MCA 会话级/治理级事件的唯一跨层通道
-event-bus = { path = "../event-bus" }
+event-bus = { workspace = true }
 # L2 窗口亲和折减器:WindowAffinity::fold() 纯函数 O(1) 查表
 # WHY 跨层(MCA P5):折减逻辑是纯函数,不涉及 HCW 运行时状态。
 # 经 event-bus 发布 WindowAffinityApplied 事件供 HCW 消费。
-hcw-window = { path = "../hcw-window" }
+hcw-window = { workspace = true }
 # L3 缓存亲和:CacheAffinityIntegration 缓存策略决策(CacheSupport 已由 L0 nexus-contracts 提供)
 # WHY 依赖 scc-cache:codec 调用 CacheAffinityIntegration::should_inject_cache_control()
 # 判断是否注入 cache_control 断点。此调用是纯函数(无状态),不涉及 scc-cache 运行时。
-scc-cache = { path = "../scc-cache" }
+scc-cache = { workspace = true }
+# sha2: Token 效率缓存键的 SHA-256 哈希计算(ADR-069 prompt_norm / cache_key)
+sha2 = { workspace = true }
+# L6 预算源:复杂度档 → 上下文 token 预算(compute_token_budget 纯函数)
+# WHY 跨层(L10→L6 向下合法,依赖铁律 §2.2):预算计算是纯函数不涉及 OSA
+# 运行时状态;osa 生产依赖仅 L0/L1 + serde/sha2/hex/tracing,轻量无副作用
+osa-coordinator = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -50,7 +56,7 @@ tempfile = { workspace = true }
 axum = { workspace = true }
 # efficiency-monitor: 体验对等验收(T4.3)驱动 AffinityMetrics 采集器
 # WHY dev-dep: 仅测试使用(依赖铁律 dev-dependencies 可绕过生产依赖方向,仅限 tests/)
-efficiency-monitor = { path = "../efficiency-monitor" }
+efficiency-monitor = { workspace = true }
 
 # MCA 热路径基准(成本估算 <1μs / SSE 归一 <5μs,check_perf_redlines RL-10/11)
 [[bench]]

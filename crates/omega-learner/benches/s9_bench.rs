@@ -84,11 +84,10 @@ fn bench_63_arm_observe(c: &mut Criterion) {
 
     c.bench_function("s9_observe_63_arms", |b| {
         b.iter(|| {
-            black_box(
-                learner
-                    .observe(black_box(&arm), black_box(ctx), black_box(reward))
-                    .unwrap(),
-            )
+            learner
+                .observe(black_box(&arm), black_box(ctx), black_box(reward))
+                .unwrap();
+            black_box(())
         })
     });
 }

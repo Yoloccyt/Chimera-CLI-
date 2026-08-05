@@ -51,7 +51,7 @@ fn timeout_heavy_trajectories() -> Vec<TrajectoryOutcome> {
 #[tokio::test]
 async fn e2e_variant_governance_full_approval_path() {
     // === Stage A: AEGIS 产出变体(Critic 已含 CiGate 门)===
-    let pipeline = AegisPipeline::new();
+    let mut pipeline = AegisPipeline::new();
     let gate = MockCiGate::with_passing_result();
     let base = base_spec();
     let verdict = pipeline
@@ -141,7 +141,7 @@ async fn e2e_variant_governance_security_veto_path() {
 async fn e2e_reward_hacking_guard_rejects_extreme_variant() {
     use gsoe_evolution::{AegisCritic, SpecCandidate};
 
-    let critic = AegisCritic::new();
+    let mut critic = AegisCritic::new();
     let gate = MockCiGate::with_passing_result();
     let base = base_spec();
 

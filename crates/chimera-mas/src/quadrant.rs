@@ -35,6 +35,8 @@
 use crate::delegation::TaskComplexity;
 use crate::error::{MasError, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// 孙代理扇出上界 (INV-3) — 四象限, 恒为 4。
 ///
@@ -357,7 +359,146 @@ pub fn quadrant_status() -> QuadrantStatus {
 }
 
 // ============================================================
-// 单元测试(QuadrantStatus)
+// QuadrantSelector — 基于任务领域语义的动态象限选择 (§3.4 扩展)
+// ============================================================
+
+/// 象限选择器 — 根据任务领域/语义动态选择激活象限
+///
+/// 默认实现 `ConfigurableQuadrantSelector` 使用可配置的领域→象限映射表，
+/// 可替换为基于 CLV 语义相似度的动态选择器。
+///
+/// # 向后兼容
+///
+/// 未配置选择器时，系统退化为固定复杂度驱动的激活矩阵（`activated_quadrants`），
+/// 保证默认行为与修改前一致。
+pub trait QuadrantSelector: Send + Sync + std::fmt::Debug {
+    /// 根据领域和任务描述选择激活象限
+    fn select_quadrants(&self, domain: &str, description: &str) -> Vec<Quadrant>;
+}
+
+/// 基于配置映射的象限选择器
+///
+/// 使用领域→象限映射表，支持运行时更新。
+/// 当领域不在映射表中时，使用默认象限集。
+///
+/// # 示例
+///
+/// ```
+/// use chimera_mas::quadrant::{
+///     ConfigurableQuadrantSelector, Quadrant, QuadrantSelector,
+/// };
+/// use std::collections::HashMap;
+///
+/// let mut map = HashMap::new();
+/// map.insert("测试发布域".into(), vec![Quadrant::Hardening, Quadrant::Verification]);
+/// let selector = ConfigurableQuadrantSelector::new(map, vec![Quadrant::Implementation]);
+/// let quadrants = selector.select_quadrants("测试发布域", "发布任务");
+/// assert_eq!(quadrants, vec![Quadrant::Hardening, Quadrant::Verification]);
+/// ```
+#[derive(Debug, Clone)]
+pub struct ConfigurableQuadrantSelector {
+    /// 领域→象限映射表（线程安全，支持运行时更新）
+    domain_map: Arc<RwLock<HashMap<String, Vec<Quadrant>>>>,
+    /// 默认象限（未匹配领域时的降级）
+    default_quadrants: Vec<Quadrant>,
+}
+
+impl ConfigurableQuadrantSelector {
+    /// 创建新的配置化象限选择器
+    ///
+    /// ## 参数
+    /// - `domain_map`: 领域→象限映射表
+    /// - `default_quadrants`: 未匹配领域时使用的默认象限
+    pub fn new(
+        domain_map: HashMap<String, Vec<Quadrant>>,
+        default_quadrants: Vec<Quadrant>,
+    ) -> Self {
+        Self {
+            domain_map: Arc::new(RwLock::new(domain_map)),
+            default_quadrants,
+        }
+    }
+
+    /// 运行时更新领域→象限映射
+    ///
+    /// 支持动态调整映射关系，无需重新创建选择器。
+    ///
+    /// ## 错误
+    /// - `MasError::QuadrantConflict`: 待映射的象限列表包含重复项
+    /// - `MasError::Internal`: 映射表读写锁被毒化
+    pub fn update_mapping(
+        &self,
+        domain: &str,
+        quadrants: Vec<Quadrant>,
+    ) -> std::result::Result<(), MasError> {
+        // 校验待映射象限无重复
+        let mut seen = std::collections::HashSet::new();
+        for q in &quadrants {
+            if !seen.insert(*q) {
+                return Err(MasError::QuadrantConflict {
+                    quadrant: q.name().to_string(),
+                });
+            }
+        }
+        match self.domain_map.write() {
+            Ok(mut map) => {
+                map.insert(domain.to_string(), quadrants);
+                Ok(())
+            }
+            Err(_) => Err(MasError::Internal(
+                "ConfigurableQuadrantSelector domain_map RwLock poisoned".into(),
+            )),
+        }
+    }
+
+    /// 使用当前硬编码领域→象限映射作为默认值创建选择器
+    ///
+    /// 基于 §6.1 静态专家编制表中的领域→主责象限关系：
+    ///
+    /// | 领域 | 映射象限 |
+    /// |------|:--------:|
+    /// | 测试发布域 | Hardening, Verification |
+    /// | 架构设计域 | Integration, Hardening |
+    /// | 代码实现域 | Implementation, Verification, Hardening |
+    ///
+    /// 默认降级为全四象限，与 `activated_quadrants(VeryComplex)` 行为一致。
+    pub fn from_static_mapping() -> Self {
+        let mut map = HashMap::new();
+        map.insert(
+            "测试发布域".to_string(),
+            vec![Quadrant::Hardening, Quadrant::Verification],
+        );
+        map.insert(
+            "架构设计域".to_string(),
+            vec![Quadrant::Integration, Quadrant::Hardening],
+        );
+        map.insert(
+            "代码实现域".to_string(),
+            vec![
+                Quadrant::Implementation,
+                Quadrant::Verification,
+                Quadrant::Hardening,
+            ],
+        );
+        Self::new(map, Quadrant::ALL.to_vec())
+    }
+}
+
+impl QuadrantSelector for ConfigurableQuadrantSelector {
+    fn select_quadrants(&self, domain: &str, _description: &str) -> Vec<Quadrant> {
+        match self.domain_map.read() {
+            Ok(map) => match map.get(domain) {
+                Some(quadrants) => quadrants.clone(),
+                None => self.default_quadrants.clone(),
+            },
+            // 锁毒化时安全降级到默认象限
+            Err(_) => self.default_quadrants.clone(),
+        }
+    }
+}
+
+// ============================================================
+// 单元测试(QuadrantStatus + QuadrantSelector)
 // ============================================================
 
 // 注意:以下测试追加到现有 #[cfg(test)] mod tests 中（文件末尾）。
@@ -442,5 +583,102 @@ mod tests {
             pairs[1],
             (Quadrant::Verification, "refactor#Q3".to_string())
         );
+    }
+
+    // ============================================================
+    // ConfigurableQuadrantSelector 测试
+    // ============================================================
+
+    #[test]
+    fn test_configurable_selector_domain_mapping() {
+        let mut map = HashMap::new();
+        map.insert("test-domain".into(), vec![Quadrant::Implementation]);
+        let selector = ConfigurableQuadrantSelector::new(map, Quadrant::ALL.to_vec());
+        let result = selector.select_quadrants("test-domain", "");
+        assert_eq!(result, vec![Quadrant::Implementation]);
+    }
+
+    #[test]
+    fn test_configurable_selector_default_fallback() {
+        let map = HashMap::new();
+        let selector = ConfigurableQuadrantSelector::new(map, vec![Quadrant::Verification]);
+        let result = selector.select_quadrants("unknown-domain", "");
+        assert_eq!(result, vec![Quadrant::Verification]);
+    }
+
+    #[test]
+    fn test_configurable_selector_update_mapping() {
+        let mut map = HashMap::new();
+        map.insert("domain-a".into(), vec![Quadrant::Implementation]);
+        let selector = ConfigurableQuadrantSelector::new(map, Quadrant::ALL.to_vec());
+
+        // 初始映射
+        let result = selector.select_quadrants("domain-a", "");
+        assert_eq!(result, vec![Quadrant::Implementation]);
+
+        // 运行时更新映射
+        selector
+            .update_mapping("domain-a", vec![Quadrant::Hardening])
+            .unwrap();
+        let result = selector.select_quadrants("domain-a", "");
+        assert_eq!(result, vec![Quadrant::Hardening]);
+    }
+
+    #[test]
+    fn test_configurable_selector_update_rejects_duplicates() {
+        let selector = ConfigurableQuadrantSelector::new(HashMap::new(), Quadrant::ALL.to_vec());
+        let err = selector.update_mapping(
+            "d",
+            vec![Quadrant::Implementation, Quadrant::Implementation],
+        );
+        assert!(matches!(err, Err(MasError::QuadrantConflict { .. })));
+    }
+
+    #[test]
+    fn test_configurable_selector_from_static_mapping() {
+        let selector = ConfigurableQuadrantSelector::from_static_mapping();
+        // 测试发布域 → Hardening, Verification
+        let result = selector.select_quadrants("测试发布域", "");
+        assert_eq!(result, vec![Quadrant::Hardening, Quadrant::Verification]);
+        // 架构设计域 → Integration, Hardening
+        let result = selector.select_quadrants("架构设计域", "");
+        assert_eq!(result, vec![Quadrant::Integration, Quadrant::Hardening]);
+        // 代码实现域 → Implementation, Verification, Hardening
+        let result = selector.select_quadrants("代码实现域", "");
+        assert_eq!(
+            result,
+            vec![
+                Quadrant::Implementation,
+                Quadrant::Verification,
+                Quadrant::Hardening
+            ]
+        );
+        // 未知领域 → 全四象限
+        let result = selector.select_quadrants("未知领域", "");
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn test_configurable_selector_description_param_ignored_by_configurable() {
+        // ConfigurableQuadrantSelector 当前忽略 description 参数，
+        // 验证 description 不影响结果
+        let mut map = HashMap::new();
+        map.insert("d".into(), vec![Quadrant::Integration]);
+        let selector = ConfigurableQuadrantSelector::new(map, Quadrant::ALL.to_vec());
+        assert_eq!(
+            selector.select_quadrants("d", "任意描述"),
+            vec![Quadrant::Integration]
+        );
+        assert_eq!(
+            selector.select_quadrants("d", "不同描述"),
+            vec![Quadrant::Integration]
+        );
+    }
+
+    #[test]
+    fn test_quadrant_selector_trait_object_send_sync() {
+        // 验证 QuadrantSelector 满足 Send + Sync 约束
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ConfigurableQuadrantSelector>();
     }
 }

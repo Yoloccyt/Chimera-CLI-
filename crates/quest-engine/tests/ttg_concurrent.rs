@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::thread;
 
-use decb_governor::BudgetTier;
+use nexus_contracts::BudgetTier;
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use quest_engine::{TtgConfig, TtgGovernor};
 

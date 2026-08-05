@@ -10,6 +10,7 @@ schema_version = 1
 [[models]]
 provider = "volcano_ark"
 model = "doubao-seed-2.1-pro"
+model_version = "2026-06-24"
 dialects = ["open_ai_chat"]
 
 [models.capabilities]

@@ -47,6 +47,8 @@ pub mod l0_working;
 pub mod l1_episodic;
 pub mod l2_semantic;
 pub mod l3_procedural;
+/// P2-8 MemCon 自适应控制器 — 幽灵记忆检测与策略自适应调整
+pub mod mem_con;
 /// polish-v2.7 P4-3:记忆图谱(语义边 + 共现边,Top-K 近邻建边,ADR-049)
 pub mod memory_graph;
 /// 记忆策略学习器持有器 — S2 接缝策略异步下发 + 本地 fallback（P4-W14.1）
@@ -66,6 +68,8 @@ pub use l2_semantic::SemanticMemory;
 pub use l3_procedural::ProceduralMemory;
 // P4-W14.1: S2 接缝记忆策略学习器持有器
 pub use memory_strategy_learner::MemoryStrategyLearnerHolder;
+// P2-8: MemCon 自适应控制器
+pub use mem_con::{MemConConfig, MemConController};
 pub use storage_impl::PragmaConn;
 pub use types::{
     ExecutionStats, MemoryEntry, MemoryId, MemoryTier, PatternSignature, ProceduralEntry, QuestId,
@@ -145,6 +149,8 @@ pub mod prelude {
     pub use crate::MemoryStage;
     // P4-W14.1: S2 接缝记忆策略学习器持有器
     pub use crate::memory_strategy_learner::MemoryStrategyLearnerHolder;
+    // P2-8: MemCon 自适应控制器
+    pub use crate::mem_con::{MemConConfig, MemConController};
     pub use crate::types::{
         ExecutionStats, MemoryEntry, MemoryId, MemoryTier, PatternSignature, ProceduralEntry,
         QuestId,

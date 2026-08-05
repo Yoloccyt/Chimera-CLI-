@@ -61,6 +61,8 @@ pub mod dashboard;
 pub mod error;
 pub mod monitor;
 pub mod oscillation_detector;
+/// PROBE P0.4: HCW 召回指标采集器（EWMA 漂移跟踪，订阅 HcwRecallReported）
+pub mod recall_collector;
 pub mod types;
 
 // === 关键类型重导出，简化外部导入 ===
@@ -78,4 +80,6 @@ pub use oscillation_detector::{
     OscillationConfig, OscillationReport, PolicyOscillationDetector, DEFAULT_HIGH_FREQ_THRESHOLD,
     DEFAULT_OSCILLATION_THRESHOLD, DEFAULT_SEVERITY_ALERT_THRESHOLD, DEFAULT_WINDOW_SECS,
 };
+// PROBE P0.4: 召回采集器公开 API
+pub use recall_collector::{RecallCollector, RecallStats, DEFAULT_EWMA_ALPHA};
 pub use types::{AlertEvent, AlertRule, AlertSeverity, Comparison, MetricSample};

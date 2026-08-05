@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use nexus_contracts::scaled_timeout;
 use qeep_protocol::{
     CallState, EntangledCallId, OrphanDetector, OrphanReport, QeepError, QeepProtocol,
     DEFAULT_TIMEOUT,
@@ -19,7 +20,8 @@ use uuid::Uuid;
 /// 测试正常 async 操作完成
 #[tokio::test]
 async fn test_entangle_success() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     let result = protocol.entangle(async { Ok(42) }).await;
 
@@ -57,7 +59,8 @@ async fn test_entangle_timeout() {
 /// 测试 spawn 的 future 被 await(受管理)
 #[tokio::test]
 async fn test_entangle_spawn_managed() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     let handle = protocol.entangle_spawn(async { Ok(42) });
     let result = handle.await.expect("JoinHandle 不应 panic").unwrap();
@@ -73,7 +76,8 @@ async fn test_entangle_spawn_managed() {
 /// OrphanGuard::drop 会检测到 completed=false,报告孤儿。
 #[tokio::test]
 async fn test_orphan_detection() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     // spawn entangle,内部 future 会 sleep 100ms
     // 注意:entangle(&self) 返回的 future 借用 protocol,不能直接 spawn,
@@ -115,7 +119,8 @@ async fn test_orphan_detection() {
 /// QEEP 必须做到 0% 孤儿(当调用者正确 await 时)。
 #[tokio::test]
 async fn test_zero_orphans_10000_ops() {
-    let protocol = QeepProtocol::new(Duration::from_secs(30));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(30));
 
     // 分批 spawn,避免一次性创建 10000 个任务导致内存压力
     const BATCH_SIZE: usize = 500;
@@ -146,7 +151,8 @@ async fn test_zero_orphans_10000_ops() {
 /// 测试 pending 数量追踪
 #[tokio::test]
 async fn test_pending_count() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     // 初始为 0
     assert_eq!(protocol.pending_count(), 0);
@@ -172,7 +178,8 @@ async fn test_pending_count() {
 /// 通过 completed_count 与 orphan_count 间接验证 receipt 被记录。
 #[tokio::test]
 async fn test_receipt_recorded() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     let result = protocol.entangle(async { Ok(42) }).await;
 
@@ -192,7 +199,8 @@ async fn test_receipt_recorded() {
 /// 测试并发 entangle 无冲突
 #[tokio::test]
 async fn test_concurrent_entangle() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     const CONCURRENT: usize = 100;
     let mut handles = Vec::with_capacity(CONCURRENT);
@@ -238,7 +246,8 @@ async fn test_orphan_detector_clear() {
 /// 测试多个 entangle 被 abort 后检测到多个孤儿报告
 #[tokio::test]
 async fn test_orphan_detector_multiple_orphans() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     const COUNT: usize = 5;
     let mut handles = Vec::with_capacity(COUNT);
@@ -377,7 +386,8 @@ async fn test_default_timeout_constant() {
 /// 验证 entangle 错误传播:future 返回 Err 时正确传播且 completed_count 递增
 #[tokio::test]
 async fn test_entangle_error_propagation() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     let result: Result<(), QeepError> =
         protocol.entangle(async { Err(QeepError::Cancelled) }).await;
@@ -407,7 +417,8 @@ async fn test_orphan_detector_default() {
 /// 并发 entangle_spawn 50 个任务全部 await,验证零孤儿
 #[tokio::test]
 async fn test_concurrent_entangle_spawn() {
-    let protocol = QeepProtocol::new(Duration::from_secs(10));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(10));
 
     const COUNT: usize = 50;
     let mut handles = Vec::with_capacity(COUNT);
@@ -429,7 +440,8 @@ async fn test_concurrent_entangle_spawn() {
 /// spawn 慢任务后 abort,验证 pending_count 归零
 #[tokio::test]
 async fn test_pending_count_after_abort() {
-    let protocol = QeepProtocol::new(Duration::from_secs(30));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(30));
 
     let handle = protocol.entangle_spawn(async {
         tokio::time::sleep(Duration::from_secs(10)).await;
@@ -455,7 +467,8 @@ async fn test_pending_count_after_abort() {
 /// 验证孤儿报告的 reason 字段包含 "Future dropped" 或 "void Promise" 关键词
 #[tokio::test]
 async fn test_orphan_report_reason() {
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     let p = protocol.clone();
     let handle = tokio::spawn(async move {
@@ -540,7 +553,8 @@ async fn test_timeout_100ms() {
 #[tokio::test]
 async fn test_timeout_1s() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(1));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(1));
 
     // Act: 操作耗时 5s(远超 1s)
     let result: Result<i32, QeepError> = protocol
@@ -566,7 +580,8 @@ async fn test_timeout_1s() {
 #[ignore = "slow: run with --ignored"]
 async fn test_timeout_10s() {
     // Arrange: 10s 超时
-    let protocol = QeepProtocol::new(Duration::from_secs(10));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(10));
 
     // Act: 操作耗时 30s(远超 10s),实际约 10s 后超时返回
     let result: Result<i32, QeepError> = protocol
@@ -714,7 +729,8 @@ async fn test_timeout_with_different_durations() {
 #[tokio::test]
 async fn test_orphan_all_senders_dropped() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(30));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(30));
     const COUNT: usize = 3;
     let mut handles = Vec::with_capacity(COUNT);
 
@@ -759,7 +775,8 @@ async fn test_orphan_all_senders_dropped() {
 #[tokio::test]
 async fn test_orphan_partial_senders_dropped() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
     let mut slow_handles = Vec::new();
     let mut fast_handles = Vec::new();
 
@@ -815,7 +832,8 @@ async fn test_orphan_partial_senders_dropped() {
 #[tokio::test]
 async fn test_orphan_detector_triggered() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(30));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(30));
     assert_eq!(protocol.orphan_count(), 0, "初始应无孤儿");
 
     // Act: spawn 并立即 abort,模拟孤儿
@@ -849,7 +867,8 @@ async fn test_orphan_detector_triggered() {
 #[tokio::test]
 async fn test_orphan_detection_with_multiple_operations() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(30));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(30));
     const TOTAL: usize = 10;
     let mut handles = Vec::with_capacity(TOTAL);
 
@@ -893,7 +912,8 @@ async fn test_orphan_detection_with_multiple_operations() {
 #[tokio::test]
 async fn test_orphan_cleanup() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     // Act 1: 产生孤儿
     let p = protocol.clone();
@@ -938,7 +958,8 @@ async fn test_orphan_cleanup() {
 #[tokio::test]
 async fn test_concurrent_entangled_call_10_threads() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
     const THREADS: usize = 10;
     let mut handles = Vec::with_capacity(THREADS);
 
@@ -968,7 +989,8 @@ async fn test_concurrent_entangled_call_10_threads() {
 #[tokio::test]
 async fn test_concurrent_entangled_call_50_threads() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(10));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(10));
     const THREADS: usize = 50;
     let mut handles = Vec::with_capacity(THREADS);
 
@@ -1007,7 +1029,8 @@ async fn test_concurrent_entangled_call_50_threads() {
 #[tokio::test]
 async fn test_empty_future_list() {
     // Arrange: 创建协议但不调用 entangle
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     // Assert: 初始状态为零态
     assert_eq!(protocol.pending_count(), 0, "初始 pending 应为 0");
@@ -1022,7 +1045,8 @@ async fn test_empty_future_list() {
 #[tokio::test]
 async fn test_single_future() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     // Act: 单个 entangle 调用
     let result = protocol.entangle(async { Ok(123) }).await;
@@ -1040,7 +1064,8 @@ async fn test_single_future() {
 #[tokio::test]
 async fn test_max_futures_1000() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(30));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(30));
     const COUNT: usize = 1000;
     let mut handles = Vec::with_capacity(COUNT);
 
@@ -1112,7 +1137,8 @@ async fn test_error_propagation_chain() {
 #[tokio::test]
 async fn test_error_recovery() {
     // Arrange
-    let protocol = QeepProtocol::new(Duration::from_secs(5));
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
 
     // Act 1: 产生错误
     let err_result: Result<(), QeepError> =
@@ -1127,4 +1153,171 @@ async fn test_error_recovery() {
     assert_eq!(protocol.completed_count(), 2, "两次调用均计入 completed");
     assert_eq!(protocol.orphan_count(), 0, "错误恢复不应产生孤儿");
     assert_eq!(protocol.pending_count(), 0, "恢复后 pending 应为 0");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// P3-Sprint1 T2: 新增测试(DashMap 并发、entangle_spawn 错误路径、
+// CallRecord 幂等性、OrphanDetector 边界、QeepError Debug、
+// 协议克隆隔离)
+// ═══════════════════════════════════════════════════════════════════
+
+/// 测试 entangle_spawn 错误路径:future 返回 Err 时正确传播
+///
+/// 验证 spawn 后 future 返回 Err,错误被正确传播且 completed_count 递增。
+#[tokio::test]
+async fn test_entangle_spawn_error_path() {
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
+
+    let handle = protocol.entangle_spawn(async { Err::<(), _>(QeepError::Cancelled) });
+    let result = handle.await.expect("JoinHandle 不应 panic");
+
+    assert!(
+        matches!(result, Err(QeepError::Cancelled)),
+        "spawn 的错误应正确传播,实际: {:?}",
+        result
+    );
+    assert_eq!(
+        protocol.completed_count(),
+        1,
+        "错误传播后 completed_count 应递增"
+    );
+    assert_eq!(protocol.orphan_count(), 0, "错误传播不应产生孤儿");
+}
+
+/// 测试 CallRecord 状态转移幂等性
+///
+/// 验证同一状态多次设置不改变最终状态。
+/// 注:CallRecord 是内部结构,通过协议外部行为间接验证。
+#[tokio::test]
+async fn test_call_record_state_idempotent() {
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
+
+    // 多次完成同一操作,验证状态不变
+    let result1 = protocol.entangle(async { Ok(42) }).await;
+    assert!(result1.is_ok(), "第一次调用应成功");
+    assert_eq!(protocol.completed_count(), 1, "第一次调用后 completed=1");
+
+    // 第二次调用(不同操作),验证 completed 幂等递增
+    let result2 = protocol.entangle(async { Ok(99) }).await;
+    assert!(result2.is_ok(), "第二次调用应成功");
+    assert_eq!(protocol.completed_count(), 2, "第二次调用后 completed=2");
+
+    // 验证 pending_count 幂等归零
+    assert_eq!(protocol.pending_count(), 0, "完成后 pending 应始终为 0");
+    assert_eq!(protocol.orphan_count(), 0, "正常完成不应产生孤儿");
+}
+
+/// 测试 OrphanDetector 空报告列表
+///
+/// 验证新创建的 OrphanDetector 无孤儿报告,且空报告不影响协议操作。
+#[tokio::test]
+async fn test_orphan_detector_empty_report() {
+    let detector = OrphanDetector::new();
+
+    // 初始状态:无孤儿
+    assert_eq!(detector.orphan_count(), 0, "新 detector 应无孤儿");
+    assert!(
+        detector.detect_orphans().is_empty(),
+        "detect_orphans 应为空"
+    );
+
+    // clear 空列表应无影响
+    let mut detector = detector;
+    detector.clear();
+    assert_eq!(detector.orphan_count(), 0, "clear 空列表后仍为 0");
+    assert!(detector.detect_orphans().is_empty(), "clear 空列表后仍为空");
+}
+
+/// 测试 OrphanDetector clear 后重新报告
+///
+/// 验证 clear 后重新报告孤儿,计数正确且新旧报告不混淆。
+#[tokio::test]
+async fn test_orphan_detector_clear_and_rereport() {
+    let mut detector = OrphanDetector::new();
+
+    // 第一次报告
+    let report1 = OrphanReport {
+        call_id: EntangledCallId(Uuid::now_v7()),
+        created_at: Utc::now(),
+        orphaned_at: Utc::now(),
+        reason: "first orphan".to_string(),
+    };
+    detector.report_orphan(report1);
+    assert_eq!(detector.orphan_count(), 1, "第一次报告后应为 1");
+
+    // clear
+    detector.clear();
+    assert_eq!(detector.orphan_count(), 0, "clear 后应为 0");
+
+    // 重新报告(与第一次不同的孤儿)
+    let report2 = OrphanReport {
+        call_id: EntangledCallId(Uuid::now_v7()),
+        created_at: Utc::now(),
+        orphaned_at: Utc::now(),
+        reason: "second orphan".to_string(),
+    };
+    detector.report_orphan(report2);
+    assert_eq!(detector.orphan_count(), 1, "重新报告后应为 1");
+    assert_eq!(
+        detector.detect_orphans()[0].reason,
+        "second orphan",
+        "重新报告后应包含最新的孤儿原因"
+    );
+}
+
+/// 验证所有 QeepError 变体的 Debug 格式非空
+///
+/// 与 test_error_display 配合,覆盖 Debug 和 Display 两种格式。
+#[tokio::test]
+async fn test_qeep_error_debug() {
+    let errors: Vec<QeepError> = vec![
+        QeepError::Timeout,
+        QeepError::Cancelled,
+        QeepError::Orphaned,
+        QeepError::AlreadyCompleted,
+        QeepError::AckMissing,
+        QeepError::ReceiptMissing,
+        QeepError::SerializationError("test error".to_string()),
+    ];
+
+    for err in &errors {
+        let debug = format!("{:?}", err);
+        assert!(
+            !debug.is_empty(),
+            "QeepError 变体的 Debug 不应为空,变体: {:?}",
+            err
+        );
+    }
+}
+
+/// 测试协议实例克隆后的状态隔离性
+///
+/// 验证克隆出的协议实例的 pending_count/completed_count/orphan_count
+/// 与原始实例相互独立。
+#[tokio::test]
+async fn test_protocol_clone_state_isolation() {
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(5));
+    let cloned = protocol.clone();
+
+    // 原始协议执行操作
+    let result = protocol.entangle(async { Ok("original") }).await;
+    assert_eq!(result.unwrap(), "original", "原始协议应正常工作");
+
+    // 克隆协议执行操作(互不影响)
+    let result2 = cloned.entangle(async { Ok("cloned") }).await;
+    assert_eq!(result2.unwrap(), "cloned", "克隆协议应正常工作");
+
+    // 验证:原始协议和克隆协议的 completed_count 各自递增
+    // 由于共享 Arc<Inner>,completed_count 是共享的(按设计)
+    // 但 pending_count 和 orphan_count 也是共享的
+    // 核心验证:两个实例都能独立处理调用,不互相阻塞
+    assert_eq!(protocol.completed_count(), 2, "两个实例共完成 2 次调用");
+    assert_eq!(cloned.completed_count(), 2, "克隆实例的 completed 也应=2");
+    assert_eq!(protocol.orphan_count(), 0, "不应产生孤儿");
+    assert_eq!(cloned.orphan_count(), 0, "克隆也不应产生孤儿");
+    assert_eq!(protocol.pending_count(), 0, "pending 应为 0");
+    assert_eq!(cloned.pending_count(), 0, "克隆 pending 也应为 0");
 }

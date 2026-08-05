@@ -347,6 +347,141 @@ impl ContextCompressor {
     }
 }
 
+/// 按 token 预算裁剪上下文 — OSA budget_mask 联动（ADR-069 Token 效率优化）
+///
+/// 与 `ContextCompressor::compress` 的区别：
+/// - `compress` 是 HCW 内部窗口压缩（target_size 来自窗口层级）
+/// - `trim_to_budget` 是 OSA 预算驱动裁剪（budget_tokens 来自 BudgetExceeded 事件）
+///
+/// 重要性排序复用 `compute_importance_score` 公式（已有），
+/// Top-K 选择用 `select_nth_unstable`（O(n) 红线）。
+///
+/// # 参数
+/// - `entries`: 待裁剪条目
+/// - `budget_tokens`: token 预算上限
+/// - `weights`: 重要性评分权重（由 SelectorPolicy 提供）
+/// - `task_clv`: 当前任务 CLV
+/// - `now`: 当前时间
+///
+/// # 返回
+/// (保留条目, 压缩报告)
+pub fn trim_to_budget(
+    entries: &[Arc<ContextEntry>],
+    budget_tokens: usize,
+    weights: SelectorWeights,
+    task_clv: Option<&CLV>,
+    now: DateTime<Utc>,
+) -> (Vec<Arc<ContextEntry>>, CompressionReport) {
+    let original_count = entries.len();
+    let original_size: usize = entries.iter().map(|e| e.token_size).sum();
+
+    // 无需裁剪
+    if original_size <= budget_tokens || entries.is_empty() {
+        return (
+            entries.to_vec(),
+            CompressionReport {
+                original_size,
+                compressed_size: original_size,
+                compression_ratio: 1.0,
+                original_count,
+                retained_count: original_count,
+                dropped_count: 0,
+                retained_entries: Vec::new(),
+                algorithm: "none".into(),
+            },
+        );
+    }
+
+    // 计算归一化统计量
+    let max_access_count = entries
+        .iter()
+        .map(|e| e.access_count)
+        .max()
+        .unwrap_or(0)
+        .max(1) as f32;
+    let oldest = entries
+        .iter()
+        .map(|e| e.last_accessed_at)
+        .min()
+        .unwrap_or(now);
+    let newest = entries
+        .iter()
+        .map(|e| e.last_accessed_at)
+        .max()
+        .unwrap_or(now);
+    let time_span_ms = (newest - oldest).num_milliseconds().max(1) as f32;
+
+    // 计算重要性评分
+    let mut scored: Vec<(f32, &Arc<ContextEntry>)> = entries
+        .iter()
+        .map(|e| {
+            let score =
+                compute_importance_score(e, weights, task_clv, now, max_access_count, time_span_ms);
+            (score, e)
+        })
+        .collect();
+
+    // Top-K 选择（O(n) 红线，禁止 sort_by 全排序）
+    let min_token_size = scored
+        .iter()
+        .map(|(_, e)| e.token_size)
+        .min()
+        .unwrap_or(1)
+        .max(1);
+    let estimated_k = (budget_tokens / min_token_size).min(scored.len()).max(1);
+
+    if estimated_k < scored.len() {
+        let (top_k, ..) = scored.select_nth_unstable_by(estimated_k - 1, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        top_k.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    scored.truncate(estimated_k);
+
+    // 贪心保留
+    let fallback_entry = scored.first().map(|(_, e)| *e);
+    let mut retained: Vec<Arc<ContextEntry>> = Vec::new();
+    let mut compressed_size: usize = 0;
+
+    for (_score, entry) in scored {
+        if compressed_size + entry.token_size <= budget_tokens {
+            compressed_size += entry.token_size;
+            retained.push(Arc::clone(entry));
+        }
+    }
+
+    // 至少保留 1 个条目
+    if retained.is_empty() {
+        if let Some(entry) = fallback_entry {
+            compressed_size = entry.token_size;
+            retained.push(Arc::clone(entry));
+        }
+    }
+
+    let retained_count = retained.len();
+    let dropped_count = original_count - retained_count;
+    let compression_ratio = if compressed_size > 0 {
+        original_size as f32 / compressed_size as f32
+    } else {
+        f32::MAX
+    };
+
+    let report = CompressionReport {
+        original_size,
+        compressed_size,
+        compression_ratio,
+        original_count,
+        retained_count,
+        dropped_count,
+        retained_entries: Vec::new(),
+        algorithm: "budget-trim".into(),
+    };
+
+    (retained, report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

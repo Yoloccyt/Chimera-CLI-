@@ -1,6 +1,6 @@
 //! 聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
 //!
-//! 对应架构层:L6 Router
+//! 对应架构层:L7 Execution
 //! 对应创新点:GQEP(Gather-Query Execution Protocol)
 //!
 //! ## 核心职责

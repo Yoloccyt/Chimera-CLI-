@@ -37,8 +37,10 @@ use tracing::{debug, info, warn};
 use crate::compressor::ContextCompressor;
 use crate::error::HcwError;
 use crate::selector::WindowSelector;
+use crate::selector_learner::SelectorLearnerHolder;
 use crate::types::HcwConfig;
 use crate::types::{CompressionReport, ContextEntry, HcwState, WindowTier};
+use nexus_contracts::SelectorPolicy;
 
 /// select_window 锁内决策的结果(锁外据此发布事件)
 ///
@@ -92,6 +94,13 @@ pub struct HcwWindow {
     event_bus: EventBus,
     /// 只读配置(四级容量、压缩阈值)
     config: HcwConfig,
+    // === PROBE P2.1: 选择器策略学习持有器（S4 接缝）===
+    /// 策略持有器（Arc 共享——多窗口可注入同一学习策略）
+    ///
+    /// WHY Arc: 编排器（chimera-cli）构造单一 holder 注入多个 HcwWindow；
+    /// 内部 RwLock 读写分离（读 ~10ns / 写每秒<1 次），初始 fallback() ==
+    /// `HcwConfig::default().selector_policy`（零行为变化保证，P2 计划 T1）
+    selector_learner: Arc<SelectorLearnerHolder>,
 }
 
 impl HcwWindow {
@@ -105,12 +114,58 @@ impl HcwWindow {
             state: Arc::new(RwLock::new(HcwState::new(initial_tier))),
             event_bus,
             config,
+            // PROBE P2.1: 默认 fallback 持有器（与 config 默认策略一致）
+            selector_learner: Arc::new(SelectorLearnerHolder::new()),
         })
     }
 
     /// 创建 HcwWindow,使用默认配置与指定 EventBus
     pub fn with_default_config(event_bus: EventBus) -> Result<Self, HcwError> {
         Self::new(HcwConfig::default(), event_bus)
+    }
+
+    /// 创建 HcwWindow,使用默认配置与共享策略持有器（PROBE P2.1）
+    ///
+    /// # 参数
+    /// - `event_bus`: 事件总线
+    /// - `holder`: 共享策略持有器（编排器构造，多窗口共用同一学习策略）
+    ///
+    /// WHY: P2.2 编排器接线——S4Learner 学习结果经 holder 注入所有窗口；
+    /// 既有 `new`/`with_default_config` 签名不变（20+ 构造点零破坏）
+    pub fn with_learner(
+        event_bus: EventBus,
+        holder: Arc<SelectorLearnerHolder>,
+    ) -> Result<Self, HcwError> {
+        let config = HcwConfig::default();
+        config.validate()?;
+        let initial_tier = WindowTier::L0;
+        Ok(Self {
+            state: Arc::new(RwLock::new(HcwState::new(initial_tier))),
+            event_bus,
+            config,
+            selector_learner: holder,
+        })
+    }
+
+    /// 更新选择器策略（PROBE P2.1 注入 API）
+    ///
+    /// # 参数
+    /// - `policy`: 新策略（`SelectorPolicy::Learned` 学习值或 `Static` 回退）
+    ///
+    /// # 红线
+    /// - sync 方法（无跨 await）——holder 内部 RwLock 写锁低频（每秒<1 次）
+    /// - learner panic/poison → holder 内建 fallback（selector_learner.rs L213-223）
+    /// - **不失效 repr_clv 缓存**：缓存存块 CLV 向量，与策略权重正交
+    ///
+    /// # 文档-代码漂移修复
+    /// s4_selector.rs L66/L552/L664 声称的此 API 此前不存在——P2.1 补齐
+    pub fn update_selector_policy(&self, policy: SelectorPolicy) {
+        self.selector_learner.update_policy(policy);
+    }
+
+    /// 返回当前选择器策略（只读，测试/诊断用）
+    pub fn current_selector_policy(&self) -> SelectorPolicy {
+        self.selector_learner.current_policy()
     }
 
     /// 获取配置引用(只读)
@@ -188,6 +243,28 @@ impl HcwWindow {
         let state = self.state.read().await;
         // WHY(M-01):读锁 + get_ref,Arc::clone 零拷贝(仅引用计数 +1)
         Ok(state.get_ref(id).map(Arc::clone))
+    }
+
+    /// 取全部条目快照（读锁 clone Arc 引用 → 释放锁 → 无锁消费）（PROBE P1.6）
+    ///
+    /// # 返回值
+    /// `Vec<Arc<ContextEntry>>`——仅 Arc 引用计数拷贝（O(N) 指针 + 2KB 分配，
+    /// 256 块 ≈ 数十 μs），**不拷贝 CLV/content 内容**（锁内零计算）
+    ///
+    /// # 红线
+    /// 持锁期最小化: 读锁在 clone 后立即释放（guard drop），调用方可无锁打分
+    /// （探针路径：repr_clv 缓存 + cosine 全在锁外执行）——"持锁禁止跨 await"
+    /// 红线与"锁内零计算"性能铁律的落点
+    ///
+    /// # 用法
+    /// ```rust,ignore
+    /// let snapshot = window.snapshot_entries().await;
+    /// // 锁已释放，无锁打分
+    /// for entry in &snapshot { /* cosine 等 */ }
+    /// ```
+    pub async fn snapshot_entries(&self) -> Vec<Arc<ContextEntry>> {
+        let state = self.state.read().await;
+        state.entries.clone()
     }
 
     /// 按 ID 获取条目(返回 `Arc<ContextEntry>`,引用语义,零拷贝)
@@ -298,6 +375,8 @@ impl HcwWindow {
                     state.entries = report.retained_entries;
                     // SubTask 19.5:entries 全量替换后索引失效,重建索引
                     state.rebuild_index();
+                    // PROBE P1.5: 压缩替换后缓存失效（R9 一致性，保守全清）
+                    state.invalidate_repr_clv_cache();
                     state.current_tier = target_tier;
                     SelectOutcome::Compressed {
                         from: current_tier,
@@ -771,6 +850,45 @@ async fn publish_compressed_event(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    // ============================================================
+    // PROBE P1.6: 快照通路测试
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_snapshot_entries_returns_all() {
+        // 快照返回全部条目（Arc 引用共享，内容一致）
+        let window = HcwWindow::with_default_config(EventBus::new()).unwrap();
+        window.insert(make_entry("a", 100)).await.unwrap();
+        window.insert(make_entry("b", 200)).await.unwrap();
+        let snap = window.snapshot_entries().await;
+        assert_eq!(snap.len(), 2);
+        let ids: Vec<&str> = snap.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&"a") && ids.contains(&"b"));
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_entries_empty() {
+        // 空窗口快照为空（不 panic）
+        let window = HcwWindow::with_default_config(EventBus::new()).unwrap();
+        assert!(window.snapshot_entries().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_entries_arc_shared() {
+        // 快照 Arc 与窗口内条目共享（非深拷贝）——修改快照不污染窗口
+        let window = HcwWindow::with_default_config(EventBus::new()).unwrap();
+        window.insert(make_entry("a", 100)).await.unwrap();
+        let snap = window.snapshot_entries().await;
+        let snap_arc = Arc::clone(&snap[0]);
+        // 窗口继续插入，快照保持旧视图（插入不改 entries 内容，仅追加）
+        window.insert(make_entry("b", 100)).await.unwrap();
+        let snap2 = window.snapshot_entries().await;
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap2.len(), 2);
+        // Arc 指向同一条目内容
+        assert!(Arc::ptr_eq(&snap_arc, &snap2[0]));
+    }
 
     fn make_entry(id: &str, token_size: usize) -> ContextEntry {
         ContextEntry::new(
