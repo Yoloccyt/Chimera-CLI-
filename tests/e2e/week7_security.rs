@@ -264,9 +264,13 @@ async fn test_mcp_injection_empty_participant_list() {
         .expect("空参与者事务应被安全处理(无 panic)");
 
     // 空事务应快速完成,不产生副作用
+    // WHY 用 CSA_THRESHOLD_MS(500ms)而非硬编码 50ms:50ms 对 CI 共享 runner 负载敏感
+    // (本机 ~0ms,CI 实测可达 148ms),本文件其余 31 处延迟断言均使用 CSA_THRESHOLD_MS,
+    // 统一阈值避免时序抖动误报,安全语义(空列表安全处理、无副作用)不变。
     assert!(
-        result.latency_ms < 50,
-        "空事务应在 50ms 内完成,实际 {}ms",
+        result.latency_ms < CSA_THRESHOLD_MS as u64,
+        "空事务应在 {}ms 内完成,实际 {}ms",
+        CSA_THRESHOLD_MS,
         result.latency_ms
     );
 
