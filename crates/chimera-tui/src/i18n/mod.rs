@@ -19,9 +19,9 @@
 //! let title = t!("panel.quest.title"); // 按当前 locale 返回译文
 //! ```
 
-use std::sync::atomic::{AtomicU8, Ordering};
 #[cfg(test)]
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU8, Ordering};
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard};
 
