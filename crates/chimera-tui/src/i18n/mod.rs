@@ -20,6 +20,10 @@
 //! ```
 
 use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(test)]
+use std::cell::Cell;
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 
 pub mod en;
 pub mod zh;
@@ -82,7 +86,22 @@ pub fn current_locale() -> Locale {
 }
 
 /// 设置界面语言(运行时切换)
+///
+/// 2026-08-07 测试互斥修复:并行测试直接写全局 `LOCALE` 会污染依赖中文文案的
+/// 断言(overwindow 空态 flaky 根因 —— 既有 guard 未覆盖非 guard 测试的写路径)。
+/// cfg(test) 下:非 guard 路径经 `LOCALE_TEST_LOCK` 串行化;guard 持有者(同线程)
+/// 经 `LOCALE_LOCK_HELD` 重入检测直接写,避免自锁。生产构建零开销(块被剥离)。
 pub fn set_locale(locale: Locale) {
+    #[cfg(test)]
+    {
+        if !LOCALE_LOCK_HELD.with(|h| h.get()) {
+            let _g = LOCALE_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            LOCALE.store(locale.as_u8(), Ordering::Relaxed);
+            return;
+        }
+    }
     LOCALE.store(locale.as_u8(), Ordering::Relaxed);
 }
 
@@ -116,20 +135,44 @@ macro_rules! t {
     };
 }
 
-/// 测试专用 locale 序列化锁 — 消除并行测试对全局 `LOCALE` 的竞争
+/// 测试专用 locale 互斥锁与持有标记 —— 消除并行测试对全局 `LOCALE` 的竞争
 ///
 /// WHY:生产为单线程(仅主线程读写 locale,无竞态);但 `cargo test` 默认多线程并行,
-/// 多个测试同时 En-pin(set En → 捕获 → reset Zh)会互相污染窗口。所有会修改全局
-/// locale 的测试在段首获取此锁并持有至复位完成,保证互斥。返回的 guard 需绑定到
-/// 局部变量(如 `let _g = ...`)以在整个测试作用域内持锁。锁中毒时降级取用内部值
+/// 多个测试同时 En-pin(set En → 捕获 → reset Zh)会互相污染窗口。`set_locale` 的
+/// cfg(test) 分支与 `locale_test_guard` 共用同一把锁,覆盖**全部**写路径:
+/// 非 guard 测试的 set_locale 自动加锁;guard 测试经重入标记直接写。
+#[cfg(test)]
+static LOCALE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// 当前线程是否持有 locale 测试锁(重入检测,防 guard 内 set_locale 自锁)
+#[cfg(test)]
+thread_local! {
+    static LOCALE_LOCK_HELD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// 测试专用 locale 序列化 guard — 绑定到局部变量(如 `let _g = ...`)以在整个
+/// 测试作用域内持锁;drop 时复位线程持有标记并释放锁。锁中毒时降级取用内部值
 /// (测试已 panic 失败,不因中毒再连锁 panic 掩盖真实失败)。
 #[cfg(test)]
-pub(crate) fn locale_test_guard() -> std::sync::MutexGuard<'static, ()> {
-    use std::sync::Mutex;
-    static LOCALE_TEST_LOCK: Mutex<()> = Mutex::new(());
-    LOCALE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+pub(crate) struct LocaleTestGuard {
+    _guard: MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for LocaleTestGuard {
+    fn drop(&mut self) {
+        LOCALE_LOCK_HELD.with(|h| h.set(false));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn locale_test_guard() -> LocaleTestGuard {
+    LOCALE_LOCK_HELD.with(|h| h.set(true));
+    LocaleTestGuard {
+        _guard: LOCALE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    }
 }
 
 #[cfg(test)]

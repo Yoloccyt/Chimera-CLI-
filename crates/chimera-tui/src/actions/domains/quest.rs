@@ -13,6 +13,8 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
         // Agent 对话 — 核心功能,斜杠 /chat,亦经 i 键进入 Insert 触发
         ActionDescriptor {
             is_core: true,
+            // F-5:需用户输入 query(palette 选中后进入参数输入态)
+            requires_query: true,
             ..ActionDescriptor::new(
                 "agent.chat",
                 ActionDomain::Quest,
@@ -20,13 +22,16 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
                 Some("chat"),
             )
         },
-        // Quest 启动
-        ActionDescriptor::new(
-            "quest.start",
-            ActionDomain::Quest,
-            "action.quest.start",
-            Some("quest start"),
-        ),
+        // Quest 启动 — 需用户输入 query(与 agent.chat 同语义,F-5)
+        ActionDescriptor {
+            requires_query: true,
+            ..ActionDescriptor::new(
+                "quest.start",
+                ActionDomain::Quest,
+                "action.quest.start",
+                Some("quest start"),
+            )
+        },
         // Quest 暂停 — 核心功能(Quest 启停)
         ActionDescriptor {
             is_core: true,

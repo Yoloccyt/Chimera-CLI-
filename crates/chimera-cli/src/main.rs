@@ -18,7 +18,7 @@
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use chimera_cli::{cli::Cli, commands, config, output, ChimeraCliError};
+use chimera_cli::{banner, cli::Cli, commands, config, output, ChimeraCliError};
 
 /// 程序入口
 ///
@@ -79,6 +79,14 @@ async fn main() -> std::process::ExitCode {
     // 2. Task 1.12:初始化全局颜色模式(`--no-color` flag 或 `NO_COLOR` 环境变量)
     //    WHY 在 tracing 之前:颜色模式影响后续所有 output helper,且不依赖日志
     output::init_color_mode(cli.no_color);
+
+    // 2.5 输出启动 banner(品牌 ASCII art),除非用户传入 `--no-banner`
+    //     WHY 在 init_color_mode 之后、tracing 之前:banner 是面向用户的视觉入口,
+    //     应尽早显示;同时先初始化颜色模式便于 banner 后续可着色(当前为纯文本,
+    //     保留扩展点)。`--no-banner` 守护确保 CI 截屏 / 自动化断言不被彩条干扰。
+    if !cli.no_banner {
+        banner::print();
+    }
 
     // 3. 初始化日志:verbose 时用 debug,否则用 info
     //    EnvFilter 允许 RUST_LOG 环境变量覆盖,提供运行时调试灵活性

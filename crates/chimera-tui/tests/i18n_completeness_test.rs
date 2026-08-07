@@ -440,6 +440,8 @@ const KNOWN_VIOLATIONS: &[(&str, &str)] = &[
     ("panels/parliament.rs", "导航"),
     ("panels/parliament.rs", "投票"),
     ("panels/parliament.rs", "是/否/弃权"),
+    // P3(I-9):移除虚假 V/Y/N/A 投票提示后,Enter=详情文案加入白名单
+    ("panels/parliament.rs", "详情"),
     // panels/pvl_score.rs(2026-08-02 补充:PVL 过程评分九维度标签 + 快捷键文案)
     ("panels/pvl_score.rs", "真实执行"),
     ("panels/pvl_score.rs", "覆盖率"),
@@ -455,6 +457,10 @@ const KNOWN_VIOLATIONS: &[(&str, &str)] = &[
     // panels/quest.rs
     ("panels/quest.rs", "导航"),
     ("panels/quest.rs", "详情"),
+    // P3(I-1 修复):Quest 详情改绑 `v` 后新增的快捷键文案,
+    // 与既有 shortcuts 白名单同批(面板快捷键整体 i18n 收口时一并迁移)
+    ("panels/quest.rs", "翻页"),
+    ("panels/quest.rs", "跳转事件流"),
     ("panels/quest.rs", "跳顶"),
     ("panels/quest.rs", "跳底"),
     // panels/resource_monitor.rs
@@ -469,6 +475,9 @@ const KNOWN_VIOLATIONS: &[(&str, &str)] = &[
     ("panels/self_assessment.rs", "切换面板"),
     // panels/dag_viz.rs(closure Stage B-10,同 self_assessment 的展示型快捷键文案)
     ("panels/dag_viz.rs", "切换面板"),
+    // panels/overwindow.rs(P1,ADR-072:展示型面板快捷键沿用既有 "切换面板" 惯例,
+    // 面板级 i18n 收口时随自评/DAG 面板一并迁移)
+    ("panels/overwindow.rs", "切换面板"),
     // panels/sysinfo.rs
     ("panels/sysinfo.rs", "刷新"),
     // panels/task_manager.rs
@@ -605,7 +614,7 @@ fn seed_keys_are_used_in_code() {
         "mode.command",
         "action.agent.chat",
         "action.quest.pause",
-        "action.task.create",
+        "action.overwindow.run",
         "action.export.run",
         "action.view.switch_layout",
         "action.system.toggle_locale",

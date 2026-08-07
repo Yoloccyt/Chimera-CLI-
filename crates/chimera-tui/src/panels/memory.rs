@@ -7,7 +7,7 @@
 //!   不直接依赖 L2/L3 crate。
 //! - 使用 `render.rs` 中的 `sparkline`/`gauge`/`utilization_bar` 统一视觉风格。
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -34,45 +34,51 @@ impl MemoryPanel {
         let lines = vec![
             Line::from(vec![
                 Span::styled(
-                    "Cache Hit Rate: ",
+                    format!("{}: ", crate::t!("panel.memory.cache_hit_rate")),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(format!("{:.1}%", mm.hit_rate_percent)),
             ]),
             Line::from(vec![
-                Span::styled("Evictions: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{}: ", crate::t!("panel.memory.evictions")),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::from(mm.evictions.to_string()),
             ]),
             Line::from(vec![
                 Span::styled(
-                    "Context Window: ",
+                    format!("{}: ", crate::t!("panel.memory.context_window")),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(format!("{} bytes", mm.context_window_size)),
             ]),
             Line::from(vec![
                 Span::styled(
-                    "Compressed Ratio: ",
+                    format!("{}: ", crate::t!("panel.memory.compressed_ratio")),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(format!("{:.1}%", mm.compressed_ratio * 100.0)),
             ]),
             Line::from(vec![
                 Span::styled(
-                    "Cache Hits: ",
+                    format!("{}: ", crate::t!("panel.memory.cache_hits")),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(mm.cache_hits.to_string()),
             ]),
             Line::from(vec![
                 Span::styled(
-                    "Cache Misses: ",
+                    format!("{}: ", crate::t!("panel.memory.cache_misses")),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::from(mm.cache_misses.to_string()),
             ]),
             Line::from(vec![
-                Span::styled("Tier: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{}: ", crate::t!("panel.memory.tier")),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::from(mm.tier.clone()),
             ]),
             Line::from(""),
@@ -83,7 +89,8 @@ impl MemoryPanel {
                 let dist = cmt_tiering::tier_distribution();
                 let to_mb = |bytes: u64| -> f64 { bytes as f64 / 1_048_576.0 };
                 Line::from(format!(
-                    "Storage: Hot:{:.1}MB | Warm:{:.1}MB | Cold:{:.1}MB | Frozen:{:.1}MB",
+                    "{}: Hot:{:.1}MB | Warm:{:.1}MB | Cold:{:.1}MB | Frozen:{:.1}MB",
+                    crate::t!("panel.memory.storage"),
                     to_mb(dist.hot),
                     to_mb(dist.warm),
                     to_mb(dist.cold),
@@ -139,11 +146,20 @@ impl Panel for MemoryPanel {
         );
         gauge.render(right_chunks[0], buf);
 
-        let sparkline = render::sparkline(&state.memory_history, "Hit Rate History", Color::Cyan);
+        let sparkline = render::sparkline(
+            &state.memory_history,
+            crate::t!("panel.memory.hit_rate_history"),
+            Color::Cyan,
+        );
         sparkline.render(right_chunks[1], buf);
     }
 
-    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // `R` 刷新:发布 RequestRefresh(与 `:refresh` 命令同语义)。
+        // WHY 补齐 shortcuts() 声明但无实现的按键(快捷键诚实性)。
+        if key.code == KeyCode::Char('R') {
+            return Some(TuiCommand::RequestRefresh);
+        }
         // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
         None
     }
@@ -166,7 +182,21 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_r_returns_request_refresh() {
+        // 快捷键诚实性:R 刷新声明即可达(此前 handle_key 恒 None)
+        let mut panel = MemoryPanel::new();
+        let mut state = TuiState::new();
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('R'), crossterm::event::KeyModifiers::NONE),
+            &mut state,
+        );
+        assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
+    }
+
+    #[test]
     fn test_memory_panel_renders_metrics() {
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
         let mut state = TuiState::new();
         state.memory_metrics = MemoryMetrics {
             hit_rate_percent: 87.5,

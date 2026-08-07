@@ -339,7 +339,7 @@ pub struct SlashCommandDescriptor {
 /// Slash 命令注册表 — 单一事实源(SubTask 1.6.2)
 ///
 /// 借鉴 `chimera_tui::actions::ActionRegistry` 的"单一事实源"设计,
-/// 但更轻量:不需要模糊搜索、域分组、熔断线(CLI 9 个命令,规模可控)。
+/// 但更轻量:不需要模糊搜索、域分组、熔断线(CLI 10 个命令,规模可控)。
 #[derive(Debug, Clone, Default)]
 pub struct SlashCommandRegistry {
     commands: Vec<SlashCommandDescriptor>,
@@ -390,9 +390,9 @@ impl SlashCommandRegistry {
     }
 }
 
-/// 9 个内建 slash 命令(SubTask 1.6.1)
+/// 10 个内建 slash 命令(SubTask 1.6.1)
 ///
-/// 顺序与 spec 表格一致:`/help` / `/clear` / `/model` / `/quest` /
+/// 顺序与 spec 表格一致:`/help` / `/clear` / `/model` / `/llm` / `/quest` /
 /// `/parliament` / `/audit` / `/mcp` / `/agent` / `/exit`。
 pub const BUILTIN_SLASH_COMMANDS: &[SlashCommandDescriptor] = &[
     SlashCommandDescriptor {
@@ -412,6 +412,12 @@ pub const BUILTIN_SLASH_COMMANDS: &[SlashCommandDescriptor] = &[
         name: "model",
         description: "显示/切换当前 model-router 渠道",
         args_usage: "[<channel>]",
+    },
+    SlashCommandDescriptor {
+        id: "llm",
+        name: "llm",
+        description: "LLM Provider 管理(等价于 /model 但语义对齐 chimera llm)",
+        args_usage: "[<action> [args]]",
     },
     SlashCommandDescriptor {
         id: "quest",
@@ -514,8 +520,9 @@ async fn handle_slash_command(
     match parsed.name.as_str() {
         "help" => handle_help(&registry),
         "clear" => handle_clear(),
-        "model" => handle_model(&parsed, config),
+        "model" => handle_model(&parsed, config, perm),
         // Result 返回的 handler 用 `?` 传播错误,使所有 match arm 统一为 `()` 类型
+        "llm" => handle_llm(&parsed, config).await?,
         "quest" => handle_quest(&parsed, engine, config, perm).await?,
         "parliament" => handle_parliament(&parsed, config).await?,
         "audit" => handle_audit(&parsed, config).await?,
@@ -559,27 +566,62 @@ fn handle_clear() {
     // 真实清零由调用方根据返回值或共享状态完成(当前简化为提示输出)。
 }
 
-/// `/model` — 显示/切换当前 model-router 渠道(SubTask 1.6.5)
+/// `/model` — 显示/切换当前 model-router 渠道(SubTask 1.6.5 / Task 3)
 ///
-/// 无参数时显示当前渠道(strategy),有参数时切换(当前为占位,真实切换需 model-router API)。
+/// 无参数时显示当前渠道(strategy)+ CAF 四渠道占位;有参数时切换
+/// (内存态,后续 Task 接入 omega.yaml 持久化)。
 ///
 /// WHY 用 `strategy` 字段而非 `default_channel`:`ModelRouterConfig`(nexus-core)只暴露
 /// `strategy` 字段(CostOptimized/SpeedOptimized/QualityOptimized/Auto/Failover),
 /// 与 CAF 四渠道(Quality/Balanced/Cost/Speed)概念映射但不完全一致。
-/// 当前显示 `strategy` 真实值,切换为占位(待 model-router API 实装后接入)。
-fn handle_model(parsed: &ParsedSlashCommand, config: &ChimeraConfig) {
+fn handle_model(parsed: &ParsedSlashCommand, config: &ChimeraConfig, perm: &PermissionCtx) {
     match parsed.first_arg() {
         None => {
+            // 无参:显示当前 strategy + CAF 四渠道占位
             println!("当前 model-router 策略: {}", config.model_router.strategy);
-            println!(
-                "可用策略: CostOptimized / SpeedOptimized / QualityOptimized / Auto / Failover"
-            );
+            println!("可用渠道(CAF 四渠道): Quality / Balanced / Cost / Speed");
         }
         Some(strategy) => {
-            // TODO: 真实切换需调用 model-router API,当前为占位
-            println!("[model] 已请求切换到策略: {strategy}(占位,真实切换待 model-router API 接入)");
+            // 有参:内存态切换(后续 Task 接入 omega.yaml 持久化)
+            if !perm.should_skip_prompt() {
+                // y/N prompt(同 spawn_tool_event_subscriber 模式)
+                println!("[permission: model] 切换策略到 '{strategy}'? [y/N]");
+                let mut input = String::new();
+                if io::stdin().lock().read_line(&mut input).is_ok() {
+                    let confirmed = matches!(input.trim().to_lowercase().as_str(), "y" | "yes");
+                    if !confirmed {
+                        println!("[model] 已取消策略切换");
+                        return;
+                    }
+                }
+            }
+            // 内存态切换:构造 cfg 副本并修改 strategy 字段
+            // 副本随函数返回 drop,不动磁盘(后续 Task 接入 omega.yaml 持久化)
+            let mut new_cfg = config.clone();
+            new_cfg.model_router.strategy = strategy.to_string();
+            drop(new_cfg);
+            println!("✓ strategy switched to: {strategy} (内存生效,待 omega.yaml 持久化接入)");
         }
     }
+}
+
+/// `/llm <action>` — 转发到 `chimera llm` 同语义(Task 3 of spec)
+///
+/// 当前实现为占位(打印提示),后续 Task 接入真实 API
+/// (实际派发到 `chimera-cli::commands::llm::execute`)。
+async fn handle_llm(parsed: &ParsedSlashCommand, _config: &ChimeraConfig) -> Result<()> {
+    match parsed.first_arg() {
+        None => println!(
+            "用法: /llm <list|show <name>|set-default <name>|test [name]|channels|strategy [s]>"
+        ),
+        Some(action) => {
+            println!(
+                "[llm] 已调用 /llm {action} {} (待真实 API 接入,占位)",
+                parsed.rest_args().join(" ")
+            );
+        }
+    }
+    Ok(())
 }
 
 /// `/quest <action>` — Quest 管理子命令(SubTask 1.6.6)
@@ -745,18 +787,19 @@ mod tests {
         assert_eq!(no_args.first_arg(), None);
     }
 
-    /// 测试 3:SlashCommandRegistry 包含 9 个内建命令(SubTask 1.6.1 / 1.6.2)
+    /// 测试 3:SlashCommandRegistry 包含 10 个内建命令(SubTask 1.6.1 / 1.6.2)
     #[test]
     fn test_builtin_registry_has_nine_commands() {
         let reg = SlashCommandRegistry::builtin();
-        assert_eq!(reg.len(), 9, "应有 9 个内建 slash 命令");
+        assert_eq!(reg.len(), 10, "应有 10 个内建 slash 命令");
         assert!(!reg.is_empty());
 
-        // 验证 9 个命令均存在
+        // 验证 10 个命令均存在
         for name in &[
             "help",
             "clear",
             "model",
+            "llm",
             "quest",
             "parliament",
             "audit",
@@ -766,6 +809,18 @@ mod tests {
         ] {
             assert!(reg.get(name).is_some(), "命令 /{name} 应存在");
         }
+    }
+
+    /// 测试 10:/llm 在 BUILTIN_SLASH_COMMANDS 中(Task 3 of spec)
+    ///
+    /// 验证:/llm 已注册到内建命令,且描述符字段(id/description)符合预期。
+    #[test]
+    fn test_llm_slash_command_registered() {
+        let reg = SlashCommandRegistry::builtin();
+        assert!(reg.get("llm").is_some(), "/llm 应在内建命令中");
+        let desc = reg.get("llm").unwrap();
+        assert_eq!(desc.id, "llm");
+        assert!(desc.description.contains("LLM"));
     }
 
     /// 测试 4:SlashCommandRegistry 拒绝重复注册

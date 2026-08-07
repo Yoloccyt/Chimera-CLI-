@@ -1,12 +1,12 @@
 {
-    "version": "1.7.0-omega",
+    "version": "2.21.0-omega",
     "description": "Chimera CLI — next-gen AI programming agent CLI (NEXUS-OMEGA)",
     "homepage": "https://github.com/Yoloccyt/Chimera-CLI-",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v1.7.0-omega/chimera-windows-x86_64.exe",
-            "hash": "42853b5601664bc61892e49de2e498fcbec3f563aae6d1ce3a22f339d0f8f1c9"
+            "url": "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v2.21.0-omega/chimera-windows-x86_64.exe",
+            "hash": "c2ba7eb45f6b3a7b2c2bf378577f6bca60875496f1317fbe399d35e1b1cd0a2a"
         }
     },
     "bin": [

@@ -270,7 +270,8 @@ fn test_update_skips_copy_when_revision_unchanged() {
         "revision 未变化时 update 应跳过字段拷贝与 dirty 标记"
     );
     assert_eq!(
-        app.state().budget.utilization_rate, 0.9,
+        app.state().budget.utilization_rate,
+        0.9,
         "revision 未变化时本地状态不应被快照覆盖"
     );
     assert_eq!(app.state().last_snapshot_revision, 7);

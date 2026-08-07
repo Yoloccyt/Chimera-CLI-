@@ -5,12 +5,16 @@
 #![forbid(unsafe_code)]
 
 use chimera_tui::{
-    DataSnapshot, DataSourceConfig, MemoryMetrics, PanelId, TuiApp, TuiConfig, TuiDataSource,
-    TuiError,
+    set_locale, DataSnapshot, DataSourceConfig, Locale, MemoryMetrics, PanelId, TuiApp, TuiConfig,
+    TuiDataSource, TuiError,
 };
 use cmt_tiering::tier_distribution;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use std::sync::Mutex;
+
+/// locale 串行化锁 — 与 i18n_chrome_test 同模式,避免 En 固定窗口被并行测试复位
+static LOCALE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 测试数据源 — 返回预设 Memory 指标
 #[derive(Debug)]
@@ -29,8 +33,8 @@ impl MemoryTestSource {
 }
 
 impl TuiDataSource for MemoryTestSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &DataSourceConfig {
@@ -126,6 +130,9 @@ fn test_memory_panel_empty_data_renders_defaults() {
 
 #[test]
 fn test_memory_panel_displays_tier_distribution() {
+    // i18n(U-3):面板正文标签随 locale 切换,固定 En 断言英文 "Storage:" 行
+    let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    set_locale(Locale::En);
     // 验证面板渲染包含 tier_distribution() 返回的四层存储分布
     let snapshot = DataSnapshot {
         memory_metrics: MemoryMetrics {
@@ -163,4 +170,5 @@ fn test_memory_panel_displays_tier_distribution() {
     assert_eq!(dist.warm, 0);
     assert_eq!(dist.cold, 0);
     assert_eq!(dist.frozen, 0);
+    set_locale(Locale::Zh); // 复位默认中文
 }

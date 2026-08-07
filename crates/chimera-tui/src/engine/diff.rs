@@ -64,7 +64,7 @@ impl DiffEngine {
     }
 
     /// 输出缓冲全部单元格为变化(全量重绘,同样按行合并 Span)
-    fn full(buf: &Buffer) -> Vec<Change> {
+    pub(crate) fn full(buf: &Buffer) -> Vec<Change> {
         // 全量重绘:每个格都视为"变化",按行合并为 Span
         Self::coalesce(buf, |_| true)
     }

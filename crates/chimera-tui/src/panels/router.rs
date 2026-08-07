@@ -12,7 +12,7 @@
 //!   O(k log k),k=10 时约 33 次比较,可接受。
 //! - 命中率低水位:`< 60%` 时追加 `[LOW]` 标记并黄色高亮,提醒运维关注。
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -74,7 +74,7 @@ impl RouterPanel {
         let m = &state.router_metrics;
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        lines.push(Line::from("Router Stats"));
+        lines.push(Line::from(crate::t!("panel.router.body_title")));
         lines.push(Line::from("─────────────"));
 
         // 三路由器命中率进度条 + 延迟行,空行分隔
@@ -87,21 +87,28 @@ impl RouterPanel {
         // 热点 capability Top-10(合并三路由器)
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            format!("Hot Capabilities (Top-{}):", TOP_K_CAPABILITIES),
+            format!(
+                "{} (Top-{}):",
+                crate::t!("panel.router.hot_capabilities"),
+                TOP_K_CAPABILITIES
+            ),
             Style::default().add_modifier(Modifier::BOLD),
         )));
 
         let merged = merge_hot_capabilities(&m.kvbsr_stats, &m.sesa_stats, &m.faae_stats);
         let top = top_k_capabilities(&merged, TOP_K_CAPABILITIES);
         if top.is_empty() {
-            lines.push(Line::from("  (no hot capabilities)"));
+            // WHY 单行书写:key 必须与宏调用同处一行,
+            // i18n_completeness_test 的行级扫描器才能发现该 key。
+            lines.push(Line::from(crate::t!("panel.router.no_hot_capabilities")));
         } else {
             for (idx, (cap, hits)) in top.iter().enumerate() {
                 lines.push(Line::from(format!(
-                    "  {}. {} ({} hits)",
+                    "  {}. {} ({} {})",
                     idx + 1,
                     cap,
-                    hits
+                    hits,
+                    crate::t!("panel.router.hits")
                 )));
             }
         }
@@ -132,7 +139,7 @@ impl RouterPanel {
         // 低命中率时追加黄色 [LOW] 标记,提醒运维关注
         if low_hit {
             spans.push(Span::styled(
-                "  [LOW]",
+                crate::t!("panel.router.low"),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -165,13 +172,19 @@ impl Panel for RouterPanel {
         paragraph.render(area, buf);
     }
 
-    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // `R` 刷新:发布 RequestRefresh(与 `:refresh` 命令同语义)。
+        // WHY 补齐 shortcuts() 声明但无实现的按键(快捷键诚实性)。
+        if key.code == KeyCode::Char('R') {
+            return Some(TuiCommand::RequestRefresh);
+        }
         // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
         None
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("↑/↓", "导航"), ("R", "刷新")]
+        // 纯展示面板无列表导航:仅保留真实可达的 R 刷新,移除虚假 ↑/↓ 提示。
+        vec![("R", "刷新")]
     }
 }
 
@@ -242,6 +255,18 @@ mod tests {
     fn test_router_panel_id() {
         let panel = RouterPanel::new();
         assert_eq!(panel.id(), PanelId::Router);
+    }
+
+    #[test]
+    fn handle_key_r_returns_request_refresh() {
+        // 快捷键诚实性:R 刷新声明即可达(此前 handle_key 恒 None)
+        let mut panel = RouterPanel::new();
+        let mut state = TuiState::new();
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('R'), crossterm::event::KeyModifiers::NONE),
+            &mut state,
+        );
+        assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
     }
 
     #[test]
@@ -326,8 +351,8 @@ mod tests {
         assert!(content.contains("SESA"));
         assert!(content.contains("FaaE"));
         assert!(content.contains("0.0%"));
-        // 默认 hit_rate = 0.0 < 0.6,应显示 [LOW] 标记
-        assert!(content.contains("[LOW]"));
+        // 默认 hit_rate = 0.0 < 0.6,应显示 [低] 标记
+        assert!(content.contains("[低]"));
     }
 
     #[test]
@@ -372,8 +397,8 @@ mod tests {
         assert!(content.contains("search"));
         assert!(content.contains("read_file"));
         assert!(content.contains("activate"));
-        // 高命中率(>= 0.6)不应显示 [LOW]
-        assert!(!content.contains("[LOW]"));
+        // 高命中率(>= 0.6)不应显示 [低]
+        assert!(!content.contains("[低]"));
     }
 
     #[test]
@@ -408,9 +433,9 @@ mod tests {
         assert!(content.contains("45.0%"));
         assert!(content.contains("50.0%"));
         assert!(content.contains("30.0%"));
-        // 三路由器均 < 0.6,应显示 [LOW] 标记(至少 3 次)
-        let low_count = content.matches("[LOW]").count();
-        assert_eq!(low_count, 3, "all three routers should have [LOW] marker");
+        // 三路由器均 < 0.6,应显示 [低] 标记(至少 3 次)
+        let low_count = content.matches("[低]").count();
+        assert_eq!(low_count, 3, "all three routers should have [低] marker");
     }
 
     #[test]
@@ -466,7 +491,7 @@ mod tests {
         };
         let content = RouterPanel::content(&state).to_string();
         assert!(
-            content.contains("no hot capabilities"),
+            content.contains("暂无热门能力"),
             "empty hot_capabilities should show placeholder"
         );
     }

@@ -57,14 +57,20 @@ impl<W: Write> TerminalWriter<W> {
                 Change::Cell { x, y, cell } => {
                     queue!(self.out, MoveTo(*x, *y))?;
                     self.apply_style_if_changed(cell.style)?;
-                    queue!(self.out, Print(cell.symbol))?;
+                    // 宽字符续格哨兵:定位后不输出(终端光标已在宽字符右列之后,
+                    // 输出任何字符都会破坏宽字符;样式仍跟踪,不影响后续格)。
+                    if !cell.is_wide_continuation() {
+                        queue!(self.out, Print(cell.symbol))?;
+                    }
                 }
                 Change::Span { x, y, cells } => {
                     // 一次 MoveTo 定位行首,随后逐格 Print(终端光标自动后移)
                     queue!(self.out, MoveTo(*x, *y))?;
                     for cell in cells {
                         self.apply_style_if_changed(cell.style)?;
-                        queue!(self.out, Print(cell.symbol))?;
+                        if !cell.is_wide_continuation() {
+                            queue!(self.out, Print(cell.symbol))?;
+                        }
                     }
                 }
             }
@@ -239,5 +245,27 @@ mod tests {
         for ch in *b"abcd" {
             assert!(span_bytes.contains(&ch), "Span 输出应含 {}", ch as char);
         }
+    }
+
+    #[test]
+    fn wide_continuation_cells_are_skipped_not_printed() {
+        // 模拟 compat 转换结果:'中' + 续格哨兵 + 'a';writer 应输出中 与 a,
+        // 但绝不输出 NUL 字节(哨兵),也不会在宽字符后打印空格破坏字形。
+        let wide = Cell::new('中');
+        let cont = Cell::new(Cell::WIDE_CONTINUATION);
+        let changes = vec![Change::Span {
+            x: 0,
+            y: 0,
+            cells: vec![wide, cont, Cell::new('a')],
+        }];
+        let mut writer = TerminalWriter::new(Vec::<u8>::new());
+        writer.render(&changes).unwrap();
+        let out = writer.into_inner();
+        assert!(
+            out.windows(3).any(|w| w == "中".as_bytes()),
+            "应输出宽字符 中"
+        );
+        assert!(out.contains(&b'a'), "续格后应继续输出 a");
+        assert!(!out.contains(&0u8), "输出不应包含 NUL(续格哨兵被跳过)");
     }
 }

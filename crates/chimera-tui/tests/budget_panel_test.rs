@@ -94,10 +94,7 @@ fn zero_utilization_renders_empty_bar() {
     let content = BudgetPanel::content(&state).to_string();
     assert!(content.contains("0.0%"), "零利用率应显示 0.0%");
     let bar_empty = "-".repeat(30);
-    assert!(
-        content.contains(&bar_empty),
-        "零利用率进度条应全空"
-    );
+    assert!(content.contains(&bar_empty), "零利用率进度条应全空");
 }
 
 #[test]
@@ -106,10 +103,7 @@ fn full_utilization_renders_full_bar() {
     let content = BudgetPanel::content(&state).to_string();
     assert!(content.contains("100.0%"), "满利用率应显示 100.0%");
     let bar_full = "=".repeat(30);
-    assert!(
-        content.contains(&bar_full),
-        "满利用率进度条应全满"
-    );
+    assert!(content.contains(&bar_full), "满利用率进度条应全满");
 }
 
 #[test]
@@ -119,10 +113,7 @@ fn negative_utilization_clamps_to_zero() {
     let content = BudgetPanel::content(&state).to_string();
     assert!(content.contains("-50.0%"), "负利用率数值如实显示(数据可信)");
     let bar_empty = "-".repeat(30);
-    assert!(
-        content.contains(&bar_empty),
-        "负利用率进度条应钳位为空"
-    );
+    assert!(content.contains(&bar_empty), "负利用率进度条应钳位为空");
 }
 
 // ============================================================

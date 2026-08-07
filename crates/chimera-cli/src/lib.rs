@@ -45,6 +45,8 @@
 
 /// Action 编排器(消费 TuiActionRequested,路由 quest.* 域到 QuestEngine 真实执行)
 pub mod action_orchestrator;
+/// 启动 banner 输出(品牌 ASCII art,可通过 `--no-banner` 关闭)
+pub mod banner;
 /// Clap 子命令定义
 pub mod cli;
 /// 子命令业务骨架

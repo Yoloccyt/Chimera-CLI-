@@ -16,7 +16,7 @@
 #   .\install.ps1 -Proxy 'http://proxy.company.com:8080'
 #
 # 离线/手动下载场景:
-#   .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimela-windows-x86_64.exe' -Version v1.5.8-omega
+#   .\install.ps1 -LocalFile 'C:\Users\$env:USERNAME\Downloads\chimela-windows-x86_64.exe' -Version v2.21.0-omega
 #
 # 私有仓库安装(需 $env:GITHUB_TOKEN 环境变量鉴权):
 #   WHY: raw.githubusercontent.com 对私有仓库 raw 内容拒绝匿名访问,

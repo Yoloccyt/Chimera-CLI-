@@ -124,6 +124,12 @@ pub struct TuiConfig {
     /// 至 70 列以下,可读性下降。折叠伴随面板让主面板独占宽度,符合响应式设计原则。
     /// 用户可在配置文件 `tui.responsive_collapse_threshold` 调整(设为 0 禁用折叠)。
     pub responsive_collapse_threshold: u16,
+    /// 退出确认(默认 false):开启后 Normal 模式按 q/Esc 先弹确认框,
+    /// 左/右键切到 Yes 后 Enter 才真正退出,防误触(§4.3 退出安全)。
+    ///
+    /// WHY 默认 false:保持既有 `q`/Esc 立即退出行为零回归(含 m3a 契约),
+    /// 需要误触保护的用户在配置文件中显式开启。
+    pub quit_requires_confirm: bool,
 }
 
 impl Default for TuiConfig {
@@ -156,6 +162,7 @@ impl Default for TuiConfig {
             state_file_path: Self::default_state_path(),
             // v2.9.0-omega Task 2.6:响应式折叠阈值默认 100 列
             responsive_collapse_threshold: 100,
+            quit_requires_confirm: false,
         }
     }
 }
@@ -364,6 +371,20 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn quit_requires_confirm_defaults_false_and_serde_compat(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // 默认关闭(保持 q/Esc 立即退出零回归);旧配置文件缺省该字段时回退 false
+        let cfg = TuiConfig::default();
+        assert!(!cfg.quit_requires_confirm);
+        let json = r#"{"theme": "Dark"}"#;
+        let restored: TuiConfig = serde_json::from_str(json)?;
+        assert!(!restored.quit_requires_confirm);
+        let enabled: TuiConfig = serde_json::from_str(r#"{"quit_requires_confirm": true}"#)?;
+        assert!(enabled.quit_requires_confirm);
+        Ok(())
     }
 
     #[test]

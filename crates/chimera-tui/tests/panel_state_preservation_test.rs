@@ -70,9 +70,7 @@ impl MockDataSource {
 }
 
 impl chimera_tui::TuiDataSource for MockDataSource {
-    fn snapshot(
-        &self,
-    ) -> Result<std::sync::Arc<chimera_tui::DataSnapshot>, chimera_tui::TuiError> {
+    fn snapshot(&self) -> Result<std::sync::Arc<chimera_tui::DataSnapshot>, chimera_tui::TuiError> {
         Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 

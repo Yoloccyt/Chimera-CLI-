@@ -42,8 +42,8 @@ impl McpNodesTestSource {
 }
 
 impl TuiDataSource for McpNodesTestSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &DataSourceConfig {

@@ -6,12 +6,21 @@
 //! # v3-engine M2 切换(ADR-061)
 //! 自研渲染路径默认启用,通过 `--no-v3-engine` flag 或 `CHIMERA_NO_V3_ENGINE=1`
 //! 环境变量可回退到 ratatui 路径。回退机制保留 2 个版本周期(v2.11.0-omega 移除)。
+//!
+//! # 超窗/RAG 链路生产接线(P1,ADR-072)
+//! `execute` 组合根创建 `OverWindowBridge`(挂 TUI 会话总线)并注入
+//! `OverWindowHandle`(桥 + 会话语料提供者)给 Action 编排器;`overwindow.run`
+//! 经 `TuiActionRequested` 协议真实执行两级检索,触发时发布
+//! `OverWindowFallbackTriggered` → EventSubscriber → DataPipeline → latest_events
+//! → OverWindow 面板结构化展示(零管道侵入)。
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use crate::action_orchestrator::OverWindowHandle;
 use crate::config::ChimeraConfig;
+use crate::overwindow_bridge::OverWindowBridge;
 
 /// 执行 tui 命令
 ///
@@ -36,14 +45,10 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
     let bus = event_bus::EventBus::new();
     let subscriber = chimera_tui::EventSubscriber::new(bus.clone());
 
-    // 构建数据管道：将事件聚合为 TUI 可消费的统一快照。
-    let pipeline = Arc::new(chimera_tui::DataPipeline::new(
-        subscriber,
-        chimera_tui::DataSourceConfig::default(),
-    ));
-
     // 加载 TUI 专用持久化配置(~/.chimera/tui.yaml)
-    // WHY 在 TuiApp 构造前加载: tui.yaml 持久化 TUI 专用字段
+    // WHY 必须在 DataPipeline 构造前加载: `DataSourceConfig::from_tui_config`
+    // 需读取 tui_config.tick_interval_ms(P1 tick 配置修复,ADR-072;原实现用
+    // DataSourceConfig::default() 导致该配置生产断线)。
     // (theme/colors/main_panel_ratio/tick_interval_ms),覆盖默认值;
     // 文件不存在时 load_from_file 静默返回默认配置(首次启动场景)。
     let tui_config = {
@@ -66,6 +71,14 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
             }
         }
     };
+
+    // 构建数据管道：将事件聚合为 TUI 可消费的统一快照。
+    // tick 间隔来自持久化 TuiConfig(修复 F-4:SetTickInterval 持久化后
+    // 下次启动经 from_tui_config 生效;运行时改值见 event_loop 提示语义)。
+    let pipeline = Arc::new(chimera_tui::DataPipeline::new(
+        subscriber,
+        chimera_tui::DataSourceConfig::from_tui_config(&tui_config),
+    ));
 
     // 创建 TUI 应用，使用实时数据管道而非空桩。
     let mut app =
@@ -92,11 +105,45 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
         crate::orchestrator::OrchestratorConfig::default(),
     );
 
+    // P1(ADR-072):构造超窗兜底桥并注入 Action 编排器。
+    // 桥挂 TUI 会话总线——触发时发布 OverWindowFallbackTriggered,经 subscriber
+    // → pipeline 进入 latest_events,由 OverWindow 面板结构化展示(闭环断点 F-3 修复)。
+    // WHY 会话级桥而非全局共享总线:保持 TUI 会话隔离(总线共享见 ADR-072 结论,
+    // 避免大爆炸式改造);桥的 provider 闭包由 overwindow_bridge 内部组装。
+    let overwindow_bridge =
+        Arc::new(OverWindowBridge::new(bus.clone()).context("OverWindowBridge 初始化失败")?);
+    // 会话语料提供者 = Chat 消息 + Quest 标题(pipeline 快照派生;空语料时
+    // overwindow.run 由编排器明确失败,不空跑)。
+    let pipeline_for_corpus = Arc::clone(&pipeline);
+    let overwindow = OverWindowHandle::new(
+        Arc::clone(&overwindow_bridge),
+        Arc::new(move || {
+            chimera_tui::TuiDataSource::snapshot(&*pipeline_for_corpus)
+                .ok()
+                .map(|snapshot| {
+                    let mut corpus = String::new();
+                    for msg in &snapshot.chat_messages {
+                        corpus.push_str(&msg.content);
+                        corpus.push('\n');
+                    }
+                    for quest in &snapshot.quest_list {
+                        corpus.push_str(&quest.title);
+                        corpus.push('\n');
+                    }
+                    corpus
+                })
+                .unwrap_or_default()
+        }),
+    );
+
     // P0 交互链:启动 Action 编排器,消费命令面板/斜杠/面板派发的 TuiActionRequested,
     // 按 action_id 域前缀路由:quest.* 驱动同一 engine 真实执行,回发 TuiActionCompleted/Failed。
     // UI 本地态动作由 TUI 本地 dispatch_action 处理,不到达此处(误达则回 Failed)。
-    let action_handle =
-        crate::action_orchestrator::spawn_action_orchestrator(bus.clone(), Arc::clone(&engine));
+    let action_handle = crate::action_orchestrator::spawn_action_orchestrator(
+        bus.clone(),
+        Arc::clone(&engine),
+        Some(overwindow),
+    );
 
     // 启动 TUI 事件循环(阻塞直到用户退出)
     // WHY 先保存结果再 shutdown:即使 run() 返回 Err,也必须清理 DataPipeline

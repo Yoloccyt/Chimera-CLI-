@@ -46,12 +46,12 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# v2.20.0-omega: PROBE HCW-Sparse 深度优化首个里程碑(P-1/P0/P1/P2/P3 全部验收通过)
-# - PROBE 总纲 ADR-070 + 召回基准 ADR-071 已落档预备
-# - NexusEvent 118 → 129 变体(HcwRecallReported/Degraded + OverWindowFallbackTriggered)
-# - 测试基线 4944+ lib tests → 8455 passed (303 个 test target)
-# - 详见 CHANGELOG.md v2.20.0-omega 章节与 docs/planning/PROBE_实施进度报告.md
-version = "2.20.0-omega"
+# v2.21.0-omega: TUI 全维度优化 + cli-help-i18n-and-llm + 测试耗时深度优化(ultra-plan)
+# - TUI: v3-engine M3/M4 渲染管线 / OverWindow / FilterCache / i18n 全覆盖(ADR-072)
+# - CLI: chimera llm/help 子命令 + --no-banner + /llm slash(ADR 相关 spec cli-help-i18n-and-llm)
+# - 测试: seccore 沙箱超时进程树泄漏修复 / mcp-mesh 事务参数化 / stress.yml 通道修复
+# - 详见 CHANGELOG.md v2.21.0-omega 章节与 docs/reports/ultra-plan-test-runtime-optimization.md
+version = "2.21.0-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"

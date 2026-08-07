@@ -260,7 +260,7 @@ async fn test_1000_transactions_all_publish_events() {
         // flaky(实测 fast 档失败,事务 ID 019fda14-... timeout_ms: 200)。
         // 30s 远大于单跑 94ms/事务,且仍能拦住真实死锁(对比 gather 场景的 300ms deadline)。
         transaction_timeout_ms: 30_000,
-        durable: false,                // 禁用 WAL,1000 次事务避免磁盘 IO 累积延迟
+        durable: false, // 禁用 WAL,1000 次事务避免磁盘 IO 累积延迟
         ..Default::default()
     };
     let bus = EventBus::new();

@@ -23,6 +23,7 @@ fn make_action(
         slash: None,
         default_key: key,
         requires_context: false,
+        requires_query: false,
         is_core: false,
     }
 }
@@ -56,9 +57,9 @@ fn test_quest_panel_uses_auto_shortcuts() {
     let registry = ActionRegistry::with_builtin_domains();
     let panel = QuestPanel::new();
 
-    // shortcuts() 仅返回手写 UI 键位(4 条:导航/详情/跳顶/跳底)
+    // shortcuts() 仅返回手写 UI 键位(6 条:导航/翻页/跳转事件流/详情/跳顶/跳底)
     let ui_only = panel.shortcuts();
-    assert_eq!(ui_only.len(), 4, "QuestPanel 手写 UI 键位应为 4 条");
+    assert_eq!(ui_only.len(), 6, "QuestPanel 手写 UI 键位应为 6 条");
 
     // shortcuts_with_registry 应合并 UI 键位 + Quest 域 action(6 条)
     let merged = panel.shortcuts_with_registry(&registry);
@@ -94,11 +95,11 @@ fn test_unknown_domain_returns_empty() {
     let shortcuts = panels::shortcuts_from_domain(&empty_reg, ActionDomain::Task);
     assert!(shortcuts.is_empty(), "空 registry 应返回空 shortcuts");
 
-    // 验证 with_builtin_domains 但查询未注册的 domain 组合(Task 已注册,但验证空 reg 兜底)
+    // 验证 with_builtin_domains 但查询未注册的 domain 组合(System 已注册,但验证空 reg 兜底)
     let builtin_reg = ActionRegistry::with_builtin_domains();
-    // Task 域在内建注册表中存在 action,应返回非空
-    let task_shortcuts = panels::shortcuts_from_domain(&builtin_reg, ActionDomain::Task);
-    assert!(!task_shortcuts.is_empty(), "Task 域应有内建 action");
+    // System 域在内建注册表中存在 action,应返回非空
+    let system_shortcuts = panels::shortcuts_from_domain(&builtin_reg, ActionDomain::System);
+    assert!(!system_shortcuts.is_empty(), "System 域应有内建 action");
 }
 
 /// 验证默认 action_domain() 返回 None 的面板(如 HelpPanel)shortcuts_with_registry 回退到 shortcuts()

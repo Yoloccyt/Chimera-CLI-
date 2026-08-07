@@ -71,8 +71,9 @@ fn toggle_companion_shows_second_panel() {
 
     // 关闭伴随:焦点为 Parliament,不应渲染 Quest 面板体("Quest Tasks")
     let off = render_to_string(&mut app, 120, 30);
+    let off_compact: String = off.chars().filter(|c| *c != ' ').collect();
     assert!(
-        !off.contains("Quest Tasks"),
+        !off_compact.contains("任务列表"),
         "关闭伴随时不应渲染 Quest 面板体"
     );
 
@@ -80,8 +81,9 @@ fn toggle_companion_shows_second_panel() {
     app.handle_key_event(key(KeyCode::Char('\\')));
     assert!(app.companion_visible(), "\\ 键应开启伴随面板");
     let on = render_to_string(&mut app, 120, 30);
+    let on_compact: String = on.chars().filter(|c| *c != ' ').collect();
     assert!(
-        on.contains("Quest Tasks"),
+        on_compact.contains("任务列表"),
         "开启伴随后应在右栏渲染 Quest 面板体(companion)"
     );
     assert_ne!(on, off, "伴随开启应改变渲染输出");

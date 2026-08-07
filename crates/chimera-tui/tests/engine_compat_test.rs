@@ -29,16 +29,39 @@ use ratatui::layout::{Position as RatPosition, Rect as RatRect};
 /// 终端产生可见差异,故不做采样,全量比对。
 fn assert_grid_equivalent(rb: &RatBuffer, eng: &EngineBuffer) {
     let area = rb.area;
+    // 行内宽字符追踪:ratatui 0.29 续格保留旧内容(常见为空格),只能按前格
+    // 显示宽度定位;与 compat 的映射规则保持一致(前格宽度 >= 2 → 本格续格)。
     for y in area.y..area.bottom() {
+        let mut prev_wide = false;
         for x in area.x..area.right() {
             let rcell = rb
                 .cell(RatPosition::new(x, y))
                 .expect("ratatui cell 应存在");
             let ecell = eng.get(x, y).expect("engine cell 应存在");
 
-            // 字符:取 ratatui symbol 首 char(skip cell 空串 → 空格),与 engine 对齐
-            let rsym = rcell.symbol().chars().next().unwrap_or(' ');
-            assert_eq!(rsym, ecell.symbol, "字符不一致 @({x},{y})");
+            // 字符等价规则(M3 宽字符语义):
+            // - engine 续格哨兵('\0') == ratatui 空符号格或显式 skip 格
+            //   (宽字符第二列不产生可见字符);
+            // - engine 空格 == ratatui 空符号格(未写入的空白格);
+            // - 其余直接比对首字符。
+            let rsym = rcell.symbol();
+            let is_continuation = prev_wide || rcell.skip;
+            let char_ok = if ecell.symbol == chimera_tui::engine::Cell::WIDE_CONTINUATION {
+                is_continuation
+            } else {
+                !is_continuation && rsym.chars().next().unwrap_or(' ') == ecell.symbol
+            };
+            assert!(
+                char_ok,
+                "字符不一致 @({x},{y}): ratatui symbol={:?} skip={} engine={:?}",
+                rsym, rcell.skip, ecell.symbol
+            );
+            // 更新行内宽字符状态(与 compat 相同:续格后复位,宽字符后置位)
+            prev_wide = if is_continuation {
+                false
+            } else {
+                unicode_width::UnicodeWidthStr::width(rsym) >= 2
+            };
 
             // 样式:fg/bg/modifier 经 compat 映射后应完全一致
             let rstyle = rcell.style();

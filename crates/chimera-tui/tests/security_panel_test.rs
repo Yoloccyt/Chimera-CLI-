@@ -29,8 +29,8 @@ impl SecurityTestSource {
 }
 
 impl TuiDataSource for SecurityTestSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &DataSourceConfig {
@@ -175,12 +175,13 @@ fn test_security_panel_empty_state() {
     app.switch_panel_to(PanelId::Security);
 
     let content = render_to_string(&mut app, 80, 24);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("No security events"),
+        compact.contains("暂无安全事件"),
         "empty state should be shown"
     );
     assert!(
-        content.contains("None"),
+        compact.contains("(无)"),
         "frozen capabilities empty hint should be shown"
     );
 }

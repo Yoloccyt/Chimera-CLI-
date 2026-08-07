@@ -144,7 +144,9 @@ impl Panel for HelpPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("Esc", "关闭"), ("?", "显示帮助")]
+        // WHY 移除 "Esc 关闭":Help 是面板而非弹窗,Normal 下 Esc 是全局退出键;
+        // 帮助浮层的关闭由弹窗层 Esc 处理(open_help_action 弹出的 overlay)。
+        vec![("?", "显示帮助")]
     }
 }
 
@@ -224,10 +226,10 @@ mod tests {
     fn test_help_panel_shortcuts() {
         let panel = HelpPanel::new();
         let shortcuts = panel.shortcuts();
-        assert_eq!(shortcuts.len(), 2, "HelpPanel 应包含 2 条快捷键: Esc + ?");
-        assert_eq!(shortcuts[0].0, "Esc");
-        assert_eq!(shortcuts[0].1, "关闭");
-        assert_eq!(shortcuts[1].0, "?");
-        assert_eq!(shortcuts[1].1, "显示帮助");
+        // 快捷键诚实性:Help 是面板而非弹窗,Normal 下 Esc 是全局退出键;
+        // 移除虚假的 "Esc 关闭" 提示(帮助浮层关闭由弹窗层 Esc 处理)。
+        assert_eq!(shortcuts.len(), 1, "HelpPanel 应只声明 `?` 一条快捷键");
+        assert_eq!(shortcuts[0].0, "?");
+        assert_eq!(shortcuts[0].1, "显示帮助");
     }
 }

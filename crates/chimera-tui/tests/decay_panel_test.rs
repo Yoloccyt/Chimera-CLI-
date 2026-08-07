@@ -37,8 +37,8 @@ impl DecayTestSource {
 }
 
 impl TuiDataSource for DecayTestSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &DataSourceConfig {
@@ -283,10 +283,11 @@ fn test_decay_panel_renders_history_sparkline() {
 
     // 渲染应包含 sparkline 标题或历史区域
     let content = render_to_string(&mut app, 80, 24);
+    // WHY 压缩空白:TestBackend 逐格渲染中文时汉字间含空格("衰 减 历 史"),
+    // 断言前先去掉空白使 CJK 文案可按原文匹配
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("History")
-            || content.contains("Decay History")
-            || content.contains("Coeff"),
+        compact.contains("衰减历史") || compact.contains("系数"),
         "decay history sparkline section should be rendered"
     );
 }
@@ -302,9 +303,10 @@ fn test_decay_panel_renders_cycle_start() {
     app.switch_panel_to(PanelId::Decay);
 
     let content = render_to_string(&mut app, 80, 24);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     // cycle_start 时间戳应显示(检查日期格式的一部分)
     assert!(
-        content.contains("Cycle") || content.contains("20"),
+        compact.contains("周期开始") || content.contains("20"),
         "cycle start timestamp should be rendered"
     );
 }
@@ -325,9 +327,10 @@ fn test_decay_panel_displays_shadow_breaker_status() {
     app.switch_panel_to(PanelId::Decay);
 
     let content = render_to_string(&mut app, 80, 30);
-    // 面板应包含 "Breakers:" 行(熔断开关)
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
+    // 面板应包含 "熔断:" 行(熔断开关)
     assert!(
-        content.contains("Breakers:"),
+        compact.contains("熔断:"),
         "面板应显示熔断开关状态行,实际内容全文:\n{}",
         content
     );

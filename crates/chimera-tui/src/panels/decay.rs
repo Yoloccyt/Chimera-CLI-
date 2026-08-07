@@ -16,7 +16,7 @@
 //! `coefficient = 1.0` 表示无衰减(满血),`0.0` 表示完全衰减。
 //! 这样默认值 1.0(无衰减)不会误显示为红色高亮。
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -71,30 +71,38 @@ impl DecayPanel {
         } else {
             Style::default()
         };
-        let coeff_text = if high_decay {
-            format!("Coefficient:  {:.1}%  [HIGH DECAY]", coeff_pct)
-        } else {
-            format!("Coefficient:  {:.1}%", coeff_pct)
-        };
+        // WHY 标签与数值在调用点拼接:t!() 返回运行时 &str,不能作 format! 字面量;
+        // 与 Health 面板既有模式一致(标签键 + 数值格式串)。
+        let coeff_text = format!(
+            "{}:  {:.1}%{}",
+            crate::t!("panel.decay.coefficient"),
+            coeff_pct,
+            if high_decay {
+                crate::t!("panel.decay.high_decay")
+            } else {
+                ""
+            }
+        );
         lines.push(Line::from(Span::styled(coeff_text, coeff_style)));
 
         // 周期开始时间
-        let cycle_text = match dm.cycle_start {
-            Some(ts) => format!("Cycle Start:  {}", ts.format("%Y-%m-%d %H:%M:%S UTC")),
-            None => "Cycle Start:  (no cycle active)".to_string(),
+        let cycle_value = match dm.cycle_start {
+            Some(ts) => ts.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            None => crate::t!("panel.decay.no_cycle").to_string(),
         };
+        let cycle_text = format!("{}:  {}", crate::t!("panel.decay.cycle_start"), cycle_value);
         lines.push(Line::from(cycle_text));
 
         lines.push(Line::from(""));
 
         // 最近衰减事件列表
         lines.push(Line::from(Span::styled(
-            "Recent Events:",
+            crate::t!("panel.decay.recent_events"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
 
         if dm.recent_events.is_empty() {
-            lines.push(Line::from("  (no recent decay events)"));
+            lines.push(Line::from(crate::t!("panel.decay.no_events")));
         } else {
             for event in &dm.recent_events {
                 lines.push(Line::from(format!("  {event}")));
@@ -111,13 +119,14 @@ impl DecayPanel {
             let status = decay_engine::shadow_breaker_status();
             let on_off = |v: bool| -> &str {
                 if v {
-                    "ON "
+                    crate::t!("panel.decay.breaker_on")
                 } else {
-                    "OFF"
+                    crate::t!("panel.decay.breaker_off")
                 }
             };
             lines.push(Line::from(format!(
-                "Breakers: TokenBurn:{} | MemoryFreeze:{} | NetworkIsolate:{}",
+                "{}: TokenBurn:{} | MemoryFreeze:{} | NetworkIsolate:{}",
+                crate::t!("panel.decay.breakers"),
                 on_off(status.token_burn),
                 on_off(status.memory_freeze),
                 on_off(status.network_isolate)
@@ -162,11 +171,20 @@ impl Panel for DecayPanel {
         // WHY 颜色随阈值变化:高衰减时红色,正常时青色,与系数文本着色保持一致
         let high_decay = Self::is_high_decay(state.decay_metrics.coefficient);
         let sparkline_color = if high_decay { Color::Red } else { Color::Cyan };
-        let sparkline = render::sparkline(&state.decay_history, "Decay History", sparkline_color);
+        let sparkline = render::sparkline(
+            &state.decay_history,
+            crate::t!("panel.decay.history"),
+            sparkline_color,
+        );
         sparkline.render(chunks[1], buf);
     }
 
-    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // `R` 刷新:发布 RequestRefresh(与 `:refresh` 命令同语义)。
+        // WHY 补齐 shortcuts() 声明但无实现的按键(快捷键诚实性)。
+        if key.code == KeyCode::Char('R') {
+            return Some(TuiCommand::RequestRefresh);
+        }
         // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
         None
     }
@@ -186,6 +204,18 @@ mod tests {
     fn test_decay_panel_id() {
         let panel = DecayPanel::new();
         assert_eq!(panel.id(), PanelId::Decay);
+    }
+
+    #[test]
+    fn handle_key_r_returns_request_refresh() {
+        // 快捷键诚实性:R 刷新声明即可达(此前 handle_key 恒 None)
+        let mut panel = DecayPanel::new();
+        let mut state = TuiState::new();
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('R'), crossterm::event::KeyModifiers::NONE),
+            &mut state,
+        );
+        assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
     }
 
     #[test]
@@ -237,7 +267,7 @@ mod tests {
             "normal coefficient should display"
         );
         assert!(
-            !content.contains("HIGH DECAY"),
+            !content.contains("高衰减"),
             "normal decay should not show HIGH DECAY marker"
         );
         assert!(
@@ -245,7 +275,7 @@ mod tests {
             "recent event should be listed"
         );
         assert!(
-            content.contains("Cycle Start"),
+            content.contains("周期开始"),
             "cycle start label should be present"
         );
     }
@@ -265,7 +295,7 @@ mod tests {
             "high decay coefficient should display"
         );
         assert!(
-            content.contains("HIGH DECAY"),
+            content.contains("高衰减"),
             "high decay should show HIGH DECAY marker"
         );
     }
@@ -280,15 +310,15 @@ mod tests {
             "default coefficient 1.0 should display as 100.0%"
         );
         assert!(
-            !content.contains("HIGH DECAY"),
+            !content.contains("高衰减"),
             "default state (1.0) should not show HIGH DECAY"
         );
         assert!(
-            content.contains("no recent decay events"),
+            content.contains("暂无最近衰减事件"),
             "empty events should show placeholder"
         );
         assert!(
-            content.contains("no cycle active"),
+            content.contains("暂无活跃周期"),
             "None cycle_start should show placeholder"
         );
     }
@@ -304,7 +334,7 @@ mod tests {
         };
         let content = DecayPanel::content(&state).to_string();
         assert!(
-            content.contains("no recent decay events"),
+            content.contains("暂无最近衰减事件"),
             "empty events list should show placeholder"
         );
     }

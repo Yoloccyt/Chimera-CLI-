@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "event-bus"
-version = "3.0.0-omega"
+version = "2.21.0-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -464,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "gsoe-evolution"
-version = "3.0.0-omega"
+version = "2.21.0-omega"
 dependencies = [
  "anyhow",
  "event-bus",
@@ -519,6 +519,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ba4ff7128dee98c7dc9794b6a411377e1404dba1c97deb8d1a55297bd25d8af"
 dependencies = [
  "hashbrown 0.14.5",
+]
+
+[[package]]
+name = "hcw-window"
+version = "2.21.0-omega"
+dependencies = [
+ "chrono",
+ "dashmap",
+ "event-bus",
+ "ndarray",
+ "nexus-contracts",
+ "nexus-core",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -886,18 +903,22 @@ dependencies = [
 
 [[package]]
 name = "mca-gateway"
-version = "3.0.0-omega"
+version = "2.21.0-omega"
 dependencies = [
  "arc-swap",
  "chrono",
  "dashmap",
  "event-bus",
+ "hcw-window",
  "nexus-contracts",
+ "osa-coordinator",
  "reqwest",
  "rmp-serde",
  "rusqlite",
+ "scc-cache",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
  "toml",
@@ -929,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "model-router"
-version = "3.0.0-omega"
+version = "2.21.0-omega"
 dependencies = [
  "dashmap",
  "event-bus",
@@ -979,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-contracts"
-version = "3.0.0-omega"
+version = "2.21.0-omega"
 dependencies = [
  "chrono",
  "serde",
@@ -988,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "3.0.0-omega"
+version = "2.21.0-omega"
 dependencies = [
  "chrono",
  "hex",
@@ -1077,6 +1098,21 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "osa-coordinator"
+version = "2.21.0-omega"
+dependencies = [
+ "event-bus",
+ "hex",
+ "nexus-contracts",
+ "nexus-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]
@@ -1456,6 +1492,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "scc-cache"
+version = "2.21.0-omega"
+dependencies = [
+ "chrono",
+ "dashmap",
+ "event-bus",
+ "nexus-contracts",
+ "nexus-core",
+ "rusqlite",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1472,12 +1525,14 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seccore"
-version = "3.0.0-omega"
+version = "2.21.0-omega"
 dependencies = [
  "chrono",
  "event-bus",
  "hex",
+ "nexus-contracts",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror 1.0.69",
  "tokio",

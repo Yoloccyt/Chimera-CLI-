@@ -46,7 +46,7 @@ impl TuiApp {
 
     /// 检查环境变量 `CHIMERA_NO_V3_ENGINE` 是否禁用 v3-engine(M2 回退验证用)
     #[cfg(feature = "v3-engine")]
-    fn v3_engine_disabled_by_env() -> bool {
+    pub(crate) fn v3_engine_disabled_by_env() -> bool {
         // WHY 运行时 env var:feature flag 是编译期的,无法在已编译二进制中关闭;
         // env var 提供"逃生舱"用于生产回退验证(Task 0.4.6 --no-v3-engine flag 设置此变量)
         std::env::var("CHIMERA_NO_V3_ENGINE")
@@ -774,5 +774,35 @@ mod v3_engine_tests {
             chunks[0].height, 3,
             "tabs still 3 rows even in small terminal"
         );
+    }
+
+    /// M3 端到端管线:真实 app 帧 → compat 转换 → V3Output diff 写出。
+    ///
+    /// 断言:默认中文帧输出含 CJK 字节;输出不含 NUL(宽字符续格哨兵被
+    /// TerminalWriter 跳过,避免汉字右半格被空格覆盖的渲染破损)。
+    #[test]
+    fn v3_output_pipeline_renders_zh_frame_without_nul() {
+        use ratatui::backend::TestBackend;
+
+        // 与其它 locale 测试互斥,避免并行竞态把全局语言切到 En 导致断言失败
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+        let mut app = TuiApp::new(TuiConfig::default()).expect("TuiApp construction failed");
+        app.switch_panel_to(crate::types::PanelId::Quest);
+        let backend = TestBackend::new(80, 24);
+        let mut term = ratatui::Terminal::new(backend).expect("memory terminal init");
+        term.draw(|f| app.render(f)).expect("frame draw");
+        let rb = term.backend().buffer().clone();
+        let back = crate::engine::from_ratatui_buffer(&rb);
+
+        let mut out_state = crate::engine::output::V3Output::new();
+        let mut sink = Vec::<u8>::new();
+        out_state.render(back, &mut sink).expect("v3 output render");
+        assert!(
+            sink.windows(3)
+                .any(|w| w == "任".as_bytes() || w == "务".as_bytes()),
+            "默认中文帧应输出 CJK 字节"
+        );
+        assert!(!sink.contains(&0u8), "输出不应包含 NUL(续格哨兵被跳过)");
     }
 }

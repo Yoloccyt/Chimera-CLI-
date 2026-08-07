@@ -1,8 +1,12 @@
 class Chimera < Formula
   desc "Chimera CLI — next-gen AI programming agent CLI (NEXUS-OMEGA)"
   homepage "https://github.com/Yoloccyt/Chimera-CLI-"
-  version "1.7.0-omega"
+  version "2.21.0-omega"
   license "MIT"
+
+  # 2026-08-07 v2.21.0-omega 同步:version 已更新;下方 sha256 需在 tag 推送后从
+  # GitHub Release 的 checksums.txt 获取(chimera-macos-aarch64 / chimera-macos-x86_64),
+  # 本地 Windows 环境无法构建 macOS 产物,由发布后同步步骤补填。
 
   if Hardware::CPU.arm?
     url "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v#{version}/chimera-macos-aarch64"

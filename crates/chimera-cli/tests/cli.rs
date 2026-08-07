@@ -1156,13 +1156,14 @@ fn test_agent_spawn_parallel_creates_two_agents() {
 
 // === Task 1.13: chimera doctor 子命令集成测试(SubTask 1.13.6)===
 //
-// 验证 doctor 命令 5 维度健康检查(config / cargo_lock / sqlite / mcp / event_bus)。
+// 验证 doctor 命令 6 维度健康检查(config / cargo_lock / sqlite / mcp / event_bus / llm_provider)。
+// Wave 2 Task 4:在原 5 维度基础上扩展 LLM Provider 断言。
 // 测试环境配置文件可能缺失(WARN),但不应 FAIL 到退出码非 0。
 
-/// 测试 `chimera doctor` 成功执行 5 维度健康检查(SubTask 1.13.2)
+/// 测试 `chimera doctor` 成功执行 6 维度健康检查(SubTask 1.13.2 + Wave 2 Task 4)
 ///
 /// 即使配置文件缺失(WARN),doctor 命令仍返回成功(退出码 0)。
-/// 输出包含 5 项检查结果 + 汇总统计。
+/// 输出包含 6 项检查结果 + 汇总统计。
 #[test]
 fn test_doctor_executes_five_dimension_checks() {
     let bin = env!("CARGO_BIN_EXE_chimera");
@@ -1181,7 +1182,7 @@ fn test_doctor_executes_five_dimension_checks() {
         "stderr 应包含报告标题,实际 stderr: {}",
         stderr
     );
-    // 5 维度检查项名称
+    // 6 维度检查项名称(5 项原维度 + LLM Provider)
     assert!(
         stderr.contains("配置文件"),
         "stderr 应包含配置文件检查项,实际 stderr: {}",
@@ -1207,10 +1208,21 @@ fn test_doctor_executes_five_dimension_checks() {
         "stderr 应包含 EventBus 检查项,实际 stderr: {}",
         stderr
     );
-    // 汇总统计
+    // Wave 2 Task 4:第 6 维 LLM Provider 健康度
+    assert!(
+        stderr.contains("LLM Provider"),
+        "stderr 应包含 LLM Provider 检查项,实际 stderr: {}",
+        stderr
+    );
+    // 汇总统计(共 6 项)
     assert!(
         stderr.contains("汇总"),
         "stderr 应包含汇总统计,实际 stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("共 6 项"),
+        "stderr 应包含 '共 6 项' 汇总,实际 stderr: {}",
         stderr
     );
 }
@@ -1249,8 +1261,8 @@ fn test_doctor_json_outputs_report_envelope() {
         stdout
     );
     assert!(
-        stdout.contains("\"total\": 5"),
-        "stdout 应包含 total: 5(5 项检查),实际: {}",
+        stdout.contains("\"total\": 6"),
+        "stdout 应包含 total: 6(6 项检查),实际: {}",
         stdout
     );
 }

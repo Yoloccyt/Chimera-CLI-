@@ -8,7 +8,7 @@
 //! - M3 扩展命令解析,支持 `:find`/`:filter`/`:level`/`:refresh` 等
 //!   过滤器命令;搜索模式提交后设置全局关键字过滤器。
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -36,10 +36,22 @@ impl CommandPalette {
     /// 根据当前输入模式渲染底部输入栏
     pub fn render(&self, state: &TuiState, area: Rect, buf: &mut Buffer) {
         let (prefix, title) = match state.input_mode {
-            InputMode::Command => (":", " Command "),
-            InputMode::Search => ("/", " Search "),
+            InputMode::Command => (":".to_string(), " Command ".to_string()),
+            InputMode::Search => ("/".to_string(), " Search ".to_string()),
             // Insert(M3a):底部显示聊天输入行 `> {buffer}`(复用同一渲染路径)
-            InputMode::Insert => ("> ", " Chat "),
+            InputMode::Insert => {
+                if let Some(pending) = &state.pending_action {
+                    // F-5:palette 参数输入态——标题显示目标动作 i18n 标题,
+                    // 明确"正在为此动作收集 query"(仅此态按帧查注册表,约 21 条,廉价)。
+                    let title = ActionRegistry::with_builtin_domains()
+                        .get(&pending.action_id)
+                        .map(|d| format!(" {} ", crate::i18n::tr(d.title_key)))
+                        .unwrap_or_else(|| format!(" {} ", pending.action_id));
+                    ("> ".to_string(), title)
+                } else {
+                    ("> ".to_string(), " Chat ".to_string())
+                }
+            }
             InputMode::Normal => return,
         };
 
@@ -70,7 +82,9 @@ impl CommandPalette {
                 None
             }
             KeyCode::Enter => self.submit(state),
-            KeyCode::Char(c) => {
+            // 排除 Ctrl 组合:与 Insert 模式语义一致,命令栏内 Ctrl+X 类快捷键
+            // 不应把字符打进输入缓冲(Ctrl+L 等全局键由 TuiApp 在委托前拦截)。
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 state.input_buffer.push(c);
                 None
             }
@@ -444,6 +458,17 @@ impl CommandPaletteModel {
     /// 当前选中的动作 id(供 Enter 执行 → DispatchAction)
     pub fn selected_action(&self) -> Option<&'static str> {
         self.selected_entry().map(|e| e.action_id)
+    }
+
+    /// 当前选中动作是否需要 query 参数(palette 参数输入流分流,F-5)
+    ///
+    /// 返回 true 时 Enter 应进入 Insert 参数收集态(提交后以 {"query": text}
+    /// 派发);false 时维持既有空 payload 直发。缺省 false,行为零回归。
+    pub fn selected_action_requires_query(&self) -> bool {
+        self.selected_entry()
+            .and_then(|e| self.registry.get(e.action_id))
+            .map(|d| d.requires_query)
+            .unwrap_or(false)
     }
 
     /// 按当前 query 重新过滤,并将选择下标钳制到有效范围

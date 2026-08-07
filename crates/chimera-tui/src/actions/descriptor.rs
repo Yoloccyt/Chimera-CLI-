@@ -56,6 +56,8 @@ impl ActionDomain {
 /// - `slash`:斜杠命令触发词(如 `"quest pause"`);`None` 表示不暴露斜杠入口
 /// - `default_key`:默认全局/面板快捷键(如 `"Ctrl+E"`);`None` 表示无默认键
 /// - `requires_context`:是否需要运行时上下文(如焦点 Quest/Task 的 id)才能执行
+/// - `requires_query`:是否需要用户输入 query 参数才能执行(如 agent.chat /
+///   quest.start / overwindow.run);palette 选中此类动作时进入参数输入态
 /// - `is_core`:是否属于"核心 10 功能"(§八 可达性验收:核心功能须 ≤3 键可达)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActionDescriptor {
@@ -73,6 +75,12 @@ pub struct ActionDescriptor {
     pub default_key: Option<&'static str>,
     /// 是否需要运行时上下文(焦点项 id 等)才能执行
     pub requires_context: bool,
+    /// 是否需要用户输入 query 参数(palette 参数输入流,F-5)
+    ///
+    /// WHY 独立于 `requires_context`:上下文是"运行时面板/选中项"派生,
+    /// query 是"用户文本输入";palette Enter 时据此分流到 Insert 参数收集态,
+    /// 提交后以 `{"query": text}` 派发(编排器 payload_str(payload, "query"))。
+    pub requires_query: bool,
     /// 是否为核心 10 功能(可达性验收基线)
     pub is_core: bool,
 }
@@ -97,6 +105,7 @@ impl ActionDescriptor {
             slash,
             default_key: None,
             requires_context: false,
+            requires_query: false,
             is_core: false,
         }
     }

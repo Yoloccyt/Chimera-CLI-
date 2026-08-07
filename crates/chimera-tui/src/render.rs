@@ -106,8 +106,12 @@ pub fn utilization_bar(value: f64, max: f64, width: usize) -> Line<'static> {
 /// (如 P99 远大于 P50 表示长尾问题)。同时复用此函数避免各面板重复拼字符串。
 pub fn latency_line(label: &str, p50: u64, p95: u64, p99: u64) -> Line<'static> {
     Line::from(format!(
-        "{}  Latency  P50: {}μs  P95: {}μs  P99: {}μs",
-        label, p50, p95, p99,
+        "{}  {}  P50: {}μs  P95: {}μs  P99: {}μs",
+        label,
+        crate::t!("panel.router.latency"),
+        p50,
+        p95,
+        p99,
     ))
 }
 

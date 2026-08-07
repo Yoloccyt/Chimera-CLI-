@@ -50,6 +50,38 @@ pub fn handle_key_navigation(key: KeyCode, selected: usize, item_count: usize) -
     }
 }
 
+/// 翻页大小(行)— 单次 PgUp/PgDn 移动的行数
+///
+/// WHY 固定 10:`handle_key` 调用点不持有可见行数上下文(渲染时才拿到 area),
+/// 用固定页大小提供一致的翻页体验,避免为每个面板引入"最近可见行数"状态。
+pub const PAGE_SIZE: usize = 10;
+
+/// 上翻一页:选中索引回退 `page_size` 行,钳制在 [0, item_count)。
+pub fn page_up(selected: usize, page_size: usize, item_count: usize) -> usize {
+    move_selection(selected, -(page_size as isize), item_count)
+}
+
+/// 下翻一页:选中索引前进 `page_size` 行,钳制在 [0, item_count)。
+pub fn page_down(selected: usize, page_size: usize, item_count: usize) -> usize {
+    move_selection(selected, page_size as isize, item_count)
+}
+
+/// 根据翻页键移动选中索引,返回新的索引。
+///
+/// 仅处理 `KeyCode::PageUp` / `KeyCode::PageDown`;其他按键返回 `None`,
+/// 与 `handle_key_navigation` 一致,便于调用方继续处理面板特定按键。
+pub fn handle_key_page_navigation(
+    key: KeyCode,
+    selected: usize,
+    item_count: usize,
+) -> Option<usize> {
+    match key {
+        KeyCode::PageUp => Some(page_up(selected, PAGE_SIZE, item_count)),
+        KeyCode::PageDown => Some(page_down(selected, PAGE_SIZE, item_count)),
+        _ => None,
+    }
+}
+
 /// 根据鼠标滚轮事件移动选中索引,返回新的索引。
 ///
 /// 仅处理 `ScrollUp` / `ScrollDown`;其他事件返回 `None`。
@@ -78,4 +110,35 @@ pub fn move_selection(selected: usize, delta: isize, item_count: usize) -> usize
         selected.saturating_add(delta as usize)
     };
     clamp_selected(new, item_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_up_clamps_at_zero() {
+        assert_eq!(page_up(0, 10, 25), 0);
+        assert_eq!(page_up(5, 10, 25), 0);
+        assert_eq!(page_up(12, 10, 25), 2);
+    }
+
+    #[test]
+    fn page_down_clamps_at_last() {
+        assert_eq!(page_down(0, 10, 25), 10);
+        assert_eq!(page_down(20, 10, 25), 24);
+        assert_eq!(page_down(30, 10, 25), 24);
+    }
+
+    #[test]
+    fn page_navigation_empty_list_stays_zero() {
+        assert_eq!(page_up(3, 10, 0), 0);
+        assert_eq!(page_down(3, 10, 0), 0);
+    }
+
+    #[test]
+    fn page_navigation_ignores_other_keys() {
+        assert_eq!(handle_key_page_navigation(KeyCode::Enter, 1, 10), None);
+        assert_eq!(handle_key_page_navigation(KeyCode::Up, 1, 10), None);
+    }
 }

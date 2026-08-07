@@ -124,7 +124,9 @@ fn wheel_scrolls_popup_when_active() {
     // ScrollDown → 4 → 5
     app.handle_mouse_event(mouse(MouseEventKind::ScrollDown, 10, 10));
     match app.state().popup_stack.current() {
-        Some(PopupKind::Detail { scroll, .. }) => assert_eq!(*scroll, 5, "ScrollDown 应增大弹窗滚动"),
+        Some(PopupKind::Detail { scroll, .. }) => {
+            assert_eq!(*scroll, 5, "ScrollDown 应增大弹窗滚动")
+        }
         other => panic!("应仍为 Detail 弹窗,实际: {other:?}"),
     }
 
@@ -173,10 +175,7 @@ fn wheel_in_main_area_scrolls_focused_panel() {
     // 主面板区域(y 3-16)ScrollDown → Parliament selected 递增
     // (Parliament handle_mouse 经 list_state 导航,不产生命令)
     app.handle_mouse_event(mouse(MouseEventKind::ScrollDown, 40, 10));
-    assert!(
-        app.state().running,
-        "主面板滚动不应影响运行状态"
-    );
+    assert!(app.state().running, "主面板滚动不应影响运行状态");
     // 无弹窗:滚动直接委托焦点面板,不 panic 即通过
     assert!(app.state().popup_stack.is_empty());
 }

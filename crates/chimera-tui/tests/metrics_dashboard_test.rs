@@ -78,8 +78,8 @@ impl TestDataSource {
 }
 
 impl TuiDataSource for TestDataSource {
-    fn snapshot(&self) -> Result<DataSnapshot, chimera_tui::TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, chimera_tui::TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &DataSourceConfig {

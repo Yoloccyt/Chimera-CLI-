@@ -7,7 +7,7 @@
 //! - 健康评分使用 Gauge 直观展示 0-100 区间。
 //! - 事件速率使用 Sparkline 展示近期趋势。
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -160,7 +160,12 @@ impl HealthPanel {
             let trend = Self::trend_arrow(sys.cpu.global_usage, last.cpu.global_usage);
             let color = Self::threshold_color(sys.cpu.global_usage, 60.0, 80.0);
             spans.push(Span::styled(
-                format!("CPU {:.0}%{}", sys.cpu.global_usage, trend),
+                format!(
+                    "{} {:.0}%{}",
+                    crate::t!("health.cpu"),
+                    sys.cpu.global_usage,
+                    trend
+                ),
                 Style::default().fg(color),
             ));
         }
@@ -172,22 +177,44 @@ impl HealthPanel {
             let trend = Self::trend_arrow(sys.memory.usage_percent, last.memory.usage_percent);
             let color = Self::threshold_color(sys.memory.usage_percent, 70.0, 90.0);
             spans.push(Span::styled(
-                format!("RAM {:.1}/{:.1} GB{}", ram_used_gb, ram_total_gb, trend),
+                format!(
+                    "{} {:.1}/{:.1} GB{}",
+                    crate::t!("health.ram"),
+                    ram_used_gb,
+                    ram_total_gb,
+                    trend
+                ),
                 Style::default().fg(color),
             ));
         }
 
-        // Disk: 读写 MB/s
+        // Disk: 读写 MB/s —— 采集缺省(DiskMetrics::default() 恒 0)时如实标注 n/a,
+        // 不渲染伪造的 0 读数(U-2)。
         {
             let disk_r_mb = sys.disk.read_bytes_per_sec as f64 / 1024.0 / 1024.0;
             let disk_w_mb = sys.disk.write_bytes_per_sec as f64 / 1024.0 / 1024.0;
-            let current_io = (sys.disk.read_bytes_per_sec + sys.disk.write_bytes_per_sec) as f32;
-            let last_io = (last.disk.read_bytes_per_sec + last.disk.write_bytes_per_sec) as f32;
-            let trend = Self::trend_arrow(current_io, last_io);
-            spans.push(Span::styled(
-                format!("Disk R{:.1} W{:.1} MB/s{}", disk_r_mb, disk_w_mb, trend),
-                Style::default().fg(Color::Gray),
-            ));
+            let span = if disk_r_mb == 0.0 && disk_w_mb == 0.0 {
+                Span::styled(
+                    format!("{} n/a", crate::t!("health.disk")),
+                    Style::default().fg(Color::Gray),
+                )
+            } else {
+                let current_io =
+                    (sys.disk.read_bytes_per_sec + sys.disk.write_bytes_per_sec) as f32;
+                let last_io = (last.disk.read_bytes_per_sec + last.disk.write_bytes_per_sec) as f32;
+                let trend = Self::trend_arrow(current_io, last_io);
+                Span::styled(
+                    format!(
+                        "{} R{:.1} W{:.1} MB/s{}",
+                        crate::t!("health.disk"),
+                        disk_r_mb,
+                        disk_w_mb,
+                        trend
+                    ),
+                    Style::default().fg(Color::Gray),
+                )
+            };
+            spans.push(span);
         }
 
         // Net: ↓RX ↑TX MB/s
@@ -199,7 +226,13 @@ impl HealthPanel {
                 last.network.rx_bytes_per_sec as f32,
             );
             spans.push(Span::styled(
-                format!("Net ↓{:.1} ↑{:.1} MB/s{}", net_rx_mb, net_tx_mb, trend),
+                format!(
+                    "{} ↓{:.1} ↑{:.1} MB/s{}",
+                    crate::t!("health.net"),
+                    net_rx_mb,
+                    net_tx_mb,
+                    trend
+                ),
                 Style::default().fg(Color::Gray),
             ));
         }
@@ -281,7 +314,12 @@ impl Panel for HealthPanel {
         }
     }
 
-    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // `R` 刷新:发布 RequestRefresh(与 `:refresh` 命令同语义)。
+        // WHY 补齐 shortcuts() 声明但无实现的按键(快捷键诚实性)。
+        if key.code == KeyCode::Char('R') {
+            return Some(TuiCommand::RequestRefresh);
+        }
         // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
         None
     }
@@ -301,6 +339,18 @@ mod tests {
     fn test_health_panel_id() {
         let panel = HealthPanel::new();
         assert_eq!(panel.id(), PanelId::Health);
+    }
+
+    #[test]
+    fn handle_key_r_returns_request_refresh() {
+        // 快捷键诚实性:R 刷新声明即可达(此前 handle_key 恒 None)
+        let mut panel = HealthPanel::new();
+        let mut state = TuiState::new();
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('R'), crossterm::event::KeyModifiers::NONE),
+            &mut state,
+        );
+        assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
     }
 
     #[test]

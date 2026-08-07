@@ -15,7 +15,9 @@
 
 use chimera_tui::engine::buffer::DirtyTracker;
 use chimera_tui::engine::output::V3Output;
-use chimera_tui::engine::{from_ratatui_buffer, from_ratatui_buffer_diffed, Buffer, DiffEngine, Rect};
+use chimera_tui::engine::{
+    from_ratatui_buffer, from_ratatui_buffer_diffed, Buffer, DiffEngine, Rect,
+};
 use ratatui::buffer::Buffer as RatBuffer;
 use ratatui::layout::Rect as RatRect;
 use ratatui::style::{Color, Style};
@@ -74,7 +76,8 @@ fn identical_frame_produces_no_output() {
     let mut out = V3Output::new();
     let mut rb = frame(10, 3);
     rb.set_string(0, 0, "static", styled());
-    out.render_diffed(&rb, &all_dirty(3), &mut Vec::new()).unwrap();
+    out.render_diffed(&rb, &all_dirty(3), &mut Vec::new())
+        .unwrap();
 
     let mut sink = Vec::new();
     out.render_diffed(&rb, &all_dirty(3), &mut sink).unwrap();
@@ -86,7 +89,8 @@ fn changed_frame_outputs_only_delta() {
     let mut out = V3Output::new();
     let mut rb = frame(10, 3);
     rb.set_string(0, 0, "AAAA", styled());
-    out.render_diffed(&rb, &all_dirty(3), &mut Vec::new()).unwrap();
+    out.render_diffed(&rb, &all_dirty(3), &mut Vec::new())
+        .unwrap();
 
     let mut rb2 = frame(10, 3);
     rb2.set_string(0, 0, "BBBB", styled());
@@ -121,7 +125,9 @@ fn render_diffed_equivalent_to_render() {
     // 路径 B:render_diffed(ratatui Buffer + 全 dirty)
     let mut out_b = V3Output::new();
     let mut sink_b = Vec::new();
-    out_b.render_diffed(&rb, &all_dirty(5), &mut sink_b).unwrap();
+    out_b
+        .render_diffed(&rb, &all_dirty(5), &mut sink_b)
+        .unwrap();
 
     assert_eq!(sink_a, sink_b, "两路径首帧输出应逐字节一致");
 
@@ -131,9 +137,13 @@ fn render_diffed_equivalent_to_render() {
     rb2.set_string(0, 3, "文字", styled());
 
     let mut sink_a2 = Vec::new();
-    out_a.render(from_ratatui_buffer(&rb2), &mut sink_a2).unwrap();
+    out_a
+        .render(from_ratatui_buffer(&rb2), &mut sink_a2)
+        .unwrap();
     let mut sink_b2 = Vec::new();
-    out_b.render_diffed(&rb2, &all_dirty(5), &mut sink_b2).unwrap();
+    out_b
+        .render_diffed(&rb2, &all_dirty(5), &mut sink_b2)
+        .unwrap();
     assert_eq!(sink_a2, sink_b2, "两路径增量帧输出应逐字节一致");
 }
 
@@ -172,10 +182,13 @@ fn diffed_skips_clean_rows() {
     let changes = from_ratatui_buffer_diffed(&front, &rb, &dirty);
     // 只有第 1 行的变化被产出;第 0/2 行 clean 被跳过
     assert!(!changes.is_empty(), "脏行变化应被产出");
-    let covered: usize = changes.iter().map(|c| match c {
-        chimera_tui::engine::Change::Cell { .. } => 1,
-        chimera_tui::engine::Change::Span { cells, .. } => cells.len(),
-    }).sum();
+    let covered: usize = changes
+        .iter()
+        .map(|c| match c {
+            chimera_tui::engine::Change::Cell { .. } => 1,
+            chimera_tui::engine::Change::Span { cells, .. } => cells.len(),
+        })
+        .sum();
     assert!(covered <= 7, "仅脏行内容应被覆盖,实际覆盖 {covered} 格");
 
     // 全 clean(dirty 全 false)时零 Change
@@ -194,14 +207,18 @@ fn resize_forces_full_redraw() {
     let mut out = V3Output::new();
     let mut rb = frame(10, 3);
     rb.set_string(0, 0, "old", styled());
-    out.render_diffed(&rb, &all_dirty(3), &mut Vec::new()).unwrap();
+    out.render_diffed(&rb, &all_dirty(3), &mut Vec::new())
+        .unwrap();
 
     // 尺寸变化(10x3 → 15x4):应全量输出新区域内容
     let mut rb2 = frame(15, 4);
     rb2.set_string(5, 2, "NEW", styled());
     let mut sink = Vec::new();
     out.render_diffed(&rb2, &all_dirty(4), &mut sink).unwrap();
-    assert!(sink.windows(3).any(|w| w == b"NEW"), "resize 后应输出新内容");
+    assert!(
+        sink.windows(3).any(|w| w == b"NEW"),
+        "resize 后应输出新内容"
+    );
     // front 区域应更新为新尺寸
     assert_eq!(out.front().area, Rect::new(0, 0, 15, 4));
 }

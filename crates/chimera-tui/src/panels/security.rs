@@ -82,8 +82,11 @@ impl SecurityPanel {
                 Span::raw(prefix),
                 Span::styled("[AUDIT]", Style::default().fg(color)),
                 Span::raw(format!(
-                    " {} | risk={:.0}%",
+                    // 标签与含义一致:该数值是检测率(detection_rate),不是风险率;
+                    // 原 "risk=" 标签与红/黄着色语义(有检测=告警)自相矛盾(U-1)。
+                    " {} | {}={:.0}%",
                     a.vulnerability_type,
+                    crate::t!("panel.security.detection"),
                     a.detection_rate * 100.0
                 )),
             ]));
@@ -133,14 +136,34 @@ impl SecurityPanel {
         for v in &state.security_state.active_vetoes {
             if offset == selected {
                 let ts = v.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true);
-                let content = format!(
-                    "Type: Skeptic Veto\nQuest: {}\nReason: {}\nFrozen capabilities: {}\nTime: {}",
-                    v.quest_id,
-                    v.veto_reason,
-                    v.frozen_capabilities.join(", "),
-                    ts
-                );
-                return Some(("Skeptic Veto Detail".into(), content));
+                let content = [
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_type"),
+                        "Skeptic Veto"
+                    ),
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_quest"),
+                        v.quest_id
+                    ),
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_reason"),
+                        v.veto_reason
+                    ),
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_frozen"),
+                        v.frozen_capabilities.join(", ")
+                    ),
+                    format!("{} {}", crate::t!("panel.security.detail_time"), ts),
+                ]
+                .join("\n");
+                return Some((
+                    crate::t!("panel.security.detail_veto_title").to_string(),
+                    content,
+                ));
             }
             offset += 1;
         }
@@ -148,16 +171,40 @@ impl SecurityPanel {
         for a in &state.security_state.recent_audits {
             if offset == selected {
                 let ts = a.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true);
-                let content = format!(
-                    "Type: Red Team Audit\nVulnerability: {}\nFailed/Total: {}/{}\nDetection rate: {:.1}%\nSuggestion: {}\nTime: {}",
-                    a.vulnerability_type,
-                    a.failed_probes,
-                    a.total_probes,
-                    a.detection_rate * 100.0,
-                    a.remediation_suggestion,
-                    ts
-                );
-                return Some(("Red Team Audit Detail".into(), content));
+                let content = [
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_type"),
+                        "Red Team Audit"
+                    ),
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_vuln"),
+                        a.vulnerability_type
+                    ),
+                    format!(
+                        "{} {}/{}",
+                        crate::t!("panel.security.detail_failed_total"),
+                        a.failed_probes,
+                        a.total_probes
+                    ),
+                    format!(
+                        "{} {:.1}%",
+                        crate::t!("panel.security.detail_detection_rate"),
+                        a.detection_rate * 100.0
+                    ),
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_suggestion"),
+                        a.remediation_suggestion
+                    ),
+                    format!("{} {}", crate::t!("panel.security.detail_time"), ts),
+                ]
+                .join("\n");
+                return Some((
+                    crate::t!("panel.security.detail_audit_title").to_string(),
+                    content,
+                ));
             }
             offset += 1;
         }
@@ -165,16 +212,39 @@ impl SecurityPanel {
         for i in &state.security_state.recent_interventions {
             if offset == selected {
                 let ts = i.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true);
-                let block_reason = i.block_reason.as_deref().unwrap_or("(none)");
-                let content = format!(
-                    "Type: ASA Intervention\nOperation: {}\nAction: {}\nSafety score: {:.2}\nBlock reason: {}\nTime: {}",
-                    i.operation_id,
-                    i.action,
-                    i.safety_score,
-                    block_reason,
-                    ts
-                );
-                return Some(("ASA Intervention Detail".into(), content));
+                let block_reason = i
+                    .block_reason
+                    .as_deref()
+                    .unwrap_or(crate::t!("common.none"));
+                let content = [
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_type"),
+                        "ASA Intervention"
+                    ),
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_operation"),
+                        i.operation_id
+                    ),
+                    format!("{} {}", crate::t!("panel.security.detail_action"), i.action),
+                    format!(
+                        "{} {:.2}",
+                        crate::t!("panel.security.detail_safety"),
+                        i.safety_score
+                    ),
+                    format!(
+                        "{} {}",
+                        crate::t!("panel.security.detail_block_reason"),
+                        block_reason
+                    ),
+                    format!("{} {}", crate::t!("panel.security.detail_time"), ts),
+                ]
+                .join("\n");
+                return Some((
+                    crate::t!("panel.security.detail_asa_title").to_string(),
+                    content,
+                ));
             }
             offset += 1;
         }
@@ -186,14 +256,14 @@ impl SecurityPanel {
     fn frozen_text(state: &TuiState) -> Text<'static> {
         let mut lines = vec![
             Line::from(vec![Span::styled(
-                "Frozen Capabilities",
+                crate::t!("panel.security.frozen"),
                 Style::default().add_modifier(Modifier::BOLD),
             )]),
             Line::from("─────────────"),
         ];
 
         if state.security_state.frozen_capabilities.is_empty() {
-            lines.push(Line::from("None"));
+            lines.push(Line::from(crate::t!("common.none")));
         } else {
             for cap in &state.security_state.frozen_capabilities {
                 lines.push(Line::from(vec![
@@ -243,7 +313,7 @@ impl Panel for SecurityPanel {
 
         let header = Paragraph::new(Text::from(vec![
             Line::from(vec![Span::styled(
-                "Security Events",
+                crate::t!("panel.security.body_title"),
                 Style::default().add_modifier(Modifier::BOLD),
             )]),
             Line::from("─────────────"),
@@ -255,7 +325,7 @@ impl Panel for SecurityPanel {
         self.scroll_offset = Self::adjust_scroll(self.selected, self.scroll_offset, visible_rows);
 
         let rows_text = if rows.is_empty() {
-            Text::from(vec![Line::from("No security events")])
+            Text::from(vec![Line::from(crate::t!("panel.security.no_events"))])
         } else {
             Text::from(rows)
         };
@@ -409,7 +479,7 @@ mod tests {
         );
         match cmd {
             Some(TuiCommand::OpenPopup(PopupKind::Detail { title, content, .. })) => {
-                assert!(title.contains("Veto"));
+                assert!(title.contains("否决"));
                 assert!(content.contains("q1"));
             }
             _ => panic!("expected Detail popup command, got {:?}", cmd),

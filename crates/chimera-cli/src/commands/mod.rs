@@ -32,6 +32,10 @@ pub mod completions;
 pub mod config;
 /// 系统健康检查子命令(Task 1.13)
 pub mod doctor;
+/// EXAMPLES 一级入口(Task 5 of spec)
+pub mod help;
+/// LLM Provider 管理子命令(Task 2 of spec)
+pub mod llm;
 /// MCP 量子网格管理子命令(Task 1.8)
 pub mod mcp;
 /// 议会审议子命令
@@ -56,6 +60,9 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
     // 从 Cli 构造 PermissionCtx(各命令按需消费,不破坏不需要 prompt 的命令签名)
     let perm = PermissionCtx::from_cli(cli);
     match &cli.command {
+        // Task 5 of spec: EXAMPLES 一级入口 — 顶级命令位置(Run 之前)
+        // 不消费 json/perm(纯字符串输出)
+        Some(Commands::Help { command }) => help::execute(command.as_deref(), cli).await,
         Some(Commands::Run { prompt }) => run::execute(prompt, cfg, cli.json, &perm).await,
         // Task 1.5: chat REPL 不消费 json flag(REPL 内部统一人类可读),
         // 但消费 perm(--no-permission 自动允许 tool 调用,CI 友好)
@@ -94,6 +101,8 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         Some(Commands::Doctor { json, fix }) => doctor::execute(cfg, cli.json || *json, *fix).await,
         // Task 1.14: 生成 shell 补全脚本 — 不消费 json/perm,直接输出到 stdout
         Some(Commands::Completions { shell }) => completions::execute(*shell).await,
+        // Task 2 of spec: LLM Provider 管理 — 全局 --json 传递;perm 供 set-default/strategy 使用
+        Some(Commands::Llm { action }) => llm::execute(action, cfg, cli.json, &perm).await,
         None => {
             // 无子命令:默认启动 TUI 交互界面(默认启用 v3-engine)
             // --help/--version 由 Clap 在 Cli::parse() 阶段内置处理,不会进入此分支

@@ -21,6 +21,7 @@
 
 use std::sync::Arc;
 
+use crate::overwindow_bridge::OverWindowBridge;
 use event_bus::{EventBus, EventBusError, EventMetadata, NexusEvent};
 use nexus_core::{MultimodalInput, UserIntent};
 use quest_engine::QuestEngine;
@@ -31,12 +32,45 @@ use tokio::task::JoinHandle;
 const SOURCE: &str = "chimera-cli";
 /// 请求者标识(写入 QuestEngine 控制方法的 `requested_by`,用于审计)
 const REQUESTED_BY: &str = "tui-action";
+/// TUI 会话超窗兜底的有效窗口(token)——HCW 四档(4K/32K/128K/1M)取 128K 档:
+/// TUI 会话语料(Chat 历史 + Quest 标题)通常远小于此,仅语料估算超窗才触发
+/// 真实兜底检索(语义正确:窗口内零开销返回,不调 provider 不发事件)。
+const DEFAULT_EFFECTIVE_WINDOW_TOKENS: u64 = 131_072;
+
+/// 超窗检索句柄 — OverWindowBridge + 会话语料提供者(commands/tui.rs 组装)
+///
+/// WHY 组合:桥与语料分离——桥可复用(事件发布/块表),语料提供者按会话实时
+/// 派生(Chat 消息 + Quest 标题),避免把 pipeline 依赖打进编排器(编排层只依赖
+/// bridge 闭包接口,依赖铁律友好;P1,ADR-072)。
+#[derive(Clone)]
+pub struct OverWindowHandle {
+    bridge: Arc<OverWindowBridge>,
+    corpus_provider: Arc<dyn Fn() -> String + Send + Sync>,
+}
+
+impl OverWindowHandle {
+    /// 创建超窗检索句柄
+    pub fn new(
+        bridge: Arc<OverWindowBridge>,
+        corpus_provider: Arc<dyn Fn() -> String + Send + Sync>,
+    ) -> Self {
+        Self {
+            bridge,
+            corpus_provider,
+        }
+    }
+}
 
 /// 处理单个事件:仅 `TuiActionRequested` 触发域路由,其余忽略。
 ///
 /// WHY 纯 async(不 spawn):测试可直接 `await` 并断言发布的 Completed/Failed。
 /// 路由结果 `Ok(摘要)` → `TuiActionCompleted`;`Err(描述)` → `TuiActionFailed`。
-pub async fn handle_action_event(bus: &EventBus, engine: &QuestEngine, event: &NexusEvent) {
+pub async fn handle_action_event(
+    bus: &EventBus,
+    engine: &QuestEngine,
+    overwindow: Option<&OverWindowHandle>,
+    event: &NexusEvent,
+) {
     let NexusEvent::TuiActionRequested {
         action_id, payload, ..
     } = event
@@ -44,7 +78,7 @@ pub async fn handle_action_event(bus: &EventBus, engine: &QuestEngine, event: &N
         return;
     };
 
-    match route_action(engine, action_id, payload).await {
+    match route_action(engine, overwindow, action_id, payload).await {
         Ok(result) => {
             let _ = bus
                 .publish(NexusEvent::TuiActionCompleted {
@@ -73,6 +107,7 @@ pub async fn handle_action_event(bus: &EventBus, engine: &QuestEngine, event: &N
 /// 编排层聚合 payload 解析 / 引擎错误 / 未实现三类失败源)。
 async fn route_action(
     engine: &QuestEngine,
+    overwindow: Option<&OverWindowHandle>,
     action_id: &str,
     payload: &str,
 ) -> Result<String, String> {
@@ -123,6 +158,42 @@ async fn route_action(
                 .map_err(|e| e.to_string())?;
             Ok(format!("已取消 Quest {qid}"))
         }
+        // 超窗兜底检索(P1,ADR-072):真实执行 kvbsr→repo-wiki→hcw 两级检索链。
+        // 需 query(命令栏 `:overwindow run <词>`);palette 无参派发时明确失败。
+        "overwindow.run" => {
+            let handle = overwindow.ok_or_else(|| {
+                "overwindow.run 未启用(未注入 OverWindowBridge,见 ADR-072)".to_string()
+            })?;
+            let query = payload_str(payload, "query")
+                .filter(|q| !q.is_empty())
+                .ok_or_else(|| {
+                    format!("{action_id} 需提供 query 参数(如 :overwindow run 检索词)")
+                })?;
+            let corpus = (handle.corpus_provider)();
+            if corpus.trim().is_empty() {
+                return Err("会话上下文为空,无可检索语料(先在 Chat 面板输入内容)".to_string());
+            }
+            // 语料 token 估算与 OverWindowBridge::chunk_corpus 一致(字符数 / 4)
+            let corpus_tokens = (corpus.chars().count() / 4) as u64;
+            // set_corpus 每次重建块表(O(语料)):会话级语料规模可接受,且复用
+            // overwindow_bridge 的锁外构建 + 原子 swap 模式(写锁仅覆盖 Arc 赋值)
+            handle.bridge.set_corpus(&corpus);
+            let outcome = handle
+                .bridge
+                .run(&query, corpus_tokens, DEFAULT_EFFECTIVE_WINDOW_TOKENS)
+                .await
+                .map_err(|e| e.to_string())?;
+            if outcome.triggered {
+                Ok(format!(
+                    "超窗兜底触发:语料 {corpus_tokens} token > 窗口 {DEFAULT_EFFECTIVE_WINDOW_TOKENS} token,候选 {} 条",
+                    outcome.candidate_count
+                ))
+            } else {
+                Ok(format!(
+                    "语料 {corpus_tokens} token 未超窗(≤ {DEFAULT_EFFECTIVE_WINDOW_TOKENS} token),未触发兜底"
+                ))
+            }
+        }
         // task.*:引擎无 per-task 执行模型(无"正在执行的 task"可暂停/取消/调优先级),
         // 真实化需 per-task 调度子系统(见 Phase 3 ADR),当前诚实未实现(不静默、不伪造)。
         // quest.jump 已改由 TUI 本地处理(切事件流),不再经 cli。
@@ -169,7 +240,11 @@ fn payload_str(payload: &str, key: &str) -> Option<String> {
 ///   立即继续,避免长处理阻塞 recv。
 /// - recv 错误:`SlowConsumerDropped`(Lagged)记录后继续;`ChannelClosed` 等退出。
 /// - 调用方负责在退出时 `abort()` 句柄,避免 orphan task。
-pub fn spawn_action_orchestrator(bus: EventBus, engine: Arc<QuestEngine>) -> JoinHandle<()> {
+pub fn spawn_action_orchestrator(
+    bus: EventBus,
+    engine: Arc<QuestEngine>,
+    overwindow: Option<OverWindowHandle>,
+) -> JoinHandle<()> {
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
         loop {
@@ -179,8 +254,9 @@ pub fn spawn_action_orchestrator(bus: EventBus, engine: Arc<QuestEngine>) -> Joi
                     if matches!(event, NexusEvent::TuiActionRequested { .. }) {
                         let bus = bus.clone();
                         let engine = Arc::clone(&engine);
+                        let overwindow = overwindow.clone();
                         tokio::spawn(async move {
-                            handle_action_event(&bus, &engine, &event).await;
+                            handle_action_event(&bus, &engine, overwindow.as_ref(), &event).await;
                         });
                     }
                 }
@@ -246,7 +322,7 @@ mod tests {
         let (engine, qid) = engine_with_one_quest(&bus).await;
         let mut rx = bus.subscribe();
         // 单一 Quest → 无需 payload.quest_id,回退解析命中
-        handle_action_event(&bus, &engine, &action("quest.pause", "{}")).await;
+        handle_action_event(&bus, &engine, None, &action("quest.pause", "{}")).await;
         assert!(
             engine.is_paused(&qid),
             "quest.pause 应驱动 QuestEngine::pause_quest"
@@ -265,7 +341,7 @@ mod tests {
         let bus = EventBus::new();
         let engine = QuestEngine::new(bus.clone());
         let mut rx = bus.subscribe();
-        handle_action_event(&bus, &engine, &action("task.pause", "{}")).await;
+        handle_action_event(&bus, &engine, None, &action("task.pause", "{}")).await;
         assert!(
             drain_find(&mut rx, |ev| matches!(
                 ev,
@@ -280,7 +356,7 @@ mod tests {
         let bus = EventBus::new();
         let engine = QuestEngine::new(bus.clone());
         let mut rx = bus.subscribe();
-        handle_action_event(&bus, &engine, &action("view.switch_layout", "{}")).await;
+        handle_action_event(&bus, &engine, None, &action("view.switch_layout", "{}")).await;
         assert!(
             drain_find(&mut rx, |ev| matches!(
                 ev,
@@ -295,7 +371,7 @@ mod tests {
         let bus = EventBus::new();
         let engine = QuestEngine::new(bus.clone()); // 无 Quest
         let mut rx = bus.subscribe();
-        handle_action_event(&bus, &engine, &action("quest.pause", "{}")).await;
+        handle_action_event(&bus, &engine, None, &action("quest.pause", "{}")).await;
         assert!(
             drain_find(&mut rx, |ev| matches!(
                 ev,
@@ -314,7 +390,7 @@ mod tests {
             metadata: EventMetadata::new("test"),
             cache_key: "k".into(),
         };
-        handle_action_event(&bus, &engine, &unrelated).await;
+        handle_action_event(&bus, &engine, None, &unrelated).await;
         assert!(
             matches!(rx.try_recv(), Ok(None)),
             "非 TuiActionRequested 事件不应触发任何发布"
@@ -326,7 +402,7 @@ mod tests {
         let bus = EventBus::new();
         let (engine, _qid) = engine_with_one_quest(&bus).await;
         let mut rx = bus.subscribe();
-        let handle = spawn_action_orchestrator(bus.clone(), Arc::new(engine));
+        let handle = spawn_action_orchestrator(bus.clone(), Arc::new(engine), None);
         bus.publish(action("quest.cancel", "{}")).await.unwrap();
 
         let mut saw_completed = false;
@@ -346,6 +422,139 @@ mod tests {
         assert!(
             saw_completed,
             "编排器应消费 quest.cancel 并回发 TuiActionCompleted"
+        );
+    }
+
+    /// 构造超窗检索句柄:语料提供者返回超窗语料(70K×8 字符 ≈ 560K 字符 ≈ 140K token > 128K 窗口)
+    fn big_corpus_handle(bus: &EventBus) -> OverWindowHandle {
+        OverWindowHandle::new(
+            Arc::new(crate::overwindow_bridge::OverWindowBridge::new(bus.clone()).unwrap()),
+            Arc::new(|| "语义检索测试语料".repeat(70_000)),
+        )
+    }
+
+    #[tokio::test]
+    async fn overwindow_run_triggers_and_completes() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        let handle = big_corpus_handle(&bus);
+        handle_action_event(
+            &bus,
+            &engine,
+            Some(&handle),
+            &action("overwindow.run", r#"{"query":"语义检索"}"#),
+        )
+        .await;
+        // 单趟收集两个断言:bridge.run 先发布 Triggered、编排器后发布 Completed,
+        // 若用两次 drain_find,第一次查找会把另一事件消费掉(破坏性 drain)。
+        let mut saw_completed = false;
+        let mut saw_triggered = false;
+        for _ in 0..64 {
+            match rx.try_recv() {
+                Ok(Some(ev)) => {
+                    if matches!(
+                        &ev,
+                        NexusEvent::TuiActionCompleted { action_id, .. }
+                            if action_id == "overwindow.run"
+                    ) {
+                        saw_completed = true;
+                    }
+                    if matches!(&ev, NexusEvent::OverWindowFallbackTriggered { .. }) {
+                        saw_triggered = true;
+                    }
+                    if saw_completed && saw_triggered {
+                        break;
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        assert!(
+            saw_completed,
+            "overwindow.run 超窗应发布 TuiActionCompleted"
+        );
+        assert!(
+            saw_triggered,
+            "超窗触发应发布 OverWindowFallbackTriggered(TUI 面板数据源)"
+        );
+    }
+
+    #[tokio::test]
+    async fn overwindow_run_within_window_completes_without_trigger() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        let handle = OverWindowHandle::new(
+            Arc::new(crate::overwindow_bridge::OverWindowBridge::new(bus.clone()).unwrap()),
+            Arc::new(|| "短语料".to_string()), // ≈1 token ≤ 窗口 → 不触发
+        );
+        handle_action_event(
+            &bus,
+            &engine,
+            Some(&handle),
+            &action("overwindow.run", r#"{"query":"x"}"#),
+        )
+        .await;
+        let mut saw_completed = false;
+        let mut saw_triggered = false;
+        for _ in 0..64 {
+            match rx.try_recv() {
+                Ok(Some(ev)) => {
+                    if matches!(&ev, NexusEvent::TuiActionCompleted { .. }) {
+                        saw_completed = true;
+                    }
+                    if matches!(&ev, NexusEvent::OverWindowFallbackTriggered { .. }) {
+                        saw_triggered = true;
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        assert!(saw_completed, "窗口内应发布 TuiActionCompleted(未触发说明)");
+        assert!(!saw_triggered, "窗口内不得发布触发事件(零开销语义)");
+    }
+
+    #[tokio::test]
+    async fn overwindow_run_missing_query_fails() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        let handle = big_corpus_handle(&bus);
+        handle_action_event(
+            &bus,
+            &engine,
+            Some(&handle),
+            &action("overwindow.run", "{}"),
+        )
+        .await;
+        assert!(
+            drain_find(&mut rx, |ev| matches!(
+                ev,
+                NexusEvent::TuiActionFailed { action_id, .. } if action_id == "overwindow.run"
+            )),
+            "缺 query 应发布 TuiActionFailed(不空跑)"
+        );
+    }
+
+    #[tokio::test]
+    async fn overwindow_run_without_handle_fails() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            &action("overwindow.run", r#"{"query":"x"}"#),
+        )
+        .await;
+        assert!(
+            drain_find(&mut rx, |ev| matches!(
+                ev,
+                NexusEvent::TuiActionFailed { .. }
+            )),
+            "未注入桥时应发布 TuiActionFailed"
         );
     }
 }

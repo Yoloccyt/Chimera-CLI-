@@ -122,8 +122,8 @@ mod tests {
     #[test]
     fn help_lines_filter_by_domain() {
         let reg = ActionRegistry::with_builtin_domains();
-        let task_help = help_lines(&reg, Some(ActionDomain::Task));
-        assert!(!task_help.is_empty());
+        let system_help = help_lines(&reg, Some(ActionDomain::System));
+        assert!(!system_help.is_empty());
         // 全量帮助行数 = 动作总数
         assert_eq!(help_lines(&reg, None).len(), reg.len());
     }

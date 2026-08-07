@@ -165,7 +165,7 @@ mod tests {
     fn core_actions_present_and_reachable() {
         let reg = ActionRegistry::with_builtin_domains();
         let core = reg.core_actions();
-        // 核心功能存在(agent.chat / task.create / export.run / system.toggle_locale 等)
+        // 核心功能存在(agent.chat / export.run / system.toggle_locale 等)
         assert!(reg.get("agent.chat").is_some());
         assert!(reg.get("export.run").is_some());
         assert!(reg.get("system.toggle_locale").is_some());
@@ -199,8 +199,24 @@ mod tests {
     #[test]
     fn by_domain_partitions_actions() {
         let reg = ActionRegistry::with_builtin_domains();
-        let task = reg.by_domain(ActionDomain::Task);
-        assert!(task.iter().all(|d| d.domain == ActionDomain::Task));
-        assert!(task.iter().any(|d| d.id == "task.create"));
+        let system = reg.by_domain(ActionDomain::System);
+        assert!(system.iter().all(|d| d.domain == ActionDomain::System));
+        assert!(system.iter().any(|d| d.id == "system.toggle_locale"));
+    }
+
+    #[test]
+    fn query_actions_marked_requires_query() {
+        // F-5:需 query 参数的动作必须显式标记,驱动 palette 参数输入流;
+        // 其余动作默认 false(palette 直接以空 payload 派发)。
+        let reg = ActionRegistry::with_builtin_domains();
+        for id in ["agent.chat", "quest.start", "overwindow.run"] {
+            let desc = reg.get(id).unwrap_or_else(|| panic!("{id} 应已注册"));
+            assert!(
+                desc.requires_query,
+                "{id} 应标记 requires_query(palette 需收集 query)"
+            );
+        }
+        assert!(!reg.get("quest.pause").unwrap().requires_query);
+        assert!(!reg.get("export.run").unwrap().requires_query);
     }
 }

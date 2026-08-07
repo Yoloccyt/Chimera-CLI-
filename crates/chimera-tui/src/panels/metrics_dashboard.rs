@@ -170,7 +170,7 @@ impl MetricsDashboardPanel {
     /// WHY 错误吞咽:`TuiDataSource::snapshot()` 返回 `Result`,但 TUI
     /// 渲染循环不应因数据源瞬时错误而退出(会黑屏),改为静默
     /// 回退到默认快照,下一帧继续尝试。
-    fn snapshot_or_default(cell: &Cell) -> crate::data::DataSnapshot {
+    fn snapshot_or_default(cell: &Cell) -> std::sync::Arc<crate::data::DataSnapshot> {
         cell.source.snapshot().unwrap_or_default()
     }
 

@@ -208,7 +208,6 @@ async fn pipeline_deduplicates_repeated_state_events() {
 }
 
 #[tokio::test]
-#[ignore = "性能测试：请在 release 模式运行，验证 1000 事件/秒处理延迟"]
 async fn pipeline_handles_1000_events_per_second() {
     // 使用 250ms tick（生产默认值），在 tick 窗口内突发 1000 个事件。
     let bus = EventBus::with_capacity(4096);
@@ -255,15 +254,67 @@ async fn pipeline_handles_1000_events_per_second() {
 
     let snapshot = pipeline.snapshot();
     assert_eq!(snapshot.latest_events.len(), 1000);
+    assert!(
+        snapshot.revision >= 1,
+        "P2 性能:快照应携带递增 revision(实际 {})",
+        snapshot.revision
+    );
 
     // 端到端延迟包含一次 tick 等待（最大 250ms）+ 处理时间。
-    // 目标：处理延迟 P95 < 100ms，因此端到端应 < 350ms，留足余量断言 < 400ms。
+    // P2 性能(P-1):精确时序由 criterion bench(data_pipeline_snapshot_latency /
+    // data_pipeline_throughput)在受控环境度量;此处保留宽松上限(< 2s)防止
+    // CI 机器抖动误报,同时仍能拦截灾难性回归(如事件丢失/死循环)。
     let elapsed = snapshot_ready.duration_since(publish_start);
     assert!(
-        elapsed < Duration::from_millis(400),
-        "1000 events processing took {:?}, expected < 400ms",
+        elapsed < Duration::from_millis(2000),
+        "1000 events processing took {:?}, expected < 2s (精确时序见 criterion bench)",
         elapsed
     );
+}
+
+/// P2 性能(P-1):快照 revision 随每个 tick 单调递增,供 `TuiApp::update`
+/// 跳过无变化帧的字段拷贝(轮询 100ms 快于 tick 250ms 时的关键优化前提)。
+#[tokio::test]
+async fn pipeline_revision_monotonic_increases() {
+    let bus = EventBus::with_capacity(4096);
+    let subscriber = EventSubscriber::new(bus.clone());
+    let config = DataSourceConfig {
+        tick_interval_ms: 50,
+        ..test_config()
+    };
+    let pipeline = DataPipeline::new(subscriber, config);
+
+    bus.publish(budget_metrics_event(
+        BudgetMetrics::default(),
+        "efficiency-monitor",
+    ))
+    .await
+    .unwrap();
+
+    // 轮询等待首个 tick(避免 CI 上任务调度延迟造成的墙钟时序脆弱)
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let mut snap1 = pipeline.snapshot();
+    while snap1.revision == 0 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        snap1 = pipeline.snapshot();
+    }
+    assert!(snap1.revision >= 1, "首次 tick 后 revision 应 >= 1");
+
+    // 轮询等待 revision 前进(至少再完成一个 tick)
+    let deadline2 = Instant::now() + Duration::from_millis(500);
+    let mut snap2 = snap1.clone();
+    while snap2.revision <= snap1.revision && Instant::now() < deadline2 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        snap2 = pipeline.snapshot();
+    }
+    assert!(
+        snap2.revision > snap1.revision,
+        "revision 应随 tick 单调递增(snap1={}, snap2={})",
+        snap1.revision,
+        snap2.revision
+    );
+
+    pipeline.shutdown().await;
 }
 
 // ============================================================

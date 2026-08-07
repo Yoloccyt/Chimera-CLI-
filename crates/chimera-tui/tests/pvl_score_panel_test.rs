@@ -159,10 +159,7 @@ fn renders_nine_dimensions_and_total() {
         assert!(content.contains(label), "应渲染维度标签 {label}");
     }
     assert!(content.contains("TOTAL SCORE"), "应渲染总分标题");
-    assert!(
-        content.contains("%"),
-        "维度与总分应包含百分比数值"
-    );
+    assert!(content.contains("%"), "维度与总分应包含百分比数值");
 }
 
 #[test]
@@ -188,10 +185,7 @@ fn selected_dimension_gets_marker() {
     panel.handle_key(key(KeyCode::Char('j')), &mut state);
     assert_eq!(panel.selected(), 2);
     let content = render_to_string(&mut panel, &state, 80, 30);
-    assert!(
-        content.contains('▶'),
-        "选中维度应显示 ▶ 标记"
-    );
+    assert!(content.contains('▶'), "选中维度应显示 ▶ 标记");
 }
 
 // ============================================================

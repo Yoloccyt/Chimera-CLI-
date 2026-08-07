@@ -3,8 +3,9 @@
 //! 命令树:
 //! ```text
 //! chimera
+//!   ├── help [command]          # EXAMPLES 一级入口(Task 5 of spec)
 //!   ├── run <prompt>          # 运行单次任务
-//!   ├── chat                   # 流式 REPL 对话(Task 1.5)
+//!   ├── chat                   # 流式 REPL 对话
 //!   ├── tui                    # 启动 TUI 交互界面
 //!   ├── quest <action>         # Quest 管理
 //!   │     ├── list             # 列出所有 Quest
@@ -18,19 +19,26 @@
 //!   │     └── path             # 显示配置文件路径
 //!   ├── wiki <query>           # Wiki 查询
 //!   ├── parliament <proposal>  # 议会审议
-//!   ├── mcp <action>           # MCP 量子网格管理(Task 1.8)
+//!   ├── mcp <action>           # MCP 量子网格管理
 //!   │     ├── list             # 列出所有 MCP 服务器
 //!   │     ├── serve            # 启动 MCP 服务器
 //!   │     ├── call <s> <t> [args]  # 调用 MCP 工具
 //!   │     └── inspect <server> # 服务器详情
-//!   ├── audit                  # 红队安全审计(Task 1.9)
-//!   ├── agent <action>         # Agent 生命周期管理(Task 1.10)
+//!   ├── audit                  # 红队安全审计
+//!   ├── agent <action>         # Agent 生命周期管理
 //!   │     ├── list             # 列出所有 Agent
 //!   │     ├── spawn --quadrant # 创建 Agent
 //!   │     ├── inspect <id>     # Agent 详情
 //!   │     └── cancel <id>      # 取消 Agent
-//!   ├── doctor                 # 系统健康检查(Task 1.13)
-//!   └── completions <shell>    # 生成 shell 补全(Task 1.14)
+//!   ├── doctor                 # 系统健康检查
+//!   ├── completions <shell>    # 生成 shell 补全
+//!   └── llm <action>           # LLM Provider 管理(Task 2 of spec)
+//!         ├── list             # 列出已配置 Provider
+//!         ├── show <name>      # Provider 详情
+//!         ├── set-default <n>  # 设置默认 Provider
+//!         ├── test [name]      # 探测连通性
+//!         ├── channels         # 4 路由渠道
+//!         └── strategy [name]  # 显示/设置 model-router 策略
 //! ```
 
 use std::path::PathBuf;
@@ -51,6 +59,9 @@ use clap::{Parser, Subcommand};
 基于 OMEGA 四定律(Ω-Sparse / Ω-Compress / Ω-Evolve / Ω-Event)构建,\n\
 提供 Quest 长期任务管理、多模型议会审议、MCP 量子网格、红队安全审计等能力。\n\
 默认启动 TUI 交互界面,也可通过子命令进行脚本化操作。",
+    // Task 5 of spec: 禁用 clap 自动生成的 `help` 子命令,避免与我们的 `Help` 变体冲突
+    // (我们的 `chimera help` 专门输出 EXAMPLES,而非 clap 默认的子命令帮助文本)。
+    disable_help_subcommand = true,
     after_long_help = "EXAMPLES:\n  \
 chimera run \"实现一个 hello world 函数\"      # 运行单次任务\n  \
 chimera --json quest list                       # JSON 格式列出 Quest\n  \
@@ -82,8 +93,8 @@ pub struct Cli {
     #[arg(long, global = true, hide = true)]
     pub legacy_exit_code: bool,
 
-    // === v2.9.0-omega Task 1.7 / 1.11 / 1.12 全局 flag ===
-    /// 以 JSON 格式输出命令结果(Task 1.7)
+    // === v2.9.0-omega 全局 flag ===
+    /// 以 JSON 格式输出命令结果
     ///
     /// 启用后,命令输出遵循 envelope schema:
     /// - 成功:`{ "status": "ok", "data": <payload> }`
@@ -93,14 +104,14 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// 自动确认所有 permission prompt(Task 1.11)
+    /// 自动确认所有 permission prompt
     ///
     /// 跳过 `quest cancel` / `agent cancel` / `mcp call` 等破坏性命令的交互式确认,
     /// 适合熟练用户快速操作。语义上假设用户已知晓操作影响并主动确认。
     #[arg(long, global = true)]
     pub yes: bool,
 
-    /// 自动允许所有操作,不弹 permission prompt(Task 1.11)
+    /// 自动允许所有操作,不弹 permission prompt
     ///
     /// CI 友好的 fail-open 模式:假设运行环境无交互能力(无 TTY),
     /// 自动允许所有操作。与 `--yes` 的区别:`--no-permission` 假设无 TTY,
@@ -108,7 +119,7 @@ pub struct Cli {
     #[arg(long = "no-permission", global = true)]
     pub no_permission: bool,
 
-    /// 禁用 ANSI 颜色输出(Task 1.12)
+    /// 禁用 ANSI 颜色输出
     ///
     /// 启用后,所有彩色输出 helper(`print_success` / `print_error` 等)
     /// 仅输出纯文本前缀(`✓` / `✗` / `⚠` / `ℹ`),不包含 ANSI 颜色码。
@@ -117,7 +128,15 @@ pub struct Cli {
     #[arg(long = "no-color", global = true)]
     pub no_color: bool,
 
-    /// 预览模式:只输出操作预览不实际执行(Task 2.2)
+    /// 关闭启动 banner(品牌 ASCII art)
+    ///
+    /// 启用后,CLI 启动时不再向 stderr 打印 `banner::print()` 输出的彩条标题。
+    /// 适用于 CI 日志截屏、自动化测试断言 stdout 纯数据等场景。
+    /// 与 `--no-color` / `--no-permission` 命名风格保持一致(否定语义 kebab-case)。
+    #[arg(long = "no-banner", global = true)]
+    pub no_banner: bool,
+
+    /// 预览模式:只输出操作预览不实际执行
     ///
     /// 启用后,破坏性命令(`quest cancel` / `agent cancel` / `mcp call`)
     /// 只输出 `[dry-run] 将执行 X 操作,不执行` 预览到 stderr,不调用真实 API。
@@ -133,11 +152,25 @@ pub struct Cli {
 /// 一级子命令枚举
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// 运行单次任务(不进入 Quest 长期任务流程)
+    /// 显示 EXAMPLES(默认从顶层 after_long_help 派生)
     #[command(
-        long_about = "运行单次任务(不进入 Quest 长期任务流程)\n\
+        long_about = "显示 EXAMPLES(默认从顶层 after_long_help 派生)\n\
 \n\
-将用户提示词经 QuestEngine 分解为 Quest,流式输出回复到 stdout。\n\
+`chimera help` 无参时显示 5 个顶级 EXAMPLES;\n\
+`chimera help <command>` 显示子命令的 EXAMPLES。\n\
+`--no-examples` 关闭示例只显示 about。",
+        after_long_help = "EXAMPLES:\n  \
+chimera help                                 # 5 个顶级 EXAMPLES\n  \
+chimera help quest                           # quest 子命令 EXAMPLES\n  \
+chimera help llm                             # llm 子命令 EXAMPLES"
+    )]
+    Help {
+        /// 可选子命令名(如 "quest" / "llm");不传则输出顶级
+        command: Option<String>,
+    },
+    /// 运行单次任务（不进入 Quest 长期任务流程）
+    #[command(
+        long_about = "将用户提示词经 QuestEngine 分解为 Quest，流式输出回复到 stdout。\n\
 适合一次性代码生成/问答场景;长期任务管理请用 `chimera quest` 或 `chimera tui`。",
         after_long_help = "EXAMPLES:\n  \
 chimera run \"实现一个 hello world 函数\"       # 运行单次代码生成任务\n  \
@@ -148,34 +181,30 @@ CHIMERA_RUN_CHUNK_DELAY_MS=0 chimera run \"test\"  # 禁用流式延迟加速测
         /// 任务提示词(用户意图的原始文本)
         prompt: String,
     },
-    /// 启动 chat REPL(非 TUI 流式对话,支持 slash 命令)(Task 1.5)
+    /// 启动 chat REPL（非 TUI 流式对话，支持 slash 命令）
     ///
     /// 与 `chimera tui` 的区别:`chat` 是纯文本流式 REPL,无 ratatui 渲染,
     /// 适合无 TTY 环境或管道消费(`chimera chat | tee log.txt`)。
     /// 支持 9 个 slash 命令(/help / /clear / /model / /quest / /parliament /
     /// /audit / /mcp / /agent / /exit),详见 `/help` 输出。
     #[command(
-        long_about = "启动 chat REPL(非 TUI 流式对话,支持 slash 命令)\n\
-\n\
-纯文本流式 REPL,无 ratatui 渲染,适合无 TTY 环境或管道消费。\n\
-支持 9 个 slash 命令(/help / /clear / /model / /quest / /parliament / /audit / /mcp / /agent / /exit)。",
+        long_about = "纯文本流式 REPL，无 ratatui 渲染，适合无 TTY 环境或管道消费。\n\
+支持 9 个 slash 命令（/help / /clear / /model / /quest / /parliament / /audit / /mcp / /agent / /exit）。",
         after_long_help = "EXAMPLES:\n  \
 chimera chat                                   # 启动交互式对话\n  \
 chimera --no-permission chat                   # 自动允许所有 tool 调用(CI 友好)\n  \
 chimera chat | tee log.txt                     # 管道消费对话输出"
     )]
     Chat,
-    /// 启动 TUI 交互界面(对应 `chimera-tui` crate)
+    /// 启动 TUI 交互界面（对应 `chimera-tui` crate）
     ///
     /// v3-engine M2(ADR-061):自研渲染路径默认启用,如需回退到 ratatui 路径
     /// 用于验证或排查渲染问题,可传入 `--no-v3-engine` flag(等价于设置
     /// `CHIMERA_NO_V3_ENGINE=1` 环境变量)。兼容窗口计划至 v2.11.0-omega 移除。
     #[command(
-        long_about = "启动 TUI 交互界面(对应 `chimera-tui` crate)\n\
-\n\
-v3-engine M2(ADR-061):自研渲染路径默认启用,如需回退到 ratatui 路径\n\
-用于验证或排查渲染问题,可传入 `--no-v3-engine` flag(等价于设置\n\
-`CHIMERA_NO_V3_ENGINE=1` 环境变量)。兼容窗口计划至 v2.11.0-omega 移除。",
+        long_about = "v3-engine M2（ADR-061）:自研渲染路径默认启用，如需回退到 ratatui 路径\n\
+用于验证或排查渲染问题，可传入 `--no-v3-engine` flag（等价于设置\n\
+`CHIMERA_NO_V3_ENGINE=1` 环境变量）。兼容窗口计划至 v2.11.0-omega 移除。",
         after_long_help = "EXAMPLES:\n  \
 chimera tui                                    # 启动 TUI(默认启用 v3-engine)\n  \
 chimera tui --no-v3-engine                     # 回退到 ratatui 渲染路径\n  \
@@ -186,13 +215,11 @@ chimera                                        # 无子命令时默认启动 TUI
         #[arg(long = "no-v3-engine")]
         no_v3_engine: bool,
     },
-    /// Quest 管理(长期任务的创建/查询/取消/检查点)
+    /// Quest 管理（长期任务的创建/查询/取消/检查点）
     #[command(
-        long_about = "Quest 管理(长期任务的创建/查询/取消/检查点)\n\
-\n\
-Quest 是 NEXUS-OMEGA 的长期任务单元,经 QuestEngine 分解为多个子任务。\n\
+        long_about = "Quest 是 NEXUS-OMEGA 的长期任务单元，经 QuestEngine 分解为多个子任务。\n\
 支持 list/show/cancel/checkpoint 4 个子动作。\n\
-注:进程内 ephemeral 引擎不跨进程持久化,真实 Quest 管理请用 `chimera tui`。",
+注:进程内 ephemeral 引擎不跨进程持久化，真实 Quest 管理请用 `chimera tui`。",
         after_long_help = "EXAMPLES:\n  \
 chimera quest list                             # 列出所有 Quest\n  \
 chimera --json quest show <quest-id>           # 查看 Quest 详情(JSON 格式)\n  \
@@ -202,19 +229,17 @@ chimera --yes quest cancel <quest-id>          # 取消 Quest(跳过确认)"
         /// Quest 子命令动作
         #[command(subcommand)]
         action: QuestAction,
-        /// 输出 JSON 格式(机器可读,Task 1.7 将统一为全局 --json)
+        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
         ///
-        /// WHY 子命令级 flag:Task 1.2 阶段尚未引入全局 --json(Task 1.7),
+        /// WHY 子命令级 flag:在引入全局 --json 之前提供结构化输出能力,
         /// 此 flag 提供 quest list/show 等子命令的结构化输出能力,便于脚本消费。
-        /// Task 1.7 完成后此 flag 将被全局 --json 替代,保留 2 个版本周期兼容。
+        /// 全局 --json 引入后此 flag 将被替代,保留 2 个版本周期兼容。
         #[arg(long)]
         json: bool,
     },
-    /// 配置管理(初始化/查看/列出)
+    /// 配置管理（初始化/查看/列出）
     #[command(
-        long_about = "配置管理(初始化/查看/列出)\n\
-\n\
-管理 omega.yaml 配置文件。支持 init/list/show/path 4 个子动作。\n\
+        long_about = "管理 omega.yaml 配置文件。支持 init/list/show/path 4 个子动作。\n\
 配置优先级:CLI --config > 默认路径 > env > defaults。",
         after_long_help = "EXAMPLES:\n  \
 chimera config init                            # 生成默认 omega.yaml\n  \
@@ -226,12 +251,10 @@ chimera --json config show                     # 显示完整配置(JSON)"
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Wiki 查询(对应 `repo-wiki` crate 的语义检索)
+    /// Wiki 查询（对应 `repo-wiki` crate 的语义检索）
     #[command(
-        long_about = "Wiki 查询(对应 `repo-wiki` crate 的语义检索)\n\
-\n\
-基于 FTS5 全文检索 + HNSW 向量近似最近邻搜索的混合查询。\n\
-默认输出 Top-10 结果(标题 + 相似度分数 + 摘要)。",
+        long_about = "基于 FTS5 全文检索 + HNSW 向量近似最近邻搜索的混合查询。\n\
+默认输出 Top-10 结果（标题 + 相似度分数 + 摘要）。",
         after_long_help = "EXAMPLES:\n  \
 chimera wiki \"Quest 分解机制\"                 # 语义检索\n  \
 chimera wiki --limit 20 \"OMEGA 四定律\"        # 限制返回 20 条\n  \
@@ -240,22 +263,20 @@ chimera --json wiki \"EventBus\"               # JSON 输出"
     Wiki {
         /// 查询语句(自然语言)
         query: String,
-        /// 输出 JSON 格式(机器可读,Task 1.7 将统一为全局 --json)
+        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
         #[arg(long)]
         json: bool,
-        /// 限制返回结果数量(默认 10,Task 1.3.3)
+        /// 限制返回结果数量(默认 10)
         ///
-        /// WHY 默认 10:与 spec SubTask 1.3.2 "默认输出 Top-10 结果" 对齐,
+        /// WHY 默认 10:与 spec "默认输出 Top-10 结果" 对齐,
         /// 用户可通过 `--limit 20` 扩大或 `--limit 1` 缩小。
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
-    /// 议会审议(对应 `parliament` crate,提交提案供多模型议会表决)
+    /// 议会审议（对应 `parliament` crate，提交提案供多模型议会表决）
     #[command(
-        long_about = "议会审议(对应 `parliament` crate,提交提案供多模型议会表决)\n\
-\n\
-5 角色对抗性审议(Architect/Implementer/Skeptic/Optimizer/Reviewer),\n\
-Skeptic 拥有否决权(红队防线),加权投票决定共识三态(达成/拒绝/否决)。",
+        long_about = "5 角色对抗性审议（Architect/Implementer/Skeptic/Optimizer/Reviewer），\n\
+Skeptic 拥有否决权（红队防线），加权投票决定共识三态（达成/拒绝/否决）。",
         after_long_help = "EXAMPLES:\n  \
 chimera parliament \"重构核心模块提升性能\"      # 提交提案审议\n  \
 chimera --json parliament \"新增 Agent 协同\"   # JSON 输出审议记录\n  \
@@ -264,19 +285,17 @@ chimera parliament \"修改依赖方向\"             # 查看审议过程(stder
     Parliament {
         /// 提案内容(需审议的决策描述)
         proposal: String,
-        /// 输出 JSON 格式(机器可读,Task 1.7 将统一为全局 --json)
+        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
         #[arg(long)]
         json: bool,
     },
-    /// MCP 量子网格管理(Task 1.8)
+    /// MCP 量子网格管理
     ///
     /// 管理 MCP 服务器注册表、启动服务器、调用工具、检查服务器详情。
     /// 对应 `mcp-mesh` crate(L10 Interface 层),CLI 直接调用进程内 ephemeral mesh。
     #[command(
-        long_about = "MCP 量子网格管理(Task 1.8)\n\
-\n\
-管理 MCP 服务器注册表、启动服务器、调用工具、检查服务器详情。\n\
-对应 `mcp-mesh` crate(L10 Interface 层),CLI 直接调用进程内 ephemeral mesh。",
+        long_about = "管理 MCP 服务器注册表、启动服务器、调用工具、检查服务器详情。\n\
+对应 `mcp-mesh` crate（L10 Interface 层），CLI 直接调用进程内 ephemeral mesh。",
         after_long_help = "EXAMPLES:\n  \
 chimera mcp list                               # 列出所有 MCP 服务器\n  \
 chimera --yes mcp call <server> <tool> [args]  # 调用 MCP 工具(跳过确认)\n  \
@@ -287,16 +306,14 @@ chimera mcp inspect <server>                   # 检查服务器详情"
         #[command(subcommand)]
         action: McpAction,
     },
-    /// 红队安全审计(Task 1.9)
+    /// 红队安全审计
     ///
     /// 调用 `parliament::ahirt::AhirtRedTeam` 执行 4 类攻击向量探测
     /// (PromptInjection / CommandInjection / PrivilegeEscalation / SandboxEscape),
     /// 输出漏洞清单与修复建议。`--severity` 可过滤严重度级别。
     #[command(
-        long_about = "红队安全审计(Task 1.9)\n\
-\n\
-调用 `parliament::ahirt::AhirtRedTeam` 执行 4 类攻击向量探测\n\
-(PromptInjection / CommandInjection / PrivilegeEscalation / SandboxEscape),\n\
+        long_about = "调用 `parliament::ahirt::AhirtRedTeam` 执行 4 类攻击向量探测\n\
+（PromptInjection / CommandInjection / PrivilegeEscalation / SandboxEscape），\n\
 输出漏洞清单与修复建议。`--severity` 可过滤严重度级别。",
         after_long_help = "EXAMPLES:\n  \
 chimera audit                                  # 执行全量红队审计\n  \
@@ -304,7 +321,7 @@ chimera --json audit                           # JSON 输出审计报告\n  \
 chimera audit --severity high                  # 过滤 high 严重度漏洞"
     )]
     Audit {
-        /// 输出 JSON 格式(机器可读,Task 1.7 将统一为全局 --json)
+        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
         #[arg(long)]
         json: bool,
         /// 过滤严重度级别(如 "critical" / "high" / "medium" / "low")
@@ -313,15 +330,13 @@ chimera audit --severity high                  # 过滤 high 严重度漏洞"
         #[arg(long)]
         severity: Option<String>,
     },
-    /// Agent 生命周期管理(Task 1.10)
+    /// Agent 生命周期管理
     ///
     /// 对应 `chimera-mas` crate(L9 Quest 层),提供多 Agent 协同子系统的 CLI 入口。
     /// 支持 list/spawn/inspect/cancel 4 个子动作,`--parallel` 启用并行派发模式。
     #[command(
-        long_about = "Agent 生命周期管理(Task 1.10)\n\
-\n\
-对应 `chimera-mas` crate(L9 Quest 层),提供多 Agent 协同子系统的 CLI 入口。\n\
-支持 list/spawn/inspect/cancel 4 个子动作,`--parallel` 启用并行派发模式。",
+        long_about = "对应 `chimera-mas` crate（L9 Quest 层），提供多 Agent 协同子系统的 CLI 入口。\n\
+支持 list/spawn/inspect/cancel 4 个子动作，`--parallel` 启用并行派发模式。",
         after_long_help = "EXAMPLES:\n  \
 chimera agent list                             # 列出所有 Agent\n  \
 chimera agent spawn --quadrant Q1 --task \"实现 hello\"  # 在 Q1 象限创建 Agent\n  \
@@ -339,50 +354,48 @@ chimera --yes agent cancel <agent-id>          # 取消 Agent(跳过确认)"
         #[arg(long)]
         parallel: bool,
     },
-    /// 系统健康检查(Task 1.13)
+    /// 系统健康检查
     ///
-    /// 执行 5 维度健康检查:
+    /// 执行 6 维度健康检查:
     /// 1. 配置文件路径与有效性
     /// 2. Cargo.lock 依赖完整性
     /// 3. SQLite 数据库可读写
     /// 4. MCP 网格连通性
     /// 5. EventBus 订阅者活跃数
+    /// 6. LLM Provider 健康度(Wave 2 Task 4)
     ///
     /// `--fix` 自动修复可修复项(如缺失配置文件)。
     #[command(
-        long_about = "系统健康检查(Task 1.13)\n\
-\n\
-执行 5 维度健康检查:\n\
+        long_about = "执行 6 维度健康检查:\n\
 1. 配置文件路径与有效性\n\
 2. Cargo.lock 依赖完整性\n\
 3. SQLite 数据库可读写\n\
 4. MCP 网格连通性\n\
 5. EventBus 订阅者活跃数\n\
+6. LLM Provider 健康度(Wave 2 Task 4)\n\
 \n\
-`--fix` 自动修复可修复项(如缺失配置文件)。",
+`--fix` 自动修复可修复项（如缺失配置文件）。",
         after_long_help = "EXAMPLES:\n  \
-chimera doctor                                 # 执行 5 维度健康检查\n  \
+chimera doctor                                 # 执行 6 维度健康检查\n  \
 chimera --json doctor                          # JSON 输出健康报告\n  \
 chimera doctor --fix                           # 自动修复可修复项"
     )]
     Doctor {
-        /// 输出 JSON 格式(机器可读,Task 1.7 将统一为全局 --json)
+        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
         #[arg(long)]
         json: bool,
         /// 自动修复可修复项(如缺失配置文件)
         #[arg(long)]
         fix: bool,
     },
-    /// 生成 shell 补全脚本(Task 1.14)
+    /// 生成 shell 补全脚本
     ///
     /// 支持 bash / zsh / fish / powershell / elvish 5 种 shell。
     /// 生成的脚本写入 stdout,可重定向到 shell 补全目录:
     /// `chimera completions bash > /etc/bash_completion.d/chimera`
     #[command(
-        long_about = "生成 shell 补全脚本(Task 1.14)\n\
-\n\
-支持 bash / zsh / fish / powershell / elvish 5 种 shell。\n\
-生成的脚本写入 stdout,可重定向到 shell 补全目录。",
+        long_about = "支持 bash / zsh / fish / powershell / elvish 5 种 shell。\n\
+生成的脚本写入 stdout，可重定向到 shell 补全目录。",
         after_long_help = "EXAMPLES:\n  \
 chimera completions bash > /etc/bash_completion.d/chimera  # 生成 bash 补全\n  \
 chimera completions zsh > ~/.zsh/completions/_chimera      # 生成 zsh 补全\n  \
@@ -391,6 +404,23 @@ chimera completions powershell >> $PROFILE                 # 生成 PowerShell �
     Completions {
         /// 目标 shell(bash/zsh/fish/powershell/elvish)
         shell: clap_complete::Shell,
+    },
+    /// LLM Provider 管理(统一入口,封装 mca-gateway / model-router)
+    #[command(
+        long_about = "LLM Provider 管理(统一入口,封装 mca-gateway / model-router)\n\
+\n\
+管理 Provider / Channel / Strategy,支持连通性测试与持久化配置。\n\
+对应 `mca-gateway`(8 个 affinity profile)与 `model-router` 4 路由策略。",
+        after_long_help = "EXAMPLES:\n  \
+chimera llm list                              # 列出已配置 Provider\n  \
+chimera llm test deepseek                     # 探测连通性\n  \
+chimera llm set-default deepseek              # 设置默认 Provider\n  \
+chimera llm strategy CostOptimized            # 切换路由策略"
+    )]
+    Llm {
+        /// LLM 子命令动作
+        #[command(subcommand)]
+        action: LlmAction,
     },
 }
 
@@ -429,7 +459,7 @@ pub enum ConfigAction {
     Path,
 }
 
-/// MCP 子命令动作(Task 1.8)
+/// MCP 子命令动作
 #[derive(Subcommand, Debug)]
 pub enum McpAction {
     /// 列出所有已注册的 MCP 服务器
@@ -460,7 +490,7 @@ pub enum McpAction {
     },
 }
 
-/// Agent 子命令动作(Task 1.10)
+/// Agent 子命令动作
 #[derive(Subcommand, Debug)]
 pub enum AgentAction {
     /// 列出所有 Agent(四象限分工 + 状态 + 当前任务)
@@ -485,5 +515,34 @@ pub enum AgentAction {
     Cancel {
         /// Agent ID
         id: String,
+    },
+}
+
+/// LLM 子命令动作(Task 2 of spec)
+#[derive(Subcommand, Debug)]
+pub enum LlmAction {
+    /// 列出已配置 Provider
+    List,
+    /// 显示 Provider 详情(endpoint / 协议 / 配额)
+    Show {
+        /// Provider 名称(如 deepseek / zhipu)
+        name: String,
+    },
+    /// 设置默认 Provider(触发 permission prompt,除非 `--yes`)
+    SetDefault {
+        /// Provider 名称
+        name: String,
+    },
+    /// 探测 Provider 连通性(发送最小化 prompt "ping")
+    Test {
+        /// Provider 名称(默认使用 default_provider)
+        name: Option<String>,
+    },
+    /// 列出 model-router 4 路由渠道(Quality / Balanced / Cost / Speed)
+    Channels,
+    /// 显示/设置 model-router 策略
+    Strategy {
+        /// 策略名(CostOptimized / SpeedOptimized / QualityOptimized / Auto / Failover)
+        strategy: Option<String>,
     },
 }

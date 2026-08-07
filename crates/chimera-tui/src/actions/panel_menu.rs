@@ -26,9 +26,7 @@ pub fn panel_context_actions(panel: PanelId) -> Vec<&'static str> {
         // Quest 面板:Quest 生命周期控制(暂停/恢复/取消;不含需文本输入的 chat/start)
         PanelId::Quest => vec!["quest.pause", "quest.resume", "quest.cancel"],
         // 资源监控 / 系统信息:采样控制与统计时间窗
-        PanelId::ResourceMonitor | PanelId::Sysinfo => {
-            vec!["monitor.pause_sampling", "monitor.time_window"]
-        }
+        PanelId::ResourceMonitor => vec!["monitor.pause_sampling", "monitor.time_window"],
         // 可视化面板:维度切换
         PanelId::OsaSparse | PanelId::ClvVector | PanelId::MetricsDashboard => {
             vec!["viz.switch_dimension"]
@@ -45,8 +43,9 @@ mod tests {
     use super::*;
     use crate::actions::ActionRegistry;
 
-    /// 全部 21 个 PanelId(与 types.rs 保持同步)
-    const ALL_PANELS: [PanelId; 21] = [
+    /// 全部 22 个已注册 PanelId(与 app/mod.rs 面板循环保持一致;
+    /// Timeline/Sysinfo 有实现但未进入面板循环,动作菜单不可能被唤出,故不列)。
+    const ALL_PANELS: [PanelId; 22] = [
         PanelId::Quest,
         PanelId::Parliament,
         PanelId::Budget,
@@ -60,15 +59,18 @@ mod tests {
         PanelId::Router,
         PanelId::McpNodes,
         PanelId::Chtc,
-        PanelId::Timeline,
-        PanelId::OsaSparse,
         PanelId::ClvVector,
         PanelId::ResourceMonitor,
         PanelId::MetricsDashboard,
-        PanelId::Sysinfo,
+        PanelId::OsaSparse,
         PanelId::Chat,
-        // polish-v2.7 P1-5:自评仪表盘面板
         PanelId::SelfAssessment,
+        // closure Stage B-10:DAG 可视化面板
+        PanelId::DagViz,
+        // Task 3.7:PVL 过程评分面板
+        PanelId::PvlScore,
+        // Task 3.9:任务管理面板
+        PanelId::TaskManager,
     ];
 
     #[test]

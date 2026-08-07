@@ -6,7 +6,7 @@
 //! - 从 `app.rs` 迁移原有渲染逻辑,保持进度条与超限高亮行为不变。
 //! - 使用 `Panel` trait 统一接口,便于 `TuiApp` 通过 `Box<dyn Panel>` 管理。
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -34,16 +34,34 @@ impl BudgetPanel {
 
         // 基础信息行
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from("Budget"),
+            Line::from(crate::t!("panel.budget.title")),
             Line::from("─────────────"),
-            Line::from(format!("Current Tier: {}", budget.current_tier)),
-            Line::from(format!("Coefficient:  {:.1}", budget.coefficient)),
             Line::from(format!(
-                "Consumption:  {:.1} / {:.1}",
-                budget.total_consumption, total
+                "{}: {}",
+                crate::t!("panel.budget.tier"),
+                budget.current_tier
             )),
-            Line::from(format!("Remaining:    {:.1}", budget.remaining_budget)),
-            Line::from(format!("Utilization:  {:.1}%", utilization_pct)),
+            Line::from(format!(
+                "{}:  {:.1}",
+                crate::t!("panel.budget.coefficient"),
+                budget.coefficient
+            )),
+            Line::from(format!(
+                "{}:  {:.1} / {:.1}",
+                crate::t!("panel.budget.consumption"),
+                budget.total_consumption,
+                total
+            )),
+            Line::from(format!(
+                "{}:    {:.1}",
+                crate::t!("panel.budget.remaining"),
+                budget.remaining_budget
+            )),
+            Line::from(format!(
+                "{}:  {:.1}%",
+                crate::t!("panel.budget.utilization"),
+                utilization_pct
+            )),
         ];
 
         // Status 行:超限时红色加粗,否则默认样式
@@ -54,7 +72,11 @@ impl BudgetPanel {
             Style::default()
         };
         lines.push(Line::from(Span::styled(
-            format!("Status:       {}", status_text),
+            format!(
+                "{}:       {}",
+                crate::t!("panel.budget.status"),
+                status_text
+            ),
             status_style,
         )));
 
@@ -82,15 +104,13 @@ impl BudgetPanel {
                 Style::default()
             };
             lines.push(Line::from(Span::styled(
-                format!("Alert:        {}", alert),
+                format!("{}:        {}", crate::t!("panel.budget.alert"), alert),
                 alert_style,
             )));
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(
-            "Budget tier controls cost coefficient and thresholds.",
-        ));
+        lines.push(Line::from(crate::t!("panel.budget.hint")));
 
         Text::from(lines)
     }
@@ -111,8 +131,13 @@ impl Panel for BudgetPanel {
         paragraph.render(area, buf);
     }
 
-    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
-        // M1:Budget 面板不处理专属按键。
+    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // `R` 刷新:发布 RequestRefresh(与 `:refresh` 命令同语义,由上游决定
+        // 是否重载/清空过滤器)。WHY 补齐 shortcuts() 声明但无实现的按键
+        // (快捷键诚实性:声明即可达)。
+        if key.code == KeyCode::Char('R') {
+            return Some(TuiCommand::RequestRefresh);
+        }
         // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
         None
     }
@@ -134,7 +159,21 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_r_returns_request_refresh() {
+        // 快捷键诚实性:R 刷新声明即可达(此前 handle_key 恒 None)
+        let mut panel = BudgetPanel::new();
+        let mut state = TuiState::new();
+        let cmd = panel.handle_key(
+            KeyEvent::new(KeyCode::Char('R'), crossterm::event::KeyModifiers::NONE),
+            &mut state,
+        );
+        assert_eq!(cmd, Some(TuiCommand::RequestRefresh));
+    }
+
+    #[test]
     fn test_budget_panel_default_state() {
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
         let state = TuiState::new();
         let content = BudgetPanel::content(&state).to_string();
         assert!(content.contains("Budget"));
@@ -144,6 +183,8 @@ mod tests {
 
     #[test]
     fn test_budget_panel_exceeded_state() {
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
         let mut state = TuiState::new();
         state.budget = BudgetMetrics {
             total_consumption: 9500.0,
@@ -158,5 +199,16 @@ mod tests {
         assert!(content.contains("EXCEEDED"));
         assert!(content.contains("Budget cap exceeded"));
         assert!(content.contains("Critical"));
+    }
+
+    #[test]
+    fn test_budget_panel_zh_body_labels() {
+        // U-3:面板正文随 locale 切换(中文标签),不再硬编码英文
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+        let state = TuiState::new();
+        let content = BudgetPanel::content(&state).to_string();
+        assert!(content.contains("当前档位"));
+        assert!(content.contains("利用率"));
     }
 }
