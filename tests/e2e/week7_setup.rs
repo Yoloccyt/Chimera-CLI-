@@ -83,7 +83,15 @@ pub fn setup_week7_pipeline() -> anyhow::Result<Week7Pipeline> {
     let coordinator = LsctCoordinator::with_event_bus(LsctConfig::default(), bus.clone());
 
     // Week 7 四个新 crate
-    let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus.clone());
+    // WHY 显式 30s 事务超时:默认 200ms 在 16 线程全并行 E2E 下会
+    // TransactionTimeout flaky(v2.21.0 同款教训,mcp-mesh mesh.rs 同款修复)
+    let mesh = McpMesh::with_event_bus(
+        MeshConfig {
+            transaction_timeout_ms: 30_000,
+            ..Default::default()
+        },
+        bus.clone(),
+    );
     let substitutor = CsnSubstitutor::with_event_bus(CsnConfig::default(), bus.clone());
     // WHY 禁用 PrerequisiteChecker:E2E 测试验证 SESA 激活逻辑本身,
     // 前置事件校验已由 sesa-router/tests/prerequisite_test.rs 专门覆盖
