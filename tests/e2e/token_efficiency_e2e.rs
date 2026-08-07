@@ -116,6 +116,7 @@ fn e2e_semantic_cache_insert_lookup_isolation() {
         tool_schema_hash: [1u8; 32],
         system_prompt_hash: [2u8; 32],
         thinking_tier: ThinkingPreference::Standard,
+        sampling_bucket: 0,
     };
     let clv = vec![0.5f32; 512];
 

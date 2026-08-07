@@ -20,7 +20,8 @@ use std::sync::Arc;
 use mca_gateway::{AdapterOptions, VendorAdapter};
 use nexus_contracts::affinity::{
     AffinityMessage, AffinityOverrides, AffinityRequest, ContentBlock, MessageRole,
-    ModelAffinitySpec, ProtocolDialect, ProviderId, ThinkingPreference,
+    ModelAffinitySpec, OutputFormat, ProtocolDialect, ProviderId, SamplingParams,
+    ThinkingPreference,
 };
 use nexus_contracts::{CapabilityToken, CapabilityTokenStatus, SeamId};
 use proptest::prelude::*;
@@ -308,6 +309,8 @@ fn mock_request() -> AffinityRequest {
         thinking_pref: ThinkingPreference::Fast,
         budget_hint_micro: None,
         overrides: AffinityOverrides::default(),
+        sampling: SamplingParams::default(),
+        output_format: OutputFormat::default(),
     }
 }
 

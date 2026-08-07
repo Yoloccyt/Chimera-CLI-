@@ -324,7 +324,8 @@ fn map_stop_reason(raw: &str) -> FinishReason {
 mod tests {
     use super::*;
     use nexus_contracts::affinity::{
-        AffinityMessage, AffinityOverrides, ProviderId, ThinkingPreference, ToolDecl,
+        AffinityMessage, AffinityOverrides, OutputFormat, ProviderId, SamplingParams,
+        ThinkingPreference, ToolDecl,
     };
 
     fn sample_request() -> AffinityRequest {
@@ -352,6 +353,8 @@ mod tests {
             thinking_pref: ThinkingPreference::Deep,
             budget_hint_micro: None,
             overrides: AffinityOverrides::default(),
+            sampling: SamplingParams::default(),
+            output_format: OutputFormat::default(),
         }
     }
 
@@ -548,6 +551,8 @@ mod tests {
             thinking_pref: ThinkingPreference::Standard,
             budget_hint_micro: None,
             overrides: AffinityOverrides::default(),
+            sampling: SamplingParams::default(),
+            output_format: OutputFormat::default(),
         }
     }
 }

@@ -302,7 +302,8 @@ pub fn apply_output_budget(body: &mut serde_json::Value, budget: &OutputBudget) 
 mod tests {
     use super::*;
     use nexus_contracts::affinity::{
-        AffinityMessage, AffinityOverrides, ContentBlock, MessageRole, ToolDecl,
+        AffinityMessage, AffinityOverrides, ContentBlock, MessageRole, OutputFormat,
+        SamplingParams, ToolDecl,
     };
     use proptest::prelude::*;
 
@@ -325,6 +326,8 @@ mod tests {
             thinking_pref: pref,
             budget_hint_micro: None,
             overrides: AffinityOverrides::default(),
+            sampling: SamplingParams::default(),
+            output_format: OutputFormat::default(),
         }
     }
 

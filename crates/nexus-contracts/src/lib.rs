@@ -254,9 +254,9 @@ pub use budget_tier::BudgetTier;
 // WHY 不导出全部子类型: PricingSpec/EndpointSpec/QuirkRule 等仅 spec 装配方
 // (L10 spec_loader)使用,走 affinity:: 路径引用,避免顶层命名空间膨胀。
 pub use affinity::{
-    AffinityRequest, AffinityResponse, CapabilitySet, ContentBlock, ModelAffinitySpec,
-    NegotiationFidelity, OutputBudget, ProtocolDialect, ProviderId, ThinkingPreference,
-    TokenCacheKey, UsageReport,
+    sampling_bucket, AffinityRequest, AffinityResponse, CapabilitySet, ContentBlock,
+    ModelAffinitySpec, NegotiationFidelity, OutputBudget, OutputFormat, ProtocolDialect,
+    ProviderId, SamplingParams, ThinkingPreference, TokenCacheKey, UsageReport,
 };
 // ADR-054 决策 3:命令验证契约(AttackType/Command/CommandPolicy/CommandValidator 上提,P9-T4)
 pub use command_validation::{
@@ -320,9 +320,9 @@ pub mod prelude {
     pub use crate::budget_tier::BudgetTier;
     // ADR-065: MCA 模型亲和契约(与顶层导出同集)
     pub use crate::affinity::{
-        AffinityRequest, AffinityResponse, CapabilitySet, ContentBlock, ModelAffinitySpec,
-        NegotiationFidelity, OutputBudget, ProtocolDialect, ProviderId, ThinkingPreference,
-        TokenCacheKey, UsageReport,
+        sampling_bucket, AffinityRequest, AffinityResponse, CapabilitySet, ContentBlock,
+        ModelAffinitySpec, NegotiationFidelity, OutputBudget, OutputFormat, ProtocolDialect,
+        ProviderId, SamplingParams, ThinkingPreference, TokenCacheKey, UsageReport,
     };
     // ADR-054 决策 3:命令验证契约(AttackType/Command/CommandPolicy/CommandValidator 上提,P9-T4)
     pub use crate::command_validation::{

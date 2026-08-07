@@ -292,7 +292,8 @@ fn map_status(raw: &str, has_tool: bool) -> FinishReason {
 mod tests {
     use super::*;
     use nexus_contracts::affinity::{
-        AffinityMessage, AffinityOverrides, ProviderId, ThinkingPreference, ToolDecl,
+        AffinityMessage, AffinityOverrides, OutputFormat, ProviderId, SamplingParams,
+        ThinkingPreference, ToolDecl,
     };
 
     fn sample_request(with_tools: bool) -> AffinityRequest {
@@ -324,6 +325,8 @@ mod tests {
             thinking_pref: ThinkingPreference::Standard,
             budget_hint_micro: None,
             overrides: AffinityOverrides::default(),
+            sampling: SamplingParams::default(),
+            output_format: OutputFormat::default(),
         }
     }
 

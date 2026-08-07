@@ -30,28 +30,20 @@ pub(crate) fn peak_factor(pricing: &PricingSpec, hour: u8) -> u16 {
     100
 }
 
-/// 请求前成本预估 — 粗粒度字符启发式(P6:路由决策必须附带预估)
+/// 请求前成本预估 — 显式化字节宽启发式(P6:路由决策必须附带预估)
 ///
-/// WHY 字符/4 启发式: 请求前无真实 token 数,中英文混排下 1 token ≈ 3-4
-/// 字符是业界通用近似;预估只用于路由权重与预算预检,实际成本以
-/// usage 回算为准(actual_cost),偏差由 acb-governor EWMA 自校正。
+/// WHY 字节/4 启发式: 请求前无真实 token 数,中英文混排下 1 token ≈ 4
+/// 字节是业界通用近似(ADR-070 显式化为按字符字节宽加权,权重可调);
+/// 预估只用于路由权重与预算预检,实际成本以 usage 回算为准(actual_cost),
+/// 偏差由 acb-governor EWMA 自校正。
 pub(crate) fn estimate_cost(
     pricing: &PricingSpec,
     request: &AffinityRequest,
     hour: u8,
 ) -> CostEstimate {
-    let chars: usize = request
-        .messages
-        .iter()
-        .flat_map(|m| &m.blocks)
-        .map(|b| match b {
-            nexus_contracts::affinity::ContentBlock::Text { text } => text.len(),
-            nexus_contracts::affinity::ContentBlock::Thinking { thinking, .. } => thinking.len(),
-            nexus_contracts::affinity::ContentBlock::ToolUse { input_json, .. } => input_json.len(),
-            nexus_contracts::affinity::ContentBlock::ToolResult { content, .. } => content.len(),
-        })
-        .sum();
-    let est_input_tokens = (chars / 4) as u64;
+    // 与 conversation_trim 同口径(逐条 floor 后求和),保证裁剪决策与
+    // 成本预估对同一请求的一致估算(ADR-070)
+    let est_input_tokens = u64::from(crate::conversation_trim::estimate_tokens(&request.messages));
     let factor = peak_factor(pricing, hour);
     // 整数微元:tokens × 价(微元/百万) / 1M × 峰谷百分比 / 100
     let total =

@@ -19,6 +19,7 @@ fn test_key() -> TokenCacheKey {
         tool_schema_hash: [1u8; 32],
         system_prompt_hash: [2u8; 32],
         thinking_tier: ThinkingPreference::Standard,
+        sampling_bucket: 0,
     }
 }
 

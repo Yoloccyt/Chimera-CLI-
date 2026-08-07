@@ -20,7 +20,8 @@ use mca_gateway::semantic_fingerprint::semantic_fingerprint;
 use mca_gateway::sse::StreamNormalizer;
 use nexus_contracts::affinity::{
     AffinityMessage, AffinityOverrides, AffinityRequest, CapabilitySet, ContentBlock, MessageRole,
-    PricingSpec, ProtocolDialect, ThinkingPreference, ThinkingSupport, ToolDecl,
+    OutputFormat, PricingSpec, ProtocolDialect, SamplingParams, ThinkingPreference,
+    ThinkingSupport, ToolDecl,
 };
 
 /// 成本估算红线(μs)——路由热路径,超限即路由决策拖慢
@@ -123,6 +124,8 @@ fn bench_negotiate_full(c: &mut Criterion) {
         thinking_pref: ThinkingPreference::Deep,
         budget_hint_micro: None,
         overrides: AffinityOverrides::default(),
+        sampling: SamplingParams::default(),
+        output_format: OutputFormat::default(),
     };
     c.bench_function("negotiate_full_deep_with_tools", |b| {
         b.iter(|| black_box(negotiate(black_box(&caps), black_box(&request))))

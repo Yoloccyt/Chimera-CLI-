@@ -22,7 +22,7 @@ use mca_gateway::sse::StreamNormalizer;
 use mca_gateway::Codec;
 use nexus_contracts::affinity::{
     AffinityMessage, ContentBlock, FinishReason, MessageRole, ProtocolDialect, ProviderId,
-    StatePreservationPolicy,
+    StatePreservationPolicy, ThinkingPreference,
 };
 
 fn affinity_dir() -> PathBuf {
@@ -259,4 +259,120 @@ fn matrix_quota_error_classification() {
     // 装配成功(有可用码器)
     let adapter = VendorAdapter::assemble(Arc::new(flash.clone()), None);
     assert!(adapter.is_ok(), "DeepSeek 通道必须可装配");
+}
+
+// ============================================================
+// 场景 F:隐式族 System 后置重排的方言兼容(ADR-072 决策 ④)
+//
+// D 优化将 Implicit 族(DeepSeek/Qwen/豆包)的 System 消息重定位到消息
+// 末尾以最大化自动前缀缓存的公共前缀。本场景验证重排后的请求体仍
+// 满足 OpenAI Chat 方言语义(协议矩阵红线:重排不得破坏方言兼容)。
+// ============================================================
+
+/// 构造带 System 消息的请求(模拟 L3 repo-wiki 动态内容注入)
+fn request_with_system(system_text: &str) -> AffinityRequest {
+    AffinityRequest {
+        intent_id: "matrix-layout".into(),
+        messages: vec![
+            AffinityMessage {
+                role: MessageRole::System,
+                blocks: vec![ContentBlock::Text {
+                    text: system_text.into(),
+                }],
+            },
+            AffinityMessage {
+                role: MessageRole::User,
+                blocks: vec![ContentBlock::Text {
+                    text: "当前问题".into(),
+                }],
+            },
+        ],
+        tools: Vec::new(),
+        thinking_pref: ThinkingPreference::Fast,
+        budget_hint_micro: None,
+        overrides: Default::default(),
+        sampling: Default::default(),
+        output_format: Default::default(),
+    }
+}
+
+#[test]
+fn matrix_implicit_family_system_tail_roundtrip() {
+    // DeepSeek(Implicit + OpenAI Chat):重排后 system 在末尾且角色保真
+    let specs = load_all();
+    let spec = specs
+        .iter()
+        .find(|s| s.route_key() == "deep_seek/deepseek-v4-flash")
+        .expect("deepseek-v4-flash 必须存在");
+    assert_eq!(
+        spec.capabilities.prompt_caching,
+        nexus_contracts::affinity::CacheSupport::Implicit,
+        "DeepSeek 必须是隐式族(本场景前提)"
+    );
+
+    let mut req = request_with_system("repo-wiki 检索结果(每轮变化)");
+    // D 优化:重排 System 到末尾
+    assert!(mca_gateway::prompt_norm::layout_messages(spec, &mut req));
+
+    // 方言原生请求构造(OpenAI Chat):system 角色必须保留且位于末尾
+    let body = Codec::for_dialect(ProtocolDialect::OpenAiChat)
+        .unwrap()
+        .build_request(spec, &req)
+        .expect("重排后请求必须可构造");
+    let messages = body["messages"].as_array().expect("messages 必须是数组");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(
+        messages[0]["role"], "user",
+        "重排后首位必须是稳定历史(user)"
+    );
+    assert_eq!(messages[1]["role"], "system", "重排后 system 必须在末尾");
+    assert_eq!(
+        messages[1]["content"], "repo-wiki 检索结果(每轮变化)",
+        "system 内容必须逐字保真(重排只改顺序不改内容)"
+    );
+    // 隐式族不注入 cache_control 断点(断点是显式族机制)
+    assert!(
+        !body.to_string().contains("cache_control"),
+        "隐式族请求体不得出现 cache_control"
+    );
+}
+
+#[test]
+fn matrix_explicit_family_system_stays_first() {
+    // 显式族(GLM):System 保持首位 + cache_control 断点注入(回归钉住)
+    let specs = load_all();
+    let spec = specs
+        .iter()
+        .find(|s| s.route_key() == "zhipu/glm-5.2")
+        .expect("glm-5.2 必须存在");
+    // GLM 走 Anthropic 方言(system 是顶层参数,不在 messages 数组)
+    let mut req = request_with_system("系统提示");
+    // 显式族不重排(断点在 L2 后,重排反而破坏断点位置)
+    assert!(!mca_gateway::prompt_norm::layout_messages(spec, &mut req));
+
+    let body = Codec::for_dialect(ProtocolDialect::AnthropicMessages)
+        .unwrap()
+        .build_request(spec, &req)
+        .expect("显式族请求必须可构造");
+    // Anthropic 路径:system 是顶层字段(不在 messages 数组);
+    // ExplicitControl 下为块数组(含 cache_control 断点)
+    let system = body["system"].clone();
+    let system_text = match &system {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| b["text"].as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+            .join(""),
+        other => panic!("system 必须是字符串或块数组, got {other:?}"),
+    };
+    assert!(
+        system_text.contains("系统提示"),
+        "Anthropic 路径 system 内容必须完整: {system_text}"
+    );
+    // 显式族注入 cache_control 断点(缓存亲和机制生效)
+    assert!(
+        body.to_string().contains("cache_control"),
+        "显式族请求体必须注入 cache_control"
+    );
 }

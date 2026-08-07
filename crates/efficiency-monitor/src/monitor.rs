@@ -728,6 +728,11 @@ mod tests {
             cost_actual_micro: 500,
             ttft_ms,
             semantic_cache_hit: false,
+            trimmed_before_tokens: None,
+            trimmed_after_tokens: None,
+            compressed_ratio: None,
+            early_stop_reason: None,
+            coalesced: false,
         }
     }
 

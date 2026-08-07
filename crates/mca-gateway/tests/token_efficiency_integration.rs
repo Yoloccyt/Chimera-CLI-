@@ -21,7 +21,8 @@ use mca_gateway::sse::StreamEvent;
 use mca_gateway::{build_token_cache_key, semantic_fingerprint, AdapterOptions, VendorAdapter};
 use nexus_contracts::affinity::{
     AffinityMessage, AffinityOverrides, AffinityRequest, ContentBlock, MessageRole,
-    ModelAffinitySpec, ProtocolDialect, ProviderId, ThinkingPreference,
+    ModelAffinitySpec, OutputFormat, ProtocolDialect, ProviderId, SamplingParams,
+    ThinkingPreference,
 };
 use nexus_contracts::{CapabilityToken, CapabilityTokenStatus, SeamId};
 use scc_cache::{CacheHitTracker, SemanticResponseCache};
@@ -97,6 +98,8 @@ fn mock_request() -> AffinityRequest {
         thinking_pref: ThinkingPreference::Fast,
         budget_hint_micro: None,
         overrides: AffinityOverrides::default(),
+        sampling: SamplingParams::default(),
+        output_format: OutputFormat::default(),
     }
 }
 
@@ -254,6 +257,83 @@ async fn context_trim_and_output_budget_synergy() {
         stops >= 1,
         "超预算时 early_stop 必须触发 BudgetExceeded 停止（输出面）"
     );
+}
+
+// ============================================================
+// 测试 2.5: 完成度感知早停(ADR-072 决策 ⑥)—— 流中断 + 输出 token 下降
+// ============================================================
+
+/// 流中断接线验证:结构化输出(Json)语义完成即停,阻止模型继续生成
+/// 尾随文本(流中断 = 消费者收到 Stop 决策后停止消费,未消费 token
+/// 不再产生)。对比全量消费基线,输出 token 下降必须 ≥ 10%
+/// (SMART 输出治理目标,Phase 4 验收基准)。
+#[test]
+fn completion_detector_stream_interrupt_reduces_output_tokens() {
+    use mca_gateway::early_stop::{StopDecision, StopReason};
+    use mca_gateway::estimate_text;
+    use nexus_contracts::affinity::OutputFormat;
+
+    // 流:完整 JSON(2 段) + 尾随冗长文本(模型多输出的部分,全量消费会
+    // 计入成本;语义完成即停后这部分不再产生)
+    let chunks = [
+        r#"{"result":"success","#,
+        r#""metrics":[1,2,3]}"#,
+        "\n\n总结:执行成功,所有指标已计算完毕,无任何异常。",
+        "全部步骤完成,报告生成结束,谢谢配合。",
+    ];
+    // 全量消费基线(对照组):所有 chunk 均被消费
+    let full: u64 = chunks.iter().map(|c| u64::from(estimate_text(c))).sum();
+    assert!(full > 0);
+
+    // 实验组:启用完成度检测(Json),流中断语义
+    let mut controller = EarlyStopController::with_completion(100_000, OutputFormat::Json);
+    let mut consumed_total: u64 = 0;
+    let mut stopped = false;
+    for chunk in chunks {
+        let decision = controller.on_event(&StreamEvent::TextDelta(chunk.into()));
+        match decision {
+            StopDecision::Continue => {
+                consumed_total += u64::from(estimate_text(chunk));
+            }
+            StopDecision::Stop { reason, consumed } => {
+                // 触发 chunk 本身已生成(计费),后续 token 不再消费
+                assert_eq!(
+                    reason,
+                    StopReason::SemanticComplete,
+                    "完整 JSON 必须触发 SemanticComplete"
+                );
+                consumed_total = consumed;
+                stopped = true;
+                break; // 流中断:停止消费后续 chunk
+            }
+        }
+    }
+    assert!(stopped, "完整 JSON 后必须语义完成停止(流中断)");
+
+    let reduction = (full - consumed_total) as f64 / full as f64;
+    assert!(
+        reduction >= 0.10,
+        "语义完成即停必须省 ≥10% 输出 token, got {reduction:.2} (full={full}, consumed={consumed_total})"
+    );
+}
+
+/// 误判保护:未闭合 JSON 不触发流中断(正确性优先,截断即事故)
+#[test]
+fn completion_detector_no_interrupt_on_unclosed_json() {
+    use mca_gateway::early_stop::StopDecision;
+    use nexus_contracts::affinity::OutputFormat;
+
+    let mut controller = EarlyStopController::with_completion(100_000, OutputFormat::Json);
+    // 流在未闭合 JSON 处结束(厂商流中断/截断输出场景)
+    let chunks = [r#"{"result":"pending","#, r#""partial":"#];
+    for chunk in chunks {
+        let decision = controller.on_event(&StreamEvent::TextDelta(chunk.into()));
+        assert!(
+            matches!(decision, StopDecision::Continue),
+            "未闭合 JSON 不得触发任何停止: {decision:?}"
+        );
+    }
+    assert!(!controller.should_stop());
 }
 
 // ============================================================
@@ -518,6 +598,8 @@ fn namespace_isolation_privacy_redline() {
         thinking_pref: ThinkingPreference::Fast,
         budget_hint_micro: None,
         overrides: AffinityOverrides::default(),
+        sampling: SamplingParams::default(),
+        output_format: OutputFormat::default(),
     };
     let req_b = AffinityRequest {
         intent_id: "quest-B".into(),
@@ -531,6 +613,8 @@ fn namespace_isolation_privacy_redline() {
         thinking_pref: ThinkingPreference::Fast,
         budget_hint_micro: None,
         overrides: AffinityOverrides::default(),
+        sampling: SamplingParams::default(),
+        output_format: OutputFormat::default(),
     };
 
     // 在 quest-A 插入语义缓存

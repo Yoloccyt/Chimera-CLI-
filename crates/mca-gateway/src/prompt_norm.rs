@@ -22,8 +22,8 @@
 use std::sync::Arc;
 
 use nexus_contracts::affinity::{
-    AffinityMessage, AffinityRequest, ContentBlock, MessageRole, ModelAffinitySpec, TokenCacheKey,
-    ToolDecl,
+    AffinityMessage, AffinityRequest, ContentBlock, MessageRole, ModelAffinitySpec,
+    ProtocolDialect, TokenCacheKey, ToolDecl,
 };
 use sha2::{Digest, Sha256};
 
@@ -116,6 +116,55 @@ pub(crate) fn deterministic_tools_json(tools: &[ToolDecl]) -> String {
     serde_json::to_string(&sorted).unwrap_or_else(|_| "[]".into())
 }
 
+/// 隐式族稳定前缀重排(ADR-072 决策 ④)— System 消息重定位到消息末尾
+///
+/// 隐式缓存族(DeepSeek/Qwen/豆包)的自动前缀缓存是"最长公共前缀"语义:
+/// System 消息(L3 repo-wiki 动态内容)每轮变化时,若位于消息首位则
+/// 整条前缀失效,缓存命中率归零。重排为 [稳定历史..., System 动态内容]
+/// 后,跨轮次公共前缀 = 除最新轮次外的全部历史,命中率实质性提升。
+///
+/// # 约束(fail-safe)
+/// - 仅 `CacheSupport::Implicit` 族生效(显式族靠 cache_control 断点,
+///   None 族无缓存语义)
+/// - 仅 OpenAI Chat 方言生效(消息数组承载 system 角色;Anthropic 路径
+///   system 是顶层参数,天然在断点外,无需重排)
+/// - 无 System 消息或消息数 < 2 时返回 false(无重排发生)
+///
+/// 返回是否实际重排(调用方据此留痕)。
+pub fn layout_messages(spec: &ModelAffinitySpec, request: &mut AffinityRequest) -> bool {
+    // 仅隐式缓存族
+    if spec.capabilities.prompt_caching != nexus_contracts::affinity::CacheSupport::Implicit {
+        return false;
+    }
+    // 仅 OpenAI Chat 方言(消息数组承载 system 角色)
+    if spec.preferred_dialect() != Some(ProtocolDialect::OpenAiChat) {
+        return false;
+    }
+    let has_system = request
+        .messages
+        .iter()
+        .any(|m| m.role == MessageRole::System);
+    if !has_system || request.messages.len() < 2 {
+        return false;
+    }
+    // 稳定部分(非 System)按原序保留,System 消息移入队尾
+    let mut stable: Vec<AffinityMessage> = request
+        .messages
+        .iter()
+        .filter(|m| m.role != MessageRole::System)
+        .cloned()
+        .collect();
+    stable.extend(
+        request
+            .messages
+            .iter()
+            .filter(|m| m.role == MessageRole::System)
+            .cloned(),
+    );
+    request.messages = stable;
+    true
+}
+
 /// 构造 Token 效率缓存键(ADR-069)— 语义缓存与厂商缓存亲和的统一键空间
 ///
 /// 五维覆盖:{model, model_version, tool_schema_hash, system_prompt_hash, thinking_tier}。
@@ -141,6 +190,9 @@ pub fn build_token_cache_key(spec: &ModelAffinitySpec, request: &AffinityRequest
         tool_schema_hash: compute_tool_schema_hash(&tools_json),
         system_prompt_hash: compute_system_prompt_hash(&prompt),
         thinking_tier: request.thinking_pref,
+        // 采样桶(ADR-070):temperature/top_p 离散化,桶间互不命中——
+        // 防"确定性任务命中随机采样响应"或反之(多样性/正确性双保)
+        sampling_bucket: nexus_contracts::affinity::sampling_bucket(&request.sampling),
     }
 }
 
@@ -279,7 +331,8 @@ mod tests {
     use super::*;
     use nexus_contracts::affinity::{
         AffinityMessage, AffinityOverrides, AffinityRequest, ContentBlock, MessageRole,
-        ModelAffinitySpec, ProtocolDialect, ProviderId, ThinkingPreference, ToolDecl,
+        ModelAffinitySpec, OutputFormat, ProtocolDialect, ProviderId, SamplingParams,
+        ThinkingPreference, ToolDecl,
     };
 
     fn sample_prompt() -> NormalizedPrompt {
@@ -425,6 +478,8 @@ mod tests {
             thinking_pref: thinking,
             budget_hint_micro: None,
             overrides: AffinityOverrides::default(),
+            sampling: SamplingParams::default(),
+            output_format: OutputFormat::default(),
         }
     }
 
@@ -511,6 +566,132 @@ mod tests {
             build_token_cache_key(&spec, &req1).system_prompt_hash,
             build_token_cache_key(&spec, &req2).system_prompt_hash,
             "会话内稳定前缀哈希必须与动态历史无关"
+        );
+    }
+
+    // ============================================================
+    // 隐式族稳定前缀重排(ADR-072 决策 ④)
+    // ============================================================
+
+    fn implicit_spec() -> ModelAffinitySpec {
+        let mut spec = ModelAffinitySpec::minimal(
+            ProviderId::DeepSeek,
+            "deepseek-v4-flash",
+            ProtocolDialect::OpenAiChat,
+        );
+        spec.capabilities.prompt_caching = nexus_contracts::affinity::CacheSupport::Implicit;
+        spec
+    }
+
+    #[test]
+    fn layout_moves_system_to_tail_for_implicit_family() {
+        // 隐式族 + OpenAI Chat:System 消息重定位到末尾,稳定历史成为前缀主体
+        let spec = implicit_spec();
+        let mut req = cache_key_request(Vec::new(), ThinkingPreference::Fast);
+        req.messages.insert(
+            0,
+            AffinityMessage {
+                role: MessageRole::System,
+                blocks: vec![ContentBlock::Text {
+                    text: "repo-wiki 检索结果(每轮变化)".into(),
+                }],
+            },
+        );
+        assert!(layout_messages(&spec, &mut req), "必须实际重排");
+        assert_eq!(
+            req.messages.first().map(|m| m.role),
+            Some(MessageRole::User),
+            "重排后首位必须是稳定历史而非动态 System"
+        );
+        assert_eq!(
+            req.messages.last().map(|m| m.role),
+            Some(MessageRole::System),
+            "重排后 System 消息必须在末尾"
+        );
+    }
+
+    #[test]
+    fn layout_noop_without_system_message() {
+        // 无 System 消息 → 零操作(无动态前缀可重排)
+        let spec = implicit_spec();
+        let mut req = cache_key_request(Vec::new(), ThinkingPreference::Fast);
+        assert!(!layout_messages(&spec, &mut req));
+    }
+
+    #[test]
+    fn layout_noop_for_explicit_family() {
+        // 显式族靠 cache_control 断点,不重排(断点在 L2 后,重排反而破坏断点位置)
+        let mut spec = implicit_spec();
+        spec.capabilities.prompt_caching = nexus_contracts::affinity::CacheSupport::ExplicitControl;
+        let mut req = cache_key_request(Vec::new(), ThinkingPreference::Fast);
+        req.messages.insert(
+            0,
+            AffinityMessage {
+                role: MessageRole::System,
+                blocks: vec![ContentBlock::Text { text: "sys".into() }],
+            },
+        );
+        assert!(!layout_messages(&spec, &mut req));
+    }
+
+    #[test]
+    fn layout_noop_for_anthropic_dialect() {
+        // Anthropic 路径 system 是顶层参数(不在 messages 数组),无需重排
+        let mut spec = implicit_spec();
+        spec.dialects = vec![ProtocolDialect::AnthropicMessages];
+        let mut req = cache_key_request(Vec::new(), ThinkingPreference::Fast);
+        req.messages.insert(
+            0,
+            AffinityMessage {
+                role: MessageRole::System,
+                blocks: vec![ContentBlock::Text { text: "sys".into() }],
+            },
+        );
+        assert!(!layout_messages(&spec, &mut req));
+    }
+
+    #[test]
+    fn layout_preserves_stable_history_prefix() {
+        // 核心性质:重排后跨轮次公共前缀 = 稳定历史(System 每轮变化不再破坏前缀)
+        let spec = implicit_spec();
+        // 第 N 轮:system 内容 A + 稳定历史
+        let mut turn_n = cache_key_request(Vec::new(), ThinkingPreference::Fast);
+        turn_n.messages.insert(
+            0,
+            AffinityMessage {
+                role: MessageRole::System,
+                blocks: vec![ContentBlock::Text {
+                    text: "检索结果 A".into(),
+                }],
+            },
+        );
+        // 第 N+1 轮:system 内容 B(变化)+ 稳定历史 + 新轮次
+        let mut turn_n1 = turn_n.clone();
+        turn_n1.messages[0] = AffinityMessage {
+            role: MessageRole::System,
+            blocks: vec![ContentBlock::Text {
+                text: "检索结果 B".into(),
+            }],
+        };
+        turn_n1.messages.push(AffinityMessage {
+            role: MessageRole::User,
+            blocks: vec![ContentBlock::Text {
+                text: "follow-up".into(),
+            }],
+        });
+
+        // 重排后:两轮共享的公共前缀 = 稳定历史(首条消息与重排前 System 无关)
+        layout_messages(&spec, &mut turn_n);
+        layout_messages(&spec, &mut turn_n1);
+        assert_eq!(
+            turn_n.messages.first().map(|m| m.role),
+            turn_n1.messages.first().map(|m| m.role),
+            "重排后两轮首条消息角色一致(稳定历史开头)"
+        );
+        assert_eq!(
+            turn_n.messages[..turn_n.messages.len() - 1],
+            turn_n1.messages[..turn_n.messages.len() - 1],
+            "重排后第 N 轮序列必须是第 N+1 轮的前缀(隐式缓存命中前提)"
         );
     }
 }

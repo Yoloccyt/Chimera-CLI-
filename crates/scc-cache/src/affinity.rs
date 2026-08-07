@@ -324,6 +324,56 @@ impl CacheAffinityIntegration {
             CacheSupport::None => 0,
         }
     }
+
+    /// 有效命中率 — 真实采集优先,无数据回落静态估值(ADR-072 决策 ⑦)
+    ///
+    /// CacheHitTracker 已采集分厂商真实命中率(`StreamSessionCompleted`
+    /// 闭环回流),路由决策应消费真实数据而非静态估值:
+    /// - tracker 有该 provider 数据 → 真实命中率(累计口径天然平滑)
+    /// - tracker 无数据(首轮/冷启动) → 回落 `estimated_hit_rate` 静态估值
+    ///
+    /// WHY 真实优先: 静态估值(80%/50%/0%)是 M0 保守假设,与实测偏差
+    /// 可达 30%+(如显式族实测 60% 而估值 80%),误导期望成本排序。
+    pub fn effective_hit_rate(
+        support: CacheSupport,
+        provider: &str,
+        tracker: &CacheHitTracker,
+    ) -> u8 {
+        let real = tracker.hit_rate_percent(provider);
+        if real > 0 {
+            real
+        } else {
+            Self::estimated_hit_rate(support)
+        }
+    }
+
+    /// 期望成本 — 命中率感知的路由决策函数(ADR-072 决策 ⑦)
+    ///
+    /// E[cost] = (1-hit_rate)×input_price×input_tokens + output_price×output_tokens
+    ///
+    /// 整数微元运算(u64 中间值,禁止浮点——u64 大数百分比计算红线):
+    /// 未命中输入按全价计,命中部分按缓存价计(命中率即缓存折扣的期望)。
+    ///
+    /// # 用途
+    /// 多通道路由时选 E[cost] 最小的通道;粘性权重在期望成本平价时
+    /// 作为偏向因子(显式族 = 0,隐式族按会话粘性偏好)。
+    pub fn expected_cost(
+        hit_rate_percent: u8,
+        input_price_micro_per_mtok: u64,
+        output_price_micro_per_mtok: u64,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) -> u64 {
+        let hr = u64::from(hit_rate_percent.min(100));
+        // 未命中比率 = (100 - hr)/100;整数运算避免浮点
+        let uncached_input = (100 - hr)
+            .saturating_mul(input_price_micro_per_mtok)
+            .saturating_mul(input_tokens)
+            / 100
+            / 1_000_000;
+        let output = output_price_micro_per_mtok.saturating_mul(output_tokens) / 1_000_000;
+        uncached_input.saturating_add(output)
+    }
 }
 
 #[cfg(test)]
@@ -656,5 +706,100 @@ mod tests {
             "并发累计 3000/10000 = 0.3, got {rate}"
         );
         assert_eq!(tracker.tracked_providers(), 1);
+    }
+
+    // ============================================================
+    // 真实命中率反馈路由(ADR-072 决策 ⑦)
+    // ============================================================
+
+    #[test]
+    fn effective_hit_rate_prefers_real_over_estimate() {
+        let tracker = CacheHitTracker::new();
+        // 真实数据存在(60%)→ 覆盖显式族静态估值 80%
+        tracker.record("zhipu", 60, 100);
+        assert_eq!(
+            CacheAffinityIntegration::effective_hit_rate(
+                CacheSupport::ExplicitControl,
+                "zhipu",
+                &tracker,
+            ),
+            60,
+            "真实命中率必须优先于静态估值"
+        );
+    }
+
+    #[test]
+    fn effective_hit_rate_falls_back_to_estimate_without_data() {
+        // 冷启动(无真实数据)→ 回落静态估值(显式 80 / 隐式 50 / 无 0)
+        let tracker = CacheHitTracker::new();
+        assert_eq!(
+            CacheAffinityIntegration::effective_hit_rate(
+                CacheSupport::ExplicitControl,
+                "zhipu",
+                &tracker,
+            ),
+            80
+        );
+        assert_eq!(
+            CacheAffinityIntegration::effective_hit_rate(
+                CacheSupport::Implicit,
+                "deep_seek",
+                &tracker,
+            ),
+            50
+        );
+        assert_eq!(
+            CacheAffinityIntegration::effective_hit_rate(CacheSupport::None, "step_fun", &tracker,),
+            0
+        );
+    }
+
+    #[test]
+    fn expected_cost_decreases_with_hit_rate() {
+        // 同通道:命中率越高期望成本越低(路由排序依据)
+        let input_price = 4_000_000u64; // ¥4/M
+        let output_price = 12_000_000u64; // ¥12/M
+        let (input_tokens, output_tokens) = (100_000u64, 10_000u64);
+        let c0 = CacheAffinityIntegration::expected_cost(
+            0,
+            input_price,
+            output_price,
+            input_tokens,
+            output_tokens,
+        );
+        let c50 = CacheAffinityIntegration::expected_cost(
+            50,
+            input_price,
+            output_price,
+            input_tokens,
+            output_tokens,
+        );
+        let c90 = CacheAffinityIntegration::expected_cost(
+            90,
+            input_price,
+            output_price,
+            input_tokens,
+            output_tokens,
+        );
+        // 输出成本恒 120,000 微元;输入成本随命中率递减
+        assert!(c0 > c50 && c50 > c90, "命中率越高期望成本必须越低");
+        // 精确值:0% → 400000+120000 = 520000;50% → 200000+120000 = 320000;
+        // 90% → 40000+120000 = 160000
+        assert_eq!(c0, 520_000);
+        assert_eq!(c50, 320_000);
+        assert_eq!(c90, 160_000);
+    }
+
+    #[test]
+    fn expected_cost_ranks_channels_for_routing() {
+        // 多通道路由:命中率差异改变排序(DeepSeek 隐式 0.8 粘性 vs Qwen 0.7)
+        // 通道 A:命中率 90%,输入价 ¥4/M;通道 B:命中率 50%,输入价 ¥2/M
+        // 输出价相同 ¥12/M,输入 100K 输出 10K
+        let a = CacheAffinityIntegration::expected_cost(90, 4_000_000, 12_000_000, 100_000, 10_000);
+        let b = CacheAffinityIntegration::expected_cost(50, 2_000_000, 12_000_000, 100_000, 10_000);
+        // A: 10%×4×100K = 40000 + 120000 = 160000
+        // B: 50%×2×100K = 100000 + 120000 = 220000
+        // 高命中率通道 A 更优(即使单价更贵)——命中率反馈修正路由决策
+        assert!(a < b, "期望成本最小化必须选择命中率感知后的最优通道");
     }
 }

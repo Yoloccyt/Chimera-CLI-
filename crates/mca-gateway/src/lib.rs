@@ -48,6 +48,7 @@
 
 pub mod adapters;
 pub mod capability;
+pub mod coalescing;
 pub mod codec;
 pub mod conversation_trim;
 pub(crate) mod cost;
@@ -63,11 +64,15 @@ pub mod semantic_fingerprint;
 pub mod session;
 pub mod spec_loader;
 pub mod sse;
+pub mod token_estimate;
 pub mod transport;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use adapters::{AdapterOptions, VendorAdapter};
 pub use capability::{negotiate, negotiate_budget, NegotiationOutcome, ThinkingDirective};
+pub use coalescing::{
+    coalesce_failure, CoalesceKey, CoalesceResult, JoinOutcome, RequestCoalescer,
+};
 pub use codec::{Codec, DecodedResponse};
 pub use conversation_trim::{conversation_budget, estimate_tokens, trim_to_budget};
 pub use cost_guard::{CostGuard, CostGuardError};
@@ -78,12 +83,18 @@ pub use hcw_integration::spawn_hcw_integration;
 pub use health::{ChannelHealth, HealthRegistry};
 pub use prompt_compress::PromptCompressor;
 pub use prompt_norm::{
-    build_token_cache_key, compute_system_prompt_hash, compute_tool_schema_hash, NormalizedPrompt,
+    build_token_cache_key, compute_system_prompt_hash, compute_tool_schema_hash, layout_messages,
+    NormalizedPrompt,
 };
 pub use semantic_fingerprint::{semantic_fingerprint, FINGERPRINT_DIM};
 pub use session::{apply_preservation_policy, migrate_history, MigrationResult, SessionStore};
-pub use spec_loader::{load_spec_dir, parse_spec_toml};
+pub use spec_loader::{
+    apply_profile_override, load_profile_dir, load_spec_dir, load_spec_dir_with_profiles,
+    parse_profile_toml, parse_spec_toml, parse_spec_toml_with_profiles, ClientRelevant,
+    DeploymentProfile, ProfileMeta,
+};
 pub use sse::{SseParser, StreamEvent, StreamNormalizer};
+pub use token_estimate::{estimate_text, TokenEstimator};
 pub use transport::{CircuitBreaker, RateLimiter, Transport};
 
 /// 预导入模块 — 提供最常用类型

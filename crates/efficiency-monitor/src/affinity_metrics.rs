@@ -372,6 +372,11 @@ mod tests {
             cost_actual_micro: 500,
             ttft_ms: 150,
             semantic_cache_hit: false,
+            trimmed_before_tokens: None,
+            trimmed_after_tokens: None,
+            compressed_ratio: None,
+            early_stop_reason: None,
+            coalesced: false,
         };
         m.handle_mca_event(&event);
         assert_eq!(m.ttft_percentile("test/t-model", 0.50), Some(150));

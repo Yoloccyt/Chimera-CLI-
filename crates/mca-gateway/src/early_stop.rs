@@ -20,9 +20,15 @@
 //! 语义区别:厂商侧 max_tokens 是软上限(厂商可能超发或提前 return),本
 //! 控制器是网关侧硬护栏——超限即 `Stop::BudgetExceeded`,提前终止阻止后续
 //! token 消费,未消费的部分自然不计成本。
+//!
+//! # 完成度感知早停(ADR-072 决策 ⑥)
+//! early stop 上限只省 TTFT 与下游处理,不省已生成 token(厂商按生成计费);
+//! 语义完成即停是唯一能"真省输出 token"的流式手段——结构化输出(JSON/
+//! 代码围栏/Markdown)在语义上已完成时主动停止消费,阻止厂商继续生成。
+//! 仅当请求显式声明 `output_format` 时启用(正确性优先,FreeText 不启用)。
 
 use crate::sse::StreamEvent;
-use nexus_contracts::affinity::FinishReason;
+use nexus_contracts::affinity::{FinishReason, OutputFormat};
 
 /// 单事件停止决策
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +51,11 @@ pub enum StopReason {
     Finished(FinishReason),
     /// 达到输出预算上限(max_output_tokens),提前终止
     BudgetExceeded,
+    /// 语义完成(结构化输出已完整,阻止厂商继续生成,ADR-072 决策 ⑥)
+    ///
+    /// 仅 `output_format` 显式声明(Json/CodeFence/Markdown)时可能触发;
+    /// FreeText 永不触发(正确性优先,防误判截断)。
+    SemanticComplete,
 }
 
 /// 流式输出治理 early stop 控制器
@@ -58,16 +69,27 @@ pub struct EarlyStopController {
     last_reported_output: Option<u64>,
     /// 已触发停止决策(幂等记忆;None = 未停止)
     stop_state: Option<StopDecision>,
+    /// 完成度检测器(None = 未启用,FreeText 或未声明 output_format)
+    completion: Option<CompletionDetector>,
 }
 
 impl EarlyStopController {
     /// 创建控制器,max_output_tokens 来自 negotiate_budget 的 OutputBudget
     pub fn new(max_output_tokens: u32) -> Self {
+        Self::with_completion(max_output_tokens, OutputFormat::FreeText)
+    }
+
+    /// 创建控制器并启用完成度检测(ADR-072 决策 ⑥)
+    ///
+    /// `format` 非 FreeText 时启用语义完成早停:结构化输出检测到完整后
+    /// 触发 `StopReason::SemanticComplete`(阻止厂商继续生成,省输出 token)。
+    pub fn with_completion(max_output_tokens: u32, format: OutputFormat) -> Self {
         Self {
             max_output_tokens,
             estimated_consumed: 0,
             last_reported_output: None,
             stop_state: None,
+            completion: (format != OutputFormat::FreeText).then(|| CompletionDetector::new(format)),
         }
     }
 
@@ -83,11 +105,23 @@ impl EarlyStopController {
                 consumed: self.consumed_tokens(),
             },
             StreamEvent::TextDelta(text) | StreamEvent::ThinkingDelta(text) => {
-                // 与 estimate_cost 一致的字符/4 启发式:len() 为字节数,
+                // 与 estimate_cost 一致的字节宽启发式(ADR-070 显式化):
                 // 中英文混排 1 token ≈ 4 字节;真实值由 Usage 回填覆盖
                 self.estimated_consumed = self
                     .estimated_consumed
-                    .saturating_add((text.len() / 4) as u64);
+                    .saturating_add(u64::from(crate::token_estimate::estimate_text(text)));
+                // 完成度检测(ADR-072):语义完成优先于预算上限触发
+                // (预算护栏是兜底,完成即停才是输出 token 治理的主手段)
+                if let Some(detector) = &mut self.completion {
+                    if detector.on_delta(text) {
+                        let decision = StopDecision::Stop {
+                            reason: StopReason::SemanticComplete,
+                            consumed: self.consumed_tokens(),
+                        };
+                        self.stop_state = Some(decision);
+                        return decision;
+                    }
+                }
                 if self.consumed_tokens() > u64::from(self.max_output_tokens) {
                     StopDecision::Stop {
                         reason: StopReason::BudgetExceeded,
@@ -127,6 +161,151 @@ impl EarlyStopController {
     pub fn should_stop(&self) -> bool {
         self.stop_state.is_some()
     }
+}
+
+/// 完成度检测器 — 结构化输出的语义完成检测(ADR-072 决策 ⑥)
+///
+/// 流式累计文本,按 `output_format` 判定语义完成:
+/// - `Json`: 括号平衡(嵌套 {}[]) + 引号配对 + 末字符为 `}`/`]`
+/// - `CodeFence`: 代码围栏(```)成对闭合 + 内容非空
+/// - `Markdown`: 围栏闭合 + 末尾段落结束(空行) + 内容充足
+/// - 通用: 4-gram 重复检测(模型冗长循环/复读机)→ 冗余抑制
+///
+/// # 保守性(正确性优先)
+/// - FreeText 永不启用(由控制器保证)
+/// - Json 要求括号完全平衡**且**末字符为闭合符——模型在完整 JSON 后
+///   继续输出说明文本时末字符非 `}`/`]`,不会误触发
+/// - 检测节流: 仅当累计增量 ≥ 50 字符时才执行重复检测(流式高频
+///   delta 下避免 O(200²) 逐 delta 扫描)
+#[derive(Debug)]
+pub struct CompletionDetector {
+    /// 输出格式(Json/CodeFence/Markdown)
+    format: OutputFormat,
+    /// 流式累计文本(有界:仅保留尾部,防长流内存膨胀)
+    buffer: String,
+    /// 上次重复检测时的 buffer 长度(节流标记)
+    last_check_len: usize,
+    /// 是否已判定完成(幂等)
+    complete: bool,
+}
+
+impl CompletionDetector {
+    /// 创建检测器(format 为 FreeText 时恒不触发,控制器已过滤)
+    pub fn new(format: OutputFormat) -> Self {
+        Self {
+            format,
+            buffer: String::new(),
+            last_check_len: 0,
+            complete: false,
+        }
+    }
+
+    /// 追加流式 delta,返回是否语义完成(完成即幂等恒 true)
+    pub fn on_delta(&mut self, text: &str) -> bool {
+        if self.complete {
+            return true;
+        }
+        // 有界缓冲:仅保留尾部 4096 字符(完成判定只需尾部结构)
+        self.buffer.push_str(text);
+        if self.buffer.len() > 8192 {
+            self.buffer = self.buffer[self.buffer.len() - 4096..].to_string();
+        }
+        let structural = match self.format {
+            OutputFormat::Json => json_complete(&self.buffer),
+            OutputFormat::CodeFence => code_fence_complete(&self.buffer),
+            OutputFormat::Markdown => markdown_complete(&self.buffer),
+            OutputFormat::FreeText => false,
+        };
+        // 冗余抑制(节流):增量 ≥ 50 字符才扫描重复 4-gram
+        let repetitive =
+            self.buffer.len() - self.last_check_len >= 50 && repetitive_tail(&self.buffer);
+        if structural || repetitive {
+            self.last_check_len = self.buffer.len();
+            self.complete = true;
+            true
+        } else {
+            self.last_check_len = self.buffer.len();
+            false
+        }
+    }
+
+    /// 当前累计文本(诊断用)
+    pub fn buffer(&self) -> &str {
+        &self.buffer
+    }
+}
+
+/// JSON 完成判定 — 括号平衡 + 引号配对 + 末字符为闭合符
+///
+/// 括号不匹配(截断的 JSON)恒返回 false(绝不误判为完成)。
+fn json_complete(buffer: &str) -> bool {
+    let mut stack: Vec<char> = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in buffer.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' | '[' => stack.push(ch),
+            '}' => {
+                if stack.pop() != Some('{') {
+                    return false;
+                }
+            }
+            ']' if stack.pop() != Some('[') => return false,
+            _ => {}
+        }
+    }
+    stack.is_empty() && !in_string && buffer.trim_end().ends_with(['}', ']'])
+}
+
+/// 代码围栏完成判定 — ``` 成对闭合且内容非空
+fn code_fence_complete(buffer: &str) -> bool {
+    let fences = buffer.matches("```").count();
+    fences >= 2 && fences.is_multiple_of(2) && buffer.trim().len() > 3
+}
+
+/// Markdown 完成判定 — 围栏闭合 + 末尾段落结束(空行) + 内容充足
+///
+/// 保守实现:未闭合围栏恒未完成;末尾无空行(段落进行中)未完成;
+/// 内容 < 80 字符(标题/列表未展开)未完成。
+fn markdown_complete(buffer: &str) -> bool {
+    let fences = buffer.matches("```").count();
+    if !fences.is_multiple_of(2) {
+        return false;
+    }
+    let trimmed = buffer.trim_end();
+    let ends_with_blank = buffer.len() > trimmed.len();
+    trimmed.chars().count() >= 80 && ends_with_blank
+}
+
+/// 冗余检测 — 尾部 200 字符内任一 4-gram 出现 ≥ 3 次(复读机/冗长循环)
+///
+/// WHY floor_char_boundary:UTF-8 字节索引切分必须落在字符边界,
+/// 中文多字节场景下 `saturating_sub` 可能落在字符中间(panic 风险)。
+fn repetitive_tail(buffer: &str) -> bool {
+    let start = buffer.len().saturating_sub(200);
+    let tail = &buffer[buffer.floor_char_boundary(start)..];
+    let chars: Vec<char> = tail.chars().collect();
+    if chars.len() < 8 {
+        return false;
+    }
+    for w in chars.windows(4) {
+        let pat: String = w.iter().collect();
+        if tail.matches(&pat).count() >= 3 {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -358,5 +537,107 @@ mod tests {
             StopDecision::Continue
         );
         assert!(!c.should_stop());
+    }
+
+    // ============================================================
+    // 完成度感知早停(ADR-072 决策 ⑥)
+    // ============================================================
+
+    #[test]
+    fn json_completion_triggers_on_balanced_document() {
+        let mut c = EarlyStopController::with_completion(10_000, OutputFormat::Json);
+        // 流式分段注入完整 JSON
+        let chunks = [
+            r#"{"name":"#,
+            r#""quicksort","#,
+            r#""complexity":"O(n log n)"}"#,
+        ];
+        for ch in chunks {
+            let d = c.on_event(&StreamEvent::TextDelta(ch.into()));
+            if matches!(d, StopDecision::Stop { .. }) {
+                assert_eq!(
+                    d,
+                    StopDecision::Stop {
+                        reason: StopReason::SemanticComplete,
+                        consumed: 11, // 3 个 delta 的字节/4 估算累计(9+12+26)/4
+                    },
+                    "完整 JSON 必须触发 SemanticComplete"
+                );
+                assert!(c.should_stop());
+                return;
+            }
+        }
+        panic!("完整 JSON 未触发完成");
+    }
+
+    #[test]
+    fn json_unclosed_never_triggers() {
+        // 未闭合括号:截断的 JSON 绝不误判为完成
+        let mut d = CompletionDetector::new(OutputFormat::Json);
+        assert!(!d.on_delta(r#"{"name":"quicksort","#));
+        // 注:完整 JSON 触发后幂等冻结(声明 Json 即承诺结构化输出,
+        // 首个平衡点即停;若模型尾随文本则被截断——已文档化的权衡,
+        // 由 output_format 显式声明 + S9 ASA 冻结兜底)
+        let mut d2 = CompletionDetector::new(OutputFormat::Json);
+        assert!(d2.on_delta(r#"{"a":1}"#), "完整 JSON 必须触发");
+        assert!(d2.on_delta("更多"), "触发后幂等恒 true");
+    }
+
+    #[test]
+    fn code_fence_completion() {
+        let mut d = CompletionDetector::new(OutputFormat::CodeFence);
+        d.on_delta("```rust\nfn main() { println!(\"hi\"); }\n");
+        assert!(d.on_delta("```"), "围栏成对闭合必须触发完成");
+        // 未闭合围栏不触发
+        let mut d2 = CompletionDetector::new(OutputFormat::CodeFence);
+        d2.on_delta("```rust\nfn main() {}");
+        assert!(!d2.on_delta("\n"), "未闭合围栏不得触发");
+    }
+
+    #[test]
+    fn markdown_completion_requires_blank_line() {
+        let mut d = CompletionDetector::new(OutputFormat::Markdown);
+        d.on_delta(
+            "# 标题\n\n这是正文内容,长度需要超过八十个字符才能满足内容充足的门槛,继续写一些文字来凑足长度,这里再补充一些描述性的内容以确保字符数量达标,最后还要加上一句收尾的话让段落显得更完整一些。",
+        );
+        assert!(d.on_delta("\n"), "内容充足 + 末尾空行必须触发");
+        // 无空行(段落进行中)不触发
+        let mut d2 = CompletionDetector::new(OutputFormat::Markdown);
+        d2.on_delta("# 标题\n正在写正文没有结束");
+        assert!(!d2.on_delta("继续"), "段落进行中不得触发");
+    }
+
+    #[test]
+    fn repetitive_output_suppressed() {
+        // 复读机模式:同一 4-gram 大量重复 → 冗余抑制触发
+        let mut d = CompletionDetector::new(OutputFormat::FreeText);
+        // FreeText 无结构检测;冗余检测是通用层,仍生效
+        let mut chunk = String::new();
+        for _ in 0..20 {
+            chunk.push_str("重复重复重复重复");
+        }
+        assert!(d.on_delta(&chunk), "大量重复必须触发冗余抑制");
+    }
+
+    #[test]
+    fn free_text_controller_never_triggers_semantic() {
+        // FreeText(默认):即使内容完整也不触发 SemanticComplete(正确性优先)
+        let mut c = EarlyStopController::new(10_000);
+        assert_eq!(
+            c.on_event(&StreamEvent::TextDelta(r#"{"a":1}"#.into())),
+            StopDecision::Continue,
+            "FreeText 必须继续消费(不启用完成检测)"
+        );
+    }
+
+    #[test]
+    fn semantic_complete_idempotent_after_trigger() {
+        // 触发后冻结:后续事件返回同一决策,不重复累计
+        let mut c = EarlyStopController::with_completion(10_000, OutputFormat::Json);
+        c.on_event(&StreamEvent::TextDelta(r#"{"a":1}"#.into()));
+        let first = c.on_event(&StreamEvent::TextDelta(" ".into()));
+        assert!(matches!(first, StopDecision::Stop { .. }));
+        let again = c.on_event(&StreamEvent::TextDelta("more".into()));
+        assert_eq!(again, first, "触发后必须幂等冻结");
     }
 }

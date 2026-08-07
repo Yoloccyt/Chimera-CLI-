@@ -26,9 +26,7 @@
 use std::sync::OnceLock;
 
 use event_bus::EventBus;
-use nexus_contracts::affinity::{
-    AffinityMessage, AffinityRequest, ContentBlock, MessageRole, ModelAffinitySpec,
-};
+use nexus_contracts::affinity::{AffinityMessage, AffinityRequest, MessageRole, ModelAffinitySpec};
 use osa_coordinator::{ComplexityBand, OmniSparseCoordinator};
 
 /// 预算利用率 — 上下文窗口 × 复杂度利用率 × 本比率(默认 0.6)
@@ -59,24 +57,17 @@ const COMPLEX_MESSAGE_THRESHOLD: usize = 30;
 /// 不参与任何事件发布(预算面是纯计算)。
 static BUDGET_COORDINATOR: OnceLock<OmniSparseCoordinator> = OnceLock::new();
 
-/// 估算会话总 token — 逐条 floor 后求和(字符/4 启发式)
+/// 估算会话总 token — 委托 token_estimate 显式化估算(ADR-070)
+///
+/// 字节宽分类权重(1B:0.25/2B:0.5/3B:0.75/4B:1.0)与既有字节/4 等价,
+/// 逐条 floor 后求和——裁剪累加与预算断言口径一致(sum(floor) ≤ floor(sum))。
 pub fn estimate_tokens(messages: &[AffinityMessage]) -> u32 {
-    messages.iter().map(estimate_message_tokens).sum()
+    crate::token_estimate::estimate_messages(messages)
 }
 
-/// 估算单条消息 token — 内容块字符总数 / 4(与 estimate_cost 同口径)
+/// 估算单条消息 token — 内容块文本字节宽加权(与 estimate_cost 同口径)
 pub fn estimate_message_tokens(message: &AffinityMessage) -> u32 {
-    let chars: usize = message
-        .blocks
-        .iter()
-        .map(|b| match b {
-            ContentBlock::Text { text } => text.len(),
-            ContentBlock::Thinking { thinking, .. } => thinking.len(),
-            ContentBlock::ToolUse { input_json, .. } => input_json.len(),
-            ContentBlock::ToolResult { content, .. } => content.len(),
-        })
-        .sum();
-    (chars / 4) as u32
+    crate::token_estimate::estimate_message(message)
 }
 
 /// 会话 token 预算 — osa-coordinator `compute_token_budget` 接线
@@ -222,8 +213,10 @@ fn role_weight(role: MessageRole) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nexus_contracts::affinity::ContentBlock;
     use nexus_contracts::affinity::{
-        AffinityOverrides, ProtocolDialect, ProviderId, ThinkingPreference, ToolDecl,
+        AffinityOverrides, OutputFormat, ProtocolDialect, ProviderId, SamplingParams,
+        ThinkingPreference, ToolDecl,
     };
 
     fn msg(role: MessageRole, text: &str) -> AffinityMessage {
@@ -243,6 +236,8 @@ mod tests {
             thinking_pref: ThinkingPreference::Fast,
             budget_hint_micro: None,
             overrides: AffinityOverrides::default(),
+            sampling: SamplingParams::default(),
+            output_format: OutputFormat::default(),
         }
     }
 

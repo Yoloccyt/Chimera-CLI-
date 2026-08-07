@@ -42,8 +42,8 @@ use mca_gateway::{
 };
 use nexus_contracts::affinity::{
     AffinityMessage, AffinityOverrides, AffinityRequest, AffinityResponse, ContentBlock, Currency,
-    MessageRole, ModelAffinitySpec, PricingSpec, ProtocolDialect, ProviderId, ThinkingPreference,
-    ToolDecl, UsageReport,
+    MessageRole, ModelAffinitySpec, OutputFormat, PricingSpec, ProtocolDialect, ProviderId,
+    SamplingParams, ThinkingPreference, ToolDecl, UsageReport,
 };
 use scc_cache::{CacheHitTracker, SemanticResponseCache};
 use serde_json::{json, Value};
@@ -826,6 +826,8 @@ fn build_request(task: &BenchTask, tier: ContextTier, variant: Option<u32>) -> A
         thinking_pref: task.thinking,
         budget_hint_micro: None,
         overrides: AffinityOverrides::default(),
+        sampling: SamplingParams::default(),
+        output_format: OutputFormat::default(),
     }
 }
 
@@ -1753,6 +1755,8 @@ async fn run_stress_matrix() {
                     semantic_cache: Some(cache.clone()),
                     capability_token: None,
                     cost_guard: None, // 主矩阵不熔断；成本上限保护由独立场景验证
+                    estimator: None,  // 主矩阵保持纯函数字节/4 口径(基线可比)
+                    coalescer: None,  // 主矩阵不合并(合并独立场景验证)
                 },
             )
             .expect("优化适配器装配");

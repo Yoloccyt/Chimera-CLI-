@@ -10,7 +10,7 @@
 
 use mca_gateway::codec::Codec;
 use mca_gateway::prelude::*;
-use nexus_contracts::affinity::{ContentBlock, FinishReason};
+use nexus_contracts::affinity::{ContentBlock, FinishReason, OutputFormat, SamplingParams};
 
 /// 读取 fixture 文件字节(测试专用,路径相对 crate 根)
 fn fixture(name: &str) -> Vec<u8> {
@@ -157,6 +157,8 @@ fn replay_zhipu_tool_call_roundtrip() {
         thinking_pref: ThinkingPreference::Standard,
         budget_hint_micro: None,
         overrides: AffinityOverrides::default(),
+        sampling: SamplingParams::default(),
+        output_format: OutputFormat::default(),
     };
     let body = codec.build_request(&spec, &request).unwrap();
 

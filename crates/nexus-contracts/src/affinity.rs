@@ -582,6 +582,61 @@ pub struct AffinityMessage {
     pub blocks: Vec<ContentBlock>,
 }
 
+/// 采样参数 — 语义缓存键的区分维度(ADR-070 Token 效率优化)
+///
+/// WHY 入键:temperature/top_p 不同却命中同一语义缓存会导致创意任务
+/// 多样性丢失(确定性响应替代随机采样)或确定性任务拿到随机响应。
+/// 采样参数离散化桶(`sampling_bucket`)参与 TokenCacheKey,桶间互不命中。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SamplingParams {
+    /// 温度(None = 厂商默认;0.0 = 完全确定性)
+    pub temperature: Option<f32>,
+    /// 核采样概率(None = 厂商默认)
+    pub top_p: Option<f32>,
+}
+
+/// 输出格式声明 — 完成度感知早停的启用条件(ADR-070 Phase 4)
+///
+/// 仅显式声明结构化格式(Json/CodeFence/Markdown)时才启用语义完成检测;
+/// FreeText/未声明 = 不启用(正确性优先,防误判截断)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputFormat {
+    /// 自由文本(默认;不启用完成度早停)
+    #[default]
+    FreeText,
+    /// JSON 对象/数组(括号平衡 + 引号配对检测)
+    Json,
+    /// 代码围栏(``` 闭合检测)
+    CodeFence,
+    /// Markdown 文档(标题/列表结构完成检测)
+    Markdown,
+}
+
+/// 采样参数 → 采样桶(语义缓存键区分维度)
+///
+/// temperature 四桶:None(厂商默认) / 0.0(确定性) / (0,1] / >1(含 (1,2] 与更高);
+/// top_p 两桶:None 或 ≥0.9 / <0.9。桶编码 = 温度桶 × 2 + top_p 桶 ∈ [0, 7]。
+///
+/// WHY None 独立桶:厂商默认采样行为不可预测,不与任何显式温度共享缓存。
+pub fn sampling_bucket(sampling: &SamplingParams) -> u8 {
+    let temp_bucket = match sampling.temperature {
+        None => 0,
+        // 字面量模式而非 guard:clippy redundant_guard 对浮点 literal 误报
+        // (t == 0.0 与 t <= 1.0 分支体不同,guard 不冗余)
+        Some(0.0) => 1,
+        Some(t) if t <= 1.0 => 2,
+        Some(_) => 3,
+    };
+    let top_p_bucket = match sampling.top_p {
+        // 显式低核采样(<0.9)独立桶;None 与 ≥0.9 共享默认桶
+        Some(p) if p < 0.9 => 1,
+        _ => 0,
+    };
+    temp_bucket * 2 + top_p_bucket
+}
+
 /// 亲和覆盖 — 上层对路由决策的显式钉选（默认全 None = 学习路由）
 ///
 /// WHY 默认不钉选: "单一首选厂商默认配置"与厂商集中度免疫探针（N7）冲突，
@@ -611,6 +666,12 @@ pub struct AffinityRequest {
     pub budget_hint_micro: Option<u64>,
     /// 路由覆盖（默认零钉选）
     pub overrides: AffinityOverrides,
+    /// 采样参数（默认厂商默认；参与语义缓存键,ADR-070）
+    #[serde(default)]
+    pub sampling: SamplingParams,
+    /// 输出格式声明（默认自由文本；完成度早停启用条件,ADR-070 Phase 4）
+    #[serde(default)]
+    pub output_format: OutputFormat,
 }
 
 /// usage 统计 — 厂商返回的 token 计量（成本回写与缓存命中率的数据源）
@@ -687,13 +748,14 @@ pub struct AffinityResponse {
 // Token 效率优化契约类型（ADR-069）
 // ============================================================
 
-/// Token 效率缓存键 — 覆盖 {model, model_version, tool_schema_hash, system_prompt_hash, thinking_tier}
+/// Token 效率缓存键 — 覆盖 {model, model_version, tool_schema_hash, system_prompt_hash, thinking_tier, sampling_bucket}
 ///
-/// 语义缓存与厂商缓存亲和的统一键空间。五维覆盖确保：
+/// 语义缓存与厂商缓存亲和的统一键空间。六维覆盖确保：
 /// - 模型静默升级（model_version 变更）→ 缓存自动失效
 /// - 工具集变更（tool_schema_hash 变更）→ 不命中旧响应
 /// - 系统提示变更（system_prompt_hash 变更）→ 不命中旧响应
 /// - 思考档位切换（thinking_tier 变更）→ 不混淆 Fast/Deep 响应
+/// - 采样参数变更（sampling_bucket 变更,ADR-070）→ 不混淆确定性/随机响应
 ///
 /// # 设计约束（ADR-033）
 /// L0 纯类型，SHA-256 计算函数在上层（scc-cache / mca-gateway）实现。
@@ -709,6 +771,9 @@ pub struct TokenCacheKey {
     pub system_prompt_hash: [u8; 32],
     /// 思考档位（Fast/Standard/Deep）
     pub thinking_tier: ThinkingPreference,
+    /// 采样桶（temperature × top_p 离散化,ADR-070;0 = 厂商默认采样）
+    #[serde(default)]
+    pub sampling_bucket: u8,
 }
 
 /// 输出预算指令 — max_tokens + thinking budget 档位
@@ -939,6 +1004,8 @@ mod tests {
             thinking_pref: ThinkingPreference::Standard,
             budget_hint_micro: Some(50_000),
             overrides: AffinityOverrides::default(),
+            sampling: SamplingParams::default(),
+            output_format: OutputFormat::default(),
         };
         let bytes = rmp_serde::to_vec(&req).unwrap();
         let back: AffinityRequest = rmp_serde::from_slice(&bytes).unwrap();
@@ -995,5 +1062,113 @@ mod tests {
         assert!(o.pinned_provider.is_none());
         assert!(o.pinned_model.is_none());
         assert!(o.service_tier.is_none());
+    }
+
+    // ============================================================
+    // 采样桶(ADR-070):temperature/top_p 离散化入缓存键
+    // ============================================================
+
+    #[test]
+    fn sampling_bucket_distinguishes_temperature_regimes() {
+        // None(厂商默认)与显式温度必须不同桶——默认采样行为不可预测
+        assert_ne!(
+            sampling_bucket(&SamplingParams::default()),
+            sampling_bucket(&SamplingParams {
+                temperature: Some(0.0),
+                top_p: None,
+            })
+        );
+        // 确定性(0.0)与温和随机(0.7)不同桶
+        assert_ne!(
+            sampling_bucket(&SamplingParams {
+                temperature: Some(0.0),
+                top_p: None,
+            }),
+            sampling_bucket(&SamplingParams {
+                temperature: Some(0.7),
+                top_p: None,
+            })
+        );
+        // 温和(0.7)与高温(1.5)不同桶
+        assert_ne!(
+            sampling_bucket(&SamplingParams {
+                temperature: Some(0.7),
+                top_p: None,
+            }),
+            sampling_bucket(&SamplingParams {
+                temperature: Some(1.5),
+                top_p: None,
+            })
+        );
+    }
+
+    #[test]
+    fn sampling_bucket_top_p_dimension() {
+        // top_p < 0.9 独立桶;None 与 ≥0.9 共享默认桶
+        assert_eq!(
+            sampling_bucket(&SamplingParams {
+                temperature: None,
+                top_p: None,
+            }),
+            sampling_bucket(&SamplingParams {
+                temperature: None,
+                top_p: Some(0.95),
+            })
+        );
+        assert_ne!(
+            sampling_bucket(&SamplingParams {
+                temperature: None,
+                top_p: Some(0.8),
+            }),
+            sampling_bucket(&SamplingParams {
+                temperature: None,
+                top_p: None,
+            })
+        );
+    }
+
+    #[test]
+    fn sampling_bucket_always_in_range() {
+        // 桶编码 ∈ [0, 7](温度 4 桶 × top_p 2 桶)
+        let cases = [
+            SamplingParams::default(),
+            SamplingParams {
+                temperature: Some(0.0),
+                top_p: None,
+            },
+            SamplingParams {
+                temperature: Some(0.5),
+                top_p: Some(0.8),
+            },
+            SamplingParams {
+                temperature: Some(2.0),
+                top_p: Some(1.0),
+            },
+        ];
+        for s in cases {
+            assert!(
+                sampling_bucket(&s) <= 7,
+                "桶编码必须在 [0,7], got {}",
+                sampling_bucket(&s)
+            );
+        }
+    }
+
+    #[test]
+    fn sampling_bucket_serde_backward_compat() {
+        // 旧版 TokenCacheKey(无 sampling_bucket)反序列化 default = 0(厂商默认桶)
+        // [u8;32] 在 JSON 中展开为 32 元素数组
+        let zeros = "[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]";
+        let old_json = format!(
+            r#"{{"model":"glm-5.2","model_version":"v1","tool_schema_hash":{zeros},"system_prompt_hash":{zeros},"thinking_tier":"fast"}}"#
+        );
+        let key: TokenCacheKey = serde_json::from_str(&old_json).unwrap();
+        assert_eq!(key.sampling_bucket, 0, "旧键必须回落默认桶 0");
+
+        // 旧版 AffinityRequest(无 sampling/output_format)反序列化 default 兼容
+        let old_req = r#"{"intent_id":"i","messages":[],"tools":[],"thinking_pref":"fast","budget_hint_micro":null,"overrides":{"pinned_provider":null,"pinned_model":null,"service_tier":null}}"#;
+        let req: AffinityRequest = serde_json::from_str(old_req).unwrap();
+        assert_eq!(req.sampling, SamplingParams::default());
+        assert_eq!(req.output_format, OutputFormat::FreeText);
     }
 }

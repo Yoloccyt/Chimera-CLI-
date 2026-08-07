@@ -213,6 +213,11 @@ mod tests {
             cost_actual_micro: 500,
             ttft_ms: 200,
             semantic_cache_hit: false,
+            trimmed_before_tokens: None,
+            trimmed_after_tokens: None,
+            compressed_ratio: None,
+            early_stop_reason: None,
+            coalesced: false,
         };
         bus.publish(event).await.unwrap();
 
@@ -279,6 +284,11 @@ mod tests {
                 cost_actual_micro: 500 + i as u64 * 100,
                 ttft_ms: 200 + i as u64 * 50,
                 semantic_cache_hit: false,
+                trimmed_before_tokens: None,
+                trimmed_after_tokens: None,
+                compressed_ratio: None,
+                early_stop_reason: None,
+                coalesced: false,
             };
             bus.publish(event).await.unwrap();
         }
@@ -313,6 +323,11 @@ mod tests {
             cost_actual_micro: 0,
             ttft_ms: 0,
             semantic_cache_hit: false,
+            trimmed_before_tokens: None,
+            trimmed_after_tokens: None,
+            compressed_ratio: None,
+            early_stop_reason: None,
+            coalesced: false,
         };
         bus.publish(event).await.unwrap();
 

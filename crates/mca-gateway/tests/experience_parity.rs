@@ -308,6 +308,8 @@ fn e4_thinking_mode_adjustable_all_channels() {
                 thinking_pref: pref,
                 budget_hint_micro: None,
                 overrides: Default::default(),
+                sampling: Default::default(),
+                output_format: Default::default(),
             };
             let outcome = negotiate(&spec.capabilities, &request);
             // E4:三档切换必须生效——要么 FullFidelity,要么 DegradedNotified

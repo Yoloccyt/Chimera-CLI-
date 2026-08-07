@@ -2113,6 +2113,22 @@ pub enum NexusEvent {
         ttft_ms: u64,
         /// 是否为语义缓存命中(false=厂商调用路径,true=语义缓存热路径)
         semantic_cache_hit: bool,
+        /// 上下文裁剪前估算 token(None = 未触发裁剪,观测闭环 ADR-070)
+        ///
+        /// 与 `trimmed_after_tokens` 成对出现:差值 = 裁剪节省量,
+        /// 供 efficiency-monitor 验证 R4 裁剪收益与 SMART 等效输入成本目标。
+        trimmed_before_tokens: Option<u64>,
+        /// 上下文裁剪后估算 token(None = 未触发裁剪)
+        trimmed_after_tokens: Option<u64>,
+        /// 历史消息压缩率(实际压缩量/原始量;None = 未压缩,sidecar 降级原文也记 None)
+        compressed_ratio: Option<f32>,
+        /// early stop 原因(自然结束 = None;BudgetExceeded/SemanticComplete = 原因名)
+        ///
+        /// 字符串而非枚举:事件是跨层观测面,避免 L10 枚举泄漏到 L1 语义层;
+        /// 消费方按需解析(参考事件字段区分决策,不新增事件变体)。
+        early_stop_reason: Option<String>,
+        /// 是否 in-flight 请求合并命中(共享一次厂商调用)
+        coalesced: bool,
     },
 
     /// 窗口亲和折减结果 — mca-gateway hcw_integration → hcw-window
