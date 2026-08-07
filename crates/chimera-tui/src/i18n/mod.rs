@@ -19,6 +19,11 @@
 //! let title = t!("panel.quest.title"); // 按当前 locale 返回译文
 //! ```
 
+// WHY allow(clippy 1.97 误报): 模块内 thread_local 初始化已用 Rust 1.88+ 推荐
+// const 块写法,但 missing_const_for_thread_local 对 thread_local! 宏展开内部仍报
+// "can be made const",且调用点 allow 无法抑制宏内部 lint(实测 unused attribute)。
+#![allow(clippy::missing_const_for_thread_local)]
+
 #[cfg(test)]
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -144,7 +149,11 @@ macro_rules! t {
 #[cfg(test)]
 static LOCALE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-/// 当前线程是否持有 locale 测试锁(重入检测,防 guard 内 set_locale 自锁)
+// 当前线程是否持有 locale 测试锁(重入检测,防 guard 内 set_locale 自锁)
+// 注:普通注释而非 /// —— rustdoc 不为宏调用生成文档,/// 会触发 clippy unused_doc_comments。
+// WHY allow: 初始化已是 Rust 1.88+ 推荐 const 块写法,clippy 1.97 的
+// missing_const_for_thread_local 对该宏语法仍误报(can be made const);
+// allow 必须位于 cfg(test) 之前,否则宏展开后 lint 抑制失效。
 #[cfg(test)]
 thread_local! {
     static LOCALE_LOCK_HELD: Cell<bool> = const { Cell::new(false) };
