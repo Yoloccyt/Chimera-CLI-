@@ -81,8 +81,10 @@ if (-not $verMatch.Success) {
 $b1Docs = @('docs/architecture/README.md', 'docs/architecture/CODE_WIKI.md', '.claude/CLAUDE.md', $nuxusRulesRel)
 $crateTokens = @("$nMembers crate", "${nMembers} crate", "$nMembers Crate", "$nMembers/$nMembers crate", "${nMembers}个crate", "${nMembers} 个crate")
 foreach ($f in $b1Docs) {
-    if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $report += '[GAP-B1] nuxus rules file not discovered under .trae/rules/'; $status = 1; continue }
-    if (-not (Test-Path $f)) { $report += '[GAP-B1] missing document: ' + $f; $status = 1; continue }
+    # 2026-08-07 适配: *.md 在 gitignore 策略下仅存于本地(bb471f9 移除跟踪),
+    # CI checkout 必然缺失文档 —— 降级为 warn 而非阻断。
+    if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $report += '[B1-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
+    if (-not (Test-Path $f)) { $report += '[B1-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
     $content = Get-Content $f -Raw
     $hit = $false
     foreach ($t in $crateTokens) { if ($content.Contains($t)) { $hit = $true; break } }
@@ -96,8 +98,9 @@ foreach ($f in $b1Docs) {
 $b2Docs = @('docs/architecture/CODE_WIKI.md', '.claude/CLAUDE.md', $nuxusRulesRel, 'CHANGELOG.md', 'docs/architecture/INDEX.md')
 $baselineString = $currentVersion
 foreach ($f in $b2Docs) {
-    if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $report += '[GAP-B2] nuxus rules file not discovered'; $status = 1; continue }
-    if (-not (Test-Path $f)) { $report += '[GAP-B2] missing document: ' + $f; $status = 1; continue }
+    # 2026-08-07 适配: 同 B1 —— gitignore *.md 策略下缺失文档降级为 warn。
+    if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $report += '[B2-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
+    if (-not (Test-Path $f)) { $report += '[B2-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
     $content = Get-Content $f -Raw
     if (-not $content.Contains($baselineString)) {
         $report += '[GAP-B2] ' + $f + ' does not contain baseline string (' + $baselineString + ')'
@@ -114,8 +117,9 @@ foreach ($f in $b2Docs) {
 # style) and `## v2.20.0-omega` (bare style); lookahead (?=\s|$) anchors the
 # version token so `## [2.20.0-omega]` does not false-positive on prefix matches.
 if (-not (Test-Path 'CHANGELOG.md')) {
-    $report += '[GAP-C1] missing document: CHANGELOG.md'
-    $status = 1
+    # 2026-08-07 适配: CHANGELOG.md 在 gitignore *.md 策略下仅存于本地(bb471f9 移除跟踪),
+    # CI checkout 必然缺失 —— 降级为 warn 而非阻断。
+    $report += '[C1-warn] missing document: CHANGELOG.md (gitignore *.md 策略,仅本地维护,跳过)'
 } else {
     $changelog = Get-Content 'CHANGELOG.md' -Raw
     $verHeaderPattern = '^##\s+\[?v?' + [regex]::Escape($currentVersion) + '\]?(?=\s|$)'

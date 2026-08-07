@@ -69,13 +69,13 @@ b1_docs=(
 )
 for f in "${b1_docs[@]}"; do
     if [[ "$f" == *not-found* ]]; then
-        report+=("[GAP-B1] nuxus rules file not discovered under .trae/rules/")
-        status=1
+        # 2026-08-07 适配: *.md 在 gitignore 策略下仅存于本地(bb471f9 移除跟踪),
+        # CI checkout 必然缺失 nuxus 规则文档 —— 降级为 warn 而非阻断。
+        report+=("[B1-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)")
         continue
     fi
     if [ ! -f "$f" ]; then
-        report+=("[GAP-B1] missing document: ${f}")
-        status=1
+        report+=("[B1-warn] missing document: ${f} (gitignore *.md 策略,CI 环境无此文档,跳过)")
         continue
     fi
     if ! grep -qE "${n_members}[[:space:]]*crate|${n_members}个crate|${n_members}[[:space:]]*Crate" "$f"; then
@@ -94,13 +94,11 @@ b2_docs=(
 )
 for f in "${b2_docs[@]}"; do
     if [[ "$f" == *not-found* ]]; then
-        report+=("[GAP-B2] nuxus rules file not discovered")
-        status=1
+        report+=("[B2-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)")
         continue
     fi
     if [ ! -f "$f" ]; then
-        report+=("[GAP-B2] missing document: ${f}")
-        status=1
+        report+=("[B2-warn] missing document: ${f} (gitignore *.md 策略,CI 环境无此文档,跳过)")
         continue
     fi
     if ! grep -qF "${current_version}" "$f"; then
@@ -115,8 +113,9 @@ done
 
 # C1. CHANGELOG.md must have ## vX.Y.Z-omega header for current version
 if [ ! -f "CHANGELOG.md" ]; then
-    report+=("[GAP-C1] missing document: CHANGELOG.md")
-    status=1
+    # 2026-08-07 适配: CHANGELOG.md 在 gitignore *.md 策略下仅存于本地(bb471f9 移除跟踪),
+    # CI checkout 必然缺失 —— 降级为 warn 而非阻断。
+    report+=("[C1-warn] missing document: CHANGELOG.md (gitignore *.md 策略,仅本地维护,跳过)")
 else
     # Dual-format compatible (PROBE R1): bracket style (## [2.20.0-omega]) and bare style (## v2.20.0-omega)
     if ! grep -qE "^##\s+\[?v?${current_version}\]?(\s|$)" CHANGELOG.md; then
