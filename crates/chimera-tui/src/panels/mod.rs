@@ -50,6 +50,9 @@ pub mod clv_vector;
 pub mod dag_viz;
 pub mod decay;
 pub mod event_stream;
+pub(crate) mod filter_cache;
+/// P1-3(评估报告 v2):变体级快速关键字匹配(免 JSON 全量序列化)
+pub(crate) mod filter_fast;
 pub mod health;
 pub mod help;
 pub(crate) mod list_state;
@@ -58,6 +61,8 @@ pub mod mcp_nodes;
 pub mod memory;
 pub mod metrics_dashboard;
 pub mod osa_sparse;
+/// P1(ADR-072):超窗兜底面板 — 展示 OverWindowFallbackTriggered 触发记录
+pub mod overwindow;
 pub mod parliament;
 /// Task 3.7:PVL 过程评分面板 — 九维度过程评分（L10 → L7 向下依赖）
 pub mod pvl_score;
@@ -85,6 +90,7 @@ pub use mcp_nodes::McpNodesPanel;
 pub use memory::MemoryPanel;
 pub use metrics_dashboard::MetricsDashboardPanel;
 pub use osa_sparse::OsaSparsePanel;
+pub use overwindow::OverWindowPanel;
 pub use parliament::ParliamentPanel;
 pub use pvl_score::PvlScorePanel;
 pub use quest::QuestPanel;

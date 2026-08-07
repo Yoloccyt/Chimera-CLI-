@@ -85,8 +85,8 @@ impl StaticSnapshotSource {
 }
 
 impl TuiDataSource for StaticSnapshotSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &DataSourceConfig {
@@ -102,7 +102,7 @@ fn full_snapshot(
 ) -> DataSnapshot {
     DataSnapshot {
         quest_list,
-        latest_events,
+        latest_events: std::sync::Arc::new(latest_events),
         budget_metrics: budget,
         ..Default::default()
     }
@@ -241,12 +241,13 @@ fn test_tui_input_mode_switching() {
 #[test]
 fn test_tui_input_mode_circular_navigation() {
     // WHY 循环导航:验证 Quest → ... → TaskManager → Quest 的完整循环
-    // (22 面板)。closure Stage B-10:SelfAssessment(P1-5)与 DagViz(B-10)、
+    // (23 面板)。closure Stage B-10:SelfAssessment(P1-5)与 DagViz(B-10)、
     // Task 3.7 PvlScore / Task 3.9 TaskManager 先后追加到主循环末尾,
-    // 从 19 面板扩展到 22 面板(Timeline/Sysinfo 未注册故不含)。
+    // ADR-072(P1)追加 OverWindow 到循环末尾,从 22 扩展到 23 面板
+    // (Timeline/Sysinfo 未注册故不含)。
     let mut app = make_app();
 
-    // 连续 Tab 22 次应回到原点(22 面板循环:起点 Quest + 21 个后续)
+    // 连续 Tab 23 次应回到原点(23 面板循环:起点 Quest + 22 个后续)
     for expected in [
         PanelId::Parliament,
         PanelId::Budget,
@@ -269,6 +270,7 @@ fn test_tui_input_mode_circular_navigation() {
         PanelId::DagViz,
         PanelId::PvlScore,
         PanelId::TaskManager,
+        PanelId::OverWindow,
         PanelId::Quest,
     ] {
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -280,8 +282,9 @@ fn test_tui_input_mode_circular_navigation() {
         );
     }
 
-    // Shift+Tab 反向循环也应回到原点(22 面板:Quest 的上一个 = 末尾 TaskManager)
+    // Shift+Tab 反向循环也应回到原点(23 面板:Quest 的上一个 = 末尾 OverWindow)
     for expected in [
+        PanelId::OverWindow,
         PanelId::TaskManager,
         PanelId::PvlScore,
         PanelId::DagViz,
@@ -689,13 +692,14 @@ fn test_quest_panel_renders_real_quest_data() {
         "Quest panel should render thinking mode, got: {}",
         &content[..content.len().min(300)]
     );
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("3 total"),
+        compact.contains("3总"),
         "Quest panel should render task summary, got: {}",
         &content[..content.len().min(300)]
     );
     assert!(
-        content.contains("1 running"),
+        compact.contains("1执行中"),
         "Quest panel should include Running count, got: {}",
         &content[..content.len().min(300)]
     );
@@ -862,6 +866,9 @@ fn test_health_panel_switch_and_render() {
 
 #[test]
 fn test_search_mode_filters_log_panel() {
+    // WHY locale 锁:断言依赖中文文案“关键字”,并行测试切换语言会偶发失败
+    // (既有 flaky,2026-08-07 修复)
+    let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // WHY:通过 '/' 进入搜索模式,提交后关键字过滤器应作用于 Log 面板
     let snapshot = full_snapshot(
         Vec::new(),
@@ -897,8 +904,9 @@ fn test_search_mode_filters_log_panel() {
 
     // 渲染后 Log 面板标题应包含关键字指示器
     let content = render_to_string(&mut app, 80, 24);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("keyword:alpha"),
+        compact.contains("关键字:alpha"),
         "Log panel title should show active keyword filter, got: {}",
         &content[..content.len().min(300)]
     );
@@ -949,12 +957,13 @@ fn test_command_filter_and_level_applies_to_log() {
     assert_eq!(app.state().filter_level, Some("critical".into()));
 
     let content = render_to_string(&mut app, 80, 24);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("topic:budget"),
+        compact.contains("主题:budget"),
         "Log panel title should show topic filter"
     );
     assert!(
-        content.contains("level:critical"),
+        compact.contains("级别:critical"),
         "Log panel title should show level filter"
     );
 }

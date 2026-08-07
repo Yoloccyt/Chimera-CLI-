@@ -11,6 +11,7 @@ use event_bus::{ChatStatus, NexusEvent};
 use nexus_core::{Quest, TaskStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use crate::error::TuiError;
 use crate::types::{ChatMessage, TickMode};
@@ -21,6 +22,15 @@ use crate::types::{ChatMessage, TickMode};
 /// 方便单元测试用内存桩替换 event-bus 订阅。
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DataSnapshot {
+    /// 快照生成号(单调递增,数据管道每次 tick 聚合后 +1)
+    ///
+    /// WHY 性能 P-1:事件循环轮询频率(100ms)高于数据 tick(250ms),
+    /// 两 tick 之间快照内容不变。`TuiApp::update` 据此跳过无变化帧的
+    /// 整包字段拷贝(latest_events / 历史曲线 / 指标),EventStream/Log
+    /// 的过滤缓存也以它为失效键。
+    #[serde(default)]
+    pub revision: u64,
+
     /// 当前活动 Quest 列表
     ///
     /// 来源:聚合 `QuestListUpdated`(替换整个列表)与 `QuestCompleted`
@@ -41,7 +51,10 @@ pub struct DataSnapshot {
     ///
     /// WHY VecDeque:面板需要"最新 N 条"语义,从队尾追加、队首丢弃
     /// 为 O(1),避免频繁 `Vec::remove(0)`。
-    pub latest_events: VecDeque<NexusEvent>,
+    /// WHY `Arc`:数据管道无新事件 tick 时直接共享上一快照的 Arc,
+    /// 快照构建零拷贝;有事件 tick 写时复制后替换(评估报告 P0-2)。
+    /// 读取方(update/面板)仅做引用计数递增,不修改内容。
+    pub latest_events: Arc<VecDeque<NexusEvent>>,
 
     /// 当前预算指标
     pub budget_metrics: BudgetMetrics,
@@ -527,7 +540,11 @@ pub trait TuiDataSource {
     ///
     /// 实现者应返回最近一次聚合结果;若尚未收到任何事件,
     /// 返回默认空快照而非错误,保证面板始终可渲染。
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError>;
+    ///
+    /// WHY 返回 `Arc<DataSnapshot>`:快照在管道内为共享不可变结构
+    /// (每 tick 原子 swap,复用 overwindow_bridge 已验证的 Arc 模式),
+    /// 读取方仅做引用计数递增,避免每帧整包深拷贝。
+    fn snapshot(&self) -> Result<Arc<DataSnapshot>, TuiError>;
 
     /// 返回数据源配置
     fn config(&self) -> &DataSourceConfig;

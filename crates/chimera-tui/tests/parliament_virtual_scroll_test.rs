@@ -20,8 +20,8 @@ struct MockDataSource {
 }
 
 impl TuiDataSource for MockDataSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
     fn config(&self) -> &DataSourceConfig {
         &self.config
@@ -41,7 +41,7 @@ fn snapshot_with_1000_votes() -> DataSnapshot {
         events.push_back(event);
     }
     DataSnapshot {
-        latest_events: events,
+        latest_events: std::sync::Arc::new(events),
         ..Default::default()
     }
 }

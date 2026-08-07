@@ -5,6 +5,7 @@
 //! 对应架构层:L10 Interface
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use crossterm::event::{self, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::style::Color;
@@ -60,8 +61,8 @@ impl MockDataSource {
 }
 
 impl TuiDataSource for MockDataSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(&self) -> Result<Arc<DataSnapshot>, TuiError> {
+        Ok(Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &DataSourceConfig {
@@ -112,9 +113,9 @@ fn test_switch_panel_next() -> Result<(), Box<dyn std::error::Error>> {
 fn test_switch_panel_prev() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_prev();
-    // Task 3.7/3.9:FocusManager 现注册 22 面板(PvlScore/TaskManager 追加到末尾);
-    // Quest 的上一个 = 列表末尾的 TaskManager 面板。
-    assert_eq!(app.current_panel(), PanelId::TaskManager);
+    // Task 3.7/3.9 + P1:FocusManager 现注册 23 面板(OverWindow 追加到循环末尾);
+    // Quest 的上一个 = 列表末尾的 OverWindow 面板。
+    assert_eq!(app.current_panel(), PanelId::OverWindow);
     Ok(())
 }
 
@@ -1100,10 +1101,10 @@ fn test_update_pulls_snapshot_into_state() -> Result<(), Box<dyn std::error::Err
             utilization_rate: 0.95,
             ..Default::default()
         },
-        latest_events: VecDeque::from([NexusEvent::CacheHit {
+        latest_events: std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
             metadata: EventMetadata::new("test"),
             cache_key: "k1".into(),
-        }]),
+        }])),
         ..Default::default()
     };
 
@@ -1127,7 +1128,7 @@ fn test_update_sets_status_message_on_error() -> Result<(), Box<dyn std::error::
     struct FailingDataSource;
 
     impl TuiDataSource for FailingDataSource {
-        fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+        fn snapshot(&self) -> Result<Arc<DataSnapshot>, TuiError> {
             Err(TuiError::DataSource("forced failure".into()))
         }
 
@@ -1225,11 +1226,14 @@ fn test_budget_panel_content_uses_state() -> Result<(), Box<dyn std::error::Erro
 
 #[test]
 fn test_log_panel_content_uses_state() -> Result<(), Box<dyn std::error::Error>> {
+    // WHY locale 锁:断言依赖中文文案“系统日志”,并行测试切换语言会偶发失败
+    // (既有 flaky,2026-08-07 修复)
+    let _locale_guard = crate::i18n::locale_test_guard();
     let snapshot = DataSnapshot {
-        latest_events: VecDeque::from([NexusEvent::CacheHit {
+        latest_events: std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k1".into(),
-        }]),
+        }])),
         ..Default::default()
     };
 
@@ -1250,7 +1254,9 @@ fn test_log_panel_content_uses_state() -> Result<(), Box<dyn std::error::Error>>
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
-    assert!(content.contains("System Log"));
+    // WHY 压缩空白:TestBackend 逐格渲染中文时汉字间含空格("系 统 日 志")
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
+    assert!(compact.contains("系统日志"));
     assert!(content.contains("CacheHit"));
     Ok(())
 }

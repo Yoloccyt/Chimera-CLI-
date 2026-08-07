@@ -65,8 +65,10 @@ impl MockDataSource {
 }
 
 impl chimera_tui::TuiDataSource for MockDataSource {
-    fn snapshot(&self) -> Result<chimera_tui::DataSnapshot, chimera_tui::TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(
+        &self,
+    ) -> Result<std::sync::Arc<chimera_tui::DataSnapshot>, chimera_tui::TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &chimera_tui::DataSourceConfig {
@@ -86,7 +88,7 @@ fn quest_enter_switches_to_event_stream_panel() {
             sample_quest("q-alpha", "Alpha Quest"),
             sample_quest("q-beta", "Beta Quest"),
         ],
-        latest_events: VecDeque::from([
+        latest_events: std::sync::Arc::new(VecDeque::from([
             NexusEvent::QuestCreated {
                 metadata: EventMetadata::new("quest-engine"),
                 quest_id: "q-alpha".into(),
@@ -99,7 +101,7 @@ fn quest_enter_switches_to_event_stream_panel() {
                 title: "Beta Quest".into(),
                 task_count: 1,
             },
-        ]),
+        ])),
         ..Default::default()
     };
 
@@ -124,12 +126,12 @@ fn quest_enter_switches_to_event_stream_panel() {
 fn quest_enter_sets_filter_keyword_to_quest_id() {
     let snapshot = chimera_tui::DataSnapshot {
         quest_list: vec![sample_quest("q-alpha", "Alpha Quest")],
-        latest_events: VecDeque::from([NexusEvent::QuestCreated {
+        latest_events: std::sync::Arc::new(VecDeque::from([NexusEvent::QuestCreated {
             metadata: EventMetadata::new("quest-engine"),
             quest_id: "q-alpha".into(),
             title: "Alpha Quest".into(),
             task_count: 1,
-        }]),
+        }])),
         ..Default::default()
     };
 
@@ -159,7 +161,7 @@ fn quest_enter_event_stream_applies_filter() {
             sample_quest("q-alpha", "Alpha Quest"),
             sample_quest("q-beta", "Beta Quest"),
         ],
-        latest_events: VecDeque::from([
+        latest_events: std::sync::Arc::new(VecDeque::from([
             // q-alpha 的关联事件
             NexusEvent::QuestCreated {
                 metadata: EventMetadata::new("quest-engine"),
@@ -179,7 +181,7 @@ fn quest_enter_event_stream_applies_filter() {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "unrelated".into(),
             },
-        ]),
+        ])),
         ..Default::default()
     };
 
@@ -218,7 +220,7 @@ fn quest_enter_on_second_quest_filters_correctly() {
             sample_quest("q-alpha", "Alpha Quest"),
             sample_quest("q-beta", "Beta Quest"),
         ],
-        latest_events: VecDeque::from([
+        latest_events: std::sync::Arc::new(VecDeque::from([
             NexusEvent::QuestCreated {
                 metadata: EventMetadata::new("quest-engine"),
                 quest_id: "q-alpha".into(),
@@ -231,7 +233,7 @@ fn quest_enter_on_second_quest_filters_correctly() {
                 title: "Beta Quest".into(),
                 task_count: 1,
             },
-        ]),
+        ])),
         ..Default::default()
     };
 

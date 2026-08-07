@@ -21,12 +21,15 @@ pub mod buffer;
 pub mod compat;
 pub mod diff;
 pub mod layout;
+pub mod output;
 pub mod rect;
 pub mod style;
 pub mod writer;
 
 pub use buffer::{Buffer, Cell, DirtyTracker, DoubleBuffer};
-pub use compat::{from_ratatui_buffer, from_ratatui_rect, to_ratatui_rect};
+pub use compat::{
+    from_ratatui_buffer, from_ratatui_buffer_diffed, from_ratatui_rect, to_ratatui_rect,
+};
 pub use diff::{Change, DiffEngine};
 pub use layout::{Constraint, Direction, LayoutEngine, LayoutTree, PaneMode, Regions};
 pub use rect::{Position, Rect, Size};

@@ -34,9 +34,11 @@
 pub mod metrics_history;
 pub mod resource_history;
 
-pub(crate) mod pipeline;
 pub(crate) mod snapshot;
 pub(crate) mod sync;
+// WHY pub:data_pipeline_bench(独立 crate)直接调用 `pipeline::push_history`
+// 做容量伸缩基准(评估报告 P0-2 验收:VecDeque 队首淘汰 O(1) 可证伪)。
+pub mod pipeline;
 
 // Re-export all public types to maintain the existing API surface
 pub use pipeline::{DataPipeline, StubDataSource, SysMetricsCollector};
@@ -661,7 +663,7 @@ mod tests {
     #[test]
     fn test_push_history_bounds() {
         use super::pipeline::push_history;
-        let mut history = Vec::new();
+        let mut history = std::collections::VecDeque::new();
         for i in 0..70 {
             push_history(&mut history, i, 64);
         }

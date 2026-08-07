@@ -45,8 +45,8 @@ impl MockDataSource {
 }
 
 impl TuiDataSource for MockDataSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &DataSourceConfig {
@@ -173,7 +173,7 @@ fn test_budget_only_change_marks_budget_only() {
 #[test]
 fn test_event_stream_change_marks_three_panels() {
     let snapshot = DataSnapshot {
-        latest_events: VecDeque::from([cache_hit("k1")]),
+        latest_events: std::sync::Arc::new(VecDeque::from([cache_hit("k1")])),
         ..Default::default()
     };
     let app = make_app_and_update(snapshot);
@@ -242,6 +242,38 @@ fn test_subsequent_identical_update_stays_clean() {
         app.state().dirty_panels.is_empty(),
         "identical snapshot after first sync must not mark any panel dirty"
     );
+}
+
+// P2 性能(P-1):快照 revision 未变化时,update 跳过整帧字段拷贝与 dirty 标记。
+// 该测试用"本地改动状态字段"区分跳过与非跳过:若不跳过,字段不一致会标 dirty;
+// 跳过则保持本地状态不被覆盖,也不产生 dirty。
+#[test]
+fn test_update_skips_copy_when_revision_unchanged() {
+    let snapshot = DataSnapshot {
+        revision: 7,
+        budget_metrics: BudgetMetrics {
+            utilization_rate: 0.5,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut app = make_app_and_update(snapshot);
+    assert_eq!(app.state().last_snapshot_revision, 7);
+    app.state_mut().clear_dirty();
+
+    // 模拟两次 tick 之间状态被本地改动:跳过时应保留,不被快照覆盖
+    app.state_mut().budget.utilization_rate = 0.9;
+    app.update();
+
+    assert!(
+        app.state().dirty_panels.is_empty(),
+        "revision 未变化时 update 应跳过字段拷贝与 dirty 标记"
+    );
+    assert_eq!(
+        app.state().budget.utilization_rate, 0.9,
+        "revision 未变化时本地状态不应被快照覆盖"
+    );
+    assert_eq!(app.state().last_snapshot_revision, 7);
 }
 
 // ============================================================

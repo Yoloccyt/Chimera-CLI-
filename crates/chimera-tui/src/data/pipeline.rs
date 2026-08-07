@@ -41,6 +41,11 @@ use crate::types::{CpuMetrics, DiskMetrics, MemMetrics, NetworkMetrics, SystemMe
 pub struct SysMetricsCollector {
     /// sysinfo 系统实例(持有以复用内部缓存)
     system: sysinfo::System,
+    /// 网络接口集合(持有以复用内部缓存,避免每 tick 重建)
+    ///
+    /// WHY 复用:原实现每 tick `Networks::new_with_refreshed_list()` 重建
+    /// 全部网络接口对象(评估报告 P0-2);字段化后仅 `refresh()` 增量刷新。
+    networks: sysinfo::Networks,
     /// 上次采样时间(用于计算速率)
     last_sample_time: Instant,
     /// 上次累计接收字节(网络)
@@ -60,6 +65,7 @@ impl SysMetricsCollector {
 
         Self {
             system,
+            networks,
             last_sample_time: Instant::now(),
             last_rx_bytes: total_rx,
             last_tx_bytes: total_tx,
@@ -122,9 +128,10 @@ impl SysMetricsCollector {
         let disk = DiskMetrics::default();
 
         // --- 网络 ---
-        let networks = sysinfo::Networks::new_with_refreshed_list();
-        let current_rx: u64 = networks.values().map(|n| n.total_received()).sum();
-        let current_tx: u64 = networks.values().map(|n| n.total_transmitted()).sum();
+        // 复用持有实例,仅增量刷新(避免每 tick 重建全部网络接口对象)
+        self.networks.refresh();
+        let current_rx: u64 = self.networks.values().map(|n| n.total_received()).sum();
+        let current_tx: u64 = self.networks.values().map(|n| n.total_transmitted()).sum();
         let (rx_rate, tx_rate) = if elapsed_secs > 0.0 {
             let rx = ((current_rx.saturating_sub(self.last_rx_bytes)) as f64 / elapsed_secs) as u64;
             let tx = ((current_tx.saturating_sub(self.last_tx_bytes)) as f64 / elapsed_secs) as u64;
@@ -183,7 +190,7 @@ impl StubDataSource {
 }
 
 impl TuiDataSource for StubDataSource {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+    fn snapshot(&self) -> Result<Arc<DataSnapshot>, TuiError> {
         let mut snapshot = DataSnapshot::default();
 
         snapshot.quest_list.push(Quest {
@@ -331,12 +338,13 @@ impl TuiDataSource for StubDataSource {
             ],
         };
 
-        snapshot.latest_events.push_back(NexusEvent::CacheHit {
+        // Arc 共享事件流:写时复制追加(默认快照 Arc 强计数为 1,make_mut 免拷贝)
+        Arc::make_mut(&mut snapshot.latest_events).push_back(NexusEvent::CacheHit {
             metadata: EventMetadata::new("stub"),
             cache_key: "demo".into(),
         });
 
-        Ok(snapshot)
+        Ok(Arc::new(snapshot))
     }
 
     fn config(&self) -> &DataSourceConfig {
@@ -353,7 +361,10 @@ pub struct DataPipeline {
     config: DataSourceConfig,
     task: Mutex<Option<JoinHandle<()>>>,
     subscriber: Arc<Mutex<Option<EventSubscriber>>>,
-    snapshot: Arc<Mutex<DataSnapshot>>,
+    // P2 性能(P-1):内部存储 Arc<DataSnapshot>,每 tick 构建新快照后原子 swap。
+    // WHY 读取方(事件循环 update / 导出 / metrics_dashboard)仅做引用计数递增,
+    // 不再每帧整包深拷贝 latest_events / 历史曲线(原实现 `guard.clone()`)。
+    snapshot: Arc<Mutex<Arc<DataSnapshot>>>,
 }
 
 impl DataPipeline {
@@ -363,7 +374,7 @@ impl DataPipeline {
     /// - `subscriber`: 已订阅 event-bus 的事件订阅者
     /// - `config`: 数据源配置，包含 tick 间隔与容量限制
     pub fn new(subscriber: EventSubscriber, config: DataSourceConfig) -> Self {
-        let snapshot = Arc::new(Mutex::new(DataSnapshot::default()));
+        let snapshot = Arc::new(Mutex::new(Arc::new(DataSnapshot::default())));
         let snapshot_clone = Arc::clone(&snapshot);
         let subscriber = Arc::new(Mutex::new(Some(subscriber)));
         let subscriber_clone = Arc::clone(&subscriber);
@@ -398,19 +409,25 @@ impl DataPipeline {
             let mut action_feedback_sync = ActionFeedbackSync::new();
             let mut critical_dropped_sync = CriticalDroppedSync::new();
             let mut sys_collector: Option<SysMetricsCollector> = None;
-            let mut latest_events: VecDeque<NexusEvent> = VecDeque::new();
+            // Arc 共享事件流:无新事件 tick 时快照直接共享 Arc(零拷贝),
+            // 有事件 tick 写时复制后替换(评估报告 P0-2)
+            let mut latest_events: Arc<VecDeque<NexusEvent>> = Arc::new(VecDeque::new());
+            // tick 内临时累积缓冲(事件消费后写入,本 tick 结束时整体替换为 Arc)
+            let mut latest_event_deque: VecDeque<NexusEvent> = VecDeque::new();
 
-            let mut budget_history: Vec<u64> = Vec::with_capacity(max_history_len);
-            let mut memory_history: Vec<u64> = Vec::with_capacity(max_history_len);
-            let mut event_rate_history: Vec<u64> = Vec::with_capacity(max_history_len);
-            let mut decay_history: Vec<u64> = Vec::with_capacity(max_history_len);
-            let mut sys_metrics_history: Vec<u64> = Vec::with_capacity(max_history_len);
+            let mut budget_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            let mut memory_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            let mut event_rate_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            let mut decay_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            let mut sys_metrics_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
 
-            let mut timeline_snapshots: Vec<crate::types::TimelineSnapshot> =
-                Vec::with_capacity(max_snapshots);
+            let mut timeline_snapshots: VecDeque<crate::types::TimelineSnapshot> =
+                VecDeque::with_capacity(max_snapshots);
             let mut total_event_count: u64 = 0;
             let mut events_since_last_snapshot: u64 = 0;
             let mut last_timeline_snapshot: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+            // 快照生成号:每 tick 递增,供 TuiApp::update 跳过无变化帧的字段拷贝
+            let mut revision: u64 = 0;
 
             loop {
                 time::sleep(Duration::from_millis(current_tick_ms)).await;
@@ -441,41 +458,47 @@ impl DataPipeline {
                     }
                 }
 
-                for (idx, event) in events.iter().enumerate() {
-                    let is_deduped_quest = matches!(event, NexusEvent::QuestListUpdated { .. })
+                let events_this_tick = events.len();
+                for (idx, event) in events.into_iter().enumerate() {
+                    let is_deduped_quest = matches!(&event, NexusEvent::QuestListUpdated { .. })
                         && Some(idx) != last_quest_idx;
                     let is_deduped_budget =
-                        matches!(event, NexusEvent::BudgetMetricsUpdated { .. })
+                        matches!(&event, NexusEvent::BudgetMetricsUpdated { .. })
                             && Some(idx) != last_budget_idx;
 
                     if !is_deduped_quest && !is_deduped_budget {
-                        quest_sync.apply_event(event);
-                        budget_sync.apply_event(event);
+                        quest_sync.apply_event(&event);
+                        budget_sync.apply_event(&event);
                     }
-                    memory_sync.apply_event(event);
+                    memory_sync.apply_event(&event);
                     security_sync.apply_event(
-                        event,
+                        &event,
                         max_security_summaries,
                         max_frozen_capabilities,
                     );
-                    health_sync.apply_event(event);
-                    decay_sync.apply_event(event);
-                    router_sync.apply_event(event);
-                    mcp_nodes_sync.apply_event(event);
-                    chtc_sync.apply_event(event);
-                    osa_sync.apply_event(event);
-                    clv_sync.apply_event(event);
-                    chat_sync.apply_event(event);
-                    action_feedback_sync.apply_event(event);
-                    critical_dropped_sync.apply_event(event);
-                    latest_events.push_back(event.clone());
+                    health_sync.apply_event(&event);
+                    decay_sync.apply_event(&event);
+                    router_sync.apply_event(&event);
+                    mcp_nodes_sync.apply_event(&event);
+                    chtc_sync.apply_event(&event);
+                    osa_sync.apply_event(&event);
+                    clv_sync.apply_event(&event);
+                    chat_sync.apply_event(&event);
+                    action_feedback_sync.apply_event(&event);
+                    critical_dropped_sync.apply_event(&event);
+                    // P2 性能(P-1):事件由 `events` 所有权转移,不再逐条 clone
+                    latest_event_deque.push_back(event);
                 }
 
-                while latest_events.len() > max_event_history {
-                    latest_events.pop_front();
+                while latest_event_deque.len() > max_event_history {
+                    latest_event_deque.pop_front();
+                }
+                // 有事件:写时复制为新的共享 Arc(快照持有,后续 tick 共享)
+                if !latest_event_deque.is_empty() {
+                    latest_events = Arc::new(latest_event_deque);
+                    latest_event_deque = VecDeque::new();
                 }
 
-                let events_this_tick = events.len();
                 let eps = health_sync.compute_events_per_second(events_this_tick, tick_ms);
                 let budget = budget_sync.metrics();
                 let memory = memory_sync.metrics();
@@ -539,15 +562,18 @@ impl DataPipeline {
                         health_score: health.health_score,
                         decay_coefficient: decay.coefficient,
                     };
-                    timeline_snapshots.push(timeline_entry);
+                    timeline_snapshots.push_back(timeline_entry);
                     while timeline_snapshots.len() > max_snapshots {
-                        timeline_snapshots.remove(0);
+                        // VecDeque 队首丢弃 O(1)(原 Vec::remove(0) 为 O(n))
+                        timeline_snapshots.pop_front();
                     }
                     last_timeline_snapshot = now;
                     events_since_last_snapshot = 0;
                 }
 
+                revision += 1;
                 let snap = DataSnapshot {
+                    revision,
                     quest_list,
                     paused_quest_count,
                     latest_events: latest_events.clone(),
@@ -555,15 +581,15 @@ impl DataPipeline {
                     memory_metrics: memory,
                     security_state: security_sync.state(),
                     health_metrics: health,
-                    budget_history: budget_history.clone(),
-                    memory_history: memory_history.clone(),
-                    event_rate_history: event_rate_history.clone(),
+                    budget_history: budget_history.iter().copied().collect(),
+                    memory_history: memory_history.iter().copied().collect(),
+                    event_rate_history: event_rate_history.iter().copied().collect(),
                     decay_metrics: decay,
                     router_metrics: router_sync.metrics(),
                     mcp_nodes: mcp_nodes_sync.nodes(),
                     chtc_state: chtc_sync.state(),
-                    decay_history: decay_history.clone(),
-                    timeline_snapshots: timeline_snapshots.clone(),
+                    decay_history: decay_history.iter().copied().collect(),
+                    timeline_snapshots: timeline_snapshots.iter().cloned().collect(),
                     osa_sparsity: osa_sync.sparsity(),
                     osa_context_mask: osa_sync.context_mask(),
                     osa_sparsity_history: osa_sync.sparsity_history(),
@@ -573,7 +599,7 @@ impl DataPipeline {
                     recall_position_bias: osa_sync.recall_position_bias(),
                     recall_chain_success: osa_sync.recall_chain_success(),
                     sys_metrics,
-                    sys_metrics_history: sys_metrics_history.clone(),
+                    sys_metrics_history: sys_metrics_history.iter().copied().collect(),
                     tick_mode,
                     chat_messages: chat_sync.messages(),
                     chat_status: chat_sync.status(),
@@ -587,7 +613,7 @@ impl DataPipeline {
                     );
                     poisoned.into_inner()
                 });
-                *guard = snap;
+                *guard = Arc::new(snap);
 
                 let backlog = latest_events.len();
                 match tick_mode {
@@ -628,7 +654,7 @@ impl DataPipeline {
     }
 
     /// 非阻塞读取当前快照
-    pub fn snapshot(&self) -> DataSnapshot {
+    pub fn snapshot(&self) -> Arc<DataSnapshot> {
         let guard = self.snapshot.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("TUI data pipeline snapshot mutex was poisoned; recovering state");
             poisoned.into_inner()
@@ -697,7 +723,7 @@ impl Drop for DataPipeline {
 }
 
 impl TuiDataSource for DataPipeline {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+    fn snapshot(&self) -> Result<Arc<DataSnapshot>, TuiError> {
         Ok(DataPipeline::snapshot(self))
     }
 
@@ -709,7 +735,7 @@ impl TuiDataSource for DataPipeline {
 // WHY Arc<DataPipeline>: CLI 需要保留 `pipeline` 变量以便在 TUI 退出后调用
 // `pipeline.shutdown().await`，同时把数据源的共享引用交给 `TuiApp`。
 impl TuiDataSource for Arc<DataPipeline> {
-    fn snapshot(&self) -> Result<DataSnapshot, TuiError> {
+    fn snapshot(&self) -> Result<Arc<DataSnapshot>, TuiError> {
         Ok(DataPipeline::snapshot(self))
     }
 
@@ -729,9 +755,14 @@ fn truncate_quests(quests: Vec<Quest>, max: usize) -> Vec<Quest> {
 }
 
 /// 辅助函数：向历史曲线追加一个点，超过容量时从队首丢弃
-pub(super) fn push_history(history: &mut Vec<u64>, value: u64, max: usize) {
+///
+/// WHY VecDeque:队首丢弃为 O(1),原 Vec::remove(0) 为 O(n)(评估报告 P0-2);
+/// 快照构建处 `iter().copied().collect()` 转回 Vec 的拷贝开销与原先的
+/// clone 相当,但消除了每次 tick 的 O(n) 队首移除。
+/// WHY pub:data_pipeline_bench 需直接测量容量伸缩复杂度(可证伪)。
+pub fn push_history(history: &mut VecDeque<u64>, value: u64, max: usize) {
     if history.len() >= max {
-        history.remove(0);
+        history.pop_front();
     }
-    history.push(value);
+    history.push_back(value);
 }

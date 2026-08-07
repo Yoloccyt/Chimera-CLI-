@@ -25,12 +25,19 @@ use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, LayoutMode, PanelId, TuiCommand};
 use event_bus::{ActionSource, EventMetadata, NexusEvent, VoteValue};
 
+/// P1-2(评估报告 v2):TuiActionRequested 本地兜底超时(编排器未接线场景)
+///
+/// WHY 2s:正常编排器回发 Completed/Failed 在毫秒级,2s 足够区分
+/// “编排器正在执行”与“无消费者”;standalone 模式(TUI 独立运行)下
+/// TuiActionRequested 无人消费,超时后状态栏提示避免用户无感知。
+const ACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 impl TuiApp {
     /// 处理键盘事件,按当前输入模式和弹窗状态路由到对应处理器。
     pub fn handle_key_event(&mut self, key: KeyEvent) {
-        // WHY 检查 KeyEventKind:crossterm 在 Windows 上会触发 Release 事件,
-        // 只处理 Press 避免重复响应(平台兼容性)
-        if key.kind != KeyEventKind::Press {
+        // WHY 仅过滤 Release:Windows crossterm 会触发 Release,必须忽略避免重复响应;
+        // Repeat(长按)对滚动/导航/文本输入是期望行为,视同 Press 处理(§4.4 平台兼容性)。
+        if key.kind == KeyEventKind::Release {
             return;
         }
 
@@ -53,6 +60,18 @@ impl TuiApp {
             self.state.input_mode,
             InputMode::Command | InputMode::Search
         ) {
+            // 极少数全局键在命令/搜索模式仍生效(与 Insert 一致):Ctrl+L 中英切换
+            // 不应把 `l` 打进输入缓冲(命令栏/搜索栏 Ctrl 组合键语义与 Insert 对齐)。
+            if key.code == KeyCode::Char('l')
+                && key.modifiers.contains(event::KeyModifiers::CONTROL)
+            {
+                self.dispatch_action(
+                    "system.toggle_locale",
+                    "{}".to_string(),
+                    ActionSource::Palette,
+                );
+                return;
+            }
             if let Some(cmd) = self.command_palette.handle_key(key, &mut self.state) {
                 self.apply_command(cmd);
             }
@@ -97,8 +116,30 @@ impl TuiApp {
     /// 不会由 Normal/GPrefix 路由产生,此处按无操作兜底以保证穷尽匹配。
     fn apply_route_target(&mut self, target: RouteTarget, key: KeyEvent) {
         match target {
-            RouteTarget::Quit => self.quit(),
-            RouteTarget::PanelJump(id) => self.switch_panel_to(id),
+            RouteTarget::Quit => {
+                // 退出安全(quit_requires_confirm):开启时先弹确认框,左/右键切到 Yes
+                // 后 Enter 才真正退出;默认关闭保持 q/Esc 立即退出行为零回归。
+                // 确认命令复用 apply_confirm_command 已有的 "quit" 分支。
+                if self.config.quit_requires_confirm {
+                    self.state.popup_stack.push(PopupKind::Confirm {
+                        prompt: crate::t!("status.quit_confirm").to_string(),
+                        on_confirm: "quit".into(),
+                        confirmed: false,
+                    });
+                } else {
+                    self.quit();
+                }
+            }
+            RouteTarget::PanelJump(id) => {
+                // 未注册面板的跳转不再静默失败:状态栏提示,避免死键无感知
+                // (如 g5 → Timeline,TimelinePanel 有实现但未进入面板循环)。
+                if self.panel_index(id).is_none() {
+                    self.state
+                        .set_status(format!("Panel {id:?} is not registered"), Severity::Warning);
+                } else {
+                    self.switch_panel_to(id);
+                }
+            }
             RouteTarget::FocusCycle { forward } => {
                 if forward {
                     self.switch_panel_next();
@@ -175,6 +216,8 @@ impl TuiApp {
                 self.state.input_buffer.pop();
             }
             RouteTarget::ExitMode => {
+                // F-5:Esc 取消 palette 参数输入流(pending 动作不再派发)
+                self.state.pending_action = None;
                 self.state.input_mode = InputMode::Normal;
                 self.state.input_buffer.clear();
             }
@@ -183,9 +226,24 @@ impl TuiApp {
                 self.dispatch_action(action_id, "{}".to_string(), ActionSource::Chat);
             }
             RouteTarget::Submit => {
+                let text = self.state.input_buffer.trim().to_string();
+                // F-5:palette 参数输入流优先——存在 pending 动作时,Insert 缓冲
+                // 收集的是该动作的 query(非 Chat 消息)。提交以 {"query": text}
+                // 经三入口统一派发后回到 Normal(一次性动作,不形成 REPL)。
+                if let Some(pending) = self.state.pending_action.clone() {
+                    if !text.is_empty() {
+                        self.state.pending_action = None;
+                        let payload = serde_json::json!({ "query": text }).to_string();
+                        self.dispatch_action(&pending.action_id, payload, pending.source);
+                        self.state.input_mode = InputMode::Normal;
+                        self.state.input_buffer.clear();
+                    }
+                    // 空输入:不派发、不丢失 pending,等待继续输入(Esc 取消)
+                    return;
+                }
+
                 // M3b:非空输入发布 TuiChatSubmitted(经 EventBus 回环由 ChatSync 追加用户消息),
                 // 自动切到 Chat 面板;保持 Insert 模式形成 chat REPL(Esc 退出)。
-                let text = self.state.input_buffer.trim().to_string();
                 if !text.is_empty() {
                     // 以 `/` 开头视为斜杠命令,提取命令名(首个空白前的词)
                     let slash_command = text
@@ -307,13 +365,30 @@ impl TuiApp {
                     .as_ref()
                     .and_then(|m| m.selected_action())
                     .map(str::to_string);
+                // F-5:需 query 的动作分流到 Insert 参数收集态(不直接发空 payload)。
+                // 判定在关闭面板前完成(模型持有 Registry 单一事实源)。
+                let requires_query = self
+                    .chat_session
+                    .palette
+                    .as_ref()
+                    .map(|m| m.selected_action_requires_query())
+                    .unwrap_or(false);
                 self.chat_session.palette = None;
                 if let Some(action_id) = action_id {
-                    self.apply_command(TuiCommand::DispatchAction {
-                        action_id,
-                        payload: "{}".to_string(),
-                        source: ActionSource::Palette,
-                    });
+                    if requires_query {
+                        self.state.pending_action = Some(crate::types::PendingAction {
+                            action_id,
+                            source: ActionSource::Palette,
+                        });
+                        self.state.input_mode = InputMode::Insert;
+                        self.state.input_buffer.clear();
+                    } else {
+                        self.apply_command(TuiCommand::DispatchAction {
+                            action_id,
+                            payload: "{}".to_string(),
+                            source: ActionSource::Palette,
+                        });
+                    }
                 }
             }
             KeyCode::Up => {
@@ -946,6 +1021,10 @@ impl TuiApp {
             // —— 编排域(quest.*/task.*/agent.chat):发布 TuiActionRequested,由 chimera-cli
             // Action 编排器消费并回发 Completed/Failed(P0 已接线,反馈经 ActionFeedbackSync 上屏)——
             _ => {
+                // P1-2:记录派发截止时间,超时无回发时状态栏兜底提示
+                // (编排器未接线/standalone 场景;收到终态反馈时由 update 清除)
+                self.state.pending_action_deadline =
+                    Some(std::time::Instant::now() + ACTION_TIMEOUT);
                 self.publish_control_event(NexusEvent::TuiActionRequested {
                     metadata: EventMetadata::new("chimera-tui"),
                     action_id: action_id.to_string(),
@@ -953,6 +1032,28 @@ impl TuiApp {
                     source,
                 });
             }
+        }
+    }
+
+    /// P1-2:检测待确认动作超时(编排器未接线场景的本地兜底反馈)
+    ///
+    /// WHY:dispatch_action 兜底发布 `TuiActionRequested` 后,若编排器未接线
+    /// (standalone 模式),`TuiActionCompleted/Failed` 永不回发,用户无感知;
+    /// 超过 `ACTION_TIMEOUT` 后状态栏提示。收到终态反馈(update 中
+    /// action_feedback_seq 增量)时清除 deadline,避免误报。
+    ///
+    /// 由 `TuiApp::update` 每帧调用(测试经 `app.update()` 触发,
+    /// 注入已过期 deadline 即可验证,无需真实等待)。
+    pub(crate) fn check_action_timeout(&mut self) {
+        let Some(deadline) = self.state.pending_action_deadline else {
+            return;
+        };
+        if std::time::Instant::now() >= deadline {
+            self.state.pending_action_deadline = None;
+            self.state.set_status(
+                "action orchestrator not connected; request may not have executed",
+                Severity::Warning,
+            );
         }
     }
 
@@ -1123,6 +1224,11 @@ impl TuiApp {
             self.publish_resume(quest_id);
         } else if let Some(quest_id) = cmd.strip_prefix("cancel:") {
             self.publish_cancel_request(quest_id);
+        } else if let Some(quest_id) = cmd.strip_prefix("terminate:") {
+            // P1-1(评估报告 v2)修复:TaskManager 单选 Terminate 的确认命令
+            // 此前无分支,确认后静默无操作(闭环断点);现发布带
+            // "operator:terminate" 来源标识的终止请求。
+            self.publish_terminate(quest_id);
         } else if let Some(ids_str) = cmd.strip_prefix("batch_pause:") {
             // 批量暂停:遍历逗号分隔的 quest_id 列表,逐个发布暂停请求
             for quest_id in ids_str.split(',') {
@@ -1230,22 +1336,26 @@ impl TuiApp {
     /// WHY 与 pause/resume 同构:复用 EventMetadata + requested_by 模式,
     /// 由 quest-engine 消费后发布 QuestCancelled 状态变更事件。
     fn publish_cancel_request(&mut self, quest_id: &str) {
-        self.publish_control_event(NexusEvent::QuestCancelRequested {
-            metadata: EventMetadata::new("chimera-tui"),
-            quest_id: quest_id.to_string(),
-            requested_by: "operator".to_string(),
-        });
+        self.publish_cancel_with_source(quest_id, "operator");
     }
 
     /// 发布 Quest 终止请求(Task 7.2 批量操作)
     ///
-    /// WHY 与 pause/resume/cancel 同构:复用 EventMetadata + requested_by 模式,
-    /// 由 quest-engine 消费后终止 Quest 执行。
+    /// WHY 复用 QuestCancelRequested 事件:quest-engine 的 cancel 语义即
+    /// “从活跃注册表移除/终止”(engine.rs cancel_quest),新增独立事件变体
+    /// 会波及 35 个 crate 的穷尽匹配(评估报告 v2 P1-1);故经 `requested_by`
+    /// 携带 `operator:terminate` 来源标识,使 Terminate 与 Cancel 在下游
+    /// (QuestCancelled.requested_by)可区分,同时保持事件总线契约不变。
     fn publish_terminate(&mut self, quest_id: &str) {
+        self.publish_cancel_with_source(quest_id, "operator:terminate");
+    }
+
+    /// 统一取消/终止请求发布入口(requested_by 携带动作来源标识)
+    fn publish_cancel_with_source(&mut self, quest_id: &str, requested_by: &str) {
         self.publish_control_event(NexusEvent::QuestCancelRequested {
             metadata: EventMetadata::new("chimera-tui"),
             quest_id: quest_id.to_string(),
-            requested_by: "operator".to_string(),
+            requested_by: requested_by.to_string(),
         });
     }
 
@@ -1358,7 +1468,7 @@ impl TuiApp {
             TuiCommand::SetTickInterval(ms) => {
                 self.config.tick_interval_ms = ms;
                 self.state.status_message = Some((
-                    format!("Tick interval set to {}ms (restart to apply)", ms),
+                    format!("Tick interval set to {}ms (applies next session)", ms),
                     crate::popup::Severity::Info,
                 ));
             }
@@ -1532,7 +1642,18 @@ impl TuiApp {
             // 数据源实现内部处理去重与缓存，此调用为 O(1) 非阻塞。
             self.update();
 
-            // 渲染当前帧
+            // 渲染当前帧:v3-engine M3 起经自研 DoubleBuffer diff + TerminalWriter
+            // 输出(仅写变化格);feature 禁用或 CHIMERA_NO_V3_ENGINE=1 时回退
+            // ratatui Terminal::draw(2 个版本周期兼容窗口,ADR-061/072)。
+            #[cfg(feature = "v3-engine")]
+            if !Self::v3_engine_disabled_by_env() {
+                self.render_frame_v3()?;
+            } else {
+                terminal
+                    .draw(|f| self.render(f))
+                    .map_err(|e| TuiError::Render(e.to_string()))?;
+            }
+            #[cfg(not(feature = "v3-engine"))]
             terminal
                 .draw(|f| self.render(f))
                 .map_err(|e| TuiError::Render(e.to_string()))?;
@@ -1542,7 +1663,19 @@ impl TuiApp {
             // - Normal:100ms(高响应,默认)
             // - Eco:1000ms(低 CPU 占用,适合后台监控场景)
             if !event::poll(self.poll_duration()).map_err(|e| TuiError::EventRead(e.to_string()))? {
+                // 无事件:面板内部状态(选中/滚动/布局)未变,置静默帧标记;
+                // 下一帧渲染时若数据亦未变则跳过主面板区域行的转换与比较
+                // (评估报告 P0-1 DirtyTracker 接线;数据变化由 render 前
+                // update 的 dirty_panels 检查兜底)。
+                #[cfg(feature = "v3-engine")]
+                {
+                    self.frame_quiescent = true;
+                }
                 continue;
+            }
+            #[cfg(feature = "v3-engine")]
+            {
+                self.frame_quiescent = false;
             }
 
             // 读取并处理事件
@@ -1554,6 +1687,98 @@ impl TuiApp {
             }
         }
         Ok(())
+    }
+
+    /// v3-engine M3 输出路径 — 内存渲染 → compat 转换 → 自研 diff → ANSI 写出
+    ///
+    /// # 流程
+    /// 1. 用复用内存终端(`v3_term`,仅尺寸变化时重建)执行与回退路径相同的
+    ///    `self.render(f)` 帧绘制,面板代码零改动(渐进迁移);
+    /// 2. `render_diffed` 将 ratatui 帧逐格翻译为自研 Cell 并与已呈现帧比较
+    ///    (单遍合并,clean 行零开销),仅变化格经 `TerminalWriter` 写入 stdout。
+    ///
+    /// # 静默帧优化(评估报告 P0-1 DirtyTracker 接线)
+    /// 上一轮 poll 无事件 + 本轮数据未变(无 dirty 面板)+ 无浮层 + Normal 模式
+    /// 时,面板渲染区域内容与已呈现帧逐字节相同,仅 status_bar 行(帧率/计数
+    /// 每帧变化)参与比较,其余行跳过 compat 转换与 diff 比较,大幅降低静默帧
+    /// 的 CPU 开销(80×24 下约 92% 的格免转换)。
+    ///
+    /// # 错误
+    /// 终端尺寸读取失败 / 帧绘制失败 / ANSI 写出失败均映射为 `TuiError::Render`。
+    #[cfg(feature = "v3-engine")]
+    fn render_frame_v3(&mut self) -> Result<(), TuiError> {
+        let (w, h) = crossterm::terminal::size()
+            .map_err(|e| TuiError::Render(format!("terminal size: {e}")))?;
+        // 尺寸为 0(极端/挂起场景)时跳过本帧,避免 TestBackend 空区域异常
+        if w == 0 || h == 0 {
+            return Ok(());
+        }
+
+        // 复用内存终端:尺寸未变时零重建(消除每帧 TestBackend/Terminal 分配)
+        let size_changed = match self.v3_term.as_ref() {
+            Some(term) => {
+                // Terminal::size 返回 Result:后端尺寸读取失败时保守重建
+                match term.size() {
+                    Ok(s) => s.width != w || s.height != h,
+                    Err(_) => true,
+                }
+            }
+            None => true,
+        };
+        if size_changed {
+            let backend = ratatui::backend::TestBackend::new(w, h);
+            self.v3_term = Some(
+                ratatui::Terminal::new(backend)
+                    .map_err(|e| TuiError::Render(format!("v3 backend init: {e}")))?,
+            );
+        }
+        // take 解除 self 借用:draw 闭包需再借 `&mut self`(render 方法),
+        // 与持有 v3_term 字段借用互斥,draw 完成后放回字段。
+        let mut term = self.v3_term.take().expect("v3_term just initialized");
+        term.draw(|f| self.render(f))
+            .map_err(|e| TuiError::Render(e.to_string()))?;
+        let rb = term.backend().buffer().clone();
+        self.v3_term = Some(term);
+
+        // 行级脏标记:静默帧仅 status_bar 行需比较(帧率/计数每帧变化);
+        // 非静默帧全部行参与(全量路径由 V3Output 内部按首帧/区域变化处理)
+        let mut dirty = crate::engine::DirtyTracker::new(h);
+        if self.quiescent_frame() {
+            if h >= 2 {
+                dirty.mark(h - 2);
+            }
+        } else {
+            dirty.mark_all();
+        }
+
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        let state = self
+            .v3_output
+            .get_or_insert_with(crate::engine::output::V3Output::new);
+        state
+            .render_diffed(&rb, &dirty, &mut out)
+            .map_err(|e| TuiError::Render(e.to_string()))
+    }
+
+    /// 静默帧判定:上一轮 poll 无事件且本轮数据/浮层状态均未变
+    ///
+    /// # 安全不变量(WHY)
+    /// 跳过行必须与已呈现帧逐字节相同,否则会漏输出导致渲染残影。
+    /// 逐项排除:
+    /// - 键盘/鼠标事件 → 面板内部状态(选中/滚动/布局)可能变化;
+    /// - `dirty_panels` 非空 → 快照数据变化;
+    /// - popup/palette/非 Normal → 浮层覆盖主面板区域;
+    /// - `auto_scroll` → 事件流自动滚动改变主面板内容;
+    /// - status_bar 行不参与跳过(帧率/计数每帧变化,见调用处)。
+    #[cfg(feature = "v3-engine")]
+    fn quiescent_frame(&self) -> bool {
+        self.frame_quiescent
+            && self.state.dirty_panels.is_empty()
+            && self.state.popup_stack.is_empty()
+            && self.chat_session.palette.is_none()
+            && self.state.input_mode == crate::types::InputMode::Normal
+            && !self.state.auto_scroll
     }
 
     /// 根据当前 tick_mode 计算事件轮询间隔(Task 1.16)

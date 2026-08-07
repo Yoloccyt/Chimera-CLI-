@@ -38,6 +38,14 @@ impl Default for Cell {
 }
 
 impl Cell {
+    /// 宽字符续格哨兵(M3 输出接线前置)
+    ///
+    /// ratatui 用"空 symbol"占据宽字符(CJK/emoji)第 2 列;compat 转换时把该
+    /// 续格映射为本哨兵,`TerminalWriter` 渲染时跳过不输出。WHY 不用空格:
+    /// 若把续格映射为空格,diff 会在宽字符后输出空格,终端光标已位于宽字符
+    /// 右列之后,回移打印空格会覆盖汉字右半格(默认中文 UI 必现的渲染破损)。
+    pub const WIDE_CONTINUATION: char = '\0';
+
     /// 以字符构造(默认样式)
     pub fn new(symbol: char) -> Self {
         Self {
@@ -50,6 +58,11 @@ impl Cell {
     pub fn reset(&mut self) {
         self.symbol = ' ';
         self.style = Style::new();
+    }
+
+    /// 是否为宽字符续格哨兵(writer 渲染时应跳过输出)
+    pub fn is_wide_continuation(&self) -> bool {
+        self.symbol == Self::WIDE_CONTINUATION
     }
 }
 
@@ -148,6 +161,11 @@ impl DoubleBuffer {
     /// 当前已呈现帧(diff 的基准)
     pub fn front(&self) -> &Buffer {
         &self.front
+    }
+
+    /// 当前已呈现帧的可变引用(单遍 diff 后原地演进为最新帧,免 swap)
+    pub fn front_mut(&mut self) -> &mut Buffer {
+        &mut self.front
     }
 
     /// 下一帧可变引用(组件渲染写入目标)

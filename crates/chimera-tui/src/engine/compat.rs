@@ -19,7 +19,8 @@ use ratatui::buffer::Buffer as RatBuffer;
 use ratatui::layout::Rect as RatRect;
 use ratatui::style::{Color as RatColor, Modifier as RatModifier, Style as RatStyle};
 
-use crate::engine::buffer::{Buffer, Cell};
+use crate::engine::buffer::{Buffer, Cell, DirtyTracker};
+use crate::engine::diff::Change;
 use crate::engine::rect::Rect;
 use crate::engine::style::{Color, Modifier, Style};
 
@@ -104,18 +105,122 @@ pub fn from_ratatui_buffer(rb: &RatBuffer) -> Buffer {
     let content = rb.content();
     let width = area.width as usize;
     for row in 0..area.height {
+        // 行内宽字符追踪:前一格符号显示宽度 >= 2 时,当前格即其续格(ratatui
+        // 0.29 不写 skip 标志,续格符号为空字符串,只能按宽度定位)。
+        let mut prev_wide = false;
         for col in 0..area.width {
             let idx = (row as usize) * width + (col as usize);
             let Some(rcell) = content.get(idx) else {
                 continue;
             };
-            // 宽字符 skip cell(空 symbol)映射为空格占位;否则取首 char
-            let symbol = rcell.symbol().chars().next().unwrap_or(' ');
+            // 续格判定:前格为宽字符,或 ratatui 显式 skip(终端图形协议占位)
+            let symbol = if prev_wide || rcell.skip {
+                prev_wide = false;
+                Cell::WIDE_CONTINUATION
+            } else {
+                let s = rcell.symbol();
+                let ch = s.chars().next().unwrap_or(' ');
+                // 显示宽度 >= 2(中文/全角/emoji)占据两列,下一格为续格
+                prev_wide = unicode_width::UnicodeWidthStr::width(s) >= 2;
+                ch
+            };
             let style = from_ratatui_style(rcell.style());
             buf.set(area.x + col, area.y + row, Cell { symbol, style });
         }
     }
     buf
+}
+
+/// 单遍 compat + diff:逐格翻译 ratatui `Buffer` 并与引擎 `front` 比较,
+/// 仅对变化格生成 `Change`(行内连续变化合并 Span),跳过中间 `Buffer` 构造。
+///
+/// # 前置
+/// - `front.area` 与 `rb.area` 必须一致(区域变化由调用方走全量路径);
+/// - `dirty` 为行级脏标记:clean 行假定与 `front` 相同,跳过翻译与比较
+///   (调用方须保证该行内容确实未变,否则会漏输出导致渲染残影);
+/// - 合并规则与 `diff.rs::coalesce` 一致:同行内 x 连续变化格合并为
+///   `Change::Span`(≥2 格),单格保持 `Change::Cell`。
+///
+/// # 收益
+/// 生产 v3-engine 路径原先执行“整帧 clone → 逐格转换 → 独立 diff 遍历”
+/// 三次 O(W×H);本函数将转换与比较合并为单遍,且 clean 行零开销。
+pub fn from_ratatui_buffer_diffed(
+    front: &Buffer,
+    rb: &RatBuffer,
+    dirty: &DirtyTracker,
+) -> Vec<Change> {
+    let area = from_ratatui_rect(rb.area);
+    let mut changes = Vec::new();
+    // 同行内连续变化格 run(与 diff.rs 合并规则一致):
+    // 单格 → Change::Cell(免 Vec 分配),≥2 格 → Change::Span(一次 MoveTo)
+    let mut run: Vec<Cell> = Vec::new();
+    let mut run_x = 0u16;
+    let mut run_y = 0u16;
+
+    let content = rb.content();
+    let width = area.width as usize;
+    for row in 0..area.height {
+        // clean 行:假定与 front 相同,整行跳过(调用方保证不变量)
+        if !dirty.is_dirty(row) {
+            flush_run(&mut changes, run_x, run_y, &mut run);
+            continue;
+        }
+        // 行内宽字符追踪:前一格显示宽度 >= 2 时,当前格即其续格
+        // (与 from_ratatui_buffer 同一套规则,保证单遍转换结果一致)
+        let mut prev_wide = false;
+        for col in 0..area.width {
+            let idx = (row as usize) * width + (col as usize);
+            let Some(rcell) = content.get(idx) else {
+                continue;
+            };
+            let symbol = if prev_wide || rcell.skip {
+                prev_wide = false;
+                Cell::WIDE_CONTINUATION
+            } else {
+                let s = rcell.symbol();
+                let ch = s.chars().next().unwrap_or(' ');
+                prev_wide = unicode_width::UnicodeWidthStr::width(s) >= 2;
+                ch
+            };
+            let cell = Cell {
+                symbol,
+                style: from_ratatui_style(rcell.style()),
+            };
+            // 与 front 逐格比较:未变化格不产生输出
+            if front.cells[idx] == cell {
+                flush_run(&mut changes, run_x, run_y, &mut run);
+                continue;
+            }
+            let ax = area.x + col;
+            let ay = area.y + row;
+            // 连续条件:同行且 x 紧接 run 起点 + 已累积长度
+            let contiguous =
+                !run.is_empty() && ay == run_y && ax == run_x.saturating_add(run.len() as u16);
+            if !contiguous {
+                flush_run(&mut changes, run_x, run_y, &mut run);
+                run_x = ax;
+                run_y = ay;
+            }
+            run.push(cell);
+        }
+        // 行尾 flush(跨行不合并)
+        flush_run(&mut changes, run_x, run_y, &mut run);
+    }
+    changes
+}
+
+/// 将累积的连续变化格 flush 为 Change(规则与 diff.rs 一致),并清空 run
+fn flush_run(changes: &mut Vec<Change>, x: u16, y: u16, run: &mut Vec<Cell>) {
+    let cells = std::mem::take(run);
+    match cells.len() {
+        0 => {}
+        1 => changes.push(Change::Cell {
+            x,
+            y,
+            cell: cells.into_iter().next().expect("len==1"),
+        }),
+        _ => changes.push(Change::Span { x, y, cells }),
+    }
 }
 
 #[cfg(test)]
@@ -182,5 +287,28 @@ mod tests {
         let eng = from_ratatui_buffer(&rb);
         assert!(eng.area.is_empty());
         assert!(eng.cells.is_empty());
+    }
+
+    #[test]
+    fn wide_char_continuation_maps_to_sentinel() {
+        use ratatui::widgets::Widget;
+
+        // "中文" 在 ratatui Buffer 中占 4 列:中 + skip + 文 + skip
+        let area = RatRect::new(0, 0, 6, 1);
+        let mut rb = RatBuffer::empty(area);
+        // WHY 用 Paragraph(与生产面板渲染路径一致):按宽度写入宽字符,
+        // 续格符号为空字符串;compat 按"前格宽度 >= 2"定位续格。
+        ratatui::widgets::Paragraph::new("中文").render(area, &mut rb);
+        let eng = from_ratatui_buffer(&rb);
+        assert_eq!(eng.get(0, 0).unwrap().symbol, '中');
+        assert!(
+            eng.get(1, 0).unwrap().is_wide_continuation(),
+            "宽字符第 2 列应映射为续格哨兵(而非空格)"
+        );
+        assert_eq!(eng.get(2, 0).unwrap().symbol, '文');
+        assert!(eng.get(3, 0).unwrap().is_wide_continuation());
+        // 未写入格保持空格(非哨兵)
+        assert_eq!(eng.get(5, 0).unwrap().symbol, ' ');
+        assert!(!eng.get(5, 0).unwrap().is_wide_continuation());
     }
 }

@@ -24,8 +24,8 @@ use crate::focus::FocusManager;
 use crate::panels::{
     BudgetPanel, ChatPanel, ChtcPanel, ClvVectorPanel, DagVizPanel, DecayPanel, EventStreamPanel,
     HealthPanel, HelpPanel, LogPanel, McpNodesPanel, MemoryPanel, MetricsDashboardPanel,
-    OsaSparsePanel, Panel, ParliamentPanel, PvlScorePanel, QuestPanel, ResourceMonitorPanel,
-    RouterPanel, SecurityPanel, SelfAssessmentPanel, TaskManagerPanel,
+    OsaSparsePanel, OverWindowPanel, Panel, ParliamentPanel, PvlScorePanel, QuestPanel,
+    ResourceMonitorPanel, RouterPanel, SecurityPanel, SelfAssessmentPanel, TaskManagerPanel,
 };
 use crate::types::{PanelId, TuiState};
 use event_bus::EventBus;
@@ -114,6 +114,27 @@ pub struct TuiApp {
     ///
     /// WHY Option:测试与普通启动场景可能不需要 EventBus,避免强制依赖。
     event_bus: Option<EventBus>,
+    /// v3-engine M3 输出状态(双缓冲 + 首帧标记;None = 未启用 v3 输出路径)
+    ///
+    /// WHY Option:仅在 `v3-engine` feature 开启且未通过 `CHIMERA_NO_V3_ENGINE`
+    /// 禁用时惰性创建;回退路径(ratatui Terminal::draw)不持有该状态。
+    #[cfg(feature = "v3-engine")]
+    v3_output: Option<crate::engine::output::V3Output>,
+    /// v3-engine 渲染用内存终端(复用避免每帧重建 TestBackend/Terminal)
+    ///
+    /// WHY 复用:render_frame_v3 原先每帧新建 TestBackend + Terminal(整帧
+    /// Cell 分配);提升为字段后仅终端尺寸变化时重建,消除每帧分配开销
+    /// (评估报告 P0-1)。
+    #[cfg(feature = "v3-engine")]
+    v3_term: Option<ratatui::Terminal<ratatui::backend::TestBackend>>,
+    /// 上一轮事件轮询是否无事件(静默帧判定,评估报告 P0-1 DirtyTracker 接线)
+    ///
+    /// WHY 跨帧状态:事件循环中 poll 超时(无键盘/鼠标事件)意味着面板内部
+    /// 状态(选中/滚动)未变;配合 render 前 update 的 dirty_panels 检查,
+    /// 可安全跳过主面板区域行的 compat 转换与 diff 比较,仅保留每帧必变的
+    /// status_bar 行(帧率/计数)。初始 false 保证首帧全量渲染。
+    #[cfg(feature = "v3-engine")]
+    frame_quiescent: bool,
 }
 
 impl TuiApp {
@@ -133,11 +154,11 @@ impl TuiApp {
         data_source: Box<dyn TuiDataSource>,
     ) -> Result<Self, TuiError> {
         config.validate()?;
-        // v2.9.0-omega:注册 22 个面板(23 PanelId 枚举,2 个未注册)。
+        // v2.9.0-omega:注册 23 个面板(24 PanelId 枚举,2 个未注册;P1 新增 OverWindow)。
         // 未注册 PanelId 原因:
         // - Timeline:P7 历史回放引擎(v1.8+) 接口占位,无对应 Panel 实现
         // - Sysinfo:数据由 ResourceMonitorPanel 承载,无需独立面板
-        // FocusManager 循环顺序:Quest → Parliament → ... → OsaSparse → PvlScore → TaskManager → Quest(22 面板循环)。
+        // FocusManager 循环顺序:Quest → Parliament → ... → OsaSparse → PvlScore → TaskManager → OverWindow → Quest(23 面板循环)。
         // WHY MetricsDashboard 加入主循环:与 ResourceMonitorPanel 同属
         // 监控类展示面板,默认进入主循环便于用户 Tab 键直接访问。
         let panels: Vec<Box<dyn Panel>> = vec![
@@ -177,6 +198,9 @@ impl TuiApp {
             // Task 3.9:L10 → L9 向下依赖,任务管理面板
             // 展示 Quest CRUD 控制台 + 四象限稳定分工(ADR-027),数据来源 chimera_mas::quadrant_status()
             Box::new(TaskManagerPanel::new()),
+            // P1(ADR-072):超窗兜底面板 — 展示 OverWindowFallbackTriggered
+            // 数据从 latest_events 派生(零管道侵入,同 SelfAssessment/DagViz),置于循环末尾
+            Box::new(OverWindowPanel::new()),
         ];
         let panel_ids: Vec<PanelId> = panels.iter().map(|p| p.id()).collect();
         let focus_manager = FocusManager::new(panel_ids);
@@ -203,6 +227,12 @@ impl TuiApp {
             // M3b:会话 id 用 uuid v7(时间有序),整个 TuiApp 生命周期复用
             chat_session: ChatSession::new(),
             event_bus: None,
+            #[cfg(feature = "v3-engine")]
+            v3_output: None,
+            #[cfg(feature = "v3-engine")]
+            v3_term: None,
+            #[cfg(feature = "v3-engine")]
+            frame_quiescent: false,
         })
     }
 

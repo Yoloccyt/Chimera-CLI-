@@ -128,6 +128,10 @@ pub enum PanelId {
     /// 展示 Quest CRUD 控制台 + 四象限稳定分工（ADR-027）状态。
     /// 数据来源：`chimera_mas::quadrant_status()`。
     TaskManager,
+    /// 超窗兜底面板 — 展示 OverWindowFallbackTriggered 触发记录(P1,ADR-072)
+    ///
+    /// 数据来源：`latest_events` 过滤超窗触发事件（零管道侵入，同 SelfAssessment/DagViz）。
+    OverWindow,
 }
 
 impl PanelId {
@@ -158,6 +162,7 @@ impl PanelId {
             PanelId::DagViz => "DagViz",
             PanelId::PvlScore => "PvlScore",
             PanelId::TaskManager => "TaskManager",
+            PanelId::OverWindow => "OverWindow",
         }
     }
 
@@ -188,6 +193,7 @@ impl PanelId {
             PanelId::DagViz => " DAG Viz ",
             PanelId::PvlScore => " PVL Score ",
             PanelId::TaskManager => " Task Manager ",
+            PanelId::OverWindow => " OverWindow ",
         }
     }
 
@@ -224,14 +230,15 @@ impl PanelId {
             PanelId::SelfAssessment => PanelId::DagViz,
             PanelId::DagViz => PanelId::PvlScore,
             PanelId::PvlScore => PanelId::TaskManager,
-            PanelId::TaskManager => PanelId::Quest,
+            PanelId::TaskManager => PanelId::OverWindow,
+            PanelId::OverWindow => PanelId::Quest,
         }
     }
 
     /// 切换到上一个面板(循环顺序)
     pub fn prev(&self) -> PanelId {
         match self {
-            PanelId::Quest => PanelId::TaskManager,
+            PanelId::Quest => PanelId::OverWindow,
             PanelId::Parliament => PanelId::Quest,
             PanelId::Budget => PanelId::Parliament,
             PanelId::Memory => PanelId::Budget,
@@ -259,6 +266,7 @@ impl PanelId {
             PanelId::PvlScore => PanelId::DagViz,
             // Task 3.9:TaskManager 位于 PvlScore 之后(循环末尾)
             PanelId::TaskManager => PanelId::PvlScore,
+            PanelId::OverWindow => PanelId::TaskManager,
         }
     }
 }
@@ -962,6 +970,43 @@ pub struct TuiState {
     /// EventStream 面板顶部据此显示 "CRITICAL 事件丢弃: N" 告警行。
     #[serde(default)]
     pub critical_event_dropped_count: u64,
+    // === P2 性能(P-1/P-3):快照 revision 追踪 ===
+    /// 最近一次已同步的 `DataSnapshot.revision`(0 = 尚未同步 / 测试桩)
+    ///
+    /// WHY 性能:事件循环轮询(100ms)快于数据 tick(250ms),revision 未变时
+    /// `TuiApp::update` 跳过整包字段拷贝,EventStream 过滤缓存也以它为失效键。
+    /// 不持久化(serde skip):运行时派生值,重启后从 0 重新开始。
+    #[serde(skip, default)]
+    pub last_snapshot_revision: u64,
+    /// Palette 参数输入流待派发动作(F-5)
+    ///
+    /// palette 选中需 query 的动作(agent.chat / quest.start / overwindow.run)时
+    /// 置位并进入 Insert 参数收集态;提交以 `{"query": text}` 派发后清除,Esc 取消。
+    /// 会话瞬态,不持久化(serde skip)。
+    #[serde(skip, default)]
+    pub pending_action: Option<PendingAction>,
+    // === P1-2(评估报告 v2):TuiActionRequested 本地兜底超时 ===
+    /// 已派发待确认动作的截止时刻(编排器未接线场景的本地兜底)
+    ///
+    /// WHY:dispatch_action 兜底发布 `TuiActionRequested` 时记录
+    /// `now + ACTION_TIMEOUT`;若无消费者(standalone 模式)且超时无
+    /// `TuiActionCompleted/Failed` 回发,`TuiApp::update` 中的超时检测
+    /// 在状态栏提示“编排器未接线”。收到终态反馈时清除,避免误报。
+    /// 会话瞬态,不持久化(serde skip)。
+    #[serde(skip, default)]
+    pub pending_action_deadline: Option<std::time::Instant>,
+}
+
+/// Palette 参数输入流待派发动作(F-5)
+///
+/// 携带动作 id 与触发入口,供 Insert 提交时构造 `{"query": text}` payload 并经
+/// `dispatch_action` 统一派发(三入口一致性;`source` 用于审计与反馈定位)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingAction {
+    /// 动作 id(须存在于 ActionRegistry,如 "agent.chat")
+    pub action_id: String,
+    /// 触发入口(palette 参数流固定为 Palette)
+    pub source: event_bus::ActionSource,
 }
 
 impl TuiState {
@@ -1024,6 +1069,11 @@ impl TuiState {
             clv_heatmap_autoscale: false,
             // P1-W2.2:Critical 旁路通道丢弃计数(0 = 无丢弃)
             critical_event_dropped_count: 0,
+            last_snapshot_revision: 0,
+            // F-5:无待派发参数动作
+            pending_action: None,
+            // P1-2:无待确认动作(超时兜底未启动)
+            pending_action_deadline: None,
         }
     }
 
@@ -1052,19 +1102,27 @@ impl TuiState {
     pub fn load_from_file(path: &std::path::Path) -> Self {
         match std::fs::read_to_string(path) {
             Ok(yaml) => match serde_yaml::from_str::<Self>(&yaml) {
-                Ok(state) => {
+                Ok(saved) => {
                     tracing::info!(
                         path = %path.display(),
                         "TuiState restored from file"
                     );
-                    // 确保关键运行时字段为初始值
+                    // 只恢复"视图/布局字段"(与 `apply_view_fields` 白名单一致):
+                    // 运行时数据(quest_list / latest_events / metrics / histories /
+                    // chat_messages 等)一律重置为初始值,由 DataPipeline 从 event-bus
+                    // 重新填充。WHY:陈旧状态文件(如本机 ~/.chimera/tui_state.yaml 残留
+                    // 的 budget_history / frame_count)若被恢复,会污染新会话的 dirty
+                    // 首帧判定,并破坏测试封闭性(incremental_render_test 曾因此误标
+                    // 无关面板);本实现同时兑现了 save_to_file 文档"只保存布局字段"
+                    // 的契约(旧实现仅重置 4 个字段,语义与文档不符)。
                     Self {
-                        running: true,
-                        latest_events: VecDeque::new(),
-                        popup_stack: crate::popup::PopupStack::new(),
-                        // P1-W2.2:丢弃计数从事件流重新填充,不持久化
-                        critical_event_dropped_count: 0,
-                        ..state
+                        layout_mode: saved.layout_mode,
+                        filter_keyword: saved.filter_keyword,
+                        filter_topic: saved.filter_topic,
+                        filter_level: saved.filter_level,
+                        monitor_window: saved.monitor_window,
+                        clv_heatmap_autoscale: saved.clv_heatmap_autoscale,
+                        ..Self::new()
                     }
                 }
                 Err(e) => {
@@ -1314,10 +1372,11 @@ mod tests {
         assert_eq!(PanelId::Chat.next(), PanelId::SelfAssessment);
         // closure Stage B-10:SelfAssessment → DagViz(DagViz 插入循环末尾)
         assert_eq!(PanelId::SelfAssessment.next(), PanelId::DagViz);
-        // Task 3.7/3.9:DagViz → PvlScore → TaskManager → Quest(循环闭合)
+        // Task 3.7/3.9 + P1:DagViz → PvlScore → TaskManager → OverWindow → Quest(循环闭合)
         assert_eq!(PanelId::DagViz.next(), PanelId::PvlScore);
         assert_eq!(PanelId::PvlScore.next(), PanelId::TaskManager);
-        assert_eq!(PanelId::TaskManager.next(), PanelId::Quest);
+        assert_eq!(PanelId::TaskManager.next(), PanelId::OverWindow);
+        assert_eq!(PanelId::OverWindow.next(), PanelId::Quest);
     }
 
     #[test]
@@ -1350,10 +1409,11 @@ mod tests {
         assert_eq!(PanelId::SelfAssessment.prev(), PanelId::Chat);
         // closure Stage B-10:DagViz → SelfAssessment(循环末尾)
         assert_eq!(PanelId::DagViz.prev(), PanelId::SelfAssessment);
-        // Task 3.7/3.9:TaskManager → PvlScore → DagViz,Quest → TaskManager(循环闭合)
+        // Task 3.7/3.9 + P1:TaskManager → PvlScore → DagViz,Quest → OverWindow(循环闭合)
         assert_eq!(PanelId::TaskManager.prev(), PanelId::PvlScore);
         assert_eq!(PanelId::PvlScore.prev(), PanelId::DagViz);
-        assert_eq!(PanelId::Quest.prev(), PanelId::TaskManager);
+        assert_eq!(PanelId::OverWindow.prev(), PanelId::TaskManager);
+        assert_eq!(PanelId::Quest.prev(), PanelId::OverWindow);
     }
 
     #[test]
@@ -1384,9 +1444,10 @@ mod tests {
             PanelId::SelfAssessment,
             // closure Stage B-10:DagViz 加入往返验证
             PanelId::DagViz,
-            // Task 3.7/3.9:PvlScore/TaskManager 加入往返验证(22 面板循环)
+            // Task 3.7/3.9 + P1:PvlScore/TaskManager/OverWindow 加入往返验证(23 面板循环)
             PanelId::PvlScore,
             PanelId::TaskManager,
+            PanelId::OverWindow,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);
@@ -1689,6 +1750,12 @@ mod state_persistence_tests {
         state.layout_mode = LayoutMode::TriplePane;
         state.filter_keyword = Some("test".to_string());
         state.running = false;
+        // 运行时字段故意塞入非默认值:验证恢复后必须被重置(视图/布局契约)
+        state.budget_history = vec![1, 2, 3];
+        state.latest_events.push_back(NexusEvent::CacheHit {
+            metadata: event_bus::EventMetadata::new("chimera-tui"),
+            cache_key: "roundtrip-key".into(),
+        });
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tui_state.yaml");
@@ -1698,8 +1765,16 @@ mod state_persistence_tests {
         let loaded = TuiState::load_from_file(&path);
         assert_eq!(loaded.layout_mode, LayoutMode::TriplePane);
         assert_eq!(loaded.filter_keyword, Some("test".to_string()));
-        // 运行时字段应重置
+        // 运行时字段应重置(陈旧状态不得污染新会话)
         assert!(loaded.running);
+        assert!(
+            loaded.budget_history.is_empty(),
+            "budget_history 不应从文件恢复"
+        );
+        assert!(
+            loaded.latest_events.is_empty(),
+            "latest_events 不应从文件恢复"
+        );
     }
 
     /// 测试文件不存在时降级为默认状态

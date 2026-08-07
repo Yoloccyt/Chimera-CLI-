@@ -39,6 +39,7 @@
 use chimera_tui::{DataPipeline, DataSourceConfig, EventSubscriber};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use event_bus::{BudgetMetricsPayload, EventBus, EventMetadata, NexusEvent};
+use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
@@ -183,9 +184,77 @@ fn data_pipeline_throughput(c: &mut Criterion) {
     group.finish();
 }
 
+/// bench 3:快照读取开销(隔离测量,排除 tick 等待)
+///
+/// WHY 补全评估盲区:bench 1 把 300ms tick 等待计入每次 iter,快照读取本身
+/// 的成本被固定开销淹没。本 bench 先完成一次"发布 + tick",再在 iter 内只测
+/// `pipeline.snapshot()`——P-1 优化后为 Arc 引用计数递增(原实现为整包深拷贝,
+/// 含 latest_events / quest_list / 历史曲线),直接量化快照读取的边际成本。
+fn snapshot_read_latency(c: &mut Criterion) {
+    let rt = Runtime::new().expect("创建 tokio runtime 失败");
+
+    let mut group = c.benchmark_group("snapshot_read_latency");
+    group.bench_function("after_250_events_tick", |b| {
+        let pipeline = rt.block_on(async {
+            let bus = EventBus::new();
+            let subscriber = EventSubscriber::new(bus.clone());
+            let config = DataSourceConfig {
+                tick_interval_ms: 250,
+                ..Default::default()
+            };
+            let pipeline = DataPipeline::new(subscriber, config);
+
+            for _ in 0..EVENTS_PER_TICK {
+                bus.publish_blocking(black_box(make_budget_event()))
+                    .expect("publish 失败");
+            }
+            tokio::time::sleep(Duration::from_millis(TICK_WAIT_MS)).await;
+            pipeline
+        });
+
+        b.iter(|| {
+            let snapshot = pipeline.snapshot();
+            black_box(snapshot);
+        });
+
+        rt.block_on(async { pipeline.shutdown().await });
+    });
+    group.finish();
+}
+
+/// bench 4:push_history 队首淘汰复杂度(评估报告 P0-2 验收)
+///
+/// VecDeque `push_back`/`pop_front` 为 O(1):不同容量(64/1024/16384)下
+/// 持续 push 的耗时应当近似恒定;若回归为 `Vec::remove(0)` 的 O(n) 实现,
+/// 16384 容量下耗时将随容量显著增长(性能可证伪铁律)。
+fn push_history_scale(c: &mut Criterion) {
+    use chimera_tui::data::pipeline::push_history;
+
+    let mut group = c.benchmark_group("push_history_scale");
+    for &max in &[64usize, 1024, 16384] {
+        group.bench_with_input(BenchmarkId::from_parameter(max), &max, |b, &max| {
+            // 预热至满容量:后续 iter 全部触发队首淘汰路径
+            let mut history: VecDeque<u64> = VecDeque::with_capacity(max);
+            for i in 0..max {
+                push_history(&mut history, i as u64, max);
+            }
+            b.iter(|| {
+                // 满容量下连续 push 64 次:每次触发 pop_front + push_back
+                for i in 0..64u64 {
+                    push_history(&mut history, i, max);
+                }
+                black_box(&history);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     data_pipeline_snapshot_latency,
-    data_pipeline_throughput
+    data_pipeline_throughput,
+    snapshot_read_latency,
+    push_history_scale
 );
 criterion_main!(benches);

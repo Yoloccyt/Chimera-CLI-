@@ -20,6 +20,10 @@ v3-engine = []
 [dependencies]
 # L10 Interface → L1 Core(向下依赖,event-bus 是唯一跨层通道,§2.2 依赖铁律)
 event-bus = { workspace = true }
+# WHY 直接依赖:engine::compat 需按 Unicode 显示宽度定位宽字符续格(ratatui 0.29
+# 渲染不写 skip 标志);unicode-width 已是 ratatui 传递依赖,版本同源零新增下载。
+unicode-width = "0.2"
+
 # nexus-core 为 L1 Core 共享领域类型(Quest/Task 等),L10 向下依赖允许
 nexus-core = { workspace = true }
 # Task 3.2: L10 → L2 向下依赖,SelfAssessmentPanel 调用 current_memory_stage()
@@ -81,11 +85,21 @@ proptest = { workspace = true }
 criterion = { workspace = true }
 # Task 2.3: SQLite 历史持久化测试隔离(每个测试独占临时目录,避免污染)
 tempfile = { workspace = true }
+# engine_compat_test 需复刻"前格宽度 >= 2 定位续格"的等价判定
+unicode-width = "0.2"
 
 # P3.2 性能与压力验证:data_pipeline 测量快照生成延迟,render 测量 5 面板渲染帧时间。
 # harness = false:criterion 自带 main,关闭 libtest 默认 harness 避免冲突。
 [[bench]]
 name = "data_pipeline_bench"
+harness = false
+
+[[bench]]
+name = "panels_scale_bench"
+harness = false
+
+[[bench]]
+name = "v3_output_bench"
 harness = false
 
 [[bench]]
@@ -105,4 +119,10 @@ harness = false
 # v3.1 M1.2:测量 writer 样式去重 + Span 合并后的输出渲染耗时(低带宽关键路径)。
 [[bench]]
 name = "writer_ansi_bench"
+harness = false
+
+# v3-engine 全链路渲染路径(评估报告 P0-1):TestBackend 新建 + draw + clone +
+# compat 转换 + diff 写出的完整链路段量化基线(目标 P95 < 16ms @200x50)。
+[[bench]]
+name = "v3_pipeline_bench"
 harness = false

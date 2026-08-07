@@ -57,27 +57,43 @@ macro_rules! dirty_map {
 impl TuiApp {
     /// 从数据源拉取最新快照并更新内部状态,含 P4.1 脏面板标记检测。
     pub fn update(&mut self) {
+        // P1-2:待确认动作超时检测每帧执行(独立于 revision 跳过——
+        // 编排器未接线时数据可能长期无变化,超时提示仍需按时触发)。
+        self.check_action_timeout();
         match self.data_source.snapshot() {
             Ok(snapshot) => {
+                // P2 性能(P-1):revision 未变化时跳过整帧字段拷贝与 dirty 标记。
+                // WHY 事件循环轮询(100ms)快于数据 tick(250ms),两 tick 之间快照
+                // 内容不变;此前每帧都深拷贝 latest_events/历史曲线,约 60% 的
+                // update 调用是无意义拷贝。revision == 0 表示测试桩/默认快照,
+                // 始终拷贝以保持既有测试语义(增量渲染测试依赖该路径)。
+                if snapshot.revision != 0 && snapshot.revision == self.state.last_snapshot_revision
+                {
+                    return;
+                }
+
                 // P4.1:在覆盖状态前检测哪些面板数据发生变化,先打 dirty 标记
                 self.mark_dirty_panels_from_snapshot(&snapshot);
 
-                self.state.quest_list = snapshot.quest_list;
+                // 快照现为 Arc 共享不可变结构:字段改为 clone 提取
+                // (此前是从管道克隆副本中 move,Arc 化后 move 语义不可用)。
+                self.state.quest_list = snapshot.quest_list.clone();
                 self.state.paused_quest_count = snapshot.paused_quest_count;
-                self.state.budget = snapshot.budget_metrics;
-                self.state.memory_metrics = snapshot.memory_metrics;
-                self.state.security_state = snapshot.security_state;
-                self.state.health_metrics = snapshot.health_metrics;
-                self.state.budget_history = snapshot.budget_history;
-                self.state.memory_history = snapshot.memory_history;
-                self.state.event_rate_history = snapshot.event_rate_history;
-                self.state.latest_events = snapshot.latest_events;
+                self.state.budget = snapshot.budget_metrics.clone();
+                self.state.memory_metrics = snapshot.memory_metrics.clone();
+                self.state.security_state = snapshot.security_state.clone();
+                self.state.health_metrics = snapshot.health_metrics.clone();
+                self.state.budget_history = snapshot.budget_history.clone();
+                self.state.memory_history = snapshot.memory_history.clone();
+                self.state.event_rate_history = snapshot.event_rate_history.clone();
+                // Arc 共享事件流:解引用后拷贝到 TuiState(面板消费 VecDeque 不变)
+                self.state.latest_events = (*snapshot.latest_events).clone();
                 // P2 新增字段同步:DataSnapshot → TuiState
-                self.state.decay_metrics = snapshot.decay_metrics;
-                self.state.router_metrics = snapshot.router_metrics;
-                self.state.mcp_nodes = snapshot.mcp_nodes;
-                self.state.chtc_state = snapshot.chtc_state;
-                self.state.decay_history = snapshot.decay_history;
+                self.state.decay_metrics = snapshot.decay_metrics.clone();
+                self.state.router_metrics = snapshot.router_metrics.clone();
+                self.state.mcp_nodes = snapshot.mcp_nodes.clone();
+                self.state.chtc_state = snapshot.chtc_state.clone();
+                self.state.decay_history = snapshot.decay_history.clone();
                 // P8 ResourceMonitor 面板字段同步:DataSnapshot → TuiState
                 // M3 monitor.pause_sampling:暂停时跳过覆盖,保留冻结快照供检视(UI 本地冻结)
                 if !self.state.monitor_paused {
@@ -87,7 +103,7 @@ impl TuiApp {
                 // Task 6:同步 tick 模式,供状态栏展示
                 self.state.tick_mode = snapshot.tick_mode;
                 // M3b:同步对话历史与状态到 TuiState(供 Chat 面板渲染)
-                self.state.chat_messages = snapshot.chat_messages;
+                self.state.chat_messages = snapshot.chat_messages.clone();
                 self.state.chat_status = snapshot.chat_status;
                 // P0 交互链:新 Action 终态反馈(seq 递增)时上屏 status_message,
                 // 比对 seq 只上屏一次;错误用 Error 级,成功用 Info 级。
@@ -101,9 +117,13 @@ impl TuiApp {
                         self.state.status_message = Some((msg.clone(), severity));
                     }
                     self.state.last_action_feedback_seq = snapshot.action_feedback_seq;
+                    // P1-2:已收到动作终态反馈,清除超时计时(避免误报)
+                    self.state.pending_action_deadline = None;
                 }
                 // P1-W2.2:同步 Critical 旁路通道丢弃计数(EventStream 面板告警显示)
                 self.state.critical_event_dropped_count = snapshot.critical_event_dropped_count;
+                // P2 性能:记录已同步的 revision,供 update 跳过与面板过滤缓存失效判断
+                self.state.last_snapshot_revision = snapshot.revision;
             }
             Err(e) => {
                 // M1 清理项 #4:数据源失败时向用户展示状态栏警告,而非静默忽略。
@@ -150,9 +170,6 @@ impl TuiApp {
             security_state: security_state => PanelId::Security;
             // health_metrics + event_rate_history + paused_quest_count → Health
             health_metrics: health_metrics, event_rate_history: event_rate_history, paused_quest_count: paused_quest_count => PanelId::Health;
-            // WHY latest_events 同时驱动 Parliament / Log / EventStream 三面板,
-            // 任一变化都需标记这三个面板,避免事件流面板错过新事件。
-            latest_events: latest_events => PanelId::Parliament, PanelId::Log, PanelId::EventStream;
             // decay_metrics + decay_history → Decay
             decay_metrics: decay_metrics, decay_history: decay_history => PanelId::Decay;
             // router_metrics → Router
@@ -177,6 +194,16 @@ impl TuiApp {
         {
             self.state.mark_dirty(PanelId::ResourceMonitor);
             self.state.mark_dirty(PanelId::Health);
+        }
+
+        // WHY latest_events 同时驱动 Parliament / Log / EventStream 三面板,
+        // 任一变化都需标记这三个面板,避免事件流面板错过新事件。
+        // 手动比较而非 dirty_map! 宏:snapshot 侧为 Arc<VecDeque> 与 state 侧
+        // VecDeque 类型不同,宏的 `!=` 无法直接比较,解引用后逐条比较。
+        if self.state.latest_events != (*snapshot.latest_events) {
+            self.state.mark_dirty(PanelId::Parliament);
+            self.state.mark_dirty(PanelId::Log);
+            self.state.mark_dirty(PanelId::EventStream);
         }
     }
 

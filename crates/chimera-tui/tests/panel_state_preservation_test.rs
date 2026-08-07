@@ -70,8 +70,10 @@ impl MockDataSource {
 }
 
 impl chimera_tui::TuiDataSource for MockDataSource {
-    fn snapshot(&self) -> Result<chimera_tui::DataSnapshot, chimera_tui::TuiError> {
-        Ok(self.snapshot.clone())
+    fn snapshot(
+        &self,
+    ) -> Result<std::sync::Arc<chimera_tui::DataSnapshot>, chimera_tui::TuiError> {
+        Ok(std::sync::Arc::new(self.snapshot.clone()))
     }
 
     fn config(&self) -> &chimera_tui::DataSourceConfig {
@@ -189,7 +191,7 @@ fn log_panel_scroll_state_preserved_across_panel_switch() {
         .collect();
 
     let snapshot = chimera_tui::DataSnapshot {
-        latest_events: VecDeque::from(events),
+        latest_events: std::sync::Arc::new(VecDeque::from(events)),
         ..Default::default()
     };
 
@@ -250,7 +252,7 @@ fn multiple_panels_preserve_independent_state() {
             sample_quest("q2", "Quest Two"),
             sample_quest("q3", "Quest Three"),
         ],
-        latest_events: VecDeque::from([
+        latest_events: std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("evt-a"),
                 cache_key: "event-a".into(),
@@ -263,7 +265,7 @@ fn multiple_panels_preserve_independent_state() {
                 metadata: EventMetadata::new("evt-c"),
                 cache_key: "event-c".into(),
             },
-        ]),
+        ])),
         ..Default::default()
     };
 
