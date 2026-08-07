@@ -79,7 +79,10 @@ ndarray = { version = "0.16", features = ["serde"] }
 # tract: 纯 Rust ONNX 推理引擎，无 C 依赖，跨平台兼容
 # WHY 添加到 workspace: nmc-encoder 需 ONNX Runtime 执行图像/视频/音频语义嵌入推理，
 # ort 仅支持 MSVC 工具链，tract 为纯 Rust 实现，与 forbid(unsafe_code) 哲学一致
-tract-onnx = "0.21"
+# WHY 0.22 而非 0.21: RUSTSEC-2026-0217(tract-nnef 0.21.10 整数溢出 OOB read,
+# 2026-06-18)修复需要 tract-nnef >=0.21.16,但 tract-onnx 0.21.10 锁定 pre-release
+# 依赖无法满足;0.22 线(tract-nnef >=0.22.2)含修复
+tract-onnx = "0.22"
 # image: 图像解码库，支持 PNG/JPEG/WebP 格式解码与缩放
 # WHY 添加到 workspace: nmc-encoder 的图像预处理需将原始字节解码为 RGB 像素矩阵，
 # 统一在 workspace 声明版本避免与其他 crate 冲突
