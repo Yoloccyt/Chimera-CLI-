@@ -444,7 +444,10 @@ async fn test_pending_count_after_abort() {
     let protocol = QeepProtocol::new(scaled_timeout!(30));
 
     let handle = protocol.entangle_spawn(async {
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        // ultra-plan(2026-08-07):10s 仅为"abort 时任务仍在运行"的保守上界
+        // (P9-T3 Category B 重评),abort 发生在 spawn 后 ~10ms,scale=0.1 时 1s
+        // 余量充足(1000ms vs 60ms 握手窗口);缺省 1.0 与原行为完全等价。
+        tokio::time::sleep(scaled_timeout!(10)).await;
         Ok(())
     });
 

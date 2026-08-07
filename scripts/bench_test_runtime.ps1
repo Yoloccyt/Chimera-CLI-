@@ -56,15 +56,19 @@ function Parse-TopTests {
     param([string]$ReportPath, [int]$TopN = 10)
     if (-not (Test-Path $ReportPath)) { return "[]" }
     try {
-        $data = Get-Content $ReportPath -Raw | ConvertFrom-Json
+        # nextest libtest-json-plus 输出为 JSON Lines:
+        # {"type":"test","event":"ok","name":"...","exec_time":<secs>}
+        # 2026-08-07 ultra-plan:修复原单 JSON 文档假设(实际为 JSONL)。
         $rows = @()
-        foreach ($t in $data.'rust-tests') {
-            if ($t.status -ne "PASS") { continue }
-            if (-not $t.elapsed) { continue }
-            $rows += [PSCustomObject]@{
-                binary = $t.binary
-                test   = $t.name
-                elapsed = $t.elapsed
+        foreach ($line in Get-Content $ReportPath) {
+            if ($line -match '"type":"test","event":"ok"') {
+                $t = $line | ConvertFrom-Json
+                if ($null -eq $t.exec_time) { continue }
+                $rows += [PSCustomObject]@{
+                    binary  = ($t.name -split '\$')[0]
+                    test    = $t.name
+                    elapsed = [double]$t.exec_time
+                }
             }
         }
         $top = $rows | Sort-Object elapsed -Descending | Select-Object -First $TopN
@@ -129,6 +133,9 @@ function Run-Mode {
             $bp = "5"
             $jsonPath = Join-Path $ReportDir "nextest-fast.json"
             $extraArgs = @("--exclude","chimera-e2e-tests")
+            # ultra-plan:与 ci.yml 对齐,mcp-mesh 1000 事务测试在快轨收敛到 100
+            # (缺省 1000 spec 语义由 full 档/完整验收档承担)
+            $env:CHIMERA_MCP_TXN_COUNT = "100"
         }
         "full" {
             $profile = "default"
@@ -136,13 +143,18 @@ function Run-Mode {
             $bp = "60"
             $jsonPath = Join-Path $ReportDir "nextest-full.json"
             $extraArgs = @()
+            # ultra-plan:full 档恢复 spec 默认(1000 次事务全量验证)
+            Remove-Item Env:CHIMERA_MCP_TXN_COUNT -ErrorAction SilentlyContinue
         }
         "stress" {
             $profile = "stress"
             $scale = "1.0"
             $bp = "60"
             $jsonPath = Join-Path $ReportDir "nextest-stress.json"
-            $extraArgs = @()
+            # ultra-plan:与 stress.yml 对齐 —— 仅跑 stress binary(
+            # 1000-iter 压测标了 #[ignore],需 --run-ignored all 显式包含;
+            # 原实现 extraArgs 为空会误跑全 workspace 常规测试)。
+            $extraArgs = @("-E", "binary(/stress/)", "--run-ignored", "all")
         }
     }
 
@@ -151,11 +163,17 @@ function Run-Mode {
 
     $env:CHIMERA_TEST_TIMEOUT_SCALE = $scale
     $env:CHIMERA_BACKPRESSURE_SECS = $bp
+    # ultra-plan:libtest-json 为 nextest 实验特性,需显式开启(2026-08-07 实测缺省报错)
+    $env:NEXTEST_EXPERIMENTAL_LIBTEST_JSON = '1'
 
     $startTs = Get-Date
     $logFile = Join-Path $ReportDir "nextest-$Mode.stdout.log"
     $errFile = Join-Path $ReportDir "nextest-$Mode.stderr.log"
-    & cargo nextest run --profile $profile --no-fail-fast --message-format json @extraArgs *>$errFile | Tee-Object -FilePath $logFile | Out-Null
+    # ultra-plan 修复:原 `*>` 把所有流重定向后管道为空,Tee-Object 收不到数据;
+    # 改为 `2>`(stderr 进文件),stdout(JSON Lines)走管道进 logFile。
+    # 另:--exclude 在 nextest 0.9.143 需搭配 --workspace;--message-format json 非法,
+    # 修正为 libtest-json-plus。
+    & cargo nextest run --workspace --profile $profile --no-fail-fast --message-format libtest-json-plus @extraArgs 2>$errFile | Tee-Object -FilePath $logFile | Out-Null
     $endTs = Get-Date
     $wallSecs = ($endTs - $startTs).TotalSeconds
 

@@ -686,12 +686,47 @@ impl Sandbox {
             cmd.kill_on_drop(true);
 
             // WHY: 超时保护 — 防止恶意命令永久阻塞(F-002)
-            match tokio::time::timeout(self.timeout, cmd.output()).await {
+            // 2026-08-07 ultra-plan 修复:原 `cmd.output()` 在超时后无法访问 child 句柄,
+            // 只能依赖 kill_on_drop 杀直接子进程;Windows 上 `cmd /C <long-cmd>` 的孙进程
+            // (如 ping)不随父进程退出,既造成进程泄漏(违背沙箱"超时即终止"承诺),
+            // 又阻塞 tokio current_thread runtime 的 drop(blocking 清理等待孙进程自然
+            // 退出,实测 1s 超时测试被拖至 ~29s)。重构为 spawn + 手动收集输出,超时后
+            // 显式终止整个进程树,把清理时间收敛到 ~1s(probe 实测 29.3s → 1.35s)。
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| SecCoreError::SandboxError(format!("进程启动失败: {e}")))?;
+
+            // 取走 stdout/stderr 管道:输出收集与 wait 并行,且不消费 child 本体,
+            // 保证超时后仍可访问 child 做进程树清理(对比 wait_with_output 按值消费)。
+            let mut stdout_pipe = child.stdout.take();
+            let mut stderr_pipe = child.stderr.take();
+
+            let collect = async {
+                let mut stdout_buf = Vec::new();
+                let mut stderr_buf = Vec::new();
+                if let Some(s) = stdout_pipe.as_mut() {
+                    tokio::io::AsyncReadExt::read_to_end(s, &mut stdout_buf).await?;
+                }
+                if let Some(e) = stderr_pipe.as_mut() {
+                    tokio::io::AsyncReadExt::read_to_end(e, &mut stderr_buf).await?;
+                }
+                let status = child.wait().await?;
+                Ok::<std::process::Output, std::io::Error>(std::process::Output {
+                    status,
+                    stdout: stdout_buf,
+                    stderr: stderr_buf,
+                })
+            };
+
+            // match 作为 else 块最终表达式(与路径 A 的 match 结构一致)
+            match tokio::time::timeout(self.timeout, collect).await {
                 Ok(Ok(output)) => output,
                 Ok(Err(e)) => {
                     return Err(SecCoreError::SandboxError(format!("进程执行失败: {e}")));
                 }
                 Err(_) => {
+                    // 超时:先终止整个进程树再返回超时错误(修复进程泄漏)
+                    kill_process_tree(&mut child).await?;
                     return Err(SecCoreError::SandboxTimeout {
                         timeout: self.timeout,
                         program: spec.program.clone(),
@@ -735,6 +770,39 @@ fn compute_audit_hash(exit_code: i32, stdout: &str, stderr: &str, duration: Dura
     hasher.update(stderr.as_bytes());
     hasher.update(duration.as_nanos().to_le_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// 终止整个进程树(超时清理路径)
+///
+/// WHY: `kill_on_drop` 只终止直接子进程;Windows 上 `cmd /C <long-cmd>` 的孙进程
+/// (如 ping)不随父进程退出。若不清理,泄漏进程会阻塞 tokio runtime 的 blocking
+/// 清理(实测 1s 超时测试被拖至 ~29s),且违背沙箱"超时即终止"的安全承诺。
+/// Windows 用 `taskkill /T`(终止进程树);Unix 直接 kill(目标命令为单进程)。
+#[cfg(windows)]
+async fn kill_process_tree(child: &mut tokio::process::Child) -> Result<(), SecCoreError> {
+    let pid = child.id().ok_or_else(|| {
+        SecCoreError::SandboxError("子进程已退出,无法获取 PID 做进程树清理".to_string())
+    })?;
+    // taskkill /PID <pid> /T /F:终止 pid 及其全部后代进程
+    let status = TokioCommand::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()
+        .await
+        .map_err(|e| SecCoreError::SandboxError(format!("taskkill 失败: {e}")))?;
+    if !status.success() {
+        // taskkill 失败(进程可能已自行退出),降级为直接 kill
+        let _ = child.kill().await;
+    }
+    // 等待子进程退出,确保清理完成(进程已死,立即返回)
+    let _ = child.wait().await;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+async fn kill_process_tree(child: &mut tokio::process::Child) -> Result<(), SecCoreError> {
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    Ok(())
 }
 
 /// 从 CommandSpec 构造 ASA 审计输入 — 用于 Parliament 档前置审计(P1-W3.2 / D6 修复)。

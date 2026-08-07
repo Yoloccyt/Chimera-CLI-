@@ -243,11 +243,23 @@ async fn test_superposition_query_five_servers_fanout() {
 
 #[tokio::test]
 async fn test_1000_transactions_all_publish_events() {
-    // 串行 1000 次事务总耗时:单跑实测约 49s,全量并行(--jobs 2)下可超 60s。
+    // 串行事务总耗时:2026-08-07 实测 ~94ms/次(1000 次 ≈ 93.7s)。
     // 需配置远超事务总耗时的心跳超时,避免慢速环境下心跳监控误判
     // ServerUnreachable(2026-08-02 全量验证实证:60s 超时在并行负载下被触发)。
+    // ultra-plan(2026-08-07):事务数参数化 —— CHIMERA_MCP_TXN_COUNT 缺省 1000
+    // (spec 语义不变,完整验收档全量验证);CI fast 档注入小值(如 100)缩短 PR
+    // 反馈时间;事件流连续性语义在任意 N 下等价(逐事务事件计数断言)。
+    let total: u32 = std::env::var("CHIMERA_MCP_TXN_COUNT")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(1000);
     let config = MeshConfig {
         heartbeat_timeout_ms: 300_000, // 5min,远大于任何负载下的事务总耗时
+        // ultra-plan(2026-08-07):事务超时从默认 200ms 上调 —— 16 线程全并行
+        // (8916 测试同跑)下 CPU 竞争使单事务可超 200ms,默认值触发 TransactionTimeout
+        // flaky(实测 fast 档失败,事务 ID 019fda14-... timeout_ms: 200)。
+        // 30s 远大于单跑 94ms/事务,且仍能拦住真实死锁(对比 gather 场景的 300ms deadline)。
+        transaction_timeout_ms: 30_000,
         durable: false,                // 禁用 WAL,1000 次事务避免磁盘 IO 累积延迟
         ..Default::default()
     };
@@ -259,9 +271,8 @@ async fn test_1000_transactions_all_publish_events() {
             .expect("注册失败");
     }
     let mut rx = bus.subscribe();
-    let total = 1000u32;
 
-    // 串行执行 1000 次事务(避免并发竞争事件丢失)
+    // 串行执行 total 次事务(避免并发竞争事件丢失)
     for _ in 0..total {
         let participants: Vec<String> = (0..5).map(|i| format!("s-{i}")).collect();
         mesh.execute_transaction(participants, "event-stream".into())
@@ -269,7 +280,7 @@ async fn test_1000_transactions_all_publish_events() {
             .expect("事务失败");
     }
 
-    // 验证收到 1000 个事件
+    // 验证收到 total 个事件
     let mut count = 0u32;
     while let Ok(event) = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
         match event {

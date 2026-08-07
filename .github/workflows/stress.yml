@@ -43,6 +43,9 @@ jobs:
       # 但允许 workflow_dispatch 覆盖。
       CHIMERA_TEST_TIMEOUT_SCALE: ${{ github.event.inputs.scale || '1.0' }}
       CHIMERA_BACKPRESSURE_SECS: '60'  # 压测档背压回到 spec 默认 60s
+      # ultra-plan:libtest-json-plus 为实验特性需显式开启
+      # (2026-08-07 修复:原 --message-format json 在 nextest 0.9.x 非法)。
+      NEXTEST_EXPERIMENTAL_LIBTEST_JSON: '1'
     steps:
       - uses: actions/checkout@v4
 
@@ -66,14 +69,16 @@ jobs:
         #     (包括 stress_test, week7_stress, token_efficiency_stress)
         #   - --profile stress 走 .config/nextest.toml 中的 stress profile 配置
         #     (test-threads = 2 防 I/O 抖动,final-status-level = fail)
-        #   - --include-ignored:1000-iter 压测标了 #[ignore],需显式包含
+        #   - --run-ignored all:1000-iter 压测标了 #[ignore],需显式包含
+        #     (2026-08-07 ultra-plan 修复:原 --include-ignored 为 cargo test 语法,
+        #     nextest 0.9.x 报 unexpected argument,本通道从未真正运行过压测)
         run: |
           cargo nextest run \
             --profile stress \
             -E 'binary(/stress/)' \
-            --include-ignored \
+            --run-ignored all \
             --no-fail-fast \
-            --message-format json \
+            --message-format libtest-json-plus \
             2>nextest-stress.stderr.log \
             | tee nextest-stress.stdout.log
 
@@ -82,7 +87,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p docs/reports
-          cp -f nextest-stress.json docs/reports/nextest-stress.json 2>/dev/null || true
+          # ultra-plan:nextest JSON 输出在 stdout(JSON Lines),stdout.log 即数据源;
+          # 原 cp nextest-stress.json 源文件不存在(仅 stdout 有数据),报告从未生成。
+          cp -f nextest-stress.stdout.log docs/reports/nextest-stress.json 2>/dev/null || true
           echo "Stress run completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             > docs/reports/stress-run-summary.txt
           echo "scale=${{ env.CHIMERA_TEST_TIMEOUT_SCALE }}" \

@@ -99,28 +99,30 @@ parse_top_tests() {
     python3 - "$report_path" "$top_n" <<'PY' 2>/dev/null || echo "[]"
 import json
 import sys
+# ultra-plan 2026-08-07:nextest libtest-json-plus 输出为 JSON Lines,
+# 单测试行形如 {"type":"test","event":"ok","name":"...","exec_time":<secs>}
 try:
-    with open(sys.argv[1]) as f:
-        data = json.load(f)
     top_n = int(sys.argv[2])
-    rust_tests = data.get("rust-tests", [])
     rows = []
-    for t in rust_tests:
-        if t.get("status") != "PASS":
-            continue
-        elapsed = t.get("elapsed")
-        if elapsed is None:
-            continue
-        binary = t.get("binary", "?")
-        name = t.get("name", "?")
-        rows.append((binary, name, elapsed))
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if '"type":"test","event":"ok"' not in line:
+                continue
+            t = json.loads(line)
+            elapsed = t.get("exec_time")
+            if elapsed is None:
+                continue
+            name = t.get("name", "?")
+            binary = name.split("$")[0]
+            rows.append((binary, name, elapsed))
     rows.sort(key=lambda r: r[2], reverse=True)
     top = rows[:top_n]
     print(json.dumps([
         {"binary": b, "test": n, "elapsed_secs": round(e, 3)}
         for (b, n, e) in top
     ]))
-except Exception as e:
+except Exception:
     print("[]")
 PY
 }
@@ -200,7 +202,10 @@ run_mode() {
             bp_secs="60"
             json_path="${REPORT_DIR}/nextest-stress.json"
             # P9-T2: stress 档仅跑 stress test binary
-            extra_args=(-E 'binary(/stress/)')
+            # ultra-plan:补 --run-ignored all —— 1000-iter 压测标了 #[ignore],
+            # 缺省不包含则压测核心全部被跳过(与 stress.yml 对齐;
+            # nextest 语法为 --run-ignored,非 cargo test 的 --include-ignored)。
+            extra_args=(-E 'binary(/stress/)' --run-ignored all)
             ;;
         *)
             echo "[ERROR] 未知模式: ${mode} (fast|full|stress)" >&2
@@ -211,14 +216,19 @@ run_mode() {
     echo "=== 模式: ${mode} | profile: ${profile} | scale: ${scale} | bp: ${bp_secs}s ==="
     echo "    输出: ${json_path}"
 
+    # ultra-plan 2026-08-07 修复:--message-format json 非法(nextest 0.9.x 支持
+    # human/libtest-json/libtest-json-plus);libtest-json 为实验特性需 env 开启;
+    # --exclude 需搭配 --workspace。
     local start_ts; start_ts="$(now_ts)"
 
     CHIMERA_TEST_TIMEOUT_SCALE="${scale}" \
     CHIMERA_BACKPRESSURE_SECS="${bp_secs}" \
+    NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1 \
     cargo nextest run \
+        --workspace \
         --profile "${profile}" \
         --no-fail-fast \
-        --message-format json \
+        --message-format libtest-json-plus \
         "${extra_args[@]}" \
         2>"${REPORT_DIR}/nextest-${mode}.stderr.log" \
         | tee "${REPORT_DIR}/nextest-${mode}.stdout.log" \

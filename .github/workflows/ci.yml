@@ -31,7 +31,9 @@ jobs:
   check:
     name: fmt · check · clippy · test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # WHY 30→15 (2026-08-07 ultra-plan):快轨实测典型 2-4min,15min 余量 3-7 倍;
+    # 收紧后测试膨胀(慢测试回归)早期失败,防未来静默膨胀拖慢 PR 反馈。
+    timeout-minutes: 15
     # WHY: sccache 编译缓存(跨 job 共享编译产物,与 CARGO_INCREMENTAL=0 不冲突;
     # 仅在 CI 启用,本地不硬编码以避免破坏 Windows GNU 工具链)。
     env:
@@ -89,6 +91,9 @@ jobs:
         env:
           CHIMERA_BACKPRESSURE_SECS: '5'
           CHIMERA_TEST_TIMEOUT_SCALE: '0.1'
+          # ultra-plan: mcp-mesh 1000 次事务集成测试参数化(缺省 1000,快轨 100)
+          # 事件流连续性语义在任意 N 下等价(见 integration.rs 测试注释)。
+          CHIMERA_MCP_TXN_COUNT: '100'
         run: cargo nextest run --profile ci-fast -E 'not binary(/stress/)' --no-fail-fast
 
       # WHY: sccache 命中率统计(始终运行,即便测试失败也能观察缓存效果)。
@@ -106,7 +111,9 @@ jobs:
   e2e:
     name: test (E2E/压测 target)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # WHY 30→15 (2026-08-07 ultra-plan):e2e 档典型 3-5min,15min 余量充足;
+    # 与 check job 同步收紧,防测试膨胀回归。
+    timeout-minutes: 15
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_CACHE: 'true'
@@ -134,6 +141,8 @@ jobs:
         env:
           CHIMERA_BACKPRESSURE_SECS: '5'
           CHIMERA_TEST_TIMEOUT_SCALE: '0.1'
+          # ultra-plan: 同上,快轨收敛 mcp-mesh 事务集成测试。
+          CHIMERA_MCP_TXN_COUNT: '100'
         run: cargo nextest run -p chimera-e2e-tests -E 'not binary(/stress/)' --no-fail-fast
 
   # ============================================================
