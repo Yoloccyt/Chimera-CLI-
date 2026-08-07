@@ -4,13 +4,11 @@ class Chimera < Formula
   version "2.21.0-omega"
   license "MIT"
 
-  # 2026-08-07 v2.21.0-omega 同步:version 已更新;下方 sha256 需在 tag 推送后从
-  # GitHub Release 的 checksums.txt 获取(chimera-macos-aarch64 / chimera-macos-x86_64),
-  # 本地 Windows 环境无法构建 macOS 产物,由发布后同步步骤补填。
+  # 2026-08-07 v2.21.0-omega 同步:sha256 取自 GitHub Release checksums.txt(发布后同步)。
 
   if Hardware::CPU.arm?
     url "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v#{version}/chimera-macos-aarch64"
-    sha256 "bbbb76197ea0b1a9298998e969b46025cd17a8c4fa53de37ba730bed02f4e5b6"
+    sha256 "d320fa63a16bb2d4de9da8d1bb954d9e5f5beb1b24b1ecd00d8a9d11dbf43f1c"
 
     livecheck do
       url :stable
@@ -18,7 +16,7 @@ class Chimera < Formula
     end
   else
     url "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v#{version}/chimera-macos-x86_64"
-    sha256 "58c4940c7b984340a7350b9cdd8e48e24717bc6c29462b61ad090cfffc05da84"
+    sha256 "7426dfd1ae470f97eca2991a4c280bafd5f3902897eff964d1398d1a3bd905dd"
   end
 
   def install

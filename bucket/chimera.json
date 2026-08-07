@@ -6,7 +6,7 @@
     "architecture": {
         "64bit": {
             "url": "https://github.com/Yoloccyt/Chimera-CLI-/releases/download/v2.21.0-omega/chimera-windows-x86_64.exe",
-            "hash": "c2ba7eb45f6b3a7b2c2bf378577f6bca60875496f1317fbe399d35e1b1cd0a2a"
+            "hash": "d29cc11d7a9524500adf06dad44a53e51183bd2b032261822b794ab89030bfd9"
         }
     },
     "bin": [
