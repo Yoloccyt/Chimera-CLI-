@@ -157,8 +157,8 @@ fi
 #   - physical = number of distinct ADR main numbers with physical files
 #   - GAP only if declared < physical (real undercount)
 if [ ! -f "docs/architecture/adr_index.md" ]; then
-    report+=("[GAP-D2] missing document: docs/architecture/adr_index.md")
-    status=1
+    # 2026-08-07 适配: 同 B/C —— gitignore *.md 策略下缺失文档降级为 warn。
+    report+=("[D2-warn] missing document: docs/architecture/adr_index.md (gitignore *.md 策略,仅本地维护,跳过)")
 else
     # Use python3 for robust CJK+ASCII regex matching
     declared_total=$(python3 -c "
@@ -200,15 +200,16 @@ for entry in "${required_dirs[@]}"; do
     dir="${entry%%:*}"
     purpose="${entry#*:}"
     if [ ! -d "$dir" ]; then
-        report+=("[GAP-E1] CONVENTIONS.md declared subdir missing: ${dir} (${purpose})")
-        status=1
+        # 2026-08-07 适配: 文档目录仅存于本地(gitignore *.md 策略,远程无 md 文件即无目录),
+        # 降级为 warn 而非阻断。
+        report+=("[E1-warn] CONVENTIONS.md declared subdir missing: ${dir} (${purpose}; gitignore *.md 策略,仅本地维护,跳过)")
     fi
 done
 
 # E2. SoT policy file existence
 if [ ! -f "docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md" ]; then
-    report+=("[GAP-E2] missing policy file: docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md")
-    status=1
+    # 2026-08-07 适配: 同 E1 —— gitignore *.md 策略下仅本地维护,降级为 warn。
+    report+=("[E2-warn] missing policy file: docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md (gitignore *.md 策略,仅本地维护,跳过)")
 fi
 
 # =============================================================================

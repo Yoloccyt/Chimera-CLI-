@@ -179,8 +179,8 @@ if (Test-Path 'docs/architecture/adr_index.md') {
         $report += '[D2-INFO] adr_index.md declares ' + $declaredTotal + ' ADRs, disk has ' + $adrMainCount + ' main numbers (' + $reserved + ' reserved/historical, expected)'
     }
 } else {
-    $report += '[GAP-D2] missing document: docs/architecture/adr_index.md'
-    $status = 1
+    # 2026-08-07 适配: 同 B/C —— gitignore *.md 策略下缺失文档降级为 warn。
+    $report += '[D2-warn] missing document: docs/architecture/adr_index.md (gitignore *.md 策略,仅本地维护,跳过)'
 }
 
 # =============================================================================
@@ -196,15 +196,16 @@ $requiredDirs = @(
 )
 foreach ($d in $requiredDirs) {
     if (-not (Test-Path $d.Path)) {
-        $report += '[GAP-E1] CONVENTIONS.md declared subdir missing: ' + $d.Path + ' (' + $d.Purpose + ')'
-        $status = 1
+        # 2026-08-07 适配: 文档目录仅存于本地(gitignore *.md 策略,远程无 md 文件即无目录),
+        # 降级为 warn 而非阻断。
+        $report += '[E1-warn] CONVENTIONS.md declared subdir missing: ' + $d.Path + ' (' + $d.Purpose + '; gitignore *.md 策略,仅本地维护,跳过)'
     }
 }
 
 # E2. SoT policy file existence
 if (-not (Test-Path 'docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md')) {
-    $report += '[GAP-E2] missing policy file: docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md'
-    $status = 1
+    # 2026-08-07 适配: 同 E1 —— gitignore *.md 策略下仅本地维护,降级为 warn。
+    $report += '[E2-warn] missing policy file: docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md (gitignore *.md 策略,仅本地维护,跳过)'
 }
 
 # =============================================================================
