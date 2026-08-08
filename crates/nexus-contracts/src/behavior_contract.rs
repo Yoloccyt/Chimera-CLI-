@@ -144,6 +144,48 @@ impl BehaviorContract {
             && self.postconditions.is_empty()
             && self.invariants.is_empty()
     }
+
+    /// 强制层校验（Milestone B-3c，九层防御 L0 补齐）
+    ///
+    /// 给定执行观测到的"已满足断言"集合，校验契约全部断言（前置 + 后置 +
+    /// 不变量）是否被覆盖。观测条目按**包含匹配**（断言为自然语言，观测
+    /// 侧可能携带上下文后缀）。
+    ///
+    /// # 返回
+    /// - `Satisfied`：全部断言被观测覆盖
+    /// - `Violated { missing }`：未被覆盖的断言列表（消费方应发布
+    ///   FormalViolation 事件并走审议，见 parliament::formal_violation）
+    ///
+    /// # 复杂度
+    /// O(断言数 × 观测数)——契约断言数量级小（个位数），线性足够。
+    pub fn enforce(&self, observed: &[String]) -> ContractCheckOutcome {
+        let covered = |assertion: &str| observed.iter().any(|o| o.contains(assertion));
+        let missing: Vec<String> = self
+            .preconditions
+            .iter()
+            .chain(self.postconditions.iter())
+            .chain(self.invariants.iter())
+            .filter(|a| !covered(a))
+            .cloned()
+            .collect();
+        if missing.is_empty() {
+            ContractCheckOutcome::Satisfied
+        } else {
+            ContractCheckOutcome::Violated { missing }
+        }
+    }
+}
+
+/// 强制层校验结果（Milestone B-3c）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContractCheckOutcome {
+    /// 全部断言满足
+    Satisfied,
+    /// 存在未覆盖断言（消费方应发布 FormalViolation 事件）
+    Violated {
+        /// 未被观测覆盖的断言列表
+        missing: Vec<String>,
+    },
 }
 
 #[cfg(test)]

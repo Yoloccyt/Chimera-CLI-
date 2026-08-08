@@ -486,6 +486,9 @@ impl MembraneFilter {
             | NexusEvent::QuestCancelled { .. }
             | NexusEvent::QuestPaused { .. }
             | NexusEvent::QuestResumed { .. }
+            | NexusEvent::ResourceRecovered { .. }
+            // Milestone B-3c: 行为契约违反（L8 Parliament 审议入口）
+            | NexusEvent::FormalViolation { .. }
             | NexusEvent::VoteCastRequested { .. }
             | NexusEvent::RefreshStateRequested { .. }
             // Agent 协作事件(外环 L9 chimera-mas 自治处理)

@@ -177,6 +177,10 @@ impl NexusEvent {
             | Self::RefreshStateRequested { .. }
             | Self::QuestPaused { .. }
             | Self::QuestResumed { .. }
+            // Milestone B-2: Ambient 资源恢复（与 BudgetExceeded 成对）
+            | Self::ResourceRecovered { .. }
+            // Milestone B-3c: 行为契约违反（L8 审议）
+            | Self::FormalViolation { .. }
             // M4 扩展(Task 1):Quest 取消与优先级控制双向事件
             | Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }

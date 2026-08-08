@@ -201,13 +201,29 @@ pub mod event_payload;
 /// 工具仅读 env,不引入任何领域逻辑;详见 module-level 文档。
 pub mod test_scale;
 
+/// RL 共享类型契约 — RLState/RLAction/RLExperience（ADR-049 修订补齐）
+///
+/// 承载跨接缝 RL 训练共享类型: RLAction（S1-S9 接缝动作封闭枚举）/ RLState
+/// （上下文状态快照）/ RLExperience（经验四元组）。纯类型零逻辑（ADR-033）,
+/// 不含训练逻辑（R2 冻结面外,ADR-042）;接缝映射 = 枚举变体包装既有契约类型。
+pub mod rl_types;
+
+/// 平台接地契约 — PlatformGroundingSpec（Milestone B-4，北大 NL2Pipeline gap 解）
+///
+/// 承载平台/环境约束的可审计契约（Env/Toolchain/Path/Permission/Config 五类），
+/// 供 L9 efficiency-monitor RuntimeAuditor 第 0 维度（契约遵守）消费。纯类型零逻辑。
+pub mod platform_grounding;
+
 // ============================================================
 // 公开 API 导出
 // ============================================================
 
 pub use capability_token::{CapabilityToken, CapabilityTokenStatus, SeamId};
 // polish-v2.7 P1-3: 行为契约(BehaviorContract + ContractContext + ContractExample,ADR-049)
-pub use behavior_contract::{BehaviorContract, ContractContext, ContractExample};
+// Milestone B-3c: 强制层校验结果（ContractCheckOutcome）
+pub use behavior_contract::{
+    BehaviorContract, ContractCheckOutcome, ContractContext, ContractExample,
+};
 // P4-W16.2.2: R1 召回配额（RecallQuota + RecallQuotaPolicy，S7 接缝）
 pub use density::{DensityPolicy, DensityTier};
 pub use recall_quota::{RecallQuota, RecallQuotaPolicy};
@@ -268,6 +284,10 @@ pub use domain::{MultimodalInput, Quest, Task, ThinkingMode, UserIntent};
 // ADR-054 决策 6:事件载荷契约(EventSeverity/TaskPriority/AgentStatus 下沉,P9-T7 Task 2)
 // severity() 判定逻辑留在 L1 event-bus(架构红线:Critical 事件 mpsc 保障)
 pub use event_payload::{AgentStatus, EventSeverity, TaskPriority};
+// ADR-049 修订: RL 共享类型补齐（RLState/RLAction/RLExperience,v3.0.x）
+// WHY 顶层导出: 与既有接缝契约类型（DensityTier/RecallQuota 等）对等路径,
+// 依赖方可直接 `use nexus_contracts::rl_types::RLAction` 或顶层 `RLAction`
+pub use rl_types::{MemPiAction, RLAction, RLExperience, RLState};
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
@@ -279,6 +299,8 @@ pub use event_payload::{AgentStatus, EventSeverity, TaskPriority};
 /// let mask: SparseMask<ToolId> = SparseMask::empty();
 /// ```
 pub mod prelude {
+    // Milestone B-3c: 强制层校验结果（与顶层导出同集）
+    pub use crate::behavior_contract::{ContractCheckOutcome, ContractContext, ContractExample};
     pub use crate::capability_token::{CapabilityToken, CapabilityTokenStatus, SeamId};
     // P4-W16.2.2: R1 召回配额（S7 接缝）
     pub use crate::density::{DensityPolicy, DensityTier};
@@ -334,4 +356,6 @@ pub mod prelude {
     // ADR-054 决策 6:事件载荷契约(EventSeverity/TaskPriority/AgentStatus 下沉,P9-T7 Task 2)
     // severity() 判定逻辑留在 L1 event-bus(架构红线:Critical 事件 mpsc 保障)
     pub use crate::event_payload::{AgentStatus, EventSeverity, TaskPriority};
+    // ADR-049 修订: RL 共享类型（与顶层导出同集）
+    pub use crate::rl_types::{MemPiAction, RLAction, RLExperience, RLState};
 }

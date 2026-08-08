@@ -2342,6 +2342,38 @@ pub enum NexusEvent {
         /// 精排后装窗数
         loaded_count: u32,
     },
+    // ============================================================
+    // L9 Ambient Mode → L9 Quest:资源恢复（Milestone B-2,append-only）
+    // ============================================================
+    /// 资源恢复 `[Normal]` — Ambient Mode 资源看门狗据此恢复被挂起的 Quest
+    ///
+    /// 与 `BudgetExceeded`（Critical）成对：预算超限挂起 → 资源恢复解除挂起。
+    /// 由外部资源治理（调度器/管理员/CLI）在资源水位回落时发布。
+    ResourceRecovered {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 资源类型（与 BudgetExceeded.budget_type 对应，如 "memory"）
+        resource_type: String,
+    },
+    // ============================================================
+    // L8 Parliament:行为契约强制层（Milestone B-3c,append-only）
+    // ============================================================
+    /// 行为契约违反 `[Normal]` — 强制层检出契约断言未覆盖，供 Parliament 审议
+    ///
+    /// 九层防御 L0 补齐（方案 §7.2）：BehaviorContract 违反 → 发布本事件 +
+    /// Parliament 审议入口（否决候选/记录审计）。Normal 级（审计可丢不致命）。
+    FormalViolation {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 契约 ID（如 "bc-test-1"）
+        contract_id: String,
+        /// 目标类型完整路径（如 "event_bus::EventBus"）
+        target_type: String,
+        /// 未被观测覆盖的断言列表
+        violations: Vec<String>,
+        /// 契约适用场景（Runtime/Test/Evolution）
+        context: nexus_contracts::behavior_contract::ContractContext,
+    },
 }
 
 impl NexusEvent {
@@ -2491,6 +2523,8 @@ impl NexusEvent {
             Self::HcwRecallReported { metadata, .. } => metadata,
             Self::HcwRecallDegraded { metadata, .. } => metadata,
             Self::OverWindowFallbackTriggered { metadata, .. } => metadata,
+            Self::ResourceRecovered { metadata, .. } => metadata,
+            Self::FormalViolation { metadata, .. } => metadata,
         }
     }
 
@@ -2732,6 +2766,8 @@ impl NexusEvent {
             Self::HcwRecallReported { .. } => "HcwRecallReported",
             Self::HcwRecallDegraded { .. } => "HcwRecallDegraded",
             Self::OverWindowFallbackTriggered { .. } => "OverWindowFallbackTriggered",
+            Self::ResourceRecovered { .. } => "ResourceRecovered",
+            Self::FormalViolation { .. } => "FormalViolation",
         }
     }
 }
