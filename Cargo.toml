@@ -87,7 +87,7 @@ tract-onnx = "0.22"
 # WHY 添加到 workspace: nmc-encoder 的图像预处理需将原始字节解码为 RGB 像素矩阵，
 # 统一在 workspace 声明版本避免与其他 crate 冲突
 image = "0.25"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
 axum = "0.7"
 prometheus-client = "0.22"
 uuid = { version = "1.10", features = ["v7", "serde"] }

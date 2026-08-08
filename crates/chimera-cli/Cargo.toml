@@ -3,6 +3,11 @@ name = "chimera-cli"
 version.workspace = true
 edition.workspace = true
 
+# Milestone C-3: rl-client 通道（feature gate，默认 off——不引入 reqwest 体积）
+# 轻量传输（HTTP/JSON）优先，否决 tonic/prost 默认引入（ADR-049 决策 1 哲学）
+[features]
+rl-client = ["dep:reqwest"]
+
 [dependencies]
 # nexus-core:L1 核心类型(配置类型定义,向下依赖符合 §2.2 铁律)
 nexus-core = { workspace = true }
@@ -49,6 +54,8 @@ tokio = { workspace = true }
 # Serde:配置序列化/反序列化
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Milestone C-3: rl-client 传输层（HTTP/JSON 轻量，feature-gated 默认 off）
+reqwest = { workspace = true, optional = true }
 # anyhow:应用层错误处理(库层应使用 thiserror)
 anyhow = { workspace = true }
 # PROBE P2.4: 影子模式报告日期（ShadowComparisonReport 构造）

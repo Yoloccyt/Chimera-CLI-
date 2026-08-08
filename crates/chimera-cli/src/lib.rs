@@ -64,6 +64,8 @@ pub mod overwindow_bridge;
 pub mod output;
 /// Permission prompt 机制(Task 1.11)
 pub mod permission;
+// Milestone C-3: rl-client 通道（HttpRlClient feature-gated，NoopRlClient 常驻）
+pub mod rl_client;
 pub mod selector_orchestrator;
 
 // === 公开 API 重导出 ===
