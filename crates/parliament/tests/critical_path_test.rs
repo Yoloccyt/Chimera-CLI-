@@ -116,8 +116,8 @@ fn exactly_at_threshold_is_not_breach() {
 #[test]
 fn weighted_score_alone_can_trigger_critical() {
     let input = RiskFactorInput {
-        task_count: 30,  // 低于阈值 32
-        max_dependency_depth: 7, // 低于阈值 8
+        task_count: 30,            // 低于阈值 32
+        max_dependency_depth: 7,   // 低于阈值 8
         coordination_to_gain: 0.9, // 低于阈值 1.0
         veto_rate: 0.28,
         timeout_rate: 0.19,

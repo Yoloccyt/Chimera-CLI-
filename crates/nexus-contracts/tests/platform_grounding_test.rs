@@ -94,5 +94,8 @@ fn spec_serde_roundtrip() {
 #[test]
 fn check_violated_on_empty_observation() {
     let spec = PlatformGroundingSpec::from_doc("pg-1", "windows-gnu", "PG-ENV: 工具链就位");
-    assert!(matches!(spec.check(&[]), GroundingCheckOutcome::Violated { .. }));
+    assert!(matches!(
+        spec.check(&[]),
+        GroundingCheckOutcome::Violated { .. }
+    ));
 }

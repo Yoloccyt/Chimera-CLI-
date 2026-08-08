@@ -161,7 +161,11 @@ mod tests {
         assert!(!report.is_critical);
         // 默认输入含基线噪声（task_count=1/depth=1 的归一化贡献），
         // 断言低风险而非精确值（避免脆性绑定归一化公式）。
-        assert!(report.risk_score < 0.1, "默认输入风险应极低: {}", report.risk_score);
+        assert!(
+            report.risk_score < 0.1,
+            "默认输入风险应极低: {}",
+            report.risk_score
+        );
     }
 
     #[test]
