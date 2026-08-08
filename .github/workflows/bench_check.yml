@@ -175,7 +175,12 @@ jobs:
               #   - "shadow_stats" 仅 shadow_stats bench 的 wilson/bootstrap 组
               "dag":               ["dag/"],
               "gea_cache":         ["eviction_saturated"],
-              "scheduler_dequeue": ["scheduler_dequeue"],
+              # scheduler_dequeue 阈值(50µs)依据 1000 任务组基线(2026-07-31 注释);
+              # bench 含 10/100/1000/10000 四规模组,10000 组为 O(n²) 退化压力组,
+              # 套 1000 组阈值必然超标(2026-08-08 本地实测 810µs)——关键词限定 1000 组。
+              # WHY 尾斜杠: 不带斜杠时 "scheduler_dequeue/1000" 是 "10000" 的前缀子串,
+              # 会把 10000 组误匹配进来(2026-08-08 提取验证发现)。
+              "scheduler_dequeue": ["scheduler_dequeue/1000/"],
               "dedup":             ["dedup_semantic"],
               "checkpoint":        ["checkpoint_save"],
               "shadow_stats":      ["shadow_stats"],
