@@ -749,6 +749,24 @@ impl WikiStore {
         .await
         .map_err(WikiError::BlockingJoinError)?
     }
+
+    /// 同步读连接访问（Milestone B-5）— 供同步库 API（如 AgentGrep::search）
+    ///
+    /// # 约束（§4.4 红线 2）
+    /// 本方法为同步（锁内执行闭包）；async 上下文调用方必须用 `spawn_blocking`
+    /// 包裹本方法本身（CLI grep 命令即如此）。
+    pub fn with_read_conn_sync<F, R>(&self, f: F) -> Result<R, WikiError>
+    where
+        F: FnOnce(&Connection) -> Result<R, WikiError>,
+    {
+        let pool = Arc::clone(&self.read_conns);
+        let len = pool.len();
+        let idx = self.next_reader.fetch_add(1, Ordering::Relaxed) % len;
+        let conn = pool[idx]
+            .lock()
+            .map_err(|e| WikiError::VectorIndexError(format!("mutex poisoned: {e}")))?;
+        f(&conn)
+    }
 }
 
 /// 初始化 schema — 创建 entries 表、tags 索引与 anchors 表/索引

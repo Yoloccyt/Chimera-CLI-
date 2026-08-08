@@ -32,6 +32,8 @@ pub mod completions;
 pub mod config;
 /// 系统健康检查子命令(Task 1.13)
 pub mod doctor;
+/// Milestone B-5: Agent Grep 双通道检索子命令
+pub mod grep;
 /// EXAMPLES 一级入口(Task 5 of spec)
 pub mod help;
 /// LLM Provider 管理子命令(Task 2 of spec)
@@ -80,6 +82,10 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         // --limit 由子命令参数传递(SubTask 1.3.3,默认 10)
         Some(Commands::Wiki { query, json, limit }) => {
             wiki::execute(query, cfg, cli.json || *json, *limit).await
+        }
+        // Milestone B-5: Agent Grep 双通道检索 — 全局 --json 优先,子命令级 --json 回退
+        Some(Commands::Grep { pattern, json }) => {
+            grep::execute(pattern, cfg, cli.json || *json).await
         }
         // Parliament:全局 --json 优先,子命令级 --json 作为兼容回退;perm 预留供未来权限检查
         Some(Commands::Parliament { proposal, json }) => {

@@ -135,6 +135,9 @@ pub struct Finding {
 /// 无证据既不给满分也不给零分,呼应证据纪律。
 #[derive(Debug, Clone)]
 pub struct HarnessReport {
+    /// 契约遵守(第 0 维, Milestone B-4):平台接地规格的满足率。
+    /// 未注入规格时为中性 0.5;注入后 = 覆盖要求数 / 总要求数。
+    pub contract_compliance: f32,
     /// 任务理解:意图 → 任务的转化率(QuestCreated / UserIntentEncoded)
     pub task_comprehension: f32,
     /// 可控执行:1 − 失控事件率(超时/孤儿调用/沙箱违规 vs 完成数)
@@ -197,6 +200,14 @@ fn bayesian_average(numerator: f32, denominator: f32, config: &BayesianConfig) -
     score.clamp(0.0, 1.0)
 }
 
+/// 平台接地状态 — 注入的规格与观测集合（第 0 维审计输入）
+struct GroundingState {
+    /// 平台接地规格
+    spec: nexus_contracts::platform_grounding::PlatformGroundingSpec,
+    /// 观测到的已满足约束描述
+    observed: Vec<String>,
+}
+
 /// 运行时自我评估审计器
 ///
 /// # 线程安全
@@ -213,6 +224,8 @@ pub struct RuntimeAuditor {
     bayesian_config: BayesianConfig,
     /// 可选事件总线(绑定后 Finding/Report 自动发布)
     event_bus: Option<EventBus>,
+    /// 平台接地状态（第 0 维审计输入，Milestone B-4）
+    grounding: std::sync::Mutex<Option<GroundingState>>,
 }
 
 impl RuntimeAuditor {
@@ -224,6 +237,7 @@ impl RuntimeAuditor {
             registered_capabilities: DashMap::new(),
             bayesian_config: BayesianConfig::default(),
             event_bus: None,
+            grounding: std::sync::Mutex::new(None),
         }
     }
 
@@ -241,6 +255,19 @@ impl RuntimeAuditor {
             event_bus: Some(bus),
             ..Self::new()
         }
+    }
+
+    /// 注入平台接地规格（第 0 维审计输入，Milestone B-4）
+    ///
+    /// `observed` 为运行时观测到的"已满足约束"描述集合（与 enforce 同款语义）。
+    pub fn with_grounding(
+        self,
+        spec: nexus_contracts::platform_grounding::PlatformGroundingSpec,
+        observed: Vec<String>,
+    ) -> Self {
+        *self.grounding.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(GroundingState { spec, observed });
+        self
     }
 
     /// 同步记录一个事件 — 按 type_name 累积计数
@@ -365,7 +392,27 @@ impl RuntimeAuditor {
 
         let findings = self.audit_all_capabilities();
 
+        // 第 0 维:契约遵守（平台接地满足率）
+        let contract_compliance = {
+            let grounding = self.grounding.lock().unwrap_or_else(|e| e.into_inner());
+            match grounding.as_ref() {
+                None => NEUTRAL_SCORE,
+                Some(g) => {
+                    use nexus_contracts::platform_grounding::GroundingCheckOutcome;
+                    match g.spec.check(&g.observed) {
+                        GroundingCheckOutcome::Grounded => 1.0,
+                        GroundingCheckOutcome::Violated { missing } => {
+                            let total = g.spec.requirements.len().max(1) as f32;
+                            let covered = (total - missing.len() as f32).clamp(0.0, total);
+                            (covered / total).clamp(0.0, 1.0)
+                        }
+                    }
+                }
+            }
+        };
+
         let report = HarnessReport {
+            contract_compliance,
             task_comprehension,
             controllable_execution,
             change_verification,

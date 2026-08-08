@@ -26,6 +26,8 @@ prometheus-client = { workspace = true }
 event-bus = { workspace = true }
 # L1 Core:领域类型(架构依赖规则要求,本 crate 仅依赖 event-bus + nexus-core)
 nexus-core = { workspace = true }
+# L0 契约:平台接地 PlatformGroundingSpec(Milestone B-4 第 0 维审计输入,L9→L0 允许)
+nexus-contracts = { workspace = true }
 
 [dev-dependencies]
 # 性能基准框架(SubTask 4.7)

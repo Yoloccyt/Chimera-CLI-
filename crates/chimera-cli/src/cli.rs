@@ -273,6 +273,21 @@ chimera --json wiki \"EventBus\"               # JSON 输出"
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
+    /// Agent Grep — 双通道检索知识库与代码行为定位（Milestone B-5）
+    #[command(
+        long_about = "双通道检索：知识通道（FTS5 全文 + LIKE 降级）+ 代码通道（BGPD 三级披露）。\n\
+适合快速定位「哪个模块实现了某行为」与「知识库中相关条目」。",
+        after_long_help = "EXAMPLES:\n  \
+chimera grep 事件总线                          # 双通道检索\n  \
+chimera --json grep 沙箱                      # JSON 输出结构化报告"
+    )]
+    Grep {
+        /// 检索模式（自然语言或关键词）
+        pattern: String,
+        /// 输出 JSON 格式(机器可读)
+        #[arg(long)]
+        json: bool,
+    },
     /// 议会审议（对应 `parliament` crate，提交提案供多模型议会表决）
     #[command(
         long_about = "5 角色对抗性审议（Architect/Implementer/Skeptic/Optimizer/Reviewer），\n\
