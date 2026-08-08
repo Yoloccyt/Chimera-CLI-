@@ -153,7 +153,9 @@ impl ActivationRequest {
     /// 而非 `SesaConfig.max_sparsity_ratio` 静态默认值。
     ///
     /// # 示例
-    /// ```ignore
+    /// ```rust,no_run
+    /// use sesa_router::types::{ActivationRequest, TaskPhase};
+    ///
     /// let req = ActivationRequest::new("req-1", vec![0.5; 64], 8, 5)
     ///     .with_task_phase(TaskPhase::Coding); // 20% 激进稀疏
     /// ```

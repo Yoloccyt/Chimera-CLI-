@@ -55,7 +55,7 @@ pub struct OverWindowOutcome {
 ///
 /// # 用法
 ///
-/// ```rust,ignore
+/// ```text
 /// let fallback = OverWindowFallback::new(bus, provider);
 /// let outcome = fallback.run("查询", corpus_tokens, effective_window);
 /// if outcome.triggered { /* 复用 fill_zones/reorder_blocks 装窗 */ }

@@ -156,7 +156,7 @@ impl AuditChain {
     ///      调用方必须用 `?` 短路阻止命令执行。
     ///
     /// 典型流程:
-    /// ```ignore
+    /// ```text
     /// let id = chain.append_intent(&spec)?;       // 执行前记录意图
     /// let result = execute(cmd).await;            // 执行命令
     /// match result {

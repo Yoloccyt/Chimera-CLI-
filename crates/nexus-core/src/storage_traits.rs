@@ -33,7 +33,7 @@ use crate::error::NexusError;
 /// 下游实现示例(在 cmt-tiering / mlc-engine 等使用 rusqlite 的 crate 中):
 /// WHY newtype wrapper:Rust coherence 规则禁止两个 crate 同时 impl
 /// 同一 trait for 同一 type,故各 crate 定义独立 newtype(详见 ADR-006)。
-/// ```ignore
+/// ```text
 /// use nexus_core::{NexusError, PragmaCapable};
 ///
 /// pub struct PragmaConn<'a>(pub &'a rusqlite::Connection);

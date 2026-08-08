@@ -55,11 +55,18 @@ struct CorpusBlock {
 ///
 /// # 用法
 ///
-/// ```rust,ignore
-/// let bridge = OverWindowBridge::new(bus.clone())?;
-/// bridge.set_corpus("...超窗语料...");
-/// let outcome = bridge.run("查询", 1_000_000, 600_000).await?;
-/// if outcome.triggered { /* 候选经 P1 fill_zones/reorder_blocks 三区装窗 */ }
+/// ```rust,no_run
+/// use chimera_cli::overwindow_bridge::OverWindowBridge;
+/// use event_bus::EventBus;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let bridge = OverWindowBridge::new(EventBus::new())?;
+///     bridge.set_corpus("...超窗语料...");
+///     let outcome = bridge.run("查询", 1_000_000, 600_000).await?;
+///     if outcome.triggered { /* 候选经 P1 fill_zones/reorder_blocks 三区装窗 */ }
+///     Ok(())
+/// }
 /// ```
 pub struct OverWindowBridge {
     /// 超窗兜底链（hcw-window；事件发布 + 截断）

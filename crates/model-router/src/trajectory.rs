@@ -180,7 +180,7 @@ pub struct TrajectoryEvent {
 /// - 整体 `Send + Sync`,满足 `RouteHook` trait 约束
 ///
 /// # 使用示例
-/// ```rust,ignore
+/// ```rust,no_run
 /// use model_router::{ModelRouter, ModelRegistry, RouterConfig, trajectory::RecordingHook};
 /// use std::sync::Arc;
 ///

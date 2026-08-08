@@ -89,7 +89,7 @@ pub(crate) type TractPlan =
 /// 4. `postprocess()` — 将输出张量归一化为 512 维 f32 向量
 ///
 /// # 示例 (概念性)
-/// ```ignore
+/// ```text
 /// let config = NmcConfig::default().with_model_dir("/opt/models");
 /// let backend = OnnxBackend::load(&config, ModelType::Image)?;
 /// let image_bytes = std::fs::read("cat.jpg")?;

@@ -619,7 +619,7 @@ impl TtgGovernor {
     ///
     /// # 使用场景
     /// 调用方在 `select_mode` 前先调用此方法获取有效档位:
-    /// ```ignore
+    /// ```text
     /// let tier = governor.effective_tier(decb_tier);
     /// let (mode, reason) = governor.select_mode(&quest, tier);
     /// ```

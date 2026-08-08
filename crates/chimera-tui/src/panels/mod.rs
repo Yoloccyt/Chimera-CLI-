@@ -156,7 +156,11 @@ pub trait Panel: Send {
     /// "面板快捷键"章节。
     ///
     /// # 示例
-    /// ```ignore
+    ///
+    /// 面板覆写 `shortcuts` 的示意实现（`no_run`：仅编译校验，展示覆写体）：
+    /// ```rust,no_run
+    /// # struct MyPanel;
+    /// # impl MyPanel {
     /// fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
     ///     vec![
     ///         ("↑/↓", "导航"),
@@ -164,6 +168,7 @@ pub trait Panel: Send {
     ///         ("P", "暂停任务"),
     ///     ]
     /// }
+    /// # }
     /// ```
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         vec![]

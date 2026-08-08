@@ -312,15 +312,16 @@ pub struct QuestTrajectory {
 /// - 总开销:<100μs,适合在 Checkpoint 保存后立即调用
 ///
 /// # 使用示例
-/// ```rust,ignore
+/// ```rust,no_run
 /// use quest_engine::checkpoint::CheckpointManager;
 /// use quest_engine::trajectory_exporter::export_trajectory;
 ///
-/// # async fn example() {
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let cm = CheckpointManager::new("/tmp/checkpoints".into());
 /// let checkpoint = cm.load_latest("quest-123").await?.expect("存在检查点");
 /// let trajectory = export_trajectory(&checkpoint)?;
 /// println!("net_reward = {:.3}", trajectory.reward.net_reward);
+/// # Ok(())
 /// # }
 /// ```
 pub fn export_trajectory(checkpoint: &Checkpoint) -> Result<QuestTrajectory, QuestError> {

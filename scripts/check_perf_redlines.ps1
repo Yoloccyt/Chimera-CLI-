@@ -156,23 +156,30 @@ foreach ($slo in $sloRedlines) {
         continue
     }
 
-    # 解析 criterion 输出: "time:   [X.XXX us X.XXX us X.XXX us]"
-    # 格式: time: [lower estimate upper unit]
-    # 提取 estimate (中间值) 和单位
-    $timePattern = 'time:\s+\[([^\]]+)\]'
-    if ($benchOutput -match $timePattern) {
-        $timeValues = $Matches[1].Trim() -split '\s+'
-        # timeValues[0]=lower, [1]=estimate, [2]=upper, [3]=unit
-        if ($timeValues.Count -ge 4) {
-            $estimate = [double]$timeValues[2]
-            $unit = $timeValues[3]
+# 转换前强制 UTF-8 解码 native stdout:
+# criterion 的 "µs" 单位以 UTF-8 字节 0xC2 0xB5 输出,Windows 控制台代码页
+# (GBK/936)默认将其解码为 "Âμ",导致后续单位比较失败而误入 else 分支
+# (把 6.8µs 当 6.8ms,linucb_40arm SLO 误报 FAIL —— 2026-08-08 发布检查发现)。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
-            # 转换为秒
-            if     ($unit -eq 'ns') { $estimateSec = $estimate / 1e9 }
-            elseif ($unit -eq 'us') { $estimateSec = $estimate / 1e6 }
-            elseif ($unit -eq 'ms') { $estimateSec = $estimate / 1e3 }
-            elseif ($unit -eq 's')  { $estimateSec = $estimate }
-            else                    { $estimateSec = $estimate / 1e3 }
+# 解析 criterion 输出: "time:   [X.XXX us X.XXX us X.XXX us]"
+# 格式: time: [lower estimate upper unit]
+# 提取 estimate (中间值) 和单位
+$timePattern = 'time:\s+\[([^\]]+)\]'
+if ($benchOutput -match $timePattern) {
+    $timeValues = $Matches[1].Trim() -split '\s+'
+    # timeValues[0]=lower, [1]=estimate, [2]=upper, [3]=unit
+    if ($timeValues.Count -ge 4) {
+        $estimate = [double]$timeValues[2]
+        $unit = $timeValues[3]
+
+        # 转换为秒。单位匹配用正则兼容三种微符号形态:
+        # U+00B5 µ(UTF-8 解码) / U+03BC μ(GBK 解码) / ASCII u
+        if     ($unit -eq 'ns') { $estimateSec = $estimate / 1e9 }
+        elseif ($unit -match '^[µμu]s$') { $estimateSec = $estimate / 1e6 }
+        elseif ($unit -eq 'ms') { $estimateSec = $estimate / 1e3 }
+        elseif ($unit -eq 's')  { $estimateSec = $estimate }
+        else                    { $estimateSec = $estimate / 1e3 }
 
             # 显示实测值
             if     ($slo.Unit -eq 'us') { $displayVal = ('{0:N3} us' -f ($estimateSec * 1e6)) }

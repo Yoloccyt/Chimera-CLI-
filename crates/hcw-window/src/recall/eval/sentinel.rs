@@ -86,12 +86,18 @@ pub enum SentinelDecision {
 ///
 /// # 用法
 ///
-/// ```rust,ignore
-/// let mut sentinel = RecallSentinel::new(bus.clone());
+/// ```rust,no_run
+/// use event_bus::EventBus;
+/// use hcw_window::recall::eval::sentinel::RecallSentinel;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut sentinel = RecallSentinel::new(EventBus::new());
 /// // 编排器每完成一个 Quest 调用一次（低频，内部计数节流）
 /// if let Some(decision) = sentinel.on_quest().await? {
 ///     // decision 可记录/上报，不阻塞主链路
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub struct RecallSentinel {
     /// 事件总线（发布 HcwRecallReported / HcwRecallDegraded）

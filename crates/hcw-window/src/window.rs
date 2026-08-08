@@ -257,10 +257,17 @@ impl HcwWindow {
     /// 红线与"锁内零计算"性能铁律的落点
     ///
     /// # 用法
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// use event_bus::EventBus;
+    /// use hcw_window::{HcwConfig, HcwWindow};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let window = HcwWindow::new(HcwConfig::default(), EventBus::new())?;
     /// let snapshot = window.snapshot_entries().await;
     /// // 锁已释放，无锁打分
     /// for entry in &snapshot { /* cosine 等 */ }
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn snapshot_entries(&self) -> Vec<Arc<ContextEntry>> {
         let state = self.state.read().await;

@@ -1175,6 +1175,11 @@ mod tests {
         assert!(results.iter().all(|h| h.id != "b"));
     }
 
+    // WHY flaky 历史记录:本测试在 v3.0.0 发布前全量回归(debug + 16 线程并行)中
+    // 偶现 1 次失败(2026-08-03 nextest-full),单独复现 3 连跑均绿,Phase9 回归报告
+    // (_blueprints/three-ring-reorg/Phase9_回归验证报告_v2.20.md)判定为 flaky。
+    // 疑似根因:hnsw_rs 图遍历在等距向量上的 tie-break 顺序受并行负载影响。
+    // 若 CI 再现,应优先检查 upsert 后 HNSW 图内残留旧链接的去重路径,而非改断言。
     #[test]
     fn test_repeated_upsert_no_duplicate_in_search() {
         let store = make_store();

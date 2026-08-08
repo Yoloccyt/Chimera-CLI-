@@ -15,9 +15,10 @@
 //!
 //! # 用法
 //!
-//! ```ignore  // 示意代码,本模块仅在测试上下文导出
-//! use nexus_contracts::test_scale::{scaled_timeout, scale_timeout};
+//! ```rust,no_run  // 示意代码,本模块仅在测试上下文导出
 //! use std::time::Duration;
+//! use nexus_contracts::scaled_timeout;
+//! use nexus_contracts::test_scale::scale_timeout;
 //!
 //! let d: Duration = scaled_timeout!(10);  // 缺省 10s;scale=0.1 时 1s
 //! let secs = scale_timeout(5);            // 缺省 5; scale=0.5 时 2
@@ -69,8 +70,8 @@ pub fn scale_timeout(secs: u64) -> u64 {
 ///
 /// # 示例
 ///
-/// ```ignore
-/// use nexus_contracts::test_scale::scaled_timeout;
+/// ```rust,no_run
+/// use nexus_contracts::scaled_timeout;
 /// let d = scaled_timeout!(5);  // Duration::from_secs(5) 或更短(scale<1.0)
 /// ```
 #[macro_export]
