@@ -72,18 +72,28 @@ jobs:
           # 每个 benchmark 约 10-30s,总耗时(含编译)约 3-8min。
           # WHY 用 `tee` 保存日志:失败时上传 artifact 供开发者分析。
           # WHY 不用 --save-baseline:CI 每次全新运行,无需 baseline 对比。
-          cargo bench -p chimera-cli --bench exit_code_matrix 2>&1 | tee bench_exit_code_matrix.log
-          cargo bench -p chimera-tui --bench render_bench 2>&1 | tee bench_render_bench.log
-          cargo bench -p chimera-tui --bench diff_engine_bench 2>&1 | tee bench_diff_engine_bench.log
-          cargo bench -p mcp-mesh --bench wal_recovery 2>&1 | tee bench_wal_recovery.log
-          cargo bench -p csn-substitutor --bench degradation_chain 2>&1 | tee bench_degradation_chain.log
+          # WHY 逐条包装 (|| { echo ...; exit 1; }):2026-08-08 定位连续 6 次
+          # exit 2 时发现 pipefail 下无法区分失败命令;包装后失败即输出
+          # 命令名 + 真实退出码,消除盲区(可观测性修复)。
+          run_bench() {
+            local name="$1"; shift
+            if ! "$@" 2>&1 | tee "bench_${name}.log"; then
+              echo "::error::bench ${name} failed (pipestatus=${PIPESTATUS[*]})"
+              exit 1
+            fi
+          }
+          run_bench exit_code_matrix cargo bench -p chimera-cli --bench exit_code_matrix
+          run_bench render_bench cargo bench -p chimera-tui --bench render_bench
+          run_bench diff_engine_bench cargo bench -p chimera-tui --bench diff_engine_bench
+          run_bench wal_recovery cargo bench -p mcp-mesh --bench wal_recovery
+          run_bench degradation_chain cargo bench -p csn-substitutor --bench degradation_chain
           # L9 Quest 层优化基线守护(2026-07-31 新增):dag/gea/scheduler/dedup/checkpoint/shadow
-          cargo bench -p quest-engine --bench dag_bench 2>&1 | tee bench_dag.log
-          cargo bench -p quest-engine --bench checkpoint_bench 2>&1 | tee bench_checkpoint.log
-          cargo bench -p gea-activator --bench gate_compute 2>&1 | tee bench_gea_cache.log
-          cargo bench -p chimera-mas --bench mas_benchmark scheduler_dequeue 2>&1 | tee bench_scheduler.log
-          cargo bench -p chimera-mas --bench dedup_bench 2>&1 | tee bench_dedup.log
-          cargo bench -p chimera-mas --bench shadow_stats 2>&1 | tee bench_shadow_stats.log
+          run_bench dag cargo bench -p quest-engine --bench dag_bench
+          run_bench checkpoint cargo bench -p quest-engine --bench checkpoint_bench
+          run_bench gea_cache cargo bench -p gea-activator --bench gate_compute
+          run_bench scheduler cargo bench -p chimera-mas --bench mas_benchmark scheduler_dequeue
+          run_bench dedup cargo bench -p chimera-mas --bench dedup_bench
+          run_bench shadow_stats cargo bench -p chimera-mas --bench shadow_stats
 
       - name: Assert thresholds
         # WHY 用 Python 解析 criterion 的 estimates.json:
@@ -189,7 +199,7 @@ jobs:
               try:
                   with open(estimates_file) as f:
                       data = json.load(f)
-                  median_ns = data["median"]["point_estimate"]
+                      median_ns = data["median"]["point_estimate"]
               except (json.JSONDecodeError, KeyError) as e:
                   print(f"::warning::Failed to parse {estimates_file}: {e}")
                   continue
