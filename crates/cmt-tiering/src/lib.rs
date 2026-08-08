@@ -50,6 +50,7 @@ pub mod hot;
 pub mod ice;
 pub mod migrator;
 pub mod pool;
+pub mod rl_migration;
 /// polish-v2.7 P4-2:分层经验回放池(Hot/Warm/Cold/Ice 四层,ADR-049)
 ///
 /// R2 冻结声明(ADR-042):经验数据仅供 R1 路径。

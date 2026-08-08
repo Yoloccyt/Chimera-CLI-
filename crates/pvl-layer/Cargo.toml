@@ -46,3 +46,8 @@ nexus-contracts = { workspace = true }
 [[bench]]
 name = "produce_verify"
 harness = false
+
+# Milestone D-2e:GTPO + RLVR 基准(性能可证伪)
+[[bench]]
+name = "gtpo_rlvr_bench"
+harness = false

@@ -620,3 +620,8 @@ panic = "abort"
 opt-level = "z"
 lto = true
 codegen-units = 1
+
+# Milestone D-3:评估-进化-协同三位一体闭环 E2E
+[[test]]
+name = "trinity_loop_e2e"
+path = "tests/e2e/trinity_loop_e2e.rs"

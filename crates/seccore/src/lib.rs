@@ -49,6 +49,7 @@ pub mod gvisor;
 /// P4-W15.1.3: Spec Merkle 完整性校验(复用 audit.rs SHA-256 实现)
 pub mod merkle;
 pub mod policy;
+pub mod rl_security;
 pub mod sandbox;
 pub mod sandbox_wasm;
 pub mod types;

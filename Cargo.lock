@@ -862,6 +862,7 @@ dependencies = [
  "criterion",
  "dashmap",
  "event-bus",
+ "nexus-contracts",
  "nexus-core",
  "proptest",
  "rand 0.8.6",

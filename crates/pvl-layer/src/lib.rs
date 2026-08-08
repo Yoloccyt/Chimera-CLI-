@@ -71,11 +71,15 @@ pub mod auto_builder;
 pub mod config;
 pub mod error;
 pub mod feedback;
+/// Milestone D-2c:GTPO Turn-Level 奖励(设计 §11.1,纯函数计算)
+pub mod gtpo;
 /// polish-v2.7 P3-6:Hint-Boosted Recovery 过程级提示引导恢复(快手 KAT,ADR-049)
 pub mod hint_recovery;
 /// polish-v2.7 P3-5:Process-Score 九维度过程评分(快手 KAT,ADR-049)
 pub mod process_score;
 pub mod producer;
+/// Milestone D-2d:RLVR 可验证奖励(设计 §11.2,enum dispatch 规则式验证器)
+pub mod rlvr;
 pub mod types;
 pub mod verifier;
 

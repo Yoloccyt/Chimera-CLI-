@@ -8,6 +8,9 @@ edition.workspace = true
 event-bus = { workspace = true }
 # L1 Core:nexus-core(SubTask 21.2 — 共享 sqlite_pragma 模块,消除 PRAGMA 重复实现)
 nexus-core = { workspace = true }
+# L0 Contracts:八维度奖励权重接入(Milestone D-2e,RLVR 层权重 × RewardLayer)
+# WHY L3→L0(§2.2 依赖铁律):分层奖励接入需消费 RewardSpec 权重表
+nexus-contracts = { workspace = true }
 # Warm/Cold 层 SQLite 持久化(WAL 模式与附加数据库,避免新依赖)
 rusqlite = { workspace = true }
 # Hot 层线程安全分片锁(支持并发读写)
@@ -46,4 +49,9 @@ harness = false
 # closure Stage C-12:分层回放池采样基准(ADR-049,分层 vs 均匀采样开销对照)
 [[bench]]
 name = "rl_replay_sample"
+harness = false
+
+# Milestone D-2e:DQN 记忆迁移决策基准(性能可证伪)
+[[bench]]
+name = "rl_migration_bench"
 harness = false

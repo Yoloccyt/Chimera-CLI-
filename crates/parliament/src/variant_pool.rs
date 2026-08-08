@@ -138,7 +138,6 @@ impl VariantPool {
             .collect()
     }
     /// 谓词命中集合超限时淘汰其中 expected_performance 最低者
-
     fn evict_lowest_if_over<F: Fn(&VariantContract) -> bool>(&mut self, pred: F, limit: usize) {
         let hits: Vec<usize> = self
             .contracts
