@@ -127,6 +127,17 @@ pub mod formal_violation;
 /// 六风险因子规则综合，判定任务链是否为关键路径（优先治理对象）。
 pub mod critical_path;
 
+/// MAPPO 多智能体 PPO（Milestone C-6，设计 §12.1）：规则式 Actor/Critic 占位实现
+///
+/// 三 actor（Skeptic/Security/Execution）联合决策 + 共享 Critic 在线统计，
+/// Agent-wise 优势归一化（Dr.MAS 修复）；R2 冻结下不触神经网络训练面。
+pub mod mappo;
+
+/// SHARP Shapley 信用分配（Milestone C-6，设计 §12.1）：精确 Shapley + 三元分解奖励
+///
+/// 效率公理/对称性数学保证 + 指数爆炸保护 + global/shapley/process 三通道奖励。
+pub mod sharp;
+
 // === 关键类型重导出,简化外部导入 ===
 pub use ahirt::{
     AhirtRedTeam, AhirtStats, ProbePayload, ProbePayloadLibrary, ProbeResult, ProbeType,

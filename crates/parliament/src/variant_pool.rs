@@ -126,7 +126,19 @@ impl VariantPool {
             .fold(None, |acc, p| Some(acc.map_or(p, |a: f32| a.max(p))))
     }
 
+    /// 变体隔离视图（Milestone D-1：弱模型变体隔离评估的 Rust 侧载体）
+    ///
+    /// 按变体 ID 标签隔离（约定：ID 含标签子串，如 "weak-qwen3.5-9b-*"），
+    /// 返回匹配变体列表；不修改池本身。隔离语义：弱模型变体与强模型
+    /// 变体分开评估（不交叉污染性能基线——D-1 变体隔离测试）。
+    pub fn isolated(&self, tag: &str) -> Vec<&VariantContract> {
+        self.contracts
+            .iter()
+            .filter(|c| c.variant_id.spec_name.contains(tag))
+            .collect()
+    }
     /// 谓词命中集合超限时淘汰其中 expected_performance 最低者
+
     fn evict_lowest_if_over<F: Fn(&VariantContract) -> bool>(&mut self, pred: F, limit: usize) {
         let hits: Vec<usize> = self
             .contracts
