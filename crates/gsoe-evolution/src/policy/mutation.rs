@@ -15,7 +15,22 @@ use crate::types::{EvolutionPolicy, MutationCandidate, MutationType};
 ///
 /// 本周占位:用线性同余 PRNG 生成伪随机数(不引入 rand crate)
 /// // TODO(Week 7): 接入 MCP Mesh 真实模型,用 logits 引导变异方向
+/// // Milestone C-2: 已闭合 —— 经 `mutate_with_direction` 注入模型方向引导;
+/// // 本函数保持 None 回退语义（Lcg 现行为）。
 pub fn mutate(policy: &EvolutionPolicy, rate: f32) -> Result<MutationCandidate, GsoeError> {
+    mutate_with_direction(policy, rate, None)
+}
+
+/// 变异候选生成（可选模型方向引导，Milestone C-2）
+///
+/// - `Some(invoker)` 且 `mutate_direction(seed) != 0`：magnitude = rate × 方向
+///   （真实模型 logits 引导变异方向，Week-7 TODO 闭合）
+/// - `None` 或方向为 0：回退 Lcg 随机扰动（现行为保持不变）
+pub fn mutate_with_direction(
+    policy: &EvolutionPolicy,
+    rate: f32,
+    invoker: Option<&dyn crate::policy::model::PolicyModelInvoker>,
+) -> Result<MutationCandidate, GsoeError> {
     if !(0.0..=1.0).contains(&rate) {
         return Err(GsoeError::MutationFailed {
             reason: format!("rate={rate} 超出 [0.0, 1.0]"),
@@ -25,6 +40,18 @@ pub fn mutate(policy: &EvolutionPolicy, rate: f32) -> Result<MutationCandidate, 
     // 基于 policy 字段哈希生成 seed,保证可复现
     let seed = hash_seed(&policy.mutation_rate.to_le_bytes())
         .wrapping_add(hash_seed(&policy.selection_pressure.to_le_bytes()));
+
+    // 模型方向引导（注入且方向非零时生效）
+    if let Some(m) = invoker {
+        let direction = m.mutate_direction(seed);
+        if direction != 0.0 {
+            return Ok(MutationCandidate {
+                policy_id: format!("policy-{}", seed % 10000),
+                mutation_type: MutationType::Uniform,
+                magnitude: rate * direction,
+            });
+        }
+    }
 
     let magnitude = match select_mutation_type(policy) {
         MutationType::Gaussian => {

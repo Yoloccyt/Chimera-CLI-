@@ -9,4 +9,6 @@
 
 pub mod fitness;
 pub mod grpo;
+/// Milestone C-2: 策略模型调用注入（PolicyModelInvoker，Week-7 TODO 闭合）
+pub mod model;
 pub mod mutation;

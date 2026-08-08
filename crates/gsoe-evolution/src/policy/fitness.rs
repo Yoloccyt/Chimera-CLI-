@@ -18,8 +18,23 @@ use crate::types::{FitnessReport, GrpoRollout};
 /// 2. confidence = 1.0 / (1.0 + n),n 为动作数量(动作越多越不确信)
 /// 3. evidence 记录 reward、action_count、advantage 等评估依据
 pub fn evaluate_fitness(rollout: &GrpoRollout) -> FitnessReport {
-    // fitness_score: 将 reward 从 [-1, 1] 映射到 [0, 1]
-    let raw_fitness = (rollout.reward + 1.0) / 2.0;
+    evaluate_fitness_with_invoker(rollout, None)
+}
+
+/// 评估单次轨迹的适应度（可选模型评判注入，Milestone C-2）
+///
+/// - `Some(invoker)`：fitness_score = invoker.judge_fitness（真实模型评判，
+///   Week-7 TODO 闭合）；confidence 与 evidence 保留规则计算
+/// - `None`：回退规则 (reward+1)/2（现行为保持不变）
+pub fn evaluate_fitness_with_invoker(
+    rollout: &GrpoRollout,
+    invoker: Option<&dyn crate::policy::model::PolicyModelInvoker>,
+) -> FitnessReport {
+    // fitness_score: 规则 (reward+1)/2 或模型评判
+    let raw_fitness = match invoker {
+        Some(m) => m.judge_fitness(rollout.reward, rollout.actions.len()),
+        None => (rollout.reward + 1.0) / 2.0,
+    };
     let fitness_score = raw_fitness.clamp(0.0, 1.0);
 
     // confidence: 动作越多越不确信(贝叶斯先验:简短决策更可靠)
@@ -31,11 +46,12 @@ pub fn evaluate_fitness(rollout: &GrpoRollout) -> FitnessReport {
         .advantage
         .map(|a| format!("{a:.4}"))
         .unwrap_or_else(|| "未计算".into());
+    let judge_kind = if invoker.is_some() { "model" } else { "rule" };
     let evidence = vec![
         format!("reward={:.4}", rollout.reward),
         format!("action_count={}", rollout.actions.len()),
         format!("advantage={advantage_str}"),
-        format!("fitness_rule=(reward+1)/2"),
+        format!("fitness_{judge_kind}=(reward+1)/2"),
     ];
 
     FitnessReport {

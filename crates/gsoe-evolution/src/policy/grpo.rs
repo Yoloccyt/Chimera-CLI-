@@ -64,15 +64,37 @@ impl Lcg {
 /// 3. reward = -|actions - optimal| 的均值(越接近最优解 reward 越高,最高 0.0)
 ///
 /// // TODO(Week 7): 接入 MCP Mesh 真实模型,用 logits 采样替代规则采样
+/// // Milestone C-2: 已闭合 —— 经 `sample_rollouts_with_invoker` 注入
+/// // `PolicyModelInvoker`(真实模型 logits);本函数保持 None 回退语义。
 pub fn sample_rollouts(policy: &EvolutionPolicy, count: u32) -> Vec<GrpoRollout> {
+    sample_rollouts_with_invoker(policy, count, None)
+}
+
+/// 采样轨迹（可选模型注入，Milestone C-2）
+///
+/// - `Some(invoker)`：动作 = OPTIMAL_ACTION + mutation_rate × invoker.logits
+///   （真实模型 logits 采样，Week-7 TODO 闭合）
+/// - `None`：回退 Lcg 确定性扰动（现行为保持不变）
+pub fn sample_rollouts_with_invoker(
+    policy: &EvolutionPolicy,
+    count: u32,
+    invoker: Option<&dyn crate::policy::model::PolicyModelInvoker>,
+) -> Vec<GrpoRollout> {
     let mut rng = Lcg::new(42);
     let mut rollouts = Vec::with_capacity(count as usize);
 
     for i in 0..count {
         let mut actions = Vec::with_capacity(ACTION_DIM);
         for _ in 0..ACTION_DIM {
-            // 动作 = 基准 + mutation_rate * 扰动
-            let action = OPTIMAL_ACTION + policy.mutation_rate * rng.next_f32();
+            // 动作 = 基准 + mutation_rate × 扰动（注入 = 模型 logits；未注入 = Lcg）
+            let perturbation = match invoker {
+                Some(m) => {
+                    // 每维独立 logits（确定性实现全同值；真实实现逐维采样）
+                    m.logits(42, ACTION_DIM)[actions.len()]
+                }
+                None => rng.next_f32(),
+            };
+            let action = OPTIMAL_ACTION + policy.mutation_rate * perturbation;
             actions.push(action);
         }
 
