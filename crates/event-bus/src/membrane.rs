@@ -489,6 +489,8 @@ impl MembraneFilter {
             | NexusEvent::ResourceRecovered { .. }
             // Milestone B-3c: 行为契约违反（L8 Parliament 审议入口）
             | NexusEvent::FormalViolation { .. }
+            // Milestone C-1: 奖励信号流（L0 RewardSpec 统一框架，R1 数据面）
+            | NexusEvent::RewardSignalReported { .. }
             | NexusEvent::VoteCastRequested { .. }
             | NexusEvent::RefreshStateRequested { .. }
             // Agent 协作事件(外环 L9 chimera-mas 自治处理)

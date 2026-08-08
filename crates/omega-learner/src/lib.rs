@@ -137,6 +137,12 @@ pub mod s9_route;
 /// 仅消费 event-bus(L1) 事件,符合 §2.2 依赖铁律。
 pub mod s9_integration;
 
+/// Milestone C-1: 接缝奖励 → RewardSignal 桥接（各层 Reward 类型统一）
+///
+/// 将 S9Reward 等接缝奖励转换为 L0 RewardSignal 统一载荷，
+/// 经 EventBus 奖励信号流传输（R1 数据面先接入，R2 解冻后训练消费）。
+pub mod reward_bridge;
+
 /// P4-W16.2.1: 经验回放池 — off-policy RL 训练的轨迹存储与采样基础设施
 pub mod replay_pool;
 

@@ -2374,6 +2374,19 @@ pub enum NexusEvent {
         /// 契约适用场景（Runtime/Test/Evolution）
         context: nexus_contracts::behavior_contract::ContractContext,
     },
+    // ============================================================
+    // L0 RewardSpec 奖励信号流（Milestone C-1,append-only）
+    // ============================================================
+    /// 奖励信号 `[Normal]` — 统一奖励框架的 EventBus 信号流载荷
+    ///
+    /// R1 数据面先接入（观测/回放池分层采样）；R2 训练面解冻后由训练服务消费。
+    /// L4 安全观测信号（is_security_observation=true）仅观测不参与训练。
+    RewardSignalReported {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 奖励信号（RewardSpec 加权后载荷）
+        signal: nexus_contracts::reward::RewardSignal,
+    },
 }
 
 impl NexusEvent {
@@ -2525,6 +2538,7 @@ impl NexusEvent {
             Self::OverWindowFallbackTriggered { metadata, .. } => metadata,
             Self::ResourceRecovered { metadata, .. } => metadata,
             Self::FormalViolation { metadata, .. } => metadata,
+            Self::RewardSignalReported { metadata, .. } => metadata,
         }
     }
 
@@ -2768,6 +2782,7 @@ impl NexusEvent {
             Self::OverWindowFallbackTriggered { .. } => "OverWindowFallbackTriggered",
             Self::ResourceRecovered { .. } => "ResourceRecovered",
             Self::FormalViolation { .. } => "FormalViolation",
+            Self::RewardSignalReported { .. } => "RewardSignalReported",
         }
     }
 }

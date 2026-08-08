@@ -214,6 +214,12 @@ pub mod rl_types;
 /// 供 L9 efficiency-monitor RuntimeAuditor 第 0 维度（契约遵守）消费。纯类型零逻辑。
 pub mod platform_grounding;
 
+/// 奖励函数统一框架契约（Milestone C-1）— RewardSpec/RewardSignal/SecuritySeverity
+///
+/// 承载设计 §17 八维度权重表的 L0 契约：层权重 + 维度组件 + 奖励信号流载荷，
+/// R1 数据面先接入，R2 训练面解冻后激活（ADR-042）；L4 安全奖励仅观测。
+pub mod reward;
+
 // ============================================================
 // 公开 API 导出
 // ============================================================

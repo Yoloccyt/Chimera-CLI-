@@ -181,6 +181,8 @@ impl NexusEvent {
             | Self::ResourceRecovered { .. }
             // Milestone B-3c: 行为契约违反（L8 审议）
             | Self::FormalViolation { .. }
+            // Milestone C-1: 奖励信号流（L0 RewardSpec 统一框架）
+            | Self::RewardSignalReported { .. }
             // M4 扩展(Task 1):Quest 取消与优先级控制双向事件
             | Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }
