@@ -155,7 +155,7 @@ mod tests {
                 gsoe_evolution::unfreeze_scope::UnfreezeScope::frozen()
                     .with_target(RlUpdateTarget::GsoeVariantSelection),
             ),
-            Stage3Prerequisites::default(),
+            Stage3Prerequisites { alpha_composite_calibrated: true, power_intra_batch_verified: true, binomial_sf_comments_corrected: true, payload_rotation_ready: true, coverage_instrumentation_ready: true, s_min_final_confirmed: true },
         );
         let report = readiness.evaluate(&R2UnfreezeReadinessInput {
             shadow_period_days: 14,
