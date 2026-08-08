@@ -23,6 +23,8 @@ pub mod batch;
 pub mod config;
 pub mod evidence_gate;
 pub mod orchestrator;
+// Milestone C-5 前置: R2 解冻就绪检查（ADR-053 rev4 阶段③ 自动化载体）
+pub mod readiness;
 pub mod stats;
 
 // === 关键类型重导出(适度导出:裁决入口 + 证据类型 + 审计分解) ===
