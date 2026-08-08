@@ -34,6 +34,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+pub mod ambient_mode;
 pub mod arbitration;
 pub mod checkpoint;
 pub mod config;
@@ -49,6 +50,11 @@ pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use arbitration::ArbitrationLayer;
+// Milestone B-2: Ambient Mode（后台常驻守护循环:资源看门狗/记忆整理/检查点调度）
+pub use ambient_mode::{
+    spawn_ambient_subscriber, spawn_ambient_subscriber_with_receivers, AmbientModeConfig,
+    MemoryTidyHook, NoopTidyHook,
+};
 pub use checkpoint::CheckpointManager;
 pub use config::QuestConfig;
 // P2-1: 协调成本/推理增益比值度量(三重悖论推理悖论红线)

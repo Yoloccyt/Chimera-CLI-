@@ -72,6 +72,18 @@ pub struct SkillGraph {
     nodes: HashMap<String, SkillNode>,
 }
 
+/// 安全约束违规（Milestone B-3a，九层防御 L5 补齐）
+///
+/// 技能图执行前闸门：调用方应先 `check_security()` 再 `recommend()`，
+/// 防止悬空依赖（依赖技能不存在）与循环依赖（执行死锁）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SecurityViolation {
+    /// 违规技能 ID
+    pub skill_id: String,
+    /// 违规原因（含依赖技能名，便于定位）
+    pub reason: String,
+}
+
 impl SkillGraph {
     /// 创建空技能图
     pub fn new() -> Self {
@@ -91,6 +103,87 @@ impl SkillGraph {
     /// 查询技能
     pub fn get(&self, skill_id: &str) -> Option<&SkillNode> {
         self.nodes.get(skill_id)
+    }
+
+    /// 安全约束校验（Milestone B-3a）— 悬空依赖 + 循环依赖检测
+    ///
+    /// # 检查项
+    /// 1. **悬空依赖**：技能 dependencies 引用的技能不在图中
+    /// 2. **循环依赖**：DFS 检测 A→…→A 环（含自依赖 a→a）
+    ///
+    /// # 返回
+    /// 违规列表（空 = 图安全）。纯查询（&self），不改变图状态。
+    ///
+    /// # 复杂度
+    /// O(V + E)（拓扑探测：每个节点至多访问一次）
+    pub fn check_security(&self) -> Vec<SecurityViolation> {
+        let mut violations = Vec::new();
+
+        // 1. 悬空依赖
+        for node in self.nodes.values() {
+            for dep in &node.dependencies {
+                if !self.nodes.contains_key(dep) {
+                    violations.push(SecurityViolation {
+                        skill_id: node.skill_id.clone(),
+                        reason: format!("悬空依赖: 引用的技能 '{dep}' 不存在于图中"),
+                    });
+                }
+            }
+        }
+
+        // 2. 循环依赖（DFS 三色标记：0=未访问 1=访问中 2=已结束）
+        // WHY 三色而非简单 visited：只有"访问中"栈上的回边才是环，
+        // 已结束节点的回边（如菱形依赖）不是环。
+        // WHY 递归后序：节点必须等全部子节点处理完才标记 2，
+        // 迭代版"pop 即标 2"会让祖先提前变 2 导致环漏检（B-3a 实测发现）。
+        let mut color: HashMap<String, u8> = HashMap::new();
+        let mut path: Vec<String> = Vec::new();
+        for skill_id in self.nodes.keys() {
+            if color.get(skill_id.as_str()) == Some(&2) {
+                continue;
+            }
+            self.dfs_cycle_detect(skill_id, &mut color, &mut path, &mut violations);
+        }
+
+        violations
+    }
+
+    /// 循环依赖 DFS 辅助（后序三色；技能图规模小，递归安全）
+    fn dfs_cycle_detect(
+        &self,
+        skill_id: &str,
+        color: &mut HashMap<String, u8>,
+        path: &mut Vec<String>,
+        violations: &mut Vec<SecurityViolation>,
+    ) {
+        color.insert(skill_id.to_string(), 1);
+        path.push(skill_id.to_string());
+        if let Some(node) = self.nodes.get(skill_id) {
+            for dep in &node.dependencies {
+                match color.get(dep.as_str()) {
+                    Some(1) => {
+                        // 回边 → 环；报告环起点（path 中该依赖的位置）
+                        let start = path.iter().position(|s| s == dep).unwrap_or(0);
+                        let cycle = &path[start..];
+                        let mut reason = format!("循环依赖: {}", cycle.join(" → "));
+                        reason.push_str(&format!(" → {dep}"));
+                        if !violations
+                            .iter()
+                            .any(|v: &SecurityViolation| v.reason == reason)
+                        {
+                            violations.push(SecurityViolation {
+                                skill_id: cycle[0].clone(),
+                                reason,
+                            });
+                        }
+                    }
+                    None => self.dfs_cycle_detect(dep, color, path, violations),
+                    _ => {} // 已结束节点的回边不是环（菱形依赖）
+                }
+            }
+        }
+        path.pop();
+        color.insert(skill_id.to_string(), 2);
     }
 
     /// 规则式联合演进(方案 §9.2 co_evolve 的降级实现,ADR-050 同款哲学)

@@ -117,6 +117,16 @@ pub mod quality_trend;
 /// 单信号超标→Yellow 预警降档，两信号超标→Red 熔断。
 pub mod paradox_dashboard;
 
+/// 行为契约强制层审议入口（Milestone B-3c，九层防御 L0 补齐）
+///
+/// 消费 `FormalViolation` 事件：契约违反 → 否决候选/记录审计。
+pub mod formal_violation;
+
+/// 关键路径动态识别（Milestone B-6，推理悖论红线度量互补）
+///
+/// 六风险因子规则综合，判定任务链是否为关键路径（优先治理对象）。
+pub mod critical_path;
+
 // === 关键类型重导出,简化外部导入 ===
 pub use ahirt::{
     AhirtRedTeam, AhirtStats, ProbePayload, ProbePayloadLibrary, ProbeResult, ProbeType,

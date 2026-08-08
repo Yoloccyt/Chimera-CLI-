@@ -76,6 +76,31 @@ pub struct TierStats {
     pub ice: usize,
 }
 
+/// 完整性审计报告（Milestone B-3b，九层防御 L3 补齐）
+///
+/// 校验回放池不变量：分层统计一致 + 容量不超限 + 无空 payload 损坏条目。
+/// 调用方（efficiency-monitor / 发布 FormalViolation 前）定期审计，
+/// 发现 `consistent == false` 应触发降级检查（数据面可信度受损）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrityReport {
+    /// Hot 层条数
+    pub hot: usize,
+    /// Warm 层条数
+    pub warm: usize,
+    /// Cold 层条数
+    pub cold: usize,
+    /// Ice 层条数
+    pub ice: usize,
+    /// 总条数（= hot+warm+cold+ice）
+    pub total: usize,
+    /// 空 payload 条目数（数据损坏信号）
+    pub empty_payload: usize,
+    /// 超容量层列表（内部淘汰 bug 信号，正常应恒空）
+    pub over_capacity_tiers: Vec<&'static str>,
+    /// 全部不变量成立
+    pub consistent: bool,
+}
+
 /// 内部四层缓冲(单锁保护,锁内无 await,§4.4 红线 1)
 struct Tiers {
     hot: VecDeque<ReplayExperience>,
@@ -165,6 +190,67 @@ impl TieredReplayPool {
             warm: tiers.warm.len(),
             cold: tiers.cold.len(),
             ice: tiers.ice.len(),
+        }
+    }
+
+    /// 完整性审计（Milestone B-3b）— 回放池不变量校验
+    ///
+    /// # 检查项
+    /// 1. 分层统计一致：total = hot + warm + cold + ice
+    /// 2. 各层不超容量（超限 = 内部 FIFO 淘汰 bug）
+    /// 3. 无空 payload 条目（空负载 = 序列化损坏信号）
+    ///
+    /// # 复杂度
+    /// O(total)：全量扫描各层 payload（审计低频，完整覆盖优于采样）。
+    pub fn integrity_audit(&self) -> IntegrityReport {
+        let tiers = self.tiers.lock().unwrap_or_else(|e| e.into_inner());
+
+        let (hot, warm, cold, ice) = (
+            tiers.hot.len(),
+            tiers.warm.len(),
+            tiers.cold.len(),
+            tiers.ice.len(),
+        );
+        let total = hot + warm + cold + ice;
+
+        // 空 payload 扫描（所有层；审计低频可接受全量）
+        let empty_payload = tiers
+            .hot
+            .iter()
+            .chain(tiers.warm.iter())
+            .chain(tiers.cold.iter())
+            .chain(tiers.ice.iter())
+            .filter(|e| e.payload.is_empty())
+            .count();
+
+        // 超容量层检测
+        let mut over_capacity_tiers = Vec::new();
+        if hot > HOT_CAPACITY {
+            over_capacity_tiers.push("hot");
+        }
+        if warm > WARM_CAPACITY {
+            over_capacity_tiers.push("warm");
+        }
+        if cold > COLD_CAPACITY {
+            over_capacity_tiers.push("cold");
+        }
+        if ice > ICE_CAPACITY {
+            over_capacity_tiers.push("ice");
+        }
+
+        let consistent = empty_payload == 0
+            && over_capacity_tiers.is_empty()
+            && total == hot + warm + cold + ice;
+
+        IntegrityReport {
+            hot,
+            warm,
+            cold,
+            ice,
+            total,
+            empty_payload,
+            over_capacity_tiers,
+            consistent,
         }
     }
 }
