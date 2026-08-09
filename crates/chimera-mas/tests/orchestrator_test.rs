@@ -23,6 +23,7 @@
 
 use chimera_mas::prelude::*;
 use chimera_mas::MAX_AGENT_DEPTH;
+use chrono::Utc;
 use event_bus::{EventBus, EventMetadata, EventTopic, NexusEvent};
 use nexus_core::{Task, TaskStatus};
 use std::collections::HashSet;
@@ -416,6 +417,125 @@ async fn test_monitor_subscribes_agent_topic() {
     );
 
     // 终止后台任务
+    handle.abort();
+}
+
+// ============================================================
+// P1-3: monitor 双通道订阅测试(广播 + mpsc 旁路,零孤儿终态保障)
+// ============================================================
+
+/// P1-3 核心: broadcast Lagged 场景下,AgentTaskFailed 终态必须经 mpsc 旁路注册
+///
+/// RED 逻辑:旧实现(仅 broadcast + Err→break)在容量 1 广播通道填充后,monitor
+/// 首次 recv 即返回 Lagged 并退出,终态未注册 → 本测试失败。
+/// GREEN 逻辑:双通道 select! + Lagged→continue 后,mpsc 旁路必达终态注册。
+#[tokio::test]
+async fn test_monitor_registers_terminal_via_mpsc_when_broadcast_lagged() {
+    // 容量 1 的广播通道:单条填充事件即可使 monitor 的广播接收者 Lagged
+    let bus = EventBus::with_capacity(1);
+    let orchestrator = RootOrchestrator::new(bus.clone());
+    let handle = orchestrator.monitor().await.expect("monitor 应成功 spawn");
+
+    // 1) 填充 Agent 主题事件(不 yield),使 monitor 广播接收者缓冲区溢出
+    bus.publish(NexusEvent::AgentTaskDelegated {
+        metadata: EventMetadata::new("test"),
+        from: "root".into(),
+        to: "agent-x".into(),
+        task_id: "t-filler".into(),
+        deadline: Utc::now() + chrono::Duration::hours(1),
+        priority: event_bus::TaskPriority::Medium,
+    })
+    .await
+    .unwrap();
+
+    // 2) 用 publish_critical 发布 AgentTaskFailed——broadcast 侧对 monitor 接收者
+    //    Lagged 丢弃,mpsc 旁路侧必达(双通道投递)
+    bus.publish_critical(NexusEvent::AgentTaskFailed {
+        metadata: EventMetadata::new("test"),
+        from: "agent-a".into(),
+        to: "root".into(),
+        task_id: "t-lagged".into(),
+        error: "timeout".into(),
+        retry_count: 0,
+    })
+    .await
+    .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // 3) 终态必须经 mpsc 旁路注册(零孤儿 §6.1)
+    assert!(
+        orchestrator.check_terminal_state("t-lagged").is_ok(),
+        "broadcast Lagged 场景下 AgentTaskFailed 终态必须经 mpsc 旁路注册(零孤儿)"
+    );
+    handle.abort();
+}
+
+/// P1-3 回归:正常容量下广播路径仍可送达 AgentTaskFailed 终态(双通道不破坏广播)
+#[tokio::test]
+async fn test_monitor_still_registers_terminal_via_broadcast() {
+    let bus = EventBus::new();
+    let orchestrator = RootOrchestrator::new(bus.clone());
+    let handle = orchestrator.monitor().await.expect("monitor 应成功 spawn");
+
+    bus.publish_critical(NexusEvent::AgentTaskFailed {
+        metadata: EventMetadata::new("test"),
+        from: "agent-b".into(),
+        to: "root".into(),
+        task_id: "t-bcast".into(),
+        error: "err".into(),
+        retry_count: 1,
+    })
+    .await
+    .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert!(
+        orchestrator.check_terminal_state("t-bcast").is_ok(),
+        "正常容量下 AgentTaskFailed 终态应经广播路径注册"
+    );
+    handle.abort();
+}
+
+/// P1-3 回归: broadcast Lagged 不终止 monitor(Lagged→continue 而非 break)
+#[tokio::test]
+async fn test_monitor_survives_broadcast_lag() {
+    let bus = EventBus::with_capacity(1);
+    let orchestrator = RootOrchestrator::new(bus.clone());
+    let handle = orchestrator.monitor().await.expect("monitor 应成功 spawn");
+
+    // 填充使广播接收者 Lagged
+    bus.publish(NexusEvent::AgentTaskDelegated {
+        metadata: EventMetadata::new("test"),
+        from: "root".into(),
+        to: "agent-y".into(),
+        task_id: "t-filler2".into(),
+        deadline: Utc::now() + chrono::Duration::hours(1),
+        priority: event_bus::TaskPriority::Medium,
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 再发心跳:若 monitor 未退出(Lagged→continue),心跳仍被记录
+    bus.publish(NexusEvent::AgentHeartbeat {
+        metadata: EventMetadata::new("test"),
+        from: "agent-z".into(),
+        status: event_bus::AgentStatus::Running,
+        current_task: Some("t-z".into()),
+        token_usage: 10,
+        memory_usage_mb: 8,
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let count = orchestrator.heartbeat_count().await;
+    assert!(
+        count >= 1,
+        "broadcast Lagged 后 monitor 不应退出,心跳仍应被记录(heartbeat_count = {count})"
+    );
     handle.abort();
 }
 

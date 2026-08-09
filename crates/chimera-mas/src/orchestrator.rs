@@ -35,7 +35,7 @@ use crate::error::{MasError, Result};
 use crate::quadrant::QuadrantPlan;
 use crate::stability::{StabilityGuard, TerminalState};
 use chrono::{DateTime, Utc};
-use event_bus::{EventBus, EventTopic, NexusEvent};
+use event_bus::{EventBus, EventBusError, EventTopic, NexusEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -410,10 +410,14 @@ impl RootOrchestrator {
     /// - `Ok(JoinHandle)`: 后台任务已 spawn,调用方可 abort 或 await
     /// - `Err`: 不会返回(subscribe_filtered 不返回错误)
     pub async fn monitor(&self) -> Result<tokio::task::JoinHandle<()>> {
-        // §4.4 反模式 3: subscribe 必须在 spawn 之前同步调用
+        // §4.4 反模式 3: subscribe 必须在 spawn 之前同步调用(两通道均在 spawn 前订阅)
         let mut rx = self
             .event_bus
             .subscribe_filtered(HashSet::from([EventTopic::Agent]));
+        // P1-3 修复:AgentTaskFailed 是 Critical 级事件(severity()==Critical + publish_critical
+        // 双通道投递),broadcast Lagged 时仅靠广播可能丢失,导致零孤儿终态注册缺失。
+        // 增加 mpsc 旁路订阅,双通道 select! 合并(参照 quest-engine ambient_mode.rs 双通道模式)。
+        let mut critical_rx = self.event_bus.subscribe_critical_events();
         let heartbeats = self.heartbeats.clone();
         // WHY Arc::clone 而非 clone:StabilityGuard 内部 DashMap 已并发安全,
         // Arc::clone 共享同一实例,后台任务注册终态后主线程可立即通过
@@ -422,15 +426,39 @@ impl RootOrchestrator {
 
         let handle = tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(NexusEvent::AgentHeartbeat {
+                let event = tokio::select! {
+                    broadcast = rx.recv() => match broadcast {
+                        Ok(e) => Some(e),
+                        // P1-3:SlowConsumerDropped 是 broadcast 背压信号,不应终止——
+                        // AgentTaskFailed 等 Critical 终态事件仍可经 mpsc 旁路送达。
+                        // 若沿用旧行为(Err→break),恰好会在 Critical 事件最可能丢失时退出,修复失效。
+                        Err(EventBusError::SlowConsumerDropped { .. }) => {
+                            warn!("monitor broadcast 订阅 Lagged,跳过本轮(Critical 事件由 mpsc 旁路保障)");
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "monitor 心跳订阅通道关闭,终止收集循环");
+                            break;
+                        }
+                    },
+                    critical = critical_rx.recv() => match critical {
+                        Some(e) => Some(e),
+                        None => {
+                            warn!("monitor Critical 旁路通道关闭,终止收集循环");
+                            break;
+                        }
+                    },
+                };
+                let Some(event) = event else { break };
+                match event {
+                    NexusEvent::AgentHeartbeat {
                         from,
                         status,
                         current_task,
                         token_usage,
                         memory_usage_mb,
                         ..
-                    }) => {
+                    } => {
                         let info = HeartbeatInfo {
                             agent_id: from.clone(),
                             status,
@@ -446,7 +474,7 @@ impl RootOrchestrator {
                         guard.insert(from.clone(), info);
                         debug!(agent_id = %from, "monitor 收到 AgentHeartbeat");
                     }
-                    Ok(NexusEvent::AgentTaskCompleted { task_id, .. }) => {
+                    NexusEvent::AgentTaskCompleted { task_id, .. } => {
                         // Task 19 §19.10: 零孤儿终态注册 + 校验
                         stability_guard.record_terminal(task_id.clone(), TerminalState::Completed);
                         // 校验注册成功(应返回 Ok,失败则记 warn 标记孤儿)
@@ -455,26 +483,21 @@ impl RootOrchestrator {
                         }
                         debug!(task_id = %task_id, "monitor 收到 AgentTaskCompleted,已注册终态");
                     }
-                    Ok(NexusEvent::AgentTaskFailed { task_id, .. }) => {
+                    NexusEvent::AgentTaskFailed { task_id, .. } => {
                         // Task 19 §19.10: 零孤儿终态注册 + 校验
-                        // AgentTaskFailed 是 Critical 级事件(§6.2 红线,走 mpsc),
-                        // 但本订阅是 broadcast 旁路,仅用于注册终态,
-                        // 不影响 Critical 事件的 mpsc 投递
+                        // P1-3:双通道订阅(广播 + mpsc 旁路)均可送达 AgentTaskFailed——
+                        // broadcast Lagged 时 mpsc 旁路兜底,终态注册不丢失(零孤儿红线)。
                         stability_guard.record_terminal(task_id.clone(), TerminalState::Failed);
                         if let Err(e) = stability_guard.ensure_terminal_state(&task_id) {
                             warn!(task_id = %task_id, error = %e, "零孤儿校验失败:AgentTaskFailed 注册后仍报孤儿(不应发生)");
                         }
                         debug!(task_id = %task_id, "monitor 收到 AgentTaskFailed,已注册终态");
                     }
-                    Ok(_) => {
-                        // 非 AgentHeartbeat/AgentTaskCompleted/AgentTaskFailed 的 Agent 主题事件
-                        // (如 AgentTaskDelegated/AgentConsultRequested 等),
-                        // FilteredSubscriber 已过滤非 Agent 主题,此处仅跳过非终态变体
+                    _ => {
+                        // 广播侧:非 AgentHeartbeat/AgentTaskCompleted/AgentTaskFailed 的
+                        // Agent 主题事件已由 FilteredSubscriber 过滤,此处跳过;
+                        // Critical 旁路侧:SkepticVeto/BudgetExceeded 等非 Agent 终态事件,忽略。
                         continue;
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "monitor 心跳订阅通道关闭,终止收集循环");
-                        break;
                     }
                 }
             }

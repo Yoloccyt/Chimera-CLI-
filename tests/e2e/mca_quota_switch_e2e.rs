@@ -56,10 +56,50 @@ async fn quota_exhausted_delivered_via_critical_mpsc() {
 
 #[tokio::test]
 async fn quota_switch_full_chain_preserves_session_continuity() {
-    // ---- 步骤 1:通道 A(DeepSeek,隐式缓存)配额耗尽 ----
+    // ---- 步骤 0:装配(组合根角色)—— csn 注册通道能力(事件驱动降级链候选事实源) ----
     let bus = EventBus::new();
-    let mut critical_rx = bus.subscribe_critical_events();
+    let sub = csn_substitutor::CsnSubstitutor::with_event_bus(
+        csn_substitutor::CsnConfig::default(),
+        bus.clone(),
+    );
     let exhausted_key = "deep_seek/deepseek-v4-flash";
+    // 耗尽通道能力:工具 + OnOff 思考 + 1M 窗口 + None 守恒(DeepSeek)
+    sub.register_channel(
+        exhausted_key,
+        caps(
+            true,
+            ThinkingSupport::OnOff,
+            1_000_000,
+            StatePreservationPolicy::None,
+        ),
+    );
+    // 候选 A:GLM(工具 + EffortLevels + 1M + BlockPreservation)—— 能力接近
+    sub.register_channel(
+        "zhipu/glm-5.2",
+        caps(
+            true,
+            ThinkingSupport::EffortLevels(vec!["low".into(), "high".into()]),
+            1_000_000,
+            StatePreservationPolicy::BlockPreservation,
+        ),
+    );
+    // 候选 B:Step(缺工具 + 256K 小窗口)—— 能力差,距离大
+    sub.register_channel(
+        "step_fun/step-3.5-flash-2603",
+        caps(
+            false,
+            ThinkingSupport::OnOff,
+            262_144,
+            StatePreservationPolicy::None,
+        ),
+    );
+
+    // ---- 步骤 1:通道 A 配额耗尽(事件驱动起点) ----
+    let mut critical_rx = bus.subscribe_critical_events();
+    let mut substituted_rx = bus.subscribe();
+    let handle = sub
+        .start_degradation_listener()
+        .expect("应启动降级 listener");
     bus.publish(NexusEvent::AffinityQuotaExhausted {
         metadata: EventMetadata::new("mca-gateway"),
         route_key: exhausted_key.into(),
@@ -73,38 +113,17 @@ async fn quota_switch_full_chain_preserves_session_continuity() {
         .unwrap();
     assert_eq!(evt.type_name(), "AffinityQuotaExhausted");
 
-    // ---- 步骤 2:csn 按能力相似度选替代通道 ----
-    // 耗尽通道能力:工具 + OnOff 思考 + 1M 窗口 + None 守恒(DeepSeek)
-    let exhausted_caps = caps(
-        true,
-        ThinkingSupport::OnOff,
-        1_000_000,
-        StatePreservationPolicy::None,
-    );
-    let candidates = vec![
-        // 候选 A:GLM(工具 + EffortLevels + 1M + BlockPreservation)—— 能力接近
-        (
-            "zhipu/glm-5.2".to_string(),
-            caps(
-                true,
-                ThinkingSupport::EffortLevels(vec!["low".into(), "high".into()]),
-                1_000_000,
-                StatePreservationPolicy::BlockPreservation,
-            ),
-        ),
-        // 候选 B:Step(缺工具 + 256K 小窗口)—— 能力差,距离大
-        (
-            "step_fun/step-3.5-flash-2603".to_string(),
-            caps(
-                false,
-                ThinkingSupport::OnOff,
-                262_144,
-                StatePreservationPolicy::None,
-            ),
-        ),
-    ];
-    let substitute =
-        csn_substitutor::select_substitute(&exhausted_caps, &candidates).expect("必须选出替代通道");
+    // ---- 步骤 2:事件驱动降级(替代原直调 select_substitute)——
+    // listener 消费 AffinityQuotaExhausted → 能力相似度选替代 → 发布 CsnSubstitutionTriggered
+    let substitute = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), substituted_rx.recv())
+            .await
+            .expect("超时:降级链未触发")
+            .expect("事件流错误");
+        if let NexusEvent::CsnSubstitutionTriggered { substitute_id, .. } = event {
+            break substitute_id;
+        }
+    };
     assert_eq!(substitute, "zhipu/glm-5.2", "应选能力最相似的 GLM 接管");
 
     // ---- 步骤 3:会话状态按新通道(GLM,BlockPreservation)迁移 ----
@@ -153,6 +172,7 @@ async fn quota_switch_full_chain_preserves_session_continuity() {
         )
     });
     assert!(assistant_text_survived, "助手可见文本必须跨通道幸存");
+    handle.abort();
 }
 
 #[tokio::test]

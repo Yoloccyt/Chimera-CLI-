@@ -61,7 +61,7 @@ pub mod mcp_nodes;
 pub mod memory;
 pub mod metrics_dashboard;
 pub mod osa_sparse;
-/// P1(ADR-072):超窗兜底面板 — 展示 OverWindowFallbackTriggered 触发记录
+/// P1(ADR-073):超窗兜底面板 — 展示 OverWindowFallbackTriggered 触发记录
 pub mod overwindow;
 pub mod parliament;
 /// Task 3.7:PVL 过程评分面板 — 九维度过程评分（L10 → L7 向下依赖）

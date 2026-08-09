@@ -48,7 +48,7 @@ pub mod substitutor;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
-pub use channel_affinity::{capability_distance, select_substitute};
+pub use channel_affinity::{capability_distance, select_substitute, ChannelAffinityRegistry};
 pub use config::CsnConfig;
 pub use degradation_chain::DegradationChain;
 pub use error::CsnError;
@@ -56,6 +56,7 @@ pub use substitutor::{SubstitutionCandidateRegistry, SubstitutionRegistryStats};
 pub use types::{CapabilityDescriptor, CapabilityMetadata, SubstitutionCandidate};
 
 use dashmap::DashMap;
+use nexus_contracts::affinity::CapabilitySet;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
@@ -63,6 +64,80 @@ use tracing::warn;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 
 use crate::similarity::cosine_similarity;
+
+/// 配额耗尽降级处理(P1-1,ADR-068 M3 接线)— 自由函数供 listener 后台任务调用
+///
+/// # 流程
+/// 1. 查耗尽通道能力(未注册 → warn 跳过,不 panic)
+/// 2. 候选 = 全通道 − 耗尽通道(O(n) 快照)
+/// 3. `select_substitute` 按能力加权距离选最相似替代(min_by 单趟)
+/// 4. 推进通道降级链(chain_id = route_key;无则创建,levels 深度 = 候选数)
+/// 5. 发布 `CsnSubstitutionTriggered`(复用既有事件,append-only 零新变体)
+///
+/// # 锁纪律
+/// 全部 DashMap 锁在语句级作用域内释放,不跨 .await 持锁(§4.4 反模式 1)。
+async fn handle_quota_exhausted(
+    chains: &Arc<DashMap<String, DegradationChain>>,
+    channel_registry: &ChannelAffinityRegistry,
+    bus: &EventBus,
+    route_key: &str,
+) {
+    // 1. 耗尽通道能力(未注册 → warn 跳过,不 panic)
+    let Some(exhausted_caps) = channel_registry.get(route_key) else {
+        warn!(route_key = %route_key, "AffinityQuotaExhausted: 通道未注册于 CSN,跳过降级");
+        return;
+    };
+    // 2. 候选 = 全通道 − 耗尽通道
+    let candidates = channel_registry.candidates_excluding(route_key);
+    if candidates.is_empty() {
+        warn!(route_key = %route_key, "无替代通道候选,无法降级");
+        return;
+    }
+    // 3. 能力加权距离选最相似替代
+    let Some(substitute) = select_substitute(&exhausted_caps, &candidates) else {
+        return;
+    };
+    let substitute_owned = substitute.to_string();
+    // 3b. 最优候选能力集(用于相似度得分计算;O(n) 单趟 find,可接受)
+    let Some((_, best_caps)) = candidates.iter().find(|(key, _)| key == &substitute_owned) else {
+        return;
+    };
+    // 4. 推进通道降级链(chain_id = route_key;无则创建)
+    let depth = candidates.len();
+    let level = if let Some(mut chain) = chains.get_mut(route_key) {
+        match chain.next_level() {
+            Ok(()) => chain.current_level() as u32,
+            Err(CsnError::ChainExhausted { .. }) => {
+                chains.remove(route_key);
+                return;
+            }
+            Err(e) => {
+                warn!(error = %e, "通道降级推进失败");
+                return;
+            }
+        }
+    } else {
+        let levels: Vec<String> = (0..depth).map(|i| format!("level-{i}")).collect();
+        let chain = DegradationChain::new(route_key.to_string(), levels);
+        let level = chain.current_level() as u32;
+        chains.insert(route_key.to_string(), chain);
+        level
+    };
+    // 5. 发布 CsnSubstitutionTriggered(复用既有事件;相似度 = 1 - 加权距离,注释说明语义)
+    let event = NexusEvent::CsnSubstitutionTriggered {
+        metadata: EventMetadata::new("csn-substitutor"),
+        original_capability_id: route_key.to_string(),
+        substitute_id: substitute_owned,
+        // WHY 1 - 加权欧氏距离:CsnSubstitutionTriggered.similarity_score 原语义为
+        // 余弦相似度;通道亲和距离为加权欧氏距离(0=最相似),以 1-dist 近似映射,
+        // 保持"越大越相似"的方向一致性(详见 channel_affinity.rs 文档)。
+        similarity_score: 1.0 - capability_distance(&exhausted_caps, best_caps),
+        degradation_level: level,
+    };
+    if let Err(e) = bus.publish(event).await {
+        warn!(error = %e, "配额降级替代事件发布失败");
+    }
+}
 
 /// 能力替代网络核心组件 — 能力注册、替代查询与降级链管理
 ///
@@ -97,6 +172,11 @@ pub struct CsnSubstitutor {
     config: CsnConfig,
     /// 可选事件总线(替代触发时发布事件)
     event_bus: Option<EventBus>,
+    /// 通道能力注册表(配额耗尽降级链候选事实源,ADR-068 M3 接线,P1-1)
+    ///
+    /// 承载 route_key → CapabilitySet,由组合根(CLI/E2E 装配)注入;
+    /// csn 不依赖 mca-gateway(依赖铁律 §2.2)。
+    channel_registry: ChannelAffinityRegistry,
 }
 
 impl CsnSubstitutor {
@@ -109,6 +189,7 @@ impl CsnSubstitutor {
             transaction_chain_map: Arc::new(DashMap::new()),
             config,
             event_bus: None,
+            channel_registry: ChannelAffinityRegistry::new(),
         }
     }
 
@@ -124,7 +205,27 @@ impl CsnSubstitutor {
             transaction_chain_map: Arc::new(DashMap::new()),
             config,
             event_bus: Some(bus),
+            channel_registry: ChannelAffinityRegistry::new(),
         }
+    }
+
+    /// 注册通道能力(配额耗尽降级候选事实源,P1-1)
+    ///
+    /// # 参数
+    /// - `route_key`: 通道路由键(如 `"zhipu/glm-5.2"`)
+    /// - `caps`: 通道能力集
+    pub fn register_channel(&self, route_key: impl Into<String>, caps: CapabilitySet) {
+        self.channel_registry.register(route_key, caps);
+    }
+
+    /// 注销通道能力
+    pub fn unregister_channel(&self, route_key: &str) -> bool {
+        self.channel_registry.unregister(route_key)
+    }
+
+    /// 已注册通道数
+    pub fn channel_count(&self) -> usize {
+        self.channel_registry.len()
     }
 
     /// 获取能力注册表引用
@@ -421,55 +522,63 @@ impl CsnSubstitutor {
         // 反映到原始 substitutor(Week 7 Task 2.5 关键 bug 修复)
         let chains = Arc::clone(&self.chains);
         let tx_map = Arc::clone(&self.transaction_chain_map);
+        let channel_registry = self.channel_registry.clone();
 
         // 在 spawn 之前同步订阅,确保不丢失后续事件
         let mut rx = bus.subscribe();
 
         Some(tokio::spawn(async move {
             while let Ok(event) = rx.recv().await {
-                if let NexusEvent::McpMeshTransactionCompleted {
-                    success: false,
-                    transaction_id,
-                    capability_id,
-                    ..
-                } = event
-                {
-                    // 确定要推进的 chain_id:
-                    // 1. 优先用 capability_id(若 Some)
-                    // 2. 否则用 transaction_id → chain_id 映射
-                    // 3. 都无 → None(回退到推进所有链)
-                    let target_chain_id = capability_id
-                        .or_else(|| tx_map.get(&transaction_id).map(|r| r.value().clone()));
+                match event {
+                    NexusEvent::McpMeshTransactionCompleted {
+                        success: false,
+                        transaction_id,
+                        capability_id,
+                        ..
+                    } => {
+                        // 确定要推进的 chain_id:
+                        // 1. 优先用 capability_id(若 Some)
+                        // 2. 否则用 transaction_id → chain_id 映射
+                        // 3. 都无 → None(回退到推进所有链)
+                        let target_chain_id = capability_id
+                            .or_else(|| tx_map.get(&transaction_id).map(|r| r.value().clone()));
 
-                    if let Some(chain_id) = target_chain_id {
-                        // 精准推进:只推进该 chain_id 的链
-                        let result = {
-                            let mut chain = match chains.get_mut(&chain_id) {
-                                Some(c) => c,
-                                None => continue,
+                        if let Some(chain_id) = target_chain_id {
+                            // 精准推进:只推进该 chain_id 的链
+                            let result = {
+                                let mut chain = match chains.get_mut(&chain_id) {
+                                    Some(c) => c,
+                                    None => continue,
+                                };
+                                chain.next_level()
                             };
-                            chain.next_level()
-                        };
-                        if matches!(result, Err(CsnError::ChainExhausted { .. })) {
-                            // ChainExhausted → 自动移除(SubTask 0.5.9)
-                            warn!(chain_id = %chain_id, "降级链已耗尽,自动移除");
-                            chains.remove(&chain_id);
-                        }
-                    } else {
-                        // 向后兼容:capability_id 为 None 且无映射时,推进所有链
-                        // WHY 保留原行为:旧版 mcp-mesh 不填充 capability_id,
-                        // 保持兼容避免破坏现有部署
-                        let mut to_remove: Vec<String> = Vec::new();
-                        for mut chain in chains.iter_mut() {
-                            if chain.next_level().is_err() {
-                                to_remove.push(chain.chain_id.clone());
+                            if matches!(result, Err(CsnError::ChainExhausted { .. })) {
+                                // ChainExhausted → 自动移除(SubTask 0.5.9)
+                                warn!(chain_id = %chain_id, "降级链已耗尽,自动移除");
+                                chains.remove(&chain_id);
+                            }
+                        } else {
+                            // 向后兼容:capability_id 为 None 且无映射时,推进所有链
+                            // WHY 保留原行为:旧版 mcp-mesh 不填充 capability_id,
+                            // 保持兼容避免破坏现有部署
+                            let mut to_remove: Vec<String> = Vec::new();
+                            for mut chain in chains.iter_mut() {
+                                if chain.next_level().is_err() {
+                                    to_remove.push(chain.chain_id.clone());
+                                }
+                            }
+                            for cid in to_remove {
+                                warn!(chain_id = %cid, "降级链已耗尽,自动移除");
+                                chains.remove(&cid);
                             }
                         }
-                        for cid in to_remove {
-                            warn!(chain_id = %cid, "降级链已耗尽,自动移除");
-                            chains.remove(&cid);
-                        }
                     }
+                    // P1-1:MCA M3 配额耗尽降级链接线(ADR-068)
+                    // AffinityQuotaExhausted(Critical mpsc 必达)→ 按能力相似度选替代通道
+                    NexusEvent::AffinityQuotaExhausted { route_key, .. } => {
+                        handle_quota_exhausted(&chains, &channel_registry, &bus, &route_key).await;
+                    }
+                    _ => {}
                 }
             }
         }))

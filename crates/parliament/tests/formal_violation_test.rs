@@ -8,7 +8,12 @@
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::behavior_contract::{BehaviorContract, ContractCheckOutcome, ContractContext};
-use parliament::formal_violation::handle_formal_violation;
+use nexus_core::{Quest, ThinkingMode};
+use parliament::formal_violation::{
+    enforce_and_audit, handle_formal_violation, spawn_formal_violation_subscriber,
+};
+use parliament::Parliament;
+use std::time::Duration;
 
 /// 构造含前置/后置/不变量断言的契约
 fn make_contract() -> BehaviorContract {
@@ -104,5 +109,87 @@ async fn parliament_handles_formal_violation() {
     assert!(
         verdict.contains("reject") || verdict.contains("否决") || verdict.contains("deny"),
         "审议应给出否决建议: {verdict:?}"
+    );
+}
+
+// ============================================================
+// P1-4: 生产接线测试（enforce_and_audit / 审议闸门 / 订阅消费）
+// ============================================================
+
+/// 前置闸门 Violated：发布事件 + 返回否决建议（P1-4 生产接线）
+#[tokio::test]
+async fn enforce_and_audit_violated_publishes_and_rejects() {
+    let bus = EventBus::new();
+    let mut rx = bus.subscribe();
+    let contract = BehaviorContract::new("bc-guard", "my::Type", ContractContext::Runtime)
+        .with_invariant("inv-1");
+    let verdict = enforce_and_audit(&bus, &[contract], &[]).expect("契约违反应返回否决建议");
+    assert!(verdict.contains("reject"), "应含否决: {verdict}");
+    let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("应收到 FormalViolation")
+        .expect("recv 不应失败");
+    assert!(
+        matches!(event, NexusEvent::FormalViolation { ref contract_id, .. } if contract_id == "bc-guard"),
+        "事件契约 ID 应匹配: {event:?}"
+    );
+}
+
+/// 前置闸门 Satisfied：无事件、返回 None
+#[test]
+fn enforce_and_audit_satisfied_no_event() {
+    let bus = EventBus::new();
+    let contract = BehaviorContract::new("bc-ok", "my::Type", ContractContext::Runtime)
+        .with_invariant("inv-1");
+    assert!(
+        enforce_and_audit(&bus, &[contract], &["inv-1".into()]).is_none(),
+        "全部断言满足应返回 None"
+    );
+}
+
+/// 订阅消费：外部发布 FormalViolation → subscriber 调用 handle_formal_violation
+/// （P1-4 修复 "handle_formal_violation 生产调用者 0"）
+#[tokio::test]
+async fn subscriber_consumes_formal_violation() {
+    let bus = EventBus::new();
+    spawn_formal_violation_subscriber(bus.clone());
+    let contract = make_contract();
+    bus.publish(NexusEvent::FormalViolation {
+        metadata: EventMetadata::new("test"),
+        contract_id: contract.contract_id.clone(),
+        target_type: contract.target_type.clone(),
+        violations: vec!["missing-1".into()],
+        context: ContractContext::Runtime,
+    })
+    .await
+    .unwrap();
+    // 订阅器消费为异步任务：短暂等待确保处理完成（不 panic 即通过）
+    tokio::time::sleep(Duration::from_millis(100)).await;
+}
+
+/// 集成：deliberate_with_contract_guard 在 Violated 时返回 ContractViolated
+#[tokio::test]
+async fn deliberate_contract_guard_vetoes_on_violation() {
+    let bus = EventBus::new();
+    let contract = BehaviorContract::new("bc-1", "my::Type", ContractContext::Runtime)
+        .with_invariant("never-observed");
+    let parliament = Parliament::new(parliament::ParliamentConfig::default(), bus)
+        .with_behavior_contracts(vec![contract]);
+    let quest = Quest {
+        quest_id: "q-1".to_string(),
+        title: "测试任务".to_string(),
+        tasks: vec![],
+        thinking_mode: ThinkingMode::Standard,
+        checkpoint_id: None,
+        priority: 128,
+    };
+    let proposal = parliament::Proposal::new("p-1", "q-1", "测试计划", 0.5);
+    let err = parliament
+        .deliberate_with_contract_guard(&quest, &proposal, &[])
+        .await
+        .expect_err("违反契约必须否决候选");
+    assert!(
+        matches!(err, parliament::ParliamentError::ContractViolated(_)),
+        "应返回 ContractViolated: {err:?}"
     );
 }

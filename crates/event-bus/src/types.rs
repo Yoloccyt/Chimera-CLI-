@@ -2358,10 +2358,12 @@ pub enum NexusEvent {
     // ============================================================
     // L8 Parliament:行为契约强制层（Milestone B-3c,append-only）
     // ============================================================
-    /// 行为契约违反 `[Normal]` — 强制层检出契约断言未覆盖，供 Parliament 审议
+    /// 行为契约违反 `[Critical]` — 强制层检出契约断言未覆盖，供 Parliament 审议
     ///
     /// 九层防御 L0 补齐（方案 §7.2）：BehaviorContract 违反 → 发布本事件 +
-    /// Parliament 审议入口（否决候选/记录审计）。Normal 级（审计可丢不致命）。
+    /// Parliament 审议入口（违反即否决：候选不得进入后续阶段）。
+    /// P1-5 升级 Critical：契约违反是安全语义（L0 "行为契约不可违反"），
+    /// 丢失导致违反无人审议、候选继续进入后续阶段，因此走 mpsc 旁路确保投递。
     FormalViolation {
         /// 事件元数据
         metadata: EventMetadata,
@@ -2603,6 +2605,9 @@ impl NexusEvent {
             // 无人触发、请求持续打向死通道。语义对齐 BudgetExceeded(资源红线
             // 必须确保投递);bus.rs is_critical_mpsc_event() 已同步列入(双清单)。
             | Self::AffinityQuotaExhausted { .. } => EventSeverity::Critical,
+            // P1-5: FormalViolation 升级为 Critical(违反即否决,丢失导致契约违反
+            // 无人审议、候选继续进入后续阶段,违反九层防御 L0 语义;双清单同步见 bus.rs)
+            | Self::FormalViolation { .. } => EventSeverity::Critical,
             // 控制事件(请求/反馈):不阻断系统,不触发 mpsc 旁路投递
             Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }

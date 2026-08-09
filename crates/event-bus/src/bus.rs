@@ -32,14 +32,15 @@ pub const DEFAULT_CAPACITY: usize = 1024;
 /// 容量满时按优先级采样丢弃(见 `send_critical_mpsc` 的 try_send 策略)。
 pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 
-/// 判断事件是否走 mpsc 旁路通道(Critical 安全告警事件)
+/// 判断事件是否走 mpsc 旁路通道(Critical 安全/治理告警事件)
 ///
 /// §6.2 红线要求:Critical 安全事件(SkepticVeto/RedTeamAudit/AsaIntervention/
-/// BudgetExceeded)必须用 mpsc channel 确保送达,避免 broadcast 在 Lagged 场景下
-/// 丢失。这与 `NexusEvent::severity()` 部分重叠但语义不同:
+/// BudgetExceeded/AgentTaskFailed/FormalViolation 等 9 类)必须用 mpsc channel
+/// 确保送达,避免 broadcast 在 Lagged 场景下丢失。这与 `NexusEvent::severity()`
+/// 部分重叠但语义不同:
 /// - `severity()` 是事件总线背压级别(同步函数,AsaIntervention 即使 Block 级
 ///   也返回 Normal,因为不依赖运行时值)
-/// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,4 类安全告警事件强制走 mpsc
+/// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,9 类安全/治理告警事件强制走 mpsc
 ///
 /// WHY 单独定义:AsaIntervention 的 severity() 返回 Normal,但 Block 级别在语义上
 /// 等价于 Critical(见 types.rs:807-810 注释),必须通过 mpsc 旁路确保投递。
@@ -47,15 +48,21 @@ pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 /// # 双清单同步红线(MCA M0 起显式声明)
 /// 本函数与 `NexusEvent::severity()` 是两张独立清单:新增 Critical 事件
 /// **必须同时修改两处**,只改 severity() 会导致"标 Critical 但 broadcast
-/// Lagged 时丢失"(旁路不生效)。同步性由 types.rs 测试
-/// `test_critical_severity_implies_mpsc_bypass` 属性断言守护。
+/// Lagged 时丢失"(旁路不生效)。同步性由**本文件 bus.rs 测试模块**
+/// `test_critical_severity_implies_mpsc_bypass`(L1207 起)守护:遍历
+/// `mpsc_required` 全量 9 个清单断言 `is_critical_mpsc_event` 必中。
 fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
     matches!(
         event,
         NexusEvent::SkepticVeto { .. }
             | NexusEvent::RedTeamAudit { .. }
-            | NexusEvent::AsaIntervention { .. }
             | NexusEvent::BudgetExceeded { .. }
+            // P1-2:AgentTaskFailed 纳入双清单(severity() 已是 Critical,types.rs L2579-2582)
+            // WHY:delegation.rs 走 publish_critical 双通道(行为已合规),但若未来其他发布方
+            // 改用 publish/publish_batch,则仅依赖 is_critical_mpsc_event 判定走旁路——
+            // 缺失此变体将导致失败事件在 broadcast Lagged 场景下丢失(孤儿任务,§6.1 红线)。
+            | NexusEvent::AgentTaskFailed { .. }
+            | NexusEvent::AsaIntervention { .. }
             // MCA M0(ADR-065):厂商额度耗尽必须确保投递(触发降级链切换,
             // 与 types.rs severity() 双清单同步)
             | NexusEvent::AffinityQuotaExhausted { .. }
@@ -66,6 +73,10 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
             // R2 路径代码可能仍在生效。必须走 mpsc 旁路确保投递,对齐 §6.2 红线 5。
             | NexusEvent::R2FreezeViolation { .. }
             | NexusEvent::R2FreezeRollbackFailed { .. }
+            // P1-5:FormalViolation 纳入 mpsc 旁路(违反即否决的投递保证,
+            // 与 types.rs severity() 双清单同步;丢失导致契约违反无人审议,
+            // 候选继续进入后续阶段,违反九层防御 L0 语义)
+            | NexusEvent::FormalViolation { .. }
     )
 }
 
@@ -1218,31 +1229,76 @@ mod tests {
                 veto_reason: "r".into(),
                 frozen_capabilities: vec![],
             },
+            NexusEvent::RedTeamAudit {
+                metadata: EventMetadata::new("t"),
+                vulnerability_type: "prompt_injection".into(),
+                failed_probes: 1,
+                total_probes: 2,
+                detection_rate: 0.5,
+                remediation_suggestion: "s".into(),
+            },
             NexusEvent::BudgetExceeded {
                 metadata: EventMetadata::new("t"),
                 budget_type: "token".into(),
                 current: 2,
                 limit: 1,
             },
+            NexusEvent::AgentTaskFailed {
+                metadata: EventMetadata::new("t"),
+                from: "agent-a".into(),
+                to: "root".into(),
+                task_id: "t-1".into(),
+                error: "timeout".into(),
+                retry_count: 0,
+            },
+            NexusEvent::AsaIntervention {
+                metadata: EventMetadata::new("t"),
+                operation_id: "op-1".into(),
+                action: "Block".into(),
+                safety_score: 0.1,
+                block_reason: Some("unsafe".into()),
+                alternative_suggestion: None,
+            },
             NexusEvent::AffinityQuotaExhausted {
                 metadata: EventMetadata::new("t"),
                 route_key: "zhipu/glm-5.2".into(),
                 reason: "quota".into(),
             },
+            NexusEvent::R2FreezeViolation {
+                metadata: EventMetadata::new("t"),
+                violation_type: "CiDetection".into(),
+                evidence: "ev".into(),
+            },
+            NexusEvent::R2FreezeRollbackFailed {
+                metadata: EventMetadata::new("t"),
+                reason: "git revert conflict".into(),
+            },
+            NexusEvent::FormalViolation {
+                metadata: EventMetadata::new("t"),
+                contract_id: "bc-1".into(),
+                target_type: "event_bus::EventBus".into(),
+                violations: vec!["v1".into()],
+                context: nexus_contracts::behavior_contract::ContractContext::Runtime,
+            },
         ];
+        assert_eq!(
+            mpsc_required.len(),
+            9,
+            "旁路清单应覆盖全量 9 个事件,新增 Critical 必须显式加入(双清单同步红线)"
+        );
         for event in &mpsc_required {
             assert!(
                 is_critical_mpsc_event(event),
                 "{} 必须在 mpsc 旁路清单中(双清单同步红线)",
                 event.type_name()
             );
+            assert_eq!(
+                event.severity(),
+                crate::EventSeverity::Critical,
+                "{} 的 severity() 必须为 Critical(双清单一致)",
+                event.type_name()
+            );
         }
-        // AffinityQuotaExhausted 双清单一致性:severity 也必须是 Critical
-        assert_eq!(
-            mpsc_required[2].severity(),
-            crate::EventSeverity::Critical,
-            "AffinityQuotaExhausted 的 severity() 必须为 Critical"
-        );
     }
 
     #[test]

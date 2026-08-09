@@ -18,7 +18,81 @@
 use nexus_contracts::affinity::{
     CacheSupport, CapabilitySet, StatePreservationPolicy, ThinkingSupport,
 };
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
+/// 通道能力注册表 — route_key → CapabilitySet 并发安全映射(ADR-068 M3 接线,P1-1)
+///
+/// # WHY 需要注册表
+/// `AffinityQuotaExhausted` 事件载荷只有 `route_key` + `reason`(types.rs L2069-2076),
+/// 不含 CapabilitySet;csn 需内部注册表承载候选通道能力,才能按能力相似度
+/// 选替代通道。候选事实源由组合根(CLI 装配 / E2E 装配)注入——csn 不依赖
+/// mca-gateway(避免 L7/L10 向上依赖,依赖铁律 §2.2)。
+///
+/// # 并发安全
+/// `RwLock<HashMap>` 同步锁:读多写少(注册低频、候选查询高频),
+/// 锁在语句级作用域内释放,不跨 .await 持锁(§4.4 反模式 1)。
+#[derive(Clone, Default)]
+pub struct ChannelAffinityRegistry {
+    channels: Arc<RwLock<HashMap<String, CapabilitySet>>>,
+}
+
+impl ChannelAffinityRegistry {
+    /// 创建空注册表
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 注册(或覆盖)通道能力;route_key 格式 `provider/model`
+    pub fn register(&self, route_key: impl Into<String>, caps: CapabilitySet) {
+        self.channels
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(route_key.into(), caps);
+    }
+
+    /// 注销通道能力,返回是否曾存在
+    pub fn unregister(&self, route_key: &str) -> bool {
+        self.channels
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(route_key)
+            .is_some()
+    }
+
+    /// 查询通道能力
+    pub fn get(&self, route_key: &str) -> Option<CapabilitySet> {
+        self.channels
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(route_key)
+            .cloned()
+    }
+
+    /// 已注册通道数
+    pub fn len(&self) -> usize {
+        self.channels
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
+    /// 是否无已注册通道
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// 排除耗尽通道后的候选快照(供 select_substitute 消费)
+    pub fn candidates_excluding(&self, exhausted: &str) -> Vec<(String, CapabilitySet)> {
+        self.channels
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|(key, _)| key.as_str() != exhausted)
+            .map(|(key, caps)| (key.clone(), caps.clone()))
+            .collect()
+    }
+}
 /// 能力维度权重(距离计算)——核心能力权重最高
 struct CapabilityWeights;
 

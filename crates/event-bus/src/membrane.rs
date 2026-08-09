@@ -70,12 +70,12 @@ pub enum InnerLoad {
 /// 新增变体时编译器强制更新映射,避免遗漏导致未知分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventCategory {
-    /// Critical 安全/治理事件(10 个 severity()==Critical 变体)
+    /// Critical 安全/治理事件(11 个 severity()==Critical 变体)
     ///
     /// spec.md L186 列出的 6 个 Critical 事件 + 代码 severity() 实际标记
-    /// Critical 的 10 个变体(CheckpointSaved/ConsensusReached/SlowConsumerDropped/
+    /// Critical 的 11 个变体(CheckpointSaved/ConsensusReached/SlowConsumerDropped/
     /// OrphanCallDetected/SkepticVeto/VetoOverridden/RedTeamAudit/BudgetExceeded/
-    /// AgentTaskFailed/AsaIntervention)
+    /// AgentTaskFailed/AsaIntervention/FormalViolation(P1-5 升级))
     Critical,
 
     /// 记忆写:修改记忆/上下文/能力分层状态(影响内环记忆一致性)
@@ -315,12 +315,12 @@ impl MembraneFilter {
     /// 优先级:Critical(severity) > 字段条件判定(risk_level) > 变体名匹配。
     ///
     /// # 分类规则
-    /// 1. severity()==Critical → EventCategory::Critical(10 个变体)
+    /// 1. severity()==Critical → EventCategory::Critical(11 个变体)
     /// 2. UserIntentEncoded.risk_level >= 71 → HighRisk(spec.md L200 高危操作)
     /// 3. 字段条件不满足时,按变体名 match 归入对应类别
     /// 4. 未知变体(不应发生,因 match 穷尽)→ 默认 NormalLow(保守策略)
     pub fn categorize(event: &NexusEvent) -> EventCategory {
-        // 1. Critical 事件族优先(severity==Critical 的 10 个变体)
+        // 1. Critical 事件族优先(severity==Critical 的 11 个变体)
         if event.severity() == EventSeverity::Critical {
             return EventCategory::Critical;
         }
@@ -487,8 +487,6 @@ impl MembraneFilter {
             | NexusEvent::QuestPaused { .. }
             | NexusEvent::QuestResumed { .. }
             | NexusEvent::ResourceRecovered { .. }
-            // Milestone B-3c: 行为契约违反（L8 Parliament 审议入口）
-            | NexusEvent::FormalViolation { .. }
             // Milestone C-1: 奖励信号流（L0 RewardSpec 统一框架，R1 数据面）
             | NexusEvent::RewardSignalReported { .. }
             | NexusEvent::VoteCastRequested { .. }
@@ -510,10 +508,10 @@ impl MembraneFilter {
             // UserIntentEncoded 的 Normal 分支(risk_level < 71)
             | NexusEvent::UserIntentEncoded { .. } => EventCategory::NormalLow,
 
-            // === Critical:severity()==Critical 的 10 个变体 ===
+            // === Critical:severity()==Critical 的 11 个变体 ===
             // WHY 列在此处:虽然函数顶部 `if event.severity() == Critical` 已
             // 提前 return EventCategory::Critical,但编译器不做跨函数的常量传播,
-            // 无法推断这 10 个变体已被顶部 if 覆盖。match 穷尽性检查要求显式列出
+            // 无法推断这 11 个变体已被顶部 if 覆盖。match 穷尽性检查要求显式列出
             // 所有 NexusEvent 变体,故在此补上 Critical 变体分支(运行时不可达,
             // 但保证 match 穷尽,新增变体时编译器强制更新)。
             // 语义上与顶部 if 一致:均归入 EventCategory::Critical。
@@ -535,7 +533,10 @@ impl MembraneFilter {
             | NexusEvent::R2FreezeRollbackFailed { .. }
             // MCA M0(ADR-065):厂商额度耗尽为 Critical(与 BudgetExceeded 同级,
             // 运行时由顶部 severity() 早退覆盖,此处仅保证 match 穷尽)
-            | NexusEvent::AffinityQuotaExhausted { .. } => EventCategory::Critical,
+            | NexusEvent::AffinityQuotaExhausted { .. }
+            // P1-5:FormalViolation 升级 Critical(运行时由顶部 severity() 早退覆盖,
+            // 此处仅保证 match 穷尽;语义 = 契约违反穿膜入内环)
+            | NexusEvent::FormalViolation { .. } => EventCategory::Critical,
         }
     }
 

@@ -50,6 +50,10 @@ pub enum ParliamentError {
         /// 配置错误详情
         detail: String,
     },
+
+    /// 行为契约违反 — 候选在审议前被否决（Milestone B-3c 生产接线，P1-4）
+    #[error("行为契约违反: {0}")]
+    ContractViolated(String),
 }
 
 #[cfg(test)]

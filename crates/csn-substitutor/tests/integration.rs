@@ -501,3 +501,160 @@ async fn test_perf_trigger_substitution_latency_under_30ms() {
         p95
     );
 }
+
+// ============================================================
+// P1-1: 配额耗尽降级链接线测试(ADR-068 M3)
+// ============================================================
+
+use nexus_contracts::affinity::{CapabilitySet, StatePreservationPolicy, ThinkingSupport};
+
+/// 构造能力集(测试辅助,对齐 mca_quota_switch_e2e.rs 的 caps())
+fn caps(
+    tool_calling: bool,
+    thinking: ThinkingSupport,
+    window: u32,
+    state: StatePreservationPolicy,
+) -> CapabilitySet {
+    let mut c = CapabilitySet::minimal_text(window, 8192);
+    c.tool_calling = tool_calling;
+    c.thinking = thinking;
+    c.state_preservation = state;
+    c
+}
+
+/// 通道能力注册表:注册/查询/排除耗尽通道(P1-1)
+#[test]
+fn test_channel_registry_register_and_exclude() {
+    use csn_substitutor::ChannelAffinityRegistry;
+    let reg = ChannelAffinityRegistry::new();
+    let exhausted = caps(
+        true,
+        ThinkingSupport::OnOff,
+        1_000_000,
+        StatePreservationPolicy::None,
+    );
+    reg.register("deep_seek/deepseek-v4-flash", exhausted);
+    reg.register(
+        "zhipu/glm-5.2",
+        caps(
+            true,
+            ThinkingSupport::EffortLevels(vec!["low".into()]),
+            1_000_000,
+            StatePreservationPolicy::BlockPreservation,
+        ),
+    );
+    assert_eq!(reg.len(), 2, "应注册 2 个通道");
+    assert!(reg.get("deep_seek/deepseek-v4-flash").is_some());
+    // 排除耗尽通道后仅剩 1 个候选
+    let candidates = reg.candidates_excluding("deep_seek/deepseek-v4-flash");
+    assert_eq!(candidates.len(), 1, "排除耗尽通道后应剩 1 个候选");
+    assert_eq!(candidates[0].0, "zhipu/glm-5.2");
+    assert!(reg.unregister("zhipu/glm-5.2"), "注销应成功");
+    assert_eq!(reg.len(), 1);
+}
+
+/// 核心:发布 AffinityQuotaExhausted → listener 消费 → 发布 CsnSubstitutionTriggered(P1-1)
+#[tokio::test]
+async fn test_quota_exhausted_triggers_channel_switch() {
+    let bus = EventBus::new();
+    let sub = CsnSubstitutor::with_event_bus(CsnConfig::default(), bus.clone());
+    // 装配通道能力(组合根角色,与 mca_quota_switch_e2e 对齐)
+    sub.register_channel(
+        "deep_seek/deepseek-v4-flash",
+        caps(
+            true,
+            ThinkingSupport::OnOff,
+            1_000_000,
+            StatePreservationPolicy::None,
+        ),
+    );
+    sub.register_channel(
+        "zhipu/glm-5.2",
+        caps(
+            true,
+            ThinkingSupport::EffortLevels(vec!["low".into(), "high".into()]),
+            1_000_000,
+            StatePreservationPolicy::BlockPreservation,
+        ),
+    );
+    sub.register_channel(
+        "step_fun/step-3.5-flash-2603",
+        caps(
+            false,
+            ThinkingSupport::OnOff,
+            262_144,
+            StatePreservationPolicy::None,
+        ),
+    );
+
+    // 订阅 CsnSubstitutionTriggered(先订阅再发布,§4.4 反模式 3)
+    let mut triggered_rx = bus.subscribe();
+    let handle = sub.start_degradation_listener().expect("应启动 listener");
+
+    // 发布配额耗尽事件(通道 A)
+    bus.publish(NexusEvent::AffinityQuotaExhausted {
+        metadata: EventMetadata::new("test"),
+        route_key: "deep_seek/deepseek-v4-flash".into(),
+        reason: "429 quota".into(),
+    })
+    .await
+    .unwrap();
+
+    // 等待消费:断言 CsnSubstitutionTriggered 送达且替代为能力最相似的 GLM
+    // (广播通道全量可达,循环跳过非目标事件——原 AffinityQuotaExhausted 会先到达)
+    let triggered = loop {
+        let event = tokio::time::timeout(Duration::from_secs(2), triggered_rx.recv())
+            .await
+            .expect("超时:降级链未触发")
+            .expect("事件流错误");
+        if matches!(event, NexusEvent::CsnSubstitutionTriggered { .. }) {
+            break event;
+        }
+    };
+    match triggered {
+        NexusEvent::CsnSubstitutionTriggered {
+            original_capability_id,
+            substitute_id,
+            degradation_level,
+            ..
+        } => {
+            assert_eq!(original_capability_id, "deep_seek/deepseek-v4-flash");
+            assert_eq!(
+                substitute_id, "zhipu/glm-5.2",
+                "应选能力最相似的 GLM 接管(Step 缺工具 + 小窗口,距离更大)"
+            );
+            assert_eq!(degradation_level, 0, "首次降级层级应为 0");
+        }
+        other => panic!("应收到 CsnSubstitutionTriggered: {other:?}"),
+    }
+    handle.abort();
+}
+
+/// 未注册通道的配额耗尽事件 → no-op(不 panic、不建链)
+#[tokio::test]
+async fn test_quota_exhausted_unknown_route_key_noop() {
+    let bus = EventBus::new();
+    let sub = CsnSubstitutor::with_event_bus(CsnConfig::default(), bus.clone());
+    sub.register_channel(
+        "zhipu/glm-5.2",
+        caps(
+            true,
+            ThinkingSupport::OnOff,
+            1_000_000,
+            StatePreservationPolicy::None,
+        ),
+    );
+    let handle = sub.start_degradation_listener().expect("应启动 listener");
+
+    bus.publish(NexusEvent::AffinityQuotaExhausted {
+        metadata: EventMetadata::new("test"),
+        route_key: "unknown/channel".into(),
+        reason: "quota".into(),
+    })
+    .await
+    .unwrap();
+
+    // 等待处理完成:不应 panic、不应建链
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    handle.abort();
+}

@@ -254,6 +254,11 @@ pub struct Parliament {
     /// 确保 Skeptic 与 Producer 使用不同厂商通道，修复同源相关失败(病理 D3)。
     /// None = 未启用(向后兼容)，既有的 deliberate 行为不受影响。
     cross_vendor_debate: Option<CrossVendorDebate>,
+    /// 行为契约集合（Milestone B-3c 生产接线，P1-4）
+    ///
+    /// 默认空 Vec = 零行为变化（deliberate 不设闸门，向后兼容）。
+    /// 注入后 `deliberate_with_contract_guard` 在审议前强制校验。
+    contracts: Vec<nexus_contracts::behavior_contract::BehaviorContract>,
 }
 
 impl Parliament {
@@ -290,7 +295,43 @@ impl Parliament {
             quality_trend: std::sync::Mutex::new(QualityTrendAnalyzer::new(None)),
             // MCA P2-1:默认禁用跨厂商辩论(向后兼容，既有的 deliberate 行为不受影响)
             cross_vendor_debate: None,
+            // P1-4:默认空契约集合(向后兼容，deliberate 不设闸门)
+            contracts: Vec::new(),
         }
+    }
+
+    /// 注入行为契约集合（可选）— 启用审议前置闸门（P1-4 生产接线）
+    ///
+    /// # 语义
+    /// 注入后调用 `deliberate_with_contract_guard` 时，任一契约 Violated
+    /// 即发布 `FormalViolation`（Critical + mpsc 旁路）并否决候选，
+    /// 不进入辩论（九层防御 L0 "行为契约不可违反"）。
+    pub fn with_behavior_contracts(
+        mut self,
+        contracts: Vec<nexus_contracts::behavior_contract::BehaviorContract>,
+    ) -> Self {
+        self.contracts = contracts;
+        self
+    }
+
+    /// 契约守护审议 — 违反即否决（Milestone B-3c 生产接线，P1-4）
+    ///
+    /// `observed` 为调用方（编排器）提供的"已满足断言"观测集合。
+    /// 任一契约 Violated → 发布 FormalViolation + 调用 handle_formal_violation
+    /// + 返回 `Err(ParliamentError::ContractViolated)`（候选被否决，不进入辩论）。
+    pub async fn deliberate_with_contract_guard(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+        observed: &[String],
+    ) -> Result<Consensus, ParliamentError> {
+        if let Some(verdict) =
+            crate::formal_violation::enforce_and_audit(&self.event_bus, &self.contracts, observed)
+        {
+            warn!(verdict = %verdict, "行为契约违反:候选在审议前被否决");
+            return Err(ParliamentError::ContractViolated(verdict));
+        }
+        self.deliberate(quest, proposal).await
     }
 
     /// 获取策略封顶守卫引用(推理悖论红线风控)
