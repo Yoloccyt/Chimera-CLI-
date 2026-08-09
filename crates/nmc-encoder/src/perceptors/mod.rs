@@ -14,9 +14,9 @@
 //! | 感知器 | 模态 | 状态 | 说明 |
 //! |--------|------|------|------|
 //! | TextPerceptor | Text | 已实现 | SHA256 + 字符频率嵌入 |
-//! | ImagePerceptor | Image | 占位 | Week 7/8 接入 ort ONNX |
-//! | VideoPerceptor | Video | 占位 | Week 7/8 接入 ort ONNX |
-//! | AudioPerceptor | Audio | 占位 | Week 7/8 接入 ort ONNX |
+//! | ImagePerceptor | Image | 已实现 | CLIP ViT-B/32 ONNX 语义嵌入 |
+//! | VideoPerceptor | Video | 已实现 | VideoMAE ONNX 语义嵌入 |
+//! | AudioPerceptor | Audio | 已实现 | Whisper encoder ONNX 语义嵌入 |
 //! | DesktopPerceptor | Desktop | 已实现 | 基于区域描述文本的哈希嵌入 |
 
 use crate::error::NmcError;

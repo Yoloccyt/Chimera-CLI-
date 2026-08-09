@@ -6,7 +6,7 @@
 //!
 //! # 职责
 //!
-//! 将解冻五要素组合为**单一可执行就绪判定**（供编排器/CLI 在解冻决策点调用）：
+//! 将解冻六要素组合为**单一可执行就绪判定**（供编排器/CLI 在解冻决策点调用）：
 //! 1. 熔断器 Armed（decay-engine ShadowModeCircuitBreaker，未跳闸）
 //! 2. 解冻范围 Allowed（gsoe UnfreezeGovernor，fail-closed 白名单含目标）
 //! 3. 阶段③ 前置齐备（chimera-mas Stage3Prerequisites，ADR-053 rev4）
@@ -43,7 +43,7 @@ pub struct R2UnfreezeReadinessInput {
     pub formal_verifier_all_green: bool,
 }
 
-/// 就绪检查器 — 五要素组合判定
+/// 就绪检查器 — 六要素组合判定
 #[derive(Debug, Clone)]
 pub struct R2UnfreezeReadiness {
     /// 熔断器（decay-engine；Tripped = fail-closed 永久拒绝）

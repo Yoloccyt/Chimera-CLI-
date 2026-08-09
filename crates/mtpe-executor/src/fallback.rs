@@ -11,7 +11,7 @@
 //! 回退操作发布 `PredictionRolledBack` 事件(携带 failed_step/rollback_to)
 //!
 //! # 依赖说明
-//! MTPE(L7)→GQEP(L6) 向下依赖允许,但为简化实现,
+//! MTPE(L7)→GQEP(L7) 向下依赖允许,但为简化实现,
 //! 回退直接调用 `self.predict(context, 1)`,不经过 GQEP 聚集。
 //! WHY 简化:回退是低频操作(仅在预测失败时触发),且单步预测本身可靠,
 //! 无需 GQEP 的并行聚集开销。Week 6 接入真实模型后可重新评估

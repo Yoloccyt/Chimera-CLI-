@@ -5,7 +5,7 @@
 //! - **增量状态机**: `SseParser` 持有跨 chunk 残留缓冲,事件边界跨 chunk 时
 //!   仅拷贝一次残留;`feed()` 每次消费一个网络 chunk,产出零或多个完整帧
 //! - **数据面不进 event-bus**(ADR-065 决策 4): 归一后的 `StreamEvent` 由
-//!   适配器经 bounded mpsc(256)直连调用方,per-token delta 不走 broadcast
+//!   适配器经 bounded mpsc(STREAM_CHANNEL_CAPACITY=256)直连调用方,per-token delta 不走 broadcast
 //! - **P3 双向容错**: 不认识的事件类型/JSON 结构归入 `StreamEvent::Unknown`
 //!   (原文留存),绝不报错中断流——留痕驱动 spec 更新
 //!
@@ -15,6 +15,13 @@
 //! data: {"type":"..."}\n
 //! \n                                ← 空行 = 帧结束
 //! ```
+
+/// 流式数据面 mpsc 容量(P3 收敛为唯一实事源,防注释与实现漂移)
+///
+/// WHY allow(dead_code):当前 channel 创建代码在 M1 stream() 交付(注释事实源先行);
+/// 常量被引用后移除该 allow。
+#[allow(dead_code)]
+pub(crate) const STREAM_CHANNEL_CAPACITY: usize = 256;
 
 use nexus_contracts::affinity::{FinishReason, ProtocolDialect, UsageReport};
 use serde_json::Value;

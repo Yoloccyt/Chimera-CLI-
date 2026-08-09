@@ -154,7 +154,7 @@ impl TuiApp {
         data_source: Box<dyn TuiDataSource>,
     ) -> Result<Self, TuiError> {
         config.validate()?;
-        // v2.9.0-omega:注册 23 个面板(24 PanelId 枚举,2 个未注册;P1 新增 OverWindow)。
+        // v2.9.0-omega:注册 23 个面板(25 PanelId 枚举,2 个未注册;P1 新增 OverWindow)。
         // 未注册 PanelId 原因:
         // - Timeline:P7 历史回放引擎(v1.8+) 接口占位,无对应 Panel 实现
         // - Sysinfo:数据由 ResourceMonitorPanel 承载,无需独立面板
