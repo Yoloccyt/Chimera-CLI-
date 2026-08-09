@@ -26,14 +26,14 @@ use sha2::{Digest, Sha256};
 
 use crate::capability::{apply_output_budget, negotiate_budget};
 use crate::coalescing::{coalesce_failure, CoalesceKey, JoinOutcome, RequestCoalescer};
-use crate::codec::Codec;
+use crate::codec::{Codec, DecodedResponse};
 use crate::cost::{actual_cost, current_hour, estimate_cost};
 use crate::cost_guard::CostGuard;
 use crate::error::AffinityError;
 use crate::prompt_compress::PromptCompressor;
 use crate::semantic_fingerprint::semantic_fingerprint;
 use crate::token_estimate::TokenEstimator;
-use crate::transport::{CircuitBreaker, RateLimiter, Transport};
+use crate::transport::{CircuitBreaker, RateLimiter, Transport, TransportResponse};
 
 /// 事件源标识(EventMetadata.source)
 const EVENT_SOURCE: &str = "mca-gateway";
@@ -263,102 +263,27 @@ impl VendorAdapter {
         //    顺序固定为"缓存查询 → 裁剪 → 厂商调用 → 回填":缓存键/指纹/上下文
         //    哈希基于原始 request(裁剪/压缩只影响实际发送内容,不影响缓存面)。
         let semantic = self.semantic_cache_inputs(request);
-        if let Some(inputs) = &semantic {
-            if let Some(cached) = inputs.lookup() {
-                let namespace = inputs.namespace.clone();
-                let similarity = cached.similarity;
-                let resp = Self::cached_response(&self.spec, self.dialect(), cached);
-                self.publish(NexusEvent::SemanticCacheHit {
-                    metadata: EventMetadata::new(EVENT_SOURCE),
-                    namespace,
-                    similarity,
-                })
-                .await;
-                // 语义缓存命中计数（原子递增，无锁安全）
-                if let Some(tracker) = &self.cache_tracker {
-                    tracker.record_semantic_hit();
-                }
-                // 发布 StreamSessionCompleted(semantic_cache_hit=true)
-                // 零 usage/cost/TTFT(未发厂商调用),efficiency-monitor 据此区分
-                // 语义缓存命中与厂商调用路径,分别统计命中率。
-                self.publish(NexusEvent::StreamSessionCompleted {
-                    metadata: EventMetadata::new(EVENT_SOURCE),
-                    intent_id: request.intent_id.to_string(),
-                    route_key,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_hit_tokens: 0,
-                    cost_actual_micro: 0,
-                    ttft_ms: 0,
-                    semantic_cache_hit: true,
-                    // 语义缓存命中路径:未发厂商调用,无裁剪/压缩/早停/合并观测
-                    trimmed_before_tokens: None,
-                    trimmed_after_tokens: None,
-                    compressed_ratio: None,
-                    early_stop_reason: None,
-                    coalesced: false,
-                })
-                .await;
-                return Ok(resp);
-            }
+        if let Some(resp) = self
+            .try_semantic_cache_hit(request, route_key.clone(), &semantic)
+            .await?
+        {
+            return Ok(resp);
         }
 
         // 0.4 C in-flight 请求合并(ADR-072 决策 ④):语义缓存 miss 后,
-        //    并发相同请求合并为一次厂商调用(多 Agent 并行/重试去重)。
+        //    并发相同请求合并为一次厂商调用(等待者共享领导者结果)。
         //    - 合并键 = TokenCacheKey + context_hash(消息内容),与语义缓存
-        //      同键空间,仅"完全相同的请求"合并(不牺牲正确性);
-        //      键独立构造,不依赖语义缓存挂接(合并是独立优化面)
-        //    - S9 未授权(CapabilityToken 存在且未授权)时不合并
-        //      (Fail-open 语义一致)
-        //    - 等待者超时 = min(endpoint.timeout_ms, 30s),超时按 retryable
-        //      处理(可重试);领导者异常未释放时同样由超时兜底
+        //      同键空间,仅"完全相同的请求"合并(不牺牲正确性)
+        //    - S9 未授权(CapabilityToken 存在且未授权)时不合并(Fail-open)
         let coalesce_key = CoalesceKey::new(
             crate::prompt_norm::build_token_cache_key(&self.spec, request),
             context_hash(&request.messages),
         );
-        let s9_bypass = self
-            .capability_token
-            .as_ref()
-            .is_some_and(|t| !t.allows_learned_policy(unix_now_secs() as i64));
-        if let (Some(coalescer), false) = (&self.coalescer, s9_bypass) {
-            match coalescer.join(coalesce_key.clone()) {
-                JoinOutcome::Wait(rx) => {
-                    let wait_ms = self.spec.endpoint.timeout_ms.clamp(1_000, 30_000);
-                    let outcome =
-                        tokio::time::timeout(std::time::Duration::from_millis(wait_ms), rx).await;
-                    return match outcome {
-                        // 等待者:共享领导者结果(零厂商调用,零重复计费)
-                        Ok(Ok(Ok(resp))) => {
-                            self.publish(NexusEvent::StreamSessionCompleted {
-                                metadata: EventMetadata::new(EVENT_SOURCE),
-                                intent_id: request.intent_id.to_string(),
-                                route_key: route_key.clone(),
-                                input_tokens: resp.usage.input_tokens,
-                                output_tokens: resp.usage.output_tokens,
-                                cache_hit_tokens: resp.usage.cache_hit_tokens,
-                                cost_actual_micro: 0,
-                                ttft_ms: 0,
-                                semantic_cache_hit: false,
-                                trimmed_before_tokens: None,
-                                trimmed_after_tokens: None,
-                                compressed_ratio: None,
-                                early_stop_reason: None,
-                                coalesced: true,
-                            })
-                            .await;
-                            // 等待者语义:响应与领导者一致(同请求同响应)
-                            Ok((*resp).clone())
-                        }
-                        // 领导者失败/异常/超时:retryable(重试后可能重新合并)
-                        Ok(Ok(Err(reason))) => Err(coalesce_failure(&route_key, reason)),
-                        Ok(Err(_)) | Err(_) => Err(coalesce_failure(
-                            &route_key,
-                            "leader vanished or wait timeout".into(),
-                        )),
-                    };
-                }
-                JoinOutcome::Lead => {}
-            }
+        if let Some(resp) = self
+            .try_join_coalesced(request, route_key.clone(), coalesce_key.clone())
+            .await?
+        {
+            return Ok(resp);
         }
 
         // 0.5 成本熔断前置检查(ADR-069 Task 6.2):熔断中拒绝,不发厂商调用。
@@ -373,13 +298,182 @@ impl VendorAdapter {
             }
         }
 
-        // 0. R4 上下文预算与动态裁剪(ADR-069 Task 3):超预算裁剪 + 超长历史压缩。
-        //    不修改原引用——裁剪/压缩作用于副本,原 request 保持不可变;
-        //    预算源为 L6 osa-coordinator compute_token_budget(复杂度档 × 窗口 × 0.6)。
-        //    裁剪/压缩观测(ADR-070):before/after 估算与压缩率随事件发布,
-        //    efficiency-monitor 据此验证 R4 收益(SMART 等效输入成本目标)。
-        //    估算口径(ADR-070):挂接 TokenEstimator 时用 EWMA 校准值,
-        //    否则回落纯函数字节/4(行为与旧版一致)。
+        // 0. R4 上下文预算与动态裁剪 + 0.75 隐式族稳定前缀重排(P2-17 提取)
+        let (effective, trimmed_before_tokens, trimmed_after_tokens, compressed_ratio) =
+            self.prepare_effective_request(request).await;
+
+        // 1. 方言原生请求构造(P2 保真)
+        let mut body = self.codec.build_request(&self.spec, &effective)?;
+
+        // 1.5 输出预算注入(ADR-069: TTG 档 × max_output → 具体 token 数)
+        let budget = negotiate_budget(
+            &self.spec.capabilities,
+            request.thinking_pref,
+            request.budget_hint_micro,
+        );
+        apply_output_budget(&mut body, &budget);
+
+        // 2. 路由决策留痕(P6 成本先行:预估成本随事件发布;基于裁剪后实际发送内容)
+        let estimate = estimate_cost(&self.spec.pricing, &effective, current_hour());
+        self.publish(NexusEvent::ModelAffinitySelected {
+            metadata: EventMetadata::new(EVENT_SOURCE),
+            intent_id: request.intent_id.to_string(),
+            route_key: route_key.clone(),
+            dialect: dialect_str(self.dialect()).to_string(),
+            cost_estimate_micro: estimate.total_micro,
+            peak_factor_percent: estimate.peak_factor_percent,
+        })
+        .await;
+
+        // 3. 传输(白名单 + 鉴权 + 重试 + 熔断 + 限流)+ 配额/协议错误分类
+        let resp = self.transport_invoke(route_key.clone(), &body).await?;
+
+        // 4-5. 解码 + 语义缓存回填 + 成本回算 + EWMA 校准 + 观测(P2-17 提取)
+        // cost 在 complete_session 内部重算(幂等纯函数,避免私有类型泄漏到签名)
+        let (decoded, ttft_ms) = self
+            .decode_and_cost(&resp, &semantic, &effective, request, started, &route_key)
+            .await?;
+
+        // 6. 会话闭环事件 + 合并释放(P2-17 提取)
+        let response = self
+            .complete_session(
+                request,
+                decoded,
+                ttft_ms,
+                route_key,
+                trimmed_before_tokens,
+                trimmed_after_tokens,
+                compressed_ratio,
+                coalesce_key,
+            )
+            .await;
+        Ok(response)
+    }
+
+    /// R3 语义缓存热路径:命中返回 `Some(resp)`(发布 SemanticCacheHit + 会话事件),
+    /// miss 返回 `None`(继续厂商调用)。
+    ///
+    /// WHY 独立方法(P2-17):invoke 337 行超 200 行红线,按流水线阶段拆分。
+    async fn try_semantic_cache_hit(
+        &self,
+        request: &AffinityRequest,
+        route_key: String,
+        semantic: &Option<SemanticCacheInputs>,
+    ) -> Result<Option<AffinityResponse>, AffinityError> {
+        let Some(inputs) = semantic else {
+            return Ok(None);
+        };
+        let Some(cached) = inputs.lookup() else {
+            return Ok(None);
+        };
+        let namespace = inputs.namespace.clone();
+        let similarity = cached.similarity;
+        let resp = Self::cached_response(&self.spec, self.dialect(), cached);
+        self.publish(NexusEvent::SemanticCacheHit {
+            metadata: EventMetadata::new(EVENT_SOURCE),
+            namespace,
+            similarity,
+        })
+        .await;
+        // 语义缓存命中计数（原子递增，无锁安全）
+        if let Some(tracker) = &self.cache_tracker {
+            tracker.record_semantic_hit();
+        }
+        // 发布 StreamSessionCompleted(semantic_cache_hit=true):零 usage/cost/TTFT,
+        // efficiency-monitor 据此区分语义缓存命中与厂商调用路径。
+        self.publish(NexusEvent::StreamSessionCompleted {
+            metadata: EventMetadata::new(EVENT_SOURCE),
+            intent_id: request.intent_id.to_string(),
+            route_key,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_hit_tokens: 0,
+            cost_actual_micro: 0,
+            ttft_ms: 0,
+            semantic_cache_hit: true,
+            trimmed_before_tokens: None,
+            trimmed_after_tokens: None,
+            compressed_ratio: None,
+            early_stop_reason: None,
+            coalesced: false,
+        })
+        .await;
+        Ok(Some(resp))
+    }
+
+    /// C in-flight 请求合并:等待者返回 `Some(resp)`(共享领导者结果),
+    /// 领导者返回 `None`(继续执行)。
+    ///
+    /// WHY 独立方法(P2-17):等待者分支含超时/重试语义,与 invoke 主流程正交。
+    async fn try_join_coalesced(
+        &self,
+        request: &AffinityRequest,
+        route_key: String,
+        coalesce_key: CoalesceKey,
+    ) -> Result<Option<AffinityResponse>, AffinityError> {
+        // S9 未授权时不合并(Fail-open 语义一致)
+        let s9_bypass = self
+            .capability_token
+            .as_ref()
+            .is_some_and(|t| !t.allows_learned_policy(unix_now_secs() as i64));
+        let Some(coalescer) = &self.coalescer else {
+            return Ok(None);
+        };
+        if s9_bypass {
+            return Ok(None);
+        }
+        match coalescer.join(coalesce_key) {
+            JoinOutcome::Wait(rx) => {
+                let wait_ms = self.spec.endpoint.timeout_ms.clamp(1_000, 30_000);
+                let outcome =
+                    tokio::time::timeout(std::time::Duration::from_millis(wait_ms), rx).await;
+                match outcome {
+                    // 等待者:共享领导者结果(零厂商调用,零重复计费)
+                    Ok(Ok(Ok(resp))) => {
+                        self.publish(NexusEvent::StreamSessionCompleted {
+                            metadata: EventMetadata::new(EVENT_SOURCE),
+                            intent_id: request.intent_id.to_string(),
+                            route_key: route_key.clone(),
+                            input_tokens: resp.usage.input_tokens,
+                            output_tokens: resp.usage.output_tokens,
+                            cache_hit_tokens: resp.usage.cache_hit_tokens,
+                            cost_actual_micro: 0,
+                            ttft_ms: 0,
+                            semantic_cache_hit: false,
+                            trimmed_before_tokens: None,
+                            trimmed_after_tokens: None,
+                            compressed_ratio: None,
+                            early_stop_reason: None,
+                            coalesced: true,
+                        })
+                        .await;
+                        Ok(Some((*resp).clone()))
+                    }
+                    // 领导者失败/异常/超时:retryable(重试后可能重新合并)
+                    Ok(Ok(Err(reason))) => Err(coalesce_failure(&route_key, reason)),
+                    Ok(Err(_)) | Err(_) => Err(coalesce_failure(
+                        &route_key,
+                        "leader vanished or wait timeout".into(),
+                    )),
+                }
+            }
+            JoinOutcome::Lead => Ok(None),
+        }
+    }
+
+    /// R4 上下文预算裁剪 + 隐式族前缀重排(返回 effective 副本与裁剪观测)
+    ///
+    /// WHY 独立方法(P2-17):裁剪/压缩/重排三段逻辑与 invoke 决策编排正交;
+    /// 不修改原引用——裁剪/压缩作用于副本,原 request 保持不可变。
+    async fn prepare_effective_request<'a>(
+        &self,
+        request: &'a AffinityRequest,
+    ) -> (
+        std::borrow::Cow<'a, AffinityRequest>,
+        Option<u64>,
+        Option<u64>,
+        Option<f32>,
+    ) {
         let mut effective = std::borrow::Cow::Borrowed(request);
         let budget = crate::conversation_trim::conversation_budget(&self.spec, request);
         let estimated = match &self.estimator {
@@ -408,7 +502,6 @@ impl VendorAdapter {
                 )),
             });
             tracing::debug!(
-                route_key = %route_key,
                 budget,
                 estimated,
                 before = request.messages.len(),
@@ -419,40 +512,26 @@ impl VendorAdapter {
         if self.compressor.is_some() {
             compressed_ratio = self.maybe_compress_history(effective.to_mut()).await;
         }
-
-        // 0.75 隐式族稳定前缀重排(ADR-072 决策 ④):System 消息重定位到末尾,
-        //    最大化 DeepSeek/Qwen/豆包自动前缀缓存的跨轮次公共前缀。
-        //    仅 Implicit 族 + OpenAI Chat 方言生效,无 System 消息时零操作。
+        // 0.75 隐式族稳定前缀重排(ADR-072 决策 ④):System 消息重定位到末尾
         if crate::prompt_norm::layout_messages(&self.spec, effective.to_mut()) {
-            tracing::debug!(
-                route_key = %route_key,
-                "implicit-cache prefix layout applied (system moved to tail)"
-            );
+            tracing::debug!("implicit-cache prefix layout applied (system moved to tail)");
         }
+        (
+            effective,
+            trimmed_before_tokens,
+            trimmed_after_tokens,
+            compressed_ratio,
+        )
+    }
 
-        // 1. 方言原生请求构造(P2 保真)
-        let mut body = self.codec.build_request(&self.spec, &effective)?;
-
-        // 1.5 输出预算注入(ADR-069: TTG 档 × max_output → 具体 token 数)
-        let budget = negotiate_budget(
-            &self.spec.capabilities,
-            request.thinking_pref,
-            request.budget_hint_micro,
-        );
-        apply_output_budget(&mut body, &budget);
-
-        // 2. 路由决策留痕(P6 成本先行:预估成本随事件发布;基于裁剪后实际发送内容)
-        let estimate = estimate_cost(&self.spec.pricing, &effective, current_hour());
-        self.publish(NexusEvent::ModelAffinitySelected {
-            metadata: EventMetadata::new(EVENT_SOURCE),
-            intent_id: request.intent_id.to_string(),
-            route_key: route_key.clone(),
-            dialect: dialect_str(self.dialect()).to_string(),
-            cost_estimate_micro: estimate.total_micro,
-            peak_factor_percent: estimate.peak_factor_percent,
-        })
-        .await;
-
+    /// 传输阶段:URL 拼装 + 白名单/鉴权 + post_json + 配额/协议错误分类
+    ///
+    /// WHY 独立方法(P2-17):传输与错误分类自成一段(含 402/403 配额事件发布)。
+    async fn transport_invoke(
+        &self,
+        route_key: String,
+        body: &serde_json::Value,
+    ) -> Result<TransportResponse, AffinityError> {
         // 3. 传输(白名单 + 鉴权 + 重试 + 熔断 + 限流)
         let url = format!(
             "{}{}",
@@ -467,7 +546,7 @@ impl VendorAdapter {
                 &route_key,
                 &url,
                 &headers,
-                &body,
+                body,
                 &self.breaker,
                 &self.limiter,
             )
@@ -490,26 +569,38 @@ impl VendorAdapter {
                 reason: format!("HTTP {}: {}", resp.status, excerpt(&resp.body)),
             });
         }
+        Ok(resp)
+    }
 
+    /// 解码 + 语义缓存回填 + 成本回算副作用 + EWMA 校准 + 观测(真实 usage,整数微元)
+    ///
+    /// WHY 独立方法(P2-17):解码后副作用(回填/累计/校准/观测)自成一段;
+    /// 返回 (decoded, ttft_ms)——cost 由调用方/complete_session 重算(幂等纯函数),
+    /// 避免私有类型 `CostEstimate` 泄漏到方法签名(E0603)。
+    async fn decode_and_cost<'a>(
+        &self,
+        resp: &TransportResponse,
+        semantic: &Option<SemanticCacheInputs>,
+        effective: &std::borrow::Cow<'a, AffinityRequest>,
+        request: &AffinityRequest,
+        started: std::time::Instant,
+        route_key: &str,
+    ) -> Result<(DecodedResponse, u64), AffinityError> {
         // 5. 解码 + 成本回算(真实 usage,整数微元)
         let decoded = self.codec.parse_response(&resp.body)?;
-        // 5.1 R3 语义缓存回填:miss 响应写入缓存(键/指纹/上下文哈希与查询段一致)。
-        //     S9 bypass 时 semantic 为 None(查询段已判定),此处同样不写入。
-        if let Some(inputs) = &semantic {
+        // 5.1 R3 语义缓存回填:miss 响应写入缓存(S9 bypass 时 semantic 为 None)
+        if let Some(inputs) = semantic {
             inputs.backfill(&decoded.blocks);
         }
         let cost = actual_cost(&self.spec.pricing, &decoded.usage, current_hour());
         let ttft_ms = started.elapsed().as_millis() as u64;
 
-        // 5.2 成本熔断累计(ADR-069 Task 6.2):实际成本入账(原子累计),
-        //    跨线检测由下次 invoke 的 check() 触发(唯一入口,防重放发布)。
+        // 5.2 成本熔断累计(ADR-069 Task 6.2):实际成本入账(原子累计)
         if let Some(guard) = &self.cost_guard {
             guard.record(cost.total_micro);
         }
 
-        // 5.3 Token 估算校准(ADR-070):以厂商真实 input_tokens 与发送内容
-        //    估算之比更新 EWMA 系数(修正每通道 BPE 系统偏差)。
-        //    校准源 = 裁剪/压缩后的发送内容,与厂商计费口径一致。
+        // 5.3 Token 估算校准(ADR-070):真实 input_tokens 与发送内容估算之比
         if let Some(est) = &self.estimator {
             let sent_estimated = crate::conversation_trim::estimate_tokens(&effective.messages);
             est.calibrate(
@@ -521,10 +612,7 @@ impl VendorAdapter {
         }
 
         // 5.5 Token 效率观测闭环(ADR-069 Task 1/2):
-        // ① L2 前缀稳定性校验——工具声明含时间戳/UUID 等动态内容时
-        //    稳定前缀每轮漂移,缓存命中率归零;仅观测(warn)不阻断请求;
-        // ② 厂商缓存命中率原子累计(R1,R2 计量口径的同步 side effect);
-        // ③ Token 缓存键构造并留痕(Task 5 语义缓存将复用本键)。
+        // L2 前缀稳定性校验 + 厂商缓存命中率累计 + Token 缓存键留痕
         let tools_json = crate::prompt_norm::deterministic_tools_json(&request.tools);
         if let Err(e) = crate::prompt_norm::validate_prefix_stability(&tools_json, "L2") {
             tracing::warn!(route_key = %route_key, error = %e, "L2 tool declarations unstable, cache hit rate at risk");
@@ -536,13 +624,34 @@ impl VendorAdapter {
                 decoded.usage.input_tokens,
             );
         }
-        let cache_key = crate::prompt_norm::build_token_cache_key(&self.spec, &effective);
+        let cache_key = crate::prompt_norm::build_token_cache_key(&self.spec, effective);
         tracing::debug!(
             route_key = %route_key,
             model = %cache_key.model,
             "token cache key computed"
         );
 
+        Ok((decoded, ttft_ms))
+    }
+
+    /// 会话闭环:发布 StreamSessionCompleted + 合并释放 + 装配 AffinityResponse
+    ///
+    /// WHY 独立方法(P2-17):事件发布与响应装配是 invoke 的最后一段;
+    /// cost 在此重算(幂等纯函数),避免私有类型泄漏到签名。
+    #[allow(clippy::too_many_arguments)] // 对齐 parliament finalize_deliberation 既有模式
+    async fn complete_session(
+        &self,
+        request: &AffinityRequest,
+        decoded: DecodedResponse,
+        ttft_ms: u64,
+        route_key: String,
+        trimmed_before_tokens: Option<u64>,
+        trimmed_after_tokens: Option<u64>,
+        compressed_ratio: Option<f32>,
+        coalesce_key: CoalesceKey,
+    ) -> AffinityResponse {
+        // 成本回算(幂等纯函数;decode_and_cost 内的副作用已先行完成)
+        let cost = actual_cost(&self.spec.pricing, &decoded.usage, current_hour());
         // 6. 会话闭环事件(成本回写 EWMA/缓存命中率/E1 度量的数据源)
         self.publish(NexusEvent::StreamSessionCompleted {
             metadata: EventMetadata::new(EVENT_SOURCE),
@@ -565,8 +674,6 @@ impl VendorAdapter {
         .await;
 
         // 6.5 合并释放(ADR-072):领导者成功 → 向全部等待者分发同一响应。
-        //    失败路径由等待者超时兑底(保守设计,避免错误路径散布 complete 调用);
-        //    complete 幂等:S9 bypass 时未 join,remove 不存在键零操作。
         let response = AffinityResponse {
             blocks: decoded.blocks,
             usage: decoded.usage,
@@ -582,7 +689,7 @@ impl VendorAdapter {
         if let Some(coalescer) = &self.coalescer {
             coalescer.complete(&coalesce_key, Ok(Arc::new(response.clone())));
         }
-        Ok(response)
+        response
     }
     /// 按方言构造鉴权头(密钥只从环境变量读取,不落日志)
     ///
