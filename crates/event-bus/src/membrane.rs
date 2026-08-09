@@ -1,4 +1,4 @@
-﻿//! 膜渗透过滤器 — 内环/外环选择性渗透决策（P2-W6.1, ADR-033 后续膜深化）
+//! 膜渗透过滤器 — 内环/外环选择性渗透决策（P2-W6.1, ADR-033 后续膜深化）
 //!
 //! 对应架构层:L1 Core(event-bus 深化,从"浅双通道总线"演化为"膜")
 //! 对应设计源:`NEXUS-OMEGA_v5.0_系统性完整设计文档.md` §3.3 膜控渗透 +
@@ -336,185 +336,11 @@ impl MembraneFilter {
             };
         }
 
-        // 3. 按变体名 match 归入对应类别(穷尽覆盖全部 100 个变体)
+        // 3. 按类别谓词分派(P2-17:原 219 行单函数拆为 5 个谓词,超 200 行红线)
+        // 谓词内变体清单完整搬移(不丢项);新增某类别变体必须加入对应 matches!。
         match event {
-            // === MemoryWrite:修改记忆/上下文/能力分层状态 ===
-            NexusEvent::NexusStateChanged { .. }
-            | NexusEvent::MemoryTiered { .. }
-            | NexusEvent::ContextWindowSwitched { .. }
-            | NexusEvent::ContextCompressed { .. }
-            | NexusEvent::CapabilityTiered { .. }
-            | NexusEvent::BlocksRebalanced { .. }
-            | NexusEvent::CheckpointLoaded { .. }
-            | NexusEvent::WikiUpdated { .. }
-            | NexusEvent::LsctTierSwitched { .. }
-            | NexusEvent::NmcEncoded { .. }
-            | NexusEvent::AgentContextOverflow { .. } => EventCategory::MemoryWrite,
-
-            // === PolicyUpdate:修改策略/预算/能力配置 ===
-            NexusEvent::GsoePolicyUpdated { .. }
-            | NexusEvent::ActivationThresholdAdjusted { .. }
-            | NexusEvent::BudgetAdjusted { .. }
-            | NexusEvent::CapabilityFrozen { .. }
-            | NexusEvent::ThinkingModeSwitched { .. }
-            | NexusEvent::QuestPriorityAdjusted { .. }
-            | NexusEvent::QuestPriorityChanged { .. }
-            | NexusEvent::ExpertRegistered { .. }
-            | NexusEvent::ExpertUnregistered { .. }
-            | NexusEvent::RoleRegistered { .. }
-            // P4-W16.2.2:R1 影子模式策略生命周期（退化检测/解冻就绪，Normal 级策略通知）
-            | NexusEvent::R1ShadowRegressionDetected { .. }
-            | NexusEvent::R1ShadowPromotionReady { .. }
-            // L8 推理悖论风控:策略封顶变更(与 GsoePolicyUpdated 同属策略生命周期通知)
-            | NexusEvent::ParliamentStrategyCapChanged { .. }
-            // P5.2.3:Spec 版本注册完成(L5 Knowledge → 任意订阅者,策略级通知)
-            // WHY 归入 PolicyUpdate:与 GsoePolicyUpdated 同属策略/配置生命周期事件,
-            //    下游(parliament / efficiency-monitor)需更新 spec 版本快照
-            | NexusEvent::SpecRegistered { .. } => EventCategory::PolicyUpdate,
-
-            // === HighRisk:自描述 high-risk 事件(不含 UserIntentEncoded,已上面处理) ===
-            // SandboxViolation:沙箱违规,安全告警(虽 severity==Normal,但语义高风险)
-            // OperationProduced:沙箱执行产物,可能影响安全决策
-            // CsnSubstitutionTriggered:CSN 降级链触发,容灾高风险
-            // EfficiencyAlertTriggered:效率告警,可能是级联故障前兆
-            NexusEvent::SandboxViolation { .. }
-            | NexusEvent::OperationProduced { .. }
-            | NexusEvent::CsnSubstitutionTriggered { .. }
-            // MCA M0(ADR-065):通道健康恶化,容灾信号(与 CsnSubstitutionTriggered
-            // 同属降级链生命周期,可能是级联故障前兆)
-            | NexusEvent::ProviderDegraded { .. }
-            | NexusEvent::EfficiencyAlertTriggered { .. } => EventCategory::HighRisk,
-
-            // === CacheLocal:缓存命中/未命中/统计(外环本地消化) ===
-            NexusEvent::CacheHit { .. }
-            | NexusEvent::CacheMiss { .. }
-            | NexusEvent::CachePrefetched { .. }
-            | NexusEvent::CacheStatsReported { .. } => EventCategory::CacheLocal,
-
-            // === ReadMetric:只读指标/心跳/统计报告(外环本地消化) ===
-            NexusEvent::MemoryMetricsReported { .. }
-            | NexusEvent::BudgetStatsReported { .. }
-            | NexusEvent::BudgetMetricsUpdated { .. }
-            | NexusEvent::DecayMetricsReported { .. }
-            | NexusEvent::RouterStatsReported { .. }
-            | NexusEvent::PredictionStatsReported { .. }
-            | NexusEvent::ActivationCacheStats { .. }
-            | NexusEvent::ClvSnapshotReported { .. }
-            | NexusEvent::McpNodeHeartbeat { .. }
-            | NexusEvent::ChtcAdapterStatus { .. }
-            | NexusEvent::AgentHeartbeat { .. }
-            | NexusEvent::McpMessageReceived { .. }
-            // P2-1:协调成本/推理增益比值报告(L9 quest-engine 发布,只读指标)
-            | NexusEvent::CoordinationRatioReported { .. }
-            // polish-v2.7 P1-2:RuntimeAuditor 审计发现与五维度报告(L9 efficiency-monitor 发布,
-            // 观察性事实陈述,外环本地消化即可,不需穿膜进内环)
-            | NexusEvent::AuditFindingRaised { .. }
-            | NexusEvent::HarnessReportGenerated { .. }
-            // L8 协调度量接线闭环:审议完成/委托批次完成观测事件
-            // (只读延迟/质量指标,外环 quest-engine 本地消化,不需穿膜进内环)
-            | NexusEvent::DebateCompleted { .. }
-            | NexusEvent::DelegationCompleted { .. }
-            // MCA M0(ADR-065):能力协商/未知字段/会话计量均为观察性事实
-            // 陈述(喂 efficiency-monitor/acb-governor/repo-wiki),外环本地消化
-            | NexusEvent::AffinityCapabilityNegotiated { .. }
-            | NexusEvent::AffinityUnknownField { .. }
-            | NexusEvent::StreamSessionCompleted { .. }
-            // MCA P5:窗口亲和折减结果(HCW 集成模块发布,观察性事实陈述,
-            // 外环本地消化,不需穿膜进内环)
-            | NexusEvent::WindowAffinityApplied { .. }
-            // MCA A3:缓存亲和策略应用结果(mca-gateway codec 发布,
-            // 观察性事实陈述,外环本地消化,不需穿膜进内环)
-            | NexusEvent::CacheAffinityApplied { .. }
-            // ADR-069: Token 效率优化事件(观测面,外环本地消化)
-            | NexusEvent::ContextBudgetAllocated { .. }
-            | NexusEvent::SemanticCacheHit { .. }
-            // P2-8 MemCon:幽灵记忆检测与策略调整(均为只读观测面事件,外环本地消化)
-            | NexusEvent::GhostMemoryDetected { .. }
-            | NexusEvent::MemConStrategyAdjusted { .. }
-            | NexusEvent::BenchmarkMetricsCollected { .. } => EventCategory::ReadMetric,
-            // PROBE P0:HCW 召回评测事件（观测面指标，与 BenchmarkMetricsCollected 同族）
-            | NexusEvent::HcwRecallReported { .. }
-            | NexusEvent::HcwRecallDegraded { .. } => EventCategory::ReadMetric,
-            NexusEvent::OverWindowFallbackTriggered { .. } => EventCategory::ReadMetric,
-
-            // === NormalLow:剩余 Normal 事件(默认本地消化) ===
-            // 包括 Quest 生命周期/控制请求/路由执行结果/Agent 协作等
-            // UserIntentEncoded 已在前面 if 分支处理,此处 match 不再列出
-            //
-            // OmniSparseMasksComputed:OSA 稀疏掩码计算结果(L6 路由层产物),
-            // 不直接影响内环记忆/策略/安全状态,归入 NormalLow(同 ToolsRouted)。
-            // PredictionVerified:PVL 生产验证结果(L7 执行层产物),
-            // 归入 NormalLow(同 ExecutionCompleted/GatherCompleted)。
-            NexusEvent::OmniSparseMasksComputed { .. }
-            | NexusEvent::PredictionVerified { .. }
-            | NexusEvent::ModelRouteSelected { .. }
-            // MCA M0(ADR-065):通道路由决策留痕(与 ModelRouteSelected 同族,
-            // L6/L1 路由层产物,不直接影响内环状态)
-            | NexusEvent::ModelAffinitySelected { .. }
-            // MCA P2-1:跨厂商辩论通道选择(parliament 发布,辩论准备阶段,
-            // 不直接影响内环记忆/策略/安全状态)
-            | NexusEvent::CrossVendorNegotiation { .. }
-            | NexusEvent::QuestCreated { .. }
-            | NexusEvent::QuestProgressUpdated { .. }
-            | NexusEvent::QuestListUpdated { .. }
-            | NexusEvent::QuestCompleted { .. }
-            | NexusEvent::VoteCast { .. }
-            | NexusEvent::ToolsRouted { .. }
-            | NexusEvent::ExecutionCompleted { .. }
-            | NexusEvent::EvolutionTriggered { .. }
-            | NexusEvent::DpoPairGenerated { .. }
-            | NexusEvent::AuditLogged { .. }
-            | NexusEvent::ExpertActivated { .. }
-            | NexusEvent::ExpertRouted { .. }
-            | NexusEvent::EntropyBalanced { .. }
-            | NexusEvent::DebateStarted { .. }
-            | NexusEvent::AhirtProbeCompleted { .. }
-            | NexusEvent::GatherCompleted { .. }
-            | NexusEvent::OperationTimedOut { .. }
-            | NexusEvent::GatherTimedOut { .. }
-            | NexusEvent::ProducerStrategyAdjusted { .. }
-            | NexusEvent::PredictionMade { .. }
-            | NexusEvent::PredictionRolledBack { .. }
-            | NexusEvent::McpMeshTransactionCompleted { .. }
-            | NexusEvent::SesaActivationCompleted { .. }
-            | NexusEvent::SsraFusionCompleted { .. }
-            | NexusEvent::ChtcToolCallReceived { .. }
-            // Quest 控制请求与状态反馈(外环 L9 Quest 自治处理)
-            | NexusEvent::QuestPauseRequested { .. }
-            | NexusEvent::QuestResumeRequested { .. }
-            | NexusEvent::QuestCancelRequested { .. }
-            | NexusEvent::QuestCancelled { .. }
-            | NexusEvent::QuestPaused { .. }
-            | NexusEvent::QuestResumed { .. }
-            | NexusEvent::ResourceRecovered { .. }
-            // Milestone C-1: 奖励信号流（L0 RewardSpec 统一框架，R1 数据面）
-            | NexusEvent::RewardSignalReported { .. }
-            | NexusEvent::VoteCastRequested { .. }
-            | NexusEvent::RefreshStateRequested { .. }
-            // Agent 协作事件(外环 L9 chimera-mas 自治处理)
-            | NexusEvent::AgentTaskDelegated { .. }
-            | NexusEvent::AgentTaskCompleted { .. }
-            | NexusEvent::AgentConsultRequested { .. }
-            | NexusEvent::AgentConsultResponded { .. }
-            // TUI 交互式动作协议(外环 L10 Interface 自治处理)
-            | NexusEvent::TuiActionRequested { .. }
-            | NexusEvent::TuiActionProgressed { .. }
-            | NexusEvent::TuiActionCompleted { .. }
-            | NexusEvent::TuiActionFailed { .. }
-            | NexusEvent::TuiChatSubmitted { .. }
-            | NexusEvent::TuiChatResponseChunk { .. }
-            | NexusEvent::TuiChatCompleted { .. }
-            | NexusEvent::TuiChatStatusChanged { .. }
-            // UserIntentEncoded 的 Normal 分支(risk_level < 71)
-            | NexusEvent::UserIntentEncoded { .. } => EventCategory::NormalLow,
-
-            // === Critical:severity()==Critical 的 11 个变体 ===
-            // WHY 列在此处:虽然函数顶部 `if event.severity() == Critical` 已
-            // 提前 return EventCategory::Critical,但编译器不做跨函数的常量传播,
-            // 无法推断这 11 个变体已被顶部 if 覆盖。match 穷尽性检查要求显式列出
-            // 所有 NexusEvent 变体,故在此补上 Critical 变体分支(运行时不可达,
-            // 但保证 match 穷尽,新增变体时编译器强制更新)。
-            // 语义上与顶部 if 一致:均归入 EventCategory::Critical。
+            // Critical 显式 arm 保留:运行时不可达(顶部 severity() 早退已覆盖),
+            // 但保持"新增 Critical 变体 → 编译期强制更新"的最强保护(安全类别)。
             NexusEvent::CheckpointSaved { .. }
             | NexusEvent::ConsensusReached { .. }
             | NexusEvent::SlowConsumerDropped { .. }
@@ -525,19 +351,118 @@ impl MembraneFilter {
             | NexusEvent::BudgetExceeded { .. }
             | NexusEvent::AgentTaskFailed { .. }
             | NexusEvent::AsaIntervention { .. }
-            // P4-W16.2.2:R1 影子模式回滚失败为 Critical（与 AsaIntervention 同级）
             | NexusEvent::R1ShadowRollbackFailed { .. }
-            // ADR-042 决策 4:R2 冻结违反及回滚失败为 Critical(奖励黑客风险立即生效,
-            // 必须走 mpsc 旁路通道投递到 SecCore/Parliament 进行处置)
             | NexusEvent::R2FreezeViolation { .. }
             | NexusEvent::R2FreezeRollbackFailed { .. }
-            // MCA M0(ADR-065):厂商额度耗尽为 Critical(与 BudgetExceeded 同级,
-            // 运行时由顶部 severity() 早退覆盖,此处仅保证 match 穷尽)
             | NexusEvent::AffinityQuotaExhausted { .. }
-            // P1-5:FormalViolation 升级 Critical(运行时由顶部 severity() 早退覆盖,
-            // 此处仅保证 match 穷尽;语义 = 契约违反穿膜入内环)
             | NexusEvent::FormalViolation { .. } => EventCategory::Critical,
+            e if Self::is_memory_write(e) => EventCategory::MemoryWrite,
+            e if Self::is_policy_update(e) => EventCategory::PolicyUpdate,
+            e if Self::is_high_risk(e) => EventCategory::HighRisk,
+            e if Self::is_cache_local(e) => EventCategory::CacheLocal,
+            e if Self::is_read_metric(e) => EventCategory::ReadMetric,
+            // 兜底 = 原 NormalLow 显式 arm 的语义等价物(默认本地消化)
+            _ => EventCategory::NormalLow,
         }
+    }
+
+    /// MemoryWrite 谓词:修改记忆/上下文/能力分层状态的事件
+    fn is_memory_write(event: &NexusEvent) -> bool {
+        matches!(
+            event,
+            NexusEvent::NexusStateChanged { .. }
+                | NexusEvent::MemoryTiered { .. }
+                | NexusEvent::ContextWindowSwitched { .. }
+                | NexusEvent::ContextCompressed { .. }
+                | NexusEvent::CapabilityTiered { .. }
+                | NexusEvent::BlocksRebalanced { .. }
+                | NexusEvent::CheckpointLoaded { .. }
+                | NexusEvent::WikiUpdated { .. }
+                | NexusEvent::LsctTierSwitched { .. }
+                | NexusEvent::NmcEncoded { .. }
+                | NexusEvent::AgentContextOverflow { .. }
+        )
+    }
+
+    /// PolicyUpdate 谓词:修改策略/预算/能力配置的事件
+    fn is_policy_update(event: &NexusEvent) -> bool {
+        matches!(
+            event,
+            NexusEvent::GsoePolicyUpdated { .. }
+                | NexusEvent::ActivationThresholdAdjusted { .. }
+                | NexusEvent::BudgetAdjusted { .. }
+                | NexusEvent::CapabilityFrozen { .. }
+                | NexusEvent::ThinkingModeSwitched { .. }
+                | NexusEvent::QuestPriorityAdjusted { .. }
+                | NexusEvent::QuestPriorityChanged { .. }
+                | NexusEvent::ExpertRegistered { .. }
+                | NexusEvent::ExpertUnregistered { .. }
+                | NexusEvent::RoleRegistered { .. }
+                | NexusEvent::R1ShadowRegressionDetected { .. }
+                | NexusEvent::R1ShadowPromotionReady { .. }
+                | NexusEvent::ParliamentStrategyCapChanged { .. }
+                | NexusEvent::SpecRegistered { .. }
+        )
+    }
+
+    /// HighRisk 谓词:自描述 high-risk 事件(不含 UserIntentEncoded,已顶部处理)
+    fn is_high_risk(event: &NexusEvent) -> bool {
+        matches!(
+            event,
+            NexusEvent::SandboxViolation { .. }
+                | NexusEvent::OperationProduced { .. }
+                | NexusEvent::CsnSubstitutionTriggered { .. }
+                | NexusEvent::ProviderDegraded { .. }
+                | NexusEvent::EfficiencyAlertTriggered { .. }
+        )
+    }
+
+    /// CacheLocal 谓词:缓存命中/未命中/统计(外环本地消化)
+    fn is_cache_local(event: &NexusEvent) -> bool {
+        matches!(
+            event,
+            NexusEvent::CacheHit { .. }
+                | NexusEvent::CacheMiss { .. }
+                | NexusEvent::CachePrefetched { .. }
+                | NexusEvent::CacheStatsReported { .. }
+        )
+    }
+
+    /// ReadMetric 谓词:只读指标/心跳/统计报告(外环本地消化)
+    fn is_read_metric(event: &NexusEvent) -> bool {
+        matches!(
+            event,
+            NexusEvent::MemoryMetricsReported { .. }
+                | NexusEvent::BudgetStatsReported { .. }
+                | NexusEvent::BudgetMetricsUpdated { .. }
+                | NexusEvent::DecayMetricsReported { .. }
+                | NexusEvent::RouterStatsReported { .. }
+                | NexusEvent::PredictionStatsReported { .. }
+                | NexusEvent::ActivationCacheStats { .. }
+                | NexusEvent::ClvSnapshotReported { .. }
+                | NexusEvent::McpNodeHeartbeat { .. }
+                | NexusEvent::ChtcAdapterStatus { .. }
+                | NexusEvent::AgentHeartbeat { .. }
+                | NexusEvent::McpMessageReceived { .. }
+                | NexusEvent::CoordinationRatioReported { .. }
+                | NexusEvent::AuditFindingRaised { .. }
+                | NexusEvent::HarnessReportGenerated { .. }
+                | NexusEvent::DebateCompleted { .. }
+                | NexusEvent::DelegationCompleted { .. }
+                | NexusEvent::AffinityCapabilityNegotiated { .. }
+                | NexusEvent::AffinityUnknownField { .. }
+                | NexusEvent::StreamSessionCompleted { .. }
+                | NexusEvent::WindowAffinityApplied { .. }
+                | NexusEvent::CacheAffinityApplied { .. }
+                | NexusEvent::ContextBudgetAllocated { .. }
+                | NexusEvent::SemanticCacheHit { .. }
+                | NexusEvent::GhostMemoryDetected { .. }
+                | NexusEvent::MemConStrategyAdjusted { .. }
+                | NexusEvent::BenchmarkMetricsCollected { .. }
+                | NexusEvent::HcwRecallReported { .. }
+                | NexusEvent::HcwRecallDegraded { .. }
+                | NexusEvent::OverWindowFallbackTriggered { .. }
+        )
     }
 
     /// 决策事件是否穿膜入内环(spec.md L244-249)

@@ -210,12 +210,19 @@ async fn test_event_bus_publishes_transaction_completed() {
             participant_count,
             latency_ms,
             success,
+            capability_id,
             ..
         } => {
             assert_eq!(transaction_id, result.transaction_id);
             assert_eq!(participant_count, 5);
             assert_eq!(latency_ms, result.latency_ms);
             assert!(success);
+            // P2-5:capability_id 必须透传 op 参数(供 csn 精准推进降级链)
+            assert_eq!(
+                capability_id.as_deref(),
+                Some("event-test"),
+                "capability_id 应透传 op 参数"
+            );
         }
         _ => panic!(
             "期望 McpMeshTransactionCompleted,得到 {:?}",

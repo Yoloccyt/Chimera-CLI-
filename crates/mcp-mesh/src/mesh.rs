@@ -286,7 +286,9 @@ impl McpMesh {
         };
 
         // 5. 发布事务完成事件(best-effort)
-        self.publish_transaction_completed(&result).await;
+        // P2-5:透传真实 capability_id(op 参数即被调用的能力/工具名),
+        // csn-substitutor 降级链以 capability_id 为键,必须透传才能精准推进。
+        self.publish_transaction_completed(&result, Some(op)).await;
 
         // 6. 整体超时也返回 TransactionTimeout 错误(让调用方知晓)
         if timed_out {
@@ -622,7 +624,15 @@ impl McpMesh {
     }
 
     /// 发布 `McpMeshTransactionCompleted` 事件(best-effort,失败仅告警)
-    async fn publish_transaction_completed(&self, result: &TransactionResult) {
+    ///
+    /// # 参数
+    /// - `capability_id`: 被调用的能力/工具名(execute_transaction 的 op 参数),
+    ///   csn-substitutor 据此精准推进对应降级链(P2-5,Task 0.5.8)。
+    async fn publish_transaction_completed(
+        &self,
+        result: &TransactionResult,
+        capability_id: Option<String>,
+    ) {
         if let Some(bus) = &self.event_bus {
             let event = NexusEvent::McpMeshTransactionCompleted {
                 metadata: EventMetadata::new("mcp-mesh"),
@@ -634,8 +644,8 @@ impl McpMesh {
                 },
                 latency_ms: result.latency_ms,
                 success: result.success,
-                // Task 0.7 v2.9.0-omega: 默认 None,Task 0.5 csn-substitutor 重设计后填充
-                capability_id: None,
+                // P2-5:透传真实 capability_id(原硬编码 None 导致 csn 精准推进分支不可达)
+                capability_id,
             };
             if let Err(e) = bus.publish(event).await {
                 warn!(error = %e, "McpMeshTransactionCompleted 事件发布失败");

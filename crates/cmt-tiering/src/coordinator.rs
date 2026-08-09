@@ -29,7 +29,9 @@ use crate::decay::DecayCalculator;
 use crate::error::CmtError;
 use crate::hot::HotTier;
 use crate::ice::IceTier;
-use crate::types::{CapabilityEntry, CapabilityId, MigrationReason, Tier};
+use crate::types::{
+    assert_archive_monotonicity, CapabilityEntry, CapabilityId, MigrationReason, Tier,
+};
 use crate::warm::WarmTier;
 
 /// 衰减周期分批处理的批大小(SubTask 19.2)
@@ -216,6 +218,9 @@ impl CmtCoordinator {
         let evicted = self.hot.insert(entry)?;
 
         if let Some(evicted_entry) = evicted {
+            // INV-8 归档单调性防御性校验(P2-7:LRU 驱逐固定 Hot→Warm 合法降级,
+            // 与 migrator.rs migrate_hot_to_warm 对齐,防未来重构引入动态层级时回升)
+            assert_archive_monotonicity(Tier::Hot, Tier::Warm)?;
             debug!(
                 evicted_id = %evicted_entry.id,
                 "Hot 层 LRU 驱逐,迁移到 Warm 层"
@@ -507,6 +512,9 @@ impl CmtCoordinator {
     /// WHY 分批:虽然 Hot 层条目已在内存中,分批处理仍可控制单批 insert_batch
     /// 的事务大小,避免超大事务阻塞其他读写操作。
     async fn demote_hot_to_warm(&self, hot_to_warm: Vec<CapabilityEntry>) -> Result<u64, CmtError> {
+        // INV-8 归档单调性防御性校验(P2-7:与 migrator.rs 三入口接线对齐,
+        // 防未来重构引入动态层级时回升)
+        assert_archive_monotonicity(Tier::Hot, Tier::Warm)?;
         if hot_to_warm.is_empty() {
             return Ok(0);
         }
@@ -555,6 +563,8 @@ impl CmtCoordinator {
     /// WHY 分批 + 按需 peek:候选 ID 列表来自 metadata(不含 content),
     /// 降级时通过 `peek` 按需读取完整条目。每批 1024 条,批间释放 content 内存。
     async fn demote_warm_to_cold(&self, candidate_ids: Vec<CapabilityId>) -> Result<u64, CmtError> {
+        // INV-8 归档单调性防御性校验(P2-7)
+        assert_archive_monotonicity(Tier::Warm, Tier::Cold)?;
         if candidate_ids.is_empty() {
             return Ok(0);
         }
@@ -602,6 +612,8 @@ impl CmtCoordinator {
     /// WHY 分批 + 按需 peek:候选 ID 列表来自 metadata(不含 content),
     /// 降级时通过 `peek` 按需读取完整条目。每批 1024 条,批间释放 content 内存。
     async fn demote_cold_to_ice(&self, candidate_ids: Vec<CapabilityId>) -> Result<u64, CmtError> {
+        // INV-8 归档单调性防御性校验(P2-7)
+        assert_archive_monotonicity(Tier::Cold, Tier::Ice)?;
         if candidate_ids.is_empty() {
             return Ok(0);
         }

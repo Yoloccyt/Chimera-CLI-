@@ -134,7 +134,11 @@ impl AcbGovernor {
             let event = NexusEvent::BudgetExceeded {
                 metadata: EventMetadata::new("acb-governor"),
                 budget_type: "token".to_string(),
-                current: request.requested_tokens,
+                // P2-10 统一语义:current = 累计消耗值(对齐事件契约 types.rs"当前消耗值"
+                // 与其他 3 个发布点:cost_integration/decb-governor/mca-gateway 均为累计口径)。
+                // WHY 不用 requested_tokens:该事件是跨层观测面,累计口径可统一解释"消耗 vs 上限";
+                // 单请求量由返回给调用方的 AcbError::BudgetExceeded.current 承载(错误契约保留请求值)。
+                current: self.total_consumption.load(Ordering::Relaxed),
                 limit,
             };
             if let Err(e) = self.event_bus.publish_blocking(event) {
@@ -412,6 +416,39 @@ mod tests {
             matches!(result, Err(AcbError::DegradedModeRejected { .. })),
             "L0 should reject with DegradedModeRejected"
         );
+    }
+
+    /// P2-10:BudgetExceeded 事件 current 字段必须为累计消耗(非请求值)
+    ///
+    /// RED 逻辑:修复前 current = request.requested_tokens(请求值),
+    /// 断言 current == 累计值 失败;修复后 current = total_consumption 通过。
+    #[tokio::test]
+    async fn test_budget_exceeded_event_current_is_cumulative() {
+        use event_bus::{EventBus, NexusEvent};
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let governor = AcbGovernor::with_event_bus(AcbGovernorConfig::default(), bus).unwrap();
+
+        // 先累计 3000 消耗
+        governor.total_consumption.store(3000, Ordering::Relaxed);
+        // 超限请求(200000 > L3 上限 100000)
+        let request = BudgetRequest::new("quest-1", 200_000);
+        let _ = governor.check_budget(&request);
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("应收到 BudgetExceeded")
+            .expect("recv 不应失败");
+        match event {
+            NexusEvent::BudgetExceeded { current, limit, .. } => {
+                assert_eq!(
+                    current, 3000,
+                    "current 应为累计消耗值(3000),而非请求值(200000)"
+                );
+                assert_eq!(limit, governor.config.token_limit_for(BudgetTier::L3));
+            }
+            other => panic!("应收到 BudgetExceeded: {other:?}"),
+        }
     }
 
     // ============================================================

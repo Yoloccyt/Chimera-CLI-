@@ -112,9 +112,13 @@ fn exactly_at_threshold_is_not_breach() {
     );
 }
 
-/// 无单因子超标但加权分超 0.6 → 关键路径（综合判定路径）
+/// 无单因子超标且加权分 0.401 < 0.6 → 非关键路径（加权分支不触发）
+///
+/// P2-12 修正:原测试名声称验证"加权分单独触发",实际断言为反例;
+/// 且注释算术 "≈0.544" 实算为 0.40125(0.2×0.469+0.2×0.438+0.25×0.3
+/// +0.15×0.28+0.1×0.19+0.1×0.84 = 0.09375+0.0875+0.075+0.042+0.019+0.084)。
 #[test]
-fn weighted_score_alone_can_trigger_critical() {
+fn weighted_score_below_threshold_is_not_critical() {
     let input = RiskFactorInput {
         task_count: 30,            // 低于阈值 32
         max_dependency_depth: 7,   // 低于阈值 8
@@ -125,6 +129,32 @@ fn weighted_score_alone_can_trigger_critical() {
     };
     let report = assess_critical_path(&input);
     // 各因子归一化：30/64+7/16+0.9/3+0.28+0.19+0.84 = 0.469+0.438+0.3+0.28+0.19+0.84
-    // 加权：0.2*0.469+0.2*0.438+0.25*0.3+0.15*0.28+0.1*0.19+0.1*0.84 ≈ 0.544 < 0.6
+    // 加权：0.2*0.469+0.2*0.438+0.25*0.3+0.15*0.28+0.1*0.19+0.1*0.84 ≈ 0.401 < 0.6
     assert!(!report.is_critical, "低综合分不应关键: {:?}", report);
+}
+
+/// 加权分超 0.6 → 关键路径（加权分支验证）
+///
+/// 注:无超标因子时加权分上限 = 0.2*(32/64)+0.2*(8/16)+0.25*(1/3)
+/// +0.15*0.3+0.1*0.2+0.1*0.85 ≈ 0.433 < 0.6,加权分支无法"单独"触发;
+/// 本测试验证加权分 > 0.6 的输入必然判定关键(加权分支与单因子分支协同)。
+#[test]
+fn weighted_score_over_threshold_marks_critical() {
+    let input = RiskFactorInput {
+        task_count: 60,            // 超标(>32),归一化 60/64=0.9375
+        max_dependency_depth: 15,  // 超标(>8),归一化 15/16=0.9375
+        coordination_to_gain: 2.5, // 超标(>1.0),归一化 2.5/3≈0.8333
+        veto_rate: 0.4,            // 超标(>0.3)
+        timeout_rate: 0.3,         // 超标(>0.2)
+        budget_watermark: 0.9,     // 超标(>0.85)
+    };
+    let report = assess_critical_path(&input);
+    // 加权：0.2*0.9375+0.2*0.9375+0.25*0.8333+0.15*0.4+0.1*0.3+0.1*0.9
+    // = 0.1875+0.1875+0.2083+0.06+0.03+0.09 ≈ 0.763 > 0.6
+    assert!(report.is_critical, "加权分超 0.6 应判定关键: {report:?}");
+    assert!(
+        report.risk_score > 0.6,
+        "风险分应超 0.6: {}",
+        report.risk_score
+    );
 }

@@ -21,6 +21,7 @@
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 use sha2::{Digest, Sha256};
 use tokio::process::Command as TokioCommand;
 use tracing::{info, warn};
@@ -87,6 +88,13 @@ pub struct Sandbox {
     /// 默认 `None` — 调用方通过 `with_gvisor_runtime()` 或 `with_gvisor_config()`
     /// 注入运行时实例。未注入时即使 `use_gvisor=true` 也会降级为进程隔离。
     gvisor_runtime: Option<GvisorRuntime>,
+    /// 事件总线(可选)— 注入后沙箱违规拦截路径发布 SandboxViolation 事件(P2-4)
+    ///
+    /// WHY Option 而非必填:与 `AsaAuditor::new()` 保留私有总线不同,Sandbox 有
+    /// 63+ 处测试调用点(`with_default_policy()`),默认 None 时发布静默跳过,
+    /// 既有测试零改动。生产代码通过 `with_event_bus` 注入共享总线,
+    /// 复用 asa.rs 的注入模式(L4 → L1 依赖合规)。
+    event_bus: Option<EventBus>,
 }
 
 // ============================================================
@@ -120,6 +128,7 @@ impl Sandbox {
             asa_auditor: None,
             use_gvisor: true,
             gvisor_runtime: None,
+            event_bus: None,
         }
     }
 
@@ -159,6 +168,35 @@ impl Sandbox {
     pub fn with_asa_auditor(mut self, auditor: AsaAuditor) -> Self {
         self.asa_auditor = Some(auditor);
         self
+    }
+
+    /// 链式注入事件总线 — 沙箱违规时发布 SandboxViolation 事件(P2-4)
+    ///
+    /// WHY:复用 asa.rs 的 EventBus 注入 + publish_blocking 模式。
+    /// EventBus 内部为 Arc,Clone 廉价;生产代码注入共享总线使违规可被
+    /// quest-engine/L9 订阅者感知并中止/告警 Quest(§6.2 安全事件观测)。
+    pub fn with_event_bus(mut self, bus: EventBus) -> Self {
+        self.event_bus = Some(bus);
+        self
+    }
+
+    /// 发布 SandboxViolation 事件(P2-4)— 违规路径统一出口
+    ///
+    /// WHY publish_blocking:`audit_and_execute` 错误路径在返回前同步调用,
+    /// 用 event-bus 官方同步 API(与 asa.rs 一致);未注入 EventBus 时
+    /// 静默跳过(向后兼容,既有测试零改动)。发布失败仅 warn 不上抛——
+    /// 违规拦截的主语义是"拒绝执行",事件发布是观测增强。
+    fn publish_violation(&self, violation_type: &str, detail: String) {
+        if let Some(bus) = &self.event_bus {
+            let event = NexusEvent::SandboxViolation {
+                metadata: EventMetadata::new("seccore"),
+                violation_type: violation_type.to_string(),
+                detail,
+            };
+            if let Err(e) = bus.publish_blocking(event) {
+                tracing::warn!(error = %e, "发布 SandboxViolation 事件失败");
+            }
+        }
     }
 
     /// 链式设置是否启用 gVisor 内核级隔离 — 为 gVisor 集成做准备(Task 10)。
@@ -282,10 +320,34 @@ impl Sandbox {
         command: Command,
     ) -> Result<ExecutionResult, SecCoreError> {
         // 步骤1:静态分析 — 拦截注入/越权/逃逸/泄露/篡改/滥用
-        let mut spec = validate_command(&command, &self.policy)?;
+        // P2-4:错误路径注入 SandboxViolation 发布(违规不再只写 Merkle 审计链)
+        let mut spec = match validate_command(&command, &self.policy) {
+            Ok(spec) => spec,
+            Err(SecCoreError::CommandBlocked {
+                attack_type,
+                detail,
+            }) => {
+                self.publish_violation(&format!("{attack_type:?}"), detail.clone());
+                return Err(SecCoreError::CommandBlocked {
+                    attack_type,
+                    detail,
+                });
+            }
+            Err(e) => return Err(e),
+        };
 
         // 步骤2:环境变量过滤 — 拦截 SECRET/KEY/TOKEN 泄露
-        let filtered_env = validate_env(&command.env, &self.env_policy)?;
+        let filtered_env = match validate_env(&command.env, &self.env_policy) {
+            Ok(filtered) => filtered,
+            Err(SecCoreError::EnvVarBlocked { name, pattern }) => {
+                self.publish_violation(
+                    "env_blocked",
+                    format!("env var '{name}' matched pattern '{pattern}'"),
+                );
+                return Err(SecCoreError::EnvVarBlocked { name, pattern });
+            }
+            Err(e) => return Err(e),
+        };
         spec.env_whitelist = filtered_env;
 
         // 步骤3(D6 修复 + P1-W3.3):高危操作强制升级通道 — 按 risk_score 分档处理
@@ -1302,5 +1364,71 @@ mod tests {
                 .any(|s| s.step_type == DecisionStepType::Result),
             "高危操作决策链应包含 Result 步骤"
         );
+    }
+
+    // ============================================================
+    // P2-4: SandboxViolation 事件发布测试
+    // ============================================================
+
+    /// 命令拦截发布 SandboxViolation 事件(Injection)
+    #[tokio::test]
+    async fn test_blocked_command_publishes_sandbox_violation() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut sandbox = Sandbox::with_default_policy().with_event_bus(bus);
+
+        let cmd = Command::new("echo").arg("$(whoami)");
+        let result = sandbox.audit_and_execute(cmd).await;
+        assert!(result.is_err(), "注入命令应被拦截");
+
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("应收到 SandboxViolation")
+            .expect("recv 不应失败");
+        match event {
+            NexusEvent::SandboxViolation {
+                violation_type,
+                detail,
+                ..
+            } => {
+                assert!(
+                    violation_type.contains("Injection"),
+                    "违规类型应为 Injection, 实际: {violation_type}"
+                );
+                assert!(!detail.is_empty(), "违规详情不应为空");
+            }
+            other => panic!("应收到 SandboxViolation: {other:?}"),
+        }
+    }
+
+    /// 环境变量拦截发布 SandboxViolation 事件(env_blocked)
+    #[tokio::test]
+    async fn test_blocked_env_publishes_sandbox_violation() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut sandbox = Sandbox::with_default_policy().with_event_bus(bus);
+
+        let cmd = Command::new("echo").arg("hello").env("SECRET_KEY", "leak");
+        let result = sandbox.audit_and_execute(cmd).await;
+        assert!(result.is_err(), "环境变量泄露应被拦截");
+
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("应收到 SandboxViolation")
+            .expect("recv 不应失败");
+        assert!(
+            matches!(&event, NexusEvent::SandboxViolation { violation_type, .. }
+                if violation_type == "env_blocked"),
+            "应收到 env_blocked 违规, 实际: {event:?}"
+        );
+    }
+
+    /// 未注入 EventBus 时发布静默跳过(向后兼容,既有测试零改动)
+    #[tokio::test]
+    async fn test_no_event_bus_skips_publish() {
+        let mut sandbox = Sandbox::with_default_policy(); // 无 with_event_bus
+        let cmd = Command::new("echo").arg("$(whoami)");
+        let result = sandbox.audit_and_execute(cmd).await;
+        assert!(result.is_err(), "拦截仍应生效(不依赖事件发布)");
     }
 }

@@ -611,6 +611,42 @@ impl Parliament {
         };
 
         // ============================================================
+        // 步骤 2~4:审议收尾副作用(发布事件/趋势/缓存/仪表盘)
+        // P2-11:提取为 finalize_deliberation(本函数 253 行超 200 行红线)
+        // ============================================================
+        self.finalize_deliberation(
+            quest,
+            proposal,
+            debate_start,
+            effective_strategy,
+            metrics.as_ref(),
+            &consensus,
+            cache_key,
+        )
+        .await;
+
+        Ok(consensus)
+    }
+
+    /// 审议收尾副作用:发布 DebateCompleted + 质量趋势 + 缓存 + 悖论仪表盘
+    ///
+    /// WHY 独立方法(P2-11):deliberate_with_policy 主流程超 _audit_fnlen 200 行红线;
+    /// 本块为纯收尾(观测事件/缓存/仪表盘),与上方的决策编排正交。
+    /// 顺序不变量:发布 → 趋势(缓存前)→ 缓存 → 仪表盘(缓存后),拆分保持原序。
+    /// 锁纪律:全部锁在语句级作用域内释放,不跨 await 持锁(§4.4 反模式 1);
+    /// publish_debate_completed_event 的 await 在取锁之前完成。
+    #[allow(clippy::too_many_arguments)] // 对齐 voting.rs 既有模式
+    async fn finalize_deliberation(
+        &self,
+        quest: &Quest,
+        proposal: &Proposal,
+        debate_start: Instant,
+        effective_strategy: ActivationStrategy,
+        metrics: Option<&DebateVoteMetrics>,
+        consensus: &Consensus,
+        cache_key: ProposalKey,
+    ) {
+        // ============================================================
         // 步骤 2:发布 DebateCompleted 观测事件(协调度量接线闭环 + M2 多维质量)
         // ============================================================
         publish_debate_completed_event(
@@ -619,9 +655,9 @@ impl Parliament {
             &proposal.proposal_id,
             debate_start.elapsed().as_secs_f64() * 1000.0,
             effective_strategy.short_name(),
-            metrics.as_ref().map(DebateVoteMetrics::vote_rates),
-            metrics.as_ref().map(|m| &m.quality),
-            consensus_outcome_label(&consensus),
+            metrics.map(DebateVoteMetrics::vote_rates),
+            metrics.map(|m| &m.quality),
+            consensus_outcome_label(consensus),
         )
         .await;
 
@@ -631,7 +667,7 @@ impl Parliament {
         // WHY 在缓存写入之前:避免缓存命中时跳过趋势分析,确保每次实际
         // 审议都参与趋势统计。FastPath 路径 metrics=None,不推送。
         // 毒锁降级:使用 unwrap_or_else(|e| e.into_inner()) 恢复(§4.1 约定)。
-        if let Some(ref m) = metrics {
+        if let Some(m) = metrics {
             let mut trend = self.quality_trend.lock().unwrap_or_else(|e| e.into_inner());
             trend.push(m.quality);
         }
@@ -667,7 +703,7 @@ impl Parliament {
             } else {
                 // skeptic_stance ∈ [0,1],接近 0 = 反对倾向高
                 // 1.0 - skeptic_stance 转换:反对倾向高 → veto_anomaly 高
-                metrics.as_ref().map_or(0.0f32, |m| {
+                metrics.map_or(0.0f32, |m| {
                     (1.0f32 - m.quality.skeptic_stance).clamp(0.0, 1.0)
                 })
             };
@@ -683,8 +719,6 @@ impl Parliament {
                 .unwrap_or_else(|e| e.into_inner());
             dashboard.update(ratio, veto_anomaly_rate, health_score);
         }
-
-        Ok(consensus)
     }
 
     /// FastPath 路径 — 跳过 Opinion 生成,直接返回共识
