@@ -72,8 +72,8 @@ pub use memory_strategy_learner::MemoryStrategyLearnerHolder;
 pub use mem_con::{MemConConfig, MemConController};
 pub use storage_impl::PragmaConn;
 pub use types::{
-    ExecutionStats, MemoryEntry, MemoryId, MemoryTier, PatternSignature, ProceduralEntry, QuestId,
-    SharedCLV,
+    assert_archive_monotonicity, ExecutionStats, MemoryEntry, MemoryId, MemoryTier,
+    PatternSignature, ProceduralEntry, QuestId, SharedCLV,
 };
 
 // === Task 3.2: L10 TUI 跨层协同 — 全局记忆策略阶段快照 ===
@@ -152,7 +152,7 @@ pub mod prelude {
     // P2-8: MemCon 自适应控制器
     pub use crate::mem_con::{MemConConfig, MemConController};
     pub use crate::types::{
-        ExecutionStats, MemoryEntry, MemoryId, MemoryTier, PatternSignature, ProceduralEntry,
-        QuestId,
+        assert_archive_monotonicity, ExecutionStats, MemoryEntry, MemoryId, MemoryTier,
+        PatternSignature, ProceduralEntry, QuestId,
     };
 }

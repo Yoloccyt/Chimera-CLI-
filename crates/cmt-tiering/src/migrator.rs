@@ -33,7 +33,7 @@ use crate::cold::ColdTier;
 use crate::error::CmtError;
 use crate::hot::HotTier;
 use crate::ice::IceTier;
-use crate::types::{MigrationReason, Tier};
+use crate::types::{assert_archive_monotonicity, MigrationReason, Tier};
 use crate::warm::WarmTier;
 
 /// 层级迁移器 — 四级存储间的自动迁移
@@ -103,6 +103,10 @@ impl TierMigrator {
         &self,
         entry: crate::types::CapabilityEntry,
     ) -> Result<(), CmtError> {
+        // INV-8 归档单调性防御性校验(P0-2:L0 独立公共 API 接线)
+        // Hot→Warm 为固定合法降级,此处校验防未来重构引入动态层级时回升。
+        assert_archive_monotonicity(Tier::Hot, Tier::Warm)?;
+
         let cap_id = entry.id.clone();
 
         // WarmTier::insert 已改为 async(spawn_blocking 包装 SQLite 操作)
@@ -127,6 +131,10 @@ impl TierMigrator {
     /// 将条目从 Warm 层移除,插入 Cold 层。
     /// 迁移原因:`MigrationReason::IdleTimeout`
     pub async fn migrate_warm_to_cold(&self, cap_id: &str) -> Result<(), CmtError> {
+        // INV-8 归档单调性防御性校验(P0-2:L0 独立公共 API 接线)
+        // Warm→Cold 为固定合法降级,此处校验防未来重构引入动态层级时回升。
+        assert_archive_monotonicity(Tier::Warm, Tier::Cold)?;
+
         // peek 不更新访问时间,避免迁移时刷新空闲计时
         let entry = self
             .warm
@@ -175,6 +183,10 @@ impl TierMigrator {
     /// 将条目从 Cold 层移除,归档到 Ice 层。
     /// 迁移原因:`MigrationReason::IdleTimeout`
     pub async fn migrate_cold_to_ice(&self, cap_id: &str) -> Result<(), CmtError> {
+        // INV-8 归档单调性防御性校验(P0-2:L0 独立公共 API 接线)
+        // Cold→Ice 为固定合法降级,此处校验防未来重构引入动态层级时回升。
+        assert_archive_monotonicity(Tier::Cold, Tier::Ice)?;
+
         // peek 不更新访问时间,避免迁移时刷新空闲计时
         let entry = self
             .cold

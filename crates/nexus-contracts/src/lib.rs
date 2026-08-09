@@ -220,6 +220,16 @@ pub mod platform_grounding;
 /// R1 数据面先接入，R2 训练面解冻后激活（ADR-042）；L4 安全奖励仅观测。
 pub mod reward;
 
+/// 归档单调性契约 — INV-8 独立公共 API（P0-2 审计修复）
+///
+/// 承载 `ArchiveTier`（Hot/Warm/Cold/Ice 四级）与 `assert_archive_monotonicity`
+/// 判定函数（降级 + 同层保持合法，回升拒绝）。INV-8 判定此前仅存在于
+/// L9 `chimera-mas`，本模块将其下沉至 L0，使 mlc-engine（L2）/ cmt-tiering（L3）
+/// 的归档入口可独立执行单调性断言（依赖铁律 §2.2：L(N) → L(0) 恒允许）。
+/// ADR-033"纯类型 + 零逻辑"的第二个明确例外（首个为 `test_scale`），
+/// 详见模块级文档。
+pub mod archive_monotonicity;
+
 // ============================================================
 // 公开 API 导出
 // ============================================================
@@ -294,6 +304,10 @@ pub use event_payload::{AgentStatus, EventSeverity, TaskPriority};
 // WHY 顶层导出: 与既有接缝契约类型（DensityTier/RecallQuota 等）对等路径,
 // 依赖方可直接 `use nexus_contracts::rl_types::RLAction` 或顶层 `RLAction`
 pub use rl_types::{MemPiAction, RLAction, RLExperience, RLState};
+// P0-2 修复: INV-8 归档单调性独立公共 API（ArchiveTier + 判定函数 + 错误类型）
+// WHY 顶层导出: 与既有契约函数/类型对等路径,依赖方可直接
+// `use nexus_contracts::assert_archive_monotonicity` 或顶层 `ArchiveTier`
+pub use archive_monotonicity::{assert_archive_monotonicity, ArchiveTier, InvariantViolation};
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
@@ -364,4 +378,8 @@ pub mod prelude {
     pub use crate::event_payload::{AgentStatus, EventSeverity, TaskPriority};
     // ADR-049 修订: RL 共享类型（与顶层导出同集）
     pub use crate::rl_types::{MemPiAction, RLAction, RLExperience, RLState};
+    // P0-2 修复: INV-8 归档单调性契约（与顶层导出同集）
+    pub use crate::archive_monotonicity::{
+        assert_archive_monotonicity, ArchiveTier, InvariantViolation,
+    };
 }

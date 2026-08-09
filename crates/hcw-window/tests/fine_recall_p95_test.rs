@@ -39,8 +39,31 @@ const SAMPLE_COUNT: usize = 1000;
 /// Top-K 返回数（spec.md 要求 500）
 const TOP_K: usize = 500;
 
-/// p95 延迟阈值（spec.md 红线: <50ms）
-const P95_THRESHOLD_MS: u64 = 50;
+/// p95 延迟阈值（毫秒，spec.md 红线: <50ms）
+///
+/// # WHY 参数化（P1-5）
+/// 硬编码时序阈值在 CI 慢机/高负载下余量不足会偶发失败（项目 memory 实证：
+/// debug 开销 + 并行竞争污染延迟测量、mlc-engine 高负载 p99 超阈值）。
+/// `HCW_FINE_RECALL_P95_MS` 使 CI 可在不改代码的情况下覆盖阈值；
+/// 失败安全：未设置/解析失败回退 50ms（语义与硬编码一致）。
+fn p95_threshold_ms() -> u64 {
+    std::env::var("HCW_FINE_RECALL_P95_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(50)
+}
+
+/// 精确重排开销阈值（毫秒，默认 10ms）
+///
+/// # WHY 参数化（P1-5）
+/// 同 p95 红线：时序断言在 CI 慢机/高负载下余量不足会偶发失败。
+/// `HCW_RERANK_OVERHEAD_MS` 使 CI 可覆盖；失败安全回退 10ms。
+fn rerank_overhead_ms() -> u64 {
+    std::env::var("HCW_RERANK_OVERHEAD_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(10)
+}
 
 // ============================================================
 // 测试用 VectorStore 实现
@@ -231,19 +254,21 @@ fn test_fine_recall_p95_below_50ms() {
     let max = latencies[latencies.len() - 1];
 
     // 5. 输出延迟分布（用于诊断）
+    // P1-5: 阈值参数化（默认 50ms，CI 可用 HCW_FINE_RECALL_P95_MS 覆盖）
+    let p95_ms_threshold = p95_threshold_ms();
     eprintln!(
         "[fine_recall_p95] blocks={BLOCK_COUNT}, samples={SAMPLE_COUNT}, top_k={TOP_K}\n\
          mean={mean:?}, p50={p50:?}, p95={p95:?}, p99={p99:?}, max={max:?}\n\
-         p95<50ms={} (threshold={P95_THRESHOLD_MS}ms)",
-        p95 < Duration::from_millis(P95_THRESHOLD_MS)
+         p95<{p95_ms_threshold}ms={}",
+        p95 < Duration::from_millis(p95_ms_threshold)
     );
 
     // 6. 红线断言
     assert!(
-        p95 < Duration::from_millis(P95_THRESHOLD_MS),
+        p95 < Duration::from_millis(p95_ms_threshold),
         "P3-W9.2.2 红线违规:精排 {BLOCK_COUNT} Block p95={p95:?} ≥ {threshold:?} \
          (InMemoryVectorStore O(n) KNN，真实 HnswStore 应更快)",
-        threshold = Duration::from_millis(P95_THRESHOLD_MS)
+        threshold = Duration::from_millis(p95_ms_threshold)
     );
 }
 
@@ -341,9 +366,11 @@ fn test_precise_rerank_overhead_acceptable() {
          with_rerank_p95={with_rerank_p95:?}, overhead={overhead:?}"
     );
 
+    // P1-5: 阈值参数化（默认 10ms，CI 可用 HCW_RERANK_OVERHEAD_MS 覆盖）
+    let overhead_ms = rerank_overhead_ms();
     // 精确重排开销应 <10ms（1000 Block × 512-dim cosine_similarity ≈ 1-2ms）
     assert!(
-        overhead < Duration::from_millis(10),
-        "精确重排开销过大: overhead={overhead:?} ≥ 10ms"
+        overhead < Duration::from_millis(overhead_ms),
+        "精确重排开销过大: overhead={overhead:?} ≥ {overhead_ms}ms"
     );
 }

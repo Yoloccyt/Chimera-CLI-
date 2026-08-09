@@ -27,11 +27,31 @@ use hcw_window::recall::types::BlockId;
 use hcw_window::{probe_health, ProbeHealth, ScoreCache};
 use nexus_core::CLV;
 
-/// 探针装窗 p95 红线（毫秒）——设计文档 §4.2.4 延迟预算
-const PROBE_WINDOW_P95_MS: u128 = 10;
+/// 探针装窗 p95 红线（毫秒，设计文档 §4.2.4 延迟预算，默认 10ms）
+///
+/// # WHY 参数化（P1-5）
+/// 硬编码时序阈值在 CI 慢机/高负载下余量不足会偶发失败（项目 memory 实证：
+/// debug 开销 + 并行竞争污染延迟测量）。`HCW_PROBE_WINDOW_P95_MS` 使 CI
+/// 可在不改代码的情况下覆盖阈值；失败安全：未设置/解析失败回退 10ms。
+fn probe_window_p95_ms() -> u128 {
+    std::env::var("HCW_PROBE_WINDOW_P95_MS")
+        .ok()
+        .and_then(|s| s.parse::<u128>().ok())
+        .unwrap_or(10)
+}
 
-/// 打分吞吐红线（块/秒）——设计文档 §6.1
-const THROUGHPUT_RATE_PER_SEC: f64 = 10_000.0;
+/// 打分吞吐红线（块/秒，设计文档 §6.1，默认 10_000）
+///
+/// # WHY 参数化（P1-5）
+/// 吞吐为时序派生断言（块数/总耗时），同 p95 属负载敏感类，CI 慢机下
+/// 余量不足会偶发失败；`HCW_PROBE_THROUGHPUT_MIN` 使 CI 可覆盖。
+/// 失败安全：未设置/解析失败回退 10_000 块/秒。
+fn probe_throughput_min() -> f64 {
+    std::env::var("HCW_PROBE_THROUGHPUT_MIN")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(10_000.0)
+}
 
 /// 窗口档块数（128K 档 = 256 块 × 512 token）
 const BLOCK_COUNT: usize = 256;
@@ -149,27 +169,31 @@ fn test_probe_window_p95_below_10ms_and_throughput() {
     // 吞吐：块数 / 总耗时（含缓存命中复用——"查询期零计算"的收益）
     let throughput = total_blocks_scored as f64 / total_elapsed.as_secs_f64();
 
+    // P1-5: 阈值参数化（默认 10ms / 10K 块每秒，CI 可覆盖）
+    let p95_ms = probe_window_p95_ms();
+    let throughput_min = probe_throughput_min();
+
     eprintln!(
         "[probe_select_p95] samples={} mean={}us p95={}us p95<{}ms={} \
          throughput={:.0} blocks/s >= {:.0}={}",
         SAMPLE_COUNT,
         latencies.iter().sum::<u128>() / SAMPLE_COUNT as u128,
         p95,
-        PROBE_WINDOW_P95_MS,
-        p95 < PROBE_WINDOW_P95_MS * 1000,
+        p95_ms,
+        p95 < p95_ms * 1000,
         throughput,
-        THROUGHPUT_RATE_PER_SEC,
-        throughput >= THROUGHPUT_RATE_PER_SEC
+        throughput_min,
+        throughput >= throughput_min
     );
 
     assert!(
-        p95 < PROBE_WINDOW_P95_MS * 1000,
+        p95 < p95_ms * 1000,
         "探针装窗 p95 {p95}us 超红线 {}ms",
-        PROBE_WINDOW_P95_MS
+        p95_ms
     );
     assert!(
-        throughput >= THROUGHPUT_RATE_PER_SEC,
-        "打分吞吐 {throughput:.0} 块/秒低于红线 {THROUGHPUT_RATE_PER_SEC}"
+        throughput >= throughput_min,
+        "打分吞吐 {throughput:.0} 块/秒低于红线 {throughput_min}"
     );
 }
 

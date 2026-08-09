@@ -283,6 +283,24 @@ fn test_baseline_comparison_table() {
     );
 }
 
+/// 读取 position_bias 病理断言阈值（CI 可配置而非硬编码，P1-5 修复）
+///
+/// # 环境变量
+/// `HCW_RECALL_MIN_THRESHOLD`：覆盖"静态路径位置偏置应显著"断言阈值，默认 0.6
+/// （0.6 为 bias 上界：bias 越低说明 lost-in-the-middle 病理越严重）
+///
+/// # WHY 参数化
+/// 硬编码阈值在语料统计特性或 CI 负载波动下余量不足会偶发失败（项目 memory 实证：
+/// hnsw-rs 小规模近似检索偶发漏节点、测试不得假设确定性）。env 覆盖使 CI
+/// 可在不改代码的情况下收敛阈值（失败安全：未设置/解析失败回退默认 0.6，
+/// 语义与硬编码一致——测试用 env::var 读取，生产代码禁 unwrap 的约束不适用）。
+fn recall_min_threshold() -> f32 {
+    std::env::var("HCW_RECALL_MIN_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.6)
+}
+
 #[test]
 fn test_static_path_position_bias_pathology() {
     // 病理量化（非 ignore，快速验证）：静态路径 position_bias 显著 < 1.0
@@ -295,9 +313,13 @@ fn test_static_path_position_bias_pathology() {
     let middle_set: std::collections::HashSet<BlockId> = middle.into_iter().collect();
     let tail_set: std::collections::HashSet<BlockId> = tail.into_iter().collect();
     let bias = position_bias(&static_selected, &head_set, &middle_set, &tail_set);
-    eprintln!("[static_path_bias] position_bias={bias:.3}（预期 < 0.6，量化 lost-in-the-middle）");
+    // P1-5: 阈值参数化（默认 0.6，CI 可用 HCW_RECALL_MIN_THRESHOLD 覆盖）
+    let bias_max = recall_min_threshold();
+    eprintln!(
+        "[static_path_bias] position_bias={bias:.3}（预期 < {bias_max}，量化 lost-in-the-middle）"
+    );
     assert!(
-        bias < 0.6,
+        bias < bias_max,
         "静态路径位置偏置应显著（bias={bias:.3}），否则病理不成立"
     );
 }

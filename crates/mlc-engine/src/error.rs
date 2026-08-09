@@ -59,6 +59,13 @@ pub enum MlcError {
     /// 事件总线错误(发布事件失败)
     #[error("事件总线错误: {0}")]
     EventBusError(String),
+
+    /// 不变量违反(INV-8 归档单调性等 — L0 nexus-contracts 契约校验失败)
+    ///
+    /// P0-2 修复:归档/降级入口执行 `nexus_contracts::assert_archive_monotonicity`
+    /// 判定失败时返回此变体,携带 L0 契约的违反描述(含源/目标层级)。
+    #[error("不变量违反: {0}")]
+    InvariantViolated(String),
 }
 
 impl From<rusqlite::Error> for MlcError {

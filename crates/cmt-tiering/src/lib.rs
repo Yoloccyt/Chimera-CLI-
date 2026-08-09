@@ -70,7 +70,9 @@ pub use ice::IceTier;
 pub use migrator::TierMigrator;
 pub use pool::SqlitePool;
 pub use storage_impl::PragmaConn;
-pub use types::{CapabilityEntry, CapabilityId, MigrationReason, Tier};
+pub use types::{
+    assert_archive_monotonicity, CapabilityEntry, CapabilityId, MigrationReason, Tier,
+};
 pub use warm::WarmTier;
 
 // === Task 3.3: L10 TUI 跨层协同 — 四层存储分布快照 ===
@@ -121,6 +123,8 @@ pub mod prelude {
     pub use crate::ice::IceTier;
     pub use crate::migrator::TierMigrator;
     pub use crate::pool::SqlitePool;
-    pub use crate::types::{CapabilityEntry, CapabilityId, MigrationReason, Tier};
+    pub use crate::types::{
+        assert_archive_monotonicity, CapabilityEntry, CapabilityId, MigrationReason, Tier,
+    };
     pub use crate::warm::WarmTier;
 }

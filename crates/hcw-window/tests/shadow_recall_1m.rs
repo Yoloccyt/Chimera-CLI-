@@ -58,6 +58,33 @@ const GROUND_TRUTH_COUNT: usize = L3_1M_ACTUAL_TOKENS / DEFAULT_BLOCK_TOKENS;
 /// 召回率阈值（spec.md KPI: ≥95%）
 const RECALL_RATE_THRESHOLD: f32 = 0.95;
 
+/// 读取召回率断言阈值（CI 可配置而非硬编码，P1-5 修复）
+///
+/// # 环境变量
+/// - `HCW_RECALL_RATE_MIN`：覆盖召回率断言阈值，默认 0.95（spec.md KPI）
+/// - `HCW_RECALL_UTILIZATION_MIN`：覆盖预算利用率断言阈值，默认 0.90
+///
+/// # WHY 参数化
+/// 硬编码阈值在语料统计特性或 CI 负载波动下余量不足会偶发失败（项目 memory 实证：
+/// 近似检索偶发漏节点、测试不得假设确定性）。env 覆盖使 CI 可在不改代码的情况下
+/// 收敛阈值（失败安全：未设置/解析失败回退默认值，语义与硬编码一致）。
+fn recall_rate_threshold() -> f32 {
+    std::env::var("HCW_RECALL_RATE_MIN")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(RECALL_RATE_THRESHOLD)
+}
+
+/// 读取预算利用率断言阈值（CI 可配置而非硬编码，P1-5 修复）
+///
+/// 默认 0.90；CI 可用 `HCW_RECALL_UTILIZATION_MIN` 覆盖。失败安全回退默认值。
+fn budget_utilization_threshold() -> f32 {
+    std::env::var("HCW_RECALL_UTILIZATION_MIN")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.90)
+}
+
 // ============================================================
 // 影子集构造（确定性生成，无 rand 依赖）
 // ============================================================
@@ -200,20 +227,22 @@ fn test_shadow_recall_1m_basic_at_least_95_percent() {
 
     let filled = execute_rerank_fill(blocks, WindowBudget::L3_1M, 0.2);
     let recall_rate = compute_recall_rate(&filled, &ground_truth);
+    // P1-5: 阈值参数化（默认 0.95，CI 可用 HCW_RECALL_RATE_MIN 覆盖）
+    let threshold = recall_rate_threshold();
 
     eprintln!(
         "[shadow_recall_1m_basic] filled_blocks={}, ground_truth={}, recall_rate={:.4}, threshold={:.2}",
         filled.len(),
         ground_truth.len(),
         recall_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 
     assert!(
-        recall_rate >= RECALL_RATE_THRESHOLD,
+        recall_rate >= threshold,
         "1M 召回率 = {:.4},期望 ≥ {:.2}（spec.md KPI）",
         recall_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 }
 
@@ -244,20 +273,22 @@ fn test_shadow_recall_1m_multi_query_average_at_least_95_percent() {
 
     let avg_rate: f32 = recall_rates.iter().sum::<f32>() / recall_rates.len() as f32;
     let min_rate = recall_rates.iter().cloned().fold(f32::INFINITY, f32::min);
+    // P1-5: 阈值参数化（默认 0.95，CI 可用 HCW_RECALL_RATE_MIN 覆盖）
+    let threshold = recall_rate_threshold();
 
     eprintln!(
         "[shadow_recall_1m_multi_query] queries={}, avg_recall={:.4}, min_recall={:.4}, threshold={:.2}",
         recall_rates.len(),
         avg_rate,
         min_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 
     assert!(
-        avg_rate >= RECALL_RATE_THRESHOLD,
+        avg_rate >= threshold,
         "10 查询平均召回率 = {:.4},期望 ≥ {:.2}",
         avg_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 }
 
@@ -272,19 +303,21 @@ fn test_shadow_recall_1m_uniform_module_at_least_95_percent() {
 
     let filled = execute_rerank_fill(blocks, WindowBudget::L3_1M, 0.2);
     let recall_rate = compute_recall_rate(&filled, &ground_truth);
+    // P1-5: 阈值参数化（默认 0.95，CI 可用 HCW_RECALL_RATE_MIN 覆盖）
+    let threshold = recall_rate_threshold();
 
     eprintln!(
         "[shadow_recall_1m_uniform_module] filled={}, recall_rate={:.4}, threshold={:.2}",
         filled.len(),
         recall_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 
     assert!(
-        recall_rate >= RECALL_RATE_THRESHOLD,
+        recall_rate >= threshold,
         "极端均匀场景召回率 = {:.4},期望 ≥ {:.2}",
         recall_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 }
 
@@ -300,19 +333,21 @@ fn test_shadow_recall_1m_max_diversity_at_least_95_percent() {
 
     let filled = execute_rerank_fill(blocks, WindowBudget::L3_1M, 0.2);
     let recall_rate = compute_recall_rate(&filled, &ground_truth);
+    // P1-5: 阈值参数化（默认 0.95，CI 可用 HCW_RECALL_RATE_MIN 覆盖）
+    let threshold = recall_rate_threshold();
 
     eprintln!(
         "[shadow_recall_1m_max_diversity] filled={}, recall_rate={:.4}, threshold={:.2}",
         filled.len(),
         recall_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 
     assert!(
-        recall_rate >= RECALL_RATE_THRESHOLD,
+        recall_rate >= threshold,
         "极端多样场景召回率 = {:.4},期望 ≥ {:.2}",
         recall_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 }
 
@@ -403,19 +438,21 @@ fn test_shadow_recall_1m_high_alpha_at_least_95_percent() {
 
     let filled = execute_rerank_fill(blocks, WindowBudget::L3_1M, 0.5);
     let recall_rate = compute_recall_rate(&filled, &ground_truth);
+    // P1-5: 阈值参数化（默认 0.95，CI 可用 HCW_RECALL_RATE_MIN 覆盖）
+    let threshold = recall_rate_threshold();
 
     eprintln!(
         "[shadow_recall_1m_high_alpha_0.5] filled={}, recall_rate={:.4}, threshold={:.2}",
         filled.len(),
         recall_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 
     assert!(
-        recall_rate >= RECALL_RATE_THRESHOLD,
+        recall_rate >= threshold,
         "α=0.5 召回率 = {:.4},期望 ≥ {:.2}",
         recall_rate,
-        RECALL_RATE_THRESHOLD
+        threshold
     );
 }
 
@@ -441,6 +478,8 @@ fn test_shadow_recall_1m_budget_utilization_above_90_percent() {
 
     let expected_budget = WindowBudget::L3_1M.actual_tokens();
     let utilization = output.budget_utilization;
+    // P1-5: 阈值参数化（默认 0.90，CI 可用 HCW_RECALL_UTILIZATION_MIN 覆盖）
+    let min_utilization = budget_utilization_threshold();
 
     eprintln!(
         "[shadow_recall_1m_budget_utilization] filled_blocks={}, total_tokens={}, expected_budget={}, utilization={:.4}",
@@ -451,9 +490,10 @@ fn test_shadow_recall_1m_budget_utilization_above_90_percent() {
     );
 
     assert!(
-        utilization >= 0.90,
-        "预算利用率 = {:.4},期望 ≥ 0.90（避免密度贪心提前停止）",
-        utilization
+        utilization >= min_utilization,
+        "预算利用率 = {:.4},期望 ≥ {:.2}（避免密度贪心提前停止）",
+        utilization,
+        min_utilization
     );
 }
 

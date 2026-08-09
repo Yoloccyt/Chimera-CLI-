@@ -238,6 +238,61 @@ async fn test_engine_demote_l0_to_l2_with_clv() {
 }
 
 // ============================================================
+// P0-2 修复: INV-8 归档单调性接线验证(demote 入口)
+// ============================================================
+
+#[tokio::test]
+async fn test_engine_demote_rejects_reverse_direction() {
+    // INV-8: demote 是归档/降级入口,回升方向(L2 → L0)必须被拒绝,
+    // 且校验发生在迁移之前(条目原地不动)。
+    let bus = EventBus::new();
+    let engine = MlcEngine::new_in_memory(bus).unwrap();
+
+    engine
+        .store(make_entry_with_clv("m-1", MemoryTier::L2Semantic))
+        .await
+        .unwrap();
+    assert_eq!(engine.l2().len().unwrap(), 1);
+
+    // L2Semantic(level 2) → L0Working(level 0) 为回升方向 → InvariantViolated
+    let result = engine
+        .demote("m-1", MemoryTier::L2Semantic, MemoryTier::L0Working)
+        .await;
+    assert!(
+        matches!(result, Err(MlcError::InvariantViolated(_))),
+        "demote 回升方向应返回 InvariantViolated,实际: {result:?}"
+    );
+
+    // 校验在迁移前执行:条目仍留在 L2,未被移动
+    assert_eq!(
+        engine.l2().len().unwrap(),
+        1,
+        "回升迁移被拒绝后 L2 条目应保留"
+    );
+    assert_eq!(engine.l0().len(), 0, "回升迁移被拒绝后 L0 不应出现条目");
+}
+
+#[tokio::test]
+async fn test_engine_demote_legal_direction_still_works() {
+    // INV-8: 合法降级方向(L1 → L2)不受影响,既有迁移行为保持
+    let bus = EventBus::new();
+    let engine = MlcEngine::new_in_memory(bus).unwrap();
+
+    engine
+        .store(make_entry_with_clv("m-1", MemoryTier::L1Episodic))
+        .await
+        .unwrap();
+
+    engine
+        .demote("m-1", MemoryTier::L1Episodic, MemoryTier::L2Semantic)
+        .await
+        .unwrap();
+
+    assert_eq!(engine.l1().len().unwrap(), 0);
+    assert_eq!(engine.l2().len().unwrap(), 1);
+}
+
+// ============================================================
 // L3 程序记忆测试
 // ============================================================
 

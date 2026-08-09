@@ -35,7 +35,9 @@ use crate::l2_semantic::SemanticMemory;
 use crate::l3_procedural::ProceduralMemory;
 use crate::mem_con::{MemConConfig, MemConController};
 use crate::memory_strategy_learner::MemoryStrategyLearnerHolder;
-use crate::types::{MemoryEntry, MemoryId, MemoryTier, ProceduralEntry};
+use crate::types::{
+    assert_archive_monotonicity, MemoryEntry, MemoryId, MemoryTier, ProceduralEntry,
+};
 
 /// MLC 引擎 — 四级神经形态记忆的统一接口
 ///
@@ -689,7 +691,17 @@ impl MlcEngine {
     /// 降级记忆条目到更低层级(如 L0 → L1)
     ///
     /// 与 `promote` 逻辑相同,仅方向不同。
+    ///
+    /// # INV-8 归档单调性(P0-2 修复)
+    ///
+    /// `demote` 是归档/降级方向入口,执行前先经 L0 nexus-contracts 契约
+    /// `assert_archive_monotonicity` 校验:回升方向(如 `L2Semantic → L0Working`)
+    /// 直接返回 `MlcError::InvariantViolated`,不执行迁移。
+    /// `promote`(访问驱动提升)不受 INV-8 约束,不在此校验。
     pub async fn demote(&self, id: &str, from: MemoryTier, to: MemoryTier) -> Result<(), MlcError> {
+        // INV-8 归档单调性防御性校验(L0 独立公共 API 接线,P0-2)
+        // 校验失败即中止,禁止以 demote 名义执行回升迁移。
+        assert_archive_monotonicity(from, to)?;
         self.migrate(id, from, to).await
     }
 

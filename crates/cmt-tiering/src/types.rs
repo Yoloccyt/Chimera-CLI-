@@ -22,6 +22,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::Deref;
 
+use crate::error::CmtError;
+use nexus_contracts::ArchiveTier;
+
 /// 能力条目唯一标识 newtype — 四级存储的统一标识
 ///
 /// WHY:newtype 模式使编译器能拦截 `CapabilityId` 误传为其他 ID 类型,
@@ -126,6 +129,44 @@ impl Tier {
             _ => None,
         }
     }
+
+    /// 映射到 L0 契约的归档层级(P0-2 修复,INV-8 判定依据)
+    ///
+    /// WHY:INV-8 判定逻辑统一在 L0 `nexus-contracts`(独立公共 API),
+    /// 本映射使 cmt 的 `Tier` 可直接参与 L0 判定,避免在 L3 重复实现单调性逻辑。
+    /// 映射关系:Hot↔Hot / Warm↔Warm / Cold↔Cold / Ice↔Ice(语义一一对应)。
+    pub(crate) fn to_archive_tier(self) -> ArchiveTier {
+        match self {
+            Self::Hot => ArchiveTier::Hot,
+            Self::Warm => ArchiveTier::Warm,
+            Self::Cold => ArchiveTier::Cold,
+            Self::Ice => ArchiveTier::Ice,
+        }
+    }
+}
+
+/// INV-8 — 归档单调性校验(委托 L0 nexus-contracts 契约,P0-2 修复)
+///
+/// 验证 `from → to` 不构成回升:Hot→Warm→Cold→Ice 单向降级(同层保持合法)。
+/// 供归档/迁移入口与第三方调用方使用,**不依赖 L9 chimera-mas**——
+/// 第三方直接使用本 crate 的迁移 API 时,INV-8 仍可独立执行。
+///
+/// ## 返回
+///
+/// - `Ok(())`: 合法降级或同层保持
+/// - `Err(CmtError::InvariantViolated)`: 回升方向(如 Ice→Hot),拒绝
+///
+/// ## 示例
+///
+/// ```
+/// use cmt_tiering::{assert_archive_monotonicity, Tier};
+///
+/// assert!(assert_archive_monotonicity(Tier::Hot, Tier::Ice).is_ok());
+/// assert!(assert_archive_monotonicity(Tier::Ice, Tier::Hot).is_err());
+/// ```
+pub fn assert_archive_monotonicity(from: Tier, to: Tier) -> Result<(), CmtError> {
+    nexus_contracts::assert_archive_monotonicity(from.to_archive_tier(), to.to_archive_tier())
+        .map_err(|v| CmtError::InvariantViolated(v.msg))
 }
 
 /// 迁移原因 — 能力条目在层级间迁移的触发原因
@@ -355,5 +396,69 @@ mod tests {
         let json = serde_json::to_string(&entry).unwrap();
         let decoded: CapabilityEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, decoded);
+    }
+
+    // ============================================================
+    // P0-2 修复: INV-8 归档单调性适配器测试(接线验证)
+    // ============================================================
+    //
+    // 验证 cmt 层适配器委托 L0 nexus-contracts 契约的正确性:
+    // 合法降级/同层全 Ok,回升全 Err(不改变既有迁移行为,见 tests/migrator.rs)。
+
+    /// 合法方向:6 对降级 + 4 对同层保持,全部 Ok
+    #[test]
+    fn test_assert_archive_monotonicity_legal_pairs() {
+        let legal_pairs = [
+            // 降级(严格 level 递增)
+            (Tier::Hot, Tier::Warm),
+            (Tier::Hot, Tier::Cold),
+            (Tier::Hot, Tier::Ice),
+            (Tier::Warm, Tier::Cold),
+            (Tier::Warm, Tier::Ice),
+            (Tier::Cold, Tier::Ice),
+            // 同层保持(归档到自身层级为无操作)
+            (Tier::Hot, Tier::Hot),
+            (Tier::Warm, Tier::Warm),
+            (Tier::Cold, Tier::Cold),
+            (Tier::Ice, Tier::Ice),
+        ];
+        for (from, to) in legal_pairs {
+            let result = assert_archive_monotonicity(from, to);
+            assert!(
+                result.is_ok(),
+                "{from:?} -> {to:?} 为降级或同层,应 Ok,实际: {result:?}"
+            );
+        }
+    }
+
+    /// 回升方向:全部 Err(CmtError::InvariantViolated),且消息含两级名称
+    #[test]
+    fn test_assert_archive_monotonicity_reverse_rejected() {
+        let reverse_pairs = [
+            (Tier::Warm, Tier::Hot),
+            (Tier::Cold, Tier::Hot),
+            (Tier::Ice, Tier::Hot),
+            (Tier::Cold, Tier::Warm),
+            (Tier::Ice, Tier::Warm),
+            (Tier::Ice, Tier::Cold),
+        ];
+        for (from, to) in reverse_pairs {
+            let result = assert_archive_monotonicity(from, to);
+            match result {
+                Err(CmtError::InvariantViolated(msg)) => {
+                    let expected_from = format!("{from:?}");
+                    let expected_to = format!("{to:?}");
+                    assert!(
+                        msg.contains(&expected_from),
+                        "消息应含源层级 {expected_from},实际: {msg}"
+                    );
+                    assert!(
+                        msg.contains(&expected_to),
+                        "消息应含目标层级 {expected_to},实际: {msg}"
+                    );
+                }
+                other => panic!("{from:?} -> {to:?} 为回升方向,应 Err,实际: {other:?}"),
+            }
+        }
     }
 }

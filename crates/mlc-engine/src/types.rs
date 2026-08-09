@@ -23,7 +23,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use nexus_contracts::{TemporalMeta, TransitionType};
+use nexus_contracts::{ArchiveTier, TemporalMeta, TransitionType};
 use nexus_core::CLV;
 use serde::{Deserialize, Serialize};
 
@@ -173,6 +173,46 @@ impl MemoryTier {
             Self::L3Procedural => "L3",
         }
     }
+
+    /// 映射到 L0 契约的归档层级(P0-2 修复,INV-8 判定依据)
+    ///
+    /// WHY:INV-8 判定逻辑统一在 L0 `nexus-contracts`(独立公共 API),
+    /// 本映射使 mlc 的 `MemoryTier` 可直接参与 L0 判定,避免在 L2 重复实现单调性逻辑。
+    /// 映射关系:L0Working↔Hot / L1Episodic↔Warm / L2Semantic↔Cold / L3Procedural↔Ice
+    /// (工作记忆=最热,程序记忆=最冷持久化,与 CMT 热温冰冷语义一一对应)。
+    pub(crate) fn to_archive_tier(self) -> ArchiveTier {
+        match self {
+            Self::L0Working => ArchiveTier::Hot,
+            Self::L1Episodic => ArchiveTier::Warm,
+            Self::L2Semantic => ArchiveTier::Cold,
+            Self::L3Procedural => ArchiveTier::Ice,
+        }
+    }
+}
+
+/// INV-8 — 归档单调性校验(委托 L0 nexus-contracts 契约,P0-2 修复)
+///
+/// 验证 `from → to` 不构成回升:L0Working→L1Episodic→L2Semantic→L3Procedural
+/// 单向降级(同层保持合法)。供归档/降级入口与第三方调用方使用,
+/// **不依赖 L9 chimera-mas**——第三方直接使用本 crate 的 demote API 时,
+/// INV-8 仍可独立执行。
+///
+/// ## 返回
+///
+/// - `Ok(())`: 合法降级或同层保持
+/// - `Err(MlcError::InvariantViolated)`: 回升方向(如 L2→L0),拒绝
+///
+/// ## 示例
+///
+/// ```
+/// use mlc_engine::{assert_archive_monotonicity, MemoryTier};
+///
+/// assert!(assert_archive_monotonicity(MemoryTier::L0Working, MemoryTier::L2Semantic).is_ok());
+/// assert!(assert_archive_monotonicity(MemoryTier::L2Semantic, MemoryTier::L0Working).is_err());
+/// ```
+pub fn assert_archive_monotonicity(from: MemoryTier, to: MemoryTier) -> Result<(), MlcError> {
+    nexus_contracts::assert_archive_monotonicity(from.to_archive_tier(), to.to_archive_tier())
+        .map_err(|v| MlcError::InvariantViolated(v.msg))
 }
 
 /// 记忆条目 — 四级记忆的统一载体
@@ -578,6 +618,64 @@ mod tests {
         assert_eq!(MemoryTier::L1Episodic.as_str(), "L1");
         assert_eq!(MemoryTier::L2Semantic.as_str(), "L2");
         assert_eq!(MemoryTier::L3Procedural.as_str(), "L3");
+    }
+
+    // ============================================================
+    // P0-2 修复: INV-8 归档单调性适配器测试(接线验证)
+    // ============================================================
+    //
+    // 验证 mlc 层适配器委托 L0 nexus-contracts 契约的正确性:
+    // 合法降级/同层全 Ok,回升全 Err(engine 级接线见 tests/engine.rs)。
+
+    /// 合法方向:6 对降级 + 4 对同层保持,全部 Ok
+    #[test]
+    fn test_assert_archive_monotonicity_legal_pairs() {
+        let legal_pairs = [
+            // 降级(严格 level 递增: L0Working→L3Procedural)
+            (MemoryTier::L0Working, MemoryTier::L1Episodic),
+            (MemoryTier::L0Working, MemoryTier::L2Semantic),
+            (MemoryTier::L0Working, MemoryTier::L3Procedural),
+            (MemoryTier::L1Episodic, MemoryTier::L2Semantic),
+            (MemoryTier::L1Episodic, MemoryTier::L3Procedural),
+            (MemoryTier::L2Semantic, MemoryTier::L3Procedural),
+            // 同层保持(归档到自身层级为无操作)
+            (MemoryTier::L0Working, MemoryTier::L0Working),
+            (MemoryTier::L1Episodic, MemoryTier::L1Episodic),
+            (MemoryTier::L2Semantic, MemoryTier::L2Semantic),
+            (MemoryTier::L3Procedural, MemoryTier::L3Procedural),
+        ];
+        for (from, to) in legal_pairs {
+            let result = assert_archive_monotonicity(from, to);
+            assert!(
+                result.is_ok(),
+                "{from:?} -> {to:?} 为降级或同层,应 Ok,实际: {result:?}"
+            );
+        }
+    }
+
+    /// 回升方向:全部 Err(MlcError::InvariantViolated),且消息含两级名称
+    #[test]
+    fn test_assert_archive_monotonicity_reverse_rejected() {
+        let reverse_pairs = [
+            (MemoryTier::L1Episodic, MemoryTier::L0Working),
+            (MemoryTier::L2Semantic, MemoryTier::L0Working),
+            (MemoryTier::L3Procedural, MemoryTier::L0Working),
+            (MemoryTier::L2Semantic, MemoryTier::L1Episodic),
+            (MemoryTier::L3Procedural, MemoryTier::L1Episodic),
+            (MemoryTier::L3Procedural, MemoryTier::L2Semantic),
+        ];
+        for (from, to) in reverse_pairs {
+            let result = assert_archive_monotonicity(from, to);
+            match result {
+                Err(MlcError::InvariantViolated(msg)) => {
+                    // 消息来自 L0 契约(含 INV-8 标识与方向分隔符,如
+                    // "归档层级回升被禁止(INV-8): Cold -> Hot")
+                    assert!(msg.contains("INV-8"), "消息应含 INV-8 标识,实际: {msg}");
+                    assert!(msg.contains("->"), "消息应包含方向分隔符,实际: {msg}");
+                }
+                other => panic!("{from:?} -> {to:?} 为回升方向,应 Err,实际: {other:?}"),
+            }
+        }
     }
 
     #[test]
