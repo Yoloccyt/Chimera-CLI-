@@ -191,7 +191,7 @@ impl Panel for DagVizPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("Tab", "切换面板")]
+        vec![("Tab", crate::t!("shortcut.switch_panel"))]
     }
 }
 

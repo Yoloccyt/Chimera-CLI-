@@ -123,7 +123,11 @@ async fn tui_renders_live_event_bus_data() {
 
     // 使用实时数据管道创建 TUI 应用。
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(std::sync::Arc::clone(&pipeline)),
     )
     .unwrap();

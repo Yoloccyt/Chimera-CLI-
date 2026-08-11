@@ -73,7 +73,11 @@ fn test_memory_panel_renders_with_sample_data() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MemoryTestSource::new(snapshot)),
     )
     .unwrap();
@@ -109,7 +113,11 @@ fn test_memory_panel_empty_data_renders_defaults() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MemoryTestSource::new(snapshot)),
     )
     .unwrap();
@@ -149,7 +157,11 @@ fn test_memory_panel_displays_tier_distribution() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MemoryTestSource::new(snapshot)),
     )
     .unwrap();

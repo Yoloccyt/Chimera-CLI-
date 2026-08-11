@@ -56,7 +56,11 @@ fn test_dag_viz_panel_displays_spec_dag() {
     // 验证面板渲染包含 spec_dag_snapshot() 返回的节点/边计数
     let snapshot = DataSnapshot::default();
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DagVizTestSource::new(snapshot)),
     )
     .unwrap();

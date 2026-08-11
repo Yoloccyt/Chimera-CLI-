@@ -104,7 +104,11 @@ fn quest_enter_switches_to_event_stream_panel() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();
@@ -134,7 +138,11 @@ fn quest_enter_sets_filter_keyword_to_quest_id() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();
@@ -184,7 +192,11 @@ fn quest_enter_event_stream_applies_filter() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();
@@ -236,7 +248,11 @@ fn quest_enter_on_second_quest_filters_correctly() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();
@@ -272,7 +288,11 @@ fn quest_enter_with_no_quest_does_not_jump() {
     let snapshot = chimera_tui::DataSnapshot::default();
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();
@@ -302,7 +322,11 @@ fn quest_jump_sets_status_message() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();

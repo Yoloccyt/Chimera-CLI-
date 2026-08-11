@@ -58,6 +58,7 @@ impl ActionDomain {
 /// - `requires_context`:是否需要运行时上下文(如焦点 Quest/Task 的 id)才能执行
 /// - `requires_query`:是否需要用户输入 query 参数才能执行(如 agent.chat /
 ///   quest.start / overwindow.run);palette 选中此类动作时进入参数输入态
+/// - `global_route`:default_key 是否经 InputRouter 全局路由派发(Concord T1.2)
 /// - `is_core`:是否属于"核心 10 功能"(§八 可达性验收:核心功能须 ≤3 键可达)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActionDescriptor {
@@ -73,6 +74,12 @@ pub struct ActionDescriptor {
     pub slash: Option<&'static str>,
     /// 默认快捷键字符串(如 "Ctrl+E");None 表示无默认快捷键
     pub default_key: Option<&'static str>,
+    /// 别名键列表(与 default_key 路由到同一动作;Concord T1.3)
+    ///
+    /// WHY 别名入声明:历史上路由表存在未声明的等价键(如 'E' 与 Ctrl+E
+    /// 同达 export.run),构成键位双源漂移(INV-K-B 实锤);别名收进描述符
+    /// 后由 codegen 统一派生路由表,声明即事实源。
+    pub alias_keys: &'static [&'static str],
     /// 是否需要运行时上下文(焦点项 id 等)才能执行
     pub requires_context: bool,
     /// 是否需要用户输入 query 参数(palette 参数输入流,F-5)
@@ -81,6 +88,12 @@ pub struct ActionDescriptor {
     /// query 是"用户文本输入";palette Enter 时据此分流到 Insert 参数收集态,
     /// 提交后以 `{"query": text}` 派发(编排器 payload_str(payload, "query"))。
     pub requires_query: bool,
+    /// default_key 是否经 InputRouter 全局路由派发(Concord T1.2,双源一致性不变量)
+    ///
+    /// WHY 需要本字段:部分动作的键位语义在焦点面板内部执行(如 panel.drill_down
+    /// 的 Enter 由面板 handle_key 消费),InputRouter 路由为 FocusPanel 而非
+    /// GlobalAction;不变量测试据此区分"全局路由键"与"面板内键",避免误报漂移。
+    pub global_route: bool,
     /// 是否为核心 10 功能(可达性验收基线)
     pub is_core: bool,
 }
@@ -104,8 +117,12 @@ impl ActionDescriptor {
             desc_key: title_key,
             slash,
             default_key: None,
+            alias_keys: &[],
             requires_context: false,
             requires_query: false,
+            // 默认全局路由;面板内执行的键位(如 panel.drill_down 的 Enter)
+            // 由域文件结构体字面量显式置 false
+            global_route: true,
             is_core: false,
         }
     }

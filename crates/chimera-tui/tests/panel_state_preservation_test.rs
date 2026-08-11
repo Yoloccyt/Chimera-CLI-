@@ -98,7 +98,11 @@ fn quest_panel_selected_preserved_across_panel_switch() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();
@@ -148,7 +152,11 @@ fn quest_panel_selected_zero_preserved() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();
@@ -194,7 +202,11 @@ fn log_panel_scroll_state_preserved_across_panel_switch() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();
@@ -268,7 +280,11 @@ fn multiple_panels_preserve_independent_state() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )
     .unwrap();

@@ -778,19 +778,19 @@ impl Panel for TaskManagerPanel {
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         vec![
-            ("↑/↓", "导航"),
-            ("/", "过滤搜索"),
-            ("P", "暂停"),
-            ("B", "批量暂停"),
-            ("R", "恢复"),
-            ("T", "终止"),
-            ("+/-", "优先级"),
-            ("S", "排序"),
-            ("E", "导出"),
-            ("Enter", "详情"),
-            ("Esc", "清除选择"),
-            ("Space", "多选"),
-            ("Ctrl+A", "全选"),
+            ("↑/↓", crate::t!("shortcut.navigate")),
+            ("/", crate::t!("shortcut.filter_search")),
+            ("P", crate::t!("shortcut.pause")),
+            ("B", crate::t!("shortcut.batch_pause")),
+            ("R", crate::t!("shortcut.resume")),
+            ("T", crate::t!("shortcut.terminate")),
+            ("+/-", crate::t!("shortcut.priority")),
+            ("S", crate::t!("shortcut.sort")),
+            ("E", crate::t!("shortcut.export")),
+            ("Enter", crate::t!("shortcut.details")),
+            ("Esc", crate::t!("shortcut.clear_selection")),
+            ("Space", crate::t!("shortcut.multi_select")),
+            ("Ctrl+A", crate::t!("shortcut.select_all")),
         ]
     }
 }

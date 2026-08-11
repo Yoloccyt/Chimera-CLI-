@@ -31,7 +31,12 @@ use std::collections::VecDeque;
 
 /// 构造注入了数据的 TuiApp(Quest 列表 + 事件流,触发完整面板渲染路径)
 fn make_app() -> TuiApp {
-    let mut app = TuiApp::new(TuiConfig::default()).expect("TuiApp 构造失败");
+    let mut app = TuiApp::new(TuiConfig {
+        default_view_mode: chimera_tui::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    })
+    .expect("TuiApp 构造失败");
     let state = app.state_mut();
     state.quest_list = (0..8)
         .map(|i| Quest {

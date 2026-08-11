@@ -143,7 +143,11 @@ fn sample_events() -> VecDeque<NexusEvent> {
 /// 渲染空面板无法代表真实运行时压力。通过 `state_mut()` 直接设置
 /// `quest_list`/`budget`/`latest_events`,模拟生产中数据管道刷新后的状态。
 fn make_app_with_data() -> TuiApp {
-    let mut app = TuiApp::new(TuiConfig::default()).expect("TuiApp 构造失败");
+    let mut app = {
+        let mut __app = TuiApp::new(TuiConfig::default()).expect("TuiApp 构造失败");
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     let state = app.state_mut();
     state.quest_list = vec![
         sample_quest("q1", "Implement OSA coordinator"),

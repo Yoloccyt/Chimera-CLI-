@@ -19,7 +19,16 @@ use ratatui::Terminal;
 
 /// 构造默认 TuiApp(无 event-bus,内存桩数据源)
 fn make_app() -> TuiApp {
-    TuiApp::new(TuiConfig::default()).unwrap()
+    {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    }
 }
 
 /// 无修饰符按键
@@ -78,7 +87,7 @@ fn toggle_companion_shows_second_panel() {
     );
 
     // 开启伴随:右栏应渲染 Quest 面板体
-    app.handle_key_event(key(KeyCode::Char('\\')));
+    app.toggle_companion(); // Concord W3:原 \ 键已复用为视图模式互切
     assert!(app.companion_visible(), "\\ 键应开启伴随面板");
     let on = render_to_string(&mut app, 120, 30);
     let on_compact: String = on.chars().filter(|c| *c != ' ').collect();
@@ -105,7 +114,7 @@ fn companion_noop_in_focus_mode() {
     );
 
     // Focus 模式无 context 区:开启伴随仍不渲染第二面板
-    app.handle_key_event(key(KeyCode::Char('\\')));
+    app.toggle_companion(); // Concord W3:原 \ 键已复用为视图模式互切
     assert!(app.companion_visible());
     let out = render_to_string(&mut app, 120, 30);
     assert!(
@@ -134,7 +143,7 @@ fn companion_toggle_via_palette() {
 fn narrow_width_does_not_split() {
     let mut app = make_app();
     focus_parliament_with_quest_companion(&mut app);
-    app.handle_key_event(key(KeyCode::Char('\\')));
+    app.toggle_companion(); // Concord W3:原 \ 键已复用为视图模式互切
     assert!(app.companion_visible());
     // 宽度 < 60:不切分、不 panic,故不渲染伴随面板体
     let out = render_to_string(&mut app, 40, 20);
@@ -182,7 +191,7 @@ fn focus_pane_toggles_only_when_visible() {
     app.handle_key_event(key(KeyCode::Char('w')));
     assert!(!app.companion_focused(), "伴随关闭时 w 应 no-op");
     // 开启伴随后 w 生效
-    app.handle_key_event(key(KeyCode::Char('\\')));
+    app.toggle_companion(); // Concord W3:原 \ 键已复用为视图模式互切
     app.handle_key_event(key(KeyCode::Char('w')));
     assert!(app.companion_focused(), "伴随可见时 w 应聚焦伴随窗格");
 }
@@ -192,7 +201,7 @@ fn keys_route_to_companion_when_focused() {
     let mut app = make_app();
     focus_parliament_with_quest_companion(&mut app);
     let main_before = app.current_panel();
-    app.handle_key_event(key(KeyCode::Char('\\'))); // 显示伴随
+    app.toggle_companion(); // Concord W3:原 \ 键已复用为视图模式互切 // 显示伴随
     app.handle_key_event(key(KeyCode::Char('w'))); // 聚焦伴随
     assert!(app.companion_focused());
     // 面板级键路由到伴随面板:不 panic、主焦点不变、应用不退出
@@ -207,7 +216,7 @@ fn keys_route_to_companion_when_focused() {
 fn switch_panel_resets_companion_focus() {
     let mut app = make_app();
     focus_parliament_with_quest_companion(&mut app);
-    app.handle_key_event(key(KeyCode::Char('\\'))); // 显示
+    app.toggle_companion(); // Concord W3:原 \ 键已复用为视图模式互切 // 显示
     app.handle_key_event(key(KeyCode::Char('w'))); // 聚焦伴随
     assert!(app.companion_focused());
     // 切换主面板(数字键 3 → Budget)应复位窗格焦点
@@ -219,7 +228,7 @@ fn switch_panel_resets_companion_focus() {
 fn render_active_pane_highlight_no_panic() {
     let mut app = make_app();
     focus_parliament_with_quest_companion(&mut app);
-    app.handle_key_event(key(KeyCode::Char('\\'))); // 显示伴随(主区高亮)
+    app.toggle_companion(); // Concord W3:原 \ 键已复用为视图模式互切 // 显示伴随(主区高亮)
     let _ = render_to_string(&mut app, 120, 30);
     app.handle_key_event(key(KeyCode::Char('w'))); // 聚焦伴随(伴随高亮)
     let _ = render_to_string(&mut app, 120, 30);

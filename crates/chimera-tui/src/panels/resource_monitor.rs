@@ -519,7 +519,7 @@ impl Panel for ResourceMonitorPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("R", "刷新")]
+        vec![("R", crate::t!("shortcut.refresh"))]
     }
 }
 

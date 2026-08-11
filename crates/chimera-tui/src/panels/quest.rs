@@ -648,12 +648,12 @@ impl Panel for QuestPanel {
         // 功能动作快捷键(agent.chat / quest.pause 等)经 `shortcuts_with_registry`
         // 从 ActionRegistry::by_domain(Quest) 自动派生,新增 quest.* 动作零手写接入。
         vec![
-            ("↑/↓", "导航"),
-            ("PgUp/PgDn", "翻页"),
-            ("Enter", "跳转事件流"),
-            ("v", "详情"),
-            ("g g", "跳顶"),
-            ("G", "跳底"),
+            ("↑/↓", crate::t!("shortcut.navigate")),
+            ("PgUp/PgDn", crate::t!("shortcut.page_updown")),
+            ("Enter", crate::t!("shortcut.jump_event_stream")),
+            ("v", crate::t!("shortcut.details")),
+            ("g g", crate::t!("shortcut.jump_top")),
+            ("G", crate::t!("shortcut.jump_bottom")),
         ]
     }
 

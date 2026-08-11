@@ -1,0 +1,139 @@
+# W6 bench compare vs refactor_base (idle-state single-run)
+   Compiling chimera-tui v2.25.0-omega (D:\Chimera CLI\crates\chimera-tui)
+    Finished `bench` profile [optimized] target(s) in 1m 16s
+     Running benches\diff_engine_bench.rs (target\release\deps\diff_engine_bench-2b53b24a86d9f4a9.exe)
+Gnuplot not found, using plotters backend
+Benchmarking diff_incremental_5pct/size/80x24
+Benchmarking diff_incremental_5pct/size/80x24: Warming up for 3.0000 s
+Benchmarking diff_incremental_5pct/size/80x24: Collecting 100 samples in estimated 5.0496 s (338k iterations)
+Benchmarking diff_incremental_5pct/size/80x24: Analyzing
+diff_incremental_5pct/size/80x24
+                        time:   [15.119 碌s 15.212 碌s 15.311 碌s]
+                        change: [-25.951% -22.990% -19.962%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking diff_incremental_5pct/size/120x40
+Benchmarking diff_incremental_5pct/size/120x40: Warming up for 3.0000 s
+Benchmarking diff_incremental_5pct/size/120x40: Collecting 100 samples in estimated 5.0699 s (131k iterations)
+Benchmarking diff_incremental_5pct/size/120x40: Analyzing
+diff_incremental_5pct/size/120x40
+                        time:   [39.617 碌s 40.000 碌s 40.379 碌s]
+                        change: [-3.7013% -2.1034% -0.6047%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) low mild
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+Benchmarking diff_incremental_5pct/size/200x50
+Benchmarking diff_incremental_5pct/size/200x50: Warming up for 3.0000 s
+Benchmarking diff_incremental_5pct/size/200x50: Collecting 100 samples in estimated 5.1969 s (61k iterations)
+Benchmarking diff_incremental_5pct/size/200x50: Analyzing
+diff_incremental_5pct/size/200x50
+                        time:   [84.244 碌s 84.956 碌s 85.733 碌s]
+                        change: [-23.722% -19.628% -15.322%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 5 outliers among 100 measurements (5.00%)
+  2 (2.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking diff_full_redraw/size/80x24
+Benchmarking diff_full_redraw/size/80x24: Warming up for 3.0000 s
+Benchmarking diff_full_redraw/size/80x24: Collecting 100 samples in estimated 5.0231 s (263k iterations)
+Benchmarking diff_full_redraw/size/80x24: Analyzing
+diff_full_redraw/size/80x24
+                        time:   [19.233 碌s 19.404 碌s 19.587 碌s]
+                        change: [+0.1855% +1.2308% +2.3827%] (p = 0.03 < 0.05)
+                        Change within noise threshold.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+Benchmarking diff_full_redraw/size/120x40
+Benchmarking diff_full_redraw/size/120x40: Warming up for 3.0000 s
+Benchmarking diff_full_redraw/size/120x40: Collecting 100 samples in estimated 5.1694 s (121k iterations)
+Benchmarking diff_full_redraw/size/120x40: Analyzing
+diff_full_redraw/size/120x40
+                        time:   [41.346 碌s 41.588 碌s 41.878 碌s]
+                        change: [-10.274% -8.3825% -6.5222%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 9 outliers among 100 measurements (9.00%)
+  7 (7.00%) high mild
+  2 (2.00%) high severe
+Benchmarking diff_full_redraw/size/200x50
+Benchmarking diff_full_redraw/size/200x50: Warming up for 3.0000 s
+Benchmarking diff_full_redraw/size/200x50: Collecting 100 samples in estimated 5.3877 s (66k iterations)
+Benchmarking diff_full_redraw/size/200x50: Analyzing
+diff_full_redraw/size/200x50
+                        time:   [83.687 碌s 84.455 碌s 85.334 碌s]
+                        change: [-8.2877% -6.0650% -3.8498%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+
+   Compiling chimera-tui v2.25.0-omega (D:\Chimera CLI\crates\chimera-tui)
+    Finished `bench` profile [optimized] target(s) in 36.29s
+     Running benches\streaming_bench.rs (target\release\deps\streaming_bench-95b5e41c9e90e659.exe)
+Gnuplot not found, using plotters backend
+Benchmarking streaming_single_token/size/80x24
+Benchmarking streaming_single_token/size/80x24: Warming up for 3.0000 s
+Benchmarking streaming_single_token/size/80x24: Collecting 100 samples in estimated 5.0638 s (359k iterations)
+Benchmarking streaming_single_token/size/80x24: Analyzing
+streaming_single_token/size/80x24
+                        time:   [13.915 碌s 14.048 碌s 14.218 碌s]
+                        change: [+0.5928% +3.1446% +5.7182%] (p = 0.02 < 0.05)
+                        Change within noise threshold.
+Found 8 outliers among 100 measurements (8.00%)
+  6 (6.00%) high mild
+  2 (2.00%) high severe
+Benchmarking streaming_single_token/size/120x40
+Benchmarking streaming_single_token/size/120x40: Warming up for 3.0000 s
+Benchmarking streaming_single_token/size/120x40: Collecting 100 samples in estimated 5.1468 s (152k iterations)
+Benchmarking streaming_single_token/size/120x40: Analyzing
+streaming_single_token/size/120x40
+                        time:   [34.732 碌s 35.209 碌s 35.789 碌s]
+                        change: [+4.9851% +6.4591% +8.2470%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 5 outliers among 100 measurements (5.00%)
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking streaming_sustained/50_tokens_80x24
+Benchmarking streaming_sustained/50_tokens_80x24: Warming up for 3.0000 s
+Benchmarking streaming_sustained/50_tokens_80x24: Collecting 100 samples in estimated 7.0237 s (10k iterations)
+Benchmarking streaming_sustained/50_tokens_80x24: Analyzing
+streaming_sustained/50_tokens_80x24
+                        time:   [679.94 碌s 683.05 碌s 687.11 碌s]
+                        thrpt:  [72.768 Kelem/s 73.201 Kelem/s 73.536 Kelem/s]
+                 change:
+                        time:   [+3.9195% +5.6077% +7.1437%] (p = 0.00 < 0.05)
+                        thrpt:  [-6.6674% -5.3099% -3.7717%]
+                        Performance has regressed.
+Found 9 outliers among 100 measurements (9.00%)
+  3 (3.00%) high mild
+  6 (6.00%) high severe
+
+Benchmarking streaming_newline_gate/ttfb_first_line
+Benchmarking streaming_newline_gate/ttfb_first_line: Warming up for 3.0000 s
+Benchmarking streaming_newline_gate/ttfb_first_line: Collecting 100 samples in estimated 5.0007 s (38M iterations)
+Benchmarking streaming_newline_gate/ttfb_first_line: Analyzing
+streaming_newline_gate/ttfb_first_line
+                        time:   [134.57 ns 135.38 ns 136.58 ns]
+                        change: [+13.065% +13.693% +14.369%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking streaming_newline_gate/feed_100_lines_charwise
+Benchmarking streaming_newline_gate/feed_100_lines_charwise: Warming up for 3.0000 s
+Benchmarking streaming_newline_gate/feed_100_lines_charwise: Collecting 100 samples in estimated 5.1416 s (146k iterations)
+Benchmarking streaming_newline_gate/feed_100_lines_charwise: Analyzing
+streaming_newline_gate/feed_100_lines_charwise
+                        time:   [35.351 碌s 35.701 碌s 36.169 碌s]
+                        change: [+2.3648% +3.8666% +5.1399%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+

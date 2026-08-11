@@ -137,7 +137,16 @@ fn multiple_offline_snapshot() -> DataSnapshot {
 
 #[test]
 fn test_mcp_nodes_panel_id() {
-    let mut app = TuiApp::new(TuiConfig::default()).unwrap();
+    let mut app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     app.switch_panel_to(PanelId::McpNodes);
     assert_eq!(app.current_panel(), PanelId::McpNodes);
 }
@@ -145,7 +154,11 @@ fn test_mcp_nodes_panel_id() {
 #[test]
 fn test_mcp_nodes_panel_renders_title() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(normal_nodes_snapshot())),
     )
     .unwrap();
@@ -167,7 +180,11 @@ fn test_mcp_nodes_panel_renders_title() {
 #[test]
 fn test_mcp_nodes_panel_renders_node_list_when_non_empty() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(normal_nodes_snapshot())),
     )
     .unwrap();
@@ -189,7 +206,11 @@ fn test_mcp_nodes_panel_renders_node_list_when_non_empty() {
 #[test]
 fn test_mcp_nodes_panel_renders_throughput_value() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(normal_nodes_snapshot())),
     )
     .unwrap();
@@ -211,7 +232,11 @@ fn test_mcp_nodes_panel_renders_throughput_value() {
 #[test]
 fn test_mcp_nodes_panel_renders_msg_per_second_unit() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(normal_nodes_snapshot())),
     )
     .unwrap();
@@ -229,7 +254,11 @@ fn test_mcp_nodes_panel_renders_msg_per_second_unit() {
 #[test]
 fn test_mcp_nodes_panel_renders_last_seen_relative_time() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(normal_nodes_snapshot())),
     )
     .unwrap();
@@ -251,7 +280,11 @@ fn test_mcp_nodes_panel_renders_last_seen_relative_time() {
 #[test]
 fn test_mcp_nodes_panel_offline_alert_banner() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(offline_node_snapshot())),
     )
     .unwrap();
@@ -295,7 +328,11 @@ fn test_mcp_nodes_panel_no_alert_when_all_online() {
         ..Default::default()
     };
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(snapshot)),
     )
     .unwrap();
@@ -314,7 +351,11 @@ fn test_mcp_nodes_panel_no_alert_when_all_online() {
 fn test_mcp_nodes_panel_alert_shows_first_offline_node() {
     // 多个 Offline 节点时,告警横幅应显示第一个 Offline 节点
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(multiple_offline_snapshot())),
     )
     .unwrap();
@@ -341,7 +382,11 @@ fn test_mcp_nodes_panel_alert_shows_first_offline_node() {
 fn test_mcp_nodes_panel_empty_state_shows_placeholder() {
     let snapshot = DataSnapshot::default();
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(snapshot)),
     )
     .unwrap();
@@ -614,7 +659,11 @@ fn test_mcp_nodes_panel_navigation_clamps_when_empty() {
 fn test_mcp_nodes_panel_default_state_renders() {
     let snapshot = DataSnapshot::default();
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(McpNodesTestSource::new(snapshot)),
     )
     .unwrap();

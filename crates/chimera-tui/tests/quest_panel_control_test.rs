@@ -50,7 +50,16 @@ fn make_app_with_quest(quest_id: &str, priority: u8) -> (TuiApp, event_bus::Even
     // 先订阅,再注入 bus 到 app,确保后续 publish 的事件都能被接收
     let rx = bus.subscribe();
 
-    let app = TuiApp::new(TuiConfig::default()).expect("TuiApp with default config should succeed");
+    let app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .expect("TuiApp with default config should succeed");
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     let mut app = TuiApp::with_event_bus(app, bus);
     app.state_mut().quest_list = vec![make_quest(quest_id, priority)];
 
@@ -61,7 +70,16 @@ fn make_app_with_quest(quest_id: &str, priority: u8) -> (TuiApp, event_bus::Even
 fn make_app_empty() -> (TuiApp, event_bus::EventReceiver) {
     let bus = event_bus::EventBus::new();
     let rx = bus.subscribe();
-    let app = TuiApp::new(TuiConfig::default()).expect("TuiApp with default config should succeed");
+    let app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .expect("TuiApp with default config should succeed");
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     let app = TuiApp::with_event_bus(app, bus);
     (app, rx)
 }

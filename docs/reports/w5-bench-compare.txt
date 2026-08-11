@@ -1,0 +1,611 @@
+# W5 bench compare vs refactor_base (idle-state rerun)
+    Finished `bench` profile [optimized] target(s) in 1.60s
+     Running benches\streaming_bench.rs (target\release\deps\streaming_bench-95b5e41c9e90e659.exe)
+Gnuplot not found, using plotters backend
+Benchmarking streaming_single_token/size/80x24
+Benchmarking streaming_single_token/size/80x24: Warming up for 3.0000 s
+Benchmarking streaming_single_token/size/80x24: Collecting 100 samples in estimated 5.0458 s (242k iterations)
+Benchmarking streaming_single_token/size/80x24: Analyzing
+streaming_single_token/size/80x24
+                        time:   [24.051 碌s 24.475 碌s 24.898 碌s]
+                        change: [+71.122% +76.255% +81.356%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking streaming_single_token/size/120x40
+Benchmarking streaming_single_token/size/120x40: Warming up for 3.0000 s
+Benchmarking streaming_single_token/size/120x40: Collecting 100 samples in estimated 5.1233 s (86k iterations)
+Benchmarking streaming_single_token/size/120x40: Analyzing
+streaming_single_token/size/120x40
+                        time:   [58.858 碌s 59.852 碌s 60.865 碌s]
+                        change: [+83.991% +87.997% +92.345%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 7 outliers among 100 measurements (7.00%)
+  7 (7.00%) high mild
+
+Benchmarking streaming_sustained/50_tokens_80x24
+Benchmarking streaming_sustained/50_tokens_80x24: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.4s, enable flat sampling, or reduce sample count to 60.
+Benchmarking streaming_sustained/50_tokens_80x24: Collecting 100 samples in estimated 6.3927 s (5050 iterations)
+Benchmarking streaming_sustained/50_tokens_80x24: Analyzing
+streaming_sustained/50_tokens_80x24
+                        time:   [1.2125 ms 1.2390 ms 1.2662 ms]
+                        thrpt:  [39.489 Kelem/s 40.354 Kelem/s 41.236 Kelem/s]
+                 change:
+                        time:   [+80.455% +85.179% +89.450%] (p = 0.00 < 0.05)
+                        thrpt:  [-47.216% -45.998% -44.584%]
+                        Performance has regressed.
+
+Benchmarking streaming_newline_gate/ttfb_first_line
+Benchmarking streaming_newline_gate/ttfb_first_line: Warming up for 3.0000 s
+Benchmarking streaming_newline_gate/ttfb_first_line: Collecting 100 samples in estimated 5.0011 s (22M iterations)
+Benchmarking streaming_newline_gate/ttfb_first_line: Analyzing
+streaming_newline_gate/ttfb_first_line
+                        time:   [216.94 ns 220.68 ns 224.47 ns]
+                        change: [+88.983% +93.378% +99.064%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 11 outliers among 100 measurements (11.00%)
+  11 (11.00%) high mild
+Benchmarking streaming_newline_gate/feed_100_lines_charwise
+Benchmarking streaming_newline_gate/feed_100_lines_charwise: Warming up for 3.0000 s
+Benchmarking streaming_newline_gate/feed_100_lines_charwise: Collecting 100 samples in estimated 5.0878 s (81k iterations)
+Benchmarking streaming_newline_gate/feed_100_lines_charwise: Analyzing
+streaming_newline_gate/feed_100_lines_charwise
+                        time:   [63.240 碌s 64.859 碌s 66.552 碌s]
+                        change: [+87.520% +92.925% +98.992%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+    Finished `bench` profile [optimized] target(s) in 1.57s
+     Running benches\v3_pipeline_bench.rs (target\release\deps\v3_pipeline_bench-680985a266b2c7fa.exe)
+Gnuplot not found, using plotters backend
+Benchmarking v3_pipeline_full/size/80x24
+Benchmarking v3_pipeline_full/size/80x24: Warming up for 3.0000 s
+Benchmarking v3_pipeline_full/size/80x24: Collecting 100 samples in estimated 5.1890 s (10k iterations)
+Benchmarking v3_pipeline_full/size/80x24: Analyzing
+v3_pipeline_full/size/80x24
+                        time:   [457.72 碌s 466.30 碌s 476.14 碌s]
+                        change: [+86.993% +91.988% +96.876%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+Benchmarking v3_pipeline_full/size/200x50
+Benchmarking v3_pipeline_full/size/200x50: Warming up for 3.0000 s
+Benchmarking v3_pipeline_full/size/200x50: Collecting 100 samples in estimated 5.1523 s (2500 iterations)
+Benchmarking v3_pipeline_full/size/200x50: Analyzing
+v3_pipeline_full/size/200x50
+                        time:   [1.8003 ms 1.8280 ms 1.8570 ms]
+                        change: [+74.562% +77.500% +80.819%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+
+Benchmarking v3_pipeline_draw_only/size/80x24
+Benchmarking v3_pipeline_draw_only/size/80x24: Warming up for 3.0000 s
+Benchmarking v3_pipeline_draw_only/size/80x24: Collecting 100 samples in estimated 5.7973 s (15k iterations)
+Benchmarking v3_pipeline_draw_only/size/80x24: Analyzing
+v3_pipeline_draw_only/size/80x24
+                        time:   [364.36 碌s 370.57 碌s 377.20 碌s]
+                        change: [+81.370% +84.290% +87.320%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) low mild
+  5 (5.00%) high mild
+Benchmarking v3_pipeline_draw_only/size/200x50
+Benchmarking v3_pipeline_draw_only/size/200x50: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.9s, enable flat sampling, or reduce sample count to 60.
+Benchmarking v3_pipeline_draw_only/size/200x50: Collecting 100 samples in estimated 6.8716 s (5050 iterations)
+Benchmarking v3_pipeline_draw_only/size/200x50: Analyzing
+v3_pipeline_draw_only/size/200x50
+                        time:   [1.3385 ms 1.3652 ms 1.3926 ms]
+                        change: [+72.740% +76.323% +79.300%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
+Benchmarking v3_pipeline_diffed/size/80x24
+Benchmarking v3_pipeline_diffed/size/80x24: Warming up for 3.0000 s
+Benchmarking v3_pipeline_diffed/size/80x24: Collecting 100 samples in estimated 6.2839 s (15k iterations)
+Benchmarking v3_pipeline_diffed/size/80x24: Analyzing
+v3_pipeline_diffed/size/80x24
+                        time:   [403.37 碌s 410.73 碌s 418.59 碌s]
+                        change: [+72.044% +76.472% +80.877%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking v3_pipeline_diffed/size/200x50
+Benchmarking v3_pipeline_diffed/size/200x50: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 7.6s, enable flat sampling, or reduce sample count to 50.
+Benchmarking v3_pipeline_diffed/size/200x50: Collecting 100 samples in estimated 7.6490 s (5050 iterations)
+Benchmarking v3_pipeline_diffed/size/200x50: Analyzing
+v3_pipeline_diffed/size/200x50
+                        time:   [1.4462 ms 1.4666 ms 1.4896 ms]
+                        change: [+65.267% +68.360% +71.720%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking v3_pipeline_quiet/size/80x24
+Benchmarking v3_pipeline_quiet/size/80x24: Warming up for 3.0000 s
+Benchmarking v3_pipeline_quiet/size/80x24: Collecting 100 samples in estimated 6.1350 s (15k iterations)
+Benchmarking v3_pipeline_quiet/size/80x24: Analyzing
+v3_pipeline_quiet/size/80x24
+                        time:   [403.17 碌s 410.66 碌s 417.70 碌s]
+                        change: [+73.387% +76.492% +79.495%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking v3_pipeline_quiet/size/200x50
+Benchmarking v3_pipeline_quiet/size/200x50: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 7.3s, enable flat sampling, or reduce sample count to 50.
+Benchmarking v3_pipeline_quiet/size/200x50: Collecting 100 samples in estimated 7.3181 s (5050 iterations)
+Benchmarking v3_pipeline_quiet/size/200x50: Analyzing
+v3_pipeline_quiet/size/200x50
+                        time:   [1.4492 ms 1.4733 ms 1.4994 ms]
+                        change: [+68.337% +72.426% +77.084%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+    Finished `bench` profile [optimized] target(s) in 1.24s
+     Running benches\data_pipeline_bench.rs (target\release\deps\data_pipeline_bench-15f15a475fd08254.exe)
+Gnuplot not found, using plotters backend
+Benchmarking data_pipeline_snapshot_latency/250_events_per_tick
+Benchmarking data_pipeline_snapshot_latency/250_events_per_tick: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 45.0s, or reduce sample count to 10.
+Benchmarking data_pipeline_snapshot_latency/250_events_per_tick: Collecting 100 samples in estimated 45.044 s (100 iterations)
+Benchmarking data_pipeline_snapshot_latency/250_events_per_tick: Analyzing
+data_pipeline_snapshot_latency/250_events_per_tick
+                        time:   [329.18 ms 330.22 ms 331.29 ms]
+                        change: [+0.3813% +1.0093% +1.6002%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high mild
+
+Benchmarking data_pipeline_throughput/125
+Benchmarking data_pipeline_throughput/125: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 32.8s, or reduce sample count to 10.
+Benchmarking data_pipeline_throughput/125: Collecting 100 samples in estimated 32.799 s (100 iterations)
+Benchmarking data_pipeline_throughput/125: Analyzing
+data_pipeline_throughput/125
+                        time:   [327.66 ms 328.81 ms 330.04 ms]
+                        thrpt:  [378.74  elem/s 380.16  elem/s 381.49  elem/s]
+                 change:
+                        time:   [+0.7735% +1.2607% +1.7440%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.7141% -1.2450% -0.7675%]
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+  2 (2.00%) high severe
+Benchmarking data_pipeline_throughput/250
+Benchmarking data_pipeline_throughput/250: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 32.7s, or reduce sample count to 10.
+Benchmarking data_pipeline_throughput/250: Collecting 100 samples in estimated 32.730 s (100 iterations)
+Benchmarking data_pipeline_throughput/250: Analyzing
+data_pipeline_throughput/250
+                        time:   [328.85 ms 330.16 ms 331.57 ms]
+                        thrpt:  [753.99  elem/s 757.22  elem/s 760.23  elem/s]
+                 change:
+                        time:   [+0.5453% +1.1411% +1.7688%] (p = 0.00 < 0.05)
+                        thrpt:  [-1.7380% -1.1282% -0.5423%]
+                        Change within noise threshold.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking data_pipeline_throughput/500
+Benchmarking data_pipeline_throughput/500: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 32.9s, or reduce sample count to 10.
+Benchmarking data_pipeline_throughput/500: Collecting 100 samples in estimated 32.928 s (100 iterations)
+Benchmarking data_pipeline_throughput/500: Analyzing
+data_pipeline_throughput/500
+                        time:   [329.92 ms 331.29 ms 332.75 ms]
+                        thrpt:  [1.5026 Kelem/s 1.5092 Kelem/s 1.5155 Kelem/s]
+                 change:
+                        time:   [+0.0565% +0.7248% +1.3617%] (p = 0.03 < 0.05)
+                        thrpt:  [-1.3434% -0.7196% -0.0565%]
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking snapshot_read_latency/after_250_events_tick
+Benchmarking snapshot_read_latency/after_250_events_tick: Warming up for 3.0000 s
+Benchmarking snapshot_read_latency/after_250_events_tick: Collecting 100 samples in estimated 5.0000 s (484M iterations)
+Benchmarking snapshot_read_latency/after_250_events_tick: Analyzing
+snapshot_read_latency/after_250_events_tick
+                        time:   [10.222 ns 10.351 ns 10.490 ns]
+                        change: [+43.351% +46.304% +49.127%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+Benchmarking push_history_scale/64
+Benchmarking push_history_scale/64: Warming up for 3.0000 s
+Benchmarking push_history_scale/64: Collecting 100 samples in estimated 5.0000 s (26M iterations)
+Benchmarking push_history_scale/64: Analyzing
+push_history_scale/64   time:   [197.21 ns 202.32 ns 207.29 ns]
+                        change: [+45.813% +49.699% +53.820%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking push_history_scale/1024
+Benchmarking push_history_scale/1024: Warming up for 3.0000 s
+Benchmarking push_history_scale/1024: Collecting 100 samples in estimated 5.0003 s (26M iterations)
+Benchmarking push_history_scale/1024: Analyzing
+push_history_scale/1024 time:   [191.38 ns 196.66 ns 202.38 ns]
+                        change: [+42.797% +47.031% +51.412%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+Benchmarking push_history_scale/16384
+Benchmarking push_history_scale/16384: Warming up for 3.0000 s
+Benchmarking push_history_scale/16384: Collecting 100 samples in estimated 5.0009 s (25M iterations)
+Benchmarking push_history_scale/16384: Analyzing
+push_history_scale/16384
+                        time:   [187.52 ns 193.28 ns 199.01 ns]
+                        change: [-14.633% -10.379% -5.6579%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking history_backfill_latency/0
+Benchmarking history_backfill_latency/0: Warming up for 3.0000 s
+Benchmarking history_backfill_latency/0: Collecting 100 samples in estimated 5.1288 s (71k iterations)
+Benchmarking history_backfill_latency/0: Analyzing
+history_backfill_latency/0
+                        time:   [69.906 碌s 71.056 碌s 72.328 碌s]
+                        change: [+91.163% +99.367% +107.70%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high mild
+Benchmarking history_backfill_latency/3000
+Benchmarking history_backfill_latency/3000: Warming up for 3.0000 s
+Benchmarking history_backfill_latency/3000: Collecting 100 samples in estimated 5.2121 s (25k iterations)
+Benchmarking history_backfill_latency/3000: Analyzing
+history_backfill_latency/3000
+                        time:   [205.84 碌s 210.40 碌s 216.41 碌s]
+                        change: [+42.977% +46.184% +49.169%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
+    Finished `bench` profile [optimized] target(s) in 1.33s
+     Running benches\diff_engine_bench.rs (target\release\deps\diff_engine_bench-2b53b24a86d9f4a9.exe)
+Gnuplot not found, using plotters backend
+Benchmarking diff_incremental_5pct/size/80x24
+Benchmarking diff_incremental_5pct/size/80x24: Warming up for 3.0000 s
+Benchmarking diff_incremental_5pct/size/80x24: Collecting 100 samples in estimated 5.0854 s (222k iterations)
+Benchmarking diff_incremental_5pct/size/80x24: Analyzing
+diff_incremental_5pct/size/80x24
+                        time:   [26.100 碌s 26.664 碌s 27.250 碌s]
+                        change: [+28.119% +33.588% +39.205%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking diff_incremental_5pct/size/120x40
+Benchmarking diff_incremental_5pct/size/120x40: Warming up for 3.0000 s
+Benchmarking diff_incremental_5pct/size/120x40: Collecting 100 samples in estimated 5.1186 s (76k iterations)
+Benchmarking diff_incremental_5pct/size/120x40: Analyzing
+diff_incremental_5pct/size/120x40
+                        time:   [69.948 碌s 71.203 碌s 72.491 碌s]
+                        change: [+74.265% +78.531% +82.583%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking diff_incremental_5pct/size/200x50
+Benchmarking diff_incremental_5pct/size/200x50: Warming up for 3.0000 s
+Benchmarking diff_incremental_5pct/size/200x50: Collecting 100 samples in estimated 5.0300 s (35k iterations)
+Benchmarking diff_incremental_5pct/size/200x50: Analyzing
+diff_incremental_5pct/size/200x50
+                        time:   [140.32 碌s 142.54 碌s 144.84 碌s]
+                        change: [+27.095% +34.141% +41.550%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+Benchmarking diff_full_redraw/size/80x24
+Benchmarking diff_full_redraw/size/80x24: Warming up for 3.0000 s
+Benchmarking diff_full_redraw/size/80x24: Collecting 100 samples in estimated 5.0807 s (162k iterations)
+Benchmarking diff_full_redraw/size/80x24: Analyzing
+diff_full_redraw/size/80x24
+                        time:   [30.111 碌s 30.710 碌s 31.321 碌s]
+                        change: [+57.306% +60.019% +63.078%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking diff_full_redraw/size/120x40
+Benchmarking diff_full_redraw/size/120x40: Warming up for 3.0000 s
+Benchmarking diff_full_redraw/size/120x40: Collecting 100 samples in estimated 5.2251 s (76k iterations)
+Benchmarking diff_full_redraw/size/120x40: Analyzing
+diff_full_redraw/size/120x40
+                        time:   [73.904 碌s 74.839 碌s 75.756 碌s]
+                        change: [+55.152% +59.006% +62.785%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking diff_full_redraw/size/200x50
+Benchmarking diff_full_redraw/size/200x50: Warming up for 3.0000 s
+Benchmarking diff_full_redraw/size/200x50: Collecting 100 samples in estimated 5.6081 s (40k iterations)
+Benchmarking diff_full_redraw/size/200x50: Analyzing
+diff_full_redraw/size/200x50
+                        time:   [131.54 碌s 133.01 碌s 134.52 碌s]
+                        change: [+45.553% +49.112% +52.564%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+    Finished `bench` profile [optimized] target(s) in 1.30s
+     Running benches\render_bench.rs (target\release\deps\render_bench-e6c0542f67060070.exe)
+Gnuplot not found, using plotters backend
+Benchmarking render_all_panels/80x24_8panels
+Benchmarking render_all_panels/80x24_8panels: Warming up for 3.0000 s
+Benchmarking render_all_panels/80x24_8panels: Collecting 100 samples in estimated 5.7194 s (20k iterations)
+Benchmarking render_all_panels/80x24_8panels: Analyzing
+render_all_panels/80x24_8panels
+                        time:   [294.80 碌s 297.10 碌s 299.54 碌s]
+                        change: [+22.344% +31.469% +40.990%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 19 outliers among 100 measurements (19.00%)
+  5 (5.00%) low mild
+  10 (10.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking render_each_panel/panel/Quest
+Benchmarking render_each_panel/panel/Quest: Warming up for 3.0000 s
+Benchmarking render_each_panel/panel/Quest: Collecting 100 samples in estimated 6.1149 s (20k iterations)
+Benchmarking render_each_panel/panel/Quest: Analyzing
+render_each_panel/panel/Quest
+                        time:   [301.69 碌s 306.66 碌s 311.41 碌s]
+                        change: [+46.357% +53.413% +60.094%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+Benchmarking render_each_panel/panel/Parliament
+Benchmarking render_each_panel/panel/Parliament: Warming up for 3.0000 s
+Benchmarking render_each_panel/panel/Parliament: Collecting 100 samples in estimated 5.9552 s (20k iterations)
+Benchmarking render_each_panel/panel/Parliament: Analyzing
+render_each_panel/panel/Parliament
+                        time:   [287.81 碌s 293.52 碌s 299.43 碌s]
+                        change: [+33.359% +38.767% +44.071%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking render_each_panel/panel/Budget
+Benchmarking render_each_panel/panel/Budget: Warming up for 3.0000 s
+Benchmarking render_each_panel/panel/Budget: Collecting 100 samples in estimated 5.3344 s (20k iterations)
+Benchmarking render_each_panel/panel/Budget: Analyzing
+render_each_panel/panel/Budget
+                        time:   [290.33 碌s 294.97 碌s 299.08 碌s]
+                        change: [+61.563% +65.928% +70.121%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking render_each_panel/panel/Memory
+Benchmarking render_each_panel/panel/Memory: Warming up for 3.0000 s
+Benchmarking render_each_panel/panel/Memory: Collecting 100 samples in estimated 6.0385 s (20k iterations)
+Benchmarking render_each_panel/panel/Memory: Analyzing
+render_each_panel/panel/Memory
+                        time:   [300.24 碌s 303.38 碌s 306.51 碌s]
+                        change: [+12.731% +19.568% +26.813%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking render_each_panel/panel/Security
+Benchmarking render_each_panel/panel/Security: Warming up for 3.0000 s
+Benchmarking render_each_panel/panel/Security: Collecting 100 samples in estimated 5.6468 s (20k iterations)
+Benchmarking render_each_panel/panel/Security: Analyzing
+render_each_panel/panel/Security
+                        time:   [275.22 碌s 279.93 碌s 284.66 碌s]
+                        change: [+79.819% +83.342% +86.720%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking render_each_panel/panel/Health
+Benchmarking render_each_panel/panel/Health: Warming up for 3.0000 s
+Benchmarking render_each_panel/panel/Health: Collecting 100 samples in estimated 6.3140 s (20k iterations)
+Benchmarking render_each_panel/panel/Health: Analyzing
+render_each_panel/panel/Health
+                        time:   [307.87 碌s 312.44 碌s 317.24 碌s]
+                        change: [+60.135% +68.642% +76.868%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking render_each_panel/panel/Log
+Benchmarking render_each_panel/panel/Log: Warming up for 3.0000 s
+Benchmarking render_each_panel/panel/Log: Collecting 100 samples in estimated 5.0958 s (15k iterations)
+Benchmarking render_each_panel/panel/Log: Analyzing
+render_each_panel/panel/Log
+                        time:   [321.11 碌s 327.15 碌s 333.90 碌s]
+                        change: [+73.273% +77.927% +82.642%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking render_each_panel/panel/Help
+Benchmarking render_each_panel/panel/Help: Warming up for 3.0000 s
+Benchmarking render_each_panel/panel/Help: Collecting 100 samples in estimated 5.7452 s (20k iterations)
+Benchmarking render_each_panel/panel/Help: Analyzing
+render_each_panel/panel/Help
+                        time:   [281.90 碌s 286.07 碌s 290.53 碌s]
+                        change: [+55.086% +58.615% +62.123%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 10 outliers among 100 measurements (10.00%)
+  3 (3.00%) low mild
+  6 (6.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking render_ide_three_panes/80x24_3panes
+Benchmarking render_ide_three_panes/80x24_3panes: Warming up for 3.0000 s
+Benchmarking render_ide_three_panes/80x24_3panes: Collecting 100 samples in estimated 5.3021 s (15k iterations)
+Benchmarking render_ide_three_panes/80x24_3panes: Analyzing
+render_ide_three_panes/80x24_3panes
+                        time:   [344.66 碌s 352.82 碌s 360.89 碌s]
+                        change: [+50.388% +55.235% +60.087%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+    Finished `bench` profile [optimized] target(s) in 1.38s
+     Running benches\panels_scale_bench.rs (target\release\deps\panels_scale_bench-8c349f14f26e2db6.exe)
+Gnuplot not found, using plotters backend
+Benchmarking log_content_10k
+Benchmarking log_content_10k: Warming up for 3.0000 s
+Benchmarking log_content_10k: Collecting 100 samples in estimated 5.0102 s (50k iterations)
+Benchmarking log_content_10k: Analyzing
+log_content_10k         time:   [113.15 碌s 115.47 碌s 118.07 碌s]
+                        change: [+56.118% +62.533% +68.465%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
+Benchmarking event_stream_content_10k
+Benchmarking event_stream_content_10k: Warming up for 3.0000 s
+Benchmarking event_stream_content_10k: Collecting 100 samples in estimated 5.5295 s (45k iterations)
+Benchmarking event_stream_content_10k: Analyzing
+event_stream_content_10k
+                        time:   [121.70 碌s 124.31 碌s 127.03 碌s]
+                        change: [+28.792% +38.254% +48.572%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+Benchmarking event_stream_keyword_filter_10k
+Benchmarking event_stream_keyword_filter_10k: Warming up for 3.0000 s
+Benchmarking event_stream_keyword_filter_10k: Collecting 100 samples in estimated 5.1954 s (1700 iterations)
+Benchmarking event_stream_keyword_filter_10k: Analyzing
+event_stream_keyword_filter_10k
+                        time:   [2.8762 ms 2.9256 ms 2.9779 ms]
+                        change: [+55.604% +61.340% +66.606%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 5 outliers among 100 measurements (5.00%)
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking event_stream_keyword_filter_legacy_10k
+Benchmarking event_stream_keyword_filter_legacy_10k: Warming up for 3.0000 s
+Benchmarking event_stream_keyword_filter_legacy_10k: Collecting 100 samples in estimated 6.5674 s (400 iterations)
+Benchmarking event_stream_keyword_filter_legacy_10k: Analyzing
+event_stream_keyword_filter_legacy_10k
+                        time:   [17.528 ms 17.905 ms 18.293 ms]
+                        change: [+48.939% +56.396% +63.808%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
+Benchmarking router_content_10k
+Benchmarking router_content_10k: Warming up for 3.0000 s
+Benchmarking router_content_10k: Collecting 100 samples in estimated 5.0326 s (515k iterations)
+Benchmarking router_content_10k: Analyzing
+router_content_10k      time:   [9.4221 碌s 9.7033 碌s 10.014 碌s]
+                        change: [+156.58% +162.95% +169.25%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 11 outliers among 100 measurements (11.00%)
+  3 (3.00%) low mild
+  3 (3.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking log_filter_cache/cold_10k
+Benchmarking log_filter_cache/cold_10k: Warming up for 3.0000 s
+Benchmarking log_filter_cache/cold_10k: Collecting 100 samples in estimated 5.0186 s (1600 iterations)
+Benchmarking log_filter_cache/cold_10k: Analyzing
+log_filter_cache/cold_10k
+                        time:   [2.9456 ms 2.9937 ms 3.0461 ms]
+                        change: [+60.086% +66.254% +72.239%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking log_filter_cache/hit_10k
+Benchmarking log_filter_cache/hit_10k: Warming up for 3.0000 s
+Benchmarking log_filter_cache/hit_10k: Collecting 100 samples in estimated 5.0013 s (17M iterations)
+Benchmarking log_filter_cache/hit_10k: Analyzing
+log_filter_cache/hit_10k
+                        time:   [300.04 ns 305.86 ns 311.99 ns]
+                        change: [+75.310% +78.639% +82.298%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+Benchmarking quest_render_cache/cold_100
+Benchmarking quest_render_cache/cold_100: Warming up for 3.0000 s
+Benchmarking quest_render_cache/cold_100: Collecting 100 samples in estimated 9.6257 s (10k iterations)
+Benchmarking quest_render_cache/cold_100: Analyzing
+quest_render_cache/cold_100
+                        time:   [930.04 碌s 946.52 碌s 964.26 碌s]
+                        change: [+120.96% +128.77% +137.86%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 10 outliers among 100 measurements (10.00%)
+  9 (9.00%) high mild
+  1 (1.00%) high severe
+Benchmarking quest_render_cache/hit_100
+Benchmarking quest_render_cache/hit_100: Warming up for 3.0000 s
+Benchmarking quest_render_cache/hit_100: Collecting 100 samples in estimated 5.7787 s (30k iterations)
+Benchmarking quest_render_cache/hit_100: Analyzing
+quest_render_cache/hit_100
+                        time:   [189.64 碌s 194.11 碌s 198.80 碌s]
+                        change: [+64.148% +68.862% +73.403%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking parliament_render_cache/cold_100
+Benchmarking parliament_render_cache/cold_100: Warming up for 3.0000 s
+Benchmarking parliament_render_cache/cold_100: Collecting 100 samples in estimated 5.5922 s (30k iterations)
+Benchmarking parliament_render_cache/cold_100: Analyzing
+parliament_render_cache/cold_100
+                        time:   [177.52 碌s 180.68 碌s 183.98 碌s]
+                        change: [+62.129% +67.177% +71.937%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking parliament_render_cache/hit_100
+Benchmarking parliament_render_cache/hit_100: Warming up for 3.0000 s
+Benchmarking parliament_render_cache/hit_100: Collecting 100 samples in estimated 5.2652 s (35k iterations)
+Benchmarking parliament_render_cache/hit_100: Analyzing
+parliament_render_cache/hit_100
+                        time:   [147.34 碌s 149.87 碌s 152.41 碌s]
+                        change: [+51.031% +55.572% +60.152%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+    Finished `bench` profile [optimized] target(s) in 1.31s
+     Running benches\v3_output_bench.rs (target\release\deps\v3_output_bench-063409a615ffa52d.exe)
+Gnuplot not found, using plotters backend
+Benchmarking v3_output/identical_80x24
+Benchmarking v3_output/identical_80x24: Warming up for 3.0000 s
+Benchmarking v3_output/identical_80x24: Collecting 100 samples in estimated 5.0365 s (237k iterations)
+Benchmarking v3_output/identical_80x24: Analyzing
+v3_output/identical_80x24
+                        time:   [26.866 碌s 27.289 碌s 27.677 碌s]
+                        change: [+59.250% +62.887% +66.895%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking v3_output/changed_120x40
+Benchmarking v3_output/changed_120x40: Warming up for 3.0000 s
+Benchmarking v3_output/changed_120x40: Collecting 100 samples in estimated 5.1508 s (76k iterations)
+Benchmarking v3_output/changed_120x40: Analyzing
+v3_output/changed_120x40
+                        time:   [62.116 碌s 63.162 碌s 64.289 碌s]
+                        change: [+56.101% +58.884% +61.770%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+    Finished `bench` profile [optimized] target(s) in 1.30s
+     Running benches\writer_ansi_bench.rs (target\release\deps\writer_ansi_bench-3e2814482750fbbf.exe)
+Gnuplot not found, using plotters backend
+Benchmarking writer_ansi/render_full_80x24
+Benchmarking writer_ansi/render_full_80x24: Warming up for 3.0000 s
+Benchmarking writer_ansi/render_full_80x24: Collecting 100 samples in estimated 5.0843 s (111k iterations)
+Benchmarking writer_ansi/render_full_80x24: Analyzing
+writer_ansi/render_full_80x24
+                        time:   [53.671 碌s 54.725 碌s 55.805 碌s]
+                        change: [+65.553% +69.878% +74.435%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking writer_ansi/render_incremental_5pct
+Benchmarking writer_ansi/render_incremental_5pct: Warming up for 3.0000 s
+Benchmarking writer_ansi/render_incremental_5pct: Collecting 100 samples in estimated 5.0245 s (530k iterations)
+Benchmarking writer_ansi/render_incremental_5pct: Analyzing
+writer_ansi/render_incremental_5pct
+                        time:   [8.4779 碌s 8.6067 碌s 8.7495 碌s]
+                        change: [+44.896% +49.089% +53.758%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 7 outliers among 100 measurements (7.00%)
+  7 (7.00%) high mild
+

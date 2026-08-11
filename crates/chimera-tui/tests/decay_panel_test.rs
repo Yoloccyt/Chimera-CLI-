@@ -97,7 +97,16 @@ fn high_decay_snapshot() -> DataSnapshot {
 
 #[test]
 fn test_decay_panel_id() {
-    let mut app = TuiApp::new(TuiConfig::default()).unwrap();
+    let mut app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     app.switch_panel_to(PanelId::Decay);
     assert_eq!(app.current_panel(), PanelId::Decay);
 }
@@ -105,7 +114,11 @@ fn test_decay_panel_id() {
 #[test]
 fn test_decay_panel_renders_title() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(normal_decay_snapshot())),
     )
     .unwrap();
@@ -123,7 +136,11 @@ fn test_decay_panel_renders_title() {
 #[test]
 fn test_decay_panel_renders_coefficient() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(normal_decay_snapshot())),
     )
     .unwrap();
@@ -142,7 +159,11 @@ fn test_decay_panel_renders_coefficient() {
 #[test]
 fn test_decay_panel_renders_recent_events() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(normal_decay_snapshot())),
     )
     .unwrap();
@@ -169,7 +190,11 @@ fn test_decay_panel_high_decay_threshold() {
     // WHY 阈值语义:spec "衰减系数 > 0.7(高衰减)" 指的是衰减量 > 0.7,
     // 即 coefficient < 0.3。此处用 0.25 验证高衰减场景。
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(high_decay_snapshot())),
     )
     .unwrap();
@@ -192,7 +217,11 @@ fn test_decay_panel_high_decay_threshold() {
 fn test_decay_panel_normal_decay_no_highlight() {
     // 正常衰减(coefficient = 0.85,远高于阈值 0.3)不应显示高亮告警标记
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(normal_decay_snapshot())),
     )
     .unwrap();
@@ -219,7 +248,11 @@ fn test_decay_panel_default_state_renders() {
         ..Default::default()
     };
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(snapshot)),
     )
     .unwrap();
@@ -253,7 +286,11 @@ fn test_decay_panel_empty_history_renders() {
         ..Default::default()
     };
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(snapshot)),
     )
     .unwrap();
@@ -274,7 +311,11 @@ fn test_decay_panel_empty_history_renders() {
 #[test]
 fn test_decay_panel_renders_history_sparkline() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(normal_decay_snapshot())),
     )
     .unwrap();
@@ -295,7 +336,11 @@ fn test_decay_panel_renders_history_sparkline() {
 #[test]
 fn test_decay_panel_renders_cycle_start() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(normal_decay_snapshot())),
     )
     .unwrap();
@@ -319,7 +364,11 @@ fn test_decay_panel_renders_cycle_start() {
 fn test_decay_panel_displays_shadow_breaker_status() {
     // 验证面板渲染包含 3 个熔断开关状态
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(DecayTestSource::new(normal_decay_snapshot())),
     )
     .unwrap();

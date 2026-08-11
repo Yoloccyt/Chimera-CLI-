@@ -19,7 +19,11 @@ fn test_config_persistence_save_and_load() {
         theme: Theme::HighContrast,
         main_panel_ratio: 0.65,
         tick_interval_ms: 300,
-        ..TuiConfig::default()
+        ..TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        }
     };
 
     // 保存
@@ -62,9 +66,22 @@ fn test_config_persistence_nonexistent_returns_default() {
     let result = TuiConfig::load_from_file(&temp_dir);
     assert!(result.is_ok(), "nonexistent file should return Ok(default)");
     let loaded = result.unwrap();
-    assert_eq!(loaded.theme, TuiConfig::default().theme);
+    assert_eq!(
+        loaded.theme,
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        }
+        .theme
+    );
     assert_eq!(
         loaded.tick_interval_ms,
-        TuiConfig::default().tick_interval_ms
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        }
+        .tick_interval_ms
     );
 }

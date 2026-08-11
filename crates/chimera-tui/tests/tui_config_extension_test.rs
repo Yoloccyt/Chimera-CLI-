@@ -31,7 +31,11 @@ use chimera_tui::{SortMode, TuiConfig};
 /// (spec §MODIFIED Requirements 迁移路径)
 #[test]
 fn test_enable_trend_charts_defaults_to_false() {
-    let cfg = TuiConfig::default();
+    let cfg = TuiConfig {
+        default_view_mode: chimera_tui::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    };
     assert!(
         !cfg.enable_trend_charts,
         "enable_trend_charts should default to false (opt-in for trend chart rendering)"
@@ -41,7 +45,11 @@ fn test_enable_trend_charts_defaults_to_false() {
 /// `metrics_sample_interval_ms` 默认 1000ms(1Hz 采样,符合 sparkline 5 分钟窗口 300 点)
 #[test]
 fn test_metrics_sample_interval_ms_defaults_to_1000() {
-    let cfg = TuiConfig::default();
+    let cfg = TuiConfig {
+        default_view_mode: chimera_tui::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    };
     assert_eq!(
         cfg.metrics_sample_interval_ms, 1000,
         "metrics_sample_interval_ms should default to 1000 (1Hz sampling for 5min window)"
@@ -51,7 +59,11 @@ fn test_metrics_sample_interval_ms_defaults_to_1000() {
 /// `metrics_history_retention_days` 默认 7 天(spec §Requirement "监控历史持久化")
 #[test]
 fn test_metrics_history_retention_days_defaults_to_7() {
-    let cfg = TuiConfig::default();
+    let cfg = TuiConfig {
+        default_view_mode: chimera_tui::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    };
     assert_eq!(
         cfg.metrics_history_retention_days, 7,
         "metrics_history_retention_days should default to 7 (one week of history)"
@@ -61,7 +73,11 @@ fn test_metrics_history_retention_days_defaults_to_7() {
 /// `task_manager_default_sort` 默认 Priority(spec §Requirement "任务管理面板")
 #[test]
 fn test_task_manager_default_sort_defaults_to_priority() {
-    let cfg = TuiConfig::default();
+    let cfg = TuiConfig {
+        default_view_mode: chimera_tui::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    };
     assert_eq!(
         cfg.task_manager_default_sort,
         SortMode::Priority,
@@ -72,7 +88,11 @@ fn test_task_manager_default_sort_defaults_to_priority() {
 /// `sysinfo_refresh_interval_ms` 默认 5000ms(spec §Scenario "系统信息面板启动加载":5s 刷新)
 #[test]
 fn test_sysinfo_refresh_interval_ms_defaults_to_5000() {
-    let cfg = TuiConfig::default();
+    let cfg = TuiConfig {
+        default_view_mode: chimera_tui::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    };
     assert_eq!(
         cfg.sysinfo_refresh_interval_ms, 5000,
         "sysinfo_refresh_interval_ms should default to 5000 (5s refresh, balance liveness and CPU)"

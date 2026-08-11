@@ -8,7 +8,16 @@ use event_bus::{EventBus, NexusEvent, VoteValue};
 
 /// 构造一个处于命令模式且已输入文本的 TuiApp
 fn app_with_command_input(input: &str) -> TuiApp {
-    let mut app = TuiApp::new(TuiConfig::default()).unwrap();
+    let mut app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
     for c in input.chars() {
         app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));

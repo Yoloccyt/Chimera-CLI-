@@ -279,11 +279,11 @@ impl Panel for LogPanel {
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         vec![
-            ("↑/↓", "导航"),
-            ("PgUp/PgDn", "翻页"),
-            ("g g", "跳顶"),
-            ("G", "跳底"),
-            ("/", "过滤"),
+            ("↑/↓", crate::t!("shortcut.navigate")),
+            ("PgUp/PgDn", crate::t!("shortcut.page_updown")),
+            ("g g", crate::t!("shortcut.jump_top")),
+            ("G", crate::t!("shortcut.jump_bottom")),
+            ("/", crate::t!("shortcut.filter")),
         ]
     }
 }

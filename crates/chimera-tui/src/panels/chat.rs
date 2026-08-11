@@ -168,11 +168,11 @@ impl Panel for ChatPanel {
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         vec![
-            ("i", "输入消息"),
-            ("Enter", "发送"),
-            ("Esc", "退出输入"),
-            ("↑/↓ j/k", "滚动"),
-            ("g g / G", "跳顶/贴底"),
+            ("i", crate::t!("shortcut.input_message")),
+            ("Enter", crate::t!("shortcut.send")),
+            ("Esc", crate::t!("shortcut.exit_input")),
+            ("↑/↓ j/k", crate::t!("shortcut.scroll")),
+            ("g g / G", crate::t!("shortcut.top_bottom")),
         ]
     }
 }

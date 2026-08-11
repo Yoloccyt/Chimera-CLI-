@@ -85,7 +85,16 @@ fn test_min_max_bounds_enforced() {
 /// 响应式折叠:终端宽度 < 阈值时返回 true(隐藏伴随面板)
 #[test]
 fn test_responsive_collapse_hides_companion_when_narrow() {
-    let app = TuiApp::new(TuiConfig::default()).expect("TuiApp 构造失败");
+    let app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .expect("TuiApp 构造失败");
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     // 默认阈值 100,宽度 99 < 100 → 应折叠
     assert!(
         app.should_collapse_companion(99),
@@ -100,7 +109,16 @@ fn test_responsive_collapse_hides_companion_when_narrow() {
 /// 响应式折叠:终端宽度 >= 阈值时返回 false(保持伴随面板)
 #[test]
 fn test_responsive_collapse_keeps_companion_when_wide() {
-    let app = TuiApp::new(TuiConfig::default()).expect("TuiApp 构造失败");
+    let app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .expect("TuiApp 构造失败");
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     // 宽度 100 == 阈值 → 不折叠(只在 < 阈值时折叠)
     assert!(
         !app.should_collapse_companion(100),

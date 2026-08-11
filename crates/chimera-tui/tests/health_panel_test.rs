@@ -88,7 +88,11 @@ fn test_health_panel_renders_with_sample_data() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(HealthTestSource::new(snapshot)),
     )
     .unwrap();
@@ -133,7 +137,11 @@ fn test_health_panel_empty_data_renders_defaults() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(HealthTestSource::new(snapshot)),
     )
     .unwrap();
@@ -162,7 +170,11 @@ fn test_health_panel_low_score_uses_red_color() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(HealthTestSource::new(snapshot)),
     )
     .unwrap();
@@ -197,7 +209,11 @@ fn test_health_panel_shows_active_quests() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(HealthTestSource::new(snapshot)),
     )
     .unwrap();
@@ -230,7 +246,11 @@ fn test_health_panel_shows_paused_quests() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(HealthTestSource::new(snapshot)),
     )
     .unwrap();

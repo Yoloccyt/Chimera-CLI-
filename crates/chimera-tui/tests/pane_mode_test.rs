@@ -19,7 +19,16 @@ use ratatui::Terminal;
 
 /// 构造默认 TuiApp(无 event-bus,内存桩数据源)
 fn make_app() -> TuiApp {
-    TuiApp::new(TuiConfig::default()).unwrap()
+    {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    }
 }
 
 /// 无修饰符按键

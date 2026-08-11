@@ -250,11 +250,51 @@ fn push_history_scale(c: &mut Criterion) {
     group.finish();
 }
 
+/// bench 5: history backfill latency (Concord T1.6, P4 wired)
+///
+/// backfill_resource_history reads the last 5-minute window from SQLite with a
+/// 200ms budget. Two scales: empty DB (first-run) and 3000 seeded samples
+/// (about one hour of 1Hz-equivalent history). Both must stay far below the
+/// 200ms budget; a regression toward the budget triggers the R7 slow-sync
+/// degradation in production (review against refactor_base baseline).
+fn history_backfill_latency(c: &mut Criterion) {
+    use chimera_tui::data::pipeline::backfill_resource_history;
+    use chimera_tui::MetricsHistory;
+
+    let rt = Runtime::new().expect("tokio runtime");
+    let mut group = c.benchmark_group("history_backfill_latency");
+    for &samples in &[0usize, 3000] {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let db_path = tmp.path().join("bench_hist.sqlite");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let seeded = rt.block_on(async {
+            let h = MetricsHistory::new(&db_path).await.expect("open db");
+            for i in 0..samples {
+                h.insert(now - (i as u64) * 1000, "cpu_usage", 50.0)
+                    .await
+                    .expect("seed");
+            }
+            h
+        });
+        group.bench_with_input(BenchmarkId::from_parameter(samples), &samples, |b, &_| {
+            b.iter(|| {
+                let res = rt.block_on(backfill_resource_history(&seeded, now));
+                black_box(res);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     data_pipeline_snapshot_latency,
     data_pipeline_throughput,
     snapshot_read_latency,
-    push_history_scale
+    push_history_scale,
+    history_backfill_latency
 );
 criterion_main!(benches);

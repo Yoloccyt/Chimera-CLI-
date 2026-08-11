@@ -146,7 +146,7 @@ impl Panel for HelpPanel {
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         // WHY 移除 "Esc 关闭":Help 是面板而非弹窗,Normal 下 Esc 是全局退出键;
         // 帮助浮层的关闭由弹窗层 Esc 处理(open_help_action 弹出的 overlay)。
-        vec![("?", "显示帮助")]
+        vec![("?", crate::t!("shortcut.show_help"))]
     }
 }
 

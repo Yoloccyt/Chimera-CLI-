@@ -84,7 +84,11 @@ fn sample_security_snapshot() -> DataSnapshot {
 #[test]
 fn test_security_panel_renders_events() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(SecurityTestSource::new(sample_security_snapshot())),
     )
     .unwrap();
@@ -114,7 +118,11 @@ fn test_security_panel_renders_events() {
 #[test]
 fn test_security_panel_navigation_opens_detail_popup() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(SecurityTestSource::new(sample_security_snapshot())),
     )
     .unwrap();
@@ -143,7 +151,11 @@ fn test_security_panel_navigation_opens_detail_popup() {
 #[test]
 fn test_security_panel_down_navigation() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(SecurityTestSource::new(sample_security_snapshot())),
     )
     .unwrap();
@@ -167,7 +179,11 @@ fn test_security_panel_empty_state() {
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(SecurityTestSource::new(snapshot)),
     )
     .unwrap();
@@ -189,7 +205,11 @@ fn test_security_panel_empty_state() {
 #[test]
 fn test_security_panel_color_by_severity() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(SecurityTestSource::new(sample_security_snapshot())),
     )
     .unwrap();

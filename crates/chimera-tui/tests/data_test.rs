@@ -426,3 +426,54 @@ async fn test_quest_cancelled_unknown_id_no_change() {
     );
     assert_eq!(snapshot.quest_list[0].quest_id, "q1");
 }
+
+// ============================================================
+// Concord T1.7:budget_metrics_ttl_ms 消费的管道级传播验证
+// ============================================================
+
+#[tokio::test]
+async fn budget_snapshot_is_fresh_right_after_update_event() {
+    let bus = EventBus::with_capacity(1024);
+    let subscriber = EventSubscriber::new(bus.clone());
+    let pipeline = DataPipeline::new(subscriber, test_config());
+
+    bus.publish(budget_metrics_event(
+        BudgetMetrics::default(),
+        "efficiency-monitor",
+    ))
+    .await
+    .unwrap();
+    wait_for_events(&pipeline, 1).await;
+
+    // 事件刚到达(远小于 ttl=5000ms)→ 快照陈旧标志必须为 false
+    let snap = pipeline.snapshot();
+    assert!(
+        !snap.budget_metrics_stale,
+        "收到 BudgetMetricsUpdated 后立即判新鲜(ttl 未超期)"
+    );
+    pipeline.shutdown().await;
+}
+
+#[tokio::test]
+async fn budget_snapshot_is_stale_without_any_update_event() {
+    let bus = EventBus::with_capacity(1024);
+    let subscriber = EventSubscriber::new(bus.clone());
+    let pipeline = DataPipeline::new(subscriber, test_config());
+
+    // 发布无关事件驱动至少一个 tick(避免首 tick 初始化耗时干扰)
+    bus.publish(quest_list_event(
+        vec![quest("q-stale", "驱动 tick")],
+        "quest-engine",
+    ))
+    .await
+    .unwrap();
+    wait_for_events(&pipeline, 1).await;
+
+    // 从未收到 BudgetMetricsUpdated → 诚实判陈旧(面板将置灰)
+    let snap = pipeline.snapshot();
+    assert!(
+        snap.budget_metrics_stale,
+        "无预算更新事件时必须判陈旧(默认占位值不得伪装新鲜)"
+    );
+    pipeline.shutdown().await;
+}

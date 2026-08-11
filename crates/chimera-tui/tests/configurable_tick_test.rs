@@ -8,7 +8,11 @@ use chimera_tui::data::DataSourceConfig;
 /// 验证 TuiConfig.tick_interval_ms 默认值
 #[test]
 fn tui_config_default_tick_interval() {
-    let config = TuiConfig::default();
+    let config = TuiConfig {
+        default_view_mode: chimera_tui::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    };
     assert_eq!(config.tick_interval_ms, 250);
 }
 

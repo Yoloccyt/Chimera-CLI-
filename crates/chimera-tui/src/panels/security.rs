@@ -396,7 +396,10 @@ impl Panel for SecurityPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("↑/↓", "导航"), ("Enter", "详情")]
+        vec![
+            ("↑/↓", crate::t!("shortcut.navigate")),
+            ("Enter", crate::t!("shortcut.details")),
+        ]
     }
 }
 

@@ -76,7 +76,15 @@ fn cache_hit(key: &str) -> NexusEvent {
 /// 上语义一致,所以快照中改动的字段会驱动 `mark_dirty`,其余字段保持 clean。
 fn make_app_and_update(snapshot: DataSnapshot) -> TuiApp {
     let data_source = MockDataSource::new(snapshot);
-    let mut app = TuiApp::with_data_source(TuiConfig::default(), Box::new(data_source)).unwrap();
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(data_source),
+    )
+    .unwrap();
     app.update();
     app
 }
@@ -224,7 +232,15 @@ fn test_subsequent_identical_update_stays_clean() {
     };
 
     let data_source = MockDataSource::new(snapshot);
-    let mut app = TuiApp::with_data_source(TuiConfig::default(), Box::new(data_source)).unwrap();
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(data_source),
+    )
+    .unwrap();
 
     // 首次 update 会让 state 与 snapshot 对齐,budget 不同 → Budget dirty
     app.update();

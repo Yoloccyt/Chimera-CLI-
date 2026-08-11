@@ -145,7 +145,16 @@ fn many_capabilities_snapshot() -> DataSnapshot {
 
 #[test]
 fn test_router_panel_id() {
-    let mut app = TuiApp::new(TuiConfig::default()).unwrap();
+    let mut app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     app.switch_panel_to(PanelId::Router);
     assert_eq!(app.current_panel(), PanelId::Router);
 }
@@ -153,7 +162,11 @@ fn test_router_panel_id() {
 #[test]
 fn test_router_panel_renders_title() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(normal_router_snapshot())),
     )
     .unwrap();
@@ -176,7 +189,11 @@ fn test_router_panel_default_state_renders_three_routers() {
         ..Default::default()
     };
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(snapshot)),
     )
     .unwrap();
@@ -208,7 +225,11 @@ fn test_router_panel_default_state_zero_hit_rate() {
         ..Default::default()
     };
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(snapshot)),
     )
     .unwrap();
@@ -230,7 +251,11 @@ fn test_router_panel_default_state_zero_hit_rate() {
 #[test]
 fn test_router_panel_renders_hit_rates() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(normal_router_snapshot())),
     )
     .unwrap();
@@ -259,7 +284,11 @@ fn test_router_panel_renders_hit_rates() {
 #[test]
 fn test_router_panel_renders_latency_p50_p95_p99() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(normal_router_snapshot())),
     )
     .unwrap();
@@ -286,7 +315,11 @@ fn test_router_panel_renders_latency_p50_p95_p99() {
 #[test]
 fn test_router_panel_renders_all_three_routers_with_data() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(normal_router_snapshot())),
     )
     .unwrap();
@@ -308,7 +341,11 @@ fn test_router_panel_renders_all_three_routers_with_data() {
 fn test_router_panel_renders_utilization_bar() {
     // 进度条应包含 [====---] 形式的字符
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(normal_router_snapshot())),
     )
     .unwrap();
@@ -336,7 +373,11 @@ fn test_router_panel_zero_hit_rate_renders_empty_bar() {
         ..Default::default()
     };
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(snapshot)),
     )
     .unwrap();
@@ -359,7 +400,11 @@ fn test_router_panel_zero_hit_rate_renders_empty_bar() {
 #[test]
 fn test_router_panel_renders_hot_capabilities() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(normal_router_snapshot())),
     )
     .unwrap();
@@ -390,7 +435,11 @@ fn test_router_panel_empty_hot_capabilities_renders_placeholder() {
         ..Default::default()
     };
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(snapshot)),
     )
     .unwrap();
@@ -413,7 +462,11 @@ fn test_router_panel_empty_hot_capabilities_renders_placeholder() {
 fn test_router_panel_top_k_truncates_to_ten() {
     // 注入 15 个 capability,验证 Top-K 截断到 10
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(many_capabilities_snapshot())),
     )
     .unwrap();
@@ -436,7 +489,11 @@ fn test_router_panel_top_k_truncates_to_ten() {
 fn test_router_panel_top_k_keeps_highest_frequency() {
     // 验证 Top-K 排序:最高频的应在列表前部
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(many_capabilities_snapshot())),
     )
     .unwrap();
@@ -465,7 +522,11 @@ fn test_router_panel_top_k_keeps_highest_frequency() {
 fn test_router_panel_low_hit_rate_renders_without_panic() {
     // 三路由器命中率均 < 0.6,渲染不应 panic
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(low_hit_rate_snapshot())),
     )
     .unwrap();
@@ -515,7 +576,11 @@ fn test_router_panel_threshold_boundary_60_percent() {
         ..Default::default()
     };
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(RouterTestSource::new(snapshot)),
     )
     .unwrap();

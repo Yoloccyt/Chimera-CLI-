@@ -38,6 +38,11 @@ impl CommandPalette {
         let (prefix, title) = match state.input_mode {
             InputMode::Command => (":".to_string(), " Command ".to_string()),
             InputMode::Search => ("/".to_string(), " Search ".to_string()),
+            // Concord W2:斜杠命令模式底部栏(补全列表由 slash_surface 渲染于上方)
+            InputMode::Slash => (
+                "/".to_string(),
+                crate::t!("slash.surface.title").to_string(),
+            ),
             // Insert(M3a):底部显示聊天输入行 `> {buffer}`(复用同一渲染路径)
             InputMode::Insert => {
                 if let Some(pending) = &state.pending_action {
@@ -112,8 +117,10 @@ impl CommandPalette {
                 }
                 None
             }
-            // Insert 不经命令面板提交(由 TuiApp::handle_insert_key 处理),此处仅为穷尽匹配
+            // Insert 不经命令面板提交(由 TuiApp::handle_insert_key 处理),此处仅为穷尽匹配;
+            // Slash 同理(Concord W2:由 TuiApp::submit_slash 处理)
             InputMode::Insert => None,
+            InputMode::Slash => None,
             InputMode::Normal => None,
         };
 
@@ -131,6 +138,13 @@ impl CommandPalette {
     /// - `filter <topic>`:设置主题过滤器
     /// - `level <severity>`:设置级别过滤器
     /// - `refresh`:发布 `RefreshStateRequested` 控制请求事件,由上游决定是否重载/清空过滤器
+    ///
+    /// Concord W2:本解析器保留为遗留命令回退通道——斜杠解析未命中时经
+    /// `parse_legacy` 桥接到此处,保证 `:` 废弃窗口期零功能断裂。
+    pub(crate) fn parse_legacy(input: &str, state: &mut TuiState) -> Option<TuiCommand> {
+        Self::parse_command(input, state)
+    }
+
     fn parse_command(input: &str, state: &mut TuiState) -> Option<TuiCommand> {
         let cmd = input.strip_prefix(':').unwrap_or(input).trim();
         if cmd.is_empty() {
@@ -351,7 +365,9 @@ impl CommandPalette {
 }
 
 /// 校验主题参数是否合法
-fn is_valid_topic(topic: &str) -> bool {
+///
+/// Concord W2:`pub(crate)` 供斜杠执行层复用同一校验(避免双源漂移)。
+pub(crate) fn is_valid_topic(topic: &str) -> bool {
     matches!(
         topic.to_lowercase().as_str(),
         "quest" | "security" | "memory" | "health" | "parliament" | "budget" | "system"

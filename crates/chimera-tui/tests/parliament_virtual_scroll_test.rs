@@ -67,7 +67,15 @@ fn app_with_1000_votes() -> TuiApp {
         snapshot,
         config: DataSourceConfig::default(),
     };
-    let mut app = TuiApp::with_data_source(TuiConfig::default(), Box::new(ds)).unwrap();
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(ds),
+    )
+    .unwrap();
     app.switch_panel_to(PanelId::Parliament);
     app
 }

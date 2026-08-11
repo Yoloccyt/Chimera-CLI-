@@ -23,7 +23,16 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
 /// 验证连续 render 后 fps 被更新(非零)
 #[test]
 fn fps_updated_after_consecutive_renders() {
-    let mut app = TuiApp::new(TuiConfig::default()).unwrap();
+    let mut app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     let backend = ratatui::backend::TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
 
@@ -43,7 +52,16 @@ fn fps_updated_after_consecutive_renders() {
 /// 验证 fps 不会超过显示上限 999
 #[test]
 fn fps_within_display_max() {
-    let mut app = TuiApp::new(TuiConfig::default()).unwrap();
+    let mut app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     let backend = ratatui::backend::TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
 
@@ -65,7 +83,16 @@ fn status_bar_contains_fps_text() {
     // i18n:状态栏标签随 locale 切换(默认中文为"帧率",CJK 双宽不利断言);
     // 固定英文 locale 以稳定断言 ASCII "FPS" 标签。本二进制内其余测试不断言 chrome,不受影响。
     chimera_tui::set_locale(chimera_tui::Locale::En);
-    let mut app = TuiApp::new(TuiConfig::default()).unwrap();
+    let mut app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
 
     // 渲染几帧让 FPS 有值
     for _ in 0..5 {

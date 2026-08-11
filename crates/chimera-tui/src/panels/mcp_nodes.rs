@@ -343,7 +343,10 @@ impl Panel for McpNodesPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("↑/↓", "导航"), ("R", "刷新")]
+        vec![
+            ("↑/↓", crate::t!("shortcut.navigate")),
+            ("R", crate::t!("shortcut.refresh")),
+        ]
     }
 }
 

@@ -12,7 +12,16 @@ use chimera_tui::{PanelId, TuiApp, TuiConfig};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn make_app() -> TuiApp {
-    TuiApp::new(TuiConfig::default()).unwrap()
+    {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    }
 }
 
 #[test]

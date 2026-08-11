@@ -443,10 +443,10 @@ impl Panel for ParliamentPanel {
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         vec![
-            ("↑/↓", "导航"),
+            ("↑/↓", crate::t!("shortcut.navigate")),
             // I-9/快捷键诚实性:Enter 实际打开事件详情弹窗;V/Y/N/A 投票
             // 无面板内按键分支(需 proposal_id,当前只能 `:vote` 命令),移除虚假提示。
-            ("Enter", "详情"),
+            ("Enter", crate::t!("shortcut.details")),
         ]
     }
 }

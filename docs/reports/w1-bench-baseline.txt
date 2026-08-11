@@ -1,0 +1,520 @@
+[data_pipeline_bench]     Finished `bench` profile [optimized] target(s) in 5.11s
+[data_pipeline_bench]      Running benches\data_pipeline_bench.rs (target\release\deps\data_pipeline_bench-15f15a475fd08254.exe)
+[data_pipeline_bench] Gnuplot not found, using plotters backend
+[data_pipeline_bench] Benchmarking data_pipeline_snapshot_latency/250_events_per_tick
+[data_pipeline_bench] Benchmarking data_pipeline_snapshot_latency/250_events_per_tick: Warming up for 3.0000 s
+[data_pipeline_bench] 
+[data_pipeline_bench] Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 48.0s, or reduce sample count to 10.
+[data_pipeline_bench] Benchmarking data_pipeline_snapshot_latency/250_events_per_tick: Collecting 100 samples in estimated 48.044 s (100 iterations)
+[data_pipeline_bench] Benchmarking data_pipeline_snapshot_latency/250_events_per_tick: Analyzing
+[data_pipeline_bench] data_pipeline_snapshot_latency/250_events_per_tick
+[data_pipeline_bench]                         time:   [325.31 ms 326.92 ms 328.66 ms]
+[data_pipeline_bench] Found 6 outliers among 100 measurements (6.00%)
+[data_pipeline_bench]   5 (5.00%) high mild
+[data_pipeline_bench]   1 (1.00%) high severe
+[data_pipeline_bench] 
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/125
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/125: Warming up for 3.0000 s
+[data_pipeline_bench] 
+[data_pipeline_bench] Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 33.1s, or reduce sample count to 10.
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/125: Collecting 100 samples in estimated 33.103 s (100 iterations)
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/125: Analyzing
+[data_pipeline_bench] data_pipeline_throughput/125
+[data_pipeline_bench]                         time:   [323.63 ms 324.71 ms 325.85 ms]
+[data_pipeline_bench]                         thrpt:  [383.62  elem/s 384.96  elem/s 386.24  elem/s]
+[data_pipeline_bench] Found 3 outliers among 100 measurements (3.00%)
+[data_pipeline_bench]   3 (3.00%) high mild
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/250
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/250: Warming up for 3.0000 s
+[data_pipeline_bench] 
+[data_pipeline_bench] Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 32.5s, or reduce sample count to 10.
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/250: Collecting 100 samples in estimated 32.493 s (100 iterations)
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/250: Analyzing
+[data_pipeline_bench] data_pipeline_throughput/250
+[data_pipeline_bench]                         time:   [324.93 ms 326.43 ms 327.97 ms]
+[data_pipeline_bench]                         thrpt:  [762.27  elem/s 765.86  elem/s 769.39  elem/s]
+[data_pipeline_bench] Found 3 outliers among 100 measurements (3.00%)
+[data_pipeline_bench]   3 (3.00%) high mild
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/500
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/500: Warming up for 3.0000 s
+[data_pipeline_bench] 
+[data_pipeline_bench] Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 33.8s, or reduce sample count to 10.
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/500: Collecting 100 samples in estimated 33.845 s (100 iterations)
+[data_pipeline_bench] Benchmarking data_pipeline_throughput/500: Analyzing
+[data_pipeline_bench] data_pipeline_throughput/500
+[data_pipeline_bench]                         time:   [327.35 ms 328.91 ms 330.59 ms]
+[data_pipeline_bench]                         thrpt:  [1.5124 Kelem/s 1.5202 Kelem/s 1.5274 Kelem/s]
+[data_pipeline_bench] Found 7 outliers among 100 measurements (7.00%)
+[data_pipeline_bench]   5 (5.00%) high mild
+[data_pipeline_bench]   2 (2.00%) high severe
+[data_pipeline_bench] 
+[data_pipeline_bench] Benchmarking snapshot_read_latency/after_250_events_tick
+[data_pipeline_bench] Benchmarking snapshot_read_latency/after_250_events_tick: Warming up for 3.0000 s
+[data_pipeline_bench] Benchmarking snapshot_read_latency/after_250_events_tick: Collecting 100 samples in estimated 5.0000 s (710M iterations)
+[data_pipeline_bench] Benchmarking snapshot_read_latency/after_250_events_tick: Analyzing
+[data_pipeline_bench] snapshot_read_latency/after_250_events_tick
+[data_pipeline_bench]                         time:   [7.0424 ns 7.1659 ns 7.3079 ns]
+[data_pipeline_bench] Found 9 outliers among 100 measurements (9.00%)
+[data_pipeline_bench]   5 (5.00%) high mild
+[data_pipeline_bench]   4 (4.00%) high severe
+[data_pipeline_bench] 
+[data_pipeline_bench] Benchmarking push_history_scale/64
+[data_pipeline_bench] Benchmarking push_history_scale/64: Warming up for 3.0000 s
+[data_pipeline_bench] Benchmarking push_history_scale/64: Collecting 100 samples in estimated 5.0004 s (38M iterations)
+[data_pipeline_bench] Benchmarking push_history_scale/64: Analyzing
+[data_pipeline_bench] push_history_scale/64   time:   [131.30 ns 133.93 ns 136.80 ns]
+[data_pipeline_bench] Found 9 outliers among 100 measurements (9.00%)
+[data_pipeline_bench]   9 (9.00%) high mild
+[data_pipeline_bench] Benchmarking push_history_scale/1024
+[data_pipeline_bench] Benchmarking push_history_scale/1024: Warming up for 3.0000 s
+[data_pipeline_bench] Benchmarking push_history_scale/1024: Collecting 100 samples in estimated 5.0002 s (36M iterations)
+[data_pipeline_bench] Benchmarking push_history_scale/1024: Analyzing
+[data_pipeline_bench] push_history_scale/1024 time:   [129.29 ns 131.44 ns 133.74 ns]
+[data_pipeline_bench] Found 7 outliers among 100 measurements (7.00%)
+[data_pipeline_bench]   3 (3.00%) high mild
+[data_pipeline_bench]   4 (4.00%) high severe
+[data_pipeline_bench] Benchmarking push_history_scale/16384
+[data_pipeline_bench] Benchmarking push_history_scale/16384: Warming up for 3.0000 s
+[data_pipeline_bench] Benchmarking push_history_scale/16384: Collecting 100 samples in estimated 5.0003 s (31M iterations)
+[data_pipeline_bench] Benchmarking push_history_scale/16384: Analyzing
+[data_pipeline_bench] push_history_scale/16384
+[data_pipeline_bench]                         time:   [170.75 ns 182.75 ns 196.70 ns]
+[data_pipeline_bench] Found 1 outliers among 100 measurements (1.00%)
+[data_pipeline_bench]   1 (1.00%) high mild
+[data_pipeline_bench] 
+[data_pipeline_bench] Benchmarking history_backfill_latency/0
+[data_pipeline_bench] Benchmarking history_backfill_latency/0: Warming up for 3.0000 s
+[data_pipeline_bench] Benchmarking history_backfill_latency/0: Collecting 100 samples in estimated 5.1060 s (152k iterations)
+[data_pipeline_bench] Benchmarking history_backfill_latency/0: Analyzing
+[data_pipeline_bench] history_backfill_latency/0
+[data_pipeline_bench]                         time:   [37.241 碌s 39.487 碌s 41.616 碌s]
+[data_pipeline_bench] Found 8 outliers among 100 measurements (8.00%)
+[data_pipeline_bench]   8 (8.00%) high mild
+[data_pipeline_bench] Benchmarking history_backfill_latency/3000
+[data_pipeline_bench] Benchmarking history_backfill_latency/3000: Warming up for 3.0000 s
+[data_pipeline_bench] Benchmarking history_backfill_latency/3000: Collecting 100 samples in estimated 5.1526 s (35k iterations)
+[data_pipeline_bench] Benchmarking history_backfill_latency/3000: Analyzing
+[data_pipeline_bench] history_backfill_latency/3000
+[data_pipeline_bench]                         time:   [140.19 碌s 142.43 碌s 144.74 碌s]
+[data_pipeline_bench] Found 4 outliers among 100 measurements (4.00%)
+[data_pipeline_bench]   3 (3.00%) high mild
+[data_pipeline_bench]   1 (1.00%) high severe
+[data_pipeline_bench] 
+[panels_scale_bench]     Finished `bench` profile [optimized] target(s) in 1.96s
+[panels_scale_bench]      Running benches\panels_scale_bench.rs (target\release\deps\panels_scale_bench-8c349f14f26e2db6.exe)
+[panels_scale_bench] Gnuplot not found, using plotters backend
+[panels_scale_bench] Benchmarking log_content_10k
+[panels_scale_bench] Benchmarking log_content_10k: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking log_content_10k: Collecting 100 samples in estimated 5.3026 s (56k iterations)
+[panels_scale_bench] Benchmarking log_content_10k: Analyzing
+[panels_scale_bench] log_content_10k         time:   [67.422 碌s 68.353 碌s 69.531 碌s]
+[panels_scale_bench] Found 17 outliers among 100 measurements (17.00%)
+[panels_scale_bench]   7 (7.00%) high mild
+[panels_scale_bench]   10 (10.00%) high severe
+[panels_scale_bench] 
+[panels_scale_bench] Benchmarking event_stream_content_10k
+[panels_scale_bench] Benchmarking event_stream_content_10k: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking event_stream_content_10k: Collecting 100 samples in estimated 5.0640 s (71k iterations)
+[panels_scale_bench] Benchmarking event_stream_content_10k: Analyzing
+[panels_scale_bench] event_stream_content_10k
+[panels_scale_bench]                         time:   [102.02 碌s 112.05 碌s 121.08 碌s]
+[panels_scale_bench] Found 17 outliers among 100 measurements (17.00%)
+[panels_scale_bench]   14 (14.00%) high mild
+[panels_scale_bench]   3 (3.00%) high severe
+[panels_scale_bench] 
+[panels_scale_bench] Benchmarking event_stream_keyword_filter_10k
+[panels_scale_bench] Benchmarking event_stream_keyword_filter_10k: Warming up for 3.0000 s
+[panels_scale_bench] 
+[panels_scale_bench] Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 9.4s, enable flat sampling, or reduce sample count to 50.
+[panels_scale_bench] Benchmarking event_stream_keyword_filter_10k: Collecting 100 samples in estimated 9.4238 s (5050 iterations)
+[panels_scale_bench] Benchmarking event_stream_keyword_filter_10k: Analyzing
+[panels_scale_bench] event_stream_keyword_filter_10k
+[panels_scale_bench]                         time:   [1.7590 ms 1.7966 ms 1.8384 ms]
+[panels_scale_bench] Found 13 outliers among 100 measurements (13.00%)
+[panels_scale_bench]   6 (6.00%) high mild
+[panels_scale_bench]   7 (7.00%) high severe
+[panels_scale_bench] 
+[panels_scale_bench] Benchmarking event_stream_keyword_filter_legacy_10k
+[panels_scale_bench] Benchmarking event_stream_keyword_filter_legacy_10k: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking event_stream_keyword_filter_legacy_10k: Collecting 100 samples in estimated 5.0005 s (500 iterations)
+[panels_scale_bench] Benchmarking event_stream_keyword_filter_legacy_10k: Analyzing
+[panels_scale_bench] event_stream_keyword_filter_legacy_10k
+[panels_scale_bench]                         time:   [10.974 ms 11.448 ms 11.953 ms]
+[panels_scale_bench] Found 1 outliers among 100 measurements (1.00%)
+[panels_scale_bench]   1 (1.00%) high mild
+[panels_scale_bench] 
+[panels_scale_bench] Benchmarking router_content_10k
+[panels_scale_bench] Benchmarking router_content_10k: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking router_content_10k: Collecting 100 samples in estimated 5.0121 s (1.4M iterations)
+[panels_scale_bench] Benchmarking router_content_10k: Analyzing
+[panels_scale_bench] router_content_10k      time:   [3.5559 碌s 3.6282 碌s 3.7257 碌s]
+[panels_scale_bench] Found 8 outliers among 100 measurements (8.00%)
+[panels_scale_bench]   1 (1.00%) low mild
+[panels_scale_bench]   2 (2.00%) high mild
+[panels_scale_bench]   5 (5.00%) high severe
+[panels_scale_bench] 
+[panels_scale_bench] Benchmarking log_filter_cache/cold_10k
+[panels_scale_bench] Benchmarking log_filter_cache/cold_10k: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking log_filter_cache/cold_10k: Collecting 100 samples in estimated 5.0165 s (1500 iterations)
+[panels_scale_bench] Benchmarking log_filter_cache/cold_10k: Analyzing
+[panels_scale_bench] log_filter_cache/cold_10k
+[panels_scale_bench]                         time:   [1.7443 ms 1.8007 ms 1.8645 ms]
+[panels_scale_bench] Found 12 outliers among 100 measurements (12.00%)
+[panels_scale_bench]   3 (3.00%) high mild
+[panels_scale_bench]   9 (9.00%) high severe
+[panels_scale_bench] Benchmarking log_filter_cache/hit_10k
+[panels_scale_bench] Benchmarking log_filter_cache/hit_10k: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking log_filter_cache/hit_10k: Collecting 100 samples in estimated 5.0006 s (29M iterations)
+[panels_scale_bench] Benchmarking log_filter_cache/hit_10k: Analyzing
+[panels_scale_bench] log_filter_cache/hit_10k
+[panels_scale_bench]                         time:   [173.33 ns 175.17 ns 177.97 ns]
+[panels_scale_bench] Found 7 outliers among 100 measurements (7.00%)
+[panels_scale_bench]   4 (4.00%) high mild
+[panels_scale_bench]   3 (3.00%) high severe
+[panels_scale_bench] 
+[panels_scale_bench] Benchmarking quest_render_cache/cold_100
+[panels_scale_bench] Benchmarking quest_render_cache/cold_100: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking quest_render_cache/cold_100: Collecting 100 samples in estimated 6.0302 s (15k iterations)
+[panels_scale_bench] Benchmarking quest_render_cache/cold_100: Analyzing
+[panels_scale_bench] quest_render_cache/cold_100
+[panels_scale_bench]                         time:   [400.74 碌s 412.65 碌s 426.76 碌s]
+[panels_scale_bench] Found 8 outliers among 100 measurements (8.00%)
+[panels_scale_bench]   3 (3.00%) high mild
+[panels_scale_bench]   5 (5.00%) high severe
+[panels_scale_bench] Benchmarking quest_render_cache/hit_100
+[panels_scale_bench] Benchmarking quest_render_cache/hit_100: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking quest_render_cache/hit_100: Collecting 100 samples in estimated 5.4260 s (45k iterations)
+[panels_scale_bench] Benchmarking quest_render_cache/hit_100: Analyzing
+[panels_scale_bench] quest_render_cache/hit_100
+[panels_scale_bench]                         time:   [112.13 碌s 113.66 碌s 115.31 碌s]
+[panels_scale_bench] Found 9 outliers among 100 measurements (9.00%)
+[panels_scale_bench]   5 (5.00%) high mild
+[panels_scale_bench]   4 (4.00%) high severe
+[panels_scale_bench] 
+[panels_scale_bench] Benchmarking parliament_render_cache/cold_100
+[panels_scale_bench] Benchmarking parliament_render_cache/cold_100: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking parliament_render_cache/cold_100: Collecting 100 samples in estimated 5.1916 s (50k iterations)
+[panels_scale_bench] Benchmarking parliament_render_cache/cold_100: Analyzing
+[panels_scale_bench] parliament_render_cache/cold_100
+[panels_scale_bench]                         time:   [104.63 碌s 108.81 碌s 114.01 碌s]
+[panels_scale_bench] Found 8 outliers among 100 measurements (8.00%)
+[panels_scale_bench]   2 (2.00%) high mild
+[panels_scale_bench]   6 (6.00%) high severe
+[panels_scale_bench] Benchmarking parliament_render_cache/hit_100
+[panels_scale_bench] Benchmarking parliament_render_cache/hit_100: Warming up for 3.0000 s
+[panels_scale_bench] Benchmarking parliament_render_cache/hit_100: Collecting 100 samples in estimated 5.4811 s (40k iterations)
+[panels_scale_bench] Benchmarking parliament_render_cache/hit_100: Analyzing
+[panels_scale_bench] parliament_render_cache/hit_100
+[panels_scale_bench]                         time:   [87.767 碌s 89.839 碌s 92.442 碌s]
+[panels_scale_bench] Found 1 outliers among 100 measurements (1.00%)
+[panels_scale_bench]   1 (1.00%) high mild
+[panels_scale_bench] 
+[v3_output_bench]     Finished `bench` profile [optimized] target(s) in 1.24s
+[v3_output_bench]      Running benches\v3_output_bench.rs (target\release\deps\v3_output_bench-063409a615ffa52d.exe)
+[v3_output_bench] Gnuplot not found, using plotters backend
+[v3_output_bench] Benchmarking v3_output/identical_80x24
+[v3_output_bench] Benchmarking v3_output/identical_80x24: Warming up for 3.0000 s
+[v3_output_bench] Benchmarking v3_output/identical_80x24: Collecting 100 samples in estimated 5.0114 s (318k iterations)
+[v3_output_bench] Benchmarking v3_output/identical_80x24: Analyzing
+[v3_output_bench] v3_output/identical_80x24
+[v3_output_bench]                         time:   [16.009 碌s 16.297 碌s 16.593 碌s]
+[v3_output_bench] Found 10 outliers among 100 measurements (10.00%)
+[v3_output_bench]   6 (6.00%) high mild
+[v3_output_bench]   4 (4.00%) high severe
+[v3_output_bench] Benchmarking v3_output/changed_120x40
+[v3_output_bench] Benchmarking v3_output/changed_120x40: Warming up for 3.0000 s
+[v3_output_bench] Benchmarking v3_output/changed_120x40: Collecting 100 samples in estimated 5.0917 s (126k iterations)
+[v3_output_bench] Benchmarking v3_output/changed_120x40: Analyzing
+[v3_output_bench] v3_output/changed_120x40
+[v3_output_bench]                         time:   [39.842 碌s 40.172 碌s 40.559 碌s]
+[v3_output_bench] Found 7 outliers among 100 measurements (7.00%)
+[v3_output_bench]   4 (4.00%) high mild
+[v3_output_bench]   3 (3.00%) high severe
+[v3_output_bench] 
+[render_bench]     Finished `bench` profile [optimized] target(s) in 1.37s
+[render_bench]      Running benches\render_bench.rs (target\release\deps\render_bench-e6c0542f67060070.exe)
+[render_bench] Gnuplot not found, using plotters backend
+[render_bench] Benchmarking render_all_panels/80x24_8panels
+[render_bench] Benchmarking render_all_panels/80x24_8panels: Warming up for 3.0000 s
+[render_bench] Benchmarking render_all_panels/80x24_8panels: Collecting 100 samples in estimated 6.0493 s (25k iterations)
+[render_bench] Benchmarking render_all_panels/80x24_8panels: Analyzing
+[render_bench] render_all_panels/80x24_8panels
+[render_bench]                         time:   [183.36 碌s 186.13 碌s 189.65 碌s]
+[render_bench] Found 1 outliers among 100 measurements (1.00%)
+[render_bench]   1 (1.00%) high severe
+[render_bench] 
+[render_bench] Benchmarking render_each_panel/panel/Quest
+[render_bench] Benchmarking render_each_panel/panel/Quest: Warming up for 3.0000 s
+[render_bench] Benchmarking render_each_panel/panel/Quest: Collecting 100 samples in estimated 5.7076 s (20k iterations)
+[render_bench] Benchmarking render_each_panel/panel/Quest: Analyzing
+[render_bench] render_each_panel/panel/Quest
+[render_bench]                         time:   [202.32 碌s 220.97 碌s 241.43 碌s]
+[render_bench] Found 10 outliers among 100 measurements (10.00%)
+[render_bench]   10 (10.00%) high severe
+[render_bench] Benchmarking render_each_panel/panel/Parliament
+[render_bench] Benchmarking render_each_panel/panel/Parliament: Warming up for 3.0000 s
+[render_bench] Benchmarking render_each_panel/panel/Parliament: Collecting 100 samples in estimated 5.0073 s (25k iterations)
+[render_bench] Benchmarking render_each_panel/panel/Parliament: Analyzing
+[render_bench] render_each_panel/panel/Parliament
+[render_bench]                         time:   [200.74 碌s 214.00 碌s 228.99 碌s]
+[render_bench] Found 8 outliers among 100 measurements (8.00%)
+[render_bench]   6 (6.00%) high mild
+[render_bench]   2 (2.00%) high severe
+[render_bench] Benchmarking render_each_panel/panel/Budget
+[render_bench] Benchmarking render_each_panel/panel/Budget: Warming up for 3.0000 s
+[render_bench] Benchmarking render_each_panel/panel/Budget: Collecting 100 samples in estimated 5.6041 s (30k iterations)
+[render_bench] Benchmarking render_each_panel/panel/Budget: Analyzing
+[render_bench] render_each_panel/panel/Budget
+[render_bench]                         time:   [163.99 碌s 169.61 碌s 176.57 碌s]
+[render_bench] Found 9 outliers among 100 measurements (9.00%)
+[render_bench]   4 (4.00%) high mild
+[render_bench]   5 (5.00%) high severe
+[render_bench] Benchmarking render_each_panel/panel/Memory
+[render_bench] Benchmarking render_each_panel/panel/Memory: Warming up for 3.0000 s
+[render_bench] Benchmarking render_each_panel/panel/Memory: Collecting 100 samples in estimated 5.3836 s (15k iterations)
+[render_bench] Benchmarking render_each_panel/panel/Memory: Analyzing
+[render_bench] render_each_panel/panel/Memory
+[render_bench]                         time:   [191.37 碌s 200.69 碌s 212.83 碌s]
+[render_bench] Found 1 outliers among 100 measurements (1.00%)
+[render_bench]   1 (1.00%) high mild
+[render_bench] Benchmarking render_each_panel/panel/Security
+[render_bench] Benchmarking render_each_panel/panel/Security: Warming up for 3.0000 s
+[render_bench] Benchmarking render_each_panel/panel/Security: Collecting 100 samples in estimated 5.3726 s (35k iterations)
+[render_bench] Benchmarking render_each_panel/panel/Security: Analyzing
+[render_bench] render_each_panel/panel/Security
+[render_bench]                         time:   [153.36 碌s 155.67 碌s 158.39 碌s]
+[render_bench] Found 5 outliers among 100 measurements (5.00%)
+[render_bench]   4 (4.00%) high mild
+[render_bench]   1 (1.00%) high severe
+[render_bench] Benchmarking render_each_panel/panel/Health
+[render_bench] Benchmarking render_each_panel/panel/Health: Warming up for 3.0000 s
+[render_bench] Benchmarking render_each_panel/panel/Health: Collecting 100 samples in estimated 5.3510 s (30k iterations)
+[render_bench] Benchmarking render_each_panel/panel/Health: Analyzing
+[render_bench] render_each_panel/panel/Health
+[render_bench]                         time:   [196.85 碌s 215.89 碌s 235.46 碌s]
+[render_bench] Found 12 outliers among 100 measurements (12.00%)
+[render_bench]   4 (4.00%) high mild
+[render_bench]   8 (8.00%) high severe
+[render_bench] Benchmarking render_each_panel/panel/Log
+[render_bench] Benchmarking render_each_panel/panel/Log: Warming up for 3.0000 s
+[render_bench] Benchmarking render_each_panel/panel/Log: Collecting 100 samples in estimated 6.0559 s (20k iterations)
+[render_bench] Benchmarking render_each_panel/panel/Log: Analyzing
+[render_bench] render_each_panel/panel/Log
+[render_bench]                         time:   [188.01 碌s 191.24 碌s 194.84 碌s]
+[render_bench] Found 10 outliers among 100 measurements (10.00%)
+[render_bench]   6 (6.00%) high mild
+[render_bench]   4 (4.00%) high severe
+[render_bench] Benchmarking render_each_panel/panel/Help
+[render_bench] Benchmarking render_each_panel/panel/Help: Warming up for 3.0000 s
+[render_bench] Benchmarking render_each_panel/panel/Help: Collecting 100 samples in estimated 5.3956 s (30k iterations)
+[render_bench] Benchmarking render_each_panel/panel/Help: Analyzing
+[render_bench] render_each_panel/panel/Help
+[render_bench]                         time:   [176.70 碌s 179.83 碌s 183.55 碌s]
+[render_bench] Found 8 outliers among 100 measurements (8.00%)
+[render_bench]   4 (4.00%) high mild
+[render_bench]   4 (4.00%) high severe
+[render_bench] 
+[render_bench] Benchmarking render_ide_three_panes/80x24_3panes
+[render_bench] Benchmarking render_ide_three_panes/80x24_3panes: Warming up for 3.0000 s
+[render_bench] Benchmarking render_ide_three_panes/80x24_3panes: Collecting 100 samples in estimated 5.2659 s (25k iterations)
+[render_bench] Benchmarking render_ide_three_panes/80x24_3panes: Analyzing
+[render_bench] render_ide_three_panes/80x24_3panes
+[render_bench]                         time:   [214.54 碌s 220.96 碌s 228.26 碌s]
+[render_bench] Found 10 outliers among 100 measurements (10.00%)
+[render_bench]   9 (9.00%) high mild
+[render_bench]   1 (1.00%) high severe
+[render_bench] 
+[diff_engine_bench]     Finished `bench` profile [optimized] target(s) in 1.50s
+[diff_engine_bench]      Running benches\diff_engine_bench.rs (target\release\deps\diff_engine_bench-2b53b24a86d9f4a9.exe)
+[diff_engine_bench] Gnuplot not found, using plotters backend
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/80x24
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/80x24: Warming up for 3.0000 s
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/80x24: Collecting 100 samples in estimated 5.1201 s (207k iterations)
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/80x24: Analyzing
+[diff_engine_bench] diff_incremental_5pct/size/80x24
+[diff_engine_bench]                         time:   [16.788 碌s 17.346 碌s 18.054 碌s]
+[diff_engine_bench] Found 4 outliers among 100 measurements (4.00%)
+[diff_engine_bench]   4 (4.00%) high mild
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/120x40
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/120x40: Warming up for 3.0000 s
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/120x40: Collecting 100 samples in estimated 5.1674 s (131k iterations)
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/120x40: Analyzing
+[diff_engine_bench] diff_incremental_5pct/size/120x40
+[diff_engine_bench]                         time:   [39.792 碌s 40.256 碌s 40.847 碌s]
+[diff_engine_bench] Found 10 outliers among 100 measurements (10.00%)
+[diff_engine_bench]   10 (10.00%) high severe
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/200x50
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/200x50: Warming up for 3.0000 s
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/200x50: Collecting 100 samples in estimated 5.3201 s (61k iterations)
+[diff_engine_bench] Benchmarking diff_incremental_5pct/size/200x50: Analyzing
+[diff_engine_bench] diff_incremental_5pct/size/200x50
+[diff_engine_bench]                         time:   [117.80 碌s 126.10 碌s 133.48 碌s]
+[diff_engine_bench] Found 1 outliers among 100 measurements (1.00%)
+[diff_engine_bench]   1 (1.00%) high mild
+[diff_engine_bench] 
+[diff_engine_bench] Benchmarking diff_full_redraw/size/80x24
+[diff_engine_bench] Benchmarking diff_full_redraw/size/80x24: Warming up for 3.0000 s
+[diff_engine_bench] Benchmarking diff_full_redraw/size/80x24: Collecting 100 samples in estimated 5.0966 s (222k iterations)
+[diff_engine_bench] Benchmarking diff_full_redraw/size/80x24: Analyzing
+[diff_engine_bench] diff_full_redraw/size/80x24
+[diff_engine_bench]                         time:   [18.822 碌s 18.892 碌s 18.965 碌s]
+[diff_engine_bench] Found 5 outliers among 100 measurements (5.00%)
+[diff_engine_bench]   4 (4.00%) high mild
+[diff_engine_bench]   1 (1.00%) high severe
+[diff_engine_bench] Benchmarking diff_full_redraw/size/120x40
+[diff_engine_bench] Benchmarking diff_full_redraw/size/120x40: Warming up for 3.0000 s
+[diff_engine_bench] Benchmarking diff_full_redraw/size/120x40: Collecting 100 samples in estimated 5.0695 s (116k iterations)
+[diff_engine_bench] Benchmarking diff_full_redraw/size/120x40: Analyzing
+[diff_engine_bench] diff_full_redraw/size/120x40
+[diff_engine_bench]                         time:   [47.157 碌s 48.746 碌s 50.239 碌s]
+[diff_engine_bench] Found 7 outliers among 100 measurements (7.00%)
+[diff_engine_bench]   5 (5.00%) high mild
+[diff_engine_bench]   2 (2.00%) high severe
+[diff_engine_bench] Benchmarking diff_full_redraw/size/200x50
+[diff_engine_bench] Benchmarking diff_full_redraw/size/200x50: Warming up for 3.0000 s
+[diff_engine_bench] Benchmarking diff_full_redraw/size/200x50: Collecting 100 samples in estimated 5.3003 s (61k iterations)
+[diff_engine_bench] Benchmarking diff_full_redraw/size/200x50: Analyzing
+[diff_engine_bench] diff_full_redraw/size/200x50
+[diff_engine_bench]                         time:   [91.972 碌s 94.586 碌s 97.122 碌s]
+[diff_engine_bench] Found 5 outliers among 100 measurements (5.00%)
+[diff_engine_bench]   3 (3.00%) high mild
+[diff_engine_bench]   2 (2.00%) high severe
+[diff_engine_bench] 
+[streaming_bench]     Finished `bench` profile [optimized] target(s) in 1.23s
+[streaming_bench]      Running benches\streaming_bench.rs (target\release\deps\streaming_bench-95b5e41c9e90e659.exe)
+[streaming_bench] Gnuplot not found, using plotters backend
+[streaming_bench] Benchmarking streaming_single_token/size/80x24
+[streaming_bench] Benchmarking streaming_single_token/size/80x24: Warming up for 3.0000 s
+[streaming_bench] Benchmarking streaming_single_token/size/80x24: Collecting 100 samples in estimated 5.0552 s (384k iterations)
+[streaming_bench] Benchmarking streaming_single_token/size/80x24: Analyzing
+[streaming_bench] streaming_single_token/size/80x24
+[streaming_bench]                         time:   [13.279 碌s 13.413 碌s 13.572 碌s]
+[streaming_bench] Found 7 outliers among 100 measurements (7.00%)
+[streaming_bench]   6 (6.00%) high mild
+[streaming_bench]   1 (1.00%) high severe
+[streaming_bench] Benchmarking streaming_single_token/size/120x40
+[streaming_bench] Benchmarking streaming_single_token/size/120x40: Warming up for 3.0000 s
+[streaming_bench] Benchmarking streaming_single_token/size/120x40: Collecting 100 samples in estimated 5.1605 s (157k iterations)
+[streaming_bench] Benchmarking streaming_single_token/size/120x40: Analyzing
+[streaming_bench] streaming_single_token/size/120x40
+[streaming_bench]                         time:   [32.183 碌s 32.568 碌s 33.027 碌s]
+[streaming_bench] Found 9 outliers among 100 measurements (9.00%)
+[streaming_bench]   4 (4.00%) high mild
+[streaming_bench]   5 (5.00%) high severe
+[streaming_bench] 
+[streaming_bench] Benchmarking streaming_sustained/50_tokens_80x24
+[streaming_bench] Benchmarking streaming_sustained/50_tokens_80x24: Warming up for 3.0000 s
+[streaming_bench] Benchmarking streaming_sustained/50_tokens_80x24: Collecting 100 samples in estimated 6.6522 s (10k iterations)
+[streaming_bench] Benchmarking streaming_sustained/50_tokens_80x24: Analyzing
+[streaming_bench] streaming_sustained/50_tokens_80x24
+[streaming_bench]                         time:   [644.34 碌s 651.06 碌s 659.56 碌s]
+[streaming_bench]                         thrpt:  [75.808 Kelem/s 76.798 Kelem/s 77.598 Kelem/s]
+[streaming_bench] Found 10 outliers among 100 measurements (10.00%)
+[streaming_bench]   6 (6.00%) high mild
+[streaming_bench]   4 (4.00%) high severe
+[streaming_bench] 
+[writer_ansi_bench]     Finished `bench` profile [optimized] target(s) in 1.21s
+[writer_ansi_bench]      Running benches\writer_ansi_bench.rs (target\release\deps\writer_ansi_bench-3e2814482750fbbf.exe)
+[writer_ansi_bench] Gnuplot not found, using plotters backend
+[writer_ansi_bench] Benchmarking writer_ansi/render_full_80x24
+[writer_ansi_bench] Benchmarking writer_ansi/render_full_80x24: Warming up for 3.0000 s
+[writer_ansi_bench] Benchmarking writer_ansi/render_full_80x24: Collecting 100 samples in estimated 5.0445 s (157k iterations)
+[writer_ansi_bench] Benchmarking writer_ansi/render_full_80x24: Analyzing
+[writer_ansi_bench] writer_ansi/render_full_80x24
+[writer_ansi_bench]                         time:   [33.176 碌s 34.117 碌s 35.157 碌s]
+[writer_ansi_bench] Found 7 outliers among 100 measurements (7.00%)
+[writer_ansi_bench]   6 (6.00%) high mild
+[writer_ansi_bench]   1 (1.00%) high severe
+[writer_ansi_bench] 
+[writer_ansi_bench] Benchmarking writer_ansi/render_incremental_5pct
+[writer_ansi_bench] Benchmarking writer_ansi/render_incremental_5pct: Warming up for 3.0000 s
+[writer_ansi_bench] Benchmarking writer_ansi/render_incremental_5pct: Collecting 100 samples in estimated 5.0044 s (874k iterations)
+[writer_ansi_bench] Benchmarking writer_ansi/render_incremental_5pct: Analyzing
+[writer_ansi_bench] writer_ansi/render_incremental_5pct
+[writer_ansi_bench]                         time:   [6.0305 碌s 6.1695 碌s 6.3281 碌s]
+[writer_ansi_bench] Found 1 outliers among 100 measurements (1.00%)
+[writer_ansi_bench]   1 (1.00%) high severe
+[writer_ansi_bench] 
+[v3_pipeline_bench]     Finished `bench` profile [optimized] target(s) in 1.28s
+[v3_pipeline_bench]      Running benches\v3_pipeline_bench.rs (target\release\deps\v3_pipeline_bench-680985a266b2c7fa.exe)
+[v3_pipeline_bench] Gnuplot not found, using plotters backend
+[v3_pipeline_bench] Benchmarking v3_pipeline_full/size/80x24
+[v3_pipeline_bench] Benchmarking v3_pipeline_full/size/80x24: Warming up for 3.0000 s
+[v3_pipeline_bench] Benchmarking v3_pipeline_full/size/80x24: Collecting 100 samples in estimated 5.5617 s (20k iterations)
+[v3_pipeline_bench] Benchmarking v3_pipeline_full/size/80x24: Analyzing
+[v3_pipeline_bench] v3_pipeline_full/size/80x24
+[v3_pipeline_bench]                         time:   [254.73 碌s 257.12 碌s 259.70 碌s]
+[v3_pipeline_bench] Found 7 outliers among 100 measurements (7.00%)
+[v3_pipeline_bench]   6 (6.00%) high mild
+[v3_pipeline_bench]   1 (1.00%) high severe
+[v3_pipeline_bench] Benchmarking v3_pipeline_full/size/200x50
+[v3_pipeline_bench] Benchmarking v3_pipeline_full/size/200x50: Warming up for 3.0000 s
+[v3_pipeline_bench] 
+[v3_pipeline_bench] Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 5.6s, enable flat sampling, or reduce sample count to 60.
+[v3_pipeline_bench] Benchmarking v3_pipeline_full/size/200x50: Collecting 100 samples in estimated 5.6420 s (5050 iterations)
+[v3_pipeline_bench] Benchmarking v3_pipeline_full/size/200x50: Analyzing
+[v3_pipeline_bench] v3_pipeline_full/size/200x50
+[v3_pipeline_bench]                         time:   [1.0260 ms 1.0388 ms 1.0568 ms]
+[v3_pipeline_bench] Found 9 outliers among 100 measurements (9.00%)
+[v3_pipeline_bench]   3 (3.00%) low mild
+[v3_pipeline_bench]   4 (4.00%) high mild
+[v3_pipeline_bench]   2 (2.00%) high severe
+[v3_pipeline_bench] 
+[v3_pipeline_bench] Benchmarking v3_pipeline_draw_only/size/80x24
+[v3_pipeline_bench] Benchmarking v3_pipeline_draw_only/size/80x24: Warming up for 3.0000 s
+[v3_pipeline_bench] Benchmarking v3_pipeline_draw_only/size/80x24: Collecting 100 samples in estimated 5.1761 s (25k iterations)
+[v3_pipeline_bench] Benchmarking v3_pipeline_draw_only/size/80x24: Analyzing
+[v3_pipeline_bench] v3_pipeline_draw_only/size/80x24
+[v3_pipeline_bench]                         time:   [199.59 碌s 201.45 碌s 203.56 碌s]
+[v3_pipeline_bench] Found 5 outliers among 100 measurements (5.00%)
+[v3_pipeline_bench]   2 (2.00%) high mild
+[v3_pipeline_bench]   3 (3.00%) high severe
+[v3_pipeline_bench] Benchmarking v3_pipeline_draw_only/size/200x50
+[v3_pipeline_bench] Benchmarking v3_pipeline_draw_only/size/200x50: Warming up for 3.0000 s
+[v3_pipeline_bench] Benchmarking v3_pipeline_draw_only/size/200x50: Collecting 100 samples in estimated 7.7289 s (10k iterations)
+[v3_pipeline_bench] Benchmarking v3_pipeline_draw_only/size/200x50: Analyzing
+[v3_pipeline_bench] v3_pipeline_draw_only/size/200x50
+[v3_pipeline_bench]                         time:   [749.74 碌s 756.52 碌s 764.19 碌s]
+[v3_pipeline_bench] Found 8 outliers among 100 measurements (8.00%)
+[v3_pipeline_bench]   4 (4.00%) high mild
+[v3_pipeline_bench]   4 (4.00%) high severe
+[v3_pipeline_bench] 
+[v3_pipeline_bench] Benchmarking v3_pipeline_diffed/size/80x24
+[v3_pipeline_bench] Benchmarking v3_pipeline_diffed/size/80x24: Warming up for 3.0000 s
+[v3_pipeline_bench] Benchmarking v3_pipeline_diffed/size/80x24: Collecting 100 samples in estimated 5.8177 s (25k iterations)
+[v3_pipeline_bench] Benchmarking v3_pipeline_diffed/size/80x24: Analyzing
+[v3_pipeline_bench] v3_pipeline_diffed/size/80x24
+[v3_pipeline_bench]                         time:   [229.19 碌s 232.95 碌s 237.61 碌s]
+[v3_pipeline_bench] Found 7 outliers among 100 measurements (7.00%)
+[v3_pipeline_bench]   6 (6.00%) high mild
+[v3_pipeline_bench]   1 (1.00%) high severe
+[v3_pipeline_bench] Benchmarking v3_pipeline_diffed/size/200x50
+[v3_pipeline_bench] Benchmarking v3_pipeline_diffed/size/200x50: Warming up for 3.0000 s
+[v3_pipeline_bench] Benchmarking v3_pipeline_diffed/size/200x50: Collecting 100 samples in estimated 9.0995 s (10k iterations)
+[v3_pipeline_bench] Benchmarking v3_pipeline_diffed/size/200x50: Analyzing
+[v3_pipeline_bench] v3_pipeline_diffed/size/200x50
+[v3_pipeline_bench]                         time:   [879.33 碌s 888.07 碌s 898.56 碌s]
+[v3_pipeline_bench] Found 7 outliers among 100 measurements (7.00%)
+[v3_pipeline_bench]   5 (5.00%) high mild
+[v3_pipeline_bench]   2 (2.00%) high severe
+[v3_pipeline_bench] 
+[v3_pipeline_bench] Benchmarking v3_pipeline_quiet/size/80x24
+[v3_pipeline_bench] Benchmarking v3_pipeline_quiet/size/80x24: Warming up for 3.0000 s
+[v3_pipeline_bench] Benchmarking v3_pipeline_quiet/size/80x24: Collecting 100 samples in estimated 5.8471 s (25k iterations)
+[v3_pipeline_bench] Benchmarking v3_pipeline_quiet/size/80x24: Analyzing
+[v3_pipeline_bench] v3_pipeline_quiet/size/80x24
+[v3_pipeline_bench]                         time:   [225.74 碌s 228.35 碌s 231.81 碌s]
+[v3_pipeline_bench] Found 6 outliers among 100 measurements (6.00%)
+[v3_pipeline_bench]   4 (4.00%) high mild
+[v3_pipeline_bench]   2 (2.00%) high severe
+[v3_pipeline_bench] Benchmarking v3_pipeline_quiet/size/200x50
+[v3_pipeline_bench] Benchmarking v3_pipeline_quiet/size/200x50: Warming up for 3.0000 s
+[v3_pipeline_bench] Benchmarking v3_pipeline_quiet/size/200x50: Collecting 100 samples in estimated 9.0532 s (10k iterations)
+[v3_pipeline_bench] Benchmarking v3_pipeline_quiet/size/200x50: Analyzing
+[v3_pipeline_bench] v3_pipeline_quiet/size/200x50
+[v3_pipeline_bench]                         time:   [878.81 碌s 886.65 碌s 896.67 碌s]
+[v3_pipeline_bench] Found 8 outliers among 100 measurements (8.00%)
+[v3_pipeline_bench]   2 (2.00%) high mild
+[v3_pipeline_bench]   6 (6.00%) high severe
+[v3_pipeline_bench] 
+SUMMARY failed_targets=0

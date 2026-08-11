@@ -130,7 +130,16 @@ fn empty_adapters_snapshot() -> DataSnapshot {
 
 #[test]
 fn test_chtc_panel_id() {
-    let mut app = TuiApp::new(TuiConfig::default()).unwrap();
+    let mut app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
     app.switch_panel_to(PanelId::Chtc);
     assert_eq!(app.current_panel(), PanelId::Chtc);
 }
@@ -138,7 +147,11 @@ fn test_chtc_panel_id() {
 #[test]
 fn test_chtc_panel_renders_title() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(ChtcTestSource::new(five_adapters_snapshot())),
     )
     .unwrap();
@@ -161,7 +174,11 @@ fn test_chtc_panel_renders_title() {
 fn test_chtc_panel_renders_adapter_list_when_non_empty() {
     // P2.5.1 测试点 1:ChtcPanel 渲染包含适配器列表(当 adapters 非空时)
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(ChtcTestSource::new(five_adapters_snapshot())),
     )
     .unwrap();
@@ -197,7 +214,11 @@ fn test_chtc_panel_renders_adapter_list_when_non_empty() {
 fn test_chtc_panel_empty_adapters_shows_placeholder() {
     // P2.5.1 测试点 5:空适配器列表时显示 "No CHTC adapters connected"
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(ChtcTestSource::new(empty_adapters_snapshot())),
     )
     .unwrap();
@@ -220,7 +241,11 @@ fn test_chtc_panel_empty_adapters_shows_placeholder() {
 fn test_chtc_panel_renders_compatibility_scores() {
     // P2.5.1 测试点 2:渲染包含兼容性评分(0-100)
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(ChtcTestSource::new(five_adapters_snapshot())),
     )
     .unwrap();
@@ -380,7 +405,11 @@ fn test_chtc_panel_content_online_offline_status() {
 #[test]
 fn test_chtc_panel_renders_progress_bar() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(ChtcTestSource::new(five_adapters_snapshot())),
     )
     .unwrap();
@@ -407,7 +436,11 @@ fn test_chtc_panel_renders_progress_bar() {
 #[test]
 fn test_chtc_panel_renders_request_distribution() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(ChtcTestSource::new(five_adapters_snapshot())),
     )
     .unwrap();
@@ -426,7 +459,11 @@ fn test_chtc_panel_renders_request_distribution() {
 #[test]
 fn test_chtc_panel_renders_request_types() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(ChtcTestSource::new(five_adapters_snapshot())),
     )
     .unwrap();
@@ -508,7 +545,11 @@ fn test_chtc_panel_handle_key_navigation() {
 #[test]
 fn test_chtc_panel_default_state_renders_without_panic() {
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(ChtcTestSource::new(empty_adapters_snapshot())),
     )
     .unwrap();
@@ -527,7 +568,11 @@ fn test_chtc_panel_default_state_renders_without_panic() {
 fn test_chtc_panel_small_area_renders_without_panic() {
     // 极小渲染区域不应 panic
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(ChtcTestSource::new(five_adapters_snapshot())),
     )
     .unwrap();

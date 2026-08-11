@@ -184,7 +184,7 @@ impl Panel for RouterPanel {
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         // 纯展示面板无列表导航:仅保留真实可达的 R 刷新,移除虚假 ↑/↓ 提示。
-        vec![("R", "刷新")]
+        vec![("R", crate::t!("shortcut.refresh"))]
     }
 }
 
