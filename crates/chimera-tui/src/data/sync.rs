@@ -129,6 +129,33 @@ impl QuestSync {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct BudgetSync {
     metrics: BudgetMetrics,
+    /// 最近一次 BudgetMetricsUpdated 到达的 Unix 毫秒(Concord T1.7)
+    ///
+    /// None = 从未收到更新;配合 `budget_metrics_ttl_ms` 判定指标陈旧,
+    /// 驱动 Budget 面板置灰展示(M0 TODO 闭环)。
+    last_update_ms: Option<u64>,
+}
+
+/// 当前 Unix 毫秒时间戳(sync 内部时钟口径,与 MetricsHistory 一致)
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 预算指标陈旧判定 — 纯函数(Concord T1.7,消费 `budget_metrics_ttl_ms`)
+///
+/// # 语义
+/// - 从未收到更新(`None`)→ 陈旧(面板展示的是默认占位值,必须诚实标注);
+/// - 距上次更新的间隔 **严格大于** ttl → 陈旧(恰等于 ttl 视为新鲜,
+///   边界语义与 proptest 单调性不变量一致);
+/// - `now_ms < last_update`(时钟回拨)→ saturating_sub 归零,判为新鲜。
+pub fn budget_is_stale(last_update_ms: Option<u64>, now_ms: u64, ttl_ms: u64) -> bool {
+    match last_update_ms {
+        None => true,
+        Some(t) => now_ms.saturating_sub(t) > ttl_ms,
+    }
 }
 
 impl BudgetSync {
@@ -139,7 +166,7 @@ impl BudgetSync {
 
     /// 应用单个 NexusEvent,若事件影响预算指标则返回更新后的指标副本
     ///
-    /// - `BudgetMetricsUpdated`:直接替换本地指标。
+    /// - `BudgetMetricsUpdated`:直接替换本地指标并记录到达时刻。
     /// - 其他事件:返回 `None`,状态不变。
     pub fn apply_event(&mut self, event: &NexusEvent) -> Option<BudgetMetrics> {
         match event {
@@ -153,6 +180,7 @@ impl BudgetSync {
                     is_exceeded: metrics.is_exceeded,
                     alert: metrics.alert.clone(),
                 };
+                self.last_update_ms = Some(now_unix_ms());
                 Some(self.metrics.clone())
             }
             _ => None,
@@ -162,6 +190,11 @@ impl BudgetSync {
     /// 获取当前预算指标副本
     pub fn metrics(&self) -> BudgetMetrics {
         self.metrics.clone()
+    }
+
+    /// 最近一次预算更新的 Unix 毫秒(None = 从未收到;Concord T1.7)
+    pub fn last_update_ms(&self) -> Option<u64> {
+        self.last_update_ms
     }
 }
 
@@ -844,6 +877,11 @@ pub struct ChatSync {
     status: ChatStatus,
     streaming: bool,
     max_messages: usize,
+    /// 行闸门(Concord W3 T3.1):流式增量按完整行提交,半行暂存
+    ///
+    /// WHY 置于同步层:闸门是"事件→消息内容"累积的一部分,与 streaming
+    /// 生命周期同归 ChatSync 所有;渲染层(v3 引擎)零改动。
+    gate: super::newline_gate::NewlineGate,
 }
 
 impl ChatSync {
@@ -854,6 +892,7 @@ impl ChatSync {
             status: ChatStatus::Idle,
             streaming: false,
             max_messages,
+            gate: super::newline_gate::NewlineGate::new(),
         }
     }
 
@@ -866,6 +905,8 @@ impl ChatSync {
                     content: query.clone(),
                 });
                 self.streaming = false;
+                // 新一轮交互:重置闸门(上一轮若有未闭合残段不再续接)
+                self.gate.flush();
                 self.enforce_cap();
             }
             NexusEvent::TuiChatResponseChunk { delta, .. } => {
@@ -877,11 +918,24 @@ impl ChatSync {
                     self.streaming = true;
                     self.enforce_cap();
                 }
-                if let Some(last) = self.messages.last_mut() {
-                    last.content.push_str(delta);
+                // Concord W3 T3.1:增量经行闸门,仅完整行追加进消息;
+                // 半行/未闭合 fence 块留存闸门,避免半行闪烁(内容守恒)
+                let committed = self.gate.feed(delta);
+                if !committed.is_empty() {
+                    if let Some(last) = self.messages.last_mut() {
+                        for line in committed {
+                            last.content.push_str(&line);
+                        }
+                    }
                 }
             }
             NexusEvent::TuiChatCompleted { .. } => {
+                // 流结束:冲刷闸门残段(含未闭合 fence 块),不丢内容
+                if let Some(rest) = self.gate.flush() {
+                    if let Some(last) = self.messages.last_mut() {
+                        last.content.push_str(&rest);
+                    }
+                }
                 self.streaming = false;
             }
             NexusEvent::TuiChatStatusChanged { status, .. } => {
@@ -983,5 +1037,51 @@ impl CriticalDroppedSync {
     /// 当前累计丢弃事件数(供 DataSnapshot 同步)
     pub fn count(&self) -> u64 {
         self.count
+    }
+}
+
+#[cfg(test)]
+mod stale_tests {
+    //! Concord T1.7:budget_is_stale 纯判定函数测试(边界 + proptest 单调性)
+    use super::budget_is_stale;
+    use proptest::prelude::*;
+
+    #[test]
+    fn never_updated_is_always_stale() {
+        // 从未收到更新 → 无论 ttl 多大都判陈旧
+        assert!(budget_is_stale(None, 1_000, u64::MAX));
+        assert!(budget_is_stale(None, 0, 0));
+    }
+
+    #[test]
+    fn boundary_equal_ttl_is_fresh() {
+        // 恰等于 ttl → 新鲜(严格 > 语义);ttl+1 → 陈旧
+        assert!(!budget_is_stale(Some(0), 5000, 5000));
+        assert!(budget_is_stale(Some(0), 5001, 5000));
+    }
+
+    #[test]
+    fn clock_rollback_is_fresh() {
+        // now < last_update(时钟回拨)→ saturating_sub 归零 → 新鲜(不谎报)
+        assert!(!budget_is_stale(Some(9000), 1000, 500));
+    }
+
+    proptest! {
+        /// 属性:判定等价于"间隔严格大于 ttl",且对间隔单调不减
+        #[test]
+        fn stale_iff_elapsed_exceeds_ttl_and_monotone(
+            base in 0u64..1_000_000,
+            elapsed in 0u64..1_000_000,
+            ttl in 0u64..1_000_000,
+            extra in 0u64..1_000_000,
+        ) {
+            let now = base.saturating_add(elapsed);
+            prop_assert_eq!(budget_is_stale(Some(base), now, ttl), elapsed > ttl);
+            // 单调性:间隔再增大不可能从陈旧变回新鲜
+            let later = now.saturating_add(extra);
+            if budget_is_stale(Some(base), now, ttl) {
+                prop_assert!(budget_is_stale(Some(base), later, ttl));
+            }
+        }
     }
 }

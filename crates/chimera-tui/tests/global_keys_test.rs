@@ -10,7 +10,16 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// 构造默认 TuiApp(无 event-bus，内存桩数据源)
 fn make_app() -> TuiApp {
-    TuiApp::new(TuiConfig::default()).unwrap()
+    {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    }
 }
 
 /// 构造标准 KeyEvent(Press 状态，无修饰符)
@@ -225,14 +234,16 @@ fn global_keys_question_mark_opens_help_overlay() {
 
 #[test]
 fn global_keys_colon_enters_command_mode() {
+    // Concord W2:`:` 与 `/` 同进斜杠命令模式(`:` 为废弃窗口期别名)
     let mut app = make_app();
     app.handle_key_event(key(KeyCode::Char(':')));
-    assert_eq!(app.state().input_mode, chimera_tui::InputMode::Command);
+    assert_eq!(app.state().input_mode, chimera_tui::InputMode::Slash);
 }
 
 #[test]
 fn global_keys_slash_enters_search_mode() {
+    // Concord W2:`/` 翻转为斜杠命令第一入口(原搜索语义由 /search 承接)
     let mut app = make_app();
     app.handle_key_event(key(KeyCode::Char('/')));
-    assert_eq!(app.state().input_mode, chimera_tui::InputMode::Search);
+    assert_eq!(app.state().input_mode, chimera_tui::InputMode::Slash);
 }

@@ -112,6 +112,26 @@ impl BudgetPanel {
         lines.push(Line::from(""));
         lines.push(Line::from(crate::t!("panel.budget.hint")));
 
+        // Concord T1.7(消费 budget_metrics_ttl_ms):指标陈旧时整体置灰 +
+        // 标题下方插入过期提示——对过期数据给诚实反馈而非伪造新鲜度。
+        if state.budget_metrics_stale {
+            let stale_style = Style::default().fg(Color::DarkGray);
+            for line in &mut lines {
+                for span in &mut line.spans {
+                    span.style = stale_style;
+                }
+            }
+            lines.insert(
+                2,
+                Line::from(Span::styled(
+                    format!("⚠ {}", crate::t!("panel.budget.stale")),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                )),
+            );
+        }
+
         Text::from(lines)
     }
 }
@@ -143,7 +163,7 @@ impl Panel for BudgetPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("R", "刷新")]
+        vec![("R", crate::t!("shortcut.refresh"))]
     }
 }
 

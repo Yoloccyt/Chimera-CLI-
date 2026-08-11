@@ -72,13 +72,60 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
         }
     };
 
+    // Concord T1.5(P4① 接线):TuiBible 四源 Figment 合并(默认→
+    // ~/.chimera/tui_bible.yaml→CHIMERA_BIBLE_* 环境变量→CLI),在 TuiConfig
+    // 持久化加载之后、DataPipeline/TuiApp 构造之前应用,使下游全部消费
+    // 合并后的配置。WHY 损坏文件回退默认而非阻断启动:TuiBible 是体验增强
+    // 配置,不应成为启动单点故障;回退经 warn 日志可观测(错误处理准则)。
+    let tui_config = {
+        let mut cfg = tui_config;
+        match chimera_tui::TuiBible::load() {
+            Ok(bible) => {
+                cfg.apply_bible_overrides(&bible);
+                tracing::info!(
+                    theme = ?bible.theme,
+                    key_bindings = bible.key_bindings.len(),
+                    "TuiBible 四源合并完成并已应用到 TuiConfig"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "TuiBible 加载失败(文件损坏或环境变量非法),回退默认配置"
+                );
+            }
+        }
+        cfg
+    };
+
     // 构建数据管道：将事件聚合为 TUI 可消费的统一快照。
     // tick 间隔来自持久化 TuiConfig(修复 F-4:SetTickInterval 持久化后
     // 下次启动经 from_tui_config 生效;运行时改值见 event_loop 提示语义)。
-    let pipeline = Arc::new(chimera_tui::DataPipeline::new(
-        subscriber,
-        chimera_tui::DataSourceConfig::from_tui_config(&tui_config),
-    ));
+    // Concord T1.6(P4②):接入指标历史持久化层——打开失败(磁盘/权限)时
+    // 降级为无持久化管道并 warn,不阻断启动(错误处理准则)。
+    let pipeline = match chimera_tui::MetricsHistory::open_default().await {
+        Ok(history) => {
+            tracing::debug!(
+                path = %history.db_path().display(),
+                "MetricsHistory 已接线到 DataPipeline(慢同步 1s + 回填 30s)"
+            );
+            Arc::new(chimera_tui::DataPipeline::new_with_history(
+                subscriber,
+                chimera_tui::DataSourceConfig::from_tui_config(&tui_config),
+                Arc::new(history),
+            ))
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "MetricsHistory 打开失败,降级为无持久化管道(趋势图无跨重启回填)"
+            );
+            Arc::new(chimera_tui::DataPipeline::new(
+                subscriber,
+                chimera_tui::DataSourceConfig::from_tui_config(&tui_config),
+            ))
+        }
+    };
 
     // 创建 TUI 应用，使用实时数据管道而非空桩。
     let mut app =

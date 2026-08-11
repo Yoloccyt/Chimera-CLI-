@@ -32,10 +32,11 @@
 //! - 其余事件进入 `latest_events` 日志流,供 Log 面板展示。
 
 pub mod metrics_history;
+pub mod newline_gate;
 pub mod resource_history;
 
 pub(crate) mod snapshot;
-pub(crate) mod sync;
+pub mod sync;
 // WHY pub:data_pipeline_bench(独立 crate)直接调用 `pipeline::push_history`
 // 做容量伸缩基准(评估报告 P0-2 验收:VecDeque 队首淘汰 O(1) 可证伪)。
 pub mod pipeline;
@@ -1199,6 +1200,8 @@ mod tests {
 
     #[test]
     fn chat_sync_chunks_accumulate_into_one_assistant() {
+        // Concord W3 T3.1:行闸门语义——完整行才可见;无换行的分块暂存闸门,
+        // 直至后续 chunk 补齐换行后一次性可见(内容守恒)。
         let mut sync = ChatSync::new(500);
         sync.apply_event(&chat_submitted("hi"));
         sync.apply_event(&chat_chunk("Hel"));
@@ -1206,7 +1209,39 @@ mod tests {
         let msgs = sync.messages();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[1].role, ChatRole::Assistant);
-        assert_eq!(msgs[1].content, "Hello");
+        assert_eq!(msgs[1].content, "", "半行应暂存闸门不闪烁");
+        // 换行到达:整行提交
+        sync.apply_event(&chat_chunk("\n"));
+        assert_eq!(sync.messages()[1].content, "Hello\n");
+    }
+
+    #[test]
+    fn chat_sync_completed_flushes_gate_remainder() {
+        let mut sync = ChatSync::new(500);
+        sync.apply_event(&chat_submitted("hi"));
+        sync.apply_event(&chat_chunk("tail-no-newline"));
+        // 流结束冲刷残段,不丢内容
+        sync.apply_event(&NexusEvent::TuiChatCompleted {
+            metadata: EventMetadata::new("orchestrator"),
+            session_id: "s1".into(),
+            tool_use: None,
+        });
+        assert_eq!(sync.messages()[1].content, "tail-no-newline");
+    }
+
+    #[test]
+    fn chat_sync_gate_holds_unclosed_fence_until_closed() {
+        let mut sync = ChatSync::new(500);
+        sync.apply_event(&chat_submitted("hi"));
+        sync.apply_event(&chat_chunk("before\n```\ncode\n"));
+        // before 行已提交;fence 块未闭合暂存
+        assert_eq!(sync.messages()[1].content, "before\n");
+        sync.apply_event(&chat_chunk("```\nafter\n"));
+        // fence 闭合:整块提交 + after 行
+        assert_eq!(
+            sync.messages()[1].content,
+            "before\n```\ncode\n```\nafter\n"
+        );
     }
 
     #[test]
@@ -1222,8 +1257,12 @@ mod tests {
         sync.apply_event(&chat_chunk("b"));
         let msgs = sync.messages();
         assert_eq!(msgs.len(), 3);
+        // Completed 冲刷残段 "a";后续 chunk 开新 assistant 消息
         assert_eq!(msgs[1].content, "a");
-        assert_eq!(msgs[2].content, "b");
+        // Concord W3 T3.1:新轮 "b" 无换行暂存闸门,换行后可见
+        assert_eq!(msgs[2].content, "");
+        sync.apply_event(&chat_chunk("\n"));
+        assert_eq!(sync.messages()[2].content, "b\n");
     }
 
     #[test]

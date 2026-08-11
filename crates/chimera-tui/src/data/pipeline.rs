@@ -14,6 +14,8 @@ use std::time::Instant;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 
+use super::metrics_history::MetricsHistory;
+use super::resource_history::MetricSample;
 use super::snapshot::{
     AsaInterventionSummary, BudgetMetrics, DataSnapshot, DataSourceConfig, HealthMetrics,
     MemoryMetrics, RedTeamAuditSummary, SecurityState, SkepticVetoSummary, TuiDataSource,
@@ -374,6 +376,30 @@ impl DataPipeline {
     /// - `subscriber`: 已订阅 event-bus 的事件订阅者
     /// - `config`: 数据源配置，包含 tick 间隔与容量限制
     pub fn new(subscriber: EventSubscriber, config: DataSourceConfig) -> Self {
+        Self::new_internal(subscriber, config, None)
+    }
+
+    /// 创建数据管道并接入指标历史持久化层(Concord T1.6,P4② 接线)
+    ///
+    /// 与 `new` 的差异:后台循环额外承担两项历史职责(均在慢同步节奏上,
+    /// 不占用每 250ms tick 的关键路径):
+    /// - 每 1s 将最新 CPU/内存采样幂等写入 SQLite(fire-and-forget 后台任务,
+    ///   §4.4 #7 幂等操作失败仅记日志);
+    /// - 每 30s 以 200ms 预算回填持久化历史到快照(R7:超时保持上次回填降级)。
+    pub fn new_with_history(
+        subscriber: EventSubscriber,
+        config: DataSourceConfig,
+        history: Arc<MetricsHistory>,
+    ) -> Self {
+        Self::new_internal(subscriber, config, Some(history))
+    }
+
+    /// 共享构造内核:`history=None` 即经典无持久化管道(零行为变化)
+    fn new_internal(
+        subscriber: EventSubscriber,
+        config: DataSourceConfig,
+        history: Option<Arc<MetricsHistory>>,
+    ) -> Self {
         let snapshot = Arc::new(Mutex::new(Arc::new(DataSnapshot::default())));
         let snapshot_clone = Arc::clone(&snapshot);
         let subscriber = Arc::new(Mutex::new(Some(subscriber)));
@@ -389,6 +415,8 @@ impl DataPipeline {
         let max_frozen_capabilities = config.max_frozen_capabilities;
         let snapshot_interval_s = config.snapshot_interval_s;
         let max_snapshots = config.max_snapshots;
+        // Concord T1.7:预算指标陈旧判定的 ttl(消费 DataSourceConfig 字段)
+        let budget_ttl_ms = config.budget_metrics_ttl_ms;
 
         let task = tokio::spawn(async move {
             let mut current_tick_ms = tick_ms;
@@ -429,24 +457,39 @@ impl DataPipeline {
             // 快照生成号:每 tick 递增,供 TuiApp::update 跳过无变化帧的字段拷贝
             let mut revision: u64 = 0;
 
+            // === Concord T1.6(P4②):指标历史同步器状态 ===
+            // 慢同步节奏:每 4 个 tick(250ms×4=1s)执行一次持久化(R7 缓解,
+            // 避免 SQLite 写放大占用 250ms tick 预算);计数从 4 起步使首 tick
+            // 即完成首次回填+采样,测试与重启场景即时可见。
+            let mut history_slow_counter: u32 = HISTORY_SLOW_EVERY;
+            // 上次成功回填时刻(None = 尚未回填,下个慢 tick 立即执行)
+            let mut last_backfill: Option<Instant> = None;
+            // 回填缓存:成功后驻留,超时/失败时保持上次结果(优雅降级)
+            let mut cpu_backfill: Vec<MetricSample> = Vec::new();
+            let mut mem_backfill: Vec<MetricSample> = Vec::new();
+
             loop {
                 time::sleep(Duration::from_millis(current_tick_ms)).await;
 
-                let mut guard = subscriber_clone.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!(
-                        "TUI data pipeline subscriber mutex was poisoned; recovering state"
-                    );
-                    poisoned.into_inner()
-                });
-                let Some(sub) = guard.as_mut() else {
-                    break;
-                };
+                // Concord T1.6:块作用域限定 subscriber guard 生命周期(同快照
+                // guard 理由:历史回填 .await 要求循环内无存活 MutexGuard)。
+                let events = {
+                    let mut guard = subscriber_clone.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!(
+                            "TUI data pipeline subscriber mutex was poisoned; recovering state"
+                        );
+                        poisoned.into_inner()
+                    });
+                    let Some(sub) = guard.as_mut() else {
+                        break;
+                    };
 
-                let mut events = Vec::new();
-                while let Some(event) = sub.try_recv() {
-                    events.push(event);
-                }
-                drop(guard);
+                    let mut events = Vec::new();
+                    while let Some(event) = sub.try_recv() {
+                        events.push(event);
+                    }
+                    events
+                };
 
                 let mut last_quest_idx = None::<usize>;
                 let mut last_budget_idx = None::<usize>;
@@ -501,6 +544,16 @@ impl DataPipeline {
 
                 let eps = health_sync.compute_events_per_second(events_this_tick, tick_ms);
                 let budget = budget_sync.metrics();
+                // Concord T1.7:每 tick 比对最后更新时刻与 ttl → 陈旧标志
+                // (budget_metrics_ttl_ms 消费点,M0 TODO 闭环)
+                let budget_stale = budget_is_stale(
+                    budget_sync.last_update_ms(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                    budget_ttl_ms,
+                );
                 let memory = memory_sync.metrics();
                 let decay = decay_sync.metrics();
 
@@ -571,6 +624,51 @@ impl DataPipeline {
                     events_since_last_snapshot = 0;
                 }
 
+                // === Concord T1.6:历史慢同步(1s 节奏;未接线时零开销) ===
+                if let Some(h) = history.as_ref() {
+                    history_slow_counter += 1;
+                    if history_slow_counter >= HISTORY_SLOW_EVERY {
+                        history_slow_counter = 0;
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        // 采样写入:幂等 INSERT(ON CONFLICT REPLACE),fire-and-forget
+                        // 后台任务(§4.4 #7:幂等操作失败仅记日志,不阻塞主循环)
+                        let hw = Arc::clone(h);
+                        let cpu_v = f64::from(sys_metrics.cpu.global_usage);
+                        let mem_v = f64::from(sys_metrics.memory.usage_percent);
+                        tokio::spawn(async move {
+                            if let Err(e) = hw.insert(now_ms, "cpu_usage", cpu_v).await {
+                                tracing::warn!(error = %e, "cpu_usage 历史持久化失败");
+                            }
+                            if let Err(e) = hw.insert(now_ms, "mem_usage", mem_v).await {
+                                tracing::warn!(error = %e, "mem_usage 历史持久化失败");
+                            }
+                        });
+                        // 回填:首个慢 tick 立即执行,此后每 30s 一次(低频全量读)
+                        let backfill_due = last_backfill.is_none_or(|t| {
+                            t.elapsed() >= Duration::from_secs(HISTORY_BACKFILL_SECS)
+                        });
+                        if backfill_due {
+                            match backfill_resource_history(h, now_ms).await {
+                                Some((c, m)) => {
+                                    cpu_backfill = c;
+                                    mem_backfill = m;
+                                    last_backfill = Some(Instant::now());
+                                }
+                                None => {
+                                    // 超时/失败:保持上次回填(R7 降级);不更新
+                                    // last_backfill 使下个慢 tick 即时重试
+                                    if cpu_backfill.is_empty() && mem_backfill.is_empty() {
+                                        tracing::warn!("历史回填超预算或失败,本周期降级为空历史");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 revision += 1;
                 let snap = DataSnapshot {
                     revision,
@@ -578,6 +676,7 @@ impl DataPipeline {
                     paused_quest_count,
                     latest_events: latest_events.clone(),
                     budget_metrics: budget,
+                    budget_metrics_stale: budget_stale,
                     memory_metrics: memory,
                     security_state: security_sync.state(),
                     health_metrics: health,
@@ -600,6 +699,8 @@ impl DataPipeline {
                     recall_chain_success: osa_sync.recall_chain_success(),
                     sys_metrics,
                     sys_metrics_history: sys_metrics_history.iter().copied().collect(),
+                    resource_cpu_backfill: cpu_backfill.clone(),
+                    resource_mem_backfill: mem_backfill.clone(),
                     tick_mode,
                     chat_messages: chat_sync.messages(),
                     chat_status: chat_sync.status(),
@@ -607,13 +708,18 @@ impl DataPipeline {
                     action_feedback_seq: action_feedback_sync.seq(),
                     critical_event_dropped_count: critical_dropped_sync.count(),
                 };
-                let mut guard = snapshot_clone.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!(
-                        "TUI data pipeline snapshot mutex was poisoned; recovering state"
-                    );
-                    poisoned.into_inner()
-                });
-                *guard = Arc::new(snap);
+                // Concord T1.6:显式块作用域限定 guard 生命周期——本循环内存在
+                // 历史回填 .await,MutexGuard(!Send)若存活至循环回边跨越 await
+                // 会使 spawn future 非 Send(红线 #1:禁止持锁跨 await)。
+                {
+                    let mut guard = snapshot_clone.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!(
+                            "TUI data pipeline snapshot mutex was poisoned; recovering state"
+                        );
+                        poisoned.into_inner()
+                    });
+                    *guard = Arc::new(snap);
+                }
 
                 let backlog = latest_events.len();
                 match tick_mode {
@@ -765,4 +871,52 @@ pub fn push_history(history: &mut VecDeque<u64>, value: u64, max: usize) {
         history.pop_front();
     }
     history.push_back(value);
+}
+
+// ============================================================
+// Concord T1.6(P4②):指标历史同步器常量与回填函数
+// ============================================================
+
+/// 慢同步节奏:每 N 个 tick 执行一次历史持久化(250ms×4 = 1s,R7 缓解)
+const HISTORY_SLOW_EVERY: u32 = 4;
+/// 回填刷新周期(秒):低频全量读,避免每 1s 重复扫描 SQLite
+const HISTORY_BACKFILL_SECS: u64 = 30;
+/// 单次回填的时间预算(毫秒):超时即降级保持上次结果(R7 预案)
+const HISTORY_BACKFILL_BUDGET_MS: u64 = 200;
+/// 回填窗口(毫秒):拉取最近 5 分钟历史(与内存滑动窗口容量对齐)
+const HISTORY_BACKFILL_WINDOW_MS: u64 = 300_000;
+
+/// 从持久化层回填 CPU/内存历史(带时间预算;Concord T1.6)
+///
+/// # 返回值
+/// - `Some((cpu, mem))`:预算内读取成功(可能为空历史)
+/// - `None`:超时或读取失败,调用方应保持上次回填结果(优雅降级)
+///
+/// WHY 独立函数:时间预算 + 双指标查询的组合逻辑可单测(不需启动完整管道);
+/// `query_range` 内部已走 spawn_blocking,本函数只叠加 timeout 护栏。
+pub async fn backfill_resource_history(
+    history: &MetricsHistory,
+    now_ms: u64,
+) -> Option<(Vec<MetricSample>, Vec<MetricSample>)> {
+    let start = now_ms.saturating_sub(HISTORY_BACKFILL_WINDOW_MS);
+    let cpu_fut = history.query_range("cpu_usage", start, now_ms);
+    let mem_fut = history.query_range("mem_usage", start, now_ms);
+    match time::timeout(Duration::from_millis(HISTORY_BACKFILL_BUDGET_MS), async {
+        tokio::try_join!(cpu_fut, mem_fut)
+    })
+    .await
+    {
+        Ok(Ok((cpu, mem))) => Some((cpu, mem)),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "历史回填查询失败");
+            None
+        }
+        Err(_) => {
+            tracing::warn!(
+                budget_ms = HISTORY_BACKFILL_BUDGET_MS,
+                "历史回填超时间预算,降级保持上次结果"
+            );
+            None
+        }
+    }
 }

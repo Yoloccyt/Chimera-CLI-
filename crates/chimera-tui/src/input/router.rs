@@ -16,6 +16,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::actions::ActionRegistry;
 use crate::types::PanelId;
 
 /// 路由模式 — 三态路由表的输入模式维度(§4.3)
@@ -42,6 +43,9 @@ pub enum RouterMode {
     /// WHY 独立态:与 GPrefix 同理,"已按下 Ctrl+W"状态由 app 以 `w_prefix` 持有,
     /// 次键经本模式解析为方向窗格焦点或循环。
     WPrefix,
+    /// 斜杠命令模式(Concord W2):`/` 补全输入态,与 Command 态同构的纯机械
+    /// 路由(Esc/方向/Enter/Backspace/Char/Tab);业务分流由 slash_parser 承担。
+    Slash,
 }
 
 /// 窗格方向(Ctrl+W 前缀方向导航)
@@ -75,9 +79,8 @@ pub enum RouteTarget {
     ExitMode,
     /// 打开统一命令面板 overlay(Normal: Ctrl+P)
     ///
-    /// WHY 独立于 `EnterCommandBar`:overlay 是 Registry 驱动的"模糊选一个动作",
-    /// 而 `:` 命令栏是"带参文本命令解析"(find/filter/vote 等),二者交互不同,
-    /// 路由目标必须区分,否则同一 `EnterMode(Command)` 无法表达两种入口(M3a 决策 B)。
+    /// WHY 独立于斜杠命令栏:overlay 是 Registry 驱动的"模糊选一个动作",
+    /// 而 `/` 命令栏是"命令表三分层执行",二者交互不同,路由目标必须区分。
     OpenPalette,
     /// 打开焦点面板的上下文动作菜单 overlay(Normal: `a`)
     ///
@@ -85,11 +88,23 @@ pub enum RouteTarget {
     /// 的上下文菜单(§4.5),动作集由 `actions::panel_context_actions(焦点面板)` 决定,
     /// 需运行时焦点上下文,故不用静态 `GlobalAction`。
     OpenActionMenu,
-    /// 进入 `:` 命令栏(Normal: `:`)—— app `InputMode::Command`,
-    /// 支持 find/filter/level/vote/pause/quest 等带参命令(保留既有能力,不丢功能)。
-    EnterCommandBar,
-    /// 进入 `/` 搜索模式(Normal: `/`)—— app `InputMode::Search`,关键字过滤。
-    EnterSearch,
+    /// 进入斜杠命令栏(Concord W2:`/` 第一公民入口;`:` 废弃窗口期同进,
+    /// app 据按键字符判定是否展示一次性弃用提示)—— 替代原 EnterCommandBar
+    /// (vi 式 `:` 命令栏)与 EnterSearch(`/` 搜索)两个目标:搜索语义由
+    /// `/search` 命令承接,遗留文本命令由 slash_parser 的 Legacy 回退承接。
+    EnterSlash,
+    /// Slash 模式:补全选中项的前缀补全(Concord W2:Tab 键)
+    SlashComplete,
+    /// Chat⇄Dashboard 视图模式互切(Concord W3 T3.4:`\` 键,方案 §7.4
+    /// 复用原 companion 键;view.toggle_companion 保留但改经命令面板访问)
+    ToggleViewMode,
+    /// Insert 模式 @ 引用补全(Concord W4 T4.5:Tab 键;末尾词以 @ 起始时
+    /// 补全为首个候选,否则无操作)
+    MentionComplete,
+    /// Insert 模式 composer 历史回溯(Concord W6 T6.2:↑ 上一条)
+    HistoryPrev,
+    /// Insert 模式 composer 历史前进(Concord W6 T6.2:↓ 下一条/回底恢复草稿)
+    HistoryNext,
     /// 焦点轮转(Tab 正向 / Shift+Tab 反向)
     FocusCycle {
         /// true = 下一个面板,false = 上一个面板
@@ -154,33 +169,31 @@ impl InputRouter {
             RouterMode::Command => Self::route_command(key),
             RouterMode::GPrefix => Self::route_gprefix(key),
             RouterMode::WPrefix => Self::route_wprefix(key),
+            RouterMode::Slash => Self::route_slash(key),
         }
     }
 
-    /// Normal 模式路由:退出 > 全局快捷键 > 比例调整 > 模式切换 > g 前缀/滚动 >
-    /// 数字/F 键面板跳转 > UI 切换 > 焦点轮转 > 焦点面板
+    /// Normal 模式路由:退出 > 机械键(面板/滚动/比例/模式) > codegen 全局动作键 > 焦点面板
     ///
-    /// WHY 完整覆盖:本表是 Normal 模式按键归属的单一事实源,与 app 的
-    /// `handle_global_key` 逐键对齐(M3 接线时替换内联分发)。Action 支持的键
-    /// (locale/help/export/layout/companion)走 `GlobalAction`,统一经派发桥接;
-    /// 纯 UI 机械键(退出/面板跳转/滚动/主题/比例)用专用目标变体。
+    /// WHY 完整覆盖:本表是 Normal 模式按键归属的单一事实源。Action 支持的
+    /// 全局键(locale/help/export/layout/companion 等)不再手写分支,而是由
+    /// `global_action_for` 从 ActionRegistry codegen 键位表派生(Concord T1.3,
+    /// P5② 键位双源收口);声明在 `ActionDescriptor.default_key`/`alias_keys`,
+    /// 机械键(退出/面板跳转/滚动/主题/比例)仍用专用目标变体。
     fn route_normal(key: KeyEvent) -> RouteTarget {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             // 退出(普通模式)
             KeyCode::Char('q') | KeyCode::Esc => RouteTarget::Quit,
-            // 全局快捷键(Action 支持,最高优先级;带 CONTROL guard 先于同字符普通键)
-            KeyCode::Char('l') if ctrl => RouteTarget::GlobalAction("system.toggle_locale"),
-            KeyCode::Char('e') if ctrl => RouteTarget::GlobalAction("export.run"),
+            // 命令面板 overlay(非动作,专用目标)
             KeyCode::Char('p') if ctrl => RouteTarget::OpenPalette,
             // Ctrl+方向:主面板比例调整
             KeyCode::Up if ctrl => RouteTarget::RatioAdjust { increase: true },
             KeyCode::Down if ctrl => RouteTarget::RatioAdjust { increase: false },
-            // 模式切换(`:` 命令栏 / `/` 搜索 / `i` Insert 各自专用目标,与 Ctrl+P palette 区分)
-            KeyCode::Char(':') => RouteTarget::EnterCommandBar,
-            KeyCode::Char('/') => RouteTarget::EnterSearch,
+            // 模式切换:Concord W2 — `/` 与 `:` 同进斜杠命令模式(命令翻转;
+            // `:` 为废弃窗口期别名,app 侧展示一次性弃用提示,R1 缓解)
+            KeyCode::Char(':') | KeyCode::Char('/') => RouteTarget::EnterSlash,
             KeyCode::Char('i') => RouteTarget::EnterMode(RouterMode::Insert),
-            KeyCode::Char('?') => RouteTarget::GlobalAction("system.open_help"),
             // g 前缀 / 滚动到底
             KeyCode::Char('g') => RouteTarget::EnterMode(RouterMode::GPrefix),
             KeyCode::Char('G') => RouteTarget::ScrollBottom,
@@ -201,24 +214,37 @@ impl InputRouter {
             KeyCode::F(6) => RouteTarget::PanelJump(PanelId::Memory),
             KeyCode::F(7) => RouteTarget::PanelJump(PanelId::Security),
             KeyCode::F(8) => RouteTarget::PanelJump(PanelId::Health),
-            // UI 切换(layout/companion 为 Action;theme 为纯 UI)
+            // 纯 UI 机械键:主题循环(非注册表动作)
             KeyCode::Char('t') => RouteTarget::ThemeCycle,
-            KeyCode::Char('l') => RouteTarget::GlobalAction("view.switch_layout"),
-            KeyCode::Char('\\') => RouteTarget::GlobalAction("view.toggle_companion"),
-            // Stage 2 伴随面板键:] 循环绑定,w 切换窗格焦点(与 handle_global_key 对齐)
-            KeyCode::Char(']') => RouteTarget::GlobalAction("view.cycle_companion"),
-            // Ctrl+W 前缀:进入方向窗格导航态(h/l 方向 + w 循环);plain w 保留循环
+            // Ctrl+W 前缀:进入方向窗格导航态;必须在 codegen 查表之前,
+            // 避免 Ctrl+W 被 'w' 绑定(view.focus_pane)截获
             KeyCode::Char('w') if ctrl => RouteTarget::EnterMode(RouterMode::WPrefix),
-            KeyCode::Char('w') => RouteTarget::GlobalAction("view.focus_pane"),
-            KeyCode::Char('E') => RouteTarget::GlobalAction("export.run"),
-            // 面板上下文动作菜单:bare `a` 唤出焦点面板精选动作(Ctrl+A 归面板多选,不匹配此 arm)
+            // 面板上下文动作菜单:bare `a` 唤出焦点面板精选动作(Ctrl+A 归面板多选)
             KeyCode::Char('a') if !ctrl => RouteTarget::OpenActionMenu,
             // 焦点轮转
             KeyCode::Tab => RouteTarget::FocusCycle { forward: true },
             KeyCode::BackTab => RouteTarget::FocusCycle { forward: false },
-            // 其余按键(Enter/Space/j/k/方向键 等)交由当前焦点面板处理
-            _ => RouteTarget::FocusPanel,
+            // Concord W3 T3.4:`\` 互切 Chat⇄Dashboard 视图模式(方案 §7.4 复用
+            // 原 companion 键;view.toggle_companion 动作保留但改经命令面板访问)
+            KeyCode::Char('\\') => RouteTarget::ToggleViewMode,
+            // Concord T1.3:全局动作键由 codegen 键位表派生(default_key/alias_keys
+            // 声明驱动);未命中则交由当前焦点面板处理
+            _ => Self::global_action_for(key).unwrap_or(RouteTarget::FocusPanel),
         }
+    }
+
+    /// 从 codegen 键位表查找按键对应的全局动作(Concord T1.3 第四通道消费点)
+    ///
+    /// WHY 每次查表而非缓存:键位表仅 ~8 条,按键事件频率远低于帧预算,
+    /// 线性查找开销可忽略;避免引入静态缓存的生命周期/测试复杂度。
+    /// 键位声明在 `actions/domains/*.rs` 的 `default_key`/`alias_keys`,
+    /// 经 `codegen::key_bindings` 派生——声明即事实源,INV-K 不变量守护。
+    fn global_action_for(key: KeyEvent) -> Option<RouteTarget> {
+        let reg = ActionRegistry::with_builtin_domains();
+        crate::actions::codegen::key_bindings(&reg)
+            .into_iter()
+            .find(|b| b.key.code == key.code && b.key.modifiers == key.modifiers)
+            .map(|b| RouteTarget::GlobalAction(b.action_id))
     }
 
     /// GPrefix 模式路由:`g` 之后的次键(g 前缀两键序列)
@@ -243,7 +269,7 @@ impl InputRouter {
     ///
     /// - `h`/`l` → 左/右方向窗格焦点(几何解析在 app)
     /// - `j`/`k` → 下/上方向(当前横向布局无垂直邻居,app 侧 no-op)
-    /// - `w` → 循环切换活跃窗格(与 Normal `w` 一致)
+    /// - `w` → 循环切换活跃窗格(经 codegen 键位表查 view.focus_pane,与 Normal 同源)
     /// - 其余 → 退出前缀态(取消,不触发动作)
     fn route_wprefix(key: KeyEvent) -> RouteTarget {
         match key.code {
@@ -251,20 +277,29 @@ impl InputRouter {
             KeyCode::Char('l') => RouteTarget::FocusPaneDir(PaneDir::Right),
             KeyCode::Char('j') => RouteTarget::FocusPaneDir(PaneDir::Down),
             KeyCode::Char('k') => RouteTarget::FocusPaneDir(PaneDir::Up),
-            KeyCode::Char('w') => RouteTarget::GlobalAction("view.focus_pane"),
+            // 'w' 声明键(view.focus_pane)经 codegen 查表,与 Normal 模式同源
+            KeyCode::Char('w') => Self::global_action_for(key).unwrap_or(RouteTarget::ExitMode),
             _ => RouteTarget::ExitMode,
         }
     }
 
-    /// Insert 模式路由:Esc 退出 > 少数全局键 > 提交/退格 > 原始字符
+    /// Insert 模式路由:Esc 退出 > 极少数全局键 > 提交/退格 > 原始字符
     fn route_insert(key: KeyEvent) -> RouteTarget {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => RouteTarget::ExitMode,
-            // Insert 模式仍允许极少数全局键(中英切换),不打断输入流的其余快捷键忽略
+            // Insert 模式仅保留 Ctrl+L 一个全局键(声明在 domains/system.rs);
+            // WHY 不走 codegen 查表:Insert 的全局键子集刻意最小化(不打断
+            // 输入流),Ctrl+E 等其余声明键在此模式必须保持 Ignored(有测试守护)。
             KeyCode::Char('l') if ctrl => RouteTarget::GlobalAction("system.toggle_locale"),
             KeyCode::Enter => RouteTarget::Submit,
             KeyCode::Backspace => RouteTarget::Backspace,
+            // Concord W4 T4.5:Insert 态 Tab = @ 引用补全(末尾词 @ 起始时)
+            KeyCode::Tab => RouteTarget::MentionComplete,
+            // Concord W6 T6.2:Insert 态 ↑↓ = composer 历史回溯/前进
+            // (Slash 态 ↑↓ 为补全导航,不受影响)
+            KeyCode::Up => RouteTarget::HistoryPrev,
+            KeyCode::Down => RouteTarget::HistoryNext,
             // 普通字符(排除 Ctrl 组合)进入输入缓冲
             KeyCode::Char(c) if !ctrl => RouteTarget::InsertChar(c),
             _ => RouteTarget::Ignored,
@@ -279,6 +314,24 @@ impl InputRouter {
             KeyCode::Up => RouteTarget::PaletteMove { down: false },
             KeyCode::Down => RouteTarget::PaletteMove { down: true },
             KeyCode::Enter => RouteTarget::Submit,
+            KeyCode::Backspace => RouteTarget::Backspace,
+            KeyCode::Char(c) if !ctrl => RouteTarget::PaletteInput(c),
+            _ => RouteTarget::Ignored,
+        }
+    }
+
+    /// Slash 模式路由(Concord W2):与 Command 态同构 + Tab 前缀补全
+    ///
+    /// 纯机械路由:补全候选过滤/三分层分流均由 slash_parser 与
+    /// SlashCommandSurface 承担,路由器只决定按键归属。
+    fn route_slash(key: KeyEvent) -> RouteTarget {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => RouteTarget::ExitMode,
+            KeyCode::Up => RouteTarget::PaletteMove { down: false },
+            KeyCode::Down => RouteTarget::PaletteMove { down: true },
+            KeyCode::Enter => RouteTarget::Submit,
+            KeyCode::Tab => RouteTarget::SlashComplete,
             KeyCode::Backspace => RouteTarget::Backspace,
             KeyCode::Char(c) if !ctrl => RouteTarget::PaletteInput(c),
             _ => RouteTarget::Ignored,
@@ -320,13 +373,14 @@ mod tests {
 
     #[test]
     fn normal_mode_switches_and_focus_cycle() {
+        // Concord W2:`/` 与 `:` 同进斜杠命令模式(命令翻转;`:` 为废弃窗口别名)
         assert_eq!(
             InputRouter::route(RouterMode::Normal, key(KeyCode::Char(':'))),
-            RouteTarget::EnterCommandBar
+            RouteTarget::EnterSlash
         );
         assert_eq!(
             InputRouter::route(RouterMode::Normal, key(KeyCode::Char('/'))),
-            RouteTarget::EnterSearch
+            RouteTarget::EnterSlash
         );
         assert_eq!(
             InputRouter::route(RouterMode::Normal, key(KeyCode::Char('i'))),
@@ -484,7 +538,8 @@ mod tests {
         );
         assert_eq!(
             InputRouter::route(RouterMode::Normal, key(KeyCode::Char('\\'))),
-            RouteTarget::GlobalAction("view.toggle_companion")
+            RouteTarget::ToggleViewMode,
+            "Concord W3 T3.4:`\\` 互切 Chat⇄Dashboard(原 companion 键复用)"
         );
         assert_eq!(
             InputRouter::route(RouterMode::Normal, key(KeyCode::Char('E'))),
@@ -508,14 +563,52 @@ mod tests {
 
     #[test]
     fn normal_colon_and_ctrl_p_are_distinct_targets() {
-        // M3a 决策 B:`:` 命令栏与 Ctrl+P palette overlay 为两个独立入口,不可混同。
+        // Concord W2:斜杠命令栏与 Ctrl+P palette overlay 为两个独立入口,不可混同。
         assert_eq!(
             InputRouter::route(RouterMode::Normal, key(KeyCode::Char(':'))),
-            RouteTarget::EnterCommandBar
+            RouteTarget::EnterSlash
         );
         assert_eq!(
             InputRouter::route(RouterMode::Normal, ctrl_key(KeyCode::Char('p'))),
             RouteTarget::OpenPalette
+        );
+    }
+
+    #[test]
+    fn slash_mode_routes_like_command_plus_tab_complete() {
+        // Concord W2:Slash 态与 Command 态同构 + Tab 前缀补全目标
+        assert_eq!(
+            InputRouter::route(RouterMode::Slash, key(KeyCode::Esc)),
+            RouteTarget::ExitMode
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Slash, key(KeyCode::Up)),
+            RouteTarget::PaletteMove { down: false }
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Slash, key(KeyCode::Down)),
+            RouteTarget::PaletteMove { down: true }
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Slash, key(KeyCode::Enter)),
+            RouteTarget::Submit
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Slash, key(KeyCode::Tab)),
+            RouteTarget::SlashComplete
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Slash, key(KeyCode::Backspace)),
+            RouteTarget::Backspace
+        );
+        assert_eq!(
+            InputRouter::route(RouterMode::Slash, key(KeyCode::Char('q'))),
+            RouteTarget::PaletteInput('q')
+        );
+        // Ctrl 组合不进输入缓冲(与 Command/Insert 态语义一致)
+        assert_eq!(
+            InputRouter::route(RouterMode::Slash, ctrl_key(KeyCode::Char('e'))),
+            RouteTarget::Ignored
         );
     }
 

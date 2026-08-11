@@ -14,6 +14,9 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
         is_core: true,
         // Ctrl+E 唤起导出弹窗(§4.6 统一交互语法)
         default_key: Some("Ctrl+E"),
+        // Concord T1.3:'E' 为历史兼容别名(路由表曾硬编码 Shift+E 同达本动作),
+        // 收进声明后由 codegen 统一派生,INV-K-B 不变量据此认可别名路由。
+        alias_keys: &["E"],
         ..ActionDescriptor::new(
             "export.run",
             ActionDomain::Export,

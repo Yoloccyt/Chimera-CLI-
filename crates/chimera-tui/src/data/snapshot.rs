@@ -59,6 +59,13 @@ pub struct DataSnapshot {
     /// 当前预算指标
     pub budget_metrics: BudgetMetrics,
 
+    /// 预算指标是否陈旧(Concord T1.7,消费 `budget_metrics_ttl_ms`)
+    ///
+    /// 管道每 tick 以 `BudgetSync::last_update_ms` 与 ttl 比对得出;
+    /// Budget 面板据此置灰 + 提示"数据过期"(M0 TODO 闭环)。
+    #[serde(default)]
+    pub budget_metrics_stale: bool,
+
     /// 当前记忆指标
     pub memory_metrics: MemoryMetrics,
 
@@ -115,6 +122,16 @@ pub struct DataSnapshot {
     pub sys_metrics: crate::types::SystemMetrics,
     /// 系统资源指标历史(sparkline 数据)
     pub sys_metrics_history: Vec<u64>,
+    /// SQLite 持久化的 CPU 历史回填(Concord T1.6,P4② 接线;重启后趋势图回溯)
+    ///
+    /// WHY 独立字段:内存滑动窗口仅 ~5 分钟,持久化层(MetricsHistory)提供
+    /// 跨重启回填;ResourceMonitor 面板据此恢复重启前的趋势曲线。
+    /// 由 DataPipeline 慢同步器(1s 周期 + 200ms 预算 + 超时降级)更新。
+    #[serde(default)]
+    pub resource_cpu_backfill: Vec<crate::data::resource_history::MetricSample>,
+    /// SQLite 持久化的内存历史回填(同 `resource_cpu_backfill`)
+    #[serde(default)]
+    pub resource_mem_backfill: Vec<crate::data::resource_history::MetricSample>,
     /// 当前 tick 模式,状态栏展示用
     #[serde(default)]
     pub tick_mode: TickMode,
@@ -347,8 +364,9 @@ pub struct DataSourceConfig {
     pub max_event_history: usize,
     /// Quest 列表保留的最大条数
     pub max_quest_list_size: usize,
-    /// 预算指标无更新时的过期时间(毫秒),当前占位
-    // TODO(M2): wire up budget metrics TTL/expiry when the panel needs staleness handling.
+    /// 预算指标无更新时的过期时间(毫秒)
+    /// Concord T1.7:由 DataPipeline 消费——每 tick 比对 BudgetSync 最后更新
+    /// 时刻,超期置 `DataSnapshot::budget_metrics_stale`(原 M0 TODO 已闭环)。
     pub budget_metrics_ttl_ms: u64,
     /// tick 间隔(毫秒),控制快照生成频率
     pub tick_interval_ms: u64,

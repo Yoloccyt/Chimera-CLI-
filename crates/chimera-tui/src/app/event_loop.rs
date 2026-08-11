@@ -55,7 +55,24 @@ impl TuiApp {
             return;
         }
 
-        // 命令/搜索模式:委托给命令面板(`:` 带参命令 / `/` 关键字过滤)
+        // 斜杠命令模式(Concord W2):`/` 第一公民入口,经 RouterMode::Slash
+        // 纯机械路由 + slash_parser 三分层执行;Command/Search 分支保留为遗留兼容。
+        if self.state.input_mode == InputMode::Slash {
+            if key.code == KeyCode::Char('l')
+                && key.modifiers.contains(event::KeyModifiers::CONTROL)
+            {
+                self.dispatch_action(
+                    "system.toggle_locale",
+                    "{}".to_string(),
+                    ActionSource::Palette,
+                );
+                return;
+            }
+            self.handle_slash_key(key);
+            return;
+        }
+
+        // 命令/搜索模式(遗留):委托给命令面板(`:` 带参命令 / `/` 关键字过滤)
         if matches!(
             self.state.input_mode,
             InputMode::Command | InputMode::Search
@@ -117,6 +134,16 @@ impl TuiApp {
     fn apply_route_target(&mut self, target: RouteTarget, key: KeyEvent) {
         match target {
             RouteTarget::Quit => {
+                // Concord W4/W5:Chat 视图 Esc 与 q 均不退出,走失焦/rewind 链
+                // (方案 §7.4:q | 退出(Dashboard)/失焦(Chat));退出统一走
+                // /exit。Dashboard 保留 q/Esc 退出肌肉记忆,零回归。
+                if (key.code == crossterm::event::KeyCode::Esc
+                    || key.code == crossterm::event::KeyCode::Char('q'))
+                    && self.state.view_mode == crate::types::ViewMode::Chat
+                {
+                    self.handle_chat_esc();
+                    return;
+                }
                 // 退出安全(quit_requires_confirm):开启时先弹确认框,左/右键切到 Yes
                 // 后 Enter 才真正退出;默认关闭保持 q/Esc 立即退出行为零回归。
                 // 确认命令复用 apply_confirm_command 已有的 "quit" 分支。
@@ -141,7 +168,11 @@ impl TuiApp {
                 }
             }
             RouteTarget::FocusCycle { forward } => {
-                if forward {
+                // Concord W4 T4.1:Chat 视图下 Shift+Tab 循环审批模式
+                // (方案 §7.4 模式内分义);Dashboard 保留原焦点环语义
+                if !forward && self.state.view_mode == crate::types::ViewMode::Chat {
+                    self.cycle_approval_mode();
+                } else if forward {
                     self.switch_panel_next();
                 } else {
                     self.switch_panel_prev();
@@ -166,14 +197,20 @@ impl TuiApp {
             RouteTarget::GlobalAction(action_id) => {
                 self.dispatch_action(action_id, "{}".to_string(), ActionSource::Panel);
             }
-            // 模式入口:`:` 命令栏 / `/` 搜索 / Ctrl+P palette / `i` Insert / `g` 前缀
-            RouteTarget::EnterCommandBar => {
-                self.state.input_mode = InputMode::Command;
+            // 模式入口:Concord W2 — `/` 与 `:` 同进斜杠命令模式;据按键字符
+            // 判定是否展示一次性弃用提示(R1 缓解:一版本窗口 + 不重复打扰)
+            RouteTarget::EnterSlash => {
+                let via_colon = key.code == KeyCode::Char(':');
+                self.state.input_mode = InputMode::Slash;
                 self.state.input_buffer.clear();
-            }
-            RouteTarget::EnterSearch => {
-                self.state.input_mode = InputMode::Search;
-                self.state.input_buffer.clear();
+                self.state.slash_selected = 0;
+                if via_colon && !self.state.colon_deprecation_shown {
+                    self.state.colon_deprecation_shown = true;
+                    self.state.set_status(
+                        crate::t!("status.colon_deprecated").to_string(),
+                        Severity::Warning,
+                    );
+                }
             }
             RouteTarget::OpenPalette => self.open_palette(),
             RouteTarget::OpenActionMenu => self.open_action_menu(),
@@ -191,16 +228,349 @@ impl TuiApp {
             RouteTarget::FocusPaneDir(dir) => self.focus_pane_dir(dir),
             // 交由当前活跃窗格(Stage 2 伴随焦点感知)处理
             RouteTarget::FocusPanel => self.delegate_key_to_active_panel(key),
-            // 以下目标不由 Normal/GPrefix 路由产生(Insert/Command 模式专属或已在上游处理),
-            // 兜底无操作以保证穷尽匹配。
-            RouteTarget::EnterMode(RouterMode::Normal | RouterMode::Command)
+            // Concord W3 T3.4:`\` 键互切 Chat⇄Dashboard 视图模式
+            RouteTarget::ToggleViewMode => self.toggle_view_mode(),
+            // 以下目标不由 Normal/GPrefix 路由产生(Insert/Command/Slash 模式专属或已在上游处理),
+            // 兕底无操作以保证穷尽匹配。
+            RouteTarget::EnterMode(
+                RouterMode::Normal | RouterMode::Command | RouterMode::Slash,
+            )
             | RouteTarget::ExitMode
             | RouteTarget::InsertChar(_)
             | RouteTarget::PaletteInput(_)
             | RouteTarget::PaletteMove { .. }
             | RouteTarget::Backspace
             | RouteTarget::Submit
+            | RouteTarget::SlashComplete
+            | RouteTarget::MentionComplete
+            | RouteTarget::HistoryPrev
+            | RouteTarget::HistoryNext
             | RouteTarget::Ignored => {}
+        }
+    }
+
+    // ============================================================
+    // Concord W2:斜杠命令模式(T2.2/T2.3 执行层)
+    // ============================================================
+
+    /// 处理 Slash 模式按键:经 RouterMode::Slash 纯机械路由到输入/选择/提交
+    fn handle_slash_key(&mut self, key: KeyEvent) {
+        match InputRouter::route(RouterMode::Slash, key) {
+            RouteTarget::PaletteInput(c) => {
+                self.state.input_buffer.push(c);
+                // 输入变化 → 候选列表重算,选中项复位首项(与主流补全交互一致)
+                self.state.slash_selected = 0;
+            }
+            RouteTarget::Backspace => {
+                self.state.input_buffer.pop();
+                self.state.slash_selected = 0;
+            }
+            RouteTarget::PaletteMove { down } => {
+                let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
+                let count = crate::slash_surface::candidates(&reg, &self.state.input_buffer).len();
+                if count > 0 {
+                    let sel = self.state.slash_selected;
+                    self.state.slash_selected = if down {
+                        (sel + 1) % count
+                    } else {
+                        // 上移循环:0 → 末项(与命令面板导航体验一致)
+                        (sel + count - 1) % count
+                    };
+                }
+            }
+            RouteTarget::SlashComplete => self.slash_tab_complete(),
+            RouteTarget::Submit => self.submit_slash(),
+            RouteTarget::ExitMode => {
+                self.state.input_mode = InputMode::Normal;
+                self.state.input_buffer.clear();
+                self.state.slash_selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Chat⇄Dashboard 视图模式互切(Concord W3 T3.4)
+    ///
+    /// WHY 状态栏反馈:模式切换无布局过渡动画,状态栏即时告知当前模式;
+    /// persist_state 开启时 view_mode 随状态文件保存,重启保留选择。
+    fn toggle_view_mode(&mut self) {
+        use crate::types::ViewMode;
+        let new_mode = match self.state.view_mode {
+            ViewMode::Chat => ViewMode::Dashboard,
+            ViewMode::Dashboard => ViewMode::Chat,
+        };
+        self.state.view_mode = new_mode;
+        let key = match new_mode {
+            ViewMode::Chat => "status.view_chat",
+            ViewMode::Dashboard => "status.view_dashboard",
+        };
+        self.state
+            .set_status(crate::t!(key).to_string(), Severity::Info);
+    }
+
+    /// Chat 视图 Esc/q 处理(Concord W4/W5):单键失焦,500ms 内双击(Esc Esc)
+    /// 触发 rewind——无可回退时诚实反馈(方案 §7.4,Claude Code 对齐)。
+    /// Dashboard 保留 Esc/q 退出肌肉记忆,不在此链。
+    ///
+    /// WHY 弹层分支为防御性:popup/palette 打开时按键在上游已被
+    /// handle_popup_key/handle_palette_key 接管(各自的 Esc 语义关闭);
+    /// 此处弹层处置仅兼顾状态不一致场景(如程序化打开未同步输入模式)。
+    fn handle_chat_esc(&mut self) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let double = crate::rewind::is_double_esc(
+            self.last_esc_ms,
+            now_ms,
+            crate::rewind::DOUBLE_ESC_WINDOW_MS,
+        );
+        self.last_esc_ms = if double { None } else { Some(now_ms) };
+        // 优先逐层弹出 overlay/popup(单击/双击共同语义)
+        if self.chat_session.palette.is_some() {
+            self.chat_session.palette = None;
+            return;
+        }
+        if !self.state.popup_stack.is_empty() {
+            self.state.popup_stack.pop();
+            return;
+        }
+        // 无可弹层:双击给诚实反馈,单击静默(失焦无操作)
+        if double {
+            self.state
+                .set_status(crate::t!("status.rewind_none").to_string(), Severity::Info);
+        }
+    }
+
+    /// 审批模式三态循环(Concord W4 T4.1,Chat 视图 Shift+Tab)
+    ///
+    /// WHY 状态栏反馈:模式切换无过渡动画,徽标 + 状态栏双通道即时告知;
+    /// 持久化随 TuiState 状态文件保留(白名单已纳入)。
+    fn cycle_approval_mode(&mut self) {
+        let next = self.state.approval_mode.cycle();
+        self.state.approval_mode = next;
+        self.state.set_status(
+            format!(
+                "{}: {}",
+                crate::t!("status.approval_mode"),
+                crate::t!(next.label_key())
+            ),
+            Severity::Info,
+        );
+    }
+
+    /// Tab 前缀补全:以选中候选的命令词替换输入缓冲(两词命令带尾随空格
+    /// 便于继续输入参数;无候选时无操作)
+    fn slash_tab_complete(&mut self) {
+        let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
+        let cands = crate::slash_surface::candidates(&reg, &self.state.input_buffer);
+        if cands.is_empty() {
+            return;
+        }
+        let sel = crate::slash_surface::clamp_selected(self.state.slash_selected, cands.len());
+        let name = cands[sel].name;
+        // 两词命令(含空格)补全后追加空格引导参数;单词命令同理保持一致
+        self.state.input_buffer = format!("{name} ");
+        self.state.slash_selected = 0;
+    }
+
+    /// 提交斜杠输入:三分层分流执行(Concord W2 T2.1 解析器 + 遗留回退)
+    fn submit_slash(&mut self) {
+        let input = self.state.input_buffer.trim().to_string();
+        self.state.input_mode = InputMode::Normal;
+        self.state.input_buffer.clear();
+        self.state.slash_selected = 0;
+        if input.is_empty() {
+            return;
+        }
+        // Concord W6 T6.2:斜杠命令同入 composer 历史(主流 CLI 共识;
+        // 去重/容量/导航复位语义在导航器内)
+        self.commit_input_history(&input);
+
+        // Concord W4 T4.5:! shell 直通 — HonestTodo 占位(红线:所有外部调用
+        // 须经 SecCore 沙箱 + Decay 衰减,安全派发管道未接线前不伪造直通)
+        if input.starts_with('!') {
+            self.state
+                .set_status(crate::t!("shell.todo").to_string(), Severity::Warning);
+            return;
+        }
+
+        use crate::actions::slash_parser::{parse, plan, ParsedSlash};
+        let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
+        match parse(&input, &reg) {
+            ParsedSlash::Empty => {}
+            ParsedSlash::Command { desc, args } => {
+                self.apply_dispatch_plan(plan(desc, &args), &args)
+            }
+            // 未命中命令表 → 遗留命令栏解析回退(面板切换/find/pause 等不丢功能)
+            ParsedSlash::Legacy(body) => {
+                if let Some(cmd) =
+                    crate::command_palette::CommandPalette::parse_legacy(&body, &mut self.state)
+                {
+                    self.apply_command(cmd);
+                }
+            }
+        }
+    }
+
+    /// 执行分流计划:Instant 本地效果 / Legacy 桥接 / Agent 模板入 composer
+    ///
+    /// Concord W4 T4.1:Plan 态拦截 orchestrated/agent 两层(仅规划不执行,
+    /// 诚实提示);instant 层为本地即时效果不受限。
+    fn apply_dispatch_plan(&mut self, plan: crate::actions::DispatchPlan, args: &str) {
+        if self.state.approval_mode.blocks_execution_tiers()
+            && !matches!(plan, crate::actions::DispatchPlan::Instant(_))
+        {
+            self.state.set_status(
+                crate::t!("approval.plan_blocked").to_string(),
+                Severity::Warning,
+            );
+            return;
+        }
+        match plan {
+            crate::actions::DispatchPlan::Instant(effect) => self.apply_slash_effect(effect),
+            crate::actions::DispatchPlan::LegacyFallback(cmd) => {
+                if let Some(c) =
+                    crate::command_palette::CommandPalette::parse_legacy(&cmd, &mut self.state)
+                {
+                    self.apply_command(c);
+                }
+            }
+            crate::actions::DispatchPlan::AgentTemplate(key) => {
+                // Agent 层:提示词模板预置进 composer(Insert 模式),操作员
+                // 补充内容后 Enter 走既有 TuiChatSubmitted 链路
+                let mut text = crate::i18n::tr(key).to_string();
+                text.push(' ');
+                text.push_str(args);
+                self.state.input_mode = InputMode::Insert;
+                self.state.input_buffer = text;
+            }
+        }
+    }
+
+    /// 执行 Instant 层本地效果(已接线的逐一落地;未接线的诚实反馈)
+    fn apply_slash_effect(&mut self, effect: crate::actions::SlashEffect) {
+        use crate::actions::SlashEffect;
+        match effect {
+            // /search 承接原 EnterSearch 语义:Some=设置关键字,空参清除
+            SlashEffect::Search(kw) => {
+                self.state.filter_keyword = kw;
+            }
+            // /filter 与 /level:复用遗留命令栏同一校验(避免双源漂移)
+            SlashEffect::FilterTopic(topic) => {
+                if topic.is_empty() {
+                    self.state
+                        .set_status("filter requires an argument", Severity::Error);
+                } else if crate::command_palette::is_valid_topic(&topic) {
+                    self.state.filter_topic = Some(topic.to_lowercase());
+                } else {
+                    self.state.set_status(
+                        format!("invalid topic '{topic}': expected quest|security|memory|health|parliament|budget|system"),
+                        Severity::Error,
+                    );
+                }
+            }
+            SlashEffect::FilterLevel(level) => {
+                if level.is_empty() {
+                    self.state
+                        .set_status("level requires an argument", Severity::Error);
+                } else {
+                    let l = level.to_lowercase();
+                    if matches!(l.as_str(), "info" | "warn" | "error" | "critical") {
+                        self.state.filter_level = Some(l);
+                    } else {
+                        self.state.set_status(
+                            format!("invalid level '{level}': expected info|warn|error|critical"),
+                            Severity::Error,
+                        );
+                    }
+                }
+            }
+            // 与既有键位同效的本地效果(复用同一执行方法,零行为分岐)
+            SlashEffect::ThemeCycle => self.cycle_theme_action(),
+            SlashEffect::LayoutCycle => self.cycle_layout_action(),
+            // Concord W4 T4.5:/focus —— Dashboard 切 SinglePane 专注布局(既有
+            // Focus 别名资产接线);Chat 态已全屏聚焦,诚实提示
+            SlashEffect::FocusView => {
+                if self.state.view_mode == crate::types::ViewMode::Dashboard {
+                    self.state.layout_mode = crate::types::LayoutMode::SinglePane;
+                    self.state.set_status(
+                        crate::t!("status.focus_applied").to_string(),
+                        Severity::Info,
+                    );
+                } else {
+                    self.state.set_status(
+                        crate::t!("status.already_chat_focus").to_string(),
+                        Severity::Info,
+                    );
+                }
+            }
+            // Concord W3 T3.4:/chat /dashboard 切换视图模式(W2 的 Chat 面板切换退役)
+            SlashEffect::SwitchView(mode) => {
+                self.state.view_mode = mode;
+                let key = match mode {
+                    crate::types::ViewMode::Chat => "status.view_chat",
+                    crate::types::ViewMode::Dashboard => "status.view_dashboard",
+                };
+                self.state
+                    .set_status(crate::t!(key).to_string(), Severity::Info);
+            }
+            SlashEffect::LocaleToggle => self.dispatch_action(
+                "system.toggle_locale",
+                "{}".to_string(),
+                ActionSource::Palette,
+            ),
+            SlashEffect::Help => self.open_help_action(),
+            SlashEffect::Exit => self.quit(),
+            // /panel <name>:大小写不敏感匹配已注册面板 as_str
+            SlashEffect::PanelByName(name) => {
+                let needle = name.trim().to_lowercase();
+                if needle.is_empty() {
+                    self.state
+                        .set_status("panel requires a panel name", Severity::Error);
+                    return;
+                }
+                let target = self
+                    .focus_manager
+                    .panels()
+                    .iter()
+                    .find(|p| p.as_str().to_lowercase() == needle);
+                match target {
+                    Some(id) => self.switch_panel_to(*id),
+                    None => self
+                        .state
+                        .set_status(format!("unknown panel '{name}'"), Severity::Error),
+                }
+            }
+            // /status:诚实汇总当前可读状态(不伪造未接线能力)
+            SlashEffect::Status => {
+                let s = &self.state;
+                let msg = format!(
+                    "quests={} budget={:.1}% theme={:?} locale={:?} panel={:?}",
+                    s.quest_list.len(),
+                    s.budget.utilization_rate * 100.0,
+                    self.config.theme,
+                    crate::i18n::current_locale(),
+                    self.focus_manager.focused()
+                );
+                self.state.set_status(msg, Severity::Info);
+            }
+            // /doctor:诚实汇总配置要点
+            SlashEffect::Doctor => {
+                let msg = format!(
+                    "tick={}ms persist={} quit_confirm={} bible={}",
+                    self.config.tick_interval_ms,
+                    self.config.persist_state,
+                    self.config.quit_requires_confirm,
+                    crate::config::tui_bible::TuiBible::default_path().display()
+                );
+                self.state.set_status(msg, Severity::Info);
+            }
+            // 已登记未接线 → 诚实反馈(不伪造功能,不静默吞掉)
+            SlashEffect::HonestTodo => {
+                self.state
+                    .set_status(crate::t!("slash.todo").to_string(), Severity::Warning);
+            }
         }
     }
 
@@ -214,6 +584,44 @@ impl TuiApp {
             RouteTarget::InsertChar(c) => self.state.input_buffer.push(c),
             RouteTarget::Backspace => {
                 self.state.input_buffer.pop();
+            }
+            // Concord W4 T4.5:@ 引用补全——末尾词以 @ 起始时替换为首个候选;
+            // 无候选时不改动缓冲(诚实降级,不伪造文件引用)
+            RouteTarget::MentionComplete => {
+                let tail = crate::mention::extract_mention_tail(&self.state.input_buffer);
+                if let Some((start, prefix)) = tail {
+                    let cands = crate::mention::mention_candidates(&self.state, &prefix);
+                    if let Some(first) = cands.first() {
+                        self.state.input_buffer.truncate(start);
+                        self.state.input_buffer.push_str(first);
+                    }
+                }
+            }
+            // Concord W6 T6.2:composer 历史 ↑ 回溯(首次保存草稿,到顶保持)
+            RouteTarget::HistoryPrev => {
+                let mut h = crate::composer_history::ComposerHistory::from_entries(
+                    self.state.input_history.clone(),
+                );
+                h.pos = self.state.history_pos;
+                h.draft = self.state.history_draft.clone();
+                if let Some(text) = h.prev(&self.state.input_buffer) {
+                    self.state.input_buffer = text;
+                }
+                self.state.history_pos = h.pos;
+                self.state.history_draft = h.draft;
+            }
+            // Concord W6 T6.2:composer 历史 ↓ 前进(回底恢复草稿)
+            RouteTarget::HistoryNext => {
+                let mut h = crate::composer_history::ComposerHistory::from_entries(
+                    self.state.input_history.clone(),
+                );
+                h.pos = self.state.history_pos;
+                h.draft = self.state.history_draft.clone();
+                if let Some(text) = h.forward() {
+                    self.state.input_buffer = text;
+                }
+                self.state.history_pos = h.pos;
+                self.state.history_draft = h.draft;
             }
             RouteTarget::ExitMode => {
                 // F-5:Esc 取消 palette 参数输入流(pending 动作不再派发)
@@ -242,9 +650,21 @@ impl TuiApp {
                     return;
                 }
 
+                // Concord W4 T4.5:! shell 直通 — HonestTodo 占位(红线:所有外部
+                // 调用须经 SecCore 沙箱 + Decay 衰减;安全派发管道未接线前
+                // 不伪造直通,也不把 ! 命令当普通 Chat 消息发送)
+                if text.starts_with('!') {
+                    self.state
+                        .set_status(crate::t!("shell.todo").to_string(), Severity::Warning);
+                    self.state.input_buffer.clear();
+                    return;
+                }
+
                 // M3b:非空输入发布 TuiChatSubmitted(经 EventBus 回环由 ChatSync 追加用户消息),
                 // 自动切到 Chat 面板;保持 Insert 模式形成 chat REPL(Esc 退出)。
                 if !text.is_empty() {
+                    // Concord W6 T6.2:提交入史(去重/容量语义在导航器内)
+                    self.commit_input_history(&text);
                     // 以 `/` 开头视为斜杠命令,提取命令名(首个空白前的词)
                     let slash_command = text
                         .strip_prefix('/')
@@ -256,13 +676,31 @@ impl TuiApp {
                         query: text,
                         slash_command,
                     });
-                    self.switch_panel_to(PanelId::Chat);
+                    // Concord W3 T3.2:Chat 模式下会话流已全屏,不再切面板;
+                    // Dashboard 模式保持原行为(提交后自动切到 Chat 面板)
+                    if self.state.view_mode == crate::types::ViewMode::Dashboard {
+                        self.switch_panel_to(PanelId::Chat);
+                    }
                 }
                 self.state.input_buffer.clear();
             }
             // 其余(Ignored 等)在 Insert 下无操作
             _ => {}
         }
+    }
+
+    /// composer 历史入史并复位导航(Concord W6 T6.2)
+    ///
+    /// WHY 经导航器:去重/容量/导航复位语义集中在 composer_history 纯函数
+    /// 状态机,本方法只做 state ↔ 导航器的搬运。
+    fn commit_input_history(&mut self, text: &str) {
+        let mut h = crate::composer_history::ComposerHistory::from_entries(
+            self.state.input_history.clone(),
+        );
+        h.commit(text);
+        self.state.input_history = h.entries;
+        self.state.history_pos = None;
+        self.state.history_draft.clear();
     }
 
     /// 循环切换主题 Dark → Light → HighContrast → Dark(P6.1,原 `t` 全局键)
@@ -600,7 +1038,7 @@ impl TuiApp {
         }
     }
 
-    /// 切换伴随面板可见性(M2 增量3,供 `\` 键与命令面板 `view.toggle_companion` 共用)
+    /// 切换伴随面板可见性(M2 增量3,供命令面板 `view.toggle_companion` 与程序化入口共用)
     fn toggle_companion_action(&mut self) {
         // Task 1.15.4:companion_visible 移至 pane_manager
         self.pane_manager.companion_visible = !self.pane_manager.companion_visible;
@@ -619,6 +1057,14 @@ impl TuiApp {
             ),
             Severity::Info,
         ));
+    }
+
+    /// 切换伴随面板(程序化公开入口,Concord W3 T3.4)
+    ///
+    /// WHY 新增:原默认键 `\` 已复用为 Chat⇄Dashboard 视图模式互切;
+    /// 本动作保留并经命令面板或本入口访问,零功能丢失。
+    pub fn toggle_companion(&mut self) {
+        self.toggle_companion_action();
     }
 
     /// 循环绑定伴随面板到下一个非焦点面板(M2 增量3 Stage 2,供 `]` 与命令面板共用)

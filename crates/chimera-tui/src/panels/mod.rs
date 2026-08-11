@@ -163,9 +163,9 @@ pub trait Panel: Send {
     /// # impl MyPanel {
     /// fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
     ///     vec![
-    ///         ("↑/↓", "导航"),
-    ///         ("Enter", "查看详情"),
-    ///         ("P", "暂停任务"),
+    ///         ("↑/↓", chimera_tui::t!("shortcut.navigate")),
+    ///         ("Enter", chimera_tui::t!("shortcut.details")),
+    ///         ("P", chimera_tui::t!("shortcut.pause")),
     ///     ]
     /// }
     /// # }

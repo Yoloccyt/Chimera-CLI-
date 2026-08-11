@@ -25,7 +25,8 @@ use crate::panels::{
     BudgetPanel, ChatPanel, ChtcPanel, ClvVectorPanel, DagVizPanel, DecayPanel, EventStreamPanel,
     HealthPanel, HelpPanel, LogPanel, McpNodesPanel, MemoryPanel, MetricsDashboardPanel,
     OsaSparsePanel, OverWindowPanel, Panel, ParliamentPanel, PvlScorePanel, QuestPanel,
-    ResourceMonitorPanel, RouterPanel, SecurityPanel, SelfAssessmentPanel, TaskManagerPanel,
+    ResourceMonitorPanel, RouterPanel, SecurityPanel, SelfAssessmentPanel, SysinfoPanel,
+    TaskManagerPanel, TimelinePanel,
 };
 use crate::types::{PanelId, TuiState};
 use event_bus::EventBus;
@@ -110,6 +111,10 @@ pub struct TuiApp {
     ///
     /// WHY 集中:`chat_session_id` + `palette` 聚合,便于扩展多会话/命令历史。
     pub(crate) chat_session: ChatSession,
+    /// 上一次 Chat 视图 Esc 的毫秒时间戳(Concord W4 T4.5 Esc Esc rewind)
+    ///
+    /// WHY 不持久化:双击窗口是瞬时交互状态,跨会话无意义。
+    last_esc_ms: Option<u64>,
     /// 可选的事件总线引用,用于发布控制请求事件(M4 双向控制)
     ///
     /// WHY Option:测试与普通启动场景可能不需要 EventBus,避免强制依赖。
@@ -137,6 +142,44 @@ pub struct TuiApp {
     frame_quiescent: bool,
 }
 
+/// 按 PanelId 构造面板实例 — 注册序驱动的面板工厂(Concord T1.4)
+///
+/// WHY 工厂函数:`TuiApp` 面板注册序必须与 `PanelId::REGISTERED_FOCUS_ORDER`
+/// 完全一致(P5① 双源收口);以 id 为驱动构造,注册列表由单一事实源
+/// 映射而来,新增面板只需在源表加 id + 本函数加分支,INV-F 不变量测试
+/// 会即时捕获任何遗漏。
+fn make_panel(id: PanelId) -> Box<dyn Panel> {
+    match id {
+        PanelId::Quest => Box::new(QuestPanel::new()),
+        PanelId::Parliament => Box::new(ParliamentPanel::new()),
+        PanelId::Budget => Box::new(BudgetPanel::new()),
+        PanelId::Memory => Box::new(MemoryPanel::new()),
+        PanelId::Security => Box::new(SecurityPanel::new()),
+        PanelId::Health => Box::new(HealthPanel::new()),
+        PanelId::Log => Box::new(LogPanel::new()),
+        PanelId::Help => Box::new(HelpPanel::new()),
+        PanelId::Decay => Box::new(DecayPanel::new()),
+        PanelId::EventStream => Box::new(EventStreamPanel::new()),
+        PanelId::Router => Box::new(RouterPanel::new()),
+        PanelId::McpNodes => Box::new(McpNodesPanel::new()),
+        PanelId::Chtc => Box::new(ChtcPanel::new()),
+        // Concord T1.4:Timeline 接线(P7 历史回放面板,此前仅枚举占位未注册)
+        PanelId::Timeline => Box::new(TimelinePanel::new()),
+        PanelId::OsaSparse => Box::new(OsaSparsePanel::new()),
+        PanelId::ClvVector => Box::new(ClvVectorPanel::new()),
+        PanelId::ResourceMonitor => Box::new(ResourceMonitorPanel::new()),
+        PanelId::MetricsDashboard => Box::new(MetricsDashboardPanel::new()),
+        // Concord T1.4:Sysinfo 接线(系统信息面板,与 ResourceMonitor 互补)
+        PanelId::Sysinfo => Box::new(SysinfoPanel::new()),
+        PanelId::Chat => Box::new(ChatPanel::new()),
+        PanelId::SelfAssessment => Box::new(SelfAssessmentPanel::new()),
+        PanelId::DagViz => Box::new(DagVizPanel::new()),
+        PanelId::PvlScore => Box::new(PvlScorePanel::new()),
+        PanelId::TaskManager => Box::new(TaskManagerPanel::new()),
+        PanelId::OverWindow => Box::new(OverWindowPanel::new()),
+    }
+}
+
 impl TuiApp {
     /// 创建 TUI 应用实例,使用默认桩数据源(生产环境应改用 `with_data_source`)。
     pub fn new(config: TuiConfig) -> Result<Self, TuiError> {
@@ -154,60 +197,25 @@ impl TuiApp {
         data_source: Box<dyn TuiDataSource>,
     ) -> Result<Self, TuiError> {
         config.validate()?;
-        // v2.9.0-omega:注册 23 个面板(25 PanelId 枚举,2 个未注册;P1 新增 OverWindow)。
-        // 未注册 PanelId 原因:
-        // - Timeline:P7 历史回放引擎(v1.8+) 接口占位,无对应 Panel 实现
-        // - Sysinfo:数据由 ResourceMonitorPanel 承载,无需独立面板
-        // FocusManager 循环顺序:Quest → Parliament → ... → OsaSparse → PvlScore → TaskManager → OverWindow → Quest(23 面板循环)。
-        // WHY MetricsDashboard 加入主循环:与 ResourceMonitorPanel 同属
-        // 监控类展示面板,默认进入主循环便于用户 Tab 键直接访问。
-        let panels: Vec<Box<dyn Panel>> = vec![
-            Box::new(QuestPanel::new()),
-            Box::new(ParliamentPanel::new()),
-            Box::new(BudgetPanel::new()),
-            Box::new(MemoryPanel::new()),
-            Box::new(SecurityPanel::new()),
-            Box::new(HealthPanel::new()),
-            Box::new(LogPanel::new()),
-            Box::new(HelpPanel::new()),
-            // P2 新增监控面板(占位实现,后续 Task 填充具体渲染逻辑)
-            Box::new(DecayPanel::new()),
-            Box::new(EventStreamPanel::new()),
-            Box::new(RouterPanel::new()),
-            Box::new(McpNodesPanel::new()),
-            Box::new(ChtcPanel::new()),
-            // P8 系统资源监控面板:CLV 向量可视化 + 实时资源指标
-            Box::new(ClvVectorPanel::new()),
-            Box::new(ResourceMonitorPanel::new()),
-            // P9 指标仪表盘面板(Task 2.2):5×2 网格 + 可绑定数据源
-            Box::new(MetricsDashboardPanel::new()),
-            // Task 3.6:L10 → L6 向下依赖,OSA 稀疏度可视化面板
-            // 展示 Ω-Sparse 五维掩码(Routing/Context/Memory/Audit/Budget),数据来源 osa_coordinator::five_dimension_masks()
-            Box::new(OsaSparsePanel::new()),
-            // M3b:Chat 面板(交互式 Agent 对话);追加到循环末尾,不改现有 Tab 次序
-            Box::new(ChatPanel::new()),
-            // polish-v2.7 P1-5:自评仪表盘面板(五维度 Harness 自我评估,ADR-049);
-            // 追加到循环末尾,数据从 latest_events 派生,零管道侵入
-            Box::new(SelfAssessmentPanel::new()),
-            // closure Stage B-10:DAG 可视化面板(Quest 任务 DAG 层级树);
-            // 追加到循环末尾,数据从 quest_list 派生,零管道侵入
-            Box::new(DagVizPanel::new()),
-            // Task 3.7:L10 → L7 向下依赖,PVL 过程评分面板
-            // 展示九维度过程评分(快手 KAT,ADR-049),数据来源 pvl_layer::pvl_score()
-            Box::new(PvlScorePanel::new()),
-            // Task 3.9:L10 → L9 向下依赖,任务管理面板
-            // 展示 Quest CRUD 控制台 + 四象限稳定分工(ADR-027),数据来源 chimera_mas::quadrant_status()
-            Box::new(TaskManagerPanel::new()),
-            // P1(ADR-072):超窗兜底面板 — 展示 OverWindowFallbackTriggered
-            // 数据从 latest_events 派生(零管道侵入,同 SelfAssessment/DagViz),置于循环末尾
-            Box::new(OverWindowPanel::new()),
-        ];
+        // Concord T1.4(P5① 收口):面板注册序派生自 PanelId::REGISTERED_FOCUS_ORDER
+        // 单一事实源;25 面板全部注册(此前 Timeline/Sysinfo 未注册,§7.3 接线)。
+        // FocusManager 遍历序 == PanelId::next/prev 静态环,由 INV-F 不变量测试守护。
+        let panels: Vec<Box<dyn Panel>> = PanelId::REGISTERED_FOCUS_ORDER
+            .iter()
+            .copied()
+            .map(make_panel)
+            .collect();
         let panel_ids: Vec<PanelId> = panels.iter().map(|p| p.id()).collect();
         let focus_manager = FocusManager::new(panel_ids);
-        let state = if config.persist_state {
+        let state = if config.persist_state && config.state_file_path.exists() {
+            // 持久化状态存在时以状态文件为准(用户运行时选择优先)
             TuiState::load_from_file(&config.state_file_path)
         } else {
-            TuiState::new()
+            // Concord W3 T3.2:无持久化状态时用配置默认视图模式初始化
+            // (TuiConfig::default 取 Chat 第一默认,ADR-076;遗留测试可显式置 Dashboard)
+            let mut s = TuiState::new();
+            s.view_mode = config.default_view_mode;
+            s
         };
 
         // Task 1.15.4:先取出 main_panel_ratio,避免 config 在结构体字面量中被 move 后再使用
@@ -226,6 +234,8 @@ impl TuiApp {
             // Task 1.15.4:chat_session_id + palette 聚合到 ChatSession
             // M3b:会话 id 用 uuid v7(时间有序),整个 TuiApp 生命周期复用
             chat_session: ChatSession::new(),
+            // Concord W4 T4.5:Esc Esc 双击检测初始无记录
+            last_esc_ms: None,
             event_bus: None,
             #[cfg(feature = "v3-engine")]
             v3_output: None,
@@ -272,6 +282,14 @@ impl TuiApp {
     /// 避免与 `TuiState.current_panel` 双来源不一致。
     pub fn current_panel(&self) -> PanelId {
         self.focus_manager.focused()
+    }
+
+    /// 返回生产焦点环的面板顺序(注册序)
+    ///
+    /// WHY 公开(Concord T1.2):双源一致性不变量测试需将 FocusManager 遍历序
+    /// 与 `PanelId::next/prev` 静态表对照,暴露/防止 P5① 焦点双源漂移。
+    pub fn panel_focus_order(&self) -> &[PanelId] {
+        self.focus_manager.panels()
     }
 
     /// v2.9.0-omega Task 2.6:判断窄视口下是否应折叠伴随面板(响应式布局)

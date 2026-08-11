@@ -19,7 +19,11 @@
 //!
 //! 本通道仅传输 R1 数据面信号；R2 训练面解冻后由训练服务消费。
 
-use anyhow::{anyhow, Result};
+// Concord W1 门槛修复(既有漂移):`anyhow!` 宏仅在 rl-client feature 块内
+// 使用,默认构建下该导入未用;cfg 门控保持两态均零警告。
+#[cfg(feature = "rl-client")]
+use anyhow::anyhow;
+use anyhow::Result;
 use nexus_contracts::reward::RewardSignal;
 
 /// 经验批量上传响应（服务端确认）

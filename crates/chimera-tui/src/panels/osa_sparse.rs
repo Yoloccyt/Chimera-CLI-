@@ -272,7 +272,7 @@ impl Panel for OsaSparsePanel {
         let masks = five_dimension_masks();
         let mask_lines = vec![
             Line::from(Span::styled(
-                "五维掩码状态",
+                crate::t!("panel.osa.mask_status"),
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(vec![
@@ -399,7 +399,7 @@ impl Panel for OsaSparsePanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("R", "刷新")]
+        vec![("R", crate::t!("shortcut.refresh"))]
     }
 }
 

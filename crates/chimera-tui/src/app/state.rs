@@ -80,6 +80,8 @@ impl TuiApp {
                 self.state.quest_list = snapshot.quest_list.clone();
                 self.state.paused_quest_count = snapshot.paused_quest_count;
                 self.state.budget = snapshot.budget_metrics.clone();
+                // Concord T1.7:陈旧标志随指标同步(驱动 Budget 面板置灰)
+                self.state.budget_metrics_stale = snapshot.budget_metrics_stale;
                 self.state.memory_metrics = snapshot.memory_metrics.clone();
                 self.state.security_state = snapshot.security_state.clone();
                 self.state.health_metrics = snapshot.health_metrics.clone();

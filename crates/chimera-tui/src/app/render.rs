@@ -7,13 +7,13 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs, Widget};
 use ratatui::Frame;
 use std::time::Instant;
 
 use super::TuiApp;
 use crate::config::Theme;
-use crate::types::{InputMode, LayoutMode};
+use crate::types::{InputMode, LayoutMode, PanelId};
 
 impl TuiApp {
     /// 渲染当前帧:绘制所有面板 + FPS 统计 + 弹窗叠加。
@@ -33,6 +33,13 @@ impl TuiApp {
         self.fps_counter.last_frame_time = now;
         self.update_fps(delta);
 
+        // Concord W3 T3.2:会话模式为第一默认视图(ADR-076);会话流全屏 +
+        // composer 底栏 + statusline,不走 Dashboard 三块布局。
+        if self.state.view_mode == crate::types::ViewMode::Chat {
+            self.render_chat_mode(frame);
+            return;
+        }
+
         // v3-engine M2 分发:feature 开启且未通过 env var 禁用时走 v3 路径
         #[cfg(feature = "v3-engine")]
         if !Self::v3_engine_disabled_by_env() {
@@ -42,6 +49,84 @@ impl TuiApp {
 
         // 回退路径:ratatui Layout::split + frame.render_widget
         self.legacy_ratatui_render(frame);
+    }
+
+    /// 渲染会话模式视图(Concord W3 T3.2):会话流 + composer + statusline
+    ///
+    /// # 布局
+    /// 三区域自上而下:ChatStream(弹性)复用已注册的 Chat 面板实例(滚动/
+    /// 跟随状态跨模式保留);composer 底栏复用 CommandPalette 底栏渲染
+    /// (Insert/Slash/Command 态各自前缀);Normal 态显示输入提示占位。
+    ///
+    /// WHY 单函数双路径共用:会话模式布局与 v3/legacy 无关(区域简单固定),
+    /// 单实现避免双路径分岐;帧末同样清理 dirty 集合。
+    pub(crate) fn render_chat_mode(&mut self, frame: &mut Frame<'_>) {
+        // Concord W6 T6.1:Plan/Auto 态预留 ModeBanner 条件行;Normal 态
+        // 布局与 W3 逐字节一致(零冲击面)
+        let banner_visible = crate::mode_banner::banner_line(self.state.approval_mode).is_some();
+        let parts = crate::chat_mode::split_chat_layout(frame.area(), banner_visible);
+        let buf = frame.buffer_mut();
+
+        // 会话流:复用已注册 Chat 面板实例(与 Dashboard 内同一实例,状态保留)
+        let state = &self.state;
+        if let Some(idx) = self.panel_index(PanelId::Chat) {
+            self.panels[idx].render(state, parts.stream, buf);
+        }
+
+        // Concord W6 T6.1:ModeBanner 常驻横幅(stream 与 composer 之间)
+        if let Some(banner_area) = parts.banner {
+            crate::mode_banner::render_banner(state.approval_mode, banner_area, buf);
+        }
+
+        // composer 底栏:非 Normal 态复用 CommandPalette 底栏(Insert `>` /
+        // Slash `/` / Command `:` 前缀);Normal 态显示输入提示占位
+        if state.input_mode != InputMode::Normal {
+            self.command_palette.render(state, parts.composer, buf);
+        } else {
+            let hint = Paragraph::new(Line::from(Span::styled(
+                format!("> {}", crate::t!("chat.composer_hint")),
+                Style::default().add_modifier(Modifier::DIM),
+            )))
+            .block(Block::default().borders(Borders::ALL));
+            hint.render(parts.composer, buf);
+        }
+
+        // statusline:复用 Dashboard 状态栏(面板/tick/FPS/状态消息同源)
+        self.render_status_bar(frame, parts.status);
+
+        // Concord W3 T3.3:会话流内嵌卡片——复盘卡优先(失败告警),
+        // 否则计划卡;附着于会话流区底部(先 Clear 再绘,不遮 composer)
+        let reflection = crate::chat_cards::derive_reflection_card(&self.state);
+        let plan = if reflection.is_none() {
+            crate::chat_cards::derive_quest_plan_card(&self.state)
+        } else {
+            None
+        };
+        if reflection.is_some() || plan.is_some() {
+            let card_h = if reflection.is_some() { 5u16 } else { 6u16 };
+            if parts.stream.height > card_h + 2 {
+                let card_area = Rect::new(
+                    parts.stream.x,
+                    parts.stream.y + parts.stream.height - card_h,
+                    parts.stream.width,
+                    card_h,
+                );
+                ratatui::widgets::Clear.render(card_area, frame.buffer_mut());
+                if let Some(r) = &reflection {
+                    crate::chat_cards::render_reflection_card(r, card_area, frame.buffer_mut());
+                } else if let Some(p) = &plan {
+                    crate::chat_cards::render_quest_plan_card(p, card_area, frame.buffer_mut());
+                }
+            }
+        }
+
+        // Concord W2/W3:Slash 态补全列表 overlay(会话流区底部靠栏)
+        if self.state.input_mode == InputMode::Slash {
+            self.render_slash_overlay(frame, parts.stream);
+        }
+
+        // 帧末清理 dirty(与 Dashboard 路径一致)
+        self.state.clear_dirty();
     }
 
     /// 检查环境变量 `CHIMERA_NO_V3_ENGINE` 是否禁用 v3-engine(M2 回退验证用)
@@ -100,6 +185,11 @@ impl TuiApp {
         // Task 1.15.4:palette 移至 chat_session,经 chat_session 字段访问
         if self.chat_session.palette.is_some() {
             self.render_palette(frame, area);
+        }
+
+        // Concord W2:斜杠补全列表 overlay(遗留路径同步,双路径行为一致)
+        if self.state.input_mode == InputMode::Slash {
+            self.render_slash_overlay(frame, chunks[1]);
         }
 
         // P4.1:本帧渲染完成,重置 dirty 集合。下一帧的 `update` 会基于
@@ -163,8 +253,39 @@ impl TuiApp {
             self.render_palette(frame, area);
         }
 
+        // Concord W2:斜杠补全列表 overlay(v3 路径同步,双路径行为一致)
+        if self.state.input_mode == InputMode::Slash {
+            self.render_slash_overlay(frame, chunks[1]);
+        }
+
         // P4.1:本帧渲染完成,重置 dirty 集合
         self.state.clear_dirty();
+    }
+
+    /// 斜杠命令补全 overlay(Concord W2 T2.2)
+    ///
+    /// 在主区底部绘制候选列表(输入栏上方):宽 min(64, 区宽),高随候选数
+    /// 增长但不超 12 行;先 `Clear` 擦除底层再渲染,避免面板内容透出。
+    /// WHY 底部靠栏而非居中:补全与输入栏视觉连续(主流 Agent CLI 交互惯例)。
+    fn render_slash_overlay(&self, frame: &mut Frame<'_>, main_area: Rect) {
+        use ratatui::widgets::Widget;
+        let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
+        let cands = crate::slash_surface::candidates(&reg, &self.state.input_buffer);
+        if cands.is_empty() || main_area.height < 3 || main_area.width < 8 {
+            return;
+        }
+        let rows = cands.len().min(crate::slash_surface::MAX_VISIBLE_ROWS) + 2; // 边框两行
+        let height = (rows as u16).min(main_area.height);
+        let width = 64u16.min(main_area.width);
+        let overlay = Rect::new(
+            main_area.x,
+            main_area.y + main_area.height - height,
+            width,
+            height,
+        );
+        ratatui::widgets::Clear.render(overlay, frame.buffer_mut());
+        let selected = crate::slash_surface::clamp_selected(self.state.slash_selected, cands.len());
+        crate::slash_surface::render_candidates(&cands, selected, overlay, frame.buffer_mut());
     }
 
     /// v3 布局计算 — 用 `engine::layout::flex::split` 替换 ratatui `Layout::split`
@@ -484,7 +605,21 @@ impl TuiApp {
                 .bg(self.theme_accent())
                 .add_modifier(Modifier::BOLD),
         );
-        let line = Line::from(span);
+        // Concord W4 T4.1:审批模式徽标(三态色彩区分,Chat/Dashboard 双视图共用;
+        // yottacode banner 实证——模式状态常驻可见)
+        let badge_fg = match self.state.approval_mode {
+            crate::approval_mode::ApprovalMode::Normal => Color::Green,
+            crate::approval_mode::ApprovalMode::Plan => Color::Yellow,
+            crate::approval_mode::ApprovalMode::Auto => Color::Red,
+        };
+        let badge = Span::styled(
+            format!(" {} ", crate::t!(self.state.approval_mode.label_key())),
+            Style::default()
+                .fg(badge_fg)
+                .bg(self.theme_accent())
+                .add_modifier(Modifier::BOLD),
+        );
+        let line = Line::from(vec![span, badge]);
         let paragraph = Paragraph::new(line);
         frame.render_widget(paragraph, area);
     }
@@ -540,7 +675,11 @@ mod v3_engine_tests {
 
     /// 构造指定 LayoutMode 的 TuiApp(使用默认 StubDataSource)
     fn make_app(layout_mode: LayoutMode) -> TuiApp {
-        let mut app = TuiApp::new(TuiConfig::default()).expect("TuiApp construction failed");
+        let mut app = {
+            let mut __app = TuiApp::new(TuiConfig::default()).expect("TuiApp construction failed");
+            __app.state_mut().view_mode = crate::types::ViewMode::Dashboard;
+            __app
+        };
         app.state_mut().layout_mode = layout_mode;
         app
     }
@@ -787,7 +926,11 @@ mod v3_engine_tests {
         // 与其它 locale 测试互斥,避免并行竞态把全局语言切到 En 导致断言失败
         let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
-        let mut app = TuiApp::new(TuiConfig::default()).expect("TuiApp construction failed");
+        let mut app = {
+            let mut __app = TuiApp::new(TuiConfig::default()).expect("TuiApp construction failed");
+            __app.state_mut().view_mode = crate::types::ViewMode::Dashboard;
+            __app
+        };
         app.switch_panel_to(crate::types::PanelId::Quest);
         let backend = TestBackend::new(80, 24);
         let mut term = ratatui::Terminal::new(backend).expect("memory terminal init");

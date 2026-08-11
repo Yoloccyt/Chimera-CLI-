@@ -169,10 +169,8 @@ impl EventStreamPanel {
         // 用户视线从标题下移时首先看到丢弃计数,确保不会被新事件流冲走。
         if state.critical_event_dropped_count > 0 {
             lines.push(Line::from(Span::styled(
-                format!(
-                    "[ALERT] CRITICAL 事件丢弃: {} (旁路通道容量满)",
-                    state.critical_event_dropped_count
-                ),
+                crate::t!("panel.event_stream.alert_dropped")
+                    .replace("{}", &state.critical_event_dropped_count.to_string()),
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             )));
         }
@@ -185,7 +183,8 @@ impl EventStreamPanel {
             if selected < last_idx {
                 let new_count = last_idx - selected;
                 lines.push(Line::from(Span::styled(
-                    format!("[新事件 {} 条] 按 G 跟随", new_count),
+                    crate::t!("panel.event_stream.new_events_follow")
+                        .replace("{}", &new_count.to_string()),
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
@@ -387,12 +386,12 @@ impl Panel for EventStreamPanel {
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         vec![
-            ("↑/↓", "导航"),
-            ("PgUp/PgDn", "翻页"),
-            ("g g", "跳顶"),
-            ("G", "跳底"),
-            ("Enter", "详情"),
-            ("/", "过滤"),
+            ("↑/↓", crate::t!("shortcut.navigate")),
+            ("PgUp/PgDn", crate::t!("shortcut.page_updown")),
+            ("g g", crate::t!("shortcut.jump_top")),
+            ("G", crate::t!("shortcut.jump_bottom")),
+            ("Enter", crate::t!("shortcut.details")),
+            ("/", crate::t!("shortcut.filter")),
         ]
     }
 }

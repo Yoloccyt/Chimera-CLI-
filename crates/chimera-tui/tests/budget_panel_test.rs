@@ -27,16 +27,49 @@ fn budget(utilization: f32) -> BudgetMetrics {
     }
 }
 
-/// 构造含指定 Budget 的 TuiState
+/// 构造含指定 Budget 的 TuiState(显式置为新鲜数据;TuiState::new 默认
+/// 陈旧,Concord T1.7——本组用例验证的是有数据接入时的渲染)
 fn state_with(b: BudgetMetrics) -> TuiState {
     let mut state = TuiState::new();
     state.budget = b;
+    state.budget_metrics_stale = false;
     state
 }
 
 // ============================================================
 // A. 正常态 / 超限态渲染
 // ============================================================
+
+// ============================================================
+// A'. 陈旧态渲染(Concord T1.7:budget_metrics_ttl_ms 消费)
+// ============================================================
+
+#[test]
+fn stale_state_shows_expiry_marker() {
+    // 陈旧态:整体置灰 + 标题下方过期提示(“⚠” 为 locale 无关标记)
+    let mut state = state_with(budget(0.5));
+    state.budget_metrics_stale = true;
+    let content = BudgetPanel::content(&state).to_string();
+    assert!(content.contains('⚠'), "陈旧态应展示过期提示标记");
+    // 指标本身仍展示(诚实呈现已过期数据,不隐藏)
+    assert!(content.contains("50.0%"), "陈旧态仍应展示利用率数值");
+}
+
+#[test]
+fn fresh_state_hides_expiry_marker() {
+    let state = state_with(budget(0.5));
+    let content = BudgetPanel::content(&state).to_string();
+    assert!(!content.contains('⚠'), "新鲜数据不应展示过期提示");
+}
+
+#[test]
+fn default_new_state_is_stale_by_default() {
+    // TuiState::new 初始无数据接入 → 陈旧(诚实展示原则)
+    let state = TuiState::new();
+    assert!(state.budget_metrics_stale, "初始状态应视为陈旧");
+    let content = BudgetPanel::content(&state).to_string();
+    assert!(content.contains('⚠'), "初始渲染应带过期提示");
+}
 
 #[test]
 fn normal_state_shows_metrics_and_ok_status() {

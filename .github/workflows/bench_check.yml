@@ -85,6 +85,9 @@ jobs:
           run_bench exit_code_matrix cargo bench -p chimera-cli --bench exit_code_matrix
           run_bench render_bench cargo bench -p chimera-tui --bench render_bench
           run_bench diff_engine_bench cargo bench -p chimera-tui --bench diff_engine_bench
+          # Concord W5:流式渲染链路基准(NewlineGate 行闸门 ttfb + 单 token 增量,
+          # streaming_bench.rs 模块目标 P95 < 500µs·token / ttfb < 1ms)
+          run_bench streaming_bench cargo bench -p chimera-tui --bench streaming_bench
           run_bench wal_recovery cargo bench -p mcp-mesh --bench wal_recovery
           run_bench degradation_chain cargo bench -p csn-substitutor --bench degradation_chain
           # L9 Quest 层优化基线守护(2026-07-31 新增):dag/gea/scheduler/dedup/checkpoint/shadow
@@ -133,6 +136,13 @@ jobs:
               "wal_recovery":      100_000_000,    # < 100ms
               "degradation_chain": 1_000,          # < 1µs
               "render_bench":      16_000_000,     # < 16ms (60 FPS)
+              # Concord W5 流式链路守护(Concord W4 实测基线 × CI 抖动余量):
+              #   - streaming_single_token 实测 ≈13-33µs,模块 P95 目标 500µs,取 500µs
+              #   - ttfb_first_line 实测 ≈125ns,<1ms 预算取 1ms(≈8 倍余量)
+              #   - feed_100_lines_charwise 实测 ≈34µs,取 5ms(≈140 倍余量防抖)
+              "streaming_single_token": 500_000,   # < 500µs·token
+              "streaming_ttfb":         1_000_000, # < 1ms
+              "streaming_feed":         5_000_000, # < 5ms
               # L9 优化基线守护(2026-07-31,阀值 = 本地基线中位数 × ~2 防 CI 抖动):
               #   - dag validate/topo 1000 节点 diamond 实测 ≈1.9ms(优化后,旧版 21ms),取 5ms
               #   - gea 满载驱逐路径(含 activate 全流程),取 500µs
@@ -166,6 +176,11 @@ jobs:
               "wal_recovery":      ["wal"],
               "degradation_chain": ["degradation"],
               "render_bench":      ["render"],
+              # Concord W5:流式链路关键词(与既有 render/diff/wal 无冲突,
+              # 提词选取组名全名或独有子串,避免跨 benchmark 歧义)
+              "streaming_single_token": ["streaming_single_token"],
+              "streaming_ttfb":         ["ttfb_first_line"],
+              "streaming_feed":         ["feed_100_lines"],
               # L9 关键词选取无歧义(各仅对应单一 bench group):
               #   - "dag" 仅 dag_bench 的 dag/validate|dag/topo_order 使用
               #   - "gea_cache" 对应 gate_compute 的 activate_eviction_saturated 驱逐组

@@ -24,7 +24,14 @@ use ratatui::backend::TestBackend;
 use crate::popup::Severity;
 
 fn make_app() -> Result<TuiApp, TuiError> {
-    TuiApp::new(TuiConfig::default())
+    let mut app = TuiApp::new(TuiConfig {
+        default_view_mode: crate::types::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    })?;
+    // Concord W3:遗留测试断言 Dashboard 布局;Chat 为第一默认视图(ADR-076)
+    app.state_mut().view_mode = crate::types::ViewMode::Dashboard;
+    Ok(app)
 }
 
 /// 构造一个简单 Quest，用于数据驱动面板测试
@@ -113,7 +120,7 @@ fn test_switch_panel_next() -> Result<(), Box<dyn std::error::Error>> {
 fn test_switch_panel_prev() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_prev();
-    // Task 3.7/3.9 + P1:FocusManager 现注册 23 面板(OverWindow 追加到循环末尾);
+    // Concord T1.4:FocusManager 注册序派生自 PanelId::REGISTERED_FOCUS_ORDER(25 面板);
     // Quest 的上一个 = 列表末尾的 OverWindow 面板。
     assert_eq!(app.current_panel(), PanelId::OverWindow);
     Ok(())
@@ -234,9 +241,11 @@ fn test_handle_key_release_ignored() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_handle_key_command_mode() -> Result<(), Box<dyn std::error::Error>> {
+    // Concord W2:`:` 进入斜杠命令模式(废弃窗口别名);未命中命令表的
+    // "budget" 经 Legacy 回退继续完成面板切换(零功能断裂)。
     let mut app = make_app()?;
     app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), event::KeyModifiers::NONE));
-    assert_eq!(app.state().input_mode, InputMode::Command);
+    assert_eq!(app.state().input_mode, InputMode::Slash);
 
     // 输入命令
     for c in "budget".chars() {
@@ -253,14 +262,15 @@ fn test_handle_key_command_mode() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_handle_key_search_mode_sets_filter() -> Result<(), Box<dyn std::error::Error>> {
+    // Concord W2:`/` 翻转为斜杠命令第一入口;原搜索语义由 `/search` 命令承接。
     let mut app = make_app()?;
     app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), event::KeyModifiers::NONE));
-    assert_eq!(app.state().input_mode, InputMode::Search);
+    assert_eq!(app.state().input_mode, InputMode::Slash);
 
-    for c in "Error".chars() {
+    for c in "search Error".chars() {
         app.handle_key_event(KeyEvent::new(KeyCode::Char(c), event::KeyModifiers::NONE));
     }
-    assert_eq!(app.state().input_buffer, "Error");
+    assert_eq!(app.state().input_buffer, "search Error");
 
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, event::KeyModifiers::NONE));
     assert_eq!(app.state().input_mode, InputMode::Normal);
@@ -853,8 +863,14 @@ fn update_freezes_sys_metrics_when_monitor_paused() -> Result<(), Box<dyn std::e
     // Mock 数据源固定返回 global_usage=10 的 sys_metrics
     let mut snap = DataSnapshot::default();
     snap.sys_metrics.cpu.global_usage = 10.0;
-    let mut app =
-        TuiApp::with_data_source(TuiConfig::default(), Box::new(MockDataSource::new(snap)))?;
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(MockDataSource::new(snap)),
+    )?;
 
     // 未暂停:update 刷新为 mock 值
     app.update();
@@ -1084,7 +1100,11 @@ fn enrich_payload_with_focused_quest_three_states() -> Result<(), Box<dyn std::e
 #[test]
 fn test_with_data_source_accepts_custom_source() -> Result<(), Box<dyn std::error::Error>> {
     let app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(DataSnapshot::default())),
     )?;
     assert!(app.state().quest_list.is_empty());
@@ -1109,7 +1129,11 @@ fn test_update_pulls_snapshot_into_state() -> Result<(), Box<dyn std::error::Err
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )?;
     app.update();
@@ -1138,7 +1162,14 @@ fn test_update_sets_status_message_on_error() -> Result<(), Box<dyn std::error::
         }
     }
 
-    let mut app = TuiApp::with_data_source(TuiConfig::default(), Box::new(FailingDataSource))?;
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(FailingDataSource),
+    )?;
     app.update();
 
     assert!(
@@ -1166,7 +1197,11 @@ fn test_quest_panel_renders_real_quest_data() -> Result<(), Box<dyn std::error::
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )?;
     app.update();
@@ -1202,7 +1237,11 @@ fn test_budget_panel_content_uses_state() -> Result<(), Box<dyn std::error::Erro
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )?;
     app.update();
@@ -1238,7 +1277,11 @@ fn test_log_panel_content_uses_state() -> Result<(), Box<dyn std::error::Error>>
     };
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )?;
     app.update();
@@ -1379,7 +1422,11 @@ fn test_dirty_map_macro_generates_correct_mappings() -> Result<(), Box<dyn std::
     // 用默认快照创建 app,update() 后 state 与快照一致
     let snapshot = DataSnapshot::default();
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )?;
     app.update();
@@ -1414,7 +1461,11 @@ fn test_dirty_map_macro_generates_correct_mappings() -> Result<(), Box<dyn std::
 fn test_dirty_map_macro_multi_field_or_logic() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot = DataSnapshot::default();
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )?;
     app.update();
@@ -1457,7 +1508,11 @@ fn test_dirty_map_macro_multi_field_or_logic() -> Result<(), Box<dyn std::error:
 fn test_dirty_map_macro_multi_panel_marking() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot = DataSnapshot::default();
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(MockDataSource::new(snapshot)),
     )?;
     app.update();

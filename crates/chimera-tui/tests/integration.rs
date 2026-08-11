@@ -48,7 +48,16 @@ static LOCALE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 构造测试用 TUI 应用(默认配置)
 fn make_app() -> TuiApp {
-    TuiApp::new(TuiConfig::default()).unwrap()
+    {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    }
 }
 
 /// 在 TestBackend 上渲染应用,返回渲染后的字符串内容
@@ -194,6 +203,8 @@ fn test_tui_layout_rendering_theme_switch() {
         ..Default::default()
     })
     .unwrap();
+    // Concord W3:主题渲染对比基于 Dashboard 布局(Chat 为第一默认)
+    light_app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
     let light_content = render_to_string(&mut light_app, 80, 24);
     assert!(
         !light_content.is_empty(),
@@ -240,80 +251,37 @@ fn test_tui_input_mode_switching() {
 
 #[test]
 fn test_tui_input_mode_circular_navigation() {
-    // WHY 循环导航:验证 Quest → ... → TaskManager → Quest 的完整循环
-    // (23 面板)。closure Stage B-10:SelfAssessment(P1-5)与 DagViz(B-10)、
-    // Task 3.7 PvlScore / Task 3.9 TaskManager 先后追加到主循环末尾,
-    // ADR-072(P1)追加 OverWindow 到循环末尾,从 22 扩展到 23 面板
-    // (Timeline/Sysinfo 未注册故不含)。
+    // WHY 循环导航:验证 Tab/Shift+Tab 沿焦点环完整循环一周回到原点。
+    // Concord T1.4:期望序列不再手写(避免测试成为第三处顺序源),而是派生
+    // 自 PanelId::REGISTERED_FOCUS_ORDER 单一事实源:Tab 沿环正向逐位,
+    // Shift+Tab 逆向逐位;25 面板全部注册(Timeline/Sysinfo 已接线)。
     let mut app = make_app();
+    let order = PanelId::REGISTERED_FOCUS_ORDER;
+    let n = order.len();
+    assert!(
+        n >= 25,
+        "焦点环应含全部已注册面板(含 Timeline/Sysinfo 接线)"
+    );
 
-    // 连续 Tab 23 次应回到原点(23 面板循环:起点 Quest + 22 个后续)
-    for expected in [
-        PanelId::Parliament,
-        PanelId::Budget,
-        PanelId::Memory,
-        PanelId::Security,
-        PanelId::Health,
-        PanelId::Log,
-        PanelId::Help,
-        PanelId::Decay,
-        PanelId::EventStream,
-        PanelId::Router,
-        PanelId::McpNodes,
-        PanelId::Chtc,
-        PanelId::ClvVector,
-        PanelId::ResourceMonitor,
-        PanelId::MetricsDashboard,
-        PanelId::OsaSparse,
-        PanelId::Chat,
-        PanelId::SelfAssessment,
-        PanelId::DagViz,
-        PanelId::PvlScore,
-        PanelId::TaskManager,
-        PanelId::OverWindow,
-        PanelId::Quest,
-    ] {
+    // 连续 Tab n 次应回到原点(正向轮转:第 i 步到达 order[i % n])
+    for i in 1..=n {
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(
             app.current_panel(),
-            expected,
-            "circular Tab navigation failed at {:?}",
-            expected
+            order[i % n],
+            "circular Tab navigation failed at step {i} ({:?})",
+            order[i % n]
         );
     }
 
-    // Shift+Tab 反向循环也应回到原点(23 面板:Quest 的上一个 = 末尾 OverWindow)
-    for expected in [
-        PanelId::OverWindow,
-        PanelId::TaskManager,
-        PanelId::PvlScore,
-        PanelId::DagViz,
-        PanelId::SelfAssessment,
-        PanelId::Chat,
-        PanelId::OsaSparse,
-        PanelId::MetricsDashboard,
-        PanelId::ResourceMonitor,
-        PanelId::ClvVector,
-        PanelId::Chtc,
-        PanelId::McpNodes,
-        PanelId::Router,
-        PanelId::EventStream,
-        PanelId::Decay,
-        PanelId::Help,
-        PanelId::Log,
-        PanelId::Health,
-        PanelId::Security,
-        PanelId::Memory,
-        PanelId::Budget,
-        PanelId::Parliament,
-        PanelId::Quest,
-    ] {
+    // Shift+Tab 反向循环也应回到原点(逆向轮转)
+    for i in 1..=n {
         app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
         assert_eq!(
             app.current_panel(),
-            expected,
-            "circular Shift+Tab navigation failed at {:?}",
-            expected
+            order[(n - i % n) % n],
+            "circular Shift+Tab navigation failed at step {i} ({:?})",
+            order[(n - i % n) % n]
         );
     }
 }
@@ -422,12 +390,13 @@ fn test_tui_keyboard_release_event_ignored() {
 
 #[test]
 fn test_tui_keyboard_command_input_buffer() {
-    // WHY 输入缓冲:命令模式下 ASCII 可打印字符进入 input_buffer,Backspace 删除
+    // WHY 输入缓冲:斜杠命令模式(Concord W2 后 `:`/`/` 同进)下 ASCII 可打印字符
+    // 进入 input_buffer,Backspace 删除
     let mut app = make_app();
 
-    // 进入命令模式
+    // 进入斜杠命令模式
     app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
-    assert_eq!(app.state().input_mode, InputMode::Command);
+    assert_eq!(app.state().input_mode, InputMode::Slash);
 
     // 输入 "hello"
     for c in ['h', 'e', 'l', 'l', 'o'] {
@@ -546,17 +515,18 @@ fn test_tui_command_palette_new_panels() {
 
 #[test]
 fn test_tui_search_mode_accepts_input() {
+    // Concord W2:`/` 进入斜杠命令模式;原搜索提交语义由 `/search <kw>` 承接
     let mut app = make_app();
 
     app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
-    assert_eq!(app.state().input_mode, InputMode::Search);
+    assert_eq!(app.state().input_mode, InputMode::Slash);
 
     for c in "query".chars() {
         app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     assert_eq!(app.state().input_buffer, "query");
 
-    // 提交后回到 Normal,不改变面板
+    // 提交后回到 Normal,不改变面板(未命中命令表 → 遗留解析报未知命令)
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.state().input_mode, InputMode::Normal);
     assert_eq!(app.current_panel(), PanelId::Quest);
@@ -613,7 +583,11 @@ fn test_budget_panel_shows_critical_state() {
     );
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(StaticSnapshotSource::new(snapshot)),
     )
     .unwrap();
@@ -668,7 +642,11 @@ fn test_quest_panel_renders_real_quest_data() {
     let snapshot = full_snapshot(vec![quest], VecDeque::new(), BudgetMetrics::default());
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(StaticSnapshotSource::new(snapshot)),
     )
     .unwrap();
@@ -734,7 +712,11 @@ fn test_parliament_panel_renders_recent_events() {
     );
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(StaticSnapshotSource::new(snapshot)),
     )
     .unwrap();
@@ -791,7 +773,11 @@ fn test_log_panel_renders_events() {
     );
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(StaticSnapshotSource::new(snapshot)),
     )
     .unwrap();
@@ -886,16 +872,20 @@ fn test_search_mode_filters_log_panel() {
     );
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(StaticSnapshotSource::new(snapshot)),
     )
     .unwrap();
     app.update();
     app.switch_panel_to(PanelId::Log);
 
-    // 进入搜索模式并输入关键字
+    // Concord W2:进入斜杠命令模式,经 /search 命令设置关键字(承接原 `/` 搜索语义)
     app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
-    for c in "alpha".chars() {
+    for c in "search alpha".chars() {
         app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -933,7 +923,11 @@ fn test_command_filter_and_level_applies_to_log() {
     );
 
     let mut app = TuiApp::with_data_source(
-        TuiConfig::default(),
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
         Box::new(StaticSnapshotSource::new(snapshot)),
     )
     .unwrap();

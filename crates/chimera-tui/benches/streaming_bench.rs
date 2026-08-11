@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+use chimera_tui::data::newline_gate::NewlineGate;
 use chimera_tui::engine::{Buffer, DiffEngine, Rect, Style};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
@@ -69,5 +70,38 @@ fn sustained_tokens(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, single_token, sustained_tokens);
+/// 行闸门 ttfb 与持续吞吐(Concord W3 T3.5)
+///
+/// - `ttfb_first_line`:首个 feed 产出完整行的延迟(首行时间目标 <1ms);
+/// - `feed_100_lines_charwise`:100 行流逐字符喂入的持续开销(最坏切分粒度)。
+fn newline_gate_perf(c: &mut Criterion) {
+    let mut group = c.benchmark_group("streaming_newline_gate");
+    group.bench_function("ttfb_first_line", |b| {
+        b.iter(|| {
+            let mut gate = NewlineGate::new();
+            let out = gate.feed(black_box("The quick brown fox jumps over the lazy dog\n"));
+            black_box(out);
+        });
+    });
+    group.bench_function("feed_100_lines_charwise", |b| {
+        let stream: String = (0..100).map(|i| format!("line {i} content\n")).collect();
+        b.iter(|| {
+            let mut gate = NewlineGate::new();
+            let mut committed = 0usize;
+            for ch in black_box(&stream).chars() {
+                let mut buf = [0u8; 4];
+                let s = ch.encode_utf8(&mut buf);
+                committed += gate.feed(s).len();
+            }
+            // 冲刷残段计入守恒(无残段时 0)
+            if gate.flush().is_some() {
+                committed += 1;
+            }
+            black_box(committed);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, single_token, sustained_tokens, newline_gate_perf);
 criterion_main!(benches);

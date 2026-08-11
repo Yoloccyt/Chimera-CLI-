@@ -22,8 +22,10 @@ fn make_action(
         desc_key: id,
         slash: None,
         default_key: key,
+        alias_keys: &[],
         requires_context: false,
         requires_query: false,
+        global_route: true,
         is_core: false,
     }
 }

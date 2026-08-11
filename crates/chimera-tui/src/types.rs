@@ -197,76 +197,60 @@ impl PanelId {
         }
     }
 
-    /// 切换到下一个面板(循环顺序)
+    /// 已注册面板的焦点环顺序 — 焦点遍历的单一事实源(Concord T1.4,P5① 收口)
     ///
-    /// 完整循环(19 面板):
-    /// Quest → Parliament → Budget → Memory → Security → Health → Log → Help
-    /// → Decay → EventStream → Router → McpNodes → Chtc → Timeline
-    /// → OsaSparse → ClvVector → ResourceMonitor → MetricsDashboard → Sysinfo → Quest
+    /// WHY 单一事实源:`PanelId::next/prev` 与 `TuiApp` 面板注册序此前双源
+    /// 维护,新增/下线面板漏改任一处即静默漂移(INV-F 实锤:静态环曾含
+    /// 未注册面板且相对顺序颠倒)。现规定:本表是唯一声明点,
+    /// `next/prev` 派生自本表,`TuiApp` 注册序也派生自本表。
+    /// 未列入的 PanelId 变体 = 未注册面板(不参与焦点环)。
+    pub const REGISTERED_FOCUS_ORDER: &[PanelId] = &[
+        PanelId::Quest,
+        PanelId::Parliament,
+        PanelId::Budget,
+        PanelId::Memory,
+        PanelId::Security,
+        PanelId::Health,
+        PanelId::Log,
+        PanelId::Help,
+        PanelId::Decay,
+        PanelId::EventStream,
+        PanelId::Router,
+        PanelId::McpNodes,
+        PanelId::Chtc,
+        // Concord T1.4:Timeline 接线注册(§7.3 未注册双面板接线清单)
+        PanelId::Timeline,
+        PanelId::OsaSparse,
+        PanelId::ClvVector,
+        PanelId::ResourceMonitor,
+        PanelId::MetricsDashboard,
+        // Concord T1.4:Sysinfo 接线注册(数据与 ResourceMonitor 互补)
+        PanelId::Sysinfo,
+        PanelId::Chat,
+        PanelId::SelfAssessment,
+        PanelId::DagViz,
+        PanelId::PvlScore,
+        PanelId::TaskManager,
+        PanelId::OverWindow,
+    ];
+
+    /// 切换到下一个面板(循环顺序,派生自 `REGISTERED_FOCUS_ORDER`)
+    ///
+    /// 未注册变体(不在焦点环内)回退到环首面板,避免孤立分支。
     pub fn next(&self) -> PanelId {
-        match self {
-            PanelId::Quest => PanelId::Parliament,
-            PanelId::Parliament => PanelId::Budget,
-            PanelId::Budget => PanelId::Memory,
-            PanelId::Memory => PanelId::Security,
-            PanelId::Security => PanelId::Health,
-            PanelId::Health => PanelId::Log,
-            PanelId::Log => PanelId::Help,
-            PanelId::Help => PanelId::Decay,
-            PanelId::Decay => PanelId::EventStream,
-            PanelId::EventStream => PanelId::Router,
-            PanelId::Router => PanelId::McpNodes,
-            PanelId::McpNodes => PanelId::Chtc,
-            PanelId::Chtc => PanelId::Timeline,
-            PanelId::Timeline => PanelId::OsaSparse,
-            PanelId::OsaSparse => PanelId::ClvVector,
-            PanelId::ClvVector => PanelId::ResourceMonitor,
-            PanelId::ResourceMonitor => PanelId::MetricsDashboard,
-            PanelId::MetricsDashboard => PanelId::Sysinfo,
-            PanelId::Sysinfo => PanelId::Chat,
-            // polish-v2.7 P1-5:SelfAssessment 插入 Chat 与 Quest 之间(循环末尾)
-            PanelId::Chat => PanelId::SelfAssessment,
-            // closure Stage B-10:DagViz 插入 SelfAssessment 与 Quest 之间(循环末尾)
-            PanelId::SelfAssessment => PanelId::DagViz,
-            PanelId::DagViz => PanelId::PvlScore,
-            PanelId::PvlScore => PanelId::TaskManager,
-            PanelId::TaskManager => PanelId::OverWindow,
-            PanelId::OverWindow => PanelId::Quest,
+        let order = Self::REGISTERED_FOCUS_ORDER;
+        match order.iter().position(|p| p == self) {
+            Some(i) => order[(i + 1) % order.len()],
+            None => order[0],
         }
     }
 
-    /// 切换到上一个面板(循环顺序)
+    /// 切换到上一个面板(循环顺序,派生自 `REGISTERED_FOCUS_ORDER`)
     pub fn prev(&self) -> PanelId {
-        match self {
-            PanelId::Quest => PanelId::OverWindow,
-            PanelId::Parliament => PanelId::Quest,
-            PanelId::Budget => PanelId::Parliament,
-            PanelId::Memory => PanelId::Budget,
-            PanelId::Security => PanelId::Memory,
-            PanelId::Health => PanelId::Security,
-            PanelId::Log => PanelId::Health,
-            PanelId::Help => PanelId::Log,
-            PanelId::Decay => PanelId::Help,
-            PanelId::EventStream => PanelId::Decay,
-            PanelId::Router => PanelId::EventStream,
-            PanelId::McpNodes => PanelId::Router,
-            PanelId::Chtc => PanelId::McpNodes,
-            PanelId::Timeline => PanelId::Chtc,
-            PanelId::OsaSparse => PanelId::Timeline,
-            PanelId::ClvVector => PanelId::OsaSparse,
-            PanelId::ResourceMonitor => PanelId::ClvVector,
-            PanelId::MetricsDashboard => PanelId::ResourceMonitor,
-            PanelId::Sysinfo => PanelId::MetricsDashboard,
-            PanelId::Chat => PanelId::Sysinfo,
-            // polish-v2.7 P1-5:SelfAssessment 位于循环末尾(Chat 之后)
-            PanelId::SelfAssessment => PanelId::Chat,
-            // closure Stage B-10:DagViz 位于 SelfAssessment 之后(循环末尾)
-            PanelId::DagViz => PanelId::SelfAssessment,
-            // Task 3.7:PvlScore 位于 DagViz 之后(循环末尾)
-            PanelId::PvlScore => PanelId::DagViz,
-            // Task 3.9:TaskManager 位于 PvlScore 之后(循环末尾)
-            PanelId::TaskManager => PanelId::PvlScore,
-            PanelId::OverWindow => PanelId::TaskManager,
+        let order = Self::REGISTERED_FOCUS_ORDER;
+        match order.iter().position(|p| p == self) {
+            Some(i) => order[(i + order.len() - 1) % order.len()],
+            None => order[order.len() - 1],
         }
     }
 }
@@ -322,6 +306,24 @@ pub enum InputMode {
     Search,
     /// 插入模式(原始文本输入,M3a 引入;Submit 于 M3b 接入 Chat)
     Insert,
+    /// 斜杠命令模式(Concord W2):`/` 第一公民入口,补全列表 + 三分层执行;
+    /// `:` 废弃窗口期同进本模式(一次性弃用提示)。
+    Slash,
+}
+
+/// 视图模式(Concord W3 T3.2):会话优先的双模式分层(ADR-076)
+///
+/// - `Chat`:第一默认——会话流全屏 + composer 底栏(Conversation-First)
+/// - `Dashboard`:第二默认——既有 25 面板驾驶舱(资产下沉不推倒)
+///
+/// `\` 键或 `/chat` `/dashboard` 命令互切;状态随 TuiState 持久化。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum ViewMode {
+    /// 会话模式(第一默认,ADR-076 裁定)
+    #[default]
+    Chat,
+    /// 仪表盘模式(25 面板驾驶舱,资产下沉)
+    Dashboard,
 }
 
 // ============================================================
@@ -844,6 +846,25 @@ pub struct TuiState {
     pub running: bool,
     /// 当前输入模式
     pub input_mode: InputMode,
+    /// 当前视图模式(Concord W3:Chat 第一默认 / Dashboard 驾驶舱下沉)
+    ///
+    /// `#[serde(default)]`:旧状态文件无本字段时反序列化得 Chat 默认。
+    #[serde(default)]
+    pub view_mode: ViewMode,
+    /// 当前审批模式(Concord W4 T4.1:Normal/Plan/Auto 三态,ADR-074)
+    ///
+    /// `#[serde(default)]`:旧状态文件无本字段时反序列化得 Normal 默认。
+    #[serde(default)]
+    pub approval_mode: crate::approval_mode::ApprovalMode,
+    /// composer 输入历史(Concord W6 T6.2:↑↓ 回溯;队尾最新,容量 100)
+    #[serde(default)]
+    pub input_history: std::collections::VecDeque<String>,
+    /// 历史导航位置(Concord W6 T6.2;None = 未处于回溯态)
+    #[serde(default)]
+    pub history_pos: Option<usize>,
+    /// 进入回溯前的草稿(回底时恢复,Concord W6 T6.2)
+    #[serde(default)]
+    pub history_draft: String,
     /// 输入缓冲(命令模式/搜索模式使用)
     pub input_buffer: String,
     /// 已渲染的帧数(用于调试与性能监控)
@@ -854,6 +875,15 @@ pub struct TuiState {
     pub paused_quest_count: usize,
     /// 当前预算指标(数据驱动 Budget 面板)
     pub budget: BudgetMetrics,
+    /// 预算指标是否陈旧(Concord T1.7,从快照同步;Budget 面板置灰依据)
+    #[serde(default)]
+    pub budget_metrics_stale: bool,
+    /// 斜杠补全列表当前选中项索引(Concord W2;每次输入变化时钳制复位)
+    #[serde(default)]
+    pub slash_selected: usize,
+    /// `:` 弃用提示是否已展示过(Concord W2,一次性提示;R1 缓解)
+    #[serde(default)]
+    pub colon_deprecation_shown: bool,
     /// 当前记忆指标(数据驱动 Memory 面板)
     pub memory_metrics: MemoryMetrics,
     /// 当前安全状态(数据驱动 Security 面板)
@@ -1015,11 +1045,24 @@ impl TuiState {
         Self {
             running: true,
             input_mode: InputMode::Normal,
+            // Concord W3 T3.2:会话模式为第一默认(ADR-076)
+            view_mode: ViewMode::Chat,
+            // Concord W4 T4.1:审批模式默认 Normal(执行前确认)
+            approval_mode: crate::approval_mode::ApprovalMode::Normal,
+            // Concord W6 T6.2:composer 历史初始为空,导航未激活
+            input_history: std::collections::VecDeque::new(),
+            history_pos: None,
+            history_draft: String::new(),
             input_buffer: String::new(),
             frame_count: 0,
             quest_list: Vec::new(),
             paused_quest_count: 0,
             budget: BudgetMetrics::default(),
+            // Concord T1.7:初始无数据源接入时预算指标视为陈旧(诚实展示)
+            budget_metrics_stale: true,
+            // Concord W2:斜杠补全选中项与 `:` 弃用提示状态
+            slash_selected: 0,
+            colon_deprecation_shown: false,
             memory_metrics: MemoryMetrics::default(),
             security_state: SecurityState::default(),
             health_metrics: HealthMetrics::default(),
@@ -1117,6 +1160,16 @@ impl TuiState {
                     // 的契约(旧实现仅重置 4 个字段,语义与文档不符)。
                     Self {
                         layout_mode: saved.layout_mode,
+                        // Concord W3 T3.4:视图模式属"视图字段",随状态文件保留
+                        // 用户选择(旧文件无本字段时 serde 默认 Chat)
+                        view_mode: saved.view_mode,
+                        // Concord W4 T4.1:审批模式同属会话策略字段(旧文件默认 Normal)
+                        approval_mode: saved.approval_mode,
+                        // Concord W6 T6.2:composer 历史跨会话保留(导航位置复位,
+                        // 回溯态不跨会话延续)
+                        input_history: saved.input_history,
+                        history_pos: None,
+                        history_draft: String::new(),
                         filter_keyword: saved.filter_keyword,
                         filter_topic: saved.filter_topic,
                         filter_level: saved.filter_level,
@@ -1343,77 +1396,44 @@ mod tests {
 
     #[test]
     fn test_panel_id_next() {
+        // Concord T1.4:next/prev 派生自 REGISTERED_FOCUS_ORDER 单一事实源,
+        // 逐边断言改为"全环逐元素验证 + 关键边抽查"(避免与源表双维护)。
+        let order = PanelId::REGISTERED_FOCUS_ORDER;
+        for (i, p) in order.iter().enumerate() {
+            assert_eq!(
+                p.next(),
+                order[(i + 1) % order.len()],
+                "{p:?}.next() 应指向环内下一面板"
+            );
+        }
+        // 关键边抽查(循环闭合 + 历史接入点)
         assert_eq!(PanelId::Quest.next(), PanelId::Parliament);
-        assert_eq!(PanelId::Parliament.next(), PanelId::Budget);
-        assert_eq!(PanelId::Budget.next(), PanelId::Memory);
-        assert_eq!(PanelId::Memory.next(), PanelId::Security);
-        assert_eq!(PanelId::Security.next(), PanelId::Health);
-        assert_eq!(PanelId::Health.next(), PanelId::Log);
-        assert_eq!(PanelId::Log.next(), PanelId::Help);
-        // P2 扩展:Help → Decay(不再是 Help → Quest)
-        assert_eq!(PanelId::Help.next(), PanelId::Decay);
-        assert_eq!(PanelId::Decay.next(), PanelId::EventStream);
-        assert_eq!(PanelId::EventStream.next(), PanelId::Router);
-        assert_eq!(PanelId::Router.next(), PanelId::McpNodes);
-        assert_eq!(PanelId::McpNodes.next(), PanelId::Chtc);
-        assert_eq!(PanelId::Chtc.next(), PanelId::Timeline);
-        // P3 扩展:Timeline → OsaSparse(不再是 Timeline → Quest)
-        assert_eq!(PanelId::Timeline.next(), PanelId::OsaSparse);
-        assert_eq!(PanelId::OsaSparse.next(), PanelId::ClvVector);
-        // 循环:ClvVector → ResourceMonitor
-        assert_eq!(PanelId::ClvVector.next(), PanelId::ResourceMonitor);
-        // 循环:ResourceMonitor → MetricsDashboard
-        assert_eq!(PanelId::ResourceMonitor.next(), PanelId::MetricsDashboard);
-        // 循环:MetricsDashboard → Sysinfo(Task 3.1 新增)
-        assert_eq!(PanelId::MetricsDashboard.next(), PanelId::Sysinfo);
-        // M3b:Sysinfo → Chat(Chat 追加到循环末尾)
-        assert_eq!(PanelId::Sysinfo.next(), PanelId::Chat);
-        // polish-v2.7 P1-5:Chat → SelfAssessment(SelfAssessment 插入循环末尾)
-        assert_eq!(PanelId::Chat.next(), PanelId::SelfAssessment);
-        // closure Stage B-10:SelfAssessment → DagViz(DagViz 插入循环末尾)
-        assert_eq!(PanelId::SelfAssessment.next(), PanelId::DagViz);
-        // Task 3.7/3.9 + P1:DagViz → PvlScore → TaskManager → OverWindow → Quest(循环闭合)
-        assert_eq!(PanelId::DagViz.next(), PanelId::PvlScore);
-        assert_eq!(PanelId::PvlScore.next(), PanelId::TaskManager);
-        assert_eq!(PanelId::TaskManager.next(), PanelId::OverWindow);
-        assert_eq!(PanelId::OverWindow.next(), PanelId::Quest);
+        assert_eq!(PanelId::OverWindow.next(), PanelId::Quest, "环必须闭合");
+        assert_eq!(
+            PanelId::Chtc.next(),
+            PanelId::Timeline,
+            "Timeline 已接线入环"
+        );
+        assert_eq!(
+            PanelId::MetricsDashboard.next(),
+            PanelId::Sysinfo,
+            "Sysinfo 已接线入环"
+        );
     }
 
     #[test]
     fn test_panel_id_prev() {
-        assert_eq!(PanelId::Parliament.prev(), PanelId::Quest);
-        assert_eq!(PanelId::Budget.prev(), PanelId::Parliament);
-        assert_eq!(PanelId::Memory.prev(), PanelId::Budget);
-        assert_eq!(PanelId::Security.prev(), PanelId::Memory);
-        assert_eq!(PanelId::Health.prev(), PanelId::Security);
-        assert_eq!(PanelId::Log.prev(), PanelId::Health);
-        assert_eq!(PanelId::Help.prev(), PanelId::Log);
-        // P2 扩展:Decay → Help(不再是 Quest → Help)
-        assert_eq!(PanelId::Decay.prev(), PanelId::Help);
-        assert_eq!(PanelId::EventStream.prev(), PanelId::Decay);
-        assert_eq!(PanelId::Router.prev(), PanelId::EventStream);
-        assert_eq!(PanelId::McpNodes.prev(), PanelId::Router);
-        assert_eq!(PanelId::Chtc.prev(), PanelId::McpNodes);
-        assert_eq!(PanelId::Timeline.prev(), PanelId::Chtc);
-        // P3 扩展:OsaSparse → Timeline,ClvVector → OsaSparse
-        assert_eq!(PanelId::OsaSparse.prev(), PanelId::Timeline);
-        assert_eq!(PanelId::ClvVector.prev(), PanelId::OsaSparse);
-        assert_eq!(PanelId::ResourceMonitor.prev(), PanelId::ClvVector);
-        // Task 2.2:MetricsDashboard → ResourceMonitor
-        assert_eq!(PanelId::MetricsDashboard.prev(), PanelId::ResourceMonitor);
-        // 循环:Sysinfo → MetricsDashboard(Task 3.1 新增)
-        assert_eq!(PanelId::Sysinfo.prev(), PanelId::MetricsDashboard);
-        // M3b:Chat → Sysinfo(Chat 位于 Sysinfo 之后)
-        assert_eq!(PanelId::Chat.prev(), PanelId::Sysinfo);
-        // polish-v2.7 P1-5:SelfAssessment → Chat(循环末尾)
-        assert_eq!(PanelId::SelfAssessment.prev(), PanelId::Chat);
-        // closure Stage B-10:DagViz → SelfAssessment(循环末尾)
-        assert_eq!(PanelId::DagViz.prev(), PanelId::SelfAssessment);
-        // Task 3.7/3.9 + P1:TaskManager → PvlScore → DagViz,Quest → OverWindow(循环闭合)
-        assert_eq!(PanelId::TaskManager.prev(), PanelId::PvlScore);
-        assert_eq!(PanelId::PvlScore.prev(), PanelId::DagViz);
-        assert_eq!(PanelId::OverWindow.prev(), PanelId::TaskManager);
+        let order = PanelId::REGISTERED_FOCUS_ORDER;
+        for (i, p) in order.iter().enumerate() {
+            assert_eq!(
+                p.prev(),
+                order[(i + order.len() - 1) % order.len()],
+                "{p:?}.prev() 应指向环内上一面板"
+            );
+        }
+        // 关键边抽查(循环闭合)
         assert_eq!(PanelId::Quest.prev(), PanelId::OverWindow);
+        assert_eq!(PanelId::Timeline.prev(), PanelId::Chtc);
     }
 
     #[test]
@@ -1444,7 +1464,7 @@ mod tests {
             PanelId::SelfAssessment,
             // closure Stage B-10:DagViz 加入往返验证
             PanelId::DagViz,
-            // Task 3.7/3.9 + P1:PvlScore/TaskManager/OverWindow 加入往返验证(23 面板循环)
+            // Task 3.7/3.9 + P1:PvlScore/TaskManager/OverWindow 加入往返验证(25 面板循环,Concord T1.4)
             PanelId::PvlScore,
             PanelId::TaskManager,
             PanelId::OverWindow,

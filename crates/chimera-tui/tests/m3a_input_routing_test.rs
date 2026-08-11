@@ -19,7 +19,16 @@ use ratatui::Terminal;
 
 /// 构造默认 TuiApp(无 event-bus,内存桩数据源)
 fn make_app() -> TuiApp {
-    TuiApp::new(TuiConfig::default()).unwrap()
+    {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    }
 }
 
 /// 无修饰符按键
@@ -59,12 +68,13 @@ fn render_once(app: &mut TuiApp) -> String {
 
 #[test]
 fn colon_opens_command_bar_not_palette() {
+    // Concord W2:`:` 进入斜杠命令模式(废弃窗口期别名,不再是 vi 式命令栏)
     let mut app = make_app();
     app.handle_key_event(key(KeyCode::Char(':')));
     assert_eq!(
         app.state().input_mode,
-        InputMode::Command,
-        "`:` 应进入命令栏(InputMode::Command)"
+        InputMode::Slash,
+        "`:` 应进入斜杠命令模式(InputMode::Slash)"
     );
     assert!(!app.palette_is_open(), "`:` 不应打开 palette overlay");
 }
@@ -99,12 +109,13 @@ fn colon_command_bar_still_parses_parameterized_command() {
 
 #[test]
 fn slash_enters_search_mode() {
+    // Concord W2:`/` 翻转为斜杠命令第一入口;原搜索语义由 `/search` 命令承接
     let mut app = make_app();
     app.handle_key_event(key(KeyCode::Char('/')));
     assert_eq!(
         app.state().input_mode,
-        InputMode::Search,
-        "`/` 应进入搜索模式"
+        InputMode::Slash,
+        "`/` 应进入斜杠命令模式"
     );
 }
 
@@ -250,15 +261,24 @@ fn theme_key_no_panic_and_renders() {
 }
 
 #[test]
-fn backslash_toggles_companion() {
-    // `\` → GlobalAction("view.toggle_companion") → dispatch_action → toggle_companion_action
+fn backslash_toggles_view_mode() {
+    // Concord W3 T3.4:`\` 复用为 Chat⇄Dashboard 视图模式互切
+    // (原 companion 键语义迁移;view.toggle_companion 改经命令面板/
+    // 程序化入口访问)。make_app 显式置 Dashboard,按 `\` 应切到 Chat。
     let mut app = make_app();
-    // 先造出确定的伴随目标(切 Quest 再切 Parliament → prev=Quest)
-    app.switch_panel_to(PanelId::Quest);
-    app.switch_panel_to(PanelId::Parliament);
-    assert!(!app.companion_visible(), "默认伴随关闭");
+    assert_eq!(app.state().view_mode, chimera_tui::ViewMode::Dashboard);
     app.handle_key_event(key(KeyCode::Char('\\')));
-    assert!(app.companion_visible(), "`\\` 应打开伴随面板");
+    assert_eq!(
+        app.state().view_mode,
+        chimera_tui::ViewMode::Chat,
+        "`\\` 应切到会话模式"
+    );
+    app.handle_key_event(key(KeyCode::Char('\\')));
+    assert_eq!(
+        app.state().view_mode,
+        chimera_tui::ViewMode::Dashboard,
+        "再按 `\\` 应切回仪表盘"
+    );
 }
 
 #[test]

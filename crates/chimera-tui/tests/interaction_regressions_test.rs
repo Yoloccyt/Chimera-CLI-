@@ -4,7 +4,7 @@
 //!
 //! # 覆盖的评估问题
 //! - I-1:Quest 详情键改绑 `v` 后经完整路由(Normal → FocusPanel)可达
-//! - I-2:g5 → Timeline 未注册不再静默失败,状态栏给出提示
+//! - I-2:g5 → Timeline 跳转(Concord T1.4 接线后为有效面板)
 //! - I-4:quit_requires_confirm 开启时 q/Esc 先确认再退出(默认关闭零回归)
 //! - I-7:Repeat 事件视同 Press(长按滚动/输入可重复)
 //! - I-5:命令栏 Ctrl 组合键不进缓冲,Ctrl+L 仍可切换语言
@@ -21,13 +21,22 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 fn make_app() -> TuiApp {
-    TuiApp::new(TuiConfig::default()).unwrap()
+    TuiApp::new(TuiConfig {
+        default_view_mode: chimera_tui::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    })
+    .unwrap()
 }
 
 fn make_confirm_app() -> TuiApp {
     TuiApp::new(TuiConfig {
         quit_requires_confirm: true,
-        ..TuiConfig::default()
+        ..TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        }
     })
     .unwrap()
 }
@@ -234,26 +243,23 @@ fn palette_non_query_action_dispatches_immediately() {
 }
 
 // ============================================================
-// I-2:g5 → Timeline 未注册,状态栏提示而非静默失败
+// I-2:g5 → Timeline 跳转(Concord T1.4 接线后为有效面板)
 // ============================================================
 
 #[test]
-fn g5_dead_jump_reports_status_not_silent() {
+fn g5_jump_to_timeline_after_wiring() {
+    // Concord T1.4:Timeline 已接线注册(§7.3),g5 从"未注册死键"变为有效跳转;
+    // 原"未注册状态栏提示"路径由 event_loop 兑底保留(未来新增未注册
+    // PanelId 时仍生效),此处验证接线后的正向行为。
     let mut app = make_app();
-    let before = app.current_panel();
     app.handle_key_event(key(KeyCode::Char('g')));
     app.handle_key_event(key(KeyCode::Char('5')));
 
     assert!(app.state().running, "g5 不应退出应用");
-    assert_eq!(app.current_panel(), before, "未注册面板不应切换焦点");
-    let (msg, _sev) = app
-        .state()
-        .status_message
-        .as_ref()
-        .expect("g5 应有状态栏提示");
-    assert!(
-        msg.contains("Timeline"),
-        "状态栏应提示 Timeline 未注册,got: {msg}"
+    assert_eq!(
+        app.current_panel(),
+        PanelId::Timeline,
+        "Timeline 已接线,g5 应成功跳转"
     );
 }
 
@@ -332,10 +338,11 @@ fn release_events_still_ignored() {
 
 #[test]
 fn command_mode_ctrl_l_toggles_locale_not_buffer() {
+    // Concord W2:`:` 进入斜杠命令模式;Ctrl+L 仍被拦截为语言切换不进缓冲
     let mut app = make_app();
     set_locale(Locale::Zh);
-    app.handle_key_event(key(KeyCode::Char(':'))); // 进入命令栏
-    assert_eq!(app.state().input_mode, InputMode::Command);
+    app.handle_key_event(key(KeyCode::Char(':'))); // 进入斜杠命令模式
+    assert_eq!(app.state().input_mode, InputMode::Slash);
 
     app.handle_key_event(ctrl('l'));
     assert_eq!(

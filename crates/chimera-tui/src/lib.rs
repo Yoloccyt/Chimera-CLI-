@@ -37,8 +37,12 @@ pub mod app;
 // Action 统一层 / 组件系统 / 自研渲染引擎 / i18n / 输入路由
 // M0-M1 默认编译供 CI 类型检查,M2 起经 v3-engine feature 切换实际渲染路径。
 pub mod actions;
+pub mod approval_mode;
+pub mod chat_cards;
+pub mod chat_mode;
 pub mod command_palette;
 pub mod components;
+pub mod composer_history;
 pub mod config;
 pub mod data;
 pub mod engine;
@@ -46,9 +50,13 @@ pub mod error;
 pub mod focus;
 pub mod i18n;
 pub mod input;
+pub mod mention;
+pub mod mode_banner;
 pub mod panels;
 pub mod popup;
 pub mod render;
+pub mod rewind;
+pub mod slash_surface;
 pub mod subscriber;
 pub mod types;
 pub mod viz;
@@ -56,6 +64,8 @@ pub mod viz;
 // === 关键类型重导出,简化外部导入 ===
 pub use app::TuiApp;
 pub use command_palette::CommandPalette;
+// Concord W2:斜杠命令补全面板与解析器(命令翻转基础设施)
+pub use slash_surface::{candidates as slash_candidates, SlashCandidate};
 // P6.1/P6.3:重导出 Theme / ThemeColors / ColorKind / ColorScheme,供 CLI 入口
 // 与下游 crate 在运行时切换主题、查询颜色方案、细粒度覆盖颜色
 // (如 chimera-cli 根据配置渲染启动画面)。
@@ -89,7 +99,7 @@ pub use subscriber::EventSubscriber;
 pub use types::{
     ChatMessage, ChatRole, ChtcAdapterInfo, ChtcState, DecayMetrics, InputMode, LayoutMode,
     McpNodeStatus, NodeStatus, PanelId, QuestAction, RouterMetrics, RouterStatsInfo, SortMode,
-    TimelineSnapshot, TuiCommand, TuiState,
+    TimelineSnapshot, TuiCommand, TuiState, ViewMode,
 };
 // P9.1:重导出 viz 公共 API(5 个高阶图表 widget + VizChartKind 枚举 + VizWidget trait),
 // 供 MetricsDashboardPanel / 外部测试 / 命令面板预览使用
@@ -101,9 +111,27 @@ pub use viz::{bar_chart, heatmap, histogram, line_chart, VizChartKind, VizWidget
 // engine 的 Rect/Style/Color/Buffer 与 ratatui 同名,不在顶层重导出以避免命名
 // 空间污染,调用方经 `chimera_tui::engine::*` 访问;此处只导出无歧义的高层类型。
 pub use actions::{ActionDescriptor, ActionDomain, ActionRegistry};
+// Concord 重构 T1.1:斜杠命令独立注册表(R9 解法,命令表不占动作 40 项预算)
+pub use actions::{SlashCommandDesc, SlashCommandRegistry, SlashDomain, SlashTier};
+// Concord W3 T3.2:会话模式视图编排(Chat 第一默认,ADR-076)
+pub use chat_mode::{split_chat_layout, ChatLayout};
+// Concord W3 T3.3:会话流内嵌卡片(计划卡/失败复盘卡)
+pub use chat_cards::{
+    derive_quest_plan_card, derive_reflection_card, render_quest_plan_card, render_reflection_card,
+    PlanStep, QuestPlanCard, ReflectionCard,
+};
+// Concord W4 T4.1:审批模式三态状态机(ADR-074)
+pub use approval_mode::ApprovalMode;
+// Concord W4 T4.5:Esc Esc 回退检测器与 @ 引用候选
 pub use components::{ComponentPanel, LayoutNode, ViewContext};
+// Concord W6 T6.2:composer 历史导航器(↑↓ 回溯纯函数状态机)
+pub use composer_history::{ComposerHistory, HISTORY_CAPACITY};
 pub use i18n::{current_locale, set_locale, toggle_locale, Locale};
 pub use input::{InputRouter, RouteTarget, RouterMode};
+pub use mention::{extract_mention_tail, mention_candidates, MAX_MENTION_CANDIDATES};
+// Concord W6 T6.1:模式常驻横幅(Plan/Auto 态 Chat 视图一行警示)
+pub use mode_banner::{banner_line, render_banner};
+pub use rewind::{is_double_esc, DOUBLE_ESC_WINDOW_MS};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {

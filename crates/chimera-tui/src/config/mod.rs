@@ -118,6 +118,13 @@ pub struct TuiConfig {
     pub persist_state: bool,
     /// 状态文件路径（默认 ~/.chimera/tui_state.yaml）
     pub state_file_path: std::path::PathBuf,
+    /// 默认视图模式(Concord W3 T3.2,ADR-076:Chat 第一默认)
+    ///
+    /// WHY 配置字段:方案 §8.2 既定增强项——构造器在无持久化状态时用本字段
+    /// 初始化 `TuiState.view_mode`;持久化状态存在时以状态文件为准(用户
+    /// 运行时选择优先)。遗留测试显式置 Dashboard 保持原断言语义。
+    #[serde(default)]
+    pub default_view_mode: crate::types::ViewMode,
     /// v2.9.0-omega Task 2.6:响应式折叠阈值(终端宽度低于此值时自动隐藏伴随面板)
     ///
     /// WHY 默认 100:终端宽度 < 100 列时,主面板 + 伴随面板(30 字符)会挤压主内容
@@ -160,6 +167,8 @@ impl Default for TuiConfig {
             sysinfo_refresh_interval_ms: 5000,
             persist_state: true,
             state_file_path: Self::default_state_path(),
+            // Concord W3 T3.2:Chat 为第一默认视图(ADR-076)
+            default_view_mode: crate::types::ViewMode::default(),
             // v2.9.0-omega Task 2.6:响应式折叠阈值默认 100 列
             responsive_collapse_threshold: 100,
             quit_requires_confirm: false,
@@ -168,6 +177,22 @@ impl Default for TuiConfig {
 }
 
 impl TuiConfig {
+    /// 应用 TuiBible 覆盖到运行时配置(Concord T1.5,P4① 接线)
+    ///
+    /// WHY 仅这四字段:theme/colors/main_panel_ratio/log_panel_height 是
+    /// TuiConfig 与 TuiBible 语义共享的字段(见 TuiBible 字段命名 WHY);
+    /// key_bindings/thresholds/layout.mode 分别由渲染/阈值/状态层消费,
+    /// 属后续波次接线范围,此处只闭环配置层合并。
+    ///
+    /// 调用时机:必须在 `validate()` 之前应用,使 bible 引入的非法值
+    /// (如越界 ratio)被 validate 统一拦截,错误路径单一。
+    pub fn apply_bible_overrides(&mut self, bible: &tui_bible::TuiBible) {
+        self.theme = bible.theme;
+        self.colors = bible.color_scheme.clone();
+        self.main_panel_ratio = bible.layout.main_panel_ratio;
+        self.log_panel_height = bible.layout.log_panel_height;
+    }
+
     /// 校验配置合法性
     ///
     /// WHY:在构造 TuiApp 时调用,提前暴露配置错误。

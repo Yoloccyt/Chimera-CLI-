@@ -18,7 +18,16 @@ use ratatui::Terminal;
 use std::collections::VecDeque;
 
 fn make_app() -> TuiApp {
-    TuiApp::new(TuiConfig::default()).unwrap()
+    {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .unwrap();
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    }
 }
 
 /// 渲染一帧(设置 pane_manager.last_area,鼠标命中测试的前置)
@@ -51,7 +60,7 @@ fn tab_click_switches_to_clicked_panel() {
     render_once(&mut app);
     assert_eq!(app.current_panel(), PanelId::Quest);
 
-    // 80 列 / 23 面板 = tab_width 3;点击第 2 个 tab(column 3-5)→ Parliament
+    // 80 列 / 25 面板 = tab_width 3(整除);点击第 2 个 tab(column 3-5)→ Parliament
     app.handle_mouse_event(left_down(4, 1));
     assert_eq!(
         app.current_panel(),

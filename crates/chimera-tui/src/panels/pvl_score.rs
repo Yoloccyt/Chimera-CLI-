@@ -29,18 +29,29 @@ use crate::panels::Panel;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use pvl_layer::pvl_score;
 
-/// 九维度标签（按 ProcessScore 字段顺序）
-const DIMENSION_LABELS: [(&str, &str); 9] = [
-    ("real_execution", "真实执行"),
-    ("coverage", "覆盖率"),
-    ("verification", "验证通过"),
-    ("confidence", "置信度"),
-    ("efficiency", "效率"),
-    ("retry_discipline", "重试纪律"),
-    ("output_substance", "产出实质性"),
-    ("orphan_free", "零孤儿"),
-    ("sandbox_clean", "沙箱清洁"),
-];
+/// 九维度标签(按 ProcessScore 字段顺序)
+///
+/// Concord W4 T4.4:const 改函数——i18n 查找为运行时行为(crate::t! 非
+/// const 可求值);维度 id 保持字面量,显示文案走 i18n 键表。
+fn dimension_labels() -> [(&'static str, &'static str); 9] {
+    [
+        ("real_execution", crate::t!("panel.pvl.dim.real_execution")),
+        ("coverage", crate::t!("panel.pvl.dim.coverage")),
+        ("verification", crate::t!("panel.pvl.dim.verification")),
+        ("confidence", crate::t!("panel.pvl.dim.confidence")),
+        ("efficiency", crate::t!("panel.pvl.dim.efficiency")),
+        (
+            "retry_discipline",
+            crate::t!("panel.pvl.dim.retry_discipline"),
+        ),
+        (
+            "output_substance",
+            crate::t!("panel.pvl.dim.output_substance"),
+        ),
+        ("orphan_free", crate::t!("panel.pvl.dim.orphan_free")),
+        ("sandbox_clean", crate::t!("panel.pvl.dim.sandbox_clean")),
+    ]
+}
 
 /// PVL 过程评分面板
 ///
@@ -128,7 +139,7 @@ impl Panel for PvlScorePanel {
             score.sandbox_clean,
         ];
 
-        for (idx, (&(en_label, zh_label), &value)) in DIMENSION_LABELS
+        for (idx, (&(dim_id, label), &value)) in dimension_labels()
             .iter()
             .zip(dimension_values.iter())
             .enumerate()
@@ -151,7 +162,7 @@ impl Panel for PvlScorePanel {
             }
 
             lines.push(Line::from(vec![Span::styled(
-                format!("{marker}{zh_label} ({en_label})",),
+                format!("{marker}{label} ({dim_id})",),
                 style,
             )]));
             lines.push(Line::from(vec![
@@ -199,6 +210,9 @@ impl Panel for PvlScorePanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("↑/↓", "选择维度"), ("j/k", "导航")]
+        vec![
+            ("↑/↓", crate::t!("shortcut.select_dimension")),
+            ("j/k", crate::t!("shortcut.navigate")),
+        ]
     }
 }

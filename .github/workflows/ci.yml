@@ -54,6 +54,25 @@ jobs:
       - name: Doc consistency (crate count vs Cargo.toml)
         run: bash scripts/check_doc_consistency.sh
 
+      # WHY: 依赖铁律机械闸门(ADR-054 决策 5,check_dependency_rules.sh 头注释)——
+      # L(N)→L(N+1) 向上依赖 / 内环越界 / 图完整性违规必须阻塞合入,禁止静默落地 main。
+      # 退出码 0=通过 / 非 0=违规;selftest 模式(--selftest)由脚本自身内嵌 mock 图自检。
+      - name: Dependency iron-law audit
+        run: bash scripts/check_dependency_rules.sh
+
+      # Concord W5:斜杠命令词表防退化——断言 24 条主流竞品同名命令均存在于
+      # SlashCommandRegistry 且 tier 正确(W2 check_slash_vocab 口径提升为 CI 门禁;
+      # 退出码 0=通过 / 非 0=词表漂移阻塞合入)。i18n 硬编码防退化由
+      # chimera-tui 的 i18n_hardcode_invariant_test 随 workspace 测试覆盖。
+      - name: Slash vocab regression
+        run: bash scripts/check_slash_vocab.sh
+
+      # WHY: 函数长度红线(单函数 ≤200 行,nuxus规则.md §6.1)审计脚本的冒烟测试——
+      # fixture 构造一个 >200 行函数断言 audit_fnlen.py / fn_scan.py 均检出且无误报,
+      # 防止治理工具自身退化后红线静默失效(工具已入库,见 scripts/audit_fnlen.py)。
+      - name: Function-length audit scripts smoke test
+        run: bash scripts/test_fnlen_smoke.sh
+
       # WHY: ubuntu-latest 预装 stable 工具链;显式补齐 rustfmt/clippy 组件以防缺失。
       - name: Ensure rustfmt & clippy components
         run: rustup component add rustfmt clippy
