@@ -4,7 +4,6 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-nexus-core = { workspace = true }
 # nexus-contracts:L0 契约层,BudgetTier 上提后 re-export 来源(ADR-054 决策 3)
 nexus-contracts = { workspace = true }
 event-bus = { workspace = true }

@@ -13,7 +13,6 @@ serde_json = { workspace = true }
 # futures:异步流处理,FuturesUnordered 用于 2PC 并发 fanout(§4.1 规范:并发收集用 FuturesUnordered)
 futures = { workspace = true }
 # 应用层错误(顶层调用方使用,库层用 thiserror)
-anyhow = { workspace = true }
 # 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }
 # 结构化日志(事件发布失败、超时回滚告警)

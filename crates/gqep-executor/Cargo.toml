@@ -21,9 +21,7 @@ tracing = { workspace = true }
 # FuturesUnordered 流式聚集(对应 A.2 设计决策:流式处理,内存占用更低)
 futures = "0.3"
 # UUIDv7 操作 ID 生成(时间有序,便于追溯)
-uuid = { workspace = true }
 # 时间戳(聚集延迟计算)
-chrono = { workspace = true }
 
 [dev-dependencies]
 # 性能基准框架(SubTask 24.6)

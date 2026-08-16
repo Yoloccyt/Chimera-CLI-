@@ -319,11 +319,6 @@ path = "tests/e2e/week8_final_acceptance.rs"
 name = "tui_control_loop"
 path = "tests/e2e/tui_control_loop.rs"
 
-# Concord W10(ADR-082):TUI ↔ 编排器协议握手 E2E(三态回环 + SEC-4 防篡改 + 门控)
-[[test]]
-name = "tui_handshake_e2e"
-path = "tests/e2e/tui_handshake_e2e.rs"
-
 # ============================================================
 # P5.5 — RHI-CG 进化执行器 E2E 验收测试
 #

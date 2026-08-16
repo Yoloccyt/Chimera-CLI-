@@ -9,11 +9,9 @@ nexus-core = { workspace = true }
 # L1 Core:EventBus 跨层通信,发布 NmcEncoded 事件
 event-bus = { workspace = true }
 # 异步运行时(事件总线 publish_blocking 同步调用,但保留 tokio 供未来扩展)
-tokio = { workspace = true }
 # 序列化:配置与类型派生
 serde = { workspace = true, features = ["derive"] }
 # 应用层错误(集成测试场景)
-anyhow = { workspace = true }
 # 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }
 # 结构化日志(操作追踪与调试)

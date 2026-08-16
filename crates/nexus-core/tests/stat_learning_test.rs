@@ -105,11 +105,14 @@ fn sliding_window_beats_ucb_on_stationary_reward() {
     // 静止奖励环境: 两种策略都应收敛到高价值动作（探索-利用平衡验证）
     let mut sw = SlidingWindowPolicy::<TestState, TestAction>::new(50, 0.05);
     let mut ucb = UCBPolicy::<TestState, TestAction>::new(1.414);
-    // 播种动作空间（策略仅从已见过动作中选择）
-    sw.update(&0, &1, 0.5);
-    sw.update(&0, &2, 0.5);
-    ucb.update(&0, &1, 0.5);
-    ucb.update(&0, &2, 0.5);
+    // 播种动作空间（策略仅从已见过动作中选择）+ 轻先验（动作 1 优于动作 2）。
+    // WHY 轻先验: 均分 0.5/0.5 会产生 EMA 平局期,贪心选择依赖 HashMap 迭代序
+    // （每进程随机种子）——flaky 复现实证 45/200 超阈;先验分离消除平局随机性,
+    // 动作 2 仅剩 epsilon 探索通道（期望 200×0.05×0.5 ≈ 5 次,阈值 30 留 6× 余量）
+    sw.update(&0, &1, 0.9);
+    sw.update(&0, &2, 0.1);
+    ucb.update(&0, &1, 0.9);
+    ucb.update(&0, &2, 0.1);
     // 训练 200 回合（动作 1 高价值）
     for _ in 0..200 {
         let a = sw.predict(&0);

@@ -169,8 +169,6 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.decay.no_cycle",
     "panel.decay.recent_events",
     "panel.decay.no_events",
-    "panel.decay.breaker_on",
-    "panel.decay.breaker_off",
     "panel.decay.breakers",
     "panel.decay.history",
     // U-3 面板正文收口:OverWindow 面板(P1 遗留字面量迁移)
@@ -533,8 +531,6 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.decay.no_cycle" => "(暂无活跃周期)",
         "panel.decay.recent_events" => "最近事件:",
         "panel.decay.no_events" => "  (暂无最近衰减事件)",
-        "panel.decay.breaker_on" => "开 ",
-        "panel.decay.breaker_off" => "关",
         "panel.decay.breakers" => "熔断",
         "panel.decay.history" => "衰减历史",
         // U-3:OverWindow 面板(P1 遗留字面量迁移)

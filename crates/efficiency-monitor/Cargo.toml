@@ -9,23 +9,19 @@ tokio = { workspace = true }
 # 配置与类型序列化(#[derive(Serialize, Deserialize)])
 serde = { workspace = true, features = ["derive"] }
 # 应用层错误(顶层调用方使用,库层用 thiserror)
-anyhow = { workspace = true }
 # 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }
 # 结构化日志(告警发布失败、Critical 事件告警)
 tracing = { workspace = true }
 # UUIDv7 事件 ID 生成(与 EventBus 对齐)
-uuid = { workspace = true }
 # 时间戳(指标样本时间戳、告警 cooldown 计算)
 chrono = { workspace = true }
 # 并发安全计数器(O(1) 分片查找,Lock-free 读取)
 dashmap = { workspace = true }
 # Prometheus 指标注册表与文本编码(用于 /metrics 端点标准格式输出)
-prometheus-client = { workspace = true }
 # L1 Core:跨层通信唯一通道,订阅 NexusEvent + 发布 EfficiencyAlertTriggered
 event-bus = { workspace = true }
 # L1 Core:领域类型(架构依赖规则要求,本 crate 仅依赖 event-bus + nexus-core)
-nexus-core = { workspace = true }
 # L0 契约:平台接地 PlatformGroundingSpec(Milestone B-4 第 0 维审计输入,L9→L0 允许)
 nexus-contracts = { workspace = true }
 

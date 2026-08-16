@@ -16,14 +16,12 @@ rusqlite = { workspace = true }
 # L0 WorkingMemory 线程安全分片锁(支持并发读写)
 dashmap = { workspace = true }
 # CLV 向量运算(余弦相似度计算,通过 nexus-core 间接依赖,此处直接用于 L2)
-ndarray = { workspace = true }
 # 序列化:条目持久化与事件 payload
 serde = { workspace = true }
 serde_json = { workspace = true }
 # 库层错误类型标准(4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }
 # MemoryId/ProceduralEntry ID 生成(UUIDv7 时间有序)
-uuid = { workspace = true }
 # 时间戳:EpisodicMemory 时间索引、MemoryEntry 访问时间
 chrono = { workspace = true }
 # 异步运行时与 spawn_blocking(L3 ProceduralMemory SQLite 操作包装,避免阻塞 worker 线程)

@@ -28,9 +28,7 @@ chrono = { workspace = true }
 # 结构化日志(窗口切换与压缩追踪)
 tracing = { workspace = true }
 # 线程安全并发 Map(SubTask 2.11 要求,预留用于未来按 id 索引优化)
-dashmap = { workspace = true }
 # 向量运算(SubTask 2.11 要求,通过 nexus-core CLV 间接使用)
-ndarray = { workspace = true }
 
 [dev-dependencies]
 # 异步测试运行器(window.rs 集成测试使用 #[tokio::test])

@@ -20,9 +20,7 @@ thiserror = { workspace = true }
 # 结构化日志(路由与均衡追踪)
 tracing = { workspace = true }
 # 线程安全并发映射(保留以备未来高并发场景优化)
-dashmap = { workspace = true }
 # UUIDv7 生成(事件元数据)
-uuid = { workspace = true }
 # 时间处理(事件元数据)
 chrono = { workspace = true }
 # 伪随机数生成(EDSB 概率均衡 Task 11:替换 SystemTime 纳秒伪随机)

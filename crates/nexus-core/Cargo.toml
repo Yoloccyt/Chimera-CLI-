@@ -11,10 +11,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
-uuid = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
-tracing = { workspace = true }
 # Task 3.10: L0 nexus-contracts 类型下沉(EventMetadata/TaskStatus/Checkpoint)
 # WHY 合规: L1 → L0 恒允许(§2.2 依赖铁律扩展 ADR-033);nexus-contracts 纯类型零依赖,不引入环
 # re-export 模式: types.rs 中 `pub use nexus_contracts::{TaskStatus, Checkpoint}` 保持向后兼容

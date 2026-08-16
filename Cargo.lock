@@ -671,24 +671,16 @@ dependencies = [
 name = "chimera-mas"
 version = "2.26.0-omega"
 dependencies = [
- "acb-governor",
- "anyhow",
- "async-trait",
  "chrono",
  "cmt-tiering",
  "criterion",
  "dashmap",
  "decay-engine",
- "decb-governor",
- "efficiency-monitor",
  "event-bus",
- "faae-router",
  "futures",
- "gqep-executor",
  "gsoe-evolution",
  "hcw-window",
  "mlc-engine",
- "model-router",
  "nexus-contracts",
  "nexus-core",
  "nmc-encoder",
@@ -696,12 +688,10 @@ dependencies = [
  "parliament",
  "proptest",
  "pvl-layer",
- "qeep-protocol",
  "rand 0.8.6",
  "regex",
  "repo-wiki",
  "rmp-serde",
- "scc-cache",
  "serde",
  "serde_json",
  "tempfile",
@@ -709,7 +699,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-test",
- "uuid",
 ]
 
 [[package]]
@@ -761,8 +750,6 @@ dependencies = [
 name = "chtc-bridge"
 version = "2.26.0-omega"
 dependencies = [
- "anyhow",
- "chrono",
  "criterion",
  "event-bus",
  "hex",
@@ -1299,8 +1286,6 @@ dependencies = [
 name = "csn-substitutor"
 version = "2.26.0-omega"
 dependencies = [
- "anyhow",
- "chrono",
  "criterion",
  "dashmap",
  "event-bus",
@@ -1311,7 +1296,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1437,7 +1421,6 @@ dependencies = [
  "criterion",
  "event-bus",
  "nexus-contracts",
- "nexus-core",
  "proptest",
  "serde",
  "serde_json",
@@ -1621,21 +1604,17 @@ checksum = "15401da73a9ed8c80e3b2d4dc05fe10e7b72d7243b9f614e516a44fa99986e88"
 name = "efficiency-monitor"
 version = "2.26.0-omega"
 dependencies = [
- "anyhow",
  "chrono",
  "criterion",
  "dashmap",
  "event-bus",
  "nexus-contracts",
- "nexus-core",
- "prometheus-client",
  "proptest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1795,7 +1774,6 @@ version = "2.26.0-omega"
 dependencies = [
  "chrono",
  "criterion",
- "dashmap",
  "event-bus",
  "gsoe-evolution",
  "nexus-contracts",
@@ -1807,7 +1785,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -2038,7 +2015,6 @@ dependencies = [
 name = "gea-activator"
 version = "2.26.0-omega"
 dependencies = [
- "chrono",
  "criterion",
  "dashmap",
  "event-bus",
@@ -2055,7 +2031,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -2149,7 +2124,6 @@ dependencies = [
 name = "gqep-executor"
 version = "2.26.0-omega"
 dependencies = [
- "chrono",
  "criterion",
  "event-bus",
  "futures",
@@ -2162,21 +2136,17 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
- "uuid",
 ]
 
 [[package]]
 name = "gsoe-evolution"
 version = "2.26.0-omega"
 dependencies = [
- "anyhow",
  "async-trait",
  "chrono",
  "criterion",
  "event-bus",
- "ndarray",
  "nexus-contracts",
- "nexus-core",
  "proptest",
  "rand 0.8.6",
  "serde",
@@ -2271,9 +2241,7 @@ version = "2.26.0-omega"
 dependencies = [
  "chrono",
  "criterion",
- "dashmap",
  "event-bus",
- "ndarray",
  "nexus-contracts",
  "nexus-core",
  "proptest",
@@ -2903,7 +2871,6 @@ dependencies = [
  "criterion",
  "dashmap",
  "event-bus",
- "ndarray",
  "nexus-contracts",
  "nexus-core",
  "proptest",
@@ -3098,12 +3065,10 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 name = "lsct-tiering"
 version = "2.26.0-omega"
 dependencies = [
- "anyhow",
  "cmt-tiering",
  "criterion",
  "dashmap",
  "event-bus",
- "nexus-core",
  "proptest",
  "serde",
  "serde_json",
@@ -3218,7 +3183,6 @@ dependencies = [
 name = "mcp-mesh"
 version = "2.26.0-omega"
 dependencies = [
- "anyhow",
  "chrono",
  "criterion",
  "dashmap",
@@ -3314,7 +3278,6 @@ dependencies = [
  "dashmap",
  "event-bus",
  "hnsw_rs",
- "ndarray",
  "nexus-contracts",
  "nexus-core",
  "proptest",
@@ -3325,7 +3288,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -3401,11 +3363,9 @@ dependencies = [
 name = "mtpe-executor"
 version = "2.26.0-omega"
 dependencies = [
- "chrono",
  "criterion",
  "event-bus",
  "ndarray",
- "nexus-core",
  "nmc-encoder",
  "proptest",
  "serde",
@@ -3413,7 +3373,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -3501,8 +3460,6 @@ dependencies = [
  "sha2",
  "thiserror 1.0.69",
  "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -3521,7 +3478,6 @@ dependencies = [
 name = "nmc-encoder"
 version = "2.26.0-omega"
 dependencies = [
- "anyhow",
  "criterion",
  "event-bus",
  "hound",
@@ -3534,7 +3490,6 @@ dependencies = [
  "sha2",
  "thiserror 1.0.69",
  "tokenizers",
- "tokio",
  "tracing",
  "tract-onnx",
 ]
@@ -3763,7 +3718,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -4301,7 +4255,6 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 name = "pvl-layer"
 version = "2.26.0-omega"
 dependencies = [
- "chrono",
  "criterion",
  "event-bus",
  "nexus-contracts",
@@ -4315,7 +4268,6 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -4772,9 +4724,7 @@ dependencies = [
  "chrono",
  "criterion",
  "event-bus",
- "hex",
  "hnsw_rs",
- "ndarray",
  "nexus-contracts",
  "nexus-core",
  "nmc-encoder",
@@ -5051,7 +5001,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -5227,7 +5176,6 @@ dependencies = [
 name = "sesa-router"
 version = "2.26.0-omega"
 dependencies = [
- "anyhow",
  "criterion",
  "dashmap",
  "event-bus",
@@ -5355,12 +5303,10 @@ dependencies = [
 name = "ssra-fusion"
 version = "2.26.0-omega"
 dependencies = [
- "anyhow",
  "chrono",
  "criterion",
  "dashmap",
  "event-bus",
- "nexus-core",
  "proptest",
  "serde",
  "serde_json",

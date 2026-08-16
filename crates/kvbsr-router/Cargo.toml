@@ -13,7 +13,6 @@ nexus-core = { workspace = true }
 event-bus = { workspace = true }
 # 向量运算:CLV 内部基于 ndarray,本 crate 通过 clv.as_slice() 获取 &[f32],
 # 保留 ndarray 依赖以备未来性能优化(如改用 ndarray 向量运算替代手写循环)
-ndarray = { workspace = true }
 # 线程安全并发映射:SubTask 5.11 要求,当前使用 RwLock<HashMap>,
 # 保留 dashmap 以备未来高并发场景优化(如工具向量索引改为 DashMap)
 dashmap = { workspace = true }

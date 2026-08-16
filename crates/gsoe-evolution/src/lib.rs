@@ -30,7 +30,7 @@
 //! ```no_run
 //! use gsoe_evolution::{GsoeEvolutionEngine, GsoeConfig};
 //!
-//! # async fn run() -> anyhow::Result<()> {
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut engine = GsoeEvolutionEngine::new(GsoeConfig::default());
 //! let result = engine.evolve_once().await?;
 //! println!("世代 {} 改进 {:.4}", result.generation, result.improvement);

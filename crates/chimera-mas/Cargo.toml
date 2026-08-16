@@ -15,7 +15,6 @@ serde = { workspace = true, features = ["derive"] }
 # serde_json:JSON 序列化(配置 + Agent 元数据持久化)
 serde_json = { workspace = true }
 # anyhow:应用层错误(顶层调用方使用,库层用 thiserror,§4.1 规范)
-anyhow = { workspace = true }
 # tracing:结构化日志,记录 Agent 生命周期与委托执行事件(审计追溯)
 tracing = { workspace = true }
 # thiserror:库层错误类型标准(§4.1:库层用自定义 thiserror enum)
@@ -23,7 +22,6 @@ thiserror = { workspace = true }
 # chrono:时间戳(Agent 创建时间、任务截止时间、心跳时间戳)
 chrono = { workspace = true }
 # uuid:UUIDv7 生成 agent_id(时间有序,便于因果追踪)
-uuid = { workspace = true }
 # dashmap:并发安全哈希表;Agent 注册表读多写少场景下分片锁并发性能优于 RwLock<HashMap>
 dashmap = { workspace = true }
 # rmp-serde:MessagePack 序列化(ADR-004,与 Event Bus 一致),用于 Agent 状态持久化
@@ -32,7 +30,6 @@ rmp-serde = { workspace = true }
 # futures:异步流处理,FuturesUnordered 用于并行委托执行(§4.1 规范:并发收集用 FuturesUnordered 优于 join_all)
 futures = { workspace = true }
 # async-trait:异步 trait 定义,Agent 工厂与委托执行器的 trait 接口
-async-trait = { workspace = true }
 
 # === workspace 内部 crate 依赖(L9→L1-L8 向下依赖 + L9 同层,§2.2 依赖铁律)===
 # L1 Core:领域类型(UserIntent / Quest / Task / TaskStatus / ThinkingMode / Checkpoint)
@@ -49,31 +46,23 @@ mlc-engine = { workspace = true }
 # L3 Storage:Hot/Warm/Cold/Ice 冷热分层,三级归档存储层(§17.2,Task 17)
 cmt-tiering = { workspace = true }
 # L3 Storage:推测缓存,归档缓存复用(§17.1,Task 17)
-scc-cache = { workspace = true }
 # L6 Router:OmniSparseCoordinator::compute_masks() 计算稀疏掩码(ADR-026 决策 7)
 osa-coordinator = { workspace = true }
 # L7 Execution:委托执行通过 gqep-executor 包装超时(零孤儿调用,§6.1 红线)
-gqep-executor = { workspace = true }
 # L4 Security:委托执行通过 qeep-protocol 实现量子纠缠零孤儿(§6.1 红线)
-qeep-protocol = { workspace = true }
 # L8 Parliament:StabilityGuard 故障隔离复用 Parliament RoleRegistry(Task 19 §19.8)
 # WHY 用 path 而非 workspace=true:parliament 仅在根 [dev-dependencies] 注册,
 # 未进入 [workspace.dependencies],沿用现有内部 crate path 引用约定(§4.1)
 parliament = { workspace = true }
 # L8 Parliament:StabilityGuard 降级链协同 ACB 治理器(Task 19 §19.9)
-acb-governor = { workspace = true }
 # L8 Parliament:StabilityGuard 降级链协同 DECB 治理器(Task 19 §19.9)
-decb-governor = { workspace = true }
 # L9 Quest(同层):StabilityGuard 与 efficiency-monitor 协同上报 Critical 事件(Task 19 §19.10)
-efficiency-monitor = { workspace = true }
 # L1 Core:ExpertConsultant 复用 model-router 选择专家旗舰模型(Task 18 §18.8)
 # WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定(§4.1,
 # 与 nexus-core/event-bus/hcw-window 等所有内部 crate 一致)
-model-router = { workspace = true }
 # L6 Router:ExpertConsultant 经 faae-router Function-as-Expert 语义路由(Task 18 §18.8)
 # WHY 用 path 而非 workspace=true:faae-router 未进入 [workspace.dependencies],
 # 沿用现有内部 crate path 引用约定(§4.1,与 parliament/acb-governor 一致)
-faae-router = { workspace = true }
 # L5 Knowledge:WikiRetriever 复用 repo-wiki FTS5 全文检索 + 内存 KNN(Task 18 §18.10)
 # WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定
 repo-wiki = { workspace = true }

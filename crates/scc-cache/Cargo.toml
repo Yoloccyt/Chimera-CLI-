@@ -22,7 +22,6 @@ tracing = { workspace = true }
 # 线程安全分片锁(缓存条目并发读写)
 dashmap = { workspace = true }
 # UUID(EventMetadata 生成)
-uuid = { workspace = true }
 # 时间戳(EventMetadata 生成)
 chrono = { workspace = true }
 # SQLite WAL 持久化(Task 6.2:SqliteWal 真实持久化实现)

@@ -17,9 +17,7 @@ thiserror = { workspace = true }
 # 结构化日志(事件发布失败告警)
 tracing = { workspace = true }
 # UUIDv7 操作 ID 生成(时间有序,便于追溯)
-uuid = { workspace = true }
 # 时间戳(事件元数据)
-chrono = { workspace = true }
 # 内容哈希(置信度评分占位实现:基于内容哈希计算置信度)
 sha2 = { workspace = true }
 # 动态黑名单:集成 SecCore 运行时黑名单,替代静态关键词列表

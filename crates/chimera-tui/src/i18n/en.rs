@@ -295,8 +295,6 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.decay.no_cycle" => "(no cycle active)",
         "panel.decay.recent_events" => "Recent Events:",
         "panel.decay.no_events" => "  (no recent decay events)",
-        "panel.decay.breaker_on" => "ON ",
-        "panel.decay.breaker_off" => "OFF",
         "panel.decay.breakers" => "Breakers",
         "panel.decay.history" => "Decay History",
         // U-3: OverWindow panel (P1 literal migration)

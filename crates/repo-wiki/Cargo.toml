@@ -28,7 +28,6 @@ thiserror = { workspace = true }
 
 # 占位嵌入向量生成(SHA-256 扩展为 512-dim,Week 6 替换为 NMC 编码)
 sha2 = { workspace = true }
-hex = { workspace = true }
 
 # 唯一标识(UUIDv7 时间有序)
 uuid = { workspace = true }
@@ -43,7 +42,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 # 向量运算(预留,Week 6 NMC 集成时使用)
-ndarray = { workspace = true }
 
 # HNSW 近似最近邻搜索(P2-W8.1:VectorStore trait 的 HnswStore 生产实现)
 # WHY 添加:VectorIndex(内存 KNN)仅支持 ≤1000 entry,P3 HCW-Sparse v2.0 精排需 10K-100K entry;

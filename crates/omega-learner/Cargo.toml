@@ -26,7 +26,6 @@ tracing = { workspace = true }
 # 时间处理(反馈事件时间戳 + 学习步时间戳)
 chrono = { workspace = true }
 # UUIDv7 生成(学习版本号 + 轨迹 ID)
-uuid = { workspace = true }
 # rand:经验回放池随机采样(P4-W16.2.1)— off-policy RL 训练需均匀采样
 # WHY workspace 已声明:proptest 等 crate 间接使用,直接声明确保版本一致
 rand = { workspace = true }

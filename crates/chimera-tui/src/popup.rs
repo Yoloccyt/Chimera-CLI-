@@ -370,7 +370,14 @@ fn value_to_lines(value: &serde_json::Value, indent: usize) -> Vec<Line<'static>
                 let mut value_lines = value_to_lines(v, indent + 2);
                 if value_lines.len() == 1 {
                     let mut spans = vec![Span::raw(key_prefix)];
-                    spans.extend(value_lines.into_iter().next().unwrap().spans);
+                    // WHY expect: len()==1 前置分支保证 next() 必命中（W3 健康度审计补论证）
+                    spans.extend(
+                        value_lines
+                            .into_iter()
+                            .next()
+                            .expect("len==1 前置分支保证非空")
+                            .spans,
+                    );
                     spans.push(Span::raw(if is_last { "" } else { "," }));
                     lines.push(Line::from(spans));
                 } else {
