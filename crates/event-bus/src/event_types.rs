@@ -26,8 +26,9 @@ use chrono::{DateTime, Utc};
 use nexus_contracts::domain::Quest;
 
 use crate::types::{
-    ActionSource, AgentStatus, BudgetMetricsPayload, ChatStatus, ClvSummary, ConsultUrgency,
-    EventMetadata, EventSeverity, QuestStatus, RouterStatsPayload, TaskPriority, VoteValue,
+    ActionSource, AgentStatus, BudgetMetricsPayload, ChatStatus, ClvSummary, CompatLevel,
+    ConsultUrgency, EventMetadata, EventSeverity, QuestStatus, RouterStatsPayload, TaskPriority,
+    VoteValue,
 };
 
 // ============================================================
@@ -200,6 +201,14 @@ pub enum StorageEvent {
         to_tier: String,
         reason: String,
     },
+    /// CMT 四层存储统计上报(L3 深度优化 P1-1)
+    CapabilityTierStatsReported {
+        metadata: EventMetadata,
+        hot: u64,
+        warm: u64,
+        cold: u64,
+        ice: u64,
+    },
     /// SCC 推测性预取完成
     CachePrefetched {
         metadata: EventMetadata,
@@ -240,6 +249,11 @@ pub enum SecurityEvent {
     CapabilityFrozen {
         metadata: EventMetadata,
         capability_id: String,
+        reason: String,
+    },
+    /// 影子模式熔断器跳闸(L4 深度优化 P1-1)
+    ShadowBreakerTripped {
+        metadata: EventMetadata,
         reason: String,
     },
     /// 预算超限 `[Critical]`
@@ -882,6 +896,26 @@ pub enum InterfaceEvent {
         session_id: String,
         status: ChatStatus,
     },
+    /// TUI → 编排器协议握手请求(Concord W10 T10.1,ADR-082;与 NexusEvent 双表同步)
+    TuiHello {
+        metadata: EventMetadata,
+        /// 协议版本(semver 字符串)
+        proto: String,
+        /// TUI 端版本
+        tui_version: String,
+        /// 能力集标识
+        caps: Vec<String>,
+    },
+    /// 编排器 → TUI 协议握手应答(Concord W10 T10.1,ADR-082;与 NexusEvent 双表同步)
+    TuiHelloAck {
+        metadata: EventMetadata,
+        /// 服务端支持的协议版本
+        proto: String,
+        /// 兼容级别
+        compat: CompatLevel,
+        /// 服务端版本
+        server_version: String,
+    },
     /// 状态刷新请求
     RefreshStateRequested {
         metadata: EventMetadata,
@@ -980,6 +1014,7 @@ impl EventClassification for StorageEvent {
             Self::CacheHit { metadata, .. }
             | Self::CacheMiss { metadata, .. }
             | Self::CapabilityTiered { metadata, .. }
+            | Self::CapabilityTierStatsReported { metadata, .. }
             | Self::CachePrefetched { metadata, .. }
             | Self::CacheStatsReported { metadata, .. }
             | Self::LsctTierSwitched { metadata, .. } => metadata,
@@ -995,6 +1030,7 @@ impl EventClassification for StorageEvent {
             Self::CacheHit { .. } => "CacheHit",
             Self::CacheMiss { .. } => "CacheMiss",
             Self::CapabilityTiered { .. } => "CapabilityTiered",
+            Self::CapabilityTierStatsReported { .. } => "CapabilityTierStatsReported",
             Self::CachePrefetched { .. } => "CachePrefetched",
             Self::CacheStatsReported { .. } => "CacheStatsReported",
             Self::LsctTierSwitched { .. } => "LsctTierSwitched",
@@ -1011,6 +1047,7 @@ impl EventClassification for SecurityEvent {
         match self {
             Self::SandboxViolation { metadata, .. }
             | Self::CapabilityFrozen { metadata, .. }
+            | Self::ShadowBreakerTripped { metadata, .. }
             | Self::BudgetExceeded { metadata, .. }
             | Self::BudgetAdjusted { metadata, .. }
             | Self::AsaIntervention { metadata, .. }
@@ -1033,6 +1070,7 @@ impl EventClassification for SecurityEvent {
         match self {
             Self::SandboxViolation { .. } => "SandboxViolation",
             Self::CapabilityFrozen { .. } => "CapabilityFrozen",
+            Self::ShadowBreakerTripped { .. } => "ShadowBreakerTripped",
             Self::BudgetExceeded { .. } => "BudgetExceeded",
             Self::BudgetAdjusted { .. } => "BudgetAdjusted",
             Self::AsaIntervention { .. } => "AsaIntervention",
@@ -1259,6 +1297,8 @@ impl EventClassification for InterfaceEvent {
             | Self::TuiChatResponseChunk { metadata, .. }
             | Self::TuiChatCompleted { metadata, .. }
             | Self::TuiChatStatusChanged { metadata, .. }
+            | Self::TuiHello { metadata, .. }
+            | Self::TuiHelloAck { metadata, .. }
             | Self::RefreshStateRequested { metadata, .. }
             | Self::SpecRegistered { metadata, .. } => metadata,
         }
@@ -1273,7 +1313,10 @@ impl EventClassification for InterfaceEvent {
             | Self::TuiActionCompleted { .. }
             | Self::TuiActionFailed { .. }
             | Self::TuiChatSubmitted { .. }
-            | Self::TuiChatCompleted { .. } => EventSeverity::Info,
+            | Self::TuiChatCompleted { .. }
+            // Concord W10 T10.1(ADR-082):协议握手(与 NexusEvent severity 同步)
+            | Self::TuiHello { .. }
+            | Self::TuiHelloAck { .. } => EventSeverity::Info,
             // 其余为 Normal(高频流式/监控/Agent 通信)
             _ => EventSeverity::Normal,
         }
@@ -1305,6 +1348,9 @@ impl EventClassification for InterfaceEvent {
             Self::TuiChatResponseChunk { .. } => "TuiChatResponseChunk",
             Self::TuiChatCompleted { .. } => "TuiChatCompleted",
             Self::TuiChatStatusChanged { .. } => "TuiChatStatusChanged",
+            // Concord W10 T10.1(ADR-082):协议握手(与 NexusEvent type_name 同步)
+            Self::TuiHello { .. } => "TuiHello",
+            Self::TuiHelloAck { .. } => "TuiHelloAck",
             Self::RefreshStateRequested { .. } => "RefreshStateRequested",
             Self::SpecRegistered { .. } => "SpecRegistered",
         }

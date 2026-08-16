@@ -10,6 +10,22 @@
 //! 订阅 `ConsensusReached`(议会共识,作为进化奖励)与 `RedTeamAudit`
 //! (红队审计,作为对抗进化信号),驱动策略参数的变异与选择。
 //!
+//! # 文档-代码偏差记录(《最新版》§10 对齐,P1-3 深度优化)
+//! - **AEGIS 落点偏差**:文档 §10.3.1/§20 规划独立 `aegis-engine` crate,
+//!   实际落地为本 crate 的 `aegis` 子模块(AEGIS-lite 降级设计,
+//!   ADR-050 + ADR-049 决策 1 否决新建 crate)。
+//! - **变体隔离落点偏差**:文档 §10.3.2 规划 L5 `variant-pool` crate,
+//!   实际落地 L8 parliament(与文档 §13 L8 变体审议一致),L5 侧经
+//!   L0 VariantId 共享类型协作。
+//! - **formal/ 跨层职责**:`formal` 模块标注 L4 FormalVerifier 职责
+//!   (文档 §19 L5 防御 = AEGIS Critic 奖励欺骗检测),形式化验证器
+//!   按 ADR-047/052 裁决分布于本 crate 与 parliament/omega-learner/
+//!   decay-engine 四 crate,属历史裁决,记录而非重构。
+//! - **P1-3 增量**(2026-08):`spec_dag_snapshot` 接入 SpecRegistry 真实谱系
+//!   (原空快照 TODO 关闭);`checkpoint_preserver`(文档 §10.2 问题 3,
+//!   RSIBench 保留历史最佳)与 `self_improvement`(文档 §10.2 问题 5,
+//!   PenguinHarness 四步降级实现)均已落地。
+//!
 //! # 快速示例
 //! ```no_run
 //! use gsoe_evolution::{GsoeEvolutionEngine, GsoeConfig};
@@ -30,6 +46,11 @@
 /// 对应 ADR: ADR-050(AEGIS-lite 降级设计)+ ADR-049 决策 1(落点裁决)
 /// R2 冻结声明(ADR-042):规则/统计驱动,无 RL 参数更新
 pub mod aegis;
+/// P1-3(计划 Task 4): CheckpointPreserver 保留历史最佳 checkpoint(RSIBench,文档 §10.3.3)
+///
+/// 纯逻辑模块(无 IO/无事件/无全局状态),按 task_type 隔离历史最佳,
+/// 停止策略 attempts > 10 且有最佳时建议停止(RSIBench 78.26% 发现)。
+pub mod checkpoint_preserver;
 /// P5.2.1: RHI-CG 通道 B CI 执行门(CiGate trait + CargoCiGate + MockCiGate)
 ///
 /// 对应 ADR: ADR-044 决策 5(CI 执行门接口设计)
@@ -46,12 +67,19 @@ pub mod formal;
 /// 聚合 7 个验证器的 VerificationResult 为 CiGateResult,复用既有 CI 门禁基础设施。
 /// 消费切片(不持有验证器实例)以规避 L5→L6 向上依赖;不含 R2 扫描关键词。
 pub mod formal_gate;
+/// Phase 5 §10.1: 四套原子算子（OpenMLE Draft/Improve/Debug/Crossover，ADR-049 内嵌）
+pub mod four_operators;
 /// polish-v2.7 closure Stage B-8: Meta-Agent 适配器(外部 Harness 描述规范化,ADR-049 降级档)
 ///
 /// 规则式规范化:外部描述 → HarnessSpec TOML → SpecLoader 全量校验(强制门自动注入)。
 /// R2 冻结声明(ADR-042):纯文本规范化,无学习/训练路径。
 pub mod meta_adapter;
 pub mod policy;
+/// P1-3(计划 Task 6): 自我改进流水线(PenguinHarness 四步,文档 §10.3.4)
+///
+/// 降级实现(ADR-042 合规):四步语义保留但规则/统计驱动,
+/// Optimizer 复用 AEGIS-lite 四阶段编排。
+pub mod self_improvement;
 /// P5.2.2: RHI-CG 通道 B 显著性检测(单尾二项检验 + SignificanceDetector)
 ///
 /// 对应 ADR: ADR-044 决策 6(显著性检测算法选型)+ ADR-045 决策 8(否决证据检查独立化)
@@ -60,6 +88,8 @@ pub mod significance;
 pub mod spec_loader;
 /// P4-W15.2.1: HarnessSpec 版本化注册表（谱系追踪 + A/B 测试 + 一键回滚 + 不可进化面守护）
 pub mod spec_registry;
+/// Phase 5 §10.2: 三因子父本选择器（UCB + Softmax + 冷却，OpenMLE，ADR-049 内嵌）
+pub mod three_factor_selector;
 pub mod types;
 /// R2 解冻统一决策闸门 — 4 项前置的组合封套(capstone)
 ///
@@ -79,6 +109,10 @@ pub use aegis::{
     CriticVerdict, DigestedTrajectories, FailurePattern, RejectedCandidate, SpecCandidate,
     SpecEvolver, TrajectoryDigester, TrajectoryOutcome,
 };
+// P1-3(计划 Task 4): CheckpointPreserver 公开 API 重导出
+pub use checkpoint_preserver::{
+    Checkpoint, CheckpointPreserver, PreserveDecision, StopDecision, MAX_ATTEMPTS_BEFORE_STOP,
+};
 // P5.2.1: CiGate 公开 API 重导出
 pub use ci_gate::{
     check_inv9_delegation_acyclic, CargoCiGate, CiFailure, CiFailureKind, CiGate, CiGateError,
@@ -93,6 +127,12 @@ pub use formal_gate::{
 };
 // R2 解冻阶段③ 前置 4:UnfreezeScope 公开 API 重导出
 pub use unfreeze_scope::{RlUpdateTarget, ScopeVerdict, UnfreezeScope};
+// P1-3(计划 Task 6): 自我改进流水线公开 API 重导出
+pub use self_improvement::{
+    AgentCreator, AgentEvaluator, Benchmark, BenchmarkDesigner, BenchmarkScenario,
+    ImprovementRequirements, ImprovementResult, RuleBasedEvaluator, RuleBenchmarkDesigner,
+    SelfImprovementPipeline, TemplateCreator,
+};
 // R2 解冻统一决策闸门:UnfreezeGovernor 公开 API 重导出
 pub use unfreeze_governor::{DenialDimension, UnfreezeDecision, UnfreezeGovernor};
 // polish-v2.7 closure Stage B-8: Meta-Agent 适配器公开 API 重导出
@@ -111,6 +151,13 @@ pub use significance::{
 pub use spec_loader::{SpecLoader, SpecLoaderError};
 // P4-W15.2.1: SpecRegistry 公开 API 重导出
 pub use spec_registry::{SpecRegistry, SpecRegistryError};
+// Phase 5 §10.1: 四套原子算子公开 API 重导出
+pub use four_operators::{
+    AtomicOperatorTrait, CardQuery, CrossoverOperator, DebugOperator, DraftOperator,
+    ImproveOperator, OperatorContext, OperatorError, OperatorResult, ResourceCost,
+};
+// Phase 5 §10.2: 三因子父本选择器公开 API 重导出
+pub use three_factor_selector::ThreeFactorSelector;
 pub use types::{
     EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout, MutationCandidate, MutationType,
 };
@@ -145,7 +192,8 @@ pub struct SpecEdge {
 /// 谱系 DAG 快照 — 规范版本演化有向无环图(Task 3.5)
 ///
 /// TUI DagVizPanel 调用 `spec_dag_snapshot()` 获取节点/边计数,
-/// 展示谱系演化规模。当前返回空快照(TODO: 真实 GSOE DAG 待 v3.x 实装)。
+/// 展示谱系演化规模。P1-3 起由 SpecRegistry 注册/回滚路径真实更新,
+/// 不再返回空快照。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SpecDagSnapshot {
     /// 谱系节点列表
@@ -154,24 +202,49 @@ pub struct SpecDagSnapshot {
     pub edges: Vec<SpecEdge>,
 }
 
-/// 返回谱系 DAG 快照(Task 3.5 跨层 Panel 数据管道)
+/// P1-3:全进程谱系 DAG 快照缓存
+///
+/// WHY 全局只读缓存:spec_dag_snapshot() 是同步纯渲染路径(TUI dag_viz
+/// 面板),无法访问任意 SpecRegistry 实例;SpecRegistry 可能存在多个实例
+/// (with_event_bus / new),全局快照是它们的并集(全进程谱系累积)。
+///
+/// WHY 不用 event-bus:dag_viz 面板消费函数是同步纯渲染路径,SpecRegistered
+/// 事件管道改造 TUI 状态成本高于收益;快照为 append-only 只读缓存,
+/// 唯一写入点 = SpecRegistry 注册/回滚路径,无隐式可变状态。
+static SPEC_DAG: std::sync::LazyLock<std::sync::RwLock<SpecDagSnapshot>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(SpecDagSnapshot::default()));
+
+/// 返回谱系 DAG 快照(Task 3.5 跨层 Panel 数据管道;P1-3 接入真实数据)
 ///
 /// TUI DagVizPanel 调用此函数显示"谱系"节点/边计数。
-/// 当前返回空快照(TODO: 真实 GSOE DAG 待 v3.x 实装)。
+/// 快照由 `SpecRegistry::register` / `rollback` 路径增量更新,
+/// 跨多个 SpecRegistry 实例累积(全进程谱系)。
 ///
 /// # 示例
 ///
 /// ```
-/// use gsoe_evolution::{spec_dag_snapshot, SpecDagSnapshot};
+/// use gsoe_evolution::spec_dag_snapshot;
 ///
 /// let snapshot = spec_dag_snapshot();
-/// assert!(snapshot.nodes.is_empty());
-/// assert!(snapshot.edges.is_empty());
+/// // 快照为全进程谱系累积:未注册时为 0,注册后为实际节点/边数
+/// let _total = snapshot.nodes.len() + snapshot.edges.len();
 /// ```
 pub fn spec_dag_snapshot() -> SpecDagSnapshot {
-    // TODO: 真实接入 GSOE 进化引擎的谱系 DAG(规范版本演化图)
-    // 当前返回空快照,待 v3.x SpecRegistry 全量版本化后接入
-    SpecDagSnapshot::default()
+    SPEC_DAG
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// 重置全局谱系快照 — 仅测试隔离用(生产代码不得调用)
+///
+/// WHY:全局快照跨测试累积会污染断言,测试需可重置;用 #[doc(hidden)]
+/// 标注避免误入公共 API 文档。
+#[doc(hidden)]
+pub fn reset_spec_dag() {
+    *SPEC_DAG
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = SpecDagSnapshot::default();
 }
 
 /// 预导入模块 — 提供最常用类型

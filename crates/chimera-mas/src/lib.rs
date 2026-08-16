@@ -54,6 +54,7 @@ pub mod context;
 pub mod delegation;
 pub mod error;
 pub mod experts;
+pub mod feedback;
 pub mod invariant_report;
 pub mod invariants;
 pub mod knowledge;
@@ -80,6 +81,7 @@ pub use delegation::{
 };
 pub use error::{MasError, Result};
 pub use experts::{ExpertProfile, ExpertRegistry, PermissionTier, ToolPermission};
+pub use feedback::{ExpertFeedbackEntry, ExpertFeedbackRegistry, ExpertPriorityAdjustment};
 pub use invariants::{
     ArchiveTier, DelegationEdge, InvariantChecker, MEMORY_BUDGET_MB, MEMORY_BUDGET_UTILIZATION,
 };
@@ -144,6 +146,7 @@ pub mod prelude {
         },
         error::{MasError, Result},
         experts::{ExpertProfile, ExpertRegistry, PermissionTier, ToolPermission},
+        feedback::{ExpertFeedbackEntry, ExpertFeedbackRegistry, ExpertPriorityAdjustment},
         invariants::{
             ArchiveTier, DelegationEdge, InvariantChecker, MEMORY_BUDGET_MB,
             MEMORY_BUDGET_UTILIZATION,

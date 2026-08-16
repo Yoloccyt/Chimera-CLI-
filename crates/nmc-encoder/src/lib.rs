@@ -6,11 +6,15 @@
 //!
 //! # 核心机制
 //! 5 种模态感知器(文本/图像/视频/音频/桌面)→ 统一 CLV(512-dim f32)输出
-//! - **TextPerceptor**:SHA256 + 字符频率嵌入(已实现,Week 7/8 接入 ort ONNX)
-//! - **ImagePerceptor**:占位(Week 7/8 接入 ort ONNX)
-//! - **VideoPerceptor**:占位(Week 7/8 接入 ort ONNX)
-//! - **AudioPerceptor**:占位(Week 7/8 接入 ort ONNX)
+//! - **TextPerceptor**:SHA256 + 字符频率嵌入 + tokenizers 分词(all-MiniLM-L6-v2)
+//! - **ImagePerceptor**:CLIP ViT-B/32 tract-onnx 语义嵌入(已实现,v2.14.0+ 升级)
+//! - **VideoPerceptor**:VideoMAE tract-onnx 语义嵌入(已实现)
+//! - **AudioPerceptor**:Whisper encoder tract-onnx 语义嵌入(已实现)
 //! - **DesktopPerceptor**:基于区域描述文本的哈希嵌入(已实现)
+//!
+//! # 推理引擎选型(WHY tract 而非 ort)
+//! ort 仅支持 MSVC 工具链;tract-onnx 为纯 Rust 实现,跨平台兼容
+//! 且与 `#![forbid(unsafe_code)]` 一致(见 Cargo.toml 注释)。
 //!
 //! # 融合策略
 //! - **Concat**:拼接后截断/填充到 512 维

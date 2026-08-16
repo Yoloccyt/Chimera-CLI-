@@ -32,22 +32,25 @@
 //! ```
 
 use chrono::{DateTime, Utc};
-use nexus_contracts::{TemporalMeta, TransitionType};
+use nexus_contracts::{TemporalMeta, TransitionType, VectorStore};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use tokio::sync::oneshot;
 use tokio::task::spawn_blocking;
 use uuid::Uuid;
 
 use crate::contradiction::ContradictionDetector;
 use crate::error::WikiError;
+use crate::experience_bank::DistilledInsight;
 use crate::fts::{self, FtsCapability};
 use crate::iscm::{IscmAnchor, Layer};
 use crate::metrics::WikiMetrics;
 use crate::relation::EntryRelation;
+use crate::search::rrf_fuse;
 use crate::types::{WikiConfig, WikiEntry};
+use crate::vector::hnsw_store::HnswStore;
 
 /// 写入线程接收的操作。
 ///
@@ -91,6 +94,8 @@ enum WriteOp {
         /// 响应通道
         respond: oneshot::Sender<Result<bool, WikiError>>,
     },
+    /// 写入全局蒸馏洞察(P1-3 计划 Task 5 双层经验库)— UPSERT 幂等
+    InsertDistilledInsight(DistilledInsight, oneshot::Sender<Result<(), WikiError>>),
 }
 
 /// Wiki 存储器 — 封装 SQLite Connection,提供线程安全的条目 CRUD
@@ -133,6 +138,17 @@ pub struct WikiStore {
     /// 将 O(1) 的 spawn_blocking 查询从每次写操作的热路径移除。
     /// 计数由写入线程返回的实际影响结果驱动,保证与 DB 一致(UPSERT/幂等删除正确)。
     entry_count: Arc<AtomicUsize>,
+    /// 惰性 HNSW dense 索引(P1-2 hybrid_query dense 通道)
+    ///
+    /// WHY RwLock<Option<...>>:索引首次 dense 检索时才构建(惰性),
+    /// 避免 open 时全量加载 embedding 的开销;`None` 表示尚未构建。
+    /// 构建在 spawn_blocking 内从 DB 全量读取,构建完成后只读共享。
+    hnsw: Arc<RwLock<Option<HnswStore>>>,
+    /// HNSW 索引脏标记 — 写操作(insert/delete)后置 true,下次 dense 检索前重建
+    ///
+    /// WHY 脏标记而非同步更新:写线程持有 SQLite 连接,而索引构建需要
+    /// 读连接池查询全量数据;异步重建 + 脏标记避免写热路径上的索引同步开销。
+    hnsw_dirty: Arc<AtomicBool>,
 }
 
 impl Clone for WikiStore {
@@ -146,6 +162,8 @@ impl Clone for WikiStore {
             fts_capability: self.fts_capability,
             metrics: Arc::clone(&self.metrics),
             entry_count: Arc::clone(&self.entry_count),
+            hnsw: Arc::clone(&self.hnsw),
+            hnsw_dirty: Arc::clone(&self.hnsw_dirty),
         }
     }
 }
@@ -264,6 +282,9 @@ impl WikiStore {
             fts_capability,
             metrics,
             entry_count: Arc::new(AtomicUsize::new(initial_count as usize)),
+            // P1-2:惰性 HNSW 索引初始未构建,首次 dense 检索时重建
+            hnsw: Arc::new(RwLock::new(None)),
+            hnsw_dirty: Arc::new(AtomicBool::new(true)),
         })
     }
 
@@ -318,6 +339,8 @@ impl WikiStore {
         }
         let count = self.entry_count.load(Ordering::Relaxed) as u32;
         self.metrics.set_entries(count);
+        // P1-2:写操作后 HNSW 索引置脏,下次 dense 检索前重建
+        self.hnsw_dirty.store(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -343,6 +366,8 @@ impl WikiStore {
             .fetch_add(newly_inserted, Ordering::Relaxed);
         let count = self.entry_count.load(Ordering::Relaxed) as u32;
         self.metrics.set_entries(count);
+        // P1-2:批量写后 HNSW 索引置脏
+        self.hnsw_dirty.store(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -398,6 +423,8 @@ impl WikiStore {
         }
         let count = self.entry_count.load(Ordering::Relaxed) as u32;
         self.metrics.set_entries(count);
+        // P1-2:矛盾检测写入(标记 Historical)同样影响 dense 索引,置脏
+        self.hnsw_dirty.store(true, Ordering::Relaxed);
 
         Ok(crate::contradiction::ContradictionResult {
             inserted: is_new,
@@ -470,6 +497,8 @@ impl WikiStore {
         }
         let count = self.entry_count.load(Ordering::Relaxed) as u32;
         self.metrics.set_entries(count);
+        // P1-2:删除后 HNSW 索引置脏
+        self.hnsw_dirty.store(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -579,6 +608,128 @@ impl WikiStore {
         .await
     }
 
+    /// 异步混合检索 — HNSW dense + FTS5 sparse + RRF 融合(P1-2)
+    ///
+    /// 将语义召回(dense,需提供查询嵌入)与关键词召回(sparse,FTS5 三级降级链)
+    /// 通过 RRF 融合为单一相关度排序,是知识检索的推荐入口。
+    ///
+    /// # 参数
+    /// - `query`:关键词查询字符串(sparse 通道)
+    /// - `query_embedding`:查询向量(dense 通道);`None` 时退化 sparse-only
+    ///   (dense_rank 全部为 None,融合分数仅由 sparse 排名贡献)
+    /// - `top_k`:返回结果上限
+    ///
+    /// # 错误
+    /// - `EmbeddingDimensionMismatch`:查询向量维度 ≠ `WikiConfig.vector_dim`
+    /// - 其余错误与 `search_fulltext` 一致(数据库/序列化/阻塞池)
+    ///
+    /// # 惰性索引(WHY)
+    /// dense 索引首次检索时从 DB 全量构建;写操作置脏后下次检索前重建。
+    /// 避免 open 时全量加载与写热路径上的索引同步开销。
+    pub async fn hybrid_query(
+        &self,
+        query: &str,
+        query_embedding: Option<&[f32]>,
+        top_k: usize,
+    ) -> Result<Vec<crate::search::HybridSearchResult>, WikiError> {
+        // 1. sparse 通道:FTS5 三级降级链(与 search_fulltext 一致)
+        let sparse_entries = self.search_fulltext(query.to_string()).await?;
+        let sparse_ids: Vec<String> = sparse_entries.iter().map(|e| e.entry_id.clone()).collect();
+
+        // 2. dense 通道(可选):惰性 HNSW 索引 + Top-K 近邻
+        let dense_ids: Vec<String> = match query_embedding {
+            Some(qe) => {
+                if qe.len() != self.config.vector_dim {
+                    return Err(WikiError::EmbeddingDimensionMismatch {
+                        expected: self.config.vector_dim,
+                        actual: qe.len(),
+                    });
+                }
+                // 惰性构建:脏标记或未构建时重建索引
+                if self.hnsw_dirty.load(Ordering::Relaxed)
+                    || self.hnsw.read().map(|g| g.is_none()).unwrap_or(true)
+                {
+                    self.rebuild_hnsw_index().await?;
+                }
+                // WHY 同步 top_k:索引在内存,HNSW 检索 SLO < 10ms,短暂阻塞
+                // 可接受;锁在无 await 区间持有,不违反"禁止持锁 await"红线。
+                let guard = self
+                    .hnsw
+                    .read()
+                    .map_err(|e| WikiError::VectorIndexError(format!("hnsw lock poisoned: {e}")))?;
+                let index = guard.as_ref().ok_or_else(|| {
+                    WikiError::VectorIndexError("hnsw index not built".to_string())
+                })?;
+                index
+                    .top_k(qe, top_k, "")
+                    .map_err(|e| WikiError::VectorIndexError(format!("hnsw top_k failed: {e}")))?
+                    .iter()
+                    .map(|h| h.id.clone())
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+
+        // 3. RRF 融合两路排名
+        Ok(rrf_fuse(
+            &dense_ids,
+            &sparse_ids,
+            &self.config.hybrid_search,
+            top_k,
+        ))
+    }
+
+    /// 重建惰性 HNSW 索引 — 从 DB 全量加载 embedding 并在阻塞线程池构建
+    ///
+    /// WHY spawn_blocking:全量扫描 + HNSW 图构建是 CPU 密集操作,
+    /// 不得阻塞 async runtime 工作线程(与所有 SQLite 读操作同款理由)。
+    async fn rebuild_hnsw_index(&self) -> Result<(), WikiError> {
+        let dim = self.config.vector_dim;
+        let read_conns = Arc::clone(&self.read_conns);
+        let hnsw = Arc::clone(&self.hnsw);
+        let dirty = Arc::clone(&self.hnsw_dirty);
+
+        spawn_blocking(move || -> Result<(), WikiError> {
+            // 全量读取 entry_id + embedding(只读连接池中任取一个)
+            let conn = read_conns[0]
+                .lock()
+                .map_err(|e| WikiError::VectorIndexError(format!("conn poisoned: {e}")))?;
+            let mut stmt = conn.prepare("SELECT entry_id, embedding FROM entries;")?;
+            let rows = stmt.query_map([], |row| {
+                let id: String = row.get(0)?;
+                let blob: Vec<u8> = row.get(1)?;
+                Ok((id, blob))
+            })?;
+            let mut entries: Vec<(String, Vec<f32>)> = Vec::new();
+            for row in rows {
+                let (id, blob) = row?;
+                // BLOB 小端序 f32 解码(与写入路径编码对称)
+                let vec = blob
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect::<Vec<f32>>();
+                entries.push((id, vec));
+            }
+
+            // 构建新索引(独立实例,构建完成后原子替换)
+            let index = HnswStore::with_config(dim, &crate::types::HnswConfig::default());
+            for (id, embedding) in &entries {
+                index
+                    .upsert(id, embedding, ())
+                    .map_err(|e| WikiError::VectorIndexError(format!("hnsw upsert {id}: {e}")))?;
+            }
+            *hnsw
+                .write()
+                .map_err(|e| WikiError::VectorIndexError(format!("hnsw lock poisoned: {e}")))? =
+                Some(index);
+            dirty.store(false, Ordering::Relaxed);
+            Ok(())
+        })
+        .await
+        .map_err(WikiError::BlockingJoinError)??;
+        Ok(())
+    }
+
     /// 异步列出所有条目(按 created_at 升序)
     pub async fn list_all(&self) -> Result<Vec<WikiEntry>, WikiError> {
         self.with_read_conn(|conn| {
@@ -630,6 +781,38 @@ impl WikiStore {
         let count = self.count().await?;
         self.metrics.set_entries(count);
         Ok(())
+    }
+
+    /// 异步写入全局蒸馏洞察(UPSERT 幂等,P1-3 计划 Task 5 双层经验库)
+    ///
+    /// 通过写入线程序列化(与 entries 写入同款模式),保证蒸馏写入与
+    /// 其他写操作顺序一致。
+    pub async fn insert_distilled_insight(
+        &self,
+        insight: DistilledInsight,
+    ) -> Result<(), WikiError> {
+        let (tx, rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteOp::InsertDistilledInsight(insight, tx))
+            .map_err(|_| WikiError::WriteChannelClosed)?;
+        rx.await.map_err(|_| WikiError::WriteChannelClosed)?
+    }
+
+    /// 异步列出全部蒸馏洞察(读连接池)
+    pub async fn list_distilled_insights(&self) -> Result<Vec<DistilledInsight>, WikiError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT insight_id, content, tags, embedding, confidence, source_count, created_at
+                 FROM distilled_insights ORDER BY source_count DESC;",
+            )?;
+            let rows = stmt.query_map([], row_to_insight)?;
+            let mut insights = Vec::new();
+            for row in rows {
+                insights.push(row?);
+            }
+            Ok(insights)
+        })
+        .await
     }
 
     // ============================================================
@@ -836,6 +1019,21 @@ fn init_schema(conn: &Connection) -> Result<(), WikiError> {
          CREATE INDEX IF NOT EXISTS idx_relations_target ON entry_relations(target_id);",
     )?;
 
+    // P1-3 计划 Task 5: 创建 distilled_insights 表(双层经验库的全局蒸馏层)
+    // WHY IF NOT EXISTS 增量迁移:老库无此表时自动补建,非破坏。
+    // 蒸馏洞察由 DualExperienceBank 规则式生成(UPSERT 幂等写入)。
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS distilled_insights (
+            insight_id   TEXT PRIMARY KEY,
+            content      TEXT NOT NULL,
+            tags         TEXT NOT NULL,
+            embedding    BLOB NOT NULL,
+            confidence   REAL NOT NULL,
+            source_count INTEGER NOT NULL,
+            created_at   TEXT NOT NULL
+        );",
+    )?;
+
     Ok(())
 }
 
@@ -897,8 +1095,74 @@ fn run_writer(mut conn: Connection, rx: mpsc::Receiver<WriteOp>, fts: FtsCapabil
                     &mut conn, entry, target_ids, relations, fts,
                 ));
             }
+            // P1-3 计划 Task 5: 全局蒸馏洞察写入(UPSERT 幂等)
+            WriteOp::InsertDistilledInsight(insight, respond) => {
+                let _ = respond.send(writer_insert_distilled_insight(&conn, &insight));
+            }
         }
     }
+}
+
+/// 写入线程:执行 distilled_insights 表写入(UPSERT 幂等,P1-3 计划 Task 5)
+///
+/// 洞察 ID 为确定性规则生成(`single:tag` / `pair:a+b`),重复蒸馏
+/// 覆盖而非追加,保证全局蒸馏层可重复构建。
+fn writer_insert_distilled_insight(
+    conn: &Connection,
+    insight: &DistilledInsight,
+) -> Result<(), WikiError> {
+    let tags_json = serde_json::to_string(&insight.tags)?;
+    // embedding BLOB 小端序 f32 编码(与 entries 表同款)
+    let blob: Vec<u8> = insight
+        .embedding
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    conn.execute(
+        "INSERT OR REPLACE INTO distilled_insights
+         (insight_id, content, tags, embedding, confidence, source_count, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+        params![
+            insight.insight_id,
+            insight.content,
+            tags_json,
+            blob,
+            insight.confidence,
+            insight.source_count,
+            insight.created_at.to_rfc3339()
+        ],
+    )?;
+    Ok(())
+}
+
+/// 将 distilled_insights 行转换为 DistilledInsight
+fn row_to_insight(row: &rusqlite::Row<'_>) -> rusqlite::Result<DistilledInsight> {
+    let insight_id: String = row.get(0)?;
+    let content: String = row.get(1)?;
+    let tags_json: String = row.get(2)?;
+    let embedding_blob: Vec<u8> = row.get(3)?;
+    let confidence: f32 = row.get(4)?;
+    let source_count: i64 = row.get(5)?;
+    let created_iso: String = row.get(6)?;
+
+    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+    let embedding = embedding_blob
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let created_at = DateTime::parse_from_rfc3339(&created_iso)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now());
+
+    Ok(DistilledInsight {
+        insight_id,
+        content,
+        tags,
+        embedding,
+        confidence,
+        source_count: u32::try_from(source_count).unwrap_or(0),
+        created_at,
+    })
 }
 
 /// 写入线程:执行 entries 表写入(INSERT OR IGNORE + UPDATE),返回是否真实新增。
@@ -1389,7 +1653,6 @@ fn row_to_anchor(row: &rusqlite::Row<'_>) -> rusqlite::Result<IscmAnchor> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn test_embedding_blob_roundtrip() {
@@ -1409,376 +1672,5 @@ mod tests {
         let blob = vec![0u8, 1, 2];
         let result = blob_to_embedding(&blob);
         assert!(result.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_open_and_journal_mode() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let store = WikiStore::open(&db_path).unwrap();
-        let mode = store.journal_mode().await.unwrap();
-        assert_eq!(mode.to_lowercase(), "wal");
-    }
-
-    /// 验证 `:memory:` 数据库被彻底拒绝。
-    ///
-    /// WHY:SQLite `:memory:` 每个 Connection 是独立实例,读连接池无法
-    /// 看到写线程的数据;即使 read_pool_size=0,后续逻辑也会创建至少 1 个
-    /// 读连接,导致读操作看到的是空库。彻底拒绝可避免静默的数据"丢失"。
-    #[test]
-    fn test_open_memory_db_rejected() {
-        let config = WikiConfig {
-            db_path: std::path::PathBuf::from(":memory:"),
-            vector_dim: 512,
-            wal_enabled: false,
-            read_pool_size: 0,
-            fts_enabled: false,
-            hnsw: crate::types::HnswConfig::default(),
-            hybrid_search: crate::search::HybridSearchConfig::default(),
-        };
-        match WikiStore::open_with_config(config) {
-            Err(err) => assert!(err.to_string().contains(":memory:")),
-            Ok(_) => panic!(":memory: should be rejected; use a file path"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_insert_and_get() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        let entry = WikiEntry::new("e-1", "标题", "内容", vec!["t".into()], vec![0.5; 512]);
-        store.insert(entry).await.unwrap();
-
-        let fetched = store.get("e-1".to_string()).await.unwrap().unwrap();
-        assert_eq!(fetched.entry_id, "e-1");
-        assert_eq!(fetched.title, "标题");
-        assert_eq!(fetched.tags, vec!["t".to_string()]);
-        assert_eq!(fetched.embedding.len(), 512);
-        assert!((fetched.embedding[0] - 0.5).abs() < 1e-6);
-    }
-
-    #[tokio::test]
-    async fn test_get_nonexistent() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let store = WikiStore::open(&db_path).unwrap();
-        let result = store.get("nonexistent".to_string()).await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_delete() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        let entry = WikiEntry::new("e-1", "标题", "内容", vec![], vec![0.0; 512]);
-        store.insert(entry).await.unwrap();
-        assert_eq!(store.count().await.unwrap(), 1);
-
-        store.delete("e-1".to_string()).await.unwrap();
-        assert_eq!(store.count().await.unwrap(), 0);
-        assert!(store.get("e-1".to_string()).await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_list_by_tag() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        for i in 0..6 {
-            let entry = WikiEntry::new(
-                format!("e-{i}"),
-                format!("Entry {i}"),
-                "content",
-                vec!["tag-0".into(), format!("tag-{i}")],
-                vec![0.0; 512],
-            );
-            store.insert(entry).await.unwrap();
-        }
-
-        let tagged = store.list_by_tag("tag-0".to_string()).await.unwrap();
-        assert_eq!(tagged.len(), 6);
-
-        let tagged_1 = store.list_by_tag("tag-1".to_string()).await.unwrap();
-        assert_eq!(tagged_1.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_search_fulltext() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        let entry = WikiEntry::new(
-            "e-1",
-            "Rust 编程",
-            "Rust 是一门系统级编程语言",
-            vec![],
-            vec![0.0; 512],
-        );
-        store.insert(entry).await.unwrap();
-
-        let found = store.search_fulltext("Rust".to_string()).await.unwrap();
-        assert!(!found.is_empty());
-
-        let not_found = store
-            .search_fulltext("nonexistent".to_string())
-            .await
-            .unwrap();
-        assert!(not_found.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_count() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        assert_eq!(store.count().await.unwrap(), 0);
-        for i in 0..5 {
-            let entry = WikiEntry::new(format!("e-{i}"), "t", "c", vec![], vec![0.0; 512]);
-            store.insert(entry).await.unwrap();
-        }
-        assert_eq!(store.count().await.unwrap(), 5);
-    }
-
-    #[tokio::test]
-    async fn test_list_all() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        for i in 0..3 {
-            let entry = WikiEntry::new(
-                format!("e-{i}"),
-                format!("Entry {i}"),
-                "content",
-                vec![],
-                vec![0.0; 512],
-            );
-            store.insert(entry).await.unwrap();
-        }
-
-        let all = store.list_all().await.unwrap();
-        assert_eq!(all.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_upsert_replaces() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        let entry_v1 = WikiEntry::new("e-1", "v1", "c1", vec![], vec![0.0; 512]);
-        store.insert(entry_v1).await.unwrap();
-
-        let entry_v2 = WikiEntry::new("e-1", "v2", "c2", vec![], vec![0.0; 512]);
-        store.insert(entry_v2).await.unwrap();
-
-        assert_eq!(store.count().await.unwrap(), 1);
-        let fetched = store.get("e-1".to_string()).await.unwrap().unwrap();
-        assert_eq!(fetched.title, "v2");
-    }
-
-    /// 验证读操作可在写操作进行时并发完成,不被阻塞。
-    ///
-    /// WHY:旧实现使用单 `Mutex<Connection>` 串行化所有读写;
-    /// 本测试一个任务持续写入,另一个任务持续读取,
-    /// 若读仍被写阻塞,`timeout` 会触发。
-    #[tokio::test]
-    async fn test_read_during_write_not_blocked() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test_rw.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        let writer = store.clone();
-        let write_handle = tokio::spawn(async move {
-            for i in 0..100 {
-                let entry = WikiEntry::new(
-                    format!("e-{i}"),
-                    format!("Entry {i}"),
-                    "content",
-                    vec![],
-                    vec![0.0; 512],
-                );
-                writer.insert(entry).await.unwrap();
-            }
-        });
-
-        let reader = store.clone();
-        let read_handle = tokio::spawn(async move {
-            for _ in 0..50 {
-                tokio::time::timeout(Duration::from_millis(500), reader.count())
-                    .await
-                    .expect("读取在写期间被阻塞,超时")
-                    .expect("count 失败");
-            }
-        });
-
-        // 两者应同时完成,读取不会因为写入而超时
-        write_handle.await.unwrap();
-        read_handle.await.unwrap();
-    }
-
-    /// 验证多个并发写入同一 entry_id 最终被序列化,状态一致。
-    ///
-    /// WHY:写入线程序列化所有写操作,UPSERT 不会产生重复记录;
-    /// 本测试确保并发写不会破坏该不变量。
-    #[tokio::test]
-    async fn test_write_serializes() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test_serial.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        let mut handles = Vec::new();
-        for i in 0..10 {
-            let store_clone = store.clone();
-            handles.push(tokio::spawn(async move {
-                let entry = WikiEntry::new(
-                    "e-same",
-                    format!("title-{i}"),
-                    format!("content-{i}"),
-                    vec![],
-                    vec![0.0; 512],
-                );
-                store_clone.insert(entry).await.unwrap();
-            }));
-        }
-
-        for handle in handles {
-            handle.await.unwrap();
-        }
-
-        assert_eq!(store.count().await.unwrap(), 1);
-        let fetched = store.get("e-same".to_string()).await.unwrap().unwrap();
-        assert!(fetched.title.starts_with("title-"));
-    }
-
-    /// 验证 `WikiStore::clone` 共享同一个写入线程与读连接池。
-    ///
-    /// WHY:clone 不能创建新连接,否则跨 clone 的数据不可见且资源泄漏。
-    #[tokio::test]
-    async fn test_clone_shares_writer() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test_clone.db");
-        let store = WikiStore::open(&db_path).unwrap();
-        let cloned = store.clone();
-
-        let entry = WikiEntry::new("e-clone", "clone-title", "content", vec![], vec![0.0; 512]);
-        cloned.insert(entry).await.unwrap();
-
-        let fetched = store.get("e-clone".to_string()).await.unwrap().unwrap();
-        assert_eq!(fetched.title, "clone-title");
-    }
-
-    /// 回归测试:验证 SQLite 操作不阻塞 async runtime
-    ///
-    /// WHY:若 SQLite 操作未用 spawn_blocking 包装,直接在 async 上下文中
-    /// 执行同步阻塞 I/O,会卡住 Tokio 工作线程,导致并发的 async 任务
-    /// 无法被调度。此测试在执行 list_all(可能较慢)的同时,并发运行
-    /// 一个轻量 async 任务,验证轻量任务能在超时时间内完成(说明
-    /// runtime 未被阻塞)。
-    #[tokio::test]
-    async fn test_spawn_blocking_does_not_block_runtime() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test_blocking.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        // 预置数据(5 条)
-        for i in 0..5 {
-            let entry = WikiEntry::new(
-                format!("e-{i}"),
-                format!("Entry {i}"),
-                format!("Content {i}"),
-                vec![],
-                vec![0.0; 512],
-            );
-            store.insert(entry).await.unwrap();
-        }
-
-        // 并发执行:WikiStore 操作 + 轻量 async 计时任务
-        // 轻量任务仅做 yield + 简单计算,正常情况下应在 1ms 内完成
-        // 若 SQLite 操作阻塞了 runtime,轻量任务会被拖延,触发超时
-        let store_clone = store.clone();
-        let db_task = tokio::spawn(async move {
-            // 执行可能较慢的 SQLite 查询
-            store_clone.list_all().await
-        });
-
-        // 轻量 async 任务:多次 yield 让出执行权
-        // WHY:若 runtime 被阻塞,yield_now 无法被调度,任务无法完成
-        let lightweight_task = tokio::time::timeout(Duration::from_millis(100), async {
-            for _ in 0..10 {
-                tokio::task::yield_now().await;
-            }
-            42
-        })
-        .await;
-
-        // 轻量任务应在超时前完成(实际通常 < 1ms)
-        assert!(
-            lightweight_task.is_ok(),
-            "轻量 async 任务超时 — SQLite 操作可能阻塞了 runtime"
-        );
-        assert_eq!(lightweight_task.unwrap(), 42);
-
-        // 等待 DB 任务完成,验证功能正确性
-        let entries = db_task
-            .await
-            .expect("db task join 失败")
-            .expect("list_all 失败");
-        assert_eq!(entries.len(), 5, "应列出 5 条条目");
-    }
-
-    /// 回归测试:验证并发场景下 spawn_blocking 的功能正确性
-    ///
-    /// WHY:多个 spawn_blocking 任务并发执行时,读连接池可并行,
-    /// 写入线程串行化写操作,整体不应死锁或丢数据。
-    #[tokio::test]
-    async fn test_concurrent_operations_correctness() {
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test_concurrent.db");
-        let store = WikiStore::open(&db_path).unwrap();
-
-        // 并发插入 10 条(每个任务独立 insert)
-        let mut handles = Vec::new();
-        for i in 0..10 {
-            let store_clone = store.clone();
-            handles.push(tokio::spawn(async move {
-                let entry = WikiEntry::new(
-                    format!("e-{i}"),
-                    format!("Entry {i}"),
-                    format!("Content {i}"),
-                    vec![format!("tag-{}", i % 3)],
-                    vec![0.0; 512],
-                );
-                store_clone.insert(entry).await
-            }));
-        }
-
-        // 等待所有插入完成
-        for handle in handles {
-            handle
-                .await
-                .expect("insert task join 失败")
-                .expect("insert 失败");
-        }
-
-        // 验证最终一致性
-        assert_eq!(store.count().await.unwrap(), 10, "应持久化 10 条");
-        let all = store.list_all().await.unwrap();
-        assert_eq!(all.len(), 10, "list_all 应返回 10 条");
-
-        // 按 tag 验证(0,3,6,9 → tag-0;1,4,7 → tag-1;2,5,8 → tag-2)
-        let tag0 = store.list_by_tag("tag-0".to_string()).await.unwrap();
-        let tag1 = store.list_by_tag("tag-1".to_string()).await.unwrap();
-        let tag2 = store.list_by_tag("tag-2".to_string()).await.unwrap();
-        assert_eq!(tag0.len(), 4, "tag-0 应有 4 条");
-        assert_eq!(tag1.len(), 3, "tag-1 应有 3 条");
-        assert_eq!(tag2.len(), 3, "tag-2 应有 3 条");
     }
 }

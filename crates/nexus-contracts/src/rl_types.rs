@@ -280,4 +280,105 @@ mod tests {
         assert_eq!(state.budget_watermark(), Some(0.8));
         assert_eq!(state.timestamp_ms(), 42);
     }
+
+    /// 线格式冻结: RLAction serde tag 冻结（跨进程契约，回放池 / 训练服务）
+    ///
+    /// WHY 显式断言 JSON 变体 tag: RLAction 为跨进程契约类型（回放池分层采样 /
+    /// 训练服务消费），serde 外部标签枚举的变体名已冻结，任何改动都会破坏
+    /// 向后兼容（与 event_payload.rs 线格式冻结测试对齐）。
+    #[test]
+    fn test_rl_action_json_wire_format_frozen() {
+        // 验证 serde 外部标签枚举格式：{"VariantName": payload}
+        let action = RLAction::MemPi(MemPiAction::Generate);
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("\"MemPi\""), "MemPi 变体 tag 应保留: {json}");
+
+        let action = RLAction::Route("premium/glm-5.2".to_string());
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("\"Route\""), "Route 变体 tag 应保留: {json}");
+
+        let action = RLAction::Custom("future_seam".to_string());
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(
+            json.contains("\"Custom\""),
+            "Custom 变体 tag 应保留: {json}"
+        );
+
+        let action = RLAction::Density(DensityTier::default());
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(
+            json.contains("\"Density\""),
+            "Density 变体 tag 应保留: {json}"
+        );
+
+        let action = RLAction::Memory(MemoryStrategy::StandardTopK);
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(
+            json.contains("\"Memory\""),
+            "Memory 变体 tag 应保留: {json}"
+        );
+
+        let action = RLAction::Prefetch(PrefetchStrategy::default());
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(
+            json.contains("\"Prefetch\""),
+            "Prefetch 变体 tag 应保留: {json}"
+        );
+
+        let action = RLAction::Selector(crate::policy::SelectorPolicy::fallback());
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(
+            json.contains("\"Selector\""),
+            "Selector 变体 tag 应保留: {json}"
+        );
+
+        let action = RLAction::Parliament(ActivationStrategy::default());
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(
+            json.contains("\"Parliament\""),
+            "Parliament 变体 tag 应保留: {json}"
+        );
+
+        let action = RLAction::Decay(DecayProfile::default());
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("\"Decay\""), "Decay 变体 tag 应保留: {json}");
+
+        let action = RLAction::RecallQuota(RecallQuota::K10);
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(
+            json.contains("\"RecallQuota\""),
+            "RecallQuota 变体 tag 应保留: {json}"
+        );
+    }
+
+    /// 线格式冻结: MemPiAction serde tag 冻结（全部 3 变体）
+    #[test]
+    fn test_mem_pi_action_json_wire_format_frozen() {
+        assert_eq!(
+            serde_json::to_string(&MemPiAction::Generate).unwrap(),
+            "\"Generate\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MemPiAction::Retrieve).unwrap(),
+            "\"Retrieve\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MemPiAction::Abstain).unwrap(),
+            "\"Abstain\""
+        );
+    }
+
+    /// 枚举闭集: 未知 MemPiAction 变体必须反序列化失败
+    #[test]
+    fn test_mem_pi_action_rejects_unknown_variant() {
+        let err = serde_json::from_str::<MemPiAction>("\"Unknown\"").unwrap_err();
+        assert!(!err.to_string().is_empty(), "未知变体应返回具体错误信息");
+    }
+
+    /// 枚举闭集: 未知 RLAction 变体必须反序列化失败
+    #[test]
+    fn test_rl_action_rejects_unknown_variant() {
+        let err = serde_json::from_str::<RLAction>(r#"{"Unknown": null}"#).unwrap_err();
+        assert!(!err.to_string().is_empty(), "未知变体应返回具体错误信息");
+    }
 }

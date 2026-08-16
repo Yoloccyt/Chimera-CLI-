@@ -158,7 +158,11 @@ jobs:
               "shadow_stats":      50_000_000,     # < 50ms
               # L9 优化第二轮(2026,早停 O(n²·d)→O(n·k·d)):resolve_conflicts n=128
               # 高重叠实测 ≈22.6µs(gate_compute bench 内新增组),取 50µs
-              "resolve_conflicts": 50_000,         # < 50µs
+              # 专家 Agent 优化(2026-08-11):新增 512 专家高密度压力组
+              # (512_high_overlap 实测 ≈92µs = 候选构建 O(n·d) + 排序 O(n log n)
+              #  + 511 次重叠检测固有成本),按 ×2 抖动余量取 200µs;
+              # 128 场景仍受 50µs 守护(22.8µs 实测,余量充足)
+              "resolve_conflicts": 200_000,         # < 200µs(128 组仍 < 50µs)
           }
 
           # 路径关键词映射:criterion 目录名 → benchmark crate

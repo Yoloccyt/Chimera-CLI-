@@ -11,6 +11,11 @@ event-bus = { workspace = true }
 # VectorStore trait + VectorHit + VectorStoreExt + VectorBackend + VectorStoreStats 来源
 nexus-contracts = { workspace = true }
 
+# L2 Memory:NMC 文本语义编码(TextPerceptor,P1-1 嵌入接入)
+# WHY:L5→L2 向下依赖合规(§2.2 L(N)→L(N-1) 允许,auto-dpo→mlc-engine 先例);
+# nmc-encoder 依赖闭包(nexus-core/event-bus/tokio/ndarray)均在 repo-wiki 已有依赖内,无循环。
+nmc-encoder = { workspace = true }
+
 # SQLite 持久化(WAL 模式 + Mutex 包装 Connection)
 rusqlite = { workspace = true }
 

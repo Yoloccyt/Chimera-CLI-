@@ -26,21 +26,19 @@ unicode-width = "0.2"
 
 # nexus-core 为 L1 Core 共享领域类型(Quest/Task 等),L10 向下依赖允许
 nexus-core = { workspace = true }
-# Task 3.2: L10 → L2 向下依赖,SelfAssessmentPanel 调用 current_memory_stage()
-# 显示记忆策略阶段(MLC 四级记忆引擎全局快照)
-mlc-engine = { workspace = true }
-# Task 3.3: L10 → L3 向下依赖,MemoryPanel 调用 tier_distribution()
-# 显示四层存储分布(热/温/冷/冰)
-cmt-tiering = { workspace = true }
-# Task 3.4: L10 → L4 向下依赖,DecayPanel 调用 shadow_breaker_status()
-# 显示影子模式熔断开关状态(TokenBurn/MemoryFreeze/NetworkIsolate)
-decay-engine = { workspace = true }
+# Phase 6 D-6 虚假数据固化治理(延续 L2/L3/L4 深度优化事件驱动化先例):
+# - 原 Task 3.2 mlc-engine 依赖(current_memory_stage() 全局占位)已移除,
+#   记忆策略阶段改由 latest_events 事件流派生(MemConStrategyAdjusted 事件)
+# - 原 Task 3.3 cmt-tiering 依赖(tier_distribution() 全局占位)已移除,
+#   四层存储分布改由 latest_events 事件流派生(CapabilityTierStatsReported 事件)
+# - 原 Task 3.4 decay-engine 依赖(shadow_breaker_status() 全局占位)已移除,
+#   熔断状态改由 latest_events 事件流派生(ShadowBreakerTripped 事件)
+# - 原 Task 3.6 osa-coordinator 依赖(five_dimension_masks() 全零占位,已弃用)已移除,
+#   掩码真实数据由 OsaSparseSync 从 OmniSparseMasksComputed 事件同步
+# 共减少 4 条 L10→L2/L3/L4/L6 依赖边,跨层数据一律走 EventBus(§2.2 依赖铁律)。
 # Task 3.5: L10 → L5 向下依赖,DagVizPanel 调用 spec_dag_snapshot()
 # 显示谱系 DAG 节点/边计数(规范版本演化图)
 gsoe-evolution = { workspace = true }
-# Task 3.6: L10 → L6 向下依赖,OsaSparsePanel 调用 five_dimension_masks()
-# 显示五维稀疏掩码状态(OSA Ω-Sparse 定律可视化)
-osa-coordinator = { workspace = true }
 # Task 3.7: L10 → L7 向下依赖,MetricsDashboard 调用 timeout_stats()
 # 显示 GQEP 双层超时防护统计(单操作超时 + 全局超时)
 gqep-executor = { workspace = true }

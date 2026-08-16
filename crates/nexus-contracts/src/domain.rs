@@ -264,6 +264,95 @@ mod tests {
         assert_eq!(decoded.priority, 128, "旧数据应取默认优先级 128");
     }
 
+    /// 线格式冻结: Quest JSON 字段名冻结（跨进程契约，MCP Mesh / 事件持久化）
+    ///
+    /// WHY 显式断言 JSON 字段名: Quest 为跨进程契约类型，字段名与 serde tag
+    /// 已冻结，任何改动都会破坏向后兼容（与 event_payload.rs 线格式冻结测试对齐）。
+    #[test]
+    fn test_quest_json_wire_format_frozen() {
+        let quest = make_quest();
+        let json = serde_json::to_string(&quest).unwrap();
+        // 字段名冻结断言
+        assert!(
+            json.contains("\"quest_id\""),
+            "quest_id 字段名应保留: {json}"
+        );
+        assert!(json.contains("\"title\""), "title 字段名应保留: {json}");
+        assert!(json.contains("\"tasks\""), "tasks 字段名应保留: {json}");
+        assert!(
+            json.contains("\"thinking_mode\""),
+            "thinking_mode 字段名应保留: {json}"
+        );
+        assert!(
+            json.contains("\"checkpoint_id\""),
+            "checkpoint_id 字段名应保留: {json}"
+        );
+        assert!(
+            json.contains("\"priority\""),
+            "priority 字段名应保留: {json}"
+        );
+        // ThinkingMode serde tag 冻结（无 rename_all，单元变体按变体名序列化）
+        assert!(
+            json.contains("\"Deep\""),
+            "ThinkingMode::Deep tag 应保留: {json}"
+        );
+    }
+
+    /// 线格式冻结: UserIntent JSON 字段名冻结
+    #[test]
+    fn test_user_intent_json_wire_format_frozen() {
+        let intent = make_user_intent();
+        let json = serde_json::to_string(&intent).unwrap();
+        assert!(
+            json.contains("\"intent_id\""),
+            "intent_id 字段名应保留: {json}"
+        );
+        assert!(
+            json.contains("\"raw_text\""),
+            "raw_text 字段名应保留: {json}"
+        );
+        assert!(
+            json.contains("\"multimodal_inputs\""),
+            "multimodal_inputs 字段名应保留: {json}"
+        );
+        assert!(
+            json.contains("\"risk_level\""),
+            "risk_level 字段名应保留: {json}"
+        );
+    }
+
+    /// 线格式冻结: MultimodalInput serde tag 冻结（无 rename_all，外部标签枚举）
+    #[test]
+    fn test_multimodal_input_json_wire_format_frozen() {
+        let input = MultimodalInput::Text("hello".into());
+        let json = serde_json::to_string(&input).unwrap();
+        assert!(json.contains("\"Text\""), "Text 变体 tag 应保留: {json}");
+    }
+
+    /// 线格式冻结: ThinkingMode serde tag 冻结（全部 3 变体）
+    #[test]
+    fn test_thinking_mode_json_wire_format_frozen() {
+        assert_eq!(
+            serde_json::to_string(&ThinkingMode::Fast).unwrap(),
+            "\"Fast\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ThinkingMode::Standard).unwrap(),
+            "\"Standard\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ThinkingMode::Deep).unwrap(),
+            "\"Deep\""
+        );
+    }
+
+    /// 枚举闭集: 未知 ThinkingMode 变体必须反序列化失败
+    #[test]
+    fn test_thinking_mode_rejects_unknown_variant() {
+        let err = serde_json::from_str::<ThinkingMode>("\"Unknown\"").unwrap_err();
+        assert!(!err.to_string().is_empty(), "未知变体应返回具体错误信息");
+    }
+
     // proptest 属性: 全变体空间任意 ThinkingMode serde_json 往返后与原值相等
     //
     // WHY 用普通注释而非 doc comment:proptest! 宏会为 #[test] fn 生成包装,

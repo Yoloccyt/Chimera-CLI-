@@ -15,8 +15,13 @@ use crate::search::HybridSearchConfig;
 
 /// Wiki 条目 — 知识沉淀的最小单元
 ///
-/// `embedding` 在 Week 2 阶段为占位哈希向量(SHA-256 扩展为 512-dim),
-/// Week 6 NMC 编码器实现后替换为真实 CLV 嵌入。
+/// `embedding` 支持两条生成路径(P1-1 接入 NMC):
+/// - **占位哈希路径**(默认):SHA-256 扩展为 512-dim,与 CLV 对齐
+/// - **NMC 语义路径**(`WikiGenerator::with_text_encoder`):ONNX 模型可用时
+///   384 维(all-MiniLM-L6-v2),无模型时字节频率降级(text_dim 维)
+///
+/// 维度契约:占位路径固定 512;NMC 路径维度由感知器决定。
+/// 使用 HNSW/混合检索时须保证 `WikiConfig.vector_dim` 与所选路径一致。
 ///
 /// # P3-W11.2 D12 修复:时间有效性维度
 ///
@@ -39,7 +44,7 @@ pub struct WikiEntry {
     pub content: String,
     /// 标签列表(用于分类与过滤)
     pub tags: Vec<String>,
-    /// 嵌入向量(512-dim f32,Week 2 占位,Week 6 替换为 CLV)
+    /// 嵌入向量(默认 512 维占位哈希;NMC 路径为感知器输出维度,见 `WikiGenerator`)
     pub embedding: Vec<f32>,
     /// 创建时间(UTC,自动生成)
     pub created_at: DateTime<Utc>,
@@ -176,6 +181,10 @@ pub struct WikiConfig {
     /// SQLite 数据库文件路径
     pub db_path: std::path::PathBuf,
     /// 嵌入向量维度(默认 512,与 nexus_core::CLV::DIMENSION 对齐)
+    ///
+    /// WHY(P1-1):接入 NMC 语义编码后,条目嵌入可能为 384 维(ONNX)或
+    /// text_dim 维(字节频率降级)。`vector_dim` 必须与条目生成路径的
+    /// 嵌入维度一致,否则 HNSW 索引维度不匹配。
     pub vector_dim: usize,
     /// 是否启用 WAL 模式(默认 true)
     pub wal_enabled: bool,

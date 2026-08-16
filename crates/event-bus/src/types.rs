@@ -219,6 +219,18 @@ pub enum NexusEvent {
         reason: String,
     },
 
+    /// 影子模式熔断器跳闸 — L4 Security fail-closed 状态变更(L4 深度优化 P1-1)
+    ///
+    /// WHY:ShadowModeCircuitBreaker 检测到 FormalVerifier 属性违规永久跳闸时
+    /// 发布(不可逆直至人工复位),供 TUI DecayPanel 等订阅方从事件流派生
+    /// 熔断状态显示(替代原 shadow_breaker_status() 全局函数占位)。
+    ShadowBreakerTripped {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 跳闸原因(形式化属性违反反例描述)
+        reason: String,
+    },
+
     // ============================================================
     // L3 Storage → L8 Parliament:预算超限
     // ============================================================
@@ -517,6 +529,24 @@ pub enum NexusEvent {
         to_tier: String,
         /// 迁移原因(如 "decay priority below threshold")
         reason: String,
+    },
+
+    /// CMT 四层存储统计上报 — L3 Storage 分布快照(L3 深度优化 P1-1)
+    ///
+    /// WHY:CMT 在 insert/migrate 变更后发布四层条目计数快照,
+    /// 供 TUI MemoryPanel 等订阅方从事件流派生存储分布显示
+    /// (替代原 tier_distribution() 全局函数占位,事件驱动化)。
+    CapabilityTierStatsReported {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// Hot 层条目数
+        hot: u64,
+        /// Warm 层条目数
+        warm: u64,
+        /// Cold 层条目数
+        cold: u64,
+        /// Ice 层条目数
+        ice: u64,
     },
 
     /// KVBSR 块重平衡完成 — L6 Router 内部状态变更
@@ -1613,6 +1643,38 @@ pub enum NexusEvent {
         status: ChatStatus,
     },
 
+    /// TUI → 编排器协议握手请求(Concord W10 T10.1,ADR-082)
+    ///
+    /// WHY 独立变体:防 Codex #37536 式版本偏移静默故障——陈旧后端
+    /// 存活时新 TUI 静默跑旧能力。TUI 启动(M4 总线注入后)发布本事件,
+    /// 编排器应答 `TuiHelloAck`;SEC-4:仅信道建立初期接受一次,
+    /// 运行期到达的握手帧丢弃并审计。
+    TuiHello {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 协议版本(semver 字符串,如 "1.0.0")
+        proto: String,
+        /// TUI 端版本(workspace 版本)
+        tui_version: String,
+        /// TUI 声明的能力集标识(如 "orchestrated-commands"/"agent-tree")
+        caps: Vec<String>,
+    },
+
+    /// 编排器 → TUI 协议握手应答(Concord W10 T10.1,ADR-082)
+    ///
+    /// WHY Info 级别:握手是一次性信道建立事件,丢失可由 TUI 超时降级
+    /// 兜底(未收到 Ack → 按未知兼容处理),无需 Critical 旁路。
+    TuiHelloAck {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 服务端支持的协议版本
+        proto: String,
+        /// 兼容级别(Full/Degraded 携降级项/Refused)
+        compat: CompatLevel,
+        /// 服务端版本
+        server_version: String,
+    },
+
     /// R1 影子模式退化检测 — 连续显著退化触发预警（P4-W16.2.2 步骤 5）
     ///
     /// WHY Normal 级别:退化检测是诊断信号,非阻断性事件。丢失仅导致本次
@@ -2411,11 +2473,15 @@ impl NexusEvent {
             Self::CacheHit { metadata, .. } => metadata,
             Self::CacheMiss { metadata, .. } => metadata,
             Self::CapabilityTiered { metadata, .. } => metadata,
+            // L3 深度优化:四层统计快照
+            Self::CapabilityTierStatsReported { metadata, .. } => metadata,
             Self::CachePrefetched { metadata, .. } => metadata,
             Self::CacheStatsReported { metadata, .. } => metadata,
             Self::LsctTierSwitched { metadata, .. } => metadata,
             Self::SandboxViolation { metadata, .. } => metadata,
             Self::CapabilityFrozen { metadata, .. } => metadata,
+            // L4 深度优化:影子模式熔断跳闸事件
+            Self::ShadowBreakerTripped { metadata, .. } => metadata,
             Self::BudgetExceeded { metadata, .. } => metadata,
             Self::BudgetAdjusted { metadata, .. } => metadata,
             Self::AsaIntervention { metadata, .. } => metadata,
@@ -2496,6 +2562,9 @@ impl NexusEvent {
             Self::TuiChatResponseChunk { metadata, .. } => metadata,
             Self::TuiChatCompleted { metadata, .. } => metadata,
             Self::TuiChatStatusChanged { metadata, .. } => metadata,
+            // Concord W10 T10.1(ADR-082):TUI ↔ 编排器协议握手
+            Self::TuiHello { metadata, .. } => metadata,
+            Self::TuiHelloAck { metadata, .. } => metadata,
             Self::RefreshStateRequested { metadata, .. } => metadata,
             Self::SpecRegistered { metadata, .. } => metadata,
             Self::R2FreezeViolation { metadata, .. } => metadata,
@@ -2541,253 +2610,6 @@ impl NexusEvent {
             Self::ResourceRecovered { metadata, .. } => metadata,
             Self::FormalViolation { metadata, .. } => metadata,
             Self::RewardSignalReported { metadata, .. } => metadata,
-        }
-    }
-
-    /// 判断事件是否为关键事件(Critical)
-    ///
-    /// 关键事件:CheckpointSaved、ConsensusReached、SlowConsumerDropped、
-    /// OrphanCallDetected(Week 4 新增)、SkepticVeto/RedTeamAudit(Week 5 新增)、
-    /// VetoOverridden(P1-3 新增:否决覆盖审计)、
-    /// BudgetExceeded(F-001 修复:Hard Constraint 第 10 条要求)
-    /// 这些事件丢失会导致系统状态不一致或告警遗漏
-    ///
-    /// WHY BudgetExceeded 标记为 Critical:预算耗尽是系统红线,意味着资源
-    /// 已达上限,必须立即触发背压保护(走 mpsc 点对点通道确保投递)并通知
-    /// Parliament 触发降级或终止。若标为 Normal,在背压场景下可能被丢弃,
-    /// 导致预算超限无人响应、Quest 持续消耗资源直至 OOM,违反架构红线
-    /// "1M Token 暴力加载"的预防机制。此为 Hard Constraint 第 10 条的
-    /// 强制要求(F-001 修复)。
-    ///
-    /// WHY:Week 3 新增的 4 个变体(ContextWindowSwitched/ContextCompressed/
-    /// CapabilityTiered/BlocksRebalanced)均为 Normal 级别,由通配符分支
-    /// 自动覆盖。Week 4 新增的 16 个变体中,仅 OrphanCallDetected 为 Critical
-    /// (对应 Claude Code 尸检 5.4% 孤儿调用教训),其余 15 个为 Normal,
-    /// 由通配符分支自动覆盖。Week 5 新增的 8 个变体中,SkepticVeto(否决权
-    /// 行使)与 RedTeamAudit(红队漏洞审计)为 Critical(丢失导致安全机制
-    /// 失效),其余 6 个为 Normal,由通配符分支自动覆盖。P1-3 新增
-    /// VetoOverridden 为 Critical(否决覆盖审计,丢失导致覆盖行为不可追溯)。
-    /// 若未来新增 Critical 事件,必须在此显式列出,避免被通配符误判为 Normal。
-    pub fn severity(&self) -> EventSeverity {
-        match self {
-            Self::CheckpointSaved { .. }
-            | Self::ConsensusReached { .. }
-            | Self::SlowConsumerDropped { .. }
-            | Self::OrphanCallDetected { .. }
-            | Self::SkepticVeto { .. }
-            | Self::VetoOverridden { .. }
-            | Self::RedTeamAudit { .. }
-            | Self::BudgetExceeded { .. }
-            // CHIMERA-MAS:AgentTaskFailed 为 Critical(Task 4,ADR-026)
-            // WHY:任务失败可能影响 Quest 完整性,必须保证投递到 SecCore 与
-            // Parliament 进行补救决策。丢失会导致失败无人响应、Quest 持续等待已死 Agent 结果。
-            | Self::AgentTaskFailed { .. }
-            // P1-W2.1.4:AsaIntervention 统一标记为 Critical(对齐 spec.md L186 红线)
-            // WHY 历史:原设计认为 severity() 是同步函数不应依赖运行时值(action
-            // 字段),故走通配符返回 Normal。但 spec.md L186 与 §6.2 红线均将
-            // AsaIntervention 列为 6 个 Critical 事件之一(W1.2 TDD 暴露偏差)。
-            // 修复策略:统一返回 Critical,无论 action 是 Allow/Warn/Block。
-            // 保守策略确保所有 ASA 安全干预走 Critical 通道,Allow/Warn 为低频
-            // 事件(每个安全操作最多一个干预),不会产生大量 Critical 事件。
-            // Block 级别更需 Critical 投递保证(丢失导致高风险操作继续执行)。
-            | Self::AsaIntervention { .. }
-            // P4-W16.2.2 步骤 5:R1 影子模式回滚失败为 Critical
-            // WHY:回滚失败意味着退化策略可能仍在生效,必须保证投递到 SecCore
-            // 与 Parliament 进行紧急干预。丢失导致 Quest 持续受退化策略影响。
-            | Self::R1ShadowRollbackFailed { .. }
-            // ADR-042 决策 4:R2 冻结违反 + 回滚失败为 Critical
-            // WHY:R2 违反等同于安全事件(奖励黑客风险立即生效),回滚失败意味着
-            // R2 路径代码可能仍在生效。必须走 mpsc 旁路通道确保投递,对齐 §6.2 红线 5。
-            | Self::R2FreezeViolation { .. }
-            | Self::R2FreezeRollbackFailed { .. }
-            // MCA M0(ADR-065):厂商额度耗尽为 Critical
-            // WHY:额度耗尽 = 通道即刻不可用,丢失导致降级链(csn-substitutor)
-            // 无人触发、请求持续打向死通道。语义对齐 BudgetExceeded(资源红线
-            // 必须确保投递);bus.rs is_critical_mpsc_event() 已同步列入(双清单)。
-            | Self::AffinityQuotaExhausted { .. } => EventSeverity::Critical,
-            // P1-5: FormalViolation 升级为 Critical(违反即否决,丢失导致契约违反
-            // 无人审议、候选继续进入后续阶段,违反九层防御 L0 语义;双清单同步见 bus.rs)
-            | Self::FormalViolation { .. } => EventSeverity::Critical,
-            // 控制事件(请求/反馈):不阻断系统,不触发 mpsc 旁路投递
-            Self::QuestCancelRequested { .. }
-            | Self::QuestCancelled { .. }
-            | Self::QuestPriorityChanged { .. }
-            | Self::QuestPriorityAdjusted { .. }
-            // TUI 交互式动作协议(ADR-029):请求/终态为 Info,高频流式为 Normal
-            | Self::TuiActionRequested { .. }
-            | Self::TuiActionCompleted { .. }
-            | Self::TuiActionFailed { .. }
-            | Self::TuiChatSubmitted { .. }
-            | Self::TuiChatCompleted { .. } => EventSeverity::Info,
-            // TuiActionProgressed / TuiChatResponseChunk / TuiChatStatusChanged
-            // 为高频流式事件,走 Normal(broadcast),由通配符分支覆盖
-            // MCA P5:窗口亲和折减结果 + MCA A3:缓存亲和策略应用结果 + MCA M0:跨厂商协商(均为观测面事件)
-            // WHY Normal:CrossVendorNegotiation 记录 PVL 辩论中的跨厂商去相关决策,
-            // 同 WindowAffinityApplied 等观测面事件,仅用于审计与监控留痕,
-            // 不阻塞系统关键路径,无需 mpsc 旁路投递。
-            Self::WindowAffinityApplied { .. }
-            | Self::CacheAffinityApplied { .. }
-            | Self::CrossVendorNegotiation { .. }
-            // P2-8 MemCon:幽灵记忆检测与策略调整(均为观测面事件,不阻断系统)
-            | Self::GhostMemoryDetected { .. }
-            | Self::MemConStrategyAdjusted { .. }
-            | Self::BenchmarkMetricsCollected { .. } => EventSeverity::Normal,
-            _ => EventSeverity::Normal,
-        }
-    }
-
-    /// 事件类型名(用于序列化 tag 与日志)
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            Self::UserIntentEncoded { .. } => "UserIntentEncoded",
-            Self::NexusStateChanged { .. } => "NexusStateChanged",
-            Self::ModelRouteSelected { .. } => "ModelRouteSelected",
-            Self::QuestCreated { .. } => "QuestCreated",
-            Self::QuestProgressUpdated { .. } => "QuestProgressUpdated",
-            Self::QuestListUpdated { .. } => "QuestListUpdated",
-            Self::QuestCompleted { .. } => "QuestCompleted",
-            Self::ThinkingModeSwitched { .. } => "ThinkingModeSwitched",
-            Self::CheckpointSaved { .. } => "CheckpointSaved",
-            Self::CheckpointLoaded { .. } => "CheckpointLoaded",
-            Self::ConsensusReached { .. } => "ConsensusReached",
-            Self::VoteCast { .. } => "VoteCast",
-            Self::CapabilityFrozen { .. } => "CapabilityFrozen",
-            Self::BudgetExceeded { .. } => "BudgetExceeded",
-            Self::SandboxViolation { .. } => "SandboxViolation",
-            Self::OperationProduced { .. } => "OperationProduced",
-            Self::PredictionVerified { .. } => "PredictionVerified",
-            Self::OmniSparseMasksComputed { .. } => "OmniSparseMasksComputed",
-            Self::ToolsRouted { .. } => "ToolsRouted",
-            Self::ExecutionCompleted { .. } => "ExecutionCompleted",
-            Self::MemoryMetricsReported { .. } => "MemoryMetricsReported",
-            Self::MemoryTiered { .. } => "MemoryTiered",
-            Self::CacheHit { .. } => "CacheHit",
-            Self::CacheMiss { .. } => "CacheMiss",
-            Self::WikiUpdated { .. } => "WikiUpdated",
-            Self::EvolutionTriggered { .. } => "EvolutionTriggered",
-            Self::DpoPairGenerated { .. } => "DpoPairGenerated",
-            Self::AuditLogged { .. } => "AuditLogged",
-            Self::McpMessageReceived { .. } => "McpMessageReceived",
-            Self::SlowConsumerDropped { .. } => "SlowConsumerDropped",
-            Self::ContextWindowSwitched { .. } => "ContextWindowSwitched",
-            Self::ContextCompressed { .. } => "ContextCompressed",
-            Self::CapabilityTiered { .. } => "CapabilityTiered",
-            Self::BlocksRebalanced { .. } => "BlocksRebalanced",
-            Self::ExpertActivated { .. } => "ExpertActivated",
-            Self::ActivationThresholdAdjusted { .. } => "ActivationThresholdAdjusted",
-            Self::ActivationCacheStats { .. } => "ActivationCacheStats",
-            Self::GatherCompleted { .. } => "GatherCompleted",
-            Self::OperationTimedOut { .. } => "OperationTimedOut",
-            Self::GatherTimedOut { .. } => "GatherTimedOut",
-            Self::OrphanCallDetected { .. } => "OrphanCallDetected",
-            Self::ProducerStrategyAdjusted { .. } => "ProducerStrategyAdjusted",
-            Self::PredictionMade { .. } => "PredictionMade",
-            Self::PredictionStatsReported { .. } => "PredictionStatsReported",
-            Self::PredictionRolledBack { .. } => "PredictionRolledBack",
-            Self::CachePrefetched { .. } => "CachePrefetched",
-            Self::CacheStatsReported { .. } => "CacheStatsReported",
-            Self::ExpertRouted { .. } => "ExpertRouted",
-            Self::EntropyBalanced { .. } => "EntropyBalanced",
-            Self::ExpertRegistered { .. } => "ExpertRegistered",
-            Self::ExpertUnregistered { .. } => "ExpertUnregistered",
-            Self::DebateStarted { .. } => "DebateStarted",
-            Self::SkepticVeto { .. } => "SkepticVeto",
-            Self::VetoOverridden { .. } => "VetoOverridden",
-            Self::RedTeamAudit { .. } => "RedTeamAudit",
-            Self::BudgetAdjusted { .. } => "BudgetAdjusted",
-            Self::AsaIntervention { .. } => "AsaIntervention",
-            Self::AhirtProbeCompleted { .. } => "AhirtProbeCompleted",
-            Self::RoleRegistered { .. } => "RoleRegistered",
-            Self::BudgetStatsReported { .. } => "BudgetStatsReported",
-            Self::BudgetMetricsUpdated { .. } => "BudgetMetricsUpdated",
-            Self::NmcEncoded { .. } => "NmcEncoded",
-            Self::ChtcToolCallReceived { .. } => "ChtcToolCallReceived",
-            Self::SsraFusionCompleted { .. } => "SsraFusionCompleted",
-            Self::GsoePolicyUpdated { .. } => "GsoePolicyUpdated",
-            Self::LsctTierSwitched { .. } => "LsctTierSwitched",
-            Self::McpMeshTransactionCompleted { .. } => "McpMeshTransactionCompleted",
-            Self::CsnSubstitutionTriggered { .. } => "CsnSubstitutionTriggered",
-            Self::SesaActivationCompleted { .. } => "SesaActivationCompleted",
-            Self::EfficiencyAlertTriggered { .. } => "EfficiencyAlertTriggered",
-            Self::QuestPauseRequested { .. } => "QuestPauseRequested",
-            Self::QuestResumeRequested { .. } => "QuestResumeRequested",
-            Self::VoteCastRequested { .. } => "VoteCastRequested",
-            Self::RefreshStateRequested { .. } => "RefreshStateRequested",
-            Self::QuestPaused { .. } => "QuestPaused",
-            Self::QuestResumed { .. } => "QuestResumed",
-            Self::DecayMetricsReported { .. } => "DecayMetricsReported",
-            Self::RouterStatsReported { .. } => "RouterStatsReported",
-            Self::McpNodeHeartbeat { .. } => "McpNodeHeartbeat",
-            Self::ChtcAdapterStatus { .. } => "ChtcAdapterStatus",
-            Self::ClvSnapshotReported { .. } => "ClvSnapshotReported",
-            Self::QuestCancelRequested { .. } => "QuestCancelRequested",
-            Self::QuestCancelled { .. } => "QuestCancelled",
-            Self::QuestPriorityChanged { .. } => "QuestPriorityChanged",
-            Self::QuestPriorityAdjusted { .. } => "QuestPriorityAdjusted",
-            // CHIMERA-MAS Agent 事件(Task 4,ADR-026)
-            Self::AgentTaskDelegated { .. } => "AgentTaskDelegated",
-            Self::AgentTaskCompleted { .. } => "AgentTaskCompleted",
-            Self::AgentTaskFailed { .. } => "AgentTaskFailed",
-            Self::AgentConsultRequested { .. } => "AgentConsultRequested",
-            Self::AgentConsultResponded { .. } => "AgentConsultResponded",
-            Self::AgentHeartbeat { .. } => "AgentHeartbeat",
-            Self::AgentContextOverflow { .. } => "AgentContextOverflow",
-            // TUI 交互式动作协议(ADR-029)
-            Self::TuiActionRequested { .. } => "TuiActionRequested",
-            Self::TuiActionProgressed { .. } => "TuiActionProgressed",
-            Self::TuiActionCompleted { .. } => "TuiActionCompleted",
-            Self::TuiActionFailed { .. } => "TuiActionFailed",
-            Self::TuiChatSubmitted { .. } => "TuiChatSubmitted",
-            Self::TuiChatResponseChunk { .. } => "TuiChatResponseChunk",
-            Self::TuiChatCompleted { .. } => "TuiChatCompleted",
-            Self::TuiChatStatusChanged { .. } => "TuiChatStatusChanged",
-            // P4-W16.2.2 步骤 5:R1 影子模式事件（3 个新变体）
-            Self::R1ShadowRegressionDetected { .. } => "R1ShadowRegressionDetected",
-            Self::R1ShadowPromotionReady { .. } => "R1ShadowPromotionReady",
-            Self::R1ShadowRollbackFailed { .. } => "R1ShadowRollbackFailed",
-            // P5.2.3: SpecRegistered 事件
-            Self::SpecRegistered { .. } => "SpecRegistered",
-            // ADR-042 决策 4:R2 冻结违反处置事件(2 个新变体)
-            Self::R2FreezeViolation { .. } => "R2FreezeViolation",
-            Self::R2FreezeRollbackFailed { .. } => "R2FreezeRollbackFailed",
-            // P2-1: 协调成本/推理增益比值报告(三重悖论推理悖论红线度量)
-            Self::CoordinationRatioReported { .. } => "CoordinationRatioReported",
-            // polish-v2.7 P1-2: RuntimeAuditor 审计事件(2 个新变体)
-            Self::AuditFindingRaised { .. } => "AuditFindingRaised",
-            Self::HarnessReportGenerated { .. } => "HarnessReportGenerated",
-            // L8 协调度量接线闭环:观测事件(2 个新变体,Normal 级走通配符)
-            Self::DebateCompleted { .. } => "DebateCompleted",
-            Self::DelegationCompleted { .. } => "DelegationCompleted",
-            // L8 推理悖论风控:策略封顶变更(Normal 级走通配符)
-            Self::ParliamentStrategyCapChanged { .. } => "ParliamentStrategyCapChanged",
-            // MCA M0(ADR-065):mca-gateway 事件(6 个新变体,仅 AffinityQuotaExhausted 为 Critical)
-            Self::ModelAffinitySelected { .. } => "ModelAffinitySelected",
-            // MCA P2-1:跨厂商辩论通道选择
-            Self::CrossVendorNegotiation { .. } => "CrossVendorNegotiation",
-            Self::ProviderDegraded { .. } => "ProviderDegraded",
-            Self::AffinityCapabilityNegotiated { .. } => "AffinityCapabilityNegotiated",
-            Self::AffinityQuotaExhausted { .. } => "AffinityQuotaExhausted",
-            Self::AffinityUnknownField { .. } => "AffinityUnknownField",
-            Self::StreamSessionCompleted { .. } => "StreamSessionCompleted",
-            // MCA P5:窗口亲和折减结果
-            Self::WindowAffinityApplied { .. } => "WindowAffinityApplied",
-            // MCA A3:缓存亲和策略应用结果
-            Self::CacheAffinityApplied { .. } => "CacheAffinityApplied",
-            // ADR-069: Token 效率优化事件
-            Self::ContextBudgetAllocated { .. } => "ContextBudgetAllocated",
-            Self::SemanticCacheHit { .. } => "SemanticCacheHit",
-            // P2-8 MemCon:幽灵记忆检测
-            Self::GhostMemoryDetected { .. } => "GhostMemoryDetected",
-            // P2-8 MemCon:策略调整
-            Self::MemConStrategyAdjusted { .. } => "MemConStrategyAdjusted",
-            Self::BenchmarkMetricsCollected { .. } => "BenchmarkMetricsCollected",
-            // PROBE P0:HCW 召回评测事件
-            Self::HcwRecallReported { .. } => "HcwRecallReported",
-            Self::HcwRecallDegraded { .. } => "HcwRecallDegraded",
-            Self::OverWindowFallbackTriggered { .. } => "OverWindowFallbackTriggered",
-            Self::ResourceRecovered { .. } => "ResourceRecovered",
-            Self::FormalViolation { .. } => "FormalViolation",
-            Self::RewardSignalReported { .. } => "RewardSignalReported",
         }
     }
 }
@@ -3665,115 +3487,6 @@ mod tests {
         };
         assert_eq!(e.metadata().event_id, expected_id);
         assert_eq!(e.metadata().source, "test-source");
-    }
-
-    // ============================================================
-    // TUI v1.8-omega: ClvSummary::from_clv 计算方法测试
-    // ============================================================
-
-    #[test]
-    fn test_clv_summary_from_clv_zero_vector() {
-        // 零向量:l2_norm = 0.0, block_means 全 0, top_dims 空
-        let clv = nexus_core::clv::CLV::zero();
-        let summary = ClvSummary::from_clv(&clv);
-        assert_eq!(summary.block_means.len(), 8);
-        assert!(summary.block_means.iter().all(|&v| v == 0.0));
-        assert_eq!(summary.l2_norm, 0.0);
-        assert!(summary.top_dims.is_empty());
-    }
-
-    #[test]
-    fn test_clv_summary_from_clv_uniform_vector() {
-        // 均匀向量(全 1.0):所有分块均值 = 1.0, l2_norm = sqrt(512) ≈ 22.63
-        let v = vec![1.0_f32; 512];
-        let clv = nexus_core::clv::CLV::from_vec(v).unwrap();
-        let summary = ClvSummary::from_clv(&clv);
-        assert_eq!(summary.block_means.len(), 8);
-        assert!(summary.block_means.iter().all(|&m| (m - 1.0).abs() < 1e-5));
-        let expected_norm = (512.0_f32).sqrt();
-        assert!((summary.l2_norm - expected_norm).abs() < 1e-3);
-        // Top-8: 所有维度值相同,取前 8 个(索引 0-7)
-        assert_eq!(summary.top_dims.len(), 8);
-        // 所有 |值| = 1.0,排序后前 8 个任意,但值都应为 1.0
-        assert!(summary
-            .top_dims
-            .iter()
-            .all(|&(_, v)| (v - 1.0).abs() < 1e-5));
-    }
-
-    #[test]
-    fn test_clv_summary_from_clv_known_vector() {
-        // 已知向量:前 64 维 = 2.0,其余 = 0.0
-        // block_means[0] = 2.0, block_means[1..8] = 0.0
-        // l2_norm = sqrt(64 * 4) = sqrt(256) = 16.0
-        // top_dims: 前 8 个应是维度 0-7(值 2.0)
-        let mut v = vec![0.0_f32; 512];
-        for val in v.iter_mut().take(64) {
-            *val = 2.0;
-        }
-        let clv = nexus_core::clv::CLV::from_vec(v).unwrap();
-        let summary = ClvSummary::from_clv(&clv);
-        assert!((summary.block_means[0] - 2.0).abs() < 1e-5);
-        for i in 1..8 {
-            assert!((summary.block_means[i] - 0.0).abs() < 1e-5);
-        }
-        assert!((summary.l2_norm - 16.0).abs() < 1e-3);
-        assert_eq!(summary.top_dims.len(), 8);
-        // 前 8 个应是维度 0-7(值 2.0)
-        assert!(summary
-            .top_dims
-            .iter()
-            .all(|&(_, v)| (v - 2.0).abs() < 1e-5));
-    }
-
-    #[test]
-    fn test_clv_summary_from_clv_block_means_length() {
-        // 验证 block_means 长度始终为 8
-        let clv = nexus_core::clv::CLV::zero();
-        let summary = ClvSummary::from_clv(&clv);
-        assert_eq!(summary.block_means.len(), 8);
-    }
-
-    #[test]
-    fn test_clv_summary_from_clv_top_dims_sorted_desc() {
-        // 验证 top_dims 按 |值| 降序排列
-        let mut v = vec![0.0_f32; 512];
-        v[0] = 5.0; // |5.0|
-        v[1] = 3.0; // |3.0|
-        v[2] = -4.0; // |4.0|
-        v[3] = 1.0; // |1.0|
-        v[4] = -2.0; // |2.0|
-        let clv = nexus_core::clv::CLV::from_vec(v).unwrap();
-        let summary = ClvSummary::from_clv(&clv);
-        assert!(!summary.top_dims.is_empty());
-        // 验证降序:|v[0]| >= |v[1]| >= ...
-        for i in 1..summary.top_dims.len() {
-            let prev_abs = summary.top_dims[i - 1].1.abs();
-            let curr_abs = summary.top_dims[i].1.abs();
-            assert!(
-                prev_abs >= curr_abs || (prev_abs - curr_abs).abs() < 1e-5,
-                "top_dims not sorted desc: |{}| < |{}|",
-                prev_abs,
-                curr_abs
-            );
-        }
-        // 第一个应是维度 0(值 5.0)
-        assert_eq!(summary.top_dims[0].0, 0);
-    }
-
-    #[test]
-    fn test_clv_summary_from_clv_negative_values() {
-        // 负值向量:验证 |值| 正确排序
-        let mut v = vec![0.0_f32; 512];
-        v[0] = -5.0; // |-5.0| = 5.0
-        v[1] = 3.0; // |3.0| = 3.0
-        let clv = nexus_core::clv::CLV::from_vec(v).unwrap();
-        let summary = ClvSummary::from_clv(&clv);
-        // 第一个应是维度 0(值 -5.0,|值|最大)
-        assert_eq!(summary.top_dims[0].0, 0);
-        assert!((summary.top_dims[0].1 - (-5.0)).abs() < 1e-5);
-        // 第二个应是维度 1(值 3.0)
-        assert_eq!(summary.top_dims[1].0, 1);
     }
 
     // ============================================================

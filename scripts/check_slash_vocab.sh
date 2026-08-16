@@ -49,6 +49,17 @@ EXPECTED=(
   "mcp Orchestrated" "theme Instant" "vim Instant" "config Instant"
   "status Instant" "doctor Instant" "help Instant" "quit Instant"
   "export Instant" "undo Orchestrated" "redo Orchestrated" "focus Instant"
+      # Concord W8 T8.3(ADR-080):PaceGate 配速档命令
+      "pace Instant"
+      # Concord W9 T9.5(ADR-081):上下文用量网格命令
+      "context Instant"
+      # Concord W11(ADR-083):生态波四命令
+      "recap Instant"
+      "copy Instant"
+      "notify Instant"
+      "commands Instant"
+      # Concord W10 T10.4(ADR-082):Agent 谱系树视图
+      "agent tree Instant"
 )
 
 # 构建 命令→tier 查找表(别名取首个 ALIAS_PENDING 后由 tier 行回填:
@@ -65,7 +76,10 @@ echo "[INFO] parsed ${#TIERS[@]} command names"
 
 diffs=0
 for pair in "${EXPECTED[@]}"; do
-  cmd="${pair%% *}"
+  # WHY 用 ${pair% *}(删末空格起)而非 ${pair%% *}(删首空格起):
+  # 支持多词命令名(如 "agent tree Instant" → cmd="agent tree"),
+  # 单词命令("new Instant" → cmd="new")行为不变,向后兼容。
+  cmd="${pair% *}"
   want="${pair##* }"
   got="${TIERS[$cmd]:-}"
   if [[ -z "$got" ]]; then

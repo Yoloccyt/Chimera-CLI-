@@ -42,7 +42,6 @@ use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::render::{self, virtual_scroll_window};
 use crate::types::{PanelId, TuiCommand, TuiState};
-use osa_coordinator::five_dimension_masks;
 
 /// OSA 稀疏度可视化面板
 ///
@@ -266,47 +265,25 @@ impl Panel for OsaSparsePanel {
 
         // === 五维掩码统计(Task 3.6) ===
         //
-        // 调用 osa_coordinator::five_dimension_masks() 获取静态快照,
-        // 显示每维度的活跃数/总数。全空掩码时 active=0,总数=0.
-        // 格式: Routing: {active}/{total} | Context: {active}/{total} | ...
-        let masks = five_dimension_masks();
+        // Phase 6 D-6 占位治理:原 five_dimension_masks() 全零占位属虚假数据固化，
+        // 已弃用。面板渲染层无 OmniSparseCoordinator 实例（同步 render 无法
+        // 调用 async compute_all_masks），真实掩码数据由 OsaSparseSync 从
+        // OmniSparseMasksComputed 事件同步（Gauge/context 列表已用真实数据）；
+        // 五维细分统计待后续迭代将 snapshot 接入 DataSnapshot 后展示，
+        // 当前诚实显示 N/A（与 Gauge 空态模式一致）。
         let mask_lines = vec![
             Line::from(Span::styled(
                 crate::t!("panel.osa.mask_status"),
                 Style::default().add_modifier(Modifier::BOLD),
             )),
-            Line::from(vec![
-                Span::raw(format!(
-                    "Routing: {}/{}",
-                    masks.routing.active_count(),
-                    masks.routing.active_ids.len()
-                )),
-                Span::raw(" | "),
-                Span::raw(format!(
-                    "Context: {}/{}",
-                    masks.context.active_count(),
-                    masks.context.active_ids.len()
-                )),
-                Span::raw(" | "),
-                Span::raw(format!(
-                    "Memory: {}/{}",
-                    masks.memory.active_count(),
-                    masks.memory.active_ids.len()
-                )),
-            ]),
-            Line::from(vec![
-                Span::raw(format!(
-                    "Audit: {}/{}",
-                    masks.audit.active_count(),
-                    masks.audit.active_ids.len()
-                )),
-                Span::raw(" | "),
-                Span::raw(format!(
-                    "Budget: {}/{}",
-                    masks.budget.active_count(),
-                    masks.budget.active_ids.len()
-                )),
-            ]),
+            Line::from(Span::styled(
+                "Routing: N/A | Context: N/A | Memory: N/A".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "Audit: N/A | Budget: N/A".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )),
             // === PROBE P0.4:HCW 召回读数（由 HcwRecallReported 事件同步，None = 未收到报告）===
             // 展示多针召回率 needle_recall@8 / 位置偏置比 / 链路成功率三指标,
             // 未收到报告时显示 N/A（灰字），收到后按值着色（≥目标绿 / 未达标黄）。

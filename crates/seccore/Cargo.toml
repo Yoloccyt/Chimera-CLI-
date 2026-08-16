@@ -21,6 +21,10 @@ nexus-contracts = { workspace = true }
 sha2 = { workspace = true }
 # 哈希十六进制编码(审计块、执行结果摘要)
 hex = { workspace = true }
+# 错误签名模式匹配(§9.3 ErrorSignatureCollector,铁律7 结构化收集 + 哈希去重聚类)
+regex = { workspace = true }
+# Paddock-Sandbox 解耦(§9.1 SandboxRuntime trait 异步执行,铁律10)
+async-trait = { workspace = true }
 # 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }
 # 领域类型序列化(审计块持久化、跨进程传输)
@@ -59,6 +63,9 @@ criterion = { workspace = true, features = ["async_tokio"] }
 proptest = { workspace = true }
 # tracing-test:捕获 tracing 日志,验证 audit_and_execute / ASA 审计的 span 与结构化字段(P1-W4.1)
 tracing-test = { workspace = true }
+# Phase 4 闭环集成测试:L4 错误签名 → L3 ExperienceCardStorage idx_error_hash 协同
+# WHY dev-dependency:仅测试用(L4→L3 向下依赖合规,且不侵入生产依赖)
+cmt-tiering = { workspace = true }
 
 # criterion 基准测试配置:避免与单元测试冲突
 [[bench]]

@@ -20,13 +20,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chrono::Utc;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
-use tracing::{debug, info};
+use event_bus::{EventBus, EventMetadata, ExperienceCardBus, NexusEvent};
+use tracing::{debug, info, warn};
 
 use crate::cold::ColdTier;
 use crate::config::CmtConfig;
 use crate::decay::DecayCalculator;
 use crate::error::CmtError;
+use crate::experience_card_storage::ExperienceCardStorage;
 use crate::hot::HotTier;
 use crate::ice::IceTier;
 use crate::types::{
@@ -238,6 +239,8 @@ impl CmtCoordinator {
         }
 
         debug!(cap_id = %cap_id, "能力条目已插入 Hot 层");
+        // L3 深度优化 P1-1:变更驱动发布四层统计快照(写入成功路径)
+        self.report_tier_stats().await?;
         Ok(())
     }
 
@@ -407,6 +410,8 @@ impl CmtCoordinator {
 
         if deleted {
             debug!(cap_id = cap_id, "跨层删除完成");
+            // L3 深度优化 P1-1:删除变更后发布四层统计快照
+            self.report_tier_stats().await?;
         }
         Ok(deleted)
     }
@@ -503,6 +508,8 @@ impl CmtCoordinator {
 
         if demoted_count > 0 {
             info!(demoted_count, "衰减周期完成,共降级条目");
+            // L3 深度优化 P1-1:迁移变更后发布四层统计快照
+            self.report_tier_stats().await?;
         }
         Ok(demoted_count)
     }
@@ -661,6 +668,243 @@ impl CmtCoordinator {
     /// 获取衰减计算器引用
     pub fn decay(&self) -> &DecayCalculator {
         &self.decay
+    }
+
+    /// 采集四层存储统计快照(L3 深度优化 P1-1)
+    ///
+    /// 统计口径为**条目数**(非字节):
+    /// - Hot:内存 DashMap len(O(1))
+    /// - Warm/Cold:SQLite COUNT(*)(spawn_blocking 包装,纯只读可并发)
+    /// - Ice:归档目录 .bin 文件数(spawn_blocking 包装目录遍历)
+    ///
+    /// # 返回
+    /// 四层条目计数快照
+    pub async fn tier_stats(&self) -> Result<crate::TierDistribution, CmtError> {
+        let hot = self.hot.len() as u64;
+        let warm = self.warm.count().await?;
+        let cold = self.cold.count().await?;
+        let ice = self.ice.list().await?.len() as u64;
+        Ok(crate::TierDistribution {
+            hot,
+            warm,
+            cold,
+            frozen: ice,
+        })
+    }
+
+    /// 发布四层存储统计事件(L3 深度优化 P1-1,事件驱动化)
+    ///
+    /// 变更驱动(insert/delete/迁移后调用)而非周期轮询,零定时器开销。
+    /// 发布 `CapabilityTierStatsReported` 事件,供 TUI MemoryPanel 等
+    /// 订阅方从事件流派生存储分布显示(替代原全局函数占位)。
+    pub async fn report_tier_stats(&self) -> Result<(), CmtError> {
+        let stats = self.tier_stats().await?;
+        let event = NexusEvent::CapabilityTierStatsReported {
+            metadata: EventMetadata::new("cmt-tiering"),
+            hot: stats.hot,
+            warm: stats.warm,
+            cold: stats.cold,
+            ice: stats.frozen,
+        };
+        self.event_bus.publish(event).await?;
+        Ok(())
+    }
+
+    /// 执行 LSCT 策略下达的单条层级迁移(L3 深度优化 P1-2,订阅闭环辅助)
+    ///
+    /// 由 [`spawn_lsct_subscriber`] 调用;不公开为公共 API(迁移语义
+    /// 由 LsctTierSwitched 事件承载)。迁移顺序:
+    /// 1. 从源层 peek 条目(不存在返回 Ok(false),幂等)
+    /// 2. 方向校验:降级方向走 L0 assert_archive_monotonicity(INV-8);
+    ///    提升方向跳过校验(提升不受 INV-8 约束,与 mlc-engine promote 先例一致)
+    /// 3. 先写目标层 → 成功后再删源层(无数据丢失,与 mlc-engine migrate 先例一致)
+    /// 4. 发布 CapabilityTiered 事件
+    async fn apply_lsct_migration(
+        &self,
+        cap_id: &str,
+        from: Tier,
+        to: Tier,
+    ) -> Result<bool, CmtError> {
+        // 1. 从源层取条目
+        let entry = match from {
+            Tier::Hot => self.hot.peek(cap_id),
+            Tier::Warm => self.warm.peek(cap_id.to_string()).await?,
+            Tier::Cold => self.cold.peek(cap_id.to_string()).await?,
+            Tier::Ice => {
+                // Ice 层无 peek 原语,归档条目仅可删除(单向下行),
+                // 从 Ice 出发的迁移无意义,返回 false
+                return Ok(false);
+            }
+        };
+        let Some(mut entry) = entry else {
+            return Ok(false);
+        };
+
+        // 2. 方向校验(仅降级方向执行 INV-8)
+        let is_demotion = to.to_archive_tier().level() >= from.to_archive_tier().level();
+        if is_demotion {
+            assert_archive_monotonicity(from, to)?;
+        }
+
+        // 3. 先写目标层
+        entry.tier = to;
+        match to {
+            Tier::Hot => {
+                // Hot 满时 insert 触发 LRU 驱逐,驱逐条目下沉 Warm(无数据丢失)
+                if let Some(evicted) = self.hot.insert(entry)? {
+                    let mut evicted = evicted;
+                    evicted.tier = Tier::Warm;
+                    self.warm.insert(evicted).await?;
+                }
+            }
+            Tier::Warm => self.warm.insert(entry).await?,
+            Tier::Cold => self.cold.insert(entry).await?,
+            Tier::Ice => self.ice.archive(entry).await?,
+        }
+
+        // 4. 确认写入成功后删源层
+        match from {
+            Tier::Hot => {
+                self.hot.remove(cap_id);
+            }
+            Tier::Warm => {
+                self.warm.delete(cap_id.to_string()).await?;
+            }
+            Tier::Cold => {
+                self.cold.delete(cap_id.to_string()).await?;
+            }
+            Tier::Ice => {}
+        }
+
+        // 5. 发布迁移事件 + 统计快照(变更驱动)
+        let event = NexusEvent::CapabilityTiered {
+            metadata: EventMetadata::new("cmt-tiering:lsct"),
+            capability_id: cap_id.to_string(),
+            from_tier: from.as_str().to_string(),
+            to_tier: to.as_str().to_string(),
+            reason: MigrationReason::AccessPatternChange.as_str().to_string(),
+        };
+        self.event_bus.publish(event).await?;
+        self.report_tier_stats().await?;
+        Ok(true)
+    }
+
+    /// 启动 LSCT 订阅闭环(L3 深度优化 P1-2)
+    ///
+    /// 订阅 `LsctTierSwitched` 事件(由 L9 任务感知策略层 lsct-tiering 发布),
+    /// 对目标能力执行实际层级迁移——补齐 lsct 设计意图"CMT 订阅事件做
+    /// 实际数据迁移"(lsct lib.rs 自述)的缺失闭环。
+    ///
+    /// # 事件驱动解耦
+    /// CMT 不依赖 lsct crate(仅解析事件字符串载荷),依赖方向不变。
+    /// 迁移后发布 `CapabilityTiered`(不同事件名),无回声环。
+    ///
+    /// # 装配方式
+    /// 上层编排器持有 `Arc<CmtCoordinator>` 时调用一次:
+    /// ```no_run
+    /// # use cmt_tiering::CmtCoordinator;
+    /// # use std::sync::Arc;
+    /// # async fn run(coordinator: Arc<CmtCoordinator>) {
+    /// let _handle = coordinator.spawn_lsct_subscriber();
+    /// # }
+    /// ```
+    ///
+    /// # 返回
+    /// JoinHandle:订阅循环永不主动退出(bus 关闭时自然结束),
+    /// 调用方可持有用于优雅停机(abort)。
+    pub fn spawn_lsct_subscriber(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let coordinator = Arc::clone(self);
+        let mut rx = self.event_bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(NexusEvent::LsctTierSwitched {
+                        capability_id,
+                        from_tier,
+                        to_tier,
+                        ..
+                    }) => {
+                        let Some(from) = Tier::parse_tier(&from_tier) else {
+                            warn!(capability_id, from_tier, "LSCT 源层级解析失败,跳过");
+                            continue;
+                        };
+                        let Some(to) = Tier::parse_tier(&to_tier) else {
+                            warn!(capability_id, to_tier, "LSCT 目标层级解析失败,跳过");
+                            continue;
+                        };
+                        match coordinator
+                            .apply_lsct_migration(&capability_id, from, to)
+                            .await
+                        {
+                            Ok(true) => {
+                                info!(capability_id, ?from, ?to, "LSCT 订阅闭环迁移完成");
+                            }
+                            Ok(false) => {
+                                debug!(capability_id, "LSCT 迁移跳过(条目不存在或 Ice 出发)");
+                            }
+                            Err(e) => {
+                                warn!(capability_id, error = %e, "LSCT 迁移失败");
+                            }
+                        }
+                    }
+                    Ok(_) => {} // 非 LSCT 事件忽略
+                    Err(event_bus::EventBusError::SlowConsumerDropped { lag, .. }) => {
+                        warn!(lag, "LSCT 订阅者 Lagged,部分事件丢失");
+                    }
+                    Err(_) => break, // 总线关闭,退出循环
+                }
+            }
+        })
+    }
+
+    /// 接入 L1 经验卡片总线 — 后台任务持久化卡片到 L3 存储（Phase 3 D-4）
+    ///
+    /// 订阅 `ExperienceCardBus` 的中分卡片广播流，后台任务将卡片
+    /// `store` 到 `ExperienceCardStorage`（SQLite 持久化）。补齐
+    /// L1 总线 → L3 存储的消费闭环，消除孤儿发布者。
+    ///
+    /// # 红线
+    /// - **先 subscribe 再 spawn**：避免事件静默丢失
+    /// - **Lagged 告警继续**：慢消费者丢弃部分卡片不中断持久化
+    /// - **Closed 退出**：总线关闭时任务自然结束
+    ///
+    /// # 装配方式
+    /// ```no_run
+    /// # use cmt_tiering::{CmtCoordinator, ExperienceCardStorage};
+    /// # use event_bus::ExperienceCardBus;
+    /// # use std::sync::Arc;
+    /// # async fn run(coord: CmtCoordinator, bus: ExperienceCardBus) -> Result<(), Box<dyn std::error::Error>> {
+    /// let storage = Arc::new(ExperienceCardStorage::new_in_memory(256).await?);
+    /// let coord = coord.with_card_persistence(&bus, storage);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # 返回
+    /// `Self`：builder 模式，持久化任务独立运行（随 runtime 生命周期）。
+    pub fn with_card_persistence(
+        self,
+        bus: &ExperienceCardBus,
+        storage: Arc<ExperienceCardStorage>,
+    ) -> Self {
+        let mut rx = bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(card) => {
+                        let card_id = card.card_id.to_string();
+                        if let Err(e) = storage.store(&card).await {
+                            warn!(card_id, error = %e, "经验卡片持久化失败");
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(lag = n, "经验卡片持久化 Lagged，丢弃 {n} 张卡片");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        self
     }
 }
 
@@ -835,15 +1079,21 @@ mod tests {
         coord.insert(make_entry("cap-1")).await.unwrap();
         coord.insert(make_entry("cap-2")).await.unwrap();
 
-        let event = rx.recv().await.unwrap();
-        match event {
-            NexusEvent::CapabilityTiered {
-                from_tier, to_tier, ..
-            } => {
-                assert_eq!(from_tier, "Hot");
-                assert_eq!(to_tier, "Warm");
+        // L3 深度优化:insert 先发布 CapabilityTierStatsReported(统计快照),
+        // 循环跳过直到 CapabilityTiered(迁移事件)
+        loop {
+            let event = rx.recv().await.unwrap();
+            match event {
+                NexusEvent::CapabilityTiered {
+                    from_tier, to_tier, ..
+                } => {
+                    assert_eq!(from_tier, "Hot");
+                    assert_eq!(to_tier, "Warm");
+                    break;
+                }
+                NexusEvent::CapabilityTierStatsReported { .. } => continue,
+                other => panic!("expected CapabilityTiered or Stats, got {other:?}"),
             }
-            other => panic!("expected CapabilityTiered, got {other:?}"),
         }
     }
 
@@ -878,5 +1128,118 @@ mod tests {
 
         let demoted = coord.run_decay_cycle().await.unwrap();
         assert_eq!(demoted, 0);
+    }
+
+    // ============================================================
+    // L3 深度优化 P1-1/P1-2:统计快照 + LSCT 订阅闭环测试
+    // ============================================================
+
+    /// tier_stats 四层条目计数正确(每层 1 条目)
+    #[tokio::test]
+    async fn test_tier_stats_counts_all_tiers() {
+        let bus = EventBus::new();
+        let coord = CmtCoordinator::new_in_memory(CmtConfig::default(), bus).unwrap();
+
+        coord.hot.insert(make_entry("hot-1")).unwrap();
+        coord.warm.insert(make_entry("warm-1")).await.unwrap();
+        coord.cold.insert(make_entry("cold-1")).await.unwrap();
+        coord.ice.archive(make_entry("ice-1")).await.unwrap();
+
+        let stats = coord.tier_stats().await.unwrap();
+        assert_eq!(stats.hot, 1);
+        assert_eq!(stats.warm, 1);
+        assert_eq!(stats.cold, 1);
+        assert_eq!(stats.frozen, 1);
+    }
+
+    /// report_tier_stats 发布 CapabilityTierStatsReported 事件且载荷正确
+    #[tokio::test]
+    async fn test_report_tier_stats_publishes_event() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let coord = CmtCoordinator::new_in_memory(CmtConfig::default(), bus).unwrap();
+
+        coord.hot.insert(make_entry("cap-1")).unwrap();
+
+        coord.report_tier_stats().await.unwrap();
+
+        let event = rx.recv().await.unwrap();
+        match event {
+            NexusEvent::CapabilityTierStatsReported {
+                hot,
+                warm,
+                cold,
+                ice,
+                ..
+            } => {
+                assert_eq!(hot, 1);
+                assert_eq!(warm, 0);
+                assert_eq!(cold, 0);
+                assert_eq!(ice, 0);
+            }
+            other => panic!("expected CapabilityTierStatsReported, got {other:?}"),
+        }
+    }
+
+    /// LSCT 订阅闭环端到端:发布 LsctTierSwitched → CMT 执行实际迁移
+    /// (Hot→Warm 降级 + CapabilityTiered 事件到达 + 统计事件尾随)
+    #[tokio::test]
+    async fn test_lsct_subscriber_migrates_on_event() {
+        let bus = EventBus::new();
+        // WHY clone:coord 构造器 move bus 后,测试仍需发布与订阅(EventBus Clone 廉价 Arc)
+        let coord = CmtCoordinator::new_in_memory(CmtConfig::default(), bus.clone()).unwrap();
+        coord.hot.insert(make_entry("cap-1")).unwrap();
+
+        let coord_arc = Arc::new(coord);
+        let _handle = coord_arc.spawn_lsct_subscriber();
+        let mut rx = bus.subscribe();
+
+        // LSCT 策略下达:cap-1 Hot → Warm(编译任务高强度 → 降级)
+        bus.publish(NexusEvent::LsctTierSwitched {
+            metadata: EventMetadata::new("lsct-tiering"),
+            capability_id: "cap-1".into(),
+            from_tier: "Hot".into(),
+            to_tier: "Warm".into(),
+            reason: "compile task high intensity".into(),
+        })
+        .await
+        .unwrap();
+
+        // 等待订阅者处理 + 验证事件流:CapabilityTiered(迁移) 与
+        // CapabilityTierStatsReported(统计,由迁移路径触发)均到达
+        let mut saw_migration = false;
+        let mut saw_stats = false;
+        for _ in 0..10 {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await {
+                Ok(Ok(NexusEvent::CapabilityTiered {
+                    capability_id,
+                    from_tier,
+                    to_tier,
+                    ..
+                })) => {
+                    assert_eq!(capability_id, "cap-1");
+                    assert_eq!(from_tier, "Hot");
+                    assert_eq!(to_tier, "Warm");
+                    saw_migration = true;
+                }
+                Ok(Ok(NexusEvent::CapabilityTierStatsReported { .. })) => {
+                    saw_stats = true;
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) => break,
+                Err(_) => break,
+            }
+        }
+        assert!(saw_migration, "应收到 CapabilityTiered 迁移事件");
+        assert!(saw_stats, "应收到 CapabilityTierStatsReported 统计事件");
+
+        // 验证实际迁移效果:Hot 空、Warm 有条目
+        assert!(!coord_arc.hot.contains("cap-1"));
+        assert!(coord_arc
+            .warm
+            .peek("cap-1".to_string())
+            .await
+            .unwrap()
+            .is_some());
     }
 }

@@ -43,6 +43,7 @@ fn prop_valid_config() -> impl Strategy<Value = GeaConfig> {
             w1,
             w2,
             w3,
+            w4_confidence: 0.0,
             bias: 0.5,
             activation_threshold: 0.5,
             cache_capacity: 128,

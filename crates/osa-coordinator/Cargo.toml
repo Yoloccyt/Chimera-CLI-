@@ -22,6 +22,8 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 # 结构化日志(掩码计算与事件发布追踪)
 tracing = { workspace = true }
+# W2(§11.3): 六维调整事件订阅后台任务(start_dimension_adjustment_loop 的 tokio::spawn)
+tokio = { workspace = true }
 
 [dev-dependencies]
 # 异步测试运行器(coordinator.rs 集成测试使用 #[tokio::test])
@@ -36,6 +38,9 @@ kvbsr-router = { workspace = true }
 # Task 2: S2 端到端集成测试(memory_s2_tests.rs)需用 S2StrategyAdapter
 # WHY dev-dependencies 可绕过依赖铁律(§2.2),仅限 tests/ 目录
 omega-learner = { workspace = true }
+# W3(§11.1): Skills 渐进加载 L5↔L6 编排集成测试(repo_wiki loader + osa planner)
+# WHY 仅测试: 生产侧经 SkillIndexEntry 轻量投影解耦(ADR-084 决策 5)
+repo-wiki = { workspace = true }
 # 基准测试框架(SubTask 11.1:Week 3 复审扩展)
 criterion = { workspace = true }
 # 属性测试框架(SubTask 15.12:sparsity/complexity 不变量验证)

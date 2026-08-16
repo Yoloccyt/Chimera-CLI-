@@ -25,7 +25,8 @@
 //! - 单函数 ≤ 200 行,禁止 unwrap()/expect()
 //! - 所有 async fn 满足 Send 约束
 
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::{MemoryStrategy, MemoryStrategyProvider};
@@ -35,6 +36,8 @@ use tracing::{debug, info};
 use crate::config::OsaConfig;
 use crate::error::OsaError;
 use crate::masks::SparseMask;
+use crate::six_dimension::SixDimensionAdjuster;
+use crate::tool_pruning::{PruneResult, PruneToolSchema, ToolSchemaPruner};
 use crate::types::{ComplexityBand, FileId, MemoryId, OperationId, TaskId, TaskProfile, ToolId};
 
 // OmniSparseMasks 从 L0 nexus-contracts 统一导入(ADR-033, P2-W5.2)
@@ -111,6 +114,28 @@ pub struct OmniSparseCoordinator {
     /// (osa-coordinator 不直接依赖 omega-learner,依赖铁律 §2.2 合规)。
     /// None 时 fallback 到 StandardTopK(k_multiplier=1.0,当前行为,向后兼容)。
     memory_strategy_provider: Option<Arc<dyn MemoryStrategyProvider>>,
+    /// 最近一次成功计算的掩码快照缓存（Phase 6 D-6 占位治理）
+    ///
+    /// WHY: 全局函数 `five_dimension_masks()` 返回全零占位属虚假数据固化；
+    /// 真实数据源是 `compute_all_masks` 的动态计算结果。同步短临界区，
+    /// 无持锁跨 await（红线 §4.4-1）。
+    recent_masks: Arc<Mutex<Option<OmniSparseMasks>>>,
+    /// W1(§11.5): 工具 schema 裁剪器 — routing 维度使用统计二次裁剪（ADR-084）
+    ///
+    /// WHY Option + Mutex: 在线喂入使用统计（record_tool_step）与
+    /// compute_all_masks 裁剪并发共享；短临界区无持锁跨 await。
+    tool_pruner: Option<Arc<Mutex<ToolSchemaPruner>>>,
+    /// W1: 工具 schema token 估算表（tokens_saved 观测指标用，缺省 0 诚实降级）
+    tool_schema_tokens: HashMap<String, u32>,
+    /// W1: 裁剪保留数（None = 不裁剪；运行时可变，供 W2 六维调整器 D2 下发）
+    tool_keep_count: Arc<Mutex<Option<usize>>>,
+    /// W1: 最近一次裁剪结果（可观测性）
+    last_prune_result: Arc<Mutex<Option<PruneResult>>>,
+    /// W2(§11.3): 六维动态调整器 — D1-D6 控制面纯规则反馈（ADR-084 决策 1）
+    ///
+    /// WHY Option + Mutex: `apply_feedback` 事件驱动并发写入与
+    /// `compute_all_masks` D2 读取共享；短临界区无持锁跨 await。
+    dimension_adjuster: Option<Arc<Mutex<SixDimensionAdjuster>>>,
 }
 
 impl OmniSparseCoordinator {
@@ -128,6 +153,15 @@ impl OmniSparseCoordinator {
             config,
             // Task 2: 默认无 S2 provider,fallback 到 StandardTopK(向后兼容)
             memory_strategy_provider: None,
+            // Phase 6 D-6: 快照缓存初始为空（未计算过 → snapshot 返回 None）
+            recent_masks: Arc::new(Mutex::new(None)),
+            // W1(§11.5): 裁剪器默认不注入（行为与 W1 前逐位一致）
+            tool_pruner: None,
+            tool_schema_tokens: HashMap::new(),
+            tool_keep_count: Arc::new(Mutex::new(None)),
+            last_prune_result: Arc::new(Mutex::new(None)),
+            // W2(§11.3): 调整器默认不注入
+            dimension_adjuster: None,
         }
     }
 
@@ -142,6 +176,97 @@ impl OmniSparseCoordinator {
     ) -> Self {
         self.memory_strategy_provider = Some(provider);
         self
+    }
+
+    /// W1(§11.5): 注入工具裁剪器 — routing 维度使用统计二次裁剪（Dressage）
+    ///
+    /// 注入后需配合 [`with_tool_keep_count`] / [`set_tool_keep_count`] 设定
+    /// 保留数（未设定 = 不裁剪，保持纯相关性 Top-K 行为，向后兼容）。
+    pub fn with_tool_pruner(mut self, pruner: ToolSchemaPruner) -> Self {
+        self.tool_pruner = Some(Arc::new(Mutex::new(pruner)));
+        self
+    }
+
+    /// W1: 注入工具 schema token 估算表（tokens_saved 观测指标用）
+    ///
+    /// WHY 可选: 裁剪决策依赖使用统计（频率/成功率/新近度）而非 token
+    /// 估算；缺省 0 时 tokens_saved 恒 0（诚实降级，不伪造估算值）。
+    pub fn with_tool_schema_tokens(mut self, tokens: HashMap<String, u32>) -> Self {
+        self.tool_schema_tokens = tokens;
+        self
+    }
+
+    /// W1: 设置裁剪保留数（D2.max_tools_per_step 控制面入口）
+    pub fn with_tool_keep_count(self, keep: usize) -> Self {
+        if let Ok(mut slot) = self.tool_keep_count.lock() {
+            *slot = Some(keep);
+        }
+        self
+    }
+
+    /// W1: 运行时更新裁剪保留数（供 W2 六维调整器 D2 动态下发）
+    ///
+    /// None = 关闭裁剪（回到纯相关性 Top-K）。
+    pub fn set_tool_keep_count(&self, keep: Option<usize>) {
+        if let Ok(mut slot) = self.tool_keep_count.lock() {
+            *slot = keep;
+        }
+    }
+
+    /// W1: 工具裁剪器共享句柄（在线喂入使用统计 `record_tool_step`）
+    pub fn tool_pruner_handle(&self) -> Option<Arc<Mutex<ToolSchemaPruner>>> {
+        self.tool_pruner.clone()
+    }
+
+    /// W1: 最近一次裁剪结果（可观测性）
+    pub fn last_prune_result(&self) -> Option<PruneResult> {
+        self.last_prune_result
+            .lock()
+            .ok()
+            .and_then(|cache| cache.clone())
+    }
+
+    /// W2(§11.3): 注入六维动态调整器（D1-D6 控制面纯规则反馈）
+    ///
+    /// 注入后 `compute_all_masks` 的裁剪 keep 优先级:
+    /// 显式 `tool_keep_count` > 调整器当前契约 `D2.max_tools_per_step`。
+    /// 需配合 [`start_dimension_adjustment_loop`] 启动事件反馈消费。
+    pub fn with_dimension_adjuster(mut self, adjuster: SixDimensionAdjuster) -> Self {
+        self.dimension_adjuster = Some(Arc::new(Mutex::new(adjuster)));
+        self
+    }
+
+    /// W2: 六维调整器共享句柄（外部直接读取契约 / 手动喂入反馈）
+    pub fn dimension_adjuster_handle(&self) -> Option<Arc<Mutex<SixDimensionAdjuster>>> {
+        self.dimension_adjuster.clone()
+    }
+
+    /// W2(§11.3): 启动六维调整事件订阅任务（后台 tokio task）
+    ///
+    /// 订阅 EventBus 全量事件,`SixDimensionAdjuster::apply_feedback` 仅响应
+    /// 四个反馈变体（HcwRecallDegraded / RouterStatsReported /
+    /// BudgetExceeded / EntropyBalanced），其余静默忽略（零新增事件变体,
+    /// ADR-084 决策 2）。
+    ///
+    /// 返回 `JoinHandle` 供调用者管理任务生命周期;未绑定调整器返回 None。
+    ///
+    /// # Week 6 教训 - broadcast 时序
+    /// `bus.subscribe()` 必须在 `tokio::spawn` 之前同步调用（§4.4-3）,
+    /// 否则事件静默丢失。持锁不跨 await: recv 完成后才取锁,apply_feedback
+    /// 为同步短临界区。
+    pub fn start_dimension_adjustment_loop(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let adjuster = self.dimension_adjuster.clone()?;
+        // 在 spawn 之前同步订阅,确保不会错过后续发布的事件
+        let mut rx = self.event_bus.subscribe();
+
+        Some(tokio::spawn(async move {
+            while let Ok(event) = rx.recv().await {
+                // 无持锁跨 await: recv 完成后短临界区应用反馈
+                if let Ok(mut adj) = adjuster.lock() {
+                    adj.apply_feedback(&event);
+                }
+            }
+        }))
     }
 
     /// 获取配置引用(用于测试与调试)
@@ -218,7 +343,7 @@ impl OmniSparseCoordinator {
         // WHY expect 而非 ? :spawn 返回的 JoinResult::join() 失败表示计算线程 panic,
         // 属于不可恢复的程序错误(非业务错误),用 expect 直接 panic 符合"内部代码信任"原则。
         // 闭包内调用的是纯函数,无外部 IO,panic 仅可能来自底层分配失败(已超出 OsaError 范畴)。
-        let (routing, context, memory, audit, budget) = std::thread::scope(|s| {
+        let (mut routing, context, memory, audit, budget) = std::thread::scope(|s| {
             // 每个闭包捕获 &self 和 &profile,scope 保证引用在 scope 内有效
             // WHY 五个 spawn 而非 rayon::join:五维度计算相互独立,无需工作窃取,
             // std::thread::scope 直接派生 5 个 OS 线程,开销最低
@@ -249,6 +374,14 @@ impl OmniSparseCoordinator {
 
             (routing, context, memory, audit, budget)
         });
+
+        // W1(§11.5): routing 维度使用统计二次裁剪（Dressage 闭环）
+        //
+        // 终态 routing 掩码 = 相关性 Top-K 幸存者 ∩ 使用统计保留集
+        // （白名单钉住 + 门控 + Top-K 补足）；未注入 pruner / 未设
+        // keep_count 时为 no-op（行为与 W1 前逐位一致）。
+        // 必须在 mask_hash 计算与事件发布之前——哈希与事件反映裁剪后终态。
+        let _prune_result = self.apply_usage_pruning(&mut routing);
 
         // 4. 聚合为 OmniSparseMasks(L0 类型,纯构造不返回 Result)
         let masks = OmniSparseMasks::new(routing, context, memory, audit, budget);
@@ -294,7 +427,80 @@ impl OmniSparseCoordinator {
             "全维稀疏掩码计算完成,事件已发布"
         );
 
+        // Phase 6 D-6: 写入快照缓存（真实数据源，替代全零占位）
+        if let Ok(mut cache) = self.recent_masks.lock() {
+            *cache = Some(masks.clone());
+        }
+
         Ok(masks)
+    }
+
+    /// 最近一次成功计算的掩码同步快照（Phase 6 D-6 占位治理）
+    ///
+    /// 返回 None 表示尚未成功计算过。调用方（如 TUI 面板）应改用
+    /// 本方法替代已弃用的全局函数 `five_dimension_masks()`（全零占位）。
+    pub fn snapshot(&self) -> Option<OmniSparseMasks> {
+        self.recent_masks
+            .lock()
+            .ok()
+            .and_then(|cache| cache.clone())
+    }
+
+    /// W1(§11.5): routing 维度使用统计二次裁剪 — 相关性 Top-K 幸存者上
+    /// 应用 Dressage 使用统计（白名单钉住 §18.3 + 门控 + Top-K 补足）
+    ///
+    /// 返回 None 的全部情形（防御性 no-op，不 panic）:
+    /// - 未注入 pruner / 未设定 keep_count（默认，行为向后兼容）
+    /// - routing 幸存者为空 / 锁中毒（跳过裁剪，掩码保持相关性 Top-K 终态）
+    fn apply_usage_pruning(&self, routing: &mut SparseMask<ToolId>) -> Option<PruneResult> {
+        // keep 来源优先级: 显式 tool_keep_count(W1) > 六维调整器 D2(W2) > 不裁剪
+        let explicit_keep = *self.tool_keep_count.lock().ok()?;
+        let keep = match explicit_keep {
+            Some(explicit) => explicit,
+            None => self
+                .dimension_adjuster
+                .as_ref()?
+                .lock()
+                .ok()?
+                .current_contract()
+                .d2_tool
+                .max_tools_per_step,
+        };
+        let pruner_arc = self.tool_pruner.as_ref()?;
+        // 中毒锁 → 跳过裁剪: 掩码保持相关性 Top-K 终态（保守回退）
+        let mut pruner = pruner_arc.lock().ok()?;
+        let active: Vec<ToolId> = routing.active_ids.clone();
+        if active.is_empty() {
+            return None;
+        }
+        // schema_tokens 缺省 0: 裁剪决策依赖使用统计而非 token 估算
+        let available: Vec<PruneToolSchema> = active
+            .iter()
+            .map(|tool| {
+                let name = tool.to_string();
+                let schema_tokens = self.tool_schema_tokens.get(&name).copied().unwrap_or(0);
+                PruneToolSchema { name, schema_tokens }
+            })
+            .collect();
+        let result = pruner.prune_tools(&available, keep);
+        // 重建 routing 掩码: 仅保留裁剪幸存者（白名单钉住项必在 kept 内）
+        let kept_names: HashSet<String> = result.kept.iter().map(|t| t.name.clone()).collect();
+        let survived: Vec<ToolId> = active
+            .iter()
+            .filter(|tool| kept_names.contains(tool.as_str()))
+            .cloned()
+            .collect();
+        debug!(
+            available = available.len(),
+            kept = survived.len(),
+            tokens_saved = result.tokens_saved,
+            "W1 工具裁剪完成（routing 维度使用统计二次裁剪）"
+        );
+        *routing = SparseMask::full(survived);
+        if let Ok(mut cache) = self.last_prune_result.lock() {
+            *cache = Some(result.clone());
+        }
+        Some(result)
     }
 
     /// 校验 TaskProfile 合法性

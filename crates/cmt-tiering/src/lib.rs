@@ -11,6 +11,16 @@
 //! - 通过 CmtCoordinator 统一接口聚合四级,自动跨层查找与提升
 //! - 集成 EventBus,发布 CapabilityTiered 事件
 //! - 基于访问频率与时间衰减的自动迁移(priority < 0.1 触发降级)
+//! - polish-v2.7 P4-2:分层经验回放池(TieredReplayPool,Hot/Warm/Cold/Ice 四层,
+//!   失败案例 Cold 权重 0.5,R2 冻结仅供 R1 路径)
+//! - Milestone B-3b:回放池完整性审计(IntegrityReport,九层防御 L3)
+//! - DQN 迁移经验记录(rl_migration,MigrationExperience 回放队列)
+//! - L3 深度优化:LSCT 订阅闭环(spawn_lsct_subscriber 订阅 LsctTierSwitched
+//!   事件执行实际迁移)+ 四层统计事件(CapabilityTierStatsReported)
+//! - Phase 3 §8.1:金字塔存储映射(pyramid_storage,MemoryPyramidLevel→热温冷冰
+//!   + 分层采样 25/25/50/0 + INV-8 迁移单调性)
+//! - Phase 3 §8.2:经验卡片持久化(experience_card_storage,SQLite 五复合索引
+//!   + 热缓存 + 三因子/错误签名查询 + 训练证据落盘 + 完整性审计)
 //!
 //! # 架构红线
 //! - 所有跨层通信走 EventBus(§2.2 依赖铁律)
@@ -46,10 +56,14 @@ pub mod config;
 pub mod coordinator;
 pub mod decay;
 pub mod error;
+/// Phase 3 §8.2:经验卡片持久化(SQLite 五复合索引 + 热缓存,ADR-049 内嵌)
+pub mod experience_card_storage;
 pub mod hot;
 pub mod ice;
 pub mod migrator;
 pub mod pool;
+/// Phase 3 §8.1:金字塔存储映射(TencentDB 四层→热温冷冰,ADR-049 内嵌)
+pub mod pyramid_storage;
 pub mod rl_migration;
 /// polish-v2.7 P4-2:分层经验回放池(Hot/Warm/Cold/Ice 四层,ADR-049)
 ///
@@ -75,41 +89,31 @@ pub use types::{
 };
 pub use warm::WarmTier;
 
-// === Task 3.3: L10 TUI 跨层协同 — 四层存储分布快照 ===
+// === Phase 3 L3 存储层五大组件重导出(§8.1/§8.2) ===
+pub use experience_card_storage::{CardStorageIntegrityReport, ExperienceCardStorage};
+pub use pyramid_storage::{PyramidStorageMapper, PYRAMID_SAMPLE_RATIOS};
 
-/// 四层存储分布 — 热/温/冷/冰四层字节数快照(Task 3.3)
+// === L3 深度优化 P1-1: 四层存储分布(事件驱动化) ===
+
+/// 四层存储分布 — 热/温/冷/冰四层**条目数**快照
+///
+/// L3 深度优化语义变更:字段原标注"字节数"实为 TODO 占位(恒零),
+/// 现改为条目计数(由 `CmtCoordinator::tier_stats()` 采集:Hot len /
+/// Warm·Cold COUNT(*)/Ice 归档文件数),经 CapabilityTierStatsReported
+/// 事件发布,消费方从事件流派生显示。
 ///
 /// WHY 结构体而非元组: 四层语义明确,命名字段避免混淆(热/温/冷/冰易记混位置)。
 /// 所有字段标注 `#[doc]` 以保持 `missing_docs` lint 合规。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TierDistribution {
-    /// 热层字节数(Hot Tier: DashMap + LRU,容量 256)
+    /// 热层条目数(Hot Tier: DashMap + LRU,容量 256)
     pub hot: u64,
-    /// 温层字节数(Warm Tier: SQLite WAL,容量 4096)
+    /// 温层条目数(Warm Tier: SQLite WAL,容量 4096)
     pub warm: u64,
-    /// 冷层字节数(Cold Tier: SQLite 附加数据库,容量 65536)
+    /// 冷层条目数(Cold Tier: SQLite 附加数据库,容量 65536)
     pub cold: u64,
-    /// 冰层字节数(Ice Tier: 归档只读文件,无容量上限)
+    /// 冰层条目数(Ice Tier: 归档只读文件,无容量上限)
     pub frozen: u64,
-}
-
-/// 返回四层存储分布快照(Task 3.3 跨层 Panel 数据管道)
-///
-/// TUI MemoryPanel 调用此函数显示"存储分布"字段。
-/// 当前返回默认全零值(TODO: 真实接入 CmtCoordinator 统计各层字节数)。
-///
-/// # 示例
-///
-/// ```
-/// use cmt_tiering::{tier_distribution, TierDistribution};
-///
-/// let dist = tier_distribution();
-/// assert_eq!(dist.hot + dist.warm + dist.cold + dist.frozen, 0);
-/// ```
-pub fn tier_distribution() -> TierDistribution {
-    // TODO: 真实接入 CmtCoordinator 统计各层条目大小
-    // 当前返回默认值(全零),待 CmtCoordinator 暴露 per-tier byte count 后替换
-    TierDistribution::default()
 }
 
 /// 预导入模块 — 提供最常用类型
@@ -127,4 +131,7 @@ pub mod prelude {
         assert_archive_monotonicity, CapabilityEntry, CapabilityId, MigrationReason, Tier,
     };
     pub use crate::warm::WarmTier;
+    // Phase 3 L3 存储层五大组件(§8.1/§8.2,与顶层导出同集)
+    pub use crate::experience_card_storage::{CardStorageIntegrityReport, ExperienceCardStorage};
+    pub use crate::pyramid_storage::{PyramidStorageMapper, PYRAMID_SAMPLE_RATIOS};
 }

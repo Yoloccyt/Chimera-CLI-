@@ -9,6 +9,23 @@
 //! - 从 `nexus_core::Quest` 结果自动生成 Wiki 条目
 //! - 通过 `event_bus::EventBus` 发布 `WikiUpdated` 事件通知上层
 //!
+//! # 文档-代码偏差记录(《最新版》§10 对齐,P1-3 深度优化)
+//! - **P1-1 嵌入接入**(2026-08):`WikiGenerator::with_text_encoder` 接入 L2
+//!   nmc-encoder TextPerceptor,替换 DEFERRED(T8-3 Audit) 占位状态;
+//!   默认路径(无编码器)保持 SHA-256 占位 512 维,向后兼容。
+//! - **P1-2 检索收敛**(2026-08):`WikiStore::hybrid_query` 为 L5 唯一融合
+//!   入口(HNSW dense + FTS5 sparse + RRF),chimera-mas WikiRetriever 与
+//!   chimera-cli wiki 命令均已收敛到此入口(Ω₆-Reuse)。
+//! - **Task 5 双层经验库**(2026-08,文档 §10.2 问题 4):`DualExperienceBank`
+//!   落于本 crate(案例级 = WikiEntry,全局蒸馏 = distilled_insights 表),
+//!   不触碰 L2 mlc-engine(记忆层职责边界)。
+//! - 文档 §20 规划的独立 crate(dual-experience-bank 等)经 ADR-049 决策 1
+//!   否决,以模块形式落地于现有 crate。
+//! - **测试外移**(2026-08):store.rs 公共 API 测试迁至
+//!   `tests/store_public_api.rs`;search.rs RRF 公共 API 单元测试迁至
+//!   `tests/search_public_api.rs`;vector/(hnsw/memory_knn)与 fts.rs 内嵌
+//!   测试依赖私有字段/私有 sanitize 函数,逐例判定保留原地。
+//!
 //! # 架构红线
 //! - 写操作通过专用写入线程(mpsc + oneshot)序列化,读操作通过只读连接池
 //!   在 `spawn_blocking` 中并发执行;从而利用 SQLite WAL 的读写并发能力
@@ -52,6 +69,8 @@ pub mod behavior_localization;
 pub mod config;
 pub mod contradiction;
 pub mod error;
+/// P1-3(计划 Task 5): 双层经验库 — 案例级(WikiEntry)+ 全局蒸馏(DistilledInsight)
+pub mod experience_bank;
 pub mod fts;
 pub mod generator;
 pub mod iscm;
@@ -63,6 +82,10 @@ pub mod relation;
 pub mod search;
 /// polish-v2.7 P4-6:技能依赖图与复用率优先推荐(Ω₆ Reuse,ADR-049)
 pub mod skill_graph;
+/// Phase 5 §10.5:Skill 生命周期状态机(MSCE Probationary→Active→Archived,ADR-049 内嵌)
+pub mod skill_lifecycle;
+/// Phase 6 §11.1:Skills 渐进加载(PenguinHarness Index First/Body on Demand,ADR-049 内嵌)
+pub mod skills_progressive_loader;
 pub mod store;
 pub mod types;
 pub mod vector;
@@ -72,6 +95,8 @@ pub use contradiction::{
     ContradictionDetector, ContradictionResult, DEFAULT_CONTRADICTION_THRESHOLD,
 };
 pub use error::WikiError;
+/// P1-3(计划 Task 5): 双层经验库公开 API 重导出
+pub use experience_bank::{DistilledInsight, DualExperienceBank};
 pub use fts::FtsCapability;
 pub use generator::WikiGenerator;
 pub use iscm::{IscmAnchor, Layer};
@@ -79,6 +104,13 @@ pub use metrics::WikiMetrics;
 pub use relation::{EntryRelation, RelationKind};
 /// RAG 混合检索融合 — RRF 算法融合 HNSW dense 与 FTS5 sparse 结果(Task 3)
 pub use search::{hybrid_search, rrf_fuse, HybridSearchConfig, HybridSearchResult};
+/// Phase 5 §10.5: Skill 生命周期管理器公开 API 重导出
+pub use skill_lifecycle::SkillLifecycleManager;
+/// Phase 6 §11.1: Skills 渐进加载器公开 API 重导出
+pub use skills_progressive_loader::{
+    skill_metadata_from_graph, BodyProvider, LoadedSkill, LoaderStats, ProgressiveSkillLoader,
+    SkillBody, SkillMetadata,
+};
 pub use store::WikiStore;
 pub use types::{HnswConfig, WikiConfig, WikiEntry};
 /// HNSW 向量存储生产路径实现(P2-W8.1)
@@ -94,6 +126,8 @@ pub mod prelude {
         ContradictionDetector, ContradictionResult, DEFAULT_CONTRADICTION_THRESHOLD,
     };
     pub use crate::error::WikiError;
+    /// P1-3(计划 Task 5): 双层经验库 prelude 导出
+    pub use crate::experience_bank::{DistilledInsight, DualExperienceBank};
     pub use crate::fts::FtsCapability;
     pub use crate::generator::WikiGenerator;
     pub use crate::iscm::{IscmAnchor, Layer};

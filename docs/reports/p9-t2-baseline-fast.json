@@ -1,0 +1,63 @@
+{
+  "mode": "fast",
+  "timestamp": "2026-08-07T02:41:27Z",
+  "host": "PC",
+  "cpu_count": 16,
+  "rustc_version": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+  "nextest_version": "cargo-nextest 0.9.143 (60fa45f63 2026-08-04)",
+  "chimera_test_timeout_scale": "0.1",
+  "chimera_backpressure_secs": "5",
+  "total_elapsed_secs": "159.77",
+  "top_tests": [
+    {
+      "binary": "mcp-mesh::integration",
+      "test": "mcp-mesh::integration$test_1000_transactions_all_publish_events",
+      "elapsed_secs": 96.101
+    },
+    {
+      "binary": "model-router::moe_test",
+      "test": "model-router::moe_test$prop_five_dim_sparsity_invariant",
+      "elapsed_secs": 15.273
+    },
+    {
+      "binary": "omega-learner::s9_convergence",
+      "test": "omega-learner::s9_convergence$s9_arm_space_convergence",
+      "elapsed_secs": 9.253
+    },
+    {
+      "binary": "chimera-tui::sysinfo_panel_test",
+      "test": "chimera-tui::sysinfo_panel_test$test_process_info_refreshes_every_5s",
+      "elapsed_secs": 7.595
+    },
+    {
+      "binary": "chimera-tui::sysinfo_panel_test",
+      "test": "chimera-tui::sysinfo_panel_test$test_sysinfo_panel_id_and_title",
+      "elapsed_secs": 7.379
+    },
+    {
+      "binary": "chimera-tui::sysinfo_panel_test",
+      "test": "chimera-tui::sysinfo_panel_test$test_cpu_model_displays_correctly",
+      "elapsed_secs": 7.33
+    },
+    {
+      "binary": "chimera-tui::sysinfo_panel_test",
+      "test": "chimera-tui::sysinfo_panel_test$test_host_info_displays_within_1s",
+      "elapsed_secs": 7.274
+    },
+    {
+      "binary": "cmt-tiering::warm",
+      "test": "cmt-tiering::warm$test_wal_mode_enabled",
+      "elapsed_secs": 7.223
+    },
+    {
+      "binary": "cmt-tiering::warm",
+      "test": "cmt-tiering::warm$test_warm_concurrent_writes",
+      "elapsed_secs": 7.185
+    },
+    {
+      "binary": "cmt-tiering::warm",
+      "test": "cmt-tiering::warm$test_warm_full_crud_lifecycle",
+      "elapsed_secs": 7.178
+    }
+  ]
+}

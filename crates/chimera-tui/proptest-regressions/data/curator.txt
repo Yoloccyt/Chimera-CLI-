@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7484622a5a0596fd1729693093f73762cacdd6db0a38598f69ae59e03dcbb2ba # shrinks to msgs = [ChatMessage { role: Assistant, content: " " }, ChatMessage { role: Assistant, content: " a@a@a aa   aaaaa  @a" }, ChatMessage { role: Assistant, content: "" }, ChatMessage { role: Assistant, content: "a @@ @a@ a@  aaa " }, ChatMessage { role: Assistant, content: " aa @@@ aaa@@" }, ChatMessage { role: Assistant, content: "aa@a@a     aaa a aa  a@@  a@aaaaa  @ " }, ChatMessage { role: Assistant, content: "aa @@@@a@a@@@@aa " }, ChatMessage { role: Assistant, content: "" }, ChatMessage { role: Assistant, content: "@   a@ @a@aa@@@  aa  @ @ " }, ChatMessage { role: Assistant, content: " @a @" }, ChatMessage { role: Assistant, content: "@@ @a@  @ @ @ @@aa  a" }, ChatMessage { role: Assistant, content: "aa@aa a@aaa @  a@" }, ChatMessage { role: Assistant, content: " @  aaaa @@@a@ aaa@a@aa  aa@@" }, ChatMessage { role: Assistant, content: " " }, ChatMessage { role: Assistant, content: " aaaaa a@" }]

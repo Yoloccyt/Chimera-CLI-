@@ -1,7 +1,7 @@
 //! S9 会话集成 — 将 StreamSessionCompleted 事件桥接到 S9RouteLearner
 //!
 //! 对应架构层: L6 Router(omega-learner)
-//! 对应 ADR: ADR-065(MCA M3), ADR-068
+//! 对应 ADR: ADR-065(MCA M3), ADR-068, ADR-084 决策 4(W5 占位治理)
 //!
 //! # 设计动机
 //!
@@ -10,10 +10,26 @@
 //! `S9SessionIntegration` 订阅此事件流,将计量转换为 `S9Reward`,
 //! 驱动 `S9RouteLearner` 的 LinUCB 臂权重更新。
 //!
+//! # W5 奖励构造修复(ADR-084)
+//!
+//! 原实现硬编码 `success: true, quality: 0.8`——早停/异常会话被误记为
+//! 成功且质量恒定(虚假数据固化)。修复后奖励项全部由事件真实字段派生:
+//! - **success** = `early_stop_reason.is_none()`(正常完成才算成功;
+//!   早停/异常 → success=false,质量项归零只留惩罚——强负反馈)
+//! - **quality** = 完成基线 1.0(一次正常完成记一个完整质量单位;
+//!   事件不承载语义质量分——诚实边界,结局质量归因依赖后续带臂归属的
+//!   奖励事件,见下)
+//! - **normalized_cost / normalized_latency** = 事件实测计量归一化(原实现即是)
+//!
 //! # 依赖方向(§2.2 铁律)
 //! omega-learner(L6) 不依赖 mca-gateway(L10)。本模块仅消费事件总线
 //! 上已发布的 `NexusEvent`,事件中的 `cost_actual_micro`/`ttft_ms` 等字段
 //! 由 event-bus(L1) 的 `StreamSessionCompleted` 变体承载。
+//!
+//! # 结局奖励通道(诚实边界,记档)
+//! `RewardSignalReported` 不携带路由臂归属(无 route_key/arm_id 字段),
+//! 无法诚实驱动 S9 的按臂更新——带臂归属的结局奖励事件留给规范 §19
+//! Phase 7 的 +14 事件波次统一治理;本阶段质量项采用完成基线,不伪造。
 //!
 //! # 线程安全
 //! S9RouteLearner 内部使用 `Arc<Mutex<>>` 保护,`observe` 是同步操作。
@@ -100,6 +116,7 @@ impl S9SessionIntegration {
                             route_key,
                             cost_actual_micro,
                             ttft_ms,
+                            early_stop_reason,
                             ..
                         } = event
                         {
@@ -117,10 +134,13 @@ impl S9SessionIntegration {
                                 risk_level: 0.2,
                             };
 
-                            // 构造奖励信号
+                            // W5 修复(ADR-084): 奖励项全部由事件真实字段派生——
+                            // success = 正常完成(早停/异常 → 失败,质量归零只留惩罚);
+                            // quality = 完成基线 1.0(事件不承载语义质量分,诚实边界);
+                            // 成本/延迟 = 事件实测计量归一化
                             let reward = S9Reward {
-                                success: true,
-                                quality: 0.8,
+                                success: early_stop_reason.is_none(),
+                                quality: 1.0,
                                 normalized_cost: (cost_actual_micro as f32) / (max_cost as f32),
                                 normalized_latency: (ttft_ms as f32) / (max_ttft as f32),
                             };
@@ -338,5 +358,44 @@ mod tests {
             guard.total_steps()
         };
         assert_eq!(steps, 1, "zero cost must not panic");
+    }
+
+    #[tokio::test]
+    async fn test_early_stop_session_observed_as_failure() {
+        // W5 修复(ADR-084): 早停会话 success=false(原实现误记成功)。
+        // 可观测验证: 早停事件仍驱动一次 observe(步数递增),且奖励通道
+        // 走失败路径(success=false → 质量归零只留成本/延迟惩罚)。
+        let arms = sample_arms();
+        let learner = Arc::new(Mutex::new(S9RouteLearner::new(&arms, 1.0).unwrap()));
+        let bus = EventBus::new();
+
+        let integration = S9SessionIntegration::new(learner.clone(), bus.clone(), 100_000, 5000);
+        integration.start();
+
+        let event = NexusEvent::StreamSessionCompleted {
+            metadata: EventMetadata::new("test"),
+            intent_id: "test-early-stop".into(),
+            route_key: "zhipu/glm-5.2".into(),
+            input_tokens: 100,
+            output_tokens: 5,
+            cache_hit_tokens: 0,
+            cost_actual_micro: 80_000, // 高成本
+            ttft_ms: 4_000,
+            semantic_cache_hit: false,
+            trimmed_before_tokens: None,
+            trimmed_after_tokens: None,
+            compressed_ratio: None,
+            early_stop_reason: Some("budget_exhausted".into()), // 早停 → 失败
+            coalesced: false,
+        };
+        bus.publish(event).await.unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        let steps = {
+            let guard = learner.lock().unwrap();
+            guard.total_steps()
+        };
+        assert_eq!(steps, 1, "早停会话仍被观察(失败奖励: 质量归零只留惩罚)");
     }
 }

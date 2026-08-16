@@ -137,7 +137,8 @@ pub struct RouterStatsPayload {
 /// WHY 定义在 event-bus:chimera-tui(L10)需要展示 CLV 摘要,
 /// 但不能携带完整 512 维向量(性能负担),通过此摘要结构传递
 /// 8 分块均值 + L2 范数 + Top-8 维度索引,足以可视化向量分布。
-/// ClvSummary::from_clv 计算方法将在 Task 2 中实现(event-bus 已依赖 nexus-core)。
+/// `from_clv_slice` 接受 f32 切片(调用方传 `clv.as_slice()`),
+/// 保持 event-bus 对 nexus-core 零依赖(P1-2 解耦,L1 Core 深度优化)。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClvSummary {
     /// 8 分块均值(每块 64 维,512/8=64)
@@ -151,46 +152,49 @@ pub struct ClvSummary {
 }
 
 impl ClvSummary {
-    /// 从 CLV 512 维向量计算摘要
+    /// 从 CLV 向量切片计算摘要
     ///
     /// 计算:
-    /// 1. **8 分块均值**: 将 512 维分为 8 块(每块 64 维),计算每块算术均值
+    /// 1. **8 分块均值**: 将向量分为 8 块(512 维时每块 64 维),计算每块算术均值
     /// 2. **L2 范数**: sqrt(sum(v_i^2))
     /// 3. **Top-8 维度**: 按 |v_i| 降序选取前 8 个(维度索引, 值)
     ///
-    /// WHY 在 event-bus 实现: ClvSummary 定义在 event-bus(事件载荷),
-    /// event-bus 已依赖 nexus-core,可直接访问 CLV::as_slice()。
-    /// 避免在 nexus-core 定义 ClvSummary 造成类型重复。
+    /// WHY 切片签名(P1-2 解耦): 原签名 `from_clv(&nexus_core::clv::CLV)` 是
+    /// event-bus 对 nexus-core 唯一生产依赖边(Cargo.toml 注释已预设解除条件)。
+    /// 改签为 `&[f32]` 后 event-bus 零 nexus-core 依赖,调用方传
+    /// `clv.as_slice()` 即可(生产调用方为 0,直接改签无兼容负担)。
     ///
     /// # 算法选择
-    /// - 分块均值: O(n) 遍历,每块 64 维累加后除以 64
+    /// - 分块均值: O(n) 遍历,每块累加后除以块长
     /// - L2 范数: O(n) 遍历,累加 v_i^2 后开方
     /// - Top-8: 使用 `select_nth_unstable_by` O(n) 算法(架构红线要求,
     ///   禁止 sort_by O(n log n) 做 Top-K);Top-k 内部排序(k ≤ 8,成本可忽略)
     ///
-    /// # 零向量边界
-    /// CLV::zero() 返回 l2_norm = 0.0 + 全 0 block_means + 空 top_dims。
-    /// 当 l2_norm == 0 时跳过 Top-8 计算(无显著维度)。
+    /// # 边界处理
+    /// - 空/过短切片(长度 < 8): block_size = 0,block_means 返回空 Vec(防除零/越界)
+    /// - 零向量: l2_norm = 0.0 + 全 0 block_means + 空 top_dims(无显著维度)
     ///
     /// # 参数
-    /// clv: CLV 引用(nexus-core 的 512 维向量)
+    /// slice: CLV 向量的 f32 切片(nexus_core::CLV::as_slice(),512 维为标准形态)
     ///
     /// # 返回
     /// ClvSummary 实例
-    pub fn from_clv(clv: &nexus_core::clv::CLV) -> Self {
-        let slice = clv.as_slice();
-        let dim = nexus_core::clv::CLV::DIMENSION; // 512
-
-        // 1. 计算 8 分块均值(每块 64 维)
-        let block_size = dim / 8; // 64
-        let block_means: Vec<f32> = (0..8)
-            .map(|i| {
-                let start = i * block_size;
-                let end = start + block_size;
-                let sum: f32 = slice[start..end].iter().sum();
-                sum / block_size as f32
-            })
-            .collect();
+    pub fn from_clv_slice(slice: &[f32]) -> Self {
+        // 1. 计算 8 分块均值(512 维时每块 64 维)
+        // 边界:长度 < 8 时 block_size = 0,跳过分块(防 slice 越界与除零)
+        let block_size = slice.len() / 8;
+        let block_means: Vec<f32> = if block_size == 0 {
+            Vec::new()
+        } else {
+            (0..8)
+                .map(|i| {
+                    let start = i * block_size;
+                    let end = start + block_size;
+                    let sum: f32 = slice[start..end].iter().sum();
+                    sum / block_size as f32
+                })
+                .collect()
+        };
 
         // 2. 计算 L2 范数 = sqrt(sum(v_i^2))
         let sum_sq: f32 = slice.iter().map(|&v| v * v).sum();
@@ -296,6 +300,21 @@ pub enum ChatStatus {
     /// 天然为"空闲"(尚未提交任何查询)。
     #[default]
     Idle,
+}
+
+/// TUI ↔ 编排器协议握手兼容级别(Concord W10 T10.1,ADR-082)
+///
+/// WHY 独立定义在 event-bus:`TuiHelloAck` 携带本枚举跨进程/跨层传递,
+/// TUI 与 chimera-cli 编排器双方均需消费。防 Codex #37536 式版本偏移
+/// 静默故障:不兼容时显式降级/拒绝,而非静默缺失功能。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompatLevel {
+    /// 完全兼容:M4 通道全开
+    Full,
+    /// 降级兼容:携带降级项列表(banner 展示,orchestrated 命令部分禁用)
+    Degraded(Vec<String>),
+    /// 拒绝:版本不可调和,banner 警告 + orchestrated 命令只读化
+    Refused,
 }
 
 // ============================================================

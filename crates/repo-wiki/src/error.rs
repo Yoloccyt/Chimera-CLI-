@@ -16,6 +16,19 @@ pub enum WikiError {
     #[error("vector index error: {0}")]
     VectorIndexError(String),
 
+    /// 查询嵌入维度不匹配(P1-2 hybrid_query dense 通道)
+    ///
+    /// WHY:query_embedding 维度必须与 `WikiConfig.vector_dim` 一致,
+    /// 否则 HNSW 索引检索将产生未定义行为。调用方传错维度是编程错误,
+    /// 显式报错优于静默降级 sparse-only。
+    #[error("embedding dimension mismatch: expected {expected}, got {actual}")]
+    EmbeddingDimensionMismatch {
+        /// 期望维度(= WikiConfig.vector_dim)
+        expected: usize,
+        /// 实际传入的查询向量维度
+        actual: usize,
+    },
+
     /// 条目不存在 — 按 entry_id 查找时未找到
     #[error("entry not found: {0}")]
     EntryNotFound(String),

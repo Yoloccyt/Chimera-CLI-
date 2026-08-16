@@ -3,8 +3,9 @@
 //! # 背景(P9-T2 测试运行时间优化)
 //!
 //! nexus-contracts 严格遵循 ADR-033 "纯类型 + 零逻辑" 约束。本模块作为该
-//! 约束的唯一例外(test-only utility),不引入任何领域逻辑,仅提供
+//! 约束的**第一个明确例外**(test-only utility),不引入任何领域逻辑,仅提供
 //! `CHIMERA_TEST_TIMEOUT_SCALE` 环境变量的读取与缩放函数。
+//! 后续例外: `archive_monotonicity`(INV-8 判定函数) / `capability_token`(EWMA 灰度状态机)。
 //!
 //! # 协议
 //!
@@ -15,7 +16,8 @@
 //!
 //! # 用法
 //!
-//! ```rust,no_run  // 示意代码,本模块仅在测试上下文导出
+//! ```rust,no_run
+//! // 示意代码,本模块仅在测试上下文导出
 //! use std::time::Duration;
 //! use nexus_contracts::scaled_timeout;
 //! use nexus_contracts::test_scale::scale_timeout;

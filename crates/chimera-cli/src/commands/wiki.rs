@@ -1,21 +1,23 @@
 //! `chimera wiki <query>` — Wiki 语义检索,真实接入 L5 repo-wiki crate
 //!
-//! v2.9.0-omega Task 1.3:替换 NotImplemented 占位,真实调用 WikiStore::search_fulltext。
+//! v2.9.0-omega Task 1.3:替换 NotImplemented 占位,真实调用 WikiStore。
+//! P1-2 检索管道收敛:由 search_fulltext 升级为 hybrid_query(RRF 融合入口)。
 //!
 //! # 流程
 //! 1. 从配置读取 `repo_wiki.db_path`,展开 `~` 为 home 目录
 //! 2. 打开 WikiStore(SQLite 文件数据库,WAL 模式,自动建表)
-//! 3. 调用 `search_fulltext(query)` 执行 FTS5 trigram / LIKE 降级搜索
+//! 3. 调用 `hybrid_query(query, None, top_k)` 执行混合检索
+//!    (CLI 无编码器注入,dense 通道退化 sparse-only;条目嵌入接入 NMC 后
+//!    可在此处注入 TextPerceptor 启用语义召回)
 //! 4. 截取 Top-N 结果(默认 10,`--limit` 控制)
 //! 5. 输出:标题 + 相似度分数 + 摘要(人类可读)或 JSON 数组
 //!
 //! # 设计决策(WHY)
-//! - **直接调用 search_fulltext 而非 hybrid_search**:hybrid_search 需要 HNSW 向量索引
-//!   (dense 检索),当前 WikiStore 的 embedding 为占位哈希向量,语义召回质量低。
-//!   FTS5 trigram 对 CJK 子串匹配更可靠(spec SubTask 1.3.1 描述为"FTS5 + HNSW 混合",
-//!   但实际 v2.9.0-omega 阶段 HNSW 未实装,降级为纯 FTS5 是工程务实)。
-//! - **相似度分数用 1/(rank+1) 近似**:FTS5 的 `rank` 列为 BM25 分数(越小越相关),
-//!   转换为 [0.0, 1.0] 区间的相似度分数便于用户理解(rank=0 → 1.0,rank 越大分数越低)。
+//! - **hybrid_query 而非 search_fulltext**:P1-2 检索能力收敛到 L5 单一融合入口,
+//!   CLI 只需传 query 文本;dense 通道依赖条目 embedding 与调用方编码器,
+//!   CLI 进程未装配 NMC 模型时自然退化为 sparse-only(行为等价于旧版 FTS5)。
+//! - **相似度分数用 RRF 融合分数**:hybrid_query 返回 rrf_score(越高越相关),
+//!   直接展示;sparse-only 模式下即由 sparse 排名决定。
 //! - **摘要截取前 100 字符**:Wiki 条目内容可能很长,表格模式只显示摘要,
 //!   完整内容用 `quest show` 或 TUI 查看。
 //!
@@ -45,23 +47,27 @@ pub async fn execute(query: &str, config: &ChimeraConfig, json: bool, limit: usi
 
     // 2. 打开 WikiStore(自动创建文件与 schema,启用 WAL)
     //    WHY spawn_blocking 不需要:WikiStore::open 是同步但快速(仅打开连接 + 建表),
-    //    search_fulltext 内部已用 with_read_conn + spawn_blocking 包装异步执行。
+    //    hybrid_query 内部已用 with_read_conn + spawn_blocking 包装异步执行。
     let store = WikiStore::open(&db_path)
         .map_err(|e| ChimeraCliError::EngineError(format!("WikiStore 打开失败: {e}")))?;
 
-    // 3. 执行全文检索(FTS5 trigram / LIKE 降级)
-    let entries = store
-        .search_fulltext(query.to_string())
+    // 3. 执行混合检索(P1-2:CLI 无编码器,sparse-only 退化模式)
+    let results = store
+        .hybrid_query(query, None, limit)
         .await
         .map_err(|e| ChimeraCliError::EngineError(format!("Wiki 检索失败: {e}")))?;
 
-    // 4. 截取 Top-N(search_fulltext 内部已按相关性排序,LIMIT 100)
-    //    WHY select_nth_unstable 而非 sort_by:spec §4.4 工程约定,Top-K 用 O(n) 算法
-    let top_entries: Vec<_> = if entries.len() > limit {
-        entries.into_iter().take(limit).collect()
-    } else {
-        entries
-    };
+    // 4. 按融合排序回取条目(结果数 ≤ limit)
+    let mut top_entries: Vec<_> = Vec::with_capacity(results.len());
+    for r in results {
+        if let Some(entry) = store
+            .get(r.doc_id)
+            .await
+            .map_err(|e| ChimeraCliError::EngineError(format!("Wiki 条目读取失败: {e}")))?
+        {
+            top_entries.push(entry);
+        }
+    }
 
     // 5. 输出
     if json {
@@ -77,8 +83,8 @@ pub async fn execute(query: &str, config: &ChimeraConfig, json: bool, limit: usi
             .iter()
             .enumerate()
             .map(|(i, entry)| {
-                // FTS5 rank 从 0 开始(0 = 最相关),转换为 [0.0, 1.0] 相似度分数
-                // rank 越大相关性越低,1/(rank+1) 单调递减映射到 (0, 1]
+                // 相似度用排名近似:RRF 分数已编码在排序中,1/(rank+1)
+                // 单调递减映射到 (0, 1] 便于用户理解
                 let similarity = 1.0 / (i as f32 + 1.0);
                 let summary = truncate_summary(&entry.content, SUMMARY_MAX_CHARS);
                 vec![

@@ -51,6 +51,8 @@ pub mod config;
 /// P4-W13.2.2: 密度学习器持有器 — S1 接缝策略异步下发 + 本地 fallback（C4 合规）
 pub mod density_learner;
 pub mod error;
+/// Phase 2 §7.4: HiLS-Attention 分层稀疏注意力（chunk-mass surrogate + 两级 softmax，ADR-049 内嵌）
+pub mod hils;
 /// PROBE P1.2: 查询探针打分（ProbeWeights / score_with_probe / mix_probe / probe_health）
 pub mod probe;
 pub mod recall;
@@ -65,6 +67,8 @@ pub use affinity::{FoldResult, WindowAffinity};
 pub use compressor::ContextCompressor;
 pub use density_learner::DensityLearnerHolder;
 pub use error::HcwError;
+// Phase 2 §7.4: HiLS-Attention 分层稀疏注意力（HCW 集成接口）
+pub use hils::{AttentionOutput, Chunk, HiLSAttention, HiLSWindowSelector};
 // PROBE P1.2/P1.6: 查询探针打分 + 增量重打分缓存公开 API
 pub use probe::{mix_probe, probe_health, score_with_probe, ProbeHealth, ProbeWeights, ScoreCache};
 pub use selector::WindowSelector;
@@ -81,6 +85,8 @@ pub mod prelude {
     // P4-W13.2.2: 密度学习器持有器（S1 接缝异步策略下发 + 本地 fallback）
     pub use crate::density_learner::DensityLearnerHolder;
     pub use crate::error::HcwError;
+    // Phase 2 §7.4: HiLS-Attention 分层稀疏注意力（与顶层导出同集）
+    pub use crate::hils::{AttentionOutput, Chunk, HiLSAttention, HiLSWindowSelector};
     pub use crate::recall::coarse::{CoarseRecall, CoarseRecallBuilder};
     pub use crate::recall::fine::{FineRecall, FineRecallInput};
     pub use crate::recall::rerank::{

@@ -20,15 +20,17 @@
 //! 所有 async fn 满足 `Send + 'static` 约束,可被 tokio::spawn。
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
-use nexus_contracts::{MemoryStrategy, MemoryStrategyPolicy};
+use event_bus::{EventBus, EventMetadata, ExperienceCardBus, NexusEvent};
+use nexus_contracts::{ExperienceCard, MemoryStrategy, MemoryStrategyPolicy};
 use nexus_core::CLV;
 use tracing::{debug, info, warn};
 
 use crate::config::MlcConfig;
 use crate::error::MlcError;
+use crate::experience_card_system::ExperienceCardSystem;
 use crate::l0_working::WorkingMemory;
 use crate::l1_episodic::EpisodicMemory;
 use crate::l2_semantic::SemanticMemory;
@@ -97,6 +99,13 @@ pub struct MlcEngine {
     /// 调用方在每次 recall 后,通过 `engine.mem_con().on_recall(is_ghost)`
     /// 记录召回结果,MemCon 控制器自动检测幽灵率并在超过阈值时调整策略。
     mem_con_controller: crate::mem_con::MemConController,
+
+    /// 经验卡片系统 — L2 消费 L1 ExperienceCardBus 卡片流（Phase 2 D-7 接线）
+    ///
+    /// WHY Arc<Mutex>: 跨 `with_card_bus` 后台消费任务与主线程共享；
+    /// `add_card` 为同步短临界区，不跨 await（红线 §4.4-1）。
+    /// 初始为空系统，`with_card_bus` 注入 L1 总线后启动后台消费。
+    card_system: Arc<Mutex<ExperienceCardSystem>>,
 }
 
 impl MlcEngine {
@@ -138,12 +147,56 @@ impl MlcEngine {
             memory_strategy_holder: MemoryStrategyLearnerHolder::default(),
             // P2-8: MemCon 自适应控制器(默认启用,连接 EventBus 用于事件发布)
             mem_con_controller,
+            // Phase 2 D-7: 经验卡片系统（初始空，with_card_bus 注入 L1 总线后消费）
+            card_system: Arc::new(Mutex::new(ExperienceCardSystem::new(1.414, 0.1))),
         })
     }
 
     /// 创建 MLC 引擎,使用默认配置与指定 EventBus
     pub fn with_default_config(event_bus: EventBus) -> Result<Self, MlcError> {
         Self::new(MlcConfig::default(), event_bus)
+    }
+
+    /// 注入 L1 经验卡片总线 — 启动后台消费任务填充经验卡片系统（Phase 2 D-7）
+    ///
+    /// 订阅 `ExperienceCardBus` 的中分卡片广播流，后台任务持续将卡片
+    /// `add_card` 到 L2 `card_system`。遵循红线：先 `subscribe` 再 `spawn`。
+    ///
+    /// # 注意
+    /// 本方法内部 `tokio::spawn`，需在 tokio runtime 上下文调用（MlcEngine
+    /// 的 async 生态内）。消费任务在 broadcast receiver 关闭时自动退出。
+    pub fn with_card_bus(self, bus: &ExperienceCardBus) -> Self {
+        let mut rx = bus.subscribe();
+        let card_system = Arc::clone(&self.card_system);
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(card) => {
+                        // 同步短临界区：锁内仅 add_card，不跨 await
+                        let mut system = card_system.lock().unwrap_or_else(|e| e.into_inner());
+                        system.add_card(card);
+                    }
+                    // Lagged（慢消费者丢弃）继续；Closed 退出
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("经验卡片消费 Lagged，丢弃 {n} 张卡片");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        self
+    }
+
+    /// 经验卡片系统只读访问（加锁克隆统计快照，避免长期持锁）
+    pub fn card_system_snapshot(&self) -> (usize, u64) {
+        let system = self.card_system.lock().unwrap_or_else(|e| e.into_inner());
+        (system.card_count(), system.global_board().total_nodes)
+    }
+
+    /// 手动注入单张经验卡片（测试/非 runtime 场景用，与 with_card_bus 互补）
+    pub fn ingest_experience_card(&self, card: ExperienceCard) {
+        let mut system = self.card_system.lock().unwrap_or_else(|e| e.into_inner());
+        system.add_card(card);
     }
 
     /// 创建用于测试的 MLC 引擎(L3 使用内存数据库)
@@ -170,6 +223,8 @@ impl MlcEngine {
             memory_strategy_holder: MemoryStrategyLearnerHolder::default(),
             // P2-8: MemCon 自适应控制器(默认启用,连接 EventBus 用于事件发布)
             mem_con_controller,
+            // Phase 2 D-7: 经验卡片系统（初始空，with_card_bus 注入 L1 总线后消费）
+            card_system: Arc::new(Mutex::new(ExperienceCardSystem::new(1.414, 0.1))),
         })
     }
 
@@ -198,6 +253,8 @@ impl MlcEngine {
             memory_strategy_holder: MemoryStrategyLearnerHolder::default(),
             // P2-8: MemCon 自适应控制器(默认启用,连接 EventBus 用于事件发布)
             mem_con_controller,
+            // Phase 2 D-7: 经验卡片系统（初始空，with_card_bus 注入 L1 总线后消费）
+            card_system: Arc::new(Mutex::new(ExperienceCardSystem::new(1.414, 0.1))),
         })
     }
 
@@ -410,6 +467,14 @@ impl MlcEngine {
     }
 
     /// 按 CLV 召回 Top-K 最相似条目(委托给 L2)
+    ///
+    /// # 召回 API 选择指引(L2-P2-2)
+    ///
+    /// | 方法 | 语义 | 适用场景 |
+    /// |---|---|---|
+    /// | `recall_by_clv`(本方法) | 显式 top_k,无策略介入 | 调用方完全控制召回数(固定 k 场景/兼容旧路径) |
+    /// | `recall_by_clv_with_strategy` | 显式传入策略,从 strategy 推导 k/阈值 | 单次调用需特定策略覆盖(不修改全局状态) |
+    /// | `recall_by_clv_with_current_policy` | 自动感知 learner 当前策略 | **默认推荐**:与 S2 接缝下发/MemCon 自适应联动 |
     pub async fn recall_by_clv(
         &self,
         query: &CLV,
@@ -588,7 +653,12 @@ impl MlcEngine {
     /// # }
     /// ```
     pub fn update_memory_strategy_policy(&self, policy: MemoryStrategyPolicy) {
+        // L2-P1-1 事件驱动化:策略变更前取旧策略,变更后发布 MemConStrategyAdjusted
+        // 事件(复用既有事件流,reason="s2_policy_injected" 区分 S2 下发与
+        // MemCon 自适应来源),供 L10 TUI 等订阅方从 latest_events 派生展示。
+        let from = self.memory_strategy_holder.strategy();
         self.memory_strategy_holder.update_policy(policy);
+        self.publish_strategy_adjusted(from, policy.strategy(), "s2_policy_injected");
     }
 
     /// 强制记忆策略回退到 fallback(`Static(StandardTopK)`)— S2 熔断入口(P4-W14.1)
@@ -612,7 +682,43 @@ impl MlcEngine {
     /// # }
     /// ```
     pub fn fallback_memory_strategy_to_static(&self) {
+        // L2-P1-1:熔断回退同样发布事件(reason="s2_circuit_breaker")
+        let from = self.memory_strategy_holder.strategy();
         self.memory_strategy_holder.fallback_to_static();
+        self.publish_strategy_adjusted(
+            from,
+            self.memory_strategy_holder.strategy(),
+            "s2_circuit_breaker",
+        );
+    }
+
+    /// 发布策略调整事件(内部辅助,L2-P1-1 事件驱动化)
+    ///
+    /// 复用既有 `MemConStrategyAdjusted` 事件载荷(from_strategy/to_strategy
+    /// 为 Debug 串,与 mem_con/controller.rs 发布格式一致);reason 区分来源:
+    /// - "s2_policy_injected":S2 接缝 omega-learner 策略下发
+    /// - "s2_circuit_breaker":S2 学习熔断回退
+    /// - "ghost_memory_detected"/"stable_recovery"/"circuit_breaker":MemCon 自适应
+    ///
+    /// 发布失败仅 warn(同步方法正确发布模式 publish_blocking,§4.4 #8),
+    /// 不影响策略状态本身(变更已完成)。
+    fn publish_strategy_adjusted(&self, from: MemoryStrategy, to: MemoryStrategy, reason: &str) {
+        let event = NexusEvent::MemConStrategyAdjusted {
+            metadata: EventMetadata::new("mlc-engine:s2"),
+            from_strategy: format!("{from:?}"),
+            to_strategy: format!("{to:?}"),
+            reason: reason.to_string(),
+            ghost_rate: None,
+        };
+        if let Err(e) = self.event_bus.publish_blocking(event) {
+            warn!(
+                from = ?from,
+                to = ?to,
+                reason,
+                error = %e,
+                "S2 策略调整事件发布失败(策略变更本身已完成)"
+            );
+        }
     }
 
     /// 返回当前激活的记忆策略(P4-W14.1)
@@ -892,716 +998,5 @@ impl MlcEngine {
             evictions, hits, misses, "MemoryMetricsReported 事件已发布"
         );
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::PatternSignature;
-
-    fn make_entry(id: &str, tier: MemoryTier) -> MemoryEntry {
-        MemoryEntry::new(id, format!("content-{id}"), tier)
-    }
-
-    fn make_entry_with_clv(id: &str, tier: MemoryTier) -> MemoryEntry {
-        let clv = CLV::zero();
-        MemoryEntry::new(id, format!("content-{id}"), tier).with_clv(clv)
-    }
-
-    #[tokio::test]
-    async fn test_store_and_recall_l0() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let entry = make_entry("m-1", MemoryTier::L0Working);
-        engine.store(entry).await.unwrap();
-
-        let recalled = engine.recall("m-1").await.unwrap();
-        assert!(recalled.is_some());
-        assert_eq!(recalled.unwrap().id.as_str(), "m-1");
-    }
-
-    #[tokio::test]
-    async fn test_store_and_recall_l1() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let entry = make_entry("m-1", MemoryTier::L1Episodic);
-        engine.store(entry).await.unwrap();
-
-        let recalled = engine.recall("m-1").await.unwrap();
-        assert!(recalled.is_some());
-        assert_eq!(recalled.unwrap().id.as_str(), "m-1");
-    }
-
-    #[tokio::test]
-    async fn test_store_and_recall_l2() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let entry = make_entry_with_clv("m-1", MemoryTier::L2Semantic);
-        engine.store(entry).await.unwrap();
-
-        let recalled = engine.recall("m-1").await.unwrap();
-        assert!(recalled.is_some());
-        assert_eq!(recalled.unwrap().id.as_str(), "m-1");
-    }
-
-    #[tokio::test]
-    async fn test_store_l2_without_clv_returns_error() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let entry = make_entry("m-1", MemoryTier::L2Semantic);
-        let result = engine.store(entry).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_store_l3_memory_entry_returns_error() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let entry = make_entry("m-1", MemoryTier::L3Procedural);
-        let result = engine.store(entry).await;
-        assert!(matches!(result, Err(MlcError::InvalidConfig(_))));
-    }
-
-    #[tokio::test]
-    async fn test_recall_nonexistent_returns_none() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let recalled = engine.recall("nonexistent").await.unwrap();
-        assert!(recalled.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_recall_cross_layer() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        // 在不同层存储不同条目
-        engine
-            .store(make_entry("m-l0", MemoryTier::L0Working))
-            .await
-            .unwrap();
-        engine
-            .store(make_entry("m-l1", MemoryTier::L1Episodic))
-            .await
-            .unwrap();
-        engine
-            .store(make_entry_with_clv("m-l2", MemoryTier::L2Semantic))
-            .await
-            .unwrap();
-
-        // 跨层查找应找到所有
-        assert!(engine.recall("m-l0").await.unwrap().is_some());
-        assert!(engine.recall("m-l1").await.unwrap().is_some());
-        assert!(engine.recall("m-l2").await.unwrap().is_some());
-    }
-
-    #[tokio::test]
-    async fn test_recall_by_clv() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let mut v = vec![0.0_f32; CLV::DIMENSION];
-        v[0] = 1.0;
-        let query = CLV::from_vec(v).unwrap();
-
-        engine
-            .store(make_entry_with_clv("m-1", MemoryTier::L2Semantic))
-            .await
-            .unwrap();
-
-        let results = engine.recall_by_clv(&query, 10).await.unwrap();
-        assert!(!results.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_promote_l1_to_l0() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        // 存储到 L1
-        engine
-            .store(make_entry("m-1", MemoryTier::L1Episodic))
-            .await
-            .unwrap();
-        assert!(engine.l1().len().unwrap() == 1);
-        assert!(engine.l0().is_empty());
-
-        // 提升到 L0
-        engine
-            .promote("m-1", MemoryTier::L1Episodic, MemoryTier::L0Working)
-            .await
-            .unwrap();
-
-        // L1 应为空,L0 应有 1 个
-        assert_eq!(engine.l1().len().unwrap(), 0);
-        assert_eq!(engine.l0().len(), 1);
-
-        // 验证条目存在
-        let recalled = engine.recall("m-1").await.unwrap().unwrap();
-        assert_eq!(recalled.tier, MemoryTier::L0Working);
-    }
-
-    #[tokio::test]
-    async fn test_demote_l0_to_l1() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        // 存储到 L0
-        engine
-            .store(make_entry("m-1", MemoryTier::L0Working))
-            .await
-            .unwrap();
-
-        // 降级到 L1
-        engine
-            .demote("m-1", MemoryTier::L0Working, MemoryTier::L1Episodic)
-            .await
-            .unwrap();
-
-        assert_eq!(engine.l0().len(), 0);
-        assert_eq!(engine.l1().len().unwrap(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_promote_nonexistent_returns_error() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let result = engine
-            .promote("nonexistent", MemoryTier::L1Episodic, MemoryTier::L0Working)
-            .await;
-        assert!(matches!(result, Err(MlcError::EntryNotFound(_))));
-    }
-
-    #[tokio::test]
-    async fn test_store_procedural_and_match() {
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let sig = PatternSignature::new(vec!["tool_a".into()], "hash-1");
-        let entry = ProceduralEntry::new(sig.clone(), "output-1");
-        engine.store_procedural(entry).await.unwrap();
-
-        let matched = engine.match_procedural(&sig).await.unwrap();
-        assert!(matched.is_some());
-        assert_eq!(matched.unwrap().output, "output-1");
-    }
-
-    #[tokio::test]
-    async fn test_memory_metrics_reported_event() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let config = MlcConfig::default().with_metrics_interval(3);
-        let engine = MlcEngine::new_in_memory_with_config(config, bus).unwrap();
-
-        // 执行 3 次存储操作,应触发指标上报
-        engine
-            .store(make_entry("m-1", MemoryTier::L0Working))
-            .await
-            .unwrap();
-        engine
-            .store(make_entry("m-2", MemoryTier::L0Working))
-            .await
-            .unwrap();
-        engine
-            .store(make_entry("m-3", MemoryTier::L0Working))
-            .await
-            .unwrap();
-
-        // 应收到 MemoryMetricsReported 事件
-        let event = rx.recv().await.unwrap();
-        match event {
-            NexusEvent::MemoryMetricsReported {
-                hit_rate,
-                evictions,
-                ..
-            } => {
-                // hit_rate 可能为 0.0(仅 store 未 recall)
-                assert!((0.0..=1.0).contains(&hit_rate));
-                assert_eq!(evictions, 0);
-            }
-            other => panic!("expected MemoryMetricsReported, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_memory_tiered_event_on_promote() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        engine
-            .store(make_entry("m-1", MemoryTier::L1Episodic))
-            .await
-            .unwrap();
-        engine
-            .promote("m-1", MemoryTier::L1Episodic, MemoryTier::L0Working)
-            .await
-            .unwrap();
-
-        // 应收到 MemoryTiered 事件
-        let event = rx.recv().await.unwrap();
-        match event {
-            NexusEvent::MemoryTiered {
-                tier,
-                item_count,
-                memory_id,
-                ..
-            } => {
-                assert_eq!(tier, "L0");
-                assert_eq!(item_count, 1);
-                // SubTask 17.4:单条迁移应填充 memory_id
-                assert_eq!(
-                    memory_id,
-                    Some("m-1".to_string()),
-                    "单条迁移的 memory_id 应为被迁移条目的 ID"
-                );
-            }
-            other => panic!("expected MemoryTiered, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_report_metrics_manual() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        // 手动上报指标
-        engine.report_metrics().await.unwrap();
-
-        let event = rx.recv().await.unwrap();
-        assert!(matches!(event, NexusEvent::MemoryMetricsReported { .. }));
-    }
-
-    #[tokio::test]
-    async fn test_hit_rate_calculation() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let config = MlcConfig::default().with_metrics_interval(5);
-        let engine = MlcEngine::new_in_memory_with_config(config, bus).unwrap();
-
-        // 存储 1 个条目
-        engine
-            .store(make_entry("m-1", MemoryTier::L0Working))
-            .await
-            .unwrap();
-
-        // 命中 1 次
-        engine.recall("m-1").await.unwrap();
-        // 未命中 1 次
-        engine.recall("nonexistent").await.unwrap();
-
-        // 继续操作直到触发指标上报(共 5 次 store,达到阈值 5)
-        for i in 0..4 {
-            engine
-                .store(make_entry(&format!("m-{i}"), MemoryTier::L0Working))
-                .await
-                .unwrap();
-        }
-
-        // 应收到 MemoryMetricsReported 事件
-        let event = rx.recv().await.unwrap();
-        if let NexusEvent::MemoryMetricsReported { hit_rate, .. } = event {
-            // hit_rate = hits / (hits + misses)
-            // 至少有 1 次命中和 1 次未命中
-            assert!(hit_rate > 0.0 && hit_rate < 1.0);
-        }
-    }
-
-    // ============================================================
-    // P3-W11.1.2 D12 修复验收测试(spec.md:293-295 召回按 TransitionType 过滤)
-    // ============================================================
-
-    /// 测试辅助:创建带 TemporalMeta 的条目
-    fn make_entry_with_temporal(
-        id: &str,
-        tier: MemoryTier,
-        meta: nexus_contracts::TemporalMeta,
-    ) -> MemoryEntry {
-        MemoryEntry::new(id, format!("content-{id}"), tier).with_temporal_meta(meta)
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_recall_current_returns_current_entry() {
-        // P3-W11.1.2: recall_current 返回 Current 状态条目(含 None 向后兼容)
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        // Current 条目(默认 None temporal_meta,视为 Current)
-        engine
-            .store(make_entry("m-current", MemoryTier::L0Working))
-            .await
-            .unwrap();
-
-        // recall_current 应返回条目
-        let result = engine.recall_current("m-current").await.unwrap();
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().id.as_str(), "m-current");
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_recall_current_filters_historical() {
-        // P3-W11.1.2: recall_current 对 Historical 条目返回 None
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let historical_meta = nexus_contracts::TemporalMeta {
-            valid_from: 1000,
-            valid_until: Some(2000),
-            transition_type: nexus_contracts::TransitionType::Historical,
-            confidence: 0.5,
-        };
-        engine
-            .store(make_entry_with_temporal(
-                "m-historical",
-                MemoryTier::L0Working,
-                historical_meta,
-            ))
-            .await
-            .unwrap();
-
-        // recall_current 对 Historical 返回 None
-        let result = engine.recall_current("m-historical").await.unwrap();
-        assert!(result.is_none());
-
-        // 但 recall(向后兼容)仍返回条目
-        let result = engine.recall("m-historical").await.unwrap();
-        assert!(result.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_recall_current_filters_transition() {
-        // P3-W11.1.2: recall_current 对 Transition 条目返回 None
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let transition_meta = nexus_contracts::TemporalMeta {
-            valid_from: 1000,
-            valid_until: Some(2000),
-            transition_type: nexus_contracts::TransitionType::Transition,
-            confidence: 0.3,
-        };
-        engine
-            .store(make_entry_with_temporal(
-                "m-transition",
-                MemoryTier::L0Working,
-                transition_meta,
-            ))
-            .await
-            .unwrap();
-
-        // recall_current 对 Transition 返回 None
-        let result = engine.recall_current("m-transition").await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_recall_historical_returns_historical_entry() {
-        // P3-W11.1.2: recall_historical 返回 Historical 状态条目
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let historical_meta = nexus_contracts::TemporalMeta {
-            valid_from: 1000,
-            valid_until: Some(2000),
-            transition_type: nexus_contracts::TransitionType::Historical,
-            confidence: 0.5,
-        };
-        engine
-            .store(make_entry_with_temporal(
-                "m-historical",
-                MemoryTier::L1Episodic,
-                historical_meta,
-            ))
-            .await
-            .unwrap();
-
-        // recall_historical 应返回条目
-        let result = engine.recall_historical("m-historical").await.unwrap();
-        assert!(result.is_some());
-        let entry = result.unwrap();
-        assert_eq!(entry.id.as_str(), "m-historical");
-        assert!(entry.is_historical());
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_recall_historical_filters_current_and_transition() {
-        // P3-W11.1.2: recall_historical 对 Current/Transition 返回 None
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        // Current 条目
-        engine
-            .store(make_entry("m-current", MemoryTier::L0Working))
-            .await
-            .unwrap();
-
-        // Transition 条目
-        let transition_meta = nexus_contracts::TemporalMeta {
-            valid_from: 1000,
-            valid_until: Some(2000),
-            transition_type: nexus_contracts::TransitionType::Transition,
-            confidence: 0.3,
-        };
-        engine
-            .store(make_entry_with_temporal(
-                "m-transition",
-                MemoryTier::L0Working,
-                transition_meta,
-            ))
-            .await
-            .unwrap();
-
-        // recall_historical 对 Current/Transition 返回 None
-        assert!(engine
-            .recall_historical("m-current")
-            .await
-            .unwrap()
-            .is_none());
-        assert!(engine
-            .recall_historical("m-transition")
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_recall_transition_returns_entry_with_evidence() {
-        // P3-W11.1.2: recall_transition 返回 Transition 条目 + 时间证据包(TemporalMeta)
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        let transition_meta = nexus_contracts::TemporalMeta {
-            valid_from: 1000,
-            valid_until: Some(2000),
-            transition_type: nexus_contracts::TransitionType::Transition,
-            confidence: 0.4, // 降置信度
-        };
-        engine
-            .store(make_entry_with_temporal(
-                "m-transition",
-                MemoryTier::L0Working,
-                transition_meta,
-            ))
-            .await
-            .unwrap();
-
-        // recall_transition 应返回 (entry, TemporalMeta)
-        let result = engine.recall_transition("m-transition").await.unwrap();
-        assert!(result.is_some());
-        let (entry, meta) = result.unwrap();
-        assert_eq!(entry.id.as_str(), "m-transition");
-        assert!(entry.is_transition());
-
-        // 时间证据包字段验证
-        assert_eq!(meta.valid_from, 1000);
-        assert_eq!(meta.valid_until, Some(2000));
-        assert_eq!(
-            meta.transition_type,
-            nexus_contracts::TransitionType::Transition
-        );
-        // 降置信度
-        assert!((meta.confidence - 0.4).abs() < 1e-6);
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_recall_transition_filters_current_and_historical() {
-        // P3-W11.1.2: recall_transition 对 Current/Historical 返回 None
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        // Current 条目
-        engine
-            .store(make_entry("m-current", MemoryTier::L0Working))
-            .await
-            .unwrap();
-
-        // Historical 条目
-        let historical_meta = nexus_contracts::TemporalMeta {
-            valid_from: 1000,
-            valid_until: Some(2000),
-            transition_type: nexus_contracts::TransitionType::Historical,
-            confidence: 0.5,
-        };
-        engine
-            .store(make_entry_with_temporal(
-                "m-historical",
-                MemoryTier::L0Working,
-                historical_meta,
-            ))
-            .await
-            .unwrap();
-
-        // recall_transition 对 Current/Historical 返回 None
-        assert!(engine
-            .recall_transition("m-current")
-            .await
-            .unwrap()
-            .is_none());
-        assert!(engine
-            .recall_transition("m-historical")
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_three_recall_methods_mutual_exclusion() {
-        // P3-W11.1.2 验收:三个召回方法对同一 ID 互斥
-        // spec.md:293-295 "默认只取 Current;Historical 需显式历史查询;Transition 附时间证据包"
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        // 存储三种状态的条目
-        let current_meta = nexus_contracts::TemporalMeta::new(1000, 1.0);
-        let historical_meta = nexus_contracts::TemporalMeta {
-            valid_from: 1000,
-            valid_until: Some(2000),
-            transition_type: nexus_contracts::TransitionType::Historical,
-            confidence: 0.5,
-        };
-        let transition_meta = nexus_contracts::TemporalMeta {
-            valid_from: 1000,
-            valid_until: Some(2000),
-            transition_type: nexus_contracts::TransitionType::Transition,
-            confidence: 0.3,
-        };
-
-        engine
-            .store(make_entry_with_temporal(
-                "m-current",
-                MemoryTier::L0Working,
-                current_meta,
-            ))
-            .await
-            .unwrap();
-        engine
-            .store(make_entry_with_temporal(
-                "m-historical",
-                MemoryTier::L0Working,
-                historical_meta,
-            ))
-            .await
-            .unwrap();
-        engine
-            .store(make_entry_with_temporal(
-                "m-transition",
-                MemoryTier::L0Working,
-                transition_meta,
-            ))
-            .await
-            .unwrap();
-
-        // Current 条目:recall_current 命中,recall_historical/recall_transition 不命中
-        assert!(engine.recall_current("m-current").await.unwrap().is_some());
-        assert!(engine
-            .recall_historical("m-current")
-            .await
-            .unwrap()
-            .is_none());
-        assert!(engine
-            .recall_transition("m-current")
-            .await
-            .unwrap()
-            .is_none());
-
-        // Historical 条目:recall_historical 命中,recall_current/recall_transition 不命中
-        assert!(engine
-            .recall_current("m-historical")
-            .await
-            .unwrap()
-            .is_none());
-        assert!(engine
-            .recall_historical("m-historical")
-            .await
-            .unwrap()
-            .is_some());
-        assert!(engine
-            .recall_transition("m-historical")
-            .await
-            .unwrap()
-            .is_none());
-
-        // Transition 条目:recall_transition 命中,recall_current/recall_historical 不命中
-        assert!(engine
-            .recall_current("m-transition")
-            .await
-            .unwrap()
-            .is_none());
-        assert!(engine
-            .recall_historical("m-transition")
-            .await
-            .unwrap()
-            .is_none());
-        assert!(engine
-            .recall_transition("m-transition")
-            .await
-            .unwrap()
-            .is_some());
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_recall_preserves_backward_compat() {
-        // P3-W11.1.2: recall(向后兼容)仍返回所有状态条目
-        // 验证方案 A:recall 不改变行为,新增方法提供过滤
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        // Current 条目(None temporal_meta)
-        engine
-            .store(make_entry("m-current", MemoryTier::L0Working))
-            .await
-            .unwrap();
-
-        // Historical 条目
-        let historical_meta = nexus_contracts::TemporalMeta {
-            valid_from: 1000,
-            valid_until: Some(2000),
-            transition_type: nexus_contracts::TransitionType::Historical,
-            confidence: 0.5,
-        };
-        engine
-            .store(make_entry_with_temporal(
-                "m-historical",
-                MemoryTier::L0Working,
-                historical_meta,
-            ))
-            .await
-            .unwrap();
-
-        // recall(向后兼容)对两种状态都返回条目
-        assert!(engine.recall("m-current").await.unwrap().is_some());
-        assert!(engine.recall("m-historical").await.unwrap().is_some());
-    }
-
-    #[tokio::test]
-    async fn test_p3_w11_1_2_recall_nonexistent_returns_none() {
-        // P3-W11.1.2: 三个新方法对不存在 ID 返回 None
-        let bus = EventBus::new();
-        let engine = MlcEngine::new_in_memory(bus).unwrap();
-
-        assert!(engine
-            .recall_current("nonexistent")
-            .await
-            .unwrap()
-            .is_none());
-        assert!(engine
-            .recall_historical("nonexistent")
-            .await
-            .unwrap()
-            .is_none());
-        assert!(engine
-            .recall_transition("nonexistent")
-            .await
-            .unwrap()
-            .is_none());
     }
 }

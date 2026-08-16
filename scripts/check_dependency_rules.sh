@@ -61,10 +61,12 @@ layer_of() {
         scc-cache|lsct-tiering|cmt-tiering) echo 3 ;;
         seccore|qeep-protocol|decay-engine) echo 4 ;;
         repo-wiki|gsoe-evolution|auto-dpo) echo 5 ;;
-        osa-coordinator|kvbsr-router|faae-router|gea-activator|sesa-router|ssra-fusion|omega-learner) echo 6 ;;
-        pvl-layer|gqep-executor|mtpe-executor|csn-substitutor) echo 7 ;;
+        # Phase 6 W0 层图订正 (2026-08-16, ADR-084): gea-activator 移 L9,
+        # ssra-fusion 移 L7 — 与 crate 自述头及 AGENTS.md §2.1 对齐
+        osa-coordinator|kvbsr-router|faae-router|sesa-router|omega-learner) echo 6 ;;
+        pvl-layer|gqep-executor|mtpe-executor|csn-substitutor|ssra-fusion) echo 7 ;;
         parliament|acb-governor|decb-governor) echo 8 ;;
-        quest-engine|efficiency-monitor|chimera-mas) echo 9 ;;
+        quest-engine|efficiency-monitor|chimera-mas|gea-activator) echo 9 ;;
         chimera-cli|chimera-tui|chtc-bridge|mca-gateway) echo 10 ;;
         *) echo "" ;;
     esac

@@ -10,8 +10,8 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::EventBus;
 use gea_activator::{
-    compute_gate_value, resolve_conflicts, Candidate, ExpertId, ExpertProfile, GeaActivator,
-    GeaConfig, TaskProfile,
+    compute_gate_value, compute_gate_value_with_norms, resolve_conflicts, Candidate, ExpertId,
+    ExpertProfile, GeaActivator, GeaConfig, TaskProfile,
 };
 use std::collections::HashMap;
 
@@ -176,12 +176,127 @@ fn bench_resolve_conflicts(c: &mut Criterion) {
     });
 }
 
+/// 高密度冲突消解基准(专家 Agent 优化 2026-08-11:范数预计算 + 点积剪枝证伪)
+///
+/// n=512 高重叠:剪枝路径主战场,验证点积早停在高密度池的收益;
+/// n=128 混合(50% 正交 + 50% 高重叠):同时覆盖剪枝与精确回退双路径。
+fn bench_resolve_conflicts_high_density(c: &mut Criterion) {
+    let config = GeaConfig::default();
+
+    // 512 高重叠:范数预计算 + 剪枝路径
+    let mut profiles: HashMap<ExpertId, ExpertProfile> = HashMap::new();
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for i in 0..512u32 {
+        let id = ExpertId::new(format!("d-{i}"));
+        let mut v = vec![1.0_f32; 64];
+        v[(i as usize) % 64] += 0.005 * (i as f32);
+        profiles.insert(
+            id.clone(),
+            ExpertProfile::new(format!("d-{i}"), v, 0.8, vec!["code-gen".into()]),
+        );
+        candidates.push((id, 0.5 + (i as f32) * 0.0002));
+    }
+    c.bench_function("resolve_conflicts/512_high_overlap", |b| {
+        b.iter(|| {
+            let result =
+                resolve_conflicts(candidates.clone(), &profiles, &config).expect("resolve ok");
+            criterion::black_box(result);
+        });
+    });
+
+    // 128 混合:前半正交(精确回退),后半高重叠(剪枝)
+    let mut profiles_mix: HashMap<ExpertId, ExpertProfile> = HashMap::new();
+    let mut candidates_mix: Vec<Candidate> = Vec::new();
+    for i in 0..128u32 {
+        let id = ExpertId::new(format!("m-{i}"));
+        let mut v = vec![0.0_f32; 64];
+        if i < 64 {
+            v[i as usize] = 1.0; // 正交:无冲突,走精确回退 + 早停
+        } else {
+            v[0] = 1.0;
+            v[(i as usize) % 64] += 0.01; // 高重叠:触发剪枝
+        }
+        profiles_mix.insert(
+            id.clone(),
+            ExpertProfile::new(format!("m-{i}"), v, 0.8, vec!["code-gen".into()]),
+        );
+        candidates_mix.push((id, 0.5 + (i as f32) * 0.002));
+    }
+    c.bench_function("resolve_conflicts/128_mixed", |b| {
+        b.iter(|| {
+            let result = resolve_conflicts(candidates_mix.clone(), &profiles_mix, &config)
+                .expect("resolve ok");
+            criterion::black_box(result);
+        });
+    });
+}
+
+/// 门控范数预计算路径基准(专家 Agent 优化 2026-08-11)
+///
+/// 对比 `compute_gate_value`(精确,每次重算范数)与
+/// `compute_gate_value_with_norms`(预计算范数,内层仅点积)。
+fn bench_gate_compute_with_norms(c: &mut Criterion) {
+    let config = GeaConfig::default();
+    let expert = ExpertProfile::new("e-1", vec![0.5; 64], 0.8, vec!["code-gen".into()]);
+    let task = TaskProfile::new(0.9, "code-gen", 30, vec![0.5; 512]);
+    // bench 侧计算范数输入(与 crate 内部 prefix_l2_norm 数学等价,无需逐位一致)
+    let norm_of =
+        |v: &[f32], len: usize| -> f32 { v.iter().take(len).map(|x| x * x).sum::<f32>().sqrt() };
+    let task_norm = norm_of(&task.clv, expert.expert_vector.len());
+    let expert_norm = norm_of(&expert.expert_vector, expert.expert_vector.len());
+
+    c.bench_function("gate_compute_with_norms/512d_clv", |b| {
+        b.iter(|| {
+            let gate =
+                compute_gate_value_with_norms(&task, task_norm, &expert, expert_norm, &config);
+            criterion::black_box(gate);
+        });
+    });
+}
+
+/// 高密度专家池全链路激活基准(专家 Agent 优化 2026-08-11)
+///
+/// 128 专家 + 512 维 CLV:门控循环(范数缓存)+ 冲突消解(剪枝)全热路径,
+/// 量化激活延迟随专家池规模的增长(激活效率维度 P0 基准)。
+fn bench_activate_dense_pool(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let bus = EventBus::new();
+    let activator = GeaActivator::new(GeaConfig::default(), bus).unwrap();
+
+    for i in 0..128u32 {
+        let mut v = vec![0.0_f32; 64];
+        v[(i as usize) % 64] = 1.0;
+        v[((i as usize) + 1) % 64] = 0.5;
+        activator.register_expert(ExpertProfile::new(
+            format!("e-{i}"),
+            v,
+            0.8,
+            vec!["code-gen".into()],
+        ));
+    }
+
+    c.bench_function("activate_dense/128_experts_512d", |b| {
+        let mut idx = 0u64;
+        b.iter(|| {
+            // 每次新任务避免缓存命中,测全链路(门控 + 冲突 + 驱逐)
+            let task = TaskProfile::new(
+                0.5 + (idx % 100) as f32 * 0.005,
+                "code-gen",
+                30,
+                vec![0.5; 512],
+            );
+            idx += 1;
+            rt.block_on(activator.activate(&task)).unwrap();
+        });
+    });
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
         .sample_size(100)
         .warm_up_time(std::time::Duration::from_millis(500));
-    targets = bench_gate_compute, bench_gate_compute_512dim, bench_activate_with_cache, bench_activate_no_cache, bench_activate_eviction_saturated, bench_resolve_conflicts
+    targets = bench_gate_compute, bench_gate_compute_512dim, bench_activate_with_cache, bench_activate_no_cache, bench_activate_eviction_saturated, bench_resolve_conflicts, bench_resolve_conflicts_high_density, bench_gate_compute_with_norms, bench_activate_dense_pool
 }
 
 criterion_main!(benches);

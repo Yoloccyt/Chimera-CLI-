@@ -152,6 +152,11 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
         crate::orchestrator::OrchestratorConfig::default(),
     );
 
+    // Concord W10 T10.2(ADR-082):启动协议握手应答器 — 响应 TUI 启动时
+    // 发布的 TuiHello,协商兼容级别并回 TuiHelloAck(SEC-4 一次性);
+    // 必须在 TUI run() 前 spawn(subscribe-before-spawn,不错过启动瞬间握手)。
+    let handshake_handle = crate::handshake::spawn_handshake_responder(bus.clone());
+
     // P1(ADR-072):构造超窗兜底桥并注入 Action 编排器。
     // 桥挂 TUI 会话总线——触发时发布 OverWindowFallbackTriggered,经 subscriber
     // → pipeline 进入 latest_events,由 OverWindow 面板结构化展示(闭环断点 F-3 修复)。
@@ -201,6 +206,8 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
     control_handle.abort();
     // 中止 Quest 编排器后台任务(避免 orphan task,§4.4 #7)。
     quest_handle.abort();
+    // 中止握手应答器后台任务(Concord W10,避免 orphan task)。
+    handshake_handle.abort();
     // 中止 Action 编排器后台任务(避免 orphan task,§4.4 #7)。
     action_handle.abort();
 

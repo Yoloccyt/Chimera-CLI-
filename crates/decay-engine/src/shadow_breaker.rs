@@ -36,8 +36,10 @@
 //!   自动恢复掩盖真实安全问题
 //! - **跳闸原因留档**:`trip_cause` 记录首次触发跳闸的违规反例,供审计追溯
 
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::formal_props::VerificationResult;
 use thiserror::Error;
+use tracing::warn;
 
 /// 复位授权构造错误(评审 S-2.1)
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -137,8 +139,13 @@ impl RlGateVerdict {
 /// 影子模式熔断开关 — fail-closed RL 更新门控状态机
 ///
 /// 消费 FormalVerifier 验证结果流,门控影子模式下 RL 更新的许可。
-/// 纯状态机,不执行 RL 训练,不发布事件(Critical 事件由调用方发布,§6.2)。
-#[derive(Debug, Clone)]
+/// 纯状态机,不执行 RL 训练(L4 深度优化 P1-1:跳闸时经可选 EventBus
+/// 发布 ShadowBreakerTripped 事件)。
+///
+/// L4 深度优化:Debug derive 改手动实现(EventBus 不含 Debug,字段显示
+/// 占位 "Some(EventBus)"/"None"),Clone 保持 EventBus Arc 语义——
+/// 公共 API 形态不变(chimera-mas 依赖 Debug 格式化)。
+#[derive(Clone)]
 pub struct ShadowModeCircuitBreaker {
     /// 当前状态
     state: BreakerState,
@@ -148,6 +155,10 @@ pub struct ShadowModeCircuitBreaker {
     observations: u64,
     /// 最近一次复位的授权凭证(评审 S-2.1,审计留存;从未复位为 None)
     last_reset: Option<ResetAuthorization>,
+    /// 可选事件总线(L4 深度优化 P1-1):跳闸时发布 ShadowBreakerTripped
+    /// 事件供订阅方派生熔断状态;None = 不发布(new() 兼容路径,测试与
+    /// 无总线装配场景零行为变化)
+    bus: Option<EventBus>,
 }
 
 impl Default for ShadowModeCircuitBreaker {
@@ -156,14 +167,60 @@ impl Default for ShadowModeCircuitBreaker {
     }
 }
 
+impl std::fmt::Debug for ShadowModeCircuitBreaker {
+    /// L4 深度优化:EventBus 不实现 Debug,手动实现保持公共 Debug 形态;
+    /// bus 字段以 Some/None 占位显示(不泄露总线内部状态)
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShadowModeCircuitBreaker")
+            .field("state", &self.state)
+            .field("trip_cause", &self.trip_cause)
+            .field("observations", &self.observations)
+            .field("last_reset", &self.last_reset)
+            .field(
+                "bus",
+                &if self.bus.is_some() {
+                    "Some(EventBus)"
+                } else {
+                    "None"
+                },
+            )
+            .finish()
+    }
+}
+
 impl ShadowModeCircuitBreaker {
-    /// 创建武装态熔断器(初始许可监控,尚未观测)
+    /// 创建武装态熔断器(初始许可监控,尚未观测,无事件总线)
     pub fn new() -> Self {
         Self {
             state: BreakerState::Armed,
             trip_cause: None,
             observations: 0,
             last_reset: None,
+            bus: None,
+        }
+    }
+
+    /// 创建带事件总线的熔断器(L4 深度优化 P1-1,事件驱动化)
+    ///
+    /// 跳闸时经 `publish_blocking` 发布 `ShadowBreakerTripped` 事件
+    /// (同步方法正确发布模式,§4.4 #8),供 TUI DecayPanel 等订阅方从
+    /// 事件流派生熔断状态显示——替代原 shadow_breaker_status() 全局
+    /// 函数占位(Ω₄-Event:所有跨层通信走 EventBus)。
+    ///
+    /// # 装配方式
+    /// 上层编排器(chimera-mas shadow/orchestrator)持有熔断器实例时:
+    /// ```no_run
+    /// # use decay_engine::ShadowModeCircuitBreaker;
+    /// # use event_bus::EventBus;
+    /// let breaker = ShadowModeCircuitBreaker::with_event_bus(EventBus::new());
+    /// ```
+    pub fn with_event_bus(bus: EventBus) -> Self {
+        Self {
+            state: BreakerState::Armed,
+            trip_cause: None,
+            observations: 0,
+            last_reset: None,
+            bus: Some(bus),
         }
     }
 
@@ -202,6 +259,17 @@ impl ShadowModeCircuitBreaker {
             let cause = format!("形式化属性被违反: {counterexample}");
             self.state = BreakerState::Tripped;
             self.trip_cause = Some(cause.clone());
+            // L4 深度优化 P1-1:跳闸时发布 ShadowBreakerTripped 事件(事件驱动化)
+            // 发布失败仅 warn(熔断状态本身已完成跳闸,事件丢失不影响 fail-closed 语义)
+            if let Some(bus) = &self.bus {
+                let event = NexusEvent::ShadowBreakerTripped {
+                    metadata: EventMetadata::new("decay-engine:shadow_breaker"),
+                    reason: cause.clone(),
+                };
+                if let Err(e) = bus.publish_blocking(event) {
+                    warn!(error = %e, "ShadowBreakerTripped 事件发布失败(跳闸已完成)");
+                }
+            }
             return RlGateVerdict::Denied { reason: cause };
         }
 

@@ -565,6 +565,81 @@ pub enum MasError {
     Internal(String),
 }
 
+impl MasError {
+    /// 判断错误是否可恢复(可重试/降级/转交)— 恢复策略辅助(专家 Agent 优化 2026-08-11)
+    ///
+    /// ## 恢复语义
+    ///
+    /// - **可恢复(true)**:调用方应实施重试 / 降级 / 转交其他专家等补救
+    ///   - `ExpertUnavailable`:专家未注册/超时/过载 → 可转交其他专家或降级
+    ///   - `ConsultationFailed` / `KnowledgeRetrievalFailed`:可降级本地检索或重试
+    ///   - `TaskTimeout` / `TaskFailed`:可重试(受重试上限约束)
+    ///   - `DelegationFailed` / `NoAvailableSubAgent`:可换子代理或降复杂度重委托
+    ///   - `MessageSendFailed` / `MessageTimeout` / `IoError` / `ChunkingFailed`:
+    ///     瞬时/环境性失败,可重试
+    /// - **不可恢复(false)**:修复根因前重试无意义,应终止或人工介入
+    ///   - `ContextIsolationViolation` / `TokenBudgetExceeded` / `MaxDepthExceeded`:
+    ///     不变量/配置类违反,重试只会重复失败
+    ///   - `QuadrantFanoutExceeded` / `QuadrantConflict` / `ArchiveMonotonicityViolated` /
+    ///     `DelegationCycleDetected`:INV 不变量违反,需治理层修复
+    ///   - `InvalidConfig` / `ShadowGateRejected` / `R2FreezeViolation`:安全/配置门禁,需人工
+    ///
+    /// ## 使用示例
+    ///
+    /// ```ignore
+    /// match err {
+    ///     e if e.is_recoverable() => retry_or_fallback(e),
+    ///     e => escalate(e), // 不可恢复:终止或上报治理层
+    /// }
+    /// ```
+    pub fn is_recoverable(&self) -> bool {
+        match self {
+            // 专家咨询类:可转交/降级/重试
+            Self::ExpertUnavailable { .. }
+            | Self::ConsultationFailed { .. }
+            | Self::KnowledgeRetrievalFailed { .. }
+            | Self::TaskTimeout { .. }
+            | Self::TaskFailed { .. }
+            | Self::DelegationFailed { .. }
+            | Self::NoAvailableSubAgent { .. }
+            | Self::MessageSendFailed { .. }
+            | Self::MessageTimeout { .. }
+            | Self::IoError(_)
+            | Self::ChunkingFailed { .. }
+            | Self::AgentCreationFailed { .. }
+            | Self::AgentStartupFailed { .. }
+            | Self::AgentShutdownFailed { .. } => true,
+
+            // 不变量/配置/安全类:重试无意义,需治理层或人工介入
+            Self::ContextIsolationViolation { .. }
+            | Self::TokenBudgetExceeded { .. }
+            | Self::ContextCompressionFailed { .. }
+            | Self::MaxDepthExceeded { .. }
+            | Self::QuadrantFanoutExceeded { .. }
+            | Self::QuadrantConflict { .. }
+            | Self::ArchiveMonotonicityViolated { .. }
+            | Self::ArchiveTierInvalid { .. }
+            | Self::DelegationCycleDetected { .. }
+            | Self::AdmissionGateDenied { .. }
+            | Self::AgentNotFound { .. }
+            | Self::InvalidAgentState { .. }
+            | Self::AgentAlreadyExists { .. }
+            | Self::TaskNotFound { .. }
+            | Self::TaskAlreadyCompleted { .. }
+            | Self::InvalidConfig { .. }
+            | Self::SerializationFailed(_)
+            | Self::MessagePackFailed(_)
+            | Self::MessagePackDecodeFailed(_)
+            | Self::CircuitBreakerOpen { .. }
+            | Self::ShadowGovernanceConfigInvalid { .. }
+            | Self::ShadowGateRejected { .. }
+            | Self::R2FreezeViolation { .. }
+            | Self::R1ShadowRollbackFailed { .. }
+            | Self::Internal(_) => false,
+        }
+    }
+}
+
 /// MAS 子系统 Result 类型
 ///
 /// 所有 MAS 公共 API 的返回类型,统一使用 `Result<T>` 简写。
@@ -573,6 +648,77 @@ pub type Result<T> = std::result::Result<T, MasError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_recoverable_expert_paths() {
+        // 专家咨询/超时/检索类:可恢复(转交/降级/重试)
+        assert!(MasError::ExpertUnavailable {
+            expert_id: "e".into(),
+            reason: "timeout after 5s".into(),
+        }
+        .is_recoverable());
+        assert!(MasError::ConsultationFailed { reason: "r".into() }.is_recoverable());
+        assert!(MasError::KnowledgeRetrievalFailed { reason: "r".into() }.is_recoverable());
+        assert!(MasError::TaskTimeout {
+            task_id: "t".into(),
+            deadline: chrono::Utc::now(),
+        }
+        .is_recoverable());
+        assert!(MasError::NoAvailableSubAgent {
+            task_id: "t".into(),
+        }
+        .is_recoverable());
+        assert!(MasError::MessageSendFailed {
+            from: "a".into(),
+            to: "b".into(),
+            reason: "r".into(),
+        }
+        .is_recoverable());
+        assert!(MasError::IoError(std::io::Error::other("io")).is_recoverable());
+    }
+
+    #[test]
+    fn test_is_recoverable_invariant_paths() {
+        // 不变量/配置/安全类:不可恢复(治理层或人工介入)
+        assert!(!MasError::ContextIsolationViolation {
+            agent_id: "a".into(),
+            context_id: "c".into(),
+        }
+        .is_recoverable());
+        assert!(!MasError::MaxDepthExceeded {
+            current_depth: 6,
+            max_depth: 5,
+        }
+        .is_recoverable());
+        assert!(!MasError::InvalidConfig {
+            field: "f".into(),
+            value: "v".into(),
+        }
+        .is_recoverable());
+        assert!(!MasError::QuadrantFanoutExceeded {
+            requested: 5,
+            max: 4,
+        }
+        .is_recoverable());
+        assert!(!MasError::ShadowGateRejected { reason: "r".into() }.is_recoverable());
+        assert!(!MasError::Internal("unreachable".into()).is_recoverable());
+        assert!(!MasError::AdmissionGateDenied {
+            m_total: 118,
+            m_budget: 117,
+            new_agent_tier: "L0".into(),
+            reason: "r".into(),
+        }
+        .is_recoverable());
+        assert!(!MasError::CircuitBreakerOpen {
+            failure_count: 5,
+            threshold: 5,
+        }
+        .is_recoverable());
+        assert!(!MasError::DelegationCycleDetected {
+            cycle_path: vec!["A".into(), "B".into(), "A".into()],
+        }
+        .is_recoverable());
+    }
 
     #[test]
     fn test_context_isolation_violation_display() {

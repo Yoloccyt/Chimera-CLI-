@@ -1,0 +1,63 @@
+{
+  "mode": "stress",
+  "timestamp": "2026-08-07T02:52:20Z",
+  "host": "PC",
+  "cpu_count": 16,
+  "rustc_version": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+  "nextest_version": "cargo-nextest 0.9.143 (60fa45f63 2026-08-04)",
+  "chimera_test_timeout_scale": "1.0",
+  "chimera_backpressure_secs": "60",
+  "total_elapsed_secs": "31.99",
+  "top_tests": [
+    {
+      "binary": "chimera-e2e-tests::token_efficiency_stress",
+      "test": "chimera-e2e-tests::token_efficiency_stress$test_stress_12_scenarios_full_matrix",
+      "elapsed_secs": 20.135
+    },
+    {
+      "binary": "chimera-e2e-tests::week7_stress",
+      "test": "chimera-e2e-tests::week7_stress$test_stress_multi_crate_100_cycles",
+      "elapsed_secs": 2.943
+    },
+    {
+      "binary": "chimera-e2e-tests::stress_test",
+      "test": "chimera-e2e-tests::stress_test$test_stress_1000_iterations",
+      "elapsed_secs": 2.074
+    },
+    {
+      "binary": "chimera-e2e-tests::stress_test",
+      "test": "chimera-e2e-tests::stress_test$test_stress_profile_per_step",
+      "elapsed_secs": 1.066
+    },
+    {
+      "binary": "chimera-e2e-tests::stress_test",
+      "test": "chimera-e2e-tests::stress_test$test_wiki_store_insert_scaling",
+      "elapsed_secs": 0.868
+    },
+    {
+      "binary": "chimera-e2e-tests::token_efficiency_stress",
+      "test": "chimera-e2e-tests::token_efficiency_stress$test_cost_guard_budget_exceeded_published_once",
+      "elapsed_secs": 0.25
+    },
+    {
+      "binary": "chimera-e2e-tests::week7_stress",
+      "test": "chimera-e2e-tests::week7_stress$test_stress_1000_iterations_no_leak",
+      "elapsed_secs": 0.238
+    },
+    {
+      "binary": "chimera-e2e-tests::stress_test",
+      "test": "chimera-e2e-tests::stress_test$setup::test_week7_setup_mcp_mesh_executes_transaction",
+      "elapsed_secs": 0.12
+    },
+    {
+      "binary": "chimera-e2e-tests::week7_stress",
+      "test": "chimera-e2e-tests::week7_stress$setup::test_week7_setup_mcp_mesh_executes_transaction",
+      "elapsed_secs": 0.113
+    },
+    {
+      "binary": "chimera-e2e-tests::week7_stress",
+      "test": "chimera-e2e-tests::week7_stress$setup::test_week7_setup_event_bus_shared_across_9_crates",
+      "elapsed_secs": 0.089
+    }
+  ]
+}

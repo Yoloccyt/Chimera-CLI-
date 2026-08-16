@@ -77,6 +77,9 @@ faae-router = { workspace = true }
 # L5 Knowledge:WikiRetriever 复用 repo-wiki FTS5 全文检索 + 内存 KNN(Task 18 §18.10)
 # WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定
 repo-wiki = { workspace = true }
+# L2 Memory:WikiRetriever 可选 NMC 文本编码器(P1-2 dense 通道查询嵌入)
+# WHY L9→L2 向下依赖合规(§2.2 L(N)→L(N-1) 允许);无编码器时检索退化 sparse-only。
+nmc-encoder = { workspace = true }
 # L5 Knowledge:InvariantHealthReporter 复用 gsoe-evolution FormalVerifier M2 属性 #7
 # (InvariantClosureChecker)对 INV-7/8/9 检查结果做全系统传递闭包元验证(Phase 8.4)。
 # WHY L9→L5 向下依赖合规(§2.2):gsoe-evolution 不依赖 chimera-mas(见 invariants.rs
@@ -138,4 +141,10 @@ harness = false
 # 协调度量接线闭环的埋点开销回归对照基线)
 [[bench]]
 name = "delegation_bench"
+harness = false
+
+# 专家 Agent 优化 2026-08-11:PDCA 闭环 + 专家反馈热路径基准
+# WHY:维度 3/5 性能可证伪 — act/plan_reflux/反馈上报/建议生成均有量化证据
+[[bench]]
+name = "pdca_bench"
 harness = false

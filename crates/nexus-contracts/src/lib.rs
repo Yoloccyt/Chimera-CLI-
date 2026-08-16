@@ -16,23 +16,102 @@
 //! - **唯一外部依赖**: `serde`（仅 derive 宏，用于跨 crate 序列化）
 //! - **依赖铁律扩展**: `L(N) → L(0)` 恒允许（任何层均可依赖 L0）
 //!
-//! # 承载类型
+//! # 承载类型（按功能分组，41 个源文件 = 40 个功能模块 + lib.rs）
 //!
+//! ## 稀疏掩码体系
 //! | 类型 | 来源 | 消费层 |
 //! |------|------|--------|
 //! | `OmniSparseMasks` | 从 `osa-coordinator` 上提 | L2 HCW / L6 Router × 3 |
 //! | `SparseMask<T>` | 从 `osa-coordinator` 上提 | L6 OSA / L2 HCW |
 //! | `ToolId` / `FileId` / `MemoryId` / `OperationId` / `TaskId` | 从 `osa-coordinator` 上提 | L6 Router × 3 / L7 Execution |
-//! | `HarnessSpec` / `ContractSpec` / `HopSpec` | 新建（P4 Harness-as-Spec） | L5 gsoe-evolution / L9 quest-engine |
-//! | `TemporalMeta` / `TransitionType` | 新建（P3 时间扩展） | L2 mlc-engine |
-//! | `NamespaceQuota` | 新建（命名空间配额上提） | L9 chimera-mas |
+//!
+//! ## Harness Spec 与契约
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
+//! | `HarnessSpec` / `ContractSpec` / `HopSpec` / `RetryPolicy` / `ImmutableSurface` | 新建（P4 Harness-as-Spec） | L5 gsoe-evolution / L9 quest-engine |
+//! | `BehaviorContract` / `ContractExample` / `ContractCheckOutcome` | 新建（polish-v2.7 P1-3，ADR-049） | L9 efficiency-monitor / L5 AEGIS |
+//! | `ProceduralBlueprint` / `BlueprintStep` / `PlanViolation` | 新建（polish-v2.7 P4-7，ADR-049） | L5 repo-wiki / L9 quest-engine |
+//! | `VariantId` / `VariantContract` | 新建（polish-v2.7 P3-2，ADR-051） | L8 parliament / L5 AEGIS |
+//!
+//! ## 策略契约（S1-S9 接缝）
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
 //! | `SelectorPolicy` / `SelectorWeights` | 新建（P3-W10.3 D1 修复） | L2 hcw-window / L6 omega-learner |
 //! | `DensityPolicy` / `DensityTier` | 新建（P4-W13.2 S1 接缝） | L2 hcw-window / L6 omega-learner |
 //! | `MemoryStrategy` / `MemoryStrategyPolicy` | 新建（P4-W14.1 S2 接缝） | L2 mlc-engine / L6 omega-learner |
 //! | `MemoryTaskPhase` / `MemoryStrategyProvider` | 新建（Task 2 OSA S2 桥接） | L6 osa-coordinator / L6 omega-learner |
+//! | `PrefetchStrategy` / `PrefetchPolicy` | 新建（P4-W14.2 S3 接缝） | L3 scc-cache / L6 omega-learner |
 //! | `ActivationStrategy` / `ParliamentPolicy` | 新建（P4-W14.3 S5 接缝） | L8 parliament / L6 omega-learner |
 //! | `DecayProfile` / `DecayPolicy` | 新建（P4-W14.4 S6 接缝） | L4 decay-engine / L6 omega-learner |
-//! | `EventSeverity` / `TaskPriority` / `AgentStatus` | 从 `event-bus` 下沉（ADR-054 决策 6，P9-T7） | L1 event-bus / L9 chimera-mas |
+//! | `RecallQuota` / `RecallQuotaPolicy` | 新建（P4-W16.2.2 S7 接缝） | L6 omega-learner / L9 编排器 |
+//! | `CapabilityToken` / `SeamId` | 新建（P4-W14.5 C4 合规） | L4 decay-engine / L6 omega-learner / L9 编排器 |
+//!
+//! ## 事件与领域类型
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
+//! | `EventMetadata` | 从 `event-bus` 下沉（Task 3.10） | L1 event-bus / L2-L10 |
+//! | `TaskStatus` | 从 `nexus-core` 下沉（Task 3.10） | L1 nexus-core / L9 quest-engine |
+//! | `Checkpoint` | 从 `nexus-core` 下沉（Task 3.10） | L1 nexus-core / L9 quest-engine |
+//! | `ThinkingMode` / `MultimodalInput` / `UserIntent` / `Quest` / `Task` | 从 `nexus-core` 上提（ADR-054 决策 6） | L1 nexus-core / L9 quest-engine |
+//! | `EventSeverity` / `TaskPriority` / `AgentStatus` | 从 `event-bus` 下沉（ADR-054 决策 6） | L1 event-bus / L9 chimera-mas |
+//! | `TemporalMeta` / `TransitionType` | 新建（P3 时间扩展） | L2 mlc-engine |
+//!
+//! ## 安全与治理契约
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
+//! | `AttackType` / `Command` / `CommandPolicy` / `CommandValidator` | 从 `seccore` 上提（ADR-054 决策 3） | L4 seccore / L8 parliament |
+//! | `BudgetTier` | 从 `decb-governor` 上提（ADR-054 决策 3） | L8 decb-governor / L9 quest-engine |
+//! | `FormalProperty` / `InvariantSpec` / `VerificationResult` | 新建（T6-2 FormalVerifier 骨架） | L4 formal-verifier / L8 parliament |
+//! | `ArchiveTier` / `assert_archive_monotonicity` | 新建（P0-2 INV-8 下沉） | L2 mlc-engine / L3 cmt-tiering |
+//!
+//! ## MCA 亲和与向量存储
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
+//! | `ProviderId` / `ProtocolDialect` / `CapabilitySet` / `ModelAffinitySpec` | 新建（ADR-065 MCA 体系） | L10 mca-gateway / L1 model-router |
+//! | `AffinityRequest` / `AffinityResponse` / `ContentBlock` | 新建（ADR-065 MCA 体系） | L10 mca-gateway / L9 quest-engine |
+//! | `VectorStore` / `VectorHit` / `VectorBackend` | 新建（P2-W7.3 向量抽象） | L5 repo-wiki / L2 mlc-engine |
+//!
+//! ## RL 与奖励体系
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
+//! | `RLState` / `RLAction` / `RLExperience` / `MemPiAction` | 新建（ADR-049 修订补齐） | L6 omega-learner / L3 cmt-tiering |
+//! | `RewardSpec` / `RewardSignal` / `RewardLayer` / `SecuritySeverity` | 新建（Milestone C-1） | L6 omega-learner / L9 efficiency-monitor |
+//!
+//! ## 平台接地与配额
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
+//! | `PlatformGroundingSpec` / `GroundingRequirement` | 新建（Milestone B-4） | L9 efficiency-monitor RuntimeAuditor |
+//! | `NamespaceQuota` / `QuotaLimits` | 新建（chimera-mas 配额上提） | L9 chimera-mas |
+//!
+//! ## 六维控制面与消息协议
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
+//! | `HarnessConfigContract` / `ContextAssemblyContract` / `ToolInteractionContract` | 新建（设计文档 §5.3.1 MemoHarness D1-D6） | L6 Router / L9 Quest / L10 Interface |
+//! | `GenerationControlContract` / `TaskOrchestrationContract` / `MemoryManagementContract` / `OutputProcessingContract` | 新建（设计文档 §5.3.1 MemoHarness D1-D6） | L6 Router / L9 Quest / L10 Interface |
+//! | `OmniMessage` / `ModelConfig` / `TokenUsage` | 新建（设计文档 §5.3.2 PenguinHarness） | L10 Interface / 外部环境 |
+//!
+//! ## v3.4.0 融合契约（OpenMLE / Dressage / MSCE / TencentDB / RL 预留）
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
+//! | `ExperienceCard` / `AtomicOperator` / `ThreeFactorScore` / `ErrorSignature` / `ExecutionStatus` | 新建（v3.4.0 §5.2 OpenMLE） | L1 event-bus / L7 PVL / L5 gsoe-evolution |
+//! | `TokenLedgerEntry` / `SegmentMetadata` / `SegmentCreationReason` | 新建（v3.4.0 §5.3 Dressage） | L1 event-bus token-ledger / L7 segment-validation |
+//! | `MemoryPyramidLevel` / `AtomicMemoryCard` / `SceneBlock` / `PersonaSummary` | 新建（v3.4.0 §5.4 MSCE + TencentDB） | L2 mlc-engine / L3 cmt-tiering |
+//! | `SkillLifecycleState` / `SkillLifecycleContract` | 新建（v3.4.0 §5.5 MSCE） | L5 skill-graph / L6 skills-loader |
+//! | `RLHook` / `SerializedPolicy` / `RLTrajectory` / `RLStateVector` / `RLActionVector` | 新建（v3.4.0 §5.7 RL 预留） | L1 rl-client / L2 memory-pyramid |
+//! | `OperatorSelectionStrategy` / `StopStrategyConfig` + 六维 OpenMLE 扩展字段 | 扩展（v3.4.0 §5.6） | L6 Router / L9 Quest |
+//!
+//! ## 测试工具与纯函数（ADR-033 例外）
+//! | 类型 | 来源 | 消费层 |
+//! |------|------|--------|
+//! | `scale_timeout` / `scaled_timeout!` | 新建（P9-T2 测试缩放，ADR-033 例外 1） | 全 workspace 测试 |
+//! | `assert_archive_monotonicity` | 新建（P0-2 INV-8 下沉，ADR-033 例外 2） | L2 mlc-engine / L3 cmt-tiering |
+//! | `CapabilityToken` EWMA 方法 | 新建（P4-W14.5 C4 合规，ADR-033 例外 3） | L4 decay-engine / L9 编排器 |
+//! | `ExperienceCard` 三因子/状态纯函数 | 新建（v3.4.0 §5.2，ADR-033 例外 4） | L1 event-bus / L5 three-factor-selector |
+//! | `PlatformGroundingSpec::from_doc/check` | 新建（Milestone B-4，纯函数先例） | L9 efficiency-monitor |
+//! | `BehaviorContract::enforce` / `ProceduralBlueprint::validate_plan` | 新建（polish-v2.7，纯函数先例） | L9 efficiency-monitor / L9 quest-engine |
+//!
+//! > 注：后两类为 ADR-033"纯类型零逻辑"约束的**纯函数先例**（无 IO 无状态变更），
+//! > 与 `archive_monotonicity` 同类；显式声明以消除审计误判（2026-08-16 修复 A2）。
 //!
 //! # 示例
 //!
@@ -104,6 +183,8 @@ pub mod decay_profile;
 ///
 /// 承载 CapabilityToken 类型，使编排器在注入 Learned 策略前查询授权等级，
 /// 实现 C4 合规要求的"运行时灰度走能力场，而非散落运行时布尔旗"。
+/// ADR-033"纯类型 + 零逻辑"的第三个明确例外（EWMA 算法 + 灰度状态机），
+/// 详见模块级文档。
 pub mod capability_token;
 
 /// 召回配额策略契约 — S7 接缝（R1 离线 RL，P4-W16.2.2）
@@ -230,6 +311,55 @@ pub mod reward;
 /// 详见模块级文档。
 pub mod archive_monotonicity;
 
+/// 六维控制面契约 — MemoHarness D1-D6 融合（设计文档 §5.3.1）
+///
+/// 承载 MemoHarness 六维控制面的跨层契约定义（D1 上下文组装 / D2 工具交互 /
+/// D3 生成控制 / D4 任务编排 / D5 Memory 管理 / D6 输出处理），
+/// 供 L6 Router / L9 Quest / L10 Interface 按统一契约调整 Harness 行为。
+/// 纯类型零逻辑（ADR-033）；RetryPolicy 复用 harness_spec（L0 同层引用）。
+pub mod harness_dimensions;
+
+/// OmniMessage 协议 — 模型-环境解耦统一消息协议（设计文档 §5.3.2）
+///
+/// 承载 PenguinHarness OmniMessage 协议的 6 变体枚举（ModelRequest / ModelResponse /
+/// ToolRequest / ToolResult / StateUpdate / TraceRecord），解耦 LLM 调用与环境执行。
+/// 纯类型零逻辑（ADR-033）；JSON 字段用 `Box<str>`（遵循 affinity.rs 先例，
+/// 保持 L0 零 crate 依赖铁律）。
+pub mod omni_message;
+
+/// 经验卡片契约 — OpenMLE 核心数据结构（v3.4.0 §5.2）
+///
+/// 承载 ExperienceCard / AtomicOperator / ThreeFactorScore / ErrorSignature /
+/// ExecutionStatus / CardMetadata。不可变契约（铁律3）+ 纯函数（铁律4）,
+/// ADR-033"纯类型 + 零逻辑"的第四个明确例外,详见模块级文档。
+pub mod experience_card;
+
+/// Token 级证据契约 — Dressage 融合（v3.4.0 §5.3）
+///
+/// 承载 TokenLedgerEntry / ToolCallRecord / SegmentMetadata /
+/// SegmentCreationReason。纯类型零逻辑（ADR-033）;铁律9 分段身份
+/// 不可篡改（parent_traj_id 共享 + anchor 承载终局 reward）。
+pub mod token_evidence;
+
+/// 记忆金字塔契约 — MSCE + TencentDB 融合（v3.4.0 §5.4）
+///
+/// 承载 MemoryPyramidLevel / AtomicMemoryCard / SceneBlock / PersonaSummary。
+/// 纯类型 + 层级映射纯函数（ADR-033 先例）;同层引用 rl_hooks 向量类型。
+pub mod memory_pyramid;
+
+/// Skill 生命周期契约 — MSCE 融合（v3.4.0 §5.5）
+///
+/// 承载 SkillLifecycleState / SkillLifecycleContract 三态状态机。
+/// 纯类型 + 状态转移纯函数（ADR-033 先例）。
+pub mod skill_lifecycle;
+
+/// RL 预留钩子契约 — v4.0 升级路径（v3.4.0 §5.7 + §17）
+///
+/// 承载 RLHook trait / SerializedPolicy / RLTrajectory / RLStateVector /
+/// RLActionVector。同步 trait（L0 零依赖铁律，不引入 async-trait）;
+/// 铁律6: 所有统计学习机制可导出为 RLTrajectory。
+pub mod rl_hooks;
+
 // ============================================================
 // 公开 API 导出
 // ============================================================
@@ -308,6 +438,41 @@ pub use rl_types::{MemPiAction, RLAction, RLExperience, RLState};
 // WHY 顶层导出: 与既有契约函数/类型对等路径,依赖方可直接
 // `use nexus_contracts::assert_archive_monotonicity` 或顶层 `ArchiveTier`
 pub use archive_monotonicity::{assert_archive_monotonicity, ArchiveTier, InvariantViolation};
+// 设计文档 §5.3.1: 六维控制面契约（MemoHarness D1-D6 融合）
+// WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接
+// `use nexus_contracts::HarnessConfigContract` 或顶层 `ContextAssemblyContract`
+pub use harness_dimensions::{
+    CompressionStrategy, ContextAssemblyContract, EvictionStrategy, ExtractionFormat,
+    FallbackStrategy, GenerationControlContract, HarnessConfigContract, MemoryManagementContract,
+    OutputProcessingContract, RetentionPolicy, TaskOrchestrationContract, ToolInteractionContract,
+    ValidationRule, WorkflowType,
+};
+// 设计文档 §5.3.2: OmniMessage 协议（PenguinHarness 模型-环境解耦）
+// WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接
+// `use nexus_contracts::OmniMessage` 或顶层 `ModelConfig`
+pub use omni_message::{ModelConfig, OmniMessage, TokenUsage};
+// v3.4.0 §5.2: 经验卡片契约（OpenMLE）
+// WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接 `use nexus_contracts::ExperienceCard`
+pub use experience_card::{
+    AtomicOperator, CardMetadata, EnvironmentInfo, ErrorSignature, ExecutionStatus, ExperienceCard,
+    NormalizedThreeFactor, ThreeFactorScore,
+};
+// v3.4.0 §5.3: Token 证据契约（Dressage）
+pub use token_evidence::{
+    SegmentCreationReason, SegmentMetadata, TokenLedgerEntry, ToolCallRecord,
+};
+// v3.4.0 §5.4: 记忆金字塔契约（MSCE + TencentDB）
+pub use memory_pyramid::{
+    AtomicCardType, AtomicMemoryCard, MemoryPyramidLevel, PersonaSummary, SceneBlock,
+};
+// v3.4.0 §5.5: Skill 生命周期契约（MSCE）
+pub use skill_lifecycle::{SkillLifecycleContract, SkillLifecycleState};
+// v3.4.0 §5.7: RL 预留钩子契约
+pub use rl_hooks::{
+    PolicyFormat, RLActionVector, RLHook, RLStateVector, RLTrajectory, SerializedPolicy,
+};
+// v3.4.0 §5.6: 六维控制面扩展（OperatorSelectionStrategy + StopStrategyConfig）
+pub use harness_dimensions::{OperatorSelectionStrategy, StopStrategyConfig};
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
@@ -382,4 +547,34 @@ pub mod prelude {
     pub use crate::archive_monotonicity::{
         assert_archive_monotonicity, ArchiveTier, InvariantViolation,
     };
+    // 设计文档 §5.3.1: 六维控制面契约（与顶层导出同集）
+    pub use crate::harness_dimensions::{
+        CompressionStrategy, ContextAssemblyContract, EvictionStrategy, ExtractionFormat,
+        FallbackStrategy, GenerationControlContract, HarnessConfigContract,
+        MemoryManagementContract, OutputProcessingContract, RetentionPolicy,
+        TaskOrchestrationContract, ToolInteractionContract, ValidationRule, WorkflowType,
+    };
+    // 设计文档 §5.3.2: OmniMessage 协议（与顶层导出同集）
+    pub use crate::omni_message::{ModelConfig, OmniMessage, TokenUsage};
+    // v3.4.0 §5.2: 经验卡片契约（与顶层导出同集）
+    pub use crate::experience_card::{
+        AtomicOperator, CardMetadata, EnvironmentInfo, ErrorSignature, ExecutionStatus,
+        ExperienceCard, NormalizedThreeFactor, ThreeFactorScore,
+    };
+    // v3.4.0 §5.3: Token 证据契约（与顶层导出同集）
+    pub use crate::token_evidence::{
+        SegmentCreationReason, SegmentMetadata, TokenLedgerEntry, ToolCallRecord,
+    };
+    // v3.4.0 §5.4: 记忆金字塔契约（与顶层导出同集）
+    pub use crate::memory_pyramid::{
+        AtomicCardType, AtomicMemoryCard, MemoryPyramidLevel, PersonaSummary, SceneBlock,
+    };
+    // v3.4.0 §5.5: Skill 生命周期契约（与顶层导出同集）
+    pub use crate::skill_lifecycle::{SkillLifecycleContract, SkillLifecycleState};
+    // v3.4.0 §5.7: RL 预留钩子契约（与顶层导出同集）
+    pub use crate::rl_hooks::{
+        PolicyFormat, RLActionVector, RLHook, RLStateVector, RLTrajectory, SerializedPolicy,
+    };
+    // v3.4.0 §5.6: 六维控制面扩展（与顶层导出同集）
+    pub use crate::harness_dimensions::{OperatorSelectionStrategy, StopStrategyConfig};
 }

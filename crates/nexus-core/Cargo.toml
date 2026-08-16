@@ -19,6 +19,10 @@ tracing = { workspace = true }
 # WHY 合规: L1 → L0 恒允许(§2.2 依赖铁律扩展 ADR-033);nexus-contracts 纯类型零依赖,不引入环
 # re-export 模式: types.rs 中 `pub use nexus_contracts::{TaskStatus, Checkpoint}` 保持向后兼容
 nexus-contracts = { workspace = true }
+# P1-W4: 统计学习接口层(v3.4.0 §6.3 SlidingWindow/UCB,epsilon-greedy 探索)
+rand = { workspace = true }
+# P1-W5: RL 客户端骨架(v3.4.0 §6.4 RLClient trait,async 接口)
+async-trait = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

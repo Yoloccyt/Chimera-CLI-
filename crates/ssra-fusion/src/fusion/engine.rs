@@ -146,6 +146,8 @@ impl SlimeFusionEngine {
 
         Ok(FusionResult {
             fused_template_id: Uuid::now_v7().to_string(),
+            // 构造占位 0: 公开路径 fuse() 在超时包装外层以 Instant 回填真实
+            // 延迟（见 fuse() 的 start.elapsed()）——此处非虚假数据固化
             latency_ms: 0,
             confidence,
             selected_count,
@@ -265,15 +267,29 @@ fn compute_confidence(top: &[(f32, FusionStrategy)], strategy: FusionStrategy) -
 }
 
 /// 防御性适配 — 预编译并注册模板(best-effort,缓存满时先驱逐)
+///
+/// W6 修复(ADR-084 决策 3): 原实现以**空参数形状**注册防御模板（空壳占位,
+/// 注册后无法参与源适配器兼容性校验）——现克隆 registry 中 base_id 模板的
+/// 真实 `parameter_shape`;base 未注册时回退空形状并记 debug 日志。
 fn defensive_adapt(registry: &TemplateRegistry, base_id: &str, strategy: FusionStrategy) {
     let cap_id = format!("defensive-{base_id}");
-    let spec = TemplateSpec::new(cap_id.clone(), vec![], strategy);
+    let parameter_shape = match registry.get(base_id) {
+        Some(base) => base.parameter_shape.clone(),
+        None => {
+            tracing::debug!(
+                base_id,
+                "防御性适配基准模板未注册,回退空参数形状"
+            );
+            Vec::new()
+        }
+    };
+    let spec = TemplateSpec::new(cap_id.clone(), parameter_shape, strategy);
     let template = precompile(spec);
 
     if registry.register(template).is_err() {
         // 缓存满,驱逐最旧后重试一次
         registry.evict_oldest();
-        let retry_spec = TemplateSpec::new(cap_id, vec![], strategy);
+        let retry_spec = TemplateSpec::new(cap_id, Vec::new(), strategy);
         if let Err(e) = registry.register(precompile(retry_spec)) {
             warn!(error = %e, "防御性适配模板注册失败");
         }
@@ -636,5 +652,40 @@ mod tests {
         let max = pick_max_weight(top);
         assert_eq!(max.map(|(w, _)| *w), Some(0.9));
         assert_eq!(max.map(|(_, s)| *s), Some(FusionStrategy::TopK));
+    }
+
+    // ============================================================
+    // W6 防御性适配真实化测试（ADR-084 决策 3）
+    // ============================================================
+
+    #[test]
+    fn test_defensive_adapt_clones_base_parameter_shape() {
+        // W6 修复: 防御模板克隆 base 真实参数形状（原空壳占位,
+        // 注册后无法参与源适配器兼容性校验）
+        let engine = make_engine_with_templates(8, vec![("shell-exec", 0.8, FusionStrategy::TopK)]);
+        // make_engine_with_templates 以 vec!["x"] 为参数形状注册 base
+        defensive_adapt(engine.registry(), "shell-exec", FusionStrategy::WeightedAverage);
+        let defensive = engine
+            .registry()
+            .get("defensive-shell-exec")
+            .expect("防御模板已注册");
+        assert_eq!(
+            defensive.parameter_shape,
+            vec!["x".to_string()],
+            "克隆 base 参数形状（非空壳）"
+        );
+        assert_eq!(defensive.fusion_strategy, FusionStrategy::WeightedAverage);
+    }
+
+    #[test]
+    fn test_defensive_adapt_base_missing_falls_back_to_empty() {
+        // base 未注册 → 回退空形状（诚实降级,不 panic）
+        let engine = make_engine_with_templates(8, vec![("a", 0.9, FusionStrategy::TopK)]);
+        defensive_adapt(engine.registry(), "ghost-capability", FusionStrategy::TopK);
+        let ghost = engine
+            .registry()
+            .get("defensive-ghost-capability")
+            .expect("回退路径仍注册模板");
+        assert!(ghost.parameter_shape.is_empty(), "base 缺失回退空形状");
     }
 }

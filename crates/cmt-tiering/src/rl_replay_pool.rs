@@ -42,7 +42,10 @@ const COLD_CAPACITY: usize = 10_000;
 const ICE_CAPACITY: usize = 100_000;
 
 /// 分层采样比例:Hot / Warm / Cold(Ice 不参与在线采样)
-const SAMPLE_RATIOS: (f32, f32, f32) = (0.25, 0.25, 0.5);
+///
+/// 公开导出供 `pyramid_storage::PYRAMID_SAMPLE_RATIOS` 一致性对齐测试引用
+/// (Wave 4 防漂移:两处采样比例必须语义一致)。
+pub const SAMPLE_RATIOS: (f32, f32, f32) = (0.25, 0.25, 0.5);
 
 /// 高价值失败经验的奖励阈值(方案 §7.1:reward < -5.0 → Cold)
 const FAILURE_REWARD_THRESHOLD: f32 = -5.0;

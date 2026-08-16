@@ -36,6 +36,7 @@
 //! - `50agent_mem_peak` ≤ 130MB(§15.3 预算模型)
 
 use crate::error::{MasError, Result};
+use crate::feedback::{ExpertFeedbackRegistry, ExpertPriorityAdjustment};
 use crate::invariants::MEMORY_BUDGET_MB;
 use crate::scheduler::WsjfWeights;
 
@@ -250,6 +251,8 @@ impl Default for TierDistribution {
 /// - `tau_seconds`: 衰减时间常数(秒,cmt-tiering DecayCalculator 参数)
 /// - `pool_size`: Agent 池大小(50 稳态,可上下浮动)
 /// - `wsjf_weights`: WSJF 权重 W1..W4(§8.2,可经 PDCA 回流微调)
+/// - `expert_adjustments`: 专家级优先级调整建议(经 `act_with_feedback` 生成,
+///   默认空 = 无专家级建议,保持与旧版 `act` 行为一致)
 #[derive(Debug, Clone, PartialEq)]
 pub struct PdcaAdjustments {
     /// Agent tier 分布
@@ -260,6 +263,8 @@ pub struct PdcaAdjustments {
     pub pool_size: u32,
     /// WSJF 权重 W1..W4
     pub wsjf_weights: WsjfWeights,
+    /// 专家级优先级调整建议(专家 Agent 优化 2026-08-11)
+    pub expert_adjustments: Vec<ExpertPriorityAdjustment>,
 }
 
 impl PdcaAdjustments {
@@ -275,7 +280,17 @@ impl PdcaAdjustments {
             tau_seconds,
             pool_size,
             wsjf_weights,
+            expert_adjustments: Vec::new(),
         }
+    }
+
+    /// 设置专家级优先级调整建议(builder 模式,向后兼容)
+    ///
+    /// WHY builder 而非修改 `new()` 签名:专家级建议仅在 `act_with_feedback`
+    /// 路径生成,普通 `act` 路径保持空列表,既有调用方无需改动。
+    pub fn with_expert_adjustments(mut self, adjustments: Vec<ExpertPriorityAdjustment>) -> Self {
+        self.expert_adjustments = adjustments;
+        self
     }
 
     /// 默认调整(50 Agent 稳态 + 24h 衰减 + 等权 WSJF)
@@ -285,6 +300,7 @@ impl PdcaAdjustments {
             tau_seconds: 86_400, // 24h
             pool_size: 50,
             wsjf_weights: WsjfWeights::default(),
+            expert_adjustments: Vec::new(),
         }
     }
 }
@@ -753,6 +769,32 @@ impl PdcaLoop {
         ))
     }
 
+    /// Act 阶段(带专家反馈)— 在 `act` 基础上追加专家级优先级调整建议
+    ///
+    /// ## 专家级调整逻辑(专家 Agent 优化 2026-08-11)
+    ///
+    /// 消费 `ExpertFeedbackRegistry::priority_adjustments()`:
+    /// - 高成功率专家(≥0.8,样本 ≥10)→ 建议 priority_delta = +0.1
+    /// - 低成功率专家(≤0.4,样本 ≥10)→ 建议 priority_delta = -0.1
+    ///
+    /// 建议由调用方应用到实际调度器(如 chimera-mas PriorityScheduler
+    /// 或 gea-activator ExpertProfile.priority),实现按专家粒度的
+    /// 资源分配调优(Ω-Evolve 反馈闭环的 mas 侧落地)。
+    ///
+    /// ## 参数
+    /// - `metrics`: 当前度量(同 `act`)
+    /// - `feedback`: 专家反馈注册表(可为空,空时输出与 `act` 一致)
+    pub fn act_with_feedback(
+        &self,
+        metrics: &PdcaMetrics,
+        feedback: &ExpertFeedbackRegistry,
+    ) -> Result<PdcaAdjustments> {
+        let base = self.act(metrics)?;
+        // 最小样本阈值 10:与 gea confidence 全量信任阈值一致,样本不足不调优
+        let adjustments = feedback.priority_adjustments(10);
+        Ok(base.with_expert_adjustments(adjustments))
+    }
+
     /// Plan 阶段 — 回流下一轮 Plan(SubTask 20.10)
     ///
     /// 根据当前 metrics 与 adjustments 生成下一轮的:
@@ -838,6 +880,22 @@ impl PdcaLoop {
                 "Decompose VeryComplex tasks to Complex (reduce quadrant fanout 4→3, target ratio {:.1}%)",
                 current_metrics.verycomplex_task_ratio * 0.7 * 100.0
             ));
+        }
+
+        // 专家 Agent 优化 2026-08-11:专家级优先级调整建议(由 act_with_feedback 生成)
+        // 空列表时不产生行动项,行为与旧版一致(向后兼容)
+        for adj in &adjustments.expert_adjustments {
+            if adj.priority_delta > 0.0 {
+                action_items.push(format!(
+                    "Prioritize expert {}: {} (delta {:+})",
+                    adj.expert_id, adj.reason, adj.priority_delta
+                ));
+            } else {
+                action_items.push(format!(
+                    "Deprioritize expert {}: {} (delta {:+})",
+                    adj.expert_id, adj.reason, adj.priority_delta
+                ));
+            }
         }
 
         if action_items.is_empty() {
@@ -1120,6 +1178,87 @@ mod tests {
         assert_eq!(adj.tau_seconds, 86_400);
         assert_eq!(adj.pool_size, 50);
         assert_eq!(adj.wsjf_weights, WsjfWeights::default());
+        // 无反馈时专家调整为空(向后兼容)
+        assert!(adj.expert_adjustments.is_empty());
+    }
+
+    // --- PdcaLoop::act_with_feedback() 测试(专家 Agent 优化 2026-08-11) ---
+
+    #[test]
+    fn test_act_with_feedback_empty_registry_matches_act() {
+        // 空反馈注册表:输出与 act 一致(仅 expert_adjustments 为空列表)
+        let loop_ = PdcaLoop::new();
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 0.5);
+        let feedback = crate::feedback::ExpertFeedbackRegistry::new();
+        let adj = loop_.act_with_feedback(&m, &feedback).expect("Act 成功");
+        assert_eq!(adj.pool_size, 50);
+        assert!(adj.expert_adjustments.is_empty());
+    }
+
+    #[test]
+    fn test_act_with_feedback_generates_expert_adjustments() {
+        use crate::feedback::ExpertFeedbackRegistry;
+        let loop_ = PdcaLoop::new();
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 0.5);
+        let feedback = ExpertFeedbackRegistry::new();
+        // E01:10 次全成功 → +0.1;E02:10 次全失败 → -0.1;E03:样本不足 → 无建议
+        for _ in 0..10 {
+            feedback.record_outcome("E01", true, 5.0);
+        }
+        for _ in 0..10 {
+            feedback.record_outcome("E02", false, 20.0);
+        }
+        for _ in 0..3 {
+            feedback.record_outcome("E03", true, 5.0);
+        }
+
+        let adj = loop_.act_with_feedback(&m, &feedback).expect("Act 成功");
+        assert_eq!(adj.expert_adjustments.len(), 2, "仅 E01/E02 达到样本阈值");
+        assert_eq!(adj.expert_adjustments[0].expert_id, "E01");
+        assert!((adj.expert_adjustments[0].priority_delta - 0.1).abs() < 1e-9);
+        assert_eq!(adj.expert_adjustments[1].expert_id, "E02");
+        assert!((adj.expert_adjustments[1].priority_delta + 0.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_plan_reflux_includes_expert_action_items() {
+        // 专家级建议应进入 plan_reflux 行动项(闭环:Act → Plan → Do)
+        let loop_ = PdcaLoop::new();
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 0.5);
+        let feedback = crate::feedback::ExpertFeedbackRegistry::new();
+        for _ in 0..10 {
+            feedback.record_outcome("E01", true, 5.0);
+        }
+        let adj = loop_.act_with_feedback(&m, &feedback).expect("Act 成功");
+        assert_eq!(adj.expert_adjustments.len(), 1);
+
+        let reflux = loop_.plan_reflux(&m, &adj).expect("Plan 成功");
+        assert!(
+            reflux
+                .action_items
+                .iter()
+                .any(|s| s.contains("Prioritize expert E01")),
+            "行动项应包含 E01 优先分配建议: {:?}",
+            reflux.action_items
+        );
+    }
+
+    #[test]
+    fn test_full_pdca_cycle_with_feedback() {
+        // 完整闭环:Check → Act(with feedback)→ Plan 全链路
+        use crate::feedback::ExpertFeedbackRegistry;
+        let loop_ = PdcaLoop::new();
+        let m = PdcaMetrics::new(50.0, 0.0, 0.0, 0.0, 1000, 0.5);
+        let feedback = ExpertFeedbackRegistry::new();
+        for _ in 0..10 {
+            feedback.record_outcome("E08", true, 8.0);
+        }
+        let alerts = loop_.check(&m);
+        assert!(alerts.is_empty());
+        let adj = loop_.act_with_feedback(&m, &feedback).expect("Act 成功");
+        assert!(!adj.expert_adjustments.is_empty());
+        let reflux = loop_.plan_reflux(&m, &adj).expect("Plan 成功");
+        assert!(reflux.action_items.iter().any(|s| s.contains("E08")));
     }
 
     #[test]

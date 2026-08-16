@@ -5,7 +5,8 @@
 //!
 //! # 核心职责
 //! - 提供类型安全的发布订阅(typed broadcast bus)
-//! - 定义 65 个跨层事件类型(Week 1-8 累计),修正 4 处依赖方向违规(Part A 分析)
+//! - 定义 134 个 NexusEvent 跨层事件变体(v2.26.0-omega 实测枚举),
+//!   修正 4 处依赖方向违规(Part A 分析)
 //! - 背压处理与慢消费者隔离,避免孤儿调用(架构红线)
 //! - MessagePack 序列化(ADR-004),支持跨进程投递
 //!
@@ -39,10 +40,18 @@ pub mod bus;
 ///
 /// 详见 [`causal::VectorClock`]。
 pub mod causal;
+/// 事件分类实现(P1-3 拆分,types.rs 上帝文件治理)
+///
+/// 承接 `NexusEvent` 的 severity()/type_name() 两个巨型 match,
+/// types.rs 保留 enum 定义与 metadata()。同 crate 内 `impl NexusEvent`
+/// 跨文件分块,调用路径零变化。severity() 判定逻辑留在 event-bus
+/// (架构红线:Critical 事件 mpsc 保障),与 bus.rs `is_critical_mpsc_event`
+/// 双清单同步红线由守护测试兜底。
+pub mod classification;
 pub mod error;
 /// 分层子枚举 — NexusEvent 按架构层拆分的分类实现
 ///
-/// 将 88+ 变体的 NexusEvent 按架构层拆分为 8 个子枚举:
+/// 将 134 变体的 NexusEvent 按架构层拆分为 8 个子枚举:
 /// CoreEvent/MemoryEvent/StorageEvent/SecurityEvent/RouterEvent/
 /// ExecutionEvent/QuestEvent/InterfaceEvent。每个子枚举实现
 /// `EventClassification` trait(metadata/severity/type_name)。
@@ -51,6 +60,11 @@ pub mod error;
 /// NexusEvent 变体结构保持不变(消费方零改动),子枚举作为分类
 /// 参考与未来迁移目标。
 pub mod event_types;
+/// 经验卡片总线 — OpenMLE 经验卡片双通道 + 四索引（v3.4.0 §6.1）
+///
+/// 承载 ExperienceCardBus（broadcast + mpsc 分级投递 + task/node/factor/error
+/// 四索引 + 全局统计），使经验卡片成为 Event Bus 一级公民。
+pub mod experience_card_bus;
 /// FormalVerifier M1 — 事件因果一致性形式化验证(P7-T4,ADR-047 Property #4)
 ///
 /// 验证 EventMetadata 序列(event_id 时序/同 source 时间戳/唯一性),
@@ -75,7 +89,17 @@ pub mod payloads;
 /// 无锁读(~5ns)+ 原子写(~50ns),旧快照在新写入后仍有效(RCU 回收语义)。
 /// 详见 [`rcu::MonotonicState`]。
 pub mod rcu;
+/// Segment-aware PER — 轨迹分段优先级经验回放（v3.4.0 §6.2）
+///
+/// 承载 SegmentAwarePER + PerBuffer（铁律9 分段身份共享 + prompt-equal
+/// denominator + TD 误差权重采样）。
+pub mod segment_per;
 pub mod subscriber;
+/// Token 账本 — Dressage Token 级证据的 append-only 存储（v3.4.0 §6.1 + §5.3）
+///
+/// 承载 TokenLedger（有序账本 + 会话/实例双索引 + 完整性校验 + 导出通道），
+/// 保证"Token Ledger 不可丢失（训练证据完整性）"绝对红线。
+pub mod token_ledger;
 pub mod topic;
 pub mod types;
 
@@ -103,10 +127,16 @@ pub use membrane::{
 pub use causal::{CausalRelation, VectorClock};
 pub use topic::{EventTopic, FilteredSubscriber};
 pub use types::{
-    ActionSource, AgentStatus, BudgetMetricsPayload, ChatStatus, ClvSummary, ConsultUrgency,
-    CriticalEventDropped, EventMetadata, EventSeverity, NexusEvent, QuestStatus,
+    ActionSource, AgentStatus, BudgetMetricsPayload, ChatStatus, ClvSummary, CompatLevel,
+    ConsultUrgency, CriticalEventDropped, EventMetadata, EventSeverity, NexusEvent, QuestStatus,
     RouterStatsPayload, TaskPriority, VoteValue,
 };
+// v3.4.0 §6.1: 经验卡片总线（OpenMLE 双通道 + 四索引）
+pub use experience_card_bus::{ExperienceCardBus, GlobalCardStats};
+// v3.4.0 §6.1 + §5.3: Token 账本（Dressage 证据完整性）
+pub use token_ledger::{LedgerError, LedgerIntegrityReport, TokenLedger};
+// v3.4.0 §6.2: Segment-aware PER（铁律9 分段身份）
+pub use segment_per::{PerBuffer, PerEntry, PerStats, SegmentAwarePER};
 // 分层子枚举与分类 trait(渐进式拆分,消费方可按需导入)
 pub use event_types::{
     CoreEvent, EventClassification, ExecutionEvent, InterfaceEvent, MemoryEvent, QuestEvent,

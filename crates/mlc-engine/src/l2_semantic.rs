@@ -4,7 +4,10 @@
 //!
 //! # 设计决策(WHY)
 //! - **线性扫描而非 ANN 索引**:100-4096 条目规模下,线性扫描 O(n×d) 足够快
-//!   (Top-10 召回 < 5ms),Week 6 后接入 sqlite-vec 提升到 10万级规模
+//!   (Top-10 召回 < 5ms 基准达标)。hnsw_rs 已引入(workspace 依赖)但仅用于
+//!   memory_graph >1K 节点建边候选生成;sqlite-vec 方案已被 ADR-005 禁用
+//!   (违反 forbid(unsafe_code),改内存 KNN),不再作为演进路径。
+//!   4096 条目 Top-10 召回 < 200ms 由 mlc_l2_knn 基准守护。
 //! - **相似度 clamp 到 [0.0, 1.0]**:余弦相似度理论范围 [-1.0, 1.0],
 //!   负值表示"语义相反",对记忆召回无意义,clamp 到 0.0 表示"无相似性"
 //! - **VecDeque<(SharedCLV, MemoryId)> 而非 HashMap**:向量需顺序扫描,Vec 缓存友好;

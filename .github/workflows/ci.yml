@@ -96,8 +96,10 @@ jobs:
 
       - name: Test (workspace, 快速回归)
         # WHY 命令裁剪(2026-08-05 实测,冷全量 ~30min):
-        # - --exclude chimera-e2e-tests:33 个 E2E/压测 [[test]] 独立二进制的
+        # - --exclude chimera-e2e-tests:根 package 33 个 E2E/压测 [[test]] 独立二进制的
         #   编译+链接+运行移出快轨,由下方 e2e job 并行承担(门禁不丢失);
+        #   注:必须显式传入(2026-08-12 修复——此前命令缺失该参数,注释与命令漂移,
+        #   导致 check job 重复编译运行 E2E target,拖慢快轨);
         # - nextest:不运行 doc-tests(~335s,占 cargo test 运行段 55%),
         #   doc-tests 由 release.yml 全量验证与发布清单步骤覆盖;
         # - --no-fail-fast:单测试失败不阻塞其余测试运行,汇总全部失败;
@@ -113,7 +115,7 @@ jobs:
           # ultra-plan: mcp-mesh 1000 次事务集成测试参数化(缺省 1000,快轨 100)
           # 事件流连续性语义在任意 N 下等价(见 integration.rs 测试注释)。
           CHIMERA_MCP_TXN_COUNT: '100'
-        run: cargo nextest run --profile ci-fast -E 'not binary(/stress/)' --no-fail-fast
+        run: cargo nextest run --profile ci-fast --exclude chimera-e2e-tests -E 'not binary(/stress/)' --no-fail-fast
 
       # WHY: sccache 命中率统计(始终运行,即便测试失败也能观察缓存效果)。
       # 用于评估跨 job 编译缓存复用率,指导缓存策略调优。

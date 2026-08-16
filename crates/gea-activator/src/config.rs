@@ -24,6 +24,13 @@ pub struct GeaConfig {
     pub w2: f32,
     /// 亲和度权重 w3(能力标签匹配度)
     pub w3: f32,
+    /// 专家 confidence 权重 w4(历史成功率反馈,默认 0.0 = 不启用)
+    ///
+    /// 专家 Agent 优化 2026-08-11:门控公式扩展为
+    /// `sigmoid(w1×complexity + w2×relevance + w3×affinity + w4×confidence - bias)`。
+    /// 默认 0.0 保持公式与旧版逐位一致;启用时建议 w1+w2+w3+w4 ≈ 1.0。
+    #[serde(default)]
+    pub w4_confidence: f32,
     /// 门控偏置 bias(越大越难激活)
     pub bias: f32,
     /// 激活阈值:门控值 >= 此值才激活
@@ -48,6 +55,7 @@ impl Default for GeaConfig {
             w1: 0.4,
             w2: 0.3,
             w3: 0.3,
+            w4_confidence: 0.0,
             bias: 0.5,
             activation_threshold: 0.5,
             cache_capacity: 128,
@@ -64,13 +72,13 @@ impl GeaConfig {
     /// WHY:在构造 GeaActivator 时调用,提前暴露配置错误,
     /// 避免运行时门控计算产生 NaN 或负值导致排序异常
     pub fn validate(&self) -> Result<(), GeaError> {
-        // 权重应为非负,且和接近 1.0(允许浮点误差)
-        if self.w1 < 0.0 || self.w2 < 0.0 || self.w3 < 0.0 {
+        // 权重应为非负,且和(w1+w2+w3+w4)接近 1.0(允许浮点误差)
+        if self.w1 < 0.0 || self.w2 < 0.0 || self.w3 < 0.0 || self.w4_confidence < 0.0 {
             return Err(GeaError::ConfigError {
                 detail: "weights must be non-negative".into(),
             });
         }
-        let sum = self.w1 + self.w2 + self.w3;
+        let sum = self.w1 + self.w2 + self.w3 + self.w4_confidence;
         if (sum - 1.0).abs() > 1e-3 {
             return Err(GeaError::ConfigError {
                 detail: format!("weights sum must be ~1.0, got {sum}"),

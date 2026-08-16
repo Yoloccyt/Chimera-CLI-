@@ -205,10 +205,10 @@ impl MemoryStrategyLearnerHolder {
             guard
         });
         *guard = policy;
-        // Task 3.2: 同步全局记忆策略阶段快照,供 L10 TUI SelfAssessmentPanel 实时读取。
-        // WHY 单一同步点: 所有策略变化(update_policy/fallback_to_static/with_policy)
-        // 最终都走 update_policy,在此同步可保证全局快照与 holder 状态一致。
-        crate::set_current_memory_stage(policy.strategy());
+        // L2-P1-1 事件驱动化:原全局快照同步(set_current_memory_stage)已移除。
+        // 策略变更的可观测传播改由 MlcEngine 层发布 MemConStrategyAdjusted 事件
+        // (engine.rs::publish_strategy_adjusted),消除进程级隐式全局状态。
+        // 本 holder 保持纯状态容器(无 EventBus 依赖),单测无需构造总线。
     }
 
     /// 强制回退到 fallback 策略（`Static(StandardTopK)`）

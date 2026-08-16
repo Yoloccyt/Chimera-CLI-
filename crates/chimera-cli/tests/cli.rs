@@ -1404,7 +1404,7 @@ fn test_subcommand_help_contains_examples_section() {
     }
 }
 
-/// 测试 `chimera --help` 输出包含 OMEGA 四定律描述(long_about,SubTask 2.1.1)
+/// 测试 `chimera --help` 输出包含 OMEGA 九定律描述(long_about,SubTask 2.1.1)
 #[test]
 fn test_help_output_contains_omega_long_about() {
     let bin = env!("CARGO_BIN_EXE_chimera");

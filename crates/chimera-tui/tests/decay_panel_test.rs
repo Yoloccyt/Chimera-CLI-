@@ -16,9 +16,11 @@ use chimera_tui::{
     TuiError,
 };
 use chrono::Utc;
-use decay_engine::shadow_breaker_status;
+use event_bus::{EventMetadata, NexusEvent};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// 测试数据源 — 返回预设 Decay 指标
 #[derive(Debug)]
@@ -357,12 +359,16 @@ fn test_decay_panel_renders_cycle_start() {
 }
 
 // ============================================================
-// Task 3.4: L4 Security 协同 — 影子模式熔断开关测试
+// Phase 6 D-6 治理: 影子模式熔断事件驱动化测试
 // ============================================================
+//
+// 原测试固化已删除的 decay_engine::shadow_breaker_status() 全局占位函数
+// (虚假数据固化,断言默认全 false)。治理后面板从 latest_events 事件流
+// 派生最近 ShadowBreakerTripped 事件的跳闸原因;无事件时诚实显示 N/A。
 
 #[test]
-fn test_decay_panel_displays_shadow_breaker_status() {
-    // 验证面板渲染包含 3 个熔断开关状态
+fn test_decay_panel_no_breaker_event_shows_na() {
+    // 无 ShadowBreakerTripped 事件时诚实显示 N/A(不虚报全 false)
     let mut app = TuiApp::with_data_source(
         TuiConfig {
             default_view_mode: chimera_tui::ViewMode::Dashboard,
@@ -377,28 +383,39 @@ fn test_decay_panel_displays_shadow_breaker_status() {
 
     let content = render_to_string(&mut app, 80, 30);
     let compact: String = content.chars().filter(|c| *c != ' ').collect();
-    // 面板应包含 "熔断:" 行(熔断开关)
+    // 面板应包含 "熔断:" 行且值为 N/A
     assert!(
-        compact.contains("熔断:"),
-        "面板应显示熔断开关状态行,实际内容全文:\n{}",
+        compact.contains("熔断:N/A"),
+        "无跳闸事件时应诚实显示 N/A,实际内容全文:\n{}",
         content
     );
-    assert!(
-        content.contains("TokenBurn:"),
-        "面板应显示 TokenBurn 熔断状态"
-    );
-    assert!(
-        content.contains("MemoryFreeze:"),
-        "面板应显示 MemoryFreeze 熔断状态"
-    );
-    assert!(
-        content.contains("NetworkIsolate:"),
-        "面板应显示 NetworkIsolate 熔断状态"
-    );
+}
 
-    // 验证 decay_engine::shadow_breaker_status() 默认全 false
-    let status = shadow_breaker_status();
-    assert!(!status.token_burn, "默认 TokenBurn 应为 false");
-    assert!(!status.memory_freeze, "默认 MemoryFreeze 应为 false");
-    assert!(!status.network_isolate, "默认 NetworkIsolate 应为 false");
+#[test]
+fn test_decay_panel_displays_breaker_trip_reason() {
+    // 注入 ShadowBreakerTripped 事件,验证面板从事件流派生跳闸原因
+    let mut snapshot = normal_decay_snapshot();
+    snapshot.latest_events = Arc::new(VecDeque::from(vec![NexusEvent::ShadowBreakerTripped {
+        metadata: EventMetadata::new("decay-engine"),
+        reason: "token_burn_exceeded".into(),
+    }]));
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(DecayTestSource::new(snapshot)),
+    )
+    .unwrap();
+    app.update();
+    app.switch_panel_to(PanelId::Decay);
+
+    let content = render_to_string(&mut app, 80, 30);
+    assert!(
+        content.contains("token_burn_exceeded"),
+        "面板应从事件流派生跳闸原因,实际内容全文:\n{}",
+        content
+    );
 }

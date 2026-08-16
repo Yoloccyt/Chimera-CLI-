@@ -58,16 +58,19 @@ $layerMap = @{
     # L5 Knowledge
     'repo-wiki' = 5; 'gsoe-evolution' = 5; 'auto-dpo' = 5
     # L6 Router
+    # Phase 6 W0 层图订正 (2026-08-16, ADR-084): gea-activator 移 L9 Quest,
+    # ssra-fusion 移 L7 Execution — 与 crate 自述头及 AGENTS.md §2.1 对齐
+    # (二者均零外部生产依赖方, 移动经 grep 核实无 Check-B 影响)
     'osa-coordinator' = 6; 'kvbsr-router' = 6; 'faae-router' = 6
-    'gea-activator' = 6; 'sesa-router' = 6; 'ssra-fusion' = 6
-    'omega-learner' = 6
+    'sesa-router' = 6; 'omega-learner' = 6
     # L7 Execution
     'pvl-layer' = 7; 'gqep-executor' = 7; 'mtpe-executor' = 7
-    'csn-substitutor' = 7
+    'csn-substitutor' = 7; 'ssra-fusion' = 7
     # L8 Parliament
     'parliament' = 8; 'acb-governor' = 8; 'decb-governor' = 8
     # L9 Quest
     'quest-engine' = 9; 'efficiency-monitor' = 9; 'chimera-mas' = 9
+    'gea-activator' = 9
     # L10 Interface
     'chimera-cli' = 10; 'chimera-tui' = 10; 'chtc-bridge' = 10
     'mca-gateway' = 10

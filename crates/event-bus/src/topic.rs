@@ -109,6 +109,8 @@ impl NexusEvent {
             | Self::ContextWindowSwitched { .. }
             | Self::ContextCompressed { .. }
             | Self::CapabilityTiered { .. }
+            // L3 深度优化:四层统计快照(Storage 归类,与 CapabilityTiered 同族)
+            | Self::CapabilityTierStatsReported { .. }
             | Self::NmcEncoded { .. }
             // TUI v1.8-omega:CLV 快照报告(NMC 编码器发布,携带 CLV 摘要)
             | Self::ClvSnapshotReported { .. }
@@ -118,6 +120,7 @@ impl NexusEvent {
 
             // === Security (8 + P2.1 1 个) === L4 Security 安全审计与干预
             Self::CapabilityFrozen { .. }
+            | Self::ShadowBreakerTripped { .. }
             | Self::SandboxViolation { .. }
             | Self::AuditLogged { .. }
             | Self::SkepticVeto { .. }
@@ -216,6 +219,9 @@ impl NexusEvent {
             | Self::TuiChatResponseChunk { .. }
             | Self::TuiChatCompleted { .. }
             | Self::TuiChatStatusChanged { .. }
+            // Concord W10 T10.1(ADR-082):TUI ↔ 编排器协议握手(L10 Interface 信道建立)
+            | Self::TuiHello { .. }
+            | Self::TuiHelloAck { .. }
             // MCA M0(ADR-065):mca-gateway 事件(L10 Interface 通道层,
             // 与 McpNodeHeartbeat/ChtcAdapterStatus 同属 L10 适配器家族)
             | Self::ModelAffinitySelected { .. }

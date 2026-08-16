@@ -55,6 +55,13 @@ $expected = [ordered]@{
     'undo'        = 'Orchestrated'
     'redo'        = 'Orchestrated'
     'focus'       = 'Instant'
+    'pace'        = 'Instant'      # Concord W8 T8.3(ADR-080)配速档
+    'context'     = 'Instant'      # Concord W9 T9.5(ADR-081)上下文网格
+    'recap'       = 'Instant'      # Concord W11 T11.8(ADR-083)会话回顾
+    'copy'        = 'Instant'      # Concord W11 T11.9(ADR-083)复制回复
+    'notify'      = 'Instant'      # Concord W11 T11.3(ADR-083)通知开关
+    'commands'    = 'Instant'      # Concord W11 T11.2(ADR-083)用户命令管理
+    'agent tree'  = 'Instant'      # Concord W10 T10.4(ADR-082)Agent 谱系树
 }
 
 $diffs = @()

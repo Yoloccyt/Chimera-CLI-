@@ -56,7 +56,7 @@ use clap::{Parser, Subcommand};
     about = "NEXUS-OMEGA AI Coding Agent — 全维稀疏架构的下一代编码代理",
     long_about = "NEXUS-OMEGA AI Coding Agent — 全维稀疏架构的下一代编码代理\n\
 \n\
-基于 OMEGA 四定律(Ω-Sparse / Ω-Compress / Ω-Evolve / Ω-Event)构建,\n\
+基于 OMEGA 九定律(Ω₁-Sparse / Ω₂-Compress / Ω₃-Evolve / Ω₄-Event / Ω₅-Credit / Ω₆-Reuse / Ω₇-Locate / Ω₈-Assess / Ω₉-Preserve)构建,\n\
 提供 Quest 长期任务管理、多模型议会审议、MCP 量子网格、红队安全审计等能力。\n\
 默认启动 TUI 交互界面,也可通过子命令进行脚本化操作。",
     // Task 5 of spec: 禁用 clap 自动生成的 `help` 子命令,避免与我们的 `Help` 变体冲突
@@ -257,7 +257,7 @@ chimera --json config show                     # 显示完整配置(JSON)"
 默认输出 Top-10 结果（标题 + 相似度分数 + 摘要）。",
         after_long_help = "EXAMPLES:\n  \
 chimera wiki \"Quest 分解机制\"                 # 语义检索\n  \
-chimera wiki --limit 20 \"OMEGA 四定律\"        # 限制返回 20 条\n  \
+chimera wiki --limit 20 \"OMEGA 九定律\"        # 限制返回 20 条\n  \
 chimera --json wiki \"EventBus\"               # JSON 输出"
     )]
     Wiki {

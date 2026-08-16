@@ -207,4 +207,77 @@ proptest! {
         prop_assert_eq!(new_activated, ref_activated, "activated 序列应与全扫描参考一致");
         prop_assert_eq!(new_suppressed, ref_suppressed, "suppressed 集合应与全扫描参考一致");
     }
+
+    /// 高密度专家池(16-64 候选)下范数预计算 + 点积早停剪枝与参考实现等价
+    ///
+    /// WHY 覆盖剪枝热路径:高重叠向量(基向量 + 微扰)使绝大多数候选在点积
+    /// 前几个分量即触发剪枝;同时低阈值(0.3)引入非冲突路径,两路径均被覆盖。
+    #[test]
+    fn prop_resolve_conflicts_high_density_prune_equivalence(
+        seed_vectors in prop::collection::vec(prop_vector_64(), 16..64),
+        top_k in 1usize..5,
+        overlap_threshold in 0.3f32..0.95,
+    ) {
+        let config = GeaConfig { top_k, overlap_threshold, ..Default::default() };
+        let mut profiles: HashMap<ExpertId, ExpertProfile> = HashMap::new();
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for (i, v) in seed_vectors.into_iter().enumerate() {
+            let id = ExpertId::new(format!("e-{i}"));
+            let gate = (i as f32 + 1.0) / 1000.0; // distinct gate
+            profiles.insert(
+                id.clone(),
+                ExpertProfile::new(format!("e-{i}"), v, 1.0, vec!["t".into()]),
+            );
+            candidates.push((id, gate));
+        }
+
+        let new_result = resolve_conflicts(candidates.clone(), &profiles, &config)
+            .expect("resolve_conflicts 应成功");
+        let (ref_activated, ref_suppressed) = reference_full_scan(candidates, &profiles, &config);
+
+        let new_activated: Vec<String> =
+            new_result.activated.iter().map(|id| id.to_string()).collect();
+        let new_suppressed: HashSet<String> =
+            new_result.suppressed.iter().map(|id| id.to_string()).collect();
+
+        prop_assert_eq!(new_activated, ref_activated, "高密度下 activated 序列应与全扫描参考一致");
+        prop_assert_eq!(new_suppressed, ref_suppressed, "高密度下 suppressed 集合应与全扫描参考一致");
+    }
+
+    /// 等长向量剪枝边界的位级一致性:范数预计算与精确路径对同一对专家
+    /// 的冲突判定必须一致(覆盖 threshold_product 边界附近的舍入安全)。
+    #[test]
+    fn prop_resolve_conflicts_prune_boundary_consistency(
+        v in prop_vector_64(),
+        scale in 0.1f32..3.0,
+        overlap_threshold in 0.3f32..0.95,
+    ) {
+        let config = GeaConfig { top_k: 2, overlap_threshold, ..Default::default() };
+        let v2: Vec<f32> = v.iter().map(|x| (x * scale).min(1.0)).collect();
+        let mut profiles: HashMap<ExpertId, ExpertProfile> = HashMap::new();
+        profiles.insert(
+            ExpertId::new("e-a"),
+            ExpertProfile::new("e-a", v.clone(), 1.0, vec!["t".into()]),
+        );
+        profiles.insert(
+            ExpertId::new("e-b"),
+            ExpertProfile::new("e-b", v2, 1.0, vec!["t".into()]),
+        );
+        // 直接比较重叠判定:剪枝路径(新)与精确路径(基线)对同一对向量必须一致
+        let exact = nexus_core::cosine_similarity_slices(
+            &profiles[&ExpertId::new("e-a")].expert_vector,
+            &profiles[&ExpertId::new("e-b")].expert_vector,
+        );
+        let exact_conflict = exact > config.overlap_threshold;
+
+        let candidates: Vec<Candidate> = vec![
+            (ExpertId::new("e-a"), 0.9),
+            (ExpertId::new("e-b"), 0.8),
+        ];
+        let result = resolve_conflicts(candidates, &profiles, &config).expect("resolve ok");
+        // top_k=2 时:仅当 e-b 与 e-a 冲突才会被抑制;非冲突则两者均激活
+        let pruned_conflict = result.suppressed.iter().any(|id| id.as_str() == "e-b");
+        prop_assert_eq!(pruned_conflict, exact_conflict,
+            "剪枝路径与精确路径冲突判定必须一致(exact={}, threshold={})", exact, overlap_threshold);
+    }
 }

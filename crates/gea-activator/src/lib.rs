@@ -45,7 +45,7 @@ pub use activator::GeaActivator;
 pub use config::GeaConfig;
 pub use conflict::{resolve_conflicts, Candidate};
 pub use error::GeaError;
-pub use gating::compute_gate_value;
+pub use gating::{compute_gate_value, compute_gate_value_with_norms};
 pub use types::{ActivationResult, ExpertId, ExpertProfile, GateValue, TaskProfile};
 
 /// 预导入模块 — 提供最常用类型

@@ -64,7 +64,13 @@ pub struct PlatformGroundingSpec {
 }
 
 /// 接地校验结果
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// # serde derive 说明（2026-08-16 审计修复 A3）
+///
+/// 校验结果可随 RuntimeAuditor 审计报告序列化（L9 efficiency-monitor 消费），
+/// 故派生 `Serialize`/`Deserialize`；`missing` 列表的 String 字段保持
+/// 可变集合语义（序列化形态为 JSON 数组）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GroundingCheckOutcome {
     /// 全部要求满足（或规格为空——无要求即无违反）
     Grounded,

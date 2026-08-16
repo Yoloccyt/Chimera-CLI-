@@ -44,6 +44,8 @@ pub mod dag;
 pub mod engine;
 pub mod error;
 pub mod metrics_sync;
+/// P1-1: NexusStateChanged EventBus 适配器(L1 Core 深度优化,依赖倒置接线)
+pub mod state_listener;
 pub mod trajectory_exporter;
 pub mod ttg;
 pub mod types;
@@ -72,6 +74,8 @@ pub use error::QuestError;
 pub use metrics_sync::{
     spawn_metrics_subscriber, spawn_metrics_subscriber_with_receiver, PendingCoordSample,
 };
+// P1-1: NexusState 状态变更 → NexusStateChanged 事件适配器
+pub use state_listener::{BusStateChangeListener, STATE_LISTENER_SOURCE};
 // P4-W16.1.3: Quest 轨迹导出器类型重导出(供 L5 omega-learner / L9 efficiency-monitor 使用)
 pub use trajectory_exporter::{
     export_trajectory, export_trajectory_from_quest, ContextSummary, QuestTrajectory, TaskProgress,

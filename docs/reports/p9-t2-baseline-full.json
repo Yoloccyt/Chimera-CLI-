@@ -1,0 +1,63 @@
+{
+  "mode": "full",
+  "timestamp": "2026-08-07T02:45:16Z",
+  "host": "PC",
+  "cpu_count": 16,
+  "rustc_version": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+  "nextest_version": "cargo-nextest 0.9.143 (60fa45f63 2026-08-04)",
+  "chimera_test_timeout_scale": "1.0",
+  "chimera_backpressure_secs": "60",
+  "total_elapsed_secs": "190.56",
+  "top_tests": [
+    {
+      "binary": "mcp-mesh::integration",
+      "test": "mcp-mesh::integration$test_1000_transactions_all_publish_events",
+      "elapsed_secs": 94.441
+    },
+    {
+      "binary": "nmc-encoder::nmc_encoder",
+      "test": "nmc-encoder::nmc_encoder$perceptors::onnx_backend::tests::test_preprocess_video_corrupt",
+      "elapsed_secs": 12.488
+    },
+    {
+      "binary": "nmc-encoder::nmc_encoder",
+      "test": "nmc-encoder::nmc_encoder$perceptors::onnx_backend::tests::test_preprocess_video_empty",
+      "elapsed_secs": 12.248
+    },
+    {
+      "binary": "nmc-encoder::nmc_encoder",
+      "test": "nmc-encoder::nmc_encoder$perceptors::onnx_backend::tests::test_preprocess_image_valid_png",
+      "elapsed_secs": 12.225
+    },
+    {
+      "binary": "nmc-encoder::nmc_encoder",
+      "test": "nmc-encoder::nmc_encoder$perceptors::onnx_backend::tests::test_preprocess_video_ffmpeg_unavailable",
+      "elapsed_secs": 11.454
+    },
+    {
+      "binary": "model-router::moe_test",
+      "test": "model-router::moe_test$prop_five_dim_sparsity_invariant",
+      "elapsed_secs": 11.444
+    },
+    {
+      "binary": "nmc-encoder::nmc_encoder",
+      "test": "nmc-encoder::nmc_encoder$perceptors::onnx_backend::tests::test_preprocess_audio_synthetic_wav",
+      "elapsed_secs": 11.379
+    },
+    {
+      "binary": "nmc-encoder::nmc_encoder",
+      "test": "nmc-encoder::nmc_encoder$perceptors::onnx_backend::tests::test_preprocess_audio_non_wav",
+      "elapsed_secs": 11.157
+    },
+    {
+      "binary": "nmc-encoder::nmc_encoder",
+      "test": "nmc-encoder::nmc_encoder$perceptors::onnx_backend::tests::test_preprocess_image_empty",
+      "elapsed_secs": 11.108
+    },
+    {
+      "binary": "nmc-encoder::nmc_encoder",
+      "test": "nmc-encoder::nmc_encoder$perceptors::onnx_backend::tests::test_preprocess_image_golden",
+      "elapsed_secs": 10.997
+    }
+  ]
+}

@@ -110,10 +110,19 @@ impl SelfAssessmentPanel {
             }
         }
 
-        // Task 3.2: L2 Memory 协同 — 显示当前记忆策略阶段(全局快照)
-        // 调用 mlc_engine::current_memory_stage() 获取 MlcEngine 策略变化时
-        // 同步的全局快照,实现 L10 Panel ↔ L2 Memory 真实数据闭环。
-        let stage = mlc_engine::current_memory_stage();
+        // Task 3.2 事件驱动化治理:原 mlc_engine::current_memory_stage() 全局
+        // 占位函数已事件驱动化(MemConStrategyAdjusted 事件)。此处从 latest_events
+        // 事件流派生最近策略阶段;无事件时显示 N/A(诚实展示,
+        // 消除虚假数据固化,与 Cargo.toml Task 3.2 治理记录一致)。
+        let stage = state
+            .latest_events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                NexusEvent::MemConStrategyAdjusted { to_strategy, .. } => Some(to_strategy.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "N/A".to_string());
         lines.push(Line::from(format!("Memory Strategy Stage: {stage}")));
 
         // 最近审计发现(反向扫描,最新在前)

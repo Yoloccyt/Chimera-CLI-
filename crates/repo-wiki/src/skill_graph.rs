@@ -105,6 +105,11 @@ impl SkillGraph {
         self.nodes.get(skill_id)
     }
 
+    /// 图节点只读迭代（W3）— 供渐进加载索引映射（skill_metadata_from_graph）
+    pub fn iter(&self) -> impl Iterator<Item = &SkillNode> {
+        self.nodes.values()
+    }
+
     /// 安全约束校验（Milestone B-3a）— 悬空依赖 + 循环依赖检测
     ///
     /// # 检查项

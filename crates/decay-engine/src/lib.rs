@@ -10,6 +10,14 @@
 //!
 //! 冻结/解冻 API 对应 Skeptic 否决权(Week 5 Parliament 实现)
 //!
+//! # 承载职责清单(L4 深度优化补充)
+//! - 衰减引擎本体(engine.rs,双驱动模型)
+//! - P4-W14.4 S6 接缝(learner_holder.rs,DecayLearnerHolder 策略异步下发)
+//! - P4-W14.5 能力场令牌注册表(capability_registry.rs,C4 灰度授权)
+//! - R2 解冻阶段③ 影子模式熔断开关(shadow_breaker.rs,fail-closed 护栏;
+//!   L4 深度优化 P1-1:跳闸经 ShadowBreakerTripped 事件发布,事件驱动化)
+//! - FormalVerifier M2 衰减一致性验证(formal.rs)
+//!
 //! # P4-W14.4 S6 接缝扩展
 //!
 //! 新增 `decay_with_policy` 方法支持策略感知衰减(详见 `learner_holder` 模块):
@@ -76,40 +84,10 @@ pub fn default_config() -> DecayConfig {
     DecayConfig::default()
 }
 
-// === Task 3.4: L10 TUI 跨层协同 — 影子模式熔断开关状态快照 ===
-
-/// 影子模式熔断开关状态 — 3 个熔断维度(Task 3.4)
-///
-/// WHY 三个独立 bool 而非 bitmask: TUI 面板直接渲染 ON/OFF 文本,
-/// 独立字段比位运算更直观,且熔断维度固定 3 个,不会膨胀。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct ShadowBreakerStatus {
-    /// Token 燃烧熔断(能力衰减过速触发)
-    pub token_burn: bool,
-    /// 记忆冻结熔断(形式化属性违规触发)
-    pub memory_freeze: bool,
-    /// 网络隔离熔断(安全审计异常触发)
-    pub network_isolate: bool,
-}
-
-/// 返回影子模式熔断开关状态(Task 3.4 跨层 Panel 数据管道)
-///
-/// TUI DecayPanel 调用此函数显示"熔断开关"状态行。
-/// 当前返回默认全 false 值(TODO: 真实接入 ShadowModeCircuitBreaker 状态)。
-///
-/// # 示例
-///
-/// ```
-/// use decay_engine::{shadow_breaker_status, ShadowBreakerStatus};
-///
-/// let status = shadow_breaker_status();
-/// assert!(!status.token_burn);
-/// assert!(!status.memory_freeze);
-/// assert!(!status.network_isolate);
-/// ```
-pub fn shadow_breaker_status() -> ShadowBreakerStatus {
-    // TODO: 真实接入 ShadowModeCircuitBreaker 全局实例状态
-    // 当前返回默认值(全 false,即未触发熔断),待 R2 解冻阶段③
-    // ShadowModeCircuitBreaker 全局实例就位后替换
-    ShadowBreakerStatus::default()
-}
+// L4 深度优化 P1-1/P1-2:原 Task 3.4 的 shadow_breaker_status() 全局函数与
+// ShadowBreakerStatus 三虚设字段结构体(token_burn/memory_freeze/network_isolate)
+// 已移除。三字段中仅 memory_freeze 有实现载体(ShadowModeCircuitBreaker 单维度
+// Armed/Tripped 状态机),其余两维无实现——保留即制造虚假语义。
+// 熔断状态的可观测传播改走 Ω₄-Event:ShadowModeCircuitBreaker::with_event_bus
+// 装配后跳闸发布 ShadowBreakerTripped 事件,TUI DecayPanel 从 latest_events
+// 派生显示——与 L2/L3 任务事件驱动化治理同构。

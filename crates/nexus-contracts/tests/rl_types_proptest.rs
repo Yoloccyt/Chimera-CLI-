@@ -12,11 +12,17 @@ use nexus_contracts::{
 use proptest::prelude::*;
 
 /// 任意密度档位（S1 臂集）
+///
+/// WHY 重复 Just(default)：当前仅默认档位一种取值，prop_oneof! 双位
+/// 为未来扩展更多密度档位预留结构（新增档位时向 prop_oneof! 追加 Just）。
 fn any_density() -> impl Strategy<Value = DensityTier> {
     prop_oneof![Just(DensityTier::default()), Just(DensityTier::default()),]
 }
 
 /// 任意预取策略（S3 臂集）
+///
+/// WHY 重复 Just(default)：当前仅默认策略一种取值，prop_oneof! 双位
+/// 为未来扩展更多预取策略预留结构（新增策略时向 prop_oneof! 追加 Just）。
 fn any_prefetch() -> impl Strategy<Value = PrefetchStrategy> {
     prop_oneof![
         Just(PrefetchStrategy::default()),

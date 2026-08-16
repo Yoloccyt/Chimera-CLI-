@@ -29,6 +29,11 @@ nexus_core::id_newtype!(ExpertId, "专家唯一标识");
 /// `expert_vector` 为 64 维压缩表示,用于与任务 CLV 计算相关性。
 /// WHY 64 维:专家向量是能力压缩表示,维度低于 CLV(512)以降低存储与计算成本;
 /// 门控计算时由 `cosine_similarity_slices` 取最小长度,兼容维度差异。
+///
+/// # 运行时反馈(专家 Agent 优化 2026-08-11)
+/// 携带激活/成功率/延迟统计,`confidence()` 供门控计算加权——
+/// 高成功率专家更易被激活(Ω-Evolve 能力画像闭环的 gea 侧落地)。
+/// 反馈字段经 `#[serde(default)]` 保证旧序列化数据兼容。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpertProfile {
     /// 专家唯一 ID
@@ -39,6 +44,15 @@ pub struct ExpertProfile {
     pub priority: f32,
     /// 能力标签(如 ["code-gen", "rust", "async"])
     pub capability_tags: Vec<String>,
+    /// 历史成功次数(任务成功反馈,由下游调用方经 `record_outcome` 上报)
+    #[serde(default)]
+    pub success_count: u64,
+    /// 历史激活总次数(含失败)
+    #[serde(default)]
+    pub total_activations: u64,
+    /// 平均激活延迟(ms,EMA 平滑,alpha=0.2)
+    #[serde(default)]
+    pub avg_latency_ms: f32,
 }
 
 impl ExpertProfile {
@@ -54,7 +68,49 @@ impl ExpertProfile {
             expert_vector,
             priority,
             capability_tags,
+            success_count: 0,
+            total_activations: 0,
+            avg_latency_ms: 0.0,
         }
+    }
+
+    /// 记录一次激活结果反馈(成功/失败 + 延迟)
+    ///
+    /// 延迟用 EMA 平滑(`new = 0.2×latest + 0.8×old`),避免单次抖动
+    /// 影响门控 confidence;激活次数为单调计数器。
+    pub fn record_outcome(&mut self, success: bool, latency_ms: f32) {
+        self.total_activations = self.total_activations.saturating_add(1);
+        if success {
+            self.success_count = self.success_count.saturating_add(1);
+        }
+        let latency = latency_ms.max(0.0);
+        if self.total_activations == 1 {
+            self.avg_latency_ms = latency;
+        } else {
+            // EMA:新样本 20% 权重,历史 80%(平滑短期波动)
+            self.avg_latency_ms = 0.2 * latency + 0.8 * self.avg_latency_ms;
+        }
+    }
+
+    /// 历史成功率 [0.0, 1.0](无数据时返回 0.5 中性值)
+    ///
+    /// WHY 0.5 中性:无反馈数据的专家不应因默认值被惩罚或优待,
+    /// 与门控 confidence 的"无信息先验"语义一致。
+    pub fn success_rate(&self) -> f32 {
+        if self.total_activations == 0 {
+            return 0.5;
+        }
+        self.success_count as f32 / self.total_activations as f32
+    }
+
+    /// 门控 confidence [0.0, 1.0] — 成功率与数据量的加权
+    ///
+    /// 公式:`0.5 + (success_rate - 0.5) × confidence_weight`
+    /// 其中 `confidence_weight = min(total_activations / 10, 1.0)`:样本越少
+    /// 越向 0.5 中性值收缩(小样本不信任),≥10 次后全量信任成功率。
+    pub fn confidence(&self) -> f32 {
+        let weight = (self.total_activations as f32 / 10.0).min(1.0);
+        0.5 + (self.success_rate() - 0.5) * weight
     }
 }
 
@@ -237,6 +293,78 @@ mod tests {
         assert_eq!(profile.expert_vector.len(), 64);
         assert!((profile.priority - 0.8).abs() < 1e-6);
         assert_eq!(profile.capability_tags.len(), 2);
+        // 反馈字段默认零值
+        assert_eq!(profile.success_count, 0);
+        assert_eq!(profile.total_activations, 0);
+        assert_eq!(profile.avg_latency_ms, 0.0);
+    }
+
+    #[test]
+    fn test_record_outcome_tracks_stats() {
+        let mut profile = ExpertProfile::new("e-1", vec![0.5; 64], 0.8, vec![]);
+        profile.record_outcome(true, 10.0);
+        assert_eq!(profile.total_activations, 1);
+        assert_eq!(profile.success_count, 1);
+        assert_eq!(profile.avg_latency_ms, 10.0); // 首次直接取样本
+
+        profile.record_outcome(false, 20.0);
+        assert_eq!(profile.total_activations, 2);
+        assert_eq!(profile.success_count, 1);
+        // EMA:0.2×20 + 0.8×10 = 12.0
+        assert!((profile.avg_latency_ms - 12.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_success_rate_neutral_without_data() {
+        let profile = ExpertProfile::new("e-1", vec![0.5; 64], 0.8, vec![]);
+        assert_eq!(profile.success_rate(), 0.5); // 无数据中性值
+        assert_eq!(profile.confidence(), 0.5); // 无数据中性值
+    }
+
+    #[test]
+    fn test_confidence_small_sample_shrinks_toward_neutral() {
+        let mut profile = ExpertProfile::new("e-1", vec![0.5; 64], 0.8, vec![]);
+        // 1 次成功:weight=0.1 → confidence = 0.5 + 0.5×0.1 = 0.55
+        profile.record_outcome(true, 10.0);
+        assert!((profile.confidence() - 0.55).abs() < 1e-6);
+        // 10 次全成功:weight=1.0 → confidence = 1.0
+        let mut profile10 = ExpertProfile::new("e-1", vec![0.5; 64], 0.8, vec![]);
+        for _ in 0..10 {
+            profile10.record_outcome(true, 10.0);
+        }
+        assert!((profile10.confidence() - 1.0).abs() < 1e-6);
+        // 10 次全失败:confidence = 0.0
+        let mut profile_fail = ExpertProfile::new("e-1", vec![0.5; 64], 0.8, vec![]);
+        for _ in 0..10 {
+            profile_fail.record_outcome(false, 10.0);
+        }
+        assert!((profile_fail.confidence() - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_preserves_feedback() {
+        let mut profile = ExpertProfile::new("e-1", vec![0.1; 64], 0.8, vec!["rust".into()]);
+        profile.record_outcome(true, 5.0);
+        profile.record_outcome(false, 15.0);
+        let json = serde_json::to_string(&profile).unwrap();
+        let restored: ExpertProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.success_count, profile.success_count);
+        assert_eq!(restored.total_activations, profile.total_activations);
+        assert!(
+            (restored.avg_latency_ms - profile.avg_latency_ms).abs() < 1e-5,
+            "EMA 延迟应 roundtrip 保留"
+        );
+    }
+
+    #[test]
+    fn test_serde_legacy_json_without_feedback_fields() {
+        // 旧版序列化数据(无反馈字段)反序列化兼容:#[serde(default)]
+        let legacy = r#"{"expert_id":"e-1","expert_vector":[0.1],"priority":0.8,"capability_tags":["rust"]}"#;
+        let restored: ExpertProfile = serde_json::from_str(legacy).unwrap();
+        assert_eq!(restored.success_count, 0);
+        assert_eq!(restored.total_activations, 0);
+        assert_eq!(restored.avg_latency_ms, 0.0);
+        assert_eq!(restored.success_rate(), 0.5);
     }
 
     #[test]

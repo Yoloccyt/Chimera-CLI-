@@ -43,6 +43,15 @@
 //! 冷却期结束后（`now >= cooldown_until`），状态恢复为 `Authorized`（若 level >= 阈值）
 //! 或 `Provisional`（若 level < 阈值）。`Frozen` 状态只能通过手动 `unfreeze()` 恢复。
 //!
+//! # ADR-033 例外声明（与 test_scale / archive_monotonicity 同类）
+//!
+//! nexus-contracts 的 ADR-033 约束为"纯类型 + 零逻辑"。本模块是继
+//! `test_scale`（P9-T2 测试缩放工具）与 `archive_monotonicity`（INV-8 判定函数）
+//! 之后的**第三个明确例外**：承载 EWMA 渐进授权算法与灰度状态机
+//! （`record_outcome` / `maybe_promote` / `trigger_asa_intervention` 等），
+//! 因为灰度授权必须在 L0 契约层内闭环（编排器在注入 Learned 策略前查询
+//! `allows_learned_policy()`），无法下沉为纯类型定义。
+//!
 //! # 设计决策（WHY）
 //!
 //! - **L0 定义**: CapabilityToken 需被 L4 decay-engine（Registry 嵌入）+ L6 omega-learner

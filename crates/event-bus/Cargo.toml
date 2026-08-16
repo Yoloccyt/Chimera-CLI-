@@ -18,14 +18,16 @@ arc-swap = { workspace = true }
 # L0 Contracts:formal_props 验证结果类型(FormalVerifier M1 P7-T4,ADR-047)
 # WHY 合规:L1 → L0 恒允许(§2.2 依赖铁律扩展);nexus-contracts 纯类型零依赖,不引入环
 nexus-contracts = { workspace = true }
-# L1 Core 共享领域类型(Quest 等),event-bus 与 nexus-core 同层互引允许(§2.2)
-# ADR-054 决策 6(P9-T7 Task 4):Quest 引用已改从 L0 nexus-contracts(domain 模块);
-# 仍保留 nexus-core 生产依赖,原因:ClvSummary::from_clv 生产 API 签名依赖
-# nexus_core::clv::CLV(512 维向量,未下沉 L0,nexus-contracts 零依赖铁律无法承载)。
-# 解除条件:CLV 下沉 L0 或 from_clv 改签,见 P9-T7 Task 4 落地记录。
-nexus-core = { workspace = true }
+# P1-2 解耦(L1 Core 深度优化):原 nexus-core 生产依赖已移除。
+# 唯一依赖边 ClvSummary::from_clv(&CLV) 改签为 from_clv_slice(&[f32])
+# (payloads.rs),event-bus 对 nexus-core 零依赖。L1 同层互引虽允许(§2.2),
+# 但减少超级节点(33 依赖方)反向依赖可降重编译面与环风险。
 # Prometheus 指标注册表与文本编码(Phase V Task V-8:/metrics 端点导出)
 prometheus-client = { workspace = true }
+# 经验卡片总线四索引(P1-W1 v3.4.0 §6.1,OpenMLE 经验卡片双通道 + 索引)
+# WHY 合规: 外部基础库(非 workspace crate),不违反依赖铁律;DashMap 无锁并发读
+# 与 project_memory 持锁跨 await 红线正交(索引读写均为同步短临界区)
+dashmap = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

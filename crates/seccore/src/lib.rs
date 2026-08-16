@@ -19,6 +19,22 @@
 //! 6. 高危操作强制升级通道(`escalation::EscalationHandler`,D6 修复):
 //!    `risk_score ∈ [71,90]` 强制 Parliament 辩论;`risk_score ∈ [91,100]` 拒绝执行并升级人工
 //!
+//! # 设计文档落层偏差记录(L4 深度优化)
+//! 设计文档 §9.2 将两项列为 L4 优化方向,实际按依赖铁律落层如下:
+//! - §9.2 问题 1(AutoBuilder 环境构建验证)→ L7 `pvl-layer/src/auto_builder.rs`
+//! - §9.2 问题 2(输出校验 D6 契约)→ L0 `nexus-contracts/harness_dimensions.rs`
+//!   (D6 OutputProcessingContract)+ 本 crate command_validator.rs(L0 trait 实现)
+//!
+//! seccore 保持纯安全职责:沙箱/审计/衰减/零孤儿,不承载构建验证与输出契约。
+//!
+//! # Phase 4 新增模块(v3.4.0 §9)
+//! - §9.1 Paddock-Sandbox 解耦(paddock_sandbox.rs,SandboxRuntime trait 抽象,
+//!   铁律10: Paddock 不依赖 Sandbox 具体实现)
+//! - §9.3 错误签名收集器(error_signature_collector.rs,5 正则模式 + SHA-256 哈希
+//!   去重聚类,铁律7;哈希计算与 L3 idx_error_hash 对齐)
+//! - §9.3 六类状态反馈集成器(execution_feedback.rs,ExecutionFeedbackIntegrator
+//!   纯函数,铁律8 全链路追踪)
+//!
 //! # 快速示例
 //! ```no_run
 //! use seccore::{Command, Sandbox};
@@ -43,11 +59,17 @@ pub mod audit;
 /// ADR-054 决策 3(P9-T4):L0 CommandValidator trait 的 seccore 实现(parliament 注入载体)
 pub mod command_validator;
 pub mod error;
+/// Phase 4 §9.3:错误签名收集器(OpenMLE 结构化收集 + SHA-256 哈希去重聚类,铁律7)
+pub mod error_signature_collector;
 pub mod escalation;
+/// Phase 4 §9.3:六类状态反馈集成器(ExecutionFeedbackIntegrator 纯函数,铁律8)
+pub mod execution_feedback;
 /// gVisor runsc 运行时检测与子进程启动(ADR-001)
 pub mod gvisor;
 /// P4-W15.1.3: Spec Merkle 完整性校验(复用 audit.rs SHA-256 实现)
 pub mod merkle;
+/// Phase 4 §9.1:Paddock-Sandbox 解耦(Dressage what-to-do/where-it-runs,铁律10)
+pub mod paddock_sandbox;
 pub mod policy;
 pub mod rl_security;
 pub mod sandbox;
@@ -85,4 +107,15 @@ pub use sandbox_wasm::SandboxBackend;
 pub use sandbox_wasm::{WasmExecutionResult, WasmSandbox};
 pub use types::{
     AttackType, Command, CommandSpec, EscalationTier, ExecutionResult, GvisorConfig, RiskLevel,
+};
+
+// === Phase 4 L4 安全层新增组件导出(v3.4.0 §9) ===
+// §9.3 错误签名收集器(OpenMLE 结构化收集 + SHA-256 哈希去重聚类,铁律7)
+pub use error_signature_collector::{compute_error_hash, ErrorSignatureCollector};
+// §9.3 六类状态反馈集成器(ExecutionFeedbackIntegrator 纯函数,铁律8)
+pub use execution_feedback::ExecutionFeedbackIntegrator;
+// §9.1 Paddock-Sandbox 解耦(Dressage,铁律10: Paddock 仅依赖 SandboxRuntime trait)
+pub use paddock_sandbox::{
+    Paddock, ProcessSandboxRuntime, RolloutContext, RolloutOutcome, SandboxExecutionOutput,
+    SandboxProvider, SandboxRuntime, SandboxType, StepResult,
 };

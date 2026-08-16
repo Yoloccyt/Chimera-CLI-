@@ -46,12 +46,21 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// 归档层级 — 四级归档的层级标识
 ///
 /// 顺序严格单调递增:Hot(0) < Warm(1) < Cold(2) < Ice(3)。
 /// 与 `cmt-tiering::Tier`(L3)/`mlc-engine::MemoryTier`(L2) 语义等价,
 /// 但定义在 L0,避免 L0 → L3/L2 向上依赖(依赖铁律 §2.2)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// # serde derive 说明（2026-08-16 审计修复 A1）
+///
+/// 归档层级可随归档事件/检查点序列化传输（如 EventBus 归档事件载荷、
+/// LHQP 检查点持久化），故派生 `Serialize`/`Deserialize`，与 crate 内
+/// 其他 30+ 公开枚举的 serde 惯例保持一致。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ArchiveTier {
     /// 热层 — 工作/高频访问(等价 cmt Hot、mlc L0Working)
     Hot,

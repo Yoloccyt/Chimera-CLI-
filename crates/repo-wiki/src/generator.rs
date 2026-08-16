@@ -6,32 +6,70 @@
 //! 将 `nexus_core::Quest` 中已完成的 Task 转化为 `WikiEntry`,
 //! 实现知识沉淀(ISCM:跨层共享索引)。
 //!
-//! # 占位嵌入向量(WHY)
-//! Week 2 阶段尚无 NMC 编码器(L6 Router 未实现),
-//! 使用内容 SHA-256 哈希扩展为 512-dim 占位向量:
-//! - 确定性:相同内容必产生相同向量,便于去重与测试
-//! - 维度对齐:512-dim 与 `nexus_core::CLV::DIMENSION` 一致
-//! - Week 6 NMC 实现后替换为真实 CLV 嵌入
+//! # 嵌入生成两条路径(WHY,P1-1)
+//! 1. **NMC 语义路径**(`with_text_encoder`):注入 L2 nmc-encoder 的
+//!    `TextPerceptor` — ONNX 模型可用时输出 384 维语义嵌入(all-MiniLM-L6-v2),
+//!    无模型时自动降级为字节频率统计(text_dim 维,默认 256)。
+//! 2. **占位哈希路径**(默认,`new()`/关联函数):内容 SHA-256 扩展为 512-dim
+//!    确定性占位向量(与 `nexus_core::CLV::DIMENSION` 对齐),满足去重与测试需求。
+//!
+//! # 维度契约(WHY)
+//! 两条路径输出维度不同,调用方须保证 `WikiConfig.vector_dim` 与所选路径的
+//! 嵌入维度一致(详见 `types.rs` 注释)。占位路径保持历史 512 维零破坏,
+//! NMC 路径由感知器自身维度决定(不强制填充)。
 
 use chrono::Utc;
 use nexus_core::{Quest, TaskStatus};
+use nmc_encoder::{PerceptionInput, Perceptor};
 use sha2::{Digest, Sha256};
 
 use crate::types::WikiEntry;
 
-/// Wiki 生成器 — 无状态工具类型,所有方法均为关联函数
-pub struct WikiGenerator;
+/// Wiki 生成器 — 可选注入 NMC 文本编码器,默认占位哈希嵌入
+pub struct WikiGenerator {
+    /// 可选的 NMC 文本语义编码器
+    ///
+    /// `None` 时走占位哈希路径(默认,向后兼容);`Some` 时走 NMC 语义路径
+    /// (ONNX 384 维 / 字节频率降级 text_dim 维)。
+    text_encoder: Option<nmc_encoder::TextPerceptor>,
+}
+
+impl Default for WikiGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl WikiGenerator {
-    /// 从 Quest 结果生成 Wiki 条目
+    /// 创建无编码器的生成器(占位哈希路径,行为与历史版本一致)
+    pub fn new() -> Self {
+        Self { text_encoder: None }
+    }
+
+    /// 创建注入 NMC 文本编码器的生成器(语义嵌入路径,P1-1)
+    pub fn with_text_encoder(encoder: nmc_encoder::TextPerceptor) -> Self {
+        Self {
+            text_encoder: Some(encoder),
+        }
+    }
+
+    /// 关联函数入口(向后兼容):默认占位哈希路径
+    ///
+    /// 等价于 `WikiGenerator::new().generate_from_quest(quest)`,
+    /// 历史调用方(quest-engine/chimera-mas 等)零改动。
+    pub fn from_quest_result(quest: &Quest) -> Vec<WikiEntry> {
+        Self::new().generate_from_quest(quest)
+    }
+
+    /// 从 Quest 结果生成 Wiki 条目(实例方法,按注入编码器选择嵌入路径)
     ///
     /// 为每个 `TaskStatus::Completed` 的 Task 生成一个 `WikiEntry`:
     /// - `entry_id`:`{quest_id}::{task_id}`(保证全局唯一)
     /// - `title`:Task description 前 50 字符(防止过长)
     /// - `content`:Task description 全文
     /// - `tags`:`["quest", quest_id]`(便于按 Quest 过滤)
-    /// - `embedding`:内容 SHA-256 扩展为 512-dim 占位向量
-    pub fn from_quest_result(quest: &Quest) -> Vec<WikiEntry> {
+    /// - `embedding`:NMC 语义路径(有编码器)或 SHA-256 占位(默认)
+    pub fn generate_from_quest(&self, quest: &Quest) -> Vec<WikiEntry> {
         let now = Utc::now();
         let quest_tag = quest.quest_id.clone();
 
@@ -40,7 +78,7 @@ impl WikiGenerator {
             .iter()
             .filter(|task| task.status == TaskStatus::Completed)
             .map(|task| {
-                let embedding = Self::placeholder_embedding(&task.description);
+                let embedding = self.embed(&task.description);
                 let title = Self::truncate_title(&task.description, 50);
 
                 WikiEntry {
@@ -59,16 +97,33 @@ impl WikiGenerator {
             .collect()
     }
 
+    /// 生成内容嵌入 — 编码器可用时走 NMC 语义路径,否则占位哈希
+    ///
+    /// # 错误策略(WHY)
+    /// NMC 编码失败(如 ONNX 模型损坏)时回退占位哈希并记录 warning,
+    /// 保证知识沉淀路径永不因编码器故障而中断(fail-open 于降级路径)。
+    pub fn embed(&self, content: &str) -> Vec<f32> {
+        match &self.text_encoder {
+            Some(encoder) => {
+                let input = PerceptionInput::Text(content.to_string());
+                match encoder.perceive(&input) {
+                    Ok(element) => element.embedding,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "NMC 文本编码失败,回退占位哈希嵌入");
+                        Self::placeholder_embedding(content)
+                    }
+                }
+            }
+            None => Self::placeholder_embedding(content),
+        }
+    }
+
     /// 将 SHA-256 哈希(32 字节)扩展为 512-dim f32 向量
     ///
-    /// WHY:Week 2 阶段无 NMC 编码器,使用确定性占位向量验证 sqlite-vec 集成
-    /// 与 VectorIndex 检索流程。Week 6 NMC 实现后替换为真实 CLV 嵌入。
+    /// WHY:无 NMC 编码器时的确定性占位向量,用于验证检索流程与去重。
     ///
     /// 算法:32 字节哈希 → 每字节重复 16 次 → 归一化到 [0, 1]
     /// 32 × 16 = 512,正好填满 CLV 维度。
-    // DEFERRED(T8-3 Audit): 占位嵌入实现,NMC 编码器(onnx_backend)已实现 Image/Video/Audio
-    // 模态的真实推理,但文本语义嵌入需额外的文本 ONNX 模型(外部依赖)。
-    // 当前 SHA-256 占位向量已满足去重与 sqlite-vec 检索需求(确定性、维度对齐、归一化)。
     fn placeholder_embedding(content: &str) -> Vec<f32> {
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
@@ -218,5 +273,42 @@ mod tests {
         let entries = WikiGenerator::from_quest_result(&quest);
         assert_eq!(entries[0].title, "实现 Wiki 存储层");
         assert_eq!(entries[0].content, "实现 Wiki 存储层");
+    }
+
+    // === P1-1:NMC 语义编码路径测试 ===
+
+    /// 注入编码器后 embed 走 NMC 字节频率降级路径(无 ONNX 模型时 text_dim 维)
+    #[test]
+    fn test_embed_with_text_encoder_byte_frequency_fallback() {
+        let config = nmc_encoder::NmcConfig::default(); // model_dir 空 → 降级字节频率
+        let encoder = nmc_encoder::TextPerceptor::new(config);
+        let generator = WikiGenerator::with_text_encoder(encoder);
+
+        let embedding = generator.embed("Tokio 是 Rust 的异步运行时");
+        // 字节频率降级路径输出维度 = text_dim(默认 256),而非占位路径的 512
+        assert_eq!(embedding.len(), 256);
+        // 确定性:相同输入两次嵌入结果一致
+        let again = generator.embed("Tokio 是 Rust 的异步运行时");
+        assert_eq!(embedding, again);
+    }
+
+    /// 语义路径下不同文本产生不同嵌入(字节频率桶计数)
+    #[test]
+    fn test_embed_with_text_encoder_distinguishes_content() {
+        let encoder = nmc_encoder::TextPerceptor::new(nmc_encoder::NmcConfig::default());
+        let generator = WikiGenerator::with_text_encoder(encoder);
+
+        let a = generator.embed("异步并发");
+        let b = generator.embed("同步串行");
+        assert_ne!(a, b);
+    }
+
+    /// 默认构造器(无编码器)保持占位哈希路径(512 维,向后兼容)
+    #[test]
+    fn test_default_generator_keeps_placeholder_path() {
+        let generator = WikiGenerator::new();
+        let embedding = generator.embed("hello");
+        assert_eq!(embedding.len(), 512);
+        assert_eq!(embedding, WikiGenerator::placeholder_embedding("hello"));
     }
 }

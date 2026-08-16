@@ -72,7 +72,11 @@ jobs:
         #   - --run-ignored all:1000-iter 压测标了 #[ignore],需显式包含
         #     (2026-08-07 ultra-plan 修复:原 --include-ignored 为 cargo test 语法,
         #     nextest 0.9.x 报 unexpected argument,本通道从未真正运行过压测)
+        #   - set +e + 记录 rc:runner 默认 bash 带 -e -o pipefail,压测失败会直接
+        #     中止脚本导致退出码无法落盘;此处显式捕获 rc 写入文件供 report 步骤引用,
+        #     并以原 rc 退出保留失败语义(continue-on-error 兜底不阻塞 workflow)。
         run: |
+          set +e
           cargo nextest run \
             --profile stress \
             -E 'binary(/stress/)' \
@@ -81,6 +85,9 @@ jobs:
             --message-format libtest-json-plus \
             2>nextest-stress.stderr.log \
             | tee nextest-stress.stdout.log
+          rc=$?
+          echo "exit_code=$rc" > nextest-exit.env
+          exit $rc
 
       - name: Generate stress report
         if: always()
@@ -94,7 +101,11 @@ jobs:
             > docs/reports/stress-run-summary.txt
           echo "scale=${{ env.CHIMERA_TEST_TIMEOUT_SCALE }}" \
             >> docs/reports/stress-run-summary.txt
-          echo "exit_code=$?" >> docs/reports/stress-run-summary.txt
+          # WHY 从 run 步骤写入的 nextest-exit.env 读取真实退出码:
+          # $? 在本步骤是上一条 echo 的退出码(恒 0),原实现记录失真
+          # (2026-08-12 修复:改读 nextest-exit.env,缺文件时标记 unknown)。
+          echo "exit_code=$(cat nextest-exit.env 2>/dev/null || echo unknown)" \
+            >> docs/reports/stress-run-summary.txt
 
       - name: Upload stress report
         if: always()

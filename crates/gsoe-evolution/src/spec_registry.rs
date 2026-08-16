@@ -63,6 +63,7 @@
 //!   active/candidate 指针，不修改 spec 内容本身
 
 use crate::error::GsoeError;
+use crate::{SpecEdge, SpecNode, SPEC_DAG};
 // Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
 use event_bus::{EventBus, NexusEvent};
 use nexus_contracts::{EventMetadata, HarnessSpec, HarnessSpecError, ImmutableSurface};
@@ -403,12 +404,12 @@ impl SpecRegistry {
         // WHY 在所有校验通过后才发布:确保事件语义 truthful(注册确实成功),
         //     避免发布"虚假成功"事件误导下游
         if let Some(bus) = &self.event_bus {
-            // WHY name.clone():event 构造 move name,但失败日志仍需引用 name,
-            //     故先 clone 一份供日志使用(避免 move 后借用编译错误)
+            // WHY name.clone():event 构造克隆 name(后续 P1-3 快照更新仍需 name),
+            //     失败日志与快照共享同一原始 name 所有权。
             let name_for_log = name.clone();
             let event = NexusEvent::SpecRegistered {
                 metadata: EventMetadata::new("gsoe-evolution"),
-                spec_name: name,
+                spec_name: name.clone(),
                 spec_version: version,
                 parent_version: parent,
                 source: source.to_string(),
@@ -420,6 +421,50 @@ impl SpecRegistry {
                     spec_version = version,
                     "发布 SpecRegistered 事件失败"
                 );
+            }
+        }
+
+        // 9. P1-3: 更新全进程谱系 DAG 快照(节点 + evolves 边)
+        // WHY 注册成功后更新:快照只记录已生效的谱系事实,校验失败不污染快照。
+        {
+            let mut snapshot = SPEC_DAG
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let node_id = format!("{name}@v{version}");
+            // 初始版本(parent=None)直接激活;子版本为 registered(待 promote)
+            let status = if parent.is_none() {
+                "active"
+            } else {
+                "registered"
+            };
+            match snapshot.nodes.iter_mut().find(|n| n.id == node_id) {
+                Some(node) => {
+                    // 已存在节点(重注册场景):仅当当前状态非 active 时更新
+                    if node.status != "active" {
+                        node.status = status.to_string();
+                    }
+                }
+                None => snapshot.nodes.push(SpecNode {
+                    id: node_id.clone(),
+                    version: version.into(),
+                    status: status.to_string(),
+                }),
+            }
+            // parent 边:父版本 → 当前版本(evolves 关系,去重)
+            if let Some(parent_version) = parent {
+                let edge_from = format!("{name}@v{parent_version}");
+                let edge_to = format!("{name}@v{version}");
+                if !snapshot
+                    .edges
+                    .iter()
+                    .any(|e| e.from == edge_from && e.to == edge_to)
+                {
+                    snapshot.edges.push(SpecEdge {
+                        from: edge_from,
+                        to: edge_to,
+                        relation: "evolves".to_string(),
+                    });
+                }
             }
         }
 
@@ -545,6 +590,23 @@ impl SpecRegistry {
 
         // 设置 active 为 parent 版本
         self.active.insert(name.to_string(), parent_version);
+
+        // P1-3: 更新全进程谱系 DAG 快照(回滚状态迁移)
+        // 被回滚版本标 deprecated,恢复的 parent 版本标 active。
+        {
+            let rolled_back_id = format!("{name}@v{active_version}");
+            let restored_id = format!("{name}@v{parent_version}");
+            let mut snapshot = SPEC_DAG
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for node in snapshot.nodes.iter_mut() {
+                if node.id == rolled_back_id {
+                    node.status = "deprecated".to_string();
+                } else if node.id == restored_id {
+                    node.status = "active".to_string();
+                }
+            }
+        }
 
         Ok(parent_version)
     }

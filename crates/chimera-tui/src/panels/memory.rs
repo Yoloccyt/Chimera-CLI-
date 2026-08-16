@@ -17,6 +17,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::Panel;
 use crate::render::{self, FOOTER_TEXT};
 use crate::types::{PanelId, TuiCommand, TuiState};
+use event_bus::NexusEvent;
 
 /// Memory 面板
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -82,20 +83,32 @@ impl MemoryPanel {
                 Span::from(mm.tier.clone()),
             ]),
             Line::from(""),
-            // Task 3.3: L3 Storage 协同 — 显示四层存储分布(全局快照)
-            // 调用 cmt_tiering::tier_distribution() 获取 CMT 四级存储层字节数,
-            // 实现 L10 Panel ↔ L3 Storage 真实数据闭环。
+            // Task 3.3 事件驱动化治理:原 cmt_tiering::tier_distribution() 全局
+            // 占位函数已事件驱动化(CapabilityTierStatsReported 事件)。此处从
+            // latest_events 事件流派生最近一次四层条目数统计;无事件时显示
+            // N/A(诚实展示,消除虚假数据固化,与 Cargo.toml Task 3.3 治理记录一致)。
             {
-                let dist = cmt_tiering::tier_distribution();
-                let to_mb = |bytes: u64| -> f64 { bytes as f64 / 1_048_576.0 };
-                Line::from(format!(
-                    "{}: Hot:{:.1}MB | Warm:{:.1}MB | Cold:{:.1}MB | Frozen:{:.1}MB",
-                    crate::t!("panel.memory.storage"),
-                    to_mb(dist.hot),
-                    to_mb(dist.warm),
-                    to_mb(dist.cold),
-                    to_mb(dist.frozen)
-                ))
+                let last_stats = state.latest_events.iter().rev().find_map(|e| match e {
+                    NexusEvent::CapabilityTierStatsReported {
+                        hot,
+                        warm,
+                        cold,
+                        ice,
+                        ..
+                    } => Some((*hot, *warm, *cold, *ice)),
+                    _ => None,
+                });
+                match last_stats {
+                    Some((hot, warm, cold, ice)) => Line::from(format!(
+                        "{}: Hot:{} | Warm:{} | Cold:{} | Ice:{}",
+                        crate::t!("panel.memory.storage"),
+                        hot,
+                        warm,
+                        cold,
+                        ice
+                    )),
+                    None => Line::from(format!("{}: N/A", crate::t!("panel.memory.storage"))),
+                }
             },
             Line::from(""),
             Line::from(FOOTER_TEXT),

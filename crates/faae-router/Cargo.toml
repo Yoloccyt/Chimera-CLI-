@@ -27,6 +27,10 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 # 伪随机数生成(EDSB 概率均衡 Task 11:替换 SystemTime 纳秒伪随机)
 rand = { workspace = true }
+# Phase 6 §11.2: L5 四套原子算子 + ThreeFactorSelector（OperatorRouter 消费）
+# WHY 合规: L6 → L5 向下依赖允许（§2.2 依赖铁律）；gsoe-evolution 不依赖任何
+# L6 crate，无循环风险（ADR-049 决策 1 内嵌落点 D-2）。
+gsoe-evolution = { workspace = true }
 
 [dev-dependencies]
 # 基准测试框架
@@ -38,4 +42,9 @@ tempfile = { workspace = true }
 
 [[bench]]
 name = "route"
+harness = false
+
+# W4(§11.2): 算子路由选择基准——聚合表 O(K) vs 全历史扫描对照(性能可证伪)
+[[bench]]
+name = "operator_select"
 harness = false

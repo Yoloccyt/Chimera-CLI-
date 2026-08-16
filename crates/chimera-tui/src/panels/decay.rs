@@ -26,6 +26,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::Panel;
 use crate::render::{self, FOOTER_TEXT};
 use crate::types::{PanelId, TuiCommand, TuiState};
+use event_bus::NexusEvent;
 
 /// 高衰减阈值:当 coefficient 低于此值时,表示衰减量 > 0.7(高衰减)。
 ///
@@ -112,25 +113,20 @@ impl DecayPanel {
         lines.push(Line::from(""));
         lines.push(Line::from(FOOTER_TEXT));
 
-        // Task 3.4: L4 Security 协同 — 显示影子模式熔断开关状态
-        // 调用 decay_engine::shadow_breaker_status() 获取 3 个熔断维度,
-        // 实现 L10 Panel ↔ L4 Security 真实数据闭环。
+        // Task 3.4 事件驱动化治理:原 decay_engine::shadow_breaker_status() 全局
+        // 占位函数已事件驱动化(ShadowBreakerTripped 事件)。此处从 latest_events
+        // 事件流派生最近跳闸原因;无跳闸事件时显示 N/A(诚实展示,
+        // 消除虚假数据固化,与 Cargo.toml Task 3.4 治理记录一致)。
         {
-            let status = decay_engine::shadow_breaker_status();
-            let on_off = |v: bool| -> &str {
-                if v {
-                    crate::t!("panel.decay.breaker_on")
-                } else {
-                    crate::t!("panel.decay.breaker_off")
-                }
+            let last_trip = state.latest_events.iter().rev().find_map(|e| match e {
+                NexusEvent::ShadowBreakerTripped { reason, .. } => Some(reason.clone()),
+                _ => None,
+            });
+            let breaker_line = match last_trip {
+                Some(reason) => format!("{}: {}", crate::t!("panel.decay.breakers"), reason),
+                None => format!("{}: N/A", crate::t!("panel.decay.breakers")),
             };
-            lines.push(Line::from(format!(
-                "{}: TokenBurn:{} | MemoryFreeze:{} | NetworkIsolate:{}",
-                crate::t!("panel.decay.breakers"),
-                on_off(status.token_burn),
-                on_off(status.memory_freeze),
-                on_off(status.network_isolate)
-            )));
+            lines.push(Line::from(breaker_line));
         }
 
         Text::from(lines)

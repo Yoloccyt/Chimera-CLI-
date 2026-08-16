@@ -51,25 +51,40 @@
 #![warn(missing_docs, clippy::all)]
 
 // === 模块声明 ===
+pub mod card_feedback;
 pub mod config;
 pub mod edsb;
 pub mod error;
 pub mod expert;
+/// Phase 6 §11.2: 算子路由器（OpenMLE Greedy/ThreeFactor/UCB/Cooling，ADR-049 内嵌；
+/// L6→L5 向下依赖 gsoe-evolution 四算子 + ThreeFactorSelector Softmax 委托 D-3）
+pub mod operator_router;
+/// Phase 6 §11.4(W4): 三因子父本选择 L6 消费适配器（§16.4 边界裁决，ADR-084 决策 6）
+pub mod parent_context;
 pub mod router;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
+pub use card_feedback::{spawn_card_feedback_loop, SharedOperatorRouter};
 pub use config::FaaeConfig;
 pub use edsb::EdsbBalancer;
 pub use error::FaaeError;
+// Phase 6 §11.2: 算子路由器公开 API 重导出（W4 含聚合表/轨迹导出/热切换）
+pub use operator_router::{
+    OperatorAggregate, OperatorRouter, OperatorSelectionRecord, HISTORY_CAP,
+};
+pub use parent_context::{ParentContextProvider, ParentSelection};
 pub use router::FaaeRouter;
 pub use types::{EntropyStats, ExpertProfile, ExpertProfileSnapshot, RoutingResult, ToolId};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
+    pub use crate::card_feedback::{spawn_card_feedback_loop, SharedOperatorRouter};
     pub use crate::config::FaaeConfig;
     pub use crate::edsb::EdsbBalancer;
     pub use crate::error::FaaeError;
+    pub use crate::operator_router::{OperatorRouter, OperatorSelectionRecord};
+    pub use crate::parent_context::{ParentContextProvider, ParentSelection};
     pub use crate::router::FaaeRouter;
     pub use crate::types::{
         EntropyStats, ExpertProfile, ExpertProfileSnapshot, RoutingResult, ToolId,

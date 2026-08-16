@@ -1,92 +1,75 @@
-//! Task 3.2: L2 Memory 协同 — SelfAssessmentPanel 记忆策略阶段集成测试
+//! Phase 6 D-6 治理:SelfAssessmentPanel 记忆策略阶段事件驱动化集成测试
 //!
-//! 验证 SelfAssessmentPanel 调用 `mlc_engine::current_memory_stage()` 显示
-//! 当前记忆策略阶段,实现 L10 Panel ↔ L2 Memory 真实数据闭环。
+//! 原测试固化已删除的 `mlc_engine::current_memory_stage()` 全局占位函数
+//! (虚假数据固化,测试固化错误断言)。治理后面板从 `latest_events` 事件流
+//! 派生最近 `MemConStrategyAdjusted` 事件的 `to_strategy`;无事件时显示 N/A。
 //!
 //! # 测试策略
-//! - 测试 1(稳定): 验证面板显示 "Memory Strategy Stage:" 行且值合法
-//! - 测试 2(串行): 验证 MemoryStage 切换时面板内容实时更新
-//!
-//! # 竞态说明
-//! `current_memory_stage()` 读取进程级全局快照(`OnceLock<RwLock<MemoryStage>>`),
-//! `cargo test --workspace` 时 mlc-engine 单元测试可能并行更新全局快照导致偶发失败。
-//! 建议用 `cargo test -p chimera-tui --test self_assessment_panel_test` 单独运行,
-//! 或通过 `STAGE_TEST_LOCK` 保证当前文件内串行。
+//! - 测试 1: 无事件时面板诚实显示 "Memory Strategy Stage: N/A"
+//! - 测试 2: 注入 MemConStrategyAdjusted 事件后面板显示事件携带的策略阶段
+//! - 测试 3: 多事件时取最近一条(反向扫描语义)
 
-use std::sync::Mutex;
+use std::collections::VecDeque;
 
 use chimera_tui::panels::SelfAssessmentPanel;
 use chimera_tui::types::TuiState;
-use mlc_engine::current_memory_stage;
-use mlc_engine::memory_strategy_learner::MemoryStrategyLearnerHolder;
-use mlc_engine::{MemoryStrategy, MemoryStrategyPolicy};
+use event_bus::{EventMetadata, NexusEvent};
 
-/// 串行化当前文件内的全局快照操作,避免测试间竞态
-static STAGE_TEST_LOCK: Mutex<()> = Mutex::new(());
+fn strategy_event(from: &str, to: &str, reason: &str) -> NexusEvent {
+    NexusEvent::MemConStrategyAdjusted {
+        metadata: EventMetadata::new("mlc-engine"),
+        from_strategy: from.into(),
+        to_strategy: to.into(),
+        reason: reason.into(),
+        ghost_rate: None,
+    }
+}
 
 #[test]
-fn test_self_assessment_panel_shows_memory_stage() {
-    let _guard = STAGE_TEST_LOCK.lock().unwrap();
-
+fn test_no_events_shows_na_placeholder() {
     let state = TuiState::new();
     let content = SelfAssessmentPanel::content(&state).to_string();
-
-    // 面板应包含 "Memory Strategy Stage:" 行
+    // 无事件时诚实显示 N/A(不虚报全局快照)
     assert!(
-        content.contains("Memory Strategy Stage:"),
-        "面板应显示记忆策略阶段,实际内容: {content}"
-    );
-
-    // 阶段值应为 5 个合法 short_name 之一
-    // (minimal/standard/reformulation/pruning/time-focused)
-    let valid_stages = [
-        "minimal",
-        "standard",
-        "reformulation",
-        "pruning",
-        "time-focused",
-    ];
-    let has_valid_stage = valid_stages
-        .iter()
-        .any(|s| content.contains(&format!("Memory Strategy Stage: {s}")));
-    assert!(
-        has_valid_stage,
-        "面板应显示合法记忆策略阶段值,实际内容: {content}"
+        content.contains("Memory Strategy Stage: N/A"),
+        "无 MemConStrategyAdjusted 事件时应显示 N/A,实际内容: {content}"
     );
 }
 
 #[test]
-fn test_memory_stage_updates_when_strategy_changes() {
-    let _guard = STAGE_TEST_LOCK.lock().unwrap();
-
-    // 1. 更新策略为 TimeFocused,验证全局快照同步
-    let holder = MemoryStrategyLearnerHolder::new();
-    holder.update_policy(MemoryStrategyPolicy::learned(
-        42,
-        MemoryStrategy::TimeFocused,
-    ));
-
-    let stage = current_memory_stage();
-    assert_eq!(
-        stage,
-        MemoryStrategy::TimeFocused,
-        "holder.update_policy(TimeFocused) 后全局快照应同步更新"
-    );
-
-    // 2. 面板应显示新策略 time-focused
-    let state = TuiState::new();
+fn test_strategy_event_derives_stage() {
+    let state = TuiState {
+        latest_events: VecDeque::from(vec![strategy_event(
+            "StandardTopK",
+            "AggressivePruning",
+            "ghost_memory_detected",
+        )]),
+        ..Default::default()
+    };
     let content = SelfAssessmentPanel::content(&state).to_string();
     assert!(
-        content.contains("Memory Strategy Stage: time-focused"),
-        "面板应显示更新后的记忆策略阶段(time-focused),实际内容: {content}"
+        content.contains("Memory Strategy Stage: AggressivePruning"),
+        "面板应显示事件携带的策略阶段,实际内容: {content}"
     );
+}
 
-    // 3. 切换回 StandardTopK(fallback),验证面板实时更新
-    holder.fallback_to_static();
-
-    let content2 = SelfAssessmentPanel::content(&state).to_string();
+#[test]
+fn test_latest_event_wins() {
+    // 反向扫描:最近一条事件的 to_strategy 生效
+    let state = TuiState {
+        latest_events: VecDeque::from(vec![
+            strategy_event("StandardTopK", "AggressivePruning", "ghost_memory_detected"),
+            strategy_event("AggressivePruning", "StandardTopK", "stable_recovery"),
+        ]),
+        ..Default::default()
+    };
+    let content = SelfAssessmentPanel::content(&state).to_string();
     assert!(
-        content2.contains("Memory Strategy Stage: standard"),
-        "面板应显示回退后的记忆策略阶段(standard),实际内容: {content2}"
+        content.contains("Memory Strategy Stage: StandardTopK"),
+        "应取最近事件的策略阶段,实际内容: {content}"
+    );
+    assert!(
+        !content.contains("Memory Strategy Stage: AggressivePruning"),
+        "旧事件的策略不应覆盖最近事件"
     );
 }

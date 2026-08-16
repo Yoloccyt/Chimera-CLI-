@@ -4,11 +4,9 @@
 //! 对应创新点:NMC(Native Multimodal Context,原生多模态上下文编码)
 //!
 //! # 设计决策(WHY)
-//! - **同步 trait 而非 async**:感知器是 CPU 密集型操作(哈希、嵌入计算),
+//! - **同步 trait 而非 async**:感知器是 CPU 密集型操作(哈希、ONNX 推理),
 //!   不涉及 IO 等待,使用同步方法避免 async-trait 的堆分配开销。
-//!   Week 7/8 接入 ort ONNX Runtime 后,若需 GPU 异步推理可再改为 async
-//! - **trait Perceptor 而非 enum dispatch**:5 种感知器实现差异大(文本 vs 占位),
-//!   trait 提供统一接口;调用方通过枚举分发选择具体实现,避免 `Box<dyn Trait>`
+//!   ONNX 推理经 tract-onnx(纯 Rust 实现,与 forbid(unsafe_code) 一致)
 //!
 //! # 感知器清单
 //! | 感知器 | 模态 | 状态 | 说明 |
@@ -48,7 +46,7 @@ pub trait Perceptor {
     ///
     /// # 错误
     /// - `InvalidModality`:输入模态与此感知器不匹配
-    /// - `EncodingFailed`:编码过程出错(如占位感知器未实现)
+    /// - `EncodingFailed`:编码过程出错(ONNX 推理失败/输入解码失败/模型不可用)
     fn perceive(&self, input: &PerceptionInput) -> Result<CognitiveElement, NmcError>;
 }
 
@@ -68,8 +66,9 @@ pub(crate) fn sha256_hex(data: &[u8]) -> String {
 /// 基于字节频率生成嵌入向量
 ///
 /// 将输入字节映射到 `dim` 个桶(取模),统计频率并归一化到 [0, 1]。
-/// WHY 字节频率:简单、确定性、对任意文本(含中文/Unicode)有效,
-/// Week 7/8 将替换为 ort ONNX Runtime 的语义嵌入
+/// WHY 字节频率:简单、确定性、对任意文本(含中文/Unicode)有效。
+/// 语义级文本嵌入由 TextPerceptor 经 tokenizers + ONNX 提供;
+/// 本函数保留为确定性 fallback(模型不可用时降级路径)。
 pub(crate) fn byte_frequency_embedding(data: &[u8], dim: usize) -> Vec<f32> {
     let mut counts = vec![0u32; dim];
     let mut total = 0u32;

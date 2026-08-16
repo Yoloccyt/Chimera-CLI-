@@ -280,15 +280,21 @@ async fn test_capability_tiered_event_on_lru_eviction() {
     coord.insert(make_entry("cap-2")).await.unwrap();
 
     // 应收到 CapabilityTiered 事件
-    let event = rx.recv().await.unwrap();
-    match event {
-        NexusEvent::CapabilityTiered {
-            from_tier, to_tier, ..
-        } => {
-            assert_eq!(from_tier, "Hot");
-            assert_eq!(to_tier, "Warm");
+    // L3 深度优化:insert 先发布 CapabilityTierStatsReported(统计快照),
+    // 循环跳过直到 CapabilityTiered(迁移事件)
+    loop {
+        let event = rx.recv().await.unwrap();
+        match event {
+            NexusEvent::CapabilityTiered {
+                from_tier, to_tier, ..
+            } => {
+                assert_eq!(from_tier, "Hot");
+                assert_eq!(to_tier, "Warm");
+                break;
+            }
+            NexusEvent::CapabilityTierStatsReported { .. } => continue,
+            other => panic!("expected CapabilityTiered or Stats, got {other:?}"),
         }
-        other => panic!("expected CapabilityTiered, got {other:?}"),
     }
 }
 

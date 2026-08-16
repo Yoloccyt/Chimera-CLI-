@@ -18,6 +18,8 @@ dashmap = { workspace = true }
 # 序列化:条目持久化与事件 payload
 serde = { workspace = true }
 serde_json = { workspace = true }
+# MessagePack:经验卡片 metadata 与训练证据载荷序列化(ADR-004,experience_card_storage)
+rmp-serde = { workspace = true }
 # rand:分层经验回放池均匀采样(polish-v2.7 P4-2,rl_replay_pool)
 # WHY workspace 已声明:omega-learner 回放池同款采样需求,统一版本
 rand = { workspace = true }
