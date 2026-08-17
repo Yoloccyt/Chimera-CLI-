@@ -290,7 +290,10 @@ mod tests {
         let mut rx = bus.subscribe();
         let mid = card("c2", "t1", 0.7, ExecutionStatus::Success);
         bus.publish(mid);
-        let received = rx.recv().await.expect("中分卡片必须送达 broadcast 通道");
+        let received = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("5s 内未收到事件(资源竞争或事件丢失)")
+            .expect("中分卡片必须送达 broadcast 通道");
         assert_eq!(received.card_id.as_ref(), "c2");
     }
 

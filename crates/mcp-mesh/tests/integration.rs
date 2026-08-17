@@ -203,7 +203,12 @@ async fn test_event_bus_publishes_transaction_completed() {
         .await
         .expect("事务失败");
 
-    let event = rx.recv().await.expect("应收到事件");
+    // WHY timeout:同 mesh.rs 单测——全量并行资源竞争下事件可能延迟,
+    // 无超时 recv 挂起风险,超时保护转为确定性失败。
+    let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("5s 内未收到事务完成事件(资源竞争或事件丢失)")
+        .expect("应收到事件");
     match event {
         NexusEvent::McpMeshTransactionCompleted {
             transaction_id,

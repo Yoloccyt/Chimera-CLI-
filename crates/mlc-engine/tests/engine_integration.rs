@@ -227,7 +227,10 @@ async fn test_memory_metrics_reported_event() {
         .unwrap();
 
     // 应收到 MemoryMetricsReported 事件
-    let event = rx.recv().await.unwrap();
+let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("5s 内未收到事件(资源竞争或事件丢失)")
+        .unwrap();
     match event {
         NexusEvent::MemoryMetricsReported {
             hit_rate,
@@ -258,7 +261,10 @@ async fn test_memory_tiered_event_on_promote() {
         .unwrap();
 
     // 应收到 MemoryTiered 事件
-    let event = rx.recv().await.unwrap();
+let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("5s 内未收到事件(资源竞争或事件丢失)")
+        .unwrap();
     match event {
         NexusEvent::MemoryTiered {
             tier,
@@ -288,7 +294,10 @@ async fn test_report_metrics_manual() {
     // 手动上报指标
     engine.report_metrics().await.unwrap();
 
-    let event = rx.recv().await.unwrap();
+let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("5s 内未收到事件(资源竞争或事件丢失)")
+        .unwrap();
     assert!(matches!(event, NexusEvent::MemoryMetricsReported { .. }));
 }
 
@@ -319,7 +328,10 @@ async fn test_hit_rate_calculation() {
     }
 
     // 应收到 MemoryMetricsReported 事件
-    let event = rx.recv().await.unwrap();
+let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("5s 内未收到事件(资源竞争或事件丢失)")
+        .unwrap();
     if let NexusEvent::MemoryMetricsReported { hit_rate, .. } = event {
         // hit_rate = hits / (hits + misses)
         // 至少有 1 次命中和 1 次未命中

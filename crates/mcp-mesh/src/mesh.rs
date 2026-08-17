@@ -1065,7 +1065,13 @@ mod tests {
             .await
             .expect("事务失败");
 
-        let event = rx.recv().await.expect("应收到事件");
+        // WHY timeout:全量并行(跨 crate)时资源竞争曾导致本测试偶发失败
+        // (事件延迟/断言时序);无超时 recv 在事件丢失时永久挂起,超时保护
+        // 将 hang 转为确定性失败并携带诊断信息。
+        let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("5s 内未收到事务完成事件(资源竞争或事件丢失)")
+            .expect("应收到事件");
         match event {
             NexusEvent::McpMeshTransactionCompleted {
                 transaction_id,
