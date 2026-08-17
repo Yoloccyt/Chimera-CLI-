@@ -34,6 +34,9 @@ on:
       - 'crates/**/Cargo.toml'
       - 'Cargo.toml'
       - '.github/workflows/bench_check.yml'
+      # P2-7: CLI 启动路径变更触发启动延迟检查
+      - 'crates/chimera-cli/src/**'
+      - 'scripts/check_cli_startup.*'
   push:
     tags:
       - 'v*.*.*-omega'
@@ -289,3 +292,34 @@ jobs:
             target/criterion/
             bench_*.log
           retention-days: 30
+
+  # ============================================================
+  # P2-7: CLI 启动延迟黑盒基线(hyperfine)——与 criterion 微基准互补
+  # WHY: criterion 覆盖函数级微基准;启动延迟(进程启动+clap 解析+tokio 初始化)
+  #      是用户可感知的黑盒指标,由 hyperfine 测量(脚本: scripts/check_cli_startup.sh)。
+  #      阈值 100ms = Windows 基线(25.9~27.9ms)~3.6× 余量,Linux 更快余量更足。
+  #      失败阻塞合入(启动路径回归属用户体验退化)。
+  # ============================================================
+  cli-startup:
+    name: CLI startup latency
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+
+      - name: Install hyperfine
+        uses: taiki-e/install-action@v2
+        with:
+          tool: hyperfine
+
+      - name: Build release binary
+        run: cargo build --release -p chimera-cli
+
+      - name: Run startup latency check (median < 100ms)
+        run: bash scripts/check_cli_startup.sh -r 20
