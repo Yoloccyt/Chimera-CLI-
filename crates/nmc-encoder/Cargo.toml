@@ -2,6 +2,7 @@
 name = "nmc-encoder"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L1 Core:使用 CLV(512-dim 潜在向量)作为多模态编码的统一输出

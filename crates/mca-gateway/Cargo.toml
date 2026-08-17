@@ -2,6 +2,7 @@
 name = "mca-gateway"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 # MCA 多通道亲和网关(ADR-065,PANTHEON 计划)
 # 架构层: L10 Interface,与 chtc-bridge/mcp-mesh 同级同构

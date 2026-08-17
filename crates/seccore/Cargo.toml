@@ -2,6 +2,7 @@
 name = "seccore"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [features]
 # 默认构建:仅进程级隔离(tokio::process::Command),零额外依赖,契合单机 CLI 零依赖部署。

@@ -2,6 +2,7 @@
 name = "repo-wiki"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L1 Core 依赖(向下依赖允许,§2.2 依赖铁律)

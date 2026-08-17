@@ -2,6 +2,7 @@
 name = "parliament"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L1 Core:提供 id_newtype! 宏(生成 RoleId newtype)与 Quest 领域类型
@@ -49,6 +50,8 @@ tracing-test = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # SubTask 37.2/37.3:E2E 认知治理流程测试与 CSA 延迟验证需要 TTG 模式选择
 # WHY dev-dependencies:测试专用依赖,不污染生产依赖图(§2.2 依赖铁律)
+# 向上 dev-dep 豁免(W8 清理记档):L8 parliament → L9 quest-engine,
+# tests/csa.rs + tests/e2e.rs 真实使用 TtgConfig/TtgGovernor,保留
 quest-engine = { workspace = true }
 # SubTask 37.2/37.3:E2E 测试需要 DECB 预算计算与档位切换
 decb-governor = { workspace = true }

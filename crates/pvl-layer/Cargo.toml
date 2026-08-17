@@ -2,6 +2,7 @@
 name = "pvl-layer"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L1 Core:提供 id_newtype! 宏(生成 OperationId newtype)

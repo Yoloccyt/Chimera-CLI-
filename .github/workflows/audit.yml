@@ -53,3 +53,27 @@ jobs:
         #   待 ratatui 升级 lru/paste 后移除对应 --ignore;
         #   待 hnsw_rs 替换 bincode 后移除对应 --ignore
         run: cargo audit --deny warnings --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0002 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2025-0119
+
+  # ============================================================
+  # 依赖过期观测 job(报告 §3.6 行动项 6)——非阻塞
+  # WHY: cargo-outdated 是信息型工具(只报告不更新),依赖过期是常态,
+  #      设为 continue-on-error 避免阻塞 PR;配合 cargo upgrade(cargo-edit)手动执行。
+  #      真实 API 兼容性由 cargo-semver-checks 定位(仅库发布场景)。
+  # ============================================================
+  outdated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+
+      - name: Install cargo-outdated
+        run: cargo install cargo-outdated --locked
+
+      - name: Run outdated check
+        run: cargo outdated --workspace --exit-code 1

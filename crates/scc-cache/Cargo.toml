@@ -2,6 +2,7 @@
 name = "scc-cache"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L1 Core: nexus-core 提供 id_newtype! 宏

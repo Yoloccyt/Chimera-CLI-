@@ -2,6 +2,7 @@
 name = "kvbsr-router"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L0 Contracts:ToolId 共享类型(ADR-033,从本地 id_newtype! 宏切换为 L0 统一类型)

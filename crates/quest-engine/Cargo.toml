@@ -2,6 +2,7 @@
 name = "quest-engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # nexus-core:L1 核心领域类型(UserIntent/Quest/Task/TaskStatus/ThinkingMode)

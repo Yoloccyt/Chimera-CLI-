@@ -2,6 +2,7 @@
 name = "hcw-window"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L1 Core:CLV 类型(任务相关性计算,基于 CLV 余弦相似度)
@@ -39,6 +40,8 @@ criterion = { workspace = true }
 proptest = { workspace = true }
 # SCC 推测上下文缓存 — HCW×SCC 跨周集成测试
 # WHY:HCW 压缩上下文后 SCC 缓存压缩结果,供 PVL Producer/Verifier 共享
+# 向上 dev-dep 豁免(W8 清理记档):L2 hcw-window → L3 scc-cache,
+# tests/integration_scc.rs 3 个跨层集成测试真实使用,保留
 scc-cache = { workspace = true }
 
 # PROBE P0: 召回评测 harness 编译期门控（ADR-034 合规：非运行时旗）

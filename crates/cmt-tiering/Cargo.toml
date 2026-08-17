@@ -2,6 +2,7 @@
 name = "cmt-tiering"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L1 Core:EventBus 跨层通信,发布 CapabilityTiered 事件(Week 3 Task 6 新增)

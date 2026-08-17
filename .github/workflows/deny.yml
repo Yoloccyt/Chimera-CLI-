@@ -1,0 +1,35 @@
+# cargo-deny 依赖策略检查 — licenses/bans 门禁
+# WHY: audit.yml 已覆盖漏洞扫描(RUSTSEC);本 workflow 补齐 license 合规与
+#      banned/multiple-versions 检查(报告 §3.6 行动项 4,38-crate workspace 的
+#      license 合规此前缺失机械闸门)。权威配置: deny.toml(已与仓库同步基线)。
+#      漏洞检查仍归 audit.yml,避免双维护。
+name: Deny (licenses/bans)
+
+on:
+  schedule:
+    # 每日 UTC 05:00 执行(北京时间 13:00,在 audit.yml 02:00 之后)
+    - cron: '0 5 * * *'
+  pull_request:
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'deny.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: cargo-deny check licenses bans
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # WHY: EmbarkStudios 官方 action,自带工具链安装与缓存,
+      #      避免 cargo install 编译等待(与 audit.yml 的 cargo install 互补)。
+      - name: Run cargo-deny (licenses + bans)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans

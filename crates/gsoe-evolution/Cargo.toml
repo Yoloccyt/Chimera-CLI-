@@ -2,6 +2,7 @@
 name = "gsoe-evolution"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 # ADR-042 决策 4 + 决策 5:r2_path feature 默认关闭
 # WHY 显式声明:使 `debug_assert!(!cfg!(feature = "r2_path"))` 在运行时检测可工作。

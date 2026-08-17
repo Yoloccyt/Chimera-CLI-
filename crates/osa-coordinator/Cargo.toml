@@ -2,6 +2,7 @@
 name = "osa-coordinator"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L0 Contracts:共享类型(ToolId/FileId/SparseMask/OmniSparseMasks 等,ADR-033)

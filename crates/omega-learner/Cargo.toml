@@ -1,7 +1,8 @@
-﻿[package]
+[package]
 name = "omega-learner"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L0 Contracts:共享类型(SelectorPolicy / SelectorWeights / TemporalMeta 等,ADR-033)

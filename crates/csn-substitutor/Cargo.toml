@@ -2,6 +2,7 @@
 name = "csn-substitutor"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # 异步运行时:timeout 超时控制 + spawn 后台订阅任务

@@ -2,6 +2,7 @@
 name = "decb-governor"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # nexus-contracts:L0 契约层,BudgetTier 上提后 re-export 来源(ADR-054 决策 3)

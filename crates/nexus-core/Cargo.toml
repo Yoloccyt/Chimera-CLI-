@@ -2,6 +2,7 @@
 name = "nexus-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # 全部使用 workspace 共享依赖(§4.1 规范)

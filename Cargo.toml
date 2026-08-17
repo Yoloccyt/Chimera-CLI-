@@ -7,6 +7,7 @@
 name = "chimera-e2e-tests"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 description = "Chimera CLI NEXUS-OMEGA E2E integration tests (workspace root)"
 

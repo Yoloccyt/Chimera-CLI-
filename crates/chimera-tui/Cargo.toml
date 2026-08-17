@@ -2,6 +2,7 @@
 name = "chimera-tui"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 # TUI 面板总览:19 面板循环(22 PanelId 枚举,3 个标注'暂不注册'原因:
 # Timeline/OsaSparse/Sysinfo,详见 app/mod.rs 注册逻辑)

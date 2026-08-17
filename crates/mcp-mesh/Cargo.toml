@@ -2,6 +2,7 @@
 name = "mcp-mesh"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # 异步运行时:timeout 超时控制 + spawn 后台订阅 + JoinSet 并发 fanout + TCP 通信(net feature)

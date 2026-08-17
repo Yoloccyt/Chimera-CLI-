@@ -86,6 +86,13 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # WHY: 无用依赖门禁(报告 §3.6 行动项 7)——cargo-machete 秒级扫描,
+      # 返回码 0/1/2 适合 CI;误报用 workspace.metadata.cargo-machete 忽略表解决。
+      - name: Unused dependencies (cargo-machete)
+        run: |
+          cargo install cargo-machete --locked
+          cargo machete
+
       - name: Install cargo-nextest
         # WHY: nextest 并行执行所有测试 binary(400+ binary 从串行变并行),
         # 2026-08-05 本地实测运行段 1126.9s → 130.3s(-88%);

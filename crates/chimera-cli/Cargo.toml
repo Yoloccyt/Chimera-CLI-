@@ -1,7 +1,8 @@
-﻿[package]
+[package]
 name = "chimera-cli"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 # Milestone C-3: rl-client 通道（feature gate，默认 off——不引入 reqwest 体积）
 # 轻量传输（HTTP/JSON）优先，否决 tonic/prost 默认引入（ADR-049 决策 1 哲学）

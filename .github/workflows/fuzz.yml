@@ -5,7 +5,7 @@ name: Fuzz
 #
 # 触发:推送 v*.*.*-omega 标签 或 手动触发
 # 运行:ubuntu-latest runner + nightly 工具链 + cargo-fuzz
-# 时长:7 target × 300s + 编译 ≈ 35-45min
+# 时长:8 target × 300s + 编译 ≈ 35-45min
 #
 # 本地 Windows GNU 无法运行(libFuzzer C++ 与 g++ 不兼容),
 # 委托 Linux CI 执行,解除限制 1。

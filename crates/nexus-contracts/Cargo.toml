@@ -26,6 +26,8 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 proptest = { workspace = true }
 # 测试用:统一使用 nexus-core 权威 cosine_similarity_slices,避免多副本优化不一致
+# ADR-033 豁免(W8 清理记档):dev-dependencies 为测试专用豁免面(§2.2),
+# 仅 vector.rs 单测与 type_consistency_test 使用,生产依赖图零污染
 nexus-core = { workspace = true }
 # Task 3.10: 测试用 MessagePack 序列化 roundtrip 验证(ADR-004 消息序列化协议)
 rmp-serde = { workspace = true }

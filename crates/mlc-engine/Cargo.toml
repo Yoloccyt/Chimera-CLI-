@@ -2,6 +2,7 @@
 name = "mlc-engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 # L1 Core:使用 CLV(512-dim 潜在向量)作为语义记忆的统一表示
