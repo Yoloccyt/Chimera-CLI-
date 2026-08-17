@@ -8,7 +8,7 @@
 
 ## TL;DR [Confidence: High]
 
-- **治理闭环（2026-08-17 第十一轮）**: 前 10 轮全部落地——17 项安装 + rustc 1.97.1 + 5 项移除 + 7 项整改 + E1-E10 复检闭环 + P1/P2 问题清单闭环 + hyperfine CI 接入 + cargo-insta 快照试点 + locale 测试隔离修复 + 无超时 recv 加固。工具链从「15 扩展 + 9 workflow」扩展到「**25 扩展 + 10 workflow + dependabot**」。
+- **治理闭环（2026-08-17 第十一轮）**: 前 10 轮全部落地——17 项安装 + rustc 1.97.1 + 5 项移除 + 7 项整改 + E1-E10 复检闭环 + P1/P2 问题清单闭环 + hyperfine CI 接入 + cargo-insta 快照试点 + locale 测试隔离修复 + 无超时 recv 加固。工具链从「15 扩展 + 9 workflow」扩展到「**24 扩展（cargo install）+ 10 workflow + dependabot**」。
 - **当前状态**: 所有高优先级推荐工具已安装并接入 CI；中优先级已安装并部分接入（insta 试点/hyperfine CI/taplo 基线）；低优先级已安装待按需启用（git-cliff/lychee/mdbook/samply/cross）。
 - **版本状态**: rustc/cargo 1.97.1 ✅；gh 2.97.0 ✅；gpg 2.5.21 ✅（PATH 未生效，需完整路径）；actionlint 1.7.12 ✅；jq 仍缺失（低优先级）。
 - **整体评价**: 工具链治理体系已成熟——供应链扫描（zizmor）/feature 矩阵（cargo-hack）/质量门禁（actionlint/typos/taplo/machete）/依赖策略（deny）/安全审计（audit）全部接入 CI；测试健壮性（locale 隔离/recv timeout/insta 快照）显著增强。剩余工作从「缺工具」转向「按需启用已装工具」。
@@ -182,7 +182,7 @@
                                  x86_64-unknown-linux-gnu)
   targets:   aarch64-unknown-linux-gnu, x86_64-pc-windows-gnu, x86_64-unknown-linux-gnu
 
-cargo 扩展 (25 包 / 45 exe，整改后):
+cargo 扩展 (25 包 / 45 exe，二次复检时点快照；后续 graveyard/cargo-zigbuild 已移除，当前实测见附录 G):
   cargo-audit 0.22.2    cargo-binstall 1.21.1  cargo-bloat 0.12.1    cargo-cache 0.8.3
   cargo-deny 0.20.2     cargo-edit 0.13.13    cargo-fuzz 0.13.2     cargo-hack 0.6.45
   cargo-insta 1.48.0    cargo-machete 0.9.2   cargo-nextest 0.9.143 cargo-outdated 0.19.0
@@ -192,7 +192,7 @@ cargo 扩展 (25 包 / 45 exe，整改后):
   zizmor 1.29.0         cargo-miri             rust-analyzer
   已移除: rls / cargo-semver-checks 0.50.0 / cargo-llvm-cov 0.8.7
 
-系统级 (整改后):
+系统级 (二次复检时点快照；后续变更: gpg 2.5.21 已安装/jq 已不在 PATH，当前实测见附录 G):
   git 2.53.0  Docker 29.7.2  podman 5.4.2  MSYS2 gcc 16.1.0  Python 3.14.6  fd 10.4.2
   gh 2.97.0 (cargo\bin)  actionlint 1.7.12 (winget)  hadolint 2.14.0 (winget)  jq 1.8.2 (winget)
   缺失: gpg / rg (均可选)
@@ -372,7 +372,7 @@ cargo binstall git-cliff lychee mdbook cargo-udeps samply
 | cargo-edit | 依赖管理交互工具 |
 | cargo-outdated | 已接 CI（audit.yml outdated job） |
 | cargo-machete | 已接 CI（ci.yml quality-gates job） |
-| cargo-miri | nightly UB 检查，低频刚需 [2] |
+| cargo-miri | 孤儿 shim（nightly-gnu 组件列表无 miri，cargo-miri.exe 残留于 cargo bin）——建议删除孤儿文件或重新 `rustup component add miri` [2] |
 | rust-analyzer | IDE 语言服务 |
 | sccache + rust-cache | 缓存双组合正确 [62][65] |
 | git 2.53 / gh 2.97.0 / gpg 2.5.21 / Docker 29.7.2 / podman 5.4.2 / MSYS2 gcc 16.1 / Python 3.14.6 / fd | 系统级底座，版本健康 |
@@ -636,7 +636,7 @@ gh 2.97.0 @ cargo\bin（用户 PATH 已前置，新终端生效）
 | rustc/cargo | 1.97.1 | 无变化（已升级） |
 | toolchain | 2 个（stable-gnu + nightly-gnu） | 无变化（msvc 已清理） |
 | targets | 3 个（aarch64-linux + x86_64-win-gnu + x86_64-linux） | 无变化 |
-| cargo 扩展 | **25 个** | 无变化（前 10 轮安装保持） |
+| cargo 扩展 | **24 个**（cargo install）；另有 cargo-miri.exe 孤儿 shim（nightly miri 组件已移除，exe 残留，建议清理） | 无变化（前 10 轮安装保持） |
 | CI workflow | **10 个** + dependabot.yml | 无变化（zizmor.yml 保持） |
 | git | 2.53.0 | 无变化 |
 | gh | 2.97.0 | 无变化 |
