@@ -60,3 +60,6 @@ dist/
 # === Python 缓存 ===
 __pycache__/
 *.pyc
+
+# lychee link checker cache
+.lycheecache

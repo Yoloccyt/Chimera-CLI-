@@ -1,0 +1,69 @@
+# lychee link checker configuration for Chimera CLI docs/
+# 用途: 检查 docs/ 目录下 Markdown 文件中的链接健康状态
+# 用法: lychee --config lychee.toml docs/**/*.md
+# CI:   可接 weekly cron（推荐 GitHub Actions lychee-action）
+#
+# WHY: docs/ 含 273 MD 文件 / 1116 链接，实测 59 errors + 28 timeouts，
+# 需要定期扫描防止文档链接腐化。GitHub token 可避免 rate limiting。
+
+# 接受的 HTTP 状态码
+accept = [200, 204, 301, 302, 307, 308]
+
+# 超时设置（秒）
+timeout = 30
+
+# 最大并发请求数
+max_concurrency = 16
+
+# 请求间隔（避免 rate limiting）
+# [hosts."github.com"]
+# request_interval = "1s"
+
+# 排除模式
+exclude = [
+    # 本地文件引用（非 URL）
+    "^file://",
+    # 占位符链接
+    "^#",
+    # 内部锚点
+    "^\\.",
+    # 需要认证的链接
+    "^https://huggingface\\.co",
+    # 不稳定/限流的主机
+    "^https://www\\.morphllm\\.com",
+    # mailto 链接
+    "^mailto:",
+]
+
+# 排除整个文件
+exclude_path = [
+    # 根目录的面试/商业文档（非技术文档）
+    "云景AI产品经理实习生_面试备战手册.md",
+]
+
+# 重试设置
+max_retries = 2
+retry_wait_time = 2
+
+# 输出格式
+format = "detailed"
+
+# User agent
+user_agent = "lychee/0.24.2 (Chimera CLI docs link checker)"
+
+# 包含 scheme
+include = []
+
+# Scheme 过滤
+scheme = ["https", "http"]
+
+# 不检查这些路径下的文件
+# exclude_path 已覆盖
+
+# GitHub token（从环境变量读取，避免 rate limiting）
+# 在 CI 中设置: LYCHEE_GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+# github_token = ""
+
+# 缓存
+cache = true
+max_cache_age = "1d"
