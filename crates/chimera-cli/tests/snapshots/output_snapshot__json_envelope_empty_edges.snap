@@ -1,0 +1,9 @@
+---
+source: crates/chimera-cli/tests/output_snapshot.rs
+assertion_line: 51
+expression: render(&empty_vec)
+---
+{
+  "status": "ok",
+  "data": []
+}

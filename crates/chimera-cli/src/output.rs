@@ -168,13 +168,26 @@ pub struct JsonResult<T: Serialize> {
     pub data: T,
 }
 
+/// 渲染成功 JSON envelope 为 pretty-print 字符串(纯函数,无 IO 副作用)
+///
+/// `data`:命令特定载荷(任意 `Serialize` 类型)。
+/// 返回序列化后的 JSON 字符串——调用方决定输出目标
+/// (`print_json` 输出到 stdout;快照测试直接断言字符串,与终端环境无关)。
+///
+/// WHY 纯函数分离:JSON envelope schema(Task 1.7.4)是程序化消费契约,
+/// 快照测试锁定其格式演进;直接测 `print_json` 需捕获 stdout,引入
+/// 线程级输出捕获(不稳定),故拆出无副作用的渲染层。
+pub fn render_json<T: Serialize>(data: &T) -> Result<String, serde_json::Error> {
+    let payload = JsonResult { status: "ok", data };
+    serde_json::to_string_pretty(&payload)
+}
+
 /// 输出成功 JSON 到 stdout(Task 1.7)
 ///
 /// 将任意 `Serialize` 类型包装为 `{ "status": "ok", "data": <payload> }` 并 pretty-print。
 /// 用于 `--json` flag 启用时的所有命令成功输出。
 pub fn print_json<T: Serialize>(data: &T) -> Result<(), serde_json::Error> {
-    let payload = JsonResult { status: "ok", data };
-    let json = serde_json::to_string_pretty(&payload)?;
+    let json = render_json(data)?;
     println!("{json}");
     Ok(())
 }

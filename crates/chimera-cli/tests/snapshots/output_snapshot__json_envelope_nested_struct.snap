@@ -1,0 +1,21 @@
+---
+source: crates/chimera-cli/tests/output_snapshot.rs
+assertion_line: 44
+expression: render(&payload)
+---
+{
+  "status": "ok",
+  "data": {
+    "layers": [
+      "L0",
+      "L4",
+      "L10"
+    ],
+    "name": "chimera",
+    "stats": {
+      "crates": 38,
+      "tests": 9954
+    },
+    "version": "2.26.0-omega"
+  }
+}

@@ -1,0 +1,9 @@
+---
+source: crates/chimera-cli/tests/output_snapshot.rs
+assertion_line: 25
+expression: render(&data)
+---
+{
+  "status": "ok",
+  "data": "hello world"
+}

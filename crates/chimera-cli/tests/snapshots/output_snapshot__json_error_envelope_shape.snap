@@ -1,0 +1,13 @@
+---
+source: crates/chimera-cli/tests/output_snapshot.rs
+assertion_line: 83
+expression: json
+---
+{
+  "status": "error",
+  "error": {
+    "kind": "ConfigError",
+    "message": "配置文件缺失"
+  },
+  "exit_code": 3
+}
