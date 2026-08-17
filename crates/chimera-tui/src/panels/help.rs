@@ -224,6 +224,12 @@ mod tests {
 
     #[test]
     fn test_help_panel_shortcuts() {
+        // WHY guard + 显式 Zh:本测试断言中文文案,必须锁定 locale——
+        // 其他 help 测试(如 content_with_context)存在 En-pin 窗口,
+        // 不持锁时 shortcuts() 的 t!() 读取可能落入 En 窗口导致 "Show help"
+        // 与 "显示帮助" 断言竞争(2026-08-17 全量回归实测复现)。
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let panel = HelpPanel::new();
         let shortcuts = panel.shortcuts();
         // 快捷键诚实性:Help 是面板而非弹窗,Normal 下 Esc 是全局退出键;

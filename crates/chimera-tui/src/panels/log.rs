@@ -470,6 +470,11 @@ mod tests {
 
     #[test]
     fn test_log_panel_empty_state() {
+        // WHY guard + 显式 Zh:本测试断言中文文案,必须锁定 locale——
+        // 并行中其他测试的 En-pin 窗口会污染 t!() 读取(2026-08-17 全量
+        // 回归实测:渲染出英文导致 contains("系统日志") 失败)。
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let state = TuiState::new();
         let content = LogPanel::content(&state, 0).to_string();
         assert!(content.contains("系统日志"));
@@ -562,6 +567,9 @@ mod tests {
 
     #[test]
     fn test_log_panel_title_with_filters() {
+        // WHY guard + 显式 Zh:build_filter_title 走 t!()(同 empty_state 修复)
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
         state.filter_keyword = Some("foo".into());
         state.filter_topic = Some("security".into());
@@ -633,6 +641,9 @@ mod tests {
     // 窗口外事件不得出现,且超窗时显示总量提示(取代原 take(50) 全量构建)。
     #[test]
     fn test_log_panel_windowed_content_skips_out_of_window_events() {
+        // WHY guard + 显式 Zh:窗口提示文案走 t!()(同 empty_state 修复)
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
         state.latest_events = (0..200)
             .map(|i| NexusEvent::CacheHit {

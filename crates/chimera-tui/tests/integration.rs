@@ -155,8 +155,12 @@ fn test_tui_layout_rendering() {
 
 #[test]
 fn test_tui_layout_rendering_all_panels() {
-    // locale 为全局静态,串行化避免与其他 En 测试并行时被复位为 Zh
-    let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // WHY 用 i18n guard 而非本文件 LOCALE_LOCK:后者只串行化本文件测试,
+    // 防不住其他测试文件(lib 单测)的 locale 写入;guard 全程持 i18n 锁,
+    // En-pin 窗口(set→渲染→恢复)内其他测试的 set_locale 阻塞(2026-08-17
+    // 甄别:旧锁模式下全量并行偶发渲染出中文导致断言失败)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::i18n::set_locale(chimera_tui::i18n::Locale::En);
     // WHY 全面板渲染:验证 8 个面板都能正确渲染各自内容
     let panels = [
         PanelId::Quest,
@@ -171,7 +175,6 @@ fn test_tui_layout_rendering_all_panels() {
 
     // i18n:面板边框标题已本地化;固定英文以稳定断言 ASCII 标题
     // (PanelId::title 为英文参考,面板在英文下亦为 ASCII,contains 可靠)。
-    chimera_tui::set_locale(chimera_tui::Locale::En);
     for panel in panels {
         let mut app = make_app();
         app.switch_panel_to(panel);
@@ -185,7 +188,9 @@ fn test_tui_layout_rendering_all_panels() {
             panel.title().trim()
         );
     }
-    chimera_tui::set_locale(chimera_tui::Locale::Zh); // 复位默认中文
+    // 恢复默认中文(guard drop 仅放锁不复位 locale;panic 路径残留由
+    // 其他测试自身的 set_locale 自愈——写测试都会显式锁定)
+    chimera_tui::i18n::set_locale(chimera_tui::i18n::Locale::Zh);
 }
 
 #[test]
@@ -441,25 +446,35 @@ fn test_tui_keyboard_non_printable_ignored_in_command_mode() {
 
 #[test]
 fn test_tui_render_after_keyboard_input() {
-    // WHY 渲染+输入联合:验证键盘输入后渲染仍能正常工作
-    let mut app = make_app();
+    // WHY 锁定 En locale:本测试断言英文 "Command"(palette 标题 t!() 化后
+    // zh 为 "命令面板"),默认 zh 下必然失败;此前依赖其他测试的 locale
+    // 污染才能通过(反向 flaky,2026-08-17 甄别:stash 用户改动后仍失败,
+    // 确认为基线测试缺陷)。guard 全程持锁保证 En-pin 窗口安全。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::i18n::set_locale(chimera_tui::i18n::Locale::En);
+    {
+        // WHY 渲染+输入联合:验证键盘输入后渲染仍能正常工作
+        let mut app = make_app();
 
-    // 进入命令模式并输入
-    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
-    for c in "budget".chars() {
-        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        // 进入命令模式并输入
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+        for c in "budget".chars() {
+            app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+
+        // 渲染应正常工作,不 panic,且显示命令面板
+        let content = render_to_string(&mut app, 80, 24);
+        assert!(
+            content.contains("Command"),
+            "render after command input should show command palette"
+        );
+        assert!(
+            content.contains("budget"),
+            "render after input should show input buffer content"
+        );
     }
-
-    // 渲染应正常工作,不 panic,且显示命令面板
-    let content = render_to_string(&mut app, 80, 24);
-    assert!(
-        content.contains("Command"),
-        "render after command input should show command palette"
-    );
-    assert!(
-        content.contains("budget"),
-        "render after input should show input buffer content"
-    );
+    // 恢复默认中文(同 layout 测试注释)
+    chimera_tui::i18n::set_locale(chimera_tui::i18n::Locale::Zh);
 }
 
 // ============================================================

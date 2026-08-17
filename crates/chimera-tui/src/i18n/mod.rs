@@ -24,10 +24,12 @@
 // "can be made const",且调用点 allow 无法抑制宏内部 lint(实测 unused attribute)。
 #![allow(clippy::missing_const_for_thread_local)]
 
-#[cfg(test)]
+// WHY 非 cfg(test):LOCALE_LOCK_HELD(thread_local)在非 test 编译下
+// (集成测试调用 lib)也存在,Cell 需全编译模式可见。
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU8, Ordering};
-#[cfg(test)]
+// WHY 非 cfg(test):LOCALE_TEST_LOCK 与 LocaleTestGuard 已对集成测试公开
+// (lib 以 non-test 模式编译),Mutex/MutexGuard 需在非 test 编译下可见。
 use std::sync::{Mutex, MutexGuard};
 
 pub mod en;
@@ -94,18 +96,17 @@ pub fn current_locale() -> Locale {
 ///
 /// 2026-08-07 测试互斥修复:并行测试直接写全局 `LOCALE` 会污染依赖中文文案的
 /// 断言(overwindow 空态 flaky 根因 —— 既有 guard 未覆盖非 guard 测试的写路径)。
-/// cfg(test) 下:非 guard 路径经 `LOCALE_TEST_LOCK` 串行化;guard 持有者(同线程)
-/// 经 `LOCALE_LOCK_HELD` 重入检测直接写,避免自锁。生产构建零开销(块被剥离)。
+/// 2026-08-17 统一加锁:原 cfg(test) 分支导致集成测试(tests/,lib 以 non-test
+/// 模式编译)的 set_locale 走无锁路径,integration 测试之间互相覆盖 locale
+/// (layout 面板标题断言并行必败实证)。现统一:非持有者经 `LOCALE_TEST_LOCK`
+/// 串行化;持有者(guard 同线程)经 `LOCALE_LOCK_HELD` 重入检测直接写。
+/// 生产路径仅 main 启动调用一次,锁开销可忽略。
 pub fn set_locale(locale: Locale) {
-    #[cfg(test)]
-    {
-        if !LOCALE_LOCK_HELD.with(|h| h.get()) {
-            let _g = LOCALE_TEST_LOCK
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            LOCALE.store(locale.as_u8(), Ordering::Relaxed);
-            return;
-        }
+    // 非持有者加锁串行化写;持有者(guard 测试)重入直接写
+    if !LOCALE_LOCK_HELD.with(|h| h.get()) {
+        let _g = LOCALE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
     LOCALE.store(locale.as_u8(), Ordering::Relaxed);
 }
@@ -146,15 +147,20 @@ macro_rules! t {
 /// 多个测试同时 En-pin(set En → 捕获 → reset Zh)会互相污染窗口。`set_locale` 的
 /// cfg(test) 分支与 `locale_test_guard` 共用同一把锁,覆盖**全部**写路径:
 /// 非 guard 测试的 set_locale 自动加锁;guard 测试经重入标记直接写。
-#[cfg(test)]
-static LOCALE_TEST_LOCK: Mutex<()> = Mutex::new(());
+///
+/// WHY 非 cfg(test)(2026-08-17):集成测试(tests/)编译时 lib 为 non-test 模式,
+/// cfg(test) 项不可见;而集成测试与单测共享同一全局 locale,必须用同一把锁
+/// 才能互斥。锁在生产路径仅存在未使用(无调用,零开销)。
+#[doc(hidden)]
+pub(crate) static LOCALE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 // 当前线程是否持有 locale 测试锁(重入检测,防 guard 内 set_locale 自锁)
 // 注:普通注释而非 /// —— rustdoc 不为宏调用生成文档,/// 会触发 clippy unused_doc_comments。
 // WHY allow: 初始化已是 Rust 1.88+ 推荐 const 块写法,clippy 1.97 的
 // missing_const_for_thread_local 对该宏语法仍误报(can be made const);
 // allow 必须位于 cfg(test) 之前,否则宏展开后 lint 抑制失效。
-#[cfg(test)]
+// WHY 非 cfg(test)(2026-08-17):set_locale 统一加锁后,非 test 编译
+// (集成测试调用 lib)也需重入检测,thread_local 需全编译模式可见。
 thread_local! {
     static LOCALE_LOCK_HELD: Cell<bool> = const { Cell::new(false) };
 }
@@ -162,25 +168,38 @@ thread_local! {
 /// 测试专用 locale 序列化 guard — 绑定到局部变量(如 `let _g = ...`)以在整个
 /// 测试作用域内持锁;drop 时复位线程持有标记并释放锁。锁中毒时降级取用内部值
 /// (测试已 panic 失败,不因中毒再连锁 panic 掩盖真实失败)。
-#[cfg(test)]
-pub(crate) struct LocaleTestGuard {
+///
+/// WHY pub + 非 cfg(test)(2026-08-17):集成测试(tests/)与单元测试共享同一
+/// 全局 locale,且 set_locale 的锁在函数返回即释放,En-pin 窗口(set→渲染→
+/// 恢复)不防其他测试插入写;guard 全程持锁是窗口安全的唯一途径。集成测试
+/// 编译时 lib 为 non-test 模式,故 guard 不能 cfg(test) 门控。
+#[doc(hidden)]
+pub struct LocaleTestGuard {
     _guard: MutexGuard<'static, ()>,
+    // WHY 记录进入时 locale:drop 时恢复,防止 guard 测试修改后残留污染
+    // 后续依赖默认状态的测试(2026-08-17 overwindow 空态 flaky 甄别)。
+    previous: Locale,
 }
 
-#[cfg(test)]
+// WHY 非 cfg(test)(2026-08-17):集成测试(lib non-test 编译)的 guard 也需
+// 设置/重置重入标记,否则 guard 内 set_locale 会自锁(HELD=false → 抢同一把锁)。
 impl Drop for LocaleTestGuard {
     fn drop(&mut self) {
         LOCALE_LOCK_HELD.with(|h| h.set(false));
+        // 恢复进入时 locale(RAII 完整语义),防残留污染后续测试
+        LOCALE.store(self.previous.as_u8(), Ordering::Relaxed);
     }
 }
 
-#[cfg(test)]
-pub(crate) fn locale_test_guard() -> LocaleTestGuard {
+#[doc(hidden)]
+pub fn locale_test_guard() -> LocaleTestGuard {
     LOCALE_LOCK_HELD.with(|h| h.set(true));
+    let previous = current_locale();
     LocaleTestGuard {
         _guard: LOCALE_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        previous,
     }
 }
 

@@ -170,8 +170,10 @@ mod tests {
     #[test]
     fn empty_state_shows_awaiting_hint() {
         // WHY locale 锁:断言依赖中文文案“尚未触发超窗兜底”,并行测试切换语言会偶发失败
-        // (既有 flaky,2026-08-07 修复)
+        // (既有 flaky,2026-08-07 修复;2026-08-17 补显式 Zh:guard 只保证写互斥,
+        // 断言中文必须确定 locale,不再依赖进入时状态)
         let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let state = TuiState::new();
         let text = OverWindowPanel::content(&state);
         let joined = text.lines.iter().map(|l| l.to_string()).collect::<String>();
