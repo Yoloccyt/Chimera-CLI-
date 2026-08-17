@@ -55,6 +55,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup nightly Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
@@ -71,6 +73,7 @@ jobs:
           key: fuzz-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             fuzz-${{ matrix.target }}-cargo-
+          lookup-only: true
 
       - name: Install cargo-fuzz
         # WHY: --locked 锁定 Cargo.lock,防止 cargo-fuzz 上游 minor 版本引入

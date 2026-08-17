@@ -1,0 +1,38 @@
+# zizmor GitHub Actions 供应链安全扫描（报告附录 E 项 E1）
+# WHY: workflow 是供应链攻击面(2026 真实案例: TanStack CVE-2026-45321 /
+#      hackerbot-claw 劫持 CI);zizmor 静态检测未固定 SHA 的 uses、
+#      过度 GITHUB_TOKEN 权限、pull_request_target 误配置等漏洞模式。
+#      audit.yml(漏洞)/ deny.yml(license/bans) 之外的安全第三闸门。
+#      默认 audit-level=high:高危问题阻塞合入,中低危仅告警。
+name: Zizmor (workflow security)
+
+on:
+  schedule:
+    # 每日 UTC 06:00 执行(北京时间 14:00,在 deny.yml 05:00 之后)
+    - cron: '0 6 * * *'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        # WHY: cargo install 编译耗时较长(约 3-5min),但扫描本身秒级;
+        #      保持与 fuzz.yml 的 cargo install 模式一致(可复现性优先)。
+        run: cargo install zizmor --locked
+
+      - name: Run zizmor scan
+        # WHY: --min-severity=high——仅高危发现阻塞合入;
+        #      中低危(medium/low)以告警形式输出,避免误报阻塞日常开发。
+        run: zizmor . --min-severity=high

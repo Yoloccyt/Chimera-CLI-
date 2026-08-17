@@ -1,0 +1,15 @@
+# zizmor 配置（GitHub Actions 供应链扫描，报告附录 E 项 E1）
+# WHY remap unpinned-uses 为 low: 项目当前无 renovate/dependabot SHA 更新机制,
+#       tag 引用由发布流程人工审核(§10.1 发布检查清单);全量 pin SHA 会显著
+#       增加 action 升级摩擦。remap 保留审计可见性(完整扫描仍报告),仅不阻塞
+#       --min-severity=high 门禁;其余规则(凭据持久化/权限过度/
+#       pull_request_target 误配置等)保持默认严重度。若未来引入 renovate,
+#       应移除本 remap 并启用 hash pinning。
+rules:
+  unpinned-uses:
+    remap:
+      severity: low
+  excessive-permissions:
+    ignore:
+      # release.yml:20 —— 创建 GitHub Release 的必要权限(softprops/action-gh-release 需 contents: write)
+      - release.yml:20

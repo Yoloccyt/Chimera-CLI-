@@ -533,7 +533,7 @@ mod tests {
     fn unknown_event_continues() {
         let mut c = EarlyStopController::new(100);
         assert_eq!(
-            c.on_event(&StreamEvent::Unknown("unparseable".into())),
+            c.on_event(&StreamEvent::Unknown("unparsable".into())),
             StopDecision::Continue
         );
         assert!(!c.should_stop());

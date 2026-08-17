@@ -48,6 +48,8 @@ jobs:
       NEXTEST_EXPERIMENTAL_LIBTEST_JSON: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
@@ -99,7 +101,7 @@ jobs:
           cp -f nextest-stress.stdout.log docs/reports/nextest-stress.json 2>/dev/null || true
           echo "Stress run completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             > docs/reports/stress-run-summary.txt
-          echo "scale=${{ env.CHIMERA_TEST_TIMEOUT_SCALE }}" \
+          echo "scale=${CHIMERA_TEST_TIMEOUT_SCALE}" \
             >> docs/reports/stress-run-summary.txt
           # WHY 从 run 步骤写入的 nextest-exit.env 读取真实退出码:
           # $? 在本步骤是上一条 echo 的退出码(恒 0),原实现记录失真

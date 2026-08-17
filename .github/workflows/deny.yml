@@ -26,6 +26,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # WHY: EmbarkStudios 官方 action,自带工具链安装与缓存,
       #      避免 cargo install 编译等待(与 audit.yml 的 cargo install 互补)。

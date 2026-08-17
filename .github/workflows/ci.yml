@@ -41,6 +41,8 @@ jobs:
       SCCACHE_GHA_CACHE: 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
@@ -53,6 +55,17 @@ jobs:
       # WHY: 先跑零编译依赖的文档一致性巡检，若架构文档 crate 数与 Cargo.toml 漂移则快速失败(F4)。
       - name: Doc consistency (crate count vs Cargo.toml)
         run: bash scripts/check_doc_consistency.sh
+
+      # E3(报告附录 E): workflow 静态检查门禁——actionlint 是 GitHub Actions
+      # 事实标准(语法/表达式类型/action 输入/脚本注入),零编译依赖,秒级反馈。
+      # 本地 1.7.12 实测 9 个 workflow 零错误(2026-08-17)。
+      - name: Workflow lint (actionlint)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: actionlint
+
+      - name: Run actionlint
+        run: actionlint -color
 
       # WHY: 依赖铁律机械闸门(ADR-054 决策 5,check_dependency_rules.sh 头注释)——
       # L(N)→L(N+1) 向上依赖 / 内环越界 / 图完整性违规必须阻塞合入,禁止静默落地 main。
@@ -92,6 +105,13 @@ jobs:
         run: |
           cargo install cargo-machete --locked
           cargo machete
+
+      # E4(报告附录 E): 拼写检查门禁——typos 以"已知拼写错误修正表"设计保持低误报,
+      # 可无监督跑 PR;词表配置见 _typos.toml(项目专有名词/标识符豁免)。
+      - name: Spell check (typos)
+        run: |
+          cargo install typos-cli --locked
+          typos
 
       - name: Install cargo-nextest
         # WHY: nextest 并行执行所有测试 binary(400+ binary 从串行变并行),
@@ -147,6 +167,8 @@ jobs:
       SCCACHE_GHA_CACHE: 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
@@ -187,6 +209,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
@@ -197,6 +221,14 @@ jobs:
 
       - name: Type check (workspace, --features mca)
         run: cargo check --workspace --all-targets --features mca
+
+      # E2(报告附录 E): feature 矩阵机械闸门——cargo-hack each-feature 穷举
+      # 每个 crate 的 feature 组合,封堵"门控代码腐化、转 on 集中爆雷"风险(R5)。
+      # --no-dev-deps 减少编译量;--exclude chimera-e2e-tests 避免重复编译 E2E。
+      - name: Feature matrix check (cargo-hack)
+        run: |
+          cargo install cargo-hack --locked
+          cargo hack check --workspace --each-feature --no-dev-deps --exclude chimera-e2e-tests
 
       - name: Test (workspace, --features mca)
         run: cargo test --workspace --features mca
@@ -215,6 +247,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2

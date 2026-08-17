@@ -78,6 +78,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -94,6 +96,7 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
+          lookup-only: true
 
       - name: Install MinGW (Windows GNU target only)
         if: runner.os == 'Windows'
@@ -140,6 +143,18 @@ jobs:
           BIN_PATH="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
           cp "$BIN_PATH" "${{ matrix.artifact_name }}"
 
+      # E5(报告附录 E): <50MB 二进制体积硬约束断言——与 CLAUDE.md 发布清单一致,
+      # 在 Release 上传前机械拦截体积回退(归因工具:cargo-bloat 本地使用)。
+      - name: Assert binary size < 50MB
+        shell: bash
+        run: |
+          SIZE=$(wc -c < "${{ matrix.artifact_name }}")
+          echo "Binary size: $((SIZE / 1024 / 1024)) MB"
+          if [ "$SIZE" -gt 52428800 ]; then
+            echo "::error::Binary exceeds 50MB limit"
+            exit 1
+          fi
+
       - name: Verify binary runs
         shell: bash
         run: |
@@ -167,6 +182,8 @@ jobs:
       SCCACHE_GHA_CACHE: 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v4
         with:
@@ -176,6 +193,7 @@ jobs:
             target
           key: linux-test-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: linux-test-cargo-
+          lookup-only: true
       - name: Setup sccache
         uses: mozilla/sccache-action@v0.0.11
       # WHY: 保持全量验证语义 —— 含 doc-tests 与 backpressure 60s spec 验收
@@ -199,12 +217,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Normalize IMAGE_NAME to lowercase
         # WHY: docker/metadata-action@v5 自动将镜像名转小写推送至 GHCR,
         # 但 ${{ env.IMAGE_NAME }} 保留 github.repository_owner 的原大小写(如 Yoloccyt),
         # 导致后续 docker pull / docker run 找不到镜像。此处统一转小写覆写 IMAGE_NAME。
-        run: echo "IMAGE_NAME=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+        run: echo "IMAGE_NAME=$(echo '${IMAGE_NAME}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -252,7 +272,7 @@ jobs:
 
           # WHY 转小写:GHCR API 路径要求全小写,而 github.repository_owner 可能保留原大小写
           REPO=$(echo "${{ github.repository_owner }}/chimera-cli" | tr '[:upper:]' '[:lower:]')
-          TAG="${{ github.ref_name }}"
+          TAG="${GITHUB_REF_NAME}"
           REGISTRY="https://ghcr.io"
 
           # 获取匿名 pull token(GHCR 公开镜像支持匿名拉取)
@@ -314,7 +334,7 @@ jobs:
           # WHY 显式 docker pull:虽然 build-push-action 已推送镜像,但本地缓存不等于
           # 用户可拉取。此步骤模拟真实用户安装路径,验证 GHCR 上的镜像可被公开拉取。
           set -euo pipefail
-          IMAGE="${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
+          IMAGE="${IMAGE_NAME}:${GITHUB_REF_NAME}"
           echo "Pulling image: $IMAGE"
           docker pull "$IMAGE"
 
@@ -351,7 +371,7 @@ jobs:
     steps:
       - name: Normalize IMAGE_NAME to lowercase
         # WHY: 与 docker job 一致,确保 Release body 中的 docker pull/run 命令使用小写镜像名
-        run: echo "IMAGE_NAME=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+        run: echo "IMAGE_NAME=$(echo '${IMAGE_NAME}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4

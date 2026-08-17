@@ -1,0 +1,17 @@
+# typos 拼写检查配置（报告附录 E 项 E4）
+# extend-words: 项目专有名词/标识符/测试数据字面量(均为甄别过的误报,
+# 非拼写错误;3 处真错已直接修复: proctocol/Simplifed/unparseable)
+[default.extend-words]
+ratatui = "ratatui"
+Ratatui = "Ratatui"
+parm = "parm"          # proptest 宏语法 $parm:pat
+abd = "abd"            # 测试字符串("abc" 对照)
+strat = "strat"        # strategy 缩写变量
+ue = "ue"              # SSE 解析测试字节串
+criticals = "criticals" # 变量名(复数)
+pn = "pn"              # p_needle 缩写变量
+thr = "thr"            # threshold 缩写(测试 ID "thr-v1")
+hel = "hel"            # "hello" 前缀测试输入
+fo = "fo"              # base64 测试字节串
+ba = "ba"              # 中文文档字节误报
+CAF = "CAF"            # Channel Affinity Framework 缩写

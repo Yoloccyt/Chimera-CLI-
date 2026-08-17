@@ -359,6 +359,30 @@ function Invoke-SafeClean {
         Write-Host "`n  [跳过] npm 不可用，跳过 npm cache clean" -ForegroundColor DarkGray
     }
 
+    # --- 步骤 4.5: cargo cache --autoclean（仅在 cargo 可用时执行） ---
+    # WHY E6(报告附录 E): .toolchain 下 cargo 缓存(registry/src)会随依赖迭代持续膨胀,
+    #      cargo cache --autoclean 仅清理过时/损坏条目,不影响当前构建所需缓存。
+    $cargoAvailable = $null -ne (Get-Command cargo -ErrorAction SilentlyContinue)
+    if ($cargoAvailable) {
+        $cargoCacheSizeGB = [double]0
+        $cargoHome = $env:CARGO_HOME
+        if (-not $cargoHome) { $cargoHome = Join-Path $env:USERPROFILE '.cargo' }
+        if (Test-Path -LiteralPath $cargoHome) {
+            $cargoCacheSize = (Get-FolderSize -Path $cargoHome).Size
+            $cargoCacheSizeGB = Format-GB -Bytes $cargoCacheSize
+        }
+        if (Confirm-CleanAction -Description "cargo cache --autoclean" -Path $cargoHome -EstimatedGB $cargoCacheSizeGB) {
+            try {
+                cargo cache --autoclean 2>&1 | Out-Null
+                Write-Ok "cargo 缓存已清理 (autoclean)"
+            } catch {
+                Write-Warning "cargo 缓存清理失败: $_"
+            }
+        }
+    } else {
+        Write-Host "`n  [跳过] cargo 不可用，跳过 cargo cache clean" -ForegroundColor DarkGray
+    }
+
     # --- 步骤 5: 删除 C:\chimera-test-target（如果存在） ---
     $testTargetPath = 'C:\chimera-test-target'
     if (Test-Path -LiteralPath $testTargetPath) {

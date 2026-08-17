@@ -54,6 +54,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -62,6 +64,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: '.'
+          lookup-only: true
         # WHY: 加速 benchmark 编译,典型缓存命中可省 60-120s
 
       - name: Run benchmarks

@@ -65,6 +65,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Resolve version
         id: version
@@ -72,21 +74,25 @@ jobs:
         run: |
           # 优先使用 workflow_dispatch 输入,其次 schedule 模式用 latest,
           # release 触发时用 release.tag_name
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${GITHUB_EVENT_INPUTS_VERSION}"
           if [ -z "$VERSION" ] && [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${GITHUB_EVENT_RELEASE_TAG_NAME}"
           fi
           if [ -z "$VERSION" ]; then
             VERSION="latest"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Resolved version: $VERSION"
+        env:
+          GITHUB_EVENT_INPUTS_VERSION: ${{ github.event.inputs.version }}
+          GITHUB_EVENT_RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
 
       # ============ Linux / macOS: 执行 install.sh ============
       - name: Run install.sh (Linux/macOS)
         if: matrix.script == 'install.sh'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.version }}
         shell: sh
         run: |
           # WHY 使用临时安装目录:避免污染 runner 系统 PATH,
@@ -95,8 +101,8 @@ jobs:
           mkdir -p "$INSTALL_DIR"
 
           VERSION_ARG=""
-          if [ "${{ steps.version.outputs.version }}" != "latest" ]; then
-            VERSION_ARG="--version ${{ steps.version.outputs.version }}"
+          if [ "${STEPS_VERSION_OUTPUTS_VERSION}" != "latest" ]; then
+            VERSION_ARG="--version ${STEPS_VERSION_OUTPUTS_VERSION}"
           fi
 
           # 执行安装脚本(自动检测平台/架构/下载/校验/PATH)
@@ -115,14 +121,15 @@ jobs:
         if: matrix.script == 'install.ps1'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STEPS_VERSION_OUTPUTS_VERSION: ${{ steps.version.outputs.version }}
         shell: powershell
         run: |
           $installDir = Join-Path $env:USERPROFILE '.local\chimera-test'
           New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 
           $versionArg = @()
-          if ('${{ steps.version.outputs.version }}' -ne 'latest') {
-            $versionArg = @('-Version', '${{ steps.version.outputs.version }}')
+          if ('$env:STEPS_VERSION_OUTPUTS_VERSION' -ne 'latest') {
+            $versionArg = @('-Version', '$env:STEPS_VERSION_OUTPUTS_VERSION')
           }
 
           # 执行安装脚本

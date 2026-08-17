@@ -272,7 +272,7 @@ impl ParadoxRiskDashboard {
     /// 触发预警行为——根据当前风险等级与前一等级执行响应
     ///
     /// # 预警逻辑
-    /// - Green → Yellow: warn + 降档 Simplifed + 发布 Warning 事件
+    /// - Green → Yellow: warn + 降档 Simplified + 发布 Warning 事件
     /// - Green/Yellow → Red: error + 熔断 FastPath + 发布 Critical 事件
     /// - Red/Yellow → Green: info + 恢复 Full + 发布 Clear 事件
     fn trigger_alert(&mut self, previous_risk_level: RiskLevel) {
