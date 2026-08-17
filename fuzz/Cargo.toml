@@ -68,7 +68,7 @@ nexus-contracts = { path = "../crates/nexus-contracts" }
 mca-gateway = { path = "../crates/mca-gateway" }
 
 # 序列化依赖(直接指定版本,fuzz crate 不在 workspace 内无法用 workspace = true)
-serde = { version = "1.0", features = ["derive"] }
+# W8 清理: serde 移除——各 target 仅直接使用 serde_json/rmp_serde,serde 为传递依赖
 serde_json = "1.0"
 rmp-serde = "1.3"
 

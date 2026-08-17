@@ -426,30 +426,6 @@ pub const BUILTIN_SLASH_COMMANDS: &[SlashCommandDescriptor] = &[
         args_usage: "<action> [args]",
     },
     SlashCommandDescriptor {
-        id: "parliament",
-        name: "parliament",
-        description: "议会审议子命令(deliberate)",
-        args_usage: "<action> [args]",
-    },
-    SlashCommandDescriptor {
-        id: "audit",
-        name: "audit",
-        description: "执行红队安全审计",
-        args_usage: "",
-    },
-    SlashCommandDescriptor {
-        id: "mcp",
-        name: "mcp",
-        description: "MCP 网格管理子命令(list/serve/call/inspect)",
-        args_usage: "<action> [args]",
-    },
-    SlashCommandDescriptor {
-        id: "agent",
-        name: "agent",
-        description: "Agent 管理子命令(list/spawn/inspect/cancel)",
-        args_usage: "<action> [args]",
-    },
-    SlashCommandDescriptor {
         id: "exit",
         name: "exit",
         description: "退出 chat REPL",
@@ -524,10 +500,6 @@ async fn handle_slash_command(
         // Result 返回的 handler 用 `?` 传播错误,使所有 match arm 统一为 `()` 类型
         "llm" => handle_llm(&parsed, config).await?,
         "quest" => handle_quest(&parsed, engine, config, perm).await?,
-        "parliament" => handle_parliament(&parsed, config).await?,
-        "audit" => handle_audit(&parsed, config).await?,
-        "mcp" => handle_mcp(&parsed, config).await?,
-        "agent" => handle_agent(&parsed, config).await?,
         "exit" => {
             eprintln!("再见!");
             return Ok(true);
@@ -693,69 +665,6 @@ async fn handle_quest(
     Ok(())
 }
 
-/// `/parliament <action>` — 议会审议子命令(SubTask 1.6.6)
-///
-/// TODO: 复用 Task 1.4 的 parliament::execute 逻辑,当前为占位。
-async fn handle_parliament(parsed: &ParsedSlashCommand, _config: &ChimeraConfig) -> Result<()> {
-    match parsed.first_arg() {
-        None => println!("用法: /parliament <deliberate <proposal>>"),
-        Some(action) => {
-            // TODO: 真实派发到 chimera parliament <action>(Task 1.4 已实现,
-            // 但需要进程内 Parliament 实例,chat 上下文未构造,暂用占位)
-            println!(
-                "已调用 chimera parliament {action} {}",
-                parsed.rest_args().join(" ")
-            );
-        }
-    }
-    Ok(())
-}
-
-/// `/audit` — 红队安全审计(SubTask 1.6.6)
-///
-/// TODO: 复用 Task 1.9 的 audit::execute 逻辑,当前为占位。
-async fn handle_audit(parsed: &ParsedSlashCommand, _config: &ChimeraConfig) -> Result<()> {
-    // TODO: 真实派发到 chimera audit(Task 1.9 由其他子代理并行处理)
-    println!("已调用 chimera audit {}", parsed.args.join(" "));
-    Ok(())
-}
-
-/// `/mcp <action>` — MCP 网格管理子命令(SubTask 1.6.6)
-///
-/// TODO: 复用 Task 1.8 的 mcp::execute 逻辑,当前为占位。
-async fn handle_mcp(parsed: &ParsedSlashCommand, _config: &ChimeraConfig) -> Result<()> {
-    match parsed.first_arg() {
-        None => println!("用法: /mcp <list|serve|call <server> <tool> <args>|inspect <server>>"),
-        Some(action) => {
-            // TODO: 真实派发到 chimera mcp <action>(Task 1.8 由其他子代理并行处理)
-            println!(
-                "已调用 chimera mcp {action} {}",
-                parsed.rest_args().join(" ")
-            );
-        }
-    }
-    Ok(())
-}
-
-/// `/agent <action>` — Agent 管理子命令(SubTask 1.6.6)
-///
-/// TODO: 复用 Task 1.10 的 agent::execute 逻辑,当前为占位。
-async fn handle_agent(parsed: &ParsedSlashCommand, _config: &ChimeraConfig) -> Result<()> {
-    match parsed.first_arg() {
-        None => println!(
-            "用法: /agent <list|spawn --quadrant <Q> --task <desc>|inspect <id>|cancel <id>>"
-        ),
-        Some(action) => {
-            // TODO: 真实派发到 chimera agent <action>(Task 1.10 由其他子代理并行处理)
-            println!(
-                "已调用 chimera agent {action} {}",
-                parsed.rest_args().join(" ")
-            );
-        }
-    }
-    Ok(())
-}
-
 // ============================================================================
 // 单元测试(SubTask 1.5.9 要求 5 个测试,实际实现 7 个覆盖各 SubTask)
 // ============================================================================
@@ -787,27 +696,23 @@ mod tests {
         assert_eq!(no_args.first_arg(), None);
     }
 
-    /// 测试 3:SlashCommandRegistry 包含 10 个内建命令(SubTask 1.6.1 / 1.6.2)
+    /// 测试 3:SlashCommandRegistry 包含 6 个内建命令(SubTask 1.6.1 / 1.6.2)
+    ///
+    /// W8 清理: parliament/audit/mcp/agent 四个假确认占位已移除——
+    /// 真实功能经 CLI 子命令 `chimera <cmd>` 可达,chat REPL 不再输出假确认。
     #[test]
-    fn test_builtin_registry_has_nine_commands() {
+    fn test_builtin_registry_has_six_commands() {
         let reg = SlashCommandRegistry::builtin();
-        assert_eq!(reg.len(), 10, "应有 10 个内建 slash 命令");
+        assert_eq!(reg.len(), 6, "应有 6 个内建 slash 命令");
         assert!(!reg.is_empty());
 
-        // 验证 10 个命令均存在
-        for name in &[
-            "help",
-            "clear",
-            "model",
-            "llm",
-            "quest",
-            "parliament",
-            "audit",
-            "mcp",
-            "agent",
-            "exit",
-        ] {
+        // 验证 6 个命令均存在
+        for name in &["help", "clear", "model", "llm", "quest", "exit"] {
             assert!(reg.get(name).is_some(), "命令 /{name} 应存在");
+        }
+        // 已移除的假确认命令不再注册（防回归）
+        for name in &["parliament", "audit", "mcp", "agent"] {
+            assert!(reg.get(name).is_none(), "命令 /{name} 应已移除");
         }
     }
 
