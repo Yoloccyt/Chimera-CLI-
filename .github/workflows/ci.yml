@@ -113,6 +113,17 @@ jobs:
           cargo install typos-cli --locked
           typos
 
+      # E4(报告附录 E, P1-3 基线): TOML 格式门禁——taplo 为 Even Better TOML 内核;
+      # 范围限定配置文件(manifest 因依赖铁律注释布局豁免,见 .taplo.toml WHY);
+      # 2026-08-17 已应用基线,本地 check 归零。
+      - name: TOML format check (taplo)
+        run: |
+          cargo install taplo-cli --locked
+          taplo fmt --check -c .taplo.toml \
+            "deny.toml" ".cargo/config.toml" ".config/nextest.toml" \
+            "fuzz/Cargo.toml" "examples/*.toml" "profiles/deployment/*.toml" \
+            "crates/mca-gateway/affinity.d/*.toml"
+
       - name: Install cargo-nextest
         # WHY: nextest 并行执行所有测试 binary(400+ binary 从串行变并行),
         # 2026-08-05 本地实测运行段 1126.9s → 130.3s(-88%);

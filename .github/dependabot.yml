@@ -1,0 +1,14 @@
+# Dependabot 配置（问题清单 P1-1：action SHA pinning 治理）
+# WHY: 报告附录 E-E1 识别 57 处 unpinned-uses(未固定 SHA 的 action 可被追溯篡改);
+#      dependabot 的 github-actions 生态 enable-version-updates 会自动将 tag
+#      引用更新为完整 SHA,并在依赖升级时同步更新 SHA——这是 unpinned-uses 的
+#      标准治理路径。zizmor.yml 的 remap 豁免在全部 PR 合并后移除。
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # 将 uses 的 tag 引用自动 pin 为 SHA(需要时),并随升级保持 SHA 同步
+    enable-version-updates: true
+    open-pull-requests-limit: 10

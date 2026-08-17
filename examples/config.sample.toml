@@ -27,7 +27,7 @@ checkpoint_interval_secs = 300
 
 # SecCore 沙箱配置
 [seccore]
-sandbox_mode = "drop"  # drop | kill | log
+sandbox_mode = "drop"                     # drop | kill | log
 command_whitelist = ["ls", "cat", "grep"]
 
 # DECB 预算配置
@@ -43,4 +43,4 @@ routing_mask_size = 128
 # 日志配置
 [logging]
 level = "info"  # trace | debug | info | warn | error
-format = "json"  # json | plain
+format = "json" # json | plain

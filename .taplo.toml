@@ -1,0 +1,7 @@
+# taplo 格式化配置（问题清单 P1-3：TOML 风格基线）
+# WHY array_auto_expand=false: 项目 manifest 的 members/dependencies 数组采用
+#      紧凑多行布局并携带架构注释(依赖铁律分层说明),自动展开会破坏注释布局;
+#      关闭展开以尊重既有风格,基线统一仅约束空白/缩进/对齐。
+[formatting]
+array_auto_expand = false
+array_auto_collapse = false
