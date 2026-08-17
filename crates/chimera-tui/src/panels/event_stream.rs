@@ -860,6 +860,8 @@ mod tests {
 
     #[test]
     fn test_event_stream_panel_new_events_indicator() {
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
         state.latest_events = VecDeque::from([
             NexusEvent::CacheHit {
@@ -885,6 +887,8 @@ mod tests {
 
     #[test]
     fn test_event_stream_panel_no_alert_when_zero_drops() {
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         // count = 0(默认)时不应显示告警行
         let state = TuiState::new();
         assert_eq!(state.critical_event_dropped_count, 0);
@@ -897,6 +901,8 @@ mod tests {
 
     #[test]
     fn test_event_stream_panel_shows_alert_when_drops_positive() {
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         // count > 0 时应在顶部显示红色告警行
         let mut state = TuiState::new();
         state.critical_event_dropped_count = 42;
@@ -910,6 +916,8 @@ mod tests {
 
     #[test]
     fn test_event_stream_panel_alert_appears_before_events() {
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         // 告警行应在事件列表之前(标题之后)
         let mut state = TuiState::new();
         state.critical_event_dropped_count = 5;
@@ -928,6 +936,8 @@ mod tests {
 
     #[test]
     fn test_event_stream_panel_alert_count_updates() {
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         // 验证告警计数随 state.critical_event_dropped_count 变化
         let mut state = TuiState::new();
         state.critical_event_dropped_count = 10;

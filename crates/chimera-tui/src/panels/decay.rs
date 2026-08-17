@@ -250,6 +250,9 @@ mod tests {
 
     #[test]
     fn test_decay_panel_content_normal() {
+        // WHY guard + 显式 Zh:断言中文文案("高衰减"/"周期开始"走 t!())
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
         state.decay_metrics = DecayMetrics {
             coefficient: 0.85,
@@ -278,6 +281,10 @@ mod tests {
 
     #[test]
     fn test_decay_panel_content_high_decay() {
+        // WHY guard + 显式 Zh:断言中文 "高衰减" marker(走 t!());En 下为
+        // "HIGH DECAY" 会导致 positive 断言失败(2026-08-17 全量甄别)。
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
         state.decay_metrics = DecayMetrics {
             coefficient: 0.25,
@@ -298,6 +305,9 @@ mod tests {
 
     #[test]
     fn test_decay_panel_content_default_state() {
+        // WHY guard + 显式 Zh:断言中文文案("高衰减"/"暂无最近衰减事件"等)
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let state = TuiState::new();
         let content = DecayPanel::content(&state).to_string();
         // 默认 coefficient = 1.0,应显示 100.0%
@@ -321,6 +331,9 @@ mod tests {
 
     #[test]
     fn test_decay_panel_content_empty_events() {
+        // WHY guard + 显式 Zh:断言中文占位文案("暂无最近衰减事件"走 t!())
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
         state.decay_metrics = DecayMetrics {
             coefficient: 0.5,

@@ -28,7 +28,6 @@ use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use std::collections::VecDeque;
-use std::sync::Mutex;
 
 use chimera_tui::config::Theme;
 use chimera_tui::{
@@ -40,11 +39,24 @@ use chimera_tui::{
 // 辅助函数与可配置静态数据源
 // ============================================================
 
-/// 串行化所有会读写全局 locale 的测试(与 i18n_chrome_test.rs 同范式)
+/// 在 En locale 下执行闭包(断言英文渲染文案的测试专用)
 ///
-/// WHY:界面语言为进程级全局静态,涉及 locale 的测试并行时会互相复位(En↔Zh),
-/// 导致 render 捕获到错误语言。用同一 Mutex 互斥这些测试,消除竞态 flaky。
-static LOCALE_LOCK: Mutex<()> = Mutex::new(());
+/// WHY(2026-08-17 系统性迁移):i18n 默认 zh,断言英文文案必须显式锁定 locale;
+/// 经 `locale_test_guard` 全程持 i18n 锁(防其他测试插入写)+ RAII drop 自动
+/// 恢复进入时 locale(panic 也恢复)。替代旧 LOCALE_LOCK 模式——后者只串行化
+/// 本文件测试,防不住其他测试文件的 locale 写入。
+fn with_en_locale<T>(f: impl FnOnce() -> T) -> T {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::i18n::set_locale(chimera_tui::i18n::Locale::En);
+    f()
+}
+
+/// 同 [`with_en_locale`],锁定中文(断言中文文案/依赖中文空态的测试专用)
+fn with_zh_locale<T>(f: impl FnOnce() -> T) -> T {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::i18n::set_locale(chimera_tui::i18n::Locale::Zh);
+    f()
+}
 
 /// 构造测试用 TUI 应用(默认配置)
 fn make_app() -> TuiApp {
@@ -123,34 +135,32 @@ fn full_snapshot(
 
 #[test]
 fn test_tui_layout_rendering() {
-    // locale 为全局静态,串行化避免与其他 En 测试并行时被复位为 Zh
-    let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // WHY TestBackend:验证 render() 产出非空内容,包含核心 UI 元素
-    // i18n:状态栏标签随 locale 切换;固定英文捕获后立即复位,
-    // 使后续断言基于已捕获的英文快照(ASCII "Panel:" 可靠),且 panic 也不泄露 locale。
-    chimera_tui::set_locale(chimera_tui::Locale::En);
-    let mut app = make_app();
-    let content = render_to_string(&mut app, 80, 24);
-    chimera_tui::set_locale(chimera_tui::Locale::Zh); // 立即复位默认中文(content 已捕获)
+    with_en_locale(|| {
+        // WHY TestBackend:验证 render() 产出非空内容,包含核心 UI 元素
+        // i18n:状态栏标签随 locale 切换;锁定 En 使断言基于英文快照
+        // (ASCII "Panel:" 可靠);guard RAII 自动恢复进入时 locale。
+        let mut app = make_app();
+        let content = render_to_string(&mut app, 80, 24);
 
-    // 验证:渲染内容包含面板标签(顶部 Tabs)
-    assert!(
-        content.contains("Quest") || content.contains("Panels"),
-        "rendered layout should contain panel tabs, got: {}",
-        &content[..content.len().min(200)]
-    );
+        // 验证:渲染内容包含面板标签(顶部 Tabs)
+        assert!(
+            content.contains("Quest") || content.contains("Panels"),
+            "rendered layout should contain panel tabs, got: {}",
+            &content[..content.len().min(200)]
+        );
 
-    // 验证:渲染内容包含状态栏(底部)
-    assert!(
-        content.contains("Panel:") || content.contains("Running:"),
-        "rendered layout should contain status bar"
-    );
+        // 验证:渲染内容包含状态栏(底部)
+        assert!(
+            content.contains("Panel:") || content.contains("Running:"),
+            "rendered layout should contain status bar"
+        );
 
-    // 验证:渲染内容包含当前面板标题(Quest Tasks)
-    assert!(
-        content.contains("Quest Tasks"),
-        "rendered layout should contain Quest panel title"
-    );
+        // 验证:渲染内容包含当前面板标题(Quest Tasks)
+        assert!(
+            content.contains("Quest Tasks"),
+            "rendered layout should contain Quest panel title"
+        );
+    });
 }
 
 #[test]
@@ -195,32 +205,34 @@ fn test_tui_layout_rendering_all_panels() {
 
 #[test]
 fn test_tui_layout_rendering_theme_switch() {
-    // WHY 主题切换:验证 Light/Dark 主题下都能正常渲染
-    let mut dark_app = make_app();
-    let dark_content = render_to_string(&mut dark_app, 80, 24);
-    assert!(
-        !dark_content.is_empty(),
-        "Dark theme should render non-empty content"
-    );
+    with_en_locale(|| {
+        // WHY 主题切换:验证 Light/Dark 主题下都能正常渲染
+        let mut dark_app = make_app();
+        let dark_content = render_to_string(&mut dark_app, 80, 24);
+        assert!(
+            !dark_content.is_empty(),
+            "Dark theme should render non-empty content"
+        );
 
-    let mut light_app = TuiApp::new(TuiConfig {
-        theme: Theme::Light,
-        ..Default::default()
-    })
-    .unwrap();
-    // Concord W3:主题渲染对比基于 Dashboard 布局(Chat 为第一默认)
-    light_app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
-    let light_content = render_to_string(&mut light_app, 80, 24);
-    assert!(
-        !light_content.is_empty(),
-        "Light theme should render non-empty content"
-    );
+        let mut light_app = TuiApp::new(TuiConfig {
+            theme: Theme::Light,
+            ..Default::default()
+        })
+        .unwrap();
+        // Concord W3:主题渲染对比基于 Dashboard 布局(Chat 为第一默认)
+        light_app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        let light_content = render_to_string(&mut light_app, 80, 24);
+        assert!(
+            !light_content.is_empty(),
+            "Light theme should render non-empty content"
+        );
 
-    // 两次渲染内容应包含相同的核心元素(主题只影响颜色,不影响布局)
-    assert!(
-        dark_content.contains("Quest") && light_content.contains("Quest"),
-        "both themes should render Quest panel"
-    );
+        // 两次渲染内容应包含相同的核心元素(主题只影响颜色,不影响布局)
+        assert!(
+            dark_content.contains("Quest") && light_content.contains("Quest"),
+            "both themes should render Quest panel"
+        );
+    });
 }
 
 // ============================================================
@@ -582,41 +594,43 @@ fn test_tui_popup_enter_closes() {
 
 #[test]
 fn test_budget_panel_shows_critical_state() {
-    // WHY 数据驱动渲染:验证 Budget 面板在 is_exceeded=true 时正确显示 EXCEEDED
-    let snapshot = full_snapshot(
-        Vec::new(),
-        VecDeque::new(),
-        BudgetMetrics {
-            total_consumption: 9500.0,
-            remaining_budget: 500.0,
-            utilization_rate: 0.95,
-            current_tier: "Critical".into(),
-            coefficient: 1.2,
-            is_exceeded: true,
-            alert: Some("Budget cap exceeded".into()),
-        },
-    );
+    with_en_locale(|| {
+        // WHY 数据驱动渲染:验证 Budget 面板在 is_exceeded=true 时正确显示 EXCEEDED
+        let snapshot = full_snapshot(
+            Vec::new(),
+            VecDeque::new(),
+            BudgetMetrics {
+                total_consumption: 9500.0,
+                remaining_budget: 500.0,
+                utilization_rate: 0.95,
+                current_tier: "Critical".into(),
+                coefficient: 1.2,
+                is_exceeded: true,
+                alert: Some("Budget cap exceeded".into()),
+            },
+        );
 
-    let mut app = TuiApp::with_data_source(
-        TuiConfig {
-            default_view_mode: chimera_tui::ViewMode::Dashboard,
-            persist_state: false,
-            ..Default::default()
-        },
-        Box::new(StaticSnapshotSource::new(snapshot)),
-    )
-    .unwrap();
+        let mut app = TuiApp::with_data_source(
+            TuiConfig {
+                default_view_mode: chimera_tui::ViewMode::Dashboard,
+                persist_state: false,
+                ..Default::default()
+            },
+            Box::new(StaticSnapshotSource::new(snapshot)),
+        )
+        .unwrap();
 
-    // 从数据源拉取快照,确保 state.budget 反映测试数据
-    app.update();
-    app.switch_panel_to(PanelId::Budget);
+        // 从数据源拉取快照,确保 state.budget 反映测试数据
+        app.update();
+        app.switch_panel_to(PanelId::Budget);
 
-    let content = render_to_string(&mut app, 80, 24);
-    assert!(
-        content.contains("EXCEEDED"),
-        "Budget panel should render EXCEEDED status when budget is exceeded, got: {}",
-        &content[..content.len().min(300)]
-    );
+        let content = render_to_string(&mut app, 80, 24);
+        assert!(
+            content.contains("EXCEEDED"),
+            "Budget panel should render EXCEEDED status when budget is exceeded, got: {}",
+            &content[..content.len().min(300)]
+        );
+    });
 }
 
 // ============================================================
@@ -625,77 +639,81 @@ fn test_budget_panel_shows_critical_state() {
 
 #[test]
 fn test_quest_panel_renders_real_quest_data() {
-    // WHY 数据驱动 Quest 面板:验证自定义数据源提供的 Quest 能被渲染到面板中
-    let quest = Quest {
-        quest_id: "quest-panel-test-001".into(),
-        title: "Panel Data Quest".into(),
-        tasks: vec![
-            Task {
-                task_id: "t1".into(),
-                description: "first task".into(),
-                status: TaskStatus::Completed,
-                dependencies: vec![],
+    // WHY 锁 Zh:断言含中文任务摘要文案("3总"/"1执行中"走 t!());
+    // 英文数据(quest_id/thinking_mode)不经翻译,Zh 下仍原样渲染。
+    with_zh_locale(|| {
+        // WHY 数据驱动 Quest 面板:验证自定义数据源提供的 Quest 能被渲染到面板中
+        let quest = Quest {
+            quest_id: "quest-panel-test-001".into(),
+            title: "Panel Data Quest".into(),
+            tasks: vec![
+                Task {
+                    task_id: "t1".into(),
+                    description: "first task".into(),
+                    status: TaskStatus::Completed,
+                    dependencies: vec![],
+                },
+                Task {
+                    task_id: "t2".into(),
+                    description: "second task".into(),
+                    status: TaskStatus::Running,
+                    dependencies: vec![],
+                },
+                Task {
+                    task_id: "t3".into(),
+                    description: "third task".into(),
+                    status: TaskStatus::Pending,
+                    dependencies: vec![],
+                },
+            ],
+            thinking_mode: ThinkingMode::Deep,
+            checkpoint_id: Some("cp-1".into()),
+            priority: 128,
+        };
+
+        let snapshot = full_snapshot(vec![quest], VecDeque::new(), BudgetMetrics::default());
+
+        let mut app = TuiApp::with_data_source(
+            TuiConfig {
+                default_view_mode: chimera_tui::ViewMode::Dashboard,
+                persist_state: false,
+                ..Default::default()
             },
-            Task {
-                task_id: "t2".into(),
-                description: "second task".into(),
-                status: TaskStatus::Running,
-                dependencies: vec![],
-            },
-            Task {
-                task_id: "t3".into(),
-                description: "third task".into(),
-                status: TaskStatus::Pending,
-                dependencies: vec![],
-            },
-        ],
-        thinking_mode: ThinkingMode::Deep,
-        checkpoint_id: Some("cp-1".into()),
-        priority: 128,
-    };
+            Box::new(StaticSnapshotSource::new(snapshot)),
+        )
+        .unwrap();
 
-    let snapshot = full_snapshot(vec![quest], VecDeque::new(), BudgetMetrics::default());
+        // 从数据源拉取快照,确保 state.quest_list 反映测试数据
+        app.update();
 
-    let mut app = TuiApp::with_data_source(
-        TuiConfig {
-            default_view_mode: chimera_tui::ViewMode::Dashboard,
-            persist_state: false,
-            ..Default::default()
-        },
-        Box::new(StaticSnapshotSource::new(snapshot)),
-    )
-    .unwrap();
-
-    // 从数据源拉取快照,确保 state.quest_list 反映测试数据
-    app.update();
-
-    let content = render_to_string(&mut app, 80, 24);
-    assert!(
-        content.contains("Panel Data Quest"),
-        "Quest panel should render quest title, got: {}",
-        &content[..content.len().min(300)]
-    );
-    assert!(
-        content.contains("quest-panel-test-001"),
-        "Quest panel should render quest_id, got: {}",
-        &content[..content.len().min(300)]
-    );
-    assert!(
-        content.contains("Deep"),
-        "Quest panel should render thinking mode, got: {}",
-        &content[..content.len().min(300)]
-    );
-    let compact: String = content.chars().filter(|c| *c != ' ').collect();
-    assert!(
-        compact.contains("3总"),
-        "Quest panel should render task summary, got: {}",
-        &content[..content.len().min(300)]
-    );
-    assert!(
-        compact.contains("1执行中"),
-        "Quest panel should include Running count, got: {}",
-        &content[..content.len().min(300)]
-    );
+        let content = render_to_string(&mut app, 80, 24);
+        assert!(
+            content.contains("Panel Data Quest"),
+            "Quest panel should render quest title, got: {}",
+            &content[..content.len().min(300)]
+        );
+        assert!(
+            content.contains("quest-panel-test-001"),
+            "Quest panel should render quest_id, got: {}",
+            &content[..content.len().min(300)]
+        );
+        assert!(
+            content.contains("Deep"),
+            "Quest panel should render thinking mode, got: {}",
+            &content[..content.len().min(300)]
+        );
+        let compact: String = content.chars().filter(|c| *c != ' ').collect();
+        assert!(
+            compact.contains("3总"),
+            "Quest panel should render task summary, got: {}",
+            &content[..content.len().min(300)]
+        );
+        assert!(
+            compact.contains("1执行中"),
+            "Quest panel should include Running count, got: {}",
+            &content[..content.len().min(300)]
+        );
+    });
 }
 
 // ============================================================
@@ -704,62 +722,66 @@ fn test_quest_panel_renders_real_quest_data() {
 
 #[test]
 fn test_parliament_panel_renders_recent_events() {
-    // WHY 数据驱动 Parliament 面板:验证自定义数据源提供的议会事件能被渲染到面板中
-    let snapshot = full_snapshot(
-        Vec::new(),
-        VecDeque::from([
-            NexusEvent::SkepticVeto {
-                metadata: EventMetadata::new("parliament"),
-                quest_id: "q-1".into(),
-                veto_reason: "unsafe shell injection detected".into(),
-                frozen_capabilities: vec!["shell_exec".into()],
+    // WHY 锁 Zh:否定断言依赖中文空态文案("暂无议会事件"类);
+    // En 下空态显示 "No recent parliament events" 会破坏 !contains 断言。
+    with_zh_locale(|| {
+        // WHY 数据驱动 Parliament 面板:验证自定义数据源提供的议会事件能被渲染到面板中
+        let snapshot = full_snapshot(
+            Vec::new(),
+            VecDeque::from([
+                NexusEvent::SkepticVeto {
+                    metadata: EventMetadata::new("parliament"),
+                    quest_id: "q-1".into(),
+                    veto_reason: "unsafe shell injection detected".into(),
+                    frozen_capabilities: vec!["shell_exec".into()],
+                },
+                NexusEvent::RedTeamAudit {
+                    metadata: EventMetadata::new("parliament"),
+                    vulnerability_type: "prompt_injection".into(),
+                    failed_probes: 5,
+                    total_probes: 20,
+                    detection_rate: 0.25,
+                    remediation_suggestion: "add input sanitization".into(),
+                },
+            ]),
+            BudgetMetrics::default(),
+        );
+
+        let mut app = TuiApp::with_data_source(
+            TuiConfig {
+                default_view_mode: chimera_tui::ViewMode::Dashboard,
+                persist_state: false,
+                ..Default::default()
             },
-            NexusEvent::RedTeamAudit {
-                metadata: EventMetadata::new("parliament"),
-                vulnerability_type: "prompt_injection".into(),
-                failed_probes: 5,
-                total_probes: 20,
-                detection_rate: 0.25,
-                remediation_suggestion: "add input sanitization".into(),
-            },
-        ]),
-        BudgetMetrics::default(),
-    );
+            Box::new(StaticSnapshotSource::new(snapshot)),
+        )
+        .unwrap();
 
-    let mut app = TuiApp::with_data_source(
-        TuiConfig {
-            default_view_mode: chimera_tui::ViewMode::Dashboard,
-            persist_state: false,
-            ..Default::default()
-        },
-        Box::new(StaticSnapshotSource::new(snapshot)),
-    )
-    .unwrap();
+        // 从数据源拉取快照,确保 state.latest_events 反映测试数据
+        app.update();
+        app.switch_panel_to(PanelId::Parliament);
 
-    // 从数据源拉取快照,确保 state.latest_events 反映测试数据
-    app.update();
-    app.switch_panel_to(PanelId::Parliament);
-
-    let content = render_to_string(&mut app, 80, 24);
-    assert!(
-        content.contains("unsafe shell injection detected"),
-        "Parliament panel should render SkepticVeto reason, got: {}",
-        &content[..content.len().min(300)]
-    );
-    assert!(
-        content.contains("q-1"),
-        "Parliament panel should render quest_id, got: {}",
-        &content[..content.len().min(300)]
-    );
-    assert!(
-        content.contains("prompt_injection") || content.contains("RedTeamAudit"),
-        "Parliament panel should render RedTeamAudit info, got: {}",
-        &content[..content.len().min(300)]
-    );
-    assert!(
-        !content.contains("No recent parliament events"),
-        "should not show empty hint when parliament events exist"
-    );
+        let content = render_to_string(&mut app, 80, 24);
+        assert!(
+            content.contains("unsafe shell injection detected"),
+            "Parliament panel should render SkepticVeto reason, got: {}",
+            &content[..content.len().min(300)]
+        );
+        assert!(
+            content.contains("q-1"),
+            "Parliament panel should render quest_id, got: {}",
+            &content[..content.len().min(300)]
+        );
+        assert!(
+            content.contains("prompt_injection") || content.contains("RedTeamAudit"),
+            "Parliament panel should render RedTeamAudit info, got: {}",
+            &content[..content.len().min(300)]
+        );
+        assert!(
+            !content.contains("No recent parliament events"),
+            "should not show empty hint when parliament events exist"
+        );
+    });
 }
 
 // ============================================================
@@ -821,44 +843,50 @@ fn test_log_panel_renders_events() {
 
 #[test]
 fn test_memory_panel_switch_and_render() {
-    let mut app = make_app();
-    app.switch_panel_to(PanelId::Memory);
-    assert_eq!(app.current_panel(), PanelId::Memory);
+    with_en_locale(|| {
+        let mut app = make_app();
+        app.switch_panel_to(PanelId::Memory);
+        assert_eq!(app.current_panel(), PanelId::Memory);
 
-    let content = render_to_string(&mut app, 80, 24);
-    assert!(
-        content.contains("Memory"),
-        "Memory panel should render title, got: {}",
-        &content[..content.len().min(300)]
-    );
+        let content = render_to_string(&mut app, 80, 24);
+        assert!(
+            content.contains("Memory"),
+            "Memory panel should render title, got: {}",
+            &content[..content.len().min(300)]
+        );
+    });
 }
 
 #[test]
 fn test_security_panel_switch_and_render() {
-    let mut app = make_app();
-    app.switch_panel_to(PanelId::Security);
-    assert_eq!(app.current_panel(), PanelId::Security);
+    with_en_locale(|| {
+        let mut app = make_app();
+        app.switch_panel_to(PanelId::Security);
+        assert_eq!(app.current_panel(), PanelId::Security);
 
-    let content = render_to_string(&mut app, 80, 24);
-    assert!(
-        content.contains("Security"),
-        "Security panel should render title, got: {}",
-        &content[..content.len().min(300)]
-    );
+        let content = render_to_string(&mut app, 80, 24);
+        assert!(
+            content.contains("Security"),
+            "Security panel should render title, got: {}",
+            &content[..content.len().min(300)]
+        );
+    });
 }
 
 #[test]
 fn test_health_panel_switch_and_render() {
-    let mut app = make_app();
-    app.switch_panel_to(PanelId::Health);
-    assert_eq!(app.current_panel(), PanelId::Health);
+    with_en_locale(|| {
+        let mut app = make_app();
+        app.switch_panel_to(PanelId::Health);
+        assert_eq!(app.current_panel(), PanelId::Health);
 
-    let content = render_to_string(&mut app, 80, 24);
-    assert!(
-        content.contains("Health"),
-        "Health panel should render title, got: {}",
-        &content[..content.len().min(300)]
-    );
+        let content = render_to_string(&mut app, 80, 24);
+        assert!(
+            content.contains("Health"),
+            "Health panel should render title, got: {}",
+            &content[..content.len().min(300)]
+        );
+    });
 }
 
 // ============================================================
@@ -867,9 +895,9 @@ fn test_health_panel_switch_and_render() {
 
 #[test]
 fn test_search_mode_filters_log_panel() {
-    // WHY locale 锁:断言依赖中文文案“关键字”,并行测试切换语言会偶发失败
-    // (既有 flaky,2026-08-07 修复)
-    let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // WHY 锁 Zh:断言中文过滤指示文案("关键字:alpha" 走 t!());
+    // 替代旧 LOCALE_LOCK 模式(只防本文件,防不住其他测试文件写入)。
+    with_zh_locale(|| {
     // WHY:通过 '/' 进入搜索模式,提交后关键字过滤器应作用于 Log 面板
     let snapshot = full_snapshot(
         Vec::new(),
@@ -915,10 +943,13 @@ fn test_search_mode_filters_log_panel() {
         "Log panel title should show active keyword filter, got: {}",
         &content[..content.len().min(300)]
     );
+    });
 }
 
 #[test]
 fn test_command_filter_and_level_applies_to_log() {
+    // WHY 锁 Zh:断言中文过滤指示文案("主题:budget"/"级别:critical" 走 t!())
+    with_zh_locale(|| {
     // WHY:`:filter` 与 `:level` 命令应设置状态过滤器并影响 Log 面板渲染
     let snapshot = full_snapshot(
         Vec::new(),
@@ -975,6 +1006,7 @@ fn test_command_filter_and_level_applies_to_log() {
         compact.contains("级别:critical"),
         "Log panel title should show level filter"
     );
+    });
 }
 
 #[test]
