@@ -43,7 +43,11 @@ pub mod coordination_metrics;
 pub mod dag;
 pub mod engine;
 pub mod error;
+/// Phase 9 §14.2: 长任务地图（TencentDB 机制：短摘要入上下文 + 详情外置 + 地图注入）
+pub mod long_task_map;
 pub mod metrics_sync;
+/// Phase 9 §14.1: OpenMLE 搜索树管理器（经验卡片进化树，与 dag.rs 任务 DAG 语义分离）
+pub mod search_tree;
 /// P1-1: NexusStateChanged EventBus 适配器(L1 Core 深度优化,依赖倒置接线)
 pub mod state_listener;
 pub mod trajectory_exporter;
@@ -69,6 +73,13 @@ pub use coordination_metrics::{
 };
 pub use engine::QuestEngine;
 pub use error::QuestError;
+// Phase 9 §14.2: 长任务地图公开 API 重导出
+pub use long_task_map::{
+    ExternalStorage, InMemoryExternalStorage, LongTaskMap, NodeStatus, StepResult, TaskEdge,
+    TaskMapRef, TaskNode,
+};
+// Phase 9 §14.1: OpenMLE 搜索树公开 API 重导出
+pub use search_tree::{SearchTreeManager, TreeError, TreeStats};
 // 协调度量接线闭环:待合并样本与观测事件订阅器
 // (消费 DebateCompleted / DelegationCompleted,填充协调成本 Option 字段)
 pub use metrics_sync::{

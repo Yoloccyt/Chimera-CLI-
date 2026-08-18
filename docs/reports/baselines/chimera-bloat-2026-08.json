@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-08-17T23:11:41.4608795+08:00",
+  "binarySizeMB": 12.33,
+  "textSectionSizeMB": 5.7,
+  "topCrates": [
+    {
+      "FilePct": 46.5,
+      "SizeKB": 5836.8,
+      "Crate": ".text",
+      "TextPct": 100.0
+    },
+    {
+      "FilePct": 7.5,
+      "SizeKB": 941.2,
+      "Crate": "hnsw_rs",
+      "TextPct": 16.0
+    },
+    {
+      "FilePct": 2.8,
+      "SizeKB": 358.4,
+      "Crate": "mel_spec",
+      "TextPct": 6.1
+    },
+    {
+      "FilePct": 0.9,
+      "SizeKB": 117.5,
+      "Crate": "libsqlite3_sys",
+      "TextPct": 2.0
+    },
+    {
+      "FilePct": 0.0,
+      "SizeKB": 0.5,
+      "Crate": "windows_sys",
+      "TextPct": 0.0
+    },
+    {
+      "FilePct": 0.0,
+      "SizeKB": 0.4,
+      "Crate": "std",
+      "TextPct": 0.0
+    },
+    {
+      "FilePct": 0.0,
+      "SizeKB": 0.2,
+      "Crate": "windows",
+      "TextPct": 0.0
+    },
+    {
+      "FilePct": 0.0,
+      "SizeKB": 0.0,
+      "Crate": "chrono",
+      "TextPct": 0.0
+    },
+    {
+      "FilePct": 0.0,
+      "SizeKB": 0.0,
+      "Crate": "backtrace",
+      "TextPct": 0.0
+    }
+  ],
+  "unknownSizeMB": 4.4
+}

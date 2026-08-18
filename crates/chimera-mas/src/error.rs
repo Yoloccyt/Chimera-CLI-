@@ -152,6 +152,16 @@ pub enum MasError {
         quadrant: String,
     },
 
+    /// 全局提供者重复注册 — W8 假遥测治理
+    ///
+    /// 触发场景:`set_quadrant_status_provider()` 二次调用(OnceLock 语义)。
+    /// 处理策略:拒绝新提供者,保留首次注册(首个装配源为权威源)。
+    #[error("Provider already registered: {name}")]
+    ProviderAlreadyRegistered {
+        /// 提供者名称(如 "quadrant_status")
+        name: String,
+    },
+
     /// 归档单调性违反 — INV-8(Task 21 §21.2 / §17.5)
     ///
     /// 触发场景:`InvariantChecker::check_inv8_archive_monotonicity()` 检测到
@@ -635,6 +645,7 @@ impl MasError {
             | Self::ShadowGateRejected { .. }
             | Self::R2FreezeViolation { .. }
             | Self::R1ShadowRollbackFailed { .. }
+            | Self::ProviderAlreadyRegistered { .. }
             | Self::Internal(_) => false,
         }
     }

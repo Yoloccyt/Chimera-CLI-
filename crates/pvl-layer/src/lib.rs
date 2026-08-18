@@ -68,7 +68,11 @@
 /// 骨架期默认不接线:沙箱执行器经 `SandboxExec` trait 由调用方注入,
 /// 真实接线时由上层编排器提供 seccore Sandbox 适配层。
 pub mod auto_builder;
+/// Phase 7 §12.1: 经验卡片生成器（PVL 验证结果→ExperienceCard，ADR-049 内嵌）
+pub mod card_generator;
 pub mod config;
+/// Phase 7 §12.3: 动态验证深度 + 熵加权（OpenMLE + 快手融合，ADR-049 内嵌）
+pub mod dynamic_depth;
 pub mod error;
 pub mod feedback;
 /// Milestone D-2c:GTPO Turn-Level 奖励(设计 §11.1,纯函数计算)
@@ -76,10 +80,17 @@ pub mod gtpo;
 /// polish-v2.7 P3-6:Hint-Boosted Recovery 过程级提示引导恢复(快手 KAT,ADR-049)
 pub mod hint_recovery;
 /// polish-v2.7 P3-5:Process-Score 九维度过程评分(快手 KAT,ADR-049)
+///
+/// 语义边界：本模块为观测九维（TUI 面板消费）；KAT 轨迹九维见
+/// `trajectory_score`（Phase 7 §12.2，经验回放/裁决消费）。
 pub mod process_score;
 pub mod producer;
 /// Milestone D-2d:RLVR 可验证奖励(设计 §11.2,enum dispatch 规则式验证器)
 pub mod rlvr;
+/// Phase 7 §12.4: Segment-aware 分段感知验证（Dressage，奖励 overlay D-4）
+pub mod segment_validation;
+/// Phase 7 §12.2: KAT 轨迹九维过程评分（D-2 命名协调，与 process_score 并存）
+pub mod trajectory_score;
 pub mod types;
 pub mod verifier;
 
@@ -89,13 +100,25 @@ pub use auto_builder::{
     AutoBuilder, BuildAgent, BuildFailure, BuildResult, BuildScript, ExecReport, ManifestKind,
     RepoLayout, SandboxExec, Verification, VerifyAgent,
 };
+// Phase 7 §12.1: 经验卡片生成器公开 API 重导出
+pub use card_generator::{CardValidationInput, ExecutionMetadata, ExperienceCardGenerator};
 pub use config::PvlConfig;
+// Phase 7 §12.3: 动态验证深度 + 熵加权公开 API 重导出
+pub use dynamic_depth::{DynamicVerifier, EntropyWeightedScorer, TaskRisk, VerificationDepth};
 pub use error::PvlError;
 pub use feedback::FeedbackChannel;
 // polish-v2.7 P3:过程评分与提示恢复公开 API 重导出
 pub use hint_recovery::{HintCategory, HintRecovery, RecoveryHint};
 pub use process_score::{check_real_execution, ProcessObservation, ProcessScore, ProcessScorer};
 pub use producer::Producer;
+// Phase 7 §12.4: Segment-aware 分段感知验证公开 API 重导出
+pub use segment_validation::{
+    SegmentAwareValidator, SegmentRewardState, SegmentValidationError, SegmentValidationResult,
+};
+// Phase 7 §12.2: KAT 轨迹九维公开 API 重导出
+pub use trajectory_score::{
+    CodeChange, ProcessTrajectory, TrajectoryAction, TrajectoryProcessScore, VerificationStep,
+};
 pub use types::{
     FeedbackMessage, Operation, OperationId, OperationStatus, ProducerStrategy, VerificationResult,
 };
@@ -107,9 +130,24 @@ pub use verifier::Verifier;
 /// 展示最近一次 PVL 过程评分（九维度 + 总分），
 /// 供 TUI 面板直接调用，避免面板渲染阻塞。
 ///
-/// TODO: v3.x 接入 RuntimeAuditor 实时采集后替换为真实 PVL 评分。
+/// **Phase 7 D-6 占位治理**：原恒 1.0 虚假数据占位已替换为真实快照
+/// 注册表——评分路径经 [`register_pvl_score`] 写入，本函数读快照；
+/// 未注册时返回默认满分快照并如实标注（不伪造运行时数据）。
 pub fn pvl_score() -> ProcessScore {
-    // 占位:返回默认满分评分（真实评分由 Producer/Verifier 运行时产生）
+    // 已注册真实评分 → 返回快照
+    if let Some(score) = PVL_SCORE_SNAPSHOT
+        .get()
+        .and_then(|slot| slot.lock().ok().and_then(|guard| guard.clone()))
+    {
+        return score;
+    }
+    // 未注册 fallback：默认满分快照（无真实评分时的诚实占位，
+    // 与 L6 OmniSparseCoordinator::snapshot 治理同模式）
+    fallback_pvl_score()
+}
+
+/// 未注册时的默认满分快照（Phase 7 D-6：不伪造运行时数据，仅诚实占位）
+fn fallback_pvl_score() -> ProcessScore {
     ProcessScore {
         real_execution: 1.0,
         coverage: 1.0,
@@ -121,6 +159,21 @@ pub fn pvl_score() -> ProcessScore {
         orphan_free: 1.0,
         sandbox_clean: 1.0,
         total: 1.0,
+    }
+}
+
+/// PVL 评分真实快照注册表（Phase 7 D-6）
+///
+/// WHY OnceLock<Mutex<Option>>：全局函数无法持有实例状态，注册表提供
+/// 真实数据源；同步短临界区，无持锁跨 await（红线 §4.4-1）。
+static PVL_SCORE_SNAPSHOT: std::sync::OnceLock<std::sync::Mutex<Option<ProcessScore>>> =
+    std::sync::OnceLock::new();
+
+/// 注册真实 PVL 过程评分（Phase 7 D-6：供 Verifier 评分路径写入）
+pub fn register_pvl_score(score: ProcessScore) {
+    let slot = PVL_SCORE_SNAPSHOT.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(score);
     }
 }
 

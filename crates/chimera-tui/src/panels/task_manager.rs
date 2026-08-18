@@ -49,7 +49,7 @@ use crate::panels::Panel;
 use crate::popup::PopupKind;
 use crate::render::FOOTER_TEXT;
 use crate::types::{PanelId, QuestAction, SortMode, TuiCommand, TuiState};
-use chimera_mas::quadrant_status;
+use chimera_mas::{quadrant_status, quadrant_status_available};
 use nexus_core::{Quest, TaskStatus};
 
 /// 优先级上限(用户面 0-10 范围)
@@ -452,20 +452,31 @@ impl Panel for TaskManagerPanel {
         block.render(area, buf);
 
         // Task 3.9:L10 → L9 向下依赖 — 四象限稳定分工状态（ADR-027）
-        let qs = quadrant_status();
-        let quadrant_footer = vec![Line::from(vec![
-            Span::styled("Quadrants: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(
-                format!(
-                    "Q1(Impl): A={} T={} WSJF={:.1} | Q2(Int): A={} T={} WSJF={:.1} | Q3(Ver): A={} T={} WSJF={:.1} | Q4(Hard): A={} T={} WSJF={:.1}",
-                    qs.agent_counts[0], qs.task_counts[0], qs.wsjf_scores[0],
-                    qs.agent_counts[1], qs.task_counts[1], qs.wsjf_scores[1],
-                    qs.agent_counts[2], qs.task_counts[2], qs.wsjf_scores[2],
-                    qs.agent_counts[3], qs.task_counts[3], qs.wsjf_scores[3],
+        // W8 假遥测治理: provider 未接入时显示诚实标记,不渲染假零数据
+        let quadrant_footer = if quadrant_status_available() {
+            let qs = quadrant_status();
+            vec![Line::from(vec![
+                Span::styled("Quadrants: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(
+                        "Q1(Impl): A={} T={} WSJF={:.1} | Q2(Int): A={} T={} WSJF={:.1} | Q3(Ver): A={} T={} WSJF={:.1} | Q4(Hard): A={} T={} WSJF={:.1}",
+                        qs.agent_counts[0], qs.task_counts[0], qs.wsjf_scores[0],
+                        qs.agent_counts[1], qs.task_counts[1], qs.wsjf_scores[1],
+                        qs.agent_counts[2], qs.task_counts[2], qs.wsjf_scores[2],
+                        qs.agent_counts[3], qs.task_counts[3], qs.wsjf_scores[3],
+                    ),
+                    Style::default().fg(Color::Cyan),
                 ),
-                Style::default().fg(Color::Cyan),
-            ),
-        ])];
+            ])]
+        } else {
+            vec![Line::from(vec![
+                Span::styled("Quadrants: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "数据源未接入(set_quadrant_status_provider 未注册)",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])]
+        };
         let footer_height = quadrant_footer.len() as u16;
 
         // 垂直切分:任务列表 + 四象限状态

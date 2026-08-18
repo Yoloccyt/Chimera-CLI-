@@ -14,6 +14,8 @@
 //!     gather 时单操作超时累积可能导致整体执行时间失控,全局 deadline 为整批兜底
 //! - 批量原子性保证:任一失败触发回滚,回滚本身也经 GQEP 聚集
 //! - 集成 QEEP `OrphanDetector`,检测孤儿调用并发布 Critical 事件
+//! - Phase 7 D-6 占位治理:`timeout_stats()` 从恒零占位改为双层超时真实
+//!   计数（计数点收敛在 with_timeout 超时分支 + collect_with_deadline 全局分支）
 //!
 //! ## 对应尸检教训
 //! Claude Code 5.4% 孤儿调用(void Promise 无 await)的根因是:
@@ -42,6 +44,8 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
+
+use std::sync::atomic::Ordering;
 
 pub mod batch;
 pub mod config;
@@ -76,12 +80,80 @@ pub struct TimeoutStats {
     pub coverage: f32,
 }
 
-/// 返回 GQEP 双层超时防护统计的静态快照（占位实现）
+/// 返回 GQEP 双层超时防护统计的真实快照（Phase 7 D-6 占位治理）
+///
+/// 原恒零占位已替换为真实计数——计数点收敛在双层超时统一入口：
+/// - 单操作超时: `timeout::with_timeout` 超时分支经 [`record_per_op_timeout`]
+/// - 全局超时: `gatherer::collect_with_deadline` 超时分支经 [`record_global_timeout`]
+///
+/// coverage 语义: 经 `with_timeout` 包装且启用超时（timeout_ms > 0）的操作
+/// 占比；零调用时返回 1.0（gather 路径恒受 entangle 单层超时保护）。
 pub fn timeout_stats() -> TimeoutStats {
+    let per_op = TIMEOUT_COUNTERS.per_op_timeouts.load(Ordering::Relaxed);
+    let global = TIMEOUT_COUNTERS.global_timeouts.load(Ordering::Relaxed);
+    let total_calls = TIMEOUT_COUNTERS.with_timeout_calls.load(Ordering::Relaxed);
+    let protected = TIMEOUT_COUNTERS.protected_ops.load(Ordering::Relaxed);
+    let coverage = if total_calls == 0 {
+        1.0
+    } else {
+        protected as f32 / total_calls as f32
+    };
     TimeoutStats {
-        per_op_timeouts: 0,
-        global_timeouts: 0,
-        coverage: 1.0, // 占位:全部操作已受双层超时防护
+        per_op_timeouts: per_op,
+        global_timeouts: global,
+        coverage,
+    }
+}
+
+/// 双层超时真实计数器（Phase 7 D-6：全局函数无实例状态，静态计数器提供真实数据源）
+static TIMEOUT_COUNTERS: TimeoutCounters = TimeoutCounters::new();
+
+/// 双层超时计数器组（Relaxed 即可：统计计数无顺序依赖）
+struct TimeoutCounters {
+    /// 单操作超时累计次数
+    per_op_timeouts: std::sync::atomic::AtomicU64,
+    /// 全局 gather 超时累计次数
+    global_timeouts: std::sync::atomic::AtomicU64,
+    /// with_timeout 调用总次数（coverage 分母）
+    with_timeout_calls: std::sync::atomic::AtomicU64,
+    /// 启用超时的受保护操作数（coverage 分子）
+    protected_ops: std::sync::atomic::AtomicU64,
+}
+
+impl TimeoutCounters {
+    const fn new() -> Self {
+        Self {
+            per_op_timeouts: std::sync::atomic::AtomicU64::new(0),
+            global_timeouts: std::sync::atomic::AtomicU64::new(0),
+            with_timeout_calls: std::sync::atomic::AtomicU64::new(0),
+            protected_ops: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+/// 记录一次单操作超时（Phase 7 D-6：timeout.rs 超时分支计数点）
+pub fn record_per_op_timeout() {
+    TIMEOUT_COUNTERS
+        .per_op_timeouts
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+/// 记录一次全局 gather 超时（Phase 7 D-6：gatherer.rs 超时分支计数点）
+pub fn record_global_timeout() {
+    TIMEOUT_COUNTERS
+        .global_timeouts
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+/// 记录一次 with_timeout 包装调用（Phase 7 D-6：coverage 统计）
+pub(crate) fn record_with_timeout_call(timeout_enabled: bool) {
+    TIMEOUT_COUNTERS
+        .with_timeout_calls
+        .fetch_add(1, Ordering::Relaxed);
+    if timeout_enabled {
+        TIMEOUT_COUNTERS
+            .protected_ops
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 

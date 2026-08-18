@@ -67,6 +67,8 @@ where
 {
     let operation_id = operation_id.to_string();
     let event_bus = event_bus.clone();
+    // Phase 7 D-6: coverage 统计计数点（timeout_ms > 0 = 受保护操作）
+    crate::record_with_timeout_call(timeout_ms > 0);
     Box::pin(async move {
         // 0 表示不超时,直接执行(用于明确不需要超时的场景)
         if timeout_ms == 0 {
@@ -88,6 +90,8 @@ where
                 if let Err(e) = event_bus.publish(event).await {
                     warn!(error = %e, operation_id = %operation_id, "发布超时事件失败");
                 }
+                // Phase 7 D-6: 单操作超时真实计数点
+                crate::record_per_op_timeout();
                 Err(GqepError::OperationTimeout {
                     operation_id,
                     timeout_ms,

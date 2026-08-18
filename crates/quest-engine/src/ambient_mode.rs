@@ -3,6 +3,14 @@
 //! 对应方案: `CHIMERA_V3_专项优化方案_v2.21基线.md` §5.1 P2 / §6 Milestone B-2
 //! 对应设计: 根目录设计文档 §13.3（jcode Ambient 工作模式）
 //!
+//! # v3.4.0 §14.3 溯源（Phase 9 D-5 偏差记录）
+//!
+//! 规范 §14.3 Ambient Mode 原型为 300s 轮询循环（sleep → organize → checkpoint →
+//! wait_for_resource）；本实现为其**事件驱动进化变体**：资源看门狗/记忆整理/
+//! 检查点调度均由事件到达驱动（无轮询锁，Ω₄-Event 合规），
+//! ResourceRecovered → 恢复挂起 Quest 即规范 wait_for_resource/resume_quests
+//! 语义的 E2E 验收点；StopStrategy 停止决策由上游事件面覆盖。
+//!
 //! # 职责
 //!
 //! 在事件流的"间隙"执行三项后台维护（事件驱动，**无轮询锁**）：

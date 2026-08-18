@@ -244,6 +244,9 @@ impl GqepExecutor {
                     warn!(error = %e, "发布 gather 全局超时事件失败");
                 }
 
+                // Phase 7 D-6: 全局超时真实计数点
+                crate::record_global_timeout();
+
                 errors.push(GqepError::GlobalTimedOut {
                     deadline_ms,
                     elapsed_ms,

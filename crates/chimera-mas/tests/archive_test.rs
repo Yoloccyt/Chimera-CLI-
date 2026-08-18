@@ -423,19 +423,20 @@ fn compressor_hcw_summary_produces_within_token_limit() {
 
 /// ArchiveCompressor 关系抽取:生成 512-dim CLV 占位向量
 ///
-/// 复用 crate API 不匹配(mlc-engine L2 SemanticMemory 需 SQLite 持久化),
-/// 本地实现:生成 512-dim 零向量占位(实际语义抽取由 mlc-engine 异步完成)
+/// W8 假数据治理:本地实现**不伪造**语义 CLV——`clv: None` 诚实标注
+/// "语义抽取由 mlc-engine 异步完成"(原 512-dim 零向量占位已移除)
 #[test]
-fn compressor_relation_extraction_produces_clv_placeholder() {
+fn compressor_relation_extraction_marks_clv_unextracted() {
     let content = "Agent 1 与 Agent 2 协作完成任务 X";
     let result = ArchiveCompressor::compress(&CompressionStrategy::RelationExtraction, content)
         .expect("关系抽取压缩应成功");
-    // 验证生成了 512-dim CLV 占位向量
+    // 诚实语义: CLV 未抽取(None),消费方不得当真实零活动语义使用
     assert!(
-        result.metadata.clv_placeholder.len() == 512,
-        "关系抽取应生成 512-dim CLV 占位向量,实际维度: {}",
-        result.metadata.clv_placeholder.len()
+        result.metadata.clv.is_none(),
+        "关系抽取 CLV 应诚实标注未抽取(None),而非伪造零向量"
     );
+    // 摘要保留原文(关系抽取阶段不压缩文本)
+    assert_eq!(result.summary, content);
 }
 
 /// ArchiveCompressor 深度压缩:6mo 级关键决策不压缩(KeepForever)

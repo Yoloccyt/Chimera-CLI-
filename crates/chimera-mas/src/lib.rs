@@ -93,8 +93,9 @@ pub use pdca::{
     ALERT_SINGLE_AGENT_WARNING_MB, ALERT_WIKI_COUNT_WARNING, PDCA_ALERT_COOLDOWN_SECS,
 };
 pub use quadrant::{
-    activated_quadrants, quadrant_status, ConfigurableQuadrantSelector, CoreCross, ProduceAssure,
-    Quadrant, QuadrantPlan, QuadrantSelector, QuadrantStatus, QualityDimension, ValidationStep,
+    activated_quadrants, quadrant_status, quadrant_status_available, set_quadrant_status_provider,
+    ConfigurableQuadrantSelector, CoreCross, ProduceAssure, Quadrant, QuadrantPlan,
+    QuadrantSelector, QuadrantStatus, QuadrantStatusProvider, QualityDimension, ValidationStep,
     MAX_QUADRANT_FANOUT,
 };
 pub use scheduler::{

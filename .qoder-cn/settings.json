@@ -5,6 +5,9 @@
     "qmind-knowledge@qoder-marketplace": true,
     "architecture-visualization@qoder-marketplace": true,
     "alibabacloud-spec-ops@qoder-marketplace": true,
-    "starops-qoder@qoder-marketplace": true
+    "starops-qoder@qoder-marketplace": true,
+    "context7@qoder-marketplace": true,
+    "redis@qoder-marketplace": true,
+    "research-copilot@qoder-marketplace": true
   }
 }

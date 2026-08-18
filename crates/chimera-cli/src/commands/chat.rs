@@ -56,8 +56,6 @@ const DEFAULT_MAX_TOKENS: usize = 32768;
 /// 每 N 轮对话输出一次上下文使用情况(SubTask 1.5.5)
 const CONTEXT_DISPLAY_INTERVAL: u32 = 5;
 
-/// 流式 chunk 之间的延迟(制造逐字符浮现观感,与 run.rs 一致)
-const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 
 /// 流式输出到 stdout 的纯函数版本(与 run.rs::stream_to_stdout 同语义)
 ///
@@ -231,7 +229,8 @@ fn chunk_delay_from_env() -> Duration {
     let ms = std::env::var("CHIMERA_CHAT_CHUNK_DELAY_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_CHUNK_DELAY_MS);
+        // W8 去重: 单点定义在 run.rs,此处引用(与 run 路径保持同一延迟源)
+        .unwrap_or(super::run::DEFAULT_CHUNK_DELAY_MS);
     Duration::from_millis(ms)
 }
 

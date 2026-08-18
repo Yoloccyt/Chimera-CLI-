@@ -183,8 +183,8 @@ pub const HCW_SUMMARY_WEIGHTS: [f64; 3] = [0.4, 0.3, 0.3];
 ///   生成 ≤500 tok 摘要。注:hcw-window `ContextCompressor` 面向 `ContextEntry`
 ///   数组(按评分 Top-N 保留),不直接适配"文本 → 摘要"场景,本地实现按权重切分。
 /// - **RelationExtraction**:3mo 级,关系抽取 → mlc L2 语义(512-dim CLV)。
-///   注:mlc-engine `SemanticMemory` 需 SQLite 持久化,本地实现生成 512-dim
-///   零向量占位,实际语义抽取由 mlc-engine 异步完成。
+///   注:mlc-engine `SemanticMemory` 需 SQLite 持久化,本地实现 `clv: None`
+///   诚实标注未抽取(W8 假数据治理,原 512-dim 零向量占位已移除)。
 /// - **DeepCompression**:6mo 级,深度压缩 + 模式抽取,关键决策不压缩(KeepForever)。
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompressionStrategy {
@@ -202,7 +202,8 @@ pub enum CompressionStrategy {
 
     /// 关系抽取(3mo 级)— 关系抽取 → mlc L2 语义(512-dim CLV)
     ///
-    /// 实际语义抽取由 mlc-engine 异步完成,本地实现生成 512-dim 零向量占位。
+    /// 实际语义抽取由 mlc-engine 异步完成,本地实现 `clv: None` 诚实标注
+    /// 未抽取(W8 假数据治理)。
     RelationExtraction,
 
     /// 深度压缩 + 模式抽取(6mo 级)— 关键决策不压缩,KeepForever

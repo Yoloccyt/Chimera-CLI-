@@ -22,11 +22,21 @@ tracing = { workspace = true }
 # 内容哈希(置信度评分占位实现:基于内容哈希计算置信度)
 sha2 = { workspace = true }
 # 动态黑名单:集成 SecCore 运行时黑名单,替代静态关键词列表
-seccore = { workspace = true, optional = true }
+# Phase 7 D-3: seccore 从 optional 转正式依赖(L7→L4 向下合规,无环已核验)——
+# 经验卡片生成复用 ExecutionFeedbackIntegrator::classify(铁律8 六类状态单一来源)
+# 与 compute_error_hash(铁律7 错误签名哈希单一来源)。
+seccore = { workspace = true }
+# Phase 7 §12.1: L0 契约类型正式依赖(ExperienceCard/ExecutionStatus/ErrorSignature
+# 等,此前仅 dev-dep);L7→L0 向下依赖恒允许(ADR-033)
+nexus-contracts = { workspace = true }
+# Phase 7 §12.1: ExperienceCard.created_at 为 DateTime<Utc>
+chrono = { workspace = true }
 
 [features]
 # 动态黑名单:启用后通过 SecCore 策略引擎获取运行时更新的危险命令黑名单
-dynamic-blacklist = ["seccore"]
+# Phase 7: seccore 已转正式依赖,本 feature 退化为纯 cfg 开关(空声明,
+# 保留以兼容既有 #[cfg(feature = "dynamic-blacklist")] 代码路径)
+dynamic-blacklist = []
 
 [dev-dependencies]
 # 性能基准框架(SubTask 25.6)
@@ -39,6 +49,7 @@ tokio-test = { workspace = true }
 # JSON 序列化测试(config.rs serde 往返测试)
 serde_json = { workspace = true }
 # P9-T2: 测试等待缩放工具(CHIMERA_TEST_TIMEOUT_SCALE 协议)
+# Phase 7: nexus-contracts 已提升为正式依赖(dev-dep 条目保留供测试目标直接使用)
 nexus-contracts = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main

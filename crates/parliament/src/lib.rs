@@ -138,6 +138,17 @@ pub mod mappo;
 /// 效率公理/对称性数学保证 + 指数爆炸保护 + global/shapley/process 三通道奖励。
 pub mod sharp;
 
+/// Phase 8 §13.1: 三因子裁决器 + 停止策略（小米 + OpenMLE 融合，ADR-049 内嵌）
+///
+/// 三角色审议投票（Skeptic/Security/Execution 三态）+ RSIBench 停止裁决；
+/// 语义边界：variant_review 双态快速审查零改动，本模块三态完整裁决并存。
+pub mod adjudicator;
+
+/// Phase 8 §13.2: 冲突仲裁（TencentDB 两阶段：候选召回 → 判断，规范指定落点）
+///
+/// ModelJudge trait 注入点（铁律1 零 Python，规则默认实现，v4.0 接线预留）。
+pub mod conflict_arbitration;
+
 // === 关键类型重导出,简化外部导入 ===
 pub use ahirt::{
     AhirtRedTeam, AhirtStats, ProbePayload, ProbePayloadLibrary, ProbeResult, ProbeType,
@@ -195,6 +206,16 @@ pub use veto::{
     VetoOverrideTicket, VetoReason,
 };
 pub use voting::{ConsensusQualityMetrics, VoteCounter, VoteResult};
+// Phase 8 §13.1: 三因子裁决器公开 API 重导出
+pub use adjudicator::{
+    AdjudicationResult, ParliamentDecision, SmokeResults, StopCheckpoint, StopContext, StopRuling,
+    ThreeFactorAdjudicator, VariantPerformance, Vote,
+};
+// Phase 8 §13.2: 冲突仲裁公开 API 重导出
+pub use conflict_arbitration::{
+    ArbitrationResult, CandidateRetriever, ConflictArbitrator, ModelDecision, ModelJudge,
+    RuleBasedJudge, RuleBasedRetriever,
+};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
@@ -218,4 +239,9 @@ pub mod prelude {
     pub use crate::voting::{VoteCounter, VoteResult};
     // ADR-064:质量趋势分析器
     pub use crate::quality_trend::{QualityReport, QualityTrendAnalyzer};
+    // Phase 8 §13: 三因子裁决与冲突仲裁核心类型
+    pub use crate::adjudicator::{
+        AdjudicationResult, ParliamentDecision, StopRuling, ThreeFactorAdjudicator,
+    };
+    pub use crate::conflict_arbitration::{ArbitrationResult, ConflictArbitrator};
 }

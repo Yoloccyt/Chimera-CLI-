@@ -148,19 +148,20 @@ pub fn should_demote_metadata(access_count: u64, delta_t_seconds: f64, tau_secon
 /// 压缩元数据 — 压缩过程中产生的辅助信息
 ///
 /// 字段根据压缩策略不同而填充:
-/// - `HcwSummary`:填充 `compression_ratio`,`clv_placeholder` 为空
-/// - `RelationExtraction`:填充 `clv_placeholder`(512-dim 零向量占位)
-/// - `DeepCompression`:填充 `compression_ratio`,`clv_placeholder` 为空
+/// - `HcwSummary`:填充 `compression_ratio`,`clv` 为 None
+/// - `RelationExtraction`:填充 `compression_ratio`,`clv` 为 None(未抽取)
+/// - `DeepCompression`:填充 `compression_ratio`,`clv` 为 None
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompressionMetadata {
     /// 压缩比(原始大小 / 压缩后大小,> 1.0 表示有压缩)
     pub compression_ratio: f64,
-    /// CLV 占位向量(512-dim,仅 RelationExtraction 策略填充)
+    /// 关系抽取出的语义 CLV(512-dim,`nexus_core::CLV` 形态)
     ///
-    /// 复用 crate API 不匹配:mlc-engine `SemanticMemory` 需 SQLite 持久化,
-    /// 本地实现生成 512-dim 零向量占位,实际语义抽取由 mlc-engine 异步完成。
-    /// 用 `Vec<f32>` 与 `nexus_core::CLV` 类型保持一致(Array1<f32>)。
-    pub clv_placeholder: Vec<f32>,
+    /// W8 假数据治理: 原实现生成 512-dim **零向量占位**——消费方无法区分
+    /// "真实零活动语义"与"未抽取",构成虚假数据固化。改为 `Option`:
+    /// `None` = CLV 未抽取(语义抽取由 mlc-engine 异步完成,诚实标注);
+    /// `Some(..)` = 真实语义 CLV(未来接入 mlc-engine 后填充)。
+    pub clv: Option<Vec<f32>>,
 }
 
 /// 压缩结果 — `ArchiveCompressor::compress` 的输出
@@ -250,7 +251,7 @@ impl ArchiveCompressor {
                 token_count: 0,
                 metadata: CompressionMetadata {
                     compression_ratio: 1.0,
-                    clv_placeholder: Vec::new(),
+                    clv: None,
                 },
             });
         }
@@ -280,25 +281,18 @@ impl ArchiveCompressor {
             token_count,
             metadata: CompressionMetadata {
                 compression_ratio,
-                clv_placeholder: Vec::new(),
+                clv: None,
             },
         })
     }
 
-    /// 关系抽取压缩(3mo 级)— 生成 512-dim CLV 占位向量,本地实现
+    /// 关系抽取压缩(3mo 级)— 摘要保留原文,CLV 诚实标注未抽取
     ///
     /// 复用 crate API 不匹配:mlc-engine `SemanticMemory` 需 SQLite 持久化,
-    /// 本地实现生成 512-dim 零向量占位,实际语义抽取由 mlc-engine 异步完成。
-    ///
-    /// WHY 512-dim:与 `nexus_core::CLV::DIMENSION = 512` 保持一致。
+    /// 本地实现不伪造语义——`clv: None` 明确标注"语义抽取由 mlc-engine
+    /// 异步完成",消费方不得将 None 当作真实零活动语义(W8 假数据治理)。
     fn relation_extraction(content: &str) -> Result<CompressedContent> {
-        // CLV 维度:512(与 nexus_core::CLV::DIMENSION 一致)
-        const CLV_DIMENSION: usize = 512;
-
-        // 生成 512-dim 零向量占位(实际语义抽取由 mlc-engine 异步完成)
-        let clv_placeholder = vec![0.0_f32; CLV_DIMENSION];
-
-        // 摘要保留原文(关系抽取阶段不压缩文本,仅生成 CLV)
+        // 摘要保留原文(关系抽取阶段不压缩文本,CLV 语义抽取待异步完成)
         let summary = content.to_string();
         let token_count = content.chars().count();
         let compression_ratio = 1.0;
@@ -308,7 +302,7 @@ impl ArchiveCompressor {
             token_count,
             metadata: CompressionMetadata {
                 compression_ratio,
-                clv_placeholder,
+                clv: None,
             },
         })
     }
@@ -326,7 +320,7 @@ impl ArchiveCompressor {
             token_count,
             metadata: CompressionMetadata {
                 compression_ratio: 1.0,
-                clv_placeholder: Vec::new(),
+                clv: None,
             },
         })
     }

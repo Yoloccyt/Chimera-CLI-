@@ -31,6 +31,8 @@ uuid = { workspace = true }
 sha2 = { workspace = true }
 # hex 编码(将 SHA-256 字节转为 hex 字符串)
 hex = { workspace = true }
+# Phase 8 §13.2: ModelJudge async trait(冲突仲裁判断注入点,v4.0 模型接线预留)
+async-trait = { workspace = true }
 
 [dev-dependencies]
 # ADR-054 决策 3(P9-T4):AHIRT 测试注入 SecCoreCommandValidator(验证注入路径),
@@ -42,6 +44,9 @@ seccore = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
 # 属性测试框架
 proptest = { workspace = true }
+# Phase 8: stop_ruling_test 验证 L5 Checkpoint → StopCheckpoint 转换接线语义
+# WHY dev-dependencies:仅测试用,不新增生产 L8→L5 依赖边(§2.2 铁律 dev 豁免)
+gsoe-evolution = { workspace = true }
 # JSON 序列化测试(config.rs serde 往返测试)
 serde_json = { workspace = true }
 # 测试中捕获 tracing 日志

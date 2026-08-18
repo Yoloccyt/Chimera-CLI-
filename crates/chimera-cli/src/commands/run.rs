@@ -40,7 +40,9 @@ use crate::permission::PermissionCtx;
 /// WHY 固定 20ms:与 TUI 编排器默认值一致(OrchestratorConfig::default().chunk_delay),
 /// 每 tick 约 12 字符,视觉流畅且不拖慢脚本消费。测试场景可通过环境变量
 /// `CHIMERA_RUN_CHUNK_DELAY_MS=0` 设为零延迟(仅 CLI run 路径生效)。
-const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
+///
+/// W8 清理: chat.rs 原同值常量去重,统一引用本定义(单点维护)
+pub(crate) const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 
 /// 执行 run 命令 — 真实接入 QuestEngine 分解任务并流式输出
 ///

@@ -334,10 +334,18 @@ impl QuadrantPlan {
 /// 为 TUI TaskManagerPanel 提供无需异步上下文的静态快照，
 /// 展示四象限稳定分工（ADR-027）的 Agent 数量、任务数量与 WSJF 分数。
 ///
-/// 真实象限状态由 `RootOrchestrator` 运行时动态更新，
-/// 本函数为 TUI 面板提供占位快照，避免面板渲染阻塞。
+/// 真实象限状态由 `RootOrchestrator` 运行时动态更新。
 ///
-/// TODO: v3.x 接入 RuntimeAuditor 实时采集后替换为真实象限统计。
+/// # W8 假遥测治理（诚实边界）
+///
+/// 原实现为无参全局函数返回**全零占位**——TUI 面板将"未实现"渲染为
+/// "零 Agent 零任务"的真实数据外观（假遥测，与 `five_dimension_masks`
+/// 先例同构）。修复:
+/// - 引入 [`QuadrantStatusProvider`] 注入接口（装配层注册真实数据源，
+///   如 RuntimeAuditor 或 orchestrator 快照——先例: osa memory_strategy_provider）
+/// - 未注册 provider 时 [`quadrant_status`] 返回 [`QuadrantStatus::unavailable`]
+///   （数值仍为零，但语义为"数据源未接入"），TUI 经
+///   [`quadrant_status_available`] 显示诚实标记而非假装真实数据
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QuadrantStatus {
     /// 各象限 Agent 数量（Q1/Q2/Q3/Q4）
@@ -348,14 +356,73 @@ pub struct QuadrantStatus {
     pub wsjf_scores: [f32; 4],
 }
 
-/// 返回四象限状态的静态快照（占位实现）
-pub fn quadrant_status() -> QuadrantStatus {
-    // 占位:返回默认空状态（真实状态由 RootOrchestrator 运行时产生）
-    QuadrantStatus {
-        agent_counts: [0, 0, 0, 0],
-        task_counts: [0, 0, 0, 0],
-        wsjf_scores: [0.0, 0.0, 0.0, 0.0],
+impl QuadrantStatus {
+    /// 数据源未接入时的语义化不可用状态（数值全零,语义明确）
+    ///
+    /// WHY 与裸全零字面量的区别: 调用方应经 [`quadrant_status_available`]
+    /// 区分"未接入"与"真实零活动",避免把占位渲染成真实数据。
+    pub const fn unavailable() -> Self {
+        Self {
+            agent_counts: [0; 4],
+            task_counts: [0; 4],
+            wsjf_scores: [0.0; 4],
+        }
     }
+}
+
+/// 象限状态数据源 — 装配层注入的真实快照提供者（W8 假遥测治理）
+///
+/// 实现方可为: RuntimeAuditor 采集器、RootOrchestrator 运行时快照、
+/// 或未来的事件累积器。全局唯一注册（`OnceLock` 语义,重复注册报错）。
+pub trait QuadrantStatusProvider: Send + Sync + std::fmt::Debug {
+    /// 返回当前象限统计快照
+    fn snapshot(&self) -> QuadrantStatus;
+}
+
+/// 全局象限状态提供者注册点（OnceLock: 首次注册生效,重复注册报错）
+static QUADRANT_STATUS_PROVIDER: std::sync::OnceLock<Arc<dyn QuadrantStatusProvider>> =
+    std::sync::OnceLock::new();
+
+/// 注册象限状态提供者（装配期调用一次;重复注册返回 `MasError`）
+///
+/// # 示例
+/// ```no_run
+/// use chimera_mas::quadrant::{set_quadrant_status_provider, QuadrantStatusProvider};
+/// use chimera_mas::quadrant::QuadrantStatus;
+///
+/// #[derive(Debug)]
+/// struct SnapshotSource;
+/// impl QuadrantStatusProvider for SnapshotSource {
+///     fn snapshot(&self) -> QuadrantStatus { QuadrantStatus::unavailable() }
+/// }
+///
+/// let _ = set_quadrant_status_provider(std::sync::Arc::new(SnapshotSource));
+/// ```
+pub fn set_quadrant_status_provider(
+    provider: Arc<dyn QuadrantStatusProvider>,
+) -> Result<()> {
+    QUADRANT_STATUS_PROVIDER
+        .set(provider)
+        .map_err(|_| MasError::ProviderAlreadyRegistered {
+            name: "quadrant_status".to_string(),
+        })
+}
+
+/// 返回四象限状态的静态快照（W8: provider 注册后返回真实数据）
+///
+/// 未注册 provider 时返回 [`QuadrantStatus::unavailable`]——数值全零但语义
+/// 为"数据源未接入";消费方（TUI 面板）应配合 [`quadrant_status_available`]
+/// 显示诚实标记,不得把占位渲染为真实零活动。
+pub fn quadrant_status() -> QuadrantStatus {
+    QUADRANT_STATUS_PROVIDER
+        .get()
+        .map(|provider| provider.snapshot())
+        .unwrap_or_else(QuadrantStatus::unavailable)
+}
+
+/// 象限状态数据源是否已接入（TUI 诚实标记依据）
+pub fn quadrant_status_available() -> bool {
+    QUADRANT_STATUS_PROVIDER.get().is_some()
 }
 
 // ============================================================
@@ -680,5 +747,56 @@ mod tests {
         // 验证 QuadrantSelector 满足 Send + Sync 约束
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<ConfigurableQuadrantSelector>();
+    }
+
+    // ============================================================
+    // W8 假遥测治理测试（Provider 注入 + 诚实降级）
+    // ============================================================
+
+    /// 测试用提供者 — 返回固定快照
+    #[derive(Debug)]
+    struct TestStatusProvider {
+        snapshot: QuadrantStatus,
+    }
+    impl QuadrantStatusProvider for TestStatusProvider {
+        fn snapshot(&self) -> QuadrantStatus {
+            self.snapshot
+        }
+    }
+
+    fn test_snapshot() -> QuadrantStatus {
+        QuadrantStatus {
+            agent_counts: [2, 1, 3, 0],
+            task_counts: [5, 4, 6, 2],
+            wsjf_scores: [0.9, 0.7, 0.8, 0.2],
+        }
+    }
+
+    #[test]
+    fn quadrant_status_provider_lifecycle() {
+        // W8 生命周期全链路（顺序自包含,规避并行测试对全局 OnceLock 的污染）:
+        // 未注册 → 语义化不可用;注册 → 真实快照透传;重复注册 → 拒绝且首个权威
+        let unavailable = quadrant_status();
+        assert_eq!(unavailable, QuadrantStatus::unavailable());
+        assert!(!quadrant_status_available(), "未注册时 available=false");
+
+        let first = TestStatusProvider {
+            snapshot: test_snapshot(),
+        };
+        set_quadrant_status_provider(std::sync::Arc::new(first)).expect("首次注册成功");
+        assert!(quadrant_status_available(), "注册后 available=true");
+        let status = quadrant_status();
+        assert_eq!(status.agent_counts, [2, 1, 3, 0], "真实快照透传");
+        assert_eq!(status.task_counts, [5, 4, 6, 2]);
+        assert_eq!(status.wsjf_scores, [0.9, 0.7, 0.8, 0.2]);
+
+        // OnceLock 语义: 重复注册报错,首个注册者保持权威
+        let second = TestStatusProvider {
+            snapshot: QuadrantStatus::unavailable(),
+        };
+        set_quadrant_status_provider(std::sync::Arc::new(second))
+            .expect_err("第二次注册必须报 ProviderAlreadyRegistered");
+        let still_first = quadrant_status();
+        assert_eq!(still_first.agent_counts, [2, 1, 3, 0], "首个注册者权威不变");
     }
 }
