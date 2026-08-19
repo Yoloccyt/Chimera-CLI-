@@ -42,6 +42,9 @@ parse_entries() {
 }
 
 # 主流五家同名 24 条词表: 命令 预期tier
+# WHY 2026-08-19 移除 W8-W11 七条(pace/context/recap/copy/notify/commands/agent tree):
+# 1f220d2 提交在词表超前声明但 slash_registry.rs 从未注册对应命令(漂移),
+# CI 首次在 main 上运行即暴露;与代码现状对齐,待命令真实落地后再加回。
 EXPECTED=(
   "new Instant" "clear Instant" "compact Orchestrated" "resume Instant"
   "model Instant" "mode Instant" "plan Instant" "permissions Instant"
@@ -49,17 +52,6 @@ EXPECTED=(
   "mcp Orchestrated" "theme Instant" "vim Instant" "config Instant"
   "status Instant" "doctor Instant" "help Instant" "quit Instant"
   "export Instant" "undo Orchestrated" "redo Orchestrated" "focus Instant"
-      # Concord W8 T8.3(ADR-080):PaceGate 配速档命令
-      "pace Instant"
-      # Concord W9 T9.5(ADR-081):上下文用量网格命令
-      "context Instant"
-      # Concord W11(ADR-083):生态波四命令
-      "recap Instant"
-      "copy Instant"
-      "notify Instant"
-      "commands Instant"
-      # Concord W10 T10.4(ADR-082):Agent 谱系树视图
-      "agent tree Instant"
 )
 
 # 构建 命令→tier 查找表(别名取首个 ALIAS_PENDING 后由 tier 行回填:
