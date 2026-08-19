@@ -224,7 +224,10 @@ jobs:
         # WHY: docker/metadata-action@v5 自动将镜像名转小写推送至 GHCR,
         # 但 ${{ env.IMAGE_NAME }} 保留 github.repository_owner 的原大小写(如 Yoloccyt),
         # 导致后续 docker pull / docker run 找不到镜像。此处统一转小写覆写 IMAGE_NAME。
-        run: echo "IMAGE_NAME=$(echo '${IMAGE_NAME}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+        # WHY 双引号: 单引号 '${IMAGE_NAME}' 在 bash 中不展开变量(2026-08-19 修复,
+        # v2.27.0-omega Docker job 因 IMAGE_NAME 变为字面量 "${image_name}" 导致
+        # buildx invalid tag,5 平台 Build 成功但 Release 未创建)。
+        run: echo "IMAGE_NAME=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -371,7 +374,7 @@ jobs:
     steps:
       - name: Normalize IMAGE_NAME to lowercase
         # WHY: 与 docker job 一致,确保 Release body 中的 docker pull/run 命令使用小写镜像名
-        run: echo "IMAGE_NAME=$(echo '${IMAGE_NAME}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+        run: echo "IMAGE_NAME=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4

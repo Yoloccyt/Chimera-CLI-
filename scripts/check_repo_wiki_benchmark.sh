@@ -165,16 +165,19 @@ while IFS= read -r line; do
 
         [[ -z "$matched_threshold" ]] && continue
 
-        # 提取时间值:criterion 输出 `time:   [low mean high]`
+        # 提取时间值:criterion 输出 `time:   [low µs mean µs high µs]`
+        # 字段布局: $1=low $2=unit $3=mean $4=unit $5=high $6=unit
+        # (2026-08-19 修复:旧版 print $2/$3 取到 low 与 unit,导致 CHECKS=0 → exit 2,
+        #  该 job 为 16 个既有提交新增门禁,首次在 main 上运行即暴露)
         time_part=$(echo "$line" | sed -n 's/.*time:\s*\[\(.*\)\]/\1/p')
         if [[ -z "$time_part" ]]; then
             echo -e "${YELLOW}[WARN] 无法解析 $bench_name 的时间值,跳过${NC}"
             continue
         fi
 
-        # 提取 mean(三个值中的第二个)和单位
-        mean_str=$(echo "$time_part" | awk '{print $2}')
-        unit=$(echo "$time_part" | awk '{print $3}')
+        # 提取 mean(三个测量值中的第二个)和单位
+        mean_str=$(echo "$time_part" | awk '{print $3}')
+        unit=$(echo "$time_part" | awk '{print $4}')
 
         # 转换为毫秒
         case "$unit" in

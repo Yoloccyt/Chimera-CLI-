@@ -59,10 +59,14 @@ jobs:
       # E3(报告附录 E): workflow 静态检查门禁——actionlint 是 GitHub Actions
       # 事实标准(语法/表达式类型/action 输入/脚本注入),零编译依赖,秒级反馈。
       # 本地 1.7.12 实测 9 个 workflow 零错误(2026-08-17)。
-      - name: Workflow lint (actionlint)
-        uses: taiki-e/install-action@v2
-        with:
-          tool: actionlint
+      # WHY 固定版本直接下载(2026-08-19 修复):taiki-e/install-action@v2 为
+      # Node20 action,在 Node24 runner 上安装失败(exit 76,1s 内失败);改为
+      # 官方 release 资产固定 v1.7.12 下载,与本地验证版本一致,零 Node 依赖。
+      - name: Install actionlint (v1.7.12 pinned)
+        run: |
+          curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz | tar xz
+          sudo mv actionlint /usr/local/bin/actionlint
+          actionlint -version
 
       - name: Run actionlint
         run: actionlint -color

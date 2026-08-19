@@ -10,5 +10,8 @@ updates:
     schedule:
       interval: "weekly"
     # 将 uses 的 tag 引用自动 pin 为 SHA(需要时),并随升级保持 SHA 同步
-    enable-version-updates: true
+    # WHY versioning-strategy 而非 enable-version-updates(2026-08-19 修复:
+    # enable-version-updates 不在 dependabot schema 中,导致 GitHub 解析失败):
+    # increase = 保持最低兼容版本并随依赖升级;auto 对 actions 生态同样生效
+    versioning-strategy: auto
     open-pull-requests-limit: 10
