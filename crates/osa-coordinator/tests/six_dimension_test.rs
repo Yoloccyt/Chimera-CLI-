@@ -18,9 +18,7 @@ fn leak(s: String) -> &'static str {
 }
 
 fn profile_with_tools(tools: Vec<&str>) -> TaskProfile {
-    use osa_coordinator::{
-        AffectedScope, RiskLevel, TaskId, TaskType, TimePressure,
-    };
+    use osa_coordinator::{AffectedScope, RiskLevel, TaskId, TaskType, TimePressure};
     TaskProfile {
         task_id: TaskId::new("task-w2"),
         task_type: TaskType::Read,
@@ -201,7 +199,11 @@ async fn router_stats_average_dead_zone() {
         sesa_stats: stats(0.5),
         faae_stats: stats(0.9),
     });
-    assert_eq!(adjuster.current_contract().d2_tool.retrieval_top_k, 10, "死区");
+    assert_eq!(
+        adjuster.current_contract().d2_tool.retrieval_top_k,
+        10,
+        "死区"
+    );
     // (0.1 + 0.1 + 0.2)/3 < 0.5 → 加宽
     adjuster.apply_feedback(&NexusEvent::RouterStatsReported {
         metadata: EventMetadata::new("test-w2"),

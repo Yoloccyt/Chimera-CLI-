@@ -398,9 +398,7 @@ static QUADRANT_STATUS_PROVIDER: std::sync::OnceLock<Arc<dyn QuadrantStatusProvi
 ///
 /// let _ = set_quadrant_status_provider(std::sync::Arc::new(SnapshotSource));
 /// ```
-pub fn set_quadrant_status_provider(
-    provider: Arc<dyn QuadrantStatusProvider>,
-) -> Result<()> {
+pub fn set_quadrant_status_provider(provider: Arc<dyn QuadrantStatusProvider>) -> Result<()> {
     QUADRANT_STATUS_PROVIDER
         .set(provider)
         .map_err(|_| MasError::ProviderAlreadyRegistered {

@@ -495,7 +495,10 @@ const KNOWN_VIOLATIONS: &[(&str, &str)] = &[
     ("panels/task_manager.rs", "多选"),
     ("panels/task_manager.rs", "全选"),
     // 用户并行改动区新增(2026-08-17, quadrant_footer 未接数据源提示),待 i18n 化
-    ("panels/task_manager.rs", "数据源未接入(set_quadrant_status_provider 未注册)"),
+    (
+        "panels/task_manager.rs",
+        "数据源未接入(set_quadrant_status_provider 未注册)",
+    ),
     // panels/timeline.rs
     ("panels/timeline.rs", "导航"),
     ("panels/timeline.rs", "时间跳转"),

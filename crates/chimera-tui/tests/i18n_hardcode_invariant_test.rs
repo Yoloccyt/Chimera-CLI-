@@ -31,9 +31,7 @@ fn locale_guard() -> std::sync::MutexGuard<'static, ()> {
 /// 2026-08-17 新增:用户并行改动区(task_manager.rs quadrant_footer 新增
 /// "数据源未接入"提示文案未走 t!(),待用户 i18n 化后移除本豁免)。
 /// 注:rel 路径含 src/ 前缀(相对 CARGO_MANIFEST_DIR),故前缀需完整。
-const EXEMPT_PREFIXES: &[&str] = &[
-    "src/panels/task_manager.rs",
-];
+const EXEMPT_PREFIXES: &[&str] = &["src/panels/task_manager.rs"];
 
 /// CJK 统一表意文字区间判定
 fn is_cjk(c: char) -> bool {

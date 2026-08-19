@@ -457,14 +457,15 @@ impl OmniSparseCoordinator {
         let explicit_keep = *self.tool_keep_count.lock().ok()?;
         let keep = match explicit_keep {
             Some(explicit) => explicit,
-            None => self
-                .dimension_adjuster
-                .as_ref()?
-                .lock()
-                .ok()?
-                .current_contract()
-                .d2_tool
-                .max_tools_per_step,
+            None => {
+                self.dimension_adjuster
+                    .as_ref()?
+                    .lock()
+                    .ok()?
+                    .current_contract()
+                    .d2_tool
+                    .max_tools_per_step
+            }
         };
         let pruner_arc = self.tool_pruner.as_ref()?;
         // 中毒锁 → 跳过裁剪: 掩码保持相关性 Top-K 终态（保守回退）
@@ -479,7 +480,10 @@ impl OmniSparseCoordinator {
             .map(|tool| {
                 let name = tool.to_string();
                 let schema_tokens = self.tool_schema_tokens.get(&name).copied().unwrap_or(0);
-                PruneToolSchema { name, schema_tokens }
+                PruneToolSchema {
+                    name,
+                    schema_tokens,
+                }
             })
             .collect();
         let result = pruner.prune_tools(&available, keep);

@@ -21,7 +21,13 @@ use nexus_contracts::affinity::{
     ThinkingSupport,
 };
 
-/// 思考指令 — 协商产出的抽象思考directive,由 Codec 翻译为方言原生参数
+/// 核心能力名 — 降级留痕/拒绝报告使用的稳定字符串(对外契约:驱动 E4
+/// 明确告知,勿随实现改动)
+const CAP_STREAMING: &str = "streaming";
+const CAP_TOOL_CALLING: &str = "tool_calling";
+const CAP_THINKING: &str = "thinking";
+
+/// 思考指令 — 协商产出的抽象指令,由 Codec 翻译为方言原生参数
 ///
 /// WHY 抽象指令而非直接方言参数: 协商引擎与 Codec 解耦——引擎只决定
 /// "关/开/哪一档",Codec 负责翻译为 `reasoning_effort=xhigh` /
@@ -67,33 +73,68 @@ pub fn negotiate_thinking(
                 (ThinkingDirective::On, false)
             }
         },
-        // 多档位:就近取档(空档位域回落 On,不 panic)
+        // 多档位:就近取档;空档位域(厂商配置错误)保守回落 On,不 panic
         ThinkingSupport::EffortLevels(levels) => {
             if levels.is_empty() {
                 return (ThinkingDirective::On, false);
             }
-            let idx = match pref {
-                ThinkingPreference::Fast => 0,
-                // 中档:len/2(奇数取中,偶数偏上,倾向更强推理)
-                ThinkingPreference::Standard => levels.len() / 2,
-                ThinkingPreference::Deep => levels.len() - 1,
-            };
+            // 上方已保证非空,索引安全;clone 为 owned 载荷(指令独立于厂商声明)
+            let idx = effort_level_index(pref, levels.len());
             (ThinkingDirective::Effort(levels[idx].clone()), false)
         }
     }
+}
+
+/// EffortLevels 就近取档:Fast=首档,Standard=中档,Deep=末档
+///
+/// 调用方保证 `level_count >= 1`(空档位域在 negotiate_thinking 中先回落 On)。
+/// 中档取 `len/2`:奇数取正中,偶数偏上(倾向更强推理)。
+fn effort_level_index(pref: ThinkingPreference, level_count: usize) -> usize {
+    match pref {
+        ThinkingPreference::Fast => 0,
+        ThinkingPreference::Standard => level_count / 2,
+        ThinkingPreference::Deep => level_count - 1,
+    }
+}
+
+/// 思考降级留痕判定:通道不支持思考且请求偏好非 Fast(真需要思考)时记录降级
+///
+/// Fast 档本就无需思考(强制 Off 不视为降级,与 P3 "降级不报错"语义一致)。
+fn thinking_degradation_name(
+    thinking_degraded: bool,
+    pref: ThinkingPreference,
+) -> Option<&'static str> {
+    if thinking_degraded && pref != ThinkingPreference::Fast {
+        Some(CAP_THINKING)
+    } else {
+        None
+    }
+}
+
+/// 缺失的核心能力名判定 — 拒绝路径与 negotiate_core 共用同一判定,避免两处逻辑漂移
+///
+/// 判定顺序即报告优先级:streaming 是通道级硬核心(缺失则通道不可用),
+/// tool_calling 是请求级硬核心(仅当请求需要工具时)。两者同时缺失时
+/// streaming 优先报告(通道级拒绝 > 请求级拒绝)。
+fn missing_core_capability(
+    capabilities: &CapabilitySet,
+    request_needs_tools: bool,
+) -> Option<&'static str> {
+    if !capabilities.streaming {
+        return Some(CAP_STREAMING);
+    }
+    if request_needs_tools && !capabilities.tool_calling {
+        return Some(CAP_TOOL_CALLING);
+    }
+    None
 }
 
 /// 协商核心能力:流式为硬核心;工具调用在请求需要时为硬核心
 ///
 /// 返回 `(通道是否被拒, 工具调用是否启用)`。
 fn negotiate_core(capabilities: &CapabilitySet, request_needs_tools: bool) -> (bool, bool) {
-    // 流式缺失:通道不可用(ChannelRejected;spec_loader 已在注册期拦截,
-    // 此处双保险,防未来动态构造的 spec 绕过)
-    if !capabilities.streaming {
-        return (true, false);
-    }
-    // 请求需要工具但通道不支持:该请求无法服务(通道对此请求被拒)
-    if request_needs_tools && !capabilities.tool_calling {
+    // spec_loader 已在注册期拦截缺失能力,此处双保险,防未来动态构造的 spec 绕过
+    if missing_core_capability(capabilities, request_needs_tools).is_some() {
         return (true, false);
     }
     (false, capabilities.tool_calling)
@@ -105,11 +146,10 @@ pub fn negotiate(capabilities: &CapabilitySet, request: &AffinityRequest) -> Neg
     let (rejected, tool_calling_enabled) = negotiate_core(capabilities, request_needs_tools);
 
     if rejected {
-        let missing = if !capabilities.streaming {
-            "streaming"
-        } else {
-            "tool_calling"
-        };
+        // rejected 由缺失核心能力驱动,同一判定必然命中(结构性不变量,见
+        // missing_core_capability;unwrap_or 仅为静态保证,运行时不可达)
+        let missing =
+            missing_core_capability(capabilities, request_needs_tools).unwrap_or(CAP_STREAMING);
         return NegotiationOutcome {
             fidelity: NegotiationFidelity::ChannelRejected,
             thinking: ThinkingDirective::Off,
@@ -122,10 +162,10 @@ pub fn negotiate(capabilities: &CapabilitySet, request: &AffinityRequest) -> Neg
         negotiate_thinking(&capabilities.thinking, request.thinking_pref);
 
     // 非核心能力降级留痕:思考不支持(请求偏好非 Fast 却被迫 Off)
-    let mut degraded = Vec::new();
-    if thinking_degraded && request.thinking_pref != ThinkingPreference::Fast {
-        degraded.push("thinking".to_string());
-    }
+    let degraded = match thinking_degradation_name(thinking_degraded, request.thinking_pref) {
+        Some(name) => vec![name.to_string()],
+        None => Vec::new(),
+    };
 
     let fidelity = if degraded.is_empty() {
         NegotiationFidelity::FullFidelity
@@ -149,6 +189,7 @@ pub fn negotiate(capabilities: &CapabilitySet, request: &AffinityRequest) -> Neg
 ///
 /// WHY 结构体而非散列常量: 6 个独立常量的对应关系仅靠命名后缀维系,
 /// 新增档位需同步修改 2 处; 类型化后编译器保证配对完整性。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BudgetTierConfig {
     /// 思考预算上限(token)
     thinking_budget: u32,
@@ -167,43 +208,74 @@ struct BudgetTierConfig {
 ///
 /// 响应预留: thinking 不能占满 max_output, 必须为实际回复留空间。
 /// 有效 thinking = min(档位预算, max_output - response_reserve)
-const BUDGET_TIERS: [BudgetTierConfig; 3] = [
-    BudgetTierConfig {
-        thinking_budget: 8_192,
-        response_reserve: 2_048,
-    }, // Fast
-    BudgetTierConfig {
-        thinking_budget: 32_768,
-        response_reserve: 8_192,
-    }, // Standard
-    BudgetTierConfig {
-        thinking_budget: 131_072,
-        response_reserve: 16_384,
-    }, // Deep
-];
+///
+/// Fast 档:8K 思考 / 2K 预留 — 简单问答/格式转换,响应速度优先
+const FAST_TIER: BudgetTierConfig = BudgetTierConfig {
+    thinking_budget: 8_192,
+    response_reserve: 2_048,
+};
+
+/// Standard 档:32K 思考 / 8K 预留 — 代码生成/多步推理,覆盖大多数日常场景
+const STANDARD_TIER: BudgetTierConfig = BudgetTierConfig {
+    thinking_budget: 32_768,
+    response_reserve: 8_192,
+};
+
+/// Deep 档:128K 思考 / 16K 预留 — 架构设计/长链推理,释放全部推理
+const DEEP_TIER: BudgetTierConfig = BudgetTierConfig {
+    thinking_budget: 131_072,
+    response_reserve: 16_384,
+};
+
+/// 档位聚合视图 — 由上述具名常量构成(单一数据源);生产取档一律走
+/// budget_tier_for(零下标, 见其 WHY),此数组仅测试引用(如 proptest 的
+/// 地板属性边界),故标记 cfg(test) 避免生产死代码
+#[cfg(test)]
+const BUDGET_TIERS: [BudgetTierConfig; 3] = [FAST_TIER, STANDARD_TIER, DEEP_TIER];
+
+/// TTG 档 → 预算档位常量(编译期常量查表,零分配)
+///
+/// WHY 具名常量而非 `&BUDGET_TIERS[i]` 下标:常量表缩水时下标会静默越界,
+/// match 穷举三档直接返回常量,编译器保证档位与常量一一对应。
+fn budget_tier_for(pref: ThinkingPreference) -> BudgetTierConfig {
+    match pref {
+        ThinkingPreference::Fast => FAST_TIER,
+        ThinkingPreference::Standard => STANDARD_TIER,
+        ThinkingPreference::Deep => DEEP_TIER,
+    }
+}
 
 /// WHY 独立成本地板: budget_hint 约束时的绝对下限，与 Fast 档解耦。
 /// 旧实现用 THINKING_BUDGET_FAST 做地板，Fast 档提升后地板跟着涨，
 /// 削弱成本护栏效力。独立常量保持成本约束的精细度。
 const BUDGET_HINT_FLOOR: u32 = 2_048;
 
+/// 输出价格估算 — 每 token 输出价 10 微元(最贵厂商 Kimi K3 输出价
+/// ~10M 微元/Mtok = 10 微元/token)。hint_micro ÷ 此值 = 可负担 token 数。
+///
+/// WHY 命名常量而非裸 `hint / 10`:除数即价格模型的数字签名,具名后可
+/// 与 cost.rs 价格表交叉核对,防止未来调价时漏改。
+const TOKEN_PRICE_MICRO: u64 = 10;
+
+/// 钳制兜底下限 — thinking 预算非零下界(防 max_output < reserve 时产生 0 预算)
+const MIN_THINKING_TOKENS: u32 = 1;
+
 /// Deep 档成本护栏: budget_hint_micro(微元) → 可承受 thinking 上限
 ///
-/// WHY /10: 保守按最贵厂商 Kimi K3 输出价 ~10M 微元/Mtok 估算,
-/// hint ÷ 10M = hint/10 可购买 token 数。
+/// WHY 按 TOKEN_PRICE_MICRO 换算: hint ÷ 10 微元/token = 可负担 token 数。
 /// 智能降级(非硬截断): 结果钳制在 [BUDGET_HINT_FLOOR, base]——
 /// 低于地板保最低思考深度(hint 是提示, 硬预算由 acb-governor 治理),
 /// 高于档位仍封顶在 base。
 ///
-/// WHY 先按 base 钳制再截断: 旧实现 (hint/10) as u32 在 hint > 42.9B
-/// 微元时静默回绕; affordable ≤ base ≤ 131072 < u32::MAX, 截断必然安全。
-/// 用 max/min 组合而非 clamp: clamp 在 (FLOOR > base) 的未来档位会 panic,
-/// 本式恒 total。
+/// WHY 先按 base 钳制再截断: 旧实现 (hint/10) as u32 在 hint > 42.9 亿
+/// (≈ u32::MAX) 微元时静默回绕; affordable ≤ base ≤ 131072 < u32::MAX,
+/// 截断必然安全。用 max/min 组合而非 clamp: clamp 在 (FLOOR > base) 的
+/// 未来档位会 panic, 本式恒成立。
 fn deep_budget_with_cost_hint(base: u32, hint_micro: Option<u64>) -> u32 {
     match hint_micro {
         None => base,
         Some(hint) => {
-            let affordable = (hint / 10).min(u64::from(base)) as u32;
+            let affordable = (hint / TOKEN_PRICE_MICRO).min(u64::from(base)) as u32;
             affordable.max(BUDGET_HINT_FLOOR).min(base)
         }
     }
@@ -242,12 +314,8 @@ pub fn negotiate_budget(
         };
     }
 
-    // 按 TTG 档位确定 thinking budget 与响应预留(类型化查表, 编译期保证配对完整)
-    let tier = match pref {
-        ThinkingPreference::Fast => &BUDGET_TIERS[0],
-        ThinkingPreference::Standard => &BUDGET_TIERS[1],
-        ThinkingPreference::Deep => &BUDGET_TIERS[2],
-    };
+    // 按 TTG 档位确定 thinking budget 与响应预留(budget_tier_for 具名查表, 零下标)
+    let tier = budget_tier_for(pref);
     let (base_thinking, response_reserve) = (tier.thinking_budget, tier.response_reserve);
 
     // Deep 档受 budget_hint_micro 成本护栏约束(K3 thinking 按输出价计费)
@@ -260,13 +328,14 @@ pub fn negotiate_budget(
     // WHY 模型容量钳制: thinking + response 必须装进 max_output
     // Kimi K3: max_output=65536, Deep 有效 thinking = min(131072, 65536-16384) = 49152
     // GLM-5.2: max_output=131072, Deep 有效 thinking = min(131072, 131072-16384) = 114688
-    // .max(1) 兖底：proptest 极端值(max_output < reserve)时不产生 0 预算
-    // .min(max_output.max(1)) 纵深防御: 保证 thinking ≤ max_output 对全 u32 域 total
-    // (max_output=0 时 thinking=1 会违反不变量; spec_loader 已在边界拒绝, 此处双保险)
+    // .max(MIN_THINKING_TOKENS) 兜底：proptest 极端值(max_output < reserve)时不产生 0 预算
+    // .min(max_output.max(MIN_THINKING_TOKENS)) 纵深防御: 保证 thinking ≤ max_output
+    // 对全 u32 域恒成立(max_output=0 时 thinking=1 会违反不变量; spec_loader 已在
+    // 边界拒绝, 此处双保险)
     let thinking_budget = thinking_cap
         .min(max_output.saturating_sub(response_reserve))
-        .max(1)
-        .min(max_output.max(1));
+        .max(MIN_THINKING_TOKENS)
+        .min(max_output.max(MIN_THINKING_TOKENS));
 
     // WHY max_output_tokens = max_output: 见函数文档"档位联动"论证——
     // thinking 是 max_output 内部子分配, Anthropic/OpenAI 语义:
@@ -542,14 +611,14 @@ mod tests {
             // thinking_budget 不超过 max_output(思考不能超出模型容量)
             if let Some(tb) = a.thinking_budget_tokens {
                 prop_assert!(tb <= max_output.max(1), "thinking {} > max_output {}", tb, max_output);
-                // .max(1) 兖底不变量: max_output ≥ 1 时 thinking ≥ 1
+                // .max(MIN_THINKING_TOKENS) 兜底不变量: max_output ≥ 1 时 thinking ≥ 1
                 if max_output >= 1 {
                     prop_assert!(tb >= 1, "thinking budget 不得为 0 (max_output ≥ 1)");
                 }
                 if pref == ThinkingPreference::Deep {
                     // hint 上限属性: hint 永不放大预算(除地板抬升外)
                     if let Some(hint) = budget_hint {
-                        let cap = u64::from(BUDGET_HINT_FLOOR).max(hint / 10);
+                        let cap = u64::from(BUDGET_HINT_FLOOR).max(hint / TOKEN_PRICE_MICRO);
                         prop_assert!(
                             u64::from(tb) <= cap,
                             "hint 不应放大 thinking: tb={} cap={}",

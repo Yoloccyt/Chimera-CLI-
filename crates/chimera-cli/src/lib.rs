@@ -55,6 +55,9 @@ pub mod commands;
 pub mod config;
 /// CLI 错误类型(结构化错误码,Task 0.2 将据此映射 ExitCode 矩阵)
 pub mod error;
+/// §16.1 经验卡片闭环组合根接线(Phase 10 审计修复 Wave 1:
+/// ExperienceCardBus 主链 + L3 双流持久化 + L2/L6 消费 + 五维审计)
+pub mod experience_loop;
 /// TUI ↔ 编排器协议握手服务端(Concord W10,ADR-082:TuiHello 应答 + SEC-4 一次性)
 pub mod handshake;
 /// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)
@@ -66,6 +69,9 @@ pub mod overwindow_bridge;
 pub mod output;
 /// Permission prompt 机制(Task 1.11)
 pub mod permission;
+/// Quest 生命周期组件桥(Phase 10 审计修复 Wave 2:
+/// LongTaskMap/SearchTreeManager/LongTermCreditAssigner 事件桥接装配)
+pub mod quest_loop;
 // Milestone C-3: rl-client 通道（HttpRlClient feature-gated，NoopRlClient 常驻）
 pub mod rl_client;
 pub mod selector_orchestrator;

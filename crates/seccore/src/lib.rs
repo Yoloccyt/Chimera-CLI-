@@ -66,6 +66,8 @@ pub mod escalation;
 pub mod execution_feedback;
 /// gVisor runsc 运行时检测与子进程启动(ADR-001)
 pub mod gvisor;
+/// §16.5(Phase 10 Wave 6):沙箱拦截率统计(真实采集,误拦截率 v4.0 预留)
+pub mod interception_stats;
 /// P4-W15.1.3: Spec Merkle 完整性校验(复用 audit.rs SHA-256 实现)
 pub mod merkle;
 /// Phase 4 §9.1:Paddock-Sandbox 解耦(Dressage what-to-do/where-it-runs,铁律10)
@@ -100,6 +102,10 @@ pub use policy::{validate_command, validate_env, BlockedPattern, CommandPolicy, 
 // polish-v2.7 P1-4: 不可学习安全红线常量表(ADR-049 决策 3,AEGIS/Variant 审议否决依据)
 pub use policy::UNLEARNABLE_SECURITY_RULES;
 pub use sandbox::Sandbox;
+// §16.5(Phase 10 Wave 6):沙箱拦截率周期报告器(真实采集,组合根装配)
+pub use sandbox::spawn_interception_reporter;
+// §16.5(Phase 10 Wave 6):拦截率统计器(原子计数,可独立采样)
+pub use interception_stats::InterceptorStats;
 // SandboxBackend 始终可用(默认 Process 变体);Wasm 变体仅 wasm-sandbox feature 启用时可用
 pub use sandbox_wasm::SandboxBackend;
 // WasmSandbox / WasmExecutionResult 仅 wasm-sandbox feature 启用时可用(ADR-035 决策 2)

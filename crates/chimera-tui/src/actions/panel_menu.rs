@@ -43,9 +43,9 @@ mod tests {
     use super::*;
     use crate::actions::ActionRegistry;
 
-    /// 全部 22 个已注册 PanelId(与 app/mod.rs 面板循环保持一致;
-    /// Timeline/Sysinfo 有实现但未进入面板循环,动作菜单不可能被唤出,故不列)。
-    const ALL_PANELS: [PanelId; 22] = [
+    /// 全部 24 个已注册 PanelId(与 app/mod.rs 面板循环保持一致;
+    /// Timeline/Sysinfo 有实现但未进入动作菜单测试清单,故不列)。
+    const ALL_PANELS: [PanelId; 24] = [
         PanelId::Quest,
         PanelId::Parliament,
         PanelId::Budget,
@@ -71,6 +71,9 @@ mod tests {
         PanelId::PvlScore,
         // Task 3.9:任务管理面板
         PanelId::TaskManager,
+        // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板
+        PanelId::ExperienceCardViz,
+        PanelId::InjectionStrategy,
     ];
 
     #[test]

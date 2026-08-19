@@ -152,6 +152,40 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
         crate::orchestrator::OrchestratorConfig::default(),
     );
 
+    // §16.1 经验卡片闭环装配(Phase 10 审计修复 Wave 1):组合根接线
+    // ExperienceCardBus 主链 — L3 SQLite 双流持久化(含 Critical 高分卡) +
+    // L2 MlcEngine 卡片消费 + L6 算子反馈回流 + RuntimeAuditor 五维报告
+    // 周期发布(打通 SelfAssessmentPanel) + 协调度量订阅器。
+    // WHY 失败不阻断启动:闭环装配是增强链路,降级后 TUI 核心交互仍可用;
+    // 失败经 warn 日志可观测(与 TuiBible 回退同款错误处理准则)。
+    // WHY 下划线前缀持有:绑定存活至函数结束,保持后台任务与 Arc 句柄生命周期。
+    let _experience_loop =
+        match crate::experience_loop::spawn_experience_loop(bus.clone(), Arc::clone(&engine)).await
+        {
+            Ok(handles) => Some(handles),
+            Err(e) => {
+                tracing::warn!(error = %e, "经验卡片闭环装配失败,降级运行(闭环不可用)");
+                None
+            }
+        };
+
+    // §16.1 L9 组件装配(Phase 10 审计修复 Wave 2):
+    // 1. Ambient Mode 后台常驻订阅器(资源看门狗/记忆整理/检查点调度,
+    //    BudgetExceeded/ResourceRecovered/CheckpointSaved 双通道;NoopTidyHook
+    //    默认——真实记忆整理由 mlc-engine 接线方注入,依赖倒置先例)。
+    let ambient_handle = quest_engine::spawn_ambient_subscriber(
+        bus.clone(),
+        Arc::clone(&engine),
+        quest_engine::AmbientModeConfig::default(),
+        Arc::new(quest_engine::NoopTidyHook),
+    );
+    // 2. Quest 生命周期组件桥:QuestCreated/Progress/Completed 事件驱动
+    //    LongTaskMap + SearchTreeManager + LongTermCreditAssigner 真实运行。
+    let _quest_loop =
+        crate::quest_loop::spawn_quest_lifecycle_bridge(bus.clone(), Arc::clone(&engine));
+    // WHY 持有:ambient_handle/quest_loop 绑定存活至函数结束(后台任务生命周期)。
+    let _ambient_handle = ambient_handle;
+
     // Concord W10 T10.2(ADR-082):启动协议握手应答器 — 响应 TUI 启动时
     // 发布的 TuiHello,协商兼容级别并回 TuiHelloAck(SEC-4 一次性);
     // 必须在 TUI run() 前 spawn(subscribe-before-spawn,不错过启动瞬间握手)。

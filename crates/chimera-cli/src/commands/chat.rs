@@ -56,7 +56,6 @@ const DEFAULT_MAX_TOKENS: usize = 32768;
 /// 每 N 轮对话输出一次上下文使用情况(SubTask 1.5.5)
 const CONTEXT_DISPLAY_INTERVAL: u32 = 5;
 
-
 /// 流式输出到 stdout 的纯函数版本(与 run.rs::stream_to_stdout 同语义)
 ///
 /// WHY 独立于 run.rs 的 stream_to_stdout:run.rs 的版本从环境变量读 delay,

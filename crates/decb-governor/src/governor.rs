@@ -46,6 +46,18 @@ struct TierState {
     last_switch_time: Option<DateTime<Utc>>,
 }
 
+/// 档位优先级 — 判断升级路径(§16.4 孤儿治理 ResourceRecovered 发布辅助)
+///
+/// 升级顺序: Degraded(0) < LowTier(1) < HighTier(2)。
+/// 降级为逆序;同级比较返回相等。
+fn tier_priority(tier: BudgetTier) -> u8 {
+    match tier {
+        BudgetTier::HighTier => 2,
+        BudgetTier::LowTier => 1,
+        BudgetTier::Degraded => 0,
+    }
+}
+
 /// DECB 治理器 — 双档认知预算治理核心
 ///
 /// 维护预算系数、档位状态与消耗统计,提供:
@@ -324,6 +336,20 @@ impl DecbGovernor {
         };
         if let Err(e) = self.event_bus.publish_blocking(event) {
             warn!(error = %e, "发布 BudgetAdjusted 事件失败");
+        }
+
+        // §16.4 孤儿治理(Phase 10 Wave 4):升级路径发布 ResourceRecovered,
+        // 打通 quest-engine ambient_mode 死订阅——降级已有 BudgetExceeded
+        // (Critical)成对,升级恢复语义此前缺失,ambient 看门狗只能挂起不能恢复。
+        // 升级顺序 Degraded(0) < LowTier(1) < HighTier(2)。
+        if tier_priority(new_tier) > tier_priority(old_tier) {
+            let recovered = NexusEvent::ResourceRecovered {
+                metadata: EventMetadata::new("decb-governor"),
+                resource_type: "token".to_string(),
+            };
+            if let Err(e) = self.event_bus.publish_blocking(recovered) {
+                warn!(error = %e, "发布 ResourceRecovered 事件失败");
+            }
         }
 
         Ok(())

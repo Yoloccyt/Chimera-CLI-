@@ -4,6 +4,15 @@
 //! 对应 ADR:ADR-049 决策 1(runtime-auditor 落点 efficiency-monitor)
 //! 对应设计源:`chimera_ultimate_polish_v2.7.md` §14.2(Qoder Better Harness)
 //!
+//! # v3.4.0 §15.1 溯源(Phase 10 D-3 审计确认)
+//!
+//! 规范 §15.1 字面要求独立 crate `runtime-auditor`(五维度证据纪律);
+//! 本模块为其内嵌实现,且为五维**超集**——额外含第 0 维
+//! contract_compliance(Milestone B-4 平台接地规格满足率)。
+//! 五维映射:task_comprehension/controllable_execution/change_verification/
+//! reliable_delivery/experience_accumulation;消费端为 L10
+//! chimera-tui SelfAssessmentPanel(HarnessReportGenerated 事件驱动)。
+//!
 //! # 核心职责
 //!
 //! 1. **证据纪律**(Qoder 核心洞察"静态发现 ≠ 已执行验证"):
@@ -446,6 +455,9 @@ impl RuntimeAuditor {
     }
 
     /// 发布五维报告(未绑定 EventBus 时静默跳过)
+    ///
+    /// 双事件发布:HarnessReportGenerated(完整五维,供 TUI 面板) +
+    /// AssessmentUpdated(§16.4 L10→L9 摘要,供任务策略调整,Phase 10 Wave 4)。
     fn publish_report(&self, report: &HarnessReport) {
         if let Some(bus) = &self.event_bus {
             let event = NexusEvent::HarnessReportGenerated {
@@ -459,6 +471,36 @@ impl RuntimeAuditor {
             };
             if let Err(e) = bus.publish_blocking(event) {
                 warn!(error = %e, "HarnessReportGenerated 发布失败");
+            }
+            // §16.4 AssessmentUpdated(L10→L9):五维加权总分摘要。
+            // 权重对齐规范 §15.1:理解 0.20/执行 0.20/验证 0.25/交付 0.20/沉淀 0.15。
+            let overall = report.task_comprehension * 0.20
+                + report.controllable_execution * 0.20
+                + report.change_verification * 0.25
+                + report.reliable_delivery * 0.20
+                + report.experience_accumulation * 0.15;
+            let summary = NexusEvent::AssessmentUpdated {
+                metadata: EventMetadata::new("efficiency-monitor"),
+                overall_score: overall,
+                dimensions: vec![
+                    ("task_comprehension".to_string(), report.task_comprehension),
+                    (
+                        "controllable_execution".to_string(),
+                        report.controllable_execution,
+                    ),
+                    (
+                        "change_verification".to_string(),
+                        report.change_verification,
+                    ),
+                    ("reliable_delivery".to_string(), report.reliable_delivery),
+                    (
+                        "experience_accumulation".to_string(),
+                        report.experience_accumulation,
+                    ),
+                ],
+            };
+            if let Err(e) = bus.publish_blocking(summary) {
+                warn!(error = %e, "AssessmentUpdated 发布失败");
             }
         }
     }

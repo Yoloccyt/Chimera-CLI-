@@ -85,6 +85,75 @@ impl OnDemandSynthesizer {
         }
     }
 
+    /// 带 Token 预算的按需合成 — 超阈值压缩(规范 §16.3 "如果超过阈值,
+    /// 进一步压缩",Phase 10 Wave 6 补齐;铁律4 纯函数)
+    ///
+    /// 压缩策略(质量优先贪心装包):
+    /// 1. 合成后估算 token 未超预算 → 原样返回(零开销路径)
+    /// 2. 超预算 → 按 score 降序贪心装包(高分卡优先保留),
+    ///    丢弃低分卡直至装入预算;重算估算与摘要。
+    ///
+    /// WHY 质量优先:规范 §16.3 压缩目标是"控制上下文长度"同时保留
+    /// 最高价值信号;低分卡对算子决策边际贡献最小,优先丢弃。
+    pub fn synthesize_with_budget(
+        &self,
+        system: &ExperienceCardSystem,
+        target_card: &ExperienceCard,
+        operator: &AtomicOperator,
+        max_ancestors: usize,
+        max_siblings: usize,
+        token_budget: usize,
+    ) -> SynthesizedMemory {
+        let mut memory =
+            self.synthesize(system, target_card, operator, max_ancestors, max_siblings);
+        if memory.estimated_tokens <= token_budget {
+            return memory;
+        }
+        // 超预算:按 score 降序贪心装包
+        let mut candidates = memory.context_cards.clone();
+        candidates.sort_unstable_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut kept: Vec<ExperienceCard> = Vec::new();
+        let mut used = 0usize;
+        for card in candidates {
+            let cost = card.metadata.token_usage.total_tokens as usize;
+            if used + cost <= token_budget {
+                used += cost;
+                kept.push(card);
+            }
+        }
+        memory.context_cards = kept.clone();
+        memory.estimated_tokens = used;
+        // 重算摘要(与压缩后上下文一致,铁律4 确定性)
+        memory.ancestor_insights = self.extract_insights_from_owned(&kept);
+        memory.sibling_patterns = self.extract_patterns_from_owned(&kept);
+        memory
+    }
+
+    /// 从自有卡片提取祖先洞察(压缩后重算用,与 extract_insights 同格式)
+    fn extract_insights_from_owned(&self, cards: &[ExperienceCard]) -> Vec<String> {
+        cards
+            .iter()
+            .map(|c| {
+                format!(
+                    "{}: score={:.2}, progress={:.2}",
+                    c.method_family, c.score, c.three_factor.progress
+                )
+            })
+            .collect()
+    }
+
+    /// 从自有卡片提取兄弟模式(压缩后重算用,与 extract_patterns 同格式)
+    fn extract_patterns_from_owned(&self, cards: &[ExperienceCard]) -> Vec<String> {
+        cards
+            .iter()
+            .map(|c| format!("{}: novelty={:.2}", c.method_family, c.three_factor.novelty))
+            .collect()
+    }
+
     /// 算子差异化上下文选择 — OpenMLE 核心（铁律4 纯函数）
     fn select_context_by_operator<'a>(
         &self,
@@ -432,6 +501,43 @@ mod tests {
             mem.ancestor_insights.len() <= 2,
             "懒加载应受 max_ancestors 约束（实际 {})",
             mem.ancestor_insights.len()
+        );
+    }
+
+    #[test]
+    fn budget_compression_keeps_high_score_cards() {
+        // §16.3 超阈值压缩(Phase 10 Wave 6):预算不足时按 score 降序贪心装包
+        let mut system = ExperienceCardSystem::new(1.414, 0.1);
+        // 链: root → a → target;Draft 选祖先 top-3
+        let mut root = card("root", None, 0.9); // 高分
+        root.metadata.token_usage.total_tokens = 60;
+        let mut a = card("a", Some("root"), 0.3); // 低分
+        a.metadata.token_usage.total_tokens = 60;
+        let mut target = card("target", Some("a"), 0.7);
+        target.metadata.token_usage.total_tokens = 10;
+        system.add_card(root);
+        system.add_card(a);
+        system.add_card(target.clone());
+        let synth = OnDemandSynthesizer::new();
+
+        // 预算充足(≥120) → 零开销路径,两祖先全保留
+        let full =
+            synth.synthesize_with_budget(&system, &target, &AtomicOperator::Draft, 3, 3, 200);
+        assert_eq!(full.context_cards.len(), 2, "预算充足不压缩");
+
+        // 预算 60 → 只能装一张卡,高分 root(0.9) 优先保留
+        let compressed =
+            synth.synthesize_with_budget(&system, &target, &AtomicOperator::Draft, 3, 3, 60);
+        assert!(
+            compressed.estimated_tokens <= 60,
+            "压缩后应在预算内(实际 {})",
+            compressed.estimated_tokens
+        );
+        assert_eq!(compressed.context_cards.len(), 1, "预算只容一卡");
+        assert_eq!(
+            compressed.context_cards[0].node_id.as_ref(),
+            "root",
+            "质量优先:高分卡保留"
         );
     }
 }

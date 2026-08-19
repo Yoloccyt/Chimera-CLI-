@@ -242,7 +242,10 @@ async fn test_trigger_substitution_publishes_event() {
     let candidate = sub.trigger_substitution("cap-1").await.expect("应找到替代");
 
     // 验证事件
-    let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())         .await         .expect("5s 内未收到事件(资源竞争或事件丢失)")         .expect("应收到事件");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("5s 内未收到事件(资源竞争或事件丢失)")
+        .expect("应收到事件");
     match event {
         NexusEvent::CsnSubstitutionTriggered {
             original_capability_id,
@@ -279,7 +282,10 @@ async fn test_event_severity_normal() {
 
     sub.trigger_substitution("cap-1").await.unwrap();
 
-    let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())         .await         .expect("5s 内未收到事件(资源竞争或事件丢失)")         .expect("应收到事件");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("5s 内未收到事件(资源竞争或事件丢失)")
+        .expect("应收到事件");
     assert_eq!(
         event.severity(),
         EventSeverity::Normal,
@@ -328,7 +334,10 @@ async fn test_multiple_triggers_publish_multiple_events() {
     // 应收到 3 个 CsnSubstitutionTriggered 事件
     let mut count = 0;
     for _ in 0..3 {
-        let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())             .await             .expect("5s 内未收到事件(资源竞争或事件丢失)")             .expect("应收到事件");
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("5s 内未收到事件(资源竞争或事件丢失)")
+            .expect("应收到事件");
         if let NexusEvent::CsnSubstitutionTriggered { .. } = event {
             count += 1;
         }

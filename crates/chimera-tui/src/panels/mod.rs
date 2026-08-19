@@ -50,11 +50,15 @@ pub mod clv_vector;
 pub mod dag_viz;
 pub mod decay;
 pub mod event_stream;
+/// Phase 10 §15.2b:经验卡片可视化面板(OpenMLE 全局统计,trait 注入)
+pub mod experience_card_viz;
 pub(crate) mod filter_cache;
 /// P1-3(评估报告 v2):变体级快速关键字匹配(免 JSON 全量序列化)
 pub(crate) mod filter_fast;
 pub mod health;
 pub mod help;
+/// Phase 10 §15.3:上下文注入策略面板(TencentDB 动态卡片/人格摘要/缓存统计)
+pub mod injection_strategy;
 pub(crate) mod list_state;
 pub mod log;
 pub mod mcp_nodes;
@@ -83,8 +87,14 @@ pub use clv_vector::ClvVectorPanel;
 pub use dag_viz::DagVizPanel;
 pub use decay::DecayPanel;
 pub use event_stream::EventStreamPanel;
+pub use experience_card_viz::{
+    ExperienceCardStatsProvider, ExperienceCardVizPanel, ExperienceCardVizStats,
+};
 pub use health::HealthPanel;
 pub use help::HelpPanel;
+pub use injection_strategy::{
+    InjectionSnapshot, InjectionSnapshotProvider, InjectionStrategyPanel,
+};
 pub use log::LogPanel;
 pub use mcp_nodes::McpNodesPanel;
 pub use memory::MemoryPanel;

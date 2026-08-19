@@ -898,51 +898,51 @@ fn test_search_mode_filters_log_panel() {
     // WHY 锁 Zh:断言中文过滤指示文案("关键字:alpha" 走 t!());
     // 替代旧 LOCALE_LOCK 模式(只防本文件,防不住其他测试文件写入)。
     with_zh_locale(|| {
-    // WHY:通过 '/' 进入搜索模式,提交后关键字过滤器应作用于 Log 面板
-    let snapshot = full_snapshot(
-        Vec::new(),
-        VecDeque::from([
-            NexusEvent::CacheHit {
-                metadata: EventMetadata::new("scc-cache"),
-                cache_key: "alpha".into(),
+        // WHY:通过 '/' 进入搜索模式,提交后关键字过滤器应作用于 Log 面板
+        let snapshot = full_snapshot(
+            Vec::new(),
+            VecDeque::from([
+                NexusEvent::CacheHit {
+                    metadata: EventMetadata::new("scc-cache"),
+                    cache_key: "alpha".into(),
+                },
+                NexusEvent::CacheMiss {
+                    metadata: EventMetadata::new("scc-cache"),
+                    cache_key: "beta".into(),
+                },
+            ]),
+            BudgetMetrics::default(),
+        );
+
+        let mut app = TuiApp::with_data_source(
+            TuiConfig {
+                default_view_mode: chimera_tui::ViewMode::Dashboard,
+                persist_state: false,
+                ..Default::default()
             },
-            NexusEvent::CacheMiss {
-                metadata: EventMetadata::new("scc-cache"),
-                cache_key: "beta".into(),
-            },
-        ]),
-        BudgetMetrics::default(),
-    );
+            Box::new(StaticSnapshotSource::new(snapshot)),
+        )
+        .unwrap();
+        app.update();
+        app.switch_panel_to(PanelId::Log);
 
-    let mut app = TuiApp::with_data_source(
-        TuiConfig {
-            default_view_mode: chimera_tui::ViewMode::Dashboard,
-            persist_state: false,
-            ..Default::default()
-        },
-        Box::new(StaticSnapshotSource::new(snapshot)),
-    )
-    .unwrap();
-    app.update();
-    app.switch_panel_to(PanelId::Log);
+        // Concord W2:进入斜杠命令模式,经 /search 命令设置关键字(承接原 `/` 搜索语义)
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        for c in "search alpha".chars() {
+            app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    // Concord W2:进入斜杠命令模式,经 /search 命令设置关键字(承接原 `/` 搜索语义)
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
-    for c in "search alpha".chars() {
-        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-    }
-    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.state().filter_keyword, Some("alpha".into()));
 
-    assert_eq!(app.state().filter_keyword, Some("alpha".into()));
-
-    // 渲染后 Log 面板标题应包含关键字指示器
-    let content = render_to_string(&mut app, 80, 24);
-    let compact: String = content.chars().filter(|c| *c != ' ').collect();
-    assert!(
-        compact.contains("关键字:alpha"),
-        "Log panel title should show active keyword filter, got: {}",
-        &content[..content.len().min(300)]
-    );
+        // 渲染后 Log 面板标题应包含关键字指示器
+        let content = render_to_string(&mut app, 80, 24);
+        let compact: String = content.chars().filter(|c| *c != ' ').collect();
+        assert!(
+            compact.contains("关键字:alpha"),
+            "Log panel title should show active keyword filter, got: {}",
+            &content[..content.len().min(300)]
+        );
     });
 }
 
@@ -950,62 +950,62 @@ fn test_search_mode_filters_log_panel() {
 fn test_command_filter_and_level_applies_to_log() {
     // WHY 锁 Zh:断言中文过滤指示文案("主题:budget"/"级别:critical" 走 t!())
     with_zh_locale(|| {
-    // WHY:`:filter` 与 `:level` 命令应设置状态过滤器并影响 Log 面板渲染
-    let snapshot = full_snapshot(
-        Vec::new(),
-        VecDeque::from([
-            NexusEvent::CacheHit {
-                metadata: EventMetadata::new("scc-cache"),
-                cache_key: "k1".into(),
+        // WHY:`:filter` 与 `:level` 命令应设置状态过滤器并影响 Log 面板渲染
+        let snapshot = full_snapshot(
+            Vec::new(),
+            VecDeque::from([
+                NexusEvent::CacheHit {
+                    metadata: EventMetadata::new("scc-cache"),
+                    cache_key: "k1".into(),
+                },
+                NexusEvent::BudgetExceeded {
+                    metadata: EventMetadata::new("decb-governor"),
+                    budget_type: "token".into(),
+                    current: 9500,
+                    limit: 10000,
+                },
+            ]),
+            BudgetMetrics::default(),
+        );
+
+        let mut app = TuiApp::with_data_source(
+            TuiConfig {
+                default_view_mode: chimera_tui::ViewMode::Dashboard,
+                persist_state: false,
+                ..Default::default()
             },
-            NexusEvent::BudgetExceeded {
-                metadata: EventMetadata::new("decb-governor"),
-                budget_type: "token".into(),
-                current: 9500,
-                limit: 10000,
-            },
-        ]),
-        BudgetMetrics::default(),
-    );
+            Box::new(StaticSnapshotSource::new(snapshot)),
+        )
+        .unwrap();
+        app.update();
+        app.switch_panel_to(PanelId::Log);
 
-    let mut app = TuiApp::with_data_source(
-        TuiConfig {
-            default_view_mode: chimera_tui::ViewMode::Dashboard,
-            persist_state: false,
-            ..Default::default()
-        },
-        Box::new(StaticSnapshotSource::new(snapshot)),
-    )
-    .unwrap();
-    app.update();
-    app.switch_panel_to(PanelId::Log);
+        // 执行 :filter budget
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+        for c in "filter budget".chars() {
+            app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.state().filter_topic, Some("budget".into()));
 
-    // 执行 :filter budget
-    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
-    for c in "filter budget".chars() {
-        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-    }
-    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.state().filter_topic, Some("budget".into()));
+        // 执行 :level critical
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
+        for c in "level critical".chars() {
+            app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.state().filter_level, Some("critical".into()));
 
-    // 执行 :level critical
-    app.handle_key_event(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
-    for c in "level critical".chars() {
-        app.handle_key_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-    }
-    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.state().filter_level, Some("critical".into()));
-
-    let content = render_to_string(&mut app, 80, 24);
-    let compact: String = content.chars().filter(|c| *c != ' ').collect();
-    assert!(
-        compact.contains("主题:budget"),
-        "Log panel title should show topic filter"
-    );
-    assert!(
-        compact.contains("级别:critical"),
-        "Log panel title should show level filter"
-    );
+        let content = render_to_string(&mut app, 80, 24);
+        let compact: String = content.chars().filter(|c| *c != ' ').collect();
+        assert!(
+            compact.contains("主题:budget"),
+            "Log panel title should show topic filter"
+        );
+        assert!(
+            compact.contains("级别:critical"),
+            "Log panel title should show level filter"
+        );
     });
 }
 
@@ -1065,12 +1065,12 @@ fn test_mouse_tab_click_switches_panel_integration() {
     // 先渲染以设置 last_area
     let _ = render_to_string(&mut app, 80, 24);
 
-    // M3b:标签栏宽度 80,17 个面板(含 Chat),每标签约 4 列。
-    // WHY column=5:落在第 2 个标签(index 1 = Parliament)内——tab_width 为 4 或 5 时
-    // 5/tab_width 均 = 1,避开边界且不受面板数微调影响。
+    // Phase 10:标签栏宽度 80,27 个面板,tab_width = 80/27 = 2 列。
+    // WHY column=3:3/2 = 1,落在第 2 个标签(index 1 = Parliament)内,
+    // 避开边界(2/2=1 与 4/2=2 均为边界列)。
     app.handle_mouse_event(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 5,
+        column: 3,
         row: 1,
         modifiers: KeyModifiers::NONE,
     });

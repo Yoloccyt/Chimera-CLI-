@@ -412,6 +412,10 @@ pub enum NexusEvent {
     },
 
     /// GSOE 触发在线进化(同层通信)
+    ///
+    /// **[RESERVED]** §16.4 审计结论:变体已落地但生产发布端缺失
+    /// (gsoe-evolution 零生产构造)。标注 reserved 保留序列化兼容,
+    /// 待后续装配时激活(Phase 10 Wave 4 孤儿治理)。
     EvolutionTriggered {
         /// 事件元数据
         metadata: EventMetadata,
@@ -2243,6 +2247,10 @@ pub enum NexusEvent {
     ///
     /// L6(osa-coordinator) → L2(hcw-window) / L10(mca-gateway)，
     /// 通知各层当前 token 预算分配。Normal 级别，丢失可由下次周期补偿。
+    ///
+    /// **[RESERVED]** §16.4 审计结论:变体已落地但生产发布端缺失
+    /// (osa-coordinator 零生产构造)。标注 reserved 保留序列化兼容,
+    /// 待后续装配时激活(Phase 10 Wave 4 孤儿治理)。
     ContextBudgetAllocated {
         /// 事件元数据
         metadata: EventMetadata,
@@ -2322,6 +2330,10 @@ pub enum NexusEvent {
     },
 
     /// 基准指标采集完成（仅基准模式发布，Normal 级别）
+    ///
+    /// **[RESERVED]** §16.4 审计结论:变体已落地但生产发布端缺失
+    /// (efficiency-monitor 基准模式零生产构造)。标注 reserved 保留
+    /// 序列化兼容,待后续装配时激活(Phase 10 Wave 4 孤儿治理)。
     BenchmarkMetricsCollected {
         /// 事件元数据
         metadata: EventMetadata,
@@ -2450,6 +2462,121 @@ pub enum NexusEvent {
         metadata: EventMetadata,
         /// 奖励信号（RewardSpec 加权后载荷）
         signal: nexus_contracts::reward::RewardSignal,
+    },
+
+    // ============================================================
+    // §16.4 跨层事件协议补齐(Phase 10 审计修复 Wave 4)
+    // ============================================================
+    /// 停止策略裁决发布 — L8 Parliament → L9 Quest(规范 §16.4,Critical)
+    ///
+    /// ThreeFactorAdjudicator.adjudicate_stop 的裁决结果事件化(此前 StopRuling
+    /// 仅本地枚举死代码);Critical 保障停止裁决不丢失(防 Quest 无界运行)。
+    StopRulingIssued {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 所属 Quest ID
+        quest_id: String,
+        /// 裁决理由(停滞/达限/收益衰减等)
+        reason: String,
+        /// 是否保留历史最佳(Ω₉-Preserve)
+        preserve_best: bool,
+    },
+    /// 变体审议通过 — L8 Parliament → L5/L6(规范 §16.4,Normal)
+    ///
+    /// ThreeFactorAdjudicator.adjudicate_variant 批准变体后发布,
+    /// 供 L5 知识沉淀与 L6 算子路由消费。
+    VariantApproved {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 变体标识(spec_name@spec_version)
+        variant_id: String,
+        /// 变体评分
+        score: f32,
+    },
+    /// 三因子父本选择结果 — L5 Knowledge → L6/L9(规范 §16.4,Normal)
+    ///
+    /// select_parent 选择结果事件化,供 L6 算子路由与 L9 搜索树扩展消费。
+    ParentSelected {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 所属任务 ID
+        task_id: String,
+        /// 选中父本节点 ID
+        parent_node_id: String,
+        /// 三因子归一化评分
+        quality: f32,
+        /// 进度因子
+        progress: f32,
+        /// 新颖性因子
+        novelty: f32,
+    },
+    /// 错误签名匹配成功 — L4 Security → L2/L5(规范 §16.4,Critical)
+    ///
+    /// 铁律7 错误签名哈希去重聚类命中时发布(Debug 算子“相同错误签名
+    /// 兄弟”检索的事件化通道);Critical 保障错误修复路径不丢失。
+    ErrorSignatureMatched {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 错误签名哈希
+        error_hash: String,
+        /// 命中的卡片 ID 列表
+        matched_card_ids: Vec<String>,
+    },
+    /// Token 证据记录 — L1 Core → L3 Storage(规范 §16.4,Normal)
+    ///
+    /// TokenLedger 追加条目后发布,通知 L3 持久化通道(铁律8 Token 证据全链路)。
+    TokenLedgerRecorded {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 证据条目 ID
+        evidence_id: String,
+        /// Token 用量
+        token_usage: u64,
+    },
+    /// 自我评估更新 — L10 Interface → L9(规范 §16.4,规范标 Low;
+    /// EventSeverity 无 Low 变体,映射 Normal——丢失可由下周期报告补偿)
+    ///
+    /// RuntimeAuditor 周期报告的摘要事件(五维总分),供 L9 消费调整任务策略。
+    AssessmentUpdated {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 五维加权总分
+        overall_score: f32,
+        /// 各维度评分(维度名 → 分值)
+        dimensions: Vec<(String, f32)>,
+    },
+    // ============================================================
+    // §16.5 跨层奖励传播 — L1 吞吐量观测(Phase 10 Wave 6,append-only)
+    // ============================================================
+    /// Event Bus 吞吐量报告 — L1 周期观测面事件(规范 §16.5,Normal)
+    ///
+    /// 审计发现规范要求"Event Bus 吞吐量"无实现;组合根周期拉取
+    /// [`EventBus::published_total`] 计算速率后发布本事件(真实采集,
+    /// 非伪造指标)。丢失可由下周期报告补偿。
+    BusThroughputReported {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 窗口内发布事件总数
+        published_total: u64,
+        /// 窗口内事件/秒(上一周期差分速率)
+        events_per_sec: f64,
+        /// 观测窗口时长(秒)
+        window_secs: u64,
+    },
+    /// L4 沙箱拦截率报告 — 安全层周期观测面事件(规范 §16.5,Normal)
+    ///
+    /// seccore 真实采集零信任沙箱的请求/拦截计数后发布本事件。
+    /// 误拦截率需人工真值标注(哪些拦截是"错误"的),标注 v4.0 预留,
+    /// 不实施假采集——对齐 §16.5 审计的诚实数据原则。
+    SecurityInterceptionReported {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 累计请求总数(审计并执行入口)
+        total_requests: u64,
+        /// 累计被拦截数(任一防御层)
+        blocked_requests: u64,
+        /// 拦截率 blocked / total(无请求时为 0.0)
+        interception_rate: f64,
     },
 }
 
@@ -2610,6 +2737,17 @@ impl NexusEvent {
             Self::ResourceRecovered { metadata, .. } => metadata,
             Self::FormalViolation { metadata, .. } => metadata,
             Self::RewardSignalReported { metadata, .. } => metadata,
+            // §16.4 跨层事件协议补齐(Phase 10 Wave 4)
+            Self::StopRulingIssued { metadata, .. } => metadata,
+            Self::VariantApproved { metadata, .. } => metadata,
+            Self::ParentSelected { metadata, .. } => metadata,
+            Self::ErrorSignatureMatched { metadata, .. } => metadata,
+            Self::TokenLedgerRecorded { metadata, .. } => metadata,
+            Self::AssessmentUpdated { metadata, .. } => metadata,
+            // §16.5 L1 吞吐量观测(Phase 10 Wave 6)
+            Self::BusThroughputReported { metadata, .. } => metadata,
+            // §16.5 L4 沙箱拦截率观测(Phase 10 Wave 6)
+            Self::SecurityInterceptionReported { metadata, .. } => metadata,
         }
     }
 }

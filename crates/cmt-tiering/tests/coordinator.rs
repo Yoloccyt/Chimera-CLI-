@@ -283,10 +283,10 @@ async fn test_capability_tiered_event_on_lru_eviction() {
     // L3 深度优化:insert 先发布 CapabilityTierStatsReported(统计快照),
     // 循环跳过直到 CapabilityTiered(迁移事件)
     loop {
-let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-        .await
-        .expect("5s 内未收到事件(资源竞争或事件丢失)")
-        .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("5s 内未收到事件(资源竞争或事件丢失)")
+            .unwrap();
         match event {
             NexusEvent::CapabilityTiered {
                 from_tier, to_tier, ..
@@ -313,7 +313,7 @@ async fn test_capability_tiered_event_on_promote() {
     coord.get("cap-1").await.unwrap();
 
     // 应收到 CapabilityTiered 事件
-let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
         .await
         .expect("5s 内未收到事件(资源竞争或事件丢失)")
         .unwrap();

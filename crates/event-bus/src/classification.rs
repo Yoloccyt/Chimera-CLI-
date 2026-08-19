@@ -83,6 +83,12 @@ impl NexusEvent {
             // P1-5: FormalViolation 升级为 Critical(违反即否决,丢失导致契约违反
             // 无人审议、候选继续进入后续阶段,违反九层防御 L0 语义;双清单同步见 bus.rs)
             | Self::FormalViolation { .. } => EventSeverity::Critical,
+            // §16.4 跨层事件协议补齐(Phase 10 Wave 4):停止裁决与错误签名匹配
+            // 为 Critical——停止裁决丢失导致 Quest 无界运行;错误修复路径丢失
+            // 导致 Debug 算子无法检索同签名兄弟。双清单同步见 bus.rs(Wave 5)。
+            Self::StopRulingIssued { .. } | Self::ErrorSignatureMatched { .. } => {
+                EventSeverity::Critical
+            }
             // 控制事件(请求/反馈):不阻断系统,不触发 mpsc 旁路投递
             Self::QuestCancelRequested { .. }
             | Self::QuestCancelled { .. }
@@ -274,6 +280,17 @@ impl NexusEvent {
             Self::ResourceRecovered { .. } => "ResourceRecovered",
             Self::FormalViolation { .. } => "FormalViolation",
             Self::RewardSignalReported { .. } => "RewardSignalReported",
+            // §16.4 跨层事件协议补齐(Phase 10 Wave 4)
+            Self::StopRulingIssued { .. } => "StopRulingIssued",
+            Self::VariantApproved { .. } => "VariantApproved",
+            Self::ParentSelected { .. } => "ParentSelected",
+            Self::ErrorSignatureMatched { .. } => "ErrorSignatureMatched",
+            Self::TokenLedgerRecorded { .. } => "TokenLedgerRecorded",
+            Self::AssessmentUpdated { .. } => "AssessmentUpdated",
+            // §16.5 L1 吞吐量观测(Phase 10 Wave 6)
+            Self::BusThroughputReported { .. } => "BusThroughputReported",
+            // §16.5 L4 沙箱拦截率观测(Phase 10 Wave 6)
+            Self::SecurityInterceptionReported { .. } => "SecurityInterceptionReported",
         }
     }
 }

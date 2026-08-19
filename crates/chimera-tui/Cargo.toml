@@ -27,6 +27,9 @@ unicode-width = "0.2"
 
 # nexus-core 为 L1 Core 共享领域类型(Quest/Task 等),L10 向下依赖允许
 nexus-core = { workspace = true }
+# Phase 10 §15.2b/§15.3:InjectionStrategyPanel 消费 L0 AtomicMemoryCard;
+# nexus-contracts 为 L0 纯类型零依赖契约层,L10→L0 向下合规不引入耦合
+nexus-contracts = { workspace = true }
 # Phase 6 D-6 虚假数据固化治理(延续 L2/L3/L4 深度优化事件驱动化先例):
 # - 原 Task 3.2 mlc-engine 依赖(current_memory_stage() 全局占位)已移除,
 #   记忆策略阶段改由 latest_events 事件流派生(MemConStrategyAdjusted 事件)

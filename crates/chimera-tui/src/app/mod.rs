@@ -23,10 +23,10 @@ use crate::error::TuiError;
 use crate::focus::FocusManager;
 use crate::panels::{
     BudgetPanel, ChatPanel, ChtcPanel, ClvVectorPanel, DagVizPanel, DecayPanel, EventStreamPanel,
-    HealthPanel, HelpPanel, LogPanel, McpNodesPanel, MemoryPanel, MetricsDashboardPanel,
-    OsaSparsePanel, OverWindowPanel, Panel, ParliamentPanel, PvlScorePanel, QuestPanel,
-    ResourceMonitorPanel, RouterPanel, SecurityPanel, SelfAssessmentPanel, SysinfoPanel,
-    TaskManagerPanel, TimelinePanel,
+    ExperienceCardVizPanel, HealthPanel, HelpPanel, InjectionStrategyPanel, LogPanel,
+    McpNodesPanel, MemoryPanel, MetricsDashboardPanel, OsaSparsePanel, OverWindowPanel, Panel,
+    ParliamentPanel, PvlScorePanel, QuestPanel, ResourceMonitorPanel, RouterPanel, SecurityPanel,
+    SelfAssessmentPanel, SysinfoPanel, TaskManagerPanel, TimelinePanel,
 };
 use crate::types::{PanelId, TuiState};
 use event_bus::EventBus;
@@ -177,6 +177,9 @@ fn make_panel(id: PanelId) -> Box<dyn Panel> {
         PanelId::PvlScore => Box::new(PvlScorePanel::new()),
         PanelId::TaskManager => Box::new(TaskManagerPanel::new()),
         PanelId::OverWindow => Box::new(OverWindowPanel::new()),
+        // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板接线(trait 注入,默认未接线诚实展示)
+        PanelId::ExperienceCardViz => Box::new(ExperienceCardVizPanel::new()),
+        PanelId::InjectionStrategy => Box::new(InjectionStrategyPanel::new()),
     }
 }
 

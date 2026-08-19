@@ -301,6 +301,19 @@ impl AcbGovernor {
             warn!(error = %e, "发布 BudgetAdjusted 事件失败");
         }
 
+        // §16.4 孤儿治理(Phase 10 Wave 4):升级路径发布 ResourceRecovered,
+        // 打通 quest-engine ambient_mode 死订阅——降级已有 BudgetExceeded
+        // (Critical)成对,升级恢复语义此前缺失,ambient 看门狗只能挂起不能恢复。
+        if target_tier.as_level() > old_tier.as_level() {
+            let recovered = NexusEvent::ResourceRecovered {
+                metadata: EventMetadata::new("acb-governor"),
+                resource_type: "token".to_string(),
+            };
+            if let Err(e) = self.event_bus.publish_blocking(recovered) {
+                warn!(error = %e, "发布 ResourceRecovered 事件失败");
+            }
+        }
+
         Ok(TierSwitchResult {
             from_tier: old_tier,
             to_tier: target_tier,

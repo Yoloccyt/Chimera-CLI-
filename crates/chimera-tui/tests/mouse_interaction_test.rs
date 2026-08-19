@@ -60,16 +60,16 @@ fn tab_click_switches_to_clicked_panel() {
     render_once(&mut app);
     assert_eq!(app.current_panel(), PanelId::Quest);
 
-    // 80 列 / 25 面板 = tab_width 3(整除);点击第 2 个 tab(column 3-5)→ Parliament
-    app.handle_mouse_event(left_down(4, 1));
+    // Phase 10:80 列 / 27 面板 = tab_width 2(整除);点击第 2 个 tab(column 2-3)→ Parliament
+    app.handle_mouse_event(left_down(3, 1));
     assert_eq!(
         app.current_panel(),
         PanelId::Parliament,
         "点击第 2 个 tab 应切到 Parliament"
     );
 
-    // 点击第 3 个 tab(column 6-8)→ Budget
-    app.handle_mouse_event(left_down(7, 1));
+    // 点击第 3 个 tab(column 4-5)→ Budget
+    app.handle_mouse_event(left_down(5, 1));
     assert_eq!(
         app.current_panel(),
         PanelId::Budget,

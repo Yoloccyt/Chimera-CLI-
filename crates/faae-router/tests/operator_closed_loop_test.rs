@@ -23,7 +23,13 @@ use proptest::prelude::*;
 // ---- 测试脚手架 ----
 
 /// 构造经验卡片（真实反馈形态）
-fn card(id: &str, family: &str, op: AtomicOperator, score: f32, status: ExecutionStatus) -> ExperienceCard {
+fn card(
+    id: &str,
+    family: &str,
+    op: AtomicOperator,
+    score: f32,
+    status: ExecutionStatus,
+) -> ExperienceCard {
     ExperienceCard {
         card_id: id.into(),
         task_id: "task-w4".into(),
@@ -72,10 +78,34 @@ async fn card_feedback_loop_updates_router_stats() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // 中分流(0.5 < score ≤ 0.8) + 高分流(score > 0.8) 双路发布
-    card_bus.publish(card("c-1", "code-gen", AtomicOperator::Draft, 0.7, ExecutionStatus::Success));
-    card_bus.publish(card("c-2", "code-gen", AtomicOperator::Draft, 0.6, ExecutionStatus::Success));
-    card_bus.publish(card("c-3", "code-gen", AtomicOperator::Improve, 0.9, ExecutionStatus::Error));
-    card_bus.publish(card("c-4", "code-gen", AtomicOperator::Draft, 0.9, ExecutionStatus::Success));
+    card_bus.publish(card(
+        "c-1",
+        "code-gen",
+        AtomicOperator::Draft,
+        0.7,
+        ExecutionStatus::Success,
+    ));
+    card_bus.publish(card(
+        "c-2",
+        "code-gen",
+        AtomicOperator::Draft,
+        0.6,
+        ExecutionStatus::Success,
+    ));
+    card_bus.publish(card(
+        "c-3",
+        "code-gen",
+        AtomicOperator::Improve,
+        0.9,
+        ExecutionStatus::Error,
+    ));
+    card_bus.publish(card(
+        "c-4",
+        "code-gen",
+        AtomicOperator::Draft,
+        0.9,
+        ExecutionStatus::Success,
+    ));
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -86,7 +116,7 @@ async fn card_feedback_loop_updates_router_stats() {
         // method_family 作为 task_type: (code-gen, Draft) 3 条 + (code-gen, Improve) 1 条
         let draft_stats = router
             .aggregates()
-            .get(&( "code-gen".to_string(), AtomicOperator::Draft))
+            .get(&("code-gen".to_string(), AtomicOperator::Draft))
             .expect("Draft 聚合存在");
         assert_eq!(draft_stats.visits, 3);
         assert_eq!(draft_stats.success_count, 3);
@@ -108,7 +138,10 @@ async fn strategy_hot_switch_preserves_stats() {
     router.record_result("t", AtomicOperator::Improve, 0.3, ExecutionStatus::Success);
 
     // 热切换到 UCB: 统计保留,策略语义切换
-    assert_eq!(router.selection_strategy(), OperatorSelectionStrategy::Greedy);
+    assert_eq!(
+        router.selection_strategy(),
+        OperatorSelectionStrategy::Greedy
+    );
     router.apply_strategy(OperatorSelectionStrategy::Ucb);
     assert_eq!(router.selection_strategy(), OperatorSelectionStrategy::Ucb);
     // 统计未被清空（策略与统计正交）
@@ -173,12 +206,29 @@ async fn history_rolling_window_cap() {
 async fn parent_context_selects_from_card_bus() {
     let card_bus = ExperienceCardBus::new();
     // 三个候选: quality 0.7 / 0.6 / 0.9（高分卡走 critical 流但索引同步保留）
-    card_bus.publish(card("p-1", "f", AtomicOperator::Draft, 0.7, ExecutionStatus::Success));
-    card_bus.publish(card("p-2", "f", AtomicOperator::Improve, 0.6, ExecutionStatus::Success));
-    card_bus.publish(card("p-3", "f", AtomicOperator::Debug, 0.6, ExecutionStatus::Success));
+    card_bus.publish(card(
+        "p-1",
+        "f",
+        AtomicOperator::Draft,
+        0.7,
+        ExecutionStatus::Success,
+    ));
+    card_bus.publish(card(
+        "p-2",
+        "f",
+        AtomicOperator::Improve,
+        0.6,
+        ExecutionStatus::Success,
+    ));
+    card_bus.publish(card(
+        "p-3",
+        "f",
+        AtomicOperator::Debug,
+        0.6,
+        ExecutionStatus::Success,
+    ));
 
-    let mut provider =
-        ParentContextProvider::new(ThreeFactorSelector::new(1.414, 0.1, 1.0));
+    let mut provider = ParentContextProvider::new(ThreeFactorSelector::new(1.414, 0.1, 1.0));
     let selection = provider
         .select_parent(&card_bus, "task-w4")
         .expect("候选充足应选出父本");
@@ -192,7 +242,10 @@ async fn parent_context_selects_from_card_bus() {
     // 最小候选阈值
     let mut strict = ParentContextProvider::new(ThreeFactorSelector::new(1.414, 0.1, 1.0))
         .with_min_candidates(4);
-    assert!(strict.select_parent(&card_bus, "task-w4").is_none(), "3 < 4 降级");
+    assert!(
+        strict.select_parent(&card_bus, "task-w4").is_none(),
+        "3 < 4 降级"
+    );
     assert_eq!(strict.min_candidates(), 4);
 }
 
@@ -201,7 +254,13 @@ async fn parent_error_signature_routes_debug_operator() {
     // §16.3: 父本 error_signature 是 Debug 算子的关键路由信号——
     // ParentSelection 透传 error_signature 供 OperatorContext 注入
     let card_bus = ExperienceCardBus::new();
-    let mut with_error = card("e-1", "f", AtomicOperator::Debug, 0.6, ExecutionStatus::Error);
+    let mut with_error = card(
+        "e-1",
+        "f",
+        AtomicOperator::Debug,
+        0.6,
+        ExecutionStatus::Error,
+    );
     with_error.error_signature = Some(ErrorSignature {
         error_type: "compile_error".into(),
         error_location: "src/main.rs:42".into(),
@@ -210,8 +269,7 @@ async fn parent_error_signature_routes_debug_operator() {
     });
     card_bus.publish(with_error);
 
-    let mut provider =
-        ParentContextProvider::new(ThreeFactorSelector::new(1.414, 0.1, 1.0));
+    let mut provider = ParentContextProvider::new(ThreeFactorSelector::new(1.414, 0.1, 1.0));
     let selection = provider
         .select_parent(&card_bus, "task-w4")
         .expect("单候选可选");
@@ -225,18 +283,28 @@ async fn parent_error_signature_routes_debug_operator() {
 // ============================================================
 
 /// 测试内全扫描参照实现（旧版语义）: Greedy 成功均分
-fn legacy_greedy(history: &[OperatorSelectionRecord], task: &str, ops: &[AtomicOperator]) -> AtomicOperator {
+fn legacy_greedy(
+    history: &[OperatorSelectionRecord],
+    task: &str,
+    ops: &[AtomicOperator],
+) -> AtomicOperator {
     let mut best = ops[0];
     let mut best_score = -1.0f32;
     for op in ops {
         let scores: Vec<f32> = history
             .iter()
             .filter(|r| {
-                r.task_type == task && r.selected_operator == *op && r.execution_status == ExecutionStatus::Success
+                r.task_type == task
+                    && r.selected_operator == *op
+                    && r.execution_status == ExecutionStatus::Success
             })
             .map(|r| r.result_score)
             .collect();
-        let score = if scores.is_empty() { 0.0 } else { scores.iter().sum::<f32>() / scores.len() as f32 };
+        let score = if scores.is_empty() {
+            0.0
+        } else {
+            scores.iter().sum::<f32>() / scores.len() as f32
+        };
         if score > best_score {
             best_score = score;
             best = *op;
@@ -246,7 +314,11 @@ fn legacy_greedy(history: &[OperatorSelectionRecord], task: &str, ops: &[AtomicO
 }
 
 /// 测试内全扫描参照实现: ThreeFactor 规范原型 utility
-fn legacy_three_factor(history: &[OperatorSelectionRecord], task: &str, ops: &[AtomicOperator]) -> AtomicOperator {
+fn legacy_three_factor(
+    history: &[OperatorSelectionRecord],
+    task: &str,
+    ops: &[AtomicOperator],
+) -> AtomicOperator {
     let mut best = ops[0];
     let mut best_utility = -1.0f32;
     for op in ops {
@@ -258,7 +330,11 @@ fn legacy_three_factor(history: &[OperatorSelectionRecord], task: &str, ops: &[A
             return *op; // 未访问优先
         }
         let quality = records.iter().map(|r| r.result_score).sum::<f32>() / records.len() as f32;
-        let progress = records.iter().map(|r| r.result_score).fold(0.0f32, f32::max) - quality;
+        let progress = records
+            .iter()
+            .map(|r| r.result_score)
+            .fold(0.0f32, f32::max)
+            - quality;
         let novelty = 1.0 / (records.len() as f32 + 1.0);
         let utility = quality + progress + novelty;
         if utility > best_utility {

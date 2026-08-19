@@ -462,6 +462,10 @@ impl MembraneFilter {
                 | NexusEvent::HcwRecallReported { .. }
                 | NexusEvent::HcwRecallDegraded { .. }
                 | NexusEvent::OverWindowFallbackTriggered { .. }
+                // §16.5(Phase 10 Wave 6):L1 吞吐量观测面事件
+                | NexusEvent::BusThroughputReported { .. }
+                // §16.5(Phase 10 Wave 6):L4 沙箱拦截率观测面事件
+                | NexusEvent::SecurityInterceptionReported { .. }
         )
     }
 

@@ -46,6 +46,9 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.border.self_assessment",
     // closure Stage B-10:DAG 可视化面板
     "panel.border.dag_viz",
+    // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板
+    "panel.border.experience_card_viz",
+    "panel.border.injection_strategy",
     // 面板正文标签(U-3:i18n 从 chrome 扩展到面板正文)
     "panel.budget.title",
     "panel.budget.tier",
@@ -281,6 +284,9 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.border.self_assessment" => " 自我评估 ",
         // closure Stage B-10:DAG 可视化面板
         "panel.border.dag_viz" => " DAG 可视化 ",
+        // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板
+        "panel.border.experience_card_viz" => " 经验卡片 ",
+        "panel.border.injection_strategy" => " 注入策略 ",
         "panel.budget.title" => "预算",
         "panel.budget.tier" => "当前档位",
         "panel.budget.coefficient" => "系数",

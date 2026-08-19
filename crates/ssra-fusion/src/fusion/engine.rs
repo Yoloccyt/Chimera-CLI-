@@ -276,10 +276,7 @@ fn defensive_adapt(registry: &TemplateRegistry, base_id: &str, strategy: FusionS
     let parameter_shape = match registry.get(base_id) {
         Some(base) => base.parameter_shape.clone(),
         None => {
-            tracing::debug!(
-                base_id,
-                "防御性适配基准模板未注册,回退空参数形状"
-            );
+            tracing::debug!(base_id, "防御性适配基准模板未注册,回退空参数形状");
             Vec::new()
         }
     };
@@ -664,7 +661,11 @@ mod tests {
         // 注册后无法参与源适配器兼容性校验）
         let engine = make_engine_with_templates(8, vec![("shell-exec", 0.8, FusionStrategy::TopK)]);
         // make_engine_with_templates 以 vec!["x"] 为参数形状注册 base
-        defensive_adapt(engine.registry(), "shell-exec", FusionStrategy::WeightedAverage);
+        defensive_adapt(
+            engine.registry(),
+            "shell-exec",
+            FusionStrategy::WeightedAverage,
+        );
         let defensive = engine
             .registry()
             .get("defensive-shell-exec")

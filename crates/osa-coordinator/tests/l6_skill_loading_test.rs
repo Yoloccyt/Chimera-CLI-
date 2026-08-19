@@ -91,9 +91,7 @@ async fn graph_to_plan_to_loader_closed_loop() {
     // 4. L5 执行: loader 按同一预算加载
     let mut loader = ProgressiveSkillLoader::new(DEFAULT_PLAN_THRESHOLD);
     loader.register_index(metadata);
-    let loaded = loader
-        .load_skills(&task, 10, d2.max_full_skill_load)
-        .await;
+    let loaded = loader.load_skills(&task, 10, d2.max_full_skill_load).await;
     // L6 规划与 L5 执行一致: 唯一全量加载项 = plan.full_load_ids[0]
     let full_bodies: Vec<&str> = loaded
         .iter()

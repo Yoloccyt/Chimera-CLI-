@@ -132,6 +132,16 @@ pub enum PanelId {
     ///
     /// 数据来源：`latest_events` 过滤超窗触发事件（零管道侵入，同 SelfAssessment/DagViz）。
     OverWindow,
+    /// 经验卡片可视化面板（Phase 10 §15.2b，清华 OpenMLE）
+    ///
+    /// 展示全局卡片统计/方法分布/最佳分，数据经 ExperienceCardStatsProvider
+    /// trait 注入（D-1：chimera-tui 不直接依赖 L2+，虚假数据治理先例）。
+    ExperienceCardViz,
+    /// 上下文注入策略面板（Phase 10 §15.3，TencentDB）
+    ///
+    /// 展示动态卡片/人格摘要/缓存统计，数据经 InjectionSnapshotProvider
+    /// trait 注入（D-1 同款依赖倒置）。
+    InjectionStrategy,
 }
 
 impl PanelId {
@@ -163,6 +173,8 @@ impl PanelId {
             PanelId::PvlScore => "PvlScore",
             PanelId::TaskManager => "TaskManager",
             PanelId::OverWindow => "OverWindow",
+            PanelId::ExperienceCardViz => "ExperienceCardViz",
+            PanelId::InjectionStrategy => "InjectionStrategy",
         }
     }
 
@@ -194,6 +206,8 @@ impl PanelId {
             PanelId::PvlScore => " PVL Score ",
             PanelId::TaskManager => " Task Manager ",
             PanelId::OverWindow => " OverWindow ",
+            PanelId::ExperienceCardViz => " Card Viz ",
+            PanelId::InjectionStrategy => " Injection ",
         }
     }
 
@@ -232,6 +246,9 @@ impl PanelId {
         PanelId::PvlScore,
         PanelId::TaskManager,
         PanelId::OverWindow,
+        // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板注册
+        PanelId::ExperienceCardViz,
+        PanelId::InjectionStrategy,
     ];
 
     /// 切换到下一个面板(循环顺序,派生自 `REGISTERED_FOCUS_ORDER`)
@@ -1408,7 +1425,12 @@ mod tests {
         }
         // 关键边抽查(循环闭合 + 历史接入点)
         assert_eq!(PanelId::Quest.next(), PanelId::Parliament);
-        assert_eq!(PanelId::OverWindow.next(), PanelId::Quest, "环必须闭合");
+        // Phase 10:环尾改为 InjectionStrategy(27 面板循环)
+        assert_eq!(
+            PanelId::InjectionStrategy.next(),
+            PanelId::Quest,
+            "环必须闭合"
+        );
         assert_eq!(
             PanelId::Chtc.next(),
             PanelId::Timeline,
@@ -1432,7 +1454,8 @@ mod tests {
             );
         }
         // 关键边抽查(循环闭合)
-        assert_eq!(PanelId::Quest.prev(), PanelId::OverWindow);
+        // Phase 10:环尾改为 InjectionStrategy(27 面板循环)
+        assert_eq!(PanelId::Quest.prev(), PanelId::InjectionStrategy);
         assert_eq!(PanelId::Timeline.prev(), PanelId::Chtc);
     }
 
@@ -1468,6 +1491,9 @@ mod tests {
             PanelId::PvlScore,
             PanelId::TaskManager,
             PanelId::OverWindow,
+            // Phase 10:ExperienceCardViz/InjectionStrategy 加入往返验证(27 面板循环)
+            PanelId::ExperienceCardViz,
+            PanelId::InjectionStrategy,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);

@@ -216,10 +216,9 @@ impl ToolSchemaPruner {
             .collect();
 
         // 白名单钉住: 先分区摘出，不占 Top-K 配额
-        let (pinned, mut rest): (Vec<ScoredEntry>, Vec<ScoredEntry>) =
-            scored
-                .into_iter()
-                .partition(|(tool, _)| self.whitelist.iter().any(|w| w == &tool.name));
+        let (pinned, mut rest): (Vec<ScoredEntry>, Vec<ScoredEntry>) = scored
+            .into_iter()
+            .partition(|(tool, _)| self.whitelist.iter().any(|w| w == &tool.name));
         let pinned_count = pinned.len();
 
         // 非白名单目标保留数: max(keep, min_tools) 扣除钉住数（白名单空 = 旧语义）
@@ -306,7 +305,11 @@ impl ToolSchemaPruner {
                 )
             })
             .collect();
-        let rewards: Vec<f32> = self.decision_log.iter().map(|d| d.tokens_saved as f32).collect();
+        let rewards: Vec<f32> = self
+            .decision_log
+            .iter()
+            .map(|d| d.tokens_saved as f32)
+            .collect();
         let timestamps: Vec<u64> = self.decision_log.iter().map(|d| d.timestamp_ms).collect();
         RLTrajectory::new(episode_id, states, actions, rewards, timestamps)
     }
@@ -591,8 +594,14 @@ mod tests {
         let result = pruner.prune_tools(&available, 4);
         assert_eq!(result.kept.len(), 4, "钉住 2 + 非白名单配额 2");
         let kept_names: Vec<&str> = result.kept.iter().map(|t| t.name.as_str()).collect();
-        assert!(kept_names.contains(&"w1") && kept_names.contains(&"w2"), "钉住项");
-        assert!(kept_names.contains(&"c") && kept_names.contains(&"b"), "评分 Top-2 = c,b");
+        assert!(
+            kept_names.contains(&"w1") && kept_names.contains(&"w2"),
+            "钉住项"
+        );
+        assert!(
+            kept_names.contains(&"c") && kept_names.contains(&"b"),
+            "评分 Top-2 = c,b"
+        );
         assert!(!kept_names.contains(&"a"), "最低分被裁");
     }
 
@@ -667,7 +676,18 @@ mod tests {
         let record_err = ToolCallRecord::new("bash", "{}", "", 10);
         let make_entry = |id: &str, calls: Vec<ToolCallRecord>| {
             TokenLedgerEntry::new(
-                id, 1, "s-1", "i-1", vec![], vec![], vec![], vec![], "v1", calls, None, 0,
+                id,
+                1,
+                "s-1",
+                "i-1",
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                "v1",
+                calls,
+                None,
+                0,
             )
         };
         let entry = make_entry("e-1", vec![record_ok.clone(), record_err]);
@@ -681,10 +701,8 @@ mod tests {
         assert!(trajectories[0].steps[0].success, "result 非空 → 成功");
         assert!(!trajectories[0].steps[1].success, "result 空 → 失败");
         // 自定义分类器注入（系统边界判断由调用方决定）
-        let always_fail = prune_trajectories_from_ledger(
-            &[make_entry("e-2", vec![record_ok])],
-            |_| false,
-        );
+        let always_fail =
+            prune_trajectories_from_ledger(&[make_entry("e-2", vec![record_ok])], |_| false);
         assert!(!always_fail[0].steps[0].success);
     }
 }

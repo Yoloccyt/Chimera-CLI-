@@ -193,6 +193,39 @@ impl MlcEngine {
         (system.card_count(), system.global_board().total_nodes)
     }
 
+    /// §16.3 合成接线(Phase 10 Wave 6):按任务按需合成记忆上下文
+    ///
+    /// 组合根（L10）经此方法调用 L2 合成器（供 L6 trait 桥接实现——
+    /// faae-router `MemorySynthesizer` 依赖倒置,不引入 L6→L2 直接依赖）。
+    /// 任务内最新卡片作为合成锚点,超阈值时按 score 贪心压缩。
+    /// 返回 `None` = 任务无卡片（诚实降级,路由不受影响）。
+    ///
+    /// 锁内同步短临界区（合成器为纯函数,不跨 await,红线 §4.4-1 合规）。
+    pub fn synthesize_context(
+        &self,
+        task_id: &str,
+        operator: nexus_contracts::experience_card::AtomicOperator,
+        token_budget: usize,
+    ) -> Option<crate::on_demand_synthesizer::SynthesizedMemory> {
+        let system = self.card_system.lock().unwrap_or_else(|e| e.into_inner());
+        // 任务内最新卡片（cards 按插入序,取最后一张）作为合成锚点
+        let target = system
+            .cards()
+            .iter()
+            .rev()
+            .find(|c| c.task_id.as_ref() == task_id)?;
+        Some(
+            crate::on_demand_synthesizer::OnDemandSynthesizer::new().synthesize_with_budget(
+                &system,
+                target,
+                &operator,
+                3,
+                3,
+                token_budget,
+            ),
+        )
+    }
+
     /// 手动注入单张经验卡片（测试/非 runtime 场景用，与 with_card_bus 互补）
     pub fn ingest_experience_card(&self, card: ExperienceCard) {
         let mut system = self.card_system.lock().unwrap_or_else(|e| e.into_inner());

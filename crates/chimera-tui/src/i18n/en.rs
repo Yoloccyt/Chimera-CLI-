@@ -43,6 +43,9 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.border.self_assessment" => " Self Assessment ",
         // closure Stage B-10: DAG 可视化面板
         "panel.border.dag_viz" => " DAG Viz ",
+        // Phase 10 §15.2b/§15.3: 经验卡片可视化 + 注入策略面板
+        "panel.border.experience_card_viz" => " Card Viz ",
+        "panel.border.injection_strategy" => " Injection ",
         "panel.budget.title" => "Budget",
         "panel.budget.tier" => "Current Tier",
         "panel.budget.coefficient" => "Coefficient",

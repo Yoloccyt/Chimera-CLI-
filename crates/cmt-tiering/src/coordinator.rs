@@ -1082,10 +1082,10 @@ mod tests {
         // L3 深度优化:insert 先发布 CapabilityTierStatsReported(统计快照),
         // 循环跳过直到 CapabilityTiered(迁移事件)
         loop {
-let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-        .await
-        .expect("5s 内未收到事件(资源竞争或事件丢失)")
-        .unwrap();
+            let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("5s 内未收到事件(资源竞争或事件丢失)")
+                .unwrap();
             match event {
                 NexusEvent::CapabilityTiered {
                     from_tier, to_tier, ..
@@ -1110,10 +1110,10 @@ let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
 
         coord.get("cap-1").await.unwrap();
 
-let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-        .await
-        .expect("5s 内未收到事件(资源竞争或事件丢失)")
-        .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("5s 内未收到事件(资源竞争或事件丢失)")
+            .unwrap();
         match event {
             NexusEvent::CapabilityTiered {
                 from_tier, to_tier, ..
@@ -1169,10 +1169,10 @@ let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
 
         coord.report_tier_stats().await.unwrap();
 
-let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-        .await
-        .expect("5s 内未收到事件(资源竞争或事件丢失)")
-        .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("5s 内未收到事件(资源竞争或事件丢失)")
+            .unwrap();
         match event {
             NexusEvent::CapabilityTierStatsReported {
                 hot,

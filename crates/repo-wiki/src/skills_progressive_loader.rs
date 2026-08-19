@@ -165,10 +165,9 @@ impl ProgressiveSkillLoader {
             .collect();
         // 2: Top-N(红线 R8: select_nth O(n) 部分排序 + 前 n 局部排序保持降序)
         if max_index_count < scored.len() {
-            scored.select_nth_unstable_by(
-                max_index_count,
-                |a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal),
-            );
+            scored.select_nth_unstable_by(max_index_count, |a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
             scored.truncate(max_index_count);
         }
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

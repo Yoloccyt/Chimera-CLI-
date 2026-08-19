@@ -50,6 +50,19 @@ use nexus_contracts::{ExperienceCard, OperatorSelectionStrategy};
 /// 选择历史滚动窗口容量（铁律3 张力化解：聚合表保真统计,窗口化仅限导出粒度）
 pub const HISTORY_CAP: usize = 4096;
 
+/// §16.3 按需记忆合成提供者 — L6 经依赖倒置调用 L2 合成器（Phase 10 Wave 6）
+///
+/// WHY trait 而非直接依赖 mlc-engine: L6→L2 直接依赖违反依赖铁律
+/// （跨层通信只能走 Event Bus / MCP Mesh）。trait 注入由组合根（L10）
+/// 实现桥接（L10 同时依赖 L6 与 L2，向下合规），保持 L6 依赖面最小。
+pub trait MemorySynthesizer: Send + Sync {
+    /// 为任务与算子按需合成上下文提示
+    ///
+    /// 返回 `Some(摘要文本)` = 合成成功;`None` = 无可用上下文（诚实降级，
+    /// 路由不受影响）。
+    fn synthesize_context(&self, task_id: &str, operator: AtomicOperator) -> Option<String>;
+}
+
 /// per-(task_type, operator) 增量聚合 — 四策略 O(K) 查询的统计底座
 ///
 /// 与全历史扫描的等价性由 proptest 锁定（Greedy/ThreeFactor/UCB 三策略）。
@@ -103,6 +116,10 @@ pub struct OperatorRouter {
     total_selections: u32,
     /// ThreeFactor Softmax 委托选择器（D-3；None = 规范原型 argmax）
     three_factor_selector: Option<ThreeFactorSelector>,
+    /// §16.3 按需合成注入点（Wave 6;None = 未装配,路由不合成上下文）
+    synthesizer: Option<std::sync::Arc<dyn MemorySynthesizer>>,
+    /// 最近一次合成摘要（可观测性;None = 从未合成或无可合成上下文）
+    last_synthesis: Option<String>,
 }
 
 /// 四算子规范序 — `select_operator` 适用集的确定性迭代序
@@ -141,6 +158,8 @@ impl OperatorRouter {
             cooling_rate: 0.01,
             total_selections: 0,
             three_factor_selector: None,
+            synthesizer: None,
+            last_synthesis: None,
         }
     }
 
@@ -158,6 +177,15 @@ impl OperatorRouter {
     /// UCB + Softmax + 冷却能力；L6 仅做算子历史 → 伪卡片投影。
     pub fn with_three_factor_selector(mut self, selector: ThreeFactorSelector) -> Self {
         self.three_factor_selector = Some(selector);
+        self
+    }
+
+    /// §16.3 注入按需记忆合成器（Wave 6）— 组合根装配时经 trait 桥接 L2
+    ///
+    /// 选择完成后调用注入的合成器,将合成上下文摘要记录到
+    /// `last_synthesis`（可观测性;不阻塞选择主路径）。
+    pub fn with_synthesizer(mut self, synthesizer: std::sync::Arc<dyn MemorySynthesizer>) -> Self {
+        self.synthesizer = Some(synthesizer);
         self
     }
 
@@ -205,6 +233,11 @@ impl OperatorRouter {
             OperatorSelectionStrategy::Cooling => self.select_cooling(task_type, &applicable),
         };
         self.total_selections += 1;
+        // §16.3 合成接线(Wave 6):选择后经注入点调用 L2 按需合成(依赖倒置,
+        // 不引入 L6→L2 直接依赖);None = 未装配或无可合成上下文,静默跳过。
+        if let (Some(synth), Some(op)) = (&self.synthesizer, selected) {
+            self.last_synthesis = synth.synthesize_context(task_type, op);
+        }
         selected
     }
 
@@ -307,6 +340,11 @@ impl OperatorRouter {
         self.selection_strategy
     }
 
+    /// 最近一次合成摘要只读访问（可观测性;None = 未装配/无可合成上下文）
+    pub fn last_synthesis(&self) -> Option<&str> {
+        self.last_synthesis.as_deref()
+    }
+
     /// 获取算子实例只读引用（供调用方 execute 执行）
     pub fn get_operator(
         &self,
@@ -389,8 +427,7 @@ impl OperatorRouter {
                     let avg_reward = a.score_sum / a.visits as f32;
                     avg_reward
                         + self.ucb_constant
-                            * ((2.0 * (self.total_selections as f32).ln()) / a.visits as f32)
-                                .sqrt()
+                            * ((2.0 * (self.total_selections as f32).ln()) / a.visits as f32).sqrt()
                 }
                 _ => f32::MAX, // 未访问算子优先
             };
@@ -624,5 +661,39 @@ mod tests {
                 Some(AtomicOperator::Draft) | Some(AtomicOperator::Crossover)
             ));
         }
+    }
+
+    /// §16.3 合成接线(Wave 6):未注入合成器时 last_synthesis 为 None
+    #[test]
+    fn without_synthesizer_no_synthesis_recorded() {
+        let mut router = OperatorRouter::new(OperatorSelectionStrategy::Greedy);
+        let selected = router.select_operator("code_gen", &context("build parser"));
+        assert!(selected.is_some(), "无合成器不影响路由主路径");
+        assert_eq!(router.last_synthesis(), None, "未注入合成器不合成");
+    }
+
+    /// §16.3 合成接线(Wave 6):注入合成器后选择即调用,last_synthesis 记录摘要
+    #[test]
+    fn with_synthesizer_invoked_after_selection() {
+        // 测试合成器:固定返回摘要文本(验证调用链成立)
+        struct FakeSynthesizer;
+        impl MemorySynthesizer for FakeSynthesizer {
+            fn synthesize_context(
+                &self,
+                task_id: &str,
+                operator: AtomicOperator,
+            ) -> Option<String> {
+                Some(format!("synth[{task_id}:{operator:?}]"))
+            }
+        }
+        let mut router = OperatorRouter::new(OperatorSelectionStrategy::Greedy)
+            .with_synthesizer(std::sync::Arc::new(FakeSynthesizer));
+        let selected = router.select_operator("code_gen", &context("build parser"));
+        assert!(selected.is_some());
+        let synthesis = router.last_synthesis().expect("选择后应调用合成器");
+        assert!(
+            synthesis.starts_with("synth[code_gen:"),
+            "摘要应含任务与算子(实际 {synthesis})"
+        );
     }
 }

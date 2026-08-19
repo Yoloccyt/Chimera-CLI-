@@ -136,9 +136,7 @@ async fn runtime_keep_count_update_from_control_plane() {
 
     // 控制面关闭 → 回到不裁剪
     coord.set_tool_keep_count(None);
-    let masks_restored = coord
-        .compute_all_masks(&profile_with_tools(vec![]))
-        .await;
+    let masks_restored = coord.compute_all_masks(&profile_with_tools(vec![])).await;
     assert!(masks_restored.is_ok());
 }
 
@@ -183,7 +181,20 @@ async fn ledger_to_mask_closed_loop() {
     // 闭环 2: TokenLedger → PruneTrajectory → analyze → coordinator 裁剪
     let make_entry = |id: &str, tool: &str, result: &str| {
         let calls = vec![ToolCallRecord::new(tool, "{}", result, 10)];
-        TokenLedgerEntry::new(id, 1, "s-1", "i-1", vec![], vec![], vec![], vec![], "v1", calls, None, 0)
+        TokenLedgerEntry::new(
+            id,
+            1,
+            "s-1",
+            "i-1",
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            "v1",
+            calls,
+            None,
+            0,
+        )
     };
     let entries = vec![
         make_entry("e-1", "tool-0", "ok"),
@@ -211,7 +222,10 @@ async fn ledger_to_mask_closed_loop() {
         .compute_all_masks(&profile_with_tools(tools))
         .await
         .expect("掩码计算");
-    assert!(masks.routing.is_active(&ToolId::new("tool-0")), "高频工具幸存");
+    assert!(
+        masks.routing.is_active(&ToolId::new("tool-0")),
+        "高频工具幸存"
+    );
     // tokens_saved 观测: 1225 总 - 425 保留 = 800（schema_tokens 注入后真实计量）
     let prune = coord.last_prune_result().expect("裁剪记录");
     assert_eq!(prune.tokens_saved, 800);

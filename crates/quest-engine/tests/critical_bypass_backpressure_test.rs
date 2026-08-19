@@ -169,12 +169,14 @@ fn audit_critical_events() -> Vec<NexusEvent> {
     ]
 }
 
-/// 审计 19 清单 ∩ mpsc 旁路触发集(bus.rs `is_critical_mpsc_event`)= 9 个
+/// 审计 19 清单 ∩ mpsc 旁路触发集(bus.rs `is_critical_mpsc_event`)= 10 个
 ///
-/// 旁路触发集:SkepticVeto/RedTeamAudit/BudgetExceeded/AgentTaskFailed(P1-2 纳入)/
-/// AsaIntervention/AffinityQuotaExhausted/R2FreezeViolation/R2FreezeRollbackFailed/
-/// FormalViolation(P1-5 升级)。此集合与 `severity()` 是两张独立清单
-/// (双清单同步红线),本测试仅锁定审计 19 清单 ∩ 旁路集的交集。
+/// 旁路触发集(Phase 10 Wave 5 对齐后 13 类):SkepticVeto/RedTeamAudit/
+/// BudgetExceeded/AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/
+/// R2FreezeViolation/R2FreezeRollbackFailed/FormalViolation/VetoOverridden/
+/// R1ShadowRollbackFailed/StopRulingIssued/ErrorSignatureMatched。
+/// 此集合与 `severity()` 是两张独立清单(双清单同步红线),
+/// 本测试仅锁定审计清单 ∩ 旁路集的交集。
 fn is_audit_bypass_event(event: &NexusEvent) -> bool {
     matches!(
         event,
@@ -187,6 +189,8 @@ fn is_audit_bypass_event(event: &NexusEvent) -> bool {
             | NexusEvent::R2FreezeViolation { .. }
             | NexusEvent::R2FreezeRollbackFailed { .. }
             | NexusEvent::FormalViolation { .. }
+            // Phase 10 Wave 5:否决覆盖审计纳入旁路(审计清单内,交集 +1)
+            | NexusEvent::VetoOverridden { .. }
     )
 }
 
@@ -212,7 +216,8 @@ async fn recv_critical(
 
 /// 测试 1(容量内投递):注入 20 个事件(19 Critical + 1 Normal),
 /// 断言全部投递成功 —— broadcast 保序收到全部 20 个,mpsc 旁路收到且仅收到
-/// 旁路触发集内 9 个 Critical 事件,全程 `critical_dropped_count == 0`。
+/// 旁路触发集内 10 个 Critical 事件(Phase 10 Wave 5:9→10),
+/// 全程 `critical_dropped_count == 0`。
 #[tokio::test]
 async fn critical_events_within_capacity_all_delivered() {
     let bus = EventBus::new();
@@ -252,14 +257,15 @@ async fn critical_events_within_capacity_all_delivered() {
     let extra = tokio::time::timeout(Duration::from_millis(100), broadcast_rx.recv()).await;
     assert!(extra.is_err(), "broadcast 不应有多余事件");
 
-    // mpsc 旁路侧:收到且仅收到旁路触发集 ∩ 审计 19 清单的 9 个事件
+    // mpsc 旁路侧:收到且仅收到旁路触发集 ∩ 审计清单的 10 个事件
+    // (Phase 10 Wave 5:VetoOverridden 纳入旁路,交集 9→10)
     let mut bypass_received: HashSet<String> = HashSet::new();
-    for _ in 0..9 {
+    for _ in 0..10 {
         match recv_critical(&mut critical_rx, Duration::from_secs(2)).await {
             Some(event) => {
                 bypass_received.insert(event.type_name().to_string());
             }
-            None => panic!("旁路应收到 9 个 mpsc Critical 事件"),
+            None => panic!("旁路应收到 10 个 mpsc Critical 事件"),
         }
     }
     let expected_bypass: HashSet<String> = [
@@ -272,6 +278,7 @@ async fn critical_events_within_capacity_all_delivered() {
         "R2FreezeViolation",
         "R2FreezeRollbackFailed",
         "FormalViolation",
+        "VetoOverridden",
     ]
     .iter()
     .map(|s| s.to_string())

@@ -122,6 +122,30 @@ impl TokenLedger {
         Ok(())
     }
 
+    /// 追加账本条目并发布 `TokenLedgerRecorded`(§16.4 L1→L3 事件化,Phase 10 Wave 4)
+    ///
+    /// opt-in 接线:既有 `append` 行为不变(零回归);需要通知 L3 持久化
+    /// 通道的调用方使用本方法。发布失败仅告警不上抛(账本写入已成功,
+    /// 事件丢失可由 L3 周期同步补偿)。铁律8 Token 证据全链路追踪。
+    pub fn append_and_notify(
+        &self,
+        entry: TokenLedgerEntry,
+        bus: &crate::EventBus,
+    ) -> Result<(), LedgerError> {
+        let evidence_id = entry.entry_id.to_string();
+        let token_usage = (entry.input_token_ids.len() + entry.output_token_ids.len()) as u64;
+        self.append(entry)?;
+        // sync 上下文用 publish_blocking(§4.4 红线 8)
+        if let Err(e) = bus.publish_blocking(crate::NexusEvent::TokenLedgerRecorded {
+            metadata: crate::EventMetadata::new("event-bus"),
+            evidence_id,
+            token_usage,
+        }) {
+            tracing::warn!(error = %e, "TokenLedgerRecorded 发布失败(账本写入已成功)");
+        }
+        Ok(())
+    }
+
     /// 按会话检索条目 ID（索引 1）
     pub fn session_entry_ids(&self, session_id: &str) -> Vec<String> {
         self.by_session

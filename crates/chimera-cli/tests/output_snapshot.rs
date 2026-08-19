@@ -71,7 +71,11 @@ impl serde::Serialize for Unserializable {
 #[test]
 fn json_envelope_unserializable_returns_err() {
     let result = render_json(&Unserializable);
-    assert!(result.is_err(), "自定义不可序列化类型应返回 Err,实际: {:?}", result);
+    assert!(
+        result.is_err(),
+        "自定义不可序列化类型应返回 Err,实际: {:?}",
+        result
+    );
 }
 
 /// 异常路径:错误 envelope 结构(JsonError)独立于成功路径

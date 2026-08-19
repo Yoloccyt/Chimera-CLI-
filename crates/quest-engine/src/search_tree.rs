@@ -45,6 +45,13 @@ use nexus_contracts::experience_card::{
 use nexus_contracts::ExperienceCard;
 use thiserror::Error;
 
+use crate::memory_sync_hook::{MemorySyncHook, NoopMemorySyncHook};
+
+/// 默认记忆同步钩子（serde 反序列化时用，trait 对象不可序列化）
+fn default_memory_sync_hook() -> Box<dyn MemorySyncHook> {
+    Box::new(NoopMemorySyncHook)
+}
+
 /// 搜索树错误（库层 thiserror，§4.1）
 #[derive(Debug, Error, PartialEq)]
 pub enum TreeError {
@@ -70,7 +77,15 @@ pub struct TreeStats {
 }
 
 /// 搜索树管理器 — OpenMLE 经验卡片进化树（规范 §14.1）
-#[derive(Debug, Default)]
+///
+/// 派生 `Serialize + Deserialize` 支持 LHQP 检查点联动（Wave 2）：
+/// 搜索树状态可序列化为 MessagePack bytes，与 Checkpoint 关联存储，
+/// 检查点恢复时重建搜索树。ExperienceCard 已有 serde，HashMap 天然支持。
+///
+/// L2 记忆层协同（Wave 3）：可选注入 [`MemorySyncHook`]，best_node 更新时
+/// 同步最优路径摘要到记忆层；默认 Noop（不破坏既有 new() 行为）。
+/// hook 为 trait 对象不可序列化，`#[serde(skip)]` 反序列化时用 Noop 重建。
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SearchTreeManager {
     /// 节点表: node_id → 经验卡片（铁律3 只读承载）
     nodes: HashMap<String, ExperienceCard>,
@@ -82,6 +97,22 @@ pub struct SearchTreeManager {
     max_depth: u32,
     /// 当前最佳节点 ID
     best_node_id: Option<String>,
+    /// L2 记忆层同步钩子（Wave 3，依赖倒置，默认 Noop）
+    #[serde(skip, default = "default_memory_sync_hook")]
+    memory_sync_hook: Box<dyn MemorySyncHook>,
+}
+
+impl Default for SearchTreeManager {
+    fn default() -> Self {
+        Self {
+            nodes: HashMap::new(),
+            children: HashMap::new(),
+            node_depth: HashMap::new(),
+            max_depth: 0,
+            best_node_id: None,
+            memory_sync_hook: Box::new(NoopMemorySyncHook),
+        }
+    }
 }
 
 impl SearchTreeManager {
@@ -91,6 +122,14 @@ impl SearchTreeManager {
             max_depth,
             ..Default::default()
         }
+    }
+
+    /// 注入 L2 记忆层同步钩子（Wave 3，依赖倒置，不破坏既有 new() 行为）
+    ///
+    /// 未注入时默认 Noop；注入后 best_node 更新时同步最优路径摘要到记忆层。
+    pub fn with_memory_sync_hook(mut self, hook: Box<dyn MemorySyncHook>) -> Self {
+        self.memory_sync_hook = hook;
+        self
     }
 
     /// 创建任务根节点（规范 §14.1 create_root）
@@ -251,18 +290,42 @@ impl SearchTreeManager {
     }
 
     /// 追踪最佳节点（分数严格大于当前最佳才更新）
+    ///
+    /// best_node 更新时同步调用 L2 记忆层钩子（Wave 3），
+    /// 传递最优路径摘要（根 → best 节点的 method_family 链）。
     fn update_best_node(&mut self, node_id: &str) {
-        if let Some(new_card) = self.nodes.get(node_id) {
-            let should_update = self
-                .best_node_id
-                .as_ref()
-                .and_then(|id| self.nodes.get(id))
-                .map(|best| new_card.score > best.score)
-                .unwrap_or(true);
-            if should_update {
-                self.best_node_id = Some(node_id.to_string());
-            }
+        // 先取新节点分数与 task_id（不可变借用，NLL 结束后才可可变更新）
+        let new_score = self.nodes.get(node_id).map(|c| c.score);
+        let Some(new_score) = new_score else {
+            return;
+        };
+        let should_update = self
+            .best_node_id
+            .as_ref()
+            .and_then(|id| self.nodes.get(id))
+            .map(|best| new_score > best.score)
+            .unwrap_or(true);
+        if should_update {
+            self.best_node_id = Some(node_id.to_string());
+            // Wave 3: best_node 更新时同步最优路径摘要到 L2 记忆层
+            let task_id = self
+                .nodes
+                .get(node_id)
+                .map(|c| c.task_id.to_string())
+                .unwrap_or_default();
+            let summary = self.best_path_summary();
+            self.memory_sync_hook
+                .on_search_tree_best_path(&task_id, &summary);
         }
+    }
+
+    /// 最优路径摘要 — 根 → best 节点的 method_family 链（Wave 3，供 L2 记忆层）
+    fn best_path_summary(&self) -> String {
+        self.get_best_path()
+            .iter()
+            .map(|c| c.method_family.as_ref().to_string())
+            .collect::<Vec<_>>()
+            .join(" → ")
     }
 
     /// 根节点 ID（node_depth=0 的唯一节点）
@@ -271,6 +334,26 @@ impl SearchTreeManager {
             .iter()
             .find(|(_, depth)| **depth == 0)
             .map(|(id, _)| id.clone())
+    }
+
+    /// 序列化为 MessagePack bytes（LHQP 检查点联动，Wave 2）
+    ///
+    /// 搜索树状态序列化后由调用方与 Checkpoint 关联存储（不修改 L0 Checkpoint）。
+    ///
+    /// # 错误
+    /// - `QuestError::SerializationError`: MessagePack 编码失败
+    pub fn to_bytes(&self) -> Result<Vec<u8>, crate::error::QuestError> {
+        rmp_serde::to_vec(self)
+            .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))
+    }
+
+    /// 从 MessagePack bytes 反序列化重建搜索树（LHQP 检查点恢复）
+    ///
+    /// # 错误
+    /// - `QuestError::SerializationError`: MessagePack 解码失败（数据损坏/版本不兼容）
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, crate::error::QuestError> {
+        rmp_serde::from_slice(bytes)
+            .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))
     }
 }
 

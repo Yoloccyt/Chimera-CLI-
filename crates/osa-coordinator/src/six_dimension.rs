@@ -137,8 +137,8 @@ impl SixDimensionAdjuster {
                 ..
             } => {
                 // 三路由器平均命中率（确定性聚合，死区控制器）
-                let avg = (kvbsr_stats.hit_rate + sesa_stats.hit_rate + faae_stats.hit_rate)
-                    / 3.0f32;
+                let avg =
+                    (kvbsr_stats.hit_rate + sesa_stats.hit_rate + faae_stats.hit_rate) / 3.0f32;
                 self.adjust_retrieval_top_k(avg);
             }
             NexusEvent::BudgetExceeded { .. } => self.tighten_tools_per_step(),
@@ -243,11 +243,10 @@ impl SixDimensionAdjuster {
             return; // 死区: 防止规则与统计噪声振荡
         };
         let old = self.contract.d2_tool.retrieval_top_k as i64;
-        let new = (old + delta)
-            .clamp(
-                self.limits.min_retrieval_top_k as i64,
-                self.limits.max_retrieval_top_k as i64,
-            );
+        let new = (old + delta).clamp(
+            self.limits.min_retrieval_top_k as i64,
+            self.limits.max_retrieval_top_k as i64,
+        );
         if new == old {
             return; // 边界 no-op
         }
@@ -482,7 +481,10 @@ mod tests {
     fn version_bump_and_hash_recompute() {
         let mut adjuster = SixDimensionAdjuster::new();
         assert_eq!(adjuster.current_contract().version, "0.1.0");
-        assert!(adjuster.current_contract().hash.is_empty(), "默认契约 hash 由消费方填充");
+        assert!(
+            adjuster.current_contract().hash.is_empty(),
+            "默认契约 hash 由消费方填充"
+        );
         adjuster.apply_feedback(&budget_exceeded());
         let contract = adjuster.current_contract();
         assert_eq!(contract.version, "0.1.1", "patch 递增");
@@ -516,7 +518,10 @@ mod tests {
         adjuster.apply_feedback(&budget_exceeded());
         let trajectory = adjuster.export_trajectory("episode-w2");
         assert_eq!(trajectory.len(), 3, "2(召回) + 1(预算)");
-        assert_eq!(trajectory.actions[0].layer.as_ref(), "l6_six_dimension_adjuster");
+        assert_eq!(
+            trajectory.actions[0].layer.as_ref(),
+            "l6_six_dimension_adjuster"
+        );
         // 维度编码: D1 x2 + D2 x1
         assert_eq!(trajectory.actions[0].action_code, 1);
         assert_eq!(trajectory.actions[2].action_code, 2);

@@ -45,6 +45,10 @@ pub mod engine;
 pub mod error;
 /// Phase 9 §14.2: 长任务地图（TencentDB 机制：短摘要入上下文 + 详情外置 + 地图注入）
 pub mod long_task_map;
+/// Phase 9 二次审查增强 §14.4: 长时程信用分配器（SHARP 统计版时间维度）
+pub mod long_term_credit;
+/// Phase 9 二次审查增强: L2 记忆层协同接口（MemorySyncHook 依赖倒置）
+pub mod memory_sync_hook;
 pub mod metrics_sync;
 /// Phase 9 §14.1: OpenMLE 搜索树管理器（经验卡片进化树，与 dag.rs 任务 DAG 语义分离）
 pub mod search_tree;
@@ -80,6 +84,10 @@ pub use long_task_map::{
 };
 // Phase 9 §14.1: OpenMLE 搜索树公开 API 重导出
 pub use search_tree::{SearchTreeManager, TreeError, TreeStats};
+// Phase 9 二次审查增强 §14.4: 长时程信用分配器公开 API 重导出
+pub use long_term_credit::{CreditAssignment, CreditStep, LongTermCreditAssigner};
+// Phase 9 二次审查增强: L2 记忆层协同接口公开 API 重导出
+pub use memory_sync_hook::{MemorySyncHook, NoopMemorySyncHook};
 // 协调度量接线闭环:待合并样本与观测事件订阅器
 // (消费 DebateCompleted / DelegationCompleted,填充协调成本 Option 字段)
 pub use metrics_sync::{

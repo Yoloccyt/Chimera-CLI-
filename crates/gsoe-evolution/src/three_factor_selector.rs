@@ -101,12 +101,18 @@ impl ThreeFactorSelector {
 
         // Softmax 温度采样
         let selected = self.softmax_sample(&scored)?;
-        *self
-            .visit_counts
-            .entry(selected.node_id.to_string())
-            .or_insert(0) += 1;
-        self.total_visits += 1;
+        self.register_visit(&selected.node_id);
         Some(selected)
+    }
+
+    /// 注册一次节点访问 — 计数同步入口(§16.4 ParentSelected 消费接线)
+    ///
+    /// 外部选择路径(如 L10 组合根发布的 ParentSelected 事件)经事件订阅器
+    /// 调用本方法,使 visit_counts/total_visits 与 select() 内部选择同步演化,
+    /// 保持 UCB bonus 探索/利用平衡的一致性。
+    pub fn register_visit(&mut self, node_id: &str) {
+        *self.visit_counts.entry(node_id.to_string()).or_insert(0) += 1;
+        self.total_visits += 1;
     }
 
     /// UCB 探索 bonus — 未访问节点返回 MAX，否则 √(2·ln(N)/n)

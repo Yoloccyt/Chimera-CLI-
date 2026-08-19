@@ -206,6 +206,58 @@ impl ErrorSignatureCollector {
     pub fn unique_signature_count(&self) -> usize {
         self.signature_frequency.len()
     }
+
+    /// 提取并检查是否为重复签名 — §16.4 ErrorSignatureMatched 发布辅助
+    ///
+    /// 返回 `(Option<ErrorSignature>, is_repeat)`:
+    /// - `is_repeat = true` 当且仅当该哈希此前已出现过(频率 > 1),
+    ///   即 Debug 算子"相同错误签名兄弟"检索的事件化条件满足。
+    /// - 调用方可据此决定是否发布 `ErrorSignatureMatched` 事件。
+    pub fn extract_and_check_repeat(
+        &mut self,
+        output: &str,
+        location: &str,
+    ) -> (Option<ErrorSignature>, bool) {
+        let sig = self.extract(output, location);
+        let is_repeat = sig
+            .as_ref()
+            .map(|s| {
+                self.signature_frequency
+                    .get(s.error_hash.as_ref())
+                    .copied()
+                    .unwrap_or(0)
+                    > 1
+            })
+            .unwrap_or(false);
+        (sig, is_repeat)
+    }
+
+    /// §16.4 事件发布辅助:提取签名并在重复时发布 ErrorSignatureMatched
+    ///
+    /// 组合根调用入口:将 ErrorSignatureCollector + EventBus 桥接,
+    /// 避免调用方手动判断 is_repeat + 构造事件 + 发布。
+    /// 返回提取到的签名(无论是否重复)。
+    pub fn extract_and_publish(
+        &mut self,
+        bus: &event_bus::EventBus,
+        output: &str,
+        location: &str,
+    ) -> Option<ErrorSignature> {
+        let (sig, is_repeat) = self.extract_and_check_repeat(output, location);
+        if is_repeat {
+            if let Some(ref s) = sig {
+                // 重复签名命中 → 发布 Critical 事件(Debug 算子检索同签名兄弟)
+                if let Err(e) = bus.publish_blocking(event_bus::NexusEvent::ErrorSignatureMatched {
+                    metadata: event_bus::EventMetadata::new("seccore"),
+                    error_hash: s.error_hash.to_string(),
+                    matched_card_ids: vec![], // L3 关联卡片由消费端按需填充
+                }) {
+                    tracing::warn!(error = %e, "ErrorSignatureMatched 发布失败");
+                }
+            }
+        }
+        sig
+    }
 }
 
 impl Default for ErrorSignatureCollector {
@@ -361,6 +413,46 @@ mod tests {
             sig.error_summary.chars().count(),
             SUMMARY_MAX_LEN,
             "摘要应截取前 100 字符"
+        );
+    }
+
+    /// §16.4 extract_and_check_repeat:首次出现不重复,第二次出现即重复
+    #[test]
+    fn extract_and_check_repeat_detects_duplicate() {
+        let mut collector = ErrorSignatureCollector::new();
+        let output = "error[E0308]: mismatched types";
+        // 首次:频率 1,不重复
+        let (sig1, is_repeat1) = collector.extract_and_check_repeat(output, "loc");
+        assert!(sig1.is_some(), "应匹配");
+        assert!(!is_repeat1, "首次出现不应标记重复");
+        // 第二次:频率 2,重复
+        let (sig2, is_repeat2) = collector.extract_and_check_repeat(output, "loc");
+        assert!(sig2.is_some(), "应匹配");
+        assert!(is_repeat2, "第二次出现应标记重复");
+    }
+
+    /// §16.4 extract_and_publish:重复签名时发布 ErrorSignatureMatched 事件
+    #[tokio::test]
+    async fn extract_and_publish_emits_event_on_repeat() {
+        let bus = event_bus::EventBus::new();
+        let mut collector = ErrorSignatureCollector::new();
+        let output = "error[E0308]: mismatched types";
+        // 先订阅再发布(subscribe-before-spawn 红线)
+        let mut rx = bus.subscribe();
+        // 首次:不发布
+        let sig1 = collector.extract_and_publish(&bus, output, "loc");
+        assert!(sig1.is_some());
+        // 第二次:发布 ErrorSignatureMatched
+        let sig2 = collector.extract_and_publish(&bus, output, "loc");
+        assert!(sig2.is_some());
+        // 消费事件
+        let event = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("应收到事件")
+            .expect("接收成功");
+        assert!(
+            matches!(event, event_bus::NexusEvent::ErrorSignatureMatched { .. }),
+            "应为 ErrorSignatureMatched"
         );
     }
 }

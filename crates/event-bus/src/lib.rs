@@ -5,7 +5,7 @@
 //!
 //! # 核心职责
 //! - 提供类型安全的发布订阅(typed broadcast bus)
-//! - 定义 134 个 NexusEvent 跨层事件变体(v2.26.0-omega 实测枚举),
+//! - 定义 144 个 NexusEvent 跨层事件变体(v2.27.0-omega 实测枚举),
 //!   修正 4 处依赖方向违规(Part A 分析)
 //! - 背压处理与慢消费者隔离,避免孤儿调用(架构红线)
 //! - MessagePack 序列化(ADR-004),支持跨进程投递
@@ -110,6 +110,8 @@ pub use bus::{
     deserialize_json, deserialize_msgpack, serialize_json, serialize_msgpack, EventBus,
     EventReceiver, DEFAULT_CAPACITY,
 };
+// §16.5 L1 吞吐量周期报告器(Phase 10 Wave 6)
+pub use crate::bus::spawn_throughput_reporter;
 pub use error::EventBusError;
 pub use formal::CausalConsistencyChecker;
 pub use logging::BusLogger;

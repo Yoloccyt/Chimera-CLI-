@@ -173,10 +173,7 @@ pub fn plan_skill_load(
 }
 
 /// 由规划合成加载进度（W3 进度追踪）
-pub fn progress_from_plan(
-    index: &[SkillIndexEntry],
-    plan: &SkillLoadPlan,
-) -> SkillLoadProgress {
+pub fn progress_from_plan(index: &[SkillIndexEntry], plan: &SkillLoadPlan) -> SkillLoadProgress {
     let est_full_body_bytes = index
         .iter()
         .filter(|e| plan.full_load_ids.contains(&e.skill_id))
@@ -226,7 +223,13 @@ mod tests {
             entry("far", 1, 100),
             entry("mid", 2, 100),
         ];
-        let plan = plan_skill_load(&d2(true, 4), &unit_clv(0), &index, &[], DEFAULT_PLAN_THRESHOLD);
+        let plan = plan_skill_load(
+            &d2(true, 4),
+            &unit_clv(0),
+            &index,
+            &[],
+            DEFAULT_PLAN_THRESHOLD,
+        );
         assert_eq!(plan.full_load_ids, vec!["near".to_string()]);
         assert!(plan.index_only_ids.is_empty(), "候选仅 1 个且预算充足");
         assert_eq!(plan.skipped_count, 2, "sim=0 低于门控跳过");
@@ -237,7 +240,13 @@ mod tests {
     fn budget_cap_enforced() {
         // 5 个同分候选,预算 2 → 仅 2 全量,其余 3 仅索引
         let index: Vec<_> = (0..5).map(|i| entry(&format!("s{i}"), 0, 10)).collect();
-        let plan = plan_skill_load(&d2(true, 2), &unit_clv(0), &index, &[], DEFAULT_PLAN_THRESHOLD);
+        let plan = plan_skill_load(
+            &d2(true, 2),
+            &unit_clv(0),
+            &index,
+            &[],
+            DEFAULT_PLAN_THRESHOLD,
+        );
         assert_eq!(plan.full_load_ids.len(), 2);
         assert_eq!(plan.index_only_ids.len(), 3);
         assert_eq!(plan.skipped_count, 0);
@@ -274,7 +283,13 @@ mod tests {
     fn progressive_disabled_means_full_load() {
         // 渐进关闭 → 全量加载语义（控制面决策的诚实反映）
         let index = vec![entry("a", 1, 10), entry("b", 2, 10)];
-        let plan = plan_skill_load(&d2(false, 1), &unit_clv(0), &index, &[], DEFAULT_PLAN_THRESHOLD);
+        let plan = plan_skill_load(
+            &d2(false, 1),
+            &unit_clv(0),
+            &index,
+            &[],
+            DEFAULT_PLAN_THRESHOLD,
+        );
         assert!(!plan.progressive_enabled);
         assert_eq!(plan.full_load_ids.len(), 2, "关闭渐进 = 全量");
         assert_eq!(plan.skipped_count, 0);
@@ -288,7 +303,13 @@ mod tests {
             entry("c", 0, 300),
             entry("far", 1, 50),
         ];
-        let plan = plan_skill_load(&d2(true, 2), &unit_clv(0), &index, &[], DEFAULT_PLAN_THRESHOLD);
+        let plan = plan_skill_load(
+            &d2(true, 2),
+            &unit_clv(0),
+            &index,
+            &[],
+            DEFAULT_PLAN_THRESHOLD,
+        );
         let progress = progress_from_plan(&index, &plan);
         assert_eq!(progress.indexed_total, 4);
         assert_eq!(progress.candidates, 3);
@@ -327,7 +348,11 @@ mod tests {
         assert_eq!(plan.full_load_ids.len(), 3);
         assert_eq!(
             plan.full_load_ids,
-            vec!["cand-a".to_string(), "cand-c".to_string(), "cand-b".to_string()]
+            vec![
+                "cand-a".to_string(),
+                "cand-c".to_string(),
+                "cand-b".to_string()
+            ]
         );
     }
 }

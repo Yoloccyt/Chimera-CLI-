@@ -63,6 +63,8 @@ pub mod operator_router;
 pub mod parent_context;
 pub mod router;
 pub mod types;
+/// Phase 10 Wave 4: §16.4 变体/父本事件消费订阅器（VariantApproved + ParentSelected 接线）
+pub mod variant_subscriber;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use card_feedback::{spawn_card_feedback_loop, SharedOperatorRouter};
@@ -71,11 +73,16 @@ pub use edsb::EdsbBalancer;
 pub use error::FaaeError;
 // Phase 6 §11.2: 算子路由器公开 API 重导出（W4 含聚合表/轨迹导出/热切换）
 pub use operator_router::{
-    OperatorAggregate, OperatorRouter, OperatorSelectionRecord, HISTORY_CAP,
+    MemorySynthesizer, OperatorAggregate, OperatorRouter, OperatorSelectionRecord, HISTORY_CAP,
 };
 pub use parent_context::{ParentContextProvider, ParentSelection};
 pub use router::FaaeRouter;
 pub use types::{EntropyStats, ExpertProfile, ExpertProfileSnapshot, RoutingResult, ToolId};
+// Phase 10 Wave 4: §16.4 事件消费订阅器公开 API 重导出
+pub use variant_subscriber::{
+    spawn_variant_event_subscriber, ApprovedVariant, ApprovedVariantRegistry,
+    ParentSelectionHistory, ParentSelectionRecord,
+};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {

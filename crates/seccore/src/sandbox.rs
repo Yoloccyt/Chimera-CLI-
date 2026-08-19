@@ -19,6 +19,7 @@
 //! 4. 审计记录(audit_chain.append):SHA-256 Merkle 链,不可篡改
 
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
@@ -31,6 +32,8 @@ use crate::audit::{AuditChain, AuditRecordStatus, DecisionChainBuilder, RecordId
 use crate::error::SecCoreError;
 use crate::escalation::{DefaultEscalationHandler, EscalationHandler};
 use crate::gvisor::GvisorRuntime;
+// §16.5(Phase 10 Wave 6):沙箱拦截率统计(真实采集)
+use crate::interception_stats::InterceptorStats;
 use crate::policy::{validate_command, validate_env, CommandPolicy, EnvPolicy};
 use crate::types::{Command, CommandSpec, EscalationTier, ExecutionResult};
 
@@ -95,6 +98,8 @@ pub struct Sandbox {
     /// 既有测试零改动。生产代码通过 `with_event_bus` 注入共享总线,
     /// 复用 asa.rs 的注入模式(L4 → L1 依赖合规)。
     event_bus: Option<EventBus>,
+    /// §16.5(Phase 10 Wave 6):拦截率统计(请求/拦截原子计数,周期报告)
+    stats: Arc<InterceptorStats>,
 }
 
 // ============================================================
@@ -129,6 +134,7 @@ impl Sandbox {
             use_gvisor: true,
             gvisor_runtime: None,
             event_bus: None,
+            stats: Arc::new(InterceptorStats::new()),
         }
     }
 
@@ -251,6 +257,20 @@ impl Sandbox {
         self.asa_auditor.as_ref()
     }
 
+    /// §16.5(Phase 10 Wave 6):拦截率统计只读快照 `(total, blocked, rate)`
+    ///
+    /// 真实采集:总请求数在 `audit_and_execute` 入口递增,拦截数在任一
+    /// 防御层拒绝时递增。误拦截率需人工真值标注,标注 v4.0 预留(不假采集)。
+    pub fn interception_stats(&self) -> (u64, u64, f64) {
+        let (total, blocked) = self.stats.snapshot();
+        (total, blocked, self.stats.interception_rate())
+    }
+
+    /// §16.5(Phase 10 Wave 6):拦截统计器 Arc 引用(供周期报告器共享采样)
+    pub fn interception_stats_handle(&self) -> Arc<InterceptorStats> {
+        Arc::clone(&self.stats)
+    }
+
     /// 审计并执行命令 — 零信任四层防御的统一入口。
     ///
     /// 执行流程(N5 修复 + D6 修复 + P1-W3.2 ASA 前置审计 + P1-W3.3 决策链上链):
@@ -319,6 +339,9 @@ impl Sandbox {
         &mut self,
         command: Command,
     ) -> Result<ExecutionResult, SecCoreError> {
+        // §16.5(Phase 10 Wave 6):入口记录总请求数(真实采集拦截率分子)
+        self.stats.record_request();
+
         // 步骤1:静态分析 — 拦截注入/越权/逃逸/泄露/篡改/滥用
         // P2-4:错误路径注入 SandboxViolation 发布(违规不再只写 Merkle 审计链)
         let mut spec = match validate_command(&command, &self.policy) {
@@ -328,6 +351,7 @@ impl Sandbox {
                 detail,
             }) => {
                 self.publish_violation(&format!("{attack_type:?}"), detail.clone());
+                self.stats.record_blocked();
                 return Err(SecCoreError::CommandBlocked {
                     attack_type,
                     detail,
@@ -344,6 +368,7 @@ impl Sandbox {
                     "env_blocked",
                     format!("env var '{name}' matched pattern '{pattern}'"),
                 );
+                self.stats.record_blocked();
                 return Err(SecCoreError::EnvVarBlocked { name, pattern });
             }
             Err(e) => return Err(e),
@@ -377,6 +402,8 @@ impl Sandbox {
         if let EscalationOutcome::Rejected(e) =
             self.handle_escalation(&spec, tier, &mut decision_builder)
         {
+            // §16.5(Phase 10 Wave 6):升级通道拒绝(EscalateToHuman/ASA Block/否决)
+            self.stats.record_blocked();
             return Err(e);
         }
 
@@ -898,6 +925,36 @@ fn build_asa_input(spec: &CommandSpec, audit_chain: &AuditChain) -> OperationAud
         risk_keywords,
         complexity_score,
     }
+}
+
+/// §16.5(Phase 10 Wave 6):沙箱拦截率周期报告器
+///
+/// 周期采样 [`InterceptorStats`] 快照,发布 `SecurityInterceptionReported`
+/// 观测面事件(真实采集,非伪造指标)。首 tick 立即返回采样基线,
+/// 窗口长度由 `interval_secs` 决定(下限 1 秒防忙循环)。
+pub fn spawn_interception_reporter(
+    bus: EventBus,
+    stats: Arc<InterceptorStats>,
+    interval_secs: u64,
+) -> tokio::task::JoinHandle<()> {
+    let window_secs = interval_secs.max(1);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(window_secs));
+        interval.tick().await; // 基线采样:跳过首个立即 tick
+        loop {
+            interval.tick().await;
+            let (total, blocked) = stats.snapshot();
+            let event = NexusEvent::SecurityInterceptionReported {
+                metadata: EventMetadata::new("seccore"),
+                total_requests: total,
+                blocked_requests: blocked,
+                interception_rate: stats.interception_rate(),
+            };
+            if let Err(e) = bus.publish_blocking(event) {
+                warn!(error = %e, "SecurityInterceptionReported 发布失败");
+            }
+        }
+    })
 }
 
 #[cfg(test)]

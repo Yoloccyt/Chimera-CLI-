@@ -68,6 +68,25 @@ pub async fn handle_control_event(
                 .adjust_priority(&quest_id, new_priority, &requested_by)
                 .await
         }
+        // §16.4 消费接线(Phase 10 Wave 4):停止策略裁决事件驱动 Quest 停止。
+        // L8 Parliament(经 chimera-cli 事件桥)发布 StopRulingIssued,此处消费
+        // 并取消 Quest——修复审计发现的 StopRuling 仅本地枚举死代码问题。
+        // preserve_best=true 时历史最佳由搜索树/检查点承载(Ω₉-Preserve),
+        // cancel 即终局(不销毁检查点)。
+        NexusEvent::StopRulingIssued {
+            quest_id,
+            reason,
+            preserve_best,
+            ..
+        } => {
+            info!(
+                quest_id = %quest_id,
+                reason = %reason,
+                preserve_best,
+                "收到停止策略裁决,取消 Quest"
+            );
+            engine.cancel_quest(&quest_id, "stop_ruling").await
+        }
         _ => Ok(()),
     }
 }
@@ -282,5 +301,39 @@ mod tests {
             }
             other => panic!("expected QuestPriorityAdjusted, got {other:?}"),
         }
+    }
+
+    /// §16.4 消费接线:StopRulingIssued → cancel_quest + QuestCancelled 发布
+    #[tokio::test]
+    async fn test_handle_stop_ruling_cancels_quest() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = QuestEngine::new(bus.clone());
+        let quest = engine.create_quest(make_intent("分析。")).await.unwrap();
+        let _ = rx.recv().await.unwrap(); // QuestCreated
+
+        let ruling = NexusEvent::StopRulingIssued {
+            metadata: EventMetadata::new("parliament"),
+            quest_id: quest.quest_id.clone(),
+            reason: "stagnation detected".to_string(),
+            preserve_best: true,
+        };
+        handle_control_event(&engine, ruling).await.unwrap();
+
+        // Quest 应已从注册表移除(停止策略驱动停止)
+        assert!(
+            engine.get_quest(&quest.quest_id).is_none(),
+            "StopRulingIssued 后 Quest 应从注册表移除"
+        );
+
+        // 应发布 QuestCancelled 事件(取消路径的既有契约)
+        let event = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("应在超时前收到 QuestCancelled 事件")
+            .unwrap();
+        assert!(
+            matches!(event, NexusEvent::QuestCancelled { .. }),
+            "应为 QuestCancelled"
+        );
     }
 }

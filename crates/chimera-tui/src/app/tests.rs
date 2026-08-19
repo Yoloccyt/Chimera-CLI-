@@ -120,9 +120,9 @@ fn test_switch_panel_next() -> Result<(), Box<dyn std::error::Error>> {
 fn test_switch_panel_prev() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_prev();
-    // Concord T1.4:FocusManager 注册序派生自 PanelId::REGISTERED_FOCUS_ORDER(25 面板);
-    // Quest 的上一个 = 列表末尾的 OverWindow 面板。
-    assert_eq!(app.current_panel(), PanelId::OverWindow);
+    // Concord T1.4:FocusManager 注册序派生自 PanelId::REGISTERED_FOCUS_ORDER;
+    // Phase 10:Quest 的上一个 = 列表末尾的 InjectionStrategy 面板(27 面板)。
+    assert_eq!(app.current_panel(), PanelId::InjectionStrategy);
     Ok(())
 }
 
@@ -1351,12 +1351,12 @@ fn test_mouse_tab_click_switches_panel() -> Result<(), Box<dyn std::error::Error
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
-    // M3b:标签栏宽度 80,17 个面板(含 Chat),每标签约 4 列。
-    // WHY column=5:落在第 2 个标签(index 1 = Parliament)内——tab_width 为 4 或 5 时
-    // 5/tab_width 均 = 1,避开边界且不受面板数微调影响。
+    // Phase 10:标签栏宽度 80,27 个面板,tab_width = 80/27 = 2 列。
+    // WHY column=3:3/2 = 1,落在第 2 个标签(index 1 = Parliament)内,
+    // 避开边界(2/2=1 与 4/2=2 均为边界列)。
     app.handle_mouse_event(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 5,
+        column: 3,
         row: 1,
         modifiers: event::KeyModifiers::NONE,
     });

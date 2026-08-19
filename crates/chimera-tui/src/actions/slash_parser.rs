@@ -198,6 +198,10 @@ fn agent_template_key(name: &str) -> &'static str {
         "init" => "slash.agent_template.init",
         "side" => "slash.agent_template.side",
         // feedback 及未来 agent 命令统一回落到 side 模板语义(旁路问答)
+        // §16.5 审计注记(Phase 10 Wave 6):规范要求的"用户满意度 + 24h 返回率"
+        // 奖励信号当前无真实数据源——/feedback 为模板文本占位,满意度采集
+        // 标注 v4.0 预留(RL 闸门开启后接真实反馈通道);不实施假采集
+        // (虚假数据固化治理先例:tier_distribution 恒零删除)。
         _ => "slash.agent_template.feedback",
     }
 }

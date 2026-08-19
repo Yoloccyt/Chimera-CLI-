@@ -129,7 +129,9 @@ impl NexusEvent {
             | Self::AsaIntervention { .. }
             | Self::AhirtProbeCompleted { .. }
             // P2.1 TUI v1.7-omega:衰减指标报告(L4 decay-engine 发布)
-            | Self::DecayMetricsReported { .. } => EventTopic::Security,
+            | Self::DecayMetricsReported { .. }
+            // §16.4(Phase 10 Wave 4):错误签名匹配成功(L4 铁律7 去重聚类命中)
+            | Self::ErrorSignatureMatched { .. } => EventTopic::Security,
 
             // === Execution (12) === L7 Execution 生产验证与融合
             Self::OperationProduced { .. }
@@ -161,7 +163,10 @@ impl NexusEvent {
             // 与 DebateStarted/ConsensusReached 同属议会审议生命周期)
             | Self::DebateCompleted { .. }
             // L8 推理悖论风控:策略封顶变更(StrategyCapGuard 发布)
-            | Self::ParliamentStrategyCapChanged { .. } => EventTopic::Parliament,
+            | Self::ParliamentStrategyCapChanged { .. }
+            // §16.4(Phase 10 Wave 4):停止裁决发布 + 变体审议通过(L8 三因子裁决事件化)
+            | Self::StopRulingIssued { .. }
+            | Self::VariantApproved { .. } => EventTopic::Parliament,
 
             // === Quest (7 + P1.2 2 + M4 8 个) === L9 Quest 意图/任务/检查点
             Self::UserIntentEncoded { .. }
@@ -206,6 +211,12 @@ impl NexusEvent {
             // 订阅者(TUI 仪表盘/AEGIS)按 System 主题过滤即可获取全部自评信号
             | Self::AuditFindingRaised { .. }
             | Self::HarnessReportGenerated { .. }
+            // §16.4(Phase 10 Wave 4):自我评估更新(L10 RuntimeAuditor → L9)
+            | Self::AssessmentUpdated { .. }
+            // §16.5(Phase 10 Wave 6):L1 吞吐量观测面事件
+            | Self::BusThroughputReported { .. }
+            // §16.5(Phase 10 Wave 6):L4 沙箱拦截率观测面事件
+            | Self::SecurityInterceptionReported { .. }
             // P2.4 TUI v1.7-omega:MCP 节点心跳(L10 mcp-mesh 发布)
             | Self::McpNodeHeartbeat { .. }
             // P2.5 TUI v1.7-omega:CHTC 适配器状态(L10 chtc-bridge 发布)
@@ -264,14 +275,18 @@ impl NexusEvent {
             | Self::R2FreezeViolation { .. }
             | Self::R2FreezeRollbackFailed { .. }
             // P5.2.3:Spec 版本注册完成(L5 gsoe-evolution 发布,通知下游 spec 谱系更新)
-            | Self::SpecRegistered { .. } => EventTopic::Knowledge,
+            | Self::SpecRegistered { .. }
+            // §16.4(Phase 10 Wave 4):三因子父本选择结果(L5 → L6/L9)
+            | Self::ParentSelected { .. } => EventTopic::Knowledge,
 
             // === Storage (5) === L3 Storage 缓存与分层
             Self::CacheHit { .. }
             | Self::CacheMiss { .. }
             | Self::CachePrefetched { .. }
             | Self::CacheStatsReported { .. }
-            | Self::LsctTierSwitched { .. } => EventTopic::Storage,
+            | Self::LsctTierSwitched { .. }
+            // §16.4(Phase 10 Wave 4):Token 证据记录(L1 → L3 持久化通知)
+            | Self::TokenLedgerRecorded { .. } => EventTopic::Storage,
 
             // === Agent (7) === L9 CHIMERA-MAS 多 Agent 协作(Task 4,ADR-026)
             Self::AgentTaskDelegated { .. }

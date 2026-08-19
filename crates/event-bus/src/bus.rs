@@ -11,7 +11,7 @@
 use crate::error::EventBusError;
 use crate::logging::BusLogger;
 use crate::membrane::{MembraneFilter, PermeationDecision};
-use crate::types::{EventSeverity, NexusEvent};
+use crate::types::{EventMetadata, EventSeverity, NexusEvent};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -77,6 +77,16 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
             // 与 types.rs severity() 双清单同步;丢失导致契约违反无人审议,
             // 候选继续进入后续阶段,违反九层防御 L0 语义)
             | NexusEvent::FormalViolation { .. }
+            // Phase 10 Wave 5 双清单对齐(§16 审计修复):
+            // VetoOverridden(否决覆盖审计不可追溯风险)与 R1ShadowRollbackFailed
+            // (退化策略可能仍在生效)此前标 Critical 但未入旁路——丢失风险
+            // 与 severity() 注释的"必须确保投递"语义冲突,现对齐。
+            | NexusEvent::VetoOverridden { .. }
+            | NexusEvent::R1ShadowRollbackFailed { .. }
+            // §16.4 新增 Critical(Phase 10 Wave 4):停止裁决丢失导致 Quest
+            // 无界运行;错误签名匹配丢失导致 Debug 算子无法检索同签名兄弟。
+            | NexusEvent::StopRulingIssued { .. }
+            | NexusEvent::ErrorSignatureMatched { .. }
     )
 }
 
@@ -146,6 +156,11 @@ pub struct EventBus {
     /// - 使用 Arc 共享使 Clone 派生正常工作(所有副本共享同一计数器)
     /// - 当 sender.len() > capacity * 3/4 时递增,配合 tracing::warn! 记录告警
     backpressure_warning_count: Arc<AtomicU64>,
+    /// 累计发布事件总数(§16.5 L1 吞吐量指标,Phase 10 Wave 6)
+    ///
+    /// WHY:审计发现规范要求"Event Bus 吞吐量"无实现。publish/publish_blocking
+    /// 入口递增,监控方周期拉取计算速率(真实采集,非伪造指标)。
+    published_total: Arc<AtomicU64>,
 }
 
 impl EventBus {
@@ -165,6 +180,7 @@ impl EventBus {
             critical_dropped_count: Arc::new(AtomicU64::new(0)),
             lagged_count: Arc::new(AtomicU64::new(0)),
             backpressure_warning_count: Arc::new(AtomicU64::new(0)),
+            published_total: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -181,6 +197,7 @@ impl EventBus {
             critical_dropped_count: Arc::new(AtomicU64::new(0)),
             lagged_count: Arc::new(AtomicU64::new(0)),
             backpressure_warning_count: Arc::new(AtomicU64::new(0)),
+            published_total: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -220,6 +237,8 @@ impl EventBus {
     /// (无 Critical 订阅者)仅走 broadcast,不报错。
     #[allow(clippy::unused_async)]
     pub async fn publish(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        // §16.5 吞吐量计数(Phase 10 Wave 6):发布入口递增
+        self.published_total.fetch_add(1, Ordering::Relaxed);
         // WHY 在方法入口测量 start:log_publish 在 send 之前调用(event 所有权
         // 尚未 move),elapsed 主要覆盖 receiver_count() 调用(接近零),
         // 但保留测量点以便未来将 log/指标采集移到 send 之后时仍准确。
@@ -295,6 +314,8 @@ impl EventBus {
     /// # §6.2 红线双通道(2026-06-29)
     /// 与 `publish` 一致:4 类 Critical 安全告警事件额外走 mpsc 旁路通道。
     pub fn publish_blocking(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        // §16.5 吞吐量计数(Phase 10 Wave 6):与 publish 一致
+        self.published_total.fetch_add(1, Ordering::Relaxed);
         // 与 publish 保持一致:入口测量耗时(Phase V Task V-8 指标采集)
         let start = Instant::now();
         let subscriber_count = self.sender.receiver_count();
@@ -800,12 +821,50 @@ impl EventBus {
         let warnings = self.backpressure_warning_count.load(Ordering::Relaxed);
         (lagged, warnings)
     }
+
+    /// 累计发布事件总数(§16.5 L1 吞吐量指标,Phase 10 Wave 6)
+    ///
+    /// 监控方周期拉取两次采样差值/间隔即得吞吐速率(真实采集)。
+    pub fn published_total(&self) -> u64 {
+        self.published_total.load(Ordering::Relaxed)
+    }
 }
 
 impl Default for EventBus {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// §16.5 L1 吞吐量周期报告器(Phase 10 Wave 6)
+///
+/// 周期拉取 [`EventBus::published_total`] 差分计算事件/秒速率,发布
+/// `BusThroughputReported` 观测面事件(真实采集,非伪造指标)。
+///
+/// 首 tick 立即返回先采样基线,避免窗口 0 除零;窗口长度由
+/// `interval_secs` 决定(下限 1 秒,防止 0 间隔忙循环)。
+pub fn spawn_throughput_reporter(bus: EventBus, interval_secs: u64) -> tokio::task::JoinHandle<()> {
+    let window_secs = interval_secs.max(1);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(window_secs));
+        interval.tick().await; // 基线采样:跳过首个立即 tick
+        let mut prev = bus.published_total();
+        loop {
+            interval.tick().await;
+            let now = bus.published_total();
+            let events_per_sec = (now.saturating_sub(prev)) as f64 / window_secs as f64;
+            prev = now;
+            let event = NexusEvent::BusThroughputReported {
+                metadata: EventMetadata::new("event-bus"),
+                published_total: now,
+                events_per_sec,
+                window_secs,
+            };
+            if let Err(e) = bus.publish_blocking(event) {
+                warn!(error = %e, "BusThroughputReported 发布失败");
+            }
+        }
+    })
 }
 
 /// 事件接收者 — 包装 broadcast::Receiver
@@ -1280,11 +1339,40 @@ mod tests {
                 violations: vec!["v1".into()],
                 context: nexus_contracts::behavior_contract::ContractContext::Runtime,
             },
+            // Phase 10 Wave 5 双清单对齐(+4):否决覆盖审计/影子回滚失败/
+            // 停止裁决/错误签名匹配(均 severity() Critical,必须确保投递)
+            NexusEvent::VetoOverridden {
+                metadata: EventMetadata::new("t"),
+                quest_id: "q".into(),
+                proposal_id: "p".into(),
+                veto_reason: "r".into(),
+                override_reason: "o".into(),
+                override_by: "admin".into(),
+            },
+            NexusEvent::R1ShadowRollbackFailed {
+                metadata: EventMetadata::new("t"),
+                reason: "rollback conflict".into(),
+                trigger_type: crate::types::RollbackTriggerType::Unknown,
+                triggered_at: None,
+                details: String::new(),
+                diagnostic: crate::types::RollbackDiagnosticContext::default(),
+            },
+            NexusEvent::StopRulingIssued {
+                metadata: EventMetadata::new("t"),
+                quest_id: "q".into(),
+                reason: "stagnation".into(),
+                preserve_best: true,
+            },
+            NexusEvent::ErrorSignatureMatched {
+                metadata: EventMetadata::new("t"),
+                error_hash: "h".into(),
+                matched_card_ids: vec![],
+            },
         ];
         assert_eq!(
             mpsc_required.len(),
-            9,
-            "旁路清单应覆盖全量 9 个事件,新增 Critical 必须显式加入(双清单同步红线)"
+            13,
+            "旁路清单应覆盖全量 13 个事件,新增 Critical 必须显式加入(双清单同步红线)"
         );
         for event in &mpsc_required {
             assert!(

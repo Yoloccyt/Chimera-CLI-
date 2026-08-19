@@ -35,6 +35,8 @@ use std::sync::Mutex;
 use nexus_contracts::Quest;
 use uuid::Uuid;
 
+use crate::memory_sync_hook::{MemorySyncHook, NoopMemorySyncHook};
+
 /// 摘要长度上限（短摘要入上下文的 Token 节约钳制）
 const SUMMARY_MAX_LEN: usize = 80;
 
@@ -75,7 +77,7 @@ impl ExternalStorage for InMemoryExternalStorage {
 }
 
 /// 任务节点状态（规范 §14.2 NodeStatus）
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NodeStatus {
     /// 待执行
     Pending,
@@ -88,7 +90,7 @@ pub enum NodeStatus {
 }
 
 /// 任务地图节点（规范 §14.2 TaskNode）
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TaskNode {
     /// 节点 ID
     pub node_id: String,
@@ -105,7 +107,7 @@ pub struct TaskNode {
 }
 
 /// 任务地图边（步骤间动作链接）
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TaskEdge {
     /// 源节点 ID
     pub from: String,
@@ -116,7 +118,7 @@ pub struct TaskEdge {
 }
 
 /// 任务地图引用（map_id + root_id）
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TaskMapRef {
     /// 地图 ID
     pub map_id: String,
@@ -125,7 +127,7 @@ pub struct TaskMapRef {
 }
 
 /// 步骤结果（record_step 输入）
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct StepResult {
     /// 状态描述（将被摘要化）
     pub state: String,
@@ -139,7 +141,21 @@ pub struct StepResult {
     pub success: bool,
 }
 
+/// 长任务地图可序列化快照（LHQP 检查点联动，Wave 2）
+///
+/// WHY 独立快照结构：`external_storage` 为 trait 对象不可序列化，
+/// 故仅序列化 task_nodes/task_edges；反序列化时用 InMemoryExternalStorage
+/// 重建（detail_ref 引用的详情需调用方重新注入，文档注明）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct LongTaskMapSnapshot {
+    task_nodes: Vec<TaskNode>,
+    task_edges: Vec<TaskEdge>,
+}
+
 /// 长任务地图 — TencentDB 机制（规范 §14.2）
+///
+/// L2 记忆层协同（Wave 3）：可选注入 [`MemorySyncHook`]，record_step 时
+/// 同步步骤摘要到记忆层；默认 Noop（不破坏既有 new() 行为）。
 pub struct LongTaskMap {
     /// 任务节点序列（按步骤序）
     task_nodes: Vec<TaskNode>,
@@ -147,6 +163,8 @@ pub struct LongTaskMap {
     task_edges: Vec<TaskEdge>,
     /// 外部存储（D-4 注入点）
     external_storage: Box<dyn ExternalStorage>,
+    /// L2 记忆层同步钩子（Wave 3，依赖倒置，默认 Noop）
+    memory_sync_hook: Box<dyn MemorySyncHook>,
 }
 
 impl Default for LongTaskMap {
@@ -162,7 +180,16 @@ impl LongTaskMap {
             task_nodes: Vec::new(),
             task_edges: Vec::new(),
             external_storage,
+            memory_sync_hook: Box::new(NoopMemorySyncHook),
         }
+    }
+
+    /// 注入 L2 记忆层同步钩子（Wave 3，依赖倒置，不破坏既有 new() 行为）
+    ///
+    /// 未注入时默认 Noop；注入后 record_step 时同步步骤摘要到记忆层。
+    pub fn with_memory_sync_hook(mut self, hook: Box<dyn MemorySyncHook>) -> Self {
+        self.memory_sync_hook = hook;
+        self
     }
 
     /// 从 Quest 创建地图（规范 §14.2 create_map）
@@ -193,12 +220,15 @@ impl LongTaskMap {
     ///
     /// 短摘要入上下文节点 + 详情外置 + 与前序节点的边链接。
     /// 地图为空时先隐式创建占位根（防御分支，替换原型索引假设）。
-    pub fn record_step(&mut self, _map_ref: &TaskMapRef, step_result: &StepResult) {
+    ///
+    /// Wave 3: record_step 时同步步骤摘要到 L2 记忆层（用 map_id 作为标识）。
+    pub fn record_step(&mut self, map_ref: &TaskMapRef, step_result: &StepResult) {
         let step_number = self.task_nodes.len() as u32;
+        let state_summary = summarize_state(&step_result.state);
         let node = TaskNode {
             node_id: format!("node_{step_number}"),
             step_number,
-            state_summary: summarize_state(&step_result.state),
+            state_summary: state_summary.clone(),
             detail_ref: self.external_storage.store(&step_result.detail),
             next_action: step_result.next_action.clone(),
             status: if step_result.success {
@@ -219,6 +249,10 @@ impl LongTaskMap {
                 action: step_result.action.clone(),
             });
         }
+        // Wave 3: 同步步骤摘要到 L2 记忆层（用 map_id 作为 quest 标识）
+        let step_summary = format!("{} → {}", state_summary, step_result.next_action);
+        self.memory_sync_hook
+            .on_task_map_step(&map_ref.map_id, &step_summary);
     }
 
     /// 任务地图注入上下文（规范 §14.2 inject_map_to_context）
@@ -258,6 +292,40 @@ impl LongTaskMap {
     /// 节点只读访问（可观测性）
     pub fn get_node(&self, node_id: &str) -> Option<&TaskNode> {
         self.task_nodes.iter().find(|n| n.node_id == node_id)
+    }
+
+    /// 序列化为 MessagePack bytes（LHQP 检查点联动，Wave 2）
+    ///
+    /// 仅序列化 task_nodes/task_edges（external_storage 为 trait 对象不参与）。
+    /// 序列化后由调用方与 Checkpoint 关联存储（不修改 L0 Checkpoint）。
+    ///
+    /// # 错误
+    /// - `QuestError::SerializationError`: MessagePack 编码失败
+    pub fn to_bytes(&self) -> Result<Vec<u8>, crate::error::QuestError> {
+        let snapshot = LongTaskMapSnapshot {
+            task_nodes: self.task_nodes.clone(),
+            task_edges: self.task_edges.clone(),
+        };
+        rmp_serde::to_vec(&snapshot)
+            .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))
+    }
+
+    /// 从 MessagePack bytes 反序列化重建地图（LHQP 检查点恢复）
+    ///
+    /// external_storage 用 InMemoryExternalStorage 默认重建；
+    /// detail_ref 引用的详情需调用方重新注入（文档注明）。
+    ///
+    /// # 错误
+    /// - `QuestError::SerializationError`: MessagePack 解码失败（数据损坏/版本不兼容）
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, crate::error::QuestError> {
+        let snapshot: LongTaskMapSnapshot = rmp_serde::from_slice(bytes)
+            .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))?;
+        Ok(Self {
+            task_nodes: snapshot.task_nodes,
+            task_edges: snapshot.task_edges,
+            external_storage: Box::new(InMemoryExternalStorage::default()),
+            memory_sync_hook: Box::new(NoopMemorySyncHook),
+        })
     }
 }
 

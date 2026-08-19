@@ -21,6 +21,17 @@ chimera-tui = { workspace = true }
 # quest-engine:L9 Quest 层,为 tui 命令提供控制事件上游消费示例(§2.2 向下依赖)
 # Task 1.1/1.2: chimera run / quest 命令真实接入 QuestEngine API
 quest-engine = { workspace = true }
+# §16.1 闭环装配(Phase 10 审计修复):组合根接线 L3 持久化 / L2 卡片消费 /
+# L6 算子回流 / L10 五维审计(均 L10→低层向下合规,跨层仅经 EventBus/卡片总线)
+cmt-tiering = { workspace = true }
+mlc-engine = { workspace = true }
+faae-router = { workspace = true }
+# §16.4 消费接线(Phase 10 Wave 4):variant_subscriber 注入 L5 三因子选择器,
+# ParentSelected 事件同步选择统计(L10→L5 向下允许,与 repo-wiki 同层先例)
+gsoe-evolution = { workspace = true }
+efficiency-monitor = { workspace = true }
+# §16.1 源头接线:PredictionVerified → ExperienceCardGenerator 卡片生成触发点(L10→L7 向下合规)
+pvl-layer = { workspace = true }
 # repo-wiki:L5 Knowledge 层,Task 1.3 chimera wiki 真实接入语义检索(§2.2 L10→L5 允许)
 repo-wiki = { workspace = true }
 # PROBE P3.2: 超窗兜底链（kvbsr 块路由候选 + repo-wiki RRF 精排；L10→L6/L5 向下允许）
