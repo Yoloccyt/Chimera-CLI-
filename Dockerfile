@@ -21,9 +21,14 @@ FROM rust:1-slim-bookworm AS builder
 # 系统依赖:
 # - pkg-config: 部分 crate 探测系统库时需要
 # - libssl-dev: 备用(本项目用 rustls-tls,通常不需要,保留以防显式依赖)
+# - build-essential: C/C++ 编译器链(2026-08-19 修复,v2.27.0-omega Docker job
+#   首次全量重编译暴露——onig_sys(tokenizers 依赖)需 cc 编译 bundled onig,
+#   esaxx-rs(tokenizers 依赖)需 g++;v2.26.0 因 gha 层缓存命中未触发。
+#   WHY 不影响最终镜像体积:builder 为中间层,distroless runtime 仅拷贝 binary)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
