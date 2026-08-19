@@ -81,7 +81,7 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION="latest"
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved version: $VERSION"
         env:
           GITHUB_EVENT_INPUTS_VERSION: ${{ github.event.inputs.version }}
@@ -106,6 +106,8 @@ jobs:
           fi
 
           # 执行安装脚本(自动检测平台/架构/下载/校验/PATH)
+          # WHY shellcheck disable: VERSION_ARG 刻意不加引号以展开为 `--version <ver>` 两个参数
+          # shellcheck disable=SC2086
           sh install.sh $VERSION_ARG --install-dir "$INSTALL_DIR"
 
           # 验证 binary 存在且可执行
