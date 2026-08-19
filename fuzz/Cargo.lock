@@ -33,12 +33,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -302,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "event-bus"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -484,14 +478,11 @@ dependencies = [
 
 [[package]]
 name = "gsoe-evolution"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
- "anyhow",
  "async-trait",
  "event-bus",
- "ndarray",
  "nexus-contracts",
- "nexus-core",
  "rand 0.8.7",
  "serde",
  "thiserror 1.0.69",
@@ -545,12 +536,10 @@ dependencies = [
 
 [[package]]
 name = "hcw-window"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
  "chrono",
- "dashmap",
  "event-bus",
- "ndarray",
  "nexus-contracts",
  "nexus-core",
  "serde",
@@ -925,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "mca-gateway"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -972,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "model-router"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
  "dashmap",
  "event-bus",
@@ -1022,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-contracts"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
  "chrono",
  "serde",
@@ -1031,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1124,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "osa-coordinator"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
  "event-bus",
  "hex",
@@ -1585,7 +1574,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "scc-cache"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
  "chrono",
  "dashmap",
@@ -1616,7 +1605,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seccore"
-version = "2.26.0-omega"
+version = "2.27.0-omega"
 dependencies = [
  "async-trait",
  "chrono",

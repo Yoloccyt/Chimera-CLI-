@@ -98,7 +98,7 @@ Chimera CLI 安装脚本
   -h, --help           显示帮助
 
 示例:
-  sh install.sh --version v2.26.0-omega
+  sh install.sh --version v2.27.0-omega
   sh install.sh --install-dir /usr/local/bin
   sudo sh install.sh --install-dir /usr/local/bin
 EOF
