@@ -157,7 +157,10 @@ jobs:
           # ultra-plan: mcp-mesh 1000 次事务集成测试参数化(缺省 1000,快轨 100)
           # 事件流连续性语义在任意 N 下等价(见 integration.rs 测试注释)。
           CHIMERA_MCP_TXN_COUNT: '100'
-        run: cargo nextest run --profile ci-fast --exclude chimera-e2e-tests -E 'not binary(/stress/)' --no-fail-fast
+        # WHY 必须带 --workspace(2026-08-19 修复):nextest 的 --exclude 仅在与
+        # --workspace 搭配时合法;缺省时默认只跑当前 package,报 "--exclude can
+        # only be used together with --workspace" 而 CI exit 101(测试 1s 即败)。
+        run: cargo nextest run --workspace --profile ci-fast --exclude chimera-e2e-tests -E 'not binary(/stress/)' --no-fail-fast
 
       # WHY: sccache 命中率统计(始终运行,即便测试失败也能观察缓存效果)。
       # 用于评估跨 job 编译缓存复用率,指导缓存策略调优。
@@ -237,6 +240,12 @@ jobs:
       - name: Type check (workspace, --features mca)
         run: cargo check --workspace --all-targets --features mca
 
+      - name: Install cargo-nextest
+        # WHY 与 fmt job 对齐:Test 步骤改用 nextest 排除 stress(见其 WHY)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       # E2(报告附录 E): feature 矩阵机械闸门——cargo-hack each-feature 穷举
       # 每个 crate 的 feature 组合,封堵"门控代码腐化、转 on 集中爆雷"风险(R5)。
       # --no-dev-deps 减少编译量;--exclude chimera-e2e-tests 避免重复编译 E2E。
@@ -246,7 +255,12 @@ jobs:
           cargo hack check --workspace --each-feature --no-dev-deps --exclude chimera-e2e-tests
 
       - name: Test (workspace, --features mca)
-        run: cargo test --workspace --features mca
+        # WHY nextest + 排除 stress(2026-08-19 修复):cargo test 串行跑全部 target
+        # (含 35+ E2E + stress)在 2 核 runner 与其余 3 job 并行时资源竞争 flaky
+        # (70d840f 轮 success / e50e626 轮 panic,同代码异结果);与 fmt job 的
+        # ci-fast 档对齐,stress 由独立 stress.yml 承担;mca_quota_switch_e2e 在根
+        # package 仍被编译运行(feature 门控保留)。
+        run: cargo nextest run --workspace --features mca -E 'not binary(/stress/)' --no-fail-fast
 
   # ============================================================
   # P1-7: repo-wiki CI benchmark 阈值断言(可选,不阻塞合并)
