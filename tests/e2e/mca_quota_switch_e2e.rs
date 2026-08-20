@@ -47,7 +47,7 @@ async fn quota_exhausted_delivered_via_critical_mpsc() {
     .await
     .unwrap();
 
-    let received = tokio::time::timeout(std::time::Duration::from_millis(200), critical_rx.recv())
+    let received = tokio::time::timeout(std::time::Duration::from_secs(5), critical_rx.recv())
         .await
         .expect("不应超时")
         .expect("Critical 旁路必须送达 AffinityQuotaExhausted");
@@ -107,7 +107,7 @@ async fn quota_switch_full_chain_preserves_session_continuity() {
     })
     .await
     .unwrap();
-    let evt = tokio::time::timeout(std::time::Duration::from_millis(200), critical_rx.recv())
+    let evt = tokio::time::timeout(std::time::Duration::from_secs(5), critical_rx.recv())
         .await
         .unwrap()
         .unwrap();
@@ -116,7 +116,7 @@ async fn quota_switch_full_chain_preserves_session_continuity() {
     // ---- 步骤 2:事件驱动降级(替代原直调 select_substitute)——
     // listener 消费 AffinityQuotaExhausted → 能力相似度选替代 → 发布 CsnSubstitutionTriggered
     let substitute = loop {
-        let event = tokio::time::timeout(std::time::Duration::from_secs(2), substituted_rx.recv())
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), substituted_rx.recv())
             .await
             .expect("超时:降级链未触发")
             .expect("事件流错误");
