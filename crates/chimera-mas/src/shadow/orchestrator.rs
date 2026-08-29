@@ -41,8 +41,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use chrono::Utc;
 use decay_engine::{ResetAuthorization, RlGateVerdict, ShadowModeCircuitBreaker};
-use event_bus::{EventBus, NexusEvent};
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 use gsoe_evolution::{RlUpdateTarget, ScopeVerdict, UnfreezeScope};
 use nexus_contracts::formal_props::VerificationResult;
 
@@ -152,7 +153,6 @@ pub enum PromotionAdvice {
 ///
 /// 所有方法为同步方法(§4.4 反模式 8),不持有异步资源;
 /// AHIRT 事件消费由独立的 [`AhirtEvidenceCollector`] 承担。
-#[derive(Debug)]
 pub struct ShadowModeOrchestrator {
     /// 治理配置(构造期已过签署校验)
     config: ShadowModeConfig,
@@ -170,6 +170,24 @@ pub struct ShadowModeOrchestrator {
     prerequisites: Stage3Prerequisites,
     /// bootstrap 预注册种子(审计:同序列同种子 → 同下界,杜绝重跑挑选)
     bootstrap_seed: u64,
+    /// WS-4B:可选事件总线 — 晋级条件满足时发布 `R1ShadowPromotionReady`
+    event_bus: Option<EventBus>,
+}
+
+impl std::fmt::Debug for ShadowModeOrchestrator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShadowModeOrchestrator")
+            .field("config", &self.config)
+            .field("breaker", &self.breaker)
+            .field("scope", &self.scope)
+            .field("target", &self.target)
+            .field("gate", &self.gate)
+            .field("ledger", &self.ledger)
+            .field("prerequisites", &self.prerequisites)
+            .field("bootstrap_seed", &self.bootstrap_seed)
+            // event_bus:EventBus 未实现 Debug,不输出
+            .finish()
+    }
 }
 
 impl ShadowModeOrchestrator {
@@ -195,7 +213,25 @@ impl ShadowModeOrchestrator {
             ledger: BatchLedger::new(),
             prerequisites: Stage3Prerequisites::default(),
             bootstrap_seed,
+            event_bus: None,
         }
+    }
+
+    /// 链式注入事件总线 — 晋级条件满足时发布 `R1ShadowPromotionReady`(WS-4B)。
+    ///
+    /// 同时将总线注入批次账本,使连续非胜回归检测发布 `R1ShadowRegressionDetected`。
+    #[must_use]
+    pub fn with_event_bus(
+        config: ShadowModeConfig,
+        scope: UnfreezeScope,
+        target: RlUpdateTarget,
+        bootstrap_seed: u64,
+        bus: EventBus,
+    ) -> Self {
+        let mut orch = Self::new(config, scope, target, bootstrap_seed);
+        orch.event_bus = Some(bus.clone());
+        orch.ledger = BatchLedger::new().with_event_bus(bus);
+        orch
     }
 
     /// 喂入形式化验证器观测(转发给 L4 熔断器)
@@ -278,6 +314,8 @@ impl ShadowModeOrchestrator {
         if lb.value > 0.5 {
             let missing = self.prerequisites.missing();
             if missing.is_empty() {
+                // WS-4B:满门通过 → 发布 R1ShadowPromotionReady 晋级就绪通知
+                self.publish_promotion_ready(wins, batches, lb.value);
                 return Ok(PromotionAdvice::Promote {
                     lower_bound: lb,
                     wins,
@@ -347,6 +385,30 @@ impl ShadowModeOrchestrator {
             });
         }
         Ok(())
+    }
+
+    /// 发布 `R1ShadowPromotionReady` 事件 — R1 影子模式解冻就绪(WS-4B)。
+    ///
+    /// `win_rate` 为批次计胜率(30 天观察期胜率代理),`ewma_level` 用
+    /// 有效下界近似(解冻条件 1 的成败率信号)。仅建议,解冻仍须 ADR-054。
+    /// 未注入 EventBus 时静默跳过;发布失败仅 warn,不阻断晋级建议产出。
+    fn publish_promotion_ready(&self, wins: usize, batches: usize, lb_value: f64) {
+        if let Some(bus) = &self.event_bus {
+            let win_rate = if batches > 0 {
+                wins as f64 / batches as f64
+            } else {
+                0.0
+            };
+            let event = NexusEvent::R1ShadowPromotionReady {
+                metadata: EventMetadata::new("chimera-mas"),
+                report_date: Utc::now(),
+                win_rate,
+                ewma_level: lb_value as f32,
+            };
+            if let Err(e) = bus.publish_blocking(event) {
+                tracing::warn!(error = %e, "发布 R1ShadowPromotionReady 事件失败");
+            }
+        }
     }
 }
 
@@ -625,6 +687,66 @@ mod tests {
                 assert!(lower_bound.value > 0.5);
             }
             other => panic!("满门通过应产出 Promote:{other:?}"),
+        }
+    }
+
+    /// WS-4B:R1ShadowPromotionReady 幽灵事件生产者验证 —
+    /// 满门通过晋级时发布晋级就绪事件。
+    #[test]
+    fn test_full_promotion_path_publishes_ready_event() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let signoff =
+            GovernanceSignoff::new("user", "ADR-053-rev4", "2026-07-29").expect("合法签署");
+        let config = ShadowModeConfig::anchor_profile(signoff).expect("锚点档合法");
+        let scope = UnfreezeScope::frozen().with_target(RlUpdateTarget::GsoeVariantSelection);
+        let mut orch = ShadowModeOrchestrator::with_event_bus(
+            config,
+            scope,
+            RlUpdateTarget::GsoeVariantSelection,
+            42,
+            bus,
+        );
+        orch.set_prerequisites(Stage3Prerequisites {
+            alpha_composite_calibrated: true,
+            power_intra_batch_verified: true,
+            binomial_sf_comments_corrected: true,
+            payload_rotation_ready: true,
+            coverage_instrumentation_ready: true,
+            s_min_final_confirmed: true,
+        });
+        for i in 0..BASE_BATCHES {
+            orch.ingest_batch(format!("b{i}"), "hash", &winning_evidence())
+                .expect("批次应入账");
+        }
+        match orch.checkpoint_advice().expect("终判应可执行") {
+            PromotionAdvice::Promote { .. } => {}
+            other => panic!("满门通过应产出 Promote:{other:?}"),
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let event = loop {
+            if let Ok(Some(e)) = rx.try_recv() {
+                break e;
+            }
+            assert!(std::time::Instant::now() < deadline, "接收晋级事件超时");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(
+            event.metadata().source,
+            "chimera-mas",
+            "R1ShadowPromotionReady 事件 source 应为 chimera-mas"
+        );
+        match event {
+            NexusEvent::R1ShadowPromotionReady {
+                win_rate,
+                ewma_level,
+                ..
+            } => {
+                assert!((win_rate - 1.0).abs() < 1e-6, "全胜批次 win_rate 应为 1.0");
+                assert!(ewma_level > 0.5, "满门下界应 > 0.5");
+            }
+            other => panic!("期望 R1ShadowPromotionReady 事件,收到 {other:?}"),
         }
     }
 

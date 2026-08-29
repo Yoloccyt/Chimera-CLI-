@@ -20,6 +20,8 @@ use std::sync::Mutex;
 use crate::error::CsnError;
 use crate::similarity::cosine_similarity;
 use crate::types::{CapabilityDescriptor, SubstitutionCandidate};
+// ws2-c1 红线 #8:公共 Top-K 收敛工具(替代 sort_by 全排)
+use nexus_contracts::util::xts_top_k_by;
 
 /// 替代候选注册表统计 — 监控指标快照
 ///
@@ -200,8 +202,11 @@ impl SubstitutionCandidateRegistry {
 
         // Top-K 内部降序排序(O(K log K),K << n,可接受)
         // WHY:select_nth_unstable 仅保证前 K 个是最大的,但不保证顺序;
-        // 返回前需排序以便调用方按相似度降序消费
-        top.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        // 公共 xts_top_k_by 返回降序前 K 段
+        let top_len = top.len();
+        xts_top_k_by(top, top_len, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // 映射为 SubstitutionCandidate,按 rank 分配 tier
         top.iter()

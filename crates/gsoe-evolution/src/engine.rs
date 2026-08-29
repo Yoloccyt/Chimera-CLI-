@@ -140,7 +140,8 @@ impl GsoeEvolutionEngine {
             });
         }
 
-        // 步骤 1:采样
+        // 步骤 0:采样(注:EvolutionTriggered 发布移至步骤 7b,保持既有
+        // test_evolve_once_publishes_event 的"首事件=GsoePolicyUpdated"契约)
         let mut rollouts = self.sample_with_signals();
 
         // 步骤 2:计算优势 + 评估适应度
@@ -171,6 +172,11 @@ impl GsoeEvolutionEngine {
 
         // 步骤 7:发布事件
         self.publish_evolution_event(&new_policy, improvement).await;
+
+        // 步骤 7b:发布进化触发事件(WS-4B 幽灵事件生产者)。
+        // WHY 置于 GsoePolicyUpdated 之后:evolution 演化顺序语义上"策略更新"是主事件,
+        // 触发通知为补充观测面,且保持既有 test_evolve_once_publishes_event 首事件契约。
+        self.publish_evolution_triggered().await;
 
         debug!(
             generation = self.generation,
@@ -253,6 +259,24 @@ impl GsoeEvolutionEngine {
             // WHY:publish 失败不应阻断进化流程,仅记录日志
             if let Err(e) = bus.publish(event).await {
                 tracing::warn!(error = %e, "发布 GsoePolicyUpdated 事件失败");
+            }
+        }
+    }
+
+    /// 发布 EvolutionTriggered 事件 — 进化触发通知(WS-4B 幽灵事件生产者)
+    ///
+    /// `generation` 为下一进化步的世代号(当前已完代 + 1),`fitness` 置 0.0 占位
+    /// (该通知在策略更新完成后续发,不携带采样前适应度)。Normal 级观测事件,
+    /// 发布失败仅 warn 不阻断进化流程(与既有发布模式一致)。
+    async fn publish_evolution_triggered(&self) {
+        if let Some(bus) = &self.event_bus {
+            let event = NexusEvent::EvolutionTriggered {
+                metadata: EventMetadata::new("gsoe-evolution"),
+                generation: self.generation + 1,
+                fitness: 0.0,
+            };
+            if let Err(e) = bus.publish(event).await {
+                tracing::warn!(error = %e, "发布 EvolutionTriggered 事件失败");
             }
         }
     }
@@ -517,5 +541,46 @@ mod tests {
             "gsoe-evolution",
             "事件 source 应为 gsoe-evolution"
         );
+    }
+
+    /// WS-4B:EvolutionTriggered 幽灵事件生产者验证 — 进化步骤执行后发布
+    #[tokio::test]
+    async fn test_evolve_once_publishes_evolution_triggered() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut engine = GsoeEvolutionEngine::with_event_bus(GsoeConfig::default(), bus);
+
+        engine.evolve_once().await.unwrap();
+
+        // 首事件为既有主事件(GsoePolicyUpdated,契约保持),第二个事件为触发通知
+        let first = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("接收首事件超时");
+        assert!(
+            matches!(first, NexusEvent::GsoePolicyUpdated { .. }),
+            "首事件应为 GsoePolicyUpdated(既有契约),收到 {first:?}"
+        );
+        let event = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .await
+            .expect("接收 EvolutionTriggered 超时");
+        assert_eq!(
+            event.metadata().source,
+            "gsoe-evolution",
+            "EvolutionTriggered 事件 source 应为 gsoe-evolution"
+        );
+        match event {
+            NexusEvent::EvolutionTriggered {
+                generation,
+                fitness,
+                ..
+            } => {
+                // 语义 = 下一进化步世代号(当前已完代 1 + 1 = 2)
+                assert_eq!(generation, 2);
+                assert!(fitness.is_finite());
+            }
+            other => panic!("期望 EvolutionTriggered 事件,收到 {other:?}"),
+        }
     }
 }

@@ -217,6 +217,19 @@ pub mod blueprint;
 /// 供 L4 formal-verifier 验证器实现与 L8 parliament 审议时查询属性满足状态共享。
 pub mod formal_props;
 
+/// 工具计划契约 — 声明式 ToolPlan DSL + 校验 + 守卫常量（P3-T8,WI-16）
+///
+/// 承载 ToolPlan / ToolNode / ToolOp / PlanEdge / PlanError / guards,
+/// 供 gqep-executor PlanRunner 解释执行（L0 纯类型契约层,零依赖）。
+pub mod tool_plan;
+
+/// 调度契约 — mas-sched 控制面类型先移 L0（P3-T2 补,ADR-033 先例）
+///
+/// 承载 TodoClaim / Lease / Quota / Priority / DenyReason / RenewOutcome /
+/// ShouldRunVerdict / TaskId / HANDOFF,供 mas-sched PeerScheduler 与后续
+/// chimera-mas 拆出依赖时经本契约承接（strangler:类型先移、接口后接）。
+pub mod scheduler_contract;
+
 /// 事件元数据契约 — L0 共享的事件追踪元信息(Task 3.10,ADR-033 扩展)
 ///
 /// 承载 `EventMetadata`(event_id / timestamp / source),从 L1 `event-bus/src/payloads.rs`
@@ -361,6 +374,44 @@ pub mod skill_lifecycle;
 pub mod rl_hooks;
 
 // ============================================================
+// v4.0 统一执行总案 A0/WI-04/WI-05/WI-21 新增模块（2026-08-22）
+// ============================================================
+
+/// 图身份契约 — GIP 跨层成本归因三元组（WI-04）
+///
+/// 承载 GraphIdentity（goal_id/run_id/node_id），经 EventMetadata 可选字段
+/// 渐进铺开；144 事件枚举本体不动（v4.0 §17 治理红线）。
+pub mod graph_identity;
+
+/// MCSM 流形约束信号守恒聚合 — Sinkhorn 双随机投影器（WI-05）
+///
+/// 纯函数投影器（ADR-033 纯函数先例）：聚合权重矩阵行列归一化，
+/// 防单源 100× 音量淹没他源；含 identity() 直通回滚路径。
+pub mod mcsm;
+
+/// 外部协议契约 — AppOp/AppEvent 与 Thread/Turn/Item 三原语（WI-01）
+///
+/// 内闭外开（T6）：NexusEvent 永不进外部协议；本模块为转译层协议面类型。
+pub mod app;
+
+/// 事件双轨契约 — DynamicEvent 注册表与 EventMetadataV2（WI-21）
+///
+/// 轨一（内置 144 枚举）不动；轨二（动态注册）供 MCP/SubAgent/Hook 外部源。
+pub mod event_v2;
+
+/// 公共 Top-K 收敛工具 — 红线 #8(WS-2 C1)
+///
+/// 承载 `xts_top_k` / `xts_top_k_by`,以 O(n) `select_nth_unstable_by` +
+/// O(k log k) 局部排序取代"全排后截断"的 `sort_by` 全排序。
+/// ADR-033"纯类型 + 零逻辑"下的纯函数工具先例(与 test_scale / archive_monotonicity / mcsm 同级)。
+pub mod util;
+
+/// 统一错误层级契约 — NexusError 与 Recoverable（A0/WI-01 §6.6）
+///
+/// 跨层边界结构化错误枚举 + 恢复策略五档；应用层 anyhow 包装。
+pub mod errors;
+
+// ============================================================
 // 公开 API 导出
 // ============================================================
 
@@ -404,6 +455,14 @@ pub use vector::{VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorSt
 // T6-2: 形式化属性定义框架（FormalVerifier L4 骨架基础类型）
 pub use formal_props::{
     FormalProperty, InvariantSpec, PropertyCategory, VerificationMethod, VerificationResult,
+};
+// P3-T8: 工具计划契约（WI-16 ToolPlan DSL）
+pub use tool_plan::{guards, PlanEdge, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};
+// P3-T2 补: 调度契约（WI-29 mas-sched 类型先移 L0,ADR-033 先例）
+// TaskId 已由 ids.rs 导出,此处不重复导出
+pub use scheduler_contract::{
+    ClaimOutcome, DenyReason, Lease, Priority, Quota, RenewOutcome, ShouldRunVerdict, TodoClaim,
+    HANDOFF,
 };
 // Task 3.10: L0 共享类型扩展(EventMetadata / TaskStatus / Checkpoint)
 // 从 L1 nexus-core / event-bus 下沉,缓解 L1 上帝 crate 病理(100+/65+/42+ 文件依赖)
@@ -473,6 +532,19 @@ pub use rl_hooks::{
 };
 // v3.4.0 §5.6: 六维控制面扩展（OperatorSelectionStrategy + StopStrategyConfig）
 pub use harness_dimensions::{OperatorSelectionStrategy, StopStrategyConfig};
+// v4.0 A0/WI-04/WI-05/WI-21: 图身份 / MCSM 投影器 / 外部协议 / 事件双轨 / 统一错误
+// WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接 `use nexus_contracts::GraphIdentity`
+pub use app::{
+    AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId, ItemStatus,
+    PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
+};
+pub use errors::{NexusError, Recoverable, RecoveryStrategy};
+pub use event_v2::{
+    Compressibility, DynamicEvent, EventMetadataV2, EventNamespace, EventPattern, EventTypeId,
+    ImportanceScore, MetadataBridge, NamespaceQuotaV2,
+};
+pub use graph_identity::GraphIdentity;
+pub use mcsm::{identity, project_weights, sinkhorn_project, ProjectedMatrix, SinkhornParams};
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
@@ -577,4 +649,18 @@ pub mod prelude {
     };
     // v3.4.0 §5.6: 六维控制面扩展（与顶层导出同集）
     pub use crate::harness_dimensions::{OperatorSelectionStrategy, StopStrategyConfig};
+    // v4.0 A0/WI-04/WI-05/WI-21: 图身份 / MCSM / 外部协议 / 事件双轨 / 统一错误（与顶层导出同集）
+    pub use crate::app::{
+        AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId,
+        ItemStatus, PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
+    };
+    pub use crate::errors::{NexusError, Recoverable, RecoveryStrategy};
+    pub use crate::event_v2::{
+        Compressibility, DynamicEvent, EventMetadataV2, EventNamespace, EventPattern, EventTypeId,
+        ImportanceScore, MetadataBridge, NamespaceQuotaV2,
+    };
+    pub use crate::graph_identity::GraphIdentity;
+    pub use crate::mcsm::{
+        identity, project_weights, sinkhorn_project, ProjectedMatrix, SinkhornParams,
+    };
 }

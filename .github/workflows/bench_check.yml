@@ -103,6 +103,25 @@ jobs:
           run_bench scheduler cargo bench -p chimera-mas --bench mas_benchmark scheduler_dequeue
           run_bench dedup cargo bench -p chimera-mas --bench dedup_bench
           run_bench shadow_stats cargo bench -p chimera-mas --bench shadow_stats
+          # ===== WS-3 E1: 审计点名的 17 个未守护 bench 补全(阈值"待首跑校准")=====
+          # 与 scripts/check_perf_redlines.ps1 Part3 $registeredBench 保持同步。
+          run_bench config_concurrency cargo bench -p chimera-cli --bench config_concurrency_bench
+          run_bench writer_ansi       cargo bench -p chimera-tui --bench writer_ansi_bench
+          run_bench v3_pipeline       cargo bench -p chimera-tui --bench v3_pipeline_bench
+          run_bench reduce_bench      cargo bench -p nexus-core --bench reduce_bench
+          run_bench session_store     cargo bench -p session-store --bench session_store_bench
+          run_bench cross_layer       cargo bench -p event-bus --bench cross_layer_bench
+          run_bench hybrid_search     cargo bench -p repo-wiki --bench hybrid_search_bench
+          run_bench debate            cargo bench -p parliament --bench debate
+          run_bench l2_recall         cargo bench -p mlc-engine --bench l2_recall
+          run_bench compress          cargo bench -p hcw-window --bench compress
+          run_bench compute_masks     cargo bench -p osa-coordinator --bench compute_masks
+          run_bench delegation        cargo bench -p chimera-mas --bench delegation_bench
+          run_bench cache_hit         cargo bench -p scc-cache --bench cache_hit
+          run_bench tiering           cargo bench -p lsct-tiering --bench tiering_benchmark
+          run_bench gather            cargo bench -p gqep-executor --bench gather
+          run_bench produce_verify    cargo bench -p pvl-layer --bench produce_verify
+          run_bench command_validator cargo bench -p seccore --bench command_validator_bench
 
       - name: Assert thresholds
         # WHY 用 Python 解析 criterion 的 estimates.json:
@@ -169,6 +188,30 @@ jobs:
               #  + 511 次重叠检测固有成本),按 ×2 抖动余量取 200µs;
               # 128 场景仍受 50µs 守护(22.8µs 实测,余量充足)
               "resolve_conflicts": 200_000,         # < 200µs(128 组仍 < 50µs)
+              # ===== WS-3 E1: 17 个补全 bench 阈值(来源注释)=====
+              # 现状:这些 bench 文件内均无既有目标常量/断言,spec.md KPI 亦无覆盖;
+              # 故统一取保守宽松 100ms 兜底,标注"待首跑校准"——CI 首跑后以实测收紧。
+              # (cross_layer/RL-07 跨膜已有 10ms 更严门;l2_recall/RL-02 单查 5ms 更严门)
+              "config_concurrency": 100_000_000,   # < 100ms 待首跑校准(CLI 配置并发;无既有目标常量)
+              "writer_ansi":        100_000_000,   # < 100ms 待首跑校准(ANSI 渲染;无既有目标)
+              "v3_pipeline":        100_000_000,   # < 100ms 待首跑校准(v3 链路输出;无既有目标)
+              "reduce_bench":       100_000_000,   # < 100ms 待首跑校准(向量化归约;确认 unroll/audit 开销)
+              "session_store":      100_000_000,   # < 100ms 待首跑校准(session 写/回放;新 crate 无 spec 依据)
+              "cross_layer":        100_000_000,   # < 100ms 待首跑校准(跨层 pipeline/fanout/旁路)
+              "hybrid_search":      100_000_000,   # < 100ms 待首跑校准(混合检索 fuse/dense/hybrid)
+              "debate":             100_000_000,   # < 100ms 待首跑校准(议会辩论;含 50 任务压力组取 max)
+              "l2_recall":          100_000_000,   # < 100ms 待首跑校准(L2 召回;RL-02 单查已有 5ms 更严门)
+              "compress":           100_000_000,   # < 100ms 待首跑校准(100k→32k 窗口压缩)
+              "compute_masks":      100_000_000,   # < 100ms 待首跑校准(全维稀疏掩码)
+              "delegation":         100_000_000,   # < 100ms 待首跑校准(委托扇出 fanout)
+              "cache_hit":          100_000_000,   # < 100ms 待首跑校准(语义缓存命中/未命中/插入)
+              "tiering":            100_000_000,   # < 100ms 待首跑校准(LSCT 分级 tick/应用决策)
+              "gather":             100_000_000,   # < 100ms 待首跑校准(GQEP 聚集/entangle)
+              "produce_verify":     100_000_000,   # < 100ms 待首跑校准(PVL 产出/验证)
+              "command_validator":  100_000_000,   # < 100ms 待首跑校准(命令校验直调/特性/动态)
+              # 预留(并行 WS-2 将创建 nexus-contracts/benches/xts_top_k.rs):
+              # 文件未落盘前无真实 estimates,只产生 no-estimates 告警(不失败);落地后自动守护。
+              "xts_top_k":          100_000_000,   # < 100ms 待首跑校准(WS-2 Top-K XTS 预留)
           }
 
           # 路径关键词映射:criterion 目录名 → benchmark crate
@@ -182,10 +225,13 @@ jobs:
           #     - "render" 仅 render_bench 使用(render_all_panels/render_each_panel/render_ide_three_panes)
           PATH_KEYWORDS = {
               "exit_code_matrix":  ["exit_code"],
-              "diff_engine_bench": ["diff"],
-              "wal_recovery":      ["wal"],
+              # WS-3 E1: diff/render/wal 均收窄为各自 bench 独有关键词,避免新增 bench
+              # 的 id 串(如 v3_pipeline_diffed / render_full_80x24 / wal_replay_cycle)
+              # 被宽泛前缀窃取进本门而污染阈值断言(见 Path 关键词唯一性原则)。
+              "diff_engine_bench": ["diff_incremental_5pct", "diff_full_redraw"],
+              "wal_recovery":      ["wal_append_single_fsync", "wal_recovery", "wal_read_empty", "wal_truncate_after_recovery"],
               "degradation_chain": ["degradation"],
-              "render_bench":      ["render"],
+              "render_bench":      ["render_all_panels", "render_each_panel", "render_ide_three_panes"],
               # Concord W5:流式链路关键词(与既有 render/diff/wal 无冲突,
               # 提词选取组名全名或独有子串,避免跨 benchmark 歧义)
               "streaming_single_token": ["streaming_single_token"],
@@ -211,6 +257,30 @@ jobs:
               "shadow_stats":      ["shadow_stats"],
               # resolve_conflicts 仅 gate_compute bench 的 resolve_conflicts/ 组使用(无歧义)
               "resolve_conflicts": ["resolve_conflicts"],
+              # ===== WS-3 E1: 17 个补全 bench 关键词 =====
+              # 关键词取自各 bench 的 criterion id 串(bench_function/benchmark_group 实参),
+              # 已核对唯一性与"单词干唯一前缀"原则,且避开 render/diff/wal 宽泛前缀冲突:
+              # writer_ansi 用 incremental_5pct 而非 render 前缀;v3_pipeline 用 v3_pipeline
+              # (diff 门已收窄为 diff_{incremental,full});session_store 用 single_write 而非 wal 前缀。
+              "config_concurrency": ["14_sections"],
+              "writer_ansi":        ["incremental_5pct", "render_full_80x24"],
+              "v3_pipeline":        ["v3_pipeline"],
+              "reduce_bench":       ["reduce"],
+              "session_store":      ["single_write"],
+              "cross_layer":        ["cross_layer"],
+              "hybrid_search":      ["hybrid_search"],
+              "debate":             ["deliberate"],
+              "l2_recall":          ["l2_recall"],
+              "compress":           ["100k_to_32k"],
+              "compute_masks":      ["compute_all_masks"],
+              "delegation":         ["delegation_fanout"],
+              "cache_hit":          ["cache_hit"],
+              "tiering":            ["apply_decision", "handle_quest_created"],
+              "gather":             ["gather", "entangle_alone"],
+              "produce_verify":     ["produce_verify", "produce_only", "verify_only"],
+              "command_validator":  ["mixed"],
+              # 预留 WS-2(nexus-contracts xts_top_k),id 串含 "xts_top_k n=" 前缀
+              "xts_top_k":          ["xts_top_k"],
           }
 
           criterion_dir = Path("target/criterion")

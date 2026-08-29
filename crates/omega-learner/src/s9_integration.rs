@@ -1,4 +1,4 @@
-//! S9 会话集成 — 将 StreamSessionCompleted 事件桥接到 S9RouteLearner
+﻿//! S9 会话集成 — 将 StreamSessionCompleted 事件桥接到 S9RouteLearner
 //!
 //! 对应架构层: L6 Router(omega-learner)
 //! 对应 ADR: ADR-065(MCA M3), ADR-068, ADR-084 决策 4(W5 占位治理)
@@ -82,6 +82,10 @@ impl S9SessionIntegration {
         max_expected_cost: u64,
         max_expected_ttft: u64,
     ) -> Self {
+        // P5-T3 分片扩量批次 3（ADR-153 Go 收官）:
+        // StreamSessionCompleted 高频非 Critical 事件→ 分片扇出;
+        // 幂等 + 无 runtime 时 Err 降级回单流（零回归,P1-T12 先例）
+        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
         Self {
             learner,
             event_bus,

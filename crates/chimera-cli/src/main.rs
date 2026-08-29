@@ -93,9 +93,11 @@ async fn main() -> std::process::ExitCode {
     let default_level = if cli.verbose { "debug" } else { "info" };
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+    // WI-02 stdout 纪律: 日志/进度全走 stderr（stdout 仅业务输出/协议帧）
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_target(false)
+        .with_writer(std::io::stderr)
         .compact()
         .init();
 

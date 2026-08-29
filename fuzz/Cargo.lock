@@ -213,6 +213,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-queue"
+version = "0.3.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803d13fb3b09d88be9f4dbc29062c66b19bf7170867ceb746d2a8689bf6c7a26"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -270,6 +298,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
 
 [[package]]
+name = "either"
+version = "1.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -300,6 +334,7 @@ version = "2.27.1-omega"
 dependencies = [
  "arc-swap",
  "chrono",
+ "crossbeam-queue",
  "dashmap",
  "nexus-contracts",
  "prometheus-client",
@@ -483,6 +518,7 @@ dependencies = [
  "async-trait",
  "event-bus",
  "nexus-contracts",
+ "nexus-core",
  "rand 0.8.7",
  "serde",
  "thiserror 1.0.69",
@@ -539,6 +575,7 @@ name = "hcw-window"
 version = "2.27.1-omega"
 dependencies = [
  "chrono",
+ "dashmap",
  "event-bus",
  "nexus-contracts",
  "nexus-core",
@@ -963,6 +1000,8 @@ dependencies = [
 name = "model-router"
 version = "2.27.1-omega"
 dependencies = [
+ "arc-swap",
+ "async-trait",
  "dashmap",
  "event-bus",
  "nexus-contracts",
@@ -1015,6 +1054,7 @@ version = "2.27.1-omega"
 dependencies = [
  "chrono",
  "serde",
+ "thiserror 1.0.69",
  "uuid",
 ]
 
@@ -1022,12 +1062,14 @@ dependencies = [
 name = "nexus-core"
 version = "2.27.1-omega"
 dependencies = [
+ "arc-swap",
  "async-trait",
  "chrono",
  "hex",
  "ndarray",
  "nexus-contracts",
  "rand 0.8.7",
+ "rayon",
  "serde",
  "serde_json",
  "sha2",
@@ -1371,6 +1413,26 @@ name = "rawpointer"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
+
+[[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
 
 [[package]]
 name = "redox_syscall"

@@ -18,6 +18,7 @@ use anyhow::Result;
 
 use crate::cli::{Cli, Commands};
 use crate::config::ChimeraConfig;
+use crate::error::ChimeraCliError;
 use crate::permission::PermissionCtx;
 
 /// Agent 生命周期管理子命令(Task 1.10)
@@ -32,6 +33,8 @@ pub mod completions;
 pub mod config;
 /// 系统健康检查子命令(Task 1.13)
 pub mod doctor;
+/// WI-02: 非交互执行契约（exec stdout 纪律 + 退出码四类语义）
+pub mod exec;
 /// Milestone B-5: Agent Grep 双通道检索子命令
 pub mod grep;
 /// EXAMPLES 一级入口(Task 5 of spec)
@@ -46,6 +49,10 @@ pub mod parliament;
 pub mod quest;
 /// 单次任务运行子命令
 pub mod run;
+/// WI-01: 协议宿主服务（serve 形态,JSON-RPC v1 over stdio）
+pub mod serve;
+/// P2-T9: ACP 桥（Agent Client Protocol,JSON-RPC 2.0 over stdio,转译层隔离）
+pub mod acp;
 /// TUI 交互界面子命令
 pub mod tui;
 /// Wiki 查询子命令
@@ -66,13 +73,36 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         // 不消费 json/perm(纯字符串输出)
         Some(Commands::Help { command }) => help::execute(command.as_deref(), cli).await,
         Some(Commands::Run { prompt }) => run::execute(prompt, cfg, cli.json, &perm).await,
+        // WI-02: exec 非交互契约 — 独立退出码语义（0/2/3/4）经 exec::exec_exit_code 映射；
+        // std::process::exit 立即终止（exec 为 CI 管道场景，析构无业务依赖）
+        Some(Commands::Exec { prompt }) => {
+            match exec::execute(prompt, cfg, cli.json, &perm).await {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    if let Some(ce) = e.downcast_ref::<ChimeraCliError>() {
+                        eprintln!("exec error: {}", ce.message());
+                        std::process::exit(exec::exec_exit_code(ce) as i32);
+                    }
+                    eprintln!("exec error: {e:?}");
+                    std::process::exit(4); // 工具失败默认码
+                }
+            }
+        }
+        // WI-01: serve 协议宿主（不消费 json/perm——协议面自身是 JSON）
+        Some(Commands::Serve) => serve::execute(cfg).await,
+        // P2-T9: ACP 桥（转译层隔离,协议面自身是 JSON）
+        Some(Commands::Acp) => acp::execute(cfg).await,
         // Task 1.5: chat REPL 不消费 json flag(REPL 内部统一人类可读),
         // 但消费 perm(--no-permission 自动允许 tool 调用,CI 友好)
         Some(Commands::Chat) => chat::execute(cli, cfg).await,
         // v3-engine M2(ADR-061):传递 `--no-v3-engine` flag 到 tui::execute,
         // 由其设置 CHIMERA_NO_V3_ENGINE 环境变量控制渲染路径回退。
+        // WI-01: `--protocol` flag 传递协议模式开关（Quest 生命周期经协议面）
         // TUI 不消费 json/perm(TUI 有自己的渲染管线,不走 stdout 输出 helper)
-        Some(Commands::Tui { no_v3_engine }) => tui::execute(cfg, *no_v3_engine).await,
+        Some(Commands::Tui {
+            no_v3_engine,
+            protocol,
+        }) => tui::execute(cfg, *no_v3_engine, *protocol).await,
         // Quest:全局 --json 优先,子命令级 --json 作为兼容回退(Task 1.7 统一前保留)
         Some(Commands::Quest { action, json }) => {
             quest::execute(action, cfg, cli.json || *json, &perm, cli.dry_run).await
@@ -110,9 +140,9 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         // Task 2 of spec: LLM Provider 管理 — 全局 --json 传递;perm 供 set-default/strategy 使用
         Some(Commands::Llm { action }) => llm::execute(action, cfg, cli.json, &perm).await,
         None => {
-            // 无子命令:默认启动 TUI 交互界面(默认启用 v3-engine)
+            // 无子命令:默认启动 TUI 交互界面(默认启用 v3-engine,非协议模式)
             // --help/--version 由 Clap 在 Cli::parse() 阶段内置处理,不会进入此分支
-            tui::execute(cfg, false).await
+            tui::execute(cfg, false, false).await
         }
     }
 }

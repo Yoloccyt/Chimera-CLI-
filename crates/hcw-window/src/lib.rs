@@ -53,12 +53,20 @@ pub mod density_learner;
 pub mod error;
 /// Phase 2 §7.4: HiLS-Attention 分层稀疏注意力（chunk-mass surrogate + 两级 softmax，ADR-049 内嵌）
 pub mod hils;
+/// P1-T14: 压缩评分 ComputeBridge 段间并行注入(env CHIMERA_NO_PARALLEL_HCW 回退)
+pub mod parallel;
+/// P2-T4: CSC 四级渐进压缩链 + from 模式保前缀 + 分组截断重试(ADR-119/v4.0 WI-12)
+pub mod pipeline;
+/// P2-T4: ThinkingPreserve 推理痕迹保留(T-02/Ω₉,压缩全程不触碰 thinking 块)
+pub mod preserve;
 /// PROBE P1.2: 查询探针打分（ProbeWeights / score_with_probe / mix_probe / probe_health）
 pub mod probe;
 pub mod recall;
 pub mod selector;
 /// P4-W13.3.2: 选择器学习器持有器 — S4 接缝策略异步下发 + 本地 fallback（C4 合规）
 pub mod selector_learner;
+/// P2-T4: SharedSemanticIndex 跨层共享语义索引(GLM IndexShare 迁移,符号/决策/错误三类)
+pub mod semantic_index;
 pub mod types;
 pub mod window;
 

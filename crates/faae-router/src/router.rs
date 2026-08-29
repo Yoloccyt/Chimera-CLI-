@@ -32,6 +32,9 @@ use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tokio::sync::RwLock;
 use tracing::warn;
 
+// ws2-c1 红线 #8:公共 Top-K 收敛工具(替代 sort_by 全排)
+use nexus_contracts::util::xts_top_k_by;
+
 use crate::config::FaaeConfig;
 use crate::edsb::EdsbBalancer;
 use crate::error::FaaeError;
@@ -167,33 +170,58 @@ impl FaaeRouter {
             });
         }
 
-        // 2. 锁外计算相似度(每个 profile 独立读锁,不争用 registry 锁)
-        let mut scored: Vec<(ToolId, f32, Arc<RwLock<ExpertProfile>>)> =
-            Vec::with_capacity(candidate_arcs.len());
-        for profile_arc in &candidate_arcs {
-            let profile = profile_arc.read().await;
-            // 截取 CLV 前 64 维与 expert_vector 对齐
-            let query = &clv[..clv.len().min(profile.expert_vector.len())];
-            let sim = nexus_core::cosine_similarity_slices(query, &profile.expert_vector);
-            // 优先级加权:final_score = sim × priority(高优先级工具更易被选中)
-            let weighted_score = sim * profile.priority;
-            scored.push((profile.tool_id.clone(), weighted_score, profile_arc.clone()));
-        }
+        // 2. 锁外计算相似度(ComputeBridge 批量评分,快照分离,见 parallel 模块)
+        //
+        // P1-T14: 原实现循环内每候选持 tokio 读锁 await + 计算,不满足 rayon
+        // 闭包契约（闭包内禁 await/持锁,红线 §7.5.3 纪律⑥）。改造为快照分离:
+        //   a) 主线程异步读锁收集评分快照（tool_id / expert_vector / priority）,
+        //      读锁随收集结束立即释放（无锁跨 await）;
+        //   b) 纯计算评分经 ComputeBridge 路由:Inline（n < Generic 阈值,串行,
+        //      与注入前行为逐位一致）或 Rayon（spawn_compute_batch 批量并行）。
+        //      `FaaeConfig::parallel_expert_scoring` + `CHIMERA_NO_PARALLEL_FAAE`
+        //      env 任一关闭 → 强制串行回退。
+        // 注:原 scored 第三元素 Arc<RwLock<ExpertProfile>> 为死数据（步骤 5 起
+        // 按 final_tool 重新查 registry）,已移除,简化并行化。
+        let score_inputs = {
+            let mut inputs = Vec::with_capacity(candidate_arcs.len());
+            for profile_arc in &candidate_arcs {
+                let profile = profile_arc.read().await;
+                inputs.push(crate::parallel::ScoreInput {
+                    tool_id: profile.tool_id.clone(),
+                    expert_vector: profile.expert_vector.clone(),
+                    priority: profile.priority,
+                });
+            }
+            inputs
+        };
+        // Arc 共享传入评分核心:并行闭包捕获同一容器 + 索引范围,零输入复制
+        // （ScoreInput 全量复制在 12000 专家场景 ~5ms,已消除）。
+        let score_inputs = Arc::new(score_inputs);
+        let scored: Vec<(ToolId, f32)> = crate::parallel::score_experts_batch(
+            clv,
+            &score_inputs,
+            self.config.parallel_expert_scoring,
+        )?;
 
-        // 3. 部分排序选 Top-K(O(n),比全排序 O(n log n) 更高效)
+        // 3. 部分排序选 Top-K(O(n),公共 xts_top_k_by,红线 #8 ws2-c1)
+        // 平局确定性:分数降序 + 原始下标升序 —— 与"全排后截断"的稳定语义等价
+        // (select_nth 分区会扰动相等元素相对顺序,必须在比较器内以原始下标消歧)。
         let k = self.config.top_k.min(scored.len());
-        if k < scored.len() {
-            scored.select_nth_unstable_by(k, |a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-        // 前 K 个再排序确保降序(K log K << n log n)
-        scored[..k].sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mut scored_idx: Vec<(usize, ToolId, f32)> = scored
+            .into_iter()
+            .enumerate()
+            .map(|(i, (t, s))| (i, t, s))
+            .collect();
+        xts_top_k_by(&mut scored_idx, k, |a, b| {
+            b.2.partial_cmp(&a.2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
 
         // 4. 构建候选列表(Top-K 工具 ID + 分数)
-        let candidates: Vec<(ToolId, f32)> = scored[..k]
+        let candidates: Vec<(ToolId, f32)> = scored_idx[..k]
             .iter()
-            .map(|(tid, score, _)| (tid.clone(), *score))
+            .map(|(_, t, s)| (t.clone(), *s))
             .collect();
 
         let routed_tool = candidates[0].0.clone();

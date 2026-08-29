@@ -52,6 +52,19 @@ pub struct FaaeConfig {
     /// 5 分钟内路由约 500-1000 次(中等负载),衰减 8%(exp(-300/3600) ≈ 0.92),
     /// 时近性权重明显但不至于过快淡出
     pub decay_interval_secs: u64,
+
+    /// 批量专家评分并行开关(P1-T14 注入,默认 true)
+    ///
+    /// WHY:WI-34 七条纪律⑤"逐一回滚"——每个热点独立 `--no-parallel-*` 语义;
+    /// 关闭后批量专家评分走串行路径(与 T14 注入前行为一致)。
+    /// `#[serde(default)]` 保证旧配置 JSON 反序列化兼容(缺省 = true,向后兼容)。
+    #[serde(default = "default_true")]
+    pub parallel_expert_scoring: bool,
+}
+
+/// serde 缺省值 — 旧配置(无该字段)反序列化为 true(默认并行,向后兼容)
+const fn default_true() -> bool {
+    true
 }
 
 impl FaaeConfig {
@@ -89,6 +102,15 @@ impl FaaeConfig {
         self.decay_interval_secs = secs;
         self
     }
+
+    /// 设置批量专家评分并行开关(P1-T14)
+    ///
+    /// false = 关闭并行,批量评分走串行路径(与 T14 注入前行为一致);
+    /// 亦可用 `CHIMERA_NO_PARALLEL_FAAE` 环境变量在进程级覆盖(见 `parallel` 模块)。
+    pub fn with_parallel_expert_scoring(mut self, enabled: bool) -> Self {
+        self.parallel_expert_scoring = enabled;
+        self
+    }
 }
 
 impl Default for FaaeConfig {
@@ -100,6 +122,8 @@ impl Default for FaaeConfig {
             balance_enabled: true,
             // WHY 默认 300s 与原硬编码 DECAY_INTERVAL_SECS 一致,保持向后兼容
             decay_interval_secs: 300,
+            // P1-T14:默认启用批量评分并行(WI-34 纪律⑤,可经配置/env 关闭)
+            parallel_expert_scoring: true,
         }
     }
 }
@@ -116,6 +140,26 @@ mod tests {
         assert!((config.decay_tau - 3600.0).abs() < 1e-6);
         assert!(config.balance_enabled);
         assert_eq!(config.decay_interval_secs, 300);
+        // P1-T14:默认启用批量评分并行
+        assert!(config.parallel_expert_scoring);
+    }
+
+    #[test]
+    fn test_with_parallel_expert_scoring_toggle() {
+        let config = FaaeConfig::default().with_parallel_expert_scoring(false);
+        assert!(!config.parallel_expert_scoring);
+        assert!(FaaeConfig::default().parallel_expert_scoring);
+    }
+
+    /// P1-T14:旧配置 JSON(无 parallel_expert_scoring 字段)反序列化兼容 → 缺省 true
+    #[test]
+    fn test_serde_backward_compat_missing_parallel_field() {
+        let old_json = r#"{"top_k":8,"entropy_threshold":0.6,"decay_tau":3600.0,"balance_enabled":true,"decay_interval_secs":300}"#;
+        let config: FaaeConfig = serde_json::from_str(old_json).expect("旧配置应可反序列化");
+        assert!(
+            config.parallel_expert_scoring,
+            "缺省字段应默认 true(向后兼容)"
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # check_dependency_rules.ps1 - Architecture dependency-iron-law audit (P9-T10)
 # =============================================================================
 # Purpose: enforce the three dependency iron laws of the NEXUS-OMEGA 10-layer
@@ -15,7 +15,7 @@
 #                              (gqep-executor->qeep-protocol ADR-048,
 #                               pvl-layer->seccore dynamic-blacklist feature).
 #   C. Graph completeness    - every referenced workspace dependency must exist
-#                              in the layer map; layer map covers 38/38 crates
+#                              in the layer map; layer map covers 39/39 crates
 #                              (static count + disk scan in normal mode).
 # Author:  staff-engineer-mode (architecture governance specialist)
 # Refs:    ADR-054 decision 5 / ADR-048, .trae/rules/nuxus-rules.md section 2.2,
@@ -53,6 +53,8 @@ $layerMap = @{
     'nmc-encoder' = 2; 'hcw-window' = 2; 'mlc-engine' = 2
     # L3 Storage
     'scc-cache' = 3; 'lsct-tiering' = 3; 'cmt-tiering' = 3
+    # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
+    'session-store' = 3
     # L4 Security
     'seccore' = 4; 'qeep-protocol' = 4; 'decay-engine' = 4
     # L5 Knowledge
@@ -66,18 +68,26 @@ $layerMap = @{
     # L7 Execution
     'pvl-layer' = 7; 'gqep-executor' = 7; 'mtpe-executor' = 7
     'csn-substitutor' = 7; 'ssra-fusion' = 7
+    # P3-T9 (2026-08-27): nexus-subagent typed SubAgent runtime (L7, 43rd crate)
+    'nexus-subagent' = 7
     # L8 Parliament
     'parliament' = 8; 'acb-governor' = 8; 'decb-governor' = 8
     # L9 Quest
     'quest-engine' = 9; 'efficiency-monitor' = 9; 'chimera-mas' = 9
     'gea-activator' = 9
+    # P3-T2 (2026-08-27): mas-sched peer scheduler control plane (L9, 41st crate)
+    'mas-sched' = 9
+    # P3-T3 (2026-08-27): nexus-hook lifecycle hook system (L9, 42nd crate)
+    'nexus-hook' = 9
     # L10 Interface
     'chimera-cli' = 10; 'chimera-tui' = 10; 'chtc-bridge' = 10
     'mca-gateway' = 10
+    # WI-01 (2026-08-22): nexus-app-server host facade (L10, 39th crate)
+    'nexus-app-server' = 10
 }
 
 # Expected total crate count (workspace members). Static completeness bound.
-$expectedCrates = 38
+$expectedCrates = 43
 
 # Inner-ring whitelist: 9 crates (memory + reasoning + evolution ring).
 # Three-ring reorganization target: inner ring talks via shared memory/direct
@@ -241,6 +251,30 @@ function Invoke-RuleChecks {
             }
         }
         $script:report += "[C] disk crates scanned: $($dirs.Count), layer map entries: $($layerMap.Count) (expect 38/38)"
+
+        # --- Check D: chimera-mas internal dependency bound (P3-T2, WI-29) ---
+        # WI-29 strangler 目标: chimera-mas 内部 crate 依赖 ≤16（实测 13）;
+        # 超限即拆（mas-sched 控制面已拆出,后续执行面继续瘦身）。
+        $masInternal = @()
+        if (Test-Path 'crates/chimera-mas/Cargo.toml') {
+            $masLines = Get-Content 'crates/chimera-mas/Cargo.toml'
+            $inDeps = $false
+            foreach ($line in $masLines) {
+                if ($line -match '^\[dependencies\]') { $inDeps = $true; continue }
+                if ($line -match '^\[dev-dependencies\]') { $inDeps = $false }
+                if ($inDeps -and $line -match '^([a-z0-9-]+)\s*=') {
+                    $depName = $Matches[1]
+                    if ($layerMap.ContainsKey($depName)) { $masInternal += $depName }
+                }
+            }
+        }
+        $masLimit = 16
+        if ($masInternal.Count -gt $masLimit) {
+            $script:report += "[GAP-D] chimera-mas internal deps $($masInternal.Count) > $masLimit (WI-29 bound, mas-sched split required)"
+            $script:status = 1
+        } else {
+            $script:report += "[D] chimera-mas internal deps: $($masInternal.Count)/$masLimit (WI-29 <=16 bound)"
+        }
     }
 }
 

@@ -26,7 +26,7 @@
 //! 专用向量索引(如 HNSW),同时保持 API 不变。
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use crate::error::WikiError;
 
@@ -35,6 +35,9 @@ pub mod hnsw_store;
 
 /// 内存 KNN fallback 路径实现(P2-W8.2,VectorStore trait 适配器)
 pub mod memory_knn_store;
+
+/// P1-T14（WI-34）:批量 KNN 检索的 ComputeBridge 并行注入（env 开关 + 路由核心）
+pub mod parallel;
 
 /// 向量索引 — 内存 KNN 检索(降级实现)
 ///
@@ -52,6 +55,12 @@ pub struct VectorIndex {
     dim: usize,
     /// 内存向量存储(entry_id → embedding)
     vectors: RwLock<HashMap<String, Vec<f32>>>,
+    /// P1-T14: 批量检索并行开关（WI-34 注入配置回退）
+    ///
+    /// 默认 true;置 false 强制 `search_batch` 走串行（env `CHIMERA_NO_PARALLEL_WIKI`
+    /// 为二次关闭开关,见 [`crate::vector::parallel`]）。仅作用于 `search_batch`
+    /// 批量路径,单查询 `search` 行为零影响。
+    parallel_search: bool,
 }
 
 impl VectorIndex {
@@ -60,6 +69,7 @@ impl VectorIndex {
         Self {
             dim,
             vectors: RwLock::new(HashMap::new()),
+            parallel_search: true,
         }
     }
 
@@ -129,6 +139,110 @@ impl VectorIndex {
         // 前 K 元素已是无序的 Top-K 集合,这里做最终降序排序(K log K)
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         Ok(scored)
+    }
+
+    /// 批量 KNN 检索 — 对 `queries` 中每个查询向量返回 Top-K 结果
+    ///
+    /// 返回 `Vec<Vec<(entry_id, similarity_score)>>`,**结果序 = 输入 query 序**
+    /// （查询 i 的结果对应输入 i）。核心计算经
+    /// [`crate::vector::parallel::knn_core`](crate::vector::parallel::knn_core)
+    /// 路由（`TaskKind::KnnSearch`,阈值 5,000,`n_items = q × v` 总相似度计算数）
+    /// → 并行或串行。
+    ///
+    /// # 语义（快照语义,确定性,Ω₂）
+    /// - 全部查询基于**调用时刻一次性快照**的向量集计算（RwLock 读锁在快照窗口内
+    ///   短暂持有,不跨闭包边界;快照后按 id 排序,消除 HashMap 迭代序对
+    ///   分数 tie 相对顺序的影响 → 并行与串行逐 query 逐位一致）;
+    /// - 查询间完全独立（互不依赖）→ 可安全并行;
+    /// - `top_k` 语义与单查询 `search` 一致（select_nth_unstable + 稳定降序排序）。
+    ///
+    /// # 原子性
+    /// 任一 query 维度不匹配 → 返回 [`WikiError::VectorIndexError`],
+    /// **零计算零检索**（维度预校验,不产生部分结果）。
+    ///
+    /// # 回退
+    /// 配置开关 `parallel_search`（默认 true,`with_parallel_search(false)` 关闭）
+    ///   加 env `CHIMERA_NO_PARALLEL_WIKI`（OnceLock 启动期一次读取）双重关闭
+    ///   强制串行;并行失败（理论不可达:闭包纯计算）自动回退串行。
+    ///
+    /// # 示例
+    /// ```
+    /// use repo_wiki::vector::VectorIndex;
+    ///
+    /// let idx = VectorIndex::new(4);
+    /// idx.upsert("a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+    /// idx.upsert("b", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+    ///
+    /// let results = idx.search_batch(&[
+    ///     vec![1.0, 0.0, 0.0, 0.0],
+    ///     vec![0.0, 1.0, 0.0, 0.0],
+    /// ], 1).unwrap();
+    /// assert_eq!(results.len(), 2);
+    /// assert_eq!(results[0][0].0, "a", "查询 0 的 top-1 应是 a");
+    /// assert_eq!(results[1][0].0, "b", "查询 1 的 top-1 应是 b");
+    /// ```
+    pub fn search_batch(
+        &self,
+        queries: &[Vec<f32>],
+        top_k: usize,
+    ) -> Result<Vec<Vec<(String, f32)>>, WikiError> {
+        let q = queries.len();
+        if q == 0 {
+            return Ok(Vec::new());
+        }
+
+        // 维度预校验（原子性:任一不匹配 → 零计算零检索）
+        for query in queries {
+            if query.len() != self.dim {
+                return Err(WikiError::VectorIndexError(format!(
+                    "query dimension mismatch: expected {}, got {}",
+                    self.dim,
+                    query.len()
+                )));
+            }
+        }
+
+        // ① 快照分离:主线程读锁一次(短暂持锁,不跨闭包边界);按 id 排序保证
+        //    分数 tie 的相对顺序确定（HashMap 迭代序不确定,Ω₂ 确定性前提）
+        let snapshot: Vec<(String, Vec<f32>)> = {
+            let vectors = self
+                .vectors
+                .read()
+                .map_err(|e| WikiError::VectorIndexError(format!("rwlock poisoned: {e}")))?;
+            let mut v: Vec<(String, Vec<f32>)> = vectors
+                .iter()
+                .map(|(id, vec)| (id.clone(), vec.clone()))
+                .collect();
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v
+        };
+
+        // ② 计算:ComputeBridge 路由(并行/串行),结果序 = 输入 query 序
+        let queries_arc = Arc::new(queries.to_vec());
+        let vectors_arc = Arc::new(snapshot);
+        Ok(parallel::knn_core(
+            &queries_arc,
+            &vectors_arc,
+            top_k,
+            self.parallel_search,
+        ))
+    }
+
+    /// 设置批量检索并行开关（builder 风格,默认 true）
+    ///
+    /// 置 false 强制 `search_batch` 走串行路径（回退语义,与 env
+    /// `CHIMERA_NO_PARALLEL_WIKI` 双重关闭;见 [`crate::vector::parallel`]）。
+    /// 仅作用于批量路径,单查询 `search` 行为零影响。
+    #[must_use]
+    pub fn with_parallel_search(mut self, flag: bool) -> Self {
+        self.parallel_search = flag;
+        self
+    }
+
+    /// 查询批量检索并行开关（默认 true）
+    #[must_use]
+    pub fn parallel_search(&self) -> bool {
+        self.parallel_search
     }
 
     /// 删除向量

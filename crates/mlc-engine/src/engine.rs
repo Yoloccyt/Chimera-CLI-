@@ -236,6 +236,11 @@ impl MlcEngine {
     ///
     /// WHY:测试场景不需要持久化,内存数据库更快且自动清理
     pub fn new_in_memory(event_bus: EventBus) -> Result<Self, MlcError> {
+        // P1-T12 示范接入(灰度验证「公共 API 零感知」):
+        // MemoryMetricsReported 每 100 次操作发布(高频非 Critical)→ 分片扇出;
+        // 无 tokio runtime 上下文时 enable_sharding 返回 Err,let _ 忽略即
+        // 降级回单流(零回归;分片默认关闭=EventBus::new() 行为与 v2.27.1 一致)
+        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
         let config = MlcConfig::default();
         let l3 = ProceduralMemory::open_in_memory()?;
         let mem_con_controller =
@@ -266,6 +271,8 @@ impl MlcEngine {
         config: MlcConfig,
         event_bus: EventBus,
     ) -> Result<Self, MlcError> {
+        // P1-T12 示范接入(与 new_in_memory 一致,见其注释)
+        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
         config.validate()?;
         let l3 = ProceduralMemory::open_in_memory()?;
         let mem_con_controller =

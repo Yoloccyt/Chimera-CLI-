@@ -33,6 +33,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use nexus_contracts::SelectorWeights;
 use nexus_core::CLV;
+// ws2-c1 红线 #8:公共 Top-K 收敛工具(替代 sort_by 全排)
+use nexus_contracts::util::xts_top_k_by;
 
 use crate::types::{CompressionReport, ContextEntry, HcwConfig};
 
@@ -192,21 +194,27 @@ impl ContextCompressor {
         // 计算每个条目的重要性评分并配对(借用 Arc 引用,不 clone)
         // WHY(M-01/M-02):scored 存 `&Arc<ContextEntry>` 而非 `&ContextEntry`,
         // 以便后续 `retained.push(Arc::clone(entry))` 零拷贝推入。
-        // compute_importance 接受 `&ContextEntry`,通过 Deref coercion
+        // compute_importance_score 接受 `&ContextEntry`,通过 Deref coercion
         // 自动将 `&Arc<ContextEntry>` 解引用为 `&ContextEntry`。
+        //
+        // WHY(P1-T14 段间并行):评分阶段经 `crate::parallel::score_entries` 路由 ——
+        // 并行开启且 n ≥ 阈值时段间并行(段内保序,段间按序拼接),否则串行;
+        // 两者逐元素一致(确定性断言锁定),Top-K 选择与贪心保留仍串行执行,
+        // 与注入前行为逐位一致。
+        let weights = config.selector_policy.weights();
+        let scores = crate::parallel::score_entries(
+            entries,
+            weights,
+            task_clv,
+            now,
+            max_access_count,
+            time_span_ms,
+            config.parallel_compress,
+        );
         let mut scored: Vec<(f32, &Arc<ContextEntry>)> = entries
             .iter()
-            .map(|e| {
-                let score = Self::compute_importance(
-                    e,
-                    config,
-                    task_clv,
-                    now,
-                    max_access_count,
-                    time_span_ms,
-                );
-                (score, e)
-            })
+            .zip(scores)
+            .map(|(e, score)| (score, e))
             .collect();
 
         // === SubTask 13.7:用 select_nth_unstable_by 部分排序替代全排序 ===
@@ -310,41 +318,6 @@ impl ContextCompressor {
             algorithm: "importance-top-n".into(),
         }
     }
-
-    /// 计算单个条目的重要性评分
-    ///
-    /// 公式:`score = w1 × recency + w2 × frequency + w3 × relevance`
-    /// (权重由 `HcwConfig.selector_policy` 注入,P3-W10.3 D1 修复)
-    ///
-    /// - `recency`(时近性):1.0 - (Δt / time_span),最新的为 1.0,最旧的为 0.0
-    /// - `frequency`(频次):access_count / max_access_count,最高频为 1.0
-    /// - `relevance`(任务相关性):CLV 余弦相似度 clamp 到 [0.0, 1.0],
-    ///   无 CLV 时取 0.5(中性)
-    ///
-    /// WHY 委托 `compute_importance_score` (P4-W13.3.2 重构):
-    /// 公式已提取为 `pub(crate)` 自由函数,供 `SelectorLearnerHolder` 共享,
-    /// 避免运行时策略路径与配置时策略路径公式漂移。此处仅从 `HcwConfig`
-    /// 读取 `SelectorPolicy::weights()` 后委托调用。
-    fn compute_importance(
-        entry: &ContextEntry,
-        config: &HcwConfig,
-        task_clv: Option<&CLV>,
-        now: DateTime<Utc>,
-        max_access_count: f32,
-        time_span_ms: f32,
-    ) -> f32 {
-        // P3-W10.3 D1 修复:从注入式 SelectorPolicy 获取权重(取代原硬编码 compressor_weights)
-        // WHY:Static 变体 = 编译进二进制的常量(fallback);Learned 变体 = omega-learner 异步下发值
-        let weights = config.selector_policy.weights();
-        compute_importance_score(
-            entry,
-            weights,
-            task_clv,
-            now,
-            max_access_count,
-            time_span_ms,
-        )
-    }
 }
 
 /// 按 token 预算裁剪上下文 — OSA budget_mask 联动（ADR-069 Token 效率优化）
@@ -430,14 +403,11 @@ pub fn trim_to_budget(
         .max(1);
     let estimated_k = (budget_tokens / min_token_size).min(scored.len()).max(1);
 
-    if estimated_k < scored.len() {
-        let (top_k, ..) = scored.select_nth_unstable_by(estimated_k - 1, |a, b| {
-            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        top_k.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    } else {
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    }
+    // 公共 xts_top_k_by:O(n) 部分排序 + O(k log k) 局部排序(红线 #8 ws2-c1)
+    // k >= len 时等价全量降序排序,抵消原 if/else 分支逻辑
+    xts_top_k_by(&mut scored, estimated_k, |a, b| {
+        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.truncate(estimated_k);
 
     // 贪心保留

@@ -396,6 +396,8 @@ fn select_top_k_desc(scored: &mut [(usize, f32)], k: usize) -> &[(usize, f32)] {
 mod tests {
     use super::*;
     use crate::config::SesaConfig;
+    // ws2-c1 红线 #8:公共 Top-K 收敛工具(仅测试内使用,故在此导入)
+    use nexus_contracts::util::xts_top_k_by;
 
     // === 辅助函数 ===
 
@@ -665,7 +667,11 @@ mod tests {
 
         // 提取 Top-K 评分并排序
         let mut top_scores: Vec<f32> = top.iter().map(|(_, s)| *s).collect();
-        top_scores.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        // ws2-c1 红线 #8:公共 xts_top_k_by 代替 sort_by 全排(测试内降序校验)
+        let n = top_scores.len();
+        xts_top_k_by(&mut top_scores, n, |a, b| {
+            b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // 期望:最大的 10 个评分(0.99, 0.98, ..., 0.90)
         for (i, &s) in top_scores.iter().enumerate() {

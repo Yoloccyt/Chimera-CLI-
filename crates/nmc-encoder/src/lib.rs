@@ -45,6 +45,8 @@
 pub mod config;
 pub mod error;
 pub mod fusion;
+// P1-T14: 批量编码 ComputeBridge 并行注入(env CHIMERA_NO_PARALLEL_NMC 回退)
+pub mod parallel;
 pub mod perceptors;
 pub mod types;
 
@@ -52,6 +54,8 @@ pub mod types;
 pub use config::{FusionStrategy, NmcConfig};
 pub use error::NmcError;
 pub use fusion::{MultimodalFusionEngine, NmcEncoder};
+// P1-T14: 批量并行编码入口(route 判定 + 串行回退)
+pub use parallel::perceive_batch;
 pub use perceptors::{
     AudioPerceptor, DesktopPerceptor, ImagePerceptor, ModelType, OnnxBackend, Perceptor,
     TextPerceptor, VideoPerceptor,

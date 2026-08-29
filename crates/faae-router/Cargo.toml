@@ -38,6 +38,8 @@ criterion = { workspace = true }
 proptest = { workspace = true }
 # 测试用临时文件/目录
 tempfile = { workspace = true }
+# 配置 JSON 反序列化兼容测试（P1-T14: 旧配置缺省字段回填验证）
+serde_json = { workspace = true }
 
 [[bench]]
 name = "route"
@@ -46,4 +48,11 @@ harness = false
 # W4(§11.2): 算子路由选择基准——聚合表 O(K) vs 全历史扫描对照(性能可证伪)
 [[bench]]
 name = "operator_select"
+harness = false
+
+# P1-T14: 批量专家评分 ComputeBridge 并行注入 — 串行 vs 并行吞吐对照（门禁 1.5×）
+# WHY 独立 bench 文件: 与 route.rs（单请求端到端延迟）解耦,专注测量大批量
+# 专家评分场景的 ComputeBridge Rayon 并行收益
+[[bench]]
+name = "faae_parallel_bench"
 harness = false

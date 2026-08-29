@@ -55,6 +55,12 @@ pub mod error;
 pub mod formal;
 /// P4-W14.4: DecayEngine 学习器持有器（S6 接缝策略异步下发 + 本地 fallback）
 pub mod learner_holder;
+/// P1-T14: 批量能力衰减的 ComputeBridge 并行注入（快照分离 + 串行提交 + 回退）
+///
+/// 批量衰减热点（v4.0 §7.5.1 L-a）经 [`nexus_core::compute`] 全局计算池并行:
+/// 逐能力独立衰减 → 主线程快照 → rayon 闭包纯计算 → 串行提交;
+/// `CHIMERA_NO_PARALLEL_DECAY` env + [`DecayEngine::parallel_batch`] 双重回退。
+pub mod parallel;
 /// R2 解冻阶段③ 前置 3 — 影子模式熔断开关（fail-closed 安全护栏，ADR-052 待办 3）
 ///
 /// 消费 FormalVerifier 验证结果流，任一属性 Violated 即永久跳闸拒绝 RL 更新，

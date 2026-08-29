@@ -190,6 +190,10 @@ impl NmcEncoder {
     /// 创建带事件总线的编码器
     pub fn with_event_bus(config: NmcConfig, bus: EventBus) -> Result<Self, NmcError> {
         config.validate()?;
+        // P4-T10 分片扩量批次 1(ADR-153 Go,分批 3 crate × 回归门禁):
+        // NmcEncoded 高频非 Critical 事件→ 分片扇出;
+        // 幂等 + 无 runtime 时 Err 降级回单流(零回归,P1-T12 先例)
+        let _ = bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
         Ok(Self {
             text_perceptor: TextPerceptor::new(config.clone()),
             image_perceptor: ImagePerceptor::new(config.clone()),
@@ -206,13 +210,31 @@ impl NmcEncoder {
     /// 流程:选择感知器 → 感知 → 融合 → 发布事件(若有总线)
     pub fn perceive(&self, input: PerceptionInput) -> Result<ClvOutput, NmcError> {
         let modality = input.modality();
-        let element = self.perceive_by_modality(&input)?;
-        let content_hash = element.content_hash.clone();
-        let clv_output = self.fusion.fuse(vec![element])?;
+        let (clv_output, content_hash) = self.perceive_core(&input)?;
 
         self.publish_encoded_event(modality, content_hash, clv_output.dimension());
 
         Ok(clv_output)
+    }
+
+    /// 感知 + 融合计算核心(不含事件发布)— P1-T14 并行注入拆出的无副作用计算段
+    ///
+    /// 返回 `(ClvOutput, content_hash)`:
+    /// - 计算段(感知器哈希/嵌入/ONNX 推理 + 融合)为**纯 CPU 计算**,无 IO/await/持锁,
+    ///   满足 rayon 闭包契约(红线 §7.5.3 纪律⑥),可放入 ComputeBridge 并行执行;
+    /// - 内容哈希供调用方在**主线程**按序发布事件(事件发布为 IO 侧操作,禁入 rayon)。
+    ///
+    /// tract-onnx 线程安全:各感知器持有的 `TractPlan`(SimplePlan)为 immutable 共享
+    /// 结构(`run(&self)` 每次调用创建独立状态,`Op: Send + Sync + 'static`),
+    /// 故 `NmcEncoder` 可跨 rayon 线程经 `Arc` 共享推理(编译期断言锁定,见 tests)。
+    pub(crate) fn perceive_core(
+        &self,
+        input: &PerceptionInput,
+    ) -> Result<(ClvOutput, String), NmcError> {
+        let element = self.perceive_by_modality(input)?;
+        let content_hash = element.content_hash.clone();
+        let clv_output = self.fusion.fuse(vec![element])?;
+        Ok((clv_output, content_hash))
     }
 
     /// 根据输入模态选择对应感知器执行感知
@@ -230,7 +252,15 @@ impl NmcEncoder {
     ///
     /// WHY 事件发布失败仅记录 warn 不阻断编码:CLV 已成功计算,
     /// 事件丢失可由下一次编码补偿(NmcEncoded 为 Normal 级别)
-    fn publish_encoded_event(&self, modality: Modality, content_hash: String, clv_dim: usize) {
+    ///
+    /// WHY `pub(crate)`:P1-T14 并行注入——`crate::parallel` 批量路径
+    /// 在 rayon 计算核心完成后于主线程按序调用本方法发布事件(IO 侧不上 rayon)。
+    pub(crate) fn publish_encoded_event(
+        &self,
+        modality: Modality,
+        content_hash: String,
+        clv_dim: usize,
+    ) {
         let Some(bus) = &self.event_bus else {
             return;
         };
@@ -256,6 +286,7 @@ mod tests {
     use super::*;
     use crate::types::DesktopCapture;
     use nexus_core::CLV;
+    use std::sync::Arc;
 
     fn make_element(modality: Modality, embedding: Vec<f32>) -> CognitiveElement {
         CognitiveElement::new(modality, "test_hash".into(), embedding)
@@ -390,6 +421,21 @@ mod tests {
     }
 
     // ── NmcEncoder 测试 ──
+
+    /// 编译期断言 — P1-T14 tract-onnx 线程安全落地验证
+    ///
+    /// `SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<..>>`(tract-core 0.22.3)
+    /// 的 `Op` trait 约束为 `Send + Sync + 'static`,plan 为 immutable 共享结构;
+    /// 断言 `NmcEncoder: Send + Sync` 即证明:感知器持有的 TractPlan 可跨 rayon
+    /// 线程共享推理(Arc<NmcEncoder> 闭包捕获零克隆)。若断言编译失败,说明某
+    /// 感知器含非 Sync 内部状态,需退化为每线程克隆/锁并报告边界。
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn test_nmc_encoder_send_sync() {
+        assert_send_sync::<NmcEncoder>();
+        assert_send_sync::<Arc<NmcEncoder>>();
+    }
 
     #[test]
     fn test_nmc_encoder_perceive_text() {

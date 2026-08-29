@@ -1,5 +1,7 @@
 # Chimera CLI 工具链分析报告
 
+> **📦 历史快照标注(2026-08-20)**:本文档为历史版本记录,当时基线如文所述;当前权威基线为 **v2.27.1-omega**(38 crates · 144 NexusEvent · 10836 tests),Phase 10 §16 跨层协同闭环已随 v2.27.0-omega 发布收编。
+
 > 生成日期: 2026-08-17（第十一轮增量更新） | 深度: deep | 数据源: 本机实测（Windows 25H2 + GNU 工具链）+ 联网核验（45+ 来源）
 > 分析对象: Chimera CLI（NEXUS-OMEGA）v2.26.0-omega — Rust 2021 + Tokio workspace，38 crate，9954 tests，45+ criterion benches，<50MB 二进制约束
 > 引用约定: [N] 对应文末参考文献；[L] 标注本地实测证据（无需外部来源）；附录 D/E/F/G 为整改执行与复检记录

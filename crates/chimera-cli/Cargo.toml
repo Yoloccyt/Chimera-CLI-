@@ -18,6 +18,8 @@ nexus-contracts = { workspace = true }
 event-bus = { workspace = true }
 # chimera-tui:L10 Interface 层 TUI 界面(ratatui + crossterm)
 chimera-tui = { workspace = true }
+# WI-01 (2026-08-22): nexus-app-server host facade (L10 same-layer, chimera serve)
+nexus-app-server = { workspace = true }
 # quest-engine:L9 Quest 层,为 tui 命令提供控制事件上游消费示例(§2.2 向下依赖)
 # Task 1.1/1.2: chimera run / quest 命令真实接入 QuestEngine API
 quest-engine = { workspace = true }

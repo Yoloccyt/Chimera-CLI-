@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "chimera-tui"
 version.workspace = true
 edition.workspace = true
@@ -27,6 +27,8 @@ unicode-width = "0.2"
 
 # nexus-core 为 L1 Core 共享领域类型(Quest/Task 等),L10 向下依赖允许
 nexus-core = { workspace = true }
+# WI-01 TUI dogfooding (2026-08-22): nexus-app-server protocol facade (L10 same-layer)
+nexus-app-server = { workspace = true }
 # Phase 10 §15.2b/§15.3:InjectionStrategyPanel 消费 L0 AtomicMemoryCard;
 # nexus-contracts 为 L0 纯类型零依赖契约层,L10→L0 向下合规不引入耦合
 nexus-contracts = { workspace = true }

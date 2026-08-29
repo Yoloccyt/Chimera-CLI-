@@ -54,7 +54,11 @@ jobs:
         # 跟踪计划:待 anyhow 发布修复版本后移除对应 --ignore;
         #   待 ratatui 升级 lru/paste 后移除对应 --ignore;
         #   待 hnsw_rs 替换 bincode 后移除对应 --ignore
-        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0002 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2025-0119
+        # WHY --deny unmaintained --deny unsound 替代 --deny warnings (P5-T5,2026-08-28):
+        #   chacha20 0.10.1 yanked (rand 0.10.2 精确钉死,update 不可解)——yank 影响
+        #   =registry 新下载,Cargo.lock 锁定可用,无安全影响,故 yanked 不进 deny 列表;
+        #   漏洞 (vulnerabilities) 默认始终 deny,无需显式声明
+        run: cargo audit --deny unmaintained --deny unsound --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0002 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2025-0119
 
   # ============================================================
   # 依赖过期观测 job(报告 §3.6 行动项 6)——非阻塞

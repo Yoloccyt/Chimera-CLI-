@@ -63,6 +63,19 @@ pub struct OsaConfig {
     ///
     /// 校验约束:0 < t1 < t2 < t3 < 1.0
     pub complexity_thresholds: (f32, f32, f32),
+
+    /// 批量五维掩码计算并行开关(P1-T14 注入,默认 true)
+    ///
+    /// WHY:WI-34 七条纪律⑤"逐一回滚"——每个热点独立 `--no-parallel-*` 语义;
+    /// 关闭后五维掩码批量计算走串行路径(与 T14 注入前行为一致)。
+    /// `#[serde(default)]` 保证旧配置 JSON 反序列化兼容(缺省 = true,向后兼容)。
+    #[serde(default = "default_true")]
+    pub parallel_masks: bool,
+}
+
+/// serde 缺省值 — 旧配置(无该字段)反序列化为 true(默认并行,向后兼容)
+const fn default_true() -> bool {
+    true
 }
 
 impl OsaConfig {
@@ -105,6 +118,15 @@ impl OsaConfig {
     /// 校验约束:0 < t1 < t2 < t3 < 1.0(在 `validate()` 中校验)
     pub fn with_complexity_thresholds(mut self, t1: f32, t2: f32, t3: f32) -> Self {
         self.complexity_thresholds = (t1, t2, t3);
+        self
+    }
+
+    /// 设置批量五维掩码计算并行开关(P1-T14)
+    ///
+    /// false = 关闭并行,批量掩码计算走串行路径(与 T14 注入前行为一致);
+    /// 亦可用 `CHIMERA_NO_PARALLEL_OSA` 环境变量在进程级覆盖(见 `parallel` 模块)。
+    pub fn with_parallel_masks(mut self, enabled: bool) -> Self {
+        self.parallel_masks = enabled;
         self
     }
 
@@ -196,6 +218,8 @@ impl Default for OsaConfig {
             budget_protection_threshold: 0.8,
             // SubTask 14.4:默认阈值与原硬编码一致,保持向后兼容
             complexity_thresholds: (0.25, 0.5, 0.75),
+            // P1-T14:默认启用批量并行(WI-34 纪律⑤,可经配置/env 关闭)
+            parallel_masks: true,
         }
     }
 }
@@ -214,6 +238,23 @@ mod tests {
         assert!((config.budget_protection_threshold - 0.8).abs() < 1e-6);
         // SubTask 14.4:默认复杂度阈值
         assert_eq!(config.complexity_thresholds, (0.25, 0.5, 0.75));
+        // P1-T14:默认启用批量并行
+        assert!(config.parallel_masks);
+    }
+
+    #[test]
+    fn test_with_parallel_masks_toggle() {
+        let config = OsaConfig::default().with_parallel_masks(false);
+        assert!(!config.parallel_masks);
+        assert!(OsaConfig::default().parallel_masks);
+    }
+
+    /// P1-T14:旧配置 JSON(无 parallel_masks 字段)反序列化兼容 → 缺省 true
+    #[test]
+    fn test_serde_backward_compat_missing_parallel_field() {
+        let old_json = r#"{"routing_top_k_bounds":[8,32],"context_scope_multipliers":[1,10,100,1000],"audit_rate_by_risk":[0.1,0.3,0.7,1.0],"budget_protection_threshold":0.8,"complexity_thresholds":[0.25,0.5,0.75]}"#;
+        let config: OsaConfig = serde_json::from_str(old_json).expect("旧配置应可反序列化");
+        assert!(config.parallel_masks, "缺省字段应默认 true(向后兼容)");
     }
 
     #[test]

@@ -52,6 +52,9 @@ pub mod memory_sync_hook;
 pub mod metrics_sync;
 /// Phase 9 §14.1: OpenMLE 搜索树管理器（经验卡片进化树，与 dag.rs 任务 DAG 语义分离）
 pub mod search_tree;
+
+// P3-T13c: Loop 终止记分卡（v4.0 WI-32:收敛×边际×配额三维打分）
+pub mod scorecard;
 /// P1-1: NexusStateChanged EventBus 适配器(L1 Core 深度优化,依赖倒置接线)
 pub mod state_listener;
 pub mod trajectory_exporter;

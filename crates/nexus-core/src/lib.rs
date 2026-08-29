@@ -36,6 +36,9 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod clv;
+// P1-T8: CPU 卸载统一入口(ComputeBridge L-a 全局 rayon 池 + L-f 三态路由 + Ω₇ 缝合点,
+// 手册 §8.3/§8.4/§10.8/§11.1,Phase 1 地基波次关键路径,T9/T14 依赖本模块)
+pub mod compute;
 pub mod config;
 pub mod decay;
 pub mod error;
@@ -48,6 +51,10 @@ pub mod path_util;
 /// 承载 RLClient trait（predict/report_experience/sync_policy）+ RLError，
 /// 铁律1: 零运行时 Python 依赖（GrpcRLClient 仅 v4.0 预留占位）。
 pub mod rl_client;
+/// P2-T6: AERA 自适应错误恢复分配（手册 T-11,effort = 0.20·quota + 0.45·criticality + 0.35·ewma）
+///
+/// 非对称迟滞（升档快降档慢）防抖;effort 决定重试预算/回退层级/人工升级。
+pub mod resilience;
 /// 统计学习接口层 — SlidingWindow/UCB 策略（v3.4.0 §6.3,RL 预留）
 ///
 /// 承载 StatLearningPolicy trait + SlidingWindowPolicy + UCBPolicy，
@@ -74,6 +81,17 @@ pub use rl_client::{GrpcRLClient, RLClient, RLError, RulePolicyFallback};
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::clv::{cosine_similarity_slices, CLV};
+    // P1-T8: 计算统一入口(与顶层导出同集)
+    pub use crate::compute::{bridge, ComputeBridge, ComputeError, DispatchPlan, TaskKind};
+    // P1-T9: HTS 动态阈值表 + 序贯检验(手册 §8.4 / ADR-103)
+    pub use crate::compute::hts::sequential_test::{
+        SequentialTest, SequentialTestConfig, TestDecision,
+    };
+    pub use crate::compute::hts::{HtsTable, ThresholdSource};
+    // P1-T10: DetReduce 双模式归约(手册 §10.2 / ADR-102/106)
+    pub use crate::compute::reduce::{
+        reduce, repro_reduce, tree_reduce_fixed, ReduceMode, DEFAULT_CHUNK,
+    };
     pub use crate::config::ChimeraConfig;
     pub use crate::error::NexusError;
     pub use crate::ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, TaskId};

@@ -80,6 +80,35 @@ impl CLV {
     pub fn as_slice(&self) -> &[f32] {
         self.0.as_slice().unwrap_or(&[])
     }
+
+    /// 发布 CLV 快照事件(WS-4A)— 供 TUI ClvVector 面板消费
+    ///
+    /// 构造 [`event_bus::NexusEvent::ClvSnapshotReported`] 并**同步发布**
+    /// (`publish_blocking`,sync 模式,无需 tokio runtime)。字段语义:
+    /// - `metadata.source = "nexus-core"`;
+    /// - `clv_summary` 由 [`event_bus::ClvSummary::from_clv_slice`] 从本向量计算;
+    /// - `content_hash` 为向量字节的 SHA-256 十六进制摘要(确定性,供去重/检索)。
+    ///
+    /// 发布失败(理论罕见)仅告警不 panic。
+    pub fn report_snapshot(&self, bus: &event_bus::EventBus) {
+        use sha2::Digest;
+
+        let mut hasher = sha2::Sha256::new();
+        for &v in self.as_slice() {
+            hasher.update(v.to_bits().to_le_bytes());
+        }
+        let content_hash = hex::encode(hasher.finalize());
+        let summary = event_bus::ClvSummary::from_clv_slice(self.as_slice());
+        let ev = event_bus::NexusEvent::ClvSnapshotReported {
+            metadata: event_bus::EventMetadata::new("nexus-core"),
+            modality: "Text".to_string(),
+            content_hash,
+            clv_summary: summary,
+        };
+        if let Err(e) = bus.publish_blocking(ev) {
+            tracing::warn!(error = %e, "CLV 快照事件发布失败");
+        }
+    }
 }
 
 /// 计算两个 f32 切片的余弦相似度(自由函数,供上层 crate 共享)
@@ -280,5 +309,40 @@ mod tests {
         let json = serde_json::to_string(&original).unwrap();
         let restored: CLV = serde_json::from_str(&json).unwrap();
         assert_eq!(original, restored);
+    }
+
+    /// WS-4A:report_snapshot 发布 ClvSnapshotReported,字段符合契约
+    #[test]
+    fn report_snapshot_publishes_event() {
+        let bus = event_bus::EventBus::new();
+        // 订阅必须先于发布(broadcast 反模式 3:错过则静默丢事件)
+        let mut rx = bus.subscribe();
+        let clv = CLV::from_vec(vec![1.0f32; CLV::DIMENSION]).unwrap();
+        clv.report_snapshot(&bus);
+
+        let ev = rx
+            .try_recv()
+            .expect("try_recv 不应 Err")
+            .expect("应收到事件");
+        match ev {
+            event_bus::NexusEvent::ClvSnapshotReported {
+                metadata,
+                modality,
+                content_hash,
+                clv_summary,
+            } => {
+                assert_eq!(metadata.source, "nexus-core");
+                assert_eq!(modality, "Text");
+                assert!(!content_hash.is_empty(), "content_hash 必须非空");
+                // 全 1 向量:L2 范数 = sqrt(512)
+                let expect_norm = (CLV::DIMENSION as f32).sqrt();
+                assert!(
+                    (clv_summary.l2_norm - expect_norm).abs() < 1e-3,
+                    "l2_norm={} 期望 ~{expect_norm}",
+                    clv_summary.l2_norm
+                );
+            }
+            other => panic!("期望 ClvSnapshotReported,收到 {other:?}"),
+        }
     }
 }

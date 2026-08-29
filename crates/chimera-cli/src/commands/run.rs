@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
-use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks, OrchestratorConfig};
+use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
 use crate::output;
 use crate::permission::PermissionCtx;
 
@@ -122,14 +122,4 @@ async fn stream_to_stdout(reply: &str) {
     }
     // 末尾换行(与 [done] 标记分行)
     let _ = writeln!(lock);
-}
-
-/// 暴露 OrchestratorConfig 供测试配置 chunk_delay
-///
-/// WHY pub(crate):仅 chimera-cli 内部测试需要零延迟配置,不暴露到公开 API。
-#[allow(dead_code)]
-pub(crate) fn test_config() -> OrchestratorConfig {
-    OrchestratorConfig {
-        chunk_delay: Duration::ZERO,
-    }
 }

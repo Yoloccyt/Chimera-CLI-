@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 
 use event_bus::{ChatStatus, NexusEvent};
+use nexus_contracts::app::AppEvent;
 use nexus_core::Quest;
 
 use super::snapshot::{
@@ -119,6 +120,67 @@ impl QuestSync {
             .iter()
             .filter(|q| self.paused_quest_ids.contains(&q.quest_id))
             .count()
+    }
+
+    /// 应用协议面事件（WI-01 TUI dogfooding）— 从 AppEvent 流更新 Quest 列表
+    ///
+    /// # 协议面数据保真机制
+    /// AppEvent 的 `Item.payload`（JSON 形态）承载完整 Quest 数据：
+    /// 核心侧将 Quest 序列化写入 payload，TUI 侧反序列化还原——
+    /// 协议面不损失信息（Codex Item payload 同源设计）。
+    ///
+    /// # 映射
+    /// - `ThreadStarted`: 新建空 Quest（quest_id = thread.goal_id，title 同 goal_id）
+    /// - `ItemChanged` kind="quest": 反序列化 payload 为 Quest，按 quest_id upsert
+    /// - `ItemChanged` kind="quest_completed" / "quest_cancelled": 从列表移除
+    /// - 其他事件: 返回 `None`，状态不变
+    pub fn apply_app_event(&mut self, ev: &AppEvent) -> Option<Vec<Quest>> {
+        match ev {
+            AppEvent::ThreadStarted { thread } => {
+                // 新建会话级 Quest（完整数据随后续 Item payload 到达）
+                let quest = Quest {
+                    quest_id: thread.goal_id.as_ref().to_string(),
+                    title: thread.goal_id.as_ref().to_string(),
+                    ..Quest::default()
+                };
+                self.quests.retain(|q| q.quest_id != quest.quest_id);
+                self.quests.push(quest);
+                Some(self.quests.clone())
+            }
+            AppEvent::ItemChanged { item } => match item.kind.as_ref() {
+                // 协议面数据保真: payload 承载序列化 Quest
+                "quest" => {
+                    let Ok(quest) = serde_json::from_str::<Quest>(&item.payload) else {
+                        return None;
+                    };
+                    if let Some(existing) = self
+                        .quests
+                        .iter_mut()
+                        .find(|q| q.quest_id == quest.quest_id)
+                    {
+                        *existing = quest;
+                    } else {
+                        self.quests.push(quest);
+                    }
+                    Some(self.quests.clone())
+                }
+                // 完成/取消 → 从活动列表移除（对标 NexusEvent 语义）
+                "quest_completed" | "quest_cancelled" => {
+                    let Ok(meta) = serde_json::from_str::<serde_json::Value>(&item.payload) else {
+                        return None;
+                    };
+                    if let Some(qid) = meta.get("quest_id").and_then(|v| v.as_str()) {
+                        self.quests.retain(|q| q.quest_id != qid);
+                        self.paused_quest_ids.remove(qid);
+                        Some(self.quests.clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     }
 }
 

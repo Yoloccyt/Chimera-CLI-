@@ -69,6 +69,11 @@ tempfile = { workspace = true }
 # 属性测试框架 — KNN 检索不变量验证
 proptest = { workspace = true }
 
+
+[[bench]]
+name = "e2e_parallel"
+harness = false
+
 [[bench]]
 name = "store_bench"
 harness = false
@@ -88,4 +93,9 @@ harness = false
 # Task 3.6: RAG 混合检索(RRF) vs dense-only 延迟对比基准
 [[bench]]
 name = "hybrid_search_bench"
+harness = false
+
+# P1-T14(WI-34): 批量 KNN 并行注入基准（串行 vs 并行,两种并行模式）
+[[bench]]
+name = "knn_parallel"
 harness = false

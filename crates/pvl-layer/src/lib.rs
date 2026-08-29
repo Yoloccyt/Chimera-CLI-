@@ -91,6 +91,10 @@ pub mod rlvr;
 pub mod segment_validation;
 /// Phase 7 §12.2: KAT 轨迹九维过程评分（D-2 命名协调，与 process_score 并存）
 pub mod trajectory_score;
+/// P2-T13: L-b 结构化并发框架（WI-34 注入续期,JoinSet 有界并发 + 超时 + 保序）
+///
+/// LLM 类调用（produce/verify）归 L-b async 并发,禁 rayon（E8-2 红线）。
+pub mod concurrency;
 pub mod types;
 pub mod verifier;
 

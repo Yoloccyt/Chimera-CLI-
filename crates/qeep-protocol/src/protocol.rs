@@ -49,9 +49,6 @@ struct Inner {
 /// 泛型 `Receipt<T>` 由 `entangle()` 直接返回给调用者。
 #[derive(Debug, Clone)]
 struct CallRecord {
-    /// 调用 ID
-    #[allow(dead_code)]
-    id: EntangledCallId,
     /// 当前状态
     state: CallState,
     /// 创建时间
@@ -122,7 +119,6 @@ impl QeepProtocol {
         self.inner.pending_calls.insert(
             id,
             CallRecord {
-                id,
                 state: CallState::Pending,
                 created_at,
                 completed_at: None,

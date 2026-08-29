@@ -13,8 +13,10 @@
 //!   审计链仍保留意图痕迹,关闭"执行成功但 append 失败导致无痕"的漏洞窗口。
 
 use chrono::Utc;
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fmt;
 use tracing::warn;
 
 use crate::asa::AuditResult;
@@ -131,13 +133,38 @@ pub struct AuditBlock {
 ///
 /// 链式结构:每个块的 prev_hash 指向前一块的 merkle_root,
 /// 篡改任意块会导致链断裂,被 `verify` 检测。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AuditChain {
     /// 审计块列表(按追加顺序)
     pub blocks: Vec<AuditBlock>,
     /// 当前链尾哈希(最后一块的 merkle_root,空链为 64 个 '0')
     pub current_hash: String,
+    /// 可选 EventBus — 审计记录完成(Merkle 链追加成功)后发布 `AuditLogged`
+    /// 事件(L4 → L1 观测面,WS-4B 幽灵事件生产者)。
+    ///
+    /// `#[serde(skip)]`:仅运行时注入,不参与序列化(持久化/反序列化时缺失
+    /// 字段由 serde 用 `Default::default()` 补为 `None`,`EventBus` 已实现 `Default`)。
+    /// 不参与 `Debug`/`PartialEq`(EventBus 未实现 `Debug`/`PartialEq`)。
+    #[serde(skip)]
+    event_bus: Option<EventBus>,
 }
+
+impl fmt::Debug for AuditChain {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuditChain")
+            .field("blocks", &self.blocks)
+            .field("current_hash", &self.current_hash)
+            .finish()
+    }
+}
+
+impl PartialEq for AuditChain {
+    fn eq(&self, other: &Self) -> bool {
+        self.blocks == other.blocks && self.current_hash == other.current_hash
+    }
+}
+
+impl Eq for AuditChain {}
 
 impl AuditChain {
     /// 创建空审计链(创世前驱哈希为 64 个 '0')。
@@ -145,7 +172,18 @@ impl AuditChain {
         Self {
             blocks: Vec::new(),
             current_hash: "0".repeat(64),
+            event_bus: None,
         }
+    }
+
+    /// 链式注入事件总线 — 审计记录完成时发布 `AuditLogged` 事件(WS-4B)。
+    ///
+    /// WHY 与 seccore 既有 `with_event_bus` 模式一致(sandbox.rs:184);
+    /// `AuditChain::update_status` 是同步方法,发布走 `publish_blocking`。
+    #[must_use]
+    pub fn with_event_bus(mut self, bus: EventBus) -> Self {
+        self.event_bus = Some(bus);
+        self
     }
 
     /// Pre-execution append:命令执行前记录 Intent 状态的审计块(N5 修复)。
@@ -352,7 +390,7 @@ impl AuditChain {
         if let Some(result) = result {
             block.result_hash = hash_result(result);
         }
-        // WHY: status 或 result_hash 变更后必须重算 merkle_root,并更新 current_hash
+        // WHY(status 或 result_hash 变更后必须重算 merkle_root,并更新 current_hash
         //      保持链尾块的 merkle_root 与 current_hash 一致(verify 检查 4)
         // WHY(P1-W3.3): decision_chain_hash 也纳入 merkle_root,保持决策链防篡改
         let decision_chain_hash = hash_decision_chain(&block.decision_chain);
@@ -367,7 +405,30 @@ impl AuditChain {
         );
         self.current_hash = new_root.clone();
         block.merkle_root = new_root;
+        // WS-4B:Merkle 审计链追加成功(终态 Executed/Failed)后发布 AuditLogged 通知。
+        // 先在 &mut 借用生命周期内克隆载荷,释放借用后再以 &self 发布(规避 E0502)。
+        let audit_hash = block.merkle_root.clone();
+        let status_name = block.status;
+        self.notify_audit_logged(&audit_hash, status_name);
         Ok(())
+    }
+
+    /// 发布 `AuditLogged` 事件 — Merkle 审计链追加成功后(L4 → L1 观测面,WS-4B)。
+    ///
+    /// `audit_hash` 取链尾块的 merkle_root(链式完整性根),`severity` 编码
+    /// 终态状态名(executed/failed)。未注入 EventBus 时静默跳过(向后兼容,
+    /// 既有测试零改动);发布失败仅 warn,不影响审计链追加主语义。
+    fn notify_audit_logged(&self, audit_hash: &str, status: AuditRecordStatus) {
+        if let Some(bus) = &self.event_bus {
+            let event = NexusEvent::AuditLogged {
+                metadata: EventMetadata::new("seccore"),
+                audit_hash: audit_hash.to_string(),
+                severity: format!("{:?}", status).to_ascii_lowercase(),
+            };
+            if let Err(e) = bus.publish_blocking(event) {
+                warn!(error = %e, "发布 AuditLogged 事件失败");
+            }
+        }
     }
 
     /// 追加一条已完成的审计记录 — 向后兼容接口(N5 修复保留)。
@@ -760,6 +821,48 @@ mod tests {
         chain.append(&make_spec(), &make_result()).unwrap();
         assert_eq!(chain.len(), 1);
         assert!(chain.verify().unwrap());
+    }
+
+    /// WS-4B:AuditLogged 幽灵事件生产者验证 — Merkle 审计链追加成功后发布
+    #[test]
+    fn test_audit_logged_published_after_chain_append() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut chain = AuditChain::new().with_event_bus(bus);
+
+        // append → append_intent + update_status(Executed) → 发布 AuditLogged
+        chain.append(&make_spec(), &make_result()).unwrap();
+
+        // publish_blocking 同步投递,try_recv 立即可取
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let event = loop {
+            if let Ok(Some(e)) = rx.try_recv() {
+                break e;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "接收 AuditLogged 事件超时"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+
+        assert_eq!(
+            event.metadata().source,
+            "seccore",
+            "AuditLogged 事件 source 应为 seccore"
+        );
+        match event {
+            event_bus::NexusEvent::AuditLogged {
+                audit_hash,
+                severity,
+                ..
+            } => {
+                // 链尾块 merkle_root 即 audit_hash
+                assert_eq!(audit_hash, chain.blocks[0].merkle_root);
+                assert_eq!(severity, "executed");
+            }
+            other => panic!("期望 AuditLogged 事件,收到 {other:?}"),
+        }
     }
 
     #[test]

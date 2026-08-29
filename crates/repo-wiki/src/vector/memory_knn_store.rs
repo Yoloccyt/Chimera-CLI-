@@ -123,6 +123,47 @@ impl MemoryKnnStore {
     pub fn dimension(&self) -> usize {
         self.inner.dimension()
     }
+
+    /// 批量 KNN 检索 — 对 `queries` 中每个查询向量返回 Top-K 命中（P1-T14）
+    ///
+    /// 委托给 [`VectorIndex::search_batch`](crate::vector::VectorIndex::search_batch)
+    /// （ComputeBridge 并行注入入口,`TaskKind::KnnSearch`）;返回
+    /// `Vec<Vec<VectorHit>>`,**结果序 = 输入 query 序**（查询 i 的结果对应输入 i）。
+    /// 并行开关继承 `inner` 的 `parallel_search`（默认 true,
+    /// `with_parallel_search(false)` + env `CHIMERA_NO_PARALLEL_WIKI` 双重关闭）。
+    ///
+    /// # 示例
+    /// ```
+    /// use nexus_contracts::VectorStore;
+    /// use repo_wiki::vector::memory_knn_store::MemoryKnnStore;
+    ///
+    /// let store = MemoryKnnStore::with_dim(3);
+    /// store.upsert("a", &[1.0, 0.0, 0.0], ()).unwrap();
+    /// store.upsert("b", &[0.0, 1.0, 0.0], ()).unwrap();
+    ///
+    /// let results = store.top_k_batch(&[vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]], 1, "")
+    ///     .unwrap();
+    /// assert_eq!(results.len(), 2);
+    /// assert_eq!(results[0][0].id, "a", "查询 0 的 top-1 应是 a");
+    /// assert_eq!(results[1][0].id, "b", "查询 1 的 top-1 应是 b");
+    /// ```
+    pub fn top_k_batch(
+        &self,
+        queries: &[Vec<f32>],
+        k: usize,
+        _ns: &str,
+    ) -> Result<Vec<Vec<VectorHit>>, WikiError> {
+        Ok(self
+            .inner
+            .search_batch(queries, k)?
+            .into_iter()
+            .map(|hits| {
+                hits.into_iter()
+                    .map(|(id, score)| VectorHit::new(id, score))
+                    .collect()
+            })
+            .collect())
+    }
 }
 
 // ============================================================

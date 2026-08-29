@@ -1,4 +1,4 @@
-//! 聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
+﻿//! 聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
 //!
 //! 对应架构层:L7 Execution
 //! 对应创新点:GQEP(Gather-Query Execution Protocol)
@@ -50,7 +50,18 @@ use std::sync::atomic::Ordering;
 pub mod batch;
 pub mod config;
 pub mod error;
+/// P2-T11: 神经符号一致性守护（v4.0 WI-27）
+///
+/// Invariant trait + ProjectCompilesInvariant（写文件后 cargo check,大仓库
+/// 降级局部 check）;奖励信号映射（+3.0/−1.0）供 WI-30 Shadow 消费。
+pub mod consistency_guardian;
 pub mod gatherer;
+/// P3-T7: 流式期间启动工具（v4.0 WI-17,增量解析 + 闭合即启动）
+pub mod streaming_dispatch;
+/// P3-T8: 声明式 ToolPlan 解释执行（v4.0 WI-16,PTC 计划批编排）
+pub mod toolplan_runner;
+/// P4-T3: ToolExecutor × execpolicy 审批流水线接线（WI-16 安全不变量兑现）
+pub mod exec_tool_executor;
 pub mod timeout;
 pub mod types;
 
@@ -60,6 +71,12 @@ pub use config::GqepConfig;
 pub use error::GqepError;
 pub use gatherer::GqepExecutor;
 pub use timeout::with_timeout;
+// P3-T7: 流式派发公开 API（WI-17）
+pub use streaming_dispatch::{DispatchOutcome, DispatchedCall, SideEffect, StreamingDispatcher};
+// P3-T8: PTC 计划批编排公开 API（WI-16）
+pub use toolplan_runner::{PlanGuards, PlanRunner, PlanSummary, ToolExecutor};
+// P4-T3: execpolicy 接线公开 API
+pub use exec_tool_executor::ExecPolicyToolExecutor;
 pub use types::{GatherResult, GqepFuture, OperationId};
 
 /// 双层超时防护统计快照（Task 3.7:L10 → L7 向下依赖）

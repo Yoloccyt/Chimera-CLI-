@@ -156,6 +156,8 @@ pub mod r1_recall_quota;
 
 /// P4-W16.2.2: R1 影子模式 — 2 周观察期对比报告与解冻条件评估（ADR-043）
 pub mod shadow_mode;
+// P3-T12: RTL 接缝（WI-30 续,ADR-151:影子先验 + 特征扩展 + reward 稳定性）
+pub mod rtl_seam;
 
 /// R2 解冻阶段③ 前置 1 — 后悔率自动采集管线（ADR-052 待办 1,纯可观测性）
 ///

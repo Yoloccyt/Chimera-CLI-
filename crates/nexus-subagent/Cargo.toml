@@ -1,0 +1,27 @@
+[package]
+name = "nexus-subagent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "L7 Execution: typed SubAgent runtime + Task Auction market (3 types + Arena + no-nesting, Phase 3, ADR-148)"
+
+[dependencies]
+# L0 Contracts: NestedSubAgentForbidden 嵌套禁令契约 + 领域类型
+# WHY(P3-T9): 禁嵌套编译期+运行期双断言（WI-25）;L7 → L0 向下依赖合规
+nexus-contracts = { workspace = true }
+# L1 Core: 领域类型 + 取消令牌（四因取消:用户/超时/配额/父级撤销）
+nexus-core = { workspace = true }
+# L1 Core: 事件发布（SubAgent 生命周期事件,跨层通信唯一通道）
+event-bus = { workspace = true }
+# 异步运行时: JoinSet 有界并发 + 取消（LLM 类禁 rayon,E8-2 裁决）
+tokio = { workspace = true, features = ["full"] }
+# 库层错误类型标准(§4.1: 库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 结构化日志(生命周期/竞价/取消审计)
+tracing = { workspace = true }
+# 序列化: SubAgent 元数据/Bid serde（审计持久化）
+serde = { workspace = true, features = ["derive"] }
+# 序列化: 测试 JSON 编解码（serde 往返验证）
+serde_json = { workspace = true }
+# 唯一 ID 生成(UUIDv7,时间有序)
+uuid = { workspace = true, features = ["v7"] }

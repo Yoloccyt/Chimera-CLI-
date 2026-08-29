@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Chimera CLI 本地 Docker 镜像验证脚本(Windows / PowerShell)
 

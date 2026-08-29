@@ -15,6 +15,14 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+# WI-06 模型 provider 开放注册:异步 trait(带 async fn 的 ModelProvider)
+# WHY workspace:async-trait 0.1 全工作区共享,天然稳定位点
+# async-trait:为 trait 方法提供 async fn 支持
+async-trait = { workspace = true }
+# WI-06 模型 provider 热更:RCU(Read-Copy-Update)原子换表
+# WHY 复用 arc-swap(event-bus 已在用):读路径 O(1) 快照、写路径无锁替换,
+# 满足"hot_reload 后 <1s 生效"且配置错误时旧表不受污染;纯 safe 封装符合 forbid(unsafe)
+arc-swap = { workspace = true }
 # v1.3.0 S2:InMemoryHistoryStore 并发安全历史存储(model_id → HistoryRecord)
 # WHY DashMap:L1 Core 工具依赖,符合 §2.2 依赖铁律;并发读写无锁,适合路由热路径
 dashmap = { workspace = true }
@@ -44,4 +52,9 @@ harness = false
 # 对比全量评估 vs Top-K 门控在 50/100/200 模型规模下的 route_auto 延迟
 [[bench]]
 name = "moe_bench"
+harness = false
+
+# P2-T12: Provider 热更延迟门禁基准(ArcSwap RCU 热更 <1s)
+[[bench]]
+name = "hot_reload_bench"
 harness = false

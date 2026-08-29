@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "mcp-mesh"
 version.workspace = true
 edition.workspace = true
@@ -26,6 +26,7 @@ chrono = { workspace = true }
 dashmap = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 McpMeshTransactionCompleted 事件、订阅 ChtcToolCallReceived
 event-bus = { workspace = true }
+nexus-contracts = { workspace = true }
 
 [dev-dependencies]
 # 性能基准框架(SubTask 1.7)
