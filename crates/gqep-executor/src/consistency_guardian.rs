@@ -1,4 +1,4 @@
-﻿//! 神经符号一致性守护（P2-T11，v4.0 WI-27）
+//! 神经符号一致性守护（P2-T11，v4.0 WI-27）
 //!
 //! 对应架构层: **L7 Execution**（gqep-executor）
 //! 对应任务: **P2-T11**（手册 W13-14）
@@ -194,10 +194,7 @@ mod tests {
             -1.0
         );
         assert_eq!(
-            InvariantResult::Skipped {
-                reason: "r".into()
-            }
-            .reward_signal(),
+            InvariantResult::Skipped { reason: "r".into() }.reward_signal(),
             0.0
         );
     }
@@ -206,14 +203,14 @@ mod tests {
     fn check_on_empty_dir_fails_or_skips() {
         // 空临时目录：cargo check 失败（无清单）或工具缺失 Skip——两者
         // 都不 panic 且不误报 Passed（fail-closed 语义：不可验证 ≠ 通过）
-        let inv = ProjectCompilesInvariant::with_timeout(
-            test_root(),
-            Duration::from_secs(10),
-        );
+        let inv = ProjectCompilesInvariant::with_timeout(test_root(), Duration::from_secs(10));
         let change = Change::new("/tmp/x.rs", Some("nonexistent-crate".into()));
         let result = inv.check(&change);
         assert!(
-            matches!(result, InvariantResult::Failed { .. } | InvariantResult::Skipped { .. }),
+            matches!(
+                result,
+                InvariantResult::Failed { .. } | InvariantResult::Skipped { .. }
+            ),
             "不可验证必须 fail-closed: {result:?}"
         );
     }

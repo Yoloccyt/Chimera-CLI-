@@ -230,7 +230,11 @@ impl SegmentWriter {
         if std::mem::take(&mut self.fail_write) {
             self.rollback_batch(start_seq, start_row);
             return Err(StoreError::Io {
-                context: format!("注入 write_all 失败(测试):追加 {} 条事件到 {}", events.len(), self.path.display()),
+                context: format!(
+                    "注入 write_all 失败(测试):追加 {} 条事件到 {}",
+                    events.len(),
+                    self.path.display()
+                ),
                 source: std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
                     "测试注入的写入失败",
@@ -240,7 +244,11 @@ impl SegmentWriter {
         if let Err(e) = self.file.write_all(&buf) {
             self.rollback_batch(start_seq, start_row);
             return Err(StoreError::Io {
-                context: format!("追加 {} 条事件到 {} 失败", events.len(), self.path.display()),
+                context: format!(
+                    "追加 {} 条事件到 {} 失败",
+                    events.len(),
+                    self.path.display()
+                ),
                 source: e,
             });
         }
@@ -249,8 +257,14 @@ impl SegmentWriter {
         if std::mem::take(&mut self.fail_sync) {
             self.rollback_batch(start_seq, start_row);
             return Err(StoreError::Io {
-                context: format!("注入 sync_all 失败(测试):fsync 段文件 {}", self.path.display()),
-                source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "测试注入的 fsync 失败"),
+                context: format!(
+                    "注入 sync_all 失败(测试):fsync 段文件 {}",
+                    self.path.display()
+                ),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "测试注入的 fsync 失败",
+                ),
             });
         }
         // fsync 段尾部:append 返回 Ok 前必须落盘（不丢已确认事件）
@@ -368,12 +382,12 @@ impl SegmentWriter {
         })?;
         let file_len = meta.len();
         // WHY seek 到 0:句柄由 append 使用,恢复前必须回到文件头
-        self.file.seek(std::io::SeekFrom::Start(0)).map_err(|e| {
-            StoreError::Io {
+        self.file
+            .seek(std::io::SeekFrom::Start(0))
+            .map_err(|e| StoreError::Io {
                 context: format!("seek 段文件 {} 失败", self.path.display()),
                 source: e,
-            }
-        })?;
+            })?;
 
         // 期望的连续性:首条 seq = first_seq(= 调用方 start_seq),row 从 0 起
         let mut expect_seq: u64 = self.first_seq;
@@ -450,12 +464,16 @@ impl SegmentWriter {
 
         // 截断未完成尾部（若存在）
         if file_len > complete_end {
-            self.file.set_len(complete_end).map_err(|e| {
-                StoreError::Io {
-                    context: format!("截断层文件 {} 到 {} 字节失败", self.path.display(), complete_end),
+            self.file
+                .set_len(complete_end)
+                .map_err(|e| StoreError::Io {
+                    context: format!(
+                        "截断层文件 {} 到 {} 字节失败",
+                        self.path.display(),
+                        complete_end
+                    ),
                     source: e,
-                }
-            })?;
+                })?;
             info!(
                 "段文件 {} 崩溃恢复:截断 {} 字节半条尾部,保留 {row} 条完整记录",
                 self.path.display(),
@@ -583,12 +601,11 @@ impl SegmentFileReader {
                 source: e,
             });
         }
-        let record: SegmentRecord = serde_json::from_slice(&body).map_err(|e| {
-            StoreError::WalCorrupt {
+        let record: SegmentRecord =
+            serde_json::from_slice(&body).map_err(|e| StoreError::WalCorrupt {
                 path: self.path.display().to_string(),
                 reason: format!("记录 JSON 解析失败: {e}"),
-            }
-        })?;
+            })?;
         self.rows += 1;
         Ok(Some(record))
     }
@@ -607,10 +624,7 @@ impl SegmentFileReader {
 /// 重开从段 0 续写会在滚动到已存在段时 OffsetMismatch）。段文件枚举是
 /// 权威源:索引缺行（崩溃后未 rebuild）也能正确定位续写段。
 /// 返回空 Vec = 会话无任何段文件（新会话）。
-pub fn list_segment_files(
-    data_dir: &Path,
-    session_id: &SessionId,
-) -> Result<Vec<u32>, StoreError> {
+pub fn list_segment_files(data_dir: &Path, session_id: &SessionId) -> Result<Vec<u32>, StoreError> {
     let stem = file_stem(session_id);
     let prefix = format!("{stem}.");
     let mut idxs: Vec<u32> = Vec::new();
@@ -705,13 +719,8 @@ mod tests {
         assert_eq!(seg0.row_count(), config.max_rows_per_segment);
         assert_eq!(seg0.next_seq(), config.max_rows_per_segment);
         // 滚动:新段 start_seq = 旧段 next_seq
-        let mut seg1 = SegmentWriter::open_or_create(
-            dir.path(),
-            &sid,
-            1,
-            seg0.next_seq(),
-        )
-        .expect("open seg1");
+        let mut seg1 =
+            SegmentWriter::open_or_create(dir.path(), &sid, 1, seg0.next_seq()).expect("open seg1");
         assert_eq!(seg1.row_count(), 0);
         let off = seg1.append(&ev(100)).expect("append seg1");
         assert_eq!(off.seq, config.max_rows_per_segment, "seq 跨段连续");
@@ -734,9 +743,13 @@ mod tests {
             }
             // 模拟崩溃:直接操作文件追加半条(前缀 + 半截数据)
             use std::io::Write as _;
-            let mut f = OpenOptions::new().append(true).open(&path).expect("open raw");
+            let mut f = OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .expect("open raw");
             let json = serde_json::to_vec(&ev(99)).expect("json");
-            f.write_all(&(json.len() as u32).to_le_bytes()).expect("prefix");
+            f.write_all(&(json.len() as u32).to_le_bytes())
+                .expect("prefix");
             let half = &json[..json.len() / 2];
             f.write_all(half).expect("half data");
             f.sync_all().expect("fsync");
@@ -764,7 +777,10 @@ mod tests {
             w.append(&ev(0)).expect("append");
             // 崩溃发生在写长度前缀中途:只写 2 字节
             use std::io::Write as _;
-            let mut f = OpenOptions::new().append(true).open(&path).expect("open raw");
+            let mut f = OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .expect("open raw");
             f.write_all(&[0x10, 0x00]).expect("half prefix");
             f.sync_all().expect("fsync");
         }

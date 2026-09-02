@@ -52,9 +52,8 @@ pub(crate) fn parse_no_parallel_env(value: Option<&str>) -> bool {
 /// env 关闭开关 — OnceLock 惰性读取（启动期一次,非热路径）
 #[must_use]
 pub(crate) fn env_no_parallel() -> bool {
-    *NO_PARALLEL_ENV.get_or_init(|| {
-        parse_no_parallel_env(std::env::var(ENV_NO_PARALLEL).ok().as_deref())
-    })
+    *NO_PARALLEL_ENV
+        .get_or_init(|| parse_no_parallel_env(std::env::var(ENV_NO_PARALLEL).ok().as_deref()))
 }
 
 /// 并行开关最终判定 — 配置开关 AND 非 env 关闭（任一关闭 → 串行回退）
@@ -94,7 +93,11 @@ pub(crate) fn compute_five_masks_batch(
     if !should_parallel(config.parallel_masks)
         || bridge().route(TaskKind::OsaMask, n_items) == DispatchPlan::Inline
     {
-        Ok(compute_five_masks_serial(config, profiles, provider.as_ref()))
+        Ok(compute_five_masks_serial(
+            config,
+            profiles,
+            provider.as_ref(),
+        ))
     } else {
         compute_five_masks_parallel(config, profiles, provider)
     }
@@ -221,7 +224,10 @@ pub(crate) fn memory_mask_core(
 }
 
 /// audit 维度核心 — 按复杂度档位与风险等级选取操作
-pub(crate) fn audit_mask_core(config: &OsaConfig, profile: &TaskProfile) -> SparseMask<OperationId> {
+pub(crate) fn audit_mask_core(
+    config: &OsaConfig,
+    profile: &TaskProfile,
+) -> SparseMask<OperationId> {
     let band = profile.complexity_band_with_thresholds(config.complexity_thresholds());
     let complexity_rate = complexity_audit_rate(band);
     let risk_rate = config.audit_rate_for(profile.risk_level.as_index());
@@ -247,8 +253,7 @@ pub(crate) fn budget_mask_core(config: &OsaConfig, profile: &TaskProfile) -> Spa
     if total == 0 {
         return SparseMask::empty();
     }
-    let protection =
-        config.budget_protection_threshold * (0.5 + profile.complexity_score * 0.5);
+    let protection = config.budget_protection_threshold * (0.5 + profile.complexity_score * 0.5);
     let k = ((total as f32) * protection).ceil() as usize;
     let k = k.clamp(1, total);
     let scores = heuristic_scores(profile.active_tasks.len());
@@ -314,7 +319,9 @@ mod tests {
     /// 构造测试用 TaskProfile（固定种子确定性生成,供并行/串行一致性断言）
     fn make_profile(seed: u64, complexity: f32, risk: RiskLevel) -> TaskProfile {
         // 固定种子 LCG — 伪随机但确定性,不引入 rand 依赖（Ω₆ 最小依赖）
-        let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let mut state = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let mut next = move || {
             state = state
                 .wrapping_mul(6364136223846793005)
@@ -333,11 +340,21 @@ mod tests {
             risk_level: risk,
             time_pressure: TimePressure::Low,
             affected_scope: AffectedScope::Local,
-            available_tools: (0..tool_n).map(|i| ToolId::new(format!("tool-{i}"))).collect(),
-            available_files: (0..file_n).map(|i| FileId::new(format!("file-{i}"))).collect(),
-            available_memories: (0..mem_n).map(|i| MemoryId::new(format!("mem-{i}"))).collect(),
-            recent_operations: (0..op_n).map(|i| OperationId::new(format!("op-{i}"))).collect(),
-            active_tasks: (0..task_n).map(|i| TaskId::new(format!("task-{i}"))).collect(),
+            available_tools: (0..tool_n)
+                .map(|i| ToolId::new(format!("tool-{i}")))
+                .collect(),
+            available_files: (0..file_n)
+                .map(|i| FileId::new(format!("file-{i}")))
+                .collect(),
+            available_memories: (0..mem_n)
+                .map(|i| MemoryId::new(format!("mem-{i}")))
+                .collect(),
+            recent_operations: (0..op_n)
+                .map(|i| OperationId::new(format!("op-{i}")))
+                .collect(),
+            active_tasks: (0..task_n)
+                .map(|i| TaskId::new(format!("task-{i}")))
+                .collect(),
             routing_scores: None,
             context_scores: None,
             memory_scores: None,
@@ -424,9 +441,21 @@ mod tests {
         let config = OsaConfig::default();
         let mut profiles_vec = make_profiles(40);
         for p in &mut profiles_vec {
-            p.routing_scores = Some((0..p.available_tools.len()).map(|i| (i % 7) as f32).collect());
-            p.context_scores = Some((0..p.available_files.len()).map(|i| (i % 11) as f32).collect());
-            p.memory_scores = Some((0..p.available_memories.len()).map(|i| (i % 5) as f32).collect());
+            p.routing_scores = Some(
+                (0..p.available_tools.len())
+                    .map(|i| (i % 7) as f32)
+                    .collect(),
+            );
+            p.context_scores = Some(
+                (0..p.available_files.len())
+                    .map(|i| (i % 11) as f32)
+                    .collect(),
+            );
+            p.memory_scores = Some(
+                (0..p.available_memories.len())
+                    .map(|i| (i % 5) as f32)
+                    .collect(),
+            );
         }
         let profiles = Arc::new(profiles_vec);
         let serial = compute_five_masks_serial(&config, &profiles, None);

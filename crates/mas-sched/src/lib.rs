@@ -33,8 +33,8 @@ pub use error::SchedError;
 pub use scheduler::{PeerScheduler, SimplePeerScheduler};
 pub use shadow::{ShadowDecision, ShadowLog, ShadowScheduler};
 pub use types::{
-    ClaimOutcome, DenyReason, Lease, Priority, Quota, RenewOutcome, ShouldRunVerdict,
-    TaskId, TodoClaim, HANDOFF,
+    ClaimOutcome, DenyReason, Lease, Priority, Quota, RenewOutcome, ShouldRunVerdict, TaskId,
+    TodoClaim, HANDOFF,
 };
 
 /// 预导入模块 — 提供最常用类型

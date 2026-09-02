@@ -1,4 +1,4 @@
-﻿//! SQLite 树索引 — segments / events 两表 + fork 零拷贝（v4.0 WI-18 存储面）
+//! SQLite 树索引 — segments / events 两表 + fork 零拷贝（v4.0 WI-18 存储面）
 //!
 //! 对应架构层: **L3 Storage**（session-store,Phase 2 新增,ADR-141）
 //! 对应任务: **P2-T2**（v4.0 WI-18:append-only JSONL 段 + SQLite 树索引 + fork 零拷贝）
@@ -193,10 +193,8 @@ impl TreeIndex {
 
     /// 打开内存树索引（测试 / 基准用,不落盘）
     pub fn open_in_memory() -> Result<Self, StoreError> {
-        let conn = rusqlite::Connection::open_in_memory().map_err(|e| {
-            StoreError::Sqlite {
-                reason: format!("打开内存树索引失败: {e}"),
-            }
+        let conn = rusqlite::Connection::open_in_memory().map_err(|e| StoreError::Sqlite {
+            reason: format!("打开内存树索引失败: {e}"),
         })?;
         Self::init(conn)
     }
@@ -313,10 +311,7 @@ impl TreeIndex {
                         payload,
                     ])
                     .map_err(|e| StoreError::Sqlite {
-                        reason: format!(
-                            "插入事件 offset={} 失败: {e}",
-                            row.offset
-                        ),
+                        reason: format!("插入事件 offset={} 失败: {e}", row.offset),
                     })?;
                 }
             }
@@ -324,9 +319,11 @@ impl TreeIndex {
         })();
         // 无论成败都提交/回滚,释放事务(不回滚会滞留写锁)
         match result {
-            Ok(()) => conn.execute_batch("COMMIT").map_err(|e| StoreError::Sqlite {
-                reason: format!("提交写事务失败: {e}"),
-            })?,
+            Ok(()) => conn
+                .execute_batch("COMMIT")
+                .map_err(|e| StoreError::Sqlite {
+                    reason: format!("提交写事务失败: {e}"),
+                })?,
             Err(e) => {
                 let _ = conn.execute_batch("ROLLBACK");
                 return Err(e);
@@ -409,9 +406,7 @@ impl TreeIndex {
             let last_end = copied.last().map(|c| c.4 as u64).unwrap_or(0);
             if first_start != 0 {
                 return Err(StoreError::ForkViolation {
-                    reason: format!(
-                        "前缀段覆盖不连续:首个复制段 start_offset={first_start} != 0"
-                    ),
+                    reason: format!("前缀段覆盖不连续:首个复制段 start_offset={first_start} != 0"),
                 });
             }
             if last_end != from_offset - 1 {
@@ -519,11 +514,10 @@ impl TreeIndex {
                     let (off, payload) = row.map_err(|e| StoreError::Sqlite {
                         reason: format!("读取前缀事件行失败: {e}"),
                     })?;
-                    let event: SessionEvent = rmp_serde::from_slice(&payload).map_err(|e| {
-                        StoreError::Serialization {
+                    let event: SessionEvent =
+                        rmp_serde::from_slice(&payload).map_err(|e| StoreError::Serialization {
                             reason: format!("前缀事件 rmp 反序列化失败: {e}"),
-                        }
-                    })?;
+                        })?;
                     prefix.push(StoredEvent {
                         offset: off as u64,
                         event,
@@ -554,11 +548,10 @@ impl TreeIndex {
             let (off, payload) = row.map_err(|e| StoreError::Sqlite {
                 reason: format!("读取本段事件行失败: {e}"),
             })?;
-            let event: SessionEvent = rmp_serde::from_slice(&payload).map_err(|e| {
-                StoreError::Serialization {
+            let event: SessionEvent =
+                rmp_serde::from_slice(&payload).map_err(|e| StoreError::Serialization {
                     reason: format!("本段事件 rmp 反序列化失败: {e}"),
-                }
-            })?;
+                })?;
             own.push(StoredEvent {
                 offset: off as u64,
                 event,
@@ -616,10 +609,8 @@ impl TreeIndex {
         let mut nodes = query_segment_nodes(&conn, session_id)?;
         // 沿 parent 链收集祖先节点（跨会话）;seen 防环（fork 链理论无环,
         // 防御性去重避免异常数据死循环）
-        let mut seen: std::collections::HashSet<SegmentId> = nodes
-            .iter()
-            .map(|n| n.segment_id.clone())
-            .collect();
+        let mut seen: std::collections::HashSet<SegmentId> =
+            nodes.iter().map(|n| n.segment_id.clone()).collect();
         let mut frontier: Vec<SegmentId> = nodes
             .iter()
             .filter_map(|n| n.parent_segment_id.clone())
@@ -682,15 +673,17 @@ impl TreeIndex {
     ///
     /// 对会话每段（含 fork 复制行）沿 parent 链解析到物理文件;fork 复制行
     /// 的 `end_offset` 保持会话视角（截断段 = fork 点 - 1）,回放按此过滤。
-    pub fn segment_sources(&self, session_id: &SessionId) -> Result<Vec<SegmentSource>, StoreError> {
+    pub fn segment_sources(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<SegmentSource>, StoreError> {
         let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
             reason: format!("段来源解析锁中毒: {p}"),
         })?;
         let nodes = query_segment_nodes(&conn, session_id)?;
         let mut out = Vec::with_capacity(nodes.len());
         for node in nodes {
-            let (file_session, file_idx) =
-                resolve_physical(&conn, &node.segment_id, 0)?;
+            let (file_session, file_idx) = resolve_physical(&conn, &node.segment_id, 0)?;
             out.push(SegmentSource {
                 segment_id: node.segment_id,
                 file_session,
@@ -797,13 +790,15 @@ impl TreeIndex {
                     })?;
                 for (idx, records) in &scanned {
                     // 段 ID:复用已有（索引残留行）或生成新（崩溃缺行）
-                    let seg_id = query_segment_id(&conn, session_id, *idx)?.unwrap_or_else(SegmentId::generate);
-                    let start = records
-                        .first()
-                        .map(|r| r.seq)
-                        .ok_or_else(|| StoreError::InvalidInput {
-                            reason: "rebuild 空段文件不可达(已在上层过滤)".into(),
-                        })?;
+                    let seg_id = query_segment_id(&conn, session_id, *idx)?
+                        .unwrap_or_else(SegmentId::generate);
+                    let start =
+                        records
+                            .first()
+                            .map(|r| r.seq)
+                            .ok_or_else(|| StoreError::InvalidInput {
+                                reason: "rebuild 空段文件不可达(已在上层过滤)".into(),
+                            })?;
                     let end = records.last().map(|r| r.seq).unwrap_or(start);
                     stmt_seg
                         .execute(params![
@@ -962,9 +957,7 @@ fn row_to_node(r: &rusqlite::Row<'_>) -> rusqlite::Result<SegmentNode> {
         segment_id: SegmentId::new(r.get::<_, String>(0)?),
         session_id: SessionId::new(r.get::<_, String>(1)?),
         segment_index: r.get::<_, i64>(2)? as u32,
-        parent_segment_id: r
-            .get::<_, Option<String>>(3)?
-            .map(SegmentId::new),
+        parent_segment_id: r.get::<_, Option<String>>(3)?.map(SegmentId::new),
         start_offset: r.get::<_, i64>(4)? as u64,
         end_offset: r.get::<_, i64>(5)? as u64,
     })
@@ -988,9 +981,10 @@ fn query_segment_nodes(
         .map_err(|e| StoreError::Sqlite {
             reason: format!("查询会话 {} 段失败: {e}", session_id),
         })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| StoreError::Sqlite {
-        reason: format!("读取会话段行失败: {e}"),
-    })
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| StoreError::Sqlite {
+            reason: format!("读取会话段行失败: {e}"),
+        })
 }
 
 /// 按段 ID 查询单段节点（None → NotFound）
@@ -1034,7 +1028,10 @@ fn query_segment_id(
         )
         .optional()
         .map_err(|e| StoreError::Sqlite {
-            reason: format!("查询会话 {} 段 {} 的 ID 失败: {e}", session_id, segment_index),
+            reason: format!(
+                "查询会话 {} 段 {} 的 ID 失败: {e}",
+                session_id, segment_index
+            ),
         })?;
     Ok(id.map(SegmentId::new))
 }
@@ -1229,7 +1226,8 @@ mod tests {
         let events: Vec<SessionEvent> = (0..8).map(ev).collect();
         let offsets = w.append_batch(&events).expect("append");
         let seg_id = SegmentId::generate();
-        tree.insert_segment(&w.meta(seg_id.clone(), None)).expect("seg");
+        tree.insert_segment(&w.meta(seg_id.clone(), None))
+            .expect("seg");
         let rows: Vec<EventRow> = offsets
             .iter()
             .zip(events)
@@ -1329,12 +1327,20 @@ mod tests {
         let (a, b, _c) = seed_fork_chain(&tree, dir.path()).expect("chain");
         // B 的 tree():只含 B 的复制行（parent 指针指向 A 的段）
         let t_b = tree.tree(&b).expect("tree b");
-        assert_eq!(t_b.node_count(), 2, "B 有 2 个复制段(10 条/5 每段,fork 点 7 截断段 1)");
+        assert_eq!(
+            t_b.node_count(),
+            2,
+            "B 有 2 个复制段(10 条/5 每段,fork 点 7 截断段 1)"
+        );
         assert_eq!(t_b.roots().len(), 0, "B 全部为 fork 复制行,无根");
         assert!(t_b.nodes.iter().all(|n| n.parent_segment_id.is_some()));
         // fork_tree(B):B 节点 + A 祖先节点
         let ft_b = tree.fork_tree(&b).expect("fork_tree b");
-        assert_eq!(ft_b.node_count(), 4, "B 的 2 节点 + A 的 2 段(段1被截断仍属 A 物理段)");
+        assert_eq!(
+            ft_b.node_count(),
+            4,
+            "B 的 2 节点 + A 的 2 段(段1被截断仍属 A 物理段)"
+        );
         // 祖先段（session_id == a）存在
         let a_nodes = ft_b
             .nodes
@@ -1351,16 +1357,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (_a, b, c) = seed_fork_chain(&tree, dir.path()).expect("chain");
         let t_b = tree.tree(&b).expect("tree b");
-        let b_segs: std::collections::HashSet<SegmentId> = t_b
-            .nodes
-            .iter()
-            .map(|n| n.segment_id.clone())
-            .collect();
+        let b_segs: std::collections::HashSet<SegmentId> =
+            t_b.nodes.iter().map(|n| n.segment_id.clone()).collect();
         let anc = tree.ancestors(&c).expect("ancestors");
         // 祖先链 = B 的 2 段 + A 的 2 段
         assert_eq!(anc.len(), 4, "B 层 2 段 + A 层 2 段");
         // 直接父层在前:B 的段出现在前两位
-        assert!(b_segs.contains(&anc[0]) && b_segs.contains(&anc[1]), "直接父层在前");
+        assert!(
+            b_segs.contains(&anc[0]) && b_segs.contains(&anc[1]),
+            "直接父层在前"
+        );
         // 全链无重复
         let dedup: std::collections::HashSet<SegmentId> = anc.iter().cloned().collect();
         assert_eq!(dedup.len(), anc.len(), "祖先链无重复");
@@ -1401,13 +1407,12 @@ mod tests {
         // 崩溃模拟:删除 events 全部行（段文件保留）
         {
             let conn = tree.conn.lock().expect("lock");
-            conn.execute("DELETE FROM events", []).expect("delete events");
+            conn.execute("DELETE FROM events", [])
+                .expect("delete events");
         }
         assert_eq!(tree.event_count(Some(&sid)).expect("count"), 0);
 
-        let stats = tree
-            .rebuild_index(dir.path(), &sid)
-            .expect("rebuild");
+        let stats = tree.rebuild_index(dir.path(), &sid).expect("rebuild");
         assert_eq!(stats.segments_scanned, 3, "3 个物理段文件");
         assert_eq!(stats.rows_inserted, 12, "12 行重建");
         assert_eq!(stats.rows_skipped, 0);
@@ -1449,7 +1454,8 @@ mod tests {
         // 删掉 offset >= 4 的行（后半段索引缺失）
         {
             let conn = tree.conn.lock().expect("lock");
-            conn.execute("DELETE FROM events WHERE offset >= 4", []).expect("delete");
+            conn.execute("DELETE FROM events WHERE offset >= 4", [])
+                .expect("delete");
         }
         let stats = tree.rebuild_index(dir.path(), &sid).expect("rebuild");
         assert_eq!(stats.rows_inserted, 4, "补齐缺失的 4 行");

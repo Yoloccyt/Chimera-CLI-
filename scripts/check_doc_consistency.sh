@@ -3,7 +3,8 @@
 # check_doc_consistency.sh - Architecture document three-way reconciliation
 # =============================================================================
 # Purpose: detect drift between Cargo.toml (code), docs/ (index), CHANGELOG.md (changelog)
-# Scope:   5 categories / 12 checks; all assertions back to Cargo.toml as canonical truth
+# Scope:   checks are SELF-REPORTED at the end of the run (categories / emitted check ids);
+#          all assertions back to Cargo.toml as canonical truth
 # Author:  staff-engineer-mode (documentation-lifecycle specialist)
 # Refs:    docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md
 #
@@ -67,22 +68,31 @@ b1_docs=(
     ".claude/CLAUDE.md"
     "${nuxus_rules}"
 )
+b1_checked=0
+b1_skipped=0
 for f in "${b1_docs[@]}"; do
     if [[ "$f" == *not-found* ]]; then
         # 2026-08-07 适配: *.md 在 gitignore 策略下仅存于本地(bb471f9 移除跟踪),
         # CI checkout 必然缺失 nuxus 规则文档 —— 降级为 warn 而非阻断。
+        b1_skipped=$((b1_skipped + 1))
         report+=("[B1-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)")
         continue
     fi
     if [ ! -f "$f" ]; then
+        b1_skipped=$((b1_skipped + 1))
         report+=("[B1-warn] missing document: ${f} (gitignore *.md 策略,CI 环境无此文档,跳过)")
         continue
     fi
     if ! grep -qE "${n_members}[[:space:]]*crate|${n_members}个crate|${n_members}[[:space:]]*Crate" "$f"; then
         report+=("[GAP-B1] ${f} does not contain current crate count (${n_members}), possibly stale")
         status=1
+    else
+        b1_checked=$((b1_checked + 1))
     fi
 done
+# Self-report on the green path: a check that stays silent when passing cannot be counted,
+# which is why the hardcoded footer total was unverifiable by design.
+report+=("[B1] ${b1_checked}/${#b1_docs[@]} docs carry current crate count (${n_members}), ${b1_skipped} skipped by gitignore *.md policy")
 
 # B2. main docs contain current baseline string (DOCUMENT_LIFECYCLE_POLICY 6.4 trigger b)
 b2_docs=(
@@ -92,20 +102,27 @@ b2_docs=(
     "CHANGELOG.md"
     "docs/architecture/INDEX.md"
 )
+b2_checked=0
+b2_skipped=0
 for f in "${b2_docs[@]}"; do
     if [[ "$f" == *not-found* ]]; then
+        b2_skipped=$((b2_skipped + 1))
         report+=("[B2-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)")
         continue
     fi
     if [ ! -f "$f" ]; then
+        b2_skipped=$((b2_skipped + 1))
         report+=("[B2-warn] missing document: ${f} (gitignore *.md 策略,CI 环境无此文档,跳过)")
         continue
     fi
     if ! grep -qF "${current_version}" "$f"; then
         report+=("[GAP-B2] ${f} does not contain baseline string (${current_version})")
         status=1
+    else
+        b2_checked=$((b2_checked + 1))
     fi
 done
+report+=("[B2] ${b2_checked}/${#b2_docs[@]} docs carry baseline string ${current_version}, ${b2_skipped} skipped by gitignore *.md policy")
 
 # =============================================================================
 # C. Changelog reconciliation
@@ -218,10 +235,19 @@ fi
 
 for line in "${report[@]}"; do echo "$line"; done
 
+# Self-reported counts, derived from the ids actually emitted (mirrors the same change in
+# check_doc_consistency.ps1). The previous literal "5 categories / 12 checks" was not
+# observable: B1/B2 emitted nothing on the green path, so no run could confirm or refute it.
+emitted_ids=$(printf '%s\n' "${report[@]}" \
+    | grep -oE '^\[(GAP-|WARN-|ERROR-)?[A-F][0-9][a-z]?(-INFO)?\]' \
+    | grep -oE '[A-F][0-9][a-z]?' | sort -u)
+id_count=$(printf '%s\n' "$emitted_ids" | grep -c .)
+cat_count=$(printf '%s\n' "$emitted_ids" | cut -c1 | sort -u | grep -c .)
+
 echo ""
 if [ "$status" = 0 ]; then
-    echo "[OK] three-way reconciliation all pass (5 categories / 12 checks): canonical version=${current_version}, ${n_members} crates, baseline aligned"
+    echo "[OK] three-way reconciliation all pass (${cat_count} categories / ${id_count} check ids, self-reported): canonical version=${current_version}, ${n_members} crates, baseline aligned"
 else
-    echo "[FAIL] three-way reconciliation found gaps, see [GAP-*] lines above, fix and rerun"
+    echo "[FAIL] three-way reconciliation found gaps (${cat_count} categories / ${id_count} check ids emitted), see [GAP-*] lines above, fix and rerun"
 fi
 exit $status

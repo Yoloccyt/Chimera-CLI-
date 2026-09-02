@@ -83,9 +83,7 @@ fn hot_reload_bench(c: &mut Criterion) {
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let p50 = samples[25];
     let p99 = samples[49];
-    eprintln!(
-        "[hot_reload_gate] n=100_specs p50_ms={p50:.3} p99_ms={p99:.3} gate_ms=1000",
-    );
+    eprintln!("[hot_reload_gate] n=100_specs p50_ms={p50:.3} p99_ms={p99:.3} gate_ms=1000",);
 }
 
 criterion_group!(benches, hot_reload_bench);

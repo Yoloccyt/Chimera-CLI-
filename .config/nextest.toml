@@ -3,8 +3,12 @@
 # =============================================================================
 # Purpose: 定义三档 nextest profile,支撑 P9-T2 测试运行时间优化的回归分级。
 #          - ci-fast: PR 快轨(默认),使用 CHIMERA_TEST_TIMEOUT_SCALE=0.1,
-#                     排除根 package E2E/压测 binary,排除 5s+ 串行等待的
-#                     长单测(由 test-group = "stress" 收纳)。
+#                     排除根 package E2E/压测 binary。
+#                     ⚠ 排除手段是命令行 `-E 'not binary(/stress/)'`,
+#                     **不是** test-group（旧注释宣称“由 test-group = "stress" 收纳”，
+#                     但全仓 test-groups 声明数为 0，属“描述了一个不存在的机制”，
+#                     2026-08-31 实测订正；test-group 在 nextest 里只用于
+#                     互斥资源串行，不能做“按名字排除”，参下方 slo 档说明）。
 #          - default (= full): 完整档(开发本地 / Release 验收),
 #                     跑所有非 #[ignore] 测试,scale 缺省 1.0。
 #          - stress: 压测档,仅跑 test-group = "stress" 的目标
@@ -67,3 +71,48 @@ test-threads = 2
 final-status-level = "fail"
 # 注:filter 规则由 CI 命令行 -E 'binary(/stress/)' 指定
 # (nextest binary() 过滤器按 test binary name 正则匹配,见 .trae/specs/p9-t2/。)
+
+# =============================================================================
+# slo 档 —— 性能红线(p95)时序断言专用
+# 目标:给 `#[ignore]` 的时序红线测试一个“能真跑且不被并行噪声污染”的通道。
+#   背景：第四轮冗余审计 F-R4-02 —— 全仓 76 条 TEST 侧 #[ignore] 中绝大多数
+#   在任何 workflow 里都不跑；而“写了不跑”的根源之一就是没有专档,
+#   把它们丢进常规档又会因并行负载而假失败。
+#
+# 关键参数与理由:
+#   test-threads = 1 —— 必须。nextest 默认并行跑多个测试进程,p95/延迟类断言
+#     在并行下必假失败(项目已有先例:kvbsr scale 阈值因噪声从 >5× 逐轮放宽)。
+#   retries = 2 —— 观察期用。语义约束:重试只吸收环境噪声,不吸收回退——
+#     切阻塞前必须达到 0 retry 命中(见 slo.yml 头部与 RK-P28)。
+#
+# 为何 **不用** test-group（2026-08-31 实测推翻了计划原设想）:
+#   计划原本要“真正声明 test-groups + 用 override 把两个 100K 用例归组”，
+#   但 nextest 0.9.143 实测报两个硬错：
+#     ① `warning: ignoring unknown configuration key: profile.slo.test-groups`
+#        —— test-groups 只能顶层声明，不是 per-profile 键；
+#     ② `error: failed to parse profile.slo.overrides at index 0: operator didn't
+#        match any binary names` —— override 的 filter 在**包级**运行
+#        （如 `-p repo-wiki`）时匹配为空直接退出 96，使 slo 档不可用。
+#   而 test-threads = 1 已将整档串行，两个 100K 用例本就不会并发——
+#   再加一个只有副作用、无生效价值的组声明，就是本文件要修的同类
+#   “写了不跑”。故本档不声明 test-group，也不保留未被引用的顶层
+#   `[test-groups]`（那同样是死配置）。若将来需要在并行档里跑这两个用例，
+#   写法必为顶层 `[test-groups]` + override filter 能在全量选择集上命中。
+#
+# 使用(#[ignore] 需命令行显式放开,nextest 无 profile 级开关):
+#   cargo nextest run --release --profile slo --workspace --run-ignored only \
+#     -E 'binary(coarse_recall_p95_test) | binary(hnsw_p95_test) | ...'
+# 归属清单:scripts/ignored_test_inventory_freeze.txt(state = slo-blocking / slo-daily)
+# =============================================================================
+[profile.slo]
+inherits = "default"
+test-threads = 1
+retries = 2
+fail-fast = false
+
+# 100K 预填充 release 实测 30-60s,debug 可超 10min → 给 120s 周期、
+# 连续 3 次超时后终止(避免单个挂死的用例吃空整个 job 预算)。
+[profile.slo.slow-timeout]
+period = '120s'
+terminate-after = 3
+

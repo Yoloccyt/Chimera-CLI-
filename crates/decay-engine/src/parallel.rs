@@ -1,4 +1,4 @@
-﻿//! P1-T14: 批量能力衰减的 ComputeBridge 并行注入
+//! P1-T14: 批量能力衰减的 ComputeBridge 并行注入
 //!
 //! 对应任务:P1-T14（WI-34 并行化第 2 批补全,v4.0 §7.5.1 L-a）
 //! 对应架构层:L4 Security
@@ -73,9 +73,8 @@ pub(crate) fn parse_no_parallel_env(value: Option<&str>) -> bool {
 /// env 关闭开关 — OnceLock 惰性读取（启动期一次,非热路径）
 #[must_use]
 pub(crate) fn env_no_parallel() -> bool {
-    *NO_PARALLEL_ENV.get_or_init(|| {
-        parse_no_parallel_env(std::env::var(ENV_NO_PARALLEL).ok().as_deref())
-    })
+    *NO_PARALLEL_ENV
+        .get_or_init(|| parse_no_parallel_env(std::env::var(ENV_NO_PARALLEL).ok().as_deref()))
 }
 
 /// 并行开关最终判定 — 配置开关 AND 非 env 关闭（任一关闭 → 串行回退）
@@ -119,12 +118,22 @@ impl DecayEventParam {
     #[must_use]
     pub(crate) fn from_event(event: &DecayEvent) -> Self {
         match event {
-            DecayEvent::TimeDecay => Self { kind: 0, severity: 0.0 },
-            DecayEvent::ViolationPenalty { severity, .. } => {
-                Self { kind: 1, severity: *severity }
-            }
-            DecayEvent::Freeze { .. } => Self { kind: 2, severity: 0.0 },
-            DecayEvent::Restore { .. } => Self { kind: 3, severity: 0.0 },
+            DecayEvent::TimeDecay => Self {
+                kind: 0,
+                severity: 0.0,
+            },
+            DecayEvent::ViolationPenalty { severity, .. } => Self {
+                kind: 1,
+                severity: *severity,
+            },
+            DecayEvent::Freeze { .. } => Self {
+                kind: 2,
+                severity: 0.0,
+            },
+            DecayEvent::Restore { .. } => Self {
+                kind: 3,
+                severity: 0.0,
+            },
         }
     }
 }
@@ -215,7 +224,6 @@ pub(crate) fn apply_decay_pure(
         }
     };
 
-
     // 自动冻结:低于阈值且未冻结则冻结（防止权限过低仍可操作,权限不应残留）
     if check_auto_freeze && !new_frozen && new_level <= config.freeze_threshold {
         new_frozen = true;
@@ -299,25 +307,24 @@ fn decay_batch_parallel(
     let n = snapshots.len();
     let n_chunks = n.div_ceil(CHUNK);
     type ChunkTask = Box<dyn FnOnce() -> Vec<Result<DecayOutcome, DecayError>> + Send>;
-    let tasks: Vec<ChunkTask> =
-        (0..n_chunks)
-            .map(|ci| {
-                let snaps = Arc::clone(snapshots);
-                let evs = Arc::clone(events);
-                let cfg = Arc::clone(config);
-                let start = ci * CHUNK;
-                let end = (start + CHUNK).min(n);
-                Box::new(move || {
-                    snaps[start..end]
-                        .iter()
-                        .zip(evs[start..end].iter())
-                        .map(|(s, ev)| {
-                            apply_decay_pure(s.level, s.frozen, s.last_decay_at, now, *ev, &cfg)
-                        })
-                        .collect()
-                }) as Box<dyn FnOnce() -> Vec<Result<DecayOutcome, DecayError>> + Send>
-            })
-            .collect();
+    let tasks: Vec<ChunkTask> = (0..n_chunks)
+        .map(|ci| {
+            let snaps = Arc::clone(snapshots);
+            let evs = Arc::clone(events);
+            let cfg = Arc::clone(config);
+            let start = ci * CHUNK;
+            let end = (start + CHUNK).min(n);
+            Box::new(move || {
+                snaps[start..end]
+                    .iter()
+                    .zip(evs[start..end].iter())
+                    .map(|(s, ev)| {
+                        apply_decay_pure(s.level, s.frozen, s.last_decay_at, now, *ev, &cfg)
+                    })
+                    .collect()
+            }) as Box<dyn FnOnce() -> Vec<Result<DecayOutcome, DecayError>> + Send>
+        })
+        .collect();
 
     let results = bridge().spawn_compute_batch(TaskKind::Generic, tasks);
 
@@ -350,7 +357,11 @@ mod tests {
         for i in 0..n {
             let id = format!("cap-{i}");
             let level = 0.3 + ((i % 60) as f32) / 100.0; // [0.30, 0.89]
-            snapshots.push(DecaySnapshot { level, frozen: false, last_decay_at });
+            snapshots.push(DecaySnapshot {
+                level,
+                frozen: false,
+                last_decay_at,
+            });
             let ev = match i % 4 {
                 0 => DecayEvent::TimeDecay,
                 1 => DecayEvent::ViolationPenalty {
@@ -419,7 +430,10 @@ mod tests {
             false,
             last,
             Instant::now(),
-            DecayEventParam { kind: 0, severity: 0.0 },
+            DecayEventParam {
+                kind: 0,
+                severity: 0.0,
+            },
             &config,
         )
         .expect("线性衰减应成功");
@@ -436,7 +450,10 @@ mod tests {
             true,
             Instant::now() - std::time::Duration::from_secs(100),
             Instant::now(),
-            DecayEventParam { kind: 0, severity: 0.0 },
+            DecayEventParam {
+                kind: 0,
+                severity: 0.0,
+            },
             &config,
         )
         .expect("冻结能力应原样返回");
@@ -452,7 +469,10 @@ mod tests {
             false,
             Instant::now(),
             Instant::now(),
-            DecayEventParam { kind: 1, severity: 2.0 },
+            DecayEventParam {
+                kind: 1,
+                severity: 2.0,
+            },
             &config,
         )
         .expect("违规惩罚应成功");
@@ -468,7 +488,10 @@ mod tests {
             false,
             Instant::now(),
             Instant::now(),
-            DecayEventParam { kind: 2, severity: 0.0 },
+            DecayEventParam {
+                kind: 2,
+                severity: 0.0,
+            },
             &config,
         )
         .expect("冻结应成功");
@@ -484,7 +507,10 @@ mod tests {
             false,
             Instant::now() - std::time::Duration::from_secs(10),
             Instant::now(),
-            DecayEventParam { kind: 3, severity: 0.0 },
+            DecayEventParam {
+                kind: 3,
+                severity: 0.0,
+            },
             &config,
         )
         .expect("恢复应成功");
@@ -501,7 +527,10 @@ mod tests {
             false,
             Instant::now(),
             Instant::now(),
-            DecayEventParam { kind: 1, severity: 1.0 },
+            DecayEventParam {
+                kind: 1,
+                severity: 1.0,
+            },
             &config,
         )
         .expect("衰减应成功");
@@ -518,7 +547,10 @@ mod tests {
             false,
             Instant::now() - std::time::Duration::from_secs(1),
             Instant::now(),
-            DecayEventParam { kind: 3, severity: 0.0 },
+            DecayEventParam {
+                kind: 3,
+                severity: 0.0,
+            },
             &config,
         )
         .expect("恢复应成功");
@@ -533,7 +565,10 @@ mod tests {
             false,
             Instant::now(),
             Instant::now(),
-            DecayEventParam { kind: 99, severity: 0.0 },
+            DecayEventParam {
+                kind: 99,
+                severity: 0.0,
+            },
             &config,
         );
         assert!(matches!(res, Err(DecayError::ConfigError(_))));
@@ -622,7 +657,11 @@ mod tests {
         for (i, (s, p)) in serial.iter().zip(parallel.iter()).enumerate() {
             match (s, p) {
                 (Ok(s), Ok(p)) => {
-                    assert_eq!(s.level.to_bits(), p.level.to_bits(), "item[{i}] 必须与串行逐位一致");
+                    assert_eq!(
+                        s.level.to_bits(),
+                        p.level.to_bits(),
+                        "item[{i}] 必须与串行逐位一致"
+                    );
                 }
                 (Err(se), Err(pe)) => {
                     assert_eq!(se.to_string(), pe.to_string(), "item[{i}] 错误必须一致");

@@ -1,4 +1,4 @@
-﻿//! NEXUS-OMEGA L10 宿主层协议门面 — 核心-表面分离（WI-01）
+//! NEXUS-OMEGA L10 宿主层协议门面 — 核心-表面分离（WI-01）
 //!
 //! 对应架构层: **L10 Interface**（第 39 crate，v4.0 48/53 预算内）
 //! 对应工作项: **WI-01 核心-表面分离：nexus-app-server**（v4.0 §6.1/§6.2/§13）
@@ -40,16 +40,16 @@ pub mod transport;
 // P3-T5: 真实核心接入（QuestBackend）+ 审批仲裁 + SSE 传输（T6 遗留三项）
 pub mod approval;
 pub mod backend;
+pub mod sse;
 /// P4-T3: SubAgent × Quest 执行引擎组合根（D-P5 遗留接线②）
 pub mod subagent_engine;
-pub mod sse;
 
 pub use approval::{ApprovalArbiter, VoteOutcome};
 pub use backend::QuestBackend;
-pub use subagent_engine::SubAgentQuestEngine;
 pub use protocol::{JsonRpcError, RpcCodec, RpcNotification, RpcRequest, RpcResponse};
 pub use server::{AppServer, AppServerConfig, CoreBackend, SessionSnapshot};
 pub use sse::{SseConnection, SseError, SseServer};
+pub use subagent_engine::SubAgentQuestEngine;
 pub use transport::{AppTransport, StdinTransport, TransportError};
 
 /// 预导入模块 — 常用类型便捷导入

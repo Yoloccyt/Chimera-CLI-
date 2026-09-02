@@ -306,7 +306,10 @@ impl ShadowWarmup {
     /// 新建预热器
     #[must_use]
     pub fn new() -> Self {
-        Self { agreed: 0, total: 0 }
+        Self {
+            agreed: 0,
+            total: 0,
+        }
     }
 
     /// 记录一次 Shadow 双跑样本（新旧打分器分桶是否一致）

@@ -34,11 +34,11 @@ use crate::types::SessionEvent;
 /// ToolResult(≈Result) / StateUpdate。内部遥测事件（如 "session.flushed"）
 /// 不在白名单——模型视图只包含对话/工具执行语义。
 pub const MODEL_VISIBLE_TYPES: [&str; 5] = [
-    "model.request", // PromptBuilt 语义:提示词构建完成
+    "model.request",  // PromptBuilt 语义:提示词构建完成
     "model.response", // 模型响应
-    "tool.request", // ToolCall 语义:工具调用请求
-    "tool.result", // Result 语义:工具执行结果
-    "state.update", // 状态同步
+    "tool.request",   // ToolCall 语义:工具调用请求
+    "tool.result",    // Result 语义:工具执行结果
+    "state.update",   // 状态同步
 ];
 
 /// 敏感载荷标记 — 载荷字节含任一标记（大小写不敏感）即整包过滤
@@ -174,12 +174,18 @@ mod tests {
         // 无敏感标记的正常载荷原样保留（不过度过滤）
         let ev = SessionEvent::with_payload(
             "model.response",
-            "{\"content\":\"普通回复文本\",\"tokens\":42}".as_bytes().to_vec(),
+            "{\"content\":\"普通回复文本\",\"tokens\":42}"
+                .as_bytes()
+                .to_vec(),
         );
         let view = to_model_view(&ev, 5).expect("投影");
         assert_eq!(
             view.payload,
-            Some("{\"content\":\"普通回复文本\",\"tokens\":42}".as_bytes().to_vec())
+            Some(
+                "{\"content\":\"普通回复文本\",\"tokens\":42}"
+                    .as_bytes()
+                    .to_vec()
+            )
         );
     }
 

@@ -12,6 +12,12 @@ on:
 
 # WHY: 非阻塞 — coverage 波动不应阻断任何开发流程,仅作观测信号。
 # 失败时 workflow 标记为黄色(警告),不阻塞合入。
+#
+# ⚠ 2026-08-31 事实注记(RK-P45,不改变本文件行为): 下面的 `continue-on-error: true` 会让
+#   `--fail-under 85` 的判定**永不生效** —— 阈值算了但结论被丢弃。同时本机 GNU 工具链缺
+#   profiler runtime(`E0463: can't find crate for profiler_builtins`,实测)也无法本地复现该数。
+#   净效果: 没有任何人知道当前真实覆盖率。若要恢复效力,须由架构委员会决定去掉 continue-on-error
+#   或把实测值落盘成趋势门(见 RK-P45 三个选项)。
 jobs:
   coverage:
     name: cargo-tarpaulin (--fail-under 85)

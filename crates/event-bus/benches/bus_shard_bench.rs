@@ -74,6 +74,7 @@ fn spawn_drain_consumer(bus: &EventBus, stop: Arc<AtomicBool>) -> std::thread::J
     })
 }
 
+// ADR-159 决策 3 三态登记:dev-only(历史副本,新 bench 请用 nexus_contracts::util::percentile_sorted)
 /// 计算吞吐量的 P50/P99(排序后分位,NaN 防御降级为 Equal 序)
 fn percentile_throughput(samples: &mut [f64]) -> (f64, f64) {
     samples.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

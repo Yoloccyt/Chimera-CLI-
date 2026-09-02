@@ -64,7 +64,11 @@ impl TaskAuction {
 
     /// 注册档案（重复 ID 覆盖——幂等更新）
     pub fn register(&mut self, profile: crate::types::SubAgentProfile) {
-        if let Some(existing) = self.profiles.iter_mut().find(|p| p.profile_id == profile.profile_id) {
+        if let Some(existing) = self
+            .profiles
+            .iter_mut()
+            .find(|p| p.profile_id == profile.profile_id)
+        {
             *existing = profile;
         } else {
             self.profiles.push(profile);
@@ -132,7 +136,11 @@ mod tests {
     fn market() -> TaskAuction {
         let mut m = TaskAuction::new();
         m.register(SubAgentProfile::new("coder-a", SubAgentKind::Coder, 2.0));
-        m.register(SubAgentProfile::new("explore-b", SubAgentKind::Explore, 1.0));
+        m.register(SubAgentProfile::new(
+            "explore-b",
+            SubAgentKind::Explore,
+            1.0,
+        ));
         m.register(SubAgentProfile::new("coder-c", SubAgentKind::Coder, 1.5));
         m
     }
@@ -162,7 +170,11 @@ mod tests {
             task_id: "t2".into(),
             required_capabilities: "plan".into(),
         };
-        assert_eq!(m.auction(&offer), AuctionOutcome::NoBid, "无 plan 档案 → NoBid");
+        assert_eq!(
+            m.auction(&offer),
+            AuctionOutcome::NoBid,
+            "无 plan 档案 → NoBid"
+        );
     }
 
     /// 负载平滑 — 高负载同能力者退让
@@ -175,7 +187,10 @@ mod tests {
         expensive.load = 0.0; // 空闲
         m.register(cheap);
         m.register(expensive);
-        let offer = TaskOffer { task_id: "t3".into(), required_capabilities: "code".into() };
+        let offer = TaskOffer {
+            task_id: "t3".into(),
+            required_capabilities: "code".into(),
+        };
         // cheap: 1.0 × 1.9 = 1.9;expensive: 1.2 × 1.0 = 1.2 → expensive 胜
         match m.auction(&offer) {
             AuctionOutcome::Won(b) => assert_eq!(b.profile_id, "expensive", "高负载必须退让"),
@@ -190,7 +205,10 @@ mod tests {
         m.register(SubAgentProfile::new("p", SubAgentKind::Coder, 1.0));
         m.register(SubAgentProfile::new("p", SubAgentKind::Coder, 9.0));
         assert_eq!(m.len(), 1, "重复注册必须覆盖");
-        let offer = TaskOffer { task_id: "t".into(), required_capabilities: "code".into() };
+        let offer = TaskOffer {
+            task_id: "t".into(),
+            required_capabilities: "code".into(),
+        };
         match m.auction(&offer) {
             AuctionOutcome::Won(b) => assert!((b.cost - 9.0).abs() < 1e-9, "新成本生效"),
             AuctionOutcome::NoBid => panic!("必须有人胜出"),
@@ -201,7 +219,10 @@ mod tests {
     #[test]
     fn concurrent_auction() {
         let m = std::sync::Arc::new(market());
-        let offer = TaskOffer { task_id: "t".into(), required_capabilities: "code,explore".into() };
+        let offer = TaskOffer {
+            task_id: "t".into(),
+            required_capabilities: "code,explore".into(),
+        };
         let handles: Vec<_> = (0..8)
             .map(|_| {
                 let m = std::sync::Arc::clone(&m);

@@ -165,7 +165,11 @@ mod tests {
             VoteOutcome::DuplicateIgnored,
             "重复投票必须忽略"
         );
-        assert_eq!(a.decision(&rid), Some(ApprovalDecision::Allow), "首裁决保留");
+        assert_eq!(
+            a.decision(&rid),
+            Some(ApprovalDecision::Allow),
+            "首裁决保留"
+        );
         assert_eq!(a.client_of(&rid).as_deref(), Some("ide-panel"));
     }
 
@@ -196,18 +200,34 @@ mod tests {
     fn ttl_expiry() {
         let a = ApprovalArbiter::new(Duration::from_millis(50));
         let rid = ReqId::new("req-3");
-        assert_eq!(a.submit_vote(&rid, "c1", ApprovalDecision::Allow), VoteOutcome::Accepted);
+        assert_eq!(
+            a.submit_vote(&rid, "c1", ApprovalDecision::Allow),
+            VoteOutcome::Accepted
+        );
         // 未过期:重复忽略
-        assert_eq!(a.submit_vote(&rid, "c2", ApprovalDecision::Deny), VoteOutcome::DuplicateIgnored);
+        assert_eq!(
+            a.submit_vote(&rid, "c2", ApprovalDecision::Deny),
+            VoteOutcome::DuplicateIgnored
+        );
         std::thread::sleep(Duration::from_millis(80));
         // 过期:新裁决生效
-        assert_eq!(a.submit_vote(&rid, "c2", ApprovalDecision::Deny), VoteOutcome::Accepted);
+        assert_eq!(
+            a.submit_vote(&rid, "c2", ApprovalDecision::Deny),
+            VoteOutcome::Accepted
+        );
         assert_eq!(a.decision(&rid), Some(ApprovalDecision::Deny));
         // 0 TTL:不过期（0 = 不限,与 max_sessions=0 约定一致）;决策可读
         let a0 = ApprovalArbiter::new(Duration::ZERO);
         let rid2 = ReqId::new("req-4");
-        assert_eq!(a0.submit_vote(&rid2, "c1", ApprovalDecision::Allow), VoteOutcome::Accepted);
-        assert_eq!(a0.decision(&rid2), Some(ApprovalDecision::Allow), "0 TTL = 不限,决策可读");
+        assert_eq!(
+            a0.submit_vote(&rid2, "c1", ApprovalDecision::Allow),
+            VoteOutcome::Accepted
+        );
+        assert_eq!(
+            a0.decision(&rid2),
+            Some(ApprovalDecision::Allow),
+            "0 TTL = 不限,决策可读"
+        );
     }
 
     /// purge_expired — 清理过期裁决

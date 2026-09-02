@@ -42,17 +42,14 @@ fn make_inputs(n: usize) -> Vec<PerceptionInput> {
 }
 
 /// 单次批量编码耗时（注入热点直测）
-fn run(
-    encoder: &Arc<NmcEncoder>,
-    inputs: &Arc<Vec<PerceptionInput>>,
-    parallel: bool,
-) -> Duration {
+fn run(encoder: &Arc<NmcEncoder>, inputs: &Arc<Vec<PerceptionInput>>, parallel: bool) -> Duration {
     let start = Instant::now();
     let out = perceive_batch(encoder, inputs, parallel);
     criterion::black_box(out);
     start.elapsed()
 }
 
+// ADR-159 决策 3 三态登记:dev-only(历史副本,新 bench 请用 nexus_contracts::util::percentile_sorted)
 /// 取分位数（样本需已排序）
 fn percentile(sorted: &[Duration], p: f64) -> Duration {
     assert!(

@@ -632,9 +632,7 @@ mod tests {
     use arc_swap::ArcSwap;
 
     use super::cgroup::{parse_cpu_max, CgroupProbe};
-    use super::sequential_test::{
-        SequentialTest, SequentialTestConfig, TestDecision,
-    };
+    use super::sequential_test::{SequentialTest, SequentialTestConfig, TestDecision};
     use super::*;
     use crate::compute::bridge::decide;
     use crate::compute::dispatch::DispatchPlan;
@@ -798,7 +796,12 @@ mod tests {
         for i in 0..29 {
             // 强效果数据（rayon 快 90%）
             let d = t.record(100.0, 10.0 + (i % 3) as f64);
-            assert_eq!(d, TestDecision::Continue, "第 {} 次记录（n<30）必须 Continue", i + 1);
+            assert_eq!(
+                d,
+                TestDecision::Continue,
+                "第 {} 次记录（n<30）必须 Continue",
+                i + 1
+            );
         }
         assert_eq!(t.sample_count(), 29);
         assert_eq!(t.spent_alpha(), 0.0, "小样本阶段不消耗 alpha 预算");
@@ -839,7 +842,11 @@ mod tests {
             // 只快 10%,未达 effect_size=20%;零方差 → SPRT 确定性退化
             last = t.record(100.0 + (i % 2) as f64, 90.0 + (i % 2) as f64);
         }
-        assert_eq!(last, TestDecision::Reject, "效果量未达标必须 Reject,不 Promote");
+        assert_eq!(
+            last,
+            TestDecision::Reject,
+            "效果量未达标必须 Reject,不 Promote"
+        );
         assert_eq!(t.spent_alpha(), 0.05, "Reject 同样是终局,耗尽预算");
     }
 
@@ -927,7 +934,11 @@ mod tests {
         for _ in 0..20 {
             let _ = t.record(100.0, 100.0);
         }
-        assert_eq!(t.decision(), Some(TestDecision::Reject), "同分布必在 max_samples 内终局");
+        assert_eq!(
+            t.decision(),
+            Some(TestDecision::Reject),
+            "同分布必在 max_samples 内终局"
+        );
         assert!(t.sample_count() <= 20, "样本量不得超过 max_samples");
     }
 

@@ -98,13 +98,18 @@ jobs:
           run_bench degradation_chain cargo bench -p csn-substitutor --bench degradation_chain
           # L9 Quest 层优化基线守护(2026-07-31 新增):dag/gea/scheduler/dedup/checkpoint/shadow
           run_bench dag cargo bench -p quest-engine --bench dag_bench
+          # 第三轮冗余审计 批 B/C:L0 共享纯函数(sigmoid / percentile_sorted)+ 激活已落盘的 Top-K 对照
+          run_bench util_micro cargo bench -p nexus-contracts --bench util_micro
+          # xts_top_k.rs 已随 WS-2 落盘,但此前未进 run_bench → 其阈值长期空转,现补齐
+          run_bench xts_top_k cargo bench -p nexus-contracts --bench xts_top_k
           run_bench checkpoint cargo bench -p quest-engine --bench checkpoint_bench
           run_bench gea_cache cargo bench -p gea-activator --bench gate_compute
           run_bench scheduler cargo bench -p chimera-mas --bench mas_benchmark scheduler_dequeue
           run_bench dedup cargo bench -p chimera-mas --bench dedup_bench
           run_bench shadow_stats cargo bench -p chimera-mas --bench shadow_stats
           # ===== WS-3 E1: 审计点名的 17 个未守护 bench 补全(阈值"待首跑校准")=====
-          # 与 scripts/check_perf_redlines.ps1 Part3 $registeredBench 保持同步。
+          # 与 scripts/perf_thresholds.toml 的 [[run_bench]] 保持同步;
+          # 该同步已由 check_perf_redlines.py 不变式 I7 机器强制(不再靠人工)。
           run_bench config_concurrency cargo bench -p chimera-cli --bench config_concurrency_bench
           run_bench writer_ansi       cargo bench -p chimera-tui --bench writer_ansi_bench
           run_bench v3_pipeline       cargo bench -p chimera-tui --bench v3_pipeline_bench
@@ -125,12 +130,15 @@ jobs:
 
       - name: Assert thresholds
         # WHY 用 Python 解析 criterion 的 estimates.json:
-        #   - criterion 的 stdout 格式可能随版本变化,estimates.json 是稳定契约
-        #   - estimates.json 包含 median.point_estimate(纳秒),精确可信
-        #   - ubuntu-latest 预装 python3,无需额外安装
+        #   - criterion 的 stdout 格式可能随版本变化, estimates.json 是稳定契约
+        #   - estimates.json 包含 median.point_estimate(纳秒), 精确可信
+        #   - ubuntu-latest 预装 python3, 无需额外安装
+        # 输出同时落盘 bench_threshold_legacy.log:下一步的 compare 要拿它跟
+        # scripts/check_perf_redlines.py 逐键对拍。tee 不改变本步成败语义
+        # (pipefail 下 python 非 0 仍使本步红)。
         shell: bash
         run: |
-          python3 <<'PYEOF'
+          python3 <<'PYEOF' | tee bench_threshold_legacy.log
           import json
           import sys
           from pathlib import Path
@@ -212,6 +220,17 @@ jobs:
               # 预留(并行 WS-2 将创建 nexus-contracts/benches/xts_top_k.rs):
               # 文件未落盘前无真实 estimates,只产生 no-estimates 告警(不失败);落地后自动守护。
               "xts_top_k":          100_000_000,   # < 100ms 待首跑校准(WS-2 Top-K XTS 预留)
+              # 第三轮冗余审计 批 B/C:L0 共享纯函数。阈值为本地静默态实跑中位数加余量
+              # (2026-08-30,Windows GNU release;ns/µs 级门槛在共享 runner 上噪声敏感,
+              #  故按实测放大数倍取保守值,首跑后再收紧):
+              #   sigmoid scalar     实测  33.2 ns → 门槛   500 ns (≈15×)
+              #   sigmoid map 1024   实测  33.7 µs → 门槛 200_000 ns (≈6×)
+              #   percentile_sorted  实测   6.5 ns → 门槛 1_000 ns (≈150×)
+              # 关键实测结论:percentile_sorted 在 n=100 与 n=10000 下均为 ~6.5 ns,
+              # 实证其 O(1) 契约(取分位成本与样本量无关,排序成本已留在调用方)。
+              "sigmoid_scalar":      500,
+              "sigmoid_map":         200_000,
+              "percentile_sorted":   1_000,
           }
 
           # 路径关键词映射:criterion 目录名 → benchmark crate
@@ -281,6 +300,11 @@ jobs:
               "command_validator":  ["mixed"],
               # 预留 WS-2(nexus-contracts xts_top_k),id 串含 "xts_top_k n=" 前缀
               "xts_top_k":          ["xts_top_k"],
+              # 关键词取 criterion 目录名(bench_function 第一参数)的子串,三者互不重叠;
+              # 匹配循环命中即 break,故用带空区的完整子串避免 "sigmoid" 互相抢占。
+              "sigmoid_scalar":      ["sigmoid scalar"],
+              "sigmoid_map":         ["sigmoid map"],
+              "percentile_sorted":   ["percentile_sorted"],
           }
 
           criterion_dir = Path("target/criterion")
@@ -350,6 +374,16 @@ jobs:
           print("✓ All benchmarks within thresholds.")
           PYEOF
 
+      # R1-T6 双跑比对门：删 heredoc 的前置条件。
+      # WHY 不直接换掉 heredoc：那等于把“两份实现”的验证责任变成一次不
+      # 可复验的信仰跳跃（F-R4-01 的病根就在此）。让两边在同一轮 CI 里各跑
+      # 一遍并逐键对拍 (passed + worst group), 连续一致一段观察期后才切流到
+      # py 核单一实现。本步红 = heredoc 不得删除。
+      # 表体来源：scripts/perf_thresholds.toml（与 heredoc 同源机械抽取, 2026-08-31）。
+      - name: Double-run compare (heredoc vs py core)
+        shell: bash
+        run: python3 scripts/check_perf_redlines.py compare --legacy-out bench_threshold_legacy.log
+
       - name: Upload benchmark report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -361,6 +395,7 @@ jobs:
           path: |
             target/criterion/
             bench_*.log
+            bench_threshold_legacy.log
           retention-days: 30
 
   # ============================================================

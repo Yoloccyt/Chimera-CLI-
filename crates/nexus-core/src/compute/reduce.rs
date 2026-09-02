@@ -196,7 +196,11 @@ pub fn repro_reduce(vals: &[f64]) -> f64 {
 
     // 全零（含与零同效的跳过路径）:零符号语义 -0.0 全负 → -0.0;含任一 +0.0 → +0.0
     if !saw_finite_nonzero {
-        return if has_neg_zero && !has_pos_zero { -0.0 } else { 0.0 };
+        return if has_neg_zero && !has_pos_zero {
+            -0.0
+        } else {
+            0.0
+        };
     }
 
     // 桶间大→小固定序累加（桶 32 覆盖 ~1e308 量级,桶 0 覆盖次正规量级）
@@ -382,7 +386,11 @@ mod tests {
         // 跨量级混合:分桶保证同量级先内聚,小量级不被大数吞没
         // 1e300 与 -1e300 同桶先抵消 → 0,1e-300 独立桶完整保留 → 2e-300
         let vals = [1e300, -1e300, 1e-300, 1e-300];
-        assert_eq!(repro_reduce(&vals), 2e-300, "同量级先抵消后,残留 2e-300 必须保留");
+        assert_eq!(
+            repro_reduce(&vals),
+            2e-300,
+            "同量级先抵消后,残留 2e-300 必须保留"
+        );
         // 交错顺序:桶内容与输入顺序无关(仅位模式决定) → 结果不变
         let shuffled = [1e300, 1e-300, -1e300, 1e-300];
         assert_eq!(repro_reduce(&shuffled), 2e-300);
@@ -409,7 +417,10 @@ mod tests {
         ] {
             assert!(tree_reduce_fixed(&vals, 64).is_nan(), "{vals:?}");
             assert!(repro_reduce(&vals).is_nan(), "{vals:?}");
-            assert!(reduce(&vals, ReduceMode::Deterministic).is_nan(), "{vals:?}");
+            assert!(
+                reduce(&vals, ReduceMode::Deterministic).is_nan(),
+                "{vals:?}"
+            );
             assert!(reduce(&vals, ReduceMode::Audit).is_nan(), "{vals:?}");
         }
     }
@@ -452,7 +463,11 @@ mod tests {
         let tiny = [f64::from_bits(1), f64::from_bits(2), f64::from_bits(3)];
         let naive: f64 = tiny.iter().sum();
         assert_eq!(repro_reduce(&tiny), naive);
-        assert_eq!(repro_reduce(&tiny).to_bits(), 6u64, "6·2^-1074 = from_bits(6)");
+        assert_eq!(
+            repro_reduce(&tiny).to_bits(),
+            6u64,
+            "6·2^-1074 = from_bits(6)"
+        );
         assert_close(tree_reduce_fixed(&tiny, 64), naive, 1.0, "subnormal");
     }
 
@@ -462,12 +477,12 @@ mod tests {
     fn bin_index_bounds() {
         // 关键位型:零/最小次正规/最小正规/2^0/2^14/最大指数 → 桶号精确锁定
         for (bits, want) in [
-            (0u64, 0),                          // 零(符号位清除)
-            (1u64, 0),                          // 最小次正规 2^-1074
-            (f64::MIN_POSITIVE.to_bits(), 0),   // 最小正规 2^-1022
-            (1.0f64.to_bits(), 16),             // 2^0(biased 1023 → (1074)>>6)
-            (2.0f64.powi(14).to_bits(), 17),    // 2^14(跨桶边界)
-            (f64::MAX.to_bits(), 32),           // 最大指数 1023
+            (0u64, 0),                        // 零(符号位清除)
+            (1u64, 0),                        // 最小次正规 2^-1074
+            (f64::MIN_POSITIVE.to_bits(), 0), // 最小正规 2^-1022
+            (1.0f64.to_bits(), 16),           // 2^0(biased 1023 → (1074)>>6)
+            (2.0f64.powi(14).to_bits(), 17),  // 2^14(跨桶边界)
+            (f64::MAX.to_bits(), 32),         // 最大指数 1023
         ] {
             assert_eq!(bin_index(bits), want, "bits={bits:#x}");
         }
@@ -506,9 +521,9 @@ mod tests {
             1e-300,
             0.5,
             -0.5,
-            f64::from_bits(1),     // 最小次正规
-            f64::MAX * 0.5,        // 接近上限
-            f64::MIN_POSITIVE,     // 最小正规
+            f64::from_bits(1), // 最小次正规
+            f64::MAX * 0.5,    // 接近上限
+            f64::MIN_POSITIVE, // 最小正规
             -123.456,
             0.001,
             -7.0e-9,

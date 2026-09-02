@@ -1,4 +1,4 @@
-﻿//! nexus-hook — 生命周期 Hook 系统（P3-T3，v4.0 WI-24）
+//! nexus-hook — 生命周期 Hook 系统（P3-T3，v4.0 WI-24）
 //!
 //! 对应架构层: **L9 Quest**（ADR-146 裁决：D-P4 层归属定案——挂靠 Quest 生命周期）
 //! 对应任务: **P3-T3**（手册 W16，WI-24：13+ LifecycleEvent + TOML 挂载 + 沙箱）
@@ -23,9 +23,9 @@
 
 pub mod audit;
 pub mod config;
-pub mod executor;
 /// P4-T3: hook.* 双轨注册与触发事件桥（WI-21 联动）
 pub mod event_bridge;
+pub mod executor;
 pub mod lifecycle;
 
 pub use audit::{AuditSink, HookAudit, HookAuditEntry, NoopAuditSink};

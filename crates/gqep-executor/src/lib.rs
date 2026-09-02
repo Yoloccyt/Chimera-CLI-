@@ -1,4 +1,4 @@
-﻿//! 聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
+//! 聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
 //!
 //! 对应架构层:L7 Execution
 //! 对应创新点:GQEP(Gather-Query Execution Protocol)
@@ -49,20 +49,20 @@ use std::sync::atomic::Ordering;
 
 pub mod batch;
 pub mod config;
-pub mod error;
 /// P2-T11: 神经符号一致性守护（v4.0 WI-27）
 ///
 /// Invariant trait + ProjectCompilesInvariant（写文件后 cargo check,大仓库
 /// 降级局部 check）;奖励信号映射（+3.0/−1.0）供 WI-30 Shadow 消费。
 pub mod consistency_guardian;
+pub mod error;
+/// P4-T3: ToolExecutor × execpolicy 审批流水线接线（WI-16 安全不变量兑现）
+pub mod exec_tool_executor;
 pub mod gatherer;
 /// P3-T7: 流式期间启动工具（v4.0 WI-17,增量解析 + 闭合即启动）
 pub mod streaming_dispatch;
+pub mod timeout;
 /// P3-T8: 声明式 ToolPlan 解释执行（v4.0 WI-16,PTC 计划批编排）
 pub mod toolplan_runner;
-/// P4-T3: ToolExecutor × execpolicy 审批流水线接线（WI-16 安全不变量兑现）
-pub mod exec_tool_executor;
-pub mod timeout;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===

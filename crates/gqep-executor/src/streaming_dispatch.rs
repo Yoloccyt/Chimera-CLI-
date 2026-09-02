@@ -48,7 +48,8 @@ impl SideEffect {
     #[must_use]
     pub fn classify(name: &str) -> Self {
         let lower = name.to_ascii_lowercase();
-        if lower.starts_with("read:") || lower.starts_with("query:") || lower.starts_with("search:") {
+        if lower.starts_with("read:") || lower.starts_with("query:") || lower.starts_with("search:")
+        {
             Self::ReadOnly
         } else {
             Self::Write
@@ -167,7 +168,8 @@ impl StreamingDispatcher {
             };
             // 4. 完整块就绪:提取参数 JSON 并校验
             let args_json = rest[..end_rel].to_string();
-            let block_end = args_start + end_rel + END_PREFIX.len() + close_rel + MARKER_SUFFIX.len();
+            let block_end =
+                args_start + end_rel + END_PREFIX.len() + close_rel + MARKER_SUFFIX.len();
             if serde_json::from_str::<serde_json::Value>(&args_json).is_err() {
                 outcome.dropped += 1;
                 self.dropped_total += 1;
@@ -226,7 +228,13 @@ mod tests {
     fn incremental_across_chunks() {
         let mut d = StreamingDispatcher::new();
         let mut total = DispatchOutcome::default();
-        for part in ["<|tool_s", "tart:query:db|>", "{\"sql\":\"SELECT 1\"}", "<|tool_end:query:db", "|>"] {
+        for part in [
+            "<|tool_s",
+            "tart:query:db|>",
+            "{\"sql\":\"SELECT 1\"}",
+            "<|tool_end:query:db",
+            "|>",
+        ] {
             let out = d.feed(part);
             total.started_readonly.extend(out.started_readonly);
             total.deferred_writes.extend(out.deferred_writes);
@@ -234,7 +242,10 @@ mod tests {
         }
         assert_eq!(total.total(), 1, "跨 chunk 必须恰产出 1 个闭合块");
         assert_eq!(total.started_readonly[0].name, "query:db");
-        assert_eq!(total.started_readonly[0].args_json, "{\"sql\":\"SELECT 1\"}");
+        assert_eq!(
+            total.started_readonly[0].args_json,
+            "{\"sql\":\"SELECT 1\"}"
+        );
     }
 
     /// 未闭合块不派发 — 置信度门禁:未闭合 = 不 dispatch
@@ -275,7 +286,9 @@ mod tests {
     #[test]
     fn interleaved_prose_ignored() {
         let mut d = StreamingDispatcher::new();
-        let out = d.feed("我来分析一下<|tool_start:search:docs|>{\"q\":\"x\"}<|tool_end:search:docs|>结论如下。");
+        let out = d.feed(
+            "我来分析一下<|tool_start:search:docs|>{\"q\":\"x\"}<|tool_end:search:docs|>结论如下。",
+        );
         assert_eq!(out.total(), 1);
         assert_eq!(out.started_readonly[0].args_json, "{\"q\":\"x\"}");
     }
@@ -287,7 +300,11 @@ mod tests {
         assert_eq!(SideEffect::classify("query:db"), SideEffect::ReadOnly);
         assert_eq!(SideEffect::classify("read:file"), SideEffect::ReadOnly);
         assert_eq!(SideEffect::classify("edit:file"), SideEffect::Write);
-        assert_eq!(SideEffect::classify("bash"), SideEffect::Write, "未识别默认保守");
+        assert_eq!(
+            SideEffect::classify("bash"),
+            SideEffect::Write,
+            "未识别默认保守"
+        );
     }
 
     /// 缓冲超限丢弃 — 防御性上限防内存撑爆
@@ -312,7 +329,11 @@ mod tests {
         let a = d.feed(block);
         let b = d.feed(block);
         assert_eq!(a.total(), 1);
-        assert_eq!(b.total(), 1, "重复输入各产 1 个（互不干扰,接入方按流语义消费）");
+        assert_eq!(
+            b.total(),
+            1,
+            "重复输入各产 1 个（互不干扰,接入方按流语义消费）"
+        );
     }
 
     /// 部分前缀累积 — 缓冲只保留前缀候选,正文被清理
@@ -320,11 +341,19 @@ mod tests {
     fn buffer_prefix_preserved_only() {
         let mut d = StreamingDispatcher::new();
         let _ = d.feed("这是正文没有工具标记");
-        assert!(d.buffer.len() <= START_PREFIX.len(), "正文应被清理,只保留前缀候选");
+        assert!(
+            d.buffer.len() <= START_PREFIX.len(),
+            "正文应被清理,只保留前缀候选"
+        );
         // 前缀候选跨 chunk 累积后仍能解析
         let mut d2 = StreamingDispatcher::new();
         let mut total = DispatchOutcome::default();
-        for part in ["<|", "tool_start:search", ":docs|>{\"q\":\"p\"}", "<|tool_end:search:docs|>"] {
+        for part in [
+            "<|",
+            "tool_start:search",
+            ":docs|>{\"q\":\"p\"}",
+            "<|tool_end:search:docs|>",
+        ] {
             let out = d2.feed(part);
             total.started_readonly.extend(out.started_readonly);
             total.deferred_writes.extend(out.deferred_writes);

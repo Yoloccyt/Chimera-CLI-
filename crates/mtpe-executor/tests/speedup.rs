@@ -61,10 +61,13 @@ async fn test_speedup_n5_vs_single_step() {
     println!("加速比: {:.2}×", speedup);
 
     // 加速比应 > 3×(理论值 5×,考虑伪预测开销留余量)
+    // 契约值 3× 保留在调用点；scale 为**下界倒数**（放松 = 阈值变小）。
+    let floor = 3.0 / nexus_contracts::util::perf_scale();
     assert!(
-        speedup > 3.0,
-        "加速比 {:.2}× 低于阈值 3×,方案 A: {:?}, 方案 B: {:?}",
+        speedup > floor,
+        "加速比 {:.2}× 低于阈值 {:.2}×(契约 3× ÷ scale),方案 A: {:?}, 方案 B: {:?}",
         speedup,
+        floor,
         elapsed_a,
         elapsed_b
     );
@@ -97,7 +100,11 @@ async fn test_speedup_n10_vs_single_step() {
     println!("方案 B (5000×N=1): {:?}", elapsed_b);
     println!("加速比: {:.2}×", speedup);
 
-    assert!(speedup > 3.0, "加速比 {:.2}× 低于阈值 3×", speedup);
+    let floor = 3.0 / nexus_contracts::util::perf_scale();
+    assert!(
+        speedup > floor,
+        "加速比 {speedup:.2}× 低于阈值 {floor:.2}×(契约 3× ÷ scale)"
+    );
 }
 
 /// 验证 N 值越大,单次预测延迟增长缓慢(主要开销在推理启动,与 N 无关)
@@ -133,10 +140,13 @@ async fn test_latency_grows_slowly_with_n() {
     );
 
     // N=10 的延迟不应超过 N=1 的 2 倍(主要开销在推理启动,与 N 无关)
+    // 容忍倍率受 scale 支配（上界类：放松 = 乘 scale）。
+    // 用 f64 比值比较而非 `Duration * f32`：避开 Duration 乘法引入的单位歧义，
+    // 且失败消息里的两个数就是上面打印过的同一个比。
+    let growth_cap = 2.0 * nexus_contracts::util::perf_scale();
+    let growth_ratio = avg_n10.as_secs_f64() / avg_n1.as_secs_f64();
     assert!(
-        avg_n10 < avg_n1 * 2,
-        "N=10 延迟 {:?} 超过 N=1 延迟 {:?} 的 2 倍",
-        avg_n10,
-        avg_n1
+        growth_ratio < growth_cap,
+        "N=10/N=1 延迟比 {growth_ratio:.2}× 超过 {growth_cap:.2}×(契约 2× × scale)",
     );
 }

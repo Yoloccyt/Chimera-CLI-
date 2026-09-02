@@ -18,8 +18,7 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use session_store::{
-    EventRow, SegmentId, SegmentWriter, SessionEvent, SessionId, StoreConfig, TreeIndex,
-    CbmrWriter,
+    CbmrWriter, EventRow, SegmentId, SegmentWriter, SessionEvent, SessionId, StoreConfig, TreeIndex,
 };
 use std::time::Instant;
 
@@ -113,8 +112,10 @@ fn probe_wal_replay() -> f64 {
     let elapsed = start.elapsed();
 
     println!("\n================ wal_replay_seconds 采样 (n={n}) ================");
-    println!("wal_replay_seconds = {:.6}  (微批写 + 重开恢复 + 全量回放,墙钟)",
-        elapsed.as_secs_f64());
+    println!(
+        "wal_replay_seconds = {:.6}  (微批写 + 重开恢复 + 全量回放,墙钟)",
+        elapsed.as_secs_f64()
+    );
     println!("==================================================================\n");
     elapsed.as_secs_f64()
 }
@@ -195,10 +196,7 @@ fn bench_wal_replay(c: &mut Criterion) {
             let writer = CbmrWriter::new(cfg).expect("CbmrWriter");
             rt.block_on(async {
                 for i in 0..64 {
-                    writer
-                        .append(&sid, ev(i as u64))
-                        .await
-                        .expect("append");
+                    writer.append(&sid, ev(i as u64)).await.expect("append");
                 }
             });
             drop(writer);

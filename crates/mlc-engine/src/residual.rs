@@ -252,7 +252,10 @@ mod tests {
         // L1 近 5 轮：fact-3..fact-7（注入时最近优先）
         let injected = store.inject(Phase::Debugging, 10_000);
         assert!(injected.iter().any(|f| f.content == "fact-7"));
-        assert!(!injected.iter().any(|f| f.content == "fact-0"), "L1 容量 5 必须丢弃最旧");
+        assert!(
+            !injected.iter().any(|f| f.content == "fact-0"),
+            "L1 容量 5 必须丢弃最旧"
+        );
     }
 
     #[test]
@@ -268,7 +271,10 @@ mod tests {
             .map(|f| f.content.as_str())
             .filter(|c| c.starts_with('f'))
             .collect();
-        assert!(l2_entries.iter().any(|c| *c == "f3" || *c == "f4"), "L2 含沉降事实");
+        assert!(
+            l2_entries.iter().any(|c| *c == "f3" || *c == "f4"),
+            "L2 含沉降事实"
+        );
     }
 
     #[test]
@@ -287,12 +293,18 @@ mod tests {
         let mut store = ResidualStore::new();
         // 大量事实（构造高 token 场景）
         for i in 0..10 {
-            store.record_turn(vec![KeyFact::new(format!("fact-content-{i}-会话上下文关键信息"), i)]);
+            store.record_turn(vec![KeyFact::new(
+                format!("fact-content-{i}-会话上下文关键信息"),
+                i,
+            )]);
         }
         let budget = 2000; // 5% = 100 token
         let injected = store.inject(Phase::Debugging, budget);
         let used: usize = injected.iter().map(KeyFact::token_estimate).sum();
-        assert!(used <= budget / 20 + 50, "注入 token 必须 ≤ 5% 预算（含尾条误差）");
+        assert!(
+            used <= budget / 20 + 50,
+            "注入 token 必须 ≤ 5% 预算（含尾条误差）"
+        );
     }
 
     #[test]

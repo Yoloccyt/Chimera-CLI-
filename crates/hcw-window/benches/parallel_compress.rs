@@ -78,6 +78,7 @@ fn run(
     start.elapsed()
 }
 
+// ADR-159 决策 3 三态登记:dev-only(历史副本,新 bench 请用 nexus_contracts::util::percentile_sorted)
 /// 取分位数（样本需已排序）
 fn percentile(sorted: &[Duration], p: f64) -> Duration {
     assert!(

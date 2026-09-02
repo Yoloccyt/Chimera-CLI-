@@ -5,7 +5,7 @@
 //! # 测试策略
 //! - 10 线程并发 get_or_prefetch + insert,验证无 panic
 //! - 混合读写场景:部分线程读,部分线程写
-//! - 命中率性能断言(标记 #[ignore],需手动运行)
+//! - 命中率性能断言（固定种子、无时序测量 → 属正确断言，随常规测试跑）
 
 use std::sync::Arc;
 use std::thread;
@@ -128,9 +128,9 @@ fn test_concurrent_arc_sharing() {
 
 /// 命中率性能断言 — 稳定访问模式下命中率 > 70%
 ///
-/// 标记 #[ignore],需手动运行:`cargo test -p scc-cache -- --ignored test_hit_rate_above_70_percent`
+/// 本断言不读时钟（实测 debug 下执行 0.02s），旧注释“需手动运行”与
+/// `#[ignore]` 理由均与实现不符，2026-08-31 R1-T10 解除（它应随常规测试跑）。
 #[test]
-#[ignore]
 fn test_hit_rate_above_70_percent() {
     let bus = EventBus::new();
     let cache = SccCache::new(SccConfig::default(), bus);

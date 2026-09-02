@@ -116,12 +116,7 @@ mod tests {
     async fn quest_backend_real_engine() {
         let bus = EventBus::new();
         let backend = QuestBackend::new(bus);
-        let thread = Thread::new(
-            ThreadId::new("goal-1::run-1"),
-            "goal-1",
-            "run-1",
-            1_000,
-        );
+        let thread = Thread::new(ThreadId::new("goal-1::run-1"), "goal-1", "run-1", 1_000);
         let turn = TurnId::new("turn-1");
         let input = UserInput {
             text: "分析项目依赖".into(),

@@ -18,9 +18,7 @@
 //! （T8/T9 模式,打印到 stdout）,criterion 其余组为迭代基准。
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use session_store::{
-    replay, CbmrWriter, Offset, SessionEvent, SessionId, StoreConfig, TreeIndex,
-};
+use session_store::{replay, CbmrWriter, Offset, SessionEvent, SessionId, StoreConfig, TreeIndex};
 use std::time::Instant;
 
 /// 回放规模（门禁口径:1 万事件）
@@ -64,8 +62,7 @@ fn seed(n: u64, segment_rows: u64) -> (tempfile::TempDir, TreeIndex, SessionId) 
     });
     drop(rt);
     drop(writer); // 模拟重开:replay 只依赖段文件 + 树索引
-    let tree =
-        TreeIndex::open(&dir.path().join("sessions.sqlite3")).expect("重开树索引");
+    let tree = TreeIndex::open(&dir.path().join("sessions.sqlite3")).expect("重开树索引");
     (dir, tree, sid)
 }
 
@@ -88,8 +85,10 @@ fn probe_replay_10000() -> (f64, f64) {
         .count();
     let pct = consistent as f64 / total as f64 * 100.0;
 
-    println!("\n================ wal_replay_seconds 采样 (n={REPLAY_N}, k={}) ================",
-        REPLAY_N / SEGMENT_ROWS);
+    println!(
+        "\n================ wal_replay_seconds 采样 (n={REPLAY_N}, k={}) ================",
+        REPLAY_N / SEGMENT_ROWS
+    );
     println!("wal_replay_seconds = {elapsed:.6}  (写 1 万 + 重开 + k-way 归并回放,墙钟)");
     println!("replay_order_consistency_pct = {pct:.2}%  (门禁: 100%)");
     println!("=====================================================================\n");
@@ -150,19 +149,13 @@ fn bench_fork(c: &mut Criterion) {
         b.iter(|| {
             let cfg = StoreConfig::with_dir(dir.path());
             let w = CbmrWriter::new(cfg).expect("writer");
-            let sid = rt.block_on(async {
-                w.fork_session(&parent, FORK_N / 2).await.expect("fork")
-            });
+            let sid =
+                rt.block_on(async { w.fork_session(&parent, FORK_N / 2).await.expect("fork") });
             sid
         })
     });
     drop(rt);
 }
 
-criterion_group!(
-    benches,
-    probe_metrics,
-    bench_replay_10000,
-    bench_fork
-);
+criterion_group!(benches, probe_metrics, bench_replay_10000, bench_fork);
 criterion_main!(benches);

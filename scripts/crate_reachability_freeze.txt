@@ -1,0 +1,38 @@
+# crate production-reachability ratchet freeze list (ADR-160)
+#
+# Semantics: the crates below are UNREACHABLE from the chimera-cli production
+# dependency graph (dev-dependencies and feature-gated/optional edges do not
+# count). Listing a crate here = acknowledging it as VISIBLE debt; it does not
+# block merges. A new unreachable crate that is NOT listed here makes
+# scripts/check_crate_reachability.sh exit non-zero.
+#
+# Three ways to repay (then delete the line):
+#   1) wire it into the composition root crates/chimera-cli/Cargo.toml [dependencies]
+#   2) declare it `optional = true` in a consumer manifest + list it under a
+#      cargo feature (precedent: ADR-065 decision 6 + the `--features mca` ci.yml job)
+#   3) keep it unwired, but record the reason in an ADR (shadow-first / migration)
+#
+# Format: <crate>   # <single-line reason + source>   (parser reads one line only)
+# Evidence rule agreed 2026-08-29: Cargo.toml self-description + ADR number.
+# Nothing in this file: legacy. Gate output must stay ASCII (Windows GBK consoles).
+
+# --- intentional reservation (Cargo.toml says "no consumer" + reservation ADR) ---
+mas-sched        # shadow-first, chimera-mas split to be taken over via L0 contract (root Cargo.toml:55-59)  ADR-145
+nexus-hook       # empty config = current behaviour, safe fallback path (root Cargo.toml:60-64)             ADR-146
+
+# --- compiled only under a cargo feature, absent from the default binary ---
+mca-gateway      # built by root `mca` feature + ci.yml mca job only; NO consumer manifest declares it even optional, so ADR-065 decision 6 assembly-time injection never landed  ADR-065
+
+# --- legacy islands (delivered in Week 6/7, never wired; unit + E2E tests green but no production consumer) ---
+model-router     # incoming edges: auto-dpo (itself an island) + quest-engine dev-dep only; the "CAF landed" claim in the rules docs does not hold on the production graph  ADR-160
+auto-dpo         # one of the three L5 evolution-loop crates, zero production incoming edges                 ADR-160
+scc-cache        # incoming edges: gea-activator / hcw-window dev-dep + mca-gateway (island)                 ADR-160
+csn-substitutor  # capability degradation chain, incoming edge: root E2E dev-dep only                        ADR-160
+gea-activator    # incoming edge: root E2E dev-dep only (layer corrected to L9 in Phase 6 W0)                ADR-160
+sesa-router      # incoming edge: root E2E dev-dep only                                                      ADR-160
+decb-governor    # incoming edge: parliament dev-dep only                                                    ADR-160
+acb-governor     # zero incoming edges (not even a dev-dep; declared only in root workspace.dependencies)    ADR-160
+chtc-bridge      # 5 IDE adapters, incoming edge: root E2E dev-dep only                                      ADR-160
+lsct-tiering     # incoming edge: root E2E dev-dep only                                                      ADR-160
+mtpe-executor    # incoming edge: gea-activator dev-dep only                                                 ADR-160
+ssra-fusion      # incoming edge: root E2E dev-dep only (layer corrected to L7 in Phase 6 W0)                ADR-160

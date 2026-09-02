@@ -1,0 +1,174 @@
+# Phase R 收口判据清单（单一真值源）
+#
+# WHY：本波次多次出现"判据写在 A 文档、跑法写在 B 文档、实际跑的是 C"的三源分裂，
+# 而且我自己就因手工重述漏跑过（clippy 在 Cargo.lock 变更后没重跑，靠复扫才发现）。
+# 因此"收口要跑哪些命令"必须有唯一登记处：本文件。
+#
+# 字段：
+#   id          判据编号（closure / checklist 引用它，不复制命令）
+#   spec_ref    对应 Spec 条目（用于完成度审计反查）
+#   cmd         实际命令（相对仓库根；用 {python} 占位当前解释器）
+#   expect      期望退出码（0=绿；1=按设计为红，例如未提交前的耦合审计）
+#   kind        light（秒级，可随手跑） | heavy（需编译/长时间，跑前查磁盘）
+#   disk_gb     heavy 项要求的最低 D 盘空闲 GB（低于则跳过并判"不可判定"，不判通过）
+#   note        一句话说明它证明什么
+#
+# 纪律：新增判据必须同时写 spec_ref 与 note；漏 spec_ref 会被 run_gate_manifest.py 判红。
+
+[[gate]]
+id = "G-01"
+spec_ref = "R1-T4 / T5"
+cmd = "{python} scripts/check_perf_redlines.py --selftest"
+expect = 0
+kind = "light"
+note = "性能红线门有牙齿（未登记必红/幽灵登记必红/收紧未删债必红）"
+
+[[gate]]
+id = "G-02"
+spec_ref = "R1-T4 / P0-A / T5"
+cmd = "{python} scripts/check_perf_redlines.py --static-only"
+expect = 0
+kind = "light"
+note = "lint + inventory + invariants + ignored 全静态面（ci.yml 阻塞步的本地等价）"
+
+[[gate]]
+id = "G-03"
+spec_ref = "P0-A"
+cmd = "bash scripts/check_perf_redlines.sh --static-only"
+expect = 0
+kind = "light"
+note = "Linux 侧薄包装可用（shebang/编码合规的运行时证据，非仅静态检查）"
+
+[[gate]]
+id = "G-04"
+spec_ref = "R1-T3 / T11"
+cmd = "pwsh -NoProfile -File scripts/check_doc_consistency.ps1"
+expect = 0
+kind = "light"
+note = "文档一致性权威执行体（自报 6 categories / N check ids，含 D3/D4/D5）"
+
+[[gate]]
+id = "G-05"
+spec_ref = "R1-T3 / ADR-166"
+cmd = "bash scripts/check_doc_consistency.sh"
+expect = 0
+kind = "light"
+note = "CI 兼容性冒烟面（自报 id 数显著少于 .ps1，正是 ADR-166 的论断）"
+
+[[gate]]
+id = "G-06"
+spec_ref = "R1-T3（audit 三处口径）"
+cmd = "{python} scripts/audit_cmd_sync.py"
+expect = 0
+kind = "light"
+note = "audit.yml / agents.md / CLAUDE.md 三处 cargo audit 口径逐字等价；缺文件退 2"
+
+[[gate]]
+id = "G-07"
+spec_ref = "T2（同 commit 硬规则）"
+cmd = "{python} scripts/audit_commit_coupling.py"
+expect = 1
+kind = "light"
+note = "已跟踪执行体引用未跟踪文件的全集；T2 分批提交前**按设计为 1**，各批落地后应归 0"
+
+[[gate]]
+id = "G-08"
+spec_ref = "R1-T1 / T4"
+cmd = "bash scripts/check_dependency_rules.sh"
+expect = 0
+kind = "light"
+note = "依赖铁律与 forbid(unsafe_code)（43/43 层图；.sh 侧曾因 CRLF 空跑，见 RK-P35）"
+
+[[gate]]
+id = "G-09"
+spec_ref = "R1-T9 前置 / ADR-160"
+cmd = "bash scripts/check_crate_reachability.sh"
+expect = 0
+kind = "light"
+note = "可达性棘轮（28 可达 / 15 冻结孤岛 / new_gaps=0）"
+
+[[gate]]
+id = "G-10"
+spec_ref = "Spec 字面完成度"
+cmd = "{python} scripts/audit_phaseR_spec.py"
+expect = 1
+kind = "light"
+note = "按 Spec 字面条目判 PROVEN/NOT PROVEN/MISSING；当前唯一非 PROVEN 是 T6 heredoc 延后（按设计为 1）"
+
+[[gate]]
+id = "G-11"
+spec_ref = "RK-P39 交付物保护"
+cmd = "{python} scripts/audit_phaseR_artifacts.py"
+expect = 0
+kind = "light"
+note = "交付物存亡 + git 跟踪态 + 报告引用证据完整性（含灵敏度对照自证）"
+
+[[gate]]
+id = "G-12"
+spec_ref = "R1-T1"
+cmd = "cargo check --workspace --all-targets"
+expect = 0
+kind = "heavy"
+disk_gb = 20
+note = "全量类型检查（发布前门第 3 项）"
+
+[[gate]]
+id = "G-13"
+spec_ref = "R1-T1 / 锁变更后必须重跑"
+cmd = "cargo clippy --workspace --all-targets --jobs 2 -- -D warnings"
+expect = 0
+kind = "heavy"
+disk_gb = 20
+note = "lint 门；Cargo.lock 变更后必须重跑（本波曾漏，靠 §5 复扫发现）"
+
+[[gate]]
+id = "G-14"
+spec_ref = "P0-B / R1-T1"
+cmd = "cargo test --workspace --jobs 4"
+expect = 0
+kind = "heavy"
+disk_gb = 20
+note = "全量回归（≥485 段、failed=0；统计须 -CaseSensitive 口径）"
+
+[[gate]]
+id = "G-15"
+spec_ref = "R1-T7 第 7 项"
+cmd = "cargo test --workspace --release --jobs 2 -- --ignored --test-threads=1"
+expect = 0
+kind = "heavy"
+disk_gb = 25
+note = "ignored 全集（本机已实测资源不可行，正确通道是 CI slo.yml + bench_check.yml）"
+
+[[gate]]
+id = "G-16"
+spec_ref = "Spec 全局（审计器自盲区反查）"
+cmd = "{python} scripts/audit_spec_coverage.py"
+expect = 0
+kind = "light"
+note = "反查 Spec 抽出的任务/风险/命名交付物/新事实是否都有审计项、判据登记或在盘上；防止 audit_phaseR_spec.py 自身漏抄要求"
+
+
+[[gate]]
+id = "G-17"
+spec_ref = "R1-T3 / 跨文档数值一致性"
+cmd = "{python} scripts/xdoc_precise.py"
+expect = 0
+kind = "light"
+note = "现状数字断言与权威值对齐（权威值当场从门禁自报读，不写死；豁免需同行含旧值身份标注）"
+
+[[gate]]
+id = "G-18"
+spec_ref = "R1-T11 / 防假绿"
+cmd = "{python} scripts/audit_gate_selfreport.py"
+expect = 0
+kind = "light"
+note = "门禁自报的 categories/ids 必须等于日志实算 id 数且达下限（抓中途截断与检查被静默去掉）"
+
+[[gate]]
+id = "G-19"
+spec_ref = "R1-T1 门③"
+cmd = "{python} scripts/verify_fmt_all_packages.py"
+expect = 0
+kind = "heavy"
+disk_gb = 0
+note = "逐包 cargo fmt --check（本机 cargo fmt --all 报 os error 206，所用聚合法）；44 包全部干净才算过"

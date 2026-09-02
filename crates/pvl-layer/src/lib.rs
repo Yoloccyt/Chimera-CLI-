@@ -70,6 +70,10 @@
 pub mod auto_builder;
 /// Phase 7 §12.1: 经验卡片生成器（PVL 验证结果→ExperienceCard，ADR-049 内嵌）
 pub mod card_generator;
+/// P2-T13: L-b 结构化并发框架（WI-34 注入续期,JoinSet 有界并发 + 超时 + 保序）
+///
+/// LLM 类调用（produce/verify）归 L-b async 并发,禁 rayon（E8-2 红线）。
+pub mod concurrency;
 pub mod config;
 /// Phase 7 §12.3: 动态验证深度 + 熵加权（OpenMLE + 快手融合，ADR-049 内嵌）
 pub mod dynamic_depth;
@@ -91,10 +95,6 @@ pub mod rlvr;
 pub mod segment_validation;
 /// Phase 7 §12.2: KAT 轨迹九维过程评分（D-2 命名协调，与 process_score 并存）
 pub mod trajectory_score;
-/// P2-T13: L-b 结构化并发框架（WI-34 注入续期,JoinSet 有界并发 + 超时 + 保序）
-///
-/// LLM 类调用（produce/verify）归 L-b async 并发,禁 rayon（E8-2 红线）。
-pub mod concurrency;
 pub mod types;
 pub mod verifier;
 

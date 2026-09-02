@@ -46,15 +46,15 @@ pub mod error;
 pub mod newtype;
 pub mod ids;
 pub mod path_util;
+/// P2-T6: AERA 自适应错误恢复分配（手册 T-11,effort = 0.20·quota + 0.45·criticality + 0.35·ewma）
+///
+/// 非对称迟滞（升档快降档慢）防抖;effort 决定重试预算/回退层级/人工升级。
+pub mod resilience;
 /// RL 客户端骨架 — RulePolicyFallback 默认实现（v3.4.0 §6.4,RL 预留）
 ///
 /// 承载 RLClient trait（predict/report_experience/sync_policy）+ RLError，
 /// 铁律1: 零运行时 Python 依赖（GrpcRLClient 仅 v4.0 预留占位）。
 pub mod rl_client;
-/// P2-T6: AERA 自适应错误恢复分配（手册 T-11,effort = 0.20·quota + 0.45·criticality + 0.35·ewma）
-///
-/// 非对称迟滞（升档快降档慢）防抖;effort 决定重试预算/回退层级/人工升级。
-pub mod resilience;
 /// 统计学习接口层 — SlidingWindow/UCB 策略（v3.4.0 §6.3,RL 预留）
 ///
 /// 承载 StatLearningPolicy trait + SlidingWindowPolicy + UCBPolicy，

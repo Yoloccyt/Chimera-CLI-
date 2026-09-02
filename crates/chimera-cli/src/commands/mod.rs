@@ -21,6 +21,8 @@ use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::permission::PermissionCtx;
 
+/// P2-T9: ACP 桥（Agent Client Protocol,JSON-RPC 2.0 over stdio,转译层隔离）
+pub mod acp;
 /// Agent 生命周期管理子命令(Task 1.10)
 pub mod agent;
 /// 红队安全审计子命令(Task 1.9)
@@ -51,8 +53,6 @@ pub mod quest;
 pub mod run;
 /// WI-01: 协议宿主服务（serve 形态,JSON-RPC v1 over stdio）
 pub mod serve;
-/// P2-T9: ACP 桥（Agent Client Protocol,JSON-RPC 2.0 over stdio,转译层隔离）
-pub mod acp;
 /// TUI 交互界面子命令
 pub mod tui;
 /// Wiki 查询子命令

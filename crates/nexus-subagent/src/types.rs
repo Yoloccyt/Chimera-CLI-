@@ -1,4 +1,4 @@
-﻿//! SubAgent 类型 — 3 类型 + 规格 + 规模上限（P3-T9，v4.0 WI-25）
+//! SubAgent 类型 — 3 类型 + 规格 + 规模上限（P3-T9，v4.0 WI-25）
 //!
 //! 对应架构层: L7 Execution（nexus-subagent，ADR-148）
 
@@ -21,7 +21,11 @@ pub enum SubAgentKind {
 
 impl SubAgentKind {
     /// 全部类型（诊断/注册遍历）
-    pub const ALL: [SubAgentKind; 3] = [SubAgentKind::Coder, SubAgentKind::Explore, SubAgentKind::Plan];
+    pub const ALL: [SubAgentKind; 3] = [
+        SubAgentKind::Coder,
+        SubAgentKind::Explore,
+        SubAgentKind::Plan,
+    ];
 
     /// 能力标签（Auction 匹配依据）
     #[must_use]
@@ -100,7 +104,11 @@ impl SubAgentProfile {
     /// 能力匹配度（0.0-1.0:标签交叠比例）
     #[must_use]
     pub fn match_ratio(&self, required: &str) -> f64 {
-        let req: Vec<&str> = required.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        let req: Vec<&str> = required
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
         if req.is_empty() {
             return 1.0;
         }

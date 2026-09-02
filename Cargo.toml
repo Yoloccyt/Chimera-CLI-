@@ -50,22 +50,26 @@ members = [
     # L3 Storage: session-store 会话事件流存储(Phase 2 新增,ADR-141,workspace 第 40 个 crate)
     # WHY 排在末位: 会话持久化从 Checkpoint 线性快照升级为 append-only 段 + CBMR 微批写
     # (手册 W9 T-07 / ADR-108 / v4.0 WI-18 存储面);仅依赖 L0(nexus-contracts),
-    # 无消费者(存储面先行,P2-T3 接入回放),加入 members 对既有 crate 零影响
+    # 消费者为 nexus-app-server(装配期注入), 事件回放面 P2-T3 接入
     "crates/session-store",
     # L9 Quest: mas-sched 多代理调度器控制面(Phase 3 新增,ADR-145,workspace 第 41 个 crate)
     # WHY 排在末位: 从 chimera-mas 拆出的控制面(PeerScheduler claim/renew/handoff/should_run),
-    # 仅依赖 L0(nexus-contracts)/L1(nexus-core/event-bus) 内部 3 个(≤6 门禁,WI-29),
+    # 仅依赖 L0(nexus-contracts) 内部 1 个(WI-29),
     # 无消费者(影子模式先行,后续 chimera-mas 拆出经 L0 契约承接),加入 members 零影响
-"crates/mas-sched",
+    # 注(ADR-160): 原注释所称"L1(nexus-core/event-bus) 内部 3 个"系声明先于实现,
+    # 事件面未落地,虚假依赖声明已删;该 crate 现登记于 crate_reachability_freeze.txt
+    "crates/mas-sched",
     # L9 Quest: nexus-hook 生命周期 Hook 系统(Phase 3 新增,ADR-146,workspace 第 42 个 crate)
     # WHY 排在末位: 13+ LifecycleEvent + TOML 挂载 + seccore ProcessFence 沙箱,
     # 依赖 L0(nexus-contracts)/L1(event-bus)/L4(seccore) 内部 3 个(≤6 门禁),
     # 无消费者(配置空载=现状,回退路径安全),加入 members 零影响
-"crates/nexus-hook",
+    "crates/nexus-hook",
     # L7 Execution: nexus-subagent 类型化 SubAgent 运行时 + Task Auction（Phase 3 新增,ADR-148,workspace 第 43 个 crate）
-    # WHY 排在末位: 3 类型 + Arena + 禁嵌套 + 竞价;依赖 L0(nexus-contracts)/L1(nexus-core/event-bus) 内部 3 个,
-    # 无消费者(运行时先行,接入方经 spawn/join 驱动),加入 members 零影响
-"crates/nexus-subagent",
+    # WHY 排在末位: 3 类型 + Arena + 禁嵌套 + 竞价;依赖 L0(nexus-contracts) 内部 1 个,
+    # 消费者为 nexus-app-server(运行时先行,接入方经 spawn/join 驱动)
+    # 注(ADR-160): 原注释所称"L1(nexus-core/event-bus) 内部 3 个"含未实现的事件面,
+    # 虚假依赖声明(thiserror/tracing 亦未用)已删
+    "crates/nexus-subagent",
 ]
 resolver = "2"
 
@@ -118,7 +122,6 @@ uuid = { version = "1.10", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 hex = "0.4"
-once_cell = "1.20"
 dashmap = "6.1"
 # arc-swap:RCU(Read-Copy-Update)原语,P2-W7.2.3 内环最终一致 + 单调读
 # WHY 添加到 workspace:event-bus 因果一致性三层(L251-255)第二层需要 RCU 保护内环共享状态;

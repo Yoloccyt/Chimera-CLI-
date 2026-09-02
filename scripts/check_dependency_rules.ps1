@@ -10,13 +10,24 @@
 #                              {nexus-contracts, nexus-core, event-bus,
 #                              model-router, mcp-mesh} plus the inner-ring
 #                              whitelist itself.
-#   B. Upward dependency     - L(N) -> L(N+1) is forbidden for all 38 crates;
-#                              the 2-item ADR exception table is exempted
+#   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
+#                              crate ($expectedCrates); the 2-item ADR exception
+#                              table is exempted
 #                              (gqep-executor->qeep-protocol ADR-048,
 #                               pvl-layer->seccore dynamic-blacklist feature).
 #   C. Graph completeness    - every referenced workspace dependency must exist
-#                              in the layer map; layer map covers 39/39 crates
-#                              (static count + disk scan in normal mode).
+#                              in the layer map; layer map must cover the whole
+#                              workspace (static count + disk scan).
+#   D. chimera-mas dep bound - internal crate deps <= 16 (WI-29 strangler).
+#
+# DRIFT WARNING (2026-08-29 audit): this file and check_dependency_rules.sh each
+#   hand-maintain a copy of the layer map, and they DID drift -- $expectedCrates
+#   was raised to 43 here while the .sh stayed at 38, silently turning the CI
+#   iron-law job red for five crates (nexus-app-server / session-store /
+#   mas-sched / nexus-hook / nexus-subagent). CI runs the .sh, so updating only
+#   this file is NOT a fix. When adding a crate, edit BOTH in the same commit.
+#   Prefer adding a new check here and mirroring it in the .sh right away; the
+#   .sh had no Check D at all until the 2026-08-29 audit.
 # Author:  staff-engineer-mode (architecture governance specialist)
 # Refs:    ADR-054 decision 5 / ADR-048, .trae/rules/nuxus-rules.md section 2.2,
 #          docs/architecture/CODE_WIKI.md section 2
@@ -184,7 +195,7 @@ function Get-DeclaredWorkspaceDeps {
 function Invoke-RuleChecks {
     # Runs the three dependency-iron-law checks against the given graph.
     # DepGraph: hashtable crate -> string[] of production workspace deps.
-    # ScanDisk: $true in normal mode verifies 38/38 disk coverage (C3);
+    # ScanDisk: $true in normal mode verifies full disk coverage (C3);
     #           $false in selftest mode (mock graph, no disk access).
     param(
         [hashtable]$DepGraph,
@@ -235,9 +246,9 @@ function Invoke-RuleChecks {
             }
         }
     }
-    # C2: layer map must define the full 38-crate workspace (static bound).
+    # C2: layer map must define the full workspace (static bound).
     if ($layerMap.Count -ne $expectedCrates) {
-        $script:report += "[GAP-C] layer map defines $($layerMap.Count) crates, expected $expectedCrates (38/38 coverage)"
+        $script:report += "[GAP-C] layer map defines $($layerMap.Count) crates, expected $expectedCrates (full workspace coverage)"
         $script:status = 1
     }
     # C3: every crates/*/Cargo.toml on disk must be registered in the layer map
@@ -246,11 +257,11 @@ function Invoke-RuleChecks {
         $dirs = @(Get-ChildItem 'crates' -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') })
         foreach ($d in $dirs) {
             if (-not $layerMap.ContainsKey($d.Name)) {
-                $script:report += "[GAP-C] disk crate <$($d.Name)> not registered in layer map (expect 38/38 coverage)"
+                $script:report += "[GAP-C] disk crate <$($d.Name)> not registered in layer map (expect $expectedCrates/$expectedCrates coverage)"
                 $script:status = 1
             }
         }
-        $script:report += "[C] disk crates scanned: $($dirs.Count), layer map entries: $($layerMap.Count) (expect 38/38)"
+        $script:report += "[C] disk crates scanned: $($dirs.Count), layer map entries: $($layerMap.Count) (expect $expectedCrates/$expectedCrates)"
 
         # --- Check D: chimera-mas internal dependency bound (P3-T2, WI-29) ---
         # WI-29 strangler 目标: chimera-mas 内部 crate 依赖 ≤16（实测 13）;
@@ -351,7 +362,7 @@ foreach ($line in $report) { Write-Host $line }
 
 Write-Host ''
 if ($status -eq 0) {
-    Write-Host '[OK] dependency iron-law audit all pass (A inner-ring boundary / B upward deps / C completeness)'
+    Write-Host '[OK] dependency iron-law audit all pass (A inner-ring / B upward deps / C completeness / D mas dep bound)'
 } else {
     Write-Host '[FAIL] dependency iron-law audit found gaps, see [GAP-*] lines above, fix and rerun'
 }

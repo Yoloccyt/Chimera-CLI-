@@ -6,19 +6,29 @@
 #          architecture as a scriptable gate (ADR-054 decision 5).
 #          Logical twin of scripts/check_dependency_rules.ps1 - keep both in
 #          sync (same config tables, same checks A/B/C, same exit semantics).
+#
+# DRIFT WARNING (2026-08-29 audit): the two files each hand-maintain a copy of
+#   the layer map, and they DID drift -- .ps1 was raised to 43 crates while this
+#   .sh stayed at 38, silently turning the CI iron-law job red for five crates
+#   (nexus-app-server / session-store / mas-sched / nexus-hook / nexus-subagent).
+#   CI runs THIS .sh (ci.yml), so a .ps1-only update is NOT a fix.
+#   When adding a crate: update layer_of + layered_crates + expected_crates here
+#   AND $layerMap + $expectedCrates in .ps1 in the same commit.
 # Scope:
 #   A. Inner-ring boundary   - the 9 inner-ring crates (memory + reasoning +
 #                              evolution ring) may only depend on the L0/L1 base
 #                              {nexus-contracts, nexus-core, event-bus,
 #                              model-router, mcp-mesh} plus the inner-ring
 #                              whitelist itself.
-#   B. Upward dependency     - L(N) -> L(N+1) is forbidden for all 38 crates;
-#                              the 2-item ADR exception table is exempted
+#   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
+#                              crate (see expected_crates); the 2-item ADR
+#                              exception table is exempted
 #                              (gqep-executor->qeep-protocol ADR-048,
 #                               pvl-layer->seccore dynamic-blacklist feature).
 #   C. Graph completeness    - every referenced workspace dependency must exist
-#                              in the layer map; layer map covers 38/38 crates
-#                              (static count + disk scan in normal mode).
+#                              in the layer map; layer map must cover the whole
+#                              workspace (static count + disk scan).
+#   D. chimera-mas dep bound - internal crate deps <= 16 (WI-29 strangler).
 # Author:  staff-engineer-mode (architecture governance specialist)
 # Refs:    ADR-054 decision 5 / ADR-048, .trae/rules/nuxus-rules.md section 2.2
 # Exit code: 0 = clean, 1 = gap found
@@ -58,23 +68,30 @@ layer_of() {
         nexus-contracts) echo 0 ;;
         nexus-core|event-bus|model-router|mcp-mesh) echo 1 ;;
         nmc-encoder|hcw-window|mlc-engine) echo 2 ;;
-        scc-cache|lsct-tiering|cmt-tiering) echo 3 ;;
+        # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
+        scc-cache|lsct-tiering|cmt-tiering|session-store) echo 3 ;;
         seccore|qeep-protocol|decay-engine) echo 4 ;;
         repo-wiki|gsoe-evolution|auto-dpo) echo 5 ;;
         # Phase 6 W0 层图订正 (2026-08-16, ADR-084): gea-activator 移 L9,
         # ssra-fusion 移 L7 — 与 crate 自述头及 AGENTS.md §2.1 对齐
         osa-coordinator|kvbsr-router|faae-router|sesa-router|omega-learner) echo 6 ;;
-        pvl-layer|gqep-executor|mtpe-executor|csn-substitutor|ssra-fusion) echo 7 ;;
+        # P3-T9 (2026-08-27): nexus-subagent typed SubAgent runtime (L7, 43rd crate)
+        pvl-layer|gqep-executor|mtpe-executor|csn-substitutor|ssra-fusion|nexus-subagent) echo 7 ;;
         parliament|acb-governor|decb-governor) echo 8 ;;
-        quest-engine|efficiency-monitor|chimera-mas|gea-activator) echo 9 ;;
-        chimera-cli|chimera-tui|chtc-bridge|mca-gateway) echo 10 ;;
+        # P3-T2/T3 (2026-08-27): mas-sched peer scheduler + nexus-hook
+        # lifecycle hooks (L9, 41st/42nd crates)
+        quest-engine|efficiency-monitor|chimera-mas|gea-activator|mas-sched|nexus-hook) echo 9 ;;
+        # WI-01 (2026-08-22): nexus-app-server host facade (L10, 39th crate)
+        chimera-cli|chimera-tui|chtc-bridge|mca-gateway|nexus-app-server) echo 10 ;;
         *) echo "" ;;
     esac
 }
 
-# All 38 layered crates (static completeness bound for check C2).
-layered_crates="nexus-contracts nexus-core event-bus model-router mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache lsct-tiering cmt-tiering seccore qeep-protocol decay-engine repo-wiki gsoe-evolution auto-dpo osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament acb-governor decb-governor quest-engine efficiency-monitor chimera-mas chimera-cli chimera-tui chtc-bridge mca-gateway"
-expected_crates=38
+# All layered crates (static completeness bound for check C2).
+# Authority for layer numbers: $layerMap in check_dependency_rules.ps1 -- both
+# lists must stay identical (see DRIFT WARNING in the header).
+layered_crates="nexus-contracts nexus-core event-bus model-router mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache lsct-tiering cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution auto-dpo osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament acb-governor decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
+expected_crates=43
 
 # Inner-ring whitelist: 9 crates (memory + reasoning + evolution ring).
 # Three-ring reorganization target: inner ring talks via shared memory/direct
@@ -114,7 +131,16 @@ is_adr_exception() {
 # space-separated string makes is_declared_dep's word-boundary case match work.
 declared_deps=""
 if [ "$SELFTEST" = "0" ]; then
-    local_declared="$(sed -n '/^\[workspace\.dependencies\]$/,/^\[/p' Cargo.toml \
+    # WHY `tr -d '\r'`: the range START pattern is anchored with `$`. Root Cargo.toml
+    # is CRLF on a core.autocrlf=true checkout (and the file even carries a UTF-8 BOM),
+    # so `/^\[workspace\.dependencies\]$/` matches nothing -> declared_deps comes out EMPTY
+    # and Check C1 emits FALSE [GAP-C] for perfectly declared deps (observed 2026-08-31:
+    # 4 bogus gaps on nexus-contracts' serde/chrono/uuid/thiserror, all declared at root).
+    # Worse, the per-crate read below degrades the opposite way: an empty dep list silently
+    # disables the check. Either way the verdict would depend on which file happens to be
+    # CRLF -- a gate must not be that fragile. Normalising line endings makes local == CI.
+    local_declared="$(tr -d '\r' < Cargo.toml \
+        | sed -n '/^\[workspace\.dependencies\]$/,/^\[/p' \
         | grep -v '^\[' \
         | grep -E '^[A-Za-z0-9_-]+[[:space:]]*=' \
         | sed -E 's/^([A-Za-z0-9_-]+).*/\1/' || true)"
@@ -139,7 +165,11 @@ is_declared_dep() {
 # `name = { workspace = true }` refs (plain version refs are external).
 workspace_deps_of() {
     local crate="$1"
-    sed -n '/^\[dependencies\]$/,/^\[/p' "crates/$crate/Cargo.toml" \
+    # WHY `tr -d '\r'`: same CRLF fragility as above -- without it a CRLF manifest
+    # yields an EMPTY dep list, so the crate is quietly never checked (false green,
+    # strictly worse than a false red).
+    tr -d '\r' < "crates/$crate/Cargo.toml" \
+        | sed -n '/^\[dependencies\]$/,/^\[/p' \
         | grep -v '^\[' \
         | grep -E '^[A-Za-z0-9_-]+[[:space:]]*=[[:space:]]*\{[[:space:]]*workspace[[:space:]]*=[[:space:]]*true' \
         | sed -E 's/^([A-Za-z0-9_-]+).*/\1/' || true
@@ -227,14 +257,14 @@ run_checks() {
             fi
         done
     done
-    # C2: layer map must define the full 38-crate workspace (static bound).
+    # C2: layer map must define the full workspace (static bound).
     # Use bash builtin positional params instead of wc/tr (portable, no
     # dependency on coreutils on minimal MSYS PATH setups).
     local n
     set -- $layered_crates
     n=$#
     if [ "$n" -ne "$expected_crates" ]; then
-        report+=("[GAP-C] layer map defines $n crates, expected $expected_crates (38/38 coverage)")
+        report+=("[GAP-C] layer map defines $n crates, expected $expected_crates (full workspace coverage)")
         status=1
     fi
     for crate in $layered_crates; do
@@ -253,11 +283,32 @@ run_checks() {
             name="$(basename "$d")"
             disk_count=$((disk_count + 1))
             if [ -z "$(layer_of "$name")" ]; then
-                report+=("[GAP-C] disk crate <$name> not registered in layer map (expect 38/38 coverage)")
+                report+=("[GAP-C] disk crate <$name> not registered in layer map (expect $expected_crates/$expected_crates coverage)")
                 status=1
             fi
         done
-        report+=("[C] disk crates scanned: $disk_count, layer map entries: $n (expect 38/38)")
+        report+=("[C] disk crates scanned: $disk_count, layer map entries: $n (expect $expected_crates/$expected_crates)")
+    fi
+
+    # --- Check D: chimera-mas internal dependency bound (P3-T2, WI-29) ---
+    # WI-29 strangler target: chimera-mas internal crate deps <= 16 (measured
+    # 13). The mas-sched control plane was already split out; further growth
+    # means the execution plane must keep splitting. Mirror of .ps1 Check D.
+    # Normal mode only, so the selftest GAP-A/B/C count assertions stay valid.
+    if [ "$scan_disk" = "yes" ] && [ -f "crates/chimera-mas/Cargo.toml" ]; then
+        local mas_internal=0
+        local mas_limit=16
+        for dep in $(workspace_deps_of chimera-mas); do
+            if [ -n "$(layer_of "$dep")" ]; then
+                mas_internal=$((mas_internal + 1))
+            fi
+        done
+        if [ "$mas_internal" -gt "$mas_limit" ]; then
+            report+=("[GAP-D] chimera-mas internal deps $mas_internal > $mas_limit (WI-29 bound, split required)")
+            status=1
+        else
+            report+=("[D] chimera-mas internal deps: $mas_internal/$mas_limit (WI-29 <=16 bound)")
+        fi
     fi
 }
 
@@ -312,7 +363,7 @@ done
 
 echo ""
 if [ "$status" -eq 0 ]; then
-    echo "[OK] dependency iron-law audit all pass (A inner-ring boundary / B upward deps / C completeness)"
+    echo "[OK] dependency iron-law audit all pass (A inner-ring / B upward deps / C completeness / D mas dep bound)"
 else
     echo "[FAIL] dependency iron-law audit found gaps, see [GAP-*] lines above, fix and rerun"
 fi

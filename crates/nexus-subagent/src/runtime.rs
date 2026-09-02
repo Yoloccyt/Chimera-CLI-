@@ -24,7 +24,8 @@ use crate::types::{SubAgentProfile, SubAgentSpec, SWARM_LIMIT};
 /// 子代理任务 — 执行体（接入方提供:同一执行引擎换参数）
 ///
 /// 返回 `Result<String, String>`（结果 / 错误文案）。
-pub type SubAgentTask = Box<dyn FnOnce(SubAgentSpec, Arc<CancellationToken>) -> Result<String, String> + Send>;
+pub type SubAgentTask =
+    Box<dyn FnOnce(SubAgentSpec, Arc<CancellationToken>) -> Result<String, String> + Send>;
 
 /// 任务句柄 — 结果 + 取消令牌（调用方 await 结果 / 主动取消）
 pub struct SubAgentHandle {
@@ -112,10 +113,7 @@ impl SubAgentRuntime {
         }
         // 2. 禁嵌套断言（运行期;编译期由 API 面保证——spawn 仅运行时入口）
         if let Some(parent) = from_task {
-            let guard = self
-                .nesting_guard
-                .read()
-                .unwrap_or_else(|p| p.into_inner());
+            let guard = self.nesting_guard.read().unwrap_or_else(|p| p.into_inner());
             if guard.get(parent).copied().unwrap_or(false) {
                 return Err(NexusError::NestedSubAgentForbidden);
             }
@@ -130,7 +128,7 @@ impl SubAgentRuntime {
             AuctionOutcome::NoBid => None, // 兜底:无档案也派发（默认执行引擎）
         };
         let _ = winner; // 档案 ID 供审计;执行体由 task 提供（同引擎换参）
-        // 4. spawn（JoinSet 有界并发;LLM 类禁 rayon,E8-2）
+                        // 4. spawn（JoinSet 有界并发;LLM 类禁 rayon,E8-2）
         let task_id = offer.task_id;
         let task_id_for_closure = task_id.clone();
         let cancel = Arc::new(CancellationToken::new());
@@ -143,7 +141,10 @@ impl SubAgentRuntime {
         self.active.spawn(async move {
             // 执行前检查取消（四因:父级撤销可预取消）
             if let Some(reason) = cancel_for_task.poll() {
-                return (task_id_for_closure.clone(), Err(format!("cancelled: {}", reason.as_str())));
+                return (
+                    task_id_for_closure.clone(),
+                    Err(format!("cancelled: {}", reason.as_str())),
+                );
             }
             let result = tokio::task::spawn_blocking(move || task(spec, cancel_for_task))
                 .await
@@ -172,22 +173,28 @@ impl SubAgentRuntime {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::SubAgentKind;
     use super::*;
+    use crate::types::SubAgentKind;
 
     /// 3 类型并行 E2E — 注册 → 派发 → 完成（门禁）
     #[tokio::test]
     async fn three_types_parallel_e2e() {
         let mut rt = SubAgentRuntime::new();
         rt.register(SubAgentProfile::new("coder-a", SubAgentKind::Coder, 2.0));
-        rt.register(SubAgentProfile::new("explore-b", SubAgentKind::Explore, 1.0));
+        rt.register(SubAgentProfile::new(
+            "explore-b",
+            SubAgentKind::Explore,
+            1.0,
+        ));
         rt.register(SubAgentProfile::new("plan-c", SubAgentKind::Plan, 1.0));
         for kind in SubAgentKind::ALL {
             let spec = SubAgentSpec::new(kind);
             let handle = rt
                 .spawn(
                     spec.clone(),
-                    Box::new(move |spec, _cancel| Ok(format!("done:{}", spec.kind.capability_tag()))),
+                    Box::new(move |spec, _cancel| {
+                        Ok(format!("done:{}", spec.kind.capability_tag()))
+                    }),
                     None,
                 )
                 .expect("派发必须成功");
@@ -223,7 +230,10 @@ mod tests {
             Box::new(|_s, _c| Ok("b".into())),
             Some(&handle_a.task_id),
         );
-        assert!(matches!(err, Err(NexusError::NestedSubAgentForbidden)), "嵌套必须拒绝");
+        assert!(
+            matches!(err, Err(NexusError::NestedSubAgentForbidden)),
+            "嵌套必须拒绝"
+        );
         // 顶层（无来源）允许
         let _ = rt
             .spawn(
@@ -270,7 +280,9 @@ mod tests {
                 None,
             )
             .expect("派发成功");
-        handle.cancel.cancel(crate::cancel::CancelReason::UserCancelled);
+        handle
+            .cancel
+            .cancel(crate::cancel::CancelReason::UserCancelled);
         let (_id, result) = rt.join_next().await.expect("任务必须完成");
         assert!(result.is_err(), "预取消必须失败");
         assert!(result.unwrap_err().contains("cancelled"));

@@ -131,13 +131,15 @@ impl SlimeFusionEngine {
             });
         }
 
-        // Top-K 选择:降序,取权重最高的 K 个
+        // Top-K 降序选择(O(n + k log k)):xts_top_k_by 返回严格降序前 k 段
         let k = request.top_k.min(metas.len()).max(1);
-        let selected = select_top_k_desc(&mut metas, k);
+        let selected = nexus_contracts::util::xts_top_k_by(&mut metas, k, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // 主导策略:Top-K 中权重最高的模板策略
-        // WHY: select_nth_unstable_by 仅保证 [0..k] 都 >= 第 k 大,
-        // 但不保证 [0] 就是最大值(分区操作后 [0] 可能是任意 >= pivot 的元素)。
+        // WHY: xts_top_k_by 已返回降序前 k 段,[0] 即为最大值;
+        // pick_max_weight 作为防御性冗余保留(防止上游语义变更)。
         let strategy = pick_max_weight(selected)
             .map(|(_, s)| *s)
             .unwrap_or(FusionStrategy::TopK);
@@ -217,21 +219,6 @@ fn pick_max_weight(metas: &[(f32, FusionStrategy)]) -> Option<&(f32, FusionStrat
     metas
         .iter()
         .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-}
-
-/// Top-K 降序选择 — 使用 `select_nth_unstable_by` 实现 O(n) 平均复杂度
-///
-/// 返回前 `k` 个权重最大的元素(未完全排序,但保证是最大的 K 个)。
-fn select_top_k_desc(metas: &mut [(f32, FusionStrategy)], k: usize) -> &[(f32, FusionStrategy)] {
-    if k >= metas.len() {
-        return metas;
-    }
-    let idx = k - 1;
-    // 降序:b.0 vs a.0(大的在前)
-    metas.select_nth_unstable_by(idx, |a, b| {
-        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    &metas[..k]
 }
 
 /// 根据融合策略计算置信度
@@ -529,7 +516,7 @@ mod tests {
         );
     }
 
-    // === 13. select_top_k_desc 单元测试 ===
+    // === 13. xts_top_k_by 单元测试(原 select_top_k_desc,收敛至共享工具) ===
 
     #[test]
     fn test_select_top_k_desc() {
@@ -539,18 +526,21 @@ mod tests {
             (0.5, FusionStrategy::TopK),
             (0.1, FusionStrategy::TopK),
         ];
-        let top = select_top_k_desc(&mut metas, 2);
+        let top = nexus_contracts::util::xts_top_k_by(&mut metas, 2, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
         assert_eq!(top.len(), 2);
-        // 前 2 个应是最大的两个(0.9 和 0.5),但顺序不保证
-        let weights: Vec<f32> = top.iter().map(|(w, _)| *w).collect();
-        assert!(weights.contains(&0.9));
-        assert!(weights.contains(&0.5));
+        // xts_top_k_by 返回严格降序:[0] >= [1]
+        assert_eq!(top[0].0, 0.9);
+        assert_eq!(top[1].0, 0.5);
     }
 
     #[test]
     fn test_select_top_k_desc_k_exceeds_len() {
         let mut metas = vec![(0.5_f32, FusionStrategy::TopK)];
-        let top = select_top_k_desc(&mut metas, 10);
+        let top = nexus_contracts::util::xts_top_k_by(&mut metas, 10, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
         assert_eq!(top.len(), 1, "k > len 时返回全部");
     }
 
@@ -631,21 +621,25 @@ mod tests {
     #[test]
     fn test_select_top_k_desc_empty() {
         let mut metas: Vec<(f32, FusionStrategy)> = vec![];
-        let top = select_top_k_desc(&mut metas, 5);
+        let top = nexus_contracts::util::xts_top_k_by(&mut metas, 5, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
         assert!(top.is_empty(), "空切片应返回空");
     }
 
     #[test]
     fn test_select_top_k_desc_dominant_is_true_max() {
-        // 构造输入使 select_nth_unstable_by 分区后 [0] 不一定为最大值,
-        // 回归验证必须用显式 max_by 取最大值,不能假设 selected[0]。
+        // xts_top_k_by 返回严格降序前 k 段,[0] 即为最大值。
+        // pick_max_weight 作为防御性冗余仍应取到正确最大值。
         let mut metas = vec![
             (0.5, FusionStrategy::MeanField),
             (0.9, FusionStrategy::TopK),
             (0.3, FusionStrategy::WeightedAverage),
             (0.7, FusionStrategy::MeanField),
         ];
-        let top = select_top_k_desc(&mut metas, 3);
+        let top = nexus_contracts::util::xts_top_k_by(&mut metas, 3, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
         let max = pick_max_weight(top);
         assert_eq!(max.map(|(w, _)| *w), Some(0.9));
         assert_eq!(max.map(|(_, s)| *s), Some(FusionStrategy::TopK));

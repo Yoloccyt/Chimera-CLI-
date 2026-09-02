@@ -137,7 +137,10 @@ async fn parse_http_op(mut read_half: tokio::net::tcp::OwnedReadHalf) -> Result<
     let mut line = Vec::new();
     loop {
         line.clear();
-        let n = reader.read_until(b'\n', &mut line).await.map_err(SseError::Io)?;
+        let n = reader
+            .read_until(b'\n', &mut line)
+            .await
+            .map_err(SseError::Io)?;
         if n == 0 {
             return Err(SseError::Closed);
         }
@@ -160,7 +163,8 @@ async fn parse_http_op(mut read_half: tokio::net::tcp::OwnedReadHalf) -> Result<
             );
         }
     }
-    let content_length = content_length.ok_or_else(|| SseError::Http("missing Content-Length".into()))?;
+    let content_length =
+        content_length.ok_or_else(|| SseError::Http("missing Content-Length".into()))?;
     if content_length > 1024 * 1024 {
         return Err(SseError::Http("body too large".into()));
     }
@@ -199,28 +203,24 @@ mod tests {
             body.len(),
             body
         );
-        client.write_all(req.as_bytes()).await.expect("请求发送成功");
+        client
+            .write_all(req.as_bytes())
+            .await
+            .expect("请求发送成功");
 
         // 服务端 accept 任务（连接已就绪,accept 立即返回）
         let accept_task = tokio::spawn(async move { server.accept().await });
-        let (received_op, conn) = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            accept_task,
-        )
-        .await
-        .expect("accept 超时(挂起)")
-        .expect("accept 任务完成")
-        .expect("accept 成功");
+        let (received_op, conn) =
+            tokio::time::timeout(std::time::Duration::from_secs(10), accept_task)
+                .await
+                .expect("accept 超时(挂起)")
+                .expect("accept 任务完成")
+                .expect("accept 成功");
         assert_eq!(received_op, op, "服务端必须解析出原 AppOp");
 
         // 服务端推送 SSE 帧 → 客户端读取
         let ev = AppEvent::ThreadStarted {
-            thread: Thread::new(
-                ThreadId::new("g::r"),
-                "g",
-                "r",
-                1,
-            ),
+            thread: Thread::new(ThreadId::new("g::r"), "g", "r", 1),
         };
         tokio::time::timeout(std::time::Duration::from_secs(10), conn.send_event(&ev))
             .await
@@ -236,7 +236,10 @@ mod tests {
         let text = String::from_utf8_lossy(&buf[..n]);
         assert!(text.contains("200 OK"), "必须返回 200: {text}");
         assert!(text.contains("data: "), "必须含 SSE data 帧");
-        assert!(text.contains("\"ThreadStarted\""), "帧内必须含 ThreadStarted");
+        assert!(
+            text.contains("\"ThreadStarted\""),
+            "帧内必须含 ThreadStarted"
+        );
     }
 
     /// 缺 Content-Length — 解析失败（协议错误路径）
@@ -260,10 +263,7 @@ mod tests {
         let server = SseServer::bind("127.0.0.1:0").await.expect("绑定成功");
         let addr = server.local_addr().expect("本地地址");
         let mut client = TcpStream::connect(addr).await.expect("连接成功");
-        let req = format!(
-            "POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n{{broken",
-            8
-        );
+        let req = format!("POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n{{broken", 8);
         client.write_all(req.as_bytes()).await.expect("发送成功");
         // 关闭写侧:read_exact(8) 只收到 7 字节 → EOF → UnexpectedEof 报错（不悬挂）
         let _ = client.shutdown().await;

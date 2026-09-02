@@ -62,17 +62,6 @@ pub mod credit_flow;
 /// P3-T10: 事件双轨注册表（v4.0 WI-21 落地,ADR-149:命名空间配额 ≤64/空间 + 审计）
 pub mod dynamic_registry;
 pub mod error;
-/// 分层子枚举 — NexusEvent 按架构层拆分的分类实现
-///
-/// 将 134 变体的 NexusEvent 按架构层拆分为 8 个子枚举:
-/// CoreEvent/MemoryEvent/StorageEvent/SecurityEvent/RouterEvent/
-/// ExecutionEvent/QuestEvent/InterfaceEvent。每个子枚举实现
-/// `EventClassification` trait(metadata/severity/type_name)。
-///
-/// # 渐进式方案
-/// NexusEvent 变体结构保持不变(消费方零改动),子枚举作为分类
-/// 参考与未来迁移目标。
-pub mod event_types;
 /// 经验卡片总线 — OpenMLE 经验卡片双通道 + 四索引（v3.4.0 §6.1）
 ///
 /// 承载 ExperienceCardBus（broadcast + mpsc 分级投递 + task/node/factor/error
@@ -192,11 +181,6 @@ pub use experience_card_bus::{ExperienceCardBus, GlobalCardStats};
 pub use token_ledger::{LedgerError, LedgerIntegrityReport, TokenLedger};
 // v3.4.0 §6.2: Segment-aware PER（铁律9 分段身份）
 pub use segment_per::{PerBuffer, PerEntry, PerStats, SegmentAwarePER};
-// 分层子枚举与分类 trait(渐进式拆分,消费方可按需导入)
-pub use event_types::{
-    CoreEvent, EventClassification, ExecutionEvent, InterfaceEvent, MemoryEvent, QuestEvent,
-    RouterEvent, SecurityEvent, StorageEvent,
-};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {

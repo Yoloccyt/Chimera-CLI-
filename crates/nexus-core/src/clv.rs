@@ -48,6 +48,50 @@ impl CLV {
         Ok(Self(Array1::from_vec(v)))
     }
 
+    /// 构造 one-hot 基向量 `e(index)`:第 `index` 维为 1.0,其余 511 维为 0.0
+    ///
+    /// # 参数语义(易误读,务必注意)
+    /// `index` 是**非零分量的下标**(取值域 `0 .. DIMENSION`),**不是**向量维度。
+    /// 返回的向量长度恒为 [`DIMENSION`](Self::DIMENSION)。
+    /// 命名取 `basis`(线性代数"基向量")而非 `unit_vector(dim)`,
+    /// 就是为了避免 `unit`/`dim` 被误读成"维度可配"。
+    ///
+    /// # 返回值
+    /// - `Some(e)`:下标合法。不变量:`e[index] == 1.0`、非零分量恰有 1 个、
+    ///   L2 范数为 1.0、与任意 `j != index` 的基向量余弦相似度为 0.0。
+    /// - `None`:`index >= DIMENSION`。
+    ///
+    /// # WHY 返回 Option 而不是 panic
+    /// 该构造器的调用方绝大多数是测试夹具(见下"收敛来源"),它们本就期望
+    /// "夹具构造失败 ⇒ 该测试无效"并自行 `expect`。库层若直接 panic,等于把
+    /// 一个可静态判定的边界输入升级为进程级失败;返回 `None` 让调用方决定强度。
+    ///
+    /// # 收敛来源
+    /// hcw-window / mlc-engine / osa-coordinator / repo-wiki 四个 crate 曾各自
+    /// 复制一份逐字节相同的 `fn unit_clv(dim) -> CLV`(共 11 处),且越界一律 panic。
+    /// 收敛到 L1 后,one-hot 语义与越界行为在此处一次性钉死。
+    ///
+    /// # 示例
+    /// ```
+    /// use nexus_core::CLV;
+    ///
+    /// let e7 = CLV::basis(7).expect("7 是合法下标");
+    /// assert_eq!(e7.as_slice()[7], 1.0);
+    /// assert_eq!(e7.as_slice().iter().filter(|&&v| v != 0.0).count(), 1);
+    ///
+    /// // 越界下标返回 None,不会 panic
+    /// assert!(CLV::basis(CLV::DIMENSION).is_none());
+    /// ```
+    pub fn basis(index: usize) -> Option<Self> {
+        if index >= Self::DIMENSION {
+            return None;
+        }
+        let mut v = vec![0.0_f32; Self::DIMENSION];
+        v[index] = 1.0;
+        // 长度由上一行构造保证为 DIMENSION,无需再走 from_vec 的维度校验
+        Some(Self(Array1::from_vec(v)))
+    }
+
     /// 计算与另一个 CLV 的余弦相似度
     ///
     /// 公式:dot(a, b) / (|a| * |b|)
@@ -111,120 +155,12 @@ impl CLV {
     }
 }
 
-/// 计算两个 f32 切片的余弦相似度(自由函数,供上层 crate 共享)
-///
-/// 公式:dot(a, b) / (|a| * |b|)
-///
-/// # 返回值
-/// 返回值 ∈ [-1.0, 1.0],通过 `clamp` 钳制浮点误差导致的微小越界。
-///
-/// # 零向量处理
-/// 若任一向量为零向量(|a|==0 或 |b|==0),返回 0.0 而非 NaN。
-/// WHY 统一零向量处理:避免不同 crate 返回 NaN 导致下游计算异常
-/// (如路由评分 NaN 导致排序异常)。
-///
-/// # 不等长输入
-/// 取两个切片的最小长度计算(兼容不等长输入,最安全)。
-/// 调用方若需严格等长校验,应在调用前自行断言。
-///
-/// # 设计决策(WHY)
-/// SubTask 21.4 — mlc-engine(types.rs)、kvbsr-router(blocks.rs)、
-/// repo-wiki(vector.rs)三处重复实现余弦相似度,且零向量处理策略不一致。
-/// 提取到 L1 Core 统一行为,消除约 80 行重复代码。
-///
-/// # 示例
-/// ```
-/// use nexus_core::cosine_similarity_slices;
-///
-/// // 相同向量余弦相似度为 1.0
-/// let v = vec![1.0, 2.0, 3.0];
-/// let sim = cosine_similarity_slices(&v, &v);
-/// assert!((sim - 1.0).abs() < 1e-5);
-///
-/// // 零向量返回 0.0(非 NaN)
-/// let zero = vec![0.0, 0.0, 0.0];
-/// assert_eq!(cosine_similarity_slices(&zero, &v), 0.0);
-/// ```
-#[inline]
-pub fn cosine_similarity_slices(a: &[f32], b: &[f32]) -> f32 {
-    let len = a.len().min(b.len());
-    if len == 0 {
-        return 0.0;
-    }
-
-    // ── P2-10: chunks_exact(4) + 4 路累加器优化 ──────────────────────
-    //
-    // WHY chunks_exact(4) 替代手动索引(P2-10 优化):
-    //
-    // 1. **消除冗余边界检查**: `chunks_exact(4)` 返回的每个 chunk 保证
-    //    长度为 4,LLVM 通过 inter-procedural analysis 可消除 `ca[0..3]`
-    //    的部分 bounds check。旧实现的手动索引 `a[base + 1]` 每次访问
-    //    都生成独立边界检查指令(4 次/迭代 × 3 变量 = 12 次/迭代)。
-    //
-    // 2. **促进 LLVM auto-vectorization**: `chunks_exact + zip` 是 LLVM
-    //    识别的标准 SIMD 友好模式,可将 4 路 FMA 编译为 SIMD 指令:
-    //    - AVX2: `VFMADD213PS`(256-bit, 8 float/cycle)
-    //    - SSE2: `MULPS + ADDPS`(128-bit, 4 float/cycle)
-    //
-    // 3. **单 pass 三计算**: dot + norm_a + norm_b 在同一循环内完成,
-    //    优化 L1 缓存利用率(512-dim f32 = 2KB, 完全在 L1 内)。
-    //
-    // 4. **4 路累加器打破依赖链**: 单累加器 `acc += x` 形成循环依赖链
-    //    (每次 FMA 依赖上次结果,延迟 ~4 cycles)。4 路独立累加器让 CPU
-    //    可并行执行 4 条 FMA 指令,充分利用流水线。
-    //
-    // 约束: 纯 safe Rust,无 unsafe / intrinsics(forbid(unsafe_code) 合规)。
-    // 实测(P2-10 criterion benchmark, 2026-07-28):
-    //   512d: 117ns → 28ns(76% ↓, 4.2× 加速)
-    //   1024d: 240ns → 53ns(78% ↓, 4.5× 加速)
-    //   接近理论 4× 极限(SIMD 4-float/cycle),证明 LLVM 已 auto-vectorize
-    let (mut dot0, mut dot1, mut dot2, mut dot3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    let (mut na0, mut na1, mut na2, mut na3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    let (mut nb0, mut nb1, mut nb2, mut nb3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-
-    // 主循环: chunks_exact(4) 保证每个 chunk 长度为 4,消除冗余边界检查
-    // 注意: a[..len] 取最小长度子切片,确保两切片等长
-    let a_slice = &a[..len];
-    let b_slice = &b[..len];
-    for (ca, cb) in a_slice.chunks_exact(4).zip(b_slice.chunks_exact(4)) {
-        // ca, cb: &[f32] 长度保证为 4,LLVM 可优化边界检查
-        dot0 += ca[0] * cb[0];
-        dot1 += ca[1] * cb[1];
-        dot2 += ca[2] * cb[2];
-        dot3 += ca[3] * cb[3];
-
-        na0 += ca[0] * ca[0];
-        na1 += ca[1] * ca[1];
-        na2 += ca[2] * ca[2];
-        na3 += ca[3] * ca[3];
-
-        nb0 += cb[0] * cb[0];
-        nb1 += cb[1] * cb[1];
-        nb2 += cb[2] * cb[2];
-        nb3 += cb[3] * cb[3];
-    }
-
-    // 合并 4 路累加器
-    let mut dot = dot0 + dot1 + dot2 + dot3;
-    let mut norm_a = na0 + na1 + na2 + na3;
-    let mut norm_b = nb0 + nb1 + nb2 + nb3;
-
-    // 尾部处理: chunks_exact 的 remainder(len % 4 非 0 时逐元素补算)
-    let processed = (len / 4) * 4;
-    for i in processed..len {
-        let (ai, bi) = (a[i], b[i]);
-        dot += ai * bi;
-        norm_a += ai * ai;
-        norm_b += bi * bi;
-    }
-
-    let norm_a = norm_a.sqrt();
-    let norm_b = norm_b.sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
-}
+// 算法定义已下沉至 L0 `nexus_contracts::util`(第四轮冗余收敛 实施-8)。
+// WHY 保留本模块 re-export:`CLV::cosine_similarity` 方法、`lib.rs`/`prelude`
+// 的 `pub use clv::{cosine_similarity_slices, CLV}` 以及 30+ 处
+// `use nexus_core::cosine_similarity_slices` 全部继续有效,对外 API 零破坏;
+// 同时让 `nexus_core::clv::cosine_similarity_slices` 这一路径也保持可用。
+pub use nexus_contracts::util::cosine_similarity_slices;
 
 #[cfg(test)]
 mod tests {
@@ -343,6 +279,81 @@ mod tests {
                 );
             }
             other => panic!("期望 ClvSnapshotReported,收到 {other:?}"),
+        }
+    }
+
+    // ── CLV::basis ───────────────────────────────────────────────────
+    //
+    // 收敛动机:hcw-window / mlc-engine / osa-coordinator / repo-wiki 四个 crate 的
+    // 11 处测试夹具各自复制了一份逐字节相同的 `unit_clv`(one-hot 向量),
+    // 且越界下标一律 panic。收敛到 L1 单一权威构造器后,行为在此处一次性钉死。
+
+    #[test]
+    fn basis_is_one_hot_at_index() {
+        for idx in [0usize, 1, 5, 256, CLV::DIMENSION - 1] {
+            let b = CLV::basis(idx).expect("合法下标应返回 Some");
+            let s = b.as_slice();
+            assert_eq!(s.len(), CLV::DIMENSION, "basis 必须保持 512 维");
+            assert_eq!(s[idx], 1.0, "下标 {idx} 处应为 1.0");
+            assert_eq!(
+                s.iter().filter(|&&v| v != 0.0).count(),
+                1,
+                "除下标 {idx} 外不得有非零分量"
+            );
+        }
+    }
+
+    #[test]
+    fn basis_out_of_range_returns_none_not_panic() {
+        assert!(
+            CLV::basis(CLV::DIMENSION).is_none(),
+            "512 越界(最大合法下标 511)"
+        );
+        assert!(CLV::basis(CLV::DIMENSION + 1).is_none());
+        assert!(CLV::basis(usize::MAX).is_none());
+    }
+
+    #[test]
+    fn basis_has_unit_l2_norm() {
+        let b = CLV::basis(42).unwrap();
+        let sq: f32 = b.as_slice().iter().map(|v| v * v).sum();
+        assert!(
+            (sq - 1.0).abs() < 1e-6,
+            "基向量 L2 范数平方应为 1.0,实为 {sq}"
+        );
+    }
+
+    #[test]
+    fn basis_vectors_are_mutually_orthogonal() {
+        let e0 = CLV::basis(0).unwrap();
+        let e1 = CLV::basis(1).unwrap();
+        assert_eq!(e0.cosine_similarity(&e1), 0.0, "不同基向量必须正交");
+        assert!(
+            (e0.cosine_similarity(&e0) - 1.0).abs() < 1e-6,
+            "自身余弦应为 1.0"
+        );
+        // 零向量边界不受新构造器影响
+        assert_eq!(e0.cosine_similarity(&CLV::zero()), 0.0);
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// 契约:index 为任意 usize 都不得 panic,且 Some ⟺ index 在维度内
+        #[test]
+        fn basis_never_panics_for_any_index(idx in any::<usize>()) {
+            let r = CLV::basis(idx);
+            prop_assert_eq!(r.is_some(), idx < CLV::DIMENSION);
+        }
+
+        /// 合法下标下 one-hot 不变量恒成立(唯一非零 + 该处为 1.0)
+        #[test]
+        fn basis_is_one_hot(idx in 0usize..CLV::DIMENSION) {
+            let b = CLV::basis(idx).unwrap();
+            let s = b.as_slice();
+            prop_assert_eq!(s.len(), CLV::DIMENSION);
+            prop_assert_eq!(s[idx], 1.0);
+            prop_assert_eq!(s.iter().filter(|&&v| v != 0.0).count(), 1);
         }
     }
 }

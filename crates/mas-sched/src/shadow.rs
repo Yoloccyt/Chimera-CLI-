@@ -1,4 +1,4 @@
-﻿//! 影子模式 — 只决策不执行,决策日志 100% 可回放（P3-T2，ADR-145）
+//! 影子模式 — 只决策不执行,决策日志 100% 可回放（P3-T2，ADR-145）
 //!
 //! 对应架构层: L9 Quest（mas-sched 控制面，ADR-145）
 //!
@@ -92,10 +92,7 @@ impl ShadowLog {
     /// 条目数（诊断）
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .len()
+        self.entries.lock().unwrap_or_else(|p| p.into_inner()).len()
     }
 
     /// 空判定
@@ -126,8 +123,17 @@ impl ShadowLog {
         let replay_sched = ShadowReplayScheduler::new();
         for entry in &snap {
             let ok = match entry {
-                ShadowDecision::Claim { task_id, peer_id, outcome } => {
-                    let claim = TodoClaim::new(task_id.to_string(), peer_id.clone(), crate::types::Priority::Medium, 10_000);
+                ShadowDecision::Claim {
+                    task_id,
+                    peer_id,
+                    outcome,
+                } => {
+                    let claim = TodoClaim::new(
+                        task_id.to_string(),
+                        peer_id.clone(),
+                        crate::types::Priority::Medium,
+                        10_000,
+                    );
                     let actual = replay_sched.claim(&claim);
                     let expected = shadow_claim_outcome_of(outcome);
                     // 重放侧以 ShadowReject 表达「授予」决策（影子语义:不真正授予）
@@ -137,12 +143,15 @@ impl ShadowLog {
                     };
                     actual == expected_replay
                 }
-                ShadowDecision::Renew { task_id, outcome } => {
-                    replay_sched.renew_lease(task_id, "replay").map(|o| o == *outcome).unwrap_or(false)
-                }
-                ShadowDecision::Handoff { task_id, to_peer, ok } => {
-                    replay_sched.handoff(task_id, to_peer).is_ok() == *ok
-                }
+                ShadowDecision::Renew { task_id, outcome } => replay_sched
+                    .renew_lease(task_id, "replay")
+                    .map(|o| o == *outcome)
+                    .unwrap_or(false),
+                ShadowDecision::Handoff {
+                    task_id,
+                    to_peer,
+                    ok,
+                } => replay_sched.handoff(task_id, to_peer).is_ok() == *ok,
                 ShadowDecision::ShouldRun { task_id, verdict } => {
                     replay_sched.should_run(task_id) == *verdict
                 }
@@ -155,7 +164,11 @@ impl ShadowLog {
         }
         // 与原调度器比对:同输入同输出（双跑验证,Ω₂）
         let _ = original;
-        ReplayReport { total: snap.len(), matched, mismatched }
+        ReplayReport {
+            total: snap.len(),
+            matched,
+            mismatched,
+        }
     }
 }
 
@@ -197,7 +210,10 @@ impl<T: PeerScheduler> ShadowScheduler<T> {
     /// 新建影子调度器（构造参数开启,非 feature 标志——禁 feature 红线）
     #[must_use]
     pub fn new(inner: T) -> Self {
-        Self { inner, log: ShadowLog::new() }
+        Self {
+            inner,
+            log: ShadowLog::new(),
+        }
     }
 
     /// 决策日志引用（审计/周度报告）
@@ -211,7 +227,9 @@ impl<T: PeerScheduler> PeerScheduler for ShadowScheduler<T> {
     fn claim(&self, claim: &TodoClaim) -> ClaimOutcome {
         let real = self.inner.claim(claim);
         let shadow_outcome = match &real {
-            ClaimOutcome::Granted(l) => ShadowClaimOutcome::Granted { duration_ms: l.duration_ms },
+            ClaimOutcome::Granted(l) => ShadowClaimOutcome::Granted {
+                duration_ms: l.duration_ms,
+            },
             ClaimOutcome::Denied(r) => ShadowClaimOutcome::Denied(*r),
         };
         self.log.push(ShadowDecision::Claim {
@@ -229,20 +247,30 @@ impl<T: PeerScheduler> PeerScheduler for ShadowScheduler<T> {
     fn renew_lease(&self, task_id: &str, peer_id: &str) -> Result<RenewOutcome, SchedError> {
         let real = self.inner.renew_lease(task_id, peer_id);
         let outcome = real.clone().unwrap_or(RenewOutcome::NotRenewable);
-        self.log.push(ShadowDecision::Renew { task_id: TaskId::from(task_id), outcome });
+        self.log.push(ShadowDecision::Renew {
+            task_id: TaskId::from(task_id),
+            outcome,
+        });
         real
     }
 
     fn handoff(&self, task_id: &str, to_peer: &str) -> Result<(), SchedError> {
         let real = self.inner.handoff(task_id, to_peer);
         let ok = real.is_ok();
-        self.log.push(ShadowDecision::Handoff { task_id: TaskId::from(task_id), to_peer: to_peer.to_string(), ok });
+        self.log.push(ShadowDecision::Handoff {
+            task_id: TaskId::from(task_id),
+            to_peer: to_peer.to_string(),
+            ok,
+        });
         real
     }
 
     fn should_run(&self, task_id: &str) -> ShouldRunVerdict {
         let v = self.inner.should_run(task_id);
-        self.log.push(ShadowDecision::ShouldRun { task_id: TaskId::from(task_id), verdict: v });
+        self.log.push(ShadowDecision::ShouldRun {
+            task_id: TaskId::from(task_id),
+            verdict: v,
+        });
         v
     }
 
@@ -280,7 +308,12 @@ impl PeerScheduler for ShadowReplayScheduler {
 
     fn renew_lease(&self, task_id: &str, _peer_id: &str) -> Result<RenewOutcome, SchedError> {
         // 回放口径:任务存在即可续（影子期续期成功语义）
-        if self.tasks.read().unwrap_or_else(|p| p.into_inner()).contains_key(task_id) {
+        if self
+            .tasks
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains_key(task_id)
+        {
             Ok(RenewOutcome::Renewed)
         } else {
             Err(SchedError::TaskNotFound(TaskId::from(task_id)))
@@ -293,7 +326,12 @@ impl PeerScheduler for ShadowReplayScheduler {
     }
 
     fn should_run(&self, task_id: &str) -> ShouldRunVerdict {
-        if self.tasks.read().unwrap_or_else(|p| p.into_inner()).contains_key(task_id) {
+        if self
+            .tasks
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains_key(task_id)
+        {
             ShouldRunVerdict::Run
         } else {
             ShouldRunVerdict::NoActionableWork
@@ -335,13 +373,20 @@ mod tests {
         let inner = SimplePeerScheduler::new();
         let s = ShadowScheduler::new(inner);
         let out = s.claim(&claim("t1", "peer-a"));
-        assert_eq!(out, ClaimOutcome::Denied(DenyReason::ShadowReject), "影子期必须拒绝");
+        assert_eq!(
+            out,
+            ClaimOutcome::Denied(DenyReason::ShadowReject),
+            "影子期必须拒绝"
+        );
         assert_eq!(s.lease_count(), 0, "影子期不产生租约");
         assert_eq!(s.log().len(), 1, "决策必须留痕");
         // 日志记录真实决策为 Granted
         let snap = s.log().snapshot();
         match &snap[0] {
-            ShadowDecision::Claim { outcome: ShadowClaimOutcome::Granted { .. }, .. } => {}
+            ShadowDecision::Claim {
+                outcome: ShadowClaimOutcome::Granted { .. },
+                ..
+            } => {}
             other => panic!("真实决策应为 Granted,got {other:?}"),
         }
     }
@@ -360,7 +405,10 @@ mod tests {
         let report = s.log().replay(&s.inner);
         assert_eq!(report.total, 5);
         assert_eq!(report.mismatched, 0, "回放必须零差异");
-        assert!((report.replay_rate() - 1.0).abs() < 1e-9, "可回放率必须 100%");
+        assert!(
+            (report.replay_rate() - 1.0).abs() < 1e-9,
+            "可回放率必须 100%"
+        );
     }
 
     /// 空日志回放 — 满分（无风险即达标）
@@ -383,7 +431,9 @@ mod tests {
         // 影子对外与真实裁决一致（should_run 无副作用,不拒绝）
         assert_eq!(v, ShouldRunVerdict::Run);
         let snap = s.log().snapshot();
-        assert!(snap.iter().any(|d| matches!(d, ShadowDecision::ShouldRun { task_id, .. } if task_id.as_str() == "t1")));
+        assert!(snap.iter().any(
+            |d| matches!(d, ShadowDecision::ShouldRun { task_id, .. } if task_id.as_str() == "t1")
+        ));
     }
 
     /// 序列化往返 — ShadowDecision serde 可编解码（审计持久化）

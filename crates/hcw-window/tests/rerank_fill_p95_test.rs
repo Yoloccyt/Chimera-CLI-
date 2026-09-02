@@ -34,6 +34,14 @@ const SAMPLE_COUNT: usize = 1000;
 /// p95 延迟阈值（spec.md 红线：< 100ms）
 const P95_THRESHOLD_MS: u64 = 100;
 
+/// 断言用阈值 = 契约常量 × CI 缩放旋钮（`CHIMERA_PERF_SCALE`，缺省 1.0）
+///
+/// 失败消息里打印的 `{threshold:?}` 因此是**生效阈值**而非契约常量，
+/// 避免“scale=4 时报告里写着 100ms 却实际按 400ms 判”这种误导。
+fn p95_threshold() -> Duration {
+    Duration::from_millis(nexus_contracts::util::perf_scale_ms(P95_THRESHOLD_MS))
+}
+
 /// 构造测试用 BlockScore 列表（确定性生成）
 fn build_blocks(count: usize, module_count: usize) -> Vec<BlockScore> {
     (0..count)
@@ -57,13 +65,13 @@ fn build_block_tokens(blocks: &[BlockScore]) -> HashMap<String, usize> {
         .collect()
 }
 
-/// 计算延迟百分位
+/// 计算延迟百分位(委托共享工具)
+///
+// 口径变更:原 `trunc(n*p)` 统一为 `round((n-1)*p)`,两者索引差 ≤1 个样本,
+// 对 p95 红线测得值无实质影响(已由本文件红线断言回归验证)。
+use nexus_contracts::util::percentile_sorted;
 fn percentile(sorted: &[Duration], p: f64) -> Duration {
-    if sorted.is_empty() {
-        return Duration::ZERO;
-    }
-    let idx = ((sorted.len() as f64) * p) as usize;
-    sorted[idx.min(sorted.len() - 1)]
+    percentile_sorted(sorted, p).unwrap_or(Duration::ZERO)
 }
 
 /// 重排填充 p95 延迟红线守护（P3-W10.1.2 spec.md 红线）
@@ -137,15 +145,15 @@ fn test_rerank_fill_p95_below_100ms() {
         "[rerank_fill_p95_test] blocks={BLOCK_COUNT}, samples={SAMPLE_COUNT}, \
          mean={mean:?}, p50={p50:?}, p95={p95:?}, p99={p99:?}, max={max:?}, \
          p95<{P95_THRESHOLD_MS}ms={}",
-        p95 < Duration::from_millis(P95_THRESHOLD_MS)
+        p95 < p95_threshold()
     );
 
     // 6. 红线断言: p95 < 100ms
     assert!(
-        p95 < Duration::from_millis(P95_THRESHOLD_MS),
+        p95 < p95_threshold(),
         "P3-W10.1.2 红线违规:重排填充 {BLOCK_COUNT} Block p95={p95:?} ≥ {threshold:?} \
          (密度贪心 O(N log N) + 二次稀疏 O(N)，理论 <1ms)",
-        threshold = Duration::from_millis(P95_THRESHOLD_MS)
+        threshold = p95_threshold()
     );
 }
 
@@ -212,12 +220,12 @@ fn test_rerank_fill_1m_window_p95_below_100ms() {
     eprintln!(
         "[rerank_fill_1m_p95] blocks={LARGE_BLOCK_COUNT}, samples={LARGE_SAMPLE_COUNT}, \
          mean={mean:?}, p95={p95:?}, p95<100ms={}",
-        p95 < Duration::from_millis(P95_THRESHOLD_MS)
+        p95 < p95_threshold()
     );
 
     assert!(
-        p95 < Duration::from_millis(P95_THRESHOLD_MS),
+        p95 < p95_threshold(),
         "P3-W10.1.2 1M 等效窗口红线违规:重排填充 {LARGE_BLOCK_COUNT} Block p95={p95:?} ≥ {threshold:?}",
-        threshold = Duration::from_millis(P95_THRESHOLD_MS)
+        threshold = p95_threshold()
     );
 }

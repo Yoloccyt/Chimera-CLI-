@@ -70,8 +70,12 @@ pub mod model_view;
 pub use error::StoreError;
 pub use model_view::{to_model_view, ModelVisibleEvent};
 pub use replay::{replay, ReplayItem, ReplayStream};
-pub use segment::{list_segment_files, segment_path, SegmentFileReader, SegmentMeta, SegmentRecord, SegmentWriter};
-pub use tree::{EventRow, RebuildStats, SegmentNode, SegmentSource, SessionTree, StoredEvent, TreeIndex};
+pub use segment::{
+    list_segment_files, segment_path, SegmentFileReader, SegmentMeta, SegmentRecord, SegmentWriter,
+};
+pub use tree::{
+    EventRow, RebuildStats, SegmentNode, SegmentSource, SessionTree, StoredEvent, TreeIndex,
+};
 pub use types::{Offset, SegmentId, SessionEvent, SessionId, StoreConfig};
 pub use writer::CbmrWriter;
 
@@ -84,7 +88,10 @@ mod tests {
     fn event_strategy() -> impl Strategy<Value = SessionEvent> {
         // WHY any::<Option<Vec<u8>>>:proptest 为 Option<T> 提供 Arbitrary(T: Arbitrary),
         // 比 proptest::option::any 组合器更简洁
-        (0u64..1024, proptest::option::of(proptest::collection::vec(any::<u8>(), 0..64)))
+        (
+            0u64..1024,
+            proptest::option::of(proptest::collection::vec(any::<u8>(), 0..64)),
+        )
             .prop_map(|(i, payload)| SessionEvent {
                 metadata: nexus_contracts::EventMetadata::new("session-store"),
                 event_type: format!("ev-{i}"),

@@ -227,7 +227,11 @@ impl ComputeBridge {
     ///
     /// `kind` 当前仅作契约占位（同 [`spawn_compute`](Self::spawn_compute)）。
     #[must_use]
-    pub fn spawn_compute_batch<F, T, I>(&self, kind: TaskKind, items: I) -> Vec<Result<T, ComputeError>>
+    pub fn spawn_compute_batch<F, T, I>(
+        &self,
+        kind: TaskKind,
+        items: I,
+    ) -> Vec<Result<T, ComputeError>>
     where
         I: IntoIterator<Item = F>,
         F: FnOnce() -> T + Send + 'static,
@@ -260,7 +264,9 @@ impl ComputeBridge {
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
                         .map_err(|_| ComputeError::Panicked);
                     // 任务内全部 catch_unwind,锁不 poison;unwrap_or_else 兜底防御
-                    let mut guard = slots.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let mut guard = slots
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     guard[idx] = Some(r);
                 });
             }
@@ -349,7 +355,10 @@ mod tests {
         assert_eq!(b.route(TaskKind::Generic, 10_000), DispatchPlan::Rayon);
         assert_eq!(b.route(TaskKind::Generic, 10_001), DispatchPlan::Rayon);
         // Async: io_bound 优先(与 n 无关)
-        assert_eq!(decide(TaskKind::Generic, true, 10_000, 0), DispatchPlan::Async);
+        assert_eq!(
+            decide(TaskKind::Generic, true, 10_000, 0),
+            DispatchPlan::Async
+        );
         assert_eq!(
             decide(TaskKind::Generic, true, 10_000, usize::MAX),
             DispatchPlan::Async
@@ -407,7 +416,11 @@ mod tests {
         let out = bridge().spawn_compute_batch(TaskKind::Generic, items);
         assert_eq!(out.len(), n, "结果数必须等于输入数");
         for (idx, r) in out.iter().enumerate() {
-            assert_eq!(r.as_ref().expect("批量任务应成功"), &(idx * 2), "顺序必须对应输入");
+            assert_eq!(
+                r.as_ref().expect("批量任务应成功"),
+                &(idx * 2),
+                "顺序必须对应输入"
+            );
         }
     }
 
@@ -425,11 +438,8 @@ mod tests {
     fn spawn_compute_batch_panic_isolated() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let items: Vec<Box<dyn FnOnce() -> u64 + Send>> = vec![
-            Box::new(|| 1),
-            Box::new(|| panic!("boom")),
-            Box::new(|| 3),
-        ];
+        let items: Vec<Box<dyn FnOnce() -> u64 + Send>> =
+            vec![Box::new(|| 1), Box::new(|| panic!("boom")), Box::new(|| 3)];
         let out = bridge().spawn_compute_batch(TaskKind::Generic, items);
         std::panic::set_hook(prev);
         assert_eq!(out.len(), 3);
@@ -487,7 +497,11 @@ mod tests {
         assert_eq!(b.route(kind, 20), DispatchPlan::Inline);
         // T1/T14 校准:阈值降至 10 → 20 项转 Rayon,9 项仍 Inline
         b.update_threshold(kind, 10, 64, ThresholdSource::ConservativeDefault);
-        assert_eq!(b.route(kind, 20), DispatchPlan::Rayon, "阈值降低后 route 必须跟随动态表");
+        assert_eq!(
+            b.route(kind, 20),
+            DispatchPlan::Rayon,
+            "阈值降低后 route 必须跟随动态表"
+        );
         assert_eq!(b.route(kind, 9), DispatchPlan::Inline);
         // 未更新的类别不受影响
         assert_eq!(b.route(TaskKind::KnnSearch, 5_000), DispatchPlan::Rayon);
@@ -566,12 +580,18 @@ mod tests {
     /// ComputeError Display — 三变体文案符合 §11.1 契约
     #[test]
     fn compute_error_display() {
-        assert_eq!(ComputeError::Panicked.to_string(), "task panicked in compute pool");
+        assert_eq!(
+            ComputeError::Panicked.to_string(),
+            "task panicked in compute pool"
+        );
         assert_eq!(
             ComputeError::Cancelled.to_string(),
             "cancelled before completion"
         );
-        assert_eq!(ComputeError::Saturated.to_string(), "pool saturated, retryable");
+        assert_eq!(
+            ComputeError::Saturated.to_string(),
+            "pool saturated, retryable"
+        );
     }
 
     /// reduce 契约 — §11.1:bridge 委托 reduce 模块,双模式结果逐位一致

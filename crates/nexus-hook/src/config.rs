@@ -141,7 +141,10 @@ impl HookFile {
     /// 已挂载事件计数（诊断）
     #[must_use]
     pub fn mounted_count(&self) -> usize {
-        LifecycleEvent::ALL.iter().map(|e| self.specs_for(*e).len()).sum()
+        LifecycleEvent::ALL
+            .iter()
+            .map(|e| self.specs_for(*e).len())
+            .sum()
     }
 }
 
@@ -197,7 +200,11 @@ mod tests {
         assert_eq!(TrustLevel::parse("trusted"), TrustLevel::Trusted);
         assert_eq!(TrustLevel::parse("ask"), TrustLevel::Ask);
         assert_eq!(TrustLevel::parse("untrusted"), TrustLevel::Untrusted);
-        assert_eq!(TrustLevel::parse("garbage"), TrustLevel::Untrusted, "未知必须 fail-closed");
+        assert_eq!(
+            TrustLevel::parse("garbage"),
+            TrustLevel::Untrusted,
+            "未知必须 fail-closed"
+        );
         assert_eq!(TrustLevel::parse(""), TrustLevel::Untrusted);
     }
 
@@ -222,7 +229,10 @@ command = "notify-send done"
         assert_eq!(cfg.specs_for(LifecycleEvent::PreToolUse).len(), 2);
         assert_eq!(cfg.specs_for(LifecycleEvent::PostToolUse).len(), 1);
         // 默认超时 5s
-        assert_eq!(cfg.specs_for(LifecycleEvent::PreToolUse)[1].timeout_ms, 5_000);
+        assert_eq!(
+            cfg.specs_for(LifecycleEvent::PreToolUse)[1].timeout_ms,
+            5_000
+        );
         // 未挂载事件为空
         assert!(cfg.specs_for(LifecycleEvent::SessionStart).is_empty());
         assert!(!cfg.is_empty());

@@ -1,4 +1,4 @@
-﻿//! P1-T14: 批量感知编码的 ComputeBridge 并行注入
+//! P1-T14: 批量感知编码的 ComputeBridge 并行注入
 //!
 //! 对应任务:P1-T14（WI-34 并行化首批注入,Phase 1 地基波次,v4.0 §7.5.1 L-a）
 //! 对应架构层:L2 Memory
@@ -67,9 +67,8 @@ pub(crate) fn parse_no_parallel_env(value: Option<&str>) -> bool {
 /// env 关闭开关 — OnceLock 惰性读取(启动期一次,非热路径)
 #[must_use]
 pub(crate) fn env_no_parallel() -> bool {
-    *NO_PARALLEL_ENV.get_or_init(|| {
-        parse_no_parallel_env(std::env::var(ENV_NO_PARALLEL).ok().as_deref())
-    })
+    *NO_PARALLEL_ENV
+        .get_or_init(|| parse_no_parallel_env(std::env::var(ENV_NO_PARALLEL).ok().as_deref()))
 }
 
 /// 并行开关最终判定 — 配置开关 AND 非 env 关闭(任一关闭 → 串行回退)
@@ -125,11 +124,7 @@ fn perceive_serial(
             let modality = input.modality();
             match encoder.perceive_core(input) {
                 Ok((clv_output, content_hash)) => {
-                    encoder.publish_encoded_event(
-                        modality,
-                        content_hash,
-                        clv_output.dimension(),
-                    );
+                    encoder.publish_encoded_event(modality, content_hash, clv_output.dimension());
                     Ok(clv_output)
                 }
                 Err(e) => Err(e),
@@ -152,21 +147,20 @@ fn perceive_parallel(
 ) -> Vec<Result<ClvOutput, NmcError>> {
     let n_chunks = inputs.len().div_ceil(CHUNK);
     type ChunkTask = Box<dyn FnOnce() -> Vec<Result<(ClvOutput, String), NmcError>> + Send>;
-    let tasks: Vec<ChunkTask> =
-        (0..n_chunks)
-            .map(|ci| {
-                let enc = Arc::clone(encoder);
-                let all = Arc::clone(inputs);
-                let start = ci * CHUNK;
-                let end = (start + CHUNK).min(all.len());
-                Box::new(move || {
-                    all[start..end]
-                        .iter()
-                        .map(|input| enc.perceive_core(input))
-                        .collect()
-                }) as Box<dyn FnOnce() -> Vec<Result<(ClvOutput, String), NmcError>> + Send>
-            })
-            .collect();
+    let tasks: Vec<ChunkTask> = (0..n_chunks)
+        .map(|ci| {
+            let enc = Arc::clone(encoder);
+            let all = Arc::clone(inputs);
+            let start = ci * CHUNK;
+            let end = (start + CHUNK).min(all.len());
+            Box::new(move || {
+                all[start..end]
+                    .iter()
+                    .map(|input| enc.perceive_core(input))
+                    .collect()
+            }) as Box<dyn FnOnce() -> Vec<Result<(ClvOutput, String), NmcError>> + Send>
+        })
+        .collect();
 
     let results = bridge().spawn_compute_batch(TaskKind::ClvSimilarity, tasks);
 
@@ -219,15 +213,18 @@ mod tests {
 
     /// 构造测试输入(固定确定性,长文本以放大纯计算成本)
     fn make_inputs(n: usize) -> Vec<PerceptionInput> {
-        let content = "Parallel batch encoding test content with deterministic seed. "
-            .repeat(64); // ~4KB,放大 SHA256 + 字节频率嵌入计算成本
+        let content = "Parallel batch encoding test content with deterministic seed. ".repeat(64); // ~4KB,放大 SHA256 + 字节频率嵌入计算成本
         (0..n)
             .map(|i| PerceptionInput::Text(format!("input-{i:04}:{content}")))
             .collect()
     }
 
     /// 错误一致性断言辅助 — NmcError 无 PartialEq,用 Debug 字符串比对
-    fn assert_err_equal(serial: &Result<ClvOutput, NmcError>, parallel: &Result<ClvOutput, NmcError>, idx: usize) {
+    fn assert_err_equal(
+        serial: &Result<ClvOutput, NmcError>,
+        parallel: &Result<ClvOutput, NmcError>,
+        idx: usize,
+    ) {
         match (serial, parallel) {
             (Err(se), Err(pe)) => assert_eq!(
                 format!("{se:?}"),

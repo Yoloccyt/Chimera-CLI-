@@ -10,6 +10,6 @@
 //! 权威定义见 `nexus-contracts/src/scheduler_contract.rs`（含类型文档与测试）。
 
 pub use nexus_contracts::scheduler_contract::{
-    ClaimOutcome, DenyReason, HANDOFF, Lease, Priority, Quota, RenewOutcome, ShouldRunVerdict,
-    TaskId, TodoClaim,
+    ClaimOutcome, DenyReason, Lease, Priority, Quota, RenewOutcome, ShouldRunVerdict, TaskId,
+    TodoClaim, HANDOFF,
 };

@@ -106,7 +106,10 @@ mod tests {
         for kind in TaskKind::ALL {
             let t = kind.threshold();
             // n_items 严格小于阈值 → Inline;0 条目也合法(空任务就地返回)
-            assert_eq!(bridge().route(kind, t.saturating_sub(1)), DispatchPlan::Inline);
+            assert_eq!(
+                bridge().route(kind, t.saturating_sub(1)),
+                DispatchPlan::Inline
+            );
             assert_eq!(bridge().route(kind, 0), DispatchPlan::Inline);
         }
     }

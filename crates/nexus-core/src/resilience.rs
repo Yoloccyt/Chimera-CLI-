@@ -1,4 +1,4 @@
-﻿//! AERA 自适应错误恢复分配（P2-T6，手册 T-11 + v4.0 WI-19 前置）
+//! AERA 自适应错误恢复分配（P2-T6，手册 T-11 + v4.0 WI-19 前置）
 //!
 //! 对应架构层: **L1 Core**（nexus-core）
 //! 对应任务: **P2-T6**（手册 W12-13）
@@ -184,7 +184,11 @@ mod tests {
         let mut a = Aera::new();
         let mut b = Aera::new();
         for (q, c, e) in [(0.3, 0.7, 0.0), (0.9, 0.2, 1.0), (0.1, 0.1, 0.5)] {
-            assert_eq!(a.effort(q, c, e), b.effort(q, c, e), "同序列必须逐位一致(Ω₂)");
+            assert_eq!(
+                a.effort(q, c, e),
+                b.effort(q, c, e),
+                "同序列必须逐位一致(Ω₂)"
+            );
         }
     }
 }

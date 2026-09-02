@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::EventBus;
 use osa_coordinator::{
-    AffectedScope, FileId, MemoryId, OsaConfig, OmniSparseCoordinator, OperationId, RiskLevel,
+    AffectedScope, FileId, MemoryId, OmniSparseCoordinator, OperationId, OsaConfig, RiskLevel,
     TaskId, TaskProfile, TaskType, TimePressure, ToolId,
 };
 use tokio::runtime::Runtime;
@@ -68,11 +68,21 @@ fn make_profiles(n: usize) -> Vec<TaskProfile> {
                 risk_level: risk,
                 time_pressure: TimePressure::Low,
                 affected_scope: AffectedScope::Local,
-                available_tools: (0..tool_n).map(|i| ToolId::new(format!("tool-{i}"))).collect(),
-                available_files: (0..file_n).map(|i| FileId::new(format!("file-{i}"))).collect(),
-                available_memories: (0..mem_n).map(|i| MemoryId::new(format!("mem-{i}"))).collect(),
-                recent_operations: (0..op_n).map(|i| OperationId::new(format!("op-{i}"))).collect(),
-                active_tasks: (0..task_n).map(|i| TaskId::new(format!("task-{i}"))).collect(),
+                available_tools: (0..tool_n)
+                    .map(|i| ToolId::new(format!("tool-{i}")))
+                    .collect(),
+                available_files: (0..file_n)
+                    .map(|i| FileId::new(format!("file-{i}")))
+                    .collect(),
+                available_memories: (0..mem_n)
+                    .map(|i| MemoryId::new(format!("mem-{i}")))
+                    .collect(),
+                recent_operations: (0..op_n)
+                    .map(|i| OperationId::new(format!("op-{i}")))
+                    .collect(),
+                active_tasks: (0..task_n)
+                    .map(|i| TaskId::new(format!("task-{i}")))
+                    .collect(),
                 routing_scores: None,
                 context_scores: None,
                 memory_scores: None,
@@ -97,6 +107,7 @@ fn run_batch(
     start.elapsed()
 }
 
+// ADR-159 决策 3 三态登记:dev-only(历史副本,新 bench 请用 nexus_contracts::util::percentile_sorted)
 /// 取分位数（样本需已排序）
 fn percentile(sorted: &[Duration], p: f64) -> Duration {
     assert!(

@@ -1144,8 +1144,12 @@ mod tests {
         let mut rx = bus.subscribe();
         let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus);
         for i in 0..3 {
-            mesh.register_server(MeshServer::new(format!("s-{i}"), format!("203.0.113.1:{i}"), vec![]))
-                .expect("注册失败");
+            mesh.register_server(MeshServer::new(
+                format!("s-{i}"),
+                format!("203.0.113.1:{i}"),
+                vec![],
+            ))
+            .expect("注册失败");
         }
 
         let query = SuperpositionQuery::with_id(
@@ -1170,10 +1174,7 @@ mod tests {
                 assert_eq!(source_node, "query-node-1");
                 assert_eq!(msg_type, "superposition_query");
             }
-            _ => panic!(
-                "期望 McpMessageReceived 事件,得到 {:?}",
-                event.type_name()
-            ),
+            _ => panic!("期望 McpMessageReceived 事件,得到 {:?}", event.type_name()),
         }
     }
 

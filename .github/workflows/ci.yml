@@ -77,6 +77,32 @@ jobs:
       - name: Dependency iron-law audit
         run: bash scripts/check_dependency_rules.sh
 
+      # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
+      # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
+      # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期
+      # `cargo test --workspace` 10836 全绿——测试与 bench 覆盖掩盖了"从未接线"。
+      # 判据:dev-dependencies 与 optional(feature 门控)边一律不计入装配面;
+      # 已知孤岛登记在 scripts/crate_reachability_freeze.txt 作为可见债务(只减不增),
+      # 新增未登记孤岛 → 退出码非 0 阻塞合入。先跑 --selftest 守护治理工具自身不退化。
+      - name: Crate reachability ratchet
+        run: |
+          bash scripts/check_crate_reachability.sh --selftest
+          bash scripts/check_crate_reachability.sh
+
+      # WHY: 性能红线与 bench 清单静态门(R1-T5, 审计发现 F-R4-01)——本门禁原以
+      # .ps1(429 行) + .sh(246 行) 两份手写实现存在, 而 CI 中零次调用(全 .github/
+      # 唯一命中是 bench_check.yml 的一句注释), 即 6 项 SLO + RL-01~11 + 120 bench
+      # 三态登记只在开发者手动敲一次 pwsh 时才生效。现表体已外置为单一真值源、逻辑
+      # 收敛到 scripts/check_perf_redlines.py, 本步把"有门"从记性变机制。
+      # --static-only = lint(32 子检查) + inventory(三态, 未知即红) + invariants
+      # (两表键集对等/兜底债棘轮/重叠对棘轮) + ignored 归属门; 全部零 cargo 调用、
+      # 秒级, 故挂在无 paths 过滤的 check job 而非 bench_check(PR 带 paths 过滤且排在
+      # 3-8min bench 之后)。故意不写 continue-on-error: 兜脏等于再写一个不跑的门。
+      - name: Perf redline inventory & lint gate
+        run: |
+          bash scripts/check_perf_redlines.sh --selftest
+          bash scripts/check_perf_redlines.sh --static-only
+
       # Concord W5:斜杠命令词表防退化——断言 24 条主流竞品同名命令均存在于
       # SlashCommandRegistry 且 tier 正确(W2 check_slash_vocab 口径提升为 CI 门禁;
       # 退出码 0=通过 / 非 0=词表漂移阻塞合入)。i18n 硬编码防退化由

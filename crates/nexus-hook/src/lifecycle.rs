@@ -128,7 +128,11 @@ mod tests {
     fn toml_sections_unique() {
         let mut set = std::collections::HashSet::new();
         for e in LifecycleEvent::ALL {
-            assert!(set.insert(e.toml_section()), "节名重复: {}", e.toml_section());
+            assert!(
+                set.insert(e.toml_section()),
+                "节名重复: {}",
+                e.toml_section()
+            );
         }
         assert_eq!(set.len(), 14);
     }

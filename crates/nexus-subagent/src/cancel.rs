@@ -119,8 +119,8 @@ impl CancellationToken {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use super::*;
+    use std::sync::Arc;
 
     /// 四因取消 — 首因生效,幂等
     #[test]
@@ -150,7 +150,11 @@ mod tests {
             .map(|i| {
                 let t = Arc::clone(&t);
                 std::thread::spawn(move || {
-                    let reason = if i % 2 == 0 { CancelReason::Timeout } else { CancelReason::ParentRevoked };
+                    let reason = if i % 2 == 0 {
+                        CancelReason::Timeout
+                    } else {
+                        CancelReason::ParentRevoked
+                    };
                     t.cancel(reason);
                 })
             })

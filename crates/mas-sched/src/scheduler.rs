@@ -1,4 +1,4 @@
-﻿//! 调度器核心 — PeerScheduler trait + SimplePeerScheduler（P3-T2，v4.0 WI-29）
+//! 调度器核心 — PeerScheduler trait + SimplePeerScheduler（P3-T2，v4.0 WI-29）
 //!
 //! 对应架构层: L9 Quest（mas-sched 控制面，ADR-145）
 //!
@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use crate::error::SchedError;
 use crate::types::{
-    ClaimOutcome, DenyReason, Lease, Priority, RenewOutcome, ShouldRunVerdict, TaskId,
-    TodoClaim, HANDOFF,
+    ClaimOutcome, DenyReason, Lease, Priority, RenewOutcome, ShouldRunVerdict, TaskId, TodoClaim,
+    HANDOFF,
 };
 
 /// 调度器 trait — 控制面四原语（v4.0 WI-29 契约）
@@ -78,10 +78,7 @@ impl SimplePeerScheduler {
             duration_ms: claim.quota.max_duration_ms,
         };
         {
-            let mut leases = self
-                .leases
-                .write()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut leases = self.leases.write().unwrap_or_else(|p| p.into_inner());
             leases.insert(claim.task_id.clone(), lease.clone());
         }
         {
@@ -103,10 +100,7 @@ impl PeerScheduler for SimplePeerScheduler {
         }
         // 2. 任务独占检查（写锁:已存在即拒绝）
         {
-            let leases = self
-                .leases
-                .write()
-                .unwrap_or_else(|p| p.into_inner());
+            let leases = self.leases.write().unwrap_or_else(|p| p.into_inner());
             if leases.contains_key(&claim.task_id) {
                 return ClaimOutcome::Denied(DenyReason::TaskClaimed);
             }
@@ -116,10 +110,7 @@ impl PeerScheduler for SimplePeerScheduler {
     }
 
     fn renew_lease(&self, task_id: &str, peer_id: &str) -> Result<RenewOutcome, SchedError> {
-        let mut leases = self
-            .leases
-            .write()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut leases = self.leases.write().unwrap_or_else(|p| p.into_inner());
         let lease = leases
             .get_mut(task_id)
             .ok_or_else(|| SchedError::TaskNotFound(TaskId::from(task_id)))?;
@@ -143,10 +134,7 @@ impl PeerScheduler for SimplePeerScheduler {
     }
 
     fn handoff(&self, task_id: &str, to_peer: &str) -> Result<(), SchedError> {
-        let mut leases = self
-            .leases
-            .write()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut leases = self.leases.write().unwrap_or_else(|p| p.into_inner());
         let lease = leases
             .get_mut(task_id)
             .ok_or_else(|| SchedError::TaskNotFound(TaskId::from(task_id)))?;
@@ -174,10 +162,7 @@ impl PeerScheduler for SimplePeerScheduler {
     }
 
     fn should_run(&self, task_id: &str) -> ShouldRunVerdict {
-        let leases = self
-            .leases
-            .read()
-            .unwrap_or_else(|p| p.into_inner());
+        let leases = self.leases.read().unwrap_or_else(|p| p.into_inner());
         match leases.get(task_id) {
             // 无租约 = 无已受理工作 → 无可行工作（记分卡语义）
             None => ShouldRunVerdict::NoActionableWork,
@@ -189,10 +174,7 @@ impl PeerScheduler for SimplePeerScheduler {
     }
 
     fn lease_count(&self) -> usize {
-        self.leases
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .len()
+        self.leases.read().unwrap_or_else(|p| p.into_inner()).len()
     }
 }
 
@@ -250,7 +232,10 @@ mod tests {
     #[test]
     fn duplicate_claim_denied() {
         let s = SimplePeerScheduler::new();
-        assert!(matches!(s.claim(&claim("t1", "peer-a")), ClaimOutcome::Granted(_)));
+        assert!(matches!(
+            s.claim(&claim("t1", "peer-a")),
+            ClaimOutcome::Granted(_)
+        ));
         assert_eq!(
             s.claim(&claim("t1", "peer-b")),
             ClaimOutcome::Denied(DenyReason::TaskClaimed),
@@ -353,7 +338,12 @@ mod tests {
                     let mut g = 0usize;
                     let mut d = 0usize;
                     for j in 0..10usize {
-                        let c = TodoClaim::new(format!("t{i}-{j}"), format!("peer-{i}"), Priority::Medium, 1_000);
+                        let c = TodoClaim::new(
+                            format!("t{i}-{j}"),
+                            format!("peer-{i}"),
+                            Priority::Medium,
+                            1_000,
+                        );
                         match s.claim(&c) {
                             ClaimOutcome::Granted(_) => g += 1,
                             ClaimOutcome::Denied(DenyReason::QuotaExceeded) => d += 1,

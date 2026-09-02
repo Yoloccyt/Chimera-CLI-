@@ -198,9 +198,10 @@ mod tests {
 
     /// 指定维度为 1.0 的单位 CLV（正交技能向量）
     fn unit_clv(dim: usize) -> CLV {
-        let mut v = vec![0.0f32; CLV::DIMENSION];
-        v[dim] = 1.0;
-        CLV::from_vec(v).expect("512 维合法")
+        // 算法体已收敛到 L1 `nexus_core::CLV::basis`(单一权威构造器),
+        // 此处仅保留本地签名,避免改动本文件内数十处调用点。
+        // basis 越界返回 None;夹具若下标非法则该测试无效,直接 expect 暴露。
+        CLV::basis(dim).expect("测试夹具:下标须在 CLV::DIMENSION 内")
     }
 
     fn entry(id: &str, dim: usize, size: u32) -> SkillIndexEntry {

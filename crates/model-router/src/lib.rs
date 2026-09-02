@@ -1,4 +1,4 @@
-﻿//! 多模型分层路由 — 按任务特征将请求路由至最适配的底层模型
+//! 多模型分层路由 — 按任务特征将请求路由至最适配的底层模型
 //!
 //! 对应架构层:L1 Core
 //! 对应创新点:无(基础设施)
@@ -49,10 +49,10 @@ pub mod model_route;
 pub mod moe;
 /// WI-03 LPA: 分层提示词组装（四层前缀稳定纪律 + 缓存断点）
 pub mod prompt_builder;
+pub mod provider;
 /// WI-06 模型 provider 开放注册与热更(能力 seam:ModelProvider trait + RCU 热更注册表)
 /// P4-T5: T-08 供应商健康漂移守卫（ADR-154,只报警不熔断）
 pub mod provider_drift;
-pub mod provider;
 pub mod registry;
 /// MCA M3: 路由亲和元数据(ADR-065,能力协商结果在路由决策中的投射)
 pub mod route_affinity;
@@ -80,10 +80,13 @@ pub use prompt_builder::{
 };
 // WI-06 模型 provider 开放注册与热更(能力 seam 类型重导出)
 // P4-T5: 守卫公开 API（DynamicEvent 双轨告警）
-pub use provider_drift::{DriftKind, DriftReport, DriftThresholds, ProviderDriftAlert, ProviderDriftEvent, ProviderDriftGuard};
 pub use provider::{
     AttentionMode, CompletionReq, CompletionResult, Health, ModelProvider, ProviderCaps,
     ProviderRegistry, ProviderSpec,
+};
+pub use provider_drift::{
+    DriftKind, DriftReport, DriftThresholds, ProviderDriftAlert, ProviderDriftEvent,
+    ProviderDriftGuard,
 };
 pub use registry::ModelRegistry;
 pub use route_affinity::RouteAffinity;

@@ -160,17 +160,18 @@ impl ReplayStream {
             Some(Reverse(e)) => e,
             None => return Ok(None),
         };
-        let cursor = self
-            .readers
-            .get_mut(entry.cursor)
+        let cursor =
+            self.readers
+                .get_mut(entry.cursor)
+                .ok_or_else(|| StoreError::InvalidInput {
+                    reason: format!("堆条目引用不存在的段游标 {}", entry.cursor),
+                })?;
+        let rec = cursor
+            .current
+            .take()
             .ok_or_else(|| StoreError::InvalidInput {
-                reason: format!("堆条目引用不存在的段游标 {}", entry.cursor),
-            })?;
-        let rec = cursor.current.take().ok_or_else(|| {
-            StoreError::InvalidInput {
                 reason: "堆顶段游标无当前记录(状态不一致)".into(),
-            }
-        })?;
+            })?;
         // 续读:从该段拉取下一条记录重新入堆（k-way 归并推进被消费段）
         cursor.advance(Offset::new(rec.seq, rec.row))?;
         if let Some(next) = &cursor.current {
@@ -329,7 +330,10 @@ mod tests {
         let items = stream.collect().expect("collect");
         assert_eq!(items.len(), expected_len as usize, "回放条数必须完整");
         for (i, item) in items.iter().enumerate() {
-            assert_eq!(item.offset.seq, i as u64, "回放 seq 必须逐 +1 与写入顺序一致");
+            assert_eq!(
+                item.offset.seq, i as u64,
+                "回放 seq 必须逐 +1 与写入顺序一致"
+            );
             assert_eq!(item.event.event_type, format!("ev-{i}"), "事件顺序逐项一致");
         }
         items
@@ -404,7 +408,8 @@ mod tests {
         let mut w = SegmentWriter::open_or_create(dir.path(), &child, 0, 7).expect("child seg0");
         let offs = w.append_batch(&[ev(100), ev(101)]).expect("child append");
         let cseg = SegmentId::generate();
-        tree.insert_segment(&w.meta(cseg.clone(), None)).expect("child seg meta");
+        tree.insert_segment(&w.meta(cseg.clone(), None))
+            .expect("child seg meta");
         let rows: Vec<EventRow> = offs
             .iter()
             .zip([ev(100), ev(101)])
@@ -443,7 +448,8 @@ mod tests {
             w.append(&e0).expect("append0");
             w.append(&e1).expect("append1");
             let seg_id = SegmentId::generate();
-            tree.insert_segment(&w.meta(seg_id.clone(), None)).expect("meta");
+            tree.insert_segment(&w.meta(seg_id.clone(), None))
+                .expect("meta");
             for (off, event) in [0u64, 1u64].iter().zip([e0, e1]) {
                 tree.insert_events(&[EventRow {
                     offset: *off,
@@ -467,7 +473,10 @@ mod tests {
 
     /// proptest 事件策略（对齐 lib.rs tests）
     fn event_strategy() -> impl Strategy<Value = SessionEvent> {
-        (0u64..1024, proptest::option::of(proptest::collection::vec(any::<u8>(), 0..64)))
+        (
+            0u64..1024,
+            proptest::option::of(proptest::collection::vec(any::<u8>(), 0..64)),
+        )
             .prop_map(|(i, payload)| SessionEvent {
                 metadata: nexus_contracts::EventMetadata::new("session-store"),
                 event_type: format!("ev-{i}"),

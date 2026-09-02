@@ -324,10 +324,7 @@ impl AppServer {
         thread_id: &ThreadId,
         turn: &TurnId,
     ) -> Result<Offset, ServerError> {
-        let store = self
-            .store
-            .as_ref()
-            .ok_or(ServerError::StoreNotConfigured)?;
+        let store = self.store.as_ref().ok_or(ServerError::StoreNotConfigured)?;
         let session_id = SessionId::new(thread_id.as_str());
         // payload = turn_id JSON（事件体最小化;敏感字段不落 payload 原则）
         let payload = serde_json::to_vec(&serde_json::json!({ "turn_id": turn.as_str() }))

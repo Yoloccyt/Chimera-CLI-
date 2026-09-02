@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "event-bus"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "gsoe-evolution"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "async-trait",
  "event-bus",
@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "hcw-window"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "chrono",
  "dashmap",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "mca-gateway"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "model-router"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1050,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-contracts"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "chrono",
  "serde",
@@ -1060,11 +1060,12 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "arc-swap",
  "async-trait",
  "chrono",
+ "event-bus",
  "hex",
  "ndarray",
  "nexus-contracts",
@@ -1075,6 +1076,7 @@ dependencies = [
  "sha2",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1155,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "osa-coordinator"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "event-bus",
  "hex",
@@ -1636,7 +1638,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "scc-cache"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "chrono",
  "dashmap",
@@ -1667,7 +1669,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seccore"
-version = "2.27.1-omega"
+version = "2.28.0-omega"
 dependencies = [
  "async-trait",
  "chrono",

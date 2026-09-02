@@ -48,12 +48,14 @@ pub fn translate_request(method: &str, params: &serde_json::Value) -> Option<App
                 .get("runId")
                 .and_then(|v| v.as_str())
                 .unwrap_or("acp-default-run");
-            Some(AppOp::ThreadStart(nexus_contracts::app::ThreadStartParams {
-                goal_id: goal_id.into(),
-                run_id: run_id.into(),
-                initial_input: None,
-                extras: None,
-            }))
+            Some(AppOp::ThreadStart(
+                nexus_contracts::app::ThreadStartParams {
+                    goal_id: goal_id.into(),
+                    run_id: run_id.into(),
+                    initial_input: None,
+                    extras: None,
+                },
+            ))
         }
         "session/prompt" => {
             let goal_id = params

@@ -205,7 +205,6 @@ fn run_ab(capacity_blocks: usize) -> ((f32, f32, f32, f32), (f32, f32, f32, f32)
 }
 
 #[test]
-#[ignore]
 fn test_probe_ab_acceptance() {
     // P1.8 验收：128K 档（256 块容量）A/B 对照
     eprintln!("\n=== PROBE P1.8 A/B 验收（128K 档 = {CAPACITY_128K_BLOCKS} 块容量）===");

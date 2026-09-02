@@ -7,21 +7,20 @@ description = "L9 Quest: multi-agent peer scheduler control plane (Todo Claim/Le
 
 [dependencies]
 # L0 Contracts: 领域类型契约（依赖铁律 §2.2: L(N) → L(0) 恒允许）
-# WHY(P3-T2): mas-sched 为控制面纯调度器,只依赖 L0/L1;类型先移 L0 的 strangler
+# WHY(P3-T2): mas-sched 为控制面纯调度器,只依赖 L0;类型先移 L0 的 strangler
 # 渐进路径与 ADR-033 先例一致,后续 chimera-mas 拆出时经 L0 契约承接
 nexus-contracts = { workspace = true }
-# L1 Core: 领域类型(UserIntent / Task 等,调度上下文)
-nexus-core = { workspace = true }
-# L1 Core: 调度决策事件发布（claim/renew/handoff 事件,跨层通信唯一通道）
-event-bus = { workspace = true }
 # 库层错误类型标准(§4.1: 库层用自定义 thiserror enum)
 thiserror = { workspace = true }
-# 结构化日志(影子模式决策留痕)
-tracing = { workspace = true }
 # 序列化: 影子日志条目 serde（回放/审计）
 serde = { workspace = true, features = ["derive"] }
 # 序列化: 影子日志条目 JSON 编解码（审计持久化/回放）
 serde_json = { workspace = true }
+# 注(2026-08-29 ADR-160 冗余审计): 此处原声明的 nexus-core / event-bus / tracing
+# 在 src 与 tests 中零引用, 已随"claim/renew/handoff 事件发布"这一**尚未实现**的
+# 叙述一并移除(声明先于实现会同时欺骗 machete 与读者)。
+# TODO(P3-T2 后续): 事件面落地时重新按依赖铁律声明 event-bus(L1),
+# 并用 `optional = true` + feature 门控接入, 使其进入可达性门禁的 GATED 轨道。
 
 [dev-dependencies]
 # 属性测试框架(任意 claim/lease 序列不变量)

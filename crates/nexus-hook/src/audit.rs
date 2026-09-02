@@ -49,10 +49,7 @@ impl HookAudit {
     /// 条目数（诊断）
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .len()
+        self.entries.lock().unwrap_or_else(|p| p.into_inner()).len()
     }
 
     /// 空判定
@@ -73,19 +70,13 @@ impl HookAudit {
     /// 中断次数（诊断）
     #[must_use]
     pub fn interrupted_count(&self) -> usize {
-        self.snapshot()
-            .iter()
-            .filter(|e| e.interrupted)
-            .count()
+        self.snapshot().iter().filter(|e| e.interrupted).count()
     }
 
     /// 沙箱拒绝次数（诊断）
     #[must_use]
     pub fn sandbox_denied_count(&self) -> usize {
-        self.snapshot()
-            .iter()
-            .filter(|e| e.sandbox_denied)
-            .count()
+        self.snapshot().iter().filter(|e| e.sandbox_denied).count()
     }
 
     /// 平均耗时（ms;空审计返回 0）
@@ -145,9 +136,30 @@ mod tests {
     fn audit_append_only() {
         let a = HookAudit::new();
         assert!(a.is_empty());
-        a.push(make_entry(LifecycleEvent::PreToolUse, "git stash", Some(0), Duration::from_millis(10), false, false));
-        a.push(make_entry(LifecycleEvent::PostToolUse, "notify", Some(1), Duration::from_millis(5), true, false));
-        a.push(make_entry(LifecycleEvent::Error, "echo err", None, Duration::from_millis(100), false, true));
+        a.push(make_entry(
+            LifecycleEvent::PreToolUse,
+            "git stash",
+            Some(0),
+            Duration::from_millis(10),
+            false,
+            false,
+        ));
+        a.push(make_entry(
+            LifecycleEvent::PostToolUse,
+            "notify",
+            Some(1),
+            Duration::from_millis(5),
+            true,
+            false,
+        ));
+        a.push(make_entry(
+            LifecycleEvent::Error,
+            "echo err",
+            None,
+            Duration::from_millis(100),
+            false,
+            true,
+        ));
         assert_eq!(a.len(), 3);
         assert_eq!(a.interrupted_count(), 1);
         assert_eq!(a.sandbox_denied_count(), 1);

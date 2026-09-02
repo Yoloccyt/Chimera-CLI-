@@ -42,7 +42,9 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, warn};
 
 use crate::error::StoreError;
-use crate::segment::{list_segment_files, segment_path, SegmentFileReader, SegmentMeta, SegmentWriter};
+use crate::segment::{
+    list_segment_files, segment_path, SegmentFileReader, SegmentMeta, SegmentWriter,
+};
 use crate::tree::{EventRow, StoredEvent, TreeIndex};
 use crate::types::{Offset, SegmentId, SessionEvent, SessionId, StoreConfig};
 
@@ -104,11 +106,9 @@ where
     T: Send + 'static,
 {
     match tokio::runtime::Handle::try_current() {
-        Ok(_) => Ok(spawn_blocking(f)
-            .await
-            .map_err(|e| StoreError::Join {
-                reason: format!("spawn_blocking join 错误(阻塞池任务 panic): {e}"),
-            })??),
+        Ok(_) => Ok(spawn_blocking(f).await.map_err(|e| StoreError::Join {
+            reason: format!("spawn_blocking join 错误(阻塞池任务 panic): {e}"),
+        })??),
         // 无 runtime 降级同步（测试/非异步环境）
         Err(_) => f(),
     }
@@ -157,9 +157,13 @@ impl CbmrWriter {
     ) -> Result<(), StoreError> {
         let should_flush = {
             // 锁段:push + 满批判定,随即释放(不持锁跨 await)
-            let mut pending = self.inner.pending.lock().map_err(|p| StoreError::LockPoisoned {
-                reason: format!("pending 队列锁中毒: {p}"),
-            })?;
+            let mut pending = self
+                .inner
+                .pending
+                .lock()
+                .map_err(|p| StoreError::LockPoisoned {
+                    reason: format!("pending 队列锁中毒: {p}"),
+                })?;
             pending.events.push(PendingEvent {
                 session_id: session_id.clone(),
                 event,
@@ -198,9 +202,13 @@ impl CbmrWriter {
     pub fn flush_sync(&self) -> Result<(), StoreError> {
         // 1. 快照 pending(取空即释放锁)
         let batch = {
-            let mut pending = self.inner.pending.lock().map_err(|p| StoreError::LockPoisoned {
-                reason: format!("pending 队列锁中毒: {p}"),
-            })?;
+            let mut pending = self
+                .inner
+                .pending
+                .lock()
+                .map_err(|p| StoreError::LockPoisoned {
+                    reason: format!("pending 队列锁中毒: {p}"),
+                })?;
             std::mem::take(&mut pending.events)
         };
         let batch_len = batch.len();
@@ -211,10 +219,7 @@ impl CbmrWriter {
         // 2. 按会话分组(保持批内相对顺序:组内 Vec 原序)
         let mut groups: HashMap<SessionId, Vec<SessionEvent>> = HashMap::new();
         for pe in batch {
-            groups
-                .entry(pe.session_id)
-                .or_default()
-                .push(pe.event);
+            groups.entry(pe.session_id).or_default().push(pe.event);
         }
 
         // 3. 段追加 + 元数据收集(锁 sessions 的同步段,不跨 await)
@@ -225,11 +230,13 @@ impl CbmrWriter {
         // 本批各会话最后写入的 Offset（flush 成功后更新 last_offset_by_session）
         let mut last_offsets: HashMap<SessionId, Offset> = HashMap::new();
         {
-            let mut sessions = self.inner.sessions.lock().map_err(|p| {
-                StoreError::LockPoisoned {
-                    reason: format!("sessions 表锁中毒: {p}"),
-                }
-            })?;
+            let mut sessions =
+                self.inner
+                    .sessions
+                    .lock()
+                    .map_err(|p| StoreError::LockPoisoned {
+                        reason: format!("sessions 表锁中毒: {p}"),
+                    })?;
             for (sid, events) in groups {
                 // 惰性创建:首次 flush 该会话时恢复续写点（重开场景打开最后
                 // 非空段 + 复用既有段 ID——见 [`recover_session_state`] 文档）
@@ -243,20 +250,18 @@ impl CbmrWriter {
                         },
                     );
                 }
-                let state = sessions.get_mut(&sid).ok_or_else(|| {
-                    StoreError::InvalidInput {
+                let state = sessions
+                    .get_mut(&sid)
+                    .ok_or_else(|| StoreError::InvalidInput {
                         reason: format!("会话 {} 状态丢失(插入后不可达)", sid),
-                    }
-                })?;
+                    })?;
                 // 批内可能跨段:写满当前段即滚动,剩余事件进新段
                 let mut events_left = events;
                 loop {
                     let capacity = max_rows.saturating_sub(state.current.row_count());
                     if capacity == 0 {
                         // 滚动:关闭旧段(元数据入列),新段承接剩余
-                        let old_meta = state
-                            .current
-                            .meta(state.current_segment_id.clone(), None);
+                        let old_meta = state.current.meta(state.current_segment_id.clone(), None);
                         segments.push(old_meta);
                         let start = state.current.next_seq();
                         let idx = state.current.segment_index() + 1;
@@ -287,9 +292,7 @@ impl CbmrWriter {
                         break;
                     }
                     // 写满滚动(继续下一段承接剩余)
-                    let old_meta = state
-                        .current
-                        .meta(state.current_segment_id.clone(), None);
+                    let old_meta = state.current.meta(state.current_segment_id.clone(), None);
                     segments.push(old_meta);
                     let start = state.current.next_seq();
                     let idx = state.current.segment_index() + 1;
@@ -310,23 +313,25 @@ impl CbmrWriter {
 
         // 4.5 flush 成功后更新 last_offset 追踪（失败不推进——未落盘不算已确认）
         if !last_offsets.is_empty() {
-            let mut last_map = self
-                .inner
-                .last_offset_by_session
-                .lock()
-                .map_err(|p| StoreError::LockPoisoned {
-                    reason: format!("last_offset 追踪锁中毒: {p}"),
-                })?;
+            let mut last_map =
+                self.inner
+                    .last_offset_by_session
+                    .lock()
+                    .map_err(|p| StoreError::LockPoisoned {
+                        reason: format!("last_offset 追踪锁中毒: {p}"),
+                    })?;
             last_map.extend(last_offsets);
         }
 
         // 5. EMA 更新(自适应窗口输入:批大 → EMA 升 → 窗口缩)
         {
-            let mut ema = self.inner.ema_batch.lock().map_err(|p| {
-                StoreError::LockPoisoned {
+            let mut ema = self
+                .inner
+                .ema_batch
+                .lock()
+                .map_err(|p| StoreError::LockPoisoned {
                     reason: format!("ema_batch 锁中毒: {p}"),
-                }
-            })?;
+                })?;
             *ema = *ema * 0.7 + batch_len as f64 * 0.3;
         }
         debug!("微批刷写 {batch_len} 条事件 → 段追加 + SQLite 单事务");
@@ -348,13 +353,19 @@ impl CbmrWriter {
         let parent = parent.clone();
         run_blocking(move || {
             let new_sid = this.inner.tree.fork(&parent, from_offset)?;
-            let mut sessions = this.inner.sessions.lock().map_err(|p| {
-                StoreError::LockPoisoned {
-                    reason: format!("sessions 表锁中毒: {p}"),
-                }
-            })?;
-            let w =
-                SegmentWriter::open_or_create(&this.inner.config.data_dir, &new_sid, 0, from_offset)?;
+            let mut sessions =
+                this.inner
+                    .sessions
+                    .lock()
+                    .map_err(|p| StoreError::LockPoisoned {
+                        reason: format!("sessions 表锁中毒: {p}"),
+                    })?;
+            let w = SegmentWriter::open_or_create(
+                &this.inner.config.data_dir,
+                &new_sid,
+                0,
+                from_offset,
+            )?;
             sessions.insert(
                 new_sid.clone(),
                 SessionState {
@@ -388,12 +399,7 @@ impl CbmrWriter {
     /// 窗口 = `4 - 3*ratio` ms（满批 1ms,空批 4ms;基准 = [`StoreConfig::base_window_ms`]）。
     #[must_use]
     pub fn adaptive_window(&self) -> Duration {
-        let ema = self
-            .inner
-            .ema_batch
-            .lock()
-            .map(|g| *g)
-            .unwrap_or(0.0);
+        let ema = self.inner.ema_batch.lock().map(|g| *g).unwrap_or(0.0);
         let ratio = (ema / self.inner.config.batch_size as f64).clamp(0.0, 1.0);
         let ms = (4.0 - 3.0 * ratio).clamp(1.0, 4.0);
         Duration::from_millis(ms as u64)
@@ -417,13 +423,13 @@ impl CbmrWriter {
     /// 即按 append → flush → last_offset 顺序调用）。会话无事件 → None。
     pub async fn last_offset(&self, session_id: &SessionId) -> Result<Option<Offset>, StoreError> {
         let sid = session_id.clone();
-        let last_map = self
-            .inner
-            .last_offset_by_session
-            .lock()
-            .map_err(|p| StoreError::LockPoisoned {
-                reason: format!("last_offset 锁中毒: {p}"),
-            })?;
+        let last_map =
+            self.inner
+                .last_offset_by_session
+                .lock()
+                .map_err(|p| StoreError::LockPoisoned {
+                    reason: format!("last_offset 锁中毒: {p}"),
+                })?;
         Ok(last_map.get(&sid).copied())
     }
 
@@ -828,7 +834,9 @@ mod tests {
         for i in 0..3 {
             w2.append(&child, ev(200 + i)).await.expect("append");
         }
-        w2.flush().await.expect("flush 无冲突(seq 从 fork 点后续写)");
+        w2.flush()
+            .await
+            .expect("flush 无冲突(seq 从 fork 点后续写)");
         let stored = w2.read_events(&child, None).await.expect("read");
         assert_eq!(stored.len(), 11, "7 前缀 + 4 自己(7..10)");
         for (i, s) in stored.iter().enumerate() {

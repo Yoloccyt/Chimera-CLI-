@@ -223,11 +223,7 @@ impl Fs for MemFs {
 
     fn list(&self, dir: &Path) -> Result<Vec<PathBuf>, SeamError> {
         let map = self.map.lock().unwrap_or_else(|p| p.into_inner());
-        Ok(map
-            .keys()
-            .filter(|p| p.starts_with(dir))
-            .cloned()
-            .collect())
+        Ok(map.keys().filter(|p| p.starts_with(dir)).cloned().collect())
     }
 }
 
@@ -326,16 +322,24 @@ mod tests {
         let path = Path::new("/tmp/x");
         assert_eq!(fs.read(path), Err(SeamError::Unsupported("OsFs")));
         assert_eq!(fs.write(path, b"x"), Err(SeamError::Unsupported("OsFs")));
-        assert_eq!(fs.list(Path::new("/tmp")), Err(SeamError::Unsupported("OsFs")));
+        assert_eq!(
+            fs.list(Path::new("/tmp")),
+            Err(SeamError::Unsupported("OsFs"))
+        );
     }
 
     /// MemFs — 写后读一致,list 前缀过滤
     #[test]
     fn mem_fs_roundtrip_and_list() {
         let fs = MemFs::new();
-        fs.write(Path::new("/a/b.txt"), b"hello").expect("MemFs 写入应成功");
-        fs.write(Path::new("/a/c.txt"), b"world").expect("MemFs 写入应成功");
-        assert_eq!(fs.read(Path::new("/a/b.txt")).expect("读取应成功"), b"hello");
+        fs.write(Path::new("/a/b.txt"), b"hello")
+            .expect("MemFs 写入应成功");
+        fs.write(Path::new("/a/c.txt"), b"world")
+            .expect("MemFs 写入应成功");
+        assert_eq!(
+            fs.read(Path::new("/a/b.txt")).expect("读取应成功"),
+            b"hello"
+        );
         let listed = fs.list(Path::new("/a")).expect("list 应成功");
         assert_eq!(listed.len(), 2);
         assert!(listed.contains(&PathBuf::from("/a/b.txt")));
@@ -347,7 +351,10 @@ mod tests {
     fn mock_net_stub_hit_and_miss() {
         let net = MockNet::new();
         net.stub_get("http://test.local/a", vec![1, 2, 3]);
-        assert_eq!(net.get("http://test.local/a").expect("stub 应命中"), vec![1, 2, 3]);
+        assert_eq!(
+            net.get("http://test.local/a").expect("stub 应命中"),
+            vec![1, 2, 3]
+        );
         assert_eq!(
             net.get("http://test.local/miss"),
             Err(SeamError::Unsupported("MockNet:no-stub"))

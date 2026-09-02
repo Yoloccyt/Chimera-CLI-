@@ -34,6 +34,4 @@ pub use hts::{HtsTable, ThresholdSource};
 // P1-T10: DetReduce 双模式归约(手册 §10.2 / ADR-102/106)
 pub use reduce::{reduce, repro_reduce, tree_reduce_fixed, ReduceMode, DEFAULT_CHUNK};
 // T1(WI-34): CPU 利用率测量基座(手册 §8.5 / v4.0 §7.5.4)
-pub use utilization::{
-    RayonProbe, TokioProbe, UtilizationSampler, UtilizationSnapshot,
-};
+pub use utilization::{RayonProbe, TokioProbe, UtilizationSampler, UtilizationSnapshot};

@@ -46,6 +46,15 @@ const TOP_K: usize = 100;
 /// p95 阈值（spec.md P3-W9.1 红线：<10ms）
 const P95_THRESHOLD_MS: u64 = 10;
 
+/// 断言用阈值 = 契约常量 × CI 缩放旋钮（`CHIMERA_PERF_SCALE`，缺省 1.0）
+///
+/// WHY 不直接改常量：契约值必须永久留在代码里可审计；放松只发生在
+/// 运行时的显式旋钮上（发布阻塞门跑 1.0，每日观测档跑 4）。
+/// 本测试是 `ignored_test_inventory_freeze.txt` 里的 slo-blocking 项。
+fn p95_threshold() -> Duration {
+    Duration::from_millis(nexus_contracts::util::perf_scale_ms(P95_THRESHOLD_MS))
+}
+
 /// 生成确定性伪随机 CLV（与 vector_bench.rs::make_vector 同模式）
 fn make_clv(seed: u64) -> CLV {
     let v: Vec<f32> = (0..CLV_DIM)
@@ -109,14 +118,13 @@ fn build_module_clvs(module_count: usize) -> HashMap<String, CLV> {
         .collect()
 }
 
-/// 取延迟分布的百分位
+/// 取延迟分布的百分位(委托共享工具)
+///
+// 口径变更:原 `trunc(n*p)` 统一为 `round((n-1)*p)`,两者索引差 ≤1 个样本,
+// 对 p95 红线测得值无实质影响(已由本文件红线断言回归验证)。
+use nexus_contracts::util::percentile_sorted;
 fn percentile(latencies: &[Duration], p: f64) -> Duration {
-    let n = latencies.len();
-    if n == 0 {
-        return Duration::ZERO;
-    }
-    let idx = ((n as f64 * p) as usize).min(n.saturating_sub(1));
-    latencies[idx]
+    percentile_sorted(latencies, p).unwrap_or(Duration::ZERO)
 }
 
 /// 粗召回 p95 延迟红线守护（P3-W9.1.2 spec.md 红线）
@@ -187,7 +195,7 @@ fn test_coarse_recall_p95_below_10ms() {
     let mean = latencies.iter().sum::<Duration>() / latencies.len() as u32;
     let max = latencies[latencies.len() - 1];
 
-    let threshold = Duration::from_millis(P95_THRESHOLD_MS);
+    let threshold = p95_threshold();
 
     // 5. 输出完整延迟分布
     eprintln!(

@@ -1,4 +1,4 @@
-﻿//! L-b 结构化并发框架（P2-T13，v4.0 WI-34 注入续期）
+//! L-b 结构化并发框架（P2-T13，v4.0 WI-34 注入续期）
 //!
 //! 对应架构层: **L7 Execution**（pvl-layer）
 //! 对应任务: **P2-T13**（滚动注入）
@@ -58,10 +58,7 @@ impl VerifyConcurrency {
     /// # 并发纪律
     /// 信号量切片：同时最多 `max_concurrency` 个任务在飞（洪峰防抖）；
     /// 每任务超时独立（单任务卡死不影响同批）。
-    pub async fn run_batch<T, F, Fut>(
-        &self,
-        tasks: Vec<F>,
-    ) -> Vec<Result<T, ConcurrencyError>>
+    pub async fn run_batch<T, F, Fut>(&self, tasks: Vec<F>) -> Vec<Result<T, ConcurrencyError>>
     where
         F: FnOnce() -> Fut + Send + 'static,
         Fut: Future<Output = T> + Send + 'static,
@@ -106,9 +103,8 @@ impl VerifyConcurrency {
                         // 用 idx 未知时的保守处理：标记所有未完成槽位
                         for slot in results.iter_mut() {
                             if slot.is_none() {
-                                *slot = Some(Err(ConcurrencyError::TaskPanicked(
-                                    join_err.to_string(),
-                                )));
+                                *slot =
+                                    Some(Err(ConcurrencyError::TaskPanicked(join_err.to_string())));
                             }
                         }
                         // 防空转：清空剩余在飞任务
@@ -131,7 +127,12 @@ impl VerifyConcurrency {
             }
         }
 
-        results.into_iter().map(|r| r.unwrap_or_else(|| Err(ConcurrencyError::TaskPanicked("missing slot".into())))).collect()
+        results
+            .into_iter()
+            .map(|r| {
+                r.unwrap_or_else(|| Err(ConcurrencyError::TaskPanicked("missing slot".into())))
+            })
+            .collect()
     }
 }
 
@@ -201,7 +202,8 @@ mod tests {
     #[tokio::test]
     async fn timeout_isolated() {
         // 不同 async 块类型不统一 → 装箱闭包统一签名
-        type BoxedTask = Box<dyn FnOnce() -> std::pin::Pin<Box<dyn Future<Output = u32> + Send>> + Send>;
+        type BoxedTask =
+            Box<dyn FnOnce() -> std::pin::Pin<Box<dyn Future<Output = u32> + Send>> + Send>;
         let ex = VerifyConcurrency::new(2, Duration::from_millis(10));
         let tasks: Vec<BoxedTask> = vec![
             Box::new(|| Box::pin(async { 1u32 })),
@@ -221,7 +223,8 @@ mod tests {
 
     #[tokio::test]
     async fn panic_isolated() {
-        type BoxedTask = Box<dyn FnOnce() -> std::pin::Pin<Box<dyn Future<Output = u32> + Send>> + Send>;
+        type BoxedTask =
+            Box<dyn FnOnce() -> std::pin::Pin<Box<dyn Future<Output = u32> + Send>> + Send>;
         let ex = VerifyConcurrency::default();
         let tasks: Vec<BoxedTask> = vec![
             Box::new(|| Box::pin(async { 1u32 })),
@@ -237,7 +240,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_batch() {
-        type BoxedTask = Box<dyn FnOnce() -> std::pin::Pin<Box<dyn Future<Output = u32> + Send>> + Send>;
+        type BoxedTask =
+            Box<dyn FnOnce() -> std::pin::Pin<Box<dyn Future<Output = u32> + Send>> + Send>;
         let ex = VerifyConcurrency::default();
         let tasks: Vec<BoxedTask> = vec![];
         let results: Vec<Result<u32, ConcurrencyError>> = ex.run_batch(tasks).await;

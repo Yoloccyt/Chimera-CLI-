@@ -8,6 +8,7 @@
     "starops-qoder@qoder-marketplace": true,
     "context7@qoder-marketplace": true,
     "redis@qoder-marketplace": true,
-    "research-copilot@qoder-marketplace": true
+    "research-copilot@qoder-marketplace": true,
+    "qmind-knowledge-cn@qoder-marketplace": true
   }
 }

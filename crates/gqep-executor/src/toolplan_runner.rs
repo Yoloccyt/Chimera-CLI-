@@ -1,4 +1,4 @@
-﻿//! PlanRunner — 声明式 ToolPlan 解释执行（P3-T8，v4.0 WI-16）
+//! PlanRunner — 声明式 ToolPlan 解释执行（P3-T8，v4.0 WI-16）
 //!
 //! 对应架构层: **L7 Execution**（gqep-executor，ADR-151 裁决：挂既有 crate 增强）
 //! 对应任务: **P3-T8**（手册 W17，WI-16：ToolPlan DAG + 计划期冲突拒绝）
@@ -22,9 +22,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use nexus_contracts::tool_plan::{
-    guards, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan,
-};
+use nexus_contracts::tool_plan::{guards, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};
 
 /// 工具执行器 — 接入方注入（execpolicy 审批/沙箱/超时/审计流水线挂载点）
 ///
@@ -225,10 +223,7 @@ impl PlanRunner {
         if preds.is_empty() {
             return "[]".to_string();
         }
-        let parts: Vec<String> = preds
-            .iter()
-            .filter_map(|p| env.get(*p).cloned())
-            .collect();
+        let parts: Vec<String> = preds.iter().filter_map(|p| env.get(*p).cloned()).collect();
         if parts.is_empty() {
             "[]".to_string()
         } else {
@@ -243,7 +238,8 @@ impl PlanRunner {
 /// 实现:按「入度清零轮次」分层（Kahn 每轮弹出入度=0 的节点 = 一层）;
 /// 若放置节点数 < 总数 → 环（validate 已保证无环,防御性校验）。
 fn compute_layers(plan: &ToolPlan) -> Result<Vec<Vec<ToolNode>>, PlanError> {
-    let mut indegree: HashMap<&str, usize> = plan.nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
+    let mut indegree: HashMap<&str, usize> =
+        plan.nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for e in &plan.edges {
         *indegree.entry(e.to.as_str()).or_insert(0) += 1;
@@ -270,7 +266,9 @@ fn compute_layers(plan: &ToolPlan) -> Result<Vec<Vec<ToolNode>>, PlanError> {
             placed += 1;
             if let Some(nexts) = adj.get(n) {
                 for m in nexts {
-                    let d = indegree.get_mut(m).ok_or_else(|| PlanError::UnknownNode((*m).into()))?;
+                    let d = indegree
+                        .get_mut(m)
+                        .ok_or_else(|| PlanError::UnknownNode((*m).into()))?;
                     *d -= 1;
                     if *d == 0 {
                         next.push_back(*m);
@@ -335,7 +333,9 @@ fn filter_by_predicate(input: &str, predicate: &str) -> String {
     let kept: Vec<&str> = items
         .iter()
         .filter(|item| {
-            extract_field(item, field).map(|v| v.trim_matches('"') == value.trim_matches('"')).unwrap_or(false)
+            extract_field(item, field)
+                .map(|v| v.trim_matches('"') == value.trim_matches('"'))
+                .unwrap_or(false)
         })
         .copied()
         .collect();
@@ -344,10 +344,7 @@ fn filter_by_predicate(input: &str, predicate: &str) -> String {
 
 /// Aggregate — 字段求和/计数（field 前缀 `sum:` = 求和,`count:` = 计数,默认求和）
 fn aggregate_field(input: &str, field: &str) -> String {
-    let (op, field_name) = field
-        .split_once(':')
-        
-        .unwrap_or(("sum", field));
+    let (op, field_name) = field.split_once(':').unwrap_or(("sum", field));
     let items: Vec<&str> = input
         .trim_start_matches('[')
         .trim_end_matches(']')
@@ -416,7 +413,10 @@ mod tests {
         async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
             // 回显工具:产出 JSON 数组元素（模拟检索结果）
             match tool_name {
-                "search:docs" => Ok(r#"[{"title":"a","score":3},{"title":"b","score":5},{"title":"c","score":1}]"#.to_string()),
+                "search:docs" => Ok(
+                    r#"[{"title":"a","score":3},{"title":"b","score":5},{"title":"c","score":1}]"#
+                        .to_string(),
+                ),
                 "echo" => Ok(args_json.to_string()),
                 _ => Err(format!("unknown tool: {tool_name}")),
             }
@@ -461,16 +461,29 @@ mod tests {
                 map,
             ],
             edges: vec![
-                PlanEdge { from: "fetch".into(), to: "sort1".into() },
-                PlanEdge { from: "sort1".into(), to: "limit1".into() },
-                PlanEdge { from: "limit1".into(), to: "map1".into() },
+                PlanEdge {
+                    from: "fetch".into(),
+                    to: "sort1".into(),
+                },
+                PlanEdge {
+                    from: "sort1".into(),
+                    to: "limit1".into(),
+                },
+                PlanEdge {
+                    from: "limit1".into(),
+                    to: "map1".into(),
+                },
             ],
         };
         let summary = runner().run(&plan).await.expect("计划必须执行成功");
         assert_eq!(summary.tool_calls, 1, "1 次工具调用（0 模型往返）");
         assert_eq!(summary.nodes_executed, 4);
         // sort 降序:score 5,3,1 → limit 前 10 → map title
-        assert!(summary.summary.contains("b"), "最高分 b 必须保留: {}", summary.summary);
+        assert!(
+            summary.summary.contains("b"),
+            "最高分 b 必须保留: {}",
+            summary.summary
+        );
         assert!(summary.summary.contains("a"));
         assert!(!summary.truncated);
     }
@@ -493,19 +506,38 @@ mod tests {
                 node("b", ToolOp::Map),
             ],
             edges: vec![
-                PlanEdge { from: "a".into(), to: "b".into() },
-                PlanEdge { from: "b".into(), to: "a".into() },
+                PlanEdge {
+                    from: "a".into(),
+                    to: "b".into(),
+                },
+                PlanEdge {
+                    from: "b".into(),
+                    to: "a".into(),
+                },
             ],
         };
-        assert_eq!(runner().run(&plan).await, Err(PlanError::Cycle), "环必须 100% 拒绝");
+        assert_eq!(
+            runner().run(&plan).await,
+            Err(PlanError::Cycle),
+            "环必须 100% 拒绝"
+        );
     }
 
     /// 冲突拒绝 — 超步数计划拒绝
     #[tokio::test]
     async fn max_steps_rejected() {
-        let nodes: Vec<ToolNode> = (0..10).map(|i| node(&format!("n{i}"), ToolOp::Map)).collect();
-        let plan = ToolPlan { id: "plan-steps".into(), nodes, edges: vec![] };
-        let g = PlanGuards { max_steps: 5, ..PlanGuards::default() };
+        let nodes: Vec<ToolNode> = (0..10)
+            .map(|i| node(&format!("n{i}"), ToolOp::Map))
+            .collect();
+        let plan = ToolPlan {
+            id: "plan-steps".into(),
+            nodes,
+            edges: vec![],
+        };
+        let g = PlanGuards {
+            max_steps: 5,
+            ..PlanGuards::default()
+        };
         let r = PlanRunner::new(Box::new(MemExecutor), g);
         assert_eq!(r.run(&plan).await, Err(PlanError::TooManySteps(10)));
     }
@@ -526,7 +558,10 @@ mod tests {
             }],
             edges: vec![],
         };
-        let g = PlanGuards { readonly_only: true, ..PlanGuards::default() };
+        let g = PlanGuards {
+            readonly_only: true,
+            ..PlanGuards::default()
+        };
         let r = PlanRunner::new(Box::new(MemExecutor), g);
         assert!(r.run(&plan).await.is_err(), "只读模式必须拒绝 Write 节点");
     }
@@ -549,17 +584,18 @@ mod tests {
         };
         let summary = runner().run(&plan).await.expect("计划不因工具失败而失败");
         assert_eq!(summary.tool_calls, 1);
-        assert!(summary.summary.contains("error"), "错误结果必须可见: {}", summary.summary);
+        assert!(
+            summary.summary.contains("error"),
+            "错误结果必须可见: {}",
+            summary.summary
+        );
     }
 
     /// 数据算子 — Filter / Aggregate 独立行为
     #[tokio::test]
     async fn filter_and_aggregate_ops() {
         // Filter
-        let filtered = filter_by_predicate(
-            r#"[{"t":"a","v":1},{"t":"b","v":2}]"#,
-            "t==b",
-        );
+        let filtered = filter_by_predicate(r#"[{"t":"a","v":1},{"t":"b","v":2}]"#, "t==b");
         assert!(filtered.contains("b"));
         assert!(!filtered.contains("\"a\""));
         // Aggregate sum
@@ -586,7 +622,10 @@ mod tests {
             }],
             edges: vec![],
         };
-        let g = PlanGuards { budget_bytes: 8, ..PlanGuards::default() };
+        let g = PlanGuards {
+            budget_bytes: 8,
+            ..PlanGuards::default()
+        };
         let r = PlanRunner::new(Box::new(MemExecutor), g);
         let summary = r.run(&plan).await.expect("执行成功");
         assert!(summary.truncated, "超预算必须截断标记");
@@ -667,9 +706,15 @@ mod tests {
                 },
                 node("s2", ToolOp::Map),
             ],
-            edges: vec![PlanEdge { from: "s1".into(), to: "s2".into() }],
+            edges: vec![PlanEdge {
+                from: "s1".into(),
+                to: "s2".into(),
+            }],
         };
-        let g = PlanGuards { timeout_ms: 50, ..PlanGuards::default() };
+        let g = PlanGuards {
+            timeout_ms: 50,
+            ..PlanGuards::default()
+        };
         let r = PlanRunner::new(Box::new(SlowExecutor), g);
         let summary = r.run(&plan).await.expect("执行成功");
         assert!(summary.truncated, "超时必须截断返回");

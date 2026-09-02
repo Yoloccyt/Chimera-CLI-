@@ -74,7 +74,12 @@ impl HookExecutor {
     /// 新建执行器（构造参数:配置 + 沙箱策略 + 审计;非 feature 标志——禁 feature 红线）
     #[must_use]
     pub fn new(config: HookConfig, fence: ProcessFence, audit: Arc<HookAudit>) -> Self {
-        Self { config, fence: std::sync::Mutex::new(fence), audit, sink: Arc::new(NoopAuditSink) }
+        Self {
+            config,
+            fence: std::sync::Mutex::new(fence),
+            audit,
+            sink: Arc::new(NoopAuditSink),
+        }
     }
 
     /// 注入审计汇出（session-store 适配器;组合根装配）
@@ -125,7 +130,10 @@ impl HookExecutor {
         }
         let mut results = Vec::new();
         for spec in self.config.specs_for(event) {
-            results.push(self.run_one(event, spec, tool_name, session_id, goal_id).await);
+            results.push(
+                self.run_one(event, spec, tool_name, session_id, goal_id)
+                    .await,
+            );
         }
         results
     }
@@ -143,21 +151,28 @@ impl HookExecutor {
         // 1. 命令解析（空白拆分:首个 token = program,其余 = args）
         let tokens: Vec<&str> = spec.command.split_whitespace().collect();
         if tokens.is_empty() {
-            return HookResult { command: spec.command.clone(), exit_code: None, interrupted: false, sandbox_denied: true };
+            return HookResult {
+                command: spec.command.clone(),
+                exit_code: None,
+                interrupted: false,
+                sandbox_denied: true,
+            };
         }
         let program = tokens[0];
         let args: Vec<String> = tokens[1..].iter().map(|s| s.to_string()).collect();
         // 2. 沙箱检查（逃逸拒绝:写 /etc、越界网络）
         {
-            let mut fence = self
-                .fence
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut fence = self.fence.lock().unwrap_or_else(|p| p.into_inner());
             if let Err(_e) = fence.check(program, &args) {
                 let entry = make_entry(event, &spec.command, None, started.elapsed(), false, true);
                 self.audit.push(entry.clone());
                 self.sink.push_audit(&entry);
-                return HookResult { command: spec.command.clone(), exit_code: None, interrupted: false, sandbox_denied: true };
+                return HookResult {
+                    command: spec.command.clone(),
+                    exit_code: None,
+                    interrupted: false,
+                    sandbox_denied: true,
+                };
             }
         }
         // 3. 执行（tokio::process + 超时熔断）
@@ -184,7 +199,12 @@ impl HookExecutor {
                 self.audit.push(entry.clone());
                 self.sink.push_audit(&entry);
                 tracing::warn!(command = %spec.command, error = %e, "hook spawn failed");
-                return HookResult { command: spec.command.clone(), exit_code: None, interrupted: false, sandbox_denied: false };
+                return HookResult {
+                    command: spec.command.clone(),
+                    exit_code: None,
+                    interrupted: false,
+                    sandbox_denied: false,
+                };
             }
             Err(_) => {
                 // 超时熔断:kill 子进程,记录审计（不阻主流程）
@@ -192,17 +212,34 @@ impl HookExecutor {
                 self.audit.push(entry.clone());
                 self.sink.push_audit(&entry);
                 tracing::warn!(command = %spec.command, timeout_ms = spec.timeout_ms, "hook timed out");
-                return HookResult { command: spec.command.clone(), exit_code: None, interrupted: false, sandbox_denied: false };
+                return HookResult {
+                    command: spec.command.clone(),
+                    exit_code: None,
+                    interrupted: false,
+                    sandbox_denied: false,
+                };
             }
         };
         let exit_code = output.status.code();
         // 4. 中断判定:可中断事件 + 非零退出码
         let interrupted = event.interruptible() && exit_code != Some(0);
         // 5. 审计（内存 + 汇出）
-        let entry = make_entry(event, &spec.command, exit_code, started.elapsed(), interrupted, false);
+        let entry = make_entry(
+            event,
+            &spec.command,
+            exit_code,
+            started.elapsed(),
+            interrupted,
+            false,
+        );
         self.audit.push(entry.clone());
         self.sink.push_audit(&entry);
-        HookResult { command: spec.command.clone(), exit_code, interrupted, sandbox_denied: false }
+        HookResult {
+            command: spec.command.clone(),
+            exit_code,
+            interrupted,
+            sandbox_denied: false,
+        }
     }
 
     /// 审计引用（导出/接 session-store）
@@ -219,8 +256,8 @@ mod tests {
     #![allow(clippy::field_reassign_with_default)]
 
     use super::*;
-    use crate::config::TrustLevel;
     use crate::config::HookSpec;
+    use crate::config::TrustLevel;
 
     /// 测试辅助:解析平台可用命令路径
     ///
@@ -252,7 +289,9 @@ mod tests {
     #[tokio::test]
     async fn empty_config_noop() {
         let ex = HookExecutor::with_config(HookConfig::default());
-        let results = ex.trigger(LifecycleEvent::PreToolUse, None, None, None).await;
+        let results = ex
+            .trigger(LifecycleEvent::PreToolUse, None, None, None)
+            .await;
         assert!(results.is_empty());
         assert!(ex.audit().is_empty());
     }
@@ -264,10 +303,15 @@ mod tests {
         cfg.trust = TrustLevel::Untrusted;
         cfg.hooks.insert(
             LifecycleEvent::PostToolUse,
-            vec![HookSpec { command: resolve("true"), timeout_ms: 1000 }],
+            vec![HookSpec {
+                command: resolve("true"),
+                timeout_ms: 1000,
+            }],
         );
         let ex = test_executor(cfg, &["true"]);
-        let results = ex.trigger(LifecycleEvent::PostToolUse, None, None, None).await;
+        let results = ex
+            .trigger(LifecycleEvent::PostToolUse, None, None, None)
+            .await;
         assert_eq!(results.len(), 1);
         assert!(results[0].sandbox_denied, "Untrusted 必须 fail-closed 拒否");
         assert!(ex.audit().is_empty(), "拒否不审计（未执行）");
@@ -283,10 +327,20 @@ mod tests {
         let cmd = resolve("true");
         cfg.hooks.insert(
             LifecycleEvent::PostToolUse,
-            vec![HookSpec { command: cmd.clone(), timeout_ms: 2000 }],
+            vec![HookSpec {
+                command: cmd.clone(),
+                timeout_ms: 2000,
+            }],
         );
         let ex = test_executor(cfg, &["true"]);
-        let results = ex.trigger(LifecycleEvent::PostToolUse, Some("tool-x"), Some("s1"), Some("g1")).await;
+        let results = ex
+            .trigger(
+                LifecycleEvent::PostToolUse,
+                Some("tool-x"),
+                Some("s1"),
+                Some("g1"),
+            )
+            .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].exit_code, Some(0));
         assert!(!results[0].interrupted);
@@ -306,12 +360,20 @@ mod tests {
         cfg.trust = TrustLevel::Trusted;
         cfg.hooks.insert(
             LifecycleEvent::PreToolUse,
-            vec![HookSpec { command: resolve("false"), timeout_ms: 2000 }],
+            vec![HookSpec {
+                command: resolve("false"),
+                timeout_ms: 2000,
+            }],
         );
         let ex = test_executor(cfg, &["false"]);
-        let results = ex.trigger(LifecycleEvent::PreToolUse, Some("tool-x"), None, None).await;
+        let results = ex
+            .trigger(LifecycleEvent::PreToolUse, Some("tool-x"), None, None)
+            .await;
         assert_eq!(results.len(), 1);
-        assert!(results[0].interrupted, "PreToolUse 非零退出必须中断（拒否）");
+        assert!(
+            results[0].interrupted,
+            "PreToolUse 非零退出必须中断（拒否）"
+        );
         assert_eq!(ex.audit().interrupted_count(), 1);
     }
 
@@ -322,10 +384,15 @@ mod tests {
         cfg.trust = TrustLevel::Trusted;
         cfg.hooks.insert(
             LifecycleEvent::PostToolUse,
-            vec![HookSpec { command: resolve("false"), timeout_ms: 2000 }],
+            vec![HookSpec {
+                command: resolve("false"),
+                timeout_ms: 2000,
+            }],
         );
         let ex = test_executor(cfg, &["false"]);
-        let results = ex.trigger(LifecycleEvent::PostToolUse, None, None, None).await;
+        let results = ex
+            .trigger(LifecycleEvent::PostToolUse, None, None, None)
+            .await;
         assert!(!results[0].interrupted, "Post 类非零退出不中断");
     }
 
@@ -337,12 +404,20 @@ mod tests {
         // sleep 2s 但超时 100ms → 熔断
         cfg.hooks.insert(
             LifecycleEvent::PostToolUse,
-            vec![HookSpec { command: format!("{} 2", resolve("sleep")), timeout_ms: 100 }],
+            vec![HookSpec {
+                command: format!("{} 2", resolve("sleep")),
+                timeout_ms: 100,
+            }],
         );
         let ex = test_executor(cfg, &["sleep"]);
         let started = std::time::Instant::now();
-        let results = ex.trigger(LifecycleEvent::PostToolUse, None, None, None).await;
-        assert!(started.elapsed() < std::time::Duration::from_millis(1500), "必须快速返回");
+        let results = ex
+            .trigger(LifecycleEvent::PostToolUse, None, None, None)
+            .await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(1500),
+            "必须快速返回"
+        );
         assert_eq!(results[0].exit_code, None, "超时熔断 exit_code=None");
         assert_eq!(ex.audit().len(), 1);
     }
@@ -358,10 +433,15 @@ mod tests {
         let sh = resolve("sh");
         cfg.hooks.insert(
             LifecycleEvent::PostToolUse,
-            vec![HookSpec { command: format!("{sh} -c \"echo pwn > /etc/pwned\""), timeout_ms: 2000 }],
+            vec![HookSpec {
+                command: format!("{sh} -c \"echo pwn > /etc/pwned\""),
+                timeout_ms: 2000,
+            }],
         );
         let ex = test_executor(cfg, &["sh"]);
-        let results = ex.trigger(LifecycleEvent::PostToolUse, None, None, None).await;
+        let results = ex
+            .trigger(LifecycleEvent::PostToolUse, None, None, None)
+            .await;
         assert!(results[0].sandbox_denied, "写 /etc 逃逸必须被沙箱拒绝");
         assert_eq!(ex.audit().sandbox_denied_count(), 1);
     }
@@ -378,7 +458,10 @@ mod tests {
         }
         impl AuditSink for RecordingSink {
             fn push_audit(&self, entry: &crate::audit::HookAuditEntry) {
-                self.entries.lock().unwrap_or_else(|p| p.into_inner()).push(entry.clone());
+                self.entries
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(entry.clone());
             }
         }
         // 正常执行 + 沙箱拒绝两条路径
@@ -387,13 +470,22 @@ mod tests {
         let cmd = resolve("true");
         cfg.hooks.insert(
             LifecycleEvent::PostToolUse,
-            vec![HookSpec { command: cmd, timeout_ms: 2000 }],
+            vec![HookSpec {
+                command: cmd,
+                timeout_ms: 2000,
+            }],
         );
         let sink = std::sync::Arc::new(RecordingSink::default());
         let ex = test_executor(cfg, &["true"]).with_audit_sink(sink.clone());
-        let results = ex.trigger(LifecycleEvent::PostToolUse, None, None, None).await;
+        let results = ex
+            .trigger(LifecycleEvent::PostToolUse, None, None, None)
+            .await;
         assert_eq!(results[0].exit_code, Some(0));
-        assert_eq!(sink.entries.lock().unwrap().len(), 1, "正常执行必须汇出 1 条");
+        assert_eq!(
+            sink.entries.lock().unwrap().len(),
+            1,
+            "正常执行必须汇出 1 条"
+        );
         assert_eq!(ex.audit().len(), 1, "内存审计同步保留");
         // 逃逸拒绝路径也汇出
         let mut cfg2 = HookConfig::default();
@@ -401,14 +493,21 @@ mod tests {
         let sh = resolve("sh");
         cfg2.hooks.insert(
             LifecycleEvent::PreToolUse,
-            vec![HookSpec { command: format!("{sh} -c \"echo pwn > /etc/pwned\""), timeout_ms: 2000 }],
+            vec![HookSpec {
+                command: format!("{sh} -c \"echo pwn > /etc/pwned\""),
+                timeout_ms: 2000,
+            }],
         );
         let ex2 = test_executor(cfg2, &["sh"]).with_audit_sink(sink.clone());
-        let results2 = ex2.trigger(LifecycleEvent::PreToolUse, None, None, None).await;
+        let results2 = ex2
+            .trigger(LifecycleEvent::PreToolUse, None, None, None)
+            .await;
         assert!(results2[0].sandbox_denied);
         assert_eq!(sink.entries.lock().unwrap().len(), 2, "沙箱拒绝必须汇出");
         // 默认 Noop:构造不带 sink 不 panic（回退路径）
         let ex3 = test_executor(HookConfig::default(), &["true"]);
-        let _ = ex3.trigger(LifecycleEvent::PostToolUse, None, None, None).await;
+        let _ = ex3
+            .trigger(LifecycleEvent::PostToolUse, None, None, None)
+            .await;
     }
 }

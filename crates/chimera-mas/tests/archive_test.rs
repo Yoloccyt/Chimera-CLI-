@@ -405,7 +405,7 @@ fn archive_operation_fields_are_complete() {
 /// ArchiveCompressor HCW 摘要:输出 token 数 ≤ 500
 ///
 /// 复用 crate API 不匹配(hcw-window ContextCompressor 面向 ContextEntry 数组),
-/// 本地实现:按权重 0.4/0.3/0.3 切分内容,取前 max_tokens 字符作为摘要
+/// 本地实现:校验权重声明自洽后,取前 max_tokens 字符作为摘要
 #[test]
 fn compressor_hcw_summary_produces_within_token_limit() {
     let content = "这是一段需要被压缩的 Agent 记忆内容。".repeat(100);

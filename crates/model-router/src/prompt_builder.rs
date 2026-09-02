@@ -414,8 +414,13 @@ mod tests {
             "L3-SESSION-目标锚点与经验卡",
             "L4-DYNAMIC-cwd 与本轮输入",
         ];
-        let req =
-            AssembleReq::new(markers[0], markers[1], markers[2], markers[3], "session-order");
+        let req = AssembleReq::new(
+            markers[0],
+            markers[1],
+            markers[2],
+            markers[3],
+            "session-order",
+        );
         let result = assembler.assemble(&req);
         // 每层标记完整出现在 text 中, 且出现位置严格递增（注入顺序 = 层序）
         let mut prev_pos = 0usize;
@@ -424,7 +429,10 @@ mod tests {
                 .text
                 .find(m)
                 .unwrap_or_else(|| panic!("缺失层内容: {m}"));
-            assert!(pos >= prev_pos, "层内容顺序错乱: {m} 出现在 {pos}, 前一标记在 {prev_pos}");
+            assert!(
+                pos >= prev_pos,
+                "层内容顺序错乱: {m} 出现在 {pos}, 前一标记在 {prev_pos}"
+            );
             prev_pos = pos + m.len();
         }
         // 空层跳过: org/session 为空 → text 不含其标记, token 计数为 0
@@ -445,7 +453,10 @@ mod tests {
         let assembler = PromptAssemblerV1::new();
         let base = sample_req("");
         let first = assembler.assemble(&base);
-        assert_eq!(first.boundary.prefix_token_count, first.layer_tokens[0] + first.layer_tokens[1] + first.layer_tokens[2]);
+        assert_eq!(
+            first.boundary.prefix_token_count,
+            first.layer_tokens[0] + first.layer_tokens[1] + first.layer_tokens[2]
+        );
         // 动态层逐轮膨胀（真实长会话输入累积）→ 断点位置保持不变
         let mut dynamic = String::from("cwd: /repo\n");
         for i in 0..10 {
@@ -459,7 +470,8 @@ mod tests {
                 result.boundary.prefix_token_count, first.boundary.prefix_token_count,
                 "动态层变化不得导致断点漂移（第 {i} 轮）"
             );
-            let expect_boundary = result.layer_tokens[0] + result.layer_tokens[1] + result.layer_tokens[2];
+            let expect_boundary =
+                result.layer_tokens[0] + result.layer_tokens[1] + result.layer_tokens[2];
             assert_eq!(result.boundary.prefix_token_count, expect_boundary);
         }
     }
