@@ -292,7 +292,7 @@ jobs:
       - name: Formal verification gate (7 verifiers)
         env:
           CHIMERA_TEST_TIMEOUT_SCALE: '0.1'
-        run: cargo nextest run -p chimera-e2e-tests -E 'binary(formal_verifier)' --no-fail-fast
+        run: cargo nextest run -p chimera-e2e-tests -E 'binary(/formal_verifier/)' --no-fail-fast
 
   # ============================================================
   # MCA 双轨旁路 job(ADR-065 决策 6,PANTHEON 计划 M0 PR-4)

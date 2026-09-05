@@ -665,8 +665,10 @@ pub fn cosine_similarity_slices(a: &[f32], b: &[f32]) -> f32 {
     // 注意: a[..len] 取最小长度子切片,确保两切片等长
     let a_slice = &a[..len];
     let b_slice = &b[..len];
-    for (ca, cb) in a_slice.chunks_exact(4).zip(b_slice.chunks_exact(4)) {
-        // ca, cb: &[f32] 长度保证为 4,LLVM 可优化边界检查
+    for (ca, cb) in
+        a_slice.as_chunks::<4>().0.iter().zip(b_slice.as_chunks::<4>().0.iter())
+    {
+        // ca, cb: &[f32; 4]（长度编译期保证为 4）,LLVM 能优化边界检查
         dot0 += ca[0] * cb[0];
         dot1 += ca[1] * cb[1];
         dot2 += ca[2] * cb[2];
