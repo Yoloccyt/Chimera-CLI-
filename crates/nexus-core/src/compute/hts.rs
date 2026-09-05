@@ -1025,10 +1025,10 @@ mod tests {
         {
             // Linux 上:无 cgroup 限制或探测失败 → None;有限制 → 正数
             let v = crate::compute::hts::cgroup::effective_cores();
-            match v {
-                Some(n) => assert!(n > 0.0, "有效核数必须为正"),
-                None => {} // 未限制/无权限:无校正信息,合法
+            if let Some(n) = v {
+                assert!(n > 0.0, "有效核数必须为正");
             }
+            // None: 未限制/无权限 → 无校正信息,合法,不校验
         }
         #[cfg(not(target_os = "linux"))]
         {
