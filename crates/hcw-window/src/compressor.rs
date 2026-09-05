@@ -30,10 +30,10 @@
 
 use std::sync::Arc;
 
+use crate::types::{CompressionReport, ContextEntry, HcwConfig};
 use chrono::{DateTime, Utc};
 use nexus_contracts::SelectorWeights;
 use nexus_core::CLV;
-use crate::types::{CompressionReport, ContextEntry, HcwConfig};
 
 /// 上下文压缩器 — 基于重要性评分的 Top-N 保留
 ///
