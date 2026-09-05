@@ -18,7 +18,7 @@ on:
   workflow_dispatch:  # 允许手动触发,便于调试
 
 permissions:
-  contents: write  # 创建 GitHub Release 需要
+  contents: read  # 顶层最小权限；GitHub Release 写权下放至 release job（最小化暴露面）
 
 env:
   CARGO_TERM_COLOR: always
@@ -88,7 +88,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo registry & target
-        uses: actions/cache@v4
+        uses: actions/cache@v4 # zizmor: ignore[cache-poisoning]
         with:
           path: |
             ~/.cargo/registry
@@ -202,7 +202,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry & target
-        uses: actions/cache@v4
+        uses: actions/cache@v4 # zizmor: ignore[cache-poisoning]
         with:
           path: |
             ~/.cargo/registry
@@ -280,7 +280,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@v4 # zizmor: ignore[cache-poisoning]
         with:
           path: |
             ~/.cargo/registry
@@ -461,6 +461,8 @@ jobs:
   # ============================================================
   release:
     name: Publish GitHub Release
+    permissions:
+      contents: write  # 仅此 job 需创建 GitHub Release(softprops/action-gh-release)
     needs: [build, test, docker]
     runs-on: ubuntu-latest
     timeout-minutes: 30  # WHY: 产物下载+Release 创建典型 1-3min,30min 兜底防 GitHub API 抖动

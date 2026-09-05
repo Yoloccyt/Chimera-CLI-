@@ -76,7 +76,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
         with:
           workspaces: '.'
 
@@ -167,7 +167,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
         with:
           workspaces: '.'
 

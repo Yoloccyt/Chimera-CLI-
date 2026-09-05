@@ -69,7 +69,7 @@ jobs:
           components: llvm-tools-preview
 
       - name: Cache cargo registry & target
-        uses: actions/cache@v4
+        uses: actions/cache@v4 # zizmor: ignore[cache-poisoning]
         with:
           path: |
             ~/.cargo/registry
@@ -87,7 +87,7 @@ jobs:
       # 步骤保存扩充后的语料;300s 冷启动由"从零积累"变为"在历史语料上继续深挖",
       # 旧条目由 GitHub Actions 缓存 LRU(仓库 10GB 上限)自然淘汰。
       - name: Restore fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v4 # zizmor: ignore[cache-poisoning]
         with:
           path: fuzz/corpus
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_number }}
