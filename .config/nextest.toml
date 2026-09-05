@@ -115,4 +115,3 @@ fail-fast = false
 [profile.slo.slow-timeout]
 period = '120s'
 terminate-after = 3
-
