@@ -39,8 +39,6 @@
 #![warn(missing_docs, clippy::all)]
 
 // === 模块声明 ===
-/// P3-T13a: TIE-SWA 廉价索引两级评估（v4.0 WI-26:全量廉价打分 + 共享复用 + Shadow 预热）
-pub mod cheap_index;
 pub mod config;
 pub mod coordinator;
 pub mod error;
@@ -49,27 +47,15 @@ pub mod masks;
 pub mod parallel;
 /// Phase 6 §11.3(W2): 六维动态调整器（D1-D6 控制面纯规则反馈，ADR-084 决策 1）
 pub mod six_dimension;
-/// Phase 6 §11.1(W3): Skills 渐进加载 L6 编排（D2 契约驱动纯函数规划器，ADR-084 决策 5）
-pub mod skill_plan;
 /// Phase 6 §11.3: 工具 Schema 动态裁剪（Dressage 频率评分 + 红线 R8 Top-K，ADR-049 内嵌）
 pub mod tool_pruning;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use config::OsaConfig;
-// P3-T13a: TIE-SWA 公开 API（WI-26）
-pub use cheap_index::{
-    cosine_similarity, DeepResult, IndexEntry, ShadowWarmup, SharedResultCache, TieswaQuery,
-    TieswaSelector,
-};
 pub use coordinator::{compute_omni_mask_hash, OmniSparseCoordinator, OmniSparseMasks};
 pub use error::OsaError;
 pub use masks::SparseMask;
-// Phase 6 §11.1(W3): Skills 编排公开 API 重导出
-pub use skill_plan::{
-    plan_skill_load, progress_from_plan, SkillIndexEntry, SkillLoadPlan, SkillLoadProgress,
-    BOOST_WEIGHT, DEFAULT_PLAN_THRESHOLD, SIMILARITY_WEIGHT,
-};
 // Phase 6 §11.3(W2): 六维调整器公开 API 重导出
 pub use six_dimension::{AdjustmentLimits, AdjustmentRecord, SixDimensionAdjuster};
 // Phase 6 §11.3: 工具 Schema 裁剪公开 API 重导出（W1 闭环含白名单/铁律6/ledger 适配）

@@ -17,6 +17,7 @@ auto-dpo|judge_retry|dev-only|训练重试路径实验基准确认
 auto-dpo|rhi_channel_a_bench|dev-only|RHI Channel-A 复用探索通道实验
 chimera-cli|overwindow_bridge|dev-only|overwindow 桥接开发探针,无 SLO
 chimera-cli|quest_orchestrator_bench|dev-only|Quest 编排黑盒探索基准
+chimera-cli|composition_root_bench|dev-only|C12 组合根装配延迟基线(build/build_app_server),启动路径探针,不入四表阈值
 chimera-mas|pdca_bench|dev-only|PDCA 循环闭环实验基准
 chimera-tui|data_pipeline_bench|dev-only|数据管线开发基准,已由 writer/v3 覆盖主链
 chimera-tui|panels_scale_bench|dev-only|面板规模压力探索基准
@@ -41,14 +42,13 @@ faae-router|route|dev-only|路由热路径补充开发基准
 gsoe-evolution|channel_b_benchmark|dev-only|Channel-B 进化通道实验基准
 gsoe-evolution|evolution_benchmark|dev-only|进化引擎整体开发基准
 gsoe-evolution|formal_gate_eval|dev-only|形式化闸门评估开发基准
+gsoe-evolution|three_factor_selector_bench|dev-only|三因子父本选择(§10.2)基准,ADR-170 收录条款配套,2026-09-02 新增
 hcw-window|coarse_recall|dev-only|粗召回窗口开发基准(分类在 compress 之下)
-hcw-window|csc_bench|dev-only|CSC 压缩模式开发基准
 hcw-window|fine_recall|dev-only|细召回窗口开发基准
 hcw-window|parallel_compress|dev-only|并行压缩补充基准
 hcw-window|probe_select|dev-only|探针选择开发基准
 hcw-window|rerank_fill|dev-only|重排填充路径开发基准
 hcw-window|shadow_recall_1m|dev-only|1M 影子召回压力开发基准
-hcw-window|sparse_compare|dev-only|稀疏比较开发基准
 hcw-window|streaming_fill|dev-only|流式填充开发基准
 hcw-window|window_affinity|dev-only|窗口亲和度开发基准
 kvbsr-router|route|dev-only|KVBSR 路由补充开发基准

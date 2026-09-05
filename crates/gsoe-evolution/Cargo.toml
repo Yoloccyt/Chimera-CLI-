@@ -58,3 +58,8 @@ harness = false
 [[bench]]
 name = "channel_b_benchmark"
 harness = false
+
+# v3.4.0 §10.2: 三因子父本选择器基准(OpenMLE UCB+Softmax+冷却,2 项候选池)
+[[bench]]
+name = "three_factor_selector_bench"
+harness = false

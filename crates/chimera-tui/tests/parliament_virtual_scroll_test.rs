@@ -2,31 +2,17 @@
 //!
 //! 验证 Parliament 面板在 1000+ 条事件下的虚拟滚动行为
 
+use std::collections::VecDeque;
+
+mod common;
+use common::mock::MockDataSource;
+
 use chimera_tui::config::TuiConfig;
 use chimera_tui::data::DataSnapshot;
-use chimera_tui::data::DataSourceConfig;
-use chimera_tui::data::TuiDataSource;
-use chimera_tui::error::TuiError;
 use chimera_tui::types::PanelId;
 use chimera_tui::TuiApp;
 use event_bus::{EventMetadata, NexusEvent};
 use ratatui::Terminal;
-use std::collections::VecDeque;
-
-/// Mock 数据源
-struct MockDataSource {
-    snapshot: DataSnapshot,
-    config: DataSourceConfig,
-}
-
-impl TuiDataSource for MockDataSource {
-    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, TuiError> {
-        Ok(std::sync::Arc::new(self.snapshot.clone()))
-    }
-    fn config(&self) -> &DataSourceConfig {
-        &self.config
-    }
-}
 
 /// 构造含 1000 条 VoteCast 事件的快照
 fn snapshot_with_1000_votes() -> DataSnapshot {
@@ -63,10 +49,7 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
 /// 构造带 1000 事件的 app
 fn app_with_1000_votes() -> TuiApp {
     let snapshot = snapshot_with_1000_votes();
-    let ds = MockDataSource {
-        snapshot,
-        config: DataSourceConfig::default(),
-    };
+    let ds = MockDataSource::new(snapshot);
     let mut app = TuiApp::with_data_source(
         TuiConfig {
             default_view_mode: chimera_tui::ViewMode::Dashboard,

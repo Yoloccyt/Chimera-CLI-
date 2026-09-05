@@ -119,6 +119,7 @@ fn panels_and_actions_production_code_has_no_hardcoded_cjk() {
 
 #[test]
 fn ctrl_l_panel_copy_switches_language_en() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     // Ctrl+L 切换实证(方案 P6 承诺):En locale 下面板 shortcuts 文案为英文
     let _guard = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);

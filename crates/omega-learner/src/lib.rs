@@ -21,7 +21,7 @@
 //! | S5 | Parliament 激活 | parliament Fast Path | 跳过/精简/完整 | 推翻率 × 辩论成本 | ✅ P4-W14.3 |
 //! | S6 | 衰减参数 | decay-engine DecayProfile | profile 参数 | 误拦率 vs 漏拦率 | ✅ P4-W14.4 |
 //! | S7 | 召回配额（R1） | omega-learner r1_recall_quota | k∈{5,10,20,50,100} | 召回率 − 误杀 − 延迟 | ✅ P4-W16.2.2 |
-//! | S8 | Mem-π 记忆决策 | omega-learner s8_mem_pi | Generate/Retrieve/Abstain | 下游达成率 − 噪声惩罚 | ✅ closure-B6（影子期） |
+//! | S8 | Mem-π 记忆决策 | omega-learner s8_mem_pi | Generate/Retrieve/Abstain | 下游达成率 − 噪声惩罚 | ✅ closure-B6;abstain 护栏默认生效(硬编码常量),仅 S8 学习器处影子期(九层防御映射表 L2) |
 //!
 //! # 设计约束(ADR-031)
 //!

@@ -55,8 +55,6 @@ pub mod error;
 pub mod hils;
 /// P1-T14: 压缩评分 ComputeBridge 段间并行注入(env CHIMERA_NO_PARALLEL_HCW 回退)
 pub mod parallel;
-/// P2-T4: CSC 四级渐进压缩链 + from 模式保前缀 + 分组截断重试(ADR-119/v4.0 WI-12)
-pub mod pipeline;
 /// P2-T4: ThinkingPreserve 推理痕迹保留(T-02/Ω₉,压缩全程不触碰 thinking 块)
 pub mod preserve;
 /// PROBE P1.2: 查询探针打分（ProbeWeights / score_with_probe / mix_probe / probe_health）

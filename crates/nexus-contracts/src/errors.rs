@@ -247,4 +247,62 @@ mod tests {
         };
         assert!(format!("{err:?}").contains(code));
     }
+
+    /// Ch11.6 错误可恢复性总契约不变式:recovery_strategy() 覆盖全部变体且确定性
+    /// (一错一策:每个错误声明恢复策略,同错误多次声明恒同,可被 AERA 按 effort 可重放调度)
+    #[test]
+    fn recovery_strategy_total_and_deterministic() {
+        // 构造全部 10 个变体的代表值(总数随变体新增而同增 —— 穷尽覆盖)
+        let all: Vec<NexusError> = vec![
+            NexusError::SerializationError("s".into()),
+            NexusError::InvalidEventType("t".into()),
+            NexusError::ContextBudgetExceeded { current: 1, max: 2 },
+            NexusError::ToolTimeout {
+                tool_name: "bash".into(),
+                duration_ms: 1_000,
+            },
+            NexusError::SandboxViolation {
+                details: "d".into(),
+            },
+            NexusError::NestedSubAgentForbidden,
+            NexusError::McpDisconnected {
+                server_name: "github".into(),
+            },
+            NexusError::ApprovalDenied {
+                operation: "op".into(),
+            },
+            NexusError::ModelApiError {
+                status: 500,
+                message: "m".into(),
+            },
+            NexusError::EventQuotaExceeded {
+                namespace: "ns".into(),
+                current: 1,
+                max: 10,
+            },
+        ];
+        assert_eq!(
+            all.len(),
+            10,
+            "新增 NexusError 变体必须在此登记并声明恢复策略(穷尽覆盖顺势增长)"
+        );
+        for err in &all {
+            // 不变式 1:每个变体必须声明恢复策略(全函数,匹配无默认兜底漂移)
+            let s1 = err.recovery_strategy();
+            // 不变式 2:确定性 — 同一错误多次声明的策略恒定(可重放调度)
+            assert_eq!(
+                s1,
+                err.recovery_strategy(),
+                "{err:?} 的恢复策略必须确定性一致"
+            );
+            // 不变式 3:策略落在五档合法值域内
+            match s1 {
+                RecoveryStrategy::Retry { .. }
+                | RecoveryStrategy::RetryWithBackoff
+                | RecoveryStrategy::FallbackToBuiltin
+                | RecoveryStrategy::CompressAndRetry
+                | RecoveryStrategy::FailFast => {}
+            }
+        }
+    }
 }

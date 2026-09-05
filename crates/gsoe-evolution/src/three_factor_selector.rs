@@ -5,6 +5,16 @@
 //! 对应论文: 清华 OpenMLE（Quality + Progress + Novelty，UCB + Softmax + 冷却系数）
 //! 对应 ADR: ADR-049 决策 1（three-factor-selector 落点 gsoe-evolution，内嵌模块）
 //!
+//! # 与《统一架构设计》§10.2 对齐声明
+//!
+//! 本实现已**完整对齐**文档 §10.2 规格:字段集(exploration_weight / cooling_coefficient /
+//! visit_counts / total_visits / temperature)、`new` 温度钳制 `temperature.max(0.1)`、
+//! 三因子归一化(各维度最大值 + 防除零 `1e-8`)、utility = Q+P+N + `exploration_weight·UCB`
+//! − 冷却系数、`ucb_bonus` = 未访问 `f32::MAX`(已访问 `√(2·ln(N)/n)`)、`cooling_factor` =
+//! `cooling_coefficient·ln(N)`,`softmax_sample` 减最大值归一化 + NaN/非有限回退 argmax。
+//! 唯一差异为**增强而非缺失**:文档用 `sort_by` 把 MAX 前置,本实现改为 `select()`
+//! 内对 UCB MAX 节点显式早返回(数值等价且避免全量排序,红线 R8 `select_nth_unstable` 对齐)。
+//!
 //! # 核心职责
 //!
 //! 三因子父本选择：Quality + Progress + Novelty 归一化 + UCB 探索 bonus +
@@ -328,5 +338,48 @@ mod tests {
         let n1 = score.normalize(1.0, 1.0, 1.0);
         let n2 = score.normalize(1.0, 1.0, 1.0);
         assert_eq!(n1, n2);
+    }
+
+    #[test]
+    fn register_visit_external_sync_updates_counters() {
+        // §16.4 ParentSelected 消费接线:外部(如 L10 组合根)发布事件后
+        // 经事件订阅器调用 register_visit 与 select() 内部计数保持同源。
+        let mut selector = ThreeFactorSelector::new(1.0, 0.1, 1.0);
+        selector.register_visit("a");
+        selector.register_visit("b");
+        selector.register_visit("a");
+        assert_eq!(selector.total_visits(), 3);
+        assert_eq!(selector.visit_count("a"), 2);
+        assert_eq!(selector.visit_count("b"), 1);
+        // 紧接的 select() 应感知已累计的访问数(UCB/冷却基准随之演化)
+        let c = card("a", 0.9, 0.1, 0.5);
+        assert!(selector.select(std::slice::from_ref(&c)).is_some());
+        assert_eq!(selector.total_visits(), 4);
+    }
+
+    #[test]
+    fn exploration_weight_encourages_under_visited_node() {
+        // UCB 已访问节点回归 √(2·ln(N)/n):访问越少节点 bonus 越高,
+        // 高 exploration_weight(区别于冷却)可在利用之外维持探索。
+        // under(1 次访问)的 UCB = √(2·ln4/1)≈1.665×10=16.65 加成,
+        // over(3 次访问)的 UCB = √(2·ln4/3)≈0.961×10=9.61 加成,
+        // 即使 over 三因子归一化分数(3.0)远超 under(0.22),under 仍被选中。
+        let mut selector = ThreeFactorSelector::new(10.0, 0.0, 0.001);
+        let under = card("under", 0.1, 0.0, 0.1);
+        let over = card("over", 0.9, 0.5, 0.9);
+        // 先构造不对称访问分布:over 3 次、under 1 次
+        selector.register_visit("under");
+        selector.register_visit("over");
+        selector.register_visit("over");
+        selector.register_visit("over");
+        // 高温?不,低温:接近 argmax,叠加 UCB 后 under 应胜出
+        let selected = selector
+            .select(&[under.clone(), over.clone()])
+            .expect("选择成功");
+        assert_eq!(
+            selected.node_id.as_ref(),
+            "under",
+            "高 exploration_weight 应补偿低分但欠访问节点"
+        );
     }
 }

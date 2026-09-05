@@ -146,3 +146,56 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         }
     }
 }
+
+/// 测试专用共享工具 —— 供 serve.rs / acp.rs 的事件循环测试复用（杜绝重复 mock）。
+#[cfg(test)]
+pub(crate) mod testutil {
+    use async_trait::async_trait;
+    use nexus_app_server::{AppTransport, TransportError};
+    use nexus_contracts::app::{AppEvent, AppOp};
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    /// 脚本化传输 mock：`recv_op` 依次弹出预置 `AppOp`，队列空返回 `Eof`；
+    /// `send_event` 按事件 kind 记录标签供断言。无需真 stdio 即可驱动事件循环。
+    pub(crate) struct MockTransport {
+        pending: Mutex<VecDeque<AppOp>>,
+        sent_kinds: Mutex<Vec<String>>,
+    }
+
+    impl MockTransport {
+        pub(crate) fn new(ops: impl IntoIterator<Item = AppOp>) -> Self {
+            Self {
+                pending: Mutex::new(ops.into_iter().collect()),
+                sent_kinds: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// 已推送事件的 kind 标签序列（供断言帧序 / 是否正常处理）。
+        pub(crate) fn sent_kinds(&self) -> Vec<String> {
+            self.sent_kinds.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl AppTransport for MockTransport {
+        async fn recv_op(&self) -> Result<AppOp, TransportError> {
+            self.pending
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or(TransportError::Eof)
+        }
+
+        async fn send_event(&self, ev: &AppEvent) -> Result<(), TransportError> {
+            let tag = match ev {
+                AppEvent::ThreadStarted { .. } => "thread_started",
+                AppEvent::ItemChanged { .. } => "item_changed",
+                AppEvent::ApprovalRequested { .. } => "approval_requested",
+                _ => "other",
+            };
+            self.sent_kinds.lock().unwrap().push(tag.to_string());
+            Ok(())
+        }
+    }
+}

@@ -8,7 +8,12 @@
 //! 完整 OTel 标准（Span 导出 JSON/Protobuf → Jaeger/Zipkin/Prometheus）为
 //! 横切面增强；本模块落地**可移植子集**：每 Agent Turn 一 Span（start/end +
 //! 属性）+ 延迟直方图（AtomicU64 桶近似）——追踪开销 <5% CPU 门禁由
-//! 原子计数保证（无锁热路径）。标准导出器（OTLP）留 Phase 3 评估。
+//! 原子计数保证（无锁热路径）。
+//!
+//! # ADR-174 决策
+//! 维持可移植子集（不引入 OTLP/外部导出器依赖）；标准导出器评估结论=推迟
+//! （依赖面/开销 gate <5% CPU 现值不合算）；任何新增导出器须另立 ADR
+//! 并满足 <5% CPU 门禁。
 //!
 //! # 与 L9 efficiency-monitor 分工（WI-28 规格）
 //! 本模块 = 基础设施追踪（Span/延迟直方图）；efficiency-monitor = 业务效能

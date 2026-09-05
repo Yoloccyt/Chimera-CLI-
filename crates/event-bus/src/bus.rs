@@ -77,23 +77,25 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
 
 /// 判断事件是否走 mpsc 旁路通道(Critical 安全/治理告警事件)
 ///
-/// §6.2 红线要求:Critical 安全事件(SkepticVeto/RedTeamAudit/AsaIntervention/
-/// BudgetExceeded/AgentTaskFailed/FormalViolation 等 9 类)必须用 mpsc channel
+/// §6.2 红线要求:Critical 安全/治理告警事件必须用 mpsc channel
 /// 确保送达,避免 broadcast 在 Lagged 场景下丢失。这与 `NexusEvent::severity()`
 /// 部分重叠但语义不同:
-/// - `severity()` 是事件总线背压级别(同步函数,AsaIntervention 即使 Block 级
-///   也返回 Normal,因为不依赖运行时值)
-/// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,9 类安全/治理告警事件强制走 mpsc
+/// - `severity()` 是事件总线背压级别(同步函数,不依赖运行时值;
+///   AsaIntervention 自 P1-W2.1.4 起统一返回 Critical,见 types.rs L878-887)
+/// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,权威清单即下方 matches! 臂,
+///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 13)
 ///
-/// WHY 单独定义:AsaIntervention 的 severity() 返回 Normal,但 Block 级别在语义上
-/// 等价于 Critical(见 types.rs:807-810 注释),必须通过 mpsc 旁路确保投递。
+/// WHY 单独定义:AsaIntervention 的 severity() 曾返回 Normal(P1-W2.1.4 修复前),
+/// 旁路判定因此独立于 severity() 存在;修复后两清单语义已对齐,由 D-8/R7
+/// 互锁测试守护(13 ⊆ 17)。
 ///
 /// # 双清单同步红线(MCA M0 起显式声明)
 /// 本函数与 `NexusEvent::severity()` 是两张独立清单:新增 Critical 事件
 /// **必须同时修改两处**,只改 severity() 会导致"标 Critical 但 broadcast
-/// Lagged 时丢失"(旁路不生效)。同步性由**本文件 bus.rs 测试模块**
-/// `test_critical_severity_implies_mpsc_bypass`(L1207 起)守护:遍历
-/// `mpsc_required` 全量 9 个清单断言 `is_critical_mpsc_event` 必中。
+/// Lagged 时丢失"(旁路不生效)。同步性由**本文件测试模块**三层守护:
+/// `test_critical_severity_implies_mpsc_bypass`(13 项手抄清单)、
+/// `test_critical_double_list_d8_counts`(常量锚定 + LANE_FORBIDDEN_SHARD
+/// 双向一一对应)与 R7 互锁断言(清单项 severity() 反查)。
 fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
     matches!(
         event,
@@ -142,11 +144,12 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
 /// 记录订阅者连接/断开、事件发布/接收、错误码、重连尝试等关键信息。
 ///
 /// # Critical 事件双通道(§6.2 红线,2026-06-29)
-/// 4 类 Critical 安全告警事件(SkepticVeto/RedTeamAudit/AsaIntervention/
-/// BudgetExceeded)额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
-/// 仍能被订阅者接收。订阅者通过 [`subscribe_critical_events`](Self::subscribe_critical_events)
+/// Critical 安全/治理告警事件(权威清单 = [`is_critical_mpsc_event`],
+/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 13 类)额外走 mpsc 旁路通道,
+/// 确保在 broadcast Lagged 场景下仍能被订阅者接收。订阅者通过
+/// [`subscribe_critical_events`](Self::subscribe_critical_events)
 /// 获取 mpsc Receiver。旁路通道按需初始化(首次订阅时创建),无订阅者时
-/// `publish` 仅走 broadcast 不报错。
+/// `publish` 仅走 broadcast 并发出 warn 告警(C3,2026-09-04)。
 ///
 /// # P1-W2.1 有界化改造(D3 修复,2026-07-23)
 /// Critical 旁路通道从 `Vec<UnboundedSender>` 改为 `Vec<mpsc::Sender<4096>>`,
@@ -483,10 +486,10 @@ impl EventBus {
     /// Normal 级事件保持静默丢弃,避免日志噪声。
     ///
     /// # §6.2 红线双通道(2026-06-29)
-    /// 4 类 Critical 安全告警事件(SkepticVeto/RedTeamAudit/AsaIntervention/
-    /// BudgetExceeded)额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
+    /// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 13 类)
+    /// 额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
     /// 仍能被 `subscribe_critical_events` 订阅者接收。旁路通道未初始化时
-    /// (无 Critical 订阅者)仅走 broadcast,不报错。
+    /// (无 Critical 订阅者)仅走 broadcast,并发出 warn 告警(C3,2026-09-04)。
     ///
     /// # P1-T12 分片路由(灰度,默认关闭)
     /// 启用分片后,`Unordered` 车道事件入 64 片之一(worker 汇入既有 broadcast,
@@ -566,7 +569,7 @@ impl EventBus {
             );
         }
 
-        // §6.2 红线双通道:4 类 Critical 安全告警事件额外走 mpsc 旁路
+        // §6.2 红线双通道:Critical 安全/治理告警事件(is_critical_mpsc_event 清单)额外走 mpsc 旁路
         // WHY 先 mpsc 后 broadcast:mpsc UnboundedSender::send 不会阻塞,
         // 先投递 mpsc 确保 Critical 订阅者必收;broadcast 仍走以保证向后兼容
         if is_critical_mpsc_event(&event) {
@@ -618,7 +621,7 @@ impl EventBus {
     /// 与 `publish` 保持一致:无订阅者且 Critical 级时记录 `warn` 日志。
     ///
     /// # §6.2 红线双通道(2026-06-29)
-    /// 与 `publish` 一致:4 类 Critical 安全告警事件额外走 mpsc 旁路通道。
+    /// 与 `publish` 一致:Critical 安全/治理告警事件(is_critical_mpsc_event 清单)额外走 mpsc 旁路通道。
     pub fn publish_blocking(&self, event: NexusEvent) -> Result<(), EventBusError> {
         // 遮蔽为可变:与 publish 一致,分片回退分支需重新赋值事件所有权
         let mut event = event;
@@ -672,7 +675,7 @@ impl EventBus {
             );
         }
 
-        // §6.2 红线双通道:4 类 Critical 安全告警事件额外走 mpsc 旁路
+        // §6.2 红线双通道:Critical 安全/治理告警事件(is_critical_mpsc_event 清单)额外走 mpsc 旁路
         if is_critical_mpsc_event(&event) {
             self.send_critical_mpsc(&event);
         }
@@ -715,7 +718,7 @@ impl EventBus {
     /// `publish_batch` 将这些采样摊销为一次,减少 N-1 次重复固定开销。
     ///
     /// # 语义一致性(与 `publish` 完全对齐)
-    /// 逐条保留:Critical 无订阅者告警、4 类 Critical 安全事件 mpsc 旁路双通道、
+    /// 逐条保留:Critical 无订阅者告警、Critical 安全事件 mpsc 旁路双通道(is_critical_mpsc_event 清单)、
     /// broadcast lag 检测。仅 `receiver_count` 与背压采样摊销为一次。
     ///
     /// # 空 Vec 早退
@@ -808,7 +811,7 @@ impl EventBus {
                     "Critical 事件无订阅者,事件将被丢弃(批量发布)"
                 );
             }
-            // §6.2 红线双通道:4 类 Critical 安全事件额外走 mpsc 旁路(逐条判定,不破坏语义)
+            // §6.2 红线双通道:Critical 安全事件(is_critical_mpsc_event 清单)额外走 mpsc 旁路(逐条判定,不破坏语义)
             if is_critical_mpsc_event(&event) {
                 self.send_critical_mpsc(&event);
             }
@@ -830,7 +833,7 @@ impl EventBus {
     /// 显式发布 Critical 事件到双通道(broadcast + mpsc 旁路)
     ///
     /// 调用方明确知道事件为 Critical 时使用此方法,语义清晰。
-    /// 内部行为与 [`publish`](Self::publish) 对 4 类 Critical 事件的处理一致,
+    /// 内部行为与 [`publish`](Self::publish) 对 is_critical_mpsc_event 清单事件的处理一致,
     /// 但不依赖 `is_critical_mpsc_event` 判定,直接走 mpsc 旁路(适用于
     /// 调用方自定义的 Critical 事件,如未来扩展的 AsaIntervention Block 级)。
     ///
@@ -847,8 +850,8 @@ impl EventBus {
     /// 显式同步发布 Critical 事件到双通道(broadcast + mpsc 旁路)
     ///
     /// 同步版本,供不便 await 的场景使用(如 sync 方法内调用)。
-    /// 内部行为与 [`publish_blocking`](Self::publish_blocking) 对 4 类 Critical
-    /// 事件的处理一致,但不依赖 `is_critical_mpsc_event` 判定。
+    /// 内部行为与 [`publish_blocking`](Self::publish_blocking) 对 is_critical_mpsc_event
+    /// 清单事件的处理一致,但不依赖 `is_critical_mpsc_event` 判定。
     pub fn publish_critical_blocking(&self, event: NexusEvent) -> Result<(), EventBusError> {
         self.send_critical_mpsc(&event);
         let _ = self.sender.send(event);
@@ -1020,6 +1023,14 @@ impl EventBus {
         // WHY unwrap_or_else: 中毒锁降级访问而非 panic(见 subscribe_critical_events 注释)。
         let mut guard = self.critical_tx.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_empty() {
+            // C3(2026-09-04): 旁路无订阅者时不再静默(F-A5-6 风险点 2)——
+            // 此时 Critical 事件仅有 broadcast 单通道保障,订阅者一旦 Lagged
+            // 事件即永久丢失且无任何痕迹。Critical 事件低频,warn 噪声可控;
+            // span(instrument 宏)已携带 event_type/severity/event_id 供定位。
+            tracing::warn!(
+                critical_dropped_count = self.critical_dropped_count.load(Ordering::Relaxed),
+                "Critical mpsc 旁路无订阅者,旁路投递跳过(仅 broadcast 单通道)"
+            );
             return;
         }
         // P1-W4.1: 所有路径发出 debug 事件,确保 span 字段(event_type / severity / event_id)
@@ -1055,6 +1066,23 @@ impl EventBus {
         if dropped_count > 0 {
             tracing::warn!(dropped_count, "Critical 事件被丢弃(订阅者通道满)");
         }
+    }
+
+    /// 查询是否存在 Critical mpsc 旁路订阅者(C3 运维观测 API)
+    ///
+    /// WHY:发布时告警是事件驱动的事后观测(send_critical_mpsc 空订阅者分支),
+    /// 本 API 提供主动查询通道,供组合根启动自检/运维巡检使用。
+    ///
+    /// # 惰性清理说明
+    /// Receiver drop 后其 Sender 由下次 send_critical_mpsc 的 retain 移除,
+    /// 故本查询反映"已建立且尚未被清理"的订阅数,与活跃订阅可能存在短暂偏差;
+    /// 精确活性以订阅方自身存活状态为准。
+    pub fn has_critical_subscribers(&self) -> bool {
+        !self
+            .critical_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 
     /// 订阅事件流,返回新的接收者
@@ -1157,8 +1185,8 @@ impl EventBus {
     /// 创建 Critical 事件订阅构建器 — 强制 subscribe-then-spawn 顺序(P1-W4.2)
     ///
     /// 返回 [`CriticalSubscriberBuilder`](crate::subscriber::CriticalSubscriberBuilder)`<Unsubscribed>`,
-    /// 用于订阅 §6.2 红线定义的 4 类 Critical 安全告警事件(SkepticVeto/RedTeamAudit/
-    /// AsaIntervention/BudgetExceeded)的 mpsc 旁路通道。
+    /// 用于订阅 §6.2 红线定义的 Critical 安全/治理告警事件(is_critical_mpsc_event
+    /// 清单,当前 13 类)的 mpsc 旁路通道。
     ///
     /// 与 [`subscriber`](Self::subscriber) 区别:返回 `mpsc::Receiver` 而非 `EventReceiver`,
     /// 确保在 broadcast Lagged 场景下仍能收到 Critical 事件。
@@ -2040,6 +2068,134 @@ mod tests {
         }
     }
 
+    // ============================================================
+    // R7-Critical 清单反向断言(bus.rs:1580/1674 手抄清单零反向断言治理)
+    // ============================================================
+    // WHY 替代"枚举反射"方案:本 crate 至少在 R7 时点 NexusEvent 无 all()/ALL/
+    // iter() 全量遍历辅助,且 Rust 无反射,无法从 144 变体"枚举定义"可靠穷举
+    // severity()-Critical 全集。故采用**三清单互锁 + 双向 is_critical_mpsc_event
+    // 交叉断言**:把行为判定(severity() / is_critical_mpsc_event)与声明清单
+    // (tests_helpers 双清单 + 常量注释记载的历史广播级)绑成一张闭环网,任何一环
+    // 漂移都触发红灯。权威源:severity() 显式臂(classification.rs) + L44-49 注释
+    // 记载的 4 个历史广播级 Critical。
+
+    /// R7-正向反向断言:手抄双清单每一项必须与 severity() 权威判定一致,
+    /// 且规模锚定(d8 常量)不回退。防"清单声称为 Critical 但 classification.rs
+    /// 判为 Normal"(被通配 `_ => Normal` 吞掉的静默降级)。
+    #[test]
+    fn test_critical_lists_are_all_severity_critical() {
+        let mpsc_variants = tests_helpers::all_mpsc_critical_variants();
+        let severity_variants = tests_helpers::all_severity_critical_variants();
+
+        // 现实值核验:13(mpsc 旁路)/ 17(severity Critical,含 4 个历史广播级)。
+        // WHY 锚定常量而非硬编码 13/17:常量是 D-8 裁决的编译期锚点,清单规模
+        // 一旦回退(误删)此测试即红。
+        assert_eq!(
+            mpsc_variants.len(),
+            CRITICAL_MPSC_VARIANTS,
+            "mpsc 旁路清单规模异常"
+        );
+        assert_eq!(
+            severity_variants.len(),
+            CRITICAL_TOTAL,
+            "severity() Critical 清单规模异常"
+        );
+
+        // 正向反向:并集内每个声称为 Critical 的事件,severity() 必须真返回 Critical。
+        // 一旦 classification.rs severity() 加显式臂时漏在此清单登记,或清单登记了
+        // 某个实际被判 Normal 的事件,此断言红灯 —— 反向捕获两只清单漂移方向。
+        for event in mpsc_variants.iter().chain(severity_variants.iter()) {
+            assert_eq!(
+                event.severity(),
+                EventSeverity::Critical,
+                "{} 声明为 Critical(手抄清单)但 severity() 返回 {:?} → 与 classification.rs 权威判定漂移",
+                event.type_name(),
+                event.severity()
+            );
+        }
+    }
+
+    /// R7-核心反向断言:severity-Critical 全集(清单)与 mpsc 旁路判定反查互锁。
+    ///
+    /// 覆盖任务约定的互锁断言 (c)/(d)+反向交叉:
+    /// - (c) mpsc_set ⊆ severity_set:每个 mpsc 变体必须在 severity 清单中;
+    /// - (d) severity_set − mpsc_set 恰为 4 个历史广播级 Critical
+    ///   (CheckpointSaved/ConsensusReached/SlowConsumerDropped/OrphanCallDetected,
+    ///   唯一权威源 = bus.rs L44-49 常量注释)——语义:除既定历史广播级 4 项外,
+    ///   **任何 severity() Critical 变体都必须走 mpsc 旁路**。若未来新增 Critical
+    ///   只看 severity 清单、漏接 mpsc,差值集合会出现非历史项 → 红。
+    /// - 反向交叉 is_critical_mpsc_event:`mpsc 清单项必须判定 true`,历史广播级
+    ///   4 项必须判定 false,锁定清单与判定函数不漂移(含 4 项通道归属不被误回退)。
+    #[test]
+    fn test_critical_severity_census_matches_lists() {
+        use std::collections::{HashMap, HashSet};
+
+        // 历史广播级 Critical(不走 mpsc 旁路)的唯一权威来源:bus.rs L44-49 常量注释。
+        // 写死于此以独立于 tests_helpers,形成对"注释声明"的落点核对。
+        let historical_broadcast_critical: [&str; 4] = [
+            "CheckpointSaved",
+            "ConsensusReached",
+            "SlowConsumerDropped",
+            "OrphanCallDetected",
+        ];
+
+        let mpsc_variants = tests_helpers::all_mpsc_critical_variants();
+        let severity_variants = tests_helpers::all_severity_critical_variants();
+
+        let mpsc_names: HashSet<&str> = mpsc_variants.iter().map(|e| e.type_name()).collect();
+        let severity_by_name: HashMap<&str, &NexusEvent> = severity_variants
+            .iter()
+            .map(|e| (e.type_name(), e))
+            .collect();
+
+        // (c) mpsc_set ⊆ severity_set
+        for name in &mpsc_names {
+            assert!(
+                severity_by_name.contains_key(name),
+                "mpsc 变体 {name} 不在 severity() Critical 清单中(13 ⊆ 17 违反)"
+            );
+        }
+
+        // (d) severity_set − mpsc_set 恰为 4 个历史广播级 Critical
+        let broadcast_only: Vec<&str> = severity_by_name
+            .keys()
+            .copied()
+            .filter(|n| !mpsc_names.contains(n))
+            .collect();
+        assert_eq!(
+            broadcast_only.len(),
+            historical_broadcast_critical.len(),
+            "severity Critical − mpsc Critical 差值必须恰为 4 个历史广播级事件,实际 {}: {broadcast_only:?}",
+            broadcast_only.len()
+        );
+        for name in &broadcast_only {
+            assert!(
+                historical_broadcast_critical.contains(name),
+                "新增 Critical 变体 {name} 仅登记在 severity 清单(漏接 mpsc 旁路)或通道归属异常;历史广播级 4 项为 {historical_broadcast_critical:?}"
+            );
+        }
+
+        // 反向交叉 is_critical_mpsc_event:
+        // (i) mpsc 清单每一项判定必须 true(清单与判定函数漂移 → 红);
+        // (ii) 历史广播级 4 项判定必须 false(4 项通道归属不得被误回退 → 红)。
+        for event in &mpsc_variants {
+            assert!(
+                is_critical_mpsc_event(event),
+                "{} 在 mpsc 清单但 is_critical_mpsc_event 判定 false → 清单与判定函数漂移",
+                event.type_name()
+            );
+        }
+        for name in historical_broadcast_critical {
+            let event = severity_by_name
+                .get(name)
+                .expect("历史广播级 Critical 应存在于 severity() 清单");
+            assert!(
+                !is_critical_mpsc_event(event),
+                "{name} 为历史广播级 Critical(只走 broadcast)但 is_critical_mpsc_event 判定 true → 通道归属被误回退"
+            );
+        }
+    }
+
     #[test]
     fn test_msgpack_roundtrip() {
         let event = make_test_event();
@@ -2537,5 +2693,80 @@ mod tests {
             stats.merged_total, stats.sharded_total,
             "统计一致性:入片数 == 汇入数"
         );
+    }
+
+    // ============================================================
+    // T16 EventSink 契约不变式(手册 §11.2)+ T17 Critical-13 顺序红线
+    // ============================================================
+
+    /// T16 EventSink 契约不变式(§11.2):shed 事件总数 = credit_shed_total 指标 —
+    /// 交付面(EventBus.credit_stats)与观测面(shadow_stats.shed_total)必须同源一致,
+    /// 防「shed 无指标 / 双处计数漂移」。
+    #[test]
+    fn event_sink_invariant_shed_metric_consistent() {
+        // 基线:分片未启用 → 无 shed,两观测面一致为 0
+        let bus = EventBus::new();
+        assert_eq!(bus.credit_stats().shed_total, 0);
+        assert_eq!(bus.shadow_stats().shed_total, 0);
+        // 一致性不变量:任一时刻两观测面对 shed 计数的读取必然相等(同源 AtomicU64)
+        assert_eq!(
+            bus.credit_stats().shed_total,
+            bus.shadow_stats().shed_total,
+            "shed 计数两观测面必须同源一致(§11.2 EventSink 不变式)"
+        );
+    }
+
+    /// T17(a) 顺序红线守护:is_critical_mpsc_event() 必须**恰好命中 13 个** mpsc 旁路
+    /// 变体(AD-159 定稿口径,CRITICAL_MPSC_VARIANTS=13)。防「17 Critical 旧口径回潮」:
+    /// 4 个广播专属 Critical(CheckpointSaved/ConsensusReached/SlowConsumerDropped/
+    /// OrphanCallDetected)按既定设计只走 broadcast,误捕即回潮破裂。
+    #[test]
+    fn mpsc_bypass_exact_13_not_17() {
+        let mpsc = tests_helpers::all_mpsc_critical_variants();
+        assert_eq!(mpsc.len(), CRITICAL_MPSC_VARIANTS, "13 名单规模锁定");
+        for ev in &mpsc {
+            assert!(
+                is_critical_mpsc_event(ev),
+                "{} 必须在 mpsc 旁路清单中",
+                ev.type_name()
+            );
+        }
+
+        // 4 个广播专属 Critical 不得被 mpsc 旁路误捕(13 ⊆ 17,差集恒为 4)
+        let severity_critical = tests_helpers::all_severity_critical_variants();
+        let mpsc_names: std::collections::HashSet<&str> =
+            mpsc.iter().map(|e| e.type_name()).collect();
+        let mut broadcast_only = 0;
+        for ev in &severity_critical {
+            if mpsc_names.contains(ev.type_name()) {
+                continue;
+            }
+            assert!(
+                !is_critical_mpsc_event(ev),
+                "{} 属广播专属 Critical,不得被 mpsc 误捕(17 口径回潮)",
+                ev.type_name()
+            );
+            broadcast_only += 1;
+        }
+        assert_eq!(
+            broadcast_only,
+            CRITICAL_TOTAL - CRITICAL_MPSC_VARIANTS,
+            "差集 17-13 = {CRITICAL_TOTAL}-{CRITICAL_MPSC_VARIANTS} = 4 个广播专属 Critical"
+        );
+    }
+
+    /// T17(b) 分片红线:13 个 mpsc 旁路变体全部判定为 Critical 车道(永不进分片,
+    /// 单流旁路投递)—— 分片(shard)仅服务非 Critical,与 event_lane/§11.2 对齐。
+    #[test]
+    fn mpsc_critical_variants_are_single_stream_never_sharded() {
+        let mpsc = tests_helpers::all_mpsc_critical_variants();
+        for ev in &mpsc {
+            assert_eq!(
+                event_lane(ev),
+                Lane::Critical,
+                "{} 必须为 Critical 车道(单流旁路,分片仅服务非 Critical)",
+                ev.type_name()
+            );
+        }
     }
 }

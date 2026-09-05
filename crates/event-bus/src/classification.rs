@@ -137,7 +137,7 @@ impl NexusEvent {
             Self::VoteCast { .. } => "VoteCast",
             Self::CapabilityFrozen { .. } => "CapabilityFrozen",
             // L4 深度优化:影子模式熔断跳闸(severity 走通配符 Normal——
-            // 熔断是 fail-closed 状态变更,非 9 类 Critical mpsc 清单)
+            // 熔断是 fail-closed 状态变更,非 Critical mpsc 旁路清单成员)
             Self::ShadowBreakerTripped { .. } => "ShadowBreakerTripped",
             Self::BudgetExceeded { .. } => "BudgetExceeded",
             Self::SandboxViolation { .. } => "SandboxViolation",

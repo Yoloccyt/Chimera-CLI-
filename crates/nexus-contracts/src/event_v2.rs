@@ -1,5 +1,9 @@
 //! 事件双轨契约 — DynamicEvent 注册表与 EventMetadataV2（WI-21）
 //!
+//! §ADR-173:轨二（动态外源事件扩展）冻结未激活；NexusEvent 单表（types.rs）
+//! 为唯一权威演进位置；除已有 2 实现者外禁止新增 DynamicEvent 实现者，
+//! 除非通过 ADR 解冻。
+//!
 //! 对应架构层: **L0 Contracts**（nexus-contracts，纯类型 + 同步 trait）
 //! 对应工作项: **WI-21 事件双轨（NexusEventV2 批判性吸收）**（v4.0 统一执行总案 §6.5）
 //! 对应设计源: 外部修订版 NexusEventV2 trait 化提案（批判性吸收——拒绝全 trait 化，

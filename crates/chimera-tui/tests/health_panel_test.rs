@@ -196,6 +196,7 @@ fn test_health_panel_low_score_uses_red_color() {
 
 #[test]
 fn test_health_panel_shows_active_quests() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     // locale 为全局静态,串行化避免与其他 En 测试并行时被复位为 Zh
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 构造 3 个 Quest 的快照,验证 Health 面板渲染 "Active Quests: 3"
@@ -232,6 +233,7 @@ fn test_health_panel_shows_active_quests() {
 
 #[test]
 fn test_health_panel_shows_paused_quests() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     // locale 为全局静态,串行化避免与其他 En 测试并行时被复位为 Zh
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 构造 2 个 Quest 且 paused_quest_count = 1 的快照,

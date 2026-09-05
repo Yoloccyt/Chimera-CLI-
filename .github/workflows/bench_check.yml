@@ -67,8 +67,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: '.'
-          lookup-only: true
-        # WHY: 加速 benchmark 编译,典型缓存命中可省 60-120s
+        # WHY: 加速 benchmark 编译,典型缓存命中可省 60-120s。
+        # C5 修复(2026-09-04): 移除 lookup-only: true —— 该参数仅检查缓存存在性
+        # 而不下载恢复,使本步骤成为 no-op,bench job 每次 PR 都全量冷编译。
+        # 默认行为(restore + job 结束后 save)即符合本步骤意图。
 
       - name: Run benchmarks
         shell: bash
@@ -127,6 +129,12 @@ jobs:
           run_bench gather            cargo bench -p gqep-executor --bench gather
           run_bench produce_verify    cargo bench -p pvl-layer --bench produce_verify
           run_bench command_validator cargo bench -p seccore --bench command_validator_bench
+          # ===== C6(2026-09-04): KPI 首次入 CI 强制门 + L1 热路径基线 =====
+          # immune_probe=KPI-03(宣称 708ns,本地实测 907ns 同量级实证);
+          # rhi_judge=KPI-04(宣称 44µs,本地实测 7.5µs);bus_bench=publish fan-out。
+          run_bench immune_probe      cargo bench -p chimera-mas --bench immune_probe
+          run_bench rhi_judge         cargo bench -p auto-dpo --bench rhi_judge
+          run_bench bus_bench         cargo bench -p event-bus --bench bus_bench
 
       - name: Assert thresholds
         # WHY 用 Python 解析 criterion 的 estimates.json:
@@ -196,30 +204,40 @@ jobs:
               #  + 511 次重叠检测固有成本),按 ×2 抖动余量取 200µs;
               # 128 场景仍受 50µs 守护(22.8µs 实测,余量充足)
               "resolve_conflicts": 200_000,         # < 200µs(128 组仍 < 50µs)
-              # ===== WS-3 E1: 17 个补全 bench 阈值(来源注释)=====
-              # 现状:这些 bench 文件内均无既有目标常量/断言,spec.md KPI 亦无覆盖;
-              # 故统一取保守宽松 100ms 兜底,标注"待首跑校准"——CI 首跑后以实测收紧。
-              # (cross_layer/RL-07 跨膜已有 10ms 更严门;l2_recall/RL-02 单查 5ms 更严门)
-              "config_concurrency": 100_000_000,   # < 100ms 待首跑校准(CLI 配置并发;无既有目标常量)
-              "writer_ansi":        100_000_000,   # < 100ms 待首跑校准(ANSI 渲染;无既有目标)
-              "v3_pipeline":        100_000_000,   # < 100ms 待首跑校准(v3 链路输出;无既有目标)
-              "reduce_bench":       100_000_000,   # < 100ms 待首跑校准(向量化归约;确认 unroll/audit 开销)
-              "session_store":      100_000_000,   # < 100ms 待首跑校准(session 写/回放;新 crate 无 spec 依据)
-              "cross_layer":        100_000_000,   # < 100ms 待首跑校准(跨层 pipeline/fanout/旁路)
-              "hybrid_search":      100_000_000,   # < 100ms 待首跑校准(混合检索 fuse/dense/hybrid)
-              "debate":             100_000_000,   # < 100ms 待首跑校准(议会辩论;含 50 任务压力组取 max)
-              "l2_recall":          100_000_000,   # < 100ms 待首跑校准(L2 召回;RL-02 单查已有 5ms 更严门)
-              "compress":           100_000_000,   # < 100ms 待首跑校准(100k→32k 窗口压缩)
-              "compute_masks":      100_000_000,   # < 100ms 待首跑校准(全维稀疏掩码)
-              "delegation":         100_000_000,   # < 100ms 待首跑校准(委托扇出 fanout)
-              "cache_hit":          100_000_000,   # < 100ms 待首跑校准(语义缓存命中/未命中/插入)
-              "tiering":            100_000_000,   # < 100ms 待首跑校准(LSCT 分级 tick/应用决策)
-              "gather":             100_000_000,   # < 100ms 待首跑校准(GQEP 聚集/entangle)
-              "produce_verify":     100_000_000,   # < 100ms 待首跑校准(PVL 产出/验证)
-              "command_validator":  100_000_000,   # < 100ms 待首跑校准(命令校验直调/特性/动态)
+              # ===== C6 校准（2026-09-04）：18 键由 100ms 兜底收紧为实测值 =====
+              # 本地 Windows GNU 全量实测 median + 分级余量（ns 级约 x10、us 级约
+              # x3-8、ms 级约 x2-2.5，与 sigmoid 33ns→500ns 先例同原则）；数据与
+              # 推导见 docs/reports/c6-kpi-threshold-calibration-report-2026-09-04.md。
+              # 与 scripts/perf_thresholds.toml 的 [thresholds_ns] 逐键一致（I1）。
+              # gather 本地 median 305ms 为离群值（5 severe outliers；CI 侧 <100ms
+              # 通过）→ 数据不可信，保留 100ms 兜底，calibration_pending 唯一存活项。
+              "config_concurrency": 3_000_000,     # < 3ms（实测 1.21ms）
+              "writer_ansi":        200_000,       # < 200µs（实测 58.7µs）
+              "v3_pipeline":        5_000_000,     # < 5ms（实测 1.89ms）
+              "reduce_bench":       2_500_000,     # < 2.5ms（实测 858µs）
+              "session_store":      2_500_000,     # < 2.5ms（实测 1.02ms）
+              "cross_layer":        100_000,       # < 100µs（实测 26.3µs）
+              "hybrid_search":      20_000_000,    # < 20ms（实测 8.12ms）
+              "debate":             100_000,       # < 100µs（实测 29.5µs）
+              "l2_recall":          5_000_000,     # < 5ms（实测 1.86ms）
+              "compress":           50_000,        # < 50µs（实测 9.6µs）
+              "compute_masks":      1_500_000,     # < 1.5ms（实测 583µs）
+              "delegation":         40_000_000,    # < 40ms（实测 16.2ms）
+              "cache_hit":          10_000,        # < 10µs（实测 581ns，ns 级放大防 CI 抖动）
+              "tiering":            500_000,       # < 500µs（实测 250µs）
+              "gather":             100_000_000,   # < 100ms 保留兜底（本地离群不可信，待 CI 首跑收紧）
+              "produce_verify":     500_000,       # < 500µs（实测 216µs）
+              "command_validator":  50_000,        # < 50µs（实测 6.8µs）
               # 预留(并行 WS-2 将创建 nexus-contracts/benches/xts_top_k.rs):
               # 文件未落盘前无真实 estimates,只产生 no-estimates 告警(不失败);落地后自动守护。
-              "xts_top_k":          100_000_000,   # < 100ms 待首跑校准(WS-2 Top-K XTS 预留)
+              "xts_top_k":          500_000,       # < 500µs（实测 213µs；WS-2 已落盘，C6 完成校准）
+              # ===== C6 新增（KPI-03/04 首次入 CI 强制门 + L1 热路径基线）=====
+              # immune_probe 实测 907ns（宣称 708ns 同量级获实证）;ns 级阈值按
+              # sigmoid 先例放大防 CI 抖动; rhi_judge 实测 7.5µs（宣称 44µs 实测更快）;
+              # bus_bench 实测 55µs（publish fan-out/批量对比）。
+              "immune_probe":       10_000,        # < 10µs（KPI-03）
+              "rhi_judge":          50_000,        # < 50µs（KPI-04）
+              "bus_bench":          200_000,       # < 200µs（L1 热路径）
               # 第三轮冗余审计 批 B/C:L0 共享纯函数。阈值为本地静默态实跑中位数加余量
               # (2026-08-30,Windows GNU release;ns/µs 级门槛在共享 runner 上噪声敏感,
               #  故按实测放大数倍取保守值,首跑后再收紧):
@@ -305,6 +323,11 @@ jobs:
               "sigmoid_scalar":      ["sigmoid scalar"],
               "sigmoid_map":         ["sigmoid map"],
               "percentile_sorted":   ["percentile_sorted"],
+              # C6 新增（与 scripts/perf_thresholds.toml [path_keywords] 同步，
+              # 已交叉核验无子串冲突，满足 I2）
+              "immune_probe":        ["immune_probe"],
+              "rhi_judge":           ["rhi_judge"],
+              "bus_bench":           ["single_publish_latency", "concurrent_subscribe_throughput", "publish_batch_vs_serial"],
           }
 
           criterion_dir = Path("target/criterion")

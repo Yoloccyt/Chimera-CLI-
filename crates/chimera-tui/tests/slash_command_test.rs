@@ -258,6 +258,7 @@ fn unwired_command_gives_honest_todo() {
 
 #[test]
 fn agent_command_prefills_composer_template() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::Zh);
     let mut app = make_app();
@@ -313,6 +314,7 @@ fn up_down_moves_selection_within_candidates() {
 
 #[test]
 fn slash_overlay_renders_candidates_above_input_bar() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::Zh);
     let mut app = make_app();

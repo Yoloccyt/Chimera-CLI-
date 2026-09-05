@@ -17,22 +17,51 @@
 # Nothing in this file: legacy. Gate output must stay ASCII (Windows GBK consoles).
 
 # --- intentional reservation (Cargo.toml says "no consumer" + reservation ADR) ---
-mas-sched        # shadow-first, chimera-mas split to be taken over via L0 contract (root Cargo.toml:55-59)  ADR-145
-nexus-hook       # empty config = current behaviour, safe fallback path (root Cargo.toml:60-64)             ADR-146
+mas-sched        # shadow-first, chimera-mas split to be taken over via L0 contract (root Cargo.toml:55-59)  ADR-145  [T11-b1 WIP]  @see ADR-179 deferral (2026-09-03): event-plane dep not landed; unblock when chimera-mas split event contract exists
+nexus-hook       # empty config = current behaviour, safe fallback path (root Cargo.toml:60-64)             ADR-146  [T11-b1 WIP]  @see ADR-179 deferral (2026-09-03): registry path depends on frozen track-2 (DynamicEvent); unblock when ADR-173 freeze lifts
 
 # --- compiled only under a cargo feature, absent from the default binary ---
-mca-gateway      # built by root `mca` feature + ci.yml mca job only; NO consumer manifest declares it even optional, so ADR-065 decision 6 assembly-time injection never landed  ADR-065
+# mca-gateway Frozen entry REMOVED 2026-09-03 (T2): chimera-cli now declares it
+# `optional = true` under its `mca` feature (ADR-065 decision 6 M4 composition-root
+# wiring), so the ratchet reclassifies it as GATED (feature-gated) rather than island.
+# frozen shrink 15 -> 14 per ADR-160 shrink-only rule.
 
 # --- legacy islands (delivered in Week 6/7, never wired; unit + E2E tests green but no production consumer) ---
-model-router     # incoming edges: auto-dpo (itself an island) + quest-engine dev-dep only; the "CAF landed" claim in the rules docs does not hold on the production graph  ADR-160
-auto-dpo         # one of the three L5 evolution-loop crates, zero production incoming edges                 ADR-160
-scc-cache        # incoming edges: gea-activator / hcw-window dev-dep + mca-gateway (island)                 ADR-160
-csn-substitutor  # capability degradation chain, incoming edge: root E2E dev-dep only                        ADR-160
+model-router     # incoming edges: auto-dpo (itself an island) + quest-engine dev-dep only; the "CAF landed" claim in the rules docs does not hold on the production graph  ADR-160/172  [ADR-171 T9: accepted pseudo-reachable production edge auto-dpo->model-router (L5->L1, ModelRouterJudgeClient), edge kept, consumer side is island; ADR-172: retired routing-contract status, frozen not deleted, mca-gateway is the only live LLM channel]
+auto-dpo         # one of the three L5 evolution-loop crates, zero production incoming edges                 ADR-160  [ADR-171 T9: accepted pseudo-reachable production edge auto-dpo->model-router (L5->L1, ModelRouterJudgeClient), edge kept, consumer side is island]
+scc-cache        # incoming edges: gea-activator / hcw-window dev-dep + mca-gateway (island)                 ADR-160  [ADR-171 T9: accepted pseudo-reachable production edge mca-gateway->scc-cache (L10->L3, CacheAffinityIntegration), edge kept, consumer side is island]
+csn-substitutor  # capability degradation chain, incoming edge: root E2E dev-dep only                        ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
 gea-activator    # incoming edge: root E2E dev-dep only (layer corrected to L9 in Phase 6 W0)                ADR-160
 sesa-router      # incoming edge: root E2E dev-dep only                                                      ADR-160
 decb-governor    # incoming edge: parliament dev-dep only                                                    ADR-160
 acb-governor     # zero incoming edges (not even a dev-dep; declared only in root workspace.dependencies)    ADR-160
 chtc-bridge      # 5 IDE adapters, incoming edge: root E2E dev-dep only                                      ADR-160
 lsct-tiering     # incoming edge: root E2E dev-dep only                                                      ADR-160
-mtpe-executor    # incoming edge: gea-activator dev-dep only                                                 ADR-160
+mtpe-executor    # incoming edge: gea-activator dev-dep only                                                 ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
 ssra-fusion      # incoming edge: root E2E dev-dep only (layer corrected to L7 in Phase 6 W0)                ADR-160
+
+# --- T11 island-repayment batch 1 registration (ADR-171, 2026-09-02) ---
+# Repayment progress is REGISTERED here only; NO wiring is performed in this
+# batch (check_crate_reachability.sh must NOT get new alarms). Islands annotated
+# [T11-b1 WIP] below have an agreed repayment path; lines are kept until wiring
+# lands (then deleted per ADR-160 ratchet "only-shrinks" rule).
+#   batch-1 registered islands:
+#     mca-gateway    repayment = ADR-171 T8 assembly-posture registration (empty feature `mca=[]`,
+#                                 feature-gated island posture maintained; M4 wiring = planned independent PR)
+#     mas-sched      repayment = ADR-145 shadow-first reservation; awaiting composition-root wiring, no date
+#     nexus-hook     repayment = ADR-146 lifecycle-hook reservation;   awaiting composition-root wiring, no date
+#     mtpe-executor  repayment = waiting for composition-root wiring;  no scheduled date
+#     csn-substitutor repayment = waiting for composition-root wiring; no scheduled date
+# Reference ADR: ADR-171-governance-registration-mca-and-pseudo-reachable-edges.md (Accepted 2026-09-02).
+# b2 schedule (2026-09-03): next actions + responsible batch for the [T11-b1 WIP] rows are recorded in
+# ADR-175-dead-module-removal-and-island-schedule.md §2 (mas-sched / nexus-hook / mtpe-executor /
+# csn-substitutor -> batch D-2 evaluation; mca-gateway -> M4 independent PR per ADR-065 decision 6).
+# ADR-172 (model-router retirement declaration, zero-code) binds model-router; rows unchanged, ratchet keeps
+# shrink-only semantics.
+
+# --- module-level islands (ADR-160 blind spot; R3 F-R3-02) — ALL RETIRED 2026-09-03 ---
+# The 4 dead-module debts (osa-coordinator::cheap_index, hcw-window::CompressionPipeline,
+# hcw-window::compressor::trim_to_budget, osa-coordinator::skill_plan) were removed in the
+# arch-refactor-direction batch (spec .trae/specs/map-arch-refactor-directions). Producers and
+# their only consumers (dedicated tests/benches, `pub mod`/`pub use` declarations) were deleted;
+# ratchet entry removed per the shrink-only rule. Evidence: docs/reports/arch-direction-D-*.md

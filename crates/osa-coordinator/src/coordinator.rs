@@ -720,7 +720,7 @@ impl OmniSparseCoordinator {
     ///
     /// 与 `compute_budget_mask`（任务级稀疏）互补：
     /// - `compute_budget_mask`: 决定保留哪些任务（TaskId 维度）
-    /// - `compute_token_budget`: 决定上下文窗口可用 token 数（供 HCW trim_to_budget 消费）
+    /// - `compute_token_budget`: 决定上下文窗口可用 token 数（供 HCW 预算驱动裁剪消费）
     ///
     /// 复杂度越高，分配更多 token 预算（复杂任务需要更多上下文）。
     /// BudgetExceeded 事件触发时，调用方可降低 budget_ratio 实现紧急裁剪。

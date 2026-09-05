@@ -26,24 +26,37 @@ dedup = 120000000
 checkpoint = 15000000
 shadow_stats = 50000000
 resolve_conflicts = 200000
-config_concurrency = 100000000
-writer_ansi = 100000000
-v3_pipeline = 100000000
-reduce_bench = 100000000
-session_store = 100000000
-cross_layer = 100000000
-hybrid_search = 100000000
-debate = 100000000
-l2_recall = 100000000
-compress = 100000000
-compute_masks = 100000000
-delegation = 100000000
-cache_hit = 100000000
-tiering = 100000000
+# ===== C6 校准（2026-09-04）=====
+# 以下 18 键由本地 Windows GNU 全量实测收紧(median + 分级余量:ns 级约 x10、
+# us 级约 x3-8、ms 级约 x2-2.5,与 sigmoid 33ns→500ns 先例同原则);数据与
+# 推导见 docs/reports/c6-kpi-threshold-calibration-report-2026-09-04.md。
+# gather 本地 median 305ms 为离群值(5 severe outliers,CI 侧 <100ms 通过)
+# 数据不可信 → 保留 100ms 兜底,为 calibration_pending 唯一存活项,待 CI
+# 首跑实测收紧。
+config_concurrency = 3000000
+writer_ansi = 200000
+v3_pipeline = 5000000
+reduce_bench = 2500000
+session_store = 2500000
+cross_layer = 100000
+hybrid_search = 20000000
+debate = 100000
+l2_recall = 5000000
+compress = 50000
+compute_masks = 1500000
+delegation = 40000000
+cache_hit = 10000
+tiering = 500000
 gather = 100000000
-produce_verify = 100000000
-command_validator = 100000000
-xts_top_k = 100000000
+produce_verify = 500000
+command_validator = 50000
+xts_top_k = 500000
+# C6 新增注册（KPI-03/04 首次入 CI 强制门 + L1 热路径基线）:
+# immune_probe 实测 907ns（宣称 708ns 同量级获实证）; rhi_judge 实测 7.5us
+# （宣称 44us,实测更快）; bus_bench 实测 55us（publish fan-out）。
+immune_probe = 10000
+rhi_judge = 50000
+bus_bench = 200000
 sigmoid_scalar = 500
 sigmoid_map = 200000
 percentile_sorted = 1000
@@ -85,12 +98,18 @@ xts_top_k = ["xts_top_k"]
 sigmoid_scalar = ["sigmoid scalar"]
 sigmoid_map = ["sigmoid map"]
 percentile_sorted = ["percentile_sorted"]
+# C6 新增（关键词与既有 36 键交叉核验无子串冲突，满足 I2）
+immune_probe = ["immune_probe"]
+rhi_judge = ["rhi_judge"]
+bus_bench = ["single_publish_latency", "concurrent_subscribe_throughput", "publish_batch_vs_serial"]
 
 # calibration_pending：当前值取保守 100ms 兜底、待 CI 首跑实测收紧的键。
 # 项目约束（ADR-159 决策 3）：此列表只减不增；wal_recovery 的 100ms 是真实规格，列在列表外。
+# C6（2026-09-04）：17 项已完成校准收紧仅余 gather（本地离群不可信，见上注）；
+# 棘轮 cap 同步 18 → 1。
 [ratchet]
-calibration_pending = ["cache_hit", "command_validator", "compress", "compute_masks", "config_concurrency", "cross_layer", "debate", "delegation", "gather", "hybrid_search", "l2_recall", "produce_verify", "reduce_bench", "session_store", "tiering", "v3_pipeline", "writer_ansi", "xts_top_k"]
-max_calibration_pending = 18
+calibration_pending = ["gather"]
+max_calibration_pending = 1
 # max_keyword_overlaps：关键词集互为子串的重叠键对数上限（迁移日实测冻结）。
 # WHY 不为 0：diff_engine_bench 的 diff_incremental_5pct 包着 writer_ansi 的
 # incremental_5pct（实测唯一重叠对，见 closure 报告）；收紧它是独立动作，
@@ -253,4 +272,20 @@ bench = "produce_verify"
 alias = "command_validator"
 crate = "seccore"
 bench = "command_validator_bench"
+
+# ===== C6（2026-09-04）新增：KPI-03/04 首次入 CI 强制门 + L1 热路径基线 =====
+[[run_bench]]
+alias = "immune_probe"
+crate = "chimera-mas"
+bench = "immune_probe"
+
+[[run_bench]]
+alias = "rhi_judge"
+crate = "auto-dpo"
+bench = "rhi_judge"
+
+[[run_bench]]
+alias = "bus_bench"
+crate = "event-bus"
+bench = "bus_bench"
 

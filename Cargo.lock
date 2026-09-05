@@ -583,6 +583,7 @@ name = "chimera-cli"
 version = "2.28.0-omega"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chimera-mas",
  "chimera-tui",
  "chrono",
@@ -601,6 +602,7 @@ dependencies = [
  "indicatif",
  "insta",
  "kvbsr-router",
+ "mca-gateway",
  "mcp-mesh",
  "mlc-engine",
  "nexus-app-server",

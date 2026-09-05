@@ -97,7 +97,9 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
-          lookup-only: true
+        # C5 修复(2026-09-04): 移除 lookup-only: true —— actions/cache 的该参数仅
+        # 检查缓存存在性而不下载恢复,使本步骤成为 no-op,5 平台 matrix 每次发版
+        # 都全量冷编译(实测每 job 多 5-15min)。默认行为(restore + post save)即符合意图。
 
       - name: Install MinGW (Windows GNU target only)
         if: runner.os == 'Windows'
@@ -208,7 +210,6 @@ jobs:
             target
           key: dual-build-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: dual-build-cargo-
-          lookup-only: true
 
       # ---- 构建 A:x86-64-v3 ----
       - name: Build binary (x86-64-v3)
@@ -287,7 +288,6 @@ jobs:
             target
           key: linux-test-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: linux-test-cargo-
-          lookup-only: true
       - name: Setup sccache
         uses: mozilla/sccache-action@v0.0.11
       # WHY: 保持全量验证语义 —— 含 doc-tests 与 backpressure 60s spec 验收

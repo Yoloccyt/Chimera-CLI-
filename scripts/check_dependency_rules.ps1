@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # check_dependency_rules.ps1 - Architecture dependency-iron-law audit (P9-T10)
 # =============================================================================
 # Purpose: enforce the three dependency iron laws of the NEXUS-OMEGA 10-layer
@@ -8,8 +8,7 @@
 #   A. Inner-ring boundary   - the 9 inner-ring crates (memory + reasoning +
 #                              evolution ring) may only depend on the L0/L1 base
 #                              {nexus-contracts, nexus-core, event-bus,
-#                              model-router, mcp-mesh} plus the inner-ring
-#                              whitelist itself.
+#                              model-router} plus the inner-ring whitelist itself.
 #   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
 #                              crate ($expectedCrates); the 2-item ADR exception
 #                              table is exempted
@@ -28,6 +27,10 @@
 #   this file is NOT a fix. When adding a crate, edit BOTH in the same commit.
 #   Prefer adding a new check here and mirroring it in the .sh right away; the
 #   .sh had no Check D at all until the 2026-08-29 audit.
+#   C10 (2026-09-04): drift is now MECHANICALLY blocked -- ci.yml check job runs
+#   scripts/check_layer_map_parity.py which cross-checks the .sh case dict +
+#   layered_crates list, this file's $layerMap, and Cargo.toml workspace.members
+#   (four-way lock; any single-sided drift fails the gate at PR time).
 # Author:  staff-engineer-mode (architecture governance specialist)
 # Refs:    ADR-054 decision 5 / ADR-048, .trae/rules/nuxus-rules.md section 2.2,
 #          docs/architecture/CODE_WIKI.md section 2
@@ -59,7 +62,7 @@ $layerMap = @{
     # L0 Contracts (ADR-033): zero-logic contract layer
     'nexus-contracts' = 0
     # L1 Core
-    'nexus-core' = 1; 'event-bus' = 1; 'model-router' = 1; 'mcp-mesh' = 1
+    'nexus-core' = 1; 'event-bus' = 1; 'model-router' = 1
     # L2 Memory
     'nmc-encoder' = 2; 'hcw-window' = 2; 'mlc-engine' = 2
     # L3 Storage
@@ -90,9 +93,9 @@ $layerMap = @{
     'mas-sched' = 9
     # P3-T3 (2026-08-27): nexus-hook lifecycle hook system (L9, 42nd crate)
     'nexus-hook' = 9
-    # L10 Interface
+    # L10 Interface (mcp-mesh 2026-09-02 T10: 对齐文档 L10 归属; 原脚本误置 L1)
     'chimera-cli' = 10; 'chimera-tui' = 10; 'chtc-bridge' = 10
-    'mca-gateway' = 10
+    'mca-gateway' = 10; 'mcp-mesh' = 10
     # WI-01 (2026-08-22): nexus-app-server host facade (L10, 39th crate)
     'nexus-app-server' = 10
 }
@@ -112,11 +115,18 @@ $innerRing = @{
 # L0/L1 base deps that any inner-ring crate may use. L0/L1 is the Core
 # infrastructure layer: ADR-054 decision 2 spirit allows the inner ring to
 # depend on ALL L0/L1 crates (only the L2+ business outer ring is forbidden).
-# auto-dpo (L5, inner) -> model-router (L1) is a legal L5->L1 downward edge
-# (RHI-CG judge routes via model-router); mcp-mesh (L1) likewise allowed.
+# auto-dpo (L5, inner) -> model-router (L1): legal L5->L1 downward edge AND an
+# ADR-171 T9 accepted pseudo-reachable production edge (ModelRouterJudgeClient).
+# ADR-172 (Accepted 2026-09-03) retired model-router's "cross-model routing
+# contract" status -- mca-gateway is the ONLY live LLM channel. The edge is KEPT
+# (ADR-160 visible-debt posture: crate frozen, not deleted); model-router stays
+# in this whitelist ONLY so the frozen edge stays green, NOT as a live-channel
+# grant -- new LLM consumers MUST anchor on mca-gateway (ADR-172 decision 2).
+# mcp-mesh is L10 (T10 realignment), so it is no longer an L0/L1 base dep.
+# KEEP IN SYNC with check_dependency_rules.sh is_inner_base (DRIFT WARNING above).
 $innerBase = @{
     'nexus-contracts' = $true; 'nexus-core' = $true; 'event-bus' = $true
-    'model-router' = $true; 'mcp-mesh' = $true
+    'model-router' = $true
 }
 
 # ADR exception table: "from,to" -> reference. Exempted from check B.

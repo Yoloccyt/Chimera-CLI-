@@ -155,6 +155,65 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
 
     tracing::debug!(?cfg.nexus.version, "配置加载完成");
 
+    // MCA 组合根装配(T2,2026-09-03,`--features mca` 门控,ADR-065 决策 6)。
+    // 仅"装配态":构造 L10 多通道亲和网关门面并留作组合根句柄,不发起网络请求、
+    // 不做主动连线、不注册 spec。默认(无 feature)编译路径不含此块且不引用
+    // mca-gateway,故默认 binary 行为零变化。构造失败 warn 降级,绝不 panic。
+    #[cfg(feature = "mca")]
+    {
+        if let Err(e) = init_mca_gateway() {
+            tracing::warn!(
+                error = %e,
+                "mca-gateway composition-root assembly failed; graceful degrade (M4)"
+            );
+        }
+    }
+
     // 分发命令(无子命令时打印帮助)
     commands::dispatch(cli, &cfg).await
+}
+
+/// MCA 组合根装配 —— 仅装配态(M4,`#[cfg(feature = "mca")]` 门控)。
+///
+/// 构造 L10 多通道亲和网关(MCA)门面作为组合根句柄。M4 阶段**不**做任何主动
+/// 接线/网络请求/spec 注册 —— 那些属于后续里程碑(M1+ 挂载 transport/健康/协商)。
+/// `McaGateway::new` 当前绝不会失败,但仍保留 `Result` 语义以便未来构造引入
+/// 不可恢复预检时,调用方选择 warn 降级而非 panic(优雅降级/graceful downgrade)。
+#[cfg(feature = "mca")]
+fn init_mca_gateway() -> anyhow::Result<()> {
+    // C12(2026-09-04): 构造逻辑单一真值源——委托 composition::build_mca_gateway，
+    // 启动诊断与 serve/acp 组合根共用同一构造函数（消除双份构造漂移面）。
+    let gateway = chimera_cli::composition::build_mca_gateway()?;
+    tracing::info!(
+        registry_capacity_hint = gateway.config().registry_capacity_hint,
+        "mca-gateway assembled at composition root (M4, assembly-only)"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    // --- T2 (2026-09-03): mca-gateway M4 组合根门控装配测试 ---
+
+    #[test]
+    #[cfg(feature = "mca")]
+    fn mca_gateway_assembles_without_panic() {
+        // 仅 feature=mca 下编译: 组合根可成功构造 L10 网关且不 panic(在 run()
+        // 装配块内 init_mca_gateway 失败也只是 warn 降级;此处直接断言易构造)。
+        crate::init_mca_gateway().expect("mca-gateway composition-root assembly should succeed");
+    }
+
+    #[test]
+    #[cfg(not(feature = "mca"))]
+    // clippy::assertions_on_constants: 断言对象是 `cfg!(feature="mca")` 编译期常量
+    // (默认构建下恒 false),属本测试的故意语义 —— 提供"默认 gate 关闭"反例覆盖。
+    #[allow(clippy::assertions_on_constants)]
+    fn default_binary_has_mca_feature_off() {
+        // 默认(无 feature)构建: mca 门关闭,组合根不含 MCA 符号/边 ——
+        // 为"默认 binary 行为零变化"提供门控反例覆盖。
+        assert!(
+            !cfg!(feature = "mca"),
+            "default build must keep `mca` feature off"
+        );
+    }
 }

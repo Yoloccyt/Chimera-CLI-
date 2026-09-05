@@ -192,15 +192,19 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool, protocol: bool
     // WHY 失败不阻断启动:闭环装配是增强链路,降级后 TUI 核心交互仍可用;
     // 失败经 warn 日志可观测(与 TuiBible 回退同款错误处理准则)。
     // WHY 下划线前缀持有:绑定存活至函数结束,保持后台任务与 Arc 句柄生命周期。
-    let _experience_loop =
-        match crate::experience_loop::spawn_experience_loop(bus.clone(), Arc::clone(&engine)).await
-        {
-            Ok(handles) => Some(handles),
-            Err(e) => {
-                tracing::warn!(error = %e, "经验卡片闭环装配失败,降级运行(闭环不可用)");
-                None
-            }
-        };
+    let _experience_loop = match crate::experience_loop::spawn_experience_loop(
+        bus.clone(),
+        Arc::clone(&engine),
+        _config.enable_strategy_cap,
+    )
+    .await
+    {
+        Ok(handles) => Some(handles),
+        Err(e) => {
+            tracing::warn!(error = %e, "经验卡片闭环装配失败,降级运行(闭环不可用)");
+            None
+        }
+    };
 
     // §16.1 L9 组件装配(Phase 10 审计修复 Wave 2):
     // 1. Ambient Mode 后台常驻订阅器(资源看门狗/记忆整理/检查点调度,

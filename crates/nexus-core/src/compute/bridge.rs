@@ -611,4 +611,48 @@ mod tests {
             );
         }
     }
+
+    // ============================================================
+    // T16 Compute 契约不变式(手册 §11.1)
+    // ============================================================
+
+    /// 契约不变式(§11.1):route 是纯函数 — 同一 (kind,n_items) 多次调用结果
+    /// 确定性一致(无随机/时间/副作用依赖),纳秒级查表三态不抖动。
+    #[test]
+    fn compute_invariant_route_deterministic_pure() {
+        let b = bridge();
+        // 全任务类型 + 边界规模:同一输入重复调用必须返回同一 DispatchPlan
+        for kind in TaskKind::ALL {
+            for n in [0usize, 1, 999, 10_000, usize::MAX] {
+                let a = b.route(kind, n);
+                assert_eq!(
+                    b.route(kind, n),
+                    a,
+                    "route({kind:?},{n}) 必须确定性一致(纯查表,pure)"
+                );
+            }
+        }
+        // 阈值边缘稳定:Inline 判定不因合并/并发读而抖到 Rayon
+        assert_eq!(b.route(TaskKind::Generic, 0), DispatchPlan::Inline);
+    }
+
+    /// 契约不变式(§11.1):reduce(Deterministic) 同一构建内多次调用逐位一致
+    /// (跨构建容差 ≤ 1e-6 的编译内锚点 —— 确定性归约不可累积或乱序)。
+    #[test]
+    fn compute_invariant_reduce_deterministic_bitwise() {
+        let vals = [1.0, -2.0, 0.5, 1e-3, -7.0e-9, 1e8, 1.337, 0.0];
+        for mode in [
+            super::super::reduce::ReduceMode::Deterministic,
+            super::super::reduce::ReduceMode::Audit,
+        ] {
+            let first = bridge().reduce(&vals, mode).to_bits();
+            for _ in 0..16 {
+                assert_eq!(
+                    bridge().reduce(&vals, mode).to_bits(),
+                    first,
+                    "reduce({mode:?}) 必须逐位确定(不变式:同输入同模式同输出)"
+                );
+            }
+        }
+    }
 }

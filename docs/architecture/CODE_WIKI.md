@@ -2,11 +2,11 @@
 
 > **版本**: v2.28.0-omega (Code Wiki · v2.28.0-omega 基线同步,2026-08-28)
 > **基线代码版本**: v2.28.0-omega 在途(迭代链 v2.0.0-omega `chimera-mas` 多 Agent 协同子系统 → v2.4.0-omega P5 进化闭环 37 crate → v2.14.0~~v2.19.0 P2 Sprint 14 项任务全量交付 → v2.20.0-omega PROBE HCW-Sparse 深度优化完整闭环 P-1~~P3 38 crate(PROBE 阶段基线起点) → v2.21.0-omega CLI LLM 统一入口 → v2.22.0-omega MCA token 效率深度优化 38 个 crate 第 38 个 `mca-gateway` 落地 → v2.24.0-omega Phase 9 三环循环元架构重组收尾 P9-T12 + RUSTSEC-2026-0217/0222/0223 修复 → v2.25.0-omega Milestone B 全部交付 B-1~~B-6(Milestone B 终态) → v2.26.0-omega Concord TUI 重构 W0~~W11 全部收尾(SlashCommandRegistry 53 命令注册 + `/` 一级整合 + Chat/Quest 双轨会话模式 + ApprovalMode 动态 Shift+Tab + i18n 中英门户 + 10 份 ADR-074~~083 落档) →~~ **~~v2.27.0-omega Phase 10 §16 跨层协同闭环审计修复正式发布~~**~~(W1-W7 全波次闭环:经验卡片闭环组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口) →~~ **~~v2.27.1-omega GPG 签名补发 + MCA E2E 超时加固~~**~~(无功能性变更) →~~ **~~v2.28.0-omega(在途,未打 tag)Phase 1-5 Ch12 W1-W26 收尾~~**~~(ComputeBridge/ShardedBus/CBMR/CausalGraph + 5 新 crate 至 43 + ADR-095~~160 + ADR-160 可达性棘轮/event\_types 镜像退役);types.rs 单表(metadata() 分类)**144 NexusEvent 变体**)
-> **最后更新**: 2026-08-30(v2.28.0-omega 在途基线收编:43 crates · 28 生产可达/15 ADR-160 冻结孤岛 · 11522 tests · 144 NexusEvent · ADR-001\~160;工作区分支 `feat/phase1-w1-w8`,最新已发 tag 为 v2.27.1-omega,v2.28 尚未打 tag)
+> **最后更新**: 2026-08-30(v2.28.0-omega 在途基线收编:43 crates · 28 生产可达/15 ADR-160 冻结孤岛 · 11564 tests · 144 NexusEvent · ADR-001\~160;工作区分支 `feat/phase1-w1-w8`,最新已发 tag 为 v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag),v2.28 尚未打 tag)
 > **权威源**: 本文件是架构决策、模块职责、核心类型的唯一权威参考
 > **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 43/43 crate 全绿)
 > **专家签名**: E01 首席架构师 · E02 安全架构师 · E03 记忆系统专家 · E04 路由算法专家 · E05 生产系统专家 · E06 认知科学专家 · E07 任务调度专家 · E08 前端交互专家
-> **三方一致性** (2026-08-30 复核): `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,43 members) ⇔ `CHANGELOG.md` 最新条目 = `[2.28.1-omega] 2026-08-28 在途补丁登记(未升 version)` ⇔ 本文档 = **43 crates(28 生产可达 + 15 ADR-160 冻结孤岛)· 144 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)· 测试规模 11522 passed / 0 failed**(2026-08-29 批 A-C,485 test target;静态 `#[test]` 计数 11433,差值为 doctest 43 + 宏展开;演进链 v2.20.0 8455 → v2.22.0 9255 → v2.24.0 9590 → v2.25.0 9669 → C 9699 → D 9744 → v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522)
+> **三方一致性** (2026-08-30 复核): `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,43 members) ⇔ `CHANGELOG.md` 最新条目 = `[2.28.1-omega] 2026-08-28 在途补丁登记(未升 version)` ⇔ 本文档 = **43 crates(28 生产可达 + 15 ADR-160 冻结孤岛)· 144 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)· 测试规模 11564 passed / 0 failed**(2026-08-31 当前工作树全量重测,485 test target;静态 `#[test]` 计数 11433,差值为 doctest 43 + 宏展开;演进链 v2.20.0 8455 → v2.22.0 9255 → v2.24.0 9590 → v2.25.0 9669 → C 9699 → D 9744 → v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11564)
 > **基线变更触发**: 任何 workspace.member / NexusEvent 变体 / `#[test]` 函数增删必须同步更新本文档的"§1.1 身份标识"与"§3 Crate 索引",并触发 `scripts/check_doc_consistency.ps1` 巡检
 
 ***
@@ -40,8 +40,8 @@
 | 技术栈      | Rust 2021 edition · Tokio async · Workspace × **43 crates** (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`)                                                                                                                                                                                                                                                                 |
 | 核心哲学     | OMEGA 十一定律: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize                                                                                                                                                                                                                                                                                                                         |
 | 设计来源     | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **当前版本** | `v2.28.0-omega` (**在途开发,工作区** **`feat/phase1-w1-w8`** **分支,尚未打 tag**;最新已发 tag = v2.27.1-omega;Phase 1-5 Ch12 波次 W1-W26 全部收尾 + 5 新 crate 落地 + ADR-095~160 治理 + 三轮冗余收敛;迭代链 v2.8.0 polish-v2.7 → v2.9.0~v2.13.0 L8/L10/MCA → v2.14.0\~v2.19.0 P3 Sprint → v2.20.0 PROBE → v2.21.0 CLI LLM → v2.22.0 MCA token → v2.24.0 Phase 9 → v2.25.0 Milestone B → v2.26.0 Concord TUI → v2.27.0 Phase 10 → v2.27.1 GPG 补发 → v2.28.0 Phase 1-5 治理 + 可达性棘轮) |
-| 测试规模     | **11522 passed / 0 failed** (debug 模式全量回归,2026-08-29 批 A-C 实测口径,485 test target;含 Concord TUI 27 面板(REGISTERED\_FOCUS\_ORDER 代码实测 = PanelId enum 27 变体) + 53 slash commands(slash\_registry 断言 reg.len()==53) + 双轨会话 + Phase 10 跨层闭环 + Phase 12 Ch12 波次 1-5 + 5 新 crate + doctest;演进 v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522)                                                                                                             |
+| **当前版本** | `v2.28.0-omega` (**在途开发,工作区** **`feat/phase1-w1-w8`** **分支,尚未打 tag**;最新已发 tag = v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag);Phase 1-5 Ch12 波次 W1-W26 全部收尾 + 5 新 crate 落地 + ADR-095~160 治理 + 三轮冗余收敛;迭代链 v2.8.0 polish-v2.7 → v2.9.0~v2.13.0 L8/L10/MCA → v2.14.0\~v2.19.0 P3 Sprint → v2.20.0 PROBE → v2.21.0 CLI LLM → v2.22.0 MCA token → v2.24.0 Phase 9 → v2.25.0 Milestone B → v2.26.0 Concord TUI → v2.27.0 Phase 10 → v2.27.1 GPG 补发 → v2.28.0 Phase 1-5 治理 + 可达性棘轮) |
+| 测试规模     | **11564 passed / 0 failed** (debug 模式全量回归,2026-08-31 当前工作树全量重测,485 test target;含 Concord TUI 27 面板(REGISTERED\_FOCUS\_ORDER 代码实测 = PanelId enum 27 变体) + 53 slash commands(slash\_registry 断言 reg.len()==53) + 双轨会话 + Phase 10 跨层闭环 + Phase 12 Ch12 波次 1-5 + 5 新 crate + doctest;演进 v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11564)                                                                                                             |
 
 ### 1.2 OMEGA 十一定律(Ω₁~Ω₉ 基座 + Ω₁₀/Ω₁₁ 扩展;权威定义源:`Chimera CLI 十层架构深度打磨与优化方案 最新版.md` §3;Ω₁₀/Ω₁₁ 见 `Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md` §3.1,收录于 ADR-170)
 
@@ -718,7 +718,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 
 ### 3.11 生产可达性与冻结孤岛清单(ADR-160,2026-08-29 棘轮)
 
-> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。43 crate = **28 生产可达 + 15 冻结孤岛**。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
+> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。43 crate = **28 生产可达 + 14 冻结孤岛 + 1 GATED(mca-gateway，仅 `--features mca` 编译，ADR-177 重分类)**。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
 
 | 孤岛 crate          | 层   | 冻结类别       | 不可达原因(摘要)                                                                                 | 依据      |
 | ----------------- | --- | ---------- | ----------------------------------------------------------------------------------------- | ------- |
@@ -738,7 +738,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 | `mtpe-executor`   | L7  | 历史孤岛       | 入边仅 gea-activator dev-dep                                                                 | ADR-160 |
 | `ssra-fusion`     | L7  | 历史孤岛       | 入边仅根 E2E dev-dep(Phase 6 W0 层归属更正为 L7)                                                    | ADR-160 |
 
-> ★ Insight:**"零 Stub / 全部实现" ≠ "已装配"**。15 个孤岛单测与 E2E 全绿、代码完整,但不在 `chimera-cli` 生产二进制的反向依赖图上——这是"实现完成度"与"装配可达性"两个正交维度。ADR-160 用棘轮把这一差异显式化、冻结化,避免文档把"写了"误报成"上线了"。
+> ★ Insight:**"零 Stub / 全部实现" ≠ "已装配"**。14 个冻结孤岛(另 1 个 GATED=mca-gateway, ADR-177)单测与 E2E 全绿、代码完整,但不在 `chimera-cli` 生产二进制的反向依赖图上——这是"实现完成度"与"装配可达性"两个正交维度。ADR-160 用棘轮把这一差异显式化、冻结化,避免文档把"写了"误报成"上线了"。
 
 ***
 
@@ -1205,7 +1205,7 @@ cargo build --workspace --release
 ### 10.3 测试命令
 
 ```powershell
-# 全量测试(43 crate 单元+集成+E2E,累计 11522 tests / 0 failed(2026-08-29 批 A-C,485 test target;静态 #[test] 计数 11433,差值为 doctest+宏展开);演进 v2.27.0=10836 → v2.28.0=11522;更早 PROBE P-1.3 基线 8455 见 PROBE 进度报告)
+# 全量测试(43 crate 单元+集成+E2E,累计 11564 tests / 0 failed(2026-08-31 当前工作树全量重测,485 test target;静态 #[test] 计数 11433,差值为 doctest+宏展开);演进 v2.27.0=10836 → v2.28.0=11564;更早 PROBE P-1.3 基线 8455 见 PROBE 进度报告)
 cargo test --workspace
 
 # 单crate测试
@@ -1601,7 +1601,7 @@ my-crate/
 | **v2.26.0-omega**      | **2026-08-11**             | **Concord TUI 重构 W0~W11 全部收尾:SlashCommandRegistry 53 命令注册 + `/` 一级整合(ADR-075) + Chat/Quest 双轨会话模式(ADR-076) + ApprovalMode 动态 Shift+Tab(ADR-074) + NewlineGate 闸门(ADR-078) + i18n 中英门户 + 10 份 ADR-074~083 落档;9954 passed / 0 failed**                                                                                                    |
 | **v2.27.0-omega**      | **2026-08-19**             | **Phase 10 §16 跨层协同闭环审计修复正式发布(W1-W7:经验卡片组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口);NexusEvent 136→144;10836 passed / 0 failed;权威基线升级(ADR-085 双态收编)**                                                                                                                                                                                 |
 | **v2.27.1-omega**      | **2026-08-20**             | **GPG 签名补发 + MCA E2E 超时加固(无功能性变更)**                                                                                                                                                                                                                                                                                                                        |
-| **v2.28.0-omega**      | **2026-08-28 起在途(未打 tag)** | **Phase 1-5 Ch12 波次 W1-W26 全部收尾:ComputeBridge 双运行时 + ShardedBus 分片总线双跑 + CausalGraph 归因(ADR-132)+ 供应商漂移守卫 + 利用率双口径(ADR-157)+ payload 双跑(ADR-158);新增 5 crate(39 app-server/40 session-store/41 mas-sched/42 nexus-hook/43 nexus-subagent,38→43);ADR-095\~160 治理;ADR-160 可达性棘轮(28 可达/15 孤岛)+ event\_types.rs 镜像退役;11522 passed / 0 failed;\[2.28.1] 在途补丁登记** |
+| **v2.28.0-omega**      | **2026-08-28 起在途(未打 tag)** | **Phase 1-5 Ch12 波次 W1-W26 全部收尾:ComputeBridge 双运行时 + ShardedBus 分片总线双跑 + CausalGraph 归因(ADR-132)+ 供应商漂移守卫 + 利用率双口径(ADR-157)+ payload 双跑(ADR-158);新增 5 crate(39 app-server/40 session-store/41 mas-sched/42 nexus-hook/43 nexus-subagent,38→43);ADR-095\~160 治理;ADR-160 可达性棘轮(28 可达/15 孤岛)+ event\_types.rs 镜像退役;11564 passed / 0 failed;\[2.28.1] 在途补丁登记** |
 
 ***
 
@@ -1609,7 +1609,7 @@ my-crate/
 
 > **生成日期**: 2026-07-23(初版)· 2026-07-30(v2.8.0-omega 基线同步)· 2026-07-31(v2.11.0-omega 基线同步)· 2026-08-01(v2.13.0-omega 同步)· 2026-08-02(v2.19.0-omega 同步)· 2026-08-05(v2.21.0-omega 同步)· 2026-08-09(v2.25.0-omega 同步)· 2026-08-11(v2.26.0-omega 同步)· 2026-08-20(v2.27.1-omega 同步)· **2026-08-30(v2.28.0 在途同步)**
 > **生成方法**: superpowers-main 极致深度思考 + staff-engineer-mode 按 surface 路由专家 + 6 个并行 Task 子代理深度源码分析 + 7 处 Cargo.toml 实证修正
-> **分析基线**: `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,2026-08-30 核验,工作区 feat/phase1-w1-w8 在途,最新 tag v2.27.1),**43 members(28 生产可达 + 15 ADR-160 冻结孤岛)**,**11522 tests / 0 failed(2026-08-29 批 A-C,485 test target)**,**144 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)**
+> **分析基线**: `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,2026-08-30 核验,工作区 feat/phase1-w1-w8 在途,最新已发 tag v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag)),**43 members(28 生产可达 + 15 ADR-160 冻结孤岛)**,**11564 tests / 0 failed(2026-08-31 当前工作树全量重测,485 test target)**,**144 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)**
 > **时点声明(2026-08-30)**:本节 §13.2~13.6 的**明细数据为 Code Wiki v2.0(2026-07-23)编制时的 v1.x/v2.19 时点快照**(如"TUI 17 面板""38 crate 中 33 依赖"等),保留为历史证据;一切当前口径以本文档 §1(身份/测试规模)、§3(43 crate 索引 + §3.11 孤岛)、§5(144 事件)与顶部三方一致块为准。
 
 ### 13.1 专家团队组建

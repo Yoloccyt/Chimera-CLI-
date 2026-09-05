@@ -101,15 +101,13 @@ impl CLV {
     /// WHY:零向量无方向,余弦相似度无定义;返回 0.0 表示"无相似性",
     /// 避免下游 NaN 污染(如路由评分 NaN 导致排序异常)。
     pub fn cosine_similarity(&self, other: &Self) -> f32 {
-        let dot = self.0.dot(&other.0);
-        let norm_self = self.0.dot(&self.0).sqrt();
-        let norm_other = other.0.dot(&other.0).sqrt();
-
-        if norm_self == 0.0 || norm_other == 0.0 {
-            return 0.0;
-        }
-
-        dot / (norm_self * norm_other)
+        // 委托至 L0 权威实现 `nexus_contracts::util::cosine_similarity_slices`(经本模块
+        // `pub use` 再导出,见本文件尾部 "算法定义已下沉至 L0" 注释)。
+        // WHY(第四轮冗余收敛 F-R3-03 实施):先前的 ndarray `dot` 内联实现与 L0 共享函数
+        // 的边界语义一致(零向量→0.0、结果∈[-1,1]、非有限→0.0);仅累加顺序(ndarray 顺序
+        // dot vs 共享函数 chunks_exact(4) 四路累加器)存在 ≤ulp 级浮点差异,对下游召回/重排
+        // 排序无影响,故统一委托以收敛重复实现。512 % 4 == 0,共享函数不触发尾部逐元素路径。
+        cosine_similarity_slices(self.as_slice(), other.as_slice())
     }
 
     /// 返回 CLV 固定维度(512)
@@ -233,6 +231,57 @@ mod tests {
         // 零向量与零向量:返回 0.0
         let sim2 = zero.cosine_similarity(&zero);
         assert_eq!(sim2, 0.0);
+    }
+
+    /// 委托收敛回归网(F-R3-03 实施):
+    /// `CLV::cosine_similarity` 委托至 L0 `cosine_similarity_slices` 后,必须与共享函数
+    /// **逐位一致**,且与朴素顺序 oracle `dot/(‖a‖·‖b‖)`(即旧 ndarray 内联实现的逻辑)
+    /// **相对等价**。若未来有人把方法改回独立实现,此测试锚定数值契约不变。
+    #[test]
+    fn test_clv_cosine_equals_shared_slices_and_oracle() {
+        // 确定性 LCG 伪随机(不引入 rand 依赖)
+        let mut state: u64 = 0x5eed_1234_5678_9abc;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            // 映射到 [-1.0, 1.0]
+            ((state >> 33) as f32) / (1u64 << 30) as f32
+        };
+
+        for _ in 0..64 {
+            let mut a = vec![0.0f32; CLV::DIMENSION];
+            let mut b = vec![0.0f32; CLV::DIMENSION];
+            for i in 0..CLV::DIMENSION {
+                a[i] = next();
+                b[i] = next();
+            }
+            // 显式保证两向量非零,避免全部被零向量分支短路
+            a[0] += 0.7;
+            b[0] += 0.7;
+            let clv_a = CLV::from_vec(a.clone()).unwrap();
+            let clv_b = CLV::from_vec(b.clone()).unwrap();
+
+            let m = clv_a.cosine_similarity(&clv_b);
+            let s = cosine_similarity_slices(&a, &b);
+            assert_eq!(m, s, "方法式与会话式必须逐位一致");
+
+            // oracle:朴素顺序 dot/(‖a‖·‖b‖),与旧 ndarray 内联实现同构
+            let dot: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+            let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let oracle = if na == 0.0 || nb == 0.0 {
+                0.0
+            } else {
+                dot / (na * nb)
+            };
+            let diff = (m - oracle).abs();
+            let scale = m.abs().max(oracle.abs()).max(1e-8);
+            assert!(
+                diff <= 1e-5 * scale + 1e-6,
+                "oracle 相对偏差过大: m={m} oracle={oracle}"
+            );
+        }
     }
 
     #[test]

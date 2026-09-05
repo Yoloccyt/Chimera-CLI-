@@ -1,4 +1,4 @@
-﻿# 根 package:承载 workspace 根目录下的 E2E 集成测试(tests/e2e/*)。
+# 根 package:承载 workspace 根目录下的 E2E 集成测试(tests/e2e/*)。
 # WHY 必须显式声明 [package]:virtual manifest(只有 [workspace])不支持
 # [[test]] 与 [dev-dependencies];将根目录变为 package manifest 后,
 # Cargo 才能识别 tests/e2e/ 子目录下的 test target。
@@ -14,8 +14,12 @@ description = "Chimera CLI NEXUS-OMEGA E2E integration tests (workspace root)"
 # MCA 双轨隔离 feature(ADR-065 决策 6)
 # WHY 根 package 声明 mca:① 使 `cargo test --workspace --features mca` 在 CI 旁路
 # job 中合法(至少一个成员定义该 feature);② 门控根 package 承载的 MCA E2E
-# 测试(如 mca_m0_dual_channel)。下游 crate(chimera-cli/chimera-tui)后续里程碑
-# 各自声明同名 feature,同一条命令行双轨验证全部门控面。默认 off,主干恒绿。
+# 测试(如 mca_m0_dual_channel)。
+# feature 传递设计(T2,2026-09-03):本根 mca 保持空 `=[]`,仅作"同名校门控锤子"。
+# workspace 级 `--features mca` 会天然激活每个定义了同名校 feature 的 member ——
+# 下游 chimera-cli 现已声明 `mca = ["dep:mca-gateway"]`(T2),同一条命令行即双轨
+# 验证根 E2E + chimera-cli 组合根两块门控面;chimera-tui 后续里程碑照此声明即可。
+# 默认 off,主干恒绿。
 [features]
 mca = []
 

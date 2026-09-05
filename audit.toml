@@ -1,4 +1,4 @@
-﻿# cargo audit 配置（P5-T5 加固预演,2026-08-28）
+# cargo audit 配置（P5-T5 加固预演,2026-08-28）
 #
 # 与 .github/workflows/audit.yml 命令行 --ignore 清单合并生效（audit 自动读取本文件）。
 # 全部为间接依赖警告类处置（非漏洞）,评估留痕见 docs/reports/phase5-wave5-closure.md §加固预演：
@@ -6,10 +6,14 @@
 # - RUSTSEC-2025-0119 number_prefix 0.4.0 unmaintained：indicatif/tokenizers 间接引入,格式化工具微件
 # - chacha20 0.10.1 yanked：rand 0.10.2 RNG 后端,已 cargo update 升至 0.10.2（yank 警告消除）
 
+# - RUSTSEC-2026-0253 lru 0.12.5 pop panic-safety UAF：ratatui→lru 间接引入,
+#   需 catch_unwind+可 panic Drop 键双重前提,ratatui 缓存键为整数索引不 panic;
+#   patched>=0.18.2 但 ratatui 约束 ^0.12 无法升级,评估登记(2026-09-02)
 [advisories]
 ignore = [
     "RUSTSEC-2026-0190",
     "RUSTSEC-2026-0002",
+    "RUSTSEC-2026-0253",
     "RUSTSEC-2024-0436",
     "RUSTSEC-2025-0141",
     "RUSTSEC-2025-0119",

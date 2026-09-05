@@ -19,40 +19,16 @@
 
 use std::collections::VecDeque;
 
+mod common;
+use common::mock::MockDataSource;
+
 use chimera_tui::config::TuiConfig;
-use chimera_tui::data::{BudgetMetrics, DataSnapshot, DataSourceConfig, TuiDataSource};
-use chimera_tui::error::TuiError;
+use chimera_tui::data::{BudgetMetrics, DataSnapshot};
 use chimera_tui::types::{PanelId, TuiState};
 use chimera_tui::TuiApp;
 use event_bus::{EventMetadata, NexusEvent};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
-
-/// 可编程 mock 数据源 — 每次 `snapshot()` 返回当前内部快照的克隆。
-#[derive(Debug)]
-struct MockDataSource {
-    snapshot: DataSnapshot,
-    config: DataSourceConfig,
-}
-
-impl MockDataSource {
-    fn new(snapshot: DataSnapshot) -> Self {
-        Self {
-            snapshot,
-            config: DataSourceConfig::default(),
-        }
-    }
-}
-
-impl TuiDataSource for MockDataSource {
-    fn snapshot(&self) -> Result<std::sync::Arc<DataSnapshot>, TuiError> {
-        Ok(std::sync::Arc::new(self.snapshot.clone()))
-    }
-
-    fn config(&self) -> &DataSourceConfig {
-        &self.config
-    }
-}
 
 /// 构造一个带指定利用率的 BudgetMetrics,其余字段使用默认值。
 fn budget(utilization: f32) -> BudgetMetrics {

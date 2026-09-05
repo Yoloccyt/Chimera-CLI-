@@ -570,7 +570,7 @@ cargo audit --deny unmaintained --deny unsound `
   --ignore RUSTSEC-2026-0002 `
   --ignore RUSTSEC-2024-0436 `
   --ignore RUSTSEC-2025-0141 `
-  --ignore RUSTSEC-2025-0119
+  --ignore RUSTSEC-2025-0119 --ignore RUSTSEC-2026-0253
 
 
 # 3a. audit 口径一致性自证（ADR-167 决策 4：CI 与本清单、CLAUDE.md 三处必须逐字等价）

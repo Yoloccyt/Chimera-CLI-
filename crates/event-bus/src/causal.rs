@@ -1,6 +1,8 @@
 //! 因果一致性 — 向量时钟(P2-W7.2.1,ADR-033 后续膜深化)
 //!
 //! 对应架构层:L1 Core(event-bus 膜深化)
+//! 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 消费方仅 attribution(同 crate
+//!             内部基座),零外部接线;对外 API 面不扩大。
 //! 对应设计源:spec.md L251-254 "因果一致性" Scenario
 //!
 //! # 核心职责

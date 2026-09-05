@@ -23,7 +23,7 @@
 //! stdout 仅协议帧（NDJSON）；日志/进度全走 stderr。
 
 use anyhow::Result;
-use nexus_app_server::{AppServer, AppServerConfig, AppTransport, StdinTransport, TransportError};
+use nexus_app_server::{AppServer, AppTransport, StdinTransport, TransportError};
 use nexus_contracts::app::{AppEvent, AppOp};
 
 use crate::config::ChimeraConfig;
@@ -103,13 +103,36 @@ pub fn translate_event(ev: &AppEvent) -> Option<serde_json::Value> {
 // ACP 桥命令
 // ============================================================
 
-/// 执行 acp 命令 — ACP JSON-RPC 2.0 over stdio 事件循环直至 EOF
-pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
+/// 执行 acp 命令 — ACP JSON-RPC 2.0 over stdio 事件循环直至 EOF 或 Ctrl+C（优雅关闭）
+pub async fn execute(config: &ChimeraConfig) -> Result<()> {
     tracing::info!("chimera acp: ACP 桥启动（JSON-RPC 2.0 over stdio）");
 
-    let server = AppServer::new(AppServerConfig::default());
+    // C1(2026-09-04): 真实核心装配——与 serve 同源走集中组合根
+    // （QuestBackend 包装 L9 QuestEngine，替代 InMemory 桩，F-A2-4）。
+    let ctx = crate::composition::build(config)?;
+    tracing::info!(
+        version = %config.nexus.version,
+        "chimera acp: 真实核心装配完成（QuestBackend + critical 旁路订阅，C1/C12）"
+    );
+    let server = crate::composition::build_app_server(ctx);
     let transport = StdinTransport::new();
 
+    // C1: 优雅关闭——EOF 与 Ctrl+C 竞争（此前 Ctrl+C 硬杀，F-A2-6）。
+    tokio::select! {
+        r = acp_loop(&server, &transport) => r,
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("chimera acp: 收到 Ctrl+C，优雅退出（内存会话随进程释放）");
+            Ok(())
+        }
+    }
+}
+
+/// 事件循环主体 — 逐帧接收/处理/转译推送（EOF 即正常结束）
+///
+/// # 参数
+/// - `server`: 组合根装配的协议宿主（真实核心后端）
+/// - `transport`: 传输层抽象（`&dyn AppTransport` 以便 MockTransport 无 stdio 驱动测试）
+async fn acp_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<()> {
     loop {
         // 接收客户端操作（EOF = 客户端断开，正常退出）
         let op = match transport.recv_op().await {
@@ -151,6 +174,8 @@ pub async fn execute(_config: &ChimeraConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::testutil::MockTransport;
+    use nexus_contracts::app::ThreadStartParams;
 
     #[test]
     fn translate_session_new_to_thread_start() {
@@ -195,5 +220,23 @@ mod tests {
             }
             other => panic!("缺省字段必须容错, 实际 {other:?}"),
         }
+    }
+
+    /// T-2：acp_loop 逐帧处理 + 转译推送：ThreadStart 经 translate_event 命中后
+    /// 调用 send_event（覆盖新增循环体与 EOF 退出，G7）。
+    #[tokio::test]
+    async fn acp_loop_processes_frames_and_stops_on_eof() {
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        let server = crate::composition::build_app_server(ctx);
+        let ops = vec![AppOp::ThreadStart(ThreadStartParams::new("g1", "r1"))];
+        let transport = MockTransport::new(ops);
+        acp_loop(&server, &transport)
+            .await
+            .expect("EOF 应使循环正常退出 Ok");
+        assert!(
+            transport.sent_kinds().iter().any(|k| k == "thread_started"),
+            "acp_loop 应转发 ThreadStarted（translate_event 命中）；实际 {:?}",
+            transport.sent_kinds()
+        );
     }
 }

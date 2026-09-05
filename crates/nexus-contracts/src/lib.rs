@@ -61,7 +61,7 @@
 //! |------|------|--------|
 //! | `AttackType` / `Command` / `CommandPolicy` / `CommandValidator` | 从 `seccore` 上提（ADR-054 决策 3） | L4 seccore / L8 parliament |
 //! | `BudgetTier` | 从 `decb-governor` 上提（ADR-054 决策 3） | L8 decb-governor / L9 quest-engine |
-//! | `FormalProperty` / `InvariantSpec` / `VerificationResult` | 新建（T6-2 FormalVerifier 骨架） | L4 formal-verifier / L8 parliament |
+//! | `FormalProperty` / `InvariantSpec` / `VerificationResult` | 新建（T6-2 FormalVerifier 骨架） | 各 owner crate formal 验证器(7 个,聚合门 gsoe-evolution formal_gate) / L8 parliament |
 //! | `ArchiveTier` / `assert_archive_monotonicity` | 新建（P0-2 INV-8 下沉） | L2 mlc-engine / L3 cmt-tiering |
 //!
 //! ## MCA 亲和与向量存储
@@ -214,7 +214,8 @@ pub mod blueprint;
 /// 形式化属性定义框架 — FormalVerifier L4 骨架基础类型(T6-2)
 ///
 /// 承载 PropertyCategory / VerificationResult / InvariantSpec / FormalProperty,
-/// 供 L4 formal-verifier 验证器实现与 L8 parliament 审议时查询属性满足状态共享。
+/// 供各 owner crate 的 formal 验证器实现(7 个,聚合门 gsoe-evolution formal_gate)
+/// 与 L8 parliament 审议时查询属性满足状态共享。
 pub mod formal_props;
 
 /// 工具计划契约 — 声明式 ToolPlan DSL + 校验 + 守卫常量（P3-T8,WI-16）

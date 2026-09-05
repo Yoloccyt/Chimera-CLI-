@@ -5,7 +5,9 @@
 # 本 workflow 把 CLAUDE.md §5 发布前清单中的 fmt/check/clippy/test 前移为合并前的必需闸门。
 # 注: Windows-GNU 与 5 平台构建由 release.yml 在 tag 时覆盖;此闸门在 ubuntu-latest 上做
 # 跨平台无关的快速校验(编译/单测/lint/格式),以获得最快反馈,不与 release 矩阵重复。
-# 注: 覆盖率由 coverage.yml 独立 workflow 处理(非阻塞,每周定时),不在 PR 门禁中运行。
+# 注: 覆盖率真实 JSON 裁决由 coverage.yml 在 nightly 阻塞运行(去 continue-on-error,
+# 见 RK-P45 收口);tarpaulin 冷插桩编译远超快轨预算,不进 PR。PR 侧仅跑零 cargo 的
+# 静态配置面(coverage_gate.py --selftest/--validate-config),见下方 "Coverage config" 步。
 name: CI
 
 on:
@@ -77,6 +79,16 @@ jobs:
       - name: Dependency iron-law audit
         run: bash scripts/check_dependency_rules.sh
 
+      # WHY: 层图双源对拍门(C10,2026-09-04)——铁律门以 .sh(CI 调用)/.ps1(本地)
+      # 两份手写实现各自内嵌 crate→层表,2026-08-29 曾实际漂移(.ps1 升 43 而 .sh
+      # 滞留 38,5 个 crate 静默漏检)。本门四方互锁 .sh case 表/layered_crates 列表、
+      # .ps1 $layerMap 与 Cargo.toml workspace.members,任一侧单改必红;
+      # 先跑 --selftest(fixture 负控,证明门有牙齿)再跑真实裁决,沿 reachability 先例。
+      - name: Layer map parity (sh vs ps1 vs Cargo.toml)
+        run: |
+          python3 scripts/check_layer_map_parity.py --selftest
+          python3 scripts/check_layer_map_parity.py
+
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
       # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期
@@ -88,6 +100,32 @@ jobs:
         run: |
           bash scripts/check_crate_reachability.sh --selftest
           bash scripts/check_crate_reachability.sh
+
+      # WHY: Top-K sort_by 例外登记表守护门(C9, ADR-160 同族)——该表此前登记无门
+      # (零消费者, 与 coverage_baseline/crate_reachability 同族的"有登记无牙齿"反模式)。
+      # 现补一条只 enforce 登记表自身不退化的静态门(格式/重复/失效/裁决词/只减不增),
+      # 刻意不做启发式 sort_by 扫描(避免误报红)。先 --selftest 证明门有牙再跑真实裁决,
+      # 沿 check_layer_map_parity/check_crate_reachability 先例。全部零 cargo、秒级。
+      - name: Top-K sort_by registry ratchet
+        run: |
+          python3 scripts/check_topk_registry.py --selftest
+          python3 scripts/check_topk_registry.py
+
+      # WHY: 覆盖率门的静态面(WS-B, 审计 P0 #1)——真实 JSON 裁决在 nightly
+      # (coverage.yml, 去 continue-on-error 后判定生效);PR 只校"配置自洽 + 棘轮单调 +
+      # 门自身有牙",全部零 cargo、秒级。首跑校准前 min 暂留 50(见 coverage_baseline.toml)。
+      - name: Coverage config & ratchet gate (static, zero-cargo)
+        run: |
+          python3 scripts/coverage_gate.py --selftest
+          python3 scripts/coverage_gate.py --validate-config
+
+      # WHY: 反馈链路一致性门(审计 finding #4)——交叉校验 gate_manifest 中 expect=0
+      # (收口必绿)的门脚本,是否在某个 workflow 的 continue-on-error 语境被吞(=清单说
+      # 阻塞、实际丢弃,coverage 旧版此病)。全部零 cargo、秒级。先 --selftest 再真实裁决。
+      - name: Gate parity (manifest expect vs CI continue-on-error)
+        run: |
+          python3 scripts/audit_gate_parity.py --selftest
+          python3 scripts/audit_gate_parity.py
 
       # WHY: 性能红线与 bench 清单静态门(R1-T5, 审计发现 F-R4-01)——本门禁原以
       # .ps1(429 行) + .sh(246 行) 两份手写实现存在, 而 CI 中零次调用(全 .github/
@@ -133,14 +171,17 @@ jobs:
       # 返回码 0/1/2 适合 CI;误报用 workspace.metadata.cargo-machete 忽略表解决。
       - name: Unused dependencies (cargo-machete)
         run: |
-          cargo install cargo-machete --locked
+          # C5(2026-09-04): --version 固定工具自身版本(--locked 仅锁依赖树),
+          # 防上游 breaking 造成 CI 间歇红;升级需显式改版本号并观察首轮结果。
+          cargo install cargo-machete --locked --version 0.9.2
           cargo machete
 
       # E4(报告附录 E): 拼写检查门禁——typos 以"已知拼写错误修正表"设计保持低误报,
       # 可无监督跑 PR;词表配置见 _typos.toml(项目专有名词/标识符豁免)。
       - name: Spell check (typos)
         run: |
-          cargo install typos-cli --locked
+          # C5(2026-09-04): pin 1.50.1(注意: crate 名是 typos-cli,与 typos 库版本不同步)
+          cargo install typos-cli --locked --version 1.50.1
           typos
 
       # E4(报告附录 E, P1-3 基线): TOML 格式门禁——taplo 为 Even Better TOML 内核;
@@ -148,7 +189,8 @@ jobs:
       # 2026-08-17 已应用基线,本地 check 归零。
       - name: TOML format check (taplo)
         run: |
-          cargo install taplo-cli --locked
+          # C5(2026-09-04): pin 0.10.0
+          cargo install taplo-cli --locked --version 0.10.0
           taplo fmt --check -c .taplo.toml \
             "deny.toml" ".cargo/config.toml" ".config/nextest.toml" \
             "fuzz/Cargo.toml" "examples/*.toml" "profiles/deployment/*.toml" \
@@ -239,6 +281,19 @@ jobs:
           CHIMERA_MCP_TXN_COUNT: '100'
         run: cargo nextest run -p chimera-e2e-tests -E 'not binary(/stress/)' --no-fail-fast
 
+      # C2(2026-09-04): Formal verification gate — 形式化验证器语义显式接线
+      # WHY(ADR-052 待办 2): 7 个验证器(gsoe-evolution/parliament/event-bus/
+      # omega-learner/auto-dpo/decay-engine 的 formal 模块,proptest 统计性验证)
+      # 此前仅被 e2e 全量隐式覆盖,缺少独立的、可被 R2 解冻治理直接引用的
+      # 裁决证据锚点。本步骤显式聚合运行 4 个 formal E2E target
+      # (formal_verifier_e2e/m1_e2e/m2_e2e/gate_e2e),失败即阻塞合入
+      # (不设 continue-on-error)。验证性质口径:统计性 proptest 而非数学证明,
+      # 见 nexus-contracts formal_props::VerificationMethod(C2 口径诚实化)。
+      - name: Formal verification gate (7 verifiers)
+        env:
+          CHIMERA_TEST_TIMEOUT_SCALE: '0.1'
+        run: cargo nextest run -p chimera-e2e-tests -E 'binary(formal_verifier)' --no-fail-fast
+
   # ============================================================
   # MCA 双轨旁路 job(ADR-065 决策 6,PANTHEON 计划 M0 PR-4)
   # WHY: feature `mca` 默认 off,默认 CI 不编译不测试下游 crate 中
@@ -277,7 +332,8 @@ jobs:
       # --no-dev-deps 减少编译量;--exclude chimera-e2e-tests 避免重复编译 E2E。
       - name: Feature matrix check (cargo-hack)
         run: |
-          cargo install cargo-hack --locked
+          # C5(2026-09-04): pin 0.6.45
+          cargo install cargo-hack --locked --version 0.6.45
           cargo hack check --workspace --each-feature --no-dev-deps --exclude chimera-e2e-tests
 
       - name: Test (workspace, --features mca)

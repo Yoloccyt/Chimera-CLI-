@@ -104,12 +104,4 @@ harness = false
 name = "probe_select"
 harness = false
 
-# P2-T4: CSC 四级压缩链门禁基准(P99<300ms / token 降 ≥40% / thinking 完整率 100%)
-[[bench]]
-name = "csc_bench"
-harness = false
 
-# P2-T5: 稀疏化压缩收益对照基准(稀疏截断 vs 仅去重,sparse_gain ≥ +20%)
-[[bench]]
-name = "sparse_compare"
-harness = false

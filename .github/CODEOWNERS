@@ -1,0 +1,81 @@
+# CODEOWNERS — Chimera CLI (NEXUS-OMEGA)
+# 目标（Phase R 收口 / 测试体系治理 反馈链路）：让"谁负责 / 多久响应 / 什么动作"可机械化。
+# CI 失败时，必阻塞门（PR required check）自动 @ 本文件匹配的 owner。
+# 当前单一维护者 @Yoloccyt；按 11 层分组，为未来拆团队评审预留结构（映射见 CODE_WIKI §2.1）。
+# 说明：dev-only 治理脚本 / CI workflow / 各 crate 均落到 owner。
+
+# 默认兜底（最后匹配优先，故放最前）
+*                                              @Yoloccyt
+
+# --- L0 Contracts ---
+/crates/nexus-contracts/                       @Yoloccyt
+
+# --- L1 Core ---
+/crates/nexus-core/                            @Yoloccyt
+/crates/event-bus/                             @Yoloccyt
+/crates/model-router/                          @Yoloccyt
+
+# --- L2 Memory ---
+/crates/nmc-encoder/                           @Yoloccyt
+/crates/hcw-window/                            @Yoloccyt
+/crates/mlc-engine/                            @Yoloccyt
+
+# --- L3 Storage ---
+/crates/scc-cache/                             @Yoloccyt
+/crates/lsct-tiering/                          @Yoloccyt
+/crates/cmt-tiering/                           @Yoloccyt
+/crates/session-store/                         @Yoloccyt
+
+# --- L4 Security ---
+/crates/seccore/                               @Yoloccyt
+/crates/qeep-protocol/                         @Yoloccyt
+/crates/decay-engine/                          @Yoloccyt
+
+# --- L5 Knowledge ---
+/crates/repo-wiki/                             @Yoloccyt
+/crates/gsoe-evolution/                        @Yoloccyt
+/crates/auto-dpo/                              @Yoloccyt
+
+# --- L6 Router ---
+/crates/osa-coordinator/                       @Yoloccyt
+/crates/kvbsr-router/                          @Yoloccyt
+/crates/faae-router/                           @Yoloccyt
+/crates/sesa-router/                           @Yoloccyt
+/crates/omega-learner/                         @Yoloccyt
+
+# --- L7 Execution ---
+/crates/pvl-layer/                             @Yoloccyt
+/crates/gqep-executor/                         @Yoloccyt
+/crates/mtpe-executor/                         @Yoloccyt
+/crates/ssra-fusion/                           @Yoloccyt
+/crates/nexus-subagent/                        @Yoloccyt
+
+# --- L8 Parliament ---
+/crates/parliament/                            @Yoloccyt
+/crates/acb-governor/                          @Yoloccyt
+/crates/decb-governor/                         @Yoloccyt
+
+# --- L9 Quest ---
+/crates/quest-engine/                          @Yoloccyt
+/crates/gea-activator/                         @Yoloccyt
+/crates/efficiency-monitor/                    @Yoloccyt
+/crates/chimera-mas/                           @Yoloccyt
+/crates/mas-sched/                             @Yoloccyt
+/crates/nexus-hook/                            @Yoloccyt
+
+# --- L10 Interface ---
+/crates/chimera-cli/                           @Yoloccyt
+/crates/chimera-tui/                           @Yoloccyt
+/crates/chtc-bridge/                           @Yoloccyt
+/crates/mcp-mesh/                              @Yoloccyt
+/crates/csn-substitutor/                       @Yoloccyt
+/crates/mca-gateway/                           @Yoloccyt
+/crates/nexus-app-server/                      @Yoloccyt
+
+# --- 测试与治理（跨层）---
+/tests/                                        @Yoloccyt
+/fuzz/                                         @Yoloccyt
+/scripts/                                      @Yoloccyt
+/.github/                                      @Yoloccyt
+/docs/architecture/                            @Yoloccyt
+/docs/governance/                              @Yoloccyt

@@ -182,4 +182,67 @@ mod tests {
             }
         }
     }
+
+    /// Ch11.3 SessionStore 契约不变式:跨多段 append 后 replay 输出全局单调且与
+    /// 写入顺序一致(k-way 归并 100% 顺序一致性),from-offset 断点续读不重不漏
+    /// (WAL 已确认事件不丢失的读面锚点)。
+    #[test]
+    fn session_contract_invariant_append_then_replay_order() {
+        use crate::replay::replay;
+        use crate::segment::SegmentWriter;
+        use crate::tree::{EventRow, TreeIndex};
+        use crate::types::SegmentId;
+
+        let tree = TreeIndex::open_in_memory().expect("open_in_memory");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sid = SessionId::new("contract-seq");
+        let per_seg: u64 = 2; // 多段滚动归并
+        let segs: u64 = 6;
+        let n = per_seg * segs; // 12
+        let mut start_seq = 0u64;
+        for idx in 0..segs as u32 {
+            let mut w = SegmentWriter::open_or_create(dir.path(), &sid, idx, start_seq)
+                .expect("open_or_create");
+            let events: Vec<SessionEvent> = (start_seq..start_seq + per_seg)
+                .map(|i| SessionEvent::with_payload(format!("ev-{i}"), vec![i as u8]))
+                .collect();
+            let offsets = w.append_batch(&events).expect("append_batch");
+            let seg_id = SegmentId::generate();
+            tree.insert_segment(&w.meta(seg_id.clone(), None))
+                .expect("insert_segment");
+            let rows: Vec<EventRow> = offsets
+                .iter()
+                .zip(events)
+                .map(|(off, event)| EventRow {
+                    offset: off.seq,
+                    session_id: sid.clone(),
+                    segment_id: seg_id.clone(),
+                    event,
+                })
+                .collect();
+            tree.insert_events(&rows).expect("insert_events");
+            start_seq += per_seg;
+        }
+
+        // 不变量 1:回放 seq 严格全局单调(第 i 条 seq == i)+ 内容与写入顺序逐项一致
+        let stream = replay(&tree, dir.path(), &sid, Offset::new(0, 0)).expect("replay");
+        assert_eq!(stream.merge_degree(), segs as usize, "k-way 归并 k = 段数");
+        let items = stream.collect().expect("collect");
+        assert_eq!(items.len(), n as usize, "回放必须完整(已确认事件不丢失)");
+        for (i, item) in items.iter().enumerate() {
+            assert_eq!(item.offset.seq, i as u64, "回放 seq 必须全局单调 +1");
+            assert_eq!(
+                item.event.event_type,
+                format!("ev-{i}"),
+                "回放顺序必须与写入一致"
+            );
+        }
+        // 不变量 2:from-offset 断点续读(不重不漏)
+        let resumed = replay(&tree, dir.path(), &sid, Offset::new(5, 0))
+            .expect("replay")
+            .collect()
+            .expect("collect");
+        assert_eq!(resumed.len(), (n - 5) as usize, "from=5 续读条数正确");
+        assert_eq!(resumed[0].offset.seq, 5, "续读首条 seq 必须为 5");
+    }
 }

@@ -575,10 +575,8 @@ mod perf_scale_tests {
 /// 全仓余弦实现现状:
 /// - 本函数 = 所有 `&[f32]` 相似度计算的唯一权威(12+ crate 经
 ///   `nexus_core::cosine_similarity_slices` 重导出或直接引用 L0 路径消费);
-/// - **已登记例外**:`osa-coordinator::cheap_index::cosine_similarity`
-///   为 `&[f64]` 特征向量专用,不等长语义(返回 0.0)与零向量阈值(1e-12)
-///   均与本函数不同,属 CODE_WIKI §冗余审计 D 项"诊断不改码"的分叉,
-///   合并须独立 ADR + TDD,不在本模块收口。
+/// - **曾登记例外已取消**:`osa-coordinator::cheap_index::cosine_similarity`(f64 域变体)
+///   已于 2026-09-03 架构批次死模块处置中删除,本函数恢复为全仓 `&[f32]` 相似度唯一权威。
 ///
 /// 公式:dot(a, b) / (|a| * |b|)
 ///

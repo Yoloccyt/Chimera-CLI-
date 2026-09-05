@@ -1,13 +1,22 @@
-# 行覆盖率水位（`.github/workflows/coverage.yml` 消费本文件，不在 workflow 里写死数字）。
+# 行覆盖率水位（唯一消费者：`scripts/coverage_gate.py`；coverage.yml 经
+# `coverage_gate.py --print-fail-under` 取数，不再在 workflow 里写死数字）。
 #
 # 语义：
-#   min_line_coverage    —— cargo tarpaulin `--fail-under` 的实际门槛，低于即 CI 红。
+#   min_line_coverage    —— 聚合行覆盖率下限，tarpaulin `--fail-under` 的实际门槛，低于即红。
 #   target_line_coverage —— 治理目标（OMEGA 覆盖率基线），达到后 min 与 target 应相等。
+#   buffer_pp            —— 校准缓冲：把 min 抬到"实测 - buffer_pp"个百分点（期望 3..5）。
+#   floor_file           —— 逐 crate 下界表（治"聚合达标但单模块裸奔"）。
 #
-# 棘轮纪律：min_line_coverage **只升不降**。
-#   2026-09-01 建立本文件时，全库尚无一次"阈值真正生效"的测量（旧 coverage.yml 有
-#   --fail-under 85 但 job 级 continue-on-error: true，结论被丢弃 ⇒ 见 RK-P45）。
-#   因此 50 是**首跑校准前的临时下界**，不是实测值；第一次 Coverage 跑完后必须把
-#   min 抬到实测值附近（留 3-5 个百分点缓冲）并在 RK-P 登记上调，禁止长期停在 50。
+# 棘轮纪律：min_line_coverage **只升不降**（下调须 ADR；由 coverage_gate.py
+#   --validate-config 用 git 历史机械强制，无提交基线时棘轮自动待命）。
+#
+# 历史与效力恢复：2026-09-01 建立本文件时，全库尚无一次"阈值真正生效"的测量
+#   （旧 coverage.yml 有 --fail-under 85 但 job 级 continue-on-error: true，结论被丢弃
+#   ⇒ RK-P45）。WS-B 已去掉 continue-on-error 并让判定真正生效，故 50 是**首跑校准前的
+#   临时下界**，不是实测值；coverage nightly 首跑后必须把 min 抬到实测值附近并登记 RK-P45。
+
+[coverage]
 min_line_coverage = 50
 target_line_coverage = 85
+buffer_pp = 5
+floor_file = "scripts/coverage_per_crate_floor.toml"

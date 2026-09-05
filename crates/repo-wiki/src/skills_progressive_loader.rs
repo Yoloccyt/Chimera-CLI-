@@ -240,7 +240,7 @@ impl ProgressiveSkillLoader {
         self.skill_index.len()
     }
 
-    /// 索引快照只读访问（W3）— 供 L6 编排层消费（osa skill_plan 规划输入）
+    /// 索引快照只读访问（W3）— 供 L6 编排层消费（osa 规划输入）
     ///
     /// WHY 只读切片: 避免克隆整个索引;调用方按需投影为 L6 轻量条目。
     pub fn index_snapshot(&self) -> &[SkillMetadata] {

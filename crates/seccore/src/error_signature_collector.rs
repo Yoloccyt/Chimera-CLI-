@@ -455,4 +455,69 @@ mod tests {
             "应为 ErrorSignatureMatched"
         );
     }
+
+    // ----------------------------------------------------------
+    // 边界测试（§9.3 已全覆盖：5 模式 + 回退 + 频率统计；此处分场景补边界）
+    // ----------------------------------------------------------
+
+    /// 通用回退各关键词大小写变体映射到正确错误类型
+    #[test]
+    fn generic_fallback_keyword_variants_map_correctly() {
+        let cases = [
+            // 输出, 预期 error_type
+            ("some unknown error in module", "GenericError"),
+            ("An Error occurred", "GenericError"),
+            ("FATAL ERROR OCCURRED", "GenericError"),
+            ("operation failed quietly", "GenericFailure"),
+            ("The build Failed", "GenericFailure"),
+            ("sudden panic in worker", "GenericPanic"),
+            ("Panic detected", "GenericPanic"),
+        ];
+        for (output, expected) in cases {
+            let mut collector = ErrorSignatureCollector::new();
+            let sig = collector.extract(output, "loc").expect("应触发回退");
+            assert_eq!(sig.error_type.as_ref(), expected, "输出: {output}");
+        }
+    }
+
+    /// 已知模式优先于通用关键词回退（输出同时含两者时，模式命中先返回）
+    #[test]
+    fn known_pattern_takes_precedence_over_generic_keyword() {
+        let mut collector = ErrorSignatureCollector::new();
+        // 同时含 "error[E0308]"（已知模式）与 "failed"（通用回退失败关键词）
+        let output = "error[E0308]: mismatched types\n  [INFO] some steps failed";
+        let sig = collector
+            .extract(output, "src/main.rs:3")
+            .expect("应命中模式");
+        // 先匹配 CompilationError，不应回退为 GenericFailure
+        assert_eq!(sig.error_type.as_ref(), "CompilationError");
+    }
+
+    /// 从未提取过任何签名时,高频查询与类型频率应返回空
+    #[test]
+    fn empty_collector_reports_zero_frequencies() {
+        let collector = ErrorSignatureCollector::new();
+        assert!(collector.get_frequent_signatures(1).is_empty());
+        assert!(collector.error_type_frequency().is_empty());
+        assert_eq!(collector.unique_signature_count(), 0);
+    }
+
+    /// extract_and_check_repeat 遇到无匹配输出→(None, false)
+    #[test]
+    fn extract_and_check_repeat_no_match_returns_none_false() {
+        let mut collector = ErrorSignatureCollector::new();
+        let (sig, is_repeat) =
+            collector.extract_and_check_repeat("build succeeded cleanly", "build");
+        assert!(sig.is_none(), "无错误信号应返回 None");
+        assert!(!is_repeat, "无匹配时不应标记重复");
+    }
+
+    /// 空 error_type 与空 summary 哈希仍确定且为 16 位
+    #[test]
+    fn compute_error_hash_empty_inputs_deterministic() {
+        let h1 = compute_error_hash("", "");
+        let h2 = compute_error_hash("", "");
+        assert_eq!(h1, h2, "空输入哈希应确定");
+        assert_eq!(h1.len(), 16, "哈希恒为前 16 位十六进制");
+    }
 }

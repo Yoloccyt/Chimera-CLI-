@@ -14,12 +14,15 @@
 #   CI runs THIS .sh (ci.yml), so a .ps1-only update is NOT a fix.
 #   When adding a crate: update layer_of + layered_crates + expected_crates here
 #   AND $layerMap + $expectedCrates in .ps1 in the same commit.
+#   C10 (2026-09-04): drift is now MECHANICALLY blocked -- ci.yml check job runs
+#   scripts/check_layer_map_parity.py which cross-checks this file's case dict +
+#   layered_crates list, the .ps1 $layerMap, and Cargo.toml workspace.members
+#   (four-way lock; any single-sided drift fails the gate at PR time).
 # Scope:
 #   A. Inner-ring boundary   - the 9 inner-ring crates (memory + reasoning +
 #                              evolution ring) may only depend on the L0/L1 base
 #                              {nexus-contracts, nexus-core, event-bus,
-#                              model-router, mcp-mesh} plus the inner-ring
-#                              whitelist itself.
+#                              model-router} plus the inner-ring whitelist itself.
 #   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
 #                              crate (see expected_crates); the 2-item ADR
 #                              exception table is exempted
@@ -66,7 +69,7 @@ esac
 layer_of() {
     case "$1" in
         nexus-contracts) echo 0 ;;
-        nexus-core|event-bus|model-router|mcp-mesh) echo 1 ;;
+        nexus-core|event-bus|model-router) echo 1 ;;
         nmc-encoder|hcw-window|mlc-engine) echo 2 ;;
         # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
         scc-cache|lsct-tiering|cmt-tiering|session-store) echo 3 ;;
@@ -82,7 +85,8 @@ layer_of() {
         # lifecycle hooks (L9, 41st/42nd crates)
         quest-engine|efficiency-monitor|chimera-mas|gea-activator|mas-sched|nexus-hook) echo 9 ;;
         # WI-01 (2026-08-22): nexus-app-server host facade (L10, 39th crate)
-        chimera-cli|chimera-tui|chtc-bridge|mca-gateway|nexus-app-server) echo 10 ;;
+        # mcp-mesh 2026-09-02 T10: 对齐文档 L10 归属(原脚本误置 L1)
+        chimera-cli|chimera-tui|chtc-bridge|mca-gateway|nexus-app-server|mcp-mesh) echo 10 ;;
         *) echo "" ;;
     esac
 }
@@ -106,11 +110,17 @@ is_inner_ring() {
 # L0/L1 base deps allowed for inner-ring crates. L0/L1 is the Core
 # infrastructure layer; ADR-054 decision 2 spirit allows the inner ring to
 # depend on ALL L0/L1 crates (only the L2+ business outer ring is forbidden).
-# auto-dpo (L5, inner) -> model-router (L1) is a legal L5->L1 downward edge
-# (RHI-CG judge routes via model-router); mcp-mesh (L1) likewise allowed.
+# auto-dpo (L5, inner) -> model-router (L1): legal L5->L1 downward edge AND an
+# ADR-171 T9 accepted pseudo-reachable production edge (ModelRouterJudgeClient).
+# ADR-172 (Accepted 2026-09-03) retired model-router's "cross-model routing
+# contract" status -- mca-gateway is the ONLY live LLM channel. The edge is KEPT
+# (ADR-160 visible-debt posture: crate frozen, not deleted); model-router stays
+# in this whitelist ONLY so the frozen edge stays green, NOT as a live-channel
+# grant -- new LLM consumers MUST anchor on mca-gateway (ADR-172 decision 2).
+# mcp-mesh is L10 (T10 realignment) so it is no longer an L0/L1 base dep.
 is_inner_base() {
     case "$1" in
-        nexus-contracts|nexus-core|event-bus|model-router|mcp-mesh) return 0 ;;
+        nexus-contracts|nexus-core|event-bus|model-router) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -124,7 +134,7 @@ is_adr_exception() {
 }
 
 # Declared workspace deps in root Cargo.toml [workspace.dependencies]
-# (external crates such as tokio/serde plus the 38 internal crate entries).
+# (external crates such as tokio/serde plus the 43 internal crate entries).
 # Used as the whitelist for check C1. Normal mode parses the real file;
 # selftest mode keeps it empty so the mock `ghost-crate` stays undefined.
 # WHY set -- / "$*": the sed pipeline emits one name per line; collapsing to a

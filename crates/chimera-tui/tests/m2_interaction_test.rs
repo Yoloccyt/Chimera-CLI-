@@ -111,6 +111,7 @@ fn palette_can_reopen_after_close() {
 
 #[test]
 fn ctrl_l_toggles_locale_between_zh_and_en() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::Zh);
     let mut app = make_app();
@@ -127,6 +128,7 @@ fn ctrl_l_toggles_locale_between_zh_and_en() {
 
 #[test]
 fn palette_renders_localized_title_without_panic() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::En);
     let mut app = make_app();
@@ -142,6 +144,7 @@ fn palette_renders_localized_title_without_panic() {
 
 #[test]
 fn render_without_palette_omits_title() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::En);
     let mut app = make_app();
@@ -170,6 +173,7 @@ fn type_query(app: &mut TuiApp, q: &str) {
 
 #[test]
 fn palette_dispatch_toggle_locale_actually_switches() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::Zh);
     let mut app = make_app();

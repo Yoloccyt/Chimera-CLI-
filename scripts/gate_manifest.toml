@@ -85,7 +85,7 @@ spec_ref = "R1-T9 前置 / ADR-160"
 cmd = "bash scripts/check_crate_reachability.sh"
 expect = 0
 kind = "light"
-note = "可达性棘轮（28 可达 / 15 冻结孤岛 / new_gaps=0）"
+note = "可达性棘轮（28 可达 / 14 冻结孤岛 + 1 GATED(mca-gateway) / new_gaps=0；权威值当场由脚本自报，勿写死）"
 
 [[gate]]
 id = "G-10"
@@ -172,3 +172,61 @@ expect = 0
 kind = "heavy"
 disk_gb = 0
 note = "逐包 cargo fmt --check（本机 cargo fmt --all 报 os error 206，所用聚合法）；44 包全部干净才算过"
+
+# C9 Top-K sort_by 例外登记表守护门（ADR-160 同族；此前登记无门，现补牙）。
+# 只 enforce 登记表自身不退化（格式/重复/失效/裁决词/只减不增），不做启发式
+# sort_by 扫描（避免误报红）。先 --selftest 证明门有牙，再跑真实裁决，沿
+# check_crate_reachability/check_layer_map_parity 先例。
+[[gate]]
+id = "G-20"
+spec_ref = "C9 / ADR-160"
+cmd = "{python} scripts/check_topk_registry.py --selftest"
+expect = 0
+kind = "light"
+note = "Top-K 登记门有牙齿（幽灵站点必红/缺裁决必红/畸形必红/重复必红/增长必红/收缩放行）"
+
+[[gate]]
+id = "G-21"
+spec_ref = "C9 / ADR-160"
+cmd = "{python} scripts/check_topk_registry.py"
+expect = 0
+kind = "light"
+note = "topk_sortby_freeze.txt 站点格式/无重复/不失效/裁决合规/只减不增（无 git 基线时棘轮自动待命）"
+
+# WS-B 覆盖率门（审计 P0 #1）：真实 JSON 裁决在 nightly（coverage.yml），
+# 本地/PR 侧只跑零 cargo 的静态面（配置自洽 + 棘轮单调 + 门自身有牙）。
+# 先 --selftest 证明门有牙（低于 min/低于 floor/零记录/幽灵/下调 均必红），
+# 再 --validate-config 校两份 toml 自洽。沿 check_crate_reachability/coverage 先例。
+[[gate]]
+id = "G-22"
+spec_ref = "WS-B / RK-P45"
+cmd = "{python} scripts/coverage_gate.py --selftest"
+expect = 0
+kind = "light"
+note = "覆盖率门有牙齿（低于 min 必红/低于 floor 必红/零记录 crate 必红/幽灵行必红/下调必红）"
+
+[[gate]]
+id = "G-23"
+spec_ref = "WS-B / RK-P45"
+cmd = "{python} scripts/coverage_gate.py --validate-config"
+expect = 0
+kind = "light"
+note = "coverage_baseline.toml 与 coverage_per_crate_floor.toml 自洽（min≤target/buffer 3..5/floor 存在/棘轮单调）"
+
+# 反馈链路（审计 finding #4）：交叉校验"清单必绿门"与 workflow continue-on-error 一致性，
+# 防"清单说阻塞、实际被吞"的分裂（coverage 旧版正是此病）。先 selftest 证明门有牙再跑真实裁决。
+[[gate]]
+id = "G-24"
+spec_ref = "反馈链路 / finding #4"
+cmd = "{python} scripts/audit_gate_parity.py --selftest"
+expect = 0
+kind = "light"
+note = "门一致性校验器有牙齿（COE 语境必抓/阻塞不报/参数签名防误报/缺清单退2）"
+
+[[gate]]
+id = "G-25"
+spec_ref = "反馈链路 / finding #4"
+cmd = "{python} scripts/audit_gate_parity.py"
+expect = 0
+kind = "light"
+note = "expect=0 的收口门均在 CI 阻塞运行（无被 continue-on-error 吞）；已知限制：step级 COE-after-run 不覆盖"

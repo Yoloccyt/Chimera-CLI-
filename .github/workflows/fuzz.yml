@@ -3,14 +3,14 @@ name: Fuzz
 # ============================================================
 # Week 8 限制深度攻坚 — cargo-fuzz CI 集成
 #
-# 触发:推送 v*.*.*-omega 标签 或 手动触发
+# 触发:推送 v*.*.*-omega 标签、每周一定时(UTC 03:00,C5 新增) 或 手动触发
 # 运行:ubuntu-latest runner + nightly 工具链 + cargo-fuzz
 # 时长:8 target × 300s + 编译 ≈ 35-45min
 #
 # 本地 Windows GNU 无法运行(libFuzzer C++ 与 g++ 不兼容),
 # 委托 Linux CI 执行,解除限制 1。
 #
-# Fuzz target 清单(7 个,与 fuzz/Cargo.toml [[bin]] 声明一致):
+# Fuzz target 清单(8 个,与 fuzz/Cargo.toml [[bin]] 声明一致):
 #   1. quest_parse           — Quest 解析
 #   2. seccore_sandbox       — SecCore 沙箱
 #   3. event_serialize       — 事件序列化
@@ -24,6 +24,11 @@ on:
   push:
     tags:
       - 'v*.*.*-omega'
+  # C5 新增(2026-09-04): 每周一定时模糊测试 —— 语料持续积累 + 每周新鲜输入,
+  # 与 slo.yml 每日 04:00 UTC / stress nightly 错峰;
+  # 注意: schedule 仅对默认分支上的本文件生效(合入后生效)。
+  schedule:
+    - cron: '0 3 * * 1'
   workflow_dispatch:  # 允许手动触发
 
 permissions:
@@ -73,12 +78,27 @@ jobs:
           key: fuzz-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             fuzz-${{ matrix.target }}-cargo-
-          lookup-only: true
+        # C5 修复(2026-09-04): 移除 lookup-only: true —— actions/cache 的该参数仅
+        # 检查缓存存在性而不下载恢复,使本步骤成为 no-op;默认行为(restore +
+        # post save)即符合意图。
+
+      # C5 新增(2026-09-04): libFuzzer 语料滚动缓存 —— key 随 run_number 递增,
+      # 每次运行 restore 最近一次语料(fuzz/corpus/<target>),fuzz 结束后 post
+      # 步骤保存扩充后的语料;300s 冷启动由"从零积累"变为"在历史语料上继续深挖",
+      # 旧条目由 GitHub Actions 缓存 LRU(仓库 10GB 上限)自然淘汰。
+      - name: Restore fuzz corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_number }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
 
       - name: Install cargo-fuzz
-        # WHY: --locked 锁定 Cargo.lock,防止 cargo-fuzz 上游 minor 版本引入
-        #      破坏性变更导致 CI 间歇性失败(reproducibility 优先)
-        run: cargo install cargo-fuzz --locked
+        # WHY: --locked 锁定 Cargo.lock + --version 固定工具自身版本,双重复现:
+        #      上游 minor 破坏性变更与版本漂移导致的间歇失败均被封堵(reproducibility 优先)。
+        #      0.13.2 = 2026-09-04 crates.io max_stable_version(C5)。
+        run: cargo install cargo-fuzz --locked --version 0.13.2
 
       - name: Run fuzz target (${{ matrix.target }})
         working-directory: ./fuzz

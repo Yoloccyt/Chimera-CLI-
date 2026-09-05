@@ -31,6 +31,9 @@
 #![warn(missing_docs, clippy::all)]
 
 /// P4-T6: CausalGraph 归因台账（ADR-132,diff 5s 窗口因果链回溯）
+///
+/// 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 零生产消费方;接线路径=
+/// 遥测导出侧接入或降为内部结构,退役条件见 ADR-181 决策 2。
 pub mod attribution;
 pub mod backpressure;
 pub mod bus;
@@ -41,6 +44,9 @@ pub mod bus;
 /// - `concurrent_with`:a 与 b 无因果关系
 ///
 /// 详见 [`causal::VectorClock`]。
+///
+/// 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 消费方仅 attribution(本 crate
+/// 内部基座),零外部/生产接线;对外 API 面不扩大。
 pub mod causal;
 /// 事件分类实现(P1-3 拆分,types.rs 上帝文件治理)
 ///
@@ -71,6 +77,9 @@ pub mod experience_card_bus;
 ///
 /// 验证 EventMetadata 序列(event_id 时序/同 source 时间戳/唯一性),
 /// 与 107+ 事件变体载荷解耦;类型复用 `nexus_contracts::formal_props`(L0)。
+///
+/// 状态(ADR-181):VERIFIER-EVIDENCE-ONLY —— 仅供形式化验证证据链
+/// (FormalVerifierGate 7 验证器之一,经根 E2E 消费),非生产运行时路径;不退役。
 pub mod formal;
 pub mod logging;
 /// 膜渗透过滤器(P2-W6.1,ADR-033 后续膜深化)
@@ -93,9 +102,12 @@ pub mod pattern_index;
 pub mod payloads;
 /// RCU 单调读状态容器(P2-W7.2.3,§9.1 arc-swap)
 ///
-/// 因果一致性三层之二:内环共享状态的最终一致 + 单调读。
+/// 因果一致性三层之二的设计意图:内环共享状态的最终一致 + 单调读。
 /// 无锁读(~5ns)+ 原子写(~50ns),旧快照在新写入后仍有效(RCU 回收语义)。
 /// 详见 [`rcu::MonotonicState`]。
+///
+/// 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 当前零生产消费方(三层叙事中
+/// 仅本层未接线,勿按"已生效"引用);内环里程碑结束仍零消费则按 ADR-181 退役。
 pub mod rcu;
 /// Segment-aware PER — 轨迹分段优先级经验回放（v3.4.0 §6.2）
 ///
@@ -103,12 +115,19 @@ pub mod rcu;
 /// denominator + TD 误差权重采样）。
 pub mod segment_per;
 /// P4-T4: 影子双跑 diff 采集（串行影子 vs 分片实投逐事件比对 + ≥7 天台账）
+///
+/// 状态(ADR-181):EXPERIMENTAL-UNWIRED(运维工具态)—— 双跑观察经
+/// scripts/run_shadow_sojourn.ps1 手动触发,未接 CI/生产进程;分片转正决策
+/// 的数据源即本台账(转正后按 ADR-181 决策 2 归档 examples)。
 pub mod shadow_diff;
 /// ShardedBus 分片核心 — 非 Critical 事件的分片扇出(P1-T12,手册 §8.5)
 ///
 /// Lane 三车道判定(Critical/OrderSensitive/Unordered)+ 64 片无锁队列扇出
-/// + shard_worker 攒批汇入既有 broadcast。灰度开关:`EventBus::enable_sharding`
-/// (默认不启用,零回归)。详见 [`shard::ShardedEventBus`]。
+/// + shard_worker 攒批汇入既有 broadcast。灰度开关:`EventBus::enable_sharding`。
+/// 状态(ADR-181 发现 1 订正):PRODUCTION-WIRED —— osa/faae/gqep/gsoe/
+/// efficiency-monitor 五处组合根运行时 opt-in `let _ = enable_sharding(...)`
+/// (无 tokio runtime 自动 Err 降级单流,幂等拒绝重复启用),非"未接线"。
+/// 详见 [`shard::ShardedEventBus`]。
 pub mod shard;
 pub mod subscriber;
 /// P2-T11: OTel 风格轻量遥测（v4.0 WI-28 落地,ADR-143:event-bus 增强）

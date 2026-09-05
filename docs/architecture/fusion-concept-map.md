@@ -40,7 +40,7 @@
 | LPA 分层提示词（分层 Prompt 架构） | V4 §提示 | `crates/chimera-cli/src/`（CLI 入口，分层提示词组装） | 部分 | 中 | L10 `chimera-cli`；未见独立 `lpa.rs` 模块（以 `crates/chimera-cli/src/` 目录为准，未发现独立文件时的兜底归因） |
 | WI-01~34（工作项 1-34） | V4 §里程碑 | 五新 crate 与既有 crate 子模块：L10 `nexus-app-server`（WI-01，`src/{server,backend,sse,approval,transport,protocol,subagent_engine}.rs`）、L3 `session-store`（WI-02）、L9 `mas-sched`/`nexus-hook`、L7 `nexus-subagent`（`src/{auction,runtime,cancel}.rs`） | 已落地 | 高 | 38→43 crate 五新成员；ADR-141/145/146/148 |
 | Runtime Auditor（五维证据纪律） | V34 §自评估 | `crates/efficiency-monitor/src/auditor.rs`（配套 `monitor.rs`/`dashboard.rs`/`collectors.rs`/`oscillation_detector.rs`） | 已落地 | 高 | Ω₈-Assess；Runtime Auditor 证据纪律 |
-| Ω₁₀ / Ω₁₁（OMEGA 新增定律） | V4 §九定律扩展 | `docs/architecture/ADR-161`（新建，文档登记位） | 缺失（规划中） | 中 | 新增定律须 ADR 记录（同 Ω₅~Ω₉ 先例 ADR-065~068）；**当前无代码/ADR 落档**，仅预留 |
+| Ω₁₀ / Ω₁₁（OMEGA 新增定律） | V4 §九定律扩展 | `docs/architecture/ADR-170-omega-11th-laws.md`（正式收录） | 已落地（ADR-170 收录） | 高 | **已由 ADR-170 收录（2026-09-02）**：Ω₁₀-Card / Ω₁₁-Synthesize 作为 Rust 侧扩展定律正式纳入（原"规划中无代码/ADR"表述失效）；守恒表述升级为"十一定律(九基座+两扩展)" |
 | 记忆策略自适应（MinimalRecall→…→AggressivePruning） | V34 §记忆策略 | `crates/mlc-engine/src/memory_strategy_learner.rs`（+ `src/mem_con/controller.rs`） | 已落地 | 高 | 三重悖论免疫·记忆悖论 |
 | 进化悖论 L4 形式化门 | V34 §进化 | `crates/gsoe-evolution/src/formal_gate.rs`、`src/formal/{mod,invariant_closure,critic_monotonicity,lineage_checker}.rs` | 已落地 | 高 | 进化悖论 L4 跃迁；R2 解冻影子期（ADR-053 rev4） |
 | 信用分配 SHARP / 三元分解奖励 | CAF §信用 | `crates/parliament/src/sharp.rs`、`src/mappo.rs` | 已落地 | 高 | Ω₅-Credit |
@@ -63,7 +63,7 @@
 | **on_demand_synthesizer** | 已落地（非缺失） | 经核实存在于 `crates/mlc-engine/src/on_demand_synthesizer.rs`。 |
 | **error_signature_collector** | 已落地（非缺失） | 经核实存在于 `crates/seccore/src/error_signature_collector.rs`。 |
 | **experience_card_bus** | 已落地（非缺失） | 经核实存在于 `crates/event-bus/src/experience_card_bus.rs`。 |
-| **Ω₁₀ / Ω₁₁** | 缺失（规划） | 无代码、无 ADR-161 文件；预留 `docs/architecture/ADR-161`（新建）。 |
+| **Ω₁₀ / Ω₁₁** | 非缺失（已由 ADR-170 正式收录） | **已由 ADR-170 收录（2026-09-02）**：Ω₁₀-Card / Ω₁₁-Synthesize 已作为 Rust 侧扩展定律落档并纳入"十一定律"守恒表述（原"无代码、无 ADR-161"规划态失效）。 |
 | **lpa** 独立模块 | 缺失（合入 CLI） | 分层提示词组装归 `crates/chimera-cli/src/`，未见独立 `lpa.rs` 模块。 |
 | **Paddock-Sandbox 独立进程** | 缺失（沙箱组件解耦） | 已组件化解耦（sandbox/os_backend/execpolicy/gvisor 分文件），但未作为独立进程/独立 crate 部署。 |
 
