@@ -67,9 +67,9 @@ note = "audit.yml / agents.md / CLAUDE.md 三处 cargo audit 口径逐字等价�
 id = "G-07"
 spec_ref = "T2（同 commit 硬规则）"
 cmd = "{python} scripts/audit_commit_coupling.py"
-expect = 1
+expect = 0
 kind = "light"
-note = "已跟踪执行体引用未跟踪文件的全集；T2 分批提交前**按设计为 1**，各批落地后应归 0"
+note = "已跟踪执行体引用未跟踪文件的全集；在途批次已于 c5a5327 落地→耦合消解，按'各批落地后应归 0'从 1 翻为 0；若再现新未跟踪引用则重新变红"
 
 [[gate]]
 id = "G-08"
