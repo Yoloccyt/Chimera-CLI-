@@ -79,10 +79,13 @@ jobs:
         # --ignore-filename-regex 从分母剔除 tests/benches（等价旧 --ignore-tests +
         # --exclude-files），避免测试代码虚高覆盖率。
         # 不带 --fail-under-lines：裁决统一交给 coverage_gate.py（单一裁决点）。
+        # --no-cfg-coverage：cargo-llvm-cov 默认注入 `--cfg coverage`，会激活部分
+        #   面板代码的 #[cfg(coverage)] 分支→改变渲染→chimera-tui 4 个 panel 内容断言
+        #   与正常 `cargo test`（mca job 已绿）不一致。关掉该 cfg 使覆盖构建与测试预期一致。
         run: |
           set -o pipefail
           mkdir -p coverage
-          cargo llvm-cov --workspace --json --output-path coverage/coverage.json \
+          cargo llvm-cov --workspace --no-cfg-coverage --json --output-path coverage/coverage.json \
             --ignore-filename-regex '(/tests/|/benches/|^tests/|^benches/)' \
             2>&1 | tee coverage/llvm-cov.log
 
