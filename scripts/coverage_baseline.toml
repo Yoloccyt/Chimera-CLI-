@@ -12,11 +12,14 @@
 #
 # 历史与效力恢复：2026-09-01 建立本文件时，全库尚无一次"阈值真正生效"的测量
 #   （旧 coverage.yml 有 --fail-under 85 但 job 级 continue-on-error: true，结论被丢弃
-#   ⇒ RK-P45）。WS-B 已去掉 continue-on-error 并让判定真正生效，故 50 是**首跑校准前的
-#   临时下界**，不是实测值；coverage nightly 首跑后必须把 min 抬到实测值附近并登记 RK-P45。
+#   ⇒ RK-P45）。WS-B 去掉 continue-on-error 并把测量引擎换为 cargo-llvm-cov（避开第三方
+#   pulp 在 tarpaulin 插桩下的 E0080 编译崩溃）。2026-09-05 CI 首跑实测：聚合行覆盖率
+#   **92.97%**（43/43 成员、718 文件、逐 crate floor 全过）——已超 target 85。
+#   故将 min 由占位 50 抬到 **85**（= target，实测下留 ~8pp 冗余；受 min≤target 约束，
+#   工具建议的 87 因 >target 不采）。后续棘轮只升不降。
 
 [coverage]
-min_line_coverage = 50
+min_line_coverage = 85
 target_line_coverage = 85
 buffer_pp = 5
 floor_file = "scripts/coverage_per_crate_floor.toml"
