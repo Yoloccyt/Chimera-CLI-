@@ -46,6 +46,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # WHY 钉定工具链(2026-09-05): `-D warnings` 的 clippy 门必须锁版本；
+      # 浮动到 ubuntu 预装 stable(现 1.98) 会因新版 clippy 新 lint 突发红
+      # (如 chunks_exact_to_as_chunks 波及 nexus-contracts/repo-wiki 等多 crate)。
+      # 钉到全仓本地已验证的 1.97.1(check/clippy/test 全绿)，使 CI==开发工具链；
+      # 待代码整体采用新 lint 后再上调。不用 rust-toolchain.toml（会破 GNU/MSVC/Linux 兼容）。
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt clippy
+
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
         with:
@@ -256,6 +265,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # WHY 钉定工具链(2026-09-05): `-D warnings` 的 clippy 门必须锁版本；
+      # 浮动到 ubuntu 预装 stable(现 1.98) 会因新版 clippy 新 lint 突发红
+      # (如 chunks_exact_to_as_chunks 波及 nexus-contracts/repo-wiki 等多 crate)。
+      # 钉到全仓本地已验证的 1.97.1(check/clippy/test 全绿)，使 CI==开发工具链；
+      # 待代码整体采用新 lint 后再上调。不用 rust-toolchain.toml（会破 GNU/MSVC/Linux 兼容）。
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt clippy
+
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
         with:
@@ -311,6 +329,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # WHY 钉定工具链(2026-09-05): `-D warnings` 的 clippy 门必须锁版本；
+      # 浮动到 ubuntu 预装 stable(现 1.98) 会因新版 clippy 新 lint 突发红
+      # (如 chunks_exact_to_as_chunks 波及 nexus-contracts/repo-wiki 等多 crate)。
+      # 钉到全仓本地已验证的 1.97.1(check/clippy/test 全绿)，使 CI==开发工具链；
+      # 待代码整体采用新 lint 后再上调。不用 rust-toolchain.toml（会破 GNU/MSVC/Linux 兼容）。
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt clippy
+
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
         with:
@@ -360,6 +387,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      # WHY 钉定工具链(2026-09-05): `-D warnings` 的 clippy 门必须锁版本；
+      # 浮动到 ubuntu 预装 stable(现 1.98) 会因新版 clippy 新 lint 突发红
+      # (如 chunks_exact_to_as_chunks 波及 nexus-contracts/repo-wiki 等多 crate)。
+      # 钉到全仓本地已验证的 1.97.1(check/clippy/test 全绿)，使 CI==开发工具链；
+      # 待代码整体采用新 lint 后再上调。不用 rust-toolchain.toml（会破 GNU/MSVC/Linux 兼容）。
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt clippy
 
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
