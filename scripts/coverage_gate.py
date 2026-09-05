@@ -21,7 +21,7 @@
 模式：
     --print-fail-under          # 打印整数 min（供 shell $() 取用）；异常退 2 不伪装成 0
     --validate-config           # 纯静态：两份 toml 自洽 + 棘轮单调（零 cargo/零 JSON，可进 PR/本地）
-    --check DIR                 # 读 DIR/*.json（tarpaulin Json 输出）→ 聚合 + 逐 crate 裁决
+    --check DIR                 # 读 DIR/*.json（tarpaulin 或 cargo-llvm-cov 输出）→ 聚合 + 逐 crate 裁决
     --selftest                  # fixture 负控：证明门有牙（每条违规必红、干净必绿）
 
 退出码：0 通过 / 1 违规（判红）/ 2 不可判定（缺文件/环境，绝不等于通过）。
@@ -128,6 +128,35 @@ def parse_record(r):
         total = 0
         covered = 0
     return path, int(covered), int(total)
+
+
+def parse_llvm_files(obj):
+    """cargo-llvm-cov 导出形状 → [(path, covered, total)]。
+
+    schema: {"data":[{"files":[{"filename":...,"summary":{"lines":{"count":N,"covered":C}}}], ...}]}。
+    仅取 per-file 行数据（count/covered），聚合/逐 crate 交给上层，与 tarpaulin 口径一致。
+    llvm-cov 只对 workspace 成员插桩，第三方依赖（如 pulp）不插桩→不会因
+    -Cinstrument-coverage 触发依赖内 const-eval 崩溃（这是改用 llvm-cov 的根因）。
+    """
+    out = []
+    for block in obj.get("data", []):
+        for f in block.get("files", []):
+            fn = f.get("filename", "(unknown)")
+            lines = (f.get("summary") or {}).get("lines") or {}
+            out.append((fn, int(lines.get("covered", 0)), int(lines.get("count", 0))))
+    return out
+
+
+def load_records_from_obj(data):
+    """统一入口：tarpaulin=list[record]；llvm-cov=dict with 'data' → [(path,cov,total)]."""
+    recs = []
+    if isinstance(data, list):
+        for r in data:
+            if isinstance(r, dict):
+                recs.append(parse_record(r))
+    elif isinstance(data, dict) and "data" in data:
+        recs.extend(parse_llvm_files(data))
+    return recs
 
 
 def aggregate(records):
@@ -301,9 +330,9 @@ def mode_check(dir_path):
             print(f"[WARN] skip unparsable {os.path.basename(fp)}: {e}")
             continue
         if isinstance(data, list):
-            for r in data:
-                if isinstance(r, dict):
-                    records.append(parse_record(r))
+            records.extend(load_records_from_obj(data))
+        elif isinstance(data, dict):
+            records.extend(load_records_from_obj(data))
     if not records:
         print("[FAIL] no usable coverage records (key-name contract broken? print first JSON to summary)")
         return 2
@@ -399,6 +428,17 @@ def mode_selftest():
     expect("selftest-10a parse covered/uncovered", (c, t) == (8, 10))
     p, c, t = parse_record({"filename": "crates/core/src/x.rs", "total_lines": 20, "cover": 0.5})
     expect("selftest-10b parse total_lines+cover", (c, t) == (10, 20))
+    # 11) llvm-cov dict 形状→统一解析（新引擎回归基线；无此则 --check 报“无可用记录”退 2）
+    llvm = {"data": [{"files": [
+        {"filename": "crates/core/src/lib.rs", "summary": {"lines": {"count": 100, "covered": 90}}},
+        {"filename": "crates/sec/src/a.rs", "summary": {"lines": {"count": 100, "covered": 80}}},
+    ]}]}
+    lr = load_records_from_obj(llvm)
+    expect("selftest-11 llvm-cov dict parsed to records",
+           sorted(lr) == sorted([("crates/core/src/lib.rs", 90, 100), ("crates/sec/src/a.rs", 80, 100)]))
+    # 12) llvm-cov 空 summary/缺键 → 不崩，归 (path,0,count)
+    lr2 = load_records_from_obj({"data": [{"files": [{"filename": "crates/x/src/a.rs"}]}]})
+    expect("selftest-12 llvm-cov missing summary tolerated", lr2 == [("crates/x/src/a.rs", 0, 0)])
 
     print("=== selftest result:", "ALL PASS" if not fails else f"{len(fails)} FAIL", "===")
     return 0 if not fails else 1

@@ -7,17 +7,17 @@
 #   scripts/coverage_baseline.toml，由 scripts/coverage_gate.py 消费（不在本文件写死数字，
 #   避免 bench_check.yml heredoc 那笔"两份实现"债的复发）。
 #
-# 决策点：tarpaulin 只**产数据**（不带 --fail-under），全部裁决集中在
+# 决策点：测量引擎(cargo-llvm-cov)只**产数据**（不带 --fail-under-lines），全部裁决集中在
 #   `coverage_gate.py --check`（聚合 V3 + 逐 crate V5 + 零记录 V2 + 幽灵 V1），
 #   保持"单一裁决点"。
 #
 # 为何 nightly 阻塞但不挂 PR：本 workflow 只有 schedule + workflow_dispatch 触发器，
-#   天然不是 PR 状态检查；tarpaulin 冷编译插桩远超 ci.yml 15min 快轨预算，故不进 PR。
+#   天然不是 PR 状态检查；全工作区插桩冷编译远超 ci.yml 15min 快轨预算，故不进 PR。
 #   ⚠ 前提：分支保护不得把 coverage 列为 required check（收口时人工确认一次）。
 #
 # cancel-in-progress=false：趋势采样要的是"每次都跑完"，中途取消丢样本（沿 slo.yml 论证）。
 # =============================================================================
-name: Coverage gate (tarpaulin + coverage_gate.py)
+name: Coverage gate (cargo-llvm-cov + coverage_gate.py)
 
 on:
   schedule:
@@ -54,10 +54,13 @@ jobs:
         with:
           workspaces: '.'
 
-      - name: Install cargo-tarpaulin
+      - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-tarpaulin
+          tool: cargo-llvm-cov
+
+      - name: Ensure llvm-tools-preview
+        run: rustup component add llvm-tools-preview
 
       # 趋势历史：restore 上一次的 coverage_history.jsonl，跑完追加并回存。
       - name: Restore coverage history
@@ -68,44 +71,49 @@ jobs:
           restore-keys: |
             coverage-history-
 
-      - name: Run coverage (tarpaulin, Json + Html)
-        # --ignore-tests: 从分母剔除 #[test]/#[tokio::test] 代码行（本仓内联测试体量大，
-        #   不剔除会让覆盖率虚高）。
-        # --exclude-files 用 crate 前缀匹配各 crate 的 tests/benches（旧写法 'tests/*'
-        #   无 crate 前缀，是否命中取决于 tarpaulin glob 实现——首跑须核对 JSON 里不出现
-        #   tests/ 路径，否则测试代码进了分母）。
-        # 不带 --fail-under：裁决统一交给 coverage_gate.py（单一裁决点）。
+      - name: Run coverage (cargo-llvm-cov, JSON)
+        # WHY llvm-cov 而非 tarpaulin：tarpaulin 经全局 RUSTFLAGS 对传递依赖
+        # 也注入 -Cinstrument-coverage，会触发第三方 pulp@0.22.3 的 const-eval
+        # E0080（CI 首跑实证）。cargo-llvm-cov 仅对 workspace 成员插桩、依赖不插桩
+        # →pulp 正常编译→可测全工作区。
+        # --ignore-filename-regex 从分母剔除 tests/benches（等价旧 --ignore-tests +
+        # --exclude-files），避免测试代码虚高覆盖率。
+        # 不带 --fail-under-lines：裁决统一交给 coverage_gate.py（单一裁决点）。
         run: |
           set -o pipefail
           mkdir -p coverage
-          cargo tarpaulin --workspace --out Json --out Html --output-dir coverage \
-            --ignore-tests \
-            --exclude-files 'crates/*/tests/*' 'crates/*/benches/*' 'tests/*' 'benches/*' \
-            2>&1 | tee coverage/tarpaulin.log
+          cargo llvm-cov --workspace --json --output-path coverage/coverage.json \
+            --ignore-filename-regex '(/tests/|/benches/|^tests/|^benches/)' \
+            2>&1 | tee coverage/llvm-cov.log
 
       # 钉死键名契约：把首条 JSON 的键与首条记录打到 step summary，
-      # 一旦 tarpaulin 版本改了 filename/covered 键，coverage_gate 会因解析不到而判 2，
+      # 一旦 llvm-cov 版本改了 summary.lines 键，coverage_gate 会因解析不到而判 2，
       # 此处日志给出根因（避免"门悄悄不判"的假绿）。
-      - name: Pin tarpaulin JSON key contract
+      - name: Pin llvm-cov JSON key contract
         if: always()
         run: |
           mkdir -p coverage
           python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY" || true
           import glob, json
           fs = sorted(glob.glob("coverage/*.json"))
-          print("### tarpaulin JSON contract")
+          print("### coverage JSON contract (llvm-cov / tarpaulin)")
           print(f"- files: {len(fs)}")
           if fs:
               d = json.load(open(fs[0]))
-              print(f"- first-file: {fs[0]}")
-              if isinstance(d, list) and d:
-                  print(f"- record-count: {len(d)}")
-                  print(f"- keys: {sorted(d[0].keys())}")
-                  print(f"- sample filename: {d[0].get('filename') or d[0].get('full_path') or d[0].get('file')}")
+              if isinstance(d, dict) and "data" in d:
+                  blocks = d.get("data", [])
+                  nf = sum(len(b.get("files", [])) for b in blocks)
+                  print(f"- format: llvm-cov; blocks={len(blocks)}; file-records={nf}")
+                  if blocks and blocks[0].get("files"):
+                      f0 = blocks[0]["files"][0]
+                      print(f"- sample filename: {f0.get('filename')}")
+                      print(f"- summary.lines keys: {sorted((f0.get('summary') or {}).get('lines', {}).keys())}")
+              elif isinstance(d, list):
+                  print(f"- format: tarpaulin list; records={len(d)}")
               else:
-                  print("- WARN: empty or unexpected shape")
+                  print("- WARN: unexpected JSON shape")
           else:
-              print("- WARN: no *.json produced (tarpaulin failed?)")
+              print("- WARN: no *.json produced (coverage run failed?)")
           PY
 
       - name: Coverage gate verdict (aggregate + per-crate floors)

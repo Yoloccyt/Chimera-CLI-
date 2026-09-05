@@ -2,7 +2,7 @@
 # `coverage_gate.py --print-fail-under` 取数，不再在 workflow 里写死数字）。
 #
 # 语义：
-#   min_line_coverage    —— 聚合行覆盖率下限，tarpaulin `--fail-under` 的实际门槛，低于即红。
+#   min_line_coverage    —— 聚合行覆盖率下限，由 coverage_gate.py --check 判定（测量引擎：cargo-llvm-cov），低于即红。
 #   target_line_coverage —— 治理目标（OMEGA 覆盖率基线），达到后 min 与 target 应相等。
 #   buffer_pp            —— 校准缓冲：把 min 抬到"实测 - buffer_pp"个百分点（期望 3..5）。
 #   floor_file           —— 逐 crate 下界表（治"聚合达标但单模块裸奔"）。
