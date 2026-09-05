@@ -187,7 +187,7 @@ def main(argv):
         print("[FAIL] %s" % f)
     if fails:
         print("Layer-map parity BROKEN (sh vs ps1 vs Cargo.toml). Fix every table")
-        print("in the same commit; see DRIFT WARNINGs in both scripts' headers.")
+        print("in the same commit; see DRIFT warnings in both scripts' headers.")
         return 1
     print("[OK] layer-map parity holds: sh case=%d sh list=%d ps1=%d members=%d (all equal)"
           % (len(sh_case), len(sh_list), len(ps_map), len(members)))

@@ -217,7 +217,7 @@ mod tests {
     // ============================================================
 
     #[test]
-    fn critical_bypass_reachable_and_serverity_critical() {
+    fn critical_bypass_reachable_and_severity_critical() {
         use event_bus::EventSeverity;
 
         let bus = make_bus();
