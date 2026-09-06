@@ -1,12 +1,12 @@
 # Chimera CLI Code Wiki — NEXUS-OMEGA
 
 > **版本**: v2.28.0-omega (Code Wiki · v2.28.0-omega 基线同步,2026-08-28)
-> **基线代码版本**: v2.28.0-omega 在途(迭代链 v2.0.0-omega `chimera-mas` 多 Agent 协同子系统 → v2.4.0-omega P5 进化闭环 37 crate → v2.14.0~~v2.19.0 P2 Sprint 14 项任务全量交付 → v2.20.0-omega PROBE HCW-Sparse 深度优化完整闭环 P-1~~P3 38 crate(PROBE 阶段基线起点) → v2.21.0-omega CLI LLM 统一入口 → v2.22.0-omega MCA token 效率深度优化 38 个 crate 第 38 个 `mca-gateway` 落地 → v2.24.0-omega Phase 9 三环循环元架构重组收尾 P9-T12 + RUSTSEC-2026-0217/0222/0223 修复 → v2.25.0-omega Milestone B 全部交付 B-1~~B-6(Milestone B 终态) → v2.26.0-omega Concord TUI 重构 W0~~W11 全部收尾(SlashCommandRegistry 53 命令注册 + `/` 一级整合 + Chat/Quest 双轨会话模式 + ApprovalMode 动态 Shift+Tab + i18n 中英门户 + 10 份 ADR-074~~083 落档) →~~ **~~v2.27.0-omega Phase 10 §16 跨层协同闭环审计修复正式发布~~**~~(W1-W7 全波次闭环:经验卡片闭环组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口) →~~ **~~v2.27.1-omega GPG 签名补发 + MCA E2E 超时加固~~**~~(无功能性变更) →~~ **~~v2.28.0-omega(在途,未打 tag)Phase 1-5 Ch12 W1-W26 收尾~~**~~(ComputeBridge/ShardedBus/CBMR/CausalGraph + 5 新 crate 至 43 + ADR-095~~160 + ADR-160 可达性棘轮/event\_types 镜像退役);types.rs 单表(metadata() 分类)**144 NexusEvent 变体**)
-> **最后更新**: 2026-08-30(v2.28.0-omega 在途基线收编:43 crates · 28 生产可达/15 ADR-160 冻结孤岛 · 11564 tests · 144 NexusEvent · ADR-001\~160;工作区分支 `feat/phase1-w1-w8`,最新已发 tag 为 v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag),v2.28 尚未打 tag)
+> **基线代码版本**: v2.28.0-omega 在途(迭代链 v2.0.0-omega `chimera-mas` 多 Agent 协同子系统 → v2.4.0-omega P5 进化闭环 37 crate → v2.14.0~~v2.19.0 P2 Sprint 14 项任务全量交付 → v2.20.0-omega PROBE HCW-Sparse 深度优化完整闭环 P-1~~P3 38 crate(PROBE 阶段基线起点) → v2.21.0-omega CLI LLM 统一入口 → v2.22.0-omega MCA token 效率深度优化 38 个 crate 第 38 个 `mca-gateway` 落地 → v2.24.0-omega Phase 9 三环循环元架构重组收尾 P9-T12 + RUSTSEC-2026-0217/0222/0223 修复 → v2.25.0-omega Milestone B 全部交付 B-1~~B-6(Milestone B 终态) → v2.26.0-omega Concord TUI 重构 W0~~W11 全部收尾(SlashCommandRegistry 53 命令注册 + `/` 一级整合 + Chat/Quest 双轨会话模式 + ApprovalMode 动态 Shift+Tab + i18n 中英门户 + 10 份 ADR-074~~083 落档) →~~ **~~v2.27.0-omega Phase 10 §16 跨层协同闭环审计修复正式发布~~**~~(W1-W7 全波次闭环:经验卡片闭环组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口) →~~ **~~v2.27.1-omega GPG 签名补发 + MCA E2E 超时加固~~**~~(无功能性变更) →~~ **~~v2.28.0-omega(发布提交 af62e44 已落 2026-09-02,tag 待推)Phase 1-5 Ch12 W1-W26 收尾~~**~~(ComputeBridge/ShardedBus/CBMR/CausalGraph + 5 新 crate 至 43 + ADR-095~~160 + ADR-160 可达性棘轮/event\_types 镜像退役);types.rs 单表(metadata() 分类)**144 NexusEvent 变体**)
+> **最后更新**: 2026-09-06(第三轮基线刷新:43 crates · 28 生产可达/14 冻结孤岛 + 1 GATED(ADR-177) · 11587 tests(2026-09-02 重测) · 144 NexusEvent · ADR-001\~182 · 覆盖率引擎 tarpaulin→cargo-llvm-cov;发布提交 `af62e44` 2026-09-02 已落,最新已发 tag 为 v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag),v2.28 尚未打 tag)
 > **权威源**: 本文件是架构决策、模块职责、核心类型的唯一权威参考
 > **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 43/43 crate 全绿)
 > **专家签名**: E01 首席架构师 · E02 安全架构师 · E03 记忆系统专家 · E04 路由算法专家 · E05 生产系统专家 · E06 认知科学专家 · E07 任务调度专家 · E08 前端交互专家
-> **三方一致性** (2026-08-30 复核): `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,43 members) ⇔ `CHANGELOG.md` 最新条目 = `[2.28.1-omega] 2026-08-28 在途补丁登记(未升 version)` ⇔ 本文档 = **43 crates(28 生产可达 + 15 ADR-160 冻结孤岛)· 144 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)· 测试规模 11564 passed / 0 failed**(2026-08-31 当前工作树全量重测,485 test target;静态 `#[test]` 计数 11433,差值为 doctest 43 + 宏展开;演进链 v2.20.0 8455 → v2.22.0 9255 → v2.24.0 9590 → v2.25.0 9669 → C 9699 → D 9744 → v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11564)
+> **三方一致性** (2026-09-06 复核): `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,43 members) ⇔ `CHANGELOG.md` 最新条目 = `[2.28.2-omega] 2026-09-05 在途批次登记(未升 version)` ⇔ 本文档 = **43 crates(28 生产可达 + 14 冻结孤岛 + 1 GATED,ADR-177)· 144 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)· 测试规模 11587 passed / 0 failed**(2026-09-02 当前工作树全量重测,485 test target,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;演进链 v2.20.0 8455 → v2.22.0 9255 → v2.24.0 9590 → v2.25.0 9669 → C 9699 → D 9744 → v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587)
 > **基线变更触发**: 任何 workspace.member / NexusEvent 变体 / `#[test]` 函数增删必须同步更新本文档的"§1.1 身份标识"与"§3 Crate 索引",并触发 `scripts/check_doc_consistency.ps1` 巡检
 
 ***
@@ -40,8 +40,8 @@
 | 技术栈      | Rust 2021 edition · Tokio async · Workspace × **43 crates** (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`)                                                                                                                                                                                                                                                                 |
 | 核心哲学     | OMEGA 十一定律: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize                                                                                                                                                                                                                                                                                                                         |
 | 设计来源     | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **当前版本** | `v2.28.0-omega` (**在途开发,工作区** **`feat/phase1-w1-w8`** **分支,尚未打 tag**;最新已发 tag = v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag);Phase 1-5 Ch12 波次 W1-W26 全部收尾 + 5 新 crate 落地 + ADR-095~160 治理 + 三轮冗余收敛;迭代链 v2.8.0 polish-v2.7 → v2.9.0~v2.13.0 L8/L10/MCA → v2.14.0\~v2.19.0 P3 Sprint → v2.20.0 PROBE → v2.21.0 CLI LLM → v2.22.0 MCA token → v2.24.0 Phase 9 → v2.25.0 Milestone B → v2.26.0 Concord TUI → v2.27.0 Phase 10 → v2.27.1 GPG 补发 → v2.28.0 Phase 1-5 治理 + 可达性棘轮) |
-| 测试规模     | **11564 passed / 0 failed** (debug 模式全量回归,2026-08-31 当前工作树全量重测,485 test target;含 Concord TUI 27 面板(REGISTERED\_FOCUS\_ORDER 代码实测 = PanelId enum 27 变体) + 53 slash commands(slash\_registry 断言 reg.len()==53) + 双轨会话 + Phase 10 跨层闭环 + Phase 12 Ch12 波次 1-5 + 5 新 crate + doctest;演进 v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11564)                                                                                                             |
+| **当前版本** | `v2.28.0-omega` (**发布提交 `af62e44` 已于 2026-09-02 落盘,tag 待推**;最新已发 tag = v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag);Phase 1-5 Ch12 波次 W1-W26 全部收尾 + 5 新 crate 落地 + ADR-095~160 治理 + 多轮冗余收敛(R1~R4→R9/R11);迭代链 v2.8.0 polish-v2.7 → v2.9.0~v2.13.0 L8/L10/MCA → v2.14.0\~v2.19.0 P3 Sprint → v2.20.0 PROBE → v2.21.0 CLI LLM → v2.22.0 MCA token → v2.24.0 Phase 9 → v2.25.0 Milestone B → v2.26.0 Concord TUI → v2.27.0 Phase 10 → v2.27.1 GPG 补发 → v2.28.0 Phase 1-5 治理 + 可达性棘轮) |
+| 测试规模     | **11587 passed / 0 failed** (debug 模式全量回归,2026-09-02 当前工作树全量重测,485 test target,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;含 Concord TUI 27 面板(REGISTERED\_FOCUS\_ORDER 代码实测 = PanelId enum 27 变体) + 53 slash commands(slash\_registry 断言 reg.len()==53) + 双轨会话 + Phase 10 跨层闭环 + Phase 12 Ch12 波次 1-5 + 5 新 crate + doctest;演进 v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587)                                                                                                             |
 
 ### 1.2 OMEGA 十一定律(Ω₁~Ω₉ 基座 + Ω₁₀/Ω₁₁ 扩展;权威定义源:`Chimera CLI 十层架构深度打磨与优化方案 最新版.md` §3;Ω₁₀/Ω₁₁ 见 `Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md` §3.1,收录于 ADR-170)
 
@@ -119,7 +119,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 > 仅依赖 L0/L1,与 chtc-bridge 同构),总数 37 → **38 crate**
 >
 > **v2.28.0-omega 变更** (Phase 1-5 Ch12 治理,ADR-141/145/146/148 + WI-01):
-> 38 → **43 crate**,新增 5 个生产 crate——L10 `nexus-app-server`(第 39,WI-01 宿主层协议门面,核心-表面分离,JSON-RPC v1 + 每 Thread 一 actor)、L3 `session-store`(第 40,ADR-141,append-only 会话事件流 + CBMR 微批写)、L9 `mas-sched`(第 41,ADR-145,从 chimera-mas strangler 拆出的多代理调度控制面)、L9 `nexus-hook`(第 42,ADR-146,13+ 生命周期 Hook + seccore 沙箱)、L7 `nexus-subagent`(第 43,ADR-148,类型化子代理运行时 + Task Auction,Swarm 上限 8)。**可达性**:ADR-160 棘轮裁定 28 个生产可达 + 15 个冻结孤岛(见 `scripts/crate_reachability_freeze.txt`),dev-dep 不计入装配面。
+> 38 → **43 crate**,新增 5 个生产 crate——L10 `nexus-app-server`(第 39,WI-01 宿主层协议门面,核心-表面分离,JSON-RPC v1 + 每 Thread 一 actor)、L3 `session-store`(第 40,ADR-141,append-only 会话事件流 + CBMR 微批写)、L9 `mas-sched`(第 41,ADR-145,从 chimera-mas strangler 拆出的多代理调度控制面)、L9 `nexus-hook`(第 42,ADR-146,13+ 生命周期 Hook + seccore 沙箱)、L7 `nexus-subagent`(第 43,ADR-148,类型化子代理运行时 + Task Auction,Swarm 上限 8)。**可达性**:ADR-160 棘轮裁定 28 个生产可达 + 14 个冻结孤岛 + 1 个 GATED(mca-gateway 经 ADR-177 重分类,见 `scripts/crate_reachability_freeze.txt`),dev-dep 不计入装配面。
 
 ### 2.2 各层职责概述
 
@@ -145,7 +145,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 > **v2.4.0-omega 变更**: 35 → 37 crate,新增 L0 `nexus-contracts` (ADR-033) + L6 `omega-learner` (ADR-031)。
 > **MCA M0 变更**: 37 → 38 crate,新增 L10 `mca-gateway` (ADR-065)。
 > **v2.28.0-omega 变更**: 38 → 43 crate,新增 L10 `nexus-app-server`(WI-01)、L3 `session-store`(ADR-141)、L9 `mas-sched`(ADR-145)、L9 `nexus-hook`(ADR-146)、L7 `nexus-subagent`(ADR-148)。
-> **可达性标注(ADR-160)**: 43 crate = 28 生产可达 + 15 冻结孤岛;孤岛完整清单(含阻塞依赖/解除条件)集中见本节末尾 **§3.11 冻结孤岛清单**,权威源为 `scripts/crate_reachability_freeze.txt`(由 `scripts/check_crate_reachability.sh` 生成,dev-dep 不计入装配面)。
+> **可达性标注(ADR-160 + ADR-177)**: 43 crate = 28 生产可达 + 14 冻结孤岛 + 1 GATED(mca-gateway);孤岛完整清单(含阻塞依赖/解除条件)集中见本节末尾 **§3.11 冻结孤岛清单**,权威源为 `scripts/crate_reachability_freeze.txt`(由 `scripts/check_crate_reachability.sh` 生成,dev-dep 不计入装配面)。
 
 ### 3.0 L0 Contracts (1 crate,ADR-033)
 
@@ -687,7 +687,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 | **关键类型**                       | `TuiApp` · `TuiDataSource` · `Panel`(trait) · `DataPipeline` · `EventSubscriber` · `TuiCommand` · `QuestAction` · `SortMode` · `TuiBible` · `LayoutTemplate` · `KeyBinding` · `VizChartKind` · `VizWidget` · `ResourceHistory` · `MetricSample` · `ThresholdLevel` · `gradient_color` · `MetricsHistory`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | **关键面板**                       | Quest · Parliament · Router · Memory · Security · Budget · Decay · MCP Nodes · CHTC · Health · Event Stream · Log · Help · **ResourceMonitor**(v1.7+) · **Timeline**(v1.7+) · **Sysinfo**(v1.8 新增) · **MetricsDashboard**(v1.8 新增) · **TaskManager**(v1.8 新增,`PanelId` 复用 Quest 共享数据源) · **OsaSparse**(v1.7+,ClvVector 关联)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **v1.8 新增模块**                  | `data/resource_history.rs`(滑动窗口+中位数滤波) · `data/metrics_history.rs`(SQLite 历史持久化) · `config/tui_bible.rs`(Figment 4 源配置加载器) · `viz/`(`line_chart`/`heatmap`/`bar_chart`/`gauge`/`histogram`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **🆕 v3.1 引擎骨架** (ADR-029, M0) | `engine/{buffer,diff,style,writer,rect,compat}.rs`(双缓冲 diff + StylePool + DiffEngine + proptest 幂等) · `engine/layout/{presets,flex,constraint,node,engine}.rs`(Flexbox + 四模式 Ide/Chat/VimSplit/Focus) · `actions/{registry,descriptor,codegen,panel_menu}.rs` + `actions/domains/{quest,task,export,view,system,config}.rs`(Registry 单一事实源 + 六域分包 + MAX\_ACTIONS=40 熔断) · `input/router.rs`(5 态 RouterMode + 22 RouteTarget + 14 D 类快照测试) · `i18n/{mod,zh,en}.rs`(AtomicU8 运行时 + t! 宏 + Ctrl+L + zh 120 keys) · `components/{mod,traits}.rs`(L5 组件骨架 LayoutNode 树) · `v3-engine` feature flag(Cargo.toml:10-12,默认 off)                                                                                                                                                                                                                                      |
+| **🆕 v3.1 引擎骨架** (ADR-029, M0) | `engine/{buffer,diff,style,writer,rect,compat}.rs`(双缓冲 diff + StylePool + DiffEngine + proptest 幂等) · `engine/layout/{presets,flex,constraint,node,engine}.rs`(Flexbox + 四模式 Ide/Chat/VimSplit/Focus) · `actions/{registry,descriptor,codegen,panel_menu}.rs` + `actions/domains/{quest,task,export,view,system,config}.rs`(Registry 单一事实源 + 六域分包 + MAX\_ACTIONS=40 熔断) · `input/router.rs`(5 态 RouterMode + 22 RouteTarget + 14 D 类快照测试) · `i18n/{mod,zh,en}.rs`(AtomicU8 运行时 + t! 宏 + Ctrl+L + zh 120 keys) · `components/{mod,traits}.rs`(L5 组件骨架 LayoutNode 树) · `v3-engine` feature flag(Cargo.toml:10-12,默认 off)（ADR-061 起已默认启用）                                                                                                                                                                                                                                      |
 | **主要依赖**                       | tokio · serde · serde\_yaml · ratatui · crossterm · dashmap · chrono · futures · sysinfo · rusqlite · figment · tracing · nexus-core · event-bus                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **测试规模**                       | 426 lib 单元测试 + 30+ 集成测试(`color_gradient_test` 11/`task_manager_test` 10/`sysinfo_panel_test` 4/`tui_bible_config_test` 3/`metrics_history_persistence_test` 3/`viz_components_test` 5/`metrics_dashboard_test` 3/`trend_charts_test` 9/`resource_monitor_panel_test` 4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
@@ -1205,7 +1205,7 @@ cargo build --workspace --release
 ### 10.3 测试命令
 
 ```powershell
-# 全量测试(43 crate 单元+集成+E2E,累计 11564 tests / 0 failed(2026-08-31 当前工作树全量重测,485 test target;静态 #[test] 计数 11433,差值为 doctest+宏展开);演进 v2.27.0=10836 → v2.28.0=11564;更早 PROBE P-1.3 基线 8455 见 PROBE 进度报告)
+# 全量测试(43 crate 单元+集成+E2E,累计 11587 tests / 0 failed(2026-09-02 当前工作树全量重测,485 test target,出处 redundancy-R9-disposition_2026-09-02.md);演进 v2.27.0=10836 → v2.28.0=11522 → 11564 → 11587;更早 PROBE P-1.3 基线 8455 见 PROBE 进度报告)
 cargo test --workspace
 
 # 单crate测试
@@ -1256,12 +1256,12 @@ cargo test --test owasp_top10
 ### 10.4 Lint与格式
 
 ```powershell
-# clippy(Windows下--jobs 2避免OOM)
+# clippy(Windows下--jobs 2避免OOM;CI 侧 2026-09-05 起 4 个 Rust job 已钉定工具链 1.97.1,不再随 stable 浮动)
 $env:RUST_MIN_STACK = '33554432'
 $env:CARGO_INCREMENTAL = '0'
 cargo clippy --workspace --all-targets --jobs 2 -- -D warnings
 
-# 格式化检查
+# 格式化检查(本机 --all 报 os error 206 时改用逐包聚合:python scripts/verify_fmt_all_packages.py)
 cargo fmt --all -- --check
 
 # 应用格式化
@@ -1297,7 +1297,7 @@ Windows GNU环境无法运行cargo-fuzz(libFuzzer仅适配MSVC)，本地做静�
 cargo check --manifest-path fuzz/Cargo.toml
 ```
 
-实际fuzz运行由`.github/workflows/fuzz.yml`在tag推送时在Linux CI上执行(6 target × 300s,与 `fuzz/Cargo.toml` 同步)。
+实际fuzz运行由`.github/workflows/fuzz.yml`在tag推送时在Linux CI上执行(8 target × 300s,与 `fuzz/Cargo.toml` 同步)。
 
 ### 10.8 Docker
 
@@ -1361,10 +1361,10 @@ chimera tui
 
 ## 11. 架构决策记录 (ADR)
 
-> 权威源: 本节 + `docs/architecture/adr_index.md` + `docs/architecture/ADR-*.md`(物理文件,主编号至 **ADR-170**(ADR-161~169 为 Phase R 草案);Phase 1-5 治理 ADR 以四份合并档落档:ADR-095~134 / ADR-135~144 / ADR-145~152 / ADR-153~156,另有 ADR-157/158/159/160 单档;含 ADR-053 rev0\~rev4 多版本)
+> 权威源: 本节 + `docs/architecture/adr_index.md` + `docs/architecture/ADR-*.md`(物理文件,主编号至 **ADR-182**(ADR-161~169 为 Phase R 草案,ADR-170 十一定律收录,ADR-171~182 为 phaseR/收口批次:含 ADR-177 mca-gateway GATED 重分类、ADR-180 batch2 收口遥测、ADR-181 影子能力状态、ADR-182 acb-governor 退役执行);Phase 1-5 治理 ADR 以四份合并档落档:ADR-095~134 / ADR-135~144 / ADR-145~152 / ADR-153~156,另有 ADR-157/158/159/160 单档;含 ADR-053 rev0\~rev4 多版本)
 > **v2.28.0-omega 实证状态** (2026-08-30 穷举 43 个 Cargo.toml + types.rs 精确枚举 + 可达性棘轮):
 >
-> * **主编号至 ADR-170** (ADR-001~006 + ADR-026~037 + ADR-042~085 + ADR-086~094 融合裁决 + ADR-095\~160 Phase 1-5 治理 + ADR-161~169 Phase R 草案 + ADR-170 十一定律收录 + ADR-SIMD-001(预留);编号-主题映射以 `adr_index.md` 为准)
+> * **主编号至 ADR-182** (ADR-001~006 + ADR-026~037 + ADR-042~085 + ADR-086~094 融合裁决 + ADR-095\~160 Phase 1-5 治理 + ADR-161~169 Phase R 草案 + ADR-170 十一定律收录 + ADR-171~182 phaseR/收口批次(ADR-177 GATED 重分类、ADR-167 audit 口径一致性、ADR-160 可达性棘轮) + ADR-SIMD-001(预留);编号-主题映射以 `adr_index.md` 为准)
 >
 > * **NexusEvent 变体数 = 144(权威口径,types.rs 单表;`event_types.rs`** **镜像已按 ADR-160 决策 5 退役删除,分类真值源收敛为 types.rs 一处)**
 >
@@ -1450,10 +1450,10 @@ D:\Chimera CLI\
 ├── .github/
 │   └── workflows/
 │       ├── audit.yml             # 每日cargo audit + PR触发
-│       ├── fuzz.yml              # tag触发fuzz(6 target × 300s，Linux CI)
+│       ├── fuzz.yml              # tag触发fuzz(8 target × 300s，Linux CI)
 │       ├── release.yml           # tag触发5平台build + docker + release
 │       └── test-install-scripts.yml
-├── crates/                       # **43 个 crate 源码**(v2.28.0-omega,见 §3 索引 + §3.11 可达性清单;28 生产可达/15 冻结孤岛)
+├── crates/                       # **43 个 crate 源码**(v2.28.0-omega,见 §3 索引 + §3.11 可达性清单;28 生产可达/14 冻结孤岛 + 1 GATED(ADR-177))
 │   ├── nexus-core/          (L1)
 │   ├── event-bus/           (L1)
 │   ├── model-router/        (L1)
@@ -1601,7 +1601,7 @@ my-crate/
 | **v2.26.0-omega**      | **2026-08-11**             | **Concord TUI 重构 W0~W11 全部收尾:SlashCommandRegistry 53 命令注册 + `/` 一级整合(ADR-075) + Chat/Quest 双轨会话模式(ADR-076) + ApprovalMode 动态 Shift+Tab(ADR-074) + NewlineGate 闸门(ADR-078) + i18n 中英门户 + 10 份 ADR-074~083 落档;9954 passed / 0 failed**                                                                                                    |
 | **v2.27.0-omega**      | **2026-08-19**             | **Phase 10 §16 跨层协同闭环审计修复正式发布(W1-W7:经验卡片组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口);NexusEvent 136→144;10836 passed / 0 failed;权威基线升级(ADR-085 双态收编)**                                                                                                                                                                                 |
 | **v2.27.1-omega**      | **2026-08-20**             | **GPG 签名补发 + MCA E2E 超时加固(无功能性变更)**                                                                                                                                                                                                                                                                                                                        |
-| **v2.28.0-omega**      | **2026-08-28 起在途(未打 tag)** | **Phase 1-5 Ch12 波次 W1-W26 全部收尾:ComputeBridge 双运行时 + ShardedBus 分片总线双跑 + CausalGraph 归因(ADR-132)+ 供应商漂移守卫 + 利用率双口径(ADR-157)+ payload 双跑(ADR-158);新增 5 crate(39 app-server/40 session-store/41 mas-sched/42 nexus-hook/43 nexus-subagent,38→43);ADR-095\~160 治理;ADR-160 可达性棘轮(28 可达/15 孤岛)+ event\_types.rs 镜像退役;11564 passed / 0 failed;\[2.28.1] 在途补丁登记** |
+| **v2.28.0-omega**      | **2026-09-02 发布提交 `af62e44` 已落(tag 待推)** | **Phase 1-5 Ch12 波次 W1-W26 全部收尾:ComputeBridge 双运行时 + ShardedBus 分片总线双跑 + CausalGraph 归因(ADR-132)+ 供应商漂移守卫 + 利用率双口径(ADR-157)+ payload 双跑(ADR-158);新增 5 crate(39 app-server/40 session-store/41 mas-sched/42 nexus-hook/43 nexus-subagent,38→43);ADR-095\~160 治理;ADR-160 可达性棘轮(28 可达/15 孤岛,后经 ADR-177 重分类 14+1 GATED)+ event\_types.rs 镜像退役;11587 passed / 0 failed(2026-09-02 重测);\[2.28.1\]/\[2.28.2\] 在途补丁登记** |
 
 ***
 
@@ -1609,14 +1609,14 @@ my-crate/
 
 > **生成日期**: 2026-07-23(初版)· 2026-07-30(v2.8.0-omega 基线同步)· 2026-07-31(v2.11.0-omega 基线同步)· 2026-08-01(v2.13.0-omega 同步)· 2026-08-02(v2.19.0-omega 同步)· 2026-08-05(v2.21.0-omega 同步)· 2026-08-09(v2.25.0-omega 同步)· 2026-08-11(v2.26.0-omega 同步)· 2026-08-20(v2.27.1-omega 同步)· **2026-08-30(v2.28.0 在途同步)**
 > **生成方法**: superpowers-main 极致深度思考 + staff-engineer-mode 按 surface 路由专家 + 6 个并行 Task 子代理深度源码分析 + 7 处 Cargo.toml 实证修正
-> **分析基线**: `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,2026-08-30 核验,工作区 feat/phase1-w1-w8 在途,最新已发 tag v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag)),**43 members(28 生产可达 + 15 ADR-160 冻结孤岛)**,**11564 tests / 0 failed(2026-08-31 当前工作树全量重测,485 test target)**,**144 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)**
+> **分析基线**: `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,2026-09-06 核验,发布提交 af62e44 2026-09-02 已落,最新已发 tag v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag)),**43 members(28 生产可达 + 14 冻结孤岛 + 1 GATED,ADR-177)**,**11587 tests / 0 failed(2026-09-02 当前工作树全量重测,485 test target)**,**144 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)**
 > **时点声明(2026-08-30)**:本节 §13.2~13.6 的**明细数据为 Code Wiki v2.0(2026-07-23)编制时的 v1.x/v2.19 时点快照**(如"TUI 17 面板""38 crate 中 33 依赖"等),保留为历史证据;一切当前口径以本文档 §1(身份/测试规模)、§3(43 crate 索引 + §3.11 孤岛)、§5(144 事件)与顶部三方一致块为准。
 
 ### 13.1 专家团队组建
 
 | 专家 ID   | 角色     | 10+ 年经验方向    | 重点分析 Surface                                                                                                           |
 | ------- | ------ | ------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| **E01** | 首席架构师  | 分布式系统/架构治理   | **11 层架构(L0 + L1-L10) + 43 crate(28 可达/15 孤岛)依赖铁律 + ADR 实证**                                                           |
+| **E01** | 首席架构师  | 分布式系统/架构治理   | **11 层架构(L0 + L1-L10) + 43 crate(28 可达/14 孤岛 + 1 GATED)依赖铁律 + ADR 实证**                                                           |
 | **E02** | 安全架构师  | 零信任/红蓝对抗     | L4 Security(seccore/decay-engine/qeep-protocol)+ OWASP A01-A10                                                         |
 | **E03** | 记忆系统专家 | 神经形态 AI/认知架构 | L2 Memory(nmc-encoder/hcw-window/mlc-engine) + L3 Storage(scc-cache/lsct-tiering/cmt-tiering)                          |
 | **E04** | 路由算法专家 | 运筹学/优化理论     | L6 Router(osa-coordinator/kvbsr-router/faae-router/sesa-router) + EDSB 概率均衡                                            |

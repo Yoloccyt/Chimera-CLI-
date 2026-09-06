@@ -68,7 +68,7 @@ alwaysApply: true
 
 > ⚠️ **MCA 体系默认未启用**: 需 `cargo build --features mca` 启用 L10 mca-gateway 双轨验证(ADR-065 决策 6,装配期注入,非运行时 flag)。详见 `docs/architecture/adr_index.md` ADR-065/066/067/068。
 
-> 以下规则基于 `AETHER_NEXUS_OMEGA_ULTIMATE.md` 定义的架构,所有决策必须与 **OMEGA 十一定律**(Ω₁-Sparse / Ω₂-Compress / Ω₃-Evolve / Ω₄-Event / Ω₅-Credit / Ω₆-Reuse / Ω₇-Locate / Ω₈-Assess / Ω₉-Preserve / Ω₁₀-Card / Ω₁₁-Synthesize)一致。ADR 编号以 `CODE_WIKI.md §2.3` 为权威源(见 §2.3 调和说明)。Ω₁~Ω₉ 权威定义见 `Chimera CLI 十层架构深度打磨与优化方案 最新版.md` §3(Ω₁~Ω₉ 全部有代码落地,2026-08-11 核验);Ω₁₀/Ω₁₁ 权威定义见 `Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md` §3.1,正式收录于 ADR-170。
+> 以下规则基于 `AETHER_NEXUS_OMEGA_ULTIMATE.md` 定义的架构,所有决策必须与 **OMEGA 十一定律**(Ω₁-Sparse / Ω₂-Compress / Ω₃-Evolve / Ω₄-Event / Ω₅-Credit / Ω₆-Reuse / Ω₇-Locate / Ω₈-Assess / Ω₉-Preserve / Ω₁₀-Card / Ω₁₁-Synthesize)一致。ADR 编号以 `CODE_WIKI.md §11` 与 `docs/architecture/adr_index.md` 为权威源(实际文件已至 ADR-182;§2.3 为旧引用路径已不复存在)。Ω₁~Ω₉ 权威定义见 `Chimera CLI 十层架构深度打磨与优化方案 最新版.md` §3(Ω₁~Ω₉ 全部有代码落地,2026-08-11 核验);Ω₁₀/Ω₁₁ 权威定义见 `Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md` §3.1,正式收录于 ADR-170。
 
 ---
 
@@ -85,17 +85,17 @@ alwaysApply: true
 | 核心哲学 | **OMEGA 十一定律**: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize |
 | 设计来源 | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂 |
 | 创新总数 | 40+ 个(22 个第一代 + 15 个第三代 + PROBE/MCA/PROBE-Sparse/Token-Eff 等增量) |
-| **当前版本** | `2.28.0-omega`(workspace.package.version,权威源 `Cargo.toml`) <!-- v2.28.0-omega 同步: 2026-08-29;CHANGELOG [2.28.1-omega] 为工作区在途补丁登记,未升 version --> |
-| **测试规模** | **11564 passed / 0 failed**(debug 全量回归,**2026-08-31 对当前工作树重测**,`--jobs 4` 限流,485 test target / 485 段全 `ok` / 0 panicked;上一登记值 11522 为 2026-08-29 时点,已被 WS-C/D/E 新增测试净增 34;演进 v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11556 → 11564;含 Concord TUI **27 面板**(`PanelId` enum 实测 27 变体,旧称 22 为 W0~W6 时点)+ 53 slash commands + 双轨会话 + Phase 10 跨层闭环 + Phase 12 Ch12 波次 1-5 + 5 新 crate 完整链路) <!-- v2.28.0-omega 同步: 2026-08-31 R1-T1 绿证重建 --> |
+| **当前版本** | `2.28.0-omega`(workspace.package.version,权威源 `Cargo.toml`) <!-- 同步: 2026-09-06;发布提交 af62e44 已于 2026-09-02 落盘,tag 未推;CHANGELOG 最新登记为 [2.28.2-omega] 在途批次(未升 version) --> |
+| **测试规模** | **11587 passed / 0 failed**(debug 全量回归,**2026-09-02 对当前工作树重测**,485 test target,口径见 `docs/reports/redundancy-R9-disposition_2026-09-02.md` 与 `arch-refactor-batch2-2026-09-03.md`;上一登记值 11564 为 2026-08-31 时点,已被 R9/R11 冗余治理批次净增超越;演进 v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587;含 Concord TUI **27 面板**(`PanelId` enum 实测 27 变体,旧称 22 为 W0~W6 时点)+ 53 slash commands + 双轨会话 + Phase 10 跨层闭环 + Phase 12 Ch12 波次 1-5 + 5 新 crate 完整链路) <!-- 同步: 2026-09-06 R9 口径基线刷新 --> |
 
 ### 1.2 当前开发阶段
 
 - **阶段**:**第三阶段 — 模块级系统性优化**(v2.0.0-omega 起) <!-- v2.27.1-omega 同步: 2026-08-20 -->
   - **第一阶段**(v1.0.0-omega GA): 8 周推进 + RC,完成 34/34 crate 全覆盖
   - **第二阶段**(v1.1.0–v1.8.0-omega): GA 后演进,创新深化与生态扩展,新增 v1.8.0-omega TUI 企业级套件
-  - **第三阶段**(v2.0.0-omega 起): 模块级系统性优化,引入 `chimera-mas` 多 Agent 协同子系统(ADR-026/027/028);Phase 9 三环重组收尾(v2.24.0-omega) + Milestone A v3.0.0 收尾 / Milestone B 差距关闭(v2.25.0-omega) + Milestone C R2 解冻前置 + Milestone D RL 全栈全部就绪;**v2.26.0-omega Concord TUI 重构 W0~W11 全部收尾**(SlashCommandRegistry 53 命令注册 + `/` 一级整合 + Chat/Quest 双轨会话模式 + ApprovalMode 动态 Shift+Tab + i18n 中英门户 + Composer 历史三角化 + 10 份 ADR-074~083 落档);**v2.27.0-omega Phase 10 §16 跨层协同闭环正式发布**(W1-W7 全波次闭环,144 NexusEvent,10836 tests);**v2.27.1-omega GPG 签名补发 + MCA E2E 超时加固**;**v2.28.0-omega(在途,未打 tag)Phase 1-5 Ch12 波次 W1-W26 全部收尾**——ComputeBridge 双运行时 + ShardedBus 分片总线双跑 + CausalGraph 因果归因(ADR-132)+ 供应商漂移守卫 + 利用率双口径(ADR-157)+ payload 级双跑(ADR-158),新增 5 crate(39 `nexus-app-server`/40 `session-store`/41 `mas-sched`/42 `nexus-hook`/43 `nexus-subagent`),ADR-095~160 治理落档,ADR-160 可达性棘轮 + `event_types.rs` 镜像退役;当前 43/43 crate(其中 **28 个生产可达**,15 个为 ADR-160 冻结登记的不可达孤岛;`crates/*/src` 物理行口径,孤岛 08-29 时点 50,604 行=15.2%,经第三轮微观冗余收敛后现值略降,**LOC 为时点点位快照、以 `check_crate_reachability.sh` 输出为准,勿逐值追逐**)
+  - **第三阶段**(v2.0.0-omega 起): 模块级系统性优化,引入 `chimera-mas` 多 Agent 协同子系统(ADR-026/027/028);Phase 9 三环重组收尾(v2.24.0-omega) + Milestone A v3.0.0 收尾 / Milestone B 差距关闭(v2.25.0-omega) + Milestone C R2 解冻前置 + Milestone D RL 全栈全部就绪;**v2.26.0-omega Concord TUI 重构 W0~W11 全部收尾**(SlashCommandRegistry 53 命令注册 + `/` 一级整合 + Chat/Quest 双轨会话模式 + ApprovalMode 动态 Shift+Tab + i18n 中英门户 + Composer 历史三角化 + 10 份 ADR-074~083 落档);**v2.27.0-omega Phase 10 §16 跨层协同闭环正式发布**(W1-W7 全波次闭环,144 NexusEvent,10836 tests);**v2.27.1-omega GPG 签名补发 + MCA E2E 超时加固**;**v2.28.0-omega(发布提交 af62e44 已于 2026-09-02 落盘,tag 待用户指示)**Phase 1-5 Ch12 波次 W1-W26 全部收尾——ComputeBridge 双运行时 + ShardedBus 分片总线双跑 + CausalGraph 因果归因(ADR-132)+ 供应商漂移守卫 + 利用率双口径(ADR-157)+ payload 级双跑(ADR-158),新增 5 crate(39 `nexus-app-server`/40 `session-store`/41 `mas-sched`/42 `nexus-hook`/43 `nexus-subagent`),ADR-095~160 治理落档,ADR-160 可达性棘轮 + `event_types.rs` 镜像退役;当前 43/43 crate(其中 **28 个生产可达**,**14 个冻结孤岛 + 1 个 GATED**——`mca-gateway` 经 ADR-177 重分类并已由 chimera-cli `optional` 边接线,2026-09-03 起 15→14+1,权威源 `scripts/crate_reachability_freeze.txt`;`crates/*/src` 物理行口径,孤岛 08-29 时点 50,604 行=15.2%,经多轮冗余收敛后现值略降,**LOC 为时点点位快照、以 `check_crate_reachability.sh` 输出为准,勿逐值追逐**)
 - **实现状态**:43/43 crate 已实现,**零 Stub**;零 `todo!()`/`unimplemented!()`;依赖铁律零违规(`check_dependency_rules.ps1` 与 CI 实际调用的 `.sh` **双源均 EXIT=0**——2026-08-29 审计发现 `.sh` 层图曾滞留 38 导致该 job 为红,已追平并补 Check D);装配面由 ADR-160 可达性棘轮守护(`scripts/check_crate_reachability.sh`,dev-dep 不计入装配面,**"零 Stub" ≠ "已装配"**);error 体系完整分层(库层 thiserror / 应用层 anyhow);RUSTSEC-2026-0217/0222/0223 修复(`tract-onnx 0.22.3` + `wasmtime 47.0.4`;2026-08-31 R1-T7 又按 RUSTSEC-2026-0268/0269 升至 47.0.4)
-- **当前焦点**:**v2.28.0-omega 在途(Phase 1-5 W1-W26 已收尾,打 tag 待用户指示;★ tag 事实订正 2026-08-31:`v2.27.1-omega` 本地与 origin 均无 tag,实际最新已发 tag = `v2.27.0-omega`(bcf9d4d),v2.27.1 为 CHANGELOG-only 补丁)** — ① 工作区 `feat/phase1-w1-w8` 未提交改动收口 + 全量回归门禁后决定 v2.28.0 tag;② ADR-160 15 冻结孤岛按三条偿还路径(组合根接线 / optional+feature / ADR 记录)逐步去孤岛;③ 冗余审计 R1/R2/R3(2026-08-30)与 R4(2026-08-31)的后续接线——性能红线静态门与双跑比对已入 CI(R1-T5/T6),`ignored` 归属门已登记 76 条,`unignore-target` 7 条待解除;④ R2 解冻影子期(≥14 天,ADR-053 rev4 + ADR-054 治理签署)+ ADR-065/066/067/068 MCA 体系双轨验证(`--features mca`);⑤ **★ RL 开发闸门(Rust-First,2026-08-15 治理决策,持续有效):现阶段只做 Rust 侧;Python 侧(RL 版)训练服务仅保留规划(C-4 协议契约不动,Python 服务实体禁止实施),待 Rust 系统彻底成熟并稳定运行后(R2 解冻 + 稳定性观察期通过)再开启 RL**
+- **当前焦点**:**v2.28.0-omega 已于 2026-09-06 打 tag 推送(`v2.28.0-omega` → `94499b4`,触发 release.yml 5 平台矩阵 + fuzz.yml;完整回归由 release.yml test job clean-runner 承担;本地证据 = cargo check --workspace --all-targets EXIT=0 + 核心层抽样 nexus-contracts/event-bus 1323/1323 绿);此前最新已发 tag 为 `v2.27.0-omega`(bcf9d4d),`v2.27.1-omega` 为 CHANGELOG-only 补丁** — ① 发布监控:release.yml build/test/docker 全 pass 才能 release;② ADR-160 冻结孤岛偿还(现口径 14 冻结 + 1 GATED,按三条偿还路径:组合根接线 / optional+feature / ADR 记录,`mca-gateway` 已走通 GATED 路径);③ 冗余/重构审计已推进至 R9/R11 批次(2026-09-02/03,测试基线随之 11522→11587)与 c1~c13 架构收口报告系列(2026-09-04),`ignored` 归属门 76 条已登记,`unignore-target` 7 条待解除;④ phaseR 收口批次已落(c5a5327,2026-09-05):WS-A 组合根 C12 真实装配(serve/acp)+ WS-B 覆盖率探针门(`scripts/coverage_gate.py` 单点裁决)+ WS-0 治理卫生(孤岛 15→14+GATED 四处文档对齐)+ 反馈链路(CODEOWNERS / audit_gate_parity / check_layer_map_parity);⑤ 覆盖率体系已切换:测量引擎 tarpaulin→**cargo-llvm-cov**(28ec019,弃用根因=全局 RUSTFLAGS 插桩传递依赖触发 pulp E0080),`coverage_baseline.toml` 单真值源 min_line=85(94499b4 回填),CI 首跑实测 **92.97%**,coverage.yml 夜间阻塞门;CI 门禁加固同日完成(zizmor 10 项 HIGH 消解 43eab00 / typos 门 71f0b36 / taplo fmt f205e26 / 4 个 Rust job 钉定工具链 1.97.1 adb3517);⑥ R2 解冻影子期(≥14 天,ADR-053 rev4 + ADR-054 治理签署)+ ADR-065/066/067/068 MCA 体系双轨验证(`--features mca`);⑦ **★ RL 开发闸门(Rust-First,2026-08-15 治理决策,持续有效):现阶段只做 Rust 侧;Python 侧(RL 版)训练服务仅保留规划(C-4 协议契约不动,Python 服务实体禁止实施),待 Rust 系统彻底成熟并稳定运行后(R2 解冻 + 稳定性观察期通过)再开启 RL**
 - **参照**:`CHANGELOG.md` v1.0.0→[2.28.1-omega] 在途完整汇总(含 v2.20.0 PROBE / v2.21.0 CLI LLM / v2.22.0 MCA token / v2.24.0 Phase 9 / v2.25.0 Milestone B / v2.26.0 Concord TUI / v2.27.0 Phase 10 / v2.28.0 Phase 1-5 Ch12 治理 八大版本章节) + §3.4 第三阶段开发规则 + `docs/reports/milestone-{A,B,C,D}-execution-report.md` 四份阶段执行报告 + `docs/reports/phase{1,2,3,4,5}-wave*-closure.md` 五份 Ch12 波次收官报告 + `docs/tui/tui-refactor-implementation-plan.md` Concord TUI 重构实施计划 + `docs/reports/phase10-cross-layer-closure-report.md` Phase 10 收编报告 + `docs/reports/redundancy-R{1,2,3}_2026-08-30.md` 三轮冗余审计
 
 ### 1.3 核心术语速查
@@ -161,7 +161,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 > **v2.0.0-omega 变更**:L9 新增 `chimera-mas`(多 Agent 协同子系统,ADR-026),第 35 个 crate,与 10 个现有 crate 复用(80% 能力复用,Part II append-only 闭环见 ADR-028)。
 > **v2.4.0-omega 变更**:L0 新增 `nexus-contracts`(纯类型零依赖契约层,ADR-033);L6 新增 `omega-learner`(LinUCB Bandit 在线学习路由器,ADR-031+ADR-043,R2 冻结)——第 37 个 crate,六接缝异步下发 SelectorPolicy::Learned。
 > **v2.22.0-omega 变更**:L10 新增 `mca-gateway`(多通道亲和网关,ADR-065)——第 38 个 crate,流式数据面走 bounded mpsc 不进 event-bus(ADR-065 决策 4)。
-> **v2.28.0-omega 变更**:38 → 43 crate,新增 L10 `nexus-app-server`(第 39,WI-01 宿主协议门面)、L3 `session-store`(第 40,ADR-141 append-only 会话事件流)、L9 `mas-sched`(第 41,ADR-145 调度控制面)、L9 `nexus-hook`(第 42,ADR-146 生命周期 Hook)、L7 `nexus-subagent`(第 43,ADR-148 类型化子代理 + Task Auction);可达性 ADR-160 棘轮:28 生产可达 + 15 冻结孤岛。
+> **v2.28.0-omega 变更**:38 → 43 crate,新增 L10 `nexus-app-server`(第 39,WI-01 宿主协议门面)、L3 `session-store`(第 40,ADR-141 append-only 会话事件流)、L9 `mas-sched`(第 41,ADR-145 调度控制面)、L9 `nexus-hook`(第 42,ADR-146 生命周期 Hook)、L7 `nexus-subagent`(第 43,ADR-148 类型化子代理 + Task Auction);可达性 ADR-160 棘轮:28 生产可达 + 15 冻结孤岛(2026-09-03 起实况 28 可达 + 14 冻结孤岛 + 1 GATED,`mca-gateway` 经 ADR-177 重分类)。
 
 ### 2.2 依赖铁律
 
@@ -181,7 +181,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 
 ### 2.3 ADR 决策参考
 
-> ⚠️ **ADR 编号调和**:以 `CODE_WIKI.md §2.3` 为权威源。`AETHER_NEXUS_OMEGA_ULTIMATE.md §10.3` 的 ADR 编号为早期草案,已与 CODE_WIKI 冲突(ADR-003/004/005 定义不同),后续将在 ULTIMATE.md 加历史注释说明。
+> ⚠️ **ADR 编号调和**:以 `CODE_WIKI.md §11` + `docs/architecture/adr_index.md` 为权威源。`AETHER_NEXUS_OMEGA_ULTIMATE.md §10.3` 的 ADR 编号为早期草案,已与 CODE_WIKI 冲突(ADR-003/004/005 定义不同),后续将在 ULTIMATE.md 加历史注释说明。
 
 | ADR | 主题 | 启示 | 落地状态 |
 |-----|------|------|---------|
@@ -230,7 +230,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 **从零搭建完全指南(v2.0.0-omega)** — 第二阶段工程实施主参考:
 
 - ⚠️ **历史偏差**:文档中"37 crates 骨架"数量为早期估计,实际为 35 crate(第二阶段核对时;v2.26.0-omega 当前为 **38**,以 `Cargo.toml` workspace.members 为权威)
-- ⚠️ **版本漂移**:文档基于 v1.x 设计,部分 crate 名称/层级已演进(v2.0.0-omega 新增 `chimera-mas` 至 L9),以 `CODE_WIKI.md §3` crate 索引为权威(当前为 43 crate:28 生产可达 + 15 ADR-160 冻结孤岛)
+- ⚠️ **版本漂移**:文档基于 v1.x 设计,部分 crate 名称/层级已演进(v2.0.0-omega 新增 `chimera-mas` 至 L9),以 `CODE_WIKI.md §3` crate 索引为权威(当前为 43 crate:28 生产可达 + 14 冻结孤岛 + 1 GATED(mca-gateway,ADR-177))
 - **适用章节**(作为历史理解参考,新工作以 v3 终极文档 + 模块优化分析报告为准):
   - §5 OMEGA 十层架构详解 → 理解分层设计原理
   - §7 核心模块从零实现 → 模块实现模式参考
@@ -278,7 +278,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 > - **v2.26.0-omega**:Concord TUI 重构 W0~W11 全部收尾 —— SlashCommandRegistry 53 命令注册(ADR-075) + `/` 一级整合 + Chat/Quest 双轨会话模式(ADR-076) + ApprovalMode 动态 Shift+Tab(ADR-074) + NewlineGate 闸门(ADR-078) + i18n 中英门户 + Composer 历史三角化 + 10 份 ADR-074~083 落档;**9954 passed / 0 failed**(chimera-tui 1387/0 + workspace 9659 + doctest 295)
 > - **v2.27.0-omega**:Phase 10 §16 跨层协同闭环正式发布(W1-W7:经验卡片组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口);NexusEvent 136→144;**10836 passed / 0 failed**;ADR-085 双态收编
 > - **v2.27.1-omega**:GPG 签名补发 + MCA E2E 超时加固(无功能性变更)
-> - **v2.28.0-omega(在途,未打 tag)**:Phase 1-5 Ch12 波次 W1-W26 全部收尾 —— ComputeBridge 双运行时 + ShardedBus 分片总线双跑(零 diff 后 Go 全量 B 级)+ CausalGraph 因果归因(ADR-132)+ 供应商漂移守卫(ADR-154)+ 利用率双口径三条件判定(ADR-157,combined 0.552→0.999)+ payload 级双跑(ADR-158,13/13);新增 5 crate(39~43,38→43);ADR-095~160 治理;ADR-160 生产可达性棘轮(28 可达/15 孤岛)+ event_types.rs 镜像退役;三轮冗余收敛(R1 依赖层/R2 契约层/R3 微观逻辑);**11522 passed / 0 failed**(485 test target);[2.28.1-omega] 为在途补丁登记未升 version
+> - **v2.28.0-omega(发布提交 af62e44 已落,2026-09-02;tag 未推)**:Phase 1-5 Ch12 波次 W1-W26 全部收尾 —— ComputeBridge 双运行时 + ShardedBus 分片总线双跑(零 diff 后 Go 全量 B 级)+ CausalGraph 因果归因(ADR-132)+ 供应商漂移守卫(ADR-154)+ 利用率双口径三条件判定(ADR-157,combined 0.552→0.999)+ payload 级双跑(ADR-158,13/13);新增 5 crate(39~43,38→43);ADR-095~160 治理;ADR-160 生产可达性棘轮(28 可达/15 孤岛,后经 ADR-177 重分类为 14+1 GATED)+ event_types.rs 镜像退役;三轮冗余收敛(R1 依赖层/R2 契约层/R3 微观逻辑);**11522 passed / 0 failed**(收口时点 485 test target;后续 R9/R11 批次已升至 11587,2026-09-02 重测);[2.28.1-omega]/[2.28.2-omega] 为在途补丁登记未升 version
 
 #### 3.4.1 开发原则
 
@@ -349,7 +349,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 |------|------|---------|---------|
 | `CHIMERA_MULTI_AGENT_四象限协同工作系统_系统性设计文档.md` | **MAS-Q 设计蓝图**(v1.0) | 三层递归委托 + 四象限稳定分工 + 5 治理 + PDCA + 6 维质量模型;Part II 7 项闭环能力(上下文隔离/复杂度分块/记忆归档/知识协同) | ✅ **`chimera-mas` 全栈已实现**(v2.0.0-omega ADR-026 ~ v2.2.0-omega ADR-028 闭环);四象限、INV-7 上下文预算界、INV-8 归档单调性、任务委托深度 ≤ 5、INV-9 委托图无环 已生效;`docs/reports/milestone-C-execution-report.md` 章节 1 验证 |
 | `CHIMERA_NEXUS_OMEGA_完整对话摘要.md` | **项目演进全景记录** | 6 轮深度迭代(架构理论→工程实现→优化分析→TUI 设计→多 Agent→模型亲和),427,000+ 字,是理解项目设计脉络的**首要入口** | ✅ 元文档,记录已发生过程;v2.26.0-omega 阶段建议追加第五/六轮迭代(Milestone A/B/C/D + Concord TUI 全链路) |
-| `CHIMERA_全球大模型亲和系统_终极设计文档.md` | **CAF 渠道亲和设计**(v6.0.0-omega) | 4 大渠道(Quality/Balanced/Cost/Speed) × 15+ 厂商 × 60+ 模型 × 地域路由;核心理念:不对单一模型适配,对所有模型做渠道亲和 | ✅ **MCA 体系已落地**(v2.21.0-omega `chimera llm` 入口 + v2.22.0-omega token 效率深度优化 + v2.25.0-omega `chimera grep` 双通道 + 43 crate 中 `mca-gateway` 8 个 affinity profile);MCA 实现已推进至 v2.28.0-omega(ADR-065~068 + ADR-160 标注其为 feature 门控孤岛,默认 binary 不含,经 `--features mca` 装配),设计 v6.0.0-omega 增量仍按 ADR-065 决策 6 装配期注入路径补齐 |
+| `CHIMERA_全球大模型亲和系统_终极设计文档.md` | **CAF 渠道亲和设计**(v6.0.0-omega) | 4 大渠道(Quality/Balanced/Cost/Speed) × 15+ 厂商 × 60+ 模型 × 地域路由;核心理念:不对单一模型适配,对所有模型做渠道亲和 | ✅ **MCA 体系已落地**(v2.21.0-omega `chimera llm` 入口 + v2.22.0-omega token 效率深度优化 + v2.25.0-omega `chimera grep` 双通道 + 43 crate 中 `mca-gateway` 8 个 affinity profile);MCA 实现已推进至 v2.28.0-omega(ADR-065~068;`mca-gateway` 于 2026-09-03 起 ADR-177 重分类为 GATED 并经 chimera-cli `optional` 边接线,经 `--features mca` 装配),设计 v6.0.0-omega 增量仍按 ADR-065 决策 6 装配期注入路径补齐 |
 | `AI_Agent_三重悖论_x_Chimera_深度映射分析.md` | **三重悖论免疫分析** | 记忆悖论(静态稀疏掩码→幽灵记忆)、推理悖论(10 层协调成本→分布式单体)、进化悖论(验证器层级 3→需跃迁至层级 4 形式化验证);**13+3 条新工程铁律** | ✅ **形式化验证器 M0/M1/M2 全部落地**(v2.13.0~v2.20.0-omega,7+1+1=9 属性),L4 验证器跃迁完成;R2 解冻前置就绪,影子期等待治理签署(ADR-053 rev4) |
 | `三环循环_十层接口_元架构重组深度分析.md` | **元架构重组方案** | 内环(9 crate:记忆+推理+进化,共享内存<1ms) + 外环(25 crate,事件驱动向后兼容);诊断 4 类病理(星型耦合/跨层渗透/循环依赖/L1 上帝 crate) | ✅ **Phase 9 全部交付**(v2.24.0-omega P9-T1~T12),7 份报告归档于 `docs/architecture/_blueprints/three-ring-reorg/`;ADR-054 三环重组决策 3/6 全部落档;依赖铁律实况 0 违规 |
 
@@ -529,7 +529,7 @@ cargo test --workspace
 # 单 crate 测试
 cargo test -p <crate-name>
 
-# lint(clippy OOM 已知问题,用 --jobs 2 缓解)
+# lint(clippy OOM 已知问题,用 --jobs 2 缓解;CI 侧 2026-09-05 起 4 个 Rust job 已钉定 1.97.1,见下注)
 $env:RUST_MIN_STACK = '33554432'; $env:CARGO_INCREMENTAL = '0'
 cargo clippy --workspace --all-targets --jobs 2 -- -D warnings
 
@@ -541,6 +541,7 @@ cargo test -- --ignored --test-threads=1 --nocapture
 ```
 
 > ⚠️ **clippy OOM 根因**:Windows `STATUS_STACK_BUFFER_OVERRUN (0xC0000409)` 实际是 `__fastfail` 的 `FAST_FAIL_FATAL_APP_EXIT`(P9=7),objdump 定位到 `std::alloc::rust_oom`,是 OOM 非栈溢出。`--jobs 2` 是最优缓解(44% 快于 `--jobs 1`)。
+> 🔄 **2026-09-05 时点更新**:CI 已将 4 个 Rust job 钉定 `dtolnay/rust-toolchain@1.97.1`(adb3517,不再随 stable 浮动,消除新 clippy lint drift);`--jobs 2` 缓解仍为本地 Windows GNU 宿主的有效口径,根因分析见 `docs/dev/clippy_root_cause_analysis.md`。
 
 ### 7.2 发布前检查清单(替代周验收)
 
@@ -558,6 +559,8 @@ cargo test --workspace --jobs 4
 #    ⚠ 16 核宿主上默认并行度会 OOM(实测 `memory allocation ... failed` + 派生的
 #      E0786 invalid metadata,2026-08-31),看起来像代码回归实为编译面爆内存在;
 #      故必须限流 `--jobs 4`(仍 OOM 递减至 2),并把 OOM 与回归分开判定。
+#    ⚠ D 盘空间为硬前置(2026-09-06 实测 98% 满):`target/` 约 24GB,磁盘不足时
+#      G-14 全量回归无法本地执行(2026-09-04 phaseR 报告实录),先清理再跑。
 cargo test --workspace --release -- --ignored --test-threads=1 --nocapture   # 压测/性能红线(SLO 阈值在 debug 下会假失败)
 
 # 3. 安全审计(audit.yml 每日跑,发布前手动确认)
@@ -614,11 +617,11 @@ git push origin v<x.y.z>-omega
 
 | 文件 | 内容 | 状态 | 重要性 |
 |------|------|------|--------|
-| `CHANGELOG.md` | **版本演进权威源** — v1.0.0→v2.26.0-omega 完整历史(含 Week 1-8 推进 + GA 后多阶段 + Concord TUI 重构 + ADR 摘要) | ✅ 存在 | ⭐⭐⭐ |
+| `CHANGELOG.md` | **版本演进权威源** — v1.0.0→[2.28.2-omega] 在途完整历史(含 Week 1-8 推进 + GA 后多阶段 + Concord TUI 重构 + ADR 摘要;注:按 `.gitignore` 政策 md 不入库,本地单一事实源) | ✅ 存在 | ⭐⭐⭐ |
 | `docs/architecture/README.md` | 架构文档权威索引(7 分类,子文档均存在;已同步至 43 crate) | ✅ 存在 | ⭐⭐ |
 | `docs/tui/README.md` | Chimera TUI 用户手册(实际版本 v2.26.0-omega,Concord TUI 重构 W0~W11 收尾) | ✅ 已同步 | ⭐⭐ |
 | `docs/grafana/README.md` + `dashboard.json` | Grafana 监控面板导出 | ✅ 存在 | ⭐ |
-| `docs/architecture/CODE_WIKI.md` | **架构权威源** — 代码 Wiki(架构概览/模块职责/核心类型/43 crate 索引(§3.11 冻结孤岛清单)/ADR-001~160) | ✅ 存在 | ⭐⭐⭐ |
+| `docs/architecture/CODE_WIKI.md` | **架构权威源** — 代码 Wiki(架构概览/模块职责/核心类型/43 crate 索引(§3.11 冻结孤岛清单,14+1 GATED)/ADR-001~182,ADR 索引见 §11 与 `docs/architecture/adr_index.md`) | ✅ 存在 | ⭐⭐⭐ |
 | `docs/architecture/INDEX.md` | 7 分类文档索引 | ✅ 存在 | ⭐⭐ |
 | `docs/architecture/AETHER_NEXUS_OMEGA_ULTIMATE.md` | 原架构手册(10 章 + 25 ADR + 8 周计划);§3.1 层级映射已废弃,内容已被 CODE_WIKI + ADR-026~028 覆盖 | ❌ 不存在(已被取代,无需恢复) | — |
 | `docs/architecture/AETHER_NEXUS_OMEGA_从零搭建终极文档_v3.md` | v3.0.0-omega 工程手册(6 源尸检 + 50+ 论文) | ✅ 存在 | ⭐⭐ |
@@ -632,8 +635,8 @@ git push origin v<x.y.z>-omega
 | `docs/audit/dimension_f_security.md` | 安全审计维度文档 | ✅ 存在 | ⭐ |
 | `Cargo.toml` | Workspace 根配置(**43 members**,含 L0 `nexus-contracts`、L6 `omega-learner`、L10 `mca-gateway`/`nexus-app-server`、L3 `session-store`、L9 `mas-sched`/`nexus-hook`、L7 `nexus-subagent`;根 package `chimera-e2e-tests` 承载 34 个 E2E/安全/压测/控制闭环 test target) | ✅ v2.28.0-omega | ⭐⭐⭐ |
 | `README.md` | 项目入口 | ✅ 存在 | ⭐⭐ |
-| `.trae/rules/nuxus规则.md` | 本文件(全局指令 + 项目专属规则) | ✅ v2.26.0-omega 同步 | ⭐⭐⭐ |
-| `.claude/CLAUDE.md` | 项目特定命令(环境/CI/Docker/发布 checklist) | ✅ v2.26.0-omega 同步 | ⭐⭐⭐ |
+| `.trae/rules/nuxus规则.md` | 速查规则(硬约束/红线/基线子集,与根 `agents.md` 构成快速/详细两层) | ✅ 2026-09-06 同步 | ⭐⭐⭐ |
+| `.claude/CLAUDE.md` | 项目特定命令(环境/CI/Docker/发布 checklist) | ✅ 2026-09-06 同步 | ⭐⭐⭐ |
 | **🆕 根目录前瞻设计文档(5 份)** | | | |
 | `CHIMERA_MULTI_AGENT_四象限协同工作系统_系统性设计文档.md` | MAS-Q 设计蓝图(四象限 + 三层委托 + 治理 PDCA) | ✅ 存在 | ⭐⭐⭐ |
 | `CHIMERA_NEXUS_OMEGA_完整对话摘要.md` | 项目 6 轮演进全景记录(427,000+ 字) | ✅ 存在 | ⭐⭐⭐ |
@@ -646,6 +649,7 @@ git push origin v<x.y.z>-omega
 <!-- v2.26.0-omega 同步: 2026-08-11(Concord TUI 重构 W0~W11 收尾) — 当前版本 v2.26.0-omega;38 crate(含 L0 nexus-contracts @ L0 / omega-learner @ L6 / mca-gateway @ L10);CHANGELOG 含 v2.20.0 PROBE / v2.21.0 CLI LLM / v2.22.0 MCA token / v2.24.0 Phase 9 / v2.25.0 Milestone B / v2.26.0 Concord TUI 六大版本章节;9954 passed / 0 failed(workspace 全量);`docs/architecture/` 子文档经复核**均已存在**,仅 ULTIMATE.md 缺失且已被取代 -->
 <!-- v2.27.1-omega 同步: 2026-08-20(Phase 10 §16 跨层协同闭环发布收编 + GPG 补发) — 当前版本 v2.27.1-omega;38 crate;CHANGELOG 含 v2.27.0 Phase 10 / v2.27.1 GPG 七版本章节;144 NexusEvent · 10836 passed / 0 failed(2026-08-19 workspace 全量实测) -->
 <!-- 历史同步: v1.7.0-omega 同步 2026-07-15;2026-07-21 复核订正 — 早期快照曾误记 docs 缺失,经复核 `docs/architecture/` 29 份文档齐备(仅 ULTIMATE.md 缺失,已被取代),CODE_WIKI.md 为架构权威源 -->
+<!-- 2026-09-06 同步(本文档即根 agents.md;`.trae/rules/nuxus规则.md` 为独立速查子集非镜像) — v2.28.0-omega 发布提交 af62e44 已落(tag 未推);测试基线 11587(2026-09-02 R9 口径);ADR 文件至 ADR-182;孤岛口径 14 冻结 + 1 GATED(mca-gateway,ADR-177);覆盖率引擎 tarpaulin→cargo-llvm-cov(实测 92.97%,基线 85);fuzz target 6→8(harness_spec_parse/sse_parse);CI 4 Rust job 钉定 1.97.1;phaseR 收口批次 c5a5327(WS-A/B/C)落档 -->
 
 ### 8.2 工程基建
 
@@ -653,7 +657,7 @@ git push origin v<x.y.z>-omega
 |------|------|--------|
 | `.github/workflows/audit.yml` | 每日 cargo audit + PR 触发(改 Cargo.lock) | ⭐⭐⭐ |
 | `.github/workflows/release.yml` | tag 触发:5 平台 matrix build + test + docker(GHCR + 100MB + --version grep) + release | ⭐⭐⭐ |
-| `.github/workflows/fuzz.yml` | tag/手动触发:nightly + cargo-fuzz 6 target × 300s(委托 Linux CI) | ⭐⭐⭐ |
+| `.github/workflows/fuzz.yml` | tag/每周 cron/手动触发:nightly + cargo-fuzz 8 target × 300s(委托 Linux CI) | ⭐⭐⭐ |
 | `Dockerfile` | 多阶段:rust:1-slim-bookworm builder + distroless/cc-debian12 runtime + nonroot + HEALTHCHECK + RUST_BACKTRACE=1 | ⭐⭐⭐ |
 | `install.ps1` / `install.sh` | 跨平台安装脚本(SHA256 校验 + PATH 注入 + --version 验证) | ⭐⭐ |
 | `test_version_verification.ps1` | 本地模拟 CI --version grep 校验(24 测试用例) | ⭐⭐ |
@@ -667,7 +671,7 @@ git push origin v<x.y.z>-omega
 | `tests/e2e/*.rs` | 32+ 个 E2E 测试 + 1 安全 + 2 压测 = **35+ 个 test target**(week5-8 主流程 + 安全 + 集成 + 压测 + 验收 + quest_lifecycle + full_integration + stress_test + tui_control_loop + formal_verifier + trinity_loop + tui_handshake + rhi_cg + r2_freeze + runtime_auditor + variant_governance + token_efficiency + mca_quota_switch 等,Cargo.toml [[test]] 注册) | ⭐⭐⭐ |
 | `tests/security/owasp_top10.rs` | OWASP A01-A10 渗透测试(零信任白名单 + Merkle 审计链) | ⭐⭐⭐ |
 | `tests/stress/week7_stress.rs` | 1000 次压测(Arc 探针 + 延迟稳定性) | ⭐⭐ |
-| `fuzz/fuzz_targets/*.rs` | 6 个 fuzz target(quest_parse/seccore_sandbox/event_serialize/cacr_budget_parse/checkpoint_deserialize/config_section_parse) | ⭐⭐ |
+| `fuzz/fuzz_targets/*.rs` | 8 个 fuzz target(quest_parse/seccore_sandbox/event_serialize/cacr_budget_parse/checkpoint_deserialize/config_section_parse + harness_spec_parse/sse_parse) | ⭐⭐ |
 | `crates/*/benches/*.rs` | 42+ criterion benches(v1.x 26 + v2.x 新增 mlc_l2_knn/wiki_knn@1000/wiki_knn@10/50agent_mem_peak 等) | ⭐⭐ |
 | `docs/audit/dimension_f_security.md` | 安全审计维度文档 | ⭐⭐ |
 
@@ -694,7 +698,7 @@ git push origin v<x.y.z>-omega
 |----------|------|---------|---------|
 | `audit.yml` | 每日 UTC 02:00 + PR 改 Cargo.lock | cargo audit | `--deny unmaintained --deny unsound` 0 退出 |
 | `release.yml` | tag `v*.*.*-omega` | build(5 平台) + test + docker + release | build/test/docker 全 pass 才能 release |
-| `fuzz.yml` | tag + workflow_dispatch | fuzz(ubuntu-latest + nightly,6 target × 300s,已与 fuzz/Cargo.toml 同步) | crash 上传(90 天留存),非阻塞 |
+| `fuzz.yml` | tag + 每周一 cron + workflow_dispatch | fuzz(ubuntu-latest + nightly,8 target × 300s,已与 fuzz/Cargo.toml 同步) | crash 上传(90 天留存),非阻塞 |
 
 **5 平台 matrix**:Win x86_64 / Linux x86_64+aarch64 / macOS x86_64+aarch64,`fail-fast: false`。
 
@@ -713,8 +717,8 @@ git push origin v<x.y.z>-omega
 > **平台限制**:libFuzzer 的 `FuzzerExtFunctionsWindows.cpp` 仅适配 MSVC(`__declspec(dllimport)`),MinGW g++ 无法解析。Windows GNU-only 环境无法跑 cargo-fuzz。
 
 **委托模式**(本地静态验证 + CI 实际执行):
-- 本地:`fuzz/Cargo.toml` 静态核验(独立 workspace 隔离 + `[package.metadata] cargo-fuzz = true` + 6 个 [[bin]] 声明),通过 `cargo check --manifest-path fuzz/Cargo.toml` 验证语法
-- CI:`fuzz.yml` ubuntu-latest + nightly + matrix 6 target × 300s(quest_parse / seccore_sandbox / event_serialize / cacr_budget_parse / checkpoint_deserialize / config_section_parse)
+- 本地:`fuzz/Cargo.toml` 静态核验(独立 workspace 隔离 + `[package.metadata] cargo-fuzz = true` + 8 个 [[bin]] 声明),通过 `cargo check --manifest-path fuzz/Cargo.toml` 验证语法
+- CI:`fuzz.yml` ubuntu-latest + nightly + matrix 8 target × 300s(quest_parse / seccore_sandbox / event_serialize / cacr_budget_parse / checkpoint_deserialize / config_section_parse / harness_spec_parse / sse_parse)
 - cargo-audit:本地网络超时时手动检查 Cargo.lock 13 个关键依赖版本
 - 静态核验脚本:`scripts/check_fuzz_config.{ps1,sh}`(8 项检查) + `scripts/verify_docker_locally.{ps1,sh}`(Docker 三级降级)
 
@@ -758,9 +762,9 @@ c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI\project_memory.md
 | release 镜像未设 `RUST_BACKTRACE=1` | ✅ 2026-06-29 已修复(Dockerfile 加 ENV RUST_BACKTRACE=1) | P1 | ✅ 已完成 <!-- verified: 2026-07-21 --> |
 | figment 三源已声明但无 `*.yaml` 配置样例 | ✅ 2026-06-29 已补齐(examples/config.sample.{yaml,toml}) | P2 | ✅ 已完成 <!-- verified: 2026-07-21 --> |
 | 环境变量(CARGO_HOME/PATH)仍需手动设置 | ✅ 2026-06-29 已改进:`install.ps1 -SetupEnv` 一步注入 env + 设 GNU channel(PowerShell 参数为单破折号 `-SetupEnv`) | P1 | ✅ 已完成 <!-- verified: 2026-07-22 --> |
-| D盘空间管理(回收站黑洞/应用商店缓存) | 后台下载+未清空回收站可导致磁盘满;2026-07-15 实测 D 盘满(274.71GB/0.01GB 剩余),回收站 127.93 GB(46.6%)+联想系缓存 68.76 GB;清理脚本 scripts/cleanup_disk_space.ps1 已创建(Diagnose/SafeClean/ProjectClean 三模式);沙箱限制需在系统 PowerShell 手动清理 | P1 | ⚠️ 需定期清理(回收站清空+联想系目录删除需用户手动执行) <!-- verified: 2026-07-21 -->
-| C盘空间管理(AppData膨胀/休眠文件/重复工具链) | AppData 62.86 GB + hiberfil.sys 6.08 GB + C:\Users\30324\.rustup 4.27 GB(历史残留,D 盘工具链已验证完整);`powercfg /hibernate off`(管理员)可释放 6 GB;删除 C:\chimera-test-target(2.44 GB)+C:\chimera-target(0.29 GB)需手动执行 | P1 | ⚠️ 需定期清理 <!-- verified: 2026-07-21 --> |
-| `fuzz.yml` CI matrix 滞后 | fuzz/Cargo.toml 声明 6 个 target,fuzz.yml 已同步至 6 target | P2 | ✅ 已完成 <!-- verified: 2026-07-21 --> |
+| D盘空间管理(回收站黑洞/应用商店缓存) | 后台下载+未清空回收站可导致磁盘满;2026-09-06 实测 D 盘 98% 满(275GB 总/6.8GB 可用)——**项目内大头:`target/` 约 24GB(受 cleanup_disk_space.ps1 保护清单保护,不自动清)+ `tmp_podman/` 1.7GB + `tmp/` 0.5GB**;清理脚本 scripts/cleanup_disk_space.ps1(Diagnose/SafeClean/ProjectClean 三模式);沙箱限制回收站清空需在系统 PowerShell 手动执行 | P1 | ⚠️ 需定期清理(2026-09-06 已清 tmp_podman/tmp;回收站+target/ 清理时机由用户决定) <!-- verified: 2026-09-06 -->
+| C盘空间管理(AppData膨胀/休眠文件/重复工具链) | AppData 为 C 盘主要占用;**历史残留已于 2026-09-06 前清空:C:\Users\30324\.rustup 已不存在、C:\chimera-test-target 与 C:\chimera-target 已删除**(C 盘 201GB 总/37GB 可用,82%,压力可控);`powercfg /hibernate off`(管理员)可再释放约 6 GB | P1 | ✅ 项目相关残留已清(2026-09-06 复核) <!-- verified: 2026-09-06 --> |
+| `fuzz.yml` CI matrix 滞后 | fuzz/Cargo.toml 声明 8 个 target(2026-09-05 前后新增 harness_spec_parse/sse_parse),fuzz.yml 已同步至 8 target | P2 | ✅ 已完成 <!-- verified: 2026-09-06 --> |
 | `fuzz/src/lib.rs` stub 宏缺失 | Windows-GNU stub 宏方案已实现(fuzz/src/lib.rs + 条件编译 import + [lib] 声明),`cargo check --manifest-path fuzz/Cargo.toml` 通过 | P3 | ✅ 已完成 <!-- verified: 2026-07-21 --> |
 | `scripts/check_fuzz_config.{ps1,sh}` 缺失 | 已实现,8 项静态检查(metadata/lib/target-dep/文件数/[[bin]]/stub 宏/条件编译) | P3 | ✅ 已完成 <!-- verified: 2026-07-21 --> |
 | `scripts/verify_docker_locally.{ps1,sh}` 缺失 | 已实现,三级降级验证(Docker→Podman→静态检查+binary体积代理+CI引导) | P3 | ✅ 已完成 <!-- verified: 2026-07-21 --> |
