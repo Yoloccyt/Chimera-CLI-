@@ -79,12 +79,21 @@ fn build_rerank_output(
         .expect("rerank fill should succeed")
 }
 
-/// 计算 p95 延迟
+/// 断言用阈值 = 各用例的局部契约常量 × CI 缩放旋钮
+///
+/// WHY 参数入而非模块常量：本文件三个门禁用不同契约值（500 / 2000 / 500 ms）
+/// 且都是函数作用域内的局部常量，统一走本 helper 可保留各自的契约值。
+/// `CHIMERA_PERF_SCALE` 缺省 1.0（= 不放松），发布阻塞门即跑真实契约。
+fn p95_threshold(base_ms: u64) -> Duration {
+    Duration::from_millis(nexus_contracts::util::perf_scale_ms(base_ms))
+}
+
+/// 计算 p95 延迟(委托共享工具,全仓统一 `round((n-1)*p)` 口径)
+use nexus_contracts::util::percentile_sorted;
 fn percentile(latencies: &[Duration], p: f64) -> Duration {
     let mut sorted = latencies.to_vec();
     sorted.sort_unstable();
-    let idx = ((sorted.len() as f64 - 1.0) * p).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
+    percentile_sorted(&sorted, p).unwrap_or(Duration::ZERO)
 }
 
 // ============================================================
@@ -122,11 +131,11 @@ fn test_streaming_fast_split_p95_below_500ms() {
         streaming.config().effective_ratio()
     );
     assert!(
-        p95 < Duration::from_millis(P95_THRESHOLD_MS),
+        p95 < p95_threshold(P95_THRESHOLD_MS),
         "P3-W10.2.3 红线违规: Fast 模式 split() {} Block p95={:?} ≥ {:?}",
         BLOCK_COUNT,
         p95,
-        Duration::from_millis(P95_THRESHOLD_MS)
+        p95_threshold(P95_THRESHOLD_MS)
     );
 }
 
@@ -164,11 +173,11 @@ fn test_streaming_deep_split_p95_below_2000ms() {
         streaming.config().effective_ratio()
     );
     assert!(
-        p95 < Duration::from_millis(P95_THRESHOLD_MS),
+        p95 < p95_threshold(P95_THRESHOLD_MS),
         "P3-W10.2.3 红线违规: Deep 模式 split() {} Block p95={:?} ≥ {:?}",
         BLOCK_COUNT,
         p95,
-        Duration::from_millis(P95_THRESHOLD_MS)
+        p95_threshold(P95_THRESHOLD_MS)
     );
 }
 
@@ -177,7 +186,6 @@ fn test_streaming_deep_split_p95_below_2000ms() {
 // ============================================================
 
 #[test]
-#[ignore = "性能红线测试:需 release 模式运行"]
 fn test_streaming_fast_critical_ratio_10_percent() {
     const BLOCK_COUNT: usize = 500;
     const EXPECTED_RATIO: f32 = 0.1;
@@ -215,7 +223,6 @@ fn test_streaming_fast_critical_ratio_10_percent() {
 // ============================================================
 
 #[test]
-#[ignore = "性能红线测试:需 release 模式运行"]
 fn test_streaming_deep_critical_ratio_20_percent() {
     const BLOCK_COUNT: usize = 500;
     const EXPECTED_RATIO: f32 = 0.2;
@@ -253,7 +260,6 @@ fn test_streaming_deep_critical_ratio_20_percent() {
 // ============================================================
 
 #[test]
-#[ignore = "性能红线测试:需 release 模式运行"]
 fn test_streaming_invariants_preserved() {
     const BLOCK_COUNT: usize = 500;
 
@@ -339,9 +345,9 @@ fn test_streaming_split_5000_blocks_p95_below_500ms() {
         p95
     );
     assert!(
-        p95 < Duration::from_millis(P95_THRESHOLD_MS),
+        p95 < p95_threshold(P95_THRESHOLD_MS),
         "P3-W10.2.3 红线违规: 5000 Block split p95={:?} ≥ {:?}",
         p95,
-        Duration::from_millis(P95_THRESHOLD_MS)
+        p95_threshold(P95_THRESHOLD_MS)
     );
 }

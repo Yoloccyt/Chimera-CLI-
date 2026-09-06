@@ -612,6 +612,17 @@ impl LazyConfig {
             .get_or_try_init(|| extract_section(&self.figment, "monitoring"))
     }
 
+    /// 策略封顶守卫启用开关(顶层 bool,ADR-063;默认 false)。
+    ///
+    /// WHY 顶层字段而非 section:推理悖论降级闭环是一条全局风控特性,
+    /// 不入某子 section;经 `Figment::extract_inner` 从 merged provider 读取,
+    /// 默认值由 `ChimeraConfig::default` 的 Serialized::defaults 提供。
+    pub fn enable_strategy_cap(&self) -> Result<bool> {
+        self.figment
+            .extract_inner::<bool>("enable_strategy_cap")
+            .map_err(|e| anyhow::anyhow!("config field `enable_strategy_cap`: {e}"))
+    }
+
     /// 聚合全部 14 section 为完整 [`ChimeraConfig`]。
     ///
     /// WHY 会触发所有未访问 section 的解析:仅用于需要完整配置的场景;
@@ -632,6 +643,8 @@ impl LazyConfig {
             mcp: self.mcp()?.clone(),
             evolution: self.evolution()?.clone(),
             monitoring: self.monitoring()?.clone(),
+            // 策略封顶守卫开关为顶层 bool,经 load() 四源合并读取(默认 false)
+            enable_strategy_cap: self.enable_strategy_cap()?,
         })
     }
 }
@@ -660,6 +673,15 @@ mod tests {
         assert!(tpl.contains("nexus:"));
         assert!(tpl.contains("model_router:"));
         assert!(tpl.contains("seccore:"));
+    }
+
+    #[test]
+    fn test_config_default_strategy_cap_off() {
+        // Task 3(ADR-063):策略封顶守卫默认关闭,零行为变更
+        assert!(
+            !default_config().enable_strategy_cap,
+            "策略封顶守卫默认应为 off(enable_strategy_cap == false)"
+        );
     }
 
     // === P2-3: 路径安全校验测试(防路径穿越越权读取) ===

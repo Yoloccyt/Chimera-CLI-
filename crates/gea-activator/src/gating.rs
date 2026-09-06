@@ -25,12 +25,8 @@
 use crate::config::GeaConfig;
 use crate::types::{ExpertProfile, TaskProfile};
 
-/// Sigmoid 函数:`1.0 / (1.0 + exp(-x))`
-///
-/// WHY 标准库 f32::exp:无需引入额外依赖,精度足够
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
-}
+/// Sigmoid 函数:委托至 nexus_contracts::util::sigmoid(全程 f32,项目红线 §6.2 #6)
+use nexus_contracts::util::sigmoid;
 
 /// 计算向量前缀 `[0..len)` 的 L2 范数
 ///

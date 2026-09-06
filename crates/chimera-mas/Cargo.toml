@@ -57,9 +57,10 @@ parliament = { workspace = true }
 # L8 Parliament:StabilityGuard 降级链协同 ACB 治理器(Task 19 §19.9)
 # L8 Parliament:StabilityGuard 降级链协同 DECB 治理器(Task 19 §19.9)
 # L9 Quest(同层):StabilityGuard 与 efficiency-monitor 协同上报 Critical 事件(Task 19 §19.10)
-# L1 Core:ExpertConsultant 复用 model-router 选择专家旗舰模型(Task 18 §18.8)
-# WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定(§4.1,
-# 与 nexus-core/event-bus/hcw-window 等所有内部 crate 一致)
+# L1 Core:ExpertConsultant 专家旗舰模型选择为内置注册表策略(Task 18 §18.8);
+# model-router 已按 ADR-172 退役"跨模型路由契约"地位(mca-gateway 为唯一在役
+# LLM 通道),本 crate 对其无依赖边——历史"复用 model-router"注释为失实登记,
+# C7 一致性收口订正(2026-09-04)
 # L6 Router:ExpertConsultant 经 faae-router Function-as-Expert 语义路由(Task 18 §18.8)
 # WHY 用 path 而非 workspace=true:faae-router 未进入 [workspace.dependencies],
 # 沿用现有内部 crate path 引用约定(§4.1,与 parliament/acb-governor 一致)

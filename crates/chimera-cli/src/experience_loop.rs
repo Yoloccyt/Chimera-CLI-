@@ -108,12 +108,21 @@ pub fn experience_db_path() -> PathBuf {
 /// 5. `RuntimeAuditor` 事件计数订阅 + 周期 `generate_report`
 ///    (内部发布 `HarnessReportGenerated`,打通 TUI SelfAssessmentPanel)
 /// 6. `spawn_metrics_subscriber`(协调度量,修复 metrics_sync 孤儿订阅器)
+/// 7. `enable_strategy_cap=true` 时挂载 `spawn_strategy_cap_subscriber`
+///    (推理悖论主动降级闭环,ADR-063;默认 off = 零行为变更)
+///
+/// # 参数
+/// - `enable_strategy_cap`:策略封顶守卫启用开关;`false` 时不挂载订阅器,
+///   行为与启用前完全一致;`true` 时 L8 StrategyCapGuard 消费
+///   `CoordinationRatioReported` 驱动审议策略封顶(JoinHandle 收进 join_handles,
+///   遵循反模式 #7 关键路径句柄管理,不 fire-and-forget)。
 ///
 /// # 错误
 /// - 内存存储构造失败(极端场景)上抛;SQLite 打开失败诚实降级为内存存储
 pub async fn spawn_experience_loop(
     nexus_bus: EventBus,
     engine: Arc<QuestEngine>,
+    enable_strategy_cap: bool,
 ) -> anyhow::Result<ExperienceLoopHandles> {
     let mut join_handles: Vec<JoinHandle<()>> = Vec::new();
 
@@ -220,7 +229,20 @@ pub async fn spawn_experience_loop(
         &nexus_bus,
     ));
 
-    // 7. L7 卡片生成触发点(§16.1 源头断链修复,Wave 3):
+    // 7. 策略封顶守卫(推理悖论主动降级闭环,ADR-063)——默认 off,零行为变更
+    //    开启时 L8 StrategyCapGuard 订阅 CoordinationRatioReported,经滞后带
+    //    状态机驱动审议策略封顶降/升档,变更发布 ParliamentStrategyCapChanged。
+    //    WHY 收进 join_handles:后台关键路径句柄必须管理(反模式 #7,
+    //    不 fire-and-forget),与 metrics/审计订阅器同生命周期。
+    if enable_strategy_cap {
+        let cap_guard = Arc::new(parliament::StrategyCapGuard::default());
+        join_handles.push(parliament::spawn_strategy_cap_subscriber(
+            Arc::clone(&cap_guard),
+            nexus_bus.clone(),
+        ));
+    }
+
+    // 8. L7 卡片生成触发点(§16.1 源头断链修复,Wave 3):
     //    订阅 PredictionVerified → ExperienceCardGenerator 生成卡片投递卡片总线。
     //    WHY 组合根订阅驱动而非改 pvl-layer 内部:零 L7 改动,依赖方向
     //    L10→L7 向下合规;同时消化 PredictionVerified 孤儿发布(有真实消费者)。
@@ -357,7 +379,7 @@ mod tests {
         let bus = EventBus::new();
         let engine = Arc::new(QuestEngine::new(bus.clone()));
         // 测试场景用内存降级路径无关紧要:SQLite 失败自动降级
-        let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine))
+        let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine), false)
             .await
             .expect("装配成功");
 
@@ -382,7 +404,7 @@ mod tests {
         // Wave 3 源头接线验证:PredictionVerified → 卡片生成 → 卡片总线 → 双流持久化
         let bus = EventBus::new();
         let engine = Arc::new(QuestEngine::new(bus.clone()));
-        let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine))
+        let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine), false)
             .await
             .expect("装配成功");
 
@@ -429,5 +451,89 @@ mod tests {
             segment_id: None,
             metadata: CardMetadata::default(),
         }
+    }
+
+    // === 3.3 测试:策略封顶守卫生产接线(推理悖论主动降级闭环,ADR-063) ===
+
+    /// 构造一次越阈 ratio 报告(ratio=2.0 > threshold=1.0)
+    async fn publish_ratio_report(bus: &EventBus, ratio: f64, offset: f64) {
+        bus.publish(NexusEvent::CoordinationRatioReported {
+            metadata: event_bus::EventMetadata::new("quest-engine"),
+            coordination_cost_ms: 2000.0,
+            inference_gain: 0.5,
+            cost_index: 1.0 + offset,
+            gain_index: 0.5,
+            ratio,
+            is_paradox_risk: true,
+            threshold: 1.0,
+            sample_count: 1,
+        })
+        .await
+        .expect("发布应成功");
+    }
+
+    #[tokio::test]
+    async fn strategy_cap_guard_fires_when_enabled() {
+        // 开启路径:enable=true 时挂载 StrategyCapGuard,连续 3 次越阈 → 降档
+        // → 发布 ParliamentStrategyCapChanged(默认 StrategyCapConfig:enter=3)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = Arc::new(QuestEngine::new(bus.clone()));
+        let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine), true)
+            .await
+            .expect("装配成功");
+
+        for i in 0..3 {
+            publish_ratio_report(&bus, 2.0, i as f64 * 0.1).await;
+        }
+
+        // 轮询等待订阅者降档并发布观测事件(异步投递,最久 2s)
+        let mut saw_change = false;
+        for _ in 0..40 {
+            match tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await {
+                Ok(Ok(NexusEvent::ParliamentStrategyCapChanged {
+                    old_cap, new_cap, ..
+                })) => {
+                    assert_eq!(old_cap, "full");
+                    assert_eq!(new_cap, "simplified");
+                    saw_change = true;
+                    break;
+                }
+                // 其他事件(卡片/审计等)忽略
+                Ok(Ok(_)) => continue,
+                _ => break,
+            }
+        }
+        // 收尾:abort 后台订阅者,避免泄漏
+        for h in handles.join_handles {
+            h.abort();
+        }
+        assert!(saw_change, "开启开关后,越阈应驱动封顶降档并发布观测事件");
+    }
+
+    #[tokio::test]
+    async fn strategy_cap_guard_inert_when_disabled() {
+        // 默认 off 路径:enable=false 时不挂载订阅器,连续越阈不产生任何
+        // ParliamentStrategyCapChanged 副作用(行为与未引入本特性前一致)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = Arc::new(QuestEngine::new(bus.clone()));
+        let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine), false)
+            .await
+            .expect("装配成功");
+
+        for i in 0..3 {
+            publish_ratio_report(&bus, 2.0, i as f64 * 0.1).await;
+        }
+
+        // 观察窗口内不应出现封顶变更事件(守卫未挂载,零副作用)
+        let saw_change = matches!(
+            tokio::time::timeout(std::time::Duration::from_millis(150), rx.recv()).await,
+            Ok(Ok(NexusEvent::ParliamentStrategyCapChanged { .. }))
+        );
+        for h in handles.join_handles {
+            h.abort();
+        }
+        assert!(!saw_change, "关闭开关后不应发布封顶变更事件");
     }
 }

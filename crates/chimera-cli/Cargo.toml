@@ -8,6 +8,13 @@ license.workspace = true
 # 轻量传输（HTTP/JSON）优先，否决 tonic/prost 默认引入（ADR-049 决策 1 哲学）
 [features]
 rl-client = ["dep:reqwest"]
+# MCA 组合根装配 feature 链（ADR-065 决策 6 + T2，2026-09-03）
+# WHY `mca = ["dep:mca-gateway"]`:将可选依赖 mca-gateway 挂在同名校名下,使
+# CI 旁路 job 的 `cargo check --workspace --features mca` 一行命令即可天然激活
+# 本 member 的 `mca` feature(workspace 级 --features 会激活每个定义同名校的
+# member),从而打开 `dep:mca-gateway` 与 src/main.rs 中对应 `#[cfg(feature="mca")]`
+# 组合根装配代码。默认 off —— 无 feature 时默认 binary 零 MCA 符号/边,行为零变化。
+mca = ["dep:mca-gateway"]
 
 [dependencies]
 # nexus-core:L1 核心类型(配置类型定义,向下依赖符合 §2.2 铁律)
@@ -18,6 +25,8 @@ nexus-contracts = { workspace = true }
 event-bus = { workspace = true }
 # chimera-tui:L10 Interface 层 TUI 界面(ratatui + crossterm)
 chimera-tui = { workspace = true }
+# WI-01 (2026-08-22): nexus-app-server host facade (L10 same-layer, chimera serve)
+nexus-app-server = { workspace = true }
 # quest-engine:L9 Quest 层,为 tui 命令提供控制事件上游消费示例(§2.2 向下依赖)
 # Task 1.1/1.2: chimera run / quest 命令真实接入 QuestEngine API
 quest-engine = { workspace = true }
@@ -44,6 +53,10 @@ seccore = { workspace = true }
 # mcp-mesh:L10 Interface 层,Task 1.8 chimera mcp 真实接入 MCP 网格(§2.2 L10→L10 同层允许)
 # 提供 McpMesh / ServerRegistry / MeshServer 类型供 mcp list/serve/call/inspect 子命令使用
 mcp-mesh = { workspace = true }
+# mca-gateway:L10 Interface 层,MCA 多通道亲和网关门面(ADR-065 决策 6,T2 组合根装配)
+# 默认 off(`optional = true` + `mca` feature):无 feature 时默认 binary 零 MCA 符号/边;
+# `--features mca` 下在组合根(src/main.rs `#[cfg(feature="mca")]`)装配其门面。同层 L10 依赖合规。
+mca-gateway = { workspace = true, optional = true }
 # chimera-mas:L9 Quest 层,Task 1.10 chimera agent 真实接入多 Agent 协同子系统(§2.2 L10→L9 允许)
 # 提供 RootOrchestrator / AgentTask / AgentHandle / HeartbeatInfo 类型供 agent list/spawn/inspect/cancel 使用
 chimera-mas = { workspace = true }
@@ -99,6 +112,9 @@ proptest = { workspace = true }
 # criterion:性能基准框架,用于 OnceLock 并发压测(SubTask S1)
 criterion = { workspace = true }
 insta = "1.48.0"
+# async-trait(dev-only):测试内实现 nexus-app-server 的 AppTransport trait(MockTransport)，
+# 以在无真 stdio 下驱动 serve_loop/acp_loop（生产代码不需，仅 #[cfg(test)] 用）。
+async-trait = { workspace = true }
 
 # 显式声明二进制目标,确保 main.rs 被识别为 chimera 可执行文件
 [[bin]]
@@ -124,4 +140,9 @@ harness = false
 # PROBE P5: 超窗兜底路径性能基准（set_corpus 构成 + provider 规模化对照）
 [[bench]]
 name = "overwindow_bridge"
+harness = false
+
+# C12 组合根装配延迟基线（build / build_app_server）——dev-only 登记，不占四表阈值
+[[bench]]
+name = "composition_root_bench"
 harness = false

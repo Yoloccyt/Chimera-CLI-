@@ -59,9 +59,15 @@ pub mod expert;
 /// Phase 6 §11.2: 算子路由器（OpenMLE Greedy/ThreeFactor/UCB/Cooling，ADR-049 内嵌；
 /// L6→L5 向下依赖 gsoe-evolution 四算子 + ThreeFactorSelector Softmax 委托 D-3）
 pub mod operator_router;
+/// P1-T14: 批量专家评分的 ComputeBridge 并行注入（WI-34 首批注入）
+pub mod parallel;
 /// Phase 6 §11.4(W4): 三因子父本选择 L6 消费适配器（§16.4 边界裁决，ADR-084 决策 6）
 pub mod parent_context;
 pub mod router;
+/// P3-T6: TSR×MoE 收口（WI-09 尾）— 任务类型×成功率矩阵 + MCP 同平面注册面 + 误剪救回率埋点
+pub mod routing_history;
+/// P2-T12: TSR×MoE 稀疏路由偏置均衡（v4.0 WI-09,aux-loss-free + top-k 6~8）
+pub mod tsr_moe;
 pub mod types;
 /// Phase 10 Wave 4: §16.4 变体/父本事件消费订阅器（VariantApproved + ParentSelected 接线）
 pub mod variant_subscriber;
@@ -77,6 +83,10 @@ pub use operator_router::{
 };
 pub use parent_context::{ParentContextProvider, ParentSelection};
 pub use router::FaaeRouter;
+// P3-T6: TSR×MoE 收口公开 API（WI-09 尾）
+pub use routing_history::{
+    ExpertCatalog, ExpertKind, ExpertMeta, MissedRecoveryTracker, RoutingHistory,
+};
 pub use types::{EntropyStats, ExpertProfile, ExpertProfileSnapshot, RoutingResult, ToolId};
 // Phase 10 Wave 4: §16.4 事件消费订阅器公开 API 重导出
 pub use variant_subscriber::{

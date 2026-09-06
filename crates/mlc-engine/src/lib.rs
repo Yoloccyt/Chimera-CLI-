@@ -59,6 +59,12 @@ pub mod memory_strategy_learner;
 pub mod on_demand_synthesizer;
 /// Phase 2 §7.3: 记忆金字塔（MSCE + TencentDB 四层 + 检索三方式 + 注入策略 + 降级链）
 pub mod pyramid;
+/// P2-T6: RSB 跨轮事件残留系统（手册 T-09 + v4.0 WI-20,三层缓冲 + 相位门控）
+///
+/// 50+ 轮后早期决策召回保持（与深层 Transformer 梯度消失同构的残差解法）;
+/// 注入公式 context' = context + α·residual,门控矩阵 Exploration[0.8,0.6,0.4] /
+/// Execution[0.3,0.2,0.1] / Debugging[0.9,0.7,0.5] / Planning[0.5,0.8,0.9]。
+pub mod residual;
 /// polish-v2.7 P4-4:记忆 Sideagent 二次验证(四检查项加权,幽灵记忆防线,ADR-049)
 pub mod sideagent;
 pub mod storage_impl;

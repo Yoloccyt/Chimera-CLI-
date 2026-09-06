@@ -17,9 +17,17 @@ nmc-encoder = { workspace = true }
 ndarray = { workspace = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
+# ⚠ 必须带 `async_tokio`：benches/predict.rs 使用 `Bencher::to_async`，而根
+# workspace 的 criterion 只开了 html_reports。以前 `cargo check --workspace --all-targets`
+# 靠其他 9 个 crate（auto-dpo/chimera-mas/gqep/...）声明的 async_tokio 做了 feature 合并
+# 才恰好编过；一旦单独跑 `cargo check/bench -p mtpe-executor` 就编译失败（2026-08-31 R1-T10 实测）。
+# 补上直接声明，不依赖兄弟 crate 的 feature 附带效果。
+criterion = { workspace = true, features = ["async_tokio"] }
 proptest = { workspace = true }
 serde_json = { workspace = true }
+# R1-T10: 阈值旋钮 CHIMERA_PERF_SCALE 的唯一实现在 L0 nexus_contracts::util
+# (失败安全解析不重写一份); dev-dep 不计入装配面, L7->L0 向下合规。
+nexus-contracts = { workspace = true }
 
 [[bench]]
 name = "predict"

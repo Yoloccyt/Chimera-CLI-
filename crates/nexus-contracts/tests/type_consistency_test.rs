@@ -247,8 +247,10 @@ fn test_nexus_contracts_zero_workspace_crate_dependencies() {
     let deps_section = extract_section(&content, "[dependencies]", "[dev-dependencies]")
         .expect("应存在 [dependencies] 段");
 
-    // ADR-033 例外白名单: serde / chrono / uuid(基础类型库,无运行时业务逻辑)
-    let allowed_external_deps = ["serde", "chrono", "uuid"];
+    // ADR-033 例外白名单: serde / chrono / uuid / thiserror(基础类型库,无运行时业务逻辑)
+    // thiserror 于 A0(2026-08-22)登记: 统一错误层级契约(errors.rs,WI-01 §6.6)
+    // 需 thiserror derive——库层错误类型标准 §4.1: 37 个 error.rs 全部 thiserror 先例
+    let allowed_external_deps = ["serde", "chrono", "uuid", "thiserror"];
 
     // 验证 [dependencies] 段中无任何 workspace path 依赖(即无 workspace crate 依赖)
     for line in deps_section.lines() {

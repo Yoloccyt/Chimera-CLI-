@@ -1,0 +1,291 @@
+# Chimera CLI bench 阈值与 CI 清单单一真值源
+#
+# 权威消费者：scripts/check_perf_redlines.py；
+# 同时被 .github/workflows/bench_check.yml 的 thresholds 步骤调用（消灭 heredoc 内嵌表）。
+# 迁移来源：bench_check.yml THRESHOLDS_NS / PATH_KEYWORDS / run_bench 行（2026-08-31 机械抽取）。
+#
+# 不变式（由 py 核 --selftest 与常规模式共同断言）：
+#   I1 set(thresholds_ns) == set(path_keywords)
+#   I2 任意两个关键词互不为子串（防匹配串台，根除 F-R4-04）
+#   I3 state==registered 的 (crate,bench) 与 run_bench 行双向等价
+#   I4 100ms 兜底条数只减不增（棘轮，见 [ratchet]）
+
+[thresholds_ns]
+exit_code_matrix = 10000
+diff_engine_bench = 100000
+wal_recovery = 100000000
+degradation_chain = 1000
+render_bench = 16000000
+streaming_single_token = 500000
+streaming_ttfb = 1000000
+streaming_feed = 5000000
+dag = 5000000
+gea_cache = 500000
+scheduler_dequeue = 50000
+dedup = 120000000
+checkpoint = 15000000
+shadow_stats = 50000000
+resolve_conflicts = 200000
+# ===== C6 校准（2026-09-04）=====
+# 以下 18 键由本地 Windows GNU 全量实测收紧(median + 分级余量:ns 级约 x10、
+# us 级约 x3-8、ms 级约 x2-2.5,与 sigmoid 33ns→500ns 先例同原则);数据与
+# 推导见 docs/reports/c6-kpi-threshold-calibration-report-2026-09-04.md。
+# gather 本地 median 305ms 为离群值(5 severe outliers,CI 侧 <100ms 通过)
+# 数据不可信 → 保留 100ms 兜底,为 calibration_pending 唯一存活项,待 CI
+# 首跑实测收紧。
+config_concurrency = 3000000
+writer_ansi = 200000
+v3_pipeline = 5000000
+reduce_bench = 2500000
+session_store = 2500000
+cross_layer = 100000
+hybrid_search = 20000000
+debate = 100000
+l2_recall = 5000000
+compress = 50000
+compute_masks = 1500000
+delegation = 40000000
+cache_hit = 10000
+tiering = 500000
+gather = 100000000
+produce_verify = 500000
+command_validator = 50000
+xts_top_k = 500000
+# C6 新增注册（KPI-03/04 首次入 CI 强制门 + L1 热路径基线）:
+# immune_probe 实测 907ns（宣称 708ns 同量级获实证）; rhi_judge 实测 7.5us
+# （宣称 44us,实测更快）; bus_bench 实测 55us（publish fan-out）。
+immune_probe = 10000
+rhi_judge = 50000
+bus_bench = 200000
+sigmoid_scalar = 500
+sigmoid_map = 200000
+percentile_sorted = 1000
+
+[path_keywords]
+exit_code_matrix = ["exit_code"]
+diff_engine_bench = ["diff_incremental_5pct", "diff_full_redraw"]
+wal_recovery = ["wal_append_single_fsync", "wal_recovery", "wal_read_empty", "wal_truncate_after_recovery"]
+degradation_chain = ["degradation"]
+render_bench = ["render_all_panels", "render_each_panel", "render_ide_three_panes"]
+streaming_single_token = ["streaming_single_token"]
+streaming_ttfb = ["ttfb_first_line"]
+streaming_feed = ["feed_100_lines"]
+dag = ["dag/"]
+gea_cache = ["eviction_saturated"]
+scheduler_dequeue = ["scheduler_dequeue/1000/"]
+dedup = ["dedup_semantic"]
+checkpoint = ["checkpoint_save"]
+shadow_stats = ["shadow_stats"]
+resolve_conflicts = ["resolve_conflicts"]
+config_concurrency = ["14_sections"]
+writer_ansi = ["incremental_5pct", "render_full_80x24"]
+v3_pipeline = ["v3_pipeline"]
+reduce_bench = ["reduce"]
+session_store = ["single_write"]
+cross_layer = ["cross_layer"]
+hybrid_search = ["hybrid_search"]
+debate = ["deliberate"]
+l2_recall = ["l2_recall"]
+compress = ["100k_to_32k"]
+compute_masks = ["compute_all_masks"]
+delegation = ["delegation_fanout"]
+cache_hit = ["cache_hit"]
+tiering = ["apply_decision", "handle_quest_created"]
+gather = ["gather", "entangle_alone"]
+produce_verify = ["produce_verify", "produce_only", "verify_only"]
+command_validator = ["mixed"]
+xts_top_k = ["xts_top_k"]
+sigmoid_scalar = ["sigmoid scalar"]
+sigmoid_map = ["sigmoid map"]
+percentile_sorted = ["percentile_sorted"]
+# C6 新增（关键词与既有 36 键交叉核验无子串冲突，满足 I2）
+immune_probe = ["immune_probe"]
+rhi_judge = ["rhi_judge"]
+bus_bench = ["single_publish_latency", "concurrent_subscribe_throughput", "publish_batch_vs_serial"]
+
+# calibration_pending：当前值取保守 100ms 兜底、待 CI 首跑实测收紧的键。
+# 项目约束（ADR-159 决策 3）：此列表只减不增；wal_recovery 的 100ms 是真实规格，列在列表外。
+# C6（2026-09-04）：17 项已完成校准收紧仅余 gather（本地离群不可信，见上注）；
+# 棘轮 cap 同步 18 → 1。
+[ratchet]
+calibration_pending = ["gather"]
+max_calibration_pending = 1
+# max_keyword_overlaps：关键词集互为子串的重叠键对数上限（迁移日实测冻结）。
+# WHY 不为 0：diff_engine_bench 的 diff_incremental_5pct 包着 writer_ansi 的
+# incremental_5pct（实测唯一重叠对，见 closure 报告）；收紧它是独立动作，
+# 不能跟在本迁移 PR 里（那会让「行为不变」无法证明）。只禁止它增长。
+max_keyword_overlaps = 1
+
+# run_bench：CI 实际执行的 bench 目标（alias 仅用于日志名）。
+[[run_bench]]
+alias = "exit_code_matrix"
+crate = "chimera-cli"
+bench = "exit_code_matrix"
+
+[[run_bench]]
+alias = "render_bench"
+crate = "chimera-tui"
+bench = "render_bench"
+
+[[run_bench]]
+alias = "diff_engine_bench"
+crate = "chimera-tui"
+bench = "diff_engine_bench"
+
+[[run_bench]]
+alias = "streaming_bench"
+crate = "chimera-tui"
+bench = "streaming_bench"
+
+[[run_bench]]
+alias = "wal_recovery"
+crate = "mcp-mesh"
+bench = "wal_recovery"
+
+[[run_bench]]
+alias = "degradation_chain"
+crate = "csn-substitutor"
+bench = "degradation_chain"
+
+[[run_bench]]
+alias = "dag"
+crate = "quest-engine"
+bench = "dag_bench"
+
+[[run_bench]]
+alias = "util_micro"
+crate = "nexus-contracts"
+bench = "util_micro"
+
+[[run_bench]]
+alias = "xts_top_k"
+crate = "nexus-contracts"
+bench = "xts_top_k"
+
+[[run_bench]]
+alias = "checkpoint"
+crate = "quest-engine"
+bench = "checkpoint_bench"
+
+[[run_bench]]
+alias = "gea_cache"
+crate = "gea-activator"
+bench = "gate_compute"
+
+[[run_bench]]
+alias = "scheduler"
+crate = "chimera-mas"
+bench = "mas_benchmark"
+filter = "scheduler_dequeue"
+
+[[run_bench]]
+alias = "dedup"
+crate = "chimera-mas"
+bench = "dedup_bench"
+
+[[run_bench]]
+alias = "shadow_stats"
+crate = "chimera-mas"
+bench = "shadow_stats"
+
+[[run_bench]]
+alias = "config_concurrency"
+crate = "chimera-cli"
+bench = "config_concurrency_bench"
+
+[[run_bench]]
+alias = "writer_ansi"
+crate = "chimera-tui"
+bench = "writer_ansi_bench"
+
+[[run_bench]]
+alias = "v3_pipeline"
+crate = "chimera-tui"
+bench = "v3_pipeline_bench"
+
+[[run_bench]]
+alias = "reduce_bench"
+crate = "nexus-core"
+bench = "reduce_bench"
+
+[[run_bench]]
+alias = "session_store"
+crate = "session-store"
+bench = "session_store_bench"
+
+[[run_bench]]
+alias = "cross_layer"
+crate = "event-bus"
+bench = "cross_layer_bench"
+
+[[run_bench]]
+alias = "hybrid_search"
+crate = "repo-wiki"
+bench = "hybrid_search_bench"
+
+[[run_bench]]
+alias = "debate"
+crate = "parliament"
+bench = "debate"
+
+[[run_bench]]
+alias = "l2_recall"
+crate = "mlc-engine"
+bench = "l2_recall"
+
+[[run_bench]]
+alias = "compress"
+crate = "hcw-window"
+bench = "compress"
+
+[[run_bench]]
+alias = "compute_masks"
+crate = "osa-coordinator"
+bench = "compute_masks"
+
+[[run_bench]]
+alias = "delegation"
+crate = "chimera-mas"
+bench = "delegation_bench"
+
+[[run_bench]]
+alias = "cache_hit"
+crate = "scc-cache"
+bench = "cache_hit"
+
+[[run_bench]]
+alias = "tiering"
+crate = "lsct-tiering"
+bench = "tiering_benchmark"
+
+[[run_bench]]
+alias = "gather"
+crate = "gqep-executor"
+bench = "gather"
+
+[[run_bench]]
+alias = "produce_verify"
+crate = "pvl-layer"
+bench = "produce_verify"
+
+[[run_bench]]
+alias = "command_validator"
+crate = "seccore"
+bench = "command_validator_bench"
+
+# ===== C6（2026-09-04）新增：KPI-03/04 首次入 CI 强制门 + L1 热路径基线 =====
+[[run_bench]]
+alias = "immune_probe"
+crate = "chimera-mas"
+bench = "immune_probe"
+
+[[run_bench]]
+alias = "rhi_judge"
+crate = "auto-dpo"
+bench = "rhi_judge"
+
+[[run_bench]]
+alias = "bus_bench"
+crate = "event-bus"
+bench = "bus_bench"
+

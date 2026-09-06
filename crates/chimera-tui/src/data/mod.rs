@@ -1,4 +1,4 @@
-//! TUI 数据源抽象 — 为 L10 Interface 提供统一数据访问契约
+﻿//! TUI 数据源抽象 — 为 L10 Interface 提供统一数据访问契约
 //!
 //! 设计约束(WHY):
 //! - `chimera-tui` 位于 L10,按 §2.2 依赖铁律禁止直接依赖 L9 的
@@ -40,9 +40,14 @@ pub mod sync;
 // WHY pub:data_pipeline_bench(独立 crate)直接调用 `pipeline::push_history`
 // 做容量伸缩基准(评估报告 P0-2 验收:VecDeque 队首淘汰 O(1) 可证伪)。
 pub mod pipeline;
+/// WI-01 TUI dogfooding: 协议客户端适配层(AppOp/AppEvent)
+pub mod protocol_client;
+/// WI-01: 协议模式数据源(TuiDataSource 实现,Quest 生命周期经协议面)
+pub mod protocol_data_source;
 
 // Re-export all public types to maintain the existing API surface
 pub use pipeline::{DataPipeline, StubDataSource, SysMetricsCollector};
+pub use protocol_data_source::ProtocolDataSource;
 pub use snapshot::{
     AsaInterventionSummary, BudgetMetrics, DataSnapshot, DataSourceConfig, ExportFormat,
     HealthMetrics, MemoryMetrics, RedTeamAuditSummary, SecurityState, SkepticVetoSummary,

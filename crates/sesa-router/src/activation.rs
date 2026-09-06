@@ -270,13 +270,15 @@ impl SesaRouter {
             scored.push((expert.mask_index as usize, score));
         }
 
-        // Top-K 选择:K = min(request.top_k, total)
+        // Top-K 降序选择(O(n + k log k)):xts_top_k_by 返回严格降序前 k 段
         let k = request.top_k.min(scored.len()).max(1);
-        let top_k_indices = select_top_k_desc(&mut scored, k);
+        let top_k_indices = nexus_contracts::util::xts_top_k_by(&mut scored, k, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // 构造掩码:激活 Top-K 对应位
         let mut mask = SesaMask::new();
-        for &(idx, _score) in top_k_indices {
+        for &mut (idx, _score) in top_k_indices {
             mask.set_bit(idx);
         }
 
@@ -369,33 +371,12 @@ impl SesaRouter {
     }
 }
 
-/// Top-K 降序选择 — 使用 `select_nth_unstable_by` 实现 O(n) 平均复杂度
-///
-/// 返回前 `k` 个评分最大的元素(未完全排序,但保证是最大的 K 个)。
-///
-/// # 算法
-/// 使用 quickselect 找到第 k-1 大的元素作为 pivot,
-/// pivot 左侧(0..k)即为评分最高的 K 个元素。
-///
-/// # 性能
-/// - 平均 O(n),最坏 O(n²)(随机化可避免最坏情况)
-/// - 相比 `sort_by` 的 O(n log n),1000 专家规模快约 10x
-fn select_top_k_desc(scored: &mut [(usize, f32)], k: usize) -> &[(usize, f32)] {
-    if k >= scored.len() {
-        return scored;
-    }
-    let idx = k - 1;
-    // 降序:b.1 vs a.1(评分大的在前)
-    scored.select_nth_unstable_by(idx, |a, b| {
-        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    &scored[..k]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::SesaConfig;
+    // Top-K 收敛工具在下文以全限定路径 `nexus_contracts::util::xts_top_k_by` 调用,
+    // 与生产代码(:275)保持同一书写形态,故此处不做裸导入。
 
     // === 辅助函数 ===
 
@@ -628,30 +609,35 @@ mod tests {
         );
     }
 
-    // === 4. select_top_k_desc 单元测试 ===
+    // === 4. xts_top_k_by 单元测试(原 select_top_k_desc,收敛至共享工具) ===
 
     #[test]
     fn test_select_top_k_desc_basic() {
         let mut scored = vec![(0usize, 0.3f32), (1, 0.9), (2, 0.5), (3, 0.1)];
-        let top = select_top_k_desc(&mut scored, 2);
+        let top = nexus_contracts::util::xts_top_k_by(&mut scored, 2, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
         assert_eq!(top.len(), 2);
-        // 前 2 个应是评分最大的两个(0.9 和 0.5)
-        let scores: Vec<f32> = top.iter().map(|(_, s)| *s).collect();
-        assert!(scores.contains(&0.9));
-        assert!(scores.contains(&0.5));
+        // xts_top_k_by 返回严格降序:[0] >= [1]
+        assert_eq!(top[0].1, 0.9);
+        assert_eq!(top[1].1, 0.5);
     }
 
     #[test]
     fn test_select_top_k_desc_k_exceeds_len() {
         let mut scored = vec![(0, 0.5f32)];
-        let top = select_top_k_desc(&mut scored, 10);
+        let top = nexus_contracts::util::xts_top_k_by(&mut scored, 10, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
         assert_eq!(top.len(), 1, "k > len 时返回全部");
     }
 
     #[test]
     fn test_select_top_k_desc_k_one() {
         let mut scored = vec![(0, 0.3f32), (1, 0.9), (2, 0.5)];
-        let top = select_top_k_desc(&mut scored, 1);
+        let top = nexus_contracts::util::xts_top_k_by(&mut scored, 1, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
         assert_eq!(top.len(), 1);
         assert!((top[0].1 - 0.9).abs() < 1e-5, "应选评分最高的 0.9");
     }
@@ -661,14 +647,12 @@ mod tests {
         // 验证 Top-K 选择正确性:返回的 K 个应是最大的 K 个
         let mut scored: Vec<(usize, f32)> = (0..100).map(|i| (i, i as f32 * 0.01)).collect();
         let k = 10;
-        let top = select_top_k_desc(&mut scored, k);
+        let top = nexus_contracts::util::xts_top_k_by(&mut scored, k, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        // 提取 Top-K 评分并排序
-        let mut top_scores: Vec<f32> = top.iter().map(|(_, s)| *s).collect();
-        top_scores.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-
-        // 期望:最大的 10 个评分(0.99, 0.98, ..., 0.90)
-        for (i, &s) in top_scores.iter().enumerate() {
+        // xts_top_k_by 已返回降序,直接验证
+        for (i, &(_, s)) in top.iter().enumerate() {
             let expected = (99 - i) as f32 * 0.01;
             assert!(
                 (s - expected).abs() < 1e-5,

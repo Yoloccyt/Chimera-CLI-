@@ -146,6 +146,40 @@ impl TokenLedger {
         Ok(())
     }
 
+    /// 追加账本条目并发布带**图身份**的 `TokenLedgerRecorded`（WI-04 GIP）
+    ///
+    /// # WHY
+    /// 成本归因从"总账"细化到"任意 Goal/节点瀑布"：本方法将
+    /// `entry.graph_identity` 挂载到事件元数据（`EventMetadata::with_graph_identity`），
+    /// 消费方（L3 持久化 / 成本面板）可按三元组聚合。
+    ///
+    /// # 兼容性
+    /// 仅当 `entry.graph_identity` 为 `Some` 时挂载身份；`None` 时行为与
+    /// [`append_and_notify`] 完全一致（零回归——WI-04 渐进铺开语义）。
+    pub fn append_and_notify_with_identity(
+        &self,
+        entry: TokenLedgerEntry,
+        bus: &crate::EventBus,
+    ) -> Result<(), LedgerError> {
+        let graph_identity = entry.graph_identity.clone();
+        let evidence_id = entry.entry_id.to_string();
+        let token_usage = (entry.input_token_ids.len() + entry.output_token_ids.len()) as u64;
+        self.append(entry)?;
+        let metadata = match graph_identity {
+            Some(gi) => crate::EventMetadata::with_graph_identity("event-bus", gi),
+            None => crate::EventMetadata::new("event-bus"),
+        };
+        // sync 上下文用 publish_blocking(§4.4 红线 8);发布失败仅告警不上抛
+        if let Err(e) = bus.publish_blocking(crate::NexusEvent::TokenLedgerRecorded {
+            metadata,
+            evidence_id,
+            token_usage,
+        }) {
+            tracing::warn!(error = %e, "TokenLedgerRecorded(带图身份) 发布失败(账本写入已成功)");
+        }
+        Ok(())
+    }
+
     /// 按会话检索条目 ID（索引 1）
     pub fn session_entry_ids(&self, session_id: &str) -> Vec<String> {
         self.by_session
@@ -208,6 +242,68 @@ impl TokenLedger {
     /// 账本是否为空
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    // ---------- WI-04 GIP 成本归因聚合 ----------
+
+    /// 按图身份聚合 Token 用量瀑布（WI-04 验收: 给定 run_id 拉出完整成本瀑布）
+    ///
+    /// 返回 `goal_id::run_id::node_id → 总 token 数`（含输入 + 输出）。
+    /// 仅统计带 `graph_identity` 的条目；无身份条目计数经
+    /// [`TokenLedger::unattributed_count`] 单独暴露（成本归因覆盖率监控）。
+    pub fn aggregate_by_graph_identity(&self) -> std::collections::BTreeMap<String, u64> {
+        let exported = self.export_entries();
+        let mut agg: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+        for e in &exported {
+            if let Some(gi) = &e.graph_identity {
+                let tokens = (e.input_token_ids.len() + e.output_token_ids.len()) as u64;
+                *agg.entry(gi.aggregate_key()).or_default() += tokens;
+            }
+        }
+        agg
+    }
+
+    /// 按 run_id 聚合成本瀑布（WI-04 验收主口径）
+    ///
+    /// 返回 `run_id → (条目数, 总 token 数, 涉及 goal 数)`——给定 run_id
+    /// 可直接拉出该次执行的完整成本画像。goal 数按 run 内去重统计。
+    pub fn aggregate_by_run(&self) -> std::collections::BTreeMap<String, (u64, u64, u64)> {
+        let exported = self.export_entries();
+        let mut agg: std::collections::BTreeMap<String, (u64, u64, u64)> =
+            std::collections::BTreeMap::new();
+        // run → goal 集合（去重统计涉及 goal 数）
+        let mut goals: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
+            std::collections::HashMap::new();
+        for e in &exported {
+            if let Some(gi) = &e.graph_identity {
+                let tokens = (e.input_token_ids.len() + e.output_token_ids.len()) as u64;
+                let entry = agg.entry(gi.run_id.to_string()).or_insert((0, 0, 0));
+                entry.0 += 1;
+                entry.1 += tokens;
+                goals
+                    .entry(gi.run_id.to_string())
+                    .or_default()
+                    .insert(gi.goal_id.to_string());
+            }
+        }
+        for (run, set) in goals {
+            if let Some(entry) = agg.get_mut(&run) {
+                entry.2 = set.len() as u64;
+            }
+        }
+        agg
+    }
+
+    /// 无图身份条目数（WI-04 成本归因覆盖率监控）
+    ///
+    /// 覆盖率 = 1 - unattributed / total；验收目标: 覆盖率 100%
+    /// （无身份事件计数每日清零）。
+    pub fn unattributed_count(&self) -> u64 {
+        let exported = self.export_entries();
+        exported
+            .iter()
+            .filter(|e| e.graph_identity.is_none())
+            .count() as u64
     }
 }
 
@@ -395,5 +491,112 @@ mod tests {
         assert_eq!(ok, 1, "恰好一个成功");
         assert_eq!(dup, 7, "其余全部拒绝");
         assert_eq!(ledger.len(), 1);
+    }
+
+    // ---------- WI-04 GIP 成本归因聚合 ----------
+
+    fn entry_with_identity(
+        id: &str,
+        goal: &str,
+        run: &str,
+        node: &str,
+        ts: u64,
+    ) -> TokenLedgerEntry {
+        entry(id, "s1", "i1", ts)
+            .with_graph_identity(nexus_contracts::GraphIdentity::new(goal, run, node))
+    }
+
+    #[test]
+    fn aggregate_by_graph_identity_produces_cost_waterfall() {
+        // WI-04 验收: 给定 run_id 拉出完整成本瀑布
+        let ledger = TokenLedger::new();
+        ledger
+            .append(entry_with_identity("e1", "g1", "r1", "n1", 1_000))
+            .expect("追加成功");
+        ledger
+            .append(entry_with_identity("e2", "g1", "r1", "n1", 2_000))
+            .expect("追加成功");
+        ledger
+            .append(entry_with_identity("e3", "g1", "r1", "n2", 3_000))
+            .expect("追加成功");
+        ledger
+            .append(entry("e4", "s1", "i1", 4_000))
+            .expect("无身份条目追加成功");
+
+        let waterfall = ledger.aggregate_by_graph_identity();
+        // 每条目 4 token（2 输入 + 2 输出）; n1 两条 = 8, n2 一条 = 4
+        assert_eq!(waterfall.get("g1::r1::n1"), Some(&8u64));
+        assert_eq!(waterfall.get("g1::r1::n2"), Some(&4u64));
+        assert_eq!(waterfall.len(), 2, "无身份条目不入瀑布");
+
+        let by_run = ledger.aggregate_by_run();
+        let (entries, tokens, goals) = by_run.get("r1").expect("run r1 必须存在");
+        assert_eq!(*entries, 3);
+        assert_eq!(*tokens, 12);
+        assert_eq!(*goals, 1, "run r1 涉及 1 个 goal");
+
+        // 成本归因覆盖率: 3/4 = 75%（e4 无身份）
+        assert_eq!(ledger.unattributed_count(), 1);
+    }
+
+    #[test]
+    fn unattributed_count_zero_when_all_attributed() {
+        // WI-04 验收: 无身份事件计数每日清零目标
+        let ledger = TokenLedger::new();
+        for i in 0..5 {
+            ledger
+                .append(entry_with_identity(
+                    &format!("e{i}"),
+                    "g1",
+                    "r1",
+                    &format!("n{i}"),
+                    i,
+                ))
+                .expect("追加成功");
+        }
+        assert_eq!(ledger.unattributed_count(), 0, "全量归因覆盖率 100%");
+    }
+
+    #[test]
+    fn aggregate_by_run_multi_goal_dedup() {
+        // 多 goal 场景: run 涉及 goal 数去重统计
+        let ledger = TokenLedger::new();
+        ledger
+            .append(entry_with_identity("e1", "g1", "r1", "n1", 1_000))
+            .expect("追加成功");
+        ledger
+            .append(entry_with_identity("e2", "g2", "r1", "n2", 2_000))
+            .expect("追加成功");
+        ledger
+            .append(entry_with_identity("e3", "g2", "r1", "n3", 3_000))
+            .expect("追加成功");
+        let by_run = ledger.aggregate_by_run();
+        let (entries, _, goals) = by_run.get("r1").expect("run r1 必须存在");
+        assert_eq!(*entries, 3);
+        assert_eq!(*goals, 2, "g1 + g2 去重后为 2");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn append_and_notify_with_identity_publishes_metadata() {
+        // WI-04: 带图身份的通知发布挂载 EventMetadata.graph_identity
+        let ledger = TokenLedger::new();
+        let bus = crate::EventBus::new();
+        let mut rx = bus.subscribe();
+        let entry = entry_with_identity("e1", "g1", "r1", "n1", 1_000);
+        ledger
+            .append_and_notify_with_identity(entry, &bus)
+            .expect("追加成功");
+        // 同步发布（publish_blocking），直接读当前事件
+        // try_recv 返回 Result<Option<NexusEvent>, _>（broadcast 语义：
+        // Ok(None) = 通道空）
+        match rx.try_recv() {
+            Ok(Some(crate::NexusEvent::TokenLedgerRecorded { metadata, .. })) => {
+                let gi = metadata.graph_identity.expect("必须挂载图身份");
+                assert_eq!(gi.goal_id.as_ref(), "g1");
+                assert_eq!(gi.run_id.as_ref(), "r1");
+                assert_eq!(gi.node_id.as_ref(), "n1");
+            }
+            other => panic!("期望 TokenLedgerRecorded, 实际 {other:?}"),
+        }
     }
 }

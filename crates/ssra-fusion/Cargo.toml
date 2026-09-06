@@ -22,6 +22,8 @@ chrono = { workspace = true }
 dashmap = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 SsraFusionCompleted 事件
 event-bus = { workspace = true }
+# L0 Contracts:公共 Top-K 收敛工具(xts_top_k_by,替代本地 select_top_k_desc)
+nexus-contracts = { workspace = true }
 # L1 Core:CLV 余弦相似度(可选,用于模板语义匹配扩展)
 
 [dev-dependencies]

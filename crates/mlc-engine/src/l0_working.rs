@@ -83,16 +83,6 @@ impl LruList {
         self.index.len()
     }
 
-    #[allow(dead_code)]
-    fn is_empty(&self) -> bool {
-        self.index.is_empty()
-    }
-
-    #[allow(dead_code)]
-    fn contains(&self, id: &str) -> bool {
-        self.index.contains_key(id)
-    }
-
     /// 在 MRU 端(尾部)插入节点
     ///
     /// 若 ID 已存在则不重复插入(调用方应先 touch 或 remove)。

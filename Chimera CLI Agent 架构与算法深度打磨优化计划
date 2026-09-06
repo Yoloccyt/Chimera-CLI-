@@ -1,0 +1,1694 @@
+# Chimera CLI Agent 架构与算法深度打磨优化计划
+## 大模型架构设计理念的融会贯通与魔改创新
+
+> **版本**: v2.0 — "大模型架构映射版"  
+> **日期**: 2026-08-19  
+> **范围**: Chimera CLI Rust 侧全栈  
+> **方法论**: 七雄 CLI 架构对比 + 五大前沿 LLM 架构解剖 → 跨域映射 → Rust 工程落地方案  
+> **核心命题**: *不是设计大模型，而是将大模型的架构智慧注入 CLI Agent 的工程骨架*
+
+---
+
+## 目录
+
+1. [战略总纲：为什么大模型架构能拯救 CLI Agent](#1-战略总纲为什么大模型架构能拯救-cli-agent)
+2. [五大前沿 LLM 架构解剖](#2-五大前沿-llm-架构解剖)
+3. [架构映射：从 Transformer 到 CLI Agent 的跨域翻译](#3-架构映射从-transformer-到-cli-agent-的跨域翻译)
+4. [Chimera 十一层架构重设计](#4-chimera-十一层架构重设计)
+5. [核心算法打磨：六大引擎重构](#5-核心算法打磨六大引擎重构)
+6. [通信通道与协议层极致优化](#6-通信通道与协议层极致优化)
+7. [Crate 级重构计划](#7-crate-级重构计划)
+8. [实施路线图与里程碑](#8-实施路线图与里程碑)
+9. [附录：跨域设计模式速查表](#9-附录跨域设计模式速查表)
+
+---
+
+## 1. 战略总纲：为什么大模型架构能拯救 CLI Agent
+
+### 1.1 一个被忽视的真相
+
+2026 年的 CLI Agent 领域存在一个深层悖论：**前端交互层（TUI、权限、Hook）的创新速度远超后端认知层（上下文管理、多代理路由、推理痕迹保留）**。七雄 CLI 对比揭示了一个残酷事实——所有 CLI Agent 的"智能"都外包给了 LLM，但 CLI 本身的架构并未吸收 LLM 内部的工程智慧。
+
+> **核心洞察**：LLM 不是 Chimera CLI 的"外部调用者"，而是其架构设计的"同源导师"。两者面对的根本问题是同构的——**如何在有限的计算/通信预算下，从海量状态空间中提取最相关的信息并做出决策**。
+
+### 1.2 五大 LLM 的架构智慧概览
+
+| LLM | 核心创新 | 对 CLI Agent 的启示 |
+|-----|---------|-------------------|
+| **DeepSeek V4** | Compressed Sparse Attention + 辅助损失-free MoE 路由 | 稀疏事件注意力 + 无辅助损失的动态工具路由 |
+| **Kimi K3** | KDA (Kimi Delta Attention) + Attention Residuals + Stable LatentMoE | 增量事件注意力 + 信息残留机制 + 稳定子代理路由 |
+| **GLM 5.3** | IndexShare + Post-training Scaling + "slime" 异步 RL | 跨层索引复用 + 架构冻结后的持续优化 + 异步反馈强化学习 |
+| **MiniMax M3** | MSA (MiniMax Sparse Attention) + "KV outer gather Q" | 稀疏事件总线 + 外向型信息聚合模式 |
+| **Qwen3.8-Max** | Hybrid Attention (Gated DeltaNet + Full) + preserve_thinking | 混合注意力引擎 + 推理痕迹跨会话持久化 |
+
+### 1.3 跨域翻译的基本原则
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     跨域架构翻译框架                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  LLM 概念              │  CLI Agent 映射              │ Chimera 落地目标     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Token                 │  NexusEvent                  │ 事件即 Token         │
+│  Attention Head        │  Event Subscriber            │ 订阅者即注意力头     │
+│  KV Cache              │  Session State + Checkpoint  │ 状态即 KV 缓存       │
+│  MoE Router            │  Tool/SubAgent Router        │ 路由即专家选择       │
+│  Context Window        │  HCW-Sparse + Compress       │ 窗口即上下文预算     │
+│  Thinking / Reasoning  │  Agent Loop + Plan Mode      │ 推理即 Agent 循环    │
+│  Residual Connection   │  Event Residuals             │ 残差即事件残留       │
+│  LayerNorm / RMSNorm   │  State Normalization         │ 归一化即状态校准     │
+│  Pre-training          │  Initial Configuration       │ 预训练即初始配置     │
+│  Post-training / RL    │  Runtime Learning / Feedback │ 后训练即运行时学习   │
+│  Quantization          │  Event Compression           │ 量化即事件压缩       │
+│  Speculative Decoding  │  Speculative Tool Execution  │ 投机解码即投机执行   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. 五大前沿 LLM 架构解剖
+
+### 2.1 DeepSeek V4 — 稀疏即效率
+
+#### 2.1.1 架构核心
+
+DeepSeek V4 的架构演进路径是效率优先的极致体现：cite🛠web_search:19#6:~:text=V4 did not appear in isolation...efficiency-focused designs
+
+- **Compressed Sparse Attention (CSA)**：从 V2 的 MLA 进化为 CSA，将 KV cache 压缩到低秩隐空间，同时引入流形约束连接替代残差流
+- **辅助损失-free 负载均衡**：传统 MoE 需要辅助损失来平衡专家利用率，V4 通过路由策略本身实现负载均衡，消除了训练不稳定性
+- **Multi-Token Prediction (MTP)**：单次前向传播预测多个未来 token，提升输出吞吐量
+- **Hybrid Attention**：结合局部注意力和全局稀疏注意力，在 1M 上下文中保持可用性
+
+#### 2.1.2 工程落地细节
+
+| 组件 | V3 实现 | V4 演进 | 效率增益 |
+|------|--------|--------|---------|
+| Attention | MLA | Compressed Sparse Attention | ~30% 内存降低 |
+| 负载均衡 | 辅助损失 | 辅助损失-free | 训练稳定性↑ |
+| 预测 | 单 token | Multi-Token Prediction | 吞吐量↑ 20-40% |
+| 连接 | 残差流 | 流形约束连接 | 信息流动优化 |
+
+### 2.2 Kimi K3 — 稳定即规模
+
+#### 2.2.1 架构核心
+
+Kimi K3 是 2026 年 7 月发布的 2.8T 参数开源旗舰，其架构设计围绕"长上下文中的信息稳定性"展开：cite🛠web_search:19#2:~:text=Kimi Delta Attention (KDA)...Attention Residuals...Stable LatentMoE
+
+- **Kimi Delta Attention (KDA)**：混合线性注意力机制，将标准二次注意力与线性缩放注意力交错排列。在长序列上，线性注意力提供 O(n) 复杂度；在关键位置，标准注意力提供精确聚焦
+- **Attention Residuals (AttnRes)**：跨长序列的信息残留连接，确保早期上下文中的关键信息不会在深层传播中稀释
+- **Stable LatentMoE**：从 896 个专家中选择 16 个，但通过"稳定路由"机制避免训练中的路由抖动。路由决策不仅基于当前输入，还考虑历史路由模式
+- **Agent Swarm**：K2.6/K3 的模型层原生支持协调最多 300 个并行 subagent，这不是应用层实现的并行，而是模型自身的并行认知能力
+
+#### 2.2.2 训练哲学：RLVR
+
+Kimi K3 采用 **Reinforcement Learning with Verifiable Rewards (RLVR)**：cite🛠web_search:19#12:~:text=reinforcement learning with verifiable rewards...rewarding the model when a unit test passes
+
+- 奖励信号不是来自人类偏好模型，而是来自可验证的结果（单元测试通过、数学答案正确、工具调用成功）
+- 这使得模型在编码和 Agent 任务上的能力提升具有"自举"特性——模型越擅长编码，就能生成更多正确的训练样本
+
+### 2.3 GLM 5.3 — 训练即架构
+
+#### 2.3.1 架构核心
+
+GLM 5.3 的发布声明只有一句话："Scaling post-training is all we did for GLM-5.3." cite🛠web_search:19#0:~:text=Scaling post-training is all we did for GLM-5.3
+
+- **IndexShare**：在稀疏注意力层之间复用索引器，减少长上下文的计算负担。不同层共享同一个稀疏索引，避免重复计算
+- **"slime" 异步 RL 基础设施**：异步强化学习框架，支持大规模并行训练而不阻塞主模型更新
+- **Post-training Scaling**：不增加模型参数，只增加后训练阶段的计算投入。这证明了"架构不是瓶颈，训练才是"
+
+#### 2.3.2 关键启示
+
+GLM 5.3 的哲学对 Chimera 极具启发：**架构冻结后，通过运行时优化（而非架构重构）实现能力跃迁**。Chimera 的 38 crate 架构已经"足够好"，真正的提升空间在于**运行时学习机制**。
+
+### 2.4 MiniMax M3 — 稀疏即速度
+
+#### 2.4.1 架构核心
+
+MiniMax M3 的核心是 **MSA (MiniMax Sparse Attention)**：cite🛠web_search:20#11:~:text=MiniMax Sparse Attention (MSA)...KV outer gather Q access pattern
+
+- **MSA**：将 KV 缓存分块，使用 "KV outer gather Q" 访问模式——先按 KV 块聚合，再与 Q 交互。这比标准的 "Q 逐个查询 KV" 模式在 1M 上下文下快 9x (prefill) / 15x (decode)
+- **Interleaved Thinking**：单模型内切换思考/非思考模式，无需切换模型。`thinking: adaptive` 让模型自行决定每轮的推理深度
+- **原生多模态**：图像和视频从 step 0 参与训练，而非后期拼接
+
+### 2.5 Qwen3.8-Max — 混合即全能
+
+#### 2.5.1 架构核心
+
+Qwen3.8-Max 采用 **混合注意力架构**：cite🛠web_search:20#2:~:text=hybrid attention mechanism...interleaving linear-scaling Gated DeltaNet layers with standard full-attention layers
+
+- **Gated DeltaNet + Full Attention 交错**：线性复杂度的 Gated DeltaNet 层处理常规上下文，标准全注意力层处理关键决策点
+- **preserve_thinking**：推理痕迹（thinking traces）跨多轮会话保留，早期推理结论自动影响后期工具调用
+- **内置工具生态**：5 个原生工具（code_interpreter, web_search, web_extractor, t2i_search, i2i_search）与模型共同训练
+
+#### 2.5.2 Agent 能力
+
+Qwen3.8-Max 的 Agent 能力是其最大亮点：cite🛠web_search:20#5:~:text=35 hours of continuous autonomous execution, 1,158 tool calls without human intervention
+
+- 35 小时连续自主执行
+- 1,158 次工具调用
+- 432 次 kernel 评估
+- 10x GPU kernel 加速
+
+---
+
+## 3. 架构映射：从 Transformer 到 CLI Agent 的跨域翻译
+
+### 3.1 第一层映射：注意力机制 → 事件注意力引擎
+
+#### 3.1.1 问题定义
+
+当前 Chimera 的 `NexusEvent` 是**全连接事件总线**——任何事件都被广播到所有订阅者。这在 136 个变体时尚可接受，但随着 MCP 集成和 SubAgent 引入，事件空间将膨胀到数千个类型。全连接总线的复杂度是 O(n²)。
+
+#### 3.1.2 借鉴：KDA + MSA → Nexus Sparse Attention (NSA)
+
+```rust
+// crates/nexus-sparse-attention/src/lib.rs
+
+/// Nexus Sparse Attention — 将 LLM 的稀疏注意力映射到事件总线
+/// 
+/// 核心思想：不是所有订阅者都需要看到所有事件。
+/// 通过"事件查询-订阅者键值"的注意力机制，只将事件路由到最相关的订阅者。
+pub struct NexusSparseAttention {
+    /// 订阅者索引：每个订阅者声明自己关心的"事件模式"
+    subscriber_index: RwLock<HashMap<SubscriberId, EventPattern>>,
+
+    /// 稀疏注意力核心：MSA 风格的块级路由
+    router: MsaEventRouter,
+
+    /// 信息残留：AttnRes 风格的事件残留
+    residual_buffer: EventResidualBuffer,
+}
+
+impl NexusSparseAttention {
+    /// 发布事件：不是广播，而是稀疏路由
+    pub async fn publish(&self, event: NexusEvent) -> Result<(), NexusError> {
+        // 1. 将事件编码为"查询向量"
+        let event_query = self.encode_event_query(&event);
+
+        // 2. MSA 风格路由：先按订阅者块聚合，再匹配
+        // 借鉴 MiniMax M3 的 "KV outer gather Q" 模式
+        // 这里：先按订阅者模式分块，再匹配事件查询
+        let relevant_subscribers = self.router.route(&event_query).await?;
+
+        // 3. 只向相关订阅者发送事件
+        for subscriber in relevant_subscribers {
+            subscriber.send(event.clone()).await?;
+        }
+
+        // 4. AttnRes：将事件的关键信息写入残留缓冲区
+        // 借鉴 Kimi K3 的 Attention Residuals
+        self.residual_buffer.write_residual(&event).await?;
+
+        Ok(())
+    }
+
+    /// 订阅事件：声明关心的事件模式（而非具体类型）
+    pub async fn subscribe(
+        &self,
+        subscriber_id: SubscriberId,
+        pattern: EventPattern,
+    ) -> Result<mpsc::Receiver<NexusEvent>, NexusError> {
+        // 模式可以是：
+        // - 精确类型匹配：EventPattern::Exact(EventTypeId)
+        // - 命名空间前缀：EventPattern::Namespace("tool.fs.*")
+        // - 语义相似度：EventPattern::Semantic(embedding_vector, threshold)
+        // - 复合条件：EventPattern::And(Box[A], Box[B])
+
+        let mut index = self.subscriber_index.write().await;
+        index.insert(subscriber_id, pattern);
+
+        // 创建专用通道
+        let (tx, rx) = mpsc::channel(1024);
+        self.router.register_subscriber(subscriber_id, tx).await?;
+
+        Ok(rx)
+    }
+}
+
+/// MSA 风格的事件路由
+/// 
+/// 借鉴 MiniMax M3 的 "KV outer gather Q"：
+/// - 在 LLM 中：先按 KV 块聚合，再与 Q 交互
+/// - 在事件中：先按订阅者模式分块，再与事件查询匹配
+pub struct MsaEventRouter {
+    /// 订阅者按模式分块
+    subscriber_blocks: Vec<SubscriberBlock>,
+
+    /// 块级索引：快速定位可能相关的块
+    block_index: HnswIndex<EventPattern, BlockId>,
+}
+
+impl MsaEventRouter {
+    pub async fn route(&self, event_query: &EventQuery) -> Result<Vec<SubscriberId>, NexusError> {
+        // 1. 找到语义上最接近的块（HNSW 近似最近邻）
+        let candidate_blocks = self.block_index.search(event_query, k=5)?;
+
+        // 2. 在每个候选块内精确匹配
+        let mut results = Vec::new();
+        for block in candidate_blocks {
+            for subscriber in &block.subscribers {
+                if subscriber.pattern.matches(event_query) {
+                    results.push(subscriber.id);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+}
+
+/// 事件残留缓冲区（借鉴 Kimi K3 Attention Residuals）
+/// 
+/// 问题：在深层 Agent Loop 中，早期事件（如用户初始意图）会被后续大量事件淹没。
+/// AttnRes 解决方案：将关键事件的"摘要残留"持续注入每一层决策。
+pub struct EventResidualBuffer {
+    /// 残留槽位：固定数量的"全局上下文摘要"
+    residual_slots: ArrayQueue<EventResidual, 16>,
+
+    /// 残留衰减：旧残留的权重随时间降低
+    decay_factor: f64,
+}
+
+impl EventResidualBuffer {
+    pub async fn write_residual(&self, event: &NexusEvent) -> Result<(), NexusError> {
+        // 只将"高价值"事件转化为残留
+        if event.importance() > ImportanceThreshold::High {
+            let residual = EventResidual {
+                event_type: event.event_type(),
+                key_symbols: event.extract_key_symbols(),
+                decision_summary: event.summarize_decision(),
+                timestamp: Instant::now(),
+                weight: 1.0,
+            };
+
+            // 如果槽位满，替换最旧的残留
+            if self.residual_slots.is_full() {
+                self.residual_slots.pop();
+            }
+            self.residual_slots.push(residual);
+        }
+        Ok(())
+    }
+
+    /// 获取当前残留向量（注入到每个新事件的 metadata 中）
+    pub fn get_residual_context(&self) -> Vec<EventResidual> {
+        self.residual_slots.iter()
+            .map(|r| {
+                let age = r.timestamp.elapsed().as_secs_f64();
+                let mut r = r.clone();
+                r.weight *= self.decay_factor.powf(age);
+                r
+            })
+            .filter(|r| r.weight > 0.01)
+            .collect()
+    }
+}
+```
+
+**预期收益**：
+- 事件路由复杂度从 O(n²) 降至 O(n log n)
+- 深层 Agent Loop 中早期关键决策不会丢失
+- 订阅者只接收相关事件，减少无效处理
+
+### 3.2 第二层映射：MoE 路由 → 动态工具/SubAgent 路由
+
+#### 3.2.1 问题定义
+
+当前 Chimera 的工具调用是**静态映射**——模型输出 tool name，Chimera 查找对应的工具实现。这相当于 Dense 模型：每个请求都激活所有工具知识。当工具数量达到 100+（MCP 生态）时，这种模式的效率极低。
+
+#### 3.2.2 借鉴：Stable LatentMoE + 辅助损失-free 路由 → Nexus MoE Router
+
+```rust
+// crates/nexus-moe-router/src/lib.rs
+
+/// Nexus MoE Router — 将 LLM 的 MoE 路由映射到工具/SubAgent 选择
+/// 
+/// 核心思想：不是所有工具都需要加载到上下文中。
+/// 通过"门控网络"动态选择最相关的 K 个工具/SubAgent。
+pub struct NexusMoERouter {
+    /// 专家注册表：每个"专家"是一个工具或 SubAgent
+    experts: HashMap<ExpertId, ExpertSpec>,
+
+    /// 门控网络：根据当前上下文选择专家
+    /// 在 LLM 中：门控网络是一个小型线性层
+    /// 在 Chimera 中：门控网络是一个轻量级嵌入匹配器
+    gating_network: GatingNetwork,
+
+    /// 负载均衡器：确保专家利用率均匀（借鉴 DeepSeek V4 辅助损失-free）
+    load_balancer: LoadBalancer,
+
+    /// 路由历史：Stable LatentMoE 风格的历史感知路由
+    routing_history: RoutingHistory,
+}
+
+impl NexusMoERouter {
+    /// 路由决策：给定当前上下文，选择 Top-K 专家
+    pub async fn route(&self, context: &SessionContext) -> Result<Vec<ExpertId>, NexusError> {
+        // 1. 编码上下文为查询向量
+        let context_embedding = self.gating_network.encode_context(context).await?;
+
+        // 2. 计算每个专家的"亲和度分数"
+        let mut scores = Vec::new();
+        for (id, expert) in &self.experts {
+            let score = self.gating_network.score(&context_embedding, &expert.embedding).await?;
+
+            // 3. Stable LatentMoE：加入历史路由偏好
+            let history_bonus = self.routing_history.get_bonus(id);
+            let adjusted_score = score + history_bonus;
+
+            scores.push((id.clone(), adjusted_score));
+        }
+
+        // 4. 辅助损失-free 负载均衡：不惩罚负载不均，而是调整门控分数
+        // 借鉴 DeepSeek V4 的负载均衡策略
+        let balanced_scores = self.load_balancer.balance(scores).await?;
+
+        // 5. 选择 Top-K
+        let top_k = self.select_top_k(balanced_scores, k=8);
+
+        // 6. 更新路由历史
+        self.routing_history.record(&top_k).await?;
+
+        Ok(top_k)
+    }
+}
+
+/// 负载均衡器（DeepSeek V4 风格：辅助损失-free）
+/// 
+/// 传统 MoE 使用辅助损失惩罚负载不均，但这会干扰主任务学习。
+/// DeepSeek V4 的策略：直接调整门控分数，而非添加损失项。
+pub struct LoadBalancer {
+    /// 每个专家的近期使用频率
+    usage_frequency: DashMap<ExpertId, f64>,
+
+    /// 目标频率：1 / N（均匀分布）
+    target_frequency: f64,
+}
+
+impl LoadBalancer {
+    pub fn balance(&self, mut scores: Vec<(ExpertId, f64)>) -> Vec<(ExpertId, f64)> {
+        let n = scores.len() as f64;
+        let target = 1.0 / n;
+
+        for (id, score) in &mut scores {
+            let freq = self.usage_frequency.get(id).map(|f| *f).unwrap_or(0.0);
+
+            // 如果专家被过度使用，降低其分数
+            // 如果专家被欠使用，提升其分数
+            let adjustment = (target - freq) * 0.1; // 0.1 是温度系数
+            *score += adjustment;
+        }
+
+        scores
+    }
+}
+
+/// 路由历史（Kimi K3 Stable LatentMoE 风格）
+/// 
+/// 问题：纯基于当前上下文的路由可能忽略"这个任务通常需要什么工具"的模式。
+/// Stable LatentMoE 解决方案：维护一个"路由偏好矩阵"，记录任务类型→专家的历史关联。
+pub struct RoutingHistory {
+    /// 任务类型 → 专家使用频率矩阵
+    preference_matrix: DashMap<TaskType, HashMap<ExpertId, f64>>,
+
+    /// 当前任务类型（由意图识别模块提供）
+    current_task_type: RwLock<Option<TaskType>>,
+}
+
+impl RoutingHistory {
+    pub fn get_bonus(&self, expert_id: &ExpertId) -> f64 {
+        let task_type = self.current_task_type.read().clone()?;
+        let matrix = self.preference_matrix.get(&task_type)?;
+        let freq = matrix.get(expert_id)?;
+
+        // 历史频率越高，bonus 越大（但需配合负载均衡防止垄断）
+        Some(freq * 0.05)
+    }
+}
+```
+
+**预期收益**：
+- 工具上下文加载量减少 60-80%（只加载 Top-K 相关工具）
+- 工具调用准确率提升（无关工具不干扰模型决策）
+- 新工具无需重新训练/配置，自动融入路由
+
+### 3.3 第三层映射：Context Window 管理 → 四层上下文压缩引擎
+
+#### 3.3.1 问题定义
+
+Chimera 的 HCW-Sparse 解决了"能看多远"（256K 物理 / 1M 等效），但未解决"看了什么"。当 Agent 运行 50+ 轮后，上下文被工具输出、文件内容、错误信息填满，关键决策信息被淹没。
+
+#### 3.3.2 借鉴：GLM 5.3 IndexShare + Claude Code 四层压缩 → Nexus Compress
+
+```rust
+// crates/nexus-compress/src/lib.rs
+
+/// Nexus Compress — 四层上下文压缩引擎
+/// 
+/// 架构来源：
+/// - Layer 1 (Snip): Claude Code 的截断策略
+/// - Layer 2 (Microcompact): Claude Code 的激进摘要
+/// - Layer 3 (Collapse): Claude Code 的语义聚类
+/// - Layer 4 (Autocompact): Claude Code 的模型驱动压缩
+/// - IndexShare: GLM 5.3 的跨层索引复用
+/// - preserve_thinking: Qwen3.8-Max 的推理痕迹保留
+pub struct NexusCompressor {
+    layers: [Box<dyn CompressionLayer>; 4],
+
+    /// IndexShare：跨层共享的语义索引
+    /// 借鉴 GLM 5.3：不同压缩层共享同一个索引，避免重复计算
+    shared_index: SharedSemanticIndex,
+
+    /// preserve_thinking：推理痕迹持久化
+    /// 借鉴 Qwen3.8-Max：关键推理结论跨轮保留
+    thinking_preserve: ThinkingPreserve,
+}
+
+impl NexusCompressor {
+    pub async fn compress(&self, context: &mut ConversationContext) -> Result<(), NexusError> {
+        let current_tokens = context.token_count();
+        let target = self.token_budget.target();
+
+        if current_tokens <= target {
+            return Ok(());
+        }
+
+        // ===== Layer 1: Snip =====
+        // 基于规则的快速截断，零成本
+        self.layers[0].apply(context, &self.shared_index)?;
+        if context.token_count() <= target * 1.3 {
+            return Ok(());
+        }
+
+        // ===== Layer 2: Microcompact =====
+        // 基于启发式的结构压缩，低成本
+        self.layers[1].apply(context, &self.shared_index)?;
+        if context.token_count() <= target * 1.15 {
+            return Ok(());
+        }
+
+        // ===== Layer 3: Collapse =====
+        // 基于语义聚类的合并，中等成本
+        self.layers[2].apply(context, &self.shared_index).await?;
+        if context.token_count() <= target {
+            return Ok(());
+        }
+
+        // ===== Layer 4: Autocompact =====
+        // 模型驱动的智能摘要，高成本但高精度
+        self.layers[3].apply(context, &self.shared_index).await?;
+
+        // 最后：preserve_thinking 注入
+        self.thinking_preserve.inject(context)?;
+
+        Ok(())
+    }
+}
+
+/// IndexShare：跨层共享的语义索引
+/// 
+/// 借鉴 GLM 5.3：不同稀疏注意力层复用同一个索引器。
+/// 在 Chimera 中：不同压缩层复用同一个语义索引。
+pub struct SharedSemanticIndex {
+    /// 符号索引：代码符号（函数名、类型名、变量名）的全局索引
+    symbol_index: SymbolIndex,
+
+    /// 决策索引：关键决策点的索引（"我们选择了 X 因为 Y"）
+    decision_index: DecisionIndex,
+
+    /// 错误索引：错误模式索引（用于避免重复错误）
+    error_index: ErrorPatternIndex,
+}
+
+impl SharedSemanticIndex {
+    /// 索引更新：任何层在压缩时都可以更新共享索引
+    pub fn update(&self, event: &NexusEvent) {
+        match event {
+            NexusEvent::ToolResult(tr) => {
+                // 提取新出现的符号
+                self.symbol_index.extract(&tr.output);
+                // 提取错误模式
+                if tr.is_error() {
+                    self.error_index.record(&tr);
+                }
+            }
+            NexusEvent::ModelOutput(mo) => {
+                // 提取决策结论
+                self.decision_index.extract(&mo.content);
+            }
+            _ => {}
+        }
+    }
+
+    /// 索引查询：获取与当前上下文相关的历史信息
+    pub fn query_relevant(&self, context: &str, top_k: usize) -> Vec<IndexedItem> {
+        // 使用共享索引快速定位相关历史信息
+        let symbols = self.symbol_index.query(context, top_k);
+        let decisions = self.decision_index.query(context, top_k);
+        let errors = self.error_index.query(context, top_k);
+
+        // 合并去重
+        merge_and_dedup(symbols, decisions, errors)
+    }
+}
+
+/// preserve_thinking：推理痕迹跨轮保留
+/// 
+/// 借鉴 Qwen3.8-Max 的 preserve_thinking：
+/// 关键推理结论（"我们应该使用 X 方案"）不应被压缩丢失，
+/// 而应作为"系统级提示"注入到每一轮上下文中。
+pub struct ThinkingPreserve {
+    /// 持久化推理槽位
+    persistent_thoughts: ArrayQueue<PersistentThought, 8>,
+
+    /// 推理验证器：验证持久化推理是否仍然有效
+    validator: ThoughtValidator,
+}
+
+impl ThinkingPreserve {
+    /// 从模型输出中提取关键推理
+    pub fn extract(&self, model_output: &str) -> Option<PersistentThought> {
+        // 使用轻量级规则提取推理结论
+        // 例如："Therefore, we should...", "The best approach is...", "Given X, Y implies..."
+        if let Some(conclusion) = extract_reasoning_conclusion(model_output) {
+            Some(PersistentThought {
+                conclusion,
+                evidence: extract_supporting_evidence(model_output),
+                confidence: estimate_confidence(model_output),
+                timestamp: Instant::now(),
+                validation_count: 0,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// 将持久化推理注入上下文
+    pub fn inject(&self, context: &mut ConversationContext) -> Result<(), NexusError> {
+        let thoughts = self.persistent_thoughts.iter()
+            .filter(|t| t.confidence > 0.7)
+            .collect::<Vec<_>>();
+
+        if thoughts.is_empty() {
+            return Ok(());
+        }
+
+        // 构建推理摘要块
+        let summary = format!(
+            "[Persistent Reasoning]\n{}\n[/Persistent Reasoning]",
+            thoughts.iter()
+                .map(|t| format!("- {} (confidence: {:.0}%)", t.conclusion, t.confidence * 100.0))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+
+        // 注入到系统提示之后、用户消息之前
+        context.insert_after_system(summary)?;
+
+        Ok(())
+    }
+}
+```
+
+**预期收益**：
+- 长会话 token 使用降低 40-60%
+- 关键推理结论不会丢失
+- 跨层索引复用减少重复计算
+
+### 3.4 第四层映射：Residual Connection → 事件残留与状态传承
+
+#### 3.4.1 问题定义
+
+在深层 Agent Loop（50+ 轮）中，早期事件（用户初始需求、架构决策）对后期行为的影响呈指数衰减。这与深层 Transformer 中梯度消失问题同构。
+
+#### 3.4.2 借鉴：Attention Residuals + 残差连接 → Nexus Residual System
+
+```rust
+// crates/nexus-residual/src/lib.rs
+
+/// Nexus Residual System — 跨轮状态传承机制
+/// 
+/// 核心思想：每一轮 Agent Loop 的输出不仅是当前轮的结果，
+/// 还应该是"当前轮结果 + 历史关键信息的残留"。
+/// 
+/// 借鉴：
+/// - Transformer Residual Connection: y = F(x) + x
+/// - Kimi K3 AttnRes: 跨层信息残留
+/// - Qwen3.8-Max preserve_thinking: 推理痕迹保留
+pub struct NexusResidualSystem {
+    /// 残差缩放器：控制历史信息的保留强度
+    /// 借鉴 LayerNorm/RMSNorm：对残留信息进行归一化
+    scaler: ResidualScaler,
+
+    /// 残差门控：决定哪些信息应该残留，哪些应该遗忘
+    /// 借鉴 Gated DeltaNet：门控机制控制信息流
+    gate: ResidualGate,
+
+    /// 残差缓冲区：分层存储不同时间尺度的残留
+    /// - L1: 最近 5 轮的高频残留
+    /// - L2: 最近 20 轮的中频残留  
+    /// - L3: 全历史的低频残留（已摘要）
+    buffers: [ResidualBuffer; 3],
+}
+
+impl NexusResidualSystem {
+    /// 计算当前轮的"残差增强上下文"
+    /// 
+    /// 公式：context' = context + α * residual(context)
+    /// 其中 α 由门控网络动态决定
+    pub async fn enhance(&self, context: &mut SessionContext) -> Result<(), NexusError> {
+        // 1. 从各层缓冲区提取残留
+        let l1_residual = self.buffers[0].extract_recent(5).await?;
+        let l2_residual = self.buffers[1].extract_recent(20).await?;
+        let l3_residual = self.buffers[2].extract_summary().await?;
+
+        // 2. 门控：决定每类残留的权重
+        let gate_values = self.gate.compute(context, &[&l1_residual, &l2_residual, &l3_residual]).await?;
+
+        // 3. 缩放：归一化残留信息
+        let scaled_l1 = self.scaler.scale(&l1_residual, gate_values[0]);
+        let scaled_l2 = self.scaler.scale(&l2_residual, gate_values[1]);
+        let scaled_l3 = self.scaler.scale(&l3_residual, gate_values[2]);
+
+        // 4. 注入：将残留信息附加到上下文
+        context.attach_residual("recent", scaled_l1)?;
+        context.attach_residual("medium", scaled_l2)?;
+        context.attach_residual("historical", scaled_l3)?;
+
+        Ok(())
+    }
+
+    /// 更新残留缓冲区（每轮结束后调用）
+    pub async fn update(&self, turn_result: &TurnResult) -> Result<(), NexusError> {
+        // 1. 提取本轮的关键信息
+        let key_info = extract_key_info(turn_result);
+
+        // 2. 写入 L1 缓冲区（高频）
+        self.buffers[0].push(key_info.clone()).await?;
+
+        // 3. 定期聚合到 L2（中频）
+        if self.buffers[0].len() >= 5 {
+            let aggregate = self.aggregate_buffer(&self.buffers[0]).await?;
+            self.buffers[1].push(aggregate).await?;
+            self.buffers[0].clear().await?;
+        }
+
+        // 4. 定期摘要到 L3（低频）
+        if self.buffers[1].len() >= 4 {
+            let summary = self.summarize_buffer(&self.buffers[1]).await?;
+            self.buffers[2].merge(summary).await?;
+            self.buffers[1].clear().await?;
+        }
+
+        Ok(())
+    }
+}
+
+/// 残差门控（借鉴 Gated DeltaNet）
+/// 
+/// Gated DeltaNet 的核心：用门控向量控制信息流。
+/// 在 Chimera 中：用门控向量控制"历史残留应该有多少进入当前上下文"。
+pub struct ResidualGate {
+    /// 轻量级门控网络（可训练或启发式）
+    /// 输入：当前上下文特征 + 残留特征
+    /// 输出：3 维门控向量（对应 L1/L2/L3）
+    network: SmallNeuralNetwork, // 或基于规则的门控
+}
+
+impl ResidualGate {
+    pub async fn compute(
+        &self,
+        context: &SessionContext,
+        residuals: &[&ResidualVector],
+    ) -> Result<Vec<f64>, NexusError> {
+        // 简单启发式门控（无需训练）：
+        // - 如果当前是"探索阶段"，增加历史残留（避免重复探索）
+        // - 如果当前是"执行阶段"，减少历史残留（专注当前任务）
+        // - 如果检测到"上下文切换"，重置门控
+
+        let phase = detect_phase(context);
+        let context_switch = detect_context_switch(context);
+
+        if context_switch {
+            Ok(vec![0.1, 0.1, 0.3]) // 保留少量历史，增加高层摘要
+        } else {
+            match phase {
+                Phase::Exploration => Ok(vec![0.8, 0.6, 0.4]),
+                Phase::Execution => Ok(vec![0.3, 0.2, 0.1]),
+                Phase::Debugging => Ok(vec![0.9, 0.7, 0.5]), // 调试时需要更多历史
+                Phase::Planning => Ok(vec![0.5, 0.8, 0.9]), // 规划时需要高层摘要
+            }
+        }
+    }
+}
+```
+
+**预期收益**：
+- 深层 Agent Loop（100+ 轮）中早期决策不丢失
+- 自动适应"探索/执行/调试/规划"不同阶段的信息需求
+- 上下文切换时自动调整残留策略
+
+### 3.5 第五层映射：Pre-training / Post-training → 配置即预训练 / 运行时即后训练
+
+#### 3.5.1 问题定义
+
+Chimera 的当前架构是"静态配置"——所有行为在编译期确定。但 GLM 5.3 证明：**架构冻结后，通过持续训练可以实现能力跃迁**。Chimera 需要一种"运行时学习"机制。
+
+#### 3.5.2 借鉴：GLM 5.3 Post-training + "slime" 异步 RL → Nexus Runtime Learning
+
+```rust
+// crates/nexus-learner/src/lib.rs (重构版)
+
+/// Nexus Runtime Learning — 运行时学习引擎
+/// 
+/// 核心思想：Chimera 的"预训练"是初始配置（ADR、系统提示、工具定义），
+/// "后训练"是运行时的反馈学习。
+/// 
+/// 借鉴：
+/// - GLM 5.3 Post-training Scaling: 架构不变，持续优化
+/// - "slime" 异步 RL: 异步收集反馈，不阻塞主流程
+/// - RLVR: 可验证的奖励信号（测试通过、编译成功）
+pub struct NexusRuntimeLearning {
+    /// 反馈收集器：异步收集工具调用结果
+    feedback_collector: AsyncFeedbackCollector,
+
+    /// 经验回放池：存储历史决策-结果对
+    experience_replay: ExperienceReplay,
+
+    /// 策略优化器：基于反馈调整路由/压缩/权限策略
+    policy_optimizer: PolicyOptimizer,
+
+    /// 学习调度器：控制学习频率（避免过度拟合近期经验）
+    learning_scheduler: LearningScheduler,
+}
+
+impl NexusRuntimeLearning {
+    /// 记录工具调用结果（异步，不阻塞主流程）
+    pub async fn record_outcome(&self, decision: Decision, outcome: Outcome) {
+        // 借鉴 "slime" 异步 RL：写入队列后立即返回
+        self.feedback_collector.send((decision, outcome)).await;
+    }
+
+    /// 定期优化策略（后台任务）
+    pub async fn optimize_policies(&self) -> Result<(), NexusError> {
+        // 1. 从经验回放池采样
+        let batch = self.experience_replay.sample(batch_size=64).await?;
+
+        // 2. 计算可验证奖励（RLVR 风格）
+        let rewards = batch.iter()
+            .map(|(d, o)| compute_verifiable_reward(d, o))
+            .collect::<Vec<_>>();
+
+        // 3. 优化三个策略：
+        // - 工具路由策略（哪个工具在什么上下文下最有效）
+        // - 压缩策略（什么类型的信息在什么阶段应该保留）
+        // - 权限策略（什么操作在什么风险级别下可以自动批准）
+
+        self.policy_optimizer.update_tool_routing(&batch, &rewards).await?;
+        self.policy_optimizer.update_compression(&batch, &rewards).await?;
+        self.policy_optimizer.update_approval(&batch, &rewards).await?;
+
+        Ok(())
+    }
+}
+
+/// 可验证奖励计算（RLVR）
+/// 
+/// 借鉴 Kimi K3 / GLM 5.3：奖励必须来自可验证的结果，而非人类偏好。
+fn compute_verifiable_reward(decision: &Decision, outcome: &Outcome) -> f64 {
+    match outcome {
+        Outcome::ToolSuccess { result } => {
+            // 基础奖励
+            let mut reward = 1.0;
+
+            // 额外奖励：如果结果包含"测试通过"、"编译成功"等可验证信号
+            if result.contains("test passed") || result.contains("✓") {
+                reward += 2.0;
+            }
+            if result.contains("build successful") || result.contains("compiled") {
+                reward += 1.5;
+            }
+
+            // 惩罚：如果工具调用次数过多（效率惩罚）
+            if decision.tool_call_count > 10 {
+                reward -= 0.5;
+            }
+
+            reward
+        }
+        Outcome::ToolFailure { error } => {
+            // 基础惩罚
+            let mut reward = -1.0;
+
+            // 如果错误是"文件不存在"而工具是"read_file"，
+            // 惩罚路由策略（选择了错误的工具）
+            if error.contains("No such file") && decision.tool_name == "read_file" {
+                reward -= 1.0;
+            }
+
+            reward
+        }
+        Outcome::UserCorrection { original, corrected } => {
+            // 用户纠正是一个强信号：原始决策是错误的
+            -2.0
+        }
+    }
+}
+
+/// 策略优化器
+pub struct PolicyOptimizer {
+    /// 工具路由策略：上下文特征 → 工具选择概率
+    routing_policy: RoutingPolicy,
+
+    /// 压缩策略：信息类型 → 压缩强度
+    compression_policy: CompressionPolicy,
+
+    /// 权限策略：操作特征 → 自动批准概率
+    approval_policy: ApprovalPolicy,
+}
+
+impl PolicyOptimizer {
+    /// 更新工具路由策略
+    /// 
+    /// 简单实现：基于计数器的频率更新（无需神经网络）
+    pub async fn update_tool_routing(
+        &self,
+        batch: &[(Decision, Outcome)],
+        rewards: &[f64],
+    ) -> Result<(), NexusError> {
+        for ((decision, _), reward) in batch.iter().zip(rewards.iter()) {
+            if *reward > 0.0 {
+                // 正向奖励：增加该上下文→工具的关联权重
+                self.routing_policy.reinforce(
+                    &decision.context_signature,
+                    &decision.tool_name,
+                    *reward,
+                ).await?;
+            } else {
+                // 负向奖励：降低关联权重
+                self.routing_policy.penalize(
+                    &decision.context_signature,
+                    &decision.tool_name,
+                    -*reward,
+                ).await?;
+            }
+        }
+        Ok(())
+    }
+}
+```
+
+**预期收益**：
+- Chimera 使用越久，工具路由越精准
+- 自动学习用户的审批偏好
+- 压缩策略自适应不同项目类型
+
+---
+
+## 4. Chimera 十一层架构重设计
+
+### 4.1 当前架构回顾
+
+```
+L10: mca-gateway          ← 多通道亲和网关
+L9:  concord-tui          ← Concord TUI 自研引擎
+L8:  omega-learner        ← 学习/优化层
+L7:  (预留)
+L6:  nexus-orchestrator   ← 编排层
+L5:  (预留)
+L4:  nexus-contracts      ← 接口契约
+L3:  (预留)
+L2:  (预留)
+L1:  (预留)
+L0:  nexus-contracts      ← 领域事件定义
+```
+
+### 4.2 重设计后的十一层架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  L10: mca-gateway-v2       多通道亲和网关 v2                                  │
+│  · 七厂商 12 模型 spec（保留）                                               │
+│  · Hybrid Attention 路由（新增：Gated DeltaNet + Full Attention 交错）        │
+│  · 模型能力动态协商（保留并增强）                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L9.5: nexus-daemon        Daemon 运行时（新增）                              │
+│  · ACP 协议适配（RFD #721）                                                  │
+│  · HTTP/SSE 双传输                                                          │
+│  · 多客户端会话共享                                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L9: concord-tui-v2        Concord TUI v2                                    │
+│  · 多会话 Tab 切换（新增）                                                   │
+│  · Speculative 渲染优化（新增）                                              │
+│  · 事件残留可视化（新增）                                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L8.5: nexus-hook          生命周期 Hook 系统（新增）                         │
+│  · 13+ 生命周期事件                                                          │
+│  · 可配置 shell 命令                                                         │
+│  · 与 git/通知/日志系统集成                                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L8: nexus-sandbox         OS 级沙箱（新增）                                  │
+│  · Seatbelt (macOS)                                                        │
+│  · Landlock + seccomp (Linux)                                              │
+│  · 三态模式：ReadOnly / WorkspaceWrite / DangerFullAccess                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L7.5: nexus-mcp           MCP 原生客户端（新增）                             │
+│  · stdio / SSE / WebSocket 传输                                             │
+│  · 动态工具发现与映射                                                        │
+│  · Workspace 级连接池（McpTransportPool）                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L7: nexus-subagent        SubAgent 运行时（新增）                            │
+│  · 类型化 SubAgent（coder/explore/plan）                                    │
+│  · Arena 竞争模式                                                           │
+│  · Agent Swarm 协调（模型层原生）                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L6.5: nexus-compress      四层上下文压缩引擎（新增）                         │
+│  · Snip → Microcompact → Collapse → Autocompact                           │
+│  · IndexShare 跨层索引复用                                                   │
+│  · preserve_thinking 推理痕迹保留                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L6: nexus-orchestrator-v2 编排层 v2                                        │
+│  · Speculative Tool Execution（新增）                                        │
+│  · 并发安全批处理（读并行/写串行）                                            │
+│  · Fork Agents for Cache Sharing（新增）                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L5.5: nexus-moe-router    MoE 动态路由（新增）                               │
+│  · 门控网络工具选择                                                          │
+│  · 辅助损失-free 负载均衡                                                    │
+│  · Stable LatentMoE 历史感知路由                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L5: nexus-sparse-attention 稀疏事件注意力（新增）                            │
+│  · MSA 风格事件路由                                                          │
+│  · AttnRes 信息残留                                                          │
+│  · HNSW 近似最近邻索引                                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L4: nexus-contracts-v2    接口契约 v2（重构）                                │
+│  · trait-based 分层命名空间                                                  │
+│  · 动态事件注册                                                              │
+│  · 向后兼容 136 个内置变体                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L3: nexus-residual        事件残留系统（新增）                               │
+│  · L1/L2/L3 三层残留缓冲区                                                   │
+│  · 残差门控（Gated DeltaNet 风格）                                          │
+│  · 相位自适应（探索/执行/调试/规划）                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L2: nexus-learner-v2      运行时学习引擎 v2（重构）                          │
+│  · "slime" 异步反馈收集                                                      │
+│  · RLVR 可验证奖励                                                           │
+│  · 策略优化（路由/压缩/权限）                                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L1: nexus-telemetry       分布式追踪（新增）                                 │
+│  · OpenTelemetry 集成                                                        │
+│  · 结构化事件导出                                                            │
+│  · Jaeger/Prometheus 对接                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  L0: nexus-contracts-v2    领域事件定义 v2（重构）                            │
+│  · 136 内置变体（保留）                                                      │
+│  · 动态事件 trait                                                            │
+│  · metadata 双重验证（保留）                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.3 层间通信契约
+
+```rust
+/// 层间通信的统一接口
+/// 
+/// 每一层只依赖下层，通过 EventBus 与上层通信。
+/// 新增：层间残留注入（L3 向所有上层注入残留上下文）。
+pub trait Layer {
+    /// 层 ID
+    fn layer_id(&self) -> LayerId;
+
+    /// 处理来自下层的事件
+    async fn handle_upward(&self, event: NexusEvent) -> Result<Vec<NexusEvent>, NexusError>;
+
+    /// 处理来自上层的命令
+    async fn handle_downward(&self, command: LayerCommand) -> Result<(), NexusError>;
+
+    /// 接收残留注入（来自 L3）
+    async fn inject_residual(&self, residual: &ResidualVector) -> Result<(), NexusError>;
+}
+```
+
+---
+
+## 5. 核心算法打磨：六大引擎重构
+
+### 5.1 引擎一：Nexus Sparse Attention (NSA) — 稀疏事件注意力
+
+#### 5.1.1 算法核心
+
+```
+输入: 事件 e, 订阅者集合 S = {s₁, s₂, ..., sₙ}
+输出: 相关订阅者子集 S' ⊆ S
+
+1. 编码: 将事件 e 编码为查询向量 q = EncodeEvent(e)
+2. 分块: 将订阅者 S 按模式相似度分块为 B = {B₁, B₂, ..., Bₘ}
+3. 块级路由: 对每个块 Bᵢ，计算块级分数 score(Bᵢ) = BlockScore(q, Bᵢ)
+4. Top-K 块选择: 选择分数最高的 K 个块 B' = TopK(B, K)
+5. 精确匹配: 在 B' 内的每个订阅者 s，计算精确分数 score(s) = ExactMatch(q, s.pattern)
+6. 阈值过滤: S' = {s ∈ B' | score(s) > θ}
+7. 残留注入: 对每个 s ∈ S'，附加残留上下文 residual(s)
+8. 返回 S'
+```
+
+#### 5.1.2 复杂度分析
+
+| 阶段 | 全连接总线 | NSA | 加速比 |
+|------|----------|-----|-------|
+| 路由 | O(n) | O(log n + k) | ~n/(log n) |
+| 内存 | O(n) | O(n) + O(m) | ~1 |
+| 残留查询 | O(1) | O(1) | 1 |
+
+### 5.2 引擎二：Nexus MoE Router — 动态工具路由
+
+#### 5.2.1 算法核心
+
+```
+输入: 上下文 c, 专家集合 E = {e₁, e₂, ..., eₙ}
+输出: Top-K 专家 E' ⊆ E
+
+1. 上下文编码: h = ContextEncoder(c)
+2. 专家评分: 对每个 eᵢ，计算 gᵢ = Gate(h, eᵢ.embedding)
+3. 历史调整: gᵢ' = gᵢ + λ · HistoryBonus(eᵢ, task_type(c))
+4. 负载均衡: gᵢ'' = gᵢ' + μ · LoadBalanceAdjustment(eᵢ)
+5. Top-K 选择: E' = TopK(E, K=8)
+6. 专家加载: 只将 E' 的工具 schema 加载到模型上下文
+7. 执行: 模型在 E' 中选择具体工具
+8. 反馈记录: 记录 (c, E', result) 到经验回放池
+```
+
+### 5.3 引擎三：Nexus Compress — 四层上下文压缩
+
+#### 5.3.1 算法核心
+
+```
+输入: 上下文 C, 目标 token 预算 T
+输出: 压缩后的上下文 C'
+
+function COMPRESS(C, T):
+    if |C| ≤ T: return C
+
+    // Layer 1: Snip（规则截断）
+    C₁ = SNIP(C)
+    if |C₁| ≤ T · 1.3: return C₁
+
+    // Layer 2: Microcompact（结构压缩）
+    C₂ = MICROCOMPACT(C₁)
+    if |C₂| ≤ T · 1.15: return C₂
+
+    // Layer 3: Collapse（语义聚类）
+    C₃ = COLLAPSE(C₂)
+    if |C₃| ≤ T: return C₃
+
+    // Layer 4: Autocompact（模型驱动）
+    C₄ = AUTOCOMPACT(C₃)
+
+    // preserve_thinking: 注入持久化推理
+    C' = INJECT_THINKING(C₄)
+
+    return C'
+
+function SNIP(C):
+    // 1. 去重错误堆栈帧
+    C = DEDUP_ERROR_FRAMES(C)
+    // 2. 截断工具输出（保留前 50 + 后 10 行）
+    C = TRUNCATE_TOOL_OUTPUTS(C, head=50, tail=10)
+    // 3. 过滤已解决的 linter 警告
+    C = FILTER_RESOLVED_DIAGNOSTICS(C)
+    return C
+
+function MICROCOMPACT(C):
+    // 1. 代码块压缩为签名
+    C = COMPRESS_CODE_TO_SIGNATURES(C)
+    // 2. 长回复压缩为 bullet points
+    C = SUMMARIZE_TO_BULLETS(C)
+    return C
+
+function COLLAPSE(C):
+    // 1. 连续文件读取合并为目录摘要
+    C = COLLAPSE_FILE_READS(C)
+    // 2. 测试失败合并为模式摘要
+    C = COLLAPSE_TEST_FAILURES(C)
+    return C
+
+function AUTOCOMPACT(C):
+    // 调用轻量级模型（如 Qwen3.7-Flash）生成摘要
+    summary = LIGHT_MODEL.summarize(C, max_tokens=T/2)
+    return REPLACE_OLDEST_TURNS(C, summary)
+```
+
+### 5.4 引擎四：Nexus Residual — 事件残留与状态传承
+
+#### 5.4.1 算法核心
+
+```
+输入: 当前轮次 t, 历史轮次 H = {h₁, h₂, ..., hₜ₋₁}
+输出: 残差增强上下文 C'
+
+function ENHANCE(C, t, H):
+    // 1. 提取三层残留
+    R₁ = EXTRACT_RECENT(H, k=5)      // L1: 高频
+    R₂ = EXTRACT_MEDIUM(H, k=20)     // L2: 中频
+    R₃ = EXTRACT_SUMMARY(H)           // L3: 低频摘要
+
+    // 2. 计算门控
+    phase = DETECT_PHASE(C)
+    switch phase:
+        Exploration:  α = [0.8, 0.6, 0.4]
+        Execution:    α = [0.3, 0.2, 0.1]
+        Debugging:    α = [0.9, 0.7, 0.5]
+        Planning:     α = [0.5, 0.8, 0.9]
+
+    // 3. 缩放残留
+    R'₁ = SCALE(R₁, α[0])
+    R'₂ = SCALE(R₂, α[1])
+    R'₃ = SCALE(R₃, α[2])
+
+    // 4. 注入上下文
+    C' = C + ATTACH_RESIDUAL("recent", R'₁)
+    C' = C' + ATTACH_RESIDUAL("medium", R'₂)
+    C' = C' + ATTACH_RESIDUAL("historical", R'₃)
+
+    return C'
+```
+
+### 5.5 引擎五：Nexus Runtime Learning — 运行时学习
+
+#### 5.5.1 算法核心
+
+```
+输入: 决策-结果对 (d, o)
+输出: 更新后的策略 π'
+
+function LEARN((d, o)):
+    // 1. 计算可验证奖励
+    r = COMPUTE_REWARD(d, o)
+
+    // 2. 存入经验回放池
+    REPLAY_BUFFER.push((d, o, r))
+
+    // 3. 定期优化（每 N 个决策触发一次）
+    if REPLAY_BUFFER.len() >= BATCH_SIZE:
+        batch = REPLAY_BUFFER.sample(BATCH_SIZE)
+
+        // 3.1 优化工具路由策略
+        for (d, o, r) in batch:
+            if r > 0:
+                ROUTING_POLICY.reinforce(d.context, d.tool, r)
+            else:
+                ROUTING_POLICY.penalize(d.context, d.tool, -r)
+
+        // 3.2 优化压缩策略
+        for (d, o, r) in batch:
+            if d.compression_applied:
+                COMPRESSION_POLICY.update(d.info_type, d.compression_level, r)
+
+        // 3.3 优化权限策略
+        for (d, o, r) in batch:
+            if d.auto_approved && r < 0:
+                APPROVAL_POLICY.penalize(d.operation_type, d.risk_level)
+            if !d.auto_approved && r > 0:
+                APPROVAL_POLICY.reinforce(d.operation_type, d.risk_level)
+
+    return π'
+```
+
+### 5.6 引擎六：Nexus Speculative Execution — 投机工具执行
+
+#### 5.6.1 算法核心
+
+```
+输入: 模型流式输出流 S
+输出: 工具调用结果（可能提前完成）
+
+function SPECULATIVE_EXECUTE(S):
+    parser = StreamingToolCallParser()
+    pending_readonly = []
+    pending_write = []
+
+    for token in S:
+        // 1. 流式解析
+        partial = parser.feed(token)
+
+        if partial.is_complete():
+            // 完整工具调用已解析
+            call = partial.to_tool_call()
+
+            if call.category == ReadOnly:
+                // 2a. 只读工具：立即执行
+                result = EXECUTE(call)
+                YIELD result
+            else:
+                // 2b. 写操作：缓存等待确认
+                pending_write.push(call)
+
+        else if partial.is_confident():
+            // 3. 高置信度部分解析：预执行只读工具
+            if partial.category == ReadOnly && partial.confidence > 0.9:
+                // 启动异步预执行
+                spawn async { PRE_EXECUTE(partial) }
+
+    // 4. 返回所有 pending 写操作等待用户/策略确认
+    return pending_write
+```
+
+---
+
+## 6. 通信通道与协议层极致优化
+
+### 6.1 NexusEvent v2 协议
+
+```rust
+/// NexusEvent v2 — 分层命名空间与动态事件注册
+/// 
+/// 核心改进：
+/// 1. 从扁平枚举变为 trait-based 分层系统
+/// 2. 支持动态事件注册（MCP/SubAgent 自定义事件）
+/// 3. 向后兼容 136 个内置变体
+/// 4. 内置稀疏注意力元数据（用于 NSA 路由）
+pub trait NexusEventV2: Send + Sync + 'static {
+    /// 事件类型 ID（全局唯一）
+    fn event_type(&self) -> EventTypeId;
+
+    /// 命名空间（用于分层权限和路由）
+    fn namespace(&self) -> EventNamespace;
+
+    /// 序列化（支持多种格式）
+    fn serialize(&self, format: SerializeFormat) -> Result<Bytes, NexusError>;
+
+    /// 元数据（包含稀疏注意力所需的特征向量）
+    fn metadata(&self) -> &EventMetadataV2;
+
+    /// 重要性评分（用于压缩和残留决策）
+    fn importance(&self) -> ImportanceScore;
+
+    /// 提取关键符号（用于 IndexShare）
+    fn extract_symbols(&self) -> Vec<Symbol>;
+
+    /// 提取决策摘要（用于 preserve_thinking）
+    fn summarize_decision(&self) -> Option<DecisionSummary>;
+}
+
+/// 事件元数据 v2
+pub struct EventMetadataV2 {
+    /// 基础元数据（保留 v1）
+    pub timestamp: Timestamp,
+    pub source: EventSource,
+    pub correlation_id: CorrelationId,
+
+    /// 新增：稀疏注意力特征
+    pub semantic_embedding: EmbeddingVector,  // 用于 NSA 路由
+    pub subscriber_pattern: EventPattern,      // 声明式订阅模式
+
+    /// 新增：残留元数据
+    pub residual_weight: f64,                  // 该事件的残留权重
+    pub residual_decay: f64,                   // 残留衰减率
+
+    /// 新增：压缩元数据
+    pub compressibility: Compressibility,      // 可压缩性评级
+    pub key_symbols: Vec<Symbol>,              // 不可压缩的关键符号
+}
+```
+
+### 6.2 ACP 协议适配
+
+```rust
+/// ACP (Agent Client Protocol) 适配器
+/// 
+/// 实现标准 RFD #721，支持：
+/// - Streamable HTTP
+/// - stdio NDJSON
+/// - WebSocket（扩展）
+pub struct AcpAdapter {
+    transport: AcpTransport,
+    translator: AcpNexusTranslator,
+    session_manager: AcpSessionManager,
+}
+
+impl AcpAdapter {
+    /// 处理 ACP 初始化请求
+    pub async fn handle_initialize(&self, req: AcpInitializeRequest) -> Result<AcpInitializeResponse, AcpError> {
+        // 1. 协议版本协商
+        let protocol_version = negotiate_version(req.protocol_version)?;
+
+        // 2. 创建或恢复会话
+        let session = self.session_manager.get_or_create(req.session_id).await?;
+
+        // 3. 返回能力声明
+        Ok(AcpInitializeResponse {
+            protocol_version,
+            session_id: session.id(),
+            capabilities: AcpCapabilities {
+                supports_streaming: true,
+                supports_tool_calls: true,
+                supports_approval: true,
+                max_context_tokens: 1_000_000,
+            },
+        })
+    }
+
+    /// 双向翻译：ACP ↔ NexusEvent
+    pub fn translate_acp_to_nexus(&self, acp_event: AcpEvent) -> Result<NexusEventV2, TranslationError> {
+        match acp_event {
+            AcpEvent::AgentMessageChunk { content, .. } => {
+                Ok(NexusEventV2::ModelOutput(ModelOutputEvent { content }))
+            }
+            AcpEvent::ToolCallStart { name, arguments, .. } => {
+                Ok(NexusEventV2::ToolCall(ToolCallEvent { name, arguments }))
+            }
+            AcpEvent::RequestPermissionRequest { tool_name, .. } => {
+                Ok(NexusEventV2::ApprovalRequest(ApprovalRequestEvent { tool_name }))
+            }
+            // ... 其他映射
+        }
+    }
+}
+```
+
+### 6.3 MCP 协议集成
+
+```rust
+/// MCP (Model Context Protocol) 客户端
+/// 
+/// 设计目标：
+/// 1. 工具即插即用（无需重新编译 Chimera）
+/// 2. Workspace 级连接池复用
+/// 3. 动态 schema 发现
+/// 4. 与 Nexus MoE Router 深度集成
+pub struct McpClientV2 {
+    transport_pool: McpTransportPool,
+    tool_registry: McpToolRegistry,
+    schema_cache: McpSchemaCache,
+    router_integration: McpRouterIntegration,
+}
+
+impl McpClientV2 {
+    /// 动态发现工具（与 MoE Router 协同）
+    pub async fn discover_and_register(&self) -> Result<(), McpError> {
+        // 1. 从所有已配置的 MCP 服务器获取工具列表
+        let all_tools = self.transport_pool.list_all_tools().await?;
+
+        // 2. 为每个工具生成语义嵌入（用于 MoE 路由）
+        for tool in &all_tools {
+            let embedding = self.generate_tool_embedding(tool).await?;
+
+            // 3. 注册到 MoE Router
+            self.router_integration.register_expert(ExpertSpec {
+                id: ExpertId::from(&tool.name),
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                embedding,
+                category: classify_tool_category(tool),
+            }).await?;
+
+            // 4. 缓存 schema
+            self.schema_cache.store(tool.name.clone(), tool.schema.clone()).await?;
+        }
+
+        Ok(())
+    }
+
+    /// 执行工具调用（与事件总线集成）
+    pub async fn execute(&self, call: McpToolCall) -> Result<ToolResult, McpError> {
+        // 1. 获取传输连接（从连接池）
+        let transport = self.transport_pool.acquire(&call.server_name).await?;
+
+        // 2. 发送调用请求
+        let result = transport.call_tool(call.name, call.arguments).await?;
+
+        // 3. 将结果转换为 NexusEvent
+        let event = NexusEventV2::ToolResult(ToolResultEvent {
+            tool_name: call.name,
+            output: result.content,
+            is_error: result.is_error,
+            metadata: EventMetadataV2 {
+                // 自动提取关键符号用于 IndexShare
+                key_symbols: extract_symbols(&result.content),
+                ..Default::default()
+            },
+        });
+
+        // 4. 发布到事件总线
+        self.event_bus.publish(event).await?;
+
+        Ok(result)
+    }
+}
+```
+
+---
+
+## 7. Crate 级重构计划
+
+### 7.1 新增 Crate（9 个）
+
+| Crate | 层级 | 来源 | 核心职责 | 依赖 |
+|-------|------|------|---------|------|
+| `nexus-sparse-attention` | L5 | Kimi K3 KDA + MiniMax M3 MSA | 稀疏事件路由、信息残留 | `nexus-contracts-v2` |
+| `nexus-moe-router` | L5.5 | DeepSeek V4 MoE + Kimi K3 Stable LatentMoE | 动态工具/SubAgent 路由 | `nexus-contracts-v2` |
+| `nexus-compress` | L6.5 | Claude Code + GLM 5.3 IndexShare | 四层上下文压缩 | `nexus-contracts-v2` |
+| `nexus-subagent` | L7 | Kimi K3 Agent Swarm + Claude Code Agent Teams | SubAgent 运行时、Arena | `nexus-moe-router` |
+| `nexus-mcp` | L7.5 | Claude Code 3000+ MCP + Qwen Code Tool Search | MCP 客户端、动态工具发现 | `nexus-moe-router` |
+| `nexus-sandbox` | L8 | Codex CLI Seatbelt/Landlock | OS 级沙箱 | `nexus-contracts-v2` |
+| `nexus-hook` | L8.5 | Claude Code 31 Hooks + Kimi Code 13 Hooks | 生命周期 Hook 系统 | `nexus-contracts-v2` |
+| `nexus-daemon` | L9.5 | Qwen Code Daemon + Kimi Code ACP | Daemon 运行时、ACP 适配 | `nexus-contracts-v2` |
+| `nexus-telemetry` | L1 | OpenTelemetry 标准 | 分布式追踪、指标 | `nexus-contracts-v2` |
+
+### 7.2 重构 Crate（5 个）
+
+| Crate | 当前版本 | 重构目标 | 关键变更 |
+|-------|---------|---------|---------|
+| `nexus-contracts` | v1 | v2 | trait-based 事件、动态注册、稀疏注意力元数据 |
+| `nexus-orchestrator` | v1 | v2 | Speculative Execution、并发批处理、Cache Sharing |
+| `omega-learner` | v1 | v2 | "slime" 异步 RL、RLVR 奖励、策略优化 |
+| `concord-tui` | v1 | v2 | 多会话、Speculative 渲染、残留可视化 |
+| `mca-gateway` | v1 | v2 | Hybrid Attention 路由、模型能力动态协商增强 |
+
+### 7.3 保留 Crate（4 个）
+
+| Crate | 保留理由 |
+|-------|---------|
+| `nexus-contracts` (L0/L4) | 核心契约层，v2 向后兼容 |
+| `mca-gateway` (L10) | 多通道网关，v2 增强而非替换 |
+| `concord-tui` (L9) | TUI 引擎，v2 增加功能 |
+| `omega-learner` (L8/L2) | 学习层，v2 扩展算法 |
+
+### 7.4 Crate 依赖图
+
+```
+                          ┌─────────────────┐
+                          │   mca-gateway   │ L10
+                          └────────┬────────┘
+                                   │
+                          ┌────────▼────────┐
+                          │  nexus-daemon   │ L9.5
+                          └────────┬────────┘
+                                   │
+┌──────────────────────────────────┼──────────────────────────────────┐
+│                          ┌───────┴───────┐                          │
+│                          │  concord-tui  │ L9                       │
+│                          └───────┬───────┘                          │
+│                                  │                                 │
+│                          ┌───────┴───────┐                          │
+│                          │  nexus-hook   │ L8.5                     │
+│                          └───────┬───────┘                          │
+│                                  │                                 │
+│                          ┌───────┴───────┐                          │
+│                          │ nexus-sandbox │ L8                       │
+│                          └───────┬───────┘                          │
+│                                  │                                 │
+│    ┌─────────────────────────────┼─────────────────────────────┐   │
+│    │                             │                             │   │
+│    ▼                             ▼                             ▼   │
+│ ┌────────┐                ┌────────────┐                ┌────────┐ │
+│ │nexus-  │                │  nexus-mcp │                │nexus-  │ │
+│ │subagent│                │    L7.5    │                │compress│ │
+│ │  L7    │                └─────┬──────┘                │ L6.5   │ │
+│ └───┬────┘                      │                       └───┬────┘ │
+│     │                           │                           │      │
+│     └───────────────────────────┼───────────────────────────┘      │
+│                                 │                                  │
+│                          ┌──────┴──────┐                           │
+│                          │nexus-moe-   │                           │
+│                          │   router    │ L5.5                      │
+│                          └──────┬──────┘                           │
+│                                 │                                  │
+│                          ┌──────┴──────┐                           │
+│                          │nexus-sparse-│                           │
+│                          │  attention  │ L5                        │
+│                          └──────┬──────┘                           │
+│                                 │                                  │
+│                          ┌──────┴──────┐                           │
+│                          │nexus-       │                           │
+│                          │contracts-v2 │ L4/L0                     │
+│                          └──────┬──────┘                           │
+│                                 │                                  │
+│                          ┌──────┴──────┐                           │
+│                          │nexus-       │                           │
+│                          │  residual   │ L3                        │
+│                          └──────┬──────┘                           │
+│                                 │                                  │
+│                          ┌──────┴──────┐                           │
+│                          │nexus-learner│                           │
+│                          │    v2       │ L2                        │
+│                          └──────┬──────┘                           │
+│                                 │                                  │
+│                          ┌──────┴──────┐                           │
+│                          │nexus-       │                           │
+│                          │ telemetry   │ L1                        │
+│                          └─────────────┘                           │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 8. 实施路线图与里程碑
+
+### 8.1 四期工程计划
+
+#### 第一期：地基重构（Month 1-2）—— "事件系统革命"
+
+**目标**：完成 NexusEvent v2、稀疏注意力、MoE 路由三大基础设施
+
+| 周次 | 任务 | 交付物 | 验收标准 |
+|------|------|--------|---------|
+| W1-2 | `nexus-contracts-v2` | trait-based 事件系统 | 136 内置变体全部迁移，新增 10+ 动态事件测试 |
+| W3-4 | `nexus-sparse-attention` | MSA 事件路由 + AttnRes | 1000 订阅者场景路由延迟 < 1ms |
+| W5-6 | `nexus-moe-router` | 门控网络 + 负载均衡 | 50 工具场景 Top-8 选择准确率 > 85% |
+| W7-8 | 整合测试 | 三 crate 联调 | 9954+ 测试通过，性能基准无回归 |
+
+#### 第二期：认知增强（Month 3-4）—— "压缩与残留"
+
+**目标**：完成压缩引擎、残留系统、学习引擎三大认知层
+
+| 周次 | 任务 | 交付物 | 验收标准 |
+|------|------|--------|---------|
+| W1-2 | `nexus-compress` | 四层压缩 + IndexShare | 100 轮会话 token 降低 40%+ |
+| W3-4 | `nexus-residual` | L1/L2/L3 残留 + 门控 | 100 轮后早期决策召回率 > 90% |
+| W5-6 | `nexus-learner-v2` | 异步 RL + RLVR | 10 次会话后工具路由准确率提升 15%+ |
+| W7-8 | 整合测试 | 三 crate + 第一期联调 | 长会话端到端测试通过 |
+
+#### 第三期：生态扩展（Month 5-6）—— "开放与嵌入"
+
+**目标**：完成 SubAgent、MCP、Daemon、沙箱四大扩展层
+
+| 周次 | 任务 | 交付物 | 验收标准 |
+|------|------|--------|---------|
+| W1-2 | `nexus-subagent` | 类型化 SubAgent + Arena | 3 种 SubAgent 并行执行测试通过 |
+| W3-4 | `nexus-mcp` + `nexus-daemon` | MCP 客户端 + ACP Daemon | 连接 5+ MCP 服务器，Zed 插件原型 |
+| W5-6 | `nexus-sandbox` + `nexus-hook` | OS 沙箱 + 13 Hooks | Seatbelt/Landlock 测试通过 |
+| W7-8 | 整合测试 | 全系统端到端 | 七雄功能对标测试 |
+
+#### 第四期：极致打磨（Month 7-8）—— "可观测与自适应"
+
+**目标**：完成遥测、性能优化、自适应调优
+
+| 周次 | 任务 | 交付物 | 验收标准 |
+|------|------|--------|---------|
+| W1-2 | `nexus-telemetry` | OpenTelemetry 集成 | Jaeger 追踪可视化 |
+| W3-4 | 性能优化 | 全系统 profiling | P99 延迟降低 30%+ |
+| W5-6 | 自适应调优 | 自动参数调整 | 不同项目类型自动适配 |
+| W7-8 | 文档与发布 | v3.0.0 发布 | 71+ ADR、完整文档、演示视频 |
+
+### 8.2 关键里程碑
+
+```
+Month 1  ──► [M1] NexusEvent v2 稳定
+Month 2  ──► [M2] 稀疏注意力 + MoE 路由 性能达标
+Month 3  ──► [M3] 四层压缩 效果验证
+Month 4  ──► [M4] 残留系统 + 学习引擎 长会话测试通过
+Month 5  ──► [M5] SubAgent + MCP 功能完整
+Month 6  ──► [M6] Daemon + 沙箱 安全审计通过
+Month 7  ──► [M7] 遥测 + 性能优化 达标
+Month 8  ──► [M8] v3.0.0 发布
+```
+
+### 8.3 风险与熔断
+
+| 风险 | 概率 | 影响 | 熔断条件 | 缓解措施 |
+|------|------|------|---------|---------|
+| trait-based 事件系统性能不达标 | 中 | 高 | 延迟 > 2x v1 | 保留 v1 回退路径 |
+| 稀疏注意力路由准确率 < 80% | 中 | 高 | 准确率 < 80% | 降级为全连接 + 缓存 |
+| OS 沙箱平台兼容性差 | 高 | 中 | macOS/Linux 任一失败 | macOS 优先，Linux 次优先 |
+| MCP 协议版本不兼容 | 中 | 中 | 无法连接主流 MCP | 封装版本适配层 |
+| 运行时学习过拟合 | 低 | 高 | 准确率随时间下降 | 学习率衰减 + 经验回放上限 |
+| 测试覆盖率下降 | 低 | 高 | < 95% | 强制新增功能伴随测试 |
+
+---
+
+## 9. 附录：跨域设计模式速查表
+
+### 9.1 LLM → CLI Agent 映射总表
+
+| # | LLM 概念 | 来源模型 | CLI Agent 映射 | Chimera 落地 |
+|---|---------|---------|---------------|-------------|
+| 1 | Multi-head Latent Attention (MLA) | DeepSeek V2/V3/V4 | 事件查询的低秩压缩 | `NexusEventV2::semantic_embedding` |
+| 2 | Compressed Sparse Attention | DeepSeek V4 | 稀疏事件路由 | `nexus-sparse-attention` |
+| 3 | 辅助损失-free MoE 路由 | DeepSeek V4 | 无辅助损失的动态工具路由 | `LoadBalancer::balance()` |
+| 4 | Multi-Token Prediction | DeepSeek V4 | 批量工具调用预测 | `SpeculativeExecutor` |
+| 5 | Kimi Delta Attention (KDA) | Kimi K3 | 增量事件注意力 | `MsaEventRouter` |
+| 6 | Attention Residuals (AttnRes) | Kimi K3 | 跨轮信息残留 | `EventResidualBuffer` |
+| 7 | Stable LatentMoE | Kimi K3 | 稳定的子代理路由 | `RoutingHistory::get_bonus()` |
+| 8 | Agent Swarm | Kimi K3 | 模型原生并行 subagent | `SubAgentRuntime::spawn_arena()` |
+| 9 | RLVR | Kimi K3/GLM 5.3 | 可验证奖励的运行时学习 | `compute_verifiable_reward()` |
+| 10 | IndexShare | GLM 5.3 | 跨层索引复用 | `SharedSemanticIndex` |
+| 11 | Post-training Scaling | GLM 5.3 | 架构冻结后的运行时优化 | `NexusRuntimeLearning` |
+| 12 | "slime" 异步 RL | GLM 5.3 | 异步反馈收集 | `AsyncFeedbackCollector` |
+| 13 | MiniMax Sparse Attention (MSA) | MiniMax M3 | 块级事件路由 | `MsaEventRouter::route()` |
+| 14 | "KV outer gather Q" | MiniMax M3 | 外向型信息聚合 | `subscriber_blocks` 分块 |
+| 15 | Interleaved Thinking | MiniMax M3 | 动态推理深度切换 | `ApprovalMode::Dynamic` |
+| 16 | Hybrid Attention (Gated DeltaNet + Full) | Qwen3.8-Max | 混合注意力引擎 | `nexus-orchestrator-v2` |
+| 17 | preserve_thinking | Qwen3.8-Max | 推理痕迹跨会话保留 | `ThinkingPreserve` |
+| 18 | 35h 自主执行 | Qwen3.8-Max | 长会话稳定性 | `NexusResidualSystem` |
+| 19 | 四层上下文压缩 | Claude Code | Snip/Microcompact/Collapse/Autocompact | `NexusCompressor` |
+| 20 | Speculative Tool Execution | Claude Code | 流式期间并行执行只读工具 | `SpeculativeExecutor` |
+| 21 | Fork Agents Cache Sharing | Claude Code | 并行子代理共享前缀缓存 | `SubAgentHandle::shared_context` |
+| 22 | OS 级沙箱 | Codex CLI | Seatbelt/Landlock/seccomp | `nexus-sandbox` |
+| 23 | ACP 协议 | Qwen Code/Kimi Code | IDE 嵌入标准协议 | `nexus-daemon` |
+| 24 | MCP 生态 | Claude Code | 工具即插即用 | `nexus-mcp` |
+
+### 9.2 架构决策原则
+
+```
+1. 稀疏优于稠密
+   → 事件路由稀疏化（NSA）
+   → 工具加载稀疏化（MoE Router）
+   → 上下文注意力稀疏化（HCW-Sparse + Compress）
+
+2. 残留优于遗忘
+   → 事件残留（AttnRes）
+   → 推理痕迹保留（preserve_thinking）
+   → 跨轮状态传承（Residual System）
+
+3. 学习优于配置
+   → 运行时学习（Post-training Scaling）
+   → 异步反馈（"slime" RL）
+   → 可验证奖励（RLVR）
+
+4. 混合优于单一
+   → 混合注意力（Hybrid Attention）
+   → 混合推理深度（Interleaved Thinking）
+   → 混合压缩策略（四层压缩）
+
+5. 开放优于封闭
+   → MCP 生态集成
+   → ACP 标准协议
+   → 动态事件注册
+```
+
+---
+
+> **终章：从"造工具"到"造生态"**
+> 
+> Chimera CLI v2.26.0-omega 的 38 crate、9954 测试、71 ADR 证明了"一个人可以造出工程深度的奇迹"。
+> 但 v3.0 的目标不是更深的深度，而是**更宽的宽度**——从 Terminal-First 到 Runtime-Platform，
+> 从 Closed Ecosystem 到 Open Protocol，从 Static Configuration to Runtime Learning。
+> 
+> 五大 LLM 的架构智慧告诉我们：**规模不是来自于更大的模型，而是来自于更聪明的稀疏、更稳定的残留、更持续的学习**。
+> Chimera v3.0 将证明这一点在 CLI Agent 领域同样成立。
+> 
+> *"The best time to plant a tree was 20 years ago. The second best time is now."*
+> *种树的最佳时间是二十年前，其次是现在。*
+> *—— 但如果我们把大模型的根系嫁接到 CLI Agent 的树干上，或许可以同时拥有深度和广度。*

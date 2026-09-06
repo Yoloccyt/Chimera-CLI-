@@ -39,6 +39,9 @@ pub mod error;
 /// R2 解冻阶段 1 前置:在 R2(GSOE×AutoDPO 约束 RL)解冻前,
 /// 先形式化保证其训练数据源(偏好对)的一致性与反奖励黑客性质。
 pub mod formal;
+// 冻结违反处置:回滚守卫(尽力回滚 pending 更新;失败则经 Critical 旁路
+// 发布 R2FreezeRollbackFailed,为该事件提供真实生产发布方)
+pub mod freeze_guard;
 pub mod generator;
 pub mod rhi_channel_a;
 pub mod rhi_judge_client;

@@ -1,6 +1,8 @@
 //! FormalVerifier M1 — 事件因果一致性形式化验证(P7-T4)
 //!
 //! 对应架构层: L4 FormalVerifier(event-bus 内验证器实现)
+//! 状态(ADR-181):VERIFIER-EVIDENCE-ONLY —— 仅供 FormalVerifierGate
+//!             证据链(经根 E2E 消费),非生产运行时路径;不退役。
 //! 对应 ADR: ADR-047(M1 Property #4:跨层事件因果一致性)
 //! 对应计划: `IMPLEMENTATION_PLAN_Harness_Engineering_V3.md` Phase 7 P7-T4
 //!

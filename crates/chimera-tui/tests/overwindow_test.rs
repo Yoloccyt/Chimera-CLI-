@@ -5,7 +5,7 @@
 //! # 覆盖点
 //! - 面板注册与焦点切换;空态提示;触发事件渲染(最新在前/字段齐备);
 //! - MAX_TRIGGERS_SHOWN 截断与 "more" 指示;键处理 None(展示型面板);
-//! - scaled_timeout! 异步护栏示范用例(异步等待状态更新)。
+//! - build_scaled_timeout! 异步护栏示范用例(异步等待状态更新)。
 //!
 //! WHY 本文件补齐 P8:OverWindow(ADR-073 落地的最新机制)此前是唯一无专项
 //! 测试文件的注册面板;断言统一用 En 文案(宽字符重组歧义规避,W3 口径沿袭)。
@@ -97,6 +97,7 @@ fn overwindow_panel_registered_and_focusable() {
 
 #[test]
 fn empty_state_shows_hint_en() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -110,6 +111,7 @@ fn empty_state_shows_hint_en() {
 
 #[test]
 fn trigger_events_render_latest_first_with_fields() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -132,6 +134,7 @@ fn trigger_events_render_latest_first_with_fields() {
 
 #[test]
 fn truncates_beyond_max_triggers_with_more_indicator() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -169,9 +172,9 @@ fn panel_key_delegation_is_noop_no_panic() {
 
 #[tokio::test]
 async fn scaled_timeout_guards_async_state_wait() {
-    // scaled_timeout! 护栏示范:异步轮询等待状态更新,超时可诊断而非挂死
+    // build_scaled_timeout! 护栏示范:异步轮询等待状态更新,超时可诊断而非挂死
     let app = make_app();
-    let deadline = tokio::time::Instant::now() + scaled_timeout!(1.0);
+    let deadline = tokio::time::Instant::now() + build_scaled_timeout!(1.0);
     let wait_result = tokio::time::timeout_at(deadline, async {
         loop {
             if app.state().frame_count < u64::MAX {
@@ -192,7 +195,7 @@ async fn scaled_timeout_guards_async_state_wait() {
 #[tokio::test]
 async fn scaled_timeout_detects_stuck_wait() {
     // 护栏反向验证:不可能满足的条件应在缩放超时内返回 Err(而非挂死)
-    let stuck = tokio::time::timeout(scaled_timeout!(0.05), async {
+    let stuck = tokio::time::timeout(build_scaled_timeout!(0.05), async {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }

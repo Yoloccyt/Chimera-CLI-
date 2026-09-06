@@ -52,6 +52,14 @@ pub struct ChimeraConfig {
     pub evolution: EvolutionConfig,
     /// 监控(Prometheus/Grafana)
     pub monitoring: MonitoringConfig,
+    /// 策略封顶守卫(推理悖论主动降级闭环,ADR-063)启用开关
+    ///
+    /// 默认 `false`(off):关闭时 `spawn_strategy_cap_subscriber` 不挂载,
+    /// 行为与未引入本字段前完全一致;开启后 L8 StrategyCapGuard 消费
+    /// `CoordinationRatioReported` ratio 反馈驱动审议策略封顶降档/升档,
+    /// 封顶变更发布 `ParliamentStrategyCapChanged` 观测事件。
+    #[serde(default)]
+    pub enable_strategy_cap: bool,
 }
 
 /// Nexus 元信息

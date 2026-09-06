@@ -82,10 +82,8 @@ impl ActorNetwork {
     }
 }
 
-/// 逻辑斯蒂函数（置信度映射，全程 f32——项目红线：不隐式转 f64）
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
-}
+/// 逻辑斯蒂函数:委托至 nexus_contracts::util::sigmoid(全程 f32,项目红线 §6.2 #6)
+use nexus_contracts::util::sigmoid;
 
 /// 三元组观测：Skeptic/Security/Execution 各自特征向量
 #[derive(Debug, Clone)]

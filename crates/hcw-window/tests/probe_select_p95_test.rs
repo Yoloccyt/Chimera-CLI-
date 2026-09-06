@@ -34,10 +34,12 @@ use nexus_core::CLV;
 /// debug 开销 + 并行竞争污染延迟测量）。`HCW_PROBE_WINDOW_P95_MS` 使 CI
 /// 可在不改代码的情况下覆盖阈值；失败安全：未设置/解析失败回退 10ms。
 fn probe_window_p95_ms() -> u128 {
-    std::env::var("HCW_PROBE_WINDOW_P95_MS")
+    let base = std::env::var("HCW_PROBE_WINDOW_P95_MS")
         .ok()
         .and_then(|s| s.parse::<u128>().ok())
-        .unwrap_or(10)
+        .unwrap_or(10);
+    // u128 入、u64 缩放、回 u128：阈值量级为 ms，远小于 u64 上限。
+    nexus_contracts::util::perf_scale_ms(base as u64) as u128
 }
 
 /// 打分吞吐红线（块/秒，设计文档 §6.1，默认 10_000）
@@ -47,10 +49,13 @@ fn probe_window_p95_ms() -> u128 {
 /// 余量不足会偶发失败；`HCW_PROBE_THROUGHPUT_MIN` 使 CI 可覆盖。
 /// 失败安全：未设置/解析失败回退 10_000 块/秒。
 fn probe_throughput_min() -> f64 {
-    std::env::var("HCW_PROBE_THROUGHPUT_MIN")
+    let base = std::env::var("HCW_PROBE_THROUGHPUT_MIN")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(10_000.0)
+        .unwrap_or(10_000.0);
+    // ⚠ 方向相反：这是**下界**（阈值越高越难达标），要放松时必须**除**以 scale。
+    // 延迟类阈值 ×scale、吞吐类阈值 ÷scale，否则“scale=4”会把本项变成更严。
+    base / nexus_contracts::util::perf_scale()
 }
 
 /// 窗口档块数（128K 档 = 256 块 × 512 token）

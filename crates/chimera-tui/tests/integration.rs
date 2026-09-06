@@ -271,7 +271,7 @@ fn test_tui_input_mode_circular_navigation() {
     // WHY 循环导航:验证 Tab/Shift+Tab 沿焦点环完整循环一周回到原点。
     // Concord T1.4:期望序列不再手写(避免测试成为第三处顺序源),而是派生
     // 自 PanelId::REGISTERED_FOCUS_ORDER 单一事实源:Tab 沿环正向逐位,
-    // Shift+Tab 逆向逐位;25 面板全部注册(Timeline/Sysinfo 已接线)。
+    // Shift+Tab 逆向逐位;27 面板全部注册(Timeline/Sysinfo 已接线)。
     let mut app = make_app();
     let order = PanelId::REGISTERED_FOCUS_ORDER;
     let n = order.len();

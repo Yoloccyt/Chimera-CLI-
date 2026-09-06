@@ -24,6 +24,8 @@ pub use nexus_contracts::EventMetadata;
 // `nexus_contracts::event_payload` 定义逐字一致(线格式冻结,跨进程契约不破坏)。
 // severity() 判定逻辑仍留在本 crate(架构红线:Critical 事件 mpsc 保障,见 types.rs)。
 pub use nexus_contracts::event_payload::{AgentStatus, EventSeverity, TaskPriority};
+// ws2-c1 红线 #8:公共 Top-K 收敛工具(替代 sort_by 全排;L1 → L0 允许)
+use nexus_contracts::util::xts_top_k_by;
 
 // ============================================================
 // Quest / 投票辅助枚举
@@ -216,21 +218,13 @@ impl ClvSummary {
             if k == 0 {
                 Vec::new()
             } else {
-                // select_nth_unstable_by 按 |值| 降序分区到第 k-1 位:
-                // before(k-1 个最大) + mid(第 k 个) = Top-k(无序)
-                let (before, mid, _) = indexed.select_nth_unstable_by(k - 1, |a, b| {
+                // 公共 xts_top_k_by:O(n) 部分排序 + 前 k 段降序(红线 #8 ws2-c1)
+                let top = xts_top_k_by(&mut indexed, k, |a, b| {
                     b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
                 });
 
-                // 收集 Top-k:前 k-1 个 + mid
-                let mut top: Vec<(usize, f32, f32)> = before.to_vec();
-                top.push(*mid);
-
-                // Top-k 内部按 |值| 降序排序(k ≤ 8,排序成本可忽略)
-                top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-                // 转换为 (维度索引, 值) 格式
-                top.into_iter().take(8).map(|(i, _abs, v)| (i, v)).collect()
+                // 转换为 (维度索引, 值) 格式(k ≤ 8,take 8 为 no-op)
+                top.iter().take(8).map(|&(i, _abs, v)| (i, v)).collect()
             }
         };
 

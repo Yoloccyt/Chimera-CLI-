@@ -1487,7 +1487,7 @@ mod tests {
             PanelId::SelfAssessment,
             // closure Stage B-10:DagViz 加入往返验证
             PanelId::DagViz,
-            // Task 3.7/3.9 + P1:PvlScore/TaskManager/OverWindow 加入往返验证(25 面板循环,Concord T1.4)
+            // Task 3.7/3.9 + P1:PvlScore/TaskManager/OverWindow 加入往返验证(27 面板循环,Concord T1.4)
             PanelId::PvlScore,
             PanelId::TaskManager,
             PanelId::OverWindow,

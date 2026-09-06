@@ -47,6 +47,12 @@ pub mod history;
 /// MCA M3: 通道化路由决策单元(ADR-065,替代旧的 model_id 字符串)
 pub mod model_route;
 pub mod moe;
+/// WI-03 LPA: 分层提示词组装（四层前缀稳定纪律 + 缓存断点）
+pub mod prompt_builder;
+pub mod provider;
+/// WI-06 模型 provider 开放注册与热更(能力 seam:ModelProvider trait + RCU 热更注册表)
+/// P4-T5: T-08 供应商健康漂移守卫（ADR-154,只报警不熔断）
+pub mod provider_drift;
 pub mod registry;
 /// MCA M3: 路由亲和元数据(ADR-065,能力协商结果在路由决策中的投射)
 pub mod route_affinity;
@@ -67,6 +73,21 @@ pub use history::{HistoryStore, InMemoryHistoryStore, SqliteHistoryStore};
 pub use history::{RouteHistoryStore, RouteRecord};
 pub use model_route::ModelRoute;
 pub use moe::{HistoryRecord, MoeGate};
+// WI-03 LPA: 分层提示词组装器（PromptAssembler trait + 默认实现 + 四层类型）
+pub use prompt_builder::{
+    dangerous_uncached_section, AssembleReq, AssembledPrompt, CompactDir, CompactPlan,
+    PromptAssembler, PromptAssemblerV1, PromptLayer, StaticBoundary,
+};
+// WI-06 模型 provider 开放注册与热更(能力 seam 类型重导出)
+// P4-T5: 守卫公开 API（DynamicEvent 双轨告警）
+pub use provider::{
+    AttentionMode, CompletionReq, CompletionResult, Health, ModelProvider, ProviderCaps,
+    ProviderRegistry, ProviderSpec,
+};
+pub use provider_drift::{
+    DriftKind, DriftReport, DriftThresholds, ProviderDriftAlert, ProviderDriftEvent,
+    ProviderDriftGuard,
+};
 pub use registry::ModelRegistry;
 pub use route_affinity::RouteAffinity;
 pub use route_target::RouteTarget;
@@ -87,6 +108,16 @@ pub mod prelude {
     pub use crate::history::{RouteHistoryStore, RouteRecord};
     pub use crate::model_route::ModelRoute;
     pub use crate::moe::{HistoryRecord, MoeGate};
+    // WI-03 LPA: 分层提示词组装（与顶层导出同集）
+    pub use crate::prompt_builder::{
+        dangerous_uncached_section, AssembleReq, AssembledPrompt, CompactDir, CompactPlan,
+        PromptAssembler, PromptAssemblerV1, PromptLayer, StaticBoundary,
+    };
+    // WI-06 模型 provider 开放注册与热更(能力 seam 类型加入 prelude)
+    pub use crate::provider::{
+        AttentionMode, CompletionReq, CompletionResult, Health, ModelProvider, ProviderCaps,
+        ProviderRegistry, ProviderSpec,
+    };
     pub use crate::registry::ModelRegistry;
     pub use crate::route_affinity::RouteAffinity;
     pub use crate::route_target::RouteTarget;

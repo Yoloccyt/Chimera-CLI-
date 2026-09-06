@@ -1,0 +1,39 @@
+﻿[package]
+name = "nexus-app-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "NEXUS-OMEGA L10 宿主层协议门面 — 核心-表面分离（WI-01）"
+
+[dependencies]
+# L0 Contracts: AppOp/AppEvent/Thread/Turn/Item 协议原语（WI-01 §6.1）
+# WHY L10 → L0 合规（依赖铁律 §2.2）;协议面类型零逻辑
+nexus-contracts = { workspace = true }
+# L1 Core: 唯一跨层事件通道（AppEvent 经 EventBus 广播,内闭外开 T6）
+event-bus = { workspace = true }
+# L1 Core: RuntimeHandle 核心驱动的领域类型（Thread/Turn/Item 映射）
+nexus-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# async-trait: AppTransport 为 async trait（L10 应用层,不受 L0 同步 trait 约束）
+async-trait = { workspace = true }
+# dashmap: 会话表并发访问（AppServer.sessions，L10 应用层依赖）
+dashmap = { workspace = true }
+# L3 Storage: 会话事件流落盘（P2-T3 灰度双写:默认仅内存,with_session_store 启用）
+# WHY L10 → L3 依赖方向:宿主层可依赖存储层(依赖铁律 L(N) → L(0..N-1) 恒允许);
+# 用构造参数而非 feature 标志控制灰度(红线:禁 feature 标志)
+session-store = { workspace = true }
+# L9 Quest: QuestBackend 真实核心接入（P3-T5,替代 InMemoryBackend）
+# WHY L10→L9 向下依赖合规(§2.2 L(N)→L(N-1) 允许);QuestEngine 为编排层真实状态源
+quest-engine = { workspace = true }
+# L7 SubAgent 运行时（P4-T3② L10 组合根接线,向下依赖合规）
+nexus-subagent = { workspace = true }
+# 意图 ID 生成（UUIDv7;与 nexus-subagent 同源）
+uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -8,15 +8,29 @@
 #   A. Inner-ring boundary   - the 9 inner-ring crates (memory + reasoning +
 #                              evolution ring) may only depend on the L0/L1 base
 #                              {nexus-contracts, nexus-core, event-bus,
-#                              model-router, mcp-mesh} plus the inner-ring
-#                              whitelist itself.
-#   B. Upward dependency     - L(N) -> L(N+1) is forbidden for all 38 crates;
-#                              the 2-item ADR exception table is exempted
+#                              model-router} plus the inner-ring whitelist itself.
+#   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
+#                              crate ($expectedCrates); the 2-item ADR exception
+#                              table is exempted
 #                              (gqep-executor->qeep-protocol ADR-048,
 #                               pvl-layer->seccore dynamic-blacklist feature).
 #   C. Graph completeness    - every referenced workspace dependency must exist
-#                              in the layer map; layer map covers 38/38 crates
-#                              (static count + disk scan in normal mode).
+#                              in the layer map; layer map must cover the whole
+#                              workspace (static count + disk scan).
+#   D. chimera-mas dep bound - internal crate deps <= 16 (WI-29 strangler).
+#
+# DRIFT WARNING (2026-08-29 audit): this file and check_dependency_rules.sh each
+#   hand-maintain a copy of the layer map, and they DID drift -- $expectedCrates
+#   was raised to 43 here while the .sh stayed at 38, silently turning the CI
+#   iron-law job red for five crates (nexus-app-server / session-store /
+#   mas-sched / nexus-hook / nexus-subagent). CI runs the .sh, so updating only
+#   this file is NOT a fix. When adding a crate, edit BOTH in the same commit.
+#   Prefer adding a new check here and mirroring it in the .sh right away; the
+#   .sh had no Check D at all until the 2026-08-29 audit.
+#   C10 (2026-09-04): drift is now MECHANICALLY blocked -- ci.yml check job runs
+#   scripts/check_layer_map_parity.py which cross-checks the .sh case dict +
+#   layered_crates list, this file's $layerMap, and Cargo.toml workspace.members
+#   (four-way lock; any single-sided drift fails the gate at PR time).
 # Author:  staff-engineer-mode (architecture governance specialist)
 # Refs:    ADR-054 decision 5 / ADR-048, .trae/rules/nuxus-rules.md section 2.2,
 #          docs/architecture/CODE_WIKI.md section 2
@@ -48,11 +62,13 @@ $layerMap = @{
     # L0 Contracts (ADR-033): zero-logic contract layer
     'nexus-contracts' = 0
     # L1 Core
-    'nexus-core' = 1; 'event-bus' = 1; 'model-router' = 1; 'mcp-mesh' = 1
+    'nexus-core' = 1; 'event-bus' = 1; 'model-router' = 1
     # L2 Memory
     'nmc-encoder' = 2; 'hcw-window' = 2; 'mlc-engine' = 2
     # L3 Storage
     'scc-cache' = 3; 'lsct-tiering' = 3; 'cmt-tiering' = 3
+    # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
+    'session-store' = 3
     # L4 Security
     'seccore' = 4; 'qeep-protocol' = 4; 'decay-engine' = 4
     # L5 Knowledge
@@ -66,18 +82,26 @@ $layerMap = @{
     # L7 Execution
     'pvl-layer' = 7; 'gqep-executor' = 7; 'mtpe-executor' = 7
     'csn-substitutor' = 7; 'ssra-fusion' = 7
+    # P3-T9 (2026-08-27): nexus-subagent typed SubAgent runtime (L7, 43rd crate)
+    'nexus-subagent' = 7
     # L8 Parliament
     'parliament' = 8; 'acb-governor' = 8; 'decb-governor' = 8
     # L9 Quest
     'quest-engine' = 9; 'efficiency-monitor' = 9; 'chimera-mas' = 9
     'gea-activator' = 9
-    # L10 Interface
+    # P3-T2 (2026-08-27): mas-sched peer scheduler control plane (L9, 41st crate)
+    'mas-sched' = 9
+    # P3-T3 (2026-08-27): nexus-hook lifecycle hook system (L9, 42nd crate)
+    'nexus-hook' = 9
+    # L10 Interface (mcp-mesh 2026-09-02 T10: 对齐文档 L10 归属; 原脚本误置 L1)
     'chimera-cli' = 10; 'chimera-tui' = 10; 'chtc-bridge' = 10
-    'mca-gateway' = 10
+    'mca-gateway' = 10; 'mcp-mesh' = 10
+    # WI-01 (2026-08-22): nexus-app-server host facade (L10, 39th crate)
+    'nexus-app-server' = 10
 }
 
 # Expected total crate count (workspace members). Static completeness bound.
-$expectedCrates = 38
+$expectedCrates = 43
 
 # Inner-ring whitelist: 9 crates (memory + reasoning + evolution ring).
 # Three-ring reorganization target: inner ring talks via shared memory/direct
@@ -91,11 +115,18 @@ $innerRing = @{
 # L0/L1 base deps that any inner-ring crate may use. L0/L1 is the Core
 # infrastructure layer: ADR-054 decision 2 spirit allows the inner ring to
 # depend on ALL L0/L1 crates (only the L2+ business outer ring is forbidden).
-# auto-dpo (L5, inner) -> model-router (L1) is a legal L5->L1 downward edge
-# (RHI-CG judge routes via model-router); mcp-mesh (L1) likewise allowed.
+# auto-dpo (L5, inner) -> model-router (L1): legal L5->L1 downward edge AND an
+# ADR-171 T9 accepted pseudo-reachable production edge (ModelRouterJudgeClient).
+# ADR-172 (Accepted 2026-09-03) retired model-router's "cross-model routing
+# contract" status -- mca-gateway is the ONLY live LLM channel. The edge is KEPT
+# (ADR-160 visible-debt posture: crate frozen, not deleted); model-router stays
+# in this whitelist ONLY so the frozen edge stays green, NOT as a live-channel
+# grant -- new LLM consumers MUST anchor on mca-gateway (ADR-172 decision 2).
+# mcp-mesh is L10 (T10 realignment), so it is no longer an L0/L1 base dep.
+# KEEP IN SYNC with check_dependency_rules.sh is_inner_base (DRIFT WARNING above).
 $innerBase = @{
     'nexus-contracts' = $true; 'nexus-core' = $true; 'event-bus' = $true
-    'model-router' = $true; 'mcp-mesh' = $true
+    'model-router' = $true
 }
 
 # ADR exception table: "from,to" -> reference. Exempted from check B.
@@ -174,7 +205,7 @@ function Get-DeclaredWorkspaceDeps {
 function Invoke-RuleChecks {
     # Runs the three dependency-iron-law checks against the given graph.
     # DepGraph: hashtable crate -> string[] of production workspace deps.
-    # ScanDisk: $true in normal mode verifies 38/38 disk coverage (C3);
+    # ScanDisk: $true in normal mode verifies full disk coverage (C3);
     #           $false in selftest mode (mock graph, no disk access).
     param(
         [hashtable]$DepGraph,
@@ -225,9 +256,9 @@ function Invoke-RuleChecks {
             }
         }
     }
-    # C2: layer map must define the full 38-crate workspace (static bound).
+    # C2: layer map must define the full workspace (static bound).
     if ($layerMap.Count -ne $expectedCrates) {
-        $script:report += "[GAP-C] layer map defines $($layerMap.Count) crates, expected $expectedCrates (38/38 coverage)"
+        $script:report += "[GAP-C] layer map defines $($layerMap.Count) crates, expected $expectedCrates (full workspace coverage)"
         $script:status = 1
     }
     # C3: every crates/*/Cargo.toml on disk must be registered in the layer map
@@ -236,11 +267,35 @@ function Invoke-RuleChecks {
         $dirs = @(Get-ChildItem 'crates' -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') })
         foreach ($d in $dirs) {
             if (-not $layerMap.ContainsKey($d.Name)) {
-                $script:report += "[GAP-C] disk crate <$($d.Name)> not registered in layer map (expect 38/38 coverage)"
+                $script:report += "[GAP-C] disk crate <$($d.Name)> not registered in layer map (expect $expectedCrates/$expectedCrates coverage)"
                 $script:status = 1
             }
         }
-        $script:report += "[C] disk crates scanned: $($dirs.Count), layer map entries: $($layerMap.Count) (expect 38/38)"
+        $script:report += "[C] disk crates scanned: $($dirs.Count), layer map entries: $($layerMap.Count) (expect $expectedCrates/$expectedCrates)"
+
+        # --- Check D: chimera-mas internal dependency bound (P3-T2, WI-29) ---
+        # WI-29 strangler 目标: chimera-mas 内部 crate 依赖 ≤16（实测 13）;
+        # 超限即拆（mas-sched 控制面已拆出,后续执行面继续瘦身）。
+        $masInternal = @()
+        if (Test-Path 'crates/chimera-mas/Cargo.toml') {
+            $masLines = Get-Content 'crates/chimera-mas/Cargo.toml'
+            $inDeps = $false
+            foreach ($line in $masLines) {
+                if ($line -match '^\[dependencies\]') { $inDeps = $true; continue }
+                if ($line -match '^\[dev-dependencies\]') { $inDeps = $false }
+                if ($inDeps -and $line -match '^([a-z0-9-]+)\s*=') {
+                    $depName = $Matches[1]
+                    if ($layerMap.ContainsKey($depName)) { $masInternal += $depName }
+                }
+            }
+        }
+        $masLimit = 16
+        if ($masInternal.Count -gt $masLimit) {
+            $script:report += "[GAP-D] chimera-mas internal deps $($masInternal.Count) > $masLimit (WI-29 bound, mas-sched split required)"
+            $script:status = 1
+        } else {
+            $script:report += "[D] chimera-mas internal deps: $($masInternal.Count)/$masLimit (WI-29 <=16 bound)"
+        }
     }
 }
 
@@ -317,7 +372,7 @@ foreach ($line in $report) { Write-Host $line }
 
 Write-Host ''
 if ($status -eq 0) {
-    Write-Host '[OK] dependency iron-law audit all pass (A inner-ring boundary / B upward deps / C completeness)'
+    Write-Host '[OK] dependency iron-law audit all pass (A inner-ring / B upward deps / C completeness / D mas dep bound)'
 } else {
     Write-Host '[FAIL] dependency iron-law audit found gaps, see [GAP-*] lines above, fix and rerun'
 }

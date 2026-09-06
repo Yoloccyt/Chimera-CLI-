@@ -165,6 +165,24 @@ impl ChtcBridge {
                 ide: call.ide_source.as_str().into(),
             })?;
 
+        // WS-4A: adapter 状态变更点 — 适配器经 registry 解析成功(上线)后发布
+        // ChtcAdapterStatus 事件,供 L10 TUI Chtc 面板观察各 IDE 适配器兼容状态。
+        // publish_blocking 为同步调用(无 tokio 依赖),发布失败仅告警优雅降级。
+        if let Some(bus) = &self.event_bus {
+            let adapter_type = call.ide_source.as_str().to_string();
+            let status_event = NexusEvent::ChtcAdapterStatus {
+                metadata: EventMetadata::new("chtc-bridge"),
+                adapter_id: adapter_type.clone(),
+                adapter_type,
+                compatibility_score: 100,
+                recent_requests: vec![(call.tool_id.clone(), 1u32)],
+                is_online: true,
+            };
+            if let Err(e) = bus.publish_blocking(status_event) {
+                tracing::warn!(error = %e, "ChtcAdapterStatus 事件发布失败");
+            }
+        }
+
         // 2. 获取并发许可(_permit 持有至函数返回,自动释放;下划线前缀抑制 unused warning)
         let _permit =
             self.semaphore
@@ -497,5 +515,47 @@ mod tests {
         // {"a": {"b": [1]}} → depth 4(标量1 → [1]2 → {"b":...}3 → {"a":...}4)
         let v = serde_json::json!({ "a": { "b": [1] } });
         assert_eq!(json_depth(&v), 4);
+    }
+
+    // ============================================================
+    // WS-4A: ChtcAdapterStatus 幽灵事件生产者(adapter 状态变更点)
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_bridge_execute_publishes_adapter_status() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let bridge = ChtcBridge::with_event_bus(ChtcConfig::default(), bus);
+
+        let call = bridge
+            .receive(sample_vscode_raw(), IdeSource::vscode())
+            .expect("转换失败");
+        bridge.execute(&call).await.expect("执行失败");
+
+        // 先消费 receive 发布的 ChtcToolCallReceived,再断言收到 ChtcAdapterStatus
+        let _ = rx.try_recv();
+        let mut found = false;
+        while let Ok(Some(event)) = rx.try_recv() {
+            if let NexusEvent::ChtcAdapterStatus {
+                metadata,
+                adapter_id,
+                adapter_type,
+                compatibility_score,
+                recent_requests,
+                is_online,
+                ..
+            } = event
+            {
+                assert_eq!(metadata.source, "chtc-bridge");
+                assert_eq!(adapter_id, "vscode");
+                assert_eq!(adapter_type, "vscode");
+                assert_eq!(compatibility_score, 100);
+                assert!(!recent_requests.is_empty());
+                assert!(is_online);
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "应收到 ChtcAdapterStatus 事件");
     }
 }

@@ -18,7 +18,7 @@
 //!
 //! - **不新增 NexusEvent 变体**: 卡片流为独立数据面（broadcast + mpsc），
 //!   遵循 ADR-065 决策 4 先例（流式数据面走 bounded mpsc 不进事件枚举），
-//!   避免 L1 四触点适配（types.rs/classification.rs/event_types.rs/topic.rs）
+//!   避免 L1 三触点适配（types.rs/classification.rs/topic.rs）
 //! - **无持锁跨 await**: 索引读写均为同步短临界区（DashMap 无锁并发读），
 //!   `publish` 为同步方法（broadcast send + mpsc send 均非阻塞）
 //! - **subscribe 先于 spawn**: `new()` 同步持有 receiver，防止事件静默丢失

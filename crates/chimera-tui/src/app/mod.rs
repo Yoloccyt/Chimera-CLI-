@@ -201,7 +201,7 @@ impl TuiApp {
     ) -> Result<Self, TuiError> {
         config.validate()?;
         // Concord T1.4(P5① 收口):面板注册序派生自 PanelId::REGISTERED_FOCUS_ORDER
-        // 单一事实源;25 面板全部注册(此前 Timeline/Sysinfo 未注册,§7.3 接线)。
+        // 单一事实源;27 面板全部注册(此前 Timeline/Sysinfo 未注册,§7.3 接线)。
         // FocusManager 遍历序 == PanelId::next/prev 静态环,由 INV-F 不变量测试守护。
         let panels: Vec<Box<dyn Panel>> = PanelId::REGISTERED_FOCUS_ORDER
             .iter()

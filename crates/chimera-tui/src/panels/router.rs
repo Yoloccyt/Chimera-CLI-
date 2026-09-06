@@ -217,34 +217,21 @@ fn merge_hot_capabilities(
 /// 从 (capability_id, hits) 列表中选取 Top-K,按 hits 降序返回
 ///
 /// # 算法选择(WHY)
-/// 使用 `select_nth_unstable_by` 做 partial sort,O(n) 时间复杂度定位第 K 大元素,
-/// 随后仅对前 K 个元素做最终排序(O(k log k))。相比 `sort_by` 全排序(O(n log n)),
-/// 在 n 较大时(如数千个 capability)显著节省 CPU。遵守 §4.1 工程约定:
-/// "Top-K 选择必须用 `select_nth_unstable` (O(n)),禁止 `sort_by` (O(n log n)) 做 Top-K"。
+/// 委托 L0 权威 `nexus_contracts::util::xts_top_k_by`(R6 冗余收敛,消除本地副本分叉)。
+/// 该函数以 `select_nth_unstable_by` partial sort(O(n) 定位第 K 大)+ 前 K 段稳定降序
+/// 排序代替 `sort_by` 全排序(O(n log n)),遵守工程约定 "Top-K 必须用 `select_nth_unstable`"。
 ///
-/// # 边界处理
+/// # 边界处理(由 L0 函数统一负责)
 /// - `k == 0`:返回空 Vec
 /// - 输入为空:返回空 Vec
-/// - 输入长度 ≤ k:跳过 partial sort,直接对全部元素排序返回(此时全排序是必要的,
-///   因为需要降序输出)
+/// - `k >= len`:等价全量稳定降序排序
 pub fn top_k_capabilities(caps: &[(String, u64)], k: usize) -> Vec<(String, u64)> {
-    if k == 0 || caps.is_empty() {
-        return Vec::new();
-    }
+    use nexus_contracts::util::xts_top_k_by;
     let mut data: Vec<(String, u64)> = caps.to_vec();
-    let k = k.min(data.len());
-    if data.len() > k {
-        // partial sort:把第 k 大的元素放到位置 k-1,前 k 个即为 Top-k(无序)
-        // compare 用降序(b.1.cmp(a.1)),使前 k 个是 hits 最高的
-        // 返回值(pivot + 左右切片)不需要使用,仅利用 side effect
-        let _ = data.select_nth_unstable_by(k - 1, |a, b| b.1.cmp(&a.1));
-    }
-    // 对前 k 个做最终降序排序,O(k log k)
-    // WHY sort_by_key + Reverse:clippy unnecessary_sort_by 建议的等价写法,
-    // 比闭包 sort_by 更高效(避免每次比较调用闭包),且语义更清晰(Reverse = 降序)
-    let mut top = data[..k].to_vec();
-    top.sort_by_key(|item| std::cmp::Reverse(item.1));
-    top
+    // 委托 L0 稳定降序 Top-K(与旧 select_nth_unstable_by + sort_by_key(Reverse)
+    // 逐元素等价,R6 论证;含 k=0 / 空输入 / k>=len 边界处理)
+    let top = xts_top_k_by(&mut data, k, |a, b| b.1.cmp(&a.1));
+    top.to_vec()
 }
 
 #[cfg(test)]
@@ -340,6 +327,110 @@ mod tests {
         let input: Vec<(String, u64)> = vec![("a".into(), 10)];
         let result = top_k_capabilities(&input, 0);
         assert!(result.is_empty());
+    }
+
+    /// F-R6-02 等价性对照:委托 L0 `xts_top_k_by` 后,结果须与旧本地实现逐元素一致。
+    /// 内嵌旧实现副本作参照(R6 diff 已论证与 L0 逐元素等价,此处锁定为回归对照),
+    /// 覆盖 k=0 / k>=len / 空输入 / 相等 hits 稳定序 四类边界。
+    #[test]
+    fn test_top_k_capabilities_matches_reference() {
+        // 旧实现副本(select_nth_unstable_by + sort_by_key(Reverse),稳定降序)
+        fn reference_impl(caps: &[(String, u64)], k: usize) -> Vec<(String, u64)> {
+            if k == 0 || caps.is_empty() {
+                return Vec::new();
+            }
+            let mut data: Vec<(String, u64)> = caps.to_vec();
+            let k = k.min(data.len());
+            if data.len() > k {
+                let _ = data.select_nth_unstable_by(k - 1, |a, b| b.1.cmp(&a.1));
+            }
+            let mut top = data[..k].to_vec();
+            top.sort_by_key(|item| std::cmp::Reverse(item.1));
+            top
+        }
+
+        let cases: Vec<(Vec<(String, u64)>, usize)> = vec![
+            // 空输入 + 任意 k
+            (vec![], 0),
+            (vec![], 3),
+            // k == 0
+            (vec![("a".into(), 10)], 0),
+            (vec![("a".into(), 5), ("b".into(), 5)], 0),
+            // 相等 hits:稳定序应保输入相对顺序(同值 5 的出现顺序)
+            (
+                vec![
+                    ("x1".into(), 5),
+                    ("x2".into(), 5),
+                    ("x3".into(), 5),
+                    ("y".into(), 9),
+                    ("z".into(), 1),
+                ],
+                5,
+            ),
+            // k 落于中间(部分切片)
+            (vec![("a".into(), 1), ("b".into(), 3), ("c".into(), 2)], 2),
+            // k >= len(全量降序)
+            (
+                vec![("a".into(), 10), ("b".into(), 30), ("c".into(), 20)],
+                10,
+            ),
+            // 大 k 截断
+            (vec![("a".into(), 10), ("b".into(), 30)], 1),
+        ];
+
+        for (input, k) in cases {
+            let expected = reference_impl(&input, k);
+            let actual = top_k_capabilities(&input, k);
+            assert_eq!(
+                actual, expected,
+                "top_k_capabilities 委托 L0 后与旧实现结果不一致 (k={k}, input={input:?})"
+            );
+        }
+    }
+
+    /// F-R6-02 相等 hits 稳定性:同 u64 值元素的处理须与旧实现逐元素**一致**。
+    /// 注意 `select_nth_unstable_by` 分区本身不稳定(不保证相等元素保输入序),
+    /// 旧实现与 L0 委托共用同一分区+稳定 `sort_by` 序列,因此真正的稳定性不变量是
+    /// **两实现输出逐元素等价**(而非硬编码输入相对顺序,那是分区所不保证的)。
+    #[test]
+    fn test_top_k_capabilities_equal_hits_stable_order() {
+        // 旧实现副本
+        fn reference_impl(caps: &[(String, u64)], k: usize) -> Vec<(String, u64)> {
+            if k == 0 || caps.is_empty() {
+                return Vec::new();
+            }
+            let mut data: Vec<(String, u64)> = caps.to_vec();
+            let k = k.min(data.len());
+            if data.len() > k {
+                let _ = data.select_nth_unstable_by(k - 1, |a, b| b.1.cmp(&a.1));
+            }
+            let mut top = data[..k].to_vec();
+            top.sort_by_key(|item| std::cmp::Reverse(item.1));
+            top
+        }
+
+        // 相等 hits 密集、k 取部分切片(k=6),最易暴露分区/排序差异
+        let input: Vec<(String, u64)> = vec![
+            ("first".into(), 7),
+            ("then".into(), 7),
+            ("last".into(), 7),
+            ("top".into(), 9),
+            ("drop".into(), 1),
+            ("mid".into(), 7),
+            ("low".into(), 2),
+        ];
+        for k in [0usize, 1, 3, 6] {
+            let expected = reference_impl(&input, k);
+            let actual = top_k_capabilities(&input, k);
+            assert_eq!(
+                actual, expected,
+                "相等 hits 场景下委托 L0 与旧实现输出不一致 (k={k})"
+            );
+            // 附加不变量:结果必须严格降序(相等值连续成组)
+            for w in actual.windows(2) {
+                assert!(w[0].1 >= w[1].1, "结果应降序 (k={k}),got {:?}", actual);
+            }
+        }
     }
 
     #[test]

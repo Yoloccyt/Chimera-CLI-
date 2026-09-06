@@ -29,6 +29,8 @@ chrono = { workspace = true }
 # 结构化日志(窗口切换与压缩追踪)
 tracing = { workspace = true }
 # 线程安全并发 Map(SubTask 2.11 要求,预留用于未来按 id 索引优化)
+# P2-T4: SharedSemanticIndex 跨层共享索引(DashMap 并发读写,ADR-128 选型)
+dashmap = { workspace = true }
 # 向量运算(SubTask 2.11 要求,通过 nexus-core CLV 间接使用)
 
 [dev-dependencies]
@@ -54,6 +56,11 @@ hcw-recall = []
 
 [[bench]]
 name = "compress"
+harness = false
+
+# P1-T14: 压缩评分 ComputeBridge 并行注入对照基准（串行 vs 并行,单行采样模式）
+[[bench]]
+name = "parallel_compress"
 harness = false
 
 # P3-W9.1.2: HCW-Sparse v2.0 粗召回基准（Project 图联合传播 → 100 模块, p95<10ms 红线）
@@ -96,3 +103,5 @@ harness = false
 [[bench]]
 name = "probe_select"
 harness = false
+
+

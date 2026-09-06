@@ -17,20 +17,39 @@ description = "NEXUS-OMEGA L0 契约层 — 纯类型定义，零逻辑，零 cr
 #   (纯类型库,无运行时业务逻辑,与 serde 同级例外)
 # - uuid: Uuid 类型,Task 3.10 下沉的 EventMetadata.event_id 字段需 UUIDv7
 #   (纯类型库,无运行时业务逻辑,与 serde 同级例外)
+# - thiserror: 统一错误层级契约(errors.rs,A0/WI-01 §6.6)需 thiserror derive
+#   (库层错误类型标准 §4.1:37 个 error.rs 全部 thiserror 先例;
+#   A0 融合裁决:与 serde 同级的基础库例外,无运行时业务逻辑)
 serde = { workspace = true, features = ["derive"] }
 chrono = { workspace = true }
 uuid = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 proptest = { workspace = true }
-# 测试用:统一使用 nexus-core 权威 cosine_similarity_slices,避免多副本优化不一致
-# ADR-033 豁免(W8 清理记档):dev-dependencies 为测试专用豁免面(§2.2),
-# 仅 vector.rs 单测与 type_consistency_test 使用,生产依赖图零污染
+# ws2-c1: xts_top_k criterion 基准(校验 O(n) partial-sort 对比 O(n log n) 全排)
+criterion = { workspace = true }
+# 测试用:nexus-core re-export 回环一致性断言(Task 3.10 向后兼容证明)
+# ADR-033 豁免(W8 清理记档):dev-dependencies 为测试专用豁免面(§2.2),生产依赖图零污染。
+# 第四轮冗余收敛 实施-8:cosine_similarity_slices 定义已下沉本 crate util 模块,
+# vector.rs 单测改为 crate 内直取,故本 dev-dep 的**唯一**使用者为
+# tests/type_consistency_test.rs 的 test_backward_compat_nexus_core_reexport。
 nexus-core = { workspace = true }
 # Task 3.10: 测试用 MessagePack 序列化 roundtrip 验证(ADR-004 消息序列化协议)
 rmp-serde = { workspace = true }
+
+# ws2-c1:xts_top_k 基准(红线 #8 Top-K 收敛对照)
+[[bench]]
+name = "xts_top_k"
+harness = false
+
+# 第三轮冗余审计 批 B/C:L0 共享纯函数(sigmoid / percentile_sorted)性能证据
+# 含 CountingAlloc 零堆分配断言,证明收敛未引入隐式分配回退
+[[bench]]
+name = "util_micro"
+harness = false
 
 # ============================================================
 # ADR-033: L0 nexus-contracts 契约层

@@ -33,6 +33,7 @@ fn make_snapshot(event_count: u64, event_rate: u64) -> TimelineSnapshot {
 
 #[test]
 fn test_timeline_panel_initialization() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let panel = TimelinePanel::new();
     assert_eq!(panel.id(), PanelId::Timeline);
     // title 返回 Line<'static>;i18n 后本地化,固定英文捕获后复位再断言。

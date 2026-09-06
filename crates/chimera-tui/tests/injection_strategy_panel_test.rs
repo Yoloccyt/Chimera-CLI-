@@ -14,6 +14,11 @@ use chimera_tui::types::PanelId;
 use nexus_contracts::memory_pyramid::{AtomicCardType, AtomicMemoryCard};
 
 /// Mock 快照提供者
+///
+/// (R14 记录:非同形,不收敛)`experience_card_viz_panel_test.rs` 亦定义同名
+/// `MockProvider`,但字段为 `ExperienceCardVizStats` 且实现
+/// `ExperienceCardStatsProvider`;本处字段为 `InjectionSnapshot` 且实现
+/// `InjectionSnapshotProvider` — 字段类型与 trait 均不同,非同形,各自保留。
 #[derive(Debug, Default)]
 struct MockProvider {
     snap: InjectionSnapshot,

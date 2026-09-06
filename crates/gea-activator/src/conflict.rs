@@ -285,22 +285,12 @@ where
 #[inline]
 fn norm_and_nonneg(v: &[f32], len: usize) -> (f32, bool) {
     let prefix = &v[..len.min(v.len())];
-    let (mut n0, mut n1, mut n2, mut n3) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
-    // 范数 4 路累加(与 prefix_l2_norm 位级一致,无分支)
-    for chunk in prefix.chunks_exact(4) {
-        n0 += chunk[0] * chunk[0];
-        n1 += chunk[1] * chunk[1];
-        n2 += chunk[2] * chunk[2];
-        n3 += chunk[3] * chunk[3];
-    }
-    let mut norm = n0 + n1 + n2 + n3;
-    let processed = (prefix.len() / 4) * 4;
-    for vi in &prefix[processed..] {
-        norm += *vi * *vi;
-    }
+    // 范数核心合并(F-R5-01):4 路累加范数体与 gating::prefix_l2_norm 位级一致,
+    // 直接委托消除重复;nonneg 保留独立遍历(简单比较,可并行向量化)。
+    let norm = crate::gating::prefix_l2_norm(v, len);
     // 符号检查独立遍历(简单比较,可向量化)
     let nonneg = prefix.iter().all(|x| *x >= 0.0);
-    (norm.sqrt(), nonneg)
+    (norm, nonneg)
 }
 
 /// 4 路累加点积 — 与 `cosine_similarity_slices` 的 dot 累加结构逐位一致
@@ -373,47 +363,35 @@ fn dot_prune(a: &[f32], b: &[f32], len: usize, bound: f32) -> Option<f32> {
 
 /// 从已通过冲突检测的列表中选择 Top-K
 ///
-/// 使用 `select_nth_unstable_by` 实现 O(n) 的 Top-K 选择,
-/// 然后对前 K 个元素排序得到降序排列的激活列表。
+/// 分区 + 稳定降序核心委托 L0 `nexus_contracts::util::xts_top_k_by`
+/// (select_nth_unstable_by O(n) + 前 k 段 sort_by O(k log k);F-R6-03)。
+/// 双 Vec(id 列表)整形保留在函数内。
 ///
 /// 返回 (activated_top_k, suppressed_extra)
 ///
-/// WHY pivot 处理:`select_nth_unstable_by(k, ...)` 返回 (left, pivot, right),
-/// left 有 k 个元素(索引 0..k),pivot 是第 k 个元素(索引 k),right 是剩余。
-/// pivot 不属于 Top-K,必须加入 suppressed,否则会丢失条目。
+/// WHY k 与 k-1 pivot 差异:xts_top_k_by 用 select_nth_unstable_by(k-1),
+/// 前 k 段即 Top-K;原实现用 select_nth_unstable_by(k) 使 pivot 落 index k。
+/// 两者 top-k **集合等价**,且 suppressed 均为分区后 `data[k..]`
+/// (原实现 suppressed = pivot(k 处) + rest,恰为 data[k..]),故集合与序均一致。
 fn select_top_k(mut scored: Vec<ScoredCandidate>, k: usize) -> (Vec<ExpertId>, Vec<ExpertId>) {
-    if scored.len() <= k {
-        // 全部激活,无额外抑制
-        scored.sort_by(|a, b| {
+    use std::cmp::Ordering;
+    let n = scored.len();
+    let k_eff = k.min(n);
+
+    // 分区 + 降序核心委托 L0(k>=len 时 xts_top_k_by 自动钳制为全量降序,等价旧 len<=k 分支)
+    let top = nexus_contracts::util::xts_top_k_by(
+        &mut scored,
+        k,
+        |a: &ScoredCandidate, b: &ScoredCandidate| {
             b.composite
                 .partial_cmp(&a.composite)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let activated: Vec<ExpertId> = scored.into_iter().map(|c| c.id).collect();
-        return (activated, Vec::new());
-    }
+                .unwrap_or(Ordering::Equal)
+        },
+    );
 
-    // select_nth_unstable_by:第 k 个元素就位,前 k 个为 Top-K(无序)
-    // WHY unwrap_or(sorted):partial_cmp 对 NaN 返回 None,但门控值经 clamp 不会为 NaN
-    let (top_k, pivot, rest) = scored.select_nth_unstable_by(k, |a, b| {
-        b.composite
-            .partial_cmp(&a.composite)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    // 对 Top-K 排序得到降序
-    let mut top_k_sorted: Vec<ScoredCandidate> = top_k.to_vec();
-    top_k_sorted.sort_by(|a, b| {
-        b.composite
-            .partial_cmp(&a.composite)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let activated: Vec<ExpertId> = top_k_sorted.into_iter().map(|c| c.id).collect();
-
-    // pivot 和 rest 均不属于 Top-K,加入抑制列表
-    let mut suppressed: Vec<ExpertId> = Vec::with_capacity(rest.len() + 1);
-    suppressed.push(pivot.id.clone());
-    suppressed.extend(rest.iter().map(|c| c.id.clone()));
+    let activated: Vec<ExpertId> = top.iter().map(|c| c.id.clone()).collect();
+    // 剩余(data[k_eff..])均为未进入 Top-K 的抑制条目
+    let suppressed: Vec<ExpertId> = scored[k_eff..].iter().map(|c| c.id.clone()).collect();
     (activated, suppressed)
 }
 
@@ -601,5 +579,183 @@ mod tests {
             v[idx] = 1.0;
         }
         v
+    }
+
+    // ============================================================
+    // F-R5-01: 范数核心合并 — norm_and_nonneg 与 prefix_l2_norm 等价性基线
+    // ============================================================
+
+    #[test]
+    fn test_norm_and_nonneg_matches_prefix_l2_norm() {
+        // 等价性契约:norm_and_nonneg 的范数部分必须与 gating::prefix_l2_norm 位级一致;
+        // nonneg 必须等价于独立遍历 `prefix.iter().all(|x| *x >= 0.0)`(NaN 使
+        // `!(NaN >= 0.0)` 成立 → 判为含负值,返回 false)。
+        let cases: Vec<(Vec<f32>, usize)> = vec![
+            (vec![], 0),                                  // 空切片
+            (vec![], 5),                                  // 空切片,翘尾长度
+            (vec![1.0f32], 1),                            // 单元素
+            (vec![1.0f32, 2.0, 3.0, 4.0], 4),             // 整倍数
+            (vec![0.3, 0.7, 0.2, 0.9, 0.5, 0.1, 0.8], 7), // 4k+3 翘尾
+            (vec![1.0, -2.0, 3.0, -4.0, 5.0], 5),         // 含负值
+            (vec![f32::NAN, 1.0, -1.0], 3),               // 含 NaN
+            (vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0], 3),   // len < v.len(),前缀截断
+        ];
+        for (v, len) in cases {
+            let (norm, nonneg) = norm_and_nonneg(&v, len);
+            let expected_norm = crate::gating::prefix_l2_norm(&v, len);
+            // NaN 分量:位级等价(两实现对同一 NaN 传播应产生相同位型;==NaN 为 false,故用位型比较)
+            let norm_equal = norm.to_bits() == expected_norm.to_bits();
+            assert!(
+                norm_equal,
+                "len={} 范数不等: norm_and_nonneg={norm}, prefix_l2_norm={expected_norm}, v={v:?}",
+                len
+            );
+            let prefix = &v[..len.min(v.len())];
+            let expected_nonneg = prefix.iter().all(|x| *x >= 0.0);
+            assert_eq!(
+                nonneg, expected_nonneg,
+                "len={} nonneg 不等: got={nonneg}, expected={expected_nonneg}, v={v:?}",
+                len
+            );
+        }
+    }
+
+    // ============================================================
+    // F-R6-03: select_top_k 委托 L0 — 等价性基线(embedded 旧实现对照 + 不变量)
+    // ============================================================
+
+    /// 旧实现参考副本(重构前 select_top_k),嵌入测试仅用于等价性对照,不参与生产。
+    fn old_select_top_k(
+        mut scored: Vec<ScoredCandidate>,
+        k: usize,
+    ) -> (Vec<ExpertId>, Vec<ExpertId>) {
+        use std::cmp::Ordering;
+        if scored.len() <= k {
+            scored.sort_by(|a, b| {
+                b.composite
+                    .partial_cmp(&a.composite)
+                    .unwrap_or(Ordering::Equal)
+            });
+            let activated: Vec<ExpertId> = scored.into_iter().map(|c| c.id).collect();
+            return (activated, Vec::new());
+        }
+        let (top_k, pivot, rest) = scored.select_nth_unstable_by(k, |a, b| {
+            b.composite
+                .partial_cmp(&a.composite)
+                .unwrap_or(Ordering::Equal)
+        });
+        let mut top_k_sorted: Vec<ScoredCandidate> = top_k.to_vec();
+        top_k_sorted.sort_by(|a, b| {
+            b.composite
+                .partial_cmp(&a.composite)
+                .unwrap_or(Ordering::Equal)
+        });
+        let activated: Vec<ExpertId> = top_k_sorted.into_iter().map(|c| c.id).collect();
+        let mut suppressed: Vec<ExpertId> = Vec::with_capacity(rest.len() + 1);
+        suppressed.push(pivot.id.clone());
+        suppressed.extend(rest.iter().map(|c| c.id.clone()));
+        (activated, suppressed)
+    }
+
+    fn make_candidate(i: usize, composite: f32) -> ScoredCandidate {
+        ScoredCandidate {
+            id: ExpertId::new(format!("e-{i}")),
+            gate: composite,
+            composite,
+            l2_norm: 1.0,
+            all_non_negative: true,
+        }
+    }
+
+    fn sorted_ids(ids: &[ExpertId]) -> Vec<String> {
+        let mut v: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn test_select_top_k_equivalence_with_old_impl() {
+        // 输入覆盖:k=0 / k>=len / 正常 k / 空 / NaN 分量
+        // 与嵌入旧实现对照:activated 精确序 + suppressed 集合序一致(委托 L0 后
+        // suppressed 内部顺序属未定型实现细节,仅集合保证)。另断言三条不变量。
+        let scored_sets: Vec<Vec<ScoredCandidate>> = vec![
+            vec![],
+            vec![make_candidate(0, 0.9), make_candidate(1, 0.8)],
+            (0..5)
+                .map(|i| make_candidate(i, 0.9 - i as f32 * 0.1))
+                .collect(),
+            vec![
+                make_candidate(0, 0.3),
+                make_candidate(1, 0.5),
+                make_candidate(2, 0.4),
+                make_candidate(3, 0.1),
+            ],
+            // NaN 分量:验证 partial_cmp 回落 Equal 路径不崩溃、总数/长度不变量保持
+            vec![
+                make_candidate(0, 0.9),
+                make_candidate(1, f32::NAN),
+                make_candidate(2, 0.7),
+            ],
+        ];
+        for k in [0usize, 1, 2, 3, 5, 10] {
+            for scored in &scored_sets {
+                let comp: std::collections::HashMap<&str, f32> = scored
+                    .iter()
+                    .map(|c| (c.id.as_str(), c.composite))
+                    .collect();
+                let (new_act, new_sup) = select_top_k(scored.clone(), k);
+                let (old_act, old_sup) = old_select_top_k(scored.clone(), k);
+                // ① activated 与旧实现精确一致(降序)
+                assert_eq!(
+                    new_act,
+                    old_act,
+                    "k={k} len={} activated 与旧实现不等",
+                    scored.len()
+                );
+                // ② suppressed 集合与旧实现一致(排序后比对)
+                assert_eq!(
+                    sorted_ids(&new_sup),
+                    sorted_ids(&old_sup),
+                    "k={k} len={} suppressed 集合不等",
+                    scored.len()
+                );
+                // ③ 无重复/丢失:汇总 == 输入全量
+                let mut all = sorted_ids(&new_act);
+                all.extend(sorted_ids(&new_sup));
+                all.sort();
+                let mut input_ids: Vec<String> =
+                    scored.iter().map(|c| c.id.as_str().to_string()).collect();
+                input_ids.sort();
+                assert_eq!(all, input_ids, "k={k} id 有重复或丢失");
+                // ④ activated.len == min(k, len)
+                assert_eq!(
+                    new_act.len(),
+                    k.min(scored.len()),
+                    "k={k} activated 数量错误"
+                );
+                // ⑤ 无 NaN 时 suppressed 单调:activated 最小 >= suppressed 最大 composite
+                let has_nan = scored.iter().any(|c| c.composite.is_nan());
+                if !has_nan
+                    && !new_act.is_empty()
+                    && new_act.len() < scored.len()
+                    && !scored.is_empty()
+                {
+                    let act_min = new_act
+                        .iter()
+                        .map(|id| comp[id.as_str()])
+                        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                        .unwrap();
+                    let sup_max = new_sup
+                        .iter()
+                        .map(|id| comp[id.as_str()])
+                        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                        .unwrap();
+                    assert!(
+                        act_min >= sup_max,
+                        "k={k} 破坏单调:activated min={act_min} < suppressed max={sup_max}"
+                    );
+                }
+            }
+        }
     }
 }

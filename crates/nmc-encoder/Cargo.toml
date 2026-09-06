@@ -51,3 +51,8 @@ criterion = { workspace = true }
 [[bench]]
 name = "encoding_benchmark"
 harness = false
+
+# P1-T14: 批量编码 ComputeBridge 并行注入对照基准（串行 vs 并行,单行采样模式）
+[[bench]]
+name = "parallel_encoding"
+harness = false

@@ -338,6 +338,7 @@ fn release_events_still_ignored() {
 
 #[test]
 fn command_mode_ctrl_l_toggles_locale_not_buffer() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     // Concord W2:`:` 进入斜杠命令模式;Ctrl+L 仍被拦截为语言切换不进缓冲
     let mut app = make_app();
     set_locale(Locale::Zh);

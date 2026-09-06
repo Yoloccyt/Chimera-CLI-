@@ -53,6 +53,10 @@ pub struct EdsbBalancer {
 impl EdsbBalancer {
     /// 创建 EDSB 均衡器
     pub fn new(config: FaaeConfig, event_bus: EventBus) -> Self {
+        // P5-T2 分片扩量批次 2（ADR-153 Go 续批）:
+        // EntropyBalanced 高频非 Critical 事件→ 分片扇出;
+        // 幂等 + 无 runtime 时 Err 降级回单流（零回归,P1-T12 先例）
+        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
         Self { config, event_bus }
     }
 

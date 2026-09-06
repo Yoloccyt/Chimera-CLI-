@@ -43,6 +43,15 @@ use mtpe_executor::{MtpeConfig, MtpeExecutor, PredictionContext};
 use pvl_layer::{Producer, PvlConfig, Verifier};
 use scc_cache::{ContextEntry, ContextId, SccCache, SccConfig};
 
+/// 延迟预算 = 契约毫秒数 × CI 缩放旋钮（`CHIMERA_PERF_SCALE`，缺省 1.0）
+///
+/// WHY：本文件 10 条断言均为 `slo-daily` 态（每日观测，不阻塞 PR）。每日档以
+/// scale=4 跑，若阈值硬编码则旋钮对它们无效——“有通道但改不动参数”只会
+/// 重现旧问题。契约值仍留在调用点，审计可读。
+fn ms_budget(base_ms: u64) -> Duration {
+    Duration::from_millis(nexus_contracts::util::perf_scale_ms(base_ms))
+}
+
 /// min-of-N 的 N 值 — 运行 5 次取最小值
 const MIN_OF_N: usize = 5;
 
@@ -165,7 +174,7 @@ async fn test_csa_total_latency_under_100ms() {
 
     let min_total = min_of_n(&total_durations);
     assert!(
-        min_total < Duration::from_millis(100),
+        min_total < ms_budget(100),
         "CSA 总延迟应 < 100ms,实际最小 {:?}",
         min_total
     );
@@ -195,7 +204,7 @@ async fn test_csa_gea_latency() {
 
     let min_lat = min_of_n(&durations);
     assert!(
-        min_lat < Duration::from_millis(1),
+        min_lat < ms_budget(1),
         "GEA 延迟应 < 1ms,实际最小 {:?}",
         min_lat
     );
@@ -220,7 +229,7 @@ fn test_csa_gea_gate_compute_only() {
 
     let min_lat = min_of_n(&durations);
     assert!(
-        min_lat < Duration::from_millis(1),
+        min_lat < ms_budget(1),
         "GEA 纯门控计算应 < 1ms,实际最小 {:?}",
         min_lat
     );
@@ -247,7 +256,7 @@ async fn test_csa_faae_latency() {
 
     let min_lat = min_of_n(&durations);
     assert!(
-        min_lat < Duration::from_millis(1),
+        min_lat < ms_budget(1),
         "FaaE 路由延迟应 < 1ms,实际最小 {:?}",
         min_lat
     );
@@ -293,7 +302,7 @@ async fn test_csa_pvl_latency() {
 
     let min_lat = min_of_n(&durations);
     assert!(
-        min_lat < Duration::from_millis(10),
+        min_lat < ms_budget(10),
         "PVL 5 操作延迟应 < 10ms,实际最小 {:?}",
         min_lat
     );
@@ -323,7 +332,7 @@ async fn test_csa_mtpe_latency() {
 
     let min_lat = min_of_n(&durations);
     assert!(
-        min_lat < Duration::from_millis(20),
+        min_lat < ms_budget(20),
         "MTPE N=5 延迟应 < 20ms,实际最小 {:?}",
         min_lat
     );
@@ -353,7 +362,7 @@ async fn test_csa_gqep_latency() {
 
     let min_lat = min_of_n(&durations);
     assert!(
-        min_lat < Duration::from_millis(50),
+        min_lat < ms_budget(50),
         "GQEP 10 操作延迟应 < 50ms,实际最小 {:?}",
         min_lat
     );
@@ -391,7 +400,7 @@ async fn test_csa_scc_latency() {
 
     let min_lat = min_of_n(&durations);
     assert!(
-        min_lat < Duration::from_millis(5),
+        min_lat < ms_budget(5),
         "SCC 缓存命中延迟应 < 5ms,实际最小 {:?}",
         min_lat
     );
@@ -432,7 +441,7 @@ async fn test_csa_edsb_latency() {
 
     let min_lat = min_of_n(&durations);
     assert!(
-        min_lat < Duration::from_millis(5),
+        min_lat < ms_budget(5),
         "EDSB 熵计算延迟应 < 5ms,实际最小 {:?}",
         min_lat
     );
@@ -536,7 +545,7 @@ async fn test_csa_latency_breakdown() {
 
     // 验证总延迟 < 100ms(单次测量,宽松阈值)
     assert!(
-        total < Duration::from_millis(100),
+        total < ms_budget(100),
         "CSA 总延迟应 < 100ms,实际 {:?}",
         total
     );

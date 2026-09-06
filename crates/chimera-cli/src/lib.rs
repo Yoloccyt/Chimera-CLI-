@@ -51,6 +51,8 @@ pub mod banner;
 pub mod cli;
 /// 子命令业务骨架
 pub mod commands;
+/// 集中组合根 — AppContext/协议宿主真实装配（C12 + C1，评审波次 1）
+pub mod composition;
 /// Figment 多源配置加载
 pub mod config;
 /// CLI 错误类型(结构化错误码,Task 0.2 将据此映射 ExitCode 矩阵)

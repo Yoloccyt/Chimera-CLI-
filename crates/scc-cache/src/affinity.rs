@@ -17,6 +17,7 @@
 //! CacheSupport 经 event-bus 事件流入,或由调用方直接传入。
 
 use dashmap::DashMap;
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::affinity::CacheSupport;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -92,10 +93,21 @@ pub fn plan_breakpoints(
 ///
 /// # 线程安全
 /// DashMap 分片锁,记录/查询均为同步原子操作,guard 立即释放(不跨 await,C7)。
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct SessionAffinityTracker {
     /// quest_id → 上一轮路由键(provider/model)
     sticky: DashMap<String, String>,
+    /// WS-4B:可选事件总线 — 亲和策略应用时发布 `CacheAffinityApplied`
+    event_bus: Option<EventBus>,
+}
+
+impl std::fmt::Debug for SessionAffinityTracker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionAffinityTracker")
+            .field("sticky", &self.sticky)
+            // event_bus:EventBus 未实现 Debug,不输出
+            .finish()
+    }
 }
 
 impl SessionAffinityTracker {
@@ -104,14 +116,45 @@ impl SessionAffinityTracker {
         Self::default()
     }
 
+    /// 链式注入事件总线 — 亲和策略实际应用时发布 `CacheAffinityApplied`(WS-4B)。
+    #[must_use]
+    pub fn with_event_bus(mut self, bus: EventBus) -> Self {
+        self.event_bus = Some(bus);
+        self
+    }
+
     /// 记录一次会话路由(仅隐式缓存族需要粘性)
     ///
     /// 显式族(ExplicitControl)靠 cache_control 断点,不依赖同通道,
     /// 记录也无害但不产生粘性收益;此处按 cache_support 过滤,只对隐式族记录。
+    ///
+    /// WS-4B:本方法即"亲和策略实际应用点"——无论哪个缓存族,都将当前
+    /// 路由所应用的亲和策略经 `CacheAffinityApplied` 事件发布留痕。
     pub fn record(&self, quest_id: &str, route_key: &str, cache_support: CacheSupport) {
         if cache_support == CacheSupport::Implicit {
             self.sticky
                 .insert(quest_id.to_string(), route_key.to_string());
+        }
+        self.notify_cache_affinity_applied(route_key, cache_support);
+    }
+
+    /// 发布 `CacheAffinityApplied` 事件 — 亲和策略实际应用点(L3 → L1,WS-4B)。
+    ///
+    /// `strategy` 用 `CacheAffinityIntegration::strategy_name` 归一;
+    /// 显式族 `cache_control_injected=true`。未注入 EventBus 时静默跳过;
+    /// 发布失败仅 warn,不影响会话粘性记录主语义。
+    fn notify_cache_affinity_applied(&self, route_key: &str, cache_support: CacheSupport) {
+        if let Some(bus) = &self.event_bus {
+            let event = NexusEvent::CacheAffinityApplied {
+                metadata: EventMetadata::new("scc-cache"),
+                route_key: route_key.to_string(),
+                strategy: CacheAffinityIntegration::strategy_name(cache_support).to_string(),
+                cache_control_injected: cache_support == CacheSupport::ExplicitControl,
+                breakpoint_count: 0,
+            };
+            if let Err(e) = bus.publish_blocking(event) {
+                tracing::warn!(error = %e, "发布 CacheAffinityApplied 事件失败");
+            }
         }
     }
 
@@ -470,6 +513,55 @@ mod tests {
         tracker.clear("q");
         assert!(tracker.preferred("q").is_none());
         assert_eq!(tracker.tracked_sessions(), 0);
+    }
+
+    /// WS-4B:CacheAffinityApplied 幽灵事件生产者验证 —
+    /// 亲和策略实际应用(publish 留痕)时发布本事件。
+    #[test]
+    fn cache_affinity_applied_published_on_record() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let tracker = SessionAffinityTracker::new().with_event_bus(bus);
+
+        tracker.record(
+            "quest-1",
+            "deep_seek/deepseek-v4-flash",
+            CacheSupport::Implicit,
+        );
+
+        // publish_blocking 同步投递,try_recv 立即可取
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let event = loop {
+            if let Ok(Some(e)) = rx.try_recv() {
+                break e;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "接收 CacheAffinityApplied 事件超时"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+
+        assert_eq!(
+            event.metadata().source,
+            "scc-cache",
+            "CacheAffinityApplied 事件 source 应为 scc-cache"
+        );
+        match event {
+            NexusEvent::CacheAffinityApplied {
+                route_key,
+                strategy,
+                cache_control_injected,
+                breakpoint_count,
+                ..
+            } => {
+                assert_eq!(route_key, "deep_seek/deepseek-v4-flash");
+                assert_eq!(strategy, "implicit");
+                assert!(!cache_control_injected);
+                assert_eq!(breakpoint_count, 0);
+            }
+            other => panic!("期望 CacheAffinityApplied 事件,收到 {other:?}"),
+        }
     }
 
     #[test]

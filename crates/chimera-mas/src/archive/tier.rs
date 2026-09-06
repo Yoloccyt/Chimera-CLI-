@@ -164,8 +164,13 @@ pub const MAX_HCW_SUMMARY_TOKENS: usize = 500;
 
 /// HCW 摘要权重(§17.2)— 0.4 时近性 / 0.3 频次 / 0.3 任务相关性
 ///
-/// 复用 hcw-window `ContextCompressor` 的重要性评分公式(§17.1):
+/// 对应 hcw-window `ContextCompressor` 的重要性评分公式(§17.1):
 /// `score = 0.4 × recency + 0.3 × frequency + 0.3 × relevance`
+///
+/// 注:该公式在 hcw-window 侧作用于带时间/频次属性的 `ContextEntry` 数组。
+/// archive 侧只拿到无属性纯文本,因此本常量**仅作为策略声明并被
+/// `ArchiveCompressor::compress` 校验自洽性(非负、有限、和 ≈ 1.0),
+/// 不参与实际截断**;摘要仍是 `max_tokens` 字符预算前缀。
 ///
 /// WHY 用 `[f64; 3]` 而非 struct:与 `CompressionStrategy::HcwSummary` 字段类型一致,
 /// 便于直接赋值,避免字段名拼写错误。
@@ -179,24 +184,27 @@ pub const HCW_SUMMARY_WEIGHTS: [f64; 3] = [0.4, 0.3, 0.3];
 ///
 /// ## 设计决策(WHY)
 ///
-/// - **HcwSummary**:1mo 级,复用 hcw-window Ω-Compress 重要性评分公式,
-///   生成 ≤500 tok 摘要。注:hcw-window `ContextCompressor` 面向 `ContextEntry`
-///   数组(按评分 Top-N 保留),不直接适配"文本 → 摘要"场景,本地实现按权重切分。
+/// - **HcwSummary**:1mo 级,生成 ≤500 tok 摘要。注:hcw-window `ContextCompressor`
+///   的 Ω-Compress 评分面向 `ContextEntry` 数组(按评分 Top-N 保留),本模块只有
+///   无属性纯文本可截断,**实际实现为字符预算前缀截断**;`weights` 字段仅做
+///   fail-closed 自洽性校验,不参与切分(详见 `ArchiveCompressor::hcw_summary`)。
 /// - **RelationExtraction**:3mo 级,关系抽取 → mlc L2 语义(512-dim CLV)。
 ///   注:mlc-engine `SemanticMemory` 需 SQLite 持久化,本地实现 `clv: None`
 ///   诚实标注未抽取(W8 假数据治理,原 512-dim 零向量占位已移除)。
 /// - **DeepCompression**:6mo 级,深度压缩 + 模式抽取,关键决策不压缩(KeepForever)。
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompressionStrategy {
-    /// HCW 摘要(1mo 级)— 复用 hcw-window 重要性评分公式
+    /// HCW 摘要(1mo 级)— 字符预算前缀截断
     ///
     /// 字段:
     /// - `max_tokens`:摘要最大 Token 数(默认 500,§17.2)
-    /// - `weights`:重要性评分权重 [recency, frequency, relevance](默认 [0.4, 0.3, 0.3])
+    /// - `weights`:重要性评分权重声明 [recency, frequency, relevance]
+    ///   (默认 [0.4, 0.3, 0.3]);当前实现只校验其自洽性(非负、有限、和 ≈ 1.0),
+    ///   非法值返回 `MasError::InvalidConfig`,不参与截断
     HcwSummary {
         /// 摘要最大 Token 数
         max_tokens: usize,
-        /// 重要性评分权重 [时近性, 频次, 任务相关性]
+        /// 重要性评分权重 [时近性, 频次, 任务相关性](仅校验自洽性,不参与切分)
         weights: [f64; 3],
     },
 

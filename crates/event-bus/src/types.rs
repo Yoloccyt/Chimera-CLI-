@@ -2583,7 +2583,9 @@ pub enum NexusEvent {
 impl NexusEvent {
     /// 获取事件元数据引用
     ///
-    /// 委托给子枚举的 `EventClassification::metadata()` 实现。
+    /// 单表手写 match:曾计划委托给分层子枚举镜像(`event_types.rs`),但委托
+    /// 从未接上,镜像已退役(ADR-160)。新增变体须同步本表与
+    /// `classification.rs::severity()`、`topic.rs::topic()` 两处。
     pub fn metadata(&self) -> &EventMetadata {
         match self {
             Self::UserIntentEncoded { metadata, .. } => metadata,

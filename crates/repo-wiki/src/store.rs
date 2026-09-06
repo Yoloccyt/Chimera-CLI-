@@ -32,6 +32,7 @@
 //! ```
 
 use chrono::{DateTime, Utc};
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::{TemporalMeta, TransitionType, VectorStore};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
@@ -149,6 +150,8 @@ pub struct WikiStore {
     /// WHY 脏标记而非同步更新:写线程持有 SQLite 连接,而索引构建需要
     /// 读连接池查询全量数据;异步重建 + 脏标记避免写热路径上的索引同步开销。
     hnsw_dirty: Arc<AtomicBool>,
+    /// WS-4B:可选事件总线 — 混合检索命中未知亲和字段时发布 `AffinityUnknownField`
+    bus: Option<EventBus>,
 }
 
 impl Clone for WikiStore {
@@ -164,6 +167,7 @@ impl Clone for WikiStore {
             entry_count: Arc::clone(&self.entry_count),
             hnsw: Arc::clone(&self.hnsw),
             hnsw_dirty: Arc::clone(&self.hnsw_dirty),
+            bus: self.bus.clone(),
         }
     }
 }
@@ -285,7 +289,15 @@ impl WikiStore {
             // P1-2:惰性 HNSW 索引初始未构建,首次 dense 检索时重建
             hnsw: Arc::new(RwLock::new(None)),
             hnsw_dirty: Arc::new(AtomicBool::new(true)),
+            bus: None,
         })
+    }
+
+    /// 链式注入事件总线 — 混合检索命中未知亲和字段时发布 `AffinityUnknownField`(WS-4B)。
+    #[must_use]
+    pub fn with_event_bus(mut self, bus: EventBus) -> Self {
+        self.bus = Some(bus);
+        self
     }
 
     /// 返回配置的引用
@@ -671,12 +683,36 @@ impl WikiStore {
         };
 
         // 3. RRF 融合两路排名
-        Ok(rrf_fuse(
-            &dense_ids,
-            &sparse_ids,
-            &self.config.hybrid_search,
-            top_k,
-        ))
+        let results = rrf_fuse(&dense_ids, &sparse_ids, &self.config.hybrid_search, top_k);
+
+        // WS-4B:命中未知亲和字段留痕(非 provider/model 形态的检索 doc_id)
+        self.publish_unknown_affinity_fields(&results);
+
+        Ok(results)
+    }
+
+    /// 发布 `AffinityUnknownField` 事件 — 混合检索命中未知亲和字段(WS-4B)。
+    ///
+    /// 当检索结果中出现不符合 `provider/model` 亲和路由形态的 doc_id 时,
+    /// 视为"未知亲和字段命中"并留痕。`route_key` 取 doc_id,`raw_excerpt`
+    /// 截断为前 64 字符避免大 payload 进 broadcast。未注入 EventBus 时
+    /// 静默跳过;发布失败仅 warn,不影响检索主语义。
+    fn publish_unknown_affinity_fields(&self, results: &[crate::search::HybridSearchResult]) {
+        if let Some(bus) = &self.bus {
+            for r in results {
+                if !is_valid_affinity_route(&r.doc_id) {
+                    let event = NexusEvent::AffinityUnknownField {
+                        metadata: EventMetadata::new("repo-wiki"),
+                        route_key: r.doc_id.clone(),
+                        dialect: "repo-wiki/rrf".to_string(),
+                        raw_excerpt: r.doc_id.chars().take(64).collect(),
+                    };
+                    if let Err(e) = bus.publish_blocking(event) {
+                        tracing::warn!(error = %e, "发布 AffinityUnknownField 事件失败");
+                    }
+                }
+            }
+        }
     }
 
     /// 重建惰性 HNSW 索引 — 从 DB 全量加载 embedding 并在阻塞线程池构建
@@ -1650,9 +1686,101 @@ fn row_to_anchor(row: &rusqlite::Row<'_>) -> rusqlite::Result<IscmAnchor> {
     })
 }
 
+/// 判定检索 doc_id 是否符合亲和路由键 `provider/model` 形态(WS-4B 生产者辅助)。
+///
+/// 不符合该形态视为"未知亲和字段命中",混合检索会对其发布
+/// `AffinityUnknownField` 留痕。两段均须非空,且仅含字母数字/`-`/`_`。
+fn is_valid_affinity_route(doc_id: &str) -> bool {
+    let mut split = doc_id.splitn(2, '/');
+    let provider = split.next().unwrap_or("");
+    let model = split.next();
+    let provider_ok = !provider.is_empty()
+        && provider
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_');
+    provider_ok
+        && matches!(
+            model,
+            Some(m)
+                if !m.is_empty()
+                    && m.chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WS-4B:AffinityUnknownField 幽灵事件生产者验证 —
+    /// 混合检索命中未知亲和字段(非 provider/model 形态 doc_id)时发布。
+    #[test]
+    fn test_unknown_affinity_field_published_on_hybrid_results() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        // 遵循同 crate 约定:SQLite 库路径 = tempdir/库文件名(而非目录本身)
+        let store = WikiStore::open(&dir.path().join("wiki.db"))
+            .expect("打开 WikiStore")
+            .with_event_bus(bus);
+
+        // 有效路由(openai/gpt-4)不触发;未知形态(无 '/' 的 doc_id)触发
+        store.publish_unknown_affinity_fields(&[
+            crate::search::HybridSearchResult {
+                doc_id: "openai/gpt-4".into(),
+                rrf_score: 0.5,
+                dense_rank: Some(1),
+                sparse_rank: None,
+            },
+            crate::search::HybridSearchResult {
+                doc_id: "unknown-route-no-slash".into(),
+                rrf_score: 0.4,
+                dense_rank: Some(2),
+                sparse_rank: None,
+            },
+        ]);
+
+        // publish_blocking 同步投递,try_recv 立即可取
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let event = loop {
+            if let Ok(Some(e)) = rx.try_recv() {
+                break e;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "接收 AffinityUnknownField 事件超时"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+
+        assert_eq!(
+            event.metadata().source,
+            "repo-wiki",
+            "AffinityUnknownField 事件 source 应为 repo-wiki"
+        );
+        match event {
+            event_bus::NexusEvent::AffinityUnknownField {
+                route_key,
+                raw_excerpt,
+                ..
+            } => {
+                assert_eq!(route_key, "unknown-route-no-slash");
+                assert_eq!(raw_excerpt, "unknown-route-no-slash");
+            }
+            other => panic!("期望 AffinityUnknownField 事件,收到 {other:?}"),
+        }
+    }
+
+    /// WS-4B:未知亲和字段形态判定辅助
+    #[test]
+    fn test_is_valid_affinity_route() {
+        assert!(is_valid_affinity_route("openai/gpt-4"));
+        assert!(is_valid_affinity_route("deep_seek/deepseek-v4-flash"));
+        assert!(!is_valid_affinity_route("unknown-route-no-slash"));
+        assert!(!is_valid_affinity_route("no-slash"));
+        assert!(!is_valid_affinity_route("a/"));
+    }
 
     #[test]
     fn test_embedding_blob_roundtrip() {

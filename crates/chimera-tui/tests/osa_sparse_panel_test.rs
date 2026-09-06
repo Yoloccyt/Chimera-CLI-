@@ -19,6 +19,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[test]
 fn test_osa_sparse_panel_initialization() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let panel = OsaSparsePanel::new();
     assert_eq!(panel.id(), PanelId::OsaSparse);
     // title 返回 Line<'static>;i18n 后本地化,固定英文捕获后复位再断言。

@@ -2,7 +2,8 @@
 # check_doc_consistency.ps1 - Architecture document three-way reconciliation
 # =============================================================================
 # Purpose: detect drift between Cargo.toml (code), docs/ (index), CHANGELOG.md (changelog)
-# Scope:   6 categories / 14 checks; all assertions back to Cargo.toml as canonical truth
+# Scope:   checks are SELF-REPORTED at the end of the run (categories / emitted check ids);
+#          all assertions back to Cargo.toml as canonical truth
 # Author:  staff-engineer-mode (documentation-lifecycle specialist)
 # Refs:    docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md
 #
@@ -13,6 +14,15 @@
 #                                - 5 main docs contain current baseline string
 #   C. Changelog reconciliation - CHANGELOG.md has `## [vX.Y.Z-omega]` (bracket) or `## vX.Y.Z-omega` header for current version
 #   D. ADR physical vs index   - ADR-*.md files on disk match adr_index.md declaration
+#                              - D3: index rows <-> disk files, both directions, with
+#                                parsed-from-prose exemptions (merged ranges, "no
+#                                standalone file", Released) - added 2026-08-31 after the
+#                                ADR-161/166 numbering collision and the ADR-168 v1 phantom
+#                                citation, neither of which any check could catch
+#                              - D4: closed RK-P items must be written back to the exact
+#                                source line they cite (ADR-168 decision 1)
+#                              - D5: mojibake (UTF-8-as-GBK) damage scan against a frozen
+#                                per-file baseline in scripts/mojibake_baseline.txt
 #   E. Policy compliance       - CONVENTIONS.md-declared subdirs exist
 #                              - DOCUMENT_LIFECYCLE_POLICY.md (SoT) exists
 #   F. NexusEvent reconciliation - enum variant count in types.rs vs CODE_WIKI.md declaration
@@ -80,33 +90,46 @@ if (-not $verMatch.Success) {
 # Note: adr_index.md is an ADR index, not a crate index, so it is NOT checked here.
 $b1Docs = @('docs/architecture/README.md', 'docs/architecture/CODE_WIKI.md', '.claude/CLAUDE.md', $nuxusRulesRel)
 $crateTokens = @("$nMembers crate", "${nMembers} crate", "$nMembers Crate", "$nMembers/$nMembers crate", "${nMembers}个crate", "${nMembers} 个crate")
+# B1/B2 used to be silent on success, so the run reported fewer ids than checks actually
+# executed and the hardcoded "14 checks" total could never be reconciled with observation.
+# Every check must self-report on the green path too (see the derived footer count).
+$b1Checked = 0
+$b1Skipped = 0
 foreach ($f in $b1Docs) {
     # 2026-08-07 适配: *.md 在 gitignore 策略下仅存于本地(bb471f9 移除跟踪),
     # CI checkout 必然缺失文档 —— 降级为 warn 而非阻断。
-    if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $report += '[B1-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
-    if (-not (Test-Path $f)) { $report += '[B1-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
+    if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $b1Skipped++; $report += '[B1-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
+    if (-not (Test-Path $f)) { $b1Skipped++; $report += '[B1-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
     $content = Get-Content $f -Raw
     $hit = $false
     foreach ($t in $crateTokens) { if ($content.Contains($t)) { $hit = $true; break } }
     if (-not $hit) {
         $report += '[GAP-B1] ' + $f + ' does not contain current crate count (' + $nMembers + '), possibly stale'
         $status = 1
+    } else {
+        $b1Checked++
     }
 }
+$report += '[B1] ' + $b1Checked + '/' + $b1Docs.Count + ' docs carry current crate count (' + $nMembers + '), ' + $b1Skipped + ' skipped by gitignore *.md policy'
 
 # B2. main docs contain current baseline string (DOCUMENT_LIFECYCLE_POLICY 6.4 trigger b)
 $b2Docs = @('docs/architecture/CODE_WIKI.md', '.claude/CLAUDE.md', $nuxusRulesRel, 'CHANGELOG.md', 'docs/architecture/INDEX.md')
 $baselineString = $currentVersion
+$b2Checked = 0
+$b2Skipped = 0
 foreach ($f in $b2Docs) {
     # 2026-08-07 适配: 同 B1 —— gitignore *.md 策略下缺失文档降级为 warn。
-    if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $report += '[B2-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
-    if (-not (Test-Path $f)) { $report += '[B2-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
+    if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $b2Skipped++; $report += '[B2-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
+    if (-not (Test-Path $f)) { $b2Skipped++; $report += '[B2-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
     $content = Get-Content $f -Raw
     if (-not $content.Contains($baselineString)) {
         $report += '[GAP-B2] ' + $f + ' does not contain baseline string (' + $baselineString + ')'
         $status = 1
+    } else {
+        $b2Checked++
     }
 }
+$report += '[B2] ' + $b2Checked + '/' + $b2Docs.Count + ' docs carry baseline string ' + $baselineString + ', ' + $b2Skipped + ' skipped by gitignore *.md policy'
 
 # =============================================================================
 # C. Changelog reconciliation
@@ -183,29 +206,212 @@ if (Test-Path 'docs/architecture/adr_index.md') {
     $report += '[D2-warn] missing document: docs/architecture/adr_index.md (gitignore *.md 策略,仅本地维护,跳过)'
 }
 
+# D3. adr_index.md table rows vs disk ADR files (bidirectional, with exemptions).
+# WHY: ADR-161/166 numbering collision and the ADR-168 v1 phantom citation were both
+#      caused by "index/ prose asserts something the disk does not contain". No existing
+#      check covered that (D1 only counts, D2 only compares totals).
+# Exemption semantics (parsed from the index row itself, never hardcoded lists):
+#   - row declares "no standalone file" / "registered in <doc>" -> expected absent
+#   - row status is Released / historical (numbers kept only in CHANGELOG) -> expected absent
+# CJK literals are written as regex \uXXXX escapes to keep this file all-ASCII (L23-25).
+$adrIdxPath = 'docs/architecture/adr_index.md'
+$exemptPat  = '\u65e0\u72ec\u7acb\u7269\u7406\u6587\u4ef6|\u4e0d\u5355\u72ec\u5efa\u6863|\u767b\u8bb0\u4e8e|CHANGELOG'
+$releasedPat = 'Released|\u5386\u53f2|\u5df2\u5e9f\u5f03'
+$idxRowNums = @{}
+if (Test-Path $adrIdxPath) {
+    $adrIdxLines = @(Get-Content $adrIdxPath -Encoding UTF8)
+    # Declared merged ranges (e.g. "ADR-001~006 + ADR-095~160") apply to BOTH directions.
+    # First cut applied them only to the reverse direction, so ADR-001..005 - which the index
+    # itself declares as file-less - were reported as GAP-D3. Ranges are parsed once here.
+    $idxRangeCovered = @{}
+    foreach ($line in $adrIdxLines) {
+        foreach ($r in [regex]::Matches($line, 'ADR-(\d{3})\s*[~-]\s*(\d{3})')) {
+            $lo = [int]$r.Groups[1].Value; $hi = [int]$r.Groups[2].Value
+            for ($k = $lo; $k -le $hi; $k++) { $idxRangeCovered[$k] = $true }
+        }
+    }
+    foreach ($line in $adrIdxLines) {
+        $m = [regex]::Match($line, '^\|\s*ADR-(\d{3})\s*\|(.*)$')
+        if ($m.Success) {
+            $n = [int]$m.Groups[1].Value
+            $body = $m.Groups[2].Value
+            $ex = ([regex]::IsMatch($body, $exemptPat) -or [regex]::IsMatch($body, $releasedPat) -or $idxRangeCovered.ContainsKey($n))
+            # keep the strongest exemption signal if a number appears twice
+            if (-not $idxRowNums.ContainsKey($n) -or $ex) { $idxRowNums[$n] = $ex }
+        }
+    }
+    # merged-range files cover every number inside them: ADR-135-144-*.md => 135..144
+    $diskNums = @{}
+    foreach ($f in $adrFiles) {
+        $mm = [regex]::Match($f.BaseName, '^ADR-(\d{3})-(\d{3})(?:-rev\d+)?')
+        if ($mm.Success) {
+            $lo = [int]$mm.Groups[1].Value; $hi = [int]$mm.Groups[2].Value
+            for ($k = $lo; $k -le $hi; $k++) { $diskNums[$k] = $f.Name }
+        } else {
+            $ms = [regex]::Match($f.BaseName, '^ADR-(\d{3})')
+            if ($ms.Success) { $diskNums[[int]$ms.Groups[1].Value] = $f.Name }
+        }
+    }
+    $d3Broken = @()
+    foreach ($n in ($idxRowNums.Keys | Sort-Object)) {
+        if (-not $diskNums.ContainsKey($n) -and -not $idxRowNums[$n]) {
+            $d3Broken += ('ADR-{0:D3}' -f $n)
+        }
+    }
+    if ($d3Broken.Count -gt 0) {
+        $report += '[GAP-D3] adr_index.md rows point to ADRs with no file on disk and no' +
+                   ' self-declared exemption (' + $d3Broken.Count + '): ' + (($d3Broken | Select-Object -First 12) -join ' ')
+        $status = 1
+    } else {
+        # ratchet on the reverse direction (disk -> index). Merged segments are registered as
+        # one range row in the index, so per-number rows are legitimately absent there; we freeze
+        # the current count instead of pretending it is zero, and only allow it to shrink.
+        $d3Unrowed = @()
+        foreach ($n in ($diskNums.Keys | Sort-Object)) {
+            if (-not $idxRowNums.ContainsKey($n) -and -not $idxRangeCovered.ContainsKey($n)) { $d3Unrowed += $n }
+        }
+        $d3Cap = 0   # ratchet: frozen 2026-08-31 at measured 0 after range-row expansion; may only shrink
+        if ($d3Unrowed.Count -gt $d3Cap) {
+            $report += '[GAP-D3] ' + $d3Unrowed.Count + ' disk ADR numbers are neither row-indexed nor inside' +
+                       ' a declared merged range (cap ' + $d3Cap + '): ' + (($d3Unrowed | ForEach-Object { 'ADR-{0:D3}' -f $_ } | Select-Object -First 12) -join ' ')
+            $status = 1
+        } else {
+            $report += '[D3] adr_index.md rows <-> disk files reconcile (' + $idxRowNums.Count + ' rows,' +
+                       ' ' + $diskNums.Count + ' numbers on disk, unrowed ' + $d3Unrowed.Count + ' <= cap ' + $d3Cap + ')'
+        }
+    }
+} else {
+    # missing index is a real gap for a D-category check: never degrade to silent skip.
+    $report += '[GAP-D3] missing file: ' + $adrIdxPath + ' (cannot verify ADR index <-> disk)'
+    $status = 1
+}
+
+# D4. closed-item write-back (ADR-168 decision 1, landed as D4 because D3-D6 were free).
+# WHY: a deviation recorded in a closure report was closed in RK-P + ADR-157, but the
+#      original report line still showed the pre-fix "warning, buffer consumed" state, and
+#      nothing went red. Closed conclusions must be reachable in one hop from where the
+#      number first appears.
+# Rule: every RK-P row whose status says "closed" must carry a `file.md:LINE` source, and
+#      that line must mention "closed" or the closing ADR id. Missing source file = not
+#      determinable = GAP (no silent skip).
+$closedPat = '\u5df2\u5173\u95ed'
+$rkPath = 'docs/governance/RK-P_risk_register.md'
+if (Test-Path $rkPath) {
+    $d4Bad = @(); $d4Checked = 0
+    foreach ($line in (Get-Content $rkPath -Encoding UTF8)) {
+        if ($line -notmatch '^\| RK-P') { continue }
+        if (-not [regex]::IsMatch($line, $closedPat)) { continue }
+        $sm = [regex]::Match($line, '([A-Za-z0-9_\-./]+\.md):(\d+)')
+        if (-not $sm.Success) { $d4Bad += (($line -split '\|')[1].Trim() + ' <no file:line source>'); continue }
+        $src = $sm.Groups[1].Value; $ln = [int]$sm.Groups[2].Value
+        $d4Checked++
+        $cand = @("docs/reports/$src", "docs/architecture/$src", "docs/governance/$src", $src)
+        $hit = $cand | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $hit) { $d4Bad += ($src + ':' + $ln + ' <source file missing>'); continue }
+        $srcLines = @(Get-Content $hit -Encoding UTF8)
+        if ($ln -gt $srcLines.Count) { $d4Bad += ($hit + ':' + $ln + ' <line beyond EOF>'); continue }
+        $targetLine = $srcLines[$ln - 1]
+        # Take ADR refs from the STATUS cell only. Using the whole row is a toothless check:
+        # the RK-P23 row mentions ADR-155 (the *registering* ADR) first, and the source line
+        # already contains that string, so a never-written-back line would pass. Verified while
+        # writing this - the failure mode this whole gate exists to catch.
+        $cells = @($line -split '\|' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+        $statusCell = if ($cells.Count -ge 2) { $cells[$cells.Count - 1] } else { '' }
+        $closingAdrs = @([regex]::Matches($statusCell, 'ADR-\d{3}') | ForEach-Object { $_.Value })
+        $okLine = [regex]::IsMatch($targetLine, $closedPat)
+        if (-not $okLine) {
+            foreach ($a in $closingAdrs) { if ($targetLine.Contains($a)) { $okLine = $true; break } }
+        }
+        if (-not $okLine) { $d4Bad += ($src + ':' + $ln + ' <closed in register, not written back>') }
+    }
+    if ($d4Bad.Count -gt 0) {
+        $report += '[GAP-D4] closed RK-P items whose source line lacks the write-back (' + $d4Bad.Count + '): ' + (($d4Bad | Select-Object -First 8) -join ' ; ')
+        $status = 1
+    } else {
+        $report += '[D4] closed-item write-back holds (' + $d4Checked + ' closed RK-P rows verified against their source lines)'
+    }
+} else {
+    $report += '[WARN-D4] ' + $rkPath + ' absent, write-back check skipped (register lives outside git per .gitignore *.md)'
+}
+
+# D5. mojibake debt scan (frozen per-file baseline, ratchet-only-shrink).
+# WHY: 2026-08-31 sweep found CHANGELOG.md carries 94 lines damaged by a UTF-8-read-as-GBK
+#      round trip (signature: rare CJK char immediately followed by '?', or U+FFFD). Other
+#      core docs measure 0. Repair must be line-by-line against code/ADR, never by guessing
+#      glyphs (RK-P40), so the debt is made visible and shrink-only rather than hidden.
+# The detector class is written as \uXXXX escapes to keep this file all-ASCII.
+$mojiPat = '[\u951b\u9359\u6fb6\u6d60\u95be\u7eeb\u7f01\u6d93\u6c33\u9428\u52ec\u69f8\u7487\u69d1]\?|\ufffd'
+$mojiFiles = @(
+    'CHANGELOG.md',
+    'agents.md',
+    '.claude/CLAUDE.md',
+    'docs/architecture/adr_index.md',
+    'docs/governance/RK-P_risk_register.md',
+    'docs/reports/phaseR-wave1-closure.md',
+    'docs/reports/phaseR-release-checklist-v2.28.0.md'
+)
+$mojiBase = @{}
+$mojiBasePath = 'scripts/mojibake_baseline.txt'
+if (Test-Path $mojiBasePath) {
+    foreach ($line in (Get-Content $mojiBasePath -Encoding UTF8)) {
+        if ($line -match '^\s*#' -or $line.Trim() -eq '') { continue }
+        $parts = $line -split "`t"
+        if ($parts.Count -ge 2 -and $parts[0] -match '^\d+$') { $mojiBase[$parts[1].Trim()] = [int]$parts[0] }
+    }
+}
+$d5Bad = @(); $d5Notes = @(); $d5Scanned = 0
+foreach ($f in $mojiFiles) {
+    if (-not (Test-Path $f)) { continue }   # absent .md is already covered by B/C/D checks
+    $d5Scanned++
+    $cnt = 0
+    foreach ($line in (Get-Content $f -Encoding UTF8)) {
+        if ([regex]::IsMatch($line, $mojiPat)) { $cnt++ }
+    }
+    $cap = if ($mojiBase.ContainsKey($f)) { $mojiBase[$f] } else { 0 }
+    if ($cnt -gt $cap) {
+        $d5Bad += ($f + ' = ' + $cnt + ' (cap ' + $cap + ')')
+    } elseif ($cnt -lt $cap) {
+        $d5Notes += ($f + ' shrank to ' + $cnt + ', lower the baseline from ' + $cap)
+    }
+}
+if ($d5Bad.Count -gt 0) {
+    $report += '[GAP-D5] mojibake damage exceeds frozen baseline: ' + ($d5Bad -join ' ; ') + ' -- repair by re-verifying each line against code/ADR'
+    $status = 1
+} else {
+    $report += '[D5] mojibake scan clean within baseline (' + $d5Scanned + ' docs scanned, caps from ' + $mojiBasePath + ')'
+    foreach ($nt in $d5Notes) { $report += '[D5-INFO] ' + $nt }
+}
+
 # =============================================================================
 # E. Policy compliance (CONVENTIONS.md declared subdirs + SoT file)
 # =============================================================================
 
 # E1. CONVENTIONS.md declared subdirs must exist
+# Every check self-reports on the green path as well (same reason as B1/B2): a check that
+# is silent when passing cannot be counted, so the footer total was unverifiable by design.
 $requiredDirs = @(
     @{ Path = 'docs/architecture/audit'; Purpose = 'audit/governance signoff and review records' },
     @{ Path = 'docs/architecture/governance'; Purpose = 'governance/policy documents' },
     @{ Path = 'docs/architecture/_archive'; Purpose = '_archive/historical snapshots' },
     @{ Path = 'docs/architecture/_blueprints'; Purpose = '_blueprints/design blueprints (not yet implemented)' }
 )
+$e1Missing = 0
 foreach ($d in $requiredDirs) {
     if (-not (Test-Path $d.Path)) {
         # 2026-08-07 适配: 文档目录仅存于本地(gitignore *.md 策略,远程无 md 文件即无目录),
         # 降级为 warn 而非阻断。
+        $e1Missing++
         $report += '[E1-warn] CONVENTIONS.md declared subdir missing: ' + $d.Path + ' (' + $d.Purpose + '; gitignore *.md 策略,仅本地维护,跳过)'
     }
 }
+$report += '[E1] ' + ($requiredDirs.Count - $e1Missing) + '/' + $requiredDirs.Count + ' declared doc subdirs exist (' + $e1Missing + ' warned)'
 
 # E2. SoT policy file existence
 if (-not (Test-Path 'docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md')) {
     # 2026-08-07 适配: 同 E1 —— gitignore *.md 策略下仅本地维护,降级为 warn。
     $report += '[E2-warn] missing policy file: docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md (gitignore *.md 策略,仅本地维护,跳过)'
+} else {
+    $report += '[E2] SoT policy file present: docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md'
 }
 
 # =============================================================================
@@ -297,9 +503,18 @@ if (Test-Path $eventTypes) {
 foreach ($line in $report) { Write-Host $line }
 
 Write-Host ''
+# Self-reported check count: DERIVED from the ids actually emitted, not a hardcoded total.
+# The previous literal ('14 checks') was duplicated across agents.md / CLAUDE.md / ADR-166 /
+# two Phase R reports, so every added check silently made six statements stale - the exact
+# "declaration without a single source of truth" defect this project keeps registering.
+# Consumers must quote "all PASS" and read the count from here, never hardcode it.
+$emittedIds = @($report | ForEach-Object {
+    if ($_ -match '^\[(?:GAP-|WARN-|ERROR-|)?([A-F]\d[a-z]?)(?:-INFO)?\]') { $Matches[1] }
+} | Select-Object -Unique)
+$catCount = (@($emittedIds | ForEach-Object { $_[0] } | Select-Object -Unique)).Count
 if ($status -eq 0) {
-    Write-Host ('[OK] three-way reconciliation all pass (6 categories / 14 checks): canonical version=' + $currentVersion + ', ' + $nMembers + ' crates, baseline aligned')
+    Write-Host ('[OK] three-way reconciliation all pass (' + $catCount + ' categories / ' + $emittedIds.Count + ' check ids, self-reported): canonical version=' + $currentVersion + ', ' + $nMembers + ' crates, baseline aligned')
 } else {
-    Write-Host '[FAIL] three-way reconciliation found gaps, see [GAP-*] lines above, fix and rerun'
+    Write-Host ('[FAIL] three-way reconciliation found gaps (' + $catCount + ' categories / ' + $emittedIds.Count + ' check ids emitted), see [GAP-*] lines above, fix and rerun')
 }
 exit $status

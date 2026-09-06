@@ -620,7 +620,31 @@ impl McpMesh {
         &self,
         query: SuperpositionQuery,
     ) -> Result<Vec<QueryResult>, McpError> {
+        // WS-4A: 收包成功路径 — 消息到达网格即发布 McpMessageReceived(同层通信)
+        // source_node 取查询消息源标识(query_id),msg_type 标记消息类型。
+        // 消息进入网格即发布(best-effort,失败仅告警),不阻塞查询执行。
+        self.publish_message_received(query.query_id.clone(), "superposition_query")
+            .await;
+
         execute_superposition_query(&query, &self.registry, self.config.heartbeat_timeout_ms).await
+    }
+
+    /// 发布 `McpMessageReceived` 事件(best-effort,失败仅告警)
+    ///
+    /// WS-4A:"消息到达网格"的发布入口。镜像 `publish_transaction_completed`
+    /// 的既有模式(event-bus `with_event_bus` 注入的 `Option<EventBus>` +
+    /// `publish().await`),未绑定 EventBus 时静默跳过。
+    async fn publish_message_received(&self, source_node: String, msg_type: &str) {
+        if let Some(bus) = &self.event_bus {
+            let event = NexusEvent::McpMessageReceived {
+                metadata: EventMetadata::new("mcp-mesh"),
+                source_node,
+                msg_type: msg_type.to_string(),
+            };
+            if let Err(e) = bus.publish(event).await {
+                warn!(error = %e, "McpMessageReceived 事件发布失败");
+            }
+        }
     }
 
     /// 发布 `McpMeshTransactionCompleted` 事件(best-effort,失败仅告警)
@@ -1111,6 +1135,47 @@ mod tests {
         let results = mesh.superposition_query(query).await.expect("查询失败");
         assert_eq!(results.len(), 3);
         assert!(results.iter().all(|r| r.success));
+    }
+
+    #[tokio::test]
+    async fn test_superposition_query_publishes_mcp_message_received() {
+        // WS-4A: 消息到达网格即发布 McpMessageReceived(同层通信)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus);
+        for i in 0..3 {
+            mesh.register_server(MeshServer::new(
+                format!("s-{i}"),
+                format!("203.0.113.1:{i}"),
+                vec![],
+            ))
+            .expect("注册失败");
+        }
+
+        let query = SuperpositionQuery::with_id(
+            "query-node-1",
+            "test",
+            (0..3).map(|i| format!("s-{i}")).collect(),
+            100,
+        );
+        let _ = mesh.superposition_query(query).await.expect("查询失败");
+
+        let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("5s 内未收到 McpMessageReceived(资源竞争或事件丢失)")
+            .expect("应收到事件");
+        match event {
+            NexusEvent::McpMessageReceived {
+                metadata,
+                source_node,
+                msg_type,
+            } => {
+                assert_eq!(metadata.source, "mcp-mesh");
+                assert_eq!(source_node, "query-node-1");
+                assert_eq!(msg_type, "superposition_query");
+            }
+            _ => panic!("期望 McpMessageReceived 事件,得到 {:?}", event.type_name()),
+        }
     }
 
     #[tokio::test]

@@ -80,6 +80,7 @@ fn fps_within_display_max() {
 /// 验证状态栏包含 FPS 文本
 #[test]
 fn status_bar_contains_fps_text() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     // i18n:状态栏标签随 locale 切换(默认中文为"帧率",CJK 双宽不利断言);
     // 固定英文 locale 以稳定断言 ASCII "FPS" 标签。本二进制内其余测试不断言 chrome,不受影响。
     chimera_tui::set_locale(chimera_tui::Locale::En);

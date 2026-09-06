@@ -12,7 +12,8 @@
 //!   HCW 的 `ContextCompressor` 面向 `ContextEntry` 数组(按重要性评分 Top-N 保留),
 //!   不直接适配本模块"文本内容 → 摘要"的归档压缩场景。
 //!   本模块提供轻量级本地实现(纯函数,不引入新依赖),按 §17.2 三种策略:
-//!   - 1mo: HCW 摘要(≤500 tok,权重 0.4/0.3/0.3)— 复用 HCW 重要性评分公式
+//!   - 1mo: HCW 摘要(≤500 tok,权重 0.4/0.3/0.3)— 前缀截断实现(权重仅校验不参与切分,
+//!     见下方 "HCW 摘要压缩" 的为何不能复用 HCW 评分公式说明,非 HCW 评分复用)
 //!   - 3mo: 关系抽取(模拟,生成 512-dim CLV 占位向量)
 //!   - 6mo: 深度压缩 + 模式抽取(关键决策不压缩,KeepForever)
 //!   注释中明确标注"复用 crate API 不匹配,本地实现"
@@ -35,7 +36,7 @@
 //! - §17.5: 6mo 级 KeepForever,关键决策不压缩
 
 use crate::archive::tier::CompressionStrategy;
-use crate::error::Result;
+use crate::error::{MasError, Result};
 
 // ============================================================
 // 常量(SubTask 17.9 REFACTOR — 抽取降级阈值)
@@ -50,6 +51,12 @@ use crate::error::Result;
 /// f32 转 f64 精度膨胀(0.1f32 as f64 > 0.1)导致误判。
 /// 本模块全程 f64,确保降级判定精确。
 pub const DEMOTION_THRESHOLD_F64: f64 = 0.1;
+
+/// HCW 权重求和容差 — 吸收 `[0.4, 0.3, 0.3]` 在 f64 下的加法误差
+///
+/// 0.4 + 0.3 + 0.3 的 f64 结果约为 0.9999999999999999,偏差 ~1.1e-16;
+/// 1e-6 既容得下浮点噪声,又足以拒掉真实的配置错误(如少给一档权重)。
+const HCW_WEIGHT_SUM_TOLERANCE: f64 = 1e-6;
 
 // ============================================================
 // 降级判定纯函数(§17.2 + §17.5)
@@ -187,10 +194,11 @@ pub struct CompressedContent {
 ///
 /// ## 复用映射(§17.1)
 ///
-/// - **1mo HcwSummary**:复用 hcw-window `ContextCompressor` 重要性评分公式
-///   (0.4×recency + 0.3×frequency + 0.3×relevance),但 hcw-window API 面向
-///   `ContextEntry` 数组(按评分 Top-N 保留),不直接适配"文本 → 摘要"场景,
-///   本地实现:按权重切分内容,取前 `max_tokens` 字符作为摘要
+/// - **1mo HcwSummary**:hcw-window `ContextCompressor` 的重要性评分公式
+///   (0.4×recency + 0.3×frequency + 0.3×relevance)面向 `ContextEntry` 数组按评分
+///   Top-N 保留;本模块只有无属性的纯文本,没有可打分的时间/频次/相关性维度,
+///   因此**权重不参与截断**,仅作为策略声明做自洽性校验,实际取前 `max_tokens`
+///   字符作为摘要(诚实性说明见 `hcw_summary`)
 /// - **3mo RelationExtraction**:复用 mlc-engine `SemanticMemory` 概念,
 ///   但 mlc-engine API 需 SQLite 持久化,本地实现生成 512-dim 零向量占位
 /// - **6mo DeepCompression**:关键决策不压缩(§17.5 KeepForever),
@@ -208,7 +216,7 @@ impl ArchiveCompressor {
     /// 压缩内容(三级归档压缩入口,§17.2)
     ///
     /// 根据 `strategy` 分派到具体压缩方法:
-    /// - `HcwSummary`:按权重切分内容,取前 `max_tokens` 字符作为摘要
+    /// - `HcwSummary`:校验权重声明后,按 `max_tokens` 字符预算取前缀作为摘要
     /// - `RelationExtraction`:生成 512-dim 零向量占位 + 原文摘要
     /// - `DeepCompression`:保留原文(KeepForever,关键决策不压缩)
     ///
@@ -232,18 +240,76 @@ impl ArchiveCompressor {
         }
     }
 
-    /// HCW 摘要压缩(1mo 级)— 复用 hcw-window 重要性评分公式,本地实现
+    /// 校验 `HcwSummary.weights` 声明自洽(项数固定 3、逐项有限非负、和 ≈ 1.0)
     ///
-    /// 复用 crate API 不匹配:hcw-window `ContextCompressor` 面向 `ContextEntry` 数组
-    /// (按评分 Top-N 保留),不直接适配"文本 → 摘要"场景。
+    /// ## 参数
     ///
-    /// 本地实现:按权重 0.4/0.3/0.3 切分内容为三段(时近性/频次/任务相关性),
-    /// 按权重比例分配 token 预算,取前 `max_tokens` 字符作为摘要。
+    /// - `weights`:策略声明的重要性评分权重 [时近性, 频次, 任务相关性]
+    ///
+    /// ## 返回
+    ///
+    /// - `Ok(())`:声明自洽,可继续压缩
+    /// - `Err(MasError::InvalidConfig)`:逐项非法或求和偏离 1.0
+    ///
+    /// WHY fail-closed:该字段是公开可构造的枚举载荷,外部调用方可传入任意值。
+    /// 若放任 NaN / 负数 / 全零 / 和不为 1 的权重通过,策略声明会退化成静默
+    /// 无操作 —— 正是 F-R3-01 的成因(权重被丢弃却无人察觉)。
+    /// 容差取 [`HCW_WEIGHT_SUM_TOLERANCE`] 以吸收 `[0.4, 0.3, 0.3]` 的 f64 加法误差。
+    fn validate_hcw_weights(weights: &[f64; 3]) -> Result<()> {
+        for (idx, w) in weights.iter().enumerate() {
+            if !w.is_finite() || *w < 0.0 {
+                return Err(MasError::InvalidConfig {
+                    field: format!("CompressionStrategy::HcwSummary.weights[{idx}]"),
+                    value: w.to_string(),
+                });
+            }
+        }
+
+        let sum: f64 = weights.iter().sum();
+        if (sum - 1.0).abs() > HCW_WEIGHT_SUM_TOLERANCE {
+            return Err(MasError::InvalidConfig {
+                field: "CompressionStrategy::HcwSummary.weights.sum".into(),
+                value: format!("{sum}"),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// HCW 摘要压缩(1mo 级)— 字符预算前缀截断,权重仅校验不生效
+    ///
+    /// 复用 crate API 不匹配:hcw-window `ContextCompressor` 面向 `ContextEntry`
+    /// 数组(按 `score = recency×w0 + frequency×w1 + relevance×w2` 做 Top-N 保留)。
+    /// 本函数只拿到一段**无属性的纯文本**,没有访问时间、频次或任务相关性可打分,
+    /// 因此**无法**实际应用该公式;强行"按权重比例把文本切成三段再拼回"只是把
+    /// 同一段字符任意重排,信息量为零,还会破坏叙事头部的连续性(违反 INV-8
+    /// 归档保真度方向)。
+    ///
+    /// 当前实现因此只做两件事:
+    /// 1. [`Self::validate_hcw_weights`] 校验权重声明自洽(fail-closed);
+    /// 2. 按 `max_tokens` 字符预算取前缀作为摘要。
+    ///
+    /// 接入真实评分需要调用方提供分段级 recency/frequency/relevance,
+    /// 属公开 API 破坏性变更,须另立 ADR 后再做。
+    ///
+    /// ## 参数
+    ///
+    /// - `content`:待摘要的原始内容
+    /// - `max_tokens`:字符预算上限(近似 token 数,见下方近似说明)
+    /// - `weights`:重要性评分权重声明,仅做自洽性校验
+    ///
+    /// ## 返回
+    ///
+    /// - `Ok(CompressedContent)`:摘要长度 = min(原文字符数, max_tokens)
+    /// - `Err(MasError::InvalidConfig)`:权重声明不自洽
     fn hcw_summary(
         content: &str,
         max_tokens: usize,
         weights: [f64; 3],
     ) -> Result<CompressedContent> {
+        // 先校验策略声明:零预算不豁免校验(非法权重本身就是配置错误)
+        Self::validate_hcw_weights(&weights)?;
+
         // 边界:max_tokens = 0 时返回空摘要
         if max_tokens == 0 {
             return Ok(CompressedContent {
@@ -258,13 +324,9 @@ impl ArchiveCompressor {
 
         // 简化实现:按字符数近似 token 数(中文 1 字符 ≈ 1 token,英文 4 字符 ≈ 1 token)
         // 注:实际 Token 计数应由 hcw-window 的 tokenizer 完成,本地实现用字符数近似
+        // 按 chars() 而非字节索引截断,保证多字节内容不落在字符边界内 panic
         let original_chars = content.chars().count();
         let summary_chars = original_chars.min(max_tokens);
-
-        // 按权重切分内容(模拟 HCW 重要性评分 Top-N 保留)
-        // WHY 按权重切分:复用 HCW 公式 `score = 0.4×recency + 0.3×frequency + 0.3×relevance`
-        // 但本模块无 ContextEntry 数组,简化为按权重比例分配字符预算
-        let _ = weights; // 权重在本地实现中仅作记录,实际切分按字符数
 
         let summary: String = content.chars().take(summary_chars).collect();
         let token_count = summary.chars().count();
@@ -375,5 +437,109 @@ mod tests {
     #[test]
     fn should_demote_infinite_tau_never_demotes() {
         assert!(!should_demote_metadata(1, 1_000_000.0, f64::INFINITY));
+    }
+
+    // ------------------------------------------------------------
+    // F-R3-01 契约:HcwSummary.weights 是公开可构造的策略字段,必须
+    // fail-closed 校验其自洽性(否则"声明与实现脱钩"可再次静默发生);
+    // 摘要必须受 max_tokens 预算约束,截断只能落在 char 边界。
+    // ------------------------------------------------------------
+
+    use crate::archive::tier::HCW_SUMMARY_WEIGHTS;
+    use crate::error::MasError;
+    use proptest::prelude::*;
+
+    fn hcw_strategy(max_tokens: usize, weights: [f64; 3]) -> CompressionStrategy {
+        CompressionStrategy::HcwSummary {
+            max_tokens,
+            weights,
+        }
+    }
+
+    fn expect_invalid_config(weights: [f64; 3], max_tokens: usize) {
+        let err = ArchiveCompressor::compress(&hcw_strategy(max_tokens, weights), "归档内容样本")
+            .expect_err("非法权重必须被拒绝");
+        assert!(
+            matches!(err, MasError::InvalidConfig { .. }),
+            "期望 InvalidConfig,实际 {err:?}"
+        );
+    }
+
+    #[test]
+    fn hcw_summary_rejects_negative_weight() {
+        expect_invalid_config([0.7, -0.1, 0.4], 10);
+    }
+
+    #[test]
+    fn hcw_summary_rejects_weight_sum_drift() {
+        expect_invalid_config([0.4, 0.3, 0.1], 10);
+    }
+
+    #[test]
+    fn hcw_summary_rejects_non_finite_weight() {
+        expect_invalid_config([f64::NAN, 0.5, 0.5], 10);
+        expect_invalid_config([f64::INFINITY, 0.0, 0.0], 10);
+    }
+
+    /// 零预算只说明"不保留内容",不豁免策略自洽性校验
+    #[test]
+    fn hcw_summary_validates_weights_even_with_zero_budget() {
+        expect_invalid_config([0.5, 0.5, 0.5], 0);
+    }
+
+    #[test]
+    fn hcw_summary_accepts_declared_default_weights() {
+        let content = "一段需要摘要的归档内容";
+        let out = ArchiveCompressor::compress(&hcw_strategy(500, HCW_SUMMARY_WEIGHTS), content)
+            .expect("默认权重 [0.4,0.3,0.3] 必须通过校验");
+        assert_eq!(out.token_count, content.chars().count());
+    }
+
+    /// 每个 '中' 占 3 字节:按字节索引截断会直接 panic
+    #[test]
+    fn hcw_summary_truncates_on_char_boundary() {
+        let content = "中".repeat(300);
+        let out = ArchiveCompressor::compress(&hcw_strategy(100, HCW_SUMMARY_WEIGHTS), &content)
+            .expect("默认权重应通过校验");
+        assert_eq!(out.summary.chars().count(), 100);
+        assert_eq!(out.token_count, 100);
+        assert!(
+            content.starts_with(out.summary.as_str()),
+            "摘要必须是原文前缀"
+        );
+    }
+
+    #[test]
+    fn hcw_summary_ratio_never_below_one_when_truncating() {
+        let content = "abcdefghij".repeat(50);
+        let out = ArchiveCompressor::compress(&hcw_strategy(20, HCW_SUMMARY_WEIGHTS), &content)
+            .expect("默认权重应通过校验");
+        assert_eq!(out.token_count, 20);
+        assert!(out.metadata.compression_ratio >= 1.0);
+    }
+
+    proptest! {
+        #[test]
+        fn budget_never_exceeded(max_tokens in 0usize..400, len in 0usize..600) {
+            let content = "字".repeat(len);
+            let out = ArchiveCompressor::compress(
+                &hcw_strategy(max_tokens, HCW_SUMMARY_WEIGHTS),
+                &content,
+            )
+            .expect("合法权重不应失败");
+            prop_assert!(out.token_count <= max_tokens);
+            prop_assert_eq!(out.token_count, len.min(max_tokens));
+        }
+
+        #[test]
+        fn invalid_weights_never_accepted(a in -2.0f64..2.0, b in -2.0f64..2.0, c in -2.0f64..2.0) {
+            let valid = a >= 0.0 && b >= 0.0 && c >= 0.0 && (a + b + c - 1.0).abs() <= 1e-6;
+            let res = ArchiveCompressor::compress(&hcw_strategy(8, [a, b, c]), "归档内容样本");
+            if valid {
+                prop_assert!(res.is_ok(), "合法权重 {a},{b},{c} 被误拒");
+            } else {
+                prop_assert!(res.is_err(), "非法权重 {a},{b},{c} 被误接受");
+            }
+        }
     }
 }

@@ -320,6 +320,74 @@ impl VoteCounter {
     pub fn config(&self) -> &ParliamentConfig {
         &self.config
     }
+
+    // ---------- WI-05 MCSM 流形约束信号守恒 ----------
+
+    /// 多源信号权重矩阵经 Sinkhorn 双随机投影（WI-05 核心接入）
+    ///
+    /// # WHY
+    /// 议会投票/IETA 写回等聚合为未约束加权和时，高音量信号源可淹没他源
+    /// （UP-25）。本方法将多源信号矩阵投影到双随机流形（行列和 ≈ 1），
+    /// 极端分布无单源淹没。
+    ///
+    /// # 参数
+    /// - `signals`: 行 = 信号源，列 = 信号维度（如 [投票源, IETA 写回源] ×
+    ///   [赞成, 反对, 弃权]）
+    ///
+    /// # 返回
+    /// - `Some(归一化矩阵)`: 投影成功（行列和 ≈ 1）
+    /// - `None`: 输入非法（含负值/非有限值/非矩形）——调用方应走
+    ///   [`VoteCounter::identity_signal`] 直通（WI-05 回滚语义）
+    pub fn mix_signals_mcsm(&self, signals: &[Vec<f32>]) -> Option<Vec<Vec<f32>>> {
+        let params = nexus_contracts::SinkhornParams::default();
+        nexus_contracts::sinkhorn_project(signals, params).map(|p| p.matrix)
+    }
+
+    /// 投票权重向量 MCSM 归一化（1×N 特例：行归一化到和 = 1）
+    ///
+    /// # WHY
+    /// 与 [`VoteCounter::compute_weighted_approval`] 的未约束加权和相比，
+    /// 归一化后权重和 = 1（加权赞成率公式数学等价——比例不变，
+    /// 零行为变化；数值稳定性更好）。
+    pub fn normalize_vote_weights_mcsm(&self, weights: &[f32]) -> Option<Vec<f32>> {
+        nexus_contracts::project_weights(weights, nexus_contracts::SinkhornParams::default())
+    }
+
+    /// 恒等直通 — WI-05 回滚路径（数值异常时保持原始权重）
+    pub fn identity_signal(&self, signals: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+        nexus_contracts::identity(signals)
+    }
+
+    /// 基于 MCSM 归一化权重的加权赞成率（显式 MCSM 路径）
+    ///
+    /// # WHY
+    /// 与 [`VoteCounter::compute_weighted_approval`] 数学等价（1D 归一化
+    /// 保持比例），作为未来多维信号聚合（WI-05 验收"单源 100× 音量不
+    /// 淹没"）的统一入口——多维场景下由 [`VoteCounter::mix_signals_mcsm`]
+    /// 先行投影。
+    pub fn compute_weighted_approval_mcsm(&self, opinions: &[Opinion]) -> (f32, f32) {
+        // 收集非弃权角色权重（顺序与 opinions 一致）
+        let mut weights = Vec::new();
+        for opinion in opinions {
+            if !opinion.is_abstain() {
+                weights.push(self.config.weight_of(opinion.role));
+            }
+        }
+        // 归一化失败（全弃权/非法）走原始加权和（与既有行为一致）
+        let Some(projected) = self.normalize_vote_weights_mcsm(&weights) else {
+            return self.compute_weighted_approval(opinions);
+        };
+        // 投影后权重和 = 1: 加权赞成率 = Σ(w'_i · position_i)
+        let mut weighted_sum = 0.0f32;
+        let mut idx = 0usize;
+        for opinion in opinions {
+            if !opinion.is_abstain() {
+                weighted_sum += projected[idx] * opinion.position;
+                idx += 1;
+            }
+        }
+        (weighted_sum, projected.iter().sum())
+    }
 }
 
 /// 计算决议内容哈希(SHA-256 hex)
@@ -1003,5 +1071,91 @@ mod tests {
             proptest::prop_assert!((-1.0..=1.0).contains(&q.consensus_margin), "consensus_margin ∈ [-1,1]");
             proptest::prop_assert!((0.0..=1.0).contains(&q.skeptic_stance), "skeptic_stance ∈ [0,1]");
         }
+    }
+
+    // ---------- WI-05 MCSM 流形约束信号守恒 ----------
+
+    #[test]
+    fn mix_signals_mcsm_double_stochastic() {
+        // WI-05 验收: 行列和 ≈ 1（数值测试；方阵正矩阵可双随机收敛）
+        let counter = make_counter();
+        let signals = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 9.0],
+        ];
+        let mixed = counter.mix_signals_mcsm(&signals).expect("投影必须成功");
+        for row in &mixed {
+            let row_sum: f32 = row.iter().sum();
+            assert!((row_sum - 1.0).abs() <= 1e-3, "行和应 ≈ 1, 实际 {row_sum}");
+        }
+        for c in 0..3 {
+            let col_sum: f32 = mixed.iter().map(|r| r[c]).sum();
+            assert!((col_sum - 1.0).abs() <= 1e-3, "列和应 ≈ 1, 实际 {col_sum}");
+        }
+    }
+
+    #[test]
+    fn mix_signals_mcsm_100x_source_does_not_drown_others() {
+        // WI-05 验收: 对抗回放（单源 100× 音量不淹没；方阵 3×3）
+        let counter = make_counter();
+        let signals = vec![
+            vec![100.0, 1.0, 1.0],
+            vec![1.0, 100.0, 1.0],
+            vec![1.0, 1.0, 1.0],
+        ];
+        let mixed = counter.mix_signals_mcsm(&signals).expect("投影必须成功");
+        // 低音量源行和仍 ≈ 1（未被 100× 源淹没）
+        for (r, row) in mixed.iter().enumerate().skip(1) {
+            let row_sum: f32 = row.iter().sum();
+            assert!(
+                (row_sum - 1.0).abs() <= 1e-3,
+                "源 {r} 行和应 ≈ 1（不被淹没）, 实际 {row_sum}"
+            );
+        }
+    }
+
+    #[test]
+    fn mix_signals_mcsm_invalid_returns_none_and_identity_fallback() {
+        // 防御: 非法输入返回 None; 回滚路径 identity 直通保持原始
+        let counter = make_counter();
+        let invalid = vec![vec![1.0, -1.0], vec![1.0, 1.0]];
+        assert!(counter.mix_signals_mcsm(&invalid).is_none());
+        let original = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        assert_eq!(counter.identity_signal(original.clone()), original);
+    }
+
+    #[test]
+    fn mcsm_weighted_approval_matches_plain_path() {
+        // MCSM 路径与既有路径数学等价（1D 归一化保持比例——零行为变化）
+        let counter = make_counter();
+        let opinions = vec![
+            Opinion::new(Role::Architect, 1.0, 0.9, "赞成"),
+            Opinion::new(Role::Optimizer, 0.0, 0.8, "反对"),
+            Opinion::new(Role::Librarian, 1.0, 0.7, "赞成"),
+        ];
+        let (plain_rate, _plain_weight) = counter.compute_weighted_approval(&opinions);
+        let (mcsm_rate, mcsm_weight) = counter.compute_weighted_approval_mcsm(&opinions);
+        assert!(
+            (plain_rate - mcsm_rate).abs() < 1e-4,
+            "加权赞成率应等价: plain {plain_rate} vs mcsm {mcsm_rate}"
+        );
+        assert!(
+            (mcsm_weight - 1.0).abs() < 1e-4,
+            "归一化权重和应 ≈ 1, 实际 {mcsm_weight}"
+        );
+    }
+
+    #[test]
+    fn normalize_vote_weights_rejects_invalid() {
+        // 防御: 全零/负值权重拒绝归一化
+        let counter = make_counter();
+        assert!(counter.normalize_vote_weights_mcsm(&[0.0, 0.0]).is_none());
+        assert!(counter.normalize_vote_weights_mcsm(&[1.0, -0.5]).is_none());
+        let normalized = counter
+            .normalize_vote_weights_mcsm(&[3.0, 1.0])
+            .expect("归一化成功");
+        let sum: f32 = normalized.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-6);
     }
 }

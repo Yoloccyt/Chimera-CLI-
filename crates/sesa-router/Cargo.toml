@@ -7,6 +7,9 @@ license.workspace = true
 [dependencies]
 # 异步运行时:timeout 超时控制 + spawn 后台订阅任务
 tokio = { workspace = true }
+# L0 Contracts:公共 Top-K 收敛工具(红线 #8 ws2-c1),替代 sort_by 全排
+# WHY L6 → L0 合规(依赖铁律 §2.2)
+nexus-contracts = { workspace = true }
 # 配置与类型序列化(#[derive(Serialize, Deserialize)])
 serde = { workspace = true, features = ["derive"] }
 # 应用层错误(顶层调用方使用,库层用 thiserror)

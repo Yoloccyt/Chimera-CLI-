@@ -65,6 +65,9 @@ impl ChannelAffinityStats {
     }
 
     /// 百分位(0.0-1.0)——用 select_nth_unstable O(n)(§4.1 Top-K 红线)
+    // 有意独立实现:O(n) select_nth_unstable 单点查询,与共享工具
+    // nexus_contracts::util::percentile_sorted(需预排序切片, O(n log n)) 的算法、
+    // 复杂度与调用形态(&self 方法)均不同,故不纳入纯函数收敛。
     fn percentile(&self, p: f64) -> Option<u64> {
         if self.ttft_samples.is_empty() {
             return None;

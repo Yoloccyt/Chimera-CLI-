@@ -15,3 +15,13 @@ hel = "hel"            # "hello" 前缀测试输入
 fo = "fo"              # base64 测试字节串
 ba = "ba"              # 中文文档字节误报
 CAF = "CAF"            # Channel Affinity Framework 缩写
+anc = "anc"            # ancestors 缩写（session-store/tree.rs 测试局部变量）
+vas = "vas"            # values_a 缩写（check_perf_redlines.py，与 vbs 配对）
+
+# 原始 cargo test 输出转储（历史证据日志，非源码散文）；
+# 内含随机测试 token/哈希，会被拼写检查误判 → 整体排除。
+[files]
+extend-exclude = [
+  "docs/reports/audit-followup/fulltest_*.txt",
+  "docs/reports/audit-redundancy/fulltest_*.txt",
+]

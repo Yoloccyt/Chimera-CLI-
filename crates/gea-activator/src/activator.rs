@@ -12,7 +12,7 @@
 //!   绕过 NaN 不可哈希问题(详见 `types::TaskProfile` 的 Hash impl 注释)
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
@@ -100,6 +100,9 @@ pub struct GeaActivator {
     cache_stats: CacheStats,
     /// LRU 驱逐采样数(根据缓存容量动态计算)
     evict_sample_size: usize,
+    /// WS-4B:最近一次实际应用阈值(f32 bits,原子)— 用于在阈值真正
+    /// 调整时发布 `ActivationThresholdAdjusted` 事件。
+    last_applied_threshold: AtomicU32,
 }
 
 impl GeaActivator {
@@ -110,6 +113,8 @@ impl GeaActivator {
     pub fn new(config: GeaConfig, event_bus: EventBus) -> Result<Self, GeaError> {
         config.validate()?;
         let evict_sample_size = compute_evict_sample_size(config.cache_capacity);
+        // 在 config 移入结构体前提取阈值位(规避 E0382 moved value)
+        let threshold_bits = config.activation_threshold.to_bits();
         Ok(Self {
             expert_registry: RwLock::new(HashMap::new()),
             expert_norms: RwLock::new(HashMap::new()),
@@ -118,6 +123,7 @@ impl GeaActivator {
             activation_cache: DashMap::new(),
             cache_stats: CacheStats::default(),
             evict_sample_size,
+            last_applied_threshold: AtomicU32::new(threshold_bits),
         })
     }
 
@@ -190,7 +196,7 @@ impl GeaActivator {
 
         // 步骤 2-4:持读锁完成门控计算与冲突消解
         // WHY 块作用域:确保 RwLockReadGuard 在 await 之前释放(clippy::await_holding_lock)
-        let result = {
+        let (result, load_factor, threshold) = {
             let registry = self.expert_registry.read().unwrap_or_else(|p| {
                 warn!("expert_registry read lock poisoned, recovering with inner data");
                 p.into_inner()
@@ -233,7 +239,9 @@ impl GeaActivator {
             }
 
             // 步骤 4:冲突消解(复用同一读锁 + 预计算范数,避免二次加锁与重算)
-            resolve_conflicts_with_norms(candidates, &registry, &norms, &self.config)?
+            let resolved =
+                resolve_conflicts_with_norms(candidates, &registry, &norms, &self.config)?;
+            (resolved, load_factor, threshold)
         }; // 读锁在此释放,后续 await 不持锁
 
         // 步骤 5:写缓存(LRU 驱逐),key 为 TaskProfile 克隆(零序列化)
@@ -245,6 +253,10 @@ impl GeaActivator {
 
         // 步骤 7:每 100 次激活发布缓存统计
         self.maybe_publish_cache_stats().await;
+
+        // WS-4B:动态阈值实际调整时发布 ActivationThresholdAdjusted 事件
+        self.publish_threshold_adjustment(load_factor, threshold)
+            .await;
 
         Ok(result)
     }
@@ -362,6 +374,30 @@ impl GeaActivator {
 
             if let Err(e) = self.event_bus.publish(event).await {
                 warn!("Failed to publish ActivationCacheStats event: {e}");
+            }
+        }
+    }
+
+    /// 发布 `ActivationThresholdAdjusted` 事件 — 动态激活阈值实际调整点(WS-4B)。
+    ///
+    /// 仅当本次 `activate` 计算出的动态阈值相对上次实际应用阈值发生变化时
+    /// 才发布(Normal 级观测事件;避免每次激活重复风暴)。`old_threshold` 为
+    /// 上次应用阈值,`new_threshold` 为本次动态阈值,`load_factor` 为驱动因子。
+    /// 发布失败仅 warn,不阻断激活主流程(与既有发布模式一致)。
+    async fn publish_threshold_adjustment(&self, load_factor: f32, new_threshold: f32) {
+        let new_bits = new_threshold.to_bits();
+        let old_bits = self
+            .last_applied_threshold
+            .swap(new_bits, Ordering::Relaxed);
+        if old_bits != new_bits {
+            let event = NexusEvent::ActivationThresholdAdjusted {
+                metadata: EventMetadata::new("gea-activator"),
+                old_threshold: f32::from_bits(old_bits),
+                new_threshold,
+                load_factor,
+            };
+            if let Err(e) = self.event_bus.publish(event).await {
+                warn!("Failed to publish ActivationThresholdAdjusted event: {e}");
             }
         }
     }
@@ -712,6 +748,50 @@ mod tests {
             .expect("timeout")
             .expect("recv failed");
         assert_eq!(event.type_name(), "ExpertActivated");
+    }
+
+    /// WS-4B:ActivationThresholdAdjusted 幽灵事件生产者验证 —
+    /// 动态阈值实际调整时发布阈值调整事件(在 ExpertActivated 之后)。
+    #[tokio::test]
+    async fn test_activation_threshold_adjusted_published_on_change() {
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let activator = GeaActivator::new(GeaConfig::default(), event_bus).unwrap();
+        activator.register_expert(make_expert("e-1", vec![0.5; 64], 0.8, vec!["code-gen"]));
+
+        let task = make_task(0.9, "code-gen");
+        let _ = activator.activate(&task).await.unwrap();
+
+        // 首个事件为 ExpertActivated(发布顺序不变,既有测试零回归)
+        let first = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("recv failed");
+        assert_eq!(first.type_name(), "ExpertActivated");
+
+        // 第二个事件为 ActivationThresholdAdjusted(冷启动 1 专家 → 动态阈值 > 基准)
+        let second = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("recv failed");
+        assert_eq!(
+            second.metadata().source,
+            "gea-activator",
+            "ActivationThresholdAdjusted 事件 source 应为 gea-activator"
+        );
+        match second {
+            NexusEvent::ActivationThresholdAdjusted {
+                old_threshold,
+                new_threshold,
+                load_factor,
+                ..
+            } => {
+                assert!(new_threshold > old_threshold, "动态阈值应高于基准阈值");
+                assert!((0.0..=1.0).contains(&load_factor));
+            }
+            other => panic!("期望 ActivationThresholdAdjusted 事件,收到 {other:?}"),
+        }
     }
 
     #[test]

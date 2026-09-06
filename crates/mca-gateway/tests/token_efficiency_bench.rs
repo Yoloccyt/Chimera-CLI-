@@ -1106,14 +1106,15 @@ impl AggStats {
     }
 }
 
-/// 百分位数（排序后按位置取；空集返回 0）
+/// 百分位数（排序后委托共享工具；空集返回 0）
+// 口径变更:原 nearest-rank `ceil(p*n)-1` 统一为 `round((n-1)*p)`,两者索引差 ≤1 个样本。
+use nexus_contracts::util::percentile_sorted;
 fn percentile(sorted: &mut [u64], p: f64) -> u64 {
     if sorted.is_empty() {
         return 0;
     }
     sorted.sort_unstable();
-    let idx = ((sorted.len() as f64) * p).ceil().min(sorted.len() as f64) as usize;
-    sorted[idx.saturating_sub(1)]
+    percentile_sorted(sorted, p).unwrap_or(0)
 }
 
 // ============================================================

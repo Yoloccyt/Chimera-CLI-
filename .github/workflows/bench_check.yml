@@ -64,11 +64,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
         with:
           workspaces: '.'
-          lookup-only: true
-        # WHY: 加速 benchmark 编译,典型缓存命中可省 60-120s
+        # WHY: 加速 benchmark 编译,典型缓存命中可省 60-120s。
+        # C5 修复(2026-09-04): 移除 lookup-only: true —— 该参数仅检查缓存存在性
+        # 而不下载恢复,使本步骤成为 no-op,bench job 每次 PR 都全量冷编译。
+        # 默认行为(restore + job 结束后 save)即符合本步骤意图。
 
       - name: Run benchmarks
         shell: bash
@@ -98,20 +100,53 @@ jobs:
           run_bench degradation_chain cargo bench -p csn-substitutor --bench degradation_chain
           # L9 Quest 层优化基线守护(2026-07-31 新增):dag/gea/scheduler/dedup/checkpoint/shadow
           run_bench dag cargo bench -p quest-engine --bench dag_bench
+          # 第三轮冗余审计 批 B/C:L0 共享纯函数(sigmoid / percentile_sorted)+ 激活已落盘的 Top-K 对照
+          run_bench util_micro cargo bench -p nexus-contracts --bench util_micro
+          # xts_top_k.rs 已随 WS-2 落盘,但此前未进 run_bench → 其阈值长期空转,现补齐
+          run_bench xts_top_k cargo bench -p nexus-contracts --bench xts_top_k
           run_bench checkpoint cargo bench -p quest-engine --bench checkpoint_bench
           run_bench gea_cache cargo bench -p gea-activator --bench gate_compute
           run_bench scheduler cargo bench -p chimera-mas --bench mas_benchmark scheduler_dequeue
           run_bench dedup cargo bench -p chimera-mas --bench dedup_bench
           run_bench shadow_stats cargo bench -p chimera-mas --bench shadow_stats
+          # ===== WS-3 E1: 审计点名的 17 个未守护 bench 补全(阈值"待首跑校准")=====
+          # 与 scripts/perf_thresholds.toml 的 [[run_bench]] 保持同步;
+          # 该同步已由 check_perf_redlines.py 不变式 I7 机器强制(不再靠人工)。
+          run_bench config_concurrency cargo bench -p chimera-cli --bench config_concurrency_bench
+          run_bench writer_ansi       cargo bench -p chimera-tui --bench writer_ansi_bench
+          run_bench v3_pipeline       cargo bench -p chimera-tui --bench v3_pipeline_bench
+          run_bench reduce_bench      cargo bench -p nexus-core --bench reduce_bench
+          run_bench session_store     cargo bench -p session-store --bench session_store_bench
+          run_bench cross_layer       cargo bench -p event-bus --bench cross_layer_bench
+          run_bench hybrid_search     cargo bench -p repo-wiki --bench hybrid_search_bench
+          run_bench debate            cargo bench -p parliament --bench debate
+          run_bench l2_recall         cargo bench -p mlc-engine --bench l2_recall
+          run_bench compress          cargo bench -p hcw-window --bench compress
+          run_bench compute_masks     cargo bench -p osa-coordinator --bench compute_masks
+          run_bench delegation        cargo bench -p chimera-mas --bench delegation_bench
+          run_bench cache_hit         cargo bench -p scc-cache --bench cache_hit
+          run_bench tiering           cargo bench -p lsct-tiering --bench tiering_benchmark
+          run_bench gather            cargo bench -p gqep-executor --bench gather
+          run_bench produce_verify    cargo bench -p pvl-layer --bench produce_verify
+          run_bench command_validator cargo bench -p seccore --bench command_validator_bench
+          # ===== C6(2026-09-04): KPI 首次入 CI 强制门 + L1 热路径基线 =====
+          # immune_probe=KPI-03(宣称 708ns,本地实测 907ns 同量级实证);
+          # rhi_judge=KPI-04(宣称 44µs,本地实测 7.5µs);bus_bench=publish fan-out。
+          run_bench immune_probe      cargo bench -p chimera-mas --bench immune_probe
+          run_bench rhi_judge         cargo bench -p auto-dpo --bench rhi_judge
+          run_bench bus_bench         cargo bench -p event-bus --bench bus_bench
 
       - name: Assert thresholds
         # WHY 用 Python 解析 criterion 的 estimates.json:
-        #   - criterion 的 stdout 格式可能随版本变化,estimates.json 是稳定契约
-        #   - estimates.json 包含 median.point_estimate(纳秒),精确可信
-        #   - ubuntu-latest 预装 python3,无需额外安装
+        #   - criterion 的 stdout 格式可能随版本变化, estimates.json 是稳定契约
+        #   - estimates.json 包含 median.point_estimate(纳秒), 精确可信
+        #   - ubuntu-latest 预装 python3, 无需额外安装
+        # 输出同时落盘 bench_threshold_legacy.log:下一步的 compare 要拿它跟
+        # scripts/check_perf_redlines.py 逐键对拍。tee 不改变本步成败语义
+        # (pipefail 下 python 非 0 仍使本步红)。
         shell: bash
         run: |
-          python3 <<'PYEOF'
+          python3 <<'PYEOF' | tee bench_threshold_legacy.log
           import json
           import sys
           from pathlib import Path
@@ -169,6 +204,51 @@ jobs:
               #  + 511 次重叠检测固有成本),按 ×2 抖动余量取 200µs;
               # 128 场景仍受 50µs 守护(22.8µs 实测,余量充足)
               "resolve_conflicts": 200_000,         # < 200µs(128 组仍 < 50µs)
+              # ===== C6 校准（2026-09-04）：18 键由 100ms 兜底收紧为实测值 =====
+              # 本地 Windows GNU 全量实测 median + 分级余量（ns 级约 x10、us 级约
+              # x3-8、ms 级约 x2-2.5，与 sigmoid 33ns→500ns 先例同原则）；数据与
+              # 推导见 docs/reports/c6-kpi-threshold-calibration-report-2026-09-04.md。
+              # 与 scripts/perf_thresholds.toml 的 [thresholds_ns] 逐键一致（I1）。
+              # gather 本地 median 305ms 为离群值（5 severe outliers；CI 侧 <100ms
+              # 通过）→ 数据不可信，保留 100ms 兜底，calibration_pending 唯一存活项。
+              "config_concurrency": 3_000_000,     # < 3ms（实测 1.21ms）
+              "writer_ansi":        200_000,       # < 200µs（实测 58.7µs）
+              "v3_pipeline":        5_000_000,     # < 5ms（实测 1.89ms）
+              "reduce_bench":       2_500_000,     # < 2.5ms（实测 858µs）
+              "session_store":      2_500_000,     # < 2.5ms（实测 1.02ms）
+              "cross_layer":        100_000,       # < 100µs（实测 26.3µs）
+              "hybrid_search":      20_000_000,    # < 20ms（实测 8.12ms）
+              "debate":             100_000,       # < 100µs（实测 29.5µs）
+              "l2_recall":          5_000_000,     # < 5ms（实测 1.86ms）
+              "compress":           50_000,        # < 50µs（实测 9.6µs）
+              "compute_masks":      1_500_000,     # < 1.5ms（实测 583µs）
+              "delegation":         40_000_000,    # < 40ms（实测 16.2ms）
+              "cache_hit":          10_000,        # < 10µs（实测 581ns，ns 级放大防 CI 抖动）
+              "tiering":            500_000,       # < 500µs（实测 250µs）
+              "gather":             100_000_000,   # < 100ms 保留兜底（本地离群不可信，待 CI 首跑收紧）
+              "produce_verify":     500_000,       # < 500µs（实测 216µs）
+              "command_validator":  50_000,        # < 50µs（实测 6.8µs）
+              # 预留(并行 WS-2 将创建 nexus-contracts/benches/xts_top_k.rs):
+              # 文件未落盘前无真实 estimates,只产生 no-estimates 告警(不失败);落地后自动守护。
+              "xts_top_k":          500_000,       # < 500µs（实测 213µs；WS-2 已落盘，C6 完成校准）
+              # ===== C6 新增（KPI-03/04 首次入 CI 强制门 + L1 热路径基线）=====
+              # immune_probe 实测 907ns（宣称 708ns 同量级获实证）;ns 级阈值按
+              # sigmoid 先例放大防 CI 抖动; rhi_judge 实测 7.5µs（宣称 44µs 实测更快）;
+              # bus_bench 实测 55µs（publish fan-out/批量对比）。
+              "immune_probe":       10_000,        # < 10µs（KPI-03）
+              "rhi_judge":          50_000,        # < 50µs（KPI-04）
+              "bus_bench":          200_000,       # < 200µs（L1 热路径）
+              # 第三轮冗余审计 批 B/C:L0 共享纯函数。阈值为本地静默态实跑中位数加余量
+              # (2026-08-30,Windows GNU release;ns/µs 级门槛在共享 runner 上噪声敏感,
+              #  故按实测放大数倍取保守值,首跑后再收紧):
+              #   sigmoid scalar     实测  33.2 ns → 门槛   500 ns (≈15×)
+              #   sigmoid map 1024   实测  33.7 µs → 门槛 200_000 ns (≈6×)
+              #   percentile_sorted  实测   6.5 ns → 门槛 1_000 ns (≈150×)
+              # 关键实测结论:percentile_sorted 在 n=100 与 n=10000 下均为 ~6.5 ns,
+              # 实证其 O(1) 契约(取分位成本与样本量无关,排序成本已留在调用方)。
+              "sigmoid_scalar":      500,
+              "sigmoid_map":         200_000,
+              "percentile_sorted":   1_000,
           }
 
           # 路径关键词映射:criterion 目录名 → benchmark crate
@@ -182,10 +262,13 @@ jobs:
           #     - "render" 仅 render_bench 使用(render_all_panels/render_each_panel/render_ide_three_panes)
           PATH_KEYWORDS = {
               "exit_code_matrix":  ["exit_code"],
-              "diff_engine_bench": ["diff"],
-              "wal_recovery":      ["wal"],
+              # WS-3 E1: diff/render/wal 均收窄为各自 bench 独有关键词,避免新增 bench
+              # 的 id 串(如 v3_pipeline_diffed / render_full_80x24 / wal_replay_cycle)
+              # 被宽泛前缀窃取进本门而污染阈值断言(见 Path 关键词唯一性原则)。
+              "diff_engine_bench": ["diff_incremental_5pct", "diff_full_redraw"],
+              "wal_recovery":      ["wal_append_single_fsync", "wal_recovery", "wal_read_empty", "wal_truncate_after_recovery"],
               "degradation_chain": ["degradation"],
-              "render_bench":      ["render"],
+              "render_bench":      ["render_all_panels", "render_each_panel", "render_ide_three_panes"],
               # Concord W5:流式链路关键词(与既有 render/diff/wal 无冲突,
               # 提词选取组名全名或独有子串,避免跨 benchmark 歧义)
               "streaming_single_token": ["streaming_single_token"],
@@ -211,6 +294,40 @@ jobs:
               "shadow_stats":      ["shadow_stats"],
               # resolve_conflicts 仅 gate_compute bench 的 resolve_conflicts/ 组使用(无歧义)
               "resolve_conflicts": ["resolve_conflicts"],
+              # ===== WS-3 E1: 17 个补全 bench 关键词 =====
+              # 关键词取自各 bench 的 criterion id 串(bench_function/benchmark_group 实参),
+              # 已核对唯一性与"单词干唯一前缀"原则,且避开 render/diff/wal 宽泛前缀冲突:
+              # writer_ansi 用 incremental_5pct 而非 render 前缀;v3_pipeline 用 v3_pipeline
+              # (diff 门已收窄为 diff_{incremental,full});session_store 用 single_write 而非 wal 前缀。
+              "config_concurrency": ["14_sections"],
+              "writer_ansi":        ["incremental_5pct", "render_full_80x24"],
+              "v3_pipeline":        ["v3_pipeline"],
+              "reduce_bench":       ["reduce"],
+              "session_store":      ["single_write"],
+              "cross_layer":        ["cross_layer"],
+              "hybrid_search":      ["hybrid_search"],
+              "debate":             ["deliberate"],
+              "l2_recall":          ["l2_recall"],
+              "compress":           ["100k_to_32k"],
+              "compute_masks":      ["compute_all_masks"],
+              "delegation":         ["delegation_fanout"],
+              "cache_hit":          ["cache_hit"],
+              "tiering":            ["apply_decision", "handle_quest_created"],
+              "gather":             ["gather", "entangle_alone"],
+              "produce_verify":     ["produce_verify", "produce_only", "verify_only"],
+              "command_validator":  ["mixed"],
+              # 预留 WS-2(nexus-contracts xts_top_k),id 串含 "xts_top_k n=" 前缀
+              "xts_top_k":          ["xts_top_k"],
+              # 关键词取 criterion 目录名(bench_function 第一参数)的子串,三者互不重叠;
+              # 匹配循环命中即 break,故用带空区的完整子串避免 "sigmoid" 互相抢占。
+              "sigmoid_scalar":      ["sigmoid scalar"],
+              "sigmoid_map":         ["sigmoid map"],
+              "percentile_sorted":   ["percentile_sorted"],
+              # C6 新增（与 scripts/perf_thresholds.toml [path_keywords] 同步，
+              # 已交叉核验无子串冲突，满足 I2）
+              "immune_probe":        ["immune_probe"],
+              "rhi_judge":           ["rhi_judge"],
+              "bus_bench":           ["single_publish_latency", "concurrent_subscribe_throughput", "publish_batch_vs_serial"],
           }
 
           criterion_dir = Path("target/criterion")
@@ -280,6 +397,16 @@ jobs:
           print("✓ All benchmarks within thresholds.")
           PYEOF
 
+      # R1-T6 双跑比对门：删 heredoc 的前置条件。
+      # WHY 不直接换掉 heredoc：那等于把“两份实现”的验证责任变成一次不
+      # 可复验的信仰跳跃（F-R4-01 的病根就在此）。让两边在同一轮 CI 里各跑
+      # 一遍并逐键对拍 (passed + worst group), 连续一致一段观察期后才切流到
+      # py 核单一实现。本步红 = heredoc 不得删除。
+      # 表体来源：scripts/perf_thresholds.toml（与 heredoc 同源机械抽取, 2026-08-31）。
+      - name: Double-run compare (heredoc vs py core)
+        shell: bash
+        run: python3 scripts/check_perf_redlines.py compare --legacy-out bench_threshold_legacy.log
+
       - name: Upload benchmark report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -291,6 +418,7 @@ jobs:
           path: |
             target/criterion/
             bench_*.log
+            bench_threshold_legacy.log
           retention-days: 30
 
   # ============================================================
@@ -309,7 +437,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
         with:
           workspaces: '.'
 

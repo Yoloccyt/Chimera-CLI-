@@ -1,0 +1,93 @@
+# #[ignore] 测试归属登记表 —— 「写了不跑」必须是被登记的决策
+#
+# 语义：crates/**/{src,tests,benches}/**/*.rs 里每个带 #[ignore] 的测试函数,
+#       必须落入下表四态之一;未登记 -> [FAIL](check_perf_redlines.py ignored)。
+# 反向防腐：登记条目指向已不存在/已改名的测试 -> [STALE] FAIL(清单自身要防腐)。
+#
+# state 含义：
+#   slo-blocking      进 release 阻塞门(tag 触发);绝对 ms 级阈值,需静默态单跑
+#   slo-daily         进每日 schedule 观测,不阻塞 PR(比值类/宽松阈值/µs 级高危项)
+#   unignore-target   判定应解除 #[ignore];解除动作属 R1-T10,本行是待办债务
+#   manual-only       刻意不接入自动通道(bench 文件内惰性属性 / 需真实墙钟)
+#
+# 格式：crate|相对路径#测试函数名|state|reason|wired:<xxxworkflow>
+#   wired 字段(R4 冗余审计接线登记,2026-09-02):记录该条目被哪个 CI workflow 消费,
+#   取值 slo-release-gate / slo-daily / no(manual-only 刻意不接入自动通道)。
+#   与 workflow 对应关系:slo-blocking -> slo.yml 的 slo-release-gate(A1);
+#   slo-daily -> slo.yml 的 slo-daily(A2,`--run-ignored only` + `not(A1)`);
+#   manual-only -> 无(slo.yml A2 的宽过滤器默认排除 criterion bench 惰性属性)。
+# 生成：由 tmp/gen_ignored_registry.py 按显式规则表复算(规则含逐条源码核实注记),
+#       2026-08-31;新增 #[ignore] 必须手工补一行并写明理由。
+# ratchet max_unignore_pending = 0
+#   上一行是不满足条件的 unignore-target 计数上限(只减不增);R1-T10 完成解除后应归零,
+#   归零时把该值改成 0,即可机械阻止「先登记后遗忘」。
+cmt-tiering|crates/cmt-tiering/tests/cold.rs#test_cold_list_idle_entries_index_benchmark|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+cmt-tiering|crates/cmt-tiering/tests/cold.rs#test_cold_query_latency_under_100ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+cmt-tiering|crates/cmt-tiering/tests/coordinator.rs#test_run_decay_cycle_batch_benchmark|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+cmt-tiering|crates/cmt-tiering/tests/warm.rs#test_warm_query_latency_under_10ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+csn-substitutor|crates/csn-substitutor/tests/integration.rs#test_perf_substitution_latency_p95_under_30ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+csn-substitutor|crates/csn-substitutor/tests/integration.rs#test_perf_trigger_substitution_latency_under_30ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+decb-governor|crates/decb-governor/tests/concurrent.rs#test_perf_compute_budget_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+decb-governor|crates/decb-governor/tests/concurrent.rs#test_perf_record_consumption_throughput|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+decb-governor|crates/decb-governor/tests/concurrent.rs#test_perf_switch_tier_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+efficiency-monitor|crates/efficiency-monitor/benches/monitor_benchmark.rs#test_check_alerts_latency_under_100ms|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+efficiency-monitor|crates/efficiency-monitor/benches/monitor_benchmark.rs#test_collect_latency_under_1ms|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+efficiency-monitor|crates/efficiency-monitor/benches/monitor_benchmark.rs#test_record_event_latency_under_1ms|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+gea-activator|crates/gea-activator/tests/concurrent.rs#test_perf_activate_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/concurrent.rs#test_perf_gate_compute_throughput|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_edsb_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_faae_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_gea_gate_compute_only|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_gea_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_gqep_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_latency_breakdown|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_mtpe_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_pvl_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_scc_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gea-activator|crates/gea-activator/tests/csa.rs#test_csa_total_latency_under_100ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gqep-executor|crates/gqep-executor/tests/concurrent.rs#test_perf_100_ops_within_threshold|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+hcw-window|crates/hcw-window/tests/coarse_recall_p95_test.rs#test_coarse_recall_p95_below_10ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+hcw-window|crates/hcw-window/tests/fine_recall_p95_test.rs#test_fine_recall_p95_below_50ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+hcw-window|crates/hcw-window/tests/fine_recall_p95_test.rs#test_precise_rerank_overhead_acceptable|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+hcw-window|crates/hcw-window/tests/probe_select_p95_test.rs#test_probe_window_p95_below_10ms_and_throughput|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+hcw-window|crates/hcw-window/tests/rerank_fill_p95_test.rs#test_rerank_fill_1m_window_p95_below_100ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+hcw-window|crates/hcw-window/tests/rerank_fill_p95_test.rs#test_rerank_fill_p95_below_100ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+hcw-window|crates/hcw-window/tests/selector.rs#test_performance_under_1ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+hcw-window|crates/hcw-window/tests/selector.rs#test_single_decision_under_1ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+hcw-window|crates/hcw-window/tests/streaming_fill_p95_test.rs#test_streaming_deep_split_p95_below_2000ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+hcw-window|crates/hcw-window/tests/streaming_fill_p95_test.rs#test_streaming_fast_split_p95_below_500ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+hcw-window|crates/hcw-window/tests/streaming_fill_p95_test.rs#test_streaming_split_5000_blocks_p95_below_500ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+hcw-window|crates/hcw-window/tests/window.rs#bench_retain_by_file_ids_hashset|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+kvbsr-router|crates/kvbsr-router/tests/rebalancer.rs#test_rebalance_performance_300_tools|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+kvbsr-router|crates/kvbsr-router/tests/router.rs#test_route_latency_under_2ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+kvbsr-router|crates/kvbsr-router/tests/router.rs#test_route_speedup_vs_full_scan|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+kvbsr-router|crates/kvbsr-router/tests/scale.rs#test_scale_route_latency_under_2ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+kvbsr-router|crates/kvbsr-router/tests/scale.rs#test_scale_speedup_vs_full_scan|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+mca-gateway|crates/mca-gateway/tests/token_efficiency_bench.rs#run_stress_matrix|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+mcp-mesh|crates/mcp-mesh/benches/mesh_benchmark.rs#bench_concurrent_100_transactions|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+mcp-mesh|crates/mcp-mesh/tests/integration.rs#test_1000_concurrent_transactions_no_deadlock|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+mlc-engine|crates/mlc-engine/tests/semantic.rs#test_l2_recall_performance_100_entries|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+mlc-engine|crates/mlc-engine/tests/working_memory.rs#test_l0_evict_lru_single_call_o1|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+mlc-engine|crates/mlc-engine/tests/working_memory.rs#test_l0_lru_eviction_o1_performance|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+mtpe-executor|crates/mtpe-executor/tests/speedup.rs#test_latency_grows_slowly_with_n|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+mtpe-executor|crates/mtpe-executor/tests/speedup.rs#test_speedup_n10_vs_single_step|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+mtpe-executor|crates/mtpe-executor/tests/speedup.rs#test_speedup_n5_vs_single_step|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+osa-coordinator|crates/osa-coordinator/tests/e2e.rs#test_e2e_performance_benchmarks|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+osa-coordinator|crates/osa-coordinator/tests/event.rs#test_event_published_within_performance_budget|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+osa-coordinator|crates/osa-coordinator/tests/masks.rs#test_is_active_hashset_o1_performance|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+osa-coordinator|crates/osa-coordinator/tests/masks.rs#test_is_active_hashset_o1_performance_hit|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+parliament|crates/parliament/tests/concurrent.rs#test_perf_concurrent_throughput|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+parliament|crates/parliament/tests/concurrent.rs#test_perf_deliberate_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+parliament|crates/parliament/tests/csa.rs#test_csa_latency_benign_quest|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+parliament|crates/parliament/tests/csa.rs#test_csa_latency_breakdown|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+parliament|crates/parliament/tests/csa.rs#test_csa_latency_malicious_quest|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+pvl-layer|crates/pvl-layer/tests/concurrent.rs#test_perf_100_ops_within_threshold|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+qeep-protocol|crates/qeep-protocol/tests/qeep.rs#test_timeout_10s|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+repo-wiki|crates/repo-wiki/tests/hnsw_p95_test.rs#test_hnsw_100k_no_oom|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+repo-wiki|crates/repo-wiki/tests/hnsw_p95_test.rs#test_hnsw_100k_p95_below_50ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+repo-wiki|crates/repo-wiki/tests/hnsw_p95_test.rs#test_hnsw_10k_functional_correctness|slo-daily|正确断言但 debug 耗时 >60s;保留 ignore,由每日 slo-daily 通道跑|wired: slo-daily
+repo-wiki|crates/repo-wiki/tests/hnsw_p95_test.rs#test_hnsw_10k_p95_below_50ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
+seccore|crates/seccore/tests/asa_concurrent.rs#test_audit_latency_under_5ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+sesa-router|crates/sesa-router/benches/router_benchmark.rs#test_activate_256_experts_latency_p95_under_5ms|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+sesa-router|crates/sesa-router/benches/router_benchmark.rs#test_enforce_sparsity_latency_under_1ms|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+sesa-router|crates/sesa-router/benches/router_benchmark.rs#test_mask_ops_latency_under_100us|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no

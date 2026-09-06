@@ -323,30 +323,6 @@ impl MemConController {
         current
     }
 
-    /// 发布幽灵记忆检测事件
-    #[allow(dead_code)]
-    fn publish_ghost_detected(&self, ghost_rate: f32, ghost_count: u32, total_recalls: u32) {
-        if let Some(ref bus) = self.event_bus {
-            let current_strategy = self
-                .current_policy
-                .read()
-                .expect("current_policy 读锁")
-                .strategy();
-
-            let event = NexusEvent::GhostMemoryDetected {
-                metadata: EventMetadata::new("mlc-engine:mem_con"),
-                ghost_rate,
-                ghost_count,
-                total_recalls,
-                current_strategy: format!("{:?}", current_strategy),
-            };
-
-            if let Err(e) = bus.publish_blocking(event) {
-                debug!("MemCon: 发布 GhostMemoryDetected 事件失败: {}", e);
-            }
-        }
-    }
-
     /// 发布策略调整事件
     fn publish_strategy_adjusted(
         &self,

@@ -6,6 +6,7 @@ name: Release
 # 触发:推送 v*.*.*-omega 标签(如 v1.0.0-omega)
 # 产物:5 平台 binary + GitHub Release
 # Matrix:Windows x86_64 · Linux x86_64/aarch64 · macOS x86_64/aarch64
+# 附加 Job 1.5: x86-64-v3/native 双构建交叉验证(ADR-102/106 DetReduce,仅 Linux)
 # ============================================================
 
 on:
@@ -17,7 +18,7 @@ on:
   workflow_dispatch:  # 允许手动触发,便于调试
 
 permissions:
-  contents: write  # 创建 GitHub Release 需要
+  contents: read  # 顶层最小权限；GitHub Release 写权下放至 release job（最小化暴露面）
 
 env:
   CARGO_TERM_COLOR: always
@@ -87,7 +88,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo registry & target
-        uses: actions/cache@v4
+        uses: actions/cache@v4 # zizmor: ignore[cache-poisoning]
         with:
           path: |
             ~/.cargo/registry
@@ -96,7 +97,9 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
-          lookup-only: true
+        # C5 修复(2026-09-04): 移除 lookup-only: true —— actions/cache 的该参数仅
+        # 检查缓存存在性而不下载恢复,使本步骤成为 no-op,5 平台 matrix 每次发版
+        # 都全量冷编译(实测每 job 多 5-15min)。默认行为(restore + post save)即符合意图。
 
       - name: Install MinGW (Windows GNU target only)
         if: runner.os == 'Windows'
@@ -168,6 +171,98 @@ jobs:
           retention-days: 30
 
   # ============================================================
+  # Job 1.5: 双构建交叉验证(ADR-102/106 DetReduce,W5 地基波次)
+  #
+  # WHY 独立 job 而非并入 build matrix:双构建由 RUSTFLAGS(-C target-cpu=...)
+  # 驱动,而 RUSTFLAGS 是全局环境变量,无法只作用于单个 matrix 条目,混入会
+  # 污染其他平台构建;独立 job 也让本地 Windows GNU 无法验证的交叉对比由
+  # Linux CI 承担。产物只做交叉比对不上传 Release(checksums.txt 断言 5 平台
+  # 5 条目,上传会破坏该门禁)。
+  #
+  # 交叉验证原理:nexus-core 的 `crossbuild_marker_output` 测试在两种
+  # RUSTFLAGS 下分别输出 Deterministic/Audit 两模式的 reduce 位模式
+  # (REDUCE_CROSSBUILD_ 前缀行)。跨构建逐位一致的契约属于 Audit 模式
+  # (ADR-102:Deterministic 仅承诺 1e-6 容差——其块内 iter().sum() 被 LLVM
+  # 向量化,归约顺序随 target-cpu/宽度变化,v3/native 位模式必然不同;
+  # 1e-6 容差由误差界 ~2e-10·Σ|x| 数学保证,无需 diff)。
+  # 故 diff 只比对 REDUCE_CROSSBUILD_audit 行,det 行保留在日志供人工参考。
+  # ============================================================
+  dual-build:
+    name: Dual-build cross-verify (x86-64-v3 vs native)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # 两轮全量 release 编译(不同 RUSTFLAGS 指纹不共享)+ 交叉测试典型 12-25min
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4 # zizmor: ignore[cache-poisoning]
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: dual-build-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: dual-build-cargo-
+
+      # ---- 构建 A:x86-64-v3 ----
+      - name: Build binary (x86-64-v3)
+        shell: bash
+        env:
+          # WHY 引号:YAML 中 'RUSTFLAGS: -C ...' 的 '-' 前缀会被解析为序列
+          RUSTFLAGS: '-C target-cpu=x86-64-v3'
+        run: cargo build --release -p chimera-cli
+
+      - name: Rename v3 binary
+        shell: bash
+        run: cp target/release/chimera chimera-linux-x86_64-v3
+
+      - name: Capture reduce output (x86-64-v3)
+        shell: bash
+        env:
+          RUSTFLAGS: '-C target-cpu=x86-64-v3'
+        run: |
+          cargo test --release -p nexus-core crossbuild_marker_output -- --nocapture \
+            | grep 'REDUCE_CROSSBUILD_audit' > /tmp/reduce-v3.txt
+          cat /tmp/reduce-v3.txt
+
+      # ---- 构建 B:native ----
+      - name: Build binary (native)
+        shell: bash
+        env:
+          RUSTFLAGS: '-C target-cpu=native'
+        run: cargo build --release -p chimera-cli
+
+      - name: Rename native binary
+        shell: bash
+        run: cp target/release/chimera chimera-linux-x86_64-native
+
+      - name: Capture reduce output (native)
+        shell: bash
+        env:
+          RUSTFLAGS: '-C target-cpu=native'
+        run: |
+          cargo test --release -p nexus-core crossbuild_marker_output -- --nocapture \
+            | grep 'REDUCE_CROSSBUILD_audit' > /tmp/reduce-native.txt
+          cat /tmp/reduce-native.txt
+
+      # ---- 交叉对比:Audit 位模式逐位一致断言(ADR-102) ----
+      - name: Cross-verify Audit bitwise identity (v3 vs native)
+        shell: bash
+        run: |
+          set -euo pipefail
+          diff /tmp/reduce-v3.txt /tmp/reduce-native.txt \
+            || { echo "::error::Audit(repro_reduce) 跨构建位模式不一致(v3 vs native)"; exit 1; }
+          echo "OK: Audit(repro_reduce) 在 x86-64-v3 与 native 构建下逐位一致(ADR-102)"
+          ls -la chimera-linux-x86_64-v3 chimera-linux-x86_64-native
+
+  # ============================================================
   # Job 2: 全 workspace 测试(不阻塞 matrix 构建)
   # ============================================================
   test:
@@ -185,7 +280,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
+      - uses: actions/cache@v4 # zizmor: ignore[cache-poisoning]
         with:
           path: |
             ~/.cargo/registry
@@ -193,7 +288,6 @@ jobs:
             target
           key: linux-test-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: linux-test-cargo-
-          lookup-only: true
       - name: Setup sccache
         uses: mozilla/sccache-action@v0.0.11
       # WHY: 保持全量验证语义 —— 含 doc-tests 与 backpressure 60s spec 验收
@@ -367,6 +461,8 @@ jobs:
   # ============================================================
   release:
     name: Publish GitHub Release
+    permissions:
+      contents: write  # 仅此 job 需创建 GitHub Release(softprops/action-gh-release)
     needs: [build, test, docker]
     runs-on: ubuntu-latest
     timeout-minutes: 30  # WHY: 产物下载+Release 创建典型 1-3min,30min 兜底防 GitHub API 抖动
