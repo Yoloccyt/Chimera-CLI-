@@ -467,9 +467,18 @@ impl DataPipeline {
             // 回填缓存:成功后驻留,超时/失败时保持上次结果(优雅降级)
             let mut cpu_backfill: Vec<MetricSample> = Vec::new();
             let mut mem_backfill: Vec<MetricSample> = Vec::new();
+            // FC-C(2026-09-06 复评):刷新请求挂起标志 —— 消费到
+            // RefreshStateRequested 后跳过一次休眠,立即重建快照并递增
+            // revision(事件丢失/Lagged 后的对齐语义)。
+            let mut refresh_pending = false;
 
             loop {
-                time::sleep(Duration::from_millis(current_tick_ms)).await;
+                // FC-C:刷新挂起时跳过本次休眠(立即 tick);其余按节拍休眠
+                if refresh_pending {
+                    refresh_pending = false;
+                } else {
+                    time::sleep(Duration::from_millis(current_tick_ms)).await;
+                }
 
                 // Concord T1.6:块作用域限定 subscriber guard 生命周期(同快照
                 // guard 理由:历史回填 .await 要求循环内无存活 MutexGuard)。
@@ -503,6 +512,12 @@ impl DataPipeline {
 
                 let events_this_tick = events.len();
                 for (idx, event) in events.into_iter().enumerate() {
+                    // FC-C(2026-09-06 复评):刷新请求 → 置挂起标志,下一循环
+                    // 跳过休眠立即重建快照(revision 随 tick 递增,下游 update
+                    // 感知新 revision 后重新对齐)。
+                    if matches!(event, NexusEvent::RefreshStateRequested { .. }) {
+                        refresh_pending = true;
+                    }
                     let is_deduped_quest = matches!(&event, NexusEvent::QuestListUpdated { .. })
                         && Some(idx) != last_quest_idx;
                     let is_deduped_budget =

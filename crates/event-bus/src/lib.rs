@@ -192,7 +192,7 @@ pub use topic::{EventTopic, FilteredSubscriber};
 pub use types::{
     ActionSource, AgentStatus, BudgetMetricsPayload, ChatStatus, ClvSummary, CompatLevel,
     ConsultUrgency, CriticalEventDropped, EventMetadata, EventSeverity, NexusEvent, QuestStatus,
-    RouterStatsPayload, TaskPriority, VoteValue,
+    RouterStatsPayload, TaskPriority, TuiChatMessagePayload, VoteValue,
 };
 // v3.4.0 §6.1: 经验卡片总线（OpenMLE 双通道 + 四索引）
 pub use experience_card_bus::{ExperienceCardBus, GlobalCardStats};

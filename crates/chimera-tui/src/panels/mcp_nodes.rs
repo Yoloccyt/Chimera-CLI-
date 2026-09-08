@@ -171,7 +171,9 @@ impl McpNodesPanel {
         if !offline_nodes.is_empty() {
             for node in &offline_nodes {
                 lines.push(Line::from(Span::styled(
-                    format!("[ALERT] Node {} offline", node.node_id),
+                    // 占位键:node_id 为数据标识, zh 值保留 "[ALERT]"/"offline"
+                    // 英文括注兼容 mcp_nodes_panel_test 断言
+                    crate::t!("panel.mcp_nodes.alert_offline").replacen("{}", &node.node_id, 1),
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 )));
             }
@@ -181,7 +183,8 @@ impl McpNodesPanel {
         // 2. 节点列表(spec P2.4.3 格式:`[icon] node_id  1250 msg/s  last_seen: 2s ago`)
         if nodes.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No MCP nodes connected",
+                // zh 值保留 "No MCP nodes connected" 英文括注,兼容既有断言
+                crate::t!("panel.mcp_nodes.no_nodes"),
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
@@ -221,36 +224,65 @@ impl McpNodesPanel {
         Text::from(lines)
     }
 
+    /// 返回节点状态对应的 i18n 标签(US-01 防 Debug 泄漏)
+    ///
+    /// WHY 面板层 match 而非 impl Display:保持与 status_color/status_symbol
+    /// 同构的面板层映射范式;zh 值为"在线 (Online)"括注形态。
+    fn status_label(status: NodeStatus) -> &'static str {
+        match status {
+            NodeStatus::Online => crate::t!("panel.mcp_nodes.status_online"),
+            NodeStatus::Degraded => crate::t!("panel.mcp_nodes.status_degraded"),
+            NodeStatus::Offline => crate::t!("panel.mcp_nodes.status_offline"),
+        }
+    }
+
     /// 构建选中节点的详情弹窗内容。
     ///
     /// 显示节点的完整状态信息,包括心跳年龄与超时警告。
+    /// WHY 逐键拼接:字段标签走 i18n 键表(US-02),值格式保持原样。
     fn detail_content(node: &McpNodeStatus) -> String {
         let now = Utc::now();
         let mut lines = vec![
-            format!("Node ID: {}", node.node_id),
-            format!("Status: {:?}", node.status),
-            format!("Throughput: {} msg/s", node.throughput),
+            crate::t!("panel.mcp_nodes.detail_node_id").replacen("{}", &node.node_id, 1),
+            crate::t!("panel.mcp_nodes.detail_status").replacen(
+                "{}",
+                Self::status_label(node.status),
+                1,
+            ),
+            crate::t!("panel.mcp_nodes.detail_throughput").replacen(
+                "{}",
+                &node.throughput.to_string(),
+                1,
+            ),
         ];
 
         match node.last_seen {
             Some(last_seen) => {
                 let age = (now - last_seen).num_seconds().max(0);
-                lines.push(format!(
-                    "Last Seen: {}",
-                    last_seen.format("%Y-%m-%d %H:%M:%S UTC")
+                lines.push(crate::t!("panel.mcp_nodes.detail_last_seen").replacen(
+                    "{}",
+                    &last_seen.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                    1,
                 ));
-                lines.push(format!("Heartbeat Age: {}s", age));
+                lines.push(crate::t!("panel.mcp_nodes.detail_heartbeat_age").replacen(
+                    "{}",
+                    &age.to_string(),
+                    1,
+                ));
                 // WHY 超时警告:操作员需知道节点是否已超时,以便排查网络/进程问题
                 if age > HEARTBEAT_TIMEOUT_SECS {
-                    lines.push(format!(
-                        "Warning: Heartbeat timed out (>{}s threshold)",
-                        HEARTBEAT_TIMEOUT_SECS
-                    ));
+                    lines.push(
+                        crate::t!("panel.mcp_nodes.detail_heartbeat_timeout").replacen(
+                            "{}",
+                            &HEARTBEAT_TIMEOUT_SECS.to_string(),
+                            1,
+                        ),
+                    );
                 }
             }
             None => {
-                lines.push("Last Seen: (never)".into());
-                lines.push("Warning: No heartbeat received".into());
+                lines.push(crate::t!("panel.mcp_nodes.detail_last_seen_never").to_string());
+                lines.push(crate::t!("panel.mcp_nodes.detail_no_heartbeat").to_string());
             }
         }
 
@@ -271,7 +303,9 @@ impl Panel for McpNodesPanel {
         let count = state.mcp_nodes.len();
         self.selected = list_state::clamp_selected(self.selected, count);
 
-        let block = Block::default().borders(Borders::ALL).title(" MCP Nodes ");
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(crate::t!("panel.border.mcp"));
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -300,7 +334,11 @@ impl Panel for McpNodesPanel {
                 if let Some(node) = state.mcp_nodes.get(self.selected) {
                     let content = McpNodesPanel::detail_content(node);
                     Some(TuiCommand::OpenPopup(PopupKind::Detail {
-                        title: format!("Node {} Detail", node.node_id),
+                        title: crate::t!("panel.mcp_nodes.detail_title").replacen(
+                            "{}",
+                            &node.node_id,
+                            1,
+                        ),
                         content,
                         scroll: 0,
                     }))
@@ -308,14 +346,8 @@ impl Panel for McpNodesPanel {
                     None
                 }
             }
-            KeyCode::Char('g') => {
-                self.scroll_to_top(state);
-                None
-            }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom(state);
-                None
-            }
+            // WHY 无 g/G arm:InputRouter 全局截获(g→GPrefix、G→ScrollBottom),
+            // 滚动经 RouteTarget::ScrollTop/ScrollBottom 等价覆盖,面板 arm 为死键。
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }

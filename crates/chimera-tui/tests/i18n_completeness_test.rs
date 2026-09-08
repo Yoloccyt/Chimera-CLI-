@@ -631,6 +631,11 @@ fn seed_keys_are_used_in_code() {
         "action.quest.jump",
         "hint.palette",
         "hint.help",
+        // B1(2026-09-06 复评):UnwiredHint(&'static str) 经运行时变量传入
+        // t!(),源码中无字面量调用点(键名由 DispatchPlan::UnwiredHint 携带)
+        "slash.unwired.fork",
+        "slash.unwired.undo",
+        "slash.unwired.redo",
     ];
 
     let mut unused: Vec<&str> = Vec::new();

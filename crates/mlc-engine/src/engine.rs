@@ -108,6 +108,27 @@ pub struct MlcEngine {
     card_system: Arc<Mutex<ExperienceCardSystem>>,
 }
 
+/// 经验卡片系统统计视图 — 供 L10 组合根接线 ExperienceCardViz 面板
+///
+/// WHY 独立视图类型(FC-05,2026-09-06 评估):卡片统计数据由 L2 `ExperienceCardSystem`
+/// 持有,L10 面板经 trait 注入消费;本类型把全局板 + 方法分布映射为自足快照,
+/// 避免 L10 直接依赖 L2 内部结构(依赖倒置先例,不引入向上依赖)。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CardSystemStatsView {
+    /// 总卡片数
+    pub total_cards: usize,
+    /// 已评估卡片数(ExecutionStatus::Success)
+    pub evaluated: usize,
+    /// 唯一错误签名数(错误聚类数)
+    pub unique_errors: usize,
+    /// 方法家族分布(method_family → 计数)
+    pub method_distribution: Vec<(String, u32)>,
+    /// 历史最佳分
+    pub best_score: f32,
+    /// 平均分
+    pub average_score: f32,
+}
+
 impl MlcEngine {
     /// 创建 MLC 引擎,使用指定配置与 EventBus
     ///
@@ -191,6 +212,27 @@ impl MlcEngine {
     pub fn card_system_snapshot(&self) -> (usize, u64) {
         let system = self.card_system.lock().unwrap_or_else(|e| e.into_inner());
         (system.card_count(), system.global_board().total_nodes)
+    }
+
+    /// 采集经验卡片系统全量统计视图(FC-05,2026-09-06 评估)
+    ///
+    /// L10 ExperienceCardViz 面板经 chimera-cli 组合根适配器调用本方法,
+    /// 映射为 `ExperienceCardVizStats`;锁内同步短临界区(纯映射,不跨 await)。
+    pub fn card_system_view(&self) -> CardSystemStatsView {
+        let system = self.card_system.lock().unwrap_or_else(|e| e.into_inner());
+        let board = system.global_board();
+        CardSystemStatsView {
+            total_cards: system.card_count(),
+            evaluated: board.total_evaluated as usize,
+            unique_errors: board.error_clusters.len(),
+            method_distribution: board
+                .method_distribution
+                .iter()
+                .map(|(family, count)| (family.to_string(), *count))
+                .collect(),
+            best_score: board.best_score,
+            average_score: board.average_score,
+        }
     }
 
     /// §16.3 合成接线(Phase 10 Wave 6):按任务按需合成记忆上下文

@@ -354,7 +354,9 @@ impl Panel for MetricsDashboardPanel {
                     self.selected -= 1;
                 }
             }
-            KeyCode::Right | KeyCode::Char('l')
+            // WHY 不含 'l':`l` 已由全局键位表绑定 view.switch_layout,InputRouter
+            // 先行截获,面板 arm 永不可达(死键);网格右移仅保留方向键 Right。
+            KeyCode::Right
                 if self.selected % GRID_COLS < GRID_COLS - 1 && self.selected + 1 < GRID_SIZE =>
             {
                 self.selected += 1;

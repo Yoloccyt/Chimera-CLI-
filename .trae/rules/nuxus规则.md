@@ -4,7 +4,7 @@
 >
 > **历史溯源**:早期为重定向占位(2026-08-11 之前的 nuxus规则.md 由 AGENTS.md 完全托管);自 2026-08-11 v2.26.0-omega 同步后,本文件升级为**速查 + 基线 + 硬约束**三重定位,与 `AGENTS.md`(全量规则)+ `project_memory.md`(持久记忆)形成"快速 / 详细 / 历史"三层规则体系。
 >
-> **最后更新**:2026-09-06(v2.28.0-omega 基线同步:Phase 1-5 Ch12 W1-W26 全部收尾 + 5 新 crate(38→43)+ ADR-095~182 治理 + 可达性棘轮(28 生产可达/14 冻结孤岛 + 1 GATED,mca-gateway 经 ADR-177 重分类)+ event_types.rs 镜像退役 + 三轮冗余收敛;发布提交 af62e44 已落(2026-09-02),tag 待推;最新已发 tag = v2.27.0-omega(v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag);**RL 开发闸门决策持续有效**:Rust-First,Python 侧仅规划)
+> **最后更新**:2026-09-08(v2.28.2-omega 正式发布:收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;基线口径 43 crates(38→43)+ ADR-095~182 治理 + 可达性棘轮(28 生产可达/14 冻结孤岛 + 1 GATED,mca-gateway 经 ADR-177 重分类)+ event_types.rs 镜像退役 + 三轮冗余收敛;上一已发 tag = v2.28.0-omega → 94499b4(2026-09-06);**RL 开发闸门决策持续有效**:Rust-First,Python 侧仅规划)
 > **生成方式**:trae-remote-official:staff-engineer-mode + superpowers-main + praxis + brooks-lint + product-lifecycle-workbench 多 agent 工具分布式深度分析
 
 ---
@@ -36,7 +36,7 @@
 | 根目录 | `D:\Chimera CLI` |
 | 技术栈 | Rust 2021 edition · Tokio async · Workspace × **43 crates**(38 基线 + v2.28 新增 L10 `nexus-app-server` + L3 `session-store` + L9 `mas-sched`/`nexus-hook` + L7 `nexus-subagent`) |
 | 核心哲学 | **OMEGA 十一定律**: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize |
-| 当前版本 | `v2.28.0-omega`(workspace.package.version,**发布提交 af62e44 已落(2026-09-02),tag 待推**;最新已发 tag v2.27.0-omega(v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag);[2.28.1] 在途补丁登记未升 version) |
+| 当前版本 | `v2.28.2-omega`(workspace.package.version,**2026-09-08 正式发布**;上一已发 tag v2.28.0-omega → 94499b4(2026-09-06);v2.28.2 收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0) |
 | 测试规模 | **11587 passed / 0 failed**(2026-09-02 全量重测,485 test target;静态 `#[test]` 计数 11433,差值为 doctest+宏展开) |
 | crates | **43/43**(零 Stub / 零 `todo!()` 真代码 / 零 `unimplemented!()`;ADR-160 裁定 28 生产可达 + 14 冻结孤岛 + 1 GATED(mca-gateway,ADR-177),**"零 Stub" ≠ "已装配"**) |
 | NexusEvent 变体 | **144 个**(types.rs 单表;`event_types.rs` 分层子枚举镜像已按 ADR-160 决策 5 退役删除,分类真值源收敛一处) |
@@ -51,7 +51,7 @@
 | **Ω-Sparse** | Ω₁ | 策略稀疏性:全维稀疏掩码 + 按需激活 | `osa-coordinator`(五维度掩码) + `sesa-router`(稀疏激活) | ✅ |
 | **Ω-Compress** | Ω₂ | 经验压缩:四级窗口 + Mem-π 生成式记忆 | `hcw-window`(4K/32K/128K/1M) + `mlc-engine`(L0-L3 四级记忆) | ✅ |
 | **Ω-Evolve** | Ω₃ | 在线策略梯度:AEGIS 四阶段引擎 + 变体隔离 | `gsoe-evolution/aegis` + `chimera-mas`(VariantPool 变体隔离) | ✅ |
-| **Ω-Event** | Ω₄ | 经验回放基础设施:Event Bus = 异步 PER 双通道 | `event-bus`(144 事件,broadcast + Critical mpsc) | ✅ |
+| **Ω-Event** | Ω₄ | 经验回放基础设施:Event Bus = 异步 PER 双通道 | `event-bus`(145 事件,broadcast + Critical mpsc) | ✅ |
 | **Ω-Credit** | Ω₅ | 信用分配:SHARP Shapley 值精确归因 | `parliament/src/sharp.rs` + `mappo.rs`(三元分解奖励) | ✅ |
 | **Ω-Reuse** | Ω₆ | 复用率优先:奖励函数优化技能复用率 | `repo-wiki/skill_graph.rs`(reuse_count) + `csn-substitutor` | ✅ |
 | **Ω-Locate** | Ω₇ | 行为定位:L1→L2→L3 自动导航代码修改点 | `parliament/src/critical_path.rs`(关键路径动态识别) | ✅ |
@@ -64,9 +64,9 @@
 
 ### 1.2 三方一致性(权威源:Cargo.toml)
 
-- `Cargo.toml` workspace.package.version = `2.28.0-omega`(在途) ⇔
-- `CHANGELOG.md` 最新条目 = `[2.28.1-omega] 2026-08-28 在途补丁登记(未升 version)` ⇔
-- `CODE_WIKI.md` / `AGENTS.md` / `.claude/CLAUDE.md` / 本文件 = **43 crates(28 生产可达/14 冻结孤岛 + 1 GATED(mca-gateway,ADR-177))· 144 NexusEvent(types.rs 单表)· 11587 tests(2026-09-02 重测)· ADR 主编号至 182**
+- `Cargo.toml` workspace.package.version = `2.28.2-omega`(正式发布) ⇔
+- `CHANGELOG.md` 最新条目 = `[2.28.2-omega] 2026-09-08 正式发布` ⇔
+- `CODE_WIKI.md` / `AGENTS.md` / `.claude/CLAUDE.md` / 本文件 = **43 crates(28 生产可达/14 冻结孤岛 + 1 GATED(mca-gateway,ADR-177))· 145 NexusEvent(types.rs 单表,FC-2 新增 TuiChatHistoryReplaced)· 11587 tests(2026-09-02 重测)· ADR 主编号至 182**
 
 ### 1.3 关键里程碑(v2.20+ 演进链)
 
@@ -205,7 +205,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 | 详细规则 | `AGENTS.md`(项目根) | 全量规则(10 章 + 附录) |
 | 项目特定命令 | `.claude/CLAUDE.md` | 环境/CI/Docker/发布 checklist |
 | 持久记忆 | `c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI--p2-35a24f2af7eb9ad9ddea\project_memory.md` | Hard Constraints + Lessons Learned |
-| 架构权威源 | `docs/architecture/CODE_WIKI.md` | 43 crate 完整索引(§3.11 冻结孤岛清单)+ 144 NexusEvent + ADR-001~182 + 8 专家深度分析 |
+| 架构权威源 | `docs/architecture/CODE_WIKI.md` | 43 crate 完整索引(§3.11 冻结孤岛清单)+ 145 NexusEvent + ADR-001~182 + 8 专家深度分析 |
 | 版本演进权威源 | `CHANGELOG.md` | v1.0.0→[2.28.2-omega] 在途完整历史 |
 | 当前基线行数报告 | `docs/reports/project_line_count_report_v2.28.0-omega.md` | 623,344 LOC / 1,870 文件(2026-08-15 实测;competition 3 份已归档至 tmp) |
 | 文档一致性巡检 | `scripts/check_doc_consistency.ps1` | 6 类 14 项 EXIT=0 |

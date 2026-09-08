@@ -93,6 +93,19 @@ impl PvlScorePanel {
     }
 }
 
+/// 构造维度评分条形字符串(填充 '█' + 空白 '░')
+///
+/// WHY 模块级自由函数而非关联函数:渲染路径(:166)与内联测试(`mod tests`
+/// 的 `use super::*`)共用同一实现,避免关联函数路径下的双份维护。
+/// WHY 上界钳制:评分快照来自外部注册路径,越界值(>1.0)未经钳制会让填充
+/// 字符撑出标签区(`filled = (value * width) as usize` 在 value=1.5 时溢出
+/// 50%);NaN 经 `as usize` 折算为 0,自然落空条。
+fn score_bar(value: f32, gauge_width: usize) -> String {
+    let filled = ((value * gauge_width as f32) as usize).min(gauge_width);
+    let empty = gauge_width.saturating_sub(filled);
+    format!("{}{}", "█".repeat(filled), "░".repeat(empty))
+}
+
 impl Panel for PvlScorePanel {
     fn id(&self) -> PanelId {
         PanelId::PvlScore
@@ -115,7 +128,7 @@ impl Panel for PvlScorePanel {
 
         // 最小终端高度检查:标题(1) + 9 维度(各 2 行) + 总分(2) + 边框(2) = 23
         if area.height < 15 {
-            let text = Text::from("Terminal too small for PVL Score panel (min 15 rows)");
+            let text = Text::from(crate::t!("panel.pvl.terminal_too_small"));
             let p = Paragraph::new(text).block(inner);
             Widget::render(p, area, buf);
             return;
@@ -152,9 +165,7 @@ impl Panel for PvlScorePanel {
             } else {
                 10
             };
-            let filled = (value * gauge_width as f32) as usize;
-            let empty = gauge_width.saturating_sub(filled);
-            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+            let bar = score_bar(value, gauge_width);
 
             let mut style = Style::default().fg(color);
             if is_selected {
@@ -176,7 +187,7 @@ impl Panel for PvlScorePanel {
         let total_color = Self::score_color(score.total);
         lines.push(Line::from(vec![
             Span::styled(
-                "  TOTAL SCORE: ",
+                crate::t!("panel.pvl.total_score"),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(
@@ -214,5 +225,30 @@ impl Panel for PvlScorePanel {
             ("↑/↓", crate::t!("shortcut.select_dimension")),
             ("j/k", crate::t!("shortcut.navigate")),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn score_bar_clamps_overflow_to_width() {
+        // value=1.5(150%):填充应钳满 gauge_width,不溢出标签区
+        assert_eq!(score_bar(1.5_f32, 10), "█".repeat(10));
+        assert_eq!(score_bar(f32::INFINITY, 7), "█".repeat(7));
+    }
+
+    #[test]
+    fn score_bar_nan_renders_empty() {
+        // NaN 经 as usize 折算为 0:空条而非 panic/乱码
+        assert_eq!(score_bar(f32::NAN, 10), "░".repeat(10));
+    }
+
+    #[test]
+    fn score_bar_partial_fill() {
+        // 50%:半填充半空白
+        let expected = format!("{}{}", "█".repeat(5), "░".repeat(5));
+        assert_eq!(score_bar(0.5_f32, 10), expected);
     }
 }

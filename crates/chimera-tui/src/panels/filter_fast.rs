@@ -40,7 +40,29 @@ pub fn event_keyword_hit_fast(event: &NexusEvent, keyword: &str) -> Option<bool>
         NexusEvent::VoteCast {
             proposal_id, voter, ..
         } => Some(hit(event.type_name()) || hit(source) || hit(proposal_id) || hit(voter)),
-        // 其余变体:无快速路径,回退 JSON 序列化兜底
+        // PF-04(2026-09-06 评估):检查点保存/加载 —— 业务字段全为 String(quest_id
+        // /checkpoint_id/memory_snapshot_hash),快路径 `Some(false)` 可证完备:
+        // 拼接文本覆盖 type_name + source + 全部业务字段,与慢路径无分歧。
+        NexusEvent::CheckpointSaved {
+            quest_id,
+            checkpoint_id,
+            memory_snapshot_hash,
+            ..
+        } => Some(
+            hit(event.type_name())
+                || hit(source)
+                || hit(quest_id)
+                || hit(checkpoint_id)
+                || hit(memory_snapshot_hash),
+        ),
+        NexusEvent::CheckpointLoaded {
+            quest_id,
+            checkpoint_id,
+            ..
+        } => Some(hit(event.type_name()) || hit(source) || hit(quest_id) || hit(checkpoint_id)),
+        // 其余变体:无快速路径(HarnessReportGenerated 等含 f32/u32 数值载荷——
+        // 数值在 JSON 序列化中可被子串匹配,快路径若返回 `Some(false)` 会与
+        // 慢路径分歧,故保持 `None` 回退 JSON 兜底)。
         _ => None,
     }
 }
@@ -121,5 +143,85 @@ mod tests {
             .to_lowercase();
             assert!(haystack.contains("alpha"));
         }
+    }
+
+    // ----------------------------------------------------------
+    // PF-04: CheckpointSaved / CheckpointLoaded 快路径
+    // ----------------------------------------------------------
+
+    fn checkpoint_saved(quest: &str, checkpoint: &str, hash: &str) -> NexusEvent {
+        NexusEvent::CheckpointSaved {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest.into(),
+            checkpoint_id: checkpoint.into(),
+            memory_snapshot_hash: hash.into(),
+        }
+    }
+
+    fn checkpoint_loaded(quest: &str, checkpoint: &str) -> NexusEvent {
+        NexusEvent::CheckpointLoaded {
+            metadata: EventMetadata::new("quest-engine"),
+            quest_id: quest.into(),
+            checkpoint_id: checkpoint.into(),
+        }
+    }
+
+    #[test]
+    fn checkpoint_saved_matches_all_business_fields() {
+        let ev = checkpoint_saved("q-1", "cp-9", "sha256-abc");
+        for kw in [
+            "CheckpointSaved",
+            "quest-engine",
+            "q-1",
+            "cp-9",
+            "sha256-ABC",
+        ] {
+            assert_eq!(
+                event_keyword_hit_fast(&ev, kw),
+                Some(true),
+                "关键字 {kw:?} 应命中(大小写不敏感)"
+            );
+        }
+    }
+
+    #[test]
+    fn checkpoint_saved_miss_is_fast_false() {
+        let ev = checkpoint_saved("q-1", "cp-9", "sha256-abc");
+        assert_eq!(
+            event_keyword_hit_fast(&ev, "nonexistent-term"),
+            Some(false),
+            "业务字段全覆盖,未命中应直接返回 false"
+        );
+    }
+
+    #[test]
+    fn fast_false_implies_slow_miss_for_checkpoint() {
+        // 关键不变量(PF-04):快路径 `Some(false)` 时,慢路径(JSON 全量)也必须
+        // 不匹配 —— 确保新扩充变体与既有 4 变体一致,无"快拒慢中"分歧。
+        let ev = checkpoint_saved("q-1", "cp-9", "sha256-abc");
+        let kw = "zzz-inexistent";
+        if let Some(false) = event_keyword_hit_fast(&ev, kw) {
+            let meta = ev.metadata();
+            let haystack = format!(
+                "{} {} {}",
+                ev.type_name(),
+                meta.source,
+                serde_json::to_string(&ev).unwrap_or_default()
+            )
+            .to_lowercase();
+            assert!(
+                !haystack.contains(&kw.to_lowercase()),
+                "快路径 false 时慢路径也不应命中"
+            );
+        }
+    }
+
+    #[test]
+    fn checkpoint_loaded_matches_quest_and_checkpoint() {
+        let ev = checkpoint_loaded("q-2", "cp-0");
+        for kw in ["CheckpointLoaded", "q-2", "cp-0"] {
+            assert_eq!(event_keyword_hit_fast(&ev, kw), Some(true));
+        }
+        assert_eq!(event_keyword_hit_fast(&ev, "nope"), Some(false));
     }
 }

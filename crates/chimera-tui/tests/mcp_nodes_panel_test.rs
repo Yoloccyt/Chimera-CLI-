@@ -548,6 +548,10 @@ fn test_mcp_nodes_panel_content_empty_state() {
 
 #[test]
 fn test_mcp_nodes_panel_content_offline_alert() {
+    // 批次-A i18n 迁移后 zh 告警为"[ALERT] 节点 {} 离线 (offline)"括注形态,
+    // 本测试断言完整英文横幅 → 钉 En locale(与 zh 断言测试同范式)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut state = TuiState::new();
     state.mcp_nodes = vec![McpNodeStatus {
         node_id: "dead-node".into(),
@@ -678,6 +682,25 @@ fn test_mcp_nodes_panel_default_state_renders() {
     assert!(
         content.contains("No MCP nodes connected"),
         "default state should show empty placeholder"
+    );
+}
+
+// ============================================================
+// J. US-02 zh locale 渲染断言 — 空状态提示为中文
+// ============================================================
+
+#[test]
+fn test_mcp_nodes_panel_zh_locale_renders_chinese_copy() {
+    // US-02 i18n 收口:空状态 "No MCP nodes connected" 迁移键表后,
+    // Zh locale 应渲染中文提示(TDD RED→GREEN:迁移前此处输出英文必红)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    let state = TuiState::new();
+    let content = McpNodesPanel::content(&state, 0).to_string();
+    assert!(
+        content.contains("暂无 MCP 节点接入"),
+        "Zh locale 下空状态应显示中文提示,实际: {}",
+        &content[..content.len().min(200)]
     );
 }
 

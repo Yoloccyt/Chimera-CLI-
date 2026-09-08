@@ -11,6 +11,7 @@
 //! - `current_panel` 字段已移除(M1 清理项 #2):当前面板以 `FocusManager`
 //!   为唯一来源,`TuiApp` 通过 `current_panel()` 方法对外暴露,避免双来源不一致。
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 
 use crate::data::{BudgetMetrics, HealthMetrics, MemoryMetrics, SecurityState};
 use crate::engine::layout::PaneMode;
@@ -246,9 +247,10 @@ impl PanelId {
         PanelId::PvlScore,
         PanelId::TaskManager,
         PanelId::OverWindow,
-        // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板注册
+        // Phase 10 §15.2b:经验卡片可视化面板注册;InjectionStrategy 已下线
+        // (FC-05,2026-09-06 评估):无运行期数据源(mlc-engine 注入策略生产不
+        // 构造),未列入本表 = 不参与焦点环,trait 注入桩保留代码可复测。
         PanelId::ExperienceCardViz,
-        PanelId::InjectionStrategy,
     ];
 
     /// 切换到下一个面板(循环顺序,派生自 `REGISTERED_FOCUS_ORDER`)
@@ -310,21 +312,17 @@ pub struct ChatMessage {
 /// 输入模式 — 控制底部输入栏的行为
 ///
 /// - `Normal`:普通模式,底部显示状态栏
-/// - `Command`:命令模式(由 `:` 触发),解析并执行面板切换/过滤/投票等带参命令
-/// - `Search`:搜索模式(由 `/` 触发),关键字过滤
 /// - `Insert`:插入模式(由 `i` 触发,M3a),原始文本输入(为 M3b Chat 提交铺路)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InputMode {
     /// 普通模式
     Normal,
-    /// 命令模式
-    Command,
-    /// 搜索模式
-    Search,
     /// 插入模式(原始文本输入,M3a 引入;Submit 于 M3b 接入 Chat)
     Insert,
     /// 斜杠命令模式(Concord W2):`/` 第一公民入口,补全列表 + 三分层执行;
     /// `:` 废弃窗口期同进本模式(一次性弃用提示)。
+    /// IT-01(批次-B):遗留 Command/Search 变体已删除——生产零 setter 死路径,
+    /// `:` 遗留命令由 Slash 的 parse_legacy 回退承接。
     Slash,
 }
 
@@ -914,7 +912,11 @@ pub struct TuiState {
     /// 事件速率历史(数据驱动 Health Sparkline)
     pub event_rate_history: Vec<u64>,
     /// 最近事件流(数据驱动 Parliament / Log 面板)
-    pub latest_events: VecDeque<NexusEvent>,
+    ///
+    /// WHY Arc:P-A 性能改造(评估报告 v2)——`TuiApp::update` 从 DataSnapshot
+    /// 同步时直接 `Arc::clone` 共享,消灭每次 revision 变化对 ≤256 事件的深拷贝;
+    /// 事件流在两次 tick 之间不可变,面板只读消费,经 Deref 保持 VecDeque 语义。
+    pub latest_events: Arc<VecDeque<NexusEvent>>,
     /// 弹窗栈(详情/通知/确认)
     pub popup_stack: PopupStack,
     /// 临时状态栏消息(内容 + 严重级别)
@@ -938,6 +940,14 @@ pub struct TuiState {
     pub timeline_snapshots: Vec<TimelineSnapshot>,
     /// FPS 显示(P4.4 性能监控)
     pub fps: u16,
+    /// Help 面板上下文快捷键(U-2,2026-09-06 复评):当前焦点面板 ID 与其
+    /// `Panel::shortcuts()` 快照,由 `TuiApp::render` 在焦点变化时更新。
+    /// WHY 放在状态而非面板互查:面板间无引用通道(HelpPanel::render 只见
+    /// TuiState),由渲染层单点注入避免 Trait 下转与双源漂移。
+    /// WHY serde(skip):渲染期瞬态 UI 态(每帧按焦点重建),非持久化契约;
+    /// 且 `&'static str` 与 owned Deserialize 语义冲突。
+    #[serde(skip)]
+    pub help_context: Option<(PanelId, Vec<(&'static str, &'static str)>)>,
     /// 增量渲染脏面板集合(P4.1,记录本帧需重绘的面板)
     pub dirty_panels: HashSet<PanelId>,
     /// 流式追加自动滚动标记(P3.4,EventStream/Log 面板用)
@@ -1072,6 +1082,7 @@ impl TuiState {
             history_draft: String::new(),
             input_buffer: String::new(),
             frame_count: 0,
+            help_context: None,
             quest_list: Vec::new(),
             paused_quest_count: 0,
             budget: BudgetMetrics::default(),
@@ -1086,7 +1097,7 @@ impl TuiState {
             budget_history: Vec::new(),
             memory_history: Vec::new(),
             event_rate_history: Vec::new(),
-            latest_events: VecDeque::new(),
+            latest_events: Arc::new(VecDeque::new()),
             popup_stack: PopupStack::new(),
             status_message: None,
             filter_keyword: None,
@@ -1425,11 +1436,17 @@ mod tests {
         }
         // 关键边抽查(循环闭合 + 历史接入点)
         assert_eq!(PanelId::Quest.next(), PanelId::Parliament);
-        // Phase 10:环尾改为 InjectionStrategy(27 面板循环)
+        // FC-05:环尾(ExperienceCardViz)回到环首 Quest,环必须闭合
+        assert_eq!(
+            PanelId::ExperienceCardViz.next(),
+            PanelId::Quest,
+            "环必须闭合"
+        );
+        // InjectionStrategy 已下线(ADR,2026-09-06):未注册变体回退环首
         assert_eq!(
             PanelId::InjectionStrategy.next(),
             PanelId::Quest,
-            "环必须闭合"
+            "未注册变体应回退环首(避免孤立分支)"
         );
         assert_eq!(
             PanelId::Chtc.next(),
@@ -1454,8 +1471,8 @@ mod tests {
             );
         }
         // 关键边抽查(循环闭合)
-        // Phase 10:环尾改为 InjectionStrategy(27 面板循环)
-        assert_eq!(PanelId::Quest.prev(), PanelId::InjectionStrategy);
+        // FC-05:环尾由 ExperienceCardViz 闭合(Quest 的 prev = 环尾)
+        assert_eq!(PanelId::Quest.prev(), PanelId::ExperienceCardViz);
         assert_eq!(PanelId::Timeline.prev(), PanelId::Chtc);
     }
 
@@ -1491,9 +1508,9 @@ mod tests {
             PanelId::PvlScore,
             PanelId::TaskManager,
             PanelId::OverWindow,
-            // Phase 10:ExperienceCardViz/InjectionStrategy 加入往返验证(27 面板循环)
+            // Phase 10:ExperienceCardViz 加入往返验证;InjectionStrategy 已下线
+            // (FC-05,2026-09-06 评估,未注册变体不参与循环)
             PanelId::ExperienceCardViz,
-            PanelId::InjectionStrategy,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);
@@ -1574,8 +1591,11 @@ mod tests {
 
     #[test]
     fn test_input_mode_equality() {
+        // IT-01(批次-B):遗留 Command/Search 变体删除后,三态等值锚定
         assert_eq!(InputMode::Normal, InputMode::Normal);
-        assert_ne!(InputMode::Normal, InputMode::Command);
+        assert_ne!(InputMode::Normal, InputMode::Insert);
+        assert_ne!(InputMode::Normal, InputMode::Slash);
+        assert_ne!(InputMode::Insert, InputMode::Slash);
     }
 
     // ============================================================
@@ -1798,7 +1818,8 @@ mod state_persistence_tests {
         state.running = false;
         // 运行时字段故意塞入非默认值:验证恢复后必须被重置(视图/布局契约)
         state.budget_history = vec![1, 2, 3];
-        state.latest_events.push_back(NexusEvent::CacheHit {
+        // WHY Arc::make_mut:latest_events 已 Arc 化(P-A),测试桩注入走 COW
+        std::sync::Arc::make_mut(&mut state.latest_events).push_back(NexusEvent::CacheHit {
             metadata: event_bus::EventMetadata::new("chimera-tui"),
             cache_key: "roundtrip-key".into(),
         });

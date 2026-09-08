@@ -115,11 +115,9 @@ fn trigger_events_render_latest_first_with_fields() {
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
-    app.state_mut()
-        .latest_events
+    std::sync::Arc::make_mut(&mut app.state_mut().latest_events)
         .push_back(trigger(100_000, 131_072, 0, 0));
-    app.state_mut()
-        .latest_events
+    std::sync::Arc::make_mut(&mut app.state_mut().latest_events)
         .push_back(trigger(600_000, 131_072, 42, 128));
     app.switch_panel_to(PanelId::OverWindow);
     let out = render_to_string(&mut app);
@@ -140,9 +138,12 @@ fn truncates_beyond_max_triggers_with_more_indicator() {
     let mut app = make_app();
     // 灌入 10 条触发事件,超过 MAX_TRIGGERS_SHOWN=8
     for i in 0..10u64 {
-        app.state_mut()
-            .latest_events
-            .push_back(trigger(1000 + i, 131_072, 1, 1));
+        std::sync::Arc::make_mut(&mut app.state_mut().latest_events).push_back(trigger(
+            1000 + i,
+            131_072,
+            1,
+            1,
+        ));
     }
     app.switch_panel_to(PanelId::OverWindow);
     // WHY 高视口:24 行下 more 截断行可能被面板区域裁剪,40 行保证可见

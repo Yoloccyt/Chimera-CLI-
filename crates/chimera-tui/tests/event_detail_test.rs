@@ -57,10 +57,10 @@ fn colored_cells(stack: &PopupStack, width: u16, height: u16) -> Vec<(u16, u16, 
 fn event_stream_enter_opens_event_detail_popup() {
     let mut panel = EventStreamPanel::new();
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from([NexusEvent::CacheHit {
+    state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
         metadata: EventMetadata::new("scc-cache"),
         cache_key: "k1".into(),
-    }]);
+    }]));
 
     let cmd = panel.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -101,12 +101,12 @@ fn event_stream_enter_opens_event_detail_popup() {
 fn parliament_enter_opens_event_detail_popup() {
     let mut panel = ParliamentPanel::new();
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from([NexusEvent::VoteCast {
+    state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::VoteCast {
         metadata: EventMetadata::new("parliament"),
         proposal_id: "p1".into(),
         voter: "alice".into(),
         vote: true,
-    }]);
+    }]));
 
     let cmd = panel.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -135,12 +135,12 @@ fn parliament_enter_opens_event_detail_popup() {
 fn log_enter_opens_event_detail_popup() {
     let mut panel = LogPanel::new();
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from([NexusEvent::BudgetExceeded {
+    state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::BudgetExceeded {
         metadata: EventMetadata::new("decb-governor"),
         budget_type: "token".into(),
         current: 9500,
         limit: 10000,
-    }]);
+    }]));
 
     let cmd = panel.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),

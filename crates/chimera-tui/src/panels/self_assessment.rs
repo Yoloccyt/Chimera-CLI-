@@ -68,7 +68,7 @@ impl SelfAssessmentPanel {
     /// 2. 最近 `MAX_FINDINGS_SHOWN` 条 `AuditFindingRaised` → 发现列表
     pub fn content(state: &TuiState) -> Text<'static> {
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from("Harness Self Assessment (Qoder 5-Dim)"),
+            Line::from(crate::t!("panel.self_assessment.body_title")),
             Line::from("──────────────────────────────────────"),
         ];
 
@@ -100,11 +100,18 @@ impl SelfAssessmentPanel {
                 lines.push(Self::dimension_line("Verification", cv));
                 lines.push(Self::dimension_line("Delivery", rd));
                 lines.push(Self::dimension_line("Experience", ea));
-                lines.push(Line::from(format!("Findings in report: {fc}")));
+                lines.push(Line::from(
+                    // 占位键:fc 为发现数(与 timeline event_summary 同 replacen 范式)
+                    crate::t!("panel.self_assessment.findings_count").replacen(
+                        "{}",
+                        &fc.to_string(),
+                        1,
+                    ),
+                ));
             }
             None => {
                 lines.push(Line::from(Span::styled(
-                    "Awaiting first HarnessReportGenerated...",
+                    crate::t!("panel.self_assessment.awaiting"),
                     Style::default().fg(Color::Gray),
                 )));
             }
@@ -123,11 +130,17 @@ impl SelfAssessmentPanel {
                 _ => None,
             })
             .unwrap_or_else(|| "N/A".to_string());
-        lines.push(Line::from(format!("Memory Strategy Stage: {stage}")));
+        lines.push(Line::from(
+            // stage 为字符串形态的策略阶段标识(事件载荷 to_strategy),直接填占位;
+            // zh 值含 "Memory Strategy Stage: {}" 括注,兼容既有英文断言
+            crate::t!("panel.self_assessment.stage_label").replacen("{}", &stage, 1),
+        ));
 
         // 最近审计发现(反向扫描,最新在前)
         lines.push(Line::from(""));
-        lines.push(Line::from("Recent Findings"));
+        lines.push(Line::from(crate::t!(
+            "panel.self_assessment.recent_findings"
+        )));
         lines.push(Line::from("──────────────────────────────────────"));
         let findings: Vec<Line<'static>> = state
             .latest_events
@@ -159,7 +172,7 @@ impl SelfAssessmentPanel {
 
         if findings.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No findings yet.",
+                crate::t!("panel.self_assessment.no_findings"),
                 Style::default().fg(Color::Gray),
             )));
         } else {
@@ -208,54 +221,61 @@ mod tests {
 
     #[test]
     fn test_content_awaiting_when_no_report() {
+        // 批次-A i18n 迁移后空态走键表。WHY 双语 OR 断言而非 locale 钉定:
+        // 不写全局 locale,避免与未加锁的 zh 断言测试产生 En 窗口竞态
+        // (同 osa_sparse render_window_empty 口径)。
         let state = TuiState::new();
         let content = SelfAssessmentPanel::content(&state).to_string();
-        assert!(content.contains("Awaiting first HarnessReportGenerated"));
-        assert!(content.contains("No findings yet."));
+        assert!(
+            content.contains("Awaiting first HarnessReportGenerated")
+                || content.contains("等待首份 Harness 评估报告"),
+            "无报告时应显示等待提示(任意 locale), got: {content}"
+        );
+        assert!(
+            content.contains("No findings yet.") || content.contains("暂无发现"),
+            "无发现时应显示占位提示(任意 locale), got: {content}"
+        );
     }
 
     #[test]
     fn test_content_renders_latest_report_and_findings() {
         let mut state = TuiState::new();
+        // WHY Arc::make_mut:latest_events 已 Arc 化(P-A),测试注入走 COW
+        let events = std::sync::Arc::make_mut(&mut state.latest_events);
         // 旧报告(应被新报告覆盖)
-        state
-            .latest_events
-            .push_back(NexusEvent::HarnessReportGenerated {
-                metadata: EventMetadata::new("test"),
-                task_comprehension: 0.1,
-                controllable_execution: 0.1,
-                change_verification: 0.1,
-                reliable_delivery: 0.1,
-                experience_accumulation: 0.1,
-                findings_count: 0,
-            });
+        events.push_back(NexusEvent::HarnessReportGenerated {
+            metadata: EventMetadata::new("test"),
+            task_comprehension: 0.1,
+            controllable_execution: 0.1,
+            change_verification: 0.1,
+            reliable_delivery: 0.1,
+            experience_accumulation: 0.1,
+            findings_count: 0,
+        });
         // 新报告(反向扫描应命中此条)
-        state
-            .latest_events
-            .push_back(NexusEvent::HarnessReportGenerated {
-                metadata: EventMetadata::new("test"),
-                task_comprehension: 0.8,
-                controllable_execution: 0.6,
-                change_verification: 0.5,
-                reliable_delivery: 1.0,
-                experience_accumulation: 0.3,
-                findings_count: 2,
-            });
-        state
-            .latest_events
-            .push_back(NexusEvent::AuditFindingRaised {
-                metadata: EventMetadata::new("test"),
-                finding_severity: "medium".into(),
-                category: "unused_capability".into(),
-                message: "能力 'x' 已配置但运行时从未使用".into(),
-                evidence_kind: "static_only".into(),
-                fix_hint: "移除或排查".into(),
-            });
+        events.push_back(NexusEvent::HarnessReportGenerated {
+            metadata: EventMetadata::new("test"),
+            task_comprehension: 0.8,
+            controllable_execution: 0.6,
+            change_verification: 0.5,
+            reliable_delivery: 1.0,
+            experience_accumulation: 0.3,
+            findings_count: 2,
+        });
+        events.push_back(NexusEvent::AuditFindingRaised {
+            metadata: EventMetadata::new("test"),
+            finding_severity: "medium".into(),
+            category: "unused_capability".into(),
+            message: "能力 'x' 已配置但运行时从未使用".into(),
+            evidence_kind: "static_only".into(),
+            fix_hint: "移除或排查".into(),
+        });
 
         let content = SelfAssessmentPanel::content(&state).to_string();
         // 取最新报告:Comprehension 80% 而非旧报告 10%
+        // (批次-A i18n 迁移后 findings 计数行渲染 zh 标签,断言随键表值同步)
         assert!(content.contains("80%"));
-        assert!(content.contains("Findings in report: 2"));
+        assert!(content.contains("报告内发现: 2"));
         assert!(content.contains("[medium]"));
         assert!(content.contains("已配置但运行时从未使用"));
     }

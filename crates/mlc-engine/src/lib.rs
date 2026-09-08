@@ -74,7 +74,7 @@ pub mod value_backfill;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use config::MlcConfig;
-pub use engine::MlcEngine;
+pub use engine::{CardSystemStatsView, MlcEngine};
 pub use error::MlcError;
 pub use l0_working::WorkingMemory;
 pub use l1_episodic::EpisodicMemory;

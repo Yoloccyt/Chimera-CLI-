@@ -199,8 +199,7 @@ fn reflection_card_appears_after_quest_failure() {
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
-    app.state_mut()
-        .latest_events
+    std::sync::Arc::make_mut(&mut app.state_mut().latest_events)
         .push_back(failed_quest_event("q-42"));
     let out = render_to_string(&mut app);
     assert!(
@@ -249,8 +248,7 @@ fn reflection_card_takes_priority_over_plan_card() {
         }],
         ..Default::default()
     });
-    app.state_mut()
-        .latest_events
+    std::sync::Arc::make_mut(&mut app.state_mut().latest_events)
         .push_back(failed_quest_event("q-1"));
     let out = render_to_string(&mut app);
     // 失败告警优先:复盘卡存在

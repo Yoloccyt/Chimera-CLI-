@@ -102,6 +102,9 @@ pub enum SlashEffect {
     Exit,
     /// 已登记未接线 — 诚实反馈(不伪造功能)
     HonestTodo,
+    /// 已登记未接线 + 具体指引(B1,2026-09-06 复评):区别于笼统
+    /// HonestTodo,告知用户替代路径(如 undo → Esc-Esc 回退)
+    UnwiredHint(&'static str),
 }
 
 /// 分流计划 — 解析后的执行路由
@@ -113,6 +116,19 @@ pub enum DispatchPlan {
     LegacyFallback(String),
     /// Agent 层:提示词模板 i18n 键(执行层预置进 composer)
     AgentTemplate(&'static str),
+    /// Orchestrated 层:编排域动作直连派发(FC-2 接线,2026-09-06)
+    ///
+    /// WHY 新变体而非复用 LegacyFallback:Legacy 桥接的是"遗留命令栏"语法
+    /// (经 `parse_legacy` 二次解析为 TuiCommand),而编排动作是结构化的
+    /// action_id + JSON payload,执行层直连 `dispatch_action` 统一派发桥
+    /// (本地臂优先,未注入资源时兜底发 `TuiActionRequested` + 2s 超时);
+    /// 两者确认弹窗/审批拦截语义保持一致。
+    Orchestrated {
+        /// 编排域动作 id(与 action_orchestrator 的 route_action 命名一致)
+        action_id: &'static str,
+        /// JSON 编码 payload(执行层按动作 schema 解析)
+        payload: String,
+    },
 }
 
 /// 按命令三分层生成分流计划
@@ -175,6 +191,17 @@ fn instant_effect(name: &str, args: &str) -> SlashEffect {
 
 /// Orchestrated 层分流:quest 控制类桥接遗留命令,其余诚实反馈
 fn orchestrated_plan(name: &str, args: &str) -> DispatchPlan {
+    // FC-2(2026-09-06):/compact 直连编排域 —— 参数合法性由执行层
+    // (action_orchestrator 经 `parse_compact_args`)权威校验,无效档位回
+    // TuiActionFailed 用法提示;计划层只携带原始参数(单一事实源,避免
+    // 两处解析规则漂移)。
+    // I-F:action_id 用共享常量(与编排器同源,防重命名静默断链)。
+    if name == super::COMPACT_ACTION_ID {
+        return DispatchPlan::Orchestrated {
+            action_id: super::COMPACT_ACTION_ID,
+            payload: serde_json::json!({ "args": args }).to_string(),
+        };
+    }
     let legacy = match name {
         // 遗留命令栏同义命令(保留确认弹窗与参数校验路径)
         "quest pause" => Some(format!("pause {args}")),
@@ -186,7 +213,37 @@ fn orchestrated_plan(name: &str, args: &str) -> DispatchPlan {
     };
     match legacy {
         Some(cmd) => DispatchPlan::LegacyFallback(cmd.trim().to_string()),
-        // list/show/checkpoint/agent 系列等编排命令待后端通道接线(W3+)
+        None => orchestrated_fallback(name, args),
+    }
+}
+
+/// 无遗留对等的编排命令处置(B1,2026-09-06 复评):逐命令定稿——
+/// 接线即时本地效果 / 派发编排域 / 带具体指引的诚实降级,不再落笼统 HonestTodo。
+fn orchestrated_fallback(name: &str, args: &str) -> DispatchPlan {
+    // quest list/show:Quest 面板本身就是实时列表与详情交互面(快照驱动),
+    // 本地切换即诚实可见,不绕编排域往返
+    if name == "quest list" || name == "quest show" {
+        return DispatchPlan::Instant(SlashEffect::PanelByName("quest".into()));
+    }
+    // quest checkpoint:engine.save_checkpoint 真实能力,派发编排域
+    // (payload 携带原始 quest_id 参数,缺省由编排器回退唯一活跃 Quest)
+    if name == "quest checkpoint" {
+        return DispatchPlan::Orchestrated {
+            action_id: crate::actions::action_ids::QUEST_CHECKPOINT,
+            payload: serde_json::json!({ "quest_id": args }).to_string(),
+        };
+    }
+    // fork/undo/redo:无对应后端(会话分叉 / 消息级撤销),降级为带具体
+    // 指引的诚实提示(区别于笼统 HonestTodo,告知替代路径)
+    let hint = match name {
+        "fork" => Some("slash.unwired.fork"),
+        "undo" => Some("slash.unwired.undo"),
+        "redo" => Some("slash.unwired.redo"),
+        _ => None,
+    };
+    match hint {
+        Some(key) => DispatchPlan::Instant(SlashEffect::UnwiredHint(key)),
+        // agent 系列等剩余编排命令维持笼统诚实反馈(待 W3+ 通道)
         None => DispatchPlan::Instant(SlashEffect::HonestTodo),
     }
 }
@@ -392,14 +449,51 @@ mod tests {
             plan(r.get("quest vote").unwrap(), "yes p-1"),
             DispatchPlan::LegacyFallback("vote yes p-1".into())
         );
-        // 无遗留对等的编排命令 → 诚实反馈
+        // B1:quest list/show → 本地即时切 Quest 面板(面板即实时列表/详情交互面)
         assert_eq!(
             plan(r.get("quest list").unwrap(), ""),
-            DispatchPlan::Instant(SlashEffect::HonestTodo)
+            DispatchPlan::Instant(SlashEffect::PanelByName("quest".into()))
         );
         assert_eq!(
+            plan(r.get("quest show").unwrap(), "q-1"),
+            DispatchPlan::Instant(SlashEffect::PanelByName("quest".into()))
+        );
+        // B1:quest checkpoint → 编排域派发(engine.save_checkpoint 真实能力)
+        assert_eq!(
+            plan(r.get("quest checkpoint").unwrap(), "q-7"),
+            DispatchPlan::Orchestrated {
+                action_id: crate::actions::action_ids::QUEST_CHECKPOINT,
+                payload: r#"{"quest_id":"q-7"}"#.to_string(),
+            }
+        );
+        // B1:fork/undo/redo → 带具体指引的诚实降级(区别于笼统 HonestTodo)
+        assert_eq!(
+            plan(r.get("fork").unwrap(), ""),
+            DispatchPlan::Instant(SlashEffect::UnwiredHint("slash.unwired.fork"))
+        );
+        assert_eq!(
+            plan(r.get("undo").unwrap(), ""),
+            DispatchPlan::Instant(SlashEffect::UnwiredHint("slash.unwired.undo"))
+        );
+        assert_eq!(
+            plan(r.get("redo").unwrap(), ""),
+            DispatchPlan::Instant(SlashEffect::UnwiredHint("slash.unwired.redo"))
+        );
+        // FC-2:/compact 已接线 —— 直连编排域(compact 策展,ADR-081)
+        assert_eq!(
             plan(r.get("compact").unwrap(), ""),
-            DispatchPlan::Instant(SlashEffect::HonestTodo)
+            DispatchPlan::Orchestrated {
+                action_id: "compact",
+                payload: r#"{"args":""}"#.to_string(),
+            }
+        );
+        // 参数原样进 payload,执行层权威校验
+        assert_eq!(
+            plan(r.get("compact").unwrap(), "aggressive"),
+            DispatchPlan::Orchestrated {
+                action_id: "compact",
+                payload: r#"{"args":"aggressive"}"#.to_string(),
+            }
         );
     }
 

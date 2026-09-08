@@ -51,7 +51,7 @@ pub struct EventStreamPanel {
     selected: usize,
     /// 列表滚动偏移(可见区域起始行)
     scroll_offset: usize,
-    /// 过滤结果缓存(仅 production + 关键字过滤时启用,见 `filtered_events_cached`)
+    /// 过滤结果缓存(P-B 起仅 production 快照启用,见 `ensure_filter_cache`)
     filter_cache: crate::panels::filter_cache::FilterCache,
 }
 
@@ -93,34 +93,39 @@ impl EventStreamPanel {
             .collect()
     }
 
-    /// 带缓存的过滤(供 render / handle_key 等有 `&mut self` 的调用点使用)
+    /// 带缓存的过滤(供 handle_key Enter 等需要事件引用的调用点使用)
     ///
     /// WHY P-3:关键字过滤对每条事件执行 `serde_json::to_string` 全量序列化,
-    /// 万级事件 + 关键字下每帧重建代价高。revision 未变时复用索引缓存,
-    /// 跨帧零过滤开销;revision == 0(测试桩)或未设置关键字时走无缓存路径,
-    /// 保持既有测试语义与廉价路径。
+    /// 万级事件下每帧重建代价高。revision 未变时复用索引缓存,跨帧零过滤开销;
+    /// revision == 0(测试桩)走无缓存路径,保持既有测试语义
+    /// (P-B 起 render 渲染路径改走 `ensure_filter_cache` + 窗口直取,不再整表 map)。
     pub fn filtered_events_cached<'a>(&mut self, state: &'a TuiState) -> Vec<&'a NexusEvent> {
-        // 缓存仅在 production 快照(revision >= 1)+ 关键字过滤时启用:
-        // 测试桩 revision == 0 时 latest_events 可能被就地修改,缓存会造成
-        // 跨调用陈旧结果;无关键字时过滤是廉价模式匹配,无需缓存。
-        let cache_enabled = crate::panels::filter_cache::FilterCache::enabled(state);
-        if cache_enabled && self.filter_cache.matches(state) {
-            return self
-                .filter_cache
-                .indices()
-                .iter()
-                .map(|&idx| &state.latest_events[idx])
+        if !crate::panels::filter_cache::FilterCache::enabled(state) {
+            return Self::compute_filtered_indices(state)
+                .into_iter()
+                .map(|idx| &state.latest_events[idx])
                 .collect();
         }
-
-        let indices = Self::compute_filtered_indices(state);
-        if cache_enabled {
-            self.filter_cache.update(state, indices.clone());
-        }
-        indices
+        self.ensure_filter_cache(state);
+        self.filter_cache
+            .indices()
             .iter()
             .map(|&idx| &state.latest_events[idx])
             .collect()
+    }
+
+    /// 确保过滤缓存与当前状态一致(命中则零分配直取,键失效则重建索引)
+    ///
+    /// WHY P-B:render 每帧调用,命中时仅借用缓存内 `Vec<usize>`,不做任何
+    /// O(n) 分配;渲染窗口由调用方经 `virtual_scroll_window` 计算后,
+    /// 仅对窗口内索引解析原事件(O(visible) 分配)。
+    fn ensure_filter_cache(&mut self, state: &TuiState) {
+        if crate::panels::filter_cache::FilterCache::enabled(state)
+            && !self.filter_cache.matches(state)
+        {
+            let indices = Self::compute_filtered_indices(state);
+            self.filter_cache.update(state, indices);
+        }
     }
 
     /// 构建 EventStream 面板文本内容(用于测试与小数据集)
@@ -136,10 +141,11 @@ impl EventStreamPanel {
     /// - `selected`:当前选中项索引(用于高亮)
     pub fn content(state: &TuiState, selected: usize) -> Text<'static> {
         let scroll_offset = list_state::adjust_scroll(selected, 0, CONTENT_DEFAULT_VISIBLE_ROWS);
-        let filtered = Self::filtered_events(state);
+        // P-B:render_window 以索引为输入,窗口内才解析原事件(测试/小数据集路径)
+        let filtered_indices = Self::compute_filtered_indices(state);
         Self::render_window(
             state,
-            &filtered,
+            &filtered_indices,
             selected,
             scroll_offset,
             CONTENT_DEFAULT_VISIBLE_ROWS,
@@ -152,17 +158,23 @@ impl EventStreamPanel {
     /// content 方法用默认行数,render 方法用实际终端高度,逻辑共享避免重复。
     /// 使用 `virtual_scroll_window` 仅构造可见区域 + 上下缓冲的 Text,
     /// 确保万级事件下 Text 构造也是 O(visible + 2×BUFFER)。
+    ///
+    /// WHY 索引入参(P-B):`filtered_indices` 为过滤后事件在 `latest_events`
+    /// 中的正序下标;窗口范围计算后仅对窗口内索引解析原事件,
+    /// 避免调用方整表 map 成 `Vec<&NexusEvent>` 的每帧 O(n) 分配。
     fn render_window(
         state: &TuiState,
-        filtered: &[&NexusEvent],
+        filtered_indices: &[usize],
         selected: usize,
         scroll_offset: usize,
         visible_rows: usize,
     ) -> Text<'static> {
-        let total = filtered.len();
+        let total = filtered_indices.len();
 
-        let mut lines: Vec<Line<'static>> =
-            vec![Line::from("Event Stream"), Line::from("─────────────")];
+        let mut lines: Vec<Line<'static>> = vec![
+            Line::from(crate::t!("panel.event_stream.body_title")),
+            Line::from("─────────────"),
+        ];
 
         // P1-W2.2:Critical 旁路通道丢弃告警(红色高亮,显示在事件列表顶部)
         // WHY 在 auto_scroll 提示之前:丢弃告警是安全红线,优先级高于浏览提示,
@@ -178,7 +190,7 @@ impl EventStreamPanel {
         // auto_scroll 暂停时,在事件列表顶部显示新事件累积提示(Claude Code 风格)
         // WHY 放在事件列表之前:用户视线从标题自然下移时首先看到提示,
         // 且不会与底部的页脚/虚拟滚动提示混淆。
-        if !state.auto_scroll && !filtered.is_empty() {
+        if !state.auto_scroll && !filtered_indices.is_empty() {
             let last_idx = total.saturating_sub(1);
             if selected < last_idx {
                 let new_count = last_idx - selected;
@@ -192,46 +204,51 @@ impl EventStreamPanel {
             }
         }
 
-        if filtered.is_empty() {
-            lines.push(Line::from("[INFO]  No events"));
+        if filtered_indices.is_empty() {
+            lines.push(Line::from(crate::t!("panel.event_stream.no_events")));
         } else {
             let (start, end) = virtual_scroll_window(total, scroll_offset, visible_rows);
 
-            for idx in start..end {
-                if let Some(event) = filtered.get(idx) {
-                    let metadata = event.metadata();
-                    let ts = metadata.timestamp.format("%H:%M:%S").to_string();
-                    let source = &metadata.source;
-                    let event_type = event.type_name();
+            for (idx, &event_idx) in filtered_indices.iter().enumerate().take(end).skip(start) {
+                // P-B:仅窗口内索引解析原事件(窗口外不触碰)
+                let event = &state.latest_events[event_idx];
+                let metadata = event.metadata();
+                let ts = metadata.timestamp.format("%H:%M:%S").to_string();
+                let source = &metadata.source;
+                let event_type = event.type_name();
 
-                    let is_critical = event.severity() == EventSeverity::Critical;
-                    let is_selected = idx == selected;
-                    let style = if is_selected {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD)
-                    } else if is_critical {
-                        Style::default().fg(Color::Red)
-                    } else {
-                        Style::default()
-                    };
+                let is_critical = event.severity() == EventSeverity::Critical;
+                let is_selected = idx == selected;
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_critical {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default()
+                };
 
-                    let prefix = if is_selected { "> " } else { "  " };
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{}{} ", prefix, ts), style),
-                        Span::styled(format!("[{}] ", source), style),
-                        Span::styled(event_type.to_string(), style),
-                    ]));
-                }
+                let prefix = if is_selected { "> " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{}{} ", prefix, ts), style),
+                    Span::styled(format!("[{}] ", source), style),
+                    Span::styled(event_type.to_string(), style),
+                ]));
             }
 
             // 虚拟滚动提示:当总事件数 > 可见窗口时显示总数
+            // 组装范式与 log.rs showing/of/events 一致(三键拼接,zh 为
+            // "显示 N / M 条事件"语序)
             if total > visible_rows {
                 lines.push(Line::from(format!(
-                    "... showing {} of {} events",
+                    "... {} {} {} {} {}",
+                    crate::t!("panel.event_stream.showing"),
                     end.saturating_sub(start),
-                    total
+                    crate::t!("panel.event_stream.of"),
+                    total,
+                    crate::t!("panel.event_stream.events")
                 )));
             }
         }
@@ -251,18 +268,31 @@ impl Panel for EventStreamPanel {
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
-        let filtered = self.filtered_events_cached(state);
+        // P-B:先确保过滤索引缓存一致(命中时零分配、零 O(n) 扫描)
+        let cache_enabled = crate::panels::filter_cache::FilterCache::enabled(state);
+        self.ensure_filter_cache(state);
+        // WHY 双路径:revision == 0(测试桩)禁用缓存,latest_events 可能在两次
+        // 渲染之间被就地修改,必须每次重算索引(仅测试/小数据集,非热路径)。
+        let computed = if cache_enabled {
+            None
+        } else {
+            Some(Self::compute_filtered_indices(state))
+        };
+        let total = match &computed {
+            Some(indices) => indices.len(),
+            None => self.filter_cache.indices().len(),
+        };
 
         // auto_scroll=true 且无弹窗遮挡时,自动跟随到最后一项(流式追加 UX)
         // WHY 在 render 中处理:每次重绘都同步 selected,确保新事件到达时
         // 选中项立即跟随,无需额外的 tick 事件驱动。
         // 弹窗打开时冻结跟随,避免详情 overlay 后方列表跳动(P3.1 冲突规避)。
-        if state.popup_stack.is_empty() && state.auto_scroll && !filtered.is_empty() {
-            self.selected = filtered.len() - 1;
+        if state.popup_stack.is_empty() && state.auto_scroll && total > 0 {
+            self.selected = total - 1;
         }
-        self.selected = list_state::clamp_selected(self.selected, filtered.len());
+        self.selected = list_state::clamp_selected(self.selected, total);
 
-        let title = build_filter_title(state, "Event Stream");
+        let title = build_filter_title(state, crate::t!("panel.event_stream.body_title"));
         let block = Block::default()
             .borders(Borders::ALL)
             .title(Line::from(title));
@@ -280,11 +310,19 @@ impl Panel for EventStreamPanel {
         // 再用 Paragraph::scroll 会导致二次滚动 — 当 scroll_offset > Text 行数时显示空白。
         // 此前实现用 content() + Paragraph::scroll 的组合在万级事件下会出现空白屏,
         // 改为直接传 content_height 给 render_window,让虚拟滚动窗口与实际终端高度对齐。
+        // P-B 窗口直取:借索引传入 render_window,仅窗口内索引解析原事件,
+        // 消灭缓存命中时整表 map 成 Vec<&NexusEvent> 的每帧 O(n) 分配。
+        let selected = self.selected;
+        let scroll_offset = self.scroll_offset;
+        let filtered_indices: &[usize] = match &computed {
+            Some(indices) => indices,
+            None => self.filter_cache.indices(),
+        };
         let paragraph = Paragraph::new(Self::render_window(
             state,
-            &filtered,
-            self.selected,
-            self.scroll_offset,
+            filtered_indices,
+            selected,
+            scroll_offset,
             content_height,
         ));
         paragraph.render(inner, buf);
@@ -334,16 +372,9 @@ impl Panel for EventStreamPanel {
                 state.auto_scroll = false;
                 None
             }
-            // g/G 双路径:app 交互经 InputRouter 全局拦截(gg→ScrollTop、G→ScrollBottom),
-            // 面板直接 API(测试/嵌入调用,如 auto_scroll_test)仍保留同名 arm,语义一致。
-            KeyCode::Char('g') => {
-                self.scroll_to_top(state);
-                None
-            }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom(state);
-                None
-            }
+            // WHY 无 g/G arm:InputRouter 全局截获(g→GPrefix、G→ScrollBottom),
+            // 滚动经 RouteTarget::ScrollTop/ScrollBottom 调用 scroll_to_top/bottom
+            // 等价覆盖(auto_scroll 恢复逻辑在 scroll_to_bottom 内,不受损),面板 arm 为死键。
             KeyCode::Enter => {
                 let filtered = self.filtered_events_cached(state);
                 filtered
@@ -608,7 +639,7 @@ mod tests {
     #[test]
     fn test_event_stream_panel_renders_events() {
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -619,7 +650,7 @@ mod tests {
                 current: 9500,
                 limit: 10000,
             },
-        ]);
+        ]));
         let content = EventStreamPanel::content(&state, 0).to_string();
         assert!(content.contains("CacheHit"));
         assert!(content.contains("BudgetExceeded"));
@@ -628,7 +659,7 @@ mod tests {
     #[test]
     fn test_event_stream_panel_filter_keyword() {
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "alpha".into(),
@@ -637,7 +668,7 @@ mod tests {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "beta".into(),
             },
-        ]);
+        ]));
         state.filter_keyword = Some("alpha".into());
 
         let filtered = EventStreamPanel::filtered_events(&state);
@@ -648,7 +679,7 @@ mod tests {
     #[test]
     fn test_event_stream_panel_filter_topic() {
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -659,7 +690,7 @@ mod tests {
                 veto_reason: "unsafe".into(),
                 frozen_capabilities: vec![],
             },
-        ]);
+        ]));
         state.filter_topic = Some("security".into());
 
         let filtered = EventStreamPanel::filtered_events(&state);
@@ -670,7 +701,7 @@ mod tests {
     #[test]
     fn test_event_stream_panel_filter_level_critical() {
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -681,7 +712,7 @@ mod tests {
                 current: 9500,
                 limit: 10000,
             },
-        ]);
+        ]));
         state.filter_level = Some("critical".into());
 
         let filtered = EventStreamPanel::filtered_events(&state);
@@ -694,7 +725,7 @@ mod tests {
     fn test_event_stream_filter_cache_consistent_and_invalidates_on_keyword_change() {
         let mut state = TuiState::new();
         state.last_snapshot_revision = 1; // production 语义:revision >= 1 启用缓存
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "alpha".into(),
@@ -707,7 +738,7 @@ mod tests {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "alpha2".into(),
             },
-        ]);
+        ]));
         state.filter_keyword = Some("alpha".into());
 
         let mut panel = EventStreamPanel::new();
@@ -732,20 +763,20 @@ mod tests {
         let mut state = TuiState::new();
         state.last_snapshot_revision = 1;
         state.filter_keyword = Some("k1".into());
-        state.latest_events = VecDeque::from([NexusEvent::CacheHit {
+        state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k1".into(),
-        }]);
+        }]));
 
         let mut panel = EventStreamPanel::new();
         assert_eq!(panel.filtered_events_cached(&state).len(), 1);
 
         // revision 前进 + 事件集变化 → 缓存必须失效并重新过滤
         state.last_snapshot_revision = 2;
-        state.latest_events = VecDeque::from([NexusEvent::CacheHit {
+        state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k2".into(),
-        }]);
+        }]));
         assert!(
             panel.filtered_events_cached(&state).is_empty(),
             "revision 变化后应重新过滤"
@@ -762,11 +793,47 @@ mod tests {
         assert!(title.contains("topic:security"));
     }
 
+    // P-B:仅 topic 过滤(无 keyword)时缓存同样启用,二次调用必须命中缓存
+    #[test]
+    fn test_event_stream_filter_cache_hits_with_topic_only() {
+        let mut state = TuiState::new();
+        state.last_snapshot_revision = 1; // production 语义:revision >= 1 启用缓存
+        state.filter_topic = Some("memory".into());
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
+            NexusEvent::CacheHit {
+                metadata: EventMetadata::new("scc-cache"),
+                cache_key: "k1".into(),
+            },
+            NexusEvent::SkepticVeto {
+                metadata: EventMetadata::new("parliament"),
+                quest_id: "q1".into(),
+                veto_reason: "unsafe".into(),
+                frozen_capabilities: vec![],
+            },
+        ]));
+
+        let mut panel = EventStreamPanel::new();
+        let first = panel.filtered_events_cached(&state);
+        assert_eq!(first.len(), 1, "topic=memory 过滤应只命中 CacheHit");
+
+        // 首次调用后缓存已按 (revision, keyword, topic, level) 键填充 → 命中
+        // (P-B 去 keyword 门槛前的行为:无 keyword 时 enabled=false,缓存不填充)
+        assert!(
+            panel.filter_cache.matches(&state),
+            "topic-only 过滤也应填充缓存"
+        );
+
+        // 二次调用走缓存:结果一致
+        let second = panel.filtered_events_cached(&state);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].type_name(), "CacheHit");
+    }
+
     #[test]
     fn test_event_stream_panel_navigation_disables_auto_scroll() {
         let mut panel = EventStreamPanel::new();
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -775,7 +842,7 @@ mod tests {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k2".into(),
             },
-        ]);
+        ]));
         state.auto_scroll = true;
 
         panel.handle_key(
@@ -793,7 +860,7 @@ mod tests {
         // 本测试改为直接验证真实路径的 scroll_to_bottom 语义。
         let mut panel = EventStreamPanel::new();
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -806,7 +873,7 @@ mod tests {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k3".into(),
             },
-        ]);
+        ]));
         state.auto_scroll = false;
         panel.selected = 0;
 
@@ -819,10 +886,10 @@ mod tests {
     fn test_event_stream_panel_detail_popup() {
         let mut panel = EventStreamPanel::new();
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([NexusEvent::CacheHit {
+        state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k1".into(),
-        }]);
+        }]));
 
         let cmd = panel.handle_key(
             KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE),
@@ -863,7 +930,7 @@ mod tests {
         let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -876,7 +943,7 @@ mod tests {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k3".into(),
             },
-        ]);
+        ]));
         state.auto_scroll = false;
         // selected=0,有 3 条事件 → 应显示 "[新事件 2 条]"
         let content = EventStreamPanel::content(&state, 0).to_string();
@@ -921,10 +988,10 @@ mod tests {
         // 告警行应在事件列表之前(标题之后)
         let mut state = TuiState::new();
         state.critical_event_dropped_count = 5;
-        state.latest_events = VecDeque::from([NexusEvent::CacheHit {
+        state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k1".into(),
-        }]);
+        }]));
         let content = EventStreamPanel::content(&state, 0).to_string();
         let alert_pos = content.find("CRITICAL 事件丢弃").expect("应包含告警行");
         let event_pos = content.find("CacheHit").expect("应包含事件");

@@ -1003,6 +1003,29 @@ impl ChatSync {
             NexusEvent::TuiChatStatusChanged { status, .. } => {
                 self.status = *status;
             }
+            // FC-2(ADR-081):/compact 策展回写 —— 压缩后的历史整体替换。
+            // WHY 事件而非直接写:ChatSync 是会话历史唯一所有者(M3b),
+            // 本事件是发给所有者的控制指令,保持单一所有权设计不破;
+            // 替换后重置流式状态与行闸门(旧轮次的未闭合残段不再续接)。
+            NexusEvent::TuiChatHistoryReplaced { messages, .. } => {
+                self.messages = messages
+                    .iter()
+                    .map(|m| ChatMessage {
+                        // 角色以字符串编码(L1 不感知 ChatRole 枚举):
+                        // 仅 "assistant" 映射 Assistant,其余(含未知值)
+                        // 保守映射 User —— 策展 Pinned 段按 User 轮次保护
+                        role: if m.role == "assistant" {
+                            ChatRole::Assistant
+                        } else {
+                            ChatRole::User
+                        },
+                        content: m.content.clone(),
+                    })
+                    .collect();
+                self.streaming = false;
+                self.gate.flush();
+                self.enforce_cap();
+            }
             _ => {}
         }
     }

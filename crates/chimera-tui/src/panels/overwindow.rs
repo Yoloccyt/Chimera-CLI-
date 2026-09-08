@@ -186,12 +186,10 @@ mod tests {
         let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
-        state
-            .latest_events
-            .push_back(trigger(100_000, 131_072, 0, 0));
-        state
-            .latest_events
-            .push_back(trigger(600_000, 131_072, 42, 128));
+        // WHY Arc::make_mut:latest_events 已 Arc 化(P-A),测试注入走 COW
+        let events = std::sync::Arc::make_mut(&mut state.latest_events);
+        events.push_back(trigger(100_000, 131_072, 0, 0));
+        events.push_back(trigger(600_000, 131_072, 42, 128));
         let text = OverWindowPanel::content(&state);
         let joined = text.lines.iter().map(|l| l.to_string()).collect::<String>();
         assert!(joined.contains("语料=600000 tok"), "最新触发应显示语料规模");

@@ -161,11 +161,18 @@ impl PopupKind {
         action_lines: &[(String, String)],
     ) -> Self {
         let mut entries = vec![
-            ("q / Esc".into(), "退出应用".into()),
+            // WHY 不写"退出应用":Concord W4/W5 起 q/Esc 在 Chat 视图走失焦/回退链,
+            // 仅 Dashboard 视图退出(退出统一走 /exit)。
+            (
+                "q / Esc".into(),
+                "退出应用(Dashboard)/ 失焦回退(Chat)".into(),
+            ),
             ("Tab / Shift+Tab".into(), "切换下/上一个面板".into()),
             ("1-9".into(), "跳转到对应序号的面板".into()),
-            (":".into(), "打开命令面板".into()),
-            ("/".into(), "打开搜索过滤器".into()),
+            // WHY 二者同义:Concord W2 起 `:` 与 `/` 均进入斜杠命令模式,
+            // `:` 为废弃窗口期别名(一次性弃用提示)。
+            (":".into(), "进入斜杠命令模式(废弃别名,同 /)".into()),
+            ("/".into(), "进入斜杠命令模式(命令检索,Tab 补全)".into()),
             ("?".into(), "显示本帮助浮层".into()),
             ("j / k".into(), "向下/向上滚动列表或弹窗".into()),
             ("Enter".into(), "查看选中项详情或确认操作".into()),

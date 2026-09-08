@@ -47,7 +47,7 @@ const TOP_K_CAPABILITIES: usize = 10;
 /// KVBSR  Latency  P50: 120μs  P95: 480μs  P99: 950μs
 ///
 /// SESA   [=======-] 72.0%
-/// SESA   Latency  P50: 200μs  P95: 800μs  P99: 1500μs
+/// SESA   Latency  P50: 200μs  P95: 800μs  P99: 1.5ms
 ///
 /// FaaE   [=========-] 91.0%
 /// FaaE   Latency  P50: 60μs  P95: 280μs  P99: 650μs
