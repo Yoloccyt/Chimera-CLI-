@@ -121,8 +121,8 @@ fn test_switch_panel_prev() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_prev();
     // Concord T1.4:FocusManager 注册序派生自 PanelId::REGISTERED_FOCUS_ORDER;
-    // Phase 10:Quest 的上一个 = 列表末尾的 InjectionStrategy 面板(27 面板)。
-    assert_eq!(app.current_panel(), PanelId::InjectionStrategy);
+    // FC-05:Quest 的上一个 = 环尾 ExperienceCardViz(InjectionStrategy 已下线)。
+    assert_eq!(app.current_panel(), PanelId::ExperienceCardViz);
     Ok(())
 }
 
@@ -1145,6 +1145,52 @@ fn test_update_pulls_snapshot_into_state() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+/// P-A(评估报告 v2):update() 必须与 DataSnapshot 共享 `latest_events` 的 Arc,
+/// 不再对事件流做 ≤256 事件的深拷贝;revision 不变的二次 update 走早退路径,
+/// 共享关系保持,且面板只读消费(Deref 迭代)不影响引用计数。
+#[test]
+fn test_update_shares_latest_events_arc_without_deep_copy() -> Result<(), Box<dyn std::error::Error>>
+{
+    let snapshot = DataSnapshot {
+        revision: 1,
+        latest_events: Arc::new(VecDeque::from([NexusEvent::CacheHit {
+            metadata: EventMetadata::new("test"),
+            cache_key: "arc-share".into(),
+        }])),
+        ..Default::default()
+    };
+    // 先保留一份 Arc 句柄,用于断言 update 后与状态指向同一分配
+    let events_arc = Arc::clone(&snapshot.latest_events);
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(MockDataSource::new(snapshot)),
+    )?;
+    app.update();
+
+    // 零拷贝:state.latest_events 与快照内 Arc 共享同一堆分配
+    assert!(
+        Arc::ptr_eq(&events_arc, &app.state().latest_events),
+        "update 应 Arc 共享事件流,而非深拷贝"
+    );
+    assert_eq!(app.state().latest_events.len(), 1);
+
+    // 只读消费(迭代)不改变 Arc 引用计数
+    let count_before = Arc::strong_count(&events_arc);
+    let total: usize = app.state().latest_events.iter().count();
+    assert_eq!(total, 1);
+    assert_eq!(Arc::strong_count(&events_arc), count_before);
+
+    // 同 revision 二次 update:早退路径不重绑,共享关系保持
+    app.update();
+    assert!(Arc::ptr_eq(&events_arc, &app.state().latest_events));
+    Ok(())
+}
+
 #[test]
 fn test_update_sets_status_message_on_error() -> Result<(), Box<dyn std::error::Error>> {
     /// 总是返回错误的数据源
@@ -1313,7 +1359,7 @@ fn test_mouse_scroll_in_main_panel() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_to(PanelId::Log);
     let state = app.state_mut();
-    state.latest_events = VecDeque::from([
+    state.latest_events = std::sync::Arc::new(VecDeque::from([
         NexusEvent::CacheHit {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k1".into(),
@@ -1322,7 +1368,7 @@ fn test_mouse_scroll_in_main_panel() -> Result<(), Box<dyn std::error::Error>> {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k2".into(),
         },
-    ]);
+    ]));
 
     // 先渲染以设置 last_area
     let backend = TestBackend::new(80, 24);
@@ -1378,7 +1424,8 @@ fn test_mouse_command_bar_click_focuses() -> Result<(), Box<dyn std::error::Erro
         row: 20,
         modifiers: event::KeyModifiers::NONE,
     });
-    assert_eq!(app.state().input_mode, InputMode::Command);
+    // I-B(2026-09-06 复评):底栏点击改入 Slash 模式(与 `:`/`/` 斜杠入口统一)
+    assert_eq!(app.state().input_mode, InputMode::Slash);
     Ok(())
 }
 
@@ -1519,10 +1566,10 @@ fn test_dirty_map_macro_multi_panel_marking() -> Result<(), Box<dyn std::error::
     app.state_mut().clear_dirty();
 
     // 修改 state.latest_events — 单字段映射到 3 个面板
-    app.state_mut().latest_events = VecDeque::from([NexusEvent::CacheHit {
+    app.state_mut().latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
         metadata: EventMetadata::new("test-dirty-map"),
         cache_key: "dirty-macro-key".into(),
-    }]);
+    }]));
     app.update();
 
     // 宏应同时标记 Parliament + Log + EventStream 三面板(共享事件流)
@@ -1544,5 +1591,133 @@ fn test_dirty_map_macro_multi_panel_marking() -> Result<(), Box<dyn std::error::
         !app.state().is_dirty(PanelId::Quest),
         "latest_events 变化不应标记 Quest 面板 dirty(无映射)"
     );
+    Ok(())
+}
+
+// ============================================================
+// U-1(2026-09-06 复评):responsive_collapse_threshold 生产接线
+// ============================================================
+
+#[test]
+fn responsive_threshold_controls_companion_folding() {
+    // 默认阈值 100:宽 80 < 100 → 次窗格折叠为单窗格
+    let app = TuiApp::new(TuiConfig {
+        default_view_mode: crate::types::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut app = app;
+    app.state_mut().layout_mode = LayoutMode::VimSplit; // VimSplit 内在多窗格
+    let narrow = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let wide = ratatui::layout::Rect::new(0, 0, 120, 24);
+    assert_eq!(
+        app.pane_rects(narrow).len(),
+        1,
+        "窄视口(80 < 默认阈值 100)应折叠次窗格"
+    );
+    assert_eq!(
+        app.pane_rects(wide).len(),
+        2,
+        "宽视口(120 ≥ 100)应保留 VimSplit 双窗格"
+    );
+
+    // 阈值 0 = 禁用自动折叠:窄视口也保留次窗格(配置语义,pane_manager 文档)
+    let app0 = TuiApp::new(TuiConfig {
+        default_view_mode: crate::types::ViewMode::Dashboard,
+        persist_state: false,
+        responsive_collapse_threshold: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut app0 = app0;
+    app0.state_mut().layout_mode = LayoutMode::VimSplit;
+    assert_eq!(
+        app0.pane_rects(narrow).len(),
+        2,
+        "阈值 0 应禁用折叠(窄视口保留次窗格)"
+    );
+
+    // 自定义阈值 70:宽 80 ≥ 70 → 不折叠(阈值真正驱动行为,死配置回归锁)
+    let app70 = TuiApp::new(TuiConfig {
+        default_view_mode: crate::types::ViewMode::Dashboard,
+        persist_state: false,
+        responsive_collapse_threshold: 70,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut app70 = app70;
+    app70.state_mut().layout_mode = LayoutMode::VimSplit;
+    assert_eq!(
+        app70.pane_rects(narrow).len(),
+        2,
+        "阈值 70 时 80 列不应折叠(配置值生效)"
+    );
+}
+
+// ============================================================
+// FC-05: 经验卡片可视化面板接线(组合根 install 路径)
+// ============================================================
+
+/// Mock 经验卡片统计提供者 — 固定统计快照
+#[derive(Debug)]
+struct MockCardStatsProvider(crate::panels::ExperienceCardVizStats);
+
+impl crate::panels::ExperienceCardStatsProvider for MockCardStatsProvider {
+    fn global_stats(&self) -> crate::panels::ExperienceCardVizStats {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn install_experience_card_provider_wires_real_stats() -> Result<(), TuiError> {
+    let mut app = make_app()?;
+
+    // 默认(未接线):面板诚实展示等待提示
+    let idx = app
+        .panel_index(PanelId::ExperienceCardViz)
+        .expect("ExperienceCardViz 应已注册");
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 10));
+    app.panels[idx].render(
+        &TuiState::new(),
+        ratatui::layout::Rect::new(0, 0, 60, 10),
+        &mut buf,
+    );
+    let text: String = buf.content.iter().map(|c| c.symbol()).collect();
+    assert!(
+        text.contains("Awaiting stats provider"),
+        "默认面板应诚实展示等待提示"
+    );
+
+    // 接线:替换为带提供者实例 → 渲染真实统计
+    let provider = Arc::new(MockCardStatsProvider(
+        crate::panels::ExperienceCardVizStats {
+            total_cards: 42,
+            evaluated: 7,
+            unique_errors: 2,
+            method_distribution: vec![("draft_pipeline".into(), 5)],
+            best_score: 0.9,
+            average_score: 0.6,
+        },
+    ));
+    app.install_experience_card_provider(provider);
+    assert_eq!(
+        app.panels[idx].id(),
+        PanelId::ExperienceCardViz,
+        "替换后面板身份不变"
+    );
+
+    let mut buf2 = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 10));
+    app.panels[idx].render(
+        &TuiState::new(),
+        ratatui::layout::Rect::new(0, 0, 60, 10),
+        &mut buf2,
+    );
+    let text2: String = buf2.content.iter().map(|c| c.symbol()).collect();
+    assert!(
+        text2.contains("Total: 42"),
+        "接线后应渲染真实统计(Total: 42)"
+    );
+    assert!(!text2.contains("Awaiting stats provider"));
     Ok(())
 }

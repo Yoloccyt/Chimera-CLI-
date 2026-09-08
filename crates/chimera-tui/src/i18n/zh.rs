@@ -121,6 +121,12 @@ pub const SEED_KEYS: &[&str] = &[
     "status.layout",
     "status.chat_pending",
     "status.quit_confirm",
+    // FC-A:投票诚实降级
+    "status.vote_unwired",
+    // B1:未接线命令的具体指引
+    "slash.unwired.fork",
+    "slash.unwired.undo",
+    "slash.unwired.redo",
     // 输入模式
     "mode.normal",
     "mode.insert",
@@ -150,6 +156,8 @@ pub const SEED_KEYS: &[&str] = &[
     "hint.palette",
     "hint.help",
     "hint.bar",
+    // I-2(2026-09-06 评估):Chat 视图下面板切换键的诚实提示(不可见切换)
+    "hint.panel_switch_in_chat",
     // 命令面板(M2 统一命令面板 overlay)
     "palette.title",
     "palette.hint",
@@ -489,6 +497,12 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "status.layout" => "布局",
         "status.chat_pending" => "Chat 将于 M3b 接入",
         "status.quit_confirm" => "确认退出 Chimera? [←/→ 切换,Enter 确认]",
+        // FC-A(2026-09-06 复评):投票诚实降级(L8 治理通道未接线)
+        "status.vote_unwired" => "投票: L8 Parliament 治理通道未接线(预留),请求未发布",
+        // B1(2026-09-06 复评):未接线命令的具体指引
+        "slash.unwired.fork" => "分叉:多会话存储未接线(预留)",
+        "slash.unwired.undo" => "撤销:消息级撤销未接线,可用 Esc-Esc 回退",
+        "slash.unwired.redo" => "重做:未接线(预留)",
         "mode.normal" => "普通",
         "mode.insert" => "输入",
         "mode.command" => "命令",
@@ -513,9 +527,9 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "chat.status.idle" => "空闲",
         "hint.palette" => "Ctrl+P 命令面板",
         "hint.help" => "? 帮助",
-        "hint.bar" => {
-            " q:退出  Tab:下个  /:搜索  ::命令  ?:帮助  t:主题  l:布局  a:动作  g+1-6:面板 "
-        }
+        // I-2(2026-09-06 评估):Chat 视图下面板切换键的诚实提示(不可见切换)
+        "hint.panel_switch_in_chat" => "面板切换在仪表盘视图生效(按 \\ 切换视图)",
+        "hint.bar" => " q:退出  Tab:下个  /:命令  ?:帮助  t:主题  l:布局  a:动作  g+1-6:面板 ",
         "palette.title" => "命令面板",
         "palette.hint" => "输入过滤 · ↑↓ 选择 · Enter 执行 · Esc 关闭",
         // U-3 面板正文收口(2026-08-06):Health 系统资源摘要

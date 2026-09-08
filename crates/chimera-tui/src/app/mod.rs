@@ -54,8 +54,6 @@ pub(crate) use pane_manager::{PaneManager, RATIO_MAX, RATIO_MIN, RATIO_STEP};
 
 /// 伴随面板宽度(字符),与引擎 Chat 模式 CHAT_CONTEXT_WIDTH 对齐(M2 增量3)
 const COMPANION_WIDTH: u16 = 30;
-/// 触发伴随面板并排的最小视口宽度(低于此不切分,避免主区被挤压)
-const COMPANION_MIN_WIDTH: u16 = 60;
 /// IDE 三窗格模式左侧栏宽度(字符),与引擎 presets IDE_SIDEBAR_WIDTH 对齐(M3d)
 const IDE_SIDEBAR_WIDTH: u16 = 20;
 /// IDE 三窗格模式右侧 context 栏宽度(字符),与引擎 presets IDE_CONTEXT_WIDTH 对齐(M3d)
@@ -140,6 +138,31 @@ pub struct TuiApp {
     /// status_bar 行(帧率/计数)。初始 false 保证首帧全量渲染。
     #[cfg(feature = "v3-engine")]
     frame_quiescent: bool,
+    /// 最近一次全量渲染的 ratatui 帧缓冲(静默帧复用,P-1,2026-09-06 评估)
+    ///
+    /// WHY 缓存:静默帧的面板区域与已呈现帧逐字节相同,却仍执行全量
+    /// widget 渲染 + 整帧 TestBackend 绘制(评估报告 P-1 热点);缓存上一帧
+    /// 后,静默帧只重绘状态行并复用缓存,消除面板渲染开销。
+    #[cfg(feature = "v3-engine")]
+    v3_cached_frame: Option<ratatui::buffer::Buffer>,
+    /// 最近一次全量渲染中状态栏的实际区域(P-2 静默帧行号来源)
+    ///
+    /// WHY 记录而非重算:Dashboard 状态行在 h-2,Chat 视图 statusline 在
+    /// h-1,SinglePane 无状态行 —— 静默帧若硬编码 h-2 会漏刷/错刷
+    /// (评估报告 P-2:Chat 静默期 statusline 冻结)。由 render_status_bar
+    /// 在渲染时写入,字节级同源,SinglePane 保持 None(静默帧零输出)。
+    #[cfg(feature = "v3-engine")]
+    status_bar_area: Option<ratatui::layout::Rect>,
+    /// 同步输出模式(P-3 AtomicFrameWriter 接线,ADR-079)
+    ///
+    /// WHY Option + 启动期一次探测:`probe_sync_output` 会写 DECRQM 查询并
+    /// 消费终端应答,必须且只应在 raw mode 开启后、事件循环启动前执行一次;
+    /// 非 TTY(测试/管道)降级 Disabled。None = 尚未探测。
+    #[cfg(feature = "v3-engine")]
+    v3_sync_mode: Option<crate::engine::SyncMode>,
+    /// 跨帧复用的原子帧写出器(P-3:稳态零再分配,ADR-079 设计意图)
+    #[cfg(feature = "v3-engine")]
+    v3_frame_writer: Option<crate::engine::AtomicFrameWriter>,
 }
 
 /// 按 PanelId 构造面板实例 — 注册序驱动的面板工厂(Concord T1.4)
@@ -201,7 +224,7 @@ impl TuiApp {
     ) -> Result<Self, TuiError> {
         config.validate()?;
         // Concord T1.4(P5① 收口):面板注册序派生自 PanelId::REGISTERED_FOCUS_ORDER
-        // 单一事实源;27 面板全部注册(此前 Timeline/Sysinfo 未注册,§7.3 接线)。
+        // 单一事实源;26 面板全部注册(FC-05 下线 InjectionStrategy)。
         // FocusManager 遍历序 == PanelId::next/prev 静态环,由 INV-F 不变量测试守护。
         let panels: Vec<Box<dyn Panel>> = PanelId::REGISTERED_FOCUS_ORDER
             .iter()
@@ -246,6 +269,10 @@ impl TuiApp {
             v3_term: None,
             #[cfg(feature = "v3-engine")]
             frame_quiescent: false,
+            v3_cached_frame: None,
+            status_bar_area: None,
+            v3_sync_mode: None,
+            v3_frame_writer: None,
         })
     }
 
@@ -255,6 +282,27 @@ impl TuiApp {
     pub fn with_event_bus(mut app: Self, bus: EventBus) -> Self {
         app.event_bus = Some(bus);
         app
+    }
+
+    /// 接线经验卡片统计提供者(FC-05,2026-09-06 评估)— 运行期替换面板实例
+    ///
+    /// WHY 运行期替换而非构造期注入:`ExperienceCardVizPanel` 遵循 D-1 trait
+    /// 注入(与 SelfAssessment 先例一致),但其数据源(L2 MlcEngine 卡片系统)
+    /// 在 chimera-cli 组合根经 `spawn_experience_loop` **异步装配后才就绪**;
+    /// 保持 `::new()` 默认桩(未接线时面板诚实展示等待提示),接线失败(闭环
+    /// 降级)时面板维持默认态,不阻断 TUI 启动。
+    ///
+    /// # 参数
+    /// - `provider`:经验卡片统计提供者(chimera-cli 组合根构造)
+    pub fn install_experience_card_provider(
+        &mut self,
+        provider: std::sync::Arc<dyn crate::panels::ExperienceCardStatsProvider>,
+    ) {
+        if let Some(idx) = self.panel_index(crate::types::PanelId::ExperienceCardViz) {
+            self.panels[idx] = Box::new(crate::panels::ExperienceCardVizPanel::with_provider(
+                provider,
+            ));
+        }
     }
 
     /// 返回配置引用

@@ -32,7 +32,7 @@ pub struct LogPanel {
     selected: usize,
     /// 事件列表的滚动偏移
     scroll_offset: usize,
-    /// 过滤结果缓存(键 = revision + 三过滤器;production + 关键字时启用)
+    /// 过滤结果缓存(键 = revision + 三过滤器;P-B 起仅 production 快照启用)
     filter_cache: FilterCache,
 }
 
@@ -56,9 +56,9 @@ impl LogPanel {
 
     /// 带缓存的过滤(供 render / handle_key / handle_mouse 等 `&mut self` 调用点使用)
     ///
-    /// WHY M4 v1:Log 过滤为 O(n) 谓词遍历,万级事件 + 关键字下每帧重建代价高;
-    /// revision 未变时复用索引缓存,跨帧零过滤开销;revision == 0(测试桩)或
-    /// 未设置关键字时走无缓存路径(与 EventStream 缓存策略一致,防陈旧结果)。
+    /// WHY M4 v1:Log 过滤为 O(n) 谓词遍历,万级事件下每帧重建代价高;
+    /// revision 未变时复用索引缓存,跨帧零过滤开销;revision == 0(测试桩)
+    /// 走无缓存路径,保持既有测试语义(P-B 起缓存不再要求关键字过滤)。
     pub fn filtered_events_cached<'a>(&mut self, state: &'a TuiState) -> Vec<&'a NexusEvent> {
         let cache_enabled = FilterCache::enabled(state);
         if cache_enabled && self.filter_cache.matches(state) {
@@ -241,16 +241,8 @@ impl Panel for LogPanel {
                     .get(self.selected)
                     .map(|event| TuiCommand::OpenPopup(PopupKind::event_detail(event)))
             }
-            // g/G 双路径:app 交互经 InputRouter 全局拦截(gg→ScrollTop、G→ScrollBottom),
-            // 面板直接 API(测试/嵌入调用)仍保留同名 arm,语义一致。
-            KeyCode::Char('g') => {
-                self.scroll_to_top(state);
-                None
-            }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom(state);
-                None
-            }
+            // WHY 无 g/G arm:InputRouter 全局截获(g→GPrefix、G→ScrollBottom),
+            // 滚动经 RouteTarget::ScrollTop/ScrollBottom 等价覆盖,面板 arm 为死键。
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
@@ -484,7 +476,7 @@ mod tests {
     #[test]
     fn test_log_panel_renders_events() {
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -495,7 +487,7 @@ mod tests {
                 current: 9500,
                 limit: 10000,
             },
-        ]);
+        ]));
         let content = LogPanel::content(&state, 0).to_string();
         assert!(content.contains("CacheHit"));
         assert!(content.contains("BudgetExceeded"));
@@ -504,7 +496,7 @@ mod tests {
     #[test]
     fn test_log_panel_filter_keyword() {
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "alpha".into(),
@@ -513,7 +505,7 @@ mod tests {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "beta".into(),
             },
-        ]);
+        ]));
         state.filter_keyword = Some("alpha".into());
 
         let filtered = LogPanel::filtered_events(&state);
@@ -524,7 +516,7 @@ mod tests {
     #[test]
     fn test_log_panel_filter_topic() {
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -535,7 +527,7 @@ mod tests {
                 veto_reason: "unsafe".into(),
                 frozen_capabilities: vec![],
             },
-        ]);
+        ]));
         state.filter_topic = Some("security".into());
 
         let filtered = LogPanel::filtered_events(&state);
@@ -546,7 +538,7 @@ mod tests {
     #[test]
     fn test_log_panel_filter_level() {
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -557,7 +549,7 @@ mod tests {
                 current: 9500,
                 limit: 10000,
             },
-        ]);
+        ]));
         state.filter_level = Some("critical".into());
 
         let filtered = LogPanel::filtered_events(&state);
@@ -582,7 +574,7 @@ mod tests {
     fn test_log_panel_navigation() {
         let mut panel = LogPanel::new();
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k1".into(),
@@ -591,7 +583,7 @@ mod tests {
                 metadata: EventMetadata::new("scc-cache"),
                 cache_key: "k2".into(),
             },
-        ]);
+        ]));
 
         panel.handle_key(
             KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE),
@@ -610,10 +602,10 @@ mod tests {
     fn test_log_panel_detail_popup() {
         let mut panel = LogPanel::new();
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([NexusEvent::CacheHit {
+        state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k1".into(),
-        }]);
+        }]));
 
         let cmd = panel.handle_key(
             KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE),
@@ -645,12 +637,14 @@ mod tests {
         let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
-        state.latest_events = (0..200)
-            .map(|i| NexusEvent::CacheHit {
-                metadata: EventMetadata::new("scc-cache"),
-                cache_key: format!("key-{i}"),
-            })
-            .collect();
+        state.latest_events = std::sync::Arc::new(
+            (0..200)
+                .map(|i| NexusEvent::CacheHit {
+                    metadata: EventMetadata::new("scc-cache"),
+                    cache_key: format!("key-{i}"),
+                })
+                .collect(),
+        );
 
         let content = LogPanel::content(&state, 0).to_string();
         // 窗口 = [0, 20 + VIRTUAL_SCROLL_BUFFER(5)) → key-0..key-24
@@ -666,22 +660,24 @@ mod tests {
         let mut state = TuiState::new();
         state.last_snapshot_revision = 1;
         state.filter_keyword = Some("alpha".into());
-        state.latest_events = [
-            NexusEvent::CacheHit {
-                metadata: EventMetadata::new("scc-cache"),
-                cache_key: "alpha-1".into(),
-            },
-            NexusEvent::CacheHit {
-                metadata: EventMetadata::new("scc-cache"),
-                cache_key: "beta-2".into(),
-            },
-            NexusEvent::CacheHit {
-                metadata: EventMetadata::new("scc-cache"),
-                cache_key: "alpha-3".into(),
-            },
-        ]
-        .into_iter()
-        .collect();
+        state.latest_events = std::sync::Arc::new(
+            [
+                NexusEvent::CacheHit {
+                    metadata: EventMetadata::new("scc-cache"),
+                    cache_key: "alpha-1".into(),
+                },
+                NexusEvent::CacheHit {
+                    metadata: EventMetadata::new("scc-cache"),
+                    cache_key: "beta-2".into(),
+                },
+                NexusEvent::CacheHit {
+                    metadata: EventMetadata::new("scc-cache"),
+                    cache_key: "alpha-3".into(),
+                },
+            ]
+            .into_iter()
+            .collect(),
+        );
 
         // 冷路径:2 条命中(最新在前:alpha-3, alpha-1)
         let first = panel.filtered_events_cached(&state);
@@ -701,13 +697,20 @@ mod tests {
         let third = panel.filtered_events_cached(&state);
         assert_eq!(third.len(), 1);
 
-        // revision 变化(事件流内容变化)→ 缓存失效重算
+        // 事件集内容变化 → 缓存失效重算
+        // PF-01(2026-09-06 评估):缓存键改为事件集 Arc 身份。测试桩模拟生产
+        // 语义 = "整体替换事件集"(`Arc::make_mut` 就地突变与生产管道不符,会
+        // 令缓存键断言失真);内容变化必然产生新 Arc → 身份键失效重建。
         state.filter_keyword = Some("alpha".into());
         state.last_snapshot_revision = 2;
-        state.latest_events.push_back(NexusEvent::CacheHit {
+        // 重建事件集(原 3 条 + alpha-4):整体替换 Arc 模拟生产管道新快照
+        let mut replaced: std::collections::VecDeque<NexusEvent> =
+            state.latest_events.iter().cloned().collect();
+        replaced.push_back(NexusEvent::CacheHit {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "alpha-4".into(),
         });
+        state.latest_events = std::sync::Arc::new(replaced);
         let fourth = panel.filtered_events_cached(&state);
         assert_eq!(fourth.len(), 3);
     }

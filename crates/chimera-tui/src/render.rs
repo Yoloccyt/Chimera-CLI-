@@ -91,6 +91,21 @@ pub fn utilization_bar(value: f64, max: f64, width: usize) -> Line<'static> {
     ])
 }
 
+/// 延迟单位自适应格式化(输入微秒)
+///
+/// WHY 自适应:P99 达秒级时 "1500000μs" 七位数字可读性差;按量级切换
+/// μs(<1_000)→ ms(<1_000_000,1 位小数)→ s(2 位小数)三档,
+/// 保持三列 P50/P95/P99 输出宽度稳定且可快速扫读。
+pub fn format_latency(us: u64) -> String {
+    if us < 1_000 {
+        format!("{us}μs")
+    } else if us < 1_000_000 {
+        format!("{:.1}ms", us as f64 / 1_000.0)
+    } else {
+        format!("{:.2}s", us as f64 / 1_000_000.0)
+    }
+}
+
 /// 构造延迟统计行(P50/P95/P99 三列横向对比)
 ///
 /// # 参数
@@ -104,14 +119,15 @@ pub fn utilization_bar(value: f64, max: f64, width: usize) -> Line<'static> {
 /// 的差距来判断长尾延迟严重程度,横排比纵排更易快速扫读。P50 反映典型体验,
 /// P95 反映多数用户的上限,P99 反映尾部异常,三者并列可一眼识别延迟分布形态
 /// (如 P99 远大于 P50 表示长尾问题)。同时复用此函数避免各面板重复拼字符串。
+/// 单位经 `format_latency` 自适应(μs/ms/s),调用方无需感知量级。
 pub fn latency_line(label: &str, p50: u64, p95: u64, p99: u64) -> Line<'static> {
     Line::from(format!(
-        "{}  {}  P50: {}μs  P95: {}μs  P99: {}μs",
+        "{}  {}  P50: {}  P95: {}  P99: {}",
         label,
         crate::t!("panel.router.latency"),
-        p50,
-        p95,
-        p99,
+        format_latency(p50),
+        format_latency(p95),
+        format_latency(p99),
     ))
 }
 
@@ -572,6 +588,44 @@ mod tests {
         assert!(text.contains("120"), "P50 value should be present");
         assert!(text.contains("480"), "P95 value should be present");
         assert!(text.contains("950"), "P99 value should be present");
+    }
+
+    #[test]
+    fn test_format_latency_micros() {
+        // < 1_000 μs:保持微秒档,既有输出不变
+        assert_eq!(format_latency(0), "0μs");
+        assert_eq!(format_latency(120), "120μs");
+        assert_eq!(format_latency(999), "999μs");
+    }
+
+    #[test]
+    fn test_format_latency_millis() {
+        // 1_000 ≤ us < 1_000_000:毫秒档,1 位小数
+        assert_eq!(format_latency(1_000), "1.0ms");
+        assert_eq!(format_latency(1_500), "1.5ms");
+        assert_eq!(format_latency(150_000), "150.0ms");
+    }
+
+    #[test]
+    fn test_format_latency_seconds() {
+        // ≥ 1_000_000 μs:秒档,2 位小数
+        assert_eq!(format_latency(1_000_000), "1.00s");
+        assert_eq!(format_latency(2_500_000), "2.50s");
+    }
+
+    #[test]
+    fn test_latency_line_adapts_units() {
+        // 既有 μs 档(KVBSR 120/480/950)输出保持不变(回归保护)
+        let line = latency_line("KVBSR", 120, 480, 950).to_string();
+        assert!(line.contains("P50: 120μs"), "μs 档输出不应变化: {line}");
+        assert!(line.contains("P95: 480μs"));
+        assert!(line.contains("P99: 950μs"));
+
+        // 跨档:P99 达秒级时自适应为 s,不再打印 7 位数字 μs
+        let line = latency_line("SESA", 1_500, 1_000, 2_500_000).to_string();
+        assert!(line.contains("P50: 1.5ms"), "ms 档应自适应: {line}");
+        assert!(line.contains("P95: 1.0ms"));
+        assert!(line.contains("P99: 2.50s"), "s 档应自适应: {line}");
     }
 
     #[test]

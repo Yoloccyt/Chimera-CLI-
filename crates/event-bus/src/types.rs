@@ -1647,6 +1647,24 @@ pub enum NexusEvent {
         status: ChatStatus,
     },
 
+    /// TUI 会话历史整体替换 — `/compact` 策展回写(FC-2,ADR-081)
+    ///
+    /// WHY 独立变体:策展压缩(curator 五段分类 + 0-1 背包 + 抽取式摘要)在
+    /// 编排器侧完成后,压缩后的会话历史必须回写到唯一所有者 ChatSync(M3b
+    /// 单一所有权设计)——本事件是唯一合法的"整史替换"控制信道;逐条
+    /// Submitted/Chunk 重放既有双计数歧义又无法表达"删除"。消息以
+    /// [`super::payloads::TuiChatMessagePayload`] 字符串角色承载(L1 不感知
+    /// L10 枚举),由 ChatSync 负责转换。Normal 级(走 broadcast 即可,历史
+    /// 替换非高频且允许 Lagged 时下次 compact 重做)。
+    TuiChatHistoryReplaced {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 会话标识(与 TuiChatSubmitted 同域,预留多会话)
+        session_id: String,
+        /// 压缩后的完整会话历史(原序)
+        messages: Vec<super::payloads::TuiChatMessagePayload>,
+    },
+
     /// TUI → 编排器协议握手请求(Concord W10 T10.1,ADR-082)
     ///
     /// WHY 独立变体:防 Codex #37536 式版本偏移静默故障——陈旧后端
@@ -2691,6 +2709,8 @@ impl NexusEvent {
             Self::TuiChatResponseChunk { metadata, .. } => metadata,
             Self::TuiChatCompleted { metadata, .. } => metadata,
             Self::TuiChatStatusChanged { metadata, .. } => metadata,
+            // FC-2(ADR-081):/compact 策展回写
+            Self::TuiChatHistoryReplaced { metadata, .. } => metadata,
             // Concord W10 T10.1(ADR-082):TUI ↔ 编排器协议握手
             Self::TuiHello { metadata, .. } => metadata,
             Self::TuiHelloAck { metadata, .. } => metadata,

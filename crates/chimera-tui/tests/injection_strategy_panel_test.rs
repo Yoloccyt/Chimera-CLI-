@@ -50,18 +50,26 @@ fn card(scene: &str, content: &str) -> AtomicMemoryCard {
 // ----------------------------------------------------------
 
 #[test]
-fn panel_registered_in_focus_order() {
+fn panel_unregistered_in_focus_order() {
+    // FC-05(2026-09-06 评估):InjectionStrategy 无运行期数据源,已从焦点环
+    // 下线(代码保留可复测);未注册变体不参与 Tab 循环,避免恒空面板占位。
     assert!(
-        PanelId::REGISTERED_FOCUS_ORDER.contains(&PanelId::InjectionStrategy),
-        "InjectionStrategy 应注册进焦点环"
+        !PanelId::REGISTERED_FOCUS_ORDER.contains(&PanelId::InjectionStrategy),
+        "InjectionStrategy 应已从焦点环下线(ADR 登记)"
     );
 }
 
 #[test]
-fn panel_next_prev_roundtrip() {
+fn panel_next_prev_fallbacks_for_unregistered() {
+    // 未注册变体的 next/prev 走 fallback:next → 环首 Quest,prev → 环尾
+    // ExperienceCardViz(types.rs 未注册变体回退语义,避免孤立分支)。
     let panel = PanelId::InjectionStrategy;
-    assert_eq!(panel.next().prev(), panel);
-    assert_eq!(panel.prev().next(), panel);
+    assert_eq!(panel.next(), PanelId::Quest, "未注册变体 next 回退环首");
+    assert_eq!(
+        panel.prev(),
+        PanelId::ExperienceCardViz,
+        "未注册变体 prev 回退环尾"
+    );
 }
 
 #[test]

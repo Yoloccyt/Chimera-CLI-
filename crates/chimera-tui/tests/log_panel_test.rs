@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 
 fn make_state_with_events(events: Vec<NexusEvent>) -> TuiState {
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from(events);
+    state.latest_events = std::sync::Arc::new(VecDeque::from(events));
     state
 }
 

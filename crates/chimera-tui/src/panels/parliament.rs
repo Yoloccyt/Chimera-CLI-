@@ -405,16 +405,8 @@ impl Panel for ParliamentPanel {
                     .get(self.selected)
                     .map(|event| TuiCommand::OpenPopup(PopupKind::event_detail(event)))
             }
-            // g/G 双路径:app 交互经 InputRouter 全局拦截(gg→ScrollTop、G→ScrollBottom),
-            // 面板直接 API(测试/嵌入调用)仍保留同名 arm,语义一致。
-            KeyCode::Char('g') => {
-                self.scroll_to_top(state);
-                None
-            }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom(state);
-                None
-            }
+            // WHY 无 g/G arm:InputRouter 全局截获(g→GPrefix、G→ScrollBottom),
+            // 滚动经 RouteTarget::ScrollTop/ScrollBottom 等价覆盖,面板 arm 为死键。
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
@@ -475,7 +467,7 @@ mod tests {
     fn test_parliament_panel_no_panic_on_unknown_event() {
         // 即使过滤条件意外包含未处理变体,也不应 panic。
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("test"),
                 cache_key: "k1".into(),
@@ -486,7 +478,7 @@ mod tests {
                 voter: "alice".into(),
                 vote: true,
             },
-        ]);
+        ]));
         let content = ParliamentPanel::content(&state, 0, (0, 50)).to_string();
         assert!(content.contains("ParliamentVoteCast"));
         assert!(!content.contains("CacheHit"));
@@ -496,7 +488,7 @@ mod tests {
     fn test_parliament_panel_navigation() {
         let mut panel = ParliamentPanel::new();
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::VoteCast {
                 metadata: EventMetadata::new("parliament"),
                 proposal_id: "p1".into(),
@@ -509,7 +501,7 @@ mod tests {
                 voter: "bob".into(),
                 vote: false,
             },
-        ]);
+        ]));
 
         panel.handle_key(
             KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE),
@@ -528,12 +520,12 @@ mod tests {
     fn test_parliament_panel_detail_popup() {
         let mut panel = ParliamentPanel::new();
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([NexusEvent::VoteCast {
+        state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::VoteCast {
             metadata: EventMetadata::new("parliament"),
             proposal_id: "p1".into(),
             voter: "alice".into(),
             vote: true,
-        }]);
+        }]));
 
         let cmd = panel.handle_key(
             KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE),
@@ -560,7 +552,7 @@ mod tests {
     fn parliament_state_with_votes(count: usize) -> TuiState {
         let mut state = TuiState::new();
         state.last_snapshot_revision = 1;
-        state.latest_events = VecDeque::from(
+        state.latest_events = std::sync::Arc::new(VecDeque::from(
             (0..count)
                 .map(|i| NexusEvent::VoteCast {
                     metadata: EventMetadata::new("test"),
@@ -569,7 +561,7 @@ mod tests {
                     vote: i % 2 == 0,
                 })
                 .collect::<Vec<_>>(),
-        );
+        ));
         state
     }
 
@@ -697,12 +689,12 @@ mod tests {
         let _guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([NexusEvent::VoteCast {
+        state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::VoteCast {
             metadata: EventMetadata::new("test"),
             proposal_id: "p1".into(),
             voter: "alice".into(),
             vote: true,
-        }]);
+        }]));
         let mut panel = ParliamentPanel::new();
         let area = Rect::new(0, 0, 80, 24);
 

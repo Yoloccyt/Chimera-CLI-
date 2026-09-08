@@ -39,11 +39,11 @@ fn test_no_events_shows_na_placeholder() {
 #[test]
 fn test_strategy_event_derives_stage() {
     let state = TuiState {
-        latest_events: VecDeque::from(vec![strategy_event(
+        latest_events: std::sync::Arc::new(VecDeque::from(vec![strategy_event(
             "StandardTopK",
             "AggressivePruning",
             "ghost_memory_detected",
-        )]),
+        )])),
         ..Default::default()
     };
     let content = SelfAssessmentPanel::content(&state).to_string();
@@ -57,10 +57,10 @@ fn test_strategy_event_derives_stage() {
 fn test_latest_event_wins() {
     // 反向扫描:最近一条事件的 to_strategy 生效
     let state = TuiState {
-        latest_events: VecDeque::from(vec![
+        latest_events: std::sync::Arc::new(VecDeque::from(vec![
             strategy_event("StandardTopK", "AggressivePruning", "ghost_memory_detected"),
             strategy_event("AggressivePruning", "StandardTopK", "stable_recovery"),
-        ]),
+        ])),
         ..Default::default()
     };
     let content = SelfAssessmentPanel::content(&state).to_string();

@@ -217,40 +217,36 @@ mod tests {
     #[test]
     fn test_content_renders_latest_report_and_findings() {
         let mut state = TuiState::new();
+        // WHY Arc::make_mut:latest_events 已 Arc 化(P-A),测试注入走 COW
+        let events = std::sync::Arc::make_mut(&mut state.latest_events);
         // 旧报告(应被新报告覆盖)
-        state
-            .latest_events
-            .push_back(NexusEvent::HarnessReportGenerated {
-                metadata: EventMetadata::new("test"),
-                task_comprehension: 0.1,
-                controllable_execution: 0.1,
-                change_verification: 0.1,
-                reliable_delivery: 0.1,
-                experience_accumulation: 0.1,
-                findings_count: 0,
-            });
+        events.push_back(NexusEvent::HarnessReportGenerated {
+            metadata: EventMetadata::new("test"),
+            task_comprehension: 0.1,
+            controllable_execution: 0.1,
+            change_verification: 0.1,
+            reliable_delivery: 0.1,
+            experience_accumulation: 0.1,
+            findings_count: 0,
+        });
         // 新报告(反向扫描应命中此条)
-        state
-            .latest_events
-            .push_back(NexusEvent::HarnessReportGenerated {
-                metadata: EventMetadata::new("test"),
-                task_comprehension: 0.8,
-                controllable_execution: 0.6,
-                change_verification: 0.5,
-                reliable_delivery: 1.0,
-                experience_accumulation: 0.3,
-                findings_count: 2,
-            });
-        state
-            .latest_events
-            .push_back(NexusEvent::AuditFindingRaised {
-                metadata: EventMetadata::new("test"),
-                finding_severity: "medium".into(),
-                category: "unused_capability".into(),
-                message: "能力 'x' 已配置但运行时从未使用".into(),
-                evidence_kind: "static_only".into(),
-                fix_hint: "移除或排查".into(),
-            });
+        events.push_back(NexusEvent::HarnessReportGenerated {
+            metadata: EventMetadata::new("test"),
+            task_comprehension: 0.8,
+            controllable_execution: 0.6,
+            change_verification: 0.5,
+            reliable_delivery: 1.0,
+            experience_accumulation: 0.3,
+            findings_count: 2,
+        });
+        events.push_back(NexusEvent::AuditFindingRaised {
+            metadata: EventMetadata::new("test"),
+            finding_severity: "medium".into(),
+            category: "unused_capability".into(),
+            message: "能力 'x' 已配置但运行时从未使用".into(),
+            evidence_kind: "static_only".into(),
+            fix_hint: "移除或排查".into(),
+        });
 
         let content = SelfAssessmentPanel::content(&state).to_string();
         // 取最新报告:Comprehension 80% 而非旧报告 10%

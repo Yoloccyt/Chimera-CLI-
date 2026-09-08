@@ -189,7 +189,41 @@ fn selected_dimension_gets_marker() {
 }
 
 // ============================================================
-// C. 面板身份
+// C. 越界值钳制(F:filled 上界防护)
+// ============================================================
+
+#[test]
+fn overflowing_score_bar_clamped_to_gauge_width() {
+    // value=1.5(150%)时条形填充必须钳制在 gauge_width 内,不得溢出标签区。
+    // 经 pvl_layer::register_pvl_score 注入越界快照(全局静态;同二进制内
+    // 其余用例仅断言标签/标记,不受数值影响)。gauge_width = 80-2(边框)-30 = 48。
+    pvl_layer::register_pvl_score(pvl_layer::ProcessScore {
+        real_execution: 1.5,
+        coverage: 1.5,
+        verification: 1.5,
+        confidence: 1.5,
+        efficiency: 1.5,
+        retry_discipline: 1.5,
+        output_substance: 1.5,
+        orphan_free: 1.5,
+        sandbox_clean: 1.5,
+        total: 1.5,
+    });
+    let mut panel = PvlScorePanel::new();
+    let state = TuiState::new();
+    let content = render_to_string(&mut panel, &state, 80, 30);
+    assert!(
+        !content.contains(&"█".repeat(49)),
+        "条形填充不应超过 gauge_width(48),实际输出被越界值撑溢"
+    );
+    assert!(
+        content.contains(&"█".repeat(48)),
+        "150% 评分应钳满为 gauge_width 填充"
+    );
+}
+
+// ============================================================
+// D. 面板身份
 // ============================================================
 
 #[test]

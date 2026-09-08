@@ -22,7 +22,7 @@ use std::time::Instant;
 /// 构造带预设事件的 TuiState
 fn make_state_with_events(events: Vec<NexusEvent>) -> TuiState {
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from(events);
+    state.latest_events = std::sync::Arc::new(VecDeque::from(events));
     state
 }
 
@@ -126,8 +126,8 @@ fn event_stream_panel_auto_scroll_follows_new_events() {
         "auto_scroll=true should follow to last event (index 1)"
     );
 
-    // 新事件到达
-    state.latest_events.push_back(NexusEvent::CacheHit {
+    // 新事件到达(Arc 化后经 make_mut COW 注入)
+    std::sync::Arc::make_mut(&mut state.latest_events).push_back(NexusEvent::CacheHit {
         metadata: EventMetadata::new("scc-cache"),
         cache_key: "k3".into(),
     });
@@ -311,7 +311,9 @@ fn event_stream_panel_filter_by_keyword() {
 // ============================================================
 
 #[test]
-fn event_stream_panel_shift_g_jumps_to_bottom_and_restores_auto_scroll() {
+fn event_stream_panel_scroll_to_bottom_restores_auto_scroll() {
+    // WHY 直调 scroll_to_bottom 而非 handle_key(Shift+G):键位治理后面板 g/G
+    // arm 已移除,生产路径经 InputRouter → RouteTarget::ScrollBottom 走同一方法。
     let events: Vec<NexusEvent> = (0..10).map(cache_hit_event).collect();
     let mut state = make_state_with_events(events);
     state.auto_scroll = false; // 模拟用户之前手动滚动过
@@ -322,20 +324,20 @@ fn event_stream_panel_shift_g_jumps_to_bottom_and_restores_auto_scroll() {
     let selected_before = panel.selected();
     assert!(selected_before > 0, "Down should move selection");
 
-    // 按 Shift+G 跳到底部
-    panel.handle_key(
-        KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
-        &mut state,
-    );
+    // 滚到底部
+    panel.scroll_to_bottom(&mut state);
 
     let filtered = EventStreamPanel::filtered_events(&state);
     let last_idx = filtered.len().saturating_sub(1);
     assert_eq!(
         panel.selected(),
         last_idx,
-        "Shift+G should select last event"
+        "scroll_to_bottom should select last event"
     );
-    assert!(state.auto_scroll, "Shift+G should restore auto_scroll=true");
+    assert!(
+        state.auto_scroll,
+        "scroll_to_bottom should restore auto_scroll=true"
+    );
 }
 
 // ============================================================
@@ -405,4 +407,55 @@ fn event_stream_panel_question_mark_returns_none() {
         None,
         "'?' should be handled globally by TuiApp as Help overlay"
     );
+}
+
+// ============================================================
+// 测试 13:P-B — 仅 topic 过滤(无 keyword)+ production revision,
+// 二次渲染走过滤缓存且行为不回归(过滤结果 / auto_scroll 语义一致)
+// ============================================================
+
+#[test]
+fn event_stream_panel_topic_only_filter_second_render_uses_cache() {
+    let mut state = make_state_with_events(vec![
+        NexusEvent::CacheHit {
+            metadata: EventMetadata::new("scc-cache"),
+            cache_key: "k1".into(),
+        },
+        NexusEvent::BudgetExceeded {
+            metadata: EventMetadata::new("decb-governor"),
+            budget_type: "token".into(),
+            current: 9500,
+            limit: 10000,
+        },
+    ]);
+    state.last_snapshot_revision = 1;
+    state.filter_topic = Some("memory".into());
+    state.auto_scroll = true;
+
+    let mut panel = EventStreamPanel::new();
+    let area = standard_area();
+
+    // 第一次渲染:冷路径(建缓存);第二次:命中缓存
+    let mut buf1 = Buffer::empty(area);
+    panel.render(&state, area, &mut buf1);
+    let mut buf2 = Buffer::empty(area);
+    panel.render(&state, area, &mut buf2);
+
+    let text_of = |buf: &Buffer| {
+        buf.content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect::<String>()
+    };
+    let text1 = text_of(&buf1);
+    let text2 = text_of(&buf2);
+
+    // 过滤语义不回归:仅显示 memory 主题事件(CacheHit),隐藏 BudgetExceeded
+    assert!(
+        text1.contains("CacheHit") && !text1.contains("BudgetExceeded"),
+        "topic=memory 过滤应只显示 CacheHit"
+    );
+    // 二次渲染命中缓存,输出与首次一致(auto_scroll 跟随选中项也不变)
+    assert_eq!(text1, text2, "缓存命中帧的渲染输出应与冷路径一致");
+    assert_eq!(panel.selected(), 0, "过滤后仅 1 条事件,selected 应为 0");
 }

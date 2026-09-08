@@ -591,11 +591,13 @@ impl Panel for TaskManagerPanel {
                 self.selected_indices.clear();
                 None
             }
-            // `/` 键:进入搜索模式,不清除已有关键字(支持增量搜索)
+            // `f` 键:进入搜索模式,不清除已有关键字(支持增量搜索)
             //
             // WHY 不清除关键字:用户可能在过滤后调整排序模式,
-            // 然后按 `/` 继续在同一关键字上追加搜索,清除会丢失上下文。
-            KeyCode::Char('/') => {
+            // 然后按 `f` 继续在同一关键字上追加搜索,清除会丢失上下文。
+            // WHY 不用 `/`:Concord W2 起 `/` 由 InputRouter 全局截获进入
+            // 斜杠命令模式,面板 arm 永不可达(死键),故改绑未被全局占用的 `f`。
+            KeyCode::Char('f') => {
                 self.is_searching = true;
                 None
             }
@@ -757,8 +759,8 @@ impl Panel for TaskManagerPanel {
                     action: QuestAction::Resume,
                 })
             }
-            // E: 导出任务数据
-            KeyCode::Char('E') => Some(TuiCommand::Export),
+            // WHY 不含 `E`:Concord 键位治理——全局 codegen 别名 `E`→export.run
+            // 先经 InputRouter 截获,面板 arm 永不可达(死键),导出语义已由全局覆盖。
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
@@ -790,14 +792,13 @@ impl Panel for TaskManagerPanel {
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         vec![
             ("↑/↓", crate::t!("shortcut.navigate")),
-            ("/", crate::t!("shortcut.filter_search")),
+            ("f", crate::t!("shortcut.filter_search")),
             ("P", crate::t!("shortcut.pause")),
             ("B", crate::t!("shortcut.batch_pause")),
             ("R", crate::t!("shortcut.resume")),
             ("T", crate::t!("shortcut.terminate")),
             ("+/-", crate::t!("shortcut.priority")),
             ("S", crate::t!("shortcut.sort")),
-            ("E", crate::t!("shortcut.export")),
             ("Enter", crate::t!("shortcut.details")),
             ("Esc", crate::t!("shortcut.clear_selection")),
             ("Space", crate::t!("shortcut.multi_select")),
@@ -1413,17 +1414,19 @@ mod tests {
     // ═══════════════════════════════════════════════════════════
 
     #[test]
-    fn test_filter_search_slash_enters_mode() {
+    fn test_filter_search_f_enters_mode() {
+        // WHY `f` 而非 `/`:`/` 已被全局 EnterSlash 截获(直调 handle_key 的
+        // 旧断言是假绿),面板搜索改绑 `f`,本测试与真实路由语义对齐。
         let mut panel = TaskManagerPanel::new();
         let mut state = TuiState::new();
 
         let cmd = panel.handle_key(
-            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
             &mut state,
         );
 
-        assert!(cmd.is_none(), "/ 键不应返回命令");
-        assert!(panel.is_searching, "/ 键应进入搜索模式");
+        assert!(cmd.is_none(), "f 键不应返回命令");
+        assert!(panel.is_searching, "f 键应进入搜索模式");
     }
 
     #[test]

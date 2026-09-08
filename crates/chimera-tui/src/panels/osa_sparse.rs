@@ -58,6 +58,79 @@ pub struct OsaSparsePanel {
 }
 
 impl OsaSparsePanel {
+    /// 渲染顶部平均稀疏度 Gauge(全量/降级两分支共用)
+    ///
+    /// WHY 根据 osa_sparsity 是否为 None 区分渲染:Some 正常显示百分比与
+    /// 颜色编码;None 显示 0% + "N/A" 灰字标签,表示尚未收到 OSA 事件。
+    fn render_gauge(&self, area: Rect, buf: &mut Buffer, state: &TuiState) {
+        let (percent, label, color) = match state.osa_sparsity {
+            Some(sparsity) => {
+                // 钳位到 [0.0, 1.0] 避免越界值导致 Gauge 异常
+                let clamped = sparsity.clamp(0.0_f32, 1.0_f32);
+                // 全程 f32 运算,避免隐式 f64 转换(§4.4 #6 红线)
+                let pct = (clamped * 100.0_f32) as u16;
+                let lbl = format!("Sparsity: {:.1}%", clamped * 100.0_f32);
+                (pct, lbl, Self::sparsity_color(clamped))
+            }
+            None => {
+                // 空状态:Gauge 显示 0% 并标注 N/A,颜色用灰色表示无数据
+                (0u16, "N/A".to_string(), Color::DarkGray)
+            }
+        };
+
+        let gauge = Gauge::default()
+            .block(Block::default().borders(Borders::ALL).title("Sparsity"))
+            .gauge_style(Style::default().fg(color))
+            .percent(percent)
+            .label(label);
+        gauge.render(area, buf);
+    }
+
+    /// 渲染五维掩码统计 + HCW 召回读数段(仅全量分支)
+    ///
+    /// Phase 6 D-6 占位治理:原 five_dimension_masks() 全零占位属虚假数据固化，
+    /// 已弃用。面板渲染层无 OmniSparseCoordinator 实例（同步 render 无法
+    /// 调用 async compute_all_masks），真实掩码数据由 OsaSparseSync 从
+    /// OmniSparseMasksComputed 事件同步（Gauge/context 列表已用真实数据）；
+    /// 五维细分统计待后续迭代将 snapshot 接入 DataSnapshot 后展示，
+    /// 当前诚实显示 N/A（与 Gauge 空态模式一致）。
+    fn render_mask_stats(area: Rect, buf: &mut Buffer, state: &TuiState) {
+        let mask_lines = vec![
+            Line::from(Span::styled(
+                crate::t!("panel.osa.mask_status"),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "Routing: N/A | Context: N/A | Memory: N/A".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "Audit: N/A | Budget: N/A".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )),
+            // === PROBE P0.4:HCW 召回读数（由 HcwRecallReported 事件同步，None = 未收到报告）===
+            // 展示多针召回率 needle_recall@8 / 位置偏置比 / 链路成功率三指标,
+            // 未收到报告时显示 N/A（灰字），收到后按值着色（≥目标绿 / 未达标黄）。
+            Self::recall_line(state),
+        ];
+        let mask_text = Text::from(mask_lines);
+        let mask_paragraph = Paragraph::new(mask_text);
+        mask_paragraph.render(area, buf);
+    }
+
+    /// 渲染中部 context 活跃文件列表(虚拟滚动,全量/降级两分支共用)
+    fn render_file_list(&mut self, area: Rect, buf: &mut Buffer, state: &TuiState) {
+        let content_height = area.height as usize;
+        // 列表内容高度需扣除虚拟滚动提示行(1 行)
+        let visible_rows = content_height.saturating_sub(1);
+        self.scroll_offset =
+            list_state::adjust_scroll(self.selected, self.scroll_offset, visible_rows);
+
+        let list_content =
+            Self::render_window(state, self.selected, self.scroll_offset, visible_rows);
+        let list_paragraph = Paragraph::new(list_content);
+        list_paragraph.render(area, buf);
+    }
     /// 创建新的 OSA 稀疏度面板
     pub fn new() -> Self {
         Self::default()
@@ -216,104 +289,47 @@ impl Panel for OsaSparsePanel {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // 终端过小时不渲染内容,避免布局计算溢出
-        if inner.height < 14 || inner.width < 20 {
+        // U-N1(2026-09-06 复评):守卫对齐布局实际需求 —— 全量四段需
+        // inner ≥ 18(3+4+Min(5)+6);此前守卫 14 导致 inner 14~17 时掩码段
+        // 被压缩,HCW 召回读数行被静默裁掉(FC-1 修复后该行才有数据,问题
+        // 随之显形)。两级降级:≥18 全量;8..17 gauge+文件列表(跳过掩码
+        // 统计与 sparkline);<8 返回。
+        if inner.width < 20 {
             return;
         }
+        if inner.height >= 18 {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // 顶部 Gauge
+                    Constraint::Length(4), // 五维掩码统计(Task 3.6)
+                    Constraint::Min(5),    // 中部文件列表
+                    Constraint::Length(6), // 底部 sparkline + omega-learner
+                ])
+                .split(inner);
 
-        // Task 3.6: 四段式纵向布局:顶部 Gauge(3) + 五维掩码(4) + 中部列表(弹性) + 底部(5+1)
-        //
-        // WHY 新增五维掩码段:OsaSparsePanel 展示 OSA 五维度(Routing/Context/
-        // Memory/Audit/Budget)的活跃/总数统计,与 Gauge 平均稀疏度互补.
-        // 底部 sparkline 5 行 + omega-learner 占位 1 行 = 6 行.
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // 顶部 Gauge
-                Constraint::Length(4), // 五维掩码统计(Task 3.6)
-                Constraint::Min(5),    // 中部文件列表
-                Constraint::Length(6), // 底部 sparkline + omega-learner
-            ])
-            .split(inner);
+            self.render_gauge(chunks[0], buf, state);
+            Self::render_mask_stats(chunks[1], buf, state);
+            self.render_file_list(chunks[2], buf, state);
 
-        // === 顶部:平均稀疏度 Gauge ===
-        //
-        // WHY 根据 osa_sparsity 是否为 None 区分渲染:
-        // - Some(value):正常显示稀疏度百分比与颜色编码
-        // - None:显示 0% + "N/A" 标签,表示尚未收到 OSA 事件
-        let (percent, label, color) = match state.osa_sparsity {
-            Some(sparsity) => {
-                // 钳位到 [0.0, 1.0] 避免越界值导致 Gauge 异常
-                let clamped = sparsity.clamp(0.0_f32, 1.0_f32);
-                // 全程 f32 运算,避免隐式 f64 转换(§4.4 #6 红线)
-                let pct = (clamped * 100.0_f32) as u16;
-                let lbl = format!("Sparsity: {:.1}%", clamped * 100.0_f32);
-                (pct, lbl, Self::sparsity_color(clamped))
-            }
-            None => {
-                // 空状态:Gauge 显示 0% 并标注 N/A,颜色用灰色表示无数据
-                (0u16, "N/A".to_string(), Color::DarkGray)
-            }
-        };
-
-        let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title("Sparsity"))
-            .gauge_style(Style::default().fg(color))
-            .percent(percent)
-            .label(label);
-        gauge.render(chunks[0], buf);
-
-        // === 五维掩码统计(Task 3.6) ===
-        //
-        // Phase 6 D-6 占位治理:原 five_dimension_masks() 全零占位属虚假数据固化，
-        // 已弃用。面板渲染层无 OmniSparseCoordinator 实例（同步 render 无法
-        // 调用 async compute_all_masks），真实掩码数据由 OsaSparseSync 从
-        // OmniSparseMasksComputed 事件同步（Gauge/context 列表已用真实数据）；
-        // 五维细分统计待后续迭代将 snapshot 接入 DataSnapshot 后展示，
-        // 当前诚实显示 N/A（与 Gauge 空态模式一致）。
-        let mask_lines = vec![
-            Line::from(Span::styled(
-                crate::t!("panel.osa.mask_status"),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                "Routing: N/A | Context: N/A | Memory: N/A".to_string(),
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "Audit: N/A | Budget: N/A".to_string(),
-                Style::default().fg(Color::DarkGray),
-            )),
-            // === PROBE P0.4:HCW 召回读数（由 HcwRecallReported 事件同步，None = 未收到报告）===
-            // 展示多针召回率 needle_recall@8 / 位置偏置比 / 链路成功率三指标,
-            // 未收到报告时显示 N/A（灰字），收到后按值着色（≥目标绿 / 未达标黄）。
-            Self::recall_line(state),
-        ];
-        let mask_text = Text::from(mask_lines);
-        let mask_paragraph = Paragraph::new(mask_text);
-        mask_paragraph.render(chunks[1], buf);
-
-        // === 中部:context 活跃文件列表(虚拟滚动) ===
-        let content_height = chunks[2].height as usize;
-        // 列表内容高度需扣除虚拟滚动提示行(1 行)
-        let visible_rows = content_height.saturating_sub(1);
-        self.scroll_offset =
-            list_state::adjust_scroll(self.selected, self.scroll_offset, visible_rows);
-
-        let list_content =
-            Self::render_window(state, self.selected, self.scroll_offset, visible_rows);
-        let list_paragraph = Paragraph::new(list_content);
-        list_paragraph.render(chunks[2], buf);
-
-        // === 底部:稀疏度历史 sparkline ===
-        // WHY 直接使用 osa_sparsity_history 作为 sparkline 数据点:
-        // 该字段已由 OsaSparseSync 将稀疏度 × 1000 转为整型存储,适合 sparkline 展示。
-        let sparkline = render::sparkline(
-            &state.osa_sparsity_history,
-            "Sparsity History",
-            Color::Magenta,
-        );
-        sparkline.render(chunks[3], buf);
+            // === 底部:稀疏度历史 sparkline ===
+            // WHY 直接使用 osa_sparsity_history 作为 sparkline 数据点:
+            // 该字段已由 OsaSparseSync 将稀疏度 × 1000 转为整型存储,适合 sparkline 展示。
+            let sparkline = render::sparkline(
+                &state.osa_sparsity_history,
+                "Sparsity History",
+                Color::Magenta,
+            );
+            sparkline.render(chunks[3], buf);
+        } else if inner.height >= 8 {
+            // 降级两段:gauge + 文件列表(掩码统计与 sparkline 让位)
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(3), Constraint::Min(3)])
+                .split(inner);
+            self.render_gauge(chunks[0], buf, state);
+            self.render_file_list(chunks[1], buf, state);
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {
@@ -341,14 +357,8 @@ impl Panel for OsaSparsePanel {
             }
             // Enter:空列表时返回 None;非空列表也返回 None(本面板未定义详情弹窗)
             KeyCode::Enter => None,
-            KeyCode::Char('g') => {
-                self.scroll_to_top(state);
-                None
-            }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom(state);
-                None
-            }
+            // WHY 无 g/G arm:InputRouter 全局截获(g→GPrefix、G→ScrollBottom),
+            // 滚动经 RouteTarget::ScrollTop/ScrollBottom 等价覆盖,面板 arm 为死键。
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
@@ -517,5 +527,72 @@ mod tests {
         let mut state = TuiState::new();
         let key = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
         assert_eq!(panel.handle_key(key, &mut state), None);
+    }
+    // ── U-N1(2026-09-06 复评):两级降级渲染验收 ──────────────────
+
+    fn render_panel_to_string(
+        panel: &mut OsaSparsePanel,
+        state: &TuiState,
+        width: u16,
+        height: u16,
+    ) -> String {
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| panel.render(state, f.area(), f.buffer_mut()))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    fn seeded_state() -> TuiState {
+        let mut state = TuiState::new();
+        state.osa_sparsity = Some(0.45);
+        state.osa_context_mask = vec!["file1.rs".into(), "file2.rs".into()];
+        state.osa_sparsity_history = vec![450];
+        state.recall_needle_at_8 = Some(0.8);
+        state
+    }
+
+    #[test]
+    fn full_layout_contains_recall_and_sparkline() {
+        let mut panel = OsaSparsePanel::new();
+        let state = seeded_state();
+        // area 40 行 → inner 38 ≥ 18:全量四段
+        let content = render_panel_to_string(&mut panel, &state, 120, 40);
+        assert!(content.contains("Sparsity: 45.0%"));
+        assert!(content.contains("Recall:"), "全量布局应含 HCW 召回读数行");
+        assert!(
+            content.contains("Sparsity History"),
+            "全量布局应含 sparkline"
+        );
+    }
+
+    #[test]
+    fn degraded_layout_drops_mask_and_sparkline_but_keeps_gauge_and_list() {
+        let mut panel = OsaSparsePanel::new();
+        let state = seeded_state();
+        // area 18 行 → inner 16(8..17):降级两段
+        let content = render_panel_to_string(&mut panel, &state, 100, 18);
+        assert!(content.contains("Sparsity:"), "降级布局应保留 gauge");
+        assert!(content.contains("file1.rs"), "降级布局应保留文件列表");
+        assert!(
+            !content.contains("Sparsity History"),
+            "降级布局应跳过 sparkline 段"
+        );
+    }
+
+    #[test]
+    fn tiny_area_renders_nothing_without_panic() {
+        let mut panel = OsaSparsePanel::new();
+        let state = seeded_state();
+        // area 8 行 → inner 6 < 8:直接返回,不 panic
+        let content = render_panel_to_string(&mut panel, &state, 100, 8);
+        assert!(!content.contains("Sparsity:"));
     }
 }

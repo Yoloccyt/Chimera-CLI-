@@ -617,16 +617,9 @@ impl Panel for QuestPanel {
                     }
                 })
             }
-            // g/G 双路径:app 交互经 InputRouter 全局拦截(gg→ScrollTop、G→ScrollBottom),
-            // 面板直接 API(测试/嵌入调用)仍保留同名 arm,语义一致。
-            KeyCode::Char('g') => {
-                self.scroll_to_top(state);
-                None
-            }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom(state);
-                None
-            }
+            // WHY 无 g/G arm:InputRouter 全局截获(g→GPrefix 前缀态、G→ScrollBottom),
+            // 滚动语义经 RouteTarget::ScrollTop/ScrollBottom 调用 scroll_to_top/bottom,
+            // 面板 arm 永不可达(死键),已按键位治理移除。
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }

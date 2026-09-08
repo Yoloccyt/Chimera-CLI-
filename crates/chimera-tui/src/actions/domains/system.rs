@@ -2,6 +2,7 @@
 //!
 //! 对应架构层:L10 Interface
 
+use crate::actions::action_ids;
 use crate::actions::descriptor::{ActionDescriptor, ActionDomain};
 
 /// 返回 System 域的全部动作描述
@@ -67,7 +68,7 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
         ActionDescriptor {
             requires_query: true,
             ..ActionDescriptor::new(
-                "overwindow.run",
+                action_ids::OVERWINDOW_RUN,
                 ActionDomain::System,
                 "action.overwindow.run",
                 Some("overwindow run"),

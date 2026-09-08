@@ -60,7 +60,8 @@ fn tab_click_switches_to_clicked_panel() {
     render_once(&mut app);
     assert_eq!(app.current_panel(), PanelId::Quest);
 
-    // Phase 10:80 列 / 27 面板 = tab_width 2(整除);点击第 2 个 tab(column 2-3)→ Parliament
+    // 26 面板(FC-05 下线 InjectionStrategy)下 80 列 / 26 = tab_width 3;
+    // 点击第 2 个 tab(column 3-5)→ Parliament
     app.handle_mouse_event(left_down(3, 1));
     assert_eq!(
         app.current_panel(),
@@ -68,8 +69,8 @@ fn tab_click_switches_to_clicked_panel() {
         "点击第 2 个 tab 应切到 Parliament"
     );
 
-    // 点击第 3 个 tab(column 4-5)→ Budget
-    app.handle_mouse_event(left_down(5, 1));
+    // 点击第 3 个 tab(column 6-8)→ Budget
+    app.handle_mouse_event(left_down(7, 1));
     assert_eq!(
         app.current_panel(),
         PanelId::Budget,
@@ -86,6 +87,27 @@ fn tab_click_out_of_range_is_ignored() {
     assert_eq!(app.current_panel(), PanelId::Quest, "越界点击不应切换面板");
 }
 
+#[test]
+fn tab_click_narrow_terminal_no_panic() {
+    // IT-02(2026-09-06 评估):窄终端(宽度 < 面板数)下 `tab_width = width/panel_count`
+    // 整除为 0,此前 `column / tab_width` 直接除零 panic(交互崩溃)。修复后应
+    // 静默忽略点击,既不 panic 也不切换面板。
+    let mut app = make_app();
+    {
+        // 5 列极窄终端渲染一帧(设置 pane_manager.last_area)
+        let backend = TestBackend::new(5, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+    }
+    // 点击标签栏首列:tab_width = 宽度 / 面板数 整除为 0 → 守卫返回
+    app.handle_mouse_event(left_down(2, 1));
+    assert_eq!(
+        app.current_panel(),
+        PanelId::Quest,
+        "窄终端标签栏点击应静默忽略(不 panic、不切换)"
+    );
+}
+
 // ============================================================
 // B. 底部区域点击进入命令模式
 // ============================================================
@@ -97,11 +119,13 @@ fn bottom_click_enters_command_mode() {
     assert_eq!(app.state().input_mode, InputMode::Normal);
 
     // DualPane 默认布局:bottom 区域从 y=17 起(80x24 终端)
+    // I-B(2026-09-06 复评):底栏点击改入 Slash 模式(与 //` 斜杠入口统一,
+    // 遗留 Command 无键盘入口后不再从鼠标进入)
     app.handle_mouse_event(left_down(10, 18));
     assert_eq!(
         app.state().input_mode,
-        InputMode::Command,
-        "点击底部区域应进入命令模式"
+        InputMode::Slash,
+        "点击底部区域应进入斜杠命令模式"
     );
     assert!(
         app.state().input_buffer.is_empty(),
@@ -170,14 +194,16 @@ fn wheel_scroll_clamps_at_zero_in_popup() {
 fn wheel_in_main_area_scrolls_focused_panel() {
     let mut app = make_app();
     // 注入 Parliament 事件,使列表可导航
-    app.state_mut().latest_events = (0..10)
-        .map(|i| NexusEvent::VoteCast {
-            metadata: EventMetadata::new("parliament"),
-            proposal_id: format!("p{i}"),
-            voter: "alice".into(),
-            vote: i % 2 == 0,
-        })
-        .collect::<VecDeque<_>>();
+    app.state_mut().latest_events = std::sync::Arc::new(
+        (0..10)
+            .map(|i| NexusEvent::VoteCast {
+                metadata: EventMetadata::new("parliament"),
+                proposal_id: format!("p{i}"),
+                voter: "alice".into(),
+                vote: i % 2 == 0,
+            })
+            .collect::<VecDeque<_>>(),
+    );
     app.switch_panel_to(PanelId::Parliament);
     render_once(&mut app);
 

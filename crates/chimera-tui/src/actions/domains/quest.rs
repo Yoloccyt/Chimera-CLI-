@@ -2,6 +2,7 @@
 //!
 //! 对应架构层:L10 Interface
 
+use crate::actions::action_ids;
 use crate::actions::descriptor::{ActionDescriptor, ActionDomain};
 
 /// 返回 Quest 域的全部动作描述
@@ -26,7 +27,7 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
         ActionDescriptor {
             requires_query: true,
             ..ActionDescriptor::new(
-                "quest.start",
+                action_ids::QUEST_START,
                 ActionDomain::Quest,
                 "action.quest.start",
                 Some("quest start"),
@@ -37,7 +38,7 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
             is_core: true,
             requires_context: true,
             ..ActionDescriptor::new(
-                "quest.pause",
+                action_ids::QUEST_PAUSE,
                 ActionDomain::Quest,
                 "action.quest.pause",
                 Some("quest pause"),
@@ -48,7 +49,7 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
             is_core: true,
             requires_context: true,
             ..ActionDescriptor::new(
-                "quest.resume",
+                action_ids::QUEST_RESUME,
                 ActionDomain::Quest,
                 "action.quest.resume",
                 Some("quest resume"),
@@ -58,7 +59,7 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
         ActionDescriptor {
             requires_context: true,
             ..ActionDescriptor::new(
-                "quest.cancel",
+                action_ids::QUEST_CANCEL,
                 ActionDomain::Quest,
                 "action.quest.cancel",
                 Some("quest cancel"),
@@ -68,7 +69,7 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
         ActionDescriptor {
             requires_context: true,
             ..ActionDescriptor::new(
-                "quest.jump",
+                action_ids::QUEST_JUMP,
                 ActionDomain::Quest,
                 "action.quest.jump",
                 Some("quest jump"),

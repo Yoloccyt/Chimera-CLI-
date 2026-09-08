@@ -238,8 +238,10 @@ fn unknown_command_reports_honest_error() {
 fn unwired_command_gives_honest_todo() {
     let _guard = locale_guard();
     let mut app = make_app();
-    // /compact 已登记但后端未接线(W3+)→ 诚实提示而非伪造执行
-    slash_submit(&mut app, "compact");
+    // /fork 已登记但后端未接线(W3+)→ 诚实提示而非伪造执行。
+    // (FC-2 2026-09-06:/compact 已接线为编排域派发,不再作本测试范例;
+    //   其派发/审批/回写闭环见 tests/compact_closure_test.rs)
+    slash_submit(&mut app, "fork");
     let msg = app
         .state()
         .status_message

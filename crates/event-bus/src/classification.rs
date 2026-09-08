@@ -230,6 +230,8 @@ impl NexusEvent {
             Self::TuiChatResponseChunk { .. } => "TuiChatResponseChunk",
             Self::TuiChatCompleted { .. } => "TuiChatCompleted",
             Self::TuiChatStatusChanged { .. } => "TuiChatStatusChanged",
+            // FC-2(ADR-081):/compact 策展回写
+            Self::TuiChatHistoryReplaced { .. } => "TuiChatHistoryReplaced",
             // Concord W10 T10.1(ADR-082):协议握手事件
             Self::TuiHello { .. } => "TuiHello",
             Self::TuiHelloAck { .. } => "TuiHelloAck",

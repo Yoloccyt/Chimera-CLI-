@@ -130,3 +130,9 @@ harness = false
 [[bench]]
 name = "v3_pipeline_bench"
 harness = false
+
+# FC-2(ADR-081):/compact 上下文策展 — 五段分类 + 0-1 背包 + 抽取式摘要
+# 在真实会话规模(500/5000 条)下的端到端耗时基线。
+[[bench]]
+name = "curator_bench"
+harness = false

@@ -250,6 +250,12 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "status.layout" => "Layout",
         "status.chat_pending" => "Chat lands in M3b",
         "status.quit_confirm" => "Quit Chimera? [←/→ toggle, Enter to confirm]",
+        // FC-A(2026-09-06 复评):投票诚实降级(L8 治理通道未接线)
+        "status.vote_unwired" => "Vote: L8 Parliament governance channel not wired (reserved), request not published",
+        // B1(2026-09-06 复评):未接线命令的具体指引
+        "slash.unwired.fork" => "Fork: multi-session storage not wired (reserved)",
+        "slash.unwired.undo" => "Undo: message-level undo not wired; use Esc-Esc rewind",
+        "slash.unwired.redo" => "Redo: not wired (reserved)",
         "mode.normal" => "Normal",
         "mode.insert" => "Insert",
         "mode.command" => "Command",
@@ -274,8 +280,12 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "chat.status.idle" => "Idle",
         "hint.palette" => "Ctrl+P Palette",
         "hint.help" => "? Help",
+        // I-2(2026-09-06 评估):Chat 视图下面板切换键的诚实提示(不可见切换)
+        "hint.panel_switch_in_chat" => {
+            "Panel switching works in Dashboard view (press \\ to toggle)"
+        }
         "hint.bar" => {
-            " q:Quit  Tab:Next  /:Search  ::Cmd  ?:Help  t:Theme  l:Layout  a:Actions  g+1-6:Panel "
+            " q:Quit  Tab:Next  /:Cmd  ?:Help  t:Theme  l:Layout  a:Actions  g+1-6:Panel "
         }
         "palette.title" => "Command Palette",
         "palette.hint" => "type to filter · ↑↓ select · Enter run · Esc close",

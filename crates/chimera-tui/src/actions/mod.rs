@@ -15,6 +15,7 @@
 //! 从哪个入口触发,行为与结果完全一致——由 `ActionRegistry` 单源保证。
 //! 派发统一经 `NexusEvent::TuiActionRequested`(见 event-bus),编排在 chimera-cli。
 
+pub mod action_ids;
 pub mod codegen;
 pub mod descriptor;
 pub mod domains;
@@ -23,6 +24,15 @@ pub mod registry;
 pub mod slash_parser;
 pub mod slash_registry;
 
+// B3/I-F(2026-09-06 复评):编排域 action_id 单一事实源见 `action_ids`
+// 模块(含 COMPACT_ACTION_ID 兼容别名),斜杠计划层与 chimera-cli 编排器
+// 均从该模块引用,禁止再写字面量。
+
+pub use action_ids::COMPACT_ACTION_ID;
+pub use action_ids::{
+    AGENT_CHAT, COMPACT, OVERWINDOW_RUN, QUEST_CANCEL, QUEST_CHECKPOINT, QUEST_PAUSE, QUEST_RESUME,
+    QUEST_START,
+};
 pub use codegen::{HelpLine, PaletteEntry, SlashCommand};
 pub use descriptor::{ActionDescriptor, ActionDomain};
 pub use panel_menu::panel_context_actions;

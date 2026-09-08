@@ -35,6 +35,13 @@ pub mod metrics_history;
 pub mod newline_gate;
 pub mod resource_history;
 
+/// `/compact` 上下文策展器(Concord W9,ADR-081;FC-2 接线,2026-09-06)
+///
+/// WHY pub:编排器(chimera-cli action_orchestrator)需调用
+/// `RuleCurationPolicy::curate` 执行策展,并经 `parse_compact_args`
+/// 校验命令参数;此前本模块从未被 `mod` 声明(纯死文件,评估报告 FC-2)。
+pub mod curator;
+
 pub(crate) mod snapshot;
 pub mod sync;
 // WHY pub:data_pipeline_bench(独立 crate)直接调用 `pipeline::push_history`
@@ -46,6 +53,9 @@ pub mod protocol_client;
 pub mod protocol_data_source;
 
 // Re-export all public types to maintain the existing API surface
+pub use curator::{
+    CompactPolicy, CompactReport, CompactRequest, CurationConfig, CurationPlan, RuleCurationPolicy,
+};
 pub use pipeline::{DataPipeline, StubDataSource, SysMetricsCollector};
 pub use protocol_data_source::ProtocolDataSource;
 pub use snapshot::{

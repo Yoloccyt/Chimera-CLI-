@@ -90,6 +90,20 @@ impl std::str::FromStr for VoteValue {
 // 结构化载荷
 // ============================================================
 
+/// TUI 聊天消息载荷 — 角色以字符串编码(L1 不感知 L10 的 ChatRole 枚举)
+///
+/// WHY 定义在 event-bus:`/compact` 策展(FC-2,ADR-081)的压缩结果需经
+/// `TuiChatHistoryReplaced` 事件整体回写会话历史;ChatMessage 类型归属
+/// chimera-tui(L10),event-bus(L1)不能反向依赖,故以字符串角色
+/// ("user"/"assistant"/"system")承载,转换由消费端(ChatSync)负责。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TuiChatMessagePayload {
+    /// 消息角色:"user" / "assistant" / "system"
+    pub role: String,
+    /// 消息内容
+    pub content: String,
+}
+
 /// 预算指标载荷 — TUI Budget 面板的结构化数据(P1.2 实时数据驱动面板)
 ///
 /// WHY 定义在 event-bus:chimera-tui(L10)无法直接依赖 efficiency-monitor(L9),

@@ -10,12 +10,13 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use crossterm::tty::IsTty;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::{self, Stdout};
 use std::time::Duration;
 
-use super::{TuiApp, COMPANION_MIN_WIDTH, COMPANION_WIDTH, IDE_CONTEXT_WIDTH, IDE_SIDEBAR_WIDTH};
+use super::{TuiApp, COMPANION_WIDTH, IDE_CONTEXT_WIDTH, IDE_SIDEBAR_WIDTH};
 use crate::command_palette::CommandPaletteModel;
 use crate::config::TuiConfig;
 use crate::data::ExportFormat;
@@ -158,9 +159,16 @@ impl TuiApp {
                 }
             }
             RouteTarget::PanelJump(id) => {
-                // 未注册面板的跳转不再静默失败:状态栏提示,避免死键无感知
-                // (如 g5 → Timeline,TimelinePanel 有实现但未进入面板循环)。
-                if self.panel_index(id).is_none() {
+                // I-2(2026-09-06 评估):Chat 视图全屏渲染会话流,面板切换
+                // 对用户不可见(仅状态栏面板名变化,体感"按了没反应")。
+                // 与其静默切走,不如诚实提示 Dashboard 路径;数字键/F 键
+                // 同经此 arm,一并覆盖。
+                if self.state.view_mode == crate::types::ViewMode::Chat {
+                    self.state
+                        .set_status(crate::t!("hint.panel_switch_in_chat"), Severity::Info);
+                } else if self.panel_index(id).is_none() {
+                    // 未注册面板的跳转不再静默失败:状态栏提示,避免死键无感知
+                    // (如 g5 → Timeline,TimelinePanel 有实现但未进入面板循环)。
                     self.state
                         .set_status(format!("Panel {id:?} is not registered"), Severity::Warning);
                 } else {
@@ -172,6 +180,11 @@ impl TuiApp {
                 // (方案 §7.4 模式内分义);Dashboard 保留原焦点环语义
                 if !forward && self.state.view_mode == crate::types::ViewMode::Chat {
                     self.cycle_approval_mode();
+                } else if forward && self.state.view_mode == crate::types::ViewMode::Chat {
+                    // I-2:Chat 视图下 Tab 与数字键同理 —— 面板切换不可见,
+                    // 诚实提示而非静默切换(与 Shift+Tab=审批模式形成对称)
+                    self.state
+                        .set_status(crate::t!("hint.panel_switch_in_chat"), Severity::Info);
                 } else if forward {
                     self.switch_panel_next();
                 } else {
@@ -436,6 +449,13 @@ impl TuiApp {
                     self.apply_command(c);
                 }
             }
+            crate::actions::DispatchPlan::Orchestrated { action_id, payload } => {
+                // FC-2(2026-09-06):斜杠编排命令直连统一派发桥 —— 本地臂
+                // 优先直执行,未注入资源的动作兜底发 TuiActionRequested 并
+                // 挂 2s 超时;Plan 审批态已在函数入口统一拦截(压缩会话
+                // 历史属变更型操作,与 quest.start 同受治理)。
+                self.dispatch_action(action_id, payload, ActionSource::Chat);
+            }
             crate::actions::DispatchPlan::AgentTemplate(key) => {
                 // Agent 层:提示词模板预置进 composer(Insert 模式),操作员
                 // 补充内容后 Enter 走既有 TuiChatSubmitted 链路
@@ -570,6 +590,11 @@ impl TuiApp {
             SlashEffect::HonestTodo => {
                 self.state
                     .set_status(crate::t!("slash.todo").to_string(), Severity::Warning);
+            }
+            // B1:未接线 + 具体指引(告知替代路径,如 undo → Esc-Esc 回退)
+            SlashEffect::UnwiredHint(key) => {
+                self.state
+                    .set_status(crate::t!(key).to_string(), Severity::Warning);
             }
         }
     }
@@ -791,6 +816,17 @@ impl TuiApp {
     /// 引用与重赋值的借用冲突。
     fn handle_palette_key(&mut self, key: KeyEvent) {
         match key.code {
+            // I-A(2026-09-06 复评):palette 打开时 Ctrl+L 此前被吞 —— 其余
+            // 全部输入模式(Insert/Slash/遗留 Command)均可中英切换,唯独
+            // palette 不行,行为不一致;复用 Slash 模式的同义派发(本地臂
+            // 立即生效),palette 保持打开(检索列表 i18n 随刷新)。
+            KeyCode::Char('l') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                self.dispatch_action(
+                    "system.toggle_locale",
+                    "{}".to_string(),
+                    ActionSource::Palette,
+                );
+            }
             KeyCode::Esc => {
                 // Task 1.15.4:palette 移至 chat_session
                 self.chat_session.palette = None;
@@ -991,8 +1027,11 @@ impl TuiApp {
     /// (与既有 companion_split 逐字节等价,零回归)。
     pub(super) fn pane_rects(&self, area: ratatui::layout::Rect) -> Vec<ratatui::layout::Rect> {
         use crate::engine::layout::{Constraint, Direction, PaneMode};
+        // U-1(2026-09-06 复评):折叠判定接入 `responsive_collapse_threshold`
+        // 配置(经 should_collapse_companion,阈值 0 = 禁用折叠)—— 此前硬编码
+        // COMPANION_MIN_WIDTH=60 致用户配置不生效(死配置,双轨漂移)。
         if !self.wants_multi_pane()
-            || area.width < COMPANION_MIN_WIDTH
+            || self.should_collapse_companion(area.width)
             || self.companion_target().is_none()
         {
             return vec![area];
@@ -1818,14 +1857,16 @@ impl TuiApp {
         });
     }
 
-    /// 发布投票请求
+    /// 投票请求 —— 诚实降级(FC-A,2026-09-06 复评)
+    ///
+    /// WHY 不发布:全仓无 `VoteCastRequested` 消费者 —— 投票属 L8 Parliament
+    /// 治理域(提案表决),quest-engine 无提案模型,发布后请求石沉大海且用户
+    /// 只见"published"假反馈(评估报告 FC-A)。在 L8 消费通道落地前不发事件、
+    /// 状态栏诚实告知;事件变体保留为协议预留(不删除)。
     fn publish_vote(&mut self, proposal_id: &str, vote: VoteValue) {
-        self.publish_control_event(NexusEvent::VoteCastRequested {
-            metadata: EventMetadata::new("chimera-tui"),
-            proposal_id: proposal_id.to_string(),
-            voter: "operator".to_string(),
-            vote,
-        });
+        let _ = (proposal_id, vote);
+        self.state
+            .set_status(crate::t!("status.vote_unwired"), Severity::Warning);
     }
 
     /// 发布状态刷新请求
@@ -1834,6 +1875,33 @@ impl TuiApp {
             metadata: EventMetadata::new("chimera-tui"),
             requested_by: "operator".to_string(),
         });
+    }
+
+    /// FC-B(2026-09-06 复评):启动期发布 TUI 协议握手帧(ADR-082 SEC-4)
+    ///
+    /// WHY 此前缺失:cli 侧 `HandshakeResponder` 一直等待 TuiHello,生产中
+    /// 永不应答(握手链路空转,评估报告 FC-B)。由 `run()` 在事件循环启动前
+    /// 调用一次;cli 侧应答的 `TuiHelloAck` 经 broadcast 落入 latest_events
+    /// (Log/EventStream 可见),即 SEC-4 要求的"兼容日志"语义。
+    /// WHY publish_blocking:`run()` 为同步上下文(§4.4 #8 sync 发布模式)。
+    pub fn publish_tui_hello(&self) {
+        if let Some(bus) = &self.event_bus {
+            let _ = bus.publish_blocking(NexusEvent::TuiHello {
+                metadata: EventMetadata::new("chimera-tui"),
+                // 与 chimera-cli handshake::TUI_PROTO_VERSION("1.0.0")保持同步
+                // (L10 内两 crate 无反向依赖,无法共享常量;negotiate 按 semver 判级)
+                proto: "1.0.0".into(),
+                // TUI 端版本:与 workspace 版本同步(hardcode 会漂移,取编译期 env)
+                tui_version: env!("CARGO_PKG_VERSION").into(),
+                // 诚实能力清单:仅列当前 TUI 已接线的协议能力
+                caps: vec![
+                    "slash-commands".into(),
+                    "pane-mode".into(),
+                    "overwindow".into(),
+                    "compact".into(),
+                ],
+            });
+        }
     }
 
     /// 通用控制事件发布,处理 EventBus 不可用或发布失败
@@ -2025,10 +2093,27 @@ impl TuiApp {
                 .map_err(|e| TuiError::TerminalInit(e.to_string()))?;
         }
 
+        // P-3(ADR-079):同步输出能力探测,raw mode 开启后、事件循环启动前
+        // 一次性执行 —— probe 会写 DECRQM 查询并经 poll 消费终端应答,若延迟到
+        // 帧循环中会与用户输入竞争。非 TTY(测试/管道)直接降级 Disabled,
+        // 避免探测超时与转义序列污染捕获输出。
+        #[cfg(feature = "v3-engine")]
+        {
+            self.v3_sync_mode = Some(if io::stdout().is_tty() {
+                crate::engine::sync_probe::probe_sync_output()
+            } else {
+                crate::engine::SyncMode::Disabled
+            });
+        }
+
         // 步骤 2:创建终端
         let backend = CrosstermBackend::new(stdout);
         let mut terminal =
             Terminal::new(backend).map_err(|e| TuiError::TerminalInit(e.to_string()))?;
+
+        // 步骤 2.5:协议握手(FC-B,ADR-082 SEC-4)——cli 侧 HandshakeResponder
+        // 应答 TuiHelloAck;必须在事件循环前发布(响应端 SEC-4 只认首帧)
+        self.publish_tui_hello();
 
         // 步骤 3:事件循环
         // WHY 用 result 变量:确保终端恢复在 return 前执行,即使事件循环出错
@@ -2141,13 +2226,27 @@ impl TuiApp {
     /// 1. 用复用内存终端(`v3_term`,仅尺寸变化时重建)执行与回退路径相同的
     ///    `self.render(f)` 帧绘制,面板代码零改动(渐进迁移);
     /// 2. `render_diffed` 将 ratatui 帧逐格翻译为自研 Cell 并与已呈现帧比较
-    ///    (单遍合并,clean 行零开销),仅变化格经 `TerminalWriter` 写入 stdout。
+    ///    (单遍合并,clean 行零开销),仅变化格经 `TerminalWriter` 写入
+    ///    `AtomicFrameWriter` 帧缓冲,帧末单次 `write_all` 原子提交。
     ///
-    /// # 静默帧优化(评估报告 P0-1 DirtyTracker 接线)
+    /// # 静默帧优化(P0-1 DirtyTracker 接线 + P-1 帧复用,2026-09-06 评估)
     /// 上一轮 poll 无事件 + 本轮数据未变(无 dirty 面板)+ 无浮层 + Normal 模式
-    /// 时,面板渲染区域内容与已呈现帧逐字节相同,仅 status_bar 行(帧率/计数
-    /// 每帧变化)参与比较,其余行跳过 compat 转换与 diff 比较,大幅降低静默帧
-    /// 的 CPU 开销(80×24 下约 92% 的格免转换)。
+    /// 时,面板渲染区域内容与已呈现帧逐字节相同:
+    /// - **P-1 跳过全量 widget 渲染**:直接复用上一帧缓存(`v3_cached_frame`),
+    ///   仅重绘状态行(帧率/计数每帧变化),消除静默帧的全量面板渲染开销;
+    /// - 仅状态行参与 compat 转换与 diff 比较,其余行跳过(80×24 下约 92%
+    ///   的格免转换);
+    /// - 缓存缺失(首帧/尺寸变化)时回退全量渲染并重建缓存。
+    ///
+    /// # 状态行来源(P-2)
+    /// 状态行区域由 `render_status_bar` 在全量渲染时记录(`status_bar_area`),
+    /// Dashboard 为 h-2 行、Chat 视图 statusline 为 h-1 行、SinglePane 无状态行
+    /// (None → 静默帧零输出)。替代旧版硬编码 h-2 —— 旧版在 Chat 视图会
+    /// 漏刷 statusline 且比较错误的 composer 行。
+    ///
+    /// # 原子帧提交(P-3,ADR-079)
+    /// 帧输出经 `AtomicFrameWriter` 累积,`finish_frame` 单次 `write_all` 提交
+    /// 并按探测结果以 CSI 2026 同步窗口包裹,消除半帧/撕裂。
     ///
     /// # 错误
     /// 终端尺寸读取失败 / 帧绘制失败 / ANSI 写出失败均映射为 `TuiError::Render`。
@@ -2178,33 +2277,100 @@ impl TuiApp {
                     .map_err(|e| TuiError::Render(format!("v3 backend init: {e}")))?,
             );
         }
-        // take 解除 self 借用:draw 闭包需再借 `&mut self`(render 方法),
-        // 与持有 v3_term 字段借用互斥,draw 完成后放回字段。
-        let mut term = self.v3_term.take().expect("v3_term just initialized");
-        term.draw(|f| self.render(f))
-            .map_err(|e| TuiError::Render(e.to_string()))?;
-        let rb = term.backend().buffer().clone();
-        self.v3_term = Some(term);
 
-        // 行级脏标记:静默帧仅 status_bar 行需比较(帧率/计数每帧变化);
+        let quiescent = self.quiescent_frame();
+        // P-2:状态行区域来自最近一次全量渲染的实际记录(字节级同源);
+        // 静默帧 + 无状态栏布局(SinglePane)→ None → 全行跳过零输出。
+        let status_area = self.status_bar_area;
+
+        let rb: ratatui::buffer::Buffer = if quiescent {
+            match self.v3_cached_frame.take() {
+                // P-1:缓存命中且尺寸一致 → 复用上一帧,仅重绘状态行
+                Some(mut cached) if cached.area.width == w && cached.area.height == h => {
+                    // WHY 手动更新 FPS:全量路径由 render() 开头统计帧间隔,
+                    // 复用路径跳过 widget 渲染,此处补齐等价统计保持帧率活性。
+                    let now = std::time::Instant::now();
+                    let delta = now.duration_since(self.fps_counter.last_frame_time);
+                    self.fps_counter.last_frame_time = now;
+                    self.update_fps(delta);
+                    if let Some(area) = status_area {
+                        // 区域越界守卫:resize 竞态下记录区域可能超出当前帧
+                        if area.y.saturating_add(area.height) <= h {
+                            self.render_status_bar(&mut cached, area);
+                        }
+                    }
+                    self.v3_cached_frame = Some(cached.clone());
+                    cached
+                }
+                // 缓存缺失(首帧/尺寸变化):回退全量渲染并重建缓存
+                _ => {
+                    self.render_full_v3_frame(w)?;
+                    self.v3_cached_frame.clone().expect("cache just written")
+                }
+            }
+        } else {
+            self.render_full_v3_frame(w)?;
+            self.v3_cached_frame.clone().expect("cache just written")
+        };
+        // take 解除 self 借用已不再需要:draw 在 render_full_v3_frame 内部完成
+        // (此处仅保留 v3_term 生命周期管理)
+
+        // 行级脏标记:P-2 状态行区域行参与比较;其余行(静默帧)全跳过;
         // 非静默帧全部行参与(全量路径由 V3Output 内部按首帧/区域变化处理)
         let mut dirty = crate::engine::DirtyTracker::new(h);
-        if self.quiescent_frame() {
-            if h >= 2 {
-                dirty.mark(h - 2);
+        if quiescent {
+            if let Some(area) = status_area {
+                let end = area.y.saturating_add(area.height).min(h);
+                for row in area.y..end {
+                    dirty.mark(row);
+                }
             }
         } else {
             dirty.mark_all();
         }
 
+        // P-3:帧输出经 AtomicFrameWriter 原子提交(take 模式复用缓冲容量,
+        // 避免 double-borrow 与每帧 8KB 再分配)
+        let sync_mode = self
+            .v3_sync_mode
+            .unwrap_or(crate::engine::SyncMode::Disabled);
+        let mut frame = self
+            .v3_frame_writer
+            .take()
+            .unwrap_or_else(|| crate::engine::AtomicFrameWriter::new(sync_mode));
+        frame.begin_frame();
         let stdout = io::stdout();
         let mut out = stdout.lock();
-        let state = self
-            .v3_output
-            .get_or_insert_with(crate::engine::output::V3Output::new);
-        state
-            .render_diffed(&rb, &dirty, &mut out)
-            .map_err(|e| TuiError::Render(e.to_string()))
+        {
+            let state = self
+                .v3_output
+                .get_or_insert_with(crate::engine::output::V3Output::new);
+            state
+                .render_diffed(&rb, &dirty, frame.buffer_mut())
+                .map_err(|e| TuiError::Render(e.to_string()))?;
+        }
+        frame
+            .finish_frame(&mut out)
+            .map_err(|e| TuiError::Render(e.to_string()))?;
+        self.v3_frame_writer = Some(frame);
+        Ok(())
+    }
+
+    /// 全量渲染一帧并更新缓存(P-1 提取:draw + 缓存写入单一路径)
+    ///
+    /// WHY 提取:静默帧复用与常规帧共享"draw → clone → 缓存"序列,
+    /// 单一实现避免两处字节级行为漂移。`v3_term` 的 take/放回借用协议
+    /// 在此收敛(draw 闭包需再借 `&mut self`)。
+    #[cfg(feature = "v3-engine")]
+    fn render_full_v3_frame(&mut self, w: u16) -> Result<(), TuiError> {
+        let mut term = self.v3_term.take().expect("v3_term just initialized");
+        term.draw(|f| self.render(f))
+            .map_err(|e| TuiError::Render(e.to_string()))?;
+        let rb = term.backend().buffer().clone();
+        debug_assert_eq!(rb.area.width, w, "全量帧宽度应与终端尺寸一致");
+        self.v3_term = Some(term);
+        self.v3_cached_frame = Some(rb.clone());
+        Ok(())
     }
 
     /// 静默帧判定:上一轮 poll 无事件且本轮数据/浮层状态均未变
