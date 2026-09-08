@@ -128,7 +128,7 @@ impl Panel for PvlScorePanel {
 
         // 最小终端高度检查:标题(1) + 9 维度(各 2 行) + 总分(2) + 边框(2) = 23
         if area.height < 15 {
-            let text = Text::from("Terminal too small for PVL Score panel (min 15 rows)");
+            let text = Text::from(crate::t!("panel.pvl.terminal_too_small"));
             let p = Paragraph::new(text).block(inner);
             Widget::render(p, area, buf);
             return;
@@ -187,7 +187,7 @@ impl Panel for PvlScorePanel {
         let total_color = Self::score_color(score.total);
         lines.push(Line::from(vec![
             Span::styled(
-                "  TOTAL SCORE: ",
+                crate::t!("panel.pvl.total_score"),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(

@@ -5,8 +5,10 @@
 //! # 测试策略(WHY)
 //! - **黑盒事件流**:经 `TuiApp::handle_key_event` 公共 API 驱动,验证对外可观测行为
 //!   (`input_mode`/`palette_is_open`/`current_panel`/`running`),不触碰私有字段。
-//! - **决策 B 核心**:`:` 打开命令栏(`InputMode::Command`)、Ctrl+P 打开命令面板 overlay,
-//!   二者为独立入口不可混同——这是 M3a 保留 `:` 带参命令能力的关键契约。
+//! - **决策 B 核心**:`/` 进入斜杠模式(`InputMode::Slash`,唯一命令入口,
+//!   遗留 `:` 命令经 parse_legacy 回退承接)、Ctrl+P 打开命令面板 overlay,
+//!   二者为独立入口不可混同。
+//!   IT-01(批次-B):遗留 `InputMode::Command/Search` 双入口已删除。
 //! - **零回归锚点**:数字/F 键/Tab/g 前缀/主题/布局经 InputRouter 决策 + 既有 app 方法执行,
 //!   效果与旧 `handle_global_key` 逐键一致;`gq` 不误退出是 GPrefix 退出态重映射的关键验证。
 

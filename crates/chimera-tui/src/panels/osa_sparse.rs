@@ -79,7 +79,11 @@ impl OsaSparsePanel {
         };
 
         let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title("Sparsity"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(crate::t!("panel.osa.gauge_title")),
+            )
             .gauge_style(Style::default().fg(color))
             .percent(percent)
             .label(label);
@@ -101,11 +105,11 @@ impl OsaSparsePanel {
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                "Routing: N/A | Context: N/A | Memory: N/A".to_string(),
+                crate::t!("panel.osa.mask_na_routing"),
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                "Audit: N/A | Budget: N/A".to_string(),
+                crate::t!("panel.osa.mask_na_audit"),
                 Style::default().fg(Color::DarkGray),
             )),
             // === PROBE P0.4:HCW 召回读数（由 HcwRecallReported 事件同步，None = 未收到报告）===
@@ -169,11 +173,11 @@ impl OsaSparsePanel {
             }
         };
         Line::from(vec![
-            Span::raw("Recall: needle@8="),
+            Span::raw(crate::t!("panel.osa.recall_label")),
             fmt_opt(state.recall_needle_at_8, 0.90_f32),
-            Span::raw(" bias="),
+            Span::raw(crate::t!("panel.osa.recall_bias")),
             fmt_opt(state.recall_position_bias, 0.85_f32),
-            Span::raw(" chain="),
+            Span::raw(crate::t!("panel.osa.recall_chain")),
             fmt_opt(state.recall_chain_success, 0.80_f32),
         ])
     }
@@ -211,7 +215,7 @@ impl OsaSparsePanel {
         if total == 0 {
             // 空列表:未收到 OSA 事件时显示等待提示
             lines.push(Line::from(Span::styled(
-                "No active context files. Waiting for OSA coordinator...",
+                crate::t!("panel.osa.no_context_files"),
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
@@ -227,11 +231,9 @@ impl OsaSparsePanel {
             // 虚拟滚动提示:总文件数 > 可见窗口时显示总数
             if total > visible_rows {
                 lines.push(Line::from(Span::styled(
-                    format!(
-                        "... showing {} of {} files",
-                        end.saturating_sub(start),
-                        total
-                    ),
+                    crate::t!("panel.osa.showing_files")
+                        .replacen("{}", &(end.saturating_sub(start)).to_string(), 1)
+                        .replacen("{}", &total.to_string(), 1),
                     Style::default().fg(Color::DarkGray),
                 )));
             }
@@ -317,7 +319,7 @@ impl Panel for OsaSparsePanel {
             // 该字段已由 OsaSparseSync 将稀疏度 × 1000 转为整型存储,适合 sparkline 展示。
             let sparkline = render::sparkline(
                 &state.osa_sparsity_history,
-                "Sparsity History",
+                crate::t!("panel.osa.sparsity_history"),
                 Color::Magenta,
             );
             sparkline.render(chunks[3], buf);
@@ -493,9 +495,15 @@ mod tests {
 
     #[test]
     fn test_osa_sparse_panel_render_window_empty() {
+        // 批次-A i18n 迁移后空态走键表。WHY 双语 OR 断言而非 En-pin:本测试
+        // 不写全局 locale(lib 进程共享 AtomicU8),避免与未加锁的 zh 断言测试
+        // 产生 En 窗口竞态(批次-A 实测 parliament/router 被污染)。
         let state = TuiState::new();
         let text = OsaSparsePanel::render_window(&state, 0, 0, 20).to_string();
-        assert!(text.contains("No active context files"));
+        assert!(
+            text.contains("暂无活跃上下文文件") || text.contains("No active context files"),
+            "空态应显示等待提示(任意 locale), got: {text}"
+        );
     }
 
     #[test]
@@ -541,13 +549,28 @@ mod tests {
         terminal
             .draw(|f| panel.render(state, f.area(), f.buffer_mut()))
             .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol().chars().next().unwrap_or(' '))
-            .collect()
+        // WHY 宽字符感知(跳过 CJK 续格):CJK 宽字符占两格,朴素逐格收集会把
+        // 续格替换为空格,导致 zh contains 断言失配(批次-A 实测);与
+        // tests/osa_sparse_panel_test.rs 的同名 helper 同口径。
+        let mut out = String::new();
+        let mut prev_wide = false;
+        for cell in terminal.backend().buffer().content().iter() {
+            if cell.skip {
+                continue;
+            }
+            let s = cell.symbol();
+            if s.is_empty() {
+                continue;
+            }
+            if prev_wide {
+                prev_wide = false;
+                continue;
+            }
+            let ch = s.chars().next().unwrap_or(' ');
+            prev_wide = unicode_width::UnicodeWidthStr::width(s) >= 2;
+            out.push(ch);
+        }
+        out
     }
 
     fn seeded_state() -> TuiState {
@@ -561,15 +584,25 @@ mod tests {
 
     #[test]
     fn full_layout_contains_recall_and_sparkline() {
+        // 批次-A i18n 迁移后文案走键表。WHY 双语 OR 断言而非 En-pin:本测试
+        // 不写全局 locale(lib 进程共享 AtomicU8),消除与未加锁 zh 断言测试的
+        // En 窗口竞态(批次-A 实测 parliament/router 被污染)——lib 内所有
+        // 渲染断言测试均不得写 locale。
         let mut panel = OsaSparsePanel::new();
         let state = seeded_state();
         // area 40 行 → inner 38 ≥ 18:全量四段
         let content = render_panel_to_string(&mut panel, &state, 120, 40);
-        assert!(content.contains("Sparsity: 45.0%"));
-        assert!(content.contains("Recall:"), "全量布局应含 HCW 召回读数行");
         assert!(
-            content.contains("Sparsity History"),
-            "全量布局应含 sparkline"
+            content.contains("Sparsity: 45.0%") || content.contains("稀疏度: 45.0%"),
+            "全量布局应含稀疏度 gauge(任意 locale), got: {content}"
+        );
+        assert!(
+            content.contains("needle@8="),
+            "全量布局应含 HCW 召回读数行(needle@8= 为语言中立标识), got: {content}"
+        );
+        assert!(
+            content.contains("Sparsity History") || content.contains("稀疏度历史"),
+            "全量布局应含 sparkline(任意 locale), got: {content}"
         );
     }
 

@@ -269,6 +269,25 @@ fn event_stream_panel_filter_by_level_critical() {
 }
 
 // ============================================================
+// 测试 14:US-02 zh locale 渲染断言 — 空状态提示为中文
+// ============================================================
+
+#[test]
+fn event_stream_panel_zh_locale_renders_chinese_copy() {
+    // US-02 i18n 收口:空状态 "[INFO]  No events" 迁移键表后,
+    // Zh locale 应渲染中文提示(TDD RED→GREEN:迁移前此处输出英文必红)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    let state = TuiState::new();
+    let content = EventStreamPanel::content(&state, 0).to_string();
+    assert!(
+        content.contains("暂无事件"),
+        "Zh locale 下空状态应显示中文提示,实际: {}",
+        &content[..content.len().min(200)]
+    );
+}
+
+// ============================================================
 // 测试 7:空状态显示 "No events"
 // ============================================================
 

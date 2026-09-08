@@ -236,3 +236,22 @@ fn panel_id_and_shortcuts_are_consistent() {
     assert!(keys.iter().any(|k| k.contains("↑")), "应声明 ↑/↓ 导航");
     assert!(keys.iter().any(|k| k.contains("j/k")), "应声明 j/k 导航");
 }
+
+// ============================================================
+// US-02 zh locale 渲染断言 — 总分标题为中文
+// ============================================================
+
+#[test]
+fn total_score_renders_zh_label() {
+    // US-02 i18n 收口:"TOTAL SCORE" 迁移键表后,Zh locale 应渲染 "总分"
+    // (TDD RED→GREEN:迁移前此处输出英文必红)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    let mut panel = PvlScorePanel::new();
+    let state = TuiState::new();
+    let content = render_to_string(&mut panel, &state, 80, 30);
+    assert!(
+        content.contains("总分"),
+        "Zh locale 下应渲染中文总分标题,实际: {content}"
+    );
+}

@@ -26,12 +26,10 @@ fn locale_guard() -> std::sync::MutexGuard<'static, ()> {
 
 /// 豁免清单(相对 crate 根的路径前缀;新增需注明理由)
 ///
-/// 当前为空:W4 收口后 panels/actions 生产代码段零 CJK。
-///
-/// 2026-08-17 新增:用户并行改动区(task_manager.rs quadrant_footer 新增
-/// "数据源未接入"提示文案未走 t!(),待用户 i18n 化后移除本豁免)。
-/// 注:rel 路径含 src/ 前缀(相对 CARGO_MANIFEST_DIR),故前缀需完整。
-const EXEMPT_PREFIXES: &[&str] = &["src/panels/task_manager.rs"];
+/// 2026-09-08 移除 task_manager.rs:批次-A 第 4 步 CJK 豁免棘轮——
+/// "数据源未接入"提示已迁入 `panel.task.no_provider` 键表,生产段零 CJK
+/// (棘轮只减不增)。
+const EXEMPT_PREFIXES: &[&str] = &[];
 
 /// CJK 统一表意文字区间判定
 fn is_cjk(c: char) -> bool {
@@ -113,6 +111,241 @@ fn panels_and_actions_production_code_has_no_hardcoded_cjk() {
     assert!(
         violations.is_empty(),
         "生产代码段发现硬编码 CJK(i18n 收口防退化,Concord W4 T4.4):\n{}",
+        violations.join("\n")
+    );
+}
+
+// ============================================================================
+// 英文反向扫描(v3 复评批次-A US-02 门禁)
+// ============================================================================
+
+/// 英文扫描的文件级豁免前缀(仅作用于英文扫描;`EXEMPT_PREFIXES` 仍同时作用于
+/// 全部三类扫描)。
+///
+/// 逐条登记理由:v3 复评 Top-1(US-02)/Top-2(US-01) 批次-A 仅覆盖 10 个文件,
+/// 下列文件的存量英文属批次-B/后续批次迁移范围;本清单先冻结存量、禁止增量,
+/// 后续批次迁移完成后应从此处移除对应前缀(只减不增棘轮)。
+const EXEMPT_ENGLISH_PREFIXES: &[&str] = &[
+    // US-01 专属文件(仅修 Debug 泄漏);全文件已被 EXEMPT_PREFIXES 豁免(CJK
+    // 2026-08-17 登记"待用户 i18n 化"),英文存量同批处理,此处冗余登记防混淆
+    // — 注意 EXEMPT_PREFIXES 已覆盖,本条仅为可读性注释位。
+    // === 以下为批次-B/后续批次迁移范围(逐文件登记) ===
+    "src/panels/budget.rs",              // Budget 面板正文/告警文案待迁移
+    "src/panels/chat.rs",                // Chat 面板文案待迁移
+    "src/panels/chtc.rs",                // CHTC 适配器面板正文待迁移
+    "src/panels/clv_vector.rs",          // CLV 向量面板正文待迁移
+    "src/panels/dag_viz.rs",             // DAG 可视化面板正文待迁移
+    "src/panels/decay.rs",               // Decay 面板残留文案待迁移
+    "src/panels/experience_card_viz.rs", // 经验卡片面板正文待迁移
+    "src/panels/health.rs",              // Health 面板残留文案待迁移
+    "src/panels/help.rs",                // 帮助面板搜索提示待迁移
+    "src/panels/memory.rs",              // Memory 面板残留文案待迁移
+    "src/panels/metrics_dashboard.rs",   // 指标仪表盘残留文案待迁移
+    "src/panels/overwindow.rs",          // 超窗面板残留文案待迁移
+    "src/panels/parliament.rs",          // 议会面板残留文案待迁移
+    "src/panels/resource_monitor.rs",    // 资源监控残留文案待迁移
+    "src/panels/router.rs",              // 路由面板残留文案待迁移
+    "src/panels/security.rs",            // 安全面板残留文案待迁移
+    "src/panels/sysinfo.rs",             // 系统信息残留文案待迁移
+    "src/actions",                       // 动作域残留文案待迁移(与面板同批)
+];
+
+/// 英文扫描的行级豁免片段(子串命中即豁免该行;逐条登记理由)
+///
+/// WHY 行级而非文件级:仅 MCP 节点行的紧凑技术格式需要豁免,文件级豁免
+/// 会放过该文件其余文案的增量退化。
+const EXEMPT_ENGLISH_SNIPPETS: &[&str] = &[
+    // msg/s + last_seen:MCP 节点行的单位符号与字段名标识符(紧凑技术格式,
+    // 译为中文会破坏列对齐;与 timeline 面板 ev/s:/bud: 紧凑列同口径)
+    "msg/s",
+    "last_seen",
+    // PgUp/PgDn:键盘键位标识符(语言中立,与 ↑/↓、Enter 同类,不译)
+    "PgUp/PgDn",
+];
+
+/// 判定字符串字面量是否为 i18n key 形状(如 `panel.log.keyword`)
+///
+/// WHY:t!()/tr() 调用点的 key 字面量本身是点分小写标识符,含多个"英文词",
+/// 但它不是用户可见文案(渲染时经键表解析),必须从英文扫描中排除。
+fn looks_like_i18n_key(literal: &str) -> bool {
+    literal.contains('.')
+        && !literal.is_empty()
+        && literal
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.')
+}
+
+/// 提取一行内的字符串字面量内容(简化状态机:处理 `\` 转义)
+///
+/// WHY 简化可接受:panels/actions 域无 raw string(`r"..."`)与多行字符串字面量
+/// 的用户文案场景;若未来出现,扩展为完整词法解析并在此注明。
+fn extract_string_literals(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_str = false;
+    let mut escaped = false;
+    for c in line.chars() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+                out.push(std::mem::take(&mut cur));
+            } else {
+                cur.push(c);
+            }
+        } else if c == '"' {
+            in_str = true;
+            cur.clear();
+        }
+    }
+    out
+}
+
+/// 统计字符串内容中的英文词 token 数
+///
+/// 启发式口径(US-02 门禁):
+/// - 先剥除 `{...}` 格式占位符(占位符是插值点,非英文文案);
+/// - token = 连续 `[A-Za-z_]` 段(下划线并入,`last_seen` 这类 snake_case
+///   标识符算一个词),仅统计字母数 ≥ 2 的 token(`N/A`/`msg/s` 中的单字母
+///   段不计,单位符号与单字母缩写不构成英文短语);
+/// - token 数 ≥ 2 判定为英文短语(如 "Event Stream"、"showing of events")。
+fn english_token_count(s: &str) -> usize {
+    // 剥除 {...} 占位符(深度计数容错,panels 域无嵌套花括号字符串)
+    let mut cleaned = String::with_capacity(s.len());
+    let mut depth = 0usize;
+    for c in s.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => cleaned.push(c),
+            _ => {}
+        }
+    }
+    cleaned
+        .split(|c: char| !(c.is_ascii_alphabetic() || c == '_'))
+        .filter(|t| t.chars().filter(|ch| ch.is_ascii_alphabetic()).count() >= 2)
+        .count()
+}
+
+/// 扫描单个文件生产代码段中的英文短语(返回 (行号, 行内容))
+fn scan_english_file(path: &Path) -> Vec<(usize, String)> {
+    let content = std::fs::read_to_string(path).expect("test source readable");
+    let mut hits = Vec::new();
+    let mut in_test_module = false;
+    for (i, raw) in content.lines().enumerate() {
+        if raw.contains("#[cfg(test)]") {
+            in_test_module = true;
+        }
+        if in_test_module {
+            continue;
+        }
+        let code = strip_line_comment(raw);
+        // 行级片段豁免(技术标识符/单位,逐条登记于 EXEMPT_ENGLISH_SNIPPETS)
+        if EXEMPT_ENGLISH_SNIPPETS.iter().any(|s| code.contains(s)) {
+            continue;
+        }
+        for literal in extract_string_literals(code) {
+            if looks_like_i18n_key(&literal) {
+                continue;
+            }
+            if english_token_count(&literal) >= 2 {
+                hits.push((i + 1, raw.trim().to_string()));
+                break;
+            }
+        }
+    }
+    hits
+}
+
+#[test]
+fn panels_and_actions_production_code_has_no_hardcoded_english() {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut violations: Vec<String> = Vec::new();
+    for sub in ["src/panels", "src/actions"] {
+        let dir = manifest.join(sub);
+        for file in collect_rs_files(&dir) {
+            let rel = file
+                .strip_prefix(&manifest)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| file.display().to_string());
+            if EXEMPT_PREFIXES.iter().any(|x| rel.starts_with(x))
+                || EXEMPT_ENGLISH_PREFIXES.iter().any(|x| rel.starts_with(x))
+            {
+                continue;
+            }
+            for (lineno, line) in scan_english_file(&file) {
+                violations.push(format!("{rel}:{lineno}: {line}"));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "生产代码段发现硬编码英文短语(US-02 i18n 收口防退化):\n{}",
+        violations.join("\n")
+    );
+}
+
+// ============================================================================
+// {:?} Debug 泄漏扫描(v3 复评批次-A US-01 门禁)
+// ============================================================================
+
+/// {:?} 扫描的文件级豁免前缀(当前为空:US-01 清零后无豁免)
+///
+/// WHY 不沿用 EXEMPT_PREFIXES:task_manager.rs 因 CJK 存量被豁免,但其
+/// `Mode: {:?}` 是真实用户可见 Debug 泄漏(US-01 修复点),不能连带豁免。
+/// 未来若出现确属合理的生产 Debug 格式化(如纯调试日志),逐条登记并注明理由。
+const EXEMPT_DEBUG_LEAK_PREFIXES: &[&str] = &[];
+
+/// 扫描单个文件生产代码段中的 `{:?}` 格式化(返回 (行号, 行内容))
+///
+/// WHY 按行匹配而非限定 format!/push/Line/Text 关键字:多行 format! 调用的
+/// 格式串常独占一行(如 quest.rs 元信息行),按行限定调用关键字会漏报格式串行;
+/// panels 生产段当前无合法 `{:?}` 用法,逐行匹配是零漏报口径。
+fn scan_debug_leak_file(path: &Path) -> Vec<(usize, String)> {
+    let content = std::fs::read_to_string(path).expect("test source readable");
+    let mut hits = Vec::new();
+    let mut in_test_module = false;
+    for (i, raw) in content.lines().enumerate() {
+        if raw.contains("#[cfg(test)]") {
+            in_test_module = true;
+        }
+        if in_test_module {
+            continue;
+        }
+        let code = strip_line_comment(raw);
+        if code.contains("{:?}") {
+            hits.push((i + 1, raw.trim().to_string()));
+        }
+    }
+    hits
+}
+
+#[test]
+fn panels_production_code_has_no_debug_format_leak() {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dir = manifest.join("src/panels");
+    let mut violations: Vec<String> = Vec::new();
+    for file in collect_rs_files(&dir) {
+        let rel = file
+            .strip_prefix(&manifest)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| file.display().to_string());
+        if EXEMPT_DEBUG_LEAK_PREFIXES
+            .iter()
+            .any(|x| rel.starts_with(x))
+        {
+            continue;
+        }
+        for (lineno, line) in scan_debug_leak_file(&file) {
+            violations.push(format!("{rel}:{lineno}: {line}"));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "生产代码段发现 {{:?}} Debug 格式泄漏(US-01 用户可见文案禁用 Debug 串):\n{}",
         violations.join("\n")
     );
 }

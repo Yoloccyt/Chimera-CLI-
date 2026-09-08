@@ -60,17 +60,33 @@ fn focus_panel(app: &mut TuiApp, target: PanelId) {
 }
 
 /// 在内存后端渲染一次,返回整帧文本(用于断言面板渲染内容)
+///
+/// WHY 宽字符感知(跳过 CJK 续格):CJK 宽字符占两格,续格 cell 会被朴素
+/// 逐格收集替换为空格,导致 `过滤:` 等 zh contains 断言失配(批次-A 实测);
+/// 与 osa_sparse/pvl_score 测试的 render_panel_to_string 同口径。
 fn render_frame(app: &mut TuiApp) -> String {
     let backend = TestBackend::new(160, 48);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
-    terminal
-        .backend()
-        .buffer()
-        .content()
-        .iter()
-        .map(|c| c.symbol().chars().next().unwrap_or(' '))
-        .collect()
+    let mut out = String::new();
+    let mut prev_wide = false;
+    for cell in terminal.backend().buffer().content().iter() {
+        if cell.skip {
+            continue;
+        }
+        let s = cell.symbol();
+        if s.is_empty() {
+            continue;
+        }
+        if prev_wide {
+            prev_wide = false;
+            continue;
+        }
+        let ch = s.chars().next().unwrap_or(' ');
+        prev_wide = unicode_width::UnicodeWidthStr::width(s) >= 2;
+        out.push(ch);
+    }
+    out
 }
 
 // ============================================================
@@ -79,13 +95,17 @@ fn render_frame(app: &mut TuiApp) -> String {
 
 #[test]
 fn task_manager_f_enters_panel_search_mode() {
+    // 批次-A i18n 迁移后过滤标记走键表(zh=" (过滤: {})",en=" (filter: {})"),
+    // 本测试断言 zh 渲染 → 钉 Zh locale(与面板 i18n 断言同范式)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
     let mut app = make_app();
     focus_panel(&mut app, PanelId::TaskManager);
 
     // 基线:标题无过滤标记
     let before = render_frame(&mut app);
     assert!(
-        !before.contains("(filter:"),
+        !before.contains("过滤:") && !before.contains("(filter:"),
         "基线渲染不应出现搜索态标题, got: {}",
         before
     );
@@ -94,14 +114,20 @@ fn task_manager_f_enters_panel_search_mode() {
     app.handle_key_event(key(KeyCode::Char('f')));
     let after = render_frame(&mut app);
     assert!(
-        after.contains("(filter:"),
-        "按 `f` 后 TaskManager 标题应追加 `(filter: ...)` 搜索态标记, got: {after}"
+        after.contains("过滤:"),
+        "按 `f` 后 TaskManager 标题应追加 `(过滤: ...)` 搜索态标记, got: {after}"
     );
+    // WHY 恢复默认 Zh:key_drift 其余测试未加锁,依赖边界处 locale=默认
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    drop(_locale_guard);
 }
 
 #[test]
 fn task_manager_search_filters_rendered_list() {
     // 搜索态下输入字符应实时过滤列表(增量搜索语义可观测)
+    // 批次-A i18n 迁移后过滤标记断言钉 Zh(同 task_manager_f_enters_panel_search_mode)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
     let mut app = make_app();
     focus_panel(&mut app, PanelId::TaskManager);
     app.handle_key_event(key(KeyCode::Char('f')));
@@ -109,7 +135,7 @@ fn task_manager_search_filters_rendered_list() {
     app.handle_key_event(key(KeyCode::Char('z')));
     let frame = render_frame(&mut app);
     assert!(
-        frame.contains("(filter: z)"),
+        frame.contains("过滤: z"),
         "搜索态输入 'z' 应反映在标题过滤关键字中, got: {frame}"
     );
 }

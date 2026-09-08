@@ -75,7 +75,7 @@ impl TimelinePanel {
         let snapshots = &state.timeline_snapshots;
         if snapshots.is_empty() {
             return Text::from(Line::from(Span::styled(
-                "No snapshots yet. Waiting for first snapshot...",
+                crate::t!("panel.timeline.no_snapshots"),
                 Style::default().fg(Color::DarkGray),
             )));
         }
@@ -97,10 +97,13 @@ impl TimelinePanel {
             ]),
             Line::from(vec![
                 Span::styled("Events: ", bold),
-                Span::from(format!(
-                    "{} total, {}/s rate",
-                    snap.event_count, snap.event_rate
-                )),
+                Span::from(
+                    // 双占位键:先填事件总数再填速率(与 injection cache_line
+                    // 的 replacen 序列同范式)
+                    crate::t!("panel.timeline.event_summary")
+                        .replacen("{}", &snap.event_count.to_string(), 1)
+                        .replacen("{}", &snap.event_rate.to_string(), 1),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("Budget: ", bold),
@@ -141,7 +144,7 @@ impl TimelinePanel {
 
         if total == 0 {
             lines.push(Line::from(Span::styled(
-                "No snapshots yet. Waiting for first snapshot...",
+                crate::t!("panel.timeline.no_snapshots"),
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
@@ -157,11 +160,9 @@ impl TimelinePanel {
             // 虚拟滚动提示:总快照数 > 可见窗口时显示总数
             if total > visible_rows {
                 lines.push(Line::from(Span::styled(
-                    format!(
-                        "... showing {} of {} snapshots",
-                        end.saturating_sub(start),
-                        total
-                    ),
+                    crate::t!("panel.timeline.showing_snapshots")
+                        .replacen("{}", &(end.saturating_sub(start)).to_string(), 1)
+                        .replacen("{}", &total.to_string(), 1),
                     Style::default().fg(Color::DarkGray),
                 )));
             }
@@ -171,14 +172,23 @@ impl TimelinePanel {
     }
 
     /// 构建快照详情弹窗内容(Enter 键触发)
+    ///
+    /// WHY 逐键拼接而非单串模板:六个字段标签各自走 i18n 键表(zh 渲染
+    /// "时间戳:" 等),字段值格式保持与英文版一致。
     fn detail_content(snap: &TimelineSnapshot) -> String {
         format!(
-            "Timestamp: {}\nEvent Count: {}\nEvent Rate: {}/s\nBudget Utilization: {:.1}%\nHealth Score: {}/100\nDecay Coefficient: {:.3}",
+            "{} {}\n{} {}\n{} {}/s\n{} {:.1}%\n{} {}/100\n{} {:.3}",
+            crate::t!("panel.timeline.detail_timestamp"),
             snap.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+            crate::t!("panel.timeline.detail_event_count"),
             snap.event_count,
+            crate::t!("panel.timeline.detail_event_rate"),
             snap.event_rate,
+            crate::t!("panel.timeline.detail_budget_util"),
             snap.budget_utilization * 100.0,
+            crate::t!("panel.timeline.detail_health"),
             snap.health_score,
+            crate::t!("panel.timeline.detail_decay"),
             snap.decay_coefficient,
         )
     }
@@ -339,7 +349,11 @@ impl Panel for TimelinePanel {
                 state.timeline_snapshots.get(self.selected).map(|snap| {
                     let content = Self::detail_content(snap);
                     TuiCommand::OpenPopup(PopupKind::Detail {
-                        title: format!("Timeline Snapshot #{}", self.selected + 1),
+                        title: crate::t!("panel.timeline.popup_title").replacen(
+                            "{}",
+                            &(self.selected + 1).to_string(),
+                            1,
+                        ),
                         content,
                         scroll: 0,
                     })

@@ -54,6 +54,24 @@ fn test_strategy_event_derives_stage() {
 }
 
 #[test]
+fn test_zh_locale_renders_chinese_copy() {
+    // US-02 i18n 收口:面板正文迁移键表后,Zh locale 应渲染中文文案
+    // (TDD RED→GREEN:迁移前此处输出英文必红)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    let state = TuiState::new();
+    let content = SelfAssessmentPanel::content(&state).to_string();
+    assert!(
+        content.contains("等待首份 Harness 评估报告"),
+        "Zh locale 下无报告时应显示中文等待提示,实际: {content}"
+    );
+    assert!(
+        content.contains("记忆策略阶段"),
+        "Zh locale 下记忆策略阶段标签应为中文,实际: {content}"
+    );
+}
+
+#[test]
 fn test_latest_event_wins() {
     // 反向扫描:最近一条事件的 to_strategy 生效
     let state = TuiState {

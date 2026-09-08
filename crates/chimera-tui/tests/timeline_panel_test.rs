@@ -346,3 +346,49 @@ fn test_timeline_panel_help_key_returns_none() {
     let result = panel.handle_key(key, &mut state);
     assert_eq!(result, None);
 }
+
+// ============================================================
+// US-02 zh locale 渲染断言 — 空状态提示为中文
+// ============================================================
+
+/// 宽字符感知的渲染收集(与 pvl_score_panel_test 同款口径:跳过 CJK 续格,
+/// 避免"暂 无 快 照"被续格空格隔断导致 contains 失配)
+fn render_panel_to_string(panel: &mut TimelinePanel, state: &TuiState, w: u16, h: u16) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, w, h);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    panel.render(state, area, &mut buf);
+    let mut out = String::new();
+    let mut prev_wide = false;
+    for cell in buf.content().iter() {
+        if cell.skip {
+            continue;
+        }
+        let s = cell.symbol();
+        if prev_wide {
+            prev_wide = false;
+            continue;
+        }
+        if s.is_empty() {
+            continue;
+        }
+        let ch = s.chars().next().unwrap_or(' ');
+        prev_wide = unicode_width::UnicodeWidthStr::width(s) >= 2;
+        out.push(ch);
+    }
+    out
+}
+
+#[test]
+fn test_timeline_panel_zh_locale_renders_chinese_copy() {
+    // US-02 i18n 收口:空状态 "No snapshots yet..." 迁移键表后,Zh locale
+    // 应渲染中文提示(TDD RED→GREEN:迁移前此处输出英文必红)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    let mut panel = TimelinePanel::new();
+    let state = TuiState::new();
+    let content = render_panel_to_string(&mut panel, &state, 80, 24);
+    assert!(
+        content.contains("暂无快照"),
+        "Zh locale 下 Timeline 空状态应显示中文提示,实际: {content}"
+    );
+}

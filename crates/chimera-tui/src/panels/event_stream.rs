@@ -171,8 +171,10 @@ impl EventStreamPanel {
     ) -> Text<'static> {
         let total = filtered_indices.len();
 
-        let mut lines: Vec<Line<'static>> =
-            vec![Line::from("Event Stream"), Line::from("─────────────")];
+        let mut lines: Vec<Line<'static>> = vec![
+            Line::from(crate::t!("panel.event_stream.body_title")),
+            Line::from("─────────────"),
+        ];
 
         // P1-W2.2:Critical 旁路通道丢弃告警(红色高亮,显示在事件列表顶部)
         // WHY 在 auto_scroll 提示之前:丢弃告警是安全红线,优先级高于浏览提示,
@@ -203,7 +205,7 @@ impl EventStreamPanel {
         }
 
         if filtered_indices.is_empty() {
-            lines.push(Line::from("[INFO]  No events"));
+            lines.push(Line::from(crate::t!("panel.event_stream.no_events")));
         } else {
             let (start, end) = virtual_scroll_window(total, scroll_offset, visible_rows);
 
@@ -237,11 +239,16 @@ impl EventStreamPanel {
             }
 
             // 虚拟滚动提示:当总事件数 > 可见窗口时显示总数
+            // 组装范式与 log.rs showing/of/events 一致(三键拼接,zh 为
+            // "显示 N / M 条事件"语序)
             if total > visible_rows {
                 lines.push(Line::from(format!(
-                    "... showing {} of {} events",
+                    "... {} {} {} {} {}",
+                    crate::t!("panel.event_stream.showing"),
                     end.saturating_sub(start),
-                    total
+                    crate::t!("panel.event_stream.of"),
+                    total,
+                    crate::t!("panel.event_stream.events")
                 )));
             }
         }
@@ -285,7 +292,7 @@ impl Panel for EventStreamPanel {
         }
         self.selected = list_state::clamp_selected(self.selected, total);
 
-        let title = build_filter_title(state, "Event Stream");
+        let title = build_filter_title(state, crate::t!("panel.event_stream.body_title"));
         let block = Block::default()
             .borders(Borders::ALL)
             .title(Line::from(title));

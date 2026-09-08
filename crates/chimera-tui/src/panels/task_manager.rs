@@ -45,6 +45,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::panels::list_state;
+use crate::panels::quest::thinking_mode_label;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
 use crate::render::FOOTER_TEXT;
@@ -316,20 +317,26 @@ impl TaskManagerPanel {
         selected_count: usize,
     ) -> Text<'static> {
         // P4.3:面板标题显示当前排序模式;搜索模式下追加过滤关键字
-        let title = if self.is_searching {
-            format!(
-                "Task Manager [{}] (filter: {})",
-                sort_mode, self.filter_keyword
-            )
-        } else {
-            format!("Task Manager [{}]", sort_mode)
+        // WHY 排序模式标签经键表:zh 渲染"优先级/状态/创建时间"(批次-A US-02)
+        let sort_label = match sort_mode {
+            SortMode::Priority => crate::t!("panel.task.sort_priority"),
+            SortMode::Status => crate::t!("panel.task.sort_status"),
+            SortMode::CreatedAt => crate::t!("panel.task.sort_created_at"),
         };
+        let mut title = crate::t!("panel.task.title_sort").replacen("{}", sort_label, 1);
+        if self.is_searching {
+            title.push_str(&crate::t!("panel.task.title_filter_suffix").replacen(
+                "{}",
+                &self.filter_keyword,
+                1,
+            ));
+        }
         let mut lines: Vec<Line<'static>> = vec![Line::from(title), Line::from("──────────────")];
 
         if quests.is_empty() {
-            // WHY "No matching quests":过滤后列表为空说明关键字无匹配,
+            // WHY "暂无匹配任务":过滤后列表为空说明关键字无匹配,
             // 与"没有任何 Quest"的语义不同,提示用户调整过滤关键字。
-            lines.push(Line::from("No matching quests"));
+            lines.push(Line::from(crate::t!("panel.task.no_matching")));
         } else {
             for (idx, quest) in quests.iter().enumerate() {
                 let is_cursor = idx == cursor;
@@ -373,11 +380,13 @@ impl TaskManagerPanel {
 
         lines.push(Line::from(""));
         // 状态统计行:显示各状态 Quest 计数 + 批量选中数
+        // WHY 四占位键 replacen 序列:与 injection cache_line 同范式
         let (pending, running, paused, completed) = Self::compute_status_counts(state);
-        let mut status_line = format!(
-            "Pending:{} | Running:{} | Paused:{} | Completed:{}",
-            pending, running, paused, completed
-        );
+        let mut status_line = crate::t!("panel.task.status_summary")
+            .replacen("{}", &pending.to_string(), 1)
+            .replacen("{}", &running.to_string(), 1)
+            .replacen("{}", &paused.to_string(), 1)
+            .replacen("{}", &completed.to_string(), 1);
         if selected_count > 0 {
             status_line.push_str(&format!(" | Selected:{}", selected_count));
         }
@@ -387,14 +396,22 @@ impl TaskManagerPanel {
     }
 
     /// 详情弹窗内容
+    ///
+    /// WHY thinking_mode_label:`{:?}` Debug 串禁止出现在用户可见文案(US-01);
+    /// 字段标签走 panel.task.detail_* 键表(US-02)。
     fn detail_content(quest: &Quest) -> String {
         format!(
-            "Title: {}\nID: {}\nPriority: {}\nTasks: {}\nMode: {:?}",
+            "{} {}\n{} {}\n{} {}\n{} {}\n{} {}",
+            crate::t!("panel.task.detail_title"),
             quest.title,
+            crate::t!("panel.task.detail_id"),
             quest.quest_id,
+            crate::t!("panel.task.detail_priority"),
             quest.priority,
+            crate::t!("panel.task.detail_tasks"),
             quest.tasks.len(),
-            quest.thinking_mode
+            crate::t!("panel.task.detail_mode"),
+            thinking_mode_label(quest.thinking_mode)
         )
     }
 
@@ -453,26 +470,47 @@ impl Panel for TaskManagerPanel {
 
         // Task 3.9:L10 → L9 向下依赖 — 四象限稳定分工状态（ADR-027）
         // W8 假遥测治理: provider 未接入时显示诚实标记,不渲染假零数据
+        // WHY 象限文案走键表(批次-A 第 4 步 CJK 豁免棘轮):生产段清零
+        // 硬编码 CJK 后,本文件从 i18n CJK 豁免清单移除(只减不增)
         let quadrant_footer = if quadrant_status_available() {
             let qs = quadrant_status();
             vec![Line::from(vec![
-                Span::styled("Quadrants: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
-                    format!(
-                        "Q1(Impl): A={} T={} WSJF={:.1} | Q2(Int): A={} T={} WSJF={:.1} | Q3(Ver): A={} T={} WSJF={:.1} | Q4(Hard): A={} T={} WSJF={:.1}",
-                        qs.agent_counts[0], qs.task_counts[0], qs.wsjf_scores[0],
-                        qs.agent_counts[1], qs.task_counts[1], qs.wsjf_scores[1],
-                        qs.agent_counts[2], qs.task_counts[2], qs.wsjf_scores[2],
-                        qs.agent_counts[3], qs.task_counts[3], qs.wsjf_scores[3],
-                    ),
+                    crate::t!("panel.task.quadrants_label"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    // WHY " | " 分隔符不进键表:纯结构分隔符,语言中立
+                    crate::t!("panel.task.quadrant_q1")
+                        .replacen("{}", &qs.agent_counts[0].to_string(), 1)
+                        .replacen("{}", &qs.task_counts[0].to_string(), 1)
+                        .replacen("{}", &format!("{:.1}", qs.wsjf_scores[0]), 1)
+                        + " | "
+                        + &crate::t!("panel.task.quadrant_q2")
+                            .replacen("{}", &qs.agent_counts[1].to_string(), 1)
+                            .replacen("{}", &qs.task_counts[1].to_string(), 1)
+                            .replacen("{}", &format!("{:.1}", qs.wsjf_scores[1]), 1)
+                        + " | "
+                        + &crate::t!("panel.task.quadrant_q3")
+                            .replacen("{}", &qs.agent_counts[2].to_string(), 1)
+                            .replacen("{}", &qs.task_counts[2].to_string(), 1)
+                            .replacen("{}", &format!("{:.1}", qs.wsjf_scores[2]), 1)
+                        + " | "
+                        + &crate::t!("panel.task.quadrant_q4")
+                            .replacen("{}", &qs.agent_counts[3].to_string(), 1)
+                            .replacen("{}", &qs.task_counts[3].to_string(), 1)
+                            .replacen("{}", &format!("{:.1}", qs.wsjf_scores[3]), 1),
                     Style::default().fg(Color::Cyan),
                 ),
             ])]
         } else {
             vec![Line::from(vec![
-                Span::styled("Quadrants: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
-                    "数据源未接入(set_quadrant_status_provider 未注册)",
+                    crate::t!("panel.task.quadrants_label"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    crate::t!("panel.task.no_provider"),
                     Style::default().fg(Color::DarkGray),
                 ),
             ])]
@@ -638,7 +676,11 @@ impl Panel for TaskManagerPanel {
                     }
                     let batch_ids = quest_ids.join(",");
                     return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
-                        &format!("Batch pause {} quests", quest_ids.len()),
+                        &crate::t!("panel.task.batch_pause_confirm").replacen(
+                            "{}",
+                            &quest_ids.len().to_string(),
+                            1,
+                        ),
                         &batch_ids,
                         format!("batch_pause:{batch_ids}"),
                     )));
@@ -668,7 +710,11 @@ impl Panel for TaskManagerPanel {
                     }
                     let batch_ids = quest_ids.join(",");
                     return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
-                        &format!("Batch terminate {} quests", quest_ids.len()),
+                        &crate::t!("panel.task.batch_terminate_confirm").replacen(
+                            "{}",
+                            &quest_ids.len().to_string(),
+                            1,
+                        ),
                         &batch_ids,
                         format!("batch_terminate:{batch_ids}"),
                     )));
@@ -744,7 +790,11 @@ impl Panel for TaskManagerPanel {
                     }
                     let batch_ids = quest_ids.join(",");
                     return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
-                        &format!("Batch resume {} quests", quest_ids.len()),
+                        &crate::t!("panel.task.batch_resume_confirm").replacen(
+                            "{}",
+                            &quest_ids.len().to_string(),
+                            1,
+                        ),
                         &batch_ids,
                         format!("batch_resume:{batch_ids}"),
                     )));

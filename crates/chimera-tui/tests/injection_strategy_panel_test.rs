@@ -98,6 +98,10 @@ fn panel_id_and_honest_display_without_provider() {
 
 #[test]
 fn panel_renders_three_sections_with_provider() {
+    // 批次-A i18n 迁移后 zh 卡片类型为"偏好 (Preference)"括注形态,
+    // 本测试断言英文渲染 → 钉 En locale(与 quest/osa 内联测试同范式)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let panel = InjectionStrategyPanel::with_provider(Arc::new(MockProvider {
         snap: InjectionSnapshot {
             dynamic_cards: vec![card("coding", "prefer rust idioms")],

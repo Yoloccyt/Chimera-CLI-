@@ -57,7 +57,9 @@ impl TuiApp {
         }
 
         // 斜杠命令模式(Concord W2):`/` 第一公民入口,经 RouterMode::Slash
-        // 纯机械路由 + slash_parser 三分层执行;Command/Search 分支保留为遗留兼容。
+        // 纯机械路由 + slash_parser 三分层执行。
+        // IT-01(批次-B):遗留 Command/Search 模式分支已删除——生产零 setter
+        // 的死路径;`:` 遗留命令能力由 Slash 的 parse_legacy 回退完整承接。
         if self.state.input_mode == InputMode::Slash {
             if key.code == KeyCode::Char('l')
                 && key.modifiers.contains(event::KeyModifiers::CONTROL)
@@ -70,29 +72,6 @@ impl TuiApp {
                 return;
             }
             self.handle_slash_key(key);
-            return;
-        }
-
-        // 命令/搜索模式(遗留):委托给命令面板(`:` 带参命令 / `/` 关键字过滤)
-        if matches!(
-            self.state.input_mode,
-            InputMode::Command | InputMode::Search
-        ) {
-            // 极少数全局键在命令/搜索模式仍生效(与 Insert 一致):Ctrl+L 中英切换
-            // 不应把 `l` 打进输入缓冲(命令栏/搜索栏 Ctrl 组合键语义与 Insert 对齐)。
-            if key.code == KeyCode::Char('l')
-                && key.modifiers.contains(event::KeyModifiers::CONTROL)
-            {
-                self.dispatch_action(
-                    "system.toggle_locale",
-                    "{}".to_string(),
-                    ActionSource::Palette,
-                );
-                return;
-            }
-            if let Some(cmd) = self.command_palette.handle_key(key, &mut self.state) {
-                self.apply_command(cmd);
-            }
             return;
         }
 

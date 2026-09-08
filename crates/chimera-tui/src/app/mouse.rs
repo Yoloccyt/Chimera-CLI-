@@ -37,10 +37,10 @@ impl TuiApp {
                 if is_inside(mouse.column, mouse.row, chunks[0]) {
                     self.handle_tab_click(mouse.column, chunks[0].width);
                 } else if is_inside(mouse.column, mouse.row, chunks[2]) {
-                    // I-B(2026-09-06 复评):底栏点击改入 Slash 模式 —— 此前
-                    // 进遗留 InputMode::Command,与 `:`/`/` 的斜杠入口双轨
-                    // (体验不一致:无补全列表/三分层);Command 输入能力已
-                    // 被 Slash 的 Legacy 回退完整承接。
+                    // I-B(2026-09-06 复评):底栏点击入 Slash 模式(补全列表 +
+                    // 三分层执行);IT-01(批次-B)后这是唯一入口——遗留
+                    // InputMode::Command 双轨已删除,`:命令` 由 Slash 的
+                    // Legacy 回退完整承接。
                     self.state.input_mode = InputMode::Slash;
                     self.state.input_buffer.clear();
                 }

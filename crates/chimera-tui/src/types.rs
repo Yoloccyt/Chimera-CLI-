@@ -312,21 +312,17 @@ pub struct ChatMessage {
 /// 输入模式 — 控制底部输入栏的行为
 ///
 /// - `Normal`:普通模式,底部显示状态栏
-/// - `Command`:命令模式(由 `:` 触发),解析并执行面板切换/过滤/投票等带参命令
-/// - `Search`:搜索模式(由 `/` 触发),关键字过滤
 /// - `Insert`:插入模式(由 `i` 触发,M3a),原始文本输入(为 M3b Chat 提交铺路)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InputMode {
     /// 普通模式
     Normal,
-    /// 命令模式
-    Command,
-    /// 搜索模式
-    Search,
     /// 插入模式(原始文本输入,M3a 引入;Submit 于 M3b 接入 Chat)
     Insert,
     /// 斜杠命令模式(Concord W2):`/` 第一公民入口,补全列表 + 三分层执行;
     /// `:` 废弃窗口期同进本模式(一次性弃用提示)。
+    /// IT-01(批次-B):遗留 Command/Search 变体已删除——生产零 setter 死路径,
+    /// `:` 遗留命令由 Slash 的 parse_legacy 回退承接。
     Slash,
 }
 
@@ -1595,8 +1591,11 @@ mod tests {
 
     #[test]
     fn test_input_mode_equality() {
+        // IT-01(批次-B):遗留 Command/Search 变体删除后,三态等值锚定
         assert_eq!(InputMode::Normal, InputMode::Normal);
-        assert_ne!(InputMode::Normal, InputMode::Command);
+        assert_ne!(InputMode::Normal, InputMode::Insert);
+        assert_ne!(InputMode::Normal, InputMode::Slash);
+        assert_ne!(InputMode::Insert, InputMode::Slash);
     }
 
     // ============================================================
