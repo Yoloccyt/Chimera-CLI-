@@ -78,8 +78,8 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# v2.27.1-omega: 补发 GPG 签名 + MCA E2E 超时加固
-version = "2.28.0-omega"
+# v2.28.2-omega: 发布收口后治理批次 + TUI 四维评估三轮修复(高严重度清零)
+version = "2.28.2-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"
