@@ -21,7 +21,22 @@ use crate::panels::Panel;
 use crate::popup::PopupKind;
 use crate::render::FOOTER_TEXT;
 use crate::types::{PanelId, TuiCommand, TuiState};
+use nexus_contracts::domain::ThinkingMode;
 use nexus_core::{Quest, TaskStatus};
+
+/// ThinkingMode → i18n 标签(US-01 防 Debug 泄漏)
+///
+/// WHY 面板层 match 而非 impl Display:`ThinkingMode` 定义在 L0
+/// nexus-contracts,孤儿规则禁止跨 crate 实现 Display;经键表映射同时
+/// 兑现 zh 双语(zh 值为"中文 (英文)"括注形态,兼容 integration 测试的
+/// "Deep" 断言)。task_manager 详情弹窗复用本函数。
+pub(crate) fn thinking_mode_label(mode: ThinkingMode) -> &'static str {
+    match mode {
+        ThinkingMode::Fast => crate::t!("panel.quest.thinking_fast"),
+        ThinkingMode::Standard => crate::t!("panel.quest.thinking_standard"),
+        ThinkingMode::Deep => crate::t!("panel.quest.thinking_deep"),
+    }
+}
 
 /// Quest 面板
 #[derive(Debug, Default, Clone)]
@@ -202,12 +217,14 @@ impl QuestPanel {
                 lines.push(Line::from(vec![Span::styled(title_text, title_style)]));
 
                 // 元信息行:灰色缩进显示 ID 与思考模式
+                // WHY thinking_mode_label:{:?} Debug 串泄漏用户可见文案(US-01),
+                // 经键表映射后 zh 为"快速 (Fast)"括注形态
                 lines.push(Line::from(vec![Span::styled(
                     format!(
-                        "    ID: {} | {}: {:?} | {}: {}",
+                        "    ID: {} | {}: {} | {}: {}",
                         quest.quest_id,
                         crate::t!("panel.quest.mode"),
-                        quest.thinking_mode,
+                        thinking_mode_label(quest.thinking_mode),
                         crate::t!("panel.quest.priority"),
                         quest.priority
                     ),
@@ -280,9 +297,9 @@ impl QuestPanel {
             format!("{} {}", crate::t!("panel.quest.detail_title"), quest.title),
             format!("{} {}", crate::t!("panel.quest.detail_id"), quest.quest_id),
             format!(
-                "{} {:?}",
+                "{} {}",
                 crate::t!("panel.quest.detail_mode"),
-                quest.thinking_mode
+                thinking_mode_label(quest.thinking_mode)
             ),
             format!(
                 "{} {}",
@@ -391,6 +408,12 @@ impl Panel for QuestPanel {
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // PS-2 U-4:退化尺寸统一早退(共享最低线,见 crate::panels::MIN_PANEL_W/H)
+        if crate::panels::degenerate(area) {
+            crate::panels::render_too_small(area, buf);
+            return;
+        }
+
         let title = build_filter_title(state, crate::t!("panel.quest.body_title"));
         let block = Block::default()
             .borders(Borders::ALL)
@@ -617,16 +640,9 @@ impl Panel for QuestPanel {
                     }
                 })
             }
-            // g/G 双路径:app 交互经 InputRouter 全局拦截(gg→ScrollTop、G→ScrollBottom),
-            // 面板直接 API(测试/嵌入调用)仍保留同名 arm,语义一致。
-            KeyCode::Char('g') => {
-                self.scroll_to_top(state);
-                None
-            }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom(state);
-                None
-            }
+            // WHY 无 g/G arm:InputRouter 全局截获(g→GPrefix 前缀态、G→ScrollBottom),
+            // 滚动语义经 RouteTarget::ScrollTop/ScrollBottom 调用 scroll_to_top/bottom,
+            // 面板 arm 永不可达(死键),已按键位治理移除。
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
@@ -996,6 +1012,11 @@ mod tests {
     /// M4 二期:全局语言切换必须使缓存失效。
     #[test]
     fn quest_render_invalidates_on_locale_change() {
+        // WHY 加锁但不切 locale:缓存键含 locale 分量,本测试篡改键的 locale
+        // 位模拟切换;若并行测试恰在两次 render 之间 set_locale,篡改位会与
+        // 全局 locale 撞同值导致假命中(批次-A 实测竞态)。守卫仅串行化,
+        // 不改变 locale 本身。
+        let _guard = crate::i18n::locale_test_guard();
         let mut state = TuiState::new();
         state.last_snapshot_revision = 1;
         state.quest_list = vec![sample_quest("q1", "Cached Quest")];

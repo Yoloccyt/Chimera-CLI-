@@ -57,7 +57,14 @@ pub mod checkpoint_preserver;
 pub mod ci_gate;
 pub mod config;
 pub mod engine;
+/// P3-T13b: EPTS 快照沙箱评测流水线（v4.0 WI-31:Extractor→Generator→Judge）
+pub mod epts;
 pub mod error;
+/// P2-T13: 变体适应度批量评估并行化（v4.0 注入表 W13-14,Shadow 限定）
+///
+/// ComputeBridge rayon 并行（GsoeEvaluate 阈值已登记）;串行回退 env 开关;
+/// R2 约束:仅加速评估计算,不改变策略写入路径（转正须议会审批 ADR-142）。
+pub mod fitness_parallel;
 /// 形式化验证模块 — AEGIS Critic 单调性等不变量的形式化保证
 ///
 /// 对应架构层: L4 FormalVerifier
@@ -75,6 +82,11 @@ pub mod four_operators;
 /// R2 冻结声明(ADR-042):纯文本规范化,无学习/训练路径。
 pub mod meta_adapter;
 pub mod policy;
+/// P2-T10: RTL 运行时策略复盘 Shadow（v4.0 WI-30,R2 限定）
+///
+/// 零 Python/零梯度/零权重更新;Shadow 只读(转正须议会审批 ADR-142);
+/// 可验证奖励纯 Rust;反馈仅写影子表 + 周度报告供议会审阅。
+pub mod rtl_shadow;
 /// P1-3(计划 Task 6): 自我改进流水线(PenguinHarness 四步,文档 §10.3.4)
 ///
 /// 降级实现(ADR-042 合规):四步语义保留但规则/统计驱动,
@@ -269,3 +281,8 @@ pub mod prelude {
         MutationType,
     };
 }
+// P3-T13b: EPTS 公开 API（WI-31）
+pub use epts::{
+    EptsPipeline, EptsStatus, JudgeVerdict, SynthesizedTask, TaskExtractor, TaskGenerator,
+    TaskJudge, TaskTemplate, JUDGE_PASS_GATE, WEEKLY_TARGET,
+};

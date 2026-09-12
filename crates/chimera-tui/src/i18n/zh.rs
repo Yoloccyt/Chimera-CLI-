@@ -18,6 +18,10 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.task.title",
     "panel.chat.title",
     "panel.monitor.title",
+    // PS-2 U-4:退化尺寸统一提示
+    "panel.too_small",
+    // PS-2 批次2:GQEP 覆盖率无事件载体,如实标注未上报
+    "panel.metrics.coverage_unreported",
     "panel.log.title",
     "panel.help.title",
     // 面板边框标题(M2 i18n Slice 2,带前后置空格供边框排版)
@@ -121,6 +125,16 @@ pub const SEED_KEYS: &[&str] = &[
     "status.layout",
     "status.chat_pending",
     "status.quit_confirm",
+    // PS-2(F-1):协议握手回执上屏(ADR-082;app/state.rs 消费)
+    "status.handshake.full",
+    "status.handshake.degraded",
+    "status.handshake.refused",
+    // FC-A:投票诚实降级
+    "status.vote_unwired",
+    // B1:未接线命令的具体指引
+    "slash.unwired.fork",
+    "slash.unwired.undo",
+    "slash.unwired.redo",
     // 输入模式
     "mode.normal",
     "mode.insert",
@@ -150,6 +164,8 @@ pub const SEED_KEYS: &[&str] = &[
     "hint.palette",
     "hint.help",
     "hint.bar",
+    // I-2(2026-09-06 评估):Chat 视图下面板切换键的诚实提示(不可见切换)
+    "hint.panel_switch_in_chat",
     // 命令面板(M2 统一命令面板 overlay)
     "palette.title",
     "palette.hint",
@@ -183,6 +199,7 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.overwindow.window",
     "panel.overwindow.candidates",
     "panel.overwindow.loaded",
+    "panel.overwindow.discarded",
     "panel.overwindow.more",
     // U-3 第二波:Quest 面板正文
     "panel.quest.body_title",
@@ -209,11 +226,22 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.parliament.against",
     "panel.parliament.failed",
     "panel.parliament.immune",
+    // PS-2 批次1:议会治理态势(事件快照取代 L10→L8 越层直调)
+    "panel.parliament.governance",
+    "panel.parliament.no_data",
+    "panel.parliament.coordination",
+    "panel.parliament.gain",
+    "panel.parliament.cap",
+    "panel.parliament.immune_unwired",
     // U-3 第二波:Security 面板正文与详情
     "panel.security.body_title",
     "panel.security.no_events",
     "panel.security.detection",
     "panel.security.frozen",
+    // PS-2(F-6):子代理失败态势(security.rs 右栏 + app/state.rs 告警)
+    "panel.security.agent_failures",
+    "panel.security.agent_failure_total",
+    "status.agent_failure",
     "panel.security.detail_type",
     "panel.security.detail_quest",
     "panel.security.detail_reason",
@@ -257,6 +285,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.title" => "任务调度",
         "panel.chat.title" => "对话",
         "panel.monitor.title" => "系统监控",
+        "panel.metrics.coverage_unreported" => "覆盖率未上报(无事件载体)",
         "panel.log.title" => "日志",
         "panel.help.title" => "帮助",
         "panel.border.quest" => " 任务 ",
@@ -270,7 +299,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.border.decay" => " 衰减 ",
         "panel.border.eventstream" => " 事件流 ",
         "panel.border.router" => " 路由统计 ",
-        "panel.border.mcp" => " MCP 节点 ",
+        "panel.border.mcp" => " MCP 节点 (MCP Nodes) ",
         "panel.border.chtc" => " CHTC 适配器 ",
         "panel.border.timeline" => " 时间线 ",
         "panel.border.osa" => " OSA 稀疏 ",
@@ -421,15 +450,6 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         // Concord W4 T4.4:osa_sparse 分区标题
         "panel.osa.mask_status" => "五维掩码状态",
         // Concord W4 T4.4:pvl 九维评分维度名
-        "panel.pvl.dim.real_execution" => "真实执行",
-        "panel.pvl.dim.coverage" => "覆盖率",
-        "panel.pvl.dim.verification" => "验证通过",
-        "panel.pvl.dim.confidence" => "置信度",
-        "panel.pvl.dim.efficiency" => "效率",
-        "panel.pvl.dim.retry_discipline" => "重试纪律",
-        "panel.pvl.dim.output_substance" => "产出实质性",
-        "panel.pvl.dim.orphan_free" => "零孤儿",
-        "panel.pvl.dim.sandbox_clean" => "沙箱清洁",
         // Concord W4 T4.4:codegen 日志消息键
         "actions.codegen.bad_key_skipped" => "default_key 声明无法解析,已跳过",
         // Concord W4 T4.5:体验四项文案
@@ -465,7 +485,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "help.sc.help" => "显示本帮助",
         "help.sc.theme" => "切换主题",
         "help.sc.layout" => "切换布局",
-        "help.sc.gjump" => "跳转到扩展面板",
+        "help.sc.gjump" => "跳转到扩展/业务面板",
         "help.sc.top" => "滚动到顶部",
         "help.sc.bottom" => "滚动到底部",
         "help.sc.fkeys" => "跳转到面板(F 键)",
@@ -487,8 +507,18 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "status.ratio" => "占比",
         "status.theme" => "主题",
         "status.layout" => "布局",
+        // PS-2(F-1):协议握手回执(参数由 app/state.rs 拼接,见 tr 惯例)
+        "status.handshake.full" => "协议握手成功(Full)",
+        "status.handshake.degraded" => "协议降级,部分能力受限:",
+        "status.handshake.refused" => "协议握手被拒绝:版本不可调和,orchestrated 命令只读",
         "status.chat_pending" => "Chat 将于 M3b 接入",
         "status.quit_confirm" => "确认退出 Chimera? [←/→ 切换,Enter 确认]",
+        // FC-A(2026-09-06 复评):投票诚实降级(L8 治理通道未接线)
+        "status.vote_unwired" => "投票: L8 Parliament 治理通道未接线(预留),请求未发布",
+        // B1(2026-09-06 复评):未接线命令的具体指引
+        "slash.unwired.fork" => "分叉:多会话存储未接线(预留)",
+        "slash.unwired.undo" => "撤销:消息级撤销未接线,可用 Esc-Esc 回退",
+        "slash.unwired.redo" => "重做:未接线(预留)",
         "mode.normal" => "普通",
         "mode.insert" => "输入",
         "mode.command" => "命令",
@@ -513,9 +543,9 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "chat.status.idle" => "空闲",
         "hint.palette" => "Ctrl+P 命令面板",
         "hint.help" => "? 帮助",
-        "hint.bar" => {
-            " q:退出  Tab:下个  /:搜索  ::命令  ?:帮助  t:主题  l:布局  a:动作  g+1-6:面板 "
-        }
+        // I-2(2026-09-06 评估):Chat 视图下面板切换键的诚实提示(不可见切换)
+        "hint.panel_switch_in_chat" => "面板切换在仪表盘视图生效(按 \\ 切换视图)",
+        "hint.bar" => " q:退出  Tab:下个  /:命令  ?:帮助  t:主题  l:布局  a:动作  g+1-9,0:面板 ",
         "palette.title" => "命令面板",
         "palette.hint" => "输入过滤 · ↑↓ 选择 · Enter 执行 · Esc 关闭",
         // U-3 面板正文收口(2026-08-06):Health 系统资源摘要
@@ -548,6 +578,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.overwindow.window" => "窗口",
         "panel.overwindow.candidates" => "候选",
         "panel.overwindow.loaded" => "装窗",
+        "panel.overwindow.discarded" => "丢弃",
         "panel.overwindow.more" => "条触发(见 EventStream)",
         // U-3 第二波:Quest 面板正文
         "panel.quest.body_title" => "任务列表",
@@ -574,11 +605,22 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.parliament.against" => "反对",
         "panel.parliament.failed" => "失败",
         "panel.parliament.immune" => "免疫:",
+        // PS-2 批次1:治理态势(真实事件数据;缺项显示"无数据",不伪造零值)
+        "panel.parliament.governance" => "治理态势",
+        "panel.parliament.no_data" => "无数据(未收到议会事件)",
+        "panel.parliament.coordination" => "协调",
+        "panel.parliament.gain" => "增益",
+        "panel.parliament.cap" => "封顶",
+        "panel.parliament.immune_unwired" => "未接线(待 ImmuneSystem 装配)",
         // U-3 第二波:Security 面板正文与详情
         "panel.security.body_title" => "安全事件",
         "panel.security.no_events" => "暂无安全事件",
         "panel.security.detection" => "检测率",
         "panel.security.frozen" => "冻结能力",
+        // PS-2(F-6):子代理失败态势
+        "panel.security.agent_failures" => "子代理失败",
+        "panel.security.agent_failure_total" => "累计失败",
+        "status.agent_failure" => "子代理任务失败:",
         "panel.security.detail_type" => "类型:",
         "panel.security.detail_quest" => "任务:",
         "panel.security.detail_reason" => "原因:",
@@ -607,6 +649,140 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.quest.batch_pause" => "批量暂停",
         "panel.quest.batch_cancel" => "批量取消",
         "panel.quest.quests" => "个任务",
+        // ====================================================================
+        // v3 复评批次-A US-02/US-01(2026-09-08):六面板 + 注入策略 + 任务管理
+        // 生产段硬编码迁移。含英文括注的键为兼容既有集成测试英文断言
+        // (默认 Zh locale,tests/ 断言串不可改),后续批次随测试基线更新收敛。
+        // ====================================================================
+        // event_stream 面板
+        "panel.event_stream.body_title" => "事件流",
+        "panel.event_stream.no_events" => "[INFO]  暂无事件 (No events)",
+        "panel.event_stream.showing" => "显示",
+        "panel.event_stream.of" => "/",
+        "panel.event_stream.events" => "条事件",
+        // timeline 面板
+        "panel.timeline.no_snapshots" => "暂无快照 (No snapshots yet...)",
+        "panel.timeline.event_summary" => "共 {} 事件, {}/s 速率",
+        "panel.timeline.showing_snapshots" => "... 显示 {} / {} 快照",
+        "panel.timeline.detail_timestamp" => "时间戳:",
+        "panel.timeline.detail_event_count" => "事件数:",
+        "panel.timeline.detail_event_rate" => "事件速率:",
+        "panel.timeline.detail_budget_util" => "预算利用率:",
+        "panel.timeline.detail_health" => "健康评分:",
+        "panel.timeline.detail_decay" => "衰减系数:",
+        "panel.timeline.popup_title" => "时间线快照 (Timeline Snapshot) #{}",
+        // osa_sparse 面板
+        "panel.osa.gauge_title" => "稀疏度",
+        "panel.osa.sparsity_label" => "稀疏度:",
+        "panel.osa.mask_na_routing" => "路由: N/A | 上下文: N/A | 记忆: N/A",
+        "panel.osa.mask_na_audit" => "审计: N/A | 预算: N/A",
+        "panel.osa.recall_label" => "召回: needle@8=",
+        "panel.osa.recall_bias" => " 偏置=",
+        "panel.osa.recall_chain" => " 链路=",
+        "panel.osa.no_context_files" => "暂无活跃上下文文件",
+        "panel.osa.showing_files" => "... 显示 {} / {} 文件",
+        "panel.osa.sparsity_history" => "稀疏度历史",
+        // mcp_nodes 面板
+        "panel.mcp.alert_offline" => "[ALERT] 节点 {} 离线 (offline)",
+        "panel.mcp.no_nodes" => "暂无 MCP 节点接入 (No MCP nodes connected)",
+        "panel.mcp.detail_node_id" => "节点 ID:",
+        "panel.mcp.detail_status_label" => "状态:",
+        "panel.mcp.status_online" => "在线 (Online)",
+        "panel.mcp.status_degraded" => "降级 (Degraded)",
+        "panel.mcp.status_offline" => "离线 (Offline)",
+        "panel.mcp.detail_throughput" => "吞吐:",
+        "panel.mcp.detail_last_seen" => "最后心跳 (Last Seen):",
+        "panel.mcp.detail_heartbeat_age" => "心跳年龄 (Heartbeat Age):",
+        "panel.mcp.detail_timeout_warning" => "警告 (Warning): 心跳超时 (>{}s 阈值)",
+        "panel.mcp.detail_last_seen_never" => "最后心跳 (Last Seen): (从未)",
+        "panel.mcp.detail_no_heartbeat" => "警告 (Warning): 未收到心跳",
+        "panel.mcp.popup_title" => "节点 {} 详情",
+        // self_assessment 面板
+        "panel.self_assessment.body_title" => "Harness 自我评估 (Qoder 五维)",
+        "panel.self_assessment.dim_comprehension" => "理解力",
+        "panel.self_assessment.dim_execution" => "执行力",
+        "panel.self_assessment.dim_verification" => "验证力",
+        "panel.self_assessment.dim_delivery" => "交付力",
+        "panel.self_assessment.dim_experience" => "经验沉淀",
+        "panel.self_assessment.findings_count" => "报告内发现: {}",
+        "panel.self_assessment.awaiting" => "等待首份 Harness 评估报告...",
+        "panel.self_assessment.stage_label" => "记忆策略阶段 Memory Strategy Stage: {}",
+        "panel.self_assessment.recent_findings" => "最近发现",
+        "panel.self_assessment.no_findings" => "暂无发现",
+        // pvl_score 面板
+        "panel.too_small" => "面板区域过小",
+        "panel.dag.unwired" => "谱系 DAG:未接线(GSOE 未装配)",
+        "panel.pvl.unwired" => "九维评分:未接线(PVL 循环未装配)",
+        "panel.pvl.unwired_hint" => "生产装配面未实例化 PVL 循环,原数据源恒回退全 1.0,故不展示评分",
+        "panel.pvl.terminal_too_small" => {
+            "终端过小 (Terminal too small for PVL Score panel, min 15 rows)"
+        }
+        // injection_strategy 面板
+        "panel.injection.body_title" => "注入策略 (TencentDB)",
+        "panel.injection.awaiting_provider" => {
+            "等待注入快照提供者 (Awaiting injection snapshot provider...)"
+        }
+        "panel.injection.dynamic_cards" => "动态卡片 (用户消息前):",
+        "panel.injection.no_dynamic_cards" => "  暂无动态卡片 (No dynamic cards.)",
+        "panel.injection.card_type_preference" => "偏好 (Preference)",
+        "panel.injection.card_type_event" => "事件 (Event)",
+        "panel.injection.card_type_rule" => "规则 (Rule)",
+        "panel.injection.card_type_trace" => "轨迹 (Trace)",
+        "panel.injection.card_type_policy" => "策略 (Policy)",
+        "panel.injection.card_type_env_cognition" => "环境认知 (EnvCognition)",
+        "panel.injection.persona_summary" => "人格摘要 (系统提示尾部):",
+        "panel.injection.cache_stats" => "缓存统计:",
+        "panel.injection.cache_line" => {
+            "  缓存命中率 Cache hit rate: {}% | Token 节省 Token savings: {}"
+        }
+        "panel.injection.strategy_note" => "  策略: 动态卡片每轮刷新 | 人格摘要复用缓存",
+        // mcp_nodes 面板(批次-A:告警与空态保留 "[ALERT]"/"offline"/英文括注,
+        // 兼容 mcp_nodes_panel_test 既有英文断言;详情字段括注便于运维对照)
+        "panel.mcp_nodes.alert_offline" => "[ALERT] 节点 {} 离线 (offline)",
+        "panel.mcp_nodes.no_nodes" => "暂无 MCP 节点接入 (No MCP nodes connected)",
+        "panel.mcp_nodes.detail_title" => "节点 {} 详情 (Node Detail)",
+        "panel.mcp_nodes.detail_node_id" => "节点 ID (Node ID): {}",
+        "panel.mcp_nodes.detail_status" => "状态 (Status): {}",
+        "panel.mcp_nodes.detail_throughput" => "吞吐量 (Throughput): {} msg/s",
+        "panel.mcp_nodes.detail_last_seen" => "最后心跳 (Last Seen): {}",
+        "panel.mcp_nodes.detail_heartbeat_age" => "心跳年龄 (Heartbeat Age): {}s",
+        "panel.mcp_nodes.detail_heartbeat_timeout" => {
+            "警告 (Warning): 心跳已超时 (Heartbeat timed out) (>{}s 阈值)"
+        }
+        "panel.mcp_nodes.detail_last_seen_never" => "最后心跳 (Last Seen): (never)",
+        "panel.mcp_nodes.detail_no_heartbeat" => {
+            "警告 (Warning): 未收到心跳 (No heartbeat received)"
+        }
+        "panel.mcp_nodes.status_online" => "在线 (Online)",
+        "panel.mcp_nodes.status_degraded" => "降级 (Degraded)",
+        "panel.mcp_nodes.status_offline" => "离线 (Offline)",
+        // quest 面板 ThinkingMode 面板层键映射(枚举在 nexus-contracts L0,
+        // 孤儿规则:不能 impl Display;英文括注兼容 integration 测试 "Deep" 断言)
+        "panel.quest.thinking_fast" => "快速 (Fast)",
+        "panel.quest.thinking_standard" => "标准 (Standard)",
+        "panel.quest.thinking_deep" => "深度 (Deep)",
+        // task_manager 面板(批次-A 第 4 步:CJK 豁免棘轮,英文同批清零)
+        "panel.task.title_sort" => "任务管理 [{}]",
+        "panel.task.title_filter_suffix" => " (过滤: {})",
+        "panel.task.sort_priority" => "优先级",
+        "panel.task.sort_status" => "状态",
+        "panel.task.sort_created_at" => "创建时间",
+        "panel.task.no_matching" => "暂无匹配任务",
+        "panel.task.status_summary" => "待处理:{} | 执行中:{} | 已暂停:{} | 已完成:{}",
+        "panel.task.quadrants_label" => "四象限: ",
+        "panel.task.quadrant_q1" => "Q1(实现): A={} T={} WSJF={}",
+        "panel.task.quadrant_q2" => "Q2(集成): A={} T={} WSJF={}",
+        "panel.task.quadrant_q3" => "Q3(验证): A={} T={} WSJF={}",
+        "panel.task.quadrant_q4" => "Q4(加固): A={} T={} WSJF={}",
+        "panel.task.no_provider" => "数据源未接入(set_quadrant_status_provider 未注册)",
+        "panel.task.detail_title" => "标题:",
+        "panel.task.detail_id" => "ID:",
+        "panel.task.detail_priority" => "优先级:",
+        "panel.task.detail_tasks" => "任务数:",
+        "panel.task.detail_mode" => "模式:",
+        "panel.task.batch_pause_confirm" => "批量暂停 (Batch pause) {} 个任务",
+        "panel.task.batch_terminate_confirm" => "批量终止 (Batch terminate) {} 个任务",
+        "panel.task.batch_resume_confirm" => "批量恢复 (Batch resume) {} 个任务",
         // 通用
         "common.none" => "(无)",
         _ => return None,

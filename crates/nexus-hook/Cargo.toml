@@ -1,0 +1,31 @@
+[package]
+name = "nexus-hook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "L9 Quest: user-programmable lifecycle hook system (13+ LifecycleEvent + TOML mount + sandbox, Phase 3, ADR-146)"
+
+[dependencies]
+# L0 Contracts: Command/CommandPolicy 命令校验契约（ProcessFence 沙箱输入）
+# WHY(P3-T3): hook 命令执行前经 seccore ProcessFence 逃逸检测;L9 → L0 向下依赖合规
+nexus-contracts = { workspace = true }
+# L1 Core: 生命周期事件发布（hook 触发/拒绝事件,跨层通信唯一通道）
+event-bus = { workspace = true }
+# L4 Security: ProcessFence 进程围栏（hook 沙箱,逃逸拒绝——写 /etc/越界网络）
+seccore = { workspace = true }
+# TOML 配置解析（HookConfig 挂载文件）
+toml = { workspace = true }
+# 序列化: HookConfig serde derive + 审计条目
+serde = { workspace = true, features = ["derive"] }
+# 序列化: 测试/审计 JSON 编解码（serde 往返验证）
+serde_json = { workspace = true }
+# 库层错误类型标准(§4.1: 库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 结构化日志(触发/拒绝/审计)
+tracing = { workspace = true }
+# 异步运行时: hook 命令超时熔断(tokio::process + timeout,不阻主流程)
+tokio = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+# 测试用时间控制
+tokio = { workspace = true, features = ["full", "test-util"] }

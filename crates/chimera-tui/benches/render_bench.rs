@@ -174,7 +174,7 @@ fn make_app_with_data() -> TuiApp {
     state.budget_history = vec![30, 32, 35, 33, 36, 38, 35];
     state.memory_history = vec![80, 82, 85, 83, 86, 88, 87];
     state.event_rate_history = vec![30, 35, 40, 38, 42, 45, 42];
-    state.latest_events = sample_events();
+    state.latest_events = std::sync::Arc::new(sample_events());
     app
 }
 

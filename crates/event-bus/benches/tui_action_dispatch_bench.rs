@@ -49,6 +49,7 @@ fn make_tui_action_event(variant: &str) -> NexusEvent {
     match variant {
         "TuiActionRequested" => NexusEvent::TuiActionRequested {
             metadata,
+            request_id: "tui-1".into(),
             action_id: "quest.pause".into(),
             payload: r#"{"quest_id":"q-1"}"#.into(),
             source: ActionSource::Palette,
@@ -60,11 +61,13 @@ fn make_tui_action_event(variant: &str) -> NexusEvent {
         },
         "TuiActionCompleted" => NexusEvent::TuiActionCompleted {
             metadata,
+            request_id: "tui-1".into(),
             action_id: "quest.export".into(),
             result: r#"{"path":"/tmp/out.json"}"#.into(),
         },
         "TuiActionFailed" => NexusEvent::TuiActionFailed {
             metadata,
+            request_id: "tui-1".into(),
             action_id: "quest.pause".into(),
             error: "quest already completed".into(),
         },

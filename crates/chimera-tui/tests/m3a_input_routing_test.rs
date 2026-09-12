@@ -5,8 +5,10 @@
 //! # 测试策略(WHY)
 //! - **黑盒事件流**:经 `TuiApp::handle_key_event` 公共 API 驱动,验证对外可观测行为
 //!   (`input_mode`/`palette_is_open`/`current_panel`/`running`),不触碰私有字段。
-//! - **决策 B 核心**:`:` 打开命令栏(`InputMode::Command`)、Ctrl+P 打开命令面板 overlay,
-//!   二者为独立入口不可混同——这是 M3a 保留 `:` 带参命令能力的关键契约。
+//! - **决策 B 核心**:`/` 进入斜杠模式(`InputMode::Slash`,唯一命令入口,
+//!   遗留 `:` 命令经 parse_legacy 回退承接)、Ctrl+P 打开命令面板 overlay,
+//!   二者为独立入口不可混同。
+//!   IT-01(批次-B):遗留 `InputMode::Command/Search` 双入口已删除。
 //! - **零回归锚点**:数字/F 键/Tab/g 前缀/主题/布局经 InputRouter 决策 + 既有 app 方法执行,
 //!   效果与旧 `handle_global_key` 逐键一致;`gq` 不误退出是 GPrefix 退出态重映射的关键验证。
 
@@ -67,8 +69,10 @@ fn render_once(app: &mut TuiApp) -> String {
 // ============================================================
 
 #[test]
-fn colon_opens_command_bar_not_palette() {
-    // Concord W2:`:` 进入斜杠命令模式(废弃窗口期别名,不再是 vi 式命令栏)
+fn colon_enters_slash_mode_not_palette() {
+    // Concord W2:`:` 进入斜杠命令模式(废弃窗口期别名,不再是 vi 式命令栏)。
+    // PS-3(I-7):原名 colon_opens_command_bar_not_palette 中 "command_bar"
+    // 概念已不存在(`InputMode::Command` 变体已删除,`:` 为 Slash 别名),按名索骥会误导。
     let mut app = make_app();
     app.handle_key_event(key(KeyCode::Char(':')));
     assert_eq!(
@@ -290,4 +294,82 @@ fn quit_via_router_q_and_esc() {
     let mut app2 = make_app();
     app2.handle_key_event(key(KeyCode::Esc));
     assert!(!app2.state().running, "Esc 应退出应用");
+}
+
+// ============================================================
+// PS-2 I-8:Alt 修饰过滤(输入缓冲不得被终端级组合键污染)
+// ============================================================
+
+fn alt(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT)
+}
+
+#[test]
+fn alt_char_routes_to_ignored_in_all_input_modes() {
+    // I-8:此前三处输入分支仅排除 Ctrl(`if !ctrl`),Alt+字符会写入
+    // 输入/检索缓冲。统一为"仅无修饰或仅 Shift 放行"后,Alt 组合必须被忽略。
+    use chimera_tui::input::router::{InputRouter, RouteTarget, RouterMode};
+
+    for mode in [RouterMode::Insert, RouterMode::Command, RouterMode::Slash] {
+        assert_eq!(
+            InputRouter::route(mode, alt('a')),
+            RouteTarget::Ignored,
+            "{mode:?}: Alt+a 必须被忽略,不得污染输入/检索缓冲"
+        );
+    }
+}
+
+#[test]
+fn plain_and_shift_chars_still_reach_input() {
+    // 对照组:修复不得误伤正常输入(Shift 承担大写输入,必须放行)
+    use chimera_tui::input::router::{InputRouter, RouteTarget, RouterMode};
+
+    assert_eq!(
+        InputRouter::route(RouterMode::Insert, key(KeyCode::Char('a'))),
+        RouteTarget::InsertChar('a')
+    );
+    assert_eq!(
+        InputRouter::route(
+            RouterMode::Insert,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SHIFT)
+        ),
+        RouteTarget::InsertChar('a'),
+        "Shift+字符承担大写输入,必须放行"
+    );
+    assert_eq!(
+        InputRouter::route(RouterMode::Slash, key(KeyCode::Char('n'))),
+        RouteTarget::PaletteInput('n')
+    );
+}
+
+// ============================================================
+// PS-2 I-9:Chat 视图退出契约(默认视图即 Chat)
+// ============================================================
+
+#[test]
+fn chat_view_q_does_not_quit_and_exit_command_works() {
+    // I-9:默认视图即 Chat(types.rs `#[default] Chat`),q/Esc 在 Chat 视图
+    // 走 composer 路径(handle_chat_esc),**不退出**;显式退出必须 `/exit`。
+    // 本测试把该契约固化,防止有人把 Chat 的 q 改回"退出"而破坏默认路径。
+    // (注意:此处**不**强制 Dashboard —— 旧 make_app 强制 Dashboard 正是为
+    // 绕开该路径,本用例补上默认路径的覆盖。)
+    let mut app = TuiApp::new(TuiConfig {
+        persist_state: false,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(
+        app.state().view_mode,
+        chimera_tui::ViewMode::Chat,
+        "默认视图应为 Chat(本用例依赖默认构造)"
+    );
+
+    app.handle_key_event(key(KeyCode::Char('q')));
+    assert!(app.state().running, "Chat 视图下 q 不应退出(契约)");
+
+    // `/exit` 是显式退出契约
+    app.handle_key_event(key(KeyCode::Char('/')));
+    type_chars(&mut app, "exit");
+    app.handle_key_event(key(KeyCode::Enter));
+    assert!(!app.state().running, "`/exit` 应退出(契约)");
 }

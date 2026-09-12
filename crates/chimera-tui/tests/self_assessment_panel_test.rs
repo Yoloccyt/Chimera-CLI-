@@ -39,11 +39,11 @@ fn test_no_events_shows_na_placeholder() {
 #[test]
 fn test_strategy_event_derives_stage() {
     let state = TuiState {
-        latest_events: VecDeque::from(vec![strategy_event(
+        latest_events: std::sync::Arc::new(VecDeque::from(vec![strategy_event(
             "StandardTopK",
             "AggressivePruning",
             "ghost_memory_detected",
-        )]),
+        )])),
         ..Default::default()
     };
     let content = SelfAssessmentPanel::content(&state).to_string();
@@ -54,13 +54,31 @@ fn test_strategy_event_derives_stage() {
 }
 
 #[test]
+fn test_zh_locale_renders_chinese_copy() {
+    // US-02 i18n 收口:面板正文迁移键表后,Zh locale 应渲染中文文案
+    // (TDD RED→GREEN:迁移前此处输出英文必红)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    let state = TuiState::new();
+    let content = SelfAssessmentPanel::content(&state).to_string();
+    assert!(
+        content.contains("等待首份 Harness 评估报告"),
+        "Zh locale 下无报告时应显示中文等待提示,实际: {content}"
+    );
+    assert!(
+        content.contains("记忆策略阶段"),
+        "Zh locale 下记忆策略阶段标签应为中文,实际: {content}"
+    );
+}
+
+#[test]
 fn test_latest_event_wins() {
     // 反向扫描:最近一条事件的 to_strategy 生效
     let state = TuiState {
-        latest_events: VecDeque::from(vec![
+        latest_events: std::sync::Arc::new(VecDeque::from(vec![
             strategy_event("StandardTopK", "AggressivePruning", "ghost_memory_detected"),
             strategy_event("AggressivePruning", "StandardTopK", "stable_recovery"),
-        ]),
+        ])),
         ..Default::default()
     };
     let content = SelfAssessmentPanel::content(&state).to_string();

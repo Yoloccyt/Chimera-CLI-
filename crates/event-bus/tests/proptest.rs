@@ -114,6 +114,7 @@ fn make_event(variant: u8) -> NexusEvent {
         },
         16 => NexusEvent::TuiActionRequested {
             metadata: m(),
+            request_id: "tui-1".into(),
             action_id: "quest.plan".into(),
             payload: "{}".into(),
             source: event_bus::types::ActionSource::Palette,

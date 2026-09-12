@@ -17,6 +17,7 @@
 //! 与既有 `decay` 共享核心逻辑（`decay_with_config`），保持向后兼容。
 //! 详见 `learner_holder::DecayLearnerHolder`（C4 合规三层 fallback）。
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use dashmap::DashMap;
@@ -456,6 +457,99 @@ impl DecayEngine {
     pub fn maybe_recover_all_from_cooldown(&self) -> Result<i32, DecayError> {
         self.token_registry.maybe_recover_all_from_cooldown()
     }
+
+    /// 发布衰减指标报告(WS-4A)— 供 TUI Decay 面板消费
+    ///
+    /// 构造 [`event_bus::NexusEvent::DecayMetricsReported`] 并**同步发布**
+    /// (`publish_blocking`,sync 模式,无需 tokio runtime)。字段语义:
+    /// - `metadata.source = "decay-engine"`;
+    /// - `coefficient` = 注册能力当前权限等级的平均值(1.0 = 无衰减;
+    ///   空注册表时取 1.0);
+    /// - `recent_events` / `fallback_count_delta` 本骨架级暂无聚合源,置空/0。
+    ///
+    /// 发布失败(理论罕见)仅告警不 panic。
+    pub fn report_metrics(&self, bus: &event_bus::EventBus) {
+        let caps = self.list_capabilities();
+        let coefficient = if caps.is_empty() {
+            1.0
+        } else {
+            caps.iter().map(|(_, lvl, _)| lvl.value()).sum::<f32>() / caps.len() as f32
+        };
+        let ev = event_bus::NexusEvent::DecayMetricsReported {
+            metadata: event_bus::EventMetadata::new("decay-engine"),
+            coefficient,
+            recent_events: Vec::new(),
+            cycle_start: chrono::Utc::now(),
+            fallback_count_delta: 0,
+        };
+        if let Err(e) = bus.publish_blocking(ev) {
+            tracing::warn!(error = %e, "衰减指标事件发布失败");
+        }
+    }
+
+    /// 批量并行衰减(P1-T14)— 经 ComputeBridge 对批量能力并行注入衰减
+    ///
+    /// 委托 [`crate::parallel::decay_batch_core`] 实现**快照分离、计算并行、
+    /// 串行提交**:
+    /// 1. 主线程按下发 `items` 顺序快照各能力 `(level, frozen, last_decay_at)`;
+    /// 2. `parallel_enabled && bridge().route(Generic, n) == Rayon` 时经 rayon
+    ///    并行计算,否则串行(结果恒与串行逐元素一致,Ω₂);
+    /// 3. 主线程按输入序把结果写回 `DashMap`(提交持锁,不入 rayon 闭包)。
+    ///
+    /// 结果序 = 输入序,返回 `(能力 id, 新等级, 是否冻结)`;任一 `items` 中出现
+    /// 未注册能力或计算失败(理论不可达)即返回 [`DecayError`]。
+    ///
+    /// `parallel_enabled = false` 或 `CHIMERA_NO_PARALLEL_DECAY` 环境变量可强制串行。
+    pub fn parallel_batch(
+        &self,
+        items: &[(&str, DecayEvent)],
+        parallel_enabled: bool,
+    ) -> Result<Vec<(String, f32, bool)>, DecayError> {
+        use crate::parallel::{decay_batch_core, DecayEventParam, DecayOutcome, DecaySnapshot};
+
+        // 快照分离:主线程一次快照,rayon 闭包零锁零 IO(红线纪律)
+        let mut snapshots = Vec::with_capacity(items.len());
+        let mut events = Vec::with_capacity(items.len());
+        let mut ids = Vec::with_capacity(items.len());
+        for (id, event) in items {
+            ids.push((*id).to_string());
+            let cap = self
+                .capabilities
+                .get(*id)
+                .ok_or_else(|| DecayError::CapabilityNotFound((*id).to_string()))?;
+            snapshots.push(DecaySnapshot {
+                level: cap.level.value(),
+                frozen: cap.frozen,
+                last_decay_at: cap.last_decay_at,
+            });
+            events.push(DecayEventParam::from_event(event));
+        }
+
+        let snaps = Arc::new(snapshots);
+        let evs = Arc::new(events);
+        let cfg = Arc::new(self.config.clone());
+        let now = Instant::now();
+        let outcomes = decay_batch_core(&snaps, &evs, &cfg, now, parallel_enabled);
+
+        // 串行提交写回 DashMap(结果序 = 输入序)
+        let mut result = Vec::with_capacity(outcomes.len());
+        for (id, outcome) in ids.into_iter().zip(outcomes) {
+            match outcome {
+                Ok(DecayOutcome { level, frozen }) => {
+                    let mut cap = self
+                        .capabilities
+                        .get_mut(&id)
+                        .ok_or_else(|| DecayError::CapabilityNotFound(id.clone()))?;
+                    cap.level = CapabilityLevel::new(level)?;
+                    cap.frozen = frozen;
+                    cap.last_decay_at = now;
+                    result.push((id, level, frozen));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(result)
+    }
 }
 
 // ============================================================
@@ -501,3 +595,67 @@ pub(crate) fn profile_to_config(profile: DecayProfile) -> DecayConfig {
 // ============================================================
 // 单元测试
 // ============================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WS-4A:report_metrics 发布 DecayMetricsReported,字段符合契约
+    #[test]
+    fn report_metrics_publishes_event() {
+        let bus = event_bus::EventBus::new();
+        // 订阅必须先于发布(broadcast 反模式 3:错过则静默丢事件)
+        let mut rx = bus.subscribe();
+        let engine = DecayEngine::new(DecayConfig::default());
+        engine
+            .register_capability("cap-a", "a", 0.8)
+            .expect("register 失败");
+        engine
+            .register_capability("cap-b", "b", 0.4)
+            .expect("register 失败");
+        engine.report_metrics(&bus);
+
+        let ev = rx
+            .try_recv()
+            .expect("try_recv 不应 Err")
+            .expect("应收到事件");
+        match ev {
+            event_bus::NexusEvent::DecayMetricsReported {
+                metadata,
+                coefficient,
+                recent_events,
+                cycle_start: _,
+                fallback_count_delta,
+            } => {
+                assert_eq!(metadata.source, "decay-engine");
+                // (0.8 + 0.4) / 2 = 0.6
+                assert!(
+                    (coefficient - 0.6).abs() < 1e-6,
+                    "coefficient={coefficient} 期望 ~0.6"
+                );
+                assert!(recent_events.is_empty());
+                assert_eq!(fallback_count_delta, 0);
+            }
+            other => panic!("期望 DecayMetricsReported,收到 {other:?}"),
+        }
+    }
+
+    /// 空注册表:coefficient 取 1.0(无衰减语义)
+    #[test]
+    fn report_metrics_empty_registry_coefficient_one() {
+        let bus = event_bus::EventBus::new();
+        let mut rx = bus.subscribe();
+        let engine = DecayEngine::new(DecayConfig::default());
+        engine.report_metrics(&bus);
+
+        let ev = rx
+            .try_recv()
+            .expect("try_recv 不应 Err")
+            .expect("应收到事件");
+        match ev {
+            event_bus::NexusEvent::DecayMetricsReported { coefficient, .. } => {
+                assert_eq!(coefficient, 1.0);
+            }
+            other => panic!("期望 DecayMetricsReported,收到 {other:?}"),
+        }
+    }
+}

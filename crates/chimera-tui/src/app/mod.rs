@@ -54,8 +54,6 @@ pub(crate) use pane_manager::{PaneManager, RATIO_MAX, RATIO_MIN, RATIO_STEP};
 
 /// 伴随面板宽度(字符),与引擎 Chat 模式 CHAT_CONTEXT_WIDTH 对齐(M2 增量3)
 const COMPANION_WIDTH: u16 = 30;
-/// 触发伴随面板并排的最小视口宽度(低于此不切分,避免主区被挤压)
-const COMPANION_MIN_WIDTH: u16 = 60;
 /// IDE 三窗格模式左侧栏宽度(字符),与引擎 presets IDE_SIDEBAR_WIDTH 对齐(M3d)
 const IDE_SIDEBAR_WIDTH: u16 = 20;
 /// IDE 三窗格模式右侧 context 栏宽度(字符),与引擎 presets IDE_CONTEXT_WIDTH 对齐(M3d)
@@ -123,14 +121,12 @@ pub struct TuiApp {
     ///
     /// WHY Option:仅在 `v3-engine` feature 开启且未通过 `CHIMERA_NO_V3_ENGINE`
     /// 禁用时惰性创建;回退路径(ratatui Terminal::draw)不持有该状态。
-    #[cfg(feature = "v3-engine")]
     v3_output: Option<crate::engine::output::V3Output>,
     /// v3-engine 渲染用内存终端(复用避免每帧重建 TestBackend/Terminal)
     ///
     /// WHY 复用:render_frame_v3 原先每帧新建 TestBackend + Terminal(整帧
     /// Cell 分配);提升为字段后仅终端尺寸变化时重建,消除每帧分配开销
     /// (评估报告 P0-1)。
-    #[cfg(feature = "v3-engine")]
     v3_term: Option<ratatui::Terminal<ratatui::backend::TestBackend>>,
     /// 上一轮事件轮询是否无事件(静默帧判定,评估报告 P0-1 DirtyTracker 接线)
     ///
@@ -138,8 +134,44 @@ pub struct TuiApp {
     /// 状态(选中/滚动)未变;配合 render 前 update 的 dirty_panels 检查,
     /// 可安全跳过主面板区域行的 compat 转换与 diff 比较,仅保留每帧必变的
     /// status_bar 行(帧率/计数)。初始 false 保证首帧全量渲染。
-    #[cfg(feature = "v3-engine")]
     frame_quiescent: bool,
+    /// 最近一次全量渲染的 ratatui 帧缓冲(静默帧复用,P-1,2026-09-06 评估)
+    ///
+    /// WHY 缓存:静默帧的面板区域与已呈现帧逐字节相同,却仍执行全量
+    /// widget 渲染 + 整帧 TestBackend 绘制(评估报告 P-1 热点);缓存上一帧
+    /// 后,静默帧只重绘状态行并复用缓存,消除面板渲染开销。
+    v3_cached_frame: Option<ratatui::buffer::Buffer>,
+    /// 最近一次全量渲染中状态栏的实际区域(P-2 静默帧行号来源)
+    ///
+    /// WHY 记录而非重算:Dashboard 状态行在 h-2,Chat 视图 statusline 在
+    /// h-1,SinglePane 无状态行 —— 静默帧若硬编码 h-2 会漏刷/错刷
+    /// (评估报告 P-2:Chat 静默期 statusline 冻结)。由 render_status_bar
+    /// 在渲染时写入,字节级同源,SinglePane 保持 None(静默帧零输出)。
+    status_bar_area: Option<ratatui::layout::Rect>,
+    /// 同步输出模式(P-3 AtomicFrameWriter 接线,ADR-079)
+    ///
+    /// WHY Option + 启动期一次探测:`probe_sync_output` 会写 DECRQM 查询并
+    /// 消费终端应答,必须且只应在 raw mode 开启后、事件循环启动前执行一次;
+    /// 非 TTY(测试/管道)降级 Disabled。None = 尚未探测。
+    v3_sync_mode: Option<crate::engine::SyncMode>,
+    /// 跨帧复用的原子帧写出器(P-3:稳态零再分配,ADR-079 设计意图)
+    v3_frame_writer: Option<crate::engine::AtomicFrameWriter>,
+    /// 静默帧命中缓存计数(子步骤1 seam:可测性指标)
+    ///
+    /// WHY 可观测:静默帧复用 `v3_cached_frame` 的次数;测试据此断言静默帧
+    /// 确实走了缓存复用分支而非回退全量渲染。无 cfg:统计字段在 v3 关闭时
+    /// 恒为 0,开销可忽略。
+    v3_silent_hits: u64,
+    /// 渲染帧总计数(子步骤1 seam:可测性指标)
+    ///
+    /// WHY 可观测:每进入 `render_frame_v3` 计 1;测试据此断言渲染次数不超过
+    /// 事件轮询次数(帧预算节流时会小于事件数)。无 cfg:统计字段恒 0 安全。
+    v3_render_count: u64,
+    /// 上一次真实渲染的时刻(PS-1 帧预算节流用)
+    ///
+    /// WHY `Option`:首帧必须立即渲染(`None` 视为"到期"),避免启动后黑屏到
+    /// 第一个帧预算到期。节流语义见 `event_loop.rs` 的 `MIN_FRAME_MS`。
+    last_render_at: Option<std::time::Instant>,
 }
 
 /// 按 PanelId 构造面板实例 — 注册序驱动的面板工厂(Concord T1.4)
@@ -201,7 +233,7 @@ impl TuiApp {
     ) -> Result<Self, TuiError> {
         config.validate()?;
         // Concord T1.4(P5① 收口):面板注册序派生自 PanelId::REGISTERED_FOCUS_ORDER
-        // 单一事实源;25 面板全部注册(此前 Timeline/Sysinfo 未注册,§7.3 接线)。
+        // 单一事实源;26 面板全部注册(FC-05 下线 InjectionStrategy)。
         // FocusManager 遍历序 == PanelId::next/prev 静态环,由 INV-F 不变量测试守护。
         let panels: Vec<Box<dyn Panel>> = PanelId::REGISTERED_FOCUS_ORDER
             .iter()
@@ -240,12 +272,16 @@ impl TuiApp {
             // Concord W4 T4.5:Esc Esc 双击检测初始无记录
             last_esc_ms: None,
             event_bus: None,
-            #[cfg(feature = "v3-engine")]
             v3_output: None,
-            #[cfg(feature = "v3-engine")]
             v3_term: None,
-            #[cfg(feature = "v3-engine")]
             frame_quiescent: false,
+            v3_cached_frame: None,
+            status_bar_area: None,
+            v3_sync_mode: None,
+            v3_frame_writer: None,
+            v3_silent_hits: 0,
+            v3_render_count: 0,
+            last_render_at: None,
         })
     }
 
@@ -255,6 +291,27 @@ impl TuiApp {
     pub fn with_event_bus(mut app: Self, bus: EventBus) -> Self {
         app.event_bus = Some(bus);
         app
+    }
+
+    /// 接线经验卡片统计提供者(FC-05,2026-09-06 评估)— 运行期替换面板实例
+    ///
+    /// WHY 运行期替换而非构造期注入:`ExperienceCardVizPanel` 遵循 D-1 trait
+    /// 注入(与 SelfAssessment 先例一致),但其数据源(L2 MlcEngine 卡片系统)
+    /// 在 chimera-cli 组合根经 `spawn_experience_loop` **异步装配后才就绪**;
+    /// 保持 `::new()` 默认桩(未接线时面板诚实展示等待提示),接线失败(闭环
+    /// 降级)时面板维持默认态,不阻断 TUI 启动。
+    ///
+    /// # 参数
+    /// - `provider`:经验卡片统计提供者(chimera-cli 组合根构造)
+    pub fn install_experience_card_provider(
+        &mut self,
+        provider: std::sync::Arc<dyn crate::panels::ExperienceCardStatsProvider>,
+    ) {
+        if let Some(idx) = self.panel_index(crate::types::PanelId::ExperienceCardViz) {
+            self.panels[idx] = Box::new(crate::panels::ExperienceCardVizPanel::with_provider(
+                provider,
+            ));
+        }
     }
 
     /// 返回配置引用
@@ -303,7 +360,52 @@ impl TuiApp {
         self.pane_manager
             .should_collapse_companion(terminal_width, self.config.responsive_collapse_threshold)
     }
+
+    /// 返回静默帧命中缓存计数(PS-1 测试 seam:可测性指标)
+    ///
+    /// WHY 可观测:验证静默帧确实复用了 `v3_cached_frame` 而非回退全量渲染。
+    /// WHY `test` 门控:本访问器仅被 in-crate 测试消费,发布构建中不存在,
+    /// 从根源消除 dead_code(而非 `#[allow]` 掩盖)。
+    #[cfg(all(test, feature = "v3-engine"))]
+    pub(crate) fn silent_hit_count(&self) -> u64 {
+        self.v3_silent_hits
+    }
+
+    /// 返回渲染帧总计数(PS-1 测试 seam:可测性指标)
+    ///
+    /// WHY 可观测:验证帧预算节流生效(渲染次数应 ≤ 事件轮询次数)。
+    /// WHY `test` 门控:同 `silent_hit_count`,仅测试消费。
+    #[cfg(all(test, feature = "v3-engine"))]
+    pub(crate) fn render_count(&self) -> u64 {
+        self.v3_render_count
+    }
+
+    /// 返回当前缓存帧引用(PS-1 测试 seam:静默帧字节等价性测试用)
+    ///
+    /// WHY 可观测:测试可读取缓存帧与全量帧逐 cell 比对,守护"静默 ≡ 已呈现"不变量。
+    /// WHY `test` 门控:同上,仅测试消费。
+    #[cfg(all(test, feature = "v3-engine"))]
+    pub(crate) fn v3_cached_frame(&self) -> Option<&ratatui::buffer::Buffer> {
+        self.v3_cached_frame.as_ref()
+    }
+
+    /// 设置静默帧判定状态(PS-1 测试 seam:注入"无事件轮询"模拟)
+    ///
+    /// WHY 可注入:测试需模拟"无事件"轮询以触发静默帧路径。
+    /// WHY `test` 门控:同上,仅测试消费。
+    #[cfg(all(test, feature = "v3-engine"))]
+    pub(crate) fn set_frame_quiescent(&mut self, v: bool) {
+        self.frame_quiescent = v;
+    }
 }
 
 #[cfg(test)]
 mod tests;
+
+/// PS-1 v3 渲染路径不变量测试(零拷贝 / 静默帧 / 帧预算)
+///
+/// WHY 独立文件:`render_frame_v3` 系列 seam 为 `pub(crate)`,集成测试不可见,
+/// 必须挂在 in-crate 模块下;与 `tests.rs`(核心行为)按主题分离,避免单文件膨胀。
+/// WHY 同时门控 `v3-engine`:被测对象(`render_frame_v3_to` 等)仅在该 feature 下存在。
+#[cfg(all(test, feature = "v3-engine"))]
+mod v3_render_tests;

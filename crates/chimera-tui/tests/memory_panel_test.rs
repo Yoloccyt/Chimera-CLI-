@@ -143,6 +143,7 @@ fn test_memory_panel_empty_data_renders_defaults() {
 
 #[test]
 fn test_memory_panel_displays_tier_distribution() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     // i18n(U-3):面板正文标签随 locale 切换,固定 En 断言英文 "Storage:" 行
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::En);
@@ -194,6 +195,7 @@ fn test_memory_panel_displays_tier_distribution() {
 
 #[test]
 fn test_memory_panel_no_tier_event_shows_na() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     // 无 CapabilityTierStatsReported 事件时诚实显示 N/A(不虚报恒零)
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::En);

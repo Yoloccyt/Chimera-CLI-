@@ -69,6 +69,10 @@ pub struct SccCache {
 impl SccCache {
     /// 创建推测上下文缓存,使用指定配置与 EventBus
     pub fn new(config: SccConfig, event_bus: EventBus) -> Self {
+        // P4-T10 分片扩量批次 1(ADR-153 Go,分批 3 crate × 回归门禁):
+        // CacheHit/CacheMiss 高频非 Critical 事件→ 分片扇出;
+        // 幂等 + 无 runtime 时 Err 降级回单流(零回归,P1-T12 先例)
+        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
         let capacity = config.capacity;
         Self {
             entries: Arc::new(DashMap::with_capacity(capacity)),

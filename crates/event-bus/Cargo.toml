@@ -29,6 +29,10 @@ prometheus-client = { workspace = true }
 # WHY 合规: 外部基础库(非 workspace crate),不违反依赖铁律;DashMap 无锁并发读
 # 与 project_memory 持锁跨 await 红线正交(索引读写均为同步短临界区)
 dashmap = { workspace = true }
+# crossbeam-queue:ShardedBus 分片无锁队列(P1-T12,手册 §8.5)
+# WHY ArrayQueue:有界无锁 MPSC,64 片 × 256 容量,入片为热路径(~50ns)
+# 无锁不阻塞(分片满回退由 CBF 信用流裁决,见 shard.rs)
+crossbeam-queue = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
@@ -61,4 +65,25 @@ harness = false
 # 运行: cargo bench -p event-bus --bench cross_layer_bench
 [[bench]]
 name = "cross_layer_bench"
+harness = false
+
+# P1-T11: CBF 信用流背压门禁基准(手册 §8.5 / T-06)
+# 单流吞吐(纯 broadcast 发布 > 100K msg/s 门禁口径)+ 信用流 acquire/release 吞吐
+# 复用 T8/T9 单行采样模式(iter_custom 零打印、固定 n 单次采样打印 P50/P99)
+[[bench]]
+name = "bus_credit_bench"
+harness = false
+
+# P1-T12: ShardedBus 分片吞吐门禁基准(手册 §8.5)
+# 分片发布吞吐 > 500K msg/s(发布端并行化)+ 单流对照基准
+# 复用 T8/T9 单行采样模式(iter_custom 零打印、固定 n 单次采样打印 P50/P99)
+[[bench]]
+name = "bus_shard_bench"
+harness = false
+
+# P2-T5: PatternIndex 精确索引门禁基准(v4.0 WI-15 阶段一)
+# 1000 订阅者 × 10K 事件匹配 P99 < 1ms + 结构性漏发率 = 0
+# 复用 T8/T9 单行采样模式(iter_custom 零打印、固定 n 单次采样)
+[[bench]]
+name = "pattern_index_bench"
 harness = false

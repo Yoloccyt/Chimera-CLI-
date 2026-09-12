@@ -149,3 +149,61 @@ fn sandbox_type_three_variants_distinct() {
     assert_ne!(SandboxType::RemoteE2B, SandboxType::Custom);
     assert_ne!(SandboxType::LocalBubblewrap, SandboxType::Custom);
 }
+
+// ----------------------------------------------------------
+// T15 解耦红线: Paddock 不得触达 Sandbox 内部实现(铁律10 守护)
+// ----------------------------------------------------------
+
+/// 读取 seccore 源码文件,用于模块级引用白名单断言
+///
+/// 基于 `CARGO_MANIFEST_DIR`(cargo 注入的环境变量,与工作目录无关)
+/// 定位 `src/`,保证在任何 cwd 下都稳定。
+fn read_module_source(file_name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join(file_name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("应能读取模块源码 {file_name}: {e}"))
+}
+
+/// 铁律10 解耦红线: paddock_sandbox.rs 不得引用 sandbox 内部实现符号。
+///
+/// what-to-do(Paddock) 与 where-it-runs(Sandbox) 解耦,要求 Paddock 只能经由公开
+/// `SandboxRuntime` trait + `SandboxProvider` 工作。`Sandbox` 属公开适配类型,仅授权
+/// `ProcessSandboxRuntime`(适配器)引用;如下 sandbox 私有辅助函数在 paddle 侧任何位置
+/// (含适配器)都不应出现。此白名单断言在回归时拦截"Paddock 直接调用 sandbox 内部"的耦合回潮。
+#[test]
+fn red_line_paddock_free_of_sandbox_internal_references() {
+    let source = read_module_source("paddock_sandbox.rs");
+    // 禁止出现的 sandbox 内部实现符号(sandbox.rs 私有函数,非公开适配点):
+    let forbidden = [
+        "compute_audit_hash", // sandbox.rs 私有审计 MERKLE 哈希
+        "build_asa_input",    // sandbox.rs 私有 ASA 输入构建
+        "execute_in_sandbox", // sandbox.rs 私有执行路径
+        "kill_process_tree",  // sandbox.rs 私有子进程清理
+        "publish_violation",  // sandbox.rs 私有违规事件发布
+    ];
+    for sym in forbidden {
+        assert!(
+            !source.contains(sym),
+            "paddock_sandbox.rs 不得引用 sandbox 内部实现 '{sym}' —— 违反铁律10 解耦红线"
+        );
+    }
+}
+
+/// 解耦红线行为侧: Paddock 全程经由公开 SandboxRuntime trait 工作,
+/// 可注入一个与 sandbox 具体实现零耦合的自定义运行时跑通完整 rollout。
+#[tokio::test]
+async fn red_line_paddock_full_rollout_via_trait_interface() {
+    // 运行时完全不经过 crate::sandbox::Sandbox,仅实现公开 SandboxRuntime trait(where-it-runs 抽象)
+    let mut paddock = mock_paddock(0); // Custom 沙箱类型 + MockRuntime(退出码 0 → 成功)
+    assert_eq!(paddock.sandbox_type(), SandboxType::Custom);
+    let ctx = paddock.initialize_rollout("decoupled rollout");
+    let step = paddock
+        .execute_step(&ctx, Command::new("sh").arg("-c").arg("true"))
+        .await
+        .expect("经 trait 执行成功");
+    let outcome = paddock
+        .finalize_rollout(&ctx, vec![step])
+        .expect("经 trait 收尾成功");
+    assert!(outcome.overall_success);
+}

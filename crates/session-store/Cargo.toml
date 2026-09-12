@@ -1,0 +1,52 @@
+[package]
+name = "session-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "L3 Storage: append-only segment + CBMR microbatch session persistence (Phase 2, ADR-141)"
+
+[dependencies]
+# L0 Contracts: EventMetadata(事件元数据)复用;Checkpoint 关系见 types.rs 文档
+# WHY(P2-T2): session-store 定义 SessionEvent 并引用 L0 EventMetadata(依赖铁律 §2.2:
+# L(N) → L(0) 恒允许);nexus-contracts 无现成会话事件类型(已读 checkpoint.rs 确认)
+nexus-contracts = { workspace = true }
+# 异步运行时(spawn_blocking 阻塞池执行 SQLite/段文件 IO,红线 3)
+tokio = { workspace = true }
+# 序列化:SessionEvent serde derive + 段文件 JSONL
+serde = { workspace = true, features = ["derive"] }
+# 序列化:段文件 JSONL 编码(SessionEvent → JSON 行,WAL 长度前缀包裹)
+serde_json = { workspace = true }
+# 序列化:events 表 payload BLOB 用 rmp-serde(ADR-004 MessagePack 协议)
+# WHY 双格式并存:段文件 JSONL(人读审计) vs SQLite payload rmp(紧凑索引)
+rmp-serde = { workspace = true }
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+thiserror = { workspace = true }
+# 结构化日志(微批刷写 / 崩溃截断时 tracing::info/warn)
+tracing = { workspace = true }
+# SQLite WAL 树索引(workspace 已收录 0.32 + bundled;内部 FFI unsafe 不传播,
+# #![forbid(unsafe_code)] 仅约束本 crate 源码,与 scc-cache 先例一致)
+rusqlite = { workspace = true }
+# 会话/段标识生成(uuid v7,与 EventMetadata.event_id 同源)
+# WHY 不直接依赖 uuid 的 workspace 声明:nexus-contracts 已锁定 uuid 1.10 版本,
+# 此处显式继承避免版本碎片化
+uuid = { workspace = true }
+
+[dev-dependencies]
+# 基准测试框架(criterion bench:单条直写 vs 微批写 + WAL 回放)
+criterion = { workspace = true }
+# 属性测试框架(任意事件序列 append 后顺序完整)
+proptest = { workspace = true }
+# 测试用临时文件/目录(跨平台安全)
+tempfile = { workspace = true }
+# futures:无 tokio runtime 时驱动 async flush 的降级同步路径测试
+futures = { workspace = true }
+# chrono:时间戳乱序构造（回放时间戳单调校验测试用;workspace 已收录 0.4）
+chrono = { workspace = true }
+
+[[bench]]
+name = "session_store_bench"
+harness = false
+
+[[bench]]
+name = "replay_bench"
+harness = false

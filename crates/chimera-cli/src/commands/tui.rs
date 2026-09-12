@@ -22,11 +22,44 @@ use crate::action_orchestrator::OverWindowHandle;
 use crate::config::ChimeraConfig;
 use crate::overwindow_bridge::OverWindowBridge;
 
+/// FC-05 适配器(2026-09-06 评估):把 L2 `MlcEngine` 卡片系统统计视图映射为
+/// TUI ExperienceCardViz 面板数据。
+///
+/// WHY 依赖倒置:trait `ExperienceCardStatsProvider` 定义在 chimera-tui(L10),
+/// 实现驻留组合根(chimera-cli)——L10 不直接依赖 L2 内部结构,适配器仅做
+/// 纯字段映射;`Debug` 手工实现(MlcEngine 未实现 Debug,仅打印 Arc 地址)。
+#[derive(Clone)]
+struct MlcCardStatsProvider(std::sync::Arc<mlc_engine::MlcEngine>);
+
+impl std::fmt::Debug for MlcCardStatsProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MlcCardStatsProvider({:p})",
+            std::sync::Arc::as_ptr(&self.0)
+        )
+    }
+}
+
+impl chimera_tui::panels::ExperienceCardStatsProvider for MlcCardStatsProvider {
+    fn global_stats(&self) -> chimera_tui::panels::ExperienceCardVizStats {
+        let v = self.0.card_system_view();
+        chimera_tui::panels::ExperienceCardVizStats {
+            total_cards: v.total_cards,
+            evaluated: v.evaluated,
+            unique_errors: v.unique_errors,
+            method_distribution: v.method_distribution,
+            best_score: v.best_score,
+            average_score: v.average_score,
+        }
+    }
+}
+
 /// 执行 tui 命令
 ///
 /// `no_v3_engine`:来自 CLI `--no-v3-engine` flag,true 时设置
 /// `CHIMERA_NO_V3_ENGINE=1` 环境变量,使 `TuiApp::render` 走 ratatui 回退路径。
-pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> {
+pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool, protocol: bool) -> Result<()> {
     // v3-engine M2(ADR-061):CLI flag 优先,设置 env var 让 TuiApp 在渲染时
     // 通过 `v3_engine_disabled_by_env()` 检测到回退意图。WHY env var 而非直接
     // 传参:TuiApp 已封装好双路径分发,env var 是最小侵入式回退通道,且支持
@@ -97,6 +130,41 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
         }
         cfg
     };
+    // B2:策展配置在 tui_config 被 move 进 TuiApp 前提取(编排器 compact 消费)
+    let curation_cfg = tui_config.curation.clone();
+
+    // WI-01 协议模式: TUI 数据层经 AppOp/AppEvent 协议面与核心交互
+    // (核心-表面分离 dogfooding——Quest 生命周期走协议面,其他面板默认空;
+    // A1 双跑窗口过渡态,直联路径(DataPipeline)保留)
+    if protocol {
+        tracing::info!("TUI 协议模式: Quest 生命周期经 AppOp/AppEvent 协议面驱动");
+        let mut protocol_ds = chimera_tui::ProtocolDataSource::new(
+            chimera_tui::DataSourceConfig::from_tui_config(&tui_config),
+        );
+        protocol_ds
+            .start_session("tui-protocol", "run-1")
+            .await
+            .context("协议会话启动失败")?;
+        let mut app = chimera_tui::TuiApp::with_data_source(tui_config, Box::new(protocol_ds))
+            .context("TUI 初始化失败")?;
+        app = chimera_tui::TuiApp::with_event_bus(app, bus.clone());
+
+        // Quest 编排器保留(EventBus 双向控制: TUI ↔ 编排器回环)
+        let engine = Arc::new(quest_engine::QuestEngine::new(bus.clone()));
+        let control_handle =
+            quest_engine::spawn_control_subscriber(Arc::clone(&engine), bus.clone());
+        let quest_handle = crate::orchestrator::spawn_quest_orchestrator(
+            bus.clone(),
+            Arc::clone(&engine),
+            crate::orchestrator::OrchestratorConfig::default(),
+        );
+
+        let run_result = app.run().context("TUI 协议模式运行失败");
+        control_handle.abort();
+        quest_handle.abort();
+        tracing::info!("TUI 协议模式退出");
+        return run_result;
+    }
 
     // 构建数据管道：将事件聚合为 TUI 可消费的统一快照。
     // tick 间隔来自持久化 TuiConfig(修复 F-4:SetTickInterval 持久化后
@@ -140,7 +208,17 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
     // 消费 TUI 发布的 QuestPauseRequested/QuestResumeRequested,
     // 形成 TUI → EventBus → 上游处理 → 状态反馈的端到端路径。
     // 这里使用最小化的 QuestEngine 实例(仅支持控制订阅演示)。
-    let engine = Arc::new(quest_engine::QuestEngine::new(bus.clone()));
+    // B1(2026-09-06 复评):启用检查点管理器 —— `/quest checkpoint` 编排命令
+    // 依赖 engine.save_checkpoint;目录与 tui.yaml 同根(~/.chimera/checkpoints)。
+    let checkpoint_dir = chimera_tui::TuiConfig::default_path()
+        .parent()
+        .map(|p| p.join("checkpoints"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".chimera/checkpoints"));
+    let engine = Arc::new(quest_engine::QuestEngine::with_checkpoints(
+        bus.clone(),
+        quest_engine::QuestConfig::default(),
+        checkpoint_dir,
+    ));
     let control_handle = quest_engine::spawn_control_subscriber(Arc::clone(&engine), bus.clone());
 
     // Quest 分解管线:启动 Quest 编排器,消费 TUI 发布的 TuiChatSubmitted,经真实 L9
@@ -159,15 +237,29 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
     // WHY 失败不阻断启动:闭环装配是增强链路,降级后 TUI 核心交互仍可用;
     // 失败经 warn 日志可观测(与 TuiBible 回退同款错误处理准则)。
     // WHY 下划线前缀持有:绑定存活至函数结束,保持后台任务与 Arc 句柄生命周期。
-    let _experience_loop =
-        match crate::experience_loop::spawn_experience_loop(bus.clone(), Arc::clone(&engine)).await
-        {
-            Ok(handles) => Some(handles),
-            Err(e) => {
-                tracing::warn!(error = %e, "经验卡片闭环装配失败,降级运行(闭环不可用)");
-                None
-            }
-        };
+    let experience_loop_handles = match crate::experience_loop::spawn_experience_loop(
+        bus.clone(),
+        Arc::clone(&engine),
+        _config.enable_strategy_cap,
+    )
+    .await
+    {
+        Ok(handles) => Some(handles),
+        Err(e) => {
+            tracing::warn!(error = %e, "经验卡片闭环装配失败,降级运行(闭环不可用)");
+            None
+        }
+    };
+
+    // FC-05(2026-09-06 评估):经验卡片可视化面板接线 —— 组合根注入 L2
+    // MlcEngine 卡片系统统计(运行期真实数据,不再恒显 "Awaiting")。
+    // 闭环装配失败(handles = None)时面板维持默认未接线状态(诚实提示),
+    // 与经验闭环降级策略一致,不阻断启动。
+    if let Some(handles) = &experience_loop_handles {
+        app.install_experience_card_provider(Arc::new(MlcCardStatsProvider(Arc::clone(
+            &handles.mlc,
+        ))));
+    }
 
     // §16.1 L9 组件装配(Phase 10 审计修复 Wave 2):
     // 1. Ambient Mode 后台常驻订阅器(资源看门狗/记忆整理/检查点调度,
@@ -222,6 +314,16 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
         }),
     );
 
+    // FC-2(ADR-081):/compact 策展的结构化会话消息提供者 —— 与超窗语料闭包
+    // 同源(DataPipeline 快照),但保留 ChatMessage 角色(Pinned 保护段判定依赖),
+    // 供编排器 compact 分支执行 RuleCurationPolicy 并回写历史。
+    let pipeline_for_compact = Arc::clone(&pipeline);
+    let chat_provider: crate::action_orchestrator::ChatMessagesProvider = Arc::new(move || {
+        chimera_tui::TuiDataSource::snapshot(&*pipeline_for_compact)
+            .map(|snapshot| snapshot.chat_messages.clone())
+            .unwrap_or_default()
+    });
+
     // P0 交互链:启动 Action 编排器,消费命令面板/斜杠/面板派发的 TuiActionRequested,
     // 按 action_id 域前缀路由:quest.* 驱动同一 engine 真实执行,回发 TuiActionCompleted/Failed。
     // UI 本地态动作由 TUI 本地 dispatch_action 处理,不到达此处(误达则回 Failed)。
@@ -229,6 +331,9 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool) -> Result<()> 
         bus.clone(),
         Arc::clone(&engine),
         Some(overwindow),
+        Some(chat_provider),
+        // B2:/compact 策展配置随 TuiConfig 四源合并后透传编排器
+        curation_cfg,
     );
 
     // 启动 TUI 事件循环(阻塞直到用户退出)

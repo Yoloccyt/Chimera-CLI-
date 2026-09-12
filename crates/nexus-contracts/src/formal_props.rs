@@ -6,11 +6,15 @@
 //! # 设计决策(WHY)
 //!
 //! - **纯类型零逻辑**: 遵循 ADR-033 约束；形式化验证的实际执行逻辑
-//!   在 L4 FormalVerifier（`formal-verifier` crate），本文件仅承载跨层共享类型
-//! - **消费层**: L4 formal-verifier（验证器实现）/ L6 omega-learner
+//!   分布于各 owner crate 的 formal 模块(7 个验证器,聚合裁决见
+//!   gsoe-evolution `formal_gate::FormalVerifierGate`),本文件仅承载跨层共享类型
+//! - **消费层**: 各 owner crate 的 formal 验证器 / L6 omega-learner
 //!   （进化闭环中查询验证结果）/ L8 parliament（审议时参考属性满足状态）
 //! - **属性类别封闭枚举**: 当前四类属性覆盖 GSOE 谱系、AEGIS 单调性、
-//!   Parliament 共识、通用不变量；新增类别需扩展枚举并更新 FormalVerifier
+//!   Parliament 共识、通用不变量；新增类别需扩展枚举并同步验证器
+//! - **验证性质(C2,2026-09-04 口径诚实化)**: 现实实现为 proptest 统计性验证
+//!   (见 `VerificationMethod::PropTest` 与 `VerificationResult::Satisfied`
+//!   的 `samples_tested`),非数学证明——R2 解冻治理引用本框架时按统计置信度解读
 
 use serde::{Deserialize, Serialize};
 

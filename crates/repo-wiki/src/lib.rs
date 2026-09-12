@@ -78,6 +78,8 @@ pub mod metrics;
 /// polish-v2.7 P4-7:流程蓝图提取器(轨迹→蓝图沉淀,北大 DataFlow,ADR-049)
 pub mod procedural_blueprint;
 pub mod relation;
+/// v4.0 WI-33:分层项目规则收集(rules as code, CHIMERA.md/AGENTS.md 就近优先)
+pub mod rules_layer;
 /// RAG 混合检索融合 — Reciprocal Rank Fusion (RRF),融合 HNSW dense 与 FTS5 sparse 结果
 pub mod search;
 /// polish-v2.7 P4-6:技能依赖图与复用率优先推荐(Ω₆ Reuse,ADR-049)

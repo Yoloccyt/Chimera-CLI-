@@ -10,7 +10,8 @@
 //!   支持纯逻辑测试(无需终端)。
 //! - `current_panel` 字段已移除(M1 清理项 #2):当前面板以 `FocusManager`
 //!   为唯一来源,`TuiApp` 通过 `current_panel()` 方法对外暴露,避免双来源不一致。
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use crate::data::{BudgetMetrics, HealthMetrics, MemoryMetrics, SecurityState};
 use crate::engine::layout::PaneMode;
@@ -121,12 +122,12 @@ pub enum PanelId {
     ///
     /// 展示 PVL 九维度过程评分（快手 KAT,ADR-049）：
     /// 真实执行/覆盖率/验证通过/置信度/效率/重试纪律/产出实质性/零孤儿/沙箱清洁。
-    /// 数据来源：`pvl_layer::pvl_score()`。
+    /// PS-2 批次3 起:PVL 循环未装配,面板诚实标注未接线(不再读 L7 全局快照)。
     PvlScore,
-    /// 任务管理面板（Task 3.9:L10 → L9 向下依赖）
+    /// 任务管理面板(PS-2 批次3 起:象限 provider 生产未注册,面板诚实标注未接入)
     ///
     /// 展示 Quest CRUD 控制台 + 四象限稳定分工（ADR-027）状态。
-    /// 数据来源：`chimera_mas::quadrant_status()`。
+    /// 数据来源:象限状态(provider 未注册时面板标注未接入)。
     TaskManager,
     /// 超窗兜底面板 — 展示 OverWindowFallbackTriggered 触发记录(P1,ADR-072)
     ///
@@ -246,9 +247,10 @@ impl PanelId {
         PanelId::PvlScore,
         PanelId::TaskManager,
         PanelId::OverWindow,
-        // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板注册
+        // Phase 10 §15.2b:经验卡片可视化面板注册;InjectionStrategy 已下线
+        // (FC-05,2026-09-06 评估):无运行期数据源(mlc-engine 注入策略生产不
+        // 构造),未列入本表 = 不参与焦点环,trait 注入桩保留代码可复测。
         PanelId::ExperienceCardViz,
-        PanelId::InjectionStrategy,
     ];
 
     /// 切换到下一个面板(循环顺序,派生自 `REGISTERED_FOCUS_ORDER`)
@@ -310,21 +312,17 @@ pub struct ChatMessage {
 /// 输入模式 — 控制底部输入栏的行为
 ///
 /// - `Normal`:普通模式,底部显示状态栏
-/// - `Command`:命令模式(由 `:` 触发),解析并执行面板切换/过滤/投票等带参命令
-/// - `Search`:搜索模式(由 `/` 触发),关键字过滤
 /// - `Insert`:插入模式(由 `i` 触发,M3a),原始文本输入(为 M3b Chat 提交铺路)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InputMode {
     /// 普通模式
     Normal,
-    /// 命令模式
-    Command,
-    /// 搜索模式
-    Search,
     /// 插入模式(原始文本输入,M3a 引入;Submit 于 M3b 接入 Chat)
     Insert,
     /// 斜杠命令模式(Concord W2):`/` 第一公民入口,补全列表 + 三分层执行;
     /// `:` 废弃窗口期同进本模式(一次性弃用提示)。
+    /// IT-01(批次-B):遗留 Command/Search 变体已删除——生产零 setter 死路径,
+    /// `:` 遗留命令由 Slash 的 parse_legacy 回退承接。
     Slash,
 }
 
@@ -914,7 +912,11 @@ pub struct TuiState {
     /// 事件速率历史(数据驱动 Health Sparkline)
     pub event_rate_history: Vec<u64>,
     /// 最近事件流(数据驱动 Parliament / Log 面板)
-    pub latest_events: VecDeque<NexusEvent>,
+    ///
+    /// WHY Arc:P-A 性能改造(评估报告 v2)——`TuiApp::update` 从 DataSnapshot
+    /// 同步时直接 `Arc::clone` 共享,消灭每次 revision 变化对 ≤256 事件的深拷贝;
+    /// 事件流在两次 tick 之间不可变,面板只读消费,经 Deref 保持 VecDeque 语义。
+    pub latest_events: Arc<VecDeque<NexusEvent>>,
     /// 弹窗栈(详情/通知/确认)
     pub popup_stack: PopupStack,
     /// 临时状态栏消息(内容 + 严重级别)
@@ -938,6 +940,14 @@ pub struct TuiState {
     pub timeline_snapshots: Vec<TimelineSnapshot>,
     /// FPS 显示(P4.4 性能监控)
     pub fps: u16,
+    /// Help 面板上下文快捷键(U-2,2026-09-06 复评):当前焦点面板 ID 与其
+    /// `Panel::shortcuts()` 快照,由 `TuiApp::render` 在焦点变化时更新。
+    /// WHY 放在状态而非面板互查:面板间无引用通道(HelpPanel::render 只见
+    /// TuiState),由渲染层单点注入避免 Trait 下转与双源漂移。
+    /// WHY serde(skip):渲染期瞬态 UI 态(每帧按焦点重建),非持久化契约;
+    /// 且 `&'static str` 与 owned Deserialize 语义冲突。
+    #[serde(skip)]
+    pub help_context: Option<(PanelId, Vec<(&'static str, &'static str)>)>,
     /// 增量渲染脏面板集合(P4.1,记录本帧需重绘的面板)
     pub dirty_panels: HashSet<PanelId>,
     /// 流式追加自动滚动标记(P3.4,EventStream/Log 面板用)
@@ -1032,16 +1042,55 @@ pub struct TuiState {
     /// 会话瞬态,不持久化(serde skip)。
     #[serde(skip, default)]
     pub pending_action: Option<PendingAction>,
-    // === P1-2(评估报告 v2):TuiActionRequested 本地兜底超时 ===
-    /// 已派发待确认动作的截止时刻(编排器未接线场景的本地兜底)
+
+    /// 协议握手回执状态(PS-2 F-1,ADR-082;None = 尚未收到 Ack)
     ///
-    /// WHY:dispatch_action 兜底发布 `TuiActionRequested` 时记录
+    /// WHY 持久化:与 view_mode 一致随状态文件保存,重启后仍可展示上次兼容级别。
+    pub handshake: Option<HandshakeState>,
+
+    /// 最近子代理任务失败(PS-2 F-6;新在前,最多 5 条)
+    pub agent_failures: Vec<AgentFailureSummary>,
+
+    /// 子代理任务失败累计数(PS-2 F-6;本次会话内单调递增,供安全面板态势展示)
+    pub agent_failure_total: u64,
+
+    /// 已上屏的失败序号(PS-2 F-6;与快照 `agent_failure_seq` 比对,
+    /// 只对**新**失败告警一次,避免每帧重复上屏)
+    ///
+    /// WHY 不持久化:管道序号每会话从 0 重新计数;若把游标写盘,重启后
+    /// 旧游标会吞掉新会话的前 N 条失败告警(`seq(1) > last(5)` 为假)。
+    /// 故按"会话内游标"语义显式 skip,加载恒为 0。
+    #[serde(skip)]
+    pub last_agent_failure_seq: u64,
+
+    /// 议会面板数据(PS-2 批次1:事件快照取代 L10→L8 越层直调)
+    pub parliament: ParliamentState,
+
+    /// GQEP 超时统计(PS-2 批次2:事件派生取代 L10→L7 越层直调)
+    pub gqep_timeouts: GqepTimeoutStats,
+    // === P1(2026-09-09 复评):TuiActionRequested 回执归属与本地兜底超时 ===
+    /// 已派发待确认动作的截止时刻表:`request_id` → 截止时间
+    ///
+    /// WHY 用 HashMap 而非单个 `Option`:**同一动作可并发/连续发起多次**
+    /// (如连点两次 `quest.cancel`),单个槽位会导致先到的回执清掉后发请求的
+    /// 计时,表现为"实际失败却显示成功"或"超时永不提示"的静默失败。
+    /// 以协议新增的 `request_id` 为主键,保证回执可精确归属。
+    ///
+    /// WHY 本地兜底:dispatch_action 发布 `TuiActionRequested` 时记录
     /// `now + ACTION_TIMEOUT`;若无消费者(standalone 模式)且超时无
     /// `TuiActionCompleted/Failed` 回发,`TuiApp::update` 中的超时检测
-    /// 在状态栏提示“编排器未接线”。收到终态反馈时清除,避免误报。
+    /// 在状态栏提示"编排器未接线"。收到对应 `request_id` 的终态反馈时移除该键。
     /// 会话瞬态,不持久化(serde skip)。
     #[serde(skip, default)]
-    pub pending_action_deadline: Option<std::time::Instant>,
+    pub pending_actions: HashMap<String, std::time::Instant>,
+
+    /// 动作请求单调序号 — 用于生成 `request_id`(`tui-{seq}`)
+    ///
+    /// WHY 本地单调计数而非 UUID:request_id 只需在**本进程本会话**内唯一即可
+    /// 完成回执配对,单调计数零依赖、零分配抖动,且天然可按序审计。
+    /// 会话瞬态,不持久化(serde skip)。
+    #[serde(skip, default)]
+    pub action_request_seq: u64,
 }
 
 /// Palette 参数输入流待派发动作(F-5)
@@ -1054,6 +1103,122 @@ pub struct PendingAction {
     pub action_id: String,
     /// 触发入口(palette 参数流固定为 Palette)
     pub source: event_bus::ActionSource,
+}
+
+/// 协议握手兼容级别(TUI 本地投影,PS-2 F-1)
+///
+/// WHY 本地枚举而非直接用 event-bus `CompatLevel`:TuiState 随状态文件
+/// 序列化持久化,本地投影与协议类型解耦 —— 协议侧增删变体不会破坏
+/// 既有状态文件的反序列化(前向兼容)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HandshakeLevel {
+    /// 完全兼容:M4 通道全开(ADR-082)
+    Full,
+    /// 降级兼容:部分能力不可用(`degraded_items` 列出降级项)
+    Degraded,
+    /// 拒绝:版本不可调和,orchestrated 命令只读
+    Refused,
+}
+
+/// 协议握手回执的 TUI 侧状态(PS-2 F-1,ADR-082 SEC-4)
+///
+/// 来源:`TuiHelloAck` 事件经 `HandshakeSync` 同步;`None` = 尚未收到 Ack
+/// (standalone 无编排器场景,按未知兼容处理,见协议注释)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandshakeState {
+    /// 兼容级别
+    pub level: HandshakeLevel,
+    /// 降级项清单(仅 `Degraded` 非空;来自编排器逐项声明)
+    pub degraded_items: Vec<String>,
+    /// 服务端版本(供状态栏展示与排障)
+    pub server_version: String,
+}
+
+/// 子代理任务失败摘要(PS-2 F-6)
+///
+/// 来源:`AgentTaskFailed`(Critical 级,`chimera-mas` 任务失败/超时经
+/// `publish_critical` 双通道发布,见 `chunker.rs:497/520`)。
+///
+/// WHY 需要聚合:该事件虽已到达 TUI 并在 EventStream 以 Critical 样式显示,
+/// 但**事件流是滚动列表**——失败一闪而过,安全面板无态势、状态栏无告警。
+/// 本摘要提供"持久可见"的聚合视图。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFailureSummary {
+    /// 失败方 Agent ID
+    pub from: String,
+    /// 委托方 Agent ID
+    pub to: String,
+    /// 任务 ID
+    pub task_id: String,
+    /// 错误信息
+    pub error: String,
+    /// 已重试次数
+    pub retry_count: u32,
+}
+
+/// 议会协调比指标(PS-2 批次1)
+///
+/// 来源:`NexusEvent::CoordinationRatioReported`(`crates/parliament/src/strategy_cap.rs:645`),
+/// 全量由该事件一次性填充 —— **不做字段级合并**,避免"部分更新"语义歧义。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoordinationMetrics {
+    /// EWMA 协调成本(毫秒):Bus 延迟 + TTG 切换 + 议会审议 + 委托开销的加权和
+    pub cost_ms: f64,
+    /// EWMA 推理增益 [0.0, 1.0]:任务成功率 + PVL 质量分 + 共识质量融合
+    pub inference_gain: f32,
+    /// 协调成本/推理增益比值
+    pub ratio: f64,
+}
+
+/// 议会策略封顶状态(PS-2 批次1)
+///
+/// 来源:`NexusEvent::ParliamentStrategyCapChanged`(`crates/parliament/src/strategy_cap.rs:675`)。
+/// 取值为 `"fast-path"` / `"simplified"` / `"full"`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StrategyCapState {
+    /// 当前封顶级别
+    pub cap: String,
+    /// 触发本次变更的协调成本/推理增益比值
+    pub ratio: f64,
+    /// 推理悖论告警阈值
+    pub threshold: f64,
+}
+
+/// GQEP 双层超时防护统计(PS-2 批次2)
+///
+/// 以**事件流派生**取代进程内全局计数器:面板数据因此可回放、可归因
+/// (原 `gqep_executor::timeout_stats()` 直调为 L10→L7 越层依赖)。
+///
+/// # 语义说明(重要)
+/// 计数**从 0 开始、随真实事件递增** —— 与旧实现"恒零占位"有本质区别:
+/// 这里 `per_op == 0` 表示"确实未发生单操作超时",是**真值**而非假数据。
+///
+/// # 缺失项
+/// `coverage`(防护覆盖率)需要"受保护操作数/总操作数"分母,而事件只携带
+/// **超时发生**次数,无法派生(且 gather 路径恒受保护,该值近乎恒为 100%),
+/// 故本结构不含该字段,面板对该项如实标注"未上报"。
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GqepTimeoutStats {
+    /// 单操作超时累计次数(`OperationTimedOut`)
+    pub per_op: u64,
+    /// 全局 gather 超时累计次数(`GatherTimedOut`)
+    pub global: u64,
+    /// 孤儿调用(未被等待的异步调用)累计次数(`OrphanCallDetected`)
+    pub orphan: u64,
+}
+
+/// 议会面板数据(PS-2 批次1:以事件快照取代 L10→L8 越层直调)
+///
+/// WHY 两个字段各自独立:协调比与策略封顶由**不同事件**发布,到达次序不定;
+/// 分字段保存可如实表达"只收到其中一个"的中间态,面板对缺项显示 N/A。
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParliamentState {
+    /// 协调比指标(None = 尚未收到 `CoordinationRatioReported`)
+    #[serde(default)]
+    pub coordination: Option<CoordinationMetrics>,
+    /// 策略封顶(None = 尚未收到 `ParliamentStrategyCapChanged`)
+    #[serde(default)]
+    pub strategy_cap: Option<StrategyCapState>,
 }
 
 impl TuiState {
@@ -1072,6 +1237,7 @@ impl TuiState {
             history_draft: String::new(),
             input_buffer: String::new(),
             frame_count: 0,
+            help_context: None,
             quest_list: Vec::new(),
             paused_quest_count: 0,
             budget: BudgetMetrics::default(),
@@ -1086,7 +1252,7 @@ impl TuiState {
             budget_history: Vec::new(),
             memory_history: Vec::new(),
             event_rate_history: Vec::new(),
-            latest_events: VecDeque::new(),
+            latest_events: Arc::new(VecDeque::new()),
             popup_stack: PopupStack::new(),
             status_message: None,
             filter_keyword: None,
@@ -1123,6 +1289,12 @@ impl TuiState {
             chat_messages: Vec::new(),
             chat_status: ChatStatus::default(),
             last_action_feedback_seq: 0,
+            handshake: None,
+            agent_failures: Vec::new(),
+            agent_failure_total: 0,
+            parliament: ParliamentState::default(),
+            gqep_timeouts: GqepTimeoutStats::default(),
+            last_agent_failure_seq: 0,
             // M3 监控/视图控制默认值(= 当前行为,零回归)
             monitor_paused: false,
             monitor_window: MonitorWindow::default(),
@@ -1132,8 +1304,10 @@ impl TuiState {
             last_snapshot_revision: 0,
             // F-5:无待派发参数动作
             pending_action: None,
-            // P1-2:无待确认动作(超时兜底未启动)
-            pending_action_deadline: None,
+            // P1:无待确认动作(超时兜底未启动)
+            pending_actions: std::collections::HashMap::new(),
+            // P1:动作请求序号从 0 起,首个 request_id 为 "tui-1"
+            action_request_seq: 0,
         }
     }
 
@@ -1425,11 +1599,17 @@ mod tests {
         }
         // 关键边抽查(循环闭合 + 历史接入点)
         assert_eq!(PanelId::Quest.next(), PanelId::Parliament);
-        // Phase 10:环尾改为 InjectionStrategy(27 面板循环)
+        // FC-05:环尾(ExperienceCardViz)回到环首 Quest,环必须闭合
+        assert_eq!(
+            PanelId::ExperienceCardViz.next(),
+            PanelId::Quest,
+            "环必须闭合"
+        );
+        // InjectionStrategy 已下线(ADR,2026-09-06):未注册变体回退环首
         assert_eq!(
             PanelId::InjectionStrategy.next(),
             PanelId::Quest,
-            "环必须闭合"
+            "未注册变体应回退环首(避免孤立分支)"
         );
         assert_eq!(
             PanelId::Chtc.next(),
@@ -1454,8 +1634,8 @@ mod tests {
             );
         }
         // 关键边抽查(循环闭合)
-        // Phase 10:环尾改为 InjectionStrategy(27 面板循环)
-        assert_eq!(PanelId::Quest.prev(), PanelId::InjectionStrategy);
+        // FC-05:环尾由 ExperienceCardViz 闭合(Quest 的 prev = 环尾)
+        assert_eq!(PanelId::Quest.prev(), PanelId::ExperienceCardViz);
         assert_eq!(PanelId::Timeline.prev(), PanelId::Chtc);
     }
 
@@ -1487,13 +1667,13 @@ mod tests {
             PanelId::SelfAssessment,
             // closure Stage B-10:DagViz 加入往返验证
             PanelId::DagViz,
-            // Task 3.7/3.9 + P1:PvlScore/TaskManager/OverWindow 加入往返验证(25 面板循环,Concord T1.4)
+            // Task 3.7/3.9 + P1:PvlScore/TaskManager/OverWindow 加入往返验证(27 面板循环,Concord T1.4)
             PanelId::PvlScore,
             PanelId::TaskManager,
             PanelId::OverWindow,
-            // Phase 10:ExperienceCardViz/InjectionStrategy 加入往返验证(27 面板循环)
+            // Phase 10:ExperienceCardViz 加入往返验证;InjectionStrategy 已下线
+            // (FC-05,2026-09-06 评估,未注册变体不参与循环)
             PanelId::ExperienceCardViz,
-            PanelId::InjectionStrategy,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);
@@ -1574,8 +1754,11 @@ mod tests {
 
     #[test]
     fn test_input_mode_equality() {
+        // IT-01(批次-B):遗留 Command/Search 变体删除后,三态等值锚定
         assert_eq!(InputMode::Normal, InputMode::Normal);
-        assert_ne!(InputMode::Normal, InputMode::Command);
+        assert_ne!(InputMode::Normal, InputMode::Insert);
+        assert_ne!(InputMode::Normal, InputMode::Slash);
+        assert_ne!(InputMode::Insert, InputMode::Slash);
     }
 
     // ============================================================
@@ -1798,7 +1981,8 @@ mod state_persistence_tests {
         state.running = false;
         // 运行时字段故意塞入非默认值:验证恢复后必须被重置(视图/布局契约)
         state.budget_history = vec![1, 2, 3];
-        state.latest_events.push_back(NexusEvent::CacheHit {
+        // WHY Arc::make_mut:latest_events 已 Arc 化(P-A),测试桩注入走 COW
+        std::sync::Arc::make_mut(&mut state.latest_events).push_back(NexusEvent::CacheHit {
             metadata: event_bus::EventMetadata::new("chimera-tui"),
             cache_key: "roundtrip-key".into(),
         });

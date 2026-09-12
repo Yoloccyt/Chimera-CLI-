@@ -60,7 +60,10 @@ ENV RUST_LOG=info
 
 # 版本标签:CI 可通过 --build-arg VERSION=... 覆盖,默认与 workspace 版本一致
 # WHY 用 ARG 而非硬编码:发布流水线需按 git tag 动态注入版本号,硬编码会导致版本漂移
-ARG VERSION=2.26.0-omega
+# ⚠ 本默认值需在每次升 version 时同步(当前 = Cargo.toml workspace.package.version);
+#   release.yml 的 docker job 始终传 --build-arg VERSION=${github_ref_name},不依赖此默认值;
+#   受影响的是本地 `docker build -t chimera-cli:rc .`(发布检查单第 10 项)不带参数时会烧进此值。
+ARG VERSION=2.28.0-omega
 
 # OCI 标准 LABELS:镜像元数据,便于镜像仓库(GHCR/Docker Hub)索引与运维检索
 # WHY 缺失 LABELS 的镜像在仓库中无法被搜索/过滤,违反 OCI 镜像规范的可发现性要求;

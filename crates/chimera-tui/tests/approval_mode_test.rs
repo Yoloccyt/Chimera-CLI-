@@ -134,6 +134,7 @@ fn shift_tab_keeps_focus_cycle_in_dashboard() {
 
 #[test]
 fn plan_mode_blocks_orchestrated_command() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -156,6 +157,7 @@ fn plan_mode_blocks_orchestrated_command() {
 
 #[test]
 fn plan_mode_allows_instant_command() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -181,6 +183,7 @@ fn plan_mode_allows_instant_command() {
 
 #[test]
 fn statusline_badge_shows_current_mode() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();

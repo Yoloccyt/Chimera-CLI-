@@ -1,0 +1,207 @@
+# SLO 红线门 —— `#[ignore]` 的 p95 时序红线测试首次拥有自己的执行通道
+# =============================================================================
+# 背景（本 workflow 存在的理由，全部有实测出处）：
+#   第四轮冗余审计 F-R4-02：全库 TEST 侧 `#[ignore]` 有 76 条，其中绝对阈值
+#   型的 p95 时序红线 13 条在任何 workflow 里都不跑；`--ignored` 仅出现在
+#   stress.yml（且原命令缺 `--workspace`，只能覆盖根 package 的 8 个）。
+#   同期 `agents.md §7.2` 的人工命令是 `cargo test -- --ignored --nocapture`
+#   ——既无 `--release` 也无 `--workspace`，照文档执行就会用 debug 跑 p95
+#   （debug-p95=21ms 假失败是有案可查的前科）。
+#
+# 归属真值源：scripts/ignored_test_inventory_freeze.txt
+#   本门的过滤器表达式 **由登记表生成**，不在此手写清单：
+#     py scripts/check_perf_redlines.py emit-slo-filter
+#   下面的 -E 串就是它的输出（改登记表 → 重跑该命令 → 改这一行，单向可核对）。
+#   ⚠ 算子形式为 `test(<精确测试名>)` 不锚定：nextest 0.9.143 实测 `binary(^name$)`
+#   与 `binary(^pkg::name$)` 均零匹配（退 94）；精确性由生成器的**子串碰撞自证**保证
+#   （任一 A1 名若为其他 ignored 测试名的子串，emit-slo-filter 直接拒绝生成）。
+#
+# 观察期（当前状态，切阻塞条件写在下面）：
+#   continue-on-error: true —— 依计划 R1-T10「先观测后阻塞」，本轮只建立通道。
+#   ⏱ 到期切换条件（二者先到）：
+#     ① 自 2026-08-31 起满 14 天且 nightly 采样 ≥ 20 次；
+#     ② A1 集连续 10 次全绿且 retry 命中 = 0。
+#   满足后把两个 job 的 `continue-on-error: true` 改为 `false`，并在
+#   docs/governance/RK-P_risk_register.md 的缓冲台账记录切换 PR 链接。
+#   ⚠ 若观察期内任一测试 retry 命中率 > 10%：按 RK-P28 退回 `manual-only`
+#   并在登记表写理由，**不得**靠放宽阈值了事（kvbsr scale.rs 的
+#   >5×→>3×→>2× 就是那条路的终点）。
+# =============================================================================
+name: SLO red-line gate (perf p95)
+
+on:
+  # 发布门：tag 推送时按契约值(scale=1.0)跑 A1 集
+  push:
+    tags: ['v*.*.*-omega']
+  # 观察期数据积累：每日一次；nightly 也跑 A2 长尾(比值/宽松阈值类)
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: 'CHIMERA_PERF_SCALE (1.0 = 契约值; >1 = 放松)'
+        required: false
+        default: '1.0'
+
+# cancel-in-progress 故意为 false：观察期要的是**样本**，中途取消会丢采样，
+# 而"连续 10 次全绿"的判据直接依赖每次都能跑完。
+concurrency:
+  group: slo-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # A1 集：13 条绝对 ms 阈值时序红线（slo-blocking 态）
+  # ---------------------------------------------------------------------------
+  slo-release-gate:
+    name: A1 p95 red-lines (release, test-threads=1)
+    runs-on: ubuntu-latest
+    # 依据：release 编译 + 13 条测试。推算 15-25 min（release.yml:43 自述单平台
+    # 8-15min × lto=true + hnsw 100K 预填充 release 30-60s ×2），45min 留 1.8-3× 余量。
+    # ⚠ 该 wall 为推算值，首次 nightly 后须以实测替换（见 closure 报告 §5）。
+    timeout-minutes: 45
+    continue-on-error: true
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_CACHE: 'true'
+      # 契约值：本门是"红线本身"，不放松。放松只属于 A2 观测档。
+      CHIMERA_PERF_SCALE: ${{ github.event.inputs.scale || '1.0' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
+        with:
+          workspaces: '.'
+
+      - name: Setup sccache
+        uses: mozilla/sccache-action@v0.0.11
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      # 防漂移自证：登记表才是真值源。若有人只改本文件的 -E 而没改表，这一步红。
+      # ⚠ 空值必须先行拦截：`grep -F` 对**空 pattern 恒匹配**，否则 python 缺失 / 登记表
+      # 无 slo-blocking 项时会得到“通过”的假绿（本地负向对照实测到此行为）。
+      - name: Verify filter matches registry
+        run: |
+          expected="$(python3 scripts/check_perf_redlines.py emit-slo-filter)"
+          if [ -z "$expected" ]; then
+            echo "::error::emit-slo-filter returned empty (registry has no slo-blocking entries?)"
+            exit 1
+          fi
+          case "$expected" in
+            *'test('*) ;;
+            *) echo "::error::unexpected filter expression: $expected"; exit 1 ;;
+          esac
+          grep -Fq -- "$expected" .github/workflows/slo.yml \
+            || { echo "::error::slo.yml -E filter drifted from ignored_test_inventory_freeze.txt"; \
+                 echo "regenerated: $expected"; exit 1; }
+
+      - name: Run A1 SLO set
+        # set +e 与 rc 落盘同 stress.yml：观察期要的是"失败也拿到数据"，
+        # 但退出码必须原样保留，否则将来切阻塞时无从验证门真的会红。
+        run: |
+          set +e
+          cargo nextest run \
+            --release \
+            --profile slo \
+            --workspace \
+            --run-ignored only \
+            -E 'test(test_coarse_recall_p95_below_10ms) | test(test_fine_recall_p95_below_50ms) | test(test_hnsw_100k_no_oom) | test(test_hnsw_100k_p95_below_50ms) | test(test_hnsw_10k_p95_below_50ms) | test(test_precise_rerank_overhead_acceptable) | test(test_probe_window_p95_below_10ms_and_throughput) | test(test_rerank_fill_1m_window_p95_below_100ms) | test(test_rerank_fill_p95_below_100ms) | test(test_scale_route_latency_under_2ms) | test(test_streaming_deep_split_p95_below_2000ms) | test(test_streaming_fast_split_p95_below_500ms) | test(test_streaming_split_5000_blocks_p95_below_500ms)' \
+            --no-fail-fast \
+            2> slo.stderr.log | tee slo.stdout.log
+          rc=$?
+          echo "exit_code=$rc" > slo-exit.env
+          echo "attempt=${{ github.run_attempt }}" >> slo-exit.env
+          exit $rc
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## SLO A1 gate"
+            echo "- when: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- scale: ${CHIMERA_PERF_SCALE}"
+            echo "- exit: $(cat slo-exit.env 2>/dev/null || echo unknown)"
+            echo "- result-lines: $(grep -c 'Summary' slo.stdout.log 2>/dev/null || echo 0)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SLO log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slo-release-gate-${{ github.run_number }}
+          path: |
+            slo.stdout.log
+            slo.stderr.log
+            slo-exit.env
+          retention-days: 45  # 覆盖 14 天观察期 + 复核余量
+
+  # ---------------------------------------------------------------------------
+  # A2 集：比值/宽松阈值类（slo-daily 态）—— 只观测，永不阻塞
+  # ---------------------------------------------------------------------------
+  slo-daily:
+    name: A2 perf-tagged ignored (observation only)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # 本 job 语义上永久非阻塞（它的产物是趋势数据，不是判据）；
+    # 真正需要"切阻塞"决策的只有上面的 A1 门。
+    continue-on-error: true
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_CACHE: 'true'
+      # 每日档用 4 倍放松：目的不是判生死，是在噪声下拿到可比数值。
+      CHIMERA_PERF_SCALE: '4'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
+        with:
+          workspaces: '.'
+
+      - name: Setup sccache
+        uses: mozilla/sccache-action@v0.0.11
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run remaining perf-tagged ignored tests
+        # 覆盖除 A1 外的 perf 类 ignored 测试：`--run-ignored only` + 排除 A1 集，
+        # 避免与上面重复计时（同一条测试测两遍会互相污染噪声样本）。
+        run: |
+          set +e
+          cargo nextest run \
+            --release \
+            --profile slo \
+            --workspace \
+            --run-ignored only \
+            -E 'not (test(test_coarse_recall_p95_below_10ms) | test(test_fine_recall_p95_below_50ms) | test(test_hnsw_100k_no_oom) | test(test_hnsw_100k_p95_below_50ms) | test(test_hnsw_10k_p95_below_50ms) | test(test_precise_rerank_overhead_acceptable) | test(test_probe_window_p95_below_10ms_and_throughput) | test(test_rerank_fill_1m_window_p95_below_100ms) | test(test_rerank_fill_p95_below_100ms) | test(test_scale_route_latency_under_2ms) | test(test_streaming_deep_split_p95_below_2000ms) | test(test_streaming_fast_split_p95_below_500ms) | test(test_streaming_split_5000_blocks_p95_below_500ms))' \
+            --no-fail-fast \
+            2> slo-daily.stderr.log | tee slo-daily.stdout.log
+          echo "exit_code=$?" > slo-daily-exit.env
+          exit 0
+
+      - name: Upload daily log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slo-daily-${{ github.run_number }}
+          path: |
+            slo-daily.stdout.log
+            slo-daily.stderr.log
+            slo-daily-exit.env
+          retention-days: 14

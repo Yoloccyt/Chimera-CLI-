@@ -110,6 +110,12 @@ impl Panel for ChatPanel {
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // PS-2 U-4:退化尺寸统一早退(共享最低线,见 crate::panels::MIN_PANEL_W/H)
+        if crate::panels::degenerate(area) {
+            crate::panels::render_too_small(area, buf);
+            return;
+        }
+
         // 边框标题内嵌会话状态指示器,如 " Chat  [Idle]"
         let title = format!(
             "{} [{}]",

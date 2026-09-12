@@ -72,6 +72,7 @@ fn test_tui_action_severity_classification() {
     // --- 5 个 Info 级变体(低频请求/终态) ---
     let requested = NexusEvent::TuiActionRequested {
         metadata: EventMetadata::new("chimera-tui"),
+        request_id: "tui-1".into(),
         action_id: "quest.pause".into(),
         payload: r#"{"quest_id":"q1"}"#.into(),
         source: ActionSource::Palette,
@@ -84,6 +85,7 @@ fn test_tui_action_severity_classification() {
 
     let completed = NexusEvent::TuiActionCompleted {
         metadata: EventMetadata::new("chimera-cli"),
+        request_id: "tui-1".into(),
         action_id: "quest.export".into(),
         result: r#"{"file":"export.json"}"#.into(),
     };
@@ -95,6 +97,7 @@ fn test_tui_action_severity_classification() {
 
     let failed = NexusEvent::TuiActionFailed {
         metadata: EventMetadata::new("chimera-cli"),
+        request_id: "tui-1".into(),
         action_id: "quest.pause".into(),
         error: "quest already completed".into(),
     };
@@ -229,6 +232,7 @@ fn test_tui_action_severity_ordering() {
     let tui_events: Vec<NexusEvent> = vec![
         NexusEvent::TuiActionRequested {
             metadata: EventMetadata::new("t"),
+            request_id: "tui-1".into(),
             action_id: "a".into(),
             payload: "{}".into(),
             source: ActionSource::Chat,
@@ -240,11 +244,13 @@ fn test_tui_action_severity_ordering() {
         },
         NexusEvent::TuiActionCompleted {
             metadata: EventMetadata::new("t"),
+            request_id: "tui-1".into(),
             action_id: "a".into(),
             result: "r".into(),
         },
         NexusEvent::TuiActionFailed {
             metadata: EventMetadata::new("t"),
+            request_id: "tui-1".into(),
             action_id: "a".into(),
             error: "e".into(),
         },
@@ -320,6 +326,7 @@ fn test_tui_action_progressed_severity_is_normal() {
 fn test_tui_action_failed_severity_is_info() {
     let event = NexusEvent::TuiActionFailed {
         metadata: EventMetadata::new("chimera-cli"),
+        request_id: "tui-1".into(),
         action_id: "quest.pause".into(),
         error: "quest already completed".into(),
     };

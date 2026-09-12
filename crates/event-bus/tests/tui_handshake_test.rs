@@ -3,18 +3,15 @@
 //! 对应架构层:L1 Core(event-bus)
 //!
 //! # 覆盖
-//! - 双表同步:NexusEvent 与 InterfaceEvent 的 TuiHello/TuiHelloAck
-//!   type_name/severity 一致(防半表漂移);
+//! - 单表分类真值源:NexusEvent 的 TuiHello/TuiHelloAck type_name 稳定
+//!   且 severity 恒为 Info(不随 CompatLevel 三态升降级);
 //! - MessagePack 序列化往返(ADR-004 协议;三态 CompatLevel 全覆盖);
 //! - topic 映射 System + severity Info(一次性信道建立事件);
 //! - 握手幂等构造:同参数构造等值(proptest 守卫字段守恒)。
 
 #![forbid(unsafe_code)]
 
-use event_bus::{
-    CompatLevel, EventClassification, EventMetadata, EventSeverity, EventTopic, InterfaceEvent,
-    NexusEvent,
-};
+use event_bus::{CompatLevel, EventMetadata, EventSeverity, EventTopic, NexusEvent};
 
 fn hello() -> NexusEvent {
     NexusEvent::TuiHello {
@@ -35,69 +32,55 @@ fn ack(compat: CompatLevel) -> NexusEvent {
 }
 
 // ============================================================
-// A. 双表同步:NexusEvent ↔ InterfaceEvent
+// A. 单表分类真值源:type_name / severity
 // ============================================================
 
+/// 原 `dual_table_type_names_match`(依赖 event_types.rs 分层子枚举镜像做双表
+/// 比对)。镜像退役后改为单表断言,并把 TuiHelloAck 扩到 CompatLevel 三态,
+/// 守卫"变体标签不随载荷取值漂移"。
 #[test]
-fn dual_table_type_names_match() {
-    let nexus_pairs = [
+fn handshake_type_names_are_stable() {
+    let pairs = [
         (hello(), "TuiHello"),
         (ack(CompatLevel::Full), "TuiHelloAck"),
-    ];
-    for (event, expected) in nexus_pairs {
-        assert_eq!(event.type_name(), expected, "NexusEvent type_name 漂移");
-    }
-    let interface_pairs = [
+        (ack(CompatLevel::Refused), "TuiHelloAck"),
         (
-            InterfaceEvent::TuiHello {
-                metadata: EventMetadata::new("chimera-tui"),
-                proto: "1.0.0".into(),
-                tui_version: "2.26.0".into(),
-                caps: vec![],
-            },
-            "TuiHello",
-        ),
-        (
-            InterfaceEvent::TuiHelloAck {
-                metadata: EventMetadata::new("chimera-cli"),
-                proto: "1.0.0".into(),
-                compat: CompatLevel::Refused,
-                server_version: "2.26.0".into(),
-            },
+            ack(CompatLevel::Degraded(vec!["agent-tree".into()])),
             "TuiHelloAck",
         ),
     ];
-    for (event, expected) in interface_pairs {
-        assert_eq!(event.type_name(), expected, "InterfaceEvent type_name 漂移");
+    for (event, expected) in pairs {
+        assert_eq!(event.type_name(), expected, "NexusEvent type_name 漂移");
     }
 }
 
+/// 原 `dual_table_severity_matches`。握手是一次性信道建立事件,severity 必须
+/// 恒为 Info 且不随 CompatLevel 三态升降级;额外显式断言不得落入 Critical —
+/// Critical 会占用 mpsc 旁路配额并触发"必须确保投递"语义(§6.2 红线)。
 #[test]
-fn dual_table_severity_matches() {
-    // 两表对同一语义事件的 severity 必须一致(均为 Info)
+fn handshake_severity_is_info_across_compat_levels() {
     assert_eq!(hello().severity(), EventSeverity::Info);
-    assert_eq!(ack(CompatLevel::Refused).severity(), EventSeverity::Info);
-    let iface_hello = InterfaceEvent::TuiHello {
-        metadata: EventMetadata::new("chimera-tui"),
-        proto: "1.0.0".into(),
-        tui_version: "2.26.0".into(),
-        caps: vec![],
-    };
-    let iface_ack = InterfaceEvent::TuiHelloAck {
-        metadata: EventMetadata::new("chimera-cli"),
-        proto: "1.0.0".into(),
-        compat: CompatLevel::Full,
-        server_version: "2.26.0".into(),
-    };
-    assert_eq!(
-        iface_hello.severity(),
-        EventSeverity::Info,
-        "双表 severity 漂移"
+    for compat in [
+        CompatLevel::Full,
+        CompatLevel::Degraded(vec!["agent-tree".into(), "multi-model".into()]),
+        CompatLevel::Refused,
+    ] {
+        assert_eq!(
+            ack(compat).severity(),
+            EventSeverity::Info,
+            "CompatLevel 变化不应影响握手 severity"
+        );
+    }
+    assert!(
+        !matches!(hello().severity(), EventSeverity::Critical),
+        "握手事件不得占用 Critical 旁路配额"
     );
-    assert_eq!(
-        iface_ack.severity(),
-        EventSeverity::Info,
-        "双表 severity 漂移"
+    assert!(
+        !matches!(
+            ack(CompatLevel::Refused).severity(),
+            EventSeverity::Critical
+        ),
+        "握手事件不得占用 Critical 旁路配额"
     );
 }
 

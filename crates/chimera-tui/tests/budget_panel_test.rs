@@ -149,6 +149,30 @@ fn negative_utilization_clamps_to_zero() {
     assert!(content.contains(&bar_empty), "负利用率进度条应钳位为空");
 }
 
+#[test]
+fn nan_utilization_shows_na() {
+    // NaN/±Inf 防护:非有限利用率显示 N/A,而非不可读的 "NaN%"
+    // (进度条 clamp 已把 NaN 折算为 0,文本路径需与之一致)
+    let state = state_with(budget(f32::NAN));
+    let content = BudgetPanel::content(&state).to_string();
+    assert!(
+        content.contains("N/A"),
+        "NaN 利用率应显示 N/A,实际: {content}"
+    );
+    assert!(!content.contains("NaN"), "任何路径都不应出现原始 NaN 文本");
+}
+
+#[test]
+fn infinite_utilization_shows_na() {
+    // ±Inf 同样走 N/A(文本与进度条两处 format 使用点统一处理)
+    for rate in [f32::INFINITY, f32::NEG_INFINITY] {
+        let state = state_with(budget(rate));
+        let content = BudgetPanel::content(&state).to_string();
+        assert!(content.contains("N/A"), "{rate} 利用率应显示 N/A");
+        assert!(!content.contains("NaN"), "{rate} 不应产生 NaN 文本");
+    }
+}
+
 // ============================================================
 // C. alert 行显隐
 // ============================================================

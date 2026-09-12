@@ -1549,6 +1549,23 @@ pub enum NexusEvent {
     TuiActionRequested {
         /// 事件元数据
         metadata: EventMetadata,
+        /// 请求唯一标识 — 由发起方(TUI)生成,终态回执原样回传
+        ///
+        /// WHY 独立字段而非复用 `action_id`:同 `action_id` 可并发/连续发起多次
+        /// 请求(如连点两次 `quest.cancel`),仅凭 `action_id` 无法把
+        /// `TuiActionCompleted/Failed` 归属到具体那一次请求,导致发起方的超时
+        /// 计时被错误清除(表现为"失败却显示成功"或"超时永不提示")。
+        /// 本字段是请求-回执配对的主键,`TuiActionCompleted`/`TuiActionFailed`
+        /// 必须原样回传同一值。
+        ///
+        /// 约定:格式由发起方自定(当前 TUI 用 `tui-{单调序号}`);空串表示
+        /// 未知/未启用关联,消费方须按"无关联"处理而非视为同一请求。
+        ///
+        /// WHY `#[serde(default)]`:事件存在 JSON/MessagePack 持久化与回放路径
+        /// (fuzz_targets/event_serialize),旧格式不含本字段;缺省为空串恰好
+        /// 落入"无关联"语义,旧数据反序列化不失败。
+        #[serde(default)]
+        request_id: String,
         /// 动作标识(如 "quest.pause"/"export.run"/"agent.chat")
         action_id: String,
         /// 动作参数(JSON 编码,schema 由 ActionDescriptor 定义)
@@ -1561,6 +1578,11 @@ pub enum NexusEvent {
     ///
     /// WHY Normal 级别:进度增量为高频事件,走 broadcast 通道;
     /// `TuiChatResponseChunk` 是本变体面向 token 流的高频特化。
+    ///
+    /// WHY 本变体**不携带** `request_id`(与 Requested/Completed/Failed 不对称):
+    /// 进度是幂等的流式展示,不构成回执,当前无任何消费方按请求归属进度;
+    /// 为其引入主键只会扩大协议变更面而无实际收益。若未来需要按请求聚合进度,
+    /// 再以独立 ADR 补充。
     TuiActionProgressed {
         /// 事件元数据
         metadata: EventMetadata,
@@ -1574,6 +1596,12 @@ pub enum NexusEvent {
     TuiActionCompleted {
         /// 事件元数据
         metadata: EventMetadata,
+        /// 回执归属的请求标识 — 原样回传 `TuiActionRequested.request_id`
+        ///
+        /// WHY `#[serde(default)]`:同 `TuiActionRequested`,旧格式回放兼容;
+        /// 空串按"无归属"处理,消费方不清除任何超时计时。
+        #[serde(default)]
+        request_id: String,
         /// 关联的动作标识
         action_id: String,
         /// 结果摘要(JSON 编码或纯文本)
@@ -1587,6 +1615,11 @@ pub enum NexusEvent {
     TuiActionFailed {
         /// 事件元数据
         metadata: EventMetadata,
+        /// 回执归属的请求标识 — 原样回传 `TuiActionRequested.request_id`
+        ///
+        /// WHY `#[serde(default)]`:同 `TuiActionCompleted`,旧格式回放兼容。
+        #[serde(default)]
+        request_id: String,
         /// 关联的动作标识
         action_id: String,
         /// 错误信息(面向用户的可读描述)
@@ -1645,6 +1678,24 @@ pub enum NexusEvent {
         session_id: String,
         /// 新状态(Thinking/ToolExecuting/Idle)
         status: ChatStatus,
+    },
+
+    /// TUI 会话历史整体替换 — `/compact` 策展回写(FC-2,ADR-081)
+    ///
+    /// WHY 独立变体:策展压缩(curator 五段分类 + 0-1 背包 + 抽取式摘要)在
+    /// 编排器侧完成后,压缩后的会话历史必须回写到唯一所有者 ChatSync(M3b
+    /// 单一所有权设计)——本事件是唯一合法的"整史替换"控制信道;逐条
+    /// Submitted/Chunk 重放既有双计数歧义又无法表达"删除"。消息以
+    /// [`super::payloads::TuiChatMessagePayload`] 字符串角色承载(L1 不感知
+    /// L10 枚举),由 ChatSync 负责转换。Normal 级(走 broadcast 即可,历史
+    /// 替换非高频且允许 Lagged 时下次 compact 重做)。
+    TuiChatHistoryReplaced {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 会话标识(与 TuiChatSubmitted 同域,预留多会话)
+        session_id: String,
+        /// 压缩后的完整会话历史(原序)
+        messages: Vec<super::payloads::TuiChatMessagePayload>,
     },
 
     /// TUI → 编排器协议握手请求(Concord W10 T10.1,ADR-082)
@@ -2583,7 +2634,9 @@ pub enum NexusEvent {
 impl NexusEvent {
     /// 获取事件元数据引用
     ///
-    /// 委托给子枚举的 `EventClassification::metadata()` 实现。
+    /// 单表手写 match:曾计划委托给分层子枚举镜像(`event_types.rs`),但委托
+    /// 从未接上,镜像已退役(ADR-160)。新增变体须同步本表与
+    /// `classification.rs::severity()`、`topic.rs::topic()` 两处。
     pub fn metadata(&self) -> &EventMetadata {
         match self {
             Self::UserIntentEncoded { metadata, .. } => metadata,
@@ -2689,6 +2742,8 @@ impl NexusEvent {
             Self::TuiChatResponseChunk { metadata, .. } => metadata,
             Self::TuiChatCompleted { metadata, .. } => metadata,
             Self::TuiChatStatusChanged { metadata, .. } => metadata,
+            // FC-2(ADR-081):/compact 策展回写
+            Self::TuiChatHistoryReplaced { metadata, .. } => metadata,
             // Concord W10 T10.1(ADR-082):TUI ↔ 编排器协议握手
             Self::TuiHello { metadata, .. } => metadata,
             Self::TuiHelloAck { metadata, .. } => metadata,
@@ -2789,6 +2844,7 @@ mod tests {
     fn test_tui_action_protocol_severity() {
         let requested = NexusEvent::TuiActionRequested {
             metadata: EventMetadata::new("chimera-tui"),
+            request_id: "tui-1".into(),
             action_id: "quest.pause".into(),
             payload: "{\"quest_id\":\"q1\"}".into(),
             source: ActionSource::Palette,
@@ -2822,6 +2878,7 @@ mod tests {
         let events = [
             NexusEvent::TuiActionRequested {
                 metadata: EventMetadata::new("chimera-tui"),
+                request_id: "tui-1".into(),
                 action_id: "a".into(),
                 payload: "{}".into(),
                 source: ActionSource::Chat,

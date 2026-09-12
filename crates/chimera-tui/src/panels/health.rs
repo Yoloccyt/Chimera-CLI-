@@ -113,7 +113,11 @@ impl HealthPanel {
                     crate::t!("health.avg_latency"),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::from(format!("{:.1} ms", hm.average_latency_ms)),
+                // U-3:改用共享时延格式化(自适应 μs/ms/s;单位不再写死)
+                //
+                // 注意下方 Disk/Net 的 "MB/s" **不适用** format_latency ——
+                // 那是吞吐量(字节/秒),与"时延"不同维度,units 不可互换。
+                Span::from(crate::render::format_latency_ms(hm.average_latency_ms)),
             ]),
             // Active/Paused Quests 指标:从 quest_list 与 paused_quest_count 派生,
             // 反映系统当前 Quest 负载与暂停状态(不新增事件,复用已有 QuestPaused/QuestResumed)
@@ -161,9 +165,12 @@ impl HealthPanel {
             let color = Self::threshold_color(sys.cpu.global_usage, 60.0, 80.0);
             spans.push(Span::styled(
                 format!(
-                    "{} {:.0}%{}",
+                    "{} {}{}",
                     crate::t!("health.cpu"),
-                    sys.cpu.global_usage,
+                    crate::render::percent_from_value(
+                        sys.cpu.global_usage,
+                        crate::render::PERCENT_PRECISION_SUMMARY
+                    ),
                     trend
                 ),
                 Style::default().fg(color),
@@ -367,7 +374,7 @@ mod tests {
         let content = HealthPanel::info_text(&state).to_string();
         assert!(content.contains("42.0"));
         assert!(content.contains("1"));
-        assert!(content.contains("15.5 ms"));
+        assert!(content.contains("15.5ms"));
         assert!(content.contains("90"));
     }
 

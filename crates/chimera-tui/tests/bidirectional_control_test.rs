@@ -4,7 +4,7 @@
 
 use chimera_tui::{PopupKind, TuiApp, TuiConfig};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use event_bus::{EventBus, NexusEvent, VoteValue};
+use event_bus::{EventBus, NexusEvent};
 
 /// 构造一个处于命令模式且已输入文本的 TuiApp
 fn app_with_command_input(input: &str) -> TuiApp {
@@ -109,28 +109,33 @@ fn bidirectional_pause_cancel_does_not_publish() {
     );
 }
 
+// FC-A(2026-09-06 复评):投票诚实降级 —— 全仓无 VoteCastRequested 消费者
+// (L8 Parliament 治理域),发布即假反馈;降级为状态栏诚实提示且不发事件。
 #[test]
-fn bidirectional_vote_publishes_event() {
+fn bidirectional_vote_degrades_honestly_without_publish() {
     let app = app_with_command_input("vote abstain p-7");
     let (mut app, _bus, mut rx) = app_with_bus(app);
 
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let event = rx.try_recv().expect("should receive event").unwrap();
-    match event {
-        NexusEvent::VoteCastRequested {
-            proposal_id,
-            voter,
-            vote,
-            ..
-        } => {
-            assert_eq!(proposal_id, "p-7");
-            assert_eq!(voter, "operator");
-            assert_eq!(vote, VoteValue::Abstain);
-        }
-        other => panic!("expected VoteCastRequested, got {other:?}"),
+    while let Ok(Some(ev)) = rx.try_recv() {
+        assert!(
+            !matches!(ev, NexusEvent::VoteCastRequested { .. }),
+            "投票降级后不得发布 VoteCastRequested(石沉大海的假反馈)"
+        );
     }
+    let (msg, severity) = app
+        .state()
+        .status_message
+        .clone()
+        .expect("投票降级应给出状态栏诚实提示");
+    assert_eq!(
+        severity,
+        chimera_tui::Severity::Warning,
+        "诚实降级提示应为 Warning 级"
+    );
+    assert!(!msg.is_empty());
 }
 
 #[test]

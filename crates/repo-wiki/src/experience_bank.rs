@@ -193,8 +193,14 @@ impl DualExperienceBank {
         let mut all = self.wiki.list_distilled_insights().await?;
         all.retain(|i| i.content.contains(query) || i.tags.iter().any(|t| t.contains(query)));
         // WHY 按支持度降序:高支持度洞察是更普遍的规律,检索价值更高
-        // sort_by_key + Reverse:clippy unnecessary-sort-by 建议
-        all.sort_by_key(|i| std::cmp::Reverse(i.source_count));
+        // C9(2026-09-04,红线 #8):全量 sort O(n log n)+截断 → L0 xts_top_k_by
+        // (select_nth O(n) + 前 k 段二次排序)。返回集合与段内降序与原语义一致;
+        // 仅同 source_count 的 tie 相对顺序由稳定全排变为 select 决定(无界洞察
+        // 库场景下性能收益随 n 增长,tests/experience_bank_test.rs 既有断言
+        // 不依赖 tie 逐位序,已核)。
+        nexus_contracts::util::xts_top_k_by(&mut all, top_k, |a, b| {
+            b.source_count.cmp(&a.source_count)
+        });
         all.truncate(top_k);
         Ok(all)
     }

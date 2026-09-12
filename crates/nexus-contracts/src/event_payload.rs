@@ -19,8 +19,8 @@
 //!   不含业务逻辑方法
 //! - **零 crate 依赖**(serde derive 例外): 与 L0 其余模块一致,仅依赖 serde derive
 //! - **severity() 判定逻辑不迁移(架构红线)**: Critical 事件的 mpsc 点对点保障是
-//!   系统可靠性红线,`NexusEvent::severity()` / `EventClassification::severity()`
-//!   判定逻辑(哪些事件变体判为 Critical/Info/Normal)必须留在 L1 `event-bus`,
+//!   系统可靠性红线,`NexusEvent::severity()` 判定逻辑
+//!   (哪些事件变体判为 Critical/Info/Normal)必须留在 L1 `event-bus`,
 //!   本模块仅下沉枚举类型本身,避免判定逻辑漂移导致 Critical 事件降级。
 //!
 //! # 语义对齐(WHY)

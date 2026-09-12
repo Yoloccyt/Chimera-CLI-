@@ -1,4 +1,4 @@
-//! TUI 数据源抽象 — 为 L10 Interface 提供统一数据访问契约
+﻿//! TUI 数据源抽象 — 为 L10 Interface 提供统一数据访问契约
 //!
 //! 设计约束(WHY):
 //! - `chimera-tui` 位于 L10,按 §2.2 依赖铁律禁止直接依赖 L9 的
@@ -35,22 +35,38 @@ pub mod metrics_history;
 pub mod newline_gate;
 pub mod resource_history;
 
+/// `/compact` 上下文策展器(Concord W9,ADR-081;FC-2 接线,2026-09-06)
+///
+/// WHY pub:编排器(chimera-cli action_orchestrator)需调用
+/// `RuleCurationPolicy::curate` 执行策展,并经 `parse_compact_args`
+/// 校验命令参数;此前本模块从未被 `mod` 声明(纯死文件,评估报告 FC-2)。
+pub mod curator;
+
 pub(crate) mod snapshot;
 pub mod sync;
 // WHY pub:data_pipeline_bench(独立 crate)直接调用 `pipeline::push_history`
 // 做容量伸缩基准(评估报告 P0-2 验收:VecDeque 队首淘汰 O(1) 可证伪)。
 pub mod pipeline;
+/// WI-01 TUI dogfooding: 协议客户端适配层(AppOp/AppEvent)
+pub mod protocol_client;
+/// WI-01: 协议模式数据源(TuiDataSource 实现,Quest 生命周期经协议面)
+pub mod protocol_data_source;
 
 // Re-export all public types to maintain the existing API surface
+pub use curator::{
+    CompactPolicy, CompactReport, CompactRequest, CurationConfig, CurationPlan, RuleCurationPolicy,
+};
 pub use pipeline::{DataPipeline, StubDataSource, SysMetricsCollector};
+pub use protocol_data_source::ProtocolDataSource;
 pub use snapshot::{
     AsaInterventionSummary, BudgetMetrics, DataSnapshot, DataSourceConfig, ExportFormat,
     HealthMetrics, MemoryMetrics, RedTeamAuditSummary, SecurityState, SkepticVetoSummary,
     TuiDataSource,
 };
 pub use sync::{
-    ActionFeedbackSync, BudgetSync, ChatSync, ChtcSync, CriticalDroppedSync, DecaySync, HealthSync,
-    McpNodesSync, MemorySync, OsaSync, QuestSync, RouterSync, SecuritySync,
+    ActionFeedbackSync, AgentFailureSync, BudgetSync, ChatSync, ChtcSync, CriticalDroppedSync,
+    DecaySync, GqepTimeoutSync, HandshakeSync, HealthSync, McpNodesSync, MemorySync, OsaSync,
+    ParliamentSync, QuestSync, RouterSync, SecuritySync,
 };
 
 #[cfg(test)]
@@ -1305,11 +1321,13 @@ mod tests {
         assert_eq!(sync.latest(), None);
         sync.apply_event(&NexusEvent::TuiActionCompleted {
             metadata: EventMetadata::new("chimera-cli"),
+            request_id: "tui-1".into(),
             action_id: "quest.pause".into(),
             result: "已暂停 Quest q-1".into(),
         });
         assert_eq!(sync.seq(), 1);
         assert_eq!(sync.latest(), Some(("已暂停 Quest q-1".to_string(), false)));
+        assert_eq!(sync.latest_request_id(), Some("tui-1".to_string()));
     }
 
     #[test]
@@ -1317,6 +1335,7 @@ mod tests {
         let mut sync = ActionFeedbackSync::new();
         sync.apply_event(&NexusEvent::TuiActionFailed {
             metadata: EventMetadata::new("chimera-cli"),
+            request_id: "tui-2".into(),
             action_id: "task.pause".into(),
             error: "尚未实现".into(),
         });
@@ -1330,11 +1349,14 @@ mod tests {
         for i in 0..3 {
             sync.apply_event(&NexusEvent::TuiActionCompleted {
                 metadata: EventMetadata::new("chimera-cli"),
+                request_id: format!("tui-{}", i + 1),
                 action_id: "quest.resume".into(),
                 result: format!("r{i}"),
             });
         }
         assert_eq!(sync.seq(), 3);
+        // 回执归属应跟随最近一次反馈的 request_id
+        assert_eq!(sync.latest_request_id(), Some("tui-3".to_string()));
         sync.apply_event(&chat_submitted("hi"));
         assert_eq!(sync.seq(), 3);
     }

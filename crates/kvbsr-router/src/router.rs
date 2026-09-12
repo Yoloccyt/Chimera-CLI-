@@ -36,6 +36,8 @@ use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_core::CLV;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+// ws2-c1 红线 #8:公共 Top-K 收敛工具(替代 sort_by 全排)
+use nexus_contracts::util::xts_top_k_by;
 
 // SubTask 21.4:使用 nexus_core 统一的 cosine_similarity_slices
 // (原 crate::blocks::cosine_similarity 已删除,统一到 L1 Core)
@@ -432,15 +434,11 @@ impl KVBlockSemanticRouter {
                 )
             })
             .collect();
-        // 部分排序:Top-N 用 select_nth_unstable_by(O(n))
+        // 部分排序:Top-N 用公共 xts_top_k_by(O(n),红线 #8 ws2-c1)
         let k = n.min(scored.len());
-        if k < scored.len() {
-            scored.select_nth_unstable_by(k, |a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-        // 前 K 个再排序确保降序(K log K << n log n)
-        scored[..k].sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        xts_top_k_by(&mut scored, k, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
         scored[..k].iter().map(|(i, _)| *i).collect()
     }
 
@@ -477,15 +475,11 @@ impl KVBlockSemanticRouter {
             })
             .collect();
 
-        // 部分排序:Top-K 用 select_nth_unstable_by(O(n))
+        // 部分排序:Top-K 用公共 xts_top_k_by(O(n),红线 #8 ws2-c1)
         let limit = k.min(scored.len());
-        if limit < scored.len() {
-            scored.select_nth_unstable_by(limit, |a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-        // 前 limit 个再排序确保降序
-        scored[..limit].sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        xts_top_k_by(&mut scored, limit, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // 取 Top-K
         let selected_tools: Vec<ToolId> =

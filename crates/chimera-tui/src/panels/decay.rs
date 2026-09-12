@@ -62,7 +62,6 @@ impl DecayPanel {
     pub fn content(state: &TuiState) -> Text<'static> {
         let dm = &state.decay_metrics;
         let high_decay = Self::is_high_decay(dm.coefficient);
-        let coeff_pct = dm.coefficient * 100.0;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -75,9 +74,9 @@ impl DecayPanel {
         // WHY 标签与数值在调用点拼接:t!() 返回运行时 &str,不能作 format! 字面量;
         // 与 Health 面板既有模式一致(标签键 + 数值格式串)。
         let coeff_text = format!(
-            "{}:  {:.1}%{}",
+            "{}:  {}{}",
             crate::t!("panel.decay.coefficient"),
-            coeff_pct,
+            crate::render::percent_detail(dm.coefficient),
             if high_decay {
                 crate::t!("panel.decay.high_decay")
             } else {
