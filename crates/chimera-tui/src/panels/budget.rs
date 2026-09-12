@@ -31,6 +31,14 @@ impl BudgetPanel {
         let budget = &state.budget;
         let total = budget.total_consumption + budget.remaining_budget;
         let utilization_pct = budget.utilization_rate * 100.0;
+        // NaN/±Inf 防护:非有限利用率显示 N/A 而非 "NaN%"。进度条 clamp 已把
+        // NaN 折算为 0,文本路径(数值行 + 进度条标签两处 format 使用点)统一
+        // 走本字符串,保证 "N/A 文本 + 空条" 的视觉一致性。
+        let utilization_text = if utilization_pct.is_finite() {
+            format!("{utilization_pct:.1}")
+        } else {
+            "N/A".to_string()
+        };
 
         // 基础信息行
         let mut lines: Vec<Line<'static>> = vec![
@@ -58,9 +66,9 @@ impl BudgetPanel {
                 budget.remaining_budget
             )),
             Line::from(format!(
-                "{}:  {:.1}%",
+                "{}:  {}%",
                 crate::t!("panel.budget.utilization"),
-                utilization_pct
+                utilization_text
             )),
         ];
 
@@ -85,7 +93,7 @@ impl BudgetPanel {
         let clamped_rate = budget.utilization_rate.clamp(0.0, 1.0);
         let used_chars = ((clamped_rate * BAR_WIDTH as f32).round() as usize).min(BAR_WIDTH);
         let remaining_chars = BAR_WIDTH - used_chars;
-        let bar_label = format!("{:.1}%", utilization_pct);
+        let bar_label = format!("{}%", utilization_text);
         lines.push(Line::from(vec![
             Span::from("["),
             Span::styled("=".repeat(used_chars), Style::default().fg(Color::Cyan)),
@@ -146,6 +154,12 @@ impl Panel for BudgetPanel {
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // PS-2 U-4:退化尺寸统一早退(共享最低线,见 crate::panels::MIN_PANEL_W/H)
+        if crate::panels::degenerate(area) {
+            crate::panels::render_too_small(area, buf);
+            return;
+        }
+
         let block = Block::default().borders(Borders::ALL).title(self.title());
         let paragraph = Paragraph::new(Self::content(state)).block(block);
         paragraph.render(area, buf);

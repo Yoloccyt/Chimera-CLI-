@@ -31,7 +31,7 @@ fn make_event(i: usize) -> NexusEvent {
 /// 构造含 N 条事件的 TuiState
 fn state_with_events(count: usize) -> TuiState {
     let mut state = TuiState::new();
-    state.latest_events = (0..count).map(make_event).collect::<VecDeque<_>>();
+    state.latest_events = std::sync::Arc::new((0..count).map(make_event).collect::<VecDeque<_>>());
     state
 }
 
@@ -179,14 +179,16 @@ fn quest_render_cache_100(c: &mut Criterion) {
 fn parliament_render_cache_100(c: &mut Criterion) {
     let mut state = TuiState::new();
     state.last_snapshot_revision = 1;
-    state.latest_events = (0..100)
-        .map(|i| NexusEvent::VoteCast {
-            metadata: EventMetadata::new("bench"),
-            proposal_id: format!("p{i}"),
-            voter: "alice".into(),
-            vote: i % 2 == 0,
-        })
-        .collect();
+    state.latest_events = std::sync::Arc::new(
+        (0..100)
+            .map(|i| NexusEvent::VoteCast {
+                metadata: EventMetadata::new("bench"),
+                proposal_id: format!("p{i}"),
+                voter: "alice".into(),
+                vote: i % 2 == 0,
+            })
+            .collect(),
+    );
     let area = Rect::new(0, 0, 80, 24);
     let mut group = c.benchmark_group("parliament_render_cache");
 

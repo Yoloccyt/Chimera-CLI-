@@ -19,6 +19,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[test]
 fn test_osa_sparse_panel_initialization() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let panel = OsaSparsePanel::new();
     assert_eq!(panel.id(), PanelId::OsaSparse);
     // title 返回 Line<'static>;i18n 后本地化,固定英文捕获后复位再断言。
@@ -254,4 +255,51 @@ fn test_osa_sparse_panel_state_with_sparsity_data() {
     let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
     panel.handle_key(key, &mut state);
     assert_eq!(panel.selected(), 1);
+}
+
+// ============================================================
+// US-02 zh locale 渲染断言 — 空状态提示为中文
+// ============================================================
+
+/// 宽字符感知的渲染收集(与 pvl_score_panel_test 同款口径:跳过 CJK 续格,
+/// 避免"暂 无 活 跃 上 下 文 文 件"被续格空格隔断导致 contains 失配)
+fn render_panel_to_string(panel: &mut OsaSparsePanel, state: &TuiState, w: u16, h: u16) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, w, h);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    panel.render(state, area, &mut buf);
+    let mut out = String::new();
+    let mut prev_wide = false;
+    for cell in buf.content().iter() {
+        if cell.skip {
+            continue;
+        }
+        let s = cell.symbol();
+        if prev_wide {
+            prev_wide = false;
+            continue;
+        }
+        if s.is_empty() {
+            continue;
+        }
+        let ch = s.chars().next().unwrap_or(' ');
+        prev_wide = unicode_width::UnicodeWidthStr::width(s) >= 2;
+        out.push(ch);
+    }
+    out
+}
+
+#[test]
+fn test_osa_sparse_panel_zh_locale_renders_chinese_copy() {
+    // US-02 i18n 收口:空状态 "No active context files..." 迁移键表后,
+    // Zh locale 应渲染中文提示(TDD RED→GREEN:迁移前此处输出英文必红)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    let mut panel = OsaSparsePanel::new();
+    let state = TuiState::new();
+    // 100x40 → inner 高 38 ≥ 18:全量四段布局,列表段可见
+    let content = render_panel_to_string(&mut panel, &state, 100, 40);
+    assert!(
+        content.contains("暂无活跃上下文文件"),
+        "Zh locale 下 OsaSparse 空状态应显示中文提示,实际: {content}"
+    );
 }

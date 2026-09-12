@@ -11,7 +11,8 @@
 //! 5. `test_checkpoint_description_field`: 验证 description 可选字段
 //! 6. `test_nexus_contracts_zero_workspace_crate_dependencies`: 验证 L0 零 workspace crate 依赖
 //!    (ADR-033 例外: serde/chrono/uuid 外部基础类型库允许;workspace crate 禁止)
-//! 7. `test_backward_compat_nexus_core_reexport`: 验证 nexus-core re-export 路径仍可工作
+//! 7. (已搬迁) re-export 类型等价性 — 见 `nexus-core/src/types.rs`
+//!    `tests::reexported_types_are_identical_to_contracts`
 //!
 //! # TDD 守恒
 //!
@@ -19,7 +20,6 @@
 //! 测试不删除已有测试,仅新增。
 
 use nexus_contracts::{Checkpoint, EventMetadata, TaskStatus};
-use serde::Serialize;
 
 // ============================================================
 // 测试 1: EventMetadata JSON 序列化 roundtrip
@@ -247,8 +247,10 @@ fn test_nexus_contracts_zero_workspace_crate_dependencies() {
     let deps_section = extract_section(&content, "[dependencies]", "[dev-dependencies]")
         .expect("应存在 [dependencies] 段");
 
-    // ADR-033 例外白名单: serde / chrono / uuid(基础类型库,无运行时业务逻辑)
-    let allowed_external_deps = ["serde", "chrono", "uuid"];
+    // ADR-033 例外白名单: serde / chrono / uuid / thiserror(基础类型库,无运行时业务逻辑)
+    // thiserror 于 A0(2026-08-22)登记: 统一错误层级契约(errors.rs,WI-01 §6.6)
+    // 需 thiserror derive——库层错误类型标准 §4.1: 37 个 error.rs 全部 thiserror 先例
+    let allowed_external_deps = ["serde", "chrono", "uuid", "thiserror"];
 
     // 验证 [dependencies] 段中无任何 workspace path 依赖(即无 workspace crate 依赖)
     for line in deps_section.lines() {
@@ -284,49 +286,17 @@ fn extract_section(content: &str, start_marker: &str, end_marker: &str) -> Optio
 }
 
 // ============================================================
-// 测试 6: 向后兼容验证 — nexus-core re-export 路径仍可工作
+// 测试 6: 向后兼容验证(已搬迁至 nexus-core)
 // ============================================================
-
-#[test]
-fn test_backward_compat_nexus_core_reexport() {
-    // 验证 nexus_core::types::TaskStatus 与 nexus_contracts::TaskStatus 是同一类型
-    // (通过 serde JSON roundtrip 间接验证类型一致性)
-    let status = <nexus_core::types::TaskStatus as Serialize>::serialize(
-        &nexus_core::types::TaskStatus::Running,
-        serde_json::value::Serializer,
-    )
-    .expect("nexus_core::types::TaskStatus 序列化失败");
-
-    let json = serde_json::to_string(&nexus_core::types::TaskStatus::Running)
-        .expect("nexus_core::types::TaskStatus JSON 序列化失败");
-    let contracts_decoded: TaskStatus = serde_json::from_str(&json)
-        .expect("应能从 nexus_core JSON 反序列化为 nexus_contracts 类型");
-
-    assert_eq!(
-        contracts_decoded,
-        TaskStatus::Running,
-        "nexus_contracts::TaskStatus 与 nexus_core::types::TaskStatus 应通过 re-export 保持一致"
-    );
-
-    // 同样验证 Checkpoint 类型一致性
-    let cp_core = nexus_core::types::Checkpoint::new(
-        "q-backward",
-        "c-backward",
-        "hash-backward",
-        vec![0xDE, 0xAD, 0xBE, 0xEF],
-    );
-    let json = serde_json::to_string(&cp_core).expect("nexus_core::Checkpoint JSON 序列化失败");
-    let cp_contracts: Checkpoint = serde_json::from_str(&json)
-        .expect("应能从 nexus_core JSON 反序列化为 nexus_contracts 类型");
-
-    assert_eq!(cp_contracts.quest_id, "q-backward");
-    assert_eq!(cp_contracts.checkpoint_id, "c-backward");
-    assert_eq!(cp_contracts.memory_snapshot_hash, "hash-backward");
-    assert_eq!(cp_contracts.serialized_state, vec![0xDE, 0xAD, 0xBE, 0xEF]);
-
-    // 防止 unused warning
-    let _ = status;
-}
+//
+// WHY 不在此验证: 原用例用 serde JSON roundtrip 间接证明"nexus_core::types::TaskStatus
+// 与 nexus_contracts::TaskStatus 是同一类型"——但 roundtrip 只证明**格式兼容**,
+// 独立定义的相同结构同样能通过,证明强度不足;且它迫使 L0 契约层反向 dev-depend
+// L1 实现层,形成 dev 依赖环。
+// 现已归位到 re-export 发生地
+// `nexus-core/src/types.rs::tests::reexported_types_are_identical_to_contracts`,
+// 改用**编译期类型等价**证明(独立定义会直接编译失败),L0 的 dev 依赖随之清除。
+// 请勿在本文件恢复此用例。
 
 // ============================================================
 // 测试 7: 向后兼容验证 — 旧格式 JSON 反序列化不失败

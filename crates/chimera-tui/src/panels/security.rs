@@ -84,10 +84,10 @@ impl SecurityPanel {
                 Span::raw(format!(
                     // 标签与含义一致:该数值是检测率(detection_rate),不是风险率;
                     // 原 "risk=" 标签与红/黄着色语义(有检测=告警)自相矛盾(U-1)。
-                    " {} | {}={:.0}%",
+                    " {} | {}={}",
                     a.vulnerability_type,
                     crate::t!("panel.security.detection"),
-                    a.detection_rate * 100.0
+                    crate::render::percent_summary(a.detection_rate)
                 )),
             ]));
             current_idx += 1;
@@ -189,9 +189,9 @@ impl SecurityPanel {
                         a.total_probes
                     ),
                     format!(
-                        "{} {:.1}%",
+                        "{} {}",
                         crate::t!("panel.security.detail_detection_rate"),
-                        a.detection_rate * 100.0
+                        crate::render::percent_detail(a.detection_rate)
                     ),
                     format!(
                         "{} {}",
@@ -274,6 +274,41 @@ impl SecurityPanel {
         }
         Text::from(lines)
     }
+
+    /// 子代理失败态势行(PS-2 F-6)
+    ///
+    /// WHY 只展示"累计数 + 最近 3 条":右栏是 30% 窄栏,完整清单在 EventStream
+    /// 面板(事件流不截断、可检索);本区块解决的是"Critical 失败一闪而过、
+    /// 无持久指示"——即评估报告 F-6 的真实缺口(证据修正见 `AgentFailureSync` 文档)。
+    fn agent_failure_lines(state: &TuiState) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(vec![Span::styled(
+                crate::t!("panel.security.agent_failures"),
+                Style::default().add_modifier(Modifier::BOLD),
+            )]),
+            Line::from("─────────────"),
+        ];
+
+        if state.agent_failure_total == 0 {
+            lines.push(Line::from(crate::t!("common.none")));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{}: {}",
+                    crate::t!("panel.security.agent_failure_total"),
+                    state.agent_failure_total
+                ),
+                Style::default().fg(Color::Red),
+            )));
+            for f in state.agent_failures.iter().take(3) {
+                lines.push(Line::from(vec![
+                    Span::styled("• ", Style::default().fg(Color::Red)),
+                    Span::raw(format!("{} → {} | {}", f.from, f.to, f.task_id)),
+                ]));
+            }
+        }
+        lines
+    }
 }
 
 impl Panel for SecurityPanel {
@@ -335,8 +370,11 @@ impl Panel for SecurityPanel {
         let footer = Paragraph::new(Text::from(vec![Line::from(""), Line::from(FOOTER_TEXT)]));
         footer.render(left_chunks[2], buf);
 
-        // 右侧:冻结能力
-        let right = Paragraph::new(Self::frozen_text(state));
+        // 右侧:冻结能力 + 子代理失败态势(PS-2 F-6 追加区块)
+        let mut right_lines = Self::frozen_text(state).lines;
+        right_lines.push(Line::from(""));
+        right_lines.extend(Self::agent_failure_lines(state));
+        let right = Paragraph::new(Text::from(right_lines));
         right.render(chunks[1], buf);
     }
 
@@ -371,14 +409,8 @@ impl Panel for SecurityPanel {
                     None
                 }
             }
-            KeyCode::Char('g') => {
-                self.scroll_to_top(state);
-                None
-            }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom(state);
-                None
-            }
+            // WHY 无 g/G arm:InputRouter 全局截获(g→GPrefix、G→ScrollBottom),
+            // 滚动经 RouteTarget::ScrollTop/ScrollBottom 等价覆盖,面板 arm 为死键。
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
@@ -473,6 +505,9 @@ mod tests {
 
     #[test]
     fn test_security_panel_detail_popup() {
+        // 并行竞态防护:断言含中文标题"否决",锁 Zh 防其它并行测试切 locale
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut panel = SecurityPanel::new();
         let mut state = sample_state();
 
@@ -496,5 +531,62 @@ mod tests {
         let state = TuiState::new();
         panel.clamp_selected(&state);
         assert_eq!(panel.selected, 0);
+    }
+}
+
+// ============================================================
+// PS-2(F-6):子代理失败态势区块测试
+// ============================================================
+
+#[cfg(test)]
+mod ps2_agent_failure_tests {
+    use super::*;
+
+    fn render_panel(state: &TuiState) -> String {
+        // WHY 200 列:右栏仅占 30%,100 列画布下右栏约 30 列,长 id 会被截断
+        // (实测 "task-7" 被截为 "ta"),故用足够宽的画布让完整文本可见。
+        let area = Rect::new(0, 0, 200, 30);
+        let mut buf = Buffer::empty(area);
+        let mut panel = SecurityPanel::new();
+        panel.render(state, area, &mut buf);
+        buf.content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn agent_failure_block_shows_total_and_latest() {
+        let mut state = TuiState::new();
+        state.agent_failure_total = 3;
+        state.agent_failures = vec![crate::types::AgentFailureSummary {
+            from: "agent-a".into(),
+            to: "orchestrator".into(),
+            task_id: "task-7".into(),
+            error: "boom".into(),
+            retry_count: 2,
+        }];
+
+        let rendered = render_panel(&state);
+        // "3" 与 "task-7" 均为语言无关内容(计数与 id 原样渲染)
+        assert!(
+            rendered.contains('3'),
+            "should show total count, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("task-7"),
+            "should show latest failed task_id, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("agent-a"),
+            "should show failing agent, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn agent_failure_block_absent_when_no_failures() {
+        let state = TuiState::new();
+        let rendered = render_panel(&state);
+        assert!(
+            !rendered.contains("task-"),
+            "no failure rows expected when total is zero, got: {rendered}"
+        );
     }
 }

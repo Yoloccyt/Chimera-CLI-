@@ -161,11 +161,18 @@ impl PopupKind {
         action_lines: &[(String, String)],
     ) -> Self {
         let mut entries = vec![
-            ("q / Esc".into(), "退出应用".into()),
+            // WHY 不写"退出应用":Concord W4/W5 起 q/Esc 在 Chat 视图走失焦/回退链,
+            // 仅 Dashboard 视图退出(退出统一走 /exit)。
+            (
+                "q / Esc".into(),
+                "退出应用(Dashboard)/ 失焦回退(Chat)".into(),
+            ),
             ("Tab / Shift+Tab".into(), "切换下/上一个面板".into()),
             ("1-9".into(), "跳转到对应序号的面板".into()),
-            (":".into(), "打开命令面板".into()),
-            ("/".into(), "打开搜索过滤器".into()),
+            // WHY 二者同义:Concord W2 起 `:` 与 `/` 均进入斜杠命令模式,
+            // `:` 为废弃窗口期别名(一次性弃用提示)。
+            (":".into(), "进入斜杠命令模式(废弃别名,同 /)".into()),
+            ("/".into(), "进入斜杠命令模式(命令检索,Tab 补全)".into()),
             ("?".into(), "显示本帮助浮层".into()),
             ("j / k".into(), "向下/向上滚动列表或弹窗".into()),
             ("Enter".into(), "查看选中项详情或确认操作".into()),
@@ -396,6 +403,36 @@ fn value_to_lines(value: &serde_json::Value, indent: usize) -> Vec<Line<'static>
     }
 }
 
+/// 计算弹窗内容的最大可滚动偏移(PS-3 I-5)
+///
+/// WHY:滚动型弹窗的 `Paragraph` 启用 `Wrap`,旧实现的 `scroll` 状态无内容上限
+/// (`clamp(0, u16::MAX)`),连按 Down 越过内容末尾后**渲染出空白弹窗**(已实证:
+/// ratatui `render_text` 对 `y < scroll.y` 的行直接跳过,scroll 超过总行数时全空),
+/// 且需等量按 Up 才能回看。
+///
+/// # 钳制基准与已知权衡(诚实记录)
+/// 本函数以**逻辑行数**(`Text::height`,O(行数) 精确且零依赖)为基准:
+/// `max_scroll = 逻辑行数 − 可视内容行数`。
+/// - 保证:任何情况下都不会渲染空白(视觉行数 ≥ 逻辑行数,钳制值恒在内容内);
+/// - 权衡:wrap 使单行折行成多视觉行时,末尾多出的视觉行可能不可达
+///   (精确的 wrap 感知计数需 ratatui `Paragraph::line_count`,其被
+///   `rendered-line-info` **不稳定**特性门控,不应为此开启不稳定特性;
+///   待其稳定后可无缝替换本函数实现)。
+///   实际影响有限:详情类内容以格式化 JSON / 多行短行为主,少有整屏级的折行膨胀;
+///   即便触及,`End` 键仍可借渲染钳制直达实际末尾(见 `handle_popup_key`)。
+///
+/// # 参数
+/// - `content_lines`:内容的逻辑行数(`Text::height()`)
+/// - `popup_height`:弹出区总高(含上下边框 2)
+///
+/// # 返回值
+/// 允许的最大滚动行数(内容不足一屏时为 0)。
+fn max_scroll_offset(content_lines: usize, popup_height: u16) -> u16 {
+    // 可视内容行数 = 弹出区总高 − 上下边框 2
+    let visible = popup_height.saturating_sub(2) as usize;
+    u16::try_from(content_lines.saturating_sub(visible)).unwrap_or(u16::MAX)
+}
+
 /// 弹窗栈 — LIFO 管理当前显示的弹窗
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PopupStack {
@@ -451,6 +488,24 @@ impl PopupStack {
         if let Some(scroll) = scroll {
             let new = *scroll as i32 + delta as i32;
             *scroll = new.clamp(0, u16::MAX as i32) as u16;
+        }
+    }
+
+    /// 将当前弹窗的滚动偏移设为指定值(PS-3 I-5:Home/End 快速导航)
+    ///
+    /// WHY 不在本方法钳制内容上限:上限依赖弹窗实际高度(wrap 后视觉行数随之
+    /// 变化),渲染时由 `max_scroll_offset` 统一收敛并写回。`Home` 传 0 回到顶部;
+    /// `End` 传 `u16::MAX` 表示"直达末尾",渲染帧会把越界值收敛到实际上限。
+    /// 非滚动型弹窗(Confirm/ActionMenu/ConfigMenu 等)为无操作。
+    pub fn scroll_to(&mut self, value: u16) {
+        let scroll = match self.current_mut() {
+            Some(PopupKind::Detail { scroll, .. }) => Some(scroll),
+            Some(PopupKind::HelpOverlay { scroll, .. }) => Some(scroll),
+            Some(PopupKind::EventDetail { scroll, .. }) => Some(scroll),
+            _ => None,
+        };
+        if let Some(scroll) = scroll {
+            *scroll = value;
         }
     }
 
@@ -530,8 +585,13 @@ impl PopupStack {
     ///
     /// WHY 接收 `area`:调用者传入整个终端区域,弹窗自行居中计算。
     /// M3 实现通知、详情与确认弹窗渲染;详情弹窗支持滚动。
-    pub fn render(&self, area: Rect, buf: &mut Buffer) {
-        let Some(popup) = self.current() else {
+    /// 渲染当前弹窗(PS-3 I-5 起为 `&mut self`:渲染时钳制滚动状态并写回)
+    ///
+    /// WHY 需要 `&mut`:滚动上限依赖弹窗实际宽度(wrap 后视觉行数随之变化),
+    /// 只有渲染时才知道该宽度;在渲染点钳制并写回 `scroll` 状态,使状态随每帧
+    /// 收敛 —— 用户连按 Down 越过内容末尾后,单次 Up 即可回看,且不会渲染空白。
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        let Some(popup) = self.current_mut() else {
             return;
         };
 
@@ -569,7 +629,10 @@ impl PopupStack {
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .title(format!(" {title} "));
-                let paragraph = Paragraph::new(content.as_str())
+                let text = Text::from(content.as_str());
+                // PS-3(I-5):按逻辑行数钳制后再渲染,保证永不出现空白弹窗
+                *scroll = (*scroll).min(max_scroll_offset(text.height(), popup_area.height));
+                let paragraph = Paragraph::new(text)
                     .block(block)
                     .wrap(Wrap { trim: true })
                     .scroll((*scroll, 0));
@@ -631,7 +694,10 @@ impl PopupStack {
                         ])
                     })
                     .collect();
-                let paragraph = Paragraph::new(Text::from(lines))
+                let text = Text::from(lines);
+                // PS-3(I-5):按逻辑行数钳制后再渲染,保证永不出现空白弹窗
+                *scroll = (*scroll).min(max_scroll_offset(text.height(), popup_area.height));
+                let paragraph = Paragraph::new(text)
                     .block(block)
                     .wrap(Wrap { trim: true })
                     .scroll((*scroll, 0));
@@ -670,7 +736,10 @@ impl PopupStack {
                     }
                 }
 
-                let paragraph = Paragraph::new(Text::from(lines))
+                let text = Text::from(lines);
+                // PS-3(I-5):按逻辑行数钳制后再渲染,保证永不出现空白弹窗
+                *scroll = (*scroll).min(max_scroll_offset(text.height(), popup_area.height));
+                let paragraph = Paragraph::new(text)
                     .block(block)
                     .wrap(Wrap { trim: true })
                     .scroll((*scroll, 0));
@@ -962,5 +1031,57 @@ mod tests {
         // 菜单导航方法对非菜单弹窗无副作用(不 panic)
         stack.move_action_menu_selection(true);
         assert!(stack.action_menu_selected_id().is_none());
+    }
+
+    // ========================================================
+    // PS-3(I-5):滚动钳制 —— 越界滚动不得渲染空白,单次 Up 即回看
+    // ========================================================
+
+    #[test]
+    fn detail_scroll_clamped_to_content_on_render() {
+        let mut stack = PopupStack::new();
+        // 50 行短行内容(不触发 wrap),远超弹窗可视高度
+        let content = (0..50)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        stack.push(PopupKind::Detail {
+            title: "t".into(),
+            content,
+            scroll: 0,
+        });
+
+        // 80x24 终端 → 弹窗高 = max(0.8*24, 5) = 19,可视内容 17 行
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+
+        // 越界滚动 500 次(旧实现 scroll 可达 500,越过末尾后渲染空白)
+        for _ in 0..500 {
+            stack.scroll_current(1);
+        }
+        stack.render(area, &mut buf);
+        let rendered: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            rendered.contains("line-49"),
+            "越界滚动经钳制后,内容末行应仍可见,而非空白"
+        );
+
+        // 状态随渲染收敛:单次 Up 应立即回看(旧实现需 500 次反向)
+        stack.scroll_current(-1);
+        let mut buf2 = Buffer::empty(area);
+        stack.render(area, &mut buf2);
+        let rendered2: String = buf2.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            rendered2.contains("line-49") || rendered2.contains("line-48"),
+            "单次 Up 后应仍处于内容末尾附近"
+        );
+        assert!(
+            stack
+                .current()
+                .and_then(PopupKind::detail_scroll)
+                .unwrap_or(0)
+                < 100,
+            "渲染应把越界 scroll 收敛到内容上限附近,而非保留 500"
+        );
     }
 }

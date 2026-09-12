@@ -5,3 +5,5 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 07fcadaa4962bec7bbff643ccb2ca6ff1ac8f02d3165ba9ba84f2e454ae71b03 # shrinks to q = "v  "
+cc cd080c5a4ebb22fded492a6bcbcaf5f5334dcfcef449535bf45d2889226a4670 # shrinks to q = "    g  "
+cc e65616d1fe869f603139c0a04e933f55d0e564adf72a40df60862bad73946759 # shrinks to q = "n "

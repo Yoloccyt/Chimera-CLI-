@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
-use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks, OrchestratorConfig};
+use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
 use crate::output;
 use crate::permission::PermissionCtx;
 
@@ -111,25 +111,21 @@ async fn stream_to_stdout(reply: &str) {
     // 复用 orchestrator::plan_chunks 保证 CLI 与 TUI 切分逻辑一致
     use std::io::Write;
     let stdout = std::io::stdout();
-    let mut lock = stdout.lock();
     for delta in plan_chunks(reply) {
-        // WHY write! 而非 print!:逐字符 flush,保证管道实时可见
-        let _ = write!(lock, "{delta}");
-        let _ = lock.flush();
+        // WHY 锁作用域只包住单次写入:`StdoutLock` 是**进程级全局锁**，持它跨
+        // `sleep().await` 会让其他任务（tracing 输出、进度提示）在整段流式
+        // 节奏期间全部排队。写完即放，把 await 留在锁外。
+        {
+            let mut lock = stdout.lock();
+            // WHY write! 而非 print!:逐字符 flush,保证管道实时可见
+            let _ = write!(lock, "{delta}");
+            let _ = lock.flush();
+        }
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
     }
     // 末尾换行(与 [done] 标记分行)
+    let mut lock = stdout.lock();
     let _ = writeln!(lock);
-}
-
-/// 暴露 OrchestratorConfig 供测试配置 chunk_delay
-///
-/// WHY pub(crate):仅 chimera-cli 内部测试需要零延迟配置,不暴露到公开 API。
-#[allow(dead_code)]
-pub(crate) fn test_config() -> OrchestratorConfig {
-    OrchestratorConfig {
-        chunk_delay: Duration::ZERO,
-    }
 }

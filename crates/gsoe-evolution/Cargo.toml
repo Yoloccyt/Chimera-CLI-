@@ -23,6 +23,8 @@ event-bus = { workspace = true }
 # toml:TOML 反序列化(spec 加载器解析 HarnessSpec DSL,设计文档 §7.2)
 # WHY 两者新增:gsoe-evolution 需读取并校验 HarnessSpec TOML 文件
 nexus-contracts = { workspace = true }
+# P2-T13: 变体适应度批量评估并行化（ComputeBridge rayon，L5 → L1 向下允许）
+nexus-core = { workspace = true }
 toml = { workspace = true }
 # Phase 5 §10.1: 四套原子算子异步执行（AtomicOperatorTrait async_trait）
 async-trait = { workspace = true }
@@ -55,4 +57,9 @@ harness = false
 # - spec_registry_register: SpecRegistry::register_with_source 性能(含事件发布)
 [[bench]]
 name = "channel_b_benchmark"
+harness = false
+
+# v3.4.0 §10.2: 三因子父本选择器基准(OpenMLE UCB+Softmax+冷却,2 项候选池)
+[[bench]]
+name = "three_factor_selector_bench"
 harness = false

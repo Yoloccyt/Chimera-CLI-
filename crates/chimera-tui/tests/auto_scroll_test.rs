@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 /// 构造带预设事件的 TuiState
 fn make_state(events: Vec<NexusEvent>) -> TuiState {
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from(events);
+    state.latest_events = std::sync::Arc::new(VecDeque::from(events));
     state
 }
 
@@ -109,30 +109,30 @@ fn paused_auto_scroll_shows_new_events_banner() {
 }
 
 // ============================================================
-// 测试 4:按 G 后恢复 auto_scroll=true 且 selected 指向末尾
+// 测试 4:滚到底部后恢复 auto_scroll=true 且 selected 指向末尾
 // ============================================================
 
 #[test]
-fn pressing_g_restores_auto_scroll_to_bottom() {
+fn scroll_to_bottom_restores_auto_scroll() {
+    // WHY 直调 scroll_to_bottom 而非 handle_key('G'):键位治理后面板 g/G arm
+    // 已移除(生产路径经 InputRouter → RouteTarget::ScrollBottom 调用同一方法),
+    // 本测试直接锚定该方法语义,与真实路由等价。
     let mut state = make_state(vec![cache_hit(0), cache_hit(1), cache_hit(2)]);
     state.auto_scroll = false;
 
     let mut panel = EventStreamPanel::new();
-    panel.handle_key(
-        KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
-        &mut state,
-    );
+    panel.scroll_to_bottom(&mut state);
 
-    assert!(state.auto_scroll, "按 G 后应恢复 auto_scroll=true");
-    assert_eq!(panel.selected(), 2, "按 G 后 selected 应指向过滤列表末尾");
+    assert!(state.auto_scroll, "滚到底后应恢复 auto_scroll=true");
+    assert_eq!(panel.selected(), 2, "滚到底后 selected 应指向过滤列表末尾");
 }
 
 // ============================================================
-// 测试 5:按 g 跳到顶部但不改变 auto_scroll 状态
+// 测试 5:滚到顶部但不改变 auto_scroll 状态
 // ============================================================
 
 #[test]
-fn pressing_small_g_scrolls_to_top_without_changing_auto_scroll() {
+fn scroll_to_top_keeps_auto_scroll() {
     let mut state = make_state(vec![cache_hit(0), cache_hit(1), cache_hit(2)]);
     state.auto_scroll = true;
 
@@ -142,13 +142,10 @@ fn pressing_small_g_scrolls_to_top_without_changing_auto_scroll() {
     panel.render(&state, area, &mut buf);
     assert_eq!(panel.selected(), 2);
 
-    panel.handle_key(
-        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
-        &mut state,
-    );
+    panel.scroll_to_top(&mut state);
 
-    assert_eq!(panel.selected(), 0, "按 g 后应跳到顶部");
-    assert!(state.auto_scroll, "按 g 不应改变 auto_scroll 状态");
+    assert_eq!(panel.selected(), 0, "滚顶后 selected 应归零");
+    assert!(state.auto_scroll, "滚顶不应改变 auto_scroll 状态");
 }
 
 // ============================================================
@@ -171,12 +168,9 @@ fn pressing_down_at_bottom_keeps_auto_scroll() {
     assert_eq!(panel.selected(), 1);
 
     // 不在底部按 Down:暂停 auto_scroll
-    // WHY 使用 'g' 键跳回顶部:selected 字段为私有,无法直接赋值,
-    // 'g' 是 EventStreamPanel 公开的跳顶快捷键,可达到同样效果。
-    panel.handle_key(
-        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
-        &mut state,
-    );
+    // WHY 直调 scroll_to_top:selected 字段为私有,无法直接赋值;面板 g/G 键
+    // arm 已随键位治理移除(生产路径经 RouteTarget::ScrollTop 走同一方法)。
+    panel.scroll_to_top(&mut state);
     panel.handle_key(
         KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
         &mut state,
@@ -239,8 +233,8 @@ fn popup_freezes_auto_scroll() {
         severity: chimera_tui::Severity::Info,
     });
 
-    // 新事件到达
-    state.latest_events.push_back(cache_hit(2));
+    // 新事件到达(Arc 化后经 make_mut COW 注入)
+    std::sync::Arc::make_mut(&mut state.latest_events).push_back(cache_hit(2));
 
     // 弹窗打开期间渲染:selected 不应自动跟随
     let mut buf2 = Buffer::empty(area);

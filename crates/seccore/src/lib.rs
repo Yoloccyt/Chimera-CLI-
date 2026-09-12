@@ -62,6 +62,8 @@ pub mod error;
 /// Phase 4 §9.3:错误签名收集器(OpenMLE 结构化收集 + SHA-256 哈希去重聚类,铁律7)
 pub mod error_signature_collector;
 pub mod escalation;
+/// P3-T4: execpolicy 命令分类规则引擎 + 六模式映射 + 单次提权（v4.0 WI-23,ADR-147）
+pub mod execpolicy;
 /// Phase 4 §9.3:六类状态反馈集成器(ExecutionFeedbackIntegrator 纯函数,铁律8)
 pub mod execution_feedback;
 /// gVisor runsc 运行时检测与子进程启动(ADR-001)
@@ -70,6 +72,11 @@ pub mod gvisor;
 pub mod interception_stats;
 /// P4-W15.1.3: Spec Merkle 完整性校验(复用 audit.rs SHA-256 实现)
 pub mod merkle;
+/// P2-T7: OS 级沙箱后端（v4.0 WI-14,四后端三档 + snapshot/fork/restore）
+///
+/// 后端降级链 Seatbelt→Landlock→Bwrap→ProcessFence;Windows 实现 ProcessFence
+/// （命令校验 + 逃逸静态拒绝,决策级快照）;进程级快照由 Linux/macOS CI 承接。
+pub mod os_backend;
 /// Phase 4 §9.1:Paddock-Sandbox 解耦(Dressage what-to-do/where-it-runs,铁律10)
 pub mod paddock_sandbox;
 pub mod policy;
@@ -92,7 +99,12 @@ pub use audit::{
 // ADR-054 决策 3(P9-T4):L0 CommandValidator trait 实现(供 L8 parliament 注入)
 pub use command_validator::SecCoreCommandValidator;
 pub use error::SecCoreError;
+// P3-T4: execpolicy 公开 API（WI-23）
 pub use escalation::{DefaultEscalationHandler, EscalationHandler};
+pub use execpolicy::{
+    DecisionStats, ExecPolicy, ExecPolicyRule, ModePolicy, PolicyAction, RulePattern, ScopeSpec,
+    SingleUseToken,
+};
 pub use gvisor::GvisorRuntime;
 // P4-W15.1.3: Merkle 完整性校验公共 API
 pub use merkle::{

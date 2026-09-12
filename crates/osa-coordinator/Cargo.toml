@@ -57,3 +57,10 @@ harness = false
 [[bench]]
 name = "parallel_vs_sequential"
 harness = false
+
+# P1-T14: 批量五维掩码 ComputeBridge 并行注入 — 串行 vs 并行吞吐对照（门禁 1.5×）
+# WHY 独立 bench 文件: 与 compute_masks/parallel_vs_sequential（单 profile 五维度）解耦,
+# 专注测量批量 N profiles 场景的 ComputeBridge Rayon 并行收益
+[[bench]]
+name = "osa_parallel_bench"
+harness = false

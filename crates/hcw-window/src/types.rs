@@ -1,4 +1,4 @@
-//! HCW 核心领域类型 — 分层上下文窗口的统一数据模型
+﻿//! HCW 核心领域类型 — 分层上下文窗口的统一数据模型
 //!
 //! 对应架构层:L2 Memory
 //! 对应创新点:HCW(Hierarchical Context Window,分层上下文窗口)
@@ -603,6 +603,7 @@ pub struct CompressionReport {
 /// - `l3_capacity`:1048576(1M Token 等效,128K 实际加载 + 8× 稀疏化)
 /// - `compression_threshold`:0.9(容量利用率达 90% 触发压缩,留 10% 余量)
 /// - `selector_policy`:`Static(0.4, 0.3, 0.3)`(P3-W10.3 D1 修复,默认 fallback 编译进二进制)
+/// - `parallel_compress`:true(P1-T14 压缩评分段间并行,默认开启)
 ///
 /// # D1 修复(P3-W10.3)
 /// `selector_policy` 字段取代原 `compressor_weights: (f32, f32, f32)` 常量,
@@ -637,6 +638,26 @@ pub struct HcwConfig {
     /// 反序列化时自动用 `SelectorPolicy::default()`,向后兼容。
     #[serde(default)]
     pub selector_policy: SelectorPolicy,
+    /// P1-T14: 压缩并行开关(默认 true)
+    ///
+    /// 经 `nexus_core::compute::ComputeBridge`(L-a 全局 rayon 池)在压缩评分阶段
+    /// **段间并行**(段内保序,段间按序拼接,结果与串行逐元素一致)
+    /// (v4.0 §7.5.1 L-a: 四层级窗口选择 / 压缩段间 2-3×【待验证】)。
+    /// 关闭方式(强制串行回退):配置 false 或环境变量 `CHIMERA_NO_PARALLEL_HCW`
+    /// 设置为 "1"/"true"/"on"(启动期 OnceLock 一次读取,不在热路径)。
+    ///
+    /// WHY 默认 true:并行收益为正的批量场景(> CscCollapseScore 阈值 200)才触发
+    /// rayon,小批量走 `DispatchPlan::Inline` 串行,零开销开关默认开启安全。
+    ///
+    /// WHY(serde default):与 `selector_policy` 同策略——旧配置文件(无此字段)
+    /// 反序列化时自动用默认值 true,向后兼容。
+    #[serde(default = "default_true")]
+    pub parallel_compress: bool,
+}
+
+/// serde 默认值 — P1-T14 并行开关默认开启(与 faae/nmc 注入模式一致)
+pub(crate) fn default_true() -> bool {
+    true
 }
 
 #[cfg(test)]

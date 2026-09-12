@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::{BudgetMetricsPayload, EventBus, EventMetadata, NexusEvent};
 use tracing::{error, info, warn};
 
 use crate::config::DecbConfig;
@@ -412,6 +412,31 @@ impl DecbGovernor {
             };
             if let Err(e) = self.event_bus.publish_blocking(event) {
                 warn!(error = %e, "发布 BudgetStatsReported 事件失败");
+            }
+
+            // WS-4A: 预算统计上报点 — 同周期发布 BudgetMetricsUpdated(结构化预算指标)
+            // WHY:BudgetMetricsUpdated 供 TUI Budget 面板/P1.2 实时数据面板消费;
+            // 与 BudgetStatsReported(简单统计)并存,携带当前档位/系数/超限状态等结构化字段。
+            // publish_blocking 为同步方法,与 BudgetStatsReported 同 pattern,发布失败仅告警。
+            let is_exceeded = stats.total_consumption >= self.config.total_budget_limit;
+            let metrics_event = NexusEvent::BudgetMetricsUpdated {
+                metadata: EventMetadata::new("decb-governor"),
+                metrics: BudgetMetricsPayload {
+                    total_consumption: stats.total_consumption,
+                    remaining_budget: stats.remaining_budget,
+                    utilization_rate: stats.utilization_rate,
+                    current_tier: stats.current_tier.to_string(),
+                    coefficient: stats.current_coefficient,
+                    is_exceeded,
+                    alert: if is_exceeded {
+                        Some("budget consumed to limit".to_string())
+                    } else {
+                        None
+                    },
+                },
+            };
+            if let Err(e) = self.event_bus.publish_blocking(metrics_event) {
+                warn!(error = %e, "发布 BudgetMetricsUpdated 事件失败");
             }
         }
 
@@ -1133,5 +1158,45 @@ mod tests {
     fn test_config_accessor() {
         let governor = make_governor();
         assert!((governor.config().base_budget - 0.8).abs() < 1e-6);
+    }
+
+    // ============================================================
+    // WS-4A: BudgetMetricsUpdated 幽灵事件生产者(预算统计上报点)
+    // ============================================================
+
+    #[test]
+    fn test_budget_metrics_updated_published_on_stats_report() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let governor = DecbGovernor::with_event_bus(DecbConfig::default(), bus).unwrap();
+
+        // 每 100 次消耗触发统计上报(含 BudgetStatsReported + BudgetMetricsUpdated)
+        for _ in 0..100 {
+            governor
+                .record_consumption(&BudgetConsumption::new(1, 0, 0))
+                .unwrap();
+        }
+
+        // 循环消费 broadcast 缓冲,断言收到 BudgetMetricsUpdated 且 payload 字段正确
+        let mut found = false;
+        for _ in 0..8 {
+            match rx.try_recv() {
+                Ok(Some(NexusEvent::BudgetMetricsUpdated { metadata, metrics })) => {
+                    assert_eq!(metadata.source, "decb-governor");
+                    assert!(metrics.total_consumption > 0.0);
+                    assert!(metrics.remaining_budget > 0.0);
+                    assert!(metrics.utilization_rate > 0.0);
+                    assert_eq!(metrics.current_tier, "high_tier");
+                    assert!((metrics.coefficient - 1.0).abs() < 1e-6);
+                    assert!(!metrics.is_exceeded);
+                    assert!(metrics.alert.is_none());
+                    found = true;
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                _ => break,
+            }
+        }
+        assert!(found, "应收到 BudgetMetricsUpdated 事件");
     }
 }

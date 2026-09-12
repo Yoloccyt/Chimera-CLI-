@@ -27,6 +27,7 @@ pub use theme::{ColorKind, ColorScheme, Theme, ThemeColors};
 
 use serde::{Deserialize, Serialize};
 
+use crate::data::curator::CurationConfig;
 use crate::error::TuiError;
 use crate::types::SortMode;
 
@@ -137,6 +138,13 @@ pub struct TuiConfig {
     /// WHY 默认 false:保持既有 `q`/Esc 立即退出行为零回归(含 m3a 契约),
     /// 需要误触保护的用户在配置文件中显式开启。
     pub quit_requires_confirm: bool,
+    /// `/compact` 上下文策展配置(B2,2026-09-06 复评;ADR-081):
+    /// 权重(α/β/γ/δ)/token 预算/Recent 保护窗口/摘要参数。
+    ///
+    /// WHY 结构体字段而非散开标量:CurationConfig 已是 serde 完备的语义
+    /// 单元(策展器的 CompactRequest 直接消费),随 TuiConfig 四源合并
+    /// (默认→配置文件→环境变量→CLI)透传给编排器。
+    pub curation: CurationConfig,
 }
 
 impl Default for TuiConfig {
@@ -172,6 +180,8 @@ impl Default for TuiConfig {
             // v2.9.0-omega Task 2.6:响应式折叠阈值默认 100 列
             responsive_collapse_threshold: 100,
             quit_requires_confirm: false,
+            // B2:CurationConfig::default(预算 4096/Recent 4 轮,策展器语义)
+            curation: CurationConfig::default(),
         }
     }
 }

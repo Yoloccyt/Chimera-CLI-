@@ -15,7 +15,8 @@ use ratatui::style::Color;
 use ratatui::Terminal;
 use std::collections::VecDeque;
 
-fn render_popup(stack: &PopupStack, width: u16, height: u16) -> String {
+// PS-3(I-5):render 需要 &mut(渲染时钳制并写回滚动状态)
+fn render_popup(stack: &mut PopupStack, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -31,7 +32,7 @@ fn render_popup(stack: &PopupStack, width: u16, height: u16) -> String {
 }
 
 /// 返回渲染缓冲区中所有非默认前景色单元格的坐标与颜色
-fn colored_cells(stack: &PopupStack, width: u16, height: u16) -> Vec<(u16, u16, Color)> {
+fn colored_cells(stack: &mut PopupStack, width: u16, height: u16) -> Vec<(u16, u16, Color)> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -57,10 +58,10 @@ fn colored_cells(stack: &PopupStack, width: u16, height: u16) -> Vec<(u16, u16, 
 fn event_stream_enter_opens_event_detail_popup() {
     let mut panel = EventStreamPanel::new();
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from([NexusEvent::CacheHit {
+    state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
         metadata: EventMetadata::new("scc-cache"),
         cache_key: "k1".into(),
-    }]);
+    }]));
 
     let cmd = panel.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -101,12 +102,12 @@ fn event_stream_enter_opens_event_detail_popup() {
 fn parliament_enter_opens_event_detail_popup() {
     let mut panel = ParliamentPanel::new();
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from([NexusEvent::VoteCast {
+    state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::VoteCast {
         metadata: EventMetadata::new("parliament"),
         proposal_id: "p1".into(),
         voter: "alice".into(),
         vote: true,
-    }]);
+    }]));
 
     let cmd = panel.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -135,12 +136,12 @@ fn parliament_enter_opens_event_detail_popup() {
 fn log_enter_opens_event_detail_popup() {
     let mut panel = LogPanel::new();
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from([NexusEvent::BudgetExceeded {
+    state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::BudgetExceeded {
         metadata: EventMetadata::new("decb-governor"),
         budget_type: "token".into(),
         current: 9500,
         limit: 10000,
-    }]);
+    }]));
 
     let cmd = panel.handle_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -174,7 +175,7 @@ fn event_detail_popup_renders_json_highlight_colors() {
     let mut stack = PopupStack::new();
     stack.push(PopupKind::event_detail(&event));
 
-    let content = render_popup(&stack, 60, 40);
+    let content = render_popup(&mut stack, 60, 40);
     assert!(content.contains("CacheHit"), "popup should render title");
     assert!(content.contains("Type:"), "popup should render type label");
     assert!(
@@ -183,7 +184,10 @@ fn event_detail_popup_renders_json_highlight_colors() {
     );
 
     // 验证 JSON 高亮颜色可见(至少存在绿色/青色/黄色/灰色中的一种)
-    let colors: Vec<_> = colored_cells(&stack, 60, 40).iter().map(|c| c.2).collect();
+    let colors: Vec<_> = colored_cells(&mut stack, 60, 40)
+        .iter()
+        .map(|c| c.2)
+        .collect();
     assert!(
         colors.contains(&Color::Green),
         "string values should be highlighted green"
@@ -205,7 +209,7 @@ fn event_detail_popup_shows_related_event_ids() {
     // 较长字段,在较窄或较矮的弹窗中 Related IDs 区域会被推到可视区外,
     // 导致渲染字符串中无法命中 quest_id/checkpoint_id。增大尺寸确保底部
     // 相关 ID 列表可见,同时仍验证正常弹窗渲染不 panic。
-    let content = render_popup(&stack, 80, 40);
+    let content = render_popup(&mut stack, 80, 40);
     assert!(
         content.contains("q1"),
         "related IDs should include quest_id"
@@ -245,7 +249,7 @@ fn event_detail_popup_falls_back_to_hex_on_decode_failure() {
         scroll: 0,
     });
 
-    let content = render_popup(&stack, 60, 10);
+    let content = render_popup(&mut stack, 60, 10);
     assert!(
         content.contains("(raw hex)"),
         "title should indicate raw hex fallback"

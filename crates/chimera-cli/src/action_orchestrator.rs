@@ -22,7 +22,12 @@
 use std::sync::Arc;
 
 use crate::overwindow_bridge::OverWindowBridge;
-use event_bus::{EventBus, EventBusError, EventMetadata, NexusEvent};
+use chimera_tui::actions::action_ids;
+use chimera_tui::data::curator::{
+    parse_compact_args, CurationConfig, CurationPolicy, RuleCurationPolicy,
+};
+use chimera_tui::types::{ChatMessage, ChatRole};
+use event_bus::{EventBus, EventBusError, EventMetadata, NexusEvent, TuiChatMessagePayload};
 use nexus_core::{MultimodalInput, UserIntent};
 use quest_engine::QuestEngine;
 use serde_json::Value;
@@ -61,28 +66,44 @@ impl OverWindowHandle {
     }
 }
 
+/// 会话消息提供者 — `/compact` 策展的结构化语料来源(FC-2,ADR-081)
+///
+/// WHY 独立类型而非复用 `OverWindowHandle::corpus_provider`:超窗检索消费
+/// "扁平文本"(拼串后分块检索,无角色概念),策展需要结构化消息与角色
+/// (Pinned 保护段判定依赖 `ChatRole::User`);两者同源于 DataPipeline 快照
+/// 但形状不同,分开注入避免相互绑架签名。
+pub type ChatMessagesProvider = Arc<dyn Fn() -> Vec<ChatMessage> + Send + Sync>;
+
 /// 处理单个事件:仅 `TuiActionRequested` 触发域路由,其余忽略。
 ///
 /// WHY 纯 async(不 spawn):测试可直接 `await` 并断言发布的 Completed/Failed。
 /// 路由结果 `Ok(摘要)` → `TuiActionCompleted`;`Err(描述)` → `TuiActionFailed`。
+/// 两类回执均原样回传 `request_id`:同一 `action_id` 可并发/连续发起多次,
+/// TUI 侧靠该标识把回执归属到具体那一次请求(否则超时计时会被错误清除)。
 pub async fn handle_action_event(
     bus: &EventBus,
     engine: &QuestEngine,
     overwindow: Option<&OverWindowHandle>,
+    chat: Option<&ChatMessagesProvider>,
+    curation: &CurationConfig,
     event: &NexusEvent,
 ) {
     let NexusEvent::TuiActionRequested {
-        action_id, payload, ..
+        request_id,
+        action_id,
+        payload,
+        ..
     } = event
     else {
         return;
     };
 
-    match route_action(engine, overwindow, action_id, payload).await {
+    match route_action(bus, engine, overwindow, chat, curation, action_id, payload).await {
         Ok(result) => {
             let _ = bus
                 .publish(NexusEvent::TuiActionCompleted {
                     metadata: EventMetadata::new(SOURCE),
+                    request_id: request_id.clone(),
                     action_id: action_id.clone(),
                     result,
                 })
@@ -92,6 +113,7 @@ pub async fn handle_action_event(
             let _ = bus
                 .publish(NexusEvent::TuiActionFailed {
                     metadata: EventMetadata::new(SOURCE),
+                    request_id: request_id.clone(),
                     action_id: action_id.clone(),
                     error,
                 })
@@ -105,9 +127,14 @@ pub async fn handle_action_event(
 /// WHY 返回 `Result<String, String>`:处理逻辑与事件发布解耦,`handle_action_event`
 /// 统一映射为 Completed/Failed;`String` 错误为面向用户的可读描述(非 thiserror——
 /// 编排层聚合 payload 解析 / 引擎错误 / 未实现三类失败源)。
+/// WHY 持有 `bus`:`compact` 分支需在返回摘要**之前**发布历史回写事件
+/// (顺序语义:先替换历史、后报告结果,保证 TUI 消费 Completed 时历史已就绪)。
 async fn route_action(
+    bus: &EventBus,
     engine: &QuestEngine,
     overwindow: Option<&OverWindowHandle>,
+    chat: Option<&ChatMessagesProvider>,
+    curation: &CurationConfig,
     action_id: &str,
     payload: &str,
 ) -> Result<String, String> {
@@ -194,12 +221,81 @@ async fn route_action(
                 ))
             }
         }
+        // B1(2026-09-06 复评):/quest checkpoint —— 保存检查点(engine 真实
+        // 能力;组合根 with_checkpoints 注入管理器,未注入时 engine 诚实报错)。
+        // quest_id 由 resolve_quest_id 解析(payload 显式指定优先,缺省回退
+        // 唯一活跃 Quest)。
+        action_ids::QUEST_CHECKPOINT => {
+            let qid = resolve_quest_id(engine, payload)?;
+            let checkpoint = engine
+                .save_checkpoint(&qid)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "已保存 Quest {qid} 检查点: {}",
+                checkpoint.checkpoint_id
+            ))
+        }
         // task.*:引擎无 per-task 执行模型(无"正在执行的 task"可暂停/取消/调优先级),
         // 真实化需 per-task 调度子系统(见 Phase 3 ADR),当前诚实未实现(不静默、不伪造)。
         // quest.jump 已改由 TUI 本地处理(切事件流),不再经 cli。
         "task.create" | "task.pause" | "task.resume" | "task.cancel" | "task.set_priority" => Err(
             format!("{action_id} 尚未实现:需 per-task 调度子系统(见 Phase 3 ADR)"),
         ),
+        // task.*:引擎无 per-task 执行模型(无"正在执行的 task"可暂停/取消/调优先级),
+        // /compact 上下文策展(FC-2,ADR-081):五段分类 + 0-1 背包 + 抽取式摘要,
+        // 压缩结果经 TuiChatHistoryReplaced 回写 ChatSync(唯一所有权事件信道)。
+        // I-F:action_id 用 chimera-tui 共享常量(与斜杠计划层同源,防重命名断链)。
+        action_ids::COMPACT => {
+            let provider = chat.ok_or_else(|| {
+                "compact 需要会话消息提供者(组合根未注入,见 commands/tui.rs)".to_string()
+            })?;
+            // 参数合法性由 parse_compact_args 权威校验(计划层只透传原始参数)
+            let args = payload_str(payload, "args").unwrap_or_default();
+            let policy = parse_compact_args(&args).ok_or_else(|| {
+                format!("无法识别的策略档 '{args}',用法: /compact [--policy aggressive|balanced|conservative]")
+            })?;
+            let messages = provider();
+            if messages.is_empty() {
+                // 诚实 no-op:空会话压缩无意义,不伪造"已完成压缩"反馈
+                return Ok("会话历史为空,无需压缩".to_string());
+            }
+            let plan = RuleCurationPolicy.curate(&messages, curation, policy);
+            // 先回写历史、后返回摘要(顺序见函数 doc):TUI 消费 Completed
+            // 时,快照中已是压缩后历史
+            bus.publish(NexusEvent::TuiChatHistoryReplaced {
+                metadata: EventMetadata::new(SOURCE),
+                // 当前直联管道为单会话(ChatSync 不区分 session_id),
+                // 字段保留为多会话预留(与 TuiChatSubmitted 同域)
+                session_id: "default".to_string(),
+                messages: plan
+                    .new_messages
+                    .iter()
+                    .map(|m| TuiChatMessagePayload {
+                        role: match m.role {
+                            ChatRole::Assistant => "assistant",
+                            ChatRole::User => "user",
+                        }
+                        .to_string(),
+                        content: m.content.clone(),
+                    })
+                    .collect(),
+            })
+            .await
+            .map_err(|e| format!("发布历史回写事件失败: {e}"))?;
+            let r = plan.report;
+            Ok(format!(
+                "compact[{}] 完成: {}→{} 条消息, {}→{} tokens, 保留价值 {:.0}%, 驱逐 {} 条, 摘要 {} 条",
+                policy.as_str(),
+                r.before_messages,
+                r.after_messages,
+                r.before_tokens,
+                r.after_tokens,
+                r.retained_value_ratio * 100.0,
+                r.evicted_count,
+                r.summarized_count,
+            ))
+        }
         // UI 本地态动作若误达 cli(正常应由 TUI 本地 dispatch_action 处理)
         _ => Err(format!("{action_id} 应由 TUI 本地处理,不应派发至编排层")),
     }
@@ -244,6 +340,8 @@ pub fn spawn_action_orchestrator(
     bus: EventBus,
     engine: Arc<QuestEngine>,
     overwindow: Option<OverWindowHandle>,
+    chat: Option<ChatMessagesProvider>,
+    curation: CurationConfig,
 ) -> JoinHandle<()> {
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
@@ -255,8 +353,18 @@ pub fn spawn_action_orchestrator(
                         let bus = bus.clone();
                         let engine = Arc::clone(&engine);
                         let overwindow = overwindow.clone();
+                        let chat = chat.clone();
+                        let curation = curation.clone();
                         tokio::spawn(async move {
-                            handle_action_event(&bus, &engine, overwindow.as_ref(), &event).await;
+                            handle_action_event(
+                                &bus,
+                                &engine,
+                                overwindow.as_ref(),
+                                chat.as_ref(),
+                                &curation,
+                                &event,
+                            )
+                            .await;
                         });
                     }
                 }
@@ -275,12 +383,22 @@ pub fn spawn_action_orchestrator(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 共享策展配置(测试默认;LazyLock 规避非 const default)
+    static CURATION: std::sync::LazyLock<chimera_tui::data::curator::CurationConfig> =
+        std::sync::LazyLock::new(chimera_tui::data::curator::CurationConfig::default);
     use event_bus::ActionSource;
 
-    /// 构造 TuiActionRequested 事件(来源 Palette)
+    /// 构造 TuiActionRequested 事件(来源 Palette,固定 `request_id`)
     fn action(action_id: &str, payload: &str) -> NexusEvent {
+        action_with_request_id("tui-1", action_id, payload)
+    }
+
+    /// 构造指定 `request_id` 的 TuiActionRequested 事件(回执归属断言用)
+    fn action_with_request_id(request_id: &str, action_id: &str, payload: &str) -> NexusEvent {
         NexusEvent::TuiActionRequested {
             metadata: EventMetadata::new("chimera-tui"),
+            request_id: request_id.into(),
             action_id: action_id.into(),
             payload: payload.into(),
             source: ActionSource::Palette,
@@ -322,7 +440,15 @@ mod tests {
         let (engine, qid) = engine_with_one_quest(&bus).await;
         let mut rx = bus.subscribe();
         // 单一 Quest → 无需 payload.quest_id,回退解析命中
-        handle_action_event(&bus, &engine, None, &action("quest.pause", "{}")).await;
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            None,
+            &CURATION,
+            &action("quest.pause", "{}"),
+        )
+        .await;
         assert!(
             engine.is_paused(&qid),
             "quest.pause 应驱动 QuestEngine::pause_quest"
@@ -341,7 +467,15 @@ mod tests {
         let bus = EventBus::new();
         let engine = QuestEngine::new(bus.clone());
         let mut rx = bus.subscribe();
-        handle_action_event(&bus, &engine, None, &action("task.pause", "{}")).await;
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            None,
+            &CURATION,
+            &action("task.pause", "{}"),
+        )
+        .await;
         assert!(
             drain_find(&mut rx, |ev| matches!(
                 ev,
@@ -351,12 +485,99 @@ mod tests {
         );
     }
 
+    // ============================================================
+    // request_id 回执归属不变量(P1 精准回执匹配)
+    // ============================================================
+
+    /// 成功路径:回执必须可归属到原请求 —— `TuiActionCompleted` 原样回传 `request_id`。
+    ///
+    /// WHY 守护此不变量:同一 `action_id` 可并发/连续发起多次(如连点两次
+    /// `quest.cancel`),仅凭 `action_id` 无法把回执配对到具体那一次请求,
+    /// TUI 的超时计时会被错误清除(表现为"失败却显示成功"或"超时永不提示")。
+    #[tokio::test]
+    async fn completed_echoes_request_id_of_request() {
+        let bus = EventBus::new();
+        let (engine, _qid) = engine_with_one_quest(&bus).await;
+        let mut rx = bus.subscribe();
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            None,
+            &CURATION,
+            &action_with_request_id("tui-42", "quest.pause", "{}"),
+        )
+        .await;
+
+        let mut echoed = None;
+        for _ in 0..32 {
+            match rx.try_recv() {
+                Ok(Some(NexusEvent::TuiActionCompleted { request_id, .. })) => {
+                    echoed = Some(request_id);
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+        assert_eq!(
+            echoed.as_deref(),
+            Some("tui-42"),
+            "TuiActionCompleted 必须原样回传发起请求的 request_id"
+        );
+    }
+
+    /// 失败路径:回执同样必须可归属原请求 —— `TuiActionFailed` 原样回传 `request_id`。
+    ///
+    /// WHY 单独守护失败路径:失败回执是超时计时的清除信号,若 `request_id`
+    /// 丢失,TUI 既收不到可配对的失败提示,又无法清除计时(双重静默失败)。
+    #[tokio::test]
+    async fn failed_echoes_request_id_of_request() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            None,
+            &CURATION,
+            &action_with_request_id("tui-42", "task.pause", "{}"),
+        )
+        .await;
+
+        let mut echoed = None;
+        for _ in 0..32 {
+            match rx.try_recv() {
+                Ok(Some(NexusEvent::TuiActionFailed { request_id, .. })) => {
+                    echoed = Some(request_id);
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+        assert_eq!(
+            echoed.as_deref(),
+            Some("tui-42"),
+            "TuiActionFailed 必须原样回传发起请求的 request_id"
+        );
+    }
+
     #[tokio::test]
     async fn ui_local_action_rejected_at_cli() {
         let bus = EventBus::new();
         let engine = QuestEngine::new(bus.clone());
         let mut rx = bus.subscribe();
-        handle_action_event(&bus, &engine, None, &action("view.switch_layout", "{}")).await;
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            None,
+            &CURATION,
+            &action("view.switch_layout", "{}"),
+        )
+        .await;
         assert!(
             drain_find(&mut rx, |ev| matches!(
                 ev,
@@ -371,7 +592,15 @@ mod tests {
         let bus = EventBus::new();
         let engine = QuestEngine::new(bus.clone()); // 无 Quest
         let mut rx = bus.subscribe();
-        handle_action_event(&bus, &engine, None, &action("quest.pause", "{}")).await;
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            None,
+            &CURATION,
+            &action("quest.pause", "{}"),
+        )
+        .await;
         assert!(
             drain_find(&mut rx, |ev| matches!(
                 ev,
@@ -390,7 +619,7 @@ mod tests {
             metadata: EventMetadata::new("test"),
             cache_key: "k".into(),
         };
-        handle_action_event(&bus, &engine, None, &unrelated).await;
+        handle_action_event(&bus, &engine, None, None, &CURATION, &unrelated).await;
         assert!(
             matches!(rx.try_recv(), Ok(None)),
             "非 TuiActionRequested 事件不应触发任何发布"
@@ -402,7 +631,8 @@ mod tests {
         let bus = EventBus::new();
         let (engine, _qid) = engine_with_one_quest(&bus).await;
         let mut rx = bus.subscribe();
-        let handle = spawn_action_orchestrator(bus.clone(), Arc::new(engine), None);
+        let handle =
+            spawn_action_orchestrator(bus.clone(), Arc::new(engine), None, None, CURATION.clone());
         bus.publish(action("quest.cancel", "{}")).await.unwrap();
 
         let mut saw_completed = false;
@@ -443,6 +673,8 @@ mod tests {
             &bus,
             &engine,
             Some(&handle),
+            None,
+            &CURATION,
             &action("overwindow.run", r#"{"query":"语义检索"}"#),
         )
         .await;
@@ -493,6 +725,8 @@ mod tests {
             &bus,
             &engine,
             Some(&handle),
+            None,
+            &CURATION,
             &action("overwindow.run", r#"{"query":"x"}"#),
         )
         .await;
@@ -525,6 +759,8 @@ mod tests {
             &bus,
             &engine,
             Some(&handle),
+            None,
+            &CURATION,
             &action("overwindow.run", "{}"),
         )
         .await;
@@ -546,6 +782,8 @@ mod tests {
             &bus,
             &engine,
             None,
+            None,
+            &CURATION,
             &action("overwindow.run", r#"{"query":"x"}"#),
         )
         .await;
@@ -555,6 +793,299 @@ mod tests {
                 NexusEvent::TuiActionFailed { .. }
             )),
             "未注入桥时应发布 TuiActionFailed"
+        );
+    }
+    // ============================================================
+    // FC-2: /compact 策展闭环(2026-09-06 接线验收)
+    // ============================================================
+
+    // 构造结构化会话消息提供者(与 commands/tui.rs 组装根同构)
+    fn chat_provider(messages: Vec<ChatMessage>) -> Option<super::ChatMessagesProvider> {
+        Some(Arc::new(move || messages.clone()))
+    }
+
+    fn user_msg(s: &str) -> ChatMessage {
+        ChatMessage {
+            role: chimera_tui::types::ChatRole::User,
+            content: s.into(),
+        }
+    }
+
+    fn asst_msg(s: &str) -> ChatMessage {
+        ChatMessage {
+            role: chimera_tui::types::ChatRole::Assistant,
+            content: s.into(),
+        }
+    }
+
+    // ============================================================
+    // B1/B2:checkpoint 接线 + 策展配置透传(2026-09-06 复评遗留批次)
+    // ============================================================
+
+    #[tokio::test]
+    async fn quest_checkpoint_saves_via_engine() {
+        // with_checkpoints 注入管理器(组合根同款):临时目录隔离
+        let dir = std::env::temp_dir().join(format!("chimera-cp-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bus = EventBus::new();
+        let engine = Arc::new(QuestEngine::with_checkpoints(
+            bus.clone(),
+            quest_engine::QuestConfig::default(),
+            dir,
+        ));
+        let quest = engine
+            .create_quest(UserIntent {
+                intent_id: "i-cp".into(),
+                raw_text: "检查点测试".into(),
+                multimodal_inputs: vec![MultimodalInput::Text("x".into())],
+                risk_level: 0,
+            })
+            .await
+            .unwrap();
+        let qid = quest.quest_id;
+        let mut rx = bus.subscribe();
+
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            None,
+            &CURATION,
+            &action("quest.checkpoint", r#"{}"#),
+        )
+        .await;
+
+        assert!(
+            drain_find(&mut rx, |ev| matches!(
+                ev,
+                NexusEvent::TuiActionCompleted { action_id, result, .. }
+                    if action_id == "quest.checkpoint" && result.contains("检查点") && result.contains(&qid)
+            )),
+            "checkpoint 应保存并回 Completed 摘要"
+        );
+    }
+
+    #[tokio::test]
+    async fn quest_checkpoint_without_manager_fails_honestly() {
+        let bus = EventBus::new();
+        let (engine, _qid) = engine_with_one_quest(&bus).await;
+        let mut rx = bus.subscribe();
+
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            None,
+            &CURATION,
+            &action("quest.checkpoint", "{}"),
+        )
+        .await;
+
+        assert!(
+            drain_find(&mut rx, |ev| matches!(
+                ev,
+                NexusEvent::TuiActionFailed { action_id, .. } if action_id == "quest.checkpoint"
+            )),
+            "无检查点管理器应诚实 Failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_uses_configured_curation_budget() {
+        // B2:自定义预算(8 token)下策展应驱逐大部分消息 —— 配置真实生效
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        let history: Vec<ChatMessage> = (0..6)
+            .flat_map(|i| {
+                vec![
+                    user_msg(&format!("question {i}")),
+                    asst_msg(&format!("answer {i} with some longer content")),
+                ]
+            })
+            .collect();
+        let chat = chat_provider(history);
+        // B2:结构体更新语法(clippy::field_reassign_with_default)
+        let cfg = chimera_tui::data::curator::CurationConfig {
+            budget_tokens: 8,
+            ..Default::default()
+        };
+
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            chat.as_ref(),
+            &cfg,
+            &action("compact", r#"{}"#),
+        )
+        .await;
+
+        // 有界收集(不在空读时中断:publish 后事件已在缓冲,但单次 try_recv
+        // 的 Ok(None) 不代表后续无事件)
+        let mut replaced_len = None;
+        let mut saw_completed = false;
+        for _ in 0..64 {
+            if let Ok(Some(ev)) = rx.try_recv() {
+                match &ev {
+                    NexusEvent::TuiChatHistoryReplaced { messages, .. } => {
+                        replaced_len = Some(messages.len());
+                    }
+                    NexusEvent::TuiActionCompleted { action_id, .. } if action_id == "compact" => {
+                        saw_completed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_completed, "策展完成应回 Completed");
+        assert!(
+            replaced_len.map(|n| n < 12).unwrap_or(false),
+            "预算 8 token 下应驱逐大部分消息: {replaced_len:?}"
+        );
+    }
+    #[tokio::test]
+    async fn compact_curates_and_replaces_history() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        // 6 轮历史(12 条),默认预算 4096×0.75 不足以全保 → 触发真实压缩
+        let history: Vec<ChatMessage> = (0..6)
+            .flat_map(|i| {
+                vec![
+                    user_msg(&format!("question {i}")),
+                    asst_msg(&format!(
+                        "answer {i} with some longer content to consume budget"
+                    )),
+                ]
+            })
+            .collect();
+        let chat = chat_provider(history);
+
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            chat.as_ref(),
+            &CURATION,
+            &action("compact", r#"{"args":""}"#),
+        )
+        .await;
+
+        let mut saw_replaced = false;
+        let mut saw_completed = false;
+        for _ in 0..32 {
+            match rx.try_recv() {
+                Ok(Some(ev)) => match &ev {
+                    NexusEvent::TuiChatHistoryReplaced { messages, .. } => {
+                        saw_replaced = true;
+                        assert!(
+                            messages.iter().any(|m| m.content == "question 0"),
+                            "User 轮次(Pinned 段)必须保留"
+                        );
+                    }
+                    NexusEvent::TuiActionCompleted {
+                        action_id, result, ..
+                    } if action_id == "compact" => {
+                        saw_completed = true;
+                        assert!(result.contains("compact"), "摘要应含策略档: {result}");
+                    }
+                    _ => {}
+                },
+                Ok(None) | Err(_) => break,
+            }
+        }
+        assert!(
+            saw_replaced,
+            "压缩完成应发布 TuiChatHistoryReplaced 回写历史"
+        );
+        assert!(saw_completed, "压缩完成应发布 TuiActionCompleted 摘要");
+    }
+
+    #[tokio::test]
+    async fn compact_invalid_policy_fails_with_usage() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        let chat = chat_provider(vec![user_msg("q")]);
+
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            chat.as_ref(),
+            &CURATION,
+            &action("compact", r#"{"args":"turbo"}"#),
+        )
+        .await;
+
+        assert!(
+            drain_find(&mut rx, |ev| matches!(
+                ev,
+                NexusEvent::TuiActionFailed { action_id, .. } if action_id == "compact"
+            )),
+            "无效策略档应诚实失败并携带用法"
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_without_provider_fails_honestly() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            None,
+            &CURATION,
+            &action("compact", "{}"),
+        )
+        .await;
+
+        assert!(
+            drain_find(&mut rx, |ev| matches!(
+                ev,
+                NexusEvent::TuiActionFailed { action_id, .. } if action_id == "compact"
+            )),
+            "未注入消息提供者应诚实失败(不伪造完成)"
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_empty_history_is_honest_noop() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        let chat = chat_provider(Vec::new());
+
+        handle_action_event(
+            &bus,
+            &engine,
+            None,
+            chat.as_ref(),
+            &CURATION,
+            &action("compact", "{}"),
+        )
+        .await;
+
+        let mut noop_completed = false;
+        for _ in 0..32 {
+            match rx.try_recv() {
+                Ok(Some(NexusEvent::TuiActionCompleted {
+                    action_id, result, ..
+                })) if action_id == "compact" => {
+                    assert!(result.contains("为空"), "空会话应为诚实 no-op: {result}");
+                    noop_completed = true;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+        assert!(
+            noop_completed,
+            "空会话 compact 应 Completed(诚实 no-op 而非 Failed)"
         );
     }
 }

@@ -64,12 +64,18 @@ pub fn gauge(value: f64, max: f64, threshold: f64, label: &str) -> Paragraph<'st
     let progress_char = BLOCKS[block_idx];
 
     // 4) 构造 Block + 内容
-    //    - 标题: "{label} {value:.1}/{max:.1} ({percent:.0}%)"
+    //    - 标题: "{label} {value:.1}/{max:.1} (百分比,统一走 render::percent_from_value)"
     //    - 主体:8 档进度字符 + 文本百分比
     // WHY 简化(包装 render::gauge_thresholded 不直接复用):
     //   Paragraph 比 Gauge widget 灵活,可同时展示标签+数值+进度,
     //   而 Gauge widget 中心仅显示 label。
-    let title = format!(" {} {:.1}/{:.1} ({:.0}%) ", label, value, max, percent);
+    let title = format!(
+        " {} {:.1}/{:.1} ({}) ",
+        label,
+        value,
+        max,
+        crate::render::percent_from_value(percent, crate::render::PERCENT_PRECISION_SUMMARY)
+    );
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(color))
@@ -78,7 +84,10 @@ pub fn gauge(value: f64, max: f64, threshold: f64, label: &str) -> Paragraph<'st
     let content = Line::from(vec![
         Span::styled(progress_char.to_string(), Style::default().fg(color)),
         Span::raw("  "),
-        Span::styled(format!("{:.0}%", percent), Style::default().fg(color)),
+        Span::styled(
+            crate::render::percent_from_value(percent, crate::render::PERCENT_PRECISION_SUMMARY),
+            Style::default().fg(color),
+        ),
     ]);
 
     // 5) 同时复用 `render::gauge_thresholded` 保证颜色逻辑一致

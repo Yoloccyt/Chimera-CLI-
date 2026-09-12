@@ -150,6 +150,17 @@ pub enum RouteTarget {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct InputRouter;
 
+/// 是否为"纯字符输入"按键(评估报告 I-8)
+///
+/// 仅放行**无修饰键**或**仅 Shift**:
+/// - Shift 必须放行 —— 大写字母与符号输入依赖它;
+/// - Ctrl 必须排除 —— 组合键是命令(如 Ctrl+P 唤出面板),不是文本;
+/// - **Alt/Super 等同样必须排除** —— 此前三处输入分支仅排除 Ctrl(`if !ctrl`),
+///   导致 `Alt+a` 这类终端级组合键的字符被写入输入/检索缓冲,污染用户检索词。
+fn is_plain_char_input(modifiers: KeyModifiers) -> bool {
+    modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
+}
+
 impl InputRouter {
     /// 根据当前模式与按键计算路由目标(§4.3 三态路由表)
     ///
@@ -207,13 +218,24 @@ impl InputRouter {
             KeyCode::Char('7') => RouteTarget::PanelJump(PanelId::Log),
             KeyCode::Char('8') => RouteTarget::PanelJump(PanelId::Help),
             KeyCode::Char('9') => RouteTarget::PanelJump(PanelId::Decay),
-            // F1-F8:面板跳转(F4/F5 未映射,回退焦点面板)
+            // F1-F12:面板直达键(PS-2 I-6 补齐 F4/F5/F9-F12)
+            //
+            // WHY 补齐:评估报告 I-6 实锤 11 个面板无直达键,最坏需 Tab 循环 25 次
+            // 或背下 `/panel <name>` 命令名。PS-3 已补 g7-g0(4 个业务面板),
+            // 本批再补 6 个(F4/F5/F9-F12)——**26 个注册面板至此全部有直达键**
+            // (Chat 例外:经 `\` 互切视图可达,见 tests/direct_key_coverage_test)。
             KeyCode::F(1) => RouteTarget::PanelJump(PanelId::Quest),
             KeyCode::F(2) => RouteTarget::PanelJump(PanelId::Parliament),
             KeyCode::F(3) => RouteTarget::PanelJump(PanelId::Budget),
+            KeyCode::F(4) => RouteTarget::PanelJump(PanelId::OsaSparse),
+            KeyCode::F(5) => RouteTarget::PanelJump(PanelId::ClvVector),
             KeyCode::F(6) => RouteTarget::PanelJump(PanelId::Memory),
             KeyCode::F(7) => RouteTarget::PanelJump(PanelId::Security),
             KeyCode::F(8) => RouteTarget::PanelJump(PanelId::Health),
+            KeyCode::F(9) => RouteTarget::PanelJump(PanelId::MetricsDashboard),
+            KeyCode::F(10) => RouteTarget::PanelJump(PanelId::Sysinfo),
+            KeyCode::F(11) => RouteTarget::PanelJump(PanelId::OverWindow),
+            KeyCode::F(12) => RouteTarget::PanelJump(PanelId::ExperienceCardViz),
             // 纯 UI 机械键:主题循环(非注册表动作)
             KeyCode::Char('t') => RouteTarget::ThemeCycle,
             // Ctrl+W 前缀:进入方向窗格导航态;必须在 codegen 查表之前,
@@ -251,6 +273,8 @@ impl InputRouter {
     ///
     /// - `g` → 滚动到顶(gg)
     /// - `1-6` → 扩展面板跳转(EventStream/Router/McpNodes/Chtc/Timeline/ResourceMonitor)
+    /// - `7-9`,`0` → 业务面板直达(SelfAssessment/DagViz/PvlScore/TaskManager)
+    ///   (PS-3 I-6:这 4 个业务面板此前无任何直达键,最坏需 25 次 Tab 才能到达)
     /// - 其余 → 退出前缀态(调用方回到 Normal,该键可另行处理或忽略)
     fn route_gprefix(key: KeyEvent) -> RouteTarget {
         match key.code {
@@ -261,6 +285,10 @@ impl InputRouter {
             KeyCode::Char('4') => RouteTarget::PanelJump(PanelId::Chtc),
             KeyCode::Char('5') => RouteTarget::PanelJump(PanelId::Timeline),
             KeyCode::Char('6') => RouteTarget::PanelJump(PanelId::ResourceMonitor),
+            KeyCode::Char('7') => RouteTarget::PanelJump(PanelId::SelfAssessment),
+            KeyCode::Char('8') => RouteTarget::PanelJump(PanelId::DagViz),
+            KeyCode::Char('9') => RouteTarget::PanelJump(PanelId::PvlScore),
+            KeyCode::Char('0') => RouteTarget::PanelJump(PanelId::TaskManager),
             _ => RouteTarget::ExitMode,
         }
     }
@@ -301,21 +329,20 @@ impl InputRouter {
             KeyCode::Up => RouteTarget::HistoryPrev,
             KeyCode::Down => RouteTarget::HistoryNext,
             // 普通字符(排除 Ctrl 组合)进入输入缓冲
-            KeyCode::Char(c) if !ctrl => RouteTarget::InsertChar(c),
+            KeyCode::Char(c) if is_plain_char_input(key.modifiers) => RouteTarget::InsertChar(c),
             _ => RouteTarget::Ignored,
         }
     }
 
     /// Command 模式路由:Esc 关闭 > 上下选择 > 提交 > 退格 > 检索字符
     fn route_command(key: KeyEvent) -> RouteTarget {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => RouteTarget::ExitMode,
             KeyCode::Up => RouteTarget::PaletteMove { down: false },
             KeyCode::Down => RouteTarget::PaletteMove { down: true },
             KeyCode::Enter => RouteTarget::Submit,
             KeyCode::Backspace => RouteTarget::Backspace,
-            KeyCode::Char(c) if !ctrl => RouteTarget::PaletteInput(c),
+            KeyCode::Char(c) if is_plain_char_input(key.modifiers) => RouteTarget::PaletteInput(c),
             _ => RouteTarget::Ignored,
         }
     }
@@ -325,7 +352,6 @@ impl InputRouter {
     /// 纯机械路由:补全候选过滤/三分层分流均由 slash_parser 与
     /// SlashCommandSurface 承担,路由器只决定按键归属。
     fn route_slash(key: KeyEvent) -> RouteTarget {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => RouteTarget::ExitMode,
             KeyCode::Up => RouteTarget::PaletteMove { down: false },
@@ -333,7 +359,7 @@ impl InputRouter {
             KeyCode::Enter => RouteTarget::Submit,
             KeyCode::Tab => RouteTarget::SlashComplete,
             KeyCode::Backspace => RouteTarget::Backspace,
-            KeyCode::Char(c) if !ctrl => RouteTarget::PaletteInput(c),
+            KeyCode::Char(c) if is_plain_char_input(key.modifiers) => RouteTarget::PaletteInput(c),
             _ => RouteTarget::Ignored,
         }
     }
@@ -658,6 +684,11 @@ mod tests {
             ('4', PanelId::Chtc),
             ('5', PanelId::Timeline),
             ('6', PanelId::ResourceMonitor),
+            // PS-3 I-6:业务面板直达键(此前无直达键,最坏需 25 次 Tab)
+            ('7', PanelId::SelfAssessment),
+            ('8', PanelId::DagViz),
+            ('9', PanelId::PvlScore),
+            ('0', PanelId::TaskManager),
         ];
         for (c, pid) in cases {
             assert_eq!(

@@ -112,17 +112,23 @@ async fn test_multi_generation_publishes_events() {
         engine.evolve_once().await.unwrap();
     }
 
-    // 应收到 3 个事件,generation 分别为 1, 2, 3
+    // 应收到 3 个 GsoePolicyUpdated,generation 分别为 1, 2, 3;
+    // 每组后跟一个 EvolutionTriggered(WS-4B 触发通知,第 7b 步发布)
     for expected_gen in 1..=3u64 {
         let event = rx.recv_timeout(Duration::from_secs(1)).await.unwrap();
         if let NexusEvent::GsoePolicyUpdated { generation, .. } = event {
             assert_eq!(
                 generation, expected_gen,
-                "第 {expected_gen} 个事件的 generation 应为 {expected_gen}"
+                "第 {expected_gen} 个策略事件的 generation 应为 {expected_gen}"
             );
         } else {
             panic!("期望 GsoePolicyUpdated 事件");
         }
+        let trigger = rx.recv_timeout(Duration::from_secs(1)).await.unwrap();
+        assert!(
+            matches!(trigger, NexusEvent::EvolutionTriggered { .. }),
+            "策略事件后应跟随 EvolutionTriggered,收到 {trigger:?}"
+        );
     }
 }
 

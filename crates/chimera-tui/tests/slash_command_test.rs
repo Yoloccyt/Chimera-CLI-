@@ -238,8 +238,10 @@ fn unknown_command_reports_honest_error() {
 fn unwired_command_gives_honest_todo() {
     let _guard = locale_guard();
     let mut app = make_app();
-    // /compact 已登记但后端未接线(W3+)→ 诚实提示而非伪造执行
-    slash_submit(&mut app, "compact");
+    // /fork 已登记但后端未接线(W3+)→ 诚实提示而非伪造执行。
+    // (FC-2 2026-09-06:/compact 已接线为编排域派发,不再作本测试范例;
+    //   其派发/审批/回写闭环见 tests/compact_closure_test.rs)
+    slash_submit(&mut app, "fork");
     let msg = app
         .state()
         .status_message
@@ -258,6 +260,7 @@ fn unwired_command_gives_honest_todo() {
 
 #[test]
 fn agent_command_prefills_composer_template() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::Zh);
     let mut app = make_app();
@@ -313,6 +316,7 @@ fn up_down_moves_selection_within_candidates() {
 
 #[test]
 fn slash_overlay_renders_candidates_above_input_bar() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::Zh);
     let mut app = make_app();

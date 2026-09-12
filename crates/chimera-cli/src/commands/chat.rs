@@ -63,14 +63,20 @@ const CONTEXT_DISPLAY_INTERVAL: u32 = 5;
 /// 密度动态调整)。两者底层都复用 `plan_chunks`,保证切分逻辑一致。
 async fn stream_to_stdout(reply: &str, delay: Duration) {
     let stdout = io::stdout();
-    let mut lock = stdout.lock();
     for delta in plan_chunks(reply) {
-        let _ = write!(lock, "{delta}");
-        let _ = lock.flush();
+        // WHY 锁作用域只包住单次写入:`StdoutLock` 是**进程级全局锁**，持它跨
+        // `sleep().await` 会让其他任务（tracing 输出、进度提示）在整段流式
+        // 节奏期间全部排队。写完即放，把 await 留在锁外。
+        {
+            let mut lock = stdout.lock();
+            let _ = write!(lock, "{delta}");
+            let _ = lock.flush();
+        }
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
     }
+    let mut lock = stdout.lock();
     let _ = writeln!(lock);
 }
 
@@ -823,6 +829,7 @@ mod tests {
         // 发布 TuiActionCompleted 事件(模拟 tool 调用完成)
         let completed = NexusEvent::TuiActionCompleted {
             metadata: event_bus::EventMetadata::new("chat-test"),
+            request_id: "tui-test".into(),
             action_id: "test-tool".into(),
             result: "{\"ok\":true}".into(),
         };

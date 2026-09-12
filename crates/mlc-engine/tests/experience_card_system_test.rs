@@ -133,6 +133,45 @@ async fn card_bus_to_mlc_engine_consumption_closed_loop() {
     assert_eq!(total_nodes, 2);
 }
 
+// ----------------------------------------------------------
+// FC-05: card_system_view — L10 ExperienceCardViz 面板接线视图
+// ----------------------------------------------------------
+
+#[test]
+fn card_system_view_empty_returns_zeroed_mapping() {
+    let engine = MlcEngine::new_in_memory(EventBus::new()).expect("引擎创建成功");
+    let v = engine.card_system_view();
+    assert_eq!(v.total_cards, 0);
+    assert_eq!(v.evaluated, 0);
+    assert_eq!(v.unique_errors, 0);
+    assert!(v.method_distribution.is_empty());
+    assert_eq!(v.best_score, 0.0);
+    assert_eq!(v.average_score, 0.0);
+}
+
+#[test]
+fn card_system_view_reflects_ingested_cards() {
+    let engine = MlcEngine::new_in_memory(EventBus::new()).expect("引擎创建成功");
+    // 直接注入 L2 卡片系统（同步路径，无需 bus/异步消费）
+    engine.ingest_experience_card(card("n1", "draft_pipeline", 0.9, ExecutionStatus::Success));
+    engine.ingest_experience_card(card("n2", "draft_pipeline", 0.4, ExecutionStatus::Error));
+    engine.ingest_experience_card(card("n3", "two_pass_debug", 0.7, ExecutionStatus::Success));
+
+    let v = engine.card_system_view();
+    assert_eq!(v.total_cards, 3);
+    assert_eq!(v.evaluated, 2, "2 张 Success 卡片计入已评估");
+    assert_eq!(v.unique_errors, 0);
+    let dist: std::collections::HashMap<&str, u32> = v
+        .method_distribution
+        .iter()
+        .map(|(k, c)| (k.as_str(), *c))
+        .collect();
+    assert_eq!(dist.get("draft_pipeline"), Some(&2));
+    assert_eq!(dist.get("two_pass_debug"), Some(&1));
+    assert!((v.best_score - 0.9).abs() < 1e-6);
+    assert!((v.average_score - (0.9 + 0.4 + 0.7) / 3.0).abs() < 1e-6);
+}
+
 #[tokio::test]
 async fn high_score_cards_not_in_broadcast_consumption() {
     // 高分卡片（>0.8）走 Critical mpsc，不进 broadcast

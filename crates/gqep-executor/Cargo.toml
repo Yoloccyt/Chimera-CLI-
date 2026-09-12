@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "gqep-executor"
 version.workspace = true
 edition.workspace = true
@@ -6,6 +6,9 @@ license.workspace = true
 
 [dependencies]
 # L1 Core:提供 id_newtype! 宏(生成 OperationId newtype)
+nexus-contracts = { workspace = true }
+# L4 Security: execpolicy 决策审计 + 规则引擎（P4-T3 接线:ToolExecutor 挂审批流水线）
+seccore = { workspace = true }
 nexus-core = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 GatherCompleted/OperationTimedOut/OrphanCallDetected 事件
 event-bus = { workspace = true }
@@ -15,12 +18,14 @@ qeep-protocol = { workspace = true }
 tokio = { workspace = true }
 # 配置与结果类型序列化(#[derive(Serialize, Deserialize)])
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 # 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }
 # 结构化日志(事件发布失败告警)
 tracing = { workspace = true }
 # FuturesUnordered 流式聚集(对应 A.2 设计决策:流式处理,内存占用更低)
 futures = "0.3"
+async-trait = { workspace = true }
 # UUIDv7 操作 ID 生成(时间有序,便于追溯)
 # 时间戳(聚集延迟计算)
 

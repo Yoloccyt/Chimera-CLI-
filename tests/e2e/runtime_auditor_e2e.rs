@@ -130,9 +130,10 @@ fn e2e_tui_self_assessment_panel_consumes_report() {
 
     let mut state = TuiState::new();
     // 模拟 DataPipeline 已将审计事件送入 latest_events
-    state
-        .latest_events
-        .push_back(NexusEvent::HarnessReportGenerated {
+    // PF-01:latest_events 为 Arc<VecDeque<_>>,测试路径经 Arc::make_mut COW 注入
+    // (生产管道整体替换 Arc,make_mut 仅存测试路径,见 CHANGELOG PF-01)
+    std::sync::Arc::make_mut(&mut state.latest_events).push_back(
+        NexusEvent::HarnessReportGenerated {
             metadata: EventMetadata::new("efficiency-monitor"),
             task_comprehension: 0.9,
             controllable_execution: 0.7,
@@ -140,17 +141,16 @@ fn e2e_tui_self_assessment_panel_consumes_report() {
             reliable_delivery: 0.6,
             experience_accumulation: 0.4,
             findings_count: 1,
-        });
-    state
-        .latest_events
-        .push_back(NexusEvent::AuditFindingRaised {
-            metadata: EventMetadata::new("efficiency-monitor"),
-            finding_severity: "medium".into(),
-            category: "unused_capability".into(),
-            message: "capability 'cap-ghost' configured but never used".into(),
-            evidence_kind: "static_only".into(),
-            fix_hint: "remove or wire up".into(),
-        });
+        },
+    );
+    std::sync::Arc::make_mut(&mut state.latest_events).push_back(NexusEvent::AuditFindingRaised {
+        metadata: EventMetadata::new("efficiency-monitor"),
+        finding_severity: "medium".into(),
+        category: "unused_capability".into(),
+        message: "capability 'cap-ghost' configured but never used".into(),
+        evidence_kind: "static_only".into(),
+        fix_hint: "remove or wire up".into(),
+    });
 
     let content = SelfAssessmentPanel::content(&state).to_string();
     // 五维评分渲染(90% 为最新报告的任务理解维度)

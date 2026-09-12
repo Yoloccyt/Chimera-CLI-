@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# P5-T1（D-Q4）:tokio_unstable cfg 声明——探针 busy_duration 口径由局部 RUSTFLAGS 注入
+# 此声明避免 clippy/check 的 unexpected_cfgs 误报（lints.rust 稳定机制）
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
+
 [dependencies]
 # 全部使用 workspace 共享依赖(§4.1 规范)
 ndarray = { workspace = true }
@@ -14,6 +19,12 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
+# event-bus: WS-4A ClvSnapshotReported 事件发布(L1 Core → L1 Core 同层互引合规)
+# WHY 合规: §2.2 同层互引允许 L(N)→L(N);event-bus 不依赖 nexus-core(零环,
+# payloads.rs ClvSummary::from_clv_slice 已解耦),故 nexus-core→event-bus 无环。
+event-bus = { workspace = true }
+# tracing: WS-4A ClvSnapshotReported 发布失败告警日志
+tracing = { workspace = true }
 # Task 3.10: L0 nexus-contracts 类型下沉(EventMetadata/TaskStatus/Checkpoint)
 # WHY 合规: L1 → L0 恒允许(§2.2 依赖铁律扩展 ADR-033);nexus-contracts 纯类型零依赖,不引入环
 # re-export 模式: types.rs 中 `pub use nexus_contracts::{TaskStatus, Checkpoint}` 保持向后兼容
@@ -22,6 +33,15 @@ nexus-contracts = { workspace = true }
 rand = { workspace = true }
 # P1-W5: RL 客户端骨架(v3.4.0 §6.4 RLClient trait,async 接口)
 async-trait = { workspace = true }
+# P1-T8: ComputeBridge 独立 rayon 全局池(手册 §8.3 L-a,WI-34)
+# WHY 红线纪律: rayon 闭包内禁 .await/IO/持锁跨边界(§7.5.3 纪律④⑥);
+# 线程数 num_cpus-2 用 std::thread::available_parallelism() 计算(Ω₆ 最小依赖,不加 num_cpus)
+rayon = { workspace = true }
+# P1-T9: HTS 动态阈值表(手册 §8.4 / ADR-103 / ADR-128)
+# WHY 用 arc-swap:route() 热路径读无锁(RCU 快照 ~5ns),符合 ADR-128;
+# 更新(T1 测定/T14 序贯校准)低频,全表 RCU store 成本可忽略;
+# 纯 safe 封装,与 forbid(unsafe_code) 哲学一致(unsafe 在依赖内不传播)
+arc-swap = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -35,4 +55,20 @@ harness = false
 
 [[bench]]
 name = "clv_cosine"
+harness = false
+
+# P1-T8: ComputeBridge roundtrip 门禁基准(W3: bridge roundtrip P99 < 20μs,手册 §13.2)
+[[bench]]
+name = "bridge_bench"
+harness = false
+
+# P1-T9: HTS route() 决策门禁基准(W4: route 决策 P99 < 1μs,手册 §8.4 / ADR-127)
+[[bench]]
+name = "hts_bench"
+harness = false
+
+# P1-T10: DetReduce 双模式归约基准(W5:审计开销 ≤ 30%,手册 §10.2 / ADR-102/106)
+# WHY 门禁口径:bench 末尾固定 n 单次采样打印 audit_overhead_pct(T8 单行采样模式)
+[[bench]]
+name = "reduce_bench"
 harness = false

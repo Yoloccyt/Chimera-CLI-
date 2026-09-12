@@ -13,6 +13,11 @@ use chimera_tui::panels::{
 use chimera_tui::types::PanelId;
 
 /// Mock 统计提供者
+///
+/// (R14 记录:非同形,不收敛)`injection_strategy_panel_test.rs` 亦定义同名
+/// `MockProvider`,但字段为 `InjectionSnapshot` 且实现 `InjectionSnapshotProvider`;
+/// 本处字段为 `ExperienceCardVizStats` 且实现 `ExperienceCardStatsProvider` —
+/// 字段类型与 trait 均不同,非同形,各自保留。
 #[derive(Debug, Default)]
 struct MockProvider {
     stats: ExperienceCardVizStats,

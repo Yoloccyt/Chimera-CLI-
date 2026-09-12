@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "mcp-mesh"
 version.workspace = true
 edition.workspace = true

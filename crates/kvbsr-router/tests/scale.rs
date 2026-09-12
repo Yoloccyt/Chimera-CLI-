@@ -111,9 +111,13 @@ async fn test_scale_route_latency_under_2ms() {
     }
 
     println!("1000 工具规模最大路由延迟: {max_latency_ms:.3}ms");
+    // 契约值 2ms 保留在代码里；`CHIMERA_PERF_SCALE`（缺省 1.0）只在运行时
+    // 控制本轮宽松度。历史上本用例阈值曾从 >5× 逐轮放宽（见 scale 加速比注释），
+    // 统一旋钮后“放宽”不再是不可逆的代码改动。
+    let budget_ms = 2.0_f32 * nexus_contracts::util::perf_scale() as f32;
     assert!(
-        max_latency_ms < 2.0,
-        "1000 工具规模路由延迟 {max_latency_ms:.3}ms 超过 2ms 阈值"
+        max_latency_ms < budget_ms,
+        "1000 工具规模路由延迟 {max_latency_ms:.3}ms 超过 {budget_ms:.3}ms 阈值(契约 2ms × scale)"
     );
 }
 
@@ -162,8 +166,11 @@ async fn test_scale_speedup_vs_full_scan() {
     // 1000 工具规模下断言加速比 > 2.0×(SubTask 15.10 + 14.9 调整)
     // WHY > 2.0× 而非 > 3.0×:workspace 整体测试时资源竞争加剧亚毫秒级测量噪声,
     // 实测 min-of-10 约 2.5-4×。> 2.0× 验证两级路由显著优于全量扫描同时消除 flake。
+    //
+    // ⚠ 加速比是**下界**，故 scale 取倒数（放松 = 阈值变小）；与延迟类×scale 方向相反。
+    let speedup_floor = 2.0_f32 / nexus_contracts::util::perf_scale() as f32;
     assert!(
-        speedup > 2.0,
-        "1000 工具规模加速比 {speedup:.2}× 未超过 2.0× 阈值(min-of-{n};理论 ≈ 9×)"
+        speedup > speedup_floor,
+        "1000 工具规模加速比 {speedup:.2}× 未超过 {speedup_floor:.2}× 阈值(契约 >2.0×;min-of-{n};理论 ≈ 9×)"
     );
 }

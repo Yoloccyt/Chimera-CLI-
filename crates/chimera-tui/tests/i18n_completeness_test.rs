@@ -614,6 +614,12 @@ fn seed_keys_are_used_in_code() {
         "status.mode",
         "status.view",
         "status.chat_pending",
+        // PS-2(F-1):握手回执按 HandshakeLevel 选键后经 `t!(key)` 动态查表
+        // (app/state.rs 的 match 返回 &'static str),无字面量调用点。
+        // 若未来改为直连字面量,可从本豁免列表移除。
+        "status.handshake.full",
+        "status.handshake.degraded",
+        "status.handshake.refused",
         "mode.normal",
         "mode.insert",
         "mode.command",
@@ -631,6 +637,11 @@ fn seed_keys_are_used_in_code() {
         "action.quest.jump",
         "hint.palette",
         "hint.help",
+        // B1(2026-09-06 复评):UnwiredHint(&'static str) 经运行时变量传入
+        // t!(),源码中无字面量调用点(键名由 DispatchPlan::UnwiredHint 携带)
+        "slash.unwired.fork",
+        "slash.unwired.undo",
+        "slash.unwired.redo",
     ];
 
     let mut unused: Vec<&str> = Vec::new();

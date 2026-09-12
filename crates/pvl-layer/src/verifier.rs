@@ -568,4 +568,51 @@ mod tests {
         let result = verifier.verify(&op);
         assert!(!result.passed, "from_seccore 创建的验证者应拦截危险命令");
     }
+
+    // ─── T16 Verify 契约不变式(手册 §11.5)──────────────────────────────
+
+    /// 契约不变式(§11.5):verify 为确定性纯判定 — 同一操作多次调用
+    /// 结果逐字段一致(无随机/时间/外部状态依赖,失败可复现)。
+    #[test]
+    fn verify_contract_invariant_deterministic() {
+        let verifier = Verifier::new(PvlConfig::default(), EventBus::new());
+        let op = make_operation("print('deterministic')");
+        let a = verifier.verify(&op);
+        for _ in 0..8 {
+            let b = verifier.verify(&op);
+            assert_eq!(
+                (a.passed, a.reason.clone()),
+                (b.passed, b.reason.clone()),
+                "verify 必须确定性一致(同输入同输出,失败可复现)"
+            );
+        }
+    }
+
+    /// 契约不变式(§11.5):拒绝结果必须携带可定位上下文 —— operation_id +
+    /// 具体 reason(规则前缀),等价「失败带可定位 FailureClass」。
+    #[test]
+    fn verify_contract_invariant_rejection_is_locatable() {
+        let verifier = Verifier::new(PvlConfig::default(), EventBus::new());
+        // 三类拒绝分支:语法 / 安全 / 依赖,均须可定位
+        let cases = [
+            ("   ", "语法检查失败"),
+            ("rm -rf /", "安全检查失败"),
+            ("echo $undefined", "依赖检查失败"),
+        ];
+        for (content, prefix) in cases {
+            let op = make_operation(content);
+            let r = verifier.verify(&op);
+            assert!(!r.passed, "{content:?} 应为拒绝(FailureClass 可定位)");
+            assert_eq!(
+                r.operation_id, op.operation_id,
+                "拒绝结果必须携带可定位 operation_id"
+            );
+            assert!(!r.reason.is_empty(), "拒绝结果必须给出非空 reason/失败类别");
+            assert!(
+                r.reason.contains(prefix),
+                "reason 必须携带失败类别前缀 {prefix:?}: {:?}",
+                r.reason
+            );
+        }
+    }
 }

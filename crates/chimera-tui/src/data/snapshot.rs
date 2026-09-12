@@ -149,6 +149,38 @@ pub struct DataSnapshot {
     /// Action 反馈序号(单调递增,app 据此判定新反馈,避免每 tick 重复上屏)
     #[serde(default)]
     pub action_feedback_seq: u64,
+    /// 最近一次 Action 终态反馈归属的 `request_id`
+    ///
+    /// WHY 独立于 `action_feedback`:后者是"上屏文案"契约(元组形状不可动),
+    /// 而回执配对需要请求标识;app 据此只清除对应请求的超时计时,
+    /// 不影响并发中的其它请求。None = 无法归属的遗留回执(app 保守不清除)。
+    #[serde(default)]
+    pub action_feedback_request_id: Option<String>,
+    // === PS-2(F-1):协议握手回执(ADR-082) ===
+    /// 编排器握手兼容状态;None = 尚未收到 Ack(standalone / 未接线场景)
+    ///
+    /// 来源:`HandshakeSync` 消费 `TuiHelloAck`;app 侧状态变化时上屏状态栏
+    /// (Degraded=Warning 携降级项,Refused=Error,Full=Info)。
+    #[serde(default)]
+    pub handshake: Option<crate::types::HandshakeState>,
+    // === PS-2(F-6):子代理任务失败聚合(Critical 级可观测性) ===
+    /// 最近子代理失败(新在前,最多 [`crate::data::sync::MAX_AGENT_FAILURES`] 条)
+    #[serde(default)]
+    pub agent_failures: Vec<crate::types::AgentFailureSummary>,
+    /// 子代理失败累计数(会话内单调递增)
+    #[serde(default)]
+    pub agent_failure_total: u64,
+    /// 失败序号(app 据此判定新失败并一次性告警)
+    #[serde(default)]
+    pub agent_failure_seq: u64,
+    // === PS-2 批次1:议会数据(取代 L10→L8 越层直调) ===
+    /// 议会治理态势(协调比 + 策略封顶;字段各自独立,缺项即 None)
+    #[serde(default)]
+    pub parliament: crate::types::ParliamentState,
+    // === PS-2 批次2:GQEP 超时统计(事件计数取代 L10→L7 越层直调) ===
+    /// 单操作/全局/孤儿调用累计计数(从 0 起,随真实事件递增)
+    #[serde(default)]
+    pub gqep_timeouts: crate::types::GqepTimeoutStats,
     // === P1-W2.2 Critical 旁路通道丢弃计数 ===
     /// Critical 旁路通道(mpsc 4096)累计丢弃事件数(单调递增,0 = 无丢弃)
     ///

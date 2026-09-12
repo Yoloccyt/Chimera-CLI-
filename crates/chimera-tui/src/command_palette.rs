@@ -1,4 +1,4 @@
-//! TUI 命令面板 — 底部命令/搜索输入栏
+//! TUI 命令面板 — 底部输入栏渲染 + 遗留命令解析器
 //!
 //! 对应架构层:L10 Interface
 //!
@@ -6,9 +6,12 @@
 //! - 命令面板为无状态解析器:输入状态保存在 `TuiState` 中,
 //!   便于面板与 `TuiApp` 统一访问。
 //! - M3 扩展命令解析,支持 `:find`/`:filter`/`:level`/`:refresh` 等
-//!   过滤器命令;搜索模式提交后设置全局关键字过滤器。
+//!   过滤器命令。
+//! - IT-01(2026-09-08 批次-B):遗留 `InputMode::Command/Search` 交互入口
+//!   (handle_key/submit)已删除——生产零 setter 的死路径;本文件保留
+//!   render(Insert/Slash 底栏)与 parse_command/parse_legacy 解析器
+//!   (斜杠回退 `:budget` B3 契约依赖)。
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -36,8 +39,6 @@ impl CommandPalette {
     /// 根据当前输入模式渲染底部输入栏
     pub fn render(&self, state: &TuiState, area: Rect, buf: &mut Buffer) {
         let (prefix, title) = match state.input_mode {
-            InputMode::Command => (":".to_string(), " Command ".to_string()),
-            InputMode::Search => ("/".to_string(), " Search ".to_string()),
             // Concord W2:斜杠命令模式底部栏(补全列表由 slash_surface 渲染于上方)
             InputMode::Slash => (
                 "/".to_string(),
@@ -69,66 +70,6 @@ impl CommandPalette {
         paragraph.render(area, buf);
     }
 
-    /// 处理命令/搜索模式下的按键
-    ///
-    /// - Esc:取消输入,返回 Normal 模式
-    /// - Enter:提交当前输入并返回解析后的命令(如果有)
-    /// - 可打印字符:追加到输入缓冲
-    /// - Backspace:删除最后一个字符
-    pub fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {
-        match key.code {
-            KeyCode::Esc => {
-                // WHY:搜索模式 Esc 需清除过滤器,避免残留关键字导致面板为空
-                if state.input_mode == InputMode::Search {
-                    state.filter_keyword = None;
-                }
-                state.input_mode = InputMode::Normal;
-                state.input_buffer.clear();
-                None
-            }
-            KeyCode::Enter => self.submit(state),
-            // 排除 Ctrl 组合:与 Insert 模式语义一致,命令栏内 Ctrl+X 类快捷键
-            // 不应把字符打进输入缓冲(Ctrl+L 等全局键由 TuiApp 在委托前拦截)。
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                state.input_buffer.push(c);
-                None
-            }
-            KeyCode::Backspace => {
-                state.input_buffer.pop();
-                None
-            }
-            _ => None,
-        }
-    }
-
-    /// 提交当前输入并解析命令
-    ///
-    /// 解析完成后清空输入缓冲并恢复 Normal 模式。
-    pub fn submit(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
-        let input = state.input_buffer.trim().to_string();
-        let cmd = match state.input_mode {
-            InputMode::Command => Self::parse_command(&input, state),
-            InputMode::Search => {
-                // M3:搜索输入作为全局关键字过滤器
-                if input.is_empty() {
-                    state.filter_keyword = None;
-                } else {
-                    state.filter_keyword = Some(input.to_lowercase());
-                }
-                None
-            }
-            // Insert 不经命令面板提交(由 TuiApp::handle_insert_key 处理),此处仅为穷尽匹配;
-            // Slash 同理(Concord W2:由 TuiApp::submit_slash 处理)
-            InputMode::Insert => None,
-            InputMode::Slash => None,
-            InputMode::Normal => None,
-        };
-
-        state.input_mode = InputMode::Normal;
-        state.input_buffer.clear();
-        cmd
-    }
-
     /// 解析命令字符串
     ///
     /// 支持的命令(冒号可省略,因为进入命令模式时已输入冒号):
@@ -141,6 +82,8 @@ impl CommandPalette {
     ///
     /// Concord W2:本解析器保留为遗留命令回退通道——斜杠解析未命中时经
     /// `parse_legacy` 桥接到此处,保证 `:` 废弃窗口期零功能断裂。
+    /// IT-01(批次-B):交互入口 handle_key/submit 已删除(生产零 setter 死路径),
+    /// 本解析器仅经 parse_legacy 由 Slash 回退调用。
     pub(crate) fn parse_legacy(input: &str, state: &mut TuiState) -> Option<TuiCommand> {
         Self::parse_command(input, state)
     }
@@ -500,13 +443,6 @@ impl CommandPaletteModel {
 mod tests {
     use super::*;
 
-    fn command_state(input: &str) -> TuiState {
-        let mut state = TuiState::new();
-        state.input_mode = InputMode::Command;
-        state.input_buffer = input.to_string();
-        state
-    }
-
     #[test]
     fn test_parse_panel_commands() {
         assert_eq!(
@@ -656,99 +592,169 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_submit_command_switches_panel() {
-        let mut palette = CommandPalette::new();
-        let mut state = command_state("budget");
-        let cmd = palette.submit(&mut state);
-
-        assert_eq!(cmd, Some(TuiCommand::SwitchPanel(PanelId::Budget)));
-        assert_eq!(state.input_mode, InputMode::Normal);
-        assert!(state.input_buffer.is_empty());
-    }
+    // ===== IT-01(批次-B):quest 子命令解析下沉(原 tests/command_palette_test.rs)=====
+    //
+    // 口径声明:原集成测试经 submit() 假绿范式(手工强制 InputMode::Command,
+    // IT-03)驱动;交互入口删除后下沉为 parser 纯语法单测,经 parse_command
+    // 直接驱动。submit 的"复位 Normal + 清缓冲"语义随交互入口一并退役——
+    // `:` 遗留命令现由 Slash 模式回退经 parse_legacy 到达此处,模式管理归
+    // Slash 路径所有。
 
     #[test]
-    fn test_submit_unknown_command_clears_state() {
-        let mut palette = CommandPalette::new();
-        let mut state = command_state("unknown");
-        let cmd = palette.submit(&mut state);
-
-        assert_eq!(cmd, None);
-        assert_eq!(state.input_mode, InputMode::Normal);
-        assert!(state.input_buffer.is_empty());
-    }
-
-    #[test]
-    fn test_submit_search_sets_keyword() {
-        let mut palette = CommandPalette::new();
+    fn test_parse_quest_cancel_command() {
         let mut state = TuiState::new();
-        state.input_mode = InputMode::Search;
-        state.input_buffer = "Error".into();
-
-        let cmd = palette.submit(&mut state);
-        assert_eq!(cmd, None);
-        assert_eq!(state.input_mode, InputMode::Normal);
-        assert!(state.input_buffer.is_empty());
-        assert_eq!(state.filter_keyword, Some("error".into()));
-    }
-
-    #[test]
-    fn test_submit_empty_search_clears_keyword() {
-        let mut palette = CommandPalette::new();
-        let mut state = TuiState::new();
-        state.input_mode = InputMode::Search;
-        state.filter_keyword = Some("old".into());
-        state.input_buffer = "   ".into();
-
-        let cmd = palette.submit(&mut state);
-        assert_eq!(cmd, None);
-        assert!(state.filter_keyword.is_none());
-    }
-
-    #[test]
-    fn test_handle_key_appends_input() {
-        let mut palette = CommandPalette::new();
-        let mut state = TuiState::new();
-        state.input_mode = InputMode::Command;
-
-        palette.handle_key(
-            KeyEvent::new(KeyCode::Char('q'), crossterm::event::KeyModifiers::NONE),
-            &mut state,
+        let cmd = CommandPalette::parse_command("quest cancel quest-001", &mut state);
+        assert_eq!(
+            cmd,
+            Some(TuiCommand::RequestQuestCancel("quest-001".to_string()))
         );
-        assert_eq!(state.input_buffer, "q");
     }
 
     #[test]
-    fn test_handle_key_esc_cancels() {
-        let mut palette = CommandPalette::new();
-        let mut state = command_state("budget");
-        let cmd = palette.handle_key(
-            KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
-            &mut state,
-        );
-
-        assert_eq!(cmd, None);
-        assert_eq!(state.input_mode, InputMode::Normal);
-        assert!(state.input_buffer.is_empty());
-    }
-
-    #[test]
-    fn test_handle_key_esc_in_search_clears_keyword() {
-        let mut palette = CommandPalette::new();
+    fn test_parse_quest_cancel_with_complex_id() {
+        // 验证含连字符/数字的 quest_id 正常解析
         let mut state = TuiState::new();
-        state.input_mode = InputMode::Search;
-        state.filter_keyword = Some("old".into());
-        state.input_buffer = "new".into();
-
-        let cmd = palette.handle_key(
-            KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
-            &mut state,
+        let cmd = CommandPalette::parse_command("quest cancel q-abc-123-xyz", &mut state);
+        assert_eq!(
+            cmd,
+            Some(TuiCommand::RequestQuestCancel("q-abc-123-xyz".to_string()))
         );
+    }
 
+    #[test]
+    fn test_quest_cancel_missing_id_shows_error() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest cancel", &mut state);
         assert_eq!(cmd, None);
-        assert!(state.filter_keyword.is_none());
-        assert_eq!(state.input_mode, InputMode::Normal);
-        assert!(state.input_buffer.is_empty());
+        let (msg, sev) = state
+            .status_message
+            .expect("error status should be set for missing quest id");
+        assert_eq!(sev, Severity::Error);
+        assert!(
+            msg.contains("quest id") || msg.contains("requires"),
+            "status should report missing quest id, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_parse_quest_priority_command() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest priority quest-001 200", &mut state);
+        assert_eq!(
+            cmd,
+            Some(TuiCommand::RequestQuestPriorityChange {
+                quest_id: "quest-001".to_string(),
+                new_priority: 200,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_quest_priority_boundary_zero() {
+        // 边界值 0(u8 下限)应接受
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest priority quest-001 0", &mut state);
+        assert_eq!(
+            cmd,
+            Some(TuiCommand::RequestQuestPriorityChange {
+                quest_id: "quest-001".to_string(),
+                new_priority: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_quest_priority_boundary_max() {
+        // 边界值 255(u8 上限)应接受
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest priority quest-001 255", &mut state);
+        assert_eq!(
+            cmd,
+            Some(TuiCommand::RequestQuestPriorityChange {
+                quest_id: "quest-001".to_string(),
+                new_priority: 255,
+            })
+        );
+    }
+
+    #[test]
+    fn test_quest_priority_invalid_level_shows_error() {
+        // 999 > 255(u8 上限),parse::<u8>() 必然失败
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest priority quest-001 999", &mut state);
+        assert_eq!(cmd, None);
+        let (msg, sev) = state
+            .status_message
+            .expect("error status should be set for invalid level");
+        assert_eq!(sev, Severity::Error);
+        assert!(
+            msg.contains("invalid priority") || msg.contains("0-255"),
+            "status should report invalid priority, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_quest_priority_non_numeric_level_shows_error() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest priority quest-001 abc", &mut state);
+        assert_eq!(cmd, None);
+        let (msg, sev) = state
+            .status_message
+            .expect("error status should be set for non-numeric level");
+        assert_eq!(sev, Severity::Error);
+        assert!(
+            msg.contains("invalid priority") || msg.contains("0-255"),
+            "status should report invalid priority, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_quest_priority_missing_level_shows_error() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest priority quest-001", &mut state);
+        assert_eq!(cmd, None);
+        let (msg, sev) = state
+            .status_message
+            .expect("error status should be set for missing level");
+        assert_eq!(sev, Severity::Error);
+        assert!(
+            msg.contains("level") || msg.contains("requires"),
+            "status should report missing level, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_quest_priority_missing_all_args_shows_error() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest priority", &mut state);
+        assert_eq!(cmd, None);
+        assert_eq!(
+            state.status_message.as_ref().map(|(_, sev)| *sev),
+            Some(Severity::Error)
+        );
+    }
+
+    #[test]
+    fn test_quest_alone_still_switches_panel() {
+        // `quest` 单独仍应切换到 Quest 面板,不被子命令逻辑拦截
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest", &mut state);
+        assert_eq!(cmd, Some(TuiCommand::SwitchPanel(PanelId::Quest)));
+    }
+
+    #[test]
+    fn test_quest_unknown_subcommand_shows_error() {
+        let mut state = TuiState::new();
+        let cmd = CommandPalette::parse_command("quest frobnicate quest-001", &mut state);
+        assert_eq!(cmd, None);
+        let (msg, sev) = state
+            .status_message
+            .expect("error status should be set for unknown subcommand");
+        assert_eq!(sev, Severity::Error);
+        assert!(
+            msg.contains("unknown quest subcommand") || msg.contains("unknown command"),
+            "status should report unknown subcommand, got: {msg}"
+        );
     }
 
     // ===== CommandPaletteModel(M1.5 统一命令面板数据模型)=====

@@ -24,7 +24,7 @@ async fn experience_loop_closure_end_to_end() {
     let engine = Arc::new(QuestEngine::new(bus.clone()));
 
     // 组合根装配(Wave 1 主链)
-    let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine))
+    let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine), false)
         .await
         .expect("装配成功");
 
@@ -90,7 +90,7 @@ async fn quest_lifecycle_bridge_publishes_stop_ruling() {
 async fn auditor_publishes_assessment_events() {
     let bus = EventBus::new();
     let engine = Arc::new(QuestEngine::new(bus.clone()));
-    let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine))
+    let handles = spawn_experience_loop(bus.clone(), Arc::clone(&engine), false)
         .await
         .expect("装配成功");
 

@@ -81,14 +81,121 @@ pub fn utilization_bar(value: f64, max: f64, width: usize) -> Line<'static> {
     };
     let used = ((ratio * width as f64).round() as usize).min(width);
     let remaining = width.saturating_sub(used);
-    let pct = ratio * 100.0;
-
     Line::from(vec![
         Span::from("["),
         Span::styled("=".repeat(used), Style::default().fg(Color::Cyan)),
         Span::styled("-".repeat(remaining), Style::default().fg(Color::Gray)),
-        Span::from(format!("] {:.1}%", pct)),
+        Span::from(format!("] {}", percent_detail(ratio))),
     ])
+}
+
+/// 延迟单位自适应格式化(输入微秒)
+///
+/// WHY 自适应:P99 达秒级时 "1500000μs" 七位数字可读性差;按量级切换
+/// μs(<1_000)→ ms(<1_000_000,1 位小数)→ s(2 位小数)三档,
+/// 保持三列 P50/P95/P99 输出宽度稳定且可快速扫读。
+pub fn format_latency(us: u64) -> String {
+    if us < 1_000 {
+        format!("{us}μs")
+    } else if us < 1_000_000 {
+        format!("{:.1}ms", us as f64 / 1_000.0)
+    } else {
+        format!("{:.2}s", us as f64 / 1_000_000.0)
+    }
+}
+
+// ============================================================
+// 百分比格式化统一(PS-2 U-1/U-2,评估报告)
+// ============================================================
+
+/// 摘要视图的百分比精度(整数位)
+///
+/// WHY 用常量而非各写 `{:.0}`/`{:.1}`:评估报告 U-2 实锤同类字段在不同视图
+/// 采用不同精度且无据可依(`security` 主视图 0 位、详情弹窗 1 位;
+/// 各面板各写各的)。约定:**摘要=整数位、详情=一位小数**,两者由常量承载,
+/// 新增视图按层级取用即可,无需再"拍脑袋选精度"。
+pub const PERCENT_PRECISION_SUMMARY: usize = 0;
+
+/// 详情视图的百分比精度(一位小数)
+pub const PERCENT_PRECISION_DETAIL: usize = 1;
+
+/// 可参与百分比格式化的数值类型(f32 / f64)
+///
+/// WHY 用 trait 而非 `percent_x` / `percent_x_f32` 两套函数:
+/// 面板持有的字段类型不一(`MemMetrics.hit_rate_percent` 是 f32、
+/// `BudgetMetrics.utilization_rate` 是 f64),若为每种类型各开一套函数,
+/// API 会成对膨胀且易误用。此处以 trait 收敛为**单一 API**,
+/// 类型提升在 `as_f64` 内**显式**完成(非调用点隐式转换,故不违反
+/// §4.4 #6"避免隐式 f64 转换"的意图;且 f32→f64 加宽对有限值为精确变换)。
+pub trait PercentValue: Copy {
+    /// 显式提升为 f64(格式化用;不参与业务计算)
+    fn as_f64(self) -> f64;
+}
+
+impl PercentValue for f32 {
+    fn as_f64(self) -> f64 {
+        f64::from(self)
+    }
+}
+
+impl PercentValue for f64 {
+    fn as_f64(self) -> f64 {
+        self
+    }
+}
+
+/// 由 **0-1 比值** 格式化百分比(如 0.72 → "72.0%")
+///
+/// WHY 函数名里带基数:`0-1 比值` 与 `0-100 数值` 是两种常见约定,
+/// 评估报告 U-1 实锤 `memory.rs` 同一面板内两种基数混用且格式串完全相同
+/// (`hit_rate_percent` 是 0-100,`compressed_ratio` 是 0-1),
+/// 读代码无法判断该不该乘 100。把基数写进函数名后,调用点自解释、歧义消失。
+pub fn percent_from_ratio<V: PercentValue>(ratio: V, precision: usize) -> String {
+    format!("{:.*}%", precision, ratio.as_f64() * 100.0)
+}
+
+/// 由 **0-100 数值** 格式化百分比(如 87.5 → "87.5%")
+///
+/// 用于数据源本身已是百分数的字段(如 `MemMetrics.hit_rate_percent`、
+/// `MemMetrics.usage_percent`),避免在调用点重复 `/100.0` 再 `*100.0` 的往返。
+pub fn percent_from_value<V: PercentValue>(value: V, precision: usize) -> String {
+    format!("{:.*}%", precision, value.as_f64())
+}
+
+/// 摘要视图快捷式(0-1 比值 → 整数百分比)
+pub fn percent_summary<V: PercentValue>(ratio: V) -> String {
+    percent_from_ratio(ratio, PERCENT_PRECISION_SUMMARY)
+}
+
+/// 详情视图快捷式(0-1 比值 → 一位小数百分比)
+pub fn percent_detail<V: PercentValue>(ratio: V) -> String {
+    percent_from_ratio(ratio, PERCENT_PRECISION_DETAIL)
+}
+
+/// 时延格式化(输入**毫秒**,内部折算微秒后交给 [`format_latency`])
+///
+/// # WHY 需要本适配器
+/// 指标字段常见的单位是**毫秒**(如 `HealthMetrics.average_latency_ms: f64`),
+/// 而 [`format_latency`] 的输入是**微秒**(采样侧原值)。若无本函数,调用点会
+/// 各自写 `format!("{:.1} ms", ms)` —— 这正是评估报告 U-3:单位被写死,
+/// 极值下可读性差(0.0003ms 显示为 "0.0 ms")。
+///
+/// # 非有限值处理(诚实优先)
+/// `NaN` / `±Inf` / 负值**不折算为 "0μs"** —— 那会把"数据异常或缺失"
+/// 伪装成"零延迟(完美)"。此处如实返回 `n/a`
+/// (与 health 面板既有的 `n/a` 标注惯例一致)。
+///
+/// # 参数
+/// - `ms`:时延(毫秒);`0.0` 是合法值(未采样)且保持输出 `0μs`
+///
+/// # 返回值
+/// 自适应单位字符串(`μs` / `ms` / `s`)
+pub fn format_latency_ms(ms: f64) -> String {
+    if !ms.is_finite() || ms < 0.0 {
+        return "n/a".to_string();
+    }
+    // round 后转 u64:避免 0.5μs 级抖动在整数截断下丢失(采样精度为 μs)
+    format_latency((ms * 1_000.0).round() as u64)
 }
 
 /// 构造延迟统计行(P50/P95/P99 三列横向对比)
@@ -104,14 +211,15 @@ pub fn utilization_bar(value: f64, max: f64, width: usize) -> Line<'static> {
 /// 的差距来判断长尾延迟严重程度,横排比纵排更易快速扫读。P50 反映典型体验,
 /// P95 反映多数用户的上限,P99 反映尾部异常,三者并列可一眼识别延迟分布形态
 /// (如 P99 远大于 P50 表示长尾问题)。同时复用此函数避免各面板重复拼字符串。
+/// 单位经 `format_latency` 自适应(μs/ms/s),调用方无需感知量级。
 pub fn latency_line(label: &str, p50: u64, p95: u64, p99: u64) -> Line<'static> {
     Line::from(format!(
-        "{}  {}  P50: {}μs  P95: {}μs  P99: {}μs",
+        "{}  {}  P50: {}  P95: {}  P99: {}",
         label,
         crate::t!("panel.router.latency"),
-        p50,
-        p95,
-        p99,
+        format_latency(p50),
+        format_latency(p95),
+        format_latency(p99),
     ))
 }
 
@@ -575,6 +683,44 @@ mod tests {
     }
 
     #[test]
+    fn test_format_latency_micros() {
+        // < 1_000 μs:保持微秒档,既有输出不变
+        assert_eq!(format_latency(0), "0μs");
+        assert_eq!(format_latency(120), "120μs");
+        assert_eq!(format_latency(999), "999μs");
+    }
+
+    #[test]
+    fn test_format_latency_millis() {
+        // 1_000 ≤ us < 1_000_000:毫秒档,1 位小数
+        assert_eq!(format_latency(1_000), "1.0ms");
+        assert_eq!(format_latency(1_500), "1.5ms");
+        assert_eq!(format_latency(150_000), "150.0ms");
+    }
+
+    #[test]
+    fn test_format_latency_seconds() {
+        // ≥ 1_000_000 μs:秒档,2 位小数
+        assert_eq!(format_latency(1_000_000), "1.00s");
+        assert_eq!(format_latency(2_500_000), "2.50s");
+    }
+
+    #[test]
+    fn test_latency_line_adapts_units() {
+        // 既有 μs 档(KVBSR 120/480/950)输出保持不变(回归保护)
+        let line = latency_line("KVBSR", 120, 480, 950).to_string();
+        assert!(line.contains("P50: 120μs"), "μs 档输出不应变化: {line}");
+        assert!(line.contains("P95: 480μs"));
+        assert!(line.contains("P99: 950μs"));
+
+        // 跨档:P99 达秒级时自适应为 s,不再打印 7 位数字 μs
+        let line = latency_line("SESA", 1_500, 1_000, 2_500_000).to_string();
+        assert!(line.contains("P50: 1.5ms"), "ms 档应自适应: {line}");
+        assert!(line.contains("P95: 1.0ms"));
+        assert!(line.contains("P99: 2.50s"), "s 档应自适应: {line}");
+    }
+
+    #[test]
     fn test_latency_line_zero_values() {
         let line = latency_line("FaaE", 0, 0, 0);
         let text = line.to_string();
@@ -738,5 +884,26 @@ mod tests {
         let filled = &line.spans[0];
         // 0.0 在 [-1.0, 1.0] 范围中是中值,应填充约 5 个字符
         assert_eq!(filled.content.chars().count(), 5);
+    }
+
+    #[test]
+    fn test_format_latency_ms_adapts_units() {
+        // 常规:毫秒档(与旧 "{:.1} ms" 数值一致,仅单位写法统一为无空格)
+        assert_eq!(format_latency_ms(15.5), "15.5ms");
+        // 极小值:进入微秒档(旧实现显示 "0.0 ms",现如实显示亚毫秒)
+        assert_eq!(format_latency_ms(0.3), "300μs");
+        // 极大值:进入秒档(旧实现显示 "15000.0 ms",可读性差)
+        assert_eq!(format_latency_ms(15_000.0), "15.00s");
+        // 零值合法(未采样),不经 n/a 分支
+        assert_eq!(format_latency_ms(0.0), "0μs");
+    }
+
+    #[test]
+    fn test_format_latency_ms_marks_non_finite_as_na() {
+        // WHY NaN 不得折算为 0μs:那会把"数据异常"伪装成"零延迟(完美)"
+        assert_eq!(format_latency_ms(f64::NAN), "n/a");
+        assert_eq!(format_latency_ms(f64::INFINITY), "n/a");
+        assert_eq!(format_latency_ms(f64::NEG_INFINITY), "n/a");
+        assert_eq!(format_latency_ms(-1.0), "n/a");
     }
 }
