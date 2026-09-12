@@ -20,6 +20,8 @@ use std::sync::Mutex;
 use crate::error::CsnError;
 use crate::similarity::cosine_similarity;
 use crate::types::{CapabilityDescriptor, SubstitutionCandidate};
+// ws2-c1 红线 #8:公共 Top-K 收敛工具(替代 sort_by 全排)
+use nexus_contracts::util::xts_top_k_by;
 
 /// 替代候选注册表统计 — 监控指标快照
 ///
@@ -194,14 +196,11 @@ impl SubstitutionCandidateRegistry {
             return Vec::new();
         }
 
-        // Top-K 选择:使用 select_nth_unstable_by(O(n) 平均复杂度)
+        // Top-K 降序选择 + 排序(O(n + k log k)):xts_top_k_by 返回严格降序前 k 段
         let k = top_k.min(scored.len());
-        let top = select_top_k_desc(&mut scored, k);
-
-        // Top-K 内部降序排序(O(K log K),K << n,可接受)
-        // WHY:select_nth_unstable 仅保证前 K 个是最大的,但不保证顺序;
-        // 返回前需排序以便调用方按相似度降序消费
-        top.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let top = xts_top_k_by(&mut scored, k, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // 映射为 SubstitutionCandidate,按 rank 分配 tier
         top.iter()
@@ -249,22 +248,6 @@ impl SubstitutionCandidateRegistry {
             misses: self.misses.load(Ordering::Relaxed),
         }
     }
-}
-
-/// Top-K 降序选择 — 使用 `select_nth_unstable_by` 实现 O(n) 平均复杂度
-///
-/// 返回前 `k` 个相似度最高的元素(未完全排序,但保证是最大的 K 个)。
-/// 调用方负责对返回的切片进行排序以获得降序顺序。
-fn select_top_k_desc(scored: &mut [(f32, String)], k: usize) -> &mut [(f32, String)] {
-    if k >= scored.len() {
-        return scored;
-    }
-    let idx = k - 1;
-    // 降序:b.0 vs a.0(大的在前)
-    scored.select_nth_unstable_by(idx, |a, b| {
-        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    &mut scored[..k]
 }
 
 #[cfg(test)]
@@ -455,28 +438,31 @@ mod tests {
         Ok(())
     }
 
-    // === 5. select_top_k_desc 单元测试 ===
+    // === 5. xts_top_k_by 单元测试(原 select_top_k_desc,收敛至共享工具) ===
 
     #[test]
     fn test_select_top_k_desc() {
-        let mut scored = vec![
-            (0.3_f32, "a".into()),
-            (0.9_f32, "b".into()),
-            (0.5_f32, "c".into()),
-            (0.1_f32, "d".into()),
+        let mut scored: Vec<(f32, String)> = vec![
+            (0.3_f32, "a".to_string()),
+            (0.9_f32, "b".to_string()),
+            (0.5_f32, "c".to_string()),
+            (0.1_f32, "d".to_string()),
         ];
-        let top = select_top_k_desc(&mut scored, 2);
+        let top = nexus_contracts::util::xts_top_k_by(&mut scored, 2, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
         assert_eq!(top.len(), 2);
-        // 前 2 个应是最大的两个(0.9 和 0.5),但顺序不保证
-        let scores: Vec<f32> = top.iter().map(|(s, _)| *s).collect();
-        assert!(scores.contains(&0.9));
-        assert!(scores.contains(&0.5));
+        // xts_top_k_by 返回严格降序:[0] >= [1]
+        assert_eq!(top[0].0, 0.9);
+        assert_eq!(top[1].0, 0.5);
     }
 
     #[test]
     fn test_select_top_k_desc_k_exceeds_len() {
-        let mut scored = vec![(0.5_f32, "a".into())];
-        let top = select_top_k_desc(&mut scored, 10);
+        let mut scored: Vec<(f32, String)> = vec![(0.5_f32, "a".to_string())];
+        let top = nexus_contracts::util::xts_top_k_by(&mut scored, 10, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+        });
         assert_eq!(top.len(), 1, "k > len 时返回全部");
     }
 

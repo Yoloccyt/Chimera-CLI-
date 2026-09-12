@@ -216,7 +216,8 @@ async fn recv_critical(
 
 /// 测试 1(容量内投递):注入 20 个事件(19 Critical + 1 Normal),
 /// 断言全部投递成功 —— broadcast 保序收到全部 20 个,mpsc 旁路收到且仅收到
-/// 旁路触发集内 10 个 Critical 事件(Phase 10 Wave 5:9→10),
+/// 旁路触发集以权威清单为准(现 CRITICAL_MPSC_VARIANTS=13,2026-09-04;
+/// 本测试登记时为 10,Phase 10 Wave 5:9→10),
 /// 全程 `critical_dropped_count == 0`。
 #[tokio::test]
 async fn critical_events_within_capacity_all_delivered() {

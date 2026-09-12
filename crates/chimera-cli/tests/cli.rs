@@ -1214,15 +1214,26 @@ fn test_doctor_executes_five_dimension_checks() {
         "stderr 应包含 LLM Provider 检查项,实际 stderr: {}",
         stderr
     );
-    // 汇总统计(共 6 项)
+    // WI-02 增强:第 7/8 维（认证密钥 + SecCore 沙箱）
+    assert!(
+        stderr.contains("认证密钥"),
+        "stderr 应包含认证密钥检查项(WI-02),实际 stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("SecCore 沙箱"),
+        "stderr 应包含 SecCore 沙箱检查项(WI-02),实际 stderr: {}",
+        stderr
+    );
+    // 汇总统计(共 8 项,WI-02 增强)
     assert!(
         stderr.contains("汇总"),
         "stderr 应包含汇总统计,实际 stderr: {}",
         stderr
     );
     assert!(
-        stderr.contains("共 6 项"),
-        "stderr 应包含 '共 6 项' 汇总,实际 stderr: {}",
+        stderr.contains("共 8 项"),
+        "stderr 应包含 '共 8 项' 汇总,实际 stderr: {}",
         stderr
     );
 }
@@ -1261,8 +1272,8 @@ fn test_doctor_json_outputs_report_envelope() {
         stdout
     );
     assert!(
-        stdout.contains("\"total\": 6"),
-        "stdout 应包含 total: 6(6 项检查),实际: {}",
+        stdout.contains("\"total\": 8"),
+        "stdout 应包含 total: 8(8 项检查,WI-02 增强: +认证密钥 / +沙箱),实际: {}",
         stdout
     );
 }

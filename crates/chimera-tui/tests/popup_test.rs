@@ -6,7 +6,8 @@ use chimera_tui::{PopupKind, PopupStack, Severity};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-fn render_popup(stack: &PopupStack, width: u16, height: u16) -> String {
+// PS-3(I-5):render 需要 &mut(渲染时钳制并写回滚动状态)
+fn render_popup(stack: &mut PopupStack, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -29,7 +30,7 @@ fn popup_stack_render_notification() {
         severity: Severity::Warning,
     });
 
-    let content = render_popup(&stack, 40, 10);
+    let content = render_popup(&mut stack, 40, 10);
     assert!(
         content.contains("Notification"),
         "notification popup should render title"
@@ -49,7 +50,7 @@ fn popup_stack_render_detail() {
         scroll: 0,
     });
 
-    let content = render_popup(&stack, 50, 12);
+    let content = render_popup(&mut stack, 50, 12);
     assert!(
         content.contains("Event Detail"),
         "detail popup should render title"
@@ -73,7 +74,7 @@ fn popup_stack_render_confirm() {
         confirmed: true,
     });
 
-    let content = render_popup(&stack, 50, 12);
+    let content = render_popup(&mut stack, 50, 12);
     assert!(
         content.contains("Confirm"),
         "confirm popup should render title"
@@ -138,7 +139,7 @@ fn popup_stack_confirm_toggle() {
 
 #[test]
 fn popup_stack_empty_render_is_noop() {
-    let stack = PopupStack::new();
+    let mut stack = PopupStack::new();
     let backend = TestBackend::new(40, 10);
     let mut terminal = Terminal::new(backend).unwrap();
     // 空栈渲染不应 panic
@@ -159,7 +160,7 @@ fn popup_stack_render_topmost_only() {
         severity: Severity::Error,
     });
 
-    let content = render_popup(&stack, 40, 10);
+    let content = render_popup(&mut stack, 40, 10);
     assert!(content.contains("top"));
     // 底层消息不应出现在最终渲染输出中
     assert!(!content.contains("bottom"));
@@ -199,6 +200,6 @@ fn popup_stack_detail_render_respects_scroll() {
         scroll: 2,
     });
 
-    let content = render_popup(&stack, 40, 6);
+    let content = render_popup(&mut stack, 40, 6);
     assert!(content.contains("HIDDEN_LINE"));
 }

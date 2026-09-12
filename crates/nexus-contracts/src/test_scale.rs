@@ -70,6 +70,8 @@ pub fn scale_timeout(secs: u64) -> u64 {
 
 /// `scaled_timeout!` 宏 — 接受字面量 secs,返回 `Duration`
 ///
+/// 全 workspace 唯一 `scaled_timeout!`(env scale 缩放语义;chimera-tui 测试本地档位放大宏已更名 `build_scaled_timeout!`,勿再同名定义)。
+///
 /// # 示例
 ///
 /// ```rust,no_run

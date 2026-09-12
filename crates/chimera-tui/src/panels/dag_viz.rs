@@ -98,22 +98,16 @@ impl DagVizPanel {
             Line::from("──────────────────────────────────────"),
         ];
 
-        // Task 3.5: L5 Knowledge 协同 — 显示谱系 DAG 节点/边计数
-        // 调用 gsoe_evolution::spec_dag_snapshot() 获取 GSOE 谱系演化图,
-        // 实现 L10 Panel ↔ L5 Knowledge 真实数据闭环。
-        // WHY 在 quest_list 判断之前:空 quest 时仍显示谱系信息,确保面板始终有内容。
-        {
-            let snapshot = gsoe_evolution::spec_dag_snapshot();
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "Spec DAG: {} nodes, {} edges",
-                    snapshot.nodes.len(),
-                    snapshot.edges.len()
-                ),
-                Style::default().fg(Color::Gray),
-            )));
-            lines.push(Line::from(""));
-        }
+        // PS-2 批次3:GSOE 谱系图在生产装配面**从未实例化**(SpecRegistry /
+        // GsoeEngine 无生产入口),全局 `SPEC_DAG` 恒空 → 原实现恒显示
+        // "Spec DAG: 0 nodes, 0 edges",这是**假数据**:看起来是"无规范",
+        // 真实语义却是"未接线"。现移除 L10→L5 越层直调,改为诚实标注。
+        // WHY 位置不变(仍在 quest_list 判断之前):确保面板始终有内容。
+        lines.push(Line::from(Span::styled(
+            crate::t!("panel.dag.unwired"),
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(""));
 
         if state.quest_list.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -180,6 +174,12 @@ impl Panel for DagVizPanel {
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // PS-2 U-4:退化尺寸统一早退(共享最低线,见 crate::panels::MIN_PANEL_W/H)
+        if crate::panels::degenerate(area) {
+            crate::panels::render_too_small(area, buf);
+            return;
+        }
+
         let block = Block::default().borders(Borders::ALL).title(self.title());
         let paragraph = Paragraph::new(Self::content(state)).block(block);
         paragraph.render(area, buf);
@@ -297,5 +297,35 @@ mod tests {
         }
         let content = DagVizPanel::content(&state).to_string();
         assert!(content.contains("2 more quests"));
+    }
+}
+
+// ============================================================
+// PS-2 批次3:未接线态(移除 L10→L5 越层直调后的诚实标注)
+// ============================================================
+
+#[cfg(test)]
+mod ps2_batch3_tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    fn render() -> String {
+        let state = TuiState::new();
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buf = Buffer::empty(area);
+        let mut panel = DagVizPanel;
+        panel.render(&state, area, &mut buf);
+        buf.content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn no_fake_zero_dag_counts_rendered() {
+        let rendered = render();
+        // 原实现恒显示 "Spec DAG: 0 nodes, 0 edges"(全局 SPEC_DAG 恒空),
+        // 语义误导为"无规范"而非"未接线"。移除越层直调后不得再出现该计数行。
+        assert!(
+            !rendered.contains("nodes"),
+            "must not render dead DAG counts, got: {rendered}"
+        );
     }
 }

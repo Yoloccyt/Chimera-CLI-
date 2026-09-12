@@ -121,8 +121,8 @@ fn test_switch_panel_prev() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_prev();
     // Concord T1.4:FocusManager 注册序派生自 PanelId::REGISTERED_FOCUS_ORDER;
-    // Phase 10:Quest 的上一个 = 列表末尾的 InjectionStrategy 面板(27 面板)。
-    assert_eq!(app.current_panel(), PanelId::InjectionStrategy);
+    // FC-05:Quest 的上一个 = 环尾 ExperienceCardViz(InjectionStrategy 已下线)。
+    assert_eq!(app.current_panel(), PanelId::ExperienceCardViz);
     Ok(())
 }
 
@@ -1145,6 +1145,52 @@ fn test_update_pulls_snapshot_into_state() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+/// P-A(评估报告 v2):update() 必须与 DataSnapshot 共享 `latest_events` 的 Arc,
+/// 不再对事件流做 ≤256 事件的深拷贝;revision 不变的二次 update 走早退路径,
+/// 共享关系保持,且面板只读消费(Deref 迭代)不影响引用计数。
+#[test]
+fn test_update_shares_latest_events_arc_without_deep_copy() -> Result<(), Box<dyn std::error::Error>>
+{
+    let snapshot = DataSnapshot {
+        revision: 1,
+        latest_events: Arc::new(VecDeque::from([NexusEvent::CacheHit {
+            metadata: EventMetadata::new("test"),
+            cache_key: "arc-share".into(),
+        }])),
+        ..Default::default()
+    };
+    // 先保留一份 Arc 句柄,用于断言 update 后与状态指向同一分配
+    let events_arc = Arc::clone(&snapshot.latest_events);
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(MockDataSource::new(snapshot)),
+    )?;
+    app.update();
+
+    // 零拷贝:state.latest_events 与快照内 Arc 共享同一堆分配
+    assert!(
+        Arc::ptr_eq(&events_arc, &app.state().latest_events),
+        "update 应 Arc 共享事件流,而非深拷贝"
+    );
+    assert_eq!(app.state().latest_events.len(), 1);
+
+    // 只读消费(迭代)不改变 Arc 引用计数
+    let count_before = Arc::strong_count(&events_arc);
+    let total: usize = app.state().latest_events.iter().count();
+    assert_eq!(total, 1);
+    assert_eq!(Arc::strong_count(&events_arc), count_before);
+
+    // 同 revision 二次 update:早退路径不重绑,共享关系保持
+    app.update();
+    assert!(Arc::ptr_eq(&events_arc, &app.state().latest_events));
+    Ok(())
+}
+
 #[test]
 fn test_update_sets_status_message_on_error() -> Result<(), Box<dyn std::error::Error>> {
     /// 总是返回错误的数据源
@@ -1313,7 +1359,7 @@ fn test_mouse_scroll_in_main_panel() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_to(PanelId::Log);
     let state = app.state_mut();
-    state.latest_events = VecDeque::from([
+    state.latest_events = std::sync::Arc::new(VecDeque::from([
         NexusEvent::CacheHit {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k1".into(),
@@ -1322,7 +1368,7 @@ fn test_mouse_scroll_in_main_panel() -> Result<(), Box<dyn std::error::Error>> {
             metadata: EventMetadata::new("scc-cache"),
             cache_key: "k2".into(),
         },
-    ]);
+    ]));
 
     // 先渲染以设置 last_area
     let backend = TestBackend::new(80, 24);
@@ -1378,7 +1424,8 @@ fn test_mouse_command_bar_click_focuses() -> Result<(), Box<dyn std::error::Erro
         row: 20,
         modifiers: event::KeyModifiers::NONE,
     });
-    assert_eq!(app.state().input_mode, InputMode::Command);
+    // I-B(2026-09-06 复评):底栏点击改入 Slash 模式(与 `:`/`/` 斜杠入口统一)
+    assert_eq!(app.state().input_mode, InputMode::Slash);
     Ok(())
 }
 
@@ -1519,10 +1566,10 @@ fn test_dirty_map_macro_multi_panel_marking() -> Result<(), Box<dyn std::error::
     app.state_mut().clear_dirty();
 
     // 修改 state.latest_events — 单字段映射到 3 个面板
-    app.state_mut().latest_events = VecDeque::from([NexusEvent::CacheHit {
+    app.state_mut().latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::CacheHit {
         metadata: EventMetadata::new("test-dirty-map"),
         cache_key: "dirty-macro-key".into(),
-    }]);
+    }]));
     app.update();
 
     // 宏应同时标记 Parliament + Log + EventStream 三面板(共享事件流)
@@ -1545,4 +1592,570 @@ fn test_dirty_map_macro_multi_panel_marking() -> Result<(), Box<dyn std::error::
         "latest_events 变化不应标记 Quest 面板 dirty(无映射)"
     );
     Ok(())
+}
+
+// ============================================================
+// U-1(2026-09-06 复评):responsive_collapse_threshold 生产接线
+// ============================================================
+
+#[test]
+fn responsive_threshold_controls_companion_folding() {
+    // 默认阈值 100:宽 80 < 100 → 次窗格折叠为单窗格
+    let app = TuiApp::new(TuiConfig {
+        default_view_mode: crate::types::ViewMode::Dashboard,
+        persist_state: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut app = app;
+    app.state_mut().layout_mode = LayoutMode::VimSplit; // VimSplit 内在多窗格
+    let narrow = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let wide = ratatui::layout::Rect::new(0, 0, 120, 24);
+    assert_eq!(
+        app.pane_rects(narrow).len(),
+        1,
+        "窄视口(80 < 默认阈值 100)应折叠次窗格"
+    );
+    assert_eq!(
+        app.pane_rects(wide).len(),
+        2,
+        "宽视口(120 ≥ 100)应保留 VimSplit 双窗格"
+    );
+
+    // 阈值 0 = 禁用自动折叠:窄视口也保留次窗格(配置语义,pane_manager 文档)
+    let app0 = TuiApp::new(TuiConfig {
+        default_view_mode: crate::types::ViewMode::Dashboard,
+        persist_state: false,
+        responsive_collapse_threshold: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut app0 = app0;
+    app0.state_mut().layout_mode = LayoutMode::VimSplit;
+    assert_eq!(
+        app0.pane_rects(narrow).len(),
+        2,
+        "阈值 0 应禁用折叠(窄视口保留次窗格)"
+    );
+
+    // 自定义阈值 70:宽 80 ≥ 70 → 不折叠(阈值真正驱动行为,死配置回归锁)
+    let app70 = TuiApp::new(TuiConfig {
+        default_view_mode: crate::types::ViewMode::Dashboard,
+        persist_state: false,
+        responsive_collapse_threshold: 70,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut app70 = app70;
+    app70.state_mut().layout_mode = LayoutMode::VimSplit;
+    assert_eq!(
+        app70.pane_rects(narrow).len(),
+        2,
+        "阈值 70 时 80 列不应折叠(配置值生效)"
+    );
+}
+
+// ============================================================
+// FC-05: 经验卡片可视化面板接线(组合根 install 路径)
+// ============================================================
+
+/// Mock 经验卡片统计提供者 — 固定统计快照
+#[derive(Debug)]
+struct MockCardStatsProvider(crate::panels::ExperienceCardVizStats);
+
+impl crate::panels::ExperienceCardStatsProvider for MockCardStatsProvider {
+    fn global_stats(&self) -> crate::panels::ExperienceCardVizStats {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn install_experience_card_provider_wires_real_stats() -> Result<(), TuiError> {
+    let mut app = make_app()?;
+
+    // 默认(未接线):面板诚实展示等待提示
+    let idx = app
+        .panel_index(PanelId::ExperienceCardViz)
+        .expect("ExperienceCardViz 应已注册");
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 10));
+    app.panels[idx].render(
+        &TuiState::new(),
+        ratatui::layout::Rect::new(0, 0, 60, 10),
+        &mut buf,
+    );
+    let text: String = buf.content.iter().map(|c| c.symbol()).collect();
+    assert!(
+        text.contains("Awaiting stats provider"),
+        "默认面板应诚实展示等待提示"
+    );
+
+    // 接线:替换为带提供者实例 → 渲染真实统计
+    let provider = Arc::new(MockCardStatsProvider(
+        crate::panels::ExperienceCardVizStats {
+            total_cards: 42,
+            evaluated: 7,
+            unique_errors: 2,
+            method_distribution: vec![("draft_pipeline".into(), 5)],
+            best_score: 0.9,
+            average_score: 0.6,
+        },
+    ));
+    app.install_experience_card_provider(provider);
+    assert_eq!(
+        app.panels[idx].id(),
+        PanelId::ExperienceCardViz,
+        "替换后面板身份不变"
+    );
+
+    let mut buf2 = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 10));
+    app.panels[idx].render(
+        &TuiState::new(),
+        ratatui::layout::Rect::new(0, 0, 60, 10),
+        &mut buf2,
+    );
+    let text2: String = buf2.content.iter().map(|c| c.symbol()).collect();
+    assert!(
+        text2.contains("Total: 42"),
+        "接线后应渲染真实统计(Total: 42)"
+    );
+    assert!(!text2.contains("Awaiting stats provider"));
+    Ok(())
+}
+
+// ============================================================
+// P1(2026-09-09 复评):TuiActionRequested 回执 request_id 归属
+// ============================================================
+
+/// 构造带指定数据快照的 app(revision 保持 0,`update()` 恒拷贝,便于桩驱动)
+fn make_app_with_snapshot(snapshot: DataSnapshot) -> Result<TuiApp, TuiError> {
+    TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(MockDataSource::new(snapshot)),
+    )
+}
+
+/// 守护不变量:**每个派发的请求独立占位**。
+///
+/// WHY:旧实现用单个 `Option<Instant>` 槽位,连续/并发派发两个动作时后者覆盖前者,
+/// 先到的回执会清掉后者的超时计时,形成“失败却显示成功”的静默失败。
+#[test]
+fn pending_actions_keyed_by_request_id() -> Result<(), Box<dyn std::error::Error>> {
+    let mut app = make_app()?;
+    app.dispatch_action(
+        "quest.pause",
+        "{}".to_string(),
+        event_bus::ActionSource::Palette,
+    );
+    app.dispatch_action(
+        "quest.cancel",
+        "{}".to_string(),
+        event_bus::ActionSource::Palette,
+    );
+    assert_eq!(
+        app.state().pending_actions.len(),
+        2,
+        "两次派发应在 pending_actions 各占一项"
+    );
+    let mut keys: Vec<&String> = app.state().pending_actions.keys().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec!["tui-1", "tui-2"],
+        "两次派发的 request_id 必须互不相同"
+    );
+    Ok(())
+}
+
+/// 守护不变量:**回执只清除自己那一条**。
+///
+/// WHY:并发派发两个请求后,仅其中一条收到 Completed/Failed 时,另一条仍须保留
+/// 超时兜底计时,否则它会永久静默(无回执也无超时提示)。
+#[test]
+fn feedback_removes_only_matching_request() -> Result<(), Box<dyn std::error::Error>> {
+    // WHY 结构体更新语法:clippy::field_reassign_with_default 禁止对 Default
+    // 实例逐字段赋值(与 state.rs:341 既有范式一致)
+    let snapshot = DataSnapshot {
+        action_feedback: Some(("paused".to_string(), false)),
+        action_feedback_seq: 1,
+        action_feedback_request_id: Some("tui-1".to_string()),
+        ..Default::default()
+    };
+    let mut app = make_app_with_snapshot(snapshot)?;
+
+    app.dispatch_action(
+        "quest.pause",
+        "{}".to_string(),
+        event_bus::ActionSource::Palette,
+    );
+    app.dispatch_action(
+        "quest.cancel",
+        "{}".to_string(),
+        event_bus::ActionSource::Palette,
+    );
+    assert_eq!(app.state().pending_actions.len(), 2);
+
+    app.update();
+
+    assert!(
+        !app.state().pending_actions.contains_key("tui-1"),
+        "已回执的 tui-1 应被精准移除"
+    );
+    assert!(
+        app.state().pending_actions.contains_key("tui-2"),
+        "未回执的 tui-2 必须保留超时计时(否则静默失败)"
+    );
+    Ok(())
+}
+
+/// 守护不变量:**超时只摘除已过期项**,未过期请求继续等待。
+///
+/// WHY:同帧多条过期只上屏一条告警,但仍须清空全部过期键,避免下一帧重复告警;
+/// 未过期项若被连带清空则同样退化为静默失败。
+#[test]
+fn timeout_reports_and_clears_only_expired() -> Result<(), Box<dyn std::error::Error>> {
+    let mut app = make_app()?;
+    let now = std::time::Instant::now();
+    app.state_mut()
+        .pending_actions
+        .insert("tui-1".to_string(), now - std::time::Duration::from_secs(1));
+    app.state_mut().pending_actions.insert(
+        "tui-2".to_string(),
+        now + std::time::Duration::from_secs(60),
+    );
+
+    app.check_action_timeout();
+
+    assert_eq!(app.state().pending_actions.len(), 1, "只有过期项应被摘除");
+    assert!(
+        app.state().pending_actions.contains_key("tui-2"),
+        "未过期的 tui-2 仍应等待回执"
+    );
+    let warned = matches!(
+        &app.state().status_message,
+        Some((msg, Severity::Warning)) if msg.contains("orchestrator not connected")
+    );
+    assert!(warned, "过期应上屏编排器未接线警告");
+    Ok(())
+}
+
+/// 守护不变量:request_id 单调递增(`tui-1`/`tui-2`/`tui-3`),不重复发号。
+///
+/// WHY:回执配对依赖 request_id 唯一;重复发号会让先到回执误清后发请求。
+#[test]
+fn action_request_seq_monotonic() -> Result<(), Box<dyn std::error::Error>> {
+    let mut app = make_app()?;
+    for _ in 0..3 {
+        app.dispatch_action(
+            "agent.chat",
+            r#"{"query":"hi"}"#.to_string(),
+            event_bus::ActionSource::Chat,
+        );
+    }
+    assert_eq!(app.state().action_request_seq, 3);
+    assert_eq!(app.state().pending_actions.len(), 3);
+    for rid in ["tui-1", "tui-2", "tui-3"] {
+        assert!(
+            app.state().pending_actions.contains_key(rid),
+            "request_id {rid} 应存在且唯一"
+        );
+    }
+    Ok(())
+}
+
+/// P1 回执归属属性测试(与上方单测互补:单测覆盖典型次数,属性测试覆盖任意次数)
+#[cfg(test)]
+mod p1_request_id_proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// 属性:任意 n 次连续派发,`pending_actions` 恰有 n 项且 `request_id` 两两互异。
+        ///
+        /// WHY 属性化:回执配对依赖"发号不重复"这一全量不变量,固定 2-3 次的
+        /// 单测无法穷尽;由 n ∈ [1,16] 随机采样,用 HashSet 判定两两互异。
+        #[test]
+        fn dispatched_requests_get_distinct_ids(n in 1usize..=16) {
+            let mut app = make_app().unwrap();
+            for _ in 0..n {
+                app.dispatch_action(
+                    "quest.pause",
+                    "{}".to_string(),
+                    event_bus::ActionSource::Palette,
+                );
+            }
+            prop_assert_eq!(app.state().pending_actions.len(), n, "每条请求独立占位");
+            let keys: std::collections::HashSet<&String> =
+                app.state().pending_actions.keys().collect();
+            prop_assert_eq!(keys.len(), n, "request_id 必须两两互异");
+        }
+    }
+}
+
+// ============================================================
+// PS-3(I-3):弹窗内 Ctrl+L 中英切换(此前被 handle_popup_key 吞掉,
+// 是 Insert/Slash/palette 之外唯一失效上下文)
+// ============================================================
+
+#[test]
+fn ctrl_l_toggles_locale_while_popup_open() {
+    // 持 guard 钉 Zh:并行 i18n 测试不再干扰,断言确定性成立
+    let _guard = crate::i18n::locale_test_guard();
+    crate::i18n::set_locale(crate::i18n::Locale::Zh);
+
+    let mut app = make_app().expect("make_app should succeed");
+    app.state_mut().popup_stack.push(PopupKind::Confirm {
+        prompt: "confirm?".into(),
+        on_confirm: "quit".into(),
+        confirmed: false,
+    });
+    assert!(!app.state().popup_stack.is_empty(), "前置:弹窗已打开");
+
+    app.handle_key_event(KeyEvent::new(
+        KeyCode::Char('l'),
+        event::KeyModifiers::CONTROL,
+    ));
+
+    assert_eq!(
+        crate::i18n::current_locale(),
+        crate::i18n::Locale::En,
+        "弹窗内 Ctrl+L 应切换中英(Zh → En)"
+    );
+    assert!(!app.state().popup_stack.is_empty(), "Ctrl+L 不应关闭弹窗");
+}
+
+// ============================================================
+// PS-2(F-1):协议握手回执上屏(HandshakeSync → snapshot → status_message)
+// ============================================================
+
+#[test]
+fn handshake_ack_promotes_to_status_and_state() {
+    use crate::types::{HandshakeLevel, HandshakeState};
+
+    // Degraded 回执:Warning 级上屏,携降级项;状态随之落库
+    let snap = DataSnapshot {
+        handshake: Some(HandshakeState {
+            level: HandshakeLevel::Degraded,
+            degraded_items: vec!["agent-tree".into(), "overwindow".into()],
+            server_version: "2.28.2-omega".into(),
+        }),
+        ..Default::default()
+    };
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(MockDataSource::new(snap)),
+    )
+    .expect("app with mock source");
+
+    app.update();
+
+    let st = app.state();
+    let hs = st.handshake.as_ref().expect("握手状态应已落库");
+    assert_eq!(hs.level, HandshakeLevel::Degraded);
+    assert_eq!(hs.degraded_items.len(), 2);
+
+    let (msg, severity) = st
+        .status_message
+        .as_ref()
+        .expect("Degraded 回执应上屏状态栏");
+    assert!(
+        msg.contains("agent-tree") && msg.contains("overwindow"),
+        "Degraded 提示应携降级项, got: {msg}"
+    );
+    assert_eq!(*severity, Severity::Warning, "Degraded 应为 Warning 级");
+
+    // 同一快照再次 update:revision 未变 → 跳过,不重复上屏(自然去重)
+    app.update();
+    // 状态保持(无回退),不再额外断言文案变化
+    assert!(app.state().handshake.is_some());
+}
+
+#[test]
+fn refused_ack_promotes_error_severity() {
+    use crate::types::{HandshakeLevel, HandshakeState};
+
+    let snap = DataSnapshot {
+        handshake: Some(HandshakeState {
+            level: HandshakeLevel::Refused,
+            degraded_items: Vec::new(),
+            server_version: "0.0.1".into(),
+        }),
+        ..Default::default()
+    };
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: crate::types::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(MockDataSource::new(snap)),
+    )
+    .expect("app with mock source");
+
+    app.update();
+
+    let (msg, severity) = app
+        .state()
+        .status_message
+        .as_ref()
+        .expect("Refused 回执应上屏状态栏");
+    assert_eq!(*severity, Severity::Error, "Refused 应为 Error 级");
+    assert!(msg.contains("0.0.1"), "提示应携服务端版本, got: {msg}");
+}
+
+// ============================================================
+// PS-2(F-6):子代理失败聚合 → 状态栏 Error 告警 + 状态落库
+// ============================================================
+
+#[test]
+fn agent_failure_promotes_to_error_status_and_state() {
+    use crate::types::AgentFailureSummary;
+
+    let snap = DataSnapshot {
+        agent_failures: vec![AgentFailureSummary {
+            from: "agent-a".into(),
+            to: "orchestrator".into(),
+            task_id: "task-7".into(),
+            error: "boom".into(),
+            retry_count: 2,
+        }],
+        agent_failure_total: 3,
+        agent_failure_seq: 3,
+        ..Default::default()
+    };
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(MockDataSource::new(snap)),
+    )
+    .expect("app with mock source");
+
+    app.update();
+
+    let st = app.state();
+    assert_eq!(st.agent_failure_total, 3, "累计数应落库");
+    assert_eq!(st.agent_failures.len(), 1, "最近失败应落库");
+
+    let (msg, severity) = st
+        .status_message
+        .as_ref()
+        .expect("Critical 子代理失败应上屏状态栏");
+    assert_eq!(*severity, Severity::Error, "Critical 失败应为 Error 级");
+    assert!(msg.contains("task-7"), "告警应携 task_id, got: {msg}");
+    assert!(msg.contains("agent-a"), "告警应携失败方 Agent, got: {msg}");
+    assert_eq!(st.last_agent_failure_seq, 3, "上屏游标应推进");
+
+    // 序号未增(无新失败)→ 不重复上屏,避免重试风暴刷屏
+    let before = app.state().status_message.clone();
+    app.update();
+    assert_eq!(
+        app.state().status_message,
+        before,
+        "无新失败时不得重复上屏(告警会被自身覆盖而无法阅读)"
+    );
+}
+
+// ============================================================
+// PS-2(F-7):动作路由分类不变量 —— 本地执行 vs 编排器发布
+// ============================================================
+//
+// 背景:评估报告 F-7 断言"monitor.pause_sampling / viz.switch_dimension 等
+// 本地动作仍经 TuiActionRequested 发往编排器 → 悬挂至 2s 超时"。经代码核查
+// **该断言不成立**(全仓 `TuiActionRequested` 仅一处构造点 = dispatch_action
+// 的 `_ =>` 兜底,本地动作均有本地 arm)。但原 F-7 揭示的**陷阱是真实的**:
+// 本地/编排的区分完全依赖"是否写了 arm",新动作漏写即静默变成编排动作。
+//
+// 本不变量把该隐性约定变为可执行断言:
+//   1. 两份清单的并集 == `ActionRegistry` 动作全集(新增动作必须登记);
+//   2. 声明为本地者:实调 dispatch_action 后**不得**登记 pending(即未发布);
+//   3. 声明为编排者:实调后**必须**登记 pending(即已发布并等待回执)。
+
+/// 本地执行动作(dispatch_action 有本地 arm,不发布事件)
+const LOCAL_ACTION_IDS: &[&str] = &[
+    "config.edit",
+    "export.run",
+    "monitor.pause_sampling",
+    "monitor.time_window",
+    "panel.drill_down",
+    "quest.jump",
+    "system.open_help",
+    "system.toggle_locale",
+    "view.apply_saved",
+    "view.cycle_companion",
+    "view.focus_pane",
+    "view.switch_layout",
+    "view.toggle_companion",
+    "viz.switch_dimension",
+];
+
+/// 编排器动作(落入 `_ =>` 兜底,发布 `TuiActionRequested` 等待回执)
+const ORCHESTRATED_ACTION_IDS: &[&str] = &[
+    "agent.chat",
+    "overwindow.run",
+    "quest.cancel",
+    "quest.pause",
+    "quest.resume",
+    "quest.start",
+];
+
+#[test]
+fn every_registered_action_is_classified() {
+    let reg = crate::actions::ActionRegistry::with_builtin_domains();
+    let mut declared: Vec<&str> = LOCAL_ACTION_IDS
+        .iter()
+        .chain(ORCHESTRATED_ACTION_IDS.iter())
+        .copied()
+        .collect();
+    declared.sort_unstable();
+    let mut actual: Vec<&str> = reg.all().iter().map(|d| d.id).collect();
+    actual.sort_unstable();
+
+    let missing: Vec<&&str> = actual.iter().filter(|id| !declared.contains(id)).collect();
+    assert!(
+        missing.is_empty(),
+        "注册表存在未分类动作(必须登记进 LOCAL/ORCHESTRATED 清单): {missing:?}"
+    );
+    let stale: Vec<&&str> = declared.iter().filter(|id| !actual.contains(id)).collect();
+    assert!(
+        stale.is_empty(),
+        "清单存在已不在注册表的动作(应删除): {stale:?}"
+    );
+    assert_eq!(declared, actual, "分类清单必须与注册表全集一一对应");
+}
+
+#[test]
+fn declared_local_actions_never_publish_to_orchestrator() {
+    for id in LOCAL_ACTION_IDS {
+        let mut app = make_app().expect("make_app should succeed");
+        app.dispatch_action(id, "{}".to_string(), event_bus::ActionSource::Panel);
+        assert!(
+            app.state().pending_actions.is_empty(),
+            "本地动作 {id} 不得发布 TuiActionRequested —— \
+             否则事件发往无 handler 的编排器、悬挂至 ACTION_TIMEOUT(2s),\
+             用户会看到与实际结果不符的超时提示"
+        );
+    }
+}
+
+#[test]
+fn declared_orchestrated_actions_publish_and_await_receipt() {
+    for id in ORCHESTRATED_ACTION_IDS {
+        let mut app = make_app().expect("make_app should succeed");
+        app.dispatch_action(id, "{}".to_string(), event_bus::ActionSource::Panel);
+        assert_eq!(
+            app.state().pending_actions.len(),
+            1,
+            "编排动作 {id} 必须发布 TuiActionRequested 并登记待回执(反向漂移:\
+             若误加本地 arm,该动作将不再抵达 chimera-cli 编排器)"
+        );
+    }
 }

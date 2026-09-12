@@ -70,6 +70,7 @@ fn status_text(app: &TuiApp) -> String {
 
 #[test]
 fn focus_command_switches_dashboard_to_single_pane() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_dashboard_app();
@@ -87,6 +88,7 @@ fn focus_command_switches_dashboard_to_single_pane() {
 
 #[test]
 fn focus_command_in_chat_view_honest_hint() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_chat_app();
@@ -111,6 +113,7 @@ fn chat_single_esc_does_not_quit() {
 
 #[test]
 fn chat_double_esc_rewind_honest_feedback() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_chat_app();
@@ -266,6 +269,7 @@ fn composer_history_up_without_history_noop() {
 
 #[test]
 fn shell_passthrough_honest_todo() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_chat_app();

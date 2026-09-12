@@ -70,9 +70,25 @@ pub struct NmcConfig {
     /// TextPerceptor 将使用 ONNX 语义嵌入而非字节频率统计。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_model: Option<String>,
+    /// P1-T14: 批量编码并行开关(默认 true)
+    ///
+    /// 经 `nexus_core::compute::ComputeBridge`(L-a 全局 rayon 池)并行批量编码
+    /// (v4.0 §7.5.1 L-a: tract-onnx 推理 / CLV 批量编码 2-4×【待验证】)。
+    /// 关闭方式(强制串行回退):配置 false 或环境变量 `CHIMERA_NO_PARALLEL_NMC`
+    /// 设置为 "1"/"true"/"on"(启动期 OnceLock 一次读取,不在热路径)。
+    ///
+    /// WHY 默认 true:并行收益为正的批量场景(> ClvSimilarity 阈值 1000)才触发
+    /// rayon,小批量走 `DispatchPlan::Inline` 串行,零开销开关默认开启安全。
+    #[serde(default = "default_true")]
+    pub parallel_encode: bool,
 }
 
 // === 默认值函数,供 serde(default = "...") 使用 ===
+
+/// serde 默认值 — P1-T14 并行开关默认开启(与 faae/hcw 注入模式一致)
+const fn default_true() -> bool {
+    true
+}
 
 fn default_image_model() -> String {
     "clip-vit-b32.onnx".to_string()
@@ -140,6 +156,15 @@ impl NmcConfig {
     /// 设置为 `Some("all-MiniLM-L6-v2.onnx")` 时启用 ONNX 语义嵌入。
     pub fn with_text_model(mut self, name: impl Into<String>) -> Self {
         self.text_model = Some(name.into());
+        self
+    }
+
+    /// 设置批量编码并行开关(链式 builder)— P1-T14
+    ///
+    /// `true`(默认):批量 > ComputeBridge 阈值时经 L-a rayon 池并行编码;
+    /// `false`:强制串行(与 `CHIMERA_NO_PARALLEL_NMC` env 关闭等价)。
+    pub fn with_parallel_encode(mut self, enabled: bool) -> Self {
+        self.parallel_encode = enabled;
         self
     }
 
@@ -230,6 +255,7 @@ impl Default for NmcConfig {
             video_model: default_video_model(),
             audio_model: default_audio_model(),
             text_model: None,
+            parallel_encode: default_true(),
         }
     }
 }
@@ -250,6 +276,8 @@ mod tests {
         assert_eq!(config.video_model, "videomae-base.onnx");
         assert_eq!(config.audio_model, "whisper-encoder.onnx");
         assert_eq!(config.text_model, None);
+        // P1-T14: 并行开关默认开启
+        assert!(config.parallel_encode);
     }
 
     #[test]
@@ -261,6 +289,10 @@ mod tests {
         assert_eq!(config.text_dim, 128);
         assert_eq!(config.clv_dim, 512);
         assert_eq!(config.fusion_strategy, FusionStrategy::Concat);
+        // P1-T14: builder 可关闭并行
+        let disabled = config.clone().with_parallel_encode(false);
+        assert!(!disabled.parallel_encode);
+        assert!(config.parallel_encode);
     }
 
     #[test]

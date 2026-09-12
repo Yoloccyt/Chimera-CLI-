@@ -6,6 +6,8 @@
 //! 1. `test_critical_dropped_tracing` — send_critical_mpsc 容量满时发出结构化 warn(dropped_count 字段)
 //! 2. `test_critical_no_drop_no_warn` — 正常投递时不发出丢弃 warn 日志
 //! 3. `test_critical_span_fields` — send_critical_mpsc span 携带 event_type / severity / event_id 字段
+//! 4. `test_critical_mpsc_bypass_without_subscriber_warns` — C3:旁路无订阅者时发出 warn(不再静默)
+//! 5. `test_has_critical_subscribers_lifecycle` — C3:订阅者存在性查询 API 生命周期
 //!
 //! # 测试方法
 //! 使用 `tracing_test::traced_test` 宏自动捕获 tracing 事件。
@@ -14,7 +16,7 @@
 //! 再由 tokio::test 包装为同步入口。若顺序反转,tokio::test 先将 async fn 转为
 //! sync fn,traced_test 无法正确注入 `logs_contain` 函数。
 //! API: `logs_contain("substring")` 返回 bool,检查捕获日志是否包含子串。
-//! SkepticVeto 是 §6.2 红线 4 类 Critical 安全告警事件之一,会强制走 mpsc 旁路通道。
+//! SkepticVeto 是 §6.2 红线 Critical 安全告警事件之一(is_critical_mpsc_event 清单),会强制走 mpsc 旁路通道。
 
 #![forbid(unsafe_code)]
 
@@ -145,7 +147,7 @@ async fn test_critical_span_fields() {
     // 排空 receiver
     let _ = rx.recv().await;
 
-    // 验证 event_type 字段(SkepticVeto 是 §6.2 红线 4 类 Critical 事件之一)
+    // 验证 event_type 字段(SkepticVeto 是 §6.2 红线 Critical 事件之一,is_critical_mpsc_event 清单)
     assert!(
         logs_contain("SkepticVeto"),
         "tracing 日志应包含 event_type=SkepticVeto"
@@ -154,5 +156,78 @@ async fn test_critical_span_fields() {
     assert!(
         logs_contain("Critical"),
         "tracing 日志应包含 severity=Critical"
+    );
+}
+
+// ============================================================
+// C3(2026-09-04)→ B-a(M0,2026-09-12): Critical mpsc 旁路无订阅者可观测性
+// ============================================================
+// 背景(F-A5-6):旁路通道按需初始化,无订阅者时 send_critical_mpsc 原先
+// 静默返回 —— C3 修复为 warn 告警 + has_critical_subscribers() 查询 API。
+// B-a 再进一步:无订阅者时事件不再"warn 后放弃",而是投递到保底 sink
+// (默认 LogCriticalSink,结构化 error!),并递增 critical_no_subscriber_total。
+// 本测试随之升级:断言 error 级保底送达日志 + 观测计数(替代旧 warn 断言)。
+
+/// 验证 broadcast 有订阅者但 Critical mpsc 旁路无订阅者时,发布
+/// `is_critical_mpsc_event` 判定的事件会经默认保底 sink 发出 error 级
+/// 结构化日志(携带 event_type/severity/event_id 定位字段)。
+///
+/// # 流程
+/// 1. 创建 EventBus,仅调用 `subscribe()`(broadcast 有订阅者,
+///    避免误触发既有"Critical 无 broadcast 订阅者"告警路径)
+/// 2. 通过 `publish` 发布 SkepticVeto(命中 is_critical_mpsc_event)
+/// 3. 验证 logs 包含保底送达消息与 event_type 字段,且计数 == 1
+///
+/// # WHY 不用 publish_critical
+/// publish_critical 语义是"调用方明确知道事件为 Critical",为隔离
+/// `is_critical_mpsc_event` 判定路径(publish 分支)的保底行为,本测试走 publish。
+#[tracing_test::traced_test]
+#[tokio::test]
+async fn test_critical_mpsc_bypass_without_subscriber_falls_back() {
+    let bus = EventBus::new();
+    // broadcast 有订阅者(排除 severity==Critical 且 subscriber_count==0 的既有告警分支)
+    let mut _broadcast_rx = bus.subscribe();
+
+    bus.publish(make_skeptic_veto("q-no-bypass-sub"))
+        .await
+        .expect("发布应成功");
+
+    // B-a:保底送达日志为 error 级,携带 event_type 定位字段(SkepticVeto)
+    assert!(
+        logs_contain("Critical 事件保底送达"),
+        "旁路无订阅者时发布 Critical 事件应经保底 sink 发出 error 级结构化日志"
+    );
+    assert!(
+        logs_contain("SkepticVeto"),
+        "保底送达日志应携带 event_type=SkepticVeto 定位字段"
+    );
+    assert_eq!(
+        bus.critical_no_subscriber_total(),
+        1,
+        "空订阅者保底投递计数应同步递增"
+    );
+}
+
+// TDD-CYCLE-2: API 缺失 RED 已观察(E0599 no method named `has_critical_subscribers`),现恢复
+/// 验证 `has_critical_subscribers()` 的生命周期语义:
+/// 初始 false → subscribe_critical_events 后 true。
+///
+/// # WHY 需要此 API
+/// 组合根/运维需要在不发布事件的前提下探询旁路订阅状态
+/// (发布时告警是事件驱动的事后观测,此 API 是主动查询通道)。
+/// 惰性清理说明:Receiver drop 后 Sender 由下次 send_critical_mpsc 的
+/// retain 清理,本查询反映"已建立且未清理"的订阅,与活跃订阅可能存在短暂偏差。
+#[tokio::test]
+async fn test_has_critical_subscribers_lifecycle() {
+    let bus = EventBus::new();
+    assert!(
+        !bus.has_critical_subscribers(),
+        "初始状态下不应存在 Critical 旁路订阅者"
+    );
+
+    let _rx = bus.subscribe_critical_events();
+    assert!(
+        bus.has_critical_subscribers(),
+        "subscribe_critical_events 后应存在 Critical 旁路订阅者"
     );
 }

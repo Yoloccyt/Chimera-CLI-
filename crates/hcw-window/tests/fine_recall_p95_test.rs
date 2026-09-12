@@ -47,10 +47,14 @@ const TOP_K: usize = 500;
 /// `HCW_FINE_RECALL_P95_MS` 使 CI 可在不改代码的情况下覆盖阈值；
 /// 失败安全：未设置/解析失败回退 50ms（语义与硬编码一致）。
 fn p95_threshold_ms() -> u64 {
-    std::env::var("HCW_FINE_RECALL_P95_MS")
+    let base = std::env::var("HCW_FINE_RECALL_P95_MS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(50)
+        .unwrap_or(50);
+    // 统一旋钮：`HCW_*` 逐阈值覆盖 × `CHIMERA_PERF_SCALE` 全局缩放。
+    // 优先级关系：前者改“契约基线”，后者改“本轮运行的宽松度”；
+    // 发布阻塞门不设两者→ 等于跑硬编码契约。
+    nexus_contracts::util::perf_scale_ms(base)
 }
 
 /// 精确重排开销阈值（毫秒，默认 10ms）
@@ -59,10 +63,11 @@ fn p95_threshold_ms() -> u64 {
 /// 同 p95 红线：时序断言在 CI 慢机/高负载下余量不足会偶发失败。
 /// `HCW_RERANK_OVERHEAD_MS` 使 CI 可覆盖；失败安全回退 10ms。
 fn rerank_overhead_ms() -> u64 {
-    std::env::var("HCW_RERANK_OVERHEAD_MS")
+    let base = std::env::var("HCW_RERANK_OVERHEAD_MS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(10)
+        .unwrap_or(10);
+    nexus_contracts::util::perf_scale_ms(base)
 }
 
 // ============================================================
@@ -177,14 +182,10 @@ fn build_vector_store(block_count: usize) -> InMemoryVectorStore {
     store
 }
 
-/// 计算延迟百分位
+/// 计算延迟百分位(委托共享工具,口径与本文件原 `round((n-1)*p)` 逐位一致)
+use nexus_contracts::util::percentile_sorted;
 fn percentile(sorted_latencies: &[Duration], p: f64) -> Duration {
-    let n = sorted_latencies.len();
-    if n == 0 {
-        return Duration::ZERO;
-    }
-    let idx = ((n as f64 - 1.0) * p).round() as usize;
-    sorted_latencies[idx.min(n - 1)]
+    percentile_sorted(sorted_latencies, p).unwrap_or(Duration::ZERO)
 }
 
 // ============================================================

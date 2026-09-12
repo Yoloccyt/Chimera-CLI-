@@ -214,6 +214,10 @@ chimera                                        # 无子命令时默认启动 TUI
         /// 禁用 v3-engine 自研渲染路径,回退到 ratatui(M2 切换后 2 个版本周期兼容)
         #[arg(long = "no-v3-engine")]
         no_v3_engine: bool,
+        /// WI-01 协议模式: TUI 数据层经 AppOp/AppEvent 协议面与核心交互
+        /// (Quest 生命周期走协议面,核心-表面分离 dogfooding;A1 双跑窗口)
+        #[arg(long)]
+        protocol: bool,
     },
     /// Quest 管理（长期任务的创建/查询/取消/检查点）
     #[command(
@@ -437,6 +441,50 @@ chimera llm strategy CostOptimized            # 切换路由策略"
         #[command(subcommand)]
         action: LlmAction,
     },
+    /// exec 非交互契约（WI-02）— CI/管道一等公民
+    ///
+    /// 执行单次任务并保证 stdout 纪律：默认 stdout 仅最终结果；
+    /// `--json` 时 stdout = JSONL（每行一 AppEvent）；日志/进度全走 stderr。
+    /// 退出码语义化: 0 成功 / 2 审批拒否 / 3 预算耗尽 / 4 工具失败。
+    #[command(
+        long_about = "非交互执行单次任务（WI-02 exec 契约）:\n\
+默认 stdout 仅最终结果; `--json` 时 stdout = JSONL（每行一 AppEvent）;\n\
+日志/进度全走 stderr。退出码: 0 成功 / 2 审批拒否 / 3 预算耗尽 / 4 工具失败。",
+        after_long_help = "EXAMPLES:\n  \
+chimera exec '修复编译错误'                  # 非交互执行,stdout 仅最终结果\n  \
+chimera exec --json '列出文件'               # JSONL 事件流(每行一 AppEvent)\n  \
+chimera exec 'x' ; echo $?                  # 退出码四类语义(0/2/3/4)"
+    )]
+    Exec {
+        /// 任务提示词
+        prompt: String,
+    },
+    /// 协议宿主服务（WI-01 serve 形态）— JSON-RPC v1 over stdio
+    ///
+    /// 启动 AppServer 事件循环：stdin 读 `app.op` 请求帧，stdout 写
+    /// `app.event` 推送帧（NDJSON）。任意宿主（TUI/IDE/脚本）经协议接入。
+    #[command(
+        long_about = "协议宿主服务（WI-01 serve 形态）:\n\
+AppServer + stdio 传输事件循环——stdin 读 JSON-RPC v1 请求帧（app.op），\n\
+stdout 写事件推送帧（app.event, NDJSON）。核心-表面分离的协议面入口。",
+        after_long_help = "EXAMPLES:\n  \
+chimera serve                                 # 启动协议宿主(等待 stdin 请求帧)\n  \
+printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"app.op\",\"params\":{...}}' | chimera serve"
+    )]
+    Serve,
+    /// Agent Client Protocol 桥（P2-T9,WI-11）— ACP JSON-RPC 2.0 over stdio
+    ///
+    /// 转译层：ACP 方法（session/new、session/prompt）→ AppOp → AppServer →
+    /// AppEvent → ACP 通知。桥层隔离，停用子命令即可回退。
+    #[command(
+        long_about = "ACP 桥（WI-11）:\n\
+Zed/JetBrains 等 IDE 面板经 Agent Client Protocol（JSON-RPC 2.0 over stdio）\n\
+接入 Chimera。方法转译层隔离在 commands::acp,App 协议面复用 serve 形态。",
+        after_long_help = "EXAMPLES:\n  \
+chimera acp                                    # 启动 ACP 桥(等待 stdin 帧)\n  \
+printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/new\",\"params\":{}}' | chimera acp"
+    )]
+    Acp,
 }
 
 /// Quest 子命令动作

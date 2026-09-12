@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use crossterm::event::KeyEvent;
-use nexus_contracts::memory_pyramid::AtomicMemoryCard;
+use nexus_contracts::memory_pyramid::{AtomicCardType, AtomicMemoryCard};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -28,6 +28,22 @@ use crate::types::{PanelId, TuiCommand, TuiState};
 
 /// 动态卡片列表最多展示条数(面板高度有限)
 const MAX_CARDS_SHOWN: usize = 6;
+
+/// 卡片类型 → i18n 标签(US-01 防 Debug 泄漏)
+///
+/// WHY 面板层 match 而非 impl Display:`AtomicCardType` 定义在 L0
+/// nexus-contracts,孤儿规则禁止跨 crate 实现 Display;经键表映射同时
+/// 兑现 zh 双语(zh 值为"中文 (英文)"括注形态,与批次-A 键值口径一致)。
+fn card_type_label(card_type: AtomicCardType) -> &'static str {
+    match card_type {
+        AtomicCardType::Preference => crate::t!("panel.injection.card_type_preference"),
+        AtomicCardType::Event => crate::t!("panel.injection.card_type_event"),
+        AtomicCardType::Rule => crate::t!("panel.injection.card_type_rule"),
+        AtomicCardType::Trace => crate::t!("panel.injection.card_type_trace"),
+        AtomicCardType::Policy => crate::t!("panel.injection.card_type_policy"),
+        AtomicCardType::EnvCognition => crate::t!("panel.injection.card_type_env_cognition"),
+    }
+}
 
 /// 注入策略快照 — 面板展示的自足快照类型(D-1)
 #[derive(Debug, Clone, Default)]
@@ -78,13 +94,13 @@ impl InjectionStrategyPanel {
     /// 3. 缓存统计(命中率百分比 + Token 节省 + 策略说明)
     pub fn content(&self) -> Text<'static> {
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from("Injection Strategy (TencentDB)"),
+            Line::from(crate::t!("panel.injection.body_title")),
             Line::from("──────────────────────────────────────"),
         ];
 
         let Some(provider) = &self.provider else {
             lines.push(Line::from(Span::styled(
-                "Awaiting injection snapshot provider...",
+                crate::t!("panel.injection.awaiting_provider"),
                 Style::default().fg(Color::Gray),
             )));
             return Text::from(lines);
@@ -94,19 +110,21 @@ impl InjectionStrategyPanel {
 
         // 段 1:动态卡片(用户消息前,每轮更新)
         lines.push(Line::from(Span::styled(
-            "Dynamic cards (before user msg):",
+            crate::t!("panel.injection.dynamic_cards"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         if snap.dynamic_cards.is_empty() {
             lines.push(Line::from(Span::styled(
-                "  No dynamic cards.",
+                crate::t!("panel.injection.no_dynamic_cards"),
                 Style::default().fg(Color::Gray),
             )));
         } else {
             for card in snap.dynamic_cards.iter().take(MAX_CARDS_SHOWN) {
                 lines.push(Line::from(format!(
-                    "  [{:?}] {}: {}",
-                    card.card_type, card.scene, card.content
+                    "  [{}] {}: {}",
+                    card_type_label(card.card_type),
+                    card.scene,
+                    card.content
                 )));
             }
         }
@@ -114,7 +132,7 @@ impl InjectionStrategyPanel {
         // 段 2:人格摘要(系统提示末尾,几轮才变利用缓存)
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Persona summary (system prompt tail):",
+            crate::t!("panel.injection.persona_summary"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         match &snap.persona_summary {
@@ -128,16 +146,21 @@ impl InjectionStrategyPanel {
         // 段 3:缓存统计
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Cache stats:",
+            crate::t!("panel.injection.cache_stats"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
-        lines.push(Line::from(format!(
-            "  Cache hit rate: {:.1}% | Token savings: {}",
-            snap.cache_hit_rate.clamp(0.0, 1.0) * 100.0,
-            snap.token_savings
-        )));
+        // WHY replacen 两次:键值含两个 {} 占位(命中率/节省量),先格式化精度
+        // 再按序替换;zh 值为双语形态兼容集成测试英文断言(见 zh.rs 批次-A 注释)
+        let cache_line = crate::t!("panel.injection.cache_line")
+            .replacen(
+                "{}",
+                &format!("{:.1}", snap.cache_hit_rate.clamp(0.0, 1.0) * 100.0),
+                1,
+            )
+            .replacen("{}", &snap.token_savings.to_string(), 1);
+        lines.push(Line::from(cache_line));
         lines.push(Line::from(Span::styled(
-            "  Strategy: dynamic cards refresh every turn | persona reuses cache",
+            crate::t!("panel.injection.strategy_note"),
             Style::default().fg(Color::Gray),
         )));
 
@@ -217,6 +240,10 @@ mod tests {
 
     #[test]
     fn content_renders_three_sections() {
+        // 批次-A i18n 迁移后 zh 卡片类型为"中文 (英文)"括注形态,本断言锁
+        // "[Preference] coding: prefer rust" 英文原格式 → 钉 En locale
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
         let panel = InjectionStrategyPanel::with_provider(Arc::new(MockProvider {
             snap: InjectionSnapshot {
                 dynamic_cards: vec![card("coding", "prefer rust")],
@@ -233,6 +260,8 @@ mod tests {
         // 段 3:缓存统计
         assert!(content.contains("Cache hit rate: 75.0%"));
         assert!(content.contains("Token savings: 1234"));
+        // WHY 恢复默认 Zh:lib 进程共享全局 locale,En 窗口须在测试边界处还原
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
     }
 
     #[test]

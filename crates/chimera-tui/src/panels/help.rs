@@ -8,7 +8,7 @@
 //!   在全局快捷键之后追加当前面板的专属快捷键章节。
 //! - 上下文感知模式由 `with_context()` 构造器激活,`new()` 返回无上下文模式。
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
@@ -25,6 +25,10 @@ use crate::types::{PanelId, TuiCommand, TuiState};
 pub struct HelpPanel {
     /// 上下文面板 ID,None 表示仅显示全局快捷键
     context_panel_id: Option<PanelId>,
+    /// 滚动偏移(U-N3,2026-09-06 复评):Help 内容 ~40 行,常规高度下
+    /// 上下文快捷键章节在可视区外,提供 ↑/↓ 滚动与跳顶/跳底。
+    /// WHY 由渲染钳制:handle_key 无终端尺寸信息,渲染时按实际行数精钳。
+    scroll_offset: usize,
 }
 
 impl HelpPanel {
@@ -32,6 +36,7 @@ impl HelpPanel {
     pub fn new() -> Self {
         Self {
             context_panel_id: None,
+            scroll_offset: 0,
         }
     }
 
@@ -39,6 +44,7 @@ impl HelpPanel {
     pub fn with_context(panel_id: PanelId) -> Self {
         Self {
             context_panel_id: Some(panel_id),
+            scroll_offset: 0,
         }
     }
 
@@ -52,7 +58,7 @@ impl HelpPanel {
         vec![
             ("Tab", crate::t!("help.sc.next")),
             ("Shift+Tab", crate::t!("help.sc.prev")),
-            ("1-8", crate::t!("help.sc.jump")),
+            ("1-9", crate::t!("help.sc.jump")),
             (":", crate::t!("help.sc.command")),
             ("/", crate::t!("help.sc.search")),
             ("Enter", crate::t!("help.sc.submit")),
@@ -64,10 +70,10 @@ impl HelpPanel {
             ("t", crate::t!("help.sc.theme")),
             ("l", crate::t!("help.sc.layout")),
             ("a", crate::t!("help.sc.panel_actions")),
-            ("g+1-6", crate::t!("help.sc.gjump")),
+            ("g+1-9,0", crate::t!("help.sc.gjump")),
             ("g g", crate::t!("help.sc.top")),
             ("G", crate::t!("help.sc.bottom")),
-            ("F1-F8", crate::t!("help.sc.fkeys")),
+            ("F1-F12", crate::t!("help.sc.fkeys")),
         ]
     }
 
@@ -132,15 +138,67 @@ impl Panel for HelpPanel {
         Line::from(crate::t!("panel.border.help"))
     }
 
-    fn render(&mut self, _state: &TuiState, area: Rect, buf: &mut Buffer) {
-        let content = Self::content(self.context_panel_id, &[]);
+    fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // PS-2 U-4:退化尺寸统一早退(共享最低线,见 crate::panels::MIN_PANEL_W/H)
+        if crate::panels::degenerate(area) {
+            crate::panels::render_too_small(area, buf);
+            return;
+        }
+
+        // U-2(2026-09-06 复评):上下文来自渲染层注入的焦点面板快照
+        // (TuiApp::render 更新 `state.help_context`);状态无注入时回退
+        // 构造期 `context_panel_id`(向后兼容 with_context 直测路径)。
+        let (context, shortcuts) = match &state.help_context {
+            Some((id, sc)) => (Some(*id), sc.as_slice()),
+            None => (
+                self.context_panel_id,
+                &[] as &[(&'static str, &'static str)],
+            ),
+        };
+        let mut content = Self::content(context, shortcuts);
+        // U-N3:滚动提示行(仅在内容确实超出一屏时有意义,恒置末尾)
+        content.lines.push(Line::from("↑/↓ scroll  g/G top/bottom"));
+        let inner_h = area.height.saturating_sub(2) as usize; // Block 上下边框
+                                                              // 渲染期精钳:handle_key 无终端尺寸,偏移上限在此按内容行数收敛
+        let max_offset = content.lines.len().saturating_sub(inner_h);
+        self.scroll_offset = self.scroll_offset.min(max_offset);
         let block = Block::default().borders(Borders::ALL).title(self.title());
-        let paragraph = Paragraph::new(content).block(block);
+        let paragraph = Paragraph::new(content)
+            .block(block)
+            .scroll((self.scroll_offset as u16, 0));
         paragraph.render(area, buf);
     }
 
-    fn handle_key(&mut self, _key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+    fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // U-N3:↑/↓(k/j)逐行滚动,Ctrl+U/D 翻页;上限由渲染按内容行数钳制。
+        // WHY 不在此钳上限:handle_key 拿不到区域尺寸,钳制统一收敛在 render。
+        use crossterm::event::KeyModifiers;
+        let page = 10usize;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(page);
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_offset = self.scroll_offset.saturating_add(page);
+            }
+            _ => {}
+        }
         None
+    }
+
+    fn scroll_to_top(&mut self, _state: &mut TuiState) {
+        self.scroll_offset = 0;
+    }
+
+    fn scroll_to_bottom(&mut self, _state: &mut TuiState) {
+        // usize::MAX 由渲染按内容行数钳制到 max_offset
+        self.scroll_offset = usize::MAX;
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
@@ -184,7 +242,7 @@ mod tests {
         assert!(content.contains("Tab"));
         assert!(content.contains("Shift+Tab"));
         assert!(content.contains("q / Esc"));
-        assert!(content.contains("F1-F8"));
+        assert!(content.contains("F1-F12"));
         assert!(content.contains("Switch theme"));
         assert!(content.contains("Switch layout"));
         assert!(content.contains("Chimera CLI NEXUS-OMEGA"));

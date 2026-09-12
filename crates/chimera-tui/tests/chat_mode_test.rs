@@ -146,6 +146,7 @@ fn backslash_in_insert_mode_types_char_not_toggles() {
 
 #[test]
 fn chat_mode_renders_composer_hint_in_normal() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -171,6 +172,7 @@ fn chat_mode_insert_shows_input_bar() {
 
 #[test]
 fn dashboard_mode_renders_panel_tabs() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_dashboard_app();
@@ -193,11 +195,11 @@ fn failed_quest_event(quest_id: &str) -> NexusEvent {
 
 #[test]
 fn reflection_card_appears_after_quest_failure() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
-    app.state_mut()
-        .latest_events
+    std::sync::Arc::make_mut(&mut app.state_mut().latest_events)
         .push_back(failed_quest_event("q-42"));
     let out = render_to_string(&mut app);
     assert!(
@@ -209,6 +211,7 @@ fn reflection_card_appears_after_quest_failure() {
 
 #[test]
 fn plan_card_appears_with_quest_and_no_failure() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -230,6 +233,7 @@ fn plan_card_appears_with_quest_and_no_failure() {
 
 #[test]
 fn reflection_card_takes_priority_over_plan_card() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -244,8 +248,7 @@ fn reflection_card_takes_priority_over_plan_card() {
         }],
         ..Default::default()
     });
-    app.state_mut()
-        .latest_events
+    std::sync::Arc::make_mut(&mut app.state_mut().latest_events)
         .push_back(failed_quest_event("q-1"));
     let out = render_to_string(&mut app);
     // 失败告警优先:复盘卡存在
@@ -404,6 +407,7 @@ fn shift_tab(app: &mut TuiApp) {
 
 #[test]
 fn banner_shown_in_plan_mode_chat_view() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -414,6 +418,7 @@ fn banner_shown_in_plan_mode_chat_view() {
 
 #[test]
 fn banner_shown_in_auto_mode_chat_view() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -425,6 +430,7 @@ fn banner_shown_in_auto_mode_chat_view() {
 
 #[test]
 fn banner_hidden_in_normal_mode() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();
@@ -437,6 +443,7 @@ fn banner_hidden_in_normal_mode() {
 
 #[test]
 fn banner_disappears_after_cycling_back_to_normal() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _g = locale_guard();
     chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = make_app();

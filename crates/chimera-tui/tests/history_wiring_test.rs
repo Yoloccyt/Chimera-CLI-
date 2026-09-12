@@ -13,7 +13,7 @@
 
 #![forbid(unsafe_code)]
 
-// Concord W4 T4.3:异步轮询超时统一经 scaled_timeout! 护栏(debug×4/release×1.5)
+// Concord W4 T4.3:异步轮询超时统一经 build_scaled_timeout! 护栏(debug×4/release×1.5)
 #[macro_use]
 mod common;
 
@@ -64,8 +64,8 @@ async fn pipeline_with_history_backfills_and_persists() {
 
     // 轮询等待回填进快照(首 tick 含 SysMetricsCollector::new 的系统全量
     // 采集,Windows 上可达数秒;固定 sleep 会造成时序脆弱,与 data_test.rs
-    // 的 wait_for_events 同一模式)。scaled_timeout!(2.0):debug 8s/release 3s。
-    let deadline = std::time::Instant::now() + scaled_timeout!(2.0);
+    // 的 wait_for_events 同一模式)。build_scaled_timeout!(2.0):debug 8s/release 3s。
+    let deadline = std::time::Instant::now() + build_scaled_timeout!(2.0);
     let mut snap = pipeline.snapshot();
     while snap.resource_cpu_backfill.is_empty() && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -83,7 +83,7 @@ async fn pipeline_with_history_backfills_and_persists() {
 
     // 采样写入路径:轮询等待 fire-and-forget insert 落库后独立连接直查
     let verify = MetricsHistory::new(&db_path).await.expect("reopen db");
-    let deadline = std::time::Instant::now() + scaled_timeout!(2.0);
+    let deadline = std::time::Instant::now() + build_scaled_timeout!(2.0);
     let mut cpu = Vec::new();
     while cpu.len() < 2 && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -128,7 +128,7 @@ async fn plain_pipeline_keeps_backfill_fields_empty() {
 
     // 轮询等待首个 tick(revision>0)后断言回填字段恒空;同样规避
     // SysMetricsCollector 初始化耗时的时序脆弱。
-    let deadline = std::time::Instant::now() + scaled_timeout!(2.0);
+    let deadline = std::time::Instant::now() + build_scaled_timeout!(2.0);
     let mut snap = pipeline.snapshot();
     while snap.revision == 0 && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;

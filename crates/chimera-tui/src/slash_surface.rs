@@ -193,8 +193,17 @@ mod tests {
         }
 
         /// 属性:候选列表规模恒等于 fuzzy 命中数(补全不增不减)
+        ///
+        /// WHY 持 locale 锁(2026-09-10 修复偶发失败):
+        /// `matches()` 经 `crate::i18n::tr(title_key)` 读**全局 locale**,
+        /// 而本用例在同一断言内**两次**收集结果(候选列表、fuzzy 列表)。
+        /// 并行测试下,其他用例可能在两次收集之间翻转 locale,
+        /// 导致两次数到的命令条数不同(实测 "n " 曾出现 19 vs 25)。
+        /// 持 `locale_test_guard()` 后,其他用例的 `set_locale` 会阻塞至本用例结束,
+        /// 两读一致 → 属性变为确定性(范式同 panels 既有用法)。
         #[test]
         fn candidates_len_matches_fuzzy(q in "[a-z ]{0,8}") {
+            let _locale_guard = crate::i18n::locale_test_guard();
             let r = reg();
             prop_assert_eq!(candidates(&r, &q).len(), r.fuzzy(&q).len());
         }

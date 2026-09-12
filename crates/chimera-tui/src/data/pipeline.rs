@@ -436,6 +436,14 @@ impl DataPipeline {
             let mut chat_sync = ChatSync::new(max_chat_messages);
             let mut action_feedback_sync = ActionFeedbackSync::new();
             let mut critical_dropped_sync = CriticalDroppedSync::new();
+            // PS-2(F-1):协议握手回执同步器(ADR-082)
+            let mut handshake_sync = HandshakeSync::new();
+            // PS-2(F-6):子代理任务失败聚合(AgentTaskFailed,Critical)
+            let mut agent_failure_sync = AgentFailureSync::new();
+            // PS-2 批次1:议会数据(取代 L10→L8 越层直调)
+            let mut parliament_sync = ParliamentSync::new();
+            // PS-2 批次2:GQEP 超时统计(取代 L10→L7 越层直调)
+            let mut gqep_timeout_sync = GqepTimeoutSync::new();
             let mut sys_collector: Option<SysMetricsCollector> = None;
             // Arc 共享事件流:无新事件 tick 时快照直接共享 Arc(零拷贝),
             // 有事件 tick 写时复制后替换(评估报告 P0-2)
@@ -467,9 +475,18 @@ impl DataPipeline {
             // 回填缓存:成功后驻留,超时/失败时保持上次结果(优雅降级)
             let mut cpu_backfill: Vec<MetricSample> = Vec::new();
             let mut mem_backfill: Vec<MetricSample> = Vec::new();
+            // FC-C(2026-09-06 复评):刷新请求挂起标志 —— 消费到
+            // RefreshStateRequested 后跳过一次休眠,立即重建快照并递增
+            // revision(事件丢失/Lagged 后的对齐语义)。
+            let mut refresh_pending = false;
 
             loop {
-                time::sleep(Duration::from_millis(current_tick_ms)).await;
+                // FC-C:刷新挂起时跳过本次休眠(立即 tick);其余按节拍休眠
+                if refresh_pending {
+                    refresh_pending = false;
+                } else {
+                    time::sleep(Duration::from_millis(current_tick_ms)).await;
+                }
 
                 // Concord T1.6:块作用域限定 subscriber guard 生命周期(同快照
                 // guard 理由:历史回填 .await 要求循环内无存活 MutexGuard)。
@@ -503,6 +520,12 @@ impl DataPipeline {
 
                 let events_this_tick = events.len();
                 for (idx, event) in events.into_iter().enumerate() {
+                    // FC-C(2026-09-06 复评):刷新请求 → 置挂起标志,下一循环
+                    // 跳过休眠立即重建快照(revision 随 tick 递增,下游 update
+                    // 感知新 revision 后重新对齐)。
+                    if matches!(event, NexusEvent::RefreshStateRequested { .. }) {
+                        refresh_pending = true;
+                    }
                     let is_deduped_quest = matches!(&event, NexusEvent::QuestListUpdated { .. })
                         && Some(idx) != last_quest_idx;
                     let is_deduped_budget =
@@ -529,6 +552,10 @@ impl DataPipeline {
                     chat_sync.apply_event(&event);
                     action_feedback_sync.apply_event(&event);
                     critical_dropped_sync.apply_event(&event);
+                    handshake_sync.apply_event(&event);
+                    agent_failure_sync.apply_event(&event);
+                    parliament_sync.apply_event(&event);
+                    gqep_timeout_sync.apply_event(&event);
                     // P2 性能(P-1):事件由 `events` 所有权转移,不再逐条 clone
                     latest_event_deque.push_back(event);
                 }
@@ -706,6 +733,17 @@ impl DataPipeline {
                     chat_status: chat_sync.status(),
                     action_feedback: action_feedback_sync.latest(),
                     action_feedback_seq: action_feedback_sync.seq(),
+                    action_feedback_request_id: action_feedback_sync.latest_request_id(),
+                    // PS-2(F-1):握手回执进快照(app 侧状态变化时上屏)
+                    handshake: handshake_sync.latest(),
+                    // PS-2(F-6):子代理失败聚合进快照(安全面板态势 + 状态栏告警)
+                    agent_failures: agent_failure_sync.recent(),
+                    agent_failure_total: agent_failure_sync.total(),
+                    agent_failure_seq: agent_failure_sync.seq(),
+                    // PS-2 批次1:议会数据进快照(面板只读快照,不再直调 L8)
+                    parliament: parliament_sync.state(),
+                    // PS-2 批次2:GQEP 超时计数进快照(面板只读快照,不再直调 L7)
+                    gqep_timeouts: gqep_timeout_sync.stats(),
                     critical_event_dropped_count: critical_dropped_sync.count(),
                 };
                 // Concord T1.6:显式块作用域限定 guard 生命周期——本循环内存在

@@ -80,6 +80,15 @@ impl HcwConfig {
         self
     }
 
+    /// 设置压缩并行开关(链式 builder)— P1-T14
+    ///
+    /// `true`(默认):压缩评分阶段经 ComputeBridge 段间并行(段内保序);
+    /// `false`:强制串行(与 `CHIMERA_NO_PARALLEL_HCW` env 关闭等价)。
+    pub fn with_parallel_compress(mut self, enabled: bool) -> Self {
+        self.parallel_compress = enabled;
+        self
+    }
+
     /// 校验配置合法性,返回 HcwError 描述具体问题
     ///
     /// 校验规则:
@@ -171,6 +180,7 @@ impl Default for HcwConfig {
             l3_capacity: 1048576,                       // 1M Token 等效(128K 实际加载 + 8× 稀疏化)
             compression_threshold: 0.9,                 // 容量利用率达 90% 触发压缩
             selector_policy: SelectorPolicy::default(), // P3-W10.3: Static(0.4, 0.3, 0.3) fallback
+            parallel_compress: true,                    // P1-T14: 压缩评分段间并行默认开启
         }
     }
 }
@@ -187,6 +197,8 @@ mod tests {
         assert_eq!(config.l2_capacity, 131072);
         assert_eq!(config.l3_capacity, 1048576);
         assert!((config.compression_threshold - 0.9).abs() < 1e-6);
+        // P1-T14: 并行开关默认开启
+        assert!(config.parallel_compress);
     }
 
     #[test]

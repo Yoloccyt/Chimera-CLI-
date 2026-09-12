@@ -338,6 +338,7 @@ fn release_events_still_ignored() {
 
 #[test]
 fn command_mode_ctrl_l_toggles_locale_not_buffer() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     // Concord W2:`:` 进入斜杠命令模式;Ctrl+L 仍被拦截为语言切换不进缓冲
     let mut app = make_app();
     set_locale(Locale::Zh);
@@ -423,20 +424,15 @@ fn action_timeout_reports_orchestrator_unavailable() {
     // palette 派发无参动作 quest.pause → 立即发布 TuiActionRequested 并启动计时
     open_palette_select(&mut app, "quest.pause");
     app.handle_key_event(key(KeyCode::Enter));
-    assert!(
-        app.state().pending_action_deadline.is_some(),
-        "派发后应启动超时计时"
-    );
+    assert_eq!(app.state().pending_actions.len(), 1, "派发后应启动超时计时");
 
-    // 模拟超时:把 deadline 回拨到过去,update() 触发检测(无需真实等待)
-    app.state_mut().pending_action_deadline =
-        Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+    // 模拟超时:把该请求键的 deadline 回拨到过去,update() 触发检测(无需真实等待)
+    for deadline in app.state_mut().pending_actions.values_mut() {
+        *deadline = std::time::Instant::now() - std::time::Duration::from_secs(3);
+    }
     app.update();
 
-    assert!(
-        app.state().pending_action_deadline.is_none(),
-        "超时后应清除计时"
-    );
+    assert!(app.state().pending_actions.is_empty(), "超时后应清除计时");
     let (msg, sev) = app
         .state()
         .status_message
@@ -456,13 +452,13 @@ fn action_timeout_cleared_when_feedback_received() {
     let (mut app, _bus, _rx) = app_with_bus(app);
     open_palette_select(&mut app, "quest.pause");
     app.handle_key_event(key(KeyCode::Enter));
-    assert!(app.state().pending_action_deadline.is_some());
+    assert_eq!(app.state().pending_actions.len(), 1);
 
     // 直接清除计时模拟 feedback 到达后的 update 行为(反馈经 DataPipeline 消费,
     // 本测试不构建 pipeline,故直接验证 deadline 清除路径的状态)
-    app.state_mut().pending_action_deadline = None;
+    app.state_mut().pending_actions.clear();
     app.update();
-    assert!(app.state().pending_action_deadline.is_none());
+    assert!(app.state().pending_actions.is_empty());
     // 无超时提示(deadline 已清除,检测不触发)
     let has_timeout_msg = app
         .state()

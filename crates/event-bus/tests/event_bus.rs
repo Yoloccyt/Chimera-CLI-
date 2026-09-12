@@ -598,7 +598,10 @@ fn test_publish_blocking_critical_no_subscriber_warns() {
         logs_contain("WARN"),
         "publish_blocking 发布 Critical 事件无订阅者时应告警"
     );
-    assert!(logs_contain("同步发布"));
+    // 方向 3 去重(2026-09-11):`publish` 与 `publish_blocking` 现共享 `dispatch_one`,
+    // 日志文案统一(与 `dispatch_batch` 的既有范式一致),不再有 "(同步发布)" 后缀
+    // 用于区分来源入口。原断言该后缀仅是为证明"这条 WARN 来自 blocking 路径",
+    // 现由本用例的调用入口(`publish_blocking`)与上一条 WARN 断言共同保证,故移除。
 }
 
 // ============================================================

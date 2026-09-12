@@ -9,7 +9,7 @@
 //!
 //! 架构层归属:L10 Interface(bench 不入架构层,仅 dev-artifact)。
 
-use chimera_cli::orchestrator::{build_quest_reply, plan_chunks};
+use chimera_cli::orchestrator::{build_quest_reply, plan_chunks, plan_chunks_batched};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 
@@ -61,5 +61,32 @@ fn bench_plan_chunks(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_plan_chunks);
+/// H-a 批聚合对照:同一回复在大/中/小批下的 chunk 生产成本与**chunk 数**。
+///
+/// WHY 此对照:批聚合(H-a 事件率治理)的收益不是"分块更快",而是**事件数下降**
+/// —— 下游每条 `TuiChatResponseChunk` 都要经 `broadcast` 对每个订阅者深拷贝一份
+/// 事件体,再各自过 TUI 侧同步器链。故本组用 `Throughput::Elements(字符数)` 统一
+/// 分母(同一回复的字符数固定),使各组耗时可直接横向比较"每条回复的总分块成本";
+/// `BenchmarkId` 同时打印该批大小下的 chunk 数,作为事件数下降倍数的可证伪证据。
+/// 生产默认批大小为 [`DEFAULT_CHUNK_BATCH_CHARS`](chimera_cli::orchestrator::DEFAULT_CHUNK_BATCH_CHARS)=8。
+fn bench_chunk_batching(c: &mut Criterion) {
+    let mut group = c.benchmark_group("quest_chunk_batching");
+    let quest = quest_with_tasks(16); // 最大代表性规模(max_tasks_per_quest=16)
+    let reply = build_quest_reply(&quest);
+    let char_count = reply.chars().count() as u64;
+    for batch in [1usize, 4, 8, 12] {
+        let chunks = plan_chunks_batched(&reply, batch).len();
+        let id = BenchmarkId::new(format!("batch{batch}_chunks{chunks}"), char_count);
+        group.throughput(Throughput::Elements(char_count));
+        group.bench_with_input(id, &reply, |b, r| {
+            b.iter(|| {
+                let batched = plan_chunks_batched(black_box(r), batch);
+                black_box(batched);
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_plan_chunks, bench_chunk_batching);
 criterion_main!(benches);

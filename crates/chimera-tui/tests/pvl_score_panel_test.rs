@@ -140,11 +140,12 @@ fn handle_key_returns_none_never_command() {
 // ============================================================
 
 #[test]
-fn renders_nine_dimensions_and_total() {
+fn renders_unwired_marker_instead_of_scores() {
+    // PS-2 批次3:原数据源未注册时回退全 1.0,九维恒显示满分(假数据)。
+    // 现移除越层直调,面板只渲染"未接线"提示 —— 不得再出现维度标签/总分/百分比。
     let mut panel = PvlScorePanel::new();
     let state = TuiState::new();
     let content = render_to_string(&mut panel, &state, 80, 30);
-    // 九维度标签(中文面板默认 Zh locale)
     for label in [
         "真实执行",
         "覆盖率",
@@ -156,40 +157,56 @@ fn renders_nine_dimensions_and_total() {
         "零孤儿",
         "沙箱清洁",
     ] {
-        assert!(content.contains(label), "应渲染维度标签 {label}");
+        assert!(
+            !content.contains(label),
+            "不得再渲染维度标签 {label}: {content}"
+        );
     }
-    assert!(content.contains("TOTAL SCORE"), "应渲染总分标题");
-    assert!(content.contains("%"), "维度与总分应包含百分比数值");
+    assert!(!content.contains("TOTAL SCORE"), "不得再渲染总分标题");
+    assert!(!content.contains('%'), "不得再渲染任何评分百分比");
+    assert!(content.contains("PVL"), "应渲染未接线提示(PVL 循环未装配)");
 }
 
 #[test]
 fn small_terminal_shows_degradation_hint() {
-    // 小终端降级分支:area.height < 15 时显示提示而非九维度(避免挤压)
+    // 小终端降级分支:未接线态只需 2 行提示,阈值降为 area.height < 5
     let mut panel = PvlScorePanel::new();
     let state = TuiState::new();
-    let content = render_to_string(&mut panel, &state, 80, 10);
+    let content = render_to_string(&mut panel, &state, 80, 4);
     assert!(
         content.contains("Terminal too small for PVL Score panel"),
         "小终端应显示降级提示,实际: {content:?}"
     );
-    // 降级路径不应 panic 且不渲染维度
     assert!(!content.contains("TOTAL SCORE"));
 }
 
 #[test]
-fn selected_dimension_gets_marker() {
-    // 选中维度应带 ▶ 前缀(可见反馈)
+fn unwired_state_renders_no_selection_marker() {
+    // 未接线态不渲染维度列表,故无 ▶ 选中标记;但导航状态仍需正常跟踪
+    // (面板保留 selected 与 gg/G,待评分渲染重建后即可直接复用)。
     let mut panel = PvlScorePanel::new();
     let mut state = TuiState::new();
     panel.handle_key(key(KeyCode::Char('j')), &mut state);
     panel.handle_key(key(KeyCode::Char('j')), &mut state);
-    assert_eq!(panel.selected(), 2);
+    assert_eq!(panel.selected(), 2, "导航状态应正常跟踪");
     let content = render_to_string(&mut panel, &state, 80, 30);
-    assert!(content.contains('▶'), "选中维度应显示 ▶ 标记");
+    assert!(
+        !content.contains('▶'),
+        "未接线态不应渲染选中标记: {content}"
+    );
 }
 
 // ============================================================
-// C. 面板身份
+// C. 越界值钳制
+// ============================================================
+
+// PS-2 批次3:原 "经 pvl_layer::register_pvl_score 注入越界快照" 的集成用例
+// 随越层依赖一并移除 —— 该行为(评分条填充钳制)已不再出现在渲染路径。
+// 等价覆盖保留在 crate 内 `score_bar_clamps_overflow_to_width`
+// (crates/chimera-tui/src/panels/pvl_score.rs),待评分渲染重建时启用。
+
+// ============================================================
+// D. 面板身份
 // ============================================================
 
 #[test]
@@ -201,4 +218,22 @@ fn panel_id_and_shortcuts_are_consistent() {
     let keys: Vec<&str> = panel.shortcuts().iter().map(|(k, _)| *k).collect();
     assert!(keys.iter().any(|k| k.contains("↑")), "应声明 ↑/↓ 导航");
     assert!(keys.iter().any(|k| k.contains("j/k")), "应声明 j/k 导航");
+}
+
+// ============================================================
+// US-02 zh locale 渲染断言 — 总分标题为中文
+// ============================================================
+
+#[test]
+fn unwired_marker_renders_zh_label() {
+    // i18n 收口:未接线提示走键表 `panel.pvl.unwired`,Zh locale 下应为中文
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+    let mut panel = PvlScorePanel::new();
+    let state = TuiState::new();
+    let content = render_to_string(&mut panel, &state, 80, 30);
+    assert!(
+        content.contains("未接线"),
+        "Zh locale 下应渲染中文未接线提示,实际: {content}"
+    );
 }

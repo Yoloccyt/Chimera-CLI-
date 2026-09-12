@@ -1,0 +1,511 @@
+   Compiling libm v0.2.16
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling smallvec v1.15.2
+   Compiling num-traits v0.2.19
+   Compiling windows-sys v0.61.2
+   Compiling log v0.4.32
+   Compiling either v1.16.0
+   Compiling ahash v0.8.12
+   Compiling serde_json v1.0.150
+   Compiling tracing-core v0.1.36
+   Compiling syn v2.0.118
+   Compiling aho-corasick v1.1.4
+   Compiling futures-core v0.3.32
+   Compiling futures-sink v0.3.32
+   Compiling slab v0.4.12
+   Compiling parking_lot_core v0.9.12
+   Compiling rayon v1.12.0
+   Compiling futures-channel v0.3.32
+   Compiling utf8parse v0.2.2
+   Compiling once_cell_polyfill v1.70.2
+   Compiling parking_lot v0.12.5
+   Compiling anstyle-parse v1.0.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling colorchoice v1.0.5
+   Compiling heck v0.5.0
+   Compiling strsim v0.11.1
+   Compiling regex-automata v0.4.14
+   Compiling bytemuck v1.25.0
+   Compiling itertools v0.10.5
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling pkg-config v0.3.33
+   Compiling vcpkg v0.2.15
+   Compiling fallible-iterator v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling lazy_static v1.5.0
+   Compiling syn v3.0.3
+   Compiling libc v0.2.186
+   Compiling anyhow v1.0.103
+   Compiling thiserror v2.0.19
+   Compiling ryu v1.0.23
+   Compiling cc v1.2.65
+   Compiling stable_deref_trait v1.2.1
+   Compiling memchr v2.8.2
+   Compiling percent-encoding v2.3.2
+   Compiling ucd-trie v0.1.7
+   Compiling simd-adler32 v0.3.10
+   Compiling winapi-x86_64-pc-windows-gnu v0.4.0
+   Compiling rmp v0.8.15
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling criterion-plot v0.5.0
+   Compiling plotters v0.3.7
+   Compiling pest v2.8.8
+   Compiling uuid v1.23.3
+   Compiling regex v1.12.4
+   Compiling libsqlite3-sys v0.30.1
+   Compiling winapi v0.3.9
+   Compiling adler2 v2.0.1
+   Compiling time-core v0.1.9
+   Compiling num-conv v0.2.2
+   Compiling miniz_oxide v0.8.9
+   Compiling thiserror-impl v2.0.19
+   Compiling displaydoc v0.2.7
+   Compiling crc32fast v1.5.0
+   Compiling time-macros v0.2.32
+   Compiling socket2 v0.6.4
+   Compiling mio v1.2.1
+   Compiling anstyle-wincon v3.0.11
+   Compiling anstyle-query v1.1.5
+   Compiling serde_derive v1.0.228
+   Compiling zerocopy-derive v0.8.52
+   Compiling tokio-macros v2.7.0
+   Compiling tracing-attributes v0.1.31
+   Compiling thiserror-impl v1.0.69
+   Compiling prometheus-client-derive-encode v0.4.2
+   Compiling futures-macro v0.3.32
+   Compiling anstream v1.0.0
+   Compiling winapi-util v0.1.11
+   Compiling clap_derive v4.6.1
+   Compiling tempfile v3.27.0
+   Compiling async-trait v0.1.89
+   Compiling same-file v1.0.6
+   Compiling clap_builder v4.6.0
+   Compiling is-terminal v0.4.17
+   Compiling walkdir v2.5.0
+   Compiling rusty-fork v0.3.1
+   Compiling prometheus-client v0.22.3
+   Compiling tokio v1.52.3
+   Compiling pest_meta v2.8.8
+   Compiling futures-util v0.3.32
+   Compiling thiserror v1.0.69
+   Compiling tracing v0.1.44
+   Compiling zerocopy v0.8.52
+   Compiling liquid-derive v0.26.8
+   Compiling pest_generator v2.8.8
+   Compiling clap v4.6.1
+   Compiling regex-syntax v0.8.11
+   Compiling pest_derive v2.8.8
+   Compiling doc-comment v0.3.4
+   Compiling flate2 v1.1.9
+   Compiling chrono v0.4.45
+   Compiling rmp-serde v1.3.1
+   Compiling ndarray v0.16.1
+   Compiling futures-executor v0.3.32
+   Compiling tinytemplate v1.2.1
+   Compiling futures v0.3.32
+   Compiling nexus-contracts v2.28.0-omega (D:\Chimera CLI\crates\nexus-contracts)
+   Compiling nom v8.0.0
+   Compiling deranged v0.5.8
+   Compiling ident_case v1.0.1
+   Compiling static_assertions v1.1.0
+   Compiling powerfmt v0.2.0
+   Compiling ppv-lite86 v0.2.21
+   Compiling half v2.7.1
+   Compiling windows-link v0.2.1
+   Compiling kstring v2.0.4
+   Compiling hashbrown v0.14.5
+   Compiling rand_chacha v0.9.0
+   Compiling rand_chacha v0.3.1
+   Compiling ciborium-ll v0.2.2
+   Compiling time v0.3.54
+   Compiling itertools v0.13.0
+   Compiling syn v1.0.109
+   Compiling rand v0.9.4
+   Compiling rand v0.8.6
+   Compiling dashmap v6.2.1
+   Compiling ciborium v0.2.2
+   Compiling hashlink v0.9.1
+   Compiling paste v1.0.15
+   Compiling windows_x86_64_gnu v0.52.6
+   Compiling proptest v1.11.0
+   Compiling rusqlite v0.32.1
+   Compiling criterion v0.5.1
+   Compiling anymap2 v0.13.0
+   Compiling num-bigint v0.4.8
+   Compiling once_cell v1.21.4
+   Compiling pastey v0.1.1
+   Compiling windows_x86_64_gnu v0.48.5
+   Compiling liquid-core v0.26.8
+   Compiling tinyvec_macros v0.1.1
+   Compiling unicode-segmentation v1.13.3
+   Compiling tinyvec v1.12.0
+   Compiling byteorder v1.5.0
+   Compiling cfg-if v1.0.4
+   Compiling windows-targets v0.52.6
+   Compiling unicode-normalization v0.1.25
+   Compiling equator-macro v0.4.2
+   Compiling jiff-core v0.1.0
+   Compiling foldhash v0.1.5
+   Compiling liquid-lib v0.26.8
+   Compiling allocator-api2 v0.2.21
+   Compiling strength_reduce v0.2.4
+   Compiling windows-targets v0.48.5
+   Compiling jiff v0.2.34
+   Compiling hashbrown v0.15.5
+   Compiling transpose v0.2.3
+   Compiling num-rational v0.4.2
+   Compiling nom-language v0.1.0
+   Compiling string-interner v0.15.0
+   Compiling event-bus v2.28.0-omega (D:\Chimera CLI\crates\event-bus)
+   Compiling equator v0.4.2
+   Compiling env_filter v2.0.0
+   Compiling scan_fmt v0.2.6
+   Compiling liquid v0.26.8
+   Compiling primal-check v0.3.4
+   Compiling itertools v0.12.1
+   Compiling downcast-rs v1.2.1
+   Compiling weezl v0.1.12
+   Compiling maplit v1.0.2
+   Compiling dyn-hash v0.2.2
+   Compiling fnv v1.0.7
+   Compiling dyn-clone v1.0.20
+   Compiling derive-new v0.5.9
+   Compiling darling_core v0.20.11
+   Compiling rustfft v6.4.1
+   Compiling aligned-vec v0.6.4
+   Compiling windows v0.48.0
+   Compiling env_logger v0.11.11
+   Compiling cpu-time v1.0.0
+   Compiling combine v4.6.7
+   Compiling pulp v0.22.3
+   Compiling widestring v1.2.1
+   Compiling num_cpus v1.17.0
+   Compiling arrayvec v0.7.8
+   Compiling tract-data v0.22.3
+   Compiling bit-vec v0.6.3
+   Compiling anndists v0.1.5
+   Compiling v_frame v0.3.9
+   Compiling bincode v1.3.3
+   Compiling bit-set v0.5.3
+   Compiling fdeflate v0.3.7
+   Compiling as-slice v0.2.1
+   Compiling itertools v0.14.0
+   Compiling raw-cpuid v11.6.0
+   Compiling unicode-width v0.2.0
+   Compiling color_quant v1.1.0
+   Compiling built v0.8.1
+   Compiling encode_unicode v1.0.0
+   Compiling av-scenechange v0.14.1
+   Compiling anymap3 v1.1.0
+   Compiling reborrow v0.5.5
+   Compiling darling_macro v0.20.11
+   Compiling pulp-wasm-simd-flag v0.1.1
+   Compiling rav1e v0.8.1
+   Compiling aligned v0.4.3
+   Compiling profiling-procmacros v1.0.18
+   Compiling arg_enum_proc_macro v0.3.4
+   Compiling onig_sys v69.9.3
+   Compiling nexus-core v2.28.0-omega (D:\Chimera CLI\crates\nexus-core)
+   Compiling zune-inflate v0.2.54
+   Compiling darling v0.20.11
+   Compiling mmap-rs v0.7.0
+   Compiling castaway v0.2.4
+   Compiling filetime v0.2.29
+   Compiling no_std_io2 v0.9.4
+   Compiling y4m v0.8.0
+   Compiling tract-linalg v0.22.3
+   Compiling quick-error v2.0.1
+   Compiling portable-atomic v1.13.1
+   Compiling bit_field v0.10.3
+   Compiling lebe v0.5.3
+   Compiling bumpalo v3.20.3
+   Compiling zip v2.4.2
+   Compiling hnsw_rs v0.3.4
+   Compiling zopfli v0.8.3
+   Compiling bitstream-io v4.10.0
+   Compiling tar v0.4.46
+   Compiling profiling v1.0.18
+   Compiling derive_builder_core v0.20.2
+   Compiling av1-grain v0.2.5
+   Compiling windows-sys v0.59.0
+   Compiling safetensors v0.6.2
+   Compiling num-derive v0.4.2
+   Compiling exr v1.74.2
+   Compiling esaxx-rs v0.1.10
+   Compiling maybe-rayon v0.1.1
+   Compiling jpeg-decoder v0.3.2
+   Compiling qoi v0.4.1
+   Compiling simd_helpers v0.1.0
+   Compiling imgref v1.12.2
+   Compiling new_debug_unreachable v1.0.6
+   Compiling zune-core v0.5.1
+   Compiling bitflags v1.3.2
+   Compiling noop_proc_macro v0.3.0
+   Compiling minimal-lexical v0.2.1
+   Compiling tiff v0.9.1
+   Compiling loop9 v0.1.5
+   Compiling nom v7.1.3
+   Compiling png v0.17.16
+   Compiling zune-jpeg v0.5.15
+   Compiling derive_builder_macro v0.20.2
+   Compiling prost-derive v0.11.9
+   Compiling console v0.15.11
+   Compiling gif v0.13.3
+   Compiling avif-serialize v0.8.9
+   Compiling py_literal v0.4.0
+   Compiling rand_distr v0.4.3
+   Compiling monostate-impl v0.1.18
+   Compiling mel_spec v0.4.0
+   Compiling num-iter v0.1.46
+   Compiling rgb v0.8.53
+   Compiling fax v0.2.7
+   Compiling macro_rules_attribute-proc_macro v0.2.3
+   Compiling number_prefix v0.4.0
+   Compiling byteorder-lite v0.1.0
+   Compiling pastey v0.2.3
+   Compiling base64 v0.13.1
+   Compiling pxfm v0.1.30
+   Compiling prost v0.11.9
+   Compiling tiff v0.11.3
+   Compiling monostate v0.1.18
+   Compiling image-webp v0.2.4
+   Compiling spm_precompiled v0.1.4
+   Compiling indicatif v0.17.11
+   Compiling ndarray-npy v0.9.1
+   Compiling num v0.4.3
+   Compiling image v0.24.9
+   Compiling derive_builder v0.20.2
+   Compiling compact_str v0.9.1
+   Compiling rayon-cond v0.4.0
+   Compiling gif v0.14.2
+   Compiling macro_rules_attribute v0.2.3
+   Compiling png v0.18.1
+   Compiling dary_heap v0.3.9
+   Compiling unicode-normalization-alignments v0.1.12
+   Compiling memmap2 v0.9.11
+   Compiling unicode_categories v0.1.1
+   Compiling hound v3.5.1
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling seccore v2.28.0-omega (D:\Chimera CLI\crates\seccore)
+   Compiling cmt-tiering v2.28.0-omega (D:\Chimera CLI\crates\cmt-tiering)
+   Compiling toml_edit v0.22.27
+   Compiling hcw-window v2.28.0-omega (D:\Chimera CLI\crates\hcw-window)
+   Compiling mlc-engine v2.28.0-omega (D:\Chimera CLI\crates\mlc-engine)
+   Compiling osa-coordinator v2.28.0-omega (D:\Chimera CLI\crates\osa-coordinator)
+   Compiling ravif v0.13.0
+   Compiling quest-engine v2.28.0-omega (D:\Chimera CLI\crates\quest-engine)
+   Compiling parliament v2.28.0-omega (D:\Chimera CLI\crates\parliament)
+   Compiling decay-engine v2.28.0-omega (D:\Chimera CLI\crates\decay-engine)
+   Compiling qeep-protocol v2.28.0-omega (D:\Chimera CLI\crates\qeep-protocol)
+   Compiling moxcms v0.8.1
+   Compiling toml v0.8.23
+   Compiling tract-core v0.22.3
+   Compiling gsoe-evolution v2.28.0-omega (D:\Chimera CLI\crates\gsoe-evolution)
+   Compiling pvl-layer v2.28.0-omega (D:\Chimera CLI\crates\pvl-layer)
+   Compiling gqep-executor v2.28.0-omega (D:\Chimera CLI\crates\gqep-executor)
+   Compiling onig v6.5.3
+   Compiling unsafe-libyaml v0.2.11
+   Compiling nu-ansi-term v0.50.3
+   Compiling tokenizers v0.21.4
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling matchers v0.2.0
+   Compiling sharded-slab v0.1.7
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling nexus-subagent v2.28.0-omega (D:\Chimera CLI\crates\nexus-subagent)
+   Compiling session-store v2.28.0-omega (D:\Chimera CLI\crates\session-store)
+   Compiling proc-macro2-diagnostics v0.10.1
+   Compiling ntapi v0.4.3
+   Compiling darling_core v0.23.0
+   Compiling crossterm_winapi v0.9.1
+   Compiling tracing-subscriber v0.3.23
+   Compiling yansi v1.0.1
+   Compiling image v0.25.10
+   Compiling windows-result v0.1.2
+   Compiling windows-implement v0.57.0
+   Compiling windows-interface v0.57.0
+   Compiling uncased v0.9.10
+   Compiling instability v0.3.12
+   Compiling nexus-app-server v2.28.0-omega (D:\Chimera CLI\crates\nexus-app-server)
+   Compiling pear_codegen v0.2.9
+   Compiling strum_macros v0.26.4
+   Compiling figment v0.10.19
+   Compiling indoc v2.0.7
+   Compiling inlinable_string v0.1.15
+   Compiling unicode-width v0.1.14
+   Compiling windows-core v0.57.0
+   Compiling unicode-truncate v1.1.0
+   Compiling darling_macro v0.23.0
+   Compiling pear v0.2.9
+   Compiling crossterm v0.28.1
+   Compiling compact_str v0.8.2
+   Compiling lru v0.12.5
+   Compiling cassowary v0.3.0
+   Compiling tracing-test-macro v0.2.6
+   Compiling scc-cache v2.28.0-omega (D:\Chimera CLI\crates\scc-cache)
+   Compiling kvbsr-router v2.28.0-omega (D:\Chimera CLI\crates\kvbsr-router)
+   Compiling windows-strings v0.5.1
+   Compiling windows v0.57.0
+   Compiling windows-result v0.4.1
+   Compiling darling v0.23.0
+   Compiling model-router v2.28.0-omega (D:\Chimera CLI\crates\model-router)
+   Compiling tracing-test v0.2.6
+   Compiling faae-router v2.28.0-omega (D:\Chimera CLI\crates\faae-router)
+   Compiling omega-learner v2.28.0-omega (D:\Chimera CLI\crates\omega-learner)
+   Compiling strum v0.26.3
+   Compiling synstructure v0.13.2
+   Compiling decb-governor v2.28.0-omega (D:\Chimera CLI\crates\decb-governor)
+   Compiling efficiency-monitor v2.28.0-omega (D:\Chimera CLI\crates\efficiency-monitor)
+   Compiling zerovec-derive v0.11.3
+   Compiling http v1.5.0
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling ratatui v0.29.0
+   Compiling http-body v1.1.0
+   Compiling windows-implement v0.60.2
+   Compiling windows-interface v0.59.3
+   Compiling litemap v0.8.2
+   Compiling writeable v0.6.3
+   Compiling ring v0.17.14
+   Compiling icu_normalizer_data v2.2.0
+   Compiling icu_properties_data v2.2.0
+   Compiling tower-service v0.3.3
+   Compiling utf8_iter v1.0.4
+   Compiling httparse v1.10.1
+   Compiling tract-nnef v0.22.3
+   Compiling tract-hir v0.22.3
+   Compiling zerofrom v0.1.8
+   Compiling tokio-util v0.7.19
+   Compiling zeroize v1.9.0
+   Compiling yoke v0.8.3
+   Compiling atomic-waker v1.1.2
+   Compiling try-lock v0.2.5
+   Compiling windows-core v0.62.2
+   Compiling want v0.3.1
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling h2 v0.4.15
+   Compiling rustls-pki-types v1.15.1
+   Compiling windows-threading v0.2.1
+   Compiling httpdate v1.0.3
+   Compiling untrusted v0.9.0
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling object v0.37.3
+   Compiling windows-future v0.3.2
+   Compiling icu_collections v2.2.0
+   Compiling windows-collections v0.3.2
+   Compiling icu_locale_core v2.2.0
+   Compiling windows-numerics v0.3.1
+   Compiling windows-registry v0.6.1
+   Compiling mcp-mesh v2.28.0-omega (D:\Chimera CLI\crates\mcp-mesh)
+   Compiling form_urlencoded v1.2.2
+   Compiling tract-onnx-opl v0.22.3
+   Compiling sync_wrapper v1.0.2
+   Compiling ipnet v2.12.0
+   Compiling litrs v1.0.0
+   Compiling rustls v0.23.43
+   Compiling base64 v0.22.1
+   Compiling icu_provider v2.2.0
+   Compiling native-tls v0.2.18
+   Compiling gimli v0.32.3
+   Compiling tract-onnx v0.22.3
+   Compiling tower-layer v0.3.3
+   Compiling document-features v0.2.12
+   Compiling icu_normalizer v2.2.0
+   Compiling hyper v1.11.0
+   Compiling icu_properties v2.2.0
+   Compiling windows v0.62.2
+   Compiling http-body-util v0.1.4
+   Compiling schannel v0.1.29
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling rustc-demangle v0.1.28
+   Compiling subtle v2.6.1
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling crossterm v0.29.0
+   Compiling tower v0.5.3
+   Compiling addr2line v0.25.1
+   Compiling idna_adapter v1.2.2
+   Compiling toml v1.1.4+spec-1.1.0
+   Compiling idna v1.1.0
+   Compiling mime v0.3.17
+   Compiling comfy-table v7.2.2
+   Compiling hyper-util v0.1.20
+   Compiling url v2.5.8
+   Compiling tokio-native-tls v0.3.1
+   Compiling serde_urlencoded v0.7.1
+   Compiling webpki-roots v1.0.9
+   Compiling clap_complete v4.6.8
+   Compiling encoding_rs v0.8.35
+   Compiling gea-activator v2.28.0-omega (D:\Chimera CLI\crates\gea-activator)
+   Compiling auto-dpo v2.28.0-omega (D:\Chimera CLI\crates\auto-dpo)
+   Compiling sesa-router v2.28.0-omega (D:\Chimera CLI\crates\sesa-router)
+   Compiling tower-http v0.6.11
+   Compiling ssra-fusion v2.28.0-omega (D:\Chimera CLI\crates\ssra-fusion)
+   Compiling acb-governor v2.28.0-omega (D:\Chimera CLI\crates\acb-governor)
+   Compiling rustls-webpki v0.103.13
+   Compiling backtrace v0.3.76
+   Compiling hyper-tls v0.6.0
+   Compiling lsct-tiering v2.28.0-omega (D:\Chimera CLI\crates\lsct-tiering)
+   Compiling chtc-bridge v2.28.0-omega (D:\Chimera CLI\crates\chtc-bridge)
+   Compiling csn-substitutor v2.28.0-omega (D:\Chimera CLI\crates\csn-substitutor)
+   Compiling tokio-stream v0.1.18
+   Compiling console v0.16.4
+   Compiling similar v2.7.0
+   Compiling axum-core v0.4.5
+   Compiling serde_path_to_error v0.1.20
+   Compiling matchit v0.7.3
+   Compiling insta v1.48.0
+   Compiling tokio-test v0.4.5
+   Compiling nmc-encoder v2.28.0-omega (D:\Chimera CLI\crates\nmc-encoder)
+   Compiling nexus-hook v2.28.0-omega (D:\Chimera CLI\crates\nexus-hook)
+   Compiling mas-sched v2.28.0-omega (D:\Chimera CLI\crates\mas-sched)
+   Compiling axum v0.7.9
+   Compiling tokio-rustls v0.26.4
+   Compiling repo-wiki v2.28.0-omega (D:\Chimera CLI\crates\repo-wiki)
+   Compiling mtpe-executor v2.28.0-omega (D:\Chimera CLI\crates\mtpe-executor)
+   Compiling sysinfo v0.38.4
+   Compiling hyper-rustls v0.27.9
+   Compiling human-panic v2.0.8
+   Compiling reqwest v0.12.28
+   Compiling sysinfo v0.32.1
+   Compiling chimera-mas v2.28.0-omega (D:\Chimera CLI\crates\chimera-mas)
+   Compiling mca-gateway v2.28.0-omega (D:\Chimera CLI\crates\mca-gateway)
+   Compiling chimera-tui v2.28.0-omega (D:\Chimera CLI\crates\chimera-tui)
+   Compiling chimera-cli v2.28.0-omega (D:\Chimera CLI\crates\chimera-cli)
+   Compiling chimera-e2e-tests v2.28.0-omega (D:\Chimera CLI)
+error: linking with `gcc` failed: exit code: 1
+  |
+  = note: "gcc" "-fno-use-linker-plugin" "-Wl,--dynamicbase" "-Wl,--disable-auto-image-base" "-m64" "-Wl,--high-entropy-va" "D:\\Chimera CLI\\target\\debug\\deps\\rustcyV3RGA\\symbols.o" "<17 object files omitted>" "-Wl,-Bstatic" "<sysroot>\\lib\\rustlib\\x86_64-pc-windows-gnu\\lib/{libtest-*,libgetopts-*,librustc_std_workspace_std-*}.rlib" "D:\\Chimera CLI\\target\\debug\\deps/{libchimera_tui-8fd907f7cf362b2b,libchimera_mas-942933754135be37,libdecay_engine-1116587f15e8a681,librepo_wiki-02163013f017fd3f,libhnsw_rs-046b9a500681dd5f,libbincode-b1bf5788e14acd22,libcpu_time-3a29cd30cd4c2288,libmmap_rs-079ada765ff05b88,libwidestring-b549cc8766580fa7,libwindows-642f91c99c2e7138,libwindows_targets-bb8bc210476dbbde,libanndists-9f939ca9326d746a,libenv_logger-dea0d95dff9472ed,libjiff-4fd285d221ab613f,libjiff_core-e91785f874a59670,libanstream-c55a676e4cffa838,libanstyle_query-7358e510d3b7d4f1,libis_terminal_polyfill-b5dfdc1a289595cc,libanstyle_wincon-e05cfd6d1dc2bfa2,libonce_cell_polyfill-51cd503701a228cf,libcolorchoice-0c8205c49a435e1f,libanstyle_parse-b4a7e8a2111a009b,libutf8parse-af568b749b937533,libenv_filter-9e606c98a8e04ae9,libanstyle-a114ad752292b3fc,libnmc_encoder-1b242d750a2be194,libtokenizers-3bd99d5d2e1774bc,libesaxx_rs-45b4a220f75af992,libunicode_normalization_alignments-69efa6792e2c906c,libspm_precompiled-d3590bf74ae2c7a1,libbase64-33374bfa1f928eea,libnom-bff8de3263516dd8,libunicode_categories-c24169985520db69,librand-6002c55e5a863dbb,librand_chacha-dd24f23af5ad8208,librand_core-49569cecf3cf5841,libdary_heap-238d7513cee24710,libcompact_str-7016edc14c8727bc,libmonostate-335b1e7d1acbd3e7,libmacro_rules_attribute-5ef934e8b63a0ed7,libindicatif-8aaf50edc9dee07e,libportable_atomic-b447800349a1a3a4,libnumber_prefix-41c827944dd68803,libconsole-996a8a362debc335,libencode_unicode-9b3f53659c310b90,libwindows_sys-55026d601c4c7f01,librayon_cond-2dccd57138bac4c2,libonig-79d6014298b69bfb,libonig_sys-1d6728eb69194cb7,libderive_builder-74c57f9d2e713840,libmel_spec-90e5af1b00dc0b8d,libimage-e5bf89adad3a95a5,libpng-d2209df350ed1036,libbitflags-60de041ae058e00a,libgif-7642079dd2aab183,libtiff-c6aeb8899704e553,libjpeg_decoder-2dbbcfc5e8d3c6ab,libnum-7d6b068eb3464310,libnum_iter-40f66fe1e39ea42b,libhound-821f53fbd00d6ce3,libimage-ef0079f104448b36,libqoi-cc4bbf4cbef8e8e3,libmoxcms-1a6e6fb522c06c35,libpxfm-fb6b3318cb579998,libimage_webp-c4a967300e4498c1,libtiff-038128e47014e8b1,libfax-b099361b9e90445e,libpng-da277f9c2d090390,libfdeflate-591d4154370e7613,libexr-5f54e441ec1dad05,libzune_inflate-c8bd565529bc818f,libbit_field-59ea9d183e34fe8a,libpulp-96f9e3940963eaaa,liblebe-37aa1d0d907c5065,libzune_jpeg-59b99e749055aff8,libzune_core-069a7ff7f81fa88f,libgif-14261b054574c749,libcolor_quant-b7ebe3e0f15b96a7,libweezl-27fd8566a97db666,libbyteorder_lite-b80d80b6452bb1c5,libravif-3d9026c059272eb8,libloop9-388d575f6c6d7917,libavif_serialize-fd54d1260af5e35b,libquick_error-673a05e8405f3fbe,librgb-13879b0393100aa7,librav1e-92cc3c781fa48c36,libprofiling-168187c4f6a21b9b,libav_scenechange-18707d5054068e2f,liby4m-64d23ced32768d45,libaligned-bac6d810585c7c81,libas_slice-3edc9ea7047742b1,libstable_deref_trait-466d61cc46cf2fb1,libav1_grain-a7ca94b545162827,libnum_rational-55407fae3197ff6f,libnum_bigint-0bd397b6cb7713e4,libmaybe_rayon-f8f3c4a13274be9a,libv_frame-93c1a67abc4f398c,libarrayvec-c56559a196d23336,libaligned_vec-dbcbfd0ef1cace7f,libequator-aeea6495731bf50c,libthiserror-e6c6851d4f5f845c,libbitstream_io-6dc3f0143c2c6646,libitertools-12e82d5281d1021a,libimgref-eb8034aa7d52ce06,libtract_onnx-b2280253ebb187a9,libmemmap2-ce02c529dd08eefe,libtract_onnx_opl-50cb26ddaef8077a,librand_distr-a27e04d466e3dfbd,libtract_nnef-4b30a3be67088810,libwalkdir-18fb48057e921020,libsame_file-104957524be0ad31,libwinapi_util-c6e9dd6a998456cc,libflate2-4fd7d4531b2ea3a7,libminiz_oxide-c2429d4173984403,libsimd_adler32-257ecb270235a2ce,libcrc32fast-99f5277585f65a56,libliquid-7a91a8289b6688c4,libliquid_lib-7f98e284cd63682e,libpercent_encoding-8ddf4ae220626149,libliquid_core-6e142a6b16f52db4,libanymap2-a9d6f011bf79a2dd,libpest-16327bad91eaf68a,libucd_trie-55657b700c7ce278,libkstring-6ff1f7c3270cb367,libtime-73cad4b62fd0ef9b,libpowerfmt-ca3d3a356b239659,libnum_conv-aac0e30cd5ca6ab0,libderanged-d1abd0cada50870f,libtime_core-a1aecc5c290d7745,libdoc_comment-8301974da80535b6,libsafetensors-ded6b502ac57a2ee,libtar-f325944e62cf61c1,libfiletime-c23ba972deb7f214,libprost-2cefda3162d5a1ee,libtract_hir-7cdfa8b154409363,libtract_core-53ab50b77efac4a5,libanymap3-e91a4fbbc68b89cc,librustfft-f710dec155b0617c,libprimal_check-e96a4bdc3ed04e11,libtranspose-021c0adb14430e4e,libstrength_reduce-940c58ce1f601d8c,libtract_linalg-26ee1de43491caf5,libbyteorder-e24b2af1733905e4,liblazy_static-426fd8f0648a3aac,libtract_data-f56d56d6c0d32a10,libdyn_clone-589e6eb51a8bdfee,libmaplit-c693260cd0a5c455,libdyn_hash-7c568a50b00879c9,libstring_interner-4bd2b6f4df0e1534,libnom_language-802361169e067257,libnom-537bb817210369d3,libscan_fmt-f289c139ccda891c,libanyhow-12d268bb1f7ec11d,libhalf-3165102cbf1f722d,libitertools-6d7f50404e62f086,libdowncast_rs-28f086aea00c96b9,libbit_set-1ea15c9171349847,libbit_vec-e4478e15bd3a2e77,libgsoe_evolution-f46802d40922c776,libosa_coordinator-c5c81611d390450a,libhcw_window-cf1224d0b4b9dad1,libsysinfo-02fbf17a2b5cb866,libntapi-b5bb8a7dc85413ce,liblibc-87fa23f4756480cc,libwindows-09408d1d2281700d,libwindows_core-c49fba4480fc7f01,libwindows_result-5c826fd322d6ffb9,libwindows_targets-1f63fdc1cb99f79a,libpvl_layer-437daf857ed1ac2f,libparliament-35db5b9c66d16306,libgqep_executor-9afe2318fe8c7a4e,libseccore-1482a55d5a94578c,libregex-6dd3f38526ae652b,libregex_automata-f0e0675304bd982a,libaho_corasick-6b6dde0b736fd60b,libregex_syntax-5ddbf3ff4afd9b1b,libqeep_protocol-1c3d8001da16c16c,libfutures-1be10f1b3d749fb0,libfutures_executor-b4f3899bf23f8959,libfutures_util-6b0df6e5e6afac01,libfutures_io-b4c2a3e10c8de5d4,libslab-e70dd74286794162,libfutures_channel-b7a8f20da922a6e3,libfutures_sink-9af5f2057e82ce6e,libfutures_task-dadae4a2b200fd77,libfutures_core-e26648ddda444fe0,libnexus_app_server-639ad8697e27a95f,libnexus_subagent-f29480a6a9c102d2,libquest_engine-da163e66689bd973,libsession_store-cae34e3b61948fe4,librusqlite-86c1279ec1ad7315,libfallible_streaming_iterator-d1b552d99d0f8c10,libfallible_iterator-3d84e2502220abfc,libhashlink-21b4eaca7156c0e8,liblibsqlite3_sys-21f5e2e81256d39b,libfigment-5684258b9287ed47,libserde_yaml-4af2353fc3adb4fd,libunsafe_libyaml-63f4c71e7ea83032,libtoml-34ceb2b0ae583d0b,libtoml_edit-9d8170cbe41ce734,libserde_spanned-77698f0cf8eaa965,libindexmap-07cbab65aed257ec,libhashbrown-71ad5f500a2cfd2e,libwinnow-ad34244600a84985,libtoml_write-2f1543d6ad6bade0,libtoml_datetime-32d21665e2f61be3,libuncased-51470a874fb93b4b,libpear-5fd53156c1ad829b,libyansi-ce706f029fc87ea8,libinlinable_string-d0c60e77fb61aecb,libnexus_core-65129d538b730533,librayon-0e2e31e0748be920,librayon_core-5200b3445edd7498,libcrossbeam_deque-647ff9328f4a7d2e,libcrossbeam_epoch-62392386cccc2ea9,libhex-0944a7768fcaaaac,librand-9f2d5ef17bececf1,librand_chacha-14687a8846c9b725,libppv_lite86-023f7ac528d92653,librand_core-97a51dca8f17bf99,libgetrandom-ddb54b1e0de1a20a,libsha2-640b2f78cc0deafa,libcpufeatures-76edb32092741883,libdigest-4b640f953ebe955b,libblock_buffer-5ae53e2f0f0215aa,libcrypto_common-2654fe6bce3ad94f,libgeneric_array-ef8966abd84e4ff0,libtypenum-ff8ab2128c10ff0b,libndarray-a11d2417403cb57a,libmatrixmultiply-3aac6ca814dd0bcd,libnum_complex-150f525e161ee2b4,libbytemuck-055f02da22079015,libnum_integer-72bf138143ffec64,librawpointer-0d36780e7de9d451,libratatui-133021116472d6d1,libunicode_truncate-bdea16eddc57ac9d,libunicode_width-c2148ea3280ccd87,liblru-14a67d8ca93c24ee,libhashbrown-a57654a3f50831f2,libfoldhash-119b640f6aa7533c,libequivalent-6ba21044b9ca6004,liballocator_api2-30e750e761fc8a9d,libitertools-39aed4f7e61515c1,libeither-0d917446049f33d4,libcassowary-959d2c8776da74c3,libcompact_str-b79b2968177a8759,libryu-115f7f8357692b7e,libstatic_assertions-bc71f2ac006c6e93,libcastaway-5671179f73b607c8,libunicode_segmentation-8cd8843fb5a2bb33,libunicode_width-5246c6d41b5bf8e9,libstrum-543e826388ebde6b,libcrossterm-8dd077a0fee85b3f,libbitflags-89cf0493537504e7,libcrossterm_winapi-988cbd1be865b6ad,libwinapi-8603a114b6416fcd,libevent_bus-4fac7881d579a45f,libserde_json-d7cd9df98c3a9bce,libmemchr-1fa176df778bd2f4,libzmij-5b5733584fb4bfe3,librmp_serde-6dd8de9e85df2f38,librmp-94699d6f0d9d1284,libcrossbeam_queue-926f71da06eeaef2,libarc_swap-a7fe660b1c0df1c2,libprometheus_client-83b44571a1ead388,libdtoa-2baf66bd98491447,libitoa-c68faf908edfa651,libnexus_contracts-6a0fad65a74e8796,libuuid-05a685c1fae4c5dd,libgetrandom-beafd5cc394531b7,libchrono-7267f050d8ba85e7,libnum_traits-b2bc4f213e42edb4,libdashmap-c43e4739cec0e3c8,libhashbrown-2cf58c5f04331e81,libahash-b9cf0eedc01da654,libgetrandom-683c3b6c2636926b,libzerocopy-ffa45ceaaa4f937a,libcrossbeam_utils-be417533af7b784e,libthiserror-bc8ff5e0937b3028,libserde-f0b1fa83831e2799,libserde_core-6d5238216fab02aa,libtracing-f307ada13304a283,liblog-2738b86d216ae536,libtracing_core-38884f36049d43ab,libonce_cell-5c309044ed603005,libtokio-379f72d40eee469b,libsocket2-53794d77be206ec3,libbytes-392049dcd0f91e9f,libmio-acbe59d093639c7c,libwindows_sys-ce3d5a03b1d6f3ca,libparking_lot-5a264cf44a8320bb,libparking_lot_core-09926f945e9ce557,libwindows_link-244785d4bf14f0b6,libcfg_if-04857fb66ce3b28b,libsmallvec-c37f8b4e1246e7df,liblock_api-33daa11569a6ddd0,libscopeguard-7713a7b636e127c3,libpin_project_lite-f0528159fac7d21c}.rlib" "<sysroot>\\lib\\rustlib\\x86_64-pc-windows-gnu\\lib/{libstd-*,libpanic_unwind-*,libobject-*,libmemchr-*,libaddr2line-*,libgimli-*,libcfg_if-*,libwindows_link-*,librustc_demangle-*,libstd_detect-*,libhashbrown-*,librustc_std_workspace_alloc-*,libminiz_oxide-*,libadler2-*,libunwind-*,liblibc-*,librustc_std_workspace_core-*,liballoc-*,libcore-*,libcompiler_builtins-*}.rlib" "-Wl,-Bdynamic" "-lkernel32" "-lwindows.0.48.5" "-lstdc++" "-lwindows.0.52.0" "-lwinapi_ntdll" "-lwindows.0.52.0" "-lwindows.0.52.0" "-lwindows.0.52.0" "-lbcrypt" "-ladvapi32" "-lwinapi_advapi32" "-lwinapi_cfgmgr32" "-lwinapi_credui" "-lwinapi_gdi32" "-lwinapi_kernel32" "-lwinapi_msimg32" "-lwinapi_opengl32" "-lwinapi_secur32" "-lwinapi_synchronization" "-lwinapi_user32" "-lwinapi_winspool" "-lkernel32" "-lkernel32" "-lkernel32" "-lntdll" "-luserenv" "-lws2_32" "-ldbghelp" "-lgcc_eh" "-l:libpthread.a" "-lmsvcrt" "-lmingwex" "-lmingw32" "-lgcc" "-lmsvcrt" "-lmingwex" "-luser32" "-lkernel32" "-Wl,--nxcompat" "-L" "D:\\Chimera CLI\\target\\debug\\build\\libsqlite3-sys-dfeed748f4fca6a1\\out" "-L" "D:\\Chimera CLI\\target\\debug\\build\\esaxx-rs-92353dd0e4619e23\\out" "-L" "D:\\Chimera CLI\\target\\debug\\build\\onig_sys-386388d8c8cc0ac6\\out" "-L" "D:\\Chimera CLI\\target\\debug\\build\\tract-linalg-b99d6de87255d641\\out" "-L" "D:\\Chimera CLI\\.toolchain\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\winapi-x86_64-pc-windows-gnu-0.4.0\\lib" "-L" "D:\\Chimera CLI\\.toolchain\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\windows_x86_64_gnu-0.48.5\\lib" "-L" "D:\\Chimera CLI\\.toolchain\\cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\windows_x86_64_gnu-0.52.6\\lib" "-o" "D:\\Chimera CLI\\target\\debug\\deps\\parliament_virtual_scroll_test-20966b86b6803996.exe" "-Wl,--gc-sections" "-Wl,--strip-debug" "-nodefaultlibs"
+  = note: some arguments are omitted. use `--verbose` to show all linker arguments
+  = note: D:/msys64/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/16.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: D:\Chimera CLI\target\debug\deps\libevent_bus-4fac7881d579a45f.rlib: error adding symbols: memory exhausted
+          collect2.exe: error: ld returned 1 exit status
+          
+
+error: could not compile `chimera-tui` (test "parliament_virtual_scroll_test") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: crate `moxcms` required to be available in rlib format, but was not found in this form
+
+error: crate `session_store` required to be available in rlib format, but was not found in this form
+
+error: crate `tract_linalg` required to be available in rlib format, but was not found in this form
+
+error: crate `png` required to be available in rlib format, but was not found in this form
+
+error: crate `crossbeam_epoch` required to be available in rlib format, but was not found in this form
+
+error: crate `figment` required to be available in rlib format, but was not found in this form
+
+error: could not compile `chimera-tui` (test "focus_test") due to 1 previous error
+error: could not compile `chimera-tui` (test "v3_engine_regression_test") due to 1 previous error
+error: could not compile `chimera-tui` (test "mcp_nodes_panel_test") due to 1 previous error
+error: crate `zune_jpeg` required to be available in rlib format, but was not found in this form
+
+error: could not compile `chimera-tui` (test "interaction_regressions_test") due to 1 previous error
+error: could not compile `chimera-tui` (test "overwindow_test") due to 2 previous errors
+error: could not compile `chimera-tui` (test "dual_source_invariant_test") due to 1 previous error

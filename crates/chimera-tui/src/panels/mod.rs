@@ -227,3 +227,41 @@ pub trait Panel: Send {
         None
     }
 }
+
+// ============================================================
+// PS-2 U-4:面板退化尺寸统一判据(评估报告 U-4)
+// ============================================================
+
+/// 面板可有意义渲染的最小宽度(列)
+pub const MIN_PANEL_W: u16 = 24;
+
+/// 面板可有意义渲染的最小高度(行)
+pub const MIN_PANEL_H: u16 = 4;
+
+/// 区域是否已退化到无法有意义地渲染面板内容
+///
+/// # WHY 统一判据
+/// 此前仅少数面板各自实现了不同阈值的守卫(有的 `height < 6`、有的 `< 15`),
+/// 其余面板**完全无守卫**:小终端下内容被切成碎片,用户看不出原因(评估报告 U-4)。
+/// 统一为共享判据后,各面板早退逻辑一致,提示文案也一致。
+///
+/// # 用法(面板 render 首行)
+/// ```ignore
+/// if crate::panels::degenerate(area) {
+///     crate::panels::render_too_small(area, buf);
+///     return;
+/// }
+/// ```
+pub fn degenerate(area: Rect) -> bool {
+    area.width < MIN_PANEL_W || area.height < MIN_PANEL_H
+}
+
+/// 退化态统一渲染:单行提示(不接管边框,由调用方决定是否已有 block)
+///
+/// WHY 独立函数:14 个面板共用同一文案与绘制方式,避免各写一份
+/// (文案走键表 `panel.too_small`,不硬编码 CJK)。
+pub fn render_too_small(area: Rect, buf: &mut Buffer) {
+    let p =
+        ratatui::widgets::Paragraph::new(ratatui::text::Text::from(crate::t!("panel.too_small")));
+    ratatui::widgets::Widget::render(p, area, buf);
+}

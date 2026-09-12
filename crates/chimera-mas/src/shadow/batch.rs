@@ -15,7 +15,11 @@
 //! 统计裁决(Wilson/哨兵/bootstrap)由 orchestrator 调用 stats 模块完成,
 //! 本模块不持有配置、不做数值判定(单一职责)。
 
+use chrono::Utc;
+
 use crate::error::{MasError, Result};
+
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 
 // ============================================================
 // 预注册检查点常量(rev3 决策 3A′-P,禁止运行时调整)
@@ -63,19 +67,46 @@ pub enum Checkpoint {
 // ============================================================
 
 /// 批次账本 — 胜负序列的唯一持有者(检查点外不可窥视)
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct BatchLedger {
     records: Vec<BatchRecord>,
     /// 扩展是否已激活(14 批终判落扩展带后由 orchestrator 标记,
     /// 激活后账本才接受第 15-25 批)
     extension_active: bool,
+    /// WS-4B:连续非胜批次数(回归检测;计胜时清零)。
+    /// 达到 [`REGRESSION_STREAK_LIMIT`] 时发布 `R1ShadowRegressionDetected`。
+    regression_streak: u32,
+    /// WS-4B:可选事件总线 — 回归检测命中时发布 `R1ShadowRegressionDetected`
+    event_bus: Option<EventBus>,
 }
+
+impl std::fmt::Debug for BatchLedger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BatchLedger")
+            .field("records", &self.records)
+            .field("extension_active", &self.extension_active)
+            .field("regression_streak", &self.regression_streak)
+            // event_bus:EventBus 未实现 Debug,不输出
+            .finish()
+    }
+}
+
+/// 触发 R1ShadowRegressionDetected 的连续非胜批次阈值(对应事件 doc "连续显著
+/// 退化天数达到 3 触发回滚" 的批次语义)。
+const REGRESSION_STREAK_LIMIT: u32 = 3;
 
 impl BatchLedger {
     /// 创建空账本
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 链式注入事件总线 — 回归检测命中时发布 `R1ShadowRegressionDetected`(WS-4B)。
+    #[must_use]
+    pub fn with_event_bus(mut self, bus: EventBus) -> Self {
+        self.event_bus = Some(bus);
+        self
     }
 
     /// 记录一批结果
@@ -103,8 +134,35 @@ impl BatchLedger {
                 ),
             });
         }
+        let win = record.win;
         self.records.push(record);
+        // WS-4B:回归检测 — 计胜清零连续非胜计数;连续非胜达阈值发布回归事件
+        if win {
+            self.regression_streak = 0;
+        } else {
+            self.regression_streak = self.regression_streak.saturating_add(1);
+            if self.regression_streak >= REGRESSION_STREAK_LIMIT {
+                self.publish_regression_detected();
+            }
+        }
         Ok(())
+    }
+
+    /// 发布 `R1ShadowRegressionDetected` 事件 — 连续非胜批次回归检测命中(WS-4B)。
+    ///
+    /// `report_date` 为当前 UTC 时刻,`regression_streak` 为连续非胜批次数。
+    /// 未注入 EventBus 时静默跳过;发布失败仅 warn(回归检测主语义不阻断)。
+    fn publish_regression_detected(&self) {
+        if let Some(bus) = &self.event_bus {
+            let event = NexusEvent::R1ShadowRegressionDetected {
+                metadata: EventMetadata::new("chimera-mas"),
+                report_date: Utc::now(),
+                regression_streak: self.regression_streak,
+            };
+            if let Err(e) = bus.publish_blocking(event) {
+                tracing::warn!(error = %e, "发布 R1ShadowRegressionDetected 事件失败");
+            }
+        }
     }
 
     /// 激活预注册扩展(14→25 批)
@@ -306,5 +364,46 @@ mod tests {
         }
         assert_eq!(ledger.wins(), 3);
         assert_eq!(ledger.audit_records().len(), 5);
+    }
+
+    /// WS-4B:R1ShadowRegressionDetected 幽灵事件生产者验证 —
+    /// 连续 3 批非胜触发回归事件,计胜清零计数。
+    #[test]
+    fn test_regression_detected_after_3_consecutive_nonwins() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut ledger = BatchLedger::new().with_event_bus(bus);
+
+        // 先计胜(清零连续计数)
+        ledger.record(record("b0", true)).expect("计胜记录应成功");
+        // 连续 3 批非胜 → 触发回归事件(第 3 批时 streak=3)
+        ledger.record(record("b1", false)).expect("记录应成功");
+        ledger.record(record("b2", false)).expect("记录应成功");
+        ledger
+            .record(record("b3", false))
+            .expect("第 3 批非胜,应触发回归事件");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let event = loop {
+            if let Ok(Some(e)) = rx.try_recv() {
+                break e;
+            }
+            assert!(std::time::Instant::now() < deadline, "接收回归事件超时");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+
+        assert_eq!(
+            event.metadata().source,
+            "chimera-mas",
+            "R1ShadowRegressionDetected 事件 source 应为 chimera-mas"
+        );
+        match event {
+            NexusEvent::R1ShadowRegressionDetected {
+                regression_streak, ..
+            } => {
+                assert_eq!(regression_streak, REGRESSION_STREAK_LIMIT);
+            }
+            other => panic!("期望 R1ShadowRegressionDetected 事件,收到 {other:?}"),
+        }
     }
 }

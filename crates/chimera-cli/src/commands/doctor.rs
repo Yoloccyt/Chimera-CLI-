@@ -26,6 +26,9 @@
 use anyhow::Result;
 use event_bus::EventBus;
 use mcp_mesh::{McpMesh, MeshConfig};
+use nexus_contracts::command_validation::{Command, CommandPolicy, CommandValidator};
+use seccore::command_validator::SecCoreCommandValidator;
+use seccore::Sandbox;
 use serde::Serialize;
 use std::path::Path;
 
@@ -83,15 +86,15 @@ pub struct HealthSummary {
     pub total: usize,
 }
 
-/// 执行 doctor 子命令 — 6 维度健康检查
+/// 执行 doctor 子命令 — 8 维度健康检查（WI-02 增强: +认证密钥 / +沙箱）
 ///
 /// `json` flag(Task 1.7):`true` 时输出 JSON envelope(完整 HealthReport)。
 /// `fix`(Task 1.13.4):`true` 时自动修复可修复项(当前仅配置文件缺失)。
 pub async fn execute(cfg: &ChimeraConfig, json: bool, fix: bool) -> Result<()> {
-    tracing::info!(fix, "系统健康检查(6 维度)");
+    tracing::info!(fix, "系统健康检查(8 维度)");
 
-    // 依次执行 6 项检查
-    let mut checks = Vec::with_capacity(6);
+    // 依次执行 8 项检查
+    let mut checks = Vec::with_capacity(8);
 
     // 1. 配置文件检查
     checks.push(check_config_file(fix).await);
@@ -110,6 +113,12 @@ pub async fn execute(cfg: &ChimeraConfig, json: bool, fix: bool) -> Result<()> {
 
     // 6. LLM Provider 健康度(Wave 2 Task 4)— 复用 llm::List 的 8-name fallback
     checks.push(check_llm_provider(cfg).await);
+
+    // 7. 认证密钥（WI-02: API key 环境变量自检，不泄露密钥值）
+    checks.push(check_auth_keys());
+
+    // 8. 沙箱（WI-02: SecCore 进程内沙箱可用性 + 命令分类）
+    checks.push(check_seccore());
 
     // 汇总统计
     let summary = HealthSummary {
@@ -406,6 +415,89 @@ async fn check_llm_provider(cfg: &ChimeraConfig) -> HealthCheck {
     }
 }
 
+/// 检查 7:认证密钥（WI-02）— API key 环境变量自检
+///
+/// 检查常见供应商密钥环境变量是否设置（不泄露密钥值）。
+/// - 任一已设置 → OK
+/// - 全部缺失 → WARN（LLM 调用需显式配置密钥）
+fn check_auth_keys() -> HealthCheck {
+    // 常见供应商密钥环境变量（与 examples/config.sample.* 对齐）
+    const KEY_ENVS: &[&str] = &[
+        "DEEPSEEK_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ZHIPU_API_KEY",
+        "MOONSHOT_API_KEY",
+        "MINIMAX_API_KEY",
+        "CHIMERA_API_KEY",
+    ];
+    let configured: Vec<&str> = KEY_ENVS
+        .iter()
+        .copied()
+        .filter(|k| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false))
+        .collect();
+
+    if configured.is_empty() {
+        HealthCheck {
+            name: "auth_keys",
+            description: "认证密钥（API key）",
+            status: HealthStatus::Warn,
+            message: "Auth: ✗ 未检测到 API key 环境变量（LLM 调用需显式配置）".into(),
+        }
+    } else {
+        HealthCheck {
+            name: "auth_keys",
+            description: "认证密钥（API key）",
+            status: HealthStatus::Ok,
+            message: format!(
+                "Auth: ✓ 已配置 {} 个密钥环境变量（{}，值不泄露）",
+                configured.len(),
+                configured.join(", ")
+            ),
+        }
+    }
+}
+
+/// 检查 8:沙箱（WI-02）— SecCore 进程内沙箱可用性 + 命令分类
+///
+/// 创建默认策略沙箱并验证命令分类器：安全命令（ls）通过、
+/// 危险命令（rm -rf）被拦截。验证零信任防线在役。
+fn check_seccore() -> HealthCheck {
+    // 沙箱构造（默认策略，含攻击类型规则）——验证沙箱运行时在役
+    let sandbox = Sandbox::with_default_policy();
+    // 拦截统计接口可用性（零信任防线数据面）
+    let (_, _, _) = sandbox.interception_stats();
+    let validator = SecCoreCommandValidator;
+    let policy = CommandPolicy::default();
+
+    // 安全命令: ls 应通过
+    let safe_ok = validator
+        .validate(&Command::new("ls").arg("-la"), &policy)
+        .is_ok();
+    // 危险命令: rm -rf 应被拦截（零信任红线）
+    let danger_blocked = validator
+        .validate(&Command::new("rm").arg("-rf").arg("/"), &policy)
+        .is_err();
+
+    if safe_ok && danger_blocked {
+        HealthCheck {
+            name: "seccore_sandbox",
+            description: "SecCore 沙箱",
+            status: HealthStatus::Ok,
+            message: "Sandbox: ✓ 默认策略就绪，命令分类器在役（安全命令放行/危险命令拦截）".into(),
+        }
+    } else {
+        HealthCheck {
+            name: "seccore_sandbox",
+            description: "SecCore 沙箱",
+            status: HealthStatus::Fail,
+            message: format!(
+                "Sandbox: ✗ 命令分类异常（safe_ok={safe_ok}, danger_blocked={danger_blocked}）"
+            ),
+        }
+    }
+}
+
 /// 人类可读模式输出健康检查报告(SubTask 1.13.2)
 ///
 /// 格式:
@@ -523,14 +615,14 @@ mod tests {
 
     /// 验证 `execute` 汇总 total = 6(确保 LLM 维已纳入报告)。
     #[tokio::test]
-    async fn test_execute_emits_six_dimensions() {
+    async fn test_execute_emits_eight_dimensions() {
         // 调 execute (json=true 走最小路径,避免 stderr 输出污染测试)
         let cfg = ChimeraConfig::default();
         execute(&cfg, true, false)
             .await
             .expect("doctor execute 应成功");
-        // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 6 维检查
+        // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 8 维检查
         // 集成层在 tests/cli.rs::test_doctor_json_outputs_report_envelope
-        // 断言 `"total": 6` 以补充此处的覆盖。
+        // 断言 `"total": 8` 以补充此处的覆盖。
     }
 }

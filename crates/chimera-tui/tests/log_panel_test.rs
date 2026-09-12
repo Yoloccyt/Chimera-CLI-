@@ -2,14 +2,14 @@
 
 #![forbid(unsafe_code)]
 
-use chimera_tui::{InputMode, LogPanel, Panel, PopupKind, TuiCommand, TuiState};
+use chimera_tui::{LogPanel, Panel, PopupKind, TuiCommand, TuiState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use event_bus::{EventMetadata, NexusEvent};
 use std::collections::VecDeque;
 
 fn make_state_with_events(events: Vec<NexusEvent>) -> TuiState {
     let mut state = TuiState::new();
-    state.latest_events = VecDeque::from(events);
+    state.latest_events = std::sync::Arc::new(VecDeque::from(events));
     state
 }
 
@@ -241,10 +241,7 @@ fn log_panel_search_input_via_state() {
             cache_key: "beta".into(),
         },
     ]);
-    state.input_mode = InputMode::Search;
-    state.input_buffer = "alpha".into();
-
-    // 搜索提交由 CommandPalette 处理,这里直接验证状态驱动过滤
+    // IT-01(批次-B):Search 模式已删除;过滤器为纯状态驱动,直接设值验证
     state.filter_keyword = Some("alpha".into());
 
     let filtered = LogPanel::filtered_events(&state);

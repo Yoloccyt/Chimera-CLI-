@@ -182,6 +182,8 @@ impl Sandbox {
     /// EventBus 内部为 Arc,Clone 廉价;生产代码注入共享总线使违规可被
     /// quest-engine/L9 订阅者感知并中止/告警 Quest(§6.2 安全事件观测)。
     pub fn with_event_bus(mut self, bus: EventBus) -> Self {
+        // WS-4B:审计链共享同一总线,使审计记录完成时发布 AuditLogged 事件
+        self.audit_chain = self.audit_chain.with_event_bus(bus.clone());
         self.event_bus = Some(bus);
         self
     }

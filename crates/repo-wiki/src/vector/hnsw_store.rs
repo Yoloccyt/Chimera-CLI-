@@ -532,14 +532,16 @@ impl VectorStore for HnswStore {
             })
             .collect();
 
-        // 按 score 降序排列
-        hits.sort_by(|a, b| {
+        // 按 score 降序取前 k — C9(2026-09-04,红线 #8):全量 sort_by+truncate
+        // → L0 xts_top_k_by(select_nth O(n) + 前 k 段二次排序);k>=len 边界由
+        // xts 内部钒制覆盖(等价全排),score tie 段内序与其余降序语义与原一致。
+        nexus_contracts::util::xts_top_k_by(&mut hits, k, |a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // 排序后截断到 k(确保返回真正的 Top-K)
+        // 截断到 k(确保返回真正的 Top-K;xts 已把最大 k 个置于前段并降序)
         hits.truncate(k);
 
         Ok(hits)

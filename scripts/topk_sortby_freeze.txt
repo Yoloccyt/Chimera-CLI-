@@ -1,0 +1,45 @@
+# =============================================================================
+# Top-K sort_by 例外登记表(C9,2026-09-04)
+# =============================================================================
+# 背景:红线 #8 要求 Top-K 选择必须 select_nth_unstable O(n),禁止全量 sort。
+# L0 工具 nexus_contracts::util::{xts_top_k, xts_top_k_by} 为唯一合规范式
+# (select_nth O(n) + 前 k 段稳定二次排序;k>=len 钳制等价全排)。
+#
+# C9 全仓扫描(约 90 处排序调用点)后,生产可达 RED 已全部迁移:
+#   [MIGRATED] repo-wiki/experience_bank.rs global_search      -> xts_top_k_by(source_count)
+#   [MIGRATED] repo-wiki/vector/hnsw_store.rs top_k            -> xts_top_k_by(score f32)
+#   [MIGRATED] auto-dpo/self_history.rs list_recent  [ISLAND]  -> xts_top_k_by(created_at)
+# 性能证据:nexus-contracts/benches/xts_top_k.rs(已注册 run_bench,C6 校准
+# 阈值 500us;2.28.1 引入时即含 sort_by 全排对照 bench)。
+# 语义等价证据:L0 util.rs equivalent_to_sort_by_truncate 系列单测 + proptest
+# + 本次站点级 tie 表征测试(repo-wiki/tests/experience_bank_test.rs)。
+#
+# 本表登记"扫描判定为 GRAY/例外、暂不迁移"的站点。判据:非热路径、k>=n 退化、
+# 迁移需行为变更(tie-break/淘汰语义)或规模恒定小。新增 sort_by 站点若为
+# top-k 截断模式,必须用 xts_* 范式而非登记本表;本表只减不增(随批次消化)。
+# 格式: crate/文件:行 站点函数 判定 理由
+# =============================================================================
+
+# --- 行为变更风险(需先改语义再迁移,单独批次) ---
+ssra-fusion/templates.rs:166        lru_evict              DEFER   全排序 take(to_remove) 选最旧;现依赖 sort 稳定性做同时间戳淘汰选择,迁移前需先加 id tie-break(否则淘汰对象改变=行为变更),ISLAND 降级处理
+scc-cache/prefetch.rs:367           get_predictions        DEFER   概率降序返回,消费侧(mca-gateway CacheAffinityIntegration)是否截断 top-N 未证实;ISLAND,待 T11 接线批次一并判定
+
+# --- top-1 / 小 k 语义(k 恒定小或建议改 max_by,非 select 收益面) ---
+parliament/variant_pool.rs:169      best_by_perf           GRAY    sort 后 next() 取 top-1,正解是 iterator.max_by O(n),不属 #8 的 top-k 族;留待 C14 微清扫
+mlc-engine/on_demand_synthesizer.rs:183 ancestors take(3)  GRAY    祖先链规模小(层级结构,k=3);k 与 n 同数量级时退化全排,xts 无收益
+mlc-engine/on_demand_synthesizer.rs:237 siblings take(2)   GRAY    同上,k=2 小列表
+gsoe-evolution/four_operators.rs:334 crossover_parents     GRAY    候选集 <=10(query top10 上游已限),k>=n 等价全排(xts 文档口径)
+hcw-window/recall/rerank.rs:832     build_sparse_pattern   GRAY    GLOBAL=1024 而 n(~500 block),k>=n 恒成立退化全排
+event-bus/experience_card_bus.rs:190 get_top_cards(n<=k)   GREEN   分支仅在 cards.len()<=k 时全排(全排即契约),非 top-k 截断
+
+# --- 统计量消费(中位数/分位,红线 #8 未覆盖;如需要另立"分位 O(n)"批次) ---
+seccore/os_backend.rs:278           probe_p50              GRAY    全排取中位,CI 探针非热路径,n=采样窗口小
+chimera-tui/resource_history.rs:270 window_median          GRAY    filter_window 规模小;可 select_nth 取中位但收益不显著
+chimera-tui/newline_gate.rs:284     percentile             GREEN   同统计量类,展示路径
+
+# --- 全序输出合法(代表例,完整清单见 C9 报告判定表;此类不入本表增长) ---
+# session-store/tree.rs:629/742(索引确定性)、attribution.rs:163(因果链时间线)、
+# gqep toolplan_runner.rs:391(Sort 操作符即需求)、repo-wiki export(全量导出)、
+# hcw rerank 757(贪心装包需全序)、cmt ice.rs:277(确定性)、sharp key 规范化等
+#
+# 审计基线:C9 扫描 2026-09-04;迁移 3 处(可达 2 + 孤岛 1),登记例外如上。

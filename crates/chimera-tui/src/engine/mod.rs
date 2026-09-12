@@ -17,6 +17,7 @@
 //! M0-M1 引擎默认编译供 CI 类型检查;M2 起在 `v3-engine` 开启后经 `compat` 桥接
 //! 逐面板切换到本引擎,M5 移除 ratatui 与兼容层,引擎成为唯一渲染路径。
 
+pub mod atomic_frame;
 pub mod buffer;
 pub mod compat;
 pub mod diff;
@@ -24,8 +25,10 @@ pub mod layout;
 pub mod output;
 pub mod rect;
 pub mod style;
+pub mod sync_probe;
 pub mod writer;
 
+pub use atomic_frame::AtomicFrameWriter;
 pub use buffer::{Buffer, Cell, DirtyTracker, DoubleBuffer};
 pub use compat::{
     from_ratatui_buffer, from_ratatui_buffer_diffed, from_ratatui_rect, to_ratatui_rect,
@@ -34,4 +37,5 @@ pub use diff::{Change, DiffEngine};
 pub use layout::{Constraint, Direction, LayoutEngine, LayoutTree, PaneMode, Regions};
 pub use rect::{Position, Rect, Size};
 pub use style::{Color, Modifier, Style, StylePool};
+pub use sync_probe::SyncMode;
 pub use writer::TerminalWriter;

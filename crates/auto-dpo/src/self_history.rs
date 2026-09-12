@@ -539,9 +539,12 @@ impl SelfComparisonHistory {
             .collect::<Result<Vec<_>, _>>()?;
 
         // 按 created_at 降序排序（最近在前）
-        // WHY sort_by_key + Reverse: clippy unnecessary_sort_by lint 要求使用 sort_by_key，
-        // Reverse 实现 Ord 的逆序，等价于 `b.cmp(&a)` 但符合 clippy 规范
-        records.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+        // C9(2026-09-04,红线 #8):全量 sort_by_key + 截断 → L0 xts_top_k_by
+        // (select_nth O(n) + 前 k 段二次排序);历史表无上限增长,收益随记录数
+        // 放大。同 created_at 的 tie 相对序由稳定全排变为 select 决定(集合等价)。
+        nexus_contracts::util::xts_top_k_by(&mut records, n, |a, b| {
+            b.created_at.cmp(&a.created_at)
+        });
 
         // 截断为前 N 条
         records.truncate(n);

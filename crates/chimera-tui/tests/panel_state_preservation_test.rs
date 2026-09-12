@@ -14,6 +14,9 @@
 
 #![forbid(unsafe_code)]
 
+mod common;
+use common::mock::MockDataSource;
+
 use chimera_tui::{TuiApp, TuiConfig};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use event_bus::{EventMetadata, NexusEvent};
@@ -51,32 +54,6 @@ fn render_content(app: &mut TuiApp, width: u16, height: u16) -> String {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect()
-}
-
-/// 测试替身数据源 — 返回预设快照
-#[derive(Debug)]
-struct MockDataSource {
-    snapshot: chimera_tui::DataSnapshot,
-    config: chimera_tui::DataSourceConfig,
-}
-
-impl MockDataSource {
-    fn new(snapshot: chimera_tui::DataSnapshot) -> Self {
-        Self {
-            snapshot,
-            config: chimera_tui::DataSourceConfig::default(),
-        }
-    }
-}
-
-impl chimera_tui::TuiDataSource for MockDataSource {
-    fn snapshot(&self) -> Result<std::sync::Arc<chimera_tui::DataSnapshot>, chimera_tui::TuiError> {
-        Ok(std::sync::Arc::new(self.snapshot.clone()))
-    }
-
-    fn config(&self) -> &chimera_tui::DataSourceConfig {
-        &self.config
-    }
 }
 
 // ============================================================

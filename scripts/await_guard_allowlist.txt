@@ -1,0 +1,36 @@
+# =============================================================================
+# await_guard_allowlist.txt - "lock held across .await" accepted exemptions
+# =============================================================================
+# Consumed by: scripts/check_await_across_guard.py
+# Key: <path>:<GUARD ACQUISITION LINE>  (one entry covers every await under it)
+#
+# Two legitimate reasons for an entry:
+#   (A) DESIGN   - the lock MUST stay held across the await (IO frame atomicity,
+#                  per-key migration serialisation). Splitting it would corrupt.
+#   (B) SCANNER  - the binding is a VALUE taken out of the lock (deref/copy/
+#                  take/remove), not a guard. The scanner over-approximates here.
+#
+# Every entry was manually reviewed on 2026-09-10. A stale entry (no longer
+# matching any finding) FAILS the gate - remove it when the code moves on.
+#
+# Trailer `SCANNER` entries are debt on the scanner, not on the code: if
+# check_await_across_guard.py ever learns to see through value extraction,
+# these lines should be deleted and the gate re-run.
+# =============================================================================
+
+# --- (A) IO frame atomicity: writer/reader lock must span the await -----------
+# Splitting these would let concurrent writers interleave half-frames.
+crates/nexus-app-server/src/transport.rs:85    # DESIGN stdio reader: read_line must complete the line frame
+crates/nexus-app-server/src/transport.rs:101   # DESIGN stdio writer: NDJSON frame written as one atomic unit
+crates/nexus-app-server/src/sse.rs:117         # DESIGN SSE writer: single-connection frame atomicity
+
+# --- (A) Per-key migration serialisation --------------------------------------
+crates/mlc-engine/src/engine.rs:912            # DESIGN migration_locks: one MemoryId migration = atomic txn incl. its completion event
+
+# --- (B) Scanner over-approximation: value extracted from the lock ------------
+crates/chimera-tui/src/data/pipeline.rs:821         # SCANNER `.take()` moves the EventSubscriber out; guard drops at stmt end
+crates/csn-substitutor/src/lib.rs:107               # SCANNER `level` is a copied u32; the RefMut `chain` dies at the if-let block
+crates/decb-governor/src/governor.rs:564            # SCANNER `current_total` is `*total` copy; state guard already block-scoped
+crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER `pooled` is a TcpStream removed from the pool; guard dies in and_then
+crates/pvl-layer/src/producer.rs:123                # SCANNER `strategy` is `*read()` Copy value; read guard dies at stmt end
+crates/session-store/src/writer.rs:495              # SCANNER `has_pending` is a bool; flush deliberately runs outside the lock

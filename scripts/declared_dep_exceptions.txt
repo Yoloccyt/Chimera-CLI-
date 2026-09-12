@@ -1,0 +1,20 @@
+# declared_dep_exceptions.txt - justified exceptions for check_declared_dep_usage.py
+# =============================================================================
+# Format (one entry per line, reason REQUIRED after `#`):
+#   <crate-dir> -> <dep-name> # why this dependency must stay in [dependencies]
+#
+# A malformed entry (missing `->` or missing reason) fails the gate with exit 2.
+# A STALE entry (no longer matching any gap) also fails the gate: an exception
+# must not outlive the debt it excused.
+#
+# When to add an entry (rare - prefer fixing the manifest):
+#   - a feature table forwards another crate's feature, so the entry is load
+#     bearing even though src/ never names the crate;
+#   - a build-script/proc-macro contract requires the entry at the root;
+#   - a deliberately-pinned production edge kept for migration reasons, with an
+#     ADR recording why (reference the ADR in the reason).
+#
+# Current state: empty (2026-09-12) - the E batch migrated chimera-mas's
+# bench-only deps to [dev-dependencies] and left zero gaps behind, so no
+# exception is needed. Keep it empty if you can.
+# =============================================================================

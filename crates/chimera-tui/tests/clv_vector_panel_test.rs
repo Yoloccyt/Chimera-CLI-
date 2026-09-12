@@ -21,6 +21,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[test]
 fn test_clv_vector_panel_initialization() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let panel = ClvVectorPanel::new();
     assert_eq!(panel.id(), PanelId::ClvVector);
     // title 返回 Line<'static>;i18n 后本地化,固定英文捕获后复位再断言。

@@ -113,6 +113,37 @@ async fn test_global_search_returns_insights() {
     assert!(insights.iter().all(|i| i.content.contains("rust")));
 }
 
+/// C9(2026-09-04)tie 表征:global_search 迁移到 L0 xts_top_k_by(select_nth
+/// O(n) + 前 k 段二次排序)后,行为基线与全排截断一致——恰返 top_k 条、
+/// 段内支持度非升、tie 集合多重集等价;仅不断言 tie 逐位序(select 决定)。
+#[tokio::test]
+async fn test_global_search_tie_and_truncation_semantics() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = WikiStore::open(&tmp.path().join("wiki.db")).unwrap();
+    // 两个标签组各 2 源条目(x/y → 同 source_count=2 的 tie),外加高支持度 rust(5)
+    store.insert(entry("a", vec!["rust", "x"])).await.unwrap();
+    store.insert(entry("b", vec!["rust", "x"])).await.unwrap();
+    store.insert(entry("c", vec!["rust", "y"])).await.unwrap();
+    store.insert(entry("d", vec!["rust", "y"])).await.unwrap();
+    store.insert(entry("e", vec!["rust"])).await.unwrap();
+    let bank = DualExperienceBank::new(Arc::new(store));
+    bank.distill_from_entries(2).await.unwrap();
+
+    // k=2:首条必为 rust(5,tie-free),第二条落入 {x,y} tie 集合(都 2)
+    let got = bank.global_search("rust", 2).await.unwrap();
+    assert_eq!(got.len(), 2, "应恰好返回 top_k 条");
+    assert!(
+        got.windows(2)
+            .all(|w| w[0].source_count >= w[1].source_count),
+        "段内支持度必须非升(xts 与全排截断的共同契约)"
+    );
+    assert_eq!(
+        got[0].source_count, 5,
+        "唯一最大支持度条目位置不受 tie 影响"
+    );
+    assert_eq!(got[1].source_count, 2, "tie 集合内任一选中项支持度必为 2");
+}
+
 /// 蒸馏幂等:重复蒸馏不产生重复洞察(UPSERT 语义)
 #[tokio::test]
 async fn test_distill_upsert_idempotent() {

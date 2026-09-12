@@ -111,6 +111,7 @@ fn palette_can_reopen_after_close() {
 
 #[test]
 fn ctrl_l_toggles_locale_between_zh_and_en() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::Zh);
     let mut app = make_app();
@@ -127,6 +128,7 @@ fn ctrl_l_toggles_locale_between_zh_and_en() {
 
 #[test]
 fn palette_renders_localized_title_without_panic() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::En);
     let mut app = make_app();
@@ -142,6 +144,7 @@ fn palette_renders_localized_title_without_panic() {
 
 #[test]
 fn render_without_palette_omits_title() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::En);
     let mut app = make_app();
@@ -170,6 +173,7 @@ fn type_query(app: &mut TuiApp, q: &str) {
 
 #[test]
 fn palette_dispatch_toggle_locale_actually_switches() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::Zh);
     let mut app = make_app();
@@ -227,4 +231,29 @@ fn palette_dispatch_unknown_action_falls_back_without_panic() {
         app.state().popup_stack.is_empty(),
         "回退动作不产生本地 overlay"
     );
+}
+
+// ============================================================
+// I-A(2026-09-06 复评):palette 打开时 Ctrl+L 中英切换不再被吞
+// ============================================================
+
+#[test]
+fn palette_open_ctrl_l_toggles_locale_and_keeps_palette() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    set_locale(Locale::Zh);
+    let mut app = make_app();
+    app.handle_key_event(ctrl('p'));
+    assert!(app.palette_is_open(), "前置:palette 应打开");
+
+    // palette 打开时 Ctrl+L:切换语言且面板保持打开(检索上下文不丢)
+    app.handle_key_event(ctrl('l'));
+    assert_eq!(
+        current_locale(),
+        Locale::En,
+        "palette 打开时 Ctrl+L 应切换到英文(此前被吞)"
+    );
+    assert!(app.palette_is_open(), "切换语言不应关闭命令面板");
+
+    // 复位
+    set_locale(Locale::Zh);
 }

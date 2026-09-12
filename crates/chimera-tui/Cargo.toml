@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "chimera-tui"
 version.workspace = true
 edition.workspace = true
@@ -27,6 +27,8 @@ unicode-width = "0.2"
 
 # nexus-core 为 L1 Core 共享领域类型(Quest/Task 等),L10 向下依赖允许
 nexus-core = { workspace = true }
+# WI-01 TUI dogfooding (2026-08-22): nexus-app-server protocol facade (L10 same-layer)
+nexus-app-server = { workspace = true }
 # Phase 10 §15.2b/§15.3:InjectionStrategyPanel 消费 L0 AtomicMemoryCard;
 # nexus-contracts 为 L0 纯类型零依赖契约层,L10→L0 向下合规不引入耦合
 nexus-contracts = { workspace = true }
@@ -40,23 +42,17 @@ nexus-contracts = { workspace = true }
 # - 原 Task 3.6 osa-coordinator 依赖(five_dimension_masks() 全零占位,已弃用)已移除,
 #   掩码真实数据由 OsaSparseSync 从 OmniSparseMasksComputed 事件同步
 # 共减少 4 条 L10→L2/L3/L4/L6 依赖边,跨层数据一律走 EventBus(§2.2 依赖铁律)。
-# Task 3.5: L10 → L5 向下依赖,DagVizPanel 调用 spec_dag_snapshot()
-# 显示谱系 DAG 节点/边计数(规范版本演化图)
-gsoe-evolution = { workspace = true }
-# Task 3.7: L10 → L7 向下依赖,MetricsDashboard 调用 timeout_stats()
-# 显示 GQEP 双层超时防护统计(单操作超时 + 全局超时)
-gqep-executor = { workspace = true }
-# Task 3.7: L10 → L7 向下依赖,PvlScorePanel 调用 pvl_score()
-# 显示 PVL 九维度过程评分(快手 KAT,ADR-049)
-pvl-layer = { workspace = true }
-# Task 3.9: L10 → L9 向下依赖,TaskManagerPanel 调用 quadrant_status()
-# 显示四象限稳定分工 + WSJF 调度(ADR-027)
-chimera-mas = { workspace = true }
-# Task 3.8: L10 → L8 向下依赖,ParliamentPanel 调用 immune_system_status()
-# 显示三探针免疫系统状态(ADR-046)
-parliament = { workspace = true }
+# PS-2 批次3:原 Task 3.5/3.7/3.9 的三条越层依赖已移除
+# - gsoe-evolution(L5):spec_dag_snapshot() 读全局 SPEC_DAG,但 SpecRegistry/engine
+#   在生产装配面从未实例化 → 恒显示 0/0;现改诚实标注未接线
+# - pvl-layer(L7):pvl_score() 未注册时回退全 1.0 → 恒显示九维满分(假数据);同上
+# - chimera-mas(L9):quadrant provider 生产从未注册 → 恒 unavailable;同上
+# 至此 chimera-tui 已无 L2-L9 跨层依赖边,跨层数据一律走 EventBus(§2.2 依赖铁律)。
 tokio = { workspace = true, features = ["sync", "time"] }
-serde = { workspace = true, features = ["derive"] }
+# PS-2 批次3:"rc" 为显式必需——DataSnapshot.latest_events 是
+# Arc<VecDeque<NexusEvent>>,序列化该 Arc 需 serde/rc。此前该特性由已移除的
+# L5-L9 依赖**传递启用**(意外拼凑),依赖边清零后必须自行声明。
+serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true }
 # serde_yaml:TuiConfig 持久化(Task 15),save_to_file/load_from_file YAML 读写
 serde_yaml = { workspace = true }
@@ -127,4 +123,31 @@ harness = false
 # compat 转换 + diff 写出的完整链路段量化基线(目标 P95 < 16ms @200x50)。
 [[bench]]
 name = "v3_pipeline_bench"
+harness = false
+
+# FC-2(ADR-081):/compact 上下文策展 — 五段分类 + 0-1 背包 + 抽取式摘要
+# 在真实会话规模(500/5000 条)下的端到端耗时基线。
+[[bench]]
+name = "curator_bench"
+harness = false
+
+# 零拷贝重构守卫:量化每帧整帧克隆次数(1/3 次全量帧、0/1 次静默帧)的代价,
+# 复刻 event_loop.rs:2370/2373/2314/2303,作为防止回归重引入 clone 的对照基准。
+[[bench]]
+name = "v3_frame_clone_cost_bench"
+harness = false
+
+# H-b 前提验证(2026-09-12):量化 DataSnapshot "每 tick 全量重建"各分量
+# (5×VecDeque<u64>(64) collect / Vec<TimelineSnapshot>(100) clone /
+# 2×Vec<MetricSample>(300) clone)与事件侧"改 1 字段复制整集合"的成本,
+# 据以裁定该方向是实施还是否决——先量化,再动代码。
+[[bench]]
+name = "snapshot_rebuild_cost_bench"
+harness = false
+
+# 感知延迟路径裁定前置(2026-09-12,H-b 系列):量化消费侧 TuiApp::update()
+# 两条路径的成本 —— revision 短路(现状多数 poll 命中)vs 全量对齐
+# (事件驱动即时刷新后每次 poll 命中),据以裁定"事件驱动刷新"的 CPU 可行性。
+[[bench]]
+name = "tui_update_cost_bench"
 harness = false

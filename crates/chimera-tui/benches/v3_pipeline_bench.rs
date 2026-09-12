@@ -61,12 +61,14 @@ fn make_app() -> TuiApp {
             priority: 128,
         })
         .collect();
-    state.latest_events = (0..64)
-        .map(|i| NexusEvent::CacheHit {
-            metadata: EventMetadata::new("bench"),
-            cache_key: format!("key-{i}"),
-        })
-        .collect::<VecDeque<_>>();
+    state.latest_events = std::sync::Arc::new(
+        (0..64)
+            .map(|i| NexusEvent::CacheHit {
+                metadata: EventMetadata::new("bench"),
+                cache_key: format!("key-{i}"),
+            })
+            .collect::<VecDeque<_>>(),
+    );
     app
 }
 
@@ -187,11 +189,55 @@ fn v3_pipeline_quiet(c: &mut Criterion) {
     group.finish();
 }
 
+/// P-1(2026-09-06 评估):静默帧缓存复用 — 跳过全量 widget 渲染
+///
+/// 生产 `render_frame_v3` 静默路径的忠实复刻:每帧只做「缓存帧克隆(留作
+/// 下帧缓存)→ 状态行内容变化 → 单行 dirty 的 compat+diff」,无 `term.draw`。
+/// 与 `v3_pipeline_quiet`(仍全量 draw)对比,量化跳过 widget 渲染的收益。
+fn v3_pipeline_quiescent_reuse(c: &mut Criterion) {
+    let sizes = [(80u16, 24u16), (200, 50)];
+    let mut group = c.benchmark_group("v3_pipeline_quiescent_reuse");
+    for (w, h) in sizes {
+        let mut app = make_app();
+        let mut out = V3Output::new();
+        let mut term = Terminal::new(TestBackend::new(w, h)).expect("Terminal 构造失败");
+        // 首帧全量:重建 V3Output front 基线 + 生成缓存帧
+        term.draw(|f| app.render(f)).expect("draw 失败");
+        let cached = term.backend().buffer().clone();
+        let mut prime = Vec::new();
+        let mut full = DirtyTracker::new(h);
+        full.mark_all();
+        out.render_diffed(&cached, &full, &mut prime)
+            .expect("首帧全量");
+        // P-2:仅状态行(Dashboard status 行 = h-2)参与 compat+diff
+        let mut dirty = DirtyTracker::new(h);
+        if h >= 2 {
+            dirty.mark(h - 2);
+        }
+        // 模拟生产每帧变化的 FPS 数字,迫使状态行真实走 compat+diff
+        let tick = std::cell::Cell::new(0u8);
+        group.bench_with_input(BenchmarkId::new("size", format!("{w}x{h}")), &(), |b, _| {
+            b.iter(|| {
+                // 生产复刻:缓存帧克隆(克隆留作下帧缓存,本帧交 diff)
+                let mut rb = cached.clone();
+                tick.set(tick.get().wrapping_add(1));
+                rb[(0, h - 2)].set_char((b'0' + tick.get() % 10) as char);
+                let mut sink = Vec::new();
+                out.render_diffed(&rb, &dirty, &mut sink)
+                    .expect("v3 output render");
+                black_box(&sink);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     v3_pipeline_full,
     v3_pipeline_draw_only,
     v3_pipeline_diffed,
-    v3_pipeline_quiet
+    v3_pipeline_quiet,
+    v3_pipeline_quiescent_reuse
 );
 criterion_main!(benches);
