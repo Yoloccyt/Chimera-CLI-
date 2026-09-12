@@ -30,6 +30,25 @@ pub enum EventBusError {
         /// 滞后事件数
         lag: u64,
     },
+
+    // ============================================================
+    // P1-T12 分片灰度(P1-T12,手册 §8.5 / v4.0 WI-15)
+    // ============================================================
+    /// 分片已启用 — 重复调用 [`EventBus::enable_sharding`](crate::bus::EventBus::enable_sharding)
+    /// 无效(幂等保护:同一总线只允许启用一次分片)
+    ///
+    /// WHY 幂等而非忽略:重复启用可能是调用方逻辑错误(两个 crate 各自调用),
+    /// 显式报错供调用方感知;调用方 `let _ =` 忽略即可安全降级(灰度语义)。
+    #[error("分片已启用(重复调用 enable_sharding 无效)")]
+    ShardingAlreadyEnabled,
+
+    /// 启用分片需要 tokio runtime 上下文 — worker 任务需在 runtime 上 spawn
+    ///
+    /// WHY:分片消费端([`crate::shard::shard_worker`])是 tokio 异步任务,必须在
+    /// runtime 内启动;无 runtime(如纯同步测试线程)时返回本错误,调用方
+    /// `let _ =` 忽略即自动降级回单流 —— 灰度安全:任何上下文缺失都不应 panic。
+    #[error("启用分片需要 tokio runtime 上下文(worker 任务需在 runtime 上启动)")]
+    ShardingRequiresRuntime,
 }
 
 /// 从 broadcast 接收错误转换

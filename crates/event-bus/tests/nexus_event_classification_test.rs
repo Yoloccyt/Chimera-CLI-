@@ -82,6 +82,7 @@ fn normal_severity_observational_events() {
 fn tui_protocol_severity_info_vs_normal() {
     let requested = NexusEvent::TuiActionRequested {
         metadata: EventMetadata::new("chimera-tui"),
+        request_id: "tui-1".into(),
         action_id: "quest.pause".into(),
         payload: "{\"quest_id\":\"q1\"}".into(),
         source: ActionSource::Palette,

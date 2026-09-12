@@ -90,13 +90,18 @@ impl OverWindowPanel {
                     effective_window
                 )),
             ]));
+            // F-8:显式给出"丢弃数"(候选 − 装窗)—— 报告指出用户看得到
+            // "超窗了",却看不到"检索到了什么、丢弃了什么"。前两数已有,
+            // 丢弃数由二者差值直接可得,一并展示闭环。
             lines.push(Line::from(Span::styled(
                 format!(
-                    "  {}={}, {}={}",
+                    "  {}={}, {}={}, {}={}",
                     crate::t!("panel.overwindow.candidates"),
                     candidate_count,
                     crate::t!("panel.overwindow.loaded"),
-                    loaded_count
+                    loaded_count,
+                    crate::t!("panel.overwindow.discarded"),
+                    candidate_count.saturating_sub(*loaded_count),
                 ),
                 Style::default().fg(Color::Yellow),
             )));
@@ -127,6 +132,12 @@ impl Panel for OverWindowPanel {
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // PS-2 U-4:退化尺寸统一早退(共享最低线,见 crate::panels::MIN_PANEL_W/H)
+        if crate::panels::degenerate(area) {
+            crate::panels::render_too_small(area, buf);
+            return;
+        }
+
         let block = Block::default().borders(Borders::ALL).title(self.title());
         let paragraph = Paragraph::new(Self::content(state)).block(block);
         paragraph.render(area, buf);
@@ -186,12 +197,10 @@ mod tests {
         let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
-        state
-            .latest_events
-            .push_back(trigger(100_000, 131_072, 0, 0));
-        state
-            .latest_events
-            .push_back(trigger(600_000, 131_072, 42, 128));
+        // WHY Arc::make_mut:latest_events 已 Arc 化(P-A),测试注入走 COW
+        let events = std::sync::Arc::make_mut(&mut state.latest_events);
+        events.push_back(trigger(100_000, 131_072, 0, 0));
+        events.push_back(trigger(600_000, 131_072, 42, 128));
         let text = OverWindowPanel::content(&state);
         let joined = text.lines.iter().map(|l| l.to_string()).collect::<String>();
         assert!(joined.contains("语料=600000 tok"), "最新触发应显示语料规模");

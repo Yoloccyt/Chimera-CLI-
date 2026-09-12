@@ -242,7 +242,6 @@ fn run_tier(tier_name: &str, capacity_blocks: usize) -> (String, String) {
 }
 
 #[test]
-#[ignore]
 fn test_baseline_comparison_table() {
     // P0.5 验收：产出可复现的双基线对照表（固定种子）
     eprintln!("\n=== PROBE P0.5 双基线对照表（Static vs CLV 探针，四档窗口）===");

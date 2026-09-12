@@ -20,7 +20,6 @@ use crate::popup::PopupKind;
 use crate::render::{virtual_scroll_window, FOOTER_TEXT};
 use crate::types::{PanelId, TuiCommand, TuiState};
 use event_bus::NexusEvent;
-use parliament::immune_system_status;
 
 /// Parliament 面板
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -170,10 +169,10 @@ impl ParliamentPanel {
                     } => (
                         "RedTeamAudit",
                         format!(
-                            "{} | {}={:.0}% | {}",
+                            "{} | {}={} | {}",
                             vulnerability_type,
                             crate::t!("panel.parliament.detection"),
-                            detection_rate * 100.0,
+                            crate::render::percent_summary(*detection_rate),
                             remediation_suggestion
                         ),
                         if is_selected {
@@ -283,6 +282,56 @@ impl ParliamentPanel {
         lines.push(Line::from(FOOTER_TEXT));
         Text::from(lines)
     }
+
+    /// 治理态势行(PS-2 批次1)
+    ///
+    /// 数据来自事件快照 [`ParliamentState`](crate::types::ParliamentState):
+    /// - 协调比(`CoordinationRatioReported`)→ 协调成本(ms) + 推理增益(%)
+    /// - 策略封顶(`ParliamentStrategyCapChanged`)→ cap 级别(按级别着色)
+    ///
+    /// 两事件可能只到达其一,故各段独立渲染;两者皆缺时显示"无数据"——
+    /// **不伪造默认值**,这正是本批次取代"全零假数据"的核心原则。
+    fn governance_line(p: &crate::types::ParliamentState) -> Line<'static> {
+        let label = Span::styled(
+            crate::t!("panel.parliament.governance"),
+            Style::default().add_modifier(Modifier::BOLD),
+        );
+        if p.coordination.is_none() && p.strategy_cap.is_none() {
+            return Line::from(vec![
+                label,
+                Span::styled(
+                    format!(" {}", crate::t!("panel.parliament.no_data")),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+        }
+
+        let mut spans = vec![label];
+        if let Some(c) = &p.coordination {
+            spans.push(Span::styled(
+                format!(
+                    " {}={:.1}ms {}={}",
+                    crate::t!("panel.parliament.coordination"),
+                    c.cost_ms,
+                    crate::t!("panel.parliament.gain"),
+                    crate::render::percent_summary(c.inference_gain),
+                ),
+                Style::default().fg(Color::Cyan),
+            ));
+        }
+        if let Some(s) = &p.strategy_cap {
+            let fg = match s.cap.as_str() {
+                "full" => Color::Green,
+                "simplified" => Color::Yellow,
+                _ => Color::Red,
+            };
+            spans.push(Span::styled(
+                format!(" {}={}", crate::t!("panel.parliament.cap"), s.cap),
+                Style::default().fg(fg),
+            ));
+        }
+        Line::from(spans)
+    }
 }
 
 impl Panel for ParliamentPanel {
@@ -295,39 +344,38 @@ impl Panel for ParliamentPanel {
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // PS-2 U-4:退化尺寸统一早退(共享最低线,见 crate::panels::MIN_PANEL_W/H)
+        if crate::panels::degenerate(area) {
+            crate::panels::render_too_small(area, buf);
+            return;
+        }
+
         let block = Block::default().borders(Borders::ALL).title(self.title());
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // Task 3.8:L10 → L8 向下依赖 — 免疫系统状态摘要（三探针 + 级联风险 + 膜厚）
-        let status = immune_system_status();
-        let immune_header = vec![
+        // PS-2 批次1:L10→L8 越层直调已移除。
+        //
+        // WHY 移除原 `immune_system_status()` 调用:该函数(`parliament/src/immune_system.rs:646`)
+        // 实为**硬编码全零占位**,且真实 `ImmuneSystem` 在生产装配面从未实例化
+        // → 原头部长期展示"永远为 0"的假数据。现改为:
+        //   行1 治理态势:读事件派生的快照 `state.parliament`(真实运行时数据,缺则 N/A);
+        //   行2 免疫探针:如实标注"未接线",不再以零值伪装成有效读数。
+        let p = &state.parliament;
+        let header_lines = vec![
+            Self::governance_line(p),
             Line::from(vec![
                 Span::styled(
                     crate::t!("panel.parliament.immune"),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(
-                        "Mem={:.0}%  Reason={:.0}%  Evol={:.0}%  Cascade={:.0}%  Membrane={}/7",
-                        status.memory_paradox_rate * 100.0,
-                        status.reasoning_trap_rate * 100.0,
-                        status.evolution_hack_rate * 100.0,
-                        status.cascade_risk * 100.0,
-                        status.membrane_thickness,
-                    ),
-                    Style::default().fg(if status.cascade_risk > 0.7 {
-                        Color::Red
-                    } else if status.cascade_risk > 0.3 {
-                        Color::Yellow
-                    } else {
-                        Color::Green
-                    }),
+                    format!(" {}", crate::t!("panel.parliament.immune_unwired")),
+                    Style::default().fg(Color::DarkGray),
                 ),
             ]),
-            Line::from(""),
         ];
-        let header_height = immune_header.len() as u16;
+        let header_height = header_lines.len() as u16;
 
         // 垂直切分:免疫状态摘要 + 事件列表
         let header_area = Rect {
@@ -343,7 +391,7 @@ impl Panel for ParliamentPanel {
             height: inner.height.saturating_sub(header_height),
         };
 
-        let header_p = Paragraph::new(Text::from(immune_header));
+        let header_p = Paragraph::new(Text::from(header_lines));
         Widget::render(header_p, header_area, buf);
 
         let content_height = list_area.height.saturating_sub(3) as usize;
@@ -405,16 +453,8 @@ impl Panel for ParliamentPanel {
                     .get(self.selected)
                     .map(|event| TuiCommand::OpenPopup(PopupKind::event_detail(event)))
             }
-            // g/G 双路径:app 交互经 InputRouter 全局拦截(gg→ScrollTop、G→ScrollBottom),
-            // 面板直接 API(测试/嵌入调用)仍保留同名 arm,语义一致。
-            KeyCode::Char('g') => {
-                self.scroll_to_top(state);
-                None
-            }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom(state);
-                None
-            }
+            // WHY 无 g/G arm:InputRouter 全局截获(g→GPrefix、G→ScrollBottom),
+            // 滚动经 RouteTarget::ScrollTop/ScrollBottom 等价覆盖,面板 arm 为死键。
             // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
             _ => None,
         }
@@ -475,7 +515,7 @@ mod tests {
     fn test_parliament_panel_no_panic_on_unknown_event() {
         // 即使过滤条件意外包含未处理变体,也不应 panic。
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::CacheHit {
                 metadata: EventMetadata::new("test"),
                 cache_key: "k1".into(),
@@ -486,7 +526,7 @@ mod tests {
                 voter: "alice".into(),
                 vote: true,
             },
-        ]);
+        ]));
         let content = ParliamentPanel::content(&state, 0, (0, 50)).to_string();
         assert!(content.contains("ParliamentVoteCast"));
         assert!(!content.contains("CacheHit"));
@@ -496,7 +536,7 @@ mod tests {
     fn test_parliament_panel_navigation() {
         let mut panel = ParliamentPanel::new();
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([
+        state.latest_events = std::sync::Arc::new(VecDeque::from([
             NexusEvent::VoteCast {
                 metadata: EventMetadata::new("parliament"),
                 proposal_id: "p1".into(),
@@ -509,7 +549,7 @@ mod tests {
                 voter: "bob".into(),
                 vote: false,
             },
-        ]);
+        ]));
 
         panel.handle_key(
             KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE),
@@ -528,12 +568,12 @@ mod tests {
     fn test_parliament_panel_detail_popup() {
         let mut panel = ParliamentPanel::new();
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([NexusEvent::VoteCast {
+        state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::VoteCast {
             metadata: EventMetadata::new("parliament"),
             proposal_id: "p1".into(),
             voter: "alice".into(),
             vote: true,
-        }]);
+        }]));
 
         let cmd = panel.handle_key(
             KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE),
@@ -560,7 +600,7 @@ mod tests {
     fn parliament_state_with_votes(count: usize) -> TuiState {
         let mut state = TuiState::new();
         state.last_snapshot_revision = 1;
-        state.latest_events = VecDeque::from(
+        state.latest_events = std::sync::Arc::new(VecDeque::from(
             (0..count)
                 .map(|i| NexusEvent::VoteCast {
                     metadata: EventMetadata::new("test"),
@@ -569,7 +609,7 @@ mod tests {
                     vote: i % 2 == 0,
                 })
                 .collect::<Vec<_>>(),
-        );
+        ));
         state
     }
 
@@ -668,6 +708,16 @@ mod tests {
     /// M4 二期:全局语言切换必须使缓存失效。
     #[test]
     fn parliament_render_invalidates_on_locale_change() {
+        // WHY 钉住全局 locale(PS-1 复评修复):本测试虽不调用 set_locale,
+        // 但首帧 render() 构建缓存键时读取**全局** locale —— 并行测试
+        // (如 i18n 系列)恰好在两次 render 之间翻转 locale 时,模拟翻转
+        // 会与真实 locale 撞车 → 缓存误命中 → 哨兵残留 → 断言随机失败
+        // (实测 1538/1 复现,单测隔离 3/3 通过,属时序竞态)。
+        // 持 guard + 钉 Zh 后两次 render 的键分量确定,与文件内
+        // `parliament_render_disables_cache_at_revision_zero` 同一范式。
+        let _guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+
         let state = parliament_state_with_votes(2);
         let mut panel = ParliamentPanel::new();
         let area = Rect::new(0, 0, 80, 24);
@@ -697,12 +747,12 @@ mod tests {
         let _guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
-        state.latest_events = VecDeque::from([NexusEvent::VoteCast {
+        state.latest_events = std::sync::Arc::new(VecDeque::from([NexusEvent::VoteCast {
             metadata: EventMetadata::new("test"),
             proposal_id: "p1".into(),
             voter: "alice".into(),
             vote: true,
-        }]);
+        }]));
         let mut panel = ParliamentPanel::new();
         let area = Rect::new(0, 0, 80, 24);
 
@@ -715,6 +765,112 @@ mod tests {
         assert!(
             !rendered.contains("SENTINEL-CACHE-HIT"),
             "revision==0 时不应使用缓存(rendered={rendered})"
+        );
+    }
+}
+
+// ============================================================
+// PS-2 批次1:治理态势行(事件快照取代 L10→L8 越层直调)
+// ============================================================
+
+#[cfg(test)]
+mod ps2_batch1_tests {
+    use super::*;
+    use crate::types::{CoordinationMetrics, ParliamentState, StrategyCapState};
+
+    /// 渲染面板并取回整个缓冲区文本
+    ///
+    /// WHY 200 列:治理态势行较长,80 列会被截断(实测踩过此坑)。
+    fn render(state: &TuiState) -> String {
+        let area = Rect::new(0, 0, 200, 24);
+        let mut buf = Buffer::empty(area);
+        let mut panel = ParliamentPanel::new();
+        panel.render(state, area, &mut buf);
+        buf.content().iter().map(|c| c.symbol()).collect()
+    }
+
+    fn with_parliament(p: ParliamentState) -> TuiState {
+        let mut state = TuiState::new();
+        state.parliament = p;
+        state
+    }
+
+    #[test]
+    fn governance_line_shows_real_coordination_and_cap() {
+        let state = with_parliament(ParliamentState {
+            coordination: Some(CoordinationMetrics {
+                cost_ms: 12.34,
+                inference_gain: 0.78,
+                ratio: 0.42,
+            }),
+            strategy_cap: Some(StrategyCapState {
+                cap: "full".into(),
+                ratio: 0.42,
+                threshold: 0.60,
+            }),
+        });
+
+        let rendered = render(&state);
+        // 数值与 cap 取值均为语言无关内容,可稳定断言
+        assert!(
+            rendered.contains("12.3"),
+            "should show coordination cost (ms), got: {rendered}"
+        );
+        assert!(
+            rendered.contains("78"),
+            "should show inference gain percentage, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("full"),
+            "should show strategy cap level, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn governance_line_shows_no_data_when_events_absent() {
+        let state = with_parliament(ParliamentState::default());
+        let rendered = render(&state);
+        // 不得出现伪造的数值(这是取代"全零假数据"的核心断言)
+        assert!(
+            !rendered.contains("0.0ms"),
+            "must not fabricate coordination cost when no event, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("full") && !rendered.contains("simplified"),
+            "must not fabricate strategy cap when no event, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn partial_arrival_renders_only_present_section() {
+        // 只收到策略封顶(协调比尚未到达):应渲染 cap,且不伪造协调成本
+        let state = with_parliament(ParliamentState {
+            coordination: None,
+            strategy_cap: Some(StrategyCapState {
+                cap: "simplified".into(),
+                ratio: 0.5,
+                threshold: 0.6,
+            }),
+        });
+        let rendered = render(&state);
+        assert!(
+            rendered.contains("simplified"),
+            "should show the arrived cap, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("ms"),
+            "must not render unit for coordination not yet arrived, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn immune_probe_is_marked_unwired_not_faked() {
+        let state = with_parliament(ParliamentState::default());
+        let rendered = render(&state);
+        // 旧实现以 Mem=/Reason=/Cascade= 展示硬编码零值 —— 必须不再出现
+        assert!(
+            !rendered.contains("Mem=") && !rendered.contains("Cascade="),
+            "must not display hardcoded zero immune metrics anymore, got: {rendered}"
         );
     }
 }

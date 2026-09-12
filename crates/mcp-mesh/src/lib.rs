@@ -36,6 +36,9 @@ pub mod quantum;
 pub mod server_registry;
 pub mod types;
 
+// P3-T11: MCP client_v2 客户端闭环（WI-22:发现 + schema 缓存 + 路由注册,ADR-150）
+pub mod client_v2;
+
 // === 关键类型重导出,简化外部导入 ===
 pub use config::MeshConfig;
 pub use error::McpError;

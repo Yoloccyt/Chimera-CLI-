@@ -250,8 +250,10 @@ fn default_key_bindings() -> HashMap<String, KeyBinding> {
         ("next_panel", "Tab", "切换到下一个面板"),
         ("prev_panel", "BackTab", "切换到上一个面板"),
         ("help", "?", "显示帮助面板"),
-        ("search", "/", "进入搜索模式"),
-        ("command_palette", ":", "打开命令面板"),
+        // Concord W2 后 `/` 与 `:` 同进斜杠命令模式(P③ 文案治理,2026-09-06):
+        // 搜索语义由 /search 子命令承接,原 vi 式命令栏经 : 弃用别名保留
+        ("search", "/", "进入斜杠命令模式(搜索经 /search 子命令)"),
+        ("command_palette", ":", "进入斜杠命令模式(原命令栏弃用别名)"),
         ("refresh", "r", "刷新数据快照"),
     ];
     for (action, key, desc) in bindings {

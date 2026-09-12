@@ -32,6 +32,40 @@ mod tests {
         assert_eq!(de, status);
     }
 
+    /// re-export 类型等价性 — **编译期**证明（强于序列化 roundtrip）
+    ///
+    /// # WHY 不用 JSON roundtrip 验证
+    /// 序列化往返只能证明"两个类型格式兼容"：若 L1 另起炉灶独立定义了一个字段
+    /// 完全相同的 `TaskStatus`，roundtrip 照样通过，但两者已不是同一个类型。
+    /// 本用例改用**赋值处的隐式类型转换**——只有两侧确为同一类型（纯 re-export）
+    /// 才能编译，任何独立定义都会直接编译失败。这是该向后兼容契约的编译期锚点。
+    ///
+    /// # 断言搬迁说明
+    /// 原位于 `nexus-contracts/tests/type_consistency_test.rs`
+    /// （`test_backward_compat_nexus_core_reexport`，JSON roundtrip 弱证明）。
+    /// 归位到 re-export 发生地并升级为编译期证明，同时消除 L0 的 dev 依赖环
+    /// （契约层不再为验证 L1 反向依赖实现层）。
+    #[test]
+    fn reexported_types_are_identical_to_contracts() {
+        // 编译期证明：左值走 L0 路径，右值走 L1 re-export 路径
+        let _: nexus_contracts::TaskStatus = TaskStatus::Running;
+        let _: nexus_contracts::Checkpoint = Checkpoint::new(
+            "q-reexport",
+            "c-reexport",
+            "hash-reexport",
+            vec![0xDE, 0xAD, 0xBE, 0xEF],
+        );
+
+        // 运行时抽查：构造方法与字段访问同样随 re-export 完整保留
+        let cp: Checkpoint = Checkpoint::new("q1", "c1", "h1", vec![1, 2, 3]);
+        assert_eq!(cp.quest_id, "q1");
+        assert_eq!(cp.serialized_state, vec![1, 2, 3]);
+
+        // 其余同源下沉类型一并锚定（Quest 来自 nexus_contracts::domain）
+        let quests: Vec<nexus_contracts::Quest> = vec![Quest::default()];
+        assert_eq!(quests.len(), 1, "Quest 应经 nexus-core 可直接构造");
+    }
+
     #[test]
     fn test_thinking_mode_serde() {
         let mode = ThinkingMode::Deep;

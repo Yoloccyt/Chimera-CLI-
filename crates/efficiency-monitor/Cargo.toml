@@ -8,7 +8,9 @@ license.workspace = true
 # 异步运行时:spawn 后台订阅任务 + 超时控制
 tokio = { workspace = true }
 # 配置与类型序列化(#[derive(Serialize, Deserialize)])
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
+# JSONL 落盘(推理悖论可检索工件 JSON 序列化,方向 E)
+serde_json = { workspace = true }
 # 应用层错误(顶层调用方使用,库层用 thiserror)
 # 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }

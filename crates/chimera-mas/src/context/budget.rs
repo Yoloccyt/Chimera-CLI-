@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 
+use crate::context::budget_model::SPARSE_FACTOR;
 use crate::error::{MasError, Result};
 
 /// 80% 告警阈值(0.0-1.0)
@@ -109,13 +110,31 @@ impl TokenBudget {
     /// assert_eq!(budget.remaining(), 1_048_576);
     /// ```
     pub fn new(agent_id: impl Into<String>, max_tokens: usize, event_bus: EventBus) -> Self {
-        Self {
+        let budget = Self {
             agent_id: agent_id.into(),
             max_tokens,
             current_tokens: AtomicUsize::new(0),
             event_bus,
             overflow_published: AtomicBool::new(false),
-        }
+        };
+        // WS-4B:INV-7 预算分配完成点 → 发布 ContextBudgetAllocated 通知
+        budget.notify_budget_allocated();
+        budget
+    }
+
+    /// 发布 `ContextBudgetAllocated` 事件 — Token 预算分配完成(WS-4B)。
+    ///
+    /// `budget_tokens` 为分配的最大预算(超 u32 截断兜底为 u32::MAX),
+    /// `tier` 注明窗口层级,`sparsity` 为稀疏压缩率(1/SPARSE_FACTOR)。
+    /// Normal 级观测事件,publish_blocking 失败静默忽略(不阻断构造)。
+    fn notify_budget_allocated(&self) {
+        let event = NexusEvent::ContextBudgetAllocated {
+            metadata: EventMetadata::new("chimera-mas"),
+            budget_tokens: u32::try_from(self.max_tokens).unwrap_or(u32::MAX),
+            tier: "hcw-window".to_string(),
+            sparsity: 1.0 / SPARSE_FACTOR as f32,
+        };
+        let _ = self.event_bus.publish_blocking(event);
     }
 
     /// 获取当前已用 Token 数(原子读取)
@@ -379,6 +398,45 @@ mod tests {
         assert_eq!(budget.remaining(), 1_000_000);
         assert!(!budget.is_exceeded());
         assert!(!budget.is_near_limit());
+    }
+
+    /// WS-4B:ContextBudgetAllocated 幽灵事件生产者验证 —
+    /// Token 预算分配完成时发布预算分配事件。
+    #[test]
+    fn test_context_budget_allocated_published_on_new() {
+        let bus = make_bus();
+        let mut rx = bus.subscribe();
+        let budget = TokenBudget::new("agent-1", 1_048_576, bus);
+        assert_eq!(budget.max_tokens, 1_048_576);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let event = loop {
+            if let Ok(Some(e)) = rx.try_recv() {
+                break e;
+            }
+            assert!(std::time::Instant::now() < deadline, "接收预算事件超时");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+
+        assert_eq!(
+            event.metadata().source,
+            "chimera-mas",
+            "ContextBudgetAllocated 事件 source 应为 chimera-mas"
+        );
+        match event {
+            NexusEvent::ContextBudgetAllocated {
+                budget_tokens,
+                tier,
+                sparsity,
+                ..
+            } => {
+                assert_eq!(budget_tokens, 1_048_576);
+                assert_eq!(tier, "hcw-window");
+                // sparsity = 1/SPARSE_FACTOR = 0.125
+                assert!((sparsity - 0.125).abs() < f32::EPSILON);
+            }
+            other => panic!("期望 ContextBudgetAllocated 事件,收到 {other:?}"),
+        }
     }
 
     #[test]

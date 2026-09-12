@@ -314,8 +314,10 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::HashMap;
-    // 统一使用 nexus-core 权威实现,避免多副本优化不一致
-    use nexus_core::cosine_similarity_slices;
+    // 余弦相似度权威实现已下沉至本 crate L0 `util` 模块(第四轮冗余收敛 实施-8)。
+    // WHY 不再用 nexus_core:L0 禁止依赖 L1,历史上此处靠 dev-dependency 反向伸手取 L1 实现;
+    // 定义下沉后同 crate 直取即可,依赖面收缩而口径仍唯一。
+    use crate::util::cosine_similarity_slices;
 
     /// 测试用 mock 实现 — 真实存储数据的内存 HashMap，验证 trait 契约
     ///

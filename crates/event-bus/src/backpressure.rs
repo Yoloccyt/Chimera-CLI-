@@ -10,8 +10,8 @@
 //!
 //! # 实现说明
 //! 已实现双通道:broadcast + mpsc 旁路,2026-06-29。
-//! 4 类 Critical 安全告警事件(SkepticVeto/RedTeamAudit/AsaIntervention/
-//! BudgetExceeded)在 `EventBus::publish`/`publish_blocking` 中自动额外
+//! Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 13 类)在
+//! `EventBus::publish`/`publish_blocking` 中自动额外
 //! 投递到 mpsc 旁路通道(见 `bus.rs::is_critical_mpsc_event`)。订阅者通过
 //! `EventBus::subscribe_critical_events()` 获取 mpsc Receiver,确保在 broadcast
 //! Lagged 场景下仍能接收 Critical 事件。

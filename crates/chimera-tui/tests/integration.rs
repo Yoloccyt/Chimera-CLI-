@@ -5,7 +5,7 @@
 //!
 //! # 测试目标
 //! - 验证多面板布局渲染(ratatui TestBackend 内存渲染,无需真实终端)
-//! - 验证输入模式切换(Tab/Shift+Tab/数字键 1-8/F1-F8)
+//! - 验证输入模式切换(Tab/Shift+Tab/数字键 1-9/F1-F12)
 //! - 验证命令面板切换面板与退出
 //! - 验证键盘事件处理(crossterm 0.28 KeyEvent::new 双参数 API)
 //! - M2 新增:验证 Memory/Security/Health 面板渲染与切换
@@ -271,7 +271,7 @@ fn test_tui_input_mode_circular_navigation() {
     // WHY 循环导航:验证 Tab/Shift+Tab 沿焦点环完整循环一周回到原点。
     // Concord T1.4:期望序列不再手写(避免测试成为第三处顺序源),而是派生
     // 自 PanelId::REGISTERED_FOCUS_ORDER 单一事实源:Tab 沿环正向逐位,
-    // Shift+Tab 逆向逐位;25 面板全部注册(Timeline/Sysinfo 已接线)。
+    // Shift+Tab 逆向逐位;26 面板全部注册(FC-05 下线 InjectionStrategy)。
     let mut app = make_app();
     let order = PanelId::REGISTERED_FOCUS_ORDER;
     let n = order.len();
@@ -305,7 +305,7 @@ fn test_tui_input_mode_circular_navigation() {
 
 #[test]
 fn test_tui_input_mode_direct_jump() {
-    // WHY 直接跳转:验证数字键 1-8 直接跳转到对应面板
+    // WHY 直接跳转:验证数字键直达面板(覆盖 1-8;9 与 F 键/g 前缀见\直接键覆盖测试)
     let mut app = make_app();
 
     let cases = [
@@ -1065,9 +1065,10 @@ fn test_mouse_tab_click_switches_panel_integration() {
     // 先渲染以设置 last_area
     let _ = render_to_string(&mut app, 80, 24);
 
-    // Phase 10:标签栏宽度 80,27 个面板,tab_width = 80/27 = 2 列。
-    // WHY column=3:3/2 = 1,落在第 2 个标签(index 1 = Parliament)内,
-    // 避开边界(2/2=1 与 4/2=2 均为边界列)。
+    // Phase 10:标签栏宽度 80,26 个面板(FC-05 下线 InjectionStrategy),
+    // tab_width = 80/26 = 3 列。
+    // WHY column=3:3/3 = 1,落在第 2 个标签(index 1 = Parliament)内,
+    // 避开边界(6/3=2 与 9/3=3 均为边界列)。
     app.handle_mouse_event(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 3,
@@ -1090,5 +1091,6 @@ fn test_mouse_command_bar_click_enters_command_mode() {
         modifiers: KeyModifiers::NONE,
     });
 
-    assert_eq!(app.state().input_mode, InputMode::Command);
+    // I-B(2026-09-06 复评):底栏点击改入 Slash 模式(与 `:`/`/` 斜杠入口统一)
+    assert_eq!(app.state().input_mode, InputMode::Slash);
 }

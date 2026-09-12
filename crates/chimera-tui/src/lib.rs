@@ -77,9 +77,9 @@ pub use data::{
     metrics_history::MetricsHistory,
     resource_history::{gradient_color, MetricSample, ResourceHistory, ThresholdLevel},
     AsaInterventionSummary, BudgetMetrics, BudgetSync, CriticalDroppedSync, DataPipeline,
-    DataSnapshot, DataSourceConfig, HealthMetrics, MemoryMetrics, MemorySync, QuestSync,
-    RedTeamAuditSummary, SecurityState, SecuritySync, SkepticVetoSummary, StubDataSource,
-    TuiDataSource,
+    DataSnapshot, DataSourceConfig, HealthMetrics, MemoryMetrics, MemorySync, ProtocolDataSource,
+    QuestSync, RedTeamAuditSummary, SecurityState, SecuritySync, SkepticVetoSummary,
+    StubDataSource, TuiDataSource,
 };
 pub use error::TuiError;
 pub use focus::FocusManager;

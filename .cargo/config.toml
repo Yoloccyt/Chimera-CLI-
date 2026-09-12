@@ -11,14 +11,31 @@ linker = "gcc"
 # (clippy -D warnings 通过)。禁用 incremental 根治该 ICE,同时与 CLAUDE.md §9
 # clippy OOM 缓解(CARGO_INCREMENTAL=0)对齐,避免开发者重复设置环境变量。
 # 代价:日常增量编译速度变慢,但项目规模(35 crates)下全量 check 仅 ~7s,可接受。
+# (2026-09-04 工具链诊断注:当前 rustc 已为 1.97.1,该 ICE 是否仍在待复测;
+#  保守保持 false,本注释为历史记录而非当前断言。)
 [build]
 incremental = false
+
+# WHY 固化 jobs = 4(2026-09-04 工具链诊断,C1 实施实录故障的根因修复):
+# 诊断实验实测(见 docs/reports/toolchain-diagnosis-report-2026-09-04.md):
+# 默认 jobs=16 逻辑核下多 target 全量链接把可用物理内存压至 0 GB
+# (15.2GB 总内存机),触发 rustc/链接器 fast-fail(0xC0000409
+# STATUS_STACK_BUFFER_OVERRUN)与元数据写盘损坏(error[E0786] invalid
+# metadata,即"windows crate rlib format"故障的同族);--jobs 2 限流重试全绿。
+# jobs=4 在 15GB 内存机上链接峰值 ~6GB 安全,编译吞吐与稳定性平衡;
+# 配置级固化使所有开发者/所有命令生效,不再依赖人工 --jobs 参数。
+jobs = 4
 
 # WHY:启用 rusqlite bundled SQLite 的 FTS5 全文索引扩展编译。
 # libsqlite3-sys 的 build.rs 读取此环境变量,传递 -DSQLITE_ENABLE_FTS5 给 C 编译器。
 # 不设置时 FTS5 不可用,repo-wiki 自动降级到 LIKE 全表扫描(降级策略见 fts.rs)。
 [env]
 SQLITE_ENABLE_FTS5 = "1"
+# C-诊断(2026-09-04): RUST_MIN_STACK 持久化——CLAUDE.md §2 clippy 段要求
+# 手工设置 32MB,此前从未落配置(仅临时 shell 变量),漏设环境下 rustc
+# 编译线程栈不足与内存耗尽叠加会放大 fast-fail 概率。32MB 为 CLAUDE.md
+# 既定值,与本次诊断修复(jobs=4)配套。
+RUST_MIN_STACK = "33554432"
 
 # ============================================================
 # 编译阶段优化(Task 3):test profile 加速

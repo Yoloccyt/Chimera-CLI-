@@ -56,6 +56,7 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
 
 #[test]
 fn hint_bar_localizes_with_ctrl_l() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::Zh);
     let mut app = make_app();
@@ -81,6 +82,7 @@ fn hint_bar_localizes_with_ctrl_l() {
 
 #[test]
 fn layout_and_theme_messages_localize() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let _guard = LOCALE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_locale(Locale::En);
     let mut app = make_app();

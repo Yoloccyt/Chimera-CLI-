@@ -27,6 +27,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::graph_identity::GraphIdentity;
+
 /// #[serde(default)] 用默认值函数: payload_version 默认 1
 fn default_payload_version() -> u32 {
     1
@@ -55,6 +57,11 @@ pub struct EventMetadata {
     /// #[serde(default)] 确保旧格式 JSON 缺失此字段时反序列化不失败
     #[serde(default = "default_payload_version")]
     pub payload_version: u32,
+    /// 图身份三元组（WI-04 GIP）— 任意 Goal/节点成本归因
+    ///
+    /// WHY Option 不 skip_serializing_if: rmp-serde array 位置编码下跳过字段
+    /// 破坏反序列化长度（ADR-004）；缺失字段反序列化自动 None（serde 默认）。
+    pub graph_identity: Option<GraphIdentity>,
 }
 
 impl EventMetadata {
@@ -67,6 +74,7 @@ impl EventMetadata {
             source: source.into(),
             correlation_id: None,
             payload_version: 1,
+            graph_identity: None,
         }
     }
 
@@ -78,6 +86,24 @@ impl EventMetadata {
             source: source.into(),
             correlation_id: Some(correlation_id.into()),
             payload_version: 1,
+            graph_identity: None,
+        }
+    }
+
+    /// 创建带图身份的三元组元数据（WI-04 GIP 挂载点）
+    ///
+    /// # WHY
+    /// 成本归因从"总账"细化到"任意 Goal/节点瀑布"（WI-04 验收:
+    /// 给定 run_id 拉出完整成本瀑布）。既有 `new`/`with_correlation`
+    /// 保持 graph_identity = None（零回归）。
+    pub fn with_graph_identity(source: impl Into<String>, graph_identity: GraphIdentity) -> Self {
+        Self {
+            event_id: Uuid::now_v7(),
+            timestamp: Utc::now(),
+            source: source.into(),
+            correlation_id: None,
+            payload_version: 1,
+            graph_identity: Some(graph_identity),
         }
     }
 }

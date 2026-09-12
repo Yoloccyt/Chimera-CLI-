@@ -16,6 +16,8 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.title" => "Task Scheduler",
         "panel.chat.title" => "Chat",
         "panel.monitor.title" => "System Monitor",
+        // PS-2 batch 2: no event carrier for coverage ratio
+        "panel.metrics.coverage_unreported" => "coverage unreported (no event carrier)",
         "panel.log.title" => "Logs",
         "panel.help.title" => "Help",
         "panel.border.quest" => " Quest Tasks ",
@@ -182,15 +184,6 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         // Concord W4 T4.4:osa_sparse section title
         "panel.osa.mask_status" => "Five-dim mask status",
         // Concord W4 T4.4:pvl nine-dimension score names
-        "panel.pvl.dim.real_execution" => "Real execution",
-        "panel.pvl.dim.coverage" => "Coverage",
-        "panel.pvl.dim.verification" => "Verification passed",
-        "panel.pvl.dim.confidence" => "Confidence",
-        "panel.pvl.dim.efficiency" => "Efficiency",
-        "panel.pvl.dim.retry_discipline" => "Retry discipline",
-        "panel.pvl.dim.output_substance" => "Output substance",
-        "panel.pvl.dim.orphan_free" => "Orphan-free",
-        "panel.pvl.dim.sandbox_clean" => "Sandbox clean",
         // Concord W4 T4.4:codegen log message key
         "actions.codegen.bad_key_skipped" => "default_key declaration unparsable, skipped",
         // Concord W4 T4.5:experience items copy
@@ -226,7 +219,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "help.sc.help" => "Show this help",
         "help.sc.theme" => "Switch theme",
         "help.sc.layout" => "Switch layout",
-        "help.sc.gjump" => "Jump to extended panels",
+        "help.sc.gjump" => "Jump to extended/business panels",
         "help.sc.top" => "Scroll to top",
         "help.sc.bottom" => "Scroll to bottom",
         "help.sc.fkeys" => "Jump to panel (F-keys)",
@@ -250,6 +243,16 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "status.layout" => "Layout",
         "status.chat_pending" => "Chat lands in M3b",
         "status.quit_confirm" => "Quit Chimera? [←/→ toggle, Enter to confirm]",
+        // PS-2(F-1):协议握手回执(ADR-082;args appended by app/state.rs)
+        "status.handshake.full" => "Protocol handshake OK (Full)",
+        "status.handshake.degraded" => "Protocol degraded, limited capabilities:",
+        "status.handshake.refused" => "Handshake refused: version irreconcilable; orchestrated commands read-only",
+        // FC-A(2026-09-06 复评):投票诚实降级(L8 治理通道未接线)
+        "status.vote_unwired" => "Vote: L8 Parliament governance channel not wired (reserved), request not published",
+        // B1(2026-09-06 复评):未接线命令的具体指引
+        "slash.unwired.fork" => "Fork: multi-session storage not wired (reserved)",
+        "slash.unwired.undo" => "Undo: message-level undo not wired; use Esc-Esc rewind",
+        "slash.unwired.redo" => "Redo: not wired (reserved)",
         "mode.normal" => "Normal",
         "mode.insert" => "Insert",
         "mode.command" => "Command",
@@ -274,8 +277,12 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "chat.status.idle" => "Idle",
         "hint.palette" => "Ctrl+P Palette",
         "hint.help" => "? Help",
+        // I-2(2026-09-06 评估):Chat 视图下面板切换键的诚实提示(不可见切换)
+        "hint.panel_switch_in_chat" => {
+            "Panel switching works in Dashboard view (press \\ to toggle)"
+        }
         "hint.bar" => {
-            " q:Quit  Tab:Next  /:Search  ::Cmd  ?:Help  t:Theme  l:Layout  a:Actions  g+1-6:Panel "
+            " q:Quit  Tab:Next  /:Cmd  ?:Help  t:Theme  l:Layout  a:Actions  g+1-9,0:Panel "
         }
         "palette.title" => "Command Palette",
         "palette.hint" => "type to filter · ↑↓ select · Enter run · Esc close",
@@ -308,6 +315,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.overwindow.corpus" => "corpus",
         "panel.overwindow.window" => "window",
         "panel.overwindow.candidates" => "candidates",
+        "panel.overwindow.discarded" => "discarded",
         "panel.overwindow.loaded" => "loaded",
         "panel.overwindow.more" => "more triggers (see EventStream)",
         // U-3 wave 2: Quest panel body
@@ -335,11 +343,22 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.parliament.against" => "AGAINST",
         "panel.parliament.failed" => "failed",
         "panel.parliament.immune" => "Immune:",
+        // PS-2 batch 1: governance posture (real event data; missing shows "no data")
+        "panel.parliament.governance" => "Governance",
+        "panel.parliament.no_data" => "no data (no parliament events yet)",
+        "panel.parliament.coordination" => "Coord",
+        "panel.parliament.gain" => "Gain",
+        "panel.parliament.cap" => "Cap",
+        "panel.parliament.immune_unwired" => "not wired (pending ImmuneSystem assembly)",
         // U-3 wave 2: Security panel body & details
         "panel.security.body_title" => "Security Events",
         "panel.security.no_events" => "No security events",
         "panel.security.detection" => "detection",
         "panel.security.frozen" => "Frozen Capabilities",
+        // PS-2(F-6):agent failure posture
+        "panel.security.agent_failures" => "Agent Failures",
+        "panel.security.agent_failure_total" => "Total failures",
+        "status.agent_failure" => "Agent task failed:",
         "panel.security.detail_type" => "Type:",
         "panel.security.detail_quest" => "Quest:",
         "panel.security.detail_reason" => "Reason:",
@@ -368,6 +387,139 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.quest.batch_pause" => "Batch pause",
         "panel.quest.batch_cancel" => "Batch cancel",
         "panel.quest.quests" => "quests",
+        // ====================================================================
+        // v3 复评批次-A US-02/US-01(2026-09-08):六面板 + 注入策略 + 任务管理
+        // 生产段硬编码迁移。zh 表含双语括注的键为兼容既有集成测试英文断言
+        // (默认 Zh locale),后续批次随测试基线更新一并收敛为纯中文。
+        // ====================================================================
+        // event_stream 面板
+        "panel.event_stream.body_title" => "Event Stream",
+        "panel.event_stream.no_events" => "[INFO]  No events",
+        "panel.event_stream.showing" => "showing",
+        "panel.event_stream.of" => "of",
+        "panel.event_stream.events" => "events",
+        // timeline 面板
+        "panel.timeline.no_snapshots" => "No snapshots yet. Waiting for first snapshot...",
+        "panel.timeline.event_summary" => "{} total, {}/s rate",
+        "panel.timeline.showing_snapshots" => "... showing {} of {} snapshots",
+        "panel.timeline.detail_timestamp" => "Timestamp:",
+        "panel.timeline.detail_event_count" => "Event Count:",
+        "panel.timeline.detail_event_rate" => "Event Rate:",
+        "panel.timeline.detail_budget_util" => "Budget Utilization:",
+        "panel.timeline.detail_health" => "Health Score:",
+        "panel.timeline.detail_decay" => "Decay Coefficient:",
+        "panel.timeline.popup_title" => "Timeline Snapshot #{}",
+        // osa_sparse 面板
+        "panel.osa.gauge_title" => "Sparsity",
+        "panel.osa.sparsity_label" => "Sparsity:",
+        "panel.osa.mask_na_routing" => "Routing: N/A | Context: N/A | Memory: N/A",
+        "panel.osa.mask_na_audit" => "Audit: N/A | Budget: N/A",
+        "panel.osa.recall_label" => "Recall: needle@8=",
+        "panel.osa.recall_bias" => " bias=",
+        "panel.osa.recall_chain" => " chain=",
+        "panel.osa.no_context_files" => "No active context files. Waiting for OSA coordinator...",
+        "panel.osa.showing_files" => "... showing {} of {} files",
+        "panel.osa.sparsity_history" => "Sparsity History",
+        // mcp_nodes 面板
+        "panel.mcp.alert_offline" => "[ALERT] Node {} offline",
+        "panel.mcp.no_nodes" => "No MCP nodes connected",
+        "panel.mcp.detail_node_id" => "Node ID:",
+        "panel.mcp.detail_status_label" => "Status:",
+        "panel.mcp.status_online" => "Online",
+        "panel.mcp.status_degraded" => "Degraded",
+        "panel.mcp.status_offline" => "Offline",
+        "panel.mcp.detail_throughput" => "Throughput:",
+        "panel.mcp.detail_last_seen" => "Last Seen:",
+        "panel.mcp.detail_heartbeat_age" => "Heartbeat Age:",
+        "panel.mcp.detail_timeout_warning" => "Warning: Heartbeat timed out (>{}s threshold)",
+        "panel.mcp.detail_last_seen_never" => "Last Seen: (never)",
+        "panel.mcp.detail_no_heartbeat" => "Warning: No heartbeat received",
+        "panel.mcp.popup_title" => "Node {} Detail",
+        // self_assessment 面板
+        "panel.self_assessment.body_title" => "Harness Self Assessment (Qoder 5-Dim)",
+        "panel.self_assessment.dim_comprehension" => "Comprehension",
+        "panel.self_assessment.dim_execution" => "Execution",
+        "panel.self_assessment.dim_verification" => "Verification",
+        "panel.self_assessment.dim_delivery" => "Delivery",
+        "panel.self_assessment.dim_experience" => "Experience",
+        "panel.self_assessment.findings_count" => "Findings in report: {}",
+        "panel.self_assessment.awaiting" => "Awaiting first HarnessReportGenerated...",
+        "panel.self_assessment.stage_label" => "Memory Strategy Stage: {}",
+        "panel.self_assessment.recent_findings" => "Recent Findings",
+        "panel.self_assessment.no_findings" => "No findings yet.",
+        // pvl_score 面板
+        "panel.too_small" => "Panel area too small",
+        "panel.dag.unwired" => "Spec DAG: not wired (GSOE not assembled)",
+        "panel.pvl.unwired" => "Nine-dim score: not wired (PVL loop not assembled)",
+        "panel.pvl.unwired_hint" => "PVL loop is never instantiated in production; its source falls back to all-1.0, so no score is shown",
+        "panel.pvl.terminal_too_small" => {
+            "Terminal too small for PVL Score panel (min 15 rows)"
+        }
+        // injection_strategy 面板
+        "panel.injection.body_title" => "Injection Strategy (TencentDB)",
+        "panel.injection.awaiting_provider" => "Awaiting injection snapshot provider...",
+        "panel.injection.dynamic_cards" => "Dynamic cards (before user msg):",
+        "panel.injection.no_dynamic_cards" => "  No dynamic cards.",
+        "panel.injection.card_type_preference" => "Preference",
+        "panel.injection.card_type_event" => "Event",
+        "panel.injection.card_type_rule" => "Rule",
+        "panel.injection.card_type_trace" => "Trace",
+        "panel.injection.card_type_policy" => "Policy",
+        "panel.injection.card_type_env_cognition" => "EnvCognition",
+        "panel.injection.persona_summary" => "Persona summary (system prompt tail):",
+        "panel.injection.cache_stats" => "Cache stats:",
+        "panel.injection.cache_line" => "  Cache hit rate: {}% | Token savings: {}",
+        "panel.injection.strategy_note" => {
+            "  Strategy: dynamic cards refresh every turn | persona reuses cache"
+        }
+        // mcp_nodes 面板(批次-A US-02/US-01:告警横幅 + 详情弹窗字段 + NodeStatus
+        // 枚举标签;zh 值保留 "[ALERT]"/"offline"/"No MCP nodes connected" 英文括注,
+        // 兼容 mcp_nodes_panel_test 既有英文断言)
+        "panel.mcp_nodes.alert_offline" => "[ALERT] Node {} offline",
+        "panel.mcp_nodes.no_nodes" => "No MCP nodes connected",
+        "panel.mcp_nodes.detail_title" => "Node {} Detail",
+        "panel.mcp_nodes.detail_node_id" => "Node ID: {}",
+        "panel.mcp_nodes.detail_status" => "Status: {}",
+        "panel.mcp_nodes.detail_throughput" => "Throughput: {} msg/s",
+        "panel.mcp_nodes.detail_last_seen" => "Last Seen: {}",
+        "panel.mcp_nodes.detail_heartbeat_age" => "Heartbeat Age: {}s",
+        "panel.mcp_nodes.detail_heartbeat_timeout" => {
+            "Warning: Heartbeat timed out (>{}s threshold)"
+        }
+        "panel.mcp_nodes.detail_last_seen_never" => "Last Seen: (never)",
+        "panel.mcp_nodes.detail_no_heartbeat" => "Warning: No heartbeat received",
+        "panel.mcp_nodes.status_online" => "Online",
+        "panel.mcp_nodes.status_degraded" => "Degraded",
+        "panel.mcp_nodes.status_offline" => "Offline",
+        // quest 面板 ThinkingMode 面板层键映射(枚举在 nexus-contracts L0,
+        // 孤儿规则:不能 impl Display,task_manager 详情弹窗共用此三键)
+        "panel.quest.thinking_fast" => "Fast",
+        "panel.quest.thinking_standard" => "Standard",
+        "panel.quest.thinking_deep" => "Deep",
+        // task_manager 面板(批次-A 第 4 步:CJK 豁免棘轮,英文同批清零)
+        "panel.task.title_sort" => "Task Manager [{}]",
+        "panel.task.title_filter_suffix" => " (filter: {})",
+        "panel.task.sort_priority" => "Priority",
+        "panel.task.sort_status" => "Status",
+        "panel.task.sort_created_at" => "CreatedAt",
+        "panel.task.no_matching" => "No matching quests",
+        "panel.task.status_summary" => "Pending:{} | Running:{} | Paused:{} | Completed:{}",
+        "panel.task.quadrants_label" => "Quadrants: ",
+        "panel.task.quadrant_q1" => "Q1(Impl): A={} T={} WSJF={}",
+        "panel.task.quadrant_q2" => "Q2(Int): A={} T={} WSJF={}",
+        "panel.task.quadrant_q3" => "Q3(Ver): A={} T={} WSJF={}",
+        "panel.task.quadrant_q4" => "Q4(Hard): A={} T={} WSJF={}",
+        "panel.task.no_provider" => {
+            "Data source not wired (set_quadrant_status_provider not registered)"
+        }
+        "panel.task.detail_title" => "Title:",
+        "panel.task.detail_id" => "ID:",
+        "panel.task.detail_priority" => "Priority:",
+        "panel.task.detail_tasks" => "Tasks:",
+        "panel.task.detail_mode" => "Mode:",
+        "panel.task.batch_pause_confirm" => "Batch pause {} quests",
+        "panel.task.batch_terminate_confirm" => "Batch terminate {} quests",
+        "panel.task.batch_resume_confirm" => "Batch resume {} quests",
         // Common
         "common.none" => "(none)",
         _ => return None,

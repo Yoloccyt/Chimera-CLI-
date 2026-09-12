@@ -41,7 +41,6 @@ use crate::data::TuiDataSource;
 use crate::panels::Panel;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use crate::viz::{bar_chart, gauge as viz_gauge, heatmap, histogram, line_chart, VizChartKind};
-use gqep_executor::timeout_stats;
 
 /// 5×2 网格行数(spec Task 2.2 明确:5 个 sparkline / 5 个 gauge)
 const GRID_ROWS: usize = 5;
@@ -247,6 +246,17 @@ impl MetricsDashboardPanel {
 }
 
 impl Panel for MetricsDashboardPanel {
+    // PS-3(I-4):实现 gg/G —— 本面板是 5×2 网格(selected 0..GRID_SIZE-1),
+    // 此前走默认空实现,gg/G 静默无响应。
+    fn scroll_to_top(&mut self, _state: &mut TuiState) {
+        self.selected = 0;
+    }
+
+    fn scroll_to_bottom(&mut self, _state: &mut TuiState) {
+        // 末个网格 cell(GRID_SIZE = GRID_ROWS * GRID_COLS = 10,末下标 9)。
+        self.selected = GRID_SIZE - 1;
+    }
+
     fn id(&self) -> PanelId {
         PanelId::MetricsDashboard
     }
@@ -260,15 +270,29 @@ impl Panel for MetricsDashboardPanel {
         )
     }
 
-    fn render(&mut self, _state: &TuiState, area: Rect, buf: &mut Buffer) {
-        // 0) 顶部 GQEP 超时防护统计摘要（Task 3.7:L10 → L7 向下依赖）
-        let stats = timeout_stats();
+    fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // PS-2 U-4:退化尺寸统一早退(共享最低线,见 crate::panels::MIN_PANEL_W/H)
+        if crate::panels::degenerate(area) {
+            crate::panels::render_too_small(area, buf);
+            return;
+        }
+
+        // 0) 顶部 GQEP 超时防护统计摘要
+        //
+        // PS-2 批次2:L10→L7 越层直调已移除(原 `timeout_stats()` 读进程内原子计数,
+        // 不可回放)。现读事件派生的快照 `state.gqep_timeouts`(可回放、可归因)。
+        //
+        // WHY 不再显示 coverage:该值需要"受保护操作数/总操作数"分母,而事件只携带
+        // **超时发生**次数,无法派生(且 gather 路径恒受保护,该值近乎恒为 100%),
+        // 故如实标注"未上报",而非伪造一个百分比。
+        let t = &state.gqep_timeouts;
         let gqep_summary = Line::from(vec![Span::styled(
             format!(
-                "GQEP Timeout: per_op={}  global={}  coverage={:.1}%",
-                stats.per_op_timeouts,
-                stats.global_timeouts,
-                stats.coverage * 100.0,
+                "GQEP Timeout: per_op={}  global={}  orphan={}  {}",
+                t.per_op,
+                t.global,
+                t.orphan,
+                crate::t!("panel.metrics.coverage_unreported"),
             ),
             Style::default()
                 .fg(Color::Cyan)
@@ -354,7 +378,9 @@ impl Panel for MetricsDashboardPanel {
                     self.selected -= 1;
                 }
             }
-            KeyCode::Right | KeyCode::Char('l')
+            // WHY 不含 'l':`l` 已由全局键位表绑定 view.switch_layout,InputRouter
+            // 先行截获,面板 arm 永不可达(死键);网格右移仅保留方向键 Right。
+            KeyCode::Right
                 if self.selected % GRID_COLS < GRID_COLS - 1 && self.selected + 1 < GRID_SIZE =>
             {
                 self.selected += 1;
@@ -374,5 +400,84 @@ impl Panel for MetricsDashboardPanel {
             ("↑/↓", crate::t!("shortcut.navigate")),
             ("R", crate::t!("shortcut.refresh")),
         ]
+    }
+}
+
+#[cfg(test)]
+mod ps3_scroll_tests {
+    // ========================================================
+    // PS-3(I-4):gg/G 必须到达首/末网格 cell(此前默认空实现,静默无响应)
+    // ========================================================
+
+    use super::*;
+
+    #[test]
+    fn gg_g_reach_first_and_last_grid_cell() {
+        let mut panel = MetricsDashboardPanel::new();
+        let mut state = TuiState::new();
+
+        // 模拟焦点在网格中部(cell 下标 5 = 第 3 行左列)
+        panel.selected = 5;
+        panel.scroll_to_top(&mut state);
+        assert_eq!(panel.selected(), 0, "gg should land on first cell (idx 0)");
+
+        // G 应到达末 cell(GRID_SIZE = 5×2 = 10,末下标 9)
+        panel.scroll_to_bottom(&mut state);
+        assert_eq!(
+            panel.selected(),
+            GRID_SIZE - 1,
+            "G should land on last cell (idx 9)"
+        );
+    }
+}
+
+// ============================================================
+// PS-2 批次2:GQEP 超时摘要行(事件派生取代 L10→L7 越层直调)
+// ============================================================
+
+#[cfg(test)]
+mod ps2_batch2_tests {
+    use super::*;
+    use crate::types::GqepTimeoutStats;
+    use ratatui::buffer::Buffer;
+
+    fn render(stats: GqepTimeoutStats) -> String {
+        let mut state = TuiState::new();
+        state.gqep_timeouts = stats;
+        // WHY 200 列:摘要行较长,窄画布会被截断(实测踩过此坑)
+        let area = Rect::new(0, 0, 200, 30);
+        let mut buf = Buffer::empty(area);
+        let mut panel = MetricsDashboardPanel::new();
+        panel.render(&state, area, &mut buf);
+        buf.content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn summary_shows_event_derived_counters() {
+        let rendered = render(GqepTimeoutStats {
+            per_op: 7,
+            global: 3,
+            orphan: 2,
+        });
+        assert!(rendered.contains("per_op=7"), "got: {rendered}");
+        assert!(rendered.contains("global=3"), "got: {rendered}");
+        assert!(rendered.contains("orphan=2"), "got: {rendered}");
+    }
+
+    #[test]
+    fn zero_counters_are_shown_as_real_zero() {
+        // 与批次1 的"假零值"不同:此处 0 表示"确实未发生超时",是真值
+        let rendered = render(GqepTimeoutStats::default());
+        assert!(rendered.contains("per_op=0"), "got: {rendered}");
+    }
+
+    #[test]
+    fn coverage_is_marked_unreported_not_fabricated() {
+        let rendered = render(GqepTimeoutStats::default());
+        // 旧实现以 coverage={}% 展示进程内派生的百分比 —— 不得再出现
+        assert!(
+            !rendered.contains("coverage="),
+            "no event carrier: must not render a fabricated coverage value, got: {rendered}"
+        );
     }
 }

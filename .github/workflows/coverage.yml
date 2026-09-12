@@ -1,26 +1,49 @@
-# 覆盖率门禁 — 每周定时运行 cargo-tarpaulin,非阻塞
-# WHY: coverage 运行缓慢(需插桩编译+全量运行),不应阻塞 PR/推送;
-# 作为独立 workflow 通过 schedule 每周运行 + 手动触发,
-# 以 --fail-under 85 断言最低 85% 行覆盖率。
-name: Coverage (tarpaulin)
+# 覆盖率门 —— 判定真正生效（WS-B，审计 P0 #1 落地）
+# =============================================================================
+# 历史（本文件为何长这样）：
+#   旧版跑 `cargo tarpaulin --fail-under 85` 却在 job 级写 `continue-on-error: true`，
+#   等于"阈值算了、结论被丢"（自述 RK-P45：没有任何人知道当前真实覆盖率）。
+#   本波去掉 continue-on-error，让判定回归；同时把阈值单一真值源外置到
+#   scripts/coverage_baseline.toml，由 scripts/coverage_gate.py 消费（不在本文件写死数字，
+#   避免 bench_check.yml heredoc 那笔"两份实现"债的复发）。
+#
+# 决策点：测量引擎(cargo-llvm-cov)只**产数据**（不带 --fail-under-lines），全部裁决集中在
+#   `coverage_gate.py --check`（聚合 V3 + 逐 crate V5 + 零记录 V2 + 幽灵 V1），
+#   保持"单一裁决点"。
+#
+# 为何 nightly 阻塞但不挂 PR：本 workflow 只有 schedule + workflow_dispatch 触发器，
+#   天然不是 PR 状态检查；全工作区插桩冷编译远超 ci.yml 15min 快轨预算，故不进 PR。
+#   ⚠ 前提：分支保护不得把 coverage 列为 required check（收口时人工确认一次）。
+#
+# cancel-in-progress=false：趋势采样要的是"每次都跑完"，中途取消丢样本（沿 slo.yml 论证）。
+# =============================================================================
+name: Coverage gate (cargo-llvm-cov + coverage_gate.py)
 
 on:
-  workflow_dispatch:
   schedule:
-    # 每周日 04:00 UTC 运行
-    - cron: '0 4 * * 0'
+    # 每晚 04:00 UTC（原每周日 → 每晚：趋势密度决定"实测-buffer"能否落地）
+    - cron: '0 4 * * *'
+  workflow_dispatch:  # 手动触发（首跑校准 / 调试）
 
-# WHY: 非阻塞 — coverage 波动不应阻断任何开发流程,仅作观测信号。
-# 失败时 workflow 标记为黄色(警告),不阻塞合入。
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+
 jobs:
   coverage:
-    name: cargo-tarpaulin (--fail-under 85)
+    # job 名不再写 "(--fail-under 85)" —— 阈值只在 coverage_baseline.toml 一处
+    name: workspace line coverage + per-crate floors
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    continue-on-error: true
-    env:
-      CARGO_TERM_COLOR: always
-      CARGO_INCREMENTAL: '0'
+    # 判定必须生效：故意不写 continue-on-error（写了 = 再制造一次 RK-P45）
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,22 +54,91 @@ jobs:
         with:
           workspaces: '.'
 
-      - name: Install cargo-tarpaulin
-        # WHY: taiki-e/install-action 下载预编译二进制,避免 cargo install 编译等待。
+      - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-tarpaulin
+          tool: cargo-llvm-cov
 
-      - name: Run coverage (tarpaulin)
-        # WHY: --workspace 覆盖全 workspace; --exclude-files 排除测试与基准代码;
-        # --fail-under 85 断言最低 85% 行覆盖率阈值;
-        # --out Html/Json 双输出便于人工查看与自动化消费。
-        run: cargo tarpaulin --workspace --out Html --out Json --output-dir coverage --exclude-files 'tests/*' 'benches/*' --fail-under 85
+      - name: Ensure llvm-tools-preview
+        run: rustup component add llvm-tools-preview
 
-      - name: Upload coverage report (HTML)
-        # WHY: 即使 --fail-under 未达标,上传产物便于事后排查。
+      # 趋势历史：restore 上一次的 coverage_history.jsonl，跑完追加并回存。
+      - name: Restore coverage history
+        uses: actions/cache@v4
+        with:
+          path: tmp/coverage_history
+          key: coverage-history-${{ github.run_number }}
+          restore-keys: |
+            coverage-history-
+
+      - name: Run coverage (cargo-llvm-cov, JSON)
+        # WHY llvm-cov 而非 tarpaulin：tarpaulin 经全局 RUSTFLAGS 对传递依赖
+        # 也注入 -Cinstrument-coverage，会触发第三方 pulp@0.22.3 的 const-eval
+        # E0080（CI 首跑实证）。cargo-llvm-cov 仅对 workspace 成员插桩、依赖不插桩
+        # →pulp 正常编译→可测全工作区。
+        # --ignore-filename-regex 从分母剔除 tests/benches（等价旧 --ignore-tests +
+        # --exclude-files），避免测试代码虚高覆盖率。
+        # 不带 --fail-under-lines：裁决统一交给 coverage_gate.py（单一裁决点）。
+        # --no-cfg-coverage：cargo-llvm-cov 默认注入 `--cfg coverage`，会激活部分
+        #   面板代码的 #[cfg(coverage)] 分支→改变渲染→chimera-tui 4 个 panel 内容断言
+        #   与正常 `cargo test`（mca job 已绿）不一致。关掉该 cfg 使覆盖构建与测试预期一致。
+        run: |
+          set -o pipefail
+          mkdir -p coverage
+          cargo llvm-cov --workspace --no-cfg-coverage --json --output-path coverage/coverage.json \
+            --ignore-filename-regex '(/tests/|/benches/|^tests/|^benches/)' \
+            2>&1 | tee coverage/llvm-cov.log
+
+      # 钉死键名契约：把首条 JSON 的键与首条记录打到 step summary，
+      # 一旦 llvm-cov 版本改了 summary.lines 键，coverage_gate 会因解析不到而判 2，
+      # 此处日志给出根因（避免"门悄悄不判"的假绿）。
+      - name: Pin llvm-cov JSON key contract
+        if: always()
+        run: |
+          mkdir -p coverage
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY" || true
+          import glob, json
+          fs = sorted(glob.glob("coverage/*.json"))
+          print("### coverage JSON contract (llvm-cov / tarpaulin)")
+          print(f"- files: {len(fs)}")
+          if fs:
+              d = json.load(open(fs[0]))
+              if isinstance(d, dict) and "data" in d:
+                  blocks = d.get("data", [])
+                  nf = sum(len(b.get("files", [])) for b in blocks)
+                  print(f"- format: llvm-cov; blocks={len(blocks)}; file-records={nf}")
+                  if blocks and blocks[0].get("files"):
+                      f0 = blocks[0]["files"][0]
+                      print(f"- sample filename: {f0.get('filename')}")
+                      print(f"- summary.lines keys: {sorted((f0.get('summary') or {}).get('lines', {}).keys())}")
+              elif isinstance(d, list):
+                  print(f"- format: tarpaulin list; records={len(d)}")
+              else:
+                  print("- WARN: unexpected JSON shape")
+          else:
+              print("- WARN: no *.json produced (coverage run failed?)")
+          PY
+
+      - name: Coverage gate verdict (aggregate + per-crate floors)
+        # 红即 job 红（rc=1 违规；rc=2 不可判定也红——绝不把"没测到"当通过）
+        run: python3 scripts/coverage_gate.py --check coverage
+
+      - name: Append trend history
+        if: always()
+        run: |
+          mkdir -p tmp/coverage_history
+          {
+            echo "when=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run=${{ github.run_number }}"
+            cat coverage/agg.env 2>/dev/null || echo "AGG=unknown"
+          } >> tmp/coverage_history/trend.txt
+
+      - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
-          path: coverage/
+          name: coverage-report-${{ github.run_number }}
+          path: |
+            coverage/
+            tmp/coverage_history/trend.txt
+          retention-days: 45

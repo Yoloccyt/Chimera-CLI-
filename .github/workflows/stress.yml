@@ -69,6 +69,11 @@ jobs:
         # WHY 仅跑 stress binary:
         #   - -E 'binary(/stress/)' 匹配 binary name 包含 "stress" 的 test target
         #     (包括 stress_test, week7_stress, token_efficiency_stress)
+        #   - --workspace **必需**(R1-T10,2026-08-31 实测校准):原命令无 --workspace,
+        #     而本仓压测 target 全部挂在根 package `chimera-e2e-tests` 上,crate 侧
+        #     的 perf-tagged #[ignore] 测试(如 gea/parliament/cmt/osa 的并发基准)
+        #     结构上永远进不来——这是第四轮审计把“stress 覆盖 12 个”高估的根因
+        #     (实测仅 8 个可被本通道覆盖)。
         #   - --profile stress 走 .config/nextest.toml 中的 stress profile 配置
         #     (test-threads = 2 防 I/O 抖动,final-status-level = fail)
         #   - --run-ignored all:1000-iter 压测标了 #[ignore],需显式包含
@@ -81,6 +86,7 @@ jobs:
           set +e
           cargo nextest run \
             --profile stress \
+            --workspace \
             -E 'binary(/stress/)' \
             --run-ignored all \
             --no-fail-fast \

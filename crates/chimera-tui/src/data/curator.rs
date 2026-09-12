@@ -98,6 +98,15 @@ impl CompactPolicy {
             _ => None,
         }
     }
+
+    /// 小写规范名(payload JSON 编码用;与 `from_arg` 互为逆映射)
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Aggressive => "aggressive",
+            Self::Balanced => "balanced",
+            Self::Conservative => "conservative",
+        }
+    }
 }
 
 /// 解析 `/compact` 完整参数串:支持 `--policy <档>` 与裸档位词;
@@ -896,6 +905,88 @@ mod proptests {
             // 新历史长度 = 保留数 + 摘要消息(0/1)
             let summary_extra = if plan.new_messages.iter().any(|m| m.content.starts_with("[上下文策展摘要]")) { 1 } else { 0 };
             prop_assert_eq!(plan.new_messages.len(), plan.kept_indices.len() + summary_extra);
+        }
+    }
+}
+
+// ============================================================
+// FC-2 proptest:策展不变量(2026-09-06 接线验收)
+// ============================================================
+
+#[cfg(test)]
+mod fc2_proptests {
+    //! 任意合法输入下策展必须保持的核心不变量:
+    //! 1. 压缩永不增长(token 与条数);
+    //! 2. 全部 User 轮次保留(Pinned 段,主流 /compact 语义);
+    //! 3. Recent 保护窗口(末 2k 条)保留。
+
+    use super::{classify, CurationPolicy};
+    use super::{ChatMessage, ChatRole, CompactPolicy, CurationConfig, RuleCurationPolicy};
+    use proptest::prelude::*;
+
+    fn user(s: &str) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::User,
+            content: s.into(),
+        }
+    }
+
+    fn asst(s: &str) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::Assistant,
+            content: s.into(),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn curate_invariants_hold_for_arbitrary_history(
+            turns in 0usize..24,
+            filler in proptest::collection::vec("[a-zA-Z0-9 @]{0,60}", 0..24),
+            policy_idx in 0usize..3,
+        ) {
+            // 交替轮次历史 + 随机长度 assistant 填充(候选段来源)
+            let mut msgs = Vec::new();
+            for i in 0..turns {
+                msgs.push(user(&format!("question {i}")));
+                msgs.push(asst(&format!("answer {i} with content")));
+            }
+            for (i, s) in filler.iter().enumerate() {
+                msgs.push(asst(&format!("{s}-{i}")));
+            }
+
+            let cfg = CurationConfig::default();
+            let policy = [CompactPolicy::Aggressive, CompactPolicy::Balanced,
+                CompactPolicy::Conservative][policy_idx];
+            let plan = RuleCurationPolicy.curate(&msgs, &cfg, policy);
+
+            // 不变量 1:压缩永不增长
+            prop_assert!(plan.report.after_tokens <= plan.report.before_tokens);
+            prop_assert!(plan.new_messages.len() <= msgs.len());
+
+            // 不变量 2:全部 User 轮次保留
+            let kept: std::collections::HashSet<&str> =
+                plan.new_messages.iter().map(|m| m.content.as_str()).collect();
+            for m in &msgs {
+                if m.role == ChatRole::User {
+                    prop_assert!(kept.contains(m.content.as_str()), "User 轮次被驱逐: {}", m.content);
+                }
+            }
+
+            // 不变量 3:Recent 保护窗口(末 2k 条)保留
+            let window = cfg.recent_turns.saturating_mul(2).min(msgs.len());
+            for m in &msgs[msgs.len() - window..] {
+                prop_assert!(kept.contains(m.content.as_str()), "Recent 窗口被驱逐: {}", m.content);
+            }
+
+            // 佐证:分类对 User 恒为 Pinned(与不变量 2 的实现一致性)
+            let scored = classify(&msgs, &cfg);
+            for s in &scored {
+                if msgs[s.index].role == ChatRole::User {
+                    prop_assert_eq!(s.segment, super::Segment::Pinned);
+                }
+            }
         }
     }
 }

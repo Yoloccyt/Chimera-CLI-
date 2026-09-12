@@ -38,7 +38,10 @@ impl MemoryPanel {
                     format!("{}: ", crate::t!("panel.memory.cache_hit_rate")),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::from(format!("{:.1}%", mm.hit_rate_percent)),
+                Span::from(crate::render::percent_from_value(
+                    mm.hit_rate_percent,
+                    crate::render::PERCENT_PRECISION_DETAIL,
+                )),
             ]),
             Line::from(vec![
                 Span::styled(
@@ -59,7 +62,7 @@ impl MemoryPanel {
                     format!("{}: ", crate::t!("panel.memory.compressed_ratio")),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::from(format!("{:.1}%", mm.compressed_ratio * 100.0)),
+                Span::from(crate::render::percent_detail(mm.compressed_ratio)),
             ]),
             Line::from(vec![
                 Span::styled(
@@ -154,7 +157,10 @@ impl Panel for MemoryPanel {
         let gauge = render::gauge(
             state.memory_metrics.hit_rate_percent as f64,
             100.0,
-            &format!("{:.1}%", state.memory_metrics.hit_rate_percent),
+            &crate::render::percent_from_value(
+                state.memory_metrics.hit_rate_percent,
+                crate::render::PERCENT_PRECISION_DETAIL,
+            ),
             Color::Green,
         );
         gauge.render(right_chunks[0], buf);

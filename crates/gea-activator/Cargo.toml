@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 nexus-core = { workspace = true }
+nexus-contracts = { workspace = true }
 event-bus = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

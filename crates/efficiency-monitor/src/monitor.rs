@@ -37,15 +37,16 @@ pub const CRITICAL_DROPPED_METRIC_NAME: &str = "nexus_critical_event_dropped_tot
 /// 判断事件是否为 Critical 告警事件（必须立即告警）
 ///
 /// 注意：这与 `NexusEvent::severity()` 部分重叠但语义不同。
-/// - `NexusEvent::severity()` 是事件总线的背压级别：SkepticVeto/RedTeamAudit/
-///   BudgetExceeded 为 Critical（F-001 修复后），AsaIntervention 仍为 Normal
+/// - `NexusEvent::severity()` 是事件总线的背压级别：is_critical_mpsc_event
+///   清单的 13 类安全/治理告警事件均为 Critical（含 AsaIntervention，
+///   P1-W2.1.4 起统一返回 Critical，C3 口径统一订正本注释）
 /// - `is_critical_alert_event` 是 efficiency-monitor 的告警级别（4 个事件均为 Critical）
 ///
-/// WHY 单独定义：AsaIntervention 在 event-bus 中返回 Normal
-/// （因为 severity() 是同步函数不依赖运行时值），但在 efficiency-monitor 中
-/// 代表安全红线，必须立即告警。F-001 修复后 BudgetExceeded 在两层都是 Critical，
-/// 此处保留匹配是出于对称性与稳定性——即使未来 event-bus 的 severity 分类变化，
-/// efficiency-monitor 的告警语义也不受影响。
+/// WHY 单独定义：历史上 AsaIntervention 在 event-bus 中曾返回 Normal
+/// （P1-W2.1.4 修复前），但在 efficiency-monitor 中
+/// 代表安全红线，必须立即告警。修复后两清单已对齐，此处保留 4 事件子集匹配
+/// 是出于告警域稳定性——即使未来 event-bus 的 severity 分类变化，
+/// efficiency-monitor 的告警语义也不受影响（与 C3 消费方过滤语义一致）。
 fn is_critical_alert_event(event: &NexusEvent) -> bool {
     matches!(
         event,
@@ -54,6 +55,90 @@ fn is_critical_alert_event(event: &NexusEvent) -> bool {
             | NexusEvent::AsaIntervention { .. }
             | NexusEvent::BudgetExceeded { .. }
     )
+}
+
+/// 推理悖论可检索 JSONL 落盘文件名（固定，方向 E）
+///
+/// 落盘到运行数据目录，每条记录为一行 JSON（append-only，无污染）。
+const PARADOX_JSONL_FILENAME: &str = "coordination_paradox.jsonl";
+
+/// 解析推理悖论落盘路径（方向 E）
+///
+/// 优先级：`CHIMERA_PARADOX_LOG` 环境变量（显式指定）> `std::env::temp_dir()`
+/// 下的固定文件名。供测试用 env 定向到临时文件，不在真实 home 写文件。
+fn paradox_log_path() -> std::path::PathBuf {
+    std::env::var_os("CHIMERA_PARADOX_LOG")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join(PARADOX_JSONL_FILENAME))
+}
+
+/// 追加一条推理悖论 JSONL 记录到默认路径（方向 E）
+///
+/// 字段：timestamp(ISO8601)、session_id、ratio、cost_index、gain_index、
+/// threshold、severity="paradox"。追加失败仅 warn! 不 panic。
+fn append_paradox_jsonl(
+    ratio: f64,
+    cost_index: f64,
+    gain_index: f64,
+    threshold: f64,
+    session_id: Option<&str>,
+) {
+    append_paradox_jsonl_at(
+        &paradox_log_path(),
+        ratio,
+        cost_index,
+        gain_index,
+        threshold,
+        session_id,
+    );
+}
+
+/// 将推理悖论记录追加到指定路径（可注入，便于测试）
+///
+/// OpenOptions create(true)+append(true)；写失败仅 warn! 不 panic。
+fn append_paradox_jsonl_at(
+    path: &std::path::Path,
+    ratio: f64,
+    cost_index: f64,
+    gain_index: f64,
+    threshold: f64,
+    session_id: Option<&str>,
+) {
+    use std::io::Write as _;
+
+    let record = serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "session_id": session_id,
+        "ratio": ratio,
+        "cost_index": cost_index,
+        "gain_index": gain_index,
+        "threshold": threshold,
+        "severity": "paradox",
+    });
+
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            warn!(
+                error = %e,
+                path = %path.display(),
+                "追加推理悖论 JSONL 失败（打开）"
+            );
+            return;
+        }
+    };
+    if let Err(e) = writeln!(file, "{record}") {
+        warn!(
+            error = %e,
+            path = %path.display(),
+            "追加推理悖论 JSONL 失败（写入）"
+        );
+    }
 }
 
 /// 效率监控器 — 整合采集器、告警引擎与事件总线
@@ -128,6 +213,11 @@ impl EfficiencyMonitor {
     /// - `check_alerts` 触发的规则告警会发布 `EfficiencyAlertTriggered` 事件
     /// - `start_event_subscriber` 可启动后台订阅循环
     pub fn with_event_bus(config: MonitorConfig, bus: EventBus) -> Self {
+        // P1-T12 示范接入(灰度验证「公共 API 零感知」):
+        // EfficiencyAlertTriggered 等非 Critical 事件走分片扇出(worker 汇入
+        // 既有 broadcast,订阅者 API 零变化);无 tokio runtime 时 enable_sharding
+        // 返回 Err,let _ 忽略即降级单流(零回归,与分片默认关闭语义一致)
+        let _ = bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
         let oscillation_detector = Self::create_oscillation_detector(&config);
         Self {
             config,
@@ -181,7 +271,10 @@ impl EfficiencyMonitor {
         if let NexusEvent::CoordinationRatioReported {
             is_paradox_risk,
             ratio,
+            cost_index,
+            gain_index,
             threshold,
+            metadata,
             ..
         } = event
         {
@@ -189,6 +282,14 @@ impl EfficiencyMonitor {
                 self.collectors
                     .record_alert(AlertSeverity::Warning.as_str());
                 self.publish_paradox_risk_alert(*ratio, *threshold);
+                // 方向 E:通知之外的可检索 JSONL 落盘(append-only,失败仅 warn)
+                append_paradox_jsonl(
+                    *ratio,
+                    *cost_index,
+                    *gain_index,
+                    *threshold,
+                    metadata.correlation_id.as_deref(),
+                );
             }
         }
     }
@@ -1509,5 +1610,44 @@ mod tests {
         };
         let detector = EfficiencyMonitor::create_oscillation_detector(&config);
         assert_eq!(detector.config().window.as_secs(), 200);
+    }
+
+    // ============================================================
+    // 方向 E:推理悖论可检索 JSONL 落盘测试
+    // ============================================================
+
+    #[test]
+    fn test_append_paradox_jsonl_writes_parseable_record() {
+        // 向指定临时路径追加 JSONL,首行应是 serde_json 可解析、字段齐全的对象
+        // （路径经函数参数注入,不在真实 home 写文件;crate 顶层 forbid(unsafe_code),
+        //   不通过 env 变更测试 CHIMERA_PARADOX_LOG 覆盖,env 读取逻辑同照 append 路径）
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "paradox_test_{}_{}.jsonl",
+            std::process::id(),
+            unique
+        ));
+
+        append_paradox_jsonl_at(&path, 1.5, 0.9, 0.6, 1.0, Some("sess-1"));
+        assert!(path.exists(), "JSONL 文件应被创建");
+
+        let content = std::fs::read_to_string(&path).expect("读取 JSONL 失败");
+        let first_line = content.lines().next().expect("至少应有一行记录");
+
+        let record: serde_json::Value =
+            serde_json::from_str(first_line).expect("首行应为可解析 JSON");
+        assert_eq!(record["severity"], "paradox");
+        assert_eq!(record["session_id"], "sess-1");
+        assert!((record["ratio"].as_f64().unwrap() - 1.5).abs() < 1e-9);
+        assert!((record["cost_index"].as_f64().unwrap() - 0.9).abs() < 1e-9);
+        assert!((record["gain_index"].as_f64().unwrap() - 0.6).abs() < 1e-9);
+        assert!((record["threshold"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+        assert!(record["timestamp"].is_string());
+
+        // 清理临时文件
+        let _ = std::fs::remove_file(&path);
     }
 }

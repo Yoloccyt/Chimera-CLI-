@@ -1,0 +1,165 @@
+# Chimera CLI 性能红线单一真值源（RL + SLO）
+#
+# 权威消费者：scripts/check_perf_redlines.py（唯一逻辑实现）。
+# check_perf_redlines.ps1 / .sh 仅为其薄包装，不得内嵌任何表体。
+# 迁移来源：scripts/check_perf_redlines.ps1 的 $redlines / $sloRedlines（2026-08-31 机械抽取）。
+#
+# 字段语义：
+#   [[redline]]  静态 lint 三项子检查（文件存在 / fn 存在 / 阈值标记存在）；
+#                threshold =  表示 spec-only 红线（第 3 项降级为 WARN，不计 FAIL）。
+#   [[slo]]      实跑型 SLO 断言（Part 2 语义）；redline_sec = 0.8 * slo_sec（80% 宽松门）。
+
+[[redline]]
+id = "RL-01"
+name = "window_select <1ms"
+file = "crates/chimera-mas/benches/mas_benchmark.rs"
+func = "bench_window_select"
+threshold = "1ms"
+
+[[redline]]
+id = "RL-02"
+name = "mlc_l2_knn <5ms"
+file = "crates/chimera-mas/benches/mas_benchmark.rs"
+func = "bench_mlc_l2_knn_top10_4096"
+threshold = "5ms"
+
+[[redline]]
+id = "RL-03"
+name = "decay <1us"
+file = "crates/decay-engine/benches/decay_bench.rs"
+func = "single_decay_step_latency"
+threshold = ""
+
+[[redline]]
+id = "RL-04"
+name = "wiki_knn @1000 <10ms"
+file = "crates/repo-wiki/benches/vector_bench.rs"
+func = "single_thread_knn_latency"
+threshold = "LARGE_SIZE"
+
+[[redline]]
+id = "RL-05"
+name = "wiki_knn @10K p95<50ms"
+file = "crates/repo-wiki/tests/hnsw_p95_test.rs"
+func = "test_hnsw_10k_p95_below_50ms"
+threshold = "P95_THRESHOLD_MS"
+
+[[redline]]
+id = "RL-06"
+name = "wiki_knn @100K p95<50ms"
+file = "crates/repo-wiki/tests/hnsw_p95_test.rs"
+func = "test_hnsw_100k_p95_below_50ms"
+threshold = "ENTRY_COUNT_100K"
+
+[[redline]]
+id = "RL-07"
+name = "membrane delivery p95<10ms"
+file = "crates/event-bus/benches/membrane_delivery_bench.rs"
+func = "membrane_e2e_delivery"
+threshold = "10ms"
+
+[[redline]]
+id = "RL-08"
+name = "50agent_mem_peak <=130MB"
+file = "crates/chimera-mas/benches/mas_benchmark.rs"
+func = "bench_50agent_mem_peak"
+threshold = "130"
+
+[[redline]]
+id = "RL-09"
+name = "linucb 40arm select p99<50us"
+file = "crates/omega-learner/benches/linucb_select.rs"
+func = "bench_s9_route_40arm_select"
+threshold = "P99_TARGET_US"
+
+[[redline]]
+id = "RL-10"
+name = "cost_estimate <1us"
+file = "crates/mca-gateway/benches/mca_hot_paths.rs"
+func = "bench_cost_estimate"
+threshold = "COST_ESTIMATE_TARGET_US"
+
+[[redline]]
+id = "RL-11"
+name = "sse normalize <5us/event"
+file = "crates/mca-gateway/benches/mca_hot_paths.rs"
+func = "bench_sse_normalize"
+threshold = "SSE_EVENT_TARGET_US"
+
+[[slo]]
+name = "window_select"
+crate = "hcw-window"
+bench_file = "window_select"
+filter = "window_select/"
+slo_sec = 0.001000000
+redline_sec = 0.000800000
+unit = "ms"
+slo_display = "1ms"
+redline_display = "0.8ms"
+
+[[slo]]
+name = "mlc_l2_knn"
+crate = "mlc-engine"
+bench_file = "mlc_l2_knn"
+filter = "bench_l2_knn_slo_assert"
+slo_sec = 0.005000000
+redline_sec = 0.004000000
+unit = "ms"
+slo_display = "5ms"
+redline_display = "4ms"
+
+[[slo]]
+name = "decay_compute"
+crate = "decay-engine"
+bench_file = "decay_compute"
+filter = "single_decay_by_profile"
+slo_sec = 0.000001000
+redline_sec = 0.000000800
+unit = "us"
+slo_display = "1us"
+redline_display = "0.8us"
+
+[[slo]]
+name = "wiki_knn_100k"
+crate = "repo-wiki"
+bench_file = "wiki_knn_slo"
+filter = "wiki_knn_100k_p95"
+slo_sec = 0.050000000
+redline_sec = 0.040000000
+unit = "ms"
+slo_display = "50ms"
+redline_display = "40ms"
+
+[[slo]]
+name = "immune_probe"
+crate = "chimera-mas"
+bench_file = "immune_probe"
+filter = "bench_assess_paradox_risk"
+slo_sec = 0.100000000
+redline_sec = 0.080000000
+unit = "ms"
+slo_display = "100ms"
+redline_display = "80ms"
+
+[[slo]]
+name = "rhi_judge"
+crate = "auto-dpo"
+bench_file = "rhi_judge"
+filter = "rhi_judge_latency"
+slo_sec = 2.000000000
+redline_sec = 1.600000000
+unit = "s"
+slo_display = "2s"
+redline_display = "1.6s"
+
+[[slo]]
+name = "linucb_40arm"
+crate = "omega-learner"
+bench_file = "linucb_select"
+filter = "select_arm_40arms_6dim_s9route"
+slo_sec = 0.000050000
+redline_sec = 0.000040000
+unit = "us"
+slo_display = "50us"
+redline_display = "40us"
+

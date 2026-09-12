@@ -33,6 +33,28 @@ impl TuiApp {
         self.fps_counter.last_frame_time = now;
         self.update_fps(delta);
 
+        // P-2:每帧重置状态栏区域记录 —— 只有本帧真实渲染了状态栏才会被置回
+        // Some(区域);SinglePane / 命令面板占底等无状态栏布局保持 None,
+        // 静默帧复用路径据此决定是否重绘状态行(避免向未渲染区域写入)。
+        self.status_bar_area = None;
+
+        // U-2(2026-09-06 复评):Help 面板上下文快捷键接线 —— 焦点变化时
+        // 才重建快照(避免每帧 Vec 分配),HelpPanel::render 据此渲染
+        // "面板专属快捷键"章节(此前恒传空切片,上下文感知是死功能)。
+        // WHY 跳过 Help 自身:切到 Help 的瞬间焦点已是 Help,若照常覆盖,
+        // 章节会退化为 Help 自己的空快捷键;保持"上一个非 Help 面板"语义
+        // (从哪个面板来,就显示哪个面板的快捷键)。
+        let focused = self.focus_manager.focused();
+        if focused != PanelId::Help
+            && self.state.help_context.as_ref().map(|(id, _)| *id) != Some(focused)
+        {
+            let shortcuts = self
+                .panel_index(focused)
+                .map(|i| self.panels[i].shortcuts())
+                .unwrap_or_default();
+            self.state.help_context = Some((focused, shortcuts));
+        }
+
         // Concord W3 T3.2:会话模式为第一默认视图(ADR-076);会话流全屏 +
         // composer 底栏 + statusline,不走 Dashboard 三块布局。
         if self.state.view_mode == crate::types::ViewMode::Chat {
@@ -92,7 +114,7 @@ impl TuiApp {
         }
 
         // statusline:复用 Dashboard 状态栏(面板/tick/FPS/状态消息同源)
-        self.render_status_bar(frame, parts.status);
+        self.render_status_bar(frame.buffer_mut(), parts.status);
 
         // Concord W3 T3.3:会话流内嵌卡片——复盘卡优先(失败告警),
         // 否则计划卡;附着于会话流区底部(先 Clear 再绘,不遮 composer)
@@ -172,7 +194,7 @@ impl TuiApp {
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(1), Constraint::Length(1)])
                 .split(chunks[2]);
-            self.render_status_bar(frame, bottom_split[0]);
+            self.render_status_bar(frame.buffer_mut(), bottom_split[0]);
             self.render_hint_bar(frame, bottom_split[1]);
         }
 
@@ -238,7 +260,10 @@ impl TuiApp {
                     crate::engine::layout::Constraint::Fixed(1),
                 ],
             );
-            self.render_status_bar(frame, crate::engine::to_ratatui_rect(bottom_parts[0]));
+            self.render_status_bar(
+                frame.buffer_mut(),
+                crate::engine::to_ratatui_rect(bottom_parts[0]),
+            );
             self.render_hint_bar(frame, crate::engine::to_ratatui_rect(bottom_parts[1]));
         }
 
@@ -564,7 +589,20 @@ impl TuiApp {
     }
 
     /// 渲染状态栏
-    fn render_status_bar(&self, frame: &mut Frame<'_>, area: ratatui::layout::Rect) {
+    /// 渲染底部状态栏(P4.4:面板/节拍/帧率/状态消息/审批徽标)
+    ///
+    /// P-1/P-2(2026-09-06 评估):改为直接写 Buffer 并记录实际渲染区域到
+    /// `status_bar_area` —— 静默帧复用路径据此对状态行做字节级同源重绘
+    /// (Dashboard h-2 / Chat statusline h-1 / SinglePane 不渲染保持 None),
+    /// 替代原先硬编码 h-2 导致的 Chat 静默期 statusline 冻结。
+    /// WHY &mut self:status_bar_area 是跨帧字段,仅在真实全量渲染路径更新。
+    /// pub(crate):静默帧复用路径(event_loop::render_frame_v3)需要重绘状态行。
+    pub(crate) fn render_status_bar(
+        &mut self,
+        buf: &mut ratatui::buffer::Buffer,
+        area: ratatui::layout::Rect,
+    ) {
+        self.status_bar_area = Some(area);
         let (status, fg) = match &self.state.status_message {
             Some((msg, severity)) => (
                 format!(
@@ -581,7 +619,7 @@ impl TuiApp {
             ),
             None => (
                 format!(
-                    " {}: {} | {}: {} | {}: {} | {}: {} | {}: {:.0}% ",
+                    " {}: {} | {}: {} | {}: {} | {}: {} | {}: {} ",
                     crate::t!("status.panel"),
                     self.current_panel().as_str(),
                     crate::t!("status.tick"),
@@ -592,7 +630,7 @@ impl TuiApp {
                     self.state.frame_count,
                     crate::t!("status.ratio"),
                     // Task 1.15.4:main_panel_ratio 经 getter 方法读取(委托 pane_manager)
-                    self.main_panel_ratio() * 100.0
+                    crate::render::percent_summary(self.main_panel_ratio())
                 ),
                 Color::Black,
             ),
@@ -621,7 +659,7 @@ impl TuiApp {
         );
         let line = Line::from(vec![span, badge]);
         let paragraph = Paragraph::new(line);
-        frame.render_widget(paragraph, area);
+        paragraph.render(area, buf);
     }
 
     /// 渲染键盘快捷提示栏

@@ -1,14 +1,14 @@
-//! Task 3.5: L5 Knowledge 协同 — DagVizPanel 谱系 DAG 快照集成测试
+//! DagVizPanel 集成测试
 //!
-//! 验证 DagVizPanel 调用 `gsoe_evolution::spec_dag_snapshot()` 显示
-//! 谱系 DAG 节点/边计数,实现 L10 Panel ↔ L5 Knowledge 真实数据闭环。
+//! PS-2 批次3 起:DagVizPanel 不再直调 `gsoe_evolution::spec_dag_snapshot()`
+//! (该全局在生产装配面恒空 → 恒显示 "0 nodes, 0 edges",属假数据)。
+//! 现改为**诚实标注未接线**;本测试守护"不再渲染失效计数"这一新契约。
 
 #![forbid(unsafe_code)]
 
 use chimera_tui::{
     DataSnapshot, DataSourceConfig, PanelId, TuiApp, TuiConfig, TuiDataSource, TuiError,
 };
-use gsoe_evolution::spec_dag_snapshot;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
@@ -52,8 +52,10 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
 }
 
 #[test]
-fn test_dag_viz_panel_displays_spec_dag() {
-    // 验证面板渲染包含 spec_dag_snapshot() 返回的节点/边计数
+fn test_dag_viz_panel_shows_unwired_marker_instead_of_dead_counts() {
+    // PS-2 批次3:GSOE 谱系图在生产装配面从未实例化(SPEC_DAG 恒空),
+    // 故不再渲染 "Spec DAG: N nodes, M edges" —— 那是**假数据**
+    // (语义误导为"无规范"而非"未接线")。改为诚实标注。
     let snapshot = DataSnapshot::default();
     let mut app = TuiApp::with_data_source(
         TuiConfig {
@@ -68,25 +70,14 @@ fn test_dag_viz_panel_displays_spec_dag() {
     app.switch_panel_to(PanelId::DagViz);
 
     let content = render_to_string(&mut app, 80, 30);
-    // 面板应包含 "Spec DAG:" 行(谱系 DAG 快照)
     assert!(
-        content.contains("Spec DAG:"),
-        "面板应显示谱系 DAG 快照,实际内容全文:\n{}",
+        !content.contains("nodes") && !content.contains("edges"),
+        "不得再渲染失效的 DAG 计数行,实际内容全文:\n{}",
         content
     );
     assert!(
-        content.contains("nodes"),
-        "面板应显示节点计数,实际内容前 500 字符: {}",
-        &content[..content.len().min(500)]
+        content.contains("DAG"),
+        "面板仍应保留 DAG 区块标识,实际内容全文:\n{}",
+        content
     );
-    assert!(
-        content.contains("edges"),
-        "面板应显示边计数,实际内容前 500 字符: {}",
-        &content[..content.len().min(500)]
-    );
-
-    // 验证 gsoe_evolution::spec_dag_snapshot() 默认返回空快照
-    let snapshot = spec_dag_snapshot();
-    assert!(snapshot.nodes.is_empty(), "默认节点列表应为空");
-    assert!(snapshot.edges.is_empty(), "默认边列表应为空");
 }

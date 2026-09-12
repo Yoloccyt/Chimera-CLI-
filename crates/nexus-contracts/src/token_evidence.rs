@@ -28,6 +28,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::graph_identity::GraphIdentity;
+
 // ============================================================
 // 工具调用记录
 // ============================================================
@@ -92,6 +94,16 @@ pub struct TokenLedgerEntry {
     pub moe_routing: Option<Vec<Vec<u32>>>,
     /// 时间戳（Unix 毫秒）
     pub timestamp: u64,
+    /// 图身份三元组（WI-04 GIP）— 按 Goal/run/node 聚合成本瀑布
+    ///
+    /// WHY Option + builder: `new` 签名不变（零回归），带身份条目经
+    /// [`TokenLedgerEntry::with_graph_identity`] 消费式构建；`None` 条目
+    /// 在账本聚合层计入"无身份事件"（WI-04 验收: 成本归因覆盖率目标 100%）。
+    ///
+    /// WHY 不 skip_serializing_if: rmp-serde 使用 array 位置编码（ADR-004），
+    /// 跳过字段导致反序列化长度不匹配（invalid length 12, expected 13）；
+    /// Option 缺失字段反序列化自动 None（serde 默认），兼容性由 Option 语义保证。
+    pub graph_identity: Option<GraphIdentity>,
 }
 
 impl TokenLedgerEntry {
@@ -139,7 +151,18 @@ impl TokenLedgerEntry {
             tool_calls,
             moe_routing,
             timestamp,
+            graph_identity: None,
         }
+    }
+
+    /// 消费式挂载图身份（WI-04 GIP）
+    ///
+    /// # WHY
+    /// 保持 `new` 签名不变（向后兼容既有调用方），带身份条目经本方法
+    /// 链式构建：`TokenLedgerEntry::new(...).with_graph_identity(gi)`。
+    pub fn with_graph_identity(mut self, gi: GraphIdentity) -> Self {
+        self.graph_identity = Some(gi);
+        self
     }
 
     /// 输出 token 数量（证据完整性便捷访问）

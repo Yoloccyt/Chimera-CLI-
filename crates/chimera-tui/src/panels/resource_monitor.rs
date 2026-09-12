@@ -194,7 +194,14 @@ impl ResourceMonitorPanel {
         } else {
             ""
         };
-        let title = format!(" CPU: {:.1}%{} ", cpu.global_usage, paused_tag);
+        let title = format!(
+            " CPU: {}{} ",
+            crate::render::percent_from_value(
+                cpu.global_usage,
+                crate::render::PERCENT_PRECISION_DETAIL
+            ),
+            paused_tag
+        );
         let title_span = Span::styled(
             &title,
             Style::default()
@@ -287,8 +294,13 @@ impl ResourceMonitorPanel {
         let total_gb = mem.total_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
         let used_gb = mem.used_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
         let title = format!(
-            " RAM: {:.1}/{:.1} GB ({:.1}%) ",
-            used_gb, total_gb, mem.usage_percent
+            " RAM: {:.1}/{:.1} GB ({}) ",
+            used_gb,
+            total_gb,
+            crate::render::percent_from_value(
+                mem.usage_percent,
+                crate::render::PERCENT_PRECISION_DETAIL
+            )
         );
         let style = Style::default()
             .fg(Self::mem_color(mem.usage_percent))
@@ -356,14 +368,10 @@ impl ResourceMonitorPanel {
     }
 
     fn mem_color(usage: f32) -> Color {
-        // 边界 70/90 与 `ThresholdLevel` 一致(spec 阈值告警)
-        if usage >= 90.0 {
-            Color::Red
-        } else if usage >= 70.0 {
-            Color::Yellow
-        } else {
-            Color::Green
-        }
+        // U-6:70/90 边界的**事实源**是 `ThresholdLevel::classify`
+        // (resource_history.rs,spec 阈值告警)—— 此处不再写死字面量,
+        // 阈值调整单点生效,杜绝两处漂移。
+        ThresholdLevel::classify(usage).color()
     }
 
     // ============================================================
@@ -457,6 +465,17 @@ impl ResourceMonitorPanel {
 }
 
 impl Panel for ResourceMonitorPanel {
+    // PS-3(I-4):实现 gg/G —— 本面板有 4 项选中态(selected 0..3,
+    // 含 collapsed 折叠交互),此前走默认空实现,gg/G 静默无响应。
+    fn scroll_to_top(&mut self, _state: &mut TuiState) {
+        self.selected = 0;
+    }
+
+    fn scroll_to_bottom(&mut self, _state: &mut TuiState) {
+        // 4 个资源区块固定为 0..3(见 handle_key 的 `selected < 3` 边界),末项恒为 3。
+        self.selected = 3;
+    }
+
     fn id(&self) -> PanelId {
         PanelId::ResourceMonitor
     }
@@ -494,6 +513,12 @@ impl Panel for ResourceMonitorPanel {
     }
 
     fn render(&mut self, state: &TuiState, area: Rect, buf: &mut Buffer) {
+        // PS-2 U-4:退化尺寸统一早退(共享最低线,见 crate::panels::MIN_PANEL_W/H)
+        if crate::panels::degenerate(area) {
+            crate::panels::render_too_small(area, buf);
+            return;
+        }
+
         let sys = &state.sys_metrics;
 
         // 计算各区域约束:折叠区 1 行,展开区等分剩余
@@ -769,5 +794,24 @@ mod tests {
         // 不应 panic,不改变状态
         assert_eq!(panel.selected, 0);
         assert!(panel.collapsed.is_empty());
+    }
+
+    // ========================================================
+    // PS-3(I-4):gg/G 必须到达首/末区块(此前默认空实现,静默无响应)
+    // ========================================================
+
+    #[test]
+    fn gg_g_reach_first_and_last_section() {
+        let mut panel = ResourceMonitorPanel::new();
+        let mut state = TuiState::new();
+
+        // 模拟用户已下移到中间区块,gg 应回首
+        panel.selected = 2;
+        panel.scroll_to_top(&mut state);
+        assert_eq!(panel.selected, 0, "gg should land on first section (idx 0)");
+
+        // G 应到达末区块(4 区块固定 0..3,见 handle_key 的 `selected < 3` 边界)
+        panel.scroll_to_bottom(&mut state);
+        assert_eq!(panel.selected, 3, "G should land on 4th section (idx 3)");
     }
 }

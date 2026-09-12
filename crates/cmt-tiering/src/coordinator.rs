@@ -81,6 +81,10 @@ impl CmtCoordinator {
     /// 会自动打开 Warm/Cold/Ice 层的持久化存储(路径从 config 读取,展开 `~`)
     pub fn new(config: CmtConfig, event_bus: EventBus) -> Result<Self, CmtError> {
         config.validate()?;
+        // P5-T2 分片扩量批次 2（ADR-153 Go 续批）:
+        // CapabilityTiered 高频非 Critical 事件→ 分片扇出;
+        // 幂等 + 无 runtime 时 Err 降级回单流（零回归,P1-T12 先例）
+        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
         let decay = Arc::new(DecayCalculator::from_config(&config)?);
 
         // 展开 `~` 并打开 Warm 层 SQLite 数据库

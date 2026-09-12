@@ -1,0 +1,25 @@
+   Compiling gsoe-evolution v2.28.0-omega (D:\Chimera CLI\crates\gsoe-evolution)
+   Compiling chimera-mas v2.28.0-omega (D:\Chimera CLI\crates\chimera-mas)
+   Compiling faae-router v2.28.0-omega (D:\Chimera CLI\crates\faae-router)
+   Compiling parliament v2.28.0-omega (D:\Chimera CLI\crates\parliament)
+warning: variable does not need to be mutable
+   --> crates\faae-router\src\router.rs:200:13
+    |
+200 |         let mut scored: Vec<(ToolId, f32)> = crate::parallel::score_experts_batch(
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `faae-router` (lib) generated 1 warning (run `cargo fix --lib -p faae-router` to apply 1 suggestion)
+   Compiling gea-activator v2.28.0-omega (D:\Chimera CLI\crates\gea-activator)
+   Compiling chimera-tui v2.28.0-omega (D:\Chimera CLI\crates\chimera-tui)
+   Compiling sesa-router v2.28.0-omega (D:\Chimera CLI\crates\sesa-router)
+warning: `faae-router` (lib test) generated 1 warning (1 duplicate)
+   Compiling chimera-cli v2.28.0-omega (D:\Chimera CLI\crates\chimera-cli)
+   Compiling chimera-e2e-tests v2.28.0-omega (D:\Chimera CLI)
+rustc-LLVM ERROR: IO failure on output stream: No space left on device
+error: could not compile `chimera-cli` (bin "chimera" test)
+
+Caused by:
