@@ -1,0 +1,60 @@
+# 逐 crate 行覆盖率下界（消费者：scripts/coverage_gate.py --check / --validate-config）
+#
+# 归因：tarpaulin JSON 的 filename/full_path 前缀 `crates/<name>/` → 该 crate
+#       （路径前缀法，不依赖 tarpaulin 包级字段，跨版本稳）。
+# 语义：
+#   [defaults].floor  —— 未在下方 [[crate]] 显式列出的 workspace 成员的下界。
+#   [[crate]]         —— 关键 crate 显式抬高下界（tier=critical 的退化在 step summary 单列）。
+#   exempt            —— 不参与"零记录必红(V2)"判定的成员（如纯聚合/无 src 的包）。
+# 棘轮纪律：floor **只升不降**（下调须 ADR，同 ADR-160 freeze 只收缩语义）。
+#
+# 校准状态：本文件为首版；coverage nightly 首次真实测量后，须把 defaults.floor 与
+#   各 [[crate]].floor 抬到"实测 - 3~5pp"附近（登记 RK-P45），禁止长期停在兜底值 45。
+
+[defaults]
+floor = 45
+exempt = []
+
+# --- 关键 crate 显式下界（红线载体，聚合达标不许掩盖此处裸奔） ---
+
+[[crate]]
+name = "event-bus"
+floor = 55
+tier = "critical"
+adr = "ADR-160"
+reason = "双通道/背压/Critical mpsc 是 §6.2 红线载体"
+
+[[crate]]
+name = "seccore"
+floor = 60
+tier = "critical"
+adr = "ADR-033"
+reason = "UNLEARNABLE_SECURITY_RULES 6 条的执行体 + 沙箱/审计链"
+
+[[crate]]
+name = "parliament"
+floor = 55
+tier = "critical"
+adr = "ADR-049"
+reason = "SHARP 信用分配/共识安全/关键路径识别，Ω₅/Ω₇ 落点"
+
+[[crate]]
+name = "quest-engine"
+floor = 55
+tier = "critical"
+adr = "ADR-026"
+reason = "LHQP 检查点/TTG 生命周期，跨层 E2E 状态源"
+
+[[crate]]
+name = "nexus-core"
+floor = 50
+tier = "critical"
+adr = "ADR-033"
+reason = "CLV/领域类型/ComputeBridge 底座，被全 43 crate 依赖"
+
+[[crate]]
+name = "chimera-cli"
+floor = 45
+tier = "composition-root"
+adr = "ADR-177"
+reason = "组合根：C1/C12 新装配代码必须落在这里，否则覆盖率门对新增面无牙"

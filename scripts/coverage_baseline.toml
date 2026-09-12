@@ -1,0 +1,25 @@
+# 行覆盖率水位（唯一消费者：`scripts/coverage_gate.py`；coverage.yml 经
+# `coverage_gate.py --print-fail-under` 取数，不再在 workflow 里写死数字）。
+#
+# 语义：
+#   min_line_coverage    —— 聚合行覆盖率下限，由 coverage_gate.py --check 判定（测量引擎：cargo-llvm-cov），低于即红。
+#   target_line_coverage —— 治理目标（OMEGA 覆盖率基线），达到后 min 与 target 应相等。
+#   buffer_pp            —— 校准缓冲：把 min 抬到"实测 - buffer_pp"个百分点（期望 3..5）。
+#   floor_file           —— 逐 crate 下界表（治"聚合达标但单模块裸奔"）。
+#
+# 棘轮纪律：min_line_coverage **只升不降**（下调须 ADR；由 coverage_gate.py
+#   --validate-config 用 git 历史机械强制，无提交基线时棘轮自动待命）。
+#
+# 历史与效力恢复：2026-09-01 建立本文件时，全库尚无一次"阈值真正生效"的测量
+#   （旧 coverage.yml 有 --fail-under 85 但 job 级 continue-on-error: true，结论被丢弃
+#   ⇒ RK-P45）。WS-B 去掉 continue-on-error 并把测量引擎换为 cargo-llvm-cov（避开第三方
+#   pulp 在 tarpaulin 插桩下的 E0080 编译崩溃）。2026-09-05 CI 首跑实测：聚合行覆盖率
+#   **92.97%**（43/43 成员、718 文件、逐 crate floor 全过）——已超 target 85。
+#   故将 min 由占位 50 抬到 **85**（= target，实测下留 ~8pp 冗余；受 min≤target 约束，
+#   工具建议的 87 因 >target 不采）。后续棘轮只升不降。
+
+[coverage]
+min_line_coverage = 85
+target_line_coverage = 85
+buffer_pp = 5
+floor_file = "scripts/coverage_per_crate_floor.toml"
