@@ -29,6 +29,9 @@ use event_bus::{ChatStatus, EventBus, EventBusError, EventMetadata, NexusEvent};
 use nexus_core::{MultimodalInput, Quest, UserIntent};
 use quest_engine::{QuestEngine, QuestError};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
 
 /// 事件来源标识(发布回发事件时写入 `EventMetadata.source`)
 const SOURCE: &str = "chimera-cli";
@@ -108,15 +111,35 @@ async fn stream_quest(
 
     // 2. 真实 L9 分解:query → UserIntent → Quest(create_quest 内部广播 QuestCreated,
     //    经同一 bus 点亮 Quest 面板)。失败则回发可读错误文本。
+    //    M2:create_quest 经 call_with_budget 注入本层超时(120s,对齐
+    //    mca-gateway per-endpoint 口径)+ CancellationToken;超时发
+    //    OperationTimedOut 事件(经同一 bus),回复文本明示失败(不静默)。
+    //    token 为新建未触发令牌,预留 TUI 取消链路接线。
     let intent = UserIntent {
         intent_id: format!("intent-{sid}"),
         raw_text: query.to_string(),
         multimodal_inputs: vec![MultimodalInput::Text(query.to_string())],
         risk_level: 0,
     };
-    let reply = match engine.create_quest(intent).await {
-        Ok(quest) => build_quest_reply(&quest),
-        Err(e) => build_error_reply(&e),
+    let token = CancellationToken::new();
+    let reply = match call_with_budget(
+        engine.create_quest(intent),
+        DEFAULT_CALL_BUDGET,
+        &token,
+        "orchestrator.create_quest",
+        bus,
+    )
+    .await
+    {
+        Ok(Ok(quest)) => build_quest_reply(&quest),
+        Ok(Err(e)) => build_error_reply(&e),
+        Err(CallBudgetError::Timeout {
+            operation_id,
+            budget_ms,
+        }) => format!("需求分解超时:{operation_id} 超过 {budget_ms}ms 未返回"),
+        Err(CallBudgetError::Cancelled { operation_id }) => {
+            format!("需求分解已取消:{operation_id}")
+        }
     };
 
     // 3. 逐字符流式回发分解结果
