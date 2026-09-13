@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use nexus_contracts::app::{AppEvent, AppOp};
 use thiserror::Error;
 
-use crate::protocol::{JsonRpcError, ProtocolError};
+use crate::protocol::{JsonRpcError, ProtocolError, RpcResponse};
 
 /// 传输错误 — 帧层 IO/编解码错误
 #[derive(Debug, Error)]
@@ -65,6 +65,24 @@ pub trait AppTransport: Send + Sync {
 
     /// 推送服务端事件（下行）
     async fn send_event(&self, ev: &AppEvent) -> Result<(), TransportError>;
+
+    /// 回送协议级错误帧 — 帧解码失败时的 JSON-RPC error response（架构方向 F-c 终章）
+    ///
+    /// # 默认实现（降级语义）
+    /// 不回帧、直接 `Ok(())`：错误回帧是 **best-effort**——主循环对解码失败的
+    /// 策略是「告警 + 继续等下一帧」，回帧失败/不支持都不应终止会话。
+    /// 需要真实回帧能力的实现（如 [`StdinTransport`]）覆写本方法。
+    ///
+    /// WHY 默认方法而非必需方法:`SseConnection` 为单向推送（recv 恒 `Eof`，
+    /// 无请求上下文可关联）、`MockTransport` 等测试桩无需空壳实现——
+    /// 默认实现让未覆写者自动获得安全的降级行为。
+    ///
+    /// # 参数
+    /// - `error`: 帧解码错误（含 JSON-RPC `code`：-32700 解析 / -32601 无效请求）
+    async fn send_decode_error(&self, error: &JsonRpcError) -> Result<(), TransportError> {
+        let _ = error;
+        Ok(())
+    }
 }
 
 /// stdio 传输 — NDJSON 行帧（每行一帧）
@@ -121,6 +139,31 @@ impl AppTransport for StdinTransport {
         use tokio::io::AsyncWriteExt;
         // `?` 经 `#[from] ProtocolError` 自动转换:阶段分类与 serde_json source 链均保留
         let frame = crate::protocol::RpcCodec::encode_notification(ev)?;
+        let mut writer = self.writer.lock().await;
+        writer.write_all(frame.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await?;
+        Ok(())
+    }
+
+    /// 覆写错误回帧 — stdio 通道写 JSON-RPC error response 行
+    ///
+    /// # id=0 约定
+    /// 解码失败时请求 id **不可知**（帧未成功解析）。JSON-RPC 2.0 规范对
+    /// parse error 用 `id: null`，但本协议的 [`RpcResponse::id`] 为 `u64`
+    /// （非 Option，wire 形态不变更）——约定 **id=0 表示「无法关联请求」**
+    /// （客户端合法 id 自 1 起，protocol_client 侧对未知 id 的响应按
+    /// 「丢弃/日志」宽容处理，不会误关联）。
+    async fn send_decode_error(&self, error: &JsonRpcError) -> Result<(), TransportError> {
+        use tokio::io::AsyncWriteExt;
+        // NDJSON error response 行:{"jsonrpc":"2.0","id":0,"result":null,"error":{...}}
+        let frame = serde_json::to_string(&RpcResponse {
+            jsonrpc: "2.0".into(),
+            id: 0,
+            result: None,
+            error: Some(error.clone()),
+        })
+        .map_err(|e| TransportError::Payload { source: e })?;
         let mut writer = self.writer.lock().await;
         writer.write_all(frame.as_bytes()).await?;
         writer.write_all(b"\n").await?;

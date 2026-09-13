@@ -151,16 +151,24 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
 #[cfg(test)]
 pub(crate) mod testutil {
     use async_trait::async_trait;
-    use nexus_app_server::{AppTransport, TransportError};
+    use nexus_app_server::{AppTransport, JsonRpcError, TransportError};
     use nexus_contracts::app::{AppEvent, AppOp};
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
     /// 脚本化传输 mock：`recv_op` 依次弹出预置 `AppOp`，队列空返回 `Eof`；
     /// `send_event` 按事件 kind 记录标签供断言。无需真 stdio 即可驱动事件循环。
+    ///
+    /// F-c 终章扩展（2026-09-13）：支持注入**帧解码错误**（`recv_op` 优先弹出，
+    /// 模拟客户端发坏帧）并记录 `send_decode_error` 回帧的 code（供断言
+    /// serve/acp 主循环的协议完备性回帧行为）。
     pub(crate) struct MockTransport {
         pending: Mutex<VecDeque<AppOp>>,
         sent_kinds: Mutex<Vec<String>>,
+        /// 预置解码错误（recv_op 优先于 pending 弹出，模拟坏帧到达）
+        decode_errors: Mutex<VecDeque<JsonRpcError>>,
+        /// 已回送错误帧的 code 序列（供断言回帧行为）
+        sent_error_codes: Mutex<Vec<i32>>,
     }
 
     impl MockTransport {
@@ -168,6 +176,22 @@ pub(crate) mod testutil {
             Self {
                 pending: Mutex::new(ops.into_iter().collect()),
                 sent_kinds: Mutex::new(Vec::new()),
+                decode_errors: Mutex::new(VecDeque::new()),
+                sent_error_codes: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// 带解码错误注入的构造 — `recv_op` 先弹 `errors`（每次一个坏帧），
+        /// 耗尽后再弹 `ops`，两者皆空返回 `Eof`。
+        pub(crate) fn new_with_decode_errors(
+            ops: impl IntoIterator<Item = AppOp>,
+            errors: impl IntoIterator<Item = JsonRpcError>,
+        ) -> Self {
+            Self {
+                pending: Mutex::new(ops.into_iter().collect()),
+                sent_kinds: Mutex::new(Vec::new()),
+                decode_errors: Mutex::new(errors.into_iter().collect()),
+                sent_error_codes: Mutex::new(Vec::new()),
             }
         }
 
@@ -175,11 +199,20 @@ pub(crate) mod testutil {
         pub(crate) fn sent_kinds(&self) -> Vec<String> {
             self.sent_kinds.lock().unwrap().clone()
         }
+
+        /// 已回送错误帧的 JSON-RPC code 序列（供断言协议完备性回帧）。
+        pub(crate) fn sent_error_codes(&self) -> Vec<i32> {
+            self.sent_error_codes.lock().unwrap().clone()
+        }
     }
 
     #[async_trait]
     impl AppTransport for MockTransport {
         async fn recv_op(&self) -> Result<AppOp, TransportError> {
+            // 优先弹出预置解码错误（模拟客户端发坏帧;主循环应对其回错误帧）
+            if let Some(je) = self.decode_errors.lock().unwrap().pop_front() {
+                return Err(TransportError::Decode(je));
+            }
             self.pending
                 .lock()
                 .unwrap()
@@ -195,6 +228,15 @@ pub(crate) mod testutil {
                 _ => "other",
             };
             self.sent_kinds.lock().unwrap().push(tag.to_string());
+            Ok(())
+        }
+
+        /// 记录回帧的 code（供断言;真实回帧行为由 StdinTransport 覆写承载）
+        async fn send_decode_error(&self, error: &JsonRpcError) -> Result<(), TransportError> {
+            self.sent_error_codes
+                .lock()
+                .unwrap()
+                .push(error.code);
             Ok(())
         }
     }

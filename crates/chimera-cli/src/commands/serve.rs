@@ -64,6 +64,16 @@ async fn serve_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<
                 tracing::info!("chimera serve: 客户端断开（EOF），正常退出");
                 return Ok(());
             }
+            Err(TransportError::Decode(je)) => {
+                // 协议完备性(F-c 终章闭环):坏帧回 JSON-RPC 错误帧(code -32700/-32601),
+                // 客户端可感知自己的请求格式错误;坏帧不终止会话,继续等下一帧。
+                // 回帧失败(best-effort)仅告警,不影响主循环。
+                if let Err(send_err) = transport.send_decode_error(&je).await {
+                    tracing::warn!(error = %send_err, "chimera serve: 错误回帧发送失败");
+                }
+                tracing::warn!(error = %je, "chimera serve: 请求帧解码失败，已回错误帧，继续等待下一帧");
+                continue;
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "chimera serve: 传输错误，继续等待下一帧");
                 continue;
@@ -94,6 +104,7 @@ async fn serve_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<
 mod tests {
     use super::*;
     use crate::commands::testutil::MockTransport;
+    use nexus_app_server::JsonRpcError;
     use nexus_contracts::app::{AppOp, ThreadId, ThreadStartParams};
 
     #[test]
@@ -103,6 +114,8 @@ mod tests {
         assert_transport::<StdinTransport>();
     }
 
+    /// T-1：serve_loop 逐帧处理（ThreadStart→TurnSubmit）后遇 EOF 正常返回 Ok，
+    /// 且把 ThreadStart 产出事件经 send_event 推送（覆盖新增循环体与 EOF 退出，G7）。
     /// T-1：serve_loop 逐帧处理（ThreadStart→TurnSubmit）后遇 EOF 正常返回 Ok，
     /// 且把 ThreadStart 产出事件经 send_event 推送（覆盖新增循环体与 EOF 退出，G7）。
     /// TurnSubmit 用未知 thread 以顺带验证“处理失败不中断循环”的降级路径。
@@ -128,6 +141,34 @@ mod tests {
         assert!(
             kinds.iter().any(|k| k == "thread_started"),
             "serve_loop 应将 ThreadStart 事件推送到传输层；实际 kinds: {kinds:?}"
+        );
+    }
+
+    /// T-3（F-c 终章闭环）：坏帧到达 → serve_loop **回 JSON-RPC 错误帧**（code
+    /// -32700）→ 继续处理后续正常帧（坏帧不终止会话）。
+    #[tokio::test]
+    async fn serve_loop_replies_error_frame_on_bad_frame() {
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        let server = crate::composition::build_app_server(ctx);
+        // 第 1 帧 = 坏帧（parse_error, code -32700）；第 2 帧 = 正常 ThreadStart
+        let transport = MockTransport::new_with_decode_errors(
+            vec![AppOp::ThreadStart(ThreadStartParams::new("g1", "r1"))],
+            vec![JsonRpcError::parse_error()],
+        );
+        serve_loop(&server, &transport)
+            .await
+            .expect("坏帧后循环应继续至 EOF 正常退出");
+        // 回帧断言:code 语义保留(修复前 Decode(String) 丢失 code,无法回帧)
+        assert_eq!(
+            transport.sent_error_codes(),
+            vec![-32700],
+            "坏帧必须回 JSON-RPC 错误帧且 code 保留"
+        );
+        // 会话连续性:坏帧之后正常帧仍被处理
+        let kinds = transport.sent_kinds();
+        assert!(
+            kinds.iter().any(|k| k == "thread_started"),
+            "坏帧不得终止会话，后续正常帧应被处理；实际 kinds: {kinds:?}"
         );
     }
 }
