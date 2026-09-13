@@ -52,7 +52,7 @@ pub use protocol::{
 pub use server::{AppServer, AppServerConfig, BackendError, CoreBackend, ServerError, SessionSnapshot};
 pub use sse::{SseConnection, SseError, SseServer};
 pub use subagent_engine::SubAgentQuestEngine;
-pub use transport::{AppTransport, StdinTransport, TransportError};
+pub use transport::{AppTransport, IoTransport, StdinTransport, TransportError};
 
 /// 预导入模块 — 常用类型便捷导入
 pub mod prelude {

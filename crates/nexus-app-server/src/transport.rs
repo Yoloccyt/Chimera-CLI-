@@ -85,37 +85,76 @@ pub trait AppTransport: Send + Sync {
     }
 }
 
-/// stdio 传输 — NDJSON 行帧（每行一帧）
+/// 泛型 IO 传输 — NDJSON 行帧（每行一帧）
+///
+/// # 泛型化（架构方向 F-c 终章遗留,2026-09-13）
+/// reader/writer 可注入（`with_io`），解锁端到端协议测试：
+/// `Cursor<Vec<u8>>` 驱动真实 `recv_op` 错误路径与 `send_decode_error`
+/// 回帧 I/O（此前具体类型 `BufReader<Stdin>` 不可注入,端到端测试被阻塞）。
+///
+/// # 向后兼容
+/// `StdinTransport` 为 **类型别名**（`IoTransport<Stdin, Stdout>`）——
+/// 既有调用点（`serve.rs`/`acp.rs` 的 `StdinTransport::new()`）零改动。
 ///
 /// # 并发
 /// reader/writer 均经 `tokio::sync::Mutex` 包裹以满足 `Send + Sync`
 /// （BufReader/BufWriter 本身非 Sync）；读写分离双锁，互不阻塞。
+///
+/// # 边界说明
+/// `R` 用 `AsyncRead` 而非 `AsyncBufRead`:`Stdin` 只实现 `AsyncRead`,
+/// `AsyncBufRead` 由存储层的 `BufReader<R>` 提供(`R: AsyncRead` 时
+/// `BufReader<R>: AsyncBufRead`)。
 #[derive(Debug)]
-pub struct StdinTransport {
-    /// stdin 行缓冲读取器（Mutex 包裹满足 Sync）
-    reader: tokio::sync::Mutex<tokio::io::BufReader<tokio::io::Stdin>>,
-    /// stdout（行写 + flush，Mutex 包裹满足 Sync）
-    writer: tokio::sync::Mutex<tokio::io::BufWriter<tokio::io::Stdout>>,
+pub struct IoTransport<R, W>
+where
+    R: tokio::io::AsyncRead + Unpin + Send,
+    W: tokio::io::AsyncWrite + Unpin + Send,
+{
+    /// 行缓冲读取器(Mutex 包裹满足 Sync;`BufReader<R>` 提供 AsyncBufRead)
+    reader: tokio::sync::Mutex<tokio::io::BufReader<R>>,
+    /// 行写 + flush(Mutex 包裹满足 Sync)
+    writer: tokio::sync::Mutex<tokio::io::BufWriter<W>>,
 }
 
-impl StdinTransport {
-    /// 创建 stdio 传输
-    pub fn new() -> Self {
+/// stdio 默认形态(向后兼容别名;`new()`/`Default` 沿用)
+pub type StdinTransport = IoTransport<tokio::io::Stdin, tokio::io::Stdout>;
+
+impl<R, W> IoTransport<R, W>
+where
+    R: tokio::io::AsyncRead + Unpin + Send,
+    W: tokio::io::AsyncWrite + Unpin + Send,
+{
+    /// 注入自定义 reader/writer(测试用 `Cursor` 驱动端到端协议路径)
+    pub fn with_io(reader: R, writer: W) -> Self {
         Self {
-            reader: tokio::sync::Mutex::new(tokio::io::BufReader::new(tokio::io::stdin())),
-            writer: tokio::sync::Mutex::new(tokio::io::BufWriter::new(tokio::io::stdout())),
+            reader: tokio::sync::Mutex::new(tokio::io::BufReader::new(reader)),
+            writer: tokio::sync::Mutex::new(tokio::io::BufWriter::new(writer)),
         }
     }
 }
 
-impl Default for StdinTransport {
-    fn default() -> Self {
-        Self::new()
+impl StdinTransport {
+    /// 创建 stdio 传输(stdin/stdout 句柄直连)
+    ///
+    /// WHY 独立固有 impl 而非泛型 `new()`:`tokio::io::Stdin/Stdout` 不实现
+    /// `Default`,泛型 `new() where R: Default` 对 stdio 形态不可用——
+    /// stdio 专用构造放在 alias 的固有 impl 上,泛型形态一律走 `with_io`。
+    ///
+    /// WHY 无 Default impl(显式允许 clippy::new_without_default):
+    /// `Default` 要求 `Stdin: Default`(不成立);stdio 句柄是进程级资源
+    /// 连接,显式 `new()` 语义比隐式 `default()` 更准确。
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self::with_io(tokio::io::stdin(), tokio::io::stdout())
     }
 }
 
 #[async_trait]
-impl AppTransport for StdinTransport {
+impl<R, W> AppTransport for IoTransport<R, W>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + Sync,
+    W: tokio::io::AsyncWrite + Unpin + Send + Sync,
+{
     async fn recv_op(&self) -> Result<AppOp, TransportError> {
         let mut line = String::new();
         use tokio::io::AsyncBufReadExt;
@@ -313,5 +352,72 @@ mod tests {
             let err = TransportError::Decode(je);
             proptest::prop_assert!(err.to_string().contains(&message));
         }
+    }
+
+    // ========================================================
+    // F-c 终章遗留闭环:IoTransport 泛型化解锁的端到端测试(2026-09-13)
+    // ========================================================
+
+    /// 端到端:真实 I/O 下的「坏帧 → 解码错误(code 保留) → 合法帧成功 → EOF」
+    ///
+    /// WHY 此前不可行:`StdinTransport` 的 `BufReader<Stdin>` 不可注入,
+    /// 真实 decode 错误路径无法在测试中驱动;泛型化后 `Cursor` 直接注入。
+    #[tokio::test]
+    async fn recv_op_reports_decode_error_then_accepts_valid_frame() {
+        use nexus_contracts::app::ThreadStartParams;
+        // 第 1 行 = 坏帧;第 2 行 = 合法 ThreadStart 请求帧
+        let valid = RpcCodec::encode_request(
+            &AppOp::ThreadStart(ThreadStartParams::new("g1", "r1")),
+            7,
+        )
+        .expect("合法帧编码成功");
+        let input = format!("not json\n{valid}\n");
+        let transport = IoTransport::with_io(
+            std::io::Cursor::new(input.into_bytes()),
+            tokio::io::stdout(),
+        );
+        // 第一次:坏帧 → Decode 错误,code 保留(真实 I/O + 真实 decode 路径)
+        let err = transport.recv_op().await.expect_err("坏帧必须报错");
+        match &err {
+            TransportError::Decode(je) => assert_eq!(je.code, -32700, "code 语义保留"),
+            other => panic!("应为 Decode 变体, 实际: {other}"),
+        }
+        // 第二次:合法帧成功解析(坏帧消费后流位置正确推进)
+        let op = transport.recv_op().await.expect("合法帧必须成功");
+        assert!(
+            matches!(op, AppOp::ThreadStart(_)),
+            "第二帧应为合法 ThreadStart"
+        );
+        // 第三次:流耗尽 → EOF
+        assert!(matches!(
+            transport.recv_op().await,
+            Err(TransportError::Eof)
+        ));
+    }
+
+    /// 端到端:send_decode_error 经真实 writer 写出**可解析的错误响应行**
+    /// (上批遗留「真实回帧行为以单元级保证」的闭环——I/O 路径现已受测)。
+    #[tokio::test]
+    async fn send_decode_error_writes_parseable_frame() {
+        let transport = IoTransport::with_io(
+            std::io::Cursor::new(Vec::new()),
+            Vec::new(),
+        );
+        transport
+            .send_decode_error(&JsonRpcError::parse_error())
+            .await
+            .expect("错误回帧必须成功");
+        // 从注入的 writer 取回已写字节(tokio Mutex::into_inner 同步取)
+        let written = transport.writer.into_inner().into_inner();
+        let line = String::from_utf8(written).expect("回帧必须是合法 UTF-8");
+        let parsed: RpcResponse = serde_json::from_str(line.trim()).expect("回帧必须可解析");
+        assert_eq!(parsed.id, 0, "id=0 约定");
+        assert_eq!(
+            parsed.error.expect("必须含 error").code,
+            -32700,
+            "code 语义经真实 I/O 保留"
+        );
+        // 行尾恰一个换行(NDJSON 纪律)
+        assert!(line.ends_with('\n') && !line.ends_with("\n\n"));
     }
 }
