@@ -128,7 +128,7 @@ fn tick_rebuild_components(c: &mut Criterion) {
     group.bench_function("timeline_clone_100", |b| {
         b.iter(|| {
             // pipeline.rs:718 模式:iter().cloned().collect()
-            let v: Vec<TimelineSnapshot> = timeline.iter().cloned().collect();
+            let v: Vec<TimelineSnapshot> = timeline.to_vec();
             black_box(v);
         });
     });
@@ -160,7 +160,7 @@ fn tick_rebuild_total(c: &mut Criterion) {
             let h3: Vec<u64> = hist.iter().copied().collect();
             let h4: Vec<u64> = hist.iter().copied().collect();
             let h5: Vec<u64> = hist.iter().copied().collect();
-            let t: Vec<TimelineSnapshot> = timeline.iter().cloned().collect();
+            let t: Vec<TimelineSnapshot> = timeline.to_vec();
             let cpu = backfill.clone();
             let mem = backfill.clone();
             black_box((h1, h2, h3, h4, h5, t, cpu, mem));
@@ -179,7 +179,7 @@ fn tick_rebuild_total(c: &mut Criterion) {
                     let h3: Vec<u64> = hist.iter().copied().collect();
                     let h4: Vec<u64> = hist.iter().copied().collect();
                     let h5: Vec<u64> = hist.iter().copied().collect();
-                    let t: Vec<TimelineSnapshot> = timeline.iter().cloned().collect();
+                    let t: Vec<TimelineSnapshot> = timeline.to_vec();
                     let cpu = backfill.clone();
                     let mem = backfill.clone();
                     black_box((h1, h2, h3, h4, h5, t, cpu, mem));

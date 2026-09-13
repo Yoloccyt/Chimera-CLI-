@@ -31,11 +31,10 @@
 use chimera_tui::data::resource_history::MetricSample;
 use chimera_tui::types::{ChatMessage, ChatRole, TimelineSnapshot};
 use chimera_tui::{DataSnapshot, TuiApp, TuiConfig};
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use event_bus::EventMetadata;
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// 每条聊天消息的正文长度(模拟真实流式回复的单条规模)
 const CHAT_MSG_CHARS: usize = 180;
@@ -82,6 +81,11 @@ fn chat_msgs(n: usize) -> Vec<ChatMessage> {
 }
 
 /// 构造稳态满额的合成快照(revision 可指定)
+///
+/// WHY 渐进构造而非巨型字面量:DataSnapshot 字段 40+,合成基准只覆盖
+/// 与成本相关的子集,其余保持 Default——`field_reassign_with_default`
+/// 在此为可读性权衡(显式允许)。
+#[allow(clippy::field_reassign_with_default)]
 fn synthetic_snapshot(revision: u64, chat_n: usize) -> DataSnapshot {
     let mut snap = DataSnapshot::default();
     snap.revision = revision;
@@ -159,7 +163,8 @@ fn update_short_circuit(c: &mut Criterion) {
         });
         app.update(); // 首次全量对齐,之后每 iter 命中短路
         b.iter(|| {
-            black_box(app.update());
+            // update() 返回 ()——无需 black_box(仅度量副作用成本)
+            app.update();
         });
     });
     group.finish();
@@ -176,7 +181,8 @@ fn update_full_align(c: &mut Criterion) {
         });
         app.update(); // 首次对齐
         b.iter(|| {
-            black_box(app.update());
+            // update() 返回 ()——无需 black_box(仅度量副作用成本)
+            app.update();
         });
     });
     group.finish();
