@@ -156,20 +156,40 @@ impl AppTransport for StdinTransport {
     /// 「丢弃/日志」宽容处理，不会误关联）。
     async fn send_decode_error(&self, error: &JsonRpcError) -> Result<(), TransportError> {
         use tokio::io::AsyncWriteExt;
-        // NDJSON error response 行:{"jsonrpc":"2.0","id":0,"result":null,"error":{...}}
-        let frame = serde_json::to_string(&RpcResponse {
-            jsonrpc: "2.0".into(),
-            id: 0,
-            result: None,
-            error: Some(error.clone()),
-        })
-        .map_err(|e| TransportError::Payload { source: e })?;
+        // 帧构造提取为纯函数(decode_error_frame):wire 形态受单元测试锁定
+        // (解析往返 + proptest 字段保真),此处仅负责 I/O。
+        let frame = decode_error_frame(error)?;
         let mut writer = self.writer.lock().await;
         writer.write_all(frame.as_bytes()).await?;
         writer.write_all(b"\n").await?;
         writer.flush().await?;
         Ok(())
     }
+}
+
+/// 构造解码失败的错误响应帧（NDJSON 行,不含行尾 `\n`）
+///
+/// # 形态（受测试锁定的 wire 契约）
+/// `{"jsonrpc":"2.0","id":0,"result":null,"error":{...}}` —— **id=0 约定**
+/// 表示「无法关联请求」（解码失败时请求 id 不可知；JSON-RPC 2.0 规范对
+/// parse error 用 `id: null`,但本协议 [`RpcResponse::id`] 为 `u64`,
+/// wire 形态不变更故以 0 约定替代;客户端合法 id 自 1 起,对未知 id 的
+/// 响应按「丢弃/日志」宽容处理,不会误关联）。
+///
+/// # 参数
+/// - `error`: 帧解码错误（含 JSON-RPC `code`）
+///
+/// # 返回
+/// `Ok(NDJSON 行字符串)`;`Err` 仅在 `JsonRpcError` 序列化失败时出现
+/// （理论上不可达——纯数据结构,防御性保留与 `send_event` 同构的错误形态）。
+fn decode_error_frame(error: &JsonRpcError) -> Result<String, TransportError> {
+    serde_json::to_string(&RpcResponse {
+        jsonrpc: "2.0".into(),
+        id: 0,
+        result: None,
+        error: Some(error.clone()),
+    })
+    .map_err(|e| TransportError::Payload { source: e })
 }
 
 // ============================================================
@@ -240,6 +260,45 @@ mod tests {
             src.downcast_ref::<serde_json::Error>().is_some(),
             "source 应可下钻为 serde_json::Error: {src}"
         );
+    }
+
+    /// 回帧 wire 契约:decode_error_frame 产出的 NDJSON 行可被客户端按
+    /// `RpcResponse` 解析,且 id=0 / error.code / result=None 逐字段保真
+    /// (F-c 终章回帧的客户端侧契约锁定;端到端 stdin 需泛型化改造,独立项)。
+    #[test]
+    fn decode_error_frame_is_parseable_rpc_response() {
+        let frame = decode_error_frame(&JsonRpcError::parse_error())
+            .expect("错误帧构造必须成功");
+        let parsed: RpcResponse = serde_json::from_str(&frame).expect("帧必须可解析");
+        assert_eq!(parsed.id, 0, "id=0 约定:无法关联请求");
+        assert!(parsed.result.is_none(), "错误帧无 result");
+        let je = parsed.error.expect("必须含 error 对象");
+        assert_eq!(je.code, -32700, "code 语义保留");
+        assert_eq!(je.message, "parse error");
+        // 不含行尾换行(行写由调用方补,与 send_event 同构)
+        assert!(!frame.ends_with('\n'), "帧本体不含行尾换行");
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(32))]
+
+        /// 属性:任意 code/message 的错误帧均可解析,且 id=0 约定与
+        /// error 字段逐字段保真(防序列化形态漂移)。
+        #[test]
+        fn prop_error_frame_roundtrip(
+            code in -32700i32..-32000i32,
+            message in "[a-z ]{0,60}",
+        ) {
+            let je = JsonRpcError::new(code, message.clone());
+            let frame = decode_error_frame(&je).expect("错误帧构造必须成功");
+            let parsed: RpcResponse = serde_json::from_str(&frame)
+                .expect("错误帧必须可解析");
+            proptest::prop_assert_eq!(parsed.id, 0);
+            proptest::prop_assert!(parsed.result.is_none());
+            let err = parsed.error.expect("必须含 error 对象");
+            proptest::prop_assert_eq!(err.code, code);
+            proptest::prop_assert_eq!(err.message, message);
+        }
     }
 
     proptest::proptest! {
