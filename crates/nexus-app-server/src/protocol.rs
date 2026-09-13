@@ -81,6 +81,15 @@ pub struct JsonRpcError {
     pub message: String,
 }
 
+impl std::fmt::Display for JsonRpcError {
+    /// 面向日志/错误链的可读形态:错误码 + 消息。
+    /// WHY 此处补 impl:`TransportError::Decode(JsonRpcError)` 的 thiserror
+    /// `#[error("{0}")]` 需要 `Display`(架构方向 F-c,decode 侧结构化)。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "code={}, message={}", self.code, self.message)
+    }
+}
+
 impl JsonRpcError {
     /// 创建 JSON-RPC 错误
     pub fn new(code: i32, message: impl Into<String>) -> Self {

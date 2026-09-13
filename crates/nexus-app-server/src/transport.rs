@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use nexus_contracts::app::{AppEvent, AppOp};
 use thiserror::Error;
 
-use crate::protocol::ProtocolError;
+use crate::protocol::{JsonRpcError, ProtocolError};
 
 /// 传输错误 — 帧层 IO/编解码错误
 #[derive(Debug, Error)]
@@ -22,9 +22,26 @@ pub enum TransportError {
     /// IO 错误（stdin/stdout 读写失败）
     #[error("transport io error: {0}")]
     Io(#[from] std::io::Error),
-    /// 请求帧解码失败
+    /// 请求帧解码失败——**保留 JSON-RPC 错误码语义**
+    ///
+    /// WHY 结构而非 String(架构方向 F-c 收尾,2026-09-13):`decode_request_line`
+    /// 返回的 `JsonRpcError` 携带 `code`(-32700 解析 / -32601 无效请求 / -32602
+    /// 无效参数),是未来「服务端回错误帧」(`encode_error`)的协议完备性依据;
+    /// 此前 `.map_err(|e| e.message)` 拍平丢失 code。当前消费方(serve/acp 主循环)
+    /// 仅 Display 打日志,结构化不增加其负担(Display 已实现)。
     #[error("request decode error: {0}")]
-    Decode(String),
+    Decode(JsonRpcError),
+    /// 载荷反序列化失败（`frame.params` → `AppOp`）
+    ///
+    /// WHY 独立变体 + `#[from]`:与帧解码(`Decode`,协议层语义)区分——
+    /// 载荷失败是 `serde_json` 层错误,保留 source 链供排障(同 `Encode` 的
+    /// `ProtocolError` 对偶,decode/encode 两侧错误面均结构化)。
+    #[error("AppOp payload deserialization failed: {source}")]
+    Payload {
+        /// 底层反序列化错误（保留 source 链）
+        #[source]
+        source: serde_json::Error,
+    },
     /// 事件帧编码失败
     ///
     /// WHY `#[from] ProtocolError`(架构方向 F-c):保留协议层的阶段分类与
@@ -93,10 +110,11 @@ impl AppTransport for StdinTransport {
             return Err(TransportError::Eof);
         }
         drop(reader); // 提前释放读锁
+        // decode 失败保留完整 JsonRpcError(code + message,不再拍 .message);
+        // 载荷反序列化失败经 #[from] serde_json::Error 转 Payload(source 链保留)
         let frame = crate::protocol::RpcCodec::decode_request_line(line.trim())
-            .map_err(|e| TransportError::Decode(e.message))?;
-        serde_json::from_value(frame.params)
-            .map_err(|e| TransportError::Decode(format!("AppOp 反序列化失败: {e}")))
+            .map_err(TransportError::Decode)?;
+        serde_json::from_value(frame.params).map_err(|e| TransportError::Payload { source: e })
     }
 
     async fn send_event(&self, ev: &AppEvent) -> Result<(), TransportError> {
@@ -118,11 +136,80 @@ impl AppTransport for StdinTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{JsonRpcError, RpcCodec};
 
     #[test]
     fn transport_trait_send_sync() {
         // 编译期断言: AppTransport 可装箱为 Send + Sync trait object
         fn assert_send_sync<T: Send + Sync + 'static>() {}
         assert_send_sync::<Box<dyn AppTransport>>();
+    }
+
+    // ========================================================
+    // F-c 收尾:decode 侧错误结构化(2026-09-13)
+    // ========================================================
+
+    /// 帧解码失败保留 JSON-RPC 错误码(修复前:仅 .message,code -32700 丢失)
+    ///
+    /// 驱动 `decode_request_line` 的**真实错误路径**(垃圾行 → parse_error),
+    /// 经与 `recv_op` 相同的 `map_err(TransportError::Decode)` 形态断言:
+    /// 错误变体携带完整 `JsonRpcError`(code + message)。
+    #[test]
+    fn decode_error_preserves_json_rpc_code() {
+        let je = RpcCodec::decode_request_line("not json")
+            .expect_err("垃圾行必须报 parse_error")
+            ;
+        assert_eq!(je.code, -32700, "parse_error 语义");
+        let err: TransportError = RpcCodec::decode_request_line("not json")
+            .map_err(TransportError::Decode)
+            .expect_err("同 recv_op 的转换形态");
+        match &err {
+            TransportError::Decode(je) => {
+                assert_eq!(je.code, -32700, "code 必须保留(修复前丢失)");
+                assert_eq!(je.message, "parse error");
+            }
+            other => panic!("应为 Decode 变体, 实际: {other}"),
+        }
+        // Display 链:日志里应能读到 code
+        assert!(err.to_string().contains("-32700"), "Display 应含 code: {err}");
+    }
+
+    /// 载荷反序列化失败保留 serde_json source 链(修复前:format! 拍平)
+    #[test]
+    fn payload_error_keeps_source_chain() {
+        use std::error::Error as _;
+        // 真实失败路径:字符串不是合法 AppOp(from_value 报 serde_json::Error)
+        let payload_err = serde_json::from_value::<nexus_contracts::app::AppOp>(
+            serde_json::json!("not-an-op"),
+        )
+        .expect_err("字符串必须反序列化失败");
+        let err = TransportError::Payload {
+            source: payload_err,
+        };
+        // Display 语义:指明载荷与阶段
+        assert!(
+            err.to_string().contains("AppOp"),
+            "Display 应指明载荷语义: {err}"
+        );
+        // source 链:Error::source() → serde_json::Error 可下钻
+        let src = err.source().expect("必须保留底层 serde_json 错误");
+        assert!(
+            src.downcast_ref::<serde_json::Error>().is_some(),
+            "source 应可下钻为 serde_json::Error: {src}"
+        );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(32))]
+
+        /// 属性:任意 message 文案都完整出现在 JsonRpcError 的 Display 与
+        /// TransportError::Decode 的 Display 中(防文案模板回归)。
+        #[test]
+        fn prop_json_rpc_error_display(message in "[a-z ]{0,60}") {
+            let je = JsonRpcError::new(-32601, message.clone());
+            proptest::prop_assert!(je.to_string().contains(&message));
+            let err = TransportError::Decode(je);
+            proptest::prop_assert!(err.to_string().contains(&message));
+        }
     }
 }
