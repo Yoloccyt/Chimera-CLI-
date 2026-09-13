@@ -131,6 +131,11 @@ where
             writer: tokio::sync::Mutex::new(tokio::io::BufWriter::new(writer)),
         }
     }
+
+    /// 消费传输,取回底层 writer(测试取回已写帧;关闭前 flush 场景)
+    pub fn into_writer(self) -> W {
+        self.writer.into_inner().into_inner()
+    }
 }
 
 impl StdinTransport {

@@ -171,4 +171,53 @@ mod tests {
             "坏帧不得终止会话，后续正常帧应被处理；实际 kinds: {kinds:?}"
         );
     }
+
+    /// T-4（泛型化能力兑现，§7.14 遗留③）：**wire 级端到端**——`Cursor` 注入
+    /// 真实 I/O：坏帧 → 错误响应帧（id=0/code=-32700）→ 正常 ThreadStart →
+    /// 事件推送帧 → EOF。与 T-3 的差异：T-3 在 Mock 层断言主循环行为，
+    /// 本测试覆盖**真实 stdio 语义**（NDJSON 行读/行写、流位置推进、帧序）。
+    #[tokio::test]
+    async fn serve_loop_wire_e2e_bad_frame_reply_then_normal_flow() {
+        use nexus_app_server::{IoTransport, RpcResponse};
+
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        let server = crate::composition::build_app_server(ctx);
+        // 输入流:坏帧 + 合法 ThreadStart 请求帧(id=1)
+        // reader 用 Cursor(Vec<u8> 无 AsyncRead;Cursor<T: AsRef<[u8]>> 有)
+        let valid = nexus_app_server::RpcCodec::encode_request(
+            &AppOp::ThreadStart(ThreadStartParams::new("g1", "r1")),
+            1,
+        )
+        .expect("合法帧编码成功");
+        let input = format!("not json\n{valid}\n");
+        let transport =
+            IoTransport::with_io(std::io::Cursor::new(input.into_bytes()), Vec::<u8>::new());
+
+        serve_loop(&server, &transport)
+            .await
+            .expect("EOF 应使循环正常退出 Ok");
+
+        // 读取全部输出(错误回帧 + 事件推送),逐帧解析断言
+        let out = transport.into_writer();
+        let text = String::from_utf8(out).expect("输出必须 UTF-8");
+        let frames: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+        assert!(
+            frames.len() >= 2,
+            "应至少有错误回帧 + 事件推送两帧；实际 {frames:?}"
+        );
+        // 帧 1:错误响应(id=0 约定 + code=-32700 经真实 I/O 保留)
+        let err_resp: RpcResponse = serde_json::from_str(frames[0]).expect("错误帧可解析");
+        assert_eq!(err_resp.id, 0, "无法关联请求的 id=0 约定");
+        assert_eq!(
+            err_resp.error.expect("错误帧必须含 error").code,
+            -32700,
+            "code 经真实 I/O 保留"
+        );
+        // 后续帧:ThreadStarted 事件推送(method=app.event)——坏帧后正常流程恢复
+        let rest = frames[1..].join("\n");
+        assert!(
+            rest.contains("\"app.event\""),
+            "坏帧后应恢复事件推送；实际 {rest:?}"
+        );
+    }
 }
