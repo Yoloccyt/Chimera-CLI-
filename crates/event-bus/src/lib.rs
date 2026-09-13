@@ -107,15 +107,11 @@ pub mod pattern_index;
 /// 独立为 payloads 模块,减少 types.rs 膨胀。通过 types 模块的 `pub use`
 /// 重导出保持向后兼容。
 pub mod payloads;
-/// RCU 单调读状态容器(P2-W7.2.3,§9.1 arc-swap)
-///
-/// 因果一致性三层之二的设计意图:内环共享状态的最终一致 + 单调读。
-/// 无锁读(~5ns)+ 原子写(~50ns),旧快照在新写入后仍有效(RCU 回收语义)。
-/// 详见 [`rcu::MonotonicState`]。
-///
-/// 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 当前零生产消费方(三层叙事中
-/// 仅本层未接线,勿按"已生效"引用);内环里程碑结束仍零消费则按 ADR-181 退役。
-pub mod rcu;
+// NOTE(2026-09-13):`rcu` 模块(`MonotonicState`,P2-W7.2.3)已按 ADR-181 决策 2
+// 退役条件执行删除——内环里程碑(P2-W7.2.3 → v2.28.x 全波次收尾)结束仍零生产
+// 消费(grep 实证),按 ADR-175 删除口径(验证零消费 → 删除+配套声明清理 →
+// grep 零残留 + check/test 回归)执行。设计意图与完整实现(含 16 项测试)保留于
+// git 基线 tag `baseline-2026-09-13`,未来内环需要 RCU 原语时从历史恢复。
 /// Segment-aware PER — 轨迹分段优先级经验回放（v3.4.0 §6.2）
 ///
 /// 承载 SegmentAwarePER + PerBuffer（铁律9 分段身份共享 + prompt-equal
@@ -180,8 +176,6 @@ pub use formal::CausalConsistencyChecker;
 // B-a(M0): Critical 保底送达 sink(可插拔落点 + 默认日志实现)
 pub use critical_sink::{CriticalSink, LogCriticalSink};
 pub use logging::BusLogger;
-// P2-W7.2.3: RCU 单调读状态容器(内环最终一致 + 单调读)
-pub use rcu::MonotonicState;
 // P1-T12:ShardedBus 分片核心(Lane 三车道 + 64 片扇出 + 前哨统计)
 pub use shard::{
     event_lane, fnv1a, Lane, SessionKey, ShadowStats, ShardedEventBus, DEFAULT_SHARD_COUNT,
