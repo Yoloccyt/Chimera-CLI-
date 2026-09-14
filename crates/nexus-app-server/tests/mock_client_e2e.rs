@@ -191,6 +191,7 @@ async fn mock_client_approval_flow_over_protocol() {
 }
 
 #[tokio::test]
+#[ignore = "release-v2.28.2 隔离:Linux CI 负载下 fork 内部 await 偶发挂起(>60s→30min job 超时,2026-09-14 实测);Windows 本地 0.00s 通过,非确定性。fork 语义已由单测 server::tests::thread_fork_creates_independent_session 覆盖;本 mock 协议 E2E 在 main 已被 IoTransport wire E2E 替换(011ff0a/85486de),隔离仅存在于 release/v2.28.2 分支"]
 async fn mock_client_fork_over_protocol() {
     // WI-18 协议面: ThreadFork 经协议 → 新会话（分支式探索语义）
     let mut client = MockClient::new();
