@@ -104,6 +104,18 @@ async fn wait_for(pred: impl Fn() -> bool, what: &str) {
     }
 }
 
+/// 截断到不超过 max_bytes 字节且落在 UTF-8 字符边界。
+/// WHY: 渲染帧含 CJK/制表框线(`│` = U+2502,3 字节),i18n 批次后默认 Zh
+/// 渲染使 `&content[..N]` 的字节 N 可能落在字符中间导致 panic(CI 实测
+/// "end byte index 400 is not a char boundary")。
+fn debug_truncate(s: &str, max_bytes: usize) -> &str {
+    let mut end = s.len().min(max_bytes);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 // ============================================================
 // FC-1 核心验收:OSA / CLV / 召回读数经真实管道同步到 TuiState
 // 并在面板上渲染(此前恒空)
@@ -168,13 +180,15 @@ async fn osa_clv_recall_sync_through_real_pipeline() {
     assert!(
         content.contains("45.0%"),
         "OsaSparse 面板应渲染实时稀疏度 45.0%,got: {}",
-        &content[..content.len().min(400)]
+        debug_truncate(&content, 400)
     );
-    // 召回读数行(此前恒为 N/A):Recall: needle@8=0.800 bias=0.100 chain=0.900
+    // 召回读数行(此前恒为 N/A):needle@8=0.800 bias/偏置=0.100 chain/链路=0.900
+    // WHY locale 中性锚点:批次-A i18n 后 en "Recall:/bias=" vs zh "召回:/偏置=",
+    // 数值锚点双语共享,避免写全局 locale 污染并行测试(同批次-A locale 纪律)。
     assert!(
-        content.contains("Recall: needle@8=0.800") && content.contains("bias=0.100"),
-        "OsaSparse 面板应渲染 HCW 召回读数,got: {}",
-        &content[..content.len().min(400)]
+        content.contains("needle@8=0.800") && content.contains("=0.100"),
+        "OsaSparse 面板应渲染 HCW 召回读数(任意 locale),got: {}",
+        debug_truncate(&content, 400)
     );
 
     app.switch_panel_to(PanelId::ClvVector);
@@ -182,7 +196,7 @@ async fn osa_clv_recall_sync_through_real_pipeline() {
     assert!(
         content.contains("L2 Norm: 12.5000"),
         "ClvVector 面板应渲染实时 L2 范数,got: {}",
-        &content[..content.len().min(400)]
+        debug_truncate(&content, 400)
     );
 
     pipeline.shutdown().await;
@@ -220,7 +234,7 @@ async fn timeline_snapshots_sync_through_real_pipeline() {
     assert!(
         content.contains("of ") && content.contains("/100"),
         "Timeline 面板应渲染快照条目(计数与健康分),got: {}",
-        &content[..content.len().min(400)]
+        debug_truncate(&content, 400)
     );
 
     pipeline.shutdown().await;
