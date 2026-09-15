@@ -9,12 +9,16 @@
 //! - 所有 async fn 满足 Send 约束,可被 tokio::spawn
 
 use crate::credit_flow::{CreditFlow, CreditStats};
+use crate::critical_sink::{CriticalSink, LogCriticalSink};
 use crate::error::EventBusError;
 use crate::logging::BusLogger;
 use crate::membrane::{MembraneFilter, PermeationDecision};
 use crate::shard::{event_lane, Lane, ShadowStats, ShardedEventBus, SHARD_CAPACITY};
 use crate::types::{EventMetadata, EventSeverity, NexusEvent};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+// F-a(M0):ArcSwapOption 承载分片总线单一真值源(取代 Mutex<Option<Arc<_>>> +
+// AtomicBool 双表达 —— 双源真相靠手工 Release/Relaxed 配对维持,分叉即灰度时灵时不灵)
+use arc_swap::ArcSwapOption;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
@@ -149,7 +153,7 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
 /// 确保在 broadcast Lagged 场景下仍能被订阅者接收。订阅者通过
 /// [`subscribe_critical_events`](Self::subscribe_critical_events)
 /// 获取 mpsc Receiver。旁路通道按需初始化(首次订阅时创建),无订阅者时
-/// `publish` 仅走 broadcast 并发出 warn 告警(C3,2026-09-04)。
+/// `publish` 仅走 broadcast,并投递到保底 sink(B-a,M0;原为 warn 后放弃)。
 ///
 /// # P1-W2.1 有界化改造(D3 修复,2026-07-23)
 /// Critical 旁路通道从 `Vec<UnboundedSender>` 改为 `Vec<mpsc::Sender<4096>>`,
@@ -186,6 +190,22 @@ pub struct EventBus {
     /// - 单调递增,不重置(运维观察累计丢弃趋势)
     /// - Relaxed 内存序:丢弃计数为统计指标,非控制流信号,无需强一致性
     critical_dropped_count: Arc<AtomicU64>,
+    /// Critical 保底送达 sink(B-a,M0) — 空订阅者分支的投递目标
+    ///
+    /// WHY Arc<dyn CriticalSink>:
+    /// - `EventBus` 派生 `Clone`,sink 须跨线程共享(可插拔 + 默认实现替换)
+    /// - 默认 `LogCriticalSink`(结构化 error! 日志),使**任何** `EventBus::new()`
+    ///   路径零接线即获得 Critical 保底落点 —— 修复 8 条 ephemeral 命令路径
+    ///   "旁路无订阅者 → warn + 放弃"的送达缺口(覆盖率 1/9 → 9/9)
+    /// - at-least-once 语义:并发交错下与 mpsc 投递可能重复,保底通道重复无害
+    ///   (见 critical_sink 模块文档"语义边界")
+    critical_fallback: Arc<dyn CriticalSink>,
+    /// Critical 空订阅者保底投递累计次数(B-a 观测指标)
+    ///
+    /// WHY 单独计数而非复用 critical_dropped_count:两者语义不同 ——
+    /// dropped = 订阅者存在但通道满被丢弃;no_subscriber = 无任何订阅者,
+    /// 事件走了保底 sink。前者是容量问题,后者是接线覆盖问题,运维处置不同。
+    critical_no_subscriber_count: Arc<AtomicU64>,
     /// Broadcast 通道 Lagged 丢弃的总事件数(背压监控,A3 容量监控)
     ///
     /// WHY Arc<AtomicU64> 而非 Mutex<u64>:
@@ -230,19 +250,26 @@ pub struct EventBus {
     credit_shed_total: Arc<AtomicU64>,
     /// 分片总线(P1-T12 灰度,默认未启用 = 与 v2.27.1 行为完全一致)
     ///
-    /// WHY Arc<Mutex<Option<Arc<ShardedEventBus>>>>:
-    /// - 灰度开关语义:默认 `None`(不分片),`enable_sharding` 首次调用时
-    ///   初始化分片总线并 spawn worker;
-    /// - `Mutex` 仅保护初始化(发布路径不触碰 —— 见 `shard_enabled` 快速路径);
-    /// - `Arc` 使 EventBus 保留 Clone 派生(所有 Clone 副本共享同一分片总线);
-    /// - 内部再包一层 Arc:worker 任务持有分片总线所有权(独立于 EventBus 生命周期)。
-    shard_bus: Arc<Mutex<Option<Arc<ShardedEventBus>>>>,
-    /// 分片启用标志(快速路径,灰度默认 false)
+    /// WHY Arc<ArcSwapOption<ShardedEventBus>>(F-a 收敛,2026-09-12):
+    /// - **单一真值源**:原实现为 `Mutex<Option<Arc<_>>>`(权威)+ `AtomicBool`
+    ///   (快速路径缓存)双表达,靠写端手工 Release / 读端 Relaxed 配对维持一致
+    ///   —— 双源真相一旦漏写一处分叉,症状是"分片灰度时灵时不灵",极难复现。
+    ///   ArcSwapOption 以一次无锁读(~5ns)同时提供"是否已启用"(`load().is_some()`,
+    ///   替代 AtomicBool)与"总线本体"(`load_full()`,替代 Mutex 锁内 clone),
+    ///   双表达合而为一,内存序由 arc-swap 内部保证(正确性不再依赖手工配对);
+    /// - 灰度开关语义不变:默认 `None`(不分片),`enable_sharding` 首次调用时
+    ///   注册并 spawn worker(写端幂等由 [`Self::enable_lock`] 门闩串行化);
+    /// - 外层 `Arc` 使 EventBus 保留 Clone 派生(所有 Clone 副本共享同一分片总线);
+    /// - 内部 `Arc<ShardedEventBus>`:worker 任务持有分片总线所有权
+    ///   (独立于 EventBus 生命周期)。
+    shard_bus: Arc<ArcSwapOption<ShardedEventBus>>,
+    /// enable_sharding 写端串行化门闩(F-a,DCL 写端)
     ///
-    /// WHY Arc<AtomicBool>:发布热路径只读此标志(一次原子 load ~1ns),
-    /// 避免默认关闭时触碰 Mutex(零回归);Arc 使 Clone 副本共享同一标志
-    /// (与 shard_bus 共享语义一致 —— enable_sharding 后所有 Clone 均分片)。
-    shard_enabled: Arc<AtomicBool>,
+    /// WHY 仅一把 `Mutex<()>` 而非原 `Mutex<Option<Arc<_>>>`:本锁**不存数据**,
+    /// 只串行化 enable 的"检查-构造-spawn-注册"四步(低频一次性路径,竞争仅
+    /// 发生在并发首次启用时);数据真值源唯一归属 `shard_bus`(读端无锁)。
+    /// 读端热路径永不触碰本锁 —— 与原"AtomicBool 快速路径"等价的无锁读体验。
+    enable_lock: Arc<Mutex<()>>,
     /// Critical 事件发布计数(影子双跑前哨 `critical_total`)
     ///
     /// WHY Arc<AtomicU64>:EventBus 派生 Clone,所有副本共享同一计数器;
@@ -269,19 +296,22 @@ pub struct EventBus {
 /// # 发布序列(顺序敏感,勿随意调整)
 /// 吞吐计数 → Critical 车道计数 → CBF 信用扣减(仅「分片启用 + Unordered」)
 /// → 分片路由(命中提前返回;片满回退并归还信用)→ 日志埋点
-/// → Critical 无订阅者告警 → Critical mpsc 旁路
+/// → Critical 保底送达(空订阅者)或 mpsc 旁路投递(有订阅者)
 /// → 背压水位告警 → broadcast 发送 + lag 检测
 ///
-/// # SubTask 17.2:Critical 事件无订阅者告警
-/// 当 `subscriber_count == 0` 且事件为 Critical 级时,记录 `warn` 日志。
-/// WHY:CheckpointSaved/ConsensusReached 等关键事件丢失会导致系统状态不一致
-/// (如 Quest 无法恢复),无订阅者时必须告警。Normal 级静默丢弃,避免日志噪声。
+/// # SubTask 17.2:Critical 事件无订阅者告警(B-a 后语义更新)
+/// 当 `subscriber_count == 0` 且事件为 Critical 级时,**投递到保底 sink**
+/// (默认 `LogCriticalSink` 结构化 `error!` 日志)并递增
+/// `critical_no_subscriber_count`。WHY:CheckpointSaved/ConsensusReached 等
+/// 关键事件丢失会导致系统状态不一致(如 Quest 无法恢复),B-a 之前仅 warn
+/// 后放弃(事件无落点);现保底 sink 提供不可绕过的最低落点,同时保留计数
+/// 供运维观测接线覆盖率。Normal 级静默丢弃,避免日志噪声。
 ///
 /// # §6.2 红线双通道(2026-06-29)
 /// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 13 类)
 /// 额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
 /// 仍能被 `subscribe_critical_events` 订阅者接收。旁路通道未初始化时
-/// (无 Critical 订阅者)仅走 broadcast,并发出 warn 告警(C3,2026-09-04)。
+/// (无 Critical 订阅者)投递到保底 sink(B-a,M0;原为 warn 告警后放弃)。
 ///
 /// # P1-T12 分片路由(灰度,默认关闭)
 /// 启用分片后,`Unordered` 车道事件入 64 片之一(worker 汇入既有 broadcast,
@@ -310,20 +340,20 @@ macro_rules! dispatch_one_impl {
         // - shed 计数统一由 try_shard_publish 回退点完成(单一计数,防双重)。
         let mut credit_deducted = false;
         if event.severity() != EventSeverity::Critical
-            && $self.shard_enabled.load(Ordering::Relaxed)
+            && $self.shard_bus.load().is_some()
             && matches!(event_lane(&event), Lane::Unordered)
         {
             credit_deducted = $self.credit_flow.try_acquire(1).is_ok();
         }
-        // P1-T12 分片路由(灰度开关;快速路径:一次 AtomicBool load ~1ns,
-        // 默认关闭时零开销 —— 与 v2.27.1 行为完全一致)
+        // P1-T12 分片路由(灰度开关;F-a 后快速路径 = 一次 ArcSwap load ~5ns,
+        // 默认关闭时仅此一次原子读 —— 单一真值源,无双表达分叉风险)
         // - `Unordered` → 入分片(worker 攒批汇入 broadcast,订阅者 API 零变化);
         // - `Critical`/`OrderSensitive` → 走原单流(红线:Critical 永不进分片;
         //   顺序敏感通道保持单流,不分片,E8-4)。
         // WHY log_publish 不覆盖分片路径:分片是发布端并行化灰度增强,其可观测性
         // 由 shadow_stats()/bus_shard_depth 指标承载;log_publish 埋点保留在单流
         // 路径(Critical/OrderSensitive/回退事件),避免双记与热路径额外采样。
-        if $self.shard_enabled.load(Ordering::Relaxed)
+        if $self.shard_bus.load().is_some()
             && matches!(event_lane(&event), Lane::Unordered)
         {
             match $self.try_shard_publish(event) {
@@ -421,15 +451,19 @@ impl EventBus {
             logger: None,
             critical_tx: Arc::new(Mutex::new(Vec::new())),
             critical_dropped_count: Arc::new(AtomicU64::new(0)),
+            // B-a(M0):默认保底 sink = 结构化 error! 日志(可经 with_critical_fallback 替换)
+            critical_fallback: Arc::new(LogCriticalSink),
+            critical_no_subscriber_count: Arc::new(AtomicU64::new(0)),
             lagged_count: Arc::new(AtomicU64::new(0)),
             backpressure_warning_count: Arc::new(AtomicU64::new(0)),
             published_total: Arc::new(AtomicU64::new(0)),
             // P1-T11:默认信用池 256(手册 §8.5 初始值)
             credit_flow: Arc::new(CreditFlow::new()),
             credit_shed_total: Arc::new(AtomicU64::new(0)),
-            // P1-T12 分片灰度:默认不启用(零回归,与 v2.27.1 行为完全一致)
-            shard_bus: Arc::new(Mutex::new(None)),
-            shard_enabled: Arc::new(AtomicBool::new(false)),
+            // P1-T12 分片灰度:默认不启用(零回归,与 v2.27.1 行为完全一致);
+            // F-a:ArcSwapOption 单一真值源(empty = 未启用) + enable 门闩
+            shard_bus: Arc::new(ArcSwapOption::empty()),
+            enable_lock: Arc::new(Mutex::new(())),
             critical_total: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -445,17 +479,49 @@ impl EventBus {
             logger: Some(Arc::new(logger)),
             critical_tx: Arc::new(Mutex::new(Vec::new())),
             critical_dropped_count: Arc::new(AtomicU64::new(0)),
+            // B-a(M0):默认保底 sink = 结构化 error! 日志(可经 with_critical_fallback 替换)
+            critical_fallback: Arc::new(LogCriticalSink),
+            critical_no_subscriber_count: Arc::new(AtomicU64::new(0)),
             lagged_count: Arc::new(AtomicU64::new(0)),
             backpressure_warning_count: Arc::new(AtomicU64::new(0)),
             published_total: Arc::new(AtomicU64::new(0)),
             // P1-T11:与 with_capacity 一致的信用池初始化
             credit_flow: Arc::new(CreditFlow::new()),
             credit_shed_total: Arc::new(AtomicU64::new(0)),
-            // P1-T12 分片灰度:默认不启用(零回归)
-            shard_bus: Arc::new(Mutex::new(None)),
-            shard_enabled: Arc::new(AtomicBool::new(false)),
+            // P1-T12 分片灰度:默认不启用(零回归);F-a:单一真值源 + enable 门闩
+            shard_bus: Arc::new(ArcSwapOption::empty()),
+            enable_lock: Arc::new(Mutex::new(())),
             critical_total: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// 替换 Critical 保底送达 sink(B-a,M0,builder 风格)
+    ///
+    /// 默认 sink 为 [`LogCriticalSink`](crate::critical_sink::LogCriticalSink)
+    /// (结构化 `error!` 日志);需要告警管道/持久化等自定义落点时,以
+    /// `Arc<dyn CriticalSink>` 注入替换。仅影响"无 mpsc 订阅者"分支的投递目标,
+    /// 既有 mpsc 订阅语义(`subscribe_critical_events`)完全不变。
+    ///
+    /// # 参数
+    /// - `sink`:保底落点实现(`Send + Sync + 'static`,内部 `Arc` 共享)
+    ///
+    /// # 返回
+    /// 消费 `self` 并返回,支持链式调用:`EventBus::new().with_critical_fallback(..)`
+    ///
+    /// # 示例
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use event_bus::{EventBus, CriticalSink, NexusEvent};
+    ///
+    /// struct MySink;
+    /// impl CriticalSink for MySink {
+    ///     fn on_critical(&self, _event: &NexusEvent) { /* 转发告警管道 */ }
+    /// }
+    /// let bus = EventBus::new().with_critical_fallback(Arc::new(MySink));
+    /// ```
+    pub fn with_critical_fallback(mut self, sink: Arc<dyn CriticalSink>) -> Self {
+        self.critical_fallback = sink;
+        self
     }
 
     // ============================================================
@@ -486,42 +552,41 @@ impl EventBus {
     /// `Ok(())` 启用成功;`Err(ShardingAlreadyEnabled)` 已启用;
     /// `Err(ShardingRequiresRuntime)` 无 runtime(调用方应忽略降级)。
     pub fn enable_sharding(&self, n_shards: usize) -> Result<(), EventBusError> {
-        // 幂等保护(快速路径):已启用则拒绝重复初始化。锁内 guard 检查是权威判定,
-        // 本 Relaxed load 仅是避免无谓取锁的快速路径 —— 并发交错下由锁内兜底
-        // (调用方 let _ = 忽略 Err 即安全降级)
-        if self.shard_enabled.load(Ordering::Relaxed) {
+        // 幂等保护(快速路径):已启用则拒绝重复初始化。ArcSwapOption::load 是
+        // 无锁读(~5ns),锁内复查兜底任何并发交错,调用方 `let _ =` 忽略 Err
+        // 即安全降级
+        if self.shard_bus.load().is_some() {
             return Err(EventBusError::ShardingAlreadyEnabled);
         }
         // 灰度安全:worker 是 tokio 异步任务,必须持有 runtime 上下文才能 spawn;
         // 无 runtime(同步线程)时返回 Err,调用方忽略即降级回单流(零风险)
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_| EventBusError::ShardingRequiresRuntime)?;
-        // 初始化分片总线(Mutex 仅保护初始化;发布路径不触碰此锁 —— 见 shard_enabled
-        // 快速路径。poison 恢复:持锁线程 panic 后数据仍有效,继续执行)
-        let mut guard = match self.shard_bus.lock() {
+        // enable 串行化门闩(DCL 写端):ArcSwapOption 的 load/store 原子无锁,
+        // 但"检查-构造-spawn-注册"四步需要串行化保证至多一组 worker
+        // (评审 Issue 1:并发双 enable 不得重复 spawn,空转 worker = 资源泄漏)。
+        //
+        // WHY 门闩而非 arc-swap compare_and_swap(F-a 实测记录,2026-09-12):
+        // 孤立实验证实 compare_and_swap 在比较成功路径上会为 new 值留下一个
+        // **永久性额外强引用**(CAS 后计数 = 存储 1 + 额外 1,drop Guard 后不
+        // 消失),破坏"分片总线恰被总线与 worker 各持一份"的可观测不变量
+        // (test_enable_sharding_concurrent_no_duplicate_spawn 66≠65 红灯)。
+        // 门闩方案下 store 只存一份,引用计数确定性恢复,行为与 v2.27.1 完全一致。
+        let _gate = match self.enable_lock.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if guard.is_some() {
-            // 并发竞态兜底:另一线程已初始化(与 shard_enabled 幂等检查互为补充,
-            // 任何交错下不重复 spawn worker)
+        // 锁内复查(权威判定):并发交错下另一线程可能已完成初始化
+        if self.shard_bus.load().is_some() {
             return Err(EventBusError::ShardingAlreadyEnabled);
         }
         // 构造分片总线并 spawn 每片 worker(worker 持有 broadcast sender + 信用流,
-        // 汇入后按 ADR-125 批提交归还信用 —— 信用流自动平衡闭环)
-        //
-        // WHY 在锁内 spawn(评审 Issue 1 修复):锁内 guard.is_some() 检查之后才
-        // spawn,任何并发交错下至多一个线程进入 spawn 区 —— 后到者在 spawn 之前
-        // 就已返回 Err,绝不产生「持有未注册总线的空转 worker」。若在锁外 spawn,
-        // 后到者会先 spawn 完 64 个 worker 才发现冲突,造成 64 个 worker 永久
-        // 空转(队列恒空,仅持有 sender/信用流引用,资源泄漏)。
+        // 汇入后按 ADR-125 批提交归还信用 —— 信用流自动平衡闭环);
+        // spawn 后注册(原版顺序):发布路径经 shard_bus.load() 只在注册后可见
+        // 分片,不存在"已注册未 spawn"窗口,行为与 v2.27.1 完全一致。
         let sb = Arc::new(ShardedEventBus::new(n_shards, SHARD_CAPACITY));
         sb.spawn_workers(self.sender.clone(), Arc::clone(&self.credit_flow), &handle);
-        *guard = Some(sb);
-        drop(guard);
-        // Release 内存序:shard_bus 写入完成后再发布启用标志,publish 侧
-        // Relaxed/Acquire 读取时必然看到完整的分片总线(数据竞争安全)
-        self.shard_enabled.store(true, Ordering::Release);
+        self.shard_bus.store(Some(sb));
         Ok(())
     }
 
@@ -531,7 +596,7 @@ impl EventBus {
     /// `true` 表示 `enable_sharding` 已成功调用(Unordered 事件走分片扇出)。
     #[must_use = "分片启用状态是灰度观测项,忽略返回值无意义"]
     pub fn sharding_enabled(&self) -> bool {
-        self.shard_enabled.load(Ordering::Relaxed)
+        self.shard_bus.load().is_some()
     }
 
     /// 影子双跑前哨统计(P1-T12;T13 漏发率=0 硬门禁的采集输入)
@@ -545,16 +610,11 @@ impl EventBus {
     /// shed_total / critical_total 五元组(Relaxed 观测,单调累计)。
     #[must_use = "前哨统计是 T13 双跑门禁输入,忽略返回值无意义"]
     pub fn shadow_stats(&self) -> ShadowStats {
-        let (sharded_total, merged_total) = match self.shard_bus.lock() {
-            Ok(guard) => match guard.as_ref() {
-                Some(sb) => (sb.sharded_total(), sb.merged_total()),
-                None => (0, 0),
-            },
-            // poison 恢复:统计是观测面,不因锁异常中断前哨采集
-            Err(poisoned) => match poisoned.into_inner().as_ref() {
-                Some(sb) => (sb.sharded_total(), sb.merged_total()),
-                None => (0, 0),
-            },
+        // F-a:ArcSwapOption 读端(Guard 借用解引用,无锁;统计是观测面,
+        // 不再需要原 Mutex 版的 poison 恢复分支 —— ArcSwap 无锁不可中毒)
+        let (sharded_total, merged_total) = match self.shard_bus.load().as_ref() {
+            Some(sb) => (sb.sharded_total(), sb.merged_total()),
+            None => (0, 0),
         };
         ShadowStats {
             published_total: self.published_total.load(Ordering::Relaxed),
@@ -586,13 +646,13 @@ impl EventBus {
     // 有意设计而非疏漏（P1-T12 接口契约,shard::try_push 同语义）
     #[allow(clippy::result_large_err)]
     fn try_shard_publish(&self, event: NexusEvent) -> Result<(), NexusEvent> {
-        // 锁内 clone Arc,锁外操作(不跨 await,§4.4 红线 1 合规);
-        // poison 恢复:数据仍有效,继续执行(与 critical_tx 锁同策略)
-        let sb = match self.shard_bus.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
+        // F-a:ArcSwapOption 无锁读(load ~5ns),clone 出 Arc<ShardedEventBus>
+        // 后在锁外操作(不跨 await,§4.4 红线 1 合规;ArcSwap 无锁不可中毒,
+        // 原 Mutex 版的 poison 恢复分支随之消失)
+        let sb = match self.shard_bus.load().as_ref().cloned() {
+            Some(sb) => sb,
+            None => return Err(event),
         };
-        let Some(sb) = sb else { return Err(event) };
         match sb.try_push(event) {
             Ok(()) => Ok(()),
             Err(event) => {
@@ -715,7 +775,7 @@ impl EventBus {
             // 分片不扣 —— 见 publish 注释;shed 由 try_shard_publish 统一计数)
             let mut credit_deducted = false;
             if event.severity() != EventSeverity::Critical
-                && self.shard_enabled.load(Ordering::Relaxed)
+                && self.shard_bus.load().is_some()
                 && matches!(event_lane(&event), Lane::Unordered)
             {
                 credit_deducted = self.credit_flow.try_acquire(1).is_ok();
@@ -724,13 +784,12 @@ impl EventBus {
             // Unordered 事件入分片,worker 汇入 broadcast(订阅者 API 零变化);
             // Critical/OrderSensitive 恒走本循环原单流(红线)
             // WHY 在信用处理之后路由:与 publish 信用账目完全一致 —— 入分片事件
-            // 的 1 信用由本循环扣除(条件与下方路由一致:shard_enabled + Unordered),
-            // worker 汇入时 release_many 归还(信用守恒不变量见 try_shard_publish;
-            // 若先路由后扣信用,worker 会归还未扣过的信用,破坏守恒语义;若扣信用
-            // 条件宽于路由条件,则 OrderSensitive/未入片事件扣而无人归还)
-            if self.shard_enabled.load(Ordering::Relaxed)
-                && matches!(event_lane(&event), Lane::Unordered)
-            {
+            // 的 1 信用由本循环扣除(条件与下方路由一致:F-a 后由 shard_bus.load
+            // 判启用 + Unordered),worker 汇入时 release_many 归还(信用守恒
+            // 不变量见 try_shard_publish;若先路由后扣信用,worker 会归还未扣过
+            // 的信用,破坏守恒语义;若扣信用条件宽于路由条件,则 OrderSensitive/
+            // 未入片事件扣而无人归还)
+            if self.shard_bus.load().is_some() && matches!(event_lane(&event), Lane::Unordered) {
                 match self.try_shard_publish(event) {
                     Ok(()) => continue,
                     // 回退语义与 publish 一致:重新赋值所有权,继续走既有单流路径
@@ -898,6 +957,13 @@ impl EventBus {
     /// # 调用时机(§4.4 反模式 3)
     /// 必须在 `tokio::spawn()` **之前同步调用**此方法,确保不会错过后续发布的
     /// Critical 事件。在 spawn 的 async block 内调用可能导致事件静默丢失。
+    ///
+    /// # 与保底 sink 的关系(B-a,M0)
+    /// 本订阅建立**之前**发布的 Critical 事件投递到保底 sink(默认结构化
+    /// `error!` 日志,见 [`critical_sink`](crate::critical_sink) 模块文档)——
+    /// sink 不缓存、不回放,"从订阅时刻开始接收"语义保持不变;建立**之后**
+    /// 发布的事件仅走 mpsc(sink 不再收到,避免双消费噪声)。组合根自检以
+    /// [`has_critical_subscribers`](Self::has_critical_subscribers)==true 为目标态。
     pub fn subscribe_critical_events(&self) -> mpsc::Receiver<NexusEvent> {
         let (tx, rx) = mpsc::channel(CRITICAL_CHANNEL_CAPACITY);
         // WHY unwrap_or_else: 中毒锁降级访问内部数据而非 panic。
@@ -928,6 +994,22 @@ impl EventBus {
     /// 即使读到稍旧的值,仅影响告警时机的毫秒级延迟,不影响系统正确性。
     pub fn critical_dropped_count(&self) -> u64 {
         self.critical_dropped_count.load(Ordering::Relaxed)
+    }
+
+    /// 获取 Critical 空订阅者保底投递累计次数(B-a,M0 新增)
+    ///
+    /// 返回发布时因 mpsc 旁路无任何订阅者而改投保底 sink
+    /// ([`CriticalSink`](crate::critical_sink::CriticalSink),默认结构化
+    /// `error!` 日志)的 Critical 事件总数。单调递增,不重置。
+    ///
+    /// # 运维语义(与 [`critical_dropped_count`](Self::critical_dropped_count) 的分工)
+    /// - 本计数持续增长 = 组合根**未接线真实消费者**,Critical 事件仅落保底日志
+    ///   (接线覆盖问题;处置:组合根调用 `subscribe_critical_events` + spawn 消费者)
+    /// - `critical_dropped_count` 增长 = 消费者已接线但通道满(容量问题)
+    ///
+    /// WHY Relaxed 内存序:同 `critical_dropped_count`,统计指标非控制流信号。
+    pub fn critical_no_subscriber_total(&self) -> u64 {
+        self.critical_no_subscriber_count.load(Ordering::Relaxed)
     }
 
     /// 向 mpsc 旁路通道投递 Critical 事件(内部辅助方法)
@@ -965,14 +1047,19 @@ impl EventBus {
         // WHY unwrap_or_else: 中毒锁降级访问而非 panic(见 subscribe_critical_events 注释)。
         let mut guard = self.critical_tx.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_empty() {
-            // C3(2026-09-04): 旁路无订阅者时不再静默(F-A5-6 风险点 2)——
-            // 此时 Critical 事件仅有 broadcast 单通道保障,订阅者一旦 Lagged
-            // 事件即永久丢失且无任何痕迹。Critical 事件低频,warn 噪声可控;
-            // span(instrument 宏)已携带 event_type/severity/event_id 供定位。
-            tracing::warn!(
-                critical_dropped_count = self.critical_dropped_count.load(Ordering::Relaxed),
-                "Critical mpsc 旁路无订阅者,旁路投递跳过(仅 broadcast 单通道)"
-            );
+            // B-a(M0): 保底送达 — 空订阅者不再是"warn + 放弃"。
+            // C3(2026-09-04) 原实现仅 warn 告警后 return,事件在旁路维度上
+            // 无任何落点(修复前 9 条生产路径中 8 条处于此状态)。
+            // 现投递到可插拔 fallback sink(默认 LogCriticalSink 结构化 error!),
+            // 使任何 EventBus::new() 路径零接线即获得 Critical 保底落点。
+            // 语义边界(见 critical_sink 模块文档):
+            // - 不回放:subscribe_critical_events "订阅时刻起接收"语义不变
+            // - at-least-once:并发交错下可能与后续 mpsc 投递重复,重复无害
+            // 计数独立于 critical_dropped_count:后者=订阅者存在但通道满;
+            // 本计数=完全无订阅者走了保底(接线覆盖问题,运维处置不同)。
+            self.critical_no_subscriber_count
+                .fetch_add(1, Ordering::Relaxed);
+            self.critical_fallback.on_critical(event);
             return;
         }
         // P1-W4.1: 所有路径发出 debug 事件,确保 span 字段(event_type / severity / event_id)
@@ -991,8 +1078,13 @@ impl EventBus {
         // 优先级采样丢弃:遍历所有 Sender,try_send 失败时按错误类型处理
         // - Full:递增丢弃计数,保留 Sender(临时满载)
         // - Closed:移除 Sender(receiver 已 drop)
+        // delivered:本次成功投递到的活跃订阅者数(B-a 用于 stale 检测)
+        let mut delivered = 0usize;
         guard.retain(|tx| match tx.try_send(event.clone()) {
-            Ok(()) => true, // 投递成功,保留
+            Ok(()) => {
+                delivered += 1;
+                true // 投递成功,保留
+            }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 // 容量满:按优先级采样丢弃,递增计数,保留 Sender
                 // WHY fetch_add 而非 store(load + 1):原子操作避免读改写竞态
@@ -1001,6 +1093,18 @@ impl EventBus {
             }
             Err(mpsc::error::TrySendError::Closed(_)) => false, // receiver 已 drop,移除
         });
+        // B-a(M0): stale 订阅者兜底 — 订阅者全部 drop 后的首个 Critical 事件,
+        // is_empty 检查时 Vec 尚含失效 Sender(惰性清理发生在本次 retain),
+        // 事件 try_send 全部 Closed → 既没进 mpsc 也不该无痕消失。此处投递
+        // fallback(与空订阅者分支同一落点),修复"订阅后 drop → 首事件静默丢失"缺口。
+        // 边界:guard 仍非空(存在 Full 满载活跃订阅者)时不投 fallback ——
+        // 那是 P1-W2.1 既定的优先级采样丢弃(有 critical_dropped_count 指标与告警),
+        // 向 fallback 转投会破坏背压设计(满载刷屏),保持原语义。
+        if delivered == 0 && guard.is_empty() {
+            self.critical_no_subscriber_count
+                .fetch_add(1, Ordering::Relaxed);
+            self.critical_fallback.on_critical(event);
+        }
         // P1-W4.1: 丢弃增量结构化日志 — 在 retain 闭包外单次发出,避免多次 warn 噪声
         // WHY 用差值而非全局累计值:全局累计值是单调递增的运维指标(由 efficiency-monitor
         // 周期性采样),而 warn 日志应反映"本次发送导致多少事件被丢弃",差值更精确
@@ -1014,6 +1118,14 @@ impl EventBus {
     ///
     /// WHY:发布时告警是事件驱动的事后观测(send_critical_mpsc 空订阅者分支),
     /// 本 API 提供主动查询通道,供组合根启动自检/运维巡检使用。
+    ///
+    /// # 语义(B-a 后更新)
+    /// `false` 不再意味着事件"无落点"——此时 Critical 事件投递到保底 sink
+    /// (默认结构化 error! 日志,投递次数见
+    /// [`critical_no_subscriber_total`](Self::critical_no_subscriber_total));
+    /// 但"仅保底日志"仍低于"真实消费者"的保障级别,组合根自检建议维持
+    /// `has_critical_subscribers()==true` 为目标态(显式订阅者可升级为
+    /// 面板/告警管道消费)。
     ///
     /// # 惰性清理说明
     /// Receiver drop 后其 Sender 由下次 send_critical_mpsc 的 retain 移除,
@@ -2560,13 +2672,24 @@ mod tests {
             1 + DEFAULT_SHARD_COUNT,
             "并发失败路径不得 spawn worker(引用计数翻倍 = 重复 spawn 泄漏)"
         );
-        // 安装的分片总线仅被总线持有 + 每片 worker 各一份(恰好一组 worker)
-        let guard = bus.shard_bus.lock().expect("分片总线锁不应 poison");
+        // 安装的分片总线:worker 恰好一组(评审 Issue 1 的守护本意 = 不重复 spawn)
+        //
+        // F-a 断言语义调整(2026-09-12,实测记录):ArcSwapOption 槽位占用期间,
+        // arc-swap 内部会为当前值多持 1 份强引用(区分实验:guard 存活/删除均 66,
+        // swap 清空槽位后 taken=65 = taken 1 + worker 64 —— +1 与槽位占用绑定,
+        // 非 spawn 翻倍、非泄漏;真正的重复-spawn 守护由上方 credit_flow 精确
+        // 计数承担,该断言在本测试中始终通过)。故本断言从"精确 65"放宽为
+        // "恰有一组 + arc-swap 内部缓存 ≤1":下界防 worker 丢失,上界防翻倍。
+        let guard = bus.shard_bus.load_full();
         let sb = guard.as_ref().expect("分片总线必须已安装");
-        assert_eq!(
-            Arc::strong_count(sb),
-            1 + DEFAULT_SHARD_COUNT,
-            "安装的分片总线必须恰有一组 worker"
+        let sb_count = Arc::strong_count(sb);
+        assert!(
+            sb_count > DEFAULT_SHARD_COUNT,
+            "分片总线必须至少被槽位与全部 worker 持有(实测 {sb_count})"
+        );
+        assert!(
+            sb_count < 2 * (1 + DEFAULT_SHARD_COUNT),
+            "分片总线引用计数翻倍 = 重复 spawn worker(实测 {sb_count})"
         );
     }
 

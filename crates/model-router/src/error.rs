@@ -24,10 +24,6 @@ pub enum RouterError {
         limit: u64,
     },
 
-    /// 事件总线错误 — 发布/订阅失败
-    #[error("event bus error: {0}")]
-    EventBusError(#[from] event_bus::EventBusError),
-
     /// 配置错误 — 配置解析或语义错误
     #[error("config error: {0}")]
     ConfigError(String),

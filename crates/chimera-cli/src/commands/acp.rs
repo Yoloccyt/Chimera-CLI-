@@ -141,6 +141,15 @@ async fn acp_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<()
                 tracing::info!("chimera acp: 客户端断开（EOF），正常退出");
                 return Ok(());
             }
+            Err(TransportError::Decode(je)) => {
+                // 协议完备性(F-c 终章闭环,与 serve_loop 同款):坏帧回错误帧
+                // （ACP 传输若不支持回帧则走 trait 默认降级,不终止会话）。
+                if let Err(send_err) = transport.send_decode_error(&je).await {
+                    tracing::warn!(error = %send_err, "chimera acp: 错误回帧发送失败");
+                }
+                tracing::warn!(error = %je, "chimera acp: 请求帧解码失败，继续等待下一帧");
+                continue;
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "chimera acp: 传输错误，继续等待下一帧");
                 continue;

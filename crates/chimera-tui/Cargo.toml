@@ -136,3 +136,18 @@ harness = false
 [[bench]]
 name = "v3_frame_clone_cost_bench"
 harness = false
+
+# H-b 前提验证(2026-09-12):量化 DataSnapshot "每 tick 全量重建"各分量
+# (5×VecDeque<u64>(64) collect / Vec<TimelineSnapshot>(100) clone /
+# 2×Vec<MetricSample>(300) clone)与事件侧"改 1 字段复制整集合"的成本,
+# 据以裁定该方向是实施还是否决——先量化,再动代码。
+[[bench]]
+name = "snapshot_rebuild_cost_bench"
+harness = false
+
+# 感知延迟路径裁定前置(2026-09-12,H-b 系列):量化消费侧 TuiApp::update()
+# 两条路径的成本 —— revision 短路(现状多数 poll 命中)vs 全量对齐
+# (事件驱动即时刷新后每次 poll 命中),据以裁定"事件驱动刷新"的 CPU 可行性。
+[[bench]]
+name = "tui_update_cost_bench"
+harness = false

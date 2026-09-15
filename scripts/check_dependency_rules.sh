@@ -322,8 +322,13 @@ run_checks() {
 
     # --- Check D: chimera-mas internal dependency bound (P3-T2, WI-29) ---
     # WI-29 strangler target: chimera-mas internal crate deps <= 16 (measured
-    # 13). The mas-sched control plane was already split out; further growth
-    # means the execution plane must keep splitting. Mirror of .ps1 Check D.
+    # 11 as of 2026-09-12, was 13). The mas-sched control plane was already
+    # split out; further growth means the execution plane must keep splitting.
+    # 13 -> 11 (arch direction E batch): `mlc-engine` and `cmt-tiering` were
+    # ghost dependencies (declared, zero reference in src/) and were removed,
+    # so this ratchet now runs on the real base. Guarded by
+    # scripts/check_declared_dep_usage.py (G-30/G-31) against re-introduction.
+    # Mirror of .ps1 Check D.
     # Normal mode only, so the selftest GAP-A/B/C count assertions stay valid.
     if [ "$scan_disk" = "yes" ] && [ -f "crates/chimera-mas/Cargo.toml" ]; then
         local mas_internal=0
