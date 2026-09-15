@@ -712,9 +712,15 @@ impl TaskManagerPanel {
 // KeyPattern/KeyRule/lookup_key_action 原语,机制统一)
 // ============================================================
 
+/// 搜索键表处理器签名(命中即执行,无返回:搜索态全部返回 None)
+type SearchKeyHandler = fn(&mut TaskManagerPanel, KeyEvent);
+
+/// 主键表处理器签名(命中即执行,返回面板意图)
+type TaskKeyHandler = fn(&mut TaskManagerPanel, &mut TuiState) -> Option<TuiCommand>;
+
 /// 搜索模式键表:Esc 退出并清关键字 / Enter 退出保留 / Backspace 删末字符 /
 /// 任意字符追加;其余键一律抑制(与旧 match 的 `_ => return None` 逐字节等价)
-const SEARCH_KEY_TABLE: &[KeyRule<fn(&mut TaskManagerPanel, KeyEvent)>] = &[
+const SEARCH_KEY_TABLE: &[KeyRule<SearchKeyHandler>] = &[
     KeyRule {
         pattern: KeyPattern::Code(KeyCode::Esc),
         action: TaskManagerPanel::search_exit_clear,
@@ -737,61 +743,60 @@ const SEARCH_KEY_TABLE: &[KeyRule<fn(&mut TaskManagerPanel, KeyEvent)>] = &[
 /// Space 多选 / Ctrl+A 全选 / Esc 清多选 / f 搜索 / S 排序 / P 单选暂停 /
 /// B 批量(或单选)暂停 / T 批量(或单选)终止 / +、- 优先级 / Enter 详情 /
 /// C 创建预留 / R 批量(或单选)恢复
-const MAIN_KEY_TABLE: &[KeyRule<fn(&mut TaskManagerPanel, &mut TuiState) -> Option<TuiCommand>>] =
-    &[
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char(' ')),
-            action: TaskManagerPanel::toggle_multi_select,
-        },
-        KeyRule {
-            pattern: KeyPattern::Ctrl(KeyCode::Char('a')),
-            action: TaskManagerPanel::select_all_filtered,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Esc),
-            action: TaskManagerPanel::clear_multi_select,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char('f')),
-            action: TaskManagerPanel::enter_search_mode,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char('S')),
-            action: TaskManagerPanel::cycle_sort_mode,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char('P')),
-            action: TaskManagerPanel::pause_selected,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char('B')),
-            action: TaskManagerPanel::batch_pause_or_single,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char('T')),
-            action: TaskManagerPanel::terminate_batch_or_single,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char('+')),
-            action: TaskManagerPanel::priority_increment,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char('-')),
-            action: TaskManagerPanel::priority_decrement,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Enter),
-            action: TaskManagerPanel::open_selected_detail,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char('C')),
-            action: TaskManagerPanel::create_quest_reserved,
-        },
-        KeyRule {
-            pattern: KeyPattern::Code(KeyCode::Char('R')),
-            action: TaskManagerPanel::resume_batch_or_single,
-        },
-    ];
+const MAIN_KEY_TABLE: &[KeyRule<TaskKeyHandler>] = &[
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char(' ')),
+        action: TaskManagerPanel::toggle_multi_select,
+    },
+    KeyRule {
+        pattern: KeyPattern::Ctrl(KeyCode::Char('a')),
+        action: TaskManagerPanel::select_all_filtered,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Esc),
+        action: TaskManagerPanel::clear_multi_select,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('f')),
+        action: TaskManagerPanel::enter_search_mode,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('S')),
+        action: TaskManagerPanel::cycle_sort_mode,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('P')),
+        action: TaskManagerPanel::pause_selected,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('B')),
+        action: TaskManagerPanel::batch_pause_or_single,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('T')),
+        action: TaskManagerPanel::terminate_batch_or_single,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('+')),
+        action: TaskManagerPanel::priority_increment,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('-')),
+        action: TaskManagerPanel::priority_decrement,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Enter),
+        action: TaskManagerPanel::open_selected_detail,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('C')),
+        action: TaskManagerPanel::create_quest_reserved,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('R')),
+        action: TaskManagerPanel::resume_batch_or_single,
+    },
+];
 
 impl Panel for TaskManagerPanel {
     fn id(&self) -> PanelId {

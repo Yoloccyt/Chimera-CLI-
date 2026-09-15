@@ -960,12 +960,18 @@ impl TuiApp {
 // 第三层:本地动作派发表(action_id → 处理器)
 // ============================================================
 
+/// 本地动作派发表的一行:action_id → 处理器
+///
+/// WHY 类型别名:行内元组 + fn 指针直接写在表签名上触发 clippy type_complexity;
+/// 别名同时自文档化"一行 = 一个动作绑定"。
+type LocalActionRule = (&'static str, fn(&mut TuiApp));
+
 /// 本地即时动作派发表:`dispatch_action` 本地臂的单一事实源(action_id → 处理器;
 /// 键序与 app/tests.rs 的 `LOCAL_ACTION_IDS` 分类清单一致,由单测交叉锚定)。
 ///
 /// 表内未列出的动作一律落入编排兜底(发布 `TuiActionRequested` 等回执)——
 /// "本地 or 编排"的路由分类不变量见 `dispatch_action` 文档。
-const LOCAL_ACTION_TABLE: &[(&str, fn(&mut TuiApp))] = &[
+const LOCAL_ACTION_TABLE: &[LocalActionRule] = &[
     ("config.edit", TuiApp::open_config_menu),
     ("export.run", TuiApp::handle_export_command),
     ("monitor.pause_sampling", TuiApp::toggle_monitor_pause),
