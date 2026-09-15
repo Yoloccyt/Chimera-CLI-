@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 ///
 /// WHY 与 run.rs 的全局映射不同:exec 是独立退出码契约(0/2/3/4),
 /// 预算/引擎类故障归 3(经 EngineError,见 exec_exit_code);若映射全局
-/// `Timeout` 变体,会被 exec_exit_code 归入"工具失败"4(exit.rs:97-99
+/// `Timeout` 变体,会被 exec_exit_code 归入"工具失败"4(exec.rs:139-146
 /// 的 `_ => 4` 分支)——分解预算耗尽≠工具执行超时,语义错配。
 /// `Cancelled` 非预算/引擎类,按 UserCancelled 落契约 catch-all 4。
 fn call_budget_to_exec_error(e: CallBudgetError) -> ChimeraCliError {
