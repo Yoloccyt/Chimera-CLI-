@@ -147,6 +147,41 @@ jobs:
           python3 scripts/check_await_across_guard.py --selftest
           python3 scripts/check_await_across_guard.py
 
+      # WHY: 组合根装配门(架构重构方向 B-c 交付, gate_manifest G-28/G-29)——
+      # chimera-cli/src/composition.rs 是唯一合法装配点;实测(2026-09-12)生产路径
+      # 9 处 EventBus::new 中 8 条命令路径绕过组合根,导致 Critical 送达仅 1/9 生效
+      # (B-a 已在总线层兜底,但"N 个互不可见总线"的结构债仍在)。本门以 exact-count
+      # 只减不增棘轮冻结存量(scripts/composition_root_baseline.txt, cap 必须等于
+      # 实测数),新增绕过必红、债务迁移后忘删豁免必红。先 --selftest 证明有牙再跑
+      # 真实裁决,沿 await-across-lock/check_topk_registry 范式。全部零 cargo、秒级。
+      - name: Composition-root assembly gate
+        run: |
+          python3 scripts/check_composition_root.py --selftest
+          python3 scripts/check_composition_root.py
+
+      # WHY: 依赖真实性门(架构重构方向 E 交付, gate_manifest G-30/G-31)——
+      # Check D 按 manifest 计数 chimera-mas 内部依赖(实测 13/16),但其中 2 条
+      # (mlc-engine/cmt-tiering)src/ 零引用,棘轮运行在虚高基数上。本门把
+      # "声明"与"实际引用"对齐:src/ 引用=正确;仅 benches/tests 引用=应移
+      # [dev-dependencies];全零引用=真幽灵。范围限定内部 workspace crate 与
+      # [dependencies] 段(外部 crate 有 derive/属性魔法,文本判定会误报)。
+      # 先 --selftest 证明有牙再跑真实裁决,沿 await-across-lock 范式,零 cargo 秒级。
+      - name: Declared-vs-used dependency gate
+        run: |
+          python3 scripts/check_declared_dep_usage.py --selftest
+          python3 scripts/check_declared_dep_usage.py
+
+      # WHY: 内部依赖边冻结门(架构方向 G' 交付, gate_manifest G-32/G-33)——
+      # 铁律 Check B 只禁向上边:新增 L10->L2 边与 L10->L9 边同样放行,分层对
+      # 边增长没有约束力(实测 140 条装配边中 82.9% 为越级向下)。本门把
+      # "边集合"以 only-decrease 棘轮冻结(dep_edge_freeze.txt):新增任何内部
+      # 装配边必须显式登记并对照层图评审;删除则收缩基线。与 E-a 门共享
+      # manifest 解析(模块导入,单一方言)。先 --selftest 再真实裁决,零 cargo 秒级。
+      - name: Dependency-edge freeze gate
+        run: |
+          python3 scripts/check_dep_edge_freeze.py --selftest
+          python3 scripts/check_dep_edge_freeze.py
+
       # WHY: 性能红线与 bench 清单静态门(R1-T5, 审计发现 F-R4-01)——本门禁原以
       # .ps1(429 行) + .sh(246 行) 两份手写实现存在, 而 CI 中零次调用(全 .github/
       # 唯一命中是 bench_check.yml 的一句注释), 即 6 项 SLO + RL-01~11 + 120 bench

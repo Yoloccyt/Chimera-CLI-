@@ -1,0 +1,33 @@
+# composition_root_baseline.txt - known-debt ratchet for check_composition_root.py
+# =============================================================================
+# Semantics (see script header, arch direction B-c):
+#   `<posix-relpath> <exact-count>` - count MUST equal the measured assembly
+#   calls in that file's production segment. Only-decrease ratchet:
+#   - count > measured  -> FAIL (stale: debt already moved, delete the line)
+#   - count < measured  -> FAIL (new bypass appeared)
+#   - file deleted      -> FAIL (exemption must not outlive the code)
+#   composition.rs is canonical and NEVER registered here (always free, and
+#   always required: migrating a line here REMOVES it from this file).
+#
+# Elimination order (B-b milestones, arch-refactor-directions-v2-2026-09-12.md):
+#   each migrated command path deletes its line(s) here; when the file is empty
+#   the gate becomes strict for that file automatically.
+# Each entry carries a WHY note for the debt it freezes.
+# =============================================================================
+
+# agent.rs: `agent` 子命令 ephemeral 总线(无 engine 需求)
+crates/chimera-cli/src/commands/agent.rs 1
+# chat.rs: chat REPL ephemeral bus+engine(commands/chat.rs:98-99)
+crates/chimera-cli/src/commands/chat.rs 2
+# doctor.rs: 纯占位构造(`let _bus = EventBus::new()`,立即 drop,零行为)
+crates/chimera-cli/src/commands/doctor.rs 1
+# exec.rs: exec 命令 ephemeral bus+engine
+crates/chimera-cli/src/commands/exec.rs 2
+# parliament.rs: parliament 命令 ephemeral bus+engine
+crates/chimera-cli/src/commands/parliament.rs 2
+# quest.rs: quest 管理操作 ephemeral bus+engine(list/show/cancel/checkpoint)
+crates/chimera-cli/src/commands/quest.rs 2
+# run.rs: run 命令 ephemeral bus+engine
+crates/chimera-cli/src/commands/run.rs 2
+# tui.rs: TUI 主路径约 300 行手写装配(bus+engine+checkpoints, B-b 最大迁移项)
+crates/chimera-cli/src/commands/tui.rs 3

@@ -160,29 +160,30 @@ async fn test_critical_span_fields() {
 }
 
 // ============================================================
-// C3(2026-09-04): Critical mpsc 旁路无订阅者可观测性
+// C3(2026-09-04)→ B-a(M0,2026-09-12): Critical mpsc 旁路无订阅者可观测性
 // ============================================================
-// 背景(F-A5-6):旁路通道按需初始化,无订阅者时 send_critical_mpsc 直接
-// 静默返回 —— 此时 Critical 事件仅有 broadcast 单通道保障,若订阅者 Lagged
-// 则事件永久丢失且无任何告警。C5 评审将此列为可观测性风险点,修复为:
-// 1. publish 路径遇"旁路清单事件 + 零旁路订阅者"时发出 warn;
-// 2. 提供 has_critical_subscribers() 供组合根/运维查询订阅状态。
+// 背景(F-A5-6):旁路通道按需初始化,无订阅者时 send_critical_mpsc 原先
+// 静默返回 —— C3 修复为 warn 告警 + has_critical_subscribers() 查询 API。
+// B-a 再进一步:无订阅者时事件不再"warn 后放弃",而是投递到保底 sink
+// (默认 LogCriticalSink,结构化 error!),并递增 critical_no_subscriber_total。
+// 本测试随之升级:断言 error 级保底送达日志 + 观测计数(替代旧 warn 断言)。
 
 /// 验证 broadcast 有订阅者但 Critical mpsc 旁路无订阅者时,发布
-/// `is_critical_mpsc_event` 判定的事件会发出 warn 告警(不再静默)。
+/// `is_critical_mpsc_event` 判定的事件会经默认保底 sink 发出 error 级
+/// 结构化日志(携带 event_type/severity/event_id 定位字段)。
 ///
 /// # 流程
 /// 1. 创建 EventBus,仅调用 `subscribe()`(broadcast 有订阅者,
 ///    避免误触发既有"Critical 无 broadcast 订阅者"告警路径)
 /// 2. 通过 `publish` 发布 SkepticVeto(命中 is_critical_mpsc_event)
-/// 3. 验证 logs 包含 "Critical mpsc 旁路无订阅者"
+/// 3. 验证 logs 包含保底送达消息与 event_type 字段,且计数 == 1
 ///
 /// # WHY 不用 publish_critical
 /// publish_critical 语义是"调用方明确知道事件为 Critical",为隔离
-/// `is_critical_mpsc_event` 判定路径(publish 分支)的告警行为,本测试走 publish。
+/// `is_critical_mpsc_event` 判定路径(publish 分支)的保底行为,本测试走 publish。
 #[tracing_test::traced_test]
 #[tokio::test]
-async fn test_critical_mpsc_bypass_without_subscriber_warns() {
+async fn test_critical_mpsc_bypass_without_subscriber_falls_back() {
     let bus = EventBus::new();
     // broadcast 有订阅者(排除 severity==Critical 且 subscriber_count==0 的既有告警分支)
     let mut _broadcast_rx = bus.subscribe();
@@ -191,9 +192,19 @@ async fn test_critical_mpsc_bypass_without_subscriber_warns() {
         .await
         .expect("发布应成功");
 
+    // B-a:保底送达日志为 error 级,携带 event_type 定位字段(SkepticVeto)
     assert!(
-        logs_contain("Critical mpsc 旁路无订阅者"),
-        "旁路无订阅者时发布 Critical 事件应发出 warn 告警,当前日志未包含该消息"
+        logs_contain("Critical 事件保底送达"),
+        "旁路无订阅者时发布 Critical 事件应经保底 sink 发出 error 级结构化日志"
+    );
+    assert!(
+        logs_contain("SkepticVeto"),
+        "保底送达日志应携带 event_type=SkepticVeto 定位字段"
+    );
+    assert_eq!(
+        bus.critical_no_subscriber_total(),
+        1,
+        "空订阅者保底投递计数应同步递增"
     );
 }
 

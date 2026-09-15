@@ -205,7 +205,10 @@ impl ModelRouter {
     /// # 错误处理
     /// - 注册表为空 → `RouterError::NoModelsRegistered`
     /// - CACR Block → `RouterError::BudgetExceeded`(同时发布事件)
-    /// - 事件发布失败 → `RouterError::EventBusError`
+    /// - **事件发布失败不改变返回值**(H-另案,M0 2026-09-12):publish 是
+    ///   决策的观测副通道,失败降级为结构化告警,决策正常返回 —— 当前
+    ///   `EventBus::publish` 恒 Ok(契约见 event-bus `publish` 文档),本语义
+    ///   为未来总线失败模式的护栏:通知失败 ≠ 路由失败。
     ///
     /// # P4-W16.1.1 hook 行为
     /// - hooks 在事件发布之后调用(确保事件已广播)
@@ -333,11 +336,22 @@ impl ModelRouter {
                         current: decision.estimated_cost,
                         limit: guard.budget_limit(),
                     };
+                    // H-另案(M0,2026-09-12):发布失败 = 通知失败 ≠ 业务结果。
+                    // Block 决策在进入本分支前已完成,publish 只是"把决策告知
+                    // 订阅者"的观测副通道 —— 总线故障不得改变 Block 的错误语义
+                    // (原实现转投 RouterError::EventBusError,丢失 cost/limit
+                    // 上下文,调用方无法区分"预算拒绝"与"总线故障")。降级为
+                    // 结构化告警后继续返回业务错误;publish 当前恒 Ok(契约见
+                    // event-bus bus.rs publish 文档),本分支为未来失败模式的
+                    // 语义护栏。
                     if let Err(e) = self.event_bus.publish(event).await {
-                        let result: Result<RoutingDecision, RouterError> =
-                            Err(RouterError::from(e));
-                        self.emit_trajectory(&request, start, &result);
-                        return result;
+                        tracing::warn!(
+                            error = %e,
+                            budget_type = "cacr",
+                            current = decision.estimated_cost,
+                            limit = guard.budget_limit(),
+                            "BudgetExceeded 事件发布失败(总线故障降级为告警,Block 决策不受影响)"
+                        );
                     }
 
                     // WHY:reason 的详细信息(成本/预算/阈值)已通过 BudgetExceeded
@@ -360,17 +374,24 @@ impl ModelRouter {
             model_id: decision.model_id.clone(),
             route_reason: decision.route_reason.clone(),
         };
-        let publish_result = self
-            .event_bus
-            .publish(event)
-            .await
-            .map_err(RouterError::from);
+        // H-另案(M0,2026-09-12):发布失败 = 通知失败 ≠ 路由失败。
+        // 路由决策(选哪个模型)在进入本段前**已完成**,publish 只是决策的
+        // 观测副通道 —— 原实现把 publish 失败上抛为 Err,调用方会误以为
+        // "路由失败"(而实际模型已选定),总线故障反转了业务结果。现降级为
+        // 结构化告警并正常返回决策;publish 当前恒 Ok(契约:event-bus bus.rs
+        // `publish` 文档"无订阅者不视为错误",且主路径无失败模式),本分支是
+        // 未来总线引入真实失败模式时的语义护栏(通知失败降级告警,不反转业务)。
+        if let Err(e) = self.event_bus.publish(event).await {
+            tracing::warn!(
+                error = %e,
+                model_id = %decision.model_id,
+                quest_id = %request.quest_id,
+                "ModelRouteSelected 事件发布失败(总线故障降级为告警,路由决策正常返回)"
+            );
+        }
+        let result = Ok(decision);
 
         // 5. P4-W16.1.1: 构造 TrajectoryEvent 并触发 hooks
-        let result = match publish_result {
-            Ok(()) => Ok(decision),
-            Err(e) => Err(e),
-        };
         self.emit_trajectory(&request, start, &result);
 
         result

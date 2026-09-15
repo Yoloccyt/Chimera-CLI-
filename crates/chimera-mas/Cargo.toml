@@ -41,31 +41,15 @@ nexus-contracts = { workspace = true }
 event-bus = { workspace = true }
 # L2 Memory:AgentContext 包装 HierarchicalWindow,1M 上下文经 HCW 稀疏化(ADR-026 决策 7)
 hcw-window = { workspace = true }
-# L2 Memory:四级神经形态记忆 L0-L3,Agent 记忆归档复用(§17.1,Task 17)
-mlc-engine = { workspace = true }
-# L3 Storage:Hot/Warm/Cold/Ice 冷热分层,三级归档存储层(§17.2,Task 17)
-cmt-tiering = { workspace = true }
-# L3 Storage:推测缓存,归档缓存复用(§17.1,Task 17)
 # L6 Router:OmniSparseCoordinator::compute_masks() 计算稀疏掩码(ADR-026 决策 7)
 osa-coordinator = { workspace = true }
-# L7 Execution:委托执行通过 gqep-executor 包装超时(零孤儿调用,§6.1 红线)
-# L4 Security:委托执行通过 qeep-protocol 实现量子纠缠零孤儿(§6.1 红线)
 # L8 Parliament:StabilityGuard 故障隔离复用 Parliament RoleRegistry(Task 19 §19.8)
-# WHY 用 path 而非 workspace=true:parliament 仅在根 [dev-dependencies] 注册,
-# 未进入 [workspace.dependencies],沿用现有内部 crate path 引用约定(§4.1)
 parliament = { workspace = true }
-# L8 Parliament:StabilityGuard 降级链协同 ACB 治理器(Task 19 §19.9)
-# L8 Parliament:StabilityGuard 降级链协同 DECB 治理器(Task 19 §19.9)
-# L9 Quest(同层):StabilityGuard 与 efficiency-monitor 协同上报 Critical 事件(Task 19 §19.10)
 # L1 Core:ExpertConsultant 专家旗舰模型选择为内置注册表策略(Task 18 §18.8);
 # model-router 已按 ADR-172 退役"跨模型路由契约"地位(mca-gateway 为唯一在役
 # LLM 通道),本 crate 对其无依赖边——历史"复用 model-router"注释为失实登记,
 # C7 一致性收口订正(2026-09-04)
-# L6 Router:ExpertConsultant 经 faae-router Function-as-Expert 语义路由(Task 18 §18.8)
-# WHY 用 path 而非 workspace=true:faae-router 未进入 [workspace.dependencies],
-# 沿用现有内部 crate path 引用约定(§4.1,与 parliament/acb-governor 一致)
 # L5 Knowledge:WikiRetriever 复用 repo-wiki FTS5 全文检索 + 内存 KNN(Task 18 §18.10)
-# WHY 用 path 而非 workspace=true:沿用现有内部 crate path 引用约定
 repo-wiki = { workspace = true }
 # L2 Memory:WikiRetriever 可选 NMC 文本编码器(P1-2 dense 通道查询嵌入)
 # WHY L9→L2 向下依赖合规(§2.2 L(N)→L(N-1) 允许);无编码器时检索退化 sparse-only。
@@ -94,6 +78,14 @@ regex = { workspace = true }
 [dev-dependencies]
 # tokio 测试支持(完整 features + test-util 用于 pause/freezing 时间)
 tokio = { workspace = true, features = ["full", "test-util"] }
+# L2 Memory / L3 Storage:mas_benchmark 基准专用(bench 属 dev 面,非生产装配边)
+# WHY 从 [dependencies] 迁入(架构方向 E 批次,2026-09-12):二者仅在
+# benches/mas_benchmark.rs 被引用(src/ 零引用),原置于 [dependencies] 使
+# check_dependency_rules.sh Check D 的内部依赖基数虚高 2(13 vs 真实 11)。
+# 迁入 dev 面后:生产装配边不再包含它们,bench 仍可编译(dev-dependencies 对
+# bench 可见);防回潮由 scripts/check_declared_dep_usage.py(G-30/G-31)承担。
+mlc-engine = { workspace = true }
+cmt-tiering = { workspace = true }
 # proptest:属性测试框架,用于不变量验证(SubTask 15.x,§4.1 block-named 语法)
 proptest = { workspace = true }
 # tempfile:测试用临时文件/目录,跨平台安全

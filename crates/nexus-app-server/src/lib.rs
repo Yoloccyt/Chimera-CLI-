@@ -46,15 +46,19 @@ pub mod subagent_engine;
 
 pub use approval::{ApprovalArbiter, VoteOutcome};
 pub use backend::QuestBackend;
-pub use protocol::{JsonRpcError, RpcCodec, RpcNotification, RpcRequest, RpcResponse};
+pub use protocol::{
+    JsonRpcError, ProtocolError, RpcCodec, RpcNotification, RpcRequest, RpcResponse,
+};
 pub use server::{AppServer, AppServerConfig, BackendError, CoreBackend, ServerError, SessionSnapshot};
 pub use sse::{SseConnection, SseError, SseServer};
 pub use subagent_engine::SubAgentQuestEngine;
-pub use transport::{AppTransport, StdinTransport, TransportError};
+pub use transport::{AppTransport, IoTransport, StdinTransport, TransportError};
 
 /// 预导入模块 — 常用类型便捷导入
 pub mod prelude {
-    pub use crate::protocol::{JsonRpcError, RpcCodec, RpcNotification, RpcRequest, RpcResponse};
+    pub use crate::protocol::{
+        JsonRpcError, ProtocolError, RpcCodec, RpcNotification, RpcRequest, RpcResponse,
+    };
     pub use crate::server::{
         AppServer, AppServerConfig, BackendError, CoreBackend, ServerError, SessionSnapshot,
     };

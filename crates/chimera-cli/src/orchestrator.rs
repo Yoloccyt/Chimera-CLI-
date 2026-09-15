@@ -5,8 +5,9 @@
 //! # 核心职责
 //! - 订阅共享 `EventBus`,消费 TUI 发布的 `TuiChatSubmitted`
 //! - 将 query 构造为 `UserIntent`,交由 `QuestEngine::create_quest` **真实分解**为任务 DAG
-//! - 逐字符流式回发分解结果:`TuiChatStatusChanged(Thinking)` → `TuiChatResponseChunk`×N
-//!   → `TuiChatCompleted` → `TuiChatStatusChanged(Idle)`
+//! - 批聚合流式回发分解结果:`TuiChatStatusChanged(Thinking)` → `TuiChatResponseChunk`×N
+//!   → `TuiChatCompleted` → `TuiChatStatusChanged(Idle)`(H-a 起按
+//!   [`DEFAULT_CHUNK_BATCH_CHARS`] 聚合,替代原逐字符发布)
 //! - 回发事件经同一 `EventBus` 回到 TUI 的订阅者 → `DataPipeline` → `ChatSync`,
 //!   点亮 Chat 面板的端到端流式对话;`create_quest` 内部广播的 `QuestCreated`
 //!   同步点亮 Quest 面板(一次提交同时驱动两个面板)
@@ -36,19 +37,39 @@ use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET}
 /// 事件来源标识(发布回发事件时写入 `EventMetadata.source`)
 const SOURCE: &str = "chimera-cli";
 
+/// 每批聚合的字符数(H-a 事件率治理,默认值)。
+///
+/// WHY 8:下游 TUI 以 **250ms tick** 批量消费事件流并一次性渲染(`DataPipeline`
+/// 定频 drain),即观感粒度本就是"每 tick 一批字符"——逐字符发布对视觉效果
+/// 零贡献,却把事件数与总线深拷贝成本抬高一个数量级(每事件经
+/// `broadcast` 对全部订阅者克隆一份 `NexusEvent`,再各自过 TUI 侧同步器链)。
+/// 原节奏 20ms/字符 ⇒ 每 250ms tick 约浮现 12 字符;批 8 + 节奏摊销 160ms/批
+/// ⇒ 每 tick 消费约 8–16 字符,**观感等价**且事件数降至 1/8。
+/// 留 1.5× 余量(而非直接取 12)以避免 tick 相位抖动造成的节奏不均。
+pub const DEFAULT_CHUNK_BATCH_CHARS: usize = 8;
+
 /// Quest 编排器配置
 pub struct OrchestratorConfig {
-    /// 每个 chunk 之间的流式延迟。
+    /// 每个 chunk(批)之间的流式延迟。
     ///
-    /// WHY 可配置:默认 20ms 制造逐字符浮现的流式观感(配合 TUI 250ms tick,
-    /// 每 tick 约增长 12 字符);测试与 bench 设 `Duration::ZERO` 以最快吞吐运行。
+    /// WHY 可配置:默认 20ms **按字符**摊销(批内字符数 × 20ms),制造逐字符浮现的
+    /// 流式观感(配合 TUI 250ms tick,每 tick 约增长 12 字符);测试与 bench 设
+    /// `Duration::ZERO` 以最快吞吐运行。组合根可经 `CHIMERA_TUI_CHUNK_DELAY_MS`
+    /// 覆盖(设 0 = 关闭打字机节奏,即时上屏)。
     pub chunk_delay: Duration,
+    /// 每批聚合的字符数(H-a,`>= 1`;`0` 按 `1` 处理,调用方无需前置校验)。
+    ///
+    /// WHY 批聚合而非逐字符发布:全部下游消费点均以 `TuiChatResponseChunk { delta, .. }`
+    /// 取值(`cursor_hint` 无承重语义,仅作序号提示),批聚合对消费侧完全透明;
+    /// 事件数按本值下降,而**总时长不变**(`chunk_delay × 字符数`,批内按字符数摊销)。
+    pub chunk_batch_chars: usize,
 }
 
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
             chunk_delay: Duration::from_millis(20),
+            chunk_batch_chars: DEFAULT_CHUNK_BATCH_CHARS,
         }
     }
 }
@@ -82,8 +103,37 @@ pub fn build_error_reply(err: &QuestError) -> String {
 ///
 /// WHY 独立 pub 函数:既是流式分块的单一事实源,也作为 bench 度量
 /// "高频 chunk 生产"的被测目标(每字符一次 `String` 分配的代价基线)。
+///
+/// 注:H-a 起生产路径改用 [`plan_chunks_batched`](plan_chunks_batched)(事件率
+/// 治理),本函数保留为**逐字符语义的对照基线**(bench/测试),不被删除。
 pub fn plan_chunks(reply: &str) -> Vec<String> {
     reply.chars().map(|c| c.to_string()).collect()
+}
+
+/// 将回复按 `batch` 个字符聚合为批分块(纯函数,**无损**)。
+///
+/// # 参数
+/// - `reply`:完整回复文本(按 `char` 切分,多字节字符安全,不做字节切片)
+/// - `batch`:每批字符数;`0` 按 `1` 处理(防除零,调用方无需前置校验)
+///
+/// # 返回
+/// 批序列;`reply` 为空时返回空 `Vec`。
+///
+/// # 不变量(由 proptest 守护)
+/// - **无损**:`batches.concat() == reply`(逐字符等价,不丢不多)
+/// - **批数**:`batches.len() == ceil(char_count / batch)`
+/// - **非空批**:每批至少 1 个字符(不会产出空 `String` 事件)
+///
+/// WHY 与 [`plan_chunks`](plan_chunks) 并存而非替换:后者是既有逐字符契约
+/// (unit test 与 bench 基线依赖),批分块是新增能力,由调用方按配置选择。
+pub fn plan_chunks_batched(reply: &str, batch: usize) -> Vec<String> {
+    let batch = batch.max(1); // 防御:0 视作 1,避免下列切片步进为 0 造成死循环
+    let chars: Vec<char> = reply.chars().collect();
+    let mut batches = Vec::with_capacity(chars.len().div_ceil(batch));
+    for window in chars.chunks(batch) {
+        batches.push(window.iter().collect());
+    }
+    batches
 }
 
 /// 执行一轮 Quest 分解 + 流式发布:Thinking → 真实分解 → 逐字符 chunk → Completed → Idle。
@@ -142,18 +192,25 @@ async fn stream_quest(
         }
     };
 
-    // 3. 逐字符流式回发分解结果
-    for (i, delta) in plan_chunks(&reply).into_iter().enumerate() {
+    // 3. 批聚合流式回发分解结果(H-a:事件率治理;消费侧只读 delta,批对下游透明)
+    //    - cursor_hint 语义:批的**起始字符偏移**(原为字符序号)。批聚合后仍需
+    //      单调递增的序号供消费侧排序/去重,起始偏移保持该语义且信息量更足。
+    //    - 节奏摊销:sleep 按批内字符数放大(`chunk_delay × batch_chars`),使每字符
+    //      平均间隔与逐字符路径一致 —— 总时长与观感不变,事件数降至 1/batch。
+    let mut cursor: u32 = 0;
+    for delta in plan_chunks_batched(&reply, cfg.chunk_batch_chars) {
+        let batch_chars = delta.chars().count() as u32;
         let _ = bus
             .publish(NexusEvent::TuiChatResponseChunk {
                 metadata: EventMetadata::new(SOURCE),
                 session_id: sid.clone(),
                 delta,
-                cursor_hint: i as u32,
+                cursor_hint: cursor,
             })
             .await;
+        cursor = cursor.saturating_add(batch_chars);
         if !cfg.chunk_delay.is_zero() {
-            tokio::time::sleep(cfg.chunk_delay).await;
+            tokio::time::sleep(cfg.chunk_delay * batch_chars).await;
         }
     }
 
@@ -300,6 +357,109 @@ mod tests {
         assert_eq!(plan_chunks("你好").len(), 2);
     }
 
+    // ============================================================
+    // H-a:批聚合分块(plan_chunks_batched)边界与不变量
+    // ============================================================
+
+    #[test]
+    fn plan_chunks_batched_boundaries() {
+        // 空串:零批(不产出空 String 事件)
+        assert!(plan_chunks_batched("", 4).is_empty());
+        // 短于批:单批,内容无损
+        assert_eq!(plan_chunks_batched("ab", 4), vec!["ab"]);
+        // 恰好整除:批数 == 字符数/batch
+        assert_eq!(plan_chunks_batched("abcdef", 3), vec!["abc", "def"]);
+        // 余量:末批不足 batch
+        assert_eq!(plan_chunks_batched("abcde", 3), vec!["abc", "de"]);
+        // batch=0 防御:按 1 处理(逐字符),不 panic、不死循环
+        assert_eq!(plan_chunks_batched("ab", 0), vec!["a", "b"]);
+        // 多字节字符:按 char 聚合,不切碎码点
+        assert_eq!(plan_chunks_batched("你好世界", 3), vec!["你好世", "界"]);
+    }
+
+    #[test]
+    fn plan_chunks_batched_is_lossless_on_single_batch() {
+        let reply = build_quest_reply(&sample_quest());
+        // batch >= 字符数 → 单批且等于原文
+        let batched = plan_chunks_batched(&reply, reply.chars().count() + 1);
+        assert_eq!(batched.len(), 1, "批大于全量时应恰为单批");
+        assert_eq!(batched[0], reply, "单批内容必须与原文逐字相同");
+    }
+
+    // 批聚合的三种核心错误路径:丢失字符 / 重复字符 / 产出空批。
+    // 三者任一发生都会让面板显示与真实回复不一致(静默 UI 缺陷),
+    // 故以属性测试跨随机输入与随机批大小扫面。
+    // 注:此处用行注释而非 doc 注释 —— doc 注释在宏调用位置上属 unused(编译告警)。
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(96))]
+
+        #[test]
+        fn prop_batched_chunks_are_lossless(
+            reply in ".{0,200}",
+            batch in 0usize..13,
+        ) {
+            let batched = plan_chunks_batched(&reply, batch);
+            let effective = batch.max(1);
+            // 不变量 1(无损):拼接逐字等于原文
+            let joined: String = batched.concat();
+            proptest::prop_assert_eq!(&joined, &reply, "批拼接必须逐字等于原文");
+            // 不变量 2(批数):ceil(char_count / effective)
+            let expected = reply.chars().count().div_ceil(effective);
+            proptest::prop_assert_eq!(batched.len(), expected, "批数必须为 ceil(len/batch)");
+            // 不变量 3(非空批):不产出空 String(否则下游会渲染空增量事件)
+            proptest::prop_assert!(
+                batched.iter().all(|b| !b.is_empty()),
+                "任何批都不得为空串"
+            );
+        }
+    }
+
+    /// H-a 端到端:批聚合后事件条数应 <= ceil(字符数 / batch)(证明批真正生效)。
+    #[tokio::test]
+    async fn handle_publishes_batched_chunks() {
+        let bus = EventBus::new();
+        let engine = QuestEngine::new(bus.clone());
+        let mut rx = bus.subscribe();
+        let batch = DEFAULT_CHUNK_BATCH_CHARS;
+        let cfg = OrchestratorConfig {
+            chunk_delay: Duration::ZERO,
+            chunk_batch_chars: batch,
+        };
+
+        handle_chat_event(&bus, &engine, &cfg, &submit("分析需求。设计方案。")).await;
+
+        let mut chunk_events = 0usize;
+        let mut acc = String::new();
+        for _ in 0..512 {
+            match rx.try_recv() {
+                Ok(Some(NexusEvent::TuiChatResponseChunk { delta, .. })) => {
+                    chunk_events += 1;
+                    acc.push_str(&delta);
+                }
+                Ok(Some(NexusEvent::TuiChatStatusChanged {
+                    status: ChatStatus::Idle,
+                    ..
+                })) => break,
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        let char_count = acc.chars().count();
+        assert!(char_count > 0, "回复不应为空:{acc}");
+        let upper_bound = char_count.div_ceil(batch);
+        assert!(
+            chunk_events <= upper_bound,
+            "批聚合未生效:发布 {chunk_events} 条 chunk,上界应为 ceil({char_count}/{batch})={upper_bound}"
+        );
+        assert!(
+            chunk_events < char_count,
+            "批聚合未生效:事件数 {chunk_events} 未低于字符数 {char_count}"
+        );
+        assert!(acc.contains("任务"), "拼接内容仍应为完整回复:{acc}");
+    }
+
     #[tokio::test]
     async fn handle_ignores_non_submit() {
         let bus = EventBus::new();
@@ -307,6 +467,7 @@ mod tests {
         let mut rx = bus.subscribe();
         let cfg = OrchestratorConfig {
             chunk_delay: Duration::ZERO,
+            ..Default::default()
         };
 
         let unrelated = NexusEvent::CacheHit {
@@ -329,6 +490,7 @@ mod tests {
         let mut rx = bus.subscribe();
         let cfg = OrchestratorConfig {
             chunk_delay: Duration::ZERO,
+            ..Default::default()
         };
 
         // 含两句 → 规则分解器真实产出多个任务;await 完成后事件已入 1024 缓冲(无溢出)
@@ -383,6 +545,7 @@ mod tests {
             engine,
             OrchestratorConfig {
                 chunk_delay: Duration::ZERO,
+                ..Default::default()
             },
         );
 

@@ -14,7 +14,9 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 rmp-serde = { workspace = true }
-# arc-swap:P2-W7.2.3 RCU 原语(内环最终一致 + 单调读)
+# arc-swap:EventBus 核心无锁指针交换(bus.rs ArcSwapOption 订阅槽/门闩语义)
+# WHY 保留(2026-09-13):原注释指向的 rcu 模块(MonotonicState)已按 ADR-181
+# 决策 2 退役删除,但本依赖仍被 bus.rs 生产路径使用,故依赖面不变。
 arc-swap = { workspace = true }
 # L0 Contracts:formal_props 验证结果类型(FormalVerifier M1 P7-T4,ADR-047)
 # WHY 合规:L1 → L0 恒允许(§2.2 依赖铁律扩展);nexus-contracts 纯类型零依赖,不引入环

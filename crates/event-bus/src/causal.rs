@@ -28,6 +28,9 @@
 //! # 因果一致性三层(spec.md L252-254)
 //! 1. 跨膜事件因果一致:向量时钟 + 因果缓冲区(本模块 + causal_buffer)
 //! 2. 内环内部最终一致 + 单调读:arc-swap RCU(P2-W7.2.3)
+//!    —— 该层原语 `rcu::MonotonicState` 已按 ADR-181 决策 2 退役删除
+//!    (内环里程碑结束仍零消费);若内环改造需要此原语,从 git 基线
+//!    `baseline-2026-09-13` 恢复
 //! 3. 外环持久状态强一致:Checkpoint/Quest 走 WAL + MessagePack(P2-W7.2.4)
 //!
 //! # 使用示例

@@ -261,3 +261,66 @@ cmd = "{python} scripts/check_await_across_guard.py"
 expect = 0
 kind = "light"
 note = "生产代码零持锁跨 await（豁免经人工复核登记于 await_guard_allowlist.txt；失效条目必红，豁免不得比代码活得更久）"
+
+# 组合根装配门（架构重构方向 B-c）。chimera-cli/src/composition.rs 是唯一合法
+# 装配点；2026-09-12 实测 9 处生产 EventBus::new 中 8 条命令路径绕过组合根
+# （Critical 送达仅 1/9，B-a 已在总线层兜底，结构债由本门棘轮冻结）。成对登记：
+# 先 --selftest 证明门有牙（生产段违规必报 / doc·注释·字符串·测试段必抑制 /
+# 棘轮五态：精确放行·cap>实测 stale·cap<实测新债·文件消失·无登记），再跑真实裁决。
+[[gate]]
+id = "G-28"
+spec_ref = "架构重构方向 B-c / 组合根收口"
+cmd = "{python} scripts/check_composition_root.py --selftest"
+expect = 0
+kind = "light"
+note = "组合根门有牙齿（1 构造性违规必报；doc/注释/字符串/测试段必抑制；棘轮五态裁决全过）"
+
+[[gate]]
+id = "G-29"
+spec_ref = "架构重构方向 B-c / 组合根收口"
+cmd = "{python} scripts/check_composition_root.py"
+expect = 0
+kind = "light"
+note = "生产路径基础设施装配仅限 composition.rs（存量 15 处经 composition_root_baseline.txt exact-count 棘轮冻结，只减不增；cap≠实测或文件消失必红）"
+
+# 依赖真实性门（架构重构方向 E）。Check D 按 manifest 计数 chimera-mas 内部依赖
+# （实测 13/16），其中 2 条 src/ 零引用 —— 棘轮基数虚高。本门对齐"声明 vs 实际
+# 引用"：src/ 引用=正确；仅 benches/tests 引用=应移 [dev-dependencies]（实测
+# chimera-mas 的 mlc-engine/cmt-tiering 已迁）；全零引用=真幽灵。范围限定内部
+# workspace crate 与 [dependencies] 段。先 --selftest 证明有牙再真实裁决。
+[[gate]]
+id = "G-30"
+spec_ref = "架构重构方向 E / 依赖声明真实性"
+cmd = "{python} scripts/check_declared_dep_usage.py --selftest"
+expect = 0
+kind = "light"
+note = "依赖真实性门有牙齿（4 类真实引用判定 + 5 类噪声抑制；例外缺理由/失效必退红）"
+
+[[gate]]
+id = "G-31"
+spec_ref = "架构重构方向 E / 依赖声明真实性"
+cmd = "{python} scripts/check_declared_dep_usage.py"
+expect = 0
+kind = "light"
+note = "138 条内部装配依赖全部有 src/ 引用（0 幽灵 / 0 仅-dev 误置 / 0 例外；chimera-mas Check D 基数 13→11 后本门守住不回潮）"
+
+# 内部依赖边冻结门（架构方向 G'）。铁律 Check B 只禁向上边——新增 L10→L2 边与
+# L10→L9 边同样放行，分层对边增长没有约束力（实测 82.9% 装配边为越级向下）。
+# 本门把边集合以 only-decrease 棘轮冻结（dep_edge_freeze.txt，138 条，2026-09-12
+# 基线）：新增任何内部装配边必须显式登记 + 对照层图评审；删除收缩基线；失效行必红。
+# 与 E-a 门共享 manifest 解析（模块导入，单一方言）。先 --selftest 再真实裁决。
+[[gate]]
+id = "G-32"
+spec_ref = "架构重构方向 G' / 依赖边冻结"
+cmd = "{python} scripts/check_dep_edge_freeze.py --selftest"
+expect = 0
+kind = "light"
+note = "边冻结门有牙齿（4 态裁决：clean/新边 GAP/失效 STALE/空集；格式错误退 2）"
+
+[[gate]]
+id = "G-33"
+spec_ref = "架构重构方向 G' / 依赖边冻结"
+cmd = "{python} scripts/check_dep_edge_freeze.py"
+expect = 0
+kind = "light"
+note = "内部装配边 138 条冻结只减不增（新边未登记必红 / 失效行必红；优先 EventBus 而非新增直连边）"

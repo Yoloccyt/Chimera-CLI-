@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use nexus_contracts::NexusError;
+use nexus_subagent::error::SubAgentError;
 use nexus_subagent::runtime::{SubAgentHandle, SubAgentRuntime, SubAgentTask};
 use nexus_subagent::types::SubAgentSpec;
 use quest_engine::QuestEngine;
@@ -66,11 +67,17 @@ impl SubAgentQuestEngine {
     ) -> Result<SubAgentHandle, NexusError> {
         let engine = Arc::clone(&self.engine);
         let goal = goal.to_string();
-        // SubAgentTask:FnOnce(SubAgentSpec, Arc<CancellationToken>) -> Result<String,String> + Send
+        // SubAgentTask:FnOnce(SubAgentSpec, Arc<CancellationToken>) -> Result<String, SubAgentError> + Send
         // 在 spawn_blocking 同步上下文执行 → Handle::block_on 驱动 async create_quest
+        //
+        // 错误映射责任在本层(L10):`QuestError`(L9)与 `SubAgentError`(L7)属不同层,
+        // 跨层转换由调用方显式完成(nexus-subagent 不该知道 quest-engine)。
         let task: SubAgentTask = Box::new(move |_spec, cancel| {
             if let Some(reason) = cancel.poll() {
-                return Err(format!("cancelled before quest: {}", reason.as_str()));
+                // 取消四因:任务执行前已被撤销 → 分类为 Cancelled(可静默降级)
+                return Err(SubAgentError::Cancelled {
+                    reason: reason.as_str().to_string(),
+                });
             }
             let handle = tokio::runtime::Handle::current();
             handle.block_on(async move {
@@ -80,10 +87,11 @@ impl SubAgentQuestEngine {
                     multimodal_inputs: Vec::new(),
                     risk_level: 0,
                 };
-                let quest = engine
-                    .create_quest(intent)
-                    .await
-                    .map_err(|e| format!("quest create failed: {e}"))?;
+                let quest = engine.create_quest(intent).await.map_err(|e| {
+                    SubAgentError::Execution {
+                        detail: format!("quest create failed: {e}"),
+                    }
+                })?;
                 Ok(quest.quest_id)
             })
         });

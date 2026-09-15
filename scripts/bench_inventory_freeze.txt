@@ -27,6 +27,20 @@ chimera-tui|v3_output_bench|dev-only|v3 输出渲染补充基准,主链已注册
 # G-01/G-02 报红。两者 Cargo.toml 注释/文件自述均有明确用途且无 SLO 阈值,故登记 dev-only。
 chimera-tui|curator_bench|dev-only|FC-2(ADR-081) /compact 上下文策展端到端耗时基线(五段分类 + 0-1 背包 + 抽取式摘要,500/5000 条会话规模),无 SLO 阈值
 chimera-tui|v3_frame_clone_cost_bench|dev-only|零拷贝重构回归守卫:量化每帧整帧克隆代价(全量帧 3→1 / 静默帧 1→0),防止回归重引入 clone,无 SLO 阈值;来源 PS-1 渲染零拷贝批次,ADR 号待补
+# 2026-09-12 补登记(架构方向 H-b 前提量化):报告原提案主张"DataSnapshot 每 250ms
+# 无条件全量重建(≥8 Vec)构成性能债",但该主张从未量化。本 bench 用公开类型复现各
+# 分量并实测,结论为**否决**:单次 tick 重建合计 540ns(4Hz = 2.2µs/s,占 250ms 预算
+# 0.0002%),故不引入 dirty 标记(其会带来"跳过时间驱动字段导致显示冻结"的复杂度与
+# 风险)。本 bench 保留为**反证据基线**——防止后续重复提出同类未量化优化,并记录
+# 事件侧真热点(sync.rs 整集合 clone 11-21µs/次,低频故暂不改)。无 SLO 阈值。
+chimera-tui|snapshot_rebuild_cost_bench|dev-only|H-b 前提量化与反证据基线:DataSnapshot 重建各分量(5×VecDeque64 collect 222ns / TimelineSnapshot100 clone 121ns / 2×MetricSample300 clone 178ns / 合计 540ns)+ 事件侧整集合 clone(11-21µs)对照,裁定"跳过重建"为伪痛点,无 SLO 阈值
+# 2026-09-12 补登记(感知延迟路径裁定前置,§7.7):量化消费侧 TuiApp::update()
+# 两条路径 —— revision 短路 5.0ns(现状多数 poll 命中)vs 全量对齐 33.9µs
+# (事件驱动即时刷新后每次 poll 命中,10Hz = 0.034% CPU)。裁定:消费侧成本可忽略,
+# 事件驱动刷新在消费侧可行;但 pipeline 侧的 refresh_pending 机制本质是"跳过下一次
+# sleep",对"sleep 期间到达的事件"无效 —— 真正实施需 EventSubscriber 提供 async
+# 唤醒原语(select! 桥接),属独立批次(含 TUI 真跑验证)。
+chimera-tui|tui_update_cost_bench|dev-only|消费侧 update() 成本基线:revision 短路 5ns vs 全量对齐 33.9µs(真实规模快照,headless TestBackend 无终端依赖),支撑感知延迟路径裁定,无 SLO 阈值
 chtc-bridge|bridge_benchmark|dev-only|CHTC 桥接开发验证基准
 cmt-tiering|hot_lru|dev-only|Hot LRU 层级开发基准
 cmt-tiering|pragma_capable_bench|dev-only|PixelRAG 能力探测开发基准

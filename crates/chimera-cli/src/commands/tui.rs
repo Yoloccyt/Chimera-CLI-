@@ -15,12 +15,37 @@
 //! → OverWindow 面板结构化展示(零管道侵入)。
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 
 use crate::action_orchestrator::OverWindowHandle;
 use crate::config::ChimeraConfig;
 use crate::overwindow_bridge::OverWindowBridge;
+
+/// 从环境变量构造 Quest 编排器配置(H-a:打字机节奏的用户开关)。
+///
+/// # 环境变量
+/// - `CHIMERA_TUI_CHUNK_DELAY_MS`:每**字符**的流式延迟毫秒数;缺省 20ms,
+///   设 `0` 关闭打字机节奏(即时上屏,适合长回复/自动化场景)。
+///
+/// # 返回
+/// [`OrchestratorConfig`](crate::orchestrator::OrchestratorConfig):
+/// `chunk_delay` 取自环境(非法/缺失回退 20ms),`chunk_batch_chars` 取默认批大小。
+///
+/// WHY 在组合根读环境而非 `Default::default()` 内:与 `commands/run.rs`
+/// (`CHIMERA_RUN_CHUNK_DELAY_MS`)、`commands/chat.rs` 的既有先例一致 ——
+/// 配置默认值保持纯函数语义(测试与 bench 可确定复现),环境覆盖只在进程入口发生。
+fn orchestrator_config_from_env() -> crate::orchestrator::OrchestratorConfig {
+    let delay_ms = std::env::var("CHIMERA_TUI_CHUNK_DELAY_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(20);
+    crate::orchestrator::OrchestratorConfig {
+        chunk_delay: Duration::from_millis(delay_ms),
+        ..Default::default()
+    }
+}
 
 /// FC-05 适配器(2026-09-06 评估):把 L2 `MlcEngine` 卡片系统统计视图映射为
 /// TUI ExperienceCardViz 面板数据。
@@ -156,7 +181,7 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool, protocol: bool
         let quest_handle = crate::orchestrator::spawn_quest_orchestrator(
             bus.clone(),
             Arc::clone(&engine),
-            crate::orchestrator::OrchestratorConfig::default(),
+            orchestrator_config_from_env(),
         );
 
         let run_result = app.run().context("TUI 协议模式运行失败");
@@ -222,12 +247,14 @@ pub async fn execute(_config: &ChimeraConfig, no_v3_engine: bool, protocol: bool
     let control_handle = quest_engine::spawn_control_subscriber(Arc::clone(&engine), bus.clone());
 
     // Quest 分解管线:启动 Quest 编排器,消费 TUI 发布的 TuiChatSubmitted,经真实 L9
-    // QuestEngine 分解为任务 DAG 并逐字符流式回发。复用上方 engine(与控制订阅者共享),
-    // create_quest 内部广播的 QuestCreated 经同一 bus 同步点亮 Quest 面板。
+    // QuestEngine 分解为任务 DAG 并批聚合流式回发(H-a)。复用上方 engine(与控制订阅者
+    // 共享),create_quest 内部广播的 QuestCreated 经同一 bus 同步点亮 Quest 面板。
+    // 节奏与批大小经 orchestrator_config_from_env() 构造(打字机延迟可经
+    // CHIMERA_TUI_CHUNK_DELAY_MS 关闭)。
     let quest_handle = crate::orchestrator::spawn_quest_orchestrator(
         bus.clone(),
         Arc::clone(&engine),
-        crate::orchestrator::OrchestratorConfig::default(),
+        orchestrator_config_from_env(),
     );
 
     // §16.1 经验卡片闭环装配(Phase 10 审计修复 Wave 1):组合根接线
