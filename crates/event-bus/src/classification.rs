@@ -34,15 +34,14 @@ impl NexusEvent {
     /// "1M Token 暴力加载"的预防机制。此为 Hard Constraint 第 10 条的
     /// 强制要求(F-001 修复)。
     ///
-    /// WHY:Week 3 新增的 4 个变体(ContextWindowSwitched/ContextCompressed/
-    /// CapabilityTiered/BlocksRebalanced)均为 Normal 级别,由通配符分支
-    /// 自动覆盖。Week 4 新增的 16 个变体中,仅 OrphanCallDetected 为 Critical
-    /// (对应 Claude Code 尸检 5.4% 孤儿调用教训),其余 15 个为 Normal,
-    /// 由通配符分支自动覆盖。Week 5 新增的 8 个变体中,SkepticVeto(否决权
-    /// 行使)与 RedTeamAudit(红队漏洞审计)为 Critical(丢失导致安全机制
-    /// 失效),其余 6 个为 Normal,由通配符分支自动覆盖。P1-3 新增
-    /// VetoOverridden 为 Critical(否决覆盖审计,丢失导致覆盖行为不可追溯)。
-    /// 若未来新增 Critical 事件,必须在此显式列出,避免被通配符误判为 Normal。
+    /// WHY fail-closed(M1 架构重构方向 3,2026-09-12):本 match **无通配符兜底**。
+    /// 历史实现以 `_ => Normal` 兜底(fail-open 安全洞):被遗忘的新变体会被
+    /// 静默降级为可丢弃的 Normal,与 §6.2 红线"Critical 事件必须走 mpsc 确保
+    /// 送达"相悖——一旦新 Critical 变体漏登 severity() 清单,即失去 mpsc 旁路
+    /// 投递保证而无人察觉。现全部 145 个变体显式定级(Critical 17 / Info 11 /
+    /// Normal 117),由编译器穷举把关:新增变体不显式定级即编译错误。
+    /// 新增 Critical 事件还须同步 bus.rs `is_critical_mpsc_event`
+    /// (双清单同步红线,守护测试 `test_critical_severity_implies_mpsc_bypass` 兜底)。
     pub fn severity(&self) -> EventSeverity {
         match self {
             Self::CheckpointSaved { .. }
@@ -103,8 +102,9 @@ impl NexusEvent {
             // Concord W10 T10.1(ADR-082):协议握手为一次性信道建立事件,
             // 丢失可由 TUI 超时降级兜底,Info 级别即可
             Self::TuiHello { .. } | Self::TuiHelloAck { .. } => EventSeverity::Info,
+            // ==== Normal(117 个,全部显式列出,无通配符兜底) ====
             // TuiActionProgressed / TuiChatResponseChunk / TuiChatStatusChanged
-            // 为高频流式事件,走 Normal(broadcast),由通配符分支覆盖
+            // 为高频流式事件,走 Normal(broadcast),不占用 mpsc 旁路
             // MCA P5:窗口亲和折减结果 + MCA A3:缓存亲和策略应用结果 + MCA M0:跨厂商协商(均为观测面事件)
             // WHY Normal:CrossVendorNegotiation 记录 PVL 辩论中的跨厂商去相关决策,
             // 同 WindowAffinityApplied 等观测面事件,仅用于审计与监控留痕,
@@ -115,8 +115,149 @@ impl NexusEvent {
             // P2-8 MemCon:幽灵记忆检测与策略调整(均为观测面事件,不阻断系统)
             | Self::GhostMemoryDetected { .. }
             | Self::MemConStrategyAdjusted { .. }
-            | Self::BenchmarkMetricsCollected { .. } => EventSeverity::Normal,
-            _ => EventSeverity::Normal,
+            | Self::BenchmarkMetricsCollected { .. }
+            // ---- 以下 111 个变体为原 `_ => Normal` 通配符覆盖范围,M1 起显式列出
+            //      (enum 声明序;行内注释为发布方→消费方归属,便于定向检索;
+            //      新增变体必须在其所属分区内显式定级,否则编译报错) ----
+            // L10 Interface → L9 Quest:用户意图编码完成
+            | Self::UserIntentEncoded { .. }
+            // L1 Core → L2 Memory:全局状态变更
+            | Self::NexusStateChanged { .. }
+            // L1 Core → L9 Quest:模型路由选定
+            | Self::ModelRouteSelected { .. }
+            // L9 Quest → L8 Parliament:任务生命周期
+            | Self::QuestCreated { .. }
+            | Self::QuestProgressUpdated { .. }
+            | Self::QuestListUpdated { .. }
+            | Self::QuestCompleted { .. }
+            | Self::ThinkingModeSwitched { .. }
+            | Self::CheckpointLoaded { .. }
+            | Self::VoteCast { .. }
+            // L4 Security → L8 Parliament:能力冻结
+            | Self::CapabilityFrozen { .. }
+            | Self::ShadowBreakerTripped { .. }
+            // L4 Security → L9 Quest:沙箱违规
+            | Self::SandboxViolation { .. }
+            // L7 Execution → L6 Router:操作产出
+            | Self::OperationProduced { .. }
+            | Self::PredictionVerified { .. }
+            // L6 Router → L5 Knowledge
+            | Self::OmniSparseMasksComputed { .. }
+            | Self::ToolsRouted { .. }
+            // L6 Router → L9 Quest:执行完成
+            | Self::ExecutionCompleted { .. }
+            // L2 Memory → L9 Quest:记忆指标上报 — 修正 V2 违规
+            | Self::MemoryMetricsReported { .. }
+            | Self::MemoryTiered { .. }
+            // L3 Storage → L6 Router:缓存命中/未命中
+            | Self::CacheHit { .. }
+            | Self::CacheMiss { .. }
+            // L5 Knowledge → L9 Quest:知识沉淀
+            | Self::WikiUpdated { .. }
+            | Self::EvolutionTriggered { .. }
+            | Self::DpoPairGenerated { .. }
+            // L6 Router → L4 Security:审计日志
+            | Self::AuditLogged { .. }
+            // L10 Interface:MCP 网格消息
+            | Self::McpMessageReceived { .. }
+            // Week 3 扩展:HCW/CMT/KVBSR 跨层通信事件
+            | Self::ContextWindowSwitched { .. }
+            | Self::ContextCompressed { .. }
+            | Self::CapabilityTiered { .. }
+            | Self::CapabilityTierStatsReported { .. }
+            | Self::BlocksRebalanced { .. }
+            // Week 4 扩展:执行优化层(L6 + L7)跨层通信事件
+            | Self::ExpertActivated { .. }
+            | Self::ActivationThresholdAdjusted { .. }
+            | Self::ActivationCacheStats { .. }
+            | Self::GatherCompleted { .. }
+            | Self::OperationTimedOut { .. }
+            | Self::GatherTimedOut { .. }
+            | Self::ProducerStrategyAdjusted { .. }
+            | Self::PredictionMade { .. }
+            | Self::PredictionStatsReported { .. }
+            | Self::PredictionRolledBack { .. }
+            | Self::CachePrefetched { .. }
+            | Self::CacheStatsReported { .. }
+            | Self::ExpertRouted { .. }
+            | Self::EntropyBalanced { .. }
+            | Self::ExpertRegistered { .. }
+            | Self::ExpertUnregistered { .. }
+            // Week 5 扩展(SubTask 37.1):Parliament/Security/Budget 跨层通信事件
+            | Self::DebateStarted { .. }
+            | Self::BudgetAdjusted { .. }
+            | Self::AhirtProbeCompleted { .. }
+            | Self::RoleRegistered { .. }
+            | Self::BudgetStatsReported { .. }
+            | Self::BudgetMetricsUpdated { .. }
+            // Week 6 扩展:NMC 多模态编码完成事件
+            | Self::NmcEncoded { .. }
+            | Self::ChtcToolCallReceived { .. }
+            // Week 6 扩展:SSRA 融合完成事件
+            | Self::SsraFusionCompleted { .. }
+            | Self::GsoePolicyUpdated { .. }
+            // Week 6 扩展:LSCT 层级切换事件
+            | Self::LsctTierSwitched { .. }
+            | Self::McpMeshTransactionCompleted { .. }
+            | Self::CsnSubstitutionTriggered { .. }
+            | Self::SesaActivationCompleted { .. }
+            | Self::EfficiencyAlertTriggered { .. }
+            // M4 扩展:TUI 双向控制请求事件
+            | Self::QuestPauseRequested { .. }
+            | Self::QuestResumeRequested { .. }
+            | Self::VoteCastRequested { .. }
+            | Self::RefreshStateRequested { .. }
+            | Self::QuestPaused { .. }
+            | Self::QuestResumed { .. }
+            | Self::DecayMetricsReported { .. }
+            | Self::RouterStatsReported { .. }
+            | Self::McpNodeHeartbeat { .. }
+            | Self::ChtcAdapterStatus { .. }
+            | Self::ClvSnapshotReported { .. }
+            // CHIMERA-MAS Agent 协作事件(ADR-026,Task 4)
+            | Self::AgentTaskDelegated { .. }
+            | Self::AgentTaskCompleted { .. }
+            | Self::AgentConsultRequested { .. }
+            | Self::AgentConsultResponded { .. }
+            | Self::AgentHeartbeat { .. }
+            | Self::AgentContextOverflow { .. }
+            | Self::TuiActionProgressed { .. }
+            | Self::TuiChatResponseChunk { .. }
+            | Self::TuiChatStatusChanged { .. }
+            | Self::TuiChatHistoryReplaced { .. }
+            | Self::R1ShadowRegressionDetected { .. }
+            | Self::R1ShadowPromotionReady { .. }
+            | Self::SpecRegistered { .. }
+            | Self::CoordinationRatioReported { .. }
+            | Self::AuditFindingRaised { .. }
+            | Self::HarnessReportGenerated { .. }
+            | Self::DebateCompleted { .. }
+            | Self::DelegationCompleted { .. }
+            | Self::ParliamentStrategyCapChanged { .. }
+            // MCA M0(ADR-065):L10 mca-gateway 会话级/治理级事件(6 个新变体)
+            | Self::ModelAffinitySelected { .. }
+            | Self::ProviderDegraded { .. }
+            | Self::AffinityCapabilityNegotiated { .. }
+            | Self::AffinityUnknownField { .. }
+            | Self::StreamSessionCompleted { .. }
+            // ADR-069 Token 效率优化事件
+            | Self::ContextBudgetAllocated { .. }
+            | Self::SemanticCacheHit { .. }
+            // PROBE P0:HCW 召回评测事件
+            | Self::HcwRecallReported { .. }
+            | Self::HcwRecallDegraded { .. }
+            | Self::OverWindowFallbackTriggered { .. }
+            // L9 Ambient Mode → L9 Quest:资源恢复
+            | Self::ResourceRecovered { .. }
+            // L0 RewardSpec 奖励信号流
+            | Self::RewardSignalReported { .. }
+            | Self::VariantApproved { .. }
+            | Self::ParentSelected { .. }
+            | Self::TokenLedgerRecorded { .. }
+            | Self::AssessmentUpdated { .. }
+            // §16.5 跨层奖励传播 — L1 吞吐量观测(Phase 10 Wave 6,append-only)
+            | Self::BusThroughputReported { .. }
+            | Self::SecurityInterceptionReported { .. } => EventSeverity::Normal,
         }
     }
 
@@ -136,7 +277,7 @@ impl NexusEvent {
             Self::ConsensusReached { .. } => "ConsensusReached",
             Self::VoteCast { .. } => "VoteCast",
             Self::CapabilityFrozen { .. } => "CapabilityFrozen",
-            // L4 深度优化:影子模式熔断跳闸(severity 走通配符 Normal——
+            // L4 深度优化:影子模式熔断跳闸(severity 显式 Normal——
             // 熔断是 fail-closed 状态变更,非 Critical mpsc 旁路清单成员)
             Self::ShadowBreakerTripped { .. } => "ShadowBreakerTripped",
             Self::BudgetExceeded { .. } => "BudgetExceeded",
@@ -159,7 +300,7 @@ impl NexusEvent {
             Self::ContextWindowSwitched { .. } => "ContextWindowSwitched",
             Self::ContextCompressed { .. } => "ContextCompressed",
             Self::CapabilityTiered { .. } => "CapabilityTiered",
-            // L3 深度优化:四层统计快照(Normal 级走通配符)
+            // L3 深度优化:四层统计快照(Normal 级,severity() 显式列出)
             Self::CapabilityTierStatsReported { .. } => "CapabilityTierStatsReported",
             Self::BlocksRebalanced { .. } => "BlocksRebalanced",
             Self::ExpertActivated { .. } => "ExpertActivated",
@@ -249,10 +390,10 @@ impl NexusEvent {
             // polish-v2.7 P1-2: RuntimeAuditor 审计事件(2 个新变体)
             Self::AuditFindingRaised { .. } => "AuditFindingRaised",
             Self::HarnessReportGenerated { .. } => "HarnessReportGenerated",
-            // L8 协调度量接线闭环:观测事件(2 个新变体,Normal 级走通配符)
+            // L8 协调度量接线闭环:观测事件(2 个新变体,Normal 级,severity() 显式列出)
             Self::DebateCompleted { .. } => "DebateCompleted",
             Self::DelegationCompleted { .. } => "DelegationCompleted",
-            // L8 推理悖论风控:策略封顶变更(Normal 级走通配符)
+            // L8 推理悖论风控:策略封顶变更(Normal 级,severity() 显式列出)
             Self::ParliamentStrategyCapChanged { .. } => "ParliamentStrategyCapChanged",
             // MCA M0(ADR-065):mca-gateway 事件(6 个新变体,仅 AffinityQuotaExhausted 为 Critical)
             Self::ModelAffinitySelected { .. } => "ModelAffinitySelected",

@@ -231,10 +231,14 @@ async fn test_default_log_sink_emits_structured_error() {
 
     bus.publish(critical_event("decb-governor")).await.unwrap();
 
-    assert!(logs_contain("Critical 事件保底送达"),
-        "默认 sink 应发出保底送达日志");
-    assert!(logs_contain("BudgetExceeded"),
-        "日志应携带 event_type 定位字段");
+    assert!(
+        logs_contain("Critical 事件保底送达"),
+        "默认 sink 应发出保底送达日志"
+    );
+    assert!(
+        logs_contain("BudgetExceeded"),
+        "日志应携带 event_type 定位字段"
+    );
     // WHY 不断言 source 字段值:tracing-test 捕获的消息文本不含结构化字段值,
     // 字段级断言由测试 1-3 的 CollectingSink 行为断言兜底(等价强度)。
     assert_eq!(bus.critical_no_subscriber_total(), 1);

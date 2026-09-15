@@ -687,7 +687,6 @@ impl EventBus {
         self.logger.as_deref()
     }
 
-
     /// 发布事件到所有订阅者
     ///
     /// 若无订阅者,事件被丢弃但不视为错误(返回 Ok(()))。
@@ -790,9 +789,7 @@ impl EventBus {
             // 不变量见 try_shard_publish;若先路由后扣信用,worker 会归还未扣过
             // 的信用,破坏守恒语义;若扣信用条件宽于路由条件,则 OrderSensitive/
             // 未入片事件扣而无人归还)
-            if self.shard_bus.load().is_some()
-                && matches!(event_lane(&event), Lane::Unordered)
-            {
+            if self.shard_bus.load().is_some() && matches!(event_lane(&event), Lane::Unordered) {
                 match self.try_shard_publish(event) {
                     Ok(()) => continue,
                     // 回退语义与 publish 一致:重新赋值所有权,继续走既有单流路径
@@ -1060,7 +1057,8 @@ impl EventBus {
             // - at-least-once:并发交错下可能与后续 mpsc 投递重复,重复无害
             // 计数独立于 critical_dropped_count:后者=订阅者存在但通道满;
             // 本计数=完全无订阅者走了保底(接线覆盖问题,运维处置不同)。
-            self.critical_no_subscriber_count.fetch_add(1, Ordering::Relaxed);
+            self.critical_no_subscriber_count
+                .fetch_add(1, Ordering::Relaxed);
             self.critical_fallback.on_critical(event);
             return;
         }
@@ -1103,7 +1101,8 @@ impl EventBus {
         // 那是 P1-W2.1 既定的优先级采样丢弃(有 critical_dropped_count 指标与告警),
         // 向 fallback 转投会破坏背压设计(满载刷屏),保持原语义。
         if delivered == 0 && guard.is_empty() {
-            self.critical_no_subscriber_count.fetch_add(1, Ordering::Relaxed);
+            self.critical_no_subscriber_count
+                .fetch_add(1, Ordering::Relaxed);
             self.critical_fallback.on_critical(event);
         }
         // P1-W4.1: 丢弃增量结构化日志 — 在 retain 闭包外单次发出,避免多次 warn 噪声

@@ -28,7 +28,7 @@
 //! - **不替代真实消费者**:组合根的显式订阅者仍是"结构化消费"的推荐路径
 //!   (可升级为 TUI 面板/告警管道);sink 只是不可绕过的最低保障。
 
-use crate::types::{NexusEvent, EventSeverity};
+use crate::types::{EventSeverity, NexusEvent};
 
 /// Critical 事件保底送达 sink(发布路径空订阅者分支的投递目标)
 ///

@@ -62,9 +62,13 @@ async fn contract_publish_is_ok_without_subscribers() {
         .expect("契约违反:无订阅者 publish 不得返回 Err");
     bus.publish_blocking(critical_event("decb-governor"))
         .expect("契约违反:publish_blocking 不得返回 Err");
-    bus.publish_batch(vec![critical_event("a"), normal_event(), critical_event("b")])
-        .await
-        .expect("契约违反:publish_batch 不得返回 Err");
+    bus.publish_batch(vec![
+        critical_event("a"),
+        normal_event(),
+        critical_event("b"),
+    ])
+    .await
+    .expect("契约违反:publish_batch 不得返回 Err");
     bus.publish_batch_blocking(vec![])
         .expect("契约违反:publish_batch_blocking(空批)不得返回 Err");
     bus.publish_critical(critical_event("decb-governor"))

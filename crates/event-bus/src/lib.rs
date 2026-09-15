@@ -5,7 +5,8 @@
 //!
 //! # 核心职责
 //! - 提供类型安全的发布订阅(typed broadcast bus)
-//! - 定义 144 个 NexusEvent 跨层事件变体(v2.27.0-omega 实测枚举),
+//! - 定义 145 个 NexusEvent 跨层事件变体(2026-09-12 实测枚举,
+//!   v2.27.1 后新增 TuiChatHistoryReplaced),
 //!   修正 4 处依赖方向违规(Part A 分析)
 //! - 背压处理与慢消费者隔离,避免孤儿调用(架构红线)
 //! - MessagePack 序列化(ADR-004),支持跨进程投递
@@ -56,13 +57,6 @@ pub mod causal;
 /// (架构红线:Critical 事件 mpsc 保障),与 bus.rs `is_critical_mpsc_event`
 /// 双清单同步红线由守护测试兜底。
 pub mod classification;
-/// Critical 事件保底送达 sink(B-a,M0)
-///
-/// 把"Critical 事件必须有对端"从组合根义务下沉为总线自身保证:
-/// 发布路径空订阅者分支投递到可插拔 [`CriticalSink`],默认
-/// [`LogCriticalSink`](critical_sink::LogCriticalSink) 结构化 `error!` 落盘。
-/// 详见 [`critical_sink`] 模块文档(含 at-least-once 语义边界)。
-pub mod critical_sink;
 /// CBF 信用流原语(P1-T11,手册 §8.5 / T-06 / v4.0 WI-08)
 ///
 /// 订阅者按消费速率获信用、发布者无信用挂起:分片启用后 Unordered 事件先
@@ -72,6 +66,13 @@ pub mod critical_sink;
 /// Critical 背压 = 死锁源,推演 9)。
 /// 详见 [`credit_flow::CreditFlow`]。
 pub mod credit_flow;
+/// Critical 事件保底送达 sink(B-a,M0)
+///
+/// 把"Critical 事件必须有对端"从组合根义务下沉为总线自身保证:
+/// 发布路径空订阅者分支投递到可插拔 [`CriticalSink`],默认
+/// [`LogCriticalSink`](critical_sink::LogCriticalSink) 结构化 `error!` 落盘。
+/// 详见 [`critical_sink`] 模块文档(含 at-least-once 语义边界)。
+pub mod critical_sink;
 /// P3-T10: 事件双轨注册表（v4.0 WI-21 落地,ADR-149:命名空间配额 ≤64/空间 + 审计）
 pub mod dynamic_registry;
 pub mod error;

@@ -1,9 +1,9 @@
-﻿//! 事件主题分类 — 9 类 EventTopic 用于 FilteredSubscriber 选择性订阅
+//! 事件主题分类 — 10 类 EventTopic 用于 FilteredSubscriber 选择性订阅
 //!
 //! 对应架构层：L1 Core
-//! 设计决策（2026-07-09）：采用 9 类分类方案，架构纯净度优先
+//! 设计决策（2026-07-09）：采用 10 类分类方案，架构纯净度优先
 //!
-//! # 9 类分类理据
+//! # 10 类分类理据
 //! 按十层架构的功能域划分，每个 topic 对应一组职责相关的 NexusEvent 变体。
 //! FilteredSubscriber 订阅指定 topic 集合后，仅接收匹配事件，避免无关事件
 //! 占用消费者缓冲区。既有 `subscribe()` 保持全量广播，向后兼容。
@@ -18,15 +18,15 @@ use std::collections::HashSet;
 
 use crate::types::NexusEvent;
 
-/// 事件主题 — 9 类分类覆盖全部 67 个 NexusEvent 变体
+/// 事件主题 — 10 类分类覆盖全部 145 个 NexusEvent 变体
 ///
-/// WHY 9 类分类：按架构层职责划分，每个 topic 对应一个功能域。
+/// WHY 10 类分类：按架构层职责划分，每个 topic 对应一个功能域。
 /// FilteredSubscriber 订阅指定 topic 集合，仅接收匹配事件，
 /// 避免无关事件占用消费者缓冲区。
 ///
 /// # 设计权衡（2026-07-09）
-/// - 方案 A（细粒度 67 类）：每变体一个 topic，过细，FilterSubscriber 失去意义
-/// - 方案 B（9 类，采用）：架构纯净度优先，每个 topic 对应一个功能域
+/// - 方案 A（细粒度，每变体一类）：过细，FilterSubscriber 失去意义
+/// - 方案 B（10 类，采用）：架构纯净度优先，每个 topic 对应一个功能域
 /// - 方案 C（按 severity 分 2 类）：粒度过粗，无法支撑 N9 PrerequisiteChecker
 ///   等只需 Routing 事件的场景
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -57,7 +57,7 @@ pub enum EventTopic {
 }
 
 impl EventTopic {
-    /// 返回全部 9 个 topic 的 HashSet，用于"订阅全部"场景
+    /// 返回全部 10 个 topic 的 HashSet，用于"订阅全部"场景
     ///
     /// WHY 用 HashSet 而非 Vec：FilteredSubscriber 的 topics 字段需要 O(1) 查找，
     /// HashSet 满足此需求；Vec 虽然构造简单但每次 contains 是 O(n)。
@@ -82,7 +82,7 @@ impl EventTopic {
 impl NexusEvent {
     /// 获取事件所属主题
     ///
-    /// 70 个变体映射到 9 类 EventTopic。
+    /// 145 个变体映射到 10 类 EventTopic。
     /// WHY 用 match 而非 HashMap：编译期穷尽性检查，新增变体时编译器强制更新映射，
     /// 避免遗漏导致 topic() panic。
     pub fn topic(&self) -> EventTopic {
@@ -311,7 +311,7 @@ impl NexusEvent {
 /// 不匹配的事件从接收缓冲区移除（消费但不返回），与 `recv_matching` 语义一致。
 ///
 /// # 使用场景
-/// - TTG 仲裁层只需 Parliament + Budget 事件，无需接收全部 67 类
+/// - TTG 仲裁层只需 Parliament + Budget 事件，无需接收全部 145 类
 /// - N9 PrerequisiteChecker 只需 Routing 事件
 /// - 减少无关事件对消费者缓冲区的占用
 ///
