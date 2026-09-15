@@ -86,6 +86,10 @@ license = "MIT"
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full", "tracing"] }
+# tokio-util(M2 塔台合并期收编):`sync::CancellationToken` 提供调用预算包装的
+# 取消注入。原由 chimera-cli 直写版本(M2 scope 限制),合并后收编为 workspace
+# 级统一声明;default features 即含 CancellationToken,零新增传递面。
+tokio-util = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # serde_yaml:TuiConfig 持久化(Task 15),YAML 格式读写配置文件
