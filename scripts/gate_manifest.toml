@@ -343,7 +343,7 @@ spec_ref = "M3 / 架构重构路线图 方向5后半"
 cmd = "bash scripts/check_lock_await.sh"
 expect = 0
 kind = "light"
-note = "crates/*/src 全量持锁跨 await 裁决（未登记违规=红;冻结 10 条与 await_guard_allowlist.txt 同口径,只减不增）"
+note = "crates/*/src 全量持锁跨 await 裁决（未登记违规=红;冻结 11 条与 await_guard_allowlist.txt 同口径,只减不增）"
 
 [[gate]]
 id = "G-36"
