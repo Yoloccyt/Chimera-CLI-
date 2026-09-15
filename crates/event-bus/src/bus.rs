@@ -85,7 +85,7 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
 /// 确保送达,避免 broadcast 在 Lagged 场景下丢失。这与 `NexusEvent::severity()`
 /// 部分重叠但语义不同:
 /// - `severity()` 是事件总线背压级别(同步函数,不依赖运行时值;
-///   AsaIntervention 自 P1-W2.1.4 起统一返回 Critical,见 types.rs L878-887)
+///   AsaIntervention 自 P1-W2.1.4 起统一返回 Critical,见 registry.rs 注册表定级)
 /// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,权威清单即下方 matches! 臂,
 ///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 13)
 ///
@@ -106,7 +106,7 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
         NexusEvent::SkepticVeto { .. }
             | NexusEvent::RedTeamAudit { .. }
             | NexusEvent::BudgetExceeded { .. }
-            // P1-2:AgentTaskFailed 纳入双清单(severity() 已是 Critical,types.rs L2579-2582)
+            // P1-2:AgentTaskFailed 纳入双清单(severity() 已是 Critical,registry.rs 注册表定级)
             // WHY:delegation.rs 走 publish_critical 双通道(行为已合规),但若未来其他发布方
             // 改用 publish/publish_batch,则仅依赖 is_critical_mpsc_event 判定走旁路——
             // 缺失此变体将导致失败事件在 broadcast Lagged 场景下丢失(孤儿任务,§6.1 红线)。
@@ -2199,11 +2199,11 @@ mod tests {
     // severity()-Critical 全集。故采用**三清单互锁 + 双向 is_critical_mpsc_event
     // 交叉断言**:把行为判定(severity() / is_critical_mpsc_event)与声明清单
     // (tests_helpers 双清单 + 常量注释记载的历史广播级)绑成一张闭环网,任何一环
-    // 漂移都触发红灯。权威源:severity() 显式臂(classification.rs) + L44-49 注释
+    // 漂移都触发红灯。权威源:severity() 显式臂(registry.rs) + L44-49 注释
     // 记载的 4 个历史广播级 Critical。
 
     /// R7-正向反向断言:手抄双清单每一项必须与 severity() 权威判定一致,
-    /// 且规模锚定(d8 常量)不回退。防"清单声称为 Critical 但 classification.rs
+    /// 且规模锚定(d8 常量)不回退。防"清单声称为 Critical 但 registry.rs
     /// 判为 Normal"(被通配 `_ => Normal` 吞掉的静默降级)。
     #[test]
     fn test_critical_lists_are_all_severity_critical() {
@@ -2225,13 +2225,13 @@ mod tests {
         );
 
         // 正向反向:并集内每个声称为 Critical 的事件,severity() 必须真返回 Critical。
-        // 一旦 classification.rs severity() 加显式臂时漏在此清单登记,或清单登记了
+        // 一旦 registry.rs severity() 加显式臂时漏在此清单登记,或清单登记了
         // 某个实际被判 Normal 的事件,此断言红灯 —— 反向捕获两只清单漂移方向。
         for event in mpsc_variants.iter().chain(severity_variants.iter()) {
             assert_eq!(
                 event.severity(),
                 EventSeverity::Critical,
-                "{} 声明为 Critical(手抄清单)但 severity() 返回 {:?} → 与 classification.rs 权威判定漂移",
+                "{} 声明为 Critical(手抄清单)但 severity() 返回 {:?} → 与 registry.rs 权威判定漂移",
                 event.type_name(),
                 event.severity()
             );
