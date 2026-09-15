@@ -28,8 +28,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::TuiApp;
 use super::event_loop::{ratio_preset_next, tick_preset_next};
+use super::TuiApp;
 use crate::input::{lookup_key_action, InputRouter, KeyPattern, KeyRule, RouteTarget, RouterMode};
 use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, PanelId, TuiCommand};
@@ -398,10 +398,7 @@ impl TuiApp {
     pub(crate) fn apply_route_target(&mut self, target: RouteTarget, key: KeyEvent) {
         let handler = ROUTE_TARGET_TABLE
             .iter()
-            .find(|e| {
-                std::mem::discriminant(&e.representative)
-                    == std::mem::discriminant(&target)
-            })
+            .find(|e| std::mem::discriminant(&e.representative) == std::mem::discriminant(&target))
             .map(|e| e.handler);
         if let Some(handler) = handler {
             handler(self, target, key);

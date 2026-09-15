@@ -164,29 +164,25 @@ fn tick_rebuild_total(c: &mut Criterion) {
             let cpu = backfill.clone();
             let mem = backfill.clone();
             black_box((h1, h2, h3, h4, h5, t, cpu, mem));
-            });
+        });
     });
 
     // 频率口径:4 Hz(250 ms tick)。用 BenchmarkId 标注,便于报告直接换算占比。
-    group.bench_with_input(
-        BenchmarkId::new("at_4hz_per_second", 4),
-        &4,
-        |b, &hz| {
-            b.iter(|| {
-                for _ in 0..hz {
-                    let h1: Vec<u64> = hist.iter().copied().collect();
-                    let h2: Vec<u64> = hist.iter().copied().collect();
-                    let h3: Vec<u64> = hist.iter().copied().collect();
-                    let h4: Vec<u64> = hist.iter().copied().collect();
-                    let h5: Vec<u64> = hist.iter().copied().collect();
-                    let t: Vec<TimelineSnapshot> = timeline.to_vec();
-                    let cpu = backfill.clone();
-                    let mem = backfill.clone();
-                    black_box((h1, h2, h3, h4, h5, t, cpu, mem));
-                }
-            });
-        },
-    );
+    group.bench_with_input(BenchmarkId::new("at_4hz_per_second", 4), &4, |b, &hz| {
+        b.iter(|| {
+            for _ in 0..hz {
+                let h1: Vec<u64> = hist.iter().copied().collect();
+                let h2: Vec<u64> = hist.iter().copied().collect();
+                let h3: Vec<u64> = hist.iter().copied().collect();
+                let h4: Vec<u64> = hist.iter().copied().collect();
+                let h5: Vec<u64> = hist.iter().copied().collect();
+                let t: Vec<TimelineSnapshot> = timeline.to_vec();
+                let cpu = backfill.clone();
+                let mem = backfill.clone();
+                black_box((h1, h2, h3, h4, h5, t, cpu, mem));
+            }
+        });
+    });
 
     group.finish();
 }

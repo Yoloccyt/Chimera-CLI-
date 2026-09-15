@@ -527,7 +527,9 @@ async fn chat_event_refreshes_snapshot_immediately_not_on_tick() {
     // 内容也应即时可见(chat_messages 已进快照)
     let snap = pipeline.snapshot();
     assert!(
-        snap.chat_messages.iter().any(|m| m.content.contains("即时刷新")),
+        snap.chat_messages
+            .iter()
+            .any(|m| m.content.contains("即时刷新")),
         "chat 消息应已进快照"
     );
     pipeline.shutdown().await;

@@ -737,60 +737,61 @@ const SEARCH_KEY_TABLE: &[KeyRule<fn(&mut TaskManagerPanel, KeyEvent)>] = &[
 /// Space 多选 / Ctrl+A 全选 / Esc 清多选 / f 搜索 / S 排序 / P 单选暂停 /
 /// B 批量(或单选)暂停 / T 批量(或单选)终止 / +、- 优先级 / Enter 详情 /
 /// C 创建预留 / R 批量(或单选)恢复
-const MAIN_KEY_TABLE: &[KeyRule<fn(&mut TaskManagerPanel, &mut TuiState) -> Option<TuiCommand>>] = &[
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char(' ')),
-        action: TaskManagerPanel::toggle_multi_select,
-    },
-    KeyRule {
-        pattern: KeyPattern::Ctrl(KeyCode::Char('a')),
-        action: TaskManagerPanel::select_all_filtered,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Esc),
-        action: TaskManagerPanel::clear_multi_select,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char('f')),
-        action: TaskManagerPanel::enter_search_mode,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char('S')),
-        action: TaskManagerPanel::cycle_sort_mode,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char('P')),
-        action: TaskManagerPanel::pause_selected,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char('B')),
-        action: TaskManagerPanel::batch_pause_or_single,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char('T')),
-        action: TaskManagerPanel::terminate_batch_or_single,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char('+')),
-        action: TaskManagerPanel::priority_increment,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char('-')),
-        action: TaskManagerPanel::priority_decrement,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Enter),
-        action: TaskManagerPanel::open_selected_detail,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char('C')),
-        action: TaskManagerPanel::create_quest_reserved,
-    },
-    KeyRule {
-        pattern: KeyPattern::Code(KeyCode::Char('R')),
-        action: TaskManagerPanel::resume_batch_or_single,
-    },
-];
+const MAIN_KEY_TABLE: &[KeyRule<fn(&mut TaskManagerPanel, &mut TuiState) -> Option<TuiCommand>>] =
+    &[
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char(' ')),
+            action: TaskManagerPanel::toggle_multi_select,
+        },
+        KeyRule {
+            pattern: KeyPattern::Ctrl(KeyCode::Char('a')),
+            action: TaskManagerPanel::select_all_filtered,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Esc),
+            action: TaskManagerPanel::clear_multi_select,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char('f')),
+            action: TaskManagerPanel::enter_search_mode,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char('S')),
+            action: TaskManagerPanel::cycle_sort_mode,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char('P')),
+            action: TaskManagerPanel::pause_selected,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char('B')),
+            action: TaskManagerPanel::batch_pause_or_single,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char('T')),
+            action: TaskManagerPanel::terminate_batch_or_single,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char('+')),
+            action: TaskManagerPanel::priority_increment,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char('-')),
+            action: TaskManagerPanel::priority_decrement,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Enter),
+            action: TaskManagerPanel::open_selected_detail,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char('C')),
+            action: TaskManagerPanel::create_quest_reserved,
+        },
+        KeyRule {
+            pattern: KeyPattern::Code(KeyCode::Char('R')),
+            action: TaskManagerPanel::resume_batch_or_single,
+        },
+    ];
 
 impl Panel for TaskManagerPanel {
     fn id(&self) -> PanelId {
@@ -974,53 +975,86 @@ mod tests {
             ),
             (
                 "MAIN_KEY_TABLE",
-                MAIN_KEY_TABLE
-                    .iter()
-                    .map(|r| r.pattern)
-                    .collect::<Vec<_>>(),
+                MAIN_KEY_TABLE.iter().map(|r| r.pattern).collect::<Vec<_>>(),
             ),
         ] {
             for (i, a) in patterns.iter().enumerate() {
                 for b in &patterns[i + 1..] {
-                    assert_ne!(
-                        a, b,
-                        "{name} 含重复键位注册(首个命中生效,重复行是死代码)"
-                    );
+                    assert_ne!(a, b, "{name} 含重复键位注册(首个命中生效,重复行是死代码)");
                 }
             }
         }
 
         // 无空路由:面板文档承诺的每个键恰命中主键表一行
         let documented: [(KeyEvent, &str); 13] = [
-            (KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), "Space 多选"),
-            (KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL), "Ctrl+A 全选"),
-            (KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), "Esc 清多选"),
-            (KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE), "f 搜索"),
-            (KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE), "S 排序"),
-            (KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE), "P 暂停"),
-            (KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE), "B 批量暂停"),
-            (KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE), "T 终止"),
-            (KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE), "+ 优先级"),
-            (KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE), "- 优先级"),
-            (KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), "Enter 详情"),
-            (KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE), "C 创建预留"),
-            (KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE), "R 恢复"),
+            (
+                KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+                "Space 多选",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+                "Ctrl+A 全选",
+            ),
+            (
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                "Esc 清多选",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+                "f 搜索",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+                "S 排序",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+                "P 暂停",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE),
+                "B 批量暂停",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
+                "T 终止",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE),
+                "+ 优先级",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE),
+                "- 优先级",
+            ),
+            (
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                "Enter 详情",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE),
+                "C 创建预留",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+                "R 恢复",
+            ),
         ];
         for (key, what) in documented {
             let hits = MAIN_KEY_TABLE
                 .iter()
                 .filter(|r| r.pattern.matches(key))
                 .count();
-            assert_eq!(
-                hits, 1,
-                "{what} 应恰命中主键表一行(空路由或重复注册即红)"
-            );
+            assert_eq!(hits, 1, "{what} 应恰命中主键表一行(空路由或重复注册即红)");
         }
 
         // 搜索表:Esc/Enter/Backspace/任意字符恰一行(无空路由)
         for (key, what) in [
             (KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), "搜索 Esc"),
-            (KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), "搜索 Enter"),
+            (
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                "搜索 Enter",
+            ),
             (
                 KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
                 "搜索 Backspace",
@@ -1038,9 +1072,9 @@ mod tests {
         }
         // 搜索抑制语义:导航/控制键(如 Up)不在搜索表内,保证搜索态抑制其他键
         assert!(
-            SEARCH_KEY_TABLE
-                .iter()
-                .all(|r| !r.pattern.matches(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))),
+            SEARCH_KEY_TABLE.iter().all(|r| !r
+                .pattern
+                .matches(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))),
             "搜索键表不应包含 Up 等导航键(搜索态须抑制)"
         );
     }

@@ -424,7 +424,8 @@ impl DataPipeline {
         let task = tokio::spawn(async move {
             let mut current_tick_ms = tick_ms;
             let mut eco_countdown: u32 = 0;
-            let mut tick_mode = TickMode::Normal;            let mut quest_sync = QuestSync::new();
+            let mut tick_mode = TickMode::Normal;
+            let mut quest_sync = QuestSync::new();
             let mut budget_sync = BudgetSync::new();
             let mut memory_sync = MemorySync::new();
             let mut security_sync = SecuritySync::new();
