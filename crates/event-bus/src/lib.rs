@@ -5,7 +5,8 @@
 //!
 //! # 核心职责
 //! - 提供类型安全的发布订阅(typed broadcast bus)
-//! - 定义 144 个 NexusEvent 跨层事件变体(v2.27.0-omega 实测枚举),
+//! - 定义 145 个 NexusEvent 跨层事件变体(2026-09-12 实测枚举,
+//!   v2.27.1 后新增 TuiChatHistoryReplaced),
 //!   修正 4 处依赖方向违规(Part A 分析)
 //! - 背压处理与慢消费者隔离,避免孤儿调用(架构红线)
 //! - MessagePack 序列化(ADR-004),支持跨进程投递

@@ -627,7 +627,6 @@ impl EventBus {
         self.logger.as_deref()
     }
 
-
     /// 发布事件到所有订阅者
     ///
     /// 若无订阅者,事件被丢弃但不视为错误(返回 Ok(()))。

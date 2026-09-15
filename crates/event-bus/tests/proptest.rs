@@ -19,7 +19,7 @@ use proptest::prelude::*;
 
 /// 构造一个代表性的 NexusEvent(覆盖全部 10 个 topic × 3 个 severity 级别)
 ///
-/// WHY 代表性构造而非穷举: NexusEvent 有 90+ 变体,全部构造代码量过大。
+/// WHY 代表性构造而非穷举: NexusEvent 有 145 个变体,全部构造代码量过大。
 /// 选取每个 topic 至少一个代表变体 + Critical/Info/Normal 各至少一个,
 /// 确保 proptest 随机选择时能覆盖全部分类路径。
 fn make_event(variant: u8) -> NexusEvent {
