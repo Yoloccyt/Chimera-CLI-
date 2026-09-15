@@ -21,12 +21,11 @@
 //! Exec 分支应用，经 [`exec_exit_code`] 显式转换）。
 
 use anyhow::Result;
-use event_bus::EventBus;
 use nexus_core::{MultimodalInput, UserIntent};
-use quest_engine::QuestEngine;
 use uuid::Uuid;
 
 use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
+use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::orchestrator::{build_error_reply, build_quest_reply};
@@ -52,24 +51,39 @@ fn call_budget_to_exec_error(e: CallBudgetError) -> ChimeraCliError {
     }
 }
 
-/// 执行 exec 命令 — 非交互 + stdout 纪律（WI-02）
+/// 执行 exec 命令 — 兼容层 thin wrapper（M4-P1）
+///
+/// 独立调用场景（库调用方/既有测试）经组合根装配 ephemeral AppContext，
+/// 语义与迁移前一致。dispatch 主链直接调 [`execute_with_ctx`] 共享
+/// dispatch 级 AppContext（C12 唯一装配点）。
 ///
 /// # 与 `chimera run` 的关系
 /// 复用相同 QuestEngine 分解路径（单一真相源），差异在**输出纪律**：
 /// run 保留流式动画（人类消费），exec 输出纯净（机器消费）。
 pub async fn execute(
     prompt: &str,
-    _config: &ChimeraConfig,
+    config: &ChimeraConfig,
+    json: bool,
+    _perm: &PermissionCtx,
+) -> Result<()> {
+    let ctx = crate::composition::build(config)?;
+    execute_with_ctx(&ctx, prompt, json, _perm).await
+}
+
+/// exec 命令主体 — 从组合根 AppContext 取共享 bus + engine（M4-P1）
+pub async fn execute_with_ctx(
+    ctx: &AppContext,
+    prompt: &str,
     json: bool,
     _perm: &PermissionCtx,
 ) -> Result<()> {
     tracing::info!(prompt = %prompt, "exec: 收到非交互任务");
 
-    // 1. 构造进程内 ephemeral EventBus + QuestEngine（与 run 一致）
-    //    WHY bus.clone():call_with_budget 需持 bus 发布 OperationTimedOut
+    // 1. 共享 bus/engine 来自组合根（与 run 同源）
+    //    WHY bus 引用:call_with_budget 需持 bus 发布 OperationTimedOut
     //    事件(M2 本层超时兜底; Parliament 路径同理保留 engine 的 clone)。
-    let bus = EventBus::new();
-    let engine = QuestEngine::new(bus.clone());
+    let bus = &ctx.bus;
+    let engine = &ctx.engine;
 
     // 2. 封装 UserIntent（UUIDv7 时间有序）
     let intent = UserIntent {
@@ -91,7 +105,7 @@ pub async fn execute(
         DEFAULT_CALL_BUDGET,
         &token,
         "exec.create_quest",
-        &bus,
+        bus,
     )
     .await
     {
@@ -222,5 +236,35 @@ mod tests {
         execute("评审增量验证:分解并总结", &config, false, &perm)
             .await
             .expect("exec 正常路径应成功");
+    }
+
+    /// M4-P1：exec 经 execute_with_ctx 走组合根共享 bus ——
+    /// QuestCreated 对外部订阅者可见（此前命令自建私有 bus，事件零可见）。
+    /// 此测试先行失败（红）：execute_with_ctx 尚不存在。
+    #[tokio::test]
+    async fn exec_events_visible_on_shared_context_bus() {
+        use std::time::Duration;
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        // §4.4 反模式 3：先 subscribe 再驱动命令，否则事件静默丢失
+        let mut rx = ctx.bus.subscribe();
+        let perm = PermissionCtx::default();
+        execute_with_ctx(&ctx, "评审增量验证:分解并总结", false, &perm)
+            .await
+            .expect("exec 正常路径应成功");
+        let mut saw_quest_created = false;
+        for _ in 0..40 {
+            match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+                Ok(Ok(event_bus::NexusEvent::QuestCreated { .. })) => {
+                    saw_quest_created = true;
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                _ => break,
+            }
+        }
+        assert!(
+            saw_quest_created,
+            "QuestCreated 应在组合根共享 bus 上可见（命令不再自建私有 bus）"
+        );
     }
 }

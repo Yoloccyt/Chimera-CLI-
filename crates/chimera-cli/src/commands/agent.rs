@@ -23,16 +23,20 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chimera_mas::{AgentTask, QualityLevel, RootOrchestrator, TaskComplexity, MAX_AGENT_DEPTH};
-use event_bus::EventBus;
 use nexus_core::{Task, TaskStatus};
 
 use crate::cli::AgentAction;
+use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::output;
 use crate::permission::{self, PermissionCtx};
 
-/// 执行 agent 子命令 — 真实接入 chimera-mas API
+/// 执行 agent 子命令 — 兼容层 thin wrapper（M4-P1）
+///
+/// 独立调用场景（库调用方/既有测试）经组合根装配 ephemeral AppContext，
+/// 语义与迁移前"进程内 ephemeral orchestrator"一致。dispatch 主链直接调
+/// [`execute_with_ctx`] 共享 dispatch 级 AppContext（C12 唯一装配点）。
 ///
 /// `json` flag(Task 1.7):`true` 时各子命令输出 JSON envelope。
 /// `parallel`(Task 1.10.6):`true` 时 spawn 使用 Medium 复杂度(创建 2 个并行 Agent)。
@@ -40,7 +44,20 @@ use crate::permission::{self, PermissionCtx};
 /// `dry_run`(Task 2.2):仅 `agent cancel` 消费,`true` 时只输出预览不执行。
 pub async fn execute(
     action: &AgentAction,
-    _config: &ChimeraConfig,
+    config: &ChimeraConfig,
+    json: bool,
+    parallel: bool,
+    perm: &PermissionCtx,
+    dry_run: bool,
+) -> Result<()> {
+    let ctx = crate::composition::build(config)?;
+    execute_with_ctx(&ctx, action, json, parallel, perm, dry_run).await
+}
+
+/// agent 子命令主体 — 从组合根 AppContext 取共享 bus（M4-P1）
+pub async fn execute_with_ctx(
+    ctx: &AppContext,
+    action: &AgentAction,
     json: bool,
     parallel: bool,
     perm: &PermissionCtx,
@@ -48,9 +65,10 @@ pub async fn execute(
 ) -> Result<()> {
     tracing::info!(?action, parallel, dry_run, "Agent 生命周期管理操作");
 
-    // 构造进程内 ephemeral RootOrchestrator(与 chimera run 一致的设计)
-    let bus = EventBus::new();
-    let orchestrator = RootOrchestrator::new(bus);
+    // 共享 bus 来自组合根（与 chimera run 同源的 ephemeral 设计）：
+    // RootOrchestrator 绑定共享 bus，delegate 发布的 AgentTaskDelegated
+    // 等事件对 dispatch 级订阅者可见（M4-P1 前:私有 bus，事件零可见）。
+    let orchestrator = RootOrchestrator::new(ctx.bus.clone());
 
     match action {
         AgentAction::List => list_agents(&orchestrator, json).await,
@@ -298,4 +316,72 @@ fn parse_quadrant(quadrant: &str) -> Result<chimera_mas::Quadrant> {
         }
     };
     Ok(q)
+}
+
+// ============================================================
+// 单元测试
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::composition;
+    use event_bus::NexusEvent;
+
+    /// M4-P1：agent 子命令经 execute_with_ctx 使用组合根共享 bus ——
+    /// spawn 经 RootOrchestrator 发布的 AgentTaskDelegated 在共享 bus 上可见
+    /// （此前命令自建私有 bus，事件零可见）。
+    /// 此测试先行失败（红）：execute_with_ctx 尚不存在。
+    #[tokio::test]
+    async fn agent_spawn_events_visible_on_shared_context_bus() {
+        let ctx = composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        // §4.4 反模式 3：先 subscribe 再驱动命令，否则事件静默丢失
+        let mut rx = ctx.bus.subscribe();
+        let perm = PermissionCtx {
+            yes: true,
+            no_permission: false,
+        };
+        let action = AgentAction::Spawn {
+            quadrant: "Q1".into(),
+            task: "实现模块 X 的核心逻辑".into(),
+        };
+        execute_with_ctx(&ctx, &action, true, false, &perm, false)
+            .await
+            .expect("agent spawn 应成功");
+        let mut saw_delegated = false;
+        for _ in 0..40 {
+            match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+                Ok(Ok(NexusEvent::AgentTaskDelegated { .. })) => {
+                    saw_delegated = true;
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                _ => break,
+            }
+        }
+        assert!(
+            saw_delegated,
+            "AgentTaskDelegated 应在组合根共享 bus 上可见（orchestrator 不再绑私有 bus）"
+        );
+    }
+
+    /// M4-P1：agent list 经共享上下文成功（回归）。
+    #[tokio::test]
+    async fn agent_list_on_shared_context() {
+        let ctx = composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        let perm = PermissionCtx::default();
+        execute_with_ctx(&ctx, &AgentAction::List, true, false, &perm, false)
+            .await
+            .expect("agent list 应成功");
+    }
+
+    /// M4-P1 兼容层回归：原签名 execute wrapper 行为不变。
+    #[tokio::test]
+    async fn agent_wrapper_normal_path_unchanged() {
+        let config = ChimeraConfig::default();
+        let perm = PermissionCtx::default();
+        execute(&AgentAction::List, &config, true, false, &perm, false)
+            .await
+            .expect("wrapper 正常路径应成功");
+    }
 }

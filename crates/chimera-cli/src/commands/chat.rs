@@ -28,11 +28,12 @@
 //! > /help               # slash 命令 → 输出可用命令清单
 //! > /exit               # 退出 REPL
 //! ```
+//! (装配说明:bus/engine 来自组合根 AppContext——M4-P1 后经 dispatch 共享,
+//! 独立调用经 execute wrapper 转组合根 ephemeral 装配,见各函数文档。)
 
 #![forbid(unsafe_code)]
 
 use std::io::{self, BufRead, Write};
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -43,6 +44,7 @@ use uuid::Uuid;
 
 use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
 use crate::cli::Cli;
+use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
@@ -82,31 +84,41 @@ async fn stream_to_stdout(reply: &str, delay: Duration) {
     let _ = writeln!(lock);
 }
 
-/// 启动 chat REPL 主循环(SubTask 1.5.1)
+/// 启动 chat REPL — 兼容层 thin wrapper（M4-P1）
+///
+/// 独立调用场景（库调用方）经组合根装配 ephemeral AppContext。
+/// dispatch 主链直接调 [`execute_with_ctx`] 共享 dispatch 级 AppContext
+/// （C12 唯一装配点）。
+pub async fn execute(cli: &Cli, config: &ChimeraConfig) -> Result<()> {
+    let ctx = crate::composition::build(config)?;
+    execute_with_ctx(&ctx, cli, config).await
+}
+
+/// chat REPL 主体 — 从组合根 AppContext 取共享 bus + engine（M4-P1）
 ///
 /// 流程:
-/// 1. 构造进程内 EventBus + QuestEngine(ephemeral,与 run.rs 一致)
+/// 1. 从 AppContext 借 engine、clone bus（C12 共享装配，与 run 同源）
 /// 2. spawn 后台事件订阅 task:消费 TuiActionProgressed/Completed,输出 tool 调用展示
 /// 3. REPL 主循环:读 stdin → slash 命令 / 自然语言 → 流式输出
 /// 4. 每 5 轮对话输出 `[context: <used>/<max>]`
 /// 5. EOF(/exit/Ctrl+C)退出
-pub async fn execute(cli: &Cli, config: &ChimeraConfig) -> Result<()> {
+pub async fn execute_with_ctx(ctx: &AppContext, cli: &Cli, config: &ChimeraConfig) -> Result<()> {
     tracing::info!("启动 chat REPL");
 
     let perm = PermissionCtx::from_cli(cli);
     let max_tokens = DEFAULT_MAX_TOKENS;
 
-    // 1. 构造进程内 ephemeral EventBus + QuestEngine
-    let bus = EventBus::new();
-    let engine = Arc::new(QuestEngine::new(bus.clone()));
+    // 1. engine 直借组合根（AppContext.engine 为 owned，REPL 生命周期 ≤ dispatch
+    //    持有的 ctx，借用安全）；bus Clone（Arc 廉价共享）供订阅 task 持有。
+    let engine = &ctx.engine;
 
     // 2. spawn 后台事件订阅 task:消费 TuiAction* 事件,输出 tool 调用展示(SubTask 1.5.4)
     //    WHY spawn 独立 task:TuiAction 事件由 QuestEngine 在分解过程中发布,
     //    若同步订阅会阻塞 REPL 主循环。独立 task + broadcast channel 保证实时展示。
-    let tool_display_handle = spawn_tool_event_subscriber(bus.clone(), perm);
+    let tool_display_handle = spawn_tool_event_subscriber(ctx.bus.clone(), perm);
 
     // 3. REPL 主循环
-    let result = repl_loop(&engine, &bus, cli, config, &perm, max_tokens).await;
+    let result = repl_loop(engine, &ctx.bus, cli, config, &perm, max_tokens).await;
 
     // 4. 退出时 abort 后台 task,避免 orphan(§4.4 反模式 #7)
     tool_display_handle.abort();
@@ -118,7 +130,7 @@ pub async fn execute(cli: &Cli, config: &ChimeraConfig) -> Result<()> {
 ///
 /// 抽取为独立函数便于单元测试(测试可直接调用并断言行为)。
 async fn repl_loop(
-    engine: &Arc<QuestEngine>,
+    engine: &QuestEngine,
     _bus: &EventBus,
     _cli: &Cli,
     _config: &ChimeraConfig,
@@ -509,7 +521,7 @@ impl ParsedSlashCommand {
 /// 返回 `Ok(true)` 表示应退出 REPL(`/exit`),`Ok(false)` 表示继续。
 async fn handle_slash_command(
     input: &str,
-    engine: &Arc<QuestEngine>,
+    engine: &QuestEngine,
     config: &ChimeraConfig,
     perm: &PermissionCtx,
 ) -> Result<bool> {
@@ -634,7 +646,7 @@ async fn handle_llm(parsed: &ParsedSlashCommand, _config: &ChimeraConfig) -> Res
 /// 复用 Task 1.2 的 QuestEngine API,但通过 chat 上下文调用。
 async fn handle_quest(
     parsed: &ParsedSlashCommand,
-    engine: &Arc<QuestEngine>,
+    engine: &QuestEngine,
     _config: &ChimeraConfig,
     _perm: &PermissionCtx,
 ) -> Result<()> {
@@ -790,12 +802,17 @@ mod tests {
     /// 测试 6:stream_quest_response 真实接入 QuestEngine 并流式输出(SubTask 1.5.2 / 1.5.9)
     ///
     /// 验证:给定自然语言输入,QuestEngine 分解后能产出非空回复文本。
+    /// M4-P1:改经组合根 AppContext 的共享 engine/bus(与生产路径同源)。
     #[tokio::test]
     async fn test_stream_quest_response_produces_reply() {
-        let bus = EventBus::new();
-        let engine = QuestEngine::new(bus.clone());
-        let reply =
-            stream_quest_response(&engine, &bus, "分析需求。设计方案。", Duration::ZERO).await;
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        let reply = stream_quest_response(
+            &ctx.engine,
+            &ctx.bus,
+            "分析需求。设计方案。",
+            Duration::ZERO,
+        )
+        .await;
         assert!(!reply.is_empty(), "回复不应为空");
         assert!(reply.contains("任务"), "回复应含任务分解信息: {reply}");
     }
@@ -803,27 +820,27 @@ mod tests {
     /// 测试 7:handle_slash_command 处理 /help 输出命令清单(SubTask 1.5.9 / 1.6.3)
     ///
     /// 验证 /help 不退出 REPL(返回 false),且 registry 能派生帮助内容。
+    /// M4-P1:engine 以 &QuestEngine 直借组合根 AppContext(签名随迁移改为借用)。
     #[tokio::test]
     async fn test_help_command_does_not_exit_and_registry_complete() {
-        let bus = EventBus::new();
-        let engine = Arc::new(QuestEngine::new(bus));
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
         let config = ChimeraConfig::default();
         let perm = PermissionCtx::default();
 
         // /help 应返回 false(不退出)
-        let should_exit = handle_slash_command("help", &engine, &config, &perm)
+        let should_exit = handle_slash_command("help", &ctx.engine, &config, &perm)
             .await
             .unwrap();
         assert!(!should_exit, "/help 不应触发退出");
 
         // /exit 应返回 true(退出)
-        let should_exit = handle_slash_command("exit", &engine, &config, &perm)
+        let should_exit = handle_slash_command("exit", &ctx.engine, &config, &perm)
             .await
             .unwrap();
         assert!(should_exit, "/exit 应触发退出");
 
         // /unknown 应返回 false(不退出)+ 输出 E001
-        let should_exit = handle_slash_command("unknown-cmd", &engine, &config, &perm)
+        let should_exit = handle_slash_command("unknown-cmd", &ctx.engine, &config, &perm)
             .await
             .unwrap();
         assert!(!should_exit, "未知命令不应触发退出");

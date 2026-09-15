@@ -22,16 +22,20 @@
 //! v2.9.0-omega Task 1.11:`quest cancel` 调用 `confirm` 触发 permission prompt
 
 use anyhow::Result;
-use event_bus::EventBus;
 use quest_engine::QuestEngine;
 
 use crate::cli::QuestAction;
+use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::output;
 use crate::permission::{self, PermissionCtx};
 
-/// 执行 quest 子命令 — 真实接入 QuestEngine API
+/// 执行 quest 子命令 — 兼容层 thin wrapper（M4-P1）
+///
+/// 独立调用场景（库调用方/既有测试）经组合根装配 ephemeral AppContext，
+/// 语义与迁移前"进程内 ephemeral 引擎"一致。dispatch 主链直接调
+/// [`execute_with_ctx`] 共享 dispatch 级 AppContext（C12 唯一装配点）。
 ///
 /// `json` flag(Task 1.7):`true` 时各子命令输出 JSON envelope。
 ///
@@ -40,22 +44,34 @@ use crate::permission::{self, PermissionCtx};
 /// `dry_run`(Task 2.2):仅 `quest cancel` 消费,`true` 时只输出预览不执行。
 pub async fn execute(
     action: &QuestAction,
-    _config: &ChimeraConfig,
+    config: &ChimeraConfig,
+    json: bool,
+    perm: &PermissionCtx,
+    dry_run: bool,
+) -> Result<()> {
+    let ctx = crate::composition::build(config)?;
+    execute_with_ctx(&ctx, action, json, perm, dry_run).await
+}
+
+/// quest 子命令主体 — 从组合根 AppContext 取共享 engine（M4-P1）
+pub async fn execute_with_ctx(
+    ctx: &AppContext,
+    action: &QuestAction,
     json: bool,
     perm: &PermissionCtx,
     dry_run: bool,
 ) -> Result<()> {
     tracing::info!(?action, dry_run, "Quest 管理操作");
 
-    // 构造进程内 ephemeral QuestEngine(与 chimera run 一致的设计)
-    let bus = EventBus::new();
-    let engine = QuestEngine::new(bus);
+    // 共享 engine 来自组合根（与 chimera run 同源的 ephemeral 设计）：
+    // 每次进程装配独立 QuestEngine，注册表不跨进程持久化。
+    let engine = &ctx.engine;
 
     match action {
-        QuestAction::List => list_quests(&engine, json).await,
-        QuestAction::Show { id } => show_quest(&engine, id, json).await,
-        QuestAction::Cancel { id } => cancel_quest(&engine, id, perm, json, dry_run).await,
-        QuestAction::Checkpoint { id } => checkpoint_quest(&engine, id, json).await,
+        QuestAction::List => list_quests(engine, json).await,
+        QuestAction::Show { id } => show_quest(engine, id, json).await,
+        QuestAction::Cancel { id } => cancel_quest(engine, id, perm, json, dry_run).await,
+        QuestAction::Checkpoint { id } => checkpoint_quest(engine, id, json).await,
     }
 }
 
@@ -190,5 +206,64 @@ async fn checkpoint_quest(engine: &QuestEngine, id: &str, json: bool) -> Result<
             Ok(())
         }
         Err(e) => Err(ChimeraCliError::EngineError(format!("检查点创建失败: {e}")).into()),
+    }
+}
+
+// ============================================================
+// 单元测试
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::composition;
+    use crate::permission::PermissionCtx;
+
+    /// M4-P1：quest 子命令经 execute_with_ctx 使用组合根共享 engine/bus ——
+    /// 共享 bus 来自 build() 标准装配（C3 旁路订阅者已注册）。
+    /// 此测试先行失败（红）：execute_with_ctx 尚不存在。
+    #[tokio::test]
+    async fn quest_list_runs_on_shared_context() {
+        let ctx = composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        let perm = PermissionCtx::default();
+        execute_with_ctx(&ctx, &QuestAction::List, true, &perm, false)
+            .await
+            .expect("quest list 应成功");
+        assert!(
+            ctx.bus.has_critical_subscribers(),
+            "共享 bus 应已注册 Critical 旁路订阅者（M4-P2 标准装配步骤）"
+        );
+    }
+
+    /// M4-P1：取消不存在的 Quest 在共享引擎上保持幂等成功语义（行为无感回归）。
+    #[tokio::test]
+    async fn quest_cancel_nonexistent_idempotent_on_shared_context() {
+        let ctx = composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        // --yes 跳过 permission prompt（非交互测试环境）
+        let perm = PermissionCtx {
+            yes: true,
+            no_permission: false,
+        };
+        execute_with_ctx(
+            &ctx,
+            &QuestAction::Cancel {
+                id: "quest-nonexistent".into(),
+            },
+            true,
+            &perm,
+            false,
+        )
+        .await
+        .expect("cancel 不存在的 Quest 应幂等成功");
+    }
+
+    /// M4-P1 兼容层回归：原签名 execute wrapper 行为不变。
+    #[tokio::test]
+    async fn quest_wrapper_normal_path_unchanged() {
+        let config = ChimeraConfig::default();
+        let perm = PermissionCtx::default();
+        execute(&QuestAction::List, &config, true, &perm, false)
+            .await
+            .expect("wrapper 正常路径应成功");
     }
 }

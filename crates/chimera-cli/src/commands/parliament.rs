@@ -22,13 +22,12 @@
 //! v2.9.0-omega Task 1.7:接受 `json` flag(共识结果 envelope 在本命令输出)
 
 use anyhow::Result;
-use event_bus::EventBus;
 use nexus_core::{MultimodalInput, UserIntent};
 use parliament::{Consensus, Parliament, ParliamentConfig, Proposal};
-use quest_engine::QuestEngine;
 use uuid::Uuid;
 
 use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
+use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::output;
@@ -44,23 +43,38 @@ fn quest_budget_error(e: CallBudgetError) -> ChimeraCliError {
     ChimeraCliError::EngineError(format!("Quest 分解失败: {e}"))
 }
 
-/// 执行 parliament 审议命令 — 真实接入 Parliament API
+/// 执行 parliament 审议命令 — 兼容层 thin wrapper（M4-P1）
+///
+/// 独立调用场景（库调用方/既有测试）经组合根装配 ephemeral AppContext。
+/// dispatch 主链直接调 [`execute_with_ctx`] 共享 dispatch 级 AppContext。
 ///
 /// `proposal` 为待审议的决策描述文本,`config` 提供引擎配置,
 /// `json` flag 控制输出格式,`perm` 预留供未来权限检查。
 pub async fn execute(
     proposal: &str,
-    _config: &ChimeraConfig,
+    config: &ChimeraConfig,
+    json: bool,
+    _perm: &PermissionCtx,
+) -> Result<()> {
+    let ctx = crate::composition::build(config)?;
+    execute_with_ctx(&ctx, proposal, json, _perm).await
+}
+
+/// parliament 审议主体 — 从组合根 AppContext 取共享 bus + engine（M4-P1）
+pub async fn execute_with_ctx(
+    ctx: &AppContext,
+    proposal: &str,
     json: bool,
     _perm: &PermissionCtx,
 ) -> Result<()> {
     tracing::info!(proposal = %proposal, "议会审议提案");
 
-    // 1. 构造进程内 ephemeral 引擎(EventBus 共享,QE + Parliament 各持一份 clone)
-    //    WHY 两个 clone:M2 的 call_with_budget 还需持 bus 发布
+    // 1. 共享 bus/engine 来自组合根（C12）；Parliament 与 QuestEngine
+    //    各持 bus 引用（EventBus Clone = Arc 廉价共享）。
+    //    WHY bus 引用:M2 的 call_with_budget 还需持 bus 发布
     //    OperationTimedOut 事件(本层超时兜底)。
-    let bus = EventBus::new();
-    let engine = QuestEngine::new(bus.clone());
+    let bus = &ctx.bus;
+    let engine = &ctx.engine;
     let parliament = Parliament::new(ParliamentConfig::default(), bus.clone());
 
     // 2. 将 proposal 封装为 UserIntent,经 QuestEngine 分解为 Quest
@@ -81,7 +95,7 @@ pub async fn execute(
         DEFAULT_CALL_BUDGET,
         &token,
         "parliament.create_quest",
-        &bus,
+        bus,
     )
     .await
     .map_err(quest_budget_error)? // 外层:CallBudgetError(M2 预算包装)
@@ -199,5 +213,35 @@ mod tests {
         execute("是否引入缓存层,请审议", &config, false, &perm)
             .await
             .expect("parliament 正常路径应成功");
+    }
+
+    /// M4-P1：parliament 经 execute_with_ctx 走组合根共享 bus ——
+    /// QuestCreated 与审议事件对外部订阅者可见（此前命令自建私有 bus，事件零可见）。
+    /// 此测试先行失败（红）：execute_with_ctx 尚不存在。
+    #[tokio::test]
+    async fn parliament_events_visible_on_shared_context_bus() {
+        use std::time::Duration;
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        // §4.4 反模式 3：先 subscribe 再驱动命令，否则事件静默丢失
+        let mut rx = ctx.bus.subscribe();
+        let perm = PermissionCtx::default();
+        execute_with_ctx(&ctx, "是否引入缓存层,请审议", false, &perm)
+            .await
+            .expect("parliament 正常路径应成功");
+        let mut saw_quest_created = false;
+        for _ in 0..40 {
+            match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+                Ok(Ok(event_bus::NexusEvent::QuestCreated { .. })) => {
+                    saw_quest_created = true;
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                _ => break,
+            }
+        }
+        assert!(
+            saw_quest_created,
+            "QuestCreated 应在组合根共享 bus 上可见（命令不再自建私有 bus）"
+        );
     }
 }
