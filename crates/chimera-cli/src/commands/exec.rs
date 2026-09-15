@@ -26,10 +26,31 @@ use nexus_core::{MultimodalInput, UserIntent};
 use quest_engine::QuestEngine;
 use uuid::Uuid;
 
+use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::orchestrator::{build_error_reply, build_quest_reply};
 use crate::permission::PermissionCtx;
+use tokio_util::sync::CancellationToken;
+
+/// CallBudgetError → ChimeraCliError 映射(exec WI-02 契约版,M2)
+///
+/// WHY 与 run.rs 的全局映射不同:exec 是独立退出码契约(0/2/3/4),
+/// 预算/引擎类故障归 3(经 EngineError,见 exec_exit_code);若映射全局
+/// `Timeout` 变体,会被 exec_exit_code 归入"工具失败"4(exit.rs:97-99
+/// 的 `_ => 4` 分支)——分解预算耗尽≠工具执行超时,语义错配。
+/// `Cancelled` 非预算/引擎类,按 UserCancelled 落契约 catch-all 4。
+fn call_budget_to_exec_error(e: CallBudgetError) -> ChimeraCliError {
+    match e {
+        CallBudgetError::Timeout {
+            operation_id,
+            budget_ms,
+        } => ChimeraCliError::EngineError(format!(
+            "Quest 分解超时:{operation_id} 超过 {budget_ms}ms 未返回"
+        )),
+        CallBudgetError::Cancelled { .. } => ChimeraCliError::UserCancelled,
+    }
+}
 
 /// 执行 exec 命令 — 非交互 + stdout 纪律（WI-02）
 ///
@@ -45,8 +66,10 @@ pub async fn execute(
     tracing::info!(prompt = %prompt, "exec: 收到非交互任务");
 
     // 1. 构造进程内 ephemeral EventBus + QuestEngine（与 run 一致）
+    //    WHY bus.clone():call_with_budget 需持 bus 发布 OperationTimedOut
+    //    事件(M2 本层超时兜底; Parliament 路径同理保留 engine 的 clone)。
     let bus = EventBus::new();
-    let engine = QuestEngine::new(bus);
+    let engine = QuestEngine::new(bus.clone());
 
     // 2. 封装 UserIntent（UUIDv7 时间有序）
     let intent = UserIntent {
@@ -57,12 +80,31 @@ pub async fn execute(
     };
 
     // 3. 真实 L9 分解（错误 → 人类可读到 stderr，不污染 stdout）
-    let quest = match engine.create_quest(intent).await {
-        Ok(q) => q,
-        Err(e) => {
+    //    M2:create_quest 经 call_with_budget 注入本层超时(120s,对齐
+    //    mca-gateway per-endpoint 口径)+ CancellationToken;超时发
+    //    OperationTimedOut 事件。预算错误映射走 call_budget_to_exec_error
+    //    (WI-02 契约:预算类故障归退出码 3,不落全局 Timeout 变体)。
+    //    token 为新建未触发令牌,预留全局取消链路接线。
+    let token = CancellationToken::new();
+    let quest = match call_with_budget(
+        engine.create_quest(intent),
+        DEFAULT_CALL_BUDGET,
+        &token,
+        "exec.create_quest",
+        &bus,
+    )
+    .await
+    {
+        Ok(Ok(q)) => q,
+        Ok(Err(e)) => {
             let msg = build_error_reply(&e);
             eprintln!("{msg}");
             return Err(ChimeraCliError::EngineError(msg).into());
+        }
+        Err(e) => {
+            let err = call_budget_to_exec_error(e);
+            eprintln!("{err}");
+            return Err(err.into());
         }
     };
 
@@ -144,5 +186,41 @@ mod tests {
             5,
             "全局矩阵 PermissionDenied 仍为 5（exec 的 2 仅在 Exec 分支应用）"
         );
+    }
+
+    // ---- M2 复核增量:call_with_budget 接入 exec 的映射验证(TDD:先写验证) ----
+
+    #[test]
+    fn exec_budget_timeout_maps_to_engine_error_exit_3() {
+        // WI-02 契约:预算/引擎类故障 → 退出码 3(非全局 Timeout=6,亦非工具超时的 4)
+        let err = call_budget_to_exec_error(CallBudgetError::Timeout {
+            operation_id: "exec.create_quest".into(),
+            budget_ms: 120_000,
+        });
+        assert!(
+            matches!(err, ChimeraCliError::EngineError(_)),
+            "exec 分解预算超时应按引擎/预算类映射 EngineError,实际: {err:?}"
+        );
+        assert_eq!(exec_exit_code(&err), 3);
+    }
+
+    #[test]
+    fn exec_budget_cancelled_maps_to_user_cancelled_exit_4() {
+        // 取消非预算/引擎类故障:按 UserCancelled 落 exec 契约 catch-all 4
+        let err = call_budget_to_exec_error(CallBudgetError::Cancelled {
+            operation_id: "exec.create_quest".into(),
+        });
+        assert!(matches!(err, ChimeraCliError::UserCancelled));
+        assert_eq!(exec_exit_code(&err), 4);
+    }
+
+    #[tokio::test]
+    async fn exec_create_quest_normal_path_with_budget() {
+        // 包装后的正常路径回归(行为无感):端到端 execute 仍 Ok
+        let config = ChimeraConfig::default();
+        let perm = PermissionCtx::default();
+        execute("评审增量验证:分解并总结", &config, false, &perm)
+            .await
+            .expect("exec 正常路径应成功");
     }
 }

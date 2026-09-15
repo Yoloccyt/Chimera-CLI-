@@ -42,10 +42,11 @@ use tracing::warn;
 
 /// 默认调用预算 — 对齐 mca-gateway per-endpoint 超时口径
 ///
-/// WHY 120s:`mca-gateway/affinity.d/*.toml` 8 个 profile 中 5 个
-/// `timeout_ms = 120000`(其余 60s/180s 为特定厂商),`transport.rs:220`
-/// 直接 `Duration::from_millis(endpoint.timeout_ms)`。取主流值使本层
-/// 防护与 gateway 口径一致(不收紧现有行为);特定调用点可传自定义 budget。
+/// WHY 120s:`mca-gateway/affinity.d/` 实测 7 文件 12 个 endpoint
+/// (5×`timeout_ms = 120000` / 5×60000 / 2×180000),120000 是各文件
+/// 旗舰模型的首列值与最大常规值;`transport.rs:220` 直接
+/// `Duration::from_millis(endpoint.timeout_ms)`。取该值使本层防护与
+/// gateway 口径一致(不收紧现有行为);特定调用点可传自定义 budget。
 pub const DEFAULT_CALL_BUDGET: Duration = Duration::from_millis(120_000);
 
 /// 调用预算错误 — 包装器的两类失败(内部 future 的输出原样透传,不在此包装)

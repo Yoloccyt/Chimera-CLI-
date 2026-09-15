@@ -28,10 +28,21 @@ use parliament::{Consensus, Parliament, ParliamentConfig, Proposal};
 use quest_engine::QuestEngine;
 use uuid::Uuid;
 
+use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::output;
 use crate::permission::PermissionCtx;
+use tokio_util::sync::CancellationToken;
+
+/// M2 预算包装错误 → ChimeraCliError 映射(parliament 版)
+///
+/// WHY 沿用 EngineError:与 quest 分解失败的既有映射同语义(退出码 3,
+/// 全局 ADR-060 矩阵)——预算耗尽属引擎/预算类故障,不引入新错误面
+/// (对外 CLI 行为无感)。
+fn quest_budget_error(e: CallBudgetError) -> ChimeraCliError {
+    ChimeraCliError::EngineError(format!("Quest 分解失败: {e}"))
+}
 
 /// 执行 parliament 审议命令 — 真实接入 Parliament API
 ///
@@ -46,22 +57,35 @@ pub async fn execute(
     tracing::info!(proposal = %proposal, "议会审议提案");
 
     // 1. 构造进程内 ephemeral 引擎(EventBus 共享,QE + Parliament 各持一份 clone)
+    //    WHY 两个 clone:M2 的 call_with_budget 还需持 bus 发布
+    //    OperationTimedOut 事件(本层超时兜底)。
     let bus = EventBus::new();
     let engine = QuestEngine::new(bus.clone());
-    let parliament = Parliament::new(ParliamentConfig::default(), bus);
+    let parliament = Parliament::new(ParliamentConfig::default(), bus.clone());
 
     // 2. 将 proposal 封装为 UserIntent,经 QuestEngine 分解为 Quest
     //    WHY 先分解:Parliament::deliberate 需要 &Quest 上下文(任务数、思考模式)
+    //    M2:create_quest 经 call_with_budget 注入本层超时(120s,对齐
+    //    mca-gateway per-endpoint 口径)+ CancellationToken;超时发
+    //    OperationTimedOut 事件,预算错误沿用 quest_budget_error 的
+    //    EngineError 映射。token 为新建未触发令牌,预留取消链路接线。
     let intent = UserIntent {
         intent_id: format!("intent-{}", Uuid::now_v7()),
         raw_text: proposal.to_string(),
         multimodal_inputs: vec![MultimodalInput::Text(proposal.to_string())],
         risk_level: 0,
     };
-    let quest = engine
-        .create_quest(intent)
-        .await
-        .map_err(|e| ChimeraCliError::EngineError(format!("Quest 分解失败: {e}")))?;
+    let token = CancellationToken::new();
+    let quest = call_with_budget(
+        engine.create_quest(intent),
+        DEFAULT_CALL_BUDGET,
+        &token,
+        "parliament.create_quest",
+        &bus,
+    )
+    .await
+    .map_err(quest_budget_error)? // 外层:CallBudgetError(M2 预算包装)
+    .map_err(|e| ChimeraCliError::EngineError(format!("Quest 分解失败: {e}")))?;
 
     // 3. 从 Quest 构建 Proposal(UUIDv7 时间有序,关联 quest_id)
     let proposal_obj = Proposal::new(
@@ -141,5 +165,39 @@ fn print_consensus_human(consensus: &Consensus) {
                 println!("冻结能力: {}", frozen_capabilities.join(", "));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::call_budget::CallBudgetError;
+
+    // ---- M2 复核增量:call_with_budget 接入 parliament 的映射验证(TDD:先写验证) ----
+
+    #[test]
+    fn parliament_budget_error_uses_engine_error_mapping() {
+        // 沿用既有"Quest 分解失败"EngineError 映射(退出码 3,全局矩阵),不新增错误面
+        let err = quest_budget_error(CallBudgetError::Timeout {
+            operation_id: "parliament.create_quest".into(),
+            budget_ms: 120_000,
+        });
+        assert_eq!(err.kind(), "EngineError");
+        let msg = err.message();
+        assert!(
+            msg.starts_with("Quest 分解失败: "),
+            "消息应沿用既有分解失败前缀,实际: {msg}"
+        );
+        assert_eq!(err.exit_code_value(), 3);
+    }
+
+    #[tokio::test]
+    async fn parliament_create_quest_normal_path_with_budget() {
+        // 包装后的正常路径回归(行为无感):端到端 execute 仍 Ok
+        let config = ChimeraConfig::default();
+        let perm = PermissionCtx::default();
+        execute("是否引入缓存层,请审议", &config, false, &perm)
+            .await
+            .expect("parliament 正常路径应成功");
     }
 }
