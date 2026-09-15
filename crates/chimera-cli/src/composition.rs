@@ -1,21 +1,22 @@
-//! 集中组合根 — AppContext 装配（C12 + C1，评审波次 1）
+//! 集中组合根 — AppContext 装配（C12 + C1，评审波次 1；M4 P1+P2 扩展）
 //!
 //! # 背景（F-A2-4 / F-A2-5，来源 `DEEP_RESEARCH_NEXUS_OMEGA_architecture_review.md`）
 //!
 //! 此前装配分散于各命令 handler（依赖图靠 grep 才能还原），MCA 网关
 //! "构造即丢弃"（main.rs 构造后无下游持有），serve/acp 跑在
 //! `AppServer::new` 默认的 `InMemoryBackend` 假核心上（协议面对外
-//! 承诺与实际能力脱节）。本模块**目标成为唯一装配点**（实况：本轮已收口
-//! serve/acp 协议宿主；chat/run/exec/quest/parliament/agent/tui 仍各自装配，
-//! 待后续波次迁移，见下）：
+//! 承诺与实际能力脱节）。本模块**目标成为唯一装配点**：
 //!
 //! ```text
 //! config → build() → AppContext { bus, engine, server_config }
-//!        → build_app_server() → AppServer（真实 QuestBackend + critical 旁路订阅）
+//!        → build_app_server() → AppServer（真实 QuestBackend，C3 旁路由 build 保证）
 //! ```
 //!
-//! chat/run 的 ephemeral 装配迁移至本模块属后续波次（进取方案），
-//! 本轮聚焦协议宿主（serve/acp）真实化。
+//! 装配收敛实况（M4 P1+P2，2026-09 批次）：chat/run/exec/quest/parliament/agent
+//! 六命令已迁离自建 `EventBus::new()`，经 dispatch 共享本模块装配的
+//! AppContext（命令保留原签名 thin wrapper，内部转组合根 ephemeral 装配）。
+//! 剩余各自装配点仅 `commands/tui.rs`（下一波次显式排除）；doctor 的
+//! `check_event_bus` 是健康探针（验证总线可构造），非命令装配，有意保留。
 
 use crate::config::ChimeraConfig;
 use anyhow::Result;
@@ -43,16 +44,31 @@ pub struct AppContext {
 ///   `model_router`/`quest` section 到 `AppServerConfig` 的字段级映射
 ///   待协议配置面扩展（`AppServerConfig` 现仅 2 字段，见 c1 报告设计决策）。
 ///
+/// # 标准装配步骤（M4-P2）
+/// 1. 构造 EventBus + QuestEngine（bus/engine 共享同一 Arc 内核）；
+/// 2. 注册 Critical 旁路订阅者（C3 契约全局生效——不再仅 serve/acp 协议宿主，
+///    全部经组合根的命令进程内 Critical 事件均有真实消费者兜底）。
+///
 /// # 错误
 /// 当前构造链不可失败（EventBus/QuestEngine 均无失败构造）；
 /// 保留 `Result` 语义以便未来装配引入不可恢复预检时调用方 warn 降级
 /// （对齐 main.rs init_mca_gateway 的优雅降级惯例）。
+///
+/// # 运行时要求
+/// 内部经 [`spawn_critical_subscriber`] 调 `tokio::spawn`，**必须在 tokio runtime
+/// 上下文调用**（无 runtime 时 `tokio::spawn` panic）。当前全部调用方
+/// （dispatch async 主链、serve/acp 的 `async fn`、各命令 wrapper、
+/// `#[tokio::test]`）满足此前置；同步上下文（如 proptest 闭包）须先建
+/// runtime 再 `block_on` 驱动（见 tests/composition_root_e2e.rs 范式）。
 pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
     let bus = EventBus::new();
     let engine = QuestEngine::new(bus.clone());
+    // M4-P2: C3 Critical 旁路注册上提为 build() 标准装配步骤（subscribe 在
+    // engine 构造后、AppContext 移出前同步完成，§4.4 反模式 3 纪律）。
+    spawn_critical_subscriber(&bus);
     tracing::debug!(
         version = %config.nexus.version,
-        "AppContext assembled at composition root (C12)"
+        "AppContext assembled at composition root (C12, critical bypass wired)"
     );
     Ok(AppContext {
         bus,
@@ -64,28 +80,18 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
 /// 装配协议宿主 AppServer（真实核心后端，C1）
 ///
 /// 与 `AppServer::new`（InMemoryBackend 桩）的目标差异：
-/// 1. `QuestBackend::with_engine` 包装真实 L9 QuestEngine——`TurnSubmit`
-///    产出含真实 `quest_id` 的 `quest_state` Item；
-/// 2. 注册 Critical 旁路订阅者（后台日志消费者）——使 §6.2 红线的 mpsc
-///    送达保障在协议宿主真实生效（否则 C3 的无订阅者告警持续触发，
-///    且旁路通道空转）。
+/// `QuestBackend::with_engine` 包装真实 L9 QuestEngine——`TurnSubmit`
+/// 产出含真实 `quest_id` 的 `quest_state` Item。
 ///
-/// # 运行时要求
-/// 内部经 [`spawn_critical_subscriber`] 调 `tokio::spawn`，**必须在 tokio runtime
-/// 上下文调用**（无 runtime 时 `tokio::spawn` panic）。当前全部调用方（serve/acp
-/// 的 `async fn`、`#[tokio::test]`）满足此前置；后续若把 `build()`/`build_app_server()`
-/// 复用到同步命令（doctor/completions 一类），须先建 runtime 或改为 `Handle::try_current()`
-/// 守卫，否则会在装配期 panic。
+/// Critical 旁路订阅由 [`build`] 标准装配保证（M4-P2 上提），本函数不再重复
+/// 注册（避免双消费者）；engine/bus 移入 `QuestBackend` 后旁路订阅者仍存活
+/// （EventBus Clone = Arc 共享内核，move 不丢订阅）。
 pub fn build_app_server(ctx: AppContext) -> AppServer {
-    // C1×C3: 先注册 Critical 旁路订阅者（借用期同步 subscribe），
-    // 再将 engine/bus 移入 QuestBackend（subscribe-then-move 顺序保证
-    // 装配完成时旁路已有消费者,C3 的无订阅者告警不会在正常路径触发）。
-    spawn_critical_subscriber(&ctx.bus);
     let backend = Box::new(QuestBackend::with_engine(ctx.engine, ctx.bus));
     AppServer::with_backend(ctx.server_config, backend)
 }
 
-/// 注册 Critical 旁路订阅者并 spawn 后台日志消费者（C1 配套，C3 接线）
+/// 注册 Critical 旁路订阅者并 spawn 后台日志消费者（C1 配套，C3 接线；M4-P2 由 build() 标准调用）
 ///
 /// WHY 组合根显式注册旁路消费者（B-a 语义更新）：`EventBus` 自 2026-09-12 起
 /// 内建保底 sink（`LogCriticalSink` 结构化 error!，见 event-bus `critical_sink`
@@ -210,6 +216,18 @@ mod tests {
         assert!(
             probe.has_critical_subscribers(),
             "组合根应注册 Critical 旁路订阅者（C1×C3 接线）"
+        );
+    }
+
+    /// M4-P2 验收：Critical 旁路注册上提为 build() 的标准装配步骤 ——
+    /// C3 契约对**所有**经组合根的命令全局生效（不再仅 serve/acp 协议宿主）。
+    /// 此测试先行失败（红）：build() 当前不注册旁路，仅 build_app_server 注册。
+    #[tokio::test]
+    async fn composition_build_registers_critical_bypass() {
+        let ctx = make_ctx();
+        assert!(
+            ctx.bus.has_critical_subscribers(),
+            "build() 应注册 Critical 旁路订阅者（M4-P2：C3 全局生效）"
         );
     }
 }
