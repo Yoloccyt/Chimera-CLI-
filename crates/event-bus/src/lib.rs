@@ -49,14 +49,6 @@ pub mod bus;
 /// 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 消费方仅 attribution(本 crate
 /// 内部基座),零外部/生产接线;对外 API 面不扩大。
 pub mod causal;
-/// 事件分类实现(P1-3 拆分,types.rs 上帝文件治理)
-///
-/// 承接 `NexusEvent` 的 severity()/type_name() 两个巨型 match,
-/// types.rs 保留 enum 定义与 metadata()。同 crate 内 `impl NexusEvent`
-/// 跨文件分块,调用路径零变化。severity() 判定逻辑留在 event-bus
-/// (架构红线:Critical 事件 mpsc 保障),与 bus.rs `is_critical_mpsc_event`
-/// 双清单同步红线由守护测试兜底。
-pub mod classification;
 /// CBF 信用流原语(P1-T11,手册 §8.5 / T-06 / v4.0 WI-08)
 ///
 /// 订阅者按消费速率获信用、发布者无信用挂起:分片启用后 Unordered 事件先
@@ -108,6 +100,13 @@ pub mod pattern_index;
 /// 独立为 payloads 模块,减少 types.rs 膨胀。通过 types 模块的 `pub use`
 /// 重导出保持向后兼容。
 pub mod payloads;
+/// 事件注册表(M5,方向 3-P1 同步点收敛)
+///
+/// `define_event_registry!` 单一声明点展开生成 severity()/type_name()/
+/// topic()/metadata() 四个无通配符 match;types.rs 保留 enum 本体,
+/// classification.rs/topic.rs 的手写分类表已退役。双清单同步红线
+/// (bus.rs `is_critical_mpsc_event`)刻意保留手写,由守护测试互锁。
+mod registry;
 // NOTE(2026-09-13):`rcu` 模块(`MonotonicState`,P2-W7.2.3)已按 ADR-181 决策 2
 // 退役条件执行删除——内环里程碑(P2-W7.2.3 → v2.28.x 全波次收尾)结束仍零生产
 // 消费(grep 实证),按 ADR-175 删除口径(验证零消费 → 删除+配套声明清理 →

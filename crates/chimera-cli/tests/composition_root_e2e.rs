@@ -61,60 +61,69 @@ async fn composition_root_replaces_inmemory_stub_on_protocol_hosts() {
     );
 }
 
-/// C1×C3 验收：build() 之后、build_app_server() 之前，Critical 旁路**未**注册
-/// （subscribe 尚未发生）；build_app_server() 之后**已**注册。锁死"先订阅再移交"
-/// 顺序（§6.2 红线的 mpsc 送达需对端消费者）。
+/// M4-P2 验收（顺序不变量重定基）：Critical 旁路注册已上提为 build() 标准装配
+/// 步骤 —— build() 之后立即存在（不再等 build_app_server）；build_app_server()
+/// 之后保持恰好存在（不重复注册）。C3 契约经组合根对全命令全局生效。
 #[tokio::test]
-async fn critical_bypass_absent_before_and_present_after_build_app_server() {
+async fn critical_bypass_registered_by_build_and_preserved_by_server() {
     let ctx = build(&ChimeraConfig::default()).expect("装配应成功");
     let probe = ctx.bus.clone();
     assert!(
-        !probe.has_critical_subscribers(),
-        "build() 仅构造 bus/engine，不得提前注册 Critical 旁路订阅者"
+        probe.has_critical_subscribers(),
+        "build() 应已注册 Critical 旁路订阅者（M4-P2：标准装配步骤）"
     );
     let _server = build_app_server(ctx);
     assert!(
         probe.has_critical_subscribers(),
-        "build_app_server() 应注册 Critical 旁路订阅者（C1×C3 接线）"
+        "build_app_server() 移交后 Critical 旁路订阅者仍应存在（不随 ctx move 丢失）"
     );
 }
 
 proptest! {
-    /// P-2（顺序不变量的 proptest 版，计划点名）：对任意 config（version 扫描），
-    /// build() 后、build_app_server() 前 `has_critical_subscribers()==false`，之后 `==true`。
-    /// 跨输入 sweep 复验 §6.2 "subscribe-then-move" 顺序不可被后人调换。
+    /// P-2（M4-P2 重定基）：对任意 config（version 扫描），build() 之后
+    /// `has_critical_subscribers()==true`（旁路注册已上提为标准装配步骤）；
+    /// build_app_server() 移交后仍为 true。跨输入 sweep 复验 C3 接线不可被后人拆除。
+    /// 注：build() 自 M4-P2 起内含 tokio::spawn，全程须在 runtime 语境下驱动。
     #[test]
-    fn prop_critical_bypass_order_holds_for_any_config(version in ".{0,32}") {
+    fn prop_critical_bypass_registered_for_any_config(version in ".{0,32}") {
         let mut cfg = ChimeraConfig::default();
         let _ = std::mem::replace(&mut cfg.nexus.version, version);
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| TestCaseError::fail(format!("runtime: {e}")))?;
-        let ctx = build(&cfg).map_err(|e| TestCaseError::fail(format!("build 失败: {e}")))?;
-        let probe = ctx.bus.clone();
-        prop_assert!(
-            !probe.has_critical_subscribers(),
-            "build() 仅构造 bus/engine，不得提前注册 Critical 旁路"
-        );
-        // build_app_server 内含 tokio::spawn，需在 runtime 语境下调用 → block_on 提供。
-        let server = rt.block_on(async move { build_app_server(ctx) });
+        let probe = rt.block_on(async {
+            let ctx = build(&cfg).map_err(|e| TestCaseError::fail(format!("build 失败: {e}")))?;
+            let probe = ctx.bus.clone();
+            prop_assert!(
+                probe.has_critical_subscribers(),
+                "build() 后必须已注册 Critical 旁路（M4-P2 标准装配步骤）"
+            );
+            // build_app_server 内含 engine/bus 移交，驱动后旁路订阅者应保持存在
+            let server = build_app_server(ctx);
+            let _ = server;
+            Ok::<_, TestCaseError>(probe)
+        })?;
         prop_assert!(
             probe.has_critical_subscribers(),
-            "build_app_server() 后必须已注册 Critical 旁路（subscribe-then-move）"
+            "build_app_server() 移交后 Critical 旁路仍应存在"
         );
-        let _ = server;
     }
 
     /// P-1：任意 version 字符串下 build() 都成功，且 bus 与 engine 共享同一内核
     /// （EventBus Clone = Arc 引用，廉价共享；组合根不得产生双总线）。
+    /// 注：build() 自 M4-P2 起内含 tokio::spawn，须在 runtime 语境下调用。
     #[test]
     fn prop_build_never_panics_and_shares_one_bus(version in ".{0,32}") {
         let mut cfg = ChimeraConfig::default();
         // 用可控字段喂 proptest：version 任意都不应影响装配（当前 config 仅用于日志）。
         let _ = std::mem::replace(&mut cfg.nexus.version, version);
-        let ctx = build(&cfg).map_err(|e| TestCaseError::fail(format!("build 失败: {e}")))?;
-        let cloned = ctx.bus.clone();
-        // 共享内核自证：clone 前后对同一 Critical 通道状态一致（未注册都应为 false）。
-        prop_assert_eq!(cloned.has_critical_subscribers(), ctx.bus.has_critical_subscribers());
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| TestCaseError::fail(format!("runtime: {e}")))?;
+        let (cloned, original) = rt.block_on(async {
+            let ctx = build(&cfg).map_err(|e| TestCaseError::fail(format!("build 失败: {e}")))?;
+            Ok::<_, TestCaseError>((ctx.bus.clone(), ctx.bus.has_critical_subscribers()))
+        })?;
+        // 共享内核自证：clone 前后对同一 Critical 通道状态一致。
+        prop_assert_eq!(cloned.has_critical_subscribers(), original);
     }
 
     /// P-3：任意用户输入下，一次 TurnSubmit 至多产出一个 quest_state Item

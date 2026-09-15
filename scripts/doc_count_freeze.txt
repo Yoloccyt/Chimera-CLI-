@@ -31,6 +31,3 @@ workspace_crates = 43
 # (these files are outside this mission's edit scope - registered as visible
 # debt; remove an entry when the doc it points at gets fixed)
 drift = agents.md | nexus_event_variants | 144
-drift = crates/event-bus/src/topic.rs | nexus_event_variants | 67
-drift = crates/event-bus/src/topic.rs | event_topic_variants | 9
-drift = crates/event-bus/src/pattern_index.rs | event_topic_variants | 9

@@ -3,7 +3,8 @@
 //! 对应架构层:L1 Core(event-bus)
 //!
 //! # 职责(WHY 本文件存在)
-//! types.rs 的 severity()/type_name() 两大 match 已外移至 classification.rs。
+//! types.rs 的 severity()/type_name() 分类 match 已收敛至 registry.rs
+//! (M5 起由 `define_event_registry!` 注册表单点展开生成,classification.rs 已退役)。
 //! 本集成测试从**消费方视角**(仅用公共 API `event_bus::*`)守护分类行为,
 //! 作为内联穷举测试之外的独立回归面:
 //! - Critical 档:安全/状态红线事件(背压不可丢弃)

@@ -868,7 +868,7 @@ pub enum EventSeverity {
 
 > **P2-12 同步(2026-07-28)+ 双清单口径修正(2026-08-30 代码级复算)**:本表为 **`severity()=Critical` 事件(17 个)**(v2.3.1-omega 基线 13 个 + MCA M0 新增 `AffinityQuotaExhausted`(ADR-065) + P1-5 新增 `FormalViolation`
 > + Phase 10 W4 新增 `StopRulingIssued`/`ErrorSignatureMatched`(ADR-085 双清单对齐)),
-> 权威源为 [`NexusEvent::severity()`](file:///d:/Chimera%20CLI/crates/event-bus/src/classification.rs#L46)(`classification.rs:46-91` 综合 match,types.rs 单表分类)。
+> 权威源为 [`NexusEvent::severity()`](file:///d:/Chimera%20CLI/crates/event-bus/src/registry.rs#L59)(`registry.rs` `define_event_registry!` 注册表 severity 列单点展开生成,types.rs 保留 enum 本体)。
 > **mpsc 旁路清单为 severity-Critical 的子集(13 个,`bus.rs::is_critical_mpsc_event()` 唯一事实源)**:含 `SkepticVeto/RedTeamAudit/BudgetExceeded/AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/R2FreezeViolation/R2FreezeRollbackFailed/FormalViolation/VetoOverridden/R1ShadowRollbackFailed/StopRulingIssued/ErrorSignatureMatched`。
 > **现状注记**:`CheckpointSaved/ConsensusReached/SlowConsumerDropped/OrphanCallDetected` 4 个为 severity-Critical 但**未列入 mpsc 旁路**(记忆/协商/慢消费者/孤儿检测语义,依赖 broadcast 重订阅恢复;若需强投递保证须在 `is_critical_mpsc_event()` 登记并同步红线)。历史:`VetoOverridden`/`R1ShadowRollbackFailed` 于 Phase 10 W5 补入旁路;`FormalVerificationFailed` 按 ADR-159 定稿为 `GsoeError` 变体、非事件。
 >   **v2.10.0-omega 同步(2026-07-31)**:在当前 v2.10.0 基线中 Critical 事件清单保持 13 不变;新增 3 个
@@ -909,7 +909,7 @@ pub enum EventSeverity {
 >
 > * `StopRulingIssued` / `ErrorSignatureMatched` 必须返回 `Critical`(Phase 10 §16.4,ADR-085 双清单对齐)
 >
-> - 权威源:`NexusEvent::severity()` 方法(`classification.rs:46-91` 综合 match;types.rs 单表分类,`event_types.rs` 镜像已按 ADR-160 退役),通过显式 `match` 分支(非通配符)确保新增 Critical 事件必须修改此方法
+> - 权威源:`NexusEvent::severity()` 方法(`registry.rs` `define_event_registry!` 注册表展开生成,types.rs 保留 enum 本体,`event_types.rs` 镜像已按 ADR-160 退役),通过无通配符 `match`(fail-closed)确保新增 Critical 事件必须同步注册表
 
 ### 5.5 核心事件变体(部分)
 
@@ -1658,7 +1658,7 @@ my-crate/
 | **MAX\_AGENT\_DEPTH = 5**              | `chimera-mas/src/delegation.rs` `MAX_AGENT_DEPTH` 常量                                  | 深度 = 1(根) + 子任务级数;5 级时叶子必须 leaf                                                   | 委托拒绝,返回 `MasError::DepthExceeded`           |
 | **`#![forbid(unsafe_code)]`**          | **43 个 crate** `lib.rs` 第 1 行                                                         | 任何 unsafe 块                                                                       | `rustc` 编译失败                                |
 | **Critical 事件 mpsc**                   | `event-bus/src/bus.rs` `publish_critical()`                                           | `SkepticVeto`/`RedTeamAudit`/`AsaIntervention`/`BudgetExceeded`/`AgentTaskFailed` | mpsc fan-out,保证送达                           |
-| **BudgetExceeded severity = Critical** | `event-bus/src/classification.rs:46`(`NexusEvent::severity()` 综合 match)               | 任何 BudgetExceeded 事件                                                              | `severity()` 必须返回 `EventSeverity::Critical` |
+| **BudgetExceeded severity = Critical** | `event-bus/src/registry.rs`(`NexusEvent::severity()`,`define_event_registry!` 注册表展开生成)               | 任何 BudgetExceeded 事件                                                              | `severity()` 必须返回 `EventSeverity::Critical` |
 
 ### 13.5 与三方权威源的一致性声明
 
