@@ -19,18 +19,20 @@
 
 pub mod auction;
 pub mod cancel;
+pub mod error;
 pub mod runtime;
 pub mod types;
 
 pub use auction::{Bid, TaskAuction, TaskOffer};
 pub use cancel::{CancelReason, CancellationToken};
+pub use error::SubAgentError;
 pub use runtime::{SubAgentHandle, SubAgentRuntime};
 pub use types::{SubAgentKind, SubAgentProfile, SubAgentSpec, SWARM_LIMIT};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::{
-        Bid, CancelReason, CancellationToken, SubAgentHandle, SubAgentKind, SubAgentProfile,
-        SubAgentRuntime, SubAgentSpec,
+        Bid, CancelReason, CancellationToken, SubAgentError, SubAgentHandle, SubAgentKind,
+        SubAgentProfile, SubAgentRuntime, SubAgentSpec,
     };
 }

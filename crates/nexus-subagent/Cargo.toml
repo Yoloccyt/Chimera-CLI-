@@ -17,8 +17,19 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 # 唯一 ID 生成(UUIDv7,时间有序)
 uuid = { workspace = true, features = ["v7"] }
-# 注(2026-08-29 ADR-160 冗余审计): 此处原声明的 nexus-core / event-bus / thiserror /
-# tracing 四项在 src 与 tests 中零引用,已随"SubAgent 生命周期事件发布"与
+# 注(2026-08-29 ADR-160 冗余审计): 此处原声明的 nexus-core / event-bus / tracing
+# 三项在 src 与 tests 中零引用,已随"SubAgent 生命周期事件发布"与
 # "库层 thiserror 错误类型"这两段**尚未落地**的叙述一并移除。
-# TODO(P3-T9 后续): 错误类型与事件面实现时再声明 thiserror / event-bus,
-# 事件面建议以 `optional = true` + feature 门控接入(GATED 轨道,见 ADR-160)。
+# TODO(P3-T9 后续): 事件面建议以 `optional = true` + feature 门控接入
+# (GATED 轨道,见 ADR-160)。错误类型部分已于 2026-09-12 落地(见下方 thiserror)。
+# thiserror: 库层错误类型标准(§4.1)—— 架构方向 F-c 落地
+# WHY 现在声明: `SubAgentError`(src/error.rs)取代 `Result<String, String>`
+# 擦除,使"取消 / panic / 业务失败"三类语义可判定(调用方可 match 降级)。
+# 事件面仍未接线,故 event-bus 不在此声明(维持 ADR-160 GATED 轨道约定)。
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# proptest:错误类型的属性测试(F-c:断言任意详情文案在 Display 中保留、
+# 分类谓词与变体一致,防止后续新增变体时漏接谓词/文案模板)。
+# WHY dev 段:仅测试使用,不进入生产装配面(与 E-a 门禁的 [dependencies] 口径分离)。
+proptest = { workspace = true }

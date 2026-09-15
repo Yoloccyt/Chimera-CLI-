@@ -30,15 +30,20 @@
 # --- (A) DESIGN: the hold is intentional -------------------------------------
 # Splitting these would let concurrent writers interleave half-frames, or
 # reopen the TOCTOU window the per-key migration lock exists to close.
-crates/nexus-app-server/src/transport.rs:85   # DESIGN stdio reader: read_line must complete the line frame
-crates/nexus-app-server/src/transport.rs:101  # DESIGN stdio writer: NDJSON frame written as one atomic unit
-crates/nexus-app-server/src/sse.rs:117        # DESIGN SSE writer: single-connection frame atomicity
+# Re-keyed 2026-09-15 after the main merge: the 2026-09-13 baseline moved the
+# nexus-app-server code (generic transport split + new send_decode_error
+# writer path); acquisition sites re-verified one by one, semantics unchanged.
+crates/nexus-app-server/src/transport.rs:169  # DESIGN stdio reader: read_line must complete the line frame
+crates/nexus-app-server/src/transport.rs:186  # DESIGN stdio writer: NDJSON frame written as one atomic unit
+crates/nexus-app-server/src/transport.rs:206  # DESIGN stdio writer: NDJSON error frame written as one atomic unit (send_decode_error)
+crates/nexus-app-server/src/sse.rs:121        # DESIGN SSE writer: single-connection frame atomicity
 crates/mlc-engine/src/engine.rs:912           # DESIGN migration_locks: one MemoryId migration = atomic txn incl. its completion event
 
 # --- (B) SCANNER-DEBT: value extracted from the lock, not a guard ------------
 # If check_lock_await.sh ever learns to see through value extraction, delete
 # these lines and re-run the gate.
-crates/chimera-tui/src/data/pipeline.rs:821   # SCANNER-DEBT `.take()` moves the EventSubscriber out; guard drops at stmt end
+# (pipeline re-keyed 2026-09-15 with the main merge, same .take() shape)
+crates/chimera-tui/src/data/pipeline.rs:891   # SCANNER-DEBT `.take()` moves the EventSubscriber out; guard drops at stmt end
 crates/csn-substitutor/src/lib.rs:107         # SCANNER-DEBT `level` is a copied u32; the RefMut `chain` dies at the if-let block
 crates/decb-governor/src/governor.rs:564      # SCANNER-DEBT `current_total` is `*total` copy; state guard already block-scoped
 crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER-DEBT `pooled` is a TcpStream removed from the pool; guard dies in and_then

@@ -1,7 +1,7 @@
 //! OTel 风格轻量遥测（P2-T11，v4.0 WI-28 落地形态）
 //!
 //! 对应架构层: **L1 Core**（event-bus，ADR-143 裁决：倾向 event-bus 增强，
-//! 否决 nexus-telemetry 新建——复用 CBF/rcu/token_ledger 基建）
+//! 否决 nexus-telemetry 新建——复用 CBF/token_ledger 基建）
 //! 对应任务: **P2-T11**（手册 W13-14）
 //!
 //! # 与 WI-28 的关系

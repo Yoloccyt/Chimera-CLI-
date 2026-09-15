@@ -3573,8 +3573,10 @@ name = "nexus-subagent"
 version = "2.28.2-omega"
 dependencies = [
  "nexus-contracts",
+ "proptest",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "uuid",
 ]

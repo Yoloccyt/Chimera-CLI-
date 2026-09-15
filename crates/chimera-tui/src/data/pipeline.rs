@@ -402,6 +402,9 @@ impl DataPipeline {
     ) -> Self {
         let snapshot = Arc::new(Mutex::new(Arc::new(DataSnapshot::default())));
         let snapshot_clone = Arc::clone(&snapshot);
+        // 感知延迟优化(§7.7 设计,2026-09-13):订阅者事件唤醒句柄——
+        // 必须在 subscriber 被包进 Mutex 之前提取。
+        let event_notify = subscriber.notify_handle();
         let subscriber = Arc::new(Mutex::new(Some(subscriber)));
         let subscriber_clone = Arc::clone(&subscriber);
         let tick_ms = config.tick_interval_ms;
@@ -421,8 +424,7 @@ impl DataPipeline {
         let task = tokio::spawn(async move {
             let mut current_tick_ms = tick_ms;
             let mut eco_countdown: u32 = 0;
-            let mut tick_mode = TickMode::Normal;
-            let mut quest_sync = QuestSync::new();
+            let mut tick_mode = TickMode::Normal;            let mut quest_sync = QuestSync::new();
             let mut budget_sync = BudgetSync::new();
             let mut memory_sync = MemorySync::new();
             let mut security_sync = SecuritySync::new();
@@ -479,13 +481,37 @@ impl DataPipeline {
             // RefreshStateRequested 后跳过一次休眠,立即重建快照并递增
             // revision(事件丢失/Lagged 后的对齐语义)。
             let mut refresh_pending = false;
+            // 感知延迟优化(§7.7,2026-09-13):事件驱动即时 tick 状态
+            // - is_light_tick:事件唤醒的 tick 只做数据新鲜化,跳过按 tick 语义
+            //   的副作用(趋势 history/sys 采样/慢同步计数,见循环体内标注)
+            // - last_tick_at:唤醒 tick 的真实 elapsed 供 eps 修正
+            // - last_sys_metrics:最近系统采样(轻量 tick 复用,避免 sysinfo
+            //   高频采集)
+            let mut is_light_tick = false;
+            let mut last_tick_at = Instant::now();
+            let mut last_sys_metrics: Option<SystemMetrics> = None;
 
             loop {
-                // FC-C:刷新挂起时跳过本次休眠(立即 tick);其余按节拍休眠
+                // FC-C:刷新挂起时跳过本次休眠(立即 tick);其余按节拍休眠。
+                // 感知延迟优化(§7.7):Normal 模式下 select! 等待「定时到期」或
+                // 「事件到达」——事件到达即唤醒(不等剩余间隔),把「事件 → 快照」
+                // 最坏等待从 ~250ms 压到毫秒级。
+                // Eco(背压降频)模式不启用唤醒:背压时事件风暴会打破节流,
+                // 保持 1s 纯定时节奏(决策记录于 §7.7)。
                 if refresh_pending {
                     refresh_pending = false;
+                } else if matches!(tick_mode, TickMode::Normal) {
+                    tokio::select! {
+                        _ = time::sleep(Duration::from_millis(current_tick_ms)) => {
+                            is_light_tick = false;
+                        }
+                        _ = event_notify.notified() => {
+                            is_light_tick = true;
+                        }
+                    }
                 } else {
                     time::sleep(Duration::from_millis(current_tick_ms)).await;
+                    is_light_tick = false;
                 }
 
                 // Concord T1.6:块作用域限定 subscriber guard 生命周期(同快照
@@ -563,13 +589,25 @@ impl DataPipeline {
                 while latest_event_deque.len() > max_event_history {
                     latest_event_deque.pop_front();
                 }
-                // 有事件:写时复制为新的共享 Arc(快照持有,后续 tick 共享)
+                // 事件累积窗口语义(事件驱动分批,2026-09-13):此前 deque 每批
+                // 替换 latest_events 后清空——事件唤醒使突发被分批消费,批间
+                // 替换会吞掉前批事件(突发完整性破坏)。改为 deque **累积**
+                // (max_event_history 有界截断)+ 克隆替换:latest_events 始终
+                // =「最近 max_event_history 条事件」,与 EventStream 面板语义一致。
+                // WHY clone 而非 move:deque 残留继续累积(跨 tick 合并)。
                 if !latest_event_deque.is_empty() {
-                    latest_events = Arc::new(latest_event_deque);
-                    latest_event_deque = VecDeque::new();
+                    latest_events = Arc::new(latest_event_deque.clone());
                 }
 
-                let eps = health_sync.compute_events_per_second(events_this_tick, tick_ms);
+                // 感知延迟:唤醒 tick 的真实间隔可能远小于配置 tick_ms(事件到达
+                // 即唤醒),eps 用真实 elapsed 计算避免被系统性低估(max(1) 防除零)
+                let real_elapsed_ms = last_tick_at.elapsed().as_millis() as u64;
+                let eps_input_ms = if is_light_tick {
+                    real_elapsed_ms.max(1)
+                } else {
+                    tick_ms
+                };
+                let eps = health_sync.compute_events_per_second(events_this_tick, eps_input_ms);
                 let budget = budget_sync.metrics();
                 // Concord T1.7:每 tick 比对最后更新时刻与 ttl → 陈旧标志
                 // (budget_metrics_ttl_ms 消费点,M0 TODO 闭环)
@@ -587,30 +625,52 @@ impl DataPipeline {
                 total_event_count += events_this_tick as u64;
                 events_since_last_snapshot += events_this_tick as u64;
 
-                push_history(
-                    &mut budget_history,
-                    (budget.utilization_rate * 100.0) as u64,
-                    max_history_len,
-                );
-                push_history(
-                    &mut memory_history,
-                    memory.hit_rate_percent as u64,
-                    max_history_len,
-                );
-                push_history(&mut event_rate_history, eps as u64, max_history_len);
-                push_history(
-                    &mut decay_history,
-                    (decay.coefficient * 1000.0) as u64,
-                    max_history_len,
-                );
+                // === 轻量 tick 副作用保护(感知延迟优化,§7.7 时间语义) ===
+                // 事件唤醒的轻量 tick 只做「数据新鲜化」(syncers + 重建快照),
+                // 跳过全部按 tick 语义的副作用,避免高频唤醒破坏既有节奏:
+                // - 趋势 history 保持 250ms 粒度(高频点会稀释 64 点时间窗口)
+                // - sys 采样保持其内部节奏(sysinfo 采集有真实成本)
+                // - 慢同步计数不递增(SQLite 持久化节奏不变,防写放大)
+                let sys_metrics = if is_light_tick {
+                    // 复用上次采样;首个 tick 即被唤醒的兜底:现场采样一次
+                    match &last_sys_metrics {
+                        Some(m) => m.clone(),
+                        None => {
+                            let m = sys_collector
+                                .get_or_insert_with(SysMetricsCollector::new)
+                                .refresh_and_snapshot();
+                            last_sys_metrics = Some(m.clone());
+                            m
+                        }
+                    }
+                } else {
+                    push_history(
+                        &mut budget_history,
+                        (budget.utilization_rate * 100.0) as u64,
+                        max_history_len,
+                    );
+                    push_history(
+                        &mut memory_history,
+                        memory.hit_rate_percent as u64,
+                        max_history_len,
+                    );
+                    push_history(&mut event_rate_history, eps as u64, max_history_len);
+                    push_history(
+                        &mut decay_history,
+                        (decay.coefficient * 1000.0) as u64,
+                        max_history_len,
+                    );
 
-                let sys_collector = sys_collector.get_or_insert_with(SysMetricsCollector::new);
-                let sys_metrics = sys_collector.refresh_and_snapshot();
-                push_history(
-                    &mut sys_metrics_history,
-                    (sys_metrics.cpu.global_usage * 10.0) as u64,
-                    max_history_len,
-                );
+                    let sys_collector = sys_collector.get_or_insert_with(SysMetricsCollector::new);
+                    let m = sys_collector.refresh_and_snapshot();
+                    push_history(
+                        &mut sys_metrics_history,
+                        (m.cpu.global_usage * 10.0) as u64,
+                        max_history_len,
+                    );
+                    last_sys_metrics = Some(m.clone());
+                    m
+                };
 
                 let quest_list = truncate_quests(quest_sync.quests(), max_quest_list_size);
                 let paused_quest_count = quest_sync.paused_quest_count();
@@ -652,8 +712,11 @@ impl DataPipeline {
                 }
 
                 // === Concord T1.6:历史慢同步(1s 节奏;未接线时零开销) ===
+                // 轻量 tick 不递增计数(SQLite 写节奏与事件频率解耦,防写放大)
                 if let Some(h) = history.as_ref() {
-                    history_slow_counter += 1;
+                    if !is_light_tick {
+                        history_slow_counter += 1;
+                    }
                     if history_slow_counter >= HISTORY_SLOW_EVERY {
                         history_slow_counter = 0;
                         let now_ms = std::time::SystemTime::now()
@@ -696,6 +759,8 @@ impl DataPipeline {
                     }
                 }
 
+                // tick 时刻推进(唤醒 tick 的真实 elapsed 供 eps 修正)
+                last_tick_at = Instant::now();
                 revision += 1;
                 let snap = DataSnapshot {
                     revision,
@@ -759,7 +824,12 @@ impl DataPipeline {
                     *guard = Arc::new(snap);
                 }
 
-                let backlog = latest_events.len();
+                // Eco 判定的 backlog 代理 = **本 tick 消费的事件数**(事件率的直接
+                // 度量)。WHY 非 latest_events.len():事件唤醒使消费节奏变为
+                // 「更频繁、更小批」,部分消费的中间态(如 128/1000)会被误判为
+                // 高积压触发 1s 降频——events_this_tick 与旧 250ms 语义等价
+                // (250ms tick 下 latest_events.len() ≈ 本 tick drain 数)。
+                let backlog = events_this_tick;
                 match tick_mode {
                     TickMode::Normal => {
                         if backlog >= event_backlog_threshold {

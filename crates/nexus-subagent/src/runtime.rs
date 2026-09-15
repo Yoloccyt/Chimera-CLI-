@@ -9,7 +9,11 @@
 //!   触发 [`NestedSubAgentForbidden`]（L0 契约,运行期断言;编译期由
 //!   API 面保证:spawn 只能从运行时入口调用）;
 //! - **规模上限**:`SWARM_LIMIT = 8`（ADR-148 门禁,超额拒绝）;
-//! - 取消:每任务 [`CancellationToken`] 四因传播。
+//! - 取消:每任务 [`CancellationToken`] 四因传播;
+//! - **错误分类**(架构方向 F-c,2026-09-12):任务结果与 [`join_next_typed`]
+//!   ([`SubAgentRuntime::join_next_typed`]) 携带 [`SubAgentError`]
+//!   ——取消 / panic / 业务失败可判定;旧 [`join_next`]
+//!   ([`SubAgentRuntime::join_next`]) 保留为兼容壳(文案取自同一 `Display`)。
 
 use std::sync::Arc;
 
@@ -19,13 +23,20 @@ use uuid::Uuid;
 
 use crate::auction::{AuctionOutcome, TaskAuction, TaskOffer};
 use crate::cancel::CancellationToken;
+use crate::error::SubAgentError;
 use crate::types::{SubAgentProfile, SubAgentSpec, SWARM_LIMIT};
 
 /// 子代理任务 — 执行体（接入方提供:同一执行引擎换参数）
 ///
-/// 返回 `Result<String, String>`（结果 / 错误文案）。
+/// 返回 `Result<String, [`SubAgentError`]>`:成功=结果文案,
+/// 失败=**分类化**错误(业务失败用 [`SubAgentError::Execution`];
+/// 取消与 panic 由运行时在派发层判定,见 [`SubAgentRuntime::spawn`])。
+///
+/// WHY 具体错误类型而非 `Result<String, String>`(架构方向 F-c):
+/// 字符串文案无法让调用方区分"预期内取消 / 实现缺陷 panic / 业务失败",
+/// 三者降级策略不同;错误被拍平会迫使调用方做子串匹配(脆弱)。
 pub type SubAgentTask =
-    Box<dyn FnOnce(SubAgentSpec, Arc<CancellationToken>) -> Result<String, String> + Send>;
+    Box<dyn FnOnce(SubAgentSpec, Arc<CancellationToken>) -> Result<String, SubAgentError> + Send>;
 
 /// 任务句柄 — 结果 + 取消令牌（调用方 await 结果 / 主动取消）
 pub struct SubAgentHandle {
@@ -39,8 +50,8 @@ pub struct SubAgentHandle {
 pub struct SubAgentRuntime {
     /// 拍卖市场（档案注册 + 择胜）
     auction: TaskAuction,
-    /// 活跃任务集合（JoinSet 有界并发）
-    active: JoinSet<(String, Result<String, String>)>,
+    /// 活跃任务集合（JoinSet 有界并发）— 结果携带**分类化**错误
+    active: JoinSet<(String, Result<String, SubAgentError>)>,
     /// 嵌套检测:任务 ID → 是否允许再 spawn（运行中 = 禁止）
     nesting_guard: std::sync::RwLock<std::collections::HashMap<String, bool>>,
     /// 规模计数（诊断）
@@ -143,19 +154,34 @@ impl SubAgentRuntime {
             if let Some(reason) = cancel_for_task.poll() {
                 return (
                     task_id_for_closure.clone(),
-                    Err(format!("cancelled: {}", reason.as_str())),
+                    Err(SubAgentError::Cancelled {
+                        reason: reason.as_str().to_string(),
+                    }),
                 );
             }
+            // spawn_blocking 的 JoinError = 任务体 panic → 分类为 Panicked
+            // (不重试语义:panic 是实现缺陷,重试通常再次 panic)
             let result = tokio::task::spawn_blocking(move || task(spec, cancel_for_task))
                 .await
-                .unwrap_or_else(|e| Err(format!("subagent task panicked: {e}")));
+                .unwrap_or_else(|e| {
+                    Err(SubAgentError::Panicked {
+                        detail: e.to_string(),
+                    })
+                });
             (task_id_for_closure, result)
         });
         Ok(SubAgentHandle { task_id, cancel })
     }
 
-    /// 等待下一任务完成 — JoinSet 语义（调用方循环驱动）
-    pub async fn join_next(&mut self) -> Option<(String, Result<String, String>)> {
+    /// 等待下一任务完成(**分类化错误**,推荐路径)
+    ///
+    /// # 返回
+    /// `Some((task_id, result))`:`result` 的 Err 为 [`SubAgentError`],
+    /// 调用方可 `match` 出取消 / panic / 业务失败并分别降级;`None` = 无更多任务
+    /// (或任务 panic 被隔离,同 `JoinSet` 语义)。
+    pub async fn join_next_typed(
+        &mut self,
+    ) -> Option<(String, Result<String, SubAgentError>)> {
         // JoinError（任务 panic）:跳过（隔离语义,不传播）
         let done = match self.active.join_next().await {
             Some(Ok(d)) => d,
@@ -168,6 +194,21 @@ impl SubAgentRuntime {
             .unwrap_or_else(|p| p.into_inner())
             .remove(&done.0);
         Some(done)
+    }
+
+    /// 等待下一任务完成（**兼容签名**:错误以 `String` 文案返回）
+    ///
+    /// WHY 保留:既有接入方（如 `nexus-app-server::subagent_engine`）按
+    /// `Result<String, String>` 消费;为不破坏其编译,本方法作为兼容壳保留,
+    /// 内部委托 [`join_next_typed`](Self::join_next_typed) 并把分类错误
+    /// 经 [`SubAgentError::as_message`] 转回文案 —— 文案唯一来源仍是
+    /// `SubAgentError` 的 `Display`,不会出现两套分叉。
+    ///
+    /// 新代码请用 [`join_next_typed`](Self::join_next_typed) 以获得可判定语义。
+    pub async fn join_next(&mut self) -> Option<(String, Result<String, String>)> {
+        self.join_next_typed()
+            .await
+            .map(|(id, result)| (id, result.map_err(|e| e.as_message())))
     }
 }
 
@@ -283,9 +324,62 @@ mod tests {
         handle
             .cancel
             .cancel(crate::cancel::CancelReason::UserCancelled);
+        // 用 typed 出口:直接断言**分类**(而非子串匹配)
+        let (_id, result) = rt.join_next_typed().await.expect("任务必须完成");
+        let err = result.expect_err("预取消必须失败");
+        assert!(err.is_cancelled(), "应分类为取消, got: {err}");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "文案应保留可读原因: {err}"
+        );
+    }
+
+    /// 业务失败分类 — 任务体返回 [`SubAgentError::Execution`] 时调用方可判定
+    /// (F-c 核心价值:不再需要子串匹配"failed"来猜测失败类别)
+    #[tokio::test]
+    async fn execution_error_is_classified() {
+        let mut rt = SubAgentRuntime::new();
+        let _ = rt
+            .spawn(
+                SubAgentSpec::new(SubAgentKind::Explore),
+                Box::new(|_s, _c| {
+                    Err(SubAgentError::Execution {
+                        detail: "tool missing".into(),
+                    })
+                }),
+                None,
+            )
+            .expect("派发成功");
+        let (_id, result) = rt.join_next_typed().await.expect("任务必须完成");
+        let err = result.expect_err("任务体失败");
+        assert!(err.is_execution(), "应分类为业务失败, got: {err}");
+        assert!(!err.is_cancelled() && !err.is_panic());
+    }
+
+    /// 兼容壳一致性 — 旧签名 `join_next()` 的错误文案必须等于新类型的 `Display`
+    ///
+    /// WHY 此断言:兼容路径若自行拼文案,会与 `SubAgentError` 分叉(两套真相);
+    /// 本测试锁定 `as_message()` 为唯一转换点。
+    #[tokio::test]
+    async fn compat_join_next_message_matches_typed() {
+        let mut rt = SubAgentRuntime::new();
+        let _ = rt
+            .spawn(
+                SubAgentSpec::new(SubAgentKind::Explore),
+                Box::new(|_s, _c| {
+                    Err(SubAgentError::Execution {
+                        detail: "same message".into(),
+                    })
+                }),
+                None,
+            )
+            .expect("派发成功");
         let (_id, result) = rt.join_next().await.expect("任务必须完成");
-        assert!(result.is_err(), "预取消必须失败");
-        assert!(result.unwrap_err().contains("cancelled"));
+        let msg = result.expect_err("任务体失败");
+        let expected = SubAgentError::Execution {
+            detail: "same message".into(),
+        };
+        assert_eq!(msg, expected.as_message(), "兼容文案必须等于分类错误 Display");
     }
 
     /// 最低价兜底 — 无档案时仍派发成功（防饿死,ADR-148/RK-P14）

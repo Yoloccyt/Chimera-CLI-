@@ -87,10 +87,13 @@ pub fn build_app_server(ctx: AppContext) -> AppServer {
 
 /// 注册 Critical 旁路订阅者并 spawn 后台日志消费者（C1 配套，C3 接线）
 ///
-/// WHY 组合根必须至少注册一个旁路消费者：Critical mpsc（§6.2 红线）
-/// 在无订阅者时投递空转——"确保送达"承诺需要对端。消费策略：逐条
-/// error! 结构化日志（event_type 字段），供宿主侧运维检索；后续里程碑
-/// 可升级为 TUI 面板式消费。进程生命周期内 detached（长驻宿主无 orphan 语义）。
+/// WHY 组合根显式注册旁路消费者（B-a 语义更新）：`EventBus` 自 2026-09-12 起
+/// 内建保底 sink（`LogCriticalSink` 结构化 error!，见 event-bus `critical_sink`
+/// 模块）——**无订阅者时事件不再无痕**，但保底仅是最低落点。本函数提供
+/// 进程内真实消费者，使 `has_critical_subscribers()==true`（组合根自检目标态），
+/// 并作为未来 TUI 面板/告警管道消费的挂载点。消费策略：逐条 error! 结构化
+/// 日志（event_type 字段），供宿主侧运维检索。进程生命周期内 detached
+/// （长驻宿主无 orphan 语义）。
 /// WHY 先同步 subscribe 再 spawn：§4.4 反模式 3（subscribe-then-spawn 纪律）。
 fn spawn_critical_subscriber(bus: &EventBus) {
     let mut rx = bus.subscribe_critical_events();

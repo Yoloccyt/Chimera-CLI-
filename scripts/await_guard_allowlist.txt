@@ -20,15 +20,19 @@
 
 # --- (A) IO frame atomicity: writer/reader lock must span the await -----------
 # Splitting these would let concurrent writers interleave half-frames.
-crates/nexus-app-server/src/transport.rs:85    # DESIGN stdio reader: read_line must complete the line frame
-crates/nexus-app-server/src/transport.rs:101   # DESIGN stdio writer: NDJSON frame written as one atomic unit
-crates/nexus-app-server/src/sse.rs:117         # DESIGN SSE writer: single-connection frame atomicity
+# Re-keyed 2026-09-15 after merging main: the 2026-09-13 baseline moved the
+# nexus-app-server code (generic transport split + new send_decode_error
+# writer path). Entry semantics re-verified against the moved code, unchanged.
+crates/nexus-app-server/src/transport.rs:169   # DESIGN stdio reader: read_line must complete the line frame
+crates/nexus-app-server/src/transport.rs:186   # DESIGN stdio writer: NDJSON frame written as one atomic unit
+crates/nexus-app-server/src/transport.rs:206   # DESIGN stdio writer: NDJSON error frame as one atomic unit (send_decode_error)
+crates/nexus-app-server/src/sse.rs:121         # DESIGN SSE writer: single-connection frame atomicity
 
 # --- (A) Per-key migration serialisation --------------------------------------
 crates/mlc-engine/src/engine.rs:912            # DESIGN migration_locks: one MemoryId migration = atomic txn incl. its completion event
 
 # --- (B) Scanner over-approximation: value extracted from the lock ------------
-crates/chimera-tui/src/data/pipeline.rs:821         # SCANNER `.take()` moves the EventSubscriber out; guard drops at stmt end
+crates/chimera-tui/src/data/pipeline.rs:891         # SCANNER `.take()` moves the EventSubscriber out; guard drops at stmt end (re-keyed 2026-09-15 after main merge)
 crates/csn-substitutor/src/lib.rs:107               # SCANNER `level` is a copied u32; the RefMut `chain` dies at the if-let block
 crates/decb-governor/src/governor.rs:564            # SCANNER `current_total` is `*total` copy; state guard already block-scoped
 crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER `pooled` is a TcpStream removed from the pool; guard dies in and_then

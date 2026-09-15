@@ -32,6 +32,16 @@ pub struct EventSubscriber {
     /// WHY `std::sync::Mutex` + `VecDeque`: `try_recv` 是同步非阻塞方法,
     /// 不需要 async lock;锁内仅做 push/pop,持有时间极短,不跨 await。
     buffer: Arc<Mutex<VecDeque<NexusEvent>>>,
+    /// 事件唤醒原语(感知延迟优化,§7.7 设计,2026-09-13)
+    ///
+    /// 转发任务每推入一条事件即 `notify_one()`;消费方(DataPipeline)以
+    /// `tokio::select!{ sleep, notified }` 实现事件驱动的即时 tick——
+    /// 此前 pipeline 只能等固定 tick 间隔,「事件 → 快照」最坏 ~250ms。
+    ///
+    /// WHY `Arc<Notify>` 而非直接持有:DataPipeline 在 guard 作用域**外**
+    /// await(`std::sync::MutexGuard` 跨 await 是 §4.4 反模式 #1),需要
+    /// 无锁借用的克隆句柄。
+    notify: Arc<tokio::sync::Notify>,
     /// 后台转发任务句柄
     ///
     /// WHY `Option`: `shutdown(&mut self)` 需要取出手柄并 await,
@@ -58,6 +68,8 @@ impl EventSubscriber {
 
         let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(BUFFER_CAPACITY)));
         let buffer_clone = Arc::clone(&buffer);
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let notify_for_task = Arc::clone(&notify);
 
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
@@ -84,6 +96,11 @@ impl EventSubscriber {
                                     );
                                 }
                                 buf.push_back(event);
+                                // 事件唤醒(感知延迟优化):通知消费方"有新事件",
+                                // 使其 select! 的 notified 分支立即返回(无需等 tick)。
+                                // Notify 许可语义:无等待者时存 1 个许可,下次
+                                // notified().await 立即完成——连续事件不堆积唤醒。
+                                notify_for_task.notify_one();
                             }
                             Err(EventBusError::ChannelClosed) => break,
                             Err(EventBusError::SlowConsumerDropped { lag, .. }) => {
@@ -107,9 +124,20 @@ impl EventSubscriber {
 
         Self {
             buffer,
+            notify,
             handle: Some(handle),
             shutdown_tx: Some(shutdown_tx),
         }
+    }
+
+    /// 事件唤醒句柄 — 消费方(DataPipeline)用于 `select!{ sleep, notified }`
+    ///
+    /// # 语义
+    /// 每当转发任务推入事件,许可即被设置;等待中的 `notified()` 立即完成。
+    /// 无等待者时许可驻留(下次等待立即返回)——「至少一条事件待消费」的
+    /// 电平语义,不丢唤醒。
+    pub fn notify_handle(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.notify)
     }
 
     /// 处理单个 NexusEvent,记录特定事件变体的接收日志
@@ -233,6 +261,37 @@ mod tests {
             sleep(Duration::from_millis(5)).await;
         }
         subscriber.try_recv()
+    }
+
+    /// Notify 许可语义(感知延迟优化,2026-09-13):事件入缓冲后,唤醒句柄的
+    /// `notified()` **立即完成**(不等任何 tick 间隔)
+    ///
+    /// 验证链路: publish_blocking → 转发任务 push_back + notify_one →
+    /// 消费方 `notify_handle().notified().await` 即时返回。许可语义:
+    /// 无等待者时许可驻留(下次等待立即返回)——「至少一条事件待消费」
+    /// 的电平语义,不丢唤醒。
+    #[tokio::test]
+    async fn notify_handle_fires_on_event_arrival() {
+        let bus = EventBus::new();
+        let mut subscriber = EventSubscriber::new(bus.clone());
+        let notify = subscriber.notify_handle();
+
+        // 先挂起等待(成为等待者),再发布事件 → notified() 应在远小于
+        // 任何 tick 间隔的时间内完成
+        let waiter = tokio::spawn(async move { notify.notified().await });
+        // 让 waiter 先进入等待态(让出调度)
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        bus.publish_blocking(osa_event(0.5, vec!["a.rs"]))
+            .expect("publish should succeed");
+
+        tokio::select! {
+            _ = waiter => {} // 唤醒成功
+            _ = sleep(Duration::from_millis(500)) => {
+                panic!("事件发布后 500ms 内未收到唤醒——Notify 原语失效");
+            }
+        }
+        subscriber.shutdown().await;
     }
 
     /// 验证 handle_event 对 OmniSparseMasksComputed 不 panic

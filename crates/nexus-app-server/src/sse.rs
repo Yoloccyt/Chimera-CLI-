@@ -22,6 +22,7 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
+use crate::protocol::ProtocolError;
 use crate::transport::{AppTransport, TransportError};
 
 /// SSE 传输错误
@@ -112,7 +113,10 @@ impl AppTransport for SseConnection {
     }
 
     async fn send_event(&self, ev: &AppEvent) -> Result<(), TransportError> {
-        let json = serde_json::to_string(ev).map_err(|e| TransportError::Encode(e.to_string()))?;
+        // SSE 帧不走 NDJSON 编解码器(直接 `data: {json}\n\n`)，但复用同一
+        // `ProtocolError` 分类语义(帧阶段)，使传输层错误面单一(架构方向 F-c)。
+        let json = serde_json::to_string(ev)
+            .map_err(|e| TransportError::Encode(ProtocolError::frame("sse event", e)))?;
         let frame = format!("data: {json}\n\n");
         let mut writer = self.writer.lock().await;
         writer

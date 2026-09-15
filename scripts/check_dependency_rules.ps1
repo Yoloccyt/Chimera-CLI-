@@ -305,8 +305,11 @@ function Invoke-RuleChecks {
         $script:report += "[C] disk crates scanned: $($dirs.Count), layer map entries: $($layerMap.Count) (expect $expectedCrates/$expectedCrates)"
 
         # --- Check D: chimera-mas internal dependency bound (P3-T2, WI-29) ---
-        # WI-29 strangler 目标: chimera-mas 内部 crate 依赖 ≤16（实测 13）;
+        # WI-29 strangler 目标: chimera-mas 内部 crate 依赖 ≤16（实测 11,2026-09-12 前为 13）;
         # 超限即拆（mas-sched 控制面已拆出,后续执行面继续瘦身）。
+        # 13 → 11（架构方向 E 批次）: `mlc-engine`/`cmt-tiering` 为幽灵依赖
+        # （已声明、src/ 零引用）已删除,本棘轮自此运行在真实基数上;防回潮由
+        # scripts/check_declared_dep_usage.py（G-30/G-31）承担。与 .sh Check D 同步。
         $masInternal = @()
         if (Test-Path 'crates/chimera-mas/Cargo.toml') {
             $masLines = Get-Content 'crates/chimera-mas/Cargo.toml'
