@@ -63,20 +63,31 @@ pub mod wiki;
 /// 根据 `Cli.command` 路由到对应子命令处理函数。
 /// 无子命令时默认启动 TUI 交互界面,用户可直接输入 `chimera` 进入可视化面板。
 ///
+/// # 组合根共享装配（M4-P1）
+/// dispatch 先经 [`crate::composition::build`] 装配 AppContext（bus+engine
+/// 一揽子，C12 唯一装配点），chat/run/exec/quest/parliament/agent 六命令
+/// 共享同一 AppContext（事件经共享 bus 对进程内订阅者可见，C3 Critical 旁路
+/// 由 build() 标准装配保证）。serve/acp 走自身 `build_app_server` 路径
+/// （本波次保留不动）；tui 仍各自装配（下一波次显式排除）。
+///
 /// 注:参数命名为 `cfg` 而非 `config`,避免遮蔽 `pub mod config;` 声明的模块名,
 /// 否则 `config::execute(...)` 会被解析为对 `&ChimeraConfig` 参数的方法调用。
 pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
     // 从 Cli 构造 PermissionCtx(各命令按需消费,不破坏不需要 prompt 的命令签名)
     let perm = PermissionCtx::from_cli(cli);
+    // C12: 进程级唯一装配点 —— 六命令共享 bus/engine（见模块文档 M4-P1 节）。
+    let ctx = crate::composition::build(cfg)?;
     match &cli.command {
         // Task 5 of spec: EXAMPLES 一级入口 — 顶级命令位置(Run 之前)
         // 不消费 json/perm(纯字符串输出)
         Some(Commands::Help { command }) => help::execute(command.as_deref(), cli).await,
-        Some(Commands::Run { prompt }) => run::execute(prompt, cfg, cli.json, &perm).await,
+        Some(Commands::Run { prompt }) => {
+            run::execute_with_ctx(&ctx, prompt, cli.json, &perm).await
+        }
         // WI-02: exec 非交互契约 — 独立退出码语义（0/2/3/4）经 exec::exec_exit_code 映射；
         // std::process::exit 立即终止（exec 为 CI 管道场景，析构无业务依赖）
         Some(Commands::Exec { prompt }) => {
-            match exec::execute(prompt, cfg, cli.json, &perm).await {
+            match exec::execute_with_ctx(&ctx, prompt, cli.json, &perm).await {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     if let Some(ce) = e.downcast_ref::<ChimeraCliError>() {
@@ -94,18 +105,19 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         Some(Commands::Acp) => acp::execute(cfg).await,
         // Task 1.5: chat REPL 不消费 json flag(REPL 内部统一人类可读),
         // 但消费 perm(--no-permission 自动允许 tool 调用,CI 友好)
-        Some(Commands::Chat) => chat::execute(cli, cfg).await,
+        Some(Commands::Chat) => chat::execute_with_ctx(&ctx, cli, cfg).await,
         // v3-engine M2(ADR-061):传递 `--no-v3-engine` flag 到 tui::execute,
         // 由其设置 CHIMERA_NO_V3_ENGINE 环境变量控制渲染路径回退。
         // WI-01: `--protocol` flag 传递协议模式开关（Quest 生命周期经协议面）
         // TUI 不消费 json/perm(TUI 有自己的渲染管线,不走 stdout 输出 helper)
+        // M4 范围说明: tui 仍各自装配（commands/tui.rs 为下一波次最厚装配点）
         Some(Commands::Tui {
             no_v3_engine,
             protocol,
         }) => tui::execute(cfg, *no_v3_engine, *protocol).await,
         // Quest:全局 --json 优先,子命令级 --json 作为兼容回退(Task 1.7 统一前保留)
         Some(Commands::Quest { action, json }) => {
-            quest::execute(action, cfg, cli.json || *json, &perm, cli.dry_run).await
+            quest::execute_with_ctx(&ctx, action, cli.json || *json, &perm, cli.dry_run).await
         }
         Some(Commands::Config { action }) => config::execute(action, cfg, cli.json).await,
         // Wiki:全局 --json 优先,子命令级 --json 作为兼容回退(Task 1.7 统一前保留);
@@ -119,7 +131,7 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         }
         // Parliament:全局 --json 优先,子命令级 --json 作为兼容回退;perm 预留供未来权限检查
         Some(Commands::Parliament { proposal, json }) => {
-            parliament::execute(proposal, cfg, cli.json || *json, &perm).await
+            parliament::execute_with_ctx(&ctx, proposal, cli.json || *json, &perm).await
         }
         // Task 1.8: MCP 量子网格管理 — 全局 --json 传递;perm 供 mcp call 使用;dry_run 供 mcp call 预览
         Some(Commands::Mcp { action }) => {
@@ -131,7 +143,7 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         }
         // Task 1.10: Agent 生命周期管理 — 全局 --json 传递;perm 供 agent cancel 使用;dry_run 供 agent cancel 预览
         Some(Commands::Agent { action, parallel }) => {
-            agent::execute(action, cfg, cli.json, *parallel, &perm, cli.dry_run).await
+            agent::execute_with_ctx(&ctx, action, cli.json, *parallel, &perm, cli.dry_run).await
         }
         // Task 1.13: 系统健康检查 — 全局 --json 优先,子命令级 --json 作为兼容回退
         Some(Commands::Doctor { json, fix }) => doctor::execute(cfg, cli.json || *json, *fix).await,
