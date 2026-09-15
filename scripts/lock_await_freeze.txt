@@ -1,0 +1,51 @@
+# =============================================================================
+# lock_await_freeze.txt - lock-held-across-.await frozen exemptions (M3 gate)
+# =============================================================================
+# Consumed by: scripts/check_lock_await.sh
+# Key: <path>:<GUARD ACQUISITION LINE>  (one entry covers every await under it)
+#
+# Two legitimate reasons for an entry (classification inherited from the
+# human-reviewed scripts/await_guard_allowlist.txt, 2026-09-10 audit; this
+# gate's findings match that list 1:1 on acquisition lines):
+#   (A) DESIGN        - the lock MUST stay held across the await (IO frame
+#                       atomicity, per-key migration serialisation). Splitting
+#                       it would corrupt the protocol/transaction.
+#   (B) SCANNER-DEBT  - the binding is a VALUE taken out of the lock (deref /
+#                       copy / take / remove), not a guard. The scanner
+#                       over-approximates here; these lines are debt on the
+#                       scanner, not on the code.
+#
+# Ratchet semantics:
+#   * a finding NOT listed here            -> gate FAILS (fix the code, or
+#                                             freeze with a reason)
+#   * a listed entry with no current match -> gate FAILS as STALE (the code
+#                                             moved on; delete the line in the
+#                                             same PR). A freeze list that can
+#                                             rot is worse than no freeze list.
+#   * the list is SHRINK-ONLY by design: new holds require review; repaying a
+#     hold means deleting its line in the same PR that fixes the code.
+# Gate output must stay ASCII (Windows GBK consoles).
+# =============================================================================
+
+# --- (A) DESIGN: the hold is intentional -------------------------------------
+# Splitting these would let concurrent writers interleave half-frames, or
+# reopen the TOCTOU window the per-key migration lock exists to close.
+# Re-keyed 2026-09-15 after the main merge: the 2026-09-13 baseline moved the
+# nexus-app-server code (generic transport split + new send_decode_error
+# writer path); acquisition sites re-verified one by one, semantics unchanged.
+crates/nexus-app-server/src/transport.rs:169  # DESIGN stdio reader: read_line must complete the line frame
+crates/nexus-app-server/src/transport.rs:186  # DESIGN stdio writer: NDJSON frame written as one atomic unit
+crates/nexus-app-server/src/transport.rs:206  # DESIGN stdio writer: NDJSON error frame written as one atomic unit (send_decode_error)
+crates/nexus-app-server/src/sse.rs:121        # DESIGN SSE writer: single-connection frame atomicity
+crates/mlc-engine/src/engine.rs:912           # DESIGN migration_locks: one MemoryId migration = atomic txn incl. its completion event
+
+# --- (B) SCANNER-DEBT: value extracted from the lock, not a guard ------------
+# If check_lock_await.sh ever learns to see through value extraction, delete
+# these lines and re-run the gate.
+# (pipeline re-keyed 2026-09-15 with the main merge, same .take() shape)
+crates/chimera-tui/src/data/pipeline.rs:891   # SCANNER-DEBT `.take()` moves the EventSubscriber out; guard drops at stmt end
+crates/csn-substitutor/src/lib.rs:107         # SCANNER-DEBT `level` is a copied u32; the RefMut `chain` dies at the if-let block
+crates/decb-governor/src/governor.rs:564      # SCANNER-DEBT `current_total` is `*total` copy; state guard already block-scoped
+crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER-DEBT `pooled` is a TcpStream removed from the pool; guard dies in and_then
+crates/pvl-layer/src/producer.rs:123          # SCANNER-DEBT `strategy` is `*read()` Copy value; read guard dies at stmt end
+crates/session-store/src/writer.rs:495        # SCANNER-DEBT `has_pending` is a bool; flush deliberately runs outside the lock

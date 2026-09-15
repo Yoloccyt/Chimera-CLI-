@@ -324,3 +324,40 @@ cmd = "{python} scripts/check_dep_edge_freeze.py"
 expect = 0
 kind = "light"
 note = "内部装配边 138 条冻结只减不增（新边未登记必红 / 失效行必红；优先 EventBus 而非新增直连边）"
+
+# 持锁跨 await 静态门 bash 单实现 + 文档计数漂移门（tower mission M3,路线图方向5后半+方向6）。
+# 与 G-26/G-27 同族互补:M3 交付物为 bash+awk 单实现(find|xargs|awk,无 python 依赖),便于
+# CI 与本地无 python 环境复跑;存量违规冻结口径与 await_guard_allowlist.txt 一致(采集行 1:1)。
+# 反馈链路闭环:2026-09-11 审计发现"manifest 登记的门未接进 CI = 门等于没装",故新门一律成对登记。
+[[gate]]
+id = "G-34"
+spec_ref = "M3 / 架构重构路线图 方向5后半"
+cmd = "bash scripts/check_lock_await.sh --selftest"
+expect = 0
+kind = "light"
+note = "持锁跨 await 静态门有牙齿（正/负 fixture 各 4/5 例:块作用域/spawn_blocking/acquire-await/drop/测试模块必抑制;冻结豁免失效必红）"
+
+[[gate]]
+id = "G-35"
+spec_ref = "M3 / 架构重构路线图 方向5后半"
+cmd = "bash scripts/check_lock_await.sh"
+expect = 0
+kind = "light"
+note = "crates/*/src 全量持锁跨 await 裁决（未登记违规=红;冻结 11 条与 await_guard_allowlist.txt 同口径,只减不增）"
+
+[[gate]]
+id = "G-36"
+spec_ref = "M3 / 架构重构路线图 方向6"
+cmd = "bash scripts/check_doc_drift.sh --selftest"
+expect = 0
+kind = "light"
+note = "文档计数漂移门有牙齿（代码漂移/未登记漂移/登记失效/锚点消失/目标缺失 全 verdict 类必检出）"
+
+[[gate]]
+id = "G-37"
+spec_ref = "M3 / 架构重构路线图 方向6"
+cmd = "bash scripts/check_doc_drift.sh"
+expect = 0
+kind = "light"
+note = "NexusEvent 变体/EventTopic 类/workspace crate 三计数:代码实测锚定 doc_count_freeze.txt(145/10/43,2026-09-12 实测);文档漂移未登记=红"
+

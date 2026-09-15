@@ -196,6 +196,31 @@ jobs:
           bash scripts/check_perf_redlines.sh --selftest
           bash scripts/check_perf_redlines.sh --static-only
 
+      # WHY: 持锁跨 await 静态门(M3 / 架构重构路线图方向5后半)——faae-router tests/
+      # lock_holding.rs 是 workspace 唯一运行时死锁回归且只覆单 crate;本门对 crates/*/src
+      # 全量静态扫描 guard 存活域跨 .await 的形态(acquire-await/snapshot 块/spawn_blocking
+      # 闭包/drop 先行释放均不误报,判定粒度宁缺毋滥)。存量违规冻结于
+      # scripts/lock_await_freeze.txt(DESIGN/SCANNER-DEBT 两级,源自 2026-09-10 人工复核
+      # 清单):未登记违规=红、登记失效=红、冻结只减不增。沿 "--selftest 先证明有牙,再跑
+      # 真实裁决" 先例;全部零 cargo、秒级。与上方 check_await_across_guard.py 同名单审计
+      # 互补(M3 交付物为 bash 单实现,便于无 python 环境复跑)。
+      - name: Lock-held-across-await static gate (M3)
+        run: |
+          bash scripts/check_lock_await.sh --selftest
+          bash scripts/check_lock_await.sh
+
+      # WHY: 文档计数漂移门(M3 / 方向6)——计数口径曾现 144 vs 145(NexusEvent)、9 类 vs
+      # 10 类(EventTopic)漂移,且 .sh 层图滞留 38 曾致依赖铁律 job 为红;本门以代码实测为
+      # 锚(NexusEvent 变体 / EventTopic 类 / workspace crate 三计数,awk 直测 types.rs /
+      # topic.rs / Cargo.toml),锁定值单点存 scripts/doc_count_freeze.txt(--update-baseline
+      # 有意更新);文档声明与锁定值不符:未登记=红、已登记=可见债(修复后删行,滞留=红)、
+      # 锚点消失=红(防锚点锈蚀成永绿假门)。目标缺失退 2 不静默放过,沿 audit_cmd_sync.py
+      # (ADR-167 决策 4)先例;全部零 cargo、秒级。
+      - name: Doc count drift gate (M3)
+        run: |
+          bash scripts/check_doc_drift.sh --selftest
+          bash scripts/check_doc_drift.sh
+
       # Concord W5:斜杠命令词表防退化——断言 24 条主流竞品同名命令均存在于
       # SlashCommandRegistry 且 tier 正确(W2 check_slash_vocab 口径提升为 CI 门禁;
       # 退出码 0=通过 / 非 0=词表漂移阻塞合入)。i18n 硬编码防退化由
