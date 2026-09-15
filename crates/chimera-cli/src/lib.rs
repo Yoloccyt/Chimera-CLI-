@@ -47,6 +47,9 @@
 pub mod action_orchestrator;
 /// 启动 banner 输出(品牌 ASCII art,可通过 `--no-banner` 关闭)
 pub mod banner;
+/// 统一调用预算包装 — 超时 + CancellationToken 注入(M2,M1-方向5:
+/// chat/quest 主路径 LLM/长操作的本层兜底防护,超时发 OperationTimedOut 事件)
+pub mod call_budget;
 /// Clap 子命令定义
 pub mod cli;
 /// 子命令业务骨架

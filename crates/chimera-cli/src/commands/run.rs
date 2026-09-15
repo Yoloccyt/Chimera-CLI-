@@ -29,11 +29,28 @@ use nexus_core::{MultimodalInput, UserIntent};
 use quest_engine::QuestEngine;
 use uuid::Uuid;
 
+use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
 use crate::output;
 use crate::permission::PermissionCtx;
+use tokio_util::sync::CancellationToken;
+
+/// CallBudgetError → ChimeraCliError 映射(M2 接入点共用)
+///
+/// WHY 走既有矩阵而非新增变体:`Timeout` 对应 ADR-060 退出码 6(timeout),
+/// `Cancelled` 对应退出码 4(user_cancelled)——纯增量防护复用既有语义,
+/// 不扩展错误面(对外 CLI 行为无感)。
+fn call_budget_to_cli_error(e: CallBudgetError) -> ChimeraCliError {
+    match e {
+        CallBudgetError::Timeout {
+            operation_id,
+            budget_ms,
+        } => ChimeraCliError::Timeout(format!("{operation_id} 超过 {budget_ms}ms 未返回")),
+        CallBudgetError::Cancelled { .. } => ChimeraCliError::UserCancelled,
+    }
+}
 
 /// 流式 chunk 之间的延迟(制造逐字符浮现观感)
 ///
@@ -64,8 +81,10 @@ pub async fn execute(
     // 1. 构造进程内 ephemeral EventBus + QuestEngine
     //    WHY new() 而非 with_checkpoints:CLI 单次运行无需持久化,
     //    且 ~/.chimera 目录可能不存在导致 CheckpointManager 初始化失败。
+    //    WHY bus.clone():call_with_budget 需持 bus 发布 OperationTimedOut
+    //    事件(M2 本层超时兜底,engine 只消费不持有发布权)。
     let bus = EventBus::new();
-    let engine = QuestEngine::new(bus);
+    let engine = QuestEngine::new(bus.clone());
 
     // 2. 封装 UserIntent(UUIDv7 时间有序,便于审计追溯)
     let intent = UserIntent {
@@ -78,10 +97,21 @@ pub async fn execute(
     // 3. 真实 L9 分解:query → UserIntent → Quest
     //    create_quest 内部会广播 QuestCreated 事件,但本进程无订阅者,
     //    publish 失败被容忍(engine 内部用 `?` 传播,EventBus 无订阅者时 publish 成功)。
-    let quest = engine
-        .create_quest(intent)
-        .await
-        .map_err(|e| ChimeraCliError::EngineError(build_error_reply(&e)))?;
+    //    M2:经 call_with_budget 注入本层超时(120s,对齐 mca-gateway per-endpoint
+    //    口径)——绕过 gateway 时 create_quest 挂起不再永久阻塞;超时发
+    //    OperationTimedOut 事件并映射为既有 Timeout 退出码 6(纯增量防护,
+    //    不收紧正常路径行为)。token 为新建未触发令牌,预留全局取消链路接线。
+    let token = CancellationToken::new();
+    let quest = call_with_budget(
+        engine.create_quest(intent),
+        DEFAULT_CALL_BUDGET,
+        &token,
+        "run.create_quest",
+        &bus,
+    )
+    .await
+    .map_err(call_budget_to_cli_error)?
+    .map_err(|e| ChimeraCliError::EngineError(build_error_reply(&e)))?;
 
     // 4. 输出
     if json {

@@ -41,11 +41,13 @@ use nexus_core::{MultimodalInput, UserIntent};
 use quest_engine::QuestEngine;
 use uuid::Uuid;
 
+use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
 use crate::cli::Cli;
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
 use crate::permission::PermissionCtx;
+use tokio_util::sync::CancellationToken;
 
 /// 默认上下文窗口 token 数(用于 `[context: .../...]` 显示)
 ///
@@ -157,7 +159,7 @@ async fn repl_loop(
 
                 // 自然语言 → QuestEngine 分解(SubTask 1.5.2)
                 turn += 1;
-                let reply = stream_quest_response(engine, input, chunk_delay).await;
+                let reply = stream_quest_response(engine, _bus, input, chunk_delay).await;
 
                 // 累计 token 使用量(粗略估计:输入 + 输出字符数 / 4)
                 // WHY / 4:经验估算 token ≈ chars/4(CJK 约 1 char/token,英文约 4 chars/token,
@@ -243,7 +245,17 @@ fn chunk_delay_from_env() -> Duration {
 ///
 /// 复用 `orchestrator::build_quest_reply` + `plan_chunks` 纯函数,
 /// 保证 CLI run / chat / TUI 三入口输出格式一致(单一真相源)。
-async fn stream_quest_response(engine: &QuestEngine, input: &str, chunk_delay: Duration) -> String {
+///
+/// M2:`create_quest` 经 `call_with_budget` 注入本层超时(120s,对齐
+/// mca-gateway per-endpoint 口径)+ CancellationToken。超时/取消不 panic、
+/// 不静默:回复文本明示失败,超时同时经 bus 发布 `OperationTimedOut` 事件
+/// (ephemeral bus 无订阅者属正常)。token 为新建未触发令牌,预留接线。
+async fn stream_quest_response(
+    engine: &QuestEngine,
+    bus: &EventBus,
+    input: &str,
+    chunk_delay: Duration,
+) -> String {
     let intent = UserIntent {
         intent_id: format!("intent-{}", Uuid::now_v7()),
         raw_text: input.to_string(),
@@ -251,9 +263,25 @@ async fn stream_quest_response(engine: &QuestEngine, input: &str, chunk_delay: D
         risk_level: 0,
     };
 
-    let reply = match engine.create_quest(intent).await {
-        Ok(quest) => build_quest_reply(&quest),
-        Err(e) => build_error_reply(&e),
+    let token = CancellationToken::new();
+    let reply = match call_with_budget(
+        engine.create_quest(intent),
+        DEFAULT_CALL_BUDGET,
+        &token,
+        "chat.create_quest",
+        bus,
+    )
+    .await
+    {
+        Ok(Ok(quest)) => build_quest_reply(&quest),
+        Ok(Err(e)) => build_error_reply(&e),
+        Err(CallBudgetError::Timeout {
+            operation_id,
+            budget_ms,
+        }) => format!("需求分解超时:{operation_id} 超过 {budget_ms}ms 未返回"),
+        Err(CallBudgetError::Cancelled { operation_id }) => {
+            format!("需求分解已取消:{operation_id}")
+        }
     };
 
     // 流式输出到 stdout(逐字符 + flush)
@@ -765,8 +793,9 @@ mod tests {
     #[tokio::test]
     async fn test_stream_quest_response_produces_reply() {
         let bus = EventBus::new();
-        let engine = QuestEngine::new(bus);
-        let reply = stream_quest_response(&engine, "分析需求。设计方案。", Duration::ZERO).await;
+        let engine = QuestEngine::new(bus.clone());
+        let reply =
+            stream_quest_response(&engine, &bus, "分析需求。设计方案。", Duration::ZERO).await;
         assert!(!reply.is_empty(), "回复不应为空");
         assert!(reply.contains("任务"), "回复应含任务分解信息: {reply}");
     }

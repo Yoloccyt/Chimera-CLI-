@@ -233,10 +233,7 @@ pub(crate) mod testutil {
 
         /// 记录回帧的 code（供断言;真实回帧行为由 StdinTransport 覆写承载）
         async fn send_decode_error(&self, error: &JsonRpcError) -> Result<(), TransportError> {
-            self.sent_error_codes
-                .lock()
-                .unwrap()
-                .push(error.code);
+            self.sent_error_codes.lock().unwrap().push(error.code);
             Ok(())
         }
     }

@@ -76,6 +76,11 @@ clap = { workspace = true }
 figment = { workspace = true }
 # Tokio:异步运行时,full feature 提供完整能力
 tokio = { workspace = true }
+# tokio-util(M2):`sync::CancellationToken` 提供调用预算包装的取消注入。
+# WHY 直写版本而非 workspace 声明:M2 scope 限 crates/chimera-cli/**,workspace
+# [workspace.dependencies] 在根 Cargo.toml(越 scope);tokio-util 已在 Cargo.lock
+# (0.7.19,传递依赖),default features = [] 即含 CancellationToken,零新增传递面。
+tokio-util = "0.7"
 # Serde:配置序列化/反序列化
 serde = { workspace = true }
 serde_json = { workspace = true }

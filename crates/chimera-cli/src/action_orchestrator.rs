@@ -21,6 +21,7 @@
 
 use std::sync::Arc;
 
+use crate::call_budget::{call_with_budget, DEFAULT_CALL_BUDGET};
 use crate::overwindow_bridge::OverWindowBridge;
 use chimera_tui::actions::action_ids;
 use chimera_tui::data::curator::{
@@ -32,6 +33,7 @@ use nexus_core::{MultimodalInput, UserIntent};
 use quest_engine::QuestEngine;
 use serde_json::Value;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 /// 事件来源标识(发布回发事件时写入 `EventMetadata.source`)
 const SOURCE: &str = "chimera-cli";
@@ -141,6 +143,10 @@ async fn route_action(
     match action_id {
         // agent.chat / quest.start:需 query 构造 UserIntent 交 create_quest 真实分解。
         // 命令面板派发通常无 query(应经 Insert/Chat 输入),此时明确失败而非空跑。
+        // M2:create_quest 经 call_with_budget 注入本层超时(120s,对齐
+        // mca-gateway per-endpoint 口径)+ CancellationToken;超时发
+        // OperationTimedOut 事件(经 bus),错误文本回 TuiActionFailed(不静默)。
+        // token 为新建未触发令牌,预留 TUI 侧取消链路接线。
         "agent.chat" | "quest.start" => {
             let query = payload_str(payload, "query")
                 .filter(|q| !q.is_empty())
@@ -151,10 +157,17 @@ async fn route_action(
                 multimodal_inputs: vec![MultimodalInput::Text(query)],
                 risk_level: 0,
             };
-            let quest = engine
-                .create_quest(intent)
-                .await
-                .map_err(|e| e.to_string())?;
+            let token = CancellationToken::new();
+            let quest = call_with_budget(
+                engine.create_quest(intent),
+                DEFAULT_CALL_BUDGET,
+                &token,
+                "action_orchestrator.create_quest",
+                bus,
+            )
+            .await
+            .map_err(|e| e.to_string())? // 外层:CallBudgetError(超时/取消)
+            .map_err(|e| e.to_string())?; // 内层:QuestEngine 分解错误
             Ok(format!(
                 "已创建 Quest「{}」({} 个任务)",
                 quest.title,
