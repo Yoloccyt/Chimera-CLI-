@@ -51,6 +51,11 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod ahirt;
+/// 审议预算门(ADR-160 孤岛偿还 M10:parliament → decb-governor 生产边,L8→L8 同层)
+///
+/// `DebateBudgetGate` 把 DECB 双档预算裁决接入审议生命周期三挂点
+/// (审议前评估 / 档位查询 / 审议后消耗回写);构造参数注入、未装配零行为变化。
+pub mod budget_gate;
 /// MCA N7 厂商集中度免疫探针 — 供应商锁定的系统级免疫(ADR-067 决策 2)
 ///
 /// 单厂商流量占比 EWMA > 70% 告警;独立模块(不并入 ImmuneSystem 固定三探针数组)。
@@ -154,6 +159,7 @@ pub use ahirt::{
     AhirtRedTeam, AhirtStats, ProbePayload, ProbePayloadLibrary, ProbeResult, ProbeType,
     SecurityReport, TypeStats,
 };
+pub use budget_gate::DebateBudgetGate;
 pub use concentration_probe::ProviderConcentrationProbe;
 pub use config::{AhirtConfig, ParliamentConfig};
 pub use debate::{DpoPair, DpoPairGenerator, Parliament};

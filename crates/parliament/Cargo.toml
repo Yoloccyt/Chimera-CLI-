@@ -33,6 +33,12 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 # Phase 8 §13.2: ModelJudge async trait(冲突仲裁判断注入点,v4.0 模型接线预留)
 async-trait = { workspace = true }
+# L8 同层互引:DECB 双档预算治理(ADR-160 孤岛偿还 M10,dev-dep 转正)
+# WHY 生产边(非 dev):src/budget_gate.rs 的 DebateBudgetGate 在审议生命周期
+# 真实调用 DecbGovernor(assess/record_consumption),L8→L8 同层互引合法(§2.2)。
+# 防回流:移回 dev-dependencies 即不可达且无 freeze 登记 → 棘轮 [GAP-R] 门红;
+# declared_dep_usage / cargo machete 双门强制 src 真实引用(无空转边)。
+decb-governor = { workspace = true }
 
 [dev-dependencies]
 # ADR-054 决策 3(P9-T4):AHIRT 测试注入 SecCoreCommandValidator(验证注入路径),
@@ -58,8 +64,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # 向上 dev-dep 豁免(W8 清理记档):L8 parliament → L9 quest-engine,
 # tests/csa.rs + tests/e2e.rs 真实使用 TtgConfig/TtgGovernor,保留
 quest-engine = { workspace = true }
-# SubTask 37.2/37.3:E2E 测试需要 DECB 预算计算与档位切换
-decb-governor = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]

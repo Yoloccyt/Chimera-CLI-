@@ -33,7 +33,10 @@ scc-cache        # incoming edges: gea-activator / hcw-window dev-dep + mca-gate
 csn-substitutor  # capability degradation chain, incoming edge: root E2E dev-dep only                        ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
 gea-activator    # incoming edge: root E2E dev-dep only (layer corrected to L9 in Phase 6 W0)                ADR-160
 sesa-router      # incoming edge: root E2E dev-dep only                                                      ADR-160
-decb-governor    # incoming edge: parliament dev-dep only                                                    ADR-160
+# decb-governor Frozen entry REMOVED 2026-09-16 (M10): parliament declares a
+# production dep and src/budget_gate.rs (DebateBudgetGate) calls DecbGovernor
+# on the deliberation lifecycle (assess / record_consumption) — real production
+# call path per ADR-179. Ratchet shrink-only: frozen 14 -> 13.
 # --- legacy islands ---
 # acb-governor Frozen entry REMOVED 2026-09-16 (M10, ADR-182): crate retired and
 # deleted (zero production consumers, not even a dev-dep). Ratchet shrink-only:
