@@ -16,7 +16,6 @@ mod setup;
 use std::time::{Duration, Instant};
 
 use chtc_bridge::IdeSource;
-use cmt_tiering::Tier;
 use event_bus::{EventMetadata, NexusEvent};
 use nmc_encoder::{DesktopCapture, PerceptionInput};
 use setup::{
@@ -24,7 +23,9 @@ use setup::{
     setup_week6_pipeline,
 };
 
-use lsct_tiering::TaskType;
+// WHY lsct_tiering::Tier(M10, ADR-160 偿还批次):lsct 已自有 Tier 类型
+// (解除 cmt 复用、防 cmt↔lsct 生产依赖环),LSCT API 一律使用本类型
+use lsct_tiering::{TaskType, Tier};
 
 // ============================================================
 // 测试 1:文本输入→NMC→SSRA→CHTC 全链路(< 400ms)

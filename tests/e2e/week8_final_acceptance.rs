@@ -313,7 +313,7 @@ fn test_week6_multimodal_evolution() {
         // L3 Storage:LSCT 任务感知能力分层(注册能力验证)
         pipeline
             .coordinator
-            .register_capability("cap-text-fusion", cmt_tiering::Tier::Warm);
+            .register_capability("cap-text-fusion", lsct_tiering::Tier::Warm);
         // LSCT 注册成功即证明 L3 Storage 可用
     });
 }
