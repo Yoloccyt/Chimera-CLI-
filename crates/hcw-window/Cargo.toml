@@ -31,6 +31,14 @@ tracing = { workspace = true }
 # 线程安全并发 Map(SubTask 2.11 要求,预留用于未来按 id 索引优化)
 # P2-T4: SharedSemanticIndex 跨层共享索引(DashMap 并发读写,ADR-128 选型)
 dashmap = { workspace = true }
+# 压缩结果 SCC 卸载(ADR-160 孤岛偿还 M10,dev-dep 转正)
+# WHY 生产边(非 dev):src/scc_offload.rs 的 CompressedWindowOffload 真实调用
+# SccCache::insert / get_or_prefetch(offload/shared),L2→L3 向下依赖合法(§2.2)。
+# 原 dev 豁免(tests/integration_scc.rs)语义与本模块一致 —— 压缩结果供
+# PVL Producer/Verifier 共享;转正后该集成测试仍绿(同 crate 引用不变)。
+# 防回流:移回 dev-dependencies 即不可达且无 freeze 登记 → 棘轮 [GAP-R] 门红;
+# declared_dep_usage / cargo machete 双门强制 src 真实引用(无空转边)。
+scc-cache = { workspace = true }
 # 向量运算(SubTask 2.11 要求,通过 nexus-core CLV 间接使用)
 
 [dev-dependencies]
@@ -40,11 +48,6 @@ tokio = { workspace = true }
 criterion = { workspace = true }
 # 属性测试框架(SubTask 20.3:压缩不变量与窗口选择单调性验证)
 proptest = { workspace = true }
-# SCC 推测上下文缓存 — HCW×SCC 跨周集成测试
-# WHY:HCW 压缩上下文后 SCC 缓存压缩结果,供 PVL Producer/Verifier 共享
-# 向上 dev-dep 豁免(W8 清理记档):L2 hcw-window → L3 scc-cache,
-# tests/integration_scc.rs 3 个跨层集成测试真实使用,保留
-scc-cache = { workspace = true }
 
 # PROBE P0: 召回评测 harness 编译期门控（ADR-034 合规：非运行时旗）
 # - `hcw-recall`: `recall/eval/` 子模块（needle/position/multihop/report 四类评测）

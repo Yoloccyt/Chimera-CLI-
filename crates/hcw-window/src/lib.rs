@@ -63,6 +63,12 @@ pub mod recall;
 pub mod selector;
 /// P4-W13.3.2: 选择器学习器持有器 — S4 接缝策略异步下发 + 本地 fallback（C4 合规）
 pub mod selector_learner;
+/// 压缩结果 SCC 卸载(ADR-160 孤岛偿还 M10:hcw-window → scc-cache 生产边,L2→L3 向下)
+///
+/// `CompressedWindowOffload` 把 HCW 压缩快照卸载进 SCC 推测缓存,
+/// PVL Producer/Verifier 经同一 content-key 共享 `Arc<ContextEntry>`;
+/// 构造参数注入、未装配时压缩路径零行为变化。
+pub mod scc_offload;
 /// P2-T4: SharedSemanticIndex 跨层共享语义索引(GLM IndexShare 迁移,符号/决策/错误三类)
 pub mod semantic_index;
 pub mod types;
@@ -80,6 +86,7 @@ pub use probe::{mix_probe, probe_health, score_with_probe, ProbeHealth, ProbeWei
 pub use selector::WindowSelector;
 // P4-W13.3.2: S4 接缝（HCW selector 权重系数）学习器持有器
 pub use selector_learner::SelectorLearnerHolder;
+pub use scc_offload::CompressedWindowOffload;
 pub use types::{CompressionReport, ContextEntry, HcwConfig, HcwState, WindowTier};
 pub use window::HcwWindow;
 
