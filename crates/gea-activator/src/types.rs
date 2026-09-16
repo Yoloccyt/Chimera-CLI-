@@ -1,6 +1,8 @@
 //! GEA 核心类型 — 专家、门控值、激活结果与任务画像
 //!
-//! 对应架构层:L6 Router
+//! 对应架构层:L9 Quest(权威源规则 §2.1 / CODE_WIKI §2.1,与 lib.rs 一致;
+//!   旧标 L6 Router 为 Phase 6 W0 前的历史残留,2026-09-16 订正——lib.rs/activator.rs
+//!   已于 2026-07-31 先行订正,本文件漏改,M11 finding 顺带收口)
 //! 对应创新点:GEA(Gated Expert Activation)
 //!
 //! # 设计决策(WHY)
