@@ -11,7 +11,7 @@
 # 只减不增：删除一行 = 该 bench 升格为受门禁守护；新增一行须附理由 + ADR 号。
 # 迁移来源：scripts/check_perf_redlines.ps1 $devOnly（78 条），
 #           2026-08-31 机械抽取，零人工转录。
-acb-governor|governor_bench|dev-only|ACB 治理闸门开发基准,无 spec KPI 阈值
+# acb-governor|governor_bench 行已随 ADR-182 退役删除(2026-09-16 M10,crate 删除,只减不增)
 auto-dpo|dpo_bench|dev-only|online-DPO 训练环节开发基准,仅实验用
 auto-dpo|judge_retry|dev-only|训练重试路径实验基准确认
 auto-dpo|rhi_channel_a_bench|dev-only|RHI Channel-A 复用探索通道实验

@@ -3,21 +3,6 @@
 version = 4
 
 [[package]]
-name = "acb-governor"
-version = "2.28.2-omega"
-dependencies = [
- "chrono",
- "criterion",
- "event-bus",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -632,7 +617,6 @@ dependencies = [
 name = "chimera-e2e-tests"
 version = "2.28.2-omega"
 dependencies = [
- "acb-governor",
  "anyhow",
  "auto-dpo",
  "chimera-cli",

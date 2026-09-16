@@ -35,7 +35,7 @@ members = [
     "crates/mtpe-executor", "crates/mlc-engine", "crates/hcw-window",
     "crates/cmt-tiering", "crates/scc-cache", "crates/lsct-tiering",
     "crates/seccore", "crates/decay-engine", "crates/qeep-protocol",
-    "crates/decb-governor", "crates/acb-governor", "crates/efficiency-monitor",
+    "crates/decb-governor", "crates/efficiency-monitor",
     "crates/gsoe-evolution", "crates/auto-dpo", "crates/mcp-mesh",
     "crates/nmc-encoder", "crates/chtc-bridge", "crates/chimera-tui",
     "crates/chimera-cli", "crates/chimera-mas",
@@ -213,9 +213,8 @@ pvl-layer = { path = "crates/pvl-layer" }
 gqep-executor = { path = "crates/gqep-executor" }
 mtpe-executor = { path = "crates/mtpe-executor" }
 csn-substitutor = { path = "crates/csn-substitutor" }
-# L8 Parliament:议会系统,自适应预算,双档预算
+# L8 Parliament:议会系统,双档预算(DECB);acb-governor 已按 ADR-182 退役删除
 parliament = { path = "crates/parliament" }
-acb-governor = { path = "crates/acb-governor" }
 decb-governor = { path = "crates/decb-governor" }
 # L9 Quest:任务引擎,效率监控,多Agent协同
 quest-engine = { path = "crates/quest-engine" }
@@ -643,7 +642,6 @@ gea-activator = { path = "crates/gea-activator" }    # L6 Router(门控专家激
 gqep-executor = { path = "crates/gqep-executor" }    # L7 Execution(聚集执行)
 mtpe-executor = { path = "crates/mtpe-executor" }    # L7 Execution(多步预测)
 scc-cache = { path = "crates/scc-cache" }            # L3 Storage(推测缓存+WAL)
-acb-governor = { path = "crates/acb-governor" }      # L8 Parliament(自适应预算)
 auto-dpo = { path = "crates/auto-dpo" }              # L5 Knowledge(偏好对生成)
 # P5.5: nexus-contracts 用于 HarnessSpec/ContractSpec/HopSpec 类型(P5.5.1 任务集定义)
 nexus-contracts = { path = "crates/nexus-contracts" }
