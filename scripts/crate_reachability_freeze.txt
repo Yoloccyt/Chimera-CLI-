@@ -29,19 +29,15 @@ nexus-hook       # empty config = current behaviour, safe fallback path (root Ca
 # --- legacy islands (delivered in Week 6/7, never wired; unit + E2E tests green but no production consumer) ---
 model-router     # incoming edges: auto-dpo (itself an island) + quest-engine dev-dep only; the "CAF landed" claim in the rules docs does not hold on the production graph  ADR-160/172  [ADR-171 T9: accepted pseudo-reachable production edge auto-dpo->model-router (L5->L1, ModelRouterJudgeClient), edge kept, consumer side is island; ADR-172: retired routing-contract status, frozen not deleted, mca-gateway is the only live LLM channel]
 auto-dpo         # one of the three L5 evolution-loop crates, zero production incoming edges                 ADR-160  [ADR-171 T9: accepted pseudo-reachable production edge auto-dpo->model-router (L5->L1, ModelRouterJudgeClient), edge kept, consumer side is island]
-# scc-cache Frozen entry REMOVED 2026-09-16 (M10): hcw-window declares a
-# production dep and src/scc_offload.rs (CompressedWindowOffload) calls
-# SccCache::insert / get_or_prefetch to share compressed windows with the
-# PVL Producer/Verifier pair — real production call path per ADR-179
-# (L2 -> L3 downward edge, §2.2 legal; same semantics the dev-dep exemption
-# recorded for tests/integration_scc.rs). Ratchet shrink-only: frozen 13 -> 12.
+# M10 2026-09-16:转正尝试被依赖铁律驳回(hcw-window 属内环 + L2->L3 向上,Check A/B 双违规),
+# 按 ADR-161 决策 4 与 revert 同 PR 回登记;重路由候选 = chimera-cli 组合根(ADR-161 路径①)。
+scc-cache        # incoming edges: gea-activator / hcw-window dev-dep + mca-gateway (island)                 ADR-160  [ADR-171 T9: accepted pseudo-reachable production edge mca-gateway->scc-cache (L10->L3, CacheAffinityIntegration), edge kept, consumer side is island]
 csn-substitutor  # capability degradation chain, incoming edge: root E2E dev-dep only                        ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
 gea-activator    # incoming edge: root E2E dev-dep only (layer corrected to L9 in Phase 6 W0)                ADR-160
 sesa-router      # incoming edge: root E2E dev-dep only                                                      ADR-160
-# decb-governor Frozen entry REMOVED 2026-09-16 (M10): parliament declares a
-# production dep and src/budget_gate.rs (DebateBudgetGate) calls DecbGovernor
-# on the deliberation lifecycle (assess / record_consumption) — real production
-# call path per ADR-179. Ratchet shrink-only: frozen 14 -> 13.
+# M10 2026-09-16:转正尝试被依赖铁律驳回(parliament 属内环,decb 不在内环白名单,Check A 违规),
+# 按 ADR-161 决策 4 与 revert 同 PR 回登记;重路由候选 = efficiency-monitor(L9->L8 向下,非内环)。
+decb-governor    # incoming edge: parliament dev-dep only                                                    ADR-160
 # --- legacy islands ---
 # acb-governor Frozen entry REMOVED 2026-09-16 (M10, ADR-182): crate retired and
 # deleted (zero production consumers, not even a dev-dep). Ratchet shrink-only:
