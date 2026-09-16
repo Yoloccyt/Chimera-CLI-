@@ -130,11 +130,9 @@ impl CmtCoordinator {
                         // 1) 重种子:把 CMT 已有能力注册进 LSCT(增量,幂等 —
                         //    已注册能力由 lsct 侧 assignments 去重)
                         match cmt.reconcile_lsct_assignments(&lsct).await {
-                            Ok(registered) => debug!(
-                                quest_title = title,
-                                registered,
-                                "LSCT 策略重种子完成"
-                            ),
+                            Ok(registered) => {
+                                debug!(quest_title = title, registered, "LSCT 策略重种子完成")
+                            }
                             Err(e) => warn!(
                                 error = %e,
                                 quest_title = title,

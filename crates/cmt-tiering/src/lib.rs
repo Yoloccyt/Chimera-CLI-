@@ -62,13 +62,13 @@ pub mod error;
 pub mod experience_card_storage;
 pub mod hot;
 pub mod ice;
-pub mod migrator;
-pub mod pool;
 /// LSCT 任务感知策略装配(cmt → lsct 生产边,ADR-160 孤岛偿还 M10)
 ///
 /// `spawn_lsct_policy` 装配决策腿(QuestCreated → LSCT 策略),
 /// 与既有 `spawn_lsct_subscriber`(执行腿)组成完整闭环。
 pub mod lsct_policy;
+pub mod migrator;
+pub mod pool;
 /// Phase 3 §8.1:金字塔存储映射(TencentDB 四层→热温冷冰,ADR-049 内嵌)
 pub mod pyramid_storage;
 pub mod rl_migration;

@@ -126,7 +126,10 @@ fn test_lsct_dep_is_production_not_dev() {
             in_dev = true;
         }
     }
-    assert!(in_deps, "cmt-tiering 必须声明 lsct-tiering 生产依赖边(ADR-160 偿还)");
+    assert!(
+        in_deps,
+        "cmt-tiering 必须声明 lsct-tiering 生产依赖边(ADR-160 偿还)"
+    );
     assert!(!in_dev, "lsct-tiering 不得出现在 [dev-dependencies]");
 }
 
