@@ -253,6 +253,45 @@ impl PanelId {
         PanelId::ExperienceCardViz,
     ];
 
+    /// 全部 PanelId 变体清单(27 个)—— 完整性断言的穷举驱动源(M6 派发表治理)
+    ///
+    /// WHY 手工清单而非编译期反射:工具链 rustc 1.97.1 的
+    /// `std::mem::variant_count` 仍未稳定(实测 E0658),无法编译期取变体数;
+    /// 故以"本清单 + `panel_id_all_is_exhaustive` 穷举 match 测试"双保险守护:
+    /// 新增变体时该测试的 match  arms 编译失败,强制同步本清单与
+    /// `REGISTERED_FOCUS_ORDER`(后者决定哪些面板进入焦点环)。
+    /// 清单与焦点环的关系:ALL == REGISTERED_FOCUS_ORDER ∪ {InjectionStrategy}
+    /// (InjectionStrategy 经 FC-05 下线,未注册但保留面板实现,见上方注释)。
+    pub const ALL: &[PanelId] = &[
+        PanelId::Quest,
+        PanelId::Parliament,
+        PanelId::Budget,
+        PanelId::Memory,
+        PanelId::Security,
+        PanelId::Health,
+        PanelId::Log,
+        PanelId::Help,
+        PanelId::Decay,
+        PanelId::EventStream,
+        PanelId::Router,
+        PanelId::McpNodes,
+        PanelId::Chtc,
+        PanelId::Timeline,
+        PanelId::OsaSparse,
+        PanelId::ClvVector,
+        PanelId::ResourceMonitor,
+        PanelId::MetricsDashboard,
+        PanelId::Sysinfo,
+        PanelId::Chat,
+        PanelId::SelfAssessment,
+        PanelId::DagViz,
+        PanelId::PvlScore,
+        PanelId::TaskManager,
+        PanelId::OverWindow,
+        PanelId::ExperienceCardViz,
+        PanelId::InjectionStrategy,
+    ];
+
     /// 切换到下一个面板(循环顺序,派生自 `REGISTERED_FOCUS_ORDER`)
     ///
     /// 未注册变体(不在焦点环内)回退到环首面板,避免孤立分支。
@@ -1576,6 +1615,63 @@ mod tests {
         assert_eq!(PanelId::Health.as_str(), "Health");
         assert_eq!(PanelId::Log.as_str(), "Log");
         assert_eq!(PanelId::Help.as_str(), "Help");
+    }
+
+    #[test]
+    fn panel_id_all_is_exhaustive_and_matches_focus_order() {
+        // 穷举守护:新增 PanelId 变体时,下方 match 因非穷尽而**编译失败**,
+        // 强制维护者同步 PanelId::ALL / REGISTERED_FOCUS_ORDER 与本测试
+        // (rustc 1.97.1 无稳定 variant_count,此为编译期驱动的等价手段)。
+        match PanelId::Quest {
+            PanelId::Quest
+            | PanelId::Parliament
+            | PanelId::Budget
+            | PanelId::Memory
+            | PanelId::Security
+            | PanelId::Health
+            | PanelId::Log
+            | PanelId::Help
+            | PanelId::Decay
+            | PanelId::EventStream
+            | PanelId::Router
+            | PanelId::McpNodes
+            | PanelId::Chtc
+            | PanelId::Timeline
+            | PanelId::OsaSparse
+            | PanelId::ClvVector
+            | PanelId::ResourceMonitor
+            | PanelId::MetricsDashboard
+            | PanelId::Sysinfo
+            | PanelId::Chat
+            | PanelId::SelfAssessment
+            | PanelId::DagViz
+            | PanelId::PvlScore
+            | PanelId::TaskManager
+            | PanelId::OverWindow
+            | PanelId::ExperienceCardViz
+            | PanelId::InjectionStrategy => {}
+        }
+
+        // 27 变体锚定(当前实测数;上方穷举 match 保证清单与 enum 同步)
+        assert_eq!(PanelId::ALL.len(), 27, "PanelId::ALL 应穷举 27 个变体");
+
+        // ALL 与焦点环的集合关系:ALL == REGISTERED_FOCUS_ORDER ∪ {InjectionStrategy}
+        // (无重复、无遗漏;InjectionStrategy 为 FC-05 下线的唯一未注册变体)
+        let mut all_sorted = PanelId::ALL.to_vec();
+        all_sorted.sort_by_key(|p| p.as_str());
+        all_sorted.dedup();
+        assert_eq!(
+            all_sorted.len(),
+            PanelId::ALL.len(),
+            "PanelId::ALL 不应含重复变体"
+        );
+        let mut focus_plus_unregistered = PanelId::REGISTERED_FOCUS_ORDER.to_vec();
+        focus_plus_unregistered.push(PanelId::InjectionStrategy);
+        focus_plus_unregistered.sort_by_key(|p| p.as_str());
+        assert_eq!(
+            all_sorted, focus_plus_unregistered,
+            "ALL 应恰为 焦点环 ∪ InjectionStrategy(注册表漂移即红)"
+        );
     }
 
     #[test]

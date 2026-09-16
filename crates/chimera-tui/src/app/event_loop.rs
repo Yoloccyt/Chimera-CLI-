@@ -5,7 +5,7 @@
 //!
 //! 对应架构层:L10 Interface
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -25,13 +25,6 @@ use crate::input::{InputRouter, PaneDir, RouteTarget, RouterMode};
 use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, LayoutMode, PanelId, TuiCommand};
 use event_bus::{ActionSource, EventMetadata, NexusEvent, VoteValue};
-
-/// P1-2(评估报告 v2):TuiActionRequested 本地兜底超时(编排器未接线场景)
-///
-/// WHY 2s:正常编排器回发 Completed/Failed 在毫秒级,2s 足够区分
-/// “编排器正在执行”与“无消费者”;standalone 模式(TUI 独立运行)下
-/// TuiActionRequested 无人消费,超时后状态栏提示避免用户无感知。
-const ACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// PS-1 帧预算:两次真实渲染之间的最小间隔(≈60fps 上限,单位 ms)
 ///
@@ -60,16 +53,10 @@ impl TuiApp {
         // 弹窗激活时:优先处理弹窗级交互。
         // PS-3(I-3):Ctrl+L 先于弹窗拦截 —— 此前 Insert/Slash/palette 三态均支持
         // 中英切换,唯独弹窗内被 handle_popup_key 吞掉(其 match 无 Ctrl 分支),
-        // 形成唯一失效上下文;在此统一拦截后 Ctrl+L 成为真正的全局不变量。
+        // 形成唯一失效上下文;经 try_locale_hotkey 统一拦截后 Ctrl+L 成为真正的
+        // 全局不变量(M6 收口:三处内联特判收敛为单点,事件源语义逐路径保留)。
         if !self.state.popup_stack.is_empty() {
-            if key.code == KeyCode::Char('l')
-                && key.modifiers.contains(event::KeyModifiers::CONTROL)
-            {
-                self.dispatch_action(
-                    "system.toggle_locale",
-                    "{}".to_string(),
-                    ActionSource::Panel,
-                );
+            if self.try_locale_hotkey(key, ActionSource::Panel) {
                 return;
             }
             self.handle_popup_key(key);
@@ -89,14 +76,7 @@ impl TuiApp {
         // IT-01(批次-B):遗留 Command/Search 模式分支已删除——生产零 setter
         // 的死路径;`:` 遗留命令能力由 Slash 的 parse_legacy 回退完整承接。
         if self.state.input_mode == InputMode::Slash {
-            if key.code == KeyCode::Char('l')
-                && key.modifiers.contains(event::KeyModifiers::CONTROL)
-            {
-                self.dispatch_action(
-                    "system.toggle_locale",
-                    "{}".to_string(),
-                    ActionSource::Palette,
-                );
+            if self.try_locale_hotkey(key, ActionSource::Palette) {
                 return;
             }
             self.handle_slash_key(key);
@@ -133,187 +113,18 @@ impl TuiApp {
         self.apply_route_target(target, key);
     }
 
-    /// 执行 InputRouter 计算出的路由目标(Normal/GPrefix 上下文)
-    ///
-    /// WHY 集中执行:路由器只表达"按键归属意图",具体副作用(退出/切面板/滚动/
-    /// 主题/比例/派发动作/进入模式/面板委托)在此统一落地,与"面板表达意图、
-    /// App 执行"设计一致。Insert/Command 模式专属目标(InsertChar/Palette*/Submit 等)
-    /// 不会由 Normal/GPrefix 路由产生,此处按无操作兜底以保证穷尽匹配。
-    fn apply_route_target(&mut self, target: RouteTarget, key: KeyEvent) {
-        match target {
-            RouteTarget::Quit => {
-                // Concord W4/W5:Chat 视图 Esc 与 q 均不退出,走失焦/rewind 链
-                // (方案 §7.4:q | 退出(Dashboard)/失焦(Chat));退出统一走
-                // /exit。Dashboard 保留 q/Esc 退出肌肉记忆,零回归。
-                if (key.code == crossterm::event::KeyCode::Esc
-                    || key.code == crossterm::event::KeyCode::Char('q'))
-                    && self.state.view_mode == crate::types::ViewMode::Chat
-                {
-                    self.handle_chat_esc();
-                    return;
-                }
-                // 退出安全(quit_requires_confirm):开启时先弹确认框,左/右键切到 Yes
-                // 后 Enter 才真正退出;默认关闭保持 q/Esc 立即退出行为零回归。
-                // 确认命令复用 apply_confirm_command 已有的 "quit" 分支。
-                if self.config.quit_requires_confirm {
-                    self.state.popup_stack.push(PopupKind::Confirm {
-                        prompt: crate::t!("status.quit_confirm").to_string(),
-                        on_confirm: "quit".into(),
-                        confirmed: false,
-                    });
-                } else {
-                    self.quit();
-                }
-            }
-            RouteTarget::PanelJump(id) => {
-                // I-2(2026-09-06 评估):Chat 视图全屏渲染会话流,面板切换
-                // 对用户不可见(仅状态栏面板名变化,体感"按了没反应")。
-                // 与其静默切走,不如诚实提示 Dashboard 路径;数字键/F 键
-                // 同经此 arm,一并覆盖。
-                if self.state.view_mode == crate::types::ViewMode::Chat {
-                    self.state
-                        .set_status(crate::t!("hint.panel_switch_in_chat"), Severity::Info);
-                } else if self.panel_index(id).is_none() {
-                    // 未注册面板的跳转不再静默失败:状态栏提示,避免死键无感知
-                    // (如 g5 → Timeline,TimelinePanel 有实现但未进入面板循环)。
-                    self.state
-                        .set_status(format!("Panel {id:?} is not registered"), Severity::Warning);
-                } else {
-                    self.switch_panel_to(id);
-                }
-            }
-            RouteTarget::FocusCycle { forward } => {
-                // Concord W4 T4.1:Chat 视图下 Shift+Tab 循环审批模式
-                // (方案 §7.4 模式内分义);Dashboard 保留原焦点环语义
-                if !forward && self.state.view_mode == crate::types::ViewMode::Chat {
-                    self.cycle_approval_mode();
-                } else if forward && self.state.view_mode == crate::types::ViewMode::Chat {
-                    // I-2:Chat 视图下 Tab 与数字键同理 —— 面板切换不可见,
-                    // 诚实提示而非静默切换(与 Shift+Tab=审批模式形成对称)
-                    self.state
-                        .set_status(crate::t!("hint.panel_switch_in_chat"), Severity::Info);
-                } else if forward {
-                    self.switch_panel_next();
-                } else {
-                    self.switch_panel_prev();
-                }
-            }
-            RouteTarget::ScrollTop => {
-                let focused = self.focus_manager.focused();
-                if let Some(idx) = self.panel_index(focused) {
-                    self.panels[idx].scroll_to_top(&mut self.state);
-                }
-            }
-            RouteTarget::ScrollBottom => {
-                let focused = self.focus_manager.focused();
-                if let Some(idx) = self.panel_index(focused) {
-                    self.panels[idx].scroll_to_bottom(&mut self.state);
-                }
-            }
-            RouteTarget::ThemeCycle => self.cycle_theme_action(),
-            RouteTarget::RatioAdjust { increase } => self.adjust_main_panel_ratio(increase),
-            // Action 支持的全局键统一经派发桥接(locale/layout/companion/help/export);
-            // 均在 dispatch_action 有本地 arm,不会回退发事件。
-            RouteTarget::GlobalAction(action_id) => {
-                self.dispatch_action(action_id, "{}".to_string(), ActionSource::Panel);
-            }
-            // 模式入口:Concord W2 — `/` 与 `:` 同进斜杠命令模式;据按键字符
-            // 判定是否展示一次性弃用提示(R1 缓解:一版本窗口 + 不重复打扰)
-            RouteTarget::EnterSlash => {
-                let via_colon = key.code == KeyCode::Char(':');
-                self.state.input_mode = InputMode::Slash;
-                self.state.input_buffer.clear();
-                self.state.slash_selected = 0;
-                if via_colon && !self.state.colon_deprecation_shown {
-                    self.state.colon_deprecation_shown = true;
-                    self.state.set_status(
-                        crate::t!("status.colon_deprecated").to_string(),
-                        Severity::Warning,
-                    );
-                }
-            }
-            RouteTarget::OpenPalette => self.open_palette(),
-            RouteTarget::OpenActionMenu => self.open_action_menu(),
-            RouteTarget::EnterMode(RouterMode::Insert) => {
-                self.state.input_mode = InputMode::Insert;
-                self.state.input_buffer.clear();
-            }
-            RouteTarget::EnterMode(RouterMode::GPrefix) => {
-                self.state.g_prefix = true;
-            }
-            RouteTarget::EnterMode(RouterMode::WPrefix) => {
-                self.state.w_prefix = true;
-            }
-            // Ctrl+W 前缀方向导航:按窗格几何切换活跃窗格(h/l 左右,j/k 上下)
-            RouteTarget::FocusPaneDir(dir) => self.focus_pane_dir(dir),
-            // 交由当前活跃窗格(Stage 2 伴随焦点感知)处理
-            RouteTarget::FocusPanel => self.delegate_key_to_active_panel(key),
-            // Concord W3 T3.4:`\` 键互切 Chat⇄Dashboard 视图模式
-            RouteTarget::ToggleViewMode => self.toggle_view_mode(),
-            // 以下目标不由 Normal/GPrefix 路由产生(Insert/Command/Slash 模式专属或已在上游处理),
-            // 兕底无操作以保证穷尽匹配。
-            RouteTarget::EnterMode(
-                RouterMode::Normal | RouterMode::Command | RouterMode::Slash,
-            )
-            | RouteTarget::ExitMode
-            | RouteTarget::InsertChar(_)
-            | RouteTarget::PaletteInput(_)
-            | RouteTarget::PaletteMove { .. }
-            | RouteTarget::Backspace
-            | RouteTarget::Submit
-            | RouteTarget::SlashComplete
-            | RouteTarget::MentionComplete
-            | RouteTarget::HistoryPrev
-            | RouteTarget::HistoryNext
-            | RouteTarget::Ignored => {}
-        }
-    }
-
     // ============================================================
     // Concord W2:斜杠命令模式(T2.2/T2.3 执行层)
     // ============================================================
-
-    /// 处理 Slash 模式按键:经 RouterMode::Slash 纯机械路由到输入/选择/提交
-    fn handle_slash_key(&mut self, key: KeyEvent) {
-        match InputRouter::route(RouterMode::Slash, key) {
-            RouteTarget::PaletteInput(c) => {
-                self.state.input_buffer.push(c);
-                // 输入变化 → 候选列表重算,选中项复位首项(与主流补全交互一致)
-                self.state.slash_selected = 0;
-            }
-            RouteTarget::Backspace => {
-                self.state.input_buffer.pop();
-                self.state.slash_selected = 0;
-            }
-            RouteTarget::PaletteMove { down } => {
-                let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
-                let count = crate::slash_surface::candidates(&reg, &self.state.input_buffer).len();
-                if count > 0 {
-                    let sel = self.state.slash_selected;
-                    self.state.slash_selected = if down {
-                        (sel + 1) % count
-                    } else {
-                        // 上移循环:0 → 末项(与命令面板导航体验一致)
-                        (sel + count - 1) % count
-                    };
-                }
-            }
-            RouteTarget::SlashComplete => self.slash_tab_complete(),
-            RouteTarget::Submit => self.submit_slash(),
-            RouteTarget::ExitMode => {
-                self.state.input_mode = InputMode::Normal;
-                self.state.input_buffer.clear();
-                self.state.slash_selected = 0;
-            }
-            _ => {}
-        }
-    }
+    // WHY 斜杠/Insert/palette 模式执行器与弹窗键表已收编至
+    // `app::key_dispatch`(M6 方向4-A 表驱动派发表);本文件保留
+    // 斜杠提交/三分层执行与主循环。
 
     /// Chat⇄Dashboard 视图模式互切(Concord W3 T3.4)
     ///
     /// WHY 状态栏反馈:模式切换无布局过渡动画,状态栏即时告知当前模式;
     /// persist_state 开启时 view_mode 随状态文件保存,重启保留选择。
-    fn toggle_view_mode(&mut self) {
+    pub(crate) fn toggle_view_mode(&mut self) {
         use crate::types::ViewMode;
         let new_mode = match self.state.view_mode {
             ViewMode::Chat => ViewMode::Dashboard,
@@ -335,7 +146,7 @@ impl TuiApp {
     /// WHY 弹层分支为防御性:popup/palette 打开时按键在上游已被
     /// handle_popup_key/handle_palette_key 接管(各自的 Esc 语义关闭);
     /// 此处弹层处置仅兼顾状态不一致场景(如程序化打开未同步输入模式)。
-    fn handle_chat_esc(&mut self) {
+    pub(crate) fn handle_chat_esc(&mut self) {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -366,7 +177,7 @@ impl TuiApp {
     ///
     /// WHY 状态栏反馈:模式切换无过渡动画,徽标 + 状态栏双通道即时告知;
     /// 持久化随 TuiState 状态文件保留(白名单已纳入)。
-    fn cycle_approval_mode(&mut self) {
+    pub(crate) fn cycle_approval_mode(&mut self) {
         let next = self.state.approval_mode.cycle();
         self.state.approval_mode = next;
         self.state.set_status(
@@ -381,7 +192,7 @@ impl TuiApp {
 
     /// Tab 前缀补全:以选中候选的命令词替换输入缓冲(两词命令带尾随空格
     /// 便于继续输入参数;无候选时无操作)
-    fn slash_tab_complete(&mut self) {
+    pub(crate) fn slash_tab_complete(&mut self) {
         let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
         let cands = crate::slash_surface::candidates(&reg, &self.state.input_buffer);
         if cands.is_empty() {
@@ -395,7 +206,7 @@ impl TuiApp {
     }
 
     /// 提交斜杠输入:三分层分流执行(Concord W2 T2.1 解析器 + 遗留回退)
-    fn submit_slash(&mut self) {
+    pub(crate) fn submit_slash(&mut self) {
         let input = self.state.input_buffer.trim().to_string();
         self.state.input_mode = InputMode::Normal;
         self.state.input_buffer.clear();
@@ -606,126 +417,11 @@ impl TuiApp {
         }
     }
 
-    /// 处理 Insert 模式按键(M3a):经 InputRouter 的 Insert 表路由到输入缓冲操作
-    ///
-    /// WHY 独立方法:Insert 是原始文本输入,与 Normal 的按键归属语义不同
-    /// (字符进缓冲、Enter 提交、Esc 退出),单独处理避免与 apply_route_target 混杂。
-    /// M3a 阶段 Submit 为占位(不发事件),M3b 接入 Chat 面板后改为发 TuiChatSubmitted。
-    fn handle_insert_key(&mut self, key: KeyEvent) {
-        match InputRouter::route(RouterMode::Insert, key) {
-            RouteTarget::InsertChar(c) => self.state.input_buffer.push(c),
-            RouteTarget::Backspace => {
-                self.state.input_buffer.pop();
-            }
-            // Concord W4 T4.5:@ 引用补全——末尾词以 @ 起始时替换为首个候选;
-            // 无候选时不改动缓冲(诚实降级,不伪造文件引用)
-            RouteTarget::MentionComplete => {
-                let tail = crate::mention::extract_mention_tail(&self.state.input_buffer);
-                if let Some((start, prefix)) = tail {
-                    let cands = crate::mention::mention_candidates(&self.state, &prefix);
-                    if let Some(first) = cands.first() {
-                        self.state.input_buffer.truncate(start);
-                        self.state.input_buffer.push_str(first);
-                    }
-                }
-            }
-            // Concord W6 T6.2:composer 历史 ↑ 回溯(首次保存草稿,到顶保持)
-            RouteTarget::HistoryPrev => {
-                let mut h = crate::composer_history::ComposerHistory::from_entries(
-                    self.state.input_history.clone(),
-                );
-                h.pos = self.state.history_pos;
-                h.draft = self.state.history_draft.clone();
-                if let Some(text) = h.prev(&self.state.input_buffer) {
-                    self.state.input_buffer = text;
-                }
-                self.state.history_pos = h.pos;
-                self.state.history_draft = h.draft;
-            }
-            // Concord W6 T6.2:composer 历史 ↓ 前进(回底恢复草稿)
-            RouteTarget::HistoryNext => {
-                let mut h = crate::composer_history::ComposerHistory::from_entries(
-                    self.state.input_history.clone(),
-                );
-                h.pos = self.state.history_pos;
-                h.draft = self.state.history_draft.clone();
-                if let Some(text) = h.forward() {
-                    self.state.input_buffer = text;
-                }
-                self.state.history_pos = h.pos;
-                self.state.history_draft = h.draft;
-            }
-            RouteTarget::ExitMode => {
-                // F-5:Esc 取消 palette 参数输入流(pending 动作不再派发)
-                self.state.pending_action = None;
-                self.state.input_mode = InputMode::Normal;
-                self.state.input_buffer.clear();
-            }
-            // Insert 下仍允许极少数全局键(如 Ctrl+L 中英切换),经派发桥接
-            RouteTarget::GlobalAction(action_id) => {
-                self.dispatch_action(action_id, "{}".to_string(), ActionSource::Chat);
-            }
-            RouteTarget::Submit => {
-                let text = self.state.input_buffer.trim().to_string();
-                // F-5:palette 参数输入流优先——存在 pending 动作时,Insert 缓冲
-                // 收集的是该动作的 query(非 Chat 消息)。提交以 {"query": text}
-                // 经三入口统一派发后回到 Normal(一次性动作,不形成 REPL)。
-                if let Some(pending) = self.state.pending_action.clone() {
-                    if !text.is_empty() {
-                        self.state.pending_action = None;
-                        let payload = serde_json::json!({ "query": text }).to_string();
-                        self.dispatch_action(&pending.action_id, payload, pending.source);
-                        self.state.input_mode = InputMode::Normal;
-                        self.state.input_buffer.clear();
-                    }
-                    // 空输入:不派发、不丢失 pending,等待继续输入(Esc 取消)
-                    return;
-                }
-
-                // Concord W4 T4.5:! shell 直通 — HonestTodo 占位(红线:所有外部
-                // 调用须经 SecCore 沙箱 + Decay 衰减;安全派发管道未接线前
-                // 不伪造直通,也不把 ! 命令当普通 Chat 消息发送)
-                if text.starts_with('!') {
-                    self.state
-                        .set_status(crate::t!("shell.todo").to_string(), Severity::Warning);
-                    self.state.input_buffer.clear();
-                    return;
-                }
-
-                // M3b:非空输入发布 TuiChatSubmitted(经 EventBus 回环由 ChatSync 追加用户消息),
-                // 自动切到 Chat 面板;保持 Insert 模式形成 chat REPL(Esc 退出)。
-                if !text.is_empty() {
-                    // Concord W6 T6.2:提交入史(去重/容量语义在导航器内)
-                    self.commit_input_history(&text);
-                    // 以 `/` 开头视为斜杠命令,提取命令名(首个空白前的词)
-                    let slash_command = text
-                        .strip_prefix('/')
-                        .map(|rest| rest.split_whitespace().next().unwrap_or("").to_string());
-                    self.publish_control_event(NexusEvent::TuiChatSubmitted {
-                        metadata: EventMetadata::new("chimera-tui"),
-                        // Task 1.15.4:chat_session_id 移至 chat_session
-                        session_id: self.chat_session.chat_session_id.clone(),
-                        query: text,
-                        slash_command,
-                    });
-                    // Concord W3 T3.2:Chat 模式下会话流已全屏,不再切面板;
-                    // Dashboard 模式保持原行为(提交后自动切到 Chat 面板)
-                    if self.state.view_mode == crate::types::ViewMode::Dashboard {
-                        self.switch_panel_to(PanelId::Chat);
-                    }
-                }
-                self.state.input_buffer.clear();
-            }
-            // 其余(Ignored 等)在 Insert 下无操作
-            _ => {}
-        }
-    }
-
     /// composer 历史入史并复位导航(Concord W6 T6.2)
     ///
     /// WHY 经导航器:去重/容量/导航复位语义集中在 composer_history 纯函数
     /// 状态机,本方法只做 state ↔ 导航器的搬运。
-    fn commit_input_history(&mut self, text: &str) {
+    pub(crate) fn commit_input_history(&mut self, text: &str) {
         let mut h = crate::composer_history::ComposerHistory::from_entries(
             self.state.input_history.clone(),
         );
@@ -740,7 +436,7 @@ impl TuiApp {
     /// WHY 提取为方法:M3a 将 `t` 键路由为 `RouteTarget::ThemeCycle`,执行逻辑集中于此,
     /// 与 `cycle_layout_action` 等其他 *_action 方法风格一致(DRY)。切换后标记所有面板
     /// dirty 触发重绘以应用新配色。
-    fn cycle_theme_action(&mut self) {
+    pub(crate) fn cycle_theme_action(&mut self) {
         let new_theme = self.config.theme.next();
         self.config.theme = new_theme;
         // 标记所有已注册面板为 dirty,确保下一帧重绘
@@ -757,7 +453,7 @@ impl TuiApp {
     ///
     /// WHY 活跃窗格优先:面板级键路由到 `active_pane` 指向的窗格面板(M3d 多窗格);
     /// 单窗格时即主焦点面板。路由器返回 `FocusPanel`(非全局键)时经此委托。
-    fn delegate_key_to_active_panel(&mut self, key: KeyEvent) {
+    pub(crate) fn delegate_key_to_active_panel(&mut self, key: KeyEvent) {
         // M3d:路由到当前活跃窗格对应的面板(active_pane 是 pane_panels 循环序下标);
         // 越界(窗格数收缩未及钳制)兜底回主焦点面板。
         // Task 1.15.4:active_pane 移至 pane_manager
@@ -778,7 +474,7 @@ impl TuiApp {
     /// WHY 复用既有模型:若已存在(之前打开过)则仅 `open()` 复位 query/选择,
     /// 保留其 `ActionRegistry` 副本;首次打开才用内建六域注册表构造,
     /// 避免每次打开都重建注册表(约 21 条描述)。
-    fn open_palette(&mut self) {
+    pub(crate) fn open_palette(&mut self) {
         // Task 1.15.4:palette 移至 chat_session
         let mut model = self
             .chat_session
@@ -794,7 +490,7 @@ impl TuiApp {
     /// WHY 从 Registry 组装:动作集由 `panel_context_actions(焦点面板)` 精选,
     /// 展示标题经 `ActionRegistry` + i18n 解析(与命令面板/斜杠同源,locale 感知)。
     /// 选中经 `DispatchAction{source:Panel}` 统一派发,复用三入口执行/反馈管线。
-    fn open_action_menu(&mut self) {
+    pub(crate) fn open_action_menu(&mut self) {
         let focused = self.focus_manager.focused();
         let ids = crate::actions::panel_context_actions(focused);
         let registry = crate::actions::ActionRegistry::with_builtin_domains();
@@ -811,96 +507,6 @@ impl TuiApp {
         self.state
             .popup_stack
             .push(PopupKind::action_menu(focused.as_str(), entries));
-    }
-
-    /// 命令面板打开时的键盘处理(M2.2)
-    ///
-    /// 语义对齐 `InputRouter` 的 Command 模式:Esc 关闭 / ↑↓ 选择 / Enter 执行
-    /// 选中动作(经 `DispatchAction` 统一派发,source=Palette)/ 退格 / 字符过滤。
-    ///
-    /// WHY 逐分支分别借用 `self.palette`:Esc/Enter 需写 `self.palette = None`,
-    /// 而导航键需 `&mut` 模型;分开借用避免在同一作用域同时持有可变
-    /// 引用与重赋值的借用冲突。
-    fn handle_palette_key(&mut self, key: KeyEvent) {
-        // I-A(2026-09-06 复评):palette 打开时 Ctrl+L 此前被吞 —— 其余
-        // 全部输入模式(Insert/Slash/遗留 Command)均可中英切换,唯独
-        // palette 不行,行为不一致;复用 Slash 模式的同义派发(本地臂
-        // 立即生效),palette 保持打开(检索列表 i18n 随刷新)。
-        // WHY 置于路由之前:route_command 对 Ctrl 组合返回 Ignored(检索缓冲
-        // 只收纯字符),Ctrl+L 若走路由会被吞,故同 Slash 模式先行特判。
-        if key.code == KeyCode::Char('l') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-            self.dispatch_action(
-                "system.toggle_locale",
-                "{}".to_string(),
-                ActionSource::Palette,
-            );
-            return;
-        }
-
-        // PS-3(I-1):键处理改经 InputRouter 的 Command 路由表。
-        // WHY 合并双源:此前本方法手写 match,与 router.rs 的 route_command
-        // 语义重复但实现分离 —— 正是 INV-K 不变量要消灭的"键位双源"。
-        // 此前 route_command 仅被自身单测覆盖(InputMode 无 Command 变体,
-        // 无任何生产路径传入 RouterMode::Command),属死代码;改经路由后
-        // 二者合一,palette 键语义与全局键位表同源自洽。
-        match InputRouter::route(RouterMode::Command, key) {
-            RouteTarget::ExitMode => {
-                // Task 1.15.4:palette 移至 chat_session
-                self.chat_session.palette = None;
-            }
-            RouteTarget::Submit => {
-                // 先取选中动作 id(&'static str,不借用模型),关闭面板后统一派发。
-                let action_id = self
-                    .chat_session
-                    .palette
-                    .as_ref()
-                    .and_then(|m| m.selected_action())
-                    .map(str::to_string);
-                // F-5:需 query 的动作分流到 Insert 参数收集态(不直接发空 payload)。
-                // 判定在关闭面板前完成(模型持有 Registry 单一事实源)。
-                let requires_query = self
-                    .chat_session
-                    .palette
-                    .as_ref()
-                    .map(|m| m.selected_action_requires_query())
-                    .unwrap_or(false);
-                self.chat_session.palette = None;
-                if let Some(action_id) = action_id {
-                    if requires_query {
-                        self.state.pending_action = Some(crate::types::PendingAction {
-                            action_id,
-                            source: ActionSource::Palette,
-                        });
-                        self.state.input_mode = InputMode::Insert;
-                        self.state.input_buffer.clear();
-                    } else {
-                        self.apply_command(TuiCommand::DispatchAction {
-                            action_id,
-                            payload: "{}".to_string(),
-                            source: ActionSource::Palette,
-                        });
-                    }
-                }
-            }
-            RouteTarget::PaletteMove { down } => {
-                if let Some(m) = self.chat_session.palette.as_mut() {
-                    m.move_selection(down);
-                }
-            }
-            RouteTarget::Backspace => {
-                if let Some(m) = self.chat_session.palette.as_mut() {
-                    m.on_backspace();
-                }
-            }
-            // 仅纯字符进入检索缓冲(route_command 已排除 Ctrl 组合)。
-            RouteTarget::PaletteInput(c) => {
-                if let Some(m) = self.chat_session.palette.as_mut() {
-                    m.on_input(c);
-                }
-            }
-            // Release 事件与其余未绑定键:忽略(Ignored)。
-            _ => {}
-        }
     }
 
     /// 命令面板是否打开(测试与外部查询用)
@@ -1091,7 +697,7 @@ impl TuiApp {
     }
 
     /// 切换伴随面板可见性(M2 增量3,供命令面板 `view.toggle_companion` 与程序化入口共用)
-    fn toggle_companion_action(&mut self) {
+    pub(crate) fn toggle_companion_action(&mut self) {
         // Task 1.15.4:companion_visible 移至 pane_manager
         self.pane_manager.companion_visible = !self.pane_manager.companion_visible;
         // M3d:关闭伴随会使 Chat 窗格数 2→1,钳制活跃窗格避免停留已消失的 context。
@@ -1123,7 +729,7 @@ impl TuiApp {
     ///
     /// 以焦点面板顺序从当前伴随目标起环形查找下一个 `!= 主焦点` 的面板写入
     /// `bound_companion`,并置 `companion_visible = true`(循环即意图显示)。
-    fn cycle_companion_action(&mut self) {
+    pub(crate) fn cycle_companion_action(&mut self) {
         let focused = self.focus_manager.focused();
         // WHY 克隆为 Vec:既将读面板顺序又要随后可变写 bound_companion,
         // 克隆断开 self 借用(约 19 个 PanelId,Copy,廉价)。
@@ -1159,7 +765,7 @@ impl TuiApp {
     ///
     /// 在可见窗格间环形循环(main → context → sidebar → main);单窗格
     /// (Focus / Chat 未开伴随 / 面板不足)无可切换窗格时 no-op 并提示。
-    fn focus_pane_action(&mut self) {
+    pub(crate) fn focus_pane_action(&mut self) {
         let n = self.pane_panels().len();
         if n <= 1 {
             self.state.status_message = Some((
@@ -1187,7 +793,7 @@ impl TuiApp {
     /// 用 `pane_rects` 的窗格矩形几何解析目标:在指定方向上取中心坐标最近的邻窗格。
     /// 当前预设布局均为横向列,故 h/l 生效;j/k(上下)当前无候选时 no-op。
     /// 单窗格(rects<=1)或该方向无邻居时 no-op 并提示。
-    fn focus_pane_dir(&mut self, dir: PaneDir) {
+    pub(crate) fn focus_pane_dir(&mut self, dir: PaneDir) {
         // Task 1.15.4:last_area / active_pane 移至 pane_manager
         let main = self.layout(self.pane_manager.last_area)[1];
         let rects = self.pane_rects(main);
@@ -1250,7 +856,7 @@ impl TuiApp {
     ///
     /// WHY 提取:Ctrl+L 快捷键与命令面板 `system.toggle_locale` 动作行为必须一致,
     /// 集中一处避免两条入口逻辑漂移(三入口统一派发)。
-    fn toggle_locale_action(&mut self) {
+    pub(crate) fn toggle_locale_action(&mut self) {
         let locale = crate::i18n::toggle_locale();
         // 切换后全体面板文案需重绘,标记 dirty 触发下一帧重绘
         for panel_id in self.focus_manager.panels() {
@@ -1263,7 +869,7 @@ impl TuiApp {
     }
 
     /// 循环切换布局模式(M2 提取,供 `l` 键与命令面板 `view.switch_layout` 共用)
-    fn cycle_layout_action(&mut self) {
+    pub(crate) fn cycle_layout_action(&mut self) {
         let new_mode = self.state.layout_mode.next();
         self.state.layout_mode = new_mode;
         // M3d:切布局可能改变窗格数(如 IDE 3 → Focus 1),钳制活跃窗格回主区。
@@ -1277,7 +883,7 @@ impl TuiApp {
     /// 打开帮助 overlay(M2 提取,供 `?` 键与命令面板 `system.open_help` 共用)
     ///
     /// 传入当前焦点面板的快捷键列表,帮助按上下文动态生成(§4.6 渐进披露)。
-    fn open_help_action(&mut self) {
+    pub(crate) fn open_help_action(&mut self) {
         // Task 2.5:registry 构造提前,供 shortcuts_with_registry 自动派生功能动作快捷键
         let registry = crate::actions::ActionRegistry::with_builtin_domains();
         let shortcuts = self
@@ -1305,7 +911,7 @@ impl TuiApp {
     ///
     /// WHY 复用 SinglePane:该布局即"当前面板全屏",语义等同下钻 Focus;`l` 键循环
     /// 布局可切回,无需额外返回栈。切布局后 `clamp_active_pane` 收敛活跃窗格到单窗格。
-    fn drill_down_action(&mut self) {
+    pub(crate) fn drill_down_action(&mut self) {
         self.state.layout_mode = LayoutMode::SinglePane;
         self.clamp_active_pane();
         let focused = self.focus_manager.focused();
@@ -1323,7 +929,7 @@ impl TuiApp {
     ///
     /// WHY 标记 ResourceMonitor + Health dirty:两面板均展示 sys_metrics,
     /// 暂停/恢复切换需立即重绘(显/隐 PAUSED 标记 + 恢复时刷新最新数据)。
-    fn toggle_monitor_pause(&mut self) {
+    pub(crate) fn toggle_monitor_pause(&mut self) {
         self.state.monitor_paused = !self.state.monitor_paused;
         self.state.mark_dirty(PanelId::ResourceMonitor);
         self.state.mark_dirty(PanelId::Health);
@@ -1336,7 +942,7 @@ impl TuiApp {
     }
 
     /// 循环监控 sparkline 时间窗(monitor.time_window)
-    fn cycle_monitor_window(&mut self) {
+    pub(crate) fn cycle_monitor_window(&mut self) {
         self.state.monitor_window = self.state.monitor_window.next();
         self.state.mark_dirty(PanelId::ResourceMonitor);
         self.state.status_message = Some((
@@ -1350,7 +956,7 @@ impl TuiApp {
     /// WHY 分级:仅 ClvVector 有数据背书(8-block 热图值域 fixed↔autoscale);
     /// OsaSparse(仅平均稀疏度)/ MetricsDashboard(cell 默认未绑定)暂无可切维度,
     /// 给诚实反馈而非伪造(质量红线:不造无数据支撑的功能)。
-    fn switch_viz_dimension(&mut self) {
+    pub(crate) fn switch_viz_dimension(&mut self) {
         match self.focus_manager.focused() {
             PanelId::ClvVector => {
                 self.state.clv_heatmap_autoscale = !self.state.clv_heatmap_autoscale;
@@ -1375,7 +981,7 @@ impl TuiApp {
     ///
     /// WHY 重载而非命名视图:项目无命名视图概念,"saved view" 即退出时经
     /// `save_to_file` 存盘的单一视图快照;本动作让用户中途恢复上次保存的布局偏好。
-    fn apply_saved_view_action(&mut self) {
+    pub(crate) fn apply_saved_view_action(&mut self) {
         let path = self.config.state_file_path.clone();
         if !path.exists() {
             self.state.status_message = Some((
@@ -1412,7 +1018,7 @@ impl TuiApp {
     /// WHY TUI 本地:quest.jump 是"切到事件流并按 Quest 过滤"的视图导航,无需引擎;
     /// 与 QuestPanel Enter 同用 `JumpToEventStream`。命令面板/菜单无选中上下文时,
     /// 单 Quest 直接过滤,0/多 Quest 诚实切换(不臆测目标,提示经 Quest 面板精确跳转)。
-    fn jump_to_quest_events_action(&mut self) {
+    pub(crate) fn jump_to_quest_events_action(&mut self) {
         // §1.3b:焦点面板(Quest)有选中项时精确跳转其事件流
         if let Some(quest_id) = self.focused_selected_context_id() {
             self.apply_command(TuiCommand::JumpToEventStream { quest_id });
@@ -1443,7 +1049,7 @@ impl TuiApp {
     ///
     /// 经 `Panel::selected_context_id` 泛化获取,不判具体面板类型;
     /// 焦点面板未覆写(展示型)或无选中项时返回 None。
-    fn focused_selected_context_id(&self) -> Option<String> {
+    pub(crate) fn focused_selected_context_id(&self) -> Option<String> {
         let focused = self.focus_manager.focused();
         self.panel_index(focused)
             .and_then(|idx| self.panels[idx].selected_context_id(&self.state))
@@ -1468,86 +1074,6 @@ impl TuiApp {
         }
         obj.insert("quest_id".to_string(), serde_json::Value::String(quest_id));
         serde_json::to_string(&obj).unwrap_or(payload)
-    }
-
-    /// 统一派发 action_id 为具体行为(M2 增量2:三入口统一派发桥接)
-    ///
-    /// WHY 桥接而非仅发事件:命令面板 Enter 需产生"真实效果",但既有可用路径分两类——
-    /// - **本地即时效果**(无参数):切换语言/布局、打开帮助,直接调用既有本地方法;
-    /// - **需编排器消费的动作**(agent.chat/quest.*/task.* 等,多含参数):当前无本地
-    ///   通路,回退发布 `TuiActionRequested`,交 chimera-cli QueryLoop 编排(M3 落地)。
-    ///
-    /// 面板上下文动作仍走各自的 `TuiCommand` 变体(带 quest_id 等参数),不经此桥接;
-    /// 本方法只服务"无参数、来源为命令面板/斜杠"的统一入口。
-    ///
-    /// # 路由分类不变量(PS-2 F-7,守护见 `mod tests` 的「动作路由分类不变量」一节)
-    /// 本 match 的每个 arm 决定动作是**本地执行**(有 arm)还是**发布到编排器**
-    /// (`_ =>` 兜底)。忘记为新增的本地动作写 arm,会静默落入兜底 → 事件发往
-    /// 无 handler 的编排器 → 悬挂至 [`ACTION_TIMEOUT`] → 用户看到误导性超时提示。
-    ///
-    /// **因此:新增/删除动作时,必须同步更新 `src/app/tests.rs` 中
-    /// `LOCAL_ACTION_IDS` / `ORCHESTRATED_ACTION_IDS` 两份清单**——该测试会
-    /// 逐动作实调本函数,断言"声明为本地者不发布、声明为编排者必发布",
-    /// 并校验清单与 `ActionRegistry` 全集一致(遗漏即测试红)。
-    pub(crate) fn dispatch_action(
-        &mut self,
-        action_id: &str,
-        payload: String,
-        source: ActionSource,
-    ) {
-        // §1.3b:quest.pause/resume/cancel 若焦点面板有选中 Quest,注入 quest_id 精确定位;
-        // 其余动作(agent.chat/quest.start 需 query、task.* 已推迟)payload 原样透传。
-        let payload = if matches!(action_id, "quest.pause" | "quest.resume" | "quest.cancel") {
-            self.enrich_payload_with_focused_quest(payload)
-        } else {
-            payload
-        };
-        match action_id {
-            // —— 本地即时效果(无参数,已有实现路径)——
-            "system.toggle_locale" => self.toggle_locale_action(),
-            "view.switch_layout" => self.cycle_layout_action(),
-            "view.toggle_companion" => self.toggle_companion_action(),
-            "view.cycle_companion" => self.cycle_companion_action(),
-            "view.focus_pane" => self.focus_pane_action(),
-            "system.open_help" => self.open_help_action(),
-            // export.run:本地弹出导出格式选择框(原 `E` 键行为)——必须本地 arm,
-            // 否则经 router 路由的 `E`/Ctrl+E 会回退发事件而非本地导出(避免行为回归)。
-            "export.run" => self.handle_export_command(),
-            // —— Phase 2 UI 本地域(UI 态,不绕道 cli,§2.2 依赖铁律)——
-            // 面板下钻:焦点面板进入 Focus 全屏(SinglePane),`l` 键切回(§4.6 L3 下钻层级)。
-            "panel.drill_down" => self.drill_down_action(),
-            // —— UI 本地态视图/配置动作(M3/M4 已落地,不绕 cli,§2.2 依赖铁律)——
-            // view.apply_saved 重载持久化视图;monitor/viz 视图控制;config.edit 配置速调菜单。
-            "view.apply_saved" => self.apply_saved_view_action(),
-            // M3 三大核心功能:monitor/viz 视图控制(UI 本地态,不绕 cli)
-            "monitor.pause_sampling" => self.toggle_monitor_pause(),
-            "monitor.time_window" => self.cycle_monitor_window(),
-            "viz.switch_dimension" => self.switch_viz_dimension(),
-            "config.edit" => self.open_config_menu(),
-            // quest.jump:TUI 本地导航(切事件流 + 按 Quest 过滤),不经 cli(§4.6 跨面板联动)
-            "quest.jump" => self.jump_to_quest_events_action(),
-            // —— 编排域(quest.*/task.*/agent.chat):发布 TuiActionRequested,由 chimera-cli
-            // Action 编排器消费并回发 Completed/Failed(P0 已接线,反馈经 ActionFeedbackSync 上屏)——
-            _ => {
-                // P1:为本次请求生成唯一 request_id 作为回执配对主键。
-                // WHY 先自增后格式化:首个请求为 "tui-1",与人类计数一致,便于审计。
-                self.state.action_request_seq += 1;
-                let request_id = format!("tui-{}", self.state.action_request_seq);
-                // 记录本次请求的截止时刻;收到同一 request_id 的终态反馈时由
-                // `update` 精准移除(不再全局清空,避免并发请求互相覆盖)
-                self.state.pending_actions.insert(
-                    request_id.clone(),
-                    std::time::Instant::now() + ACTION_TIMEOUT,
-                );
-                self.publish_control_event(NexusEvent::TuiActionRequested {
-                    metadata: EventMetadata::new("chimera-tui"),
-                    request_id,
-                    action_id: action_id.to_string(),
-                    payload,
-                    source,
-                });
-            }
-        }
     }
 
     /// P1:检测待确认动作超时(编排器未接线场景的本地兜底反馈)
@@ -1587,180 +1113,8 @@ impl TuiApp {
         );
     }
 
-    /// 处理弹窗激活时的键盘事件
-    fn handle_popup_key(&mut self, key: KeyEvent) {
-        // ActionMenu 有独立选择/执行语义(↑↓ 移选、Enter 派发选中动作),
-        // 与滚动型弹窗(Detail/Help)分流,避免 Up/Down 被 scroll 语义占用。
-        if matches!(
-            self.state.popup_stack.current(),
-            Some(PopupKind::ActionMenu { .. })
-        ) {
-            self.handle_action_menu_key(key);
-            return;
-        }
-        // ConfigMenu 就地循环编辑语义(↑↓ 移选、Enter 循环当前项、菜单常驻),同样分流
-        if matches!(
-            self.state.popup_stack.current(),
-            Some(PopupKind::ConfigMenu { .. })
-        ) {
-            self.handle_config_menu_key(key);
-            return;
-        }
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.state.popup_stack.pop();
-            }
-            KeyCode::Enter => {
-                // 确认弹窗且选中 Yes 时执行关联命令
-                if let Some(PopupKind::Confirm {
-                    on_confirm,
-                    confirmed,
-                    ..
-                }) = self.state.popup_stack.current()
-                {
-                    if *confirmed {
-                        let cmd = on_confirm.clone();
-                        self.state.popup_stack.pop();
-                        self.apply_confirm_command(&cmd);
-                    } else {
-                        self.state.popup_stack.pop();
-                    }
-                } else {
-                    self.state.popup_stack.pop();
-                }
-            }
-            KeyCode::Up => {
-                self.state.popup_stack.scroll_current(-1);
-            }
-            KeyCode::Down => {
-                self.state.popup_stack.scroll_current(1);
-            }
-            // PS-3(I-5):翻页与首尾导航 —— 长详情越界滚动后无需等量按 Up 回看;
-            // End 传 u16::MAX 表示"直达末尾",渲染帧会把越界值收敛到实际上限。
-            // 非滚动型弹窗(Confirm/ActionMenu/ConfigMenu)对四键均无操作。
-            KeyCode::Home => {
-                self.state.popup_stack.scroll_to(0);
-            }
-            KeyCode::End => {
-                self.state.popup_stack.scroll_to(u16::MAX);
-            }
-            KeyCode::PageUp => {
-                self.state.popup_stack.scroll_current(-10);
-            }
-            KeyCode::PageDown => {
-                self.state.popup_stack.scroll_current(10);
-            }
-            KeyCode::Left | KeyCode::Right => {
-                self.state.popup_stack.toggle_confirm();
-            }
-            _ => {}
-        }
-    }
-
-    /// 动作菜单弹窗的键盘处理(§4.5 入口三:面板动作)
-    ///
-    /// ↑↓/kj 移动选中项,Enter 派发选中动作(经 `DispatchAction`,source=Panel,
-    /// 复用三入口统一派发与反馈管线),Esc/q 关闭。
-    fn handle_action_menu_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.state.popup_stack.pop();
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.state.popup_stack.move_action_menu_selection(false);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.state.popup_stack.move_action_menu_selection(true);
-            }
-            KeyCode::Enter => {
-                // 取选中 action_id,关闭菜单后经统一派发桥接执行(source=Panel)
-                let action_id = self.state.popup_stack.action_menu_selected_id();
-                self.state.popup_stack.pop();
-                if let Some(action_id) = action_id {
-                    self.apply_command(TuiCommand::DispatchAction {
-                        action_id,
-                        payload: "{}".to_string(),
-                        source: ActionSource::Panel,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// 打开配置速调菜单(config.edit)—— 列出运行时可调配置项,就地循环编辑
-    pub(crate) fn open_config_menu(&mut self) {
-        let entries = self.config_menu_entries();
-        self.state.popup_stack.push(PopupKind::config_menu(entries));
-    }
-
-    /// 组装配置菜单条目(固定顺序 [主题, 占比, Tick],值取自当前 config)
-    ///
-    /// WHY 顺序固定:`cycle_config_item` 按下标循环对应项,顺序须与本函数一致。
-    fn config_menu_entries(&self) -> Vec<(String, String)> {
-        vec![
-            (
-                crate::t!("status.theme").to_string(),
-                self.config.theme.as_str().to_string(),
-            ),
-            (
-                crate::t!("status.ratio").to_string(),
-                // Task 1.15.4:main_panel_ratio 经 getter 方法读取(委托 pane_manager)
-                crate::render::percent_summary(self.main_panel_ratio()),
-            ),
-            (
-                crate::t!("status.tick").to_string(),
-                format!("{}ms (重启生效)", self.config.tick_interval_ms),
-            ),
-        ]
-    }
-
-    /// 配置菜单键盘处理(§4.5 收尾)——↑↓/kj 移选,Enter 就地循环选中项,Esc/q 关
-    fn handle_config_menu_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.state.popup_stack.pop();
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.state.popup_stack.move_config_menu_selection(false);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.state.popup_stack.move_config_menu_selection(true);
-            }
-            KeyCode::Enter => {
-                if let Some(idx) = self.state.popup_stack.config_menu_selected() {
-                    self.cycle_config_item(idx);
-                    // 循环后刷新条目显示当前值,菜单常驻以便连续编辑
-                    let entries = self.config_menu_entries();
-                    self.state.popup_stack.set_config_menu_entries(entries);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// 循环指定配置项(0=主题即时生效,1=占比即时生效,2=tick 重启生效)
-    ///
-    /// WHY 仅这 3 项:核验确认仅 theme/main_panel_ratio/tick_interval_ms 可运行时安全修改;
-    /// 下标顺序须与 `config_menu_entries` 一致。
-    fn cycle_config_item(&mut self, idx: usize) {
-        match idx {
-            0 => {
-                self.config.theme = self.config.theme.next();
-                // 主题即时生效:全面板 mark_dirty 触发下一帧重绘
-                for panel_id in self.focus_manager.panels() {
-                    self.state.mark_dirty(*panel_id);
-                }
-            }
-            // Task 1.15.4:main_panel_ratio 写入经 pane_manager(读取用 getter 方法)
-            1 => self.pane_manager.main_panel_ratio = ratio_preset_next(self.main_panel_ratio()),
-            2 => self.config.tick_interval_ms = tick_preset_next(self.config.tick_interval_ms),
-            _ => {}
-        }
-    }
-
     /// 根据确认弹窗的命令字符串执行动作
-    fn apply_confirm_command(&mut self, cmd: &str) {
+    pub(crate) fn apply_confirm_command(&mut self, cmd: &str) {
         if cmd == "quit" {
             self.quit();
         } else if let Some(quest_id) = cmd.strip_prefix("pause:") {
@@ -1819,7 +1173,7 @@ impl TuiApp {
     }
 
     /// 处理导出命令 — 弹出格式选择弹窗
-    fn handle_export_command(&mut self) {
+    pub(crate) fn handle_export_command(&mut self) {
         self.state.popup_stack.push(PopupKind::Confirm {
             prompt: "Export as CSV?".into(),
             on_confirm: "export:csv".into(),
@@ -1968,7 +1322,7 @@ impl TuiApp {
     ///
     /// WHY:所有 M4 控制请求走同一入口,统一设置状态栏反馈,
     /// 避免每个命令重复 error/success 处理逻辑。
-    fn publish_control_event(&mut self, event: NexusEvent) {
+    pub(crate) fn publish_control_event(&mut self, event: NexusEvent) {
         let type_name = event.type_name();
         match &self.event_bus {
             Some(bus) => match bus.publish_blocking(event) {

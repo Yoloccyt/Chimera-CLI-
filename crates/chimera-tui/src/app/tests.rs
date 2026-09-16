@@ -23,7 +23,7 @@ use ratatui::backend::TestBackend;
 
 use crate::popup::Severity;
 
-fn make_app() -> Result<TuiApp, TuiError> {
+pub(crate) fn make_app() -> Result<TuiApp, TuiError> {
     let mut app = TuiApp::new(TuiConfig {
         default_view_mode: crate::types::ViewMode::Dashboard,
         persist_state: false,
@@ -2080,7 +2080,10 @@ fn agent_failure_promotes_to_error_status_and_state() {
 //   3. 声明为编排者:实调后**必须**登记 pending(即已发布并等待回执)。
 
 /// 本地执行动作(dispatch_action 有本地 arm,不发布事件)
-const LOCAL_ACTION_IDS: &[&str] = &[
+///
+/// WHY pub(crate):key_dispatch 完整性单测交叉锚定"派发表键集合 == 本清单"
+/// (表 ↔ 清单 ↔ 行为三级闭环);仅 #[cfg(test)] 模块内可见性提升,无生产影响。
+pub(crate) const LOCAL_ACTION_IDS: &[&str] = &[
     "config.edit",
     "export.run",
     "monitor.pause_sampling",

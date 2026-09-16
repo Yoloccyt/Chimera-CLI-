@@ -17,7 +17,7 @@
 //! - P4.3:CreatedAt 排序使用面板侧表(`created_at_index`)记录 Quest 首次观察时间,
 //!   避免修改 `nexus-core::Quest` 域类型(95+ 构造点),L10 自治封装。
 //!
-//! # 键位
+//! # 键位(声明式键表驱动,见 `SEARCH_KEY_TABLE` / `MAIN_KEY_TABLE`)
 //! - `C`:创建 Quest(占位,本期返回 None;后续 Task 接入创建命令)
 //! - `P`:暂停(单选,走 `TuiCommand::QuestControl { Pause }`)
 //! - `B`:批量暂停(多选时批量弹窗确认;无多选时回退单选暂停)
@@ -26,7 +26,8 @@
 //! - `+` / `=`:优先级 +1(上限 10)
 //! - `-`:优先级 -1(下限 0)
 //! - `Enter`:查看详情(沿用既有 OpenPopup 模式)
-//! - `/`:关键字过滤(沿用 `state.filter_keyword`)
+//! - `f`:进入关键字过滤搜索态(Concord W2 起 `/` 由 InputRouter 全局截获,
+//!   面板改绑 `f`;退出时 Esc 清关键字 / Enter 保留)
 //! - `↑` / `↓`:导航
 //! - `S`:循环切换排序模式(Priority → Status → CreatedAt → Priority,P4.3)
 //! - `Space`:切换当前项的多选状态
@@ -37,13 +38,14 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
+use crate::input::{lookup_key_action, KeyPattern, KeyRule};
 use crate::panels::list_state;
 use crate::panels::quest::thinking_mode_label;
 use crate::panels::Panel;
@@ -445,7 +447,356 @@ impl TaskManagerPanel {
         }
         1 // 默认 Pending(混合状态如部分 Pending + 部分 Completed)
     }
+
+    // ============================================================
+    // 按键派发表处理器(M6 方向4-A:原 match arm 体逐字节搬迁为命名方法,
+    // 表声明见下方 SEARCH_KEY_TABLE / MAIN_KEY_TABLE)
+    // ============================================================
+
+    /// 退出搜索模式并清除过滤关键字
+    fn search_exit_clear(&mut self, _key: KeyEvent) {
+        self.is_searching = false;
+        self.filter_keyword.clear();
+    }
+
+    /// 退出搜索模式但保留关键字
+    fn search_exit_keep(&mut self, _key: KeyEvent) {
+        self.is_searching = false;
+    }
+
+    /// 删除过滤关键字末字符
+    fn search_backspace(&mut self, _key: KeyEvent) {
+        self.filter_keyword.pop();
+    }
+
+    /// 普通字符追加到过滤关键字(AnyChar 模式命中后从按键提取载荷)
+    fn search_push_char(&mut self, key: KeyEvent) {
+        if let KeyCode::Char(c) = key.code {
+            self.filter_keyword.push(c);
+        }
+    }
+
+    /// Space 切换当前高亮项的多选状态
+    ///
+    /// WHY Space:与文件管理器/邮件客户端的多选语义一致,
+    /// 操作员直觉式操作无需学习。不影响单行光标导航。
+    fn toggle_multi_select(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
+        let quests = self.filtered_quests(state);
+        if quests.is_empty() {
+            return None;
+        }
+        let idx = list_state::clamp_selected(self.selected, quests.len());
+        if self.selected_indices.contains(&idx) {
+            self.selected_indices.remove(&idx);
+        } else {
+            self.selected_indices.insert(idx);
+        }
+        None
+    }
+
+    /// Ctrl+A 全选当前过滤列表中所有 Quest
+    ///
+    /// WHY Ctrl+A:与编辑器全选语义一致,减少逐项选择的操作成本。
+    fn select_all_filtered(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
+        let quests = self.filtered_quests(state);
+        for i in 0..quests.len() {
+            self.selected_indices.insert(i);
+        }
+        None
+    }
+
+    /// 清空所有批量选择,退出多选模式
+    ///
+    /// 注意:生产环境中 Esc 由 app.rs 全局拦截为 quit,
+    /// 面板级 Esc 仅在测试场景中生效。
+    fn clear_multi_select(&mut self, _state: &mut TuiState) -> Option<TuiCommand> {
+        self.selected_indices.clear();
+        None
+    }
+
+    /// 进入搜索模式,不清除已有关键字(支持增量搜索)
+    ///
+    /// WHY 不清除关键字:用户可能在过滤后调整排序模式,
+    /// 然后按 `f` 继续在同一关键字上追加搜索,清除会丢失上下文。
+    /// WHY 不用 `/`:Concord W2 起 `/` 由 InputRouter 全局截获进入
+    /// 斜杠命令模式,面板 arm 永不可达(死键),故改绑未被全局占用的 `f`。
+    fn enter_search_mode(&mut self, _state: &mut TuiState) -> Option<TuiCommand> {
+        self.is_searching = true;
+        None
+    }
+
+    /// 循环切换排序模式(Priority → Status → CreatedAt → Priority,P4.3)
+    ///
+    /// WHY 无副作用:排序模式是面板本地状态,不发 TuiCommand,
+    /// 避免污染事件总线与下游订阅者。
+    fn cycle_sort_mode(&mut self, _state: &mut TuiState) -> Option<TuiCommand> {
+        self.sort_mode = self.sort_mode.next();
+        None
+    }
+
+    /// P 键:单选暂停(始终走确认弹窗)
+    fn pause_selected(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
+        let quest_id = self
+            .filtered_quests(state)
+            .get(self.selected)
+            .map(|q| q.quest_id.clone());
+        quest_id.map(|id| TuiCommand::QuestControl {
+            id,
+            action: QuestAction::Pause,
+        })
+    }
+
+    /// B 键:批量暂停(多选时批量;无多选时回退单选暂停,与 P 键一致)
+    ///
+    /// WHY B 键独立:操作员多选后按 B 批量暂停,无多选时 B 退化为单选暂停,
+    /// 与 P 键语义一致,互不冲突。
+    fn batch_pause_or_single(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
+        if !self.selected_indices.is_empty() {
+            let quests = self.filtered_quests(state);
+            let quest_ids: Vec<String> = self
+                .selected_indices
+                .iter()
+                .filter_map(|&i| quests.get(i))
+                .map(|q| q.quest_id.clone())
+                .collect();
+            if quest_ids.is_empty() {
+                return None;
+            }
+            let batch_ids = quest_ids.join(",");
+            return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                &crate::t!("panel.task.batch_pause_confirm").replacen(
+                    "{}",
+                    &quest_ids.len().to_string(),
+                    1,
+                ),
+                &batch_ids,
+                format!("batch_pause:{batch_ids}"),
+            )));
+        }
+        // 无多选时回退单选暂停
+        let quest_id = self
+            .filtered_quests(state)
+            .get(self.selected)
+            .map(|q| q.quest_id.clone());
+        quest_id.map(|id| TuiCommand::QuestControl {
+            id,
+            action: QuestAction::Pause,
+        })
+    }
+
+    /// T 键:终止 Quest(多选时批量;无多选时回退单选终止)
+    fn terminate_batch_or_single(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
+        if !self.selected_indices.is_empty() {
+            let quests = self.filtered_quests(state);
+            let quest_ids: Vec<String> = self
+                .selected_indices
+                .iter()
+                .filter_map(|&i| quests.get(i))
+                .map(|q| q.quest_id.clone())
+                .collect();
+            if quest_ids.is_empty() {
+                return None;
+            }
+            let batch_ids = quest_ids.join(",");
+            return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                &crate::t!("panel.task.batch_terminate_confirm").replacen(
+                    "{}",
+                    &quest_ids.len().to_string(),
+                    1,
+                ),
+                &batch_ids,
+                format!("batch_terminate:{batch_ids}"),
+            )));
+        }
+        // 无多选时回退单选终止
+        let quest_id = self
+            .filtered_quests(state)
+            .get(self.selected)
+            .map(|q| q.quest_id.clone());
+        quest_id.map(|id| TuiCommand::QuestControl {
+            id,
+            action: QuestAction::Terminate,
+        })
+    }
+
+    /// `+` 键:优先级 +1(上限 10,边界保护)
+    ///
+    /// WHY 边界检查在面板:与 spec 一致(0-10 范围),
+    /// priority=10 时不返回命令,避免无效 SetPriority(11) 进入事件总线。
+    fn priority_increment(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
+        let quest = self.filtered_quests(state).get(self.selected).copied();
+        quest.and_then(|q| {
+            let current_user = user_priority_from_internal(q.priority);
+            if current_user < PRIORITY_MAX {
+                Some(TuiCommand::QuestControl {
+                    id: q.quest_id.clone(),
+                    action: QuestAction::SetPriority(current_user + 1),
+                })
+            } else {
+                None
+            }
+        })
+    }
+
+    /// `-` 键:优先级 -1(下限 0,边界保护)
+    fn priority_decrement(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
+        let quest = self.filtered_quests(state).get(self.selected).copied();
+        quest.and_then(|q| {
+            let current_user = user_priority_from_internal(q.priority);
+            if current_user > PRIORITY_MIN {
+                Some(TuiCommand::QuestControl {
+                    id: q.quest_id.clone(),
+                    action: QuestAction::SetPriority(current_user - 1),
+                })
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Enter 键:打开 Quest 详情弹窗(沿用 OpenPopup 模式)
+    fn open_selected_detail(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
+        let quest = self.filtered_quests(state).get(self.selected).copied();
+        quest.map(|q| {
+            TuiCommand::OpenPopup(PopupKind::Detail {
+                title: format!("Task: {}", q.title),
+                content: Self::detail_content(q),
+                scroll: 0,
+            })
+        })
+    }
+
+    /// C 键:创建 Quest 预留(本期返回 None)
+    fn create_quest_reserved(&mut self, _state: &mut TuiState) -> Option<TuiCommand> {
+        None
+    }
+
+    /// R 键:恢复 Quest(多选时批量;无多选时回退单选恢复)
+    fn resume_batch_or_single(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
+        if !self.selected_indices.is_empty() {
+            let quests = self.filtered_quests(state);
+            let quest_ids: Vec<String> = self
+                .selected_indices
+                .iter()
+                .filter_map(|&i| quests.get(i))
+                .map(|q| q.quest_id.clone())
+                .collect();
+            if quest_ids.is_empty() {
+                return None;
+            }
+            let batch_ids = quest_ids.join(",");
+            return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
+                &crate::t!("panel.task.batch_resume_confirm").replacen(
+                    "{}",
+                    &quest_ids.len().to_string(),
+                    1,
+                ),
+                &batch_ids,
+                format!("batch_resume:{batch_ids}"),
+            )));
+        }
+        // 无多选时回退单选恢复
+        let quest_id = self
+            .filtered_quests(state)
+            .get(self.selected)
+            .map(|q| q.quest_id.clone());
+        quest_id.map(|id| TuiCommand::QuestControl {
+            id,
+            action: QuestAction::Resume,
+        })
+    }
 }
+
+// ============================================================
+// 按键派发表声明(M6 方向4-A:与 app::key_dispatch 同一套
+// KeyPattern/KeyRule/lookup_key_action 原语,机制统一)
+// ============================================================
+
+/// 搜索键表处理器签名(命中即执行,无返回:搜索态全部返回 None)
+type SearchKeyHandler = fn(&mut TaskManagerPanel, KeyEvent);
+
+/// 主键表处理器签名(命中即执行,返回面板意图)
+type TaskKeyHandler = fn(&mut TaskManagerPanel, &mut TuiState) -> Option<TuiCommand>;
+
+/// 搜索模式键表:Esc 退出并清关键字 / Enter 退出保留 / Backspace 删末字符 /
+/// 任意字符追加;其余键一律抑制(与旧 match 的 `_ => return None` 逐字节等价)
+const SEARCH_KEY_TABLE: &[KeyRule<SearchKeyHandler>] = &[
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Esc),
+        action: TaskManagerPanel::search_exit_clear,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Enter),
+        action: TaskManagerPanel::search_exit_keep,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Backspace),
+        action: TaskManagerPanel::search_backspace,
+    },
+    KeyRule {
+        pattern: KeyPattern::AnyChar,
+        action: TaskManagerPanel::search_push_char,
+    },
+];
+
+/// 主键表(行序即旧 match 链 arm 序;首个命中生效,键位两两不同由单测守护):
+/// Space 多选 / Ctrl+A 全选 / Esc 清多选 / f 搜索 / S 排序 / P 单选暂停 /
+/// B 批量(或单选)暂停 / T 批量(或单选)终止 / +、- 优先级 / Enter 详情 /
+/// C 创建预留 / R 批量(或单选)恢复
+const MAIN_KEY_TABLE: &[KeyRule<TaskKeyHandler>] = &[
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char(' ')),
+        action: TaskManagerPanel::toggle_multi_select,
+    },
+    KeyRule {
+        pattern: KeyPattern::Ctrl(KeyCode::Char('a')),
+        action: TaskManagerPanel::select_all_filtered,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Esc),
+        action: TaskManagerPanel::clear_multi_select,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('f')),
+        action: TaskManagerPanel::enter_search_mode,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('S')),
+        action: TaskManagerPanel::cycle_sort_mode,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('P')),
+        action: TaskManagerPanel::pause_selected,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('B')),
+        action: TaskManagerPanel::batch_pause_or_single,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('T')),
+        action: TaskManagerPanel::terminate_batch_or_single,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('+')),
+        action: TaskManagerPanel::priority_increment,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('-')),
+        action: TaskManagerPanel::priority_decrement,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Enter),
+        action: TaskManagerPanel::open_selected_detail,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('C')),
+        action: TaskManagerPanel::create_quest_reserved,
+    },
+    KeyRule {
+        pattern: KeyPattern::Code(KeyCode::Char('R')),
+        action: TaskManagerPanel::resume_batch_or_single,
+    },
+];
 
 impl Panel for TaskManagerPanel {
     fn id(&self) -> PanelId {
@@ -532,35 +883,16 @@ impl Panel for TaskManagerPanel {
 
     fn handle_key(&mut self, key: KeyEvent, state: &mut TuiState) -> Option<TuiCommand> {
         // 搜索模式:仅处理搜索专用键,抑制所有其他键以避免误触 Quest 控制
+        // (表驱动:命中 SEARCH_KEY_TABLE 即执行;未命中 = 旧 `_ => return None` 抑制语义)
         if self.is_searching {
-            match key.code {
-                // Esc 退出搜索模式并清除关键字
-                KeyCode::Esc => {
-                    self.is_searching = false;
-                    self.filter_keyword.clear();
-                    return None;
-                }
-                // Enter 退出搜索模式但保留关键字
-                KeyCode::Enter => {
-                    self.is_searching = false;
-                    return None;
-                }
-                // Backspace 删除最后一个字符
-                KeyCode::Backspace => {
-                    self.filter_keyword.pop();
-                    return None;
-                }
-                // 普通字符追加到过滤关键字
-                KeyCode::Char(c) => {
-                    self.filter_keyword.push(c);
-                    return None;
-                }
-                // 搜索模式下抑制所有其他键
-                _ => return None,
+            if let Some(handler) = lookup_key_action(SEARCH_KEY_TABLE, key) {
+                handler(self, key);
             }
+            return None;
         }
 
-        // Up/Down 导航(复用 list_state 工具,使用过滤后列表长度)
+        // Up/Down 导航(复用 list_state 工具,使用过滤后列表长度)——共享导航
+        // 优先于键表派发,与旧 match 链的 arm 顺序一致(导航在前)
         let filtered_count = self.filtered_quests(state).len();
         if let Some(new_selected) =
             list_state::handle_key_navigation(key.code, self.selected, filtered_count)
@@ -569,227 +901,14 @@ impl Panel for TaskManagerPanel {
             return None;
         }
 
-        match key.code {
-            // Space 键:切换当前高亮项的多选状态
-            //
-            // WHY Space:与文件管理器/邮件客户端的多选语义一致,
-            // 操作员直觉式操作无需学习。不影响单行光标导航。
-            KeyCode::Char(' ') => {
-                let quests = self.filtered_quests(state);
-                if quests.is_empty() {
-                    return None;
-                }
-                let idx = list_state::clamp_selected(self.selected, quests.len());
-                if self.selected_indices.contains(&idx) {
-                    self.selected_indices.remove(&idx);
-                } else {
-                    self.selected_indices.insert(idx);
-                }
-                None
-            }
-            // Ctrl+A:全选当前过滤列表中所有 Quest
-            //
-            // WHY Ctrl+A:与编辑器全选语义一致,减少逐项选择的操作成本。
-            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let quests = self.filtered_quests(state);
-                for i in 0..quests.len() {
-                    self.selected_indices.insert(i);
-                }
-                None
-            }
-            // Esc:清空所有批量选择,退出多选模式
-            //
-            // 注意:生产环境中 Esc 由 app.rs 全局拦截为 quit,
-            // 面板级 Esc 仅在测试场景中生效。
-            KeyCode::Esc => {
-                self.selected_indices.clear();
-                None
-            }
-            // `f` 键:进入搜索模式,不清除已有关键字(支持增量搜索)
-            //
-            // WHY 不清除关键字:用户可能在过滤后调整排序模式,
-            // 然后按 `f` 继续在同一关键字上追加搜索,清除会丢失上下文。
-            // WHY 不用 `/`:Concord W2 起 `/` 由 InputRouter 全局截获进入
-            // 斜杠命令模式,面板 arm 永不可达(死键),故改绑未被全局占用的 `f`。
-            KeyCode::Char('f') => {
-                self.is_searching = true;
-                None
-            }
-            // P4.3:`S` 键循环切换排序模式(Priority → Status → CreatedAt → Priority)
-            //
-            // WHY 无副作用:排序模式是面板本地状态,不发 TuiCommand,
-            // 避免污染事件总线与下游订阅者。
-            KeyCode::Char('S') => {
-                self.sort_mode = self.sort_mode.next();
-                None
-            }
-            // P 键:单选暂停(始终走确认弹窗)
-            KeyCode::Char('P') => {
-                let quest_id = self
-                    .filtered_quests(state)
-                    .get(self.selected)
-                    .map(|q| q.quest_id.clone());
-                quest_id.map(|id| TuiCommand::QuestControl {
-                    id,
-                    action: QuestAction::Pause,
-                })
-            }
-            // B 键:批量暂停(多选时批量;无多选时回退单选暂停,与 P 键一致)
-            //
-            // WHY B 键独立:操作员多选后按 B 批量暂停,无多选时 B 退化为单选暂停,
-            // 与 P 键语义一致,互不冲突。
-            KeyCode::Char('B') => {
-                if !self.selected_indices.is_empty() {
-                    let quests = self.filtered_quests(state);
-                    let quest_ids: Vec<String> = self
-                        .selected_indices
-                        .iter()
-                        .filter_map(|&i| quests.get(i))
-                        .map(|q| q.quest_id.clone())
-                        .collect();
-                    if quest_ids.is_empty() {
-                        return None;
-                    }
-                    let batch_ids = quest_ids.join(",");
-                    return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
-                        &crate::t!("panel.task.batch_pause_confirm").replacen(
-                            "{}",
-                            &quest_ids.len().to_string(),
-                            1,
-                        ),
-                        &batch_ids,
-                        format!("batch_pause:{batch_ids}"),
-                    )));
-                }
-                // 无多选时回退单选暂停
-                let quest_id = self
-                    .filtered_quests(state)
-                    .get(self.selected)
-                    .map(|q| q.quest_id.clone());
-                quest_id.map(|id| TuiCommand::QuestControl {
-                    id,
-                    action: QuestAction::Pause,
-                })
-            }
-            // T 键:终止 Quest(多选时批量;无多选时回退单选终止)
-            KeyCode::Char('T') => {
-                if !self.selected_indices.is_empty() {
-                    let quests = self.filtered_quests(state);
-                    let quest_ids: Vec<String> = self
-                        .selected_indices
-                        .iter()
-                        .filter_map(|&i| quests.get(i))
-                        .map(|q| q.quest_id.clone())
-                        .collect();
-                    if quest_ids.is_empty() {
-                        return None;
-                    }
-                    let batch_ids = quest_ids.join(",");
-                    return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
-                        &crate::t!("panel.task.batch_terminate_confirm").replacen(
-                            "{}",
-                            &quest_ids.len().to_string(),
-                            1,
-                        ),
-                        &batch_ids,
-                        format!("batch_terminate:{batch_ids}"),
-                    )));
-                }
-                // 无多选时回退单选终止
-                let quest_id = self
-                    .filtered_quests(state)
-                    .get(self.selected)
-                    .map(|q| q.quest_id.clone());
-                quest_id.map(|id| TuiCommand::QuestControl {
-                    id,
-                    action: QuestAction::Terminate,
-                })
-            }
-            // `+` 键:优先级 +1(上限 10,边界保护)
-            //
-            // WHY 边界检查在面板:与 spec 一致(0-10 范围),
-            // priority=10 时不返回命令,避免无效 SetPriority(11) 进入事件总线。
-            KeyCode::Char('+') => {
-                let quest = self.filtered_quests(state).get(self.selected).copied();
-                quest.and_then(|q| {
-                    let current_user = user_priority_from_internal(q.priority);
-                    if current_user < PRIORITY_MAX {
-                        Some(TuiCommand::QuestControl {
-                            id: q.quest_id.clone(),
-                            action: QuestAction::SetPriority(current_user + 1),
-                        })
-                    } else {
-                        None
-                    }
-                })
-            }
-            // `-` 键:优先级 -1(下限 0,边界保护)
-            KeyCode::Char('-') => {
-                let quest = self.filtered_quests(state).get(self.selected).copied();
-                quest.and_then(|q| {
-                    let current_user = user_priority_from_internal(q.priority);
-                    if current_user > PRIORITY_MIN {
-                        Some(TuiCommand::QuestControl {
-                            id: q.quest_id.clone(),
-                            action: QuestAction::SetPriority(current_user - 1),
-                        })
-                    } else {
-                        None
-                    }
-                })
-            }
-            // Enter 键:打开 Quest 详情弹窗(沿用 OpenPopup 模式)
-            KeyCode::Enter => {
-                let quest = self.filtered_quests(state).get(self.selected).copied();
-                quest.map(|q| {
-                    TuiCommand::OpenPopup(PopupKind::Detail {
-                        title: format!("Task: {}", q.title),
-                        content: Self::detail_content(q),
-                        scroll: 0,
-                    })
-                })
-            }
-            // C 键:创建 Quest 预留(本期返回 None)
-            KeyCode::Char('C') => None,
-            // R 键:恢复 Quest(多选时批量;无多选时回退单选恢复)
-            KeyCode::Char('R') => {
-                if !self.selected_indices.is_empty() {
-                    let quests = self.filtered_quests(state);
-                    let quest_ids: Vec<String> = self
-                        .selected_indices
-                        .iter()
-                        .filter_map(|&i| quests.get(i))
-                        .map(|q| q.quest_id.clone())
-                        .collect();
-                    if quest_ids.is_empty() {
-                        return None;
-                    }
-                    let batch_ids = quest_ids.join(",");
-                    return Some(TuiCommand::OpenPopup(PopupKind::control_confirm(
-                        &crate::t!("panel.task.batch_resume_confirm").replacen(
-                            "{}",
-                            &quest_ids.len().to_string(),
-                            1,
-                        ),
-                        &batch_ids,
-                        format!("batch_resume:{batch_ids}"),
-                    )));
-                }
-                // 无多选时回退单选恢复
-                let quest_id = self
-                    .filtered_quests(state)
-                    .get(self.selected)
-                    .map(|q| q.quest_id.clone());
-                quest_id.map(|id| TuiCommand::QuestControl {
-                    id,
-                    action: QuestAction::Resume,
-                })
-            }
-            // WHY 不含 `E`:Concord 键位治理——全局 codegen 别名 `E`→export.run
-            // 先经 InputRouter 截获,面板 arm 永不可达(死键),导出语义已由全局覆盖。
-            // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
-            _ => None,
+        // 表驱动派发:首个命中者执行,未命中即死键返回 None(旧 `_ => None` 等价)。
+        // WHY 不含 `E`:Concord 键位治理——全局 codegen 别名 `E`→export.run
+        // 先经 InputRouter 截获,面板 arm 永不可达(死键),导出语义已由全局覆盖。
+        // WHY P3.2:`?` 已由 TuiApp 全局拦截为 Help overlay,面板不再处理。
+        if let Some(handler) = lookup_key_action(MAIN_KEY_TABLE, key) {
+            return handler(self, state);
         }
+        None
     }
 
     fn scroll_to_top(&mut self, _state: &mut TuiState) {
@@ -810,8 +929,6 @@ impl Panel for TaskManagerPanel {
         {
             self.selected = new_selected;
         }
-        // consume Ctrl modifier 警告(避免未使用 import)
-        let _ = KeyModifiers::NONE;
         None
     }
 
@@ -847,7 +964,125 @@ fn user_priority_from_internal(internal: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
     use nexus_core::{Task, TaskStatus, ThinkingMode};
+
+    #[test]
+    fn key_tables_unique_and_cover_documented_keys() {
+        // 无重复注册(首个命中生效,重复行即死代码):两表内键位模式两两不同
+        for (name, patterns) in [
+            (
+                "SEARCH_KEY_TABLE",
+                SEARCH_KEY_TABLE
+                    .iter()
+                    .map(|r| r.pattern)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "MAIN_KEY_TABLE",
+                MAIN_KEY_TABLE.iter().map(|r| r.pattern).collect::<Vec<_>>(),
+            ),
+        ] {
+            for (i, a) in patterns.iter().enumerate() {
+                for b in &patterns[i + 1..] {
+                    assert_ne!(a, b, "{name} 含重复键位注册(首个命中生效,重复行是死代码)");
+                }
+            }
+        }
+
+        // 无空路由:面板文档承诺的每个键恰命中主键表一行
+        let documented: [(KeyEvent, &str); 13] = [
+            (
+                KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+                "Space 多选",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+                "Ctrl+A 全选",
+            ),
+            (
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                "Esc 清多选",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+                "f 搜索",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+                "S 排序",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+                "P 暂停",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE),
+                "B 批量暂停",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
+                "T 终止",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE),
+                "+ 优先级",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE),
+                "- 优先级",
+            ),
+            (
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                "Enter 详情",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE),
+                "C 创建预留",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+                "R 恢复",
+            ),
+        ];
+        for (key, what) in documented {
+            let hits = MAIN_KEY_TABLE
+                .iter()
+                .filter(|r| r.pattern.matches(key))
+                .count();
+            assert_eq!(hits, 1, "{what} 应恰命中主键表一行(空路由或重复注册即红)");
+        }
+
+        // 搜索表:Esc/Enter/Backspace/任意字符恰一行(无空路由)
+        for (key, what) in [
+            (KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), "搜索 Esc"),
+            (
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                "搜索 Enter",
+            ),
+            (
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+                "搜索 Backspace",
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+                "搜索任意字符",
+            ),
+        ] {
+            let hits = SEARCH_KEY_TABLE
+                .iter()
+                .filter(|r| r.pattern.matches(key))
+                .count();
+            assert_eq!(hits, 1, "{what} 应恰命中搜索键表一行");
+        }
+        // 搜索抑制语义:导航/控制键(如 Up)不在搜索表内,保证搜索态抑制其他键
+        assert!(
+            SEARCH_KEY_TABLE.iter().all(|r| !r
+                .pattern
+                .matches(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))),
+            "搜索键表不应包含 Up 等导航键(搜索态须抑制)"
+        );
+    }
 
     fn sample_quest(id: &str, title: &str, priority: u8) -> Quest {
         Quest {

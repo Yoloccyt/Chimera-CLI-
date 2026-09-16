@@ -35,6 +35,9 @@ use event_bus::EventBus;
 pub(crate) mod chat_session;
 pub(crate) mod event_loop;
 pub(crate) mod fps_counter;
+/// 表驱动按键派发表(执行层,M6 方向4-A):弹窗键表 / RouteTarget 执行表 /
+/// 本地动作派发表从 event_loop.rs 收编至此,与 InputRouter(按键归属)分层分工
+pub(crate) mod key_dispatch;
 pub(crate) mod mouse;
 pub(crate) mod pane_manager;
 pub(crate) mod render;

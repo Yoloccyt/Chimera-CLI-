@@ -43,9 +43,11 @@ mod tests {
     use super::*;
     use crate::actions::ActionRegistry;
 
-    /// 全部 24 个已注册 PanelId(与 app/mod.rs 面板循环保持一致;
-    /// Timeline/Sysinfo 有实现但未进入动作菜单测试清单,故不列)。
-    const ALL_PANELS: [PanelId; 24] = [
+    /// 全部 27 个 PanelId 变体(与 `PanelId::ALL` 对齐;含 FC-05 下线未注册的
+    /// InjectionStrategy —— 其上下文菜单仍须满足"无只读死面板铁律",即恒含
+    /// panel.drill_down)。新增 PanelId 变体时,types.rs 的穷举测试会编译失败,
+    /// 强制同步本清单。
+    const ALL_PANELS: [PanelId; 27] = [
         PanelId::Quest,
         PanelId::Parliament,
         PanelId::Budget,
@@ -59,10 +61,13 @@ mod tests {
         PanelId::Router,
         PanelId::McpNodes,
         PanelId::Chtc,
+        // Concord T1.4:Timeline 接线注册(§7.3 未注册双面板接线清单)
+        PanelId::Timeline,
         PanelId::ClvVector,
         PanelId::ResourceMonitor,
         PanelId::MetricsDashboard,
         PanelId::OsaSparse,
+        PanelId::Sysinfo,
         PanelId::Chat,
         PanelId::SelfAssessment,
         // closure Stage B-10:DAG 可视化面板
@@ -71,6 +76,8 @@ mod tests {
         PanelId::PvlScore,
         // Task 3.9:任务管理面板
         PanelId::TaskManager,
+        // P1(ADR-073):超窗兜底面板
+        PanelId::OverWindow,
         // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板
         PanelId::ExperienceCardViz,
         PanelId::InjectionStrategy,
