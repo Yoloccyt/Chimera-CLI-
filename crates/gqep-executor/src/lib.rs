@@ -77,7 +77,7 @@ pub use streaming_dispatch::{DispatchOutcome, DispatchedCall, SideEffect, Stream
 pub use toolplan_runner::{PlanGuards, PlanRunner, PlanSummary, ToolExecutor};
 // P4-T3: execpolicy 接线公开 API
 pub use exec_tool_executor::ExecPolicyToolExecutor;
-pub use types::{GatherResult, GqepFuture, OperationId};
+pub use types::{GatherCollected, GatherResult, GqepFuture, OperationId};
 
 /// 双层超时防护统计快照（Task 3.7:L10 → L7 向下依赖）
 ///
@@ -181,5 +181,5 @@ pub mod prelude {
     pub use crate::error::GqepError;
     pub use crate::gatherer::GqepExecutor;
     pub use crate::timeout::with_timeout;
-    pub use crate::types::{GatherResult, GqepFuture, OperationId};
+    pub use crate::types::{GatherCollected, GatherResult, GqepFuture, OperationId};
 }
