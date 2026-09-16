@@ -14,10 +14,11 @@
 use std::time::Duration;
 
 use chtc_bridge::{ChtcBridge, ChtcConfig, IdeSource};
-use cmt_tiering::Tier;
 use event_bus::{EventBus, EventReceiver, NexusEvent};
 use gsoe_evolution::{GsoeConfig, GsoeEvolutionEngine};
-use lsct_tiering::{LsctConfig, LsctCoordinator, TaskLoadProfile, TaskType};
+// WHY lsct_tiering::Tier(M10, ADR-160 偿还批次):lsct 已自有 Tier 类型
+// (解除 cmt 复用、防 cmt↔lsct 生产依赖环),LSCT API 一律使用本类型
+use lsct_tiering::{LsctConfig, LsctCoordinator, TaskLoadProfile, TaskType, Tier};
 use nmc_encoder::{NmcConfig, NmcEncoder, PerceptionInput};
 use ssra_fusion::{
     precompile, FusionRequest, FusionStrategy, SlimeFusionEngine, SsraConfig, TemplateSpec,

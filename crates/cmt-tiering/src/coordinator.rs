@@ -432,6 +432,12 @@ impl CmtCoordinator {
         }
     }
 
+    /// 共享事件总线引用(crate 内部访问,供 `lsct_policy` 等同级模块
+    /// 装配订阅腿时使用;不公开为公共 API —— 外部应通过构造时注入持有)
+    pub(crate) fn event_bus(&self) -> &EventBus {
+        &self.event_bus
+    }
+
     /// 运行衰减周期,将 priority < 0.1 的条目降级
     ///
     /// 扫描 Hot/Warm/Cold 三层(Ice 层不衰减,已是最低层),

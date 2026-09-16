@@ -3,21 +3,6 @@
 version = 4
 
 [[package]]
-name = "acb-governor"
-version = "2.28.2-omega"
-dependencies = [
- "chrono",
- "criterion",
- "event-bus",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -632,7 +617,6 @@ dependencies = [
 name = "chimera-e2e-tests"
 version = "2.28.2-omega"
 dependencies = [
- "acb-governor",
  "anyhow",
  "auto-dpo",
  "chimera-cli",
@@ -857,6 +841,7 @@ dependencies = [
  "criterion",
  "dashmap",
  "event-bus",
+ "lsct-tiering",
  "nexus-contracts",
  "nexus-core",
  "proptest",
@@ -3115,7 +3100,6 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 name = "lsct-tiering"
 version = "2.28.2-omega"
 dependencies = [
- "cmt-tiering",
  "criterion",
  "dashmap",
  "event-bus",

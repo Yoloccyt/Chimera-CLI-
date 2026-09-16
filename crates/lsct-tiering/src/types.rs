@@ -10,13 +10,60 @@
 //! - `TierSwitchDecision`:层级切换决策,enum dispatch 携带完整迁移信息
 //!
 //! # 设计决策(WHY)
-//! - **复用 CMT 的 Tier enum**:类型重用而非实现重用,LSCT 不操作 CMT 存储,
-//!   仅复用层级标识类型,符合 §2.2 同层互引规则
+//! - **LSCT 自有 `Tier` 枚举**(M10, ADR-160 孤岛偿还批次):原实现复用
+//!   `cmt_tiering::Tier`(类型重用)。cmt 反向接入 LSCT 策略层
+//!   (`lsct_policy` 装配)后,若继续复用会形成 cmt↔lsct 生产依赖环
+//!   (cargo 禁止)。两类型语义 1:1 对应,事件 payload 字符串契约
+//!   (`as_str`/`parse_tier`)保持逐字一致,由 cmt 侧转换函数守护。
 //! - **TierSwitchDecision 携带完整信息**:Promote/Demote/Keep 各带 capability_id、
 //!   层级与 reason,apply_decision 通过模式匹配一次性获取参数,避免额外查表
 
-use cmt_tiering::Tier;
 use serde::{Deserialize, Serialize};
+
+/// 能力存储层级 — 热/温/冷/冰四级
+///
+/// 语义与 `cmt_tiering::Tier` 1:1 对应(LSCT 是 CMT 之上的任务感知策略层,
+/// 不操作 CMT 存储,仅计算策略并通过 `LsctTierSwitched` 事件下发)。
+/// WHY 自有类型而非复用:M10 偿还批次中 cmt → lsct 生产边的引入
+/// 会使 cmt↔lsct 互依赖成环(cargo 禁止生产依赖环),故 LSCT 自持层级类型,
+/// 转换一致性由 `cmt_tiering::lsct_policy` 的双向转换函数保证。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Tier {
+    /// 热层:内存索引,延迟 < 1μs(访问最频繁的能力)
+    Hot,
+    /// 温层:SQLite WAL,延迟 < 5ms
+    Warm,
+    /// 冷层:SQLite 附加数据库,延迟 < 50ms
+    Cold,
+    /// 冰层:归档只读文件,延迟 < 500ms(近乎不再访问)
+    Ice,
+}
+
+impl Tier {
+    /// 返回层级名称(用于 `LsctTierSwitched` 事件 payload 与日志)
+    ///
+    /// 字符串契约:必须与 `cmt_tiering::Tier::as_str` 逐字一致
+    /// (CMT 订阅侧按此字符串解析层级)。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Hot => "Hot",
+            Self::Warm => "Warm",
+            Self::Cold => "Cold",
+            Self::Ice => "Ice",
+        }
+    }
+
+    /// 从事件 payload / 配置字符串解析层级(大小写敏感,与 CMT 契约一致)
+    pub fn parse_tier(s: &str) -> Option<Self> {
+        match s {
+            "Hot" => Some(Self::Hot),
+            "Warm" => Some(Self::Warm),
+            "Cold" => Some(Self::Cold),
+            "Ice" => Some(Self::Ice),
+            _ => None,
+        }
+    }
+}
 
 /// 任务类型 — 不同任务对存储层级有不同偏好
 ///

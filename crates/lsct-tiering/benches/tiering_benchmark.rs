@@ -12,8 +12,8 @@
 //! cargo bench -p lsct-tiering
 //! ```
 
-use cmt_tiering::Tier;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use lsct_tiering::Tier;
 use lsct_tiering::{LsctConfig, LsctCoordinator, TaskLoadProfile, TaskType};
 
 /// 构建 n 个能力的 coordinator

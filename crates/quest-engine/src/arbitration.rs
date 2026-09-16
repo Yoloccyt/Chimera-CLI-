@@ -40,14 +40,15 @@ use nexus_contracts::BudgetTier;
 use tracing::{debug, warn};
 
 // ============================================================
-// AcbTier — ACB 四级预算枚举(内部解析用,不依赖 acb-governor crate)
+// AcbTier — ACB 四级预算枚举(内部解析用;历史上的 acb-governor crate 已按 ADR-182 退役)
 // ============================================================
 
 /// ACB 预算级别 — 解析自 ACB BudgetAdjusted 事件的 new_tier 字符串
 ///
-/// WHY 独立枚举而非依赖 acb_governor::BudgetTier:quest-engine 的 DECB 档位
-/// 已由 L0 nexus-contracts 提供(ADR-054 决策 3),再依赖 acb_governor 会增加
-/// 编译时间与耦合度。
+/// WHY 独立枚举而非复用外部 BudgetTier 类型:quest-engine 的 DECB 档位
+/// 已由 L0 nexus-contracts 提供(ADR-054 决策 3);历史上 L8 曾有
+/// acb-governor crate 提供 ACB BudgetTier,已按 ADR-182 退役删除(2026-09-16),
+/// 本枚举即其事件 new_tier 字符串的轻量解析替代品(仅 4 变体)。
 /// ACB 级别仅需 4 个变体的字符串解析,独立枚举更轻量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AcbTier {

@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use cmt_tiering::Tier;
+use crate::types::Tier;
 
 use crate::error::LsctError;
 use crate::types::{next_colder, tier_rank, TierAssignment};

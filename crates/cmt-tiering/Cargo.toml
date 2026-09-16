@@ -32,6 +32,13 @@ chrono = { workspace = true }
 tokio = { workspace = true }
 # 结构化日志(操作追踪与调试)
 tracing = { workspace = true }
+# L3 同层互引:LSCT 任务感知策略层(ADR-160 孤岛偿还 M10)
+# WHY 生产边(非 dev):cmt::lsct_policy 在 src 生产装配 LSCT 策略协调器,
+# 订阅 QuestCreated 出升降温策略 → LsctTierSwitched → CMT 订阅者执行实际迁移。
+# L3→L3 同层互引合法(§2.2);无依赖环 —— lsct 已自持 Tier 类型(转换函数守护契约)。
+# 防回流:移回 dev-dependencies 即不可达且无 freeze 登记 → 棘轮 [GAP-R] 门红,
+# 另有 tests/lsct_policy.rs::test_lsct_dep_is_production_not_dev 双保险。
+lsct-tiering = { workspace = true }
 
 [dev-dependencies]
 # 测试用临时文件/目录(跨平台安全),用于 Warm/Cold/Ice 层持久化测试

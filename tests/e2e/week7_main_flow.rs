@@ -29,7 +29,6 @@ mod setup;
 use std::time::{Duration, Instant};
 
 use chtc_bridge::IdeSource;
-use cmt_tiering::Tier;
 use decb_governor::{BudgetConsumption, DecbConfig, DecbError, DecbGovernor};
 use event_bus::{EventMetadata, NexusEvent};
 use nmc_encoder::PerceptionInput;
@@ -38,7 +37,9 @@ use setup::{
     make_vscode_raw, setup_week7_pipeline,
 };
 
-use lsct_tiering::TaskType;
+// WHY lsct_tiering::Tier(M10, ADR-160 偿还批次):lsct 已自有 Tier 类型
+// (解除 cmt 复用、防 cmt↔lsct 生产依赖环),LSCT API 一律使用本类型
+use lsct_tiering::{TaskType, Tier};
 
 /// CSA 延迟阈值:500ms(Task 6.5,从 Week 6 的 400ms 上浮 100ms)
 const CSA_THRESHOLD_MS: u128 = 500;

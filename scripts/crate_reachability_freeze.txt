@@ -29,14 +29,26 @@ nexus-hook       # empty config = current behaviour, safe fallback path (root Ca
 # --- legacy islands (delivered in Week 6/7, never wired; unit + E2E tests green but no production consumer) ---
 model-router     # incoming edges: auto-dpo (itself an island) + quest-engine dev-dep only; the "CAF landed" claim in the rules docs does not hold on the production graph  ADR-160/172  [ADR-171 T9: accepted pseudo-reachable production edge auto-dpo->model-router (L5->L1, ModelRouterJudgeClient), edge kept, consumer side is island; ADR-172: retired routing-contract status, frozen not deleted, mca-gateway is the only live LLM channel]
 auto-dpo         # one of the three L5 evolution-loop crates, zero production incoming edges                 ADR-160  [ADR-171 T9: accepted pseudo-reachable production edge auto-dpo->model-router (L5->L1, ModelRouterJudgeClient), edge kept, consumer side is island]
+# M10 2026-09-16:转正尝试被依赖铁律驳回(hcw-window 属内环 + L2->L3 向上,Check A/B 双违规),
+# 按 ADR-161 决策 4 与 revert 同 PR 回登记;重路由候选 = chimera-cli 组合根(ADR-161 路径①)。
 scc-cache        # incoming edges: gea-activator / hcw-window dev-dep + mca-gateway (island)                 ADR-160  [ADR-171 T9: accepted pseudo-reachable production edge mca-gateway->scc-cache (L10->L3, CacheAffinityIntegration), edge kept, consumer side is island]
 csn-substitutor  # capability degradation chain, incoming edge: root E2E dev-dep only                        ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
 gea-activator    # incoming edge: root E2E dev-dep only (layer corrected to L9 in Phase 6 W0)                ADR-160
 sesa-router      # incoming edge: root E2E dev-dep only                                                      ADR-160
+# M10 2026-09-16:转正尝试被依赖铁律驳回(parliament 属内环,decb 不在内环白名单,Check A 违规),
+# 按 ADR-161 决策 4 与 revert 同 PR 回登记;重路由候选 = efficiency-monitor(L9->L8 向下,非内环)。
 decb-governor    # incoming edge: parliament dev-dep only                                                    ADR-160
-acb-governor     # zero incoming edges (not even a dev-dep; declared only in root workspace.dependencies)    ADR-160
+# --- legacy islands ---
+# acb-governor Frozen entry REMOVED 2026-09-16 (M10, ADR-182): crate retired and
+# deleted (zero production consumers, not even a dev-dep). Ratchet shrink-only:
+# frozen 16 -> 15. Verification: check/test/clippy/dependency rules all green.
 chtc-bridge      # 5 IDE adapters, incoming edge: root E2E dev-dep only                                      ADR-160
-lsct-tiering     # incoming edge: root E2E dev-dep only                                                      ADR-160
+# lsct-tiering Frozen entry REMOVED 2026-09-16 (M10): cmt-tiering declares a
+# production dep and assembles the policy leg (CmtCoordinator::spawn_lsct_policy,
+# crates/cmt-tiering/src/lsct_policy.rs) — QuestCreated -> LSCT decisions ->
+# LsctTierSwitched -> CMT subscriber executes real migration. Real production
+# call path per ADR-179; cycle broken by lsct owning its Tier type (M10).
+# Ratchet shrink-only: frozen 15 -> 14.
 mtpe-executor    # incoming edge: gea-activator dev-dep only                                                 ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
 ssra-fusion      # incoming edge: root E2E dev-dep only (layer corrected to L7 in Phase 6 W0)                ADR-160
 # --- transitively unreachable (2026-09-11): the capability chain rooted at the frozen

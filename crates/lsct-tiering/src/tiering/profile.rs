@@ -11,8 +11,8 @@
 //! 绝不会出现"高强度得到更冷的 tier"。
 
 use crate::config::LsctConfig;
+use crate::types::Tier;
 use crate::types::{TaskLoadProfile, TaskType};
-use cmt_tiering::Tier;
 
 impl TaskLoadProfile {
     /// 创建任务负载画像

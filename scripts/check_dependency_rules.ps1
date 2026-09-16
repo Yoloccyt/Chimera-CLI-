@@ -84,8 +84,8 @@ $layerMap = @{
     'csn-substitutor' = 7; 'ssra-fusion' = 7
     # P3-T9 (2026-08-27): nexus-subagent typed SubAgent runtime (L7, 43rd crate)
     'nexus-subagent' = 7
-    # L8 Parliament
-    'parliament' = 8; 'acb-governor' = 8; 'decb-governor' = 8
+    # L8 Parliament — ADR-182 (2026-09-16, M10): acb-governor 退役删除
+    'parliament' = 8; 'decb-governor' = 8
     # L9 Quest
     'quest-engine' = 9; 'efficiency-monitor' = 9; 'chimera-mas' = 9
     'gea-activator' = 9
@@ -101,7 +101,8 @@ $layerMap = @{
 }
 
 # Expected total crate count (workspace members). Static completeness bound.
-$expectedCrates = 43
+# ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
+$expectedCrates = 42
 
 # Inner-ring whitelist: 9 crates (memory + reasoning + evolution ring).
 # Three-ring reorganization target: inner ring talks via shared memory/direct

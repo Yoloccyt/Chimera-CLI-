@@ -12,9 +12,10 @@ tracing = { workspace = true }
 dashmap = { workspace = true }
 # L1 Core:跨层通信,发布 LsctTierSwitched 事件
 event-bus = { workspace = true }
-# L1 Core:nexus-core(workspace 共享基础设施)
-# L3 同层互引:复用 Tier/CapabilityId 类型(类型重用,非实现重用,§2.2 允许)
-cmt-tiering = { workspace = true }
+# 注(M10, ADR-160 孤岛偿还):原 `cmt-tiering` 依赖已解除 —— cmt 接入本 crate
+# 组成策略装配闭环(cmt::lsct_policy)后,互依赖会成环(cargo 禁止生产依赖环)。
+# Tier 类型现已自有(lsct_tiering::types::Tier),与 CMT 层级语义 1:1,
+# 事件 payload 字符串契约不变,转换一致性由 cmt 侧双向转换函数守护。
 
 [dev-dependencies]
 proptest = { workspace = true }

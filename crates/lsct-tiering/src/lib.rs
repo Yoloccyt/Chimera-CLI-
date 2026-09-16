@@ -11,14 +11,14 @@
 //!
 //! # 与 CMT 的关系
 //! LSCT 是 CMT 之上的"任务感知策略层",不直接操作 CMT 存储:
-//! - 复用 CMT 的 Tier enum(类型重用,非实现重用)
+//! - 自持 `Tier` 层级类型(与 CMT 语义 1:1,M10 解除互依赖防环;
+//!   转换由 `cmt_tiering::lsct_policy` 守护)
 //! - 计算策略并发布事件,CMT 订阅事件做实际数据迁移
-//! - 符合 §2.2 依赖铁律:同层 L3 互引 + 跨层走 EventBus
+//! - 生产装配入口:`CmtCoordinator::spawn_lsct_policy`(cmt 侧)
 //!
 //! # 快速示例
 //! ```no_run
-//! use lsct_tiering::{LsctCoordinator, LsctConfig, TaskType, compute_target_tier};
-//! use cmt_tiering::Tier;
+//! use lsct_tiering::{LsctCoordinator, LsctConfig, TaskType, Tier};
 //!
 //! let coordinator = LsctCoordinator::new(LsctConfig::default());
 //! coordinator.register_capability("cap-1", Tier::Warm);
@@ -46,6 +46,6 @@ pub use tiering::{
     LsctPromoter,
 };
 pub use types::{
-    next_colder, next_warmer, tier_rank, TaskLoadProfile, TaskType, TierAssignment,
+    next_colder, next_warmer, tier_rank, TaskLoadProfile, TaskType, Tier, TierAssignment,
     TierSwitchDecision,
 };
