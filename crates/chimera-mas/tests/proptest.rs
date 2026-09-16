@@ -1044,3 +1044,131 @@ proptest! {
         }
     }
 }
+
+// ============================================================
+// M12 / ADR-185 D2:MAS→GEA 桥接属性测试
+// ============================================================
+
+/// TaskComplexity 全变体覆盖策略
+fn arb_complexity() -> impl Strategy<Value = TaskComplexity> {
+    prop_oneof![
+        Just(TaskComplexity::Simple),
+        Just(TaskComplexity::Medium),
+        Just(TaskComplexity::Complex),
+        Just(TaskComplexity::VeryComplex),
+    ]
+}
+
+/// TaskPriority 全变体覆盖策略
+fn arb_priority() -> impl Strategy<Value = TaskPriority> {
+    prop_oneof![
+        Just(TaskPriority::Low),
+        Just(TaskPriority::Medium),
+        Just(TaskPriority::High),
+        Just(TaskPriority::Critical),
+    ]
+}
+
+proptest! {
+    /// 桥接属性 1:任意复杂度 × 优先级,TaskProfile 词表布局不变量恒成立
+    ///
+    /// - clv 恒 64 维(BRIDGE_VECTOR_DIMS)
+    /// - dims[0..4] 每维 ∈ {0.0, complexity}(激活象限置复杂度,未激活为 0)
+    /// - dim[4] == complexity;dim[5] == risk/100(risk 来自优先级映射)
+    /// - task_type == 激活计划首象限小写名(亲和词表)
+    /// - complexity_score == complexity_weight(complexity)
+    #[test]
+    fn bridge_task_profile_layout_invariant(
+        complexity in arb_complexity(),
+        priority in arb_priority(),
+        task_suffix in "[a-z0-9]{1,8}"
+    ) {
+        let task = AgentTask::new(
+            Task {
+                task_id: format!("t-prop-{task_suffix}"),
+                description: "桥接属性测试".into(),
+                status: TaskStatus::Pending,
+                dependencies: vec![],
+            },
+            complexity,
+            1000,
+            std::time::Duration::from_secs(60),
+            QualityLevel::Standard,
+        )
+        .with_priority(priority);
+        let profile = chimera_mas::gea_bridge::task_profile_from_agent_task(&task);
+
+        prop_assert_eq!(profile.clv.len(), chimera_mas::BRIDGE_VECTOR_DIMS);
+        let expected_complexity = chimera_mas::complexity_weight(complexity);
+        for dim in 0..4 {
+            let v = profile.clv[dim];
+            prop_assert!(
+                v == 0.0 || (v - expected_complexity).abs() < 1e-6,
+                "dims[{dim}] 应为 0 或复杂度,实际 {v}"
+            );
+        }
+        prop_assert!((profile.clv[4] - expected_complexity).abs() < 1e-6);
+        let expected_risk = f32::from(chimera_mas::priority_risk_level(priority)) / 100.0;
+        prop_assert!((profile.clv[5] - expected_risk).abs() < 1e-6, "风险维应为 risk/100");
+        prop_assert!((profile.complexity_score - expected_complexity).abs() < 1e-6);
+        // task_type 词表 = QuadrantPlan 首激活象限小写名(Simple→implementation)
+        prop_assert_eq!(profile.task_type, "implementation");
+        prop_assert_eq!(profile.risk_level, chimera_mas::priority_risk_level(priority));
+    }
+
+    /// 桥接属性 2:任意象限,quadrant_dim 与 Quadrant::ALL 声明序一致
+    ///
+    /// 0..4 维 one-hot 的位置权威源是 Quadrant::ALL 顺序;该属性锁定
+    /// "维下标 ↔ 象限"双射不被无意重排(重排会破坏已注册专家画像的语义)。
+    #[test]
+    fn bridge_quadrant_dim_bijection(q_index in 0usize..4) {
+        let quadrant = chimera_mas::Quadrant::ALL[q_index];
+        let dim = chimera_mas::gea_bridge::quadrant_dim(quadrant);
+        prop_assert_eq!(dim, q_index, "quadrant_dim 应与 Quadrant::ALL 声明序一致");
+    }
+
+    /// 桥接属性 3(Tier/Profile 往返):任意 E01-E08 编制专家 → gea 画像往返守恒
+    ///
+    /// - expert_id 原样保留(E01..E08 共享键)
+    /// - 向量恒 64 维且 dims[0..4] 恰一维为 1.0(象限 one-hot 不塌缩)
+    /// - priority == tier_priority_weight(highest_tier())(编制权重派生)
+    /// - capability_tags 含小写象限名(亲和词表)
+    #[test]
+    fn bridge_expert_profile_roundtrip(e_index in 0usize..8) {
+        let mas_profile = chimera_mas::ExpertRegistry::new().all()[e_index];
+        let gea_profile = chimera_mas::gea_bridge::build_gea_expert_profile(&mas_profile);
+
+        prop_assert_eq!(gea_profile.expert_id.as_str(), mas_profile.id);
+        prop_assert_eq!(gea_profile.expert_vector.len(), chimera_mas::BRIDGE_VECTOR_DIMS);
+        let onehot_sum: f32 = gea_profile.expert_vector[0..4].iter().sum();
+        prop_assert!(
+            (onehot_sum - 1.0).abs() < 1e-6,
+            "象限 one-hot 恰一维, got {onehot_sum}"
+        );
+        let expected_weight = chimera_mas::tier_priority_weight(mas_profile.highest_tier());
+        prop_assert!(
+            (gea_profile.priority - expected_weight).abs() < 1e-6,
+            "priority 应等于编制权重"
+        );
+        let tag = mas_profile.primary_quadrant.name().to_lowercase();
+        prop_assert!(
+            gea_profile.capability_tags.contains(&tag),
+            "tags 应含小写象限名 {tag}"
+        );
+    }
+
+    /// 桥接属性 4:任意 E01-E08 专家,桥接构建确定性(同输入同输出)
+    ///
+    /// 值域守护 [TAG_HASH_BASE, 64) 由 FNV-1a 取模构造保证(单元测试锁定),
+    /// 本属性锁定跨 case 的确定性:桥接是"语义翻译",输出必须可复现,
+    /// 否则已注册画像的语义会随进程漂移。
+    #[test]
+    fn bridge_expert_profile_deterministic(e_index in 0usize..8) {
+        let mas_profile = chimera_mas::ExpertRegistry::new().all()[e_index];
+        let a = chimera_mas::gea_bridge::build_gea_expert_profile(&mas_profile);
+        let b = chimera_mas::gea_bridge::build_gea_expert_profile(&mas_profile);
+        prop_assert_eq!(a.expert_vector, b.expert_vector, "桥接向量必须确定性可复现");
+        prop_assert_eq!(a.capability_tags, b.capability_tags);
+        prop_assert_eq!(a.expert_id.as_str(), b.expert_id.as_str());
+    }
+}
