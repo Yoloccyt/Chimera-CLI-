@@ -24,10 +24,13 @@
 #                              {nexus-contracts, nexus-core, event-bus,
 #                              model-router} plus the inner-ring whitelist itself.
 #   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
-#                              crate (see expected_crates); the 2-item ADR
+#                              crate (see expected_crates); the 1-item ADR
 #                              exception table is exempted
-#                              (gqep-executor->qeep-protocol ADR-048,
-#                               pvl-layer->seccore dynamic-blacklist feature).
+#                              (pvl-layer->seccore dynamic-blacklist feature).
+#                              The former gqep-executor->qeep-protocol ADR-048
+#                              entry was retired in wave 3c (M12, ADR-185 D4):
+#                              L7->L4 is a legal DOWNWARD edge that Check B
+#                              never flags, so the exemption was a no-op pad.
 #   C. Graph completeness    - every referenced workspace dependency must exist
 #                              in the layer map; layer map must cover the whole
 #                              workspace (static count + disk scan).
@@ -128,9 +131,13 @@ is_inner_base() {
 }
 
 # ADR exception table: exempted from check B.
+# WHY 只剩 1 条:gqep-executor(L7)->qeep-protocol(L4) 条目已于 wave 3c 收编移除
+# (M12/ADR-185 D4)——Check B 只 flag 向上依赖(dep_layer > layer),该向下边无豁免
+# 也天然合法,例外名义只剩 no-op 安全垫,挂着反而误导后人以为该边仍异常。
+# 移除后双门仍绿 = 收编的可执行证据(先例:P9-T6 复审"外环内部 L7->L4 合法")。
 is_adr_exception() {
     case "$1,$2" in
-        gqep-executor,qeep-protocol|pvl-layer,seccore) return 0 ;;
+        pvl-layer,seccore) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -193,7 +200,7 @@ mock_deps_of() {
         mlc-engine) echo "nexus-core event-bus scc-cache" ;;        # GAP-A + GAP-B
         repo-wiki) echo "nexus-core event-bus ghost-crate" ;;       # GAP-C (undefined dep)
         model-router) echo "nexus-core nmc-encoder" ;;              # GAP-B (L1 -> L2)
-        gqep-executor) echo "nexus-core event-bus qeep-protocol" ;; # legal (ADR-048)
+        gqep-executor) echo "nexus-core event-bus qeep-protocol" ;; # legal downward L7->L4 (no exemption needed since ADR-048 wave-3c retirement, ADR-185 D4)
         pvl-layer) echo "nexus-core event-bus seccore" ;;           # legal (feature-gated)
         nexus-contracts) echo "" ;;
         chimera-tui) echo "nexus-contracts event-bus pvl-layer" ;;  # GAP-E (L10 -> L7)
@@ -376,10 +383,12 @@ if [ "$SELFTEST" = "1" ]; then
     printf '%s\n' "${report[@]}" | grep -q '\[GAP-B\] model-router (L1) -> nmc-encoder' || { ok=0; report+=('[SELFTEST] missing GAP-B for model-router -> nmc-encoder'); }
     printf '%s\n' "${report[@]}" | grep -q 'undefined dependency <ghost-crate>' || { ok=0; report+=('[SELFTEST] missing GAP-C for undefined dep ghost-crate'); }
     printf '%s\n' "${report[@]}" | grep -q '\[GAP-E\] chimera-tui (L10) -> pvl-layer' || { ok=0; report+=('[SELFTEST] missing GAP-E for chimera-tui -> pvl-layer'); }
-    # ADR-exempted edges must never surface as gaps.
+    # 合法/例外边不得报 gap:gqep-executor->qeep-protocol 为向下边(ADR-048 已于
+    # wave 3c 收编,无豁免天然合法,ADR-185 D4);pvl-layer->seccore 为 ADR 例外
+    # (feature-gated)。两条边在 mock 图中均存在,任何一条冒出 GAP 都是回归。
     if printf '%s\n' "${report[@]}" | grep -Eq '^\[GAP-[ABC]\] (gqep-executor|pvl-layer)'; then
         ok=0
-        report+=('[SELFTEST] ADR-exempted edge (gqep-executor->qeep-protocol / pvl-layer->seccore) wrongly reported')
+        report+=('[SELFTEST] legal/ADR-exempted edge (gqep-executor->qeep-protocol downward / pvl-layer->seccore) wrongly reported')
     fi
 
     if [ "$ok" -eq 1 ]; then

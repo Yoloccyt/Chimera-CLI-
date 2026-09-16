@@ -10,10 +10,15 @@
 #                              {nexus-contracts, nexus-core, event-bus,
 #                              model-router} plus the inner-ring whitelist itself.
 #   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
-#                              crate ($expectedCrates); the 2-item ADR exception
+#                              crate ($expectedCrates); the 1-item ADR exception
 #                              table is exempted
-#                              (gqep-executor->qeep-protocol ADR-048,
-#                               pvl-layer->seccore dynamic-blacklist feature).
+#                              (pvl-layer->seccore dynamic-blacklist feature).
+#                              The former gqep-executor->qeep-protocol ADR-048
+#                              entry was retired in wave 3c (M12, ADR-185 D4):
+#                              L7->L4 is a legal DOWNWARD edge that Check B
+#                              never flags, so the exemption was a no-op pad.
+#                              KEEP IN SYNC with check_dependency_rules.sh
+#                              is_adr_exception (DRIFT WARNING above).
 #   C. Graph completeness    - every referenced workspace dependency must exist
 #                              in the layer map; layer map must cover the whole
 #                              workspace (static count + disk scan).
@@ -131,12 +136,13 @@ $innerBase = @{
 }
 
 # ADR exception table: "from,to" -> reference. Exempted from check B.
-# gqep-executor (L7) -> qeep-protocol (L4): ADR-048 accepted cross-layer
-#   penetration (synchronous low-latency entangle call, <10us).
+# WHY 只剩 1 条:gqep-executor(L7)->qeep-protocol(L4) 条目已于 wave 3c 收编移除
+# (M12/ADR-185 D4)——Check B 只 flag 向上依赖,该向下边无豁免天然合法,例外只剩
+# no-op 安全垫;保留反而误导后人。移除后双门仍绿 = 收编的可执行证据。
+# KEEP IN SYNC with check_dependency_rules.sh is_adr_exception.
 # pvl-layer (L7) -> seccore (L4): gated behind pvl-layer optional feature
 #   `dynamic-blacklist` (seccore declared optional = true).
 $adrExceptions = @{
-    'gqep-executor,qeep-protocol' = 'ADR-048 cross-layer penetration (accepted tech debt)'
     'pvl-layer,seccore' = 'optional feature dynamic-blacklist (seccore optional = true)'
 }
 
@@ -350,8 +356,9 @@ if ($SelfTest) {
     #   repo-wiki  (inner, L5) -> ghost-crate (undefined) : GAP-C
     #   chimera-tui (L10)      -> pvl-layer   (L7)        : GAP-E (PS-2 2.2)
     # Legal edges that must NOT be reported:
-    #   gqep-executor -> qeep-protocol (ADR-048),
-    #   pvl-layer     -> seccore (feature dynamic-blacklist).
+    #   gqep-executor -> qeep-protocol (legal DOWNWARD L7->L4 since ADR-048
+    #                    wave-3c retirement, ADR-185 D4 -- no exemption needed),
+    #   pvl-layer     -> seccore (ADR exception, feature dynamic-blacklist).
     # -------------------------------------------------------------------------
     $declaredDeps = @{}
     $mockGraph = @{
@@ -379,10 +386,11 @@ if ($SelfTest) {
     if (@($gapBLines | Where-Object { $_ -like '*model-router (L1) -> nmc-encoder*' }).Count -eq 0) { $selftestOk = $false; $report += '[SELFTEST] missing GAP-B for model-router -> nmc-encoder' }
     if (@($gapCLines | Where-Object { $_ -like '*ghost-crate*' }).Count -eq 0) { $selftestOk = $false; $report += '[SELFTEST] missing GAP-C for undefined dep ghost-crate' }
     if (@($gapELines | Where-Object { $_ -like '*chimera-tui (L10) -> pvl-layer*' }).Count -eq 0) { $selftestOk = $false; $report += '[SELFTEST] missing GAP-E for chimera-tui -> pvl-layer' }
-    # ADR-exempted edges must never surface as gaps.
+    # 合法/例外边不得冒出 gap:gqep-executor->qeep-protocol 向下边(ADR-048 收编后
+    # 无豁免天然合法)与 pvl-layer->seccore ADR 例外,在 mock 图中均存在。
     if (@($report | Where-Object { $_ -match '^\[GAP-[ABC]\] (gqep-executor|pvl-layer)' }).Count -gt 0) {
         $selftestOk = $false
-        $report += '[SELFTEST] ADR-exempted edge (gqep-executor->qeep-protocol / pvl-layer->seccore) wrongly reported'
+        $report += '[SELFTEST] legal/ADR-exempted edge (gqep-executor->qeep-protocol downward / pvl-layer->seccore) wrongly reported'
     }
 
     if ($selftestOk) {
