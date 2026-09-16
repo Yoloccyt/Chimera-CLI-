@@ -1260,7 +1260,7 @@ pub const MAX_AGENT_FAILURES: usize = 5;
 /// # 闭环意义(评估报告 F-6,证据修正版)
 /// 该事件此前**已到达 TUI**(`publish_critical` 双通道含 broadcast,
 /// `bus.rs:844-846`;TUI 订阅无主题过滤,`subscriber.rs:57`)且严重度已判为
-/// Critical(`classification.rs:56-59`),EventStream 会以 Critical 样式显示。
+/// Critical(`registry.rs:234`),EventStream 会以 Critical 样式显示。
 /// 真实缺口是**无聚合**:失败随滚动消失,安全面板无态势、状态栏无告警。
 /// 本同步器补齐这一层,使"一闪而过"变为"持久可见"。
 ///
