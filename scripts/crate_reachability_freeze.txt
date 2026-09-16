@@ -33,7 +33,11 @@ auto-dpo         # one of the three L5 evolution-loop crates, zero production in
 # 按 ADR-161 决策 4 与 revert 同 PR 回登记;重路由候选 = chimera-cli 组合根(ADR-161 路径①)。
 scc-cache        # incoming edges: gea-activator / hcw-window dev-dep + mca-gateway (island)                 ADR-160  [ADR-171 T9: accepted pseudo-reachable production edge mca-gateway->scc-cache (L10->L3, CacheAffinityIntegration), edge kept, consumer side is island]
 csn-substitutor  # capability degradation chain, incoming edge: root E2E dev-dep only                        ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
-gea-activator    # incoming edge: root E2E dev-dep only (layer corrected to L9 in Phase 6 W0)                ADR-160
+# M12 2026-09-16:gea-activator Frozen entry REMOVED (wave 3c, ADR-185):chimera-mas
+# 新增生产边消费(L9->L9 同层,gea_bridge 64 维桥接 + orchestrator 委托前激活 +
+# delegation 结果回填 + feedback 转发闭环,fresh hold 判据见 ADR-179);
+# 重路由候选 = chimera-cli 组合根(ADR-161 路径①)经 mas 间接达成。
+# Ratchet shrink-only: frozen 14 -> 11 (与下行 gqep/qeep 同批)。
 sesa-router      # incoming edge: root E2E dev-dep only                                                      ADR-160
 # M10 2026-09-16:转正尝试被依赖铁律驳回(parliament 属内环,decb 不在内环白名单,Check A 违规),
 # 按 ADR-161 决策 4 与 revert 同 PR 回登记;重路由候选 = efficiency-monitor(L9->L8 向下,非内环)。
@@ -52,13 +56,14 @@ chtc-bridge      # 5 IDE adapters, incoming edge: root E2E dev-dep only         
 mtpe-executor    # incoming edge: gea-activator dev-dep only                                                 ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
 ssra-fusion      # incoming edge: root E2E dev-dep only (layer corrected to L7 in Phase 6 W0)                ADR-160
 # --- transitively unreachable (2026-09-11): the capability chain rooted at the frozen
-# island gea-activator. Each has exactly ONE production consumer, and that consumer is
-# itself unreachable, so neither was ever listed while the ratchet reported new_gaps=0.
-# Registered per ADR-160 path 3 (visible debt). Repaying them means wiring the whole
-# chain (gea-activator -> gqep-executor -> qeep-protocol) from the composition root,
-# which is an architecture decision, not a mechanical one.
-gqep-executor    # transitively unreachable: sole production consumer gea-activator is itself a frozen island (line 34 above)  ADR-160
-qeep-protocol    # transitively unreachable: sole production consumer gqep-executor (ADR-048 exception edge) is itself unreachable  ADR-160/ADR-048
+# island gea-activator. Registered per ADR-160 path 3 (visible debt). Repaying them
+# means wiring the whole chain (gea-activator -> gqep-executor -> qeep-protocol)
+# from the composition root.
+# M12 2026-09-16:gqep-executor + qeep-protocol Frozen entries REMOVED (wave 3c,
+# ADR-185):整条岛链三 crate 全量偿还——gea 经 mas 生产边(见上行 REMOVED 注记),
+# gqep 经 chimera-cli 生产边(doctor 8 探针并行 gather,gather_collected<T>),
+# qeep 经 gqep 既有生产边(ADR-048 例外已收编为正常向下边)传递转正。
+# Ratchet shrink-only: frozen 14 -> 11;reachable 27 -> 30,new_gaps=0 实测。
 
 # --- T11 island-repayment batch 1 registration (ADR-171, 2026-09-02) ---
 # Repayment progress is REGISTERED here only; NO wiring is performed in this
