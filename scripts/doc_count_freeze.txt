@@ -24,10 +24,14 @@
 
 nexus_event_variants = 145
 event_topic_variants = 10
-workspace_crates = 43
+workspace_crates = 42
 
 # --- drift registry: doc declarations currently disagreeing with the lock ---
 # format: drift = <file> | <metric> | <declared>
 # (these files are outside this mission's edit scope - registered as visible
 # debt; remove an entry when the doc it points at gets fixed)
 drift = agents.md | nexus_event_variants | 144
+# M10 2026-09-16: acb-governor 退役(ADR-182),workspace 43->42;agents.md 为
+# untracked 本地文件(md 入库政策),本分支不可修,登记为可见债;
+# 主检出修复后删除本行(与 144 条目同 lifecycle)。
+drift = agents.md | workspace_crates | 43
