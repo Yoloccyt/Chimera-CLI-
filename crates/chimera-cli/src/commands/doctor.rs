@@ -90,35 +90,36 @@ pub struct HealthSummary {
 ///
 /// `json` flag(Task 1.7):`true` 时输出 JSON envelope(完整 HealthReport)。
 /// `fix`(Task 1.13.4):`true` 时自动修复可修复项(当前仅配置文件缺失)。
+///
+/// 兼容层 thin wrapper(M4 先例):独立调用场景经组合根装配 ephemeral
+/// AppContext;dispatch 主链调 [`execute_with_ctx`] 共享 dispatch 级上下文。
 pub async fn execute(cfg: &ChimeraConfig, json: bool, fix: bool) -> Result<()> {
-    tracing::info!(fix, "系统健康检查(8 维度)");
+    let ctx = crate::composition::build(cfg)?;
+    execute_with_ctx(&ctx, cfg, json, fix).await
+}
 
-    // 依次执行 8 项检查
-    let mut checks = Vec::with_capacity(8);
+/// doctor 子命令主体 — 8 探针经组合根共享 GQEP 执行器并行 gather(M12 / ADR-185 D3)
+///
+/// ## 并行化决策(WHY GQEP 而非 tokio::join!)
+///
+/// - **语义不变**:8 项检查内容/状态/汇总与串行版逐项一致(索引 tag 按注册序
+///   还原,FuturesUnordered 完成序不保证输入序);仅时序由串行改并行
+/// - **零孤儿治理**:探针 future 全部经 QEEP `entangle` 包裹(单操作 5s 超时 +
+///   OrphanGuard),比裸 `join!` 多双层超时防护,符合 §6.1 红线
+/// - **可观测**:gather 在共享总线发布 `GatherCompleted`(total/succeeded/failed),
+///   TUI/审计可订阅;探针恒 `Ok` 返回(检查失败是结果而非错误),失败 tail 仅
+///   可能来自 gqep 超时——以 FAIL 占位兜底,报告恒 8 项
+/// - **可回滚**:单 commit revert 即恢复串行路径(本函数整体替换)
+pub async fn execute_with_ctx(
+    ctx: &crate::composition::AppContext,
+    cfg: &ChimeraConfig,
+    json: bool,
+    fix: bool,
+) -> Result<()> {
+    tracing::info!(fix, "系统健康检查(8 维度, GQEP 并行 gather)");
 
-    // 1. 配置文件检查
-    checks.push(check_config_file(fix).await);
-
-    // 2. Cargo.lock 依赖完整性
-    checks.push(check_cargo_lock().await);
-
-    // 3. SQLite 数据库路径
-    checks.push(check_sqlite_path().await);
-
-    // 4. MCP 网格连通性
-    checks.push(check_mcp_mesh().await);
-
-    // 5. EventBus 订阅者
-    checks.push(check_event_bus().await);
-
-    // 6. LLM Provider 健康度(Wave 2 Task 4)— 复用 llm::List 的 8-name fallback
-    checks.push(check_llm_provider(cfg).await);
-
-    // 7. 认证密钥（WI-02: API key 环境变量自检，不泄露密钥值）
-    checks.push(check_auth_keys());
-
-    // 8. 沙箱（WI-02: SecCore 进程内沙箱可用性 + 命令分类）
-    checks.push(check_seccore());
+    let checks = run_probes_parallel(ctx, cfg, fix).await;
+    let probe_total = checks.len() as u32;
 
     // 汇总统计
     let summary = HealthSummary {
@@ -136,6 +137,10 @@ pub async fn execute(cfg: &ChimeraConfig, json: bool, fix: bool) -> Result<()> {
             .count(),
         total: checks.len(),
     };
+    debug_assert_eq!(
+        summary.total, probe_total as usize,
+        "报告项数应与探针数一致(兜底占位也计数)"
+    );
 
     let report = HealthReport { checks, summary };
 
@@ -147,6 +152,60 @@ pub async fn execute(cfg: &ChimeraConfig, json: bool, fix: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// 8 探针并行 gather(GQEP `gather_collected<(usize, HealthCheck)>`)
+///
+/// 索引 tag 设计:每个探针 future 携 `(索引, 结果)`——gather 返回完成序的
+/// values,此处按索引还原注册序,保证报告输出顺序与串行版逐字节一致。
+/// 超时空底:探针恒 `Ok`,值缺失仅源于 gqep 单操作/全局超时,以 FAIL 占位
+/// 保证报告恒 8 项(该 tail 实践中不可达:LLM 探针自带 3s 内部超时,
+/// 其余探针均快路径)。
+async fn run_probes_parallel(
+    ctx: &crate::composition::AppContext,
+    cfg: &ChimeraConfig,
+    fix: bool,
+) -> Vec<HealthCheck> {
+    const PROBE_COUNT: usize = 8;
+
+    // cfg 以 owned clone 移入 future('static 约束);Clone 代价 = 一次配置结构拷贝,
+    // 远小于 LLM 探针 238ms 睡眠——并行净收益不受影响
+    let cfg_owned = cfg.clone();
+
+    // 探针注册序 = 报告输出序(与串行版一致,输出内容零变化)
+    let probes: Vec<gqep_executor::GqepFuture<(usize, HealthCheck)>> = vec![
+        Box::pin(async move { Ok((0, check_config_file(fix).await)) }),
+        Box::pin(async move { Ok((1, check_cargo_lock().await)) }),
+        Box::pin(async move { Ok((2, check_sqlite_path().await)) }),
+        Box::pin(async move { Ok((3, check_mcp_mesh().await)) }),
+        Box::pin(async move { Ok((4, check_event_bus().await)) }),
+        Box::pin(async move { Ok((5, check_llm_provider(&cfg_owned).await)) }),
+        Box::pin(async move { Ok((6, check_auth_keys())) }),
+        Box::pin(async move { Ok((7, check_seccore())) }),
+    ];
+
+    let outcome = ctx.gqep.gather_collected(probes).await;
+    tracing::debug!(
+        total = outcome.stats.total,
+        succeeded = outcome.stats.succeeded,
+        failed = outcome.stats.failed,
+        latency_ms = outcome.stats.latency_ms,
+        "doctor 探针 gather 完成"
+    );
+
+    // 按索引还原注册序;缺失索引(FAIL 占位)仅来自 gqep 超时 tail
+    let mut by_index: std::collections::HashMap<usize, HealthCheck> =
+        outcome.values.into_iter().collect();
+    let mut checks = Vec::with_capacity(PROBE_COUNT);
+    for i in 0..PROBE_COUNT {
+        checks.push(by_index.remove(&i).unwrap_or_else(|| HealthCheck {
+            name: "probe_timeout",
+            description: "探针执行超时",
+            status: HealthStatus::Fail,
+            message: format!("探针 #{i} 未在 gather 时限内完成(gqep 超时兜底)"),
+        }));
+    }
+    checks
 }
 
 /// 检查 1:配置文件路径与有效性(SubTask 1.13.1.1)
@@ -624,5 +683,35 @@ mod tests {
         // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 8 维检查
         // 集成层在 tests/cli.rs::test_doctor_json_outputs_report_envelope
         // 断言 `"total": 8` 以补充此处的覆盖。
+    }
+
+    /// M12 / ADR-185 D3 验收③:并行 gather 路径产生 GatherCompleted(total=8) 事件
+    ///
+    /// 组合根共享 bus 订阅断言:8 探针经 gqep gather_collected 并行执行,
+    /// gqep 在 gather 完成时发布 GatherCompleted(total, succeeded, failed);
+    /// 探针 future 恒 Ok(检查失败是结果而非错误),故 succeeded 恒 = 8。
+    #[tokio::test]
+    async fn test_execute_with_ctx_emits_gather_completed_with_eight_probes() {
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        // §4.4 反模式 3:subscribe 必须在 gather 调用之前同步调用
+        let mut rx = ctx.bus.subscribe();
+
+        execute_with_ctx(&ctx, &ChimeraConfig::default(), true, false)
+            .await
+            .expect("doctor 并行 gather 路径应成功");
+
+        let event = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("500ms 内应收到 GatherCompleted")
+            .expect("recv 失败");
+        match event {
+            event_bus::NexusEvent::GatherCompleted {
+                total, succeeded, ..
+            } => {
+                assert_eq!(total, 8, "探针总数应为 8");
+                assert_eq!(succeeded, 8, "探针恒 Ok,应全部成功");
+            }
+            other => panic!("期望 GatherCompleted,实际 {}", other.type_name()),
+        }
     }
 }

@@ -60,6 +60,12 @@ mca-gateway = { workspace = true, optional = true }
 # chimera-mas:L9 Quest 层,Task 1.10 chimera agent 真实接入多 Agent 协同子系统(§2.2 L10→L9 允许)
 # 提供 RootOrchestrator / AgentTask / AgentHandle / HeartbeatInfo 类型供 agent list/spawn/inspect/cancel 使用
 chimera-mas = { workspace = true }
+# M12 / ADR-185 D1:gea-activator(L9 Quest 层,经 mas 桥接消费)——组合根装配共享
+# GeaActivator 实例注入 mas orchestrator(委托前门控激活);L10→L9 向下依赖合规(§2.2)
+gea-activator = { workspace = true }
+# M12 / ADR-185 D3:gqep-executor(L7 Execution 层)——doctor 8 探针并行 gather 化
+# (gather_collected<T> 泛型带值聚集);L10→L7 向下依赖合规(§2.2,先例:pvl-layer)
+gqep-executor = { workspace = true }
 # PROBE P2.2: 选择器学习编排器依赖（L10 → 学习层/L2 向下依赖允许）
 omega-learner = { workspace = true }
 hcw-window = { workspace = true }

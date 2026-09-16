@@ -147,7 +147,10 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
             agent::execute_with_ctx(&ctx, action, cli.json, *parallel, &perm, cli.dry_run).await
         }
         // Task 1.13: 系统健康检查 — 全局 --json 优先,子命令级 --json 作为兼容回退
-        Some(Commands::Doctor { json, fix }) => doctor::execute(cfg, cli.json || *json, *fix).await,
+        // M12 / ADR-185 D3:doctor 已迁共享 AppContext,8 探针经 gqep 并行 gather
+        Some(Commands::Doctor { json, fix }) => {
+            doctor::execute_with_ctx(&ctx, cfg, cli.json || *json, *fix).await
+        }
         // Task 1.14: 生成 shell 补全脚本 — 不消费 json/perm,直接输出到 stdout
         Some(Commands::Completions { shell }) => completions::execute(*shell).await,
         // Task 2 of spec: LLM Provider 管理 — 全局 --json 传递;perm 供 set-default/strategy 使用
