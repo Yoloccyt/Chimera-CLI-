@@ -63,12 +63,13 @@ pub mod wiki;
 /// 根据 `Cli.command` 路由到对应子命令处理函数。
 /// 无子命令时默认启动 TUI 交互界面,用户可直接输入 `chimera` 进入可视化面板。
 ///
-/// # 组合根共享装配（M4-P1）
+/// # 组合根共享装配（M4-P1 + M9）
 /// dispatch 先经 [`crate::composition::build`] 装配 AppContext（bus+engine
-/// 一揽子，C12 唯一装配点），chat/run/exec/quest/parliament/agent 六命令
+/// 一揽子，C12 唯一装配点），chat/run/exec/quest/parliament/agent/tui 七命令
 /// 共享同一 AppContext（事件经共享 bus 对进程内订阅者可见，C3 Critical 旁路
 /// 由 build() 标准装配保证）。serve/acp 走自身 `build_app_server` 路径
-/// （本波次保留不动）；tui 仍各自装配（下一波次显式排除）。
+/// （本波次保留不动）；tui 臂带检查点引擎基于共享 bus 臂内构造
+/// （B1 行为零变化，见 commands/tui.rs `assemble_quest_stack`）。
 ///
 /// 注:参数命名为 `cfg` 而非 `config`,避免遮蔽 `pub mod config;` 声明的模块名,
 /// 否则 `config::execute(...)` 会被解析为对 `&ChimeraConfig` 参数的方法调用。
@@ -106,15 +107,15 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         // Task 1.5: chat REPL 不消费 json flag(REPL 内部统一人类可读),
         // 但消费 perm(--no-permission 自动允许 tool 调用,CI 友好)
         Some(Commands::Chat) => chat::execute_with_ctx(&ctx, cli, cfg).await,
-        // v3-engine M2(ADR-061):传递 `--no-v3-engine` flag 到 tui::execute,
+        // v3-engine M2(ADR-061):传递 `--no-v3-engine` flag 到 tui::execute_with_ctx,
         // 由其设置 CHIMERA_NO_V3_ENGINE 环境变量控制渲染路径回退。
         // WI-01: `--protocol` flag 传递协议模式开关（Quest 生命周期经协议面）
         // TUI 不消费 json/perm(TUI 有自己的渲染管线,不走 stdout 输出 helper)
-        // M4 范围说明: tui 仍各自装配（commands/tui.rs 为下一波次最厚装配点）
+        // M9: tui 臂已收敛至 dispatch 共享 AppContext(与 M4 六臂同先例)
         Some(Commands::Tui {
             no_v3_engine,
             protocol,
-        }) => tui::execute(cfg, *no_v3_engine, *protocol).await,
+        }) => tui::execute_with_ctx(&ctx, cfg, *no_v3_engine, *protocol).await,
         // Quest:全局 --json 优先,子命令级 --json 作为兼容回退(Task 1.7 统一前保留)
         Some(Commands::Quest { action, json }) => {
             quest::execute_with_ctx(&ctx, action, cli.json || *json, &perm, cli.dry_run).await
@@ -154,7 +155,7 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         None => {
             // 无子命令:默认启动 TUI 交互界面(默认启用 v3-engine,非协议模式)
             // --help/--version 由 Clap 在 Cli::parse() 阶段内置处理,不会进入此分支
-            tui::execute(cfg, false, false).await
+            tui::execute_with_ctx(&ctx, cfg, false, false).await
         }
     }
 }
