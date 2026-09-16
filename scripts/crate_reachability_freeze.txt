@@ -39,7 +39,12 @@ decb-governor    # incoming edge: parliament dev-dep only                       
 # deleted (zero production consumers, not even a dev-dep). Ratchet shrink-only:
 # frozen 16 -> 15. Verification: check/test/clippy/dependency rules all green.
 chtc-bridge      # 5 IDE adapters, incoming edge: root E2E dev-dep only                                      ADR-160
-lsct-tiering     # incoming edge: root E2E dev-dep only                                                      ADR-160
+# lsct-tiering Frozen entry REMOVED 2026-09-16 (M10): cmt-tiering declares a
+# production dep and assembles the policy leg (CmtCoordinator::spawn_lsct_policy,
+# crates/cmt-tiering/src/lsct_policy.rs) — QuestCreated -> LSCT decisions ->
+# LsctTierSwitched -> CMT subscriber executes real migration. Real production
+# call path per ADR-179; cycle broken by lsct owning its Tier type (M10).
+# Ratchet shrink-only: frozen 15 -> 14.
 mtpe-executor    # incoming edge: gea-activator dev-dep only                                                 ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
 ssra-fusion      # incoming edge: root E2E dev-dep only (layer corrected to L7 in Phase 6 W0)                ADR-160
 # --- transitively unreachable (2026-09-11): the capability chain rooted at the frozen

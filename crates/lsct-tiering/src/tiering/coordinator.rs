@@ -20,7 +20,6 @@
 
 use std::sync::Mutex;
 
-use cmt_tiering::Tier;
 use dashmap::DashMap;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tracing::{debug, warn};
@@ -31,7 +30,7 @@ use crate::tiering::demoter::LsctDemoter;
 use crate::tiering::profile::compute_target_tier_with_config;
 use crate::tiering::promoter::LsctPromoter;
 use crate::types::{
-    next_colder, next_warmer, tier_rank, TaskLoadProfile, TierAssignment, TierSwitchDecision,
+    next_colder, next_warmer, tier_rank, TaskLoadProfile, Tier, TierAssignment, TierSwitchDecision,
 };
 
 /// LSCT 协调器 — 任务感知能力分层的核心组件
@@ -40,8 +39,7 @@ use crate::types::{
 ///
 /// # 使用示例
 /// ```no_run
-/// use lsct_tiering::{LsctCoordinator, LsctConfig, TaskType, TaskLoadProfile};
-/// use cmt_tiering::Tier;
+/// use lsct_tiering::{LsctCoordinator, LsctConfig, TaskType, TaskLoadProfile, Tier};
 ///
 /// # async fn example() {
 /// let coordinator = LsctCoordinator::new(LsctConfig::default());

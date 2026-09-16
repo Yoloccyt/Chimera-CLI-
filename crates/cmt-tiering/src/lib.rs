@@ -17,6 +17,8 @@
 //! - DQN 迁移经验记录(rl_migration,MigrationExperience 回放队列)
 //! - L3 深度优化:LSCT 订阅闭环(spawn_lsct_subscriber 订阅 LsctTierSwitched
 //!   事件执行实际迁移)+ 四层统计事件(CapabilityTierStatsReported)
+//! - M10(ADR-160 偿还):LSCT 策略装配闭环(spawn_lsct_policy 订阅 QuestCreated,
+//!   reconcile 种子 + handle_quest_created 出策略,补齐决策腿)
 //! - Phase 3 §8.1:金字塔存储映射(pyramid_storage,MemoryPyramidLevel→热温冷冰
 //!   + 分层采样 25/25/50/0 + INV-8 迁移单调性)
 //! - Phase 3 §8.2:经验卡片持久化(experience_card_storage,SQLite 五复合索引
@@ -62,6 +64,11 @@ pub mod hot;
 pub mod ice;
 pub mod migrator;
 pub mod pool;
+/// LSCT 任务感知策略装配(cmt → lsct 生产边,ADR-160 孤岛偿还 M10)
+///
+/// `spawn_lsct_policy` 装配决策腿(QuestCreated → LSCT 策略),
+/// 与既有 `spawn_lsct_subscriber`(执行腿)组成完整闭环。
+pub mod lsct_policy;
 /// Phase 3 §8.1:金字塔存储映射(TencentDB 四层→热温冷冰,ADR-049 内嵌)
 pub mod pyramid_storage;
 pub mod rl_migration;
@@ -81,6 +88,7 @@ pub use decay::{DecayCalculator, DEMOTION_THRESHOLD};
 pub use error::CmtError;
 pub use hot::HotTier;
 pub use ice::IceTier;
+pub use lsct_policy::LsctPolicyHandle;
 pub use migrator::TierMigrator;
 pub use pool::SqlitePool;
 pub use storage_impl::PragmaConn;

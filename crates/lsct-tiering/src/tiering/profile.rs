@@ -12,7 +12,7 @@
 
 use crate::config::LsctConfig;
 use crate::types::{TaskLoadProfile, TaskType};
-use cmt_tiering::Tier;
+use crate::types::Tier;
 
 impl TaskLoadProfile {
     /// 创建任务负载画像

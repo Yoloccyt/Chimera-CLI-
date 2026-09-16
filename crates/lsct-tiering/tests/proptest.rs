@@ -10,7 +10,7 @@
 //! proptest 1.11.0 闭包形式解析不稳定,使用块状命名测试形式
 //! (参考 CHTC-bridge fix, 2026-06-26)
 
-use cmt_tiering::Tier;
+use lsct_tiering::Tier;
 use lsct_tiering::{compute_target_tier, tier_rank, TaskLoadProfile, TaskType};
 use proptest::prelude::*;
 
