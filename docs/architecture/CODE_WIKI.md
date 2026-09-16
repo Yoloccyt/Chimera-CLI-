@@ -2,11 +2,11 @@
 
 > **版本**: v2.28.2-omega (Code Wiki · v2.28.2-omega 基线同步,2026-09-08)
 > **基线代码版本**: v2.28.0-omega 在途(迭代链 v2.0.0-omega `chimera-mas` 多 Agent 协同子系统 → v2.4.0-omega P5 进化闭环 37 crate → v2.14.0~~v2.19.0 P2 Sprint 14 项任务全量交付 → v2.20.0-omega PROBE HCW-Sparse 深度优化完整闭环 P-1~~P3 38 crate(PROBE 阶段基线起点) → v2.21.0-omega CLI LLM 统一入口 → v2.22.0-omega MCA token 效率深度优化 38 个 crate 第 38 个 `mca-gateway` 落地 → v2.24.0-omega Phase 9 三环循环元架构重组收尾 P9-T12 + RUSTSEC-2026-0217/0222/0223 修复 → v2.25.0-omega Milestone B 全部交付 B-1~~B-6(Milestone B 终态) → v2.26.0-omega Concord TUI 重构 W0~~W11 全部收尾(SlashCommandRegistry 53 命令注册 + `/` 一级整合 + Chat/Quest 双轨会话模式 + ApprovalMode 动态 Shift+Tab + i18n 中英门户 + 10 份 ADR-074~~083 落档) →~~ **~~v2.27.0-omega Phase 10 §16 跨层协同闭环审计修复正式发布~~**~~(W1-W7 全波次闭环:经验卡片闭环组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口) →~~ **~~v2.27.1-omega GPG 签名补发 + MCA E2E 超时加固~~**~~(无功能性变更) →~~ **~~v2.28.0-omega(发布提交 af62e44 已落 2026-09-02,tag 待推)Phase 1-5 Ch12 W1-W26 收尾~~**~~(ComputeBridge/ShardedBus/CBMR/CausalGraph + 5 新 crate 至 43 + ADR-095~~160 + ADR-160 可达性棘轮/event\_types 镜像退役);types.rs 单表(metadata() 分类)**145 NexusEvent 变体**)
-> **最后更新**: 2026-09-08(v2.28.2-omega 正式发布:收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;43 crates · 28 生产可达/14 冻结孤岛 + 1 GATED(ADR-177) · 11587 tests(2026-09-02 全量重测,485 test target) · 145 NexusEvent(FC-2 新增 TuiChatHistoryReplaced) · ADR-001\~182 · 覆盖率引擎 cargo-llvm-cov;上一已发 tag v2.28.0-omega → 94499b4(2026-09-06))
+> **最后更新**: 2026-09-16(M10 孤岛偿还批次:acb-governor 按 ADR-182 退役删除、lsct-tiering 经 cmt 生产边转正,冻结孤岛 16→14;decb/scc-cache 转正被依赖铁律驳回——parliament/hcw-window 属内环保守白名单、hcw→scc 为 L2→L3 向上,详见 §3.11 注记与重路由候选;42 crates · 27 生产可达/14 冻结孤岛 + 1 GATED(ADR-177),棘轮口径以 check_crate_reachability.sh 输出为准 · 11587 tests(2026-09-02 全量重测,485 test target) · 145 NexusEvent · ADR-001\~182 · 覆盖率引擎 cargo-llvm-cov;上一已发 tag v2.28.0-omega → 94499b4(2026-09-06))
 > **权威源**: 本文件是架构决策、模块职责、核心类型的唯一权威参考
 > **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 43/43 crate 全绿)
 > **专家签名**: E01 首席架构师 · E02 安全架构师 · E03 记忆系统专家 · E04 路由算法专家 · E05 生产系统专家 · E06 认知科学专家 · E07 任务调度专家 · E08 前端交互专家
-> **三方一致性** (2026-09-08 复核): `Cargo.toml` workspace.package.version = `2.28.2-omega`(代码实况,43 members) ⇔ `CHANGELOG.md` 最新条目 = `[2.28.2-omega] 2026-09-08 正式发布` ⇔ 本文档 = **43 crates(28 生产可达 + 14 冻结孤岛 + 1 GATED,ADR-177)· 145 NexusEvent 变体(types.rs 单表,FC-2 新增 TuiChatHistoryReplaced;event\_types.rs 镜像已退役)· 测试规模 11587 passed / 0 failed**(2026-09-02 当前工作树全量重测,485 test target,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;演进链 v2.20.0 8455 → v2.22.0 9255 → v2.24.0 9590 → v2.25.0 9669 → C 9699 → D 9744 → v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587)
+> **三方一致性** (2026-09-08 复核): `Cargo.toml` workspace.package.version = `2.28.2-omega`(代码实况,43 members) ⇔ `CHANGELOG.md` 最新条目 = `[2.28.2-omega] 2026-09-08 正式发布` ⇔ 本文档 = **42 crates(27 生产可达 + 14 冻结孤岛 + 1 GATED,ADR-177;M10 批次 16→14,2026-09-16 棘轮实测)· 145 NexusEvent 变体(types.rs 单表,FC-2 新增 TuiChatHistoryReplaced;event\_types.rs 镜像已退役)· 测试规模 11587 passed / 0 failed**(2026-09-02 当前工作树全量重测,485 test target,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;演进链 v2.20.0 8455 → v2.22.0 9255 → v2.24.0 9590 → v2.25.0 9669 → C 9699 → D 9744 → v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587)
 > **基线变更触发**: 任何 workspace.member / NexusEvent 变体 / `#[test]` 函数增删必须同步更新本文档的"§1.1 身份标识"与"§3 Crate 索引",并触发 `scripts/check_doc_consistency.ps1` 巡检
 
 ***
@@ -145,7 +145,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 > **v2.4.0-omega 变更**: 35 → 37 crate,新增 L0 `nexus-contracts` (ADR-033) + L6 `omega-learner` (ADR-031)。
 > **MCA M0 变更**: 37 → 38 crate,新增 L10 `mca-gateway` (ADR-065)。
 > **v2.28.0-omega 变更**: 38 → 43 crate,新增 L10 `nexus-app-server`(WI-01)、L3 `session-store`(ADR-141)、L9 `mas-sched`(ADR-145)、L9 `nexus-hook`(ADR-146)、L7 `nexus-subagent`(ADR-148)。
-> **可达性标注(ADR-160 + ADR-177)**: 43 crate = 28 生产可达 + 14 冻结孤岛 + 1 GATED(mca-gateway);孤岛完整清单(含阻塞依赖/解除条件)集中见本节末尾 **§3.11 冻结孤岛清单**,权威源为 `scripts/crate_reachability_freeze.txt`(由 `scripts/check_crate_reachability.sh` 生成,dev-dep 不计入装配面)。
+> **可达性标注(ADR-160 + ADR-177 + M10 批次)**: 42 crate = 27 生产可达 + 14 冻结孤岛 + 1 GATED(mca-gateway;M10 批次 2026-09-16:acb-governor 退役删除 + lsct-tiering 转正,冻结 16→14,棘轮实测 reachable=27/frozen=14/new_gaps=0;decb/scc-cache 转正被依赖铁律驳回，回登记见 §3.11);孤岛完整清单(含阻塞依赖/解除条件)集中见本节末尾 **§3.11 冻结孤岛清单**,权威源为 `scripts/crate_reachability_freeze.txt`(由 `scripts/check_crate_reachability.sh` 生成,dev-dep 不计入装配面)。
 
 ### 3.0 L0 Contracts (1 crate,ADR-033)
 
@@ -717,7 +717,11 @@ L1   Core ─────── nexus-core · event-bus · model-router
 
 ### 3.11 生产可达性与冻结孤岛清单(ADR-160,2026-08-29 棘轮)
 
-> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。43 crate = **28 生产可达 + 14 冻结孤岛 + 1 GATED(mca-gateway，仅 `--features mca` 编译，ADR-177 重分类)**。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
+> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。42 crate = **27 生产可达 + 14 冻结孤岛 + 1 GATED(mca-gateway，仅 `--features mca` 编译，ADR-177 重分类)**。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
+>
+> **M10 偿还批次(2026-09-16,island-batch-promotion-a):冻结孤岛 16 → 14**。有效两岛:`acb-governor` 退役删除(ADR-182,零生产消费者,~2200 LOC);`lsct-tiering` 经 cmt-tiering 生产边转正(`src/lsct_policy.rs` 策略装配闭环,L3→L3 同层;lsct 自持 Tier 类型解除 cmt↔lsct 依赖环,ADR-179 真实生产调用路径)。
+>
+> **被依赖铁律驳回两岛(回登记,follow-up 候选已注)**:`decb-governor` 原计划经 parliament 转正——parliament 属内环 9 crate 白名单,decb 不在白名单亦非 L0/L1 基座(Check A 违规,M7"同层允许"裁定遗漏内环保守规则);`scc-cache` 原计划经 hcw-window 转正——hcw 同属内环,且 L2→L3 为向上依赖(Check B 违规,"L2→L3 向下合法"系方向误判)。重路由候选:decb → efficiency-monitor(L9→L8 向下、非内环,BudgetMetrics 消费 DECB get_stats);scc → chimera-cli 组合根(ADR-161 路径①,原批次 1 计划)。两者消费方均不在 M10 scope,待 tower 开 follow-up mission。
 
 | 孤岛 crate          | 层   | 冻结类别       | 不可达原因(摘要)                                                                                 | 依据      |
 | ----------------- | --- | ---------- | ----------------------------------------------------------------------------------------- | ------- |
@@ -726,18 +730,20 @@ L1   Core ─────── nexus-core · event-bus · model-router
 | `mca-gateway`     | L10 | feature 门控 | 仅根 `mca` feature + ci mda job 编译;无消费方(连 optional 都未声明),ADR-065 决策 6 装配期注入未落地,默认 binary 不含 | ADR-065 |
 | `model-router`    | L1  | 历史孤岛       | 入边仅 auto-dpo(自身孤岛)+ quest-engine dev-dep;规则文档"CAF 已落地"在生产图上不成立                            | ADR-160 |
 | `auto-dpo`        | L5  | 历史孤岛       | L5 进化环三 crate 之一,生产入边为零(RL 闸门禁止 Python 服务实体)                                              | ADR-160 |
-| `scc-cache`       | L3  | 历史孤岛       | 入边仅 gea-activator/hcw-window dev-dep + mca-gateway(孤岛)                                    | ADR-160 |
+| `scc-cache`       | L3  | 历史孤岛       | 入边仅 gea-activator/hcw-window dev-dep + mca-gateway(孤岛);M10 经 hcw 转正被铁律驳回(L2→L3 向上 + 内环保守),重路由候选 = chimera-cli 组合根 | ADR-160 |
 | `csn-substitutor` | L10 | 历史孤岛       | 能力降级链,入边仅根 E2E dev-dep                                                                    | ADR-160 |
 | `gea-activator`   | L9  | 历史孤岛       | 入边仅根 E2E dev-dep(Phase 6 W0 层归属更正为 L9)                                                    | ADR-160 |
 | `sesa-router`     | L6  | 历史孤岛       | 入边仅根 E2E dev-dep                                                                          | ADR-160 |
-| `decb-governor`   | L8  | 历史孤岛       | 入边仅 parliament dev-dep                                                                    | ADR-160 |
-| `acb-governor`    | L8  | 历史孤岛       | 零入边(连 dev-dep 都没有,仅根 workspace.dependencies 声明)                                           | ADR-160 |
+| `decb-governor`   | L8  | 历史孤岛       | 入边仅 parliament dev-dep;M10 经 parliament 转正被铁律驳回(内环保守白名单),重路由候选 = efficiency-monitor | ADR-160 |
 | `chtc-bridge`     | L10 | 历史孤岛       | 5 IDE 适配器,入边仅根 E2E dev-dep                                                                | ADR-160 |
-| `lsct-tiering`    | L3  | 历史孤岛       | 入边仅根 E2E dev-dep                                                                          | ADR-160 |
 | `mtpe-executor`   | L7  | 历史孤岛       | 入边仅 gea-activator dev-dep                                                                 | ADR-160 |
 | `ssra-fusion`     | L7  | 历史孤岛       | 入边仅根 E2E dev-dep(Phase 6 W0 层归属更正为 L7)                                                    | ADR-160 |
+| `gqep-executor`   | L7  | 传递不可达     | 唯一生产消费者 gea-activator 自身冻结(ADR-160 path 3 登记)                                          | ADR-160 |
+| `qeep-protocol`   | L4  | 传递不可达     | 唯一生产消费者 gqep-executor 不可达(ADR-048 特批边)                                              | ADR-160/ADR-048 |
 
 > ★ Insight:**"零 Stub / 全部实现" ≠ "已装配"**。14 个冻结孤岛(另 1 个 GATED=mca-gateway, ADR-177)单测与 E2E 全绿、代码完整,但不在 `chimera-cli` 生产二进制的反向依赖图上——这是"实现完成度"与"装配可达性"两个正交维度。ADR-160 用棘轮把这一差异显式化、冻结化,避免文档把"写了"误报成"上线了"。
+>
+> 已偿还/处置(自本表移除,M10 2026-09-16):`acb-governor`(退役删除,见 §3.8 退役注记)、`lsct-tiering`(cmt-tiering 生产边转正)。历史快照见 git 历史与 freeze 文件 REMOVED 注记。
 
 ***
 
@@ -1409,6 +1415,7 @@ chimera tui
 \| **ADR-159** | **审计遗留项系统性修复治理** | **fix-audit-followup 波次,审计发现项闭环登记** | ✅ 落地 | `ADR-159-audit-followup-governance.md` |
 \| **ADR-160** | **生产可达性棘轮 + event\_types 镜像退役** | **43=28 可达+15 孤岛冻结清单(CI 棘轮,新孤岛未登记即失败);event-bus 分层子枚举镜像 event\_types.rs 退役删除,分类真值源收敛 types.rs 单表;依赖层图 .sh/.ps1 双源追平** | ✅ 落地 | `ADR-160-crate-reachability-gate-and-event-types-retirement.md` + `scripts/check_crate_reachability.sh` + `crate_reachability_freeze.txt` |
 \| **ADR-170** | **正式收录 OMEGA 第 10/11 定律(Ω₁₀-Card / Ω₁₁-Synthesize)** | **Ω₁₀-Card=经验卡片数据结构定律(不可变+版本化+append-only 事件流);Ω₁₁-Synthesize=按需记忆合成算法定律(懒加载+非阻塞+Debug→同错误签名兄弟定向检索);守恒表述升级为"OMEGA 十一定律(九基座+两扩展)";原文编号拟 161 被孤岛偿还占用,顺延 170** | ✅ Accepted(2026-09-02) | `ADR-170-omega-11th-laws.md` |
+\| **ADR-182** | **acb-governor 生产孤岛退役执行** | **首个 crate 级孤岛净减:十步删除清单全量执行(crate 删除/根 manifest/层图 .sh+.ps1/freeze+bench 清单/CODE_WIKI 回写);验证协议 check/test/clippy/dependency rules/棘轮全绿;M10 批次同批 lsct-tiering 经 cmt 生产边转正(16→14),decb/scc 转正被依赖铁律驳回并回登记(内环保守白名单 + L2→L3 方向误判,重路由候选见 §3.11)** | ✅ 执行完成(2026-09-16,M10;原 Proposed 状态随执行闭合) | 物理文件 `ADR-182-acb-governor-retirement-execution.md`(本地未入库,与 ADR-161 同政策);执行证据 = 本表 + freeze REMOVED 注记 + 棘轮输出 |
 
 ### 11.1 ADR 降级追溯
 
@@ -1607,14 +1614,14 @@ my-crate/
 
 > **生成日期**: 2026-07-23(初版)· 2026-07-30(v2.8.0-omega 基线同步)· 2026-07-31(v2.11.0-omega 基线同步)· 2026-08-01(v2.13.0-omega 同步)· 2026-08-02(v2.19.0-omega 同步)· 2026-08-05(v2.21.0-omega 同步)· 2026-08-09(v2.25.0-omega 同步)· 2026-08-11(v2.26.0-omega 同步)· 2026-08-20(v2.27.1-omega 同步)· **2026-08-30(v2.28.0 在途同步)**
 > **生成方法**: superpowers-main 极致深度思考 + staff-engineer-mode 按 surface 路由专家 + 6 个并行 Task 子代理深度源码分析 + 7 处 Cargo.toml 实证修正
-> **分析基线**: `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,2026-09-06 核验,发布提交 af62e44 2026-09-02 已落,最新已发 tag v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag)),**43 members(28 生产可达 + 14 冻结孤岛 + 1 GATED,ADR-177)**,**11587 tests / 0 failed(2026-09-02 当前工作树全量重测,485 test target)**,**145 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)**
+> **分析基线**: `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,2026-09-06 核验,发布提交 af62e44 2026-09-02 已落,最新已发 tag v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag)),**42 members(M10 批次后:27 生产可达 + 14 冻结孤岛 + 1 GATED,ADR-177;批次前 43 = 28 + 14 + 1;decb/scc 转正被铁律驳回回登记,见 §3.11)**,**11587 tests / 0 failed(2026-09-02 当前工作树全量重测,485 test target)**,**145 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)**
 > **时点声明(2026-08-30)**:本节 §13.2~13.6 的**明细数据为 Code Wiki v2.0(2026-07-23)编制时的 v1.x/v2.19 时点快照**(如"TUI 17 面板""38 crate 中 33 依赖"等),保留为历史证据;一切当前口径以本文档 §1(身份/测试规模)、§3(43 crate 索引 + §3.11 孤岛)、§5(145 事件)与顶部三方一致块为准。
 
 ### 13.1 专家团队组建
 
 | 专家 ID   | 角色     | 10+ 年经验方向    | 重点分析 Surface                                                                                                           |
 | ------- | ------ | ------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| **E01** | 首席架构师  | 分布式系统/架构治理   | **11 层架构(L0 + L1-L10) + 43 crate(28 可达/14 孤岛 + 1 GATED)依赖铁律 + ADR 实证**                                                           |
+| **E01** | 首席架构师  | 分布式系统/架构治理   | **11 层架构(L0 + L1-L10) + 42 crate(M10 批次后 27 可达/14 孤岛 + 1 GATED)依赖铁律 + ADR 实证**                                                           |
 | **E02** | 安全架构师  | 零信任/红蓝对抗     | L4 Security(seccore/decay-engine/qeep-protocol)+ OWASP A01-A10                                                         |
 | **E03** | 记忆系统专家 | 神经形态 AI/认知架构 | L2 Memory(nmc-encoder/hcw-window/mlc-engine) + L3 Storage(scc-cache/lsct-tiering/cmt-tiering)                          |
 | **E04** | 路由算法专家 | 运筹学/优化理论     | L6 Router(osa-coordinator/kvbsr-router/faae-router/sesa-router) + EDSB 概率均衡                                            |
