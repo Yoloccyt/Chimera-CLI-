@@ -131,29 +131,20 @@ mod tests {
     #[test]
     fn classification_is_mutually_exclusive() {
         let variants = [
-            SubAgentError::Cancelled {
-                reason: "r".into(),
-            },
-            SubAgentError::Panicked {
-                detail: "d".into(),
-            },
-            SubAgentError::Execution {
-                detail: "d".into(),
-            },
+            SubAgentError::Cancelled { reason: "r".into() },
+            SubAgentError::Panicked { detail: "d".into() },
+            SubAgentError::Execution { detail: "d".into() },
         ];
         for v in &variants {
             // 每个变体恰命中一个分类谓词
-            let hits =
-                v.is_cancelled() as u8 + v.is_panic() as u8 + v.is_execution() as u8;
+            let hits = v.is_cancelled() as u8 + v.is_panic() as u8 + v.is_execution() as u8;
             assert_eq!(hits, 1, "变体 {v} 应恰归属一个分类");
         }
     }
 
     #[test]
     fn as_message_matches_display() {
-        let e = SubAgentError::Execution {
-            detail: "x".into(),
-        };
+        let e = SubAgentError::Execution { detail: "x".into() };
         assert_eq!(e.as_message(), e.to_string());
     }
 
