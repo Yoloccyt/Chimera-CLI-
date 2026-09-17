@@ -734,18 +734,15 @@ L1   Core ─────── nexus-core · event-bus · model-router
 | `auto-dpo`        | L5  | 历史孤岛       | L5 进化环三 crate 之一,生产入边为零(RL 闸门禁止 Python 服务实体)                                              | ADR-160 |
 | `scc-cache`       | L3  | 历史孤岛       | 入边仅 gea-activator/hcw-window dev-dep + mca-gateway(孤岛);M10 经 hcw 转正被铁律驳回(L2→L3 向上 + 内环保守),重路由候选 = chimera-cli 组合根 | ADR-160 |
 | `csn-substitutor` | L10 | 历史孤岛       | 能力降级链,入边仅根 E2E dev-dep                                                                    | ADR-160 |
-| `gea-activator`   | L9  | 历史孤岛       | 入边仅根 E2E dev-dep(Phase 6 W0 层归属更正为 L9)                                                    | ADR-160 |
 | `sesa-router`     | L6  | 历史孤岛       | 入边仅根 E2E dev-dep                                                                          | ADR-160 |
 | `decb-governor`   | L8  | 历史孤岛       | 入边仅 parliament dev-dep;M10 经 parliament 转正被铁律驳回(内环保守白名单),重路由候选 = efficiency-monitor | ADR-160 |
 | `chtc-bridge`     | L10 | 历史孤岛       | 5 IDE 适配器,入边仅根 E2E dev-dep                                                                | ADR-160 |
 | `mtpe-executor`   | L7  | 历史孤岛       | 入边仅 gea-activator dev-dep                                                                 | ADR-160 |
 | `ssra-fusion`     | L7  | 历史孤岛       | 入边仅根 E2E dev-dep(Phase 6 W0 层归属更正为 L7)                                                    | ADR-160 |
-| `gqep-executor`   | L7  | 传递不可达     | 唯一生产消费者 gea-activator 自身冻结(ADR-160 path 3 登记)                                          | ADR-160 |
-| `qeep-protocol`   | L4  | 传递不可达     | 唯一生产消费者 gqep-executor 不可达(ADR-048 特批边)                                              | ADR-160/ADR-048 |
 
 > ★ Insight:**"零 Stub / 全部实现" ≠ "已装配"**。11 个冻结孤岛(另 1 个 GATED=mca-gateway, ADR-177;M12 批次 gea/gqep/qeep 三岛链已转正,见上)单测与 E2E 全绿、代码完整,但不在 `chimera-cli` 生产二进制的反向依赖图上——这是"实现完成度"与"装配可达性"两个正交维度。ADR-160 用棘轮把这一差异显式化、冻结化,避免文档把"写了"误报成"上线了"。
 >
-> 已偿还/处置(自本表移除,M10 2026-09-16):`acb-governor`(退役删除,见 §3.8 退役注记)、`lsct-tiering`(cmt-tiering 生产边转正)。历史快照见 git 历史与 freeze 文件 REMOVED 注记。
+> 已偿还/处置(自本表移除):**M12 2026-09-16(wave 3c,ADR-185)**:`gea-activator`(chimera-mas 生产边 L9→L9 转正,gea_bridge 桥接闭环)、`gqep-executor`(chimera-cli 生产边 L10→L7 转正,doctor 并行 gather)、`qeep-protocol`(gqep 传递转正,ADR-048 例外收编);**M10 2026-09-16**:`acb-governor`(退役删除,见 §3.8 退役注记)、`lsct-tiering`(cmt-tiering 生产边转正)。历史快照见 git 历史与 freeze 文件 REMOVED 注记。
 
 ***
 
