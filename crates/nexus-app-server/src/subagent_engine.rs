@@ -72,29 +72,30 @@ impl SubAgentQuestEngine {
         //
         // 错误映射责任在本层(L10):`QuestError`(L9)与 `SubAgentError`(L7)属不同层,
         // 跨层转换由调用方显式完成(nexus-subagent 不该知道 quest-engine)。
-        let task: SubAgentTask = Box::new(move |_spec, cancel| {
-            if let Some(reason) = cancel.poll() {
-                // 取消四因:任务执行前已被撤销 → 分类为 Cancelled(可静默降级)
-                return Err(SubAgentError::Cancelled {
-                    reason: reason.as_str().to_string(),
-                });
-            }
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(async move {
-                let intent = nexus_core::UserIntent {
-                    intent_id: uuid::Uuid::now_v7().to_string(),
-                    raw_text: goal,
-                    multimodal_inputs: Vec::new(),
-                    risk_level: 0,
-                };
-                let quest = engine.create_quest(intent).await.map_err(|e| {
-                    SubAgentError::Execution {
-                        detail: format!("quest create failed: {e}"),
-                    }
-                })?;
-                Ok(quest.quest_id)
-            })
-        });
+        let task: SubAgentTask =
+            Box::new(move |_spec, cancel| {
+                if let Some(reason) = cancel.poll() {
+                    // 取消四因:任务执行前已被撤销 → 分类为 Cancelled(可静默降级)
+                    return Err(SubAgentError::Cancelled {
+                        reason: reason.as_str().to_string(),
+                    });
+                }
+                let handle = tokio::runtime::Handle::current();
+                handle.block_on(async move {
+                    let intent = nexus_core::UserIntent {
+                        intent_id: uuid::Uuid::now_v7().to_string(),
+                        raw_text: goal,
+                        multimodal_inputs: Vec::new(),
+                        risk_level: 0,
+                    };
+                    let quest = engine.create_quest(intent).await.map_err(|e| {
+                        SubAgentError::Execution {
+                            detail: format!("quest create failed: {e}"),
+                        }
+                    })?;
+                    Ok(quest.quest_id)
+                })
+            });
         self.runtime.spawn(spec, task, from_task)
     }
 

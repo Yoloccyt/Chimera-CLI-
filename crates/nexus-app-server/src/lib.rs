@@ -49,7 +49,9 @@ pub use backend::QuestBackend;
 pub use protocol::{
     JsonRpcError, ProtocolError, RpcCodec, RpcNotification, RpcRequest, RpcResponse,
 };
-pub use server::{AppServer, AppServerConfig, BackendError, CoreBackend, ServerError, SessionSnapshot};
+pub use server::{
+    AppServer, AppServerConfig, BackendError, CoreBackend, ServerError, SessionSnapshot,
+};
 pub use sse::{SseConnection, SseError, SseServer};
 pub use subagent_engine::SubAgentQuestEngine;
 pub use transport::{AppTransport, IoTransport, StdinTransport, TransportError};

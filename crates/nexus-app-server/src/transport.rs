@@ -172,8 +172,8 @@ where
             return Err(TransportError::Eof);
         }
         drop(reader); // 提前释放读锁
-        // decode 失败保留完整 JsonRpcError(code + message,不再拍 .message);
-        // 载荷反序列化失败经 #[from] serde_json::Error 转 Payload(source 链保留)
+                      // decode 失败保留完整 JsonRpcError(code + message,不再拍 .message);
+                      // 载荷反序列化失败经 #[from] serde_json::Error 转 Payload(source 链保留)
         let frame = crate::protocol::RpcCodec::decode_request_line(line.trim())
             .map_err(TransportError::Decode)?;
         serde_json::from_value(frame.params).map_err(|e| TransportError::Payload { source: e })
@@ -263,9 +263,7 @@ mod tests {
     /// 错误变体携带完整 `JsonRpcError`(code + message)。
     #[test]
     fn decode_error_preserves_json_rpc_code() {
-        let je = RpcCodec::decode_request_line("not json")
-            .expect_err("垃圾行必须报 parse_error")
-            ;
+        let je = RpcCodec::decode_request_line("not json").expect_err("垃圾行必须报 parse_error");
         assert_eq!(je.code, -32700, "parse_error 语义");
         let err: TransportError = RpcCodec::decode_request_line("not json")
             .map_err(TransportError::Decode)
@@ -278,7 +276,10 @@ mod tests {
             other => panic!("应为 Decode 变体, 实际: {other}"),
         }
         // Display 链:日志里应能读到 code
-        assert!(err.to_string().contains("-32700"), "Display 应含 code: {err}");
+        assert!(
+            err.to_string().contains("-32700"),
+            "Display 应含 code: {err}"
+        );
     }
 
     /// 载荷反序列化失败保留 serde_json source 链(修复前:format! 拍平)
@@ -286,10 +287,9 @@ mod tests {
     fn payload_error_keeps_source_chain() {
         use std::error::Error as _;
         // 真实失败路径:字符串不是合法 AppOp(from_value 报 serde_json::Error)
-        let payload_err = serde_json::from_value::<nexus_contracts::app::AppOp>(
-            serde_json::json!("not-an-op"),
-        )
-        .expect_err("字符串必须反序列化失败");
+        let payload_err =
+            serde_json::from_value::<nexus_contracts::app::AppOp>(serde_json::json!("not-an-op"))
+                .expect_err("字符串必须反序列化失败");
         let err = TransportError::Payload {
             source: payload_err,
         };
@@ -311,8 +311,7 @@ mod tests {
     /// (F-c 终章回帧的客户端侧契约锁定;端到端 stdin 需泛型化改造,独立项)。
     #[test]
     fn decode_error_frame_is_parseable_rpc_response() {
-        let frame = decode_error_frame(&JsonRpcError::parse_error())
-            .expect("错误帧构造必须成功");
+        let frame = decode_error_frame(&JsonRpcError::parse_error()).expect("错误帧构造必须成功");
         let parsed: RpcResponse = serde_json::from_str(&frame).expect("帧必须可解析");
         assert_eq!(parsed.id, 0, "id=0 约定:无法关联请求");
         assert!(parsed.result.is_none(), "错误帧无 result");
@@ -371,11 +370,9 @@ mod tests {
     async fn recv_op_reports_decode_error_then_accepts_valid_frame() {
         use nexus_contracts::app::ThreadStartParams;
         // 第 1 行 = 坏帧;第 2 行 = 合法 ThreadStart 请求帧
-        let valid = RpcCodec::encode_request(
-            &AppOp::ThreadStart(ThreadStartParams::new("g1", "r1")),
-            7,
-        )
-        .expect("合法帧编码成功");
+        let valid =
+            RpcCodec::encode_request(&AppOp::ThreadStart(ThreadStartParams::new("g1", "r1")), 7)
+                .expect("合法帧编码成功");
         let input = format!("not json\n{valid}\n");
         let transport = IoTransport::with_io(
             std::io::Cursor::new(input.into_bytes()),
@@ -404,10 +401,7 @@ mod tests {
     /// (上批遗留「真实回帧行为以单元级保证」的闭环——I/O 路径现已受测)。
     #[tokio::test]
     async fn send_decode_error_writes_parseable_frame() {
-        let transport = IoTransport::with_io(
-            std::io::Cursor::new(Vec::new()),
-            Vec::new(),
-        );
+        let transport = IoTransport::with_io(std::io::Cursor::new(Vec::new()), Vec::new());
         transport
             .send_decode_error(&JsonRpcError::parse_error())
             .await

@@ -183,8 +183,7 @@ impl RpcCodec {
             jsonrpc: "2.0".into(),
             id,
             result: Some(
-                serde_json::to_value(event)
-                    .map_err(|e| ProtocolError::payload("AppEvent", e))?,
+                serde_json::to_value(event).map_err(|e| ProtocolError::payload("AppEvent", e))?,
             ),
             error: None,
         };
@@ -296,7 +295,10 @@ mod tests {
         let e = ProtocolError::payload("AppOp", sample_serde_error());
         let msg = e.to_string();
         assert!(msg.contains("AppOp"), "阶段载荷名应在文案中: {msg}");
-        assert!(msg.contains("payload serialization failed"), "阶段语义应可读: {msg}");
+        assert!(
+            msg.contains("payload serialization failed"),
+            "阶段语义应可读: {msg}"
+        );
 
         let f = ProtocolError::frame("notification", sample_serde_error());
         let msg = f.to_string();
@@ -344,7 +346,10 @@ mod tests {
         assert!(frame.result.is_some());
 
         let line = RpcCodec::encode_notification(&ev).expect("推送帧编码成功");
-        assert!(line.contains("\"method\":\"app.event\""), "推送帧方法名固定: {line}");
+        assert!(
+            line.contains("\"method\":\"app.event\""),
+            "推送帧方法名固定: {line}"
+        );
         assert!(line.contains("quest_state"), "载荷应携带事件内容: {line}");
     }
 

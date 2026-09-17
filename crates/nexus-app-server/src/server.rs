@@ -467,10 +467,7 @@ impl AppServer {
 
         // 阶段 2:驱动核心 —— 慢路径（LLM / 工具调用）期间不持有任何会话锁
         // 后端产出 Item 流（单向驱动核心）
-        let items = self
-            .backend
-            .submit_turn(&thread, &turn_id, input)
-            .await?;
+        let items = self.backend.submit_turn(&thread, &turn_id, input).await?;
 
         // 阶段 3:回填 Item 历史（再次短暂取锁，锁内无 await）
         {
@@ -505,9 +502,7 @@ impl AppServer {
     }
 
     async fn turn_interrupt(&self, turn_id: &TurnId) -> Result<Vec<AppEvent>, ServerError> {
-        self.backend
-            .interrupt_turn(turn_id)
-            .await?;
+        self.backend.interrupt_turn(turn_id).await?;
         Ok(Vec::new())
     }
 
@@ -1052,7 +1047,9 @@ mod tests {
             .await
             .expect("首个会话应成功");
         let err = server
-            .handle_op(&AppOp::ThreadStart(ThreadStartParams::new("goal-2", "run-2")))
+            .handle_op(&AppOp::ThreadStart(ThreadStartParams::new(
+                "goal-2", "run-2",
+            )))
             .await
             .expect_err("超限应报错");
         assert!(matches!(err, ServerError::SessionLimit(1)), "实际 {err:?}");
