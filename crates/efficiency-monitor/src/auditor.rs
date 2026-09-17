@@ -44,6 +44,7 @@
 //! ```
 
 use dashmap::DashMap;
+use decb_governor::DecbGovernor;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tracing::warn;
 
@@ -157,6 +158,10 @@ pub struct HarnessReport {
     pub reliable_delivery: f32,
     /// 经验沉淀:知识/检查点沉淀率((WikiUpdated + CheckpointSaved) / QuestCompleted)
     pub experience_accumulation: f32,
+    /// 预算纪律(第 6 维,M13):DECB 剩余预算率(1 − 预算利用率)。
+    /// 未注入 DECB 治理器时为中性 0.5;注入后每次报告经
+    /// `DecbGovernor::get_stats()` 真实采样(M13 重路由生产消费路径)。
+    pub budget_discipline: f32,
     /// 本次报告的审计发现集合
     pub findings: Vec<Finding>,
 }
@@ -235,6 +240,13 @@ pub struct RuntimeAuditor {
     event_bus: Option<EventBus>,
     /// 平台接地状态（第 0 维审计输入，Milestone B-4）
     grounding: std::sync::Mutex<Option<GroundingState>>,
+    /// 可选 DECB 治理器句柄(第 6 维预算纪律输入,M13 重路由)
+    ///
+    /// WHY Arc:DecbGovernor 非 Clone(Mutex 字段),生产装配由组合根持有
+    /// 共享实例(chimera-cli experience_loop 构造),审计器经 Arc 消费其
+    /// `get_stats()` 快照。未注入(None)时 budget_discipline 取中性 0.5,
+    /// 与既有五维证据纪律口径一致(零行为变化)。
+    decb: Option<std::sync::Arc<DecbGovernor>>,
 }
 
 impl RuntimeAuditor {
@@ -247,6 +259,7 @@ impl RuntimeAuditor {
             bayesian_config: BayesianConfig::default(),
             event_bus: None,
             grounding: std::sync::Mutex::new(None),
+            decb: None,
         }
     }
 
@@ -277,6 +290,24 @@ impl RuntimeAuditor {
         *self.grounding.lock().unwrap_or_else(|e| e.into_inner()) =
             Some(GroundingState { spec, observed });
         self
+    }
+
+    /// 注入 DECB 治理器句柄（第 6 维预算纪律审计输入，M13 重路由）
+    ///
+    /// 生产装配点：chimera-cli `experience_loop` 组合根构造共享 `DecbGovernor`
+    /// 并经此方法注入（ADR-179 真实生产调用路径——审计报告周期生成时
+    /// `generate_report` 消费 `get_stats()` 预算快照）。未注入时
+    /// `budget_discipline` 维度取中性 0.5（与五维证据纪律同口径，零行为变化）。
+    pub fn with_decb_governor(self, governor: std::sync::Arc<DecbGovernor>) -> Self {
+        Self {
+            decb: Some(governor),
+            ..self
+        }
+    }
+
+    /// DECB 治理器句柄访问器（M13；None = 未注入，第 6 维恒为中性值）
+    pub fn decb_governor(&self) -> Option<&std::sync::Arc<DecbGovernor>> {
+        self.decb.as_ref()
     }
 
     /// 同步记录一个事件 — 按 type_name 累积计数
@@ -427,10 +458,30 @@ impl RuntimeAuditor {
             change_verification,
             reliable_delivery,
             experience_accumulation,
+            // 第 6 维:预算纪律(DECB 剩余预算率,M13)。注入 DECB 时经
+            // get_stats() 真实采样;未注入取中性值(零行为变化)
+            budget_discipline: self.budget_discipline(),
             findings,
         };
         self.publish_report(&report);
         report
+    }
+
+    /// 第 6 维预算纪律评分 — DECB 剩余预算率(1 − 利用率)
+    ///
+    /// WHY 1 − utilization_rate:预算纪律的观测定义是"预算头寸健康度"——
+    /// 利用率越低剩余头寸越充裕,纪律分越高;耗尽趋近 0.0。取 DECB
+    /// `get_stats()` 只读快照(三次轻量锁读取,微秒级),不跨 await 持锁
+    /// (§4.4 红线 1 合规)。未注入 DECB 时返回中性 0.5(证据纪律:
+    /// 无观测既不给满分也不给零分,与五维同口径)。
+    fn budget_discipline(&self) -> f32 {
+        match self.decb.as_ref() {
+            None => NEUTRAL_SCORE,
+            Some(governor) => {
+                let stats = governor.get_stats();
+                (1.0 - stats.utilization_rate).clamp(0.0, 1.0)
+            }
+        }
     }
 
     /// 发布单条 Finding(未绑定 EventBus 时静默跳过)
@@ -779,5 +830,56 @@ mod tests {
         assert_eq!(FindingCategory::EvidenceGap.as_str(), "evidence_gap");
         assert_eq!(EvidenceKind::StaticOnly.as_str(), "static_only");
         assert_eq!(EvidenceKind::RuntimeEvents(1).as_str(), "runtime_events");
+    }
+
+    // --- 第 6 维预算纪律(M13,decb-governor 重路由生产消费) ---
+
+    #[test]
+    fn test_budget_discipline_neutral_without_decb() {
+        // 未注入 DECB 时,第 6 维应取中性 0.5(证据纪律:无观测不给满分也不给零分)
+        let auditor = RuntimeAuditor::new();
+        let report = auditor.generate_report();
+        assert_eq!(report.budget_discipline, NEUTRAL_SCORE);
+        assert!(auditor.decb_governor().is_none());
+    }
+
+    #[test]
+    fn test_budget_discipline_full_headroom_with_zero_consumption() {
+        // 注入 DECB 且零消耗:利用率 0 → 预算纪律 = 1.0(头寸充裕)
+        let governor = std::sync::Arc::new(DecbGovernor::new(Default::default()).unwrap());
+        let auditor = RuntimeAuditor::new().with_decb_governor(governor);
+        let report = auditor.generate_report();
+        assert!((report.budget_discipline - 1.0).abs() < f32::EPSILON);
+        assert!(auditor.decb_governor().is_some());
+    }
+
+    #[test]
+    fn test_budget_discipline_reflects_utilization() {
+        // 注入 DECB 并记录消耗:维度分 = 1 − 利用率(真实 get_stats 消费路径)
+        let governor = DecbGovernor::new(Default::default()).unwrap();
+        // 默认 total_budget_limit = 1_000_000,记录 250_000 → 利用率 0.25
+        governor
+            .record_consumption(&decb_governor::BudgetConsumption {
+                total_cost: 250_000.0,
+                ..decb_governor::BudgetConsumption::zero()
+            })
+            .unwrap();
+        let auditor = RuntimeAuditor::new().with_decb_governor(std::sync::Arc::new(governor));
+        let report = auditor.generate_report();
+        assert!(
+            (report.budget_discipline - 0.75).abs() < 1e-6,
+            "预算纪律应 = 1 - 0.25 = 0.75,实际 {}",
+            report.budget_discipline
+        );
+    }
+
+    #[test]
+    fn test_budget_discipline_with_event_bus_chaining() {
+        // with_event_bus + with_decb_governor 链式装配应同时生效(M13 生产装配形态)
+        let bus = EventBus::new();
+        let governor = std::sync::Arc::new(DecbGovernor::new(Default::default()).unwrap());
+        let auditor = RuntimeAuditor::with_event_bus(bus).with_decb_governor(governor);
+        let report = auditor.generate_report();
+        assert!((report.budget_discipline - 1.0).abs() < f32::EPSILON);
     }
 }

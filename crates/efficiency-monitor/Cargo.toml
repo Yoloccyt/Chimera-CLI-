@@ -27,6 +27,10 @@ event-bus = { workspace = true }
 # L1 Core:领域类型(架构依赖规则要求,本 crate 仅依赖 event-bus + nexus-core)
 # L0 契约:平台接地 PlatformGroundingSpec(Milestone B-4 第 0 维审计输入,L9→L0 允许)
 nexus-contracts = { workspace = true }
+# L8 Parliament:DECB 预算统计消费(M13 重路由,efficiency-monitor→decb-governor
+# L9→L8 向下合法、非内环;RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats,
+# 未接入时中性 0.5 零行为变化)
+decb-governor = { workspace = true }
 
 [dev-dependencies]
 # 性能基准框架(SubTask 4.7)
