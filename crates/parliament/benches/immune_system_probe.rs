@@ -77,7 +77,7 @@ fn prefill_mirror(mirror: &StabilityMirror) {
     // 推入 4 次 BudgetExceeded（触发 MemoryParadox + EvolutionHack budget 项）
     for ts in [1000u64, 2000, 3000, 4000] {
         let event = NexusEvent::BudgetExceeded {
-            metadata: EventMetadata::new("acb-governor"),
+            metadata: EventMetadata::new("decb-governor"),
             budget_type: "token".into(),
             current: 1000,
             limit: 1000,

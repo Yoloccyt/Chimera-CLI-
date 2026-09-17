@@ -35,7 +35,8 @@ pub(crate) fn peak_factor(pricing: &PricingSpec, hour: u8) -> u16 {
 /// WHY 字节/4 启发式: 请求前无真实 token 数,中英文混排下 1 token ≈ 4
 /// 字节是业界通用近似(ADR-070 显式化为按字符字节宽加权,权重可调);
 /// 预估只用于路由权重与预算预检,实际成本以 usage 回算为准(actual_cost),
-/// 偏差由 acb-governor EWMA 自校正。
+/// 偏差由 EWMA 自校正(算法承袭自 ADR-037 acb-governor 设计,该 crate 已按
+/// ADR-182 退役删除 2026-09-16,校准逻辑现由本 crate token_estimate 承载)。
 pub(crate) fn estimate_cost(
     pricing: &PricingSpec,
     request: &AffinityRequest,

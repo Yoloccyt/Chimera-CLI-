@@ -208,7 +208,7 @@ mod tests {
         let mirror = Arc::new(StabilityMirror::new());
         for ts in [1000u64, 2000, 3000] {
             let event = NexusEvent::BudgetExceeded {
-                metadata: EventMetadata::new("acb-governor"),
+                metadata: EventMetadata::new("decb-governor"),
                 budget_type: "token".into(),
                 current: 1000,
                 limit: 1000,
@@ -240,7 +240,7 @@ mod tests {
         }
         for ts in [1000u64, 2000, 3000, 4000] {
             let event = NexusEvent::BudgetExceeded {
-                metadata: EventMetadata::new("acb-governor"),
+                metadata: EventMetadata::new("decb-governor"),
                 budget_type: "token".into(),
                 current: 1000,
                 limit: 1000,
@@ -272,7 +272,7 @@ mod tests {
         }
         for ts in 1000..2000 {
             let event = NexusEvent::BudgetExceeded {
-                metadata: EventMetadata::new("acb-governor"),
+                metadata: EventMetadata::new("decb-governor"),
                 budget_type: "token".into(),
                 current: 1000,
                 limit: 1000,

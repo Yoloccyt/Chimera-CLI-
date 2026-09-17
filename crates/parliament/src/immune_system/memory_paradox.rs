@@ -175,7 +175,7 @@ mod tests {
         // 模拟 3 次 BudgetExceeded
         for ts in [1000u64, 2000, 3000] {
             let event = NexusEvent::BudgetExceeded {
-                metadata: EventMetadata::new("acb-governor"),
+                metadata: EventMetadata::new("decb-governor"),
                 budget_type: "token".into(),
                 current: 1000,
                 limit: 1000,
@@ -208,7 +208,7 @@ mod tests {
         mirror.update_from_event(&csn_event, 1000);
         for ts in [1000u64, 2000, 3000, 4000] {
             let event = NexusEvent::BudgetExceeded {
-                metadata: EventMetadata::new("acb-governor"),
+                metadata: EventMetadata::new("decb-governor"),
                 budget_type: "token".into(),
                 current: 1000,
                 limit: 1000,

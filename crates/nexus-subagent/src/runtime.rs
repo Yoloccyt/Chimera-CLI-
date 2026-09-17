@@ -179,9 +179,7 @@ impl SubAgentRuntime {
     /// `Some((task_id, result))`:`result` 的 Err 为 [`SubAgentError`],
     /// 调用方可 `match` 出取消 / panic / 业务失败并分别降级;`None` = 无更多任务
     /// (或任务 panic 被隔离,同 `JoinSet` 语义)。
-    pub async fn join_next_typed(
-        &mut self,
-    ) -> Option<(String, Result<String, SubAgentError>)> {
+    pub async fn join_next_typed(&mut self) -> Option<(String, Result<String, SubAgentError>)> {
         // JoinError（任务 panic）:跳过（隔离语义,不传播）
         let done = match self.active.join_next().await {
             Some(Ok(d)) => d,
@@ -379,7 +377,11 @@ mod tests {
         let expected = SubAgentError::Execution {
             detail: "same message".into(),
         };
-        assert_eq!(msg, expected.as_message(), "兼容文案必须等于分类错误 Display");
+        assert_eq!(
+            msg,
+            expected.as_message(),
+            "兼容文案必须等于分类错误 Display"
+        );
     }
 
     /// 最低价兜底 — 无档案时仍派发成功（防饿死,ADR-148/RK-P14）

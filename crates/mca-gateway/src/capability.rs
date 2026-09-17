@@ -264,7 +264,8 @@ const MIN_THINKING_TOKENS: u32 = 1;
 ///
 /// WHY 按 TOKEN_PRICE_MICRO 换算: hint ÷ 10 微元/token = 可负担 token 数。
 /// 智能降级(非硬截断): 结果钳制在 [BUDGET_HINT_FLOOR, base]——
-/// 低于地板保最低思考深度(hint 是提示, 硬预算由 acb-governor 治理),
+/// 低于地板保最低思考深度(hint 是提示,硬预算由 decb-governor 治理;
+/// 历史上的 acb-governor 已按 ADR-182 退役删除 2026-09-16),
 /// 高于档位仍封顶在 base。
 ///
 /// WHY 先按 base 钳制再截断: 旧实现 (hint/10) as u32 在 hint > 42.9 亿

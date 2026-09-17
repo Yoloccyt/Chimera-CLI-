@@ -36,7 +36,8 @@ const EVENT_SOURCE: &str = "mca-gateway";
 /// BudgetExceeded 事件的预算类型标识(成本熔断面)
 ///
 /// WHY 字符串契约: BudgetExceeded.budget_type 为自由字符串,消费者
-/// (efficiency-monitor / acb-governor)按此值分流成本面告警。
+/// (efficiency-monitor / decb-governor)按此值分流成本面告警
+/// (历史上的 acb-governor 已按 ADR-182 退役删除 2026-09-16)。
 pub const BUDGET_TYPE: &str = "token_efficiency_cost";
 
 /// 熔断开启时长(秒)— 超限后 30s 内拒绝全部请求,之后进入半开窗口
