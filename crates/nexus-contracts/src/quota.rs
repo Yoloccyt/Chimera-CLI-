@@ -7,7 +7,8 @@
 //! # 设计决策(WHY)
 //!
 //! - **从 chimera-mas 上提**: 命名空间配额需被 L9 `chimera-mas` 与 L8 `parliament` /
-//!   L8 `acb-governor` 共同消费，定义在 L0 避免跨层依赖
+//!   L8 `decb-governor` 共同消费（历史上的 `acb-governor` 已按 ADR-182 退役删除
+//!   2026-09-16），定义在 L0 避免跨层依赖
 //!
 //! - **INV-7 上下文预算界**: `memory_budget_mb` 限制命名空间内存上限，
 //!   任意时刻 `m_total ≤ MEMORY_BUDGET_MB × MEMORY_BUDGET_UTILIZATION`

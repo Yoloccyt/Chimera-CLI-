@@ -662,7 +662,8 @@ pub struct AffinityRequest {
     pub tools: Vec<ToolDecl>,
     /// TTG 思考偏好
     pub thinking_pref: ThinkingPreference,
-    /// 预算提示（微元；None = 不限，由 acb-governor 全局治理兜底）
+    /// 预算提示（微元；None = 不限，硬预算兜底由 decb-governor 治理；
+    /// 历史上的 acb-governor 已按 ADR-182 退役删除 2026-09-16）
     pub budget_hint_micro: Option<u64>,
     /// 路由覆盖（默认零钉选）
     pub overrides: AffinityOverrides,
