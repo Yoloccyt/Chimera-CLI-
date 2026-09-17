@@ -19,6 +19,7 @@
 //! - **`agent cancel` 触发 permission prompt**:取消 Agent 可能影响正在执行的任务,
 //!   必须调用 `permission::confirm` 获取用户确认(除非 `--yes` / `--no-permission`)。
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -68,7 +69,10 @@ pub async fn execute_with_ctx(
     // 共享 bus 来自组合根（与 chimera run 同源的 ephemeral 设计）：
     // RootOrchestrator 绑定共享 bus，delegate 发布的 AgentTaskDelegated
     // 等事件对 dispatch 级订阅者可见（M4-P1 前:私有 bus，事件零可见）。
-    let orchestrator = RootOrchestrator::new(ctx.bus.clone());
+    // M12 / ADR-185 D1:orchestrator 接线组合根共享 GeaActivator ——
+    // delegate() 委托决策点门控激活（ExpertActivated 经共享 bus 广播），
+    // Top-K 专家盖章进任务供执行层回填能力画像（真实调用链，非装配态空转）。
+    let orchestrator = RootOrchestrator::new(ctx.bus.clone()).with_gea(Arc::clone(&ctx.gea));
 
     match action {
         AgentAction::List => list_agents(&orchestrator, json).await,

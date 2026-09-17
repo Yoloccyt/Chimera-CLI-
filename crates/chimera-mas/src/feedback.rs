@@ -10,6 +10,9 @@
 //!   confidence 直接消费;本注册表是 **MAS 层聚合视图**(E01-E08 静态编制 +
 //!   自定义专家),供 PDCA 按专家粒度生成调整建议。
 //! - 两者互补:gea 侧管"激活倾向",mas 侧管"调度/分配倾向"。
+//! - M12 / ADR-185 D1 接线兑现:`with_gea()` 装配后,`record_outcome` 在写
+//!   本注册表的同时逐专家转发 gea `record_expert_outcome`——mas 聚合反馈
+//!   即刻成为 gea 门控 confidence 的输入(上述书面设计的运行时落地)。
 //!
 //! ## 设计要点
 //!
@@ -89,27 +92,74 @@ pub struct ExpertPriorityAdjustment {
 ///
 /// ## 线程安全
 /// `DashMap` 分片锁:反馈上报(写)与 PDCA 查询(读)可并发,无全局锁竞争。
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ExpertFeedbackRegistry {
     /// 专家 ID → 反馈条目
     entries: DashMap<String, ExpertFeedbackEntry>,
+    /// GEA 转发句柄(M12 / ADR-185 D1;None = 未接线,不转发)
+    ///
+    /// WHY Arc:与 orchestrator / DelegationExecutor 共享同一激活器实例;
+    /// GeaActivator 非 Clone(RwLock 字段),共享只能经 Arc。
+    gea: Option<std::sync::Arc<gea_activator::GeaActivator>>,
+}
+
+impl std::fmt::Debug for ExpertFeedbackRegistry {
+    /// 手动实现 Debug(原 derive)——GeaActivator 未派生 Debug,
+    /// 以接线标志 + 条目数概括呈现
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExpertFeedbackRegistry")
+            .field("expert_count", &self.entries.len())
+            .field("gea_wired", &self.gea.is_some())
+            .finish()
+    }
 }
 
 impl ExpertFeedbackRegistry {
-    /// 创建空注册表
+    /// 创建空注册表(未接线 gea)
     pub fn new() -> Self {
         Self {
             entries: DashMap::new(),
+            gea: None,
         }
     }
 
+    /// 接线 GEA 激活器(builder 模式,M12 / ADR-185 D1)
+    ///
+    /// 装配后 `record_outcome` 双写:本注册表(MAS 聚合视图,供 PDCA)+
+    /// gea 激活器(per-expert 运行时统计,供门控 confidence)——兑现本模块
+    /// 文档"与 gea-activator 反馈的关系"的书面设计。未接线时行为不变。
+    pub fn with_gea(mut self, gea: std::sync::Arc<gea_activator::GeaActivator>) -> Self {
+        self.gea = Some(gea);
+        self
+    }
+
+    /// 返回 GEA 转发句柄(未接线返回 None)
+    pub fn gea(&self) -> Option<&gea_activator::GeaActivator> {
+        self.gea.as_deref()
+    }
+
     /// 上报一次专家激活结果反馈(专家不存在时自动创建条目)
+    ///
+    /// 接线 gea 时同步转发 gea `record_expert_outcome`(gea 对未注册专家
+    /// 静默忽略,自定义/未知 ID 不会报错);转发在 DashMap 写锁释放后执行,
+    /// 持锁时间不受 gea 写锁影响(锁粒度隔离,无嵌套持锁)。
     pub fn record_outcome(&self, expert_id: &str, success: bool, latency_ms: f32) {
-        let mut entry = self
-            .entries
-            .entry(expert_id.to_string())
-            .or_insert_with(|| ExpertFeedbackEntry::new(expert_id));
-        entry.record(success, latency_ms);
+        {
+            let mut entry = self
+                .entries
+                .entry(expert_id.to_string())
+                .or_insert_with(|| ExpertFeedbackEntry::new(expert_id));
+            entry.record(success, latency_ms);
+        } // DashMap 分片写锁在此释放
+
+        // MAS 聚合 → gea per-expert 桥接(接线时)
+        if let Some(gea) = &self.gea {
+            gea.record_expert_outcome(
+                &gea_activator::ExpertId::new(expert_id),
+                success,
+                latency_ms,
+            );
+        }
     }
 
     /// 查询专家成功率;未上报过返回 None
@@ -269,5 +319,70 @@ mod tests {
         assert!((adjustments[0].priority_delta - 0.1).abs() < 1e-9);
         assert_eq!(adjustments[1].expert_id, "E02");
         assert!((adjustments[1].priority_delta + 0.1).abs() < 1e-9);
+    }
+
+    // ============================================================
+    // M12 / ADR-185 D1:MAS 聚合 → gea per-expert 转发桥接
+    // ============================================================
+
+    #[test]
+    fn test_record_outcome_forwards_to_gea_when_wired() {
+        // 兑现 feedback.rs:7-12 书面设计:注册表上报同步转发 gea 门控 confidence
+        let gea = crate::gea_bridge::build_mas_activator(
+            crate::gea_bridge::mas_gea_config(),
+            event_bus::EventBus::new(),
+        )
+        .expect("装配应成功");
+        let reg = ExpertFeedbackRegistry::new().with_gea(gea.clone());
+        assert!(reg.gea().is_some());
+
+        reg.record_outcome("E03", true, 12.0);
+        reg.record_outcome("E03", false, 20.0);
+        // MAS 聚合视图不变
+        let rate = reg.success_rate("E03").expect("应存在");
+        assert!((rate - 0.5).abs() < 1e-9);
+        // gea per-expert 视图同步(同一专家同一统计)
+        let gea_rate = gea
+            .expert_success_rate(&gea_activator::ExpertId::new("E03"))
+            .expect("E03 已在注册表中,gea 应可查询");
+        assert!(
+            (gea_rate - 0.5).abs() < 1e-6,
+            "转发后 gea 成功率应与 MAS 视图一致, got {gea_rate}"
+        );
+    }
+
+    #[test]
+    fn test_record_outcome_unknown_expert_silently_ignored_by_gea() {
+        // gea 对未注册专家静默忽略:自定义专家 ID 可入 MAS 注册表,不炸 gea
+        let gea = crate::gea_bridge::build_mas_activator(
+            crate::gea_bridge::mas_gea_config(),
+            event_bus::EventBus::new(),
+        )
+        .expect("装配应成功");
+        let reg = ExpertFeedbackRegistry::new().with_gea(gea);
+        reg.record_outcome("custom-expert-99", true, 5.0);
+        assert_eq!(reg.success_rate("custom-expert-99"), Some(1.0));
+    }
+
+    #[test]
+    fn test_registry_without_gea_unchanged() {
+        // 未接线:record_outcome 行为与接线前完全一致(零行为变化)
+        let reg = ExpertFeedbackRegistry::new();
+        assert!(reg.gea().is_none());
+        reg.record_outcome("E01", true, 5.0);
+        assert_eq!(reg.success_rate("E01"), Some(1.0));
+    }
+
+    #[test]
+    fn test_registry_debug_shows_gea_wired_flag() {
+        let plain = ExpertFeedbackRegistry::new();
+        assert!(format!("{plain:?}").contains("gea_wired: false"));
+        let gea = crate::gea_bridge::build_mas_activator(
+            crate::gea_bridge::mas_gea_config(),
+            event_bus::EventBus::new(),
+        )
+        .expect("装配应成功");
+        let wired = ExpertFeedbackRegistry::new().with_gea(gea);
+        assert!(format!("{wired:?}").contains("gea_wired: true"));
     }
 }

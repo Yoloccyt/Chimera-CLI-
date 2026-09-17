@@ -82,6 +82,23 @@ impl Default for GatherResult {
     }
 }
 
+/// 带值聚集结果 —— `GqepExecutor::gather_collected` 的返回类型(M12 / ADR-185 D3)
+///
+/// 与 stats-only 的 [`GatherResult`] 相比额外保留成功操作的返回值,
+/// 供调用方(如 chimera-cli doctor 探针并行化)按自身 tag 还原顺序。
+/// `stats` 字段语义与 `gather` 的返回值完全一致(同一泛型内核产出)。
+#[derive(Debug, Clone)]
+pub struct GatherCollected<T> {
+    /// 聚集执行统计(与 `gather` 返回的 GatherResult 同语义同字段)
+    pub stats: GatherResult,
+    /// 成功操作的返回值集合
+    ///
+    /// 顺序为流式完成序(**不保证输入序**);失败/超时的操作不计入
+    /// (其错误已入 `stats.errors`)。需要输入序的调用方应自行在
+    /// `T` 内携带序号 tag 并在聚集后排序还原。
+    pub values: Vec<T>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

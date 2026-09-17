@@ -23,7 +23,7 @@ use tracing::warn;
 
 use crate::config::GqepConfig;
 use crate::error::GqepError;
-use crate::types::{GatherResult, GqepFuture};
+use crate::types::{GatherCollected, GatherResult, GqepFuture};
 
 /// GQEP 执行器 — 并发异步操作的聚集汇聚核心
 ///
@@ -97,20 +97,58 @@ impl GqepExecutor {
     /// 聚集结果统计(总数/成功数/失败数/延迟/错误列表)。全局超时时,未完成的
     /// future 计入 `failed`,`errors` 含一个 `GlobalTimedOut`(区分于单操作超时)。
     pub async fn gather(&self, futures: Vec<GqepFuture<String>>) -> GatherResult {
+        self.gather_generic(futures).await.stats
+    }
+
+    /// 聚集执行多个异步操作,并保留成功操作的返回值(泛型版,M12 / ADR-185 D3)
+    ///
+    /// 与 [`gather`](Self::gather) 共享同一泛型内核,行为契约完全一致:
+    /// 相同的 QEEP entangle 孤儿检测、相同的双层超时防护、相同的
+    /// `GatherCompleted` 事件发布;唯一区别是本方法把成功操作的 `T` 值
+    /// 随统计一并返回,供调用方按自身 tag 还原顺序(见 `GatherCollected`)。
+    ///
+    /// WHY 泛型化而非 String 特判:chimera-cli doctor 探针并行化需要回传
+    /// `HealthCheck` 值;泛型 `<T: Send + 'static>` 由 `GqepFuture<T>` 天然承载,
+    /// 零额外 trait 约束。既有 `gather` 收敛为 `.stats` 薄包装,签名与语义零变化。
+    ///
+    /// # 参数
+    /// - `futures`:待聚集的异步操作列表(`Vec<GqepFuture<T>>`)
+    ///
+    /// # 返回
+    /// 带值聚集结果 [`GatherCollected`]——`stats` 为聚集统计(与 `gather` 同语义),
+    /// `values` 为成功操作返回值集合(完成序,不保证输入序)
+    pub async fn gather_collected<T: Send + 'static>(
+        &self,
+        futures: Vec<GqepFuture<T>>,
+    ) -> GatherCollected<T> {
+        self.gather_generic(futures).await
+    }
+
+    /// 泛型聚集内核(`gather` / `gather_collected` 共用,M12)
+    ///
+    /// 流程与原子性保证与原 `gather` 逐行等价(仅 `String` 特化提升为 `<T>`):
+    /// 1. 每个 future 经 `entangle` 包裹(孤儿检测 + 单操作超时)
+    /// 2. `collect_with_deadline` 流式处理 + 全局 deadline 包裹
+    /// 3. 检查 `orphan_reports`,发布 `OrphanCallDetected` 事件(Critical)
+    /// 4. 发布 `GatherCompleted` 事件
+    async fn gather_generic<T: Send + 'static>(
+        &self,
+        futures: Vec<GqepFuture<T>>,
+    ) -> GatherCollected<T> {
         let total = futures.len() as u32;
         let start = Instant::now();
 
         // 将每个 future 经 QEEP entangle 包裹后放入 FuturesUnordered
         // WHY entangle:利用 OrphanGuard 在 future drop 时检测孤儿调用,
         // 同时 entangle 内部用 tokio::time::timeout 提供单操作超时保护
-        let stream: FuturesUnordered<GqepFuture<String>> = FuturesUnordered::new();
+        let stream: FuturesUnordered<GqepFuture<T>> = FuturesUnordered::new();
         for future in futures {
             let qeep = self.qeep.clone();
-            // 将 GqepFuture<String> 经 entangle 包裹,转换为 GqepFuture<String>
+            // 将 GqepFuture<T> 经 entangle 包裹,转换为 GqepFuture<T>
             // 内部做 GqepError <-> QeepError 错误映射(entangle 要求 QeepError)
-            let entangled: GqepFuture<String> = Box::pin(async move {
-                // 将 GqepFuture 转换为 entangle 要求的 Future<Output=Result<String, QeepError>>
-                let mapped: Pin<Box<dyn Future<Output = Result<String, QeepErr>> + Send>> =
+            let entangled: GqepFuture<T> = Box::pin(async move {
+                // 将 GqepFuture 转换为 entangle 要求的 Future<Output=Result<T, QeepError>>
+                let mapped: Pin<Box<dyn Future<Output = Result<T, QeepErr>> + Send>> =
                     Box::pin(async move { future.await.map_err(map_gqep_to_qeep) });
                 // entangle 提供孤儿检测 + 单操作超时
                 qeep.entangle(mapped).await.map_err(map_qeep_to_gqep)
@@ -121,7 +159,8 @@ impl GqepExecutor {
         // 流式收集结果,应用全局 gather deadline(双层超时的外层)
         // WHY 提取为独立方法:将"全局超时包裹"与"统计"职责分离,
         // 保持 gather 主方法简洁(架构红线:单函数 ≤200 行)
-        let (succeeded, failed, errors) = self.collect_with_deadline(stream, start, total).await;
+        let (succeeded, values, failed, errors) =
+            self.collect_with_deadline(stream, start, total).await;
 
         let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
 
@@ -152,7 +191,10 @@ impl GqepExecutor {
             warn!(error = %e, "发布聚集完成事件失败");
         }
 
-        result
+        GatherCollected {
+            stats: result,
+            values,
+        }
     }
 
     /// 流式收集 `FuturesUnordered` 结果,并应用全局 gather deadline
@@ -182,14 +224,16 @@ impl GqepExecutor {
     /// - `total`:总操作数(用于计算被放弃数,发布事件)
     ///
     /// # 返回
-    /// `(succeeded, failed, errors)` 三元组。全局超时时 `errors` 含一个 `GlobalTimedOut`。
-    async fn collect_with_deadline(
+    /// `(succeeded, values, failed, errors)` 四元组——`values` 为成功操作的
+    /// 返回值集合(完成序)。全局超时时 `errors` 含一个 `GlobalTimedOut`。
+    async fn collect_with_deadline<T: Send + 'static>(
         &self,
-        mut stream: FuturesUnordered<GqepFuture<String>>,
+        mut stream: FuturesUnordered<GqepFuture<T>>,
         start: Instant,
         total: u32,
-    ) -> (u32, u32, Vec<GqepError>) {
+    ) -> (u32, Vec<T>, u32, Vec<GqepError>) {
         let mut succeeded: u32 = 0;
+        let mut values: Vec<T> = Vec::new();
         let mut failed: u32 = 0;
         let mut errors: Vec<GqepError> = Vec::new();
 
@@ -200,14 +244,17 @@ impl GqepExecutor {
         if deadline_ms == 0 {
             while let Some(result) = stream.next().await {
                 match result {
-                    Ok(_) => succeeded += 1,
+                    Ok(v) => {
+                        succeeded += 1;
+                        values.push(v);
+                    }
                     Err(e) => {
                         failed += 1;
                         errors.push(e);
                     }
                 }
             }
-            return (succeeded, failed, errors);
+            return (succeeded, values, failed, errors);
         }
 
         let deadline = Duration::from_millis(deadline_ms);
@@ -217,7 +264,10 @@ impl GqepExecutor {
         let collect_all = async {
             while let Some(result) = stream.next().await {
                 match result {
-                    Ok(_) => succeeded += 1,
+                    Ok(v) => {
+                        succeeded += 1;
+                        values.push(v);
+                    }
                     Err(e) => {
                         failed += 1;
                         errors.push(e);
@@ -231,7 +281,7 @@ impl GqepExecutor {
         let outcome = tokio::time::timeout(deadline, collect_all).await;
 
         match outcome {
-            Ok(()) => (succeeded, failed, errors),
+            Ok(()) => (succeeded, values, failed, errors),
             Err(_) => {
                 // 全局超时:记录 GlobalTimedOut(区分单操作超时,供调用者决策)
                 let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -256,7 +306,7 @@ impl GqepExecutor {
                     deadline_ms,
                     elapsed_ms,
                 });
-                (succeeded, failed, errors)
+                (succeeded, values, failed, errors)
             }
         }
     }
@@ -628,5 +678,137 @@ mod tests {
         // 聚集完成后:pending=0, completed=2
         assert_eq!(executor.pending_count(), 0);
         assert_eq!(executor.completed_count(), 2);
+    }
+
+    // ============================================================
+    // gather_collected<T>:泛型带值聚集(M12 / ADR-185 D3)
+    // ============================================================
+
+    /// 创建携带任意值的成功 future(泛型 gather_collected 测试用)
+    fn make_value_future<T: Send + 'static>(value: T) -> GqepFuture<T> {
+        Box::pin(async move { Ok(value) })
+    }
+
+    #[tokio::test]
+    async fn test_gather_collected_returns_all_values() {
+        let executor = GqepExecutor::new(GqepConfig::default(), EventBus::new());
+        let futures: Vec<GqepFuture<u64>> = vec![
+            make_value_future(10u64),
+            make_value_future(20u64),
+            make_value_future(30u64),
+        ];
+        let outcome = executor.gather_collected(futures).await;
+
+        assert_eq!(outcome.stats.total, 3);
+        assert_eq!(outcome.stats.succeeded, 3);
+        assert_eq!(outcome.stats.failed, 0);
+        assert!(outcome.stats.is_all_success());
+        // WHY 排序后比较:FuturesUnordered 为流式完成序,不保证输入序;
+        // 值完整性用集合语义断言(顺序由调用方按自身 tag 还原,见 doctor 桥接)
+        let mut values = outcome.values.clone();
+        values.sort_unstable();
+        assert_eq!(values, vec![10u64, 20u64, 30u64]);
+    }
+
+    #[tokio::test]
+    async fn test_gather_collected_struct_values() {
+        // 泛型价值证明:非 String 的 struct 值可完整穿透聚集层
+        #[derive(Debug, Clone, PartialEq)]
+        struct Probe {
+            name: &'static str,
+            elapsed_ms: u64,
+        }
+        let executor = GqepExecutor::new(GqepConfig::default(), EventBus::new());
+        let futures: Vec<GqepFuture<Probe>> = vec![
+            make_value_future(Probe {
+                name: "config_file",
+                elapsed_ms: 1,
+            }),
+            make_value_future(Probe {
+                name: "event_bus",
+                elapsed_ms: 2,
+            }),
+        ];
+        let outcome = executor.gather_collected(futures).await;
+
+        assert_eq!(outcome.stats.succeeded, 2);
+        assert_eq!(outcome.values.len(), 2);
+        let mut names: Vec<&str> = outcome.values.iter().map(|p| p.name).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["config_file", "event_bus"]);
+    }
+
+    #[tokio::test]
+    async fn test_gather_collected_excludes_failed_values() {
+        // 失败/超时操作不计入 values,但计入 stats.failed(与 GatherResult 语义一致)
+        let executor = GqepExecutor::new(GqepConfig::default(), EventBus::new());
+        let futures: Vec<GqepFuture<u64>> = vec![
+            make_value_future(1u64),
+            Box::pin(async {
+                Err(GqepError::OperationFailed {
+                    operation_id: String::new(),
+                    reason: "boom".to_string(),
+                })
+            }),
+            make_value_future(3u64),
+        ];
+        let outcome = executor.gather_collected(futures).await;
+
+        assert_eq!(outcome.stats.total, 3);
+        assert_eq!(outcome.stats.succeeded, 2);
+        assert_eq!(outcome.stats.failed, 1);
+        assert_eq!(outcome.stats.errors.len(), 1);
+        let mut values = outcome.values.clone();
+        values.sort_unstable();
+        assert_eq!(values, vec![1u64, 3u64]);
+    }
+
+    #[tokio::test]
+    async fn test_gather_collected_publishes_completed_event() {
+        // 泛型路径与 stats-only 路径同事件契约:GatherCompleted(total, succeeded, failed, latency)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let executor = GqepExecutor::new(GqepConfig::default(), bus.clone());
+
+        let futures: Vec<GqepFuture<u8>> = vec![make_value_future(7u8)];
+        let _ = executor.gather_collected(futures).await;
+
+        let event = rx.recv_timeout(Duration::from_millis(100)).await;
+        assert!(
+            matches!(
+                event,
+                Ok(NexusEvent::GatherCompleted {
+                    total: 1,
+                    succeeded: 1,
+                    failed: 0,
+                    ..
+                })
+            ),
+            "泛型 gather 也应发布 GatherCompleted,实际: {:?}",
+            event
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gather_collected_empty() {
+        let executor = GqepExecutor::new(GqepConfig::default(), EventBus::new());
+        let outcome: GatherCollected<u64> = executor.gather_collected(vec![]).await;
+        assert_eq!(outcome.stats.total, 0);
+        assert!(outcome.values.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_gather_still_stats_only_after_generic_refactor() {
+        // 回归守护:泛型化重构后 gather 签名/语义零变化(返回值不含个体值)
+        let executor = GqepExecutor::new(GqepConfig::default(), EventBus::new());
+        let futures = vec![
+            make_success_future("a"),
+            make_success_future("b"),
+            make_failure_future("c"),
+        ];
+        let result = executor.gather(futures).await;
+        assert_eq!(result.total, 3);
+        assert_eq!(result.succeeded, 2);
+        assert_eq!(result.failed, 1);
     }
 }

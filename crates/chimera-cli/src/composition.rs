@@ -21,15 +21,18 @@
 //! `check_event_bus` 是健康探针（验证总线可构造），非命令装配，有意保留。
 
 use crate::config::ChimeraConfig;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use event_bus::EventBus;
 use nexus_app_server::{AppServer, AppServerConfig, QuestBackend};
 use quest_engine::QuestEngine;
+use std::sync::Arc;
 
 /// 集中装配产物 — 依赖注入的一揽子载体（C12）
 ///
 /// `bus` 为 `EventBus`（Clone = Arc 引用计数，廉价共享）；`engine` 为 owned，
 /// 由 [`build_app_server`] 移入 `QuestBackend`（真实状态源归协议宿主持有）。
+/// `gea` / `gqep` 为 M12（ADR-185 D1/D3）接线句柄：Arc 共享实例，
+/// 分别注入 mas orchestrator（委托前门控激活）与 doctor（探针并行 gather）。
 pub struct AppContext {
     /// 事件总线（全部组件共享的通信通道）
     pub bus: EventBus,
@@ -37,6 +40,10 @@ pub struct AppContext {
     pub engine: QuestEngine,
     /// 协议宿主配置（由 ChimeraConfig 派生；字段级映射待协议配置面扩展）
     pub server_config: AppServerConfig,
+    /// GEA 门控激活器（M12 / ADR-185 D1；E01-E08 编制已注册，共享给 mas）
+    pub gea: Arc<gea_activator::GeaActivator>,
+    /// GQEP 聚集执行器（M12 / ADR-185 D3；doctor 探针并行 gather 复用）
+    pub gqep: Arc<gqep_executor::GqepExecutor>,
 }
 
 /// 装配 AppContext（唯一组合根入口，C12）
@@ -65,17 +72,30 @@ pub struct AppContext {
 pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
     let bus = EventBus::new();
     let engine = QuestEngine::new(bus.clone());
+    // M12(ADR-185 D1/D3):gea + gqep 组合根装配——与 bus 同生命周期,
+    // Arc 共享实例注入 mas orchestrator / doctor(非"构造即丢弃":
+    // agent 命令经 with_gea 消费 gea,doctor 经 gather_collected 消费 gqep)。
+    // gea 构造可失败(config 校验),失败即装配失败——mas_gea_config 为
+    // crate 内常量恒合法,此处 ? 仅保留未来配置面扩展的诚实错误路径。
+    let gea =
+        gea_activator::GeaActivator::new(chimera_mas::gea_bridge::mas_gea_config(), bus.clone())
+            .context("组合根装配 GeaActivator 失败(config 校验)")?;
+    // E01-E08 静态编制 → gea 动态画像(幂等,启动期一次性)
+    chimera_mas::gea_bridge::register_mas_experts(&gea);
+    let gqep = gqep_executor::GqepExecutor::new(gqep_executor::GqepConfig::default(), bus.clone());
     // M4-P2: C3 Critical 旁路注册上提为 build() 标准装配步骤（subscribe 在
     // engine 构造后、AppContext 移出前同步完成，§4.4 反模式 3 纪律）。
     spawn_critical_subscriber(&bus);
     tracing::debug!(
         version = %config.nexus.version,
-        "AppContext assembled at composition root (C12, critical bypass wired)"
+        "AppContext assembled at composition root (C12, critical bypass wired, gea+gqep wired)"
     );
     Ok(AppContext {
         bus,
         engine,
         server_config: AppServerConfig::default(),
+        gea: Arc::new(gea),
+        gqep: Arc::new(gqep),
     })
 }
 
@@ -230,6 +250,22 @@ mod tests {
         assert!(
             ctx.bus.has_critical_subscribers(),
             "build() 应注册 Critical 旁路订阅者（M4-P2：C3 全局生效）"
+        );
+    }
+
+    /// M12 / ADR-185 D1×D3 验收：组合根 gea/gqep 句柄真实装配非空转 ——
+    /// gea 已注册 E01-E08 编制（8 专家），gqep 可服务 gather（共享 bus）。
+    #[tokio::test]
+    async fn composition_build_wires_gea_and_gqep() {
+        let ctx = make_ctx();
+        assert_eq!(
+            ctx.gea.expert_count(),
+            8,
+            "组合根 gea 应已注册 E01-E08 静态编制（mas 桥接）"
+        );
+        assert!(
+            ctx.gqep.config().gather_deadline_ms > 0,
+            "gqep 双层超时配置应生效（全局 deadline 启用）"
         );
     }
 }

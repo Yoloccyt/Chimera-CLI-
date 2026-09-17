@@ -171,6 +171,14 @@ pub struct RootOrchestrator {
     /// 后台任务在 spawn 时 Arc::clone,处理 AgentTaskCompleted/Failed 时
     /// 调用 record_terminal() 注册终态,调用 ensure_terminal_state() 校验。
     stability_guard: Arc<StabilityGuard>,
+    /// GEA 门控激活器(M12 / ADR-185 D1;None = 未接线,行为与接线前完全一致)
+    ///
+    /// WHY Arc 包装:与组合根 / DelegationExecutor 共享同一激活器实例
+    /// (激活 → 执行 → 反馈 → confidence 加权门控的闭环要求单一注册表状态);
+    /// GeaActivator 本身非 Clone(RwLock 字段),共享只能经 Arc。
+    /// 接线时 delegate() 在委托决策点做门控激活并把 Top-K 专家盖章进
+    /// AgentTask.activated_experts,供执行层回填能力画像。
+    gea: Option<Arc<gea_activator::GeaActivator>>,
 }
 
 impl RootOrchestrator {
@@ -199,12 +207,34 @@ impl RootOrchestrator {
             event_bus,
             heartbeats: Arc::new(Mutex::new(HashMap::new())),
             stability_guard: Arc::new(StabilityGuard::new()),
+            // M12:默认未接线——RootOrchestrator::new 行为与接线前完全一致
+            gea: None,
         }
     }
 
     /// 返回最大委托深度
     pub fn max_depth(&self) -> usize {
         self.max_depth
+    }
+
+    /// 接线 GEA 门控激活器(builder 模式,M12 / ADR-185 D1)
+    ///
+    /// 接线后 `delegate()` 在委托决策点做门控激活(gea `ExpertActivated`
+    /// 事件经共享总线广播),并把 Top-K 激活专家盖章进任务的
+    /// `activated_experts` 字段,供 DelegationExecutor 完成后回填能力画像。
+    /// 激活失败仅记 warn 日志,不阻断委托(优雅降级,委托主流程零影响)。
+    ///
+    /// ## 参数
+    /// - `gea`: 共享激活器句柄(Arc,须已注册 MAS 专家编制,见
+    ///   `gea_bridge::register_mas_experts` / `gea_bridge::build_mas_activator`)
+    pub fn with_gea(mut self, gea: Arc<gea_activator::GeaActivator>) -> Self {
+        self.gea = Some(gea);
+        self
+    }
+
+    /// 返回 GEA 激活器句柄(未接线返回 None;测试与可观测性探针用)
+    pub fn gea(&self) -> Option<&gea_activator::GeaActivator> {
+        self.gea.as_deref()
     }
 
     /// 返回事件总线引用(供外部订阅事件或检查订阅者数)
@@ -271,9 +301,37 @@ impl RootOrchestrator {
     /// - `MasError::MaxDepthExceeded`: `delegation_depth >= max_depth`
     /// - `MasError::AgentAlreadyExists`: agent_id 重复(不应发生,delegate 生成唯一 ID)
     /// - `MasError::AgentCreationFailed`: AgentContext 初始化或事件发布失败
-    pub async fn delegate(&self, task: AgentTask) -> Result<Vec<AgentHandle>> {
+    pub async fn delegate(&self, mut task: AgentTask) -> Result<Vec<AgentHandle>> {
         // 1. 深度检查(spec SubTask 12.4)
         self.check_depth(task.delegation_depth)?;
+
+        // M12 / ADR-185 D1:委托前 GEA 门控激活(仅接线时;未接线整块跳过,
+        // 行为与接线前完全一致)。激活的 Top-K 专家盖章进任务
+        // (activated_experts),随执行结果由 DelegationExecutor 回填 gea
+        // 能力画像;ExpertActivated 事件经共享总线广播(gea 内部发布)。
+        // 激活失败仅记 warn,委托主流程零影响(优雅降级)。
+        if let Some(gea) = &self.gea {
+            let profile = crate::gea_bridge::task_profile_from_agent_task(&task);
+            match gea.activate(&profile).await {
+                Ok(result) => {
+                    task.activated_experts =
+                        result.activated.iter().map(|id| id.to_string()).collect();
+                    debug!(
+                        task_id = %task.inner.task_id,
+                        activated = ?task.activated_experts,
+                        top_gate_value = result.top_gate_value,
+                        "GEA 门控激活完成,Top-K 专家已盖章进任务"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        task_id = %task.inner.task_id,
+                        error = %e,
+                        "GEA 门控激活失败,委托继续(降级为未激活清单)"
+                    );
+                }
+            }
+        }
 
         // 2. 根据 complexity 决定子 Agent 数量
         let count = sub_agent_count(task.complexity);
@@ -557,6 +615,7 @@ impl std::fmt::Debug for RootOrchestrator {
             .field("max_depth", &self.max_depth)
             .field("factory", &self.factory)
             .field("subscriber_count", &self.event_bus.subscriber_count())
+            .field("gea_wired", &self.gea.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -652,5 +711,75 @@ mod tests {
     #[test]
     fn test_max_agent_depth_constant() {
         assert_eq!(MAX_AGENT_DEPTH, 5);
+    }
+
+    // ============================================================
+    // M12 / ADR-185 D1:GEA 门控激活接线
+    // ============================================================
+
+    /// 构造接线 gea 的 orchestrator(共享总线,事件可断言)
+    fn wired_orchestrator(bus: &EventBus) -> RootOrchestrator {
+        let gea = crate::gea_bridge::build_mas_activator(
+            crate::gea_bridge::mas_gea_config(),
+            bus.clone(),
+        )
+        .expect("装配应成功");
+        RootOrchestrator::new(bus.clone()).with_gea(gea)
+    }
+
+    fn make_delegate_task(task_id: &str, complexity: TaskComplexity) -> AgentTask {
+        AgentTask::new(
+            nexus_core::Task {
+                task_id: task_id.into(),
+                description: "GEA 接线测试".into(),
+                status: nexus_core::TaskStatus::Pending,
+                dependencies: vec![],
+            },
+            complexity,
+            1000,
+            std::time::Duration::from_secs(60),
+            crate::delegation::QualityLevel::Standard,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_delegate_publishes_expert_activated_when_gea_wired() {
+        // 集成断言 ①:接线 gea 后,委托路径在共享总线产生 ExpertActivated
+        let bus = EventBus::new();
+        // §4.4 反模式 3:subscribe 必须在 spawn/调用之前同步调用
+        let mut rx = bus.subscribe();
+        let orchestrator = wired_orchestrator(&bus);
+        assert!(orchestrator.gea().is_some());
+
+        let handles = orchestrator
+            .delegate(make_delegate_task("t-gea-1", TaskComplexity::VeryComplex))
+            .await
+            .expect("委托应成功");
+        assert_eq!(handles.len(), 5, "VeryComplex → 5 子 Agent(行为不变)");
+
+        // gea 内部发布顺序:ExpertActivated 在 ActivationThresholdAdjusted 之前
+        let event = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("应收到事件")
+            .expect("recv 失败");
+        assert_eq!(
+            event.type_name(),
+            "ExpertActivated",
+            "委托路径应产生 ExpertActivated,实际 {}",
+            event.type_name()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delegate_without_gea_keeps_semantics() {
+        // 未接线:委托行为与接线前完全一致(零行为变化红线)
+        let bus = EventBus::new();
+        let orchestrator = RootOrchestrator::new(bus);
+        assert!(orchestrator.gea().is_none());
+        let handles = orchestrator
+            .delegate(make_delegate_task("t-no-gea", TaskComplexity::Simple))
+            .await
+            .expect("未接线委托语义不变");
+        assert_eq!(handles.len(), 1);
     }
 }

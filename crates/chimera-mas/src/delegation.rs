@@ -134,6 +134,15 @@ pub struct AgentTask {
     /// `#[serde(default)]` 保证旧序列化数据(无此字段)反序列化兼容。
     #[serde(default)]
     pub quest_id: Option<String>,
+    /// 委托前经 GEA 门控激活的专家 ID 列表(E01..E08,M12 / ADR-185 D1)
+    ///
+    /// WHY 新增:orchestrator 委托决策点激活的 Top-K 专家须随任务传递到执行层,
+    /// 任务完成后由 DelegationExecutor 按此清单回填 gea 能力画像
+    /// (record_expert_outcome → confidence 加权门控,Ω-Evolve 闭环)。
+    /// 空 Vec = 未接线 gea 或未激活任何专家,执行层跳过回填(零行为变化)。
+    /// `#[serde(default)]` 保证旧序列化数据(无此字段)反序列化兼容。
+    #[serde(default)]
+    pub activated_experts: Vec<String>,
 }
 
 impl AgentTask {
@@ -174,6 +183,8 @@ impl AgentTask {
             parent_agent_id: None,
             delegation_depth: 0,
             quest_id: None,
+            // 默认空:未接线 gea 或未激活专家(执行层回填跳过)
+            activated_experts: Vec::new(),
         }
     }
 
@@ -260,6 +271,19 @@ impl AgentTask {
     /// ```
     pub fn with_priority(mut self, priority: TaskPriority) -> Self {
         self.priority = priority;
+        self
+    }
+
+    /// 设置委托前 GEA 激活的专家清单(builder 模式,M12 / ADR-185 D1)
+    ///
+    /// 通常由 `RootOrchestrator::delegate` 在委托决策点自动盖章,调用方无需
+    /// 手动设置;本 builder 供测试与高级调用方(绕过 orchestrator 直接走
+    /// DelegationExecutor 的路径)显式注入。空清单 = 执行层不做 gea 回填。
+    ///
+    /// ## 参数
+    /// - `expert_ids`: 激活专家 ID 列表(E01..E08 或自定义专家)
+    pub fn with_activated_experts(mut self, expert_ids: Vec<String>) -> Self {
+        self.activated_experts = expert_ids;
         self
     }
 }
@@ -360,6 +384,13 @@ pub struct DelegationExecutor {
     default_timeout: Duration,
     /// 任务执行闭包(注入实际执行逻辑,默认总是成功)
     task_runner: TaskRunner,
+    /// GEA 门控激活器句柄(M12 / ADR-185 D1;None = 未接线,回填跳过)
+    ///
+    /// WHY Option:DelegationExecutor 可独立使用(不经 orchestrator 委托路径),
+    /// 未接线时行为与接线前完全一致(零行为变化);
+    /// 接线后任务完成时按 `AgentTask.activated_experts` 逐专家回填
+    /// gea 能力画像(record_expert_outcome → confidence 影响后续激活)。
+    gea: Option<Arc<gea_activator::GeaActivator>>,
 }
 
 impl DelegationExecutor {
@@ -377,6 +408,7 @@ impl DelegationExecutor {
             event_bus,
             default_timeout,
             task_runner: default_task_runner(),
+            gea: None,
         }
     }
 
@@ -401,7 +433,27 @@ impl DelegationExecutor {
             event_bus,
             default_timeout,
             task_runner,
+            gea: None,
         }
+    }
+
+    /// 接线 GEA 门控激活器(builder 模式,M12 / ADR-185 D1)
+    ///
+    /// 接线后,每个子任务完成时按 `AgentTask.activated_experts`(orchestrator
+    /// 委托决策点盖章)逐专家调用 `GeaActivator::record_expert_outcome`,
+    /// 闭合"激活 → 执行 → 反馈 → confidence 加权门控"的 Ω-Evolve 能力画像闭环。
+    /// 未接线(without gea)时执行语义与接线前完全一致(additive 零行为变化)。
+    ///
+    /// ## 参数
+    /// - `gea`: 共享激活器句柄(Arc,与 orchestrator / 组合根同一实例)
+    pub fn with_gea(mut self, gea: Arc<gea_activator::GeaActivator>) -> Self {
+        self.gea = Some(gea);
+        self
+    }
+
+    /// 返回 GEA 激活器句柄(未接线返回 None;测试与可观测性探针用)
+    pub fn gea(&self) -> Option<&Arc<gea_activator::GeaActivator>> {
+        self.gea.as_ref()
     }
 
     /// 获取默认超时
@@ -543,6 +595,8 @@ impl DelegationExecutor {
             // WHY Arc::clone:§4.4 反模式 5,async 任务共享状态必须用 Arc::clone 而非 clone
             let runner = Arc::clone(&self.task_runner);
             let bus = self.event_bus.clone();
+            // gea 句柄同样 Arc::clone 共享(接线时),供子任务完成后回填能力画像
+            let gea = self.gea.clone();
             // effective_timeout 在 spawn 之前同步调用(借用 task),之后 task 被 move
             let timeout = effective_timeout(&task, self.default_timeout);
             let agent_id = format!("{parent_id}::{agent_id_infix}::{}", task.inner.task_id);
@@ -552,6 +606,7 @@ impl DelegationExecutor {
                 task,
                 runner,
                 bus,
+                gea,
                 timeout,
                 agent_id,
                 parent_id_owned,
@@ -630,6 +685,7 @@ impl std::fmt::Debug for DelegationExecutor {
             .field("default_timeout", &self.default_timeout)
             .field("subscriber_count", &self.event_bus.subscriber_count())
             .field("task_runner", &"<closure>")
+            .field("gea_wired", &self.gea.is_some())
             .finish()
     }
 }
@@ -710,16 +766,25 @@ fn default_task_runner() -> TaskRunner {
 /// - `from`: 执行子任务的 agent_id(`{parent_id}::sub::{task_id}`)
 /// - `to`: 委托方 parent_id
 /// - `metadata.source`: `"chimera-mas:DelegationExecutor"`
+///
+/// ## GEA 能力画像回填(M12 / ADR-185 D1)
+///
+/// 接线 gea 且任务携带 `activated_experts` 时,任务终态(成功/失败/超时)后
+/// 按激活清单逐专家 `record_expert_outcome`(延迟取任务实际耗时)——
+/// gea 侧 confidence 加权门控影响后续激活,闭合 Ω-Evolve 闭环。
 async fn execute_single_task(
     task: AgentTask,
     runner: TaskRunner,
     bus: EventBus,
+    gea: Option<Arc<gea_activator::GeaActivator>>,
     timeout: Duration,
     agent_id: String,
     parent_id: String,
 ) -> TaskResult {
     // 在 task 被 runner 消费前,先 clone 出 task_id 用于事件发布与结果构造
     let task_id = task.inner.task_id.clone();
+    // 同步克隆激活清单(orchestrator 委托决策点盖章),供终态后回填 gea
+    let activated_experts = task.activated_experts.clone();
     let start = std::time::Instant::now();
 
     // tokio::time::timeout 包装执行(零孤儿调用,§6.1 红线)
@@ -730,7 +795,7 @@ async fn execute_single_task(
 
     let duration = start.elapsed();
 
-    match outcome {
+    let result = match outcome {
         // runner 在超时内完成且成功
         Ok(Ok(summary)) => {
             debug!(task_id = %task_id, duration = ?duration, "子任务执行成功");
@@ -797,7 +862,31 @@ async fn execute_single_task(
                 agent_id,
             }
         }
+    };
+
+    // M12 / ADR-185 D1:GEA 能力画像闭环回填(接线且激活清单非空时)。
+    // 成功/失败/超时三态都回填——失败反馈同样降低 confidence(Ω-Evolve)。
+    // gea 对未注册专家静默忽略,自定义/未知 ID 不会报错。
+    if let Some(gea) = &gea {
+        if !activated_experts.is_empty() {
+            let latency_ms = duration.as_secs_f32() * 1000.0;
+            for expert_id in &activated_experts {
+                gea.record_expert_outcome(
+                    &gea_activator::ExpertId::new(expert_id.as_str()),
+                    result.success,
+                    latency_ms,
+                );
+            }
+            debug!(
+                task_id = %result.task_id,
+                success = result.success,
+                experts = ?activated_experts,
+                "GEA 能力画像已按激活清单回填"
+            );
+        }
     }
+
+    result
 }
 
 #[cfg(test)]
@@ -872,5 +961,90 @@ mod tests {
         let timeout = effective_timeout(&task, Duration::from_secs(30));
         // Simple(15s) + acceptable_latency(60s) → 15s
         assert_eq!(timeout, Duration::from_secs(15));
+    }
+
+    // ============================================================
+    // M12 / ADR-185 D1:GEA 能力画像回填
+    // ============================================================
+
+    /// 构造接线 gea 的 executor + 注册 E01-E08 的激活器(测试装配)
+    fn wired_gea_executor() -> (DelegationExecutor, Arc<gea_activator::GeaActivator>) {
+        let gea = crate::gea_bridge::build_mas_activator(
+            crate::gea_bridge::mas_gea_config(),
+            EventBus::new(),
+        )
+        .expect("装配应成功");
+        let executor = DelegationExecutor::new(EventBus::new(), Duration::from_secs(60))
+            .with_gea(Arc::clone(&gea));
+        (executor, gea)
+    }
+
+    #[tokio::test]
+    async fn test_execute_delegation_records_gea_outcome_on_success() {
+        // 接线 gea:任务携激活清单执行成功 → 专家成功率被回填(0.5 中性 → 1.0)
+        let (executor, gea) = wired_gea_executor();
+        let task = make_test_task(TaskComplexity::Simple, Duration::ZERO)
+            .with_activated_experts(vec!["E03".to_string()]);
+        let results = executor
+            .execute_delegation("p-1", vec![task])
+            .await
+            .expect("委托执行应成功");
+        assert!(results[0].success);
+        let rate = gea
+            .expert_success_rate(&gea_activator::ExpertId::new("E03"))
+            .expect("E03 应已回填");
+        assert!(
+            (rate - 1.0).abs() < 1e-6,
+            "成功后成功率应为 1.0, got {rate}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_delegation_records_gea_outcome_on_failure() {
+        // 失败同样回填(confidence 下降通道,Ω-Evolve 需要负反馈)
+        let gea = crate::gea_bridge::build_mas_activator(
+            crate::gea_bridge::mas_gea_config(),
+            EventBus::new(),
+        )
+        .expect("装配应成功");
+        let runner: TaskRunner =
+            Arc::new(|_task: AgentTask| Box::pin(async { Err("注入失败".to_string()) }));
+        let executor =
+            DelegationExecutor::with_runner(EventBus::new(), Duration::from_secs(60), runner)
+                .with_gea(Arc::clone(&gea));
+        let task = make_test_task(TaskComplexity::Simple, Duration::ZERO)
+            .with_activated_experts(vec!["E03".to_string()]);
+        let results = executor
+            .execute_delegation("p-1", vec![task])
+            .await
+            .expect("委托执行框架应成功(失败在结果层)");
+        assert!(!results[0].success);
+        let rate = gea
+            .expert_success_rate(&gea_activator::ExpertId::new("E03"))
+            .expect("E03 应已回填");
+        assert!(
+            (rate - 0.0).abs() < 1e-6,
+            "失败后成功率应为 0.0, got {rate}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_delegation_without_gea_keeps_semantics() {
+        // 未接线:携激活清单也不 panic、不回填(零行为变化)
+        let executor = DelegationExecutor::new(EventBus::new(), Duration::from_secs(60));
+        assert!(executor.gea().is_none());
+        let task = make_test_task(TaskComplexity::Simple, Duration::ZERO)
+            .with_activated_experts(vec!["E03".to_string()]);
+        let results = executor
+            .execute_delegation("p-1", vec![task])
+            .await
+            .expect("未接线 gea 执行语义不变");
+        assert!(results[0].success);
+    }
+
+    #[test]
+    fn test_executor_debug_shows_gea_wired_flag() {
+        let plain = DelegationExecutor::new(EventBus::new(), Duration::from_secs(60));
+        assert!(format!("{plain:?}").contains("gea_wired: false"));
     }
 }

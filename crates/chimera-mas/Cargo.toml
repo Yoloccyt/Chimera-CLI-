@@ -69,6 +69,10 @@ pvl-layer = { workspace = true }
 # ResetAuthorization 问责凭证),不重实现熔断逻辑(ADR-053 备忘录 §五 B-4
 # "编排熔断"职责)。WHY L9→L4 向下依赖合规(§2.2,先例:qeep-protocol)。
 decay-engine = { workspace = true }
+# L9 Quest(同层):GEA 门控专家激活——委托前激活 + 结果回填能力画像闭环
+# (M12 / ADR-185 D1+D2;接线=兑现 feedback.rs:7-12 书面设计,非新造需求)。
+# Check D 内部依赖 11→12 ≤16(WI-29 界内)。
+gea-activator = { workspace = true }
 # rand:shadow 模块 moving block bootstrap 重采样(ADR-053-rev3 决策 3A′-P:
 # L=3/B=10000/percentile 单侧);注入式固定种子保证测试可复现。
 rand = { workspace = true }

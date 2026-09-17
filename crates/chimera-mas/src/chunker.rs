@@ -197,6 +197,9 @@ impl TaskChunker {
                 delegation_depth: task.delegation_depth + 1,
                 // 继承父任务的 Quest 关联(协调度量接线闭环:切块不改变归因)
                 quest_id: task.quest_id.clone(),
+                // 继承父任务的 GEA 激活清单(M12:切块是同一逻辑任务,
+                // 各块执行结果均回填同一批激活专家的能力画像)
+                activated_experts: task.activated_experts.clone(),
             };
             chunks.push(chunk_task);
         }

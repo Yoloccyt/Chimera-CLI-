@@ -28,7 +28,10 @@
 //! - 直接复用 `nexus-core` 的 Quest / Task / Checkpoint 领域类型(L1,非 quest-engine)
 //!   — 2026-07-31 订正:ADR-026 决策 5 原拟复用 quest-engine DAG,实现态直接用
 //!   nexus-core 类型,src 零 quest_engine 引用,故移除僵尸同层依赖。
-//! - 复用 `gqep-executor` + `qeep-protocol` 实现零孤儿调用(§6.1 红线)
+//! - 子任务超时治理用 `tokio::time::timeout`(§6.1 零孤儿红线);gqep-executor /
+//!   qeep-protocol **不经本 crate 消费**(delegation.rs:726 书面判词: gather 仅统计
+//!   语义不匹配 Vec<TaskResult> 个体结果需求)——2026-09-16 订正原"复用"失实声明
+//!   (M11 范围外 finding,零生产边经实证)。
 //!
 //! ## 快速示例
 //!
@@ -55,6 +58,7 @@ pub mod delegation;
 pub mod error;
 pub mod experts;
 pub mod feedback;
+pub mod gea_bridge;
 pub mod invariant_report;
 pub mod invariants;
 pub mod knowledge;
@@ -82,6 +86,13 @@ pub use delegation::{
 pub use error::{MasError, Result};
 pub use experts::{ExpertProfile, ExpertRegistry, PermissionTier, ToolPermission};
 pub use feedback::{ExpertFeedbackEntry, ExpertFeedbackRegistry, ExpertPriorityAdjustment};
+// MAS→GEA 桥接(M12 / ADR-185 D2):适度导出装配入口与纯函数;
+// gea 侧类型经 `gea_activator::` 全限定路径消费(同名 ExpertProfile 消歧纪律)。
+pub use gea_bridge::{
+    build_gea_expert_profile, build_mas_activator, complexity_weight, mas_gea_config,
+    priority_risk_level, register_mas_experts, task_profile_from_agent_task, tier_priority_weight,
+    BRIDGE_VECTOR_DIMS,
+};
 pub use invariants::{
     ArchiveTier, DelegationEdge, InvariantChecker, MEMORY_BUDGET_MB, MEMORY_BUDGET_UTILIZATION,
 };
