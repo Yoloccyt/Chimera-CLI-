@@ -21,7 +21,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 
-/// EWMA 平滑系数(对齐 ADR-037 acb-governor α=0.1)
+/// EWMA 平滑系数(α=0.1 承袭 ADR-037 原 acb-governor 设计;
+/// 该 crate 已按 ADR-182 退役删除 2026-09-16)
 const EWMA_ALPHA: f64 = 0.1;
 
 /// 健康分降级阈值(< 该值时通道视为恶化,触发 ProviderDegraded)
