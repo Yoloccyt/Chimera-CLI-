@@ -22,7 +22,7 @@ EXAMPLES:
   chimera run \"实现一个 hello world 函数\"            # 运行单次任务
   chimera --json quest list                         # JSON 格式列出 Quest
   chimera --yes agent cancel <agent-id>             # 取消 Agent(跳过确认)
-  chimera doctor                                    # 6 维度健康检查
+  chimera doctor                                    # 9 维度健康检查
   chimera completions bash > /etc/bash_completion.d/chimera  # 生成补全脚本";
 
 /// 子命令 EXAMPLES 映射(扩展:任何新增子命令只需在此添加一行)
@@ -49,7 +49,7 @@ const SUBCOMMAND_EXAMPLES: &[(&str, &str)] = &[
     ),
     (
         "doctor",
-        "EXAMPLES:\n  chimera doctor            # 6 维检查\n  chimera --json doctor     # JSON",
+        "EXAMPLES:\n  chimera doctor            # 9 维检查\n  chimera --json doctor     # JSON",
     ),
 ];
 

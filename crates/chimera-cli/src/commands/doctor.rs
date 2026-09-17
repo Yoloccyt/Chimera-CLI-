@@ -3,13 +3,16 @@
 //! v2.9.0-omega Task 1.13:提供类 `cargo doctor` 的环境诊断能力。
 //! Wave 2 Task 4:在原 5 维度基础上增加 LLM Provider 健康度检查。
 //!
-//! # 6 维度健康检查(SubTask 1.13.1 + Wave 2 Task 4)
+//! # 9 维度健康检查(SubTask 1.13.1 + Wave 2 Task 4 + WI-02 + M13)
 //! 1. **配置文件**(Config File)— `omega.yaml` 路径存在且可解析
 //! 2. **Cargo.lock**(Dependency Lock)— 当前目录 `Cargo.lock` 存在(Rust 项目完整性)
 //! 3. **SQLite 数据库路径**(SQLite Path)— `repo_wiki.db_path` 父目录可写
 //! 4. **MCP 网格连通性**(MCP Mesh)— McpMesh 可创建,统计注册服务器数
 //! 5. **EventBus 订阅者**(EventBus)— EventBus 可创建,统计订阅者数
 //! 6. **LLM Provider**(LLM)— 复用 `llm::List` 的 8-name fallback 探测默认 Provider
+//! 7. **认证密钥**(Auth Keys)— 常见供应商 API key 环境变量自检(WI-02)
+//! 8. **SecCore 沙箱**(Sandbox)— 进程内沙箱可用性 + 命令分类在役验证(WI-02)
+//! 9. **SCC 缓存**(SCC Cache)— 组合根装配的 SccCache 统计快照健康度(M13 重路由)
 //!
 //! # 设计决策(WHY)
 //! - **不直接依赖 rusqlite**:`chimera-cli/Cargo.toml` 未声明 `rusqlite` 依赖
@@ -17,8 +20,8 @@
 //!   SQLite 检查降级为"路径有效性 + 父目录可写性"验证,满足 doctor 诊断需求。
 //! - **进程内 ephemeral 检查**:MCP/EventBus 检查创建临时实例验证可初始化,
 //!   不反映长生命周期 TUI 进程的真实状态(TUI 有独立 mesh + bus)。
-//! - **`--fix` 仅修复配置文件**:6 项中仅"配置文件缺失"可自动修复(生成默认 omega.yaml);
-//!   其余项(Cargo.lock / SQLite 路径 / MCP / EventBus / LLM Provider)需用户手动处理。
+//! - **`--fix` 仅修复配置文件**:9 项中仅"配置文件缺失"可自动修复(生成默认 omega.yaml);
+//!   其余项(Cargo.lock / SQLite 路径 / MCP / EventBus / LLM Provider / 认证密钥 / 沙箱 / SCC 缓存)需用户手动处理。
 //! - **LLM 维**走独立 mock 探测(238ms sleep + 50/50 判定)而非调用 `llm::execute`,
 //!   避免 doctor → llm → dispatch → ... 链式回环;真实 mca-gateway 接入在后续 Task 完成。
 //! - **3s 超时**:`tokio::time::timeout` 包裹 LLM 探测,失败不阻塞其他 5 维度的渲染。
@@ -67,7 +70,7 @@ pub struct HealthCheck {
 /// 健康检查报告汇总
 #[derive(Debug, Serialize)]
 pub struct HealthReport {
-    /// 6 项检查结果
+    /// 9 项检查结果
     pub checks: Vec<HealthCheck>,
     /// 汇总统计
     pub summary: HealthSummary,
@@ -86,7 +89,7 @@ pub struct HealthSummary {
     pub total: usize,
 }
 
-/// 执行 doctor 子命令 — 8 维度健康检查（WI-02 增强: +认证密钥 / +沙箱）
+/// 执行 doctor 子命令 — 9 维度健康检查（WI-02 增强: +认证密钥 / +沙箱;M13: +SCC 缓存）
 ///
 /// `json` flag(Task 1.7):`true` 时输出 JSON envelope(完整 HealthReport)。
 /// `fix`(Task 1.13.4):`true` 时自动修复可修复项(当前仅配置文件缺失)。
@@ -98,25 +101,26 @@ pub async fn execute(cfg: &ChimeraConfig, json: bool, fix: bool) -> Result<()> {
     execute_with_ctx(&ctx, cfg, json, fix).await
 }
 
-/// doctor 子命令主体 — 8 探针经组合根共享 GQEP 执行器并行 gather(M12 / ADR-185 D3)
+/// doctor 子命令主体 — 9 探针经组合根共享 GQEP 执行器并行 gather(M12 / ADR-185 D3;
+/// M13 起 +SCC 缓存探针)
 ///
 /// ## 并行化决策(WHY GQEP 而非 tokio::join!)
 ///
-/// - **语义不变**:8 项检查内容/状态/汇总与串行版逐项一致(索引 tag 按注册序
+/// - **语义不变**:9 项检查内容/状态/汇总与串行版逐项一致(索引 tag 按注册序
 ///   还原,FuturesUnordered 完成序不保证输入序);仅时序由串行改并行
 /// - **零孤儿治理**:探针 future 全部经 QEEP `entangle` 包裹(单操作 5s 超时 +
 ///   OrphanGuard),比裸 `join!` 多双层超时防护,符合 §6.1 红线
 /// - **可观测**:gather 在共享总线发布 `GatherCompleted`(total/succeeded/failed),
 ///   TUI/审计可订阅;探针恒 `Ok` 返回(检查失败是结果而非错误),失败 tail 仅
-///   可能来自 gqep 超时——以 FAIL 占位兜底,报告恒 8 项
-/// - **可回滚**:单 commit revert 即恢复串行路径(本函数整体替换)
+///   可能来自 gqep 超时——以 FAIL 占位兜底,报告恒 9 项
+/// - **可回滚**:单 commit revert 即恢复(M13 scc 探针同 commit 可独立 revert)
 pub async fn execute_with_ctx(
     ctx: &crate::composition::AppContext,
     cfg: &ChimeraConfig,
     json: bool,
     fix: bool,
 ) -> Result<()> {
-    tracing::info!(fix, "系统健康检查(8 维度, GQEP 并行 gather)");
+    tracing::info!(fix, "系统健康检查(9 维度, GQEP 并行 gather)");
 
     let checks = run_probes_parallel(ctx, cfg, fix).await;
     let probe_total = checks.len() as u32;
@@ -154,25 +158,28 @@ pub async fn execute_with_ctx(
     Ok(())
 }
 
-/// 8 探针并行 gather(GQEP `gather_collected<(usize, HealthCheck)>`)
+/// 9 探针并行 gather(GQEP `gather_collected<(usize, HealthCheck)>`)
 ///
 /// 索引 tag 设计:每个探针 future 携 `(索引, 结果)`——gather 返回完成序的
 /// values,此处按索引还原注册序,保证报告输出顺序与串行版逐字节一致。
 /// 超时空底:探针恒 `Ok`,值缺失仅源于 gqep 单操作/全局超时,以 FAIL 占位
-/// 保证报告恒 8 项(该 tail 实践中不可达:LLM 探针自带 3s 内部超时,
+/// 保证报告恒 9 项(该 tail 实践中不可达:LLM 探针自带 3s 内部超时,
 /// 其余探针均快路径)。
 async fn run_probes_parallel(
     ctx: &crate::composition::AppContext,
     cfg: &ChimeraConfig,
     fix: bool,
 ) -> Vec<HealthCheck> {
-    const PROBE_COUNT: usize = 8;
+    const PROBE_COUNT: usize = 9;
 
     // cfg 以 owned clone 移入 future('static 约束);Clone 代价 = 一次配置结构拷贝,
-    // 远小于 LLM 探针 238ms 睡眠——并行净收益不受影响
+    // 远小于 LLM 探针 238ms 睡眠——并行净收益不受影响。
+    // scc 句柄同理(SccCache Clone = Arc 引用计数,廉价):M13 第 9 探针消费
+    // 组合根装配的共享缓存实例,而非探针内自建 ephemeral(那是装配态空转)。
     let cfg_owned = cfg.clone();
+    let scc_owned = ctx.scc.clone();
 
-    // 探针注册序 = 报告输出序(与串行版一致,输出内容零变化)
+    // 探针注册序 = 报告输出序(与串行版一致,输出内容零变化;M13 起尾部追加 scc_cache)
     let probes: Vec<gqep_executor::GqepFuture<(usize, HealthCheck)>> = vec![
         Box::pin(async move { Ok((0, check_config_file(fix).await)) }),
         Box::pin(async move { Ok((1, check_cargo_lock().await)) }),
@@ -182,6 +189,7 @@ async fn run_probes_parallel(
         Box::pin(async move { Ok((5, check_llm_provider(&cfg_owned).await)) }),
         Box::pin(async move { Ok((6, check_auth_keys())) }),
         Box::pin(async move { Ok((7, check_seccore())) }),
+        Box::pin(async move { Ok((8, check_scc_cache(&scc_owned))) }),
     ];
 
     let outcome = ctx.gqep.gather_collected(probes).await;
@@ -557,6 +565,31 @@ fn check_seccore() -> HealthCheck {
     }
 }
 
+/// 检查 9:SCC 缓存（M13 重路由）— 组合根装配的 SccCache 统计快照健康度
+///
+/// 消费组合根共享 `SccCache` 实例(ADR-161 路径①,非探针内自建 ephemeral——
+/// 那不构成对装配面的真实消费,ADR-179 非空转判据)。只读 `stats()` 快照 +
+/// `len()`/`access_count()` 计数,零变异、零事件发布(不触发 CacheHit/Miss)。
+///
+/// - 缓存实例在役(构造成功即可达,默认容量 256)→ OK
+/// - 命中率随访问累计自然上升;装配初期 0 访问/0 命中为预期行为,不降级
+fn check_scc_cache(cache: &scc_cache::SccCache) -> HealthCheck {
+    let stats = cache.stats();
+    let accesses = cache.access_count();
+
+    HealthCheck {
+        name: "scc_cache",
+        description: "SCC 推测上下文缓存",
+        status: HealthStatus::Ok,
+        message: format!(
+            "SCC: ✓ 缓存在役（条目 {} / 命中率 {:.1}% / 累计访问 {}）",
+            stats.entry_count,
+            stats.hit_rate * 100.0,
+            accesses,
+        ),
+    }
+}
+
 /// 人类可读模式输出健康检查报告(SubTask 1.13.2)
 ///
 /// 格式:
@@ -672,26 +705,53 @@ mod tests {
         );
     }
 
-    /// 验证 `execute` 汇总 total = 6(确保 LLM 维已纳入报告)。
+    /// 验证 `execute` 汇总 total = 9(确保 LLM / 沙箱 / SCC 维已纳入报告)。
     #[tokio::test]
-    async fn test_execute_emits_eight_dimensions() {
+    async fn test_execute_emits_nine_dimensions() {
         // 调 execute (json=true 走最小路径,避免 stderr 输出污染测试)
         let cfg = ChimeraConfig::default();
         execute(&cfg, true, false)
             .await
             .expect("doctor execute 应成功");
-        // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 8 维检查
+        // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 9 维检查
         // 集成层在 tests/cli.rs::test_doctor_json_outputs_report_envelope
-        // 断言 `"total": 8` 以补充此处的覆盖。
+        // 断言 `"total": 9` 以补充此处的覆盖。
     }
 
-    /// M12 / ADR-185 D3 验收③:并行 gather 路径产生 GatherCompleted(total=8) 事件
-    ///
-    /// 组合根共享 bus 订阅断言:8 探针经 gqep gather_collected 并行执行,
-    /// gqep 在 gather 完成时发布 GatherCompleted(total, succeeded, failed);
-    /// 探针 future 恒 Ok(检查失败是结果而非错误),故 succeeded 恒 = 8。
+    /// M13 / ADR-161 路径① 验收:第 9 探针 scc_cache 消费组合根共享缓存实例
+    /// (stats() 只读快照;非自建 ephemeral = 非装配态空转,ADR-179)
     #[tokio::test]
-    async fn test_execute_with_ctx_emits_gather_completed_with_eight_probes() {
+    async fn test_doctor_scc_cache_probe_consumes_assembled_cache() {
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        let check = check_scc_cache(&ctx.scc);
+
+        assert_eq!(check.name, "scc_cache");
+        assert_eq!(check.description, "SCC 推测上下文缓存");
+        assert!(
+            matches!(check.status, HealthStatus::Ok),
+            "组合根缓存在役应恒 OK,实际: {:?}",
+            check.status
+        );
+        assert!(
+            check.message.starts_with("SCC:"),
+            "message 应以 'SCC:' 开头,实际: {}",
+            check.message
+        );
+        assert!(
+            check.message.contains("条目 0"),
+            "装配初期缓存应为空,实际 message: {}",
+            check.message
+        );
+    }
+
+    /// M12 / ADR-185 D3 验收③(探针数 M13 起 8→9):并行 gather 路径产生
+    /// GatherCompleted(total=9) 事件
+    ///
+    /// 组合根共享 bus 订阅断言:9 探针经 gqep gather_collected 并行执行,
+    /// gqep 在 gather 完成时发布 GatherCompleted(total, succeeded, failed);
+    /// 探针 future 恒 Ok(检查失败是结果而非错误),故 succeeded 恒 = 9。
+    #[tokio::test]
+    async fn test_execute_with_ctx_emits_gather_completed_with_nine_probes() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
         // §4.4 反模式 3:subscribe 必须在 gather 调用之前同步调用
         let mut rx = ctx.bus.subscribe();
@@ -708,8 +768,8 @@ mod tests {
             event_bus::NexusEvent::GatherCompleted {
                 total, succeeded, ..
             } => {
-                assert_eq!(total, 8, "探针总数应为 8");
-                assert_eq!(succeeded, 8, "探针恒 Ok,应全部成功");
+                assert_eq!(total, 9, "探针总数应为 9(M13 起 +scc_cache)");
+                assert_eq!(succeeded, 9, "探针恒 Ok,应全部成功");
             }
             other => panic!("期望 GatherCompleted,实际 {}", other.type_name()),
         }

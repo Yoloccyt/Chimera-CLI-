@@ -106,7 +106,8 @@ pub fn experience_db_path() -> PathBuf {
 /// 3. L2 `MlcEngine::with_card_bus`(卡片系统消费)
 /// 4. L6 `spawn_card_feedback_loop`(全库唯一双流消费者,驱动算子统计回流)
 /// 5. `RuntimeAuditor` 事件计数订阅 + 周期 `generate_report`
-///    (内部发布 `HarnessReportGenerated`,打通 TUI SelfAssessmentPanel)
+///    (内部发布 `HarnessReportGenerated`,打通 TUI SelfAssessmentPanel;
+///    M13 起注入共享 DecbGovernor,第 6 维 budget_discipline 真实消费 get_stats)
 /// 6. `spawn_metrics_subscriber`(协调度量,修复 metrics_sync 孤儿订阅器)
 /// 7. `enable_strategy_cap=true` 时挂载 `spawn_strategy_cap_subscriber`
 ///    (推理悖论主动降级闭环,ADR-063;默认 off = 零行为变更)
@@ -195,9 +196,21 @@ pub async fn spawn_experience_loop(
     join_handles.push(spawn_card_feedback_loop(&card_bus, Arc::clone(&router)));
 
     // 5. RuntimeAuditor:事件计数订阅 + 周期五维报告(发布 HarnessReportGenerated)
-    let auditor = Arc::new(efficiency_monitor::RuntimeAuditor::with_event_bus(
-        nexus_bus.clone(),
-    ));
+    //    M13(decb 重路由):组合根构造共享 DecbGovernor 注入审计器——第 6 维
+    //    budget_discipline 每次报告经 get_stats() 真实消费(L9→L8 向下非内环,
+    //    ADR-179 非空转生产调用路径)。DECB 默认配置零消耗,不发布任何事件,
+    //    报告事件面分毫不动(零行为变化)。
+    let decb = Arc::new(
+        decb_governor::DecbGovernor::with_event_bus(
+            decb_governor::DecbConfig::default(),
+            nexus_bus.clone(),
+        )
+        .context("DecbGovernor 构造失败(默认配置校验)")?,
+    );
+    let auditor = Arc::new(
+        efficiency_monitor::RuntimeAuditor::with_event_bus(nexus_bus.clone())
+            .with_decb_governor(decb),
+    );
     let mut rx_audit = nexus_bus.subscribe();
     let auditor_for_loop = Arc::clone(&auditor);
     join_handles.push(tokio::spawn(async move {
@@ -397,6 +410,27 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         let count = handles.storage.card_count().await.expect("查询成功");
         assert!(count >= 1, "高分卡应经 Critical 通道持久化");
+    }
+
+    #[tokio::test]
+    async fn spawn_experience_loop_auditor_consumes_decb() {
+        // M13 / decb 重路由验收:组合根装配的审计器已注入共享 DecbGovernor,
+        // 第 6 维 budget_discipline 经 get_stats() 真实消费(非装配态空转,
+        // ADR-179);未注入路径中性 0.5 的口径在 efficiency-monitor 单元测试覆盖
+        let bus = EventBus::new();
+        let engine = Arc::new(QuestEngine::new(bus.clone()));
+        let handles = spawn_experience_loop(bus, Arc::clone(&engine), false)
+            .await
+            .expect("装配成功");
+
+        let governor = handles
+            .auditor
+            .decb_governor()
+            .expect("装配后审计器应持有 DECB 句柄(M13 接线)");
+        // 真实调用证据:句柄可服务 get_stats() 且初始利用率为 0(零消耗)
+        let stats = governor.get_stats();
+        assert_eq!(stats.utilization_rate, 0.0);
+        assert_eq!(stats.current_tier, decb_governor::BudgetTier::HighTier);
     }
 
     #[tokio::test]

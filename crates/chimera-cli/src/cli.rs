@@ -375,27 +375,33 @@ chimera --yes agent cancel <agent-id>          # 取消 Agent(跳过确认)"
     },
     /// 系统健康检查
     ///
-    /// 执行 6 维度健康检查:
+    /// 执行 9 维度健康检查:
     /// 1. 配置文件路径与有效性
     /// 2. Cargo.lock 依赖完整性
     /// 3. SQLite 数据库可读写
     /// 4. MCP 网格连通性
     /// 5. EventBus 订阅者活跃数
     /// 6. LLM Provider 健康度(Wave 2 Task 4)
+    /// 7. 认证密钥环境变量(WI-02)
+    /// 8. SecCore 沙箱可用性(WI-02)
+    /// 9. SCC 推测上下文缓存(M13 重路由)
     ///
     /// `--fix` 自动修复可修复项(如缺失配置文件)。
     #[command(
-        long_about = "执行 6 维度健康检查:\n\
+        long_about = "执行 9 维度健康检查:\n\
 1. 配置文件路径与有效性\n\
 2. Cargo.lock 依赖完整性\n\
 3. SQLite 数据库可读写\n\
 4. MCP 网格连通性\n\
 5. EventBus 订阅者活跃数\n\
 6. LLM Provider 健康度(Wave 2 Task 4)\n\
+7. 认证密钥环境变量(WI-02)\n\
+8. SecCore 沙箱可用性(WI-02)\n\
+9. SCC 推测上下文缓存(M13 重路由)\n\
 \n\
 `--fix` 自动修复可修复项（如缺失配置文件）。",
         after_long_help = "EXAMPLES:\n  \
-chimera doctor                                 # 执行 6 维度健康检查\n  \
+chimera doctor                                 # 执行 9 维度健康检查\n  \
 chimera --json doctor                          # JSON 输出健康报告\n  \
 chimera doctor --fix                           # 自动修复可修复项"
     )]

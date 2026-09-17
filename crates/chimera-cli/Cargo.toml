@@ -66,6 +66,13 @@ gea-activator = { workspace = true }
 # M12 / ADR-185 D3:gqep-executor(L7 Execution 层)——doctor 8 探针并行 gather 化
 # (gather_collected<T> 泛型带值聚集);L10→L7 向下依赖合规(§2.2,先例:pvl-layer)
 gqep-executor = { workspace = true }
+# M13(decb 重路由):decb-governor(L8 Parliament 层)——experience_loop 组合根构造
+# 共享 DecbGovernor 注入 RuntimeAuditor(第 6 维 budget_discipline 消费 get_stats);
+# L10→L8 向下依赖合规(§2.2,先例:parliament)
+decb-governor = { workspace = true }
+# M13(scc 重路由):scc-cache(L3 Storage 层)——组合根装配 SccCache 共享实例
+# (ADR-161 路径①),doctor 第 9 探针真实消费 stats();L10→L3 向下依赖合规(§2.2)
+scc-cache = { workspace = true }
 # PROBE P2.2: 选择器学习编排器依赖（L10 → 学习层/L2 向下依赖允许）
 omega-learner = { workspace = true }
 hcw-window = { workspace = true }
