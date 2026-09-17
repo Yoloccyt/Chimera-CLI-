@@ -74,9 +74,7 @@ impl ToolExecutor for ExecPolicyToolExecutor {
             // 文案将产生嵌套转义(模型无法直接解析)。纯文本经包装后为单层合法
             // JSON 且 `error` 字段可直接读取。关键词 `denied`/`ask_required`
             // 保留供调用方审计/审批流路由。
-            PolicyAction::Deny => Err(format!(
-                "denied: execpolicy (tool={tool_name})"
-            )),
+            PolicyAction::Deny => Err(format!("denied: execpolicy (tool={tool_name})")),
             PolicyAction::Ask => Err(format!(
                 "ask_required: execpolicy needs approval (tool={tool_name})"
             )),
@@ -181,10 +179,7 @@ mod tests {
 
         let delegate = Arc::new(RecordingExecutor::default());
         // 子场景 1:Deny(零信任默认全拒)
-        let deny_ex = ExecPolicyToolExecutor::new(
-            Arc::new(ExecPolicy::new()),
-            delegate.clone(),
-        );
+        let deny_ex = ExecPolicyToolExecutor::new(Arc::new(ExecPolicy::new()), delegate.clone());
         let err = deny_ex
             .execute("search:docs", r#"{"q":"x"}"#)
             .await
@@ -210,7 +205,10 @@ mod tests {
             !err.trim_start().starts_with('{'),
             "Err 文案不得是 JSON: {err}"
         );
-        assert!(err.contains("ask_required"), "Ask 文案须含 ask_required: {err}");
+        assert!(
+            err.contains("ask_required"),
+            "Ask 文案须含 ask_required: {err}"
+        );
         assert!(
             delegate.calls.lock().unwrap().is_empty(),
             "Deny/Ask 均不得委托执行"
@@ -225,7 +223,8 @@ mod tests {
         use nexus_contracts::tool_plan::{ToolNode, ToolOp, ToolPlan};
 
         let policy = ExecPolicy::new(); // 零信任:全部 deny
-        let ex = ExecPolicyToolExecutor::new(Arc::new(policy), Arc::new(RecordingExecutor::default()));
+        let ex =
+            ExecPolicyToolExecutor::new(Arc::new(policy), Arc::new(RecordingExecutor::default()));
         let runner = PlanRunner::new(Box::new(ex), PlanGuards::default());
 
         let plan = ToolPlan {
