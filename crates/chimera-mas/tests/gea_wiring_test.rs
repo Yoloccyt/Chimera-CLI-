@@ -193,7 +193,10 @@ async fn recorded_outcomes_influence_subsequent_activation() {
         "10 次失败 → 成功率 0.0"
     );
     let r_failed = fresh
-        .activate(&profile_at(event_bus::TaskPriority::Medium, "t-gate-failed"))
+        .activate(&profile_at(
+            event_bus::TaskPriority::Medium,
+            "t-gate-failed",
+        ))
         .await
         .expect("failed 相激活调用应成功(空结果也是 Ok)");
     assert!(
@@ -211,7 +214,10 @@ async fn recorded_outcomes_influence_subsequent_activation() {
         fresh.record_expert_outcome(&e03_id, true, 10.0);
     }
     let r_recovered = fresh
-        .activate(&profile_at(event_bus::TaskPriority::High, "t-gate-recovered"))
+        .activate(&profile_at(
+            event_bus::TaskPriority::High,
+            "t-gate-recovered",
+        ))
         .await
         .expect("recovered 相激活应成功");
     assert!(
