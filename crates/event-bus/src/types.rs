@@ -2207,7 +2207,8 @@ pub enum NexusEvent {
         raw_excerpt: String,
     },
 
-    /// 流式会话闭环 — mca-gateway → acb-governor/auto-dpo
+    /// 流式会话闭环 — mca-gateway → decb-governor/auto-dpo
+    /// (历史上的下游 acb-governor 已按 ADR-182 退役删除 2026-09-16)
     ///
     /// 会话结束时发布真实计量:成本回写(EWMA α=0.1)、缓存命中率
     /// 回读、DPO 偏好对轨迹的数据源;TTFT 喂入健康探针与 E1 验收。
