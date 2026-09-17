@@ -44,6 +44,9 @@ pub struct AppContext {
     pub gea: Arc<gea_activator::GeaActivator>,
     /// GQEP 聚集执行器（M12 / ADR-185 D3；doctor 探针并行 gather 复用）
     pub gqep: Arc<gqep_executor::GqepExecutor>,
+    /// 推测上下文缓存（M13 / ADR-161 路径①；SccCache Clone=Arc 共享,
+    /// doctor scc_cache 探针经此真实消费 stats()）
+    pub scc: scc_cache::SccCache,
 }
 
 /// 装配 AppContext（唯一组合根入口，C12）
@@ -83,12 +86,17 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
     // E01-E08 静态编制 → gea 动态画像(幂等,启动期一次性)
     chimera_mas::gea_bridge::register_mas_experts(&gea);
     let gqep = gqep_executor::GqepExecutor::new(gqep_executor::GqepConfig::default(), bus.clone());
+    // M13(ADR-161 路径①):scc-cache 组合根装配——默认配置(容量 256,零 IO 轻构造),
+    // 与 bus 同生命周期;doctor scc_cache 探针每次运行经 ctx.scc 真实消费
+    // stats()(非"构造即丢弃");CacheHit/Miss 事件仅由真实缓存访问触发,
+    // 装配本身零事件流量(零行为变化)。
+    let scc = scc_cache::SccCache::new(scc_cache::SccConfig::default(), bus.clone());
     // M4-P2: C3 Critical 旁路注册上提为 build() 标准装配步骤（subscribe 在
     // engine 构造后、AppContext 移出前同步完成，§4.4 反模式 3 纪律）。
     spawn_critical_subscriber(&bus);
     tracing::debug!(
         version = %config.nexus.version,
-        "AppContext assembled at composition root (C12, critical bypass wired, gea+gqep wired)"
+        "AppContext assembled at composition root (C12, critical bypass wired, gea+gqep+scc wired)"
     );
     Ok(AppContext {
         bus,
@@ -96,6 +104,7 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
         server_config: AppServerConfig::default(),
         gea: Arc::new(gea),
         gqep: Arc::new(gqep),
+        scc,
     })
 }
 
@@ -267,5 +276,18 @@ mod tests {
             ctx.gqep.config().gather_deadline_ms > 0,
             "gqep 双层超时配置应生效（全局 deadline 启用）"
         );
+    }
+
+    /// M13 / ADR-161 路径① 验收：组合根 scc 句柄真实装配非空转 ——
+    /// SccCache 默认配置就绪（容量 256、空缓存、命中率 0），可服务
+    /// doctor scc_cache 探针的 stats() 消费（共享 bus 生命周期）。
+    #[tokio::test]
+    async fn composition_build_wires_scc() {
+        let ctx = make_ctx();
+        assert!(ctx.scc.is_empty(), "装配初期缓存应为空");
+        assert_eq!(ctx.scc.len(), 0);
+        let stats = ctx.scc.stats();
+        assert_eq!(stats.entry_count, 0);
+        assert!((stats.hit_rate - 0.0).abs() < f32::EPSILON);
     }
 }

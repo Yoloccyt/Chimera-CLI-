@@ -147,7 +147,7 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
             agent::execute_with_ctx(&ctx, action, cli.json, *parallel, &perm, cli.dry_run).await
         }
         // Task 1.13: 系统健康检查 — 全局 --json 优先,子命令级 --json 作为兼容回退
-        // M12 / ADR-185 D3:doctor 已迁共享 AppContext,8 探针经 gqep 并行 gather
+        // M12 / ADR-185 D3:doctor 已迁共享 AppContext,9 探针(M13 起 +scc_cache)经 gqep 并行 gather
         Some(Commands::Doctor { json, fix }) => {
             doctor::execute_with_ctx(&ctx, cfg, cli.json || *json, *fix).await
         }
