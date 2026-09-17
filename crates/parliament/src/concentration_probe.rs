@@ -6,7 +6,8 @@
 //! # 供应商锁定是系统级病理(N7)
 //! "单一首选厂商默认配置"与 ImmuneSystem 的免疫哲学冲突:把"供应商绑定风险"
 //! 定义为系统级病理并自动纠偏。单厂商流量占比 EWMA > 70% → 发布
-//! `ProviderConcentrationWarning` → acb-governor 自动拉低该厂商路由权重。
+//! `ProviderConcentrationWarning` → 自动拉低该厂商路由权重
+//! (原承接方 acb-governor 已按 ADR-182 退役删除 2026-09-16)。
 //!
 //! # 与 ImmuneSystem 三探针的关系
 //! 本探针是**独立模块**,不并入 `ImmuneSystem` 的固定 `[ParadoxReport; 3]`
