@@ -6,7 +6,7 @@
 > **权威源**: 本文件是架构决策、模块职责、核心类型的唯一权威参考
 > **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 43/43 crate 全绿)
 > **专家签名**: E01 首席架构师 · E02 安全架构师 · E03 记忆系统专家 · E04 路由算法专家 · E05 生产系统专家 · E06 认知科学专家 · E07 任务调度专家 · E08 前端交互专家
-> **三方一致性** (2026-09-17 M13 复核): `Cargo.toml` workspace.package.version = `2.28.2-omega`(代码实况,43 members) ⇔ `CHANGELOG.md` 最新条目 = `[2.28.2-omega] 2026-09-08 正式发布` ⇔ 本文档 = **42 crates(32 生产可达 + 9 冻结孤岛 + 1 GATED,ADR-177;M13 批次 decb/scc 两岛重路由偿还 11→9,2026-09-17 棘轮实测 reachable=32/frozen=9/new_gaps=0;M12 批次 gea/gqep/qeep 三岛链转正 14→11)· 145 NexusEvent 变体(types.rs 单表,FC-2 新增 TuiChatHistoryReplaced;event\_types.rs 镜像已退役)· 测试规模 11587 passed / 0 failed**(2026-09-02 当前工作树全量重测,485 test target,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;演进链 v2.20.0 8455 → v2.22.0 9255 → v2.24.0 9590 → v2.25.0 9669 → C 9699 → D 9744 → v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587)
+> **三方一致性** (2026-09-20 架构减法批次后复核): `Cargo.toml` workspace.package.version = `2.28.2-omega`(代码实况,41 members;原 43 - auto-dpo/model-router + router-traits) ⇔ `CHANGELOG.md` 最新条目 = `[2.28.2-omega] 2026-09-08 正式发布` ⇔ 本文档 = **41 crates(32 生产可达 + 9 GATED + 0 冻结孤岛;2026-09-20 棘轮实测 reachable=32/frozen=0/new_gaps=0;历史:M13 decb/scc 重路由 11→9,M12 三岛链 14→11,P0-P3 批次剩余孤岛经 r2_island_repayment feature 全部偿还)· 146 NexusEvent 变体(types.rs 单表;L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后分布 18/11/117,三层锁同步;event\_types.rs 镜像已退役)· 上一登记测试规模 11587 passed / 0 failed**(2026-09-02 历史时点全量重测,本轮架构减法/三层锁变更后待重测,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;演进链 v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587)
 > **基线变更触发**: 任何 workspace.member / NexusEvent 变体 / `#[test]` 函数增删必须同步更新本文档的"§1.1 身份标识"与"§3 Crate 索引",并触发 `scripts/check_doc_consistency.ps1` 巡检
 
 ***
@@ -15,7 +15,7 @@
 
 1. [项目概览](#1-项目概览)
 2. [十层架构详解](#2-十层架构详解)
-3. [43 Crate 完整索引](#3-43-crate-完整索引)
+3. [41 Crate 完整索引](#3-41-crate-完整索引)
 4. [核心领域类型](#4-核心领域类型)
 5. [事件系统](#5-事件系统)
 6. [依赖关系铁律](#6-依赖关系铁律)
@@ -37,7 +37,7 @@
 | 项目名      | Chimera CLI                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 代号       | NEXUS-OMEGA (Omni-Model Engineering Generative Architecture)                                                                                                                                                                                                                                                                                                                                                                                   |
 | 根目录      | `D:\Chimera CLI`                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 技术栈      | Rust 2021 edition · Tokio async · Workspace × **43 crates** (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`)                                                                                                                                                                                                                                                                 |
+| 技术栈      | Rust 2021 edition · Tokio async · Workspace × **41 crates** (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`;v2.29 架构减法:删 auto-dpo/model-router + 新增 L6 `router-traits`)                                                                                                                                                                                                                                                                 |
 | 核心哲学     | OMEGA 十一定律: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize                                                                                                                                                                                                                                                                                                                         |
 | 设计来源     | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂                                                                                                                                                                                                                                                                                                                                                                                                 |
 | **当前版本** | `v2.28.2-omega` (**2026-09-08 正式发布**,收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;上一已发 tag = v2.28.0-omega → 94499b4(2026-09-06);Phase 1-5 Ch12 波次 W1-W26 全部收尾 + 5 新 crate 落地 + ADR-095~160 治理 + 多轮冗余收敛(R1~R4→R9/R11);迭代链 v2.8.0 polish-v2.7 → v2.9.0~v2.13.0 L8/L10/MCA → v2.14.0\~v2.19.0 P3 Sprint → v2.20.0 PROBE → v2.21.0 CLI LLM → v2.22.0 MCA token → v2.24.0 Phase 9 → v2.25.0 Milestone B → v2.26.0 Concord TUI → v2.27.0 Phase 10 → v2.27.1 GPG 补发 → v2.28.0 Phase 1-5 治理 + 可达性棘轮 → v2.28.2 TUI 修复收口) |
@@ -138,7 +138,7 @@ L1   Core ─────── nexus-core · event-bus
 
 ***
 
-## 3. 43 Crate 完整索引
+## 3. 41 Crate 完整索引
 
 > **三方一致性原则**: 本节每个 crate 的"层归属"必须与 §2.1 分层映射图严格一致;
 > "主要依赖"必须与各 crate 的 `Cargo.toml` 实证一致;任何增删触发 `scripts/check_doc_consistency.ps1` 巡检。
@@ -342,17 +342,6 @@ L1   Core ─────── nexus-core · event-bus
 | **主要依赖**      | tokio · serde · ndarray · rand · dashmap · chrono · uuid · tracing · nexus-core · event-bus                                                                                                                                                                                                                                                                                                                                     |
 | **L4 形式化验证门** | ADR-047(Proposed, 2026-07-27):GSOE 进化主路径将新增 `evolve_with_formal_verification()` 方法(append-only,决策 5),在 L3 执行反馈通过后追加 L4 形式化验证门作为第二道闸;L4 门失败的候选发布 `NexusEvent::FormalVerificationFailed`(Critical 级,走 mpsc 旁路通道)并否决,不进入 AutoDPO 偏好对生成;L4 门通过发布 `NexusEvent::FormalVerificationPassed`(Normal 级);对齐 ADR-042 R2 冻结解冻前置条件 + 三重悖论进化悖论红线(L3→L4 跃迁);落地时间表 M1 集成 2026-09-15                                                              |
 
-#### [auto-dpo](file:///d:/Chimera%20CLI/crates/auto-dpo)
-
-| 项        | 说明                                                                                                                                                                                                                                                             |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L5 Knowledge                                                                                                                                                                                                                                                   |
-| **核心职责** | 自动DPO(直接偏好优化)，从执行轨迹自动生成偏好对；**P1-3: FormalVerifier M1 偏好对一致性验证**(反自偏好 + margin 有界性)                                                                                                                                                                             |
-| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/auto-dpo/src/lib.rs) · [generator.rs](file:///d:/Chimera%20CLI/crates/auto-dpo/src/generator.rs) · [formal/preference\_consistency.rs](file:///d:/Chimera%20CLI/crates/auto-dpo/src/formal/preference_consistency.rs) |
-| **关键类型** | `AutoDpoGenerator` · `PreferencePair` · `TrajectorySample` · `PreferenceConsistencyChecker`(M1)                                                                                                                                                                |
-| **关键方法** | `AutoDpoGenerator::generate_pair()` · `AutoDpoGenerator::record_trajectory()` · `PreferenceConsistencyChecker::verify_no_self_preference()` · `PreferenceConsistencyChecker::verify_margin_bounded()`                                                          |
-| **主要依赖** | event-bus · tokio · serde · serde\_json · thiserror · tracing · nexus-contracts(VerificationResult)                                                                                                                                                            |
-
 ***
 
 ### 3.6 L6 Router (5 crates,ADR-031 新增 omega-learner)
@@ -408,7 +397,7 @@ L1   Core ─────── nexus-core · event-bus
 | 项          | 说明                                                                                                                                                                                                                                                                                                  |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **架构层**    | L6 Router                                                                                                                                                                                                                                                                                           |
-| **核心职责**   | LinUCB Bandit 学习层;嫁接 gsoe-evolution / auto-dpo 的 RHI-CG 通道;异步下发 `SelectorPolicy::Learned` 给调用方,本地 fallback 保证可用性;R1 召回配额影子模式(CQL/IQL),R2 形式化验证器落地前冻结                                                                                                                                                |
+| **核心职责**   | LinUCB Bandit 学习层;嫁接 gsoe-evolution 的 RHI-CG 通道(auto-dpo 已按架构减法批次退役删除);异步下发 `SelectorPolicy::Learned` 给调用方,本地 fallback 保证可用性;R1 召回配额影子模式(CQL/IQL),R2 形式化验证器落地前冻结                                                                                                                                                |
 | **关键文件**   | [lib.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/lib.rs) · [bandit.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/bandit.rs) · [policy.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/policy.rs) · [shadow.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/shadow.rs) |
 | **关键类型**   | `OmegaLearner` · `LinUCB` · `SelectorPolicy::{Static,Learned,Hybrid}` · `ShadowObserver` · `RewardSignal`                                                                                                                                                                                           |
 | **关键方法**   | `OmegaLearner::recommend()` · `LinUCB::update()` · `ShadowObserver::compare()`                                                                                                                                                                                                                      |
@@ -706,7 +695,7 @@ L1   Core ─────── nexus-core · event-bus
 
 ### 3.11 生产可达性与冻结孤岛清单(ADR-160,2026-08-29 棘轮)
 
-> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。42 crate = **32 生产可达 + 9 冻结孤岛 + 1 GATED(mca-gateway，仅 `--features mca` 编译，ADR-177 重分类)**。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
+> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。41 crate = **32 生产可达 + 9 GATED(feature 门控)+ 0 冻结孤岛**(2026-09-20 P0-P3 岛链偿还批次后,棘轮实测 `reachable=32 frozen=0 new_gaps=0`;v2.28.2-omega 同步:members 41 = 原 43 - 架构减法批次删除 auto-dpo/model-router + 新增 router-traits)。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
 >
 > **M10 偿还批次(2026-09-16,island-batch-promotion-a):冻结孤岛 16 → 14**。有效两岛:`acb-governor` 退役删除(ADR-182,零生产消费者,~2200 LOC);`lsct-tiering` 经 cmt-tiering 生产边转正(`src/lsct_policy.rs` 策略装配闭环,L3→L3 同层;lsct 自持 Tier 类型解除 cmt↔lsct 依赖环,ADR-179 真实生产调用路径)。
 >
@@ -718,20 +707,19 @@ L1   Core ─────── nexus-core · event-bus
 >
 > **被依赖铁律驳回两岛(M10 回登记,已于 M13 按重路由候选偿还)**:M10 时 `decb-governor` 原计划经 parliament 转正——parliament 属内环 9 crate 白名单,decb 不在白名单亦非 L0/L1 基座(Check A 违规,M7"同层允许"裁定遗漏内环保守规则);`scc-cache` 原计划经 hcw-window 转正——hcw 同属内环,且 L2→L3 为向上依赖(Check B 违规,"L2→L3 向下合法"系方向误判)。M11 wiring 决策报告给出重路由候选方向(decb → efficiency-monitor;scc → chimera-cli 组合根,ADR-161 路径①),M13 完成消费者决策论证与接线,见上 M13 批次注记。
 
-| 孤岛 crate          | 层   | 冻结类别       | 不可达原因(摘要)                                                                                 | 依据      |
-| ----------------- | --- | ---------- | ----------------------------------------------------------------------------------------- | ------- |
-| `mas-sched`       | L9  | 刻意预留       | shadow-first,从 chimera-mas 拆出待经 L0 契约接管                                                   | ADR-145 |
-| `nexus-hook`      | L9  | 刻意预留       | 空配置 = 当前行为,安全回退路径                                                                         | ADR-146 |
-| `mca-gateway`     | L10 | feature 门控 | 仅根 `mca` feature + ci mda job 编译;无消费方(连 optional 都未声明),ADR-065 决策 6 装配期注入未落地,默认 binary 不含 | ADR-065 |
-| `model-router`    | L1  | 历史孤岛       | 入边仅 auto-dpo(自身孤岛)+ quest-engine dev-dep;规则文档"CAF 已落地"在生产图上不成立                            | ADR-160 |
-| `auto-dpo`        | L5  | 历史孤岛       | L5 进化环三 crate 之一,生产入边为零(RL 闸门禁止 Python 服务实体)                                              | ADR-160 |
-| `csn-substitutor` | L10 | 历史孤岛       | 能力降级链,入边仅根 E2E dev-dep                                                                    | ADR-160 |
-| `sesa-router`     | L6  | 历史孤岛       | 入边仅根 E2E dev-dep                                                                          | ADR-160 |
-| `chtc-bridge`     | L10 | 历史孤岛       | 5 IDE 适配器,入边仅根 E2E dev-dep                                                                | ADR-160 |
-| `mtpe-executor`   | L7  | 历史孤岛       | 入边仅 gea-activator dev-dep                                                                 | ADR-160 |
-| `ssra-fusion`     | L7  | 历史孤岛       | 入边仅根 E2E dev-dep(Phase 6 W0 层归属更正为 L7)                                                    | ADR-160 |
+| feature 门控 crate   | 层   | 门控类别       | 说明                                                                                 | 依据      |
+| ----------------- | --- | ---------- | ----------------------------------------------------------------------------------- | ------- |
+| `mas-sched`       | L9  | feature 接线 | r2_island_repayment feature 可达(原 shadow-first 预留已偿)                                | ADR-145 |
+| `nexus-hook`      | L9  | feature 接线 | r2_island_repayment feature 可达(空配置 = 现状回退安全)                                      | ADR-146 |
+| `mca-gateway`     | L10 | feature 门控 | 仅根 `mca` feature + ci mca job 编译;ADR-065 决策 6 装配期注入chimera-cli optional 边        | ADR-065 |
+| `csn-substitutor` | L10 | feature 接线 | 能力降级链,r2_island_repayment feature 编译(默认 binary 不含)                               | ADR-160 |
+| `sesa-router`     | L6  | feature 接线 | 子专家稀疏激活,r2_island_repayment feature 编译                                            | ADR-160 |
+| `chtc-bridge`     | L10 | feature 接线 | 5 IDE 适配器,chimera-cli optional=true 接线(batch-P2)                                  | ADR-160 |
+| `mtpe-executor`   | L7  | feature 接线 | 多步预测执行,r2_island_repayment feature 编译                                            | ADR-160 |
+| `ssra-fusion`     | L7  | feature 接线 | 黏液式适配,r2_island_repayment feature 编译(Phase 6 W0 层归属更正为 L7)                      | ADR-160 |
+| `omega-learner`   | L6  | feature 门控 | LinUCB 学习层,R2 冻结期仅 feature 路径编译                                                   | ADR-031 |
 
-> ★ Insight:**"零 Stub / 全部实现" ≠ "已装配"**。9 个冻结孤岛(另 1 个 GATED=mca-gateway, ADR-177;M13 批次 decb/scc 两岛已转正,M12 批次 gea/gqep/qeep 三岛链已转正,见上)单测与 E2E 全绿、代码完整,但不在 `chimera-cli` 生产二进制的反向依赖图上——这是"实现完成度"与"装配可达性"两个正交维度。ADR-160 用棘轮把这一差异显式化、冻结化,避免文档把"写了"误报成"上线了"。
+> ★ Insight:**"零 Stub / 全部实现" ≠ "已装配"**。原 9 个冻结孤岛已经 P0-P3 偿还批次全部转为 feature 接线可达(棘轮 frozen=0),单测与 E2E 全绿、代码完整——但默认二进制仍不含这 9 个 crate([GATED] 口径),这是"实现完成度"与"装配可达性"两个正交维度。ADR-160 用棘轮把这一差异显式化,避免文档把"写了"误报成"上线了"。另:架构减法批次(v2.29.0-omega 在途)物理删除 `auto-dpo`(零生产消费者)与 `model-router`(ADR-172 退役,入边仅孤岛+dev-dep),members 43 → 41。
 >
 > 已偿还/处置(自本表移除):**M13 2026-09-17(decb-scc 重路由)**:`decb-governor`(efficiency-monitor 生产边 L9→L8 转正,RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats,experience_loop 组合根装配共享实例)、`scc-cache`(chimera-cli 组合根生产边 L10→L3 转正,ADR-161 路径①,doctor 第 9 探针 scc_cache 消费 stats());**M12 2026-09-16(wave 3c,ADR-185)**:`gea-activator`(chimera-mas 生产边 L9→L9 转正,gea_bridge 桥接闭环)、`gqep-executor`(chimera-cli 生产边 L10→L7 转正,doctor 并行 gather)、`qeep-protocol`(gqep 传递转正,ADR-048 例外收编);**M10 2026-09-16**:`acb-governor`(退役删除,见 §3.8 退役注记)、`lsct-tiering`(cmt-tiering 生产边转正)。历史快照见 git 历史与 freeze 文件 REMOVED 注记。
 
@@ -1450,10 +1438,9 @@ D:\Chimera CLI\
 │       ├── fuzz.yml              # tag触发fuzz(8 target × 300s，Linux CI)
 │       ├── release.yml           # tag触发5平台build + docker + release
 │       └── test-install-scripts.yml
-├── crates/                       # **42 个 crate 源码**(v2.28.2-omega 在途,见 §3 索引 + §3.11 可达性清单;acb-governor 已按 ADR-182 退役,42 = 32 生产可达/9 冻结孤岛 + 1 GATED(ADR-177;M13 批次 decb/scc 两岛重路由转正 11→9,棘轮实测 reachable=32/frozen=9/new_gaps=0),棘轮口径以 check_crate_reachability.sh 输出为准)
+├── crates/                       # **41 个 crate 源码**(v2.29.0-omega 在途,见 §3 索引 + §3.11 可达性清单;架构减法批次删 auto-dpo/model-router + 新增 router-traits,41 = 32 生产可达 + 9 GATED + 0 冻结孤岛,棘轮实测 reachable=32/frozen=0/new_gaps=0,口径以 check_crate_reachability.sh 输出为准)
 │   ├── nexus-core/          (L1)
 │   ├── event-bus/           (L1)
-│   ├── model-router/        (L1)
 │   ├── nmc-encoder/         (L2)
 │   ├── hcw-window/          (L2)
 │   ├── mlc-engine/          (L2)
@@ -1465,7 +1452,6 @@ D:\Chimera CLI\
 │   ├── qeep-protocol/       (L4)
 │   ├── repo-wiki/           (L5)
 │   ├── gsoe-evolution/      (L5)
-│   ├── auto-dpo/            (L5)
 │   ├── osa-coordinator/     (L6)
 │   ├── kvbsr-router/        (L6)
 │   ├── faae-router/         (L6)
@@ -1652,7 +1638,7 @@ my-crate/
 | **INV-7 上下文预算界**                       | `chimera-mas/src/invariants.rs` `InvariantChecker::check_inv7_budget()`               | `m_total > MEMORY_BUDGET_MB × MEMORY_BUDGET_UTILIZATION`(130 × 0.9 = 117 MB)      | LRU 淘汰 Warm/Cold(保留 Hot)                    |
 | **INV-8 归档单调性**                        | `chimera-mas/src/invariants.rs` `InvariantChecker::check_inv8_archive_monotonicity()` | 检测到 Cold→Warm 升级请求                                                                | 拒绝并走 `archive::upgrade_with_audit()` 留痕     |
 | **MAX\_AGENT\_DEPTH = 5**              | `chimera-mas/src/delegation.rs` `MAX_AGENT_DEPTH` 常量                                  | 深度 = 1(根) + 子任务级数;5 级时叶子必须 leaf                                                   | 委托拒绝,返回 `MasError::DepthExceeded`           |
-| **`#![forbid(unsafe_code)]`**          | **43 个 crate** `lib.rs` 第 1 行                                                         | 任何 unsafe 块                                                                       | `rustc` 编译失败                                |
+| **`#![forbid(unsafe_code)]`**          | **41 个 crate** `lib.rs` 第 1 行                                                         | 任何 unsafe 块                                                                       | `rustc` 编译失败                                |
 | **Critical 事件 mpsc**                   | `event-bus/src/bus.rs` `publish_critical()`                                           | `SkepticVeto`/`RedTeamAudit`/`AsaIntervention`/`BudgetExceeded`/`AgentTaskFailed` | mpsc fan-out,保证送达                           |
 | **BudgetExceeded severity = Critical** | `event-bus/src/registry.rs`(`NexusEvent::severity()`,`define_event_registry!` 注册表展开生成)               | 任何 BudgetExceeded 事件                                                              | `severity()` 必须返回 `EventSeverity::Critical` |
 

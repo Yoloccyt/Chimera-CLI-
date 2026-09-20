@@ -9,11 +9,11 @@
 //!    变体即编译错误。即使未来 severity() 被误加回通配符(本 M1 修复的回归),
 //!    这道锁依然拦住未登记的变体。
 //! 2. **计数锁** `test_variant_count_lock` — 样本清单实际构造的变体数必须
-//!    等于 `VARIANT_COUNT_LOCK`(145);样本与序数表交叉断言一一对应
+//!    等于 `VARIANT_COUNT_LOCK`(146);样本与序数表交叉断言一一对应
 //!    (清单漏登/重登即失败)。
 //! 3. **分级分布锁** `test_severity_distribution_lock` — severity() 的
-//!    Critical/Info/Normal 分布必须等于 17/11/117;并与 bus.rs
-//!    `LANE_FORBIDDEN_SHARD` 的 17 个 Critical 名单双向互锁。
+//!    Critical/Info/Normal 分布必须等于 18/11/117;并与 bus.rs
+//!    `LANE_FORBIDDEN_SHARD` 的 18 个 Critical 名单双向互锁。
 //!
 //! # 维护规约(新增变体时必须同步修改)
 //! - enum 新增变体 → 编译器强制修改 severity()/type_name()/topic(),
@@ -37,16 +37,17 @@ use event_bus::{
 use nexus_contracts::behavior_contract::ContractContext;
 use nexus_contracts::reward::RewardSignal;
 
-/// 变体总数锁定值(2026-09-12 实测 enum = 145,含 WIP 新增 TuiChatHistoryReplaced)
-const VARIANT_COUNT_LOCK: usize = 145;
-/// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 17 一致)
-const CRITICAL_LOCK: usize = 17;
+/// 变体总数锁定值(2026-09-20 实测 enum = 146,含 SecurityInterceptionReported;
+/// L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后 18/11/117 分布)
+const VARIANT_COUNT_LOCK: usize = 146;
+/// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 18 一致)
+const CRITICAL_LOCK: usize = 18;
 /// severity 分布锁定值(Info)
 const INFO_LOCK: usize = 11;
 /// severity 分布锁定值(Normal)
 const NORMAL_LOCK: usize = 117;
 
-/// 构造全部 145 个 NexusEvent 变体的最小实例清单(enum 声明序)
+/// 构造全部 146 个 NexusEvent 变体的最小实例清单(enum 声明序)
 ///
 /// WHY 每变体一个构造器: 把"变体清单"变成编译期契约 —— 变体改名/删除立即
 /// 编译错误;新增变体未登记时,下方计数锁与序数表交叉断言失败。
@@ -997,7 +998,7 @@ fn all_variant_samples() -> Vec<NexusEvent> {
     ]
 }
 
-/// 变体序数表(enum 声明序,1..=145) — 编译期穷举锁
+/// 变体序数表(enum 声明序,1..=146) — 编译期穷举锁
 ///
 /// WHY 无通配符: 新增变体不显式登记即编译错误(第一道锁,先于一切运行时断言)。
 #[allow(dead_code)]
@@ -1160,7 +1161,7 @@ fn test_variant_count_lock() {
         VARIANT_COUNT_LOCK,
         "NexusEvent 变体实际数量与锁定值不符: 清单需同步登记 enum 新变体"
     );
-    // 序数表与样本清单交叉锁: 145 个样本必须映射到 145 个不同序数
+    // 序数表与样本清单交叉锁: 146 个样本必须映射到 146 个不同序数
     // (清单漏登变体 → 样本数不足;序数表漏登 → 编译错误;双重登记 → 序数重复)
     let ordinals: HashSet<u32> = all.iter().map(variant_ordinals).collect();
     assert_eq!(

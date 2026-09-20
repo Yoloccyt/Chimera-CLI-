@@ -84,6 +84,9 @@ $layerMap = @{
     # (二者均零外部生产依赖方, 移动经 grep 核实无 Check-B 影响)
     'osa-coordinator' = 6; 'kvbsr-router' = 6; 'faae-router' = 6
     'sesa-router' = 6; 'omega-learner' = 6
+    # 架构减法批次 (2026-09-20): router-traits L6 trait 抽象 crate
+    # (星型耦合消除;osa-coordinator 实现方,依赖 L0/L1 合规向下)
+    'router-traits' = 6
     # L7 Execution
     'pvl-layer' = 7; 'gqep-executor' = 7; 'mtpe-executor' = 7
     'csn-substitutor' = 7; 'ssra-fusion' = 7
@@ -107,7 +110,10 @@ $layerMap = @{
 
 # Expected total crate count (workspace members). Static completeness bound.
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
-$expectedCrates = 42
+# 架构减法批次 (2026-09-20): +router-traits -> 43。注:auto-dpo/model-router
+# 两个层图历史条目保留——磁盘目录已删(C3 反向不报),但 selftest mock 图
+# 与存量注释仍引用其层号(删除会破坏 mock 断言基线)。
+$expectedCrates = 43
 
 # Inner-ring whitelist: 9 crates (memory + reasoning + evolution ring).
 # Three-ring reorganization target: inner ring talks via shared memory/direct

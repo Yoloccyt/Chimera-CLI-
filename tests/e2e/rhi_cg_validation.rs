@@ -40,8 +40,10 @@
 #![forbid(unsafe_code)]
 
 // ⚠️ **TODO**: rhi_cg_validation 严重依赖 auto-dpo crate (PreferencePair/JudgeClient/SelfComparisonHistory),
-//   auto-dpo 已于 v2.28.3-omega P0 批次删除，需等待 RL 全栈接入后恢复
-// 整个文件已注释
+//   auto-dpo 已于 v2.28.3-omega P0 批次删除，需等待 RL 全栈接入后恢复。
+// 恢复方法:删除下方 #![cfg(any())] 行并重建对 gsoe/RL 层的类型映射(原 auto_dpo 引用已全部失效)。
+// #![cfg(any())] = Rust 惯用"整 target 暂禁编译"开关,源码保留供 RL 接入时迁移参考。
+#![cfg(any())]
 
 // ============================================================
 // 数据结构 — 进化结果载体

@@ -107,25 +107,10 @@ fn test_week2_quest_repo_router() {
             "WikiStore 初始应为空"
         );
 
-        // L1 Core:Model Router 路由
-        let registry =
-            model_router::ModelRegistry::from_config(&model_router::RouterConfig::default());
-        let router = model_router::ModelRouter::new(registry, bus);
-        let req = model_router::RoutingRequest {
-            quest_id: "q-w2".into(),
-            intent: nexus_core::UserIntent {
-                intent_id: "i-w2-r".into(),
-                raw_text: "test".into(),
-                multimodal_inputs: vec![],
-                risk_level: 10,
-            },
-            estimated_tokens: 100,
-            strategy: model_router::RoutingStrategy::Lite,
-            // MCA P2: 端到端验收测试使用标准思考模式
-            thinking_pref: nexus_contracts::affinity::ThinkingPreference::Standard,
-        };
-        let decision = router.route(req).await.expect("Model Router 路由失败");
-        assert!(!decision.model_id.is_empty(), "Model Router 应选中非空模型");
+        // L1 Core:Model Router 路由验收块已随架构减法批次移除——
+        // model-router 已按 ADR-172 退役删除(mca-gateway 为唯一在役 LLM 通道),
+        // 通道级验收由 mca_quota_switch_e2e / token_efficiency_e2e 承接。
+        drop(bus);
     });
 }
 

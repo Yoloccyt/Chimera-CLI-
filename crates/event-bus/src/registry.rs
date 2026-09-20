@@ -18,15 +18,15 @@
 //! - **重名**:同一变体在注册表登记两次 → 展开出重复 match 臂,
 //!   `unreachable_patterns` 在 `-D warnings` 下即编译失败;
 //! - **错位/定级错误**:由 tests/variant_count_test.rs 三层锁守护
-//!   (145 计数锁 + 序数表交叉锁 + 17/11/117 分布锁 + Critical 名单与
+//!   (146 计数锁 + 序数表交叉锁 + 18/11/117 分布锁 + Critical 名单与
 //!   bus.rs `LANE_FORBIDDEN_SHARD` 双向互锁),注册表任一属性笔误都会
 //!   使对应锁测试红灯;
 //! - **metadata()**:所有变体第一字段均为 `metadata: EventMetadata`,
 //!   注册表逐变体生成取元数据臂,与手写表逐字等价。
 //!
 //! # 双清单同步红线(刻意保留的人工清单)
-//! bus.rs `is_critical_mpsc_event`(13 个 mpsc 旁路变体)与
-//! `LANE_FORBIDDEN_SHARD`(17 个 Critical 变体名)**不**由本注册表生成,
+//! bus.rs `is_critical_mpsc_event`(14 个 mpsc 旁路变体)与
+//! `LANE_FORBIDDEN_SHARD`(18 个 Critical 变体名)**不**由本注册表生成,
 //! 维持独立手写清单 —— 这是设计特性而非疏漏:两张独立清单 + 守护测试
 //! 互锁(bus.rs `test_critical_severity_implies_mpsc_bypass` 等)使
 //! "severity 定级"与"mpsc 旁路判定"的漂移可被双向捕获;若二者同源于
@@ -51,8 +51,8 @@ macro_rules! define_event_registry {
         impl NexusEvent {
             /// 判断事件是否为关键事件(Critical)
             ///
-            /// 由 `define_event_registry!` 从注册表展开,全部 145 个变体
-            /// 显式定级(Critical 17 / Info 11 / Normal 117),无通配符兜底:
+            /// 由 `define_event_registry!` 从注册表展开,全部 146 个变体
+            /// 显式定级(Critical 18 / Info 11 / Normal 117),无通配符兜底:
             /// 新增变体不显式定级即编译错误(fail-closed,M1 属性)。
             /// Critical 语义与红线文档见模块文档;旁路通道判定见 bus.rs
             /// `is_critical_mpsc_event`(双清单同步红线)。
@@ -74,7 +74,7 @@ macro_rules! define_event_registry {
 
             /// 获取事件所属主题(10 类 EventTopic)
             ///
-            /// 由 `define_event_registry!` 从注册表展开,145 变体映射到
+            /// 由 `define_event_registry!` 从注册表展开,146 变体映射到
             /// 10 类 topic,无通配符兜底,新增变体编译器强制登记。
             pub fn topic(&self) -> EventTopic {
                 match self {
@@ -119,6 +119,9 @@ define_event_registry! {
     // L4 Security → L8 Parliament:能力冻结
     CapabilityFrozen => Normal, Security;
     ShadowBreakerTripped => Normal, Security;
+    // [Critical·mpsc] L4 深度优化 P1-1:形式化验证失败必须确保投递——
+    // 丢失则被否决的违规候选继续进入后续阶段(与 FormalViolation 同语义,
+    // 对齐九层防御 L0 + 进化悖论 L3→L4 跃迁红线;双清单同步见 bus.rs)
     FormalVerificationFailed => Critical, Security;
     // [Critical·mpsc] 预算耗尽 = 系统红线(Hard Constraint 第 10 条,F-001):
     // 资源达上限必须立即触发背压保护并通知 Parliament,标 Normal 会在

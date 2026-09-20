@@ -20,10 +20,8 @@
 use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, NexusEvent};
-use model_router::{
-    CacrConfig, ModelRegistry, ModelRouter, RouterConfig, RoutingRequest, RoutingStrategy,
-};
-use nexus_contracts::affinity::ThinkingPreference;
+// 架构减法批次(2026-09-20):model-router 已按 ADR-172 退役删除,
+// 原路由集成块随之移除;LLM 通道级 E2E 由 mca_quota_switch_e2e 承接。
 use nexus_core::{MultimodalInput, TaskStatus, ThinkingMode, UserIntent};
 use quest_engine::{QuestConfig, QuestEngine};
 use repo_wiki::{Layer, VectorIndex, WikiGenerator, WikiStore};
@@ -102,25 +100,8 @@ async fn test_e2e_full_pipeline_happy_path() {
     }
 
     // ========== 阶段 2:模型路由 ==========
-    let registry = ModelRegistry::from_config(&RouterConfig::default());
-    let router = ModelRouter::new(registry, bus.clone());
-    let routing_req = RoutingRequest {
-        quest_id: quest.quest_id.clone(),
-        intent: make_intent(),
-        estimated_tokens: 1000,
-        strategy: RoutingStrategy::Auto,
-        // MCA P2: 端到端测试使用标准思考模式
-        thinking_pref: ThinkingPreference::Standard,
-    };
-    let decision = router.route(routing_req).await.unwrap();
-    assert!(!decision.model_id.is_empty(), "路由应选中非空模型");
-
-    // 验证:ModelRouteSelected 事件已发布
-    let event = rx.recv().await.unwrap();
-    assert!(
-        matches!(event, NexusEvent::ModelRouteSelected { ref quest_id, .. } if quest_id == &quest.quest_id),
-        "期望 ModelRouteSelected 事件,实际收到 {event:?}"
-    );
+    // 已随 model-router 退役移除(ADR-172);ModelRouteSelected 事件类型的
+    // 发布方职责转移至 mca-gateway 通道层(见 mca_quota_switch_e2e)。
 
     // ========== 阶段 3:Task 状态推进 ==========
     // 推进所有 Task 至 Completed,触发自动检查点与 ExecutionCompleted
@@ -372,18 +353,7 @@ async fn test_e2e_no_orphan_events() {
     );
     let quest = engine.create_quest(make_intent()).await.unwrap();
 
-    // 路由
-    let registry = ModelRegistry::from_config(&RouterConfig::default());
-    let router = ModelRouter::new(registry, bus.clone());
-    let routing_req = RoutingRequest {
-        quest_id: quest.quest_id.clone(),
-        intent: make_intent(),
-        estimated_tokens: 1000,
-        strategy: RoutingStrategy::Lite,
-        // MCA P2: 端到端测试使用标准思考模式
-        thinking_pref: ThinkingPreference::Standard,
-    };
-    router.route(routing_req).await.unwrap();
+    // 路由块已随 model-router 退役移除(ADR-172)
 
     // 推进所有 Task 至 Completed
     for i in 0..quest.tasks.len() {
@@ -402,7 +372,6 @@ async fn test_e2e_no_orphan_events() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let mut got_quest_created = false;
-    let mut got_model_route_selected = false;
     let mut got_quest_progress = false;
     let mut got_execution_completed = false;
 
@@ -410,7 +379,6 @@ async fn test_e2e_no_orphan_events() {
     while let Ok(Some(event)) = rx.try_recv() {
         match event {
             NexusEvent::QuestCreated { .. } => got_quest_created = true,
-            NexusEvent::ModelRouteSelected { .. } => got_model_route_selected = true,
             NexusEvent::QuestProgressUpdated { .. } => got_quest_progress = true,
             NexusEvent::ExecutionCompleted { .. } => got_execution_completed = true,
             _ => {}
@@ -418,36 +386,13 @@ async fn test_e2e_no_orphan_events() {
     }
 
     assert!(got_quest_created, "应收到 QuestCreated 事件");
-    assert!(got_model_route_selected, "应收到 ModelRouteSelected 事件");
     assert!(got_quest_progress, "应收到 QuestProgressUpdated 事件");
     assert!(got_execution_completed, "应收到 ExecutionCompleted 事件");
 }
 
-/// CACR 集成测试 — 验证启用 CACR 守卫后正常路由走 Allow 路径
-///
-/// 默认 CacrConfig 预算充足(1_000_000 美分),正常路由应被放行。
-#[tokio::test]
-async fn test_e2e_cacr_allow_path() {
-    let bus = EventBus::new();
-    let registry = ModelRegistry::from_config(&RouterConfig::default());
-    let router = ModelRouter::with_cacr(registry, bus.clone(), CacrConfig::default());
-
-    let req = RoutingRequest {
-        quest_id: "q-cacr-test".into(),
-        intent: make_intent(),
-        estimated_tokens: 1000,
-        strategy: RoutingStrategy::Lite,
-        // MCA P2: CACR 测试使用标准思考模式
-        thinking_pref: ThinkingPreference::Standard,
-    };
-    let decision = router.route(req).await.unwrap();
-    assert!(!decision.model_id.is_empty(), "CACR Allow 应放行路由");
-    // route_reason 不应包含 CACR Downgrade 标识
-    assert!(
-        !decision.route_reason.contains("CACR Downgrade"),
-        "正常路由不应触发降级"
-    );
-}
+// 注:test_e2e_cacr_allow_path 已随 model-router 退役删除(ADR-172)——
+// CACR 预算守卫属 model-router 内部行为,无独立存在形态;
+// 预算守卫能力由 decb-governor/RuntimeAuditor 体系承接。
 
 /// 思考模式切换测试 — 验证 TTG(Thinking Toggle Governance)事件广播
 ///

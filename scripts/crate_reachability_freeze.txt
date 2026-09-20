@@ -17,8 +17,11 @@
 # Nothing in this file: legacy. Gate output must stay ASCII (Windows GBK consoles).
 
 # --- intentional reservation (Cargo.toml says "no consumer" + reservation ADR) ---
-mas-sched        # shadow-first, chimera-mas split to be taken over via L0 contract (root Cargo.toml:55-59)  ADR-145  [T11-b1 WIP]  @see ADR-179 deferral (2026-09-03): event-plane dep not landed; unblock when chimera-mas split event contract exists
-nexus-hook       # empty config = current behaviour, safe fallback path (root Cargo.toml:60-64)             ADR-146  [T11-b1 WIP]  @see ADR-179 deferral (2026-09-03): registry path depends on frozen track-2 (DynamicEvent); unblock when ADR-173 freeze lifts
+# mas-sched / nexus-hook Frozen entries REMOVED 2026-09-20 (P0 doc-governance batch):
+# check_crate_reachability.sh now reports [ROTATE] for both crates - they are
+# reachable via the r2_island_repayment feature wiring (debt repaid); lines
+# deleted per ADR-160 shrink-only rule. mca-gateway stays GATED (feature-gated,
+# not listed here).
 
 # --- compiled only under a cargo feature, absent from the default binary ---
 # mca-gateway Frozen entry REMOVED 2026-09-03 (T2): chimera-cli now declares it
@@ -27,7 +30,10 @@ nexus-hook       # empty config = current behaviour, safe fallback path (root Ca
 # frozen shrink 15 -> 14 per ADR-160 shrink-only rule.
 
 # --- legacy islands (delivered in Week 6/7, never wired; unit + E2E tests green but no production consumer) ---
-model-router     # incoming edges: auto-dpo (itself an island) + quest-engine dev-dep only; the "CAF landed" claim in the rules docs does not hold on the production graph  ADR-160/172  [ADR-171 T9: accepted pseudo-reachable production edge auto-dpo->model-router (L5->L1, ModelRouterJudgeClient), edge kept, consumer side is island; ADR-172: retired routing-contract status, frozen not deleted, mca-gateway is the only live LLM channel]
+# model-router Frozen entry REMOVED 2026-09-19/20 (arch-subtraction batch A): the
+# crate was retired per ADR-172 and physically deleted from workspace.members
+# (directory gone); [STALE] registration line deleted. mca-gateway is the only
+# live LLM channel.
 # --- transitively unreachable (2026-09-11): the capability chain rooted at the frozen
 # island gea-activator. Registered per ADR-160 path 3 (visible debt). Repaying them
 # means wiring the whole chain (gea-activator -> gqep-executor -> qeep-protocol)

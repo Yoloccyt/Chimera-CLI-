@@ -460,7 +460,7 @@ fn payload_within_limit(event: &NexusEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::LANE_FORBIDDEN_SHARD;
+    use crate::bus::{CRITICAL_TOTAL, LANE_FORBIDDEN_SHARD};
     use crate::types::EventMetadata;
 
     /// 无会话键的普通事件(Unordered 代表)
@@ -505,8 +505,9 @@ mod tests {
 
     #[test]
     fn test_lane_forbidden_shard_names_are_critical() {
-        // LANE_FORBIDDEN_SHARD 清单自身:17 个名字,全部命中 Critical 车道
-        assert_eq!(LANE_FORBIDDEN_SHARD.len(), 17);
+        // LANE_FORBIDDEN_SHARD 清单自身:与 CRITICAL_TOTAL 常量锚定(防漂移),
+        // 全部命中 Critical 车道
+        assert_eq!(LANE_FORBIDDEN_SHARD.len(), CRITICAL_TOTAL);
         for name in LANE_FORBIDDEN_SHARD {
             let event = super::super::bus::tests_helpers::critical_variant_by_name(name)
                 .expect("清单中的名字必须可构造事件");

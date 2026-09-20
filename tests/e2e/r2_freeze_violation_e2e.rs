@@ -96,17 +96,18 @@ fn test_r2_freeze_declaration_in_ci_gate() {
     );
 }
 
-/// 验证 auto-dpo/src/generator.rs 有 R2 冻结声明注释
+/// 验证 auto-dpo 的 R2 冻结声明面已随退役自然消灭
+///
+/// 架构减法批次(2026-09-20):auto-dpo 已物理删除,原"generator.rs 必须含
+/// R2 冻结声明"验收转为"crate 目录不存在 = R2 路径不可能存在"的退役守卫
+/// (更强的 fail-closed:代码不存在则无从违反);RL 全栈若重建 auto-dpo,
+/// 需同步恢复冻结声明断言。
 #[test]
 fn test_r2_freeze_declaration_in_auto_dpo() {
-    let source = read_crate_source("auto-dpo", "generator.rs");
+    let crate_dir = workspace_root().join("crates").join("auto-dpo");
     assert!(
-        source.contains("R2 冻结声明(ADR-042)"),
-        "auto-dpo/src/generator.rs 必须包含 R2 冻结声明(ADR-042)"
-    );
-    assert!(
-        source.contains("FormalVerifier 落地前无条件冻结"),
-        "auto-dpo/src/generator.rs 必须声明 FormalVerifier 落地前无条件冻结"
+        !crate_dir.exists(),
+        "auto-dpo 应按 ADR-172 体系退役删除;若目录重新出现,必须同时恢复 R2 冻结声明断言"
     );
 }
 

@@ -40,17 +40,8 @@ use omega_learner::formal::LearningMonotonicityChecker;
 use omega_learner::s2_memory::TaskPhase;
 use omega_learner::s8_mem_pi::{S8Context, S8Learner, S8Reward};
 
-/// 构造测试偏好对
-fn pair(id: &str, cs: f32, rs: f32) -> PreferencePair {
-    PreferencePair {
-        pair_id: id.to_string(),
-        chosen: format!("chosen-{id}"),
-        rejected: format!("rejected-{id}"),
-        chosen_score: cs,
-        rejected_score: rs,
-        quality: SampleQuality::High,
-    }
-}
+// 属性 #3 构造器 pair()/PreferencePair 随 auto-dpo 退役移除,
+// RL 全栈接入后恢复(见文件头 TODO)。
 
 // ============================================================
 // 属性 #3:AutoDPO 偏好对一致性 (M1 新增)
@@ -189,12 +180,14 @@ fn test_property5_s8_learner_real_trajectory() {
 }
 
 // ============================================================
-// 综合管线:五属性全链路(定义 → 执行 → 汇总)
+// 综合管线:属性全链路(定义 → 执行 → 汇总)
 // ============================================================
 
 #[test]
 fn test_m1_five_property_pipeline_all_satisfied() {
     // Step 1: 属性定义(InvariantSpec,L0 契约层)
+    // 注:M1-P3(AutoDPO 偏好对)随 auto-dpo 退役移出可执行管线(诚实降级,
+    // 不伪造 Satisfied);RL 全栈接入后恢复 5/5 口径。
     let specs = [
         InvariantSpec::new(
             "M1-P1",
@@ -208,13 +201,6 @@ fn test_m1_five_property_pipeline_all_satisfied() {
             "AEGIS Critic 评分单调不减",
             PropertyCategory::ScoreMonotonicity,
             "gsoe-evolution",
-            VerificationMethod::PropTest,
-        ),
-        InvariantSpec::new(
-            "M1-P3",
-            "AutoDPO 偏好对 chosen > rejected",
-            PropertyCategory::InvariantPreservation,
-            "auto-dpo",
             VerificationMethod::PropTest,
         ),
         InvariantSpec::new(
@@ -257,9 +243,12 @@ fn test_m1_five_property_pipeline_all_satisfied() {
     let learning = LearningMonotonicityChecker::new();
     let r5 = learning.verify_steps_monotonic(&[1, 2, 3]);
 
-    // Step 3: 汇总报告(5/5 Satisfied = M1 门禁达成)
-    let results = [r1, r2, r3, r4, r5];
+    // Step 3: 汇总报告(4/4 Satisfied = 可执行属性门禁达成;M1-P3 已随退役降级)
+    let results = [r1, r2, r4, r5];
     let satisfied = results.iter().filter(|r| r.is_satisfied()).count();
-    assert_eq!(satisfied, 5, "M1 门禁要求 5/5 属性通过,实际 {satisfied}/5");
+    assert_eq!(
+        satisfied, 4,
+        "可执行属性门禁要求 4/4 通过,实际 {satisfied}/4"
+    );
     assert_eq!(specs.len(), results.len());
 }

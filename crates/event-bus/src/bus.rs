@@ -42,22 +42,24 @@ pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 ///
 /// WHY 常量而非硬编码:双清单同步红线(MCA M0 起)要求新增 Critical 事件
 /// 必须同时修改 severity() 与 is_critical_mpsc_event 两处;此常量供
-/// 守护测试断言旁路清单规模不回退(13 ⊆ 17)。
-pub const CRITICAL_MPSC_VARIANTS: usize = 13;
+/// 守护测试断言旁路清单规模不回退(14 ⊆ 18)。
+/// L4 深度优化 P1-1:FormalVerificationFailed 升入旁路(13 → 14)——
+/// 验证器否决候选若丢失则违规候选继续进入后续阶段,与 FormalViolation 同语义。
+pub const CRITICAL_MPSC_VARIANTS: usize = 14;
 
 /// severity() 返回 Critical 的变体总数 — D-8 口径
 ///
-/// 17 = 13(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
+/// 18 = 14(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
 /// CheckpointSaved / ConsensusReached / SlowConsumerDropped / OrphanCallDetected)。
-/// 本任务不改变 17 个 Critical 事件的通道归属(既定设计,推演 D-8 裁决)。
-pub const CRITICAL_TOTAL: usize = 17;
+/// 本任务不改变 4 个历史 Critical 事件的通道归属(既定设计,推演 D-8 裁决)。
+pub const CRITICAL_TOTAL: usize = 18;
 
-/// 分片禁区声明 — 17 个 Critical 变体名清单(T12 分片时使用)
+/// 分片禁区声明 — 18 个 Critical 变体名清单(T12 分片时使用)
 ///
 /// WHY 声明但不实现:T12 分片改造(SPSC 环阵列 + 分片总线)将按此清单
 /// 禁止把 Critical 单流切片 —— Critical 分片会破坏"发布方 → 订阅方"的
 /// 全序投递语义与 mpsc 旁路免背压保证(推演 9:Critical 背压 = 死锁源)。
-/// 本任务只声明常量 + 测试守护(断言 17 个名字与 severity() Critical 清单
+/// 本任务只声明常量 + 测试守护(断言 18 个名字与 severity() Critical 清单
 /// 一一对应),不实现分片总线。
 pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     "CheckpointSaved",
@@ -77,6 +79,8 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     "FormalViolation",
     "StopRulingIssued",
     "ErrorSignatureMatched",
+    // L4 深度优化 P1-1:验证器失败升入 Critical(双清单同步)
+    "FormalVerificationFailed",
 ];
 
 /// 判断事件是否走 mpsc 旁路通道(Critical 安全/治理告警事件)
@@ -97,7 +101,7 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
 /// 本函数与 `NexusEvent::severity()` 是两张独立清单:新增 Critical 事件
 /// **必须同时修改两处**,只改 severity() 会导致"标 Critical 但 broadcast
 /// Lagged 时丢失"(旁路不生效)。同步性由**本文件测试模块**三层守护:
-/// `test_critical_severity_implies_mpsc_bypass`(13 项手抄清单)、
+/// `test_critical_severity_implies_mpsc_bypass`(14 项手抄清单)、
 /// `test_critical_double_list_d8_counts`(常量锚定 + LANE_FORBIDDEN_SHARD
 /// 双向一一对应)与 R7 互锁断言(清单项 severity() 反查)。
 fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
@@ -136,6 +140,10 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
             // 无界运行;错误签名匹配丢失导致 Debug 算子无法检索同签名兄弟。
             | NexusEvent::StopRulingIssued { .. }
             | NexusEvent::ErrorSignatureMatched { .. }
+            // L4 深度优化 P1-1:FormalVerificationFailed 纳入 mpsc 旁路——
+            // 验证器否决候选必须确保投递(丢失则违规候选继续进入后续阶段,
+            // 与 FormalViolation 同语义;双清单同步红线,registry.rs 定级对齐)
+            | NexusEvent::FormalVerificationFailed { .. }
     )
 }
 
@@ -1650,15 +1658,15 @@ pub fn deserialize_json(s: &str) -> Result<NexusEvent, EventBusError> {
 
 /// Critical 变体构造测试辅助(D-8 口径)
 ///
-/// WHY pub(crate):shard.rs 的 Lane 判定全量断言(17 Critical → Critical)
-/// 复用本模块构造事件,避免两处维护 17 个变体构造代码漂移(新增 Critical
+/// WHY pub(crate):shard.rs 的 Lane 判定全量断言(18 Critical → Critical)
+/// 复用本模块构造事件,避免两处维护 18 个变体构造代码漂移(新增 Critical
 /// 事件时只需改此处一处,三处清单同步守护见 test_critical_double_list_d8_counts)。
 /// 仅测试构建存在(cfg(test)),生产零足迹。
 #[cfg(test)]
 pub(crate) mod tests_helpers {
     use super::*;
 
-    /// 全量 13 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
+    /// 全量 14 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
     pub fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
         vec![
             NexusEvent::SkepticVeto {
@@ -1745,12 +1753,19 @@ pub(crate) mod tests_helpers {
                 error_hash: "h".into(),
                 matched_card_ids: vec![],
             },
+            // L4 深度优化 P1-1:验证器失败升入 mpsc 旁路(双清单同步)
+            NexusEvent::FormalVerificationFailed {
+                metadata: EventMetadata::new("t"),
+                property: "inv-1".into(),
+                counterexample: "s".into(),
+                generation: 1,
+            },
         ]
     }
 
-    /// 全量 17 个 severity() Critical 变体构造(D-8 口径)
+    /// 全量 18 个 severity() Critical 变体构造(D-8 口径)
     ///
-    /// 17 = 13(mpsc 旁路,见 [`all_mpsc_critical_variants`])
+    /// 18 = 14(mpsc 旁路,见 [`all_mpsc_critical_variants`])
     ///   + 4(历史 Critical 只走 broadcast:CheckpointSaved/ConsensusReached/
     ///     SlowConsumerDropped/OrphanCallDetected,按既定设计不回退通道归属)。
     pub fn all_severity_critical_variants() -> Vec<NexusEvent> {
@@ -1785,7 +1800,7 @@ pub(crate) mod tests_helpers {
 
     /// 按变体名构造 Critical 事件(供 LANE_FORBIDDEN_SHARD 逐名断言)
     ///
-    /// 名字不在 17 清单中返回 None(调用方断言消息定位漂移名字)。
+    /// 名字不在 18 清单中返回 None(调用方断言消息定位漂移名字)。
     pub fn critical_variant_by_name(name: &str) -> Option<NexusEvent> {
         all_severity_critical_variants()
             .into_iter()
@@ -2094,11 +2109,18 @@ mod tests {
                 error_hash: "h".into(),
                 matched_card_ids: vec![],
             },
+            // L4 深度优化 P1-1(+1):验证器失败升入旁路(与 registry.rs 定级同步)
+            NexusEvent::FormalVerificationFailed {
+                metadata: EventMetadata::new("t"),
+                property: "inv-1".into(),
+                counterexample: "s".into(),
+                generation: 1,
+            },
         ];
         assert_eq!(
             mpsc_required.len(),
-            13,
-            "旁路清单应覆盖全量 13 个事件,新增 Critical 必须显式加入(双清单同步红线)"
+            14,
+            "旁路清单应覆盖全量 14 个事件,新增 Critical 必须显式加入(双清单同步红线)"
         );
         for event in &mpsc_required {
             assert!(
@@ -2115,8 +2137,8 @@ mod tests {
         }
     }
 
-    /// D-8 双清单计数守护(P1-T11):CRITICAL_MPSC_VARIANTS(13)、
-    /// CRITICAL_TOTAL(17)、13 ⊆ 17、LANE_FORBIDDEN_SHARD 一一对应
+    /// D-8 双清单计数守护(P1-T11):CRITICAL_MPSC_VARIANTS(14)、
+    /// CRITICAL_TOTAL(18)、14 ⊆ 18、LANE_FORBIDDEN_SHARD 一一对应
     #[test]
     fn test_critical_double_list_d8_counts() {
         // 口径断言:两清单规模与常量一致(常量是 D-8 裁决的编译期锚点)
@@ -2135,7 +2157,7 @@ mod tests {
             "severity() Critical 变体数必须等于 CRITICAL_TOTAL({CRITICAL_TOTAL})"
         );
 
-        // 13 个 mpsc 变体:is_critical_mpsc_event 必中 + severity() Critical
+        // 14 个 mpsc 变体:is_critical_mpsc_event 必中 + severity() Critical
         for event in &mpsc_variants {
             assert!(
                 is_critical_mpsc_event(event),
@@ -2149,27 +2171,27 @@ mod tests {
                 event.type_name()
             );
         }
-        // 17 个 Critical 变体:severity() 全部为 Critical(17 口径)
+        // 18 个 Critical 变体:severity() 全部为 Critical(18 口径)
         for event in &critical_variants {
             assert_eq!(
                 event.severity(),
                 EventSeverity::Critical,
-                "{} 应命中 severity() Critical 清单(17 口径)",
+                "{} 应命中 severity() Critical 清单(18 口径)",
                 event.type_name()
             );
         }
 
-        // 13 ⊆ 17:每个 mpsc 变体的名字必须在 severity() Critical 清单中
+        // 14 ⊆ 18:每个 mpsc 变体的名字必须在 severity() Critical 清单中
         let mpsc_names: Vec<&str> = mpsc_variants.iter().map(|e| e.type_name()).collect();
         let critical_names: Vec<&str> = critical_variants.iter().map(|e| e.type_name()).collect();
         for name in &mpsc_names {
             assert!(
                 critical_names.contains(name),
-                "mpsc 变体 {name} 不在 severity() Critical 清单中(13 ⊆ 17 违反)"
+                "mpsc 变体 {name} 不在 severity() Critical 清单中(14 ⊆ 18 违反)"
             );
         }
 
-        // LANE_FORBIDDEN_SHARD 分片禁区声明:17 个名字与 Critical 清单一一对应
+        // LANE_FORBIDDEN_SHARD 分片禁区声明:18 个名字与 Critical 清单一一对应
         // WHY 双向断言:T12 分片实现将按此清单禁止切片 Critical 单流;
         // 任一方向缺失都意味着声明与实际清单漂移
         assert_eq!(
@@ -2210,8 +2232,8 @@ mod tests {
         let mpsc_variants = tests_helpers::all_mpsc_critical_variants();
         let severity_variants = tests_helpers::all_severity_critical_variants();
 
-        // 现实值核验:13(mpsc 旁路)/ 17(severity Critical,含 4 个历史广播级)。
-        // WHY 锚定常量而非硬编码 13/17:常量是 D-8 裁决的编译期锚点,清单规模
+        // 现实值核验:14(mpsc 旁路)/ 18(severity Critical,含 4 个历史广播级)。
+        // WHY 锚定常量而非硬编码 14/18:常量是 D-8 裁决的编译期锚点,清单规模
         // 一旦回退(误删)此测试即红。
         assert_eq!(
             mpsc_variants.len(),
@@ -2885,7 +2907,7 @@ mod tests {
         assert_eq!(
             broadcast_only,
             CRITICAL_TOTAL - CRITICAL_MPSC_VARIANTS,
-            "差集 17-13 = {CRITICAL_TOTAL}-{CRITICAL_MPSC_VARIANTS} = 4 个广播专属 Critical"
+            "差集 18-14 = {CRITICAL_TOTAL}-{CRITICAL_MPSC_VARIANTS} = 4 个广播专属 Critical"
         );
     }
 

@@ -80,7 +80,7 @@ layer_of() {
         repo-wiki|gsoe-evolution|auto-dpo) echo 5 ;;
         # Phase 6 W0 层图订正 (2026-08-16, ADR-084): gea-activator 移 L9,
         # ssra-fusion 移 L7 — 与 crate 自述头及 AGENTS.md §2.1 对齐
-        osa-coordinator|kvbsr-router|faae-router|sesa-router|omega-learner) echo 6 ;;
+        osa-coordinator|kvbsr-router|faae-router|sesa-router|omega-learner|router-traits) echo 6 ;;
         # P3-T9 (2026-08-27): nexus-subagent typed SubAgent runtime (L7, 43rd crate)
         pvl-layer|gqep-executor|mtpe-executor|csn-substitutor|ssra-fusion|nexus-subagent) echo 7 ;;
         # ADR-182 (2026-09-16, M10): acb-governor 退役删除, L8 余 parliament/decb-governor
@@ -98,9 +98,11 @@ layer_of() {
 # All layered crates (static completeness bound for check C2).
 # Authority for layer numbers: $layerMap in check_dependency_rules.ps1 -- both
 # lists must stay identical (see DRIFT WARNING in the header).
-layered_crates="nexus-contracts nexus-core event-bus model-router mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache lsct-tiering cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution auto-dpo osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
+layered_crates="nexus-contracts nexus-core event-bus model-router mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache lsct-tiering cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution auto-dpo osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner router-traits pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
-expected_crates=42
+# 架构减法批次 (2026-09-20): +router-traits -> 43(与 .ps1 $expectedCrates 同步;
+# auto-dpo/model-router 历史层号条目保留供 selftest mock 基线)
+expected_crates=43
 
 # Inner-ring whitelist: 9 crates (memory + reasoning + evolution ring).
 # Three-ring reorganization target: inner ring talks via shared memory/direct

@@ -11,11 +11,14 @@
 //! - 旧策略始终保留（单调性不变量）
 
 use event_bus::EventBus;
-use gsoe_evolution::{formal_gate::NamedPropertyResult, GsoeEvolutionEngine, GsoeConfig};
-use nexus_contracts::{EmptyFormalProvider, VerificationResult};
+use gsoe_evolution::{formal_gate::NamedPropertyResult, GsoeConfig, GsoeEvolutionEngine};
+use nexus_contracts::VerificationResult;
 
-/// 构建进化编排器（简化版，不含后悔率采集）
-fn build_orchestrator(bus: EventBus) -> (GsoeEvolutionEngine, decay_engine::ShadowModeCircuitBreaker) {
+/// 构建进化编排器测试夹具(简化版,不含后悔率采集)
+///
+/// WHY 无参:引擎/熔断器构造不消费总线(总线在 evolve 调用点注入),
+/// 避免误导性的"装配需要 bus"假设。
+fn build_orchestrator() -> (GsoeEvolutionEngine, decay_engine::ShadowModeCircuitBreaker) {
     (
         GsoeEvolutionEngine::new(GsoeConfig::default()),
         decay_engine::ShadowModeCircuitBreaker::new(),
@@ -24,9 +27,9 @@ fn build_orchestrator(bus: EventBus) -> (GsoeEvolutionEngine, decay_engine::Shad
 
 #[tokio::test]
 async fn e2e_r2_unfreeze_normal_path() {
-    // 场景 1: 正常路径 - 7 个属性全 Satisfied
+    // 场景 1: 正常路径 - 7 个属性全 Skipped(模拟 EmptyFormalProvider 语义)
     let bus = EventBus::new();
-    let (mut engine, mut breaker) = build_orchestrator(bus.clone());
+    let (mut engine, mut breaker) = build_orchestrator();
 
     // 构造全 Skipped 结果（模拟 EmptyFormalProvider）
     let results: Vec<_> = [
@@ -39,11 +42,20 @@ async fn e2e_r2_unfreeze_normal_path() {
         "invariant-closure",
     ]
     .iter()
-    .map(|p| NamedPropertyResult::new(*p, VerificationResult::Skipped { reason: "no data".into() }))
+    .map(|p| {
+        NamedPropertyResult::new(
+            *p,
+            VerificationResult::Skipped {
+                reason: "no data".into(),
+            },
+        )
+    })
     .collect();
 
     // 所有结果都是 Skipped → fail-closed 应失败
-    let result = engine.evolve_with_formal_verification(&results, &mut breaker, Some(&bus)).await;
+    let result = engine
+        .evolve_with_formal_verification(&results, &mut breaker, Some(&bus))
+        .await;
 
     assert!(result.is_err(), "全 Skipped 应门禁失败（fail-closed）");
 }
@@ -52,7 +64,7 @@ async fn e2e_r2_unfreeze_normal_path() {
 async fn e2e_r2_unfreeze_violation_path() {
     // 场景 2: 违规路径 - decay-consistency 被违反
     let bus = EventBus::new();
-    let (mut engine, mut breaker) = build_orchestrator(bus.clone());
+    let (mut engine, mut breaker) = build_orchestrator();
 
     let results = vec![
         NamedPropertyResult::new(
@@ -62,15 +74,47 @@ async fn e2e_r2_unfreeze_violation_path() {
                 samples_tested: 10,
             },
         ),
-        NamedPropertyResult::new("lineage-dag", VerificationResult::Satisfied { samples_tested: 100 }),
-        NamedPropertyResult::new("critic-monotonicity", VerificationResult::Satisfied { samples_tested: 100 }),
-        NamedPropertyResult::new("preference-consistency", VerificationResult::Satisfied { samples_tested: 100 }),
-        NamedPropertyResult::new("causal-consistency", VerificationResult::Satisfied { samples_tested: 100 }),
-        NamedPropertyResult::new("learning-monotonicity", VerificationResult::Satisfied { samples_tested: 100 }),
-        NamedPropertyResult::new("invariant-closure", VerificationResult::Satisfied { samples_tested: 100 }),
+        NamedPropertyResult::new(
+            "lineage-dag",
+            VerificationResult::Satisfied {
+                samples_tested: 100,
+            },
+        ),
+        NamedPropertyResult::new(
+            "critic-monotonicity",
+            VerificationResult::Satisfied {
+                samples_tested: 100,
+            },
+        ),
+        NamedPropertyResult::new(
+            "preference-consistency",
+            VerificationResult::Satisfied {
+                samples_tested: 100,
+            },
+        ),
+        NamedPropertyResult::new(
+            "causal-consistency",
+            VerificationResult::Satisfied {
+                samples_tested: 100,
+            },
+        ),
+        NamedPropertyResult::new(
+            "learning-monotonicity",
+            VerificationResult::Satisfied {
+                samples_tested: 100,
+            },
+        ),
+        NamedPropertyResult::new(
+            "invariant-closure",
+            VerificationResult::Satisfied {
+                samples_tested: 100,
+            },
+        ),
     ];
 
-    let result = engine.evolve_with_formal_verification(&results, &mut breaker, Some(&bus)).await;
+    let result = engine
+        .evolve_with_formal_verification(&results, &mut breaker, Some(&bus))
+        .await;
 
     assert!(result.is_err(), "违规应门禁失败");
 }
@@ -79,7 +123,7 @@ async fn e2e_r2_unfreeze_violation_path() {
 async fn e2e_r2_unfreeze_all_satisfied_path() {
     // 场景 3: 全 Satisfied 路径
     let bus = EventBus::new();
-    let (mut engine, mut breaker) = build_orchestrator(bus.clone());
+    let (mut engine, mut breaker) = build_orchestrator();
 
     let results: Vec<_> = [
         "lineage-dag",
@@ -91,10 +135,19 @@ async fn e2e_r2_unfreeze_all_satisfied_path() {
         "invariant-closure",
     ]
     .iter()
-    .map(|p| NamedPropertyResult::new(*p, VerificationResult::Satisfied { samples_tested: 100 }))
+    .map(|p| {
+        NamedPropertyResult::new(
+            *p,
+            VerificationResult::Satisfied {
+                samples_tested: 100,
+            },
+        )
+    })
     .collect();
 
-    let result = engine.evolve_with_formal_verification(&results, &mut breaker, Some(&bus)).await;
+    let result = engine
+        .evolve_with_formal_verification(&results, &mut breaker, Some(&bus))
+        .await;
 
     assert!(result.is_ok(), "全 Satisfied 应通过门禁");
     assert_eq!(engine.generation(), 1, "generation 应递增");

@@ -1,8 +1,8 @@
 //! L6 Router Traits — 路由层公共 trait 定义
-//! 
+//!
 //! ★ Insight: 星型耦合转 Trait 抽象是 Rust 惯用模式（如 serde/tonic 的设计哲学）。
 //! 依赖倒置原则 (DIP): 高层模块不应依赖低层模块，都应依赖抽象。
-//! 
+//!
 //! 本 crate 提供：
 //! - `SparseMaskProvider`: OSA 稀疏掩码提供者接口
 //! - `RouterConfig`: 路由配置契约
@@ -15,10 +15,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod masks;
 pub mod config;
+pub mod masks;
 pub mod security;
 
-pub use masks::{SparseMaskProvider, SparseMaskError};
 pub use config::{RouterConfig, RouterId};
-pub use security::{ZeroOrphanGuarantee, OrphanDetector, OrphanReason};
+pub use masks::{SparseMaskError, SparseMaskProvider};
+pub use security::{OrphanDetector, OrphanReason, ZeroOrphanGuarantee};

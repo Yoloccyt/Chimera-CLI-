@@ -136,6 +136,13 @@ fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
             error_hash: "h".into(),
             matched_card_ids: vec![],
         },
+        // L4 深度优化 P1-1:验证器失败升入 mpsc 旁路(与 bus.rs 双清单同步)
+        NexusEvent::FormalVerificationFailed {
+            metadata: EventMetadata::new("t"),
+            property: "inv-1".into(),
+            counterexample: "s".into(),
+            generation: 1,
+        },
     ]
 }
 
@@ -145,17 +152,17 @@ fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
 
 #[test]
 fn test_public_d8_constants_consistent() {
-    // 常量口径:13(mpsc 旁路)+ 4(历史 broadcast-only)= 17(Critical 总数)
-    assert_eq!(CRITICAL_MPSC_VARIANTS, 13);
-    assert_eq!(CRITICAL_TOTAL, 17);
-    assert_eq!(LANE_FORBIDDEN_SHARD.len(), 17, "分片禁区必须恰好 17 个名字");
-    // LANE_FORBIDDEN_SHARD 与全量 13 变体名一一覆盖(13 ⊆ 17)
+    // 常量口径:14(mpsc 旁路)+ 4(历史 broadcast-only)= 18(Critical 总数)
+    assert_eq!(CRITICAL_MPSC_VARIANTS, 14);
+    assert_eq!(CRITICAL_TOTAL, 18);
+    assert_eq!(LANE_FORBIDDEN_SHARD.len(), 18, "分片禁区必须恰好 18 个名字");
+    // LANE_FORBIDDEN_SHARD 与全量 14 变体名一一覆盖(14 ⊆ 18)
     let forbidden: HashSet<&str> = LANE_FORBIDDEN_SHARD.iter().copied().collect();
-    assert_eq!(forbidden.len(), 17, "LANE_FORBIDDEN_SHARD 名字必须唯一");
+    assert_eq!(forbidden.len(), 18, "LANE_FORBIDDEN_SHARD 名字必须唯一");
     for ev in all_mpsc_critical_variants() {
         assert!(
             forbidden.contains(ev.type_name()),
-            "mpsc 变体 {} 未声明在分片禁区(13 ⊆ 17 违反)",
+            "mpsc 变体 {} 未声明在分片禁区(14 ⊆ 18 违反)",
             ev.type_name()
         );
         assert_eq!(ev.severity(), EventSeverity::Critical);
@@ -401,9 +408,9 @@ async fn test_chaos_slow_consumer_critical_zero_loss() {
     let mut critical_rx = bus.subscribe_critical_events(); // mpsc 旁路(4096)
     let mut slow_rx = bus.subscribe(); // 广播订阅者 —— 故意不消费(阻塞)
 
-    // 1) 13 个 mpsc Critical 变体各发布一次(同步 API)
+    // 1) 全量 mpsc Critical 变体各发布一次(同步 API;规模锚定常量防漂移)
     let variants = all_mpsc_critical_variants();
-    assert_eq!(variants.len(), 13);
+    assert_eq!(variants.len(), CRITICAL_MPSC_VARIANTS);
     for ev in &variants {
         bus.publish_critical_blocking(ev.clone()).unwrap();
     }
@@ -413,9 +420,9 @@ async fn test_chaos_slow_consumer_critical_zero_loss() {
         bus.publish_blocking(make_event(i)).unwrap();
     }
 
-    // 3) Critical 零丢失:mpsc 旁路全部收到 13 个(有界 4096 内,不受慢消费者影响)
-    let mut received = Vec::with_capacity(13);
-    for _ in 0..13 {
+    // 3) Critical 零丢失:mpsc 旁路全部收到 14 个(有界 4096 内,不受慢消费者影响)
+    let mut received = Vec::with_capacity(CRITICAL_MPSC_VARIANTS);
+    for _ in 0..CRITICAL_MPSC_VARIANTS {
         let ev = tokio::time::timeout(Duration::from_secs(2), critical_rx.recv())
             .await
             .expect("Critical mpsc 投递不应超时(豁免背压)")
@@ -427,11 +434,19 @@ async fn test_chaos_slow_consumer_critical_zero_loss() {
         );
         received.push(ev.type_name());
     }
-    assert_eq!(received.len(), 13, "慢消费者场景下 Critical 事件必须零丢失");
-    // 13 个名字全部到位(去重后仍 13 —— 无重复无缺失)
+    assert_eq!(
+        received.len(),
+        CRITICAL_MPSC_VARIANTS,
+        "慢消费者场景下 Critical 事件必须零丢失"
+    );
+    // 14 个名字全部到位(去重后仍 14 —— 无重复无缺失)
     let unique: HashSet<&str> = received.iter().copied().collect();
-    assert_eq!(unique.len(), 13, "13 个 Critical 变体应各出现一次");
-    // 与分片禁区交集:收到的正是 13 个 mpsc 变体
+    assert_eq!(
+        unique.len(),
+        CRITICAL_MPSC_VARIANTS,
+        "全量 Critical 变体应各出现一次"
+    );
+    // 与分片禁区交集:收到的正是 14 个 mpsc 变体
     for name in &unique {
         assert!(
             LANE_FORBIDDEN_SHARD.contains(name),

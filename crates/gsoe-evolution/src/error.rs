@@ -101,7 +101,7 @@ pub enum GsoeError {
         /// 违规详情（来自 VerificationResult::Violated 的 counterexample）
         detail: String,
     },
-    
+
     /// R2 解冻阶段③ 前置 2:形式化门禁否决 — 7 个 FormalVerifier 聚合裁决失败
     ///
     /// 触发场景:`FormalVerifierGate::evaluate()` 返回 failed（任一属性 Violated 或
@@ -115,7 +115,7 @@ pub enum GsoeError {
         /// 所有失败详情列表（每个 Violated 属性一条 + 可能的证据不足一条）
         failures: Vec<crate::ci_gate::CiFailure>,
     },
-    
+
     /// R2 解冻阶段③ 前置 3:影子模式熔断器跳闸 — fail-closed 永久拒绝
     ///
     /// 触发场景:`ShadowModeCircuitBreaker::observe()` 检测到后悔率发散（LearningMonotonicity
@@ -125,7 +125,7 @@ pub enum GsoeError {
         /// 跳闸原因（后悔率发散描述）
         cause: String,
     },
-    
+
     /// 形式化验证器未配置 — 缺少必要的 FormalVerifier 实例
     ///
     /// 触发场景：调用 evolve_with_formal_verification 但未注入验证器依赖。

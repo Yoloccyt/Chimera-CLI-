@@ -230,7 +230,7 @@ pub enum NexusEvent {
         /// 跳闸原因 (形式化属性违反反例描述)
         reason: String,
     },
-    
+
     /// 形式化验证失败 — L4 Security Critical 事件 (mpsc 旁路通道)
     ///
     /// WHY Critical:进化否决影响重大，TUI DecayPanel 需立即高亮告警；

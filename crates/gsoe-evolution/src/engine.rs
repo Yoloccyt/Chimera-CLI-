@@ -222,8 +222,8 @@ impl GsoeEvolutionEngine {
         event_bus: Option<&event_bus::EventBus>,
     ) -> Result<EvolutionResult, GsoeError> {
         // 步骤 1: L3 进化
-        let mut result = self.evolve_once().await?;
-        
+        let result = self.evolve_once().await?;
+
         // 步骤 2: L4 门禁裁决
         let gate = crate::formal_gate::FormalVerifierGate::default();
         let gate_verdict = gate.evaluate(formal_results);
@@ -231,36 +231,44 @@ impl GsoeEvolutionEngine {
             // 门禁失败：发布 Critical 事件（如果 EventBus 已连接）
             if let Some(bus) = event_bus {
                 for failure in &gate_verdict.failures {
-                    bus.publish_critical(
-                        NexusEvent::FormalVerificationFailed {
+                    // Critical 送达失败不改变否决语义(fail-closed:裁决优先),
+                    // 但必须留痕告警(旁路保底 sink 已在总线内部处理无订阅场景)
+                    if let Err(e) = bus
+                        .publish_critical(NexusEvent::FormalVerificationFailed {
                             metadata: EventMetadata::new("gsoe-evolution"),
                             property: failure.kind.to_string(),
                             counterexample: failure.message.clone(),
                             generation: self.generation,
-                        }
-                    ).await;
+                        })
+                        .await
+                    {
+                        tracing::warn!("FormalVerificationFailed Critical 投递失败: {e}");
+                    }
                 }
             }
             return Err(GsoeError::FormalVerificationRejected {
                 failures: gate_verdict.failures.clone(),
             });
         }
-        
+
         // 步骤 3: 熔断器观察
         if breaker.is_tripped() {
             if let Some(bus) = event_bus {
-                bus.publish_critical(
-                    NexusEvent::ShadowBreakerTripped {
+                if let Err(e) = bus
+                    .publish_critical(NexusEvent::ShadowBreakerTripped {
                         metadata: EventMetadata::new("gsoe-evolution"),
                         reason: breaker.trip_cause().unwrap_or("unknown").to_string(),
-                    }
-                ).await;
+                    })
+                    .await
+                {
+                    tracing::warn!("ShadowBreakerTripped Critical 投递失败: {e}");
+                }
             }
             return Err(GsoeError::ShadowModeCircuitBroken {
                 cause: breaker.trip_cause().unwrap_or("unknown").to_string(),
             });
         }
-        
+
         // 步骤 4: 许可应用
         Ok(result)
     }
@@ -607,17 +615,52 @@ mod tests {
                 },
             ),
             // 其他 6 个 Satisfied
-            NamedPropertyResult::new("lineage-dag", VerificationResult::Satisfied { samples_tested: 100 }),
-            NamedPropertyResult::new("critic-monotonicity", VerificationResult::Satisfied { samples_tested: 100 }),
-            NamedPropertyResult::new("preference-consistency", VerificationResult::Satisfied { samples_tested: 100 }),
-            NamedPropertyResult::new("causal-consistency", VerificationResult::Satisfied { samples_tested: 100 }),
-            NamedPropertyResult::new("learning-monotonicity", VerificationResult::Satisfied { samples_tested: 100 }),
-            NamedPropertyResult::new("invariant-closure", VerificationResult::Satisfied { samples_tested: 100 }),
+            NamedPropertyResult::new(
+                "lineage-dag",
+                VerificationResult::Satisfied {
+                    samples_tested: 100,
+                },
+            ),
+            NamedPropertyResult::new(
+                "critic-monotonicity",
+                VerificationResult::Satisfied {
+                    samples_tested: 100,
+                },
+            ),
+            NamedPropertyResult::new(
+                "preference-consistency",
+                VerificationResult::Satisfied {
+                    samples_tested: 100,
+                },
+            ),
+            NamedPropertyResult::new(
+                "causal-consistency",
+                VerificationResult::Satisfied {
+                    samples_tested: 100,
+                },
+            ),
+            NamedPropertyResult::new(
+                "learning-monotonicity",
+                VerificationResult::Satisfied {
+                    samples_tested: 100,
+                },
+            ),
+            NamedPropertyResult::new(
+                "invariant-closure",
+                VerificationResult::Satisfied {
+                    samples_tested: 100,
+                },
+            ),
         ];
 
-        let result = engine.evolve_with_formal_verification(&results, &mut breaker, None).await;
+        let result = engine
+            .evolve_with_formal_verification(&results, &mut breaker, None)
+            .await;
 
-        assert!(matches!(result, Err(crate::error::GsoeError::FormalVerificationRejected { .. })));
+        assert!(matches!(
+            result,
+            Err(crate::error::GsoeError::FormalVerificationRejected { .. })
+        ));
     }
 
     #[tokio::test]
@@ -639,10 +682,19 @@ mod tests {
             "invariant-closure",
         ]
         .iter()
-        .map(|p| NamedPropertyResult::new(*p, VerificationResult::Satisfied { samples_tested: 100 }))
+        .map(|p| {
+            NamedPropertyResult::new(
+                *p,
+                VerificationResult::Satisfied {
+                    samples_tested: 100,
+                },
+            )
+        })
         .collect();
 
-        let result = engine.evolve_with_formal_verification(&results, &mut breaker, None).await;
+        let result = engine
+            .evolve_with_formal_verification(&results, &mut breaker, None)
+            .await;
 
         assert!(result.is_ok(), "全 Satisfied 应通过门禁");
         assert_eq!(engine.generation(), 1);
@@ -669,11 +721,20 @@ mod tests {
             "invariant-closure",
         ]
         .iter()
-        .map(|p| NamedPropertyResult::new(*p, VerificationResult::Satisfied { samples_tested: 100 }))
+        .map(|p| {
+            NamedPropertyResult::new(
+                *p,
+                VerificationResult::Satisfied {
+                    samples_tested: 100,
+                },
+            )
+        })
         .collect();
 
         // 门禁通过，熔断器未跳闸 → 进化成功
-        let result = engine.evolve_with_formal_verification(&results, &mut breaker, None).await;
+        let result = engine
+            .evolve_with_formal_verification(&results, &mut breaker, None)
+            .await;
 
         assert!(result.is_ok(), "门禁通过且熔断器未跳闸应成功");
     }
