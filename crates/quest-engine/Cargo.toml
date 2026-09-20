@@ -38,11 +38,9 @@ hex = { workspace = true }
 [dev-dependencies]
 # tempfile:测试用临时文件/目录
 tempfile = { workspace = true }
-# repo-wiki:L5 知识沉淀,端到端集成测试需验证 Quest 结果可生成 Wiki 条目
+# repo-wiki:L5 知识沉淀，端到端集成测试需验证 Quest 结果可生成 Wiki 条目
 repo-wiki = { workspace = true }
-# model-router:L1 模型路由,端到端集成测试需验证 Quest 创建后可路由至执行模型
-model-router = { workspace = true }
-# nexus-contracts:L0 契约,同时为生产依赖(BudgetTier,ADR-054 决策 3)与
+# nexus-contracts:L0 契约，同时为生产依赖 (BudgetTier,ADR-054 决策 3) 与
 # 测试用类型来源(MCA ThinkingPreference,RoutingRequest 字段);tests/ 目录使用
 nexus-contracts = { workspace = true }
 # criterion:基准测试框架,用于 TTG 模式选择延迟基准(SubTask 35.6)

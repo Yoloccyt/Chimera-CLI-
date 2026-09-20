@@ -119,6 +119,7 @@ define_event_registry! {
     // L4 Security → L8 Parliament:能力冻结
     CapabilityFrozen => Normal, Security;
     ShadowBreakerTripped => Normal, Security;
+    FormalVerificationFailed => Critical, Security;
     // [Critical·mpsc] 预算耗尽 = 系统红线(Hard Constraint 第 10 条,F-001):
     // 资源达上限必须立即触发背压保护并通知 Parliament,标 Normal 会在
     // 背压场景被丢弃,导致超限无人响应、Quest 持续消耗直至 OOM

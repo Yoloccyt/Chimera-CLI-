@@ -91,16 +91,46 @@ pub enum GsoeError {
 
     /// P1-2: M0 形式化验证失败 — Critic 候选未通过单调性/反奖励黑客/有界性检查
     ///
-    /// 触发场景: AEGIS Critic 在 CiGate 前运行 M0 守卫时，候选的复合分数
+    /// 触发场景：AEGIS Critic 在 CiGate 前运行 M0 守卫时，候选的复合分数
     /// 序列违反 CriticMonotonicityChecker 的三项验证之一。
-    /// 处理策略: 拒绝候选（不进入 CiGate），记录违规详情供审计。
-    #[error("M0 形式化验证失败: {property} — {detail}")]
+    /// 处理策略：拒绝候选（不进入 CiGate），记录违规详情供审计。
+    #[error("M0 形式化验证失败：{property} — {detail}")]
     FormalVerificationFailed {
         /// 失败的属性名（如 "critic-monotonicity" / "anti-reward-hacking" / "score-bounded"）
         property: String,
         /// 违规详情（来自 VerificationResult::Violated 的 counterexample）
         detail: String,
     },
+    
+    /// R2 解冻阶段③ 前置 2:形式化门禁否决 — 7 个 FormalVerifier 聚合裁决失败
+    ///
+    /// 触发场景:`FormalVerifierGate::evaluate()` 返回 failed（任一属性 Violated 或
+    /// Satisfied 数不足 require_min_satisfied）。
+    ///
+    /// WHY 独立变体：与 P1-2 的 M0 门不同，本变体承载 R2 解冻阶段③ 前置 2 的完整 7 属性
+    /// 聚合门（M0 谱系/Critic + M1 偏好/事件/学习 + M2 衰减/闭包），且需携带所有失败
+    /// 详情供诊断。P1-2 仅 M0 三门，语义不同。
+    #[error("形式化门禁否决：{}条失败", .failures.len())]
+    FormalVerificationRejected {
+        /// 所有失败详情列表（每个 Violated 属性一条 + 可能的证据不足一条）
+        failures: Vec<crate::ci_gate::CiFailure>,
+    },
+    
+    /// R2 解冻阶段③ 前置 3:影子模式熔断器跳闸 — fail-closed 永久拒绝
+    ///
+    /// 触发场景:`ShadowModeCircuitBreaker::observe()` 检测到后悔率发散（LearningMonotonicity
+    /// Violated）后永久跳闸。
+    #[error("影子模式熔断器跳闸：{cause}")]
+    ShadowModeCircuitBroken {
+        /// 跳闸原因（后悔率发散描述）
+        cause: String,
+    },
+    
+    /// 形式化验证器未配置 — 缺少必要的 FormalVerifier 实例
+    ///
+    /// 触发场景：调用 evolve_with_formal_verification 但未注入验证器依赖。
+    #[error("形式化验证器未配置")]
+    FormalVerifierNotConfigured,
 }
 
 #[cfg(test)]

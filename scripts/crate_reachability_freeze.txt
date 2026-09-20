@@ -28,42 +28,6 @@ nexus-hook       # empty config = current behaviour, safe fallback path (root Ca
 
 # --- legacy islands (delivered in Week 6/7, never wired; unit + E2E tests green but no production consumer) ---
 model-router     # incoming edges: auto-dpo (itself an island) + quest-engine dev-dep only; the "CAF landed" claim in the rules docs does not hold on the production graph  ADR-160/172  [ADR-171 T9: accepted pseudo-reachable production edge auto-dpo->model-router (L5->L1, ModelRouterJudgeClient), edge kept, consumer side is island; ADR-172: retired routing-contract status, frozen not deleted, mca-gateway is the only live LLM channel]
-auto-dpo         # one of the three L5 evolution-loop crates, zero production incoming edges                 ADR-160  [ADR-171 T9: accepted pseudo-reachable production edge auto-dpo->model-router (L5->L1, ModelRouterJudgeClient), edge kept, consumer side is island]
-# M13 2026-09-17:scc-cache Frozen entry REMOVED (decb-scc-reroute-repayment 批次):
-# chimera-cli 组合根装配 SccCache 共享实例(ADR-161 路径①,AppContext.scc,
-# SccConfig::default 容量 256,零 IO 轻构造),doctor 第 9 探针 scc_cache 每次
-# 运行真实消费 stats() 只读快照(消费装配实例而非探针内 ephemeral,ADR-179
-# 非空转判据);L10->L3 向下合法,scc 非内环。M10 经 hcw-window 转正尝试被
-# 依赖铁律驳回的注记随偿还完成移除。
-# Ratchet shrink-only: frozen 11 -> 10。
-csn-substitutor  # capability degradation chain, incoming edge: root E2E dev-dep only                        ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
-# M12 2026-09-16:gea-activator Frozen entry REMOVED (wave 3c, ADR-185):chimera-mas
-# 新增生产边消费(L9->L9 同层,gea_bridge 64 维桥接 + orchestrator 委托前激活 +
-# delegation 结果回填 + feedback 转发闭环,fresh hold 判据见 ADR-179);
-# 重路由候选 = chimera-cli 组合根(ADR-161 路径①)经 mas 间接达成。
-# Ratchet shrink-only: frozen 14 -> 11 (与下行 gqep/qeep 同批)。
-sesa-router      # incoming edge: root E2E dev-dep only                                                      ADR-160
-# M13 2026-09-17:decb-governor Frozen entry REMOVED (decb-scc-reroute-repayment 批次):
-# efficiency-monitor 新增生产依赖(L9->L8 向下、非内环,Check A/B 双绿),
-# RuntimeAuditor 第 6 维 budget_discipline 每次 generate_report 真实消费
-# get_stats() 预算快照(未注入时中性 0.5,事件面零变化);chimera-cli
-# experience_loop 组合根构造共享 DecbGovernor 注入审计器(60s 周期报告=
-# ADR-179 非空转生产调用路径)。M10 经 parliament 转正尝试被内环保守白名单
-# 驳回的注记随偿还完成移除。
-# Ratchet shrink-only: frozen 10 -> 9。
-# --- legacy islands ---
-# acb-governor Frozen entry REMOVED 2026-09-16 (M10, ADR-182): crate retired and
-# deleted (zero production consumers, not even a dev-dep). Ratchet shrink-only:
-# frozen 16 -> 15. Verification: check/test/clippy/dependency rules all green.
-chtc-bridge      # 5 IDE adapters, incoming edge: root E2E dev-dep only                                      ADR-160
-# lsct-tiering Frozen entry REMOVED 2026-09-16 (M10): cmt-tiering declares a
-# production dep and assembles the policy leg (CmtCoordinator::spawn_lsct_policy,
-# crates/cmt-tiering/src/lsct_policy.rs) — QuestCreated -> LSCT decisions ->
-# LsctTierSwitched -> CMT subscriber executes real migration. Real production
-# call path per ADR-179; cycle broken by lsct owning its Tier type (M10).
-# Ratchet shrink-only: frozen 15 -> 14.
-mtpe-executor    # incoming edge: gea-activator dev-dep only                                                 ADR-160  [T11-b1 WIP: repayment=awaiting composition-root wiring, no scheduled date]
-ssra-fusion      # incoming edge: root E2E dev-dep only (layer corrected to L7 in Phase 6 W0)                ADR-160
 # --- transitively unreachable (2026-09-11): the capability chain rooted at the frozen
 # island gea-activator. Registered per ADR-160 path 3 (visible debt). Repaying them
 # means wiring the whole chain (gea-activator -> gqep-executor -> qeep-protocol)
@@ -93,6 +57,14 @@ ssra-fusion      # incoming edge: root E2E dev-dep only (layer corrected to L7 i
 # csn-substitutor -> batch D-2 evaluation; mca-gateway -> M4 independent PR per ADR-065 decision 6).
 # ADR-172 (model-router retirement declaration, zero-code) binds model-router; rows unchanged, ratchet keeps
 # shrink-only semantics.
+
+# --- P0-P3 island-repayment batch (2026-09-19) ---
+# Repayment completed: auto-dpo deleted, chtc-bridge+6 other islands wired via r2_island_repayment feature
+#   batch-P0: auto-dpo deleted (zombie crate, zero production consumer)
+#   batch-P2: chtc-bridge wired (optional=true in chimera-cli dependencies)
+#   batch-P3: mtpe-executor/ssra-fusion/sesa-router/csn-substitutor/mas-sched/nexus-hook wired
+# Ratchet update: frozen 7 -> 0 (all islands repaid), reachable 31 -> 38 (+7)
+# Note: mas-sched/nexus-hook remain GATED (shadow-first reservation per ADR-145/146)
 
 # --- module-level islands (ADR-160 blind spot; R3 F-R3-02) — ALL RETIRED 2026-09-03 ---
 # The 4 dead-module debts (osa-coordinator::cheap_index, hcw-window::CompressionPipeline,

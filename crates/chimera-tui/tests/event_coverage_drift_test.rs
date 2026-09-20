@@ -244,6 +244,7 @@ pub fn classify(event: &NexusEvent) -> TuiEventClass {
         SemanticCacheHit { .. } => TuiEventClass::NotForTui,
         SesaActivationCompleted { .. } => TuiEventClass::NotForTui,
         ShadowBreakerTripped { .. } => TuiEventClass::Consumed,
+        FormalVerificationFailed { .. } => TuiEventClass::Consumed,
         SkepticVeto { .. } => TuiEventClass::Consumed,
         SlowConsumerDropped { .. } => TuiEventClass::Consumed,
         SpecRegistered { .. } => TuiEventClass::NotForTui,

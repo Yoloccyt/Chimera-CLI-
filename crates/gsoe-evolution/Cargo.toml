@@ -18,6 +18,10 @@ serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 event-bus = { workspace = true }
+# R2 解冻阶段③ 前置 3:影子模式熔断器 (ShadowModeCircuitBreaker, L4 Security)
+# WHY L5 → L4 向下依赖合规:§2.2 铁律允许，先例:gsoe-evolution → decay-engine
+# (P1-1 已声明),此处显式声明以支持 evolve_with_formal_verification 方法调用。
+decay-engine = { workspace = true }
 # P4-W15.1.2: SpecLoader 依赖
 # nexus-contracts:L0 契约层(HarnessSpec 类型定义,ADR-033)
 # toml:TOML 反序列化(spec 加载器解析 HarnessSpec DSL,设计文档 §7.2)

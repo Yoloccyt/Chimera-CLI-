@@ -11,6 +11,8 @@
 //! 学习错误（无效奖励/矩阵病态）经 anyhow 传播；holder panic/poison
 //! 内建 fallback（hcw-window selector_learner.rs）——学习失败不影响主链路。
 
+#![cfg(feature = "r2_unfreeze")]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;

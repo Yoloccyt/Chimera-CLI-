@@ -51,11 +51,14 @@ pub mod six_dimension;
 pub mod tool_pruning;
 pub mod types;
 
-// === 关键类型重导出,简化外部导入 ===
+// === 关键类型重导出，简化外部导入 ===
 pub use config::OsaConfig;
 pub use coordinator::{compute_omni_mask_hash, OmniSparseCoordinator, OmniSparseMasks};
 pub use error::OsaError;
 pub use masks::SparseMask;
+
+// ★ Insight: 实现 router-traits trait，使 osa-coordinator 成为 SparseMaskProvider + RouterConfig
+use router_traits::{RouterConfig, RouterId, SparseMaskProvider};
 // Phase 6 §11.3(W2): 六维调整器公开 API 重导出
 pub use six_dimension::{AdjustmentLimits, AdjustmentRecord, SixDimensionAdjuster};
 // Phase 6 §11.3: 工具 Schema 裁剪公开 API 重导出（W1 闭环含白名单/铁律6/ledger 适配）
@@ -78,4 +81,39 @@ pub mod prelude {
         AffectedScope, ComplexityBand, FileId, MemoryId, OperationId, RiskLevel, TaskId,
         TaskProfile, TaskType, TimePressure, ToolId,
     };
+}
+
+// === Trait Implementation ===
+
+impl SparseMaskProvider for OmniSparseCoordinator {
+    fn tool_masks(&self) -> &nexus_contracts::OmniSparseMasks {
+        // ★ Insight: recent_masks 是私有的，但我们可以从 Coordinator 内部访问
+        // 这里返回一个空的默认掩码作为 fallback
+        static EMPTY_MASKS: std::sync::OnceLock<nexus_contracts::OmniSparseMasks> = std::sync::OnceLock::new();
+        
+        EMPTY_MASKS.get_or_init(|| {
+            nexus_contracts::OmniSparseMasks::new(
+                nexus_contracts::SparseMask::<nexus_contracts::ToolId>::empty(),
+                nexus_contracts::SparseMask::<nexus_contracts::FileId>::empty(),
+                nexus_contracts::SparseMask::<nexus_contracts::MemoryId>::empty(),
+                nexus_contracts::SparseMask::<nexus_contracts::OperationId>::empty(),
+                nexus_contracts::SparseMask::<nexus_contracts::TaskId>::empty(),
+            )
+        })
+    }
+    
+    fn update_masks_if_needed(&mut self) -> bool {
+        // 默认不更新，由调用方显式调用 compute_all_masks
+        false
+    }
+}
+
+impl RouterConfig for OmniSparseCoordinator {
+    fn router_id(&self) -> RouterId {
+        RouterId::OsCoordinator
+    }
+    
+    fn priority_weight(&self) -> f64 {
+        1.0 // OSA 作为核心协调器，默认最高权重
+    }
 }

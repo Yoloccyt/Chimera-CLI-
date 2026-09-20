@@ -219,16 +219,34 @@ pub enum NexusEvent {
         reason: String,
     },
 
-    /// 影子模式熔断器跳闸 — L4 Security fail-closed 状态变更(L4 深度优化 P1-1)
+    /// 影子模式熔断器跳闸 — L4 Security fail-closed 状态变更 (L4 深度优化 P1-1)
     ///
     /// WHY:ShadowModeCircuitBreaker 检测到 FormalVerifier 属性违规永久跳闸时
-    /// 发布(不可逆直至人工复位),供 TUI DecayPanel 等订阅方从事件流派生
-    /// 熔断状态显示(替代原 shadow_breaker_status() 全局函数占位)。
+    /// 发布 (不可逆直至人工复位),供 TUI DecayPanel 等订阅方从事件流派生
+    /// 熔断状态显示 (替代原 shadow_breaker_status() 全局函数占位)。
     ShadowBreakerTripped {
         /// 事件元数据
         metadata: EventMetadata,
-        /// 跳闸原因(形式化属性违反反例描述)
+        /// 跳闸原因 (形式化属性违反反例描述)
         reason: String,
+    },
+    
+    /// 形式化验证失败 — L4 Security Critical 事件 (mpsc 旁路通道)
+    ///
+    /// WHY Critical:进化否决影响重大，TUI DecayPanel 需立即高亮告警；
+    /// 走 mpsc 而非 broadcast 确保送达（broadcast 可能丢包）。
+    ///
+    /// 触发时机：FormalVerifierGate::evaluate 返回 failed 或
+    /// ShadowModeCircuitBreaker 永久跳闸时发布。
+    FormalVerificationFailed {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 哪个属性被违反
+        property: String,
+        /// 反例描述
+        counterexample: String,
+        /// 当前进化世代
+        generation: u64,
     },
 
     // ============================================================

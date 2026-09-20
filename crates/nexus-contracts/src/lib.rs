@@ -455,7 +455,8 @@ pub use blueprint::{BlueprintSource, BlueprintStep, PlanViolation, ProceduralBlu
 pub use vector::{VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats};
 // T6-2: 形式化属性定义框架（FormalVerifier L4 骨架基础类型）
 pub use formal_props::{
-    FormalProperty, InvariantSpec, PropertyCategory, VerificationMethod, VerificationResult,
+    FormalProperty, FormalResultProvider, InvariantSpec, PropertyCategory, VerificationMethod,
+    VerificationResult, VerifiedWithStrength, EmptyFormalProvider,
 };
 // P3-T8: 工具计划契约（WI-16 ToolPlan DSL）
 pub use tool_plan::{guards, PlanEdge, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};

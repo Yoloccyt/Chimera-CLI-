@@ -1,0 +1,19 @@
+[package]
+name = "router-traits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "L6 Router Traits — 路由层公共 trait 定义，消除星型耦合"
+
+[dependencies]
+# L0 Contracts:共享类型（OmniSparseMasks）
+nexus-contracts = { workspace = true }
+# L1 Core:事件总线（用于事件广播）
+event-bus = { workspace = true }
+
+# 库层错误类型标准 (thiserror)
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# 测试用
+tokio = { workspace = true, features = ["macros", "rt"] }

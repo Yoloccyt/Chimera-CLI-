@@ -11,8 +11,10 @@ license.workspace = true
 nexus-contracts = { workspace = true }
 # L1 Core:基础类型(如 CLV,本 crate 暂未直接使用,保留以备扩展)
 nexus-core = { workspace = true }
-# L1 Core:EventBus 跨层通信,发布 OmniSparseMasksComputed 事件(修正 V1 违规)
+# L1 Core:EventBus 跨层通信，发布 OmniSparseMasksComputed 事件 (修正 V1 违规)
 event-bus = { workspace = true }
+# L6 Router Traits:星型耦合消除，实现 SparseMaskProvider + RouterConfig trait
+router-traits = { path = "../router-traits" }
 # 序列化:mask_hash 计算需将五维度掩码序列化为 JSON
 serde = { workspace = true }
 serde_json = { workspace = true }

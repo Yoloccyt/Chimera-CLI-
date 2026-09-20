@@ -17,13 +17,16 @@
 //! # 测试覆盖
 //!
 //! 1. 属性 #3 正反路径(合法对集 Satisfied / 倒置对 Violated)
-//! 2. 属性 #4 正反路径(真实 EventBus 发布流 Satisfied / 乱序流 Violated)
-//! 3. 属性 #5 正反路径(收敛轨迹 Satisfied / 发散轨迹 Violated)
-//! 4. S8 学习器真实轨迹 → 属性 #5 验证(学习层与验证器的真实集成)
+//! 2. 属性 #4 正反路径 (真实 EventBus 发布流 Satisfied / 乱序流 Violated)
+//! 3. 属性 #5 正反路径 (收敛轨迹 Satisfied / 发散轨迹 Violated)
+//! 4. S8 学习器真实轨迹 → 属性 #5 验证 (学习层与验证器的真实集成)
 //! 5. 五属性综合管线:InvariantSpec 定义 → 各验证器执行 → 汇总全 Satisfied
+//!
+//! ⚠️ **TODO**: 第 1 项属性 #3(PreferenceConsistencyChecker) 依赖 auto-dpo crate,
+//!   auto-dpo 已于 v2.28.3-omega P0 批次删除，需等待 RL 全栈接入后恢复
 
-use auto_dpo::formal::PreferenceConsistencyChecker;
-use auto_dpo::types::{PreferencePair, SampleQuality};
+// use auto_dpo::formal::PreferenceConsistencyChecker;
+// use auto_dpo::types::{PreferencePair, SampleQuality};
 use event_bus::formal::CausalConsistencyChecker;
 use event_bus::EventMetadata;
 use gsoe_evolution::formal::critic_monotonicity::CriticMonotonicityChecker;
@@ -50,41 +53,35 @@ fn pair(id: &str, cs: f32, rs: f32) -> PreferencePair {
 }
 
 // ============================================================
-// 属性 #3:AutoDPO 偏好对一致性(M1 新增)
+// 属性 #3:AutoDPO 偏好对一致性 (M1 新增)
 // ============================================================
-
-#[test]
-fn test_property3_preference_consistency_satisfied() {
-    let checker = PreferenceConsistencyChecker::new();
-    let pairs = vec![pair("p1", 0.9, 0.4), pair("p2", 0.8, 0.6)];
-
-    assert!(checker.verify_preference_asymmetry(&pairs).is_satisfied());
-    assert!(checker.verify_no_self_preference(&pairs).is_satisfied());
-    assert!(checker
-        .verify_margin_bounded(&pairs, 0.05, 0.8)
-        .is_satisfied());
-}
-
-#[test]
-fn test_property3_inverted_pair_violated_with_counterexample() {
-    let checker = PreferenceConsistencyChecker::new();
-    let pairs = vec![pair("good", 0.9, 0.4), pair("inverted", 0.3, 0.8)];
-
-    match checker.verify_preference_asymmetry(&pairs) {
-        VerificationResult::Violated {
-            counterexample,
-            samples_tested,
-        } => {
-            // 反例必须精确指向违规对,且全部样本被检查
-            assert!(counterexample.contains("inverted"));
-            assert_eq!(samples_tested, 2);
-        }
-        other => panic!("期望 Violated,实际: {other:?}"),
-    }
-}
+// ⚠️ **TODO**: PreferenceConsistencyChecker 依赖 auto-dpo crate,
+//   auto-dpo 已于 v2.28.3-omega P0 批次删除，需等待 RL 全栈接入后恢复
+// #[test]
+// fn test_property3_preference_consistency_satisfied() {
+//     let checker = PreferenceConsistencyChecker::new();
+//     ...
+// }
+// #[test]
+// fn test_property3_inverted_pair_violated_with_counterexample() {
+//     let checker = PreferenceConsistencyChecker::new();
+//     let pairs = vec![pair("good", 0.9, 0.4), pair("inverted", 0.3, 0.8)];
+//
+//     match checker.verify_preference_asymmetry(&pairs) {
+//         VerificationResult::Violated {
+//             counterexample,
+//             samples_tested,
+//         } => {
+//             // 反例必须精确指向违规对，且全部样本被检查
+//             assert!(counterexample.contains("inverted"));
+//             assert_eq!(samples_tested, 2);
+//         }
+//         other => panic!("期望 Violated,实际：{other:?}"),
+//     }
+// }
 
 // ============================================================
-// 属性 #4:事件因果一致性(M1 新增,真实 EventBus 流)
+// 属性 #4:事件因果一致性 (M1 新增，真实 EventBus 流)
 // ============================================================
 
 #[test]
@@ -250,8 +247,8 @@ fn test_m1_five_property_pipeline_all_satisfied() {
     let critic = CriticMonotonicityChecker::new();
     let r2 = critic.verify_monotonicity(&[0.1, 0.5, 0.9], &[0.2, 0.4, 0.8]);
 
-    let preference = PreferenceConsistencyChecker::new();
-    let r3 = preference.verify_preference_asymmetry(&[pair("p1", 0.9, 0.3)]);
+    // TODO: preference = PreferenceConsistencyChecker::new(); // auto-dpo deleted
+    // let r3 = preference.verify_preference_asymmetry(&[pair("p1", 0.9, 0.3)]);
 
     let causal = CausalConsistencyChecker::new();
     let stream: Vec<EventMetadata> = ["a", "b"].iter().map(|s| EventMetadata::new(*s)).collect();

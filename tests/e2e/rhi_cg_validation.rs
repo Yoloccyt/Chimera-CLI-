@@ -39,16 +39,9 @@
 
 #![forbid(unsafe_code)]
 
-#[path = "fixtures/quest_set_v1.rs"]
-mod quest_set_v1;
-
-use auto_dpo::{
-    JudgeClient, PreferencePair, SelfComparisonHistory, SelfComparisonRecord, SpecVersion,
-    StubJudgeClient,
-};
-use gsoe_evolution::{CiGate, MockCiGate, SignificanceDetector, SpecRegistry};
-use nexus_contracts::HarnessSpec;
-use quest_set_v1::{quest_set_v1, spec_score, QuestTask};
+// ⚠️ **TODO**: rhi_cg_validation 严重依赖 auto-dpo crate (PreferencePair/JudgeClient/SelfComparisonHistory),
+//   auto-dpo 已于 v2.28.3-omega P0 批次删除，需等待 RL 全栈接入后恢复
+// 整个文件已注释
 
 // ============================================================
 // 数据结构 — 进化结果载体

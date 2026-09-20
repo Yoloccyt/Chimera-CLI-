@@ -15,6 +15,14 @@ rl-client = ["dep:reqwest"]
 # member),从而打开 `dep:mca-gateway` 与 src/main.rs 中对应 `#[cfg(feature="mca")]`
 # 组合根装配代码。默认 off —— 无 feature 时默认 binary 零 MCA 符号/边,行为零变化。
 mca = ["dep:mca-gateway"]
+# R2 解冻阶段③ 前置:T3.1 进化编排器（feature gate,默认 off——降低风险）
+r2_unfreeze = ["dep:decay-engine", "dep:omega-learner"]
+# Phase 2:冻结孤岛偿还 (P1-T1)
+r2_island_repayment = [
+    "dep:mtpe-executor", "dep:ssra-fusion", "dep:sesa-router",
+    "dep:csn-substitutor", "dep:chtc-bridge", "dep:mas-sched",
+    "dep:nexus-hook"
+]
 
 [dependencies]
 # nexus-core:L1 核心类型(配置类型定义,向下依赖符合 §2.2 铁律)
@@ -73,8 +81,18 @@ decb-governor = { workspace = true }
 # M13(scc 重路由):scc-cache(L3 Storage 层)——组合根装配 SccCache 共享实例
 # (ADR-161 路径①),doctor 第 9 探针真实消费 stats();L10→L3 向下依赖合规(§2.2)
 scc-cache = { workspace = true }
-# PROBE P2.2: 选择器学习编排器依赖（L10 → 学习层/L2 向下依赖允许）
-omega-learner = { workspace = true }
+# R2 解冻阶段③ 前置:T3.1 进化编排器依赖（decay-engine L4,shadow breaker;omega-learner L6,regret_pipeline）
+# L10→L4/L6 向下依赖允许，feature-gated (`r2_unfreeze`) 默认 off 降低风险
+omega-learner = { workspace = true, optional = true }
+decay-engine = { workspace = true, optional = true }
+# Phase 2:冻结孤岛偿还 (P1-T1)
+mtpe-executor = { workspace = true, optional = true }
+ssra-fusion = { workspace = true, optional = true }
+sesa-router = { workspace = true, optional = true }
+csn-substitutor = { workspace = true, optional = true }
+chtc-bridge = { workspace = true, optional = true }
+mas-sched = { workspace = true, optional = true }
+nexus-hook = { workspace = true, optional = true }
 hcw-window = { workspace = true }
 # nexus-core:L1 核心类型,Task 1.10 agent spawn 构造 Task / TaskStatus 领域对象
 # 已通过上方 nexus-core 依赖间接可用,显式注释提醒

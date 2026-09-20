@@ -84,6 +84,42 @@ pub enum VerificationResult {
     },
 }
 
+/// 带证据强度的验证结果 — 用于报告与审计
+///
+/// WHY 新增此结构：当前 VerificationResult 仅有三态，缺少置信度信息；
+/// 后续报告模块需展示"多少样本测试后通过"以及统计置信度。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VerifiedWithStrength {
+    /// 验证结果三态
+    pub result: VerificationResult,
+    /// 置信度 (0.0~1.0)，样本量越大 confidence 越高
+    pub confidence: f32,
+    /// 证据数量（采样总数）
+    pub evidence_count: usize,
+}
+
+impl VerifiedWithStrength {
+    /// 构造带置信度的验证结果
+    pub fn new(result: VerificationResult, confidence: f32, evidence_count: usize) -> Self {
+        Self { result, confidence, evidence_count }
+    }
+
+    /// 从 VerificationResult 构造（置信度基于样本数自动计算）
+    ///
+    /// WHY 自动计算：根据经验公式 confidence = min(1.0, samples_tested / 1000.0)
+    /// 即 1000 次采样对应 100% 置信度，500 次对应 50%，以此类推。
+    #[must_use]
+    pub fn from_result_with_auto_confidence(result: VerificationResult) -> Self {
+        let samples = match &result {
+            VerificationResult::Satisfied { samples_tested } => *samples_tested as usize,
+            VerificationResult::Violated { samples_tested, .. } => *samples_tested as usize,
+            VerificationResult::Skipped { .. } => 0,
+        };
+        let confidence = (samples as f32 / 1000.0).min(1.0);
+        Self::new(result, confidence, samples)
+    }
+}
+
 impl VerificationResult {
     /// 验证是否通过（`Satisfied` 变体返回 `true`）
     #[must_use]
@@ -143,6 +179,38 @@ impl InvariantSpec {
             owner_crate: owner_crate.into(),
             verification_method,
         }
+    }
+}
+
+/// 形式化验证结果提供者 trait（依赖倒置抽象）
+///
+/// WHY trait:chimera-cli(L10) 不能直接依赖 omega-learner(L6)，
+/// 因此定义 trait 在 L0，由 omega-learner 实现，chimera-cli 通过
+/// trait 抽象调用（依赖倒置）。
+pub trait FormalResultProvider {
+    /// 收集单个属性的验证结果（返回属性名 + 验证结果）
+    fn collect_results(&self) -> Vec<(String, VerificationResult)>;
+}
+
+/// 空实现 — 返回所有属性 Skipped 状态
+///
+/// WHY 默认实现：当没有真实验证器可用时，返回全 Skipped 避免 panic；
+/// 消费方（如 FormalVerifierGate）会将其视为"证据不足"而门禁失败。
+#[derive(Debug, Default)]
+pub struct EmptyFormalProvider;
+
+impl FormalResultProvider for EmptyFormalProvider {
+    fn collect_results(&self) -> Vec<(String, VerificationResult)> {
+        // 返回 7 个属性全 Skipped
+        vec![
+            ("lineage-dag".into(), VerificationResult::Skipped { reason: "no data".into() }),
+            ("critic-monotonicity".into(), VerificationResult::Skipped { reason: "no data".into() }),
+            ("preference-consistency".into(), VerificationResult::Skipped { reason: "no data".into() }),
+            ("causal-consistency".into(), VerificationResult::Skipped { reason: "no data".into() }),
+            ("learning-monotonicity".into(), VerificationResult::Skipped { reason: "no data".into() }),
+            ("decay-consistency".into(), VerificationResult::Skipped { reason: "no data".into() }),
+            ("invariant-closure".into(), VerificationResult::Skipped { reason: "no data".into() }),
+        ]
     }
 }
 

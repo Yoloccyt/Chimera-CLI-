@@ -244,25 +244,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "auto-dpo"
-version = "2.28.2-omega"
-dependencies = [
- "chrono",
- "criterion",
- "event-bus",
- "mlc-engine",
- "model-router",
- "nexus-contracts",
- "nexus-core",
- "proptest",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -572,11 +553,14 @@ dependencies = [
  "chimera-mas",
  "chimera-tui",
  "chrono",
+ "chtc-bridge",
  "clap",
  "clap_complete",
  "cmt-tiering",
  "comfy-table",
  "criterion",
+ "csn-substitutor",
+ "decay-engine",
  "decb-governor",
  "efficiency-monitor",
  "event-bus",
@@ -590,12 +574,15 @@ dependencies = [
  "indicatif",
  "insta",
  "kvbsr-router",
+ "mas-sched",
  "mca-gateway",
  "mcp-mesh",
  "mlc-engine",
+ "mtpe-executor",
  "nexus-app-server",
  "nexus-contracts",
  "nexus-core",
+ "nexus-hook",
  "nu-ansi-term",
  "omega-learner",
  "parliament",
@@ -608,6 +595,8 @@ dependencies = [
  "seccore",
  "serde",
  "serde_json",
+ "sesa-router",
+ "ssra-fusion",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -622,7 +611,6 @@ name = "chimera-e2e-tests"
 version = "2.28.2-omega"
 dependencies = [
  "anyhow",
- "auto-dpo",
  "chimera-cli",
  "chimera-mas",
  "chimera-tui",
@@ -644,7 +632,6 @@ dependencies = [
  "mca-gateway",
  "mcp-mesh",
  "mlc-engine",
- "model-router",
  "mtpe-executor",
  "nexus-contracts",
  "nexus-core",
@@ -2172,6 +2159,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "criterion",
+ "decay-engine",
  "event-bus",
  "nexus-contracts",
  "nexus-core",
@@ -3360,28 +3348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "model-router"
-version = "2.28.2-omega"
-dependencies = [
- "arc-swap",
- "async-trait",
- "criterion",
- "dashmap",
- "event-bus",
- "nexus-contracts",
- "nexus-core",
- "proptest",
- "rmp-serde",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "monostate"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3929,6 +3895,7 @@ dependencies = [
  "omega-learner",
  "proptest",
  "repo-wiki",
+ "router-traits",
  "serde",
  "serde_json",
  "sha2",
@@ -4434,7 +4401,6 @@ dependencies = [
  "dashmap",
  "event-bus",
  "hex",
- "model-router",
  "nexus-contracts",
  "nexus-core",
  "proptest",
@@ -4939,6 +4905,16 @@ checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
 dependencies = [
  "rmp",
  "serde",
+]
+
+[[package]]
+name = "router-traits"
+version = "2.28.2-omega"
+dependencies = [
+ "event-bus",
+ "nexus-contracts",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

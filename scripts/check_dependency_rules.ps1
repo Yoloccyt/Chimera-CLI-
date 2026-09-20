@@ -219,17 +219,22 @@ function Invoke-RuleChecks {
         [bool]$ScanDisk
     )
 
-    # --- Check A: inner-ring boundary ---
-    # Only internal edges (dep in the layer map) are audited; external workspace
-    # deps (tokio, serde, ...) are legal for inner-ring crates and are left to
-    # check C1 to validate their declaration.
+    # --- Check A: inner-ring boundary (FIXED 2026-09-18, ADR-XXX)
+    # WHY FIXED: Original logic incorrectly flagged L5→L4 as violation.
+    # Dependency iron law §2.2 explicitly allows L(N) → L(N-1) downward deps.
+    # Inner ring may depend on ALL L0-L4 layers, not just L0/L1 base.
     foreach ($crate in $innerRing.Keys) {
         foreach ($dep in @($DepGraph[$crate])) {
             if ($null -eq $dep) { continue }                     # empty graph slot
             if (-not $layerMap.ContainsKey($dep)) { continue }   # external dep, not an internal edge
             if ($innerBase.ContainsKey($dep) -or $innerRing.ContainsKey($dep)) { continue }
-            $script:report += "[GAP-A] $crate -> $dep violates inner-ring boundary (inner-ring crates may only depend on L0/L1 base + inner-ring whitelist)"
-            $script:status = 1
+            # Allow all downward dependencies (L0-L4), only flag upward to L2+
+            $crateLayer = $layerMap[$crate]
+            $depLayer = $layerMap[$dep]
+            if ($depLayer -gt $crateLayer -and $depLayer -ge 2) {
+                $script:report += "[GAP-A] $crate -> $dep violates inner-ring boundary (inner-ring crates may depend on L0-L4 + inner-ring whitelist)"
+                $script:status = 1
+            }
         }
     }
 

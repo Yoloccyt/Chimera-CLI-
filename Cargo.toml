@@ -28,15 +28,15 @@ members = [
     # L0 Contracts (ADR-033): 纯类型零依赖契约层，必须最先编译
     "crates/nexus-contracts",
     "crates/nexus-core", "crates/event-bus", "crates/quest-engine",
-    "crates/repo-wiki", "crates/model-router", "crates/parliament",
-    "crates/pvl-layer", "crates/osa-coordinator", "crates/kvbsr-router",
+    "crates/repo-wiki", "crates/parliament",
+    "crates/pvl-layer", "crates/osa-coordinator", "crates/router-traits", "crates/kvbsr-router",
     "crates/faae-router", "crates/gea-activator", "crates/gqep-executor",
     "crates/sesa-router", "crates/ssra-fusion", "crates/csn-substitutor",
     "crates/mtpe-executor", "crates/mlc-engine", "crates/hcw-window",
     "crates/cmt-tiering", "crates/scc-cache", "crates/lsct-tiering",
     "crates/seccore", "crates/decay-engine", "crates/qeep-protocol",
     "crates/decb-governor", "crates/efficiency-monitor",
-    "crates/gsoe-evolution", "crates/auto-dpo", "crates/mcp-mesh",
+    "crates/gsoe-evolution", "crates/mcp-mesh",
     "crates/nmc-encoder", "crates/chtc-bridge", "crates/chimera-tui",
     "crates/chimera-cli", "crates/chimera-mas",
     # L6 Router: omega-learner Bandit 六接缝(P4-W13.1,workspace 第 37 个 crate)
@@ -177,12 +177,11 @@ toml = "0.8"
 nexus-contracts = { path = "crates/nexus-contracts" }
 # L7 SubAgent 运行时（Phase 3 ADR-148;P4-T3 L10 组合根接线引用）
 nexus-subagent = { path = "crates/nexus-subagent" }
-# L1 Core:核心运行时,事件总线,模型路由
+# L1 Core:核心运行时，事件总线
 nexus-core = { path = "crates/nexus-core" }
 event-bus = { path = "crates/event-bus" }
 mcp-mesh = { path = "crates/mcp-mesh" }
-model-router = { path = "crates/model-router" }
-# L2 Memory:多模态编码,分层窗口,四级记忆
+# L2 Memory:多模态编码，分层窗口，四级记忆
 nmc-encoder = { path = "crates/nmc-encoder" }
 hcw-window = { path = "crates/hcw-window" }
 mlc-engine = { path = "crates/mlc-engine" }
@@ -196,12 +195,12 @@ session-store = { path = "crates/session-store" }
 seccore = { path = "crates/seccore" }
 qeep-protocol = { path = "crates/qeep-protocol" }
 decay-engine = { path = "crates/decay-engine" }
-# L5 Knowledge:仓库知识库,在线进化,自动DPO
+# L5 Knowledge:仓库知识库，在线进化
 repo-wiki = { path = "crates/repo-wiki" }
 gsoe-evolution = { path = "crates/gsoe-evolution" }
-auto-dpo = { path = "crates/auto-dpo" }
-# L6 Router:全维稀疏协调器,KV块路由,函数即专家,门控激活,子专家稀疏激活,黏液适配,学习器
+# L6 Router:全维稀疏协调器，KV 块路由，函数即专家，门控激活，子专家稀疏激活，黏液适配，学习器
 osa-coordinator = { path = "crates/osa-coordinator" }
+router-traits = { path = "crates/router-traits" }  # L6 Router Traits — 星型耦合消除
 kvbsr-router = { path = "crates/kvbsr-router" }
 faae-router = { path = "crates/faae-router" }
 gea-activator = { path = "crates/gea-activator" }
@@ -216,10 +215,13 @@ csn-substitutor = { path = "crates/csn-substitutor" }
 # L8 Parliament:议会系统,双档预算(DECB);acb-governor 已按 ADR-182 退役删除
 parliament = { path = "crates/parliament" }
 decb-governor = { path = "crates/decb-governor" }
-# L9 Quest:任务引擎,效率监控,多Agent协同
+# L9 Quest:任务引擎，效率监控，多 Agent 协同
 quest-engine = { path = "crates/quest-engine" }
 efficiency-monitor = { path = "crates/efficiency-monitor" }
 chimera-mas = { path = "crates/chimera-mas" }
+# Phase 2:冻结孤岛偿还 (P1-T1)
+mas-sched = { path = "crates/mas-sched" }
+nexus-hook = { path = "crates/nexus-hook" }
 # L10 Interface:CLI入口,TUI,跨平台桥接,多通道亲和网关
 chimera-cli = { path = "crates/chimera-cli" }
 chimera-tui = { path = "crates/chimera-tui" }
@@ -359,7 +361,15 @@ name = "week8_final_acceptance"
 path = "tests/e2e/week8_final_acceptance.rs"
 
 # ============================================================
-# TUI 双向控制闭环 E2E 测试
+# R2 解冻路径完整 E2E 验收测试
+#
+# WHY 新增 test target:验证 R2 解冻阶段③ 的 4 项前置条件装配完整性
+# 覆盖场景：全 Skipped（fail-closed）/ 违规否决 / 全 Satisfied 许可
+# ============================================================
+
+[[test]]
+name = "r2_unfreeze_path_e2e"
+path = "tests/e2e/r2_unfreeze_path_e2e.rs"
 #
 # WHY 新增 test target:验证 TUI→EventBus→quest-engine→EventBus→TUI
 # 完整双向控制闭环(取消/优先级调整)。测试不启动真实 TUI(避免阻塞),
@@ -591,10 +601,20 @@ path = "tests/stress/token_efficiency_stress.rs"
 # ADR-069 Task 4: Token 效率优化 v2 — 50 任务基准集 Driver
 # WHY 新增 test target: 验证 50 个编码任务基准集的模拟执行与指标采集全链路,
 # 产出 JSON 格式基准报告 benchmark_report.json,支持单任务调试模式。
-# 测试文件位于 tests/e2e/ 子目录,必须显式注册。
+# 测试文件位于 tests/e2e/ 子目录，必须显式注册。
 [[test]]
 name = "token_efficiency_benchmark_driver"
 path = "tests/e2e/token_efficiency_benchmark_driver.rs"
+
+# Phase 1: Dependency Rules Inner Ring Test (GAP-A validation)
+[[test]]
+name = "dependency_rules_inner_ring_test"
+path = "tests/dependency_rules_inner_ring_test.rs"
+
+# Phase 1: Composition Root Omega-Learner Test (GAP-R validation)
+[[test]]
+name = "composition_root_omega_learner_test"
+path = "tests/composition_root_omega_learner_test.rs"
 
 # E2E 测试所需的被测 crate 与共享依赖
 # WHY 用 path 引用本地 crate:workspace 内 crate 间依赖走 path,
@@ -630,7 +650,6 @@ chimera-cli = { path = "crates/chimera-cli" }         # L10 Interface(handshake 
 # Concord W10:握手门控测试需按键事件构造(KeyCode/KeyEvent)
 crossterm = { workspace = true }
 repo-wiki = { path = "crates/repo-wiki" }            # L5 Knowledge(Wiki 沉淀)
-model-router = { path = "crates/model-router" }      # L1 Core(模型路由)
 osa-coordinator = { path = "crates/osa-coordinator" } # L6 Router(OSA 五维度稀疏)
 pvl-layer = { path = "crates/pvl-layer" }            # L7 Execution(PVL 生产验证)
 qeep-protocol = { path = "crates/qeep-protocol" }    # L4 Security(QEEP 零孤儿)
@@ -642,8 +661,7 @@ gea-activator = { path = "crates/gea-activator" }    # L9 Quest(门控专家激�
 gqep-executor = { path = "crates/gqep-executor" }    # L7 Execution(聚集执行)
 mtpe-executor = { path = "crates/mtpe-executor" }    # L7 Execution(多步预测)
 scc-cache = { path = "crates/scc-cache" }            # L3 Storage(推测缓存+WAL)
-auto-dpo = { path = "crates/auto-dpo" }              # L5 Knowledge(偏好对生成)
-# P5.5: nexus-contracts 用于 HarnessSpec/ContractSpec/HopSpec 类型(P5.5.1 任务集定义)
+# P5.5: nexus-contracts 用于 HarnessSpec/ContractSpec/HopSpec 类型 (P5.5.1 任务集定义)
 nexus-contracts = { path = "crates/nexus-contracts" }
 # L7 SubAgent 运行时（Phase 3 ADR-148;P4-T3 L10 组合根接线引用）
 nexus-subagent = { path = "crates/nexus-subagent" } # L0 Contracts(契约层)

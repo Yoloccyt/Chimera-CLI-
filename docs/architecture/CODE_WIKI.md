@@ -1,7 +1,7 @@
 # Chimera CLI Code Wiki — NEXUS-OMEGA
 
-> **版本**: v2.28.2-omega (Code Wiki · v2.28.2-omega 基线同步,2026-09-08)
-> **基线代码版本**: v2.28.0-omega 在途(迭代链 v2.0.0-omega `chimera-mas` 多 Agent 协同子系统 → v2.4.0-omega P5 进化闭环 37 crate → v2.14.0~~v2.19.0 P2 Sprint 14 项任务全量交付 → v2.20.0-omega PROBE HCW-Sparse 深度优化完整闭环 P-1~~P3 38 crate(PROBE 阶段基线起点) → v2.21.0-omega CLI LLM 统一入口 → v2.22.0-omega MCA token 效率深度优化 38 个 crate 第 38 个 `mca-gateway` 落地 → v2.24.0-omega Phase 9 三环循环元架构重组收尾 P9-T12 + RUSTSEC-2026-0217/0222/0223 修复 → v2.25.0-omega Milestone B 全部交付 B-1~~B-6(Milestone B 终态) → v2.26.0-omega Concord TUI 重构 W0~~W11 全部收尾(SlashCommandRegistry 53 命令注册 + `/` 一级整合 + Chat/Quest 双轨会话模式 + ApprovalMode 动态 Shift+Tab + i18n 中英门户 + 10 份 ADR-074~~083 落档) →~~ **~~v2.27.0-omega Phase 10 §16 跨层协同闭环审计修复正式发布~~**~~(W1-W7 全波次闭环:经验卡片闭环组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口) →~~ **~~v2.27.1-omega GPG 签名补发 + MCA E2E 超时加固~~**~~(无功能性变更) →~~ **~~v2.28.0-omega(发布提交 af62e44 已落 2026-09-02,tag 待推)Phase 1-5 Ch12 W1-W26 收尾~~**~~(ComputeBridge/ShardedBus/CBMR/CausalGraph + 5 新 crate 至 43 + ADR-095~~160 + ADR-160 可达性棘轮/event\_types 镜像退役);types.rs 单表(metadata() 分类)**145 NexusEvent 变体**)
+> **版本**: v2.28.2-omega (Code Wiki · v2.28.2-omega 基线同步，2026-09-08)
+> **基线代码版本**: v2.28.0-omega 在途 (迭代链 v2.0.0-omega `chimera-mas` 多 Agent 协同子系统 → v2.4.0-omega P5 进化闭环 37 crate → v2.14.0~~v2.19.0 P2 Sprint 14 项任务全量交付 → v2.20.0-omega PROBE HCW-Sparse 深度优化完整闭环 P-1~~P3 38 crate(PROBE 阶段基线起点) → v2.21.0-omega CLI LLM 统一入口 → v2.22.0-omega MCA token 效率深度优化 38 个 crate 第 38 个 `mca-gateway` 落地 → v2.24.0-omega Phase 9 三环循环元架构重组收尾 P9-T12 + RUSTSEC-2026-0217/0222/0223 修复 → v2.25.0-omega Milestone B 全部交付 B-1~~B-6(Milestone B 终态) → v2.26.0-omega Concord TUI 重构 W0~~W11 全部收尾 (SlashCommandRegistry 53 命令注册 + `/` 一级整合 + Chat/Quest 双轨会话模式 + ApprovalMode 动态 Shift+Tab + i18n 中英门户 + 10 份 ADR-074~~083 落档) → ~~**~~v2.27.0-omega Phase 10 §16 跨层协同闭环审计修复正式发布~~**~~(W1-W7 全波次闭环：经验卡片闭环组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口) →~~ **~~v2.27.1-omega GPG 签名补发 + MCA E2E 超时加固~~**~~(无功能性变更) →~~ **~~v2.28.0-omega(发布提交 af62e44 已落 2026-09-02,tag 待推)Phase 1-5 Ch12 W1-W26 收尾~~**~~(ComputeBridge/ShardedBus/CBMR/CausalGraph + 5 新 crate 至 43 + ADR-095~~160 + ADR-160 可达性棘轮/event\_types 镜像退役);types.rs 单表 (metadata() 分类)**146 NexusEvent 变体**) > **最后更新**: 2026-09-19 (Phase 1-7 执行总结:auto-dpo 退役 + 8 个冻结孤岛偿还 + crate_reachability_freeze.txt 清理;reachable=31 frozen=1 new_gaps=0;41 crates·146 NexusEvent·ADR-001~185·覆盖率引擎 cargo-llvm-cov;上一已发 tag v2.28.0-omega → 94499b4(2026-09-06))
 > **最后更新**: 2026-09-17(M13 decb-scc 重路由偿还批次:decb-governor 经 efficiency-monitor 生产边转正(L9→L8 向下非内环,RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats)+ scc-cache 经 chimera-cli 组合根转正(ADR-161 路径①,doctor 第 9 探针消费 stats()),冻结孤岛 11→9、生产可达 30→32;消费者决策论证与 D1/D2 决策记录见 §3.11 M13 批次注记,ADR-186 物理文件留待 tower 合并侧补录;M12 wave 3c 接线批次:gea-activator/gqep-executor/qeep-protocol 三岛链全量偿还转正——mas→gea 生产边桥接 + chimera-cli→gqep doctor 并行 gather + ADR-048 收编;M10 批次:acb-governor 按 ADR-182 退役删除、lsct-tiering 经 cmt 生产边转正;decb/scc-cache M10 经 parliament/hcw-window 转正被依赖铁律驳回后本轮按重路由候选偿还;42 crates · 32 生产可达/9 冻结孤岛 + 1 GATED(ADR-177),棘轮口径以 check_crate_reachability.sh 输出为准 · 145 NexusEvent · ADR-001\~185 · 覆盖率引擎 cargo-llvm-cov;上一已发 tag v2.28.0-omega → 94499b4(2026-09-06))
 > **权威源**: 本文件是架构决策、模块职责、核心类型的唯一权威参考
 > **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 43/43 crate 全绿)
@@ -98,14 +98,14 @@
 L0   Contracts ── nexus-contracts                            [ADR-033 纯类型零依赖契约层]
 L10  Interface ── chimera-cli · chimera-tui · chtc-bridge · mcp-mesh · csn-substitutor · mca-gateway · nexus-app-server [ADR-065 MCA 网关 + WI-01 宿主协议门面]
 L9   Quest ───── quest-engine · gea-activator · efficiency-monitor · chimera-mas · mas-sched · nexus-hook [ADR-145 调度控制面 + ADR-146 生命周期 Hook]
-L8   Parliament ─ parliament · decb-governor                 (acb-governor 已按 ADR-182 退役删除,M10 2026-09-16)
+L8   Parliament ─ parliament · decb-governor
 L7   Execution ── pvl-layer · gqep-executor · mtpe-executor · ssra-fusion · nexus-subagent [ADR-148 类型化子代理 + Task Auction]
 L6   Router ───── osa-coordinator · kvbsr-router · faae-router · sesa-router · omega-learner [ADR-031 Bandit 学习]
-L5   Knowledge ── repo-wiki · gsoe-evolution · auto-dpo
+L5   Knowledge ── repo-wiki · gsoe-evolution
 L4   Security ─── seccore · qeep-protocol · decay-engine
 L3   Storage ──── scc-cache · lsct-tiering · cmt-tiering · session-store [ADR-141 append-only 会话事件流]
 L2   Memory ───── nmc-encoder · hcw-window · mlc-engine
-L1   Core ─────── nexus-core · event-bus · model-router
+L1   Core ─────── nexus-core · event-bus
 ```
 
 > **v2.4.0-omega 变更** (v5.0 P2 + P4):
@@ -186,18 +186,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 | **关键类型** | `EventBus` · `NexusEvent` · `EventMetadata` · `EventSeverity` · `EventSubscription`                                                                                                                                                                                                     |
 | **关键方法** | `EventBus::publish()` · `EventBus::subscribe()` · `EventBus::publish_critical()`                                                                                                                                                                                                        |
 | **主要依赖** | tokio · serde · chrono · uuid · tracing · nexus-core                                                                                                                                                                                                                                    |
-| **设计模式** | 发布-订阅 · 双通道保障(Normal→broadcast, Critical→mpsc)                                                                                                                                                                                                                                          |
-
-#### [model-router](file:///d:/Chimera%20CLI/crates/model-router)
-
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                                  |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L1 Core                                                                                                                                                                                                                                                                                                                                                             |
-| **核心职责** | 模型注册与策略化路由(MoE混合专家、CACR上下文感知)，调用历史SQLite持久化                                                                                                                                                                                                                                                                                                                         |
-| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/model-router/src/lib.rs) · [router.rs](file:///d:/Chimera%20CLI/crates/model-router/src/router.rs) · [moe.rs](file:///d:/Chimera%20CLI/crates/model-router/src/moe.rs) · [cacr.rs](file:///d:/Chimera%20CLI/crates/model-router/src/cacr.rs) · [registry.rs](file:///d:/Chimera%20CLI/crates/model-router/src/registry.rs) |
-| **关键类型** | `ModelRouter` · `ModelRegistry` · `MoERouter` · `CACRController` · `RoutingStrategy`                                                                                                                                                                                                                                                                                |
-| **关键方法** | `ModelRouter::route()` · `ModelRegistry::register()`                                                                                                                                                                                                                                                                                                                |
-| **主要依赖** | tokio · rusqlite · serde · ndarray · dashmap · rand · nexus-core                                                                                                                                                                                                                                                                                                    |
+| **设计模式** | 发布 - 订阅 · 双通道保障 (Normal→broadcast, Critical→mpsc)                                                                                                                                                                                                                                          |
 
 ***
 

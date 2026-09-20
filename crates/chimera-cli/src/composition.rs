@@ -27,12 +27,70 @@ use nexus_app_server::{AppServer, AppServerConfig, QuestBackend};
 use quest_engine::QuestEngine;
 use std::sync::Arc;
 
+// R2 解冻阶段③ 前置：进化编排器（T3.1,feature-gated）
+#[cfg(feature = "r2_unfreeze")]
+use decay_engine::ShadowModeCircuitBreaker;
+#[cfg(feature = "r2_unfreeze")]
+use gsoe_evolution::GsoeEvolutionEngine;
+
+/// 进化编排器 — 封装 evolve_with_formal_verification 主路径（R2 解冻阶段③ 前置）
+///
+/// WHY 独立结构体：将 GSOE 引擎 + 熔断器封装为单一抽象，
+/// 供 CLI/TUI 调用方通过 `step()` 方法执行完整进化循环（含 L4 门）。
+#[cfg(feature = "r2_unfreeze")]
+pub struct EvolutionOrchestrator {
+    /// GSOE 进化引擎（L5 Knowledge）
+    engine: GsoeEvolutionEngine,
+    /// 影子模式熔断器（L4 Security, fail-closed 门）
+    breaker: ShadowModeCircuitBreaker,
+    /// 事件总线（用于发布 Critical 事件）
+    event_bus: EventBus,
+}
+
+#[cfg(feature = "r2_unfreeze")]
+impl EvolutionOrchestrator {
+    /// 构造进化编排器
+    pub fn new(
+        engine: GsoeEvolutionEngine,
+        breaker: ShadowModeCircuitBreaker,
+        event_bus: EventBus,
+    ) -> Self {
+        Self {
+            engine,
+            breaker,
+            event_bus,
+        }
+    }
+
+    /// 单次进化迭代（含 L4 形式化验证门）
+    ///
+    /// # 流程
+    /// 1. 获取 7 个形式化属性的验证结果（来自 EmptyFormalProvider → 全 Skipped）
+    /// 2. 调用 engine.evolve_with_formal_verification 执行进化 + 门禁裁决
+    /// 3. 许可则应用新策略，否决则回退并发布 Critical 事件
+    ///
+    /// # 返回
+    /// - `Ok(())`: 进化成功
+    /// - `Err(_)`: 进化被否决（门禁失败或熔断器跳闸）
+    ///
+    /// ⚠️ TODO: This method is currently a placeholder awaiting formal API definitions.
+    /// See Phase 2 for implementation of EmptyFormalProvider.collect_results() and
+    /// GsoeEvolutionEngine::default().
+    pub async fn step(&mut self) -> Result<(), gsoe_evolution::error::GsoeError> {
+        // Placeholder implementation - returns Ok to allow compilation during Phase 1
+        // Full implementation will be added in Phase 2 when formal APIs are defined
+        tracing::warn!("EvolutionOrchestrator::step() is a placeholder (Phase 1)");
+        Ok(())
+    }
+}
+
 /// 集中装配产物 — 依赖注入的一揽子载体（C12）
 ///
 /// `bus` 为 `EventBus`（Clone = Arc 引用计数，廉价共享）；`engine` 为 owned，
 /// 由 [`build_app_server`] 移入 `QuestBackend`（真实状态源归协议宿主持有）。
 /// `gea` / `gqep` 为 M12（ADR-185 D1/D3）接线句柄：Arc 共享实例，
 /// 分别注入 mas orchestrator（委托前门控激活）与 doctor（探针并行 gather）。
+/// R2 解冻阶段③ 前置：`evolution_orchestrator` 封装进化引擎 + 熔断器 + 后悔率采集。
 pub struct AppContext {
     /// 事件总线（全部组件共享的通信通道）
     pub bus: EventBus,
@@ -47,6 +105,11 @@ pub struct AppContext {
     /// 推测上下文缓存（M13 / ADR-161 路径①；SccCache Clone=Arc 共享,
     /// doctor scc_cache 探针经此真实消费 stats()）
     pub scc: scc_cache::SccCache,
+    /// R2 解冻阶段③ 前置：进化编排器（封装 evolve_with_formal_verification 主路径）
+    #[cfg(feature = "r2_unfreeze")]
+    pub evolution_orchestrator: Option<EvolutionOrchestrator>,
+    #[cfg(not(feature = "r2_unfreeze"))]
+    pub _evolution_orchestrator_placeholder: std::marker::PhantomData<*const u8>,
 }
 
 /// 装配 AppContext（唯一组合根入口，C12）
@@ -94,6 +157,16 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
     // M4-P2: C3 Critical 旁路注册上提为 build() 标准装配步骤（subscribe 在
     // engine 构造后、AppContext 移出前同步完成，§4.4 反模式 3 纪律）。
     spawn_critical_subscriber(&bus);
+    
+    // R2 解冻阶段③ 前置：进化编排器装配（T3.1,feature-gated）
+    #[cfg(feature = "r2_unfreeze")]
+    let evolution_orchestrator = Some(EvolutionOrchestrator::new(
+        GsoeEvolutionEngine::default(),
+        ShadowModeCircuitBreaker::new(),
+        bus.clone(),
+    ));
+    #[cfg(not(feature = "r2_unfreeze"))]
+    let _evolution_orchestrator: Option<()> = None;
     tracing::debug!(
         version = %config.nexus.version,
         "AppContext assembled at composition root (C12, critical bypass wired, gea+gqep+scc wired)"
@@ -105,6 +178,10 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
         gea: Arc::new(gea),
         gqep: Arc::new(gqep),
         scc,
+        #[cfg(feature = "r2_unfreeze")]
+        evolution_orchestrator,
+        #[cfg(not(feature = "r2_unfreeze"))]
+        _evolution_orchestrator_placeholder: std::marker::PhantomData,
     })
 }
 
