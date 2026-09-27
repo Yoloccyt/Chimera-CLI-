@@ -7,6 +7,7 @@
 //! 4. L10 RuntimeAuditor 五维报告 + AssessmentUpdated 发布(Wave 4)
 //! 5. §16.4 StopRulingIssued 经 Quest 生命周期桥发布(Wave 2)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

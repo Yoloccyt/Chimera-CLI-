@@ -17,6 +17,7 @@
 //! - 公共常量断言:CRITICAL_MPSC_VARIANTS(13)/ CRITICAL_TOTAL(17)/
 //!   LANE_FORBIDDEN_SHARD(17 名字,分片禁区声明)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 

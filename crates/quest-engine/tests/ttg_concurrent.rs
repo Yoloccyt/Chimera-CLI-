@@ -7,6 +7,7 @@
 //! - 验证无 panic、模式结果正确
 //! - 共享 Quest ID 的并发调用验证 Mutex 互斥正确性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 use std::thread;
 

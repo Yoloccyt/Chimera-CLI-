@@ -4,6 +4,7 @@
 //! 对应 SubTask 13.9:is_active HashSet O(1) 性能基准
 //! 对应 SubTask 13.10:select_top_k 语义测试(按 scores 选 Top-K)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use osa_coordinator::SparseMask;
 use std::time::Instant;
 

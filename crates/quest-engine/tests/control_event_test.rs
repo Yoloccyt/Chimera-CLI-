@@ -1,5 +1,6 @@
 //! M4 控制事件消费测试 — quest-engine 订阅并处理 TUI 控制请求
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};

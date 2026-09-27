@@ -3,6 +3,7 @@
 //! 外移说明:原 #[cfg(test)] mod tests 混在生产文件(369 行,占 36%),
 //! 外移后 asa.rs 仅保留生产代码。覆盖:规则评分、干预分级、AsaIntervention
 //! 事件发布、升级通道阈值边界。
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use seccore::{AsaAuditor, AsaConfig, InterventionAction, OperationAuditInput, SecCoreError};
 
 /// 构造测试用 OperationAuditInput。

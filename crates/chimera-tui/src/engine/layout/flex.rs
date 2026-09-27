@@ -46,6 +46,7 @@ pub fn split(area: Rect, direction: Direction, constraints: &[Constraint]) -> Ve
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

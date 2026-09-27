@@ -12,6 +12,7 @@
 //! - 命名遵循 block-named 风格(`fn budget_model_l3_xxx_is_yyy`)
 //! - 覆盖边界场景(等号允许/超限拒绝)与稳态场景(50 Agent 分布)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_mas::context::budget_model::{
     should_compress_at, AdmissionGate, ContextTier, MemoryBudgetModel, COMPRESSION_THRESHOLD,
     SPARSE_FACTOR,

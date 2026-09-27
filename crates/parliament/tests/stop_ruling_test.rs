@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / 停止策略四分支端到端 / Ω₉-Preserve 保留最佳 /
 //! L5 CheckpointPreserver 语义对齐（score 类型转换接线）/ proptest 停止单调性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::experience_card::AtomicOperator;

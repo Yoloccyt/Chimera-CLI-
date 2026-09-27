@@ -6,6 +6,7 @@
 //! 修复后:`TuiApp::render` 在焦点变化时把焦点面板的 `shortcuts()` 快照注入
 //! `TuiState.help_context`,Help 渲染据此追加上下文章节。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{PanelId, TuiApp, TuiConfig};

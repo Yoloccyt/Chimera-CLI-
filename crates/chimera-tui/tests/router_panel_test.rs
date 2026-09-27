@@ -9,6 +9,7 @@
 //!   此阈值是经验值:低于 60% 表示路由器命中率不及格,需运维关注。
 //! - Top-K 测试:注入 >10 个 capability 验证 `select_nth_unstable` O(n) 截断路径。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

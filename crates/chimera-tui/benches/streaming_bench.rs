@@ -12,6 +12,7 @@
 //!   为 M3 Chat 面板流式渲染与 M4 低带宽优化提供可证伪基线。
 //! - **纯内存路径**:不含 EventBus/终端 IO,聚焦 append + diff 的 CPU 成本。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::data::newline_gate::NewlineGate;

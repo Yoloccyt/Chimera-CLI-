@@ -4,6 +4,7 @@
 //! 外置存储往返 / 地图注入端到端 / ExternalStorage trait 注入 mock /
 //! proptest 摘要钳制不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::domain::Task;

@@ -11,6 +11,7 @@
 //! - Agent-wise 优势归一化（Dr.MAS 修复：每 agent 独立 baseline/std，非全局）
 //! - 三元分解奖励：global(0.3) + shapley(0.5) + process(0.2) 三通道
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use parliament::mappo::{

@@ -8,6 +8,7 @@
 //! 作为 M1 埋点(批次 wall-clock 计时 + DelegationCompleted 发布)
 //! 开销回归的对照基线(性能可证伪铁律)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_mas::delegation::{DelegationExecutor, TaskRunner};
 use chimera_mas::prelude::*;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};

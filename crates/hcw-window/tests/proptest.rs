@@ -14,6 +14,7 @@
 //! - 对不同 target_size 调用 compress,验证不变量
 //! - 生成随机 complexity 值,验证窗口选择单调性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

@@ -3,6 +3,7 @@
 //! 外移说明:原 #[cfg(test)] mod tests 混在生产文件(546 行,占 52%),
 //! 外移后 engine.rs 仅保留生产代码。覆盖:双驱动衰减、冻结/解冻、
 //! S6 接缝 profile_to_config 映射(等价辅助函数复制)、边界值。
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use decay_engine::{DecayConfig, DecayEngine, DecayError, DecayEvent};
 use nexus_contracts::{DecayPolicy, DecayProfile};
 

@@ -15,6 +15,7 @@
 //!   `ResourceMonitorPanel::with_trends` 后,本测试应全部通过
 //! - REFACTOR 阶段:提取通用 `TrendWindow` 组件(若需)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::Duration;

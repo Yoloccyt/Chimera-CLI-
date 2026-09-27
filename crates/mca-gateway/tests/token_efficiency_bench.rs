@@ -28,6 +28,7 @@
 //!
 //! 报告落盘：`docs/performance/token_efficiency_stress_report.md`（含生成日期与运行环境）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;

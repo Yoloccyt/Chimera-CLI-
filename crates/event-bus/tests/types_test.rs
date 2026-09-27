@@ -10,6 +10,7 @@
 //! 守护性质不变:序列化线格式(msgpack/json 往返)、severity 分级、
 //! type_name 稳定性、topic 映射与 metadata() 契约。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::payloads::*;

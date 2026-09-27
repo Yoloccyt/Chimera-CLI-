@@ -360,6 +360,7 @@ pub fn publish_admission_denied_event(
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

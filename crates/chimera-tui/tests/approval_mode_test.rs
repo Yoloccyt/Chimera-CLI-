@@ -7,6 +7,7 @@
 //! - Plan 态拦截 orchestrated 命令(诚实提示),instant 命令不受限;
 //! - statusline 徽标渲染(En 文案);approval_mode 持久化往返。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Mutex;

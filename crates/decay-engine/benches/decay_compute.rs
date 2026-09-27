@@ -13,6 +13,7 @@
 //! - SLO 1μs 依据: 生产环境每秒可处理 >1000 次衰减，留 10x 余量
 //! - 使用 criterion 默认 sample_size=100，统计上等价于 min-of-N 5 采样
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};

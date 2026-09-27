@@ -8,6 +8,7 @@
 //! （enum dispatch，非 Box<dyn>——项目规范）；GTPO 为纯函数计算
 //! （无参数学习），两者均不触训练面。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use pvl_layer::gtpo::{TurnTrajectory, GTPO};

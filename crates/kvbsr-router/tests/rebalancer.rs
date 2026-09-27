@@ -12,6 +12,7 @@
 //! 使用 `EventBus::subscribe()` 订阅事件,通过 `EventReceiver::recv_timeout()`
 //! 接收事件并验证字段。订阅必须在发布之前调用(broadcast 语义)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 mod common;
 
 use std::time::Duration;

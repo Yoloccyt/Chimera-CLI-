@@ -165,6 +165,7 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
 
 /// 测试专用共享工具 —— 供 serve.rs / acp.rs 的事件循环测试复用（杜绝重复 mock）。
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 pub(crate) mod testutil {
     use async_trait::async_trait;
     use nexus_app_server::{AppTransport, JsonRpcError, TransportError};

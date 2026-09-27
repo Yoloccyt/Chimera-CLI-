@@ -690,6 +690,7 @@ impl Panel for QuestPanel {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};

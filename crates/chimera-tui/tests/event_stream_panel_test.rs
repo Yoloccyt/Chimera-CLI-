@@ -9,6 +9,7 @@
 //! - 帧时间断言 < 16ms(60fps):虚拟滚动只渲染可见区域 + 上下 5 行缓冲,
 //!   10000 事件的实际渲染行数约 50 行,远低于全量渲染。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{EventStreamPanel, Panel, PopupKind, TuiCommand, TuiState};

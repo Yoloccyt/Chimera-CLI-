@@ -4,6 +4,7 @@
 //! 集成测试仅使用公共 API(`event_bus::ClvSummary`),验证 8 分块均值 /
 //! L2 范数 / Top-8 降序 / 零向量与过短切片边界。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::ClvSummary;
 
 #[test]

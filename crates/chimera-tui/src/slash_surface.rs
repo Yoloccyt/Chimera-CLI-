@@ -121,6 +121,7 @@ pub fn render_candidates(cands: &[SlashCandidate], selected: usize, area: Rect, 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

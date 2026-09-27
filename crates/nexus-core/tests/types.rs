@@ -6,6 +6,7 @@
 //! - 领域类型:serde_json 序列化反序列化往返
 //! - Checkpoint:created_at 自动生成
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use nexus_core::{
     Checkpoint, MultimodalInput, NexusError, NexusState, Quest, Task, TaskStatus, ThinkingMode,
     UserIntent, CLV,

@@ -24,6 +24,7 @@
 //! cargo test -p hcw-window --test shadow_recall_1m -- --nocapture
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

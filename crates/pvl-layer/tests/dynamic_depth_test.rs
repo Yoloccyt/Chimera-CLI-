@@ -4,6 +4,7 @@
 //! EMA 有效性追踪 / RLTrajectory 导出（铁律6）/ 熵加权数学 /
 //! proptest EMA 不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chrono::Utc;

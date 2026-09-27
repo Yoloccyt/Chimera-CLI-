@@ -7,6 +7,7 @@
 //! - 缓存并发读写正确性
 //! - 专家注册表并发读正确性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use std::sync::Arc;
 use std::time::Duration;
 

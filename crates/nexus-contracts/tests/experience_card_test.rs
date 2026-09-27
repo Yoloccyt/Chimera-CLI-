@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / 证据链闭环（卡片 ↔ TokenLedgerEntry）/
 //! 三因子归一化 proptest 属性 / 执行状态判定互斥完备性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chrono::{DateTime, Utc};

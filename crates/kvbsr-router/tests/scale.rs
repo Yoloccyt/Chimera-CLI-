@@ -12,6 +12,7 @@
 //! 使用 min-of-N(N=10)减少调度噪声(项目记忆推荐的亚毫秒级基准方法)。
 //! 加速比阈值放宽到 > 5×(而非严格的 > 10×),以适应高负载测试环境噪声。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 mod common;
 
 use event_bus::EventBus;

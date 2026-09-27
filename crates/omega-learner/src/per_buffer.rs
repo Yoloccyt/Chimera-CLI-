@@ -278,6 +278,7 @@ fn priority_from_td(td_error: f32) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use rand::rngs::StdRng;

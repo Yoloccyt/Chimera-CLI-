@@ -21,6 +21,7 @@
 //! HNSW 检索延迟已由 `vector_bench.rs` 覆盖,这里用预生成的 doc_id 列表
 //! 模拟检索结果,隔离 RRF 融合算法的性能特征。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use repo_wiki::search::{hybrid_search, rrf_fuse, HybridSearchConfig};
 

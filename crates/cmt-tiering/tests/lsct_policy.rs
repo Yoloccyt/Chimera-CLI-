@@ -17,6 +17,7 @@
 //! 生产图上没有任何 lsct 实例发布 `LsctTierSwitched`。本装配补上决策腿后,
 //! "任务负载 → 策略 → 事件 → 实际迁移" 四段链路全部走真实生产调用路径。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -16,6 +16,7 @@
 //! 修正口径数字如实报告,**不预设 65% 达标线**;判定以 ADR-157 双口径三条件
 //! 联合为准（rayon ≥0.9 + tokio busy 证据 + e2e ≥ 基线）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // example code idiom; E-5 targets production code
 use std::sync::Arc;
 use std::time::Duration;
 

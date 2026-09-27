@@ -9,6 +9,7 @@
 //! 4. DPO 对生成:良性提案辩论后有赞成和反对 → 生成 DPO 对
 //! 5. DPO 对不生成:全赞成 → 不生成 DPO 对
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use event_bus::EventBus;

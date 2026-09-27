@@ -17,6 +17,7 @@
 //! `probe_replay_10000` / `probe_fork_latency` 为固定 n 单次采样
 //! （T8/T9 模式,打印到 stdout）,criterion 其余组为迭代基准。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use session_store::{replay, CbmrWriter, Offset, SessionEvent, SessionId, StoreConfig, TreeIndex};
 use std::time::Instant;

@@ -15,6 +15,7 @@
 //! - 所有跨层通信走 EventBus(§2.2 依赖铁律)
 //! - 测试使用 `#[tokio::test]`,HCW 方法 async / SCC 方法 sync
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::EventBus;
 use hcw_window::{ContextEntry as HcwContextEntry, HcwWindow, WindowTier};
 use scc_cache::{ContextEntry as SccContextEntry, ContextId, SccCache, SccConfig};

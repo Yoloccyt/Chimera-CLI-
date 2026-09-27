@@ -9,6 +9,7 @@
 //!   对应 `coefficient < 0.3`(因为 coefficient = 1.0 表示无衰减,0.0 表示完全衰减)。
 //!   这样默认值 1.0(无衰减)不会误显示为红色高亮。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

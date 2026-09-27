@@ -13,6 +13,7 @@
 //! broadcast 不缓存历史消息,subscribe() 必须在 publish() 之前调用。
 //! 测试中先创建 receiver,再触发操作,确保事件不丢失。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use event_bus::EventBus;

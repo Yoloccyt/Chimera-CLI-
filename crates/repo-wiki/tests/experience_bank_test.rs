@@ -7,6 +7,7 @@
 //! - 全局蒸馏检索(global_search)
 //! - 蒸馏幂等(UPSERT 语义)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use repo_wiki::experience_bank::DualExperienceBank;

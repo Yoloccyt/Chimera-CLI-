@@ -4,6 +4,7 @@
 //! 设计 §17 八维度权重表 → L0 RewardSpec 契约 1:1 映射 + 各层 Reward 类型统一
 //! + EventBus 奖励信号流（R1 数据面先接入，R2 训练面解冻后激活）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::reward::{

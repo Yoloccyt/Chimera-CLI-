@@ -9,6 +9,7 @@
 //! 4. 空上下文预测:history 与 clv 均为空时不 panic(边界健壮性)
 //! 5. 回退到单步预测:rollback_to_single_step 返回 N=1 结果
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

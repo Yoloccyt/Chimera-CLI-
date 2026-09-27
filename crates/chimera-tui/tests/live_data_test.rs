@@ -3,6 +3,7 @@
 //! 验证 `TuiApp` 通过 `DataPipeline` 消费 EventBus 事件，
 //! 并将 Quest / Budget 数据渲染到面板上。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};

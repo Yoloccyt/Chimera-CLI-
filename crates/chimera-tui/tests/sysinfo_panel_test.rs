@@ -10,6 +10,7 @@
 //! - GREEN:实现 `src/panels/sysinfo.rs` 后全部测试通过
 //! - REFACTOR:无明显重复,可保留原状
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::Instant;

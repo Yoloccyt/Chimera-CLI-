@@ -9,6 +9,7 @@
 //! 4. 无效配置:block_vector_dim=0 返回 InvalidConfig
 //! 5. 无效配置:top_tools=0 返回 InvalidConfig
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

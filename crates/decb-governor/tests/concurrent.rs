@@ -8,6 +8,7 @@
 //! - 并发 switch_tier,档位状态一致
 //! - 性能断言测试标记 `#[ignore]`,需用 `cargo test -- --ignored` 运行
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 use std::time::Duration;
 

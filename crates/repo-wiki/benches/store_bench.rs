@@ -11,6 +11,7 @@
 //! cargo bench -p repo-wiki
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicU64, Ordering};

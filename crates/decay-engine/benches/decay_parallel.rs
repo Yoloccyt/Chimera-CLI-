@@ -20,6 +20,7 @@
 //!
 //! > 语法结构参照同目录 `decay_bench.rs` / `decay_compute.rs`。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};

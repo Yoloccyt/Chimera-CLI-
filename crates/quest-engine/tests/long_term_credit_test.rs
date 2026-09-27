@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / 折扣累积端到端 / Shapley 时间归因 /
 //! RLTrajectory 导出（铁律6）/ proptest 折扣单调性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use proptest::prelude::*;

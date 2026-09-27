@@ -411,6 +411,7 @@ pub fn spawn_strategy_cap_subscriber(
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

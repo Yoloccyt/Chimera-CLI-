@@ -13,6 +13,7 @@
 //! 再 DefaultHasher,序列化开销 O(n)(n = clv 长度,通常 512),且分配 String。
 //! 直接 impl Hash 用 `to_bits()` 逐字段哈希,零分配 O(n),省去序列化中间态。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::hash_map::DefaultHasher;

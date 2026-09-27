@@ -1,5 +1,6 @@
 //! M4 双向控制端到端测试 — TUI 命令输入 → EventBus → 上游消费
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{PopupKind, TuiApp, TuiConfig};

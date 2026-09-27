@@ -7,6 +7,7 @@
 //!
 //! 这是 P5 "Quest→Event 跳转" 的端到端验证。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 mod common;

@@ -13,6 +13,7 @@
 //! - **min-of-N 采样**:criterion 默认 sample_size=100 + warmup,等价 min-of-N,
 //!   减少 Windows 调度噪声(与既有 render_bench 约定一致)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::engine::{Buffer, Cell, DiffEngine, Rect};

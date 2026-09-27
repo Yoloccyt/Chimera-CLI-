@@ -70,6 +70,7 @@ pub fn evaluate_population(rollouts: &[GrpoRollout]) -> Vec<FitnessReport> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / 逆向价值传播全链路 / L0 AtomicMemoryCard.value 回填 /
 //! α 边界 / proptest 价值传播不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use mlc_engine::{DualSignalBackfill, L1Trace, ReflectionScorer};

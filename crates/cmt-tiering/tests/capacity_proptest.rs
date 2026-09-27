@@ -11,6 +11,7 @@
 //! # 语法约束(§4.4)
 //! proptest 1.11+ 用 block-named 语法: `fn name(arg in strategy) { body }`
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use cmt_tiering::{CapabilityEntry, HotTier, Tier};

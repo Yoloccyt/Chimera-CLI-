@@ -18,6 +18,7 @@
 //! # 数据
 //! 固定种子确定性数据(`sin` 映射,平台无关),多规模梯度覆盖 L1/L2 cache 边界。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};

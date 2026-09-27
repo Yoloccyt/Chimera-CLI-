@@ -3,6 +3,7 @@
 //! 覆盖: export_distilled_insights 导出接口 — 空库边界 / 蒸馏后导出 /
 //! 支持度降序 / 导出与 global_search 一致性（职责边界: 不引入 cmt-tiering 依赖）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

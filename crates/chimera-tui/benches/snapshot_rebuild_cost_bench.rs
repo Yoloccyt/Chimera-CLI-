@@ -33,6 +33,7 @@
 //! 容量口径取自生产默认:`DataSourceConfig::default().max_history_len = 64`、
 //! `max_snapshots = 100`、资源回填窗口约 300 样本(5 分钟 @1 s)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::data::resource_history::MetricSample;

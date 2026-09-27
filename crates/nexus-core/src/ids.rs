@@ -23,6 +23,7 @@ id_newtype!(CapabilityId, "能力唯一标识");
 id_newtype!(OperationId, "操作唯一标识");
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

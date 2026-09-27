@@ -3,6 +3,7 @@
 //! 验证 `DataPipeline` 能把多源 NexusEvent 对齐为单一 `DataSnapshot`,
 //! 支持同一 tick 内状态事件去重，并保留完整事件日志流。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::{BudgetMetrics, DataPipeline, DataSourceConfig, EventSubscriber};
 use event_bus::{BudgetMetricsPayload, EventBus, EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};

@@ -17,6 +17,7 @@
 //! criterion 默认 sample_size=100 + 5 warmup,统计上等价于"min-of-N 5"采样减少
 //! Windows 调度噪声。本 bench 沿用默认配置不显式调小 sample_size,保证统计稳健。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};

@@ -6,6 +6,7 @@
 //! 真实文件"能被 spec_loader 正确解析并通过全部校验,是 P8 元数据外置的
 //! 端到端保证(卡片写错在 CI 即暴露,而非上线后厂商调用失败)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use mca_gateway::prelude::*;
 use mca_gateway::spec_loader::{load_spec_dir, parse_spec_toml};
 use nexus_contracts::affinity::{

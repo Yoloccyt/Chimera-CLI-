@@ -3,6 +3,7 @@
 //! 覆盖: 三态状态机全转移路径 / 不可变记录链 / proptest 状态机属性 /
 //! 与六维控制面 D2 Skills 渐进加载的配置协同
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::{HarnessConfigContract, SkillLifecycleContract, SkillLifecycleState};

@@ -4,6 +4,7 @@
 //! 后台常驻 Ambient Mode（记忆整理 + 检查点 + 资源等待），事件驱动无轮询锁，
 //! 不依赖 RL（jcode 论文独立可落地项）。E2E 验收：资源恢复触发 quest 恢复。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};

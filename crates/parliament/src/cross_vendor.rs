@@ -431,6 +431,7 @@ fn pick_alternative_provider(current: &ProviderId) -> ProviderId {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::provider_affinity::ProviderBinding;

@@ -6,6 +6,7 @@
 //! - shutdown 后 subscriber 终止,不再接收事件
 //! - lag 场景优雅处理(warn 日志,不 panic)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::Duration;

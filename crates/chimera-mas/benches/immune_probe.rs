@@ -15,6 +15,7 @@
 //! cargo bench -p chimera-mas --bench immune_probe -- --test   # 快速验证
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

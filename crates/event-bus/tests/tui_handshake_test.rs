@@ -9,6 +9,7 @@
 //! - topic 映射 System + severity Info(一次性信道建立事件);
 //! - 握手幂等构造:同参数构造等值(proptest 守卫字段守恒)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{CompatLevel, EventMetadata, EventSeverity, EventTopic, NexusEvent};

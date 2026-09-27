@@ -16,6 +16,7 @@
 //! `syscall_reduction_probe` / `wal_replay_probe` 为固定 n 单次采样
 //! （T8/T9 模式,打印到 stdout）,criterion 其余组为迭代基准。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use session_store::{
     CbmrWriter, EventRow, SegmentId, SegmentWriter, SessionEvent, SessionId, StoreConfig, TreeIndex,

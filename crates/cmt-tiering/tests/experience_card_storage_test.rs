@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / 持久化全链路 / 三因子查询 / 完整性审计 /
 //! 热缓存一致性 / proptest 持久化不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

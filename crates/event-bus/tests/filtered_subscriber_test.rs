@@ -9,6 +9,7 @@
 //! Task 5 扩展(CHIMERA-MAS,ADR-026):新增 EventTopic::Agent 主题测试,
 //! 覆盖 7 个 Agent 协作变体 + recv_matching 谓词选择性订阅验证。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{

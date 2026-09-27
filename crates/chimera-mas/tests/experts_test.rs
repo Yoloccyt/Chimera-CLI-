@@ -7,6 +7,7 @@
 //! - 工具白名单非空、权限分级(L0/L1/L2)合法
 //! - `has_tool` / `highest_tier` 行为
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_mas::experts::{ExpertRegistry, PermissionTier};
 use chimera_mas::quadrant::Quadrant;
 

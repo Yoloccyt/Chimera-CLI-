@@ -18,6 +18,7 @@
 //! 与 `benches/coarse_recall.rs::make_clv` 同模式：纯算术伪随机，不引入 rand 依赖，
 //! 固定种子可复现（每次运行结果一致，避免 flaky）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_core::CLV;

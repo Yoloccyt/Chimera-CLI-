@@ -16,6 +16,7 @@
 //! 无真实 API Key 下以合成 fixture + 模拟 TTFT/成本驱动 AffinityMetrics;
 //! Key 就绪后原位替换真实录像,断言不变(标注 `_fixture_note` 语义)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::path::PathBuf;
 use std::sync::Arc;
 

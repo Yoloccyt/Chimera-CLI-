@@ -11,6 +11,7 @@
 //!   作为 future client-side 超时检测的参考阈值(当前面板基于事件载荷的
 //!   status 字段判定,不依赖客户端时间差)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

@@ -7,6 +7,7 @@
 //! - 使用 TuiState::new() 构造测试状态(Panel trait 接收 &TuiState)
 //! - 参考 quest.rs / event_stream.rs 的测试模式,保持一致性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::panels::{Panel, TimelinePanel};

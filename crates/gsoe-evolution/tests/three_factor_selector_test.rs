@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性（re-export 验证）/ 空候选边界 / UCB 未访问优先 /
 //! Softmax 低温集中性 / visit_counts 更新 / 冷却随访问数增长
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chrono::Utc;

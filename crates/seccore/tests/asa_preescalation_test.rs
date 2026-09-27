@@ -11,6 +11,7 @@
 //! - AND ASA Allow/Warn → 继续进入 EscalationHandler.parliament_debate()
 //! - Low-risk (ReadOnly/Normal) 与 EscalateToHuman 不触发 ASA(快速路径)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use seccore::{
     AsaAuditor, AsaConfig, Command, CommandPolicy, EnvPolicy, EscalationHandler, EscalationTier,
     Sandbox, SecCoreError,

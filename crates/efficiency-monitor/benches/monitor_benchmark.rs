@@ -14,6 +14,7 @@
 //! 注意:基准测试标记为 `#[ignore]`,因为 criterion 基准测试
 //! 在常规 `cargo test` 中不应运行。使用 `--ignored` 标志显式运行。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};

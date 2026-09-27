@@ -3,6 +3,7 @@
 //! 验证 L0 工作记忆的 LRU 驱逐策略与并发安全性。
 //! 重点测试:插入 65 条目后最久未访问的被驱逐(容量 64)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::thread;
 
 use mlc_engine::{MemoryEntry, MemoryTier, WorkingMemory};

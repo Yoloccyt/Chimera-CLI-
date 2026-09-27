@@ -15,6 +15,7 @@
 //!
 //! 本文件聚焦 MlcEngine 统一接口层级的 10 线程并发场景(现有测试均在单层 L0/L1/L2/L3 上)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::HashSet;
 use std::sync::Arc;
 

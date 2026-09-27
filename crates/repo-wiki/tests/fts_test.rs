@@ -17,6 +17,7 @@
 //!
 //! 从而验证降级策略的透明性(调用方不感知底层引擎切换)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use repo_wiki::{FtsCapability, WikiConfig, WikiEntry, WikiStore};

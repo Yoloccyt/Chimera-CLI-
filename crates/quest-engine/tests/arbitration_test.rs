@@ -9,6 +9,7 @@
 //! - 无事件时返回 None(让调用方使用 fallback)
 //! - TtgGovernor 集成:effective_tier() 方法
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::BudgetTier;
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};

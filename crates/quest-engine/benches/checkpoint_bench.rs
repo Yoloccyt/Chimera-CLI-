@@ -8,6 +8,7 @@
 //! (v4 报告 §9.1 二期,涉 ADR-004 格式变更)**明确不做**,以数据关门。
 //! 元数据边车优化仅在 list 路径证实为瓶颈时才落地。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};

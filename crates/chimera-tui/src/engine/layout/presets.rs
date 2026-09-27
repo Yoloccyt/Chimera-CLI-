@@ -172,6 +172,7 @@ pub fn centered_overlay(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

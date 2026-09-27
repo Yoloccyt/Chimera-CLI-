@@ -129,6 +129,7 @@ impl TaskAuction {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // 测试码 unwrap 为 Rust 惯用法；E-5 lint 意在治理生产码
 mod tests {
     use super::*;
     use crate::types::{SubAgentKind, SubAgentProfile};

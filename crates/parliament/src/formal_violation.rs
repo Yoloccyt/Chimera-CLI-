@@ -119,6 +119,7 @@ pub fn spawn_formal_violation_subscriber(bus: EventBus) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -6,6 +6,7 @@
 //! 3. §11.4 父本选择: 卡片总线 → L5 选择器 → ParentSelection 消费适配
 //! 4. 聚合表与全历史扫描的等价性（proptest,铁律4 纯函数性质锁定）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;

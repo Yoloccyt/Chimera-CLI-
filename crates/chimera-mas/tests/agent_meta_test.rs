@@ -14,6 +14,7 @@
 //! - AgentMeta/AgentType/AgentStatus 定义在 chimera-mas crate 内(§A.3.4 不下沉 nexus-core)
 //! - 序列化兼容(serde_json + rmp-serde 往返,ADR-004)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_mas::prelude::*;

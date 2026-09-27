@@ -21,6 +21,7 @@
 //! `enable_trend_charts` / `metrics_sample_interval_ms` 等的测试将编译失败
 //! (E0609 找不到字段);也包含断言默认值的测试,实现完成后转为 GREEN。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::{SortMode, TuiConfig};
 
 // ============================================================

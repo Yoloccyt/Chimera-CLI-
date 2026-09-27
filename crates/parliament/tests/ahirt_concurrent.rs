@@ -7,6 +7,7 @@
 //! - AhirtRedTeam 满足 Send + Sync 约束(可跨线程共享)
 //! - 周期探测不阻塞主流程
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 use std::time::Duration;
 

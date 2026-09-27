@@ -4,6 +4,7 @@
 //! L3 ExperienceCardStorage.query_by_error_signature（idx_error_hash 索引）全链路闭环。
 //! 验证 D-3 哈希一致性（collector.compute_error_hash 与 L3 存储 error_hash 对齐）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chrono::Utc;

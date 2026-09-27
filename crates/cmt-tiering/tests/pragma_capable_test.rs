@@ -29,6 +29,7 @@
 //! - temp_store:0=DEFAULT, 1=FILE, 2=MEMORY
 //! - cache_size:负值表示 KB 单位,正值表示页数;-65536 = 64MB
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use cmt_tiering::PragmaConn;

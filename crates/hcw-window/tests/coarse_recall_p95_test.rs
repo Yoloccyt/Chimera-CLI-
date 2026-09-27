@@ -18,6 +18,7 @@
 //! 性能红线测试需在 release 模式运行，debug 模式下 HNSW/CLV 计算未优化，
 //! 可能误判红线失败。`#[ignore]` 避免普通 `cargo test` 触发，需显式 `--ignored`。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

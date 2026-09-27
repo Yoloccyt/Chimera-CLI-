@@ -8,6 +8,7 @@
 //! 2. 防止未来重构(如增加变体或改用 HashMap 分发)意外引入性能回归
 //! 3. 提供 criterion 统计置信区间,排除测量噪声
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use chimera_cli::ChimeraCliError;

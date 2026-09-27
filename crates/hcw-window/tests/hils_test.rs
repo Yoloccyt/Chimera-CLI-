@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / HiLSWindowSelector 与 WindowSelector 互补 /
 //! 长上下文块选择 / 批量查询 / proptest 块选择不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use hcw_window::{Chunk, HiLSAttention, HiLSWindowSelector, WindowSelector, WindowTier};

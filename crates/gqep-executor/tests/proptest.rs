@@ -12,6 +12,7 @@
 //! - 断言 succeeded + failed == total
 //! - 生成超时 future(短超时 + 长运行),验证计入 total 与 failed
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::Duration;

@@ -10,6 +10,7 @@
 //!   `active_pane()` 断言 `w` 环形循环,覆盖 IDE 三窗格与 VimSplit 双分屏两条新路径。
 //! - **零回归 + 不 panic**:各 PaneMode × 宽/窄视口渲染均不 panic;窄视口收敛单窗格。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{PanelId, TuiApp, TuiConfig};

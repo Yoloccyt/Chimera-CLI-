@@ -8,6 +8,7 @@
 //! WHY 使用 block_on:`compute_all_masks` 为 async fn, criterion 默认同步,
 //! 通过 `Runtime::new().block_on()` 在同步上下文中调用 async 方法。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use event_bus::EventBus;
 use osa_coordinator::{

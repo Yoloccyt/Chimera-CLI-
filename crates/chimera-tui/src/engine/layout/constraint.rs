@@ -240,6 +240,7 @@ fn shrink_distribute(sizes: &mut [u32], base: &[u32], shrink: &[u32], total: u32
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

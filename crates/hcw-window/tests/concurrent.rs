@@ -16,6 +16,7 @@
 //! - 并发写操作通过 RwLock 串行化,无竞态窗口
 //! - 锁外发布事件(避免持锁 await 死锁)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use event_bus::EventBus;

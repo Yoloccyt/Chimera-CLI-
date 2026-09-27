@@ -12,6 +12,7 @@
 //! WHY 不 bench 排序本身:`percentile_sorted` 契约要求调用方传入已排序切片(排序是
 //! O(n log n),属调用方策略而非取分位这一步)。这里只测取分位的 O(1) 成本。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use nexus_contracts::util::{percentile_sorted, sigmoid};
 use std::alloc::{GlobalAlloc, Layout, System};

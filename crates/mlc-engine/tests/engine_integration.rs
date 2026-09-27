@@ -6,6 +6,7 @@
 //! - 事件发布(MemoryMetricsReported / MemoryTiered)
 //! - TemporalMeta 召回过滤(P3-W11.1.2)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, NexusEvent};
 use mlc_engine::types::{PatternSignature, ProceduralEntry};
 use mlc_engine::{MemoryEntry, MemoryTier, MlcConfig, MlcEngine, MlcError};

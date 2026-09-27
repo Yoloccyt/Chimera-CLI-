@@ -13,6 +13,7 @@
 //! 注意:WikiStore 所有方法已改为 async(C-01 修复:spawn_blocking),
 //! 所有测试用 `#[tokio::test]` 标注。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chrono::Utc;
 use repo_wiki::{IscmAnchor, Layer, WikiEntry, WikiError, WikiStore};
 use uuid::Uuid;

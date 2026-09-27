@@ -5,6 +5,7 @@
 //! 变体分开评估（不交叉污染性能基线）。隔离按变体 ID 标签约定
 //! （不改 VariantContract 核心类型——领域类型稳定性，§3.3.1）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::variant::VariantId;

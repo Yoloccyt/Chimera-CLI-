@@ -10,6 +10,7 @@
 //!   cargo insta accept        # 接受全部新快照
 //!   cargo test -p chimera-cli # 常规运行(快照不匹配则失败)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::BTreeMap;
 
 use chimera_cli::output::render_json;

@@ -13,6 +13,7 @@
 //! - `test_concurrent_feedback_strategy_adjustment`:高拒绝率触发策略调整
 //! - `test_zero_void_promise`:验证所有 async 操作均被 await
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use event_bus::EventBus;

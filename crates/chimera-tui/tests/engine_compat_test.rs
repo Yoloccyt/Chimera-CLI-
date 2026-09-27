@@ -13,6 +13,7 @@
 //! - **不启真实终端**:直接对 ratatui `Buffer::empty` 渲染,无需 TTY,CI 可跑。
 //! - **不修改现有测试**:本文件为新增等价测试,现有 ~40 测试零改动。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::engine::compat::{from_ratatui_buffer, from_ratatui_modifier};

@@ -23,6 +23,7 @@
 //! 断言一律符合 spec 红线（`== EventSeverity::Critical`），不因想让测试 RED
 //! 而写错断言。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventMetadata, EventSeverity, NexusEvent};
 
 // ============================================================

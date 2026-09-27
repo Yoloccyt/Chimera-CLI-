@@ -1,5 +1,6 @@
 //! PopupStack 集成测试 — 验证弹窗渲染、详情滚动与确认弹窗行为
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{PopupKind, PopupStack, Severity};

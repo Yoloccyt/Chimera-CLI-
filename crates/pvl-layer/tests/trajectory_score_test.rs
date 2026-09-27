@@ -4,6 +4,7 @@
 //! 权重和 = 1.0 / 与既有观测九维（ProcessScore）并存语义 /
 //! proptest overall ∈ [0,1] 不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::experience_card::AtomicOperator;

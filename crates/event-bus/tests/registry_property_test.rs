@@ -21,6 +21,7 @@
 //! 钉死 (type_name, severity, topic) 三元组 —— 捕获"两个 Normal 变体
 //! topic 互换"这类计数锁无法发现的错位。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{

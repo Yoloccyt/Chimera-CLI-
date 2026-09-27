@@ -9,6 +9,7 @@
 //! AsaIntervention/BudgetExceeded)必须用 mpsc channel 确保送达"。
 //! 双通道实现见 `bus.rs::EventBus::subscribe_critical_events`。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use event_bus::{EventBus, EventMetadata, EventSeverity, NexusEvent};

@@ -22,6 +22,7 @@
 //! - 新增 Critical 变体 → 还须同步 bus.rs `is_critical_mpsc_event`
 //!   (双清单同步红线)与 `LANE_FORBIDDEN_SHARD`。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashSet;

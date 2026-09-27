@@ -10,6 +10,7 @@
 //! WHY 本文件补齐 P8:OverWindow(ADR-073 落地的最新机制)此前是唯一无专项
 //! 测试文件的注册面板;断言统一用 En 文案(宽字符重组歧义规避,W3 口径沿袭)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 #[macro_use]

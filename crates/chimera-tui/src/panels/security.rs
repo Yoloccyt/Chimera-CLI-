@@ -436,6 +436,7 @@ impl Panel for SecurityPanel {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::data::{
@@ -539,6 +540,7 @@ mod tests {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ps2_agent_failure_tests {
     use super::*;
 

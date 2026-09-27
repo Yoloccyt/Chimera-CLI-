@@ -3,6 +3,7 @@
 //! 运行: `cargo bench -p pvl-layer --bench gtpo_rlvr_bench`
 //! 覆盖: Turn-Level 优势计算（100 步轨迹）与可验证奖励（100 用例）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use pvl_layer::gtpo::{TurnTrajectory, GTPO};
 use pvl_layer::rlvr::{TestCase, VerifierKind, RLVR};

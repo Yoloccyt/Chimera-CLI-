@@ -3,6 +3,7 @@
 //! 验证窗口溢出降级链(L0->L1->L2->L3)、OSA 掩码订阅稀疏化、
 //! ContextWindowSwitched/ContextCompressed 事件正确发布。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};

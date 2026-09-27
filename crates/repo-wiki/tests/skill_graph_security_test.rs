@@ -4,6 +4,7 @@
 //! SkillGraph 无显式安全约束（仅 Blueprint validate_plan 覆盖）→ 补齐安全约束接口，
 //! 防止技能图出现悬空依赖（依赖的技能不存在）与循环依赖（A→B→A 执行死锁）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_core::CLV;

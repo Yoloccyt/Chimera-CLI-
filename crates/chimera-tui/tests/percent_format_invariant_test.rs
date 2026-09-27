@@ -13,6 +13,7 @@
 //! 2. **辅助契约**:`percent_*` 系列的行为(含 NaN、越界、f32/f64)与
 //!    精度常量取值的确定性断言。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::render::{

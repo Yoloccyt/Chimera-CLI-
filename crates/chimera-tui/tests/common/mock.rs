@@ -6,6 +6,7 @@
 //! trait、方法逐字一致)统一收敛至此,一举消除重复。差异项(#[derive(Debug)] 缺失
 //! 3/4、new() 缺失 3/4、import 风格全限定 vs 裸名)以下述为准补齐。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use chimera_tui::data::{DataSnapshot, DataSourceConfig, TuiDataSource};

@@ -5,6 +5,7 @@
 //!
 //! V1 违规修正验证:OSA 不持有 HCW 引用,仅通过 EventBus 传递 context_mask
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, NexusEvent};
 use osa_coordinator::{
     AffectedScope, FileId, MemoryId, OmniSparseCoordinator, OperationId, RiskLevel, TaskId,

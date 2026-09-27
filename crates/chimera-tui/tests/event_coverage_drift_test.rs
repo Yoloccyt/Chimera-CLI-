@@ -18,6 +18,7 @@
 //! 本文件是它的**编译期对账单**:任何面向 TUI 的新事件,必须先在此分类,
 //! 再去对应同步器接线 —— 两处缺一,测试红。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::NexusEvent;
 
 /// TUI 对事件的消费分类(PS-2 漂移守卫)

@@ -10,6 +10,7 @@
 //! 5. 多次融合发布多个事件(事件流连续性)
 //! 6. 事件 severity 为 Normal
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{EventBus, EventMetadata, EventSeverity, NexusEvent};

@@ -4,6 +4,7 @@
 //! 各层实现为 Reward 类型 + EventBus 奖励信号流——S9 路由接缝的 S9Reward
 //! 经桥接转换为 L0 RewardSignal（统一载荷），R1 数据面先接入。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

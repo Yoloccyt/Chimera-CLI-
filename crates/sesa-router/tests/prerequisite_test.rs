@@ -7,6 +7,7 @@
 //!
 //! 三者齐备才允许 SESA 激活,强制五层路由顺序(安全优先)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use sesa_router::{ActivationRequest, ExpertDescriptor, SesaConfig, SesaError, SesaRouter};
 

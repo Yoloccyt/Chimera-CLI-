@@ -14,6 +14,7 @@
 //!   且观察后 version 递增。
 //! - `s9_arm_id_roundtrip`: 随机臂 ID 在单臂集中 roundtrip 正确。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use proptest::prelude::*;
 
 use omega_learner::s9_route::{S9Context, S9Reward, S9RouteLearner};

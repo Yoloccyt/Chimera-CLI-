@@ -2,6 +2,7 @@
 //!
 //! 验证 L1 情节记忆的时间范围查询与 Quest 关联查询。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chrono::{DateTime, Duration, Utc};
 
 use mlc_engine::{EpisodicMemory, MemoryEntry, MemoryTier};

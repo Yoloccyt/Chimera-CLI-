@@ -10,6 +10,7 @@
 //! # 性能可证伪(§3.4.1 第 6 条)
 //! 上述路径均为毫秒级以下纯计算,基准提供优化前后量化对比依据。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_mas::feedback::ExpertFeedbackRegistry;
 use chimera_mas::pdca::{PdcaLoop, PdcaMetrics};
 use criterion::{criterion_group, criterion_main, Criterion};

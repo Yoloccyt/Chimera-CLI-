@@ -5,6 +5,7 @@
 //!
 //! 对应架构层:L10 Interface(`chimera-tui`)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{panels, ActionDescriptor, ActionDomain, ActionRegistry, Panel, QuestPanel};

@@ -11,6 +11,7 @@
 //! 全局锁串行化本文件的快照相关测试,断言再按 spec name 过滤,
 //! 与其他测试文件(integration.rs 等)的 register 调用互不干扰。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use std::sync::{Mutex, MutexGuard};
 
 use gsoe_evolution::{spec_dag_snapshot, SpecRegistry};

@@ -48,6 +48,7 @@
 //! - §6.1: 单函数 ≤ 200 行
 //! - `#![forbid(unsafe_code)]`: 纯测试,无 unsafe 需求
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use repo_wiki::{ContradictionDetector, WikiEntry, WikiStore};

@@ -12,6 +12,7 @@
 //! - N=5 预测延迟(典型多步)
 //! - N=10 预测延迟(上限)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use event_bus::EventBus;
 use mtpe_executor::{MtpeConfig, MtpeExecutor, PredictionContext};

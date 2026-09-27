@@ -11,6 +11,7 @@
 //! - dirty 行跳过语义(clean 行零开销,不变量由调用方保证);
 //! - resize 全量重绘。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::engine::buffer::DirtyTracker;

@@ -4,6 +4,7 @@
 //! 1. 任何 ide_source 经转换后字段完整(tool_id/parameters/ide_source/call_id 非空)
 //! 2. to_native_format(from_*_format(raw)) 保持 tool_id 一致
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chtc_bridge::{IdeSource, ProtocolConverter};

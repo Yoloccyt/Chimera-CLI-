@@ -110,6 +110,7 @@ id_newtype!(TaskId, "任务唯一标识 — budget 维度的稀疏化对象");
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

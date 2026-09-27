@@ -13,6 +13,7 @@
 //! - routing 的 k 由档位决定:Simple=8, Regular=16, Complex=24, UltraComplex=32
 //! - 档位随 complexity_score 非递减 → k 非递减 → active_count 非递减
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

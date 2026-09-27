@@ -626,6 +626,7 @@ pub mod cgroup {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use std::sync::Arc;
 

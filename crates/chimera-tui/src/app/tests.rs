@@ -4,6 +4,7 @@
 //!
 //! 对应架构层:L10 Interface
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -1868,6 +1869,7 @@ fn action_request_seq_monotonic() -> Result<(), Box<dyn std::error::Error>> {
 
 /// P1 回执归属属性测试(与上方单测互补:单测覆盖典型次数,属性测试覆盖任意次数)
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod p1_request_id_proptests {
     use super::*;
     use proptest::prelude::*;

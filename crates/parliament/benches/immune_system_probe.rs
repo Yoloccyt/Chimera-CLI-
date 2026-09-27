@@ -19,6 +19,7 @@
 //! - sample_size: 100（与 debate.rs 对齐,统计显著性足够）
 //! - warm_up_time: 500ms（避免冷启动干扰）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, Criterion};

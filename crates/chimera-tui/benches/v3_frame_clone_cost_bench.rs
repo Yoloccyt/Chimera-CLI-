@@ -43,6 +43,7 @@
 //! # 运行
 //! `cargo bench -p chimera-tui --bench v3_frame_clone_cost_bench -- --quick`
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::engine::output::V3Output;

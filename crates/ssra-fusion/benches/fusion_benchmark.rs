@@ -11,6 +11,7 @@
 //! cargo bench -p ssra-fusion
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};

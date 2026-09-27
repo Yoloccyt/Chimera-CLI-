@@ -9,6 +9,7 @@
 //! - 流式行闸门语义:半行暂存、完整行可见、Completed 冲刷残段;
 //! - view_mode 持久化往返(save→load 保留)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Mutex;

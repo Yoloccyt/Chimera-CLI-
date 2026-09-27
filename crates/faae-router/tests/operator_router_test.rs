@@ -4,6 +4,7 @@
 //! 四策略分派 / select→execute 执行链路（L5 协同）/ 历史 append-only /
 //! ThreeFactorSelector Softmax 委托 / proptest 计数不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use faae_router::{OperatorRouter, OperatorSelectionRecord};

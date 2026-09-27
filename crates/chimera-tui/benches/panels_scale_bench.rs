@@ -6,6 +6,7 @@
 //! - EventStream 面板 1 万事件 `content()` 构建(既有虚拟滚动基线);
 //! - EventStream 关键字过滤(每条事件 serde_json 全量序列化路径);
 //! - Router 面板 1 万事件 `content()`(Top-K 能力列表 + 事件流驱动展示)。
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use event_bus::{EventMetadata, NexusEvent};
 use std::collections::VecDeque;

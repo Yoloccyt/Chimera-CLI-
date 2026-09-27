@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / L0 ExperienceCard 全链路消费 / 三因子父本选择 /
 //! **L1 ExperienceCardBus → L2 MlcEngine 消费闭环（D-7 接线）** / proptest 不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::Duration;

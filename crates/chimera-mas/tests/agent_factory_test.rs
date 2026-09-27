@@ -17,6 +17,7 @@
 //! - §6.2:AgentTaskDelegated 是 Normal 级,走 broadcast(非 mpsc)
 //! - Agent 持有 AgentMeta + AgentContext + AgentLifecycle 三组件
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_mas::prelude::*;

@@ -4,6 +4,7 @@
 //! 回放池完整性仅"R2 冻结声明注释"覆盖，无独立审计 → 补齐完整性审计接口，
 //! 校验分层统计一致性与容量不变量（超限 = 内部淘汰 bug 的信号）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use cmt_tiering::rl_replay_pool::{ReplayExperience, TieredReplayPool};

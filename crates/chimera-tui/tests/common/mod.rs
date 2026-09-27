@@ -10,6 +10,7 @@
 //! 本宏为档位放大语义(debug×4/release×1.5),与 nexus-contracts 共享版
 //! `scaled_timeout!`(env scale 缩放)语义不同,更名为 `build_scaled_timeout!`
 //! 避免同名混用。
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 
 /// 按构建档位缩放超时时长
 ///

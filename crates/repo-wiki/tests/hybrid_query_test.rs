@@ -6,6 +6,7 @@
 //! - 查询嵌入维度不匹配的显式报错
 //! - 惰性 HNSW 索引在写操作后脏重建
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use repo_wiki::{WikiEntry, WikiError, WikiStore};
 
 fn make_entry(id: &str, content: &str, embedding: Vec<f32>) -> WikiEntry {

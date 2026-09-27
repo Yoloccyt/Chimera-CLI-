@@ -3,6 +3,7 @@
 //! 覆盖: 铁律6 轨迹导出 / 策略可替换（load_policy）/ 全格式序列化 /
 //! RLHook 与既有 rl_types（RLAction/RLState）的语义对齐 / proptest 轨迹属性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::{

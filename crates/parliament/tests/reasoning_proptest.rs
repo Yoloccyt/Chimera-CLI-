@@ -16,6 +16,7 @@
 //! proptest! 宏要求至少一个参数(`$($parm:pat in $strategy:expr),+`),
 //! 因此纯不变量函数(无随机输入)用普通 `#[test]` 而非 `proptest!` 块
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use parliament::reasoning::{

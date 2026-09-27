@@ -285,6 +285,7 @@ fn now_secs() -> i64 {
     chrono::Utc::now().timestamp()
 }
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_contracts::SelectorWeights;

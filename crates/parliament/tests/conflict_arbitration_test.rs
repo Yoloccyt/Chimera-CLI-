@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / L0 AtomicMemoryCard 消费 / 四决策闭环 /
 //! trait 注入 mock judge / 召回子集不变量 proptest
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;

@@ -8,6 +8,7 @@
 //! 待 Action Item 1(七厂商 API Key)就绪后原位替换——测试断言不变,
 //! 这正是录播测试的价值:替换录像即验证真实协议兼容性。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use mca_gateway::codec::Codec;
 use mca_gateway::prelude::*;
 use nexus_contracts::affinity::{ContentBlock, FinishReason, OutputFormat, SamplingParams};

@@ -4,6 +4,7 @@
 //! "RuntimeAuditor 五维度第 0 维度（契约遵守）可产出"——平台接地规格
 //! 注入后 audit 报告应包含契约遵守分数。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use efficiency_monitor::auditor::RuntimeAuditor;

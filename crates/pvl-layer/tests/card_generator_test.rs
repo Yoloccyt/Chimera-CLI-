@@ -4,6 +4,7 @@
 //! L1 ExperienceCardBus 双通道投递闭环 / L4 classify + compute_error_hash 协同 /
 //! proptest 三因子不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::ExperienceCardBus;

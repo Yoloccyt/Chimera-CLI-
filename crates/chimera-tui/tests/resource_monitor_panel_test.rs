@@ -2,6 +2,7 @@
 //!
 //! 验证 ResourceMonitorPanel 正确渲染 CPU/内存/磁盘/网络四区域指标。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::panels::{Panel, ResourceMonitorPanel};

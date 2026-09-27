@@ -19,6 +19,7 @@
 //! - `sample_batch32_{1k,10k,100k}`: batch=32 的采样延迟(off-policy 训练典型 batch)
 //! - `sample_batch256_100k`: 大 batch 压力场景
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use omega_learner::per_buffer::PerBuffer;
 use omega_learner::replay_pool::ReplayPool;

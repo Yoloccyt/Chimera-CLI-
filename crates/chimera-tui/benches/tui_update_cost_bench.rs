@@ -26,6 +26,7 @@
 //! - 若单次对齐为**几十 µs** → 每秒 CPU < 0.05%,事件驱动刷新可行;
 //! - 若达**毫秒级** → 需先做字段级增量对齐(仅同步变化的字段)再实施。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::data::resource_history::MetricSample;

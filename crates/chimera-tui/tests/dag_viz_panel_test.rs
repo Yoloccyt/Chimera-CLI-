@@ -4,6 +4,7 @@
 //! (该全局在生产装配面恒空 → 恒显示 "0 nodes, 0 edges",属假数据)。
 //! 现改为**诚实标注未接线**;本测试守护"不再渲染失效计数"这一新契约。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

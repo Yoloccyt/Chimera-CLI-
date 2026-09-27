@@ -33,6 +33,7 @@
 //! cargo bench -p chimera-mas -- agent_creation  # 单个 benchmark
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashSet;

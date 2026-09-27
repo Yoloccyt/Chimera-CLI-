@@ -9,6 +9,7 @@
 //! 3. 10000 Block（大规模场景）— 验证生产规模延迟
 //! 4. p95 延迟测量（1000 Block × 1000 次采样）— 红线守护
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::sync::RwLock;

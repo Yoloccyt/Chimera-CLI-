@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 //! ImmuneSystem facade 命名对齐测试（ADR-046 P1-5）

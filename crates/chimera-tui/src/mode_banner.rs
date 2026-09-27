@@ -58,6 +58,7 @@ pub fn render_banner(mode: ApprovalMode, area: Rect, buf: &mut Buffer) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -3,6 +3,7 @@
 //! 覆盖: MemoryPyramidLevel ↔ ArchiveTier 静态映射（含 ArchiveTier 新 serde）/
 //! 金字塔层级与经验卡片/Token 证据的跨模块组装 / RL 快照卡片全链路 / proptest 属性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::{

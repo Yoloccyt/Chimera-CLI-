@@ -521,6 +521,7 @@ fn map_anthropic_stop(raw: &str) -> FinishReason {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

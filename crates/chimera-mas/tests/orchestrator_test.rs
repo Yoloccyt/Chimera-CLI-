@@ -19,6 +19,7 @@
 //! - ADR-026 决策 2:复用 event-bus,不新建 AgentMessageBus
 //! - §2.2 依赖铁律:chimera-mas (L9) → event-bus (L1) 向下依赖允许
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_mas::prelude::*;

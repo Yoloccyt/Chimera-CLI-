@@ -33,6 +33,7 @@ pub const COMPACT: &str = "compact";
 pub const COMPACT_ACTION_ID: &str = COMPACT;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

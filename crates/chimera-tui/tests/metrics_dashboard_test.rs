@@ -15,6 +15,7 @@
 //! - **渲染验证**:使用 `ratatui::backend::TestBackend` 渲染到 Buffer,
 //!   验证非默认 cell 数量与 cell 标题文本,确保"网格确实渲染了内容"。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use chimera_tui::data::{DataSnapshot, DataSourceConfig, TuiDataSource};

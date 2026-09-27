@@ -3,6 +3,7 @@
 //! 覆盖:相同帧(增量路径零输出开销)与 5% 变化帧(diff + ANSI 写出)。
 //! 运行:`cargo bench -p chimera-tui --bench v3_output_bench -- --quick`
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::engine::buffer::{Buffer, Cell};
 use chimera_tui::engine::output::V3Output;
 use chimera_tui::engine::rect::Rect;

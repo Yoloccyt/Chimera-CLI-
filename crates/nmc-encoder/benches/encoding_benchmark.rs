@@ -8,6 +8,7 @@
 //! - 中等文本(1KB)编码延迟
 //! - 长文本(10KB)编码延迟
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use nmc_encoder::{NmcConfig, NmcEncoder, PerceptionInput};
 

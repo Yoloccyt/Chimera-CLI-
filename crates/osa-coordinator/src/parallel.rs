@@ -312,6 +312,7 @@ pub(crate) fn apply_k_multiplier(base_k: usize, multiplier: f32) -> usize {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::types::{AffectedScope, RiskLevel, TaskType, TimePressure};

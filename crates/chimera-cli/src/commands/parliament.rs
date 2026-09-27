@@ -183,6 +183,7 @@ fn print_consensus_human(consensus: &Consensus) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::call_budget::CallBudgetError;

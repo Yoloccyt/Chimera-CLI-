@@ -113,6 +113,7 @@ pub fn move_selection(selected: usize, delta: isize, item_count: usize) -> usize
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

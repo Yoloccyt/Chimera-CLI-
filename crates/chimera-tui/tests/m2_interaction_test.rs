@@ -9,6 +9,7 @@
 //!   互斥,避免并行线程相互切换语言导致断言抖动。
 //! - **渲染安全**:`TestBackend` 内存渲染,验证 overlay 不 panic 且标题随 locale 呈现。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Mutex;

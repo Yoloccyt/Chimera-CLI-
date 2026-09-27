@@ -9,6 +9,7 @@
 //! - 三个感知器（Image/Video/Audio）共享相同的 OnnxBackend 后处理管道，
 //!   通过测试后处理的一致性来保证跨模态 embedding 维度统一
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use nmc_encoder::{
     AudioPerceptor, ImagePerceptor, Modality, NmcConfig, OnnxBackend, PerceptionInput, Perceptor,
     VideoPerceptor,

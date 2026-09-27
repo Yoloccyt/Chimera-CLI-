@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 //! Task 21(RED): INV-7 / INV-8 不变量检查器失败测试

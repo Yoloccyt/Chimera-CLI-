@@ -11,6 +11,7 @@
 //! 架构层归属:L10 Interface(bench 不入架构层,仅作为 chimera-cli dev-artifact)。
 //! 关联任务:S1(P1 短期增强,最低风险,纯 bench 新增,零生产代码修改)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use chimera_cli::LazyConfig;

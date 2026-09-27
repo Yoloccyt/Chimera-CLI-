@@ -369,6 +369,7 @@ pub fn apply_output_budget(body: &mut serde_json::Value, budget: &OutputBudget) 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_contracts::affinity::{

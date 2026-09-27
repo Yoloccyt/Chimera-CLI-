@@ -14,6 +14,7 @@
 //! - L0/L1/L2 不受 sparsity 影响(忽略参数)
 //! - fallback 与 Some(0.875) 等价性验证
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use hcw_window::{HcwConfig, WindowTier};
 
 /// 默认 L3 容量 = 1M = 1048576

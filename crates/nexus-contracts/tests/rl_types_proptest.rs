@@ -4,6 +4,7 @@
 //! "proptest 序列化往返"）。验证任意合法 RLAction/RLExperience 经
 //! serde_json / rmp-serde 序列化-反序列化后保持相等（ADR-004 MessagePack 协议）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use nexus_contracts::rl_types::{MemPiAction, RLAction, RLExperience, RLState};
 use nexus_contracts::{
     ActivationStrategy, DecayProfile, DensityTier, MemoryStrategy, PrefetchStrategy, RecallQuota,

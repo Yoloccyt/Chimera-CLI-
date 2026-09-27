@@ -11,6 +11,7 @@
 //! 使用 `criterion_group!` + `criterion_main!` 宏注册基准。
 //! `harness = false` 在 Cargo.toml 中声明,禁用 libtest 默认 harness。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};

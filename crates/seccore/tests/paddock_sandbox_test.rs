@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / rollout 生命周期端到端 / 铁律10 解耦验证 /
 //! ProcessSandboxRuntime 构造 / SandboxType 三类型
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;

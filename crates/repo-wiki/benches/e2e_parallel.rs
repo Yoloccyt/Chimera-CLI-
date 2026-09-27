@@ -17,6 +17,7 @@
 //! `cargo bench -p repo-wiki --bench e2e_parallel`（release 模式）;
 //! 静默态单跑取样（µs 级 bench 防负载假回归）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::hint::black_box;

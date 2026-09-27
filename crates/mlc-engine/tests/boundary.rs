@@ -8,6 +8,7 @@
 //! - L2 recall_by_clv top_k=0 返回空 Vec:tests/semantic.rs::test_l2_recall_by_clv_zero_top_k
 //! - L2 recall_by_clv 空记忆返回空:tests/semantic.rs::test_l2_recall_by_clv_empty
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use mlc_engine::{MlcError, PatternSignature, ProceduralMemory, WorkingMemory};
 
 /// L0 空时 get 返回 EntryNotFound(断言错误类型,而非仅 is_err)

@@ -33,6 +33,7 @@
 //!   若 W2.1 偏好 `FuturesUnordered`,可在 Cargo.toml `[dev-dependencies]` 添加
 //!   `futures = { workspace = true }` 后重构,当前不修改 Cargo.toml)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{CriticalEventDropped, EventBus, EventMetadata, NexusEvent};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

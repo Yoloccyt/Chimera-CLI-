@@ -7,6 +7,7 @@
 //! 基线用途:优化前记录 O(n²) 配对基线,优化后接入 bench_check.yml 守护
 //! (1000 条目 dedup < 50ms)。全排序 O(n² log n) 保留(贪心正确性所需)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_mas::archive::{DedupEngine, DedupEntry};
 use chrono::Utc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};

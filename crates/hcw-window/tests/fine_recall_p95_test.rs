@@ -16,6 +16,7 @@
 //!   hcw-window (L2) 不能依赖 repo-wiki (L5) 的 HnswStore（生产依赖方向禁止），
 //!   InMemoryVectorStore 比 HNSW 慢，若此实现满足 <50ms 红线，真实 HnswStore 一定能满足
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};

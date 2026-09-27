@@ -9,6 +9,7 @@
 //! - UPSERT 语义:相同 ID 覆盖
 //! - spawn_blocking 异步包装验证
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chrono::{Duration, Utc};
 use cmt_tiering::{CapabilityEntry, ColdTier, Tier};
 

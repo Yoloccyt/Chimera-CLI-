@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性（re-export 验证）/ 33→4 实证端到端 /
 //! D-6 占位治理（snapshot 真实数据源）/ proptest 裁剪不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

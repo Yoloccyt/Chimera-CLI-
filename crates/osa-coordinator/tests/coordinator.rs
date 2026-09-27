@@ -8,6 +8,7 @@
 //! - Complex(0.5-0.75):routing Top-24,context 100 文件,audit 100%
 //! - UltraComplex(≥ 0.75):routing Top-32,context 1000 文件,audit 100%
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::EventBus;
 use osa_coordinator::OsaConfig;
 use osa_coordinator::{

@@ -3,6 +3,7 @@
 //! 覆盖: L1 经验卡片总线 → L3 持久化端到端闭环 / 分级投递持久化策略 /
 //! TokenLedger 训练证据落盘闭环 / 孤儿发布者消除验证
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

@@ -25,6 +25,7 @@
 //!
 //! 基准覆盖 §10.2 全文公式,为"三因子选择性能"声明提供数据证据(§0 性能证据铁律)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use chrono::Utc;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use gsoe_evolution::ThreeFactorSelector;

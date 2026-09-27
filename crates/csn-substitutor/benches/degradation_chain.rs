@@ -16,6 +16,7 @@
 //! - 基准不含 EventBus 发布开销(那是异步路径,由集成测试覆盖)
 //! - 使用 `black_box` 防止编译器优化掉关键操作
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};

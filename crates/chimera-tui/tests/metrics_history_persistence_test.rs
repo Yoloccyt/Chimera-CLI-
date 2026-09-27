@@ -18,6 +18,7 @@
 //! - 测试 DB 用 `tempfile::tempdir()` 隔离,避免污染用户 `~/.chimera/`
 //! - 库层错误用 `TuiError`(`thiserror` enum),不引入 `anyhow`
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::data::metrics_history::MetricsHistory;

@@ -5,6 +5,7 @@
 //! 验证 HttpRlClient 的 push_experiences / health_check 端到端。
 //! 仅 `rl-client` feature 开启时编译（required-features）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 #![cfg(feature = "rl-client")]
 

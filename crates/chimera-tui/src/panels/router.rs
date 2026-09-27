@@ -241,6 +241,7 @@ pub fn top_k_capabilities(caps: &[(String, u64)], k: usize) -> Vec<(String, u64)
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

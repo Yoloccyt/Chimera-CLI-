@@ -28,6 +28,7 @@
 //! cargo test -p chimera-tui --test i18n_completeness_test
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::fs;

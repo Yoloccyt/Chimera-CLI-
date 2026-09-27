@@ -5,6 +5,7 @@
 //! gVisor 文件系统隔离、进程隔离、升级通道档位分类、SandboxViolation 事件发布。
 //! 私有 API 白盒测试(handle_escalation/post_execution_audit)保留在
 //! src/sandbox.rs private_api_tests 模块(访问 pub(crate) 方法)。
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use event_bus::{EventBus, NexusEvent};

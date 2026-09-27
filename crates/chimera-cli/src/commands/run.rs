@@ -183,6 +183,7 @@ async fn stream_to_stdout(reply: &str) {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::composition;

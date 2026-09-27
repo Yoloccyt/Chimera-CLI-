@@ -74,6 +74,7 @@ pub fn prefix_hint_entries(kind: PrefixKind) -> Vec<(&'static str, &'static str)
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

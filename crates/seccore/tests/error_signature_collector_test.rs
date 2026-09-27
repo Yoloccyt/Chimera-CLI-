@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / 5 模式端到端提取 / SHA-256 哈希一致性 /
 //! L0 ErrorSignature 契约协同 / proptest 模糊输出鲁棒性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use proptest::prelude::*;

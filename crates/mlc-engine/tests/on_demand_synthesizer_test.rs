@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / 合成器与卡片系统协同 / 四算子差异化上下文 /
 //! 懒加载边界约束（铁律5）/ proptest 上下文规模不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chrono::{DateTime, Utc};

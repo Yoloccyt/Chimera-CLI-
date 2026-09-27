@@ -42,6 +42,7 @@
 //!   chimera-mas),若非 `event_bus::TaskPriority` 等路径,需同步更新本测试
 //!   import。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{

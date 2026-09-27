@@ -14,6 +14,7 @@
 //! 设计依据:`crates/event-bus/src/critical_sink.rs` 模块文档(含 at-least-once
 //! 语义边界)与 `bus.rs::send_critical_mpsc` 的 B-a 改造注释。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

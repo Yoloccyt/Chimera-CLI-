@@ -10,6 +10,7 @@
 //! 并通过 `static ENV_LOCK` 互斥锁串行化所有测试,避免并行测试间
 //! 共享 std::env 全局状态导致的环境变量竞态。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::config::tui_bible::TuiBible;
 use std::sync::Mutex;
 use tempfile::TempDir;

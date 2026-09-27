@@ -16,6 +16,7 @@
 //! 目标:P95 < 16ms @200×50(60 FPS 帧预算),优化后 `diffed` 应显著低于 `full`。
 //! 运行:`cargo bench -p chimera-tui --bench v3_pipeline_bench -- --quick`
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::engine::compat::from_ratatui_buffer;

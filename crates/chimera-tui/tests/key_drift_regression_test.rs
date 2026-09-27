@@ -12,6 +12,7 @@
 //! - `a` 动作菜单全链路(打开/移选/执行/关闭)
 //! - ConfigMenu 经 Ctrl+P palette 触达(↑↓/Enter 就地循环)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{InputMode, PanelId, TuiApp, TuiConfig, ViewMode};

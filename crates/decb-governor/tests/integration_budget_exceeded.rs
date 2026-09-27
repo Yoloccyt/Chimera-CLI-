@@ -10,6 +10,7 @@
 //! - F-001 修复:BudgetExceeded severity 必须为 Critical
 //! - Week 5 Task 37:decb-governor 集成 event-bus 发布 BudgetExceeded
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use decb_governor::{BudgetConsumption, DecbConfig, DecbGovernor};

@@ -5,6 +5,7 @@
 //! - 重复访问返回缓存(同一引用)
 //! - 既有 eager API(load / default_config / ChimeraConfig)向后兼容不变
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::io::Write;

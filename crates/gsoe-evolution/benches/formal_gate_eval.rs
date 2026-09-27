@@ -15,6 +15,7 @@
 //! cargo bench -p gsoe-evolution --bench formal_gate_eval
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use gsoe_evolution::aegis::AegisCritic;
 use gsoe_evolution::formal_gate::{FormalVerifierGate, NamedPropertyResult};

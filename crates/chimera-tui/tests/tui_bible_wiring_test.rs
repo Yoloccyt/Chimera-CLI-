@@ -11,6 +11,7 @@
 //! 新增 UTF-8 测试避免编码混写;env 隔离用本文件自有互斥锁(测试二进制
 //! 为独立进程,与既有文件的 ENV_LOCK 无跨进程竞争)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::config::tui_bible::TuiBible;

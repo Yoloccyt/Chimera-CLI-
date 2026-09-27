@@ -2,6 +2,7 @@
 //!
 //! 对照 `xts_top_k`(O(n) partial-sort + O(k log k) 局部排序)vs 原有
 //! `sort_by` 全排基线(O(n log n))。随机 u64 输入,n = 10^4 与 10^5,k = n/10。
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use nexus_contracts::util::xts_top_k;
 

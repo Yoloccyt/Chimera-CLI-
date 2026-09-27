@@ -20,6 +20,7 @@
 //! `iter_custom` 测量阶段零打印,测量结束后固定采样打印 P50/P99 + speedup;
 //! 不达标时报告按 DONE_WITH_CONCERNS 记录实测值（基准不做断言,防采样抖动误报）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};

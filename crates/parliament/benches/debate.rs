@@ -13,6 +13,7 @@
 //! 三档策略基线(fastpath/simplified/full)为 M1 埋点开销回归对照与
 //! M3 封顶降档收益证据提供对比基准(性能可证伪铁律)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::{ActivationStrategy, ParliamentPolicy};

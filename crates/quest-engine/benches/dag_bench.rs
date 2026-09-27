@@ -8,6 +8,7 @@
 //! 基线用途:优化前记录 O(V²·D) 基线,优化后接入
 //! `.github/workflows/bench_check.yml` 阈值断言(1000 节点 validate < 1ms)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use nexus_core::{Task, TaskStatus};
 use quest_engine::dag::{topological_order, validate_dag};

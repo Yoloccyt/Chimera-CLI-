@@ -29,6 +29,7 @@
 //! 分片基准结束后打印 `shadow_stats`(sharded/merged/shed):若 shed 大量,
 //! 说明 worker 追不上发布端,测量退化为 broadcast 回退路径(需检查配置)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicBool, Ordering};

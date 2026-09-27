@@ -3,6 +3,7 @@
 //! 这些测试通过 event_bus crate 的公开 API 验证端到端行为,
 //! 单元测试见各模块的 #[cfg(test)] 子模块。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::{Duration, Instant};
 
 use event_bus::{

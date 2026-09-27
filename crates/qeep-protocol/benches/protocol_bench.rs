@@ -32,6 +32,7 @@
 //! criterion 默认 sample_size=100 + 5 warmup,统计上等价于"min-of-N 5"采样减少
 //! Windows 调度噪声。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::Duration;

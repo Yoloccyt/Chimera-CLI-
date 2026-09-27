@@ -189,6 +189,7 @@ pub fn max_allowed_active(total: u32, max_ratio: f32) -> usize {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

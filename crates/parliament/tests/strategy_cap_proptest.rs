@@ -8,6 +8,7 @@
 //!    (红队防线不可被风控降级绕过)
 //! 4. **封顶生效**:Full 策略在 Simplified 封顶下实际走 3 角色辩论
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, NexusEvent};
 use nexus_contracts::{ActivationStrategy, ParliamentPolicy};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};

@@ -18,6 +18,7 @@
 //! - 事件验证:AHIRT/ASA/Skeptic 否决尚未集成到 event-bus(代码中有 TODO 注释),
 //!   通过返回值(SecurityReport/SecCoreError::AsaBlocked/Consensus::Vetoed)验证
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 

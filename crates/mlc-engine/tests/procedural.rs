@@ -5,6 +5,7 @@
 //! 注:SubTask 9.1 将 ProceduralMemory 所有方法改为 async + spawn_blocking,
 //! 测试需用 `#[tokio::test]` 并在 async 方法调用后添加 `.await`。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use mlc_engine::{ExecutionStats, PatternSignature, ProceduralEntry, ProceduralMemory};
 
 /// 构造测试用模式签名

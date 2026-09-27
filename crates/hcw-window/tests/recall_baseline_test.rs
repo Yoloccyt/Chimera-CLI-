@@ -27,6 +27,7 @@
 //! 2. Static 路径 position_bias 显著 < 1.0（位置偏置病理量化）
 //! 3. 全 f32 运算（红线），`select_nth_unstable_by` Top-K（红线）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

@@ -195,6 +195,7 @@ fn entry_to_hit(entry: &WikiEntry) -> KnowledgeHit {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::behavior_localization::{CodeUnit, ExecutionStage, HarnessHandbook};

@@ -7,6 +7,7 @@
 //! - measurement: 100 次采样
 //! - 测量预算系数计算延迟(目标 < 1ms)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chrono::Utc;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use decb_governor::{DecbConfig, DecbGovernor, QuestBudgetInput};

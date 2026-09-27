@@ -10,6 +10,7 @@
 //! 降级实现说明(R2 冻结合规,ADR-042):全程规则/统计驱动,
 //! 无梯度更新、无 RL 训练路径;四步复用 L5 已有能力编排。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use gsoe_evolution::ci_gate::MockCiGate;
 use gsoe_evolution::self_improvement::{
     AgentCreator, AgentEvaluator, BenchmarkDesigner, ImprovementRequirements, RuleBasedEvaluator,

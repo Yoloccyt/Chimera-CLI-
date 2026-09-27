@@ -2,6 +2,7 @@
 //!
 //! 验证 TuiConfig.tick_interval_ms 正确桥接到 DataSourceConfig
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::config::TuiConfig;
 use chimera_tui::data::DataSourceConfig;
 

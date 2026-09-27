@@ -33,6 +33,7 @@
 //! - 所有 async 通过 `Runtime::block_on` 在同步 criterion 上下文中调用
 //! - 不修改 KVBSR/FaaE/SESA 源码,仅作为外部基准调用公共 API
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};

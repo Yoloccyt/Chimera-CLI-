@@ -20,6 +20,7 @@
 //! - 沿用既有 `Panel` trait + `TuiCommand` 模式,不破坏 17 面板 API
 //! - 优先级边界 [0, 10] 强校验(spec 明确,与既有 RequestQuestPriorityChange 的 [0, 255] 范围区分)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::panels::Panel;

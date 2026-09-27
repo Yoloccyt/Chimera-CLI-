@@ -44,6 +44,7 @@
 //! CiGate::execute / SignificanceDetector::p_value / SpecRegistry::register 均在
 //! 通道 B 后台执行,不阻塞推理路径。基准数据用于验证 P5.2 实施的延迟预算。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use event_bus::EventBus;
 use gsoe_evolution::{

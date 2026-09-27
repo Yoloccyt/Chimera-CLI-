@@ -14,6 +14,7 @@
 //! | Cooldown 态 bypass 语义缓存 | 预填缓存必命中仍走厂商(不查缓存) |
 //! | Frozen 态 bypass 语义缓存 | 同上 |
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 

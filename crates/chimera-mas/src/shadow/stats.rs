@@ -283,6 +283,7 @@ pub fn effective_lower_bound(outcomes: &[bool], bootstrap_seed: u64) -> Effectiv
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

@@ -15,6 +15,7 @@
 //! 本测试文件位于 `tests/` 目录,通过 dev-dependencies 引入 omega-learner,
 //! 不违反 §2.2 依赖铁律(dev-dependencies 可绕过生产依赖方向,仅限 tests/)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use event_bus::EventBus;

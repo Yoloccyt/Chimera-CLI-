@@ -412,6 +412,7 @@ pub fn search_like(conn: &Connection, query: &str) -> Result<Vec<WikiEntry>, Wik
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

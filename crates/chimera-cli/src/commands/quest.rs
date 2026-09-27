@@ -214,6 +214,7 @@ async fn checkpoint_quest(engine: &QuestEngine, id: &str, json: bool) -> Result<
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::composition;

@@ -9,6 +9,7 @@
 //! - 测试 2: 注入 MemConStrategyAdjusted 事件后面板显示事件携带的策略阶段
 //! - 测试 3: 多事件时取最近一条(反向扫描语义)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::VecDeque;
 
 use chimera_tui::panels::SelfAssessmentPanel;

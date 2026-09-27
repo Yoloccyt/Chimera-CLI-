@@ -15,6 +15,7 @@
 //!   完整空间(超过 ~40 臂典型场景,压力测试)。
 //! - **select + observe 全周期**: 模拟生产环境的一轮选择+观察操作。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use omega_learner::s9_route::{S9Context, S9Reward, S9RouteLearner};
 

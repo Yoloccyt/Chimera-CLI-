@@ -612,6 +612,7 @@ fn should_keep_over(a: &DedupEntry, b: &DedupEntry) -> bool {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

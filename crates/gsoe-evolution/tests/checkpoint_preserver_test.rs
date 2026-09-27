@@ -6,6 +6,7 @@
 //! - 停止策略:attempts > 10 且有最佳 → Stop(RSIBench 78.26% 发现)
 //! - 多 task_type 隔离
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use gsoe_evolution::checkpoint_preserver::{
     Checkpoint, CheckpointPreserver, PreserveDecision, StopDecision,
 };

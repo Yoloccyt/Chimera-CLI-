@@ -6,6 +6,7 @@
 //! - 命令白名单(禁止 shell 插值)✓
 //! - 环境变量白名单(防止 SECRET 泄露)✓
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::HashMap;
 use std::time::Duration;
 

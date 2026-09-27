@@ -12,6 +12,7 @@
 //! 5. **公共 API 访问验证**:metrics() / last_coordination_ratio() 可正常访问
 //! 6. **多 Quest EWMA 收敛**:多个 Quest 完成后 EWMA 收敛到稳定值
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_core::{MultimodalInput, TaskStatus, UserIntent};
 use quest_engine::{

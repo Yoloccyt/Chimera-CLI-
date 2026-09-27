@@ -9,6 +9,7 @@
 //! 契约:Dashboard 视图行为零回归(数字键/F 键/Tab 正常切换,由
 //! m3a_input_routing_test 既有锚点覆盖)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{PanelId, TuiApp, TuiConfig, ViewMode};

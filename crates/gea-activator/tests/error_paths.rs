@@ -9,6 +9,7 @@
 //! 4. 配置错误:负权重 / 权重和≠1.0 / 阈值越界 返回 ConfigError
 //! 5. 缓存满:LRU 驱逐后容量恒定
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

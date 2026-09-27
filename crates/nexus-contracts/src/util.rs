@@ -91,6 +91,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
     use proptest::prelude::*;
@@ -311,6 +312,7 @@ pub fn percentile_sorted<T: Copy>(sorted: &[T], p: f64) -> Option<T> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod percentile_tests {
     use super::*;
     use proptest::prelude::*;
@@ -424,6 +426,7 @@ pub fn sigmoid(x: f32) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod sigmoid_tests {
     use super::*;
 
@@ -490,6 +493,7 @@ pub fn perf_scale_ms(base_ms: u64) -> u64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod perf_scale_tests {
     use super::*;
 
@@ -720,6 +724,7 @@ pub fn cosine_similarity_slices(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod cosine_tests {
     use super::cosine_similarity_slices;
     // proptest! 块内的 prop_assert! / prop_assert_eq! 依赖 prelude 导入

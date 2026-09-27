@@ -16,6 +16,7 @@
 //! - 与 `benches/rerank_fill.rs::bench_rerank_fill_p95_latency` 互补：
 //!   bench 输出延迟分布供人工核验，test 做硬性红线断言
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

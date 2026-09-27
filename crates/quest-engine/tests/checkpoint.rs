@@ -12,6 +12,7 @@
 //! 9. 自动检查点触发(checkpoint_interval 达阈值自动保存)
 //! 10. 禁用检查点时 save/restore 返回明确错误
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::path::PathBuf;
 use std::time::Duration;
 

@@ -121,6 +121,7 @@ fn truncate(s: &str, max_chars: usize) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

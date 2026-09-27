@@ -23,6 +23,7 @@
 //! 上述 seam 均为 `pub(crate)`,集成测试(`tests/`)是独立 crate 无法访问,
 //! 故本文件挂在 `app` 模块下(`mod.rs` 中 `#[cfg(test)] mod v3_render_tests;`)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer as RatBuffer;
 

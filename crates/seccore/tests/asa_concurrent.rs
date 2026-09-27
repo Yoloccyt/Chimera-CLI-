@@ -2,6 +2,7 @@
 //!
 //! 对应 SubTask 32.5:10 线程并发 audit,无 panic、无数据竞争
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;

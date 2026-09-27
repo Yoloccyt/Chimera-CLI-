@@ -9,6 +9,7 @@
 //! 4. 错误转换:std::io::Error → CmtError::StorageError
 //! 5. 错误转换:serde_json::Error → CmtError::StorageError
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use cmt_tiering::{CmtConfig, CmtError, ColdTier};

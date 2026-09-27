@@ -17,6 +17,7 @@
 //! 属性测试验证"对任意输入,不变量恒成立",而非重复单元测试的固定 case。
 //! 每个属性测试默认 256 cases,覆盖边界值与随机组合。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_mas::prelude::*;

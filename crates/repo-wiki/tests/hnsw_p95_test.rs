@@ -31,6 +31,7 @@
 //! - **vector_bench.rs::hnsw_{10k,100k}_p95_search_latency**(人工核验):
 //!   输出 p50/p95/p99/mean 供性能分析,不阻塞 CI
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Mutex;

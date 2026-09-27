@@ -16,6 +16,7 @@
 //! 若需通过 `cargo test --ignored` 运行性能验证,参见
 //! `tests/integration.rs` 中的 `test_perf_substitution_latency` 测试。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};

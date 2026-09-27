@@ -6,6 +6,7 @@
 //! - Help overlay 内容包含关键快捷键(q/Tab/:/j/k/Enter)
 //! - 弹出 Help overlay 不切换当前面板
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{PanelId, TuiApp, TuiConfig};

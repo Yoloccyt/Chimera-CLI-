@@ -107,6 +107,7 @@ pub fn partition_by_depth(corpus: &EvalCorpus) -> (Vec<BlockId>, Vec<BlockId>, V
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

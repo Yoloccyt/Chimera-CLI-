@@ -492,6 +492,7 @@ impl Panel for ParliamentPanel {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use event_bus::{EventMetadata, NexusEvent};
@@ -774,6 +775,7 @@ mod tests {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ps2_batch1_tests {
     use super::*;
     use crate::types::{CoordinationMetrics, ParliamentState, StrategyCapState};

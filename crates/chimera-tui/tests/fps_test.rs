@@ -2,6 +2,7 @@
 //!
 //! 验证 FPS 计算与状态栏显示
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::config::TuiConfig;
 use chimera_tui::TuiApp;
 use ratatui::Terminal;

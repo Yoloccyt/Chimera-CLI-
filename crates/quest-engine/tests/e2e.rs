@@ -15,6 +15,7 @@
 //! - 单函数 ≤ 200 行,测试代码允许 unwrap()
 //! - 遵循 `#![forbid(unsafe_code)]`
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};

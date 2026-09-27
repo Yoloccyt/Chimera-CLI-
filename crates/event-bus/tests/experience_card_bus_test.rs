@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / 证据链关联（卡片 ↔ Token 账本）/
 //! 四索引跨模块查询 / 分级投递全路径（含无订阅者场景）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chrono::{DateTime, Utc};

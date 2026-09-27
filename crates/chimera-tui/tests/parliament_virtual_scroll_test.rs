@@ -2,6 +2,7 @@
 //!
 //! 验证 Parliament 面板在 1000+ 条事件下的虚拟滚动行为
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::VecDeque;
 
 mod common;

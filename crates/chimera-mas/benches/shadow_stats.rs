@@ -8,6 +8,7 @@
 //! 基线用途:接入 `.github/workflows/bench_check.yml` 阈值断言,
 //! 防止统计核重构引入性能回归(bootstrap 在 n=25/B=10000 下应 <50ms)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_mas::shadow::{
     effective_lower_bound, moving_block_bootstrap_lower, wilson_lower_bound,
 };

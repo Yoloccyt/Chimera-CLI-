@@ -5,6 +5,7 @@
 //! 注入（编排器在 L10 接线真实模型；L5 不依赖 L10，依赖铁律合规）；
 //! 未注入时回退确定性 Lcg 实现（现行为保持不变）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use gsoe_evolution::policy::fitness::{evaluate_fitness, evaluate_fitness_with_invoker};

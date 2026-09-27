@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性（re-export 验证）/ 三态转移 / Active 成功重置 failure_count /
 //! Archived 终态 / proptest 状态机不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::skill_lifecycle::SkillLifecycleState;

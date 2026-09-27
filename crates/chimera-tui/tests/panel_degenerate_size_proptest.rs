@@ -12,6 +12,7 @@
 //! 尺寸组合是二维空间且边界不连续(宽/高各自独立触发退化),枚举样例易漏;
 //! proptest 覆盖随机组合,把"某个尺寸下崩"这类缺陷从偶发变为必现。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::panels::{degenerate, MIN_PANEL_H, MIN_PANEL_W};

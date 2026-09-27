@@ -14,6 +14,7 @@
 //! # 序列化协议(ADR-004)
 //! MessagePack(rmp-serde)为跨层通信与持久化协议
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_core::{

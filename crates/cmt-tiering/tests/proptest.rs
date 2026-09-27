@@ -16,6 +16,7 @@
 //! - 生成两个 Δt(t1 ≤ t2)
 //! - 断言 priority(t1) >= priority(t2)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chrono::{Duration, Utc};

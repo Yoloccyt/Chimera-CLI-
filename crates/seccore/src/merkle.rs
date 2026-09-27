@@ -265,6 +265,7 @@ pub fn verify_merkle_root(inputs: &[&str], expected_root: &str) -> bool {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

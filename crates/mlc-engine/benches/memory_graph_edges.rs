@@ -14,6 +14,7 @@
 //! cargo bench -p mlc-engine --bench memory_graph_edges
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use mlc_engine::memory_graph::{MemoryGraph, MemoryNode, MemoryNodeType};
 use nexus_core::CLV;

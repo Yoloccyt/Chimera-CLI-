@@ -16,6 +16,7 @@
 //! WHY: 选择各档位中间值而非边界值,避免分支预测器对边界条件的特殊优化,
 //! 更真实地反映生产环境中的选择延迟。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use hcw_window::WindowSelector;
 

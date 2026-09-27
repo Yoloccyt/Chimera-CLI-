@@ -622,6 +622,7 @@ fn _assert_s6_learner_send_sync() {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     // P4-W14.4 测试补丁: `arm_set.size()` 是 `ArmSet` trait 方法，trait 不在 `super::*` 范围内

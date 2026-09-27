@@ -167,6 +167,7 @@ pub fn scan_commands(project_dir: &Path, user_dir: Option<&Path>) -> Vec<UserCom
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -15,6 +15,7 @@
 //! 使用 `iter_batched` 确保每次迭代使用新连接,避免 PRAGMA 状态污染。
 //! 真实 rusqlite::Connection(非 mock),验证泛型函数在生产路径的性能特征。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use cmt_tiering::PragmaConn;
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use nexus_core::apply_performance_pragmas;

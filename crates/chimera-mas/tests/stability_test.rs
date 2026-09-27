@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 //! Task 19(RED): 系统稳定性守护测试 — §19 系统稳定运行与功能完整闭环

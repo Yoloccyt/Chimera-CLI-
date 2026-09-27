@@ -7,6 +7,7 @@
 //! - 连续衰减曲线验证
 //! - 时间驱动 + 事件驱动衰减
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use decay_engine::types::DecayConfig;
 use decay_engine::{DecayEngine, DecayError, DecayEvent};
 

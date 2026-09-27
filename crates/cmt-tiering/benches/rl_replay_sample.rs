@@ -16,6 +16,7 @@
 //! cargo bench -p cmt-tiering --bench rl_replay_sample
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use cmt_tiering::rl_replay_pool::{ReplayExperience, TieredReplayPool};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::rngs::StdRng;

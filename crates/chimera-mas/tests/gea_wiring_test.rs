@@ -9,6 +9,7 @@
 //! 注册)+ `RootOrchestrator::with_gea` + `DelegationExecutor::with_gea`,
 //! 三者共享同一 `Arc<GeaActivator>` 实例(激活 → 执行 → 反馈闭环要求单一注册表)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_mas::gea_bridge::{build_mas_activator, mas_gea_config};

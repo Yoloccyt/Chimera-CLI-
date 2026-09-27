@@ -13,6 +13,7 @@
 //! - 块内共现 150 次(> 阈值 100),块间无共现
 //! - 期望:聚类后得到 15 个块,每块 20 工具
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 mod common;
 
 use common::{NUM_BLOCKS, TOOLS_PER_BLOCK, TOTAL_TOOLS, VECTOR_DIM};

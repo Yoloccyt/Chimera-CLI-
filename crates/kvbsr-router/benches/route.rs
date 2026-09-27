@@ -18,6 +18,7 @@
 //! WHY 使用 block_on:`route`/`build_blocks` 为 async fn,
 //! criterion 默认同步,通过 `Runtime::new().block_on()` 在同步上下文中调用。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};

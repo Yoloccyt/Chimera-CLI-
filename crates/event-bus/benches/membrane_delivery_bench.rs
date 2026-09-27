@@ -18,6 +18,7 @@
 //! criterion 报告的 p95 分位 < 10ms。膜决策是 O(1) match(categorize) +
 //! O(1) 条件判定(decide),不应显著增加 publish 延迟。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};

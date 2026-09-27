@@ -11,6 +11,7 @@
 //! 红线对照:SQLite 读写全部经 MetricsHistory 内部 spawn_blocking(§4.4 #2);
 //! 采样写入为幂等 fire-and-forget(§4.4 #7)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 // Concord W4 T4.3:异步轮询超时统一经 build_scaled_timeout! 护栏(debug×4/release×1.5)

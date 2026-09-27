@@ -4,6 +4,7 @@
 //! 解冻五要素组合判定（熔断器 Armed + 范围 Allowed + 阶段③ 前置 + 影子期 2 周
 //! + E2E 绿 + FormalVerifier 全绿）——R2 冻结面外（只读状态，不触训练）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_mas::shadow::orchestrator::Stage3Prerequisites;

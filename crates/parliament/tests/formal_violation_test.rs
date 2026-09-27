@@ -4,6 +4,7 @@
 //! 行为契约仅"审计消费"覆盖、无强制层 → 补齐 `enforce` 强制校验 +
 //! FormalViolation 事件（违反路径可发布事件）+ Parliament 审议入口。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};

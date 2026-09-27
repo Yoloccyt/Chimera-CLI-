@@ -13,6 +13,7 @@
 //!
 //! 常规阈值(0.6)下会 Reached,覆议阈值(0.667)下会 Rejected — 精确区分两阈值。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::EventBus;
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use parliament::{Consensus, Parliament, ParliamentConfig, Proposal, VetoOverrideTicket};

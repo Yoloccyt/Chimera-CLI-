@@ -14,6 +14,7 @@
 //! cargo bench -p omega-learner --bench regret_collection
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use omega_learner::regret_pipeline::RegretCollector;
 

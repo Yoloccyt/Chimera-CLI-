@@ -12,6 +12,7 @@
 //! - **零回归锚点**:数字/F 键/Tab/g 前缀/主题/布局经 InputRouter 决策 + 既有 app 方法执行,
 //!   效果与旧 `handle_global_key` 逐键一致;`gq` 不误退出是 GPrefix 退出态重映射的关键验证。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{InputMode, PanelId, TuiApp, TuiConfig};

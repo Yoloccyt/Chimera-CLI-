@@ -6,6 +6,7 @@
 //! 3. **告警单调性**:severity 超过阈值 ⟺ should_alert(判定与阈值一致)
 //! 4. **震荡对计数一致**:oscillation_pairs ≤ oscillation_patterns.len()
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use efficiency_monitor::{OscillationConfig, PolicyOscillationDetector};
 use event_bus::{EventMetadata, NexusEvent};
 use proptest::prelude::*;

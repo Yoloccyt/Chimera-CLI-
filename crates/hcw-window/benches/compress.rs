@@ -5,6 +5,7 @@
 //! 基准场景:构造 100K Token 上下文(100 个条目 × 1000 token/条),
 //! 测量 `ContextCompressor::compress` 压缩到 32K 的延迟。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use chrono::Utc;

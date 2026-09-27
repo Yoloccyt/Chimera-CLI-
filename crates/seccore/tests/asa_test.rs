@@ -11,6 +11,7 @@
 //!
 //! TDD 流程:本文件先写(RED),实现 asa.rs 改造后转 GREEN。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use seccore::{AsaAuditor, AsaConfig, OperationAuditInput, PpoCritic, RiskLevel};
 
 /// 构造测试用 OperationAuditInput。

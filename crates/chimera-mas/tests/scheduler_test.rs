@@ -8,6 +8,7 @@
 //! - Critical 抢占 Low 规则
 //! - `PriorityScheduler` 入队/出队排序、WSJF 次序、动态重排
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_mas::delegation::{AgentTask, QualityLevel, TaskComplexity};
 use chimera_mas::scheduler::{
     aged_priority_rank, priority_from_rank, priority_rank, score_to_priority, should_preempt,

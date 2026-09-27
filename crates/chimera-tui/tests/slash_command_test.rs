@@ -11,6 +11,7 @@
 //! - 诚实反馈:未知命令报错、未接线命令提示后续波次;
 //! - Tab 前缀补全与补全 overlay 渲染。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Mutex;

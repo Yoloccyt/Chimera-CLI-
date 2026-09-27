@@ -14,6 +14,7 @@
 //! - 70-90%: Yellow(#FFDC00) → OrangeRed(#FF851B)
 //! - 90-100%: OrangeRed(#FF851B) → Red(#FF4136)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::data::resource_history::gradient_color;

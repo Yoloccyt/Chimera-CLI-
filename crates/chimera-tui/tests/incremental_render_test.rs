@@ -17,6 +17,7 @@
 //! 在各数据字段上语义一致这一事实,使得"仅改动某字段"时,`update`
 //! 只会把对应面板标记为 dirty,无需先做 warm-up 同步。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::VecDeque;
 
 mod common;

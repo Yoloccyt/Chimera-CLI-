@@ -4,6 +4,7 @@
 //! 统计学习器 → RLClient 的完整数据流（铁律6 导出 → report_experience）/
 //! proptest 轨迹上报不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::rl_hooks::{RLActionVector, RLStateVector, RLTrajectory};

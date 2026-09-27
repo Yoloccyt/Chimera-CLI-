@@ -8,6 +8,7 @@
 //! - **只读渲染**:构造带 `chat_messages` 的 `TuiState`,经 `ChatPanel::render` 渲染到
 //!   `TestBackend` 内存缓冲,验证对外可观测输出。状态/流式逻辑由 ChatSync 单测覆盖。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{ChatMessage, ChatPanel, ChatRole, Panel, TuiState};

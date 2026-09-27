@@ -4,6 +4,7 @@
 //! 关闭 ADR-049 裁决漂移（rl-types 部分落地），补齐 RL 共享类型
 //! （纯类型零逻辑，ADR-033 合规；Serde + 接缝映射，不含训练逻辑——R2 冻结面外）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use nexus_contracts::rl_types::{MemPiAction, RLAction, RLExperience, RLState};
 use nexus_contracts::{
     ActivationStrategy, DecayProfile, DensityTier, MemoryStrategy, PrefetchStrategy, RecallQuota,

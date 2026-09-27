@@ -4,6 +4,7 @@
 //! anchor 终局奖励传播（0.3 系数）/ L1 SegmentAwarePER 协同闭环 /
 //! proptest 传播系数不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::SegmentAwarePER;

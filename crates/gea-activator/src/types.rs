@@ -272,6 +272,7 @@ impl PartialEq for TaskProfile {
 impl Eq for TaskProfile {}
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

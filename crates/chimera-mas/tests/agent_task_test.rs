@@ -20,6 +20,7 @@
 //! - AgentTask 实现 Clone + Debug + Serialize + Deserialize + PartialEq
 //! - 复用 Task 7 的 `From<TaskComplexity> for ThinkingMode`(同文件 delegation.rs)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_mas::prelude::*;

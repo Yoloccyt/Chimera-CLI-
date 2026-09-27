@@ -127,6 +127,7 @@ pub(crate) fn make_entry(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::lifecycle::LifecycleEvent;

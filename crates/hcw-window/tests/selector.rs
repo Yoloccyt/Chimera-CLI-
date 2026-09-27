@@ -3,6 +3,7 @@
 //! 验证 4 个复杂度档位选择正确窗口层级,决策耗时 < 1ms。
 //! 测试通过 `hcw_window` crate 的公共 API 进行(集成测试)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use hcw_window::{WindowSelector, WindowTier};
 
 /// 验证 4 个复杂度档位选择正确的窗口层级

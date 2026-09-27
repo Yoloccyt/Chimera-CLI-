@@ -117,6 +117,7 @@ macro_rules! id_newtype {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     id_newtype!(TestId, "测试用 ID 类型");
 

@@ -18,6 +18,7 @@
 //!   之前同步调用,确保不会错过后续发布的控制事件
 //! - `d` 键从原 detail 功能迁移到 cancel,detail 改用 `i` 键(info)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::{PopupKind, TuiApp, TuiConfig};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use event_bus::NexusEvent;

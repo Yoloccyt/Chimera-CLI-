@@ -9,6 +9,7 @@
 //! - I-7:Repeat 事件视同 Press(长按滚动/输入可重复)
 //! - I-5:命令栏 Ctrl 组合键不进缓冲,Ctrl+L 仍可切换语言
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

@@ -3,6 +3,7 @@
 //! 覆盖:EventStream/Parliament/Log 面板 Enter 弹窗、JSON 高亮颜色、
 //! 相关事件 ID 链展示、MessagePack 解码失败降级为 hex。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

@@ -20,6 +20,7 @@
 //! 确实编译失败(若未来误加 spawn 方法到 Unsubscribed,doctest 会转 GREEN 失败)。
 //! 此处不再重复,改为运行时验证 TypeState 转换正确性。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use std::time::Duration;
 

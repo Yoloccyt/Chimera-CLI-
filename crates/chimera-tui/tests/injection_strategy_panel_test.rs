@@ -3,6 +3,7 @@
 //! 覆盖: 面板注册可达（REGISTERED_FOCUS_ORDER）/ next/prev 往返 /
 //! mock 快照三段渲染 / 诚实展示 / L0 AtomicMemoryCard 消费
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

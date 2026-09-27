@@ -9,6 +9,7 @@
 //! 4. 孤儿调用检测:entangle_spawn + abort → OrphanCallDetected
 //! 5. 空操作聚集:gather(vec![]) → total=0
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicU32, Ordering};

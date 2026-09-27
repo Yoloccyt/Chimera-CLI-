@@ -3,6 +3,7 @@
 //! 覆盖: SearchTreeManager/LongTaskMap to_bytes/from_bytes 往返 /
 //! 检查点保存/恢复场景 / 空树/空地图边界 / proptest 序列化往返不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chrono::Utc;

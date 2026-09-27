@@ -327,6 +327,7 @@ fn parse_quadrant(quadrant: &str) -> Result<chimera_mas::Quadrant> {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::composition;

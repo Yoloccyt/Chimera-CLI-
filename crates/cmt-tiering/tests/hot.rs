@@ -10,6 +10,7 @@
 //! - 更新已存在条目不触发驱逐
 //! - 计数与清空操作
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use cmt_tiering::{CapabilityEntry, CmtError, HotTier, Tier};
 
 /// 构造测试用能力条目

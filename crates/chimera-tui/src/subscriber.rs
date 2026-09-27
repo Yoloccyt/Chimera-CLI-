@@ -220,6 +220,7 @@ impl Drop for EventSubscriber {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use event_bus::{ClvSummary, EventMetadata, NexusEvent};

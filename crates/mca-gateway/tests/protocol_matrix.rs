@@ -14,6 +14,7 @@
 //! fixture 为按厂商文档合成(标注 `_fixture_note`),CI 离线回放零网络依赖;
 //! Action Item 1(七厂商 API Key)就绪后原位替换真实录像,断言不变。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::path::PathBuf;
 use std::sync::Arc;
 

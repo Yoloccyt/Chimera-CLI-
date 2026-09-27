@@ -11,6 +11,7 @@
 //! 4. **序列化兼容**: ShadowComparisonReport serde 往返
 //! 5. **解冻条件评估**: 部分条件不满足时拒绝解冻
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chrono::Utc;
 use nexus_contracts::{RecallQuota, RecallQuotaPolicy};
 use omega_learner::r1_recall_quota::{R1Context, RecallQuotaLearner, RecallQuotaTransition};

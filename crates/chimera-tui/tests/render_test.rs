@@ -8,6 +8,7 @@
 //!   确保阈值着色逻辑实际生效(而非仅构造成功)。
 //! - **边界用例**:覆盖 max=0、value=0、value=max 等边界,与现有 gauge 测试互补。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::render::{gauge, gauge_thresholded, sparkline, sparkline_dual, GaugeThreshold};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};

@@ -592,6 +592,7 @@ impl<T> Default for CausalBuffer<T> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use rmp_serde::{from_slice, to_vec_named};

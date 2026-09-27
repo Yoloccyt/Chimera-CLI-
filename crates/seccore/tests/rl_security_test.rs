@@ -8,6 +8,7 @@
 //! - 奖励映射（§8.1 五档）仅作观测信号（RewardSignal::security_observation）
 //! - 微调因子 clamp [0.5, 2.0]——任何情况下审计不会关闭/失控
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::reward::{security_event_reward, SecuritySeverity};

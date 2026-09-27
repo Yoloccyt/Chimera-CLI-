@@ -7,6 +7,7 @@
 //!
 //! 运行:`cargo bench -p chimera-tui --bench curator_bench -- --measurement-time 1`
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::data::curator::{

@@ -18,6 +18,7 @@
 //! API: `logs_contain("substring")` 返回 bool,检查捕获日志是否包含子串。
 //! SkepticVeto 是 §6.2 红线 Critical 安全告警事件之一(is_critical_mpsc_event 清单),会强制走 mpsc 旁路通道。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};

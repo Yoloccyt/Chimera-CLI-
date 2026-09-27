@@ -34,6 +34,7 @@
 //! - 后台任务内 `tokio::select!` 不持锁跨 `.await`(反模式 #1):
 //!   锁仅在快照写入时短暂持有,事件消费与状态同步在锁外完成。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{DataPipeline, DataSourceConfig, EventSubscriber};

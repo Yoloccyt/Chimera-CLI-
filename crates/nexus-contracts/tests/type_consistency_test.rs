@@ -19,6 +19,7 @@
 //! 先写失败测试(类型未定义,编译失败)→ 实现类型 → 测试通过。
 //! 测试不删除已有测试,仅新增。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use nexus_contracts::{Checkpoint, EventMetadata, TaskStatus};
 
 // ============================================================

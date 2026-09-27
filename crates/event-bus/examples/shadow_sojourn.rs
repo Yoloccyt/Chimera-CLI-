@@ -13,6 +13,7 @@
 //!
 //! 运行: `cargo run -p event-bus --example shadow_sojourn`
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{
     AttributionResult, CausalAttributionLedger, ShadowDiffRecorder, ShadowSojournLedger,
 };

@@ -5,6 +5,7 @@
 //! 对应架构层:L4 Security
 //! 对应 Task 32:ASA 对抗性自我审计
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use proptest::prelude::*;

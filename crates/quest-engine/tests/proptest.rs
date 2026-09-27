@@ -5,6 +5,7 @@
 //! 对应架构层:L9 Quest
 //! 对应创新点:TTG(Thinking Toggle Governance)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::BudgetTier;

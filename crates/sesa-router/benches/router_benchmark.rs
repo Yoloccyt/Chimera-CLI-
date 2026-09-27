@@ -19,6 +19,7 @@
 //! 注意:`#[ignore]` 性能测试标记为需显式运行,因为它们包含
 //! async 运行时创建与多次采样,不适合常规 `cargo test`。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};

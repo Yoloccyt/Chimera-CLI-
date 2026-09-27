@@ -22,6 +22,7 @@
 //! - `top_k` 为同步方法（`&self`），无需 spawn_blocking
 //! - SLO 红线断言由 CI 性能阈值测试守护，本 benchmark 仅输出统计指标
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};

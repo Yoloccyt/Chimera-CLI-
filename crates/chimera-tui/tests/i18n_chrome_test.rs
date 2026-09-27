@@ -8,6 +8,7 @@
 //!   Ctrl+L 切英文后**出现**。
 //! - **locale 串行化**:界面语言为全局静态,涉及 locale 的测试用同一 `Mutex` 互斥。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Mutex;

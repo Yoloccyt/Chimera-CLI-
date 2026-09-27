@@ -13,6 +13,7 @@
 //! `WindowAffinity::fold()` 是 O(1) 查表,不进任何热路径分配。
 //! 单次调用应 < 10ns(p99 受 CPU 缓存影响,目标 < 50ns)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use hcw_window::WindowAffinity;
 use hcw_window::WindowTier;

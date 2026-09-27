@@ -45,6 +45,7 @@
 //! - 预填充在 setup 阶段执行(不计入测量):10K 约 1-3 秒,100K 约 30-60 秒(release)
 //! - 100K 基准建议在 release 模式运行(debug 模式预填充可能 >5 分钟)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicU64, Ordering};

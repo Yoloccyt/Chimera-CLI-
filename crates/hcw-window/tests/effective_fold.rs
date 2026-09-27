@@ -6,6 +6,7 @@
 //! - 与 `effective_capacity_for` 正交叠加取 min 的分流语义
 //! - 回归锚点：`effective_capacity_for`（OSA 稀疏度）语义零变化
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use hcw_window::types::{HcwConfig, WindowTier, EFFECTIVE_FOLD_FACTOR};
 
 #[test]

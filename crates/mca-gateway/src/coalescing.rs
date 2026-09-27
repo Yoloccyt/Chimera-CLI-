@@ -154,6 +154,7 @@ pub fn coalesce_failure(route_key: &str, reason: String) -> AffinityError {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_contracts::affinity::{FinishReason, UsageReport};

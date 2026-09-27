@@ -29,6 +29,7 @@ pub fn is_double_esc(prev_esc_ms: Option<u64>, now_ms: u64, window_ms: u64) -> b
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

@@ -6,6 +6,7 @@
 //! - 终结状态不可再次转移
 //! - 超时设置 Timeout 状态
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

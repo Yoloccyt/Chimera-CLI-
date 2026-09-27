@@ -3,6 +3,7 @@
 //! 覆盖: MemorySyncHook 注入闭环（搜索树 best_path / 任务地图 step 同步）/
 //! Noop 默认 / 自定义 hook 计数 / proptest hook 调用次数 = 状态变更次数
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};

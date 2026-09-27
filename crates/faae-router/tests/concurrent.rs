@@ -11,6 +11,7 @@
 //! - usage_count: AtomicU64,无锁原子更新
 //! - route 路径:获取读锁 → clone Arc → 释放锁 → 锁外计算
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 

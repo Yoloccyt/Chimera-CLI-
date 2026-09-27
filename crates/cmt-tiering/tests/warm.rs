@@ -13,6 +13,7 @@
 //! 测试需用 `#[tokio::test]` 并在 async 方法调用后添加 `.await`。
 //! peek/get/delete 参数为 `String`(非 `&str`),需 `.to_string()` 转换。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chrono::{Duration, Utc};
 use cmt_tiering::{CapabilityEntry, Tier, WarmTier};
 

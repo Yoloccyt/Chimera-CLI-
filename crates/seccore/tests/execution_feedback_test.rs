@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / 六类状态全可达 / 分类优先级端到端 /
 //! 与 L0 ExecutionStatus 纯函数协同（is_retryable/generates_meaningful_card）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::experience_card::ExecutionStatus;

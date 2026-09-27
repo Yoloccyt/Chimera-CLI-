@@ -13,6 +13,7 @@
 //! HcwWindow 未实现 Debug,不能用 `unwrap_err()`(要求 T: Debug)。
 //! 改用 `match` 模式提取错误,避免 Debug 约束。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

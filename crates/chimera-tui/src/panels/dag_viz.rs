@@ -196,6 +196,7 @@ impl Panel for DagVizPanel {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_core::{Quest, ThinkingMode};
@@ -305,6 +306,7 @@ mod tests {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ps2_batch3_tests {
     use super::*;
     use ratatui::buffer::Buffer;

@@ -7,6 +7,7 @@
 //! - 孤儿调用检测器(运行时追踪未 await 的 future)✓
 //! - 10000 次操作零孤儿调用测试 ✓
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use chrono::Utc;

@@ -236,6 +236,7 @@ fn probe_decrqm() -> SyncMode {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -347,6 +348,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod proptests {
     use super::*;
     use proptest::prelude::*;

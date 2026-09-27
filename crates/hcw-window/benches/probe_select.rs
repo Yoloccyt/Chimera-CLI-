@@ -12,6 +12,7 @@
 //! - `probe_score_throughput`: 打分吞吐（块/秒），1000 块全量 cosine
 //! - `score_cache_hit_vs_recompute`: 增量重打分命中 vs 重算对照（查询期零计算收益）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

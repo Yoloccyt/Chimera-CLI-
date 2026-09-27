@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性（re-export 验证）/ L0 ThreeFactorScore 契约消费闭环 /
 //! 三角色投票决策矩阵 / L7 process_score 填充协同 / proptest 决策确定性不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::VariantId;

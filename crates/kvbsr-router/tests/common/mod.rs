@@ -12,6 +12,7 @@
 // 允许未使用的函数:本模块被多个测试文件共享(blocks/router/rebalancer),
 // 某些函数可能仅在部分测试文件中使用,在每个测试文件的独立编译单元中
 // 会产生 dead_code 警告。此处统一抑制,避免 clippy `-D warnings` 失败。
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![allow(dead_code)]
 
 use kvbsr_router::{CoOccurrenceMatrix, ToolId, ToolVector};

@@ -5,6 +5,7 @@
 //! 6 风险因子（任务规模/依赖深度/协调成本比/否决率/超时率/资源水位）
 //! 综合判定任务链是否为关键路径（高风险链应优先治理）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use parliament::critical_path::{assess_critical_path, RiskFactorInput};

@@ -540,6 +540,7 @@ fn build_summary_message(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -825,6 +826,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod proptests {
     use super::*;
     use proptest::prelude::*;
@@ -914,6 +916,7 @@ mod proptests {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod fc2_proptests {
     //! 任意合法输入下策展必须保持的核心不变量:
     //! 1. 压缩永不增长(token 与条数);

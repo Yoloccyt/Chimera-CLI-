@@ -19,6 +19,7 @@
 //! | override_mode (手动覆盖) | override_mode_and_publish | Deep |
 //! | reset_override (清除覆盖) | reset_override | 无事件(向后兼容) |
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use event_bus::{EventBus, EventReceiver, NexusEvent};

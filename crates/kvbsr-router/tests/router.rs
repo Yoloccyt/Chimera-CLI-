@@ -15,6 +15,7 @@
 //! 3. 第二级:在选中块的并集工具集内选 Top-8 工具
 //! 4. 发布 ToolsRouted 事件
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 mod common;
 
 use std::time::Instant;

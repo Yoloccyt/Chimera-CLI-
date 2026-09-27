@@ -16,6 +16,7 @@
 //! - 压缩率与稀疏化达标(测试 3)
 //! - 事件流完整无丢失(测试 4)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};

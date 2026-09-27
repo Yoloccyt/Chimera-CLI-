@@ -12,6 +12,7 @@
 //! 7. 规则引擎:AlertRule 阈值检测 → EfficiencyAlertTriggered 发布
 //! 8. Prometheus /metrics 输出格式正确性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use efficiency_monitor::{AlertRule, AlertSeverity, Comparison, EfficiencyMonitor, MonitorConfig};

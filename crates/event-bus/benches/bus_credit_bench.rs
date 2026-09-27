@@ -20,6 +20,7 @@
 //! 日志(100K 次发送 = 100K 条 warn,既失真又拖慢测量)。
 //! 消费线程在另一核上运行,不进入被计时的主线程路径(测量诚实)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::{AtomicBool, Ordering};

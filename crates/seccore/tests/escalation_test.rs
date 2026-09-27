@@ -13,6 +13,7 @@
 //!
 //! TDD 流程:本文件先写(RED),实现升级通道后转 GREEN。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use seccore::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

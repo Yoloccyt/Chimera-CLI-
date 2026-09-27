@@ -18,6 +18,7 @@
 //! - 延迟分解测试:逐阶段测量 TTG/DECB/Parliament/Skeptic/ASA/AHIRT 延迟,
 //!   验证各阶段延迟符合预算分配(单阶段超预算时给出明确错误信息)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 

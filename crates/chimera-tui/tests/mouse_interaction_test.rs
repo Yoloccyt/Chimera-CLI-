@@ -8,6 +8,7 @@
 //! - 弹窗激活时滚轮滚动弹窗而非主面板;
 //! - 主面板区域滚轮滚动焦点面板(Parliament 列表)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{InputMode, PanelId, PopupKind, TuiApp, TuiConfig};

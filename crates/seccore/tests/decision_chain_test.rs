@@ -12,6 +12,7 @@
 //!
 //! TDD 流程:本文件先写(RED),实现 audit.rs 改造后转 GREEN。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::HashMap;
 use std::time::Duration;
 

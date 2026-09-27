@@ -7,6 +7,7 @@
 //!   未指定地址、已知内网域名
 //! - **接受列表**:公网域名、公网 IP(TEST-NET-3 文档地址)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use mcp_mesh::{McpError, MeshServer, ServerRegistry};

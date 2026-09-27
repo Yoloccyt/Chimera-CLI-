@@ -9,6 +9,7 @@
 //! 对同一 provider 链产出等价值;`Yaml::file(缺失)` 返回 `Ok(empty)`,回退默认值,
 //! 故 `LazyConfig::new` 与 `config::load` 在缺失文件场景行为一致。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::path::PathBuf;
 
 use chimera_cli::config;

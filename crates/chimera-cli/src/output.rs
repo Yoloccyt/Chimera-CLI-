@@ -231,6 +231,7 @@ pub fn print_json_error(kind: &'static str, message: &str, exit_code: u8) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

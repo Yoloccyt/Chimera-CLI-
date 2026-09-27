@@ -17,6 +17,7 @@
 //! - HnswStore 使用低维向量(4-dim)而非 512-dim,降低测试耗时并使结果可预测
 //! - f32 分数比较使用容差(1e-6),避免浮点精度问题
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::VectorStore;

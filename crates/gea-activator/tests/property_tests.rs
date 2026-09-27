@@ -3,6 +3,7 @@
 //! WHY 文件名 property_tests(非 proptest):Cargo 会为 tests/<name>.rs 生成同名测试二进制,
 //! 若文件名为 proptest.rs,则 `use proptest::prelude::*;` 会解析到测试二进制自身而非外部 crate
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

@@ -12,6 +12,7 @@
 //!
 //! 只输出分布不 panic（对齐 probe_select.rs 约定）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_cli::overwindow_bridge::OverWindowBridge;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 

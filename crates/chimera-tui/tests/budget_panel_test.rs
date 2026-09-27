@@ -8,6 +8,7 @@
 //! - alert 行显隐;
 //! - 快捷键诚实性:R 刷新声明即可达,其余按键无命令。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::data::BudgetMetrics;

@@ -8,6 +8,7 @@
 //! - @ 引用补全:Insert 态 Tab 补全首个候选;无候选不改缓冲;
 //! - ! shell:HonestTodo 占位(不伪造直通)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Mutex;

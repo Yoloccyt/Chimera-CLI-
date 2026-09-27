@@ -22,6 +22,7 @@
 //! 场景,属性测试是保障解析鲁棒性的高性价比手段,能在 CI 阶段提前
 //! 暴露潜在的 panic 与解析漂移问题。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;

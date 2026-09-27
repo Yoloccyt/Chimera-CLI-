@@ -23,6 +23,7 @@
 //! cargo bench -p hcw-window --bench rerank_fill -- "p95"
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

@@ -11,6 +11,7 @@
 //! 8. ThinkingModeSwitched 事件发布
 //! 9. 状态转换校验(合法/非法)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, NexusEvent};

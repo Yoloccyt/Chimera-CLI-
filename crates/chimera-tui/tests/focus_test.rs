@@ -1,5 +1,6 @@
 //! FocusManager 集成测试 — 验证面板焦点导航
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{FocusManager, PanelId};

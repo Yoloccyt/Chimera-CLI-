@@ -17,6 +17,7 @@
 //! 注:SubTask 9.1 将 WarmTier 所有方法改为 async + spawn_blocking,
 //! 测试需在 async 方法调用后添加 `.await`,且 peek/get/delete 参数为 `String`。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use cmt_tiering::{
     CapabilityEntry, ColdTier, HotTier, IceTier, MigrationReason, Tier, TierMigrator, WarmTier,
 };

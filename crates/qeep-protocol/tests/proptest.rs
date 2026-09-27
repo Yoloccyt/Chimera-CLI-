@@ -25,6 +25,7 @@
 //! 错误通过 `fail` + `?` 传播为 `TestCaseError`。
 //! 限制 cases 数为 16,避免 sleep 测试拖慢整体执行。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::Duration;

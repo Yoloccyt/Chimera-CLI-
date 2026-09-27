@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 //! Task 17(RED):Agent 记忆三级归档(1mo / 3mo / 6mo)+ INV-8 失败测试

@@ -49,6 +49,7 @@
 //! - 误把 Failed 降到 Normal → 丢失操作员可感知性
 //! - 误把 Failed 升到 Critical → 占用仅为稀有安全告警保留的 mpsc 旁路
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{ActionSource, ChatStatus, EventMetadata, EventSeverity, NexusEvent};
 
 // ============================================================

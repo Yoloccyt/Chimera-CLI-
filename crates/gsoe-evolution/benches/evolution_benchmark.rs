@@ -12,6 +12,7 @@
 //! - `evolve_once_with_bus`:单轮进化(带 EventBus,含事件发布)
 //! - `evolve_5_generations`:5 代连续进化
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use event_bus::EventBus;
 use gsoe_evolution::{GsoeConfig, GsoeEvolutionEngine};

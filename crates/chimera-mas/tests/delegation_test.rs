@@ -9,6 +9,7 @@
 //! 测试通过 `DelegationExecutor::with_runner` 注入不同 TaskRunner,
 //! 控制子任务的成功/失败/超时行为,验证聚集与事件发布逻辑。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_mas::delegation::{DelegationExecutor, TaskRunner};
 use chimera_mas::prelude::*;
 use event_bus::{EventBus, EventSeverity, NexusEvent};

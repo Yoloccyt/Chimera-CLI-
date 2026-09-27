@@ -7,6 +7,7 @@
 //! build_app_server 内部 `tokio::spawn` Critical 旁路订阅者，故需 tokio runtime
 //! 上下文 —— 用 `rt.enter()` 守卫令当前线程具备 runtime 语境。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_cli::composition::{build, build_app_server};
 use chimera_cli::ChimeraConfig;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};

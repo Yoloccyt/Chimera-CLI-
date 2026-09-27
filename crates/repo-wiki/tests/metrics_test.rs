@@ -10,6 +10,7 @@
 //! - `test_entries_total_updated_on_delete`:delete 后 gauge 更新为正确条目数
 //! - `test_warn_log_when_entries_approach_threshold`:set_entries 阈值边界行为
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use repo_wiki::{WikiEntry, WikiMetrics, WikiStore};
 
 /// 辅助:创建 512-dim 零向量条目(与 CLV::DIMENSION 对齐)

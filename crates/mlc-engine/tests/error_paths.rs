@@ -9,6 +9,7 @@
 //! 4. 边界溢出:l0_capacity 超过上界返回 InvalidConfig
 //! 5. 错误转换:serde_json::Error → MlcError::SerializationFailed
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use mlc_engine::{MlcConfig, MlcError, ProceduralMemory, SemanticMemory};

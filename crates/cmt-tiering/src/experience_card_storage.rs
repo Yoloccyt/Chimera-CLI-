@@ -647,6 +647,7 @@ fn row_to_card(row: &CardRow) -> Result<ExperienceCard, CmtError> {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_contracts::experience_card::{CardMetadata, ErrorSignature};

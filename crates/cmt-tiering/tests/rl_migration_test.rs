@@ -8,6 +8,7 @@
 //! 注入，非神经网络），`record` 仅回放记录不做梯度更新——训练面占位，
 //! 解冻后替换为 TD 误差 + Q 权重更新，不得破坏接口契约。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use cmt_tiering::rl_migration::{DQNMigrationPolicy, MigrationExperience, MigrationState};

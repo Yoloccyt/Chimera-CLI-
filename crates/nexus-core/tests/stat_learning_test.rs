@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API / 铁律6 轨迹导出（RLTrajectory 完整填充）/
 //! 自定义投影覆盖 / 与 UCB 的探索-利用对比 / proptest 统计不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::rl_hooks::{RLActionVector, RLStateVector};

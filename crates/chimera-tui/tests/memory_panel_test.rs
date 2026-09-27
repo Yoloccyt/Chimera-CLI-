@@ -2,6 +2,7 @@
 //!
 //! 验证 MemoryPanel 在自定义数据下正确渲染命中率、上下文窗口、压缩率与层级。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / L0 契约类型四层全链路 / 检索三方式融合 /
 //! 注入策略 / 降级链四态 / L0→L1 提炼 / proptest 检索不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use mlc_engine::{

@@ -17,6 +17,7 @@
 //! bus.rs `is_critical_mpsc_event` 双清单守护互补,任何 Critical 清单
 //! 漂移会同时触发本文件与内联穷举测试失败。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{ActionSource, EventMetadata, EventSeverity, NexusEvent};
 
 // ---------------------------------------------------------------

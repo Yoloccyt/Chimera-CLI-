@@ -15,6 +15,7 @@
 //! - 使用 tokio::runtime::Runtime 在 proptest 中执行 async 代码
 //!   (WHY:proptest! 宏不兼容 #[tokio::test],需手动创建 runtime)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

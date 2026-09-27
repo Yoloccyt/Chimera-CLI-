@@ -45,6 +45,7 @@ pub fn validate_log_panel_height(height: u16) -> Result<(), &'static str> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -76,6 +76,7 @@ pub fn multihop_corpus(block_count: usize, chain_count: usize) -> Result<Multiho
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

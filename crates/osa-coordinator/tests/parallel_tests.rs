@@ -15,6 +15,7 @@
 //! - 并行计算不改变结果顺序(active_ids 顺序确定,mask_hash 一致)
 //! - 不同复杂度档位 / 风险等级 / 候选集规模均满足一致性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use event_bus::EventBus;

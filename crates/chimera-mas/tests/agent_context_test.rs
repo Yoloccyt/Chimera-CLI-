@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 //! Task 9.1 (RED): AgentContext 上下文管理失败测试

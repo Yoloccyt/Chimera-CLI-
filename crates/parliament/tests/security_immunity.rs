@@ -18,6 +18,7 @@
 //!   将整个载荷作为 program 可确保所有危险模式被扫描到(与 AHIRT 一致)
 //! - **不使用 unwrap/expect**:用 assert! + 模式匹配处理错误,遵循项目规范
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use parliament::{AhirtRedTeam, ProbePayload, ProbeType, Proposal, Skeptic};

@@ -7,6 +7,7 @@
 //! - 按 G 恢复到底部并重新启用 auto_scroll
 //! - 弹窗打开时冻结 auto_scroll,避免详情 overlay 后方列表跳动
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{EventStreamPanel, Panel, PopupKind, TuiState};

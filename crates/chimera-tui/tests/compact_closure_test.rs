@@ -8,6 +8,7 @@
 //! 4. `TuiChatHistoryReplaced` 经真实 DataPipeline 回写会话历史
 //!    (ChatSync 唯一所有权设计的事件控制信道)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};

@@ -23,6 +23,7 @@
 //!   `GlobalAction(id)`,其 id 必须已注册,且其声明的 default_key 必须落在
 //!   路由到该 id 的键集合内(未声明 default_key 即漂移)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::{
     ActionRegistry, InputRouter, PanelId, RouteTarget, RouterMode, TuiApp, TuiConfig,
 };

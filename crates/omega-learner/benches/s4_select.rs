@@ -11,6 +11,7 @@
 //! 既有 `linucb_select.rs` 40 臂红线覆盖 s9 通路；本文件提供 S4 29 臂
 //! 精确证据（臂数更小延迟更低，但需可证伪数据——性能可证伪原则）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use omega_learner::arm::{ArmId, ArmIndex, DiscreteArmSet};
 use omega_learner::context::SeamContext;

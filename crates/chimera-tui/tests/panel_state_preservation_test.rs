@@ -12,6 +12,7 @@
 //! WHY 渲染验证优于字段直读:end-to-end 测试更接近真实用户体验,
 //! 且不破坏 Panel trait 封装性(无需新增 trait 方法或公开字段)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 mod common;

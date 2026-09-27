@@ -22,6 +22,7 @@
 //! - 500 Block × Deep 20% split: ~0.02ms（100 块克隆）
 //! - 总计远小于 500ms 首 token 目标
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};

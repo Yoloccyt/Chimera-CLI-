@@ -4,6 +4,7 @@
 //! (双路融合/dense-only/sparse-only/空输入/去重/Top-K 截断/分数公式/
 //! 权重/k 宽容度)、hybrid_search 等价性。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use repo_wiki::search::{hybrid_search, rrf_fuse, HybridSearchConfig};
 
 // --- 配置测试 ---

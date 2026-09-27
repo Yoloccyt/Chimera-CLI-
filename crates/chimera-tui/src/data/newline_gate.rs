@@ -163,6 +163,7 @@ fn split_inclusive_iter(s: &str) -> impl Iterator<Item = (&str, &str)> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

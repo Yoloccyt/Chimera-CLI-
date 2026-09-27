@@ -6,6 +6,7 @@
 //! - 100 条目 Top-10 召回:验证 criterion 框架能正常运行(冒烟基准)
 //! - 4096 条目 Top-10 召回:验证设计目标 < 200ms(满容量场景)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use mlc_engine::{MemoryEntry, MemoryTier, SemanticMemory};
 use nexus_core::CLV;

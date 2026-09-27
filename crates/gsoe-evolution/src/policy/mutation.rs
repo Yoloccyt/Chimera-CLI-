@@ -124,6 +124,7 @@ fn hash_seed(bytes: &[u8]) -> u64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

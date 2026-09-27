@@ -5,6 +5,7 @@
 //! 2. osa 消费接线: 调整器 D2.max_tools_per_step → compute_all_masks 裁剪 keep
 //! 3. 铁律6: journal → RLTrajectory 导出
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, EventMetadata, NexusEvent, RouterStatsPayload};
 use osa_coordinator::{
     AdjustmentLimits, OmniSparseCoordinator, SixDimensionAdjuster, TaskProfile, ToolId,

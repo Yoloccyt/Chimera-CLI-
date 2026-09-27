@@ -3,6 +3,7 @@
 //! 对应 SubTask 32.5:审计延迟基准
 //! 运行:`cargo bench -p seccore --jobs 1`
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use seccore::{AsaAuditor, OperationAuditInput};

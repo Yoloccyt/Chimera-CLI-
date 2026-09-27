@@ -3,6 +3,7 @@
 //! 验证 MlcEngine 统一接口的 store/recall/promote/demote 流程,
 //! 以及 `MemoryMetricsReported`/`MemoryTiered` 事件正确发布。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, NexusEvent};
 use mlc_engine::{
     MemoryEntry, MemoryTier, MlcConfig, MlcEngine, MlcError, PatternSignature, ProceduralEntry,

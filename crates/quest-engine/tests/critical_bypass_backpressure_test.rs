@@ -31,6 +31,7 @@
 //! BudgetExceeded / SkepticVeto / RedTeamAudit / AsaIntervention / AgentTaskFailed /
 //! AffinityQuotaExhausted / R2FreezeViolation / R2FreezeRollbackFailed / FormalViolation。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashSet;

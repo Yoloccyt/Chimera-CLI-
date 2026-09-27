@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API / 铁律9 分段身份与 anchor 语义 / prompt-equal 数学 /
 //! 回放采样分布 / proptest 折减不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{PerBuffer, PerEntry, SegmentAwarePER};

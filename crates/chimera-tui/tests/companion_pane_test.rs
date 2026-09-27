@@ -10,6 +10,7 @@
 //!   故以 "Quest Tasks" 作为"伴随面板确被渲染"的稳定标记。
 //! - **零回归**:伴随面板默认关闭,渲染路径与既有一致。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{PanelId, TuiApp, TuiConfig};

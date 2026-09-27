@@ -11,6 +11,7 @@
 //! - 高访问次数的条目衰减更慢
 //! - 从配置创建衰减计算器
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chrono::{DateTime, Duration, Utc};
 use cmt_tiering::{CmtConfig, CmtError, DecayCalculator, Tier, DEMOTION_THRESHOLD};
 

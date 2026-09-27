@@ -20,6 +20,7 @@
 //! 1. 在 `rt.block_on(async { ... })` 内完成异步操作并收集结果数据
 //! 2. 在 `proptest!` 闭包顶层使用 `prop_assert!`(无需 `?`,early return 自动生效)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

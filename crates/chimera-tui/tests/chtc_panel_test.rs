@@ -13,6 +13,7 @@
 //!   60-79 之间正常显示。此阈值与 spec "评分 < 60 黄色高亮" 一致,
 //!   是经验值:低于 60% 表示兼容性不及格,需运维关注。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

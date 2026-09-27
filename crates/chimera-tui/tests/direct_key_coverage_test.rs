@@ -13,6 +13,7 @@
 //! 2. **运行期绑定**:逐个按键实调 `InputRouter::route`,断言路由结果确为
 //!    预期面板的 `PanelJump` —— 证明绑定真实存在且指向正确(而非"源码里有字符串")。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::input::router::{InputRouter, RouteTarget, RouterMode};

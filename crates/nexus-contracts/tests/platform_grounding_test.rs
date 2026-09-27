@@ -4,6 +4,7 @@
 //! 平台接地规格将平台/环境约束固化为可审计契约（BehaviorContract 覆盖部分
 //! 语义，本模块补齐平台维度），供 RuntimeAuditor 第 0 维度（契约遵守）消费。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::platform_grounding::{

@@ -371,6 +371,7 @@ impl TuiApp {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod visualization_sync_proptests {
     //! FC-1 回归护栏:任意合法快照字段经 `sync_visualization_fields`
     //! 必须完整镜像进 TuiState(防止未来字段增长再次遗漏同步)。

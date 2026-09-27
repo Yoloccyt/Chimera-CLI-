@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API / 证据完整性红线 / 导出通道（JSON + MsgPack）/
 //! 跨 session/instance 回溯 / proptest 并发不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{LedgerError, TokenLedger};

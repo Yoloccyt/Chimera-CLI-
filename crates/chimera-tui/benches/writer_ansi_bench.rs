@@ -14,6 +14,7 @@
 //! - **precompute changes**:diff 计算由 diff_engine_bench 单独覆盖,本 bench
 //!   仅测 writer,changes 在 iter 外预计算。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::engine::{Buffer, Change, Color, DiffEngine, Rect, Style, TerminalWriter};

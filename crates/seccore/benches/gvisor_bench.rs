@@ -15,6 +15,7 @@
 //! - Windows/macOS: gVisor 基准跳过(标记 `#[ignore]`),降级路径基准始终可用
 //! - `#[cfg(target_os = "linux")]` 条件编译保护 gVisor 相关代码
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 // WHY cfg 门控:Duration 与 GvisorRuntime 仅在 Linux + runsc 分支使用,

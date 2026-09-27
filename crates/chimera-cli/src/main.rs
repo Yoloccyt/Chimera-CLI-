@@ -192,6 +192,7 @@ fn init_mca_gateway() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     // --- T2 (2026-09-03): mca-gateway M4 组合根门控装配测试 ---
 

@@ -791,6 +791,7 @@ fn _assert_s2_strategy_adapter_send_sync() {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::sync::Arc;

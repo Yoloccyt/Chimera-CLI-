@@ -438,6 +438,7 @@ fn build_meta(agent_type: AgentType, agent_id: &str) -> AgentMeta {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

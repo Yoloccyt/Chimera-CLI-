@@ -6,6 +6,7 @@
 //! - severity() 返回 EventSeverity::Info(非 Critical,控制事件不阻断系统)
 //! - new_priority 边界值(0 / 128 / 255)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{deserialize_msgpack, serialize_msgpack, EventMetadata, EventSeverity, NexusEvent};
 
 /// 构造测试用元数据(单参数 source,与 crate 公开签名一致)

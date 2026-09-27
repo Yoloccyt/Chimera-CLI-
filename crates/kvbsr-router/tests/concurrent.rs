@@ -13,6 +13,7 @@
 //! 锁外从 DashMap 无锁读取工具向量;auto_rebalance 仅更新 blocks(不修改 tool_vectors),
 //! 确保 blocks 与 tool_vectors 始终一致,消除 BlockNotFound 竞态。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 mod common;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

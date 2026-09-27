@@ -1197,6 +1197,7 @@ impl HandshakeSync {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod stale_tests {
     //! Concord T1.7:budget_is_stale 纯判定函数测试(边界 + proptest 单调性)
     use super::budget_is_stale;
@@ -1331,6 +1332,7 @@ impl AgentFailureSync {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod handshake_sync_tests {
     use super::*;
     use event_bus::{CompatLevel, EventMetadata};
@@ -1467,6 +1469,7 @@ impl ParliamentSync {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod agent_failure_sync_tests {
     use super::*;
     use event_bus::EventMetadata;
@@ -1594,6 +1597,7 @@ impl GqepTimeoutSync {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod parliament_sync_tests {
     use super::*;
     use event_bus::EventMetadata;
@@ -1669,6 +1673,7 @@ mod parliament_sync_tests {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod gqep_timeout_sync_tests {
     use super::*;
     use event_bus::EventMetadata;

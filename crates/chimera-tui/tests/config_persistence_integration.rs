@@ -4,6 +4,7 @@
 //! 与 config.rs 中的单元测试互补:单元测试覆盖 save/load 单方法行为,
 //! 本测试覆盖"保存后重新加载"的完整往返场景。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::{Theme, TuiConfig};
 
 #[test]

@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / L0 ExperienceCard 蒸馏全链路 / 成功失败模式提取 /
 //! 检索过滤 / 蒸馏幂等 / proptest 蒸馏不变量
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chrono::{DateTime, Utc};

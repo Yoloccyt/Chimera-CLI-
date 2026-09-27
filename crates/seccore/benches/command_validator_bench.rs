@@ -14,6 +14,7 @@
 //! - `validator_trait_dyn_mixed`: `&dyn CommandValidator` 动态分发
 //!   (parliament AHIRT 实际注入路径,任务对比目标)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use nexus_contracts::command_validation::{Command, CommandPolicy, CommandValidator};

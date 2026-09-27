@@ -9,6 +9,7 @@
 //! 预期: N=4096(满窗口)时 aggregate 数量级优于 full_scan;
 //! aggregate 在 N=256 与 N=4096 两档延迟基本持平（O(K) 不变性）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use faae_router::{OperatorRouter, OperatorSelectionRecord};
 use gsoe_evolution::OperatorContext;

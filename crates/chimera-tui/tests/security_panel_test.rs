@@ -2,6 +2,7 @@
 //!
 //! 验证 SecurityPanel 正确渲染安全事件列表、冻结能力、键盘导航与详情弹窗。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

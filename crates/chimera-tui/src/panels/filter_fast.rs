@@ -68,6 +68,7 @@ pub fn event_keyword_hit_fast(event: &NexusEvent, keyword: &str) -> Option<bool>
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use event_bus::EventMetadata;

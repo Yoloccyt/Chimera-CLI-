@@ -10,6 +10,7 @@
 //! 5. 无事件总线时编码仍正常工作
 //! 6. 事件 clv_dimension 始终为 512
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, NexusEvent};
 use nmc_encoder::{
     DesktopCapture, FusionStrategy, Modality, NmcConfig, NmcEncoder, PerceptionInput,

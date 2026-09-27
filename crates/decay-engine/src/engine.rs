@@ -596,6 +596,7 @@ pub(crate) fn profile_to_config(profile: DecayProfile) -> DecayConfig {
 // 单元测试
 // ============================================================
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

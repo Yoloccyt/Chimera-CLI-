@@ -8,6 +8,7 @@
 //! - `QuadrantPlan` INV-3(扇出≤4) / INV-4(象限唯一)强制
 //! - serde 序列化往返(JSON)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_mas::delegation::TaskComplexity;
 use chimera_mas::error::MasError;
 use chimera_mas::quadrant::{

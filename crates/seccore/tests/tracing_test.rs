@@ -17,6 +17,7 @@
 //! sync fn,traced_test 无法正确注入 `logs_contain` 函数。
 //! API: `logs_contain("substring")` 返回 bool,检查捕获日志是否包含子串。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use seccore::{

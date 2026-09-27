@@ -2,6 +2,7 @@
 //!
 //! 验证 HealthPanel 正确渲染事件速率、慢消费者、平均延迟与健康评分公式。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{

@@ -30,6 +30,7 @@
 //! - 触发实际 balance 路径(预先设置 usage_count 不均匀使熵 < 0.6)
 //! - 若超时则判定为持锁跨 await 违规(测试失败 + panic)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 use std::time::Duration;
 

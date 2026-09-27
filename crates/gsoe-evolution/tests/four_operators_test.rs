@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性（re-export 验证）/ 四算子类型覆盖 /
 //! 算子链协同（Draft→Improve→Debug）/ CardQuery 依赖倒置注入
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

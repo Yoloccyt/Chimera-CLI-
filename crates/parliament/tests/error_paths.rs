@@ -5,6 +5,7 @@
 //! 对应架构层:L8 Parliament
 //! 对应创新点:AHIRT(Anti-Hack Intelligent Red Team,反黑客红队)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use parliament::{

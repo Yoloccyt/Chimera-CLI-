@@ -6,6 +6,7 @@
 //!
 //! 私有依赖测试(embedding blob 编解码)保留在 src/store.rs(依赖私有函数)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use repo_wiki::{WikiConfig, WikiEntry, WikiStore};

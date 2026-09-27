@@ -702,6 +702,7 @@ impl TuiApp {
 // 3. 布局不变量:子区域高度之和 == 父区域高度(无缝平铺)
 // ============================================================================
 #[cfg(all(test, feature = "v3-engine"))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod v3_engine_tests {
     use super::*;
     use crate::config::TuiConfig;

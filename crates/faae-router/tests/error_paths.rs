@@ -9,6 +9,7 @@
 //! 4. 熵计算边界:compute_entropy 对空/单工具 profiles 返回 Ok(1.0)
 //! 5. 并发注册冲突:多线程并发注册不同专家,验证不 panic 且计数正确
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

@@ -9,6 +9,7 @@
 //! - WHY 空状态测试:ClvSummary 由 event-bus crate 定义,集成测试中保持
 //!   空状态(None)验证面板的空状态处理逻辑,避免跨 crate 构造复杂数据
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::panels::{ClvVectorPanel, Panel};

@@ -289,6 +289,7 @@ fn map_status(raw: &str, has_tool: bool) -> FinishReason {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_contracts::affinity::{

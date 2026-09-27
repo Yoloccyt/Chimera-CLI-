@@ -3,6 +3,7 @@
 //! 验证 `TuiApp::handle_global_key` 提取后，全局快捷键优先于面板键，
 //! 且 `g` 前缀状态不会卡死。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{McpNodeStatus, NodeStatus, PanelId, TuiApp, TuiConfig};

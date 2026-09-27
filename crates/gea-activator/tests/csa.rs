@@ -26,6 +26,7 @@
 //! cargo test -p gea-activator --jobs 1 -- --ignored
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 

@@ -4,6 +4,7 @@
 //! 端到端 128K 压缩到 32K,压缩率 > 4x。
 //! 测试通过 `hcw_window` crate 的公共 API 进行(集成测试)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};

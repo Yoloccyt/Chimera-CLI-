@@ -8,6 +8,7 @@
 //! 与 Semaphore 限流),criterion 0.5 无 async_tokio feature,用 `block_on`
 //! 在同步 b.iter 中驱动 async future。runtime 在函数级创建一次,复用。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chtc_bridge::{ChtcBridge, ChtcConfig, IdeSource, ProtocolConverter};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use serde_json::json;

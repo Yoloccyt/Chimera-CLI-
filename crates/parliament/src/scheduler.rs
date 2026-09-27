@@ -83,6 +83,7 @@ impl WorkStealingScheduler {
 // 此结构体满足 Send + Sync 的自动推导条件。
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};

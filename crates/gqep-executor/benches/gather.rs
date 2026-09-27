@@ -7,6 +7,7 @@
 //! cargo bench -p gqep-executor
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use event_bus::EventBus;
 use gqep_executor::{GqepConfig, GqepExecutor, GqepFuture};

@@ -9,6 +9,7 @@
 //!
 //! 架构层归属:L10 Interface(bench 不入架构层,仅 dev-artifact)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_cli::orchestrator::{build_quest_reply, plan_chunks, plan_chunks_batched};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};

@@ -4,6 +4,7 @@
 //! - `pattern_match_p99_us`：1000 订阅者 × 10K 事件匹配 P99 < 1ms【门禁目标】
 //! - 漏发率 = 0（精确匹配结构保证，采样断言命中集非空且精确）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::pattern_index::PatternIndex;
 

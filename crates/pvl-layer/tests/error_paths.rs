@@ -9,6 +9,7 @@
 //! 4. 策略调整:高拒绝率触发 check_and_adjust_strategy 返回 Ok(true)
 //! 5. 空操作:produce(0) 正常返回 Ok,无副作用
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

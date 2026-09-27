@@ -14,6 +14,7 @@
 //! 非负值向量的余弦相似度天然 ∈ [0.0, 1.0],无法测试 clamp 到 0.0 的路径。
 //! 包含负值后,余弦相似度可能为负(语义相反),clamp 到 0.0 的逻辑才会被触发。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use mlc_engine::{MemoryEntry, MemoryTier, SemanticMemory};

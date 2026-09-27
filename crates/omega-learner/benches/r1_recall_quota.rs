@@ -11,6 +11,7 @@
 //! - **IQL select_quota**: IQL 推理延迟（目标 < 100μs）
 //! - **CQL full_train_100_iters**: 100 轮完整训练延迟（目标 < 500ms）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use nexus_contracts::RecallQuota;
 use omega_learner::r1_recall_quota::{R1Context, RecallQuotaLearner, RecallQuotaTransition};

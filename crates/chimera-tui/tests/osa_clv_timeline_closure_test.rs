@@ -12,6 +12,7 @@
 //! 全链路驱动,断言(1)字段同步;(2)面板渲染非空;(3)变化时 dirty 标记。
 //! 严禁手工注入 TuiState 字段(那正是掩盖本 bug 的反模式)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

@@ -9,6 +9,7 @@
 //! 4. 容量为 1 的 LRU 边界:插入 2 个条目,第一个被驱逐
 //! 5. 并发驱逐:多线程并发 insert,验证不 panic
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

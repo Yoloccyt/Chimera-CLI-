@@ -27,6 +27,7 @@
 //! - ADR-026 决策 7:不自实现压缩,委托 hcw_window + osa_coordinator
 //! - `#![forbid(unsafe_code)]` 保持(chimera-mas crate 级)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_mas::prelude::*;

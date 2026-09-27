@@ -5,6 +5,7 @@
 //! - FC-C:`RefreshStateRequested` 经真实 DataPipeline 消费后跳过一次
 //!   休眠立即重建快照(revision 前进,下游 update 重新对齐)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};

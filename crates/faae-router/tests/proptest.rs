@@ -14,6 +14,7 @@
 //! - 生成 64 维 [0, 1] 浮点向量(非负,确保 cosine similarity ∈ [0, 1])
 //! - 使用 tokio::runtime::Runtime 在 proptest 中执行 async 代码
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

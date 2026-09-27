@@ -1,5 +1,6 @@
 //! Log 面板集成测试 — 验证事件过滤、标题指示器与详情弹窗
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::{LogPanel, Panel, PopupKind, TuiCommand, TuiState};

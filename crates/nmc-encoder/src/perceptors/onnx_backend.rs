@@ -720,6 +720,7 @@ fn resample_audio(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 /// # 返回
 /// - WAV 文件字节 (16-bit PCM, 单声道)
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-only helper: idiomatic unwrap; E-5 targets production code
 fn generate_sine_wav(
     sample_rate: u32,
     duration_secs: f32,
@@ -754,6 +755,7 @@ fn generate_sine_wav(
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

@@ -22,6 +22,7 @@
 //!
 //! 参考:`docs/reports/arch-refactor-directions-v2-2026-09-12.md` 方向 H-另案。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};

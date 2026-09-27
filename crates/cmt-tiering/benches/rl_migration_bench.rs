@@ -4,6 +4,7 @@
 //! 基线价值: decide_tier 为纳秒级热路径（每记忆块迁移决策），
 //! 性能回退红线由 perf 脚本/CI benchmark check 守护。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use cmt_tiering::rl_migration::{DQNMigrationPolicy, MigrationState};
 use criterion::{criterion_group, criterion_main, Criterion};
 

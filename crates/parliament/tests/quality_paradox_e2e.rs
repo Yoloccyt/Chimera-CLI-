@@ -15,6 +15,7 @@
 //! - 使用 `nexus_contracts::ActivationStrategy` 验证自适应策略选择器:
 //!   质量趋势分析器与自适应策略选择器的集成是 ADR-064 的关键闭环。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::ActivationStrategy;

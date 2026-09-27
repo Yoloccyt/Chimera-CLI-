@@ -12,6 +12,7 @@
 //! - `#[cfg(test)]` 之后的测试模块豁免(断言消息非渲染面);
 //! - 新增面板/动作时若确需豁免,经评审后加入 EXEMPT 清单并注明理由。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};

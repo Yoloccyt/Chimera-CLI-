@@ -9,6 +9,7 @@
 //! 4. 预测按概率降序排列
 //! 5. access_count 非递减
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

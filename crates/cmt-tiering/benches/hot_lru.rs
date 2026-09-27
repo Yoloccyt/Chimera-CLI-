@@ -4,6 +4,7 @@
 //!
 //! 基准场景:Hot 层容量 256,插入 256 条目后,测量第 257 次插入触发 LRU 驱逐的延迟。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use cmt_tiering::{CapabilityEntry, HotTier, Tier};
 use criterion::{criterion_group, criterion_main, Criterion};
 

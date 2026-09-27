@@ -6,6 +6,7 @@
 //! - LRU 模式表容量驱逐
 //! - S3 接缝预取策略学习器持有器(异步下发 + 本地 fallback)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::EventBus;
 use nexus_contracts::{PrefetchPolicy, PrefetchStrategy};
 use scc_cache::prefetch::PrefetchLearnerHolder;

@@ -7,6 +7,7 @@
 //! - 10K entries: 中等规模，验证线性扫描在万级条目下的表现
 //! - 100K entries: 压力规模，验证线性扫描在十万级条目下是否仍满足 < 10ms SLO
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use mlc_engine::{MemoryEntry, MemoryTier, SemanticMemory};
 use nexus_core::CLV;

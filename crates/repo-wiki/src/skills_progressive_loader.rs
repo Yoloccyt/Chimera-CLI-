@@ -291,6 +291,7 @@ pub fn skill_metadata_from_graph(graph: &SkillGraph) -> Vec<SkillMetadata> {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

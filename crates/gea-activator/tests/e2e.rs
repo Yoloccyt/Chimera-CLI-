@@ -22,6 +22,7 @@
 //! - 性能断言使用 min-of-N 减少调度噪声,但不标记 #[ignore]
 //!   (严格性能基准测试在 csa.rs 中标记 #[ignore])
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 

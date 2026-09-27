@@ -7,6 +7,7 @@
 //! - measurement: 100 次采样
 //! - 测量 P50/P99 延迟
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::EventBus;
 use gea_activator::{

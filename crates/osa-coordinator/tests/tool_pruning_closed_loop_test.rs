@@ -5,6 +5,7 @@
 //! 2. ledger 适配: TokenLedgerEntry → PruneTrajectory → 裁剪器统计
 //! 3. 铁律6: 决策日志 → RLTrajectory 导出
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::HashMap;
 
 use event_bus::EventBus;

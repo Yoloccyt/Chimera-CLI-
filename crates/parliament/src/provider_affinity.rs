@@ -162,6 +162,7 @@ pub fn validate_cross_provider(binding: &ProviderBinding) -> Result<(), Parliame
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -4,6 +4,7 @@
 //! - 马尔可夫链转移矩阵容量上限
 //! - LRU 淘汰策略
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

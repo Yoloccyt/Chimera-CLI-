@@ -8,6 +8,7 @@
 //! - 小终端降级分支(min 15 rows 提示);
 //! - 快捷键诚实性:shortcuts 声明的 ↑/↓ 与 j/k 均真实可达。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_tui::panels::{Panel, PvlScorePanel};

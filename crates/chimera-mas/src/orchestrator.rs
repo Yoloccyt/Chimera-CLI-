@@ -685,6 +685,7 @@ fn pick_agent_type(task: &AgentTask, child_depth: usize, index: usize) -> AgentT
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -70,6 +70,7 @@ pub use sync::{
 };
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::snapshot::{csv_escape, quest_status_label};
     use super::sync::{ClvSync, CRITICAL_DROPPED_METRIC_NAME};

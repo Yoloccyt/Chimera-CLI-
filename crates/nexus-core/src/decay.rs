@@ -87,6 +87,7 @@ pub fn apply_exponential_decay(value: f64, delta_seconds: f64, tau_seconds: f64)
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

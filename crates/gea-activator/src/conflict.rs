@@ -396,6 +396,7 @@ fn select_top_k(mut scored: Vec<ScoredCandidate>, k: usize) -> (Vec<ExpertId>, V
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::collections::HashMap;

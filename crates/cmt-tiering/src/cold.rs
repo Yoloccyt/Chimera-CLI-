@@ -573,6 +573,7 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<CapabilityEntry> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::types::Tier;

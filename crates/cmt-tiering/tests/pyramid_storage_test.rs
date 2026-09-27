@@ -3,6 +3,7 @@
 //! 覆盖: 顶层 API 可达性 / MemoryPyramidLevel→热温冷冰端到端存储 /
 //! 分层采样比例 / INV-8 迁移单调性 / 与 rl_replay_pool 采样比例一致性
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;

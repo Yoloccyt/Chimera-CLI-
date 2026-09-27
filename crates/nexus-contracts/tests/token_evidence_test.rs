@@ -3,6 +3,7 @@
 //! 覆盖: 铁律9 分段身份共享 / anchor 语义 / 分段↔账本证据链 /
 //! 分段创建原因全格式 roundtrip / MsgPack 体积优势验证
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use nexus_contracts::{SegmentCreationReason, SegmentMetadata, TokenLedgerEntry, ToolCallRecord};

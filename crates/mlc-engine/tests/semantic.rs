@@ -3,6 +3,7 @@
 //! 验证 L2 语义记忆的 CLV 向量召回 Top-K 与相似度分数 ∈ [0.0, 1.0]。
 //! 性能基准:100 条目 Top-10 召回 < 5ms。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use mlc_engine::{MemoryEntry, MemoryTier, SemanticMemory};
 use nexus_core::CLV;
 

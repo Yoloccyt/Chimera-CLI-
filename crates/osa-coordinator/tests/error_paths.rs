@@ -9,6 +9,7 @@
 //! 4. 边界校验:SparsityOutOfRange 错误构造与显示
 //! 5. 错误转换:serde_json::Error → OsaError::MaskComputationFailed
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

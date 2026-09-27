@@ -4,6 +4,7 @@
 //! 测试零向量 / 相同向量 / 随机向量三种场景。
 //! 使用 `std::hint::black_box` 防止编译器过度优化。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};

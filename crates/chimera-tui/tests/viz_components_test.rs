@@ -10,6 +10,7 @@
 //!   痕迹(非默认色 cell),确保组件不仅构造成功还能真正渲染。
 //! - **风格统一**:沿用 `render_test.rs` 既有 `make_buffer` + `gauge_rendered_fg` 模式。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_tui::viz::gauge as viz_gauge;
 use chimera_tui::viz::{bar_chart, heatmap, histogram, line_chart, VizChartKind};
 use ratatui::buffer::Buffer;

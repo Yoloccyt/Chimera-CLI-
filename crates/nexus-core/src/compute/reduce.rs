@@ -226,6 +226,7 @@ pub fn reduce(vals: &[f64], mode: ReduceMode) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
     use crate::compute::seam::{ChaCha8Rng, Rng as SeamRng};

@@ -9,6 +9,7 @@
 //! get 保持返回 ContextEntry(API 兼容,内部 clone Arc 内部值),
 //! 新增 get_ref 返回 `&Arc<ContextEntry>`(完全零拷贝引用访问)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 
 use event_bus::EventBus;

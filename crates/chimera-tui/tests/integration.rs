@@ -18,6 +18,7 @@
 //! - WHY 测试 Release 事件过滤:Windows 平台 crossterm 会触发 Release,
 //!   必须过滤避免重复响应(§4.4 平台兼容性)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use crossterm::event::{

@@ -20,6 +20,7 @@
 //! 5 个维度计算量差异较大(context 2000 文件最重,routing 50 工具最轻),
 //! 并行版受"最重维度"限制(Amdahl 定律),但仍应显著快于顺序版。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{criterion_group, criterion_main, Criterion};
 use event_bus::EventBus;
 use osa_coordinator::{

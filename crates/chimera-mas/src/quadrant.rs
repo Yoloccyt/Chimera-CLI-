@@ -569,6 +569,7 @@ impl QuadrantSelector for ConfigurableQuadrantSelector {
 // 注意:以下测试追加到现有 #[cfg(test)] mod tests 中（文件末尾）。
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

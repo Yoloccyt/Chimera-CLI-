@@ -368,6 +368,7 @@ fn derive_fitness(spec: &HarnessSpec) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::ci_gate::{CiFailure, CiFailureKind, MockCiGate};

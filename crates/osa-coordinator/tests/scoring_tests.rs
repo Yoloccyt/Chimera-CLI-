@@ -14,6 +14,7 @@
 //! - 默认配置 complexity=0.0 → Simple 档位 → k=8,候选集 10 个,
 //!   确保 k < len 才能验证 Top-K 选择(而非全选)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::EventBus;

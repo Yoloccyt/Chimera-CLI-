@@ -7,6 +7,7 @@
 //! - 混合读写场景:部分线程读,部分线程写
 //! - 命中率性能断言（固定种子、无时序测量 → 属正确断言，随常规测试跑）
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 use std::thread;
 
