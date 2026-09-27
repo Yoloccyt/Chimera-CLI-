@@ -183,10 +183,19 @@ pub fn aged_priority_rank(base: TaskPriority, waited: Duration, threshold: Durat
     if threshold.is_zero() {
         return base_rank;
     }
-    // WHY as u64 后相除: Duration 无直接除法得整数倍, 用纳秒比值取整得"满几个间隔"。
-    let intervals = (waited.as_nanos() / threshold.as_nanos().max(1)) as u64;
-    let boosted = base_rank as u64 + intervals;
-    boosted.min(3) as u8
+    // WHY 迭代比较而非 `waited.as_nanos() / threshold.as_nanos()`（L9 优化 2.3 续）：
+    // Duration 除法走 u128 路径（单次十数纳秒量级），而出队是 O(n) 遍历——1000 项队列时
+    // 这条除法就是热路主体（实测 53µs/次出队，超 50µs SLO 门）。秩封顶在 3，
+    // 故至多判 (3 - base_rank) 次即可定结果，**与原除法语义等价**：
+    // 原 = min(base + ⌊waited/threshold⌋, 3)；下 = 从 base 起每满一个间隔 +1，封顶 3。
+    let mut rank = base_rank;
+    let mut boundary = threshold;
+    while rank < 3 && waited >= boundary {
+        rank += 1;
+        // saturating_add：累加不再增长时下一轮 `waited >= boundary` 必为假而退出，无死循环
+        boundary = boundary.saturating_add(threshold);
+    }
+    rank
 }
 
 /// 判断 `incoming` 是否应抢占正在执行的 `running` (§8.4 抢占规则)。
@@ -353,12 +362,15 @@ impl PriorityScheduler {
             return None;
         }
         let mut best_idx = 0usize;
-        let mut best_rank = self.effective_rank(0, now);
-        let mut best_wsjf = self.entries[0].wsjf;
-        let mut best_enqueued = self.entries[0].enqueued_at;
-        let mut best_seq = self.entries[0].seq;
+        // 热路常数项：一次取齐阈值，避免每条目回读 self 字段
+        let starvation = self.starvation_threshold;
+        let first = &self.entries[0];
+        let mut best_rank = Self::rank_of(first, now, starvation);
+        let mut best_wsjf = first.wsjf;
+        let mut best_enqueued = first.enqueued_at;
+        let mut best_seq = first.seq;
         for (idx, entry) in self.entries.iter().enumerate().skip(1) {
-            let rank = self.effective_rank(idx, now);
+            let rank = Self::rank_of(entry, now, starvation);
             // 四维键: 秩高者优先 → WSJF 高者优先 → enqueued_at 早者优先 → seq 小者优先。
             // WHY 显式比 enqueued_at + seq: swap_remove 打乱物理顺序后,不能靠下标隔定
             // 先入队者;时间戳保 FIFO,seq 在 Instant 分辨率内同刻入队时提供完全确定性。
@@ -393,13 +405,16 @@ impl PriorityScheduler {
         Some(best_idx)
     }
 
-    /// 内部: 第 `idx` 条目的有效优先级秩(基础优先级 + 饥饿老化)。
-    fn effective_rank(&self, idx: usize, now: Instant) -> u8 {
-        let entry = &self.entries[idx];
+    /// 内部: 单条目的有效优先级秩(基础优先级 + 饥饿老化)。
+    ///
+    /// WHY 取条目引用而非 `idx`：`best_index` 已在迭代里持有 `entry`，
+    /// 传引用可省掉每条目一次的 `self.entries[idx]` 边界检查——出队是 O(n)
+    /// 扫描，省下的正是遍历的常数项（与除法改比较同批优化）。
+    fn rank_of(entry: &ScheduleEntry, now: Instant, starvation_threshold: Duration) -> u8 {
         aged_priority_rank(
             entry.task.priority,
             now.saturating_duration_since(entry.enqueued_at),
-            self.starvation_threshold,
+            starvation_threshold,
         )
     }
 }
@@ -409,6 +424,7 @@ impl PriorityScheduler {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -487,6 +503,65 @@ mod tests {
             aged_priority_rank(TaskPriority::Low, Duration::from_secs(9999), Duration::ZERO),
             0
         );
+    }
+
+    /// 热路优化的**语义等价安全网**：`aged_priority_rank` 已从
+    /// `min(base + ⌊waited/threshold⌋, 3)`（u128 除法）改为至多 3 次比较的循环，
+    /// 本测在六类阈值 × 四档基础秩 × 间隔 0..6 的边界三点（恰等 k×th /
+    /// 前 1ns / 后 1ns）上逐点比对**保留在此的旧公式参考实现**，
+    /// 杜绝“快了但改了老化语义”（封顶/零阈值/极端大阈值均入矩阵）。
+    #[test]
+    fn test_aged_rank_matches_division_formula_at_boundaries() {
+        let reference = |base: TaskPriority, waited: Duration, threshold: Duration| -> u8 {
+            let base_rank = priority_rank(base);
+            if threshold.is_zero() {
+                return base_rank;
+            }
+            let intervals = (waited.as_nanos() / threshold.as_nanos().max(1)) as u64;
+            (u64::from(base_rank) + intervals).min(3) as u8
+        };
+        let thresholds = [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::from_nanos(60),
+            Duration::from_millis(1),
+            Duration::from_secs(1),
+            Duration::from_secs(3600),
+        ];
+        let bases = [
+            TaskPriority::Low,
+            TaskPriority::Medium,
+            TaskPriority::High,
+            TaskPriority::Critical,
+        ];
+        let mut probes_done = 0usize;
+        for th in thresholds {
+            for base in bases {
+                for k in 0u32..6 {
+                    let probes: Vec<Duration> = if th.is_zero() {
+                        // 零阈值下“间隔倍数”无定义，只校不老化分支与极端输入
+                        vec![Duration::from_secs(u64::from(k)), Duration::MAX]
+                    } else {
+                        let exact = th * k;
+                        vec![
+                            exact,
+                            exact.saturating_sub(Duration::from_nanos(1)),
+                            exact.saturating_add(Duration::from_nanos(1)),
+                        ]
+                    };
+                    for waited in probes {
+                        probes_done += 1;
+                        assert_eq!(
+                            aged_priority_rank(base, waited, th),
+                            reference(base, waited, th),
+                            "老化语义漂移: base={base:?} th={th:?} waited={waited:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // 夹具自身不得空跑：零命中的矩阵会让本测变成假绿
+        assert!(probes_done > 300, "边界矩阵未充分展开: {probes_done}");
     }
 
     #[test]
