@@ -55,3 +55,12 @@ harness = false
 [[bench]]
 name = "memory_graph_edges"
 harness = false
+
+# ADR-192:L2 分层检索验收取数(10k/100k 双档 × {tiered, exact} + recall@10 质量采样)
+[[bench]]
+name = "hnsw_tiered"
+harness = false
+
+# E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)
+[lints]
+workspace = true

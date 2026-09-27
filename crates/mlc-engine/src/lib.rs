@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L2
+//! ROLE:     四级潜在记忆引擎  L0-L3 神经形态记忆分级存储与检索
+//! BACKEND:  sqlite
+//! PRODUCERS: 4 GhostMemoryDetected,MemConStrategyAdjusted,MemoryMetricsReported,MemoryTiered
+//! CONSUMERS: 1 chimera-cli
+//! MATURITY: PLACEHOLDER-CN
+//! CRATE-CONTRACT END
 //! 四级潜在记忆引擎  L0-L3 神经形态记忆分级存储与检索
 //!
 //! 对应架构层:L2 Memory
@@ -6,7 +14,8 @@
 //! # 核心职责
 //! - 实现 L0 WorkingMemory(DashMap + LRU,容量 64,延迟 < 1μs)
 //! - 实现 L1 EpisodicMemory(BTreeMap 时间索引 + HashMap Quest 索引,容量 1024)
-//! - 实现 L2 SemanticMemory(Vec + 线性扫描 KNN,容量 4096,Top-10 召回 < 5ms)
+//! - 实现 L2 SemanticMemory(分层检索:<4096 线性扫描精确层 / ≥4096 HNSW 近似层,
+//!   ADR-192;容量默认 4096,Top-10 召回 < 5ms)
 //! - 实现 L3 ProceduralMemory(SQLite 持久化,模式签名匹配)
 //! - 通过 MlcEngine 统一接口聚合 L0-L3,自动路由与层级迁移
 //! - 集成 EventBus,发布 MemoryMetricsReported/MemoryTiered 事件
@@ -78,7 +87,7 @@ pub use engine::{CardSystemStatsView, MlcEngine};
 pub use error::MlcError;
 pub use l0_working::WorkingMemory;
 pub use l1_episodic::EpisodicMemory;
-pub use l2_semantic::SemanticMemory;
+pub use l2_semantic::{HnswTierSnapshot, SemanticMemory};
 pub use l3_procedural::ProceduralMemory;
 // P4-W14.1: S2 接缝记忆策略学习器持有器
 pub use memory_strategy_learner::MemoryStrategyLearnerHolder;

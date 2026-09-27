@@ -45,6 +45,15 @@ l2_recall = 5000000
 compress = 50000
 compute_masks = 1500000
 delegation = 40000000
+# ADR-192 附带（性能门精度）：dev-only bench `hcw-window/probe_select` 升为 registered。
+# 其值组目录 `score_cache_hit_vs_recompute/{cache_hit,recompute}` 的路径内嵌 `cache_hit` 子串，
+# 在本地累积的 criterion 树上被 first-match-wins 误归给下方 `cache_hit` 键，使其报 100µs > 10µs 假红
+# （真值 403.7ns；`all` 静态子模式不跑 thresholds，CI 侧不生成该目录故不受影响，但本地无法验收）。
+# 子串语义下 `cache_hit` 无法用更长关键词区分（真路径恰是污染路径的后缀），故按门自身提示
+# “fix the keyword sets instead of flipping this switch”：把污染路径抢在 `cache_hit` 之前归给本键
+# （匹配循环文档序 = 判定序）。阈值 = 实测最重组 `probe_score_throughput/1000_blocks` 338.5µs 的 ~1.5× 余量
+# （同轮三组：probe_window_select/256_blocks 88.1µs、score_cache_hit_vs_recompute/{recompute 96.6µs, cache_hit 0.4ns}）。
+probe_select = 500000
 cache_hit = 10000
 tiering = 500000
 gather = 100000000
@@ -52,11 +61,36 @@ produce_verify = 500000
 command_validator = 50000
 xts_top_k = 500000
 # C6 新增注册（KPI-03/04 首次入 CI 强制门 + L1 热路径基线）:
-# immune_probe 实测 907ns（宣称 708ns 同量级获实证）; rhi_judge 实测 7.5us
-# （宣称 44us,实测更快）; bus_bench 实测 55us（publish fan-out）。
+# immune_probe 实测 907ns（宣称 708ns 同量级获实证）; bus_bench 实测 55us
+# （publish fan-out）。
+# rhi_judge 键已删除（2026-09-20）：其宿主 crate auto-dpo 目录已物理移除，
+# 阈值指向不存在的 bench 即为虚门；原实测 7.5us 记录保留在 C6 closure 报告中。
 immune_probe = 10000
-rhi_judge = 50000
 bus_bench = 200000
+hot_lru = 200000
+# P-6 终批（分诊后实升 4 项；pdca_act/memory_graph_recall 因 criterion 目录层级与
+# 斜杠组名失配、断言路径待深查，按"实测路径不确定不升格"纪律留 dev-only 待复查）：
+# 召回三段（粗/细/重排）取 p95 组或最重规模 ×3-8 余量；
+# osa 串行基线（串行变慢即回归信号；并行组已被 compute_masks 关键词覆盖）
+coarse_recall_p95 = 8_000_000
+fine_recall_top = 20_000_000
+rerank_fill_top = 30_000_000
+pdca_act = 20_000
+memory_graph_recall = 4_000_000
+osa_sequential_baseline = 1_000_000
+# P-6 二批（深审 2026-09-25，perf-slo 报告 §1.2/§3 实测驱动）：
+# nmc 并行 1200 单元实测 3.27ms（串行 21.2ms，并行收益 6.5×）→ x3.1 余量
+nmc_parallel_encoding = 10000000
+# nmc 文本编码最长输入 37.1µs → x5.4 余量；桌面编码 3.4µs 同源富余
+nmc_encoding = 200000
+# gsoe 三因子选择 64 候选 10.7µs → x4.7 余量（ADR-170 收录条款配套热路）
+three_factor = 50000
+# gsoe 形式化闸门评估 256 命题 0.2µs → x10 余量（ns 级先例 x10）
+formal_gate = 2000
+# ADR-192（2026-09-26）：mlc L2 分层检索 10k 档 Top-10 召回。立项时现值 4.117ms
+# （已越 mlc_l2_knn 的 4ms redline），分层后目标 ≤ 2ms（≥2× 改善且退出警示带）。
+# 实际门槛以静默态单跑 median 定档（见 perf-slo-2026-09-25.md §1.1 落地状态）。
+hnsw_tiered = 2_000_000
 sigmoid_scalar = 500
 sigmoid_map = 200000
 percentile_sorted = 1000
@@ -85,6 +119,10 @@ session_store = ["single_write"]
 cross_layer = ["cross_layer"]
 hybrid_search = ["hybrid_search"]
 debate = ["deliberate"]
+# ADR-192 附带：本键必须排在 `cache_hit` 之前（匹配循环 first-match-wins，文档序 = 判定序，
+# 与 bench_check.yml heredoc 的 dict 插入序逐字对齐）；`hit_vs_recompute` 与 `cache_hit`
+# 互不为子串（I2 双向已核），故不会反过来遮蔽真 cache_hit 组。
+probe_select = ["probe_window_select/", "probe_score_throughput/", "hit_vs_recompute"]
 l2_recall = ["l2_recall"]
 compress = ["100k_to_32k"]
 compute_masks = ["compute_all_masks"]
@@ -100,8 +138,28 @@ sigmoid_map = ["sigmoid map"]
 percentile_sorted = ["percentile_sorted"]
 # C6 新增（关键词与既有 36 键交叉核验无子串冲突，满足 I2）
 immune_probe = ["immune_probe"]
-rhi_judge = ["rhi_judge"]
 bus_bench = ["single_publish_latency", "concurrent_subscribe_throughput", "publish_batch_vs_serial"]
+# P-6 升格（深审 2026-09-25）：cmt 热层 LRU 实测 median 45µs（hot_lru_eviction_257th_insert,
+# docs/reports/perf-slo-2026-09-25.md §1.2），us 级 x4.4 余量定 200µs；与既有键无子串冲突（I2）
+hot_lru = ["hot_lru"]
+# P-6 终批（关键词均为实测 full_id 前缀级全链书写，与既有键无子串冲突，I2 已核）
+coarse_recall_p95 = ["coarse_recall_p95_latency/p95_latency"]
+fine_recall_top = ["fine_recall_10000_blocks"]
+rerank_fill_top = ["rerank_fill_5000_blocks"]
+# 磁盘形态修正（2026-09-26 根因查实）：criterion 3.x 将 bench_function("a/b")
+# 形式的斜杠组名在磁盘目录转义为下划线单层目录（memory_graph_recall_2k_depth2/），
+# 关键词必须按磁盘实形书写；非两级 benchmark_group API 的 nmc 真子目录形态不同
+pdca_act = ["pdca_act_stressed", "pdca_act_with_feedback_8_experts"]
+memory_graph_recall = ["memory_graph_recall_2k_depth2"]
+osa_sequential_baseline = ["sequential_compute_5_masks"]
+# P-6 二批：关键词取各 bench 实测最重组，与既有键无子串冲突（I2 已交叉核）
+nmc_parallel_encoding = ["nmc_parallel_encoding/parallel_1200"]
+nmc_encoding = ["text_encoding/long_10kb"]
+three_factor = ["three_factor_select_64_candidates"]
+formal_gate = ["formal_gate/evaluate/256"]
+# ADR-192：关键词按 benchmark_group + BenchmarkId 的真两级磁盘形态书写
+# （同 l2_knn_slo 先例；与既有键无子串冲突，I2 已核：含 "top10_recall" 而非 "l2_recall"）
+hnsw_tiered = ["l2_knn_tiered/top10_recall/10000_tiered"]
 
 # calibration_pending：当前值取保守 100ms 兜底、待 CI 首跑实测收紧的键。
 # 项目约束（ADR-159 决策 3）：此列表只减不增；wal_recovery 的 100ms 是真实规格，列在列表外。
@@ -228,6 +286,13 @@ alias = "debate"
 crate = "parliament"
 bench = "debate"
 
+# ADR-192 附带：probe_select 由 dev-only 升为 registered（消除上述串台假红；
+# 同时该 bench 获得自己的 SLO 守护）。`bench_inventory_freeze.txt` 对应行同批删除（只减纪律）。
+[[run_bench]]
+alias = "probe_select"
+crate = "hcw-window"
+bench = "probe_select"
+
 [[run_bench]]
 alias = "l2_recall"
 crate = "mlc-engine"
@@ -280,12 +345,73 @@ crate = "chimera-mas"
 bench = "immune_probe"
 
 [[run_bench]]
-alias = "rhi_judge"
-crate = "auto-dpo"
-bench = "rhi_judge"
-
-[[run_bench]]
 alias = "bus_bench"
 crate = "event-bus"
 bench = "bus_bench"
+
+# P-6 升格（深审 2026-09-25）：cmt 热层 LRU——实测驱动首次入 CI 强制门
+# （数据：perf-slo-2026-09-25.md §1.2，median 45µs vs 阈值 200µs）
+[[run_bench]]
+alias = "hot_lru"
+crate = "cmt-tiering"
+bench = "hot_lru"
+
+# P-6 终批 6 项升格（深审 2026-09-26，实测见 docs/reports/perf-slo-2026-09-25.md）
+[[run_bench]]
+alias = "coarse_recall_p95"
+crate = "hcw-window"
+bench = "coarse_recall"
+
+[[run_bench]]
+alias = "fine_recall_top"
+crate = "hcw-window"
+bench = "fine_recall"
+
+[[run_bench]]
+alias = "rerank_fill_top"
+crate = "hcw-window"
+bench = "rerank_fill"
+
+[[run_bench]]
+alias = "pdca_act"
+crate = "chimera-mas"
+bench = "pdca_bench"
+
+[[run_bench]]
+alias = "memory_graph_recall"
+crate = "mlc-engine"
+bench = "memory_graph_edges"
+
+[[run_bench]]
+alias = "osa_sequential_baseline"
+crate = "osa-coordinator"
+bench = "parallel_vs_sequential"
+
+# P-6 二批升格（深审 2026-09-25）：nmc 编码双 bench + gsoe 两热路，均有实测现值
+[[run_bench]]
+alias = "nmc_parallel_encoding"
+crate = "nmc-encoder"
+bench = "parallel_encoding"
+
+[[run_bench]]
+alias = "nmc_encoding"
+crate = "nmc-encoder"
+bench = "encoding_benchmark"
+
+[[run_bench]]
+alias = "three_factor"
+crate = "gsoe-evolution"
+bench = "three_factor_selector_bench"
+
+[[run_bench]]
+alias = "formal_gate"
+crate = "gsoe-evolution"
+bench = "formal_gate_eval"
+
+# ADR-192：L2 分层检索 10k 档入 CI 阈值门（100k 档为 dev-only 手动取数，
+# 需 CHIMERA_HNSW_BENCH_FULL=1，缘由见 benches/hnsw_tiered.rs::bench_sizes 注）
+[[run_bench]]
+alias = "hnsw_tiered"
+crate = "mlc-engine"
+bench = "hnsw_tiered"
 

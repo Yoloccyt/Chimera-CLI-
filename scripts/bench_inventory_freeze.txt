@@ -12,13 +12,21 @@
 # 迁移来源：scripts/check_perf_redlines.ps1 $devOnly（78 条），
 #           2026-08-31 机械抽取，零人工转录。
 # acb-governor|governor_bench 行已随 ADR-182 退役删除(2026-09-16 M10,crate 删除,只减不增)
-auto-dpo|dpo_bench|dev-only|online-DPO 训练环节开发基准,仅实验用
-auto-dpo|judge_retry|dev-only|训练重试路径实验基准确认
-auto-dpo|rhi_channel_a_bench|dev-only|RHI Channel-A 复用探索通道实验
+# auto-dpo|{dpo_bench,judge_retry,rhi_channel_a_bench} 与 model-router|{hot_reload_bench,
+#   moe_bench,registry_bench} 六行已删除(2026-09-20,两 crate 目录已物理移除,
+#   登记条目不得比它所登记的 bench 活得更久 —— 同 acb-governor 先例)
+# event-bus|bus_bench 一行已删除(2026-09-21,取证见 docs/reports/gate-trust-B0-2026-09-20.md §89.11)。
+#   原由是这行与自身矛盾:它声明 dev-only「无 SLO」并称「覆盖在 cross_layer 之下」,但
+#   perf_thresholds.toml 的 run_bench 同时有 {alias=bus_bench, crate=event-bus, bench=bus_bench}
+#   与 thresholds_ns.bus_bench + path_keywords.bus_bench(3 个关键词) —— 它本来就是受 CI 阈值门守护的
+#   registered 态。classify() 判定序 gated→registered→dev-only 把这条旧声明遮蔽了,所以门看不见矛盾
+#   (改前本表 75 行而门自报 dev-only=74,差的就是这一处双重声明)。
+#   按本文件自订约定「删除一行 = 该 bench 升格为受门禁守护」—— 它早已升格,这行是升格时漏撤的旧账。
+#   删除后 I6 下限(len>=70)余量 75→74 仍满足;改前/改后 --selftest 输出逐字节相同,
+#   --static-only 的 rc/I5/I7/VERDICT 全部不变,唯一 stdout 差异是 I6 自报数 (75)→(74)。
 chimera-cli|overwindow_bridge|dev-only|overwindow 桥接开发探针,无 SLO
 chimera-cli|quest_orchestrator_bench|dev-only|Quest 编排黑盒探索基准
 chimera-cli|composition_root_bench|dev-only|C12 组合根装配延迟基线(build/build_app_server),启动路径探针,不入四表阈值
-chimera-mas|pdca_bench|dev-only|PDCA 循环闭环实验基准
 chimera-tui|data_pipeline_bench|dev-only|数据管线开发基准,已由 writer/v3 覆盖主链
 chimera-tui|panels_scale_bench|dev-only|面板规模压力探索基准
 chimera-tui|v3_output_bench|dev-only|v3 输出渲染补充基准,主链已注册 v3_pipeline
@@ -42,7 +50,6 @@ chimera-tui|snapshot_rebuild_cost_bench|dev-only|H-b 前提量化与反证据基
 # 唤醒原语(select! 桥接),属独立批次(含 TUI 真跑验证)。
 chimera-tui|tui_update_cost_bench|dev-only|消费侧 update() 成本基线:revision 短路 5ns vs 全量对齐 33.9µs(真实规模快照,headless TestBackend 无终端依赖),支撑感知延迟路径裁定,无 SLO 阈值
 chtc-bridge|bridge_benchmark|dev-only|CHTC 桥接开发验证基准
-cmt-tiering|hot_lru|dev-only|Hot LRU 层级开发基准
 cmt-tiering|pragma_capable_bench|dev-only|PixelRAG 能力探测开发基准
 cmt-tiering|rl_migration_bench|dev-only|RL 迁移路径实验(RL 闸门:仅规划外观)基准
 cmt-tiering|rl_replay_sample|dev-only|RL 采样实验基准,规格未冻结
@@ -50,7 +57,6 @@ csn-substitutor|substitutor_benchmark|dev-only|替换器语义测量基准(主�
 decay-engine|decay_parallel|dev-only|衰减并行路径补充基准,无独立 SLO
 decb-governor|budget_compute|dev-only|预算计算开发基准
 efficiency-monitor|monitor_benchmark|dev-only|监控器审计路径开发基准
-event-bus|bus_bench|dev-only|事件总线吞吐基准(覆盖在 cross_layer 之下)
 event-bus|bus_credit_bench|dev-only|信用记账路径开发基准
 event-bus|bus_shard_bench|dev-only|分片职责 benchmark,无 KPI 目标
 event-bus|pattern_index_bench|dev-only|模式索引路径开发基准
@@ -60,29 +66,17 @@ faae-router|operator_select|dev-only|算子选择开发基准
 faae-router|route|dev-only|路由热路径补充开发基准
 gsoe-evolution|channel_b_benchmark|dev-only|Channel-B 进化通道实验基准
 gsoe-evolution|evolution_benchmark|dev-only|进化引擎整体开发基准
-gsoe-evolution|formal_gate_eval|dev-only|形式化闸门评估开发基准
-gsoe-evolution|three_factor_selector_bench|dev-only|三因子父本选择(§10.2)基准,ADR-170 收录条款配套,2026-09-02 新增
-hcw-window|coarse_recall|dev-only|粗召回窗口开发基准(分类在 compress 之下)
-hcw-window|fine_recall|dev-only|细召回窗口开发基准
 hcw-window|parallel_compress|dev-only|并行压缩补充基准
-hcw-window|probe_select|dev-only|探针选择开发基准
-hcw-window|rerank_fill|dev-only|重排填充路径开发基准
 hcw-window|shadow_recall_1m|dev-only|1M 影子召回压力开发基准
 hcw-window|streaming_fill|dev-only|流式填充开发基准
 hcw-window|window_affinity|dev-only|窗口亲和度开发基准
 kvbsr-router|route|dev-only|KVBSR 路由补充开发基准
 mcp-mesh|mesh_benchmark|dev-only|Mesh 消息吞吐开发基准
-mlc-engine|memory_graph_edges|dev-only|记忆构图边基准,无独立 KPI
-model-router|hot_reload_bench|dev-only|模型热加载开发基准
-model-router|moe_bench|dev-only|MoE 门控开发基准
-model-router|registry_bench|dev-only|路由注册表开发基准
 mtpe-executor|predict|dev-only|MTPE 预测路径开发基准
 nexus-core|bridge_bench|dev-only|桥接层开发基准
 nexus-core|clv_bench|dev-only|CLV 客户生命周期价值计算开发基准
 nexus-core|clv_cosine|dev-only|CLV 余弦专项基准
 nexus-core|hts_bench|dev-only|HTS 哈希时间序列开发基准
-nmc-encoder|encoding_benchmark|dev-only|NMC 编码整体基准
-nmc-encoder|parallel_encoding|dev-only|并行编码开发基准
 omega-learner|per_buffer_sample|dev-only|per-buffer 采样实验基准
 omega-learner|r1_recall_quota|dev-only|R1 召回配额开发基准
 omega-learner|regret_collection|dev-only|后悔值收集实验基准
@@ -90,7 +84,6 @@ omega-learner|replay_sample|dev-only|回放采样实验基准
 omega-learner|s4_select|dev-only|S4 状态选择基准,非生产热路径
 omega-learner|s9_bench|dev-only|S9 综合基准,主链已由 linucb_select 守护
 osa-coordinator|osa_parallel_bench|dev-only|OSA 并行基准,主链已由 compute_masks 守护
-osa-coordinator|parallel_vs_sequential|dev-only|串并行对比实验基准
 parliament|immune_system_probe|dev-only|免疫系统探针基准,主链已有 immune_probe 守护
 parliament|variant_route|dev-only|变体路由实验基准
 pvl-layer|gtpo_rlvr_bench|dev-only|RL 变体训练前端基准(RL 闸门:仅规划外观)

@@ -128,13 +128,36 @@ jobs:
           run_bench tiering           cargo bench -p lsct-tiering --bench tiering_benchmark
           run_bench gather            cargo bench -p gqep-executor --bench gather
           run_bench produce_verify    cargo bench -p pvl-layer --bench produce_verify
+          # ADR-192 附带：probe_select 升为 registered（消除 cache_hit 串台假红），I7 双源配对
+          run_bench probe_select      cargo bench -p hcw-window --bench probe_select
           run_bench command_validator cargo bench -p seccore --bench command_validator_bench
           # ===== C6(2026-09-04): KPI 首次入 CI 强制门 + L1 热路径基线 =====
           # immune_probe=KPI-03(宣称 708ns,本地实测 907ns 同量级实证);
           # rhi_judge=KPI-04(宣称 44µs,本地实测 7.5µs);bus_bench=publish fan-out。
           run_bench immune_probe      cargo bench -p chimera-mas --bench immune_probe
-          run_bench rhi_judge         cargo bench -p auto-dpo --bench rhi_judge
+          # (rhi_judge run_bench 已于 2026-09-25 摘除: 其宿主 crate auto-dpo 于 38c72e6 物理删除，
+          #  但 perf_thresholds.toml 2026-09-20 已删其键、此侧漏清→ I7 幽灵。见 ADR-190)
           run_bench bus_bench         cargo bench -p event-bus --bench bus_bench
+          # P-6 升格（深审 2026-09-25）：cmt 热层 LRU，本地实测 median 45µs
+          # （docs/reports/perf-slo-2026-09-25.md §1.2），与 perf_thresholds.toml 三表同步
+          run_bench hot_lru           cargo bench -p cmt-tiering --bench hot_lru
+          # P-6 二批（深审 2026-09-25）：nmc 双 bench + gsoe 两热路（实测见 perf-slo-2026-09-25.md）
+          run_bench nmc_parallel_encoding cargo bench -p nmc-encoder --bench parallel_encoding
+          run_bench nmc_encoding        cargo bench -p nmc-encoder --bench encoding_benchmark
+          run_bench three_factor        cargo bench -p gsoe-evolution --bench three_factor_selector_bench
+          run_bench formal_gate         cargo bench -p gsoe-evolution --bench formal_gate_eval
+          # P-6 终批 6 项（深审 2026-09-26；pdca/memory_graph 磁盘形态根因已查实：
+          # criterion 3.x 斜杠组名转义下划线单层目录，关键词按磁盘实形书写）
+          run_bench coarse_recall_p95   cargo bench -p hcw-window --bench coarse_recall
+          run_bench fine_recall_top     cargo bench -p hcw-window --bench fine_recall
+          run_bench rerank_fill_top     cargo bench -p hcw-window --bench rerank_fill
+          run_bench pdca_act            cargo bench -p chimera-mas --bench pdca_bench
+          run_bench memory_graph_recall cargo bench -p mlc-engine --bench memory_graph_edges
+          run_bench osa_sequential_baseline cargo bench -p osa-coordinator --bench parallel_vs_sequential
+          # ADR-192（2026-09-26）：mlc L2 分层检索 10k 档（立项判据：现值 4.117ms 越
+          # 4ms redline，分层后 ≤2ms）。与 perf_thresholds.toml 三表同批（I7 机器断言兜底）；
+          # 100k 档属 dev-only 手动取数（CHIMERA_HNSW_BENCH_FULL=1），不入 CI 日跑。
+          run_bench hnsw_tiered        cargo bench -p mlc-engine --bench hnsw_tiered
 
       - name: Assert thresholds
         # WHY 用 Python 解析 criterion 的 estimates.json:
@@ -223,6 +246,11 @@ jobs:
               "compress":           50_000,        # < 50µs（实测 9.6µs）
               "compute_masks":      1_500_000,     # < 1.5ms（实测 583µs）
               "delegation":         40_000_000,    # < 40ms（实测 16.2ms）
+              # ADR-192 附带（性能门精度）：probe_select 由 dev-only 升为 registered，必须排在
+              # cache_hit 之前——dict 插入序 = first-match-wins 判定序，否则其值组路径
+              # `score_cache_hit_vs_recompute/*`（内嵌 `cache_hit` 子串）仍会被误归给 cache_hit。
+              # 阈值 = 实测最重组 probe_score_throughput/1000_blocks 338.5µs 的 ~1.5×；与 perf_thresholds.toml 三表同批。
+              "probe_select":       500_000,       # < 500µs（同轮实测：88.1µs / 338.5µs / 96.6µs / 0.4ns，取最重留 1.5×）
               "cache_hit":          10_000,        # < 10µs（实测 581ns，ns 级放大防 CI 抖动）
               "tiering":            500_000,       # < 500µs（实测 250µs）
               "gather":             100_000_000,   # < 100ms 保留兜底（本地离群不可信，待 CI 首跑收紧）
@@ -236,7 +264,18 @@ jobs:
               # sigmoid 先例放大防 CI 抖动; rhi_judge 实测 7.5µs（宣称 44µs 实测更快）;
               # bus_bench 实测 55µs（publish fan-out/批量对比）。
               "immune_probe":       10_000,        # < 10µs（KPI-03）
-              "rhi_judge":          50_000,        # < 50µs（KPI-04）
+              "hot_lru":            200_000,       # < 200µs（P-6 升格：实测 45µs x4.4 余量）
+              "nmc_parallel_encoding": 10_000_000, # < 10ms（实测并行 3.27ms/串行 21.2ms）
+              "nmc_encoding":       200_000,       # < 200µs（实测 text 最长输入 37.1µs）
+              "three_factor":       50_000,        # < 50µs（实测 64 候选 10.7µs）
+              "formal_gate":        2_000,         # < 2µs（实测 256 命题 0.2µs）
+              "coarse_recall_p95":  8_000_000,     # < 8ms（实测 p95 组 1.45ms x5.5）
+              "fine_recall_top":    20_000_000,    # < 20ms（实测 10000_blocks 5.82ms x3.4）
+              "rerank_fill_top":    30_000_000,    # < 30ms（实测 5000_blocks 组，取 p95×8 保守）
+              "pdca_act":           20_000,        # < 20µs（实测 stressed <1µs/8experts 1.9µs x10；磁盘键用下划线转义形）
+              "memory_graph_recall": 4_000_000,    # < 4ms（实测 recall_2k 798µs x5；建边 443ms 量级仍 dev-only 不入 CI）
+              "osa_sequential_baseline": 1_000_000, # < 1ms（实测串行 5 掩码 149µs x6.7）
+              # (rhi_judge 阈值已随 auto-dpo 删除同步摘除，见 ADR-190)
               "bus_bench":          200_000,       # < 200µs（L1 热路径）
               # 第三轮冗余审计 批 B/C:L0 共享纯函数。阈值为本地静默态实跑中位数加余量
               # (2026-08-30,Windows GNU release;ns/µs 级门槛在共享 runner 上噪声敏感,
@@ -311,6 +350,9 @@ jobs:
               "compress":           ["100k_to_32k"],
               "compute_masks":      ["compute_all_masks"],
               "delegation":         ["delegation_fanout"],
+              # ADR-192 附带：顺序与阈值字典一致（先于 cache_hit）；`hit_vs_recompute` 同时
+              # 接走污染的两个值组，且与 `cache_hit` 互不为子串（I2 双向已核），不反向遮蔽真组。
+              "probe_select":       ["probe_window_select/", "probe_score_throughput/", "hit_vs_recompute"],
               "cache_hit":          ["cache_hit"],
               "tiering":            ["apply_decision", "handle_quest_created"],
               "gather":             ["gather", "entangle_alone"],
@@ -326,7 +368,18 @@ jobs:
               # C6 新增（与 scripts/perf_thresholds.toml [path_keywords] 同步，
               # 已交叉核验无子串冲突，满足 I2）
               "immune_probe":        ["immune_probe"],
-              "rhi_judge":           ["rhi_judge"],
+              "hot_lru":             ["hot_lru"],
+              "nmc_parallel_encoding": ["nmc_parallel_encoding/parallel_1200"],
+              "nmc_encoding":        ["text_encoding/long_10kb"],
+              "three_factor":        ["three_factor_select_64_candidates"],
+              "formal_gate":         ["formal_gate/evaluate/256"],
+              "coarse_recall_p95":   ["coarse_recall_p95_latency/p95_latency"],
+              "fine_recall_top":     ["fine_recall_10000_blocks"],
+              "rerank_fill_top":     ["rerank_fill_5000_blocks"],
+              "pdca_act":            ["pdca_act_stressed", "pdca_act_with_feedback_8_experts"],
+              "memory_graph_recall": ["memory_graph_recall_2k_depth2"],
+              "osa_sequential_baseline": ["sequential_compute_5_masks"],
+              # (rhi_judge path_keyword 已随 auto-dpo 删除同步摘除，见 ADR-190)
               "bus_bench":           ["single_publish_latency", "concurrent_subscribe_throughput", "publish_batch_vs_serial"],
           }
 

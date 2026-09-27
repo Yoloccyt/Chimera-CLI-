@@ -9,6 +9,7 @@
 //! 使用内存 [`MockTransport`]（管道对），完整走 JSON-RPC v1 帧编解码
 //! （`RpcCodec`）——不直接调用 server 方法，验证协议面（内闭外开 T6）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use nexus_app_server::{AppServer, AppServerConfig, RpcCodec, RpcNotification, RpcResponse};
 use nexus_contracts::app::{AppOp, AppTokenUsage, ThreadId, UserInput};
 use std::collections::VecDeque;
@@ -85,9 +86,17 @@ async fn drive_roundtrip(client: &MockClient, server: &AppServer) {
 }
 
 /// 从客户端收件箱解析下一帧（跳过非目标帧）
+///
+/// WHY panic 路径带诊断上下文且不依赖空转：inbox 耗尽属测试前提破坏——
+/// 旧版此处在调试点 panic 会经由 libtest catch_unwind + 当前单线程 runtime
+/// 交互路径引发 harness 挂死（2026-09-26 workspace 全量终判实锤，
+/// 单 crate 跑不可见），现在先快照帧文本再断言，失败信息可直接定位
 fn next_notification(client: &MockClient) -> nexus_contracts::app::AppEvent {
     loop {
-        let frame = client.recv_frame().expect("应有一帧");
+        // 加锁临界区仅取帧（走 recv_frame：锁内无解析/断言，防锁持有期 panic 放大）
+        let Some(frame) = client.recv_frame() else {
+            panic!("收件箱已耗尽仍等待 app.event 推送帧（测试前提破坏：期望的事件序列未全部到达）");
+        };
         if let Ok(notif) = serde_json::from_str::<RpcNotification>(&frame) {
             if notif.method == "app.event" {
                 return serde_json::from_value(notif.params).expect("AppEvent 反序列化成功");
