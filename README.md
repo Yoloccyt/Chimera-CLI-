@@ -3,6 +3,10 @@
 面向开发者的命令行 AI 编程智能体，代号 **NEXUS-OMEGA**。Rust workspace（多 crate），架构为 L0 契约层 + L1–L10 十层，依赖方向受铁律约束。
 
 > 架构与计数的权威源不在本文件：架构看 `docs/architecture/CODE_WIKI.md`，版本演进看 `CHANGELOG.md`，crate 清单看 `Cargo.toml`（`workspace.members`），ADR 看 `docs/architecture/adr_index.md`。本文件不登记任何计数，避免漂移。
+>
+> **架构图（派发生成，禁手改）**：`docs/architecture/views/architecture.svg`（层带 × crate 胶囊 × 域色带 × 域间边矩阵），
+> 同目录另有 `dependency.dot`（完整内部依赖图）、`layers.txt` / `domains.txt` / `layer_contracts.txt` / `report.txt`；
+> 再生成 `python scripts/emit_architecture_views.py --write`，一致性由 `--verify`（G-70）逐字节守护。
 
 ## 前置条件
 

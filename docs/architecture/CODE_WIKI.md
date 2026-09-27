@@ -92,6 +92,10 @@
 
 ## 2. 十层架构详解
 
+> **图与派生物（禁手改）**：本章的机器可读版图在 `docs/architecture/views/`——`architecture.svg`（层带 × crate 胶囊 × 域色带 × 域间边矩阵，给人看）、
+> `dependency.dot`（完整非可选内部依赖图，向上边标红）、`layers.txt` / `domains.txt` / `layer_contracts.txt`（逐 crate BACKEND/PROD/CONS/MATURITY）。
+> 这些派生物与本节同源（`LAYER_MAP` + `cargo metadata`），由 `scripts/emit_architecture_views.py --write` 生成、`--verify` 逐字节门禁（G-70）；如本节与派生物不一致，以派生物为准并修本节。
+
 ### 2.1 分层映射 (L1→L10)
 
 ```

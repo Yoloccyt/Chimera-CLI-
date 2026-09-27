@@ -24,6 +24,10 @@ Views (`--emit`):
   contracts  per-layer role + interface contract rollup, read from each crate's own
              CRATE-CONTRACT block (BACKEND / PRODUCERS / CONSUMERS / MATURITY / ROLE);
              a member with no block still gets a NO-CONTRACT line -- never dropped
+  svg        the architecture diagram (layer bands x crate chips + domain rail +
+             inter-domain edge matrix) for human reading; derived from the SAME
+             `layers`/`edges` as every other view, so "draw the diagram" cannot
+             become the hand-maintained second topology the design doc forbids
 
 `--write` renders every view into docs/architecture/views/ and `--verify` byte-compares
 what is on disk against the same renderer (gate: G-70). Content carries NO timestamp so
@@ -130,9 +134,134 @@ def _render_dot(layers, edges):
 
 def _render_report(layers, edges):
     bands = group_by_layer(layers)
-    return ["[REPORT] members=%d layers=%d domains=%d edges=%d upward=%d"
+    return ["[REPORT] members=%d layers=%d domains=%d edges=%d upward=%d"       
             % (len(layers), len(bands), len(DOMAINS), len(edges),
                len(upward_edges(edges, layers)))]
+
+
+# ============================================================
+# svg view -- the human-readable architecture diagram
+# ============================================================
+# WHY generated and not drawn by hand: `CHIMERA_架构减法与职责重组设计方案_v2.30.md`
+# 2.2 abolishes hand-maintained topologies (three documented deaths of that shape in
+# this repo). A picture of the architecture is the single most copy-paste-prone
+# artifact there is, so it is emitted from the same `layers`/`edges` the other views
+# use and locked by the same byte-exact `--verify` (G-70).
+SVG_W = 1240
+SVG_MARGIN = 28
+SVG_ROW_H = 56
+SVG_ROW_GAP = 6
+SVG_TOP = 172
+SVG_RAIL_W = 300
+# Per-band tint; the set is fixed by DOMAINS, so a new band means a new colour here.
+BAND_FILL = {"D0": "#eef2ff", "D1": "#ecfdf5", "D2": "#fff7ed", "D3": "#eff6ff"}
+BAND_LINE = {"D0": "#c7d2fe", "D1": "#a7f3d0", "D2": "#fed7aa", "D3": "#bfdbfe"}
+
+
+def _esc(text):
+    """XML text escaping -- crate names are [a-z0-9-] today, but the emitter must not
+    depend on that staying true."""
+    return (text.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _svg_chip(x, y, text, fill="#ffffff", stroke="#d1d5db"):
+    """One crate chip: a rounded rect sized to the label, left-aligned at `x`."""
+    w = 14 + int(len(text) * 7.4)
+    return [
+        '  <rect x="%d" y="%d" width="%d" height="30" rx="6" fill="%s" '
+        'stroke="%s"/>' % (x, y, w, fill, stroke),
+        '  <text x="%d" y="%d" font-size="13" fill="#111827">%s</text>'
+        % (x + 7, y + 20, _esc(text)),
+    ]
+
+
+def _render_svg(layers, edges):
+    bands = group_by_layer(layers)
+    ordered = sorted(bands)
+    layer_rows = sorted(ordered, reverse=True)  # L10 on top, L0 (contracts) at bottom
+    row_y = {layer: SVG_TOP + i * (SVG_ROW_H + SVG_ROW_GAP)
+             for i, layer in enumerate(layer_rows)}
+    rail_x = SVG_W - SVG_MARGIN - SVG_RAIL_W
+    band_x0, band_x1 = SVG_MARGIN + 56, rail_x - 20
+    body_h = len(layer_rows) * (SVG_ROW_H + SVG_ROW_GAP)
+    mat = domain_edge_matrix(edges, layers)
+    up = upward_edges(edges, layers)
+    total_h = SVG_TOP + body_h + 208
+
+    out = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" '
+           'width="%d" height="%d" font-family="Helvetica, Arial, sans-serif">'
+           % (SVG_W, total_h, SVG_W, total_h),
+           '  <desc>GENERATED artifact. Regenerate with '
+           '`python scripts/emit_architecture_views.py --write`; `--verify` fails on '
+           'any hand edit. Numbers below come from `layers.txt` / `domains.txt` / '
+           '`dependency.dot` in this same directory.</desc>',
+           '  <rect x="0" y="0" width="%d" height="%d" fill="#ffffff"/>'
+           % (SVG_W, total_h),
+           '  <text x="%d" y="46" font-size="24" font-weight="bold" fill="#111827">'
+           'Chimera CLI (NEXUS-OMEGA) architecture — emitted view</text>' % SVG_MARGIN,
+           '  <text x="%d" y="72" font-size="13" fill="#4b5563">%d crates · %d layers '
+           '· %d domains · %d non-optional internal edges · upward-edge violations '
+           '(iron law) = %d</text>'
+           % (SVG_MARGIN, len(layers), len(bands), len(DOMAINS), len(edges), len(up)),
+           '  <text x="%d" y="92" font-size="13" fill="#4b5563">Dependencies may only '
+           'point down (L(N)→L(N−1)) or sideways; cross-layer communication goes '
+           'through event-bus (L1) or mcp-mesh (L10) only.</text>' % SVG_MARGIN,
+           '  <line x1="%d" y1="108" x2="%d" y2="108" stroke="#e5e7eb"/>'
+           % (SVG_MARGIN, SVG_W - SVG_MARGIN)]
+
+    # Domain bands first (background), then chips on top of them.
+    for name, label, lo, hi in DOMAINS:
+        rows = [ly for ly in layer_rows if lo <= ly <= hi]
+        if not rows:
+            continue
+        y0 = min(row_y[ly] for ly in rows) - 6
+        y1 = max(row_y[ly] for ly in rows) + SVG_ROW_H + 6
+        internal = sum(v for (a, b), v in mat.items() if a == name and b == name)
+        members = sum(1 for _c, l in layers.items() if lo <= l <= hi)
+        out += [
+            '  <rect x="%d" y="%d" width="%d" height="%d" rx="8" fill="%s" '
+            'stroke="%s"/>' % (band_x0, y0, band_x1 - band_x0, y1 - y0,
+                                BAND_FILL[name], BAND_LINE[name]),
+            '  <rect x="%d" y="%d" width="6" height="%d" rx="3" fill="%s"/>'
+            % (band_x0 + 8, y0 + 6, y1 - y0 - 12, BAND_LINE[name]),
+            '  <text x="%d" y="%d" font-size="13" font-weight="bold" fill="#374151">'
+            '%s %s</text>'
+            % (rail_x, y0 + 22, name, _esc(label)),
+            '  <text x="%d" y="%d" font-size="12" fill="#6b7280">L%d-L%d · %d crates '
+            '· %d intra-domain edges</text>'
+            % (rail_x, y0 + 40, lo, hi, members, internal),
+        ]
+
+    for layer in layer_rows:
+        y = row_y[layer]
+        out.append('  <rect x="%d" y="%d" width="56" height="32" rx="6" '
+                   'fill="#f3f4f6" stroke="#d1d5db"/>' %
+                   (SVG_MARGIN, y + 12))
+        out.append('  <text x="%d" y="%d" font-size="14" font-weight="bold" '
+                   'fill="#374151">L%d</text>' % (SVG_MARGIN + 14, y + 34, layer))
+        x = band_x0 + 26
+        for crate in bands[layer]:
+            out += _svg_chip(x, y + 13, crate)
+            x += 14 + int(len(crate) * 7.4) + 10
+
+    # Footer: inter-domain edges (the aggregate the chips cannot show) + provenance.
+    foot_y = SVG_TOP + body_h + 26
+    out.append('  <text x="%d" y="%d" font-size="13" font-weight="bold" '
+               'fill="#374151">Inter-domain edges</text>' % (SVG_MARGIN, foot_y))
+    dy = foot_y + 20
+    for (a, b), v in sorted(mat.items()):
+        if a != b:
+            out.append('  <text x="%d" y="%d" font-size="12" fill="#4b5563">'
+                       '%s→%s %d</text>' % (SVG_MARGIN, dy, a, b, v))
+            dy += 18
+    out.append('  <text x="%d" y="%d" font-size="12" fill="#6b7280">'
+               'Full edge list: dependency.dot · per-crate BACKEND/MATURITY: '
+               'layer_contracts.txt (all generated in scripts/emit_architecture_views.py '
+               '--write; --verify byte-compares)</text>'
+               % (SVG_MARGIN + 220, foot_y + 20))
+    out.append('</svg>')
+    return out
 
 
 def _count_prefix(value):
@@ -170,10 +299,28 @@ VIEWS = (("layers", _render_layers, "layers.txt", "#"),
          ("domains", _render_domains, "domains.txt", "#"),
          ("dot", _render_dot, "dependency.dot", "//"),
          ("report", _render_report, "report.txt", "#"),
-         ("contracts", _render_contracts, "layer_contracts.txt", "#"))
+         ("contracts", _render_contracts, "layer_contracts.txt", "#"),
+         ("svg", _render_svg, "architecture.svg", "<!--"))
 RENDERERS = {name: fn for name, fn, _f, _c in VIEWS}
 COMMENT_TOKEN = {name: tok for name, _fn, _f, tok in VIEWS}
 BANNER = "GENERATED by scripts/emit_architecture_views.py --write -- do NOT hand-edit."
+
+
+def _banner_line(view):
+    """Banner in the artifact's OWN comment syntax.
+
+    WHY not the naive `token + BANNER` for every view: XML forbids `--` inside
+    comments, so an SVG comment carrying the verbatim banner (which contains two
+    `--write`-style runs) would make the file unparseable. The SVG banner therefore
+    folds each `--` run to a single `-` and closes the comment on the same line; the
+    exact regenerate command stays available verbatim in the file's <desc> element.
+    For `#` / `//` tokens the output is byte-identical to the previous inline form,
+    so the existing views keep their byte-exact --verify contract.
+    """
+    tok = COMMENT_TOKEN[view]
+    if tok == "<!--":
+        return "<!-- %s -->" % BANNER.replace("--", "-")
+    return "%s %s" % (tok, BANNER)
 
 
 def render(view, layers, edges):
@@ -181,8 +328,7 @@ def render(view, layers, edges):
     fn = RENDERERS.get(view)
     if fn is None:
         return None
-    head = "%s %s" % (COMMENT_TOKEN[view], BANNER)
-    return "\n".join([head] + fn(layers, edges)) + "\n"
+    return "\n".join([_banner_line(view)] + fn(layers, edges)) + "\n"
 
 
 def views_dir():
@@ -348,6 +494,18 @@ def selftest():
         rc_w = write_views(layers, meta, vd)
         rc_v = verify_views(layers, meta, vd)
         checks.append(("--write 后 --verify 判绿", rc_w == 0 and rc_v == 0))
+        # svg 视图的牙齿：必须是良构 XML。XML 注释里禁止出现 `--`，而 banner 原文带两个
+        # `--` 序列 —— 这条断言守的正是 _banner_line() 的转义那一行（转义一回归，
+        # 视图仍会写盘、但任何 XML 消费者都会拒收，属于静默半死形态）。
+        import xml.dom.minidom
+        try:
+            xml.dom.minidom.parseString(
+                open(os.path.join(vd, "architecture.svg"),
+                     encoding="utf-8").read())
+            svg_well_formed = True
+        except Exception:  # noqa: BLE001 -- any parse failure is the same red
+            svg_well_formed = False
+        checks.append(("svg 视图是良构 XML（banner 注释转义的牙齿）", svg_well_formed))
         first = {f: open(os.path.join(vd, f), encoding="utf-8", newline="").read()
                  for _v, _fn, f, _t in VIEWS}
         write_views(layers, meta, vd)
