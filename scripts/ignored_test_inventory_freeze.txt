@@ -66,6 +66,7 @@ kvbsr-router|crates/kvbsr-router/tests/scale.rs#test_scale_speedup_vs_full_scan|
 mca-gateway|crates/mca-gateway/tests/token_efficiency_bench.rs#run_stress_matrix|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
 mcp-mesh|crates/mcp-mesh/benches/mesh_benchmark.rs#bench_concurrent_100_transactions|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
 mcp-mesh|crates/mcp-mesh/tests/integration.rs#test_1000_concurrent_transactions_no_deadlock|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+mlc-engine|crates/mlc-engine/tests/hnsw_tiered.rs#test_tiered_recall_quality_at_100k_manual_scale|manual-only|100k 建图 release 实测 16.1-21.0s(debug 再乘 4-8)+图侧向量副本 ~214MB，超单 target 120s 时长红线与 CI 内存预算(ADR-192 §4 代价 1/2)；取数纪律=静默态本地 `--release -- --ignored` 手动跑，与 hnsw_tiered bench 的 CHIMERA_HNSW_BENCH_FULL 同口径|wired: no
 mlc-engine|crates/mlc-engine/tests/semantic.rs#test_l2_recall_performance_100_entries|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
 mlc-engine|crates/mlc-engine/tests/working_memory.rs#test_l0_evict_lru_single_call_o1|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
 mlc-engine|crates/mlc-engine/tests/working_memory.rs#test_l0_lru_eviction_o1_performance|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily

@@ -169,6 +169,21 @@ fn corpus_10k() -> &'static Corpus {
     })
 }
 
+/// 100k 条目档（spec Phase 2 integration 的字面项）语料 + 默认分层实例
+///
+/// 仅由 `#[ignore]` 的手动测消费（建图与驻留成本见该测注释）；`OnceLock` 共享
+/// 保证同进程内只构造一次。
+fn corpus_100k() -> &'static Corpus {
+    static CORPUS: OnceLock<Corpus> = OnceLock::new();
+    CORPUS.get_or_init(|| {
+        let n = 100_000;
+        let (vectors, ids) = make_corpus(n);
+        let mem = SemanticMemory::new(n);
+        fill(&mem, &vectors, &ids);
+        Corpus { vectors, ids, mem }
+    })
+}
+
 /// 分数制三档质量统计（4096 与 10k 两档共用，避免两处各写一份判据而漂移）
 ///
 /// 返回 `(id_recall, 分数容差 recall, 质量比)`；过程中同时硬断言
@@ -220,8 +235,9 @@ fn quality_stats(corpus: &Corpus, queries: u64) -> (f64, f64, f64) {
 fn test_tiered_recall_quality_at_10k_real_threshold() {
     // Spec Phase 2 integration 判据的 10k 档（真实 SLO 场景 + 默认阈值 4096）：
     // 近似层 recall@10 对精确 ground-truth 的分数制三档均须达标（ADR-192 D2b）。
-    // 100k 档因 debug 下建图十秒级 + 全量 ground-truth 扫描会击穿单 target 时长预算，
-    // 留在 benches/hnsw_tiered.rs（release 静默态，同样带硬断言）取数。
+    // 100k 档同走本测集的 `test_tiered_recall_quality_at_100k_manual_scale`（`#[ignore]`，
+    // 手动静默跑），因 debug 下建图十秒级 + 全量 ground-truth 会击穿单 target 时长预算；
+    // `benches/hnsw_tiered.rs` 的 100k 档（release 静默 + 内置硬断言）为同一口径的第二仪器。
     let corpus = corpus_10k();
     let (id_recall, tol_recall, quality) = quality_stats(corpus, 3);
     let snap = corpus.mem.hnsw_tier_snapshot().unwrap();
@@ -230,6 +246,37 @@ fn test_tiered_recall_quality_at_10k_real_threshold() {
     assert_eq!(snap.tombstones, 0);
     println!(
         "[hnsw_tiered test 10k] id-recall={id_recall:.4} tol-recall={tol_recall:.4} quality={quality:.6}"
+    );
+    assert!(quality >= 0.99, "召回质量比 {quality:.4} < 0.99");
+    assert!(tol_recall >= 0.95, "分数容差 recall {tol_recall:.4} < 0.95");
+    assert!(
+        id_recall >= 0.90,
+        "id 制 recall {id_recall:.4} < 0.90（疑似图参数/接线回归）"
+    );
+}
+
+/// 100k 档 recall@10 质量门（spec Phase 2 integration 字面项的 100k 半）
+///
+/// WHY `#[ignore]`（= 被登记的决策，不是「写了不跑」）：100k 建图 release 实测
+/// 16.1-21.0s（debug 再乘 4-8×），叠加 100k 全量 ground-truth 与图侧向量副本
+/// ≈214MB + CLV 池 ≈205MB，会击穿单 target 120s 时长红线与 CI 内存预算
+/// （ADR-192 §4 代价 1/2 的实测数值）。
+/// 取数纪律 = 静默态本地手动跑（与 `hnsw_tiered` bench 的 100k 档
+/// `CHIMERA_HNSW_BENCH_FULL=1` 同一口径）：
+/// `cargo test -p mlc-engine --release --test hnsw_tiered -- --ignored --nocapture`
+/// 归属登记：`scripts/ignored_test_inventory_freeze.txt`（manual-only）。
+#[test]
+#[ignore = "manual-only: 100k 建图 16-21s(release) 且图侧 ~214MB，超单 target 120s 与 CI 内存预算；须静默态手动跑"]
+fn test_tiered_recall_quality_at_100k_manual_scale() {
+    let corpus = corpus_100k();
+    // queries=4：每 query 一次 100k 全量 ground-truth，足够统计又不手动跑时拉长的墙钟
+    let (id_recall, tol_recall, quality) = quality_stats(corpus, 4);
+    let snap = corpus.mem.hnsw_tier_snapshot().unwrap();
+    assert!(snap.built, "100k 达阈应已建图");
+    assert_eq!(snap.live_points, corpus.mem.len().unwrap(), "图-主表一致性");
+    assert_eq!(snap.tombstones, 0);
+    println!(
+        "[hnsw_tiered test 100k] id-recall={id_recall:.4} tol-recall={tol_recall:.4} quality={quality:.6}"
     );
     assert!(quality >= 0.99, "召回质量比 {quality:.4} < 0.99");
     assert!(tol_recall >= 0.95, "分数容差 recall {tol_recall:.4} < 0.95");
