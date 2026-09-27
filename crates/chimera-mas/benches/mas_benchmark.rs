@@ -38,7 +38,7 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
@@ -607,19 +607,30 @@ fn bench_50agent_mem_peak(c: &mut Criterion) {
 /// 调度器出队延迟基准 — 证伪 best_index 线性扫描 + Vec::remove 的 O(n)
 ///
 /// 队列规模 10/100/1000/10000,混合四档优先级。dequeue 是破坏性操作,
-/// 用 iter_batched 每次重建满队列后出一个,隔离 setup 开销。
+/// 每次需从满队列开始,故用 `iter_custom` 手工圈表。
+///
+/// WHY 不用 iter_batched(2026-09-27 定性):该 API 只把 setup 排除在计时窗外,
+/// 闭包返回时 `sched` 的 **drop 仍在计时内**——而 1000 条 `ScheduleEntry`(各含
+/// String 任务体与多维键)的析构本身就是数十 µs 量级,使本组长期由「队列拆解成本」
+/// 而非「出队延迟」主导:实测 80-105µs 的跑间漂(31%)与分配器状态一致,而与
+/// O(n) 扫描应有的确定性量级不符。现按 setup → start → dequeue → stop → drop 显式排序,
+/// 只计 dequeue;**阈值与关键词口径不变**(仍 `scheduler_dequeue/1000/` < 50µs)。
 fn bench_scheduler_dequeue(c: &mut Criterion) {
     let mut group = c.benchmark_group("scheduler_dequeue");
     for &size in &[10usize, 100, 1000, 10000] {
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
-            b.iter_batched(
-                // WHY 重建满队列:dequeue 移除条目,需每次从满队列开始才能稳定度量 O(n) 出队
-                || build_scheduler(size),
-                |mut sched| {
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
+                    // 每次重建满队列:dequeue 移除条目,需从满队列开始才能稳定度量
+                    let mut sched = build_scheduler(size);
+                    let start = Instant::now();
                     criterion::black_box(sched.dequeue());
-                },
-                criterion::BatchSize::SmallInput,
-            );
+                    total += start.elapsed();
+                    // sched 在此行末 drop——已出计时窗(拆解成本不计入出队延迟)
+                }
+                total
+            });
         });
     }
     group.finish();
