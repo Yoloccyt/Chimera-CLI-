@@ -15,7 +15,7 @@
 //! 主动路由。两者正交,合并会造成单文件双主题(维护者需跳跃理解),故独立成模块。
 //!
 //! # Lane 三车道(手册 §8.5)
-//! - `Critical`:17 个 Critical 事件(severity() == Critical,与 [`crate::bus::LANE_FORBIDDEN_SHARD`]
+//! - `Critical`:18 个 Critical 事件(severity() == Critical,与 [`crate::bus::LANE_FORBIDDEN_SHARD`]
 //!   一一对应,守护测试保证)→ **永远走既有 mpsc/broadcast 通道,不进分片**(红线:
 //!   Critical 分片会破坏"发布方 → 订阅方"全序投递语义与 mpsc 旁路免背压保证,
 //!   推演 9:Critical 背压 = 死锁源);
@@ -37,7 +37,7 @@
 //!
 //! # 分片键(设计文档偏差说明)
 //! 设计文档口径「无序事件按 `kind() as usize % 64`」,但本 crate 的 `NexusEvent`
-//! **没有 `kind()` 方法**(144 变体仅有 `type_name()` 字符串)。以
+//! **没有 `kind()` 方法**(变体清单以 `types.rs` 的 `NexusEvent` 为准,此处只用到 `type_name()` 字符串)。以
 //! `type_name()` 的 FNV-1a 哈希替代:`kind() as usize % 64` 与 `fnv1a(type_name) % 64`
 //! 在语义上等价(同类型事件确定性同片,不同类型按哈希分散),确定性由测试守护。
 //!
@@ -458,6 +458,7 @@ fn payload_within_limit(event: &NexusEvent) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::bus::{CRITICAL_TOTAL, LANE_FORBIDDEN_SHARD};
@@ -671,7 +672,7 @@ mod tests {
 
     #[test]
     fn test_unordered_events_spread_across_shards() {
-        // 无序事件分散:144 变体中取 32 个不同类型,分片分布不得塌缩到 1 片
+        // 无序事件分散:从 `NexusEvent` 全体变体中取 32 个不同类型,分片分布不得塌缩到 1 片
         // (设计口径 kind() % 64 的等价验证:type_name FNV-1a 哈希分散)
         let bus = ShardedEventBus::new(DEFAULT_SHARD_COUNT, SHARD_CAPACITY);
         let mut occupied = std::collections::HashSet::new();

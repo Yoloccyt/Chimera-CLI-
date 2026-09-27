@@ -51,6 +51,23 @@ PROBE_SENSITIVITY = [
     "crates/chimera-cli/tests/agent_web_search_rate_limit_e2e.rs",
 ]
 
+# 报告正文里的"文件式引用"。首字符必须允许 `_`：否则 `_exit.txt` 被截成 `exit.txt`，
+# 下面的后缀简写跳过规则会失效。
+EVIDENCE_PATTERN = r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:log|txt|json|py|sh|ps1|toml)\b"
+
+# 证据引用的**持久性分级**：只有"作者声称可复核的持久证据"找不到才判红。
+# WHY：本仓库 `.gitignore` 明确把 `tmp/` 与构建产物排除在外，criterion 的 `estimates.json`
+# 一类是**生成物**；而报告正文也常显式写明"一次性工具（落 `tmp/`，不入库，非交付物）"。
+# 上一版把这三类与真交付物混成一个"真丢失 33 条" ⇒ 该门**永远不可能绿**，
+# 而它一响就淹掉"真丢失"这个唯一有用的信号（与 RK-P40 同族：把不可满足的期望当红线）。
+EPHEMERAL_PREFIXES = ("tmp/",)
+EPHEMERAL_BASENAMES = frozenset({
+    "estimates.json", "base.json", "both.json", "median.json", "mean.json",
+    "sd.json", "t.json", "sample.json", "tukey.json", "line_data.json",
+    "criterion_summary.json",
+})
+EPHEMERAL_LINE_MARKERS = ("不入库", "一次性工具", "非交付物", "落 `tmp/")
+
 REPORTS = [
     "docs/reports/phaseR-wave1-closure.md",
     "docs/reports/phaseR-release-checklist-v2.28.0.md",
@@ -77,6 +94,38 @@ def all_basenames() -> set:
         dirs[:] = [d for d in dirs if d not in ("target", "tmp_podman", ".git", "node_modules")]
         names.update(files)
     return names
+
+
+def is_ephemeral_reference(cand: str, declared) -> bool:
+    """这条引用是不是"按政策本就该消失"的易逝物。
+
+    独立成函数是为了可测：**误分类会吞掉真丢失**，比漏分类危险得多 ⇒ 由 selftest 的负例守住。
+    """
+    base = cand.rsplit("/", 1)[-1]
+    return (cand.startswith(EPHEMERAL_PREFIXES)
+            or base in EPHEMERAL_BASENAMES
+            or cand in declared)
+
+
+def mode_selftest() -> int:
+    """分类器夹具：正例证明 tmp/生成物不再报红，负例证明持久证据仍会报红。"""
+    cases = [
+        ("tmp/phaseR_t1_test.log", frozenset(), True),
+        ("estimates.json", frozenset(), True),                # criterion 生成物
+        ("t6_equiv.py", frozenset({"t6_equiv.py"}), True),    # 报告自称"不入库"
+        ("scripts/gen_ignored_registry.py", frozenset(), False),  # 交付物目录 ⇒ 必须仍红
+        (".github/workflows/bench.yml", frozenset(), False),
+        ("verify_param.py", frozenset(), False),              # 无前缀无声明 ⇒ 交人定性
+        ("docs/reports/x.md", frozenset(), False),
+    ]
+    bad = 0
+    for cand, declared, want in cases:
+        got = is_ephemeral_reference(cand, declared)
+        ok = got == want
+        bad += 0 if ok else 1
+        print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{cand} (want_ephemeral={want} got={got})")
+    print(f"  RESULT: {'FAIL' if bad else 'PASS'} ({bad}/{len(cases)} assertion(s) violated)")
+    return 1 if bad else 0
 
 
 def main() -> int:
@@ -107,14 +156,21 @@ def main() -> int:
 
     print("\n=== 2) 报告引用的证据文件是否仍在 ===")
     live = all_basenames()
-    missing_logs = []
+    missing_permanent, ephemeral = [], []
     for rep in REPORTS:
         if not os.path.exists(rep):
             continue
         text = io.open(rep, encoding="utf-8", errors="replace").read()
-        # 首字符必须允许 `_`：否则 `_exit.txt` 被截成 `exit.txt`，下面的简写跳过规则会失效。
-        cands = set(re.findall(r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:log|txt|json|py|sh|ps1|toml)\b", text))
+        # 引用行自己声明"一次性/不入库/非交付物" ⇒ 该引用不是"可复核的持久证据"主张
+        declared_eph = {
+            c
+            for line in text.splitlines()
+            if any(m in line for m in EPHEMERAL_LINE_MARKERS)
+            for c in re.findall(EVIDENCE_PATTERN, line)
+        }
+        cands = set(re.findall(EVIDENCE_PATTERN, text))
         gone = []
+        eph_before = len(ephemeral)
         for c in sorted(cands):
             base = c.rsplit("/", 1)[-1]
             if base.startswith("_"):
@@ -123,20 +179,31 @@ def main() -> int:
                 continue
             if base in live:
                 continue
+            if is_ephemeral_reference(c, declared_eph):
+                ephemeral.append(c)
+                continue
             gone.append(c)
-        print(f"  {rep}: 引用 {len(cands)} 个文件式引用，其中 {len(gone)} 个全库找不到（真丢失）")
+        print(f"  {rep}: 引用 {len(cands)} 个文件式引用，"
+              f"其中 {len(gone)} 个持久证据找不到（红），"
+              f"{len(ephemeral) - eph_before} 个按易逝政策豁免（不判红）")
         for g in gone:
-            print(f"      丢失: {g}")
-        missing_logs += gone
+            print(f"      [PERMANENT-LOST] {g}")
+        missing_permanent += gone
 
     print("\n=== 结论 ===")
     print(f"  交付物缺失: {len(lost)}")
-    print(f"  未跟踪交付物（随时可能丢）: {len(untracked)}")
-    print(f"  报告引用但已消失的证据文件: {len(missing_logs)}")
+    print(f"  未跟踪交付物（随时可能丢，advisory 不改退出码）: {len(untracked)}")
+    print(f"  报告引用但已消失的**持久**证据: {len(missing_permanent)}")
+    print(f"  同批按易逝政策豁免的引用（tmp/、criterion 产物、报告自称不入库）: {len(ephemeral)}")
     print(f"  灵敏度对照按缺失报出: {len(sens_absent)}/{len(PROBE_SENSITIVITY)}")
-    # 退出码只受**真交付物**影响；灵敏度项永远缺失，不能把它算成失败
-    return 1 if (lost or missing_logs or sens_present) else 0
+    # 退出码只受**真交付物 + 持久证据**影响；灵敏度项永远缺失，不能把它算成失败；
+    # 易逝引用按 .gitignore 政策本就不该存在，报红会让这道门永远绿不了、
+    # 从而淹掉"真丢失"信号（RK-P40 同族教训）。
+    return 1 if (lost or missing_permanent or sens_present) else 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import sys
+    import gate_rc  # 崩溃必须退 2, 不得借 1 冒充"判过且红"（F32/F33）
+    raise SystemExit(gate_rc.run(
+        lambda: mode_selftest() if "--selftest" in sys.argv[1:] else main()))

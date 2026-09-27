@@ -13,6 +13,8 @@
 //!   `select_arm` p99 目标 < 50μs(arm.rs L23 设计假设 ~10 臂,40 臂需性能证据;
 //!   超过 50μs 才引入 θ 缓存优化——证据驱动,不预先优化)。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
+
 /// 40 臂路由选择延迟红线(μs)——MCA M3 s9 臂(ADR-068 决策 2)
 pub const P99_TARGET_US: u64 = 50;
 

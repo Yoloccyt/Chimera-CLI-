@@ -22,16 +22,22 @@
 #   (docs still say "9 categories" in crates/event-bus), workspace 43 members.
 # =============================================================================
 
-nexus_event_variants = 145
+nexus_event_variants = 146
 event_topic_variants = 10
-workspace_crates = 42
+workspace_crates = 41
 
 # --- drift registry: doc declarations currently disagreeing with the lock ---
 # format: drift = <file> | <metric> | <declared>
 # (these files are outside this mission's edit scope - registered as visible
 # debt; remove an entry when the doc it points at gets fixed)
-drift = agents.md | nexus_event_variants | 144
-# M10 2026-09-16: acb-governor 退役(ADR-182),workspace 43->42;agents.md 为
-# untracked 本地文件(md 入库政策),本分支不可修,登记为可见债;
-# 主检出修复后删除本行(与 144 条目同 lifecycle)。
-drift = agents.md | workspace_crates | 43
+#
+# Both agents.md entries DELETED 2026-09-20 (P0 doc-governance batch, main
+# checkout - the branch that filed them could not edit untracked agents.md):
+#   drift = agents.md | nexus_event_variants | 144
+#   drift = agents.md | workspace_crates | 43
+# Resolved at the root rather than by re-typing numbers: [CONFIG-REFACTOR-20260920]
+# retired in-place counts from the rule docs, so the stale 144/43 prose is being
+# replaced by pointers to Cargo.toml / CODE_WIKI, and the DECLS anchors in
+# check_doc_drift.sh moved to the facts baseline doc that still declares them.
+# A registered drift whose file no longer matches would FAIL the gate as STALE,
+# so the lines go away with the fix.

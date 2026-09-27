@@ -4,7 +4,7 @@
 //!
 //! # 设计决策(WHY)
 //! Conversation-First:Chat 模式为第一默认视图——会话流全屏、composer 底栏、
-//! statusline 三区域,与主流 Agent CLI 交互同构;既有 25 面板驾驶舱下沉为
+//! statusline 三区域,与主流 Agent CLI 交互同构;既有的多面板驾驶舱下沉为
 //! `ViewMode::Dashboard`,资产不推倒(方案 §5 设计理念)。
 //!
 //! 布局走既有 `engine::layout::flex::split` 求解器(与 Dashboard 同一求解器,
@@ -77,6 +77,7 @@ pub fn split_chat_layout(area: Rect, banner_visible: bool) -> ChatLayout {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

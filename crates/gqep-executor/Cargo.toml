@@ -44,3 +44,8 @@ serde_json = { workspace = true }
 [[bench]]
 name = "gather"
 harness = false
+
+# E-5 第五例 opt-in：生产码唯二 expect(“validate 已保证”不变量)已改 fail-soft
+# 错误 JSON(与执行失败同型)；余命中全在 cfg(test) mod/benches/tests，按惯用法 allow。
+[lints]
+workspace = true

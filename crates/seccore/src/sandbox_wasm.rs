@@ -326,8 +326,15 @@ mod wasm_impl {
 
     impl Default for WasmSandbox {
         /// 默认创建(等价于 `WasmSandbox::new()`),便于 `Default::default()` 构造
+        ///
+        /// # Panics
+        /// 当 `Engine` 创建失败(通常是系统资源不足)时 panic——
+        /// `Default` 契约无法传播 Err,显式 panic 保留诊断信息
         fn default() -> Self {
-            Self::new().expect("WasmSandbox::new 失败(Engine 创建失败,通常是系统资源不足)")
+            match Self::new() {
+                Ok(sandbox) => sandbox,
+                Err(e) => panic!("WasmSandbox 默认构造失败: {e}"),
+            }
         }
     }
 
@@ -341,6 +348,7 @@ mod wasm_impl {
     }
 
     #[cfg(test)]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
     mod tests {
         use super::*;
 
@@ -495,6 +503,7 @@ mod wasm_impl {
 pub use wasm_impl::{WasmExecutionResult, WasmSandbox};
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod backend_tests {
     use super::*;
 

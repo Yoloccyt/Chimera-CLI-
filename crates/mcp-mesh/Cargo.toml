@@ -32,6 +32,8 @@ event-bus = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
 # 临时文件/目录用于 WAL 测试(Task 0.7)
 tempfile = { workspace = true }
+# 属性测试(T-3 / 四维深审):SSRF 防线不变量生成式验证
+proptest = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]
@@ -42,3 +44,8 @@ harness = false
 [[bench]]
 name = "wal_recovery"
 harness = false
+
+# E-5 opt-in: production code measured clean (2 mock call_log poison-expects
+# rewritten to unwrap_or_else(IntoInternal)); rest are test/bench idioms.
+[lints]
+workspace = true

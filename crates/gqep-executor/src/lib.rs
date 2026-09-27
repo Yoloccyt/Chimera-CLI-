@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L7
+//! ROLE:     聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
+//! BACKEND:  memory
+//! PRODUCERS: 4 GatherCompleted,GatherTimedOut,OperationTimedOut,OrphanCallDetected
+//! CONSUMERS: 1 chimera-cli
+//! MATURITY: SIMPLIFIED-CN
+//! CRATE-CONTRACT END
 //! 聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
 //!
 //! 对应架构层:L7 Execution

@@ -12,10 +12,12 @@
 //! # 红线标记(静态 lint 锚点)
 //! 阈值常量名即 lint 的 Threshold 标记,勿重命名。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use mca_gateway::capability::{negotiate, negotiate_budget};
+use mca_gateway::cost_guard::CostGuard;
 use mca_gateway::semantic_fingerprint::semantic_fingerprint;
 use mca_gateway::sse::StreamNormalizer;
 use nexus_contracts::affinity::{
@@ -182,6 +184,28 @@ fn bench_semantic_fingerprint_10msg(c: &mut Criterion) {
     });
 }
 
+/// 成本熔断路径红线(ns)——`invoke()` 传输前的前置检查,每次外部调用必经
+pub const COST_GUARD_TARGET_NS: u64 = 50;
+
+/// 成本熔断守卫基准 —— 覆盖 `record()`(饱和累加)与 `check()`(全放行快路径)
+///
+/// WHY 入基准:`record()` 由 `fetch_add` 改为 `fetch_update` + `saturating_add`
+/// 修回绕旁路,锁前缀原子指令从 `lock xadd` 变 `lock cmpxchg` 循环。
+/// 二者都在 `invoke()` 热路径上,必须有可证伪的回归尺子,不接受"应该差不多"。
+fn bench_cost_guard(c: &mut Criterion) {
+    // 无上限守卫:只测累加路径(不触发熔断分支)
+    let recorder = CostGuard::new(None);
+    c.bench_function("cost_guard_record_one_micro", |b| {
+        b.iter(|| recorder.record(black_box(1)))
+    });
+
+    // 全放行快路径:spent 远低于上限时 check() 走 `spent < limit` 单分支返回
+    let checker = CostGuard::new(Some(u64::MAX));
+    c.bench_function("cost_guard_check_under_limit", |b| {
+        b.iter(|| black_box(checker.check(black_box(1_700_000_000))))
+    });
+}
+
 criterion_group!(
     benches,
     bench_cost_estimate,
@@ -189,5 +213,6 @@ criterion_group!(
     bench_negotiate_full,
     bench_negotiate_budget_deep,
     bench_semantic_fingerprint_10msg,
+    bench_cost_guard,
 );
 criterion_main!(benches);

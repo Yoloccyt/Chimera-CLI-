@@ -1,4 +1,5 @@
-﻿#![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
+#![forbid(unsafe_code)]
 
 //! Task 10.1 (RED): TokenBudget 预算管理失败测试
 //!

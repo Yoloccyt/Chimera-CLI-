@@ -13,7 +13,7 @@
 //! 4. CLI 参数(目前仅 `--config` 影响加载路径)
 //!
 //! ## 配置样例
-//! - 简化样例见 `examples/config.sample.yaml` / `examples/config.sample.toml`
+//! - `examples/config.sample.yaml` 是本模板的**派生物**(由 G-69 `check_config_sample_parity.py` 断言等值),勿手改;`.toml` 只是指向本文件的指针(加载器只注册 `Yaml`)
 //! - 完整模板(含全部 14 个顶层 section)由 `chimera config init` 生成
 
 // 类型定义 re-export:nexus-core 定义,L10 通过 re-export 保持向后兼容。
@@ -664,6 +664,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

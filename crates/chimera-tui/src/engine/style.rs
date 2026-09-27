@@ -197,8 +197,11 @@ impl StylePool {
         if let Some(&id) = self.index.get(&style) {
             return id;
         }
-        let id = u16::try_from(self.styles.len())
-            .expect("StylePool 唯一样式数超过 u16::MAX,疑似样式泄漏");
+        let id = match u16::try_from(self.styles.len()) {
+            Ok(id) => id,
+            // 契约(见上方 # Panics):达 u16::MAX 即样式泄漏 bug,主动暴露而非静默截断
+            Err(_) => panic!("StylePool 唯一样式数超过 u16::MAX,疑似样式泄漏"),
+        };
         self.styles.push(style);
         self.index.insert(style, id);
         id
@@ -221,6 +224,7 @@ impl StylePool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

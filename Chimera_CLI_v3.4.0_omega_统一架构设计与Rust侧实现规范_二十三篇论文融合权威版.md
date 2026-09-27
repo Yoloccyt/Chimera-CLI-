@@ -3,6 +3,24 @@
 > # 🔖 档案化权威基线核准横幅（2026-09-02 追加，2026-09-06 核验刷新，历史文档只加注不改写）
 >
 > **档案化时点**：2026-09-02（2026-09-06 核验）
+>
+> ## ⚠ 2026-09-21 追加校正（取代下方横幅中所有过期条目）
+>
+> **A. 本文档仍是「Ω₁₀/Ω₁₁ 权威定义源」——指针已复核有效**：`agents.md` §1.1 指向本文 §3.1，实测该节确在（约 204-218 行，Ω₁₀-Card / Ω₁₁-Synthesize 定义在 217-218 行）。但需两处订正：
+> - §3 / §3.1 标题写「OMEGA **十**定律」而表内实为 11 行 → 应为「**十一**定律（Ω₁-Ω₉ 架构基座 + Ω₁₀/Ω₁₁ 学习扩展）」。
+> - 横幅所称「Ω₁₀/Ω₁₁ 尚未并入现行权威九定律集」**已过期**：二者已由 **ADR-170** 正式收录，且**已落地为代码**——`crates/nexus-contracts/src/experience_card.rs`（经验卡片）、`crates/mlc-engine/src/on_demand_synthesizer.rs` + `dual_experience_bank.rs` + `experience_card_system.rs`（按需合成）、`crates/cmt-tiering/src/experience_card_storage.rs`。引用时以 ADR-170 与上述实现为准，勿再称「未并入」。
+>
+> **B. 计数不再逐值订正**：横幅「现行真值 = 144」已过期，实测 **146**（`crates/event-bus/src/types.rs:28`）；crate 数 **41**（非 43，`auto-dpo`/`model-router` 批次 A 删、`acb-governor` 按 ADR-182 删）；`v2.28.0-omega` tag **已于 2026-09-06 推送**；ADR 物理文件至 **185**。现行值一律现取，权威源 `Cargo.toml` + `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md`；按 `[CONFIG-REFACTOR-20260920]` 政策本文内部计数不再逐条追修。
+>
+> **C. §4 十层全图（约 251-331 行）不可照单施工**：其每层标注「Rust侧完整实现」属**愿景口径**，实测不符——合计「~53 crates」对现行 41；L1 列 `model-router`、L5 列 `auto-dpo`、L8 列 `acb-governor`（三者均已物理删除）；`runtime-auditor` / `operator-router` 标注为「新增 crate」，实际落在既有 crate 的子模块（`crates/efficiency-monitor/src/auditor.rs` @L9、`crates/faae-router/src/operator_router.rs`）；批次 B 新增的 L6 `router-traits` 未登记。**读法**：§4 是规划落点图，非现状图。
+>
+> **D. §16.4 跨层事件协议四个事件名未采纳**：`ExperienceCardGenerated` / `HighScoreCard` / `OperatorExecuted` / `SegmentValidated` 在 `types.rs` 零命中；经验卡片交付面**刻意不新增事件变体**，改走独立数据面（证据 `crates/event-bus/src/experience_card_bus.rs:20-22`）。另 `StopRuling` 实名 **`StopRulingIssued`**（`types.rs:2544`）。
+>
+> **E. §6.1 实现规范示例与红线相悖，勿照抄**：示例 `use nexus_contracts::{ExperienceCard, ...}` 不可编译（`nexus-contracts` 为 **mod 级导出、无根 re-export**，实际写法 `nexus_contracts::experience_card::{...}`，见 `experience_card_bus.rs:37`）；示例用 `mpsc::UnboundedSender` 与 Top-K `sort_by`，而现行实现为 **bounded** mpsc（容量 4096，`bus.rs:39`）与 `select_nth_unstable*`（`agents.md` §4.1/§6.2 红线）。
+>
+> **F. 依赖铁律现为红**：2026-09-21 现测 `scripts/check_dependency_rules.sh` → EXIT=1，失败项 `[GAP-A] gsoe-evolution -> decay-engine`；裁决在途 `docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md`。
+>
+> 下方 2026-09-02/06 横幅段保留为该时点核对记录。
 > **权威基线**：v2.28.0-omega（发布提交 af62e44 已落 2026-09-02，tag 待推）· 43 crates（28 生产可达 / 14 冻结孤岛 + 1 GATED（mca-gateway，ADR-177））· 144 NexusEvent（types.rs 单表，event_types.rs 镜像已退役）· 11,587 tests / 485 target（2026-09-02 重测，以实测为准）· ADR 主编号至 182（新编号段自 ADR-183 起）
 > **tag 事实订正**：v2.27.1-omega 本地与 origin 均无 tag（CHANGELOG-only 补丁），实际最新已发 tag = v2.27.0-omega
 >

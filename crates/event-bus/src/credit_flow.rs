@@ -15,8 +15,14 @@
 //!   shed 或走既有 broadcast 兜底。
 //!
 //! # 红线:Critical 事件不经过信用流(豁免)
-//! Critical 事件(severity() == Critical,17 个变体)由 mpsc 旁路通道保证投递
-//! (容量 4096,`is_critical_mpsc_event` 判定 13 个 + broadcast),**绝不进入信用流**。
+//! Critical 事件由 mpsc 旁路通道保证投递（容量 4096），**绝不进入信用流**。
+//!
+//! ⚠ 两个"Critical"集合**不等价**，判据各查各的（此处刻意不写数量，数量由锚常量与测试锁定）：
+//! - 投递保证成员资格 := `is_critical_mpsc_event()`（锚常量 `bus.rs::CRITICAL_MPSC_VARIANTS`）
+//! - 背压级别 := `NexusEvent::severity() == Critical`（锚常量 `bus.rs::CRITICAL_TOTAL`）
+//! 前者是后者的**子集**（安全/资源类必须确保送达；`CheckpointSaved`/`ConsensusReached` 等
+//! 历史 Critical 按既定设计只走 broadcast 以免背压死锁）。双向包含关系由
+//! `bus.rs` 的双清单计数测试守护，勿以"数量不等"推断违规。
 //!
 //! WHY 豁免(推演 9):**Critical 背压 = 死锁源**。若 Critical 事件也参与信用
 //! 扣减/等待,则 Critical 订阅者(如 SecCore/Parliament)在自身消费慢时会让
@@ -306,6 +312,7 @@ impl CreditFlow {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::sync::Arc;

@@ -1,4 +1,4 @@
-//! `chimera doctor` — 系统健康检查,6 维度诊断 Chimera CLI 运行环境
+//! `chimera doctor` — 系统健康检查,逐探针诊断 Chimera CLI 运行环境
 //!
 //! v2.9.0-omega Task 1.13:提供类 `cargo doctor` 的环境诊断能力。
 //! Wave 2 Task 4:在原 5 维度基础上增加 LLM Provider 健康度检查。
@@ -158,12 +158,12 @@ pub async fn execute_with_ctx(
     Ok(())
 }
 
-/// 9 探针并行 gather(GQEP `gather_collected<(usize, HealthCheck)>`)
+/// 各探针并行 gather(GQEP `gather_collected<(usize, HealthCheck)>`)
 ///
 /// 索引 tag 设计:每个探针 future 携 `(索引, 结果)`——gather 返回完成序的
 /// values,此处按索引还原注册序,保证报告输出顺序与串行版逐字节一致。
 /// 超时空底:探针恒 `Ok`,值缺失仅源于 gqep 单操作/全局超时,以 FAIL 占位
-/// 保证报告恒 9 项(该 tail 实践中不可达:LLM 探针自带 3s 内部超时,
+/// 保证报告项数恒等于探针数(该 tail 实践中不可达:LLM 探针自带 3s 内部超时,
 /// 其余探针均快路径)。
 async fn run_probes_parallel(
     ctx: &crate::composition::AppContext,
@@ -635,6 +635,7 @@ fn print_report_human(report: &HealthReport) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -642,7 +643,7 @@ mod tests {
     ///
     /// 注:doctor 的人类可读输出走 stderr(与 output::print_* helper 一致),
     /// 本单测通过 `check_llm_provider` 直接断言 message 格式含 `LLM:` 前缀,
-    /// 集成层 `tests/cli.rs::test_doctor_executes_five_dimension_checks`
+    /// 集成层 `tests/cli.rs::test_doctor_reports_all_probes_and_summary`
     /// 扩展为断言 stderr 含 `LLM` 字符串(由 5 维 → 6 维)。
     #[tokio::test]
     async fn test_doctor_llm_dimension_emitted() {

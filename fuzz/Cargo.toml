@@ -57,8 +57,6 @@ libfuzzer-sys = { version = "0.4", optional = true }
 nexus-core = { path = "../crates/nexus-core" }
 event-bus = { path = "../crates/event-bus" }
 seccore = { path = "../crates/seccore" }
-# model-router: CACR 预算配置解析 fuzz(cacr_budget_parse target)
-model-router = { path = "../crates/model-router" }
 # P4-W15.3.1: gsoe-evolution + nexus-contracts 用于 harness_spec_parse fuzz target
 # gsoe-evolution: SpecLoader（TOML 反序列化 + 字段校验 + 不可进化面检查）
 # nexus-contracts: HarnessSpec/HarnessSpecError/ImmutableSurface 类型（L0 契约层）

@@ -85,7 +85,12 @@ pub fn spawn_handshake_responder(bus: EventBus) -> JoinHandle<()> {
         let answered = Arc::new(AtomicBool::new(false));
         loop {
             match rx.recv().await {
-                Ok(NexusEvent::TuiHello { proto, caps, .. }) => {
+                Ok(NexusEvent::TuiHello {
+                    metadata,
+                    proto,
+                    caps,
+                    ..
+                }) => {
                     if answered.swap(true, Ordering::SeqCst) {
                         // SEC-4:运行期重复握手帧 — 丢弃并留审计痕迹
                         tracing::warn!(
@@ -95,7 +100,9 @@ pub fn spawn_handshake_responder(bus: EventBus) -> JoinHandle<()> {
                         );
                         continue;
                     }
-                    let ack = build_ack(&proto);
+                    let mut ack = build_ack(&proto);
+                    // O-4: ack 继承入站 TuiHello 的 trace_id，把“客户端→服务端→ack”归入同一追踪链
+                    ack.metadata_mut().trace_id = metadata.trace_id.clone();
                     if let Err(e) = bus.publish(ack).await {
                         tracing::warn!(error = %e, "TuiHelloAck 发布失败,TUI 将按未知兼容降级");
                     } else {
@@ -113,6 +120,7 @@ pub fn spawn_handshake_responder(bus: EventBus) -> JoinHandle<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

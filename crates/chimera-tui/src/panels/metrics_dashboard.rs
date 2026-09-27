@@ -26,7 +26,7 @@
 //!   (纯视图层),避免 `TuiState` 字段膨胀。
 //! - **不与全局 `FocusManager` 耦合**:5×2 网格的 cell 选择(高亮/导航)
 //!   由面板内部 `selected` 状态管理,网格 cell 是局部子状态,
-//!   不与 16 面板级焦点冲突(TuiApp FocusManager 注册 16 面板,本面板为新增第 16 个)。
+//!   不与面板级焦点冲突（面板焦点成员以 `TuiApp` 的 `FocusManager` 注册表为唯一权威）。
 
 use std::sync::Arc;
 
@@ -404,6 +404,7 @@ impl Panel for MetricsDashboardPanel {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ps3_scroll_tests {
     // ========================================================
     // PS-3(I-4):gg/G 必须到达首/末网格 cell(此前默认空实现,静默无响应)
@@ -436,6 +437,7 @@ mod ps3_scroll_tests {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod ps2_batch2_tests {
     use super::*;
     use crate::types::GqepTimeoutStats;

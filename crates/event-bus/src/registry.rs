@@ -28,7 +28,7 @@
 //! bus.rs `is_critical_mpsc_event`(14 个 mpsc 旁路变体)与
 //! `LANE_FORBIDDEN_SHARD`(18 个 Critical 变体名)**不**由本注册表生成,
 //! 维持独立手写清单 —— 这是设计特性而非疏漏:两张独立清单 + 守护测试
-//! 互锁(bus.rs `test_critical_severity_implies_mpsc_bypass` 等)使
+//! 互锁(bus.rs `test_mpsc_required_events_hit_both_lists` 等)使
 //! "severity 定级"与"mpsc 旁路判定"的漂移可被双向捕获;若二者同源于
 //! 注册表,互锁测试将退化为自比较而失去意义。
 
@@ -87,6 +87,19 @@ macro_rules! define_event_registry {
             /// 由 `define_event_registry!` 从注册表展开;所有变体第一字段
             /// 均为 `metadata: EventMetadata`,逐变体生成取元数据臂。
             pub fn metadata(&self) -> &EventMetadata {
+                match self {
+                    $(Self::$variant { metadata, .. } => metadata,)+
+                }
+            }
+
+            /// 获取事件元数据的可变引用（O-4 / trace-id 传播基础件）
+            ///
+            /// 与 `metadata()` 同由 `define_event_registry!` 逐变体展开（第一字段均为
+            /// `metadata`）。供传播点在**显式**设/继承 trace_id 与 correlation_id 时使用。
+            /// 注：**故意不在 publish 路径自动 `ensure_trace_id`**——那会给发出的事件补
+            /// trace_id 而使 `assert_eq!(recv, sent)` 类事件相等断言回归（sent 无、recv 有）；
+            /// trace 传播须由发起方显式 `with_trace`/`ensure_trace_id`（保留事件不变性）。
+            pub fn metadata_mut(&mut self) -> &mut EventMetadata {
                 match self {
                     $(Self::$variant { metadata, .. } => metadata,)+
                 }

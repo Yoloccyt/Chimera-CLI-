@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L3
+//! ROLE:     任务感知能力分层 — 按任务负载动态调整能力存储层级
+//! BACKEND:  memory
+//! PRODUCERS: 1 LsctTierSwitched
+//! CONSUMERS: 1 cmt-tiering
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! 任务感知能力分层 — 按任务负载动态调整能力存储层级
 //!
 //! 对应架构层:L3 Storage

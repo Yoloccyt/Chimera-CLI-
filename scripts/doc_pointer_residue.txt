@@ -1,0 +1,6 @@
+# doc_pointer_residue.txt -- only-decrease ledger for check_doc_pointer_integrity.py
+# Row = `doc|pointer|kind` + a trailing "# reason". Emitted 2026-09-23 by --emit and
+# reviewed against the source text (not hand-copied).
+# Delete the row as soon as the anchor is repaired: a registered allowance must not
+# outlive the debt it allowed, or this file becomes the lie it was meant to bound.
+docs/architecture/CODE_WIKI.md|model-router/src/provider_drift.rs:13|dead-file  # 该路径属已删 crate model-router（批次 A/38c72e6，见 CODE_WIKI §3.12）；:767 处正文已在**引述** RK-P22 的旧权威出处并自陈"已改标待重定位"，属披露式历史记录，不是未发现的谎。等 B5 文档批次把它改成不带 :line 的历史写法后删本行。

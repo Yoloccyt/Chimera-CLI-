@@ -10,6 +10,7 @@
 //! - test_render_metrics_prometheus_format: 输出符合 Prometheus 文本格式
 //! - test_no_logger_no_metrics: 无 BusLogger 时向后兼容
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
 use event_bus::{BusLogger, EventBus, EventMetadata, EventTopic, NexusEvent};
@@ -213,4 +214,33 @@ fn test_event_topic_count_matches_labels() {
     // 确保 EventTopic 有 10 个变体,与 Prometheus 标签值一一对应
     let all = EventTopic::all();
     assert_eq!(all.len(), 10, "EventTopic 应有 10 个变体");
+}
+
+// ============================================================
+// O-1 / ADR-191 D1 端到端:bus.publish → logger.log_publish → render_metrics
+// ============================================================
+
+/// 证明“经总线发布”的事件会计入挂载的 BusLogger（而非仅 logger 直测）。
+/// 此前生产侧 logger 恒 None ⇒ 该接线为死码;O-1 挂载后本测锁定 publish→计数真实打通。
+#[test]
+fn test_publish_through_attached_logger_reflects_in_metrics() {
+    let mut bus = EventBus::new();
+    bus.set_logger(BusLogger::new("test-e2e"));
+    bus.publish_blocking(make_quest_event(1))
+        .expect("publish quest");
+    bus.publish_blocking(make_skeptic_veto_event())
+        .expect("publish veto");
+
+    let rendered = bus
+        .logger()
+        .expect("O-1: 挂载后 logger() 应为 Some")
+        .render_metrics();
+    assert!(
+        rendered.contains("nexus_event_total"),
+        "经 bus.publish 后 render_metrics 应含发布计数,实际:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("nexus_critical_event_total"),
+        "Critical 发布(SkepticVeto)应计入 nexus_critical_event_total,实际:\n{rendered}"
+    );
 }

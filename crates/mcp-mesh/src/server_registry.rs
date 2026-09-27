@@ -310,8 +310,10 @@ fn is_reserved_ipv6(v6: Ipv6Addr) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::thread;
     use std::time::Duration as StdDuration;
 
@@ -446,5 +448,33 @@ mod tests {
         let json = serde_json::to_string(&server).expect("序列化失败");
         let restored: MeshServer = serde_json::from_str(&json).expect("反序列化失败");
         assert_eq!(server, restored);
+    }
+
+    // T-3(四维深审):SSRF 防线生成式不变量。对任意 IPv4 字面量 endpoint,
+    // validate_endpoint 的判决必须与 is_reserved_ipv4 谓词严格一致(保留段全拦、
+    // 公网全放)。重点验证 `extract_host` 对 host:port 的解析正确——若提 host
+    // 错误(如漏剥端口/误剥)会让保留地址漏网,该 property 能捕获此类回归。
+    proptest! {
+        #[test]
+        fn prop_ssrf_ipv4_reservation_matches_verdict(
+            a in any::<u8>(),
+            b in any::<u8>(),
+            c in any::<u8>(),
+            d in any::<u8>(),
+        ) {
+            let ip = std::net::Ipv4Addr::new(a, b, c, d);
+            let endpoint = format!("{ip}:8080");
+            if is_reserved_ipv4(ip) {
+                prop_assert!(
+                    validate_endpoint(&endpoint).is_err(),
+                    "保留地址 {ip} 必须被 SSRF 拦截"
+                );
+            } else {
+                prop_assert!(
+                    validate_endpoint(&endpoint).is_ok(),
+                    "公网地址 {ip} 必须放行"
+                );
+            }
+        }
     }
 }

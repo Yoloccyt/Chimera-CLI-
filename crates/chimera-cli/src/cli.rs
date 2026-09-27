@@ -66,7 +66,7 @@ use clap::{Parser, Subcommand};
 chimera run \"实现一个 hello world 函数\"      # 运行单次任务\n  \
 chimera --json quest list                       # JSON 格式列出 Quest\n  \
 chimera --yes agent cancel <agent-id>           # 取消 Agent(跳过确认)\n  \
-chimera doctor                                  # 5 维度健康检查\n  \
+chimera doctor                                  # 运行环境健康检查\n  \
 chimera completions bash > /etc/bash_completion.d/chimera  # 生成补全脚本"
 )]
 pub struct Cli {

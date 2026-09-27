@@ -1,0 +1,6 @@
+# subscribe_order_allowlist.txt -- only-decrease baseline for
+#   check_subscribe_order.py (red line: subscribe-before-spawn).
+# Row = `<path>:<line>  # reason`. Take via:
+#   python scripts/check_subscribe_order.py --emit
+# New violations must move the subscribe OUT of the spawned task
+# (subscribe in the sync caller, then spawn), not be registered.

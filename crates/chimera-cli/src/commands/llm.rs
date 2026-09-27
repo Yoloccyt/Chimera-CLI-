@@ -40,10 +40,13 @@ use crate::error::ChimeraCliError;
 use crate::output;
 use crate::permission::{self, PermissionCtx};
 
-/// 8 个内置 default Provider 名(对应 `mca-gateway` 8 个 affinity profile)
+/// 内置 default Provider 名(`model_router.providers` 为空时的回退清单)
 ///
-/// WHY 8 个:对齐 mca-gateway 设计目标 — 8 个 affinity profile 覆盖
-/// 国内主流 LLM 服务(深度求索/智谱/MiniMax/字节/阶跃/阿里云等)。
+/// WHY 这 8 个:对齐 MCA 渠道亲和的设计目标 — 覆盖国内主流 LLM 服务
+/// (深度求索/智谱/MiniMax/字节/阶跃/阿里云等)。设计口径见根目录
+/// `Chimera_全模型亲和适配体系设计文档_v1.0.md`;`mca-gateway` 侧**无同名枚举**
+/// (仅 `AffinityError`),故本清单与该 crate 不构成编译期耦合——
+/// 增删此处的名字不会触发对侧失败,反之亦然。
 const FALLBACK_PROVIDER_NAMES: &[&str] = &[
     "deepseek", "zhipu", "minimax", "volcano", "moonshot", "stepfun", "alicloud", "custom",
 ];
@@ -85,7 +88,7 @@ pub async fn execute(
 ///
 /// WHY 此处不直接读 `cfg.llm.providers`:ChimeraConfig 当前无 `llm` 顶层 section,
 /// 复用 `model_router.providers` 作为数据源;若用户清空 model_router.providers,
-/// 降级到内置 8 默认名(覆盖 mca-gateway 8 个 affinity profile)。
+/// 降级到 `FALLBACK_PROVIDER_NAMES` 内置默认名。
 fn available_providers(cfg: &ChimeraConfig) -> Vec<ProviderRow> {
     let mut rows: Vec<ProviderRow> = Vec::new();
     let configured = &cfg.model_router.providers;
@@ -350,6 +353,7 @@ async fn strategy(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

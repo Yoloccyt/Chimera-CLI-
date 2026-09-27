@@ -7,7 +7,7 @@
 //! ReasoningState 七态转移表(纯函数),proptest 三性质(无死锁 / 全可达 / 无意外循环)。
 //! 对齐既有 INV-7/8 的 1000 次 proptest 先例(chimera-mas invariants.rs)。
 //!
-//! # 七态设计(对应 `debate.rs::Parliament::deliberate` 流程)
+//! # 七态设计(对应 `debate::Parliament::deliberate` 流程)
 //!
 //! ```text
 //!                  ProposalSubmitted
@@ -63,7 +63,7 @@ use serde::{Deserialize, Serialize};
 
 /// ReasoningState 七态状态机 — 跟踪 Parliament 审议流程的完整生命周期
 ///
-/// 对应 `debate.rs::Parliament::deliberate` 的 7 个阶段:
+/// 对应 `debate::Parliament::deliberate` 的 7 个阶段:
 /// Idle → VetoCheck → (Vetoed | Debating → Voting → (Accepted | Rejected)) → Idle
 ///
 /// # 设计决策(WHY)
@@ -141,7 +141,7 @@ impl std::fmt::Display for ReasoningState {
 
 /// ReasoningEvent — 触发 ReasoningState 转移的事件
 ///
-/// 每个事件对应 `debate.rs::Parliament::deliberate` 流程中的一个步骤触发点:
+/// 每个事件对应 `debate::Parliament::deliberate` 流程中的一个步骤触发点:
 /// - ProposalSubmitted: 提案提交(步骤 0 之前,Idle → VetoCheck)
 /// - VetoTriggered: Skeptic 检测到恶意意图(步骤 0,VetoCheck → Vetoed)
 /// - DebateStarted: 辩论开始(步骤 1,VetoCheck → Debating)
@@ -450,6 +450,7 @@ pub fn invariant_no_unexpected_cycles() -> Result<(), Vec<ReasoningState>> {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

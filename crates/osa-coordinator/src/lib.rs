@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L6
+//! ROLE:     全维稀疏协调器 — 工具/上下文/记忆/审计/预算五维度稀疏化调度
+//! BACKEND:  memory
+//! PRODUCERS: 6 BudgetExceeded,EntropyBalanced,HcwRecallDegraded,OmniSparseMasksComputed,RouterStatsReported…
+//! CONSUMERS: 2 chimera-mas,mca-gateway
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! 全维稀疏协调器 — 工具/上下文/记忆/审计/预算五维度稀疏化调度
 //!
 //! 对应架构层:L6 Router
@@ -89,8 +97,9 @@ impl SparseMaskProvider for OmniSparseCoordinator {
     fn tool_masks(&self) -> &nexus_contracts::OmniSparseMasks {
         // ★ Insight: recent_masks 是私有的，但我们可以从 Coordinator 内部访问
         // 这里返回一个空的默认掩码作为 fallback
-        static EMPTY_MASKS: std::sync::OnceLock<nexus_contracts::OmniSparseMasks> = std::sync::OnceLock::new();
-        
+        static EMPTY_MASKS: std::sync::OnceLock<nexus_contracts::OmniSparseMasks> =
+            std::sync::OnceLock::new();
+
         EMPTY_MASKS.get_or_init(|| {
             nexus_contracts::OmniSparseMasks::new(
                 nexus_contracts::SparseMask::<nexus_contracts::ToolId>::empty(),
@@ -101,7 +110,7 @@ impl SparseMaskProvider for OmniSparseCoordinator {
             )
         })
     }
-    
+
     fn update_masks_if_needed(&mut self) -> bool {
         // 默认不更新，由调用方显式调用 compute_all_masks
         false
@@ -112,7 +121,7 @@ impl RouterConfig for OmniSparseCoordinator {
     fn router_id(&self) -> RouterId {
         RouterId::OsCoordinator
     }
-    
+
     fn priority_weight(&self) -> f64 {
         1.0 // OSA 作为核心协调器，默认最高权重
     }

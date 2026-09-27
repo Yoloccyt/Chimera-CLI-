@@ -85,7 +85,15 @@ def key(cmd: str) -> tuple[frozenset[str], frozenset[str]]:
 
 
 def main(argv: list[str]) -> int:
-    verbose = "-v" in argv
+    # F35（F24/F29 同族第三例）：未知旗标不再静默忽略。
+    # 拼错 `-v` 会"照样跑完整比对"，调用者拿到的是一份没请求的判定，
+    # 而不是"我用错了参数"的提示 —— 失败方向必须是拒绝执行，不是降级执行。
+    unknown = sorted({a for a in argv if a not in ("-v", "--verbose")})
+    if unknown:
+        print("usage: py -3 scripts/audit_cmd_sync.py [-v]", file=sys.stderr)
+        print(f"[UNDECIDABLE] 未知参数: {' '.join(unknown)} —— 未执行任何比对", file=sys.stderr)
+        return 2
+    verbose = "-v" in argv or "--verbose" in argv
     results: dict[str, list[tuple[frozenset[str], frozenset[str]]]] = {}
     for rel in TARGETS:
         path = ROOT / rel
@@ -95,8 +103,8 @@ def main(argv: list[str]) -> int:
             if alt.exists():
                 path = alt
             else:
-                print(f"[FAIL] required file not found: {rel} "
-                      "(此检查不可判定，不得视为通过)", file=sys.stderr)
+                print(f"[UNDECIDABLE] required file not found: {rel} "
+                      "(该项比对未执行，不得视为通过)", file=sys.stderr)
                 return 2
         cmds = commands(path)
         if not cmds:
@@ -127,4 +135,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    import gate_rc  # 只在入口需要：崩溃必须退 2, 不得借 1 冒充"判过且红"（F32/F33）
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))

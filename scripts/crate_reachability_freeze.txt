@@ -78,3 +78,7 @@
 # arch-refactor-direction batch (spec .trae/specs/map-arch-refactor-directions). Producers and
 # their only consumers (dedicated tests/benches, `pub mod`/`pub use` declarations) were deleted;
 # ratchet entry removed per the shrink-only rule. Evidence: docs/reports/arch-direction-D-*.md
+# 2026-09-24 B5 口径校正（不改写上方历史行，只加注）：上面 "wired / all islands repaid" 只对
+#   可达性棘轮成立（optional 声明 + feature 数组即计入 reachable），不等于生产码已消费。
+#   实测这 7 者在 crates/chimera-cli 的 src/tests/benches 零引用，被 G-56/G-57 判为 DECORATIVE
+#   （见 scripts/gated_wiring_baseline.txt），消化排期 B3-B4。⇒ reachable != wired，两账分开。

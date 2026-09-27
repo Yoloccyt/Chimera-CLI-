@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L3
+//! ROLE:     推测上下文缓存 — 基于访问模式推测性预取的上下文缓存
+//! BACKEND:  sqlite
+//! PRODUCERS: 5 CacheAffinityApplied,CacheHit,CacheMiss,CachePrefetched,CacheStatsReported
+//! CONSUMERS: 2 chimera-cli,mca-gateway
+//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-CN
+//! CRATE-CONTRACT END
 //! 推测上下文缓存 — 基于访问模式推测性预取的上下文缓存
 //!
 //! 对应架构层:L3 Storage

@@ -129,16 +129,18 @@ fn flush_run(changes: &mut Vec<Change>, x: u16, y: u16, run: &mut Vec<Cell>) {
     let cells = std::mem::take(run);
     match cells.len() {
         0 => {}
-        1 => changes.push(Change::Cell {
-            x,
-            y,
-            cell: cells.into_iter().next().expect("len==1"),
-        }),
+        1 => {
+            // len==1 是 match 臂守卫,next() 必命中;漂移态跳过(不产生错帧)
+            if let Some(cell) = cells.into_iter().next() {
+                changes.push(Change::Cell { x, y, cell });
+            }
+        }
         _ => changes.push(Change::Span { x, y, cells }),
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::engine::rect::Rect;

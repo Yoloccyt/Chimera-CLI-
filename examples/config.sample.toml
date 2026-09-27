@@ -1,46 +1,20 @@
-# Chimera CLI 配置样例(Figment 三源合并:Default < File < Env < CLI)
+# 本文件**不是**配置样例，也不是加载目标 —— 它是一份指路牌。
 #
-# 用法:
-#   1. 复制为 ~/.aether/omega.toml 并按需修改
-#   2. 或通过 CHIMERA_CONFIG 环境变量指定路径:
-#        $env:CHIMERA_CONFIG = 'D:\my\config.toml'
-#   3. 或通过 --config 命令行参数覆盖:
-#        aether --config /path/to/config.toml wiki "查询"
+# 为什么原来那份 TOML 样例必须被撤掉（逐条实测，2026-09-23）：
+#   * 加载器只注册了 Yaml provider（`crates/chimera-cli/src/config.rs` 的 `load()`：
+#     `Serialized::defaults` → `Yaml::file(path)` → `Env::prefixed("CHIMERA_")`），
+#     所以旧样例教人"复制为 `~/.aether/omega.toml`"永远不会被读取（真实默认路径是
+#     `~/.chimera/omega.yaml`，由 `default_config_path()` 决定）。
+#   * 旧样例写的 `CHIMERA_CONFIG` 环境变量在 `crates/`+`scripts/` 全库 0 命中（虚构）。
+#   * 旧样例写"三源合并：Default < File < Env < CLI"并把 CLI 列为最高优先级，
+#     而 `config.rs` 的注释自陈 CLI 参数**不进** Figment（只有 `--config` 改文件路径）。
+#   * 旧样例的环境变量前缀写 `AETHER_`，加载器用的是 `CHIMERA_`。
+#   * 它还与 `config.rs` 里的内嵌模板构成**第二份手写配置副本** —— 本仓已有三例
+#     双源漂移前科，故此处只留指针，不留副本。
 #
-# 完整字段参考:`crates/chimera-cli/src/config.rs` 中的 `ChimeraConfig` struct,
-# 或执行 `aether config init` 生成完整 omega.toml 模板(含全部 14 个顶层 section)。
-#
-# 配置优先级(后者覆盖前者):
-#   1. 内置默认值(ChimeraConfig::default)
-#   2. 配置文件(本文件)
-#   3. 环境变量(前缀 AETHER_,嵌套用 __ 分隔,如 AETHER_MODEL_ROUTER__STRATEGY)
-#   4. CLI 参数(--config / --model 等,优先级最高)
-#
-# WHY TOML 样例:Figment 支持 TOML/YAML/JSON/ENV 四源,但 TOML 是 Rust 生态
-# 首选(Rust 社区惯例 + cargo 用 TOML)。提供 TOML 样例便于用户复制即用,
-# 避免用户手写 TOML 时遗漏字段类型或数组语法(§10.5 已补齐 yaml+toml 双样例)。
-
-# Quest 引擎配置
-[quest]
-max_concurrent_quests = 4
-checkpoint_interval_secs = 300
-
-# SecCore 沙箱配置
-[seccore]
-sandbox_mode = "drop"                     # drop | kill | log
-command_whitelist = ["ls", "cat", "grep"]
-
-# DECB 预算配置
-[decb]
-budget_limit = 10000
-adjustment_factor = 0.1
-
-# OSA 稀疏化配置
-[osa]
-sparsity_ratio = 0.4
-routing_mask_size = 128
-
-# 日志配置
-[logging]
-level = "info"  # trace | debug | info | warn | error
-format = "json" # json | plain
+# 该看哪里（唯一权威源）：
+#   * 可直接改的完整样例：`examples/config.sample.yaml`
+#     —— 由 `omega_yaml_template()` 派生，`python scripts/check_config_sample_parity.py`
+#        强制两处逐字等值（漂移即红）。
+#   * 落盘一份真配置：`chimera config init`（等价 `cargo run -p chimera-cli -- config init`）。
+#   * 字段定义：`crates/chimera-cli/src/config.rs` 的 `ChimeraConfig`（含 14 个顶层段）。

@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L10
+//! ROLE:     Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
+//! BACKEND:  fs
+//! PRODUCERS: 23 CacheHit,CoordinationRatioReported,GatherCompleted,OperationTimedOut,OverWindowFallbackTriggered…
+//! CONSUMERS: 0 -
+//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN|SIMPLIFIED-CN
+//! CRATE-CONTRACT END
 //! Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
 //!
 //! 对应架构层:L10 Interface

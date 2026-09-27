@@ -101,7 +101,11 @@ pub struct VerifiedWithStrength {
 impl VerifiedWithStrength {
     /// 构造带置信度的验证结果
     pub fn new(result: VerificationResult, confidence: f32, evidence_count: usize) -> Self {
-        Self { result, confidence, evidence_count }
+        Self {
+            result,
+            confidence,
+            evidence_count,
+        }
     }
 
     /// 从 VerificationResult 构造（置信度基于样本数自动计算）
@@ -203,13 +207,48 @@ impl FormalResultProvider for EmptyFormalProvider {
     fn collect_results(&self) -> Vec<(String, VerificationResult)> {
         // 返回 7 个属性全 Skipped
         vec![
-            ("lineage-dag".into(), VerificationResult::Skipped { reason: "no data".into() }),
-            ("critic-monotonicity".into(), VerificationResult::Skipped { reason: "no data".into() }),
-            ("preference-consistency".into(), VerificationResult::Skipped { reason: "no data".into() }),
-            ("causal-consistency".into(), VerificationResult::Skipped { reason: "no data".into() }),
-            ("learning-monotonicity".into(), VerificationResult::Skipped { reason: "no data".into() }),
-            ("decay-consistency".into(), VerificationResult::Skipped { reason: "no data".into() }),
-            ("invariant-closure".into(), VerificationResult::Skipped { reason: "no data".into() }),
+            (
+                "lineage-dag".into(),
+                VerificationResult::Skipped {
+                    reason: "no data".into(),
+                },
+            ),
+            (
+                "critic-monotonicity".into(),
+                VerificationResult::Skipped {
+                    reason: "no data".into(),
+                },
+            ),
+            (
+                "preference-consistency".into(),
+                VerificationResult::Skipped {
+                    reason: "no data".into(),
+                },
+            ),
+            (
+                "causal-consistency".into(),
+                VerificationResult::Skipped {
+                    reason: "no data".into(),
+                },
+            ),
+            (
+                "learning-monotonicity".into(),
+                VerificationResult::Skipped {
+                    reason: "no data".into(),
+                },
+            ),
+            (
+                "decay-consistency".into(),
+                VerificationResult::Skipped {
+                    reason: "no data".into(),
+                },
+            ),
+            (
+                "invariant-closure".into(),
+                VerificationResult::Skipped {
+                    reason: "no data".into(),
+                },
+            ),
         ]
     }
 }
@@ -258,6 +297,7 @@ impl FormalProperty {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 
@@ -495,6 +535,7 @@ mod tests {
 // ================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod proptests {
     use super::*;
     use proptest::prelude::*;

@@ -1,11 +1,11 @@
-//! 影子模式 — 只决策不执行,决策日志 100% 可回放（P3-T2，ADR-145）
+//! 影子模式 — 只决策不执行,决策日志可回放（P3-T2，ADR-145）
 //!
 //! 对应架构层: L9 Quest（mas-sched 控制面，ADR-145）
 //!
 //! # 影子语义（W16 门禁）
 //! `ShadowScheduler<T>` 包装任意 [`PeerScheduler`]:
 //! - **只决策不执行**:所有决策委托给内部调度器,但返回前记录完整输入/输出;
-//! - **可回放**:[`ShadowLog::replay`] 逐条重放日志,决策结果与原始逐位一致（Ω₂）;
+//! - **可回放**:[`ShadowLog::replay`] 逐条重放日志,良构序列下决策结果与原始逐位一致（Ω₂）;
 //! - **ShadowReject 通道**:影子期 claim 以 `DenyReason::ShadowReject` 返回
 //!   （只决策不真正授予——影子决策用于评估,不产生租约状态）。
 //!
@@ -112,8 +112,17 @@ impl ShadowLog {
 
     /// 回放 — 逐条重放并逐位比对
     ///
-    /// 回放语义:以重放模式构造的影子调度器（`ShadowReplayScheduler`）消费日志,
-    /// 每条决策输出与原始日志**逐位一致**（Ω₂ 确定性;门禁:100% 可回放）。
+    /// 回放语义:以重放模式构造的影子调度器（`ShadowReplayScheduler`）消费日志。
+    /// **良构决策序列**下每条输出与原始日志逐位一致（Ω₂ 确定性;W16 门禁 100% 可回放）。
+    /// 良构 = claim 内部必授予 ∧ renew 由原持有者发起 ∧ handoff 移交具名 peer ∧ 租约未过期。
+    ///
+    /// WHY 断言带前置条件（2026-09-21 由 `tests/proptest.rs` 两个见证测试量出,非推断）:
+    /// 重放侧是**独立状态机**——claim 恒回 `ShadowReject`、handoff 恒 `Ok`、
+    /// `should_run` 只看本次重放是否出现过 claim。故以下四类决策必然不可复现:
+    /// ① 内部以非 `ShadowReject` 原因拒绝的 claim（配额/独占/时长）;
+    /// ② 重放侧查无此任务的 renew（内部 `Err` 被降级记为 `NotRenewable`）;
+    /// ③ 内部失败的 handoff;④ 租约被 `HANDOFF` 哨兵释放后的 should_run。
+    /// 它们被计入 `ReplayReport::mismatched` 而非静默丢弃 ⇒ 门禁失败是响亮的。
     #[must_use]
     pub fn replay(&self, original: &dyn PeerScheduler) -> ReplayReport {
         let snap = self.snapshot();
@@ -358,6 +367,7 @@ fn shadow_claim_outcome_of(o: &ShadowClaimOutcome) -> ClaimOutcome {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // 测试码 unwrap 为 Rust 惯用法；E-5 lint 意在治理生产码
 mod tests {
     use super::*;
     use crate::scheduler::SimplePeerScheduler;

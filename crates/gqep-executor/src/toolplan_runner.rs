@@ -187,8 +187,14 @@ impl PlanRunner {
     async fn exec_node(&self, node: &ToolNode, input: &str) -> String {
         match node.op {
             ToolOp::ToolCall => {
-                let tool = node.tool_name.as_deref().expect("validate 已保证");
-                let args = node.args_json.as_deref().expect("validate 已保证");
+                // validate 已保证二者齐备;但缺字段不再靠 expect 不变量——
+                // 与下方执行失败同型 fail-soft(错误文本进节点结果，可审计不 panic)。
+                let Some(tool) = node.tool_name.as_deref() else {
+                    return r#"{"error":"missing tool_name"}"#.to_string();
+                };
+                let Some(args) = node.args_json.as_deref() else {
+                    return r#"{"error":"missing args_json"}"#.to_string();
+                };
                 // 工具失败不 panic:错误文本作为节点结果（调用方审计）
                 match self.executor.execute(tool, args).await {
                     Ok(s) => s,
@@ -401,6 +407,7 @@ fn sort_by_field(input: &str, field: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
     use nexus_contracts::tool_plan::PlanEdge;

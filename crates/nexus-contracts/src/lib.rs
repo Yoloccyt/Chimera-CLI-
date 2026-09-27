@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L0
+//! ROLE:     NEXUS-OMEGA L0 契约层 — 纯类型定义，零逻辑，零 crate 依赖
+//! BACKEND:  memory
+//! PRODUCERS: 0 -
+//! CONSUMERS: 34 chimera-cli,chimera-mas,chimera-tui,cmt-tiering,csn-substitutor…
+//! MATURITY: NOT-IMPL-CN
+//! CRATE-CONTRACT END
 //! NEXUS-OMEGA L0 契约层 — 纯类型定义，零逻辑，零 crate 依赖
 //!
 //! 对应架构层: **L0 Contracts**（nexus-core 之下，十层架构新增最低层）
@@ -455,8 +463,8 @@ pub use blueprint::{BlueprintSource, BlueprintStep, PlanViolation, ProceduralBlu
 pub use vector::{VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats};
 // T6-2: 形式化属性定义框架（FormalVerifier L4 骨架基础类型）
 pub use formal_props::{
-    FormalProperty, FormalResultProvider, InvariantSpec, PropertyCategory, VerificationMethod,
-    VerificationResult, VerifiedWithStrength, EmptyFormalProvider,
+    EmptyFormalProvider, FormalProperty, FormalResultProvider, InvariantSpec, PropertyCategory,
+    VerificationMethod, VerificationResult, VerifiedWithStrength,
 };
 // P3-T8: 工具计划契约（WI-16 ToolPlan DSL）
 pub use tool_plan::{guards, PlanEdge, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};

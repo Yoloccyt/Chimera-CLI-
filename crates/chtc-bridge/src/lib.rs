@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L10
+//! ROLE:     跨平台工具兼容桥 — 5 大 IDE 的工具调用兼容适配层
+//! BACKEND:  memory
+//! PRODUCERS: 2 ChtcAdapterStatus,ChtcToolCallReceived
+//! CONSUMERS: 0 -
+//! MATURITY: MOCK-ONLY
+//! CRATE-CONTRACT END
 //! 跨平台工具兼容桥 — 5 大 IDE 的工具调用兼容适配层
 //!
 //! 对应架构层:L10 Interface

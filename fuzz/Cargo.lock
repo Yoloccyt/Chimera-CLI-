@@ -146,7 +146,6 @@ dependencies = [
  "gsoe-evolution",
  "libfuzzer-sys",
  "mca-gateway",
- "model-router",
  "nexus-contracts",
  "nexus-core",
  "rmp-serde",
@@ -271,6 +270,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "decay-engine"
+version = "2.28.2-omega"
+dependencies = [
+ "chrono",
+ "dashmap",
+ "event-bus",
+ "nexus-contracts",
+ "nexus-core",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -330,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "event-bus"
-version = "2.28.0-omega"
+version = "2.28.2-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -513,9 +525,10 @@ dependencies = [
 
 [[package]]
 name = "gsoe-evolution"
-version = "2.28.0-omega"
+version = "2.28.2-omega"
 dependencies = [
  "async-trait",
+ "decay-engine",
  "event-bus",
  "nexus-contracts",
  "nexus-core",
@@ -572,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "hcw-window"
-version = "2.28.0-omega"
+version = "2.28.2-omega"
 dependencies = [
  "chrono",
  "dashmap",
@@ -951,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "mca-gateway"
-version = "2.28.0-omega"
+version = "2.28.2-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -997,25 +1010,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "model-router"
-version = "2.28.0-omega"
-dependencies = [
- "arc-swap",
- "async-trait",
- "dashmap",
- "event-bus",
- "nexus-contracts",
- "nexus-core",
- "rmp-serde",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1050,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-contracts"
-version = "2.28.0-omega"
+version = "2.28.2-omega"
 dependencies = [
  "chrono",
  "serde",
@@ -1060,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "2.28.0-omega"
+version = "2.28.2-omega"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1157,12 +1151,13 @@ dependencies = [
 
 [[package]]
 name = "osa-coordinator"
-version = "2.28.0-omega"
+version = "2.28.2-omega"
 dependencies = [
  "event-bus",
  "hex",
  "nexus-contracts",
  "nexus-core",
+ "router-traits",
  "serde",
  "serde_json",
  "sha2",
@@ -1556,6 +1551,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "router-traits"
+version = "2.28.2-omega"
+dependencies = [
+ "nexus-contracts",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1638,7 +1641,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "scc-cache"
-version = "2.28.0-omega"
+version = "2.28.2-omega"
 dependencies = [
  "chrono",
  "dashmap",
@@ -1669,7 +1672,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seccore"
-version = "2.28.0-omega"
+version = "2.28.2-omega"
 dependencies = [
  "async-trait",
  "chrono",

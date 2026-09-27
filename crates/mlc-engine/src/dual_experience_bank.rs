@@ -286,8 +286,10 @@ impl DualExperienceBank {
         }
         by_error
             .into_iter()
-            .map(|(hash, group)| {
-                let first = group.first().expect("分组非空");
+            .filter_map(|(hash, group)| {
+                // entry().push() 成组的 group 必非空;若未来变更混入空组,
+                // 丢弃即可(空组无频率统计意义),不留 panic 面
+                let first = group.first()?;
                 let error_type = first
                     .card
                     .error_signature
@@ -299,13 +301,13 @@ impl DualExperienceBank {
                     .map(|c| c.card.metadata.execution_time_ms)
                     .sum::<u64>()
                     / group.len() as u64;
-                FailurePattern {
+                Some(FailurePattern {
                     error_signature: hash,
                     error_type,
                     fix_strategy: "Apply known fix from similar cases".to_string(),
                     frequency: group.len() as u32,
                     avg_fix_time_ms: avg_time,
-                }
+                })
             })
             .collect()
     }
@@ -367,6 +369,7 @@ impl DualExperienceBank {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_contracts::experience_card::{

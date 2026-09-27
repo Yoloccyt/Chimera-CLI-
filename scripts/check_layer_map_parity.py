@@ -11,11 +11,15 @@ arms + layered_crates list; ps1: $layerMap hashtable). The 2026-08-29 incident
 (.ps1 raised to 43 while the CI-called .sh stayed at 38 -> iron-law job red,
 5 crates unchecked) proved the comment-level "DRIFT WARNING" is not enough.
 
-This gate mechanically cross-checks FOUR structures against each other:
+This gate mechanically cross-checks FIVE structures against each other:
   1. .sh  layer_of() case dict          (crate -> layer)
   2. .sh  layered_crates list            (same key set as 1)
   3. .ps1 $layerMap hashtable            (crate -> layer, equal to 1)
   4. root Cargo.toml workspace.members   (ground truth crate roster)
+  5. root Cargo.toml [workspace.dependencies] "# L<n" comment grouping
+     (Check D, added 2026-09-24: the roster was policed but the dependency
+     table's layer comments were read by nobody, so three entries -- mcp-mesh
+     under L1, gea-activator + ssra-fusion under L6 -- had been lying silently)
 plus the static bounds expected_crates (sh) / $expectedCrates (ps1) equal the
 real member count. Any single-sided drift turns this gate red at PR time.
 
@@ -92,6 +96,66 @@ def parse_members(text):
 
 
 # ---------------------------------------------------------------------------
+# Check D: [workspace.dependencies] "# L<n>" comment grouping vs the layer map
+# ---------------------------------------------------------------------------
+
+DEP_SECTION = "[workspace.dependencies]"
+GROUP_RE = re.compile(r"^\s*#\s*L(\d+)\b")
+ENTRY_RE = re.compile(r'^\s*([A-Za-z0-9_-]+)\s*=\s*\{\s*path\s*=\s*"crates/([A-Za-z0-9_-]+)"')
+INLINE_RE = re.compile(r"#\s*L(\d+)\b")
+
+
+def parse_dep_groups(text):
+    """Return [(dep_key, path_crate, effective_layer, line_no)] inside [workspace.dependencies].
+
+    A group header applies to the entries below it; an inline "# L<n>" on the entry line
+    wins, because the manifest keeps some crates at their historical position and labels
+    them where they sit (same convention the router-traits line already used).
+    Extracting nothing raises: an empty scan surface must never be read as "groups agree".
+    """
+    rows = []
+    inside = False
+    cur = None
+    for no, line in enumerate(text.splitlines(), 1):
+        if line.startswith("["):
+            inside = line.strip() == DEP_SECTION
+            cur = None
+            continue
+        if not inside:
+            continue
+        g = GROUP_RE.match(line)
+        if g:
+            cur = int(g.group(1))
+            continue
+        e = ENTRY_RE.match(line)
+        if not e:
+            continue
+        inline = INLINE_RE.search(line)
+        rows.append((e.group(1), e.group(2), int(inline.group(1)) if inline else cur, no))
+    if not rows:
+        raise ValueError("Cargo.toml: %s scan extracted 0 path entries" % DEP_SECTION)
+    return rows
+
+
+def check_dep_groups(sh_case, rows):
+    """Pure diff between the comment grouping and the authoritative layer map."""
+    fails = []
+    for key, path_crate, layer, no in rows:
+        if key != path_crate:
+            fails.append("Cargo.toml:%d dep key %s != path crate %s" % (no, key, path_crate))
+            continue
+        truth = sh_case.get(key)
+        if truth is None:
+            fails.append("Cargo.toml:%d dep %s absent from layer map" % (no, key))
+        elif layer is None:
+            fails.append("Cargo.toml:%d dep %s sits outside any '# L<n>' group" % (no, key))
+        elif layer != truth:
+            fails.append("Cargo.toml:%d dep %s grouping says L%d, layer map says L%d"
+                         % (no, key, layer, truth))
+    return fails
+
+
+# ---------------------------------------------------------------------------
 # Parity checks (pure function over the six inputs -> list of failure strings)
 # ---------------------------------------------------------------------------
 
@@ -161,7 +225,38 @@ def selftest():
     # stale static bound (count bumped wrongly) must be caught
     expect("selftest-5 stale expected_crates caught",
            run_checks(ok_case, ok_list, 42, ok_ps, 43, members) != [])
-    verdict = "PASS (all %d assertions held)" % 5 if failures == 0 else "FAIL (%d/5 violated)" % failures
+    # --- Check D: dependency-table "# L<n>" grouping vs the layer map ---------
+    ok_rows = [(c, c, ok_case[c], 100 + i) for i, c in enumerate(members)]
+    expect("selftest-6 clean dep grouping green",
+           check_dep_groups(ok_case, ok_rows) == [])
+    shifted = list(ok_rows)
+    shifted[5] = (shifted[5][0], shifted[5][1], 3, shifted[5][3])
+    expect("selftest-7 misplaced dep grouping caught",
+           check_dep_groups(ok_case, shifted) != [])
+    ungrouped = list(ok_rows)
+    ungrouped[8] = (ungrouped[8][0], ungrouped[8][1], None, ungrouped[8][3])
+    expect("selftest-8 dep outside any group caught",
+           check_dep_groups(ok_case, ungrouped) != [])
+    unknown = list(ok_rows)
+    unknown.append(("ghost-crate", "ghost-crate", 1, 999))
+    expect("selftest-9 dep absent from layer map caught",
+           check_dep_groups(ok_case, unknown) != [])
+    # parser level: an inline label must beat the group header it physically sits under
+    mini = ('[workspace]\nmembers = ["crates/a"]\n'
+            '[workspace.dependencies]\n'
+            '# L1 Core\n'
+            'a = { path = "crates/a" }  # L9 Quest\n')
+    expect("selftest-10 inline label overrides group header",
+           parse_dep_groups(mini) == [("a", "a", 9, 5)])
+    # an empty scan surface must raise, never report "grouping agrees"
+    try:
+        parse_dep_groups('[package]\nname = "x"\n')
+        empty_refused = False
+    except ValueError:
+        empty_refused = True
+    expect("selftest-11 empty dep scan refused", empty_refused)
+    total = 11
+    verdict = "PASS (all %d assertions held)" % total if failures == 0 else "FAIL (%d/%d violated)" % (failures, total)
     print("  RESULT: %s" % verdict)
     return 0 if failures == 0 else 1
 
@@ -178,21 +273,28 @@ def main(argv):
         with open("scripts/check_dependency_rules.ps1", encoding="utf-8") as fh:
             ps_map, ps_exp = parse_ps1(fh.read())
         with open("Cargo.toml", encoding="utf-8-sig") as fh:
-            members = parse_members(fh.read())
+            manifest_text = fh.read()
+        members = parse_members(manifest_text)
+        dep_rows = parse_dep_groups(manifest_text)
     except Exception as exc:  # parse failure = gate cannot judge -> red, never silent
         print("[FAIL] parse error: %s" % exc)
         return 1
     fails = run_checks(sh_case, sh_list, sh_exp, ps_map, ps_exp, members)
+    fails = fails + check_dep_groups(sh_case, dep_rows)
     for f in fails:
         print("[FAIL] %s" % f)
     if fails:
         print("Layer-map parity BROKEN (sh vs ps1 vs Cargo.toml). Fix every table")
         print("in the same commit; see DRIFT warnings in both scripts' headers.")
         return 1
-    print("[OK] layer-map parity holds: sh case=%d sh list=%d ps1=%d members=%d (all equal)"
-          % (len(sh_case), len(sh_list), len(ps_map), len(members)))
+    print("[OK] layer-map parity holds: sh case=%d sh list=%d ps1=%d members=%d "
+          "dep groupings=%d (all equal)"
+          % (len(sh_case), len(sh_list), len(ps_map), len(members), len(dep_rows)))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    # ASCII-only file (see the coding cookie above).
+    # gate_rc: a crash must exit 2, never borrow 1 as "judged red" (F32/F33).
+    import gate_rc
+    sys.exit(gate_rc.run(lambda: main(sys.argv)))

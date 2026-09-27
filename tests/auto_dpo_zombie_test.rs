@@ -23,13 +23,13 @@ mod tests {
             .filter(|line| !line.contains("crates/auto-dpo/"))
             .filter(|line| {
                 // 跳过注释行
-                !line.trim().starts_with("//") &&
-                !line.trim().starts_with("/*")
+                !line.trim().starts_with("//") && !line.trim().starts_with("/*")
             })
             .collect();
 
         if !real_consumers.is_empty() {
-            let consumed_lines: Vec<String> = real_consumers.iter().map(|s| s.to_string()).collect();
+            let consumed_lines: Vec<String> =
+                real_consumers.iter().map(|s| s.to_string()).collect();
             panic!(
                 "auto-dpo 被发现被其他 crate 导入:\n{}",
                 consumed_lines.join("\n")
@@ -54,13 +54,11 @@ mod tests {
                     let path = entry.path();
                     if path.is_dir() {
                         scan_rs_files(&path, results, pattern);
-                    } else if path.extension().map_or(false, |ext| ext == "rs") {
+                    } else if path.extension().is_some_and(|ext| ext == "rs") {
                         if let Ok(content) = fs::read_to_string(&path) {
                             for (line_num, line) in content.lines().enumerate() {
                                 if line.contains(pattern) {
-                                    let full_path = path
-                                        .to_string_lossy()
-                                        .replace("\\", "/");
+                                    let full_path = path.to_string_lossy().replace("\\", "/");
                                     results.push(format!(
                                         "{}:{}:{}",
                                         full_path,

@@ -81,17 +81,15 @@ impl PerBuffer {
         self.entries.push(entry);
         if self.capacity > 0 && self.entries.len() > self.capacity {
             // O(n) 找到最低 TD 误差条目并移除（红线 R8: 禁 sort_by O(n log n)）
-            let min_idx = self
-                .entries
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| {
-                    a.td_error
-                        .partial_cmp(&b.td_error)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .map(|(idx, _)| idx)
-                .expect("entries 非空（len > capacity > 0）");
+            // len > capacity > 0 保证序列非空,min_by 必命中;None 仅可能源于
+            // 不变量破坏,保守降级(本轮不淘汰)而非 panic
+            let Some((min_idx, _)) = self.entries.iter().enumerate().min_by(|(_, a), (_, b)| {
+                a.td_error
+                    .partial_cmp(&b.td_error)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) else {
+                return;
+            };
             self.entries.swap_remove(min_idx);
         }
     }
@@ -278,6 +276,7 @@ impl SegmentAwarePER {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_contracts::rl_types::{MemPiAction, RLAction, RLState};

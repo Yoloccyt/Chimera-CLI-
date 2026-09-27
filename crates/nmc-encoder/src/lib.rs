@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L2
+//! ROLE:     神经多模态上下文编码器 — 将多模态输入编码为统一的潜在表示
+//! BACKEND:  fs
+//! PRODUCERS: 1 NmcEncoded
+//! CONSUMERS: 3 chimera-mas,mtpe-executor,repo-wiki
+//! MATURITY: DEFERRED|PLACEHOLDER-CN
+//! CRATE-CONTRACT END
 //! 神经多模态上下文编码器 — 将多模态输入编码为统一的潜在表示
 //!
 //! 对应架构层:L2 Memory

@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L4
+//! ROLE:     量子纠缠执行协议 — 跨执行单元的零孤儿结果汇聚协议
+//! BACKEND:  memory
+//! PRODUCERS: 0 -
+//! CONSUMERS: 1 gqep-executor
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! 量子纠缠执行协议 — 跨执行单元的零孤儿结果汇聚协议
 //!
 //! 对应架构层:L4 Security

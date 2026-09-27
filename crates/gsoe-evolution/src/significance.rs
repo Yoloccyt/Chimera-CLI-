@@ -109,10 +109,12 @@ fn binomial_coefficient(n: u32, k: u32) -> u64 {
     for i in 0..k {
         // result = result * (n - i) / (i + 1)
         // 先乘后除避免精度损失(整数除法)
-        result = result
-            .checked_mul((n - i) as u64)
-            .expect("binomial_coefficient: 乘法溢出(N <= 32 时不应发生)")
-            / (i + 1) as u64;
+        // API contract: 仅由本模块 PMF 以 n <= 32 调用(上方数值论证+R3-E06-4)，
+        // 溢出属超契约输入，显式 panic 优于静默错值(亦不依赖 expect)
+        match result.checked_mul((n - i) as u64) {
+            Some(v) => result = v / (i + 1) as u64,
+            None => panic!("binomial_coefficient: 乘法溢出(n > 32 超契约)"),
+        }
     }
     result
 }
@@ -371,6 +373,7 @@ impl Default for SignificanceDetector {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

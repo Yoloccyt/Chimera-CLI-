@@ -18,7 +18,8 @@
 //! - immutable_surface_blocks_registration:不可进化面违反 → 注册拒绝 + 错误映射
 //! - channel_a_to_b_end_to_end:通道 A 提议 → 通道 B CI 门 + 显著性 → 注册
 
-// Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
+                                                    // Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
 use event_bus::{EventBus, EventSeverity, NexusEvent};
 use gsoe_evolution::{
     CargoCiGate, CiFailure, CiFailureKind, CiGate, DelegationEdge, GsoeConfig, GsoeError,

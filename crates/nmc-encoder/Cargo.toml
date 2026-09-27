@@ -56,3 +56,8 @@ harness = false
 [[bench]]
 name = "parallel_encoding"
 harness = false
+
+# E-5 opt-in: production code expects rewritten to documented defensive
+# branches (pop-if-let / iterator let-else); rest are test/bench idioms.
+[lints]
+workspace = true

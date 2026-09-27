@@ -1,0 +1,8 @@
+# topk_sites_baseline.txt -- measured sort-then-truncate shapes (P-4 incremental)
+# Key = crates-path::normalized-sort-line(first 48 chars).
+# Only-DECREASE: removing a shape (migrate to xts_top_k) deletes its row; a NEW unregistered shape fails V-newsite.
+# Refresh ONLY as part of a reviewed migration batch: --emit-sites
+crates/chimera-tui/src/panels/experience_card_viz.rs::sorted.sort_by_key(|item| std::cmp::Reverse(item
+crates/mlc-engine/src/l2_semantic.rs::scored[..k].sort_by(|a, b| b.1.partial_cmp(&a.1)
+crates/nexus-contracts/src/util.rs::items[..k].sort_by(cmp);
+crates/repo-wiki/src/search.rs::results[..k].sort_by(|a, b| {

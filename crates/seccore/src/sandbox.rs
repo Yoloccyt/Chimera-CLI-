@@ -707,20 +707,15 @@ impl Sandbox {
         // ── gVisor 可用性检测 ──
         // WHY: 三层检测确保"意图启用 → 已配置 → 运行时可用"全链路通过,
         // 任一层不满足即降级为进程隔离,避免在非预期环境(如测试)误用 gVisor
-        let gvisor_available = self.use_gvisor
-            && self
-                .gvisor_runtime
-                .as_ref()
-                .is_some_and(|rt| rt.is_available());
+        // Option 形态直接携带 runtime 引用,消除后续 expect 重复检查
+        let gvisor_runtime = self
+            .gvisor_runtime
+            .as_ref()
+            .filter(|rt| self.use_gvisor && rt.is_available());
 
         // ── 执行路径选择 ──
-        let output = if gvisor_available {
+        let output = if let Some(runtime) = gvisor_runtime {
             // 路径 A: gVisor 内核级隔离 (Linux 生产环境)
-            let runtime = self
-                .gvisor_runtime
-                .as_ref()
-                .expect("gvisor_runtime 存在性已在 is_some_and 中检查,此 expect 不会触发");
-
             info!(
                 runsc_path = %runtime.runsc_path(),
                 program = %spec.program,
@@ -960,6 +955,7 @@ pub fn spawn_interception_reporter(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod private_api_tests {
     // L4 深度优化 P2-1:私有 API 白盒测试(handle_escalation/post_execution_audit
     // 访问私有字段)保留在 src 内;公共 API 测试已外移 tests/sandbox_integration.rs。

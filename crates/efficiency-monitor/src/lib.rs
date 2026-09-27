@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L9
+//! ROLE:     效率监控与告警 — 实时采集执行指标并触发告警
+//! BACKEND:  fs
+//! PRODUCERS: 21 AffinityCapabilityNegotiated,AsaIntervention,AssessmentUpdated,AuditFindingRaised,BudgetExceeded…
+//! CONSUMERS: 1 chimera-cli
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! 效率监控与告警 — 实时采集执行指标并触发告警
 //!
 //! 对应架构层：L9 Quest

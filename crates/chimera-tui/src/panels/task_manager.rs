@@ -4,7 +4,8 @@
 //! 对应 spec:`enterprise-tui-monitoring-task-viz §三 任务管理增强`
 //!
 //! # 设计决策(WHY)
-//! - 独立 Panel 实现,不强注册到 TuiApp 17 面板循环(避免破坏既有焦点契约);
+//! - 独立 Panel 实现,不强注册到 `TuiApp` 的面板焦点循环(避免破坏既有焦点契约,
+//!   循环成员以 `FocusManager` 注册表为唯一权威);
 //!   面板通过单元测试与未来"插件化 PanelRegistry"接入。
 //! - 优先级 0-10 用户面范围(与底层 `Quest.priority` 0-255 内部范围区分),
 //!   范围映射在 `TuiApp::apply_command` 中桥接(×25)。
@@ -962,6 +963,7 @@ fn user_priority_from_internal(internal: u8) -> u8 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;

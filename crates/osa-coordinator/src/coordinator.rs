@@ -138,6 +138,35 @@ pub struct OmniSparseCoordinator {
     dimension_adjuster: Option<Arc<Mutex<SixDimensionAdjuster>>>,
 }
 
+/// 单次路径五维并行的尺寸自适应阈值(四维深审 E-2 配套立项,2026-09-26)
+///
+/// WHY 保守取大:实测小负载(2210 活跃项)下并行固定成本≈293µs(442-149)
+/// 吞掉全部计算收益(串行仅 149µs,见 docs/reports/perf-slo-2026-09-25.md §1.2)——
+/// 五 OS 线程 spawn/join 固定开销与输入无关,而可省的计算时间随规模线性增长;
+/// 交点推算 ≈13.6× 实测慢位(2210) ≈ 30k,取整保守值:宁可对中等负载错失
+/// 并行收益,绝不再让小负载付 3× 惩罚(即现状病理)。大负载真收益需新
+/// 实测锚点后再下调(阈只减不增的对称约束靠 bench 守,见 P-6 登记链)。
+pub const PARALLEL_MIN_ACTIVE_ITEMS: usize = 30_000;
+
+/// 汇总 profile 五列表的活跃项总数(并行收益规模的代理变量)
+#[must_use]
+pub fn profile_active_items(profile: &TaskProfile) -> usize {
+    profile.available_tools.len()
+        + profile.available_files.len()
+        + profile.available_memories.len()
+        + profile.recent_operations.len()
+        + profile.active_tasks.len()
+}
+
+/// 单次 compute_all_masks 是否走五维 thread::scope 并行(尺寸判定纯函数)
+///
+/// 判定与 IO 完全分离(可 proptest);返回 false 时走串行五连调,
+/// 两路结果逐位相同(五方法均为纯函数,只读 &self/&profile)。
+#[must_use]
+pub fn should_use_parallel_masks(profile: &TaskProfile) -> bool {
+    profile_active_items(profile) >= PARALLEL_MIN_ACTIVE_ITEMS
+}
+
 impl OmniSparseCoordinator {
     /// 创建协调器,使用默认配置
     pub fn new(event_bus: EventBus) -> Self {
@@ -317,8 +346,9 @@ impl OmniSparseCoordinator {
     /// `mask_hash` 从缓存字段改为通过 `compute_omni_mask_hash(&masks)?` 现算。
     ///
     /// # 性能基准
-    /// 掩码计算 < 10ms(测试中断言);并行版在 50 工具 + 2000 文件规模下
-    /// 相比顺序版有显著延迟降低(见 benches/parallel_vs_sequential.rs)
+    /// 掩码计算 < 10ms(测试中断言);小负载(活跃项 < PARALLEL_MIN_ACTIVE_ITEMS)
+    /// 走串行五连调(实测并行固定成本使小输入 3× 慢),大负载走
+    /// std::thread::scope 五维并行(见 benches/parallel_vs_sequential.rs)
     pub async fn compute_all_masks(
         &self,
         profile: &TaskProfile,
@@ -335,50 +365,61 @@ impl OmniSparseCoordinator {
             "开始计算全维稀疏掩码"
         );
 
-        // 3. 并行计算五维度掩码(Task 6: std::thread::scope)
+        // 3. 计算五维度掩码——尺寸自适应(四维深审 E-2 配套立项,2026-09-26)
         //
-        // 5 个 compute_*_mask 方法均为纯函数(只读 &self 和 &profile),无 &mut self,
-        // 无外部副作用(事件发布移到并行计算之后,见步骤 6)。5 个维度在独立 OS 线程中
-        // 同时计算,消解 O(5N) 顺序开销。
+        // 大负载:5 个 compute_*_mask 纯函数在独立 OS 线程并行(std::thread::scope,
+        // 消解 O(5N) 顺序开销);小负载:串行五连调——实测五线程 spawn/join 固定
+        // 成本≈293µs 使 2210 项输入比串行慢 3×(perf-slo §1.2),两路结果逐位相同。
         //
         // WHY thread::scope 而非 tokio::join!:compute_*_mask 是同步纯函数,
         // thread::scope 直接派生 OS 线程并行,无需 async runtime 切换开销。
         // scope 保证所有派生线程在 scope 结束前 join,引用生命周期由编译器保证。
         //
-        // WHY expect 而非 ? :spawn 返回的 JoinResult::join() 失败表示计算线程 panic,
-        // 属于不可恢复的程序错误(非业务错误),用 expect 直接 panic 符合"内部代码信任"原则。
+        // WHY panic 而非 ? :spawn 返回的 JoinResult::join() 失败表示计算线程 panic,
+        // 属于不可恢复的程序错误(非业务错误),用显式 panic 中止符合"内部代码信任"原则。
         // 闭包内调用的是纯函数,无外部 IO,panic 仅可能来自底层分配失败(已超出 OsaError 范畴)。
-        let (mut routing, context, memory, audit, budget) = std::thread::scope(|s| {
-            // 每个闭包捕获 &self 和 &profile,scope 保证引用在 scope 内有效
-            // WHY 五个 spawn 而非 rayon::join:五维度计算相互独立,无需工作窃取,
-            // std::thread::scope 直接派生 5 个 OS 线程,开销最低
-            let r_routing = s.spawn(|| self.compute_routing_mask(profile));
-            let r_context = s.spawn(|| self.compute_context_mask(profile));
-            let r_memory = s.spawn(|| self.compute_memory_mask(profile));
-            let r_audit = s.spawn(|| self.compute_audit_mask(profile));
-            let r_budget = s.spawn(|| self.compute_budget_mask(profile));
+        let (mut routing, context, memory, audit, budget) = if should_use_parallel_masks(profile) {
+            std::thread::scope(|s| {
+                // 统一 join 外壳:线程 panic 仅可能源于开发期缺陷(纯函数无外部 IO),
+                // 显式 panic 保留维度诊断;Err 载荷不消费(Box<dyn Any> 无法跨层传播)
+                fn join_dim<T>(dim: &str, joined: Result<T, Box<dyn std::any::Any + Send>>) -> T {
+                    match joined {
+                        Ok(v) => v,
+                        Err(_) => {
+                            panic!("{dim} mask 计算线程 panic:纯函数不应失败,检查底层分配")
+                        }
+                    }
+                }
+                // 每个闭包捕获 &self 和 &profile,scope 保证引用在 scope 内有效
+                // WHY 五个 spawn 而非 rayon::join:五维度计算相互独立,无需工作窃取,
+                // std::thread::scope 直接派生 5 个 OS 线程,开销最低
+                let r_routing = s.spawn(|| self.compute_routing_mask(profile));
+                let r_context = s.spawn(|| self.compute_context_mask(profile));
+                let r_memory = s.spawn(|| self.compute_memory_mask(profile));
+                let r_audit = s.spawn(|| self.compute_audit_mask(profile));
+                let r_budget = s.spawn(|| self.compute_budget_mask(profile));
 
-            // 顺序 join(顺序无关,5 个线程已并行启动)
-            // WHY join 顺序不影响结果:5 个线程已通过 spawn 并行启动,
-            // join 顺序仅影响主线程等待顺序,不改变并行性
-            let routing = r_routing
-                .join()
-                .expect("routing mask 计算线程 panic:纯函数不应失败,检查底层分配");
-            let context = r_context
-                .join()
-                .expect("context mask 计算线程 panic:纯函数不应失败,检查底层分配");
-            let memory = r_memory
-                .join()
-                .expect("memory mask 计算线程 panic:纯函数不应失败,检查底层分配");
-            let audit = r_audit
-                .join()
-                .expect("audit mask 计算线程 panic:纯函数不应失败,检查底层分配");
-            let budget = r_budget
-                .join()
-                .expect("budget mask 计算线程 panic:纯函数不应失败,检查底层分配");
+                // 顺序 join(顺序无关,5 个线程已并行启动)
+                // WHY join 顺序不影响结果:5 个线程已通过 spawn 并行启动,
+                // join 顺序仅影响主线程等待顺序,不改变并行性
+                let routing = join_dim("routing", r_routing.join());
+                let context = join_dim("context", r_context.join());
+                let memory = join_dim("memory", r_memory.join());
+                let audit = join_dim("audit", r_audit.join());
+                let budget = join_dim("budget", r_budget.join());
 
-            (routing, context, memory, audit, budget)
-        });
+                (routing, context, memory, audit, budget)
+            })
+        } else {
+            // 小负载串行五连调:与并行路径逐位等价(五方法纯函数,只读 &self/&profile)
+            (
+                self.compute_routing_mask(profile),
+                self.compute_context_mask(profile),
+                self.compute_memory_mask(profile),
+                self.compute_audit_mask(profile),
+                self.compute_budget_mask(profile),
+            )
+        };
 
         // W1(§11.5): routing 维度使用统计二次裁剪（Dressage 闭环）
         //
@@ -747,9 +788,106 @@ impl OmniSparseCoordinator {
 // 方法改为委托,避免双实现漂移。
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::types::{AffectedScope, RiskLevel, TaskType, TimePressure};
+    use proptest::prelude::*;
+
+    // ==================== 尺寸自适应并行判定(2026-09-26,E-2 配套立项) ====================
+
+    /// 构造指定五列表长度的 TaskProfile(尺寸判定测试专用)
+    fn make_sized_profile(
+        tools: usize,
+        files: usize,
+        mems: usize,
+        ops: usize,
+        tasks: usize,
+    ) -> TaskProfile {
+        TaskProfile {
+            task_id: "t-size".into(),
+            task_type: TaskType::Read,
+            complexity_score: 0.5,
+            risk_level: RiskLevel::Medium,
+            time_pressure: TimePressure::Low,
+            affected_scope: AffectedScope::Local,
+            available_tools: (0..tools).map(|i| format!("tool-{i}").into()).collect(),
+            available_files: (0..files).map(|i| format!("file-{i}").into()).collect(),
+            available_memories: (0..mems).map(|i| format!("mem-{i}").into()).collect(),
+            recent_operations: (0..ops).map(|i| format!("op-{i}").into()).collect(),
+            active_tasks: (0..tasks).map(|i| format!("task-{i}").into()).collect(),
+            routing_scores: None,
+            context_scores: None,
+            memory_scores: None,
+            task_phase: None,
+        }
+    }
+
+    #[test]
+    fn adaptive_threshold_boundary_is_inclusive() {
+        // 阈值含边界:≥ 30_000 才并行;29_999 保持串行(实测慢区)
+        let under = make_sized_profile(1, 29_995, 1, 1, 1); // total = 29_999
+        let at = make_sized_profile(1, 29_996, 1, 1, 1); //   total = 30_000
+        assert_eq!(profile_active_items(&under), PARALLEL_MIN_ACTIVE_ITEMS - 1);
+        assert!(!should_use_parallel_masks(&under), "实测慢区必须走串行");
+        assert!(should_use_parallel_masks(&at), "阈值边界含等号→并行");
+    }
+
+    #[test]
+    fn adaptive_threshold_is_proportional_across_all_five_lists() {
+        // 阈值看五列表总和不看单项:单列达标与均衡分摊结果一致
+        let single = make_sized_profile(30_000, 0, 0, 0, 0);
+        let spread = make_sized_profile(6_000, 6_000, 6_000, 6_000, 6_000);
+        assert!(should_use_parallel_masks(&single));
+        assert!(
+            should_use_parallel_masks(&spread),
+            "总和达标即并行,与分布无关"
+        );
+    }
+
+    #[test]
+    fn adaptive_two_paths_produce_bitwise_identical_masks() {
+        // 双路径逐位等价的核心证据:小 profile(串行路)的五连调手工结果
+        // == compute_all_masks 整体产出(同尺寸下两路同一串行分支,再与
+        // 大 profile 并行分支对照结构不变量——纯函数前提由编译期只读借用保证)
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let coord = OmniSparseCoordinator::new(EventBus::new());
+        let profile = make_sized_profile(40, 1_500, 40, 80, 8); // 实测 bench 同形态小负载
+        assert!(!should_use_parallel_masks(&profile), "前置:该走串行");
+        let masks = rt.block_on(coord.compute_all_masks(&profile)).unwrap();
+        let manual = OmniSparseMasks::new(
+            coord.compute_routing_mask(&profile),
+            coord.compute_context_mask(&profile),
+            coord.compute_memory_mask(&profile),
+            coord.compute_audit_mask(&profile),
+            coord.compute_budget_mask(&profile),
+        );
+        assert_eq!(masks, manual, "串行路必须与手工五连调逐位相同");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// 单调性:向任意列追加活跃项永不把并行翻回串行(阈值判定单调)
+        #[test]
+        fn prop_adaptive_decision_is_monotone_in_items(base_files in 0usize..40_000, extra in 0usize..100) {
+            let small = make_sized_profile(0, base_files, 0, 0, 0);
+            let grown = make_sized_profile(0, base_files + extra, 0, 0, 0);
+            let s = should_use_parallel_masks(&small);
+            let g = should_use_parallel_masks(&grown);
+            prop_assert!(!s || g, "增加项后从并行翻回串行破坏单调性: base={base_files} extra={extra}");
+        }
+
+        /// 求和完整性:活跃项总数恒等于五列表长度之和(代理变量定义性不变量)
+        #[test]
+        fn prop_active_items_is_exact_sum(
+            t in 0usize..10_000, f in 0usize..10_000, m in 0usize..10_000,
+            o in 0usize..10_000, k in 0usize..10_000,
+        ) {
+            let p = make_sized_profile(t, f, m, o, k);
+            prop_assert_eq!(profile_active_items(&p), t + f + m + o + k);
+        }
+    }
 
     /// 构造测试用 TaskProfile
     fn make_profile(complexity: f32, risk: RiskLevel) -> TaskProfile {

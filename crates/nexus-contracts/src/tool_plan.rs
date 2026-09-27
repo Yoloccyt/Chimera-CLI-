@@ -187,10 +187,13 @@ fn has_cycle(nodes: &[ToolNode], edges: &[PlanEdge]) -> bool {
         visited += 1;
         if let Some(nexts) = adj.get(n) {
             for m in nexts {
-                let d = indegree.get_mut(m).expect("边引用已校验");
-                *d -= 1;
-                if *d == 0 {
-                    queue.push_back(m);
+                // 不变量:边引用必在 indegree(建表先于扫描);缺失属数据异常，
+                // E-5 去 expect 改防御性跳过——环判定对合法输入结果不变，异常输入保守不误报环
+                if let Some(d) = indegree.get_mut(m) {
+                    *d -= 1;
+                    if *d == 0 {
+                        queue.push_back(m);
+                    }
                 }
             }
         }
@@ -199,6 +202,7 @@ fn has_cycle(nodes: &[ToolNode], edges: &[PlanEdge]) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

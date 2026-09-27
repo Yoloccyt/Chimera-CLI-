@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L3
+//! ROLE:     能力内存四级分层 — 热/温/冷/冰四级能力存储与自动迁移
+//! BACKEND:  sqlite
+//! PRODUCERS: 3 CapabilityTierStatsReported,CapabilityTiered,LsctTierSwitched
+//! CONSUMERS: 1 chimera-cli
+//! MATURITY: NOT-IMPL-CN
+//! CRATE-CONTRACT END
 //! 能力内存四级分层 — 热/温/冷/冰四级能力存储与自动迁移
 //!
 //! 对应架构层:L3 Storage

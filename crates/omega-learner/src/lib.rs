@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L6
+//! ROLE:     NEXUS-OMEGA L6 学习层 — omega-learner Bandit 六接缝
+//! BACKEND:  memory
+//! PRODUCERS: 3 ModelRouteSelected,RewardSignalReported,StreamSessionCompleted
+//! CONSUMERS: 0 -
+//! MATURITY: NOT-IMPL-CN
+//! CRATE-CONTRACT END
 //! NEXUS-OMEGA L6 学习层 — omega-learner Bandit 六接缝
 //!
 //! 对应架构层: **L6 Router**（与 OSA/KVBSR/FAAE/SESA 同层）

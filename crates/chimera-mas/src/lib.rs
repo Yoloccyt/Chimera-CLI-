@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L9
+//! ROLE:     CHIMERA Multi-Agent Synergy (MAS) 子系统
+//! BACKEND:  memory
+//! PRODUCERS: 13 AgentConsultRequested,AgentConsultResponded,AgentContextOverflow,AgentHeartbeat,AgentTaskCompleted…
+//! CONSUMERS: 1 chimera-cli
+//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-CN|SIMPLIFIED-CN
+//! CRATE-CONTRACT END
 //! CHIMERA Multi-Agent Synergy (MAS) 子系统
 //!
 //! 架构层归属: L9 Quest(与 quest-engine / gea-activator / efficiency-monitor 同层)

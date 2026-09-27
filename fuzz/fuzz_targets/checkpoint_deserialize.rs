@@ -24,10 +24,10 @@
 // fuzz crate 独立于主 workspace,不影响 34 crate 的 forbid 覆盖率。
 
 // Windows-GNU 下使用 stub 宏(chimera_fuzz),非 Windows 使用 libfuzzer_sys
-#[cfg(not(windows))]
-use libfuzzer_sys::fuzz_target;
 #[cfg(windows)]
 use chimera_fuzz::fuzz_target;
+#[cfg(not(windows))]
+use libfuzzer_sys::fuzz_target;
 use nexus_core::Checkpoint;
 
 fuzz_target!(|data: &[u8]| {
@@ -64,9 +64,6 @@ fuzz_target!(|data: &[u8]| {
     // 虽然持久化用 MessagePack,JSON 路径也需安全(调试/导出场景)
     if let Ok(checkpoint) = serde_json::from_slice::<Checkpoint>(data) {
         let reserialized = serde_json::to_vec(&checkpoint);
-        assert!(
-            reserialized.is_ok(),
-            "Checkpoint JSON 重新序列化应成功"
-        );
+        assert!(reserialized.is_ok(), "Checkpoint JSON 重新序列化应成功");
     }
 });

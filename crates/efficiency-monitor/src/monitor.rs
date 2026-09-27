@@ -412,6 +412,8 @@ impl EfficiencyMonitor {
                 tokio::time::interval(Duration::from_millis(collect_interval_ms));
             // 上次采样的累计丢弃数，用于检测是否有新增丢弃
             let mut last_dropped_count: u64 = 0;
+            // E-3: 上一 tick 的 broadcast 累计 lagged 丢弃数，用于检测背压增量
+            let mut last_lagged: u64 = 0;
 
             // 双通道消费循环：broadcast 主流 + mpsc 旁路兜底 + 周期采样
             // WHY tokio::select!：同时 await broadcast recv、mpsc recv 与 interval tick，
@@ -462,6 +464,21 @@ impl EfficiencyMonitor {
                         if current > last_dropped_count {
                             publish_critical_dropped_alert(&bus_for_alerts, current);
                             last_dropped_count = current;
+                        }
+                        // E-3(四维深审): 闭合 `backpressure_stats()` 生产零消费者——
+                        // 周期拉取背压统计,lagged 增量时发布 `SlowConsumerDropped` 告警
+                        // (复用现有变体,不新增事件 ⇒ 不触 NexusEvent 双清单红线)。lagged
+                        // 仅因真实慢消费者增长,本 publish 不会再增 lagged ⇒ 无自反馈。
+                        // publish_blocking 为同步广播 send(best-effort,失败仅忽略不阻断采集)。
+                        let (lagged, _bp_warnings) = bus_for_alerts.backpressure_stats();
+                        if lagged > last_lagged {
+                            let _ = bus_for_alerts.publish_blocking(NexusEvent::SlowConsumerDropped {
+                                metadata: EventMetadata::new("efficiency-monitor"),
+                                subscriber_id: "broadcast-collective".to_string(),
+                                lag: lagged - last_lagged,
+                                dropped_count: lagged,
+                            });
+                            last_lagged = lagged;
                         }
                     }
                 }
@@ -743,6 +760,7 @@ fn publish_critical_dropped_alert(bus: &EventBus, dropped_count: u64) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
     use crate::types::Comparison;

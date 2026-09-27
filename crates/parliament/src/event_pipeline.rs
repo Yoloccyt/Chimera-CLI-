@@ -90,7 +90,8 @@ impl EventPipeline {
 
         let (tx, mut rx) = mpsc::channel::<PipelineEvent>(self.capacity);
         // 将发送端存入 Mutex，供 publish 使用
-        *self.tx.lock().expect("EventPipeline::spawn tx lock") = Some(tx);
+        // poison-tolerant(仓内惯用法):tx 槽位无跨线程不变量,恢复优于 panic
+        *self.tx.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
 
         let bus = Arc::clone(&self.bus);
         tokio::spawn(async move {
@@ -142,8 +143,8 @@ impl EventPipeline {
             ack_tx: Some(ack_tx),
         };
 
-        // 锁定 Mutex 获取发送端引用
-        let tx_guard = self.tx.lock().expect("EventPipeline::publish tx lock");
+        // 锁定 Mutex 获取发送端引用(poison-tolerant,同上)
+        let tx_guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
         match tx_guard.as_ref() {
             Some(tx) => {
                 // 尝试非阻塞发送
@@ -185,6 +186,7 @@ impl EventPipeline {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use event_bus::EventMetadata;

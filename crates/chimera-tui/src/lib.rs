@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L10
+//! ROLE:     Chimera TUI — 基于 Ratatui 的多面板终端用户界面
+//! BACKEND:  sqlite
+//! PRODUCERS: 73 AgentTaskFailed,AhirtProbeCompleted,AsaIntervention,AuditFindingRaised,BudgetAdjusted…
+//! CONSUMERS: 1 chimera-cli
+//! MATURITY: SIMPLIFIED-CN
+//! CRATE-CONTRACT END
 //! Chimera TUI — 基于 Ratatui 的多面板终端用户界面
 //!
 //! 对应架构层:L10 Interface
@@ -15,7 +23,8 @@
 //! # 技术选型(WHY)
 //! - **ratatui 0.29**:Rust 生态最成熟的 TUI 框架,纯 Rust 实现契合
 //!   `#![forbid(unsafe_code)]` 安全哲学;提供 Widget trait 组合式布局,
-//!   支持 8 面板并行渲染(Quest/Parliament/Budget/Memory/Security/Health/Log/Help)。
+//!   支持多面板并行渲染（面板集合以 `types::PanelId` 为唯一权威；示例：Quest/Parliament/
+//!   Budget/Memory/Security/Health/Log/Help）。
 //! - **crossterm 0.28**:跨平台终端后端(Windows/macOS/Linux),
 //!   0.28 版本 KeyEvent API 变更为 `KeyEvent::new(code, modifiers)` 双参数,
 //!   Release 事件需 `KeyEvent::new_with_kind(code, modifiers, KeyEventKind::Release)`。

@@ -12,12 +12,6 @@
 # chimera-mas Check D base 11/16). Regenerate with:
 #   python scripts/check_dep_edge_freeze.py --emit > scripts/dep_edge_freeze.txt
 # (then re-add this header block).
-acb-governor|event-bus
-auto-dpo|event-bus
-auto-dpo|mlc-engine
-auto-dpo|model-router
-auto-dpo|nexus-contracts
-auto-dpo|nexus-core
 chimera-cli|chimera-mas
 chimera-cli|chimera-tui
 chimera-cli|cmt-tiering
@@ -91,7 +85,6 @@ hcw-window|nexus-core
 kvbsr-router|event-bus
 kvbsr-router|nexus-contracts
 kvbsr-router|nexus-core
-lsct-tiering|cmt-tiering
 lsct-tiering|event-bus
 mas-sched|nexus-contracts
 mca-gateway|event-bus
@@ -103,9 +96,6 @@ mcp-mesh|event-bus
 mlc-engine|event-bus
 mlc-engine|nexus-contracts
 mlc-engine|nexus-core
-model-router|event-bus
-model-router|nexus-contracts
-model-router|nexus-core
 mtpe-executor|event-bus
 mtpe-executor|nmc-encoder
 nexus-app-server|event-bus
@@ -150,4 +140,28 @@ sesa-router|nexus-core
 session-store|nexus-contracts
 ssra-fusion|event-bus
 ssra-fusion|nexus-contracts
+
+# --- 2026-09-21 batch: per-edge reviewed registration (NOT an --emit bulk) ---
+# Each line below was checked individually against the layer map and for a real
+# source reference (file:line given as the review evidence). All are downward or
+# same-layer edges, so Check B cannot flag them; none touches the Check E scope
+# (chimera-tui outbound only); none is an inner-ring edge (Check A).
+# The unregistered edges that are NOT in this block stay red on purpose:
+#   7 x chimera-cli -> {chtc-bridge,csn-substitutor,mas-sched,mtpe-executor,
+#       nexus-hook,sesa-router,ssra-fusion}  = zero-reference ghost declarations
+#       (G-31 red too; same 7 crates) -> disposition is decision Q2 / ADR-188
+#   (RESOLVED 2026-09-24) gsoe-evolution -> decay-engine was the [GAP-A] edge
+#       pending Q3; ADR-187 retired Check A (alpha-prime), so it is now a
+#       REGISTERED lawful downward edge (see line at the end of this block).
+chimera-cli|decay-engine       # L10->L4 down; composition.rs:32 use decay_engine::ShadowMode (WS-A wire-up)
+chimera-cli|decb-governor      # L10->L8 down; experience_loop.rs:204 decb_governor:: (governor must be constructed, not evented)
+chimera-cli|gea-activator      # L10->L9 down; composition.rs:102 pub gea: Arc<gea_activator::..> (single construction point)
+chimera-cli|gqep-executor      # L10->L7 down; commands/doctor.rs:183 probes gqep_executor:: (health probe consumes the API)
+chimera-cli|scc-cache          # L10->L3 down; commands/doctor.rs:576 check_scc_cache via scc_cache:: (probe, not new data path)
+chimera-mas|gea-activator      # L9->L9 same-layer allowed; delegation.rs:393 Option<Arc<gea_activator::..>> (5 files)
+cmt-tiering|lsct-tiering       # L3->L3 same-layer allowed; lsct_policy.rs:32 use lsct_tiering::LsctCo.. (policy needs the tier type, no event equivalent)
+efficiency-monitor|decb-governor # L9->L8 down; auditor.rs:47 use decb_governor::Dec.. (auditor reads governor state synchronously)
+osa-coordinator|router-traits  # L6->L6 same-layer allowed; lib.rs:61 use router_traits::{RouterCon..} (seam abstraction, replacing the per-router hand glue)
+router-traits|nexus-contracts  # L6->L0 down, ADR-033 allows L(N)->L0; lib.rs:42 use nexus_contracts::{..} (trait over shared types only)
+gsoe-evolution|decay-engine    # L5->L4 DOWNWARD, lawful under agents.md 2.2 ten-layer law; registered per ADR-187 (alpha-prime: Check A retired, was a strict subset of Check B with zero unique detections). Engine reads ShadowModeCircuitBreaker synchronously (engine.rs:255 breaker.is_tripped()); event-ization rejected (would turn a fail-closed safety read fail-open). Ref docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md
 

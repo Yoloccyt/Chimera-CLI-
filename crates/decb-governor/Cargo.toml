@@ -23,3 +23,8 @@ proptest = { workspace = true }
 [[bench]]
 name = "budget_compute"
 harness = false
+
+# E-5 opt-in: production code unwrap/expect measured 0; all hits in
+# test/bench units with idiomatic file-top/mod allow.
+[lints]
+workspace = true

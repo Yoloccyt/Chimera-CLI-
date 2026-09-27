@@ -515,6 +515,10 @@ $catCount = (@($emittedIds | ForEach-Object { $_[0] } | Select-Object -Unique)).
 if ($status -eq 0) {
     Write-Host ('[OK] three-way reconciliation all pass (' + $catCount + ' categories / ' + $emittedIds.Count + ' check ids, self-reported): canonical version=' + $currentVersion + ', ' + $nMembers + ' crates, baseline aligned')
 } else {
-    Write-Host ('[FAIL] three-way reconciliation found gaps (' + $catCount + ' categories / ' + $emittedIds.Count + ' check ids emitted), see [GAP-*] lines above, fix and rerun')
+    # The self-report parenthetical must appear on BOTH paths: audit_gate_selfreport.py /
+    # xdoc_precise.py parse "N categories / M check ids, self-reported", so a green-path-only
+    # line left the meta-gates blind exactly when this gate was red (they reported
+    # "no self-report line" = undecidable instead of grading the counts).
+    Write-Host ('[FAIL] three-way reconciliation found gaps (' + $catCount + ' categories / ' + $emittedIds.Count + ' check ids, self-reported), see [GAP-*] lines above, fix and rerun')
 }
 exit $status

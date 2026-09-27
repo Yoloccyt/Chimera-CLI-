@@ -1,0 +1,7 @@
+# sqlite_blocking_allowlist.txt -- only-decrease baseline for check_sqlite_blocking.py
+# Row = `<path>:<line>  # reason`. Take via:
+#   python scripts/check_sqlite_blocking.py --emit
+# Register each with a real justification; new DB-in-async calls must go through spawn_blocking instead.
+crates/cmt-tiering/src/experience_card_storage.rs:60  # baseline 2026-09-25
+crates/cmt-tiering/src/experience_card_storage.rs:66  # baseline 2026-09-25
+crates/mlc-engine/src/engine.rs:841  # baseline 2026-09-25

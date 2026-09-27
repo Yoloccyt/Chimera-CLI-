@@ -1,0 +1,46 @@
+# lint_ratchet_crates.txt -- crates carrying [lints] workspace=true
+# Ratchet: only GROW. A row may be added only after
+#   `cargo clippy -p <crate> --all-targets` is warning-free under
+#   unwrap_used/expect_used (measure == 0). Removing an opt-in must
+#   delete the row in the same commit (V1 otherwise fails).
+chimera-cli  # opted in, measured clean at registration time
+chimera-mas  # opted in, measured clean at registration time
+chimera-tui  # opted in, measured clean at registration time
+chtc-bridge  # opted in, measured clean at registration time
+cmt-tiering  # opted in, measured clean at registration time
+csn-substitutor  # opted in, measured clean at registration time
+decay-engine  # opted in, measured clean at registration time
+decb-governor  # opted in, measured clean at registration time
+efficiency-monitor  # opted in, measured clean at registration time
+event-bus  # opted in, measured clean at registration time
+faae-router  # opted in, measured clean at registration time
+gea-activator  # opted in, measured clean at registration time
+gqep-executor  # opted in, measured clean at registration time
+gsoe-evolution  # opted in, measured clean at registration time
+hcw-window  # opted in, measured clean at registration time
+kvbsr-router  # opted in, measured clean at registration time
+lsct-tiering  # opted in, measured clean at registration time
+mas-sched  # opted in, measured clean at registration time
+mca-gateway  # opted in, measured clean at registration time
+mcp-mesh  # opted in, measured clean at registration time
+mlc-engine  # opted in, measured clean at registration time
+mtpe-executor  # opted in, measured clean at registration time
+nexus-app-server  # opted in, measured clean at registration time
+nexus-contracts  # opted in, measured clean at registration time
+nexus-core  # opted in, measured clean at registration time
+nexus-hook  # opted in, measured clean at registration time
+nexus-subagent  # opted in, measured clean at registration time
+nmc-encoder  # opted in, measured clean at registration time
+omega-learner  # opted in, measured clean at registration time
+osa-coordinator  # opted in, measured clean at registration time
+parliament  # opted in, measured clean at registration time
+pvl-layer  # opted in, measured clean at registration time
+qeep-protocol  # opted in, measured clean at registration time
+quest-engine  # opted in, measured clean at registration time
+repo-wiki  # opted in, measured clean at registration time
+router-traits  # opted in, measured clean at registration time
+scc-cache  # opted in, measured clean at registration time
+seccore  # opted in, measured clean at registration time
+sesa-router  # opted in, measured clean at registration time
+session-store  # opted in, measured clean at registration time
+ssra-fusion  # opted in, measured clean at registration time

@@ -26,8 +26,8 @@ use thiserror::Error;
 
 /// MAS 子系统错误类型
 ///
-/// 共 39 个变体,覆盖 MAS 特有错误场景(含 ADR-042 R2FreezeViolation
-/// 与 ADR-053 影子模式 2 变体)。
+/// 变体清单以本文件 `MasError` 定义为准（覆盖 MAS 特有错误场景，含 ADR-042
+/// R2FreezeViolation 与 ADR-053 影子模式两变体）。
 /// 所有变体均通过 `#[error("...")]` 提供人类可读的 Display 实现。
 #[derive(Debug, Error)]
 pub enum MasError {
@@ -657,6 +657,7 @@ impl MasError {
 pub type Result<T> = std::result::Result<T, MasError>;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

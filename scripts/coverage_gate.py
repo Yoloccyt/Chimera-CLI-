@@ -36,7 +36,7 @@ import sys
 try:
     import tomllib
 except ImportError:
-    print("[FAIL] coverage_gate.py requires python >= 3.11 (tomllib)")
+    print("[UNDECIDABLE] coverage_gate.py requires python >= 3.11 (tomllib)")
     sys.exit(2)
 
 try:
@@ -291,7 +291,7 @@ def mode_print_fail_under():
     mn = b.get("min")
     if not isinstance(mn, (int, float)) or isinstance(mn, bool) or not (0 <= mn <= 100):
         print("", end="")  # 空输出，让调用方拦（勿打印非数字污染 $()）
-        sys.stderr.write(f"[FAIL] baseline min not numeric/in-range: {mn!r}\n")
+        sys.stderr.write(f"[UNDECIDABLE] baseline min not numeric/in-range: {mn!r}\n")
         return 2
     print(int(mn))
     return 0
@@ -315,11 +315,12 @@ def mode_validate_config():
 
 def mode_check(dir_path):
     if not os.path.isdir(dir_path):
-        print(f"[FAIL] coverage dir not found: {dir_path}")
+        print(f"[UNDECIDABLE] coverage dir not found: {dir_path}")
         return 2
     files = sorted(glob.glob(os.path.join(dir_path, "*.json")))
     if not files:
-        print(f"[FAIL] no coverage JSON in {dir_path} (tarpaulin produced nothing)")
+        print(f"[UNDECIDABLE] no coverage JSON in {dir_path} "
+              "(cargo-llvm-cov 未产出 summary，或被清理)")
         return 2
     records = []
     for fp in files:
@@ -334,11 +335,12 @@ def mode_check(dir_path):
         elif isinstance(data, dict):
             records.extend(load_records_from_obj(data))
     if not records:
-        print("[FAIL] no usable coverage records (key-name contract broken? print first JSON to summary)")
+        print("[UNDECIDABLE] no usable coverage records —— 键名契约可能已变，"
+              "请打印首个 JSON 的顶层键后再判（未做任何覆盖率裁决）")
         return 2
     b = load_baseline()
     if b is None:
-        print("[FAIL] baseline missing (undeterminable)")
+        print("[UNDECIDABLE] baseline missing —— 无阈值可对照，未做任何覆盖率裁决")
         return 2
     df, ex, exp = load_floors(b["floor_file"] if os.path.isabs(b["floor_file"]) else os.path.join(ROOT, b["floor_file"]))
     members = workspace_members(ROOT)
@@ -467,4 +469,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    import gate_rc  # 只在入口需要：崩溃必须退 2, 不得借 1 冒充"判过且红"（F32/F33）
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))

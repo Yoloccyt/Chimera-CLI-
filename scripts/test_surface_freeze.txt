@@ -1,0 +1,18 @@
+# 「注册了但不跑」测试面活性登记表 —— 与 ignored_test_inventory_freeze.txt 同族的另一态
+#
+# 语义：由 scripts/check_test_surface_liveness.py 检出，每条发现必须落本表一行，
+#       格式 = STATE|path|reason（STATE ∈ {MUTED, NEVER_COMPILED}）。
+#       未登记 -> [UNREGISTERED] FAIL；登记了但对象已消失 -> [STALE] FAIL。
+# 覆盖机制差别：#[ignore] 是"编译但不执行"，本表是"根本不参与编译"（target 级 cfg 屏蔽 /
+#       失去 mod 入口），二者都不该静默存在，故分表登记。
+#
+# 本表条目数即「负覆盖清单」的账；删除条目 = 该面恢复编译或被物理删除，二者都需在
+#       docs/reports/SAB-B0-2-impl-maturity-gate-2026-09-23.md 留一行去向。
+
+# 2026-09-25（四维深审 T-1 处置）：以下两笔“注册不跑”面已**物理删除**（其主题 auto-dpo
+# 已于批次 A 删除、RHI-CG 幽灵 rhi_judge 已于 ADR-190/P0-1 从 bench 清单摘除，测试对象不存在，
+# 恢复无意义）：
+#   - tests/e2e/rhi_cg_validation.rs（25 测，原 #![cfg(any())] 屏蔽）—— 连同其 [[test]] 注册删除
+#   - tests/e2e/fixtures/quest_set_v1.rs（769 行/7 测，唯一入口随上者失效）
+# 本表现存活动现：无（发现数 2→0）。历史去向另见报告 §62。
+

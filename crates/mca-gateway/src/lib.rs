@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L10
+//! ROLE:     多通道亲和网关 — MCA(Model-Channel Affinity)体系的 L10 通道层
+//! BACKEND:  sqlite
+//! PRODUCERS: 6 AffinityQuotaExhausted,BudgetExceeded,ModelAffinitySelected,SemanticCacheHit,StreamSessionCompleted…
+//! CONSUMERS: 0 -
+//! MATURITY: NOT-IMPL-CN
+//! CRATE-CONTRACT END
 //! 多通道亲和网关 — MCA(Model-Channel Affinity)体系的 L10 通道层
 //!
 //! 对应架构层:L10 Interface(与 chtc-bridge/mcp-mesh 同级同构)

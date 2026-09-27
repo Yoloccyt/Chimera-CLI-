@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L7
+//! ROLE:     生产验证闭环 — 并行流式生成与验证的 Producer-Verifier 循环
+//! BACKEND:  memory
+//! PRODUCERS: 3 OperationProduced,PredictionVerified,ProducerStrategyAdjusted
+//! CONSUMERS: 2 chimera-cli,chimera-mas
+//! MATURITY: PLACEHOLDER-CN|SIMPLIFIED-CN
+//! CRATE-CONTRACT END
 //! 生产验证闭环 — 并行流式生成与验证的 Producer-Verifier 循环
 //!
 //! 对应架构层:L7 Execution

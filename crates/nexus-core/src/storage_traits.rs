@@ -12,7 +12,7 @@
 //! (`pub struct PragmaConn<'a>(pub &'a rusqlite::Connection)`)并 impl
 //! `PragmaCapable for PragmaConn<'a>`,从而把 rusqlite 依赖下沉到真正使用它的层。
 //! WHY newtype wrapper:Rust coherence 规则禁止两个 crate 同时 impl 同一 trait
-//! for 同一 type(详见 ADR-006 方案 E 实施修正)。
+//! for 同一 type(详见 ADR-006《rusqlite 依赖从 nexus-core 下沉到 L3》方案 E 实施修正)。
 //!
 //! # 历史说明
 //! 原 `sqlite_pragma.rs` 已在 F2.3 阶段删除,逻辑全部迁移到本文件的
@@ -32,7 +32,7 @@ use crate::error::NexusError;
 ///
 /// 下游实现示例(在 cmt-tiering / mlc-engine 等使用 rusqlite 的 crate 中):
 /// WHY newtype wrapper:Rust coherence 规则禁止两个 crate 同时 impl
-/// 同一 trait for 同一 type,故各 crate 定义独立 newtype(详见 ADR-006)。
+/// 同一 trait for 同一 type,故各 crate 定义独立 newtype(详见 ADR-006《rusqlite 依赖从 nexus-core 下沉到 L3》)。
 /// ```text
 /// use nexus_core::{NexusError, PragmaCapable};
 ///
@@ -84,6 +84,7 @@ pub fn apply_performance_pragmas<T: PragmaCapable>(conn: &T) -> Result<(), Nexus
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
     use std::cell::RefCell;

@@ -236,6 +236,8 @@ pub async fn spawn_experience_loop(
         }
     }));
 
+    // 5b/5c. O-1+O-3 可观测装配(行为与原内联逐字一致;抽 fn 守 fn-length 棘轮)。
+    attach_observability(&nexus_bus, &mut join_handles);
     // 6. 协调度量订阅器(修复 metrics_sync 孤儿:P2-1 三重悖论推理悖论红线)
     join_handles.push(quest_engine::spawn_metrics_subscriber(
         Arc::clone(&engine),
@@ -319,6 +321,48 @@ pub async fn spawn_experience_loop(
     })
 }
 
+/// O-1 + O-3 (ADR-191 D1/D3) 可观测装配：EfficiencyMonitor 告警链 + 可选
+/// Prometheus 指标落盘导出。从 `spawn_experience_loop` 抽出入独立 fn 以守
+/// fn-length 棘轮(≤200)，行为与原内联逐字一致：5b 默认仅在有真实丢弃时
+/// 告警⇒零常态变化；5c 未设 `CHIMERA_METRICS_DUMP_PATH` 则不 spawn。
+fn attach_observability(nexus_bus: &EventBus, join_handles: &mut Vec<JoinHandle<()>>) {
+    // 5b. EfficiencyMonitor:闭合 ADR-191 D3 —— 周期采样 Critical 旁路丢弃计数,
+    //     计数增加时发布 `CriticalEventDropped`(metric_name=CRITICAL_DROPPED_METRIC_NAME),
+    //     由 TUI `CriticalDroppedSync` 消费。start_event_subscriber 内部先同步 subscribe
+    //     (broadcast + Critical mpsc 双通道)再 spawn(§4.4-3 红线)且克隆所需状态入后台
+    //     任务,故局部 monitor 可在启动后安全 drop。默认配置仅在有真实丢弃时告警⇒零常态行为变化。
+    {
+        let monitor = efficiency_monitor::EfficiencyMonitor::with_event_bus(
+            efficiency_monitor::MonitorConfig::default(),
+            nexus_bus.clone(),
+        );
+        if let Err(e) = monitor.start_event_subscriber() {
+            tracing::warn!(
+                error = ?e,
+                "EfficiencyMonitor 事件订阅启动失败(Critical 丢弃告警链未闭合)"
+            );
+        }
+    }
+
+    // 5c. O-1(ADR-191 D1 后半)：可选 Prometheus 文本指标落盘导出。设
+    //     CHIMERA_METRICS_DUMP_PATH 则周期(5s)把 bus.logger().render_metrics() 写该
+    //     文件(供无 HTTP 环境抓取/巡检);未设=不 spawn,零常态行为变化。用 tokio::fs::write
+    //     异步写不在 publish 热路径同步导出(红线);先取 owned String 避免 &borrow 跨 await。
+    if let Ok(dump_path) = std::env::var("CHIMERA_METRICS_DUMP_PATH") {
+        let dump_bus = nexus_bus.clone();
+        join_handles.push(tokio::spawn(async move {
+            let mut it = tokio::time::interval(Duration::from_secs(5));
+            it.tick().await; // 首个 tick 立即返回，跳过
+            loop {
+                it.tick().await;
+                if let Some(text) = dump_bus.logger().map(|l| l.render_metrics()) {
+                    let _ = tokio::fs::write(&dump_path, text).await;
+                }
+            }
+        }));
+    }
+}
+
 /// L7 卡片生成触发器 — PredictionVerified → ExperienceCard 投递(§16.1 源头接线)
 ///
 /// 修复审计断链:`generate_and_publish` 生产零调用——PVL 验证完成后
@@ -375,6 +419,7 @@ pub fn spawn_card_generation_trigger(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

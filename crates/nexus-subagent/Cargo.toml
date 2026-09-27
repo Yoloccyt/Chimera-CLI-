@@ -33,3 +33,8 @@ thiserror = { workspace = true }
 # 分类谓词与变体一致,防止后续新增变体时漏接谓词/文案模板)。
 # WHY dev 段:仅测试使用,不进入生产装配面(与 E-a 门禁的 [dependencies] 口径分离)。
 proptest = { workspace = true }
+
+# E-5 第四例 opt-in：生产码 unwrap/expect 实测 0（18 处均在 4 个 cfg(test) mod，
+# 已惯用法 mod 级 allow）；由 check_lint_ratchet.py 棘轮守护。
+[lints]
+workspace = true

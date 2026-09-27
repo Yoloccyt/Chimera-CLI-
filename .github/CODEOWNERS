@@ -13,7 +13,6 @@
 # --- L1 Core ---
 /crates/nexus-core/                            @Yoloccyt
 /crates/event-bus/                             @Yoloccyt
-/crates/model-router/                          @Yoloccyt
 
 # --- L2 Memory ---
 /crates/nmc-encoder/                           @Yoloccyt
@@ -34,7 +33,6 @@
 # --- L5 Knowledge ---
 /crates/repo-wiki/                             @Yoloccyt
 /crates/gsoe-evolution/                        @Yoloccyt
-/crates/auto-dpo/                              @Yoloccyt
 
 # --- L6 Router ---
 /crates/osa-coordinator/                       @Yoloccyt
@@ -52,7 +50,6 @@
 
 # --- L8 Parliament ---
 /crates/parliament/                            @Yoloccyt
-/crates/acb-governor/                          @Yoloccyt
 /crates/decb-governor/                         @Yoloccyt
 
 # --- L9 Quest ---

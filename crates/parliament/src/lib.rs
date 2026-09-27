@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L8
+//! ROLE:     对抗性议会 — 5 角色对抗性审议与决策治理
+//! BACKEND:  memory
+//! PRODUCERS: 19 AgentTaskCompleted,AgentTaskFailed,AhirtProbeCompleted,BudgetExceeded,CapabilityFrozen…
+//! CONSUMERS: 2 chimera-cli,chimera-mas
+//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-CN|SIMPLIFIED-CN
+//! CRATE-CONTRACT END
 //! 对抗性议会 — 5 角色对抗性审议与决策治理
 //!
 //! 对应架构层:L8 Parliament

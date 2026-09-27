@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L5
+//! ROLE:     仓库知识沉淀 — 跨层共享索引的代码 Wiki 与知识图谱
+//! BACKEND:  sqlite
+//! PRODUCERS: 2 AffinityUnknownField,WikiUpdated
+//! CONSUMERS: 2 chimera-cli,chimera-mas
+//! MATURITY: DEFERRED|NOT-IMPL-CN
+//! CRATE-CONTRACT END
 //! 仓库知识沉淀 — 跨层共享索引的代码 Wiki 与知识图谱
 //!
 //! 对应架构层:L5 Knowledge

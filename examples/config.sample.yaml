@@ -1,1 +1,165 @@
-# Chimera
+# ~/.chimera/omega.yaml
+nexus:
+  version: "1.0.0-omega"
+
+quest:
+  auto_decompose: true
+  max_tasks_per_quest: 20
+  default_deadline_hours: 168
+  checkpoint_interval_ops: 100
+  checkpoint_interval_minutes: 10
+
+thinking_toggle:
+  default_mode: "Auto"  # NonThinking / Lite / Deep / Max / Auto
+  auto_thresholds:
+    non_thinking: { complexity: 0.1, risk: "Low" }
+    lite: { complexity: 0.4, risk: "Medium" }
+    deep: { complexity: 0.7, risk: "High" }
+    max: { complexity: 0.9, risk: "Critical" }
+
+repo_wiki:
+  auto_generate: true
+  db_path: "~/.chimera/wiki.db"
+  embedding_dim: 256
+  auto_update_on_commit: true
+
+model_router:
+  strategy: "Auto"  # CostOptimized / SpeedOptimized / QualityOptimized / Auto / Failover
+  budget:
+    daily_usd: 50.0
+    monthly_usd: 1000.0
+    alert_threshold: 0.8
+  providers:
+    - id: "claude-opus"
+      name: "Claude Opus 4.8"
+      endpoint: "https://api.anthropic.com"
+      context_window: 200000
+      capabilities: [CodeGeneration, ArchitectureDesign, SecurityAudit, Reasoning]
+      tier: "premium"
+      input_cost_per_1k: 15.0
+      output_cost_per_1k: 75.0
+    - id: "gpt-4o"
+      name: "GPT-4o"
+      endpoint: "https://api.openai.com"
+      context_window: 128000
+      capabilities: [CodeGeneration, CodeReview, ToolUse]
+      tier: "efficient"
+      input_cost_per_1k: 2.5
+      output_cost_per_1k: 10.0
+    - id: "qwen-coder"
+      name: "Qwen Coder"
+      endpoint: "https://dashscope.aliyuncs.com"
+      context_window: 128000
+      capabilities: [CodeGeneration, LongContext, Multilingual]
+      tier: "lite"
+      input_cost_per_1k: 0.5
+      output_cost_per_1k: 2.0
+    - id: "minimax-m3"
+      name: "Minimax M3"
+      endpoint: "https://api.minimax.chat"
+      context_window: 1000000
+      capabilities: [CodeGeneration, LongContext, Multimodal]
+      tier: "efficient"
+      input_cost_per_1k: 0.3
+      output_cost_per_1k: 1.2
+    - id: "glm-5.2"
+      name: "GLM 5.2"
+      endpoint: "https://api.zhipu.ai"
+      context_window: 1000000
+      capabilities: [CodeGeneration, LongContext, Reasoning]
+      tier: "premium"
+      input_cost_per_1k: 1.0
+      output_cost_per_1k: 4.0
+
+osa:
+  dimensions: [routing, context, memory, audit, budget]
+  sparsity_base: 0.8
+  complexity_adjustment: true
+
+kvbsr:
+  max_blocks: 20
+  tools_per_block: 15
+  auto_rebalance_threshold: 100
+  coherence_min: 0.7
+
+pvl:
+  producer_timeout_ms: 5000
+  verifier_timeout_ms: 3000
+  feedback_channel_size: 100
+  max_retry: 3
+
+mtpe:
+  default_prediction_depth: 3
+  max_prediction_depth: 10
+  adapt_depth_enabled: true
+  batch_verify: true
+
+gqep:
+  batch_size: 10
+  resource_types: [FileSystem, Network, Git, Docker, Database]
+  connection_pool_size: 5
+
+seccore:
+  sandbox: gvisor
+  seccomp: true
+  command_interpolation: forbidden
+  red_team:
+    enabled: true
+    audit_frequency: 0.1
+    active_probe_interval_hours: 24
+  capability_decay:
+    initial: 1.0
+    high_risk_decay: 0.2
+    medium_risk_decay: 0.1
+    low_risk_decay: 0.02
+    recovery_rate: 0.05
+    recovery_interval_minutes: 10
+
+mcp:
+  mesh:
+    transports: [stdio, http]
+    entanglement: true
+  servers:
+    - id: filesystem
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-filesystem"]
+    - id: github
+      url: "https://api.github.com/mcp"
+      auth: oauth
+    - id: postgres
+      url: "postgresql://localhost:5432/mcp"
+      auth: password
+
+evolution:
+  enabled: true
+  mutation_pool_path: "~/.chimera/evolution/mutations/"
+  fitness_function: "(success_rate * 0.4) + (speed * 0.3) + (token_efficiency * 0.2) + (safety * 0.1)"
+  ab_test:
+    enabled: true
+    min_samples: 30
+    significance_threshold: 1.5
+  online_learning:
+    enabled: true
+    update_frequency: 10  # 每 10 次任务更新
+    learning_rate: 0.01
+
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+  grafana:
+    enabled: true
+    dashboard_path: "./monitoring/grafana-dashboard.json"
+  alerts:
+    - name: "CapabilityDepleted"
+      expr: "chimera_capability_current < 0.1"
+      for: "1m"
+    - name: "HighOrphanRate"
+      expr: "rate(chimera_orphan_calls_total[5m]) > 0"
+      for: "1m"
+    - name: "BudgetAlert"
+      expr: "chimera_daily_cost / chimera_daily_budget > 0.8"
+      for: "5m"
+    - name: "RedTeamVulnerability"
+      expr: "chimera_red_team_vulnerabilities > 0"
+      for: "1m"

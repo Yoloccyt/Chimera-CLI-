@@ -1,0 +1,17 @@
+# 入口契约门（G-43）的已定性豁免表 —— **只减不增**；条目在盘上无匹配即报 [STALE] 并判红。
+#
+# 键格式: <file>::<族>::<函数名>::<规范化语句>        |  <读码证明的理由>
+#   - 族: C1 rc-as-counter / C2 crash-is-red / C3 silent-default / C4 label-mismatch
+#   - 键里**没有行号**（有意避开 F2 那条"行号键冻结表"结构性缺陷：无关的上下平移会
+#     同时制造"新增未登记"与"STALE"两条零语义价值的失败）。
+#   - 加一行的门槛：必须读码证明"该形态不可能把发现条数当退出码 / 该标签不是门的输出",
+#     并把证明写进理由。修好判据本体（收窄 + 双侧夹具）优于登记 —— 见本门 C1/C4 的 F38 收窄。
+#
+# check_crate_reachability.py::C1::src_loc 是"入口可达"这条过近似的残留: 可达 ≠ 流向退出码。
+# 不做数据流分析(值 → sys.exit 实参)是刻意的取舍: 那需要 def-use 链, 复杂度与本门收益不成比例。
+check_crate_reachability.py::C1::src_loc::return total | src_loc 的 total 是 crate 的 src/*.rs 行数(累加自 sum(1 for _ in fh)), 只供打印债务量, 从不进 sys.exit ⇒ 非 F18 的 rc-as-counter 形态
+check_event_ownership.py::C1::_next_code_line::return j | j 是"下一个非空行"的行号索引(供证据定位打印与语句归属), 调用方用它索引 lines[], 从不进退出码 ⇒ 非 rc-as-counter
+check_gated_wiring_substance.py::C1::cfg_sites::return n | n 是 feature-gate 源码头命中数, 仅作数据参与 "n == 0 且未登记 ⇒ GAP" 的比较链, 真退出码在 main 里由 verdict 集合决定 ⇒ 非 rc-as-counter
+check_gated_wiring_substance.py::C1::ci_enablements::return n | n 是 workflow 里启用该 feature 的行数, 同上只进比较链("计数>0 = 已接刃"的布尔前提), 不进退出码 ⇒ 非 rc-as-counter
+check_lint_ratchet.py::C1::count_offenders::return total | total 是已 opt-in crate 全 target 的 unwrap/expect 命中数, 仅作 V2 的 >0 比较数据, 退出码由 decide() 的 v1/v2/v3 集合在 main 决定 ⇒ 非 rc-as-counter
+check_lint_ratchet.py::C1::count_offenders_file::return total | 同上函数的单文件分量(cfg(test) 区豁免的行级扫描), 返回值只汇入 count_offenders 的 total 并进 >0 比较, 从不流 sys.exit ⇒ 非 rc-as-counter

@@ -27,28 +27,36 @@ use crate::server_registry::ServerRegistry;
 /// 超位置查询请求 — 描述一次并发 fanout 查询
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SuperpositionQuery {
-    /// 查询 ID(UUIDv7,自动生成)
+    /// 查询 ID（UUIDv7，自动生成）
     pub query_id: String,
-    /// 查询语句(语义由具体 MCP 服务器解释)
+    /// 查询语句（语义由具体 MCP 服务器解释）
     pub query: String,
     /// fanout 目标服务器 ID 列表
     pub fanout_servers: Vec<String>,
-    /// 查询截止时间(毫秒),超时返回部分结果
+    /// 查询截止时间（毫秒），超时返回部分结果
     pub deadline_ms: u64,
+    /// O-4 跨进程 trace 贯传（深审 2026-09-25）：发起方已有的 trace_id。
+    ///
+    /// WHY `#[serde(default)]`：wire 向后兼容——旧序列化负载无本字段仍可通过，
+    /// 新字段对旧接收方为被忽略的多余键（`EventMetadata::trace_id` 同方言，
+    /// 见 nexus-contracts 双向兼容用例）；None 时网格自行种新根，行为与历史一致。
+    #[serde(default)]
+    pub trace_id: Option<String>,
 }
 
 impl SuperpositionQuery {
-    /// 创建超位置查询,query_id 自动生成 UUIDv7
+    /// 创建超位置查询，query_id 自动生成 UUIDv7（无上游 trace）
     pub fn new(query: impl Into<String>, fanout_servers: Vec<String>, deadline_ms: u64) -> Self {
         Self {
             query_id: Uuid::now_v7().to_string(),
             query: query.into(),
             fanout_servers,
             deadline_ms,
+            trace_id: None,
         }
     }
 
-    /// 使用指定 query_id 创建查询(主要用于测试)
+    /// 使用指定 query_id 创建查询（主要用于测试）
     pub fn with_id(
         query_id: impl Into<String>,
         query: impl Into<String>,
@@ -60,7 +68,25 @@ impl SuperpositionQuery {
             query: query.into(),
             fanout_servers,
             deadline_ms,
+            trace_id: None,
         }
+    }
+
+    /// 附加上游 trace_id（链式构造器，与 `with_id` 风格对齐）
+    #[must_use]
+    pub fn with_trace(mut self, trace_id: impl Into<String>) -> Self {
+        self.trace_id = Some(trace_id.into());
+        self
+    }
+
+    /// 构造网格侧事件元数据（O-4 wire 收敛点）：
+    /// 携带上游 trace 时延续同一追踪链（外部进程入口视上游为根，直接赋值
+    /// 而非 `child_of`——本进程不在上游事件总线上，无 parent metadata 可借）；
+    /// 无上游 trace 时保持历史行为（fresh 元数据，下游自行种根）。
+    pub(crate) fn trace_meta(&self) -> event_bus::EventMetadata {
+        let mut meta = event_bus::EventMetadata::new("mcp-mesh");
+        meta.trace_id = self.trace_id.clone();
+        meta
     }
 }
 
@@ -197,6 +223,7 @@ pub async fn execute_superposition_query(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
     use crate::config::MeshConfig;
@@ -279,5 +306,40 @@ mod tests {
         let err = QueryResult::err("q-1", "s-2", 5, "timeout");
         assert!(!err.success);
         assert_eq!(err.payload, "timeout");
+    }
+
+    /// O-4 wire 向后兼容：旧序列化负载（无 trace_id 键）必须仍可反序列化 → None
+    #[test]
+    fn legacy_wire_without_trace_id_deserializes_to_none() {
+        let legacy = r#"{
+            "query_id": "q-legacy",
+            "query": "old",
+            "fanout_servers": ["s-1"],
+            "deadline_ms": 100
+        }"#;
+        let q: SuperpositionQuery = serde_json::from_str(legacy).expect("旧 wire 必须兼容反序列化");
+        assert_eq!(q.query_id, "q-legacy");
+        assert_eq!(q.trace_id, None, "缺键必须落 None(历史 fresh 行为)");
+    }
+
+    /// O-4 贯传：with_trace 经序列化往返保真；trace_meta 延续上游 trace 而非新种根
+    #[test]
+    fn with_trace_survives_roundtrip_and_continues_chain_in_meta() {
+        let q =
+            SuperpositionQuery::new("q", vec!["s-1".into()], 100).with_trace("upstream-root-trace");
+        // 序列化→反序列化往返（模拟跨进程 wire）trace_id 保真
+        let json = serde_json::to_string(&q).expect("serialize");
+        let back: SuperpositionQuery = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.trace_id.as_deref(), Some("upstream-root-trace"));
+        // 网格侧元数据延续同一 trace（不另种根）
+        let meta = back.trace_meta();
+        assert_eq!(
+            meta.trace_id.as_deref(),
+            Some("upstream-root-trace"),
+            "携上游 trace 时必须延续而非新种"
+        );
+        // 无上游 trace 时保持历史 fresh（trace_id 仍 None，由下游 ensure/种根逻辑接管）
+        let plain = SuperpositionQuery::new("q", vec!["s-1".into()], 100);
+        assert_eq!(plain.trace_meta().trace_id, None);
     }
 }

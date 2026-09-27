@@ -536,8 +536,11 @@ impl TuiApp {
                     let slash_command = text
                         .strip_prefix('/')
                         .map(|rest| rest.split_whitespace().next().unwrap_or("").to_string());
+                    // O-4: 交互请求起源种 trace_id（ensure_trace_id），下游 child_of 继承→整链可关联
+                    let mut chat_meta = EventMetadata::new("chimera-tui");
+                    chat_meta.ensure_trace_id();
                     self.publish_control_event(NexusEvent::TuiChatSubmitted {
-                        metadata: EventMetadata::new("chimera-tui"),
+                        metadata: chat_meta,
                         // Task 1.15.4:chat_session_id 移至 chat_session
                         session_id: self.chat_session.chat_session_id.clone(),
                         query: text,
@@ -1044,8 +1047,11 @@ impl TuiApp {
             request_id.clone(),
             std::time::Instant::now() + ACTION_TIMEOUT,
         );
+        // O-4: 动作请求起源种 trace_id，response 侧 child_of 继承→请求/响应同链
+        let mut action_meta = EventMetadata::new("chimera-tui");
+        action_meta.ensure_trace_id();
         self.publish_control_event(NexusEvent::TuiActionRequested {
-            metadata: EventMetadata::new("chimera-tui"),
+            metadata: action_meta,
             request_id,
             action_id: action_id.to_string(),
             payload,
@@ -1059,6 +1065,7 @@ impl TuiApp {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::input::RouterMode;

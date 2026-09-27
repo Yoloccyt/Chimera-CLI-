@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L10
+//! ROLE:     NEXUS-OMEGA L10 宿主层协议门面 — 核心-表面分离（WI-01）
+//! BACKEND:  memory
+//! PRODUCERS: 0 -
+//! CONSUMERS: 2 chimera-cli,chimera-tui
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! NEXUS-OMEGA L10 宿主层协议门面 — 核心-表面分离（WI-01）
 //!
 //! 对应架构层: **L10 Interface**（第 39 crate，v4.0 48/53 预算内）

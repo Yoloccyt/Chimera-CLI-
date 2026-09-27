@@ -10,7 +10,11 @@
 #          against silent tool regression.
 # Usage:
 #   bash scripts/test_fnlen_smoke.sh
-# Exit code: 0 = pass, 1 = any assertion failed (or python missing)
+# Exit code: 0 = pass, 1 = assertion failed (a real red verdict), 2 = undecidable
+#          (interpreter missing / the audited tool itself crashed -- the check
+#           never ran, so it must not borrow 1 to impersonate "the red line broke".
+#           2026-09-21 F39b: previously a missing interpreter exited 1, so every
+#           host without python3 read it as "the >200-line rule regressed".)
 # Encoding: all-ASCII to avoid CJK path/locale issues (project script convention)
 # =============================================================================
 set -euo pipefail
@@ -29,8 +33,8 @@ if command -v python3 >/dev/null 2>&1; then
 elif command -v python >/dev/null 2>&1; then
     py="python"
 else
-    echo "[FAIL] no python3/python interpreter found" >&2
-    exit 1
+    echo "[UNDECIDABLE] no python3/python interpreter found - gate did not judge" >&2
+    exit 2
 fi
 
 tmp="$(mktemp -d)"
@@ -59,7 +63,14 @@ EOF
 fail=""
 
 # --- audit_fnlen.py: precise brace-balance scan ------------------------------
-out="$("$py" scripts/audit_fnlen.py "$tmp")"
+# A non-zero exit from the tool under test means the TOOL died, not that the
+# function-length rule passed. Both tools are pure reporters (no sys.exit/exit()
+# anywhere in their source), so non-zero can only be a crash => exit 2, never
+# borrow 1 to impersonate a red verdict.
+out="$("$py" scripts/audit_fnlen.py "$tmp")" || {
+    echo "[UNDECIDABLE] audit_fnlen.py exited non-zero (tool crash, not a verdict)" >&2
+    exit 2
+}
 if ! grep -q "fn oversized" <<<"$out"; then
     fail="$fail
 [FAIL] audit_fnlen.py missed the oversized fn (fixture $tmp/bad/oversized.rs)"
@@ -70,7 +81,10 @@ if grep -q "fn small" <<<"$out"; then
 fi
 
 # --- fn_scan.py: coarse line-gap scan -----------------------------------------
-out2="$("$py" scripts/fn_scan.py "$tmp")"
+out2="$("$py" scripts/fn_scan.py "$tmp")" || {
+    echo "[UNDECIDABLE] fn_scan.py exited non-zero (tool crash, not a verdict)" >&2
+    exit 2
+}
 if ! grep -q "fn oversized" <<<"$out2"; then
     fail="$fail
 [FAIL] fn_scan.py missed the oversized fn (fixture $tmp/bad/oversized.rs)"
@@ -85,4 +99,60 @@ if [ -n "$fail" ]; then
     exit 1
 fi
 
-echo "[OK] fnlen smoke test pass (audit_fnlen.py + fn_scan.py detect >200-line fn, no false positive)"
+# --- the ratchet itself: "single fn <= 200 lines" as a judgement ---------------
+# WHY the verdict lives here and not under a new gate id: this script is ALREADY
+# wired into CI (ci.yml: "Fn-length tool smoke") and into the manifest as G-48, so
+# the judgement inherits CI teeth without minting an unwired gate. rc: 0 honoured,
+# 1 the red line moved the wrong way, 2 register unreadable (never borrow 1).
+# HARD ORDERING PRECONDITION: scripts/fnlen_baseline.txt must be committed WITH the
+# --check code path in audit_fnlen.py; a missing register exits 2 on purpose, so an
+# incomplete commit turns this gate red instead of silently skipping the rule.
+rc=0
+"$py" scripts/audit_fnlen.py --check || rc=$?
+if [ "$rc" -eq 1 ]; then
+    echo "[FAIL] fn-length ratchet broken ([NEW]/[GROWTH]/[STALE] lines above)" >&2
+    exit 1
+elif [ "$rc" -gt 1 ]; then
+    echo "[UNDECIDABLE] audit_fnlen.py --check could not judge (rc=$rc)" >&2
+    exit 2
+fi
+
+# Teeth: a ratchet that cannot go red is decoration. Plant a register row for a
+# function that does not exist -- the same --check must answer 1 with [STALE].
+base="$tmp/baseline_with_ghost.txt"
+cp scripts/fnlen_baseline.txt "$base"
+printf 'crates/phantom/src/ghost.rs::gone_fn|999  # planted STALE control\n' >> "$base"
+rc=0
+"$py" scripts/audit_fnlen.py --check --baseline "$base" >"$tmp/ghost.out" 2>&1 || rc=$?
+if [ "$rc" -ne 1 ] || ! grep -q '\[STALE\]' "$tmp/ghost.out"; then
+    echo "[FAIL] ratchet has no teeth: planted ghost row was not judged red (rc=$rc)" >&2
+    cat "$tmp/ghost.out" >&2
+    exit 1
+fi
+
+# Teeth 3: an EMPTY SCAN SURFACE must also be UNDECIDABLE (2). A mistyped root -- or
+# the register path passed positionally, which is exactly how this tool was mis-run
+# once -- makes os.walk yield zero .rs files. "0 offenders" from 0 files scanned is
+# not a verdict; before this guard it posed as 10 [STALE] reds (looks judged, saw none).
+rc=0
+"$py" scripts/audit_fnlen.py --check scripts/fnlen_baseline.txt >"$tmp/emptyscan.out" 2>&1 || rc=$?
+if [ "$rc" -ne 2 ] || ! grep -q '\[UNDECIDABLE\] scanned 0' "$tmp/emptyscan.out"; then
+    echo "[FAIL] empty scan surface gave rc=$rc, expected 2 with [UNDECIDABLE]" >&2
+    cat "$tmp/emptyscan.out" >&2
+    exit 1
+fi
+
+# Teeth 2: an allowance without a reason must be UNDECIDABLE (2), not a silent pass
+# and not a borrowed 1 -- that is how registers quietly become dumping grounds.
+grep -v '^crates/osa-coordinator' scripts/fnlen_baseline.txt > "$tmp/base_noreason.txt"
+printf 'crates/x/src/y.rs::f|300\n' >> "$tmp/base_noreason.txt"
+rc=0
+"$py" scripts/audit_fnlen.py --check --baseline "$tmp/base_noreason.txt" >/dev/null 2>&1 || rc=$?
+if [ "$rc" -ne 2 ]; then
+    echo "[FAIL] reason-less register row gave rc=$rc, expected 2 (undecidable)" >&2
+    exit 1
+fi
+
+echo "[OK] fnlen smoke + ratchet: tools detect >200-line fn (no false positive);" \
+     "register honoured; teeth proven (STALE -> 1, reason-less -> 2)"
+

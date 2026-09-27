@@ -623,7 +623,8 @@ impl McpMesh {
         // WS-4A: 收包成功路径 — 消息到达网格即发布 McpMessageReceived(同层通信)
         // source_node 取查询消息源标识(query_id),msg_type 标记消息类型。
         // 消息进入网格即发布(best-effort,失败仅告警),不阻塞查询执行。
-        self.publish_message_received(query.query_id.clone(), "superposition_query")
+        // O-4(深审 2026-09-25): 携带上游 trace_id 时延续同一追踪链跨进程贯传
+        self.publish_message_received(query.query_id.clone(), "superposition_query", &query)
             .await;
 
         execute_superposition_query(&query, &self.registry, self.config.heartbeat_timeout_ms).await
@@ -634,10 +635,16 @@ impl McpMesh {
     /// WS-4A:"消息到达网格"的发布入口。镜像 `publish_transaction_completed`
     /// 的既有模式(event-bus `with_event_bus` 注入的 `Option<EventBus>` +
     /// `publish().await`),未绑定 EventBus 时静默跳过。
-    async fn publish_message_received(&self, source_node: String, msg_type: &str) {
+    async fn publish_message_received(
+        &self,
+        source_node: String,
+        msg_type: &str,
+        query: &SuperpositionQuery,
+    ) {
         if let Some(bus) = &self.event_bus {
             let event = NexusEvent::McpMessageReceived {
-                metadata: EventMetadata::new("mcp-mesh"),
+                // O-4 wire:请求携上游 trace 则延续追踪链,未携则保持历史 fresh 行为
+                metadata: query.trace_meta(),
                 source_node,
                 msg_type: msg_type.to_string(),
             };
@@ -1005,6 +1012,7 @@ impl McpMesh {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

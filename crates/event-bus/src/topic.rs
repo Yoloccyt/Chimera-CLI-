@@ -18,7 +18,7 @@ use std::collections::HashSet;
 
 use crate::types::NexusEvent;
 
-/// 事件主题 — 10 类分类覆盖全部 145 个 NexusEvent 变体
+/// 事件主题 — 10 类分类覆盖全部 146 个 NexusEvent 变体
 ///
 /// WHY 10 类分类：按架构层职责划分，每个 topic 对应一个功能域。
 /// FilteredSubscriber 订阅指定 topic 集合，仅接收匹配事件，
@@ -171,6 +171,7 @@ impl FilteredSubscriber {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::types::EventMetadata;

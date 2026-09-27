@@ -38,3 +38,7 @@ proptest = { workspace = true }
 [[bench]]
 name = "route"
 harness = false
+
+# E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)
+[lints]
+workspace = true

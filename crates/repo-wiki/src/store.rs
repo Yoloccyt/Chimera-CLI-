@@ -35,6 +35,7 @@ use chrono::{DateTime, Utc};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::{TemporalMeta, TransitionType, VectorStore};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
@@ -337,6 +338,8 @@ impl WikiStore {
     /// 既保证指标准确,又避免额外查询。
     pub async fn insert(&self, entry: WikiEntry) -> Result<(), WikiError> {
         let (tx, rx) = oneshot::channel();
+        // WHY 在 `entry` 移入写线程前取指纹:此处借用 entry_id(零克隆),过了 send 就再也拿不到
+        let wiki_hash = Self::wiki_update_hash(std::iter::once(entry.entry_id.as_str()));
         self.write_tx
             .send(WriteOp::Insert(entry, tx))
             .map_err(|_| WikiError::WriteChannelClosed)?;
@@ -353,6 +356,7 @@ impl WikiStore {
         self.metrics.set_entries(count);
         // P1-2:写操作后 HNSW 索引置脏,下次 dense 检索前重建
         self.hnsw_dirty.store(true, Ordering::Relaxed);
+        self.publish_wiki_updated(&wiki_hash, u32::from(is_new));
         Ok(())
     }
 
@@ -368,6 +372,8 @@ impl WikiStore {
         if entries.is_empty() {
             return Ok(());
         }
+        // WHY 空批已在上面早退:那是一次"什么都没变"的调用,发事件会凭空抬高沉淀计数
+        let wiki_hash = Self::wiki_update_hash(entries.iter().map(|e| e.entry_id.as_str()));
         let (tx, rx) = oneshot::channel();
         self.write_tx
             .send(WriteOp::InsertBatch(entries, tx))
@@ -380,6 +386,8 @@ impl WikiStore {
         self.metrics.set_entries(count);
         // P1-2:批量写后 HNSW 索引置脏
         self.hnsw_dirty.store(true, Ordering::Relaxed);
+        // 一次批量写入 = 一条事件(delta 为其中真实新增的条数),不是每条一事件
+        self.publish_wiki_updated(&wiki_hash, newly_inserted as u32);
         Ok(())
     }
 
@@ -418,6 +426,8 @@ impl WikiStore {
         let target_ids: Vec<String> = contradictions.iter().map(|r| r.target_id.clone()).collect();
 
         // 4. 发送写入命令 — 事务内原子执行:标记旧条目 + 写入关系 + 写入新条目
+        //    变更集指纹须在 `entry` 移入 op 前取(借用 entry_id,零克隆)
+        let wiki_hash = Self::wiki_update_hash(std::iter::once(entry.entry_id.as_str()));
         let (tx, rx) = oneshot::channel();
         self.write_tx
             .send(WriteOp::InsertWithContradictionCheck {
@@ -437,6 +447,9 @@ impl WikiStore {
         self.metrics.set_entries(count);
         // P1-2:矛盾检测写入(标记 Historical)同样影响 dense 索引,置脏
         self.hnsw_dirty.store(true, Ordering::Relaxed);
+        // delta 只记新条目是否真新增;被归档的旧条目是"变更"而非"新增",
+        // 其数量在 `ContradictionResult.contradictions` 里由调用方直接取,不必绕事件
+        self.publish_wiki_updated(&wiki_hash, u32::from(is_new));
 
         Ok(crate::contradiction::ContradictionResult {
             inserted: is_new,
@@ -712,6 +725,67 @@ impl WikiStore {
                     }
                 }
             }
+        }
+    }
+
+    /// 计算一次 Wiki 写入的 `wiki_hash` — 变更 entry_id **集合**的 SHA-256 hex。
+    ///
+    /// 两条语义约束(均由消费方需求决定,见 [`Self::publish_wiki_updated`]):
+    /// - **与写入顺序无关**:先排序再哈希 ⇒ 同一变更集在不同调用顺序下同一读数;
+    /// - **逐 id 追加 `0x00` 分隔符**:否则 `["ab","c"]` 与 `["a","bc"]` 会同哈希,
+    ///   两个不同变更集在消费方看起来完全相同(假同一)。
+    ///
+    /// WHY 哈希 entry_id 而非 content:content 单条可达数 KB,批量写入逐条哈希会把
+    /// 写热路径开销抬到 O(总字节);entry_id 定长,且"哪些条目变了"才是沉淀度量
+    /// 需要的信息。成本 = O(条数 × ~36 B),相对一次 SQLite 事务可忽略。
+    fn wiki_update_hash<'a>(ids: impl Iterator<Item = &'a str>) -> String {
+        use std::fmt::Write as _;
+
+        let mut sorted: Vec<&str> = ids.collect();
+        sorted.sort_unstable();
+        let mut hasher = Sha256::new();
+        for id in sorted {
+            hasher.update(id.as_bytes());
+            hasher.update([0u8]);
+        }
+        let digest = hasher.finalize();
+        let mut hex = String::with_capacity(digest.len() * 2);
+        for byte in digest.iter() {
+            // 写进 String 不会失败(无 IO),故丢弃 Result 而非 expect
+            let _ = write!(&mut hex, "{byte:02x}");
+        }
+        hex
+    }
+
+    /// 发布 `WikiUpdated` — Wiki 内容发生写入后的留痕(B4′ 事件接线)。
+    ///
+    /// 载荷语义:`wiki_hash` = 本次变更 entry_id 集合的指纹;`delta` = **真实新增**
+    /// 条目数,`0` 表示本次只更新既有条目(UPSERT 命中)。消费方
+    /// `efficiency-monitor/src/auditor.rs` 把 `count("WikiUpdated")` 计入"经验沉淀"
+    /// 维度分子 ⇒ delta 把"更新"算成"新增"会让沉淀率虚高,这是本函数唯一的硬语义。
+    ///
+    /// 未注入 EventBus 时静默跳过;发布失败仅 warn —— 条目已落库,通知是旁路观测面,
+    /// 不得因广播通道满而把成功的写入报成失败(与同 crate
+    /// [`Self::publish_unknown_affinity_fields`] 同款纪律)。
+    ///
+    /// WHY 同步 + `publish_blocking`(§4.4 反模式 8):三个调用点都已拿到写线程回执,
+    /// 再 `.await` 一次 publish 会改变各自 async 状态机;同步投递既够
+    /// (broadcast `send` 本就即时)又不改变调用方的并发形状。
+    ///
+    /// ⚠ **可达性现状(2026-09-24 实测,勿据"已接 emit"就以为指标活了)**:本 crate 之外
+    /// 只有测试驱动 `WikiStore` 的写路径(`chimera-mas/tests/knowledge_test.rs`、
+    /// `quest-engine/tests/e2e.rs`);生产持有者(`chimera-cli` 的 `wiki`/`grep` 子命令、
+    /// `chimera-mas/src/knowledge/wiki_retrieval.rs`)只做读。⇒ 事件在**生产路径上目前
+    /// 不会触发**,要等"沉淀写入"接进命令面才算闭环(登记在 B4′ 决策 ⑩)。
+    fn publish_wiki_updated(&self, wiki_hash: &str, delta: u32) {
+        let Some(bus) = &self.bus else { return };
+        let event = NexusEvent::WikiUpdated {
+            metadata: EventMetadata::new("repo-wiki"),
+            wiki_hash: wiki_hash.to_string(),
+            delta,
+        };
+        if let Err(e) = bus.publish_blocking(event) {
+            tracing::warn!(error = %e, "发布 WikiUpdated 事件失败");
         }
     }
 
@@ -1709,6 +1783,7 @@ fn is_valid_affinity_route(doc_id: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -1800,5 +1875,190 @@ mod tests {
         let blob = vec![0u8, 1, 2];
         let result = blob_to_embedding(&blob);
         assert!(result.is_empty());
+    }
+
+    // ── B4′:`WikiUpdated` 生产端接线 ───────────────────────────────────────
+    //
+    // 盯的是同一个"账面-事实脱钩":`lib.rs` 自述"发布 WikiUpdated 事件通知上层",
+    // 而 G-67(`check_event_ownership.py`)实测 `prod_ctor=0`。消费方
+    // `efficiency-monitor/src/auditor.rs` 把 `count("WikiUpdated")` 计入"经验沉淀"
+    // 维度分子 —— 无生产者不是崩溃,是**度量与被度量对象断开**。
+
+    use proptest::prelude::*;
+
+    /// 取总线上第一条 `WikiUpdated` 载荷。
+    ///
+    /// WHY `try_recv_matching`:同一 store 仍可能发其他事件(如未知亲和字段),
+    /// 逐条 `try_recv` 会把无关事件误当失败。
+    fn recv_wiki_updated(rx: &mut event_bus::EventReceiver) -> (String, u32) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Ok(Some(event_bus::NexusEvent::WikiUpdated {
+                wiki_hash, delta, ..
+            })) =
+                rx.try_recv_matching(|e| matches!(e, event_bus::NexusEvent::WikiUpdated { .. }))
+            {
+                return (wiki_hash, delta);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "2s 内未收到 WikiUpdated:`publish_blocking` 是同步投递,收不到即未发布"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// 建带总线的临时 store(tempdir 生命周期由调用方持有)。
+    fn store_with_bus(dir: &tempfile::TempDir, bus: EventBus) -> WikiStore {
+        WikiStore::open(&dir.path().join("wiki.db"))
+            .expect("打开 WikiStore")
+            .with_event_bus(bus)
+    }
+
+    fn wiki_entry(id: &str) -> WikiEntry {
+        WikiEntry::new(
+            id,
+            format!("title-{id}"),
+            format!("content of {id}"),
+            vec!["b4-prime".to_string()],
+            vec![0.0; 512],
+        )
+    }
+
+    #[tokio::test]
+    async fn insert_publishes_wiki_updated_with_new_entry_delta() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        let store = store_with_bus(&dir, bus);
+
+        store
+            .insert(wiki_entry("e-one"))
+            .await
+            .expect("insert 应成功");
+
+        let (hash, delta) = recv_wiki_updated(&mut rx);
+        assert_eq!(delta, 1, "首次写入应记 1 条真实新增");
+        assert_eq!(hash.len(), 64, "wiki_hash 定为 SHA-256 hex(64 字符)");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "wiki_hash 应为 hex,实测 {hash}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upsert_of_existing_entry_publishes_zero_delta() {
+        // delta 语义 = "真实新增条数",不是"写入调用次数":UPSERT 命中已存在
+        // entry_id 时条目总量不涨,记 1 会让"经验沉淀率"虚高。
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        let store = store_with_bus(&dir, bus);
+
+        store
+            .insert(wiki_entry("e-dup"))
+            .await
+            .expect("首次 insert");
+        let (_first_hash, first_delta) = recv_wiki_updated(&mut rx);
+        assert_eq!(first_delta, 1);
+
+        store.insert(wiki_entry("e-dup")).await.expect("同 id 再写");
+        let (_, delta) = recv_wiki_updated(&mut rx);
+        assert_eq!(delta, 0, "UPSERT 命中已存在条目不得计新增");
+    }
+
+    #[tokio::test]
+    async fn insert_batch_publishes_one_event_with_new_only_delta() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        let store = store_with_bus(&dir, bus);
+
+        store.insert(wiki_entry("b-0")).await.expect("预置条目");
+        recv_wiki_updated(&mut rx);
+
+        store
+            .insert_batch(vec![
+                wiki_entry("b-0"),
+                wiki_entry("b-1"),
+                wiki_entry("b-2"),
+            ])
+            .await
+            .expect("批量写入应成功");
+
+        let (hash, delta) = recv_wiki_updated(&mut rx);
+        assert_eq!(delta, 2, "3 条中 1 条是 UPSERT 更新 ⇒ 新增 2");
+        assert_eq!(hash.len(), 64);
+        let extra = rx.try_recv();
+        assert!(
+            matches!(extra, Ok(None) | Err(_)),
+            "一次批量写入只应发一条事件,实测仍有 {extra:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn contradiction_check_insert_publishes_wiki_updated() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        let store = store_with_bus(&dir, bus);
+
+        store
+            .insert_with_contradiction_check(wiki_entry("c-1"))
+            .await
+            .expect("矛盾检测写入应成功");
+
+        let (hash, delta) = recv_wiki_updated(&mut rx);
+        assert_eq!(delta, 1);
+        assert_eq!(hash.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn contradiction_check_upsert_of_existing_publishes_zero_delta() {
+        // 三条写路径各自有一行 delta 实现;此处钉住矛盾检测路径的"命中已存在 ⇒ 0"。
+        // 缺它则该行的 `u32::from(is_new)` 退化为常量 1 时,全套测试无人可变红。
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        let store = store_with_bus(&dir, bus);
+
+        store
+            .insert_with_contradiction_check(wiki_entry("cc-dup"))
+            .await
+            .expect("首次矛盾检测写入应成功");
+        let (_, first_delta) = recv_wiki_updated(&mut rx);
+        assert_eq!(first_delta, 1, "首次写入应记 1 条新增");
+
+        // WHY 同 entry_id 二次调用不会引入第二个变量:检测器按 entry_id 过滤掉自身
+        // (contradiction.rs `detect` 的自反跳过),故不会把该条改判 Historical,
+        // 事件里唯一变化的就是 is_new
+        store
+            .insert_with_contradiction_check(wiki_entry("cc-dup"))
+            .await
+            .expect("重复矛盾检测写入应成功");
+        let (_, delta) = recv_wiki_updated(&mut rx);
+        assert_eq!(delta, 0, "矛盾检测路径命中已存在条目不得计新增");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// `wiki_hash` 必须是"**哪些**条目变了"这个集合的函数,而不是写入顺序的函数;
+        /// 且必须带分隔符 —— 否则 `["ab","c"]` 与 `["a","bc"]` 会同哈希,
+        /// 两个不同的变更集在消费方看起来完全相同(假同一)。
+        #[test]
+        fn wiki_hash_is_set_function_and_unambiguous(
+            ids in prop::collection::vec("[a-z0-9]{1,6}", 2..5)
+        ) {
+            let mut reversed = ids.clone();
+            reversed.reverse();
+            let a = WikiStore::wiki_update_hash(ids.iter().map(|s| s.as_str()));
+            let b = WikiStore::wiki_update_hash(reversed.iter().map(|s| s.as_str()));
+            prop_assert_eq!(a, b, "同一变更集不同顺序应同哈希");
+
+            let ab_c = WikiStore::wiki_update_hash(["ab", "c"].iter().copied());
+            let a_bc = WikiStore::wiki_update_hash(["a", "bc"].iter().copied());
+            prop_assert_ne!(ab_c, a_bc, "缺分隔符会造成拼接歧义");
+        }
     }
 }

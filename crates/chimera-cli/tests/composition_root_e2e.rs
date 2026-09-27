@@ -6,6 +6,7 @@
 //! "lib 导出 = bin 可用"这条接缝（G7 收口缺口）。proptest 部分覆盖输入空间与
 //! subscribe-then-move 顺序不变量（§6.2 红线可参数化守护）。
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use chimera_cli::composition::{build, build_app_server};
@@ -172,4 +173,16 @@ fn drive_two_step_turn_async(user_text: &str) -> impl std::future::Future<Output
             })
             .collect()
     }
+}
+
+/// O-1（ADR-191 D1）验收：组合根 `build()` 必须挂载 L1 `BusLogger`——
+/// 防“logger 恒 None ⇒ logging.rs 全套 Prometheus 指标生产死码”回潮。
+/// `EventBus::logger() -> Option<&BusLogger>`，Some 表示计数器已激活。
+#[tokio::test]
+async fn build_attaches_bus_logger_for_observability() {
+    let ctx = build(&ChimeraConfig::default()).expect("装配应成功");
+    assert!(
+        ctx.bus.logger().is_some(),
+        "O-1/ADR-191 D1：build() 后 EventBus 必须挂载 BusLogger（否则 L1 指标生产死码回潮）"
+    );
 }

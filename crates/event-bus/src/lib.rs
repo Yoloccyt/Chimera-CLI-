@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L1
+//! ROLE:     事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
+//! BACKEND:  fs
+//! PRODUCERS: 101 ActivationCacheStats,ActivationThresholdAdjusted,AffinityCapabilityNegotiated,AffinityQuotaExhausted,AffinityUnknownField…
+//! CONSUMERS: 34 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
+//! MATURITY: NOT-IMPL-CN
+//! CRATE-CONTRACT END
 //! 事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
 //!
 //! 对应架构层:L1 Core
@@ -147,7 +155,9 @@ pub mod topic;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
-pub use backpressure::{is_critical_event, BackpressurePolicy, SlowConsumerDetector};
+pub use backpressure::{
+    is_critical_event, pressure_latch_next, BackpressurePolicy, SlowConsumerDetector,
+};
 // FormalVerifier M1:事件因果一致性验证器重导出(P7-T4)
 pub use bus::{
     deserialize_json, deserialize_msgpack, serialize_json, serialize_msgpack, EventBus,
@@ -174,7 +184,7 @@ pub use credit_flow::{
 };
 pub use formal::CausalConsistencyChecker;
 // B-a(M0): Critical 保底送达 sink(可插拔落点 + 默认日志实现)
-pub use critical_sink::{CriticalSink, LogCriticalSink};
+pub use critical_sink::{CriticalSink, FileWalCriticalSink, LogCriticalSink};
 pub use logging::BusLogger;
 // P1-T12:ShardedBus 分片核心(Lane 三车道 + 64 片扇出 + 前哨统计)
 pub use shard::{

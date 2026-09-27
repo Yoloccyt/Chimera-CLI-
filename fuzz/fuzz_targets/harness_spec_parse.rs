@@ -26,11 +26,11 @@
 // fuzz crate 独立于主 workspace,不影响 35 crate 的 forbid 覆盖率。
 
 // Windows-GNU 下使用 stub 宏(chimera_fuzz),非 Windows 使用 libfuzzer_sys
-#[cfg(not(windows))]
-use libfuzzer_sys::fuzz_target;
 #[cfg(windows)]
 use chimera_fuzz::fuzz_target;
 use gsoe_evolution::SpecLoader;
+#[cfg(not(windows))]
+use libfuzzer_sys::fuzz_target;
 use nexus_contracts::{HarnessSpecError, ImmutableSurface};
 
 fuzz_target!(|data: &[u8]| {
@@ -65,11 +65,7 @@ fuzz_target!(|data: &[u8]| {
             // === 目标 5: 不可进化面清单可访问 ===
             // immutable_surfaces() 应返回固定 20 个变体
             let surfaces = SpecLoader::immutable_surfaces();
-            assert_eq!(
-                surfaces.len(),
-                20,
-                "不可进化面清单应固定为 20 个变体"
-            );
+            assert_eq!(surfaces.len(), 20, "不可进化面清单应固定为 20 个变体");
         }
         // 若 result 为 Err，这是预期的（畸形/恶意输入应被拒绝），不需断言
     }

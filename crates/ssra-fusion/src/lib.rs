@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L7
+//! ROLE:     SSRA 黏液式快速适配 — 预编译模板 + 运行时低延迟融合
+//! BACKEND:  memory
+//! PRODUCERS: 2 RedTeamAudit,SsraFusionCompleted
+//! CONSUMERS: 0 -
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! SSRA 黏液式快速适配 — 预编译模板 + 运行时低延迟融合
 //!
 //! 对应架构层:L7 Execution

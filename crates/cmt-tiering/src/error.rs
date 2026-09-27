@@ -4,7 +4,7 @@
 //!
 //! # 设计决策(WHY)
 //! - 使用 `thiserror` 而非 `anyhow`:库层错误需明确变体,便于调用方按错误类型决策
-//! - 7 个变体覆盖四级存储的所有失败场景,不引入多余抽象
+//! - 变体集合以本文件 `CmtError` 定义为准（每个变体对应一类可区分的失败），不引入多余抽象
 //! - `StorageError` 包装 `rusqlite::Error` 与文件 I/O 错误,提供持久化失败的上下文
 //! - `EventBusError` 包装 `event_bus::EventBusError`,跨层通信失败时向上传播
 //! - `MigrationFailed` 携带源层与目标层信息,便于定位迁移链路问题
@@ -98,6 +98,7 @@ impl From<event_bus::EventBusError> for CmtError {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

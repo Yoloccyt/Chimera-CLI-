@@ -4,7 +4,7 @@
 //!
 //! # 设计决策(WHY)
 //! - **精选静态映射,非改 Panel trait**:每个 `PanelId` 显式声明其上下文动作,
-//!   单一可审源、零 per-panel 样板,不触动 20 个面板的旧 `Panel` trait。
+//!   单一可审源、零 per-panel 样板,不触动既有面板的旧 `Panel` trait。
 //!   (M5 面板迁移到 `ComponentPanel` 后可由 `actions()` 取代本映射。)
 //! - **无只读死面板铁律(§2.3)**:每个面板末尾统一追加 `panel.drill_down`,
 //!   保证任意面板至少暴露一个交互动作(下钻查看详情)。
@@ -39,6 +39,7 @@ pub fn panel_context_actions(panel: PanelId) -> Vec<&'static str> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::actions::ActionRegistry;

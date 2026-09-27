@@ -556,7 +556,9 @@ impl AgentContext {
         let mut block_clvs: std::collections::HashMap<String, CLV> =
             std::collections::HashMap::with_capacity(clv_blocks.len());
         for b in &clv_blocks {
-            let clv = b.clv.as_ref().expect("filtered by clv.is_some");
+            // clv_blocks 已按 clv.is_some 过滤,None 仅可能源于过滤漂移;
+            // 跳过该块(保守降级)不改变合法输入结果,且避免 panic 面
+            let Some(clv) = b.clv.as_ref() else { continue };
             store.upsert(&b.name, clv.as_slice(), ()).map_err(|e| {
                 MasError::ContextCompressionFailed {
                     agent_id: self.agent_id.clone(),
@@ -574,7 +576,9 @@ impl AgentContext {
                 let n = clv_blocks.len() as f32;
                 let mut acc: Vec<f32> = vec![0.0f32; CLV::DIMENSION];
                 for b in &clv_blocks {
-                    let s = b.clv.as_ref().expect("filtered").as_slice();
+                    // 同上:已过滤集合内 None 属漂移态,跳过累加(探针均维偏保守)
+                    let Some(clv) = b.clv.as_ref() else { continue };
+                    let s = clv.as_slice();
                     for (i, v) in s.iter().enumerate() {
                         acc[i] += v;
                     }
@@ -696,6 +700,7 @@ fn estimate_complexity(total_tokens: usize) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

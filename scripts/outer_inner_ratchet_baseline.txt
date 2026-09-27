@@ -1,0 +1,31 @@
+# outer->inner direct-edge ratchet baseline (ADR-187 / Q3 §4.2)
+# =============================================================================
+# Format: <outer-crate>|<inner-dep>   (one production [dependencies] edge per line)
+#
+# Semantics (check_outer_inner_ratchet.py, ONLY-DECREASE ratchet):
+#   - outer->inner edge present in tree, ABSENT here -> FAIL (growth; route via
+#     event-bus or register a reviewed freeze line AFTER human review)
+#   - a line here whose edge no longer exists        -> FAIL (stale; delete it)
+#
+# This freezes the CURRENT outer->inner coupling as visible debt so it can only
+# shrink. It does NOT resurrect Check A (which policed the inner->base direction
+# and collapsed into Check B; retired by ADR-187). The ring partition stays a
+# NOT-ENFORCED design goal (agents.md 3.4.5); this gate adds teeth to the
+# previously-UNGGATED outer->inner direction.
+#
+# Composition roots EXEMPT (their job is instantiation, per Check E scoping):
+#   chimera-cli, nexus-app-server
+# Inner ring = v2.20 design set, auto-dpo removed (8 crates): see gate INNER_RING.
+#
+# Baseline generated 2026-09-24 via:
+#   python scripts/check_outer_inner_ratchet.py --emit
+# Disposition of each (post-R2-unfreeze candidates, NOT deleted this round):
+chimera-mas|gea-activator   # L9->L9 down; agent expert-activation (delegation.rs)
+chimera-mas|gsoe-evolution  # L9->L5 down; experience-evolution consumer
+chimera-mas|hcw-window      # L9->L2 down; INV-7 context-budget window
+chimera-mas|nmc-encoder     # L9->L2 down; multimodal encode for context
+chimera-mas|parliament      # L9->L8 down; deliberation/SHARP credit
+chimera-mas|repo-wiki       # L9->L5 down; skill-reuse retrieval (Omega-6)
+faae-router|gsoe-evolution  # L6->L5 down; function-as-expert evolution hook
+mca-gateway|hcw-window      # L10->L2 down; token-window on affinity cache
+mtpe-executor|nmc-encoder   # L7->L2 down; multi-step-prediction encode input

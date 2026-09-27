@@ -128,12 +128,11 @@ impl Telemetry {
     /// 结束 Turn Span（记录延迟直方图）
     pub fn end_span(&self, span: &mut TurnSpan, status: SpanStatus) {
         span.status = status;
-        span.finished = Some(Instant::now());
-        let us = span
-            .finished
-            .unwrap()
-            .duration_since(span.started)
-            .as_micros() as u64;
+        // 单一时间源:同一个 now 既写入 finished 又参与延迟计算,
+        // 消除“先赋值再 unwrap 取回”的冗余 panic 面
+        let now = Instant::now();
+        span.finished = Some(now);
+        let us = now.duration_since(span.started).as_micros() as u64;
         self.turn_latency.record_us(us);
     }
 
@@ -149,6 +148,7 @@ impl Telemetry {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

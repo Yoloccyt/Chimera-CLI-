@@ -17,6 +17,9 @@ import re
 import sys
 import tomllib
 
+import gate_rc  # F37：平铺脚本无 __main__ 可包 => 崩溃经 excepthook 退 2, 不借默认 1
+gate_rc.install()
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 def _find_spec():

@@ -8,6 +8,7 @@
 //! - 关键事件标注 Critical,背压策略据此保护(见 backpressure 模块)
 //! - 所有 async fn 满足 Send 约束,可被 tokio::spawn
 
+use crate::backpressure::{pressure_latch_next, BackpressurePolicy};
 use crate::credit_flow::{CreditFlow, CreditStats};
 use crate::critical_sink::{CriticalSink, LogCriticalSink};
 use crate::error::EventBusError;
@@ -18,7 +19,7 @@ use crate::types::{EventMetadata, EventSeverity, NexusEvent};
 // F-a(M0):ArcSwapOption 承载分片总线单一真值源(取代 Mutex<Option<Arc<_>>> +
 // AtomicBool 双表达 —— 双源真相靠手工 Release/Relaxed 配对维持,分叉即灰度时灵时不灵)
 use arc_swap::ArcSwapOption;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
@@ -91,17 +92,19 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
 /// - `severity()` 是事件总线背压级别(同步函数,不依赖运行时值;
 ///   AsaIntervention 自 P1-W2.1.4 起统一返回 Critical,见 registry.rs 注册表定级)
 /// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,权威清单即下方 matches! 臂,
-///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 13)
+///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 14)
 ///
 /// WHY 单独定义:AsaIntervention 的 severity() 曾返回 Normal(P1-W2.1.4 修复前),
 /// 旁路判定因此独立于 severity() 存在;修复后两清单语义已对齐,由 D-8/R7
-/// 互锁测试守护(13 ⊆ 17)。
+/// 互锁测试守护(14 ⊆ 18)。
 ///
 /// # 双清单同步红线(MCA M0 起显式声明)
 /// 本函数与 `NexusEvent::severity()` 是两张独立清单:新增 Critical 事件
 /// **必须同时修改两处**,只改 severity() 会导致"标 Critical 但 broadcast
 /// Lagged 时丢失"(旁路不生效)。同步性由**本文件测试模块**三层守护:
-/// `test_critical_severity_implies_mpsc_bypass`(14 项手抄清单)、
+/// `test_mpsc_required_events_hit_both_lists`(14 项手抄清单:每一项须**同时**命中
+/// 旁路清单与 severity()==Critical —— 断言的是"清单内即两清单皆在",
+/// **不是** "severity Critical ⇒ 旁路",后者按设计不成立),
 /// `test_critical_double_list_d8_counts`(常量锚定 + LANE_FORBIDDEN_SHARD
 /// 双向一一对应)与 R7 互锁断言(清单项 severity() 反查)。
 fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
@@ -147,6 +150,42 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
     )
 }
 
+/// E-2 压力下降采样运行时(滞回 latch + 计数,全原子无锁,ADR-191 D2)
+///
+/// 状态机真值在 `backpressure::pressure_latch_next` 纯函数(可 proptest);
+/// 本结构只存状态不判状态(热路径与可测性分离)。
+#[derive(Debug)]
+pub(crate) struct DsRuntime {
+    /// 降采样参数 (every, trigger_permille, resume_permille);None = 策略未启用
+    params: Option<(u64, u64, u64)>,
+    /// 压力 latch:0=正常区,1=压力区(滞回态,由纯函数刷新)
+    engaged: AtomicU8,
+    /// 压力区内 Normal 事件序号(模 every 放行)
+    normal_seq: AtomicU64,
+    /// 累计被降采样(未入广播)的 Normal 事件数——运维可见性指标
+    downsampled: AtomicU64,
+}
+
+impl DsRuntime {
+    fn disabled() -> Self {
+        Self {
+            params: None,
+            engaged: AtomicU8::new(0),
+            normal_seq: AtomicU64::new(0),
+            downsampled: AtomicU64::new(0),
+        }
+    }
+
+    fn from_policy(policy: &BackpressurePolicy) -> Self {
+        Self {
+            params: policy.downsample_params(),
+            engaged: AtomicU8::new(0),
+            normal_seq: AtomicU64::new(0),
+            downsampled: AtomicU64::new(0),
+        }
+    }
+}
+
 /// 事件总线 — 跨层通信的唯一通道
 ///
 /// 基于 `tokio::broadcast::Sender<NexusEvent>`,支持多订阅者广播。
@@ -157,7 +196,7 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
 ///
 /// # Critical 事件双通道(§6.2 红线,2026-06-29)
 /// Critical 安全/治理告警事件(权威清单 = [`is_critical_mpsc_event`],
-/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 13 类)额外走 mpsc 旁路通道,
+/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 14 类)额外走 mpsc 旁路通道,
 /// 确保在 broadcast Lagged 场景下仍能被订阅者接收。订阅者通过
 /// [`subscribe_critical_events`](Self::subscribe_critical_events)
 /// 获取 mpsc Receiver。旁路通道按需初始化(首次订阅时创建),无订阅者时
@@ -191,6 +230,13 @@ pub struct EventBus {
     ///   静默忽略并定期清理失效 sender(避免 Vec 无限增长)
     /// - 容量满时 try_send 返回 Err(Full),递增 critical_dropped_count 并丢弃
     critical_tx: Arc<Mutex<Vec<mpsc::Sender<NexusEvent>>>>,
+    /// E-2(ADR-191 D2,2026-09-26)压力下降采样运行时状态
+    ///
+    /// WHY Arc<DsRuntime> + 原子字段:滞回 latch 与计数器必须跨 Clone 副本
+    /// 共享(同一总线一个压力状态机);全部操作为 Relaxed 原子,无锁不跨
+    /// await(§4.4 红线 1);默认(非降采样)策略下 params=None,热路径仅
+    /// 一次 Option 判空即早退,行为与性能零变更。
+    ds: Arc<DsRuntime>,
     /// Critical 通道累计丢弃事件数(P1-W2.1 优先级采样丢弃策略)
     ///
     /// WHY Arc<AtomicU64> 而非 Mutex<u64>:
@@ -316,7 +362,7 @@ pub struct EventBus {
 /// 供运维观测接线覆盖率。Normal 级静默丢弃,避免日志噪声。
 ///
 /// # §6.2 红线双通道(2026-06-29)
-/// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 13 类)
+/// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 14 类)
 /// 额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
 /// 仍能被 `subscribe_critical_events` 订阅者接收。旁路通道未初始化时
 /// (无 Critical 订阅者)投递到保底 sink(B-a,M0;原为 warn 告警后放弃)。
@@ -422,6 +468,14 @@ macro_rules! dispatch_one_impl {
             );
         }
 
+        // E-2(ADR-191 D2)压力下降采样:非降采样策略/Critical 恒放行(上方早退),
+        // 锁存期内被降采样的事件递增计数后跳过广播(返回 Ok——主动降级非错误,
+        // published_total 已在入口计数,降级量由 downsampled_total 单独可见)
+        if !$self.ds_admit(event.severity(), queued) {
+            $self.ds.downsampled.fetch_add(1, Ordering::Relaxed);
+            return Ok(());
+        }
+
         // broadcast::Sender::send 返回 Ok(receiver_count) 表示有多少接收者收到了消息。
         // 若 receiver_count < subscriber_count(发送前采样),说明有慢消费者 lag
         // (其内部缓冲区已满,send 跳过了它)。Err(SendError) 表示无接收者。
@@ -458,6 +512,7 @@ impl EventBus {
             capacity,
             logger: None,
             critical_tx: Arc::new(Mutex::new(Vec::new())),
+            ds: Arc::new(DsRuntime::disabled()),
             critical_dropped_count: Arc::new(AtomicU64::new(0)),
             // B-a(M0):默认保底 sink = 结构化 error! 日志(可经 with_critical_fallback 替换)
             critical_fallback: Arc::new(LogCriticalSink),
@@ -486,6 +541,7 @@ impl EventBus {
             capacity,
             logger: Some(Arc::new(logger)),
             critical_tx: Arc::new(Mutex::new(Vec::new())),
+            ds: Arc::new(DsRuntime::disabled()),
             critical_dropped_count: Arc::new(AtomicU64::new(0)),
             // B-a(M0):默认保底 sink = 结构化 error! 日志(可经 with_critical_fallback 替换)
             critical_fallback: Arc::new(LogCriticalSink),
@@ -501,6 +557,80 @@ impl EventBus {
             enable_lock: Arc::new(Mutex::new(())),
             critical_total: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// 创建启用指定背压策略的事件总线(E-2,ADR-191 D2)
+    ///
+    /// 容量取 `policy.broadcast_capacity()`;`DownsampleUnderPressure` 策略在
+    /// 占用进入压力区(千分比滞回,见 `backpressure::pressure_latch_next`)后
+    /// 对非 Critical 事件按「每 every 条广播 1 条」降采样;其余策略行为与
+    /// `with_capacity` 完全一致(零变更)。
+    ///
+    /// # 参数
+    /// - `policy`:背压策略(默认 `LagThreshold` 即历史行为)
+    pub fn with_policy(policy: BackpressurePolicy) -> Self {
+        let capacity = policy.broadcast_capacity();
+        let (sender, _) = broadcast::channel(capacity);
+        Self {
+            sender,
+            capacity,
+            logger: None,
+            critical_tx: Arc::new(Mutex::new(Vec::new())),
+            ds: Arc::new(DsRuntime::from_policy(&policy)),
+            critical_dropped_count: Arc::new(AtomicU64::new(0)),
+            critical_fallback: Arc::new(LogCriticalSink),
+            critical_no_subscriber_count: Arc::new(AtomicU64::new(0)),
+            lagged_count: Arc::new(AtomicU64::new(0)),
+            backpressure_warning_count: Arc::new(AtomicU64::new(0)),
+            published_total: Arc::new(AtomicU64::new(0)),
+            credit_flow: Arc::new(CreditFlow::new()),
+            credit_shed_total: Arc::new(AtomicU64::new(0)),
+            shard_bus: Arc::new(ArcSwapOption::empty()),
+            enable_lock: Arc::new(Mutex::new(())),
+            critical_total: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// E-2 降采样判定与状态机刷新(热路径单点)。
+    ///
+    /// 返回 true = 本事件应入广播;false = 已降采样(调用方跳过 send 并递增计数)。
+    /// 关键不变量(由纯函数+此处结构保证,均有 proptest 覆盖):
+    /// - 非降采样策略或 latch 未锁存 → 永远 true(默认路径零行为)
+    /// - Critical 事件 → 永远 true(红线:降级不得伤害关键告警投递)
+    /// - 锁存期内严格按 seq % every == 0 放行,间隔恒定 = every
+    ///
+    /// 借用注意:`event` 在本函数后仍被 send 消费,故只收 severity/借用标志。
+    #[inline]
+    fn ds_admit(&self, severity: EventSeverity, queued: usize) -> bool {
+        let Some((every, trigger, resume)) = self.ds.params else {
+            return true;
+        };
+        // latch 刷新:每次 publish 采样点同步(与 A3 告警共用 queued,零额外原子)
+        let prev = self.ds.engaged.load(Ordering::Relaxed) == 1;
+        let next = pressure_latch_next(prev, queued, self.capacity, trigger, resume);
+        if next != prev {
+            self.ds.engaged.store(next as u8, Ordering::Relaxed);
+        }
+        if !next || severity == EventSeverity::Critical {
+            return true;
+        }
+        // 压力区内:Normal/其它非 Critical 按模 every 放行
+        self.ds
+            .normal_seq
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(every)
+    }
+
+    /// E-2 累计被降采样的事件数(运维可见性;默认策略下恒 0)
+    #[must_use]
+    pub fn downsampled_total(&self) -> u64 {
+        self.ds.downsampled.load(Ordering::Relaxed)
+    }
+
+    /// E-2 当前是否处于压力区(latch 锁存态;默认策略下恒 false)
+    #[must_use]
+    pub fn pressure_engaged(&self) -> bool {
+        self.ds.engaged.load(Ordering::Relaxed) == 1
     }
 
     /// 替换 Critical 保底送达 sink(B-a,M0,builder 风格)
@@ -1248,7 +1378,7 @@ impl EventBus {
     ///
     /// 返回 [`CriticalSubscriberBuilder`](crate::subscriber::CriticalSubscriberBuilder)`<Unsubscribed>`,
     /// 用于订阅 §6.2 红线定义的 Critical 安全/治理告警事件(is_critical_mpsc_event
-    /// 清单,当前 13 类)的 mpsc 旁路通道。
+    /// 清单,当前 14 类)的 mpsc 旁路通道。
     ///
     /// 与 [`subscriber`](Self::subscriber) 区别:返回 `mpsc::Receiver` 而非 `EventReceiver`,
     /// 确保在 broadcast Lagged 场景下仍能收到 Critical 事件。
@@ -1663,6 +1793,7 @@ pub fn deserialize_json(s: &str) -> Result<NexusEvent, EventBusError> {
 /// 事件时只需改此处一处,三处清单同步守护见 test_critical_double_list_d8_counts)。
 /// 仅测试构建存在(cfg(test)),生产零足迹。
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 pub(crate) mod tests_helpers {
     use super::*;
 
@@ -1809,6 +1940,7 @@ pub(crate) mod tests_helpers {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::shard::DEFAULT_SHARD_COUNT;
@@ -2016,7 +2148,7 @@ mod tests {
     }
 
     #[test]
-    fn test_critical_severity_implies_mpsc_bypass() {
+    fn test_mpsc_required_events_hit_both_lists() {
         // 双清单同步守护(MCA M0 起):§6.2 红线要求的安全/资源类 Critical
         // 事件必须同时在 severity() 与 is_critical_mpsc_event() 两张清单中。
         // WHY 不断言全部 Critical 变体:CheckpointSaved/ConsensusReached 等
@@ -2297,7 +2429,7 @@ mod tests {
         for name in &mpsc_names {
             assert!(
                 severity_by_name.contains_key(name),
-                "mpsc 变体 {name} 不在 severity() Critical 清单中(13 ⊆ 17 违反)"
+                "mpsc 变体 {name} 不在 severity() Critical 清单中(14 ⊆ 18 违反)"
             );
         }
 
@@ -2575,6 +2707,32 @@ mod tests {
         assert!(
             warnings > 0,
             "backpressure_warning_count 应递增,实际: {warnings}"
+        );
+    }
+
+    // T-4(ADR-191「日志即契约」):补齐 §7 四可靠性站点中的背压 WARN 站点
+    // (bus.rs:416-425)的日志断言。`test_backpressure_monitor_tracks_warnings`
+    // 仅断言 counter(背压告警次数),此处断言“缓冲区 >75% 必发 WARN”本身是
+    // 运维契约——日志文案漂移即回归。行为触发条件与上测完全一致(容量 8,订
+    // 阅者不消费,第 8 次 publish 前 sender.len()==7 > 6=8*3/4)。
+    #[tracing_test::traced_test]
+    #[tokio::test]
+    async fn test_backpressure_warn_emits_log_contract() {
+        let bus = EventBus::with_capacity(8);
+        let _rx = bus.subscribe(); // 保持订阅者,防止 send 返回 Err
+        for i in 0..8 {
+            bus.publish(NexusEvent::QuestProgressUpdated {
+                metadata: EventMetadata::new("test"),
+                quest_id: format!("q-{i}"),
+                completed: i as u32,
+                total: 8,
+            })
+            .await
+            .unwrap();
+        }
+        assert!(
+            logs_contain("broadcast 通道背压告警"),
+            "缓冲区占用 >75% 时应记录背压 WARN 日志(T-4 日志契约)"
         );
     }
 
@@ -2872,8 +3030,9 @@ mod tests {
         );
     }
 
-    /// T17(a) 顺序红线守护:is_critical_mpsc_event() 必须**恰好命中 13 个** mpsc 旁路
-    /// 变体(AD-159 定稿口径,CRITICAL_MPSC_VARIANTS=13)。防「17 Critical 旧口径回潮」:
+    /// T17(a) 顺序红线守护:is_critical_mpsc_event() 必须**恰好命中 14 个** mpsc 旁路
+    /// 变体(规模由 `CRITICAL_MPSC_VARIANTS` 锁定,广播专属 Critical 计数由
+    /// `CRITICAL_TOTAL` 锁定)。防「全 Critical 一律进旁路」旧口径回潮:
     /// 4 个广播专属 Critical(CheckpointSaved/ConsensusReached/SlowConsumerDropped/
     /// OrphanCallDetected)按既定设计只走 broadcast,误捕即回潮破裂。
     #[test]
@@ -2888,7 +3047,7 @@ mod tests {
             );
         }
 
-        // 4 个广播专属 Critical 不得被 mpsc 旁路误捕(13 ⊆ 17,差集恒为 4)
+        // 4 个广播专属 Critical 不得被 mpsc 旁路误捕(14 ⊆ 18,差集恒为 4)
         let severity_critical = tests_helpers::all_severity_critical_variants();
         let mpsc_names: std::collections::HashSet<&str> =
             mpsc.iter().map(|e| e.type_name()).collect();
@@ -2911,7 +3070,7 @@ mod tests {
         );
     }
 
-    /// T17(b) 分片红线:13 个 mpsc 旁路变体全部判定为 Critical 车道(永不进分片,
+    /// T17(b) 分片红线:14 个 mpsc 旁路变体全部判定为 Critical 车道(永不进分片,
     /// 单流旁路投递)—— 分片(shard)仅服务非 Critical,与 event_lane/§11.2 对齐。
     #[test]
     fn mpsc_critical_variants_are_single_stream_never_sharded() {

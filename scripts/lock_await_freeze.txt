@@ -5,8 +5,10 @@
 # Key: <path>:<GUARD ACQUISITION LINE>  (one entry covers every await under it)
 #
 # Two legitimate reasons for an entry (classification inherited from the
-# human-reviewed scripts/await_guard_allowlist.txt, 2026-09-10 audit; this
-# gate's findings match that list 1:1 on acquisition lines):
+# human-reviewed scripts/await_guard_allowlist.txt, 2026-09-10 audit; the two
+# key sets MUST match 1:1 on acquisition lines, and that 1:1 is machine-checked
+# by scripts/check_await_across_guard.py = manifest gate G-27, so editing only
+# one of the two files fails a gate instead of silently diverging):
 #   (A) DESIGN        - the lock MUST stay held across the await (IO frame
 #                       atomicity, per-key migration serialisation). Splitting
 #                       it would corrupt the protocol/transaction.
@@ -42,9 +44,12 @@ crates/mlc-engine/src/engine.rs:912           # DESIGN migration_locks: one Memo
 # --- (B) SCANNER-DEBT: value extracted from the lock, not a guard ------------
 # If check_lock_await.sh ever learns to see through value extraction, delete
 # these lines and re-run the gate.
-# (pipeline re-keyed 2026-09-15 with the main merge, same .take() shape)
-crates/chimera-tui/src/data/pipeline.rs:891   # SCANNER-DEBT `.take()` moves the EventSubscriber out; guard drops at stmt end
-crates/csn-substitutor/src/lib.rs:107         # SCANNER-DEBT `level` is a copied u32; the RefMut `chain` dies at the if-let block
+# (pipeline re-keyed 2026-09-15 with the main merge, same .take() shape;
+#  re-keyed again 2026-09-20: acquisition line 891 -> 892, one line of
+#  unrelated code above shifted it. Semantics re-verified: `.take()` at
+#  pipeline.rs:897 moves the EventSubscriber VALUE out and the MutexGuard is a
+#  temporary dropped at that statement's end, so the await at :899 holds no lock.)
+crates/chimera-tui/src/data/pipeline.rs:892   # SCANNER-DEBT `.take()` moves the EventSubscriber out; guard drops at stmt end
 crates/decb-governor/src/governor.rs:564      # SCANNER-DEBT `current_total` is `*total` copy; state guard already block-scoped
 crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER-DEBT `pooled` is a TcpStream removed from the pool; guard dies in and_then
 crates/pvl-layer/src/producer.rs:123          # SCANNER-DEBT `strategy` is `*read()` Copy value; read guard dies at stmt end

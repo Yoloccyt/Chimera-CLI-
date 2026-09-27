@@ -32,3 +32,7 @@ nexus-contracts = { workspace = true }
 [[bench]]
 name = "predict"
 harness = false
+
+# E-5 第六例 opt-in：生产码 unwrap 已清（doctest 改 ? 传播惯用法；测试/bench 单元惯用法 allow）
+[lints]
+workspace = true

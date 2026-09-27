@@ -1,0 +1,26 @@
+# doc_symbol_claim_baseline.txt -- shrink-only register (gate: scripts/check_doc_symbol_claims.py)
+# One line per CODE_WIKI table-row type claim with zero occurrence in crates/**/*.rs.
+# Reason states the owning section and the disposition batch (Q14). Debt is visible, never growing;
+# fixing a line's symbol WITHOUT deleting the line is STALE = red.
+# Adopted 2026-09-21 from check_doc_symbol_claims --emit (81 gaps), hand-reviewed.
+# The original premise "every sampled row is a '**key types**' assertion, i.e. stated as
+# existing public API" held in 2026-09-21 but NO LONGER holds for the 7 rows below:
+# each of them now sits in a CODE_WIKI row that explicitly DISCLOSES the name as retired
+# or renamed. Deleting the row would turn the gate red; deleting the doc text would turn
+# an honest disclosure into silence. Two permanent classes therefore:
+#   RETIRED-CRATE   owning crate physically deleted; the section is a 退役前快照
+#   RENAMED-IN-DOC  the row lists the old design name AND its measured replacement
+# Pointer note (2026-09-23, SAB-B0-2 report §28): both `CODE_WIKI:` line numbers had
+# rotted (+9 / +10 from earlier insertions above them) -- 508->517, 701->711. A register
+# pointer that no longer lands on the claiming row is decoration, not evidence; the
+# candidate fix (gate asserts "the pointed line contains this symbol") is a NEW judging
+# rule and is registered for authorization, not shipped here.
+# --- acb-governor (RETIRED-CRATE) ---
+AcbGovernor                  # CODE_WIKI:517  acb-governor  RETIRED-CRATE-ADR-182
+BudgetAllocation             # CODE_WIKI:517  acb-governor  RETIRED-CRATE-ADR-182
+UsagePattern                 # CODE_WIKI:517  acb-governor  RETIRED-CRATE-ADR-182
+# --- nexus-app-server (RENAMED-IN-DOC) ---
+ApprovalGate                 # CODE_WIKI:711  nexus-app-server  RENAMED-IN-DOC->ApprovalArbiter
+SseTransport                 # CODE_WIKI:711  nexus-app-server  RENAMED-IN-DOC->SseServer+AppTransport
+SubAgentEngine               # CODE_WIKI:711  nexus-app-server  RENAMED-IN-DOC->SubAgentQuestEngine
+ThreadActor                  # CODE_WIKI:711  nexus-app-server  RENAMED-IN-DOC->SessionActor

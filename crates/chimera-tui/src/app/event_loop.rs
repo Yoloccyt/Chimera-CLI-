@@ -1906,7 +1906,16 @@ impl TuiApp {
         &mut self,
         w: u16,
     ) -> Result<ratatui::buffer::Buffer, TuiError> {
-        let mut term = self.v3_term.take().expect("v3_term just initialized");
+        // v3_term 由初始化路径置位;漂移态(未初始化)走 Err 而非 panic,
+        // 本函数契约已是 Result,调用方无需防panic
+        let mut term = match self.v3_term.take() {
+            Some(term) => term,
+            None => {
+                return Err(TuiError::Render(
+                    "v3_term 未初始化(render_full_v3_frame 前置接线缺失)".into(),
+                ));
+            }
+        };
         term.draw(|f| self.render(f))
             .map_err(|e| TuiError::Render(e.to_string()))?;
         // 唯一不可避免的克隆:TestBackend 独占其缓冲区,只能克隆出一份。

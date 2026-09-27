@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L8
+//! ROLE:     双档认知预算治理 — 高低双档切换的认知预算治理器
+//! BACKEND:  none
+//! PRODUCERS: 5 BudgetAdjusted,BudgetExceeded,BudgetMetricsUpdated,BudgetStatsReported,ResourceRecovered
+//! CONSUMERS: 2 chimera-cli,efficiency-monitor
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! 双档认知预算治理 — 高低双档切换的认知预算治理器
 //!
 //! 对应架构层:L8 Parliament

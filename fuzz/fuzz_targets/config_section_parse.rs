@@ -13,10 +13,16 @@
 //! ChimeraConfig 包含 14 个顶层 section(nexus/quest/seccore/...),
 //! 每个 section 的字段都可能被用户错误编辑。fuzz 确保反序列化路径安全。
 //!
-//! # 注意:此 target 替代原计划的 moe_gate_compute
-//! MoE 门控计算尚未实现(model-router 中无 moe 模块),
-//! 改为模糊测试 ChimeraConfig 配置 section 解析。
-//! 待 MoE 实现后可新增 moe_gate_compute target。
+//! # 注意:本 target 与"MoE 门控未实现"这一立项理由已脱钩
+//! 立项时写的是「MoE 门控尚未实现(model-router 中无 moe 模块)」,该说法现两处失真:
+//! ① `model-router` 已随架构减法物理删除(唯一登记表 `docs/architecture/CODE_WIKI.md §3.12`);
+//! ② MoE 门控其实已在 L6 落地——`crates/faae-router/src/tsr_moe.rs` 的
+//!    `TsrMoeRouter::score`/`score_with_history`(ADR-137 裁决挂既有 crate,
+//!    aux-loss-free 直接调分)。⇒ 保留本 target 的理由只剩它自身的覆盖面
+//!    (配置反序列化不 panic + 往返不变量),与 MoE 无关。
+//! 真缺口是 `moe_gate_compute`(对 `score` 的 f64 NaN/Inf 与序稳定性做模糊),但新增
+//! target 会牵动 `fuzz/Cargo.toml` [[bin]] 与 `.github/workflows/fuzz.yml` matrix(8→9),
+//! 属需授权改动,故只登记不擅动。
 //!
 //! # 运行方式(需 nightly)
 //! ```bash
@@ -28,10 +34,10 @@
 // fuzz crate 独立于主 workspace,不影响 34 crate 的 forbid 覆盖率。
 
 // Windows-GNU 下使用 stub 宏(chimera_fuzz),非 Windows 使用 libfuzzer_sys
-#[cfg(not(windows))]
-use libfuzzer_sys::fuzz_target;
 #[cfg(windows)]
 use chimera_fuzz::fuzz_target;
+#[cfg(not(windows))]
+use libfuzzer_sys::fuzz_target;
 use nexus_core::ChimeraConfig;
 
 fuzz_target!(|data: &[u8]| {

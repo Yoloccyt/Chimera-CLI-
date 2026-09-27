@@ -1,0 +1,25 @@
+# event_ownership_baseline.txt -- NexusEvent 变体"本仓无生产态构造点"账本（只减不增）
+# 语义：每行一个变体 + 实测证据。判据来自 scripts/check_event_ownership.py：
+#   prod_ctor=0 表示 crates/**/src 的生产作用域内没有 `NexusEvent::V { ... }` 构造点
+#   （`#[cfg(test)]` 与 tests/ 下的夹具不计入 —— event-bus 的 variant_count_test /
+#    shard.rs 测试工厂会构造全部 146 个变体，计入即等于永远全绿）。
+# ⚠ 这不等于"该事件不可达"：NexusEvent 派生 Serialize/Deserialize(tag="type")，
+#   外部进程仍可经线帧反序列化物化任何变体。因此**不得**据本账本删事件契约，
+#   只能据它决定"要不要在本仓接一个 emit 点"。语义出处：ADR-188 决策 1 措辞边界。
+# 消一行 = 该变体拿到真实生产者（门会同时把该行判为 STALE 红，提醒删行）。
+# ⚠ `--emit` 重刷会丢掉**人工判定前缀**（RESERVED-BY-ADR-* / HONEST-DEGRADE，现 2 行），
+#   重刷后须按 ADR-188 决策 1-c 的两栏表重新贴回。
+AgentConsultResponded  # prod_ctor=0 test_ctor=8 consumers=crates/chimera-mas/src/knowledge/expert_consult.rs,crates/chimera-mas/src/knowledge/mutual_inquiry.rs
+AffinityCapabilityNegotiated  # prod_ctor=0 test_ctor=3 consumers=crates/efficiency-monitor/src/affinity_metrics.rs,crates/event-bus/src/membrane.rs；mca-gateway 仅 doc 声明发布未接线；本行系 2026-09-25 恢复(前次删除为门 cfg(test) 邻接盲点伪偿还，见 check_event_ownership._next_item_line 注)
+AgentHeartbeat  # prod_ctor=0 test_ctor=17 consumers=crates/chimera-mas/src/orchestrator.rs,crates/event-bus/src/membrane.rs
+BenchmarkMetricsCollected  # RESERVED-BY-ADR-159 决策4/ADR-160:70 正式预留(禁删)，无自然发布流；prod_ctor=0 test_ctor=2 consumers=crates/event-bus/src/membrane.rs
+DpoPairGenerated  # prod_ctor=0 test_ctor=2 consumers=-
+ModelRouteSelected  # prod_ctor=0 test_ctor=6 consumers=crates/chimera-tui/src/panels/event_stream.rs,crates/chimera-tui/src/panels/log.rs
+ProviderDegraded  # prod_ctor=0 test_ctor=3 consumers=crates/efficiency-monitor/src/affinity_metrics.rs,crates/event-bus/src/membrane.rs；同 AffinityCapabilityNegotiated：发布点在 mca-gateway doc 规划未接线；2026-09-25 恢复误删行
+QuestCompleted  # prod_ctor=0 test_ctor=11 consumers=crates/chimera-cli/src/quest_loop.rs,crates/chimera-tui/src/chat_cards.rs,crates/chimera-tui/src/data/sync.rs；quest_loop.rs 内构造均为测试夹具；2026-09-25 恢复误删行
+QuestListUpdated  # prod_ctor=0 test_ctor=7 consumers=crates/chimera-tui/src/data/pipeline.rs,crates/chimera-tui/src/data/sync.rs,crates/chimera-tui/src/panels/event_stream.rs,crates/chimera-tui/src/panels/log.rs
+RouterStatsReported  # prod_ctor=0 test_ctor=5 consumers=crates/chimera-tui/src/data/sync.rs,crates/event-bus/src/membrane.rs,crates/osa-coordinator/src/six_dimension.rs
+TuiActionProgressed  # prod_ctor=0 test_ctor=6 consumers=crates/chimera-cli/src/commands/chat.rs
+UserIntentEncoded  # prod_ctor=0 test_ctor=10 consumers=crates/chimera-tui/src/panels/event_stream.rs,crates/chimera-tui/src/panels/log.rs,crates/event-bus/src/membrane.rs
+VoteCastRequested  # HONEST-DEGRADE FC-A(CHANGELOG:61)：chimera-tui/app/event_loop.rs:1280 publish_vote 刻意不发(L8 消费通道未落地,注释在 :1274)；prod_ctor=0 test_ctor=5 consumers=-
+# total 146 variant(s): 133 owned / 13 without a production ctor

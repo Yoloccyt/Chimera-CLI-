@@ -18,7 +18,7 @@
 #   E. Policy compliance       - CONVENTIONS.md-declared subdirs exist
 #                              - DOCUMENT_LIFECYCLE_POLICY.md (SoT) exists
 #
-# Exit code: 0 = clean, 1 = gap found
+# Exit code: 0 = clean, 1 = gap found, 2 = undecidable (no python interpreter)
 # Note:     Linux/CI uses this; Windows uses check_doc_consistency.ps1. Keep in sync.
 # =============================================================================
 set -euo pipefail
@@ -27,6 +27,26 @@ cd "$root"
 
 status=0
 report=()
+
+# Python launcher resolution. WHY: checks D1/D2 need robust CJK regex matching and
+# call python inline, but Windows Git Bash ships no `python3` (only `py -3`). With a
+# bare `python3` the gate died at D1 with rc=127 and emitted NO self-report line, so
+# xdoc_precise.py / audit_gate_selfreport.py could only grade it "undecidable" -- the
+# doc-consistency gate had zero local execution coverage while looking merely "red".
+# Same resolution order as check_crate_reachability.sh / check_perf_redlines.sh.
+py=()
+for cand in "python3" "python" "py -3"; do
+    probe=($cand)
+    if command -v "${probe[0]}" >/dev/null 2>&1; then
+        py=("${probe[@]}")
+        break
+    fi
+done
+if [ ${#py[@]} -eq 0 ]; then
+    echo "[FAIL] no python3/python/py interpreter found -- D1/D2 cannot run" >&2
+    echo "RESULT: UNDECIDABLE (0 categories / 0 check ids, self-reported)" >&2
+    exit 2
+fi
 
 # Helper: discover file by ASCII basename under known parent dir.
 # Avoids hardcoding CJK characters that may corrupt on Windows IDE write.
@@ -151,7 +171,7 @@ fi
 # Use python3 for robust parsing of complex multi-version filenames
 if compgen -G "docs/architecture/ADR-*.md" > /dev/null; then
     adr_total_files=$(find docs/architecture -maxdepth 1 -name 'ADR-*.md' -type f | wc -l | tr -d ' ')
-    adr_main_count=$(python3 -c "
+    adr_main_count=$("${py[@]}" -c "
 import re, os, glob
 seen = set()
 for p in glob.glob('docs/architecture/ADR-*.md'):
@@ -177,8 +197,8 @@ if [ ! -f "docs/architecture/adr_index.md" ]; then
     # 2026-08-07 适配: 同 B/C —— gitignore *.md 策略下缺失文档降级为 warn。
     report+=("[D2-warn] missing document: docs/architecture/adr_index.md (gitignore *.md 策略,仅本地维护,跳过)")
 else
-    # Use python3 for robust CJK+ASCII regex matching
-    declared_total=$(python3 -c "
+    # Use the resolved python launcher for robust CJK+ASCII regex matching
+    declared_total=$("${py[@]}" -c "
 import re, sys
 with open('docs/architecture/adr_index.md', encoding='utf-8') as fh:
     for line in fh:
@@ -248,6 +268,6 @@ echo ""
 if [ "$status" = 0 ]; then
     echo "[OK] three-way reconciliation all pass (${cat_count} categories / ${id_count} check ids, self-reported): canonical version=${current_version}, ${n_members} crates, baseline aligned"
 else
-    echo "[FAIL] three-way reconciliation found gaps (${cat_count} categories / ${id_count} check ids emitted), see [GAP-*] lines above, fix and rerun"
+    echo "[FAIL] three-way reconciliation found gaps (${cat_count} categories / ${id_count} check ids, self-reported), see [GAP-*] lines above, fix and rerun"
 fi
 exit $status

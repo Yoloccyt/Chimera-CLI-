@@ -10,6 +10,7 @@
 //! 5. EventBus 集成:1000 次事务均发布 McpMeshTransactionCompleted 事件
 //! 6. 超位置查询:5 服务器 fanout,结果完整
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
@@ -249,6 +250,39 @@ async fn test_superposition_query_five_servers_fanout() {
     let results = mesh.superposition_query(query).await.expect("查询失败");
     assert_eq!(results.len(), 5, "应收到 5 个服务器响应");
     assert!(results.iter().all(|r| r.success), "所有响应应成功");
+}
+
+/// O-4 跨进程 wire 贯传 e2e（深审 2026-09-25）：请求携上游 trace_id 时，
+/// 网格发布的 McpMessageReceived 必须延续同一 trace（外部入口→网格事件链闭合）
+#[tokio::test]
+async fn test_superposition_query_propagates_upstream_trace() {
+    let bus = event_bus::EventBus::new();
+    let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus.clone());
+    for i in 0..3 {
+        mesh.register_server(MeshServer::new(
+            format!("s-{i}"),
+            format!("203.0.113.10:{i}"),
+            vec![],
+        ))
+        .expect("注册失败");
+    }
+    // 红线:先 subscribe 再触发发布,否则丢事件(broadcast 不回放历史)
+    let mut rx = bus.subscribe();
+    let query = SuperpositionQuery::new("trace-q", vec!["s-0".into()], 200)
+        .with_trace("upstream-cross-process-root");
+    mesh.superposition_query(query).await.expect("查询失败");
+
+    let event = rx.recv().await.expect("应收到 McpMessageReceived");
+    match event {
+        NexusEvent::McpMessageReceived { metadata, .. } => {
+            assert_eq!(
+                metadata.trace_id.as_deref(),
+                Some("upstream-cross-process-root"),
+                "网格收包事件必须延续请求携带的上游 trace,而非另种新根"
+            );
+        }
+        other => panic!("期望 McpMessageReceived,得到 {:?}", other.type_name()),
+    }
 }
 
 // === 6. 1000 次事务全部发布事件(事件流连续性) ===

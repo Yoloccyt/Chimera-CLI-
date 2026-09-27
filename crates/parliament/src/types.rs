@@ -355,14 +355,8 @@ impl DeliberationCache {
         // 将命中条目移到末尾(最近使用)
         let entry = self.entries.remove(pos);
         self.entries.push(entry);
-        // 安全:pos 来自 position() 找到的有效索引,entries.last() 必定为 Some
-        Some(
-            &self
-                .entries
-                .last()
-                .expect("entries.last() after push 不应为 None")
-                .1,
-        )
+        // push 后 last() 必命中(LRU 保序不变量);漂移态视作未命中返 None(保守,无 panic 面)
+        self.entries.last().map(|(_, consensus)| consensus)
     }
 
     /// 插入或覆盖缓存条目
@@ -392,6 +386,7 @@ impl DeliberationCache {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

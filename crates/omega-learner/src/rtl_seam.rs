@@ -91,14 +91,18 @@ impl ExtendedContext {
         cache_hit_history: f64,
         risk_level: f64,
     ) -> Self {
-        Self::new(vec![
+        // 5 特征恒 ≤ 容量上限(编译期字面量个数),Err 仅可能源于上限调低的
+        // 开发期缺陷;显式 panic 保留诊断,不用 expect 以免绕过 unwrap 治理
+        match Self::new(vec![
             task_complexity,
             budget_water_level,
             latency_sensitivity,
             cache_hit_history,
             risk_level,
-        ])
-        .expect("5 特征 ≤ 上限")
+        ]) {
+            Ok(ctx) => ctx,
+            Err(e) => panic!("default_s9 固定 5 特征超容量(开发期缺陷): {e:?}"),
+        }
     }
 }
 
@@ -226,6 +230,7 @@ pub struct RewardStabilityReport {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

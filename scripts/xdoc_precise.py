@@ -12,6 +12,9 @@ import re
 import subprocess
 import sys
 
+import gate_rc  # F37：平铺脚本无 __main__ 可包 => 崩溃经 excepthook 退 2, 不借默认 1
+gate_rc.install()
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 DOCS = ["agents.md", ".claude/CLAUDE.md", "CHANGELOG.md",
@@ -24,19 +27,37 @@ DOCS = ["agents.md", ".claude/CLAUDE.md", "CHANGELOG.md",
         "docs/architecture/ADR-168-closure-writeback-and-doc-numeric-ssot.md"]
 
 # 权威值当场读，不写死
-ps1 = io.open("scripts/check_doc_consistency.ps1", encoding="utf-8", errors="replace").read()
-r = subprocess.run(["pwsh", "-NoProfile", "-File", "scripts/check_doc_consistency.ps1"],
-                   capture_output=True, text=True, encoding="utf-8", errors="replace")
+def run_tool(argv):
+    """调用外部解释器；返回 None 表示该解释器不在 PATH（环境缺失，非判据红）。
+
+    WHY 不裸跑 subprocess.run：缺二进制时它抛 FileNotFoundError，Python 退码是 1，
+    与本门"判定为红"的退码同值 —— 收口清单会把环境缺失误读成一条真缺陷（本机实测：
+    `pwsh` 不在 PATH 时本门以 traceback 报 rc=1，看着像文档数字对不上）。
+    """
+    try:
+        return subprocess.run(argv, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return None
+
+
+r = run_tool(["pwsh", "-NoProfile", "-File", "scripts/check_doc_consistency.ps1"])
+if r is None:
+    print("!! 不可判定：找不到可执行 pwsh ⇒ .ps1 自报值取不到，权威基准无法建立")
+    print("   （环境缺失，不视为通过，也不视为红；装 PowerShell 7 或换用 .sh 侧口径后重跑）")
+    sys.exit(2)
 out = (r.stdout or "") + (r.stderr or "")
 m = re.search(r"\((\d+) categories / (\d+) check ids, self-reported\)", out)
 if not m:
     print("!! 门禁未自报检查数，无法建立权威值"); print(out[-400:]); sys.exit(2)
 PS_CAT, PS_ID = int(m.group(1)), int(m.group(2))
 
-rs = subprocess.run(["bash", "scripts/check_doc_consistency.sh"],
-                    capture_output=True, text=True, encoding="utf-8", errors="replace")
-m2 = re.search(r"\((\d+) categories / (\d+) check ids, self-reported\)", (rs.stdout or "") + (rs.stderr or ""))
+rs = run_tool(["bash", "scripts/check_doc_consistency.sh"])
+out_sh = ((rs.stdout or "") + (rs.stderr or "")) if rs else ""
+m2 = re.search(r"\((\d+) categories / (\d+) check ids, self-reported\)", out_sh)
 SH_ID = int(m2.group(2)) if m2 else -1
+if rs is None:
+    print("!! 注意：找不到可执行 bash ⇒ .sh 侧自报 id 记为 -1（.sh 写死项按不可判定处理）")
 
 idx = io.open("docs/architecture/adr_index.md", encoding="utf-8", errors="replace").read()
 m3 = re.search(r"ADR 声明总数 = (\d+)", idx)

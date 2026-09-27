@@ -25,7 +25,7 @@ import sys
 try:
     import tomllib
 except ImportError:  # pragma: no cover - 环境门槛, 非业务分支
-    print("[FAIL] check_crate_reachability.py requires python >= 3.11 (tomllib)")
+    print("[UNDECIDABLE] check_crate_reachability.py requires python >= 3.11 (tomllib)")
     sys.exit(2)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -252,4 +252,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    import gate_rc  # 只在入口需要：崩溃必须退 2, 不得借 1 冒充"判过且红"（F32/F33）
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))

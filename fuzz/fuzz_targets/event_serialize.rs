@@ -20,20 +20,17 @@
 // fuzz crate 独立于主 workspace,不影响 34 crate 的 forbid 覆盖率。
 
 // Windows-GNU 下使用 stub 宏(chimera_fuzz),非 Windows 使用 libfuzzer_sys
-#[cfg(not(windows))]
-use libfuzzer_sys::fuzz_target;
 #[cfg(windows)]
 use chimera_fuzz::fuzz_target;
+#[cfg(not(windows))]
+use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     // === 目标1:NexusEvent JSON 反序列化不 panic ===
     if let Ok(event) = serde_json::from_slice::<event_bus::NexusEvent>(data) {
         // 往返不变量:反序列化成功后,重新序列化应成功
         let reserialized = serde_json::to_vec(&event);
-        assert!(
-            reserialized.is_ok(),
-            "NexusEvent JSON 重新序列化应成功"
-        );
+        assert!(reserialized.is_ok(), "NexusEvent JSON 重新序列化应成功");
 
         // 重新反序列化应得到相等事件(往返一致性)
         let reserialized = reserialized.unwrap();
@@ -57,10 +54,7 @@ fuzz_target!(|data: &[u8]| {
         // 往返一致性
         let reserialized = reserialized.unwrap();
         if let Ok(event2) = rmp_serde::from_slice::<event_bus::NexusEvent>(&reserialized) {
-            assert_eq!(
-                event, event2,
-                "NexusEvent MessagePack 往返序列化后应相等"
-            );
+            assert_eq!(event, event2, "NexusEvent MessagePack 往返序列化后应相等");
         }
     }
 

@@ -11,6 +11,7 @@
 //! 6. MCP Mesh 事务失败 → 订阅任务推进降级链
 //! 7. 性能验证:单次替代查询 p95 ≤ 30ms(#[ignore],需手动运行)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
 use csn_substitutor::{
@@ -666,4 +667,186 @@ async fn test_quota_exhausted_unknown_route_key_noop() {
     // 等待处理完成:不应 panic、不应建链
     tokio::time::sleep(Duration::from_millis(100)).await;
     handle.abort();
+}
+
+// ============================================================
+// P1(§8.1): 降级链耗尽路径不得卡死 degradation listener
+// ============================================================
+
+/// 探针等待预算:listener 若在耗尽路径自锁,探针事件永远不会有产出。
+const LIVENESS_BUDGET: Duration = Duration::from_secs(2);
+
+/// 构造配额耗尽事件(测试辅助)
+fn quota_event(route_key: &str) -> NexusEvent {
+    NexusEvent::AffinityQuotaExhausted {
+        metadata: EventMetadata::new("test"),
+        route_key: route_key.into(),
+        reason: "429 quota".into(),
+    }
+}
+
+/// 单次事件的处理节拍(listener 是顺序 await,逐个发就得逐个等)
+const TICK: Duration = Duration::from_millis(100);
+
+/// 场景裁决:`Ok(true)` 耗尽后仍存活 / `Ok(false)` 无产出 / `Err` 前提不成立
+///
+/// `channels` = 注册通道数。耗尽键固定 `ch-0`,其链深 = `channels - 1`
+/// (`handle_quota_exhausted` 以"候选数"作 levels 深度)⇒ 恰好 `channels` 次事件
+/// 进入 `ChainExhausted` 分支,之后再加一次不同键的探针。
+///
+/// 前提为何显式回传而不是 panic:线程内 panic 只会让主线程观察到「超时」,
+/// 于是「用例前提没成立」会被误判成「生产码卡死」。
+async fn exhaustion_scenario(channels: usize) -> Result<bool, &'static str> {
+    if channels < 3 {
+        return Err("通道数须 ≥ 3(链深 ≥ 2)才可能进入耗尽分支");
+    }
+    let bus = EventBus::new();
+    let sub = CsnSubstitutor::with_event_bus(CsnConfig::default(), bus.clone());
+    for i in 0..channels {
+        sub.register_channel(
+            format!("ch-{i}"),
+            caps(
+                i % 2 == 0,
+                if i % 3 == 0 {
+                    ThinkingSupport::OnOff
+                } else {
+                    ThinkingSupport::EffortLevels(vec!["low".into(), "high".into()])
+                },
+                1_000_000,
+                if i % 2 == 0 {
+                    StatePreservationPolicy::None
+                } else {
+                    StatePreservationPolicy::BlockPreservation
+                },
+            ),
+        );
+    }
+
+    // 先订阅再 spawn(§4.4 反模式 3)
+    let mut rx = bus.subscribe();
+    let handle = match sub.start_degradation_listener() {
+        Some(h) => h,
+        None => return Err("listener 未绑定 EventBus,场景不成立"),
+    };
+
+    // 第 1 次:建链。链没建起来就谈不上"进耗尽分支",用例会退化成假绿,故自证前提。
+    // WHY 只在这里查 chain_count():此后 listener 可能已卡在写守卫上,
+    // 而它要取全分片读锁(见 run_exhaustion 的 WHY 注释)。
+    bus.publish(quota_event("ch-0")).await.unwrap();
+    tokio::time::sleep(TICK).await;
+    if sub.chain_count() != 1 {
+        handle.abort();
+        return Err("首次配额耗尽后未建立降级链,用例前提不成立");
+    }
+
+    // 再发 channels-1 次:第 channels 次落到 ChainExhausted 分支
+    for _ in 1..channels {
+        bus.publish(quota_event("ch-0")).await.unwrap();
+        tokio::time::sleep(TICK).await;
+    }
+
+    // 反空转前提:走到这里 ch-0 的链必须**已被耗尽路径移除**。
+    // WHY 必要:若事件数不足以推进到链尾(例如深度算错),后面的探针照样会成功,
+    // 属性版就会在"根本没进 ChainExhausted 分支"的输入上静默通过 —— 绿但无意义。
+    if sub.chain_count() != 0 {
+        handle.abort();
+        return Err("事件数未把 ch-0 推进到 ChainExhausted(链仍在),属性用例会退化成假绿");
+    }
+
+    // 探针:换一个 route_key。listener 仍活着 ⇒ 必然再产出一个 Triggered。
+    bus.publish(quota_event("ch-1")).await.unwrap();
+    let alive = tokio::time::timeout(LIVENESS_BUDGET, async {
+        loop {
+            match rx.recv().await {
+                Ok(NexusEvent::CsnSubstitutionTriggered { .. }) => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    handle.abort();
+    Ok(alive)
+}
+
+/// 在独立线程 + 自有 runtime 里跑一个场景,主线程只等 `recv_timeout`。
+/// 返回 `Err(String)` 时字符串自带判红理由(含预算与通道数),调用方无需再拼。
+///
+/// WHY 线程化而不是直接在 `#[tokio::test]` 里 await:自锁持有的是**分片写锁**,
+/// 而对该图做任何整体读(`DashMap::len()` 一类)都要取**全部分片读锁** —— 会把测试
+/// 线程一起锁死。那样用例表现为「挂住」而非「失败」:既拿不到可归档的红色证据,
+/// 又会把 CI 的整条 test job 拖死。线程若卡死,主线程超时即判红,进程照常退出。
+fn run_exhaustion(channels: usize) -> Result<bool, String> {
+    // 预算随深度线性放大:场景自身约 (channels+1) 个 TICK,再加调度余量
+    let budget = Duration::from_millis(100 * (channels as u64 + 2) + 4_000);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("独立 runtime 构建失败");
+        // send 失败只可能是主线程已超时退出,无需处理
+        let _ = tx.send(rt.block_on(exhaustion_scenario(channels)));
+    });
+    match rx.recv_timeout(budget) {
+        // 已回传裁决 => 线程必然跑完,join 不会阻塞
+        Ok(v) => {
+            let _ = worker.join();
+            v.map_err(String::from)
+        }
+        // 超时:线程可能正卡死,**不能** join(会把挂起传染给测试进程)
+        Err(err) => Err(format!(
+            "{} 通道(链深 {})的耗尽场景在 {:?} 内未回传裁决({:?}):降级链耗尽路径把 \
+             listener 卡死了。修法见同 crate 的正确模板 \
+             CsnSubstitutor::advance_degradation(块作用域出守卫后再 remove)。",
+            channels,
+            channels - 1,
+            budget,
+            err
+        )),
+    }
+}
+
+/// 生产路径回归守卫:`handle_quota_exhausted` 的 `ChainExhausted` 分支若在 `get_mut`
+/// 守卫仍存活时对同一张 DashMap 调 `remove`,分片写锁不可重入即自锁;而 listener 是
+/// **单个顺序 await 的 task**(`start_degradation_listener` 内一处 `recv` + 一处
+/// `handle_quota_exhausted(..).await`),所以卡掉的不是一条链,而是之后所有通道的
+/// 降级响应。WHY 用符号而非行号锚点:本文件修复过一次即整体位移,行号指针当场腐烂。
+///
+/// 机制层最小证明见 `tests/lock_reentrancy_mechanism.rs`;任意深度的属性版见本文件末。
+#[test]
+fn chain_exhaustion_does_not_wedge_degradation_listener() {
+    match run_exhaustion(3) {
+        Ok(true) => {}
+        Ok(false) => panic!(
+            "降级链耗尽后 listener 不再产出替代事件(探针超时):同图重入自锁,回归点在 \
+             handle_quota_exhausted 的 ChainExhausted 分支;正确模板见 \
+             CsnSubstitutor::advance_degradation(块作用域出守卫后再 remove)。"
+        ),
+        Err(premise) => panic!("{}", premise),
+    }
+}
+
+/// 属性版:把上面这一条(depth=2 单点)一般化到**任意链深**。
+///
+/// WHY 值得加:修复的形态是"守卫作用域",它是否随候选数变化而漏掉某个分支,
+/// 单点用例证不了。属性 = "对任意通道数 n≥3,把 ch-0 推到耗尽后再来一个键,
+/// listener 仍产出替代事件"。案例数刻意压到 6(每例约 (n+1)×100ms),
+/// 否则 256 例的默认值会把这条挂进 CI 长尾。
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(6))]
+
+    #[test]
+    fn any_chain_depth_exhaustion_keeps_listener_alive(channels in 3usize..=8usize) {
+        let verdict = run_exhaustion(channels);
+        prop_assert!(
+            matches!(verdict, Ok(true)),
+            "channels={} 时耗尽路径之后 listener 未恢复响应: {:?}",
+            channels,
+            verdict
+        );
+    }
 }

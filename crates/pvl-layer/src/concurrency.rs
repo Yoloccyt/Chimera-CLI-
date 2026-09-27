@@ -76,7 +76,12 @@ impl VerifyConcurrency {
         // 首波入队（≤ 并发度）
         while next < n && inflight < self.max_concurrency {
             let idx = next;
-            let fut = task_iter.next().expect("迭代器长度与 n 一致")();
+            // 迭代器由 tasks(len=n) 派生，耗尽属数学不可能；E-5 去 expect
+            // 改防御性 break(宁少不成环，上方不变式已保证不会走到 None 分支)
+            let Some(factory) = task_iter.next() else {
+                break;
+            };
+            let fut = factory();
             let task_timeout = self.task_timeout;
             set.spawn(async move { (idx, timeout(task_timeout, fut).await) });
             next += 1;
@@ -118,11 +123,14 @@ impl VerifyConcurrency {
                 // 补充下一波（若有）
                 if next < n {
                     let idx = next;
-                    let fut = task_iter.next().expect("迭代器长度与 n 一致")();
-                    let task_timeout = self.task_timeout;
-                    set.spawn(async move { (idx, timeout(task_timeout, fut).await) });
-                    next += 1;
-                    inflight += 1;
+                    // 同上：耗尽不可能，防御性跳过补充而非 panic
+                    if let Some(factory) = task_iter.next() {
+                        let fut = factory();
+                        let task_timeout = self.task_timeout;
+                        set.spawn(async move { (idx, timeout(task_timeout, fut).await) });
+                        next += 1;
+                        inflight += 1;
+                    }
                 }
             }
         }
@@ -150,6 +158,7 @@ pub enum ConcurrencyError {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

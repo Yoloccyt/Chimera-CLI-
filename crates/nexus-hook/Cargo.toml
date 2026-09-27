@@ -29,3 +29,8 @@ tokio = { workspace = true, features = ["process"] }
 [dev-dependencies]
 # 测试用时间控制
 tokio = { workspace = true, features = ["full", "test-util"] }
+
+# E-5 第三例 opt-in：生产码 unwrap/expect 实测 0（14 处均在 cfg(test) mod，
+# 已惯用法 mod 级 allow）；由 check_lint_ratchet.py 棘轮守护。
+[lints]
+workspace = true

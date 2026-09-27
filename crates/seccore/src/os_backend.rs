@@ -271,11 +271,18 @@ pub fn probe_snapshot_latency(fence: &mut ProcessFence, n: usize) -> f64 {
     let mut samples = Vec::with_capacity(n);
     for _ in 0..n {
         let t0 = Instant::now();
-        let snap = fence.snapshot().expect("快照不可失败");
+        // 契约:ProcessFence::snapshot 为纯内存复制,实现层保证不返回 Err;
+        // 若返回 Err 即不变量被破坏(开发期缺陷),显式 panic 暴露而非静默降级
+        let snap = match fence.snapshot() {
+            Ok(snap) => snap,
+            Err(e) => panic!("进程围栏快照不可失败(不变量破坏): {e}"),
+        };
         let _ = fence.restore(&snap);
         samples.push(t0.elapsed().as_secs_f64() * 1e6);
     }
-    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // 耗时样本由 as_secs_f64() 产出,恒为非 NaN,partial_cmp 理论不可失效,
+    // Equal 兼容分支仅作防御(避免排序 panic)
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     samples[n / 2]
 }
 
@@ -284,6 +291,7 @@ pub fn probe_snapshot_latency(fence: &mut ProcessFence, n: usize) -> f64 {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

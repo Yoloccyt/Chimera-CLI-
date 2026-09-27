@@ -6,14 +6,16 @@ license.workspace = true
 description = "L6 Router Traits — 路由层公共 trait 定义，消除星型耦合"
 
 [dependencies]
-# L0 Contracts:共享类型（OmniSparseMasks）
+# L0 Contracts:共享类型(OmniSparseMasks/SparseMask/ID 新类型)
 nexus-contracts = { workspace = true }
-# L1 Core:事件总线（用于事件广播）
-event-bus = { workspace = true }
-
-# 库层错误类型标准 (thiserror)
+# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }
 
 [dev-dependencies]
 # 测试用
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+# E-5(四维深审 Phase 3)：首个 opt-in crate——全 target unwrap/expect 实测 0，
+# 由 scripts/check_lint_ratchet.py 棘轮守护(回退即红，集合只增不减)。
+[lints]
+workspace = true

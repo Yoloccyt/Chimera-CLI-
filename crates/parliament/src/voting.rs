@@ -397,7 +397,7 @@ impl VoteCounter {
 ///
 /// # P4-W14.3 S5 接缝扩展(可见性提升)
 ///
-/// 此函数从 `fn`(模块私有)提升为 `pub(crate)`,供 `debate.rs` 中
+/// 此函数从 `fn`(模块私有)提升为 `pub(crate)`,供 `debate` 模块中
 /// `deliberate_with_policy` 的 FastPath 分支调用。FastPath 跳过辩论,
 /// 无 Opinion 列表,但仍需生成 `decision_hash` 供审计与去重。
 /// 调用 `compute_decision_hash(proposal, &[])` 即可仅哈希提案字段。
@@ -600,6 +600,7 @@ pub async fn publish_debate_completed_event(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

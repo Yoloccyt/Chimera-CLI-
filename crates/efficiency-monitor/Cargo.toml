@@ -44,3 +44,8 @@ proptest = { workspace = true }
 [[bench]]
 name = "monitor_benchmark"
 harness = false
+
+# E-5 opt-in: 2 poison-expects on pure-counter stats rewritten to
+# unwrap_or_else(IntoInternal); rest are test units with idiomatic allow.
+[lints]
+workspace = true

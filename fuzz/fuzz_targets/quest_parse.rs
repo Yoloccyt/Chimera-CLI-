@@ -19,10 +19,10 @@
 // fuzz crate 独立于主 workspace,不影响 34 crate 的 forbid 覆盖率。
 
 // Windows-GNU 下使用 stub 宏(chimera_fuzz),非 Windows 使用 libfuzzer_sys
-#[cfg(not(windows))]
-use libfuzzer_sys::fuzz_target;
 #[cfg(windows)]
 use chimera_fuzz::fuzz_target;
+#[cfg(not(windows))]
+use libfuzzer_sys::fuzz_target;
 use nexus_core::{MultimodalInput, Quest, UserIntent};
 
 fuzz_target!(|data: &[u8]| {
@@ -39,20 +39,14 @@ fuzz_target!(|data: &[u8]| {
         // 重新反序列化应得到相等对象(往返一致性)
         let reserialized = reserialized.unwrap();
         if let Ok(quest2) = serde_json::from_slice::<Quest>(&reserialized) {
-            assert_eq!(
-                quest, quest2,
-                "Quest 往返序列化后应相等(serde 不变量)"
-            );
+            assert_eq!(quest, quest2, "Quest 往返序列化后应相等(serde 不变量)");
         }
     }
 
     // === 目标2:Quest MessagePack 反序列化不 panic ===
     if let Ok(quest) = rmp_serde::from_slice::<Quest>(data) {
         let reserialized = rmp_serde::to_vec(&quest);
-        assert!(
-            reserialized.is_ok(),
-            "Quest MessagePack 重新序列化应成功"
-        );
+        assert!(reserialized.is_ok(), "Quest MessagePack 重新序列化应成功");
     }
 
     // === 目标3:UserIntent JSON 反序列化不 panic ===
@@ -64,10 +58,7 @@ fuzz_target!(|data: &[u8]| {
 
         // 往返不变量
         let reserialized = serde_json::to_vec(&intent);
-        assert!(
-            reserialized.is_ok(),
-            "UserIntent 重新序列化应成功"
-        );
+        assert!(reserialized.is_ok(), "UserIntent 重新序列化应成功");
     }
 
     // === 目标4:MultimodalInput 枚举反序列化不 panic ===

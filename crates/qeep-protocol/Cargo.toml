@@ -32,3 +32,7 @@ criterion = { workspace = true, features = ["async_tokio"] }
 [[bench]]
 name = "protocol_bench"
 harness = false
+# E-5 opt-in: production code measured clean (2 mock call_log poison-expects
+# rewritten to unwrap_or_else(IntoInternal)); rest are test/bench idioms.
+[lints]
+workspace = true

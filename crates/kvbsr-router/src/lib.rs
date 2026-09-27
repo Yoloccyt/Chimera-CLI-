@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L6
+//! ROLE:     KV 块语义路由器 — 两级块路由的键值缓存语义检索
+//! BACKEND:  memory
+//! PRODUCERS: 2 BlocksRebalanced,ToolsRouted
+//! CONSUMERS: 1 chimera-cli
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! KV 块语义路由器 — 两级块路由的键值缓存语义检索
 //!
 //! 对应架构层:L6 Router

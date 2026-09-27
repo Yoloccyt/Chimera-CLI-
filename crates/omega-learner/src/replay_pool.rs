@@ -8,8 +8,8 @@
 //!
 //! ## 1. 泛型设计(`ReplayPool<T>`)
 //! 回放池不绑定具体轨迹类型,允许上层按需实例化:
-//! - `ReplayPool<model_router::TrajectoryEvent>` — 捕获点 1(路由轨迹)
-//! - `ReplayPool<quest_engine::QuestTrajectory>` — 捕获点 2(Quest 状态轨迹)
+//! - `ReplayPool<上层自定义轨迹类型>` — 由 L9/L10 自行传入(本 crate 不引用它们)
+//! - 原"捕获点 1 = `model-router` 路由轨迹"随该 crate 于架构减法批次删除而不复存在
 //! - `ReplayPool<ReplaySample>` — 统一样本格式(推荐)
 //!
 //! WHY 泛型而非具体类型:
@@ -47,8 +47,8 @@
 //!
 //! # 数据流
 //! ```text
-//! 捕获点 1 (model-router RecordingHook)
-//!     │ drain() → Vec<TrajectoryEvent>
+//! 捕获点 1 (原 model-router RecordingHook —— 该 crate 已删,此路当前无生产者)
+//!     │ drain() → Vec<上层传入的轨迹类型>
 //!     ▼
 //! ┌─────────────────────────────────────────┐
 //! │         ReplayPool<T>                   │
@@ -65,7 +65,7 @@
 //! ```
 //!
 //! # 容量规划
-//! - 单条 TrajectoryEvent ≈ 200 bytes(序列化后)
+//! - 单条 `ReplaySample` ≈ 200 bytes(序列化后)
 //! - 10K 轨迹 ≈ 2MB 内存,完全在预算内
 //! - 生产环境可通过 `with_capacity` 自定义
 
@@ -462,16 +462,16 @@ impl ReplayPoolStats {
 ///
 /// # 设计决策
 /// - **自包含类型**:仅含原始字段(String/f32/u64 等),不依赖 quest-engine 或
-///   model-router 的具体类型,避免 L6→L9 依赖违规(§2.2 依赖铁律)
+///   其他层的轨迹具体类型,避免 L6→L9 依赖违规(§2.2 依赖铁律)
 /// - **可选使用**:上层可直接使用 `ReplayPool<ReplaySample>`,
-///   也可使用 `ReplayPool<model_router::TrajectoryEvent>` 等具体类型
+///   也可传入上层自己拥有的轨迹类型(泛型参数 `T`)
 /// - **序列化支持**:派生 `Serialize + Deserialize`,便于持久化与跨进程传输
 ///
 /// # 字段映射
-/// | 字段 | 捕获点 1 (model-router) | 捕获点 2 (quest-engine) |
-/// |------|------------------------|------------------------|
+/// | 字段 | 捕获点 1 (原 model-router;crate 已删 ⇒ 当前无生产者) | 捕获点 2 (quest-engine) |
+/// |------|--------------------------------------------------------------|------------------------|
 /// | source | Router | QuestCheckpoint |
-/// | quest_id | TrajectoryEvent.quest_id | QuestTrajectory.state.quest_id |
+/// | quest_id | 历史称谓 TrajectoryEvent.quest_id(该类型已随 crate 删除) | QuestTrajectory.state.quest_id |
 /// | arm | strategy 名称 | thinking_mode 名称 |
 /// | reward | outcome 成功=1.0/失败=0.0 | net_reward |
 /// | context_hash | (可选)request hash | memory_snapshot_hash |
@@ -543,6 +543,7 @@ impl ReplaySample {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use rand::thread_rng;

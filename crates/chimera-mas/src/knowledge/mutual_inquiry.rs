@@ -80,17 +80,25 @@ impl SensitivePatterns {
     /// WHY 集中编译:`create_safe_summary` 多次调用时复用同一组 Regex,
     /// 避免每次调用重新编译(Regex::new 是 O(n) 编译)。
     fn new() -> Self {
+        /// 编译内置字面量正则:失败仅可能源于模式串本身非法
+        /// (开发期缺陷,无运行期输入路径)→显式 panic 保留诊断
+        fn compile_builtin(pattern: &str) -> Regex {
+            match Regex::new(pattern) {
+                Ok(re) => re,
+                Err(e) => panic!("内置敏感模式正则非法(开发期缺陷): {e}"),
+            }
+        }
         Self {
             // Windows 路径:C:\foo\bar 或 D:/foo/bar
-            windows_path: Regex::new(r"[A-Za-z]:[\\/][^\s]+").expect("windows path regex"),
+            windows_path: compile_builtin(r"[A-Za-z]:[\\/][^\s]+"),
             // Unix 路径:/etc/passwd /usr/local/bin
-            unix_path: Regex::new(r"/[a-z]+/[^\s]+").expect("unix path regex"),
+            unix_path: compile_builtin(r"/[a-z]+/[^\s]+"),
             // IP 地址:192.168.1.1
-            ip: Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").expect("ip regex"),
+            ip: compile_builtin(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"),
             // 邮箱:user@example.com
-            email: Regex::new(r"[\w.+-]+@[\w.-]+\.\w+").expect("email regex"),
+            email: compile_builtin(r"[\w.+-]+@[\w.-]+\.\w+"),
             // API key:sk-xxxxxxxxxxxxxxxxxxxx(至少 20 个字符)
-            api_key: Regex::new(r"sk-[A-Za-z0-9]{20,}").expect("api key regex"),
+            api_key: compile_builtin(r"sk-[A-Za-z0-9]{20,}"),
         }
     }
 }

@@ -18,6 +18,9 @@ import shutil
 import subprocess
 import sys
 
+import gate_rc  # F37：平铺脚本无 __main__ 可包 => 崩溃经 excepthook 退 2, 不借默认 1
+gate_rc.install()
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -52,7 +55,9 @@ def judge(label, text, rc, floor):
         return 2
     rep_cat, rep_id = int(m.group(1)), int(m.group(2))
     act_cat = len({i[0] for i in ids})
-    gaps = [l.strip() for l in text.splitlines() if "[GAP-" in l]
+    # Anchor to line start: the gate's own epilogue literally contains the token
+    # "[GAP-*] lines above", which a substring search counted as a 4th gap.
+    gaps = [l.strip() for l in text.splitlines() if l.strip().startswith("[GAP-")]
     inconsistent = (rep_id != len(ids) or rep_cat != act_cat)
     below = len(ids) < floor
     ok = (rc == 0) and not inconsistent and not below and not gaps

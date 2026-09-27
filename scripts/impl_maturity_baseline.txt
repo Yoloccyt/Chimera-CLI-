@@ -1,0 +1,43 @@
+# impl_maturity_baseline.txt - only-decrease ratchet for scripts/check_impl_maturity_claims.py
+# Measured 2026-09-23 on the working tree (regenerate: --emit | grep -v "^#   ").
+# One row per (crate, label). Increase = RED. Row reaching 0 = delete the row.
+# An allowance must not outlive the debt it allowed.
+chimera-cli.NOT-IMPL-CN=6  # crates/chimera-cli/src/action_orchestrator.rs:15
+chimera-cli.PLACEHOLDER-EN=1  # crates/chimera-cli/src/composition.rs:80 (EvolutionOrchestrator::step 在 feature="r2_unfreeze" 档内自述 placeholder 并无条件返回 Ok(()),即 R2 fail-closed 熔断路径现状永远放行;CI 从未启用该 feature,故现网不可达 —— 记账而非豁免:解冻前必须实装或删除)
+chimera-cli.SIMPLIFIED-CN=1  # crates/chimera-cli/src/commands/chat.rs:336
+chimera-mas.NOT-IMPL-CN=7  # crates/chimera-mas/src/quadrant.rs:341
+chimera-mas.PLACEHOLDER-CN=2  # crates/chimera-mas/src/delegation.rs:1
+chimera-mas.SIMPLIFIED-CN=1  # crates/chimera-mas/src/archive/compressor.rs:325
+chimera-tui.SIMPLIFIED-CN=1  # crates/chimera-tui/src/viz/line_chart.rs:79
+chtc-bridge.MOCK-ONLY=5  # crates/chtc-bridge/src/adapters/emacs.rs:3
+cmt-tiering.NOT-IMPL-CN=2  # crates/cmt-tiering/src/cold.rs:357
+event-bus.NOT-IMPL-CN=1  # crates/event-bus/src/dynamic_registry.rs:17
+gqep-executor.SIMPLIFIED-CN=1  # crates/gqep-executor/src/toolplan_runner.rs:293
+gsoe-evolution.PLACEHOLDER-CN=1  # crates/gsoe-evolution/src/policy/grpo.rs:13
+hcw-window.NOT-IMPL-CN=2  # crates/hcw-window/src/recall/fine.rs:201
+mca-gateway.NOT-IMPL-CN=3  # crates/mca-gateway/src/adapters.rs:46
+mcp-mesh.NOT-IMPL-CN=1  # crates/mcp-mesh/src/error.rs:157
+mcp-mesh.PLACEHOLDER-CN=7  # crates/mcp-mesh/src/mesh.rs:12
+mlc-engine.PLACEHOLDER-CN=1  # crates/mlc-engine/src/pyramid.rs:25
+mtpe-executor.DEFERRED=2  # crates/mtpe-executor/src/predictor.rs:33
+mtpe-executor.PLACEHOLDER-CN=1  # crates/mtpe-executor/src/predictor.rs:9
+mtpe-executor.PSEUDO=1  # crates/mtpe-executor/src/predictor.rs:35
+mtpe-executor.SIMPLIFIED-CN=2  # crates/mtpe-executor/src/fallback.rs:14
+nexus-contracts.NOT-IMPL-CN=1  # crates/nexus-contracts/src/memory_strategy.rs:31
+nexus-core.NOT-IMPL-CN=2  # crates/nexus-core/src/compute/seam.rs:28
+nmc-encoder.DEFERRED=1  # crates/nmc-encoder/src/perceptors/desktop.rs:17
+nmc-encoder.PLACEHOLDER-CN=14  # crates/nmc-encoder/src/config.rs:14
+omega-learner.NOT-IMPL-CN=1  # crates/omega-learner/src/context.rs:34
+parliament.NOT-IMPL-CN=3  # crates/parliament/src/ahirt.rs:290
+parliament.PLACEHOLDER-CN=11  # crates/parliament/src/ahirt.rs:637
+parliament.SIMPLIFIED-CN=1  # crates/parliament/src/adaptive_strategy.rs:42
+pvl-layer.PLACEHOLDER-CN=6  # crates/pvl-layer/src/producer.rs:11
+pvl-layer.SIMPLIFIED-CN=1  # crates/pvl-layer/src/verifier.rs:123
+repo-wiki.DEFERRED=1  # crates/repo-wiki/src/lib.rs:14
+repo-wiki.NOT-IMPL-CN=3  # crates/repo-wiki/src/iscm.rs:78
+scc-cache.NOT-IMPL-CN=1  # crates/scc-cache/src/affinity.rs:108
+scc-cache.PLACEHOLDER-CN=8  # crates/scc-cache/src/wal.rs:8
+seccore.DEFERRED=1  # crates/seccore/src/asa.rs:529
+seccore.NOT-IMPL-CN=3  # crates/seccore/src/asa.rs:324
+seccore.PLACEHOLDER-CN=2  # crates/seccore/src/asa.rs:155
+# advisory (not scored): 100 location(s)

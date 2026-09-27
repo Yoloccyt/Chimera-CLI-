@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn test_cargo_check_with_r2_unfreeze_feature() {
         let output = Command::new("cargo")
-            .args(&["check", "-p", "chimera-cli", "--features", "r2_unfreeze"])
+            .args(["check", "-p", "chimera-cli", "--features", "r2_unfreeze"])
             .current_dir(super::repo_root())
             .output()
             .expect("Failed to execute cargo check");
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn test_omega_learner_reachable_after_fix() {
         let output = Command::new("powershell")
-            .args(&[
+            .args([
                 "-NoProfile",
                 "-File",
                 "scripts/check_crate_reachability.ps1",
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn test_omega_learner_in_cargo_tree() {
         let output = Command::new("cargo")
-            .args(&["tree", "-p", "omega-learner", "--edges", "normal"])
+            .args(["tree", "-p", "omega-learner", "--edges", "normal"])
             .current_dir(super::repo_root())
             .output()
             .expect("Failed to execute cargo tree");

@@ -23,3 +23,8 @@ criterion = { workspace = true }
 [[bench]]
 name = "bridge_benchmark"
 harness = false
+
+# E-5 第七例 opt-in：生产码唯 3 处 poison-expect 已改 unwrap_or_else(IntoInternal)
+# 惯用法（map 无不变量，恢复优于 panic）；测试/bench 单元惯用法 allow。
+[lints]
+workspace = true

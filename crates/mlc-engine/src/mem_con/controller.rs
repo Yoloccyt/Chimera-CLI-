@@ -29,6 +29,7 @@
 //! 2. 异常回退层:回退到 StandardTopK
 //! 3. 熔断入口层:circuit_breaker_ghost_rate 触发时回退到 StandardTopK
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
@@ -66,6 +67,12 @@ pub struct MemConController {
     config: MemConConfig,
     /// 上次调整时的幽灵率(用于熔断判定)
     last_adjustment_ghost_rate: std::sync::RwLock<Option<f32>>,
+    /// 本轮"幽灵越限"是否已播报 `GhostMemoryDetected`(上升沿闩)
+    ///
+    /// WHY 需要它:冷却期只在**真的换策略**时设置,而"超限但策略已是最激进"
+    /// 的区间里 `try_adjust` 会被每次 recall 反复调入 ⇒ 无闩则每条 recall
+    /// 发一件,把 broadcast 通道刷满(事件风暴)。
+    ghost_reported: AtomicBool,
 }
 
 impl MemConController {
@@ -90,6 +97,7 @@ impl MemConController {
             stats: std::sync::RwLock::new(MemConStats::new()),
             config,
             last_adjustment_ghost_rate: std::sync::RwLock::new(None),
+            ghost_reported: AtomicBool::new(false),
         }
     }
 
@@ -124,13 +132,13 @@ impl MemConController {
 
         // 1. 记录召回结果
         {
-            let mut detector = self.detector.write().expect("detector 写锁");
+            let mut detector = self.detector.write().unwrap_or_else(|e| e.into_inner());
             detector.record_recall(is_ghost);
         }
 
         // 2. 更新统计
         {
-            let mut stats = self.stats.write().expect("stats 写锁");
+            let mut stats = self.stats.write().unwrap_or_else(|e| e.into_inner());
             stats.total_recalls += 1;
             if is_ghost {
                 stats.total_ghost_detections += 1;
@@ -151,7 +159,10 @@ impl MemConController {
     fn try_adjust(&self) -> AdjustmentOutcome {
         // 检查冷却期
         {
-            let cooldown = self.cooldown_until.read().expect("cooldown 读锁");
+            let cooldown = self
+                .cooldown_until
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             if Instant::now() < *cooldown {
                 return AdjustmentOutcome::NoChange;
             }
@@ -163,8 +174,10 @@ impl MemConController {
 
         // 读取检测器状态
         {
-            let detector = self.detector.read().expect("detector 读锁");
+            let detector = self.detector.read().unwrap_or_else(|e| e.into_inner());
             if !detector.is_ghost_threshold_exceeded() {
+                // 解除播报闩:幽灵率回落后,下一次越限是一次**新**检测,应当再播一条
+                self.ghost_reported.store(false, Ordering::Release);
                 // 如果幽灵率恢复正常且不是刚调整完,考虑放宽策略
                 return self.try_recover();
             }
@@ -177,8 +190,16 @@ impl MemConController {
         let current_strategy = self
             .current_policy
             .read()
-            .expect("current_policy 读锁")
+            .unwrap_or_else(|e| e.into_inner())
             .strategy();
+
+        // 上升沿播报检出:「检测到幽灵记忆」与「是否据此换策略」是两件事
+        // (mem_con/mod.rs 框图把 GhostMemoryDetected 列在检测侧、
+        //  MemConStrategyAdjusted 列在调整侧),故必须在 select_strategy 之前发,
+        // 且靠 `ghost_reported` 闩保证一段越限期只播一次(理由见该字段注释)。
+        if !self.ghost_reported.swap(true, Ordering::AcqRel) {
+            self.publish_ghost_detected(ghost_rate, ghost_count, total_recalls, current_strategy);
+        }
 
         let new_strategy = Self::select_strategy(current_strategy, ghost_rate);
 
@@ -188,19 +209,25 @@ impl MemConController {
 
         // 更新策略
         {
-            let mut policy = self.current_policy.write().expect("current_policy 写锁");
+            let mut policy = self
+                .current_policy
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             *policy = MemoryStrategyPolicy::Static(new_strategy);
         }
 
         // 设置冷却期
         {
-            let mut cooldown = self.cooldown_until.write().expect("cooldown 写锁");
+            let mut cooldown = self
+                .cooldown_until
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             *cooldown = Instant::now() + Duration::from_secs(self.config.cooldown_secs);
         }
 
         // 更新统计
         {
-            let mut stats = self.stats.write().expect("stats 写锁");
+            let mut stats = self.stats.write().unwrap_or_else(|e| e.into_inner());
             stats.adjustments_count += 1;
         }
 
@@ -209,7 +236,7 @@ impl MemConController {
             let mut last = self
                 .last_adjustment_ghost_rate
                 .write()
-                .expect("last_adjustment_ghost_rate 写锁");
+                .unwrap_or_else(|e| e.into_inner());
             *last = Some(ghost_rate);
         }
 
@@ -240,7 +267,7 @@ impl MemConController {
         let ghost_rate;
 
         {
-            let detector = self.detector.read().expect("detector 读锁");
+            let detector = self.detector.read().unwrap_or_else(|e| e.into_inner());
             ghost_rate = detector.ghost_rate();
         }
 
@@ -253,7 +280,7 @@ impl MemConController {
         let current_strategy = self
             .current_policy
             .read()
-            .expect("current_policy 读锁")
+            .unwrap_or_else(|e| e.into_inner())
             .strategy();
 
         if current_strategy == MemoryStrategy::StandardTopK {
@@ -262,19 +289,25 @@ impl MemConController {
 
         // 恢复为 StandardTopK
         {
-            let mut policy = self.current_policy.write().expect("current_policy 写锁");
+            let mut policy = self
+                .current_policy
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             *policy = MemoryStrategyPolicy::Static(MemoryStrategy::StandardTopK);
         }
 
         // 设置冷却期
         {
-            let mut cooldown = self.cooldown_until.write().expect("cooldown 写锁");
+            let mut cooldown = self
+                .cooldown_until
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             *cooldown = Instant::now() + Duration::from_secs(self.config.cooldown_secs);
         }
 
         // 更新统计
         {
-            let mut stats = self.stats.write().expect("stats 写锁");
+            let mut stats = self.stats.write().unwrap_or_else(|e| e.into_inner());
             stats.adjustments_count += 1;
         }
 
@@ -323,6 +356,43 @@ impl MemConController {
         current
     }
 
+    /// 发布幽灵记忆检出事件(B4′ 事件接线)
+    ///
+    /// 语义边界:这是**检测侧**的一次「越限」,与「是否据此换策略」无关(后者见
+    /// [`Self::publish_strategy_adjusted`])。四个载荷全部直取检测器窗口状态,
+    /// 不做二次推断 ⇒ 消费方(`event-bus/src/membrane.rs` 的风险分级臂)读到的
+    /// 就是检测器当时的真相。
+    ///
+    /// 未注入 EventBus 时静默跳过;发布失败仅 debug(与同 crate 其余 `publish_*`
+    /// 同款纪律:旁路观测面不得影响策略控制主语义)。
+    ///
+    /// ⚠ **可达性现状(2026-09-24 实测)**:本文件的 `try_adjust` 只由 `on_recall` 驱动,
+    /// 而 `on_recall` 在 `crates/**/src` 内**没有任何生产调用方**(只有 `engine.rs:99/370/384`
+    /// 的 doc 注释写着"调用方在每次 recall 后调它",以及 `mem_con` 自己的测试)。
+    /// ⇒ 事件在生产路径上目前不会触发;要闭环需把 recall hook 接进 `MlcEngine::recall*`
+    ///   并由时效判定给出 `is_ghost`(属业务口径,登记在 B4′ 决策 ⑩)。
+    fn publish_ghost_detected(
+        &self,
+        ghost_rate: f32,
+        ghost_count: u32,
+        total_recalls: u32,
+        current_strategy: MemoryStrategy,
+    ) {
+        if let Some(ref bus) = self.event_bus {
+            let event = NexusEvent::GhostMemoryDetected {
+                metadata: EventMetadata::new("mlc-engine:mem_con"),
+                ghost_rate,
+                ghost_count,
+                total_recalls,
+                current_strategy: format!("{current_strategy:?}"),
+            };
+
+            if let Err(e) = bus.publish_blocking(event) {
+                debug!("MemCon: 发布 GhostMemoryDetected 事件失败: {}", e);
+            }
+        }
+    }
+
     /// 发布策略调整事件
     fn publish_strategy_adjusted(
         &self,
@@ -356,23 +426,29 @@ impl MemConController {
     pub fn current_strategy(&self) -> MemoryStrategy {
         self.current_policy
             .read()
-            .expect("current_policy 读锁")
+            .unwrap_or_else(|e| e.into_inner())
             .strategy()
     }
 
     /// 获取当前策略策略(完整 MemoryStrategyPolicy)
     pub fn current_policy(&self) -> MemoryStrategyPolicy {
-        *self.current_policy.read().expect("current_policy 读锁")
+        *self
+            .current_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// 获取当前幽灵率
     pub fn ghost_rate(&self) -> f32 {
-        self.detector.read().expect("detector 读锁").ghost_rate()
+        self.detector
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .ghost_rate()
     }
 
     /// 获取运行统计
     pub fn stats(&self) -> MemConStats {
-        *self.stats.read().expect("stats 读锁")
+        *self.stats.read().unwrap_or_else(|e| e.into_inner())
     }
 
     /// 获取配置引用
@@ -383,15 +459,18 @@ impl MemConController {
     /// 重置控制器(清空检测器窗口,重置统计)
     pub fn reset(&self) {
         {
-            let mut detector = self.detector.write().expect("detector 写锁");
+            let mut detector = self.detector.write().unwrap_or_else(|e| e.into_inner());
             detector.reset();
         }
         {
-            let mut stats = self.stats.write().expect("stats 写锁");
+            let mut stats = self.stats.write().unwrap_or_else(|e| e.into_inner());
             *stats = MemConStats::new();
         }
         {
-            let mut cooldown = self.cooldown_until.write().expect("cooldown 写锁");
+            let mut cooldown = self
+                .cooldown_until
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             let past = Instant::now()
                 .checked_sub(Duration::from_secs(self.config.cooldown_secs + 1))
                 .unwrap_or_else(Instant::now);
@@ -401,16 +480,20 @@ impl MemConController {
             let mut last = self
                 .last_adjustment_ghost_rate
                 .write()
-                .expect("last_adjustment_ghost_rate 写锁");
+                .unwrap_or_else(|e| e.into_inner());
             *last = None;
         }
+        // 检测闩一并解除:重置后第一次越限应重新播报(否则 reset 之后永不再报)
+        self.ghost_reported.store(false, Ordering::Release);
         debug!("MemCon: 控制器已重置");
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     /// 验证禁用模式下,on_recall 返回 NoChange
     #[test]
@@ -544,6 +627,162 @@ mod tests {
             }
         }
         assert!(found_event, "应至少发布一个 MemConStrategyAdjusted 事件");
+    }
+
+    // ── B4′:`GhostMemoryDetected` 生产端接线 ──────────────────────────────
+    //
+    // 账面-事实缺口:`mem_con/mod.rs` 框图把"发布 GhostMemoryDetected"列在检测侧,
+    // 而 G-67 实测 prod_ctor=0 ⇒ 三重悖论"记忆悖论"的观测面是空的。
+
+    /// 取总线上全部检出事件(其余事件跳过,不消费判定)。
+    fn drain_ghost_detected(rx: &mut event_bus::EventReceiver) -> Vec<(f32, u32, u32, String)> {
+        let mut out = Vec::new();
+        for _ in 0..200 {
+            match rx.try_recv() {
+                Ok(Some(event_bus::NexusEvent::GhostMemoryDetected {
+                    ghost_rate,
+                    ghost_count,
+                    total_recalls,
+                    current_strategy,
+                    ..
+                })) => out.push((ghost_rate, ghost_count, total_recalls, current_strategy)),
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+        out
+    }
+
+    /// `cooldown_secs: 0` 的控制器。
+    ///
+    /// WHY 零冷却:冷却只挡**调整**步骤;若检出不自带闩,零冷却就把"超限但策略
+    /// 已是最激进"区间的每次 recall 都变成一条事件 ⇒ 风暴在本用例里直接可见。
+    fn storm_config() -> MemConConfig {
+        MemConConfig {
+            window_size: 10,
+            ghost_threshold: 0.3,
+            cooldown_secs: 0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ghost_detection_publishes_once_per_excursion() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let controller = MemConController::new(storm_config(), Some(bus));
+
+        for _ in 0..5 {
+            controller.on_recall(false);
+        }
+        for _ in 0..30 {
+            controller.on_recall(true);
+        }
+
+        let events = drain_ghost_detected(&mut rx);
+        assert_eq!(
+            events.len(),
+            1,
+            "持续越限期间只应播报一条,实际 {events:?}(检出未被限流即事件风暴)"
+        );
+        let (rate, count, total, strategy) = &events[0];
+        assert!(
+            *rate > 0.3,
+            "检出事件的 ghost_rate 应在阈值之上,实际 {rate}"
+        );
+        assert!(
+            *count > 0 && *total > 0,
+            "计数与窗口读数不得为 0,实际 {count}/{total}"
+        );
+        assert_eq!(
+            strategy, "StandardTopK",
+            "检出先于调整 ⇒ 事件里的策略必须仍是调整前那一个"
+        );
+    }
+
+    #[test]
+    fn ghost_detection_rearms_after_recovery() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let controller = MemConController::new(storm_config(), Some(bus));
+
+        for _ in 0..5 {
+            controller.on_recall(false);
+        }
+        for _ in 0..6 {
+            controller.on_recall(true);
+        }
+        assert_eq!(
+            drain_ghost_detected(&mut rx).len(),
+            1,
+            "第一段越限应恰好播报一条"
+        );
+
+        for _ in 0..10 {
+            controller.on_recall(false);
+        }
+        assert!(
+            controller.ghost_rate() <= 0.3,
+            "回落前置条件不成立(率 {}),用例退化成假绿",
+            controller.ghost_rate()
+        );
+
+        for _ in 0..6 {
+            controller.on_recall(true);
+        }
+        assert_eq!(
+            drain_ghost_detected(&mut rx).len(),
+            1,
+            "回落后再次越限必须再播一条(闩未解除即报 0 条)"
+        );
+    }
+
+    #[test]
+    fn no_ghost_event_below_threshold() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let controller = MemConController::new(storm_config(), Some(bus));
+
+        for _ in 0..20 {
+            controller.on_recall(false);
+        }
+        // 判据是 `rate > threshold`,3/10 = 0.3 恰好等于阈值 ⇒ 仍属未越限
+        for _ in 0..3 {
+            controller.on_recall(true);
+        }
+        assert!(
+            drain_ghost_detected(&mut rx).is_empty(),
+            "未越限不得播报检出事件"
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+
+        /// 检出条数必须与"越限持续多久"无关 —— 任意长度的全幽灵流都只播一条。
+        ///
+        /// WHY 绑长度而非绑阈值:阈值侧已有 `no_ghost_event_below_threshold` 守;
+        /// 这条守的是限流本身(长度一变条数就变 ⇒ 要么漏报要么风暴)。
+        #[test]
+        fn ghost_event_count_is_independent_of_excursion_length(n in 12usize..60) {
+            let bus = EventBus::new();
+            let mut rx = bus.subscribe();
+            let controller = MemConController::new(storm_config(), Some(bus));
+            for _ in 0..5 {
+                controller.on_recall(false);
+            }
+            for _ in 0..n {
+                controller.on_recall(true);
+            }
+            let events = drain_ghost_detected(&mut rx);
+            prop_assert_eq!(
+                events.len(),
+                1,
+                "幽灵流长度 {} 却播报 {} 条(检出未按上升沿限流)",
+                n,
+                events.len()
+            );
+        }
     }
 
     /// 验证冷却期机制

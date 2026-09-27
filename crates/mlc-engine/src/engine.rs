@@ -537,12 +537,12 @@ impl MlcEngine {
     ) -> Result<Option<(MemoryEntry, nexus_contracts::TemporalMeta)>, MlcError> {
         match self.recall(id).await? {
             Some(entry) if entry.is_transition() => {
-                // 提取 TemporalMeta(is_transition() 为 true 时 temporal_meta 必为 Some)
-                let meta = entry
-                    .temporal_meta
-                    .clone()
-                    .expect("is_transition() 为 true 时 temporal_meta 必为 Some(Transition)");
-                Ok(Some((entry, meta)))
+                // is_transition() 为 true 时 temporal_meta 理论上必为 Some(Transition);
+                // 漂移态归入文档已承诺的 None("非 Transition 状态")分支,不 panic
+                match entry.temporal_meta.clone() {
+                    Some(meta) => Ok(Some((entry, meta))),
+                    None => Ok(None),
+                }
             }
             _ => Ok(None),
         }

@@ -109,10 +109,12 @@ pub fn priority_risk_level(priority: TaskPriority) -> u8 {
 ///
 /// 下标取 `Quadrant::ALL` 声明序,与桥接词表 dims[0..4] 一一对应。
 pub fn quadrant_dim(quadrant: Quadrant) -> usize {
-    Quadrant::ALL
-        .iter()
-        .position(|q| q == &quadrant)
-        .expect("Quadrant::ALL 覆盖全部四象限,position 必命中")
+    // Quadrant::ALL 穷举四象限(enum 演化时编译器强制 ALL 同步),未命中
+    // 仅可能源于 ALL 与 enum 漂移(开发期缺陷)→显式 panic 保留诊断
+    match Quadrant::ALL.iter().position(|q| q == &quadrant) {
+        Some(dim) => dim,
+        None => panic!("Quadrant::ALL 未覆盖 {quadrant:?}:枚举与 ALL 声明已漂移(开发期缺陷)",),
+    }
 }
 
 /// 能力标签 → 哈希填充维(确定性 FNV-1a,跨进程/跨平台一致)
@@ -253,6 +255,7 @@ pub fn mas_gea_config() -> gea_activator::GeaConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

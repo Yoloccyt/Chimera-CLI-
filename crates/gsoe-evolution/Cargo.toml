@@ -67,3 +67,8 @@ harness = false
 [[bench]]
 name = "three_factor_selector_bench"
 harness = false
+
+# E-5 opt-in: production expects rewritten (defensive if-let / documented
+# explicit panic contracts); test/bench units idiomatic allow.
+[lints]
+workspace = true

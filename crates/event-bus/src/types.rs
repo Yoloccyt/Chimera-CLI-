@@ -503,7 +503,7 @@ pub enum NexusEvent {
     //
     // WHY:Week 3 新增三个 crate(hcw-window/cmt-tiering/kvbsr-router),
     // 它们通过 EventBus 发布状态变更,符合 §2.2 依赖铁律(跨层通信
-    // 只能走 Event Bus)。4 个变体均为 Normal 级别,追加在枚举末尾
+    // 只能走 Event Bus)。本分节变体均为 Normal 级别,追加在枚举末尾
     // 以保持向后兼容(不修改现有变体的字段或顺序)。
     // ============================================================
     /// HCW 窗口层级切换 — L2 Memory 内部状态变更

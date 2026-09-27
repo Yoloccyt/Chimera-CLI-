@@ -9,6 +9,9 @@ import os
 import re
 import sys
 
+import gate_rc  # F37：本脚本平铺执行、无 __main__ 可包 => 未捕获异常必须退 2。
+gate_rc.install()  # 本门 expect=1：崩溃若借默认 rc=1 会被台账读成"如期红"= 静默假绿。
+
 ENC = "utf-8"
 
 

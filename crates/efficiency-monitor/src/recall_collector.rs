@@ -110,10 +110,8 @@ impl RecallCollector {
     /// # 返回值
     /// 快照拷贝（Mutex 锁内 clone 后释放，不跨锁边界返回引用）
     pub fn snapshot(&self) -> RecallStats {
-        self.stats
-            .lock()
-            .expect("recall stats lock poisoned")
-            .clone()
+        // poison-tolerant(仓内惯用法):RecallStats 为纯计数器快照，无不变量可破坏
+        self.stats.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// 应用单条事件（同步处理，测试与无 runtime 场景用）
@@ -134,8 +132,8 @@ impl RecallCollector {
         else {
             return false;
         };
-        let mut stats = self.stats.lock().expect("recall stats lock poisoned");
-        // EWMA 平滑（f32 全程，禁止 as f64 红线）
+        let mut stats = self.stats.lock().unwrap_or_else(|e| e.into_inner()); // poison-tolerant，同上
+                                                                              // EWMA 平滑（f32 全程，禁止 as f64 红线）
         let prev_needle = stats.ewma_needle_at_8.unwrap_or(*needle_recall_at_8);
         let prev_bias = stats.ewma_position_bias.unwrap_or(*position_bias);
         let prev_chain = stats.ewma_chain_success.unwrap_or(*chain_success_rate);
@@ -177,6 +175,7 @@ impl RecallCollector {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
     use event_bus::EventMetadata;

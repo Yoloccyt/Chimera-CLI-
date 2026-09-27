@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L3
+//! ROLE:     session-store — 会话事件流存储（append-only 段 + CBMR 微批写）
+//! BACKEND:  sqlite
+//! PRODUCERS: 0 -
+//! CONSUMERS: 1 nexus-app-server
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! session-store — 会话事件流存储（append-only 段 + CBMR 微批写）
 //!
 //! 对应架构层: **L3 Storage**（Phase 2 新增,ADR-141,workspace 第 40 个 crate）
@@ -80,6 +88,7 @@ pub use types::{Offset, SegmentId, SessionEvent, SessionId, StoreConfig};
 pub use writer::CbmrWriter;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
     use proptest::prelude::*;

@@ -14,7 +14,10 @@ nexus-core = { workspace = true }
 # L1 Core:EventBus 跨层通信，发布 OmniSparseMasksComputed 事件 (修正 V1 违规)
 event-bus = { workspace = true }
 # L6 Router Traits:星型耦合消除，实现 SparseMaskProvider + RouterConfig trait
-router-traits = { path = "../router-traits" }
+# 2026-09-24 卫生：path= 改 workspace=true，对齐根 [workspace.dependencies] 与全仓内部
+# crate 一致（行为不变，同一 crate）。副作用：该 L6→L6 同层边自此进入
+# check_dependency_rules 依赖图（同层允许，不触发 Check B/E），与 dep_edge_freeze 登记口径对齐。
+router-traits = { workspace = true }
 # 序列化:mask_hash 计算需将五维度掩码序列化为 JSON
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -66,3 +69,7 @@ harness = false
 [[bench]]
 name = "osa_parallel_bench"
 harness = false
+
+# E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)
+[lints]
+workspace = true

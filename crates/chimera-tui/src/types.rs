@@ -368,7 +368,7 @@ pub enum InputMode {
 /// 视图模式(Concord W3 T3.2):会话优先的双模式分层(ADR-076)
 ///
 /// - `Chat`:第一默认——会话流全屏 + composer 底栏(Conversation-First)
-/// - `Dashboard`:第二默认——既有 25 面板驾驶舱(资产下沉不推倒)
+/// - `Dashboard`:第二默认——多面板驾驶舱(面板清单见 `PanelId`,资产下沉不推倒)
 ///
 /// `\` 键或 `/chat` `/dashboard` 命令互切;状态随 TuiState 持久化。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -376,7 +376,7 @@ pub enum ViewMode {
     /// 会话模式(第一默认,ADR-076 裁定)
     #[default]
     Chat,
-    /// 仪表盘模式(25 面板驾驶舱,资产下沉)
+    /// 仪表盘模式(多面板驾驶舱,资产下沉;面板数以 `PanelId` 为准)
     Dashboard,
 }
 
@@ -401,7 +401,8 @@ pub enum LayoutMode {
     /// 双面板:主面板 + 侧边栏(对比模式)
     ///
     /// WHY 默认值:用户首次启动 TUI 时应看到完整界面(tabs + main + status_bar),
-    /// 知晓有 13 个面板可切换。SinglePane 是用户主动按 `l` 切换的专注模式,
+    /// 知晓全部面板可切换（清单以 `PanelId` 为唯一权威，勿在此复述数量）。
+    /// SinglePane 是用户主动按 `l` 切换的专注模式,
     /// 不适合作为默认值 — 否则用户不知道有其他面板存在。
     #[default]
     DualPane,
@@ -1575,6 +1576,7 @@ pub struct NetworkMetrics {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -2065,6 +2067,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod state_persistence_tests {
     use super::*;
 

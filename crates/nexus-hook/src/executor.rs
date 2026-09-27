@@ -253,7 +253,12 @@ impl HookExecutor {
 mod tests {
     // WHY allow(field_reassign_with_default):测试配置用 Default + hooks.insert
     // 模式（insert 语义无法自动字面量化,8 处用例统一风格）,可读性优于嵌套 HashMap 字面量
-    #![allow(clippy::field_reassign_with_default)]
+    // WHY allow(unwrap/expect):测试码 unwrap 为 Rust 惯用法；E-5 lint 意在治理生产码
+    #![allow(
+        clippy::field_reassign_with_default,
+        clippy::unwrap_used,
+        clippy::expect_used
+    )]
 
     use super::*;
     use crate::config::HookSpec;

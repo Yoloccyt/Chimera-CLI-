@@ -29,6 +29,10 @@
 //!   (可升级为 TUI 面板/告警管道);sink 只是不可绕过的最低保障。
 
 use crate::types::{EventSeverity, NexusEvent};
+use std::fs::OpenOptions;
+use std::io::{LineWriter, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// Critical 事件保底送达 sink(发布路径空订阅者分支的投递目标)
 ///
@@ -87,5 +91,174 @@ impl CriticalSink for LogCriticalSink {
             is_critical = event.severity() == EventSeverity::Critical,
             "Critical 事件保底送达(无 mpsc 订阅者,结构化日志落点)"
         );
+    }
+}
+
+/// WAL 保底 sink(E-1 / ADR-191 D4)——把无 mpsc 订阅者的 Critical 事件以
+/// JSON Lines 追加落盘,提供崩溃后 `replay()` 审计能力(**at-least-once**)。
+///
+/// WHY `LineWriter`+`Mutex` 而非后台线程:`on_critical` 仅在 "Critical 且无 mpsc
+/// 订阅者" 低频分支触发(非高频广播),`LineWriter` 逐行 write 为 µs 级同步 append,
+/// Critical 本身低频,不违反 "publish 热路径不阻塞"红线(该分支为异常保底,
+/// 默认 LogCriticalSink 的 `error!` 亦同步)。写失败**不上抛**(保底通道不得 panic/失败),
+/// 降级为 `tracing::error` 并继续。
+pub struct FileWalCriticalSink {
+    writer: Mutex<LineWriter<std::fs::File>>,
+    path: PathBuf,
+}
+
+impl FileWalCriticalSink {
+    /// 打开(或创建)WAL 文件,追加模式。失败上抛(由调用方组合根决定回退到 LogCriticalSink)。
+    pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path.as_ref())?;
+        Ok(Self {
+            writer: Mutex::new(LineWriter::new(file)),
+            path: path.as_ref().to_path_buf(),
+        })
+    }
+
+    /// WAL 文件路径。
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// 读取并反序化 WAL 全部可解析行(损坏行跳过,尽力而为)。不改动文件。
+    pub fn replay(&self) -> std::io::Result<Vec<NexusEvent>> {
+        let data = std::fs::read_to_string(&self.path)?;
+        Ok(data
+            .lines()
+            .filter_map(|l| serde_json::from_str::<NexusEvent>(l).ok())
+            .collect())
+    }
+}
+
+impl CriticalSink for FileWalCriticalSink {
+    fn on_critical(&self, event: &NexusEvent) {
+        // 序列化失败/锁毒化均不上抛:降级日志,保底通道不得 panic(§4.4)。
+        let line = match serde_json::to_string(event) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, "Critical WAL 序列化失败,事件未落盘");
+                return;
+            }
+        };
+        match self.writer.lock() {
+            Ok(mut w) => {
+                if let Err(e) = writeln!(w, "{line}") {
+                    tracing::error!(error = %e, path = %self.path.display(), "Critical WAL 写入失败");
+                }
+                // LineWriter 已逐行 flush;此处无需显式 fsync(热路径避免阻塞);
+                // 若需强持久可后续接一个后台 sync 周期(ADR-191 标为可配)。
+            }
+            Err(_) => {
+                tracing::error!(path = %self.path.display(), "Critical WAL 锁毒化,事件未落盘")
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod file_wal_tests {
+    use super::*;
+    use crate::EventMetadata;
+
+    fn quest_event(id: &str) -> NexusEvent {
+        NexusEvent::QuestCreated {
+            metadata: EventMetadata::new("test-harness"),
+            quest_id: id.to_string(),
+            title: "wal".to_string(),
+            task_count: 1,
+        }
+    }
+
+    #[test]
+    fn file_wal_sink_persists_and_replays() {
+        let path = std::env::temp_dir().join(format!("chimera_wal_{}.logl", uuid::Uuid::now_v7()));
+        let sink = FileWalCriticalSink::open(&path).expect("open wal");
+        sink.on_critical(&quest_event("q-1"));
+        sink.on_critical(&quest_event("q-2"));
+        // LineWriter 逐行 flush,无需 drop 即可读回。
+        let got = sink.replay().expect("replay");
+        assert_eq!(got.len(), 2, "两条 Critical 均应落盘可重放");
+        assert!(got
+            .iter()
+            .any(|e| matches!(e, NexusEvent::QuestCreated { quest_id, .. } if quest_id == "q-1")));
+        drop(sink);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_wal_sink_is_critical_sink_object_safe() {
+        // 验证可作为 Arc<dyn CriticalSink> 注入(与 with_critical_fallback 契合)。
+        let path = std::env::temp_dir().join(format!(
+            "chimera_wal_traitobj_{}.logl",
+            uuid::Uuid::now_v7()
+        ));
+        let sink: std::sync::Arc<dyn CriticalSink> =
+            std::sync::Arc::new(FileWalCriticalSink::open(&path).expect("open"));
+        sink.on_critical(&quest_event("q-3"));
+        drop(sink);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// E-1 崩溃持久性契约（存储层）：一个 sink 实例写入后 drop（关闭文件句柄，
+    /// 模拟持有者进程终止），用**全新实例**打开同一路径 replay 仍可检索
+    /// ⇒ WAL 跨句柄/跨“重启”存活。（真进程 SIGKILL 重放 e2e 属 CI 级，本测
+    /// 验证其本质契约：数据已在磁盘上、与内存句柄生命周期无关。）
+    #[test]
+    fn file_wal_survives_handle_reopen() {
+        let path =
+            std::env::temp_dir().join(format!("chimera_wal_restart_{}.logl", uuid::Uuid::now_v7()));
+        {
+            let sink = FileWalCriticalSink::open(&path).expect("open wal");
+            sink.on_critical(&quest_event("q-restart-1"));
+            sink.on_critical(&quest_event("q-restart-2"));
+            // sink 在此 drop ⇒ 文件句柄关闭（模拟持有者进程结束）
+        }
+        // “重启”：全新实例读同一磁盘 WAL
+        let reopened = FileWalCriticalSink::open(&path).expect("reopen wal");
+        let got = reopened.replay().expect("replay after reopen");
+        assert_eq!(
+            got.len(),
+            2,
+            "进程终止后重启，两条 Critical 仍应可从磁盘 WAL 检索"
+        );
+        assert!(got.iter().any(
+            |e| matches!(e, NexusEvent::QuestCreated { quest_id, .. } if quest_id == "q-restart-1")
+        ));
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// WAL 撕裂韧性（崩溃真实失败模式）：kill -9 常留下未写完的最后一行。
+    /// 追加一条合法记录后直接写一段残缺 JSON（无换行），replay 应跳过损坏行、
+    /// 仍返回已完整落盘的事件 ⇒ 保底通道不因尾行损坏而整体不可读。
+    #[test]
+    fn file_wal_replay_skips_corrupt_trailing_line() {
+        let path =
+            std::env::temp_dir().join(format!("chimera_wal_corrupt_{}.logl", uuid::Uuid::now_v7()));
+        {
+            let sink = FileWalCriticalSink::open(&path).expect("open wal");
+            sink.on_critical(&quest_event("q-ok"));
+            // LineWriter 已 flush q-ok；再模拟崩溃时半写的尾行（截断、无换行）
+            let mut raw = OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .expect("open raw");
+            write!(raw, "{{\"truncated\": true").expect("append torn line");
+        }
+        let reopened = FileWalCriticalSink::open(&path).expect("reopen wal");
+        let got = reopened.replay().expect("replay with torn tail");
+        assert_eq!(got.len(), 1, "损坏尾行应被跳过，完整落盘的 q-ok 仍可检索");
+        assert!(matches!(
+            &got[0],
+            NexusEvent::QuestCreated { quest_id, .. } if quest_id == "q-ok"
+        ));
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
     }
 }

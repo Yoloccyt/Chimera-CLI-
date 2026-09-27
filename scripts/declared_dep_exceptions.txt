@@ -18,3 +18,14 @@
 # bench-only deps to [dev-dependencies] and left zero gaps behind, so no
 # exception is needed. Keep it empty if you can.
 # =============================================================================
+
+# --- 2026-09-24 B5 架构减法批次：r2_island_repayment 预留位（7 条，非新增债务）---
+chimera-cli -> chtc-bridge # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> csn-substitutor # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> mas-sched # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> mtpe-executor # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> nexus-hook # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> sesa-router # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> ssra-fusion # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
+# 说明：以上 7 条不判为「可删的 manifest 噪声」，因为删除会同时抽掉 B3-B4 的接线占位与
+#   ADR-160 可达性棘轮的既有账；债务可见性由 G-56/G-57 承担，本表只负责让 G-31 能抓到新幽灵。

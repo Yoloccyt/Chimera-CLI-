@@ -147,6 +147,61 @@ jobs:
           python3 scripts/check_await_across_guard.py --selftest
           python3 scripts/check_await_across_guard.py
 
+      # rusqlite→spawn_blocking 词法门（四维深审 P-3，gate_manifest G-77/G-78）：
+      # async fn 内、spawn_blocking（含仓内 with_*_async/with_read_conn 同义 wrapper）
+      # 闭包外的 DB 调用=红；存量 3 笔真阳性冻结于 sqlite_blocking_allowlist.txt（只减
+      # 不增，STALE 必红）。沿用 --selftest 先证明有牙再裁决先例；零 cargo、秒级。
+      - name: SQLite-in-async blocking gate (P-3)
+        run: |
+          python3 scripts/check_sqlite_blocking.py --selftest
+          python3 scripts/check_sqlite_blocking.py
+
+      # subscribe-before-spawn 词法门（四维深审 E-6 v2，gate_manifest G-79/G-80）：
+      # spawn 闭包体内裸 .subscribe*()=红（broadcast 不回放，晚订阅丢触发事件）；
+      # 现值零违例（基线空），防的是未来回退；TypeState builder 继续守 builder 面。
+      - name: Subscribe-order blocking gate (E-6)
+        run: |
+          python3 scripts/check_subscribe_order.py --selftest
+          python3 scripts/check_subscribe_order.py
+
+      # workspace.lints opt-in 棘轮门（四维深审 E-5 首片，gate_manifest G-81/G-82）：
+      # [workspace.lints] unwrap_used/expect_used=warn 对未 opt-in crate 惰性；登记集
+      # lint_ratchet_crates.txt 只增，新 opt-in 需先 clippy --all-targets 零告警。
+      - name: Lint-ratchet blocking gate (E-5)
+        run: |
+          python3 scripts/check_lint_ratchet.py --selftest
+          python3 scripts/check_lint_ratchet.py
+
+      # 前序静态只读门并接（四维深审 G-25 收口）：11 个零 cargo、秒级的登记/对等/漂移门
+      # 此前登记于 gate_manifest 但无 workflow 接刃（G-25 判“expect=0 却永不在 CI 跑”）。
+      # 全量 manifest 实测每项 rc=0，阻断接入防“注册了但没人执行”的静默回退；
+      # parity 按 (script, flag) 级对账，故 selftest/多形态项逐一与 normal 同列。
+      - name: Static read-only audit gates (G-25 wiring)
+        run: |
+          python3 scripts/check_config_sample_parity.py --selftest
+          python3 scripts/check_config_sample_parity.py
+          python3 scripts/check_contract_consumers_parity.py --selftest
+          python3 scripts/check_contract_consumers_parity.py
+          python3 scripts/check_doc_pointer_integrity.py --selftest
+          python3 scripts/check_doc_pointer_integrity.py
+          python3 scripts/check_event_ownership.py --selftest
+          python3 scripts/check_event_ownership.py
+          python3 scripts/check_gated_wiring_substance.py --selftest
+          python3 scripts/check_gated_wiring_substance.py
+          python3 scripts/check_impl_maturity_claims.py --selftest
+          python3 scripts/check_impl_maturity_claims.py
+          python3 scripts/check_manifest_path_deps.py --selftest
+          python3 scripts/check_manifest_path_deps.py
+          python3 scripts/check_retired_crate_residue.py --selftest
+          python3 scripts/check_retired_crate_residue.py
+          python3 scripts/check_test_surface_liveness.py --selftest
+          python3 scripts/check_test_surface_liveness.py
+          python3 scripts/crate_contract.py --selftest
+          python3 scripts/crate_contract.py --check
+          python3 scripts/emit_architecture_views.py --selftest
+          python3 scripts/emit_architecture_views.py --check
+          python3 scripts/emit_architecture_views.py --verify
+
       # WHY: 组合根装配门(架构重构方向 B-c 交付, gate_manifest G-28/G-29)——
       # chimera-cli/src/composition.rs 是唯一合法装配点;实测(2026-09-12)生产路径
       # 9 处 EventBus::new 中 8 条命令路径绕过组合根,导致 Critical 送达仅 1/9 生效
@@ -181,6 +236,15 @@ jobs:
         run: |
           python3 scripts/check_dep_edge_freeze.py --selftest
           python3 scripts/check_dep_edge_freeze.py
+
+      # WHY: 外环->内环直连边棘轮（ADR-187 / Q3 §4.2）——"外环只能经 event-bus
+      # 依赖内环"这一半此前完全无门（Check B 只拦向上边，这些是向下的跨环直连
+      # 边）。only-decrease 冻结当前 9 条（组合根 chimera-cli/nexus-app-server 豁免），
+      # 新直连内环边即红。非 Check A 复活。gate_manifest G-75/G-76。
+      - name: Outer->inner ratchet gate
+        run: |
+          python3 scripts/check_outer_inner_ratchet.py --selftest
+          python3 scripts/check_outer_inner_ratchet.py
 
       # WHY: 性能红线与 bench 清单静态门(R1-T5, 审计发现 F-R4-01)——本门禁原以
       # .ps1(429 行) + .sh(246 行) 两份手写实现存在, 而 CI 中零次调用(全 .github/

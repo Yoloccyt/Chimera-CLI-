@@ -1,0 +1,5 @@
+# retired_crate_residue.txt -- only-decrease ledger for check_retired_crate_residue.py
+# Row = `file|retired-crate|kind` + a trailing "# reason". Measured 2026-09-23 via --emit.
+# Delete the row as soon as the reference is gone: an allowance must not outlive its debt.
+# (bench_check.yml|auto-dpo|cargo-flag row retired 2026-09-25: the `-p auto-dpo` run
+#  item was removed in P0-1 / ADR-190, so nothing on disk backs this allowance anymore.)

@@ -39,3 +39,8 @@ uuid = { workspace = true, features = ["v7"] }
 tempfile = { workspace = true }
 # 方向 4 错误契约：BackendError::from(String) 等纯函数的属性测试
 proptest = { workspace = true }
+
+# E-5 opt-in: production code unwrap/expect measured 0; all hits in one
+# integration-test unit with file-top idiom allow.
+[lints]
+workspace = true

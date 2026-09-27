@@ -190,17 +190,30 @@ impl LruPatternMap {
             self.nodes[n].prev = prev;
         }
 
-        // 追加到尾部
-        let tail_idx = self.tail.expect("tail must exist when len > 0");
-        self.nodes[tail_idx].next = Some(idx);
-        self.nodes[idx].prev = Some(tail_idx);
+        // 追加到尾部;不变量:列表存在 ⇒ tail=Some。head==None(单节点被拆完前驱)
+        // 时该节点自身即旧尾(上方 move_to_tail 早退已排除 idx==tail),防御性
+        // 退化为自环而非 panic(E-5:去 expect,语义等价于原“不可能”分支的静默容错)。
+        match self.tail {
+            Some(tail_idx) => {
+                self.nodes[tail_idx].next = Some(idx);
+                self.nodes[idx].prev = Some(tail_idx);
+            }
+            None => {
+                self.nodes[idx].prev = Some(idx);
+            }
+        }
         self.nodes[idx].next = None;
         self.tail = Some(idx);
     }
 
     /// 驱逐最近最少使用的 current 上下文
     fn evict_lru(&mut self) {
-        let lru_idx = self.head.expect("cannot evict from empty map");
+        // 调用方仅在超容量时驱逐(非空保证);head==None 属不可能态,
+        // E-5 去 expect 后以文档化 no-op 防御(空列表无可驱逐，与调用契约一致)。
+        let Some(lru_idx) = self.head else {
+            debug_assert!(false, "evict_lru 不应在空列表上被调用");
+            return;
+        };
         let lru_key = self.nodes[lru_idx].key.clone();
         let new_head = self.nodes[lru_idx].next;
 

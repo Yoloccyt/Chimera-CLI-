@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L7
+//! ROLE:     多步预测执行 — 多 Token 预测的执行器,加速推理吞吐
+//! BACKEND:  memory
+//! PRODUCERS: 3 PredictionMade,PredictionRolledBack,PredictionStatsReported
+//! CONSUMERS: 0 -
+//! MATURITY: DEFERRED|PLACEHOLDER-CN|PSEUDO|SIMPLIFIED-CN
+//! CRATE-CONTRACT END
 //! 多步预测执行 — 多 Token 预测的执行器,加速推理吞吐
 //!
 //! 对应架构层:L7 Execution
@@ -14,7 +22,7 @@
 //! use mtpe_executor::{MtpeExecutor, MtpeConfig, PredictionContext};
 //! use event_bus::EventBus;
 //!
-//! # async fn run() {
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let bus = EventBus::new();
 //! let executor = MtpeExecutor::new(MtpeConfig::default(), bus);
 //! let ctx = PredictionContext {
@@ -22,8 +30,9 @@
 //!     history: vec!["hello".into()],
 //!     clv: vec![0.1; 512],
 //! };
-//! let result = executor.predict(&ctx, 5).await.unwrap();
+//! let result = executor.predict(&ctx, 5).await?;
 //! assert_eq!(result.n, 5);
+//! # Ok(())
 //! # }
 //! ```
 

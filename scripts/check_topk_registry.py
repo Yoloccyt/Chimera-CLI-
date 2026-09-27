@@ -38,7 +38,139 @@ except Exception:  # noqa: BLE001 - reconfigure 在老解释器/非 tty 下可�
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REGISTRY_REL = os.path.join("scripts", "topk_sortby_freeze.txt")
+SITES_BASELINE_REL = os.path.join("scripts", "topk_sites_baseline.txt")
 VERDICTS = ("DEFER", "GRAY", "GREEN", "MIGRATED")
+
+# ---- P-4 incremental heuristic (new-introduction red, measured baseline first) ----
+# A "top-k truncation shape" = one fn body containing BOTH a full-sort call and a
+# truncating consumer. Statement-level association inside a brace-depth region is
+# exactly what the repo's lexical scanners (check_await_across_guard /
+# check_sqlite_blocking / check_subscribe_order) proved reliable -- same
+# architecture, zero cross-function leakage (the failure mode that killed the
+# first subscribe-order attempt).
+SORT_RE = re.compile(r"\.sort_(?:unstable_)?(?:by|by_key)\s*\(")
+TRUNC_RE = re.compile(r"\.take\s*\(|\.truncate\s*\(|\[[^\]]*?\.\.[^\]]*?\]|\.drain\s*\(\.\.")
+FN_RE = re.compile(r"\bfn\s+[A-Za-z_]")
+CFG_TEST_RE = re.compile(r"#\[cfg\(test\)\]")
+
+
+def strip_line_noise(line):
+    """Drop line comments and string contents so patterns must be real code.
+    (Minimal sibling of the await gate's strip_noise; gates stay self-contained.)"""
+    out = []
+    in_str = False
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            i += 1
+            continue
+        if c == "/" and i + 1 < len(line) and line[i + 1] == "/":
+            break
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def norm_site_key(relpath, line_text):
+    """Stable key: path + whitespace-normalized sort-line prefix (survives line
+    drift; the await gate's re-keying lesson)."""
+    norm = " ".join(line_text.split())[:48]
+    return "%s::%s" % (relpath, norm)
+
+
+def scan_sort_truncate_sites(root):
+    """Current top-k truncation sites: set[norm key].
+
+    Association model (high-confidence by construction, NOT a general dataflow):
+    a sort call on the SAME line as a truncating consumer (method chain fits on
+    one line after rustfmt only if short) or on one of the next 2 lines (the
+    usual `.take(k)` continuation indent of a formatted chain). cfg(test) regions
+    are sticky-skipped. Deliberately NOT fn-body brace tracking: brace counting
+    over `vec![`/macro bodies is the leakage class that killed the first
+    subscribe-order attempt -- and any residual over/under-match in EXISTING code
+    is absorbed by the measured --emit-sites baseline; only NEW shapes go red.
+    """
+    crates = os.path.join(root, "crates")
+    sites = set()
+    if not os.path.isdir(crates):
+        return sites
+    for dirpath, dirnames, filenames in os.walk(crates):
+        dirnames[:] = [d for d in dirnames if d not in ("target", "__pycache__")]
+        for fn in sorted(filenames):
+            if not fn.endswith(".rs"):
+                continue
+            full = os.path.join(dirpath, fn)
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.read().splitlines()
+            except OSError:
+                continue
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            in_test = False
+            pending = None      # sort line awaiting a truncation within 2 lines
+            wait = 0
+            for raw in lines:
+                if CFG_TEST_RE.search(raw):
+                    in_test = True
+                if in_test:
+                    continue
+                code = strip_line_noise(raw)
+                has_sort = bool(SORT_RE.search(code))
+                has_trunc = bool(TRUNC_RE.search(code))
+                if has_sort:
+                    if has_trunc:
+                        sites.add(norm_site_key(rel, code))
+                    pending, wait = code, 2
+                elif pending is not None and has_trunc:
+                    sites.add(norm_site_key(rel, pending))
+                    pending, wait = None, 0
+                elif pending is not None:
+                    wait -= 1
+                    if wait <= 0:
+                        pending = None
+    return sites
+
+
+def load_sites_baseline(root):
+    """Baseline keys; None (no baseline yet) when file missing -- V-newsite then
+    degrades to INFO (measured-first discipline, never red on a cold start)."""
+    p = os.path.join(root, SITES_BASELINE_REL)
+    if not os.path.isfile(p):
+        return None
+    keys = set()
+    with open(p, "r", encoding="utf-8", errors="replace") as f:
+        for raw in f:
+            line = raw.split("#", 1)[0].strip()
+            if line:
+                keys.add(line)
+    return keys
+
+
+def check_new_sites(sites, baseline):
+    """V-newsite: current sites minus baseline = unregistered new top-k shapes
+    (must be migrated to xts_top_k or baselined WITH review); baseline minus
+    current = repaid debt whose ledger row must die (STALE, mirror of the
+    allowlist discipline)."""
+    if baseline is None:
+        return [], ["V-newsite: no sites baseline yet -- run --emit-sites and "
+                     "commit it; ratchet self-activates after first commit"]
+    errors = []
+    for s in sorted(sites - baseline):
+        errors.append("V-newsite: NEW sort-then-truncate site, unregistered: %s" % s)
+    for s in sorted(baseline - sites):
+        errors.append("V-newsite STALE: baseline site no longer detected "
+                      "(delete the row): %s" % s)
+    return errors, []
 
 # 站点首 token 形如 `<crate>/<path>.rs:<line>`；crate/文件可含子路径（如
 # hcw-window/recall/rerank.rs:832）。只要求：含 '/'、以 `.rs:<int>` 结尾。
@@ -167,21 +299,43 @@ def validate(registry_path, repo_root, baseline_keys):
 def mode_check(argv):
     registry = argv[0] if argv else os.path.join(ROOT, REGISTRY_REL)
     if not os.path.isfile(registry):
-        print(f"[FAIL] registry not found: {registry}")
+        print(f"[UNDECIDABLE] registry not found: {registry}")
         return 2
     baseline = load_baseline_keys(REGISTRY_REL.replace(os.sep, "/"), ROOT)
     errors, infos, count = validate(registry, ROOT, baseline)
     if errors is None:
-        print("[FAIL] registry unreadable (undeterminable, not a pass)")
+        print("[UNDECIDABLE] registry unreadable —— 未做任何校验，不得记为通过")
         return 2
+    # P-4: incremental top-k shape detection over the real tree (only NEW
+    # shapes go red; the measured --emit-sites baseline absorbs the stock).
+    sites = scan_sort_truncate_sites(ROOT)
+    ns_errs, ns_infos = check_new_sites(sites, load_sites_baseline(ROOT))
+    errors += ns_errs
+    infos += ns_infos
     for i in infos:
         print(f"[INFO] {i}")
     if errors:
-        print(f"[FAIL] topk registry violations ({len(errors)}), {count} active entries:")
+        print(f"[FAIL] topk registry violations ({len(errors)}), {count} active "
+              f"entries, {len(sites)} live top-k shapes:")
         for e in errors:
             print(f"   - {e}")
         return 1
-    print(f"[OK] topk registry clean: {count} active entries, format/dup/staleness/shrink all hold")
+    print(f"[OK] topk registry clean: {count} active entries, {len(sites)} live "
+          "shapes within baseline; format/dup/staleness/shrink/newsite all hold")
+    return 0
+
+
+def mode_emit_sites():
+    """Print the measured current top-k shapes as the only-decrease baseline."""
+    sites = scan_sort_truncate_sites(ROOT)
+    print("# topk_sites_baseline.txt -- measured sort-then-truncate shapes "
+          "(P-4 incremental)")
+    print("# Key = crates-path::normalized-sort-line(first 48 chars).")
+    print("# Only-DECREASE: removing a shape (migrate to xts_top_k) deletes its "
+          "row; a NEW unregistered shape fails V-newsite.")
+    print("# Refresh ONLY as part of a reviewed migration batch: --emit-sites")
+    for s in sorted(sites):
+        print(s)
     return 0
 
 
@@ -230,6 +384,58 @@ def mode_selftest():
     # 7) 收缩：基线含两键，当前只剩其一 → 不报增长
     shrink_ok, _ = check_shrink({good_site}, baseline_keys={good_site, "other/x.rs:2"})
     expect("selftest-7 shrink is allowed", shrink_ok == [])
+    # 8) 入口契约（F35）：拼错的旗标不能被静默丢弃后去跑注册表实检 —— 必须"没跑任何判据"并退 2
+    expect("selftest-8 unknown flag is undecidable, not a silent real check",
+           main(["--nope"]) == 2)
+
+    # 9-13) P-4 增量检测：夹具树验证关联模型 + 基线机制（scan/check 纯函数级）
+    sbase = os.path.join(tmp, "siteroot")
+    sd = os.path.join(sbase, "crates", "demo", "src")
+    os.makedirs(sd)
+    with open(os.path.join(sd, "lib.rs"), "w", encoding="utf-8") as f:
+        f.write('''
+fn same_line(v: &mut Vec<u32>) -> usize {
+    v.sort_by(|a, b| a.cmp(b)); let _ = 1; let _ = 2; let _ = v.iter().take(1).count();
+    0
+}
+
+fn chain_2lines(v: &mut Vec<u32>) {
+    v.iter()
+        .sort_by(|a, b| a.cmp(b))
+        .take(2);
+}
+
+fn aged_out(v: &mut Vec<u32>) {
+    v.sort_by(|a, b| a.cmp(b));
+    let _a = 1;
+    let _b = 2;
+    let _c = v.take(3);
+}
+
+fn strings_are_noise() {
+    let _s = "v.sort_by(|a, b| a.cmp(b)).take(9)";
+}
+
+#[cfg(test)]
+mod t {
+    fn in_tests(v: &mut Vec<u32>) { v.sort_by(|a, b| a.cmp(b)); v.truncate(1); }
+}
+''')
+    got = scan_sort_truncate_sites(sbase)
+    # same-line key starts with the sort call + trailing `;` (statement after it
+    # shares the line); chain key is the continuation-line form (starts `.sort_`).
+    expect("selftest-9 same-line shape detected",
+           any("::v.sort_by(|a, b| a.cmp(b));" in k for k in got))
+    expect("selftest-10 chain within 2 lines detected",
+           any("::.sort_by(|a, b| a.cmp(b))" in k for k in got))
+    expect("selftest-11 aged-out / strings / cfg(test) not detected", len(got) == 2)
+    ne, _ = check_new_sites(got, set())
+    expect("selftest-12 new site vs empty baseline is red",
+           sum("V-newsite: NEW" in e for e in ne) == 2)
+    ne2, _ = check_new_sites(got, got | {"ghost::x"})
+    expect("selftest-13 stale baseline row is red",
+           not any("NEW" in e for e in ne2)
+           and any("STALE" in e and "ghost" in e for e in ne2))
 
     print("=== selftest result:", "ALL PASS" if not fails else f"{len(fails)} FAIL", "===")
     return 0 if not fails else 1
@@ -238,9 +444,23 @@ def mode_selftest():
 def main(argv):
     if "--selftest" in argv:
         return mode_selftest()
+    if "--emit-sites" in argv:
+        return mode_emit_sites()
+    # F35（F24/F29 同族）：`--*` 参数过去被**静默丢弃**（rest 只留非旗标项），于是
+    # `--selfstes` 这种拼错会去跑注册表实检 —— 请求没执行，报告却给出一份判定。
+    # 位置参数仍是合法用法（指定注册表路径），因此只拒 `--` 前缀的未知旗标。
+    unknown = sorted({a for a in argv
+                      if a.startswith("--") and a not in ("--selftest", "--emit-sites")})
+    if unknown:
+        print("usage: py -3 scripts/check_topk_registry.py [--selftest] [registry-path]",
+              file=sys.stderr)
+        print("[UNDECIDABLE] unknown flag(s): %s -- no check ran" % " ".join(unknown),
+              file=sys.stderr)
+        return 2
     rest = [a for a in argv if not a.startswith("--")]
     return mode_check(rest)
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    import gate_rc  # 只在入口需要：崩溃必须退 2, 不得借 1 冒充"判过且红"（F32/F33）
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))

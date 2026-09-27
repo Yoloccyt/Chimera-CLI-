@@ -31,6 +31,8 @@ nexus-core = { workspace = true }
 criterion = { workspace = true }
 # JSON 序列化测试(config serde 往返)
 serde_json = { workspace = true }
+# 属性测试:把"降级链耗尽不卡死 listener"从单点(depth=2)一般化到任意链深
+proptest = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]
@@ -41,3 +43,8 @@ harness = false
 [[bench]]
 name = "degradation_chain"
 harness = false
+
+# E-5 opt-in: production code expects rewritten to documented defensive
+# branches (pop-if-let / iterator let-else); rest are test/bench idioms.
+[lints]
+workspace = true

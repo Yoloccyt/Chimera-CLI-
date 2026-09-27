@@ -10,7 +10,7 @@
 //!
 //! # 实现说明
 //! 已实现双通道:broadcast + mpsc 旁路,2026-06-29。
-//! Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 13 类)在
+//! Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 14 类)在
 //! `EventBus::publish`/`publish_blocking` 中自动额外
 //! 投递到 mpsc 旁路通道(见 `bus.rs::is_critical_mpsc_event`)。订阅者通过
 //! `EventBus::subscribe_critical_events()` 获取 mpsc Receiver,确保在 broadcast
@@ -45,6 +45,27 @@ pub enum BackpressurePolicy {
         /// 普通事件仍走 broadcast
         broadcast_capacity: usize,
     },
+
+    /// 压力下降采样策略(ADR-191 D2 / 四维深审 E-2,2026-09-26)
+    ///
+    /// broadcast 占用率进入压力区(≥ trigger)后,非 Critical 事件按
+    /// 「每 `every` 条广播 1 条」降采样,给实时订阅者腾出缓冲区;
+    /// 占用回落到 resume 以下才解除。Critical 事件永远全量(红线:
+    /// 降级不得伤害关键告警投递),mpsc 旁路不受影响。
+    ///
+    /// WHY 默认不启用:降采样面向统计/进度类 Normal 流量,消费方语义
+    /// 因部署而异——机制先落地,启用由装配方显式选择(with_policy)。
+    DownsampleUnderPressure {
+        /// 通道容量(with_policy 构造时取用)
+        broadcast_capacity: usize,
+        /// 压力区内的发送间隔:每 `every` 条 Normal 事件广播 1 条(≥ 2)
+        every: u64,
+        /// 触发水位(千分比):queued*1000 ≥ capacity*trigger 时入压力区
+        trigger_permille: u64,
+        /// 解除水位(千分比):queued*1000 ≤ capacity*resume 时退出。
+        /// 必须 < trigger 形成滞回死区,防临界振荡(抖动)反复切换
+        resume_permille: u64,
+    },
 }
 
 impl Default for BackpressurePolicy {
@@ -60,6 +81,9 @@ impl BackpressurePolicy {
         match self {
             Self::LagThreshold { .. } | Self::DropOldest => 1024,
             Self::CriticalMpsc { broadcast_capacity } => *broadcast_capacity,
+            Self::DownsampleUnderPressure {
+                broadcast_capacity, ..
+            } => *broadcast_capacity,
         }
     }
 
@@ -69,6 +93,52 @@ impl BackpressurePolicy {
             Self::LagThreshold { max_lag } => Some(*max_lag),
             _ => None,
         }
+    }
+
+    /// 若策略为降采样型,返回其参数四元组 (every, trigger, resume)
+    ///
+    /// 非降采样策略返 None → 热路径零行为变更(默认路径仅一次枚举判断)
+    pub fn downsample_params(&self) -> Option<(u64, u64, u64)> {
+        match self {
+            Self::DownsampleUnderPressure {
+                every,
+                trigger_permille,
+                resume_permille,
+                ..
+            } => Some((*every, *trigger_permille, *resume_permille)),
+            _ => None,
+        }
+    }
+}
+
+/// 压力滞回状态机(纯函数核)
+///
+/// 输入当前采样 (queued, capacity) 与上一状态 engaged,输出新状态:
+/// - 未锁存 + 占用 ≥ trigger → 锁存(进入压力区)
+/// - 已锁存 + 占用 ≤ resume → 解除(滞回死区 [resume, trigger) 内保持原态)
+///
+/// WHY 纯函数:状态机可直接用 proptest 验证"死区内永不翻转"不变量,
+/// 总线侧仅需原子存取,不含判断逻辑(热路径与可测性分离)。
+/// WHY 千分比整数比较:避免浮点与除法,`u64` 乘法在 queued/capacity
+/// 量级(≤ 1e9)下无溢出风险。
+#[must_use]
+pub fn pressure_latch_next(
+    engaged: bool,
+    queued: usize,
+    capacity: usize,
+    trigger_permille: u64,
+    resume_permille: u64,
+) -> bool {
+    if capacity == 0 {
+        return engaged;
+    }
+    let scaled = queued as u64 * 1000;
+    let cap = capacity as u64;
+    if !engaged {
+        scaled >= cap * trigger_permille
+    } else {
+        // 死区内( resume < scaled/cap < trigger )保持锁存,防抖动
+        scaled > cap * resume_permille
     }
 }
 
@@ -128,7 +198,10 @@ pub fn is_critical_event(event: &NexusEvent) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     #[test]
@@ -176,5 +249,88 @@ mod tests {
         let p = BackpressurePolicy::default();
         assert_eq!(p.broadcast_capacity(), 1024);
         assert_eq!(p.max_lag(), Some(256));
+    }
+
+    // ==================== E-2 降采样策略与滞回状态机(2026-09-26) ====================
+
+    #[test]
+    fn latch_triggers_at_threshold_and_resumes_below_resume() {
+        // capacity=1000, trigger=750‰, resume=500‰
+        // 未锁存 + 占用 750(=75%) → 触发锁存
+        assert!(pressure_latch_next(false, 750, 1000, 750, 500));
+        // 已锁存 + 占用 500(=50% 临界) → 解除(≤ resume 语义)
+        assert!(!pressure_latch_next(true, 499, 1000, 750, 500));
+    }
+
+    #[test]
+    fn latch_holds_inside_hysteresis_deadzone_both_directions() {
+        // 死区 (500, 750) 内:未锁存不因中等占用误触发,已锁存不误解除
+        assert!(!pressure_latch_next(false, 600, 1000, 750, 500));
+        assert!(pressure_latch_next(true, 600, 1000, 750, 500));
+    }
+
+    #[test]
+    fn latch_zero_capacity_is_noop() {
+        // 防除零/无意义比较:容量 0 时状态保持
+        assert!(!pressure_latch_next(false, 0, 0, 750, 500));
+        assert!(pressure_latch_next(true, 0, 0, 750, 500));
+    }
+
+    #[test]
+    fn downsample_params_only_for_downsample_policy() {
+        assert_eq!(
+            BackpressurePolicy::default().downsample_params(),
+            None,
+            "默认策略必须无降采样参数(热路径早退)"
+        );
+        let p = BackpressurePolicy::DownsampleUnderPressure {
+            broadcast_capacity: 512,
+            every: 4,
+            trigger_permille: 750,
+            resume_permille: 500,
+        };
+        assert_eq!(p.downsample_params(), Some((4, 750, 500)));
+        assert_eq!(p.broadcast_capacity(), 512);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// 滞回死区不变量:占用严格落在 (resume, trigger) 开区间时,
+        /// 无论上一态如何,输出必等于上一态(状态机在死区内永不翻转)
+        #[test]
+        fn prop_latch_never_flips_in_deadzone(
+            capacity in 1usize..100_000,
+            permille in 1u64..1_000,
+        ) {
+            let trigger = 750u64;
+            let resume = 500u64;
+            let cap = capacity as u64;
+            // 取任意死区内占用:queued*1000 ∈ (cap*500, cap*750)
+            let lo = (cap * resume) / 1000 + 1; // 开区间下界
+            let hi = cap * trigger / 1000; // 闭区间内最大安全值(严格 < trigger)
+            prop_assume!(lo <= hi);
+            let queued = (lo + permille % (hi - lo + 1)) as usize;
+            let scaled = queued as u64 * 1000;
+            prop_assume!(scaled < cap * trigger && scaled > cap * resume);
+            // 两方向均保持原态
+            prop_assert!(!pressure_latch_next(false, queued, capacity, trigger, resume));
+            prop_assert!(pressure_latch_next(true, queued, capacity, trigger, resume));
+        }
+
+        /// 单调性不变量:占用越高越应处于压力区(同上一态下的比较关系)
+        #[test]
+        fn prop_latch_monotone_in_queued(
+            capacity in 1usize..50_000,
+            q1 in 0usize..60_000,
+            q2 in 0usize..60_000,
+        ) {
+            let (hi, lo) = (q1.max(q2), q1.min(q2));
+            let e = true; // 从已锁存态评估解除条件(单调方向明确)
+            let r_hi = pressure_latch_next(e, hi, capacity, 750, 500);
+            let r_lo = pressure_latch_next(e, lo, capacity, 750, 500);
+            // 已锁存时:高占用解除结果 ≥ 低占用解除结果(越高越保持锁存)
+            prop_assert!((r_hi as u8) >= (r_lo as u8));
+        }
     }
 }

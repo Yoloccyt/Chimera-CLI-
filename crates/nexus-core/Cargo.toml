@@ -4,10 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# P5-T1（D-Q4）:tokio_unstable cfg 声明——探针 busy_duration 口径由局部 RUSTFLAGS 注入
-# 此声明避免 clippy/check 的 unexpected_cfgs 误报（lints.rust 稳定机制）
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
+# P5-T1（D-Q4）:tokio_unstable cfg 声明已提升至根 [workspace.lints.rust]
+# （E-5 opt-in 后局部 [lints.*] 与 lints.workspace=true 互斥，见根注释）
 
 [dependencies]
 # 全部使用 workspace 共享依赖(§4.1 规范)
@@ -72,3 +70,8 @@ harness = false
 [[bench]]
 name = "reduce_bench"
 harness = false
+
+# E-5 opt-in: production code expects rewritten to documented defensive
+# branches (pop-if-let / iterator let-else); rest are test/bench idioms.
+[lints]
+workspace = true

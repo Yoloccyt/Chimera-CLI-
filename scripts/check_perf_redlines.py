@@ -34,8 +34,19 @@ WHY 存在这个文件:
   - [UNKNOWN] 盘上有、登记格里没有 -> FAIL (新增/忘登记的 bench 必被捕获)
   - [RATCHET] 兜底债 (calibration_pending) 只减不增
 
-退出码: 0=通过 / 1=违反 / 2=用法或环境错误
-输出全部 ASCII, 规避 Windows 控制台 GBK 陷阱 (项目脚本约定)。
+退出码: 0=通过 / 1=至少一条违反 / 2=用法或环境错误(判据未真正运行)
+  ★ F18: rc 是**状态**, 不是计数器。违规条数只出现在 stdout 载荷里
+    (`RESULT: FAIL (2/20 …)`、`VERDICT: … (failing_submodes=[…])`)。
+    归一化前本脚本把条数直接当 rc 返回, 于是"2 条违规"会撞上方言里
+    **2 = 不可判定** 这个不同含义的码 —— 收口清单会把一条确定的红记成"状态未知"。
+  ★ F29: 未知旗标不再静默降级成"跑默认模式", 而是拒绝并退 2。
+  ★ F30: 未捕获异常退 2 而非 1（守卫在 scripts/gate_rc.py, 全仓门共用一份）
+      —— 崩溃=判据没跑完, 不是"跑过且红"。
+    (实测: 一次 TypeError 让 python 以 1 退出, 在 0/1/2 方言里那就是确定的红。)
+  ★ F31: 标签与码必须一致 —— 所有退 2 的路径都打 [UNDECIDABLE] 而非 [FAIL]。
+    靠 grep [FAIL] 找红的人若被 [FAIL]+rc2 误导, "根本没跑"会被当成"跑了且红"。
+判据输出行全部 ASCII, 规避 Windows 控制台 GBK 陷阱 (项目脚本约定)。
+唯一例外: `--help` 打印本 docstring(含中文), 需要时设 PYTHONIOENCODING=utf-8。
 """
 
 import json
@@ -46,7 +57,7 @@ import sys
 try:
     import tomllib
 except ImportError:  # pragma: no cover - 环境门槛, 非业务分支
-    print("[FAIL] check_perf_redlines.py requires python >= 3.11 (tomllib)")
+    print("[UNDECIDABLE] check_perf_redlines.py requires python >= 3.11 (tomllib)")
     sys.exit(2)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -75,7 +86,7 @@ UNIT_TO_SEC = {
 def load_toml(path):
     """读取 TOML 并容忍 UTF-8 BOM (同 check_crate_reachability.py 的口径)。"""
     if not os.path.exists(path):
-        print(f"[FAIL] missing data file: {os.path.relpath(path, ROOT)}")
+        print(f"[UNDECIDABLE] missing data file: {os.path.relpath(path, ROOT)}")
         sys.exit(2)
     with open(path, "rb") as fh:
         return tomllib.loads(fh.read().decode("utf-8-sig"))
@@ -97,7 +108,7 @@ def read_pipe_table(path):
                 continue
             parts = [p.strip() for p in line.split("|")]
             if len(parts) < 4:
-                print(f"[FAIL] malformed row in {os.path.basename(path)}: {line}")
+                print(f"[UNDECIDABLE] malformed row in {os.path.basename(path)}: {line}")
                 print("       expected: crate|key|state|reason")
                 sys.exit(2)
             state, reason = parts[2], "|".join(parts[3:])
@@ -183,7 +194,7 @@ def mode_lint(redlines):
             print(f"  [WARN] {rl['id']}.3 threshold marker: spec-only red line, "
                   "no in-code assertion")
     print(f"\n  summary: {executed - fails}/{executed} sub-checks passed, {warns} warn")
-    return fails
+    return rc_from_findings(fails)
 
 
 def _check(name, ok):
@@ -192,6 +203,27 @@ def _check(name, ok):
 
 
 # --------------------------------------------------------------------------- Part 3
+def slo_ghosts(redlines):
+    """列出 `[slo]` 里"阈值键还在、它测的 bench 文件已消失"的条目（`crate/stem`）。
+
+    WHY 单列成函数：这条判据既要供 mode_inventory 打 advisory，又要被 selftest 的
+      正向/特异度夹具直接复用；抄两份就又是 F66 的"同构靠人工维持"。
+    """
+    out = []
+    for e in redlines.get("slo", []):
+        crate, raw = e.get("crate") or "", (e.get("bench_file") or "")
+        stem = raw[:-3] if raw.endswith(".rs") else raw
+        stem = stem.replace("\\", "/").rstrip("/").split("/")[-1]
+        if not crate or not stem:
+            out.append(f"{crate or '<no-crate>'}/<malformed:{raw or 'no bench_file'}>")
+            continue
+        cands = (os.path.join(ROOT, "crates", crate, "benches", f"{stem}.rs"),
+                 os.path.join(ROOT, "crates", crate, raw))
+        if not any(os.path.isfile(c) for c in cands):
+            out.append(f"{crate}/{stem}")
+    return sorted(set(out))
+
+
 def mode_inventory(redlines, thresholds_doc, freeze):
     """三态清单门 + 反向 STALE 检查 (登记表有、盘上没有 -> FAIL)。"""
     print("=== Part 3: bench inventory completeness gate ===")
@@ -220,6 +252,32 @@ def mode_inventory(redlines, thresholds_doc, freeze):
         fails += 1
         print(f"  [STALE] dev-only entry has no bench file: {pair[0]}/{pair[1]}")
 
+    # 反向防腐之二: 同一 (crate, bench) 不得既登记 dev-only 又已被守护。
+    # WHY (2026-09-21, F63): classify() 的判定序 gated -> registered -> dev-only 是"先到先得",
+    #   所以"dev-only 行 + 受守护"这种双重声明既不落 unknown 也不落 STALE —— 门全绿,
+    #   而**读表**判定"该 bench 无 SLO"的人必然得到假阴性(实测 event-bus/bus_bench 一边写
+    #   dev-only、一边有 run_bench 行 + thresholds_ns 键 + 3 个 path_keywords)。
+    #   表头自订约定"删除一行 = 该 bench 升格为受门禁守护" => 这类行是升格时漏撤的旧账。
+    shadowed = sorted((crate, stem) for crate, stem, _rel, state in states
+                      if state in ("gated", "registered") and (crate, stem) in freeze)
+    for crate, stem in shadowed:
+        fails += 1
+        print(f"  [SHADOW] dev-only row shadowed by a guarding mechanism: {crate}/{stem} "
+              f"- delete the row (this bench is already guarded)")
+
+    # 观测面（advisory，不改 rc）：`[slo]` 是三张 bench 表里唯一没有存在性反查的那张。
+    # WHY (2026-09-22, F60)：删 crate 时 `[run_bench]` 与 dev-only 两侧都会被 [STALE] 抓到，
+    #   但 `[slo]` 的一条阈值键若指向已消失的 bench，classify() 根本看不见它（slo 不参与盘上枚举）
+    #   ⇒ 既不记 gated 也不报错，只**静默抬高 I5 的 slo 计数**。实测今天 7 条 slo 里 1 条
+    #   正是这种幽灵（auto-dpo/rhi_judge），而 I5 判据是 `n_slo >= 7` ⇒ 门禁当前的"绿"
+    #   由这条幽灵撑着。直接判红会让清理"改完更红"，所以先按 advisory 落地
+    #   （rc 中立、CI 日志可见）。2026-09-25 已原子收口 4 引用面（bench_check.yml 的
+    #   run_bench/thresholds/path_keywords 三处 + perf_redlines.toml [[slo]]），ghost 消失、
+    #   advisory 自然不再触发；I5 floor 同步校准 7→6（诚实值，见下 I5 注释）。
+    ghosts = slo_ghosts(redlines)
+    for g in ghosts:
+        print(f"  [SLO-GHOST] advisory (not counted): [slo] entry whose bench file is gone: {g}")
+
     print(f"\n  counts: total={len(states)} gated={counts['gated']} "
           f"registered={counts['registered']} dev-only={counts['dev-only']} "
           f"unknown={counts['unknown']}")
@@ -227,7 +285,7 @@ def mode_inventory(redlines, thresholds_doc, freeze):
         print(f"  RESULT: FAIL ({fails} finding(s))")
     else:
         print("  RESULT: PASS (every bench explicitly guarded)")
-    return fails
+    return rc_from_findings(fails)
 
 
 # --------------------------------------------------------------------------- 自证
@@ -292,17 +350,42 @@ def mode_invariants(redlines, thresholds_doc, freeze):
             print(f"         {k} was tightened but is still listed as pending debt "
                   "- remove it from calibration_pending")
 
-    # I5 11 条红线 + 7 条 SLO 的规模下限 (防止误删表体把门禁掏空)
+    # I5 11 条红线 + 6 条 SLO 的规模下限 (防止误删表体把门禁掏空)
+    # 2026-09-25: 原第 7 条 slo = auto-dpo/rhi_judge 幽灵（见上方 F60 注释），已随
+    # 原子清幽灵批次删除 ⇒ floor 校准到诚实值 6（变绿非放宽：旧"绿"由幽灵支撑）。
     n_rl = len(redlines.get("redline", []))
     n_slo = len(redlines.get("slo", []))
     if not _check(f"I5 redline/slo tables populated ({n_rl} rl / {n_slo} slo)",
-                  n_rl >= 11 and n_slo >= 7):
+                  n_rl >= 11 and n_slo >= 6):
         fails += 1
-    if not _check(f"I6 dev-only registry populated ({len(freeze)})", len(freeze) >= 70):
+    # I6 floor 70→65→60（深审 2026-09-25/26，P-6 两批共 11 项合法减行：
+    # 升格 registered 即棘轮式减债，floor 语义仅防空表不阻减债，I5 同先例）
+    if not _check(f"I6 dev-only registry populated ({len(freeze)})", len(freeze) >= 60):
         fails += 1
+    # I8 注释-常量一致性 (ADR-190 §5 后续 / 深审 E-7c): shard.rs 文档注释里的
+    # "N 个 Critical 事件" 必须等于 bus.rs 的 CRITICAL_TOTAL 常量，防变体新增后注释滞后回潮
+    # (本会话已手工修过一次 17->18；此不变式令其不可再现)。
+    try:
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "shard.rs"),
+                  encoding="utf-8", errors="ignore") as fh:
+            shard_txt = fh.read()
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus.rs"),
+                  encoding="utf-8", errors="ignore") as fh:
+            bus_txt = fh.read()
+        m_cmt = re.search(r"(\d+)\s*个\s*Critical\s*事件", shard_txt)
+        m_const = re.search(r"CRITICAL_TOTAL\s*:\s*usize\s*=\s*(\d+)", bus_txt)
+        cmt_val = m_cmt.group(1) if m_cmt else "?"
+        const_val = m_const.group(1) if m_const else "?"
+        ok_i8 = bool(m_cmt) and bool(m_const) and cmt_val == const_val
+        if not _check(f"I8 shard.rs Critical-count comment == CRITICAL_TOTAL (comment={cmt_val} total={const_val})",
+                      ok_i8):
+            fails += 1
+    except OSError as exc:
+        if not _check(f"I8 event-bus sources readable ({exc})", False):
+            fails += 1
     verdict = f"FAIL ({fails} violation(s))" if fails else "PASS (all invariants hold)"
     print(f"\n  RESULT: {verdict}")
-    return fails
+    return rc_from_findings(fails)
 
 
 # CI 侧执行清单行的形状: run_bench <alias> cargo bench -p <crate> --bench <bench> [filter...]
@@ -428,8 +511,11 @@ def mode_compare(thresholds_doc, criterion_dir, legacy_path):
     """
     print("=== double-run comparison: heredoc vs py core ===")
     if not os.path.isfile(legacy_path):
-        print(f"[FAIL] legacy log not found: {legacy_path}")
-        return 1
+        # F31: 缺输入 = 比对根本没跑, 不是"跑完发现不等"。旧码退 1(确定红),
+        # 收口清单会把它记成"双跑发现漂移"; 契约行里 2 才是"环境错误/判据未运行"。
+        print(f"[UNDECIDABLE] legacy log not found: {legacy_path} "
+              "-- comparison never ran")
+        return 2
     legacy = parse_legacy_threshold_log(legacy_path)
     payload, _unmatched, _ambiguous = collect_threshold_results(thresholds_doc, criterion_dir)
     fails = 0
@@ -459,7 +545,10 @@ def mode_compare(thresholds_doc, criterion_dir, legacy_path):
     if fails:
         print(f"  RESULT: FAIL ({fails} divergence(s)) - heredoc must NOT be removed yet")
         return 1
-    print("  RESULT: PASS (py core is behaviour-identical to the heredoc)")
+    # 措辞与验证范围对齐（F71）: 上面只遍历了 legacy 侧的键 ⇒ 证明的是"heredoc 守卫过的
+    # 键上无分歧", 而非两侧逐键等价（py 侧多出的键从未进入比对）。补对称段属判据收紧,
+    # 未授权前只把话说准（task #60 / Q50）。
+    print("  RESULT: PASS (no divergence on keys guarded by the heredoc)")
     return 0
 
 
@@ -471,9 +560,12 @@ def mode_thresholds(thresholds_doc, criterion_dir, as_json, strict):
     """
     thr = thresholds_doc.get("thresholds_ns", {})
     if not os.path.isdir(criterion_dir):
-        print(f"[FAIL] criterion dir not found: {criterion_dir} "
-              "(benchmarks may have failed)")
-        return 1
+        # F31: 同上 —— 没有 criterion 产物就没有任何一条阈值被真正评估过,
+        # 这属"判据未运行"(2), 不属"评估后越线"(1)。措辞里的 "benchmarks may have
+        # failed" 已经自陈了它是前置条件问题。
+        print(f"[UNDECIDABLE] criterion dir not found: {criterion_dir} "
+              "(benchmarks may have failed -- no threshold was evaluated)")
+        return 2
 
     payload, unmatched, ambiguous = collect_threshold_results(thresholds_doc, criterion_dir)
     fails = 0
@@ -509,7 +601,7 @@ def mode_thresholds(thresholds_doc, criterion_dir, as_json, strict):
     if as_json:
         print("\n__JSON__")
         print(json.dumps(payload, sort_keys=True))
-    return fails
+    return rc_from_findings(fails)
 
 
 def _walk_estimates(root_dir):
@@ -540,6 +632,29 @@ def _fmt_ns(ns):
 
 
 # --------------------------------------------------------------------------- Part 2 (SLO)
+def parse_criterion_time(txt):
+    """Extract (estimate, unit) from a criterion 'time: [...]' body.
+
+    Two output dialects coexist across toolchain versions (7th landmine,
+    measured 2026-09-25: the gate CRASHED on the newer one -- ValueError
+    float('ns')):
+      * criterion 2.x: 'lo est hi unit'                     -> 4 tokens
+      * criterion 3.x: 'lo u est u hi u' (unit per value)   -> 6 tokens
+    Returns (float, str), or None when the line matches neither shape.
+    """
+    vals = txt.split()
+    if len(vals) == 4:
+        est, unit = vals[1], vals[3]
+    elif len(vals) == 6 and vals[1] == vals[3] == vals[5]:
+        est, unit = vals[2], vals[3]
+    else:
+        return None
+    try:
+        return float(est), unit
+    except ValueError:
+        return None
+
+
 def mode_slo(redlines):
     """实跑 criterion bench, 解析 'time: [lo est up unit]' 并对 80% 红线断言。
 
@@ -564,12 +679,13 @@ def mode_slo(redlines):
             print("    [SKIP] no criterion time output "
                   f"(cargo exit={proc.returncode}; bench may have failed to compile)")
             continue
-        vals = m.group(1).split()
-        if len(vals) < 4:
+        vals = m.group(1)
+        pu = parse_criterion_time(vals)
+        if pu is None:
             skipped += 1
-            print(f"    [SKIP] unparsable criterion line: {m.group(1)!r}")
+            print(f"    [SKIP] unparsable criterion line: {vals!r}")
             continue
-        estimate, unit = float(vals[1]), vals[3]
+        estimate, unit = pu
         if unit not in UNIT_TO_SEC:
             skipped += 1
             print(f"    [SKIP] unknown unit {unit!r} - extend UNIT_TO_SEC deliberately")
@@ -584,7 +700,13 @@ def mode_slo(redlines):
             fails += 1
             print(f"    [FAIL] exceeds SLO ({slo['slo_display']})")
     print(f"\n  summary: failed={fails} skipped={skipped}")
-    return fails
+    # 三态方言（深审 2026-09-25）：SKIP 意味着该条目未被测量，
+    # 存在 SKIP 时零判定不得冒充全绿（"证不了自身读数的门不如无门"）。
+    if fails:
+        return rc_from_findings(fails)
+    if skipped:
+        return 2
+    return 0
 
 
 # --------------------------------------------------------------------------- ignored 归属门
@@ -675,7 +797,7 @@ def mode_ignored(freeze_path=IGNORED_FREEZE_PATH):
     print("\n  state counts: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     print(f"  total ignored tests: {len(items)}")
     print(f"  RESULT: {'FAIL' if fails else 'PASS'}")
-    return fails
+    return rc_from_findings(fails)
 
 
 def read_ratchet_directive(path, key):
@@ -698,6 +820,7 @@ def mode_selftest():
     三条断言: 未登记 bench 必红 / 幽灵登记必红 / 干净集必绿。
     全部在临时目录里做, 不触碰真实仓库文件。
     """
+    import copy
     import tempfile
     import shutil
 
@@ -711,6 +834,50 @@ def mode_selftest():
         with open(os.path.join(fake, "clean_bench.rs"), "w", encoding="utf-8") as fh:
             fh.write("fn main() {}\n")
         inv = [("fakecrate", "clean_bench", "crates/fakecrate/benches/clean_bench.rs")]
+
+        # 真实数据三件套 + I7 临时 workflow 生成器：提到夹具区开头，供"真实路径"断言复用
+        # （F66/F67, 2026-09-21）。原先它们各自定义在第 9/10 断言块里，位置在需要它们的
+        # 断言之后 —— 于是 6/7/8 只能各抄一份判定，那正是 F66 的病灶。
+        real_rl = load_toml(REDLINES_PATH)
+        real_td = load_toml(THRESHOLDS_PATH)
+        real_fz = read_pipe_table(BENCH_FREEZE_PATH)
+
+        def wf_text(rows, tag):
+            p = os.path.join(tmp, f"wf_{tag}.yml")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("".join(f"          run_bench {a} cargo bench -p {c} --bench {b}\n"
+                                 for c, b, a in rows))
+            return p
+
+        def inv_rc(td):
+            """在**真实** mode_invariants 上跑一份阈值文档, 返回 (rc, 输出)。
+
+            I7 用"由该文档自身 run_bench 生成的临时 workflow 文件"中和掉 —— 否则真仓
+            bench_check.yml 的既有红(F1/Q10)会把每一条不变式断言都顶成红, 夹具就退化成
+            "永远红"的空断言(F67 实测: 真实 mode_invariants 整个换成 return 0 时,
+            24 条断言**零条**转红)。破坏点只注入在被测那一条上, 断言同时核对
+            输出里的判据名, 防"因别的原因红"。
+            """
+            mod = sys.modules[__name__]
+            real_wf = mod.BENCH_WORKFLOW_PATH
+            mod.BENCH_WORKFLOW_PATH = wf_text([(e["crate"], e["bench"], e["alias"])
+                                               for e in td["run_bench"]], "inv")
+            try:
+                return _capture_out(mode_invariants, real_rl, td, real_fz)
+            finally:
+                mod.BENCH_WORKFLOW_PATH = real_wf
+
+        def td_with(key, thr, kw, pending=False, cap_delta=0):
+            """真实阈值文档的一份副本, 只多出一个夹具键（F67: 破坏必须靶向单条判据）。"""
+            d = copy.deepcopy(real_td)
+            d["thresholds_ns"][key] = thr
+            d["path_keywords"][key] = [kw]
+            if pending:
+                d["ratchet"]["calibration_pending"] = (
+                    list(d["ratchet"]["calibration_pending"]) + [key])
+            d["ratchet"]["max_calibration_pending"] = (
+                int(d["ratchet"]["max_calibration_pending"]) + cap_delta)
+            return d
 
         # 夹具构造器：一条 run_bench 清单 -> 一份自洽的阈值文档。
         # I5/I6 的规模下限用 skip_scale 绕过，否则每条断言都会被它们抵消。
@@ -751,6 +918,22 @@ def mode_selftest():
         rc = _capture(inventory_capturing, inv, rl_gated, mk_td([]), {}, True)
         expect("selftest-4 fully-guarded set is green", rc, 0)
 
+        # 断言 14：dev-only 行与守护机制双重声明 -> 必红（F63 遮蔽假阴性的回归通道）
+        #   夹具故意用 rl_gated（slo 已覆盖 clean_bench）+ 同键 dev-only 行，
+        #   这正是 2026-09-21 实测到的 event-bus/bus_bench 形状。
+        #   编号取 14 = 现有最大号 13 的下一个，**不按位置续号**：本文件已存在 selftest-11/12/13
+        #   （真实数据同步、未知旗标、I7 三态），撞号会让 `grep selftest-12` 一次命中两条、
+        #   失败归因错对象 —— 这条纪律本身就是本文件"标记须可机检且唯一"的要求。
+        rc = _capture(inventory_capturing, inv, rl_gated, mk_td([]),
+                      {("fakecrate", "clean_bench"): ("dev-only", "dup row")}, True)
+        expect("selftest-14a shadowed dev-only row is fatal", rc, 1)
+        # 断言 14b：同 crate 的**另一个** bench 登记 dev-only -> 必绿（特异度对照，
+        #   防"freeze 非空就判遮蔽"的假阳性把整张表变成不能用的登记面）
+        inv_two = inv + [("fakecrate", "other_bench", "crates/fakecrate/benches/other_bench.rs")]
+        rc = _capture(inventory_capturing, inv_two, rl_gated, mk_td([]),
+                      {("fakecrate", "other_bench"): ("dev-only", "genuinely unguarded")}, True)
+        expect("selftest-14b non-overlapping dev-only row stays green", rc, 0)
+
         # 断言 5：关键词互为子串双向可检（路径串台的根源）
         expect("selftest-5a overlap short-in-long",
                len(keyword_overlaps({"a": ["mixed"], "b": ["128_mixed"]})), 1)
@@ -760,33 +943,63 @@ def mode_selftest():
         expect("selftest-5c disjoint keywords are clean",
                len(keyword_overlaps({"a": ["wal_"], "b": ["dag/"]})), 0)
 
-        # 断言 6：100ms 兜底已收紧却仍列债务 -> 必红
-        doc = {"thresholds_ns": {"x": 5_000}, "path_keywords": {"x": ["x"]},
-               "ratchet": {"max_keyword_overlaps": 0, "calibration_pending": ["x"],
-                           "max_calibration_pending": 5}, "run_bench": []}
-        rc = _capture(invariants_capturing, rl_scale_ok(), doc, {}, True)
-        expect("selftest-6 calibrated-but-still-listed debt is fatal", rc, 1)
+        # 断言 6/7/8：三条不变式破坏在**真实** mode_invariants 上必红, 且必须点名对应判据
+        #   （F66+F67, 2026-09-21）。原实现走手抄副本 invariants_capturing, 实测把真实
+        #   mode_invariants 整个换成 `return 0`（即这道子门被删空）时, 24 条断言**零条**转红,
+        #   只有一条本该红的转绿 —— 手抄副本测的是另一段代码, 台账 note 宣称的
+        #   "收紧未删债必红"这道牙在那一刻并不真实存在。
+        def expect_fatal(name, td, want_rc, tag):
+            """rc 与"输出里是否点名该判据"一起断言：只看 rc 会把"因 A 红"记成"因 B 红"。"""
+            rc, out = inv_rc(td)
+            expect(f"{name} [{tag} reported]", (rc, tag in out), (want_rc, True))
 
-        # 断言 7：债务列表增长超上限 -> 必红
-        doc2 = {"thresholds_ns": {"x": 100_000_000, "y": 100_000_000},
-                "path_keywords": {"x": ["x"], "y": ["y"]},
-                "ratchet": {"max_keyword_overlaps": 0,
-                            "calibration_pending": ["x", "y"],
-                            "max_calibration_pending": 1}, "run_bench": []}
-        rc = _capture(invariants_capturing, rl_scale_ok(), doc2, {}, True)
-        expect("selftest-7 ratchet growth is fatal", rc, 1)
+        # 断言 6：100ms 兜底已收紧却仍列债务 -> I4b 必红
+        expect_fatal("selftest-6 calibrated-but-still-listed debt is fatal",
+                     td_with("zzq_i4b", 5_000, "zzq_i4b_tok", pending=True, cap_delta=1),
+                     1, "I4b")
 
-        # 断言 8：阈值键集与关键词键集不等 -> 必红（新 bench 只建一张表的典型病灶）
-        doc3 = {"thresholds_ns": {"x": 1000}, "path_keywords": {},
-                "ratchet": {"max_keyword_overlaps": 0, "calibration_pending": [],
-                            "max_calibration_pending": 0}, "run_bench": []}
-        rc = _capture(invariants_capturing, rl_scale_ok(), doc3, {}, True)
-        expect("selftest-8 key-set mismatch is fatal", rc, 1)
+        # 断言 7：债务列表增长未同步上限 -> I4a 必红（阈值仍是兜底值, 所以只有 I4a 能红）
+        expect_fatal("selftest-7 ratchet growth is fatal",
+                     td_with("zzq_i4a", 100_000_000, "zzq_i4a_tok", pending=True),
+                     1, "I4a")
+
+        # 断言 8：阈值键集与关键词键集不等 -> I1 必红（新 bench 只建一张表的典型病灶）
+        d8 = copy.deepcopy(real_td)
+        d8["path_keywords"].pop(sorted(d8["path_keywords"])[0])
+        expect_fatal("selftest-8 key-set mismatch is fatal", d8, 1, "I1")
+
+        # 断言 17：对照 —— 未破坏的真实文档（I7 中和后）必绿。
+        #   没有它, 6/7/8 的"红"可能来自夹具自身；这条把"红绿都能出"的最低配补齐。
+        expect("selftest-17 invariants control: undamaged table is green",
+               inv_rc(copy.deepcopy(real_td))[0], 0)
+
+        # 断言 18：`[slo]` 幽灵必须是 **advisory**（可见但不改 rc）——F60 的观测面补齐，
+        #   同时锁住"不许悄悄把它升级成阻塞判据"：Q10 原子批收口前，判红会让正确清理更红。
+        rl_ghost = {"redline": [], "slo": [{"crate": "zzq_no_such_crate",
+                                            "bench_file": "zzq_no_such_bench"}]}
+        rc18a, out18a = _capture_out(inventory_capturing, [], rl_ghost,
+                                      mk_td([]), {}, True)
+        expect("selftest-18a [slo] ghost announced, rc untouched",
+               ("SLO-GHOST" in out18a, rc18a), (True, 0))
+        #   特异度对照：只留"文件确实存在"的 slo 行 ⇒ 一声不吭（防空转式常报）
+        rl_clean = {"redline": [],
+                    "slo": [e for e in real_rl["slo"]
+                            if not slo_ghosts({"slo": [e]})]}
+        rc18b, out18b = _capture_out(inventory_capturing, [], rl_clean,
+                                     mk_td([]), {}, True)
+        expect("selftest-18b control: live [slo] rows announce nothing",
+               ("SLO-GHOST" in out18b, rc18b), (False, 0))
+
+        # 第 7 枚地雷：criterion 3.x 逐值单位行曾使 mode_slo 崩溃（ValueError
+        # float('ns')，2026-09-25 实测）；解析纯函数两方言各一枚断言 + 垃圾行兑底
+        expect("selftest-19a criterion 2.x line parses (mid, unit)",
+               parse_criterion_time("9.902 9.967 10.037 ns"), (9.967, "ns"))
+        expect("selftest-19b criterion 3.x per-value-unit line parses",
+               parse_criterion_time("68.439 ns 68.483 ns 68.661 ns"), (68.483, "ns"))
+        expect("selftest-19c garbage line yields None (SKIP not crash)",
+               parse_criterion_time("ns"), None)
 
         # 断言 9：真实表必绿（防止自测只测红路径而把真表测挂）
-        real_rl = load_toml(REDLINES_PATH)
-        real_td = load_toml(THRESHOLDS_PATH)
-        real_fz = read_pipe_table(BENCH_FREEZE_PATH)
         rc = _capture(lambda: mode_lint(real_rl),)
         expect("selftest-9a real lint is green", rc, 0)
         rc = _capture(lambda: mode_inventory(real_rl, real_td, real_fz))
@@ -795,15 +1008,77 @@ def mode_selftest():
         expect("selftest-9c real invariants are green", rc, 0)
         rc = _capture(lambda: mode_ignored())
         expect("selftest-9d real ignored-ownership gate is green", rc, 0)
+
+        # 断言 15/16：另两道子门的**真实路径**负向夹具（F67, 2026-09-21）
+        #   反事实复算实测：把 mode_lint / mode_ignored 整个换成 `return 0` 时,
+        #   原有 24 条断言零条转红 —— 与 mode_invariants 同病。二者都恰好把输入做成了
+        #   参数（mode_lint(redlines) / mode_ignored(freeze_path=...)）, 所以不需要
+        #   再造一份手抄判定, 直接喂破坏后的副本即可。
+        d15 = copy.deepcopy(real_rl)
+        d15["redline"][0]["func"] = "zzq_no_such_fn_xyz"
+        rc15, out15 = _capture_out(mode_lint, d15)
+        expect("selftest-15a lint: declared fn absent from file is fatal",
+               (rc15, ".2 function" in out15), (1, True))
+        expect("selftest-15b lint control: undamaged deep copy is green",
+               _capture(mode_lint, copy.deepcopy(real_rl)), 0)
+
+        with open(IGNORED_FREEZE_PATH, encoding="utf-8-sig") as fh:
+            ign_lines = fh.read().splitlines(True)
+        ign_data = [i for i, ln in enumerate(ign_lines)
+                    if ln.strip() and not ln.lstrip().startswith("#")]
+        p16 = os.path.join(tmp, "ignored_minus_one.txt")
+        with open(p16, "w", encoding="utf-8", newline="") as fh:
+            fh.writelines(ln for i, ln in enumerate(ign_lines) if i != ign_data[-1])
+        rc16, out16 = _capture_out(mode_ignored, p16)
+        expect("selftest-16a ignored: dropped registry row is fatal",
+               (rc16, "unregistered ignored test" in out16), (1, True))
+        p16b = os.path.join(tmp, "ignored_verbatim.txt")
+        with open(p16b, "w", encoding="utf-8", newline="") as fh:
+            fh.writelines(ign_lines)
+        expect("selftest-16b ignored control: verbatim copy is green",
+               _capture(mode_ignored, p16b), 0)
+
+        # 断言 19：mode_compare 的负控（F71, 2026-09-22）。该函数此前**零负覆盖**
+        # （全库只有定义 + 分派三处引用, selftest 从不调用它）, 而它是 bench_check.yml:408
+        # 的 CI 硬阻塞步、"能否删 heredoc 双实现"这一治理决策全压在它的判决上。
+        # 夹具用合成键 zz_ns + 自建 criterion 树, 不读真仓 target/（本机无产物也能跑）。
+        cmp_td = {"thresholds_ns": {"zz_ns": 1000}, "path_keywords": {"zz_ns": ["zz_fn/"]}}
+        cmp_worst = "zz_fn/new/estimates.json"
+        cmp_dir = os.path.join(tmp, "crit_zz")
+        os.makedirs(os.path.join(cmp_dir, "zz_fn", "new"), exist_ok=True)
+        with open(os.path.join(cmp_dir, "zz_fn", "new", "estimates.json"), "w",
+                  encoding="utf-8", newline="\n") as fh:
+            fh.write('{"median": {"point_estimate": 500.0}}')
+
+        def legacy_log(mark):
+            """造一份 heredoc stdout 残影: 一行断言 + 一行 worst group。"""
+            pth = os.path.join(tmp, f"legacy_{mark}.log")
+            with open(pth, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(f"  zz_ns: {mark} max median = 500.00 ns (threshold < 1000.00 ns)\n")
+                fh.write(f"    worst group: {cmp_worst}\n")
+            return pth
+
+        rc19a, out19a = _capture_out(mode_compare, cmp_td, cmp_dir, legacy_log("✓"))
+        expect("selftest-19a compare control: agreeing heredoc is green",
+               (rc19a, "RESULT: PASS" in out19a), (0, True))
+        rc19b, out19b = _capture_out(mode_compare, cmp_td, cmp_dir, legacy_log("✗"))
+        expect("selftest-19b compare fatal when heredoc and py disagree on a verdict",
+               (rc19b, "[DIFF]" in out19b), (1, True))
+        p_empty = os.path.join(tmp, "legacy_empty.log")
+        with open(p_empty, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("no benchmark asserted here\n")
+        rc19c, out19c = _capture_out(mode_compare, cmp_td, cmp_dir, p_empty)
+        expect("selftest-19c compare fatal when nothing could be compared (vacuous)",
+               (rc19c, "vacuous" in out19c), (1, True))
+        rc19d, out19d = _capture_out(mode_compare, cmp_td, cmp_dir,
+                                     os.path.join(tmp, "legacy_absent.log"))
+        expect("selftest-19d compare undecidable when legacy log is absent",
+               (rc19d, "UNDECIDABLE" in out19d), (2, True))
+
         # 断言 10：I7 的五种形态（干净/CI 多出/表多出/alias 漂/文件缺失）
         # 前四种用临时 workflow 文件, 不碰真仓的 bench_check.yml。
-        def wf_text(rows, tag):
-            p = os.path.join(tmp, f"wf_{tag}.yml")
-            with open(p, "w", encoding="utf-8") as fh:
-                fh.write("".join(f"          run_bench {a} cargo bench -p {c} --bench {b}\n"
-                                 for c, b, a in rows))
-            return p
-
+        # （wf_text 已上提到夹具区开头, 与 inv_rc 共用同一份行格式 —— 两处各写一份
+        #   就是"同构靠人工维持", 漂了会让 I7 因错原因红。）
         rb1 = [{"crate": "c1", "bench": "b1", "alias": "a1"}]
         expect("selftest-10a I7 clean when CI list matches table",
                ci_runbench_sync(wf_text([("c1", "b1", "a1")], "clean"), rb1), [])
@@ -820,50 +1095,43 @@ def mode_selftest():
         # 断言 11：真实 bench_check.yml 与真表对等（I7 在产环境必绿，与自测红路径互补）
         expect("selftest-11 real bench_check.yml is in sync with [[run_bench]]",
                ci_runbench_sync(BENCH_WORKFLOW_PATH, load_toml(THRESHOLDS_PATH)["run_bench"]), [])
+
+        # 断言 12/13：入口契约（F18 + F29）—— 过了 main() 的码才算数，
+        # 只在注释里写"0=通过/1=违反/2=不可判定"不算（那是另一道"写了不跑"）。
+        # 12：拼错的旗标必退 2（不可判定），而不是静默降级去跑默认模式拿一份没请求的判定。
+        expect("selftest-12 unknown flag is undecidable, not a silent default run",
+               _capture(main, ["--lit"]), 2)
+        # 13：--help 是一次被满足的请求 -> 0；旧码退 2，会让收口清单把"看过用法"记成不可判定。
+        expect("selftest-13 --help is a successful request, not an error",
+               _capture(main, ["--help"]), 0)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     # 断言条数自报：文档不得写死这个数字（写死 = 下一道“写了不跑”与跨文档漂移）
     verdict = (f"PASS (all {n_assert} assertions held)" if not fails
                else f"FAIL ({fails}/{n_assert} assertion(s) violated)")
     print(f"\n  RESULT: {verdict}")
-    return fails
-
-
-def rl_scale_ok():
-    """自测夹具：满足 I5 规模下限的最小红线表。"""
-    return {"redline": [{"id": f"RL-{i:02d}"} for i in range(1, 12)],
-            "slo": [{"crate": "c", "bench_file": "b"} for _ in range(7)]}
+    # F18: 条数留在上面的 RESULT 载荷里；rc 只答"有没有违规"。归一前 rc=fails，
+    # "2 条断言被违反"会退 2，撞方言里 2=不可判定 —— 确定的红被记成状态未知。
+    return rc_from_findings(fails)
 
 
 def inventory_capturing(inv, rl, td, fz, skip_scale=False):
-    """mode_inventory 的可注入版本（selftest 用），判定与真实模式同构。"""
-    states, _p1, _p2, reg = classify(inv, rl, td, fz)
-    on_disk = {(c, s) for c, s, _r, _st in states}
-    bad = sum(1 for st in states if st[3] == "unknown")
-    bad += len(set(reg) - on_disk) + len(set(fz) - on_disk)
-    return 1 if bad else 0
+    """mode_inventory 的夹具入口：注入清单后调用**真实函数**（判定只有一份）。
 
-
-def invariants_capturing(rl, td, fz, skip_scale=False):
-    """mode_invariants 的可注入版本（selftest 用），逻辑与真实模式同构。"""
-    thr, kw = td.get("thresholds_ns", {}), td.get("path_keywords", {})
-    r = td.get("ratchet", {})
-    bad = 0
-    if set(thr) != set(kw):
-        bad += 1
-    if len(keyword_overlaps(kw)) > int(r.get("max_keyword_overlaps", -1)):
-        bad += 1
-    pending = set(r.get("calibration_pending", []))
-    if len(pending) > int(r.get("max_calibration_pending", len(pending))):
-        bad += 1
-    if any(thr.get(k) != 100_000_000 for k in pending):
-        bad += 1
-    if not skip_scale:
-        if len(rl.get("redline", [])) < 11 or len(rl.get("slo", [])) < 7:
-            bad += 1
-        if len(fz) < 70:
-            bad += 1
-    return 1 if bad else 0
+    WHY 改写（2026-09-21 F66）：原实现是手抄一份"同构判定"（unknown + 两个 STALE 差集），
+      于是 ① 我给 mode_inventory 加的新规则（dev-only 遮蔽 [SHADOW]）夹具永远测不到 ——
+      实测 selftest-11a 在改写前 got=0 而真实 mode_inventory 同输入 rc=1；
+      ② "夹具全绿"与"生产判定有牙"脱钩，正是本文件反复在治的"同构靠人工维持"病灶
+      （同族前例：check_dependency_rules 的 .sh/.ps1 各写一份判据、两份 perf 门双双不跑）。
+      skip_scale 保留仅为兼容既有调用点；mode_inventory 本身无规模下限依赖。
+    """
+    mod = sys.modules[__name__]
+    real = mod.bench_inventory
+    mod.bench_inventory = lambda: inv
+    try:
+        return mode_inventory(rl, td, fz)
+    finally:
+        mod.bench_inventory = real
 
 
 def _capture(fn, *args):
@@ -876,16 +1144,58 @@ def _capture(fn, *args):
         return fn(*args)
 
 
+def _capture_out(fn, *args):
+    """同 _capture, 但把输出一起返回 —— 断言"哪一条判据红的"要靠它。
+
+    WHY: 只看 rc 的负向夹具会把"因 A 红"和"因 B 红"记成同一件事;
+      本文件 2026-09-21 的 F63/F66/F67 三连全栽在这种"计数对得上、原因对不上"上。
+    """
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = fn(*args)
+    return rc, buf.getvalue()
+
+
 # --------------------------------------------------------------------------- main
 VALUE_FLAGS = ("--criterion-dir", "--legacy-out")
+# F29: 显式白名单 —— 新增旗标必须写进这里，否则 main 会拒绝而不是静默忽略它。
+KNOWN_FLAGS = ("--selftest", "--json", "--strict", "--help", "-h", "--static-only")
+
+
+def rc_from_findings(n):
+    """F18: 把"违规条数"归一成退出码 —— rc 只回答有没有, 条数留在载荷里。
+
+    WHY 必须归一：POSIX 退出码是 mod-256 的。归一前 mode_* 把**条数**直接当 rc 返回，
+    于是"2 条违规"撞上方言里 2=不可判定（确定的红被记成状态未知），
+    而 256 条违规会退 **0**（实测 `sys.exit(256)` 的 rc 就是 0）—— 确定的一大堆红变成绿。
+    """
+    return 1 if n else 0
 
 
 def main(argv):
     flags = {a for a in argv if a.startswith("-")}
     # --help 必须显式返回，不能掉进默认模式：未支持时它会被当作“无模式”而跑完整套件
     # 并以非零退出（本会话实测踩到：调用者会误读为“检查失败”）。
+    # F18: 归一后走 0 —— 打印用法是**成功完成一次请求**，不是错误；旧代码退 2 会让
+    # 收口清单把它记成"不可判定"（与"未知参数"同码）。未知参数仍退 2（见下方）。
     if {"--help", "-h"} & flags:
         print(__doc__)
+        return 0
+    # F29: 未知**旗标**过去被整个忽略 —— `--lit` 会当作"没给模式"而跑默认 static 全套，
+    # 于是拼错一个字母就可能拿到一次"我没请求的判定"（若那套恰好全绿就是假绿）。
+    # 与 run_gate_manifest.py 的 F24 同族，这里同治：拒绝并退 2，不降级成默认模式。
+    unknown = sorted(flags - set(KNOWN_FLAGS) - set(VALUE_FLAGS))
+    if unknown:
+        print("用法: py -3 scripts/check_perf_redlines.py "
+              "[--selftest|--static-only|MODE] [--json] [--strict] "
+              "[--criterion-dir D] [--legacy-out F]")
+        print("  MODE = all|static|lint|inventory|invariants|thresholds|compare|"
+              "slo|ignored|emit-ignored|emit-slo-filter|emit-overlaps")
+        print(f"[UNDECIDABLE] 未知旗标: {' '.join(unknown)} —— 未执行任何判据；"
+              "不把拼错的旗标降级成「跑默认模式」")
         return 2
     if "--selftest" in flags:
         return mode_selftest()
@@ -901,7 +1211,7 @@ def main(argv):
         if opt in argv:
             i = argv.index(opt)
             if i + 1 >= len(argv):
-                print(f"[FAIL] {opt} needs a value")
+                print(f"[UNDECIDABLE] {opt} needs a value")
                 return 2
             if opt == "--criterion-dir":
                 criterion_dir = argv[i + 1]
@@ -919,10 +1229,22 @@ def main(argv):
     if mode in ("all", "--static-only", "static"):
         # CI 阻塞门: 全部子检查均为静态(零 cargo 调用、秒级)。ignored 门一并计入:
         # 它防的是同一病灶 —— “写了不跑”从 bench 延伸到测试, 不该只登记不把关。
-        return (mode_lint(redlines)
-                + mode_inventory(redlines, thresholds_doc, freeze)
-                + mode_invariants(redlines, thresholds_doc, freeze)
-                + mode_ignored())
+        sub = {
+            "lint": mode_lint(redlines),
+            "inventory": mode_inventory(redlines, thresholds_doc, freeze),
+            "invariants": mode_invariants(redlines, thresholds_doc, freeze),
+            "ignored": mode_ignored(),
+        }
+        # F17: 各子模式各自打一条 RESULT:, 最后一条常是 PASS ⇒ 任何"读末行"的人/
+        # 日志抓取器会把 rc!=0 的运行读成绿。退出码才是权威, 故末行必须由它派生。
+        # F18: rc 归一为 0/1，"哪些子模式红了"写进载荷。原先 rc=sum(条数)，
+        # 于是"2 条违规"被读成方言里的 2=不可判定，而 256 条会退 0（POSIX 是 mod-256）。
+        failing = [k for k, v in sub.items() if v]
+        rc = rc_from_findings(len(failing))
+        print(f"\nVERDICT: {'PASS' if rc == 0 else 'FAIL'}"
+              f" (rc={rc}, failing_submodes="
+              f"{failing if failing else 'none'})")
+        return rc
     if mode == "lint":
         return mode_lint(redlines)
     if mode == "inventory":
@@ -933,7 +1255,7 @@ def main(argv):
         return mode_thresholds(thresholds_doc, criterion_dir, as_json, strict)
     if mode == "compare":
         if not legacy_out:
-            print("[FAIL] compare mode needs --legacy-out <heredoc stdout file>")
+            print("[UNDECIDABLE] compare mode needs --legacy-out <heredoc stdout file>")
             return 2
         return mode_compare(thresholds_doc, criterion_dir, legacy_out)
     if mode == "slo":
@@ -984,10 +1306,14 @@ def main(argv):
     if mode == "emit-overlaps":
         print(f"max_keyword_overlaps = {len(keyword_overlaps(thresholds_doc['path_keywords']))}")
         return 0
-    print(f"[FAIL] unknown mode: {mode}")
+    print(f"[UNDECIDABLE] unknown mode: {mode}")
     print(__doc__)
     return 2
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # F30 → F32：守卫本身收进 scripts/gate_rc.py（单一真值源，16 个门脚本共用一份）。
+    # 本会话实测过一次 `set - tuple` 的 TypeError 让 python 以 **1** 退出 —— 崩溃伪装成红
+    # 比伪装成绿更隐蔽：台账会把它当成"已知的待修红"消化掉，从此无人回查它跑没跑过判据。
+    import gate_rc
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))

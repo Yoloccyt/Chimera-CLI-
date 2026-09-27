@@ -67,3 +67,8 @@ harness = false
 # - TemporalMeta / TransitionType（P3 时间元数据扩展）
 # - NamespaceQuota（chimera-mas 命名空间配额上提）
 # ============================================================
+
+# E-5 opt-in: production expects rewritten (defensive if-let / documented
+# explicit panic contracts); test/bench units idiomatic allow.
+[lints]
+workspace = true

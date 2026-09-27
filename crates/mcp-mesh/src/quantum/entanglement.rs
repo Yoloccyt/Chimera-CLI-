@@ -446,7 +446,8 @@ impl EntanglementManager {
 ///
 /// WHY 复用 `McpNodeHeartbeat` 而非新增事件变体:
 /// - `McpNodeHeartbeat` 已有 `node_id` + `status` + `last_seen` 字段,完全满足状态同步需求
-/// - 新增事件变体需修改 `severity()` / `event_name()` 等多处,且需更新 109 变体计数
+/// - 新增事件变体需修改 `severity()` / `event_name()` 等多处,且要同步变体计数锚点
+///   （`check_doc_drift` 守的那个 `nexus_event_variants`）⇒ 维护成本远高于复用现成事件
 /// - `status` 字段编码为 `"sync:{source}->{partner}:{payload}"` 格式,订阅者可解析
 /// - `throughput` 设为 0(状态同步不携带吞吐量信息)
 fn build_state_sync_event(
@@ -472,6 +473,7 @@ impl Default for EntanglementManager {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

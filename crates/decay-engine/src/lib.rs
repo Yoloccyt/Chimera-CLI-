@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L4
+//! ROLE:     能力衰减引擎 — 连续 [0.0, 1.0] 权限流体衰减模型
+//! BACKEND:  memory
+//! PRODUCERS: 2 DecayMetricsReported,ShadowBreakerTripped
+//! CONSUMERS: 2 chimera-mas,gsoe-evolution
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! 能力衰减引擎 — 连续 [0.0, 1.0] 权限流体衰减模型
 //!
 //! 对应架构层:L4 Security

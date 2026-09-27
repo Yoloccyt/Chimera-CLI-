@@ -858,9 +858,10 @@ impl MockParticipantClient {
 
     /// 获取调用日志(可用于验证 2PC 流程)
     pub fn call_log(&self) -> Vec<MockCall> {
+        // poison-tolerant(仓内惯用法):调用日志向量无不变量可破坏，恢复优于 panic
         self.call_log
             .lock()
-            .expect("MockParticipantClient call_log Mutex poison")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
@@ -874,7 +875,7 @@ impl MockParticipantClient {
     ) {
         self.call_log
             .lock()
-            .expect("MockParticipantClient call_log Mutex poison")
+            .unwrap_or_else(|e| e.into_inner()) // poison-tolerant，同上
             .push(MockCall {
                 phase,
                 server_id: server_id.to_string(),
@@ -979,6 +980,7 @@ impl ParticipantClient for MockParticipantClient {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

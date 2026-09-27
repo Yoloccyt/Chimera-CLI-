@@ -13,6 +13,11 @@
 # Every entry was manually reviewed on 2026-09-10. A stale entry (no longer
 # matching any finding) FAILS the gate - remove it when the code moves on.
 #
+# MIRROR: scripts/lock_await_freeze.txt registers these same exemptions for the
+# bash gate (check_lock_await.sh). Both key sets must stay identical; gate G-27
+# (= this script) enforces that, so a re-key that touches only one file is a
+# gate failure rather than a silent divergence. Reason wording may differ.
+#
 # Trailer `SCANNER` entries are debt on the scanner, not on the code: if
 # check_await_across_guard.py ever learns to see through value extraction,
 # these lines should be deleted and the gate re-run.
@@ -32,8 +37,7 @@ crates/nexus-app-server/src/sse.rs:121         # DESIGN SSE writer: single-conne
 crates/mlc-engine/src/engine.rs:912            # DESIGN migration_locks: one MemoryId migration = atomic txn incl. its completion event
 
 # --- (B) Scanner over-approximation: value extracted from the lock ------------
-crates/chimera-tui/src/data/pipeline.rs:891         # SCANNER `.take()` moves the EventSubscriber out; guard drops at stmt end (re-keyed 2026-09-15 after main merge)
-crates/csn-substitutor/src/lib.rs:107               # SCANNER `level` is a copied u32; the RefMut `chain` dies at the if-let block
+crates/chimera-tui/src/data/pipeline.rs:892         # SCANNER `.take()` moves the EventSubscriber out; guard drops at stmt end. Covers both awaits it feeds (`sub.shutdown()` and `handle.await`); re-keyed 891->892 with the same 1-line shift that moved lock_await_freeze.txt
 crates/decb-governor/src/governor.rs:564            # SCANNER `current_total` is `*total` copy; state guard already block-scoped
 crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER `pooled` is a TcpStream removed from the pool; guard dies in and_then
 crates/pvl-layer/src/producer.rs:123                # SCANNER `strategy` is `*read()` Copy value; read guard dies at stmt end

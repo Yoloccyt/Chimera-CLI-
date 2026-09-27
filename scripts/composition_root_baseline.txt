@@ -15,19 +15,7 @@
 # Each entry carries a WHY note for the debt it freezes.
 # =============================================================================
 
-# agent.rs: `agent` 子命令 ephemeral 总线(无 engine 需求)
-crates/chimera-cli/src/commands/agent.rs 1
-# chat.rs: chat REPL ephemeral bus+engine(commands/chat.rs:98-99)
-crates/chimera-cli/src/commands/chat.rs 2
 # doctor.rs: 纯占位构造(`let _bus = EventBus::new()`,立即 drop,零行为)
 crates/chimera-cli/src/commands/doctor.rs 1
-# exec.rs: exec 命令 ephemeral bus+engine
-crates/chimera-cli/src/commands/exec.rs 2
-# parliament.rs: parliament 命令 ephemeral bus+engine
-crates/chimera-cli/src/commands/parliament.rs 2
-# quest.rs: quest 管理操作 ephemeral bus+engine(list/show/cancel/checkpoint)
-crates/chimera-cli/src/commands/quest.rs 2
-# run.rs: run 命令 ephemeral bus+engine
-crates/chimera-cli/src/commands/run.rs 2
-# tui.rs: TUI 主路径约 300 行手写装配(bus+engine+checkpoints, B-b 最大迁移项)
-crates/chimera-cli/src/commands/tui.rs 3
+# tui.rs: TUI 主路径手写装配残留(B-b 最大迁移项,已迁 1 处)
+crates/chimera-cli/src/commands/tui.rs 2

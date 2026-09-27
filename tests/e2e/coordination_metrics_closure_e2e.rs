@@ -313,7 +313,7 @@ async fn test_e2e_vetoed_debate_reports_latency_without_quality() {
 //
 // 验证真实 Parliament.deliberate 产出的多维质量(divergence/abstention_rate/
 // consensus_margin)随 DebateCompleted 流入 quest-engine 待合并缓存。
-// 场景由 generate_opinion 规则 stub 驱动(见 debate.rs):
+// 场景由 generate_opinion 规则 stub 驱动(见 debate/ops.rs):
 // - Architect:task_count≤3 赞成,>3 反对
 // - Skeptic:risk<0.3 赞成,0.3-0.5 弃权,>0.5 反对
 // - Optimizer:Fast 赞成,Standard 弃权,Deep 反对

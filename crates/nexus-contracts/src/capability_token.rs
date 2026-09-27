@@ -89,7 +89,7 @@
 use serde::{Deserialize, Serialize};
 
 // ============================================================
-// SeamId 枚举（六接缝标识）
+// SeamId 枚举（接缝标识；成员清单以本枚举为准，勿在此复述数量）
 // ============================================================
 
 /// 八接缝标识 — 学习策略灰度授权的目标接缝
@@ -97,7 +97,9 @@ use serde::{Deserialize, Serialize};
 /// WHY 独立定义（与 `omega_learner::SeamId` 语义对齐）:
 /// - L0 nexus-contracts 禁止依赖 L6 omega-learner（依赖铁律向上禁止）
 /// - 当前任务 P4-W14.5 聚焦 CapabilityToken，SeamId 统一上提作为 P4-W14.6 后续任务
-/// - 物理独立但语义对齐：8 变体一一对应，未来上提时可直接替换
+/// - 物理独立但**规模不等**：本枚举含 S1..S9，`omega_learner::SeamId` 目前少一个接缝
+///   （两侧各自以 `all() -> [SeamId; N]` 自我锚定，N 由编译器保证，勿在此复述）
+///   ⇒ "上提时可直接替换"**不成立**：L0 → L6 存在无对应项，需先补齐或显式记下游不支持清单
 ///
 /// WHY 用枚举而非字符串:
 /// - 编译期穷尽性检查（match 必须覆盖所有变体）
@@ -798,6 +800,7 @@ impl Default for CapabilityToken {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

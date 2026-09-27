@@ -46,7 +46,7 @@ pub struct PatternIndex {
     literal_subscribers: HashMap<Arc<str>, HashSet<SubscriberId>>,
     /// 全部订阅者（兜底：`*` 通配注册者）
     wildcard_subscribers: HashSet<SubscriberId>,
-    /// 类型级匹配缓存 — 事件类型名有限（144 变体），缓存命中零分配
+    /// 类型级匹配缓存 — 事件类型名有限（`NexusEvent` 变体集），缓存命中零分配
     ///
     /// WHY：启动期注册后表不可变（只读快照语义），缓存无需失效；
     /// 10K 事件流中类型名去重后 ≤ 144，内存有界。命中路径直接返回
@@ -176,6 +176,7 @@ impl PatternIndex {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::types::EventMetadata;

@@ -155,10 +155,13 @@ impl InvariantClosureChecker {
             removed += 1;
             if let Some(prereqs) = adj.get(node) {
                 for &p in prereqs {
-                    let d = in_degree.get_mut(p).expect("边中节点必在入度表");
-                    *d -= 1;
-                    if *d == 0 {
-                        queue.push_back(p);
+                    // 不变量:边中节点必已建入度表；E-5 去 expect 改防御性跳过
+                    // (合法输入结果不变，数据异常保守不误判闭包完成)
+                    if let Some(d) = in_degree.get_mut(p) {
+                        *d -= 1;
+                        if *d == 0 {
+                            queue.push_back(p);
+                        }
                     }
                 }
             }
@@ -302,6 +305,7 @@ impl InvariantClosureChecker {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

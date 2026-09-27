@@ -74,7 +74,7 @@ def script_signatures(cmd):
 
 
 def blocking_gate_scripts(manifest_path):
-    """返回 (expect=0 判据引用的脚本签名集合, 显式声明不接 CI 的签名集合)。
+    """返回 (expect=0 判据引用的脚本签名集合, 声明不接 CI 的集合, 声明 CI 内非阻塞的集合)。
 
     除原有的 expect=0 集合外，新增对 `ci_exempt = "<reason>"` 字段的识别：
     某门若因设计原因有意不接入任何 workflow（如仅收口时人工跑的审计项），
@@ -82,13 +82,20 @@ def blocking_gate_scripts(manifest_path):
 
     WHY 需要这个豁免口子：不提供显式豁免，反向断言会把"有意本地跑"的门误报成缺陷，
     逼人删门或硬塞进 CI；而提供豁免又强制写理由，避免它变成静默的逃避通道。
+
+    ★ `ci_advisory = "<reason>"` 是同一形状的**另一半**（F39c，2026-09-21 由登记孤儿门逼出）：
+      有些判据故意在 CI 里挂 `continue-on-error: true`（性能趋势探针、宿主相关的 bench 阈值），
+      它**接了 CI 但不阻塞**。此前没有这种表达法，于是两难：不登记 ⇒ 台账看不见这道门（正是
+      F39 的盲区）；登记 ⇒ gap 断言"要求必过的门却挂在非阻塞语境下"直接判红。
+      加字段而不是放宽断言：advisory 必须写理由，且**只豁免 gap 断言，不豁免 MISSING**
+      —— 声明 advisory 却根本没接 CI，仍然是缺陷。
     """
     if not os.path.isfile(manifest_path):
-        return None, None
+        return None, None, None
     with open(manifest_path, "rb") as f:
         raw = f.read().decode("utf-8-sig")
-    scripts, exempt = set(), set()
-    cur_cmd, cur_expect, cur_exempt = None, None, None
+    scripts, exempt, advisory = set(), set(), set()
+    cur_cmd, cur_expect, cur_exempt, cur_adv = None, None, None, None
     for line in raw.splitlines():
         s = line.strip()
         if s == "[[gate]]":
@@ -97,7 +104,9 @@ def blocking_gate_scripts(manifest_path):
                 scripts |= sigs
                 if cur_exempt:
                     exempt |= sigs
-            cur_cmd, cur_expect, cur_exempt = None, None, None
+                if cur_adv:
+                    advisory |= sigs
+            cur_cmd, cur_expect, cur_exempt, cur_adv = None, None, None, None
         elif s.startswith("cmd"):
             cur_cmd = s.split("=", 1)[1].strip().strip('"') if "=" in s else ""
         elif s.startswith("expect"):
@@ -105,14 +114,21 @@ def blocking_gate_scripts(manifest_path):
                 cur_expect = int(s.split("=", 1)[1].strip())
             except ValueError:
                 cur_expect = None
-        elif s.startswith("ci_exempt"):
+        elif re.match(r"ci_exempt\s*=", s):
+            # ★ 键名必须精确匹配（F39d）：旧写法 `startswith("ci_exempt")` 让 `ci_exemptX = "..."`
+            #   这类**拼错的键**也拿到豁免权 ⇒ 一次打字错误就能静默关掉一条断言。
+            #   （这是我为 F39c 做负控时撞出来的：把 ci_advisory 改名成 ci_advisoryX，门照样绿。）
             cur_exempt = s.split("=", 1)[1].strip().strip('"') if "=" in s else ""
+        elif re.match(r"ci_advisory\s*=", s):
+            cur_adv = s.split("=", 1)[1].strip().strip('"') if "=" in s else ""
     if cur_expect == 0 and cur_cmd:  # 末尾无后继 [[gate]]
         sigs = set(script_signatures(cur_cmd))
         scripts |= sigs
         if cur_exempt:
             exempt |= sigs
-    return scripts, exempt
+        if cur_adv:
+            advisory |= sigs
+    return scripts, exempt, advisory
 
 
 def nonblocking_scripts_in_workflows(wf_glob):
@@ -161,12 +177,13 @@ def all_scripts_in_workflows(wf_glob):
 
 
 def check(manifest_path, wf_glob):
-    blocking, exempt = blocking_gate_scripts(manifest_path)
+    blocking, exempt, advisory = blocking_gate_scripts(manifest_path)
     if blocking is None:
         return None
     nonblock = nonblocking_scripts_in_workflows(wf_glob)
     used = all_scripts_in_workflows(wf_glob)
-    gaps = sorted(blocking & set(nonblock.keys()))
+    # advisory 门从 gap 断言里扣除，但**不**从 MISSING 里扣除（见 blocking_gate_scripts docstring）
+    gaps = sorted((blocking - advisory) & set(nonblock.keys()))
     # 反向断言：expect=0 且未声明 ci_exempt 的门，必须被某个 workflow 真正调用过
     missing = sorted((blocking - exempt) - set(used.keys()))
     return gaps, nonblock, blocking, missing
@@ -239,8 +256,44 @@ def mode_selftest():
                 'ci_exempt = "local-only audit, ADR-000"\n')
     _g9, _nb9, _bl9, miss9 = check(man, os.path.join(wfdir, "*.yml"))
     expect("selftest-9 ci_exempt suppresses MISSING (reason required)", miss9 == [])
+    # F39c：advisory（接了 CI 但**故意**非阻塞）—— 有理由 ⇒ 不报 gap；空理由 ⇒ 照报。
+    # 这三条夹具是"加字段而不是放宽断言"的证据：删掉 ci_advisory 识别，11 会红；
+    # 把 advisory 也用来豁免 MISSING，13 会红。
+    with open(os.path.join(wfdir, "t.yml"), "w") as f:
+        f.write("jobs:\n  adv:\n    steps:\n      - name: s\n"
+                "        continue-on-error: true\n        run: |\n          bash scripts/A.py\n")
+    with open(man, "w", encoding="utf-8") as f:
+        f.write('[[gate]]\nid = "X"\ncmd = "bash scripts/A.py"\nexpect = 0\nkind = "light"\n'
+                'ci_advisory = "perf trend probe: advisory by design"\n')
+    gaps_adv, _, _, _ = check(man, os.path.join(wfdir, "*.yml"))
+    expect("selftest-11 ci_advisory suppresses gap (reason required)", gaps_adv == [])
+    with open(man, "w", encoding="utf-8") as f:
+        f.write('[[gate]]\nid = "X"\ncmd = "bash scripts/A.py"\nexpect = 0\nkind = "light"\n'
+                'ci_advisory = ""\n')
+    gaps_adv2, _, _, _ = check(man, os.path.join(wfdir, "*.yml"))
+    expect("selftest-12 ci_advisory WITHOUT reason still gaps", gaps_adv2 == [("A.py", "")])
+    with open(man, "w", encoding="utf-8") as f:
+        f.write('[[gate]]\nid = "Z"\ncmd = "bash scripts/C.py --gate"\nexpect = 0\nkind = "light"\n'
+                'ci_advisory = "declared advisory but wired nowhere"\n')
+    _g, _nb, _bl, miss_adv3 = check(man, os.path.join(wfdir, "*.yml"))
+    expect("selftest-13 advisory does NOT exempt MISSING", miss_adv3 == [("C.py", "--gate")])
+    # F39d：拼错的豁免键**不得**生效（旧解析用 startswith, `ci_advisoryX` 也会被认成 advisory
+    # 而静默关掉 gap 断言 —— 一次打字错误 = 一条断言消失, 正是本工具存在的理由的反面）。
+    with open(man, "w", encoding="utf-8") as f:
+        f.write('[[gate]]\nid = "X"\ncmd = "bash scripts/A.py"\nexpect = 0\nkind = "light"\n'
+                'ci_advisoryX = "typo key must not silence the gap assertion"\n')
+    gaps_typo, _, _, _ = check(man, os.path.join(wfdir, "*.yml"))
+    expect("selftest-14 misspelled advisory key does NOT suppress gap", gaps_typo == [("A.py", "")])
+    with open(man, "w", encoding="utf-8") as f:
+        f.write('[[gate]]\nid = "Z"\ncmd = "bash scripts/C.py --gate"\nexpect = 0\nkind = "light"\n'
+                'ci_exemptX = "typo key must not silence MISSING"\n')
+    _g, _nb, _bl, miss_typo = check(man, os.path.join(wfdir, "*.yml"))
+    expect("selftest-15 misspelled exempt key does NOT suppress MISSING",
+           miss_typo == [("C.py", "--gate")])
     # 清单缺失 → check 返回 None（不可判定）
     expect("selftest-5 missing manifest -> None", check(os.path.join(tmp, "nope.toml"), wfdir) is None)
+    # 入口契约（F35）：未知旗标必须"没跑任何判据"并退 2，不能当作"没给旗标"而跑真对拍
+    expect("selftest-10 unknown flag is undecidable, no check ran", main(["--nope"]) == 2)
     import shutil
     shutil.rmtree(tmp, ignore_errors=True)
     print("=== selftest result:", "ALL PASS" if not fails else f"{len(fails)} FAIL", "===")
@@ -250,7 +303,7 @@ def mode_selftest():
 def mode_check():
     res = check(MANIFEST, WORKFLOWS_GLOB)
     if res is None:
-        print("[FAIL] gate_manifest not readable (undeterminable)")
+        print("[UNDECIDABLE] gate_manifest not readable —— 未执行任何对拍")
         return 2
     gaps, nonblock, blocking, missing = res
     print(f"[info] expect=0 gate scripts: {len(blocking)}; non-blocking-context scripts in CI: {len(nonblock)}")
@@ -267,6 +320,9 @@ def mode_check():
         print("        fail CI, so it protects nothing. Fix: add a blocking step in some")
         print('        workflow, or, if it is deliberately local-only, declare')
         print('        ci_exempt = "<reason>" in gate_manifest.toml.')
+        print('        If it IS wired but intentionally non-blocking (advisory perf probe),')
+        print('        declare ci_advisory = "<reason>" instead: the gate stays visible in')
+        print('        the ledger without pretending it can block a release.')
         return 1
     print("[OK] no parity gap: every closure-required gate runs blocking in CI")
     print("     and is actually wired into at least one workflow")
@@ -274,10 +330,19 @@ def mode_check():
 
 
 def main(argv):
+    # F35（F24/F29 同族）：除 --selftest 外的一切参数都必须被拒，而不是"当作没给"
+    # 顺手跑一次真对拍 —— 拼错旗标的人要的从来不是那份判定。
+    unknown = sorted({a for a in argv if a != "--selftest"})
+    if unknown:
+        print("usage: py -3 scripts/audit_gate_parity.py [--selftest]", file=sys.stderr)
+        print("[UNDECIDABLE] unknown argument(s): %s -- no check ran"
+              % " ".join(unknown), file=sys.stderr)
+        return 2
     if "--selftest" in argv:
         return mode_selftest()
     return mode_check()
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    import gate_rc  # 只在入口需要：崩溃必须退 2, 不得借 1 冒充"判过且红"（F32/F33）
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))

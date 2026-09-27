@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L10
+//! ROLE:     能力替代网络(CSN)— 能力降级链,在缺失时自动寻找替代实现
+//! BACKEND:  memory
+//! PRODUCERS: 2 CsnSubstitutionTriggered,McpMeshTransactionCompleted
+//! CONSUMERS: 0 -
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! 能力替代网络(CSN)— 能力降级链,在缺失时自动寻找替代实现
 //!
 //! 对应架构层:L10 Interface
@@ -65,6 +73,23 @@ use event_bus::{EventBus, EventMetadata, NexusEvent};
 
 use crate::similarity::cosine_similarity;
 
+/// 降级链推进结果 —— 把"需要动图"的三种后续从守卫作用域里带出来
+///
+/// WHY 存在这个类型:`DashMap` 的分片写锁不可重入,`remove`/`insert` 必须在
+/// `get_mut` 守卫释放**之后**执行;而推进路径有 4 种结局(成功/耗尽/其他失败/链不存在),
+/// 各自的后续动作不同。若不用显式判别式,就只能把动图调用写进守卫作用域内 ——
+/// 正是 `handle_quota_exhausted` 修复前的缺陷形态。
+enum ChainAdvance {
+    /// 推进成功,携带新的层级值
+    Level(u32),
+    /// 已到链尾:守卫释放后移除该链并结束本次处理
+    Exhausted,
+    /// 其他推进错误:守卫释放后 warn 并结束
+    Failed(CsnError),
+    /// 该 route_key 尚无链:守卫释放后按候选深度新建
+    Absent,
+}
+
 /// 配额耗尽降级处理(P1-1,ADR-068 M3 接线)— 自由函数供 listener 后台任务调用
 ///
 /// # 流程
@@ -75,7 +100,8 @@ use crate::similarity::cosine_similarity;
 /// 5. 发布 `CsnSubstitutionTriggered`(复用既有事件,append-only 零新变体)
 ///
 /// # 锁纪律
-/// 全部 DashMap 锁在语句级作用域内释放,不跨 .await 持锁(§4.4 反模式 1)。
+/// 全部 DashMap 锁在语句级作用域内释放,不跨 .await 持锁(§4.4 反模式 1);
+/// 且守卫存活期间**不得**再访问同一张图(分片写锁不可重入,见 `ChainAdvance`)。
 async fn handle_quota_exhausted(
     chains: &Arc<DashMap<String, DegradationChain>>,
     channel_registry: &ChannelAffinityRegistry,
@@ -103,25 +129,38 @@ async fn handle_quota_exhausted(
         return;
     };
     // 4. 推进通道降级链(chain_id = route_key;无则创建)
+    //    WHY 守卫只活在块内:DashMap 分片写锁不可重入 —— 守卫存活时对同一张图
+    //    调 remove/insert 会**自锁**(永久挂起,非 panic),`cargo check` 与
+    //    "持锁跨 .await"门都看不见它。取 `ChainAdvance` 判别式即为此;与同文件
+    //    advance_degradation 的块作用域写法一致。行为与修复前逐分支等价。
     let depth = candidates.len();
-    let level = if let Some(mut chain) = chains.get_mut(route_key) {
-        match chain.next_level() {
-            Ok(()) => chain.current_level() as u32,
-            Err(CsnError::ChainExhausted { .. }) => {
-                chains.remove(route_key);
-                return;
-            }
-            Err(e) => {
-                warn!(error = %e, "通道降级推进失败");
-                return;
-            }
+    let advance = {
+        match chains.get_mut(route_key) {
+            Some(mut chain) => match chain.next_level() {
+                Ok(()) => ChainAdvance::Level(chain.current_level() as u32),
+                Err(CsnError::ChainExhausted { .. }) => ChainAdvance::Exhausted,
+                Err(e) => ChainAdvance::Failed(e),
+            },
+            None => ChainAdvance::Absent,
         }
-    } else {
-        let levels: Vec<String> = (0..depth).map(|i| format!("level-{i}")).collect();
-        let chain = DegradationChain::new(route_key.to_string(), levels);
-        let level = chain.current_level() as u32;
-        chains.insert(route_key.to_string(), chain);
-        level
+    };
+    let level = match advance {
+        ChainAdvance::Level(level) => level,
+        ChainAdvance::Exhausted => {
+            chains.remove(route_key);
+            return;
+        }
+        ChainAdvance::Failed(e) => {
+            warn!(error = %e, "通道降级推进失败");
+            return;
+        }
+        ChainAdvance::Absent => {
+            let levels: Vec<String> = (0..depth).map(|i| format!("level-{i}")).collect();
+            let chain = DegradationChain::new(route_key.to_string(), levels);
+            let level = chain.current_level() as u32;
+            chains.insert(route_key.to_string(), chain);
+            level
+        }
     };
     // 5. 发布 CsnSubstitutionTriggered(复用既有事件;相似度 = 1 - 加权距离,注释说明语义)
     let event = NexusEvent::CsnSubstitutionTriggered {
@@ -356,9 +395,9 @@ impl CsnSubstitutor {
         // WHY:每次推进应返回不同的候选,Top-(N+1) 的第 N+1 个是新候选
         if candidates.len() >= top_k {
             Ok(candidates.remove(top_k - 1))
-        } else if !candidates.is_empty() {
+        } else if let Some(last) = candidates.pop() {
             // 候选不足:返回最后一个可用候选(避免降级链提前终止)
-            Ok(candidates.pop().expect("已检查非空"))
+            Ok(last)
         } else {
             Err(CsnError::NoSubstituteFound {
                 capability_id: original_id.to_string(),
@@ -633,6 +672,7 @@ impl CsnSubstitutor {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

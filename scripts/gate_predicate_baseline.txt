@@ -1,0 +1,45 @@
+# gate-predicate divergence register (Q15 / companion to ADR-186 proposal)
+#
+# WHAT THIS FILE IS: the known RULE-level disagreements between the two
+# hand-maintained dependency iron-law implementations
+#   scripts/check_dependency_rules.sh   (CI executes this one: ci.yml:89, G-08)
+#   scripts/check_dependency_rules.ps1  (local Windows twin, nobody runs it in CI)
+# adjudicated by scripts/check_gate_predicates_parity.py.
+#
+# WHY A REGISTER INSTEAD OF A FIX: these four are arity/idiom differences with no
+# effect on any verdict -- the executing side (.sh) and the twin reach the same
+# GAP sets on real workspace data. Deleting a line here is mandatory once the
+# twins converge (the gate reports STALE otherwise): registered debt must not
+# outlive the code it describes.
+#
+# DELIBERATELY NOT REGISTERED -- P3|Check A. That one is a genuine semantic
+# divergence (the .ps1 Check A is logically dead, its new predicate makes it a
+# strict subset of Check B) and it is what Q3 must adjudicate; see
+# docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md. Keeping it red is
+# the point: the alarm must not be laundered into a baseline line by the same
+# hand that is waiting for the ruling. Same reasoning as the 18 unregistered NEW
+# edges in dep_edge_freeze.txt.
+#
+# Format: one `ID|detail` per line, exact match against the gate's finding.
+# Discipline: only-decrease. A new divergence must be fixed in the same commit,
+# or registered here with a reason a reviewer can disagree with.
+
+# .sh C has an extra internal-config site ("layer map entry <x> has no layer")
+# that the twin lacks. .sh is the CI side, so nothing is unprotected in CI; the
+# debt is that a local .ps1 run under-reports. Converge by porting the site.
+P2|GAP-C emit sites .sh=4 .ps1=3
+
+# .ps1 needs an explicit `$null -eq $dep` guard when iterating a hashtable value
+# array; bash word-splitting cannot yield an empty element, so .sh has no such
+# guard. Language idiom, same verdict either way.
+P4|Check B skip-guards .sh=3 .ps1=4
+
+# .ps1 Check D parses the manifest line-by-line and `continue`s past the
+# [dependencies] section header; .sh delegates that to workspace_deps_of().
+# Same counted set, different plumbing.
+P4|Check D skip-guards .sh=0 .ps1=1
+
+# .ps1 Check E guards "crate absent from layerMap" and "crate absent from the
+# dep graph" up front (hashtable lookups throw on miss); .sh gets both for free
+# from layer_of() returning empty. The 2 extra lines are null-safety, not scope.
+P4|Check E skip-guards .sh=3 .ps1=5

@@ -210,10 +210,15 @@ pub struct RLExperience {
 
 impl RLExperience {
     /// 创建经验四元组（done=false，seam 由动作推导）
+    ///
+    /// # Panics
+    /// Route/Custom 等无固定 seam 的动作不适用本便捷构造，请改用结构体字面量
+    /// 显式指定 seam 字段——文档化 API 契约，超契约输入显式 panic 优于静默错值
+    /// （亦不依赖 expect）。
     pub fn new(state: RLState, action: RLAction, reward: f32, next_state: RLState) -> Self {
-        let seam = action
-            .seam_id()
-            .expect("接缝动作必须映射到 SeamId（Route/Custom 经验请显式构造 seam 字段）");
+        let Some(seam) = action.seam_id() else {
+            panic!("接缝动作必须映射到 SeamId（Route/Custom 经验请显式构造 seam 字段）");
+        };
         Self {
             state,
             action,
@@ -230,6 +235,7 @@ impl RLExperience {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
 

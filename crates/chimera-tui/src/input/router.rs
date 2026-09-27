@@ -222,7 +222,8 @@ impl InputRouter {
             //
             // WHY 补齐:评估报告 I-6 实锤 11 个面板无直达键,最坏需 Tab 循环 25 次
             // 或背下 `/panel <name>` 命令名。PS-3 已补 g7-g0(4 个业务面板),
-            // 本批再补 6 个(F4/F5/F9-F12)——**26 个注册面板至此全部有直达键**
+            // 本批再补 6 个(F4/F5/F9-F12)——**注册面板至此全部有直达键**
+            //   (面板清单以 FocusManager 注册表为准;新增面板必须同步补直达键,勿在此复述面板数)
             // (Chat 例外:经 `\` 互切视图可达,见 tests/direct_key_coverage_test)。
             KeyCode::F(1) => RouteTarget::PanelJump(PanelId::Quest),
             KeyCode::F(2) => RouteTarget::PanelJump(PanelId::Parliament),
@@ -366,6 +367,7 @@ impl InputRouter {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

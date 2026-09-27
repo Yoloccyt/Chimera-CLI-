@@ -328,4 +328,5 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import gate_rc  # entry-only: a crash must exit 2, never borrow 1 to fake "judged and red" (F32/F33)
+    sys.exit(gate_rc.run(main))

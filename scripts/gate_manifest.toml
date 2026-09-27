@@ -21,7 +21,7 @@ spec_ref = "R1-T4 / T5"
 cmd = "{python} scripts/check_perf_redlines.py --selftest"
 expect = 0
 kind = "light"
-note = "性能红线门有牙齿（未登记必红/幽灵登记必红/收紧未删债必红）"
+note = "性能红线门有牙齿（未登记必红/幽灵登记必红/收紧未删债必红）；断言条数由门自报, 台账不写死。入口契约亦在断言面内：未知旗标/用法/崩溃三态由 F18+F29+F30 锁定, rc 只承载 0/1/2 不承载计数"
 ci_exempt = "CI 经 check_perf_redlines.sh(G-03, ci.yml Perf redline step)执行等价判据;.py 直调为本地/收口形式"
 
 [[gate]]
@@ -73,7 +73,7 @@ spec_ref = "T2（同 commit 硬规则）"
 cmd = "{python} scripts/audit_commit_coupling.py"
 expect = 0
 kind = "light"
-note = "已跟踪执行体引用未跟踪文件的全集；在途批次已于 c5a5327 落地→耦合消解，按'各批落地后应归 0'从 1 翻为 0；若再现新未跟踪引用则重新变红"
+note = "已跟踪执行体引用未跟踪文件的全集；在途批次已于 c5a5327 落地→耦合消解，按'各批落地后应归 0'从 1 翻为 0；若再现新未跟踪引用则重新变红（2026-09-21 F32 批次即属此类：run_gate_manifest.py 新增 import gate_rc，消解条件＝同 commit 内 git add scripts/gate_rc.py）"
 ci_exempt = "收口审计项:未跟踪文件耦合核查,随批次落地归零时跑,非 PR 快轨"
 
 [[gate]]
@@ -180,7 +180,7 @@ cmd = "{python} scripts/verify_fmt_all_packages.py"
 expect = 0
 kind = "heavy"
 disk_gb = 0
-note = "逐包 cargo fmt --check（本机 cargo fmt --all 报 os error 206，所用聚合法）；44 包全部干净才算过"
+note = "逐包 cargo fmt --check（本机 cargo fmt --all 报 os error 206，所用聚合法）；覆盖面 = 门自报的 workspace 包数 + 全部**隔离 workspace**（如 fuzz/，`--all` 与 `-p` 都够不到，2026-09-24 前零守门）；包数不在本条登记，以门输出为准，全部干净才算过"
 ci_exempt = "收口审计项:全包 fmt 验证;PR 快轨已由 cargo fmt --check 覆盖,此项为收口全量复核"
 
 # C9 Top-K sort_by 例外登记表守护门（ADR-160 同族；此前登记无门，现补牙）。
@@ -201,7 +201,7 @@ spec_ref = "C9 / ADR-160"
 cmd = "{python} scripts/check_topk_registry.py"
 expect = 0
 kind = "light"
-note = "topk_sortby_freeze.txt 站点格式/无重复/不失效/裁决合规/只减不增（无 git 基线时棘轮自动待命）"
+note = "topk_sortby_freeze.txt 站点格式/无重复/不失效/裁决合规/只减不增（无 git 基线时棘轮自动待命）+ P-4 V-newsite 增量启发式：同线/≤2 行链的 sort-then-truncate 形态扫描（词法同源架构，cfg(test)/字符串不计），现值 4 形态冻结于 topk_sites_baseline.txt（均为 xts 范式内段二次排序），新站未登记必红/迁移后忘删必红/无基线时退 INFO 自激活"
 
 # WS-B 覆盖率门（审计 P0 #1）：真实 JSON 裁决在 nightly（coverage.yml），
 # 本地/PR 侧只跑零 cargo 的静态面（配置自洽 + 棘轮单调 + 门自身有牙）。
@@ -252,15 +252,15 @@ spec_ref = "架构重构方向 2 / 持锁跨 await"
 cmd = "{python} scripts/check_await_across_guard.py --selftest"
 expect = 0
 kind = "light"
-note = "持锁跨 await 门有牙齿（1 构造性违规必报；块作用域/spawn_blocking 闭包/取锁 await 三类假阳性必抑制）"
+note = "持锁跨 await 门有牙齿（构造性违规必报；块作用域/spawn_blocking 闭包/取锁 await 三类假阳性必抑制；同图重入规则正/负夹具齐备——含 drop(g) 与块作用域两种**推荐修法**不得被误判；豁免双表对拍夹具全绿）。夹具数由 --selftest 自报，不在此登记"
 
 [[gate]]
 id = "G-27"
-spec_ref = "架构重构方向 2 / 持锁跨 await"
+spec_ref = "架构重构方向 2 / 持锁跨 await + 同图重入"
 cmd = "{python} scripts/check_await_across_guard.py"
 expect = 0
 kind = "light"
-note = "生产代码零持锁跨 await（豁免经人工复核登记于 await_guard_allowlist.txt；失效条目必红，豁免不得比代码活得更久）"
+note = "生产代码零持锁跨 await（豁免经人工复核登记于 await_guard_allowlist.txt；失效条目必红，豁免不得比代码活得更久）；并机械复核与 lock_await_freeze.txt 的键集 1:1（F20，只对键不比对理由措辞）。第二条规则=DashMap 同图重入自锁（守卫存活时对同一张图 remove/insert）：该缺陷非类型错误、也不跨 .await，故 cargo check 与第一条规则都看不见；此规则**零容差且无登记册**——双表对拍的另一侧（bash 门）不检测这一类，登记进去等于伪造或必然陈旧，唯一出路是改码"
 
 # 组合根装配门（架构重构方向 B-c）。chimera-cli/src/composition.rs 是唯一合法
 # 装配点；2026-09-12 实测 9 处生产 EventBus::new 中 8 条命令路径绕过组合根
@@ -325,6 +325,25 @@ expect = 0
 kind = "light"
 note = "内部装配边 138 条冻结只减不增（新边未登记必红 / 失效行必红；优先 EventBus 而非新增直连边）"
 
+# 外环->内环直连边棘轮（ADR-187 / Q3 §4.2）：给 ADR-054“外环只能经 event-bus 依赖内环”
+# 这一当前无门的另一半上牙。only-decrease 冻结当前 9 条（组合根 chimera-cli /
+# nexus-app-server 豁免）；非 Check A 复活（那条管内环->base 且已塔缩为 Check B 子集）。
+[[gate]]
+id = "G-75"
+spec_ref = "ADR-187 / Q3 §4.2 外环->内环棘轮"
+cmd = "{python} scripts/check_outer_inner_ratchet.py --selftest"
+expect = 0
+kind = "light"
+note = "外环->内环棘轮门有牙齿（4 裁决用例 + 集合不相交守卫）"
+
+[[gate]]
+id = "G-76"
+spec_ref = "ADR-187 / Q3 §4.2 外环->内环棘轮"
+cmd = "{python} scripts/check_outer_inner_ratchet.py"
+expect = 0
+kind = "light"
+note = "外环->内环直连边 9 条冻结只减不增（新直连内环边必红；事件化/删除则收缩基线）"
+
 # 持锁跨 await 静态门 bash 单实现 + 文档计数漂移门（tower mission M3,路线图方向5后半+方向6）。
 # 与 G-26/G-27 同族互补:M3 交付物为 bash+awk 单实现(find|xargs|awk,无 python 依赖),便于
 # CI 与本地无 python 环境复跑;存量违规冻结口径与 await_guard_allowlist.txt 一致(采集行 1:1)。
@@ -343,7 +362,7 @@ spec_ref = "M3 / 架构重构路线图 方向5后半"
 cmd = "bash scripts/check_lock_await.sh"
 expect = 0
 kind = "light"
-note = "crates/*/src 全量持锁跨 await 裁决（未登记违规=红;冻结 11 条与 await_guard_allowlist.txt 同口径,只减不增）"
+note = "crates/*/src 全量持锁跨 await 裁决（未登记违规=红;本表与 await_guard_allowlist.txt 的键集 1:1 由 G-27 机械复核,只减不增;条数以门自报输出为准,不写死）"
 
 [[gate]]
 id = "G-36"
@@ -359,5 +378,467 @@ spec_ref = "M3 / 架构重构路线图 方向6"
 cmd = "bash scripts/check_doc_drift.sh"
 expect = 0
 kind = "light"
-note = "NexusEvent 变体/EventTopic 类/workspace crate 三计数:代码实测锚定 doc_count_freeze.txt(145/10/43,2026-09-12 实测);文档漂移未登记=红"
+note = "NexusEvent 变体/EventTopic 类/workspace crate 三计数:代码实测锚定 doc_count_freeze.txt(146/10/41,2026-09-20 重锁,router-traits 批次后);文档漂移未登记=红"
+
+# 双源"判据"对拍门（Q15，2026-09-21）。check_layer_map_parity（C10）只对拍两张
+# 数据表，看不见判据分歧：2026-09-18 一次标注 "FIXED 2026-09-18, ADR-XXX" 的改动
+# 只改了 .ps1 侧 Check A 的谓词（令其成为 Check B 的真子集而逻辑死亡），CI 跑的
+# .sh 侧完全无感——表对拍门对此全程静默。本门对拍 Check 名单/GAP 发射重数/谓词
+# 类别/skip 守卫重数/selftest 期望值 五项规则结构，已知分歧登记在
+# gate_predicate_baseline.txt（只减不增）。成对登记，先 selftest 证明门有牙。
+[[gate]]
+id = "G-38"
+spec_ref = "Q15 / ADR-187（Q3 α′ 裁决已落地 2026-09-24）"
+cmd = "{python} scripts/check_gate_predicates_parity.py --selftest"
+expect = 0
+kind = "light"
+note = "判据对拍门有牙齿（10 项：5 检测器 + 本门自身 3 类假阳性回归 + 基线抑制/失效两态）"
+ci_exempt = "元审计:双源规则结构对拍,收口时跑;CI 实跑体是 .sh 本身(G-08),.ps1 无 CI 调用方"
+
+# ★ RESOLVED 2026-09-24 (ADR-187, alpha-prime): the sole unregistered finding
+# P3|Check A (the semantic divergence .sh inner-ring no-layer-comparison vs .ps1
+# layer-guarded) is gone because Check A was retired from BOTH twins, so this
+# gate now legitimately expects GREEN (expect=0). Historically the red was the
+# alarm (registering it into the baseline would have laundered the very drift
+# this gate exists to catch, same discipline as dep_edge_freeze not swallowing
+# NEW edges). The 4 arity divergences stay registered in gate_predicate_baseline.txt
+# (shrink-only). Evidence: docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md
+[[gate]]
+id = "G-39"
+spec_ref = "Q15 / ADR-187（Q3 α′ 裁决已落地 2026-09-24）"
+cmd = "{python} scripts/check_gate_predicates_parity.py"
+expect = 0
+kind = "light"
+note = "双源判据对拍：Check A 已由 ADR-187（α′）从 .sh/.ps1 双侧退役，P3|Check A 分歧消除 ⇒ expect 由设计性红 1 翻 0；余 4 条 arity 差异仍按语言惯例登记于 gate_predicate_baseline.txt（只减不增）"
+ci_exempt = "同 G-38:元审计,收口时跑;Q3 已落地(α′),门转绿"
+
+# 文档"名单"门（F6，2026-09-21）。check_doc_drift 只钉基数（146/10/41），所以
+# CODE_WIKI §5.5 写出不存在的 `SecurityAuditCompleted`、把 `RouterStatsReported`
+# 写成 `RouterStatsUpdated` 时计数照绿——基数正确掩盖了枚举面腐烂。本门把表格行里的
+# PascalCase 类型名对拍 crates/ 全量标识符；存量 81 条不可证名全部登记为可见债
+# （scripts/doc_symbol_claim_baseline.txt，只减不增），新增未登记即红。
+# 键=符号名（非行号）：有意避开 F2 那条"行号键冻结表"结构性缺陷。
+# 先 --selftest 证牙（10 fixture：GAP/STALE/无理由/重复/prose 不误报/两类不可判定退 2），
+# 再真实裁决；真盘负控：往 doc 副本注入 TotailyMadeUpProbeType → GAP + EXIT=1 实测。
+[[gate]]
+id = "G-40"
+spec_ref = "F6 / 文档名单真实性"
+cmd = "{python} scripts/check_doc_symbol_claims.py --selftest"
+expect = 0
+kind = "light"
+note = "名单门有牙齿（未登记新名必红/静默修好未删行必红/缺理由必红/重复必红/prose 与跨 crate 引用不误报/缺 doc 或缺 crates 退 2）"
+ci_exempt = "元门:证明本门有牙的夹具,收口时跑;CI 侧接真实裁决(G-41)即可"
+
+[[gate]]
+id = "G-41"
+spec_ref = "F6 / 文档名单真实性"
+cmd = "{python} scripts/check_doc_symbol_claims.py"
+expect = 0
+kind = "light"
+note = "CODE_WIKI 表格行类型名逐一对拍 crates/（存量 81 条登记于 doc_symbol_claim_baseline.txt，Q14 纠偏一批即少一行）"
+ci_exempt = "待授权接 ci.yml（补丁见 docs/reports/ci-patch-approval-Q10-Q15-F3-2026-09-21.md）;文档门在 CONFIG-REFACTOR 落盘前保持本地/收口口径"
+
+[[gate]]
+id = "G-42"
+spec_ref = "F15 / 清单运行器自检"
+cmd = "{python} scripts/run_gate_manifest.py --selftest"
+expect = 0
+kind = "light"
+note = "环境故障分类器有牙：漏分类仍显示 MISMATCH(安全),误分类会藏真红(危险) ⇒ 正例+负例同等强制；F33 追加判决顺序夹具(expect=1 的门崩在解析期不得记 OK)。夹具条数以自报为准, 不写死"
+ci_exempt = "元门:证明本执行器不会把运行器故障读成门红;CI 侧已由清单本身间接覆盖"
+
+# ★ 入口契约家族门（F38，2026-09-21）。F30/F32/F35/F36/F37 五轮修的是同一张面，
+# 而承载判据的探针一直躺在 gitignore 的 tmp/ 里没人调用 ⇒ 前八轮修复没有回归通道。
+# 本门把探针提升为常驻判据：四族（rc-as-counter / crash-is-red / silent-default /
+# label-mismatch）一次性扫 scripts/*.py。已定性假阳性进 entry_contract_baseline.txt
+# （键 = file::族::函数名::规范化语句，**不含行号** ⇒ 有意避开 F2 行号键病），
+# 条目失配即报 STALE；负控已实测：植入四族缺陷 + 伪造基线行 → 5 命中 1 STALE EXIT=1。
+[[gate]]
+id = "G-43"
+spec_ref = "F38 / 入口契约面回归通道"
+cmd = "{python} scripts/check_entry_contract.py --selftest"
+expect = 0
+kind = "light"
+note = "扫描器自身有牙：四族各配正/负样本 + 论域判据夹具（C2 在门上是发现、在库脚本上不是）+ 键稳定性与基线三向拆分夹具；自检不过 ⇒ 真扫描拒绝出数退 2。夹具条数以自报为准, 不写死"
+ci_exempt = "元门:证明扫描器不自盲即可,真实裁决接 CI 的是 G-44(同 G-40/G-41 分工口径)"
+
+[[gate]]
+id = "G-44"
+spec_ref = "F38 / 入口契约面回归通道"
+cmd = "{python} scripts/check_entry_contract.py"
+expect = 0
+kind = "light"
+note = "四族全集扫描：未登记发现或基线 STALE ⇒ 1；论域(gate_manifest)/基线读不出或未知旗标 ⇒ 2。存量 1 条假阳性登记于 entry_contract_baseline.txt（C1 的「入口可达」是过近似: 可达≠流向退出码）"
+ci_exempt = "待授权接 ci.yml（同 G-41 口径，补丁见 docs/reports/ci-patch-approval-Q10-Q15-F3-2026-09-21.md）"
+
+# ★ F39（2026-09-21）：审计「CI 跑的判据 vs 清单登记的判据」两个集合，发现 CI-only 侧有
+# 6 个脚本从未进清单 ⇒ 台账「44 门全集」其实漏了 5 道真判据（第 6 个 audit_fnlen.py 只在
+# ci.yml 注释里出现，由 G-48 冒烟门代跑）。audit_gate_parity 只查「清单→CI」单向，
+# 查不出「CI→清单」的反向孤儿，所以这个盲区一直静默。以下 6 条即补齐登记。
+[[gate]]
+id = "G-45"
+spec_ref = "F39 / CI-only 孤儿门收编"
+cmd = "{python} scripts/check_layer_map_parity.py --selftest"
+expect = 0
+kind = "light"
+note = "层图对拍门有牙：fixture 注入证明「.ps1 层号改动 / .sh 名单丢项 / 未登记成员 / expected_crates 过期」四类都必红。CI 从 ci.yml:98 就在跑, 清单此前不知道；本机实测 EXIT=0"
+
+[[gate]]
+id = "G-46"
+spec_ref = "F39 / CI-only 孤儿门收编"
+cmd = "{python} scripts/check_layer_map_parity.py"
+expect = 0
+kind = "light"
+note = "十层映射 ↔ Cargo members 对拍（B0-6 清掉 auto-dpo/model-router 两个幽灵键后转绿；本条把它从「只有 CI 知道」变成台账可见）。本机实测 EXIT=0（2026-09-21）"
+
+[[gate]]
+id = "G-47"
+spec_ref = "F39 / CI-only 孤儿门收编"
+cmd = "bash scripts/check_slash_vocab.sh"
+expect = 0
+kind = "light"
+note = "斜杠命令与主流五家同名的 24 条存在性 + tier 抽查；单一事实源 slash_registry.rs。ci.yml:229 在跑, 清单此前不知道"
+
+[[gate]]
+id = "G-48"
+spec_ref = "F39 / CI-only 孤儿门收编"
+cmd = "bash scripts/test_fnlen_smoke.sh"
+expect = 0
+kind = "light"
+note = "「单函数 ≤200 行」红线**由本门同时承载工具防退化 + 判定**（2026-09-24 起）：① fixture 造一个 >200 行函数 + 一个干净函数, 断言 audit_fnlen.py 与 fn_scan.py 只检出前者；② `audit_fnlen.py --check` 对 scripts/fnlen_baseline.txt（only-decrease 登记册, 键 = path::fn + cap, 抗行号漂移）判 NEW/GROWTH/SHRINK/STALE, 实测 10 项全登记 ⇒ rc=0；③ 本门自带牙口检查（植入幽灵行必判 [STALE] 红、无理由行必判 rc=2），脚本级三条退出路径 0/1/2 均已实测走通。判定挂在此处而非新开门 ID：本脚本已在 ci.yml ⇒ 判定**零新增未接线债**。F39b 已把「解释器缺失」从退 1 改判退 2（本机无 python3 时属不可判定, 不得读成红线破了）。⚠ 入库前置：scripts/fnlen_baseline.txt 必须与 audit_fnlen.py 的 --check 代码路径同批提交, 缺登记册会主动退 2（宁可判不可判定, 不静默跳过红线）"
+
+[[gate]]
+id = "G-49"
+spec_ref = "F39 / CI-only 孤儿门收编"
+cmd = "bash scripts/check_repo_wiki_benchmark.sh"
+expect = 0
+kind = "heavy"
+disk_gb = 20
+note = "repo-wiki HNSW 10K benchmark 阈值断言（SLO: wiki_knn@100K p95 < 50ms 的 CI 快速侧）。需编译 + criterion 实跑, 本地由 CI 承担；阈值表见脚本头注释"
+ci_advisory = "ci.yml 以 continue-on-error 跑它(性能趋势探针, debug runner 波动大) ⇒ 登记为可见债而非阻塞门;升格为阻塞门需 Q33 授权"
+
+[[gate]]
+id = "G-50"
+spec_ref = "F39 / CI-only 孤儿门收编"
+cmd = "bash scripts/check_cli_startup.sh -r 20"
+expect = 0
+kind = "heavy"
+disk_gb = 25
+note = "CLI 冷启动 hyperfine 黑盒门槛（需 release binary + hyperfine + python3 三件前置, 本机 6.8GB 不可行）。bench_check.yml:453 在跑, 清单此前不知道"
+
+# --- 实现成熟度自述标签门（架构减法 B0-2, 设计方案 v2.30 §4）-----------------
+# 动机：`零 Stub` 判据此前只扫 `todo!()`/`unimplemented!()` 宏名，而本仓用
+# MOCK-ONLY / DEFERRED( / 伪实现 / 占位实现 等自述标签标注未完成代码，全部穿过
+# 该判据。本组门把"实现成熟度"从宏名判据换成可机检的 only-decrease 棘轮。
+[[gate]]
+id = "G-51"
+spec_ref = "架构减法 v2.30 §4 / B0-2 实现成熟度门"
+cmd = "{python} scripts/check_impl_maturity_claims.py --selftest"
+expect = 0
+kind = "light"
+note = "分类器有牙（8/8 计分标签全覆盖 + 6 类否定式/噪声抑制；四态裁决 new/grown/rotate/stale 各产一次；畸形基线退 2）"
+
+[[gate]]
+id = "G-52"
+spec_ref = "架构减法 v2.30 §4 / B0-2 实现成熟度门"
+cmd = "bash scripts/test_impl_maturity_smoke.sh"
+expect = 0
+kind = "light"
+ci_exempt = "bash-only smoke test (GNU toolchain + bash runner); its python twin check_impl_maturity_claims.py (G-51/G-53) is wired blocking in ci.yml, so the judged surface is executed in CI either way"
+note = "端到端反证：合成树跑真扫描路径，未登记标记必红 / 已登记必绿 / 空 allowance 必 STALE / 畸形基线必退 2（四断言各含消息内容校验，防对码错因）"
+
+[[gate]]
+id = "G-53"
+spec_ref = "架构减法 v2.30 §4 / B0-2 实现成熟度门"
+cmd = "{python} scripts/check_impl_maturity_claims.py"
+expect = 0
+kind = "light"
+note = "现势基线守住：108 处自述 WIP 标记 / 22 crate / 37 行棘轮（只减不增）；新增一个假实现即判红，删掉一处须同步下调基线"
+
+# --- 已退役 crate 悬空引用门（架构减法 B0-4, 设计方案 v2.30 §6 B0 / §3.3）------
+# 动机：批次 A（38c72e6）删 crate 时留下 4 处功能性悬空引用——fuzz/Cargo.toml
+# 的 path 依赖（使 `cargo check --manifest-path fuzz/Cargo.toml` 直接 EXIT=101）、
+# bench_check.yml 的 `cargo bench -p auto-dpo`（发布 tag 必红）、CODEOWNERS 三行
+# 死目录。本门把"退役必同 commit 清干净引用面"变成可机检的 only-decrease 账本。
+# 注释类历史注记按 DOCUMENT_LIFECYCLE_POLICY（历史只加注不改写）不计分。
+[[gate]]
+id = "G-54"
+spec_ref = "架构减法 v2.30 §6 / B0-4 退役爆炸半径"
+cmd = "{python} scripts/check_retired_crate_residue.py --selftest"
+expect = 0
+kind = "light"
+note = "合成仓库跑真扫描路径：4 类可执行引用(path-dep/symbol/cargo-flag/owners)各检出一次 + 注记与 .md 不计分 + 四态裁决 + 缺账本退 2"
+
+[[gate]]
+id = "G-55"
+spec_ref = "架构减法 v2.30 §6 / B0-4 退役爆炸半径"
+cmd = "{python} scripts/check_retired_crate_residue.py"
+expect = 0
+kind = "light"
+note = "现势账本 6 条（CODEOWNERS×3 / bench_check.yml auto-dpo / fuzz manifest path-dep / fuzz target symbol）只减不增；同键重复按出现次数计，植入第 7 条实测判红"
+
+# --- feature 门控装配实质门（架构减法 B0-1, 设计方案 v2.30 §4.1 / Q2 §4 方案2）---
+# 动机：check_crate_reachability.py 把"仅被 optional 边引用"判为 GATED，而 GATED
+# 曾被当作"已装配/已偿还"。本门要求门控有装配实质：≥1 处真 `cfg(feature=..)` 站点
+# + ≥1 个真开该 feature 的 CI job，否则记 DECORATIVE（开了也不改变任何行为）。
+# 采兄弟门而非改造可达性门：后者是 CI 在册的承重门且本工作树内已被他人改动。
+[[gate]]
+id = "G-56"
+spec_ref = "架构减法 v2.30 §4.1 / B0-1 GATED 装配实质"
+cmd = "{python} scripts/check_gated_wiring_substance.py --selftest"
+expect = 0
+kind = "light"
+note = "合成工作区产出 WIRED/PARTIAL/DECORATIVE/ORPHAN 四态；跨行 feature 数组完整解析（r2_island_repayment 跨 4 行，漏解析即假判 ORPHAN）；外部 optional 依赖不计分"
+
+[[gate]]
+id = "G-57"
+spec_ref = "架构减法 v2.30 §4.1 / B0-1 GATED 装配实质"
+cmd = "{python} scripts/check_gated_wiring_substance.py"
+expect = 0
+kind = "light"
+note = "现势账本 9 条债务 / 10 条 optional 内部边：7 DECORATIVE(r2_island_repayment 零 cfg) + 2 PARTIAL(r2_unfreeze 11 处 cfg 但 CI 从不启用) 只减不增；删一行账本实测判红"
+
+# --- crate 契约头门（架构减法 B0-5, 设计方案 v2.30 §4）------------------------
+# 动机：把「零 Stub」与「已装配」两句对外宣称变成每个 crate 头部一段可机检的
+# 声明。LAYER 取 scripts/check_dependency_rules.sh 的 layer_of()（唯一机器权威）,
+# CONSUMERS 取非 optional 生产依赖边（与可达性门同量纲）, MATURITY 复用成熟度门
+# 词表, ROLE 从 crate 自己的 //! 首行采集（41/41 有, 非代写）。
+# 落地方式：41 个 lib.rs 各插入 8 行 `//!` 内部文档注释（安装证据: 新增 328 行 /
+# 删除 0 行 / 非 //! 新增 0 行 / 行尾与 BOM 41/41 保真）。
+[[gate]]
+id = "G-58"
+spec_ref = "架构减法 v2.30 §4 / B0-5 crate 契约头"
+cmd = "{python} scripts/crate_contract.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具 8 断言：4 类派生字段对拍 + 5 枚植入缺陷(陈旧 LAYER/缺键/缺块/BOM 错位/CRLF 归一)必被挡 + 重装幂等"
+
+[[gate]]
+id = "G-59"
+spec_ref = "架构减法 v2.30 §4 / B0-5 crate 契约头"
+cmd = "{python} scripts/crate_contract.py --check"
+expect = 0
+kind = "light"
+note = "41/41 crate 的契约头与磁盘实测一致（改依赖面不改头即红）；刷新口令 --install 会重写派生行而保留 ROLE 人工修订"
+
+# --- path 依赖可解析门（架构减法 B0-3, 设计方案 v2.30 §6 B0）------------------
+# 动机：悬空的 `path = "..."` 使整份 manifest 无法解析，后果不是"某个 target 编译失败"
+# 而是"该 package 的一切 check/test/build 都做不了"。fuzz/Cargo.toml:61 自批次 A 起
+# 就指着已删的 crates/model-router ⇒ `cargo check --manifest-path fuzz/Cargo.toml`
+# 长期 EXIT=101，而 check_fuzz_config.sh 的"路径存在"只查 [[bin]] target 文件，一直报绿。
+[[gate]]
+id = "G-60"
+spec_ref = "架构减法 v2.30 §6 / B0-3 path 依赖可解析"
+cmd = "{python} scripts/check_manifest_path_deps.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具 6 断言：成员 manifest 确在扫描面内(曾漏 `crates/` 前缀只扫到 2/43) + [patch.*] 与 dev 表覆盖 + 合法/registry/[[bin]] 表不误报"
+
+[[gate]]
+id = "G-61"
+spec_ref = "架构减法 v2.30 §6 / B0-3 path 依赖可解析"
+cmd = "{python} scripts/check_manifest_path_deps.py"
+expect = 0
+kind = "light"
+note = "2026-09-23 红转绿：唯一悬空边 fuzz/Cargo.toml:61 → 已删 crate 已随 B5-① 消化（该 target 迁到活体后继面 mca-gateway spec_loader/CostGuard）。原为设计内红（发布阻断项），转绿后本行即普通阻塞门"
+
+# G-62/G-63 (2026-09-23, B0 追加)：契约头 CONSUMERS 面的"第二方法"对拍。
+# 动因：crate_contract --check 用与安装时同一个 manifest 解析器自证，双表声明
+# （[dependencies] + [dev-dependencies] 同名）被 last-wins 吞掉，导致 nexus-contracts
+# 的入度少计 2 而门仍绿。cargo metadata 是 cargo 自己对同一批 manifest 的读法。
+[[gate]]
+id = "G-62"
+spec_ref = "架构减法 v2.30 §4 / 契约面双方法对拍"
+cmd = "{python} scripts/check_contract_consumers_parity.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具 8 断言：跨行 optional 不当装配边 + target 作用域边须单独上报不当静默丢弃 + 丢边/造边两向都判红"
+
+[[gate]]
+id = "G-63"
+spec_ref = "架构减法 v2.30 §4 / 契约面双方法对拍"
+cmd = "{python} scripts/check_contract_consumers_parity.py"
+expect = 0
+kind = "light"
+note = "真树：41 成员 / cargo 138 边 == 解析器 138 边 / target 作用域内部边 0。出现 [PARSER-MISSING]/[PARSER-EXTRA]/[UNCOVERED] 即为契约面数据缺陷（本轮已借此修掉双表声明吞边，nexus-contracts 入度 32→34）"
+
+# G-64/G-65 (2026-09-23, 设计文档 §2.2 兑现)：分层/职责域/依赖图由脚本派生。
+# 本文档体系此前只有一张手画 ASCII 域图 —— §2.2 自己判定这种形状必然腐化。
+[[gate]]
+id = "G-64"
+spec_ref = "架构减法 v2.30 §2.2 派生视图（不维护手写第二张拓扑）"
+cmd = "{python} scripts/emit_architecture_views.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具 20 断言：层分配完整 / 两法边集一致 / 植入向上边必被 C3 抓 / 越带 crate 破基数闭合 / 盘上未分层 crate 必报 / 五种视图均可出图 / 契约汇总行数与成员数闭合（无契约者出 NO-CONTRACT 行而非被静默丢弃）；另有派生工件六项（--write 后 --verify 绿、连续两次 --write 逐字节相同即内容确定性、dot 首行是其自身语法的注释、手改派生物判红、还原后转绿、缺文件退 2 不退 0）"
+
+[[gate]]
+id = "G-65"
+spec_ref = "架构减法 v2.30 §2.2 派生视图（不维护手写第二张拓扑）"
+cmd = "{python} scripts/emit_architecture_views.py --check"
+expect = 0
+kind = "light"
+note = "真树：members=41 / layers=11 / domains=4 / 非 optional 内部边 138 / 向上边 0。任一分层缺失、基数不闭合或出现向上装配边即红"
+
+# 事件 emit 面门（架构减法 v2.30 §1.2「零 Stub 换成消费判据」的事件侧；ADR-188 决策 1 的
+# 机器可执行载体）。此前全库没有任何门断言"NexusEvent 变体还有人发得出来"——146 个变体、
+# registry 定级行、消费臂都会继续编译，退役一个 crate 把某事件的 emit 面清零时门表无感。
+# 语义边界（写进门头注释，也写进账本头）：判的是**本仓生产作用域内的构造点**；
+# NexusEvent 派生 serde(tag="type") Deserialize，故外部线帧仍可物化任一变体 ⇒
+# 本门的红**不构成删事件的理由**。测试夹具不计入：event-bus 的 variant_count_test 与
+# shard.rs 测试工厂会构造全部 146 个变体，计入即等于永不出红（2026-09-23 实测过这个陷阱）。
+[[gate]]
+id = "G-66"
+spec_ref = "架构减法 v2.30 §1.2 / ADR-188 决策 1"
+cmd = "{python} scripts/check_event_ownership.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具 14 断言：enum↔registry 基数闭合 / 构造-模式-测试态三分 / DEAD 不可登记 / STALE 双向 / 抹掉真生产者必判红"
+
+[[gate]]
+id = "G-67"
+spec_ref = "架构减法 v2.30 §1.2 / ADR-188 决策 1"
+cmd = "{python} scripts/check_event_ownership.py"
+expect = 0
+kind = "light"
+note = "真树：146 变体 = 133 有生产态构造 + 13 无（账本 event_ownership_baseline.txt 13 行；计数随事件增删漂移，现值以 check_event_ownership.py 自报为准、勿逐值追逐；首版曾误报 18，三枚假阳性见报告 §24.1）。新增未登记的零 emit 变体即红；账本行拿到真生产者后不删行亦红（实测两向：GAP-S 与 GAP-E 各翻红一次后逐字节还原）"
+
+# 配置样例派生门（架构减法 v2.30 §6 B5「配置样例修复」，agents.md §10.5 自 2026-09-22
+# 起挂🟡 的仓库工件项）。根因不是那 9 个字节，是仓库为一个已有唯一权威渲染
+# （config.rs::omega_yaml_template()，即 `chimera config init` 落盘的那份字符串）
+# 手抄了第二份：手抄必漂（本仓已有 .sh/.ps1 谓词、event_types.rs 镜像、层图三例前科）。
+# 所以样例改成**派生物**，由本门断言"仍是从模板派生的"，而不是承诺"我们会记得同步"。
+# 与类型对拍是第二authority：只比"两份手抄一致"抓不到两边同时错的段。
+# 三类不对称（详见脚本头）：漏段=红 / 幻影键=红 / 有默认值的标量漏写=NOTE 不判红。
+[[gate]]
+id = "G-68"
+spec_ref = "架构减法 v2.30 §6 B5 / agents.md §10.5"
+cmd = "{python} scripts/check_config_sample_parity.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具 11 断言：等值绿 / 9 字节注释桩红 / 漂移定位到行 / 样例缺失与模板改形各退 2 / --write 幂等 / 幻影键红 / 漏段红 / 标量漏写只出 NOTE。首版把 enable_strategy_cap（bool + serde(default) 根级标量）当成「缺第 15 段」判红，是量具的范畴错误——该假红由第 9/10 号夹具钉死"
+
+[[gate]]
+id = "G-69"
+spec_ref = "架构减法 v2.30 §6 B5 / agents.md §10.5"
+cmd = "{python} scripts/check_config_sample_parity.py"
+expect = 0
+kind = "light"
+note = "真树：examples/config.sample.yaml 与内嵌模板逐字等值（165 行 / 14 段；旧值 9 字节零配置项）。段集合与 ChimeraConfig 15 字段（14 段 + 1 标量）对拍通过，NOTE 记 enable_strategy_cap 未进模板（有默认值，仅损失可发现性）。样例被手改、模板改形认不出来或样例缺失即红（后者退 2）"
+
+# 派生架构视图的"仍是派生的"门（设计文档 §2.2「不维护手写第二张拓扑」的交付面）。
+# G-64/G-65 只保证脚本自身算得对；但"交付物"若只长在 stdout 上，等于没有工件——
+# 于是文档又会被迫手抄一份拓扑（本仓三例双源漂移的前科正是这么来的）。
+# 现在五份视图落 docs/architecture/views/（layers.txt / domains.txt / dependency.dot /
+# report.txt / layer_contracts.txt），本门逐字节对拍盘上物与派生文本；视图缺失退 2。
+[[gate]]
+id = "G-70"
+spec_ref = "架构减法 v2.30 §2.2 派生视图（交付物面）"
+cmd = "{python} scripts/emit_architecture_views.py --verify"
+expect = 0
+kind = "light"
+note = "真树：5 份派生视图与 --emit 逐字等值（layers 13 行 / domains 12 / dependency.dot 184 / report 2 / layer_contracts 42 = 1 横幅 + 41 成员，行数与 members 闭合）。内容刻意无时间戳（否则每次 --write 都自我判红），故 G-64 另钉「连续两次 write 字节相同」。手改任一份即红并点名文件与首个不一致行"
+
+# 代理指令面的 `path:line` 锚点完整性（设计文档 §8.1「量具自身静默失效」的对偶：
+# 锚点错了指令会主动把人引向不存在的文件，比不写更坏）。
+# 判定面刻意收窄：只判「能唯一解析到盘上某文件」的锚点（rooted 与 crate 相对简写），
+# 裸名（domain.rs:37）与多解简写一律记 advisory 不判红——本仓有多个 src/types.rs、两个
+# src/wal.rs，对它们判红就是拿猜测当判决。
+# 曾试做过「锚点旁声明的符号必须落在该行 ±3」的强判据：6 份文档实测 38 OK / 9 DRIFT /
+# 6 ABSENT，抽验 3 条「失败」全部是散文结构而非文档错误（bus.rs:48 指向 CRITICAL_MPSC_VARIANTS
+# 常量块而正文提及其判据函数；表格单元格里主语是 SparseMask、同格另提 OmniSparseMasks 属
+# 跨文件引用）。28% 假红的门一个月内就会被 continue-on-error 掉，比没有门更糟 ⇒ 主动放弃，
+# 理由写在这里以免有人重来一遍。
+[[gate]]
+id = "G-71"
+spec_ref = "架构减法 v2.30 §8.1 量具静默失效 / §6 B0"
+cmd = "{python} scripts/check_doc_pointer_integrity.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具断言（条数以 --selftest 末行自报为准，不在此登记）：rooted 锚绿 / crate 相对简写不得假红 / 植入死 crate 锚红 / 植入越界行红 / 裸名与多解只出 advisory（负对照）/ 缺失文档退 2（防「文件不在＝没毛病」的真空转）/ 登记放行绿 / 已修但留行判 STALE / 无原因行退 2 / 未登记新债红 / 台账缺失退 2 / 表格完整性：植入「正文行漏尾竖线」判红，两条负对照不得判红（单元格内转义竖线、围栏块里的 |---| ASCII 表）"
+
+[[gate]]
+id = "G-72"
+spec_ref = "架构减法 v2.30 §6 B0（指令面锚点卫生）"
+cmd = "{python} scripts/check_doc_pointer_integrity.py"
+expect = 0
+kind = "light"
+note = "真树判两件事（计数一律看它自报的 [SCAN] 行，不在此登记，避免又造一个会漂的数）：① 可唯一解析的 path:line 锚点必须文件在且行不越界，死锚/越界走 doc_pointer_residue.txt 的只减台账（现存 1 条：CODE_WIKI 引述已删 crate 的旧权威出处，属披露式历史）；裸名与多解只记 advisory 不判红。② GFM 表格列数完整性零容忍、**不设台账**：正文行列数与其表头不等即红（缺尾竖线在纯文本里看不见，只在渲染时把最后一格截掉，而这七份文件正是人与代理动手前先读的指令面）。已知边界：只认三个反引号围栏，波浪线围栏在七份面文档实测 0 处；真树植入仅验证了 dead-file，line-beyond 的牙口只在夹具内验证"
+
+[[gate]]
+id = "G-73"
+spec_ref = "架构减法 v2.30 §6 B0（测试面活性）"
+cmd = "{python} scripts/check_test_surface_liveness.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具断言 7 项（条数以 --selftest 末行自报）：植入 #![cfg(any())] 必判 MUTED / 子目录孤儿文件必判 NEVER_COMPILED / 未登记必红 / 登记后必绿 / STALE 必红 / target 数不足 30 判不可判定（退 2）/ 真树必须与登记表一致。第 2 项是修出来的：首版把孤儿夹具放在 tests/ 顶层，而顶层文件必被 Cargo 自动发现成 target ⇒ 该态从未被测到却报「自检通过」"
+
+[[gate]]
+id = "G-74"
+spec_ref = "架构减法 v2.30 §6 B0（测试面活性）"
+cmd = "{python} scripts/check_test_surface_liveness.py"
+expect = 0
+kind = "light"
+note = "检「注册了但不跑」两态（计数看它自报的 targets=/发现= 行，不在此登记）：MUTED = 某 [[test]] 源文件被 #![cfg(any())] 整 target 屏蔽；NEVER_COMPILED = tests/ 子目录里的 .rs 既非 target 也不被任何已编译文件的 mod/#[path] 到达。与 ignored_test_inventory_freeze.txt 分表：那边是「编译但不执行」，这边是「根本不参与编译」，cargo test 全绿对二者都无感。现存两笔债务（rhi_cg_validation 25 测试 + 其夹具 7 测试）登记在 scripts/test_surface_freeze.txt，处置待裁决（复活 vs 物理删除），见报告 §62"
+
+# rusqlite→spawn_blocking 词法门（四维深审 P-3，2026-09-25）：复用 check_await_across_guard 的
+# strip_noise+深度+offload 语境栈架构（仓内已验证先例，非被否决的正则启发式）；存量 3 笔
+# 真阳性基线只减不增；wrapper 名单（pool.rs with_*_async / repo-wiki with_read_conn）= spawn_blocking 同义。
+[[gate]]
+id = "G-77"
+spec_ref = "四维深审 P-3 / agents.md rusqlite 红线"
+cmd = "{python} scripts/check_sqlite_blocking.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具 14 项（末行自报）：async 裸 Connection::open→GAP；spawn_blocking/with_write_async 闭包内→不报；sync fn→不报；字符串/注释→不报；cfg(test) async 区→默认不报且 --include-tests 必报（首版双重 not in_test 门使 include 永为空操作，该夹具即其回归网）；基线行全登记→绿；删任一行→红；STALE→红；缺 allowlist→退 2"
+
+[[gate]]
+id = "G-78"
+spec_ref = "四维深审 P-3 / agents.md rusqlite 红线"
+cmd = "{python} scripts/check_sqlite_blocking.py"
+expect = 0
+kind = "light"
+note = "扫 7 个声明 rusqlite 的 crate（动态发现非硬编码）：async fn 体内、spawn_blocking 及其仓内同义 wrapper 闭包之外的 Connection::open*/execute*/query*/prepare* = 红；存量 3 笔真阳性（cmt-tiering 异步构造 2 + mlc 同步委托 1）登记 scripts/sqlite_blocking_allowlist.txt，只减不增，新 DB-in-async 必须走 spawn_blocking 而非加登记"
+
+# 红线 subscribe-before-spawn 词法门（四维深审 E-6 v2，2026-09-25）：与 P-3/G-77 同一 await-gate
+# 架构（strip_noise+深度+语境栈）。首版 naive 切片因 3/4 假阳被否决（§4.5）；本版经牙齿探针实测
+# 拓住同形漏报（单行 spawn{subscribe}）后修正。真树现值=零违例（builder TypeState+纪律已维持），
+# 基线空文件合法；未来新违规必红——门防的是回退，不是存量。
+[[gate]]
+id = "G-79"
+spec_ref = "四维深审 E-6 / §4.4 反模式 #3 subscribe-before-spawn"
+cmd = "{python} scripts/check_subscribe_order.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具 14 项（末行自报）：多行/单行 spawn 内 subscribe 均必报（单行形态是牙齿探针实测出的首版漏报，位置比较修正）；同线 subscribe→spawn 顺序合法；spawn 转发 callee 体不报(O2)；spawn_blocking 闭包不报(O3)；字符串/注释不报(O1)；cfg(test) 默认不报且 --include-tests 必报(O4)；allowlist 全登记→绿/删行→红/STALE→红/缺文件→退 2"
+
+[[gate]]
+id = "G-80"
+spec_ref = "四维深审 E-6 / §4.4 反模式 #3 subscribe-before-spawn"
+cmd = "{python} scripts/check_subscribe_order.py"
+expect = 0
+kind = "light"
+note = "全 workspace src 扫（~1262 文件）：tokio::spawn/spawn_local/Handle::spawn 闭包体内出现裸 .subscribe*() = 红（broadcast 不回放历史，晚订阅=丢触发事件）；现值零违例（基线空，--emit 可重取）；新代码必须把 subscribe 提到 spawn 前或用 TypeState builder，而非登记进 subscribe_order_allowlist.txt"
+
+# E-5 首片（四维深审 Phase 3，2026-09-25）：[workspace.lints] unwrap_used/expect_used=warn 基础设施
+# 惰性落地（未 opt-in crate 零影响）+ opt-in 棘轮门——存量 40/41 crate >5 处不可一把全开，
+# 故集合只增：登记⇔[lints]存在⇔实测0三方一致；首个 opt-in = router-traits（唯一 cfg(test) mock
+# unwrap 已改 poison-tolerant，clippy --all-targets 零告警）。
+[[gate]]
+id = "G-81"
+spec_ref = "四维深审 E-5 / workspace.lints 统一治理"
+cmd = "{python} scripts/check_lint_ratchet.py --selftest"
+expect = 0
+kind = "light"
+note = "夹具 5 项：opt-in 检测（[lints]+workspace=true 两行联合匹配）/ V1 登记但被掉 opt-in / V2 已 opt-in 但现值>0 / V3 opt-in 未登记 / 绿色全一致；三形态各抓一次，防门无牙"
+
+[[gate]]
+id = "G-82"
+spec_ref = "四维深审 E-5 / workspace.lints 统一治理"
+cmd = "{python} scripts/check_lint_ratchet.py"
+expect = 0
+kind = "light"
+note = "现值：41 crate 扫，opt-in 集=1（router-traits）⇔ ledger=1 ⇔ 全部实测 unwrap/expect=0；新 opt-in 必须先 cargo clippy -p <crate> --all-targets 零告警再入 lint_ratchet_crates.txt（同 commit），静默摘除/带脏入组均红"
+
+
 

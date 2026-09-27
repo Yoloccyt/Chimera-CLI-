@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L6
+//! ROLE:     Function-as-Expert 语义路由 — 工具即专家的语义化路由调度
+//! BACKEND:  memory
+//! PRODUCERS: 6 EntropyBalanced,ExpertRegistered,ExpertRouted,ExpertUnregistered,ParentSelected…
+//! CONSUMERS: 1 chimera-cli
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! Function-as-Expert 语义路由 — 工具即专家的语义化路由调度
 //!
 //! 对应架构层:L6 Router

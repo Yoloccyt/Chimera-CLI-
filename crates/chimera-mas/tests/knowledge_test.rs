@@ -7,6 +7,7 @@
 //! 4. 同僚互询脱敏(文件路径 / IP / 邮箱 / API key)
 //! 5. Wiki 检索上限(Top-K via select_nth_unstable + check_risk)
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,9 +38,11 @@ async fn test_expert_consult_success_within_sla() {
     let consultant = ExpertConsultant::new(bus.clone(), 4, 60);
 
     // mock 专家:订阅 AgentConsultRequested,收到后立即 publish AgentConsultResponded
+    // WHY 先 subscribe 再 spawn(§4.4 反模式 3):broadcast 不缓存历史,在任务内部订阅会让
+    //   首条 AgentConsultRequested 静默丢失;原先用 50ms sleep 抢时序,负载高时该测试 flaky。
     let bus_clone = bus.clone();
+    let mut rx = bus.subscribe();
     let mock_task = tokio::spawn(async move {
-        let mut rx = bus_clone.subscribe();
         // 等待 AgentConsultRequested
         while let Ok(event) = rx.recv().await {
             if let NexusEvent::AgentConsultRequested { to, .. } = &event {
@@ -55,9 +58,6 @@ async fn test_expert_consult_success_within_sla() {
             }
         }
     });
-
-    // 给 mock 任务时间启动订阅(§4.4 反模式 3:先 subscribe 再 publish)
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
     let result = consultant
         .consult("expert-1", ConsultUrgency::Critical)

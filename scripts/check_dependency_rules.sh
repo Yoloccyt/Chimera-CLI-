@@ -19,10 +19,20 @@
 #   layered_crates list, the .ps1 $layerMap, and Cargo.toml workspace.members
 #   (four-way lock; any single-sided drift fails the gate at PR time).
 # Scope:
-#   A. Inner-ring boundary   - the 9 inner-ring crates (memory + reasoning +
-#                              evolution ring) may only depend on the L0/L1 base
-#                              {nexus-contracts, nexus-core, event-bus,
-#                              model-router} plus the inner-ring whitelist itself.
+#   A. (RETIRED by ADR-187, 2026-09-24) The former "inner-ring boundary" check
+#                              is removed from BOTH twins. Root cause (see
+#                              docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md):
+#                              the inner/outer ring partition (ADR-054 d4) was
+#                              never implemented (CoreLoopEvent absent), and after
+#                              the 2026-09-18 .ps1 "fix" (phantom ADR-XXX) Check A
+#                              became a strict subset of Check B (zero unique
+#                              detections). The ten-layer law (agents.md 2.2)
+#                              permits L(N)->L(N-1) downward deps, so gsoe(L5)->
+#                              decay(L4) is lawful; Check A vetoed it with an
+#                              unimplemented goal. Reopen only when CoreLoopEvent
+#                              lands in event-bus/types.rs + inner-ring latency
+#                              criterion baseline + a real shared-state container
+#                              (see ADR-187).
 #   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
 #                              crate (see expected_crates); the 1-item ADR
 #                              exception table is exempted
@@ -72,17 +82,17 @@ esac
 layer_of() {
     case "$1" in
         nexus-contracts) echo 0 ;;
-        nexus-core|event-bus|model-router) echo 1 ;;
+        nexus-core|event-bus) echo 1 ;;
         nmc-encoder|hcw-window|mlc-engine) echo 2 ;;
         # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
         scc-cache|lsct-tiering|cmt-tiering|session-store) echo 3 ;;
         seccore|qeep-protocol|decay-engine) echo 4 ;;
-        repo-wiki|gsoe-evolution|auto-dpo) echo 5 ;;
+        repo-wiki|gsoe-evolution) echo 5 ;;
         # Phase 6 W0 层图订正 (2026-08-16, ADR-084): gea-activator 移 L9,
         # ssra-fusion 移 L7 — 与 crate 自述头及 AGENTS.md §2.1 对齐
         osa-coordinator|kvbsr-router|faae-router|sesa-router|omega-learner|router-traits) echo 6 ;;
         # P3-T9 (2026-08-27): nexus-subagent typed SubAgent runtime (L7, 43rd crate)
-        pvl-layer|gqep-executor|mtpe-executor|csn-substitutor|ssra-fusion|nexus-subagent) echo 7 ;;
+        pvl-layer|gqep-executor|mtpe-executor|ssra-fusion|nexus-subagent) echo 7 ;;
         # ADR-182 (2026-09-16, M10): acb-governor 退役删除, L8 余 parliament/decb-governor
         parliament|decb-governor) echo 8 ;;
         # P3-T2/T3 (2026-08-27): mas-sched peer scheduler + nexus-hook
@@ -90,7 +100,11 @@ layer_of() {
         quest-engine|efficiency-monitor|chimera-mas|gea-activator|mas-sched|nexus-hook) echo 9 ;;
         # WI-01 (2026-08-22): nexus-app-server host facade (L10, 39th crate)
         # mcp-mesh 2026-09-02 T10: 对齐文档 L10 归属(原脚本误置 L1)
-        chimera-cli|chimera-tui|chtc-bridge|mca-gateway|nexus-app-server|mcp-mesh) echo 10 ;;
+        # csn-substitutor 2026-09-24 B5: 对齐文档 L10 归属(原脚本误置 L7;方案 §2.4 裁决,
+        #   与 CODE_WIKI 层图/孤岛表/E08 映射/根 manifest 行内标注四处一致。
+        #   方向上惰性: 其内部依赖只有 nexus-contracts(L0)/event-bus(L1)/nexus-core(L1),
+        #   改层不翻转任何边 ⇒ 纯账面收口)
+        chimera-cli|chimera-tui|chtc-bridge|mca-gateway|nexus-app-server|mcp-mesh|csn-substitutor) echo 10 ;;
         *) echo "" ;;
     esac
 }
@@ -98,39 +112,23 @@ layer_of() {
 # All layered crates (static completeness bound for check C2).
 # Authority for layer numbers: $layerMap in check_dependency_rules.ps1 -- both
 # lists must stay identical (see DRIFT WARNING in the header).
-layered_crates="nexus-contracts nexus-core event-bus model-router mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache lsct-tiering cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution auto-dpo osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner router-traits pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
+layered_crates="nexus-contracts nexus-core event-bus mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache lsct-tiering cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner router-traits pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
-# 架构减法批次 (2026-09-20): +router-traits -> 43(与 .ps1 $expectedCrates 同步;
-# auto-dpo/model-router 历史层号条目保留供 selftest mock 基线)
-expected_crates=43
+# 架构减法批次 (2026-09-20): +router-traits -> 43
+# B0-6 (2026-09-20): auto-dpo / model-router 两个"历史层号条目"出表 —— 二者磁盘
+#   目录已删，留在生产层图里只让 check_layer_map_parity 判 map-only 漂移。
+#   原先"保留以支撑 selftest mock 基线"的理由经实测不成立：mock 图借用的
+#   model-router 已换成同为 L1 的现存 event-bus（见 mock_deps_of 注释），
+#   check_layer_map_parity.py 的 selftest 夹具本就用合成名 crate-NN。
+# 口径：此值必须等于 `Cargo.toml` workspace.members 实测数，勿硬编码追数。
+expected_crates=41
 
-# Inner-ring whitelist: 9 crates (memory + reasoning + evolution ring).
-# Three-ring reorganization target: inner ring talks via shared memory/direct
-# calls; it must never reach into the L2+ business outer ring.
-is_inner_ring() {
-    case "$1" in
-        mlc-engine|hcw-window|nmc-encoder|quest-engine|parliament|gea-activator|gsoe-evolution|auto-dpo|repo-wiki) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# L0/L1 base deps allowed for inner-ring crates. L0/L1 is the Core
-# infrastructure layer; ADR-054 decision 2 spirit allows the inner ring to
-# depend on ALL L0/L1 crates (only the L2+ business outer ring is forbidden).
-# auto-dpo (L5, inner) -> model-router (L1): legal L5->L1 downward edge AND an
-# ADR-171 T9 accepted pseudo-reachable production edge (ModelRouterJudgeClient).
-# ADR-172 (Accepted 2026-09-03) retired model-router's "cross-model routing
-# contract" status -- mca-gateway is the ONLY live LLM channel. The edge is KEPT
-# (ADR-160 visible-debt posture: crate frozen, not deleted); model-router stays
-# in this whitelist ONLY so the frozen edge stays green, NOT as a live-channel
-# grant -- new LLM consumers MUST anchor on mca-gateway (ADR-172 decision 2).
-# mcp-mesh is L10 (T10 realignment) so it is no longer an L0/L1 base dep.
-is_inner_base() {
-    case "$1" in
-        nexus-contracts|nexus-core|event-bus|model-router) return 0 ;;
-        *) return 1 ;;
-    esac
-}
+# Inner-ring whitelist (is_inner_ring) and L0/L1 base (is_inner_base) helpers
+# were removed together with Check A by ADR-187 (2026-09-24); they were used
+# ONLY by the retired inner-ring boundary check. The three-ring reorganization
+# intent stays documented as a NOT-ENFORCED design goal in agents.md 2.2/3.4.5,
+# not as a machine gate. KEEP IN SYNC with check_dependency_rules.ps1 ($innerRing
+# / $innerBase removed there in the same commit).
 
 # ADR exception table: exempted from check B.
 # WHY 只剩 1 条:gqep-executor(L7)->qeep-protocol(L4) 条目已于 wave 3c 收编移除
@@ -186,6 +184,10 @@ is_declared_dep() {
 # `name = { workspace = true }` refs (plain version refs are external).
 workspace_deps_of() {
     local crate="$1"
+    # 层图条目必须对应真实目录：条目比代码活得久时（crate 已退役但层号未清理），
+    # 这里会直接对不存在的 manifest 报错。跳过而非静默产出空列表，让 C3 反向
+    # 检查去显式暴露它。
+    [ -f "crates/$crate/Cargo.toml" ] || return 0
     # WHY `tr -d '\r'`: same CRLF fragility as above -- without it a CRLF manifest
     # yields an EMPTY dep list, so the crate is quietly never checked (false green,
     # strictly worse than a false red).
@@ -199,9 +201,12 @@ workspace_deps_of() {
 # SelfTest mode: embedded mock graph with deliberately constructed violations.
 mock_deps_of() {
     case "$1" in
-        mlc-engine) echo "nexus-core event-bus scc-cache" ;;        # GAP-A + GAP-B
+        mlc-engine) echo "nexus-core event-bus scc-cache" ;;        # GAP-B (upward; Check A retired by ADR-187)
         repo-wiki) echo "nexus-core event-bus ghost-crate" ;;       # GAP-C (undefined dep)
-        model-router) echo "nexus-core nmc-encoder" ;;              # GAP-B (L1 -> L2)
+        # GAP-B 夹具必须借用**现存** crate：曾用 model-router(L1) 承载此形状，
+        # 该 crate 已随 ADR-172 物理删除，借用已删 crate 会把层图生产表钉住
+        # （删条目即打断负控），故改用同样 L1 的 event-bus。
+        event-bus) echo "nexus-core hcw-window" ;;                  # GAP-B (L1 -> L2)
         gqep-executor) echo "nexus-core event-bus qeep-protocol" ;; # legal downward L7->L4 (no exemption needed since ADR-048 wave-3c retirement, ADR-185 D4)
         pvl-layer) echo "nexus-core event-bus seccore" ;;           # legal (feature-gated)
         nexus-contracts) echo "" ;;
@@ -222,7 +227,7 @@ deps_of() {
 # Crate universe: real crates/* dirs (normal) or mock crate list (selftest).
 all_crates() {
     if [ "$SELFTEST" = "1" ]; then
-        echo "mlc-engine repo-wiki model-router gqep-executor pvl-layer nexus-contracts chimera-tui"
+        echo "mlc-engine repo-wiki event-bus gqep-executor pvl-layer nexus-contracts chimera-tui"
     else
         for d in crates/*/; do
             [ -f "$d/Cargo.toml" ] || continue
@@ -238,19 +243,15 @@ run_checks() {
     local scan_disk="$1"   # "yes" normal mode (disk coverage), "no" selftest
     local crate dep layer dep_layer
 
-    # --- Check A: inner-ring boundary ---
-    # Only internal edges (dep with a layer) are audited; external workspace
-    # deps (tokio, serde, ...) are legal for inner-ring crates and are left to
-    # check C1 to validate their declaration.
-    for crate in $layered_crates; do
-        is_inner_ring "$crate" || continue
-        for dep in $(deps_of "$crate"); do
-            [ -n "$(layer_of "$dep")" ] || continue   # external dep, not an internal edge
-            if is_inner_base "$dep" || is_inner_ring "$dep"; then continue; fi
-            report+=("[GAP-A] $crate -> $dep violates inner-ring boundary (inner-ring crates may only depend on L0/L1 base + inner-ring whitelist)")
-            status=1
-        done
-    done
+    # --- Check A: RETIRED by ADR-187 (2026-09-24) ---
+    # The inner-ring boundary check was deleted from both twins here. Its
+    # detection surface collapsed into Check B (strict-subset after the 2026-09-18
+    # .ps1 "fix", zero unique detections) and it vetoed the lawful downward
+    # gsoe(L5)->decay(L4) edge using the never-implemented ring partition.
+    # Machine-proof of "green via removal, not relaxation": the selftest fixture
+    # mlc-engine(L2)->scc-cache(L3) is an UPWARD edge that Check B still flags,
+    # so deleting Check A loses no detectable violation class. Reopen conditions
+    # live in ADR-187; see gate-predicate parity gate (G-38/G-39) going expect=0.
 
     # --- Check B: upward dependency L(N) -> L(N+1) ---
     for crate in $(all_crates); do
@@ -365,9 +366,9 @@ run_checks() {
 if [ "$SELFTEST" = "1" ]; then
     # SelfTest mode: run the shared checks against the embedded mock graph.
     # Expected detection (see mock_deps_of comments):
-    #   GAP-A x1 (mlc-engine->scc-cache; repo-wiki->ghost-crate is an external
-    #             ref with no layer, so check A skips it and C1 reports it)
-    #   GAP-B x2 (mlc-engine->scc-cache, model-router->nmc-encoder)
+    #   GAP-A x0 (Check A retired by ADR-187; mlc-engine->scc-cache is now caught
+    #             by GAP-B alone -- the loss-0 machine proof)
+    #   GAP-B x2 (mlc-engine->scc-cache, event-bus->hcw-window)
     #   GAP-C x1 (repo-wiki->ghost-crate)
     #   GAP-E x1 (chimera-tui L10 -> pvl-layer L7; PS-2 2.2)
     run_checks "no"
@@ -376,13 +377,15 @@ if [ "$SELFTEST" = "1" ]; then
     gb="$(printf '%s\n' "${report[@]}" | grep -c '^\[GAP-B\]' || true)"
     gc="$(printf '%s\n' "${report[@]}" | grep -c '^\[GAP-C\]' || true)"
     ok=1
-    [ "$ga" -eq 1 ] || { ok=0; report+=("[SELFTEST] expected 1 GAP-A line (mlc-engine->scc-cache), got $ga"); }
-    [ "$gb" -eq 2 ] || { ok=0; report+=("[SELFTEST] expected 2 GAP-B lines (mlc-engine->scc-cache, model-router->nmc-encoder), got $gb"); }
+    # Check A retired (ADR-187): assert GAP-A is EMPTY (proves the check is gone)
+    # while GAP-B still catches mlc-engine->scc-cache + event-bus->hcw-window (2).
+    [ "$ga" -eq 0 ] || { ok=0; report+=("[SELFTEST] expected 0 GAP-A line (Check A retired by ADR-187), got $ga"); }
+    [ "$gb" -eq 2 ] || { ok=0; report+=("[SELFTEST] expected 2 GAP-B lines (mlc-engine->scc-cache, event-bus->hcw-window), got $gb"); }
     [ "$gc" -eq 1 ] || { ok=0; report+=("[SELFTEST] expected 1 GAP-C line (repo-wiki->ghost-crate), got $gc"); }
     ge="$(printf '%s\n' "${report[@]}" | grep -c '^\[GAP-E\]' || true)"
     [ "$ge" -eq 1 ] || { ok=0; report+=("[SELFTEST] expected 1 GAP-E line (chimera-tui->pvl-layer), got $ge"); }
-    printf '%s\n' "${report[@]}" | grep -q '\[GAP-A\] mlc-engine -> scc-cache' || { ok=0; report+=('[SELFTEST] missing GAP-A for mlc-engine -> scc-cache'); }
-    printf '%s\n' "${report[@]}" | grep -q '\[GAP-B\] model-router (L1) -> nmc-encoder' || { ok=0; report+=('[SELFTEST] missing GAP-B for model-router -> nmc-encoder'); }
+    printf '%s\n' "${report[@]}" | grep -q '\[GAP-B\] mlc-engine (L2) -> scc-cache' || { ok=0; report+=('[SELFTEST] missing GAP-B for mlc-engine -> scc-cache'); }
+    printf '%s\n' "${report[@]}" | grep -q '\[GAP-B\] event-bus (L1) -> hcw-window' || { ok=0; report+=('[SELFTEST] missing GAP-B for event-bus -> hcw-window'); }
     printf '%s\n' "${report[@]}" | grep -q 'undefined dependency <ghost-crate>' || { ok=0; report+=('[SELFTEST] missing GAP-C for undefined dep ghost-crate'); }
     printf '%s\n' "${report[@]}" | grep -q '\[GAP-E\] chimera-tui (L10) -> pvl-layer' || { ok=0; report+=('[SELFTEST] missing GAP-E for chimera-tui -> pvl-layer'); }
     # 合法/例外边不得报 gap:gqep-executor->qeep-protocol 为向下边(ADR-048 已于
@@ -415,7 +418,7 @@ done
 
 echo ""
 if [ "$status" -eq 0 ]; then
-    echo "[OK] dependency iron-law audit all pass (A inner-ring / B upward deps / C completeness / D mas dep bound / E L10 outbound)"
+    echo "[OK] dependency iron-law audit all pass (B upward deps / C completeness / D mas dep bound / E L10 outbound; A inner-ring retired by ADR-187)"
 else
     echo "[FAIL] dependency iron-law audit found gaps, see [GAP-*] lines above, fix and rerun"
 fi

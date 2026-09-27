@@ -47,7 +47,7 @@ def rustfmt(text: bytes) -> bytes | None:
 
 def main() -> int:
     if not RUSTFMT:
-        print("[FAIL] rustfmt not found on PATH")
+        print("[UNDECIDABLE] rustfmt not found on PATH —— 无法分类，非通过")
         return 2
 
     out = git("status", "--porcelain", "-uall").stdout.decode("utf-8", "replace")
@@ -105,4 +105,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import gate_rc  # 只在入口需要：崩溃必须退 2, 不得借 1 冒充"判过且红"（F32/F33）
+    sys.exit(gate_rc.run(main))

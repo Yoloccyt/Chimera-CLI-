@@ -1,0 +1,18 @@
+# gated_wiring_baseline.txt -- only-decrease ledger for check_gated_wiring_substance.py
+# Row = `dep|verdict` + "# reason". Generated 2026-09-23 from --emit (debt rows only).
+# Delete a row when the wiring lands (DECORATIVE->WIRED) or the optional edge goes away.
+#
+# 2026-09-24 cross-ref (零影响收敛主线 C): the per-island decision dossier for these
+# DECORATIVE/PARTIAL rows lives in docs/reports/arch-debt-islands-2026-09-24.md; their
+# retirement/wiring AUTHORITY is ADR-188 (does NOT authorize deletion this round).
+# Dependency-direction governance landed separately via ADR-187 (Check A retired;
+# gsoe-evolution->decay-engine registered in dep_edge_freeze.txt) -- NOT this file.
+chtc-bridge|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
+csn-substitutor|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
+decay-engine|PARTIAL  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
+mas-sched|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
+mtpe-executor|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
+nexus-hook|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
+omega-learner|PARTIAL  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
+sesa-router|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
+ssra-fusion|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化

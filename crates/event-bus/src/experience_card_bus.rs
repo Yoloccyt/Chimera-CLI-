@@ -28,7 +28,7 @@
 //! # 与 EventBus 的关系
 //!
 //! `ExperienceCardBus` 挂在 `EventBus` 之上作为**独立数据面**：
-//! - EventBus 承载系统状态变更的广播（NexusEvent 136 变体）
+//! - EventBus 承载系统状态变更的广播（`NexusEvent` 全量变体，清单以 `types.rs` 为准）
 //! - ExperienceCardBus 承载经验卡片的流式投递（高吞吐、可丢失语义分级）
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -238,6 +238,7 @@ impl Default for ExperienceCardBus {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use chrono::{DateTime, Utc};

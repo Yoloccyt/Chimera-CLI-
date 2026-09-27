@@ -3,8 +3,8 @@
 > **文档头元信息**
 >
 > - **生成时点**：2026-09-02
-> - **用途**：把三份根目录设计文档（`Chimera_CLI_v4.0_架构重构与算法优化一体化方案（六编重构终版）.md`、`Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md`、`Chimera_CLI_九源交叉融合彻底重构工程手册V1.0.md` 及 `Chimera_全模型亲和适配体系设计文档_v1.0.md`）的核心主张映射到现行 43-crate 代码库，作为「代码为准 + 映射表」融合落地的**唯一检索入口**。
-> - **权威基线**：v2.28.0-omega · **43 crates**（28 生产可达 + 14 冻结孤岛 + 1 GATED（mca-gateway，ADR-177））· **144 NexusEvent**（`event-bus/src/types.rs` 单表）· **可达性棘轮**。测试数**以实测为准**（工作区全量重测登记 11587 passed / 0 failed，2026-09-02 重测）。
+> - **用途**：把三份根目录设计文档（`Chimera_CLI_v4.0_架构重构与算法优化一体化方案（六编重构终版）.md`、`Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md`、`Chimera_CLI_九源交叉融合彻底重构工程手册V1.0.md` 及 `Chimera_全模型亲和适配体系设计文档_v1.0.md`）的核心主张映射到**现行代码库**（crate 数以 `Cargo.toml` `workspace.members` 为准），作为「代码为准 + 映射表」融合落地的**唯一检索入口**。
+> - **权威基线（指针制，本文件不登记计数）**：版本以 `Cargo.toml` `workspace.package.version` 为准，NexusEvent 以 `crates/event-bus/src/types.rs` 为准，可达性以 `bash scripts/check_crate_reachability.sh` 实时输出为准（2026-09-22 现测 = workspace 41 成员 / 生产可达 32 / 冻结孤岛 0 / feature-gated 9）。本文件**生成时点**为 v2.28.0-omega（当时记作 43 crates / 28 可达 + 14 孤岛 + 1 GATED / 144 事件）——**该组数字是历史点位，不得当现状读**。测试数以 `docs/reports/` 最新回归报告为准（生成时点登记 11587 passed / 0 failed，2026-09-02 重测）。
 > - **原则**：路径一律经 Grep/Glob 实际核实，以代码为准；未独立成 crate/module 的概念标注「经 ADR 否决/合入」或「缺失」，**不编造路径**。
 
 ---
@@ -23,16 +23,16 @@
 |---|---|---|---|---|---|
 | ComputeBridge / DetReduce（计算桥接/降维归约） | V4 §计算层 | `crates/nexus-core/src/compute/bridge.rs`、`crates/nexus-core/src/compute/reduce.rs`（`compute/` 下另有 `mod.rs`/`seam.rs`/`hts.rs`/`dispatch.rs`/`utilization.rs`） | 已落地 | 高 | — |
 | 分片总线 + ShardedBus + CBF（跨层信用流/背压/段性能） | V34 §事件总线 | `crates/event-bus/src/shard.rs`（分片）、`credit_flow.rs`（CBF）、`backpressure.rs`（背压）、`segment_per.rs`（段性能） | 已落地 | 高 | 144 事件双通道（broadcast + Critical mpsc）见 `bus.rs::is_critical_mpsc_event()` |
-| CSC 四级压缩 + ThinkingPreserve（层次压缩+推理保留） | V34 §记忆压缩 | `crates/hcw-window/src/compressor.rs`、`crates/hcw-window/src/pipeline.rs`、`crates/hcw-window/src/preserve.rs` | 已落地 | 高 | Ω₂-Compress；hcw 四级窗口 4K/32K/128K/1M |
+| CSC 四级压缩 + ThinkingPreserve（层次压缩+推理保留） | V34 §记忆压缩 | `crates/hcw-window/src/compressor.rs`、`crates/hcw-window/src/window.rs`（`HcwWindow`:90，四级窗口主体；无 pipeline.rs）、`crates/hcw-window/src/preserve.rs` | 已落地 | 高 | Ω₂-Compress；hcw 四级窗口 4K/32K/128K/1M |
 | HiLS（层次长短期记忆调度） | V34 §记忆调度 | `crates/hcw-window/src/hils.rs` | 已落地 | 高 | 与 recall/ 子模块协同 |
 | TSR × MoE（任务自路由×专家混合） | V4 §路由 | `crates/faae-router/src/tsr_moe.rs` + `crates/mas-sched/`（L9 调度面） | 已落地（TSR MoE）/部分（跨调度） | 中 | `mas-sched` = ADR-145，L9；`faae-router` 为 L6 |
 | CBMR 微批写（会话存储） | V4 §存储 | `crates/session-store/`（`src/{writer,segment,tree,replay}.rs`） | 已落地 | 高 | `session-store` = ADR-141，L3 |
 | PTC 并行工具协调 | V4 §工具编排 | `crates/nexus-contracts/src/tool_plan.rs`（`ToolPlan`/`ToolNode`/`ToolOp`/`guards`/`SideEffectDecl`） | 已落地 | 高 | 注：任务下发的默认提法「若不存在标注缺失」——经核实**存在**；契约层纯类型 |
-| SER 两阶段检索（粗排+精排） | V34 §知识检索 | `crates/repo-wiki/src/search.rs`、`src/vector/{memory_knn_store,hnsw_store}.rs`、`src/retrieval`（`agent_grep.rs`/`fts.rs`） | 已落地 | 高 | Ω₆-Reuse；repo-wiki 既有 FTS5 + HNSW 两段式 |
+| SER 两阶段检索（粗排+精排） | V34 §知识检索 | `crates/repo-wiki/src/search.rs`、`src/vector/{memory_knn_store,hnsw_store}.rs`、`src/fts.rs`、`src/agent_grep.rs`（repo-wiki 检索面） | 已落地 | 高 | Ω₆-Reuse；repo-wiki 既有 FTS5 + HNSW 两段式 |
 | 三因子父本选择（进化父本） | V4 §进化 | `crates/gsoe-evolution/src/three_factor_selector.rs` | 已落地 | 高 | Ω₃-Evolve |
 | AEGIS 四阶段（Planner/Evolver/Digester/Critic） | V34 §进化引擎 | `crates/gsoe-evolution/src/aegis/`（`mod.rs`/`planner.rs`/`evolver.rs`/`digester.rs`/`critic.rs`） | 已落地 | 高 | Ω₃-Evolve；AEGIS 四阶段引擎 |
 | 按需记忆合成（生成式记忆） | V34 §记忆合成 | `crates/mlc-engine/src/on_demand_synthesizer.rs` | 已落地 | 高 | 经核实路径存在；Ω₂ Mem-π |
-| 错误签名收集 | V4 §安全 | `crates/seccore/src/error_signature_collector.rs`（配套 `tests/error_signature_collector_test.rs`） | 已落地 | 高 | 经核实路径存在 |
+| 错误签名收集 | V4 §安全 | `crates/seccore/src/error_signature_collector.rs`（配套 `crates/seccore/tests/error_signature_collector_test.rs`） | 已落地 | 高 | 经核实路径存在 |
 | Paddock-Sandbox 解耦（沙箱/OS 后端/执行策略） | V9YS §沙箱 | `crates/seccore/src/paddock_sandbox.rs`、`os_backend.rs`、`execpolicy.rs`（配套 `sandbox.rs`/`sandbox_wasm.rs`/`gvisor.rs`） | 已落地 | 高 | UNLEARNABLE 红线 1：seccomp 不可降 |
 | 经验卡片（Experience Card） | V34 §经验沉淀 | `crates/event-bus/src/experience_card_bus.rs`（总线）+ `crates/pvl-layer/src/card_generator.rs`（卡片生成）+ `crates/nexus-contracts/src/experience_card.rs`（类型） | 已落地 | 高 | Ω₄-Event；三处成链（契约类型 → 生成 → 总线） |
 | Token Ledger / GIP（Token 账本/生成-输入平衡） | V4 §信用 | `crates/event-bus/src/token_ledger.rs` + `crates/nexus-contracts/src/token_evidence.rs` | 已落地 | 高 | 经核实均存在；credit/credit_flow 协同 |
@@ -45,7 +45,7 @@
 | 进化悖论 L4 形式化门 | V34 §进化 | `crates/gsoe-evolution/src/formal_gate.rs`、`src/formal/{mod,invariant_closure,critic_monotonicity,lineage_checker}.rs` | 已落地 | 高 | 进化悖论 L4 跃迁；R2 解冻影子期（ADR-053 rev4） |
 | 信用分配 SHARP / 三元分解奖励 | CAF §信用 | `crates/parliament/src/sharp.rs`、`src/mappo.rs` | 已落地 | 高 | Ω₅-Credit |
 | 关键路径动态识别（行为定位） | CAF §定位 | `crates/parliament/src/critical_path.rs` | 已落地 | 高 | Ω₇-Locate |
-| 变体隔离 + 停止策略 | CAF §保留 | `crates/chimera-mas/src/variant_pool.rs`、`crates/gsoe-evolution/src/checkpoint_preserver.rs` | 已落地 | 高 | Ω₉-Preserve |
+| 变体隔离 + 停止策略 | CAF §保留 | `crates/parliament/src/variant_pool.rs`（`VariantPool`，导出 `lib.rs:202`；ADR-051 明示 L8 子模块不新建 crate）、`crates/gsoe-evolution/src/checkpoint_preserver.rs` | 已落地 | 高 | Ω₉-Preserve |
 | 稀疏全维掩码 + 按需激活 | CAF §稀疏 | `crates/osa-coordinator/src/`、`crates/sesa-router/src/{activation,sparsity}.rs` | 已落地 | 高 | Ω₁-Sparse；sesa 稀疏激活 |
 | 全局模型亲和（MCA 体系） | CAF §亲和 | `crates/mca-gateway/`（L10） | 部分（feature 门控） | 中 | ADR-065~068；ADR-160 标注为 feature 门控孤岛，默认 binary 不含 |
 
@@ -53,7 +53,7 @@
 
 ## 2. 未落地 / 缺失项清单
 
-> 以下为文档设想但现行 43-crate 代码库中**无独立 crate 或独立模块**的项。均已按「经 ADR 否决并合入既有 crate」或「缺失」标注，**无编造路径**。
+> 以下为文档设想但现行代码库（2026-09-22 实测 41 crate，权威源 `Cargo.toml` `workspace.members`；43 为 v2.28.0 时点值）中**无独立 crate 或独立模块**的项。均已按「经 ADR 否决并合入既有 crate」或「缺失」标注，**无编造路径**。
 
 | 文档设想项 | 现状裁决 | 说明 |
 |---|---|---|

@@ -22,7 +22,7 @@
 
 use crate::config::ChimeraConfig;
 use anyhow::{Context, Result};
-use event_bus::EventBus;
+use event_bus::{logging::BusLogger, EventBus};
 use nexus_app_server::{AppServer, AppServerConfig, QuestBackend};
 use quest_engine::QuestEngine;
 use std::sync::Arc;
@@ -31,7 +31,7 @@ use std::sync::Arc;
 #[cfg(feature = "r2_unfreeze")]
 use decay_engine::ShadowModeCircuitBreaker;
 #[cfg(feature = "r2_unfreeze")]
-use gsoe_evolution::GsoeEvolutionEngine;
+use gsoe_evolution::{GsoeConfig, GsoeEvolutionEngine};
 
 /// 进化编排器 — 封装 evolve_with_formal_verification 主路径（R2 解冻阶段③ 前置）
 ///
@@ -108,6 +108,7 @@ pub struct AppContext {
     /// R2 解冻阶段③ 前置：进化编排器（封装 evolve_with_formal_verification 主路径）
     #[cfg(feature = "r2_unfreeze")]
     pub evolution_orchestrator: Option<EvolutionOrchestrator>,
+    /// 非 r2_unfreeze 构建下的字段占位(保持元组尺寸一致,无运行时足迹)
     #[cfg(not(feature = "r2_unfreeze"))]
     pub _evolution_orchestrator_placeholder: std::marker::PhantomData<*const u8>,
 }
@@ -136,7 +137,28 @@ pub struct AppContext {
 /// `#[tokio::test]`）满足此前置；同步上下文（如 proptest 闭包）须先建
 /// runtime 再 `block_on` 驱动（见 tests/composition_root_e2e.rs 范式）。
 pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
-    let bus = EventBus::new();
+    let mut bus = EventBus::new();
+    // O-1 (ADR-191 D1): 挂载 L1 BusLogger，激活全套 Prometheus 计数器。
+    // 此前 `EventBus::new()` 置 logger=None（bus.rs）⇒ logging.rs 指标生产死码。
+    // BusLogger 自带 per-instance Registry（非全局默认），多次构造不冲突；
+    // set_logger 为同步内联赋值，不影响后续 clone/&bus。指标导出(/metrics 或文件
+    // dump)为 D1 后续增量，本步先接线使计数器真实累加。
+    bus.set_logger(BusLogger::new("chimera-cli"));
+    // E-1 (ADR-191 D4): 可选 Critical WAL 持久化。默认关=保留 LogCriticalSink;
+    // 设 CHIMERA_CRITICAL_WAL_PATH 则把“无 mpsc 订阅者”的 Critical 事件 JSONL 落盘,
+    // 崩溃后 FileWalCriticalSink::replay 可审计(at-least-once)。走 env 而非新增
+    // ChimeraConfig 段:避免动 14 段 Figment 与 config_sample 门(正式 config 化留后续)。
+    if let Ok(wal_path) = std::env::var("CHIMERA_CRITICAL_WAL_PATH") {
+        match event_bus::FileWalCriticalSink::open(&wal_path) {
+            Ok(sink) => {
+                bus = bus.with_critical_fallback(Arc::new(sink));
+            }
+            Err(e) => tracing::warn!(
+                path = %wal_path, error = %e,
+                "Critical WAL 打开失败,回退 LogCriticalSink"
+            ),
+        }
+    }
     let engine = QuestEngine::new(bus.clone());
     // M12(ADR-185 D1/D3):gea + gqep 组合根装配——与 bus 同生命周期,
     // Arc 共享实例注入 mas orchestrator / doctor(非"构造即丢弃":
@@ -157,11 +179,13 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
     // M4-P2: C3 Critical 旁路注册上提为 build() 标准装配步骤（subscribe 在
     // engine 构造后、AppContext 移出前同步完成，§4.4 反模式 3 纪律）。
     spawn_critical_subscriber(&bus);
-    
+
     // R2 解冻阶段③ 前置：进化编排器装配（T3.1,feature-gated）
     #[cfg(feature = "r2_unfreeze")]
     let evolution_orchestrator = Some(EvolutionOrchestrator::new(
-        GsoeEvolutionEngine::default(),
+        // WHY 显式 `GsoeConfig::default()` 而非 `GsoeEvolutionEngine::default()`:
+        // 引擎未实现 Default(仅 new(GsoeConfig)),此前写法使 r2_unfreeze 分支从未编译通过。
+        GsoeEvolutionEngine::new(GsoeConfig::default()),
         ShadowModeCircuitBreaker::new(),
         bus.clone(),
     ));
@@ -248,6 +272,7 @@ pub fn build_mca_gateway() -> Result<mca_gateway::McaGateway> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_contracts::app::{AppEvent, AppOp, Item, ThreadStartParams, UserInput};

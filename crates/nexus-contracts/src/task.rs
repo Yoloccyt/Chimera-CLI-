@@ -5,7 +5,7 @@
 //!
 //! # 核心职责
 //!
-//! 承载 Task 节点的生命周期状态枚举(4 变体:Pending/Running/Completed/Failed)。
+//! 承载 Task 节点的生命周期状态枚举（成员清单以本文件 `TaskStatus` 定义为准，含取消/暂停态）。
 //! 原定义于 `nexus-core/src/types.rs`,被 65+ 文件依赖(L1 上帝 crate 病理),
 //! 下沉到 L0 共享契约层,供 L1-L10 所有上层 crate 直接导入。
 //!

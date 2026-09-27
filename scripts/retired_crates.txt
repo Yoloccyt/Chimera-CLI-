@@ -1,0 +1,3 @@
+auto-dpo       # 批次 A 38c72e6 物理删除（CODE_WIKI §3.12 唯一登记表）
+model-router     # 批次 A 38c72e6 物理删除（ADR-172 原登记退役，后由 38c72e6 物理删）
+acb-governor     # ADR-182 退役删除（Decay/DECB 承接预算面）

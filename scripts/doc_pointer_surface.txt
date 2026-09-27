@@ -1,0 +1,11 @@
+# doc_pointer_surface.txt -- documents whose `path:line` anchors are judged by
+# check_doc_pointer_integrity.py. Scope rule: "who reads it", not directory habit --
+# an agent that follows a dead anchor wastes a whole turn on a file that is not there.
+# Row = `doc-path # reason`. Delete the row to stop judging a document.
+agents.md  # root agent instruction file (always loaded)
+.qoder/rules/chimera.md  # derived rules copy, always_on
+.qoder/rules/chimera2.md  # derived rules copy, always_on
+.claude/CLAUDE.md  # project commands + release checklist
+.trae/rules/nuxus规则.md  # 速查规则, cited by the two files above
+docs/architecture/CODE_WIKI.md  # architecture authority source
+docs/architecture/CHIMERA_架构减法与职责重组设计方案_v2.30.md  # current batch deliverable

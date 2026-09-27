@@ -65,6 +65,18 @@ pub struct ErrorSignatureCollector {
     error_type_frequency: HashMap<String, u32>,
 }
 
+/// 编译内置模式正则。
+///
+/// # Panics
+/// 当 `pattern` 非法时 panic——所有调用点均为编译期字面量正则,
+/// 任何失败都是开发期缺陷(不变量契约),不存在运行期输入路径。
+fn compile_known_pattern(pattern: &str) -> Regex {
+    match Regex::new(pattern) {
+        Ok(re) => re,
+        Err(e) => panic!("内置正则非法(开发期缺陷): {e}"),
+    }
+}
+
 impl ErrorSignatureCollector {
     /// 创建收集器 — 注册 5 个已知模式正则
     pub fn new() -> Self {
@@ -72,29 +84,31 @@ impl ErrorSignatureCollector {
         let patterns: Vec<(Regex, String)> = vec![
             // 1. 编译错误: error[E0308]: mismatched types
             (
-                Regex::new(r"error\[(?P<type>E\d+)\]:\s*(?P<summary>.+)").expect("正则编译失败"),
+                compile_known_pattern(r"error\[(?P<type>E\d+)\]:\s*(?P<summary>.+)"),
                 "CompilationError".to_string(),
             ),
             // 2. 运行时 panic: thread 'main' panicked at src/x.rs:42, message
             (
-                Regex::new(r"thread '\w+' panicked at (?P<location>.+?),\s*(?P<summary>.+)")
-                    .expect("正则编译失败"),
+                compile_known_pattern(
+                    r"thread '\w+' panicked at (?P<location>.+?),\s*(?P<summary>.+)",
+                ),
                 "RuntimePanic".to_string(),
             ),
             // 3. 断言失败: assertion failed: xxx
             (
-                Regex::new(r"assertion failed:\s*(?P<summary>.+)").expect("正则编译失败"),
+                compile_known_pattern(r"assertion failed:\s*(?P<summary>.+)"),
                 "AssertionFailure".to_string(),
             ),
             // 4. 测试失败: test result: FAILED. 2 failed, 3 passed
             (
-                Regex::new(r"test result: FAILED\.\s*(?P<summary>\d+ failed, \d+ passed)")
-                    .expect("正则编译失败"),
+                compile_known_pattern(
+                    r"test result: FAILED\.\s*(?P<summary>\d+ failed, \d+ passed)",
+                ),
                 "TestFailure".to_string(),
             ),
             // 5. 超时: timeout after 5000ms
             (
-                Regex::new(r"timeout after (?P<duration>\d+ms)").expect("正则编译失败"),
+                compile_known_pattern(r"timeout after (?P<duration>\d+ms)"),
                 "Timeout".to_string(),
             ),
         ];
@@ -276,6 +290,7 @@ fn truncate_summary(s: &str) -> String {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

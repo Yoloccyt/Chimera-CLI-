@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L9
+//! ROLE:     nexus-hook — 生命周期 Hook 系统（P3-T3，v4.0 WI-24）
+//! BACKEND:  memory
+//! PRODUCERS: 0 -
+//! CONSUMERS: 0 -
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! nexus-hook — 生命周期 Hook 系统（P3-T3，v4.0 WI-24）
 //!
 //! 对应架构层: **L9 Quest**（ADR-146 裁决：D-P4 层归属定案——挂靠 Quest 生命周期）

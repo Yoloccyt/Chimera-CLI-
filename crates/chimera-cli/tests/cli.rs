@@ -6,6 +6,7 @@
 //! - 配置文件可被 Figment 加载
 //! - 默认配置非空
 
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -1166,7 +1167,7 @@ fn test_agent_spawn_parallel_creates_two_agents() {
 /// 即使配置文件缺失(WARN),doctor 命令仍返回成功(退出码 0)。
 /// 输出包含 9 项检查结果 + 汇总统计。
 #[test]
-fn test_doctor_executes_five_dimension_checks() {
+fn test_doctor_reports_all_probes_and_summary() {
     let bin = env!("CARGO_BIN_EXE_chimera");
     let output = std::process::Command::new(bin)
         .args(["doctor"])
@@ -1183,7 +1184,7 @@ fn test_doctor_executes_five_dimension_checks() {
         "stderr 应包含报告标题,实际 stderr: {}",
         stderr
     );
-    // 6 维度检查项名称(5 项原维度 + LLM Provider)
+    // 原始 5 维检查项名称(LLM Provider / WI-02 两维 / M13 一维见下方各自断言)
     assert!(
         stderr.contains("配置文件"),
         "stderr 应包含配置文件检查项,实际 stderr: {}",
@@ -1266,7 +1267,7 @@ fn test_doctor_json_outputs_report_envelope() {
         "stdout 应包含 status: ok,实际: {}",
         stdout
     );
-    // HealthReport 包含 checks 数组(5 项)
+    // HealthReport 包含 checks 数组
     assert!(
         stdout.contains("\"checks\""),
         "stdout 应包含 checks 字段,实际: {}",
@@ -1402,8 +1403,11 @@ fn test_help_output_contains_examples_section() {
 
 /// 测试 `chimera <subcommand> --help` 输出包含 EXAMPLES 段落(子命令级)
 ///
-/// 抽样验证 `run` / `quest` / `agent` 3 个子命令的 help 输出含 EXAMPLES 段落,
-/// 确保 12 个子命令均添加了 after_long_help 字段。
+/// 抽样验证 `run` / `quest` / `agent` 3 个子命令的 help 输出含 EXAMPLES 段落。
+///
+/// 注:这是**抽样**,不能据此推出"所有子命令都有 EXAMPLES"——`Commands` 变体数会随
+/// 新命令增长,而本测试的 `for` 列表不会自动跟上。全量口径以 `cli.rs` 各变体上是否
+/// 挂 `after_long_help` 属性为准(新增子命令时人工评审,见设计文档 §8 准入清单)。
 #[test]
 fn test_subcommand_help_contains_examples_section() {
     let bin = env!("CARGO_BIN_EXE_chimera");

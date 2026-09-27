@@ -4,6 +4,23 @@
 > # 🔖 档案化权威基线核准横幅（2026-09-02 追加，2026-09-06 核验刷新，历史文档只加注不改写；与本文件更下方 2026-08-30 的"执行完结状态横幅"互补，不叠加重复横幅）
 >
 > **档案化时点**：2026-09-02（2026-09-06 核验）
+>
+> ## ⚠ 2026-09-21 追加校正（取代下方横幅中所有过期条目）
+>
+> **A. Critical 事件口径两级纠正**：横幅称「"17 Critical"陈旧、现 13」——两个数都非现行。实测**两套不同口径**须分清：`severity()` 判为 Critical 的变体共 **18**（`crates/event-bus/src/bus.rs:55` `CRITICAL_TOTAL`），其中走 mpsc 旁路通道的为 **14**（`bus.rs:48` `CRITICAL_MPSC_VARIANTS`，权威清单 `bus.rs:107` `is_critical_mpsc_event()`），余 4 类仅走 broadcast。本文 §2.1 事实基线表「17 个 Critical **全部**列入 `is_critical_mpsc_event()`」在**事实与语义两处均错**（既非 17，也非「全部」）。
+>
+> **B. 计数不再逐值订正**：crate 数 **41**（非 43）、NexusEvent **146**（非 144）、ADR 至 **185**、`v2.28.0-omega` tag **已于 2026-09-06 推送**。现行值现取（`Cargo.toml` + `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md`）；按 `[CONFIG-REFACTOR-20260920]` 政策本文内部计数不再逐条追修。
+>
+> **C. 🔴 三个工作项落点已随退役失效，勿照单施工**：`model-router`（L1）、`auto-dpo`（L5）、`acb-governor`（L8）三 crate 已**物理删除**（批次 A 删前二者，`acb-governor` 按 ADR-182 删，证据 `Cargo.toml:215`）。因此：
+> - §6.3 provider seam 与依赖 **WI-06** 的落点（原挂 `model-router`）**已悬空**——需先裁决迁至 `mca-gateway` 还是 `router-traits`，否则 WI-06 无法执行；
+> - **WI-05** 若依赖 `acb-governor` 亦悬空；
+> - 文中把这三者作为**在役**事实的各处（约 298/302/305/328/333/368/379/427/667/932 行）应读作「批次 A 前状态」。
+>
+> **D. UP-01~27 / WI-xx 账本的可追溯性保留**：本文是该编号体系**唯一出处**，故不归档正文；但状态位须以 `docs/architecture/doc-roles-matrix.md` 与本校正块为准。批次 B 的 `router-traits` 现仅导出 `RouterConfig`（`crates/router-traits/src/config.rs:53`）与 `SparseMaskProvider`（`masks.rs:22`），生产消费者**仅 `osa-coordinator`**；`ZeroOrphanGuarantee`/`OrphanDetector` 已回退删除（`lib.rs:13` 注释），凡引用之的条目为**待实现**且需重新立项。
+>
+> **E. 依赖铁律现为红**：2026-09-21 现测 `scripts/check_dependency_rules.sh` → EXIT=1，失败项 `[GAP-A] gsoe-evolution -> decay-engine`（内环边界）；裁决在途 `docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md`。本文「实跑 EXIT=0 / 0 违规」类表述均为该时点快照。
+>
+> 下方 2026-09-02/06 横幅段保留为该时点核对记录。
 > **权威基线**：v2.28.0-omega（发布提交 af62e44 已落 2026-09-02，tag 待推）· 43 crates（28 生产可达 / 14 冻结孤岛 + 1 GATED（mca-gateway，ADR-177））· 144 NexusEvent（types.rs 单表，event_types.rs 镜像已退役）· 11,587 tests / 485 target（2026-09-02 重测，以实测为准）· ADR 主编号至 182（新编号段自 ADR-183 起）
 > **tag 事实订正**：v2.27.1-omega 本地与 origin 均无 tag（CHANGELOG-only 补丁），实际最新已发 tag = v2.27.0-omega
 >

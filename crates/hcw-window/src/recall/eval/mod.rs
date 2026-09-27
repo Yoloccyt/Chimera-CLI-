@@ -148,7 +148,11 @@ pub fn make_clv(seed: u64, topic: Option<&CLV>, topic_bias: f32) -> CLV {
             *val = topic_bias * t_slice[i] + (1.0 - topic_bias) * *val;
         }
     }
-    CLV::from_vec(v).expect("CLV dimension must be 512")
+    // v 按 CLV::DIMENSION 定长生成,维度不变量破坏属开发期缺陷→显式 panic
+    match CLV::from_vec(v) {
+        Ok(clv) => clv,
+        Err(e) => panic!("合成 CLV 应保持 512 维(不变量破坏): {e:?}"),
+    }
 }
 
 /// 语料构建器 — 确定性合成语料（P0 一期；二期替换为真实代码库切片）
@@ -374,6 +378,7 @@ pub fn needle_hit(selected: &[BlockId], needle: &BlockId) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

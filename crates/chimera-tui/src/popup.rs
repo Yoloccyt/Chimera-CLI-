@@ -377,16 +377,13 @@ fn value_to_lines(value: &serde_json::Value, indent: usize) -> Vec<Line<'static>
                 let mut value_lines = value_to_lines(v, indent + 2);
                 if value_lines.len() == 1 {
                     let mut spans = vec![Span::raw(key_prefix)];
-                    // WHY expect: len()==1 前置分支保证 next() 必命中（W3 健康度审计补论证）
-                    spans.extend(
-                        value_lines
-                            .into_iter()
-                            .next()
-                            .expect("len==1 前置分支保证非空")
-                            .spans,
-                    );
-                    spans.push(Span::raw(if is_last { "" } else { "," }));
-                    lines.push(Line::from(spans));
+                    // len()==1 前置分支保证 next() 必命中;漂移态整条跳过
+                    // (宁可少渲染一行 JSON 也不 panic;W3 审计补论证后改形)
+                    if let Some(only_line) = value_lines.into_iter().next() {
+                        spans.extend(only_line.spans);
+                        spans.push(Span::raw(if is_last { "" } else { "," }));
+                        lines.push(Line::from(spans));
+                    }
                 } else {
                     lines.push(Line::from(key_prefix));
                     if let Some(last) = value_lines.last_mut() {
@@ -833,6 +830,7 @@ impl PopupKind {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

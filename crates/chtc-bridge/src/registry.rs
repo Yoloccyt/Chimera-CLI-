@@ -59,7 +59,8 @@ impl IdeAdapterRegistry {
         let mut guard = self
             .factories
             .lock()
-            .expect("registry mutex poisoned(工厂注册时)");
+            // poison-tolerant(仓内惯用法):工厂 map 无不变量可破坏，恢复优于 panic
+            .unwrap_or_else(|e| e.into_inner());
         guard.insert(name, factory);
     }
 
@@ -71,19 +72,13 @@ impl IdeAdapterRegistry {
     /// 持锁时间极短;`Box<dyn Fn>` 无法 clone,无法在锁外调用。
     /// 这不违反 §4.4 #1(禁止持锁跨 .await)——factory 调用不含 .await。
     pub fn create(&self, name: &str) -> Option<IdeAdapterKind> {
-        let guard = self
-            .factories
-            .lock()
-            .expect("registry mutex poisoned(创建适配器时)");
+        let guard = self.factories.lock().unwrap_or_else(|e| e.into_inner()); // poison-tolerant，同上
         guard.get(name).map(|f| f())
     }
 
     /// 列出所有已注册 IDE 标识
     pub fn list(&self) -> Vec<&'static str> {
-        let guard = self
-            .factories
-            .lock()
-            .expect("registry mutex poisoned(列举 IDE 时)");
+        let guard = self.factories.lock().unwrap_or_else(|e| e.into_inner()); // poison-tolerant，同上
         let mut keys: Vec<&'static str> = guard.keys().copied().collect();
         keys.sort();
         keys
@@ -97,6 +92,7 @@ impl Default for IdeAdapterRegistry {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
     use crate::adapters::VscodeAdapter;

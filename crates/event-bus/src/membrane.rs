@@ -70,12 +70,14 @@ pub enum InnerLoad {
 /// 新增变体时编译器强制更新映射,避免遗漏导致未知分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventCategory {
-    /// Critical 安全/治理事件(11 个 severity()==Critical 变体)
+    /// Critical 安全/治理事件
     ///
-    /// spec.md L186 列出的 6 个 Critical 事件 + 代码 severity() 实际标记
-    /// Critical 的 11 个变体(CheckpointSaved/ConsensusReached/SlowConsumerDropped/
-    /// OrphanCallDetected/SkepticVeto/VetoOverridden/RedTeamAudit/BudgetExceeded/
-    /// AgentTaskFailed/AsaIntervention/FormalViolation(P1-5 升级))
+    /// WHY 不在此写变体数与名单:本类别与两个相邻集合**互不等价**——
+    /// `NexusEvent::severity() == Critical` 的集合、mpsc 旁路集合
+    /// (`is_critical_mpsc_event()`,锚常量 `bus.rs::CRITICAL_MPSC_VARIANTS`)、
+    /// 以及本文件 `classify` 里那条显式 arm 的 alternatives,三者规模各不相同且各自演进。
+    /// 成员资格的唯一权威是本文件 `classify` 的 match 分支本身(编译期穷尽性强制),
+    /// 背压级别以 `severity()` 为准;散文复述必然滞后(此处曾长期写着一个两头都不对的数)。
     Critical,
 
     /// 记忆写:修改记忆/上下文/能力分层状态(影响内环记忆一致性)
@@ -584,6 +586,7 @@ impl MembraneFilter {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::types::EventMetadata;

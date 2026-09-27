@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L5
+//! ROLE:     在线进化引擎 — GRPO 风格的引导式自组织在线进化
+//! BACKEND:  fs
+//! PRODUCERS: 5 EvolutionTriggered,FormalVerificationFailed,GsoePolicyUpdated,ShadowBreakerTripped,SpecRegistered
+//! CONSUMERS: 3 chimera-cli,chimera-mas,faae-router
+//! MATURITY: PLACEHOLDER-CN
+//! CRATE-CONTRACT END
 //! 在线进化引擎 — GRPO 风格的引导式自组织在线进化
 //!
 //! 对应架构层:L5 Knowledge

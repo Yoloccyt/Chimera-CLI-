@@ -1,4 +1,12 @@
-﻿//! nexus-subagent — 类型化 SubAgent 运行时 + Task Auction 市场（P3-T9，v4.0 WI-25）
+﻿//! CRATE-CONTRACT BEGIN
+//! LAYER:    L7
+//! ROLE:     nexus-subagent — 类型化 SubAgent 运行时 + Task Auction 市场（P3-T9，v4.0 WI-25）
+//! BACKEND:  memory
+//! PRODUCERS: 0 -
+//! CONSUMERS: 1 nexus-app-server
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
+//! nexus-subagent — 类型化 SubAgent 运行时 + Task Auction 市场（P3-T9，v4.0 WI-25）
 //!
 //! 对应架构层: **L7 Execution**（ADR-148 裁决：D-P5 层归属定案——执行层，同一引擎换参数）
 //! 对应任务: **P3-T9**（手册 W17-18，WI-25：3 类型 + Arena + 禁嵌套 + 竞价）

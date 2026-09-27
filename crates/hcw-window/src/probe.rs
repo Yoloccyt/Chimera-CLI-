@@ -123,7 +123,12 @@ pub fn mix_probe(query_clv: &CLV, recent_dialogue: &[CLV]) -> CLV {
     for v in acc.iter_mut() {
         *v /= n;
     }
-    CLV::from_vec(acc).expect("CLV dimension must be 512")
+    // 维数不变量:acc 逐元素累加自等宽的 CLV 切片,长度恒为 CLV::DIMENSION;
+    // from_vec 失败仅可能源于维度漂移(开发期缺陷),显式 panic 保留诊断信息
+    match CLV::from_vec(acc) {
+        Ok(clv) => clv,
+        Err(e) => panic!("均值池化应保持 512 维(不变量破坏): {e:?}"),
+    }
 }
 
 /// 探针质量检测结果 — 异常时调用方回退 Static 路径（R13 降级必告知）
@@ -253,6 +258,7 @@ impl ScoreCache {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

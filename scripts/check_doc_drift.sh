@@ -148,14 +148,20 @@ load_freeze() {
 # Doc declaration anchors: "current truth" spots that must carry the locked
 # value. EREs are deliberately precise so version-history mentions of old
 # counts (CHANGELOG-style "v2.27.0 had 144") do NOT match.
+# WHY anchored on the facts baseline and not agents.md: the
+# [CONFIG-REFACTOR-20260920] batch retired in-place counts from the rule docs
+# (policy: counts are referenced, never duplicated, so rule files stop drifting
+# on every version bump). The two agents.md anchors therefore rusted away, so
+# they were repointed at docs/reports/DOC-AUDIT-FACTS_*.md §11, which is the
+# designated document-side declaration spot. EREs must not contain '|'.
 # ---------------------------------------------------------------------------
 DECLS=(
-    'agents.md|nexus_event_variants|定义 [0-9]+ 个 `NexusEvent` 变体'
+    'docs/reports/DOC-AUDIT-FACTS_2026-09-20.md|nexus_event_variants|定义 [0-9]+ 个 `NexusEvent` 变体'
     'crates/event-bus/src/topic.rs|nexus_event_variants|全部 [0-9]+ 个 NexusEvent 变体'
     'crates/event-bus/src/topic.rs|event_topic_variants|[0-9]+ 类 EventTopic'
     'crates/event-bus/src/topic.rs|event_topic_variants|全部 [0-9]+ 个 topic'
     'crates/event-bus/src/pattern_index.rs|event_topic_variants|[0-9]+ 类 EventTopic'
-    'agents.md|workspace_crates|Workspace × \*\*[0-9]+ crates\*\*'
+    'docs/reports/DOC-AUDIT-FACTS_2026-09-20.md|workspace_crates|Workspace × \*\*[0-9]+ crates\*\*'
 )
 
 # ---------------------------------------------------------------------------
@@ -303,7 +309,7 @@ update_baseline() {
 selftest() {
     local fx
     fx="$(mktemp -d)"
-    mkdir -p "$fx/crates/event-bus/src" "$fx/scripts"
+    mkdir -p "$fx/crates/event-bus/src" "$fx/scripts" "$fx/docs/reports"
 
     cat > "$fx/crates/event-bus/src/types.rs" <<'RS'
 //! fixture types
@@ -340,7 +346,7 @@ members = [
     "crates/gamma",
 ]
 TOML
-    cat > "$fx/agents.md" <<'MD'
+    cat > "$fx/docs/reports/DOC-AUDIT-FACTS_2026-09-20.md" <<'MD'
 # fixture rules
 - 技术栈 | Workspace × **3 crates**(fixture) |
 - 当前: event-bus 定义 3 个 `NexusEvent` 变体(types.rs 单表)。
@@ -363,8 +369,9 @@ FRZ
         echo "[SELFTEST] all-green fixture -> [OK] (rc=0)"
     fi
 
-    # 2) unregistered drift -> 1 (nexus declared 9 in agents.md)
-    sed -i 's/定义 3 个 `NexusEvent` 变体/定义 9 个 `NexusEvent` 变体/' "$fx/agents.md"
+    # 2) unregistered drift -> 1 (nexus declared 9 in the facts baseline doc)
+    sed -i 's/定义 3 个 `NexusEvent` 变体/定义 9 个 `NexusEvent` 变体/' \
+        "$fx/docs/reports/DOC-AUDIT-FACTS_2026-09-20.md"
     out="$(CHECK_DOC_DRIFT_ROOT="$fx" CHECK_DOC_DRIFT_FREEZE="$fx/scripts/doc_count_freeze.txt" \
            run_check 2>&1)" && rc=0 || rc=$?
     if [ "$rc" -ne 1 ] || ! printf '%s\n' "$out" | grep -q 'unregistered drift'; then
@@ -374,7 +381,7 @@ FRZ
     fi
 
     # 3) registered drift -> 0 with WARN
-    printf '%s\n' 'drift = agents.md | nexus_event_variants | 9' >> "$fx/scripts/doc_count_freeze.txt"
+    printf '%s\n' 'drift = docs/reports/DOC-AUDIT-FACTS_2026-09-20.md | nexus_event_variants | 9' >> "$fx/scripts/doc_count_freeze.txt"
     out="$(CHECK_DOC_DRIFT_ROOT="$fx" CHECK_DOC_DRIFT_FREEZE="$fx/scripts/doc_count_freeze.txt" \
            run_check 2>&1)" && rc=0 || rc=$?
     if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -q 'registered drift'; then
@@ -384,7 +391,8 @@ FRZ
     fi
 
     # 4) doc fixed but registry line left behind -> stale -> 1
-    sed -i 's/定义 9 个 `NexusEvent` 变体/定义 3 个 `NexusEvent` 变体/' "$fx/agents.md"
+    sed -i 's/定义 9 个 `NexusEvent` 变体/定义 3 个 `NexusEvent` 变体/' \
+        "$fx/docs/reports/DOC-AUDIT-FACTS_2026-09-20.md"
     out="$(CHECK_DOC_DRIFT_ROOT="$fx" CHECK_DOC_DRIFT_FREEZE="$fx/scripts/doc_count_freeze.txt" \
            run_check 2>&1)" && rc=0 || rc=$?
     if [ "$rc" -ne 1 ] || ! printf '%s\n' "$out" | grep -q 'stale registry entry'; then
@@ -392,7 +400,7 @@ FRZ
     else
         echo "[SELFTEST] stale registry entry -> rc=1 (forces same-PR cleanup)"
     fi
-    sed -i '/^drift = agents.md/d' "$fx/scripts/doc_count_freeze.txt"
+    sed -i '/^drift = docs\/reports\//d' "$fx/scripts/doc_count_freeze.txt"
 
     # 5) code drift -> 1; --update-baseline re-locks; doc then mismatches -> 1
     sed -i 's/    Gamma,/    Gamma,\n    Delta,/' "$fx/crates/event-bus/src/types.rs"

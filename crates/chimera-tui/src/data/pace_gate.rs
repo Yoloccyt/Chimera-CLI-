@@ -215,11 +215,14 @@ impl PaceGate {
     pub fn drain_due(&mut self, now: Instant) -> Vec<CommitUnit> {
         let mut out = Vec::new();
         while let Some(front) = self.pending.front() {
-            if front.ready_at <= now {
-                out.push(self.pending.pop_front().expect("front checked").unit);
-            } else {
+            if front.ready_at > now {
                 break;
             }
+            // front 刚确认非空,pop 理论必命中;漂移态终止循环(保守,无 panic 面)
+            let Some(popped) = self.pending.pop_front() else {
+                break;
+            };
+            out.push(popped.unit);
         }
         out
     }
@@ -299,6 +302,7 @@ impl PaceGate {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -470,6 +474,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod proptests {
     use super::*;
     use proptest::prelude::*;

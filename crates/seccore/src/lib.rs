@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L4
+//! ROLE:     零信任执行核心 — SecCore
+//! BACKEND:  fs
+//! PRODUCERS: 5 AsaIntervention,AuditLogged,ErrorSignatureMatched,SandboxViolation,SecurityInterceptionReported
+//! CONSUMERS: 4 chimera-cli,gqep-executor,nexus-hook,pvl-layer
+//! MATURITY: DEFERRED|NOT-IMPL-CN|PLACEHOLDER-CN
+//! CRATE-CONTRACT END
 //! 零信任执行核心 — SecCore
 //!
 //! 基于 gVisor + seccomp 的沙箱化命令执行(Linux 生产环境),

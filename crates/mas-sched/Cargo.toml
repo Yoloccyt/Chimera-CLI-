@@ -27,3 +27,8 @@ serde_json = { workspace = true }
 proptest = { workspace = true }
 # 测试用时间控制(定时任务时间操纵)
 tokio = { workspace = true, features = ["full", "test-util"] }
+
+# E-5 第二例 opt-in：生产码 unwrap/expect 实测 0（唯 8 处在两个 cfg(test) mod，
+# 已按惯用法 mod 级 allow）；由 check_lint_ratchet.py 棘轮守护。
+[lints]
+workspace = true

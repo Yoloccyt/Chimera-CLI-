@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L9
+//! ROLE:     长期任务引擎 — Quest 分解、检查点持久化与思考模式治理
+//! BACKEND:  fs
+//! PRODUCERS: 21 BudgetAdjusted,CacheHit,CheckpointLoaded,CheckpointSaved,CoordinationRatioReported…
+//! CONSUMERS: 2 chimera-cli,nexus-app-server
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! 长期任务引擎 — Quest 分解、检查点持久化与思考模式治理
 //!
 //! 对应架构层:L9 Quest

@@ -147,13 +147,18 @@ async fn stream_quest(
     cfg: &OrchestratorConfig,
     session_id: &str,
     query: &str,
+    parent: &EventMetadata,
 ) {
     let sid = session_id.to_string();
+    // O-4: 继承入请求 TuiChatSubmitted 的 trace_id（child_of）；下游 4 事件再 child_of 本 root，
+    // 使“提交→分解→chunk→完成”整条交互链共享同一 trace（若上游未带 trace 则此处锚定为根）。
+    let mut root_meta = EventMetadata::child_of(parent, SOURCE);
+    root_meta.ensure_trace_id();
 
     // 1. 进入思考态(分解期间面板显示 Thinking 指示器)
     let _ = bus
         .publish(NexusEvent::TuiChatStatusChanged {
-            metadata: EventMetadata::new(SOURCE),
+            metadata: EventMetadata::child_of(&root_meta, SOURCE),
             session_id: sid.clone(),
             status: ChatStatus::Thinking,
         })
@@ -202,7 +207,7 @@ async fn stream_quest(
         let batch_chars = delta.chars().count() as u32;
         let _ = bus
             .publish(NexusEvent::TuiChatResponseChunk {
-                metadata: EventMetadata::new(SOURCE),
+                metadata: EventMetadata::child_of(&root_meta, SOURCE),
                 session_id: sid.clone(),
                 delta,
                 cursor_hint: cursor,
@@ -217,14 +222,14 @@ async fn stream_quest(
     // 4. 完成 + 回到 Idle
     let _ = bus
         .publish(NexusEvent::TuiChatCompleted {
-            metadata: EventMetadata::new(SOURCE),
+            metadata: EventMetadata::child_of(&root_meta, SOURCE),
             session_id: sid.clone(),
             tool_use: None,
         })
         .await;
     let _ = bus
         .publish(NexusEvent::TuiChatStatusChanged {
-            metadata: EventMetadata::new(SOURCE),
+            metadata: EventMetadata::child_of(&root_meta, SOURCE),
             session_id: sid,
             status: ChatStatus::Idle,
         })
@@ -246,7 +251,7 @@ pub async fn handle_chat_event(
         session_id, query, ..
     } = event
     {
-        stream_quest(bus, engine, cfg, session_id, query).await;
+        stream_quest(bus, engine, cfg, session_id, query, event.metadata()).await;
     }
 }
 
@@ -297,6 +302,7 @@ pub fn spawn_quest_orchestrator(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use nexus_core::{Task, TaskStatus, ThinkingMode};

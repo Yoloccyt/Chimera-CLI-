@@ -121,7 +121,10 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
                     state.step_rewards.push(progress);
                 }
                 NexusEvent::QuestCompleted {
-                    quest_id, status, ..
+                    quest_id,
+                    status,
+                    metadata,
+                    ..
                 } => {
                     // QuestCompleted → 搜索树终局节点 + 长时程信用分配 + 轨迹导出
                     let state = {
@@ -145,7 +148,7 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
                     // 零生产调用问题。此处使用根节点作为父本(终局场景)。
                     if let Err(e) = publish_bus
                         .publish(NexusEvent::ParentSelected {
-                            metadata: EventMetadata::new("chimera-cli"),
+                            metadata: EventMetadata::child_of(&metadata, "chimera-cli"),
                             task_id: quest_id.clone(),
                             parent_node_id: root_id.clone(),
                             quality: terminal_reward,
@@ -179,87 +182,17 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
                         terminal_reward,
                         "Quest 长时程信用分配完成,RLTrajectory 已导出(v4.0 预留)"
                     );
-                    // §16.4 StopRulingIssued 接线(L8→L9,Phase 10 Wave 4):
-                    // 三因子裁决器停止策略事件化——修复审计发现的 StopRuling
-                    // 本地枚举死代码问题。从步骤奖励历史推导停滞信号。
-                    let best_score = state.step_rewards.iter().copied().fold(0.0f32, f32::max);
-                    // 连续无改进次数:尾部与最佳分相同的连续步数(简化停滞信号)
-                    let stagnation_count = state
-                        .step_rewards
-                        .iter()
-                        .rev()
-                        .take_while(|r| (best_score - **r).abs() < 1e-6)
-                        .count() as u32;
-                    let stop_ctx = StopContext {
-                        attempts: state.step_rewards.len() as u32,
-                        max_attempts: 10,
-                        stagnation_count,
-                        stagnation_threshold: 3,
-                        current_score: terminal_reward,
-                        best_score,
-                        score_gap_threshold: 0.9,
-                        best_checkpoint: None,
-                        current_operator: nexus_contracts::experience_card::AtomicOperator::Improve,
-                    };
-                    let adjudicator = ThreeFactorAdjudicator::new(0.1, 0.5, 0.5, 0.05);
-
-                    // §16.4 VariantApproved 接线(L8→L5/L6,Phase 10 Wave 4):
-                    // 变体审议通过事件化——修复审计发现的 adjudicate_variant
-                    // 零生产调用问题。此处模拟一个自对比审议(终局奖励 vs 0 基线)。
-                    use parliament::{SmokeResults, VariantPerformance};
-                    let variant_perf = VariantPerformance {
-                        variant_id: nexus_contracts::VariantId::new(quest_id.as_str(), 1),
-                        avg_score: terminal_reward,
-                        history_scores: state.step_rewards.clone(),
-                        config_hash: 0,
-                        process_score: None,
-                    };
-                    let baseline_perf = VariantPerformance {
-                        variant_id: nexus_contracts::VariantId::new("baseline", 0),
-                        avg_score: 0.0,
-                        history_scores: vec![0.0],
-                        config_hash: 0,
-                        process_score: None,
-                    };
-                    let smoke = SmokeResults {
-                        tests_passed: 0,
-                        tests_failed: 0,
-                        has_regression: false,
-                        regression_details: Vec::new(),
-                    };
-                    let adj_result =
-                        adjudicator.adjudicate_variant(&variant_perf, &baseline_perf, &smoke);
-                    if matches!(adj_result.decision, parliament::ParliamentDecision::Approve) {
-                        if let Err(e) = publish_bus
-                            .publish(NexusEvent::VariantApproved {
-                                metadata: EventMetadata::new("chimera-cli"),
-                                variant_id: format!("{quest_id}@terminal"),
-                                score: terminal_reward,
-                            })
-                            .await
-                        {
-                            debug!(quest_id, error = %e, "VariantApproved 发布失败");
-                        }
-                    }
-
-                    if let StopRuling::Stop {
-                        reason,
-                        preserve_best,
-                        ..
-                    } = adjudicator.adjudicate_stop(&stop_ctx)
-                    {
-                        if let Err(e) = publish_bus
-                            .publish(NexusEvent::StopRulingIssued {
-                                metadata: EventMetadata::new("chimera-cli"),
-                                quest_id: quest_id.clone(),
-                                reason,
-                                preserve_best,
-                            })
-                            .await
-                        {
-                            debug!(quest_id, error = %e, "StopRulingIssued 发布失败");
-                        }
-                    }
+                    // §16.4 变体审议/停止裁决事件化 + O-4 trace 继承:逻辑抽入
+                    // adjudicate_terminal_and_publish(行为与原实现逐字一致;
+                    // 守 fn-length 棘轮——派生发布点不增长桥接 fn)。
+                    adjudicate_terminal_and_publish(
+                        &publish_bus,
+                        &quest_id,
+                        &state.step_rewards,
+                        terminal_reward,
+                        &metadata,
+                    )
+                    .await;
                 }
                 _ => {}
             }
@@ -268,6 +201,98 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
 
     QuestLoopHandles {
         join_handles: vec![handle],
+    }
+}
+
+/// §16.4 QuestCompleted 派生裁决:变体自对比审议(VariantApproved)与停滞/
+/// 停止裁决(StopRulingIssued)事件化;派生事件经 child_of 继承来源
+/// QuestCompleted 的 trace 链(O-4)。自 `spawn_quest_lifecycle_bridge` 抽出
+/// (行为与原实现逐字一致;守 fn-length 棘轮)。
+async fn adjudicate_terminal_and_publish(
+    publish_bus: &EventBus,
+    quest_id: &str,
+    step_rewards: &[f32],
+    terminal_reward: f32,
+    src_meta: &EventMetadata,
+) {
+    // §16.4 StopRulingIssued 接线(L8→L9,Phase 10 Wave 4):
+    // 三因子裁决器停止策略事件化——修复审计发现的 StopRuling
+    // 本地枚举死代码问题。从步骤奖励历史推导停滞信号。
+    let best_score = step_rewards.iter().copied().fold(0.0f32, f32::max);
+    // 连续无改进次数:尾部与最佳分相同的连续步数(简化停滞信号)
+    let stagnation_count = step_rewards
+        .iter()
+        .rev()
+        .take_while(|r| (best_score - **r).abs() < 1e-6)
+        .count() as u32;
+    let stop_ctx = StopContext {
+        attempts: step_rewards.len() as u32,
+        max_attempts: 10,
+        stagnation_count,
+        stagnation_threshold: 3,
+        current_score: terminal_reward,
+        best_score,
+        score_gap_threshold: 0.9,
+        best_checkpoint: None,
+        current_operator: nexus_contracts::experience_card::AtomicOperator::Improve,
+    };
+    let adjudicator = ThreeFactorAdjudicator::new(0.1, 0.5, 0.5, 0.05);
+
+    // §16.4 VariantApproved 接线(L8→L5/L6,Phase 10 Wave 4):
+    // 变体审议通过事件化——修复审计发现的 adjudicate_variant
+    // 零生产调用问题。此处模拟一个自对比审议(终局奖励 vs 0 基线)。
+    use parliament::{SmokeResults, VariantPerformance};
+    let variant_perf = VariantPerformance {
+        variant_id: nexus_contracts::VariantId::new(quest_id, 1),
+        avg_score: terminal_reward,
+        history_scores: step_rewards.to_vec(),
+        config_hash: 0,
+        process_score: None,
+    };
+    let baseline_perf = VariantPerformance {
+        variant_id: nexus_contracts::VariantId::new("baseline", 0),
+        avg_score: 0.0,
+        history_scores: vec![0.0],
+        config_hash: 0,
+        process_score: None,
+    };
+    let smoke = SmokeResults {
+        tests_passed: 0,
+        tests_failed: 0,
+        has_regression: false,
+        regression_details: Vec::new(),
+    };
+    let adj_result = adjudicator.adjudicate_variant(&variant_perf, &baseline_perf, &smoke);
+    if matches!(adj_result.decision, parliament::ParliamentDecision::Approve) {
+        if let Err(e) = publish_bus
+            .publish(NexusEvent::VariantApproved {
+                metadata: EventMetadata::child_of(src_meta, "chimera-cli"),
+                variant_id: format!("{quest_id}@terminal"),
+                score: terminal_reward,
+            })
+            .await
+        {
+            debug!(quest_id, error = %e, "VariantApproved 发布失败");
+        }
+    }
+
+    if let StopRuling::Stop {
+        reason,
+        preserve_best,
+        ..
+    } = adjudicator.adjudicate_stop(&stop_ctx)
+    {
+        if let Err(e) = publish_bus
+            .publish(NexusEvent::StopRulingIssued {
+                metadata: EventMetadata::child_of(src_meta, "chimera-cli"),
+                quest_id: quest_id.to_string(),
+                reason,
+                preserve_best,
+            })
+            .await
+        {
+            debug!(quest_id, error = %e, "StopRulingIssued 发布失败");
+        }
     }
 }
 
@@ -304,6 +329,7 @@ fn make_terminal_card(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use event_bus::EventMetadata;

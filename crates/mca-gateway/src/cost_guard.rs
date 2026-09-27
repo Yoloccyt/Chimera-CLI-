@@ -140,7 +140,7 @@ impl CostGuard {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            let reopen_at = now_secs + CIRCUIT_OPEN_DURATION_SECS;
+            let reopen_at = now_secs.saturating_add(CIRCUIT_OPEN_DURATION_SECS);
             self.circuit_open_until.store(reopen_at, Ordering::Relaxed);
             self.publish_exceeded(spent, limit);
             return Err(CostGuardError::CircuitOpen {
@@ -150,8 +150,10 @@ impl CostGuard {
             });
         }
         // 已发布过 → 半开窗口:放行一个探测请求,同时重开熔断(探测后仍超限)
-        self.circuit_open_until
-            .store(now_secs + CIRCUIT_OPEN_DURATION_SECS, Ordering::Relaxed);
+        self.circuit_open_until.store(
+            now_secs.saturating_add(CIRCUIT_OPEN_DURATION_SECS),
+            Ordering::Relaxed,
+        );
         Ok(())
     }
 
@@ -160,7 +162,14 @@ impl CostGuard {
     /// 仅原子累计,跨线检测与事件发布延迟到下一次 check()(唯一入口),
     /// 事件 payload 的 current/limit 为发布时刻真实值,语义不受延迟影响。
     pub fn record(&self, cost_micro: u64) {
-        self.spent_micro.fetch_add(cost_micro, Ordering::Relaxed);
+        // WHY 饱和累加:原子 `fetch_add` 在溢出时**回绕**(不受 overflow-checks 约束,
+        // debug/release 行为一致),一条畸形巨额成本即可把 spent 绕回低位,
+        // 使 `spent < limit` 恒真 —— 成本熔断被永久旁路。饱和保证单调性不可破。
+        let _ = self
+            .spent_micro
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |spent| {
+                Some(spent.saturating_add(cost_micro))
+            });
     }
 
     /// 当前累计成本(微元,观测/测试用)
@@ -208,6 +217,7 @@ impl std::fmt::Debug for CostGuard {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::time::Duration;
 
@@ -270,6 +280,68 @@ mod tests {
         assert_eq!(guard.budget_limit_micro(), Some(1234));
         let unlimited = CostGuard::new(None);
         assert_eq!(unlimited.budget_limit_micro(), None);
+    }
+
+    /// 极端时钟值下熔断路径必须仍是全函数(不溢出、不旁路)。
+    ///
+    /// WHY 此测试: `reopen_at` 由 `now_secs + CIRCUIT_OPEN_DURATION_SECS` 得出。
+    /// 裸 `+` 在 debug 下于 `i64::MAX` 附近 panic,在 release 下回绕成负数——
+    /// 而 `check()` 的判据是 `now_secs < circuit_open_until`,负哨兵会让它**恒假**,
+    /// 于是每次 check 都走"半开放行"分支,成本熔断被静默旁路(预算强制失效)。
+    #[test]
+    fn max_clock_value_keeps_circuit_open() {
+        let guard = CostGuard::new(Some(50));
+        guard.record(100);
+        // 首次跨线:必须拒绝,且 reopen_at 饱和在 i64::MAX(而非回绕成负值)
+        let err = guard.check(i64::MAX).unwrap_err();
+        match err {
+            CostGuardError::CircuitOpen { reopen_at, .. } => {
+                assert_eq!(
+                    reopen_at,
+                    i64::MAX,
+                    "裸 `+` 在 debug 下 overflow panic、release 下回绕成负值"
+                );
+            }
+        }
+        // 关键断言:极端时钟不得污染**正常时钟**下的熔断判定。
+        // 回绕成负数后 `now < circuit_open_until` 恒假,正常 now 会被判为
+        // "窗口已过"而走半开放行分支 —— 即预算强制被静默作废。
+        assert!(
+            guard.check(1_700_000_000).is_err(),
+            "极端时钟值之后,正常时钟下的超限请求必须仍被熔断拒绝"
+        );
+    }
+
+    /// 正常域不变量:累计成本未达上限时 `check()` 恒 Ok(与 now_secs 取值无关)。
+    #[test]
+    fn under_limit_allows_across_clock_domain() {
+        for now in [i64::MIN, -1, 0, 1_700_000_000, i64::MAX / 2, i64::MAX] {
+            let guard = CostGuard::new(Some(100));
+            guard.record(99);
+            assert!(
+                guard.check(now).is_ok(),
+                "spent=99 < limit=100 时 now_secs={now} 不应拒绝"
+            );
+        }
+    }
+
+    /// 累计成本必须**单调不减**:原子 `fetch_add` 在溢出时回绕(debug/release 皆回绕,
+    /// 原子加不受 `overflow-checks` 约束),一条畸形巨额成本可把 spent 绕回低位,
+    /// 使 `spent < limit` 恒真 —— 成本熔断被永久旁路。故累加须饱和。
+    #[test]
+    fn record_saturates_and_never_wraps() {
+        let guard = CostGuard::new(Some(100));
+        guard.record(u64::MAX);
+        guard.record(u64::MAX);
+        assert_eq!(
+            guard.spent_micro(),
+            u64::MAX,
+            "累加回绕会使熔断旁路,必须饱和在 u64::MAX"
+        );
+        assert!(
+            guard.check(1000).is_err(),
+            "饱和后 spent 仍 >= limit,熔断必须生效"
+        );
     }
 
     #[tokio::test]

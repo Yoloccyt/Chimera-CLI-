@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L9
+//! ROLE:     门控专家激活 — 基于门控机制的专家网络激活调度
+//! BACKEND:  memory
+//! PRODUCERS: 3 ActivationCacheStats,ActivationThresholdAdjusted,ExpertActivated
+//! CONSUMERS: 2 chimera-cli,chimera-mas
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! 门控专家激活 — 基于门控机制的专家网络激活调度
 //!
 //! 对应架构层:L9 Quest(与 quest-engine / efficiency-monitor / chimera-mas 同层)
@@ -32,6 +40,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
+#![allow(clippy::unwrap_used, clippy::expect_used)] // module-doc doctests are illustrative code; E-5 gates production fn bodies only
 
 pub mod activator;
 pub mod config;

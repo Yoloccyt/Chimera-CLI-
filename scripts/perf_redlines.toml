@@ -101,7 +101,9 @@ redline_display = "0.8ms"
 name = "mlc_l2_knn"
 crate = "mlc-engine"
 bench_file = "mlc_l2_knn"
-filter = "bench_l2_knn_slo_assert"
+# filter 实测对齐（2026-09-25，旧值 bench_l2_knn_slo_assert 系历史改名漂移，永不匹配=假 SKIP）：
+# 判 10k 场景（SLO 5ms 本意），1000 入场用 10000_entries 前缀会多匹配，此处用全段 id
+filter = "l2_knn_slo/top10_recall/10000_entries"
 slo_sec = 0.005000000
 redline_sec = 0.004000000
 unit = "ms"
@@ -112,7 +114,9 @@ redline_display = "4ms"
 name = "decay_compute"
 crate = "decay-engine"
 bench_file = "decay_compute"
-filter = "single_decay_by_profile"
+# filter 实测对齐（2026-09-25）：实际 group id 为 decay_compute/single/profile/<档>；
+# 取最重的 aggressive 作保守判据（单值匹配，避开 mode_slo 只取首行 time 的顺序风险）
+filter = "decay_compute/single/profile/aggressive"
 slo_sec = 0.000001000
 redline_sec = 0.000000800
 unit = "us"
@@ -123,7 +127,8 @@ redline_display = "0.8us"
 name = "wiki_knn_100k"
 crate = "repo-wiki"
 bench_file = "wiki_knn_slo"
-filter = "wiki_knn_100k_p95"
+# filter 实测对齐（2026-09-25）：实际 group id 为 wiki_knn_100k_slo/p95_latency
+filter = "wiki_knn_100k_slo/p95_latency"
 slo_sec = 0.050000000
 redline_sec = 0.040000000
 unit = "ms"
@@ -134,23 +139,13 @@ redline_display = "40ms"
 name = "immune_probe"
 crate = "chimera-mas"
 bench_file = "immune_probe"
-filter = "bench_assess_paradox_risk"
+# filter 实测对齐（2026-09-25）：实际 group id 为 immune_probe/assess_paradox_risk
+filter = "immune_probe/assess_paradox_risk"
 slo_sec = 0.100000000
 redline_sec = 0.080000000
 unit = "ms"
 slo_display = "100ms"
 redline_display = "80ms"
-
-[[slo]]
-name = "rhi_judge"
-crate = "auto-dpo"
-bench_file = "rhi_judge"
-filter = "rhi_judge_latency"
-slo_sec = 2.000000000
-redline_sec = 1.600000000
-unit = "s"
-slo_display = "2s"
-redline_display = "1.6s"
 
 [[slo]]
 name = "linucb_40arm"

@@ -3,7 +3,8 @@
 //! 对应架构层:L10 Interface
 //!
 //! # 设计决策(WHY)
-//! - **边界翻译而非改面板签名**:现有 20 个面板均以 `Panel::render(state, area,
+//! - **边界翻译而非改面板签名**:全部面板（清单以 `impl Panel for` 为权威）均以
+//!   `Panel::render(state, area,
 //!   buf)` 写入 ratatui `Buffer`。本模块在渲染完成后把 ratatui `Buffer` 逐格翻译
 //!   为自研 `engine::Buffer`,交由自研 diff/writer 输出。面板代码与 ~40 测试**零改动**,
 //!   这是"渐进迁移、随时可回滚"的关键(否决"自研 Buffer 暴露 ratatui API"方案:
@@ -214,16 +215,18 @@ fn flush_run(changes: &mut Vec<Change>, x: u16, y: u16, run: &mut Vec<Cell>) {
     let cells = std::mem::take(run);
     match cells.len() {
         0 => {}
-        1 => changes.push(Change::Cell {
-            x,
-            y,
-            cell: cells.into_iter().next().expect("len==1"),
-        }),
+        1 => {
+            // len==1 是 match 臂守卫,next() 必命中;漂移态跳过(不产生错帧)
+            if let Some(cell) = cells.into_iter().next() {
+                changes.push(Change::Cell { x, y, cell });
+            }
+        }
         _ => changes.push(Change::Span { x, y, cells }),
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

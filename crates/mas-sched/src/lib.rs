@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L9
+//! ROLE:     mas-sched — 多代理调度器控制面（P3-T2，v4.0 WI-29）
+//! BACKEND:  memory
+//! PRODUCERS: 0 -
+//! CONSUMERS: 0 -
+//! MATURITY: TRUE
+//! CRATE-CONTRACT END
 //! mas-sched — 多代理调度器控制面（P3-T2，v4.0 WI-29）
 //!
 //! 对应架构层: **L9 Quest**（ADR-145 裁决：从 chimera-mas 拆出，D-P3 层归属定案）
@@ -6,16 +14,18 @@
 //! # 职责
 //! **控制面纯调度,不碰工具执行**（v4.0 WI-29 契约）:
 //! - [`PeerScheduler`] trait:claim / renew_lease / handoff / should_run 四原语
-//! - [`SimplePeerScheduler`]:内存实现（租约表 + 配额 + 优先级）
-//! - [`ShadowScheduler`]:影子模式包装（只决策不执行,决策日志 100% 可回放,ADR-145）
+//! - [`SimplePeerScheduler`] —— 内存实现（租约表 + 配额 + 优先级）
+//! - [`ShadowScheduler`] —— 影子模式包装（只决策不执行,决策日志可回放,ADR-145）
 //!
 //! # 与 chimera-mas 的分工（v4.0 WI-25）
 //! - **Claim 管长任务租约**（本 crate:TodoClaim/Lease/Quota/Handoff）;
 //! - **Auction 管短任务派发**（nexus-subagent WI-25,Phase 3 T9）。
 //!
 //! # 影子模式（W16 门禁）
-//! 影子决策日志 100% 可回放——`ShadowScheduler` 记录每条决策输入与输出,
-//! [`ShadowLog::replay`] 逐条重放且决策结果与原始逐位一致（Ω₂ 确定性）。
+//! `ShadowScheduler` 记录每条决策输入与输出,[`ShadowLog::replay`] 逐条重放;
+//! **良构决策序列**下结果与原始逐位一致（Ω₂ 确定性,门禁 100% 可回放）,
+//! 非良构决策被计入 `ReplayReport::mismatched` 而非静默丢弃
+//! （良构定义与四类不可复现决策见 [`ShadowLog::replay`] 文档）。
 //!
 //! # 红线
 //! `#![forbid(unsafe_code)]` 由 crate 顶层保证;依赖仅 L0/L1（内部 3 个 ≤6 门禁）;

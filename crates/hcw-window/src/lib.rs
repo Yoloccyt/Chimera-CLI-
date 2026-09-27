@@ -1,3 +1,11 @@
+//! CRATE-CONTRACT BEGIN
+//! LAYER:    L2
+//! ROLE:     分层上下文窗口 - 4K/32K/128K/1M 四级上下文窗口管理
+//! BACKEND:  memory
+//! PRODUCERS: 6 ContextCompressed,ContextWindowSwitched,HcwRecallDegraded,HcwRecallReported,OmniSparseMasksComputed…
+//! CONSUMERS: 3 chimera-cli,chimera-mas,mca-gateway
+//! MATURITY: NOT-IMPL-CN
+//! CRATE-CONTRACT END
 //! 分层上下文窗口 - 4K/32K/128K/1M 四级上下文窗口管理
 //!
 //! 对应架构层:L2 Memory

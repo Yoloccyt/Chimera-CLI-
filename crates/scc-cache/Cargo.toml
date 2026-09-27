@@ -57,3 +57,8 @@ harness = false
 [[bench]]
 name = "semantic_cache_bench"
 harness = false
+
+# E-5 opt-in: 2 LRU-invariant expects rewritten to documented defensive
+# branches (self-loop / no-op + debug_assert); rest are test/bench units with idioms.
+[lints]
+workspace = true

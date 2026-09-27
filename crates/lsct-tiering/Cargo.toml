@@ -26,3 +26,8 @@ serde_json = { workspace = true }
 [[bench]]
 name = "tiering_benchmark"
 harness = false
+
+# E-5 opt-in: production code is unwrap/expect-free (measured 0);
+# remaining hits are all integration-test/bench units with file-top idiom allow.
+[lints]
+workspace = true

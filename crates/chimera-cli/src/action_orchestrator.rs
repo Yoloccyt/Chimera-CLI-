@@ -104,7 +104,8 @@ pub async fn handle_action_event(
         Ok(result) => {
             let _ = bus
                 .publish(NexusEvent::TuiActionCompleted {
-                    metadata: EventMetadata::new(SOURCE),
+                    // O-4: 响应继承入请求的 trace_id/correlation(child_of)，串起一次交互的因果链
+                    metadata: EventMetadata::child_of(event.metadata(), SOURCE),
                     request_id: request_id.clone(),
                     action_id: action_id.clone(),
                     result,
@@ -114,7 +115,8 @@ pub async fn handle_action_event(
         Err(error) => {
             let _ = bus
                 .publish(NexusEvent::TuiActionFailed {
-                    metadata: EventMetadata::new(SOURCE),
+                    // O-4: 失败响应同样继承入请求 trace_id（与成功路径一致，不丢链）
+                    metadata: EventMetadata::child_of(event.metadata(), SOURCE),
                     request_id: request_id.clone(),
                     action_id: action_id.clone(),
                     error,
@@ -394,6 +396,7 @@ pub fn spawn_action_orchestrator(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
