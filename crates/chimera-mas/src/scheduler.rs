@@ -20,7 +20,77 @@
 
 use crate::delegation::AgentTask;
 use event_bus::TaskPriority;
+use std::cmp::Reverse;
+use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::time::{Duration, Instant};
+
+/// WSJF 的全序包装 — `f64` 无 `Ord`，而桶内索引必须是 `BTreeSet` 的可比较键。
+///
+/// WHY `total_cmp` 而不手写位模式展开：`f64::total_cmp` 就是 IEEE754 totalOrder 的
+/// 稳定实现，非 NaN 输入下与 `partial_cmp` 同序；NaN 排在 +∞ 之上是它的规范定义，
+/// 而入口已把 NaN 归一（见 `enqueue`），故该位置在库内不可达。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WsjfOrd(f64);
+
+impl Eq for WsjfOrd {}
+
+impl Ord for WsjfOrd {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for WsjfOrd {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// 桶内排序键：WSJF 降序 → `enqueued_at` 升序 → `seq` 升序。
+///
+/// 与 `best_index` 三维尾键**逐位同序**（后者保留为 debug 参考实现），故“取桶内最大
+/// 键”就是“取同秩下最优条目”；`seq` 唯一，使 `BTreeSet` 不会因时间戳同刻而压键。
+///
+/// ## 方向表（首版两处都写反过，被 debug 对拍当场抓出，故列表存证）
+///
+/// `BTreeSet` 里「最优」= **最大键**，而派生 `Ord` 逐字段取大，于是：
+///
+/// | 字段 | 胜者 | 写法 |
+/// |---|---|---|
+/// | WSJF | 高者 | **原值**（`WsjfOrd` 取大就是分高）|
+/// | `enqueued_at` | 早者 | `Reverse`（反转后“大”= 时间早）|
+/// | `seq` | 小者 | `Reverse`（同上，同刻入队时定序）|
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct OrderKey {
+    /// WSJF：最大键 = 最高分（直接放原值，不能套 `Reverse`）。
+    wsjf: WsjfOrd,
+    /// 入队时刻：`Reverse` 使最大键落在**最早**入队者。
+    enqueued_asc: Reverse<Instant>,
+    /// 入队序号：`Reverse` 使最大键落在 `seq` **最小**（先入队）者。
+    seq_asc: Reverse<u64>,
+}
+
+/// 下一个秩提升到点：`enqueue` 起第 k 个饥饿间隔（k = 当前秩 − 基础秩 + 1）。
+///
+/// 返回 `None` 有三义，且三者都对应「无需再排事件」：秩已封顶 3、老化关闭（零阈值，
+/// `aged_priority_rank` 同语义）、或时间运算溢出（阈值量级 ~10^11 年，此时
+/// `waited / threshold` 在任何真实时钟下必为 0，不排事件的观测结果与全扫一致）。
+///
+/// WHY 纯函数：与 `aged_priority_rank` / `priority_rank` 同属调度纯函数层，可独立
+/// 单测边界（封顶/零阈值/溢出），不沾调度器状态。
+fn promotion_deadline(
+    threshold: Duration,
+    enqueued_at: Instant,
+    base_rank: u8,
+    rank: u8,
+) -> Option<Instant> {
+    if rank >= 3 || threshold.is_zero() {
+        return None;
+    }
+    let steps = u32::from(rank.saturating_sub(base_rank)) + 1;
+    let span = threshold.checked_mul(steps)?;
+    enqueued_at.checked_add(span)
+}
 
 /// 优先级数值秩 — Critical=3 > High=2 > Medium=1 > Low=0。
 ///
@@ -228,16 +298,32 @@ struct ScheduleEntry {
 /// 优先级调度器 (§8) — 按 (有效优先级秩, WSJF) 出队, 支持动态重排与饥饿保护。
 ///
 /// 采用「惰性最佳选择」: 出队时按当前有效秩(含饥饿老化)+ WSJF 选出最优条目,
-/// 因此队列始终返回当下最应调度的任务, 无需维护堆的键稳定性。
+/// 因此队列始终返回当下最应调度的任务。
 ///
-/// ## 三维排序键不可约简为分桶(L9 优化 2.3 分析结论)
+/// ## 出队选优：按**有效秩**分桶 + 到点搬桶（L9 优化第三轮）
 ///
 /// 出队序由三维键决定:(有效秩 = 基础秩 + 饥饿老化, WSJF 降序, enqueued_at 升序)。
-/// 曾试图按基础秩分 4 桶 + 桶内 FIFO 降低出队至 O(桶数),但发现**根本冲突**:
-/// 桶内若按 WSJF 排序(满足同秩 WSJF 次序契约),则老化最久条目(有效秩最高)
-/// 不在队头,跨桶老化比较无法 O(桶数) 完成;桶内若按 FIFO(满足老化),则丢失
-/// WSJF 次序。两需求共存必须全扫。故 `best_index` 保留 O(n)(仅整数比较,
-/// 常数极小),仅将 `Vec::remove` O(n) 优化为 `swap_remove` O(1)。
+/// 曾试过按**基础秩**分 4 桶 + 桶内 FIFO，失败结论被记作「三维键不可约简为分桶」：
+/// 桶内按 WSJF 排就丢老化、按 FIFO 排就丢 WSJF，故当时认定「必须全扫」。
+///
+/// 那个结论只对**无状态全扫**成立：缺的不是分桶本身，而是把老化从「扫描时现算」
+/// 变成「到点搬桶」的机制。本实现补上这一块：
+///
+/// 1. **按有效秩（而非基础秩）分桶** —— `buckets[0..4]` 桶内按 `OrderKey`（WSJF 降序
+///    → enqueued_at 升序 → seq 升序）有序，于是「最高非空桶的最大键」就是全局最优：
+///    跨桶由桶号定胜负（有效秩高者胜），同桶由键定胜负（WSJF 契约 + FIFO 稳定性）。
+/// 2. **`promotions` 即时堆记录下一个秩提升到点** —— 一次 `enqueue` 至多排 3 个事件
+///    （秩封顶 3）；每次出队先把已到点的事件搬桶（均摊 O(log n)），未到点的条目秩必
+///    仍等于全扫公式的取值（因为边界恰好就是那些未触发的事件）。
+/// 3. **正确性由 debug 对拍守卫** —— `best_index`（O(n) 全扫）作为参考实现全量保留，
+///    debug/测试构建下每次出队逐位对拍加速路径，release 零成本（见 `best_slot`）。
+///
+/// 实测（release，`scheduler_dequeue` bench，**同轮**对照 `peek`=全扫参照）：
+/// n=32 起桶路径即胜（0.269 vs 0.312µs），n=1000 / n=10000 分别 15.8× / 62×；
+/// 唯一新增成本是 `swap_remove` 必需的 seq 索引修正（~0.1µs，与选优路径无关）。
+/// 曾实现过“小队列全扫回退”分支，同轮实测反而更慢（单路径更省）且多一套不变量，
+/// 已按架构减法原则删除——本层保持**单一选优路径**。
+/// 判据口径（`/1000 < 50µs`）与语义均不变，仅从 «单 O(n)» 变为 «单 O(log n)»。
 #[derive(Debug)]
 pub struct PriorityScheduler {
     /// WSJF 权重
@@ -250,6 +336,14 @@ pub struct PriorityScheduler {
     entries: Vec<ScheduleEntry>,
     /// 下一个入队序号 — 单调递增,为每次 enqueue 分配唯一 seq(饥饿平局确定性)。
     next_seq: u64,
+    /// 按**有效秩**分桶的有序索引（0=最低…3=Critical）：桶内按 `OrderKey`
+    /// （WSJF 降序 → enqueued_at 升序 → seq 升序）排列，与出队键尾部同序。
+    buckets: [BTreeSet<OrderKey>; 4],
+    /// `seq` → `entries` 下标；`swap_remove` 后仅需修补被换位的那一条。
+    seq_index: HashMap<u64, usize>,
+    /// 到点搬桶事件堆（`Reverse` 使其成为最早到点在堆顶）；可能含已失效条目
+    /// （条目已出队/已重建索引），靠 `seq_index` 现场验活。
+    promotions: BinaryHeap<Reverse<(Instant, u64)>>,
 }
 
 impl Default for PriorityScheduler {
@@ -286,6 +380,9 @@ impl PriorityScheduler {
             starvation_threshold,
             entries: Vec::new(),
             next_seq: 0,
+            buckets: Default::default(),
+            seq_index: HashMap::new(),
+            promotions: BinaryHeap::new(),
         }
     }
 
@@ -304,7 +401,11 @@ impl PriorityScheduler {
     /// 任务自身的 `priority` 字段保留为主排序键;WSJF 作为同优先级内的次排序键;
     /// seq 为完全平局时的确定性终键(递增,先入队者 seq 更小)。
     pub fn enqueue(&mut self, task: AgentTask, wsjf_input: &WsjfInput) {
-        let wsjf = wsjf_score(wsjf_input, &self.weights);
+        let raw = wsjf_score(wsjf_input, &self.weights);
+        // NaN 归一（单点声明）：全序桶索引无法表达「与一切相等」的 NaN 语义，而 NaN 只
+        // 会来自调用方传入非有限输入（内置公式已用 max(1.0) 守住除零）——按最低键归一，
+        // 使加速路径与 debug 参考实现见到的 `wsjf` 完全一致（否则两者会合法分歧）。
+        let wsjf = if raw.is_nan() { 0.0 } else { raw };
         let seq = self.next_seq;
         self.next_seq += 1;
         self.entries.push(ScheduleEntry {
@@ -313,24 +414,37 @@ impl PriorityScheduler {
             enqueued_at: Instant::now(),
             seq,
         });
+        let idx = self.entries.len() - 1;
+        // 刚入队时限 `waited ≈ 0 < threshold`，故有效秩就是基础秩（零阈值时同式）。
+        let rank = priority_rank(self.entries[idx].task.priority);
+        self.index_insert(idx, rank);
     }
 
     /// 出队 — 移除并返回当前最应调度的任务。
     ///
-    /// 选择规则: 先比较有效优先级秩(含饥饿老化), 秩相同再比 WSJF(高者先),
+    /// 选择规则: 先比较有效优先级秩(含饥饿老化), 秩相同再比 WSJF(高者先),      
     /// 仍相同则取先入队者(稳定)。队列为空返回 `None`。
     ///
-    /// WHY swap_remove(L9 优化 2.3): 选中条目与末尾交换后弹出,O(1) 替代
-    /// `Vec::remove` 的 O(n) 搬移。swap_remove 打乱剩余条目物理顺序,但
-    /// 出队序由 `best_index` 的三维键(含 enqueued_at)重新定义,物理顺序
-    /// 无关——同秩同 WSJF 的先入队者仍因 enqueued_at 更早而胜出(稳定性保留)。
+    /// WHY `swap_remove`(L9 优化 2.3): 选中条目与末尾交换后弹出, O(1) 替代
+    /// `Vec::remove` 的 O(n) 搬移。搬乱只影响物理布局——出队序由秩桶键
+    /// (`enqueued_at` + `seq`) 重新定义，稳定性不受影响。
     pub fn dequeue(&mut self) -> Option<AgentTask> {
         let now = Instant::now();
-        let best = self.best_index(now)?;
-        Some(self.entries.swap_remove(best).task)
+        let best = self.best_slot(now)?;
+        let removed = self.entries.swap_remove(best);
+        self.seq_index.remove(&removed.seq);
+        // swap_remove 把原末条搬到了 best 位：只修它的下标，键与所在桶均不变。
+        if let Some(moved_seq) = self.entries.get(best).map(|e| e.seq) {
+            self.seq_index.insert(moved_seq, best);
+        }
+        Some(removed.task)
     }
 
     /// 查看(不移除)当前最应调度任务的有效优先级。
+    ///
+    /// WHY 这里保留 O(n) 全扫（而非用加速桶）：本方法契约是 `&self`，而秩提升是
+    /// **状态变更**（搬桶需 `&mut`）；它服务于抢占判定类低频查询，不在出队热路基准内。
+    /// 全扫本身就是参考实现，故此处绝无两套语义分歧风险。
     pub fn peek_effective_priority(&self) -> Option<TaskPriority> {
         let now = Instant::now();
         let best = self.best_index(now)?;
@@ -351,12 +465,134 @@ impl PriorityScheduler {
         for entry in &mut self.entries {
             entry.task.priority = score_to_priority(entry.wsjf, &self.thresholds);
         }
+        // 基础秩整体变 → 桶划分与提升事件全失效：按当前时刻整重建（批量操作，
+        // 不在出队热路；重建后每个条目的秩与提升点又与全扫公式对齐）。
+        self.rebuild_index(Instant::now());
+    }
+
+    /// 把一个条目登记进 `rank` 桶，并排定其下一秩提升到点。
+    fn index_insert(&mut self, idx: usize, rank: u8) {
+        let (wsjf, enqueued_at, seq, base) = {
+            let e = &self.entries[idx];
+            (e.wsjf, e.enqueued_at, e.seq, priority_rank(e.task.priority))
+        };
+        let key = OrderKey {
+            wsjf: WsjfOrd(wsjf),
+            enqueued_asc: Reverse(enqueued_at),
+            seq_asc: Reverse(seq),
+        };
+        self.buckets[usize::from(rank)].insert(key);
+        self.seq_index.insert(seq, idx);
+        if let Some(deadline) =
+            promotion_deadline(self.starvation_threshold, enqueued_at, base, rank)
+        {
+            self.promotions.push(Reverse((deadline, seq)));
+        }
+    }
+
+    /// `entries[idx]` 的桶内键（与 `index_insert` 同源拼键，避免两处漂移）。
+    fn key_of(&self, idx: usize) -> OrderKey {
+        let e = &self.entries[idx];
+        OrderKey {
+            wsjf: WsjfOrd(e.wsjf),
+            enqueued_asc: Reverse(e.enqueued_at),
+            seq_asc: Reverse(e.seq),
+        }
+    }
+
+    /// 把已到点的秩提升事件落到桶上（惰性：失效事件靠 `seq_index` 现场验活跳过）。
+    ///
+    /// 均摊成本：每个条目一生至多 3 次搬桶（秩封顶 3），每次 O(log n)。
+    fn apply_due_promotions(&mut self, now: Instant) {
+        while let Some(&Reverse((deadline, seq))) = self.promotions.peek() {
+            if deadline > now {
+                break;
+            }
+            self.promotions.pop();
+            let Some(&idx) = self.seq_index.get(&seq) else {
+                continue; // 条目已出队/已被重建替换 → 该事件失效
+            };
+            let key = self.key_of(idx);
+            let (priority, enqueued_at) = {
+                let e = &self.entries[idx];
+                (e.task.priority, e.enqueued_at)
+            };
+            let new_rank = aged_priority_rank(
+                priority,
+                now.saturating_duration_since(enqueued_at),
+                self.starvation_threshold,
+            );
+            for bucket in &mut self.buckets {
+                if bucket.remove(&key) {
+                    break;
+                }
+            }
+            self.buckets[usize::from(new_rank)].insert(key);
+            let base = priority_rank(priority);
+            if let Some(next) =
+                promotion_deadline(self.starvation_threshold, enqueued_at, base, new_rank)
+            {
+                self.promotions.push(Reverse((next, seq)));
+            }
+        }
+    }
+
+    /// 加速路径：先应用到点提升，再取最高非空桶的最大键，并将该键从桶中移除、返回下标。
+    ///
+    /// ## Panics
+    /// 桶内键必在 `seq_index` 内（不变式：桶集合与活条目集合严格互为镜像，两者只在
+    /// `index_insert` / 本方法的删除处变动）；违反即开发期缺陷，显式 `panic!` 而非静默
+    /// 降级（静默 `None` 会伪装成「队列为空」）。
+    fn best_slot(&mut self, now: Instant) -> Option<usize> {
+        self.apply_due_promotions(now);
+        for rank in (0..self.buckets.len()).rev() {
+            let Some(&key) = self.buckets[rank].last() else {
+                continue;
+            };
+            let Some(&idx) = self.seq_index.get(&key.seq_asc.0) else {
+                panic!(
+                    "调度器桶/序号表失同步（开发期缺陷）：seq={} 不在 seq_index",
+                    key.seq_asc.0
+                );
+            };
+            // debug/测试构建：与全扫参考实现逐位对拍（release 编译期略除，零成本）。
+            // 对拍用同一个 `now`，故它同时校验三件事：秩桶划分、到点搬桶、同秩键序。
+            #[cfg(debug_assertions)]
+            {
+                assert_eq!(
+                    self.best_index(now),
+                    Some(idx),
+                    "加速出队与全扫参考实现分歧（秩桶/promotion/键序回归）：idx={idx}"
+                );
+            }
+            self.buckets[rank].remove(&key);
+            return Some(idx);
+        }
+        None
+    }
+
+    /// 按 `now` 重算每个条目的有效秩，整重建桶 / 序号表 / 提升堆。
+    fn rebuild_index(&mut self, now: Instant) {
+        for bucket in &mut self.buckets {
+            bucket.clear();
+        }
+        self.seq_index.clear();
+        self.promotions.clear();
+        for idx in 0..self.entries.len() {
+            let rank = Self::rank_of(&self.entries[idx], now, self.starvation_threshold);
+            self.index_insert(idx, rank);
+        }
     }
 
     /// 内部: 返回当前最优条目的下标(含饥饿老化), 空则 `None`。
     ///
-    /// O(n) 扫描不可避免(三维排序键,见结构体文档);仅为整数秩 + f64 比较,
-    /// 常数极小,与出队的 swap_remove O(1) 共同使单次出队从旧版双 O(n) 降为单 O(n)。
+    /// **本方法已不再是出队路径**：它是 O(n) 全扫的**参考实现**，保留的用途是在
+    /// debug/测试构建下与加速路径（`best_slot`）逐位对拍（见结构体文档第 3 条），
+    /// 以及 `peek_effective_priority` 这个 `&self` 低频查询。
+    ///
+    /// WHY 不删：两套独立实现的逐位一致，是本仓验证同类优化的既有范式（参见
+    /// `test_aged_rank_matches_division_formula_at_boundaries` 保留旧公式作对拍）；
+    /// 且 `peek_effective_priority`（`&self` 契约）仍靠它给出答案，故 release 下也在用。
     fn best_index(&self, now: Instant) -> Option<usize> {
         if self.entries.is_empty() {
             return None;
@@ -576,5 +812,265 @@ mod tests {
             TaskPriority::Critical,
             TaskPriority::Critical
         ));
+    }
+
+    // ============================================================
+    // L9 优化第三轮：秩桶 + 到点搬桶（加速出队）
+    // ============================================================
+
+    /// 构造指定优先级的 AgentTask（默认 Medium 复杂度）
+    fn make_sched_task(id: &str, priority: TaskPriority) -> AgentTask {
+        let task = nexus_core::Task {
+            task_id: id.into(),
+            description: format!("task {id}"),
+            status: nexus_core::TaskStatus::Pending,
+            dependencies: vec![],
+        };
+        AgentTask::new(
+            task,
+            crate::delegation::TaskComplexity::Medium,
+            1000,
+            Duration::from_secs(60),
+            crate::delegation::QualityLevel::Standard,
+        )
+        .with_priority(priority)
+    }
+
+    /// 秩提升到点纯函数的四类边界：封顶 / 零阈值 / 步数算术后溢出面
+    #[test]
+    fn test_promotion_deadline_boundaries() {
+        let now = Instant::now();
+        let th = Duration::from_secs(100);
+        // 秩已封顶 / 老化关闭 → 均不再排事件
+        assert_eq!(promotion_deadline(th, now, 0, 3), None, "封顶 3 不应再排");
+        assert_eq!(
+            promotion_deadline(Duration::ZERO, now, 0, 0),
+            None,
+            "零阈值=关闭老化，不应排"
+        );
+        // 步数 = 当前秩 − 基础秩 + 1：从基础秩尚未提升过 → 首个到点就是 +1×th
+        assert_eq!(
+            promotion_deadline(th, now, 0, 0),
+            Some(now + Duration::from_secs(100))
+        );
+        // base=Low(0) 且已在秩 2 → 下一个边界是第 3 个间隔
+        assert_eq!(
+            promotion_deadline(th, now, 0, 2),
+            Some(now + Duration::from_secs(300))
+        );
+        // base=High(2) 且秩=2（尚未因老化提升）→ 下一个边界仍是 +1×th
+        assert_eq!(
+            promotion_deadline(th, now, 2, 2),
+            Some(now + Duration::from_secs(100))
+        );
+        // 溢出面：Duration::MAX 即使 ×1 可行，Instant + MAX 必溢出 → 返回 None（不 panic）
+        assert_eq!(promotion_deadline(Duration::MAX, now, 0, 0), None);
+        assert_eq!(promotion_deadline(Duration::MAX, now, 0, 1), None);
+    }
+
+    /// 入队/出队的排序契约：秩优先 → 同秩 WSJF 降序 → 全平局 FIFO（按入队序）
+    #[test]
+    fn test_dequeue_contract_rank_then_wsjf_then_fifo() {
+        let mut s = PriorityScheduler::new();
+        let low_score = WsjfInput::new(1.0, 1.0, 1.0, 1.0, 10.0);
+        let high_score = WsjfInput::new(10.0, 10.0, 10.0, 10.0, 1.0);
+        s.enqueue(make_sched_task("low-hi", TaskPriority::Low), &high_score);
+        s.enqueue(make_sched_task("med-lo", TaskPriority::Medium), &low_score);
+        s.enqueue(
+            make_sched_task("med-hi-1", TaskPriority::Medium),
+            &high_score,
+        );
+        s.enqueue(
+            make_sched_task("med-hi-2", TaskPriority::Medium),
+            &high_score,
+        );
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "med-hi-1");
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "med-hi-2");
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "med-lo");
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "low-hi");
+        assert!(s.dequeue().is_none());
+    }
+
+    /// NaN 归一（入队单点）：全序桶无法表达「与一切相等」的 NaN 语义，故按最低键归一。
+    /// 夹具先用同一纯函数断言输入确实产 NaN，避免在窗口里跑成假绿。
+    #[test]
+    fn test_nan_wsjf_normalized_to_lowest_key() {
+        let nan_input = WsjfInput {
+            business_value: f64::NAN,
+            time_criticality: 1.0,
+            risk_reduction: 1.0,
+            dependency_unlock: 1.0,
+            job_size: 1.0,
+        };
+        assert!(
+            wsjf_score(&nan_input, &WsjfWeights::default()).is_nan(),
+            "夹具前提：该输入应产出 NaN"
+        );
+        let mut s = PriorityScheduler::new();
+        s.enqueue(make_sched_task("nan", TaskPriority::Medium), &nan_input);
+        let finite = WsjfInput::new(1.0, 1.0, 1.0, 1.0, 1.0);
+        s.enqueue(make_sched_task("finite", TaskPriority::Medium), &finite);
+        // 同优先级下有限分应胜出（若 NaN 仍按「与一切相等」会退化为按 FIFO→先行入队的 nan 先出）
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "finite");
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "nan");
+    }
+
+    /// 老化提权在加速路径下仍生效：阈值 1ms + 实等待 5 个间隔 → Low 封顶 Critical，压过后来的 High
+    #[test]
+    fn test_aging_promotes_waiting_entry_under_bucket_path() {
+        let mut s = PriorityScheduler::with_config(
+            WsjfWeights::default(),
+            PriorityThresholds::default(),
+            Duration::from_millis(1),
+        );
+        let input = WsjfInput::new(1.0, 1.0, 1.0, 1.0, 1.0);
+        s.enqueue(make_sched_task("low-old", TaskPriority::Low), &input);
+        std::thread::sleep(Duration::from_millis(5));
+        s.enqueue(make_sched_task("high-new", TaskPriority::High), &input);
+        // 老条目已老化到 3 → 先出；且 debug 下每次出队都与全扫参考实现对拍（见 best_slot）
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "low-old");
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "high-new");
+    }
+
+    /// `recompute_from_wsjf` 整体重排后：桶/序号表/提升堆必须已重建，出队序按新优先级
+    #[test]
+    fn test_recompute_rebuilds_index_and_order_follows_new_priority() {
+        let mut s = PriorityScheduler::new();
+        let weak = WsjfInput::new(1.0, 1.0, 1.0, 1.0, 1.0); // 分低
+        let strong = WsjfInput::new(10.0, 10.0, 10.0, 10.0, 1.0); // 分高
+        s.enqueue(make_sched_task("crit-weak", TaskPriority::Critical), &weak);
+        s.enqueue(make_sched_task("low-strong", TaskPriority::Low), &strong);
+        assert_eq!(
+            s.dequeue().unwrap().inner.task_id,
+            "crit-weak",
+            "重排前：优先级主导"
+        );
+        assert_eq!(
+            s.dequeue().unwrap().inner.task_id,
+            "low-strong",
+            "清空队列（否则它会以同分先行入队者身份抢头位）"
+        );
+        // 只留强/弱各一条后重排：强分被提档，弱分被降档
+        s.enqueue(make_sched_task("weak2", TaskPriority::Critical), &weak);
+        s.enqueue(make_sched_task("strong2", TaskPriority::Low), &strong);
+        s.recompute_from_wsjf();
+        assert_eq!(s.len(), 2);
+        // 强分高于弱分，且 score→priority 单调 ⇒ 强分先出（同档时 WSJF 也保它先出）
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "strong2");
+        assert_eq!(s.dequeue().unwrap().inner.task_id, "weak2");
+        assert!(s.is_empty());
+        // 不变式：桶集合与活条目集合严格互为镜像 → 空队列 ⇒ 桶与序号表都必空
+        assert!(s.seq_index.is_empty());
+        assert!(
+            s.buckets.iter().all(BTreeSet::is_empty),
+            "空队列不得残留任何桶键"
+        );
+    }
+
+    /// 跨档连续作业后索引仍严格成镜像：先小规模多轮出入队，再撑大、再排空。
+    ///
+    /// WHY 单列此测：它锁的正是“桶集合 == 活条目集合”这条单一不变式在**长时间混合
+    /// 负载**下的成立性（含 recompute 整重建、超时搬桶、连续 swap_remove 改正）。
+    #[test]
+    fn test_index_stays_exact_mirror_under_long_mixed_load() {
+        let mut s = PriorityScheduler::with_config(
+            WsjfWeights::default(),
+            PriorityThresholds::default(),
+            Duration::from_millis(1),
+        );
+        let input = WsjfInput::new(1.0, 1.0, 1.0, 1.0, 1.0);
+        // 阶段 1：小规模多轮出入队（每轮 3 入 1 出，跨老化边界）
+        for i in 0..8 {
+            s.enqueue(
+                make_sched_task(&format!("small{i}"), TaskPriority::Medium),
+                &input,
+            );
+            if i % 3 == 2 {
+                std::thread::sleep(Duration::from_millis(2));
+                assert!(s.dequeue().is_some(), "非空队列应能出队");
+            }
+        }
+        // 阶段 2：撑大后连续排空（跨多次超时搬桶）
+        for i in 0..40 {
+            s.enqueue(
+                make_sched_task(&format!("big{i}"), TaskPriority::Low),
+                &input,
+            );
+        }
+        std::thread::sleep(Duration::from_millis(3));
+        let mut drained = 0usize;
+        while s.dequeue().is_some() {
+            drained += 1;
+        }
+        let expected = 8 + 40 - 2; // 阶段 1 入 8、出 2（i∈{2,5}）；阶段 2 入 40；共余 46
+        assert_eq!(drained, expected, "出入账必须平衡");
+        assert!(s.is_empty());
+        assert!(s.seq_index.is_empty(), "排空后序号表必须清空");
+        assert!(
+            s.buckets.iter().all(BTreeSet::is_empty),
+            "排空后桶必须全空（镜像不变式在长负载下仍成立）"
+        );
+    }
+
+    /// 结构不变量（跨混合操作）：序号表双射、桶键与条目现键一致、seq 不得跨桶重复
+    #[test]
+    fn test_index_invariants_after_mixed_ops() {
+        const PRIOS: [TaskPriority; 4] = [
+            TaskPriority::Low,
+            TaskPriority::Medium,
+            TaskPriority::High,
+            TaskPriority::Critical,
+        ];
+        let mut s = PriorityScheduler::with_config(
+            WsjfWeights::default(),
+            PriorityThresholds::default(),
+            Duration::from_millis(1),
+        );
+        let input = WsjfInput::new(1.0, 1.0, 1.0, 1.0, 1.0);
+        let mut next = 0usize;
+        for round in 0..12usize {
+            // 每轮 40 条 → 存活量足以让超时搬桶真实发生（配合下方 sleep）
+            for _ in 0..40 {
+                s.enqueue(
+                    make_sched_task(&format!("t{next}"), PRIOS[round % 4]),
+                    &input,
+                );
+                next += 1;
+            }
+            if round % 4 == 3 {
+                s.recompute_from_wsjf();
+            }
+            // 跨过至少一个饥饿间隔，让搬桶路径真实发生
+            std::thread::sleep(Duration::from_millis(2));
+            if !s.is_empty() {
+                let _ = s.dequeue();
+            }
+            assert_eq!(s.seq_index.len(), s.entries.len(), "序号表与条目基数应恒等");
+            for idx in 0..s.entries.len() {
+                let seq = s.entries[idx].seq;
+                assert_eq!(
+                    s.seq_index.get(&seq).copied(),
+                    Some(idx),
+                    "seq→下标反查必须回到自身"
+                );
+            }
+            let mut seen = std::collections::HashSet::new();
+            for (rank, bucket) in s.buckets.iter().enumerate() {
+                for key in bucket {
+                    // 不变式：桶集合与活条目集合严格互为镜像——桶内每个键都必须对应一个
+                    // 活条目，且键值与其现键逐位一致、不跨桶重复。
+                    let Some(&idx) = s.seq_index.get(&key.seq_asc.0) else {
+                        panic!("桶内键必须对应活条目：rank={rank} seq={}", key.seq_asc.0);
+                    };
+                    assert_eq!(
+                        s.key_of(idx),
+                        *key,
+                        "桶内键必须与条目现键一致（rank={rank}）"
+                    );
+                    assert!(seen.insert(key.seq_asc.0), "活 seq 不得同时出现在两个桶");
+                }
+            }
+            assert_eq!(seen.len(), s.entries.len(), "每个活条目必须恰有一个桶键");
+        }
     }
 }

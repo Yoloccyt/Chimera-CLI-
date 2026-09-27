@@ -1173,3 +1173,71 @@ proptest! {
         prop_assert_eq!(a.expert_id.as_str(), b.expert_id.as_str());
     }
 }
+
+// ============================================================
+// L9 优化第三轮：加速出队（秩桶 + 到点搬桶）与朴素模型的完全一致
+// ============================================================
+
+proptest! {
+    /// 关闭老化（零阈值）时秩恒等于基础秩 ⇒ 出队序可外部复算：与朴素模型逐条对拍。
+    ///
+    /// 模型只依赖公开纯函数（`priority_rank` / `wsjf_score`），与实现内部结构零耦合，
+    /// 故它能抓“桶划分 / 搬桶 / 键序”任何一处与契约不符；与实现自带的全扫参考实现
+    /// （`best_slot` 的 debug 对拍）互为**独立**证据（同一个断言点的两种来源）。
+    #[test]
+    fn scheduler_accelerated_dequeue_matches_naive_model(
+        ops in prop::collection::vec((0u8..4u8, 1u8..10u8, 1u8..10u8), 1..40)
+    ) {
+        use chimera_mas::scheduler::{wsjf_score, PriorityThresholds, WsjfWeights};
+        use std::time::Duration;
+
+        let weights = WsjfWeights::default();
+        let mut scheduler = PriorityScheduler::with_config(
+            WsjfWeights::default(),
+            PriorityThresholds::default(),
+            Duration::ZERO, // 关老化：rank 恒等于基础秩，模型可外部复算
+        );
+        // 模型条目：(秩, wsjf, seq)；seq 直接用入队次序号（与实现分配的单调序号一一对应，
+        // 且 `enumerate` 免去手写计数器——clippy::explicit_counter_loop 的惯用修法）。
+        let mut model: Vec<(u8, f64, u64)> = Vec::new();
+        for (seq, (prio_idx, uv, js)) in ops.into_iter().enumerate() {
+            let priority = match prio_idx {
+                0 => TaskPriority::Low,
+                1 => TaskPriority::Medium,
+                2 => TaskPriority::High,
+                _ => TaskPriority::Critical,
+            };
+            let input = WsjfInput::new(f64::from(uv), 1.0, 1.0, 1.0, f64::from(js));
+            let id = format!("t{seq}");
+            scheduler.enqueue(make_prio_task(&id, priority), &input);
+            model.push((
+                priority_rank(priority),
+                wsjf_score(&input, &weights),
+                seq as u64,
+            ));
+        }
+        // 排空并对拍。模型选优 = 秩高 → WSJF 高 → seq 小；实现的全平局键是
+        // enqueued_at 升序 → seq 升序，而 seq 随入队单调 ⇒ 两者等价。
+        while !model.is_empty() {
+            let best = model
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| {
+                    a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(b.2.cmp(&a.2))
+                })
+                .map(|(i, _)| i)
+                .expect("模型非空");
+            let (_, _, expected_seq) = model.remove(best);
+            let got = scheduler.dequeue().expect("调度器应与模型同步非空");
+            // WHY 先绑定：`format!` 的临时值在同一语句里会先于断言宏用尽借用而析构（E0716）
+            let expected_id = format!("t{expected_seq}");
+            prop_assert_eq!(
+                got.inner.task_id.as_str(),
+                expected_id.as_str(),
+                "加速出队序应与朴素模型逐条一致"
+            );
+        }
+        prop_assert!(scheduler.is_empty(), "排空后调度器必须为空");
+        prop_assert!(scheduler.dequeue().is_none(), "空队列出队应为 None");
+    }
+}

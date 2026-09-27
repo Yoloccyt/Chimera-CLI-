@@ -617,7 +617,9 @@ fn bench_50agent_mem_peak(c: &mut Criterion) {
 /// 只计 dequeue;**阈值与关键词口径不变**(仍 `scheduler_dequeue/1000/` < 50µs)。
 fn bench_scheduler_dequeue(c: &mut Criterion) {
     let mut group = c.benchmark_group("scheduler_dequeue");
-    for &size in &[10usize, 100, 1000, 10000] {
+    // WHY 含 32/64 两档：加速路径（秩桶）与全扫的交叉点就在这里，取数入库后
+    // “单路径全档上桶”的结论才有可复核的依据（同一 run 内还有 peek=全扫参照线）。
+    for &size in &[10usize, 32, 64, 100, 1000, 10000] {
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.iter_custom(|iters| {
                 let mut total = Duration::ZERO;
@@ -628,6 +630,21 @@ fn bench_scheduler_dequeue(c: &mut Criterion) {
                     criterion::black_box(sched.dequeue());
                     total += start.elapsed();
                     // sched 在此行末 drop——已出计时窗(拆解成本不计入出队延迟)
+                }
+                total
+            });
+        });
+        // 同轮扫描参照线：`peek_effective_priority` 走的正是全扫（旧出队路径的选优本体），
+        // 故同一 run 内 `peek/<n>` 与 `dequeue/<n>` 的比值就是加速比的**同条件**证据
+        // （跳轮对比会被跑间漂移污染——本仓已记录过多次该形态的假回归/假改进）。
+        group.bench_with_input(BenchmarkId::new("peek", size), &size, |b, &size| {
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
+                    let sched = build_scheduler(size);
+                    let start = Instant::now();
+                    criterion::black_box(sched.peek_effective_priority());
+                    total += start.elapsed();
                 }
                 total
             });
