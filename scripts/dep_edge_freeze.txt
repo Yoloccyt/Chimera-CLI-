@@ -161,7 +161,5 @@ chimera-cli|scc-cache          # L10->L3 down; commands/doctor.rs:576 check_scc_
 chimera-mas|gea-activator      # L9->L9 same-layer allowed; delegation.rs:393 Option<Arc<gea_activator::..>> (5 files)
 cmt-tiering|lsct-tiering       # L3->L3 same-layer allowed; lsct_policy.rs:32 use lsct_tiering::LsctCo.. (policy needs the tier type, no event equivalent)
 efficiency-monitor|decb-governor # L9->L8 down; auditor.rs:47 use decb_governor::Dec.. (auditor reads governor state synchronously)
-osa-coordinator|router-traits  # L6->L6 same-layer allowed; lib.rs:61 use router_traits::{RouterCon..} (seam abstraction, replacing the per-router hand glue)
-router-traits|nexus-contracts  # L6->L0 down, ADR-033 allows L(N)->L0; lib.rs:42 use nexus_contracts::{..} (trait over shared types only)
 gsoe-evolution|decay-engine    # L5->L4 DOWNWARD, lawful under agents.md 2.2 ten-layer law; registered per ADR-187 (alpha-prime: Check A retired, was a strict subset of Check B with zero unique detections). Engine reads ShadowModeCircuitBreaker synchronously (engine.rs:255 breaker.is_tripped()); event-ization rejected (would turn a fail-closed safety read fail-open). Ref docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md
 

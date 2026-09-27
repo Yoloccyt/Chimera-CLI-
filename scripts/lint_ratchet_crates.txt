@@ -38,7 +38,6 @@ pvl-layer  # opted in, measured clean at registration time
 qeep-protocol  # opted in, measured clean at registration time
 quest-engine  # opted in, measured clean at registration time
 repo-wiki  # opted in, measured clean at registration time
-router-traits  # opted in, measured clean at registration time
 scc-cache  # opted in, measured clean at registration time
 seccore  # opted in, measured clean at registration time
 sesa-router  # opted in, measured clean at registration time

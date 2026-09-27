@@ -90,7 +90,7 @@ layer_of() {
         repo-wiki|gsoe-evolution) echo 5 ;;
         # Phase 6 W0 层图订正 (2026-08-16, ADR-084): gea-activator 移 L9,
         # ssra-fusion 移 L7 — 与 crate 自述头及 AGENTS.md §2.1 对齐
-        osa-coordinator|kvbsr-router|faae-router|sesa-router|omega-learner|router-traits) echo 6 ;;
+        osa-coordinator|kvbsr-router|faae-router|sesa-router|omega-learner) echo 6 ;;
         # P3-T9 (2026-08-27): nexus-subagent typed SubAgent runtime (L7, 43rd crate)
         pvl-layer|gqep-executor|mtpe-executor|ssra-fusion|nexus-subagent) echo 7 ;;
         # ADR-182 (2026-09-16, M10): acb-governor 退役删除, L8 余 parliament/decb-governor
@@ -112,16 +112,18 @@ layer_of() {
 # All layered crates (static completeness bound for check C2).
 # Authority for layer numbers: $layerMap in check_dependency_rules.ps1 -- both
 # lists must stay identical (see DRIFT WARNING in the header).
-layered_crates="nexus-contracts nexus-core event-bus mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache lsct-tiering cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner router-traits pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
+layered_crates="nexus-contracts nexus-core event-bus mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache lsct-tiering cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
 # 架构减法批次 (2026-09-20): +router-traits -> 43
+# ADR-193 (2026-09-27): router-traits 整 crate 退役(唯一消费方 osa 的 trait 实现为空壳,
+#   契约头自带收缩条款),-router-traits -> 40
 # B0-6 (2026-09-20): auto-dpo / model-router 两个"历史层号条目"出表 —— 二者磁盘
 #   目录已删，留在生产层图里只让 check_layer_map_parity 判 map-only 漂移。
 #   原先"保留以支撑 selftest mock 基线"的理由经实测不成立：mock 图借用的
 #   model-router 已换成同为 L1 的现存 event-bus（见 mock_deps_of 注释），
 #   check_layer_map_parity.py 的 selftest 夹具本就用合成名 crate-NN。
 # 口径：此值必须等于 `Cargo.toml` workspace.members 实测数，勿硬编码追数。
-expected_crates=41
+expected_crates=40
 
 # Inner-ring whitelist (is_inner_ring) and L0/L1 base (is_inner_base) helpers
 # were removed together with Check A by ADR-187 (2026-09-24); they were used

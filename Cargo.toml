@@ -29,7 +29,7 @@ members = [
     "crates/nexus-contracts",
     "crates/nexus-core", "crates/event-bus", "crates/quest-engine",
     "crates/repo-wiki", "crates/parliament",
-    "crates/pvl-layer", "crates/osa-coordinator", "crates/router-traits", "crates/kvbsr-router",
+    "crates/pvl-layer", "crates/osa-coordinator", "crates/kvbsr-router",
     "crates/faae-router", "crates/gea-activator", "crates/gqep-executor",
     "crates/sesa-router", "crates/ssra-fusion", "crates/csn-substitutor",
     "crates/mtpe-executor", "crates/mlc-engine", "crates/hcw-window",
@@ -92,8 +92,8 @@ license = "MIT"
 # 棘轮方向：opt-in 集合只增不减，由 scripts/check_lint_ratchet.py 强制
 # (已登记 crate 实测 unwrap/expect 必须为 0 → 新代码不得引入回退)。
 # 存量分布(2026-09-25 实测，全 target)：41 crate 中 40 个 >5 处、最大 858，
-# 故无法“一把全开”；首个 opt-in = router-traits(src 生产码 0，唯一一处为
-# cfg(test) mock 的 lock().unwrap()，已改 poison-tolerant)。
+# 故无法“一把全开”；router-traits 曾是首个 opt-in，已随 ADR-193 架构减法批次
+# 整 crate 退役，其台账行同批摘除；存量 opt-in 集合继续只增不减。
 # ============================================================
 [workspace.lints.clippy]
 unwrap_used = "warn"
@@ -221,7 +221,6 @@ repo-wiki = { path = "crates/repo-wiki" }
 gsoe-evolution = { path = "crates/gsoe-evolution" }
 # L6 Router:全维稀疏协调器，KV 块路由，函数即专家，子专家稀疏激活，学习器(gea-activator/ssra-fusion 两行历史错位,层号以行内标注为准)
 osa-coordinator = { path = "crates/osa-coordinator" }
-router-traits = { path = "crates/router-traits" }  # L6 Router Traits — 星型耦合消除
 kvbsr-router = { path = "crates/kvbsr-router" }
 faae-router = { path = "crates/faae-router" }
 gea-activator = { path = "crates/gea-activator" }  # L9 Quest(门控激活)
