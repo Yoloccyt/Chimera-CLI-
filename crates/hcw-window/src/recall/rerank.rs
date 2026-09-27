@@ -457,6 +457,43 @@ impl RerankFill {
         })
     }
 
+    /// 恒留块提取 —— 「豁免打分」必须等价于「必在场」（H5 不变量的完整性修复）
+    ///
+    /// WHY: 旧实现只从精排输出里按 ID 取块（`by_id.get`），未命中即静默丢弃，
+    /// 等于把「恒留」重新交给检索层决定——而近似检索（HNSW 图层级由 OS 随机种子
+    /// 生成）不保证返回每一个候选，小图下 sink 块可能整块缺席；既破坏本层文档承诺的
+    /// 「系统提示恒留且在前」，也让调用方传给 `reorder_blocks` 的
+    /// `sink_count = sink_ids.len()` 位置假设错位（Linux CI 上 chimera-mas
+    /// `test_build_prompt_recall_path_orders_by_probe` 偶发红的根因即此）。
+    /// 现规则：
+    /// - 精排命中 → 沿用原条目（保留其精确分数与 temporal 透传，行为零变化）；
+    /// - 未命中但 `block_tokens` 登记过该 ID（= 调用方确认该块存在）→ 合成豁免条目；
+    /// - 两处都查不到 → 仍丢弃（不凭空造块，防御边界）。
+    ///
+    /// 合成条目 `score = 1.0`（恒留区按位置保留、不参与排序，给满分以免任何按分数
+    /// 降序消费该列表的下游把它裁掉）、`hnsw_score = 0.0`（诊断位：该块未被检索命中）。
+    fn extract_held(
+        ids: &[BlockId],
+        quota: usize,
+        by_id: &HashMap<&BlockId, &BlockScore>,
+        block_tokens: &HashMap<BlockId, usize>,
+    ) -> Vec<BlockScore> {
+        ids.iter()
+            .take(quota)
+            .filter_map(|id| match by_id.get(id) {
+                Some(block) => Some((*block).clone()),
+                None => block_tokens.get(id).map(|tokens| BlockScore {
+                    block_id: id.clone(),
+                    score: 1.0,
+                    hnsw_score: 0.0,
+                    source_module: String::new(),
+                    token_count: *tokens,
+                    temporal: false,
+                }),
+            })
+            .collect()
+    }
+
     /// 执行三区填充 — sink 恒留 + 滑窗恒留 + 中段密度贪心（PROBE P1.3）
     ///
     /// # 三区结构（StreamingLLM sink × NSA 三分支的脚手架平移）
@@ -520,20 +557,20 @@ impl RerankFill {
             blocks.iter().map(|b| (&b.block_id, b)).collect();
 
         // 2. sink 区: 恒留块（原序，限配额，豁免打分——H5 修复）
-        let sink_blocks: Vec<BlockScore> = input
-            .sink_blocks
-            .iter()
-            .take(sink_block_quota)
-            .filter_map(|id| by_id.get(id).copied().cloned())
-            .collect();
+        let sink_blocks: Vec<BlockScore> = Self::extract_held(
+            input.sink_blocks,
+            sink_block_quota,
+            &by_id,
+            input.block_tokens,
+        );
 
         // 3. 滑窗区: 恒留块（原序，限配额，recency 由结构保证）
-        let sliding_blocks: Vec<BlockScore> = input
-            .sliding_blocks
-            .iter()
-            .take(sliding_block_quota)
-            .filter_map(|id| by_id.get(id).copied().cloned())
-            .collect();
+        let sliding_blocks: Vec<BlockScore> = Self::extract_held(
+            input.sliding_blocks,
+            sliding_block_quota,
+            &by_id,
+            input.block_tokens,
+        );
 
         // 恒留块已占用 token（按实际 token_count，缺失按 DEFAULT 兜底）
         let held_tokens: usize = sink_blocks
@@ -887,6 +924,7 @@ impl Default for RerankFill {
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::recall::types::FineRecallOutput;
@@ -1013,6 +1051,52 @@ mod tests {
         let sliding_pos = ids.iter().position(|id| *id == "b19").unwrap();
         assert!(sink_pos < middle_pos, "sink 区应在中段之前");
         assert!(middle_pos < sliding_pos, "中段应在滑窗之前");
+    }
+
+    /// H5 不变量补全: sink 块**未被精排返回**时必须合成，不得静默丢弃
+    ///
+    /// 触发面即近似检索（HNSW 图层级随机）漏回候选的场景；旧实现把「恒留」
+    /// 重新取决于检索结果，本测锁定新语义（含位置契约：调用方传
+    /// `sink_count = sink_ids.len()` 时首位必为 sink）。
+    #[test]
+    fn test_fill_zones_synthesizes_held_block_missing_from_fine_output() {
+        let recall = RerankFill::with_default_config();
+        let (mut fine, coarse, tokens, sink, sliding, _) = make_zone_scenario();
+        // 模拟近似检索漏回 sink 首块（b01 仍在 block_tokens 里 = 调用方确认其存在）
+        fine.blocks.retain(|b| b.block_id != "b01");
+        assert!(!fine.blocks.iter().any(|b| b.block_id == "b01"));
+
+        let input = make_zone_input(&fine, &coarse, &tokens, &sink, &sliding, None);
+        let out = recall
+            .fill_zones(input, ZoneFillConfig::new(2048, 4096))
+            .unwrap();
+        let held = out
+            .filled_blocks
+            .iter()
+            .find(|b| b.block_id == "b01")
+            .expect("恒留块漏回时必须被合成保留（H5）");
+        assert!(
+            held.hnsw_score.abs() < f32::EPSILON,
+            "合成条目 hnsw_score=0 作诊断位（未被检索命中）"
+        );
+        assert!(held.score > 0.99, "合成条目按满分保留，不参与排序");
+        assert_eq!(out.filled_blocks[0].block_id, "b01", "sink 区首位不变");
+    }
+
+    /// 防御边界: 精排与 `block_tokens` 两处都没有的 ID 仍不得造块
+    #[test]
+    fn test_fill_zones_drops_held_id_unknown_to_caller() {
+        let recall = RerankFill::with_default_config();
+        let (fine, coarse, tokens, _, sliding, _) = make_zone_scenario();
+        let ghost: Vec<BlockId> = vec!["ghost-sink".to_string()];
+        let input = make_zone_input(&fine, &coarse, &tokens, &ghost, &sliding, None);
+        let out = recall
+            .fill_zones(input, ZoneFillConfig::new(2048, 4096))
+            .unwrap();
+        assert!(
+            !out.filled_blocks.iter().any(|b| b.block_id == "ghost-sink"),
+            "调用方未登记的 ID 不应凭空造块"
+        );
     }
 
     #[test]
