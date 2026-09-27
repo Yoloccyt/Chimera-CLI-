@@ -125,7 +125,7 @@ jobs:
           run_bench compute_masks     cargo bench -p osa-coordinator --bench compute_masks
           run_bench delegation        cargo bench -p chimera-mas --bench delegation_bench
           run_bench cache_hit         cargo bench -p scc-cache --bench cache_hit
-          run_bench tiering           cargo bench -p lsct-tiering --bench tiering_benchmark
+          run_bench tiering           cargo bench -p cmt-tiering --bench lsct_tiering_benchmark
           run_bench gather            cargo bench -p gqep-executor --bench gather
           run_bench produce_verify    cargo bench -p pvl-layer --bench produce_verify
           # ADR-192 附带：probe_select 升为 registered（消除 cache_hit 串台假红），I7 双源配对

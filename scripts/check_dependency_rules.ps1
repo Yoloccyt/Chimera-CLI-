@@ -82,7 +82,7 @@ $layerMap = @{
     # L2 Memory
     'nmc-encoder' = 2; 'hcw-window' = 2; 'mlc-engine' = 2
     # L3 Storage
-    'scc-cache' = 3; 'lsct-tiering' = 3; 'cmt-tiering' = 3
+    'scc-cache' = 3; 'cmt-tiering' = 3
     # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
     'session-store' = 3
     # L4 Security
@@ -125,7 +125,7 @@ $layerMap = @{
 #   GAP-B），且解法不该是让生产层图钉住已删 crate —— 改为让 mock 借用同为 L1 的
 #   现存 event-bus。auto-dpo 从未出现在任何 mock 中。
 # 口径：此值必须等于 Cargo.toml workspace.members 实测数，勿硬编码追数。
-$expectedCrates = 40
+$expectedCrates = 39
 
 # Inner-ring whitelist ($innerRing) and L0/L1 base ($innerBase) tables were
 # removed together with Check A by ADR-187 (2026-09-24); they were referenced

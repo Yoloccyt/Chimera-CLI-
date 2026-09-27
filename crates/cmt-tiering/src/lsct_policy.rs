@@ -1,13 +1,11 @@
-//! LSCT 任务感知策略装配 — cmt-tiering → lsct-tiering 生产依赖边
+//! LSCT 任务感知策略装配 — 同 crate 模块装配(ADR-193 架构减法)
 //!
-//! 对应架构层:L3 Storage(同层互引,§2.2 依赖铁律)
-//! 对应任务:ADR-160 冻结孤岛偿还(M10,island-batch-promotion-a 岛 4/4)
+//! 对应架构层:L3 Storage(原 `cmt-tiering → lsct-tiering` 跨 crate 生产边,
+//! 自 ADR-193 起 lsct 整并为 `crate::lsct` 子模块,本模块为其装配腿)
 //!
 //! # 模块职责(WHY 本模块存在)
 //! LSCT 订阅闭环的 CMT 消费腿(`CmtCoordinator::spawn_lsct_subscriber`)
-//! 自 L3 深度优化起已存在,但生产依赖图上没有任何 `lsct_tiering` 实例,
-//! `LsctTierSwitched` 事件零生产者 —— "任务负载 → 策略 → 事件 → 实际迁移"
-//! 四段链路缺第一段。本模块把 LSCT 策略层生产地装配进 CMT:
+//! 自 L3 深度优化起已存在。本模块把 LSCT 策略层生产地装配进 CMT:
 //!
 //! ```text
 //! QuestCreated 事件 ──► reconcile 种子(注册 CMT 已有能力)
@@ -16,11 +14,11 @@
 //!                              └► spawn_lsct_subscriber(既有)执行真实迁移
 //! ```
 //!
-//! # 依赖方向
-//! - `cmt-tiering → lsct-tiering`:L3 → L3 同层互引,合法(§2.2)
+//! # 依赖方向(ADR-193 后)
+//! - `crate::lsct` 与本模块同属 cmt-tiering,无跨 crate 依赖边
 //! - 反向事件流走 EventBus(`LsctTierSwitched`),不构成依赖边
-//! - WHY 无依赖环:lsct 已自持 `Tier` 类型(M10 解除原 cmt 类型复用),
-//!   两类型语义 1:1,由本模块的双向转换函数守护契约
+//! - Tier 类型单一实现(`crate::types::Tier`),原双向转换函数
+//!   (`to_lsct_tier`/`from_lsct_tier`)随跨 crate 边退役(恒等映射无意义)
 //!
 //! # 零行为变化保证
 //! 全部为 additive API:既有方法(`insert`/`get`/`spawn_lsct_subscriber` 等)
@@ -29,35 +27,11 @@
 use std::sync::Arc;
 
 use event_bus::NexusEvent;
-use lsct_tiering::{LsctConfig, LsctCoordinator};
 use tracing::{debug, info, warn};
 
+use crate::lsct::{LsctConfig, LsctCoordinator};
 use crate::types::Tier;
 use crate::CmtCoordinator;
-
-/// cmt `Tier` → lsct `Tier`(语义 1:1 映射)
-///
-/// WHY 独立转换函数而非 From trait 散点调用:层级契约是跨 crate 的
-/// 隐式接口(事件 payload 字符串的载体),集中一处便于审计与测试覆盖
-/// (见 `tests/lsct_policy.rs::test_tier_conversion_roundtrip`)。
-pub fn to_lsct_tier(tier: Tier) -> lsct_tiering::Tier {
-    match tier {
-        Tier::Hot => lsct_tiering::Tier::Hot,
-        Tier::Warm => lsct_tiering::Tier::Warm,
-        Tier::Cold => lsct_tiering::Tier::Cold,
-        Tier::Ice => lsct_tiering::Tier::Ice,
-    }
-}
-
-/// lsct `Tier` → cmt `Tier`(语义 1:1 映射,`to_lsct_tier` 的逆)
-pub fn from_lsct_tier(tier: lsct_tiering::Tier) -> Tier {
-    match tier {
-        lsct_tiering::Tier::Hot => Tier::Hot,
-        lsct_tiering::Tier::Warm => Tier::Warm,
-        lsct_tiering::Tier::Cold => Tier::Cold,
-        lsct_tiering::Tier::Ice => Tier::Ice,
-    }
-}
 
 /// LSCT 策略装配句柄 — 持有策略协调器实例与后台决策任务
 ///
@@ -180,7 +154,8 @@ impl CmtCoordinator {
         for tier in [Tier::Hot, Tier::Warm, Tier::Cold, Tier::Ice] {
             for entry in self.list(tier).await? {
                 if lsct.get_tier(entry.id.as_str()).is_none() {
-                    lsct.register_capability(entry.id.as_str(), to_lsct_tier(tier));
+                    // Tier 已统一为同一类型(ADR-193),原 to_lsct_tier 转换为恒等映射而删除
+                    lsct.register_capability(entry.id.as_str(), tier);
                     registered += 1;
                 }
             }

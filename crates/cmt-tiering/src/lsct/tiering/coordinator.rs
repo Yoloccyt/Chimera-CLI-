@@ -24,12 +24,12 @@ use dashmap::DashMap;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use tracing::{debug, warn};
 
-use crate::config::LsctConfig;
-use crate::error::LsctError;
-use crate::tiering::demoter::LsctDemoter;
-use crate::tiering::profile::compute_target_tier_with_config;
-use crate::tiering::promoter::LsctPromoter;
-use crate::types::{
+use crate::lsct::config::LsctConfig;
+use crate::lsct::error::LsctError;
+use crate::lsct::tiering::demoter::LsctDemoter;
+use crate::lsct::tiering::profile::compute_target_tier_with_config;
+use crate::lsct::tiering::promoter::LsctPromoter;
+use crate::lsct::types::{
     next_colder, next_warmer, tier_rank, TaskLoadProfile, Tier, TierAssignment, TierSwitchDecision,
 };
 
@@ -39,7 +39,7 @@ use crate::types::{
 ///
 /// # 使用示例
 /// ```no_run
-/// use lsct_tiering::{LsctCoordinator, LsctConfig, TaskType, TaskLoadProfile, Tier};
+/// use cmt_tiering::lsct::{LsctCoordinator, LsctConfig, TaskType, TaskLoadProfile, Tier};
 ///
 /// # async fn example() {
 /// let coordinator = LsctCoordinator::new(LsctConfig::default());
@@ -339,6 +339,8 @@ impl LsctCoordinator {
     async fn publish_tier_switched(&self, capability_id: &str, from: Tier, to: Tier, reason: &str) {
         if let Some(bus) = &self.event_bus {
             let event = NexusEvent::LsctTierSwitched {
+                // 源标签保留历史值 "lsct-tiering"(事件消费方可能按 source 过滤,
+                // ADR-193 整并后不改字面量,零行为变化)
                 metadata: EventMetadata::new("lsct-tiering"),
                 capability_id: capability_id.to_string(),
                 from_tier: from.as_str().to_string(),
@@ -360,7 +362,7 @@ impl LsctCoordinator {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
-    use crate::types::TaskType;
+    use crate::lsct::types::TaskType;
 
     #[test]
     fn test_register_and_get_tier() {

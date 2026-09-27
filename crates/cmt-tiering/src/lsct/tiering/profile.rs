@@ -10,9 +10,9 @@
 //! 对同一 task_type,intensity 越高 → tier_rank 越小(越热)或相等,
 //! 绝不会出现"高强度得到更冷的 tier"。
 
-use crate::config::LsctConfig;
-use crate::types::Tier;
-use crate::types::{TaskLoadProfile, TaskType};
+use crate::lsct::config::LsctConfig;
+use crate::lsct::types::Tier;
+use crate::lsct::types::{TaskLoadProfile, TaskType};
 
 impl TaskLoadProfile {
     /// 创建任务负载画像
@@ -75,7 +75,7 @@ impl TaskLoadProfile {
 /// 计算目标存储层级 — 按任务类型与强度决定(使用默认配置阈值)
 ///
 /// 向后兼容包装:委托给 [`compute_target_tier_with_config`] 并传入
-/// [`LsctConfig::default()`](crate::config::LsctConfig::default)。
+/// [`LsctConfig::default()`](crate::lsct::config::LsctConfig::default)。
 /// 适用于测试或无自定义阈值需求的场景。
 ///
 /// WHY 保留包装:原 API 被大量单元/集成/proptest 调用,这些测试验证
@@ -140,7 +140,7 @@ pub fn compute_target_tier_with_config(profile: &TaskLoadProfile, config: &LsctC
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
-    use crate::types::tier_rank;
+    use crate::lsct::types::tier_rank;
 
     // === TaskLoadProfile::new 测试 ===
 

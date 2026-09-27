@@ -17,8 +17,8 @@
 use std::time::Duration;
 
 use event_bus::EventBus;
-use lsct_tiering::Tier;
-use lsct_tiering::{
+use cmt_tiering::lsct::Tier;
+use cmt_tiering::lsct::{
     compute_target_tier, LsctConfig, LsctCoordinator, TaskLoadProfile, TaskType, TierSwitchDecision,
 };
 

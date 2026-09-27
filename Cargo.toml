@@ -33,7 +33,7 @@ members = [
     "crates/faae-router", "crates/gea-activator", "crates/gqep-executor",
     "crates/sesa-router", "crates/ssra-fusion", "crates/csn-substitutor",
     "crates/mtpe-executor", "crates/mlc-engine", "crates/hcw-window",
-    "crates/cmt-tiering", "crates/scc-cache", "crates/lsct-tiering",
+    "crates/cmt-tiering", "crates/scc-cache",
     "crates/seccore", "crates/decay-engine", "crates/qeep-protocol",
     "crates/decb-governor", "crates/efficiency-monitor",
     "crates/gsoe-evolution", "crates/mcp-mesh",
@@ -208,7 +208,6 @@ hcw-window = { path = "crates/hcw-window" }
 mlc-engine = { path = "crates/mlc-engine" }
 # L3 Storage:推测缓存,任务感知分层,能力内存分层
 scc-cache = { path = "crates/scc-cache" }
-lsct-tiering = { path = "crates/lsct-tiering" }
 cmt-tiering = { path = "crates/cmt-tiering" }
 # L3 Storage:会话事件流存储(Phase 2 新增,ADR-141;append-only 段 + CBMR 微批写)
 session-store = { path = "crates/session-store" }
@@ -633,7 +632,6 @@ event-bus = { path = "crates/event-bus" }
 nexus-core = { path = "crates/nexus-core" }
 # Week 6 五个被测 crate(L2/L3/L5/L7/L10)
 nmc-encoder = { path = "crates/nmc-encoder" }        # L2 Memory
-lsct-tiering = { path = "crates/lsct-tiering" }      # L3 Storage
 cmt-tiering = { path = "crates/cmt-tiering" }        # L3 Storage(Tier 类型复用)
 gsoe-evolution = { path = "crates/gsoe-evolution" }  # L5 Knowledge
 ssra-fusion = { path = "crates/ssra-fusion" }        # L7 Execution

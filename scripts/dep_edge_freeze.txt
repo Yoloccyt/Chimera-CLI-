@@ -85,7 +85,6 @@ hcw-window|nexus-core
 kvbsr-router|event-bus
 kvbsr-router|nexus-contracts
 kvbsr-router|nexus-core
-lsct-tiering|event-bus
 mas-sched|nexus-contracts
 mca-gateway|event-bus
 mca-gateway|hcw-window
@@ -159,7 +158,6 @@ chimera-cli|gea-activator      # L10->L9 down; composition.rs:102 pub gea: Arc<g
 chimera-cli|gqep-executor      # L10->L7 down; commands/doctor.rs:183 probes gqep_executor:: (health probe consumes the API)
 chimera-cli|scc-cache          # L10->L3 down; commands/doctor.rs:576 check_scc_cache via scc_cache:: (probe, not new data path)
 chimera-mas|gea-activator      # L9->L9 same-layer allowed; delegation.rs:393 Option<Arc<gea_activator::..>> (5 files)
-cmt-tiering|lsct-tiering       # L3->L3 same-layer allowed; lsct_policy.rs:32 use lsct_tiering::LsctCo.. (policy needs the tier type, no event equivalent)
 efficiency-monitor|decb-governor # L9->L8 down; auditor.rs:47 use decb_governor::Dec.. (auditor reads governor state synchronously)
 gsoe-evolution|decay-engine    # L5->L4 DOWNWARD, lawful under agents.md 2.2 ten-layer law; registered per ADR-187 (alpha-prime: Check A retired, was a strict subset of Check B with zero unique detections). Engine reads ShadowModeCircuitBreaker synchronously (engine.rs:255 breaker.is_tripped()); event-ization rejected (would turn a fail-closed safety read fail-open). Ref docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md
 

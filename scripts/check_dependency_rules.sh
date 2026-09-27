@@ -85,7 +85,7 @@ layer_of() {
         nexus-core|event-bus) echo 1 ;;
         nmc-encoder|hcw-window|mlc-engine) echo 2 ;;
         # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
-        scc-cache|lsct-tiering|cmt-tiering|session-store) echo 3 ;;
+        scc-cache|cmt-tiering|session-store) echo 3 ;;
         seccore|qeep-protocol|decay-engine) echo 4 ;;
         repo-wiki|gsoe-evolution) echo 5 ;;
         # Phase 6 W0 层图订正 (2026-08-16, ADR-084): gea-activator 移 L9,
@@ -112,18 +112,19 @@ layer_of() {
 # All layered crates (static completeness bound for check C2).
 # Authority for layer numbers: $layerMap in check_dependency_rules.ps1 -- both
 # lists must stay identical (see DRIFT WARNING in the header).
-layered_crates="nexus-contracts nexus-core event-bus mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache lsct-tiering cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
+layered_crates="nexus-contracts nexus-core event-bus mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
 # 架构减法批次 (2026-09-20): +router-traits -> 43
 # ADR-193 (2026-09-27): router-traits 整 crate 退役(唯一消费方 osa 的 trait 实现为空壳,
 #   契约头自带收缩条款),-router-traits -> 40
+# ADR-193 批次二: lsct-tiering 并入 cmt-tiering(唯一生产消费方即 cmt,Tier 逐字复制),-lsct-tiering -> 39
 # B0-6 (2026-09-20): auto-dpo / model-router 两个"历史层号条目"出表 —— 二者磁盘
 #   目录已删，留在生产层图里只让 check_layer_map_parity 判 map-only 漂移。
 #   原先"保留以支撑 selftest mock 基线"的理由经实测不成立：mock 图借用的
 #   model-router 已换成同为 L1 的现存 event-bus（见 mock_deps_of 注释），
 #   check_layer_map_parity.py 的 selftest 夹具本就用合成名 crate-NN。
 # 口径：此值必须等于 `Cargo.toml` workspace.members 实测数，勿硬编码追数。
-expected_crates=40
+expected_crates=39
 
 # Inner-ring whitelist (is_inner_ring) and L0/L1 base (is_inner_base) helpers
 # were removed together with Check A by ADR-187 (2026-09-24); they were used

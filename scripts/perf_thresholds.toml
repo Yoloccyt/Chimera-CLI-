@@ -320,8 +320,8 @@ bench = "cache_hit"
 
 [[run_bench]]
 alias = "tiering"
-crate = "lsct-tiering"
-bench = "tiering_benchmark"
+crate = "cmt-tiering"
+bench = "lsct_tiering_benchmark"
 
 [[run_bench]]
 alias = "gather"

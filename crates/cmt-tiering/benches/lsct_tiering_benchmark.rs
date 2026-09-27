@@ -9,12 +9,12 @@
 //!
 //! # 运行方式
 //! ```bash
-//! cargo bench -p lsct-tiering
+//! cargo bench -p cmt-tiering --bench lsct_tiering_benchmark
 //! ```
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use lsct_tiering::Tier;
-use lsct_tiering::{LsctConfig, LsctCoordinator, TaskLoadProfile, TaskType};
+use cmt_tiering::lsct::Tier;
+use cmt_tiering::lsct::{LsctConfig, LsctCoordinator, TaskLoadProfile, TaskType};
 
 /// 构建 n 个能力的 coordinator
 fn build_coordinator(n: usize) -> LsctCoordinator {
@@ -59,7 +59,7 @@ fn bench_apply_decision(c: &mut Criterion) {
     coordinator.register_capability("cap-promote", Tier::Warm);
     coordinator.register_capability("cap-demote", Tier::Hot);
 
-    let promote_decision = lsct_tiering::TierSwitchDecision::Promote {
+    let promote_decision = cmt_tiering::lsct::TierSwitchDecision::Promote {
         capability_id: "cap-promote".into(),
         from: Tier::Warm,
         to: Tier::Hot,

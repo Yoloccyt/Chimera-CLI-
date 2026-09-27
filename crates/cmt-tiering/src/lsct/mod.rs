@@ -1,11 +1,13 @@
-//! CRATE-CONTRACT BEGIN
-//! LAYER:    L3
+//! MODULE-CONTRACT BEGIN
+//! LAYER:    L3(cmt-tiering 内生子模块,ADR-193 架构减法:原独立 crate
+//!           `lsct-tiering` 因唯一消费方即本 crate 而整并,消除跨 crate
+//!           Tier 复制与双向转换守护层)
 //! ROLE:     任务感知能力分层 — 按任务负载动态调整能力存储层级
 //! BACKEND:  memory
 //! PRODUCERS: 1 LsctTierSwitched
-//! CONSUMERS: 1 cmt-tiering
+//! CONSUMERS: 1 cmt-tiering(同 crate:spawn_lsct_policy 装配 + 订阅腿)
 //! MATURITY: TRUE
-//! CRATE-CONTRACT END
+//! MODULE-CONTRACT END
 //! 任务感知能力分层 — 按任务负载动态调整能力存储层级
 //!
 //! 对应架构层:L3 Storage
@@ -19,14 +21,13 @@
 //!
 //! # 与 CMT 的关系
 //! LSCT 是 CMT 之上的"任务感知策略层",不直接操作 CMT 存储:
-//! - 自持 `Tier` 层级类型(与 CMT 语义 1:1,M10 解除互依赖防环;
-//!   转换由 `cmt_tiering::lsct_policy` 守护)
+//! - `Tier` 层级类型与 CMT 共用单一实现(`crate::types::Tier`,ADR-193 统一)
 //! - 计算策略并发布事件,CMT 订阅事件做实际数据迁移
 //! - 生产装配入口:`CmtCoordinator::spawn_lsct_policy`(cmt 侧)
 //!
 //! # 快速示例
 //! ```no_run
-//! use lsct_tiering::{LsctCoordinator, LsctConfig, TaskType, Tier};
+//! use cmt_tiering::lsct::{LsctCoordinator, LsctConfig, TaskType, Tier};
 //!
 //! let coordinator = LsctCoordinator::new(LsctConfig::default());
 //! coordinator.register_capability("cap-1", Tier::Warm);
@@ -37,9 +38,6 @@
 //! - 锁中毒场景使用 `unwrap_or_else(|p| p.into_inner())`
 //! - 所有 async fn 满足 `Send + 'static` 约束
 //! - 跨层通信只能走 EventBus(§2.2 依赖铁律)
-
-#![forbid(unsafe_code)]
-#![warn(missing_docs, clippy::all)]
 
 pub mod config;
 pub mod error;

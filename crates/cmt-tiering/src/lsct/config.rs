@@ -2,7 +2,7 @@
 //!
 //! 对应架构层:L3 Storage
 
-use crate::error::LsctError;
+use crate::lsct::error::LsctError;
 use serde::{Deserialize, Serialize};
 
 /// LSCT 配置 — 控制升降温触发条件与扫描频率

@@ -70,7 +70,14 @@ pub mod error;
 pub mod experience_card_storage;
 pub mod hot;
 pub mod ice;
-/// LSCT 任务感知策略装配(cmt → lsct 生产边,ADR-160 孤岛偿还 M10)
+/// LSCT 任务感知策略子模块(ADR-193 架构减法:原独立 crate `lsct-tiering` 整并)
+///
+/// 自 ADR-160(M10)起 lsct 的唯一生产消费方就是本 crate 的 `spawn_lsct_policy`
+/// 装配腿;整并后 Tier 类型统一为 `crate::types::Tier` 单一实现,
+/// 跨 crate 双向转换守护层(`to_lsct_tier`/`from_lsct_tier`)随之退役。
+/// 子模块完整契约见 `lsct/mod.rs` MODULE-CONTRACT 头。
+pub mod lsct;
+/// LSCT 策略装配(`cmt → lsct` 由跨 crate 生产边变为同 crate 模块装配,ADR-193)
 ///
 /// `spawn_lsct_policy` 装配决策腿(QuestCreated → LSCT 策略),
 /// 与既有 `spawn_lsct_subscriber`(执行腿)组成完整闭环。

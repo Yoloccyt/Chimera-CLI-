@@ -14,10 +14,10 @@
 
 use std::collections::HashSet;
 
-use crate::types::Tier;
+use crate::lsct::types::Tier;
 
-use crate::error::LsctError;
-use crate::types::{next_warmer, tier_rank, TierAssignment};
+use crate::lsct::error::LsctError;
+use crate::lsct::types::{next_warmer, tier_rank, TierAssignment};
 
 /// 升温器 — 逐级提升层级,HashSet 防级联
 ///
