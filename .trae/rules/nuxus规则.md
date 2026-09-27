@@ -4,7 +4,7 @@
 >
 > **历史溯源**:早期为重定向占位(2026-08-11 之前的 nuxus规则.md 由 AGENTS.md 完全托管);自 2026-08-11 v2.26.0-omega 同步后,本文件升级为**速查 + 基线 + 硬约束**三重定位,与 `AGENTS.md`(全量规则)+ `project_memory.md`(持久记忆)形成"快速 / 详细 / 历史"三层规则体系。
 >
-> **最后更新**:2026-09-08(v2.28.2-omega 正式发布:收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;基线口径 43 crates(38→43)+ ADR-095~182 治理 + 可达性棘轮(28 生产可达/14 冻结孤岛 + 1 GATED,mca-gateway 经 ADR-177 重分类)+ event_types.rs 镜像退役 + 三轮冗余收敛;上一已发 tag = v2.28.0-omega → 94499b4(2026-09-06);**RL 开发闸门决策持续有效**:Rust-First,Python 侧仅规划)
+> **最后更新**:2026-09-08(v2.28.2-omega 正式发布:收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;基线口径:crate 数以 `Cargo.toml` `workspace.members` 为准(批次 A 退役 `auto-dpo`/`model-router`,故低于 v2.28.0 时点的 43)+ ADR 至 185(索引见 `docs/architecture/adr_index.md`)+ 可达性棘轮由 `scripts/check_crate_reachability.sh` 现测(`mca-gateway` 经 ADR-177 重分类为 GATED)+ event_types.rs 镜像退役 + 三轮冗余收敛;上一已发 tag = v2.28.0-omega → 94499b4(2026-09-06);**RL 开发闸门决策持续有效**:Rust-First,Python 侧仅规划)
 > **生成方式**:trae-remote-official:staff-engineer-mode + superpowers-main + praxis + brooks-lint + product-lifecycle-workbench 多 agent 工具分布式深度分析
 
 ---
@@ -19,13 +19,13 @@
 | 错误处理 | 库层 thiserror / 应用层 anyhow | 无 | `cargo clippy --workspace -D warnings` |
 | 性能证据 | criterion benchmark | 任何性能声明必附 bench 数据 | `cargo bench` + `scripts/check_perf_redlines.ps1` |
 | unsafe code | `#![forbid(unsafe_code)]` | 绝对禁止(包含 crate 顶层) | grep 全文 `unsafe` |
-| 单函数长度 | ≤200 行 | 超必须拆模块 | `scripts/audit_fnlen.py` |
+| 单函数长度 | ≤200 行 | 超必须拆模块（现状 2026-09-22 实测 10 处超标 = src 6 + tests 4；门系报告型、CI 仅自证工具牙口，**未判达标**，详见 DOC-AUDIT-FACTS_2026-09-20 §25） | `scripts/audit_fnlen.py` |
 | test timeout | `scaled_timeout!` 宏 | `CHIMERA_TEST_TIMEOUT_SCALE=0.1` 默认 | `cargo test --workspace` |
 | Python RL 训练服务 | **仅规划,禁止实施** | Rust 系统彻底成熟稳定运行后开启(RL 开发闸门) | 规则文档 + AGENTS.md + 全部规划文档标注 |
 
 ---
 
-## 1. v2.28.0-omega 基线声明(2026-09-06 同步;发布提交 af62e44 已落 2026-09-02,tag 待推)
+## 1. v2.28.0-omega 基线声明(2026-09-06 同步;发布提交 af62e44 于 2026-09-02 落,tag `v2.28.0-omega` 已于 2026-09-06 推送 → 94499b4;其后 `v2.28.2-omega` 于 2026-09-08 正式发布)
 
 ### 1.1 项目身份
 
@@ -34,15 +34,15 @@
 | 项目名 | Chimera CLI |
 | 代号 | NEXUS-OMEGA (Omni-Model Engineering Generative Architecture) |
 | 根目录 | `D:\Chimera CLI` |
-| 技术栈 | Rust 2021 edition · Tokio async · Workspace × **43 crates**(38 基线 + v2.28 新增 L10 `nexus-app-server` + L3 `session-store` + L9 `mas-sched`/`nexus-hook` + L7 `nexus-subagent`) |
+| 技术栈 | Rust 2021 edition · Tokio async · Workspace 多 crate(**crate 数以 `Cargo.toml` `workspace.members` 为准**；v2.28 曾新增 L10 `nexus-app-server` + L3 `session-store` + L9 `mas-sched`/`nexus-hook` + L7 `nexus-subagent`，其后批次 A 退役 `auto-dpo`/`model-router`) |
 | 核心哲学 | **OMEGA 十一定律**: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize |
-| 当前版本 | `v2.28.2-omega`(workspace.package.version,**2026-09-08 正式发布**;上一已发 tag v2.28.0-omega → 94499b4(2026-09-06);v2.28.2 收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0) |
-| 测试规模 | **11587 passed / 0 failed**(2026-09-02 全量重测,485 test target;静态 `#[test]` 计数 11433,差值为 doctest+宏展开) |
-| crates | **43/43**(零 Stub / 零 `todo!()` 真代码 / 零 `unimplemented!()`;ADR-160 裁定 28 生产可达 + 14 冻结孤岛 + 1 GATED(mca-gateway,ADR-177),**"零 Stub" ≠ "已装配"**) |
-| NexusEvent 变体 | **144 个**(types.rs 单表;`event_types.rs` 分层子枚举镜像已按 ADR-160 决策 5 退役删除,分类真值源收敛一处) |
-| ADR 数量 | **主编号至 ADR-182**(ADR-001~006 + ADR-026~037 + ADR-042~094 + ADR-095~160 Phase 1-5 治理 + 其后治理批次至 182;Phase 1-5 以四份合并档 095-134/135-144/145-152/153-156 + 单档 132/157/159/160 落档,ADR-158 登记于 phase5 收官报告;权威映射见 `adr_index.md`) |
+| 当前版本 | `v2.29.0-omega`(workspace.package.version,**2026-09-27 发布**;收口四维深审运行期质量批次 + 架构减法 A/B/P0 治理 + mlc L2 分层检索 ADR-192;上一发布 v2.28.2-omega(2026-09-08),其 tag a1b4616 落在 release 支线而非 main 祖先——⚠ 双支线历史待治理;再早 tag v2.28.0-omega → 94499b4(2026-09-06)) |
+| 测试规模 | **动态 passed 数不在此登记**——权威源 `docs/reports/` 最新回归报告;已登记时点 11587(2026-09-02,43 crates / 485 test target)→ **11794(2026-09-17 M13 提交态,回写提交 `d3840ba`)**,架构减法批次 `38c72e6`(43→41 crates)改动测试面 ⇒ **现势值待重测**;静态口径两尺 11232(strict)/11276(loose,2026-09-22 现取)与旧"差值=doctest+宏展开"解释的**否证**见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md §24` |
+| crates | **41 crates**(成员数现取 `Cargo.toml` 的 `workspace.members`;零 Stub / 零 `todo!()` / 零 `unimplemented!()`。可达性**不登记**、以 `scripts/check_crate_reachability.sh` 现取(2026-09-22 实测 32 生产可达 / 0 冻结孤岛 / 9 GATED);旧口径"28 可达 + 14 孤岛 + 1 GATED"(ADR-160 时点)已被 P0-P3 岛链偿还批次取代。**"零 Stub" ≠ "已装配"** 仍然成立) |
+| NexusEvent 变体 | **计数不在此登记**(本文件头部政策)——变体清单唯一权威源 `crates/event-bus/src/types.rs`,现取命令 `bash scripts/check_doc_drift.sh`(自报 `nexus_event_variants=…`;2026-09-22 实测 **146**);`event_types.rs` 分层子枚举镜像已按 ADR-160 决策 5 退役删除,分类真值源收敛一处 |
+| ADR 数量 | **主编号至 ADR-185**(2026-09-22 现取:`ls docs/architecture/ADR-*.md` 的最大主编号 = 185)。分段构成、合并档与保留号一律以 `docs/architecture/adr_index.md` + `CODE_WIKI §11` 为准,本文不登记清单与分段(旧记「至 ADR-182」为 2026-09-06 时点值,`agents.md` 同处旧记一并校正) |
 
-### 1.1a OMEGA 十一定律(Ω₁~Ω₉ 基座 + Ω₁₀/Ω₁₁ 扩展;权威定义源:`Chimera CLI 十层架构深度打磨与优化方案 最新版.md` §3 + `Chimera CLI 十层架构与算法深度打磨优化方案.md` §2.1;Ω₁₀/Ω₁₁ 见 `Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md` §3.1,收录于 ADR-170)
+### 1.1a OMEGA 十一定律(Ω₁~Ω₉ 基座 + Ω₁₀/Ω₁₁ 扩展;权威定义源:`docs/architecture/CODE_WIKI.md` §1.2 + ADR-170（旧引文件经 2026-09-21 全库检索确认不在盘，属悬空权威源） + `Chimera CLI 十层架构与算法深度打磨优化方案.md` §2.1;Ω₁₀/Ω₁₁ 见 `Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md` §3.1,收录于 ADR-170)
 
 > ★ Insight: 四定律→九定律→十一定律演进(2026-08-11 全库核验 Ω₁~Ω₉,2026-09-02 ADR-170 收录 Ω₁₀/Ω₁₁):Ω₁~Ω₄ 为架构基座,Ω₅~Ω₉ 为 v2.x 学习/进化体系补齐,Ω₁₀/Ω₁₁ 为经验卡片与按需记忆合成扩展。全部十一定律已有代码落地与 E2E 验证。
 
@@ -56,7 +56,7 @@
 | **Ω-Reuse** | Ω₆ | 复用率优先:奖励函数优化技能复用率 | `repo-wiki/skill_graph.rs`(reuse_count) + `csn-substitutor` | ✅ |
 | **Ω-Locate** | Ω₇ | 行为定位:L1→L2→L3 自动导航代码修改点 | `parliament/src/critical_path.rs`(关键路径动态识别) | ✅ |
 | **Ω-Assess** | Ω₈ | 自我评估:Runtime Auditor 五维度证据纪律 | `efficiency-monitor/src/auditor.rs`(EvidenceGap) | ✅ |
-| **Ω-Preserve** | Ω₉ | 保留历史最佳:变体隔离 + 停止策略 | `chimera-mas/src/variant_pool.rs` + `gsoe-evolution` checkpoint | ✅ |
+| **Ω-Preserve** | Ω₉ | 保留历史最佳:变体隔离 + 停止策略 | `parliament/src/variant_pool.rs`(变体隔离,ADR-051 决策「不新建 crate」) + `gsoe-evolution`(停止策略,`checkpoint_preserver.rs`) + `chimera-mas`(INV-8/INV-9) | ✅ |
 | **Ω-Card** | Ω₁₀ | 经验卡片数据结构:不可变 + 版本化 + append-only 事件流 | `event-bus/src/experience_card_bus.rs` + `nexus-contracts/src/experience_card.rs` + `mlc-engine/src/experience_card_system.rs` + `cmt-tiering/src/experience_card_storage.rs` | ✅ |
 | **Ω-Synthesize** | Ω₁₁ | 按需记忆合成算法:懒加载合成 + 不阻塞主流程 + Debug→同错误签名兄弟定向检索 | `mlc-engine/src/on_demand_synthesizer.rs` + `event-bus`(错误签名级检索) | ✅ |
 
@@ -64,28 +64,28 @@
 
 ### 1.2 三方一致性(权威源:Cargo.toml)
 
-- `Cargo.toml` workspace.package.version = `2.28.2-omega`(正式发布) ⇔
-- `CHANGELOG.md` 最新条目 = `[2.28.2-omega] 2026-09-08 正式发布` ⇔
-- `CODE_WIKI.md` / `AGENTS.md` / `.claude/CLAUDE.md` / 本文件 = **43 crates(28 生产可达/14 冻结孤岛 + 1 GATED(mca-gateway,ADR-177))· 145 NexusEvent(types.rs 单表,FC-2 新增 TuiChatHistoryReplaced)· 11587 tests(2026-09-02 重测)· ADR 主编号至 182**
+- `Cargo.toml` workspace.package.version = `2.29.0-omega`(正式发布) ⇔
+- `CHANGELOG.md` 最新条目 = `[2.29.0-omega] 2026-09-27 发布` ⇔
+- 三方一致性口径**不在此登记数值**，改由门禁现测：`scripts/check_doc_drift.sh`（锁定基线 `scripts/doc_count_freeze.txt`）保证 `Cargo.toml` / `types.rs` 代码实况与文档声明三者同步；文档侧计数唯一登记点为 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md`
 
 ### 1.3 关键里程碑(v2.20+ 演进链)
 
 | 版本 | 交付 |
 |------|------|
 | v2.20.0-omega | PROBE HCW-Sparse 深度优化完整闭环(P-1~P3,38 crates,126 NexusEvent,ADR-070/071) |
-| v2.21.0-omega | CLI LLM 统一入口(`chimera llm` + `/llm` slash) |
+| v2.21.0-omega | CLI LLM 统一入口(`chimera llm` 子命令；TUI 侧为 `/model`，注册表无 `/llm`) |
 | v2.22.0-omega | MCA token 效率深度优化(coalescing + token_estimate + 亲和缓存) |
 | v2.24.0-omega | Phase 9 三环循环元架构重组收尾(P9-T12)+ RUSTSEC-2026-0217/0222/0223 修复 |
 | v2.25.0-omega | Milestone B 全部交付 B-1~B-6 + Milestone C R2 解冻前置 + Milestone D RL 全栈三位一体闭环 |
-| **v2.26.0-omega** | **Concord TUI 重构 W0~W11 全部收尾**(SlashCommandRegistry 53 命令 + `/` 一级整合 + Chat/Quest 双轨 + ApprovalMode 动态 Shift+Tab + NewlineGate 闸门 + i18n 中英门户 + 10 份 ADR-074~083 落档) |
+| **v2.26.0-omega** | **Concord TUI 重构 W0~W11 全部收尾**（**此处「全部收尾」指波次工程收口，不等于清单内每项均已落码**：W8~W11 若干子项实测未接线/未注册，逐项现状的唯一权威源是 `docs/tui/README.md` 的「Concord 重构 W7~W11 新增能力」节）(SlashCommandRegistry 53 命令 + `/` 一级整合 + Chat/Quest 双轨 + ApprovalMode 动态 Shift+Tab + NewlineGate 闸门 + i18n 中英门户 + 10 份 ADR-074~083 落档) |
 | **v2.27.0-omega** | **Phase 10 §16 跨层协同闭环审计修复正式发布**(W1-W7 全波次闭环,144 NexusEvent,10836 tests) |
 | **v2.27.1-omega** | **GPG 签名补发 + MCA E2E 超时加固**(无功能性变更) |
-| **v2.28.0-omega(发布提交已落 2026-09-02,tag 待推)** | **Phase 1-5 Ch12 W1-W26 全部收尾**(38→43 crates 五新成员 nexus-app-server/session-store/mas-sched/nexus-hook/nexus-subagent;ComputeBridge 双运行时 + 分片总线双跑零 diff ADR-153 Go 全量 B 级 + CausalGraph ADR-132 + 供应商漂移 ADR-154 + 利用率双口径 ADR-157 + payload 双跑 ADR-158;ADR-095~160 治理;ADR-160 可达性棘轮 28/15 + event_types 镜像退役;485 test target 11587 tests,2026-09-02 重测) |
+| **v2.28.0-omega(发布提交 af62e44 于 2026-09-02 落,tag 已于 2026-09-06 推送 → 94499b4)** | **Phase 1-5 Ch12 W1-W26 全部收尾**(38→43 crates 五新成员 nexus-app-server/session-store/mas-sched/nexus-hook/nexus-subagent;ComputeBridge 双运行时 + 分片总线双跑零 diff ADR-153 Go 全量 B 级 + CausalGraph ADR-132 + 供应商漂移 ADR-154 + 利用率双口径 ADR-157 + payload 双跑 ADR-158;ADR-095~160 治理;ADR-160 可达性棘轮 28/15 + event_types 镜像退役;485 test target 11587 tests,2026-09-02 重测) |
 | **v2.28.1-omega(工作区在途)** | **审计遗留修复(fix-audit-followup,2026-08-28)**:B1 freeze_guard 双向接线 R2FreezeRollbackFailed;C1 xts_top_k 收敛红线 #8;E1 bench 三态门禁;14 幽灵事件接线 13+预留 1;FormalVerificationFailed 定稿;ADR-159 登记(未改 workspace.package.version) |
 
 ### 1.4 当前焦点(2026-08-30)
 
-- **v2.28.0-omega 收口**:Phase 1-5 Ch12 W1-W26 已全部收尾(43 crates · 11587 tests(2026-09-02 重测) · 144 事件),发布提交 af62e44 已落(2026-09-02),**tag 待推**;收口前跑全量回归 + clippy + fmt + 依赖铁律双源门禁
+- **v2.28.0-omega 收口**:Phase 1-5 Ch12 W1-W26 已全部收尾(发布提交 af62e44 于 2026-09-02 落,**tag `v2.28.0-omega` 已于 2026-09-06 推送 → 94499b4**;其后 `v2.28.2-omega` 于 2026-09-08 正式发布;逐时点 crate/测试/事件计数见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md`);收口前跑全量回归 + clippy + fmt + 依赖铁律双源门禁
 - **ADR-160 冻结孤岛偿还(现口径 14 冻结 + 1 GATED，mca-gateway 经 ADR-177 重分类)**:按三条路径(组合根接线 / `optional`+cargo feature / ADR 记录理由)逐步去孤岛;新增不可达 crate 若未登记会让 `check_crate_reachability.sh` 非零退出
 - **冗余审计后续**:R1 依赖层 / R2 契约层 / R3 微观逻辑三轮(2026-08-30)已收敛,下一轮 R4 排查跨层语义重复
 - **R2 解冻影子期**(≥14 天,ADR-053 rev4 + ADR-054 治理签署,五要素 fail-closed 门禁)
@@ -116,14 +116,14 @@ L(N) → L(0)    ✓ L0 Contracts 恒允许(ADR-033)
 L0   Contracts ── nexus-contracts                            (纯类型零依赖契约层,ADR-033)
 L10  Interface ── chimera-cli · chimera-tui · chtc-bridge · mcp-mesh · csn-substitutor · mca-gateway · nexus-app-server
 L9   Quest ───── quest-engine · gea-activator · efficiency-monitor · chimera-mas · mas-sched · nexus-hook
-L8   Parliament ─ parliament · acb-governor · decb-governor
+L8   Parliament ─ parliament · decb-governor
 L7   Execution ── pvl-layer · gqep-executor · mtpe-executor · ssra-fusion · nexus-subagent
-L6   Router ───── osa-coordinator · kvbsr-router · faae-router · sesa-router · omega-learner
-L5   Knowledge ── repo-wiki · gsoe-evolution · auto-dpo
+L6   Router ───── osa-coordinator · router-traits · kvbsr-router · faae-router · sesa-router · omega-learner
+L5   Knowledge ── repo-wiki · gsoe-evolution
 L4   Security ─── seccore · qeep-protocol · decay-engine
 L3   Storage ──── scc-cache · lsct-tiering · cmt-tiering · session-store
 L2   Memory ───── nmc-encoder · hcw-window · mlc-engine
-L1   Core ─────── nexus-core · event-bus · model-router
+L1   Core ─────── nexus-core · event-bus
 ```
 
 **v2.x 关键变更**:
@@ -137,7 +137,7 @@ L1   Core ─────── nexus-core · event-bus · model-router
 ## 4. async 反模式清单(完整 8 条 + Week 1-8 教训,见 AGENTS.md §4.4 / project_memory.md)
 
 1. **禁止持锁跨 `.await`** — DashMap/Mutex 写锁必须在 `.await` 前释放
-2. **rusqlite 必须 `spawn_blocking`** — 79 处已包装(repo-wiki / scc-cache)
+2. **rusqlite 必须 `spawn_blocking`** — 89 处已包装(repo-wiki / scc-cache;2026-09-22 现取,旧值 79 已漂,见 DOC-AUDIT-FACTS §25)
 3. **`tokio::broadcast` 先 subscribe 再 spawn** — 否则事件静默丢失
 4. **`with_event_bus(config, bus)` 会 move bus** — subscribe 必须在 with_event_bus 之前
 5. **`Arc::new(self.chains.clone())` 创建独立副本** — 必须 `Arc::clone(&self.chains)`
@@ -166,9 +166,9 @@ L1   Core ─────── nexus-core · event-bus · model-router
 13. 孤儿调用(异步无 GQEP 聚集/超时)
 14. R2 冻结扫描关键词命中(constrained_rl / r2_policy / train_r2 / GsoeAutoDpoRL / evolve_with_constrained_rl)
 
-**Critical 事件清单**(必须 mpsc 旁路;**权威源 `event-bus/src/bus.rs::is_critical_mpsc_event()`,13 个真实 NexusEvent**):
-`SkepticVeto` / `RedTeamAudit` / `BudgetExceeded` / `AgentTaskFailed` / `AsaIntervention` / `AffinityQuotaExhausted` / `R2FreezeViolation` / `R2FreezeRollbackFailed` / `FormalViolation` / `VetoOverridden` / `R1ShadowRollbackFailed` / `StopRulingIssued` / `ErrorSignatureMatched`
-> 注(2026-08-28 ADR-159 定稿,源冗余审计维度2):`FormalVerificationFailed` 实为 `GsoeError` 的错误变体(gsoe-evolution/src/error.rs:98),**非 NexusEvent**,已从此清单剔除;`VetoOverridden`/`R1ShadowRollbackFailed` 为 Phase 10 Wave 5 双清单对齐补齐,此前文档清单漏列。清单以代码 `is_critical_mpsc_event()` 为唯一事实源,文档改动须同步更新。
+**Critical 事件清单**(必须 mpsc 旁路;**权威源 `event-bus/src/bus.rs::is_critical_mpsc_event()`,14 个真实 NexusEvent,规模由 `bus.rs:48` `CRITICAL_MPSC_VARIANTS` 常量守护**):
+`SkepticVeto` / `RedTeamAudit` / `BudgetExceeded` / `AgentTaskFailed` / `AsaIntervention` / `AffinityQuotaExhausted` / `R2FreezeViolation` / `R2FreezeRollbackFailed` / `FormalViolation` / `VetoOverridden` / `R1ShadowRollbackFailed` / `StopRulingIssued` / `ErrorSignatureMatched` / `FormalVerificationFailed`
+> 注(2026-08-28 ADR-159 定稿,源冗余审计维度2):`FormalVerificationFailed` 曾按本决策被当作 `GsoeError` 错误变体(`gsoe-evolution/src/error.rs:98`)从清单剔除;**但 2026-09-22 复证实现已推翻该前提**——`types.rs:241` 有其枚举变体、`registry.rs:125` 定级 Critical、并已进 mpsc 旁路(故本行清单实为 14 个,与 `bus.rs:48 CRITICAL_MPSC_VARIANTS=14` 对齐;superseding ADR 待补);`VetoOverridden`/`R1ShadowRollbackFailed` 为 Phase 10 Wave 5 双清单对齐补齐,此前文档清单漏列。清单以代码 `is_critical_mpsc_event()` 为唯一事实源,文档改动须同步更新。
 
 ---
 
@@ -186,9 +186,9 @@ L1   Core ─────── nexus-core · event-bus · model-router
 ## 7. 9 条不可压缩的工程铁律(Week 1-8 + v2.x 实战)
 
 1. **禁止持锁 .await** — 锁内取快照→释放→await
-2. **rusqlite 必须 spawn_blocking** — 79 处已包装
+2. **rusqlite 必须 spawn_blocking** — 89 处已包装(2026-09-22 现取,见 DOC-AUDIT-FACTS §25)
 3. **broadcast 先 subscribe 再 spawn** — `bus.subscribe()` 同步调用
-4. **BudgetExceeded severity = Critical** — types.rs:1158 权威源
+4. **BudgetExceeded severity = Critical** — 定级表 crates/event-bus/src/registry.rs:129（旧锚 types.rs:1158 已失效）
 5. **Critical 安全事件用 mpsc** — `Vec<UnboundedSender>` 旁路
 6. **禁止 cargo add 不更新 Cargo.lock** — cargo audit 每日扫描
 7. **sqlite-vec 禁用** — 违反 forbid(unsafe),改内存 KNN
@@ -205,8 +205,8 @@ L1   Core ─────── nexus-core · event-bus · model-router
 | 详细规则 | `AGENTS.md`(项目根) | 全量规则(10 章 + 附录) |
 | 项目特定命令 | `.claude/CLAUDE.md` | 环境/CI/Docker/发布 checklist |
 | 持久记忆 | `c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI--p2-35a24f2af7eb9ad9ddea\project_memory.md` | Hard Constraints + Lessons Learned |
-| 架构权威源 | `docs/architecture/CODE_WIKI.md` | 43 crate 完整索引(§3.11 冻结孤岛清单)+ 145 NexusEvent + ADR-001~182 + 8 专家深度分析 |
-| 版本演进权威源 | `CHANGELOG.md` | v1.0.0→[2.28.2-omega] 在途完整历史 |
+| 架构权威源 | `docs/architecture/CODE_WIKI.md` | crate 完整索引(§3.11 冻结孤岛清单)+ `NexusEvent` 全量清单(权威源 `crates/event-bus/src/types.rs`)+ ADR 全量索引(§11 与 `docs/architecture/adr_index.md`)+ 8 专家深度分析 |
+| 版本演进权威源 | `CHANGELOG.md` | v1.0.0→[2.29.0-omega] 在途完整历史 |
 | 当前基线行数报告 | `docs/reports/project_line_count_report_v2.28.0-omega.md` | 623,344 LOC / 1,870 文件(2026-08-15 实测;competition 3 份已归档至 tmp) |
 | 文档一致性巡检 | `scripts/check_doc_consistency.ps1` | 6 类 14 项 EXIT=0 |
 | 依赖铁律校验 | `scripts/check_dependency_rules.{ps1,sh}` | L(N)→L(N-1) 验证 |
@@ -283,7 +283,7 @@ $env:PATH = "D:\Chimera CLI\.toolchain\cargo\bin;D:\msys64\mingw64\bin;$env:PATH
 # 快速类型检查
 cargo check --workspace
 
-# 全量测试(11587 passed / 0 failed,2026-09-02 全量重测,485 test target)
+# 全量测试(passed 数不写死:权威源 docs/reports/ 最新回归报告;时点值 11587=2026-09-02、11794=2026-09-17 M13 提交态,架构减法批次后待重测)
 cargo test --workspace
 
 # clippy(Windows OOM 缓解:--jobs 2)

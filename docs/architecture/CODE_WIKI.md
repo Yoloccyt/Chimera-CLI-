@@ -1,12 +1,12 @@
 # Chimera CLI Code Wiki — NEXUS-OMEGA
 
-> **版本**: v2.28.2-omega (Code Wiki · v2.28.2-omega 基线同步，2026-09-08)
+> **版本**: v2.29.0-omega (Code Wiki · v2.29.0-omega 基线同步，2026-09-27)
 > **基线代码版本**: v2.28.0-omega 在途 (迭代链 v2.0.0-omega `chimera-mas` 多 Agent 协同子系统 → v2.4.0-omega P5 进化闭环 37 crate → v2.14.0~~v2.19.0 P2 Sprint 14 项任务全量交付 → v2.20.0-omega PROBE HCW-Sparse 深度优化完整闭环 P-1~~P3 38 crate(PROBE 阶段基线起点) → v2.21.0-omega CLI LLM 统一入口 → v2.22.0-omega MCA token 效率深度优化 38 个 crate 第 38 个 `mca-gateway` 落地 → v2.24.0-omega Phase 9 三环循环元架构重组收尾 P9-T12 + RUSTSEC-2026-0217/0222/0223 修复 → v2.25.0-omega Milestone B 全部交付 B-1~~B-6(Milestone B 终态) → v2.26.0-omega Concord TUI 重构 W0~~W11 全部收尾 (SlashCommandRegistry 53 命令注册 + `/` 一级整合 + Chat/Quest 双轨会话模式 + ApprovalMode 动态 Shift+Tab + i18n 中英门户 + 10 份 ADR-074~~083 落档) → ~~**~~v2.27.0-omega Phase 10 §16 跨层协同闭环审计修复正式发布~~**~~(W1-W7 全波次闭环：经验卡片闭环组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口) →~~ **~~v2.27.1-omega GPG 签名补发 + MCA E2E 超时加固~~**~~(无功能性变更) →~~ **~~v2.28.0-omega(发布提交 af62e44 已落 2026-09-02,tag 待推)Phase 1-5 Ch12 W1-W26 收尾~~**~~(ComputeBridge/ShardedBus/CBMR/CausalGraph + 5 新 crate 至 43 + ADR-095~~160 + ADR-160 可达性棘轮/event\_types 镜像退役);types.rs 单表 (metadata() 分类)**146 NexusEvent 变体**) > **最后更新**: 2026-09-19 (Phase 1-7 执行总结:auto-dpo 退役 + 8 个冻结孤岛偿还 + crate_reachability_freeze.txt 清理;reachable=31 frozen=1 new_gaps=0;41 crates·146 NexusEvent·ADR-001~185·覆盖率引擎 cargo-llvm-cov;上一已发 tag v2.28.0-omega → 94499b4(2026-09-06))
-> **最后更新**: 2026-09-17(M13 decb-scc 重路由偿还批次:decb-governor 经 efficiency-monitor 生产边转正(L9→L8 向下非内环,RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats)+ scc-cache 经 chimera-cli 组合根转正(ADR-161 路径①,doctor 第 9 探针消费 stats()),冻结孤岛 11→9、生产可达 30→32;消费者决策论证与 D1/D2 决策记录见 §3.11 M13 批次注记,ADR-186 物理文件留待 tower 合并侧补录;M12 wave 3c 接线批次:gea-activator/gqep-executor/qeep-protocol 三岛链全量偿还转正——mas→gea 生产边桥接 + chimera-cli→gqep doctor 并行 gather + ADR-048 收编;M10 批次:acb-governor 按 ADR-182 退役删除、lsct-tiering 经 cmt 生产边转正;decb/scc-cache M10 经 parliament/hcw-window 转正被依赖铁律驳回后本轮按重路由候选偿还;42 crates · 32 生产可达/9 冻结孤岛 + 1 GATED(ADR-177),棘轮口径以 check_crate_reachability.sh 输出为准 · 145 NexusEvent · ADR-001\~185 · 覆盖率引擎 cargo-llvm-cov;上一已发 tag v2.28.0-omega → 94499b4(2026-09-06))
+> **最后更新**: 2026-09-21(文档审查批次:§3 可达性现状改为 41 = 32 生产可达 + 9 GATED + 0 冻结孤岛；ADR-001 行改为"Linux 生产路径已实现"；crate/事件/测试计数改为引用权威源。历史:2026-09-17 M13 decb-scc 重路由偿还批次(decb-governor 经 efficiency-monitor 生产边转正(L9→L8 向下非内环,RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats)+ scc-cache 经 chimera-cli 组合根转正(ADR-161 路径①,doctor 第 9 探针消费 stats()),冻结孤岛 11→9、生产可达 30→32;消费者决策论证与 D1/D2 决策记录见 §3.11 M13 批次注记,ADR-186 物理文件留待 tower 合并侧补录;M12 wave 3c 接线批次:gea-activator/gqep-executor/qeep-protocol 三岛链全量偿还转正——mas→gea 生产边桥接 + chimera-cli→gqep doctor 并行 gather + ADR-048 收编;M10 批次:acb-governor 按 ADR-182 退役删除、lsct-tiering 经 cmt 生产边转正;decb/scc-cache M10 经 parliament/hcw-window 转正被依赖铁律驳回后本轮按重路由候选偿还;crate 数与可达性口径以 `Cargo.toml` members + `check_crate_reachability.sh` 输出为准(本行为 2026-09-17 M13 时点记录,已被 2026-09-19/20 复核段取代) · NexusEvent 变体数以 `crates/event-bus/src/types.rs` 为准 · ADR-001\~185 · 覆盖率引擎 cargo-llvm-cov;上一已发 tag v2.28.0-omega → 94499b4(2026-09-06))
 > **权威源**: 本文件是架构决策、模块职责、核心类型的唯一权威参考
-> **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 43/43 crate 全绿)
+> **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 全 members 全绿)
 > **专家签名**: E01 首席架构师 · E02 安全架构师 · E03 记忆系统专家 · E04 路由算法专家 · E05 生产系统专家 · E06 认知科学专家 · E07 任务调度专家 · E08 前端交互专家
-> **三方一致性** (2026-09-20 架构减法批次后复核): `Cargo.toml` workspace.package.version = `2.28.2-omega`(代码实况,41 members;原 43 - auto-dpo/model-router + router-traits) ⇔ `CHANGELOG.md` 最新条目 = `[2.28.2-omega] 2026-09-08 正式发布` ⇔ 本文档 = **41 crates(32 生产可达 + 9 GATED + 0 冻结孤岛;2026-09-20 棘轮实测 reachable=32/frozen=0/new_gaps=0;历史:M13 decb/scc 重路由 11→9,M12 三岛链 14→11,P0-P3 批次剩余孤岛经 r2_island_repayment feature 全部偿还)· 146 NexusEvent 变体(types.rs 单表;L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后分布 18/11/117,三层锁同步;event\_types.rs 镜像已退役)· 上一登记测试规模 11587 passed / 0 failed**(2026-09-02 历史时点全量重测,本轮架构减法/三层锁变更后待重测,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;演进链 v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587)
+> **三方一致性** (2026-09-20 架构减法批次后复核): `Cargo.toml` workspace.package.version = `2.29.0-omega`(代码实况,41 members;原 43 - auto-dpo/model-router + router-traits) ⇔ `CHANGELOG.md` 最新条目 = `[2.29.0-omega] 2026-09-27 发布` ⇔ 本文档 = **41 crates(32 生产可达 + 9 GATED + 0 冻结孤岛;2026-09-20 棘轮实测 reachable=32/frozen=0/new_gaps=0;历史:M13 decb/scc 重路由 11→9,M12 三岛链 14→11,P0-P3 批次剩余孤岛经 r2_island_repayment feature 全部偿还)· 146 NexusEvent 变体(types.rs 单表;L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后分布 18/11/117,三层锁同步;event\_types.rs 镜像已退役)· 测试规模不登记动态 passed(时点链 11587 = 2026-09-02 全量重测,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;→ 11794 = 2026-09-17 M13 提交态全量回归实测终值,回写提交 `d3840ba`;架构减法/三层锁变更后待重测,两值均不得当现势;静态两尺 11232 strict / 11276 loose = 2026-09-22 现取,旧"差值 = doctest + 宏展开"解释已被否证,见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md §24`)**
 > **基线变更触发**: 任何 workspace.member / NexusEvent 变体 / `#[test]` 函数增删必须同步更新本文档的"§1.1 身份标识"与"§3 Crate 索引",并触发 `scripts/check_doc_consistency.ps1` 巡检
 
 ***
@@ -32,61 +32,61 @@
 
 ### 1.1 身份标识
 
-| 字段       | 值                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 字段 | 值 |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 项目名      | Chimera CLI                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 代号       | NEXUS-OMEGA (Omni-Model Engineering Generative Architecture)                                                                                                                                                                                                                                                                                                                                                                                   |
-| 根目录      | `D:\Chimera CLI`                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 技术栈      | Rust 2021 edition · Tokio async · Workspace × **41 crates** (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`;v2.29 架构减法:删 auto-dpo/model-router + 新增 L6 `router-traits`)                                                                                                                                                                                                                                                                 |
-| 核心哲学     | OMEGA 十一定律: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize                                                                                                                                                                                                                                                                                                                         |
-| 设计来源     | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **当前版本** | `v2.28.2-omega` (**2026-09-08 正式发布**,收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;上一已发 tag = v2.28.0-omega → 94499b4(2026-09-06);Phase 1-5 Ch12 波次 W1-W26 全部收尾 + 5 新 crate 落地 + ADR-095~160 治理 + 多轮冗余收敛(R1~R4→R9/R11);迭代链 v2.8.0 polish-v2.7 → v2.9.0~v2.13.0 L8/L10/MCA → v2.14.0\~v2.19.0 P3 Sprint → v2.20.0 PROBE → v2.21.0 CLI LLM → v2.22.0 MCA token → v2.24.0 Phase 9 → v2.25.0 Milestone B → v2.26.0 Concord TUI → v2.27.0 Phase 10 → v2.27.1 GPG 补发 → v2.28.0 Phase 1-5 治理 + 可达性棘轮 → v2.28.2 TUI 修复收口) |
-| 测试规模     | **11587 passed / 0 failed** (debug 模式全量回归,2026-09-02 当前工作树全量重测,485 test target,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;含 Concord TUI 27 面板(REGISTERED\_FOCUS\_ORDER 代码实测 = PanelId enum 27 变体) + 53 slash commands(slash\_registry 断言 reg.len()==53) + 双轨会话 + Phase 10 跨层闭环 + Phase 12 Ch12 波次 1-5 + 5 新 crate + doctest;演进 v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587)                                                                                                             |
+| 项目名 | Chimera CLI |
+| 代号 | NEXUS-OMEGA (Omni-Model Engineering Generative Architecture) |
+| 根目录 | `D:\Chimera CLI` |
+| 技术栈 | Rust 2021 edition · Tokio async · Workspace × **41 crates** (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`;v2.29 架构减法:删 auto-dpo/model-router + 新增 L6 `router-traits`) |
+| 核心哲学 | OMEGA 十一定律: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize |
+| 设计来源 | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂 |
+| **当前版本** | `v2.29.0-omega` (**2026-09-27 发布**,收口四维深审运行期质量批次 + 架构减法 A/B/P0 治理 + mlc L2 分层检索（ADR-192）;上一发布 = v2.28.2-omega(2026-09-08 发布 / tag a1b4616 2026-09-14 落在 release 支线，main 未含该 merge;⚠ 双支线历史待治理，见 `docs/reports/arch-quality-deep-review-2026-09-25.md` §5.51);再早 v2.28.0-omega → 94499b4(2026-09-06);v2.28.2 收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;Phase 1-5 Ch12 波次 W1-W26 全部收尾 + 5 新 crate 落地 + ADR-095~160 治理 + 多轮冗余收敛(R1~R4→R9/R11);迭代链 v2.8.0 polish-v2.7 → v2.9.0~v2.13.0 L8/L10/MCA → v2.14.0\~v2.19.0 P3 Sprint → v2.20.0 PROBE → v2.21.0 CLI LLM → v2.22.0 MCA token → v2.24.0 Phase 9 → v2.25.0 Milestone B → v2.26.0 Concord TUI → v2.27.0 Phase 10 → v2.27.1 GPG 补发 → v2.28.0 Phase 1-5 治理 + 可达性棘轮 → v2.28.2 TUI 修复收口) |
+| 测试规模 | **动态 passed 数不在此登记**（权威源 `docs/reports/` 最新回归报告）；**已登记时点链** v2.26.0 9954 → v2.27.0 10836 → v2.28.0 11522 → 11564 → 11587（2026-09-02 全量重测,43 crates / 485 test target,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`）→ **11794（2026-09-17 M13 提交态全量回归实测终值,回写提交 `d3840ba`）**；架构减法批次 `38c72e6`（43→41 crates）改动测试面 ⇒ **现势值待重测,两数均不得当现势**。静态口径两尺 11232（strict）/ 11276（loose）系 2026-09-22 现取,连同旧"差值 = doctest + 宏展开"解释的**否证**一并见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md §24`。**测试面构成**：Concord TUI 27 面板(REGISTERED\_FOCUS\_ORDER 代码实测 = PanelId enum 27 变体) + 53 slash commands(slash\_registry 断言 reg.len()==53) + 双轨会话 + Phase 10 跨层闭环 + Phase 12 Ch12 波次 1-5 + 5 新 crate + doctest |
 
-### 1.2 OMEGA 十一定律(Ω₁~Ω₉ 基座 + Ω₁₀/Ω₁₁ 扩展;权威定义源:`Chimera CLI 十层架构深度打磨与优化方案 最新版.md` §3;Ω₁₀/Ω₁₁ 见 `Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md` §3.1,收录于 ADR-170)
+### 1.2 OMEGA 十一定律(Ω₁~Ω₉ 基座 + Ω₁₀/Ω₁₁ 扩展;权威定义源:`docs/architecture/CODE_WIKI.md` §1.2（本节即定律权威表；旧引「`Chimera CLI 十层架构深度打磨与优化方案 最新版.md` §3」经 2026-09-21 全库检索确认**该文件不在盘**，根目录同名近亲文件 `Chimera CLI Agent 架构与算法深度打磨优化计划`（无扩展名）内 **Ω 记号 0 命中**，不可作定律权威源）;Ω₁₀/Ω₁₁ 见 `Chimera_CLI_v3.4.0_omega_统一架构设计与Rust侧实现规范_二十三篇论文融合权威版.md` §3.1,收录于 ADR-170)
 
 > ★ Insight: 四定律→九定律→十一定律演进,Ω₁~Ω₄ 架构基座 + Ω₅~Ω₉ v2.x 学习/进化体系补齐 + Ω₁₀/Ω₁₁ 经验卡片与按需记忆合成扩展。全部十一定律已有代码落地与 E2E 验证(2026-08-11 全库核验 Ω₁~Ω₉,2026-09-02 ADR-170 收录 Ω₁₀/Ω₁₁)。
 
-| 定律             | 符号 | 工程实现                                         | 落地 crate                                         |
+| 定律 | 符号 | 工程实现 | 落地 crate |
 | -------------- | -- | -------------------------------------------- | ------------------------------------------------ |
-| **Ω-Sparse**   | Ω₁ | 全维稀疏掩码 + 按需激活(工具/上下文/记忆/审计/预算)               | `osa-coordinator` + `sesa-router`                |
-| **Ω-Compress** | Ω₂ | 四级窗口 + Mem-π 生成式记忆(4K/32K/128K/1M)           | `hcw-window` + `mlc-engine`                      |
-| **Ω-Evolve**   | Ω₃ | AEGIS 四阶段引擎 + GRPO 风格进化 + 变体隔离               | `gsoe-evolution` + `chimera-mas`                 |
-| **Ω-Event**    | Ω₄ | 事件驱动架构(broadcast + Critical mpsc 双通道,145 事件) | `event-bus`                                      |
-| **Ω-Credit**   | Ω₅ | 信用分配:SHARP Shapley 值精确归因                     | `parliament/sharp.rs` + `mappo.rs`               |
-| **Ω-Reuse**    | Ω₆ | 复用率优先:奖励函数优化技能复用率                            | `repo-wiki/skill_graph.rs` + `csn-substitutor`   |
-| **Ω-Locate**   | Ω₇ | 行为定位:L1→L2→L3 自动导航代码修改点                      | `parliament/critical_path.rs`                    |
-| **Ω-Assess**   | Ω₈ | 自我评估:Runtime Auditor 五维度证据纪律                 | `efficiency-monitor/auditor.rs`                  |
-| **Ω-Preserve** | Ω₉ | 保留历史最佳:变体隔离 + 停止策略                           | `chimera-mas/variant_pool.rs` + `gsoe-evolution` |
-| **Ω-Card**    | Ω₁₀ | 经验卡片数据结构:不可变 + 版本化 + append-only 事件流           | `event-bus/experience_card_bus.rs` + `nexus-contracts/experience_card.rs` + `mlc-engine/experience_card_system.rs` + `cmt-tiering/experience_card_storage.rs` |
+| **Ω-Sparse** | Ω₁ | 全维稀疏掩码 + 按需激活(工具/上下文/记忆/审计/预算) | `osa-coordinator` + `sesa-router` |
+| **Ω-Compress** | Ω₂ | 四级窗口 + Mem-π 生成式记忆(4K/32K/128K/1M) | `hcw-window` + `mlc-engine` |
+| **Ω-Evolve** | Ω₃ | AEGIS 四阶段引擎 + GRPO 风格进化 + 变体隔离 | `gsoe-evolution` + `chimera-mas` |
+| **Ω-Event** | Ω₄ | 事件驱动架构(broadcast + Critical mpsc 双通道,变体清单见 `types.rs`) | `event-bus` |
+| **Ω-Credit** | Ω₅ | 信用分配:SHARP Shapley 值精确归因 | `parliament/sharp.rs` + `mappo.rs` |
+| **Ω-Reuse** | Ω₆ | 复用率优先:奖励函数优化技能复用率 | `repo-wiki/skill_graph.rs` + `csn-substitutor` |
+| **Ω-Locate** | Ω₇ | 行为定位:L1→L2→L3 自动导航代码修改点 | `parliament/critical_path.rs` |
+| **Ω-Assess** | Ω₈ | 自我评估:Runtime Auditor 五维度证据纪律 | `efficiency-monitor/auditor.rs` |
+| **Ω-Preserve** | Ω₉ | 保留历史最佳:变体隔离 + 停止策略 | `parliament/src/variant_pool.rs`(变体隔离,ADR-051 决策「不新建 crate」)+ `gsoe-evolution`(停止策略,`checkpoint_preserver.rs`)+ `chimera-mas`(INV-8 归档单调 / INV-9 委托无环) |
+| **Ω-Card** | Ω₁₀ | 经验卡片数据结构:不可变 + 版本化 + append-only 事件流 | `event-bus/experience_card_bus.rs` + `nexus-contracts/experience_card.rs` + `mlc-engine/experience_card_system.rs` + `cmt-tiering/experience_card_storage.rs` |
 | **Ω-Synthesize** | Ω₁₁ | 按需记忆合成算法:懒加载合成 + 非阻塞主流程 + Debug→同错误签名兄弟定向检索 | `mlc-engine/on_demand_synthesizer.rs` + `event-bus` |
 
 ### 1.3 核心术语速查
 
-| 缩写       | 全称                                           | 对应 crate          |
+| 缩写 | 全称 | 对应 crate |
 | -------- | -------------------------------------------- | ----------------- |
-| Ω-Sparse | 全维稀疏(工具/上下文/记忆/审计/预算)                        | `osa-coordinator` |
-| Ω-Card  | 经验卡片数据结构(不可变 + 版本化 + append-only 事件流)         | `event-bus` + `mlc-engine` |
-| Ω-Synthesize | 按需记忆合成算法(懒加载 + 非阻塞 + 错误签名定向检索)          | `mlc-engine` |
-| CLV      | Context Latent Vector (512-dim 潜在语言)         | `nexus-core`      |
-| MLC      | Multi-Level Context (四级神经形态记忆)               | `mlc-engine`      |
-| HCW      | Hierarchical Context Window (4K/32K/128K/1M) | `hcw-window`      |
-| CMT      | Capability Memory Tiering (热/温/冷/冰)          | `cmt-tiering`     |
-| OSA      | Omni-Sparse Architecture (全维稀疏协调器)           | `osa-coordinator` |
-| KVBSR    | KV-Block Semantic Router (两级块路由)             | `kvbsr-router`    |
-| FaaE     | Function-as-Expert (工具即专家,语义路由)              | `faae-router`     |
-| PVL      | Producer-Verifier Loop (并行流式生成验证)            | `pvl-layer`       |
-| MTPE     | Multi-Token Prediction Execution (多步预测执行)    | `mtpe-executor`   |
-| GQEP     | Gather-Query Execution Protocol (聚集执行)       | `gqep-executor`   |
-| QEEP     | Quantum-Entangled Execution Protocol (量子纠缠)  | `qeep-protocol`   |
-| TTG      | Thinking Toggle Governance (三级思考切换)          | `quest-engine`    |
-| SSRA     | Slime-Style Rapid Adaptation (黏液式适配)         | `ssra-fusion`     |
-| ISCM     | Inter-Shared Cross Module (跨层共享索引)           | `repo-wiki`       |
-| SCC      | Speculative Context Cache (推测缓存)             | `scc-cache`       |
-| LHQP     | Long-Horizon Quest Persistence (检查点持久化)      | `quest-engine`    |
-| GSOE     | Guided Self-Organizing Evolution (在线进化)      | `gsoe-evolution`  |
-| AHIRT    | Anti-Hack Intelligent Red Team (反黑客红队)       | `parliament`      |
-| CHTC     | Cross-Harness Tool Compatibility (跨平台适配)     | `chtc-bridge`     |
+| Ω-Sparse | 全维稀疏(工具/上下文/记忆/审计/预算) | `osa-coordinator` |
+| Ω-Card | 经验卡片数据结构(不可变 + 版本化 + append-only 事件流) | `event-bus` + `mlc-engine` |
+| Ω-Synthesize | 按需记忆合成算法(懒加载 + 非阻塞 + 错误签名定向检索) | `mlc-engine` |
+| CLV | Context Latent Vector (512-dim 潜在语言) | `nexus-core` |
+| MLC | Multi-Level Context (四级神经形态记忆) | `mlc-engine` |
+| HCW | Hierarchical Context Window (4K/32K/128K/1M) | `hcw-window` |
+| CMT | Capability Memory Tiering (热/温/冷/冰) | `cmt-tiering` |
+| OSA | Omni-Sparse Architecture (全维稀疏协调器) | `osa-coordinator` |
+| KVBSR | KV-Block Semantic Router (两级块路由) | `kvbsr-router` |
+| FaaE | Function-as-Expert (工具即专家,语义路由) | `faae-router` |
+| PVL | Producer-Verifier Loop (并行流式生成验证) | `pvl-layer` |
+| MTPE | Multi-Token Prediction Execution (多步预测执行) | `mtpe-executor` |
+| GQEP | Gather-Query Execution Protocol (聚集执行) | `gqep-executor` |
+| QEEP | Quantum-Entangled Execution Protocol (量子纠缠) | `qeep-protocol` |
+| TTG | Thinking Toggle Governance (三级思考切换) | `quest-engine` |
+| SSRA | Slime-Style Rapid Adaptation (黏液式适配) | `ssra-fusion` |
+| ISCM | Inter-Shared Cross Module (跨层共享索引) | `repo-wiki` |
+| SCC | Speculative Context Cache (推测缓存) | `scc-cache` |
+| LHQP | Long-Horizon Quest Persistence (检查点持久化) | `quest-engine` |
+| GSOE | Guided Self-Organizing Evolution (在线进化) | `gsoe-evolution` |
+| AHIRT | Anti-Hack Intelligent Red Team (反黑客红队) | `parliament` |
+| CHTC | Cross-Harness Tool Compatibility (跨平台适配) | `chtc-bridge` |
 
 ***
 
@@ -100,13 +100,31 @@ L10  Interface ── chimera-cli · chimera-tui · chtc-bridge · mcp-mesh · c
 L9   Quest ───── quest-engine · gea-activator · efficiency-monitor · chimera-mas · mas-sched · nexus-hook [ADR-145 调度控制面 + ADR-146 生命周期 Hook]
 L8   Parliament ─ parliament · decb-governor
 L7   Execution ── pvl-layer · gqep-executor · mtpe-executor · ssra-fusion · nexus-subagent [ADR-148 类型化子代理 + Task Auction]
-L6   Router ───── osa-coordinator · kvbsr-router · faae-router · sesa-router · omega-learner [ADR-031 Bandit 学习]
+L6   Router ───── osa-coordinator · router-traits · kvbsr-router · faae-router · sesa-router · omega-learner [ADR-031 Bandit 学习 + v2.29 router-traits 抽象层]
 L5   Knowledge ── repo-wiki · gsoe-evolution
 L4   Security ─── seccore · qeep-protocol · decay-engine
 L3   Storage ──── scc-cache · lsct-tiering · cmt-tiering · session-store [ADR-141 append-only 会话事件流]
 L2   Memory ───── nmc-encoder · hcw-window · mlc-engine
 L1   Core ─────── nexus-core · event-bus
 ```
+
+> **本层图与依赖门之间的历史分歧（2026-09-22 逐层对拍登记；2026-09-24 已按 ADR-189 收口为 L10，以下保留登记时的原状描述）**：`csn-substitutor` 在本文档 §2.1 与 §3.11、目录树、E08 专家映射
+> 一律记 **L10 Interface**；而机器权威
+> `scripts/check_dependency_rules.sh:86`（`.ps1:93` 同步）把它记成 **L7 Execution**，
+> 且 `crates/csn-substitutor/src/lib.rs:2` 的自述头 `//! LAYER: L7` **与门一致**（2026-09-24 实测校正：本句旧版误记为"`:3` 自述头一律记 L10"——`:3` 是 `ROLE:` 行，头实际在 `:2` 且写 L7）。
+> 该分歧早在 `docs/architecture/_blueprints/three-ring-reorg/Phase0_评估报告_v2.20.md:109` 就以
+> 「按根 Cargo.toml 归 L7；与 §2.1 冲突」登记过，但没有裁决记录 ⇒ 后果是**门按 L7 放行、文档按 L10 约束**，
+> csn 若新增指向 L8/L9 的向上依赖边，`check_dependency_rules.sh` 不会报警。修法二选一待治理裁决
+> （2026-09-24 代价结构校正：**自述头不是可独立改的一处**——`scripts/crate_contract.py`(G-58/G-59) 的 LAYER 字段就是按 `layer_of()` **派生**再比对，
+> 把头改成 L10 会当场令 G-59 红；故真选项只有"改 4 处散文归 L7"（零铁律变化）或"改 `layer_of()` 2 处归 L10"（放松铁律，须 ADR；
+> 实测 csn 非 optional 依赖仅 `nexus-contracts`/`event-bus`/`nexus-core` ⇒ 抬层现状不放行任何新边，但会失去对未来 L8/L9 边的拦截）。
+> 其余 40 个 crate 在 6 份权威/派生文档与本表逐层一致（每份覆盖率 41/41，无幽灵名、无重复、无缺项）。
+> ✅ **2026-09-24 收口（ADR-189）**：采"改 `layer_of()` 归 L10"一支，双源 + 契约头 + 根 manifest 行内标注 + 4 份派生视图同批改；
+> 该 crate 非 optional 内部依赖仅 `nexus-contracts`/`event-bus`/`nexus-core` ⇒ 抬层不放行任何现存边。
+> 上文"抬层会失去对未来 L8/L9 边的拦截"**只对了一半**：植入 `csn→parliament` 探针边实测——依赖铁律 0 提及，
+> 但 `check_dep_edge_freeze.py`(G-33，边集 only-decrease 棘轮) 判红并点名该边 ⇒ 拦截换门未丢；
+> 如实记录：G-33 当前因 8 条既存未登记边为红，故这是"机制仍拦"而非"门禁全绿"。回归 `csn-substitutor` 136 passed / 0 failed。
+
 
 > **v2.4.0-omega 变更** (v5.0 P2 + P4):
 >
@@ -123,18 +141,18 @@ L1   Core ─────── nexus-core · event-bus
 
 ### 2.2 各层职责概述
 
-| 层级                | 名称  | 核心职责                           |
+| 层级 | 名称 | 核心职责 |
 | ----------------- | --- | ------------------------------ |
-| **L1 Core**       | 核心层 | 定义全局共享领域类型、事件总线契约、模型路由策略       |
-| **L2 Memory**     | 记忆层 | 多模态编码、分层上下文窗口、四级神经形态记忆         |
-| **L3 Storage**    | 存储层 | 推测缓存、存储层级协调、能力内存分层             |
-| **L4 Security**   | 安全层 | 零信任沙箱、量子纠缠协议(零孤儿调用)、能力衰减引擎     |
-| **L5 Knowledge**  | 知识层 | 代码知识库、自进化引擎、偏好优化               |
-| **L6 Router**     | 路由层 | 全维稀疏协调、KV块语义路由、工具即专家路由、子专家稀疏激活 |
-| **L7 Execution**  | 执行层 | 生产验证循环、聚集执行、多步预测、黏液式融合         |
-| **L8 Parliament** | 议会层 | 多角色辩论表决、自适应预算治理、动态紧急预算治理       |
-| **L9 Quest**      | 任务层 | 长期任务引擎、门控专家激活、效率监控仪表盘          |
-| **L10 Interface** | 接口层 | CLI入口、TUI仪表盘、跨IDE适配、MCP网格、降级链  |
+| **L1 Core** | 核心层 | 定义全局共享领域类型、事件总线契约、模型路由策略 |
+| **L2 Memory** | 记忆层 | 多模态编码、分层上下文窗口、四级神经形态记忆 |
+| **L3 Storage** | 存储层 | 推测缓存、存储层级协调、能力内存分层 |
+| **L4 Security** | 安全层 | 零信任沙箱、量子纠缠协议(零孤儿调用)、能力衰减引擎 |
+| **L5 Knowledge** | 知识层 | 代码知识库、自进化引擎、偏好优化 |
+| **L6 Router** | 路由层 | 全维稀疏协调、KV块语义路由、工具即专家路由、子专家稀疏激活 |
+| **L7 Execution** | 执行层 | 生产验证循环、聚集执行、多步预测、黏液式融合 |
+| **L8 Parliament** | 议会层 | 多角色辩论表决、自适应预算治理、动态紧急预算治理 |
+| **L9 Quest** | 任务层 | 长期任务引擎、门控专家激活、效率监控仪表盘 |
+| **L10 Interface** | 接口层 | CLI入口、TUI仪表盘、跨IDE适配、MCP网格、降级链 |
 
 ***
 
@@ -145,48 +163,49 @@ L1   Core ─────── nexus-core · event-bus
 > **v2.4.0-omega 变更**: 35 → 37 crate,新增 L0 `nexus-contracts` (ADR-033) + L6 `omega-learner` (ADR-031)。
 > **MCA M0 变更**: 37 → 38 crate,新增 L10 `mca-gateway` (ADR-065)。
 > **v2.28.0-omega 变更**: 38 → 43 crate,新增 L10 `nexus-app-server`(WI-01)、L3 `session-store`(ADR-141)、L9 `mas-sched`(ADR-145)、L9 `nexus-hook`(ADR-146)、L7 `nexus-subagent`(ADR-148)。
-> **可达性标注(ADR-160 + ADR-177 + M10/M12/M13 批次)**: 42 crate = 32 生产可达 + 9 冻结孤岛 + 1 GATED(mca-gateway;M13 批次 2026-09-17:decb-governor 经 efficiency-monitor 生产边转正(L9→L8 向下非内环,RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats)+ scc-cache 经 chimera-cli 组合根转正(ADR-161 路径①,doctor 第 9 探针消费 stats()),冻结 11→9、可达 30→32,棘轮实测 reachable=32/frozen=9/new_gaps=0,消费者决策论证与 D1/D2 决策见 §3.11 M13 批次注记;M12 批次 2026-09-16:gea-activator/gqep-executor/qeep-protocol 三岛链经 wave 3c 接线全量转正——mas→gea 生产边(L9→L9)+ chimera-cli→gqep 生产边(L10→L7)+ qeep 传递转正(ADR-048 收编),冻结 14→11、可达 27→30,ADR-185;M10 批次 2026-09-16:acb-governor 退役删除 + lsct-tiering 转正,冻结 16→14;decb/scc-cache M10 经 parliament/hcw-window 转正被依赖铁律驳回后于 M13 按重路由候选偿还);孤岛完整清单(含阻塞依赖/解除条件)集中见本节末尾 **§3.11 冻结孤岛清单**,权威源为 `scripts/crate_reachability_freeze.txt`(由 `scripts/check_crate_reachability.sh` 生成,dev-dep 不计入装配面)。
+> **可达性现状（2026-09-21 棘轮现测）**: **41** crate = **32 生产可达 + 9 GATED + 0 冻结孤岛**（`scripts/check_crate_reachability.sh` 输出 `[R] members: 41, reachable: 32, unreachable: 0` 与 `[OK] reachable=32 frozen=0 new_gaps=0`）。GATED（仅 `--features` 编译、不入默认二进制）名单 = `chtc-bridge` · `csn-substitutor` · `mas-sched` · `mca-gateway` · `mtpe-executor` · `nexus-hook` · `omega-learner` · `sesa-router` · `ssra-fusion`；其中 `mas-sched`/`nexus-hook` 是经 `crates/chimera-cli/Cargo.toml:21 r2_island_repayment` 转为可达（freeze 清单 2026-09-20 `[ROTATE]` 留痕），故"冻结孤岛"这一类**已清零**，剩余 9 个是**有意 feature 门控**而非欠债。
+> **可达性历史标注(ADR-160 + ADR-177 + M10/M12/M13 批次)**: **M13 时点(2026-09-17)** 42 crate = 32 生产可达 + 9 冻结孤岛 + 1 GATED(mca-gateway;M13 批次 2026-09-17:decb-governor 经 efficiency-monitor 生产边转正(L9→L8 向下非内环,RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats)+ scc-cache 经 chimera-cli 组合根转正(ADR-161 路径①,doctor 第 9 探针消费 stats()),冻结 11→9、可达 30→32,棘轮实测 reachable=32/frozen=9/new_gaps=0,消费者决策论证与 D1/D2 决策见 §3.11 M13 批次注记;M12 批次 2026-09-16:gea-activator/gqep-executor/qeep-protocol 三岛链经 wave 3c 接线全量转正——mas→gea 生产边(L9→L9)+ chimera-cli→gqep 生产边(L10→L7)+ qeep 传递转正(ADR-048 收编),冻结 14→11、可达 27→30,ADR-185;M10 批次 2026-09-16:acb-governor 退役删除 + lsct-tiering 转正,冻结 16→14;decb/scc-cache M10 经 parliament/hcw-window 转正被依赖铁律驳回后于 M13 按重路由候选偿还);孤岛完整清单(含阻塞依赖/解除条件)集中见本节末尾 **§3.11 冻结孤岛清单**,权威源为 `scripts/crate_reachability_freeze.txt`(由 `scripts/check_crate_reachability.sh` 生成,dev-dep 不计入装配面)。
 
 ### 3.0 L0 Contracts (1 crate,ADR-033)
 
 #### [nexus-contracts](file:///d:/Chimera%20CLI/crates/nexus-contracts)
 
-| 项          | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 项 | 说明 |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**    | L0 Contracts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **核心职责**   | 纯类型 + 零逻辑 + 零依赖契约层;承载跨层共享的语义不变量类型(`OmniSparseMasks` / `HarnessSpec` / `TemporalMeta` / `NamespaceQuota` / `SelectorPolicy`,MCA M0 新增 `affinity` 模块:`ProviderId` / `CapabilitySet` / `ModelAffinitySpec`,ADR-065),P9 新增 `budget_tier` / `command_validation` / `domain` / `event_payload` 模块(`BudgetTier` / `Command` / `CommandPolicy` / `AttackType` / `ThinkingMode` / `MultimodalInput` / `UserIntent` / `Quest` / `Task` / `EventSeverity` / `TaskPriority` / `AgentStatus`,ADR-054 决策 3/6,P9-T3/T4/T7 上提/下沉),依赖铁律扩展为 `L(N) → L(0)` 恒允许 |
-| **关键文件**   | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-contracts/src/lib.rs)                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **关键类型**   | `OmniSparseMasks` · `HarnessSpec` · `TemporalMeta` · `NamespaceQuota` · `SelectorPolicy` · `BudgetTier` · `Command` · `CommandPolicy` · `AttackType` · `ThinkingMode` · `MultimodalInput` · `UserIntent` · `Quest` · `Task` · `EventSeverity` · `TaskPriority` · `AgentStatus`                                                                                                                                                                                                                                                              |
-| **关键函数**   | 类型派生(`Serialize`/`Deserialize`/`Clone`/`Debug`/`PartialEq`);`util` 模块三个**无副作用共享纯函数**:`xts_top_k_by`(Top-K,O(n) `select_nth_unstable_by`)、`sigmoid`、`percentile_sorted<T: Copy>`(已排序切片分位,O(1))。三者为 ADR-033"纯类型+零逻辑"约束的**受控例外**(与 `test_scale::scaled_timeout!` 同源),须为零分配/零 I/O/零全局状态                                                                                                                                                                                                                                                         |
-| **性能证据**   | `benches/util_micro.rs`(criterion,含 `CountingAlloc` 零堆分配硬断言):`sigmoid scalar` 33.2 ns / `sigmoid map 1024` 33.73 µs / `percentile_sorted p95` 6.5 ns(n=100 与 n=10000 等价 → 实证 O(1));CI 门槛见 `bench_check.yml`                                                                                                                                                                                                                                                                                                                                 |
-| **主要依赖**   | **仅** **`serde`** **workspace**,**无其他 workspace crate 依赖**(零依赖契约层)                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **设计模式**   | Pure Data · 零运行时 · 编译期契约                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **ADR 来源** | ADR-033 (L0 nexus-contracts)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **架构层** | L0 Contracts |
+| **核心职责** | 纯类型 + 零逻辑 + 零依赖契约层;承载跨层共享的语义不变量类型(`OmniSparseMasks` / `HarnessSpec` / `TemporalMeta` / `NamespaceQuota` / `SelectorPolicy`,MCA M0 新增 `affinity` 模块:`ProviderId` / `CapabilitySet` / `ModelAffinitySpec`,ADR-065),P9 新增 `budget_tier` / `command_validation` / `domain` / `event_payload` 模块(`BudgetTier` / `Command` / `CommandPolicy` / `AttackType` / `ThinkingMode` / `MultimodalInput` / `UserIntent` / `Quest` / `Task` / `EventSeverity` / `TaskPriority` / `AgentStatus`,ADR-054 决策 3/6,P9-T3/T4/T7 上提/下沉),依赖铁律扩展为 `L(N) → L(0)` 恒允许 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-contracts/src/lib.rs) |
+| **关键类型** | `OmniSparseMasks` · `HarnessSpec` · `TemporalMeta` · `NamespaceQuota` · `SelectorPolicy` · `BudgetTier` · `Command` · `CommandPolicy` · `AttackType` · `ThinkingMode` · `MultimodalInput` · `UserIntent` · `Quest` · `Task` · `EventSeverity` · `TaskPriority` · `AgentStatus` |
+| **关键函数** | 类型派生(`Serialize`/`Deserialize`/`Clone`/`Debug`/`PartialEq`);`util` 模块三个**无副作用共享纯函数**:`xts_top_k_by`(Top-K,O(n) `select_nth_unstable_by`)、`sigmoid`、`percentile_sorted<T: Copy>`(已排序切片分位,O(1))。三者为 ADR-033"纯类型+零逻辑"约束的**受控例外**(与 `test_scale::scaled_timeout!` 同源),须为零分配/零 I/O/零全局状态 |
+| **性能证据** | `benches/util_micro.rs`(criterion,含 `CountingAlloc` 零堆分配硬断言):`sigmoid scalar` 33.2 ns / `sigmoid map 1024` 33.73 µs / `percentile_sorted p95` 6.5 ns(n=100 与 n=10000 等价 → 实证 O(1));CI 门槛见 `bench_check.yml` |
+| **主要依赖** | **仅** **`serde`** **workspace**,**无其他 workspace crate 依赖**(零依赖契约层) |
+| **设计模式** | Pure Data · 零运行时 · 编译期契约 |
+| **ADR 来源** | ADR-033 (L0 nexus-contracts) |
 
 ### 3.1 L1 Core (3 crates)
 
 #### [nexus-core](file:///d:/Chimera%20CLI/crates/nexus-core)
 
-| 项        | 说明                                                                                                                                                                                                                                                                            |
+| 项 | 说明 |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L1 Core                                                                                                                                                                                                                                                                       |
-| **核心职责** | 定义所有上层共享的领域类型、CLV向量、错误类型、存储trait                                                                                                                                                                                                                                              |
+| **架构层** | L1 Core |
+| **核心职责** | 定义所有上层共享的领域类型、CLV向量、错误类型、存储trait |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-core/src/lib.rs) · [types.rs](file:///d:/Chimera%20CLI/crates/nexus-core/src/types.rs) · [clv.rs](file:///d:/Chimera%20CLI/crates/nexus-core/src/clv.rs) · [state.rs](file:///d:/Chimera%20CLI/crates/nexus-core/src/state.rs) |
-| **关键类型** | `UserIntent` · `Quest` · `Task` · `TaskStatus` · `Checkpoint` · `ThinkingMode` · `CLV` · `NexusState` · `MultimodalInput`                                                                                                                                                     |
+| **关键类型** | `UserIntent` · `Quest` · `Task` · `TaskStatus` · `Checkpoint` · `ThinkingMode` · `CLV` · `NexusState` · `MultimodalInput` |
 | **关键函数** | `CLV::basis()` · `CLV::cosine_similarity()` · `cosine_similarity_slices()`(定义已下沉 L0 `nexus-contracts::util`,此处 `pub use` 重导出,调用路径不变) |
-| **主要依赖** | ndarray · serde · chrono · uuid · thiserror                                                                                                                                                                                                                                   |
+| **主要依赖** | ndarray · serde · chrono · uuid · thiserror |
 
 #### [event-bus](file:///d:/Chimera%20CLI/crates/event-bus)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                      |
+| 项 | 说明 |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L1 Core                                                                                                                                                                                                                                                                                 |
-| **核心职责** | 跨层通信唯一通道，基于Tokio broadcast + mpsc双通道，背压控制                                                                                                                                                                                                                                               |
+| **架构层** | L1 Core |
+| **核心职责** | 跨层通信唯一通道，基于Tokio broadcast + mpsc双通道，背压控制 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/event-bus/src/lib.rs) · [bus.rs](file:///d:/Chimera%20CLI/crates/event-bus/src/bus.rs) · [types.rs](file:///d:/Chimera%20CLI/crates/event-bus/src/types.rs) · [backpressure.rs](file:///d:/Chimera%20CLI/crates/event-bus/src/backpressure.rs) |
-| **关键类型** | `EventBus` · `NexusEvent` · `EventMetadata` · `EventSeverity` · `EventSubscription`                                                                                                                                                                                                     |
-| **关键方法** | `EventBus::publish()` · `EventBus::subscribe()` · `EventBus::publish_critical()`                                                                                                                                                                                                        |
-| **主要依赖** | tokio · serde · chrono · uuid · tracing · nexus-core                                                                                                                                                                                                                                    |
-| **设计模式** | 发布 - 订阅 · 双通道保障 (Normal→broadcast, Critical→mpsc)                                                                                                                                                                                                                                          |
+| **关键类型** | `EventBus` · `NexusEvent` · `EventMetadata` · `EventSeverity` |
+| **关键方法** | `EventBus::publish()` · `EventBus::subscribe()` · `EventBus::publish_critical()` |
+| **主要依赖** | tokio · serde · chrono · uuid · tracing · nexus-contracts |
+| **设计模式** | 发布 - 订阅 · 双通道保障 (Normal→broadcast, Critical→mpsc) |
 
 ***
 
@@ -194,37 +213,37 @@ L1   Core ─────── nexus-core · event-bus
 
 #### [nmc-encoder](file:///d:/Chimera%20CLI/crates/nmc-encoder)
 
-| 项           | 说明                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 项 | 说明 |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**     | L2 Memory                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **核心职责**    | 神经多模态编码(NMC)，Text/Image/Video/Audio/Desktop感知器 → 512维CLV融合；Image/Video/Audio 通过 tract-onnx 加载预训练模型(CLIP/VideoMAE/Whisper)实现语义级嵌入推理                                                                                                                                                                                                                                                                         |
-| **关键文件**    | [lib.rs](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/lib.rs) · [fusion.rs](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/fusion.rs) · [perceptors/](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/perceptors) · [perceptors/onnx\_backend.rs](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/perceptors/onnx_backend.rs) · [config.rs](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/config.rs) |
-| **关键类型**    | `NmcEncoder` · `TextPerceptor` · `ImagePerceptor` · `AudioPerceptor` · `VideoPerceptor` · `DesktopPerceptor` · `OnnxBackend` · `ModelType`                                                                                                                                                                                                                                                                 |
-| **关键方法**    | `NmcEncoder::encode()` → `CLV` · `OnnxBackend::load()` / `OnnxBackend::run()`                                                                                                                                                                                                                                                                                                                              |
-| **主要依赖**    | tokio · ndarray · serde · tract-onnx · image · sha2 · nexus-core · event-bus                                                                                                                                                                                                                                                                                                                               |
-| **ONNX 说明** | P1-1 (2026-07-28): ImagePerceptor/VideoPerceptor/AudioPerceptor 从占位升级为 tract-onnx 推理，模型加载失败时 fallback 返回 `EncodingFailed`（向后兼容）；模型文件通过 `NmcConfig::model_dir` 配置，详见 `docs/onnx-models.md`                                                                                                                                                                                                                  |
+| **架构层** | L2 Memory |
+| **核心职责** | 神经多模态编码(NMC)，Text/Image/Video/Audio/Desktop感知器 → 512维CLV融合；Image/Video/Audio 通过 tract-onnx 加载预训练模型(CLIP/VideoMAE/Whisper)实现语义级嵌入推理 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/lib.rs) · [fusion.rs](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/fusion.rs) · [perceptors/](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/perceptors) · [perceptors/onnx\_backend.rs](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/perceptors/onnx_backend.rs) · [config.rs](file:///d:/Chimera%20CLI/crates/nmc-encoder/src/config.rs) |
+| **关键类型** | `NmcEncoder` · `TextPerceptor` · `ImagePerceptor` · `AudioPerceptor` · `VideoPerceptor` · `DesktopPerceptor` · `OnnxBackend` · `ModelType` |
+| **关键方法** | `NmcEncoder::perceive()`(`crates/nmc-encoder/src/fusion.rs:211`) · `OnnxBackend::load()` · `OnnxBackend::run()` |
+| **主要依赖** | tokio · ndarray · serde · tract-onnx · image · sha2 · nexus-core · event-bus |
+| **ONNX 说明** | P1-1 (2026-07-28): ImagePerceptor/VideoPerceptor/AudioPerceptor 从占位升级为 tract-onnx 推理，模型加载失败时 fallback 返回 `EncodingFailed`（向后兼容）；模型文件通过 `NmcConfig::model_dir` 配置，详见 `docs/onnx-models.md` |
 
 #### [hcw-window](file:///d:/Chimera%20CLI/crates/hcw-window)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                  |
+| 项 | 说明 |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L2 Memory                                                                                                                                                                                                                                                                                           |
-| **核心职责** | 分层上下文窗口(4K/32K/128K/1M)，配合OSA稀疏掩码实现1M等效上下文(实际仅加载128K)                                                                                                                                                                                                                                               |
+| **架构层** | L2 Memory |
+| **核心职责** | 分层上下文窗口(4K/32K/128K/1M)，配合OSA稀疏掩码实现1M等效上下文(实际仅加载128K) |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/hcw-window/src/lib.rs) · [window.rs](file:///d:/Chimera%20CLI/crates/hcw-window/src/window.rs) · [selector.rs](file:///d:/Chimera%20CLI/crates/hcw-window/src/selector.rs) · [compressor.rs](file:///d:/Chimera%20CLI/crates/hcw-window/src/compressor.rs) |
-| **关键类型** | `HierarchicalWindow` · `WindowSelector` · `WindowCompressor` · `WindowTier`                                                                                                                                                                                                                         |
-| **关键方法** | `HierarchicalWindow::load()` · `HierarchicalWindow::select()`                                                                                                                                                                                                                                       |
-| **主要依赖** | tokio · serde · ndarray · dashmap · nexus-core                                                                                                                                                                                                                                                      |
+| **关键类型** | `HierarchicalWindow` · `WindowSelector` · `WindowTier` |
+| **关键方法** | `WindowSelector::select()` · `HcwWindow::apply_sparse_mask()` · `HcwWindow::current_selector_policy()` |
+| **主要依赖** | tokio · serde · ndarray · dashmap · nexus-core |
 
 #### [mlc-engine](file:///d:/Chimera%20CLI/crates/mlc-engine)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 项 | 说明 |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L2 Memory                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| **核心职责** | 四级神经形态记忆(L0工作/L1情景/L2语义/L3程序)，自动冷热迁移                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **架构层** | L2 Memory |
+| **核心职责** | 四级神经形态记忆(L0工作/L1情景/L2语义/L3程序)，自动冷热迁移；L2 语义检索为**分层实现**（条目数 < `HNSW_MIN_ENTRIES=4096` 走线性扫描精确层、≥ 阈值走 `hnsw_rs` 近似层 + 候选精确重算，ADR-192；`CHIMERA_NO_HNSW_MLC` 可一键关闭） |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/mlc-engine/src/lib.rs) · [engine.rs](file:///d:/Chimera%20CLI/crates/mlc-engine/src/engine.rs) · [l0\_working.rs](file:///d:/Chimera%20CLI/crates/mlc-engine/src/l0_working.rs) · [l1\_episodic.rs](file:///d:/Chimera%20CLI/crates/mlc-engine/src/l1_episodic.rs) · [l2\_semantic.rs](file:///d:/Chimera%20CLI/crates/mlc-engine/src/l2_semantic.rs) · [l3\_procedural.rs](file:///d:/Chimera%20CLI/crates/mlc-engine/src/l3_procedural.rs) |
-| **关键类型** | `MlcEngine` · `WorkingMemory` · `EpisodicMemory` · `SemanticMemory` · `ProceduralMemory` · `MemoryTier`                                                                                                                                                                                                                                                                                                                                                                               |
-| **关键方法** | `MlcEngine::store()` · `MlcEngine::recall()` · `MlcEngine::promote()` · `MlcEngine::demote()`                                                                                                                                                                                                                                                                                                                                                                                         |
-| **主要依赖** | tokio · serde · ndarray · rusqlite · dashmap · chrono · uuid · nexus-core                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **关键类型** | `MlcEngine` · `WorkingMemory` · `EpisodicMemory` · `SemanticMemory` · `ProceduralMemory` · `MemoryTier` |
+| **关键方法** | `MlcEngine::store()` · `MlcEngine::recall()` · `MlcEngine::promote()` · `MlcEngine::demote()` |
+| **主要依赖** | tokio · serde · ndarray · rusqlite · dashmap · chrono · uuid · hnsw_rs · nexus-core · nexus-contracts · event-bus |
 
 ***
 
@@ -232,49 +251,49 @@ L1   Core ─────── nexus-core · event-bus
 
 #### [scc-cache](file:///d:/Chimera%20CLI/crates/scc-cache)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                               |
+| 项 | 说明 |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **架构层**  | L3 Storage                                                                                                                                                                                                                                                                                                                                       |
-| **核心职责** | 推测上下文缓存(SCC)，一阶马尔可夫链推测性预取 + Arc引用保护LRU + WAL持久化                                                                                                                                                                                                                                                                                                  |
+| **架构层** | L3 Storage |
+| **核心职责** | 推测上下文缓存(SCC)，一阶马尔可夫链推测性预取 + Arc引用保护LRU + WAL持久化 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/scc-cache/src/lib.rs) · [cache.rs](file:///d:/Chimera%20CLI/crates/scc-cache/src/cache.rs) · [lru.rs](file:///d:/Chimera%20CLI/crates/scc-cache/src/lru.rs) · [prefetch.rs](file:///d:/Chimera%20CLI/crates/scc-cache/src/prefetch.rs) · [wal.rs](file:///d:/Chimera%20CLI/crates/scc-cache/src/wal.rs) |
-| **关键类型** | `SccCache` · `LruCache` · `Prefetcher` · `Wal` · `CacheEntry`                                                                                                                                                                                                                                                                                    |
-| **关键方法** | `SccCache::get()` · `SccCache::put()` · `SccCache::prefetch()`                                                                                                                                                                                                                                                                                   |
-| **主要依赖** | tokio · serde · rmp-serde · dashmap · rand · chrono · nexus-core                                                                                                                                                                                                                                                                                 |
+| **关键类型** | `SccCache` · `CachedResponse` · `PrefetchLearnerHolder` · `WalTrait`(实现 `InMemoryWal` / `SqliteWal`) · `SemanticEntry` |
+| **关键方法** | `SccCache::get_or_prefetch()` · `AccessPatternLearner::prefetch()` · `SccCache::contains()` |
+| **主要依赖** | tokio · serde · rmp-serde · dashmap · rand · chrono · nexus-core |
 
 #### [lsct-tiering](file:///d:/Chimera%20CLI/crates/lsct-tiering)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 项 | 说明 |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L3 Storage                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **核心职责** | 延迟敏感存储分层(LSCT)，根据任务负载画像计算层级切换策略                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **架构层** | L3 Storage |
+| **核心职责** | 延迟敏感存储分层(LSCT)，根据任务负载画像计算层级切换策略 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/lsct-tiering/src/lib.rs) · [tiering/coordinator.rs](file:///d:/Chimera%20CLI/crates/lsct-tiering/src/tiering/coordinator.rs) · [tiering/promoter.rs](file:///d:/Chimera%20CLI/crates/lsct-tiering/src/tiering/promoter.rs) · [tiering/demoter.rs](file:///d:/Chimera%20CLI/crates/lsct-tiering/src/tiering/demoter.rs) · [tiering/profile.rs](file:///d:/Chimera%20CLI/crates/lsct-tiering/src/tiering/profile.rs) |
-| **关键类型** | `LsctCoordinator` · `TierPromoter` · `TierDemoter` · `WorkloadProfile` · `StorageTier`                                                                                                                                                                                                                                                                                                                                                                      |
-| **关键方法** | `LsctCoordinator::profile()` · `LsctCoordinator::promote()` · `LsctCoordinator::demote()`                                                                                                                                                                                                                                                                                                                                                                   |
-| **主要依赖** | tokio · serde · dashmap · chrono · tracing · nexus-core                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **关键类型** | `LsctCoordinator` |
+| **关键方法** | `LsctPromoter::promote()`(`crates/lsct-tiering/src/tiering/promoter.rs:54`) · `LsctDemoter::demote()`(`crates/lsct-tiering/src/tiering/demoter.rs:53`) · `LsctConfig::validate()` |
+| **主要依赖** | tokio · serde · dashmap · chrono · tracing · event-bus |
 
 #### [cmt-tiering](file:///d:/Chimera%20CLI/crates/cmt-tiering)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 项 | 说明 |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L3 Storage                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| **核心职责** | 能力内存分层(CMT)，热/温/冷/冰四级存储 + 指数衰减自动迁移                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **架构层** | L3 Storage |
+| **核心职责** | 能力内存分层(CMT)，热/温/冷/冰四级存储 + 指数衰减自动迁移 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/cmt-tiering/src/lib.rs) · [coordinator.rs](file:///d:/Chimera%20CLI/crates/cmt-tiering/src/coordinator.rs) · [hot.rs](file:///d:/Chimera%20CLI/crates/cmt-tiering/src/hot.rs) · [warm.rs](file:///d:/Chimera%20CLI/crates/cmt-tiering/src/warm.rs) · [cold.rs](file:///d:/Chimera%20CLI/crates/cmt-tiering/src/cold.rs) · [ice.rs](file:///d:/Chimera%20CLI/crates/cmt-tiering/src/ice.rs) · [decay.rs](file:///d:/Chimera%20CLI/crates/cmt-tiering/src/decay.rs) · [migrator.rs](file:///d:/Chimera%20CLI/crates/cmt-tiering/src/migrator.rs) |
-| **关键类型** | `CmtCoordinator` · `HotTier` · `WarmTier` · `ColdTier` · `IceTier` · `DecayScheduler` · `CapabilityMigrator`                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **关键方法** | `CmtCoordinator::access()` · `CmtCoordinator::store()` · `CmtCoordinator::decay_tick()`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **主要依赖** | tokio · serde · rmp-serde · rusqlite · dashmap · rand · chrono · sha2 · hex · nexus-core                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **关键类型** | `CmtCoordinator` · `HotTier` · `WarmTier` · `ColdTier` · `IceTier` |
+| **关键方法** | `CmtCoordinator::decay()` · `CmtCoordinator::report_tier_stats()` · `CmtCoordinator::run_decay_cycle()` |
+| **主要依赖** | tokio · serde · rmp-serde · rusqlite · dashmap · rand · chrono · sha2 · hex · nexus-core |
 
 #### [session-store](file:///d:/Chimera%20CLI/crates/session-store)
 
-| 项          | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 项 | 说明 |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**    | L3 Storage(v2.28 新增,workspace 第 40 个 crate)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| **核心职责**   | 会话事件流存储:把会话持久化从「Checkpoint 线性全量快照」升级为「append-only 事件流 + CBMR 微批写」;JSONL 段文件(每 Thread 一段,长度前缀 WAL 意向,`append` 返回 Ok 前 fsync)+ SQLite 树索引(segments/events 单事务批量);Offset 双键 `{seq 全局单调, row 段内行号}` 供 k-way 归并回放;`fork(session, offset)` 前缀段元数据零拷贝复制                                                                                                                                                                                                                                                                                          |
-| **关键文件**   | [lib.rs](file:///d:/Chimera%20CLI/crates/session-store/src/lib.rs) · [segment.rs](file:///d:/Chimera%20CLI/crates/session-store/src/segment.rs) · [writer.rs](file:///d:/Chimera%20CLI/crates/session-store/src/writer.rs) · [tree.rs](file:///d:/Chimera%20CLI/crates/session-store/src/tree.rs) · [replay.rs](file:///d:/Chimera%20CLI/crates/session-store/src/replay.rs) · [model\_view.rs](file:///d:/Chimera%20CLI/crates/session-store/src/model_view.rs) · [error.rs](file:///d:/Chimera%20CLI/crates/session-store/src/error.rs) |
-| **关键类型**   | `SessionSegment` · `SegmentOffset{seq,row}` · `MicroBatchWriter`(CBMR,≤64/2ms 自适应窗口) · `EventTreeIndex` · `SessionReplayer` · `ModelView`                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **关键方法**   | `append(ev)`(攒批→spawn\_blocking flush) · `read_events()`(SQLite 树索引,与写并发 WAL) · `fork(session, offset)`                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| **主要依赖**   | tokio · serde · serde\_json · rusqlite(spawn\_blocking 包装) · thiserror · nexus-core · nexus-contracts · event-bus                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **设计模式**   | append-only 段 · CBMR 微批写(N 次直写降为 ceil(N/64) 次) · Write-Ahead 长度前缀 · 崩溃尾部截断                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **ADR 来源** | ADR-141(CSC 会话存储契约)/ ADR-108(CBMR 微批写)/ ADR-109(Offset 双键归并);对应 v4.0 WI-18、九源手册 W9 T-07                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **架构层** | L3 Storage(v2.28 新增,workspace 第 40 个 crate) |
+| **核心职责** | 会话事件流存储:把会话持久化从「Checkpoint 线性全量快照」升级为「append-only 事件流 + CBMR 微批写」;JSONL 段文件(每 Thread 一段,长度前缀 WAL 意向,`append` 返回 Ok 前 fsync)+ SQLite 树索引(segments/events 单事务批量);Offset 双键 `{seq 全局单调, row 段内行号}` 供 k-way 归并回放;`fork(session, offset)` 前缀段元数据零拷贝复制 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/session-store/src/lib.rs) · [segment.rs](file:///d:/Chimera%20CLI/crates/session-store/src/segment.rs) · [writer.rs](file:///d:/Chimera%20CLI/crates/session-store/src/writer.rs) · [tree.rs](file:///d:/Chimera%20CLI/crates/session-store/src/tree.rs) · [replay.rs](file:///d:/Chimera%20CLI/crates/session-store/src/replay.rs) · [model\_view.rs](file:///d:/Chimera%20CLI/crates/session-store/src/model_view.rs) · [error.rs](file:///d:/Chimera%20CLI/crates/session-store/src/error.rs) |
+| **关键类型** | `SegmentOffset{seq,row}` · `CbmrWriter` |
+| **关键方法** | `append(ev)`(攒批→spawn\_blocking flush) · `read_events()`(SQLite 树索引,与写并发 WAL) · `fork(session, offset)` |
+| **主要依赖** | tokio · serde · serde\_json · rusqlite(spawn\_blocking 包装) · thiserror · nexus-contracts |
+| **设计模式** | append-only 段 · CBMR 微批写(N 次直写降为 ceil(N/64) 次) · Write-Ahead 长度前缀 · 崩溃尾部截断 |
+| **ADR 来源** | ADR-141(CSC 会话存储契约)/ ADR-108(CBMR 微批写)/ ADR-109(Offset 双键归并);对应 v4.0 WI-18、九源手册 W9 T-07 |
 
 ***
 
@@ -282,38 +301,38 @@ L1   Core ─────── nexus-core · event-bus
 
 #### [seccore](file:///d:/Chimera%20CLI/crates/seccore)
 
-| 项                     | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 项 | 说明 |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**               | L4 Security                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **核心职责**              | 安全核心，零信任沙箱(gVisor内核级隔离/进程隔离)、Merkle审计链、ASA自适应安全审计                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **关键文件**              | [lib.rs](file:///d:/Chimera%20CLI/crates/seccore/src/lib.rs) · [sandbox.rs](file:///d:/Chimera%20CLI/crates/seccore/src/sandbox.rs) · [audit.rs](file:///d:/Chimera%20CLI/crates/seccore/src/audit.rs) · [asa.rs](file:///d:/Chimera%20CLI/crates/seccore/src/asa.rs) · [policy.rs](file:///d:/Chimera%20CLI/crates/seccore/src/policy.rs) · [gvisor.rs](file:///d:/Chimera%20CLI/crates/seccore/src/gvisor.rs) · [types.rs](file:///d:/Chimera%20CLI/crates/seccore/src/types.rs) |
-| **关键类型**              | `SecurityCore` · `Sandbox` · `MerkleAuditChain` · `AsaAuditor` · `SecurityPolicy` · `RiskLevel` · `GvisorRuntime` · `GvisorConfig`                                                                                                                                                                                                                                                                                                                                                 |
-| **关键方法**              | `Sandbox::execute()` · `MerkleAuditChain::record()` · `AsaAuditor::audit()` · `GvisorRuntime::detect()` / `GvisorRuntime::spawn()`                                                                                                                                                                                                                                                                                                                                                 |
-| **主要依赖**              | tokio · serde · sha2 · hex · chrono · uuid · tracing · thiserror · event-bus                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **gVisor 说明**         | P2-9 (2026-07-28): `Sandbox` 新增 `use_gvisor` + `gvisor_runtime` 字段，`execute_in_sandbox()` 在 Linux + runsc 可用时通过 gVisor 内核级隔离执行命令，否则降级为 `tokio::process::Command`；`GvisorRuntime` 封装 runsc 检测与子进程启动；详见 `docs/gvisor-deployment.md`                                                                                                                                                                                                                                                  |
-| **FormalVerifier L4** | ADR-047(Proposed, 2026-07-27):L4 形式化验证器层级跃迁路线图,嵌入 seccore 而非新建独立 crate(决策 1);三阶段渐进式实施 M0 骨架(2026-08-15)/ M1 集成(2026-09-15)/ M2 完整(2026-10-15);属性语言采用 Rust 类型系统 + proptest + clippy 三层组合(决策 3,非 SMT-LIB/Lean);复用 `sandbox.rs` 资源限制 + `chimera-mas/invariants.rs` InvariantChecker 模式(决策 4);对齐 ADR-042 R2 解冻前置条件判定标准 2(ADR 落档);落地路径 `crates/seccore/src/formal_verifier.rs` + 4 子模块(append-only)                                                                                     |
+| **架构层** | L4 Security |
+| **核心职责** | 安全核心，零信任沙箱(gVisor内核级隔离/进程隔离)、Merkle审计链、ASA自适应安全审计 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/seccore/src/lib.rs) · [sandbox.rs](file:///d:/Chimera%20CLI/crates/seccore/src/sandbox.rs) · [audit.rs](file:///d:/Chimera%20CLI/crates/seccore/src/audit.rs) · [asa.rs](file:///d:/Chimera%20CLI/crates/seccore/src/asa.rs) · [policy.rs](file:///d:/Chimera%20CLI/crates/seccore/src/policy.rs) · [gvisor.rs](file:///d:/Chimera%20CLI/crates/seccore/src/gvisor.rs) · [types.rs](file:///d:/Chimera%20CLI/crates/seccore/src/types.rs) |
+| **关键类型** | `Sandbox` · `AsaAuditor` · `RiskLevel` · `GvisorRuntime` · `GvisorConfig` |
+| **关键方法** | `Sandbox::audit_and_execute()` · `AsaAuditor::audit()` · `GvisorRuntime::detect()` · `GvisorRuntime::spawn()` |
+| **主要依赖** | tokio · serde · sha2 · hex · chrono · uuid · tracing · thiserror · event-bus |
+| **gVisor 说明** | P2-9 (2026-07-28): `Sandbox` 新增 `use_gvisor` + `gvisor_runtime` 字段，`execute_in_sandbox()` 在 Linux + runsc 可用时通过 gVisor 内核级隔离执行命令，否则降级为 `tokio::process::Command`；`GvisorRuntime` 封装 runsc 检测与子进程启动；详见 `docs/gvisor-deployment.md` |
+| **FormalVerifier L4** | ADR-047(Proposed, 2026-07-27):L4 形式化验证器层级跃迁路线图,嵌入 seccore 而非新建独立 crate(决策 1);三阶段渐进式实施 M0 骨架(2026-08-15)/ M1 集成(2026-09-15)/ M2 完整(2026-10-15);属性语言采用 Rust 类型系统 + proptest + clippy 三层组合(决策 3,非 SMT-LIB/Lean);复用 `sandbox.rs` 资源限制 + `chimera-mas/invariants.rs` InvariantChecker 模式(决策 4);对齐 ADR-042 R2 解冻前置条件判定标准 2(ADR 落档);落地路径 `crates/seccore/src/formal_verifier.rs` + 4 子模块(append-only)。**实测核对（2026-09-22，本审计 P109）**：本行前半句的 seccore 落点**未被采用**——`crates/seccore/src/` 现 22 个文件中无任何 formal* 文件，全 `crates/` 内唯一 `FormalVerifier*` 命名类型是 `FormalVerifierGate`（`crates/gsoe-evolution/src/formal_gate.rs:84`）；验证器族实际分散落地于 `parliament/src/formal/`、`gsoe-evolution/src/formal_gate.rs`、`nexus-contracts/src/formal_props.rs`、`decay-engine/src/formal.rs`、`event-bus/src/formal.rs`、`omega-learner/src/formal.rs` 六处⇒ ADR-047 决策 1「嵌入 seccore 而非新建独立 crate」与实现不符，且该 ADR 状态仍为 Proposed；「M0/M1/M2 全部落地、L4 跃迁完成」的能力主张成立（E2E target `formal_verifier_e2e`/`_m1_`/`_m2_`/`_gate_` 均在 `Cargo.toml` `[[test]]` 注册），但**落点描述不可作为施工位置依据**。待裁决：补 superseding ADR 或改写 ADR-047 决策 1。 |
 
 #### [decay-engine](file:///d:/Chimera%20CLI/crates/decay-engine)
 
-| 项        | 说明                                                                                                                                          |
+| 项 | 说明 |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L4 Security                                                                                                                                 |
-| **核心职责** | 能力衰减引擎，基于连续权限流体模型，能力随时间/风险动态衰减                                                                                                              |
+| **架构层** | L4 Security |
+| **核心职责** | 能力衰减引擎，基于连续权限流体模型，能力随时间/风险动态衰减 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/decay-engine/src/lib.rs) · [engine.rs](file:///d:/Chimera%20CLI/crates/decay-engine/src/engine.rs) |
-| **关键类型** | `DecayEngine` · `CapabilityToken` · `DecayProfile`                                                                                          |
-| **关键方法** | `DecayEngine::grant()` · `DecayEngine::check()` · `DecayEngine::decay_tick()`                                                               |
-| **主要依赖** | tokio · serde · dashmap · chrono · tracing · nexus-core · event-bus                                                                         |
+| **关键类型** | `DecayEngine` · `CapabilityToken` · `DecayProfile` |
+| **关键方法** | `DecayEngine::decay()` · `DecayEngine::decay_with_policy()` · `DecayEngine::freeze()` |
+| **主要依赖** | tokio · serde · dashmap · chrono · tracing · nexus-core · event-bus |
 
 #### [qeep-protocol](file:///d:/Chimera%20CLI/crates/qeep-protocol)
 
-| 项        | 说明                                                                                                                                                                                                                               |
+| 项 | 说明 |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L4 Security                                                                                                                                                                                                                      |
-| **核心职责** | 量子纠缠执行协议(QEEP)，保证所有异步操作都有聚集/超时处理(零孤儿调用)                                                                                                                                                                                          |
+| **架构层** | L4 Security |
+| **核心职责** | 量子纠缠执行协议(QEEP)，保证所有异步操作都有聚集/超时处理(零孤儿调用) |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/qeep-protocol/src/lib.rs) · [protocol.rs](file:///d:/Chimera%20CLI/crates/qeep-protocol/src/protocol.rs) · [detector.rs](file:///d:/Chimera%20CLI/crates/qeep-protocol/src/detector.rs) |
-| **关键类型** | `QeepProtocol` · `OrphanDetector` · `EntangledOperation` · `EntanglementState`                                                                                                                                                   |
-| **关键方法** | `QeepProtocol::entangle()` · `QeepProtocol::complete()` · `OrphanDetector::detect()`                                                                                                                                             |
-| **主要依赖** | tokio · serde · dashmap · uuid · chrono · tracing · thiserror · nexus-core · event-bus                                                                                                                                           |
+| **关键类型** | `QeepProtocol` · `OrphanDetector` |
+| **关键方法** | `QeepProtocol::entangle()` · `OrphanDetector::detect_orphans()` · `QeepProtocol::call_ack()` |
+| **主要依赖** | tokio · serde · dashmap · uuid · chrono · tracing · thiserror |
 
 ***
 
@@ -321,90 +340,101 @@ L1   Core ─────── nexus-core · event-bus
 
 #### [repo-wiki](file:///d:/Chimera%20CLI/crates/repo-wiki)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 项 | 说明 |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L5 Knowledge                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **核心职责** | 代码知识库，ISCM跨层共享索引、FTS5全文检索、内存KNN向量检索、知识沉淀与指标                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **架构层** | L5 Knowledge |
+| **核心职责** | 代码知识库，ISCM跨层共享索引、FTS5全文检索、内存KNN向量检索、知识沉淀与指标 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/repo-wiki/src/lib.rs) · [store.rs](file:///d:/Chimera%20CLI/crates/repo-wiki/src/store.rs) · [iscm.rs](file:///d:/Chimera%20CLI/crates/repo-wiki/src/iscm.rs) · [fts.rs](file:///d:/Chimera%20CLI/crates/repo-wiki/src/fts.rs) · [vector.rs](file:///d:/Chimera%20CLI/crates/repo-wiki/src/vector.rs) · [generator.rs](file:///d:/Chimera%20CLI/crates/repo-wiki/src/generator.rs) · [metrics.rs](file:///d:/Chimera%20CLI/crates/repo-wiki/src/metrics.rs) |
-| **关键类型** | `RepoWiki` · `IscmIndex` · `FtsSearcher` · `VectorSearcher` · `WikiEntry` · `WikiMetrics`                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **关键方法** | `RepoWiki::search()` · `RepoWiki::store()` · `RepoWiki::generate_index()`                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **主要依赖** | tokio · serde · serde\_json · rmp-serde · rusqlite · ndarray · dashmap · sha2 · hex · chrono · uuid · nexus-core · event-bus                                                                                                                                                                                                                                                                                                                                                                         |
+| **关键类型** | `RepoWiki` · `WikiEntry` · `WikiMetrics` |
+| **关键方法** | `VectorIndex::search()` · `WikiStore::count()` · `WikiStore::create_anchor()` |
+| **主要依赖** | tokio · serde · serde\_json · rmp-serde · rusqlite · ndarray · dashmap · sha2 · hex · chrono · uuid · nexus-core · event-bus |
 
 #### [gsoe-evolution](file:///d:/Chimera%20CLI/crates/gsoe-evolution)
 
-| 项             | 说明                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 项 | 说明 |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**       | L5 Knowledge                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **核心职责**      | 引导式自组织进化(GSOE)，GRPO风格策略进化 + 适应度评估 + 变异                                                                                                                                                                                                                                                                                                                                                                                          |
-| **关键文件**      | [lib.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/lib.rs) · [engine.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/engine.rs) · [policy/grpo.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/policy/grpo.rs) · [policy/fitness.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/policy/fitness.rs) · [policy/mutation.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/policy/mutation.rs) |
-| **关键类型**      | `GsoeEngine` · `GrpoPolicy` · `FitnessEvaluator` · `MutationOperator` · `EvolutionRecord`                                                                                                                                                                                                                                                                                                                                       |
-| **关键方法**      | `GsoeEngine::evolve()` · `GsoeEngine::record_feedback()`                                                                                                                                                                                                                                                                                                                                                                        |
-| **主要依赖**      | tokio · serde · ndarray · rand · dashmap · chrono · uuid · tracing · nexus-core · event-bus                                                                                                                                                                                                                                                                                                                                     |
-| **L4 形式化验证门** | ADR-047(Proposed, 2026-07-27):GSOE 进化主路径将新增 `evolve_with_formal_verification()` 方法(append-only,决策 5),在 L3 执行反馈通过后追加 L4 形式化验证门作为第二道闸;L4 门失败的候选发布 `NexusEvent::FormalVerificationFailed`(Critical 级,走 mpsc 旁路通道)并否决,不进入 AutoDPO 偏好对生成;L4 门通过发布 `NexusEvent::FormalVerificationPassed`(Normal 级);对齐 ADR-042 R2 冻结解冻前置条件 + 三重悖论进化悖论红线(L3→L4 跃迁);落地时间表 M1 集成 2026-09-15                                                              |
+| **架构层** | L5 Knowledge |
+| **核心职责** | 引导式自组织进化(GSOE)，GRPO风格策略进化 + 适应度评估 + 变异 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/lib.rs) · [engine.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/engine.rs) · [policy/grpo.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/policy/grpo.rs) · [policy/fitness.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/policy/fitness.rs) · [policy/mutation.rs](file:///d:/Chimera%20CLI/crates/gsoe-evolution/src/policy/mutation.rs) |
+| **关键类型** | `GsoeEngine` · `EvolutionRecord` · `GsoeEvolutionEngine` |
+| **关键方法** | `GsoeEvolutionEngine::evolve_once()` · `GsoeEvolutionEngine::current_policy()` · `GsoeEvolutionEngine::evolve_with_formal_verification()` |
+| **主要依赖** | tokio · serde · ndarray · rand · dashmap · chrono · uuid · tracing · nexus-core · event-bus |
+| **L4 形式化验证门** | ADR-047(Proposed, 2026-07-27):GSOE 进化主路径将新增 `evolve_with_formal_verification()` 方法(append-only,决策 5),在 L3 执行反馈通过后追加 L4 形式化验证门作为第二道闸;L4 门失败的候选发布 `NexusEvent::FormalVerificationFailed`(Critical 级,走 mpsc 旁路通道)并否决,不进入 AutoDPO 偏好对生成;L4 门通过发布 `NexusEvent::FormalVerificationPassed`(Normal 级);对齐 ADR-042 R2 冻结解冻前置条件 + 三重悖论进化悖论红线(L3→L4 跃迁);落地时间表 M1 集成 2026-09-15 |
 
 ***
 
-### 3.6 L6 Router (5 crates,ADR-031 新增 omega-learner)
+### 3.6 L6 Router (6 crates,ADR-031 新增 omega-learner,v2.29 新增 router-traits)
 
 > **L6 星型耦合已解耦**（ADR-033）：kvbsr-router、faae-router、sesa-router 通过 L0 \[`nexus-contracts`] 共享 `ToolId` 等类型，不再依赖 `osa-coordinator`。`osa-coordinator` 保持为 L6 Router 的协调器，但并非其他路由器的依赖。
 
+#### [router-traits](file:///d:/Chimera%20CLI/crates/router-traits)
+
+| 项 | 说明 |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **架构层** | L6 Router |
+| **核心职责** | 路由层 trait 契约层(纯抽象,零运行时逻辑):SparseMaskProvider 稀疏掩码提供者接口 + RouterConfig 路由配置契约 + RouterId 身份枚举;星型耦合消除的依赖倒置扩展点 |
+| **关键类型** | `SparseMaskProvider` · `RouterConfig` · `RouterId` · `SparseMaskError` |
+| **实现方** | osa-coordinator(`impl SparseMaskProvider/RouterConfig for OmniSparseCoordinator`,fallback 返回五维空掩码) |
+| **主要依赖** | nexus-contracts (L0) · thiserror——收缩后零 event-bus 依赖(v2.29 收缩:security 模块因前提证伪删除,见 lib.rs 收缩记录) |
+| **治理状态** | 实现方已接线生产可达;消费方待批次 C 决策——v2.31 前仍零消费则整 crate 收缩删除(减法优先棘轮) |
+
 #### [osa-coordinator](file:///d:/Chimera%20CLI/crates/osa-coordinator)
 
-| 项        | 说明                                                                                                                                                                                                                                     |
+| 项 | 说明 |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L6 Router                                                                                                                                                                                                                              |
-| **核心职责** | 全维稀疏架构协调器(OSA)，五维度稀疏掩码(路由/上下文/记忆/审计/预算)计算                                                                                                                                                                                              |
-| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/lib.rs) · [coordinator.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/coordinator.rs) · [masks.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/masks.rs) |
-| **关键类型** | `OmniSparseCoordinator` · `OmniSparseMasks` · `RoutingMask` · `ContextMask` · `MemoryMask` · `AuditMask` · `BudgetMask`                                                                                                                |
-| **关键方法** | `OmniSparseCoordinator::compute_masks()` → `OmniSparseMasks`                                                                                                                                                                           |
-| **主要依赖** | nexus-contracts · nexus-core · event-bus · serde · serde\_json · thiserror · sha2 · hex · tracing                                                                                                                                      |
+| **架构层** | L6 Router |
+| **核心职责** | 全维稀疏架构协调器(OSA)，五维度稀疏掩码(路由/上下文/记忆/审计/预算)计算 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/lib.rs) · [coordinator.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/coordinator.rs) · [masks.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/masks.rs)(17 行 re-export 垫片;类型定义在 `crates/nexus-contracts/src/masks.rs:53`) |
+| **关键类型** | `OmniSparseCoordinator` · `OmniSparseMasks`(`crates/nexus-contracts/src/omni_masks.rs:46`) · `SparseMask<T>`(`crates/nexus-contracts/src/masks.rs:53`) · 五维字段 `routing`/`context`/`memory`/`audit`/`budget`(`crates/nexus-contracts/src/omni_masks.rs:48-56`) |
+| **关键方法** | `OmniSparseCoordinator::compute_all_masks()` → `OmniSparseMasks`(`crates/osa-coordinator/src/coordinator.rs:322`,async) · `compute_all_masks_batch()`(`crates/osa-coordinator/src/coordinator.rs:458`) |
+| **主要依赖** | nexus-contracts · nexus-core · event-bus · serde · serde\_json · thiserror · sha2 · hex · tracing |
 
 #### [kvbsr-router](file:///d:/Chimera%20CLI/crates/kvbsr-router)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                      |
+| 项 | 说明 |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L6 Router                                                                                                                                                                                                                                                                                               |
-| **核心职责** | KV块语义路由器(KVBSR)，两级块路由 + 语义块管理 + 自动再平衡                                                                                                                                                                                                                                                                   |
+| **架构层** | L6 Router |
+| **核心职责** | KV块语义路由器(KVBSR)，两级块路由 + 语义块管理 + 自动再平衡 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/kvbsr-router/src/lib.rs) · [router.rs](file:///d:/Chimera%20CLI/crates/kvbsr-router/src/router.rs) · [blocks.rs](file:///d:/Chimera%20CLI/crates/kvbsr-router/src/blocks.rs) · [rebalancer.rs](file:///d:/Chimera%20CLI/crates/kvbsr-router/src/rebalancer.rs) |
-| **关键类型** | `KvbsrRouter` · `SemanticBlock` · `BlockRebalancer` · `RoutingResult`                                                                                                                                                                                                                                   |
-| **关键方法** | `KvbsrRouter::route()` · `KvbsrRouter::register_block()` · `BlockRebalancer::rebalance()`                                                                                                                                                                                                               |
-| **主要依赖** | tokio · serde · ndarray · dashmap · uuid · tracing · nexus-core · event-bus · nexus-contracts · thiserror                                                                                                                                                                                               |
+| **关键类型** | `SemanticBlock` · `RoutingResult` · `KVBlockSemanticRouter` |
+| **关键方法** | `KVBlockSemanticRouter::route()` · `KVBlockSemanticRouter::auto_rebalance()` · `KVBlockSemanticRouter::block_count()` |
+| **主要依赖** | tokio · serde · ndarray · dashmap · uuid · tracing · nexus-core · event-bus · nexus-contracts · thiserror |
 
 #### [faae-router](file:///d:/Chimera%20CLI/crates/faae-router)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                      |
+| 项 | 说明 |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L6 Router                                                                                                                                                                                                                                                                               |
-| **核心职责** | 工具即专家路由器(FaaE)，专家注册/匹配/路由、EDSB概率均衡                                                                                                                                                                                                                                                      |
+| **架构层** | L6 Router |
+| **核心职责** | 工具即专家路由器(FaaE)，专家注册/匹配/路由、EDSB概率均衡 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/faae-router/src/lib.rs) · [router.rs](file:///d:/Chimera%20CLI/crates/faae-router/src/router.rs) · [expert.rs](file:///d:/Chimera%20CLI/crates/faae-router/src/expert.rs) · [edsb.rs](file:///d:/Chimera%20CLI/crates/faae-router/src/edsb.rs) |
-| **关键类型** | `FaaeRouter` · `Expert` · `ExpertRegistry` · `EdsBalancer` · `ExpertSelection`                                                                                                                                                                                                          |
-| **关键方法** | `FaaeRouter::route()` · `FaaeRouter::register_expert()`                                                                                                                                                                                                                                 |
-| **主要依赖** | tokio · serde · rand · dashmap · uuid · chrono · tracing · nexus-core · event-bus · nexus-contracts · thiserror                                                                                                                                                                         |
+| **关键类型** | `FaaeRouter` · `Expert` · `ExpertRegistry` |
+| **关键方法** | `FaaeRouter::route()` · `FaaeRouter::register_expert()` |
+| **主要依赖** | tokio · serde · rand · dashmap · uuid · chrono · tracing · nexus-core · event-bus · nexus-contracts · thiserror |
 
 #### [sesa-router](file:///d:/Chimera%20CLI/crates/sesa-router)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                                                       |
+| 项 | 说明 |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L6 Router                                                                                                                                                                                                                                                                                                                                                                                |
-| **核心职责** | 子专家稀疏激活(SESA)，三层路由(前置条件→掩码→稀疏度→激活)                                                                                                                                                                                                                                                                                                                                                       |
+| **架构层** | L6 Router |
+| **核心职责** | 子专家稀疏激活(SESA)，三层路由(前置条件→掩码→稀疏度→激活) |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/sesa-router/src/lib.rs) · [sparsity.rs](file:///d:/Chimera%20CLI/crates/sesa-router/src/sparsity.rs) · [prerequisite.rs](file:///d:/Chimera%20CLI/crates/sesa-router/src/prerequisite.rs) · [mask.rs](file:///d:/Chimera%20CLI/crates/sesa-router/src/mask.rs) · [activation.rs](file:///d:/Chimera%20CLI/crates/sesa-router/src/activation.rs) |
-| **关键类型** | `SesaRouter` · `SparsityController` · `PrerequisiteChecker` · `MaskApplier` · `ActivationFunc` · `ActivationResult`                                                                                                                                                                                                                                                                      |
-| **关键方法** | `SesaRouter::activate()` · `SparsityController::compute_threshold()`                                                                                                                                                                                                                                                                                                                     |
-| **主要依赖** | tokio · serde · anyhow · thiserror · dashmap · tracing · nexus-core · event-bus                                                                                                                                                                                                                                                                                                          |
+| **关键类型** | `SesaRouter` · `PrerequisiteChecker` · `ActivationResult` |
+| **关键方法** | `SesaRouter::activate()` · `SesaMask::clear_bit()` · `SesaMask::from_indices()` |
+| **主要依赖** | tokio · serde · anyhow · thiserror · dashmap · tracing · nexus-core · event-bus |
 
 #### [omega-learner](file:///d:/Chimera%20CLI/crates/omega-learner)
 
-| 项          | 说明                                                                                                                                                                                                                                                                                                  |
+| 项 | 说明 |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**    | L6 Router                                                                                                                                                                                                                                                                                           |
-| **核心职责**   | LinUCB Bandit 学习层;嫁接 gsoe-evolution 的 RHI-CG 通道(auto-dpo 已按架构减法批次退役删除);异步下发 `SelectorPolicy::Learned` 给调用方,本地 fallback 保证可用性;R1 召回配额影子模式(CQL/IQL),R2 形式化验证器落地前冻结                                                                                                                                                |
-| **关键文件**   | [lib.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/lib.rs) · [bandit.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/bandit.rs) · [policy.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/policy.rs) · [shadow.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/shadow.rs) |
-| **关键类型**   | `OmegaLearner` · `LinUCB` · `SelectorPolicy::{Static,Learned,Hybrid}` · `ShadowObserver` · `RewardSignal`                                                                                                                                                                                           |
-| **关键方法**   | `OmegaLearner::recommend()` · `LinUCB::update()` · `ShadowObserver::compare()`                                                                                                                                                                                                                      |
-| **主要依赖**   | tokio · serde · ndarray · rand · tracing · **nexus-contracts** (L0) · **event-bus** (L1)                                                                                                                                                                                                            |
-| **依赖铁律**   | L6 → L0(ADR-033 扩展恒允许) + L6 → L1(原铁律允许);**不依赖 L7+**(符合 §2.2 铁律)                                                                                                                                                                                                                                     |
-| **设计模式**   | Bandit · 影子模式(Shadow Mode)· 异步下发 + 本地 fallback                                                                                                                                                                                                                                                      |
-| **ADR 来源** | ADR-031 (Harness-as-Spec + omega-learner 边界) · ADR-043 (R1 影子模式)                                                                                                                                                                                                                                    |
+| **架构层** | L6 Router |
+| **核心职责** | LinUCB Bandit 学习层;嫁接 gsoe-evolution 的 RHI-CG 通道(auto-dpo 已按架构减法批次退役删除);异步下发 `SelectorPolicy::Learned` 给调用方,本地 fallback 保证可用性;R1 召回配额影子模式(CQL/IQL),R2 形式化验证器落地前冻结 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/lib.rs) · [bandit.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/bandit.rs) · [policy.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/policy.rs) · [shadow.rs](file:///d:/Chimera%20CLI/crates/omega-learner/src/shadow.rs) |
+| **关键类型** | `OmegaLearner` · `LinUCB` · `SelectorPolicy::{Static,Learned,Hybrid}` · `RewardSignal` |
+| **关键方法** | `LinUCB::update()` · `LinUCB::alpha()` · `LinUCB::arm_id_of()` |
+| **主要依赖** | tokio · serde · ndarray · rand · tracing · **nexus-contracts** (L0) · **event-bus** (L1) |
+| **依赖铁律** | L6 → L0(ADR-033 扩展恒允许) + L6 → L1(原铁律允许);**不依赖 L7+**(符合 §2.2 铁律) |
+| **设计模式** | Bandit · 影子模式(Shadow Mode)· 异步下发 + 本地 fallback |
+| **ADR 来源** | ADR-031 (Harness-as-Spec + omega-learner 边界) · ADR-043 (R1 影子模式) |
 
 ***
 
@@ -412,61 +442,61 @@ L1   Core ─────── nexus-core · event-bus
 
 #### [pvl-layer](file:///d:/Chimera%20CLI/crates/pvl-layer)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                              |
+| 项 | 说明 |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L7 Execution                                                                                                                                                                                                                                                                                    |
-| **核心职责** | 生产者-验证者循环(PVL)，并行流式生成与验证，反馈闭环                                                                                                                                                                                                                                                                   |
+| **架构层** | L7 Execution |
+| **核心职责** | 生产者-验证者循环(PVL)，并行流式生成与验证，反馈闭环 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/pvl-layer/src/lib.rs) · [producer.rs](file:///d:/Chimera%20CLI/crates/pvl-layer/src/producer.rs) · [verifier.rs](file:///d:/Chimera%20CLI/crates/pvl-layer/src/verifier.rs) · [feedback.rs](file:///d:/Chimera%20CLI/crates/pvl-layer/src/feedback.rs) |
-| **关键类型** | `PvlLayer` · `Producer` · `Verifier` · `FeedbackLoop` · `ProduceResult` · `VerifyResult`                                                                                                                                                                                                        |
-| **关键方法** | `PvlLayer::produce_and_verify()` · `FeedbackLoop::record()`                                                                                                                                                                                                                                     |
-| **主要依赖** | tokio · serde · dashmap · futures · rand · chrono · uuid · tracing · nexus-core · event-bus                                                                                                                                                                                                     |
+| **关键类型** | `Producer` · `Verifier` · `FeedbackChannel` |
+| **关键方法** | `Verifier::from_seccore()` · `Verifier::rejected_count()` · `Verifier::run()` |
+| **主要依赖** | tokio · serde · dashmap · futures · rand · chrono · uuid · tracing · nexus-core · event-bus |
 
 #### [gqep-executor](file:///d:/Chimera%20CLI/crates/gqep-executor)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                      |
+| 项 | 说明 |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L7 Execution                                                                                                                                                                                                                                                                                            |
-| **核心职责** | 聚集-查询执行协议(GQEP)，异步操作聚集、超时处理、批量执行                                                                                                                                                                                                                                                                        |
+| **架构层** | L7 Execution |
+| **核心职责** | 聚集-查询执行协议(GQEP)，异步操作聚集、超时处理、批量执行 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/lib.rs) · [gatherer.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/gatherer.rs) · [timeout.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/timeout.rs) · [batch.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/batch.rs) |
-| **关键类型** | `GqepExecutor` · `Gatherer` · `TimeoutController` · `BatchExecutor` · `GatherResult`                                                                                                                                                                                                                    |
-| **关键方法** | `GqepExecutor::gather()` · `GqepExecutor::execute_batch()`                                                                                                                                                                                                                                              |
-| **主要依赖** | tokio · serde · dashmap · futures · rand · chrono · uuid · tracing · nexus-core · event-bus · qeep-protocol                                                                                                                                                                                             |
-| **架构例外** | ⚠️ 跨层渗透例外(ADR-048 Accepted):L7→L4 依赖 qeep-protocol,接受现状,推迟至三环重组根治                                                                                                                                                                                                                                       |
+| **关键类型** | `GqepExecutor` · `BatchExecutor` · `GatherResult` |
+| **关键方法** | `GqepExecutor::gather()` · `GqepExecutor::completed_count()` · `GqepExecutor::entangle_spawn()` |
+| **主要依赖** | tokio · serde · dashmap · futures · rand · chrono · uuid · tracing · nexus-core · event-bus · qeep-protocol |
+| **架构例外** | 无 —— 原「跨层渗透例外(ADR-048 Accepted)」已于 wave 3c / ADR-185 D4 **收编**:`gqep-executor`(L7)→`qeep-protocol`(L4) 是**合法向下边**,治理脚本 `scripts/check_dependency_rules.sh:217` 不再为其保留豁免条目;「推迟至三环重组根治」一项亦已完成(Phase 9 P9-T1~T12, v2.24.0) |
 
 #### [mtpe-executor](file:///d:/Chimera%20CLI/crates/mtpe-executor)
 
-| 项        | 说明                                                                                                                                                                                                                                 |
+| 项 | 说明 |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L7 Execution                                                                                                                                                                                                                       |
-| **核心职责** | 多Token预测执行(MTPE)，伪预测加速、回退策略                                                                                                                                                                                                        |
+| **架构层** | L7 Execution |
+| **核心职责** | 多Token预测执行(MTPE)，伪预测加速、回退策略 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/mtpe-executor/src/lib.rs) · [predictor.rs](file:///d:/Chimera%20CLI/crates/mtpe-executor/src/predictor.rs) · [fallback.rs](file:///d:/Chimera%20CLI/crates/mtpe-executor/src/fallback.rs) |
-| **关键类型** | `MtpeExecutor` · `Predictor` · `FallbackStrategy` · `PredictionResult`                                                                                                                                                             |
-| **关键方法** | `MtpeExecutor::predict()` · `MtpeExecutor::verify_and_fallback()`                                                                                                                                                                  |
-| **主要依赖** | tokio · serde · dashmap · rand · tracing · nexus-core · event-bus                                                                                                                                                                  |
+| **关键类型** | `MtpeExecutor` · `FallbackStrategy` · `PredictionResult` |
+| **关键方法** | `MtpeExecutor::predict()` · `MtpeExecutor::get_success_rate()` · `MtpeExecutor::model()` |
+| **主要依赖** | tokio · serde · dashmap · rand · tracing · event-bus · nmc-encoder |
 
 #### [ssra-fusion](file:///d:/Chimera%20CLI/crates/ssra-fusion)
 
-| 项        | 说明                                                                                                                                                                                                                                     |
+| 项 | 说明 |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L7 Execution                                                                                                                                                                                                                           |
-| **核心职责** | 黏液式快速适配(SSRA)，多策略融合引擎、模板系统                                                                                                                                                                                                             |
+| **架构层** | L7 Execution |
+| **核心职责** | 黏液式快速适配(SSRA)，多策略融合引擎、模板系统 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/ssra-fusion/src/lib.rs) · [fusion/engine.rs](file:///d:/Chimera%20CLI/crates/ssra-fusion/src/fusion/engine.rs) · [templates.rs](file:///d:/Chimera%20CLI/crates/ssra-fusion/src/templates.rs) |
-| **关键类型** | `SsraFusionEngine` · `FusionStrategy` · `TemplateRegistry` · `FusionResult`                                                                                                                                                            |
-| **关键方法** | `SsraFusionEngine::fuse()` · `SsraFusionEngine::adapt()`                                                                                                                                                                               |
-| **主要依赖** | tokio · serde · serde\_json · rand · dashmap · chrono · uuid · tracing · nexus-core · event-bus                                                                                                                                        |
+| **关键类型** | `FusionStrategy` · `TemplateRegistry` · `FusionResult` |
+| **关键方法** | `SlimeFusionEngine::fuse()` · `SlimeFusionEngine::registry()` · `SlimeFusionEngine::start_defensive_adapter()` |
+| **主要依赖** | tokio · serde · serde\_json · rand · dashmap · chrono · uuid · tracing · event-bus · nexus-contracts |
 
 #### [nexus-subagent](file:///d:/Chimera%20CLI/crates/nexus-subagent)
 
-| 项          | 说明                                                                                                                                                                                                                                                                                                                                                                                    |
+| 项 | 说明 |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**    | L7 Execution(v2.28 新增,workspace 第 43 个 crate;ADR-148 裁决层归属定案——执行层,同一引擎换参数)                                                                                                                                                                                                                                                                                                            |
-| **核心职责**   | 类型化 SubAgent 运行时 + Task Auction 市场:coder/explore/plan 三类子代理(同一执行引擎换模型/工具集/权限/worktree 参数);Arena 竞争 + 竞价(bid → `min_by(cost/match)` 择胜);**禁嵌套**(`NestedSubAgentForbidden` L0 契约,编译期+运行期双断言,Swarm 规模上限 8);取消经 `CancellationToken` 四因传播(用户取消/超时/配额耗尽/父级撤销);与 mas-sched 分工:Auction 管短任务派发,Claim 管长任务租约                                                                                    |
-| **关键文件**   | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/lib.rs) · [runtime.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/runtime.rs) · [auction.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/auction.rs) · [cancel.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/cancel.rs) · [types.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/types.rs) |
-| **关键类型**   | `SubAgentRuntime` · `SubAgentHandle` · `SubAgentKind`(coder/explore/plan) · `SubAgentSpec`/`SubAgentProfile` · `TaskAuction` · `TaskOffer` · `Bid` · `CancellationToken`/`CancelReason` · `SWARM_LIMIT=8`                                                                                                                                                                             |
-| **关键方法**   | `SubAgentRuntime::spawn()` · `TaskAuction::offer()`/`award()`(min\_by cost/match) · `CancellationToken::cancel()`                                                                                                                                                                                                                                                                     |
-| **主要依赖**   | tokio · serde · thiserror · async-trait · nexus-core · nexus-contracts · event-bus(内部依赖 ≤6 门禁)                                                                                                                                                                                                                                                                                        |
-| **设计模式**   | 类型化子代理(引擎复用+参数化) · Task Auction 市场 · CancellationToken 协作式取消 · 嵌套禁止双断言                                                                                                                                                                                                                                                                                                                |
-| **ADR 来源** | ADR-148(层归属 D-P5 定案);对应 v4.0 WI-25、九源手册 W17-18、Phase 3 T9                                                                                                                                                                                                                                                                                                                             |
+| **架构层** | L7 Execution(v2.28 新增,workspace 第 43 个 crate;ADR-148 裁决层归属定案——执行层,同一引擎换参数) |
+| **核心职责** | 类型化 SubAgent 运行时 + Task Auction 市场:coder/explore/plan 三类子代理(同一执行引擎换模型/工具集/权限/worktree 参数);Arena 竞争 + 竞价(bid → `min_by(cost/match)` 择胜);**禁嵌套**(`NestedSubAgentForbidden` L0 契约,编译期+运行期双断言,Swarm 规模上限 8);取消经 `CancellationToken` 四因传播(用户取消/超时/配额耗尽/父级撤销);与 mas-sched 分工:Auction 管短任务派发,Claim 管长任务租约 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/lib.rs) · [runtime.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/runtime.rs) · [auction.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/auction.rs) · [cancel.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/cancel.rs) · [types.rs](file:///d:/Chimera%20CLI/crates/nexus-subagent/src/types.rs) |
+| **关键类型** | `SubAgentRuntime` · `SubAgentHandle` · `SubAgentKind`(coder/explore/plan) · `SubAgentSpec`/`SubAgentProfile` · `TaskAuction` · `TaskOffer` · `Bid` · `CancellationToken`/`CancelReason` · `SWARM_LIMIT=8` |
+| **关键方法** | `SubAgentRuntime::spawn()` · `CancellationToken::cancel()` · `SubAgentError::as_message()` |
+| **主要依赖** | tokio · serde · thiserror · async-trait · nexus-contracts |
+| **设计模式** | 类型化子代理(引擎复用+参数化) · Task Auction 市场 · CancellationToken 协作式取消 · 嵌套禁止双断言 |
+| **ADR 来源** | ADR-148(层归属 D-P5 定案);对应 v4.0 WI-25、九源手册 W17-18、Phase 3 T9 |
 
 ***
 
@@ -474,38 +504,38 @@ L1   Core ─────── nexus-core · event-bus
 
 #### [parliament](file:///d:/Chimera%20CLI/crates/parliament)
 
-| 项                      | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 项 | 说明 |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**                | L8 Parliament                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **核心职责**               | 多模型议会，角色注册(Skeptic/Security/Execution)、辩论、投票、否决权、AHIRT红队;v2.10.0+ 协调度量全路径埋点 + StrategyCapGuard 推理悖论风控;v2.11.0+ 多维共识质量(`ConsensusQualityMetrics` 赞成/弃权/分歧/裕度/Skeptic 立场)+ override 度量盲区修复 + Arc 共享优化                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **关键文件**               | [lib.rs](file:///d:/Chimera%20CLI/crates/parliament/src/lib.rs) · [debate.rs](file:///d:/Chimera%20CLI/crates/parliament/src/debate.rs) · [voting.rs](file:///d:/Chimera%20CLI/crates/parliament/src/voting.rs) · [veto.rs](file:///d:/Chimera%20CLI/crates/parliament/src/veto.rs) · [roles.rs](file:///d:/Chimera%20CLI/crates/parliament/src/roles.rs) · [ahirt.rs](file:///d:/Chimera%20CLI/crates/parliament/src/ahirt.rs) · [strategy\_cap.rs](file:///d:/Chimera%20CLI/crates/parliament/src/strategy_cap.rs)(v2.10.0+) · [override.rs](file:///d:/Chimera%20CLI/crates/parliament/src/override.rs)(v2.11.0+) |
-| **关键类型**               | `Parliament` · `DebateChamber` · `VotingSystem` · `VetoPower` · `RoleRegistry` · `AhirtRedTeam` · `ParliamentRole` · `VoteValue` · `ConsensusQualityMetrics`(v2.11.0+) · `StrategyCapGuard`(v2.10.0+) · `StrategyCap`(枚举: Full/Simplified/FastPath)                                                                                                                                                                                                                                                                                                                                                                  |
-| **关键方法**               | `Parliament::submit_proposal()` · `Parliament::debate()` · `Parliament::vote()` · `VetoPower::exercise()` · `deliberate_with_policy()`(v2.10.0+ 全路径埋点) · `deliberate_with_override()`(v2.11.0+ 度量盲区修复) · `consensus_quality()`(v2.11.0+ 多维质量派生) · `StrategyCapGuard::update_cap()`(v2.10.0+ 滞后带状态机)                                                                                                                                                                                                                                                                                                                  |
-| **主要依赖**               | tokio · serde · dashmap · rand · chrono · uuid · tracing · nexus-core · event-bus · seccore                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **v2.10.0-omega 关键变化** | (1) `deliberate_with_policy` 全路径 wall-clock 埋点(含 Vetoed 短路),`weighted_approval_rate`/`participation_rate` 随 `DebateCompleted` 事件上报;(2) `StrategyCapGuard` 消费 `CoordinationRatioReported`,滞后带(连续 3 次越阈降档 / 5 次回落升档 / 带内双清零),生效策略 = min(学习策略, 封顶)                                                                                                                                                                                                                                                                                                                                                                      |
-| **v2.11.0-omega 关键变化** | (1) `override.rs` 三返回路径全覆盖(`deliberate_with_override`/`reopen_veto`);(2) `voting.rs::consensus_quality()` 派生 5 指标(分歧度 = 加权 position 方差 / 0.25 归一化 Popoviciu 上界);(3) `collect_opinions_filtered` Arc 共享消除 O(R×T) clone(50 任务基准归档);(4) `execute_delegation`/`execute_batch_delegation` 去重抽 `run_delegation_batch` 私有内核                                                                                                                                                                                                                                                                                                 |
-| **关联 ADR**             | ADR-046 (ImmuneSystem facade) · ADR-063 (L8 协调度量接线闭环) · ADR-064 (L8 Parliament 深度优化第二轮)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| **架构层** | L8 Parliament |
+| **核心职责** | 多模型议会，角色注册(Skeptic/Security/Execution)、辩论、投票、否决权、AHIRT红队;v2.10.0+ 协调度量全路径埋点 + StrategyCapGuard 推理悖论风控;v2.11.0+ 多维共识质量(`ConsensusQualityMetrics` 赞成/弃权/分歧/裕度/Skeptic 立场)+ override 度量盲区修复 + Arc 共享优化 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/parliament/src/lib.rs) · [debate/mod.rs](file:///d:/Chimera%20CLI/crates/parliament/src/debate/mod.rs) · [debate/dpo.rs](file:///d:/Chimera%20CLI/crates/parliament/src/debate/dpo.rs) · [debate/ops.rs](file:///d:/Chimera%20CLI/crates/parliament/src/debate/ops.rs)(原 `debate.rs` 3,901 行于 2026-09-24 B5 拆分,模块路径 `crate::debate` 不变) · [voting.rs](file:///d:/Chimera%20CLI/crates/parliament/src/voting.rs) · [veto.rs](file:///d:/Chimera%20CLI/crates/parliament/src/veto.rs) · [roles.rs](file:///d:/Chimera%20CLI/crates/parliament/src/roles.rs) · [ahirt.rs](file:///d:/Chimera%20CLI/crates/parliament/src/ahirt.rs) · [strategy\_cap.rs](file:///d:/Chimera%20CLI/crates/parliament/src/strategy_cap.rs)(v2.10.0+) · [override.rs](file:///d:/Chimera%20CLI/crates/parliament/src/override.rs)(v2.11.0+) |
+| **关键类型** | `Parliament` · `DebateResult` · `VoteCounter` · `VetoReason` · `RoleRegistry` · `AhirtRedTeam` · `AgentRole` · `VoteValue` · `ConsensusQualityMetrics`(v2.11.0+) · `StrategyCapGuard`(v2.10.0+) |
+| **关键方法** | `Parliament::deliberate()`(`crates/parliament/src/debate/mod.rs:291`,async) · `Parliament::deliberate_with_policy()`(`crates/parliament/src/debate/mod.rs:346`,v2.10.0+ 全路径埋点) · `Parliament::deliberate_with_override()`(`crates/parliament/src/debate/mod.rs:901`,v2.11.0+ 度量盲区修复) · `VoteCounter::count_votes_with_threshold()`(`crates/parliament/src/voting.rs:134`) · `Skeptic::exercise_veto()`(`crates/parliament/src/veto.rs:457`) · `QualityTrendAnalyzer::consensus_health_score()`(`crates/parliament/src/quality_trend.rs:158`,v2.11.0+ 多维质量派生) · `StrategyCapGuard::set_max_strategy()`(配 `update_hysteresis_params()`,v2.10.0+ 滞后带状态机) |
+| **主要依赖** | tokio · serde · dashmap · rand · chrono · uuid · tracing · nexus-core · event-bus · seccore〔仅测试边〕 · nexus-contracts |
+| **v2.10.0-omega 关键变化** | (1) `deliberate_with_policy` 全路径 wall-clock 埋点(含 Vetoed 短路),`weighted_approval_rate`/`participation_rate` 随 `DebateCompleted` 事件上报;(2) `StrategyCapGuard` 消费 `CoordinationRatioReported`,滞后带(连续 3 次越阈降档 / 5 次回落升档 / 带内双清零),生效策略 = min(学习策略, 封顶) |
+| **v2.11.0-omega 关键变化** | (1) `override.rs` 三返回路径全覆盖(`deliberate_with_override`/`reopen_veto`);(2) `voting.rs::consensus_quality()` 派生 5 指标(分歧度 = 加权 position 方差 / 0.25 归一化 Popoviciu 上界);(3) `collect_opinions_filtered` Arc 共享消除 O(R×T) clone(50 任务基准归档);(4) `execute_delegation`/`execute_batch_delegation` 去重抽 `run_delegation_batch` 私有内核 |
+| **关联 ADR** | ADR-046 (ImmuneSystem facade) · ADR-063 (L8 协调度量接线闭环) · ADR-064 (L8 Parliament 深度优化第二轮) |
 
 #### [acb-governor](file:///d:/Chimera%20CLI/crates/acb-governor) — 已退役(ADR-182,M10 2026-09-16)
 
 > **退役注记**:crate 已删除(`git rm crates/acb-governor/`,约 2200 LOC)。退役时为零生产消费者(连 dev-dep 入边都没有,唯一源码提及是 quest-engine/src/arbitration.rs:48-49 的历史注释)。L8 Parliament 现存 `parliament` 与 `decb-governor`。本节保留为历史档案,字段描述不再维护。
 
-| 项        | 说明(退役前快照)                                                                                                                               |
+| 项 | 说明(退役前快照) |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L8 Parliament                                                                                                                                   |
-| **核心职责** | 自适应预算治理器(ACB)，根据历史使用模式动态调整预算分配                                                                                                                  |
-| **关键类型** | `AcbGovernor` · `BudgetAllocation` · `UsagePattern`                                                                                             |
+| **架构层** | L8 Parliament |
+| **核心职责** | 自适应预算治理器(ACB)，根据历史使用模式动态调整预算分配 |
+| **关键类型** | `AcbGovernor` · `BudgetAllocation` · `UsagePattern` |
 
 #### [decb-governor](file:///d:/Chimera%20CLI/crates/decb-governor)
 
-| 项        | 说明                                                                                                                                                                                                                               |
+| 项 | 说明 |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L8 Parliament                                                                                                                                                                                                                    |
-| **核心职责** | 动态紧急预算治理器(DECB)，预算超限检测、溢出处理、紧急预算调整                                                                                                                                                                                               |
+| **架构层** | L8 Parliament |
+| **核心职责** | 动态紧急预算治理器(DECB)，预算超限检测、溢出处理、紧急预算调整 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/decb-governor/src/lib.rs) · [governor.rs](file:///d:/Chimera%20CLI/crates/decb-governor/src/governor.rs) · [overflow.rs](file:///d:/Chimera%20CLI/crates/decb-governor/src/overflow.rs) |
-| **关键类型** | `DecbGovernor` · `BudgetState` · `OverflowHandler` · `BudgetExceededReason`                                                                                                                                                      |
-| **关键方法** | `DecbGovernor::check()` · `DecbGovernor::adjust()` · `OverflowHandler::handle()`                                                                                                                                                 |
-| **主要依赖** | tokio · serde · dashmap · chrono · tracing · nexus-core · event-bus                                                                                                                                                              |
+| **关键类型** | `DecbGovernor` · `OverflowDetector` · `DecbCostCallback` |
+| **关键方法** | `DecbGovernor::compute_budget()` · `DecbGovernor::current_tier()` · `DecbGovernor::determine_tier()` |
+| **主要依赖** | tokio · serde · dashmap · chrono · tracing · event-bus · nexus-contracts |
 
 > **🔴 红线**: `BudgetExceeded` 事件的 `severity()` 必须返回 `EventSeverity::Critical`，强制走mpsc通道确保送达。
 
@@ -515,93 +545,93 @@ L1   Core ─────── nexus-core · event-bus
 
 #### [quest-engine](file:///d:/Chimera%20CLI/crates/quest-engine)
 
-| 项                      | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 项 | 说明 |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**                | L9 Quest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| **核心职责**               | 长期任务引擎，Quest DAG管理、检查点持久化(LHQP)、TTG三级思考切换、仲裁层;v2.10.0+ L8 协调度量接线闭环(`metrics_sync` 订阅合并 + 多维共识质量消费)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| **关键文件**               | [lib.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/lib.rs) · [engine.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/engine.rs) · [dag.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/dag.rs) · [checkpoint.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/checkpoint.rs) · [ttg.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/ttg.rs) · [arbitration.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/arbitration.rs) · [control.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/control.rs) · [metrics\_sync.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/metrics_sync.rs)(v2.10.0+) |
-| **关键类型**               | `QuestEngine` · `TaskDag` · `CheckpointManager` · `TtgGovernor` · `ArbitrationLayer` · `PendingCoordSample`(v2.10.0+)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **关键方法**               | `QuestEngine::create_quest()` · `QuestEngine::execute()` · `CheckpointManager::save()` · `CheckpointManager::restore()` · `TtgGovernor::switch_mode()` · `spawn_metrics_subscriber()`(v2.10.0+, subscribe-before-spawn 红线守护)                                                                                                                                                                                                                                                                                                                                                                                                           |
-| **主要依赖**               | tokio · serde · rmp-serde · rusqlite · dashmap · sha2 · hex · chrono · uuid · tracing · nexus-core · event-bus                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **v2.10.0-omega 关键变化** | (1) `complete_quest` 经既有 builder 填充 `parliament_debate_latency_ms` / `delegation_overhead_ms` / `consensus_quality`;(2) `cancel_quest` 清理 `PendingCoordSample` 防泄漏;(3) 修复 TTG 切换延迟硬编码 0.0 缺口;(4) 修复 `with_metrics_config` 静默断开 EventBus 绑定的缺陷                                                                                                                                                                                                                                                                                                                                                                                          |
-| **v2.11.0-omega 关键变化** | (1) `PendingCoordSample` 同步消费 `ConsensusQualityMetrics` 多维字段(divergence / abstention\_rate / consensus\_margin),仅观测不影响 `InferenceGainSample` 主 proxy 口径                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **架构层** | L9 Quest |
+| **核心职责** | 长期任务引擎，Quest DAG管理、检查点持久化(LHQP)、TTG三级思考切换、仲裁层;v2.10.0+ L8 协调度量接线闭环(`metrics_sync` 订阅合并 + 多维共识质量消费) |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/lib.rs) · [engine.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/engine.rs) · [dag.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/dag.rs) · [checkpoint.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/checkpoint.rs) · [ttg.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/ttg.rs) · [arbitration.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/arbitration.rs) · [control.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/control.rs) · [metrics\_sync.rs](file:///d:/Chimera%20CLI/crates/quest-engine/src/metrics_sync.rs)(v2.10.0+) |
+| **关键类型** | `QuestEngine` · `LongTaskMap` · `CheckpointManager` · `TtgGovernor` · `ArbitrationLayer` · `PendingCoordSample`(v2.10.0+) |
+| **关键方法** | `QuestEngine::create_quest()` · `CheckpointManager::save()` · `TtgGovernor::select_mode()` |
+| **主要依赖** | tokio · serde · rmp-serde · rusqlite · dashmap · sha2 · hex · chrono · uuid · tracing · nexus-core · event-bus |
+| **v2.10.0-omega 关键变化** | (1) `complete_quest` 经既有 builder 填充 `parliament_debate_latency_ms` / `delegation_overhead_ms` / `consensus_quality`;(2) `cancel_quest` 清理 `PendingCoordSample` 防泄漏;(3) 修复 TTG 切换延迟硬编码 0.0 缺口;(4) 修复 `with_metrics_config` 静默断开 EventBus 绑定的缺陷 |
+| **v2.11.0-omega 关键变化** | (1) `PendingCoordSample` 同步消费 `ConsensusQualityMetrics` 多维字段(divergence / abstention\_rate / consensus\_margin),仅观测不影响 `InferenceGainSample` 主 proxy 口径 |
 
 #### [gea-activator](file:///d:/Chimera%20CLI/crates/gea-activator)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                            |
+| 项 | 说明 |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L9 Quest                                                                                                                                                                                                                                                                                                      |
-| **核心职责** | 门控专家激活(GEA)，冲突检测、门控计算、CSA上下文开关激活                                                                                                                                                                                                                                                                              |
+| **架构层** | L9 Quest |
+| **核心职责** | 门控专家激活(GEA)，冲突检测、门控计算、CSA上下文开关激活 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/gea-activator/src/lib.rs) · [activator.rs](file:///d:/Chimera%20CLI/crates/gea-activator/src/activator.rs) · [gating.rs](file:///d:/Chimera%20CLI/crates/gea-activator/src/gating.rs) · [conflict.rs](file:///d:/Chimera%20CLI/crates/gea-activator/src/conflict.rs) |
-| **关键类型** | `GeaActivator` · `GatingNetwork` · `ConflictDetector` · `CsaSwitch` · `ActivationGate`                                                                                                                                                                                                                        |
-| **关键方法** | `GeaActivator::activate()` · `ConflictDetector::detect()` · `GatingNetwork::compute_gates()`                                                                                                                                                                                                                  |
-| **主要依赖** | tokio · serde · ndarray · dashmap · rand · tracing · nexus-core · event-bus · osa-coordinator · sesa-router                                                                                                                                                                                                   |
+| **关键类型** | `GeaActivator` |
+| **关键方法** | `GeaActivator::activate()` · `GeaActivator::cache_hit_rate()` · `GeaActivator::cache_len()` |
+| **主要依赖** | tokio · serde · ndarray · dashmap · rand · tracing · nexus-core · event-bus · nexus-contracts |
 
 #### [efficiency-monitor](file:///d:/Chimera%20CLI/crates/efficiency-monitor)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                    |
+| 项 | 说明 |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L9 Quest                                                                                                                                                                                                                                                                                                                              |
-| **核心职责** | 效率监控，指标收集、告警、仪表盘数据聚合                                                                                                                                                                                                                                                                                                                  |
+| **架构层** | L9 Quest |
+| **核心职责** | 效率监控，指标收集、告警、仪表盘数据聚合 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/efficiency-monitor/src/lib.rs) · [collectors.rs](file:///d:/Chimera%20CLI/crates/efficiency-monitor/src/collectors.rs) · [alerts.rs](file:///d:/Chimera%20CLI/crates/efficiency-monitor/src/alerts.rs) · [dashboard.rs](file:///d:/Chimera%20CLI/crates/efficiency-monitor/src/dashboard.rs) |
-| **关键类型** | `EfficiencyMonitor` · `MetricsCollector` · `AlertManager` · `DashboardData` · `BudgetMetrics` · `RouterStats`                                                                                                                                                                                                                         |
-| **关键方法** | `EfficiencyMonitor::collect()` · `EfficiencyMonitor::check_alerts()` · `EfficiencyMonitor::dashboard_snapshot()`                                                                                                                                                                                                                      |
-| **主要依赖** | tokio · serde · serde_json · thiserror · tracing · chrono · dashmap · event-bus · nexus-contracts · decb-governor(M13 重路由生产消费:RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats)                                                                                                                                                                                                       |
+| **关键类型** | `EfficiencyMonitor` · `BudgetMetrics` · `AffinityMetrics` |
+| **关键方法** | `EfficiencyMonitor::record_event()`(`crates/efficiency-monitor/src/monitor.rs:248`) · `EfficiencyMonitor::check_alerts()` · `render_metrics()`(`crates/efficiency-monitor/src/dashboard.rs:171`,自由函数) |
+| **主要依赖** | tokio · serde · serde_json · thiserror · tracing · chrono · dashmap · event-bus · nexus-contracts · decb-governor(M13 重路由生产消费:RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats) |
 
 #### [chimera-mas](file:///d:/Chimera%20CLI/crates/chimera-mas)
 
-| 项                      | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 项 | 说明 |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**                | L9 Quest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **核心职责**               | 多 Agent 协同工作子系统(MAS),层级化递归委托编排、独立上下文隔离、Agent 生命周期管理、孙代理四象限稳定分工、WSJF 优先级调度、精英专家团队编制、Part II 闭环能力(上下文预算/分块调度/三级归档/知识协同/稳定闭环/PDCA 基准/INV-7/INV-8 不变量)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| **关键文件**               | [lib.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/lib.rs) · [orchestrator.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/orchestrator.rs) · [quadrant.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/quadrant.rs) · [scheduler.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/scheduler.rs) · [experts.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/experts.rs) · [agent/meta.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/agent/meta.rs) · [delegation.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/delegation.rs) · [context/budget\_model.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/context/budget_model.rs) · [chunker.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/chunker.rs) · [archive/mod.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/archive/mod.rs) · [knowledge/mod.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/knowledge/mod.rs) · [stability.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/stability.rs) · [pdca.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/pdca.rs) · [invariants.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/invariants.rs) |
-| **关键类型**               | `RootOrchestrator` · `AgentMeta` · `AgentType` · `AgentContext` · `AgentTask` · `TaskComplexity` · `Quadrant` · `QuadrantPlan` · `PriorityScheduler` · `ExpertRegistry` · `MasError` · `MemoryBudgetModel`(§15) · `AdmissionGate`(§15/INV-7) · `TaskChunker`(§16) · `BatchExecutor`(§16) · `ArchiveTier`(§17/INV-8) · `ExpertConsultant`(§18) · `MutualInquirer`(§18) · `WikiRetriever`(§18) · `StabilityGuard`(§19) · `CircuitBreaker`(§19) · `DegradationChain`(§19) · `PdcaLoop`(§20) · `PdcaMetrics`(§20) · `InvariantChecker`(§21)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **关键方法**               | `RootOrchestrator::delegate()` · `RootOrchestrator::delegate_quadrants()` · `activated_quadrants()` · `wsjf_score()` · `AgentContext::build_prompt()` · `AdmissionGate::check()`(§15/INV-7) · `TaskChunker::chunk()`(§16) · `InvariantChecker::check_inv8_archive_monotonicity()`(§17/INV-8) · `WikiRetriever::search()`(§18) · `StabilityGuard::apply_degradation()`(§19) · `PdcaLoop::check()`/`act()`/`plan_reflux()`(§20)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **主要依赖**               | tokio · serde · thiserror · chrono · uuid · tracing · futures · regex · nexus-core · event-bus · hcw-window · osa-coordinator · quest-engine · gqep-executor · qeep-protocol · mlc-engine · cmt-tiering · scc-cache · repo-wiki · faae-router · model-router · parliament · decb-governor · efficiency-monitor(acb-governor 已随 ADR-182 退役移除)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **设计模式**               | 层级递归委托 · 四象限稳定分工(INV-3/4) · WSJF 优先级调度 · 包装模式(AgentTask wrapper) · 独立上下文隔离 · 上下文预算 + 派生准入闸(INV-7) · 任务复杂度分块调度 · 三级归档单调性(INV-8) · 专家咨询/互询/Wiki 检索知识协同 · 稳定闭环降级链 + CircuitBreaker · PDCA 端到端闭环 + criterion 基准 · 不变量编码(InvariantChecker)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **v2.10.0-omega 关键变化** | (1) `AgentTask` 新增 `quest_id` 归因字段(`#[serde(default)]` 兼容)+ `with_quest()` builder;(2) 委托批次 wall-clock 聚合(非 duration 求和,并行不重复计费);(3) `DelegationCompleted` 事件携带真实开销,`quest-engine::metrics_sync` 消费合并到 `delegation_overhead_ms` 字段                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| **v2.11.0-omega 关键变化** | (1) `execute_delegation`/`execute_batch_delegation` 去重:`run_delegation_batch` 私有内核(仅 agent\_id 中缀/文案参数化),公开 API 零变更;(2) `chimera-mas/benches/delegation_bench` 新增 fan-out 1/4/16 三档基准                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **相关 ADR**             | [ADR-026](file:///d:/Chimera%20CLI/docs/architecture/ADR-026-chimera-mas-subsystem.md) · [ADR-027](file:///d:/Chimera%20CLI/docs/architecture/ADR-027-chimera-mas-quadrant.md) · [ADR-028](file:///d:/Chimera%20CLI/docs/architecture/ADR-028-chimera-mas-part2-closure.md) · [ADR-063](file:///d:/Chimera%20CLI/docs/architecture/ADR-063-l8-coordination-metrics-closure.md) · [ADR-064](file:///d:/Chimera%20CLI/docs/architecture/ADR-064-l8-parliament-deep-polish-round2.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **架构层** | L9 Quest |
+| **核心职责** | 多 Agent 协同工作子系统(MAS),层级化递归委托编排、独立上下文隔离、Agent 生命周期管理、孙代理四象限稳定分工、WSJF 优先级调度、精英专家团队编制、Part II 闭环能力(上下文预算/分块调度/三级归档/知识协同/稳定闭环/PDCA 基准/INV-7/INV-8 不变量) |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/lib.rs) · [orchestrator.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/orchestrator.rs) · [quadrant.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/quadrant.rs) · [scheduler.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/scheduler.rs) · [experts.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/experts.rs) · [agent/meta.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/agent/meta.rs) · [delegation.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/delegation.rs) · [context/budget\_model.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/context/budget_model.rs) · [chunker.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/chunker.rs) · [archive/mod.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/archive/mod.rs) · [knowledge/mod.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/knowledge/mod.rs) · [stability.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/stability.rs) · [pdca.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/pdca.rs) · [invariants.rs](file:///d:/Chimera%20CLI/crates/chimera-mas/src/invariants.rs) |
+| **关键类型** | `RootOrchestrator` · `AgentMeta` · `AgentType` · `AgentContext` · `AgentTask` · `TaskComplexity` · `Quadrant` · `QuadrantPlan` · `PriorityScheduler` · `ExpertRegistry` · `MasError` · `MemoryBudgetModel`(§15) · `AdmissionGate`(§15/INV-7) · `TaskChunker`(§16) · `BatchExecutor`(§16) · `ArchiveTier`(§17/INV-8) · `ExpertConsultant`(§18) · `MutualInquirer`(§18) · `WikiRetriever`(§18) · `StabilityGuard`(§19) · `CircuitBreaker`(§19) · `DegradationChain`(§19) · `PdcaLoop`(§20) · `PdcaMetrics`(§20) · `InvariantChecker`(§21) |
+| **关键方法** | `RootOrchestrator::delegate()` · `RootOrchestrator::delegate_quadrants()` · `AgentContext::build_prompt()` · `AdmissionGate::check()` · `TaskChunker::chunk()` · `InvariantChecker::check_inv8_archive_monotonicity()` · `WikiRetriever::search()` · `PdcaLoop::check()` · `act()` · `plan_reflux()` |
+| **主要依赖** | tokio · serde · thiserror · chrono · uuid · tracing · futures · regex · nexus-core · event-bus · hcw-window · osa-coordinator · repo-wiki · parliament · mlc-engine〔仅测试边〕 · cmt-tiering〔仅测试边〕 · decay-engine · gea-activator · gsoe-evolution · nexus-contracts · nmc-encoder · pvl-layer |
+| **设计模式** | 层级递归委托 · 四象限稳定分工(INV-3/4) · WSJF 优先级调度 · 包装模式(AgentTask wrapper) · 独立上下文隔离 · 上下文预算 + 派生准入闸(INV-7) · 任务复杂度分块调度 · 三级归档单调性(INV-8) · 专家咨询/互询/Wiki 检索知识协同 · 稳定闭环降级链 + CircuitBreaker · PDCA 端到端闭环 + criterion 基准 · 不变量编码(InvariantChecker) |
+| **v2.10.0-omega 关键变化** | (1) `AgentTask` 新增 `quest_id` 归因字段(`#[serde(default)]` 兼容)+ `with_quest()` builder;(2) 委托批次 wall-clock 聚合(非 duration 求和,并行不重复计费);(3) `DelegationCompleted` 事件携带真实开销,`quest-engine::metrics_sync` 消费合并到 `delegation_overhead_ms` 字段 |
+| **v2.11.0-omega 关键变化** | (1) `execute_delegation`/`execute_batch_delegation` 去重:`run_delegation_batch` 私有内核(仅 agent\_id 中缀/文案参数化),公开 API 零变更;(2) `chimera-mas/benches/delegation_bench` 新增 fan-out 1/4/16 三档基准 |
+| **相关 ADR** | [ADR-026](file:///d:/Chimera%20CLI/docs/architecture/ADR-026-chimera-mas-subsystem.md) · [ADR-027](file:///d:/Chimera%20CLI/docs/architecture/ADR-027-chimera-mas-quadrant.md) · [ADR-028](file:///d:/Chimera%20CLI/docs/architecture/ADR-028-chimera-mas-part2-closure.md) · [ADR-063](file:///d:/Chimera%20CLI/docs/architecture/ADR-063-l8-coordination-metrics-closure.md) · [ADR-064](file:///d:/Chimera%20CLI/docs/architecture/ADR-064-l8-parliament-deep-polish-round2.md) |
 
 **Part II §15-§21 子模块清单(ADR-028)**:
 
-| 子模块                       | 章节  | 核心类型                                                                                                              | 职责                                     |
+| 子模块 | 章节 | 核心类型 | 职责 |
 | ------------------------- | --- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `context/budget_model.rs` | §15 | `MemoryBudgetModel` · `AdmissionGate` · `TokenBudget`                                                             | 上下文预算 + HCW 稀疏化 + INV-7 派生准入闸          |
-| `chunker.rs`              | §16 | `TaskChunker` · `BatchExecutor` · `BatchConfig` · `ChunkOutput`                                                   | 任务复杂度分块 + 分批调度                         |
-| `archive/`                | §17 | `ArchiveTier` · `compressor.rs` · `scheduler.rs` · `tier.rs`                                                      | Agent 记忆三级归档(1mo/3mo/6mo)+ INV-8 单调性   |
-| `knowledge/`              | §18 | `ExpertConsultant` · `MutualInquirer` · `WikiRetriever` · `KnowledgeChain`                                        | 知识协同:专家咨询 + 同僚互询 + Wiki FTS5/KNN 检索    |
-| `stability.rs`            | §19 | `StabilityGuard` · `CircuitBreaker` · `DegradationChain` · `DegradationStep` · `PressureSource` · `TerminalState` | 稳定闭环 + 三类压力源降级链 + 熔断器(零孤儿)             |
-| `pdca.rs`                 | §20 | `PdcaLoop` · `PdcaMetrics` · `PdcaAdjustments` · `PlanReflux` · `PdcaAlert` · `AlertThresholds`                   | PDCA 端到端闭环强化 + 4 条告警规则 + criterion 基准  |
-| `invariants.rs`           | §21 | `InvariantChecker` · `ArchiveTier` · `MEMORY_BUDGET_MB` · `MEMORY_BUDGET_UTILIZATION`                             | INV-7/INV-8 不变量编码 + 1000 次 proptest 验证 |
+| `context/budget_model.rs` | §15 | `MemoryBudgetModel` · `AdmissionGate` · `TokenBudget` | 上下文预算 + HCW 稀疏化 + INV-7 派生准入闸 |
+| `chunker.rs` | §16 | `TaskChunker` · `BatchExecutor` · `BatchConfig` · `ChunkOutput` | 任务复杂度分块 + 分批调度 |
+| `archive/` | §17 | `ArchiveTier` · `compressor.rs` · `scheduler.rs` · `tier.rs` | Agent 记忆三级归档(1mo/3mo/6mo)+ INV-8 单调性 |
+| `knowledge/` | §18 | `ExpertConsultant` · `MutualInquirer` · `WikiRetriever` · `KnowledgeChain` | 知识协同:专家咨询 + 同僚互询 + Wiki FTS5/KNN 检索 |
+| `stability.rs` | §19 | `StabilityGuard` · `CircuitBreaker` · `DegradationChain` · `DegradationStep` · `PressureSource` · `TerminalState` | 稳定闭环 + 三类压力源降级链 + 熔断器(零孤儿) |
+| `pdca.rs` | §20 | `PdcaLoop` · `PdcaMetrics` · `PdcaAdjustments` · `PlanReflux` · `PdcaAlert` · `AlertThresholds` | PDCA 端到端闭环强化 + 4 条告警规则 + criterion 基准 |
+| `invariants.rs` | §21 | `InvariantChecker` · `ArchiveTier` · `MEMORY_BUDGET_MB` · `MEMORY_BUDGET_UTILIZATION` | INV-7/INV-8 不变量编码 + 1000 次 proptest 验证 |
 
 **criterion 基准(5 项,§20)**: `window_select`(< 1ms) · `mlc_l2_knn_top10@4096`(< 5ms) · `wiki_knn@1000`(< 10ms) · `wiki_knn@10`(< 1ms) · `decay_compute`(< 1μs) · `50agent_mem_peak`(≤ 130MB)
 
 #### [mas-sched](file:///d:/Chimera%20CLI/crates/mas-sched)
 
-| 项          | 说明                                                                                                                                                                                                                                                                                                                                                           |
+| 项 | 说明 |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **架构层**    | L9 Quest(v2.28 新增,workspace 第 41 个 crate;ADR-145 裁决从 chimera-mas strangler 拆出,控制面/执行面分离)                                                                                                                                                                                                                                                                     |
-| **核心职责**   | 多代理调度器**控制面**(纯调度,不碰工具执行):`PeerScheduler` trait 四原语 claim/renew\_lease/handoff/should\_run;`SimplePeerScheduler` 内存实现(租约表+配额+优先级);`ShadowScheduler` 影子包装(只决策不执行,决策日志 100% 可回放,逐位一致,Ω₂ 确定性);与 nexus-subagent 分工:Claim 管长任务租约(TodoClaim/Lease/Quota/Handoff),Auction 管短任务派发                                                                                    |
-| **关键文件**   | [lib.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/lib.rs) · [scheduler.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/scheduler.rs) · [shadow.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/shadow.rs) · [types.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/types.rs) · [error.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/error.rs) |
-| **关键类型**   | `PeerScheduler`(trait) · `SimplePeerScheduler` · `ShadowScheduler`/`ShadowLog` · `TodoClaim` · `Lease` · `Quota` · `Handoff`                                                                                                                                                                                                                                 |
-| **关键方法**   | `claim()` · `renew_lease()` · `handoff()` · `should_run()` · `ShadowLog::replay()`                                                                                                                                                                                                                                                                           |
-| **主要依赖**   | tokio · serde · thiserror · **仅 L0/L1**(nexus-contracts/nexus-core/event-bus,内部依赖 ≤3 门禁)                                                                                                                                                                                                                                                                     |
-| **设计模式**   | strangler 拆分 · 控制面/执行面分离 · 影子模式可回放 · 无自旋(Instant 时间戳非忙等) · 禁 feature 标志                                                                                                                                                                                                                                                                                      |
-| **ADR 来源** | ADR-145(层归属 D-P3 定案);对应 v4.0 WI-29、九源手册 W16、Phase 3 T2                                                                                                                                                                                                                                                                                                       |
+| **架构层** | L9 Quest(v2.28 新增,workspace 第 41 个 crate;ADR-145 裁决从 chimera-mas strangler 拆出,控制面/执行面分离) |
+| **核心职责** | 多代理调度器**控制面**(纯调度,不碰工具执行):`PeerScheduler` trait 四原语 claim/renew\_lease/handoff/should\_run;`SimplePeerScheduler` 内存实现(租约表+配额+优先级);`ShadowScheduler` 影子包装(只决策不执行,决策日志 100% 可回放,逐位一致,Ω₂ 确定性);与 nexus-subagent 分工:Claim 管长任务租约(TodoClaim/Lease/Quota/Handoff),Auction 管短任务派发 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/lib.rs) · [scheduler.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/scheduler.rs) · [shadow.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/shadow.rs) · [types.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/types.rs) · [error.rs](file:///d:/Chimera%20CLI/crates/mas-sched/src/error.rs) |
+| **关键类型** | `PeerScheduler`(trait) · `SimplePeerScheduler` · `ShadowScheduler`/`ShadowLog` · `TodoClaim` · `Lease` · `Quota` · `Handoff` |
+| **关键方法** | `claim()` · `renew_lease()` · `handoff()` · `should_run()` · `ShadowLog::replay()` |
+| **主要依赖** | tokio · serde · thiserror · **仅 L0/L1**(nexus-contracts/nexus-core/event-bus,内部依赖 ≤3 门禁) |
+| **设计模式** | strangler 拆分 · 控制面/执行面分离 · 影子模式可回放 · 无自旋(Instant 时间戳非忙等) · 禁 feature 标志 |
+| **ADR 来源** | ADR-145(层归属 D-P3 定案);对应 v4.0 WI-29、九源手册 W16、Phase 3 T2 |
 
 #### [nexus-hook](file:///d:/Chimera%20CLI/crates/nexus-hook)
 
-| 项          | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 项 | 说明 |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**    | L9 Quest(v2.28 新增,workspace 第 42 个 crate;ADR-146 裁决挂靠 Quest 生命周期)                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **核心职责**   | 用户可编程生命周期 Hook 系统:13+ `LifecycleEvent`(PreToolUse/PostToolUse/PreQuestTurn/PostQuestTurn 等);TOML 配置挂载 shell 命令 + 环境变量注入($TOOL\_NAME/$SESSION\_ID/$GOAL\_ID);PreToolUse 类 hook 非零退出码可拒否该次工具调用;hook 命令执行前经 seccore `ProcessFence` 沙箱校验(逃逸拒绝:写 /etc、越界网络)+ 项目信任提示(TrustLevel)+ 超时熔断(默认 5s,不阻主流程);每条触发记 `HookAudit`(可接 session-store)                                                                                                                                                         |
-| **关键文件**   | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/lib.rs) · [lifecycle.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/lifecycle.rs) · [config.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/config.rs) · [executor.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/executor.rs) · [audit.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/audit.rs) · [event\_bridge.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/event_bridge.rs)(P4-T3 hook.\* 双轨注册,WI-21 联动) |
-| **关键类型**   | `LifecycleEvent`(13+) · `HookConfig` · `HookExecutor` · `HookAudit` · `TrustLevel` · `HookEventBridge`                                                                                                                                                                                                                                                                                                                                                                                    |
-| **关键方法**   | `HookExecutor::run()`(tokio::process + 超时) · `HookEventBridge::register()` · 非零退出码拒否判定                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **主要依赖**   | tokio · serde · toml · thiserror · nexus-core · nexus-contracts · event-bus · seccore(ProcessFence 沙箱)                                                                                                                                                                                                                                                                                                                                                                                    |
-| **设计模式**   | 生命周期挂载点 · 同步 shell hook · 沙箱栅栏 + 信任分级 + 超时熔断 · 全量审计                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **ADR 来源** | ADR-146(层归属 D-P4 定案);对应 v4.0 WI-24、九源手册 W16、Phase 3 T3                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **架构层** | L9 Quest(v2.28 新增,workspace 第 42 个 crate;ADR-146 裁决挂靠 Quest 生命周期) |
+| **核心职责** | 用户可编程生命周期 Hook 系统:13+ `LifecycleEvent`(PreToolUse/PostToolUse/PreQuestTurn/PostQuestTurn 等);TOML 配置挂载 shell 命令 + 环境变量注入($TOOL\_NAME/$SESSION\_ID/$GOAL\_ID);PreToolUse 类 hook 非零退出码可拒否该次工具调用;hook 命令执行前经 seccore `ProcessFence` 沙箱校验(逃逸拒绝:写 /etc、越界网络)+ 项目信任提示(TrustLevel)+ 超时熔断(默认 5s,不阻主流程);每条触发记 `HookAudit`(可接 session-store) |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/lib.rs) · [lifecycle.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/lifecycle.rs) · [config.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/config.rs) · [executor.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/executor.rs) · [audit.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/audit.rs) · [event\_bridge.rs](file:///d:/Chimera%20CLI/crates/nexus-hook/src/event_bridge.rs)(P4-T3 hook.\* 双轨注册,WI-21 联动) |
+| **关键类型** | `LifecycleEvent`(13+) · `HookConfig` · `HookExecutor` · `HookAudit` · `TrustLevel` · `HookEventBridge` |
+| **关键方法** | `HookExecutor::trigger()`(`crates/nexus-hook/src/executor.rs:110`,async) · `HookEventBridge::register_all()` |
+| **主要依赖** | tokio · serde · toml · thiserror · nexus-contracts · event-bus · seccore(ProcessFence 沙箱) |
+| **设计模式** | 生命周期挂载点 · 同步 shell hook · 沙箱栅栏 + 信任分级 + 超时熔断 · 全量审计 |
+| **ADR 来源** | ADR-146(层归属 D-P4 定案);对应 v4.0 WI-24、九源手册 W16、Phase 3 T3 |
 
 ***
 
@@ -609,89 +639,91 @@ L1   Core ─────── nexus-core · event-bus
 
 #### [mca-gateway](file:///d:/Chimera%20CLI/crates/mca-gateway)
 
-| 项          | 说明                                                                                                                                                                                                                 |
+| 项 | 说明 |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **架构层**    | L10 Interface                                                                                                                                                                                                      |
-| **核心职责**   | MCA 多通道亲和网关(ADR-065,PANTHEON 计划)：三协议 Codec(OpenAI Chat/Anthropic Messages/OpenAI Responses)、spec 驱动通用厂商适配器、SSE 流式归一、能力协商取代名字嗅探(P1)                                                                                 |
-| **关键文件**   | [lib.rs](file:///d:/Chimera%20CLI/crates/mca-gateway/src/lib.rs) · [gateway.rs](file:///d:/Chimera%20CLI/crates/mca-gateway/src/gateway.rs) · [error.rs](file:///d:/Chimera%20CLI/crates/mca-gateway/src/error.rs) |
-| **关键类型**   | `McaGateway` · `McaGatewayConfig` · `AffinityError`(5 变体)                                                                                                                                                          |
-| **关键方法**   | `McaGateway::register_spec()` · `McaGateway::lookup_spec()`(ArcSwap RCU 无锁读) · `VendorAdapter::invoke()`(非流式全周期)                                                                                                   |
-| **主要依赖**   | tokio · serde · thiserror · toml · arc-swap · dashmap · reqwest(rustls) · rusqlite · nexus-contracts · event-bus                                                                                                   |
-| **M4 状态**  | 全量落地:三协议 Codec + 七厂商 12 模型 spec 卡(affinity.d)+ SSE 归一器 + transport(熔断/限流/域名白名单)+ session 状态守恒(VerbatimThinking C9)+ 健康探针 EWMA + 能力协商引擎(三态降级);体验对等验收 6 测全绿;配额切换 E2E 3 测全绿                                           |
-| **ADR 来源** | ADR-065 (MCA 总纲与 L10 网关) · ADR-066 (能力协商与三态降级)                                                                                                                                                                     |
+| **架构层** | L10 Interface |
+| **核心职责** | MCA 多通道亲和网关(ADR-065,PANTHEON 计划)：三协议 Codec(OpenAI Chat/Anthropic Messages/OpenAI Responses)、spec 驱动通用厂商适配器、SSE 流式归一、能力协商取代名字嗅探(P1) |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/mca-gateway/src/lib.rs) · [gateway.rs](file:///d:/Chimera%20CLI/crates/mca-gateway/src/gateway.rs) · [error.rs](file:///d:/Chimera%20CLI/crates/mca-gateway/src/error.rs) |
+| **关键类型** | `McaGateway` · `McaGatewayConfig` · `AffinityError`(5 变体) |
+| **关键方法** | `McaGateway::register_spec()` · `McaGateway::lookup_spec()`(ArcSwap RCU 无锁读) · `VendorAdapter::invoke()`(非流式全周期) |
+| **主要依赖** | tokio · serde · thiserror · toml · arc-swap · dashmap · reqwest(rustls) · rusqlite · nexus-contracts · event-bus |
+| **M4 状态** | 全量落地:三协议 Codec + 七厂商 12 模型 spec 卡(affinity.d)+ SSE 归一器 + transport(熔断/限流/域名白名单)+ session 状态守恒(VerbatimThinking C9)+ 健康探针 EWMA + 能力协商引擎(三态降级);体验对等验收 6 测全绿;配额切换 E2E 3 测全绿 |
+| **ADR 来源** | ADR-065 (MCA 总纲与 L10 网关) · ADR-066 (能力协商与三态降级) |
 
 #### [mcp-mesh](file:///d:/Chimera%20CLI/crates/mcp-mesh)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 项 | 说明 |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **架构层**  | L10 Interface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **核心职责** | MCP(Model Context Protocol)量子网格，服务器注册、量子纠缠/叠加/事务、SSRF防护                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **架构层** | L10 Interface |
+| **核心职责** | MCP(Model Context Protocol)量子网格，服务器注册、量子纠缠/叠加/事务、SSRF防护 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/mcp-mesh/src/lib.rs) · [mesh.rs](file:///d:/Chimera%20CLI/crates/mcp-mesh/src/mesh.rs) · [server\_registry.rs](file:///d:/Chimera%20CLI/crates/mcp-mesh/src/server_registry.rs) · [quantum/entanglement.rs](file:///d:/Chimera%20CLI/crates/mcp-mesh/src/quantum/entanglement.rs) · [quantum/superposition.rs](file:///d:/Chimera%20CLI/crates/mcp-mesh/src/quantum/superposition.rs) · [quantum/transaction.rs](file:///d:/Chimera%20CLI/crates/mcp-mesh/src/quantum/transaction.rs) |
-| **关键类型** | `McpMesh` · `ServerRegistry` · `QuantumEntanglement` · `QuantumSuperposition` · `QuantumTransaction` · `McpServer`                                                                                                                                                                                                                                                                                                                                                                                                             |
-| **关键方法** | `McpMesh::register_server()` · `McpMesh::call_tool()` · `QuantumTransaction::commit()`                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **主要依赖** | tokio · serde · anyhow · thiserror · tracing · uuid · chrono · dashmap · event-bus                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| **降级说明** | HTTP 传输未启用(无 reqwest/axum 依赖,实际为进程内消息网格 + 事件总线);SSRF 防护为本地白名单而非网络出口拦截                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **关键类型** | `McpMesh` · `ServerRegistry` · `QuantumTransaction` |
+| **关键方法** | `McpMesh::register_server()` · `McpMesh::execute_transaction()` · `McpMesh::pending_compensation_count()` |
+| **主要依赖** | tokio · serde · anyhow · thiserror · tracing · uuid · chrono · dashmap · event-bus |
+| **降级说明** | HTTP 传输未启用(无 reqwest/axum 依赖,实际为进程内消息网格 + 事件总线);SSRF 防护为本地白名单而非网络出口拦截 |
 
 #### [csn-substitutor](file:///d:/Chimera%20CLI/crates/csn-substitutor)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                   |
+| 项 | 说明 |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L10 Interface                                                                                                                                                                                                                                                                                                                                        |
-| **核心职责** | 能力替代网络(CSN)，降级链构建、相似度匹配、优雅降级                                                                                                                                                                                                                                                                                                                         |
+| **架构层** | L10 Interface |
+| **核心职责** | 能力替代网络(CSN)，降级链构建、相似度匹配、优雅降级 |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/csn-substitutor/src/lib.rs) · [substitutor.rs](file:///d:/Chimera%20CLI/crates/csn-substitutor/src/substitutor.rs) · [degradation\_chain.rs](file:///d:/Chimera%20CLI/crates/csn-substitutor/src/degradation_chain.rs) · [similarity.rs](file:///d:/Chimera%20CLI/crates/csn-substitutor/src/similarity.rs) |
-| **关键类型** | `CsnSubstitutor` · `DegradationChain` · `SimilarityMatcher` · `SubstitutionResult`                                                                                                                                                                                                                                                                   |
-| **关键方法** | `CsnSubstitutor::find_substitute()` · `DegradationChain::next()`                                                                                                                                                                                                                                                                                     |
-| **主要依赖** | tokio · serde · ndarray · dashmap · rand · tracing · nexus-core · event-bus                                                                                                                                                                                                                                                                          |
+| **关键类型** | `CsnSubstitutor` · `DegradationChain` |
+| **关键方法** | `CsnSubstitutor::find_substitutes()` · `DegradationChain::next_level()` · `DegradationChain::chain_id()` |
+| **主要依赖** | tokio · serde · ndarray · dashmap · rand · tracing · nexus-core · event-bus |
 
 #### [chtc-bridge](file:///d:/Chimera%20CLI/crates/chtc-bridge)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 项 | 说明 |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L10 Interface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **核心职责** | 跨IDE工具兼容桥(CHTC)，VSCode/Vim/Emacs/IntelliJ/Zed适配器，枚举分发而非trait object                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **架构层** | L10 Interface |
+| **核心职责** | 跨IDE工具兼容桥(CHTC)，VSCode/Vim/Emacs/IntelliJ/Zed适配器，枚举分发而非trait object |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/chtc-bridge/src/lib.rs) · [bridge.rs](file:///d:/Chimera%20CLI/crates/chtc-bridge/src/bridge.rs) · [protocol.rs](file:///d:/Chimera%20CLI/crates/chtc-bridge/src/protocol.rs) · [adapters/vscode.rs](file:///d:/Chimera%20CLI/crates/chtc-bridge/src/adapters/vscode.rs) · [adapters/vim.rs](file:///d:/Chimera%20CLI/crates/chtc-bridge/src/adapters/vim.rs) · [adapters/emacs.rs](file:///d:/Chimera%20CLI/crates/chtc-bridge/src/adapters/emacs.rs) · [adapters/intellij.rs](file:///d:/Chimera%20CLI/crates/chtc-bridge/src/adapters/intellij.rs) · [adapters/zed.rs](file:///d:/Chimera%20CLI/crates/chtc-bridge/src/adapters/zed.rs) |
-| **关键类型** | `ChtcBridge` · `IdeAdapter`(enum) · `BridgeProtocol` · `IdeType`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **关键方法** | `ChtcBridge::connect()` · `ChtcBridge::send_command()`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| **主要依赖** | tokio · serde · serde\_json · dashmap · uuid · tracing · nexus-core · event-bus                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **关键类型** | `ChtcBridge` · `IdeAdapter`(enum) · `ProtocolConverter` |
+| **关键方法** | `ProtocolConverter::from_emacs_format()` · `ProtocolConverter::from_intellij_format()` · `ProtocolConverter::from_vim_format()` |
+| **主要依赖** | tokio · serde · serde\_json · dashmap · uuid · tracing · nexus-core · event-bus |
 
 #### [chimera-tui](file:///d:/Chimera%20CLI/crates/chimera-tui)
 
-| 项                              | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 项 | 说明 |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**                        | L10 Interface                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| **核心职责**                       | 终端仪表盘(27 面板循环 = PanelId::REGISTERED_FOCUS_ORDER 长度, 27 PanelId 枚举, 未注册 0（Timeline / Sysinfo 已接线）),基于 ratatui 的实时监控与双向控制;含设计手册权威源 `NEXUS_OMEGA_TUI_DESIGN_BIBLE.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| **关键文件**                       | [lib.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/lib.rs) · [app.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/app.rs) · [render.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/render.rs) · [subscriber.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/subscriber.rs) · [command\_palette.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/command_palette.rs) · [panels/](file:///d:/Chimera%20CLI/crates/chimera-tui/src/panels) (20 个面板) · [viz/](file:///d:/Chimera%20CLI/crates/chimera-tui/src/viz) (5 个可视化组件) · [data/resource\_history.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/data/resource_history.rs) · [data/metrics\_history.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/data/metrics_history.rs) · [config/tui\_bible.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/config/tui_bible.rs) |
-| **关键类型**                       | `TuiApp` · `TuiDataSource` · `Panel`(trait) · `DataPipeline` · `EventSubscriber` · `TuiCommand` · `QuestAction` · `SortMode` · `TuiBible` · `LayoutTemplate` · `KeyBinding` · `VizChartKind` · `VizWidget` · `ResourceHistory` · `MetricSample` · `ThresholdLevel` · `gradient_color` · `MetricsHistory`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **关键面板**                       | Quest · Parliament · Router · Memory · Security · Budget · Decay · MCP Nodes · CHTC · Health · Event Stream · Log · Help · **ResourceMonitor**(v1.7+) · **Timeline**(v1.7+) · **Sysinfo**(v1.8 新增) · **MetricsDashboard**(v1.8 新增) · **TaskManager**(v1.8 新增,`PanelId` 复用 Quest 共享数据源) · **OsaSparse**(v1.7+,ClvVector 关联)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **v1.8 新增模块**                  | `data/resource_history.rs`(滑动窗口+中位数滤波) · `data/metrics_history.rs`(SQLite 历史持久化) · `config/tui_bible.rs`(Figment 4 源配置加载器) · `viz/`(`line_chart`/`heatmap`/`bar_chart`/`gauge`/`histogram`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **🆕 v3.1 引擎骨架** (ADR-029, M0) | `engine/{buffer,diff,style,writer,rect,compat}.rs`(双缓冲 diff + StylePool + DiffEngine + proptest 幂等) · `engine/layout/{presets,flex,constraint,node,engine}.rs`(Flexbox + 四模式 Ide/Chat/VimSplit/Focus) · `actions/{registry,descriptor,codegen,panel_menu}.rs` + `actions/domains/{quest,task,export,view,system,config}.rs`(Registry 单一事实源 + 六域分包 + MAX\_ACTIONS=40 熔断) · `input/router.rs`(5 态 RouterMode + 22 RouteTarget + 14 D 类快照测试) · `i18n/{mod,zh,en}.rs`(AtomicU8 运行时 + t! 宏 + Ctrl+L + zh 120 keys) · `components/{mod,traits}.rs`(L5 组件骨架 LayoutNode 树) · `v3-engine` feature flag(Cargo.toml:10-12,默认 off)（ADR-061 起已默认启用）                                                                                                                                                                                                                                      |
-| **主要依赖**                       | tokio · serde · serde\_yaml · ratatui · crossterm · dashmap · chrono · futures · sysinfo · rusqlite · figment · tracing · nexus-core · event-bus                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **测试规模**                       | 426 lib 单元测试 + 30+ 集成测试(`color_gradient_test` 11/`task_manager_test` 10/`sysinfo_panel_test` 4/`tui_bible_config_test` 3/`metrics_history_persistence_test` 3/`viz_components_test` 5/`metrics_dashboard_test` 3/`trend_charts_test` 9/`resource_monitor_panel_test` 4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **架构层** | L10 Interface |
+| **核心职责** | 终端仪表盘(27 面板循环 = PanelId::REGISTERED_FOCUS_ORDER 长度, 27 PanelId 枚举, 未注册 0（Timeline / Sysinfo 已接线）),基于 ratatui 的实时监控与双向控制;含设计手册权威源 `NEXUS_OMEGA_TUI_DESIGN_BIBLE.md` |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/lib.rs) · [app.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/app.rs) · [render.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/render.rs) · [subscriber.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/subscriber.rs) · [command\_palette.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/command_palette.rs) · [panels/](file:///d:/Chimera%20CLI/crates/chimera-tui/src/panels) (20 个面板) · [viz/](file:///d:/Chimera%20CLI/crates/chimera-tui/src/viz) (5 个可视化组件) · [data/resource\_history.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/data/resource_history.rs) · [data/metrics\_history.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/data/metrics_history.rs) · [config/tui\_bible.rs](file:///d:/Chimera%20CLI/crates/chimera-tui/src/config/tui_bible.rs) |
+| **关键类型** | `TuiApp` · `TuiDataSource` · `Panel`(trait) · `DataPipeline` · `EventSubscriber` · `TuiCommand` · `QuestAction` · `SortMode` · `TuiBible` · `LayoutTemplate` · `KeyBinding` · `VizChartKind` · `VizWidget` · `ResourceHistory` · `MetricSample` · `ThresholdLevel` · `gradient_color` · `MetricsHistory` |
+| **关键面板** | Quest · Parliament · Router · Memory · Security · Budget · Decay · MCP Nodes · CHTC · Health · Event Stream · Log · Help · **ResourceMonitor**(v1.7+) · **Timeline**(v1.7+) · **Sysinfo**(v1.8 新增) · **MetricsDashboard**(v1.8 新增) · **TaskManager**(v1.8 新增,`PanelId` 复用 Quest 共享数据源) · **OsaSparse**(v1.7+,ClvVector 关联) |
+| **v1.8 新增模块** | `data/resource_history.rs`(滑动窗口+中位数滤波) · `data/metrics_history.rs`(SQLite 历史持久化) · `config/tui_bible.rs`(Figment 4 源配置加载器) · `viz/`(`line_chart`/`heatmap`/`bar_chart`/`gauge`/`histogram`) |
+| **🆕 v3.1 引擎骨架** (ADR-029, M0) | `engine/{buffer,diff,style,writer,rect,compat}.rs`(双缓冲 diff + StylePool + DiffEngine + proptest 幂等) · `engine/layout/{presets,flex,constraint,node,engine}.rs`(Flexbox + 四模式 Ide/Chat/VimSplit/Focus) · `actions/{registry,descriptor,codegen,panel_menu}.rs` + `actions/domains/{quest,task,export,view,system,config}.rs`(Registry 单一事实源 + 六域分包 + MAX\_ACTIONS=40 熔断) · `input/router.rs`(5 态 RouterMode + 22 RouteTarget + 14 D 类快照测试) · `i18n/{mod,zh,en}.rs`(AtomicU8 运行时 + t! 宏 + Ctrl+L + zh 120 keys) · `components/{mod,traits}.rs`(L5 组件骨架 LayoutNode 树) · `v3-engine` feature flag(Cargo.toml:10-12,默认 off)（ADR-061 起已默认启用） |
+| **主要依赖** | tokio · serde · serde\_yaml · ratatui · crossterm · dashmap · chrono · futures · sysinfo · rusqlite · figment · tracing · nexus-core · event-bus |
+| **测试规模** | 426 lib 单元测试 + 30+ 集成测试(`color_gradient_test` 11/`task_manager_test` 10/`sysinfo_panel_test` 4/`tui_bible_config_test` 3/`metrics_history_persistence_test` 3/`viz_components_test` 5/`metrics_dashboard_test` 3/`trend_charts_test` 9/`resource_monitor_panel_test` 4) |
 
 #### [chimera-cli](file:///d:/Chimera%20CLI/crates/chimera-cli)
 
-| 项        | 说明                                                                                                                                                                                                                                                                                                                                                        |
+| 项 | 说明 |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**  | L10 Interface                                                                                                                                                                                                                                                                                                                                             |
-| **核心职责** | CLI主入口，命令解析、配置加载、子命令分发                                                                                                                                                                                                                                                                                                                                    |
+| **架构层** | L10 Interface |
+| **核心职责** | CLI主入口，命令解析、配置加载、子命令分发 |
 | **关键文件** | [main.rs](file:///d:/Chimera%20CLI/crates/chimera-cli/src/main.rs) · [lib.rs](file:///d:/Chimera%20CLI/crates/chimera-cli/src/lib.rs) · [cli.rs](file:///d:/Chimera%20CLI/crates/chimera-cli/src/cli.rs) · [config.rs](file:///d:/Chimera%20CLI/crates/chimera-cli/src/config.rs) · [commands/](file:///d:/Chimera%20CLI/crates/chimera-cli/src/commands) |
-| **关键类型** | `Cli` · `Commands`(enum) · `ChimeraConfig`                                                                                                                                                                                                                                                                                                                |
-| **子命令**  | `run` · `tui` · `chat` · `quest`(list/show/cancel/checkpoint) · `config`(init/list/show/path) · `wiki` · `parliament` · `mcp`(list/serve/call/inspect) · `audit` · `agent`(list/spawn/inspect/cancel) · `doctor` · `completions`                                                                                                                          |
-| **关键方法** | `commands::dispatch()` · `config::load()`                                                                                                                                                                                                                                                                                                                 |
-| **主要依赖** | tokio · clap · figment · serde · tracing · tracing-subscriber · anyhow · chimera-tui · nexus-core · event-bus · quest-engine · repo-wiki · parliament                                                                                                                                                                                                     |
+| **关键类型** | `Cli` · `Commands`(enum) · `ChimeraConfig` |
+| **子命令** | `run` · `tui` · `chat` · `quest`(list/show/cancel/checkpoint) · `config`(init/list/show/path) · `wiki` · `grep` · `parliament` · `mcp`(list/serve/call/inspect) · `audit` · `agent`(list/spawn/inspect/cancel) · `doctor` · `completions` · `help` · `llm`(list/show/set-default/test/channels/strategy) · `exec` · `serve` · `acp`（18 个，与 `cli.rs:154` `Commands` enum 逐项一致；2026-09-22 实测，旧行缺 `grep`/`llm`/`exec`/`serve`/`acp`/`help` 六项） |
+| **关键方法** | `commands::dispatch()` · `config::load()` |
+| **机器接口** | `--json` envelope：成功 `{"status":"ok","data":<payload>}`、错误 `{"status":"error","error":{"kind","message"},"exit_code":<0-6>}`（`crates/chimera-cli/src/output.rs:14-32`）；退出码由 `ChimeraCliError::exit_code_value()`（`crates/chimera-cli/src/error.rs:84-94`）给出，`kind` 取 `error.rs:103-112` 的 7 个稳定标识符；矩阵语义见 ADR-060（0=success/1=user_error/2=not_implemented/3=system_error/4=user_cancelled/5=permission_denied/6=timeout） |
+| **主要依赖** | tokio · clap · figment · serde · tracing · tracing-subscriber · anyhow · chimera-tui · nexus-core · event-bus · quest-engine · repo-wiki · parliament |
 
 #### [nexus-app-server](file:///d:/Chimera%20CLI/crates/nexus-app-server)
 
-| 项          | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 项 | 说明 |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层**    | L10 Interface(v2.28 新增,workspace 第 39 个 crate;WI-01 核心-表面分离,预算 48/53)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **核心职责**   | 宿主层协议门面:对外提供稳定外部协议(**JSON-RPC v1**,协议冻结 ≥3 个月,扩展走 `extras` 逃逸舱),对内以 `CoreOp/CoreEvent` 单向驱动核心;**NexusEvent 永不进外部协议**(内闭:内部事件走 EventBus;外开:外部只经 AppOp/AppEvent,转译在 server 层);每 Thread 一 actor(会话状态归 actor 独占);断线恢复(客户端持 last\_item\_id 重连回放增量,Item 为最小 I/O 单元,状态机 started→in\_progress→completed/failed);设计源对标 Codex CLI app-server / OpenCode serve-attach / DSH headless 五形态                                                                                                                                                                                                                                                                                        |
-| **关键文件**   | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/lib.rs) · [server.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/server.rs) · [protocol.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/protocol.rs) · [transport.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/transport.rs) · [sse.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/sse.rs) · [backend.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/backend.rs) · [approval.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/approval.rs) · [subagent\_engine.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/subagent_engine.rs) |
-| **关键类型**   | `AppServer`/`AppServerConfig` · `AppOp`/`AppEvent` · `CoreOp`/`CoreEvent` · `ThreadActor` · `Item`(最小 I/O 单元) · `SseTransport` · `ApprovalGate` · `SubAgentEngine`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| **关键方法**   | `AppServer::new()` · `ThreadActor::handle_op()` · 增量回放 `replay_since(last_item_id)` · SSE 推送                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **主要依赖**   | tokio · serde · serde\_json · thiserror · axum/tokio-stream(SSE,以 Cargo.toml 为准) · nexus-core · nexus-contracts · event-bus · mas-sched · nexus-subagent                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| **设计模式**   | 核心-表面分离(内闭外开) · Actor 模型(每 Thread 一 actor) · 协议版本冻结 + extras 逃逸舱 · 断线增量回放                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **ADR 来源** | WI-01(v4.0 §6.1/§6.2/§13)、九源手册 W1;L0 `app.rs` 契约(ADR-054 P9 上提)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **架构层** | L10 Interface(v2.28 新增,workspace 第 39 个 crate;WI-01 核心-表面分离,预算 48/53) |
+| **核心职责** | 宿主层协议门面:对外提供稳定外部协议(**JSON-RPC v1**,协议冻结 ≥3 个月,扩展走 `extras` 逃逸舱),对内以 `AppOp`→`CoreBackend` 单向驱动核心(注释仍沿用设计称谓 `CoreOp`/`CoreEvent`);**NexusEvent 永不进外部协议**(内闭:内部事件走 EventBus;外开:外部只经 `AppOp`/`AppEvent`,转译在 server 层);每 Thread 一 `SessionActor`(会话状态归 actor 独占,`server.rs:193`,外界只经 `AppServer` 公开方法);断线恢复(客户端持 last\_item\_id 重连回放增量,Item 为最小 I/O 单元,状态机 started→in\_progress→completed/failed);设计源对标 Codex CLI app-server / OpenCode serve-attach / DSH headless 五形态 |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/lib.rs) · [server.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/server.rs) · [protocol.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/protocol.rs) · [transport.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/transport.rs) · [sse.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/sse.rs) · [backend.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/backend.rs) · [approval.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/approval.rs) · [subagent\_engine.rs](file:///d:/Chimera%20CLI/crates/nexus-app-server/src/subagent_engine.rs) |
+| **关键类型** | **实测存在**:服务面 `AppServer`(`server.rs:236`)、`AppServerConfig`(`:160`)、`SessionSnapshot`(`:178`)、crate 私有 actor `SessionActor`(`:193`);后端抽象 `CoreBackend` trait(`:102`) 及两实现 `InMemoryBackend`(`:120`)/`QuestBackend`(`backend.rs:24`);JSON-RPC 面 `RpcRequest`/`RpcResponse`/`RpcNotification`/`RpcCodec`/`JsonRpcError`/`ProtocolError`(`protocol.rs:120,133,148,159,77,29`);SSE 面 `SseServer`/`SseConnection`(`sse.rs:47,86`);传输抽象 `AppTransport`+`IoTransport`(`transport.rs:62,108`);审批 `ApprovalArbiter`+`VoteOutcome`(`approval.rs:41,19`);子代理 `SubAgentQuestEngine`(`subagent_engine.rs:27`);协议类型在 L0:`AppOp`/`AppEvent`/`Item`/`Thread`(`nexus-contracts/src/app.rs:329,403,156,129`)。**旧版此处所列六个名称是 v4.0 设计称谓,实现已改名**(按旧名 grep `crates/*/src` 零命中):`CoreOp`/`CoreEvent`→`AppOp`/`AppEvent`(旧名仅存于注释 `server.rs:97`·`backend.rs:23`·`app.rs:327`)、`ThreadActor`→`SessionActor`、`SseTransport`→`SseServer`+`AppTransport`、`ApprovalGate`→`ApprovalArbiter`、`SubAgentEngine`→`SubAgentQuestEngine`;扩展时以上列实测名为准 |
+| **关键方法** | `AppServer::new()`(`server.rs:264`) · `with_backend()`(`:275`) · `with_session_store()`(`:291`,灰度双写落盘) · `handle_op(&AppOp)`(`:315`,唯一核心驱动入口) · `replay_since(thread_id, last_item_id)`(`:332`,断线增量回放) · `snapshot()`(`:344`) · `pending_approvals()`(`:349`) · `persist_turn()`(`:367`) · `inject_approval_request()`(`:399`) · SSE 接入 `SseServer::bind()`/`accept()`(`sse.rs:54,74`) |
+| **协议线格式（2026-09-22 现测，补「可指导开发」缺口）** | 全协议只有 **2 个 JSON-RPC method**：请求侧 `app.op`（`protocol.rs:171` 编码、`:225` 解码守卫，非该值即回 -32601 method not found）、推送侧 `app.event`（`:214` 编码、`:151` 通知帧）。**`AppOp` 6 变体**是语义入口（`crates/nexus-contracts/src/app.rs` 的 `:331 ThreadStart` / `:333 TurnSubmit` / `:340 TurnInterrupt` / `:345 ApprovalRespond` / `:352 ThreadFork` / `:359 ModeSet`）；**`AppEvent` 5 变体**（`:405 ThreadStarted` / `:410 ItemChanged` / `:415 ApprovalRequested` / `:420 TurnCompleted` / `:427 Error`）⇒ 扩展新操作 = 加 `AppOp` 变体 + `handle_op` 分支，**不得新增 method 名**（JSON-RPC v1 冻结）。**错误码实际只实现 3 个**：-32700(`protocol.rs:104`) / -32600(`:109`) / -32601(`:114`)；而 `JsonRpcError` 的文档注释(`:78`)另列 -32602 无效参数，全 crate 无对应构造点（代码侧待决，登记账本 §114） |
+| **主要依赖** | 内部 6(`crates/nexus-app-server/Cargo.toml`):`nexus-contracts:12`(L0) · `event-bus:14` · `nexus-core:16`(L1) · `session-store:29`(L3 灰度双写) · `quest-engine:32`(L9) · `nexus-subagent:34`(L7);外部 8:`tokio/serde/serde_json/thiserror/tracing/async-trait/dashmap/uuid`(`:17-36`)。**旧版所记 `axum`/`tokio-stream`/`mas-sched` 在本 crate `Cargo.toml` 零命中,从未引入** ——SSE 走 tokio `TcpListener` + 手写极简 HTTP 头解析(`sse.rs:12`「零新依赖」设计约束) |
+| **设计模式** | 核心-表面分离(内闭外开) · Actor 模型(每 Thread 一 `SessionActor`,crate 私有) · 协议版本冻结 + extras 逃逸舱 · 断线增量回放 · 双写灰度(`store: Option<CbmrWriter>`,构造参数而非 feature 标志) · SSE 零新依赖(std 级 tokio TcpListener) |
+| **ADR 来源** | WI-01(v4.0 §6.1/§6.2/§13)、九源手册 W1;L0 `app.rs` 契约(ADR-054 P9 上提) |
 
 ### 3.11 生产可达性与冻结孤岛清单(ADR-160,2026-08-29 棘轮)
 
@@ -702,28 +734,55 @@ L1   Core ─────── nexus-core · event-bus
 > **M12 偿还批次(2026-09-16,wave 3c gea-gqep-qeep 接线,ADR-185):冻结孤岛 14 → 11、生产可达 27 → 30**。三岛一条链全量偿还:`gea-activator` 经 chimera-mas 生产边转正(L9→L9 同层;`gea_bridge` 64 维 one-hot 桥接词表 + orchestrator 委托前激活 + delegation 结果回填 + feedback 转发闭环,ADR-179 真实调用路径,兑现 feedback.rs:7-12 书面设计);`gqep-executor` 经 chimera-cli 生产边转正(L10→L7 向下;doctor 并行 gather,`gather_collected<T>` 泛型带值聚集,报告输出内容零变化);`qeep-protocol` 经 gqep 既有生产边传递转正,ADR-048 例外同步收编(Check B 只 flag 向上依赖,L7→L4 向下无豁免天然合法,is_adr_exception 双门移除后仍绿=可执行证据)。freeze REMOVED 注记 + 棘轮 reachable=30/frozen=11/new_gaps=0 实测。
 >
 > **M13 偿还批次(2026-09-17,decb-scc 重路由):冻结孤岛 11 → 9、生产可达 30 → 32**。M10 被依赖铁律驳回的两岛按重路由候选全量偿还,消费者决策论证(ADR-179 非空转判据)与决策全文如下——
-> **D1 decb 消费者 = efficiency-monitor::RuntimeAuditor(第 6 维 budget_discipline)**:efficiency-monitor 新增 decb-governor 生产依赖(L9→L8 向下、非内环,Check A/B 双绿)。RuntimeAuditor 是 chimera-cli 生产域唯一已接线 efficiency-monitor 组件(experience_loop 组合根装配,60s 周期 generate_report),故为唯一真实调用路径;每次报告经 `DecbGovernor::get_stats()` 采样预算快照,维度分 = 1 − 利用率(预算头寸健康度),未注入时中性 0.5(证据纪律同口径);`HarnessReportGenerated`/`AssessmentUpdated` 事件面分毫不动,145 变体锁定;chimera-cli experience_loop 构造共享 DecbGovernor 注入(`with_decb_governor`),DECB 零消耗不发布事件,装配本身零行为变化。
+> **D1 decb 消费者 = efficiency-monitor::RuntimeAuditor(第 6 维 budget_discipline)**:efficiency-monitor 新增 decb-governor 生产依赖(L9→L8 向下、非内环,Check A/B 双绿)。RuntimeAuditor 是 chimera-cli 生产域唯一已接线 efficiency-monitor 组件(experience_loop 组合根装配,60s 周期 generate_report),故为唯一真实调用路径;每次报告经 `DecbGovernor::get_stats()` 采样预算快照,维度分 = 1 − 利用率(预算头寸健康度),未注入时中性 0.5(证据纪律同口径);`HarnessReportGenerated`/`AssessmentUpdated` 事件面分毫不动,该批未新增变体(其时 145；现数以 `types.rs` 枚举与 `check_doc_drift.sh` 自报为准);chimera-cli experience_loop 构造共享 DecbGovernor 注入(`with_decb_governor`),DECB 零消耗不发布事件,装配本身零行为变化。
 > **D2 scc 消费者 = chimera-cli 组合根 AppContext.scc + doctor 第 9 探针**:按 ADR-161 路径①组合根装配 `SccCache`(SccConfig::default 容量 256,零 IO 轻构造,与 bus 同生命周期);doctor 新增 `scc_cache` 探针(索引 8,尾部追加)每次运行真实消费装配实例 `stats()` 只读快照(非探针内 ephemeral 自建——那不构成对装配面的真实消费);否决备选 chat REPL 上下文缓存(缓存无人真实读 = 制造需求,CacheHit/Miss 事件侵入用户面)。探针数 8→9 为唯一对外可见变化(doctor 输出尾部追加一行,既有 8 探针内容/顺序/状态零变化;cli.rs/help.rs 陈旧"6 维度"文案顺带订正为 9)。freeze REMOVED 注记 + 棘轮 reachable=32/frozen=9/new_gaps=0 实测;ADR-186 物理文件留待 tower 合并侧补录(本批次决策以本节注记为权威记录,同 M10 先例)。
 >
 > **被依赖铁律驳回两岛(M10 回登记,已于 M13 按重路由候选偿还)**:M10 时 `decb-governor` 原计划经 parliament 转正——parliament 属内环 9 crate 白名单,decb 不在白名单亦非 L0/L1 基座(Check A 违规,M7"同层允许"裁定遗漏内环保守规则);`scc-cache` 原计划经 hcw-window 转正——hcw 同属内环,且 L2→L3 为向上依赖(Check B 违规,"L2→L3 向下合法"系方向误判)。M11 wiring 决策报告给出重路由候选方向(decb → efficiency-monitor;scc → chimera-cli 组合根,ADR-161 路径①),M13 完成消费者决策论证与接线,见上 M13 批次注记。
 
-| feature 门控 crate   | 层   | 门控类别       | 说明                                                                                 | 依据      |
+| feature 门控 crate | 层 | 门控类别 | 说明 | 依据 |
 | ----------------- | --- | ---------- | ----------------------------------------------------------------------------------- | ------- |
-| `mas-sched`       | L9  | feature 接线 | r2_island_repayment feature 可达(原 shadow-first 预留已偿)                                | ADR-145 |
-| `nexus-hook`      | L9  | feature 接线 | r2_island_repayment feature 可达(空配置 = 现状回退安全)                                      | ADR-146 |
-| `mca-gateway`     | L10 | feature 门控 | 仅根 `mca` feature + ci mca job 编译;ADR-065 决策 6 装配期注入chimera-cli optional 边        | ADR-065 |
-| `csn-substitutor` | L10 | feature 接线 | 能力降级链,r2_island_repayment feature 编译(默认 binary 不含)                               | ADR-160 |
-| `sesa-router`     | L6  | feature 接线 | 子专家稀疏激活,r2_island_repayment feature 编译                                            | ADR-160 |
-| `chtc-bridge`     | L10 | feature 接线 | 5 IDE 适配器,chimera-cli optional=true 接线(batch-P2)                                  | ADR-160 |
-| `mtpe-executor`   | L7  | feature 接线 | 多步预测执行,r2_island_repayment feature 编译                                            | ADR-160 |
-| `ssra-fusion`     | L7  | feature 接线 | 黏液式适配,r2_island_repayment feature 编译(Phase 6 W0 层归属更正为 L7)                      | ADR-160 |
-| `omega-learner`   | L6  | feature 门控 | LinUCB 学习层,R2 冻结期仅 feature 路径编译                                                   | ADR-031 |
+| `mas-sched` | L9 | feature 接线 | r2_island_repayment feature 可达(原 shadow-first 预留已偿) | ADR-145 |
+| `nexus-hook` | L9 | feature 接线 | r2_island_repayment feature 可达(空配置 = 现状回退安全) | ADR-146 |
+| `mca-gateway` | L10 | feature 门控 | 仅根 `mca` feature + ci mca job 编译;ADR-065 决策 6 装配期注入chimera-cli optional 边 | ADR-065 |
+| `csn-substitutor` | L10 | feature 接线 | 能力降级链,r2_island_repayment feature 编译(默认 binary 不含) | ADR-160 |
+| `sesa-router` | L6 | feature 接线 | 子专家稀疏激活,r2_island_repayment feature 编译 | ADR-160 |
+| `chtc-bridge` | L10 | feature 接线 | 5 IDE 适配器,chimera-cli optional=true 接线(batch-P2) | ADR-160 |
+| `mtpe-executor` | L7 | feature 接线 | 多步预测执行,r2_island_repayment feature 编译 | ADR-160 |
+| `ssra-fusion` | L7 | feature 接线 | 黏液式适配,r2_island_repayment feature 编译(Phase 6 W0 层归属更正为 L7) | ADR-160 |
+| `omega-learner` | L6 | feature 门控 | LinUCB 学习层,R2 冻结期仅 feature 路径编译 | ADR-031 |
 
 > ★ Insight:**"零 Stub / 全部实现" ≠ "已装配"**。原 9 个冻结孤岛已经 P0-P3 偿还批次全部转为 feature 接线可达(棘轮 frozen=0),单测与 E2E 全绿、代码完整——但默认二进制仍不含这 9 个 crate([GATED] 口径),这是"实现完成度"与"装配可达性"两个正交维度。ADR-160 用棘轮把这一差异显式化,避免文档把"写了"误报成"上线了"。另:架构减法批次(v2.29.0-omega 在途)物理删除 `auto-dpo`(零生产消费者)与 `model-router`(ADR-172 退役,入边仅孤岛+dev-dep),members 43 → 41。
 >
 > 已偿还/处置(自本表移除):**M13 2026-09-17(decb-scc 重路由)**:`decb-governor`(efficiency-monitor 生产边 L9→L8 转正,RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats,experience_loop 组合根装配共享实例)、`scc-cache`(chimera-cli 组合根生产边 L10→L3 转正,ADR-161 路径①,doctor 第 9 探针 scc_cache 消费 stats());**M12 2026-09-16(wave 3c,ADR-185)**:`gea-activator`(chimera-mas 生产边 L9→L9 转正,gea_bridge 桥接闭环)、`gqep-executor`(chimera-cli 生产边 L10→L7 转正,doctor 并行 gather)、`qeep-protocol`(gqep 传递转正,ADR-048 例外收编);**M10 2026-09-16**:`acb-governor`(退役删除,见 §3.8 退役注记)、`lsct-tiering`(cmt-tiering 生产边转正)。历史快照见 git 历史与 freeze 文件 REMOVED 注记。
 
 ***
+
+### 3.12 已物理删除的 crate（唯一登记处；其他文档一律引用本节，勿各自复述）
+
+> 2026-09-22 由文档审计批次建立。判据：`git log --diff-filter=D --name-only -- 'crates/*/Cargo.toml'`
+> 穷举得 **恰好 3 个**（下表），并以 `[ -d crates/<name> ]` 复核"目录确实不在盘"。
+> ⚠ **本节的存在理由**：`从零搭建完全指南` / `从零搭建终极文档_v3` / `模块级系统性优化分析报告`
+> 这三份"如何搭/如何优化"主参考里仍有大量指向下列 crate 的落点与代码示例，
+> 新开发者照做会打开不存在的目录。**引用某 crate 前，先 `ls crates/` 或查 `Cargo.toml` members。**
+
+| 已删 crate | 删除提交 | 依据 | 原能力的现存载体（已核实） |
+|---|---|---|---|
+| `acb-governor`（L8 ACB 能力预算治理器） | `697b6c2`（2026-09-16） | ADR-182（生产孤岛退役执行，十步删除清单） | 预算/成本治理落在 `decb-governor`（其 `src/config.rs:12`/`:69` 仍按 CACR 美分单位对齐成本参数） |
+| `model-router`（L1 CACR 成本感知模型路由） | `38c72e6`（2026-09-20，架构减法批次 A+B） | 同上批次 | 渠道亲和/成本面落在 `mca-gateway`（`src/adapters.rs`、`src/capability.rs`、`src/cost_guard.rs`）；类型契约落在 `nexus-contracts/src/affinity.rs`（`ProviderId:68` / `CacheSupport:162` 等） |
+| `auto-dpo`（L5 DPO 偏好数据生成与优化） | `38c72e6`（同上） | 同上批次 | **无 1:1 继承者**。仅事件契约留存：`DpoPairGenerated`（`event-bus/src/types.rs:447`、定级 `registry.rs:149`），其构造点在 `crates/*/src` **零命中**（仅 `event-bus/tests/filtered_subscriber_test.rs:577` 与 TUI 覆盖测试构造）⇒ 该事件属"已定义未接线"，勿当作可用链路 |
+
+> 连带后果与治理缺口（集中登记以免遗漏）：
+> ① **层图夹具曾借用生产名**（已修）：`model-router`/`auto-dpo` 的层号条目曾为 mock 夹具保留，使已删 crate 钉在层图里；
+>    B0-6（2026-09-20）已出表并改借现存 crate，见 `scripts/check_dependency_rules.sh:105`（出表说明）与 `:213`（GAP-B 夹具改借）。
+> ② `docs/governance/RK-P_risk_register.md` 的 RK-P22 权威出处 `model-router/src/provider_drift.rs:13` 已改标"待重定位"；
+> ③ `docs/superpowers/plans/2026-08-01-p1-4-*` 的落点全指 `auto-dpo`/`model-router`，其"已完成"横幅已加"产物不在当前代码库"注记；
+> ④ **★ 治理缺口（待实现）：ADR-172 的否决被实施推翻，但无 superseding ADR。**
+>    ADR-172 决策 1（`docs/architecture/ADR-172-…-llm-channel.md:23`）明文"**不删除 crate**（保留其契约源码与孤岛 E2E）"，
+>    而 v2.29 批次 A（`38c72e6`）将其与 `auto-dpo` **物理删除**；该 ADR 自身在 `:30-33` 已注记此现状并写明
+>    "截至本注记，没有任何 ADR 记录本项否决被推翻"⇒ **决策记录与其执行结果不一致，且缺口无人补录**。
+>    处置选项（须治理侧择一，本审计不代作决定）：补一份 ADR 宣布 ADR-172 决策 1 被 superseded，或在 ADR-172 追加"已执行删除"终裁段。
+
+---
 
 ## 4. 核心领域类型
 
@@ -823,10 +882,10 @@ pub enum ThinkingMode {
 
 ### 5.1 双通道架构
 
-| 通道            | 适用事件       | 实现                             | 语义           |
+| 通道 | 适用事件 | 实现 | 语义 |
 | ------------- | ---------- | ------------------------------ | ------------ |
-| **broadcast** | Normal事件   | `tokio::sync::broadcast`       | 发布-订阅，可被背压丢弃 |
-| **mpsc**      | Critical事件 | `Vec<UnboundedSender>` fan-out | 点对点，确保送达     |
+| **broadcast** | Normal事件 | `tokio::sync::broadcast` | 发布-订阅，可被背压丢弃 |
+| **mpsc** | Critical事件 | `Vec<UnboundedSender>` fan-out | 点对点，确保送达 |
 
 ### 5.2 EventMetadata — 事件元数据
 
@@ -849,10 +908,10 @@ pub enum EventSeverity {
 
 ### 5.4 Critical事件清单(必须走mpsc)
 
-> **P2-12 同步(2026-07-28)+ 双清单口径修正(2026-08-30 代码级复算)**:本表为 **`severity()=Critical` 事件(17 个)**(v2.3.1-omega 基线 13 个 + MCA M0 新增 `AffinityQuotaExhausted`(ADR-065) + P1-5 新增 `FormalViolation`
+> **P2-12 同步(2026-07-28)+ 双清单口径修正(2026-08-30 代码级复算)**:本表为 **`severity()=Critical` 事件(18 个)**(v2.3.1-omega 基线 13 个 + MCA M0 新增 `AffinityQuotaExhausted`(ADR-065) + P1-5 新增 `FormalViolation`
 > + Phase 10 W4 新增 `StopRulingIssued`/`ErrorSignatureMatched`(ADR-085 双清单对齐)),
 > 权威源为 [`NexusEvent::severity()`](file:///d:/Chimera%20CLI/crates/event-bus/src/registry.rs#L59)(`registry.rs` `define_event_registry!` 注册表 severity 列单点展开生成,types.rs 保留 enum 本体)。
-> **mpsc 旁路清单为 severity-Critical 的子集(13 个,`bus.rs::is_critical_mpsc_event()` 唯一事实源)**:含 `SkepticVeto/RedTeamAudit/BudgetExceeded/AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/R2FreezeViolation/R2FreezeRollbackFailed/FormalViolation/VetoOverridden/R1ShadowRollbackFailed/StopRulingIssued/ErrorSignatureMatched`。
+> **mpsc 旁路清单为 severity-Critical 的子集(**14 个**,`bus.rs::is_critical_mpsc_event()` 唯一事实源)**:含 `SkepticVeto/RedTeamAudit/BudgetExceeded/AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/R2FreezeViolation/R2FreezeRollbackFailed/FormalViolation/VetoOverridden/R1ShadowRollbackFailed/StopRulingIssued/ErrorSignatureMatched`。
 > **现状注记**:`CheckpointSaved/ConsensusReached/SlowConsumerDropped/OrphanCallDetected` 4 个为 severity-Critical 但**未列入 mpsc 旁路**(记忆/协商/慢消费者/孤儿检测语义,依赖 broadcast 重订阅恢复;若需强投递保证须在 `is_critical_mpsc_event()` 登记并同步红线)。历史:`VetoOverridden`/`R1ShadowRollbackFailed` 于 Phase 10 W5 补入旁路;`FormalVerificationFailed` 按 ADR-159 定稿为 `GsoeError` 变体、非事件。
 >   **v2.10.0-omega 同步(2026-07-31)**:在当前 v2.10.0 基线中 Critical 事件清单保持 13 不变;新增 3 个
 >   **Normal 级**观测事件(`DebateCompleted` / `DelegationCompleted` /
@@ -862,25 +921,25 @@ pub enum EventSeverity {
 >   consensus\_margin Option 字段(零破坏,见 ADR-064 M2 多维共识质量)。
 >   **v2.13.0-omega (MCA M0) 同步**:新增 `AffinityQuotaExhausted` Critical 事件,总数 13 → 14。
 
-| 事件                       | 原因                                            | 新增来源                  |
+| 事件 | 原因 | 新增来源 |
 | ------------------------ | --------------------------------------------- | --------------------- |
-| `CheckpointSaved`        | 丢失将导致Quest无法恢复                                | Week 2                |
-| `ConsensusReached`       | 议会共识必须送达,丢失导致执行不一致                            | Week 2                |
-| `SlowConsumerDropped`    | 慢消费者被丢弃必须通知,丢失导致订阅方状态漂移                       | Week 4                |
-| `OrphanCallDetected`     | 孤儿调用检测(对应 Claude Code 尸检 5.4% 孤儿调用教训)         | Week 4                |
-| `SkepticVeto`            | 安全否决必须送达,丢失导致高风险操作继续执行                        | Week 5                |
-| `VetoOverridden`         | 否决覆盖审计不可丢失,丢失导致覆盖行为不可追溯                       | P1-3                  |
-| `RedTeamAudit`           | 红队审计结果必须送达,丢失导致安全机制失效                         | Week 5                |
-| `BudgetExceeded`         | 预算超限必须触发治理,丢失导致资源持续消耗至OOM                     | F-001 修复              |
-| `AgentTaskFailed`        | Agent任务失败影响Quest完整性,丢失导致失败无人响应                | ADR-026(v2.0.0)       |
-| `AsaIntervention`        | ASA安全干预必须送达,丢失导致高风险操作继续执行                     | P1-W2.1.4             |
-| `R1ShadowRollbackFailed` | R1影子模式回滚失败,丢失导致退化策略持续生效                       | P4-W16.2.2            |
-| `R2FreezeViolation`      | R2冻结违反等同安全事件(奖励黑客风险立即生效)                      | ADR-042 决策 4          |
-| `R2FreezeRollbackFailed` | R2回滚失败意味着R2路径代码可能仍在生效                         | ADR-042 决策 4          |
-| `AffinityQuotaExhausted` | 厂商额度耗尽必须触发降级链切换,丢失导致请求持续打向死通道                 | ADR-065 (MCA M0)      |
-| `FormalViolation`        | 形式化验证违反,丢失导致契约违反无人审议、候选继续进入后续阶段               | P1-5                  |
-| `StopRulingIssued`       | 停止裁决丢失导致 Quest 无界运行,必须保证投递到 quest-engine 取消路径 | Phase 10 W4 (v2.27.0) |
-| `ErrorSignatureMatched`  | 错误签名匹配丢失导致 Debug 算子无法检索同签名兄弟                  | Phase 10 W4 (v2.27.0) |
+| `CheckpointSaved` | 丢失将导致Quest无法恢复 | Week 2 |
+| `ConsensusReached` | 议会共识必须送达,丢失导致执行不一致 | Week 2 |
+| `SlowConsumerDropped` | 慢消费者被丢弃必须通知,丢失导致订阅方状态漂移 | Week 4 |
+| `OrphanCallDetected` | 孤儿调用检测(对应 Claude Code 尸检 5.4% 孤儿调用教训) | Week 4 |
+| `SkepticVeto` | 安全否决必须送达,丢失导致高风险操作继续执行 | Week 5 |
+| `VetoOverridden` | 否决覆盖审计不可丢失,丢失导致覆盖行为不可追溯 | P1-3 |
+| `RedTeamAudit` | 红队审计结果必须送达,丢失导致安全机制失效 | Week 5 |
+| `BudgetExceeded` | 预算超限必须触发治理,丢失导致资源持续消耗至OOM | F-001 修复 |
+| `AgentTaskFailed` | Agent任务失败影响Quest完整性,丢失导致失败无人响应 | ADR-026(v2.0.0) |
+| `AsaIntervention` | ASA安全干预必须送达,丢失导致高风险操作继续执行 | P1-W2.1.4 |
+| `R1ShadowRollbackFailed` | R1影子模式回滚失败,丢失导致退化策略持续生效 | P4-W16.2.2 |
+| `R2FreezeViolation` | R2冻结违反等同安全事件(奖励黑客风险立即生效) | ADR-042 决策 4 |
+| `R2FreezeRollbackFailed` | R2回滚失败意味着R2路径代码可能仍在生效 | ADR-042 决策 4 |
+| `AffinityQuotaExhausted` | 厂商额度耗尽必须触发降级链切换,丢失导致请求持续打向死通道 | ADR-065 (MCA M0) |
+| `FormalViolation` | 形式化验证违反,丢失导致契约违反无人审议、候选继续进入后续阶段 | P1-5 |
+| `StopRulingIssued` | 停止裁决丢失导致 Quest 无界运行,必须保证投递到 quest-engine 取消路径 | Phase 10 W4 (v2.27.0) |
+| `ErrorSignatureMatched` | 错误签名匹配丢失导致 Debug 算子无法检索同签名兄弟 | Phase 10 W4 (v2.27.0) |
 
 > **🔴 红线**:
 >
@@ -896,43 +955,44 @@ pub enum EventSeverity {
 
 ### 5.5 核心事件变体(部分)
 
-| 事件                                                    | 发布方→订阅方                              | 载荷关键字段                                                                                                                  |
+| 事件 | 发布方→订阅方 | 载荷关键字段 |
 | ----------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `UserIntentEncoded`                                   | L10→L9                               | intent\_id, raw\_text, risk\_level                                                                                      |
-| `QuestCreated`                                        | L9→L8                                | quest\_id, title, task\_count                                                                                           |
-| `ThinkingModeSwitched`                                | L9→L8                                | quest\_id, from\_mode, to\_mode, reason                                                                                 |
-| `CheckpointSaved` \[Critical]                         | L9→存储                                | quest\_id, checkpoint\_id, hash                                                                                         |
-| `OmniSparseMasksComputed`                             | L6→L2/L3                             | masks(五维度)                                                                                                              |
-| `ConsensusReached` \[Critical]                        | L8→L5                                | proposal\_id, outcome                                                                                                   |
-| `BudgetExceeded` \[Critical]                          | L8→全系统                               | budget\_type, current, limit                                                                                            |
-| `SkepticVeto` \[Critical]                             | L8→L4                                | proposal\_id, veto\_reason                                                                                              |
-| `RedTeamAudit` \[Critical]                            | L4→L8                                | audit\_result, vulnerabilities                                                                                          |
-| `AgentTaskFailed` \[Critical]                         | L9→L8/L4                             | agent\_id, task\_id, error                                                                                              |
-| `SecurityAuditCompleted`                              | L4→监控                                | audit\_result, risk\_score                                                                                              |
-| `MemoryMetricsReported`                               | L2→L9                                | tier\_stats, hit\_rate                                                                                                  |
-| `RouterStatsUpdated`                                  | L9→L10                               | hit\_rate, p50/p95/p99 latency                                                                                          |
-| `QuestCompleted`                                      | L9→L10                               | quest\_id, status(Completed/Failed/Cancelled)                                                                           |
-| **`DebateCompleted`** \[v2.10.0+ Normal]              | L8→L9/efficiency-monitor             | debate\_id, weighted\_approval\_rate, participation\_rate, latency\_ms, divergence, abstention\_rate, consensus\_margin |
-| **`DelegationCompleted`** \[v2.10.0+ Normal]          | L9 chimera-mas→L9/efficiency-monitor | batch\_id, agent\_count, total\_overhead\_ms, quest\_id                                                                 |
-| **`ParliamentStrategyCapChanged`** \[v2.10.0+ Normal] | L8→efficiency-monitor                | from\_cap, to\_cap, reason, ratio\_at\_change                                                                           |
+| `UserIntentEncoded` | L10→L9 | intent\_id, raw\_text, risk\_level |
+| `QuestCreated` | L9→L8 | quest\_id, title, task\_count |
+| `ThinkingModeSwitched` | L9→L8 | quest\_id, from\_mode, to\_mode, reason |
+| `CheckpointSaved` \[Critical] | L9→存储 | quest\_id, checkpoint\_id, hash |
+| `OmniSparseMasksComputed` | L6→L2/L3 | masks(五维度) |
+| `ConsensusReached` \[Critical] | L8→L5 | proposal\_id, outcome |
+| `BudgetExceeded` \[Critical] | L8→全系统 | budget\_type, current, limit |
+| `SkepticVeto` \[Critical] | L8→L4 | proposal\_id, veto\_reason |
+| `RedTeamAudit` \[Critical] | L4→L8 | audit\_result, vulnerabilities |
+| `AgentTaskFailed` \[Critical] | L9→L8/L4 | agent\_id, task\_id, error |
+| `AuditLogged` \[Normal] | L4→观测面 | audit\_hash, severity（`seccore/src/audit.rs:423` 在 Merkle 链追加成功后发布;定级 `registry.rs:151`） |
+| `MemoryMetricsReported` | L2→L9 | tier\_stats, hit\_rate |
+| `RouterStatsReported` \[Normal] | （**生产侧无发布方**）→L6/L10 | kvbsr/sesa/faae\_stats(hit\_rate, p50/p95/p99 latency)；消费方 `osa-coordinator/src/six_dimension.rs:133` + `chimera-tui/src/data/sync.rs:617`，定级 `registry.rs:227`；全库 4 处构造点**全在测试态**（`chimera-tui/src/data/mod.rs:708`、`osa-coordinator/src/six_dimension.rs:383`、`event-bus/tests/variant_count_test.rs:548`、`osa-coordinator/tests/six_dimension_test.rs:196,208`）⇒ 无任何生产发布方 |
+| `QuestCompleted` | L9→L10 | quest\_id, status(Completed/Failed/Cancelled) |
+| **`DebateCompleted`** \[v2.10.0+ Normal] | L8→L9/efficiency-monitor | debate\_id, weighted\_approval\_rate, participation\_rate, latency\_ms, divergence, abstention\_rate, consensus\_margin |
+| **`DelegationCompleted`** \[v2.10.0+ Normal] | L9 chimera-mas→L9/efficiency-monitor | batch\_id, agent\_count, total\_overhead\_ms, quest\_id |
+| **`ParliamentStrategyCapChanged`** \[v2.10.0+ Normal] | L8→efficiency-monitor | from\_cap, to\_cap, reason, ratio\_at\_change |
 
 ### 5.6 Phase 10 §16 跨层协同闭环新增事件(v2.27.0-omega 已收编)
 
 > **状态声明 (2026-08-20 收编)**:以下 8 个变体为 **Phase 10 §16 跨层协同闭环审计修复**(对应
 > `docs/reports/phase10-cross-layer-closure-report.md` W1-W7)的**正式发布新增**,随 **v2.27.0-omega**
-> (2026-08-19 发布)已提交并**收编入权威口径**。本文档权威口径现为 **145 变体**(types.rs 单表枚举 + metadata() 分类;event_types.rs 镜像按 ADR-160 退役);§5.6 从"在途提示"转为"发布记录",8 个事件已并入权威基线,
-> `check_doc_consistency.ps1` 的 \[GAP-F2] 随收编自然消除(权威口径 = 145 = 工作区实测)。
+> (2026-08-19 发布)已提交并**收编入权威口径**。§5.6 从"在途提示"转为"发布记录"，8 个事件已并入权威基线,
+> `check_doc_consistency.ps1` 的 \[GAP-F2] 随收编自然消除。
+> **变体总数不在此登记**（2026-09-21 校正）：原写"权威口径现为 145 变体 / = 145 = 工作区实测"是 **2026-08-20 收编时点值**，现测已被后续批次超越 —— 唯一权威取法为枚举 `crates/event-bus/src/types.rs`（2026-09-21 实测 **146**），并由 `scripts/check_doc_drift.sh` 自报校验（types.rs 单表枚举 + metadata() 分类；`event_types.rs` 镜像按 ADR-160 退役）。
 
-| 事件                                  | 域归属             | 发布方→订阅方                                                                                       | 载荷关键字段                                                 | Wave |
+| 事件 | 域归属 | 发布方→订阅方 | 载荷关键字段 | Wave |
 | ----------------------------------- | --------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ---- |
-| `StopRulingIssued` \[Critical]      | L9 Quest 停止姿态   | `chimera-cli/quest_loop.rs` (ThreeFactorAdjudicator)→`quest-engine/control.rs`(cancel\_quest) | quest\_id, reason, payload                             | W4   |
-| `VariantApproved`                   | L5 GSOE 变体批准    | `quest_loop.rs`→`faae-router/variant_subscriber.rs`(批准注册表)                                    | variant\_id, approval                                  | W4   |
-| `ParentSelected`                    | L9 终局父本         | `quest_loop.rs`→`faae-router/variant_subscriber.rs`(register\_visit 同步 UCB)                   | parent\_id, child                                      | W4   |
-| `ErrorSignatureMatched` \[Critical] | L4 零信任错误签名      | `seccore/error_signature_collector.rs::extract_and_publish`→组合根订阅器(待 Debug 算子路由装配)            | signature, context                                     | W4   |
-| `TokenLedgerRecorded`               | L1 token 账本     | token\_ledger 记录路径→L3 持久化                                                                     | ledger\_id, delta                                      | W4   |
-| `AssessmentUpdated`                 | L9 自我评估         | RuntimeAuditor 周期报告(组合根装配)→L9 策略调整                                                            | assessment, score                                      | W4   |
-| `BusThroughputReported`             | L1 EventBus 吞吐量 | `event-bus/bus.rs::spawn_throughput_reporter`→订阅器                                             | published\_total, rate                                 | W6   |
-| `SecurityInterceptionReported`      | L4 沙箱拦截率        | `seccore/interception_stats.rs` + `sandbox.rs::spawn_interception_reporter`→订阅器               | total\_requests, blocked\_requests, interception\_rate | W6   |
+| `StopRulingIssued` \[Critical] | L9 Quest 停止姿态 | `chimera-cli/quest_loop.rs` (ThreeFactorAdjudicator)→`quest-engine/control.rs`(cancel\_quest) | quest\_id, reason, payload | W4 |
+| `VariantApproved` | L5 GSOE 变体批准 | `quest_loop.rs`→`faae-router/variant_subscriber.rs`(批准注册表) | variant\_id, approval | W4 |
+| `ParentSelected` | L9 终局父本 | `quest_loop.rs`→`faae-router/variant_subscriber.rs`(register\_visit 同步 UCB) | parent\_id, child | W4 |
+| `ErrorSignatureMatched` \[Critical] | L4 零信任错误签名 | `seccore/error_signature_collector.rs::extract_and_publish`→组合根订阅器(待 Debug 算子路由装配) | signature, context | W4 |
+| `TokenLedgerRecorded` | L1 token 账本 | token\_ledger 记录路径→L3 持久化 | ledger\_id, delta | W4 |
+| `AssessmentUpdated` | L9 自我评估 | RuntimeAuditor 周期报告(组合根装配)→L9 策略调整 | assessment, score | W4 |
+| `BusThroughputReported` | L1 EventBus 吞吐量 | `event-bus/bus.rs::spawn_throughput_reporter`→订阅器 | published\_total, rate | W6 |
+| `SecurityInterceptionReported` | L4 沙箱拦截率 | `seccore/interception_stats.rs` + `sandbox.rs::spawn_interception_reporter`→订阅器 | total\_requests, blocked\_requests, interception\_rate | W6 |
 
 > **诚实数据原则 (v4.0 预留)**:`ErrorSignatureMatched` 的消费端、L10 用户满意度、L4 误拦截率、
 > RLTrajectory 下游训练消费均无真实数据源,**禁止实施伪造采集**,仅在真实通道上线后激活
@@ -940,24 +1000,25 @@ pub enum EventSeverity {
 
 ### 5.7 审计遗留修复接线登记(fix-audit-followup,2026-08-28)
 
-> **来源**:docs/reports/audit-followup/(WS-1\~WS-5)。变更均为"接线/门禁/定稿",**145 变体总数不变**。
+> **来源**:docs/reports/audit-followup/(WS-1\~WS-5)。变更均为"接线/门禁/定稿"，**该批次未新增变体**（其时总数 145；现测总数见 §5.6 状态声明——一律以 `types.rs` 枚举与 `check_doc_drift.sh` 自报为准，不在本行登记）。
 
-| 类别            | 项                                                                                                                                                                                                                                                                                               | 处置                                                                                                                        |
+| 类别 | 项 | 处置 |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| B1 旁路生产者补齐    | `R2FreezeRollbackFailed`(Critical 旁路成员,此前 0 生产发布)                                                                                                                                                                                                                                               | auto-dpo `freeze_guard::attempt_rollback_with_guard` 回滚失败真实发布(metadata.source="auto-dpo:freeze\_guard");不触碰 R2 冻结关键词      |
-| 幽灵事件接线 13     | `McpMessageReceived`(mcp-mesh)/`DecayMetricsReported`(decay-engine)/`ChtcAdapterStatus`(chtc-bridge)/`ClvSnapshotReported`(nexus-core CLV)/`BudgetMetricsUpdated`(decb-governor)                                                                                                                | 有 TUI 专用面板的 5 个补真实生产者(字段照 §5.2 定义,severity=Normal)                                                                        |
-| 幽灵事件接线 13(续)  | `EvolutionTriggered`(gsoe)/`AuditLogged`(seccore Merkle)/`R1ShadowRegressionDetected`+`R1ShadowPromotionReady`(chimera-mas shadow)/`AffinityUnknownField`(repo-wiki)/`CacheAffinityApplied`(scc-cache)/`ContextBudgetAllocated`(chimera-mas INV-7)/`ActivationThresholdAdjusted`(gea-activator) | 语义点真实发布 + 单测断言投递                                                                                                          |
-| 幽灵事件预留 1      | `BenchmarkMetricsCollected`                                                                                                                                                                                                                                                                     | **无自然发布流**(efficiency-monitor 仅 Prometheus 采样,efficiency 无 7 字段基准快照)→ 正式登记 **预留(未接线,禁删)**                                 |
-| Critical 清单定稿 | `FormalVerificationFailed`                                                                                                                                                                                                                                                                      | 确认为 **`GsoeError`** **变体**(gsoe-evolution/src/error.rs:98),**非 NexusEvent**;**从 Critical 事件文档清单剔除并加注**(旁路口径 13 不变,无新增事件面) |
-| C1 红线 #8      | `xts_top_k`(nexus-contracts/util)                                                                                                                                                                                                                                                               | 替换 7 站 8 处 `sort_by` 调用点(O(n),select\_nth\_unstable\_by)                                                                  |
-| E1 门禁         | `check_perf_redlines.ps1` Part 3                                                                                                                                                                                                                                                                | 全量 bench 三态登记(gated/registered/dev-only),unknown=0 门禁                                                                     |
+| B1 旁路生产者补齐 | `R2FreezeRollbackFailed`(Critical 旁路成员,此前 0 生产发布) | auto-dpo `freeze_guard::attempt_rollback_with_guard` 回滚失败真实发布(metadata.source="auto-dpo:freeze\_guard");不触碰 R2 冻结关键词 |
+| 幽灵事件接线 13 | `McpMessageReceived`(mcp-mesh)/`DecayMetricsReported`(decay-engine)/`ChtcAdapterStatus`(chtc-bridge)/`ClvSnapshotReported`(nexus-core CLV)/`BudgetMetricsUpdated`(decb-governor) | 有 TUI 专用面板的 5 个补真实生产者(字段照 §5.2 定义,severity=Normal) |
+| 幽灵事件接线 13(续) | `EvolutionTriggered`(gsoe)/`AuditLogged`(seccore Merkle)/`R1ShadowRegressionDetected`+`R1ShadowPromotionReady`(chimera-mas shadow)/`AffinityUnknownField`(repo-wiki)/`CacheAffinityApplied`(scc-cache)/`ContextBudgetAllocated`(chimera-mas INV-7)/`ActivationThresholdAdjusted`(gea-activator) | 语义点真实发布 + 单测断言投递 |
+| 幽灵事件预留 1 | `BenchmarkMetricsCollected` | **无自然发布流**(efficiency-monitor 仅 Prometheus 采样,efficiency 无 7 字段基准快照)→ 正式登记 **预留(未接线,禁删)** |
+| Critical 清单定稿 | `FormalVerificationFailed` | 确认为 **`GsoeError`** **变体**(gsoe-evolution/src/error.rs:98),**非 NexusEvent**;**从 Critical 事件文档清单剔除并加注**(旁路口径 13 不变,无新增事件面) |
+| C1 红线 #8 | `xts_top_k`(nexus-contracts/util) | 替换 7 站 8 处 `sort_by` 调用点(O(n),select\_nth\_unstable\_by) |
+| E1 门禁 | `check_perf_redlines.ps1` Part 3 | 全量 bench 三态登记(gated/registered/dev-only),unknown=0 门禁 |
 
 ### 5.8 FormalVerificationFailed 定稿注记(2026-08-28)
 
 审计(维度2)确认:`FormalVerificationFailed` 在代码库中是 **`GsoeError`** **的错误变体**(gsoe-evolution/src/error.rs:98,
 由 aegis/critic 返回),**不是** `NexusEvent`。此前规则文档/红线 §5 将其列为 Critical 事件属"规格名 vs 实现名"漂移。
 **定稿决定**:不新增虚假事件面——从 Critical 事件清单删除该称谓;若未来需要其走事件总线,须重新立项新增
-NexusEvent 变体并注册 mpsc 旁路(禁止为对齐文档而伪造发布)。既有 Critical 旁路成员清单(13 个,`is_critical_mpsc_event`)不受影响。
+NexusEvent 变体并注册 mpsc 旁路(禁止为对齐文档而伪造发布)。既有 Critical 旁路成员清单(`is_critical_mpsc_event`,**现 14 个,`bus.rs:48 CRITICAL_MPSC_VARIANTS = 14` 计数守护**)不受影响。
+> ⚠ **但本决策第 5 项的前提已被实现推翻**(2026-09-22 复证):`crates/event-bus/src/types.rs:241` 现有 `FormalVerificationFailed` 枚举变体,`registry.rs:125` 将其定级 `Critical, Security`,并已列入 `bus.rs:109` mpsc 旁路清单 ⇒ 它**同时**是 NexusEvent 与 GsoeError 变体(`gsoe-evolution/src/error.rs:98` 亦存在)。ADR-159 决策 5 需补 superseding 记录(见账本 §92 / 待裁决项 #20)。
 
 ### 5.9 微观重复收敛登记(第三轮冗余审计,2026-08-30)
 
@@ -965,12 +1026,12 @@ NexusEvent 变体并注册 mpsc 旁路(禁止为对齐文档而伪造发布)。�
 > **落点约定**:跨 crate 的**无副作用微观算法**(Top-K / 激活函数 / 分位数)一律收敛到 L0
 > `nexus_contracts::util`,禁止在各 crate 再写本地副本;受 ADR-033 例外治理约束(见 §3.0)。
 
-| 批次 | 收敛                     | 结果                                                                                                                                       |
+| 批次 | 收敛 | 结果 |
 | -- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| A  | `select_top_k_desc` ×3 | → `util::xts_top_k_by`(O(n));生产调用点归零,本地定义归零                                                                                              |
-| B  | `sigmoid` ×2(字节级相同)    | → `util::sigmoid`;`gea-activator` 新增 L9→L0 边(依赖铁律允许)                                                                                     |
-| C  | `percentile` ×14       | 分层:6 个 `tests/` 函数体 → `util::percentile_sorted<T: Copy>`;7 个 bench 按 ADR-159 决策 3 **冻结登记**(不删);`affinity_metrics.rs` 有意保留独立实现(O(n) 方法形态) |
-| D  | `cheap_index` 余弦分叉     | **诊断不改码**:6 维分叉(输入类型/不等长语义/NaN/零向量阈值/clamp/4.2× 性能)须独立 ADR + TDD                                                                         |
+| A | `select_top_k_desc` ×3 | → `util::xts_top_k_by`(O(n));生产调用点归零,本地定义归零 |
+| B | `sigmoid` ×2(字节级相同) | → `util::sigmoid`;`gea-activator` 新增 L9→L0 边(依赖铁律允许) |
+| C | `percentile` ×14 | 分层:6 个 `tests/` 函数体 → `util::percentile_sorted<T: Copy>`;7 个 bench 按 ADR-159 决策 3 **冻结登记**(不删);`affinity_metrics.rs` 有意保留独立实现(O(n) 方法形态) |
+| D | `cheap_index` 余弦分叉 | **诊断不改码**:6 维分叉(输入类型/不等长语义/NaN/零向量阈值/clamp/4.2× 性能)须独立 ADR + TDD |
 
 **口径变更**:`percentile_sorted` 统一为 `round((n-1)·p)` 索引(原各站 `trunc(n·p)` 混用),索引差 ≤1 个样本;
 已用 `--release -- --ignored` 实跑 16 项 p95 SLO 红线验证无回退。
@@ -1004,11 +1065,11 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走MCP Mesh
 
 ### 6.3 已修正的历史违规(通过Event Bus)
 
-| 违规编号  | 原违规路径                        | 修正方式 | 事件类型                      |
+| 违规编号 | 原违规路径 | 修正方式 | 事件类型 |
 | ----- | ---------------------------- | ---- | ------------------------- |
-| V1    | OSA→HCW 向上依赖                 | 事件通知 | `OmniSparseMasksComputed` |
-| V2    | MLC→efficiency-monitor 跨层    | 事件通知 | `MemoryMetricsReported`   |
-| V3/V4 | Parliament→GSOE/AutoDPO 向上依赖 | 事件通知 | `ConsensusReached`        |
+| V1 | OSA→HCW 向上依赖 | 事件通知 | `OmniSparseMasksComputed` |
+| V2 | MLC→efficiency-monitor 跨层 | 事件通知 | `MemoryMetricsReported` |
+| V3/V4 | Parliament→GSOE/AutoDPO 向上依赖 | 事件通知 | `ConsensusReached` |
 
 ***
 
@@ -1113,27 +1174,27 @@ sync方法(audit/verify\_security/switch\_tier)使用`publish_blocking`；async�
 
 ### 9.1 原始六条尸检红线(Claude Code教训)
 
-| 问题    | Claude Code教训       | 本项目红线                                         |
+| 问题 | Claude Code教训 | 本项目红线 |
 | ----- | ------------------- | --------------------------------------------- |
-| 函数太大? | `print.ts` 3167行神函数 | **单函数 ≤200行，超过必须拆模块**                         |
-| 结果丢了? | 5.4%孤儿调用            | **所有异步操作必须有GQEP聚集/超时处理**                      |
-| 裸奔?   | 命令插值+auth跳过         | **所有外部调用经SecCore沙箱+Decay衰减**                  |
-| 竞态?   | void Promise无await  | **所有async必须await或spawn管理**                    |
-| 功能乱?  | 44个未发布标志            | **禁止功能标志，用能力场自然进化替代**                         |
-| 内存爆炸? | 1M Token暴力加载        | **必须经HCW分层+OSA稀疏化后再加载**(1M = 128K实际 + 8×稀疏压缩) |
+| 函数太大? | `print.ts` 3167行神函数 | **单函数 ≤200行，超过必须拆模块**（现状 2026-09-22 实测 **10 处超标** = 生产码 6 + 测试码 4；`scripts/audit_fnlen.py` 系报告型门（跑全仓 rc=0），CI 仅跑 smoke 自证工具牙口 ⇒ **本红线未被判定达标**，逐条清单与复现命令见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md` §25） |
+| 结果丢了? | 5.4%孤儿调用 | **所有异步操作必须有GQEP聚集/超时处理** |
+| 裸奔? | 命令插值+auth跳过 | **所有外部调用经SecCore沙箱+Decay衰减** |
+| 竞态? | void Promise无await | **所有async必须await或spawn管理** |
+| 功能乱? | 44个未发布标志 | **禁止功能标志，用能力场自然进化替代** |
+| 内存爆炸? | 1M Token暴力加载 | **必须经HCW分层+OSA稀疏化后再加载**(1M = 128K实际 + 8×稀疏压缩) |
 
 ### 9.2 Week 1-8 新增红线(违反即阻塞发布)
 
-| 红线                                     | 教训来源                         | 说明                                                                         |
+| 红线 | 教训来源 | 说明 |
 | -------------------------------------- | ---------------------------- | -------------------------------------------------------------------------- |
-| **禁止持锁.await**                         | faae-router 4 Critical       | DashMap/Mutex写锁跨await导致死锁，必须快照→释放→await                                    |
-| **rusqlite必须spawn\_blocking**          | repo-wiki/scc-cache 79处      | rusqlite非async，直接调用阻塞runtime                                               |
-| **broadcast先subscribe再spawn**          | Week 6 SSRA + Week 7 4 crate | `bus.subscribe()`必须在`tokio::spawn()`之前同步调用，否则事件静默丢失                        |
-| **BudgetExceeded severity = Critical** | C2修复                         | 禁止降级，必须返回`EventSeverity::Critical`                                         |
-| **Critical安全事件用mpsc**                  | efficiency-monitor           | SkepticVeto/RedTeamAudit/AsaIntervention/BudgetExceeded必须用mpsc channel确保送达 |
-| **sqlite-vec禁用**                       | ADR-005降级                    | sqlite-vec 0.1.9 binding需unsafe，改内存KNN(10-1000 entry scale)                |
-| **Top-K用select\_nth\_unstable**        | 工程约定                         | O(n)替代O(n log n) sort\_by                                                  |
-| **f32禁止隐式转f64比较**                      | sesa-router教训                | `0.4f32 as f64`精度膨胀导致稀疏度误判，全程保持f32                                         |
+| **禁止持锁.await** | faae-router 4 Critical | DashMap/Mutex写锁跨await导致死锁，必须快照→释放→await |
+| **rusqlite必须spawn\_blocking** | repo-wiki/scc-cache 79处 | rusqlite非async，直接调用阻塞runtime |
+| **broadcast先subscribe再spawn** | Week 6 SSRA + Week 7 4 crate | `bus.subscribe()`必须在`tokio::spawn()`之前同步调用，否则事件静默丢失 |
+| **BudgetExceeded severity = Critical** | C2修复 | 禁止降级，必须返回`EventSeverity::Critical` |
+| **Critical安全事件用mpsc** | efficiency-monitor | SkepticVeto/RedTeamAudit/AsaIntervention/BudgetExceeded必须用mpsc channel确保送达 |
+| **sqlite-vec禁用** | ADR-005降级 | sqlite-vec 0.1.9 binding需unsafe，改内存KNN(10-1000 entry scale) |
+| **Top-K用select\_nth\_unstable** | 工程约定 | O(n)替代O(n log n) sort\_by |
+| **f32禁止隐式转f64比较** | sesa-router教训 | `0.4f32 as f64`精度膨胀导致稀疏度误判，全程保持f32 |
 
 ### 9.3 async反模式清单
 
@@ -1188,7 +1249,7 @@ cargo build --workspace --release
 ### 10.3 测试命令
 
 ```powershell
-# 全量测试(43 crate 单元+集成+E2E,累计 11587 tests / 0 failed(2026-09-02 当前工作树全量重测,485 test target,出处 redundancy-R9-disposition_2026-09-02.md);演进 v2.27.0=10836 → v2.28.0=11522 → 11564 → 11587;更早 PROBE P-1.3 基线 8455 见 PROBE 进度报告)
+# 全量测试(全部 crate 单元+集成+E2E(crate 数以 Cargo.toml members 为准),累计 passed 数以 docs/reports/ 最新回归报告为准(2026-09-02 时点全量重测,485 test target,出处 redundancy-R9-disposition_2026-09-02.md;此后架构减法批次需重测);演进 v2.27.0=10836 → v2.28.0=11522 → 11564 → 11587 → 11794(2026-09-17 M13 提交态实测终值,回写提交 d3840ba);静态两尺 11232 strict / 11276 loose 与否证见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md` §24;更早 PROBE P-1.3 基线 8455 见 PROBE 进度报告)
 cargo test --workspace
 
 # 单crate测试
@@ -1226,13 +1287,13 @@ cargo test --test owasp_top10
 
 #### 测试加速工具(P9-T2/P9-T3,2026-08-05)
 
-| 工具                 | 路径                                             | 说明                                                                                            |
+| 工具 | 路径 | 说明 |
 | ------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| 三档 nextest profile | `.config/nextest.toml`                         | `ci-fast`(PR 快轨) / `default`(=full) / `stress`(nightly 压测,test-threads=2)                     |
-| 等待缩放宏              | `nexus-contracts::test_scale::scaled_timeout!` | `CHIMERA_TEST_TIMEOUT_SCALE` 环境变量驱动,clamp \[0.01,1.0],缺省 1.0 与原行为等价;ADR-033 "纯类型+零逻辑"约束唯一例外   |
-| 测试编译加速             | `.cargo/config.toml [profile.test]`            | `opt-level=0` + `codegen-units=16` + `debug=0` + `[profile.test.build-override]`,冷全量编译 \~-75% |
-| 基准采集脚本             | `scripts/bench_test_runtime.{sh,ps1}`          | ci-fast/default/stress 三档分派 + JSON 报告解析                                                       |
-| 临时文件清理             | `scripts/clean_test_temp.ps1`                  | 清理 tmp/ 下 .tmp\* 残留(实测 47 目录)                                                                 |
+| 三档 nextest profile | `.config/nextest.toml` | `ci-fast`(PR 快轨) / `default`(=full) / `stress`(nightly 压测,test-threads=2) |
+| 等待缩放宏 | `nexus-contracts::test_scale::scaled_timeout!` | `CHIMERA_TEST_TIMEOUT_SCALE` 环境变量驱动,clamp \[0.01,1.0],缺省 1.0 与原行为等价;ADR-033 "纯类型+零逻辑"约束唯一例外 |
+| 测试编译加速 | `.cargo/config.toml [profile.test]` | `opt-level=0` + `codegen-units=16` + `debug=0` + `[profile.test.build-override]`,冷全量编译 \~-75% |
+| 基准采集脚本 | `scripts/bench_test_runtime.{sh,ps1}` | ci-fast/default/stress 三档分派 + JSON 报告解析 |
+| 临时文件清理 | `scripts/clean_test_temp.ps1` | 清理 tmp/ 下 .tmp\* 残留(实测 47 目录) |
 
 **实测**: ci-fast 档 wall time 12.94s → 4.12s(-68.1%);深度优化后 3.629s(-71.9%)。qeep-protocol 36 处协议超时已替换为 scaled\_timeout!(P9-T3)。
 
@@ -1290,7 +1351,7 @@ docker build -t chimera-cli:local .
 
 # 验证
 docker run --rm chimera-cli:local --version
-# 期望输出: chimera 2.28.2-omega
+# 期望输出: chimera 2.29.0-omega
 ```
 
 基础镜像: `gcr.io/distroless/cc-debian12`(无shell，nonroot UID 65532)\
@@ -1344,43 +1405,43 @@ chimera tui
 
 ## 11. 架构决策记录 (ADR)
 
-> 权威源: 本节 + `docs/architecture/adr_index.md` + `docs/architecture/ADR-*.md`(物理文件,主编号至 **ADR-182**(ADR-161~169 为 Phase R 草案,ADR-170 十一定律收录,ADR-171~182 为 phaseR/收口批次:含 ADR-177 mca-gateway GATED 重分类、ADR-180 batch2 收口遥测、ADR-181 影子能力状态、ADR-182 acb-governor 退役执行);Phase 1-5 治理 ADR 以四份合并档落档:ADR-095~134 / ADR-135~144 / ADR-145~152 / ADR-153~156,另有 ADR-157/158/159/160 单档;含 ADR-053 rev0\~rev4 多版本)
-> **v2.28.0-omega 实证状态** (2026-08-30 穷举 43 个 Cargo.toml + types.rs 精确枚举 + 可达性棘轮):
+> 权威源: 本节 + `docs/architecture/adr_index.md` + `docs/architecture/ADR-*.md`(物理文件,主编号至 **ADR-192**(ADR-161~169 为 Phase R 草案,ADR-170 十一定律收录,ADR-171~192 为 phaseR/收口/接线/治理批次:含 ADR-177 mca-gateway GATED 重分类、ADR-180 batch2 收口遥测、ADR-181 影子能力状态、ADR-182 acb-governor 退役执行、ADR-183 TUI 经验卡片接线 + InjectionStrategy 下线、ADR-184 NexusError 无 source 字段取舍、ADR-185 gea/gqep/qeep 三岛链接线、ADR-187 内环界 Check A 退役（Q3 α′ 裁决）、ADR-188 退役 crate 事件所有权冻结、ADR-189 csn-substitutor 层号归 L10、ADR-190 性能门 I7 幽灵治理、ADR-191 L1 事件可靠性契约、ADR-192 mlc L2 分层检索);Phase 1-5 治理 ADR 以四份合并档落档:ADR-095~134 / ADR-135~144 / ADR-145~152 / ADR-153~156,另有 ADR-157/158/159/160 单档;含 ADR-053 rev0\~rev4 多版本)
+> **v2.28.0-omega 实证状态** (2026-08-30 时点穷举 43 个 Cargo.toml + types.rs 精确枚举 + 可达性棘轮;该时点数值已被后续架构减法批次取代,现势见顶部三方一致块):
 >
-> * **主编号至 ADR-182** (ADR-001~006 + ADR-026~037 + ADR-042~085 + ADR-086~094 融合裁决 + ADR-095\~160 Phase 1-5 治理 + ADR-161~169 Phase R 草案 + ADR-170 十一定律收录 + ADR-171~182 phaseR/收口批次(ADR-177 GATED 重分类、ADR-167 audit 口径一致性、ADR-160 可达性棘轮) + ADR-SIMD-001(预留);编号-主题映射以 `adr_index.md` 为准)
+> * **主编号至 ADR-192** (ADR-001~006 + ADR-026~037 + ADR-042~085 + ADR-086~094 融合裁决 + ADR-095\~160 Phase 1-5 治理 + ADR-161~169 Phase R 草案 + ADR-170 十一定律收录 + ADR-171~192 phaseR/收口/接线/治理批次(ADR-177 GATED 重分类、ADR-167 audit 口径一致性、ADR-160 可达性棘轮、ADR-187 Check A 退役、ADR-190 I7 幽灵治理、ADR-191 事件可靠性契约、ADR-192 mlc L2 分层检索) + ADR-SIMD-001(预留);编号-主题映射以 `adr_index.md` 为准)
 >
-> * **NexusEvent 变体数 = 145(权威口径,types.rs 单表;`event_types.rs`** **镜像已按 ADR-160 决策 5 退役删除,分类真值源收敛为 types.rs 一处)**
+> * **NexusEvent 变体数不在此登记**（2026-09-21 校正：原记"= 145 权威口径"为 2026-08-30 时点值，已被后续批次超越）：唯一取法为枚举 `crates/event-bus/src/types.rs`，分类由其 `metadata()` 负责（`event_types.rs` 镜像已按 ADR-160 决策 5 退役删除，分类真值源收敛为 types.rs 一处），并由 `scripts/check_doc_drift.sh` 自报校验
 >
-> * **`#![forbid(unsafe_code)]`** **43/43 crate 全合规**(lib.rs 层声明;依赖 crate 内部 unsafe 如 rusqlite/prometheus-client 不传播)
+> * **`#![forbid(unsafe_code)]`** **41/41 crate 全合规**(2026-09-21 实测：每个 `crates/*/src/lib.rs` 均声明；lib.rs 层声明，依赖 crate 内部 unsafe 如 rusqlite/prometheus-client 不传播)
 
-| ADR         | 主题                                       | 决策                                                                                                                                                                                                                                       | 落地状态                                                                 | 代码实证                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ADR | 主题 | 决策 | 落地状态 | 代码实证 |
 | ----------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ADR-001     | 沙箱运行时选择                                  | 优先 gVisor,降级 seccomp+WASM                                                                                                                                                                                                                | ⚠️ **降级**                                                            | `seccore/Cargo.toml` **无 wasmtime 依赖**(ADR-035 决策 3:wasmtime 已下沉到 seccore 直接声明 + `wasm-sandbox` feature gate 隔离);实际为 `tokio::process::Command` + 策略过滤;`sandbox.rs:474` 注释"当前实现为降级版本"                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ADR-002     | 能力衰减模型设计                                 | 连续权限流体模型,能力随时间/风险动态衰减                                                                                                                                                                                                                    | ✅ 落地                                                                 | `decay-engine` 3 个依赖(thiserror/dashmap/tracing),2 源文件                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ADR-003     | Event Bus 实现选型                           | Tokio broadcast + mpsc 双通道                                                                                                                                                                                                               | ✅ 落地                                                                 | **145 个 NexusEvent 变体(权威口径,types.rs 单表 + metadata() 分类;event\_types.rs 镜像已按 ADR-160 退役)** (v2.3.1=74 → v3.1.0=+8 TuiAction/Chat → v5.0=+3 R1Shadow → polish-v2.7=+24 增量 → v2.10.0=+3 观测事件 → MCA M0=+6 Affinity 事件 → P9 演进=+11 → W10=+2 TuiHello/TuiHelloAck → Phase 10=+8 StopRuling/VariantApproved/ParentSelected/ErrorSignatureMatched/TokenLedgerRecorded/AssessmentUpdated/BusThroughputReported/SecurityInterceptionReported),broadcast + mpsc 旁路(Critical 事件);`arc-swap` RCU 原语保护内环共享状态(P2-W7.2.3);v2.11.0 新增 `publish_batch`/`publish_batch_blocking` 原语(摊销 receiver\_count 背压采样,N=5 降 16.3% / N=10 降 20.4%) |
-| ADR-004     | 消息序列化协议                                  | MessagePack(rmp-serde)                                                                                                                                                                                                                   | ✅ 落地                                                                 | 18 个文件使用 rmp-serde,Checkpoint 持久化主流协议                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ADR-005     | 持久化存储选型                                  | SQLite + 向量,sqlite-vec 降级为内存 KNN(10-1000 entry)                                                                                                                                                                                          | ⚠️ **部分降级**                                                          | `repo-wiki/Cargo.toml` L50 注释 `# sqlite-vec = { workspace = true }`(已注释);v5.0 P2 引入 `hnsw_rs` HNSW 近似最近邻(10K-100K entry scale,生产路径)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ADR-026     | CHIMERA-MAS 多 Agent 协同子系统                | L9 Quest 层归属 + event-bus 扩展 + AgentTask wrapper                                                                                                                                                                                          | ✅ 落地                                                                 | `chimera-mas/Cargo.toml` 24 个内部 crate 依赖 + 5 个 Part II 章节;v2.0.0-omega Stage A 骨架                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ADR-027     | CHIMERA-MAS 四象限 + 优先级调度                  | 孙代理四象限(INV-3/4) + WSJF + E01-E08 专家团队                                                                                                                                                                                                    | ✅ 落地                                                                 | `chimera-mas/src/quadrant.rs` + `scheduler.rs`;v2.1.0-omega Stage B                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ADR-028     | CHIMERA-MAS Part II 闭环能力                 | 7 项闭环(上下文预算/分块/归档/知识/稳定/PDCA/INV)                                                                                                                                                                                                        | ✅ 落地                                                                 | `chimera-mas/src/{context,chunker,archive,knowledge,stability,pdca,invariants}.rs`;v2.2.0-omega;INV-7/INV-8 不变量                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| **ADR-029** | **AETHER TUI v3.1 交互式重构**                | **自研渲染引擎(纯 safe Rust,L3 双缓冲 diff/L4 Flexbox/L5 组件)+ Action 统一协议(8 变体 append-only)+ Registry 单一事实源 + InputRouter 5 态路由(Normal/Insert/Command/GPrefix/WPrefix)+ i18n 默认中文 +** **`v3-engine`** **feature 双轨迁移**                             | ✅ **M0 落地**                                                          | `chimera-tui/src/{actions,engine,components,i18n,input}/` 5 模块 + `event-bus` 8 变体(types.rs:1549-1655) + `chimera-cli` action\_orchestrator 订阅;commit `bf9aa75`(2026-07-21);M2 起 v3-engine feature 启用渲染                                                                                                                                                                                                                                                                                                                                                                                                               |
-| **ADR-030** | **unsafe 红线不特批**                         | **安全等价物重写(arc-swap / crossbeam / bumpalo 替代 unsafe 库)**                                                                                                                                                                                  | ✅ 落地                                                                 | workspace 引入 `arc-swap = "1.7"`(event-bus L251-255);`#![forbid(unsafe_code)]` 43/43 crate 全覆盖                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **ADR-031** | **Harness-as-Spec + omega-learner 边界**   | **C2 嫁接点命名映射表 + §5.2 九项裁决对账附录 + omega-learner 异步下发 SelectorPolicy::Learned**                                                                                                                                                             | ✅ 落地                                                                 | `omega-learner/src/{bandit,policy,shadow}.rs`;LinUCB + Shadow Mode + 本地 fallback                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| **ADR-032** | **双通道评估器(RHI-CG)**                       | **通道 A 提议 + 通道 B 否决(双通道互不覆盖)**                                                                                                                                                                                                           | ✅ 落地                                                                 | `auto-dpo/src/rhi_channel_a.rs` + `gsoe-evolution/src/ci_gate.rs`;P5.1/P5.2 完整闭环                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| **ADR-033** | **L0 nexus-contracts**                   | **纯类型 + 零逻辑 + 零依赖契约层,依赖铁律扩展** **`L(N) → L(0)`** **恒允许**                                                                                                                                                                                  | ✅ 落地                                                                 | `crates/nexus-contracts/src/lib.rs` 仅依赖 `serde` workspace;承载 `OmniSparseMasks` / `HarnessSpec` / `TemporalMeta` / `NamespaceQuota` / `SelectorPolicy` / `BudgetTier`(ADR-054 决策 3,P9-T3 上提) / `command_validation` 契约(`Command`/`CommandPolicy`/`AttackType` + `CommandValidator` trait,ADR-054 决策 3,P9-T4) + `domain` 契约(`ThinkingMode`/`MultimodalInput`/`UserIntent`/`Quest`/`Task`,ADR-054 决策 6,P9-T7) + `event_payload` 契约(`EventSeverity`/`TaskPriority`/`AgentStatus`,P9-T7)                                                                                                                                  |
-| **ADR-034** | **灰度=能力场 + 编译期 feature**                 | **否决运行时 Feature Flag,采用 CapabilityToken 四态 + 编译期** **`v3-engine`** **/** **`wasm-sandbox`** **feature 双轨**                                                                                                                               | ✅ 落地                                                                 | `chimera-tui/Cargo.toml:10-12` `v3-engine` feature 默认 off;`seccore/Cargo.toml` `wasm-sandbox` feature gate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| **ADR-035** | **威胁模型下修 + wasmtime 沙箱重启路径**             | **wasmtime 下沉到 seccore 直接声明 +** **`wasm-sandbox`** **feature gate 隔离 + 重启路径**                                                                                                                                                            | ✅ 落地                                                                 | `seccore/Cargo.toml` wasmtime 独立声明;`sandbox.rs:474` 注释降级说明 + 重启路径代码                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **ADR-037** | **能力场灰度工程化方案**                           | **CapabilityToken 四态 + EWMA α=0.1 + AsaIntervention 安全闭环**                                                                                                                                                                               | ✅ 落地                                                                 | `parliament/src/capability_token.rs` + ~~`acb-governor/src/ewma.rs`~~(已随 ADR-182 退役);P4-W14.5 实施                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **ADR-042** | **R2 形式化验证器冻结**                          | **R2(GSOE×AutoDPO 约束 RL)FormalVerifier 落地前无条件冻结 + 5 项工程实施决策**                                                                                                                                                                            | ✅ 落地                                                                 | `gsoe-evolution/src/freeze.rs`;5 项决策:冻结范围 + 期限 + 三阶递进解冻 + 违反处置 + 工程硬约束                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| **ADR-043** | **R1 召回配额 CQL/IQL 影子模式设计**               | **影子模式开关 + 对比报告 + 2 周解冻条件 EWMA≥0.7/胜率≥71.4% + 回滚预案 4 项**                                                                                                                                                                                 | ✅ 落地                                                                 | `omega-learner/src/shadow.rs`;P4-W16.2.4 实施                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **ADR-044** | **RHI-CG 双通道工程实施**                       | **JudgeClient + LlmInvoker + CiGate trait;P5.1 决策回溯 + P5.2 通道 B 预留**                                                                                                                                                                     | ✅ 落地                                                                 | `auto-dpo/src/rhi_judge_client.rs` + `gsoe-evolution/src/ci_gate.rs`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **ADR-045** | **INV-9 命名调和**                           | **`check_inv9_delegation_acyclic`** **为权威名,解除 Channel B 实施约束**                                                                                                                                                                           | ✅ 落地                                                                 | `gsoe-evolution/src/invariants.rs` 命名修正                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| **ADR-046** | **ImmuneSystem facade 设计**               | **悖论三探针(memory\_paradox/reasoning\_trap/evolution\_hack) + 事件订阅镜像 + 不可进化面定义**                                                                                                                                                            | ✅ 落地                                                                 | `parliament/src/immune_system.rs` + 3 子探针模块;P5.3 完整落地                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ADR-065     | MCA 总纲与 L10 mca-gateway 多通道亲和网关          | 网关落位 L10 独立 crate(第 38 个,仅依赖 L0/L1);三协议 Codec + spec 驱动适配器;流式数据面走 bounded mpsc 不进 event-bus                                                                                                                                              | ✅ 落地                                                                 | `mca-gateway/Cargo.toml` 第 38 个 workspace member;`gateway.rs` + `affinity/` 子模块;M4 全量落地                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ADR-066     | 能力协商与三态降级协议                              | 三态降级(FullFidelity/DegradedNotified/ChannelRejected);TTG×七厂商思考映射数据化;会话状态守恒;健康探针 EWMA + 熔断互补                                                                                                                                               | ✅ 落地                                                                 | `mca-gateway/src/negotiation/` + `health.rs`;E5 哨兵 proptest 200 例                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ADR-068     | 成本治理与峰谷模型                                | model-router 通道化;omega-learner s9 路由臂;acb-governor 成本模型(EWMA+CostVerdict);跨厂商级联降级 FrugalGPT                                                                                                                                              | ✅ 落地                                                                 | `model-router/src/channel.rs` + `omega-learner/src/arm9.rs` + ~~`acb-governor/src/cost_model.rs`~~(已随 ADR-182 退役)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ADR-067     | 跨厂商级联与去相关议会                              | 跨厂商去相关(ProviderAffinityRegistry);厂商集中度免疫探针(EWMA>70% 告警);级联升级复用 ConsensusQualityMetrics                                                                                                                                                   | ✅ 落地                                                                 | `parliament/src/provider_affinity.rs` + ~~`acb-governor/src/concentration_probe.rs`~~(已随 ADR-182 退役)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **ADR-054** | **Phase 9 三环循环元架构重组设计(2026-08-04 落档预备)** | **8 项决策:① 内环边界 9 候选不变(omega-learner/chimera-mas 留外环) ② L0/L1 三底座永久外环基础设施 ③ 2 条生产违规边解耦(quest→decb 类型上提 L0 / parliament→seccore 事件化) ④ 内环三层通信(共享内存+mpsc+EventBus) ⑤ 保持单 workspace+依赖审计脚本 ⑥ 病理处置确认(D3/D4 已消除) ⑦ 接口冻结+门禁发布 ⑧ criterion 四基准** | Proposed, **P9-T3/T4/T5/T7 部分落地(2 条生产违规边已消除,D1 首批下沉完成)(2026-08-04)** | 依据 `_blueprints/three-ring-reorg/Phase0_评估报告_v2.20.md`(P9-T1,38 crate 实况);权威索引见 `adr_index.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ADR-001 | 沙箱运行时选择 | 优先 gVisor,降级 seccomp+WASM | ✅ **Linux 已实现**（2026-09-21 校正） | `seccore/Cargo.toml` **已声明可选 `wasmtime`**（原文「无 wasmtime 依赖」与其同行括注「wasmtime 已下沉到 seccore 直接声明」自相矛盾，现统一为后者；`wasm-sandbox = ["dep:wasmtime"]` feature gate，见 `crates/seccore/Cargo.toml:14,45`，ADR-035 决策 2/3）;实际为 `tokio::process::Command` + 策略过滤 + **gVisor 子进程**（2026-09-21 校正：`seccore/src/gvisor.rs` 672 行真实实现 runsc 检测与启动，`detect` :325 / `is_available` :343 / `TokioCommand::new(runsc_path)` :386；非 Linux 与未注入 runtime 时按设计降级 `sandbox.rs:10-12`/`:92`）。旧引「`sandbox.rs:474` 注释"当前实现为降级版本"」为**幽灵引用**：该注释已从代码移除（全 `crates/` 零命中） |
+| ADR-002 | 能力衰减模型设计 | 连续权限流体模型,能力随时间/风险动态衰减 | ✅ 落地 | `decay-engine` 3 个依赖(thiserror/dashmap/tracing),2 源文件 |
+| ADR-003 | Event Bus 实现选型 | Tokio broadcast + mpsc 双通道 | ✅ 落地 | **NexusEvent 变体数以 `crates/event-bus/src/types.rs` 现计(权威口径 = types.rs 单表 + metadata() 分类;event\_types.rs 镜像已按 ADR-160 退役;本行旧值 145 为 2026-08-30 时点)** (v2.3.1=74 → v3.1.0=+8 TuiAction/Chat → v5.0=+3 R1Shadow → polish-v2.7=+24 增量 → v2.10.0=+3 观测事件 → MCA M0=+6 Affinity 事件 → P9 演进=+11 → W10=+2 TuiHello/TuiHelloAck → Phase 10=+8 StopRuling/VariantApproved/ParentSelected/ErrorSignatureMatched/TokenLedgerRecorded/AssessmentUpdated/BusThroughputReported/SecurityInterceptionReported),broadcast + mpsc 旁路(Critical 事件);`arc-swap` RCU 原语保护内环共享状态(P2-W7.2.3);v2.11.0 新增 `publish_batch`/`publish_batch_blocking` 原语(摊销 receiver\_count 背压采样,N=5 降 16.3% / N=10 降 20.4%) |
+| ADR-004 | 消息序列化协议 | MessagePack(rmp-serde) | ✅ 落地 | `crates/*/src` 内 26 个 .rs 文件引用 rmp-serde(2026-09-21 实测;连 tests 共 41 个)——旧记「18 个文件」为 v1.0 时点值,未复现;Checkpoint 持久化主流协议 |
+| ADR-005 | 持久化存储选型 | SQLite + 向量,sqlite-vec 降级为内存 KNN(10-1000 entry) | ⚠️ **部分降级** | `repo-wiki/Cargo.toml` L50 注释 `# sqlite-vec = { workspace = true }`(已注释);v5.0 P2 引入 `hnsw_rs` HNSW 近似最近邻(10K-100K entry scale,生产路径) |
+| ADR-026 | CHIMERA-MAS 多 Agent 协同子系统 | L9 Quest 层归属 + event-bus 扩展 + AgentTask wrapper | ✅ 落地 | `chimera-mas/Cargo.toml` **14 个内部 crate 依赖**(2026-09-21 实测 `[dependencies]`;旧记 24 未复现) + 5 个 Part II 章节;v2.0.0-omega Stage A 骨架 |
+| ADR-027 | CHIMERA-MAS 四象限 + 优先级调度 | 孙代理四象限(INV-3/4) + WSJF + E01-E08 专家团队 | ✅ 落地 | `chimera-mas/src/quadrant.rs` + `scheduler.rs`;v2.1.0-omega Stage B |
+| ADR-028 | CHIMERA-MAS Part II 闭环能力 | 7 项闭环(上下文预算/分块/归档/知识/稳定/PDCA/INV) | ✅ 落地 | `chimera-mas/src/{context,chunker,archive,knowledge,stability,pdca,invariants}.rs`;v2.2.0-omega;INV-7/INV-8 不变量 |
+| **ADR-029** | **AETHER TUI v3.1 交互式重构** | **自研渲染引擎(纯 safe Rust,L3 双缓冲 diff/L4 Flexbox/L5 组件)+ Action 统一协议(8 变体 append-only)+ Registry 单一事实源 + InputRouter 5 态路由(Normal/Insert/Command/GPrefix/WPrefix)+ i18n 默认中文 +** **`v3-engine`** **feature 双轨迁移** | ✅ **M0 落地** | `chimera-tui/src/{actions,engine,components,i18n,input}/` 5 模块 + `event-bus` TUI 段现 **11 变体**(types.rs:1567-1740;ADR-029 原始 8 变体 + W10 增 TuiHello/TuiHelloAck + FC-2 增 TuiChatHistoryReplaced;旧记「8 变体(types.rs:1549-1655)」行号已漂移) + `chimera-cli` action\_orchestrator 订阅;commit `bf9aa75`(2026-07-21);M2 起 v3-engine feature 启用渲染 |
+| **ADR-030** | **unsafe 红线不特批** | **安全等价物重写(arc-swap / crossbeam / bumpalo 替代 unsafe 库)** | ✅ 落地 | workspace 引入 `arc-swap`(event-bus Cargo.toml;版本以 `Cargo.toml` `[workspace.dependencies]` 为准,旧记行号 L251-255 已漂移);`#![forbid(unsafe_code)]` **41/41 crate 全覆盖**(2026-09-21 实测,旧记 43/43 为架构减法前时点) |
+| **ADR-031** | **Harness-as-Spec + omega-learner 边界** | **C2 嫁接点命名映射表 + §5.2 九项裁决对账附录 + omega-learner 异步下发 SelectorPolicy::Learned** | ✅ 落地 | `omega-learner/src/{bandit,policy,shadow}.rs`;LinUCB + Shadow Mode + 本地 fallback |
+| **ADR-032** | **双通道评估器(RHI-CG)** | **通道 A 提议 + 通道 B 否决(双通道互不覆盖)** | ✅ 落地 | `auto-dpo/src/rhi_channel_a.rs` + `gsoe-evolution/src/ci_gate.rs`;P5.1/P5.2 完整闭环 |
+| **ADR-033** | **L0 nexus-contracts** | **纯类型 + 零逻辑 + 零依赖契约层,依赖铁律扩展** **`L(N) → L(0)`** **恒允许** | ✅ 落地 | `crates/nexus-contracts/src/lib.rs` 仅依赖 `serde` workspace;承载 `OmniSparseMasks` / `HarnessSpec` / `TemporalMeta` / `NamespaceQuota` / `SelectorPolicy` / `BudgetTier`(ADR-054 决策 3,P9-T3 上提) / `command_validation` 契约(`Command`/`CommandPolicy`/`AttackType` + `CommandValidator` trait,ADR-054 决策 3,P9-T4) + `domain` 契约(`ThinkingMode`/`MultimodalInput`/`UserIntent`/`Quest`/`Task`,ADR-054 决策 6,P9-T7) + `event_payload` 契约(`EventSeverity`/`TaskPriority`/`AgentStatus`,P9-T7) |
+| **ADR-034** | **灰度=能力场 + 编译期 feature** | **否决运行时 Feature Flag,采用 CapabilityToken 四态 + 编译期** **`v3-engine`** **/** **`wasm-sandbox`** **feature 双轨** | ✅ 落地 | `chimera-tui/Cargo.toml:10-12` `v3-engine` feature 默认 off;`seccore/Cargo.toml` `wasm-sandbox` feature gate |
+| **ADR-035** | **威胁模型下修 + wasmtime 沙箱重启路径** | **wasmtime 下沉到 seccore 直接声明 +** **`wasm-sandbox`** **feature gate 隔离 + 重启路径** | ✅ 落地 | `seccore/Cargo.toml` wasmtime 独立声明;`sandbox.rs:474` 注释降级说明 + 重启路径代码 |
+| **ADR-037** | **能力场灰度工程化方案** | **CapabilityToken 四态 + EWMA α=0.1 + AsaIntervention 安全闭环** | ✅ 落地 | `parliament/src/capability_token.rs` + ~~`acb-governor/src/ewma.rs`~~(已随 ADR-182 退役);P4-W14.5 实施 |
+| **ADR-042** | **R2 形式化验证器冻结** | **R2(GSOE×AutoDPO 约束 RL)FormalVerifier 落地前无条件冻结 + 5 项工程实施决策** | ✅ 落地 | `gsoe-evolution/src/freeze.rs`;5 项决策:冻结范围 + 期限 + 三阶递进解冻 + 违反处置 + 工程硬约束 |
+| **ADR-043** | **R1 召回配额 CQL/IQL 影子模式设计** | **影子模式开关 + 对比报告 + 2 周解冻条件 EWMA≥0.7/胜率≥71.4% + 回滚预案 4 项** | ✅ 落地 | `omega-learner/src/shadow.rs`;P4-W16.2.4 实施 |
+| **ADR-044** | **RHI-CG 双通道工程实施** | **JudgeClient + LlmInvoker + CiGate trait;P5.1 决策回溯 + P5.2 通道 B 预留** | ✅ 落地 | `auto-dpo/src/rhi_judge_client.rs` + `gsoe-evolution/src/ci_gate.rs` |
+| **ADR-045** | **INV-9 命名调和** | **`check_inv9_delegation_acyclic`** **为权威名,解除 Channel B 实施约束** | ✅ 落地 | `gsoe-evolution/src/invariants.rs` 命名修正 |
+| **ADR-046** | **ImmuneSystem facade 设计** | **悖论三探针(memory\_paradox/reasoning\_trap/evolution\_hack) + 事件订阅镜像 + 不可进化面定义** | ✅ 落地 | `parliament/src/immune_system.rs` + 3 子探针模块;P5.3 完整落地 |
+| ADR-065 | MCA 总纲与 L10 mca-gateway 多通道亲和网关 | 网关落位 L10 独立 crate(第 38 个,仅依赖 L0/L1);三协议 Codec + spec 驱动适配器;流式数据面走 bounded mpsc 不进 event-bus | ✅ 落地 | `mca-gateway/Cargo.toml` 第 38 个 workspace member;`gateway.rs` + `affinity/` 子模块;M4 全量落地 |
+| ADR-066 | 能力协商与三态降级协议 | 三态降级(FullFidelity/DegradedNotified/ChannelRejected);TTG×七厂商思考映射数据化;会话状态守恒;健康探针 EWMA + 熔断互补 | ✅ 落地 | `mca-gateway/src/negotiation/` + `health.rs`;E5 哨兵 proptest 200 例 |
+| ADR-068 | 成本治理与峰谷模型 | model-router 通道化;omega-learner s9 路由臂;acb-governor 成本模型(EWMA+CostVerdict);跨厂商级联降级 FrugalGPT | ✅ 落地(落点已随两次退役迁移) | `mca-gateway/src/adapters.rs`(通道化;原 `model-router/src/channel.rs` 已按 ADR-172 退役) + `omega-learner/src/s9_route.rs`(导出 `S9RouteLearner`,见 `lib.rs:249`;旧记的 arm9.rs 文件名全库不存在) + ~~`acb-governor/src/cost_model.rs`~~(已随 ADR-182 退役;成本面现由 `mca-gateway/src/cost_guard.rs:71 CostGuard` 承载) |
+| ADR-067 | 跨厂商级联与去相关议会 | 跨厂商去相关(ProviderAffinityRegistry);厂商集中度免疫探针(EWMA>70% 告警);级联升级复用 ConsensusQualityMetrics | ✅ 落地 | `parliament/src/provider_affinity.rs` + ~~`acb-governor/src/concentration_probe.rs`~~(已随 ADR-182 退役) |
+| **ADR-054** | **Phase 9 三环循环元架构重组设计(2026-08-04 落档预备)** | **8 项决策:① 内环边界 9 候选不变(omega-learner/chimera-mas 留外环) ② L0/L1 三底座永久外环基础设施 ③ 2 条生产违规边解耦(quest→decb 类型上提 L0 / parliament→seccore 事件化) ④ 内环三层通信(共享内存+mpsc+EventBus) ⑤ 保持单 workspace+依赖审计脚本 ⑥ 病理处置确认(D3/D4 已消除) ⑦ 接口冻结+门禁发布 ⑧ criterion 四基准** | Proposed, **P9-T3/T4/T5/T7 部分落地(2 条生产违规边已消除,D1 首批下沉完成)(2026-08-04)** | 依据 `_blueprints/three-ring-reorg/Phase0_评估报告_v2.20.md`(P9-T1,38 crate 实况);权威索引见 `adr_index.md` |
 
 \| **ADR-086\~094** | **十源融合文档逐项裁决(v4.0 §2.5)** | **对《Agent\_CLI\_Architecture\_Fusion》9 项主张逐条裁决(采纳/增强/否决)** | ✅ 落档 | 见 v4.0 六编总案 §2.5;无独立物理文件,裁决并入 Phase 1 治理 |
 \| **ADR-095\~134** | **Phase 1 治理奠基(40 条合并档)** | **ComputeBridge 双运行时(rayon 独立池替换 spawn\_blocking 桥接)、ShardedBus 分片总线双跑、CBMR 微批写、CausalGraph 归因、22 周计划奠基、无锁三件套等** | ✅ 落地 | `ADR-095-134-phase1-consolidation.md`;对应九源手册 W1-W8、v4.0 WI 系列 |
@@ -1396,6 +1457,8 @@ chimera tui
 \| **ADR-182** | **acb-governor 生产孤岛退役执行** | **首个 crate 级孤岛净减:十步删除清单全量执行(crate 删除/根 manifest/层图 .sh+.ps1/freeze+bench 清单/CODE_WIKI 回写);验证协议 check/test/clippy/dependency rules/棘轮全绿;M10 批次同批 lsct-tiering 经 cmt 生产边转正(16→14),decb/scc 转正被依赖铁律驳回并回登记(内环保守白名单 + L2→L3 方向误判,重路由候选见 §3.11)** | ✅ 执行完成(2026-09-16,M10;原 Proposed 状态随执行闭合) | 物理文件 `ADR-182-acb-governor-retirement-execution.md`(本地未入库,与 ADR-161 同政策);执行证据 = 本表 + freeze REMOVED 注记 + 棘轮输出 |
 | **ADR-185** | **gea-gqep-qeep 三岛链接线(wave 3c)** | **M11 裁决执行六决策:D1 gea 消费者=mas(L9→L9 同层,兑现 feedback.rs:7-12 书面设计;否决候选 B CLI 组合根空转/候选 C gea→gqep 自洽环,ADR-179 判据留档);D2 E01-E08→gea 64 维 one-hot 桥接词表(象限 one-hot+强度/风险维+FNV-1a 标签哈希)+ `mas_gea_config` 重校准(w4=0.25 使 Ω-Evolve 反馈闭环真正影响门控,bias 0.35 补偿稀疏向量);D3 gqep 消费者=chimera-cli doctor 8 探针并行 gather(`gather_collected<T>` 泛型化,索引 tag 还原注册序,输出内容零变化;否决 mas 路径援引 delegation.rs:726);D4 ADR-048 例外边收编(Check B 只 flag 向上依赖,L7→L4 无豁免天然绿,is_adr_exception .sh+.ps1 移除后双门仍绿=可执行证据,INV-GQEP-1~4 零扰动);D5 零新增 NexusEvent 变体(145 锁定,复用 ExpertActivated/ActivationThresholdAdjusted/ActivationCacheStats,CRITICAL 13/17 分毫不动);D6 棘轮 shrink-only 14→11(reachable=30/frozen=11/new_gaps=0 实测)+ CODE_WIKI §3.11/§1 口径回写** | ✅ Accepted(2026-09-16,M12;开工前查重 git/文件系统均无同名) | 物理文件 `ADR-185-gea-gqep-qeep-wiring.md`(tracked 入库);执行证据 = 本表 + freeze REMOVED 注记 + 棘轮输出 + mas/cli 集成测试(ExpertActivated 断言/confidence 升降循环断言/GatherCompleted 断言) |
 
+| **ADR-192** | **mlc L2 语义检索分层(精确层 + HNSW 近似层)** | **立项判据 = `docs/reports/perf-slo-2026-09-25.md` §1.1 实测(10k 4.117ms 越 4ms redline 入 5ms SLO 警示带、100k 42.136ms 为 O(n) 线性 10× 特征)，既有 `mlc_l2_knn` SLO 与「4096<200ms」条款不放宽**;D1 `recall_by_clv` 签名与输出契约零破坏 + 按条目数路由(<4096 精确扫描逐位不变;≥4096 HNSW 取候选后逐条**重算精确余弦并 clamp**，近似性只在候选选取，recall@10 对精确 ground-truth ≥95%);D2 `HNSW_MIN_ENTRIES=4096`(小输入不回退纪律，与 osa 尺寸自适应同哲学);D3 hnsw_rs 不支持删点 → dataid 单调不回收 + tombstone + over-fetch(min(死点,2×top_k)) + 死点占比达 25% 重建（`try_write` 内全量重建；绝对上限规则经建图成本实测后已撤销），**重建窗口回退精确扫描**(降级方向=变慢而非变错)；建图/重建落在读路径，写路径只做 O(log n) 增量；图参数由 4096×64 簇语料扫参定档（M=32、ef_construction=100、ef_search 50/100/200 阶梯）；实测收益（release 同批对照）10k 4.386ms → 0.446ms（9.8×）、100k 47.174ms → 2.110ms（22.4×）；质量判据取分数制三档（质量比 ≥0.99 / 分数容差 recall ≥0.95 / id 制 recall ≥0.90 仅哨兵）;D4 近似层 Top-K 走 L0 `xts_top_k_by`(红线 R8，不新增 sort_by 站点);D5 `CHIMERA_NO_HNSW_MLC` env 一键关闭=回到 ADR-005 纯线性行为 | ✅ Accepted(2026-09-26) | `ADR-192-mlc-l2-tiered-hnsw-retrieval.md` + `crates/mlc-engine/src/l2_semantic.rs`(线性精确层 `recall_exact` + `HnswTier` 侧表分层路由) + `crates/mlc-engine/benches/hnsw_tiered.rs`(双档对照) + `scripts/perf_thresholds.toml`/`bench_check.yml` 三源登记 |
+
 ### 11.1 ADR 降级追溯
 
 **ADR-001 沙箱降级路径**:
@@ -1405,7 +1468,7 @@ chimera tui
     ↓ [技术约束:Windows 平台 gVisor 不可用,gVisor0.4 仍处实验阶段]
 降级方案:seccomp 风格进程级隔离 + tokio::process 沙箱
     ↓ [进一步约束:WASM 沙箱未启用,无 wasmtime 依赖]
-当前实现:`seccore/src/sandbox.rs:474` 注释明确"当前实现为降级版本"
+当前实现:Linux 走 `seccore/src/gvisor.rs` 的真实 runsc 沙箱(检测 + OCI bundle + 子进程启动);非 Linux 平台与未注入 runtime 时降级为 seccomp 风格进程级隔离 + tokio::process(旧述「`sandbox.rs:474` 注释"当前实现为降级版本"」为幽灵引用,该注释已不在代码中）
     ↓ 后续路径
 可重启路径:引入 wasmtime + WasmEdge 重建 WASM 沙箱(gVisor 在 Linux CI 验证)
 ```
@@ -1488,13 +1551,15 @@ D:\Chimera CLI\
 │   └── config.sample.yaml
 ├── fuzz/                         # Fuzz测试(独立workspace)
 │   ├── Cargo.toml
-│   └── fuzz_targets/
+│   └── fuzz_targets/             # 8 个 target(与 fuzz/Cargo.toml [[bin]] 及 fuzz.yml matrix 同步)
 │       ├── cacr_budget_parse.rs
 │       ├── checkpoint_deserialize.rs
 │       ├── config_section_parse.rs
 │       ├── event_serialize.rs
+│       ├── harness_spec_parse.rs
 │       ├── quest_parse.rs
-│       └── seccore_sandbox.rs
+│       ├── seccore_sandbox.rs
+│       └── sse_parse.rs
 ├── scripts/
 │   ├── setup-gpg-signing.ps1
 │   ├── verify-p0-cleanup.ps1
@@ -1502,16 +1567,14 @@ D:\Chimera CLI\
 │   ├── verify_docker_locally.ps1
 │   └── (对应的.sh脚本)
 ├── tests/                        # Workspace根E2E测试
-│   ├── e2e/                      # 11个E2E测试
+│   ├── e2e/                      # E2E target(注册于根 Cargo.toml [[test]]；清单与计数以 manifest 现取)
 │   ├── security/
 │   │   └── owasp_top10.rs       # OWASP A01-A10渗透测试
 │   └── stress/
 │       └── week7_stress.rs      # 1000次压测
-├── Formula/
-│   └── chimela.rb               # Homebrew formula
-├── bucket/
-│   └── chimela.json             # Scoop manifest
-├── Cargo.toml                    # Workspace根配置(43 members)
+├── .config/                      # nextest.toml(测试画像 default/ci-fast/full/stress/slo)
+├── agents.md                     # 项目规则权威副本(另见 .claude/ .qoder/ .trae/ 派生面)
+├── Cargo.toml                    # Workspace根配置(members 为 crate 数权威源)
 ├── Cargo.lock
 ├── Dockerfile                    # 多阶段distroless镜像
 ├── CHANGELOG.md                  # 版本演进史
@@ -1542,48 +1605,48 @@ my-crate/
 
 ### 12.3 关键文档入口
 
-| 文档                | 路径                                                                                                   | 用途                             |
+| 文档 | 路径 | 用途 |
 | ----------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------ |
-| **CODE\_WIKI.md** | [docs/architecture/CODE\_WIKI.md](file:///d:/Chimera%20CLI/docs/architecture/CODE_WIKI.md)           | **本文件** — 架构权威源                |
-| 项目规则              | [.trae/rules/nuxus规则.md](file:///d:/Chimera%20CLI/.trae/rules/nuxus规则.md)                            | 全局规则、红线、async/SQLite/安全        |
-| 项目命令              | [.claude/CLAUDE.md](file:///d:/Chimera%20CLI/.claude/CLAUDE.md)                                      | 环境设置、常用命令、CI/CD                |
-| CHANGELOG         | [CHANGELOG.md](file:///d:/Chimera%20CLI/CHANGELOG.md)                                                | Week 1-8验收记录 + v1.0.0-omega GA |
-| README            | [README.md](file:///d:/Chimera%20CLI/README.md)                                                      | 项目首页、安装、快速开始                   |
-| 从零搭建终极文档          | [AETHER\_NEXUS\_OMEGA\_从零搭建终极文档\_v3.md](file:///d:/Chimera%20CLI/docs/architecture/AETHER_NEXUS_OMEGA_从零搭建终极文档_v3.md)  | 工程实施升级参考(已落位 docs/architecture,2026-08-30 复核) |
-| 模块级优化报告           | [AETHER\_NEXUS\_OMEGA\_模块级系统性优化分析报告.md](file:///d:/Chimera%20CLI/docs/architecture/AETHER_NEXUS_OMEGA_模块级系统性优化分析报告.md) | 模块优化主参考(已落位 docs/architecture,2026-08-30 复核) |
+| **CODE\_WIKI.md** | [docs/architecture/CODE\_WIKI.md](file:///d:/Chimera%20CLI/docs/architecture/CODE_WIKI.md) | **本文件** — 架构权威源 |
+| 项目规则 | [.trae/rules/nuxus规则.md](file:///d:/Chimera%20CLI/.trae/rules/nuxus规则.md) | 全局规则、红线、async/SQLite/安全 |
+| 项目命令 | [.claude/CLAUDE.md](file:///d:/Chimera%20CLI/.claude/CLAUDE.md) | 环境设置、常用命令、CI/CD |
+| CHANGELOG | [CHANGELOG.md](file:///d:/Chimera%20CLI/CHANGELOG.md) | Week 1-8验收记录 + v1.0.0-omega GA |
+| README | [README.md](file:///d:/Chimera%20CLI/README.md) | 项目首页、安装、快速开始 |
+| 从零搭建终极文档 | [AETHER\_NEXUS\_OMEGA\_从零搭建终极文档\_v3.md](file:///d:/Chimera%20CLI/docs/architecture/AETHER_NEXUS_OMEGA_从零搭建终极文档_v3.md) | 工程实施升级参考(已落位 docs/architecture,2026-08-30 复核) |
+| 模块级优化报告 | [AETHER\_NEXUS\_OMEGA\_模块级系统性优化分析报告.md](file:///d:/Chimera%20CLI/docs/architecture/AETHER_NEXUS_OMEGA_模块级系统性优化分析报告.md) | 模块优化主参考(已落位 docs/architecture,2026-08-30 复核) |
 
 ***
 
 ## 附录: 版本历史
 
-| 版本                     | 日期                         | 主要里程碑                                                                                                                                                                                                                                                                                                                                                      |
+| 版本 | 日期 | 主要里程碑 |
 | ---------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| v1.0.0-omega           | 2026-06-28                 | GA发布，34 crate全覆盖，3000+测试全绿                                                                                                                                                                                                                                                                                                                                 |
-| v1.4.0-omega           | 2026-07-09                 | L1-L10全部34 crate功能完整，E2E测试体系建立                                                                                                                                                                                                                                                                                                                             |
-| v1.5.7-omega           | 2026-07-12                 | 首个含GitHub Release artifacts的版本                                                                                                                                                                                                                                                                                                                             |
-| v1.7.0-omega           | 2026-07-14                 | TUI完整重构(M0-M6)，P0安全修复，Scoop/Homebrew分发                                                                                                                                                                                                                                                                                                                     |
-| v1.8.0-omega           | 2026-07-15                 | TUI企业级套件 + v3.1 M0 引擎骨架 + 8 项 TUI 决策                                                                                                                                                                                                                                                                                                                       |
-| v2.0.0-omega           | 2026-07-22                 | `chimera-mas` 多 Agent 协同子系统(ADR-026,35→37 crate)                                                                                                                                                                                                                                                                                                           |
-| v2.1.0-omega           | 2026-07-24                 | 四象限稳定分工 + WSJF 调度(ADR-027)                                                                                                                                                                                                                                                                                                                                 |
-| v2.2.0-omega           | 2026-07-25                 | Part II 七项闭环能力(ADR-028,INV-7/INV-8)                                                                                                                                                                                                                                                                                                                        |
-| v2.3.0-omega           | 2026-07-26                 | Phase A 架构审计 + Phase B TUI 收尾 + Phase C 治理                                                                                                                                                                                                                                                                                                                 |
-| v2.3.1-omega           | 2026-07-26                 | 发布流程补救(patch)                                                                                                                                                                                                                                                                                                                                              |
-| v2.4.0-omega           | 2026-07-26                 | `nexus-contracts` L0 + `omega-learner` L6(ADR-033)                                                                                                                                                                                                                                                                                                         |
-| v2.8.0-omega           | 2026-07-29                 | polish-v2.7 Phase 1-6 合并发布(closure Stage A)                                                                                                                                                                                                                                                                                                                |
-| v2.9.0-omega           | 2026-07-30                 | L10 深度打磨与跨层优化(P0/P1/P2/P3 全档)                                                                                                                                                                                                                                                                                                                              |
-| v2.10.0-omega          | 2026-07-31                 | L8 协调度量接线闭环 + 推理悖论红线风控(ADR-063)                                                                                                                                                                                                                                                                                                                            |
-| **v2.11.0-omega**      | **2026-07-31**             | **L8 Parliament 深度优化第二轮(ADR-064):M1 override 度量盲区修复 + M2 多维共识质量 + M3 悖论风险模型 + M4 委托可维护性;event-bus** **`publish_batch`** **原语;`arc-swap`** **优化 O(R×T) clone**                                                                                                                                                                                              |
-| v2.12.0\~v2.13.0-omega | 2026-08-01                 | MCA PANTHEON + 形式化验证器 M0                                                                                                                                                                                                                                                                                                                                   |
-| v2.14.0\~v2.19.0-omega | 2026-08-02                 | P2 Sprint 14 项任务全量交付                                                                                                                                                                                                                                                                                                                                       |
-| v2.20.0-omega          | 2026-08-03                 | PROBE HCW-Sparse 深度优化完整闭环(P-1\~P3,38 crates,126 NexusEvent,ADR-070/071)                                                                                                                                                                                                                                                                                    |
-| v2.21.0-omega          | 2026-08-04                 | CLI --help 规整化 + LLM 统一入口(`chimera llm` + `/llm` slash)                                                                                                                                                                                                                                                                                                    |
-| v2.22.0-omega          | 2026-08-07                 | MCA token 效率深度优化(coalescing + token\_estimate + 亲和缓存)                                                                                                                                                                                                                                                                                                      |
-| v2.24.0-omega          | 2026-08-08                 | Phase 9 三环循环元架构重组收尾(P9-T12)+ RUSTSEC-2026-0217/0222/0223 修复                                                                                                                                                                                                                                                                                                |
-| v2.25.0-omega          | 2026-08-08                 | Milestone B 全部交付 B-1\~B-6(RL 共享类型/Ambient Mode/九层防御/PlatformGroundingSpec/Agent Grep CLI/关键路径) + Milestone C R2 解冻前置 + Milestone D RL 全栈三位一体闭环                                                                                                                                                                                                             |
-| **v2.26.0-omega**      | **2026-08-11**             | **Concord TUI 重构 W0~W11 全部收尾:SlashCommandRegistry 53 命令注册 + `/` 一级整合(ADR-075) + Chat/Quest 双轨会话模式(ADR-076) + ApprovalMode 动态 Shift+Tab(ADR-074) + NewlineGate 闸门(ADR-078) + i18n 中英门户 + 10 份 ADR-074~083 落档;9954 passed / 0 failed**                                                                                                    |
-| **v2.27.0-omega**      | **2026-08-19**             | **Phase 10 §16 跨层协同闭环审计修复正式发布(W1-W7:经验卡片组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口);NexusEvent 136→144;10836 passed / 0 failed;权威基线升级(ADR-085 双态收编)**                                                                                                                                                                                 |
-| **v2.27.1-omega**      | **2026-08-20**             | **GPG 签名补发 + MCA E2E 超时加固(无功能性变更)**                                                                                                                                                                                                                                                                                                                        |
-| **v2.28.0-omega**      | **2026-09-02 发布提交 `af62e44` 已落(tag 待推)** | **Phase 1-5 Ch12 波次 W1-W26 全部收尾:ComputeBridge 双运行时 + ShardedBus 分片总线双跑 + CausalGraph 归因(ADR-132)+ 供应商漂移守卫 + 利用率双口径(ADR-157)+ payload 双跑(ADR-158);新增 5 crate(39 app-server/40 session-store/41 mas-sched/42 nexus-hook/43 nexus-subagent,38→43);ADR-095\~160 治理;ADR-160 可达性棘轮(28 可达/15 孤岛,后经 ADR-177 重分类 14+1 GATED)+ event\_types.rs 镜像退役;11587 passed / 0 failed(2026-09-02 重测);\[2.28.1\]/\[2.28.2\] 在途补丁登记** |
+| v1.0.0-omega | 2026-06-28 | GA发布，34 crate全覆盖，3000+测试全绿 |
+| v1.4.0-omega | 2026-07-09 | L1-L10全部34 crate功能完整，E2E测试体系建立 |
+| v1.5.7-omega | 2026-07-12 | 首个含GitHub Release artifacts的版本 |
+| v1.7.0-omega | 2026-07-14 | TUI完整重构(M0-M6)，P0安全修复，Scoop/Homebrew分发 |
+| v1.8.0-omega | 2026-07-15 | TUI企业级套件 + v3.1 M0 引擎骨架 + 8 项 TUI 决策 |
+| v2.0.0-omega | 2026-07-22 | `chimera-mas` 多 Agent 协同子系统(ADR-026,35→37 crate) |
+| v2.1.0-omega | 2026-07-24 | 四象限稳定分工 + WSJF 调度(ADR-027) |
+| v2.2.0-omega | 2026-07-25 | Part II 七项闭环能力(ADR-028,INV-7/INV-8) |
+| v2.3.0-omega | 2026-07-26 | Phase A 架构审计 + Phase B TUI 收尾 + Phase C 治理 |
+| v2.3.1-omega | 2026-07-26 | 发布流程补救(patch) |
+| v2.4.0-omega | 2026-07-26 | `nexus-contracts` L0 + `omega-learner` L6(ADR-033) |
+| v2.8.0-omega | 2026-07-29 | polish-v2.7 Phase 1-6 合并发布(closure Stage A) |
+| v2.9.0-omega | 2026-07-30 | L10 深度打磨与跨层优化(P0/P1/P2/P3 全档) |
+| v2.10.0-omega | 2026-07-31 | L8 协调度量接线闭环 + 推理悖论红线风控(ADR-063) |
+| **v2.11.0-omega** | **2026-07-31** | **L8 Parliament 深度优化第二轮(ADR-064):M1 override 度量盲区修复 + M2 多维共识质量 + M3 悖论风险模型 + M4 委托可维护性;event-bus** **`publish_batch`** **原语;`arc-swap`** **优化 O(R×T) clone** |
+| v2.12.0\~v2.13.0-omega | 2026-08-01 | MCA PANTHEON + 形式化验证器 M0 |
+| v2.14.0\~v2.19.0-omega | 2026-08-02 | P2 Sprint 14 项任务全量交付 |
+| v2.20.0-omega | 2026-08-03 | PROBE HCW-Sparse 深度优化完整闭环(P-1\~P3,38 crates,126 NexusEvent,ADR-070/071) |
+| v2.21.0-omega | 2026-08-04 | CLI --help 规整化 + LLM 统一入口(`chimera llm` 子命令 + TUI `/model`；旧述 `/llm` slash 系幻影，注册表与 git 历史均无) |
+| v2.22.0-omega | 2026-08-07 | MCA token 效率深度优化(coalescing + token\_estimate + 亲和缓存) |
+| v2.24.0-omega | 2026-08-08 | Phase 9 三环循环元架构重组收尾(P9-T12)+ RUSTSEC-2026-0217/0222/0223 修复 |
+| v2.25.0-omega | 2026-08-08 | Milestone B 全部交付 B-1\~B-6(RL 共享类型/Ambient Mode/九层防御/PlatformGroundingSpec/Agent Grep CLI/关键路径) + Milestone C R2 解冻前置 + Milestone D RL 全栈三位一体闭环 |
+| **v2.26.0-omega** | **2026-08-11** | **Concord TUI 重构 W0~W11 全部收尾（**此处「全部收尾」指波次工程收口，不等于清单内每项均已落码**：W8~W11 若干子项实测未接线/未注册，逐项现状的唯一权威源是 docs/tui/README.md 的「Concord 重构 W7~W11 新增能力」节）:SlashCommandRegistry 53 命令注册 + `/` 一级整合(ADR-075) + Chat/Quest 双轨会话模式(ADR-076) + ApprovalMode 动态 Shift+Tab(ADR-074) + NewlineGate 闸门(ADR-078) + i18n 中英门户 + 10 份 ADR-074~083 落档;9954 passed / 0 failed** |
+| **v2.27.0-omega** | **2026-08-19** | **Phase 10 §16 跨层协同闭环审计修复正式发布(W1-W7:经验卡片组合根 + Quest 生命周期桥 + 卡片生成触发点 + 事件协议补齐 + mpsc 双清单对齐 + 合成闭环 + 奖励缺口);NexusEvent 136→144;10836 passed / 0 failed;权威基线升级(ADR-085 双态收编)** |
+| **v2.27.1-omega** | **2026-08-20** | **GPG 签名补发 + MCA E2E 超时加固(无功能性变更)** |
+| **v2.28.0-omega** | **2026-09-02 发布提交 `af62e44` 已落(tag 待推)** | **Phase 1-5 Ch12 波次 W1-W26 全部收尾:ComputeBridge 双运行时 + ShardedBus 分片总线双跑 + CausalGraph 归因(ADR-132)+ 供应商漂移守卫 + 利用率双口径(ADR-157)+ payload 双跑(ADR-158);新增 5 crate(39 app-server/40 session-store/41 mas-sched/42 nexus-hook/43 nexus-subagent,38→43);ADR-095\~160 治理;ADR-160 可达性棘轮(28 可达/15 孤岛,后经 ADR-177 重分类 14+1 GATED)+ event\_types.rs 镜像退役;11587 passed / 0 failed(2026-09-02 重测);\[2.28.1\]/\[2.28.2\] 在途补丁登记** |
 
 ***
 
@@ -1591,81 +1654,81 @@ my-crate/
 
 > **生成日期**: 2026-07-23(初版)· 2026-07-30(v2.8.0-omega 基线同步)· 2026-07-31(v2.11.0-omega 基线同步)· 2026-08-01(v2.13.0-omega 同步)· 2026-08-02(v2.19.0-omega 同步)· 2026-08-05(v2.21.0-omega 同步)· 2026-08-09(v2.25.0-omega 同步)· 2026-08-11(v2.26.0-omega 同步)· 2026-08-20(v2.27.1-omega 同步)· **2026-08-30(v2.28.0 在途同步)**
 > **生成方法**: superpowers-main 极致深度思考 + staff-engineer-mode 按 surface 路由专家 + 6 个并行 Task 子代理深度源码分析 + 7 处 Cargo.toml 实证修正
-> **分析基线**: `Cargo.toml` workspace.package.version = `2.28.0-omega`(代码实况,2026-09-06 核验,发布提交 af62e44 2026-09-02 已落,最新已发 tag v2.27.0-omega(注:v2.27.1-omega 为 CHANGELOG-only 补丁,本地与 origin 均无 tag)),**42 members(M13 批次后:32 生产可达 + 9 冻结孤岛 + 1 GATED,ADR-177;M13 = decb 经 efficiency-monitor 生产边 + scc 经 chimera-cli 组合根重路由转正 11→9;M12 = gea/gqep/qeep 经 wave 3c 接线转正 14→11;M10 批次:16→14),棘轮实测 reachable=32/frozen=9/new_gaps=0,见 §3.11)**,**11794 tests / 0 failed(2026-09-17 M13 提交态 workspace 全量回归实测 = M12 基线 11787 + 本分支新增 7 测试)**,**145 NexusEvent 变体(types.rs 单表,event\_types.rs 镜像已退役)**
-> **时点声明(2026-08-30)**:本节 §13.2~13.6 的**明细数据为 Code Wiki v2.0(2026-07-23)编制时的 v1.x/v2.19 时点快照**(如"TUI 17 面板""38 crate 中 33 依赖"等),保留为历史证据;一切当前口径以本文档 §1(身份/测试规模)、§3(43 crate 索引 + §3.11 孤岛)、§5(145 事件)与顶部三方一致块为准。
+> **分析基线**: `Cargo.toml` workspace.package.version = `2.28.0-omega`(2026-09-06 核验时点值,发布提交 af62e44 2026-09-02 落;现行 version 见本文顶部三方一致块),**成员数与可达性以 `Cargo.toml` `workspace.members` + `scripts/check_crate_reachability.sh` 现测为准**(本行旧值「42 members / 32 可达 + 9 冻结孤岛 + 1 GATED / reachable=32 frozen=9」为 2026-09-17 M13 时点快照,现势为 **41 members = 32 生产可达 + 9 GATED + 0 冻结孤岛**,见 §3.11)**,**测试基线见 `docs/reports/` 最新回归报告**(旧登记 11794 passed / 0 failed = 2026-09-17 M13 提交态全量回归实测 = M12 基线 11787 + 本分支新增 7 测试;架构减法/三层锁变更后待重测)**,**NexusEvent 变体数以 `crates/event-bus/src/types.rs` 现计**(旧登记 145 为时点值,event\_types.rs 镜像已退役)
+> **时点声明(2026-08-30)**:本节 §13.2~13.6 的**明细数据为 Code Wiki v2.0(2026-07-23)编制时的 v1.x/v2.19 时点快照**(如"TUI 17 面板""38 crate 中 33 依赖"等),保留为历史证据;一切当前口径以本文档 §1(身份/测试规模)、§3(crate 索引 + §3.11 可达性现状)、§5(事件系统)与顶部三方一致块为准。
 
 ### 13.1 专家团队组建
 
-| 专家 ID   | 角色     | 10+ 年经验方向    | 重点分析 Surface                                                                                                           |
+| 专家 ID | 角色 | 10+ 年经验方向 | 重点分析 Surface |
 | ------- | ------ | ------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| **E01** | 首席架构师  | 分布式系统/架构治理   | **11 层架构(L0 + L1-L10) + 42 crate(M10 批次后 27 可达/14 孤岛 + 1 GATED)依赖铁律 + ADR 实证**                                                           |
-| **E02** | 安全架构师  | 零信任/红蓝对抗     | L4 Security(seccore/decay-engine/qeep-protocol)+ OWASP A01-A10                                                         |
-| **E03** | 记忆系统专家 | 神经形态 AI/认知架构 | L2 Memory(nmc-encoder/hcw-window/mlc-engine) + L3 Storage(scc-cache/lsct-tiering/cmt-tiering)                          |
-| **E04** | 路由算法专家 | 运筹学/优化理论     | L6 Router(osa-coordinator/kvbsr-router/faae-router/sesa-router) + EDSB 概率均衡                                            |
-| **E05** | 生产系统专家 | SRE/DevOps   | CI/CD 5 平台 matrix + Docker distroless + release pipeline + 5 platform binary                                           |
-| **E06** | 认知科学专家 | 思维模型/任务分解    | L7 Execution(pvl-layer/gqep-executor/mtpe-executor/ssra-fusion) + L8 Parliament(parliament/acb-governor/decb-governor) |
-| **E07** | 任务调度专家 | 调度算法/PDCA    | L9 Quest(quest-engine/gea-activator/efficiency-monitor/chimera-mas) + Part II 7 闭环                                     |
-| **E08** | 前端交互专家 | TUI/UX 工程    | L10 Interface(chimera-tui/chimera-cli/chtc-bridge/mcp-mesh/csn-substitutor)                                            |
+| **E01** | 首席架构师 | 分布式系统/架构治理 | **11 层架构(L0 + L1-L10) + 42 crate(M10 批次后 27 可达/14 孤岛 + 1 GATED)依赖铁律 + ADR 实证** |
+| **E02** | 安全架构师 | 零信任/红蓝对抗 | L4 Security(seccore/decay-engine/qeep-protocol)+ OWASP A01-A10 |
+| **E03** | 记忆系统专家 | 神经形态 AI/认知架构 | L2 Memory(nmc-encoder/hcw-window/mlc-engine) + L3 Storage(scc-cache/lsct-tiering/cmt-tiering) |
+| **E04** | 路由算法专家 | 运筹学/优化理论 | L6 Router(osa-coordinator/kvbsr-router/faae-router/sesa-router) + EDSB 概率均衡 |
+| **E05** | 生产系统专家 | SRE/DevOps | CI/CD 5 平台 matrix + Docker distroless + release pipeline + 5 platform binary |
+| **E06** | 认知科学专家 | 思维模型/任务分解 | L7 Execution(pvl-layer/gqep-executor/mtpe-executor/ssra-fusion) + L8 Parliament(parliament/acb-governor/decb-governor) |
+| **E07** | 任务调度专家 | 调度算法/PDCA | L9 Quest(quest-engine/gea-activator/efficiency-monitor/chimera-mas) + Part II 7 闭环 |
+| **E08** | 前端交互专家 | TUI/UX 工程 | L10 Interface(chimera-tui/chimera-cli/chtc-bridge/mcp-mesh/csn-substitutor) |
 
 ### 13.2 6 个并行子代理深度分析结果
 
-| 子代理                 | 分析 surface                                   | 关键发现                                                                                                                                                                                                    |
+| 子代理 | 分析 surface | 关键发现 |
 | ------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **子代理 1** (E01)     | **38 个 Cargo.toml** 穷举审计                     | **8 处不一致**(已 7 处修正):seccore/mcp-mesh 虚标依赖;decay-engine/qeep-protocol/auto-dpo/gsoe-evolution 中度虚标;repo-wiki 虚标 dashmap;v2.4.0-omega 新增 nexus-contracts/omega-learner 已纳入索引                              |
-| **子代理 2** (E02)     | L4 Security 全部 3 crate 源码 + OWASP 测试         | 4 层防御模型(SecCore Sandbox + Merkle Audit + ASA + QEEP);OWASP A01-A10 全部覆盖;A02(加密)用 SHA-256 链式哈希;A03(注入)用零信任白名单 + Merkle 拦截                                                                                |
-| **子代理 3** (E03)     | L2/L3 全部 6 crate 源码                          | HCW 重要性评分:`score = w1·recency + w2·frequency + w3·relevance`(实现在 `hcw-window/src/selector.rs`);MLC 四级基于访问频率 + 时间衰减;NMC 5 模态加权融合                                                                         |
-| **子代理 4** (E04)     | L6 全部 4 crate 源码                             | OSA 5 维稀疏掩码(Routing/Context/Memory/Audit/Budget);EDSB 概率均衡 O(1) 散列;FaaE 工具即专家语义匹配;SESA 三层路由(前置→掩码→稀疏→激活)                                                                                                |
-| **子代理 5** (E05)     | .github/workflows + Dockerfile + release.yml | 5 平台 matrix(WoA + Linux x86\_64/aarch64 + macOS x86\_64/aarch64);`fail-fast: false`;Docker distroless/cc-debian12 + nonroot UID 65532;HEALTHCHECK + RUST\_BACKTRACE=1;fuzz 委托 Linux CI(Windows-GNU 不可用) |
-| **子代理 6** (E06/E07) | L7/L8/L9 全部 11 crate + chimera-mas 16 子模块    | PVL 5 步反馈闭环(produce→verify→diff→refine→commit);ACB 自适应预算 + DECB 动态紧急预算;TTG 三级思考切换(Quick/Standard/Deep);LHQP 检查点 MessagePack;INV-7 预算触发 LRU 淘汰 Warm/Cold(非 Hot);INV-8 归档单调 Hot→Warm→Cold→Ice             |
-| **子代理 7** (E08)     | L10 全部 5 crate 源码                            | TUI 17 面板(v1.8: 14+3 新增);5 IDE 适配器 enum dispatch(VSCode/Vim/Emacs/IntelliJ/Zed);MCP Mesh 进程内消息 + 事件总线(无 HTTP);CSN 降级链 + 相似度匹配;5 平台 binary 3.44MB                                                        |
+| **子代理 1** (E01) | **38 个 Cargo.toml** 穷举审计 | **8 处不一致**(已 7 处修正):seccore/mcp-mesh 虚标依赖;decay-engine/qeep-protocol/auto-dpo/gsoe-evolution 中度虚标;repo-wiki 虚标 dashmap;v2.4.0-omega 新增 nexus-contracts/omega-learner 已纳入索引 |
+| **子代理 2** (E02) | L4 Security 全部 3 crate 源码 + OWASP 测试 | 4 层防御模型(SecCore Sandbox + Merkle Audit + ASA + QEEP);OWASP A01-A10 全部覆盖;A02(加密)用 SHA-256 链式哈希;A03(注入)用零信任白名单 + Merkle 拦截 |
+| **子代理 3** (E03) | L2/L3 全部 6 crate 源码 | HCW 重要性评分:`score = w1·recency + w2·frequency + w3·relevance`(实现在 `hcw-window/src/selector.rs`);MLC 四级基于访问频率 + 时间衰减;NMC 5 模态加权融合 |
+| **子代理 4** (E04) | L6 全部 4 crate 源码 | OSA 5 维稀疏掩码(Routing/Context/Memory/Audit/Budget);EDSB 概率均衡 O(1) 散列;FaaE 工具即专家语义匹配;SESA 三层路由(前置→掩码→稀疏→激活) |
+| **子代理 5** (E05) | .github/workflows + Dockerfile + release.yml | 5 平台 matrix(WoA + Linux x86\_64/aarch64 + macOS x86\_64/aarch64);`fail-fast: false`;Docker distroless/cc-debian12 + nonroot UID 65532;HEALTHCHECK + RUST\_BACKTRACE=1;fuzz 委托 Linux CI(Windows-GNU 不可用) |
+| **子代理 6** (E06/E07) | L7/L8/L9 全部 11 crate + chimera-mas 16 子模块 | PVL 5 步反馈闭环(produce→verify→diff→refine→commit);ACB 自适应预算 + DECB 动态紧急预算;TTG 三级思考切换(Quick/Standard/Deep);LHQP 检查点 MessagePack;INV-7 预算触发 LRU 淘汰 Warm/Cold(非 Hot);INV-8 归档单调 Hot→Warm→Cold→Ice |
+| **子代理 7** (E08) | L10 全部 5 crate 源码 | TUI 17 面板(v1.8: 14+3 新增);5 IDE 适配器 enum dispatch(VSCode/Vim/Emacs/IntelliJ/Zed);MCP Mesh 进程内消息 + 事件总线(无 HTTP);CSN 降级链 + 相似度匹配;5 平台 binary 3.44MB |
 
 ### 13.3 7 处 Cargo.toml 实证修正清单 (Code Wiki v2.0 核心交付)
 
-| # | crate            | v1 描述                                              | v2.0 实证(基于 Cargo.toml)                                                                      | 性质                          |
+| # | crate | v1 描述 | v2.0 实证(基于 Cargo.toml) | 性质 |
 | - | ---------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------- |
-| 1 | `seccore`        | 11 依赖(含 wasmtime/rusqlite/dashmap/uuid/nexus-core) | **8 依赖**:tokio · serde · sha2 · hex · chrono · tracing · thiserror · event-bus              | **严重虚标**(5 项实际无)            |
-| 2 | `decay-engine`   | 7 依赖(含 tokio/serde/chrono/nexus-core/event-bus)    | **3 依赖**:thiserror · dashmap · tracing                                                      | **严重虚标**(4 项实际无)            |
-| 3 | `qeep-protocol`  | 9 依赖(含 serde/tracing/nexus-core/event-bus)         | **5 依赖**:tokio · uuid · chrono · dashmap · thiserror                                        | **严重虚标**(4 项实际无)            |
-| 4 | `auto-dpo`       | 9 依赖(含 dashmap/rand/chrono/uuid/nexus-core)        | **6 依赖**:event-bus · tokio · serde · serde\_json · thiserror · tracing                      | **中度虚标**(5 项实际无)            |
-| 5 | `gsoe-evolution` | 10 依赖(含 rand/dashmap/chrono/uuid)                  | **8 依赖**:tokio · serde · anyhow · thiserror · tracing · ndarray · event-bus · nexus-core    | **中度虚标**(4 项实际无)            |
-| 6 | `mcp-mesh`       | 14 依赖(含 reqwest/axum/sha2/hex/nexus-core/seccore)  | **9 依赖**:tokio · serde · anyhow · thiserror · tracing · uuid · chrono · dashmap · event-bus | **严重虚标**(6 项实际无,HTTP 实际未启用) |
-| 7 | `repo-wiki`      | 12 依赖(缺 prometheus-client)                         | **15 依赖**(新增 prometheus-client,移除虚标 dashmap)                                                | **轻度虚标 + 漏标**               |
+| 1 | `seccore` | 11 依赖(含 wasmtime/rusqlite/dashmap/uuid/nexus-core) | **8 依赖**:tokio · serde · sha2 · hex · chrono · tracing · thiserror · event-bus | **严重虚标**(5 项实际无) |
+| 2 | `decay-engine` | 7 依赖(含 tokio/serde/chrono/nexus-core/event-bus) | **3 依赖**:thiserror · dashmap · tracing | **严重虚标**(4 项实际无) |
+| 3 | `qeep-protocol` | 9 依赖(含 serde/tracing/nexus-core/event-bus) | **5 依赖**:tokio · uuid · chrono · dashmap · thiserror | **严重虚标**(4 项实际无) |
+| 4 | `auto-dpo` | 9 依赖(含 dashmap/rand/chrono/uuid/nexus-core) | **6 依赖**:event-bus · tokio · serde · serde\_json · thiserror · tracing | **中度虚标**(5 项实际无) |
+| 5 | `gsoe-evolution` | 10 依赖(含 rand/dashmap/chrono/uuid) | **8 依赖**:tokio · serde · anyhow · thiserror · tracing · ndarray · event-bus · nexus-core | **中度虚标**(4 项实际无) |
+| 6 | `mcp-mesh` | 14 依赖(含 reqwest/axum/sha2/hex/nexus-core/seccore) | **9 依赖**:tokio · serde · anyhow · thiserror · tracing · uuid · chrono · dashmap · event-bus | **严重虚标**(6 项实际无,HTTP 实际未启用) |
+| 7 | `repo-wiki` | 12 依赖(缺 prometheus-client) | **15 依赖**(新增 prometheus-client,移除虚标 dashmap) | **轻度虚标 + 漏标** |
 
 ### 13.4 关键不变量与约束编码
 
-| 不变量                                    | 编码位置                                                                                  | 触发条件                                                                              | 动作                                          |
+| 不变量 | 编码位置 | 触发条件 | 动作 |
 | -------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------- |
-| **INV-7 上下文预算界**                       | `chimera-mas/src/invariants.rs` `InvariantChecker::check_inv7_budget()`               | `m_total > MEMORY_BUDGET_MB × MEMORY_BUDGET_UTILIZATION`(130 × 0.9 = 117 MB)      | LRU 淘汰 Warm/Cold(保留 Hot)                    |
-| **INV-8 归档单调性**                        | `chimera-mas/src/invariants.rs` `InvariantChecker::check_inv8_archive_monotonicity()` | 检测到 Cold→Warm 升级请求                                                                | 拒绝并走 `archive::upgrade_with_audit()` 留痕     |
-| **MAX\_AGENT\_DEPTH = 5**              | `chimera-mas/src/delegation.rs` `MAX_AGENT_DEPTH` 常量                                  | 深度 = 1(根) + 子任务级数;5 级时叶子必须 leaf                                                   | 委托拒绝,返回 `MasError::DepthExceeded`           |
-| **`#![forbid(unsafe_code)]`**          | **41 个 crate** `lib.rs` 第 1 行                                                         | 任何 unsafe 块                                                                       | `rustc` 编译失败                                |
-| **Critical 事件 mpsc**                   | `event-bus/src/bus.rs` `publish_critical()`                                           | `SkepticVeto`/`RedTeamAudit`/`AsaIntervention`/`BudgetExceeded`/`AgentTaskFailed` | mpsc fan-out,保证送达                           |
-| **BudgetExceeded severity = Critical** | `event-bus/src/registry.rs`(`NexusEvent::severity()`,`define_event_registry!` 注册表展开生成)               | 任何 BudgetExceeded 事件                                                              | `severity()` 必须返回 `EventSeverity::Critical` |
+| **INV-7 上下文预算界** | `chimera-mas/src/invariants.rs` `InvariantChecker::check_inv7_context_budget()`（`invariants.rs:275`；两条约束 = 单 Agent 驻留 ≤ `effective_capacity`、全局 `m_total ≤ m_budget × 0.9`） | `m_total > m_budget × MEMORY_BUDGET_UTILIZATION`（常量 `MEMORY_BUDGET_MB = 130` @ `invariants.rs:87`、`MEMORY_BUDGET_UTILIZATION = 0.9` @ `invariants.rs:95` ⇒ 阈值 117 MB；`nexus-contracts/src/quota.rs:85`+`:88` 另有同值镜像） | 早退返回 `MasError::TokenBudgetExceeded`（**检测型，不执行淘汰**；Hot 256 条 LRU 与 Warm/Cold 降级由归档调度独立负责，见 `archive/mod.rs:28`） |
+| **INV-8 归档单调性** | `chimera-mas/src/invariants.rs` `InvariantChecker::check_inv8_archive_monotonicity()` | 检测到 Cold→Warm 升级请求 | `InvariantChecker::check_inv8_archive_monotonicity()` 以 `?` 早退返回 `MasError::ArchiveMonotonicityViolated`（调用点 `archive/scheduler.rs:123` 的 `trigger`；该模块自述见 `archive/scheduler.rs:15`） |
+| **MAX\_AGENT\_DEPTH = 5** | `chimera-mas/src/orchestrator.rs:49` 的 `pub const MAX_AGENT_DEPTH: usize = 5`（`nexus-contracts/src/quota.rs:91` 镜像同值；`delegation.rs` 内该常量出现 0 次） | 深度 = 1(根) + 子任务级数;5 级时叶子必须 leaf | 委托拒绝,返回 `MasError::MaxDepthExceeded`（`MasError` enum 实测 40 个变体，变体名以 `crates/chimera-mas/src/error.rs` 为准） |
+| **`#![forbid(unsafe_code)]`** | **41/41 crate** 的 `src/lib.rs` 顶部属性区（实测**无一处位于第 1 行**——前导是 `//!` 模块文档注释；`grep -l` 口径 41/41 命中） | 任何 unsafe 块 | `rustc` 编译失败 |
+| **Critical 事件 mpsc** | `event-bus/src/bus.rs` `publish_critical()` | `SkepticVeto`/`RedTeamAudit`/`AsaIntervention`/`BudgetExceeded`/`AgentTaskFailed` | mpsc fan-out,保证送达 |
+| **BudgetExceeded severity = Critical** | `event-bus/src/registry.rs`(`NexusEvent::severity()`,`define_event_registry!` 注册表展开生成) | 任何 BudgetExceeded 事件 | `severity()` 必须返回 `EventSeverity::Critical` |
 
-### 13.5 与三方权威源的一致性声明
+### 13.5 与三方权威源的一致性声明（⚠ **本表是 v2.19.0 时点快照，✅ 只对该时点成立**：表中 version / crate 数 / 测试规模 / 事件数 / Critical 名单均已被后续批次超越，现势值按本文顶部「三方一致性」块与 `docs/reports/` 最新回归报告现取，勿照抄本表）
 
-| 权威源                                    | 字段           | 值                                                                                                                                                                                                                 | 一致性 |
+| 权威源 | 字段 | 值 | 一致性 |
 | -------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
-| `Cargo.toml` workspace.package.version | version      | `2.19.0-omega`                                                                                                                                                                                                    | ✅   |
-| `Cargo.toml` `[workspace.members]`     | crate 数      | **38**(含 chimera-mas + nexus-contracts + omega-learner + mca-gateway)                                                                                                                                             | ✅   |
-| `CHANGELOG.md` v2.19.0-omega           | 测试规模         | 8455(含 MCA 亲和体系 + P3 Sprint:ASA PPO/贝叶斯平均/DelegationExecutor 超时映射/CoordinationMetricsCollector 上限锁/ConsensusQualityMetrics 熵基归一化/gVisor benchmark)                                                                | ✅   |
-| `event-bus/src/types.rs`               | event 变体     | 129(74 v2.3.1 → +7 Agent → +28 v2.x → +3 观测事件 → +6 MCA Affinity → +11 至 v2.20.0 快照,2026-08-05;与 §11 表头一致)                                                                                                         | ✅   |
-| `crates/chimera-mas/Cargo.toml`        | 内部依赖         | 24 个 workspace 成员                                                                                                                                                                                                 | ✅   |
-| `nuxus规则.md` §3.4                      | 当前阶段         | 第三阶段(模块级系统性优化)                                                                                                                                                                                                    | ✅   |
-| `.claude/CLAUDE.md` §1                 | 工具链          | `D:\Chimera CLI\.toolchain\`,GNU stable                                                                                                                                                                           | ✅   |
-| `project_memory.md` Hard Constraints   | Critical 事件数 | 14(含 R2Freeze/R2Rollback/AffinityQuotaExhausted/CheckpointSaved/ConsensusReached/SlowConsumer/OrphanCall/SkepticVeto/VetoOverridden/RedTeamAudit/BudgetExceeded/AgentTaskFailed/AsaIntervention/R1ShadowRollback) | ✅   |
+| `Cargo.toml` workspace.package.version | version | `2.19.0-omega` | ✅ |
+| `Cargo.toml` `[workspace.members]` | crate 数 | **38**(含 chimera-mas + nexus-contracts + omega-learner + mca-gateway) | ✅ |
+| `CHANGELOG.md` v2.19.0-omega | 测试规模 | 8455(含 MCA 亲和体系 + P3 Sprint:ASA PPO/贝叶斯平均/DelegationExecutor 超时映射/CoordinationMetricsCollector 上限锁/ConsensusQualityMetrics 熵基归一化/gVisor benchmark) | ✅ |
+| `event-bus/src/types.rs` | event 变体 | 129(74 v2.3.1 → +7 Agent → +28 v2.x → +3 观测事件 → +6 MCA Affinity → +11 至 v2.20.0 快照,2026-08-05;与 §11 表头一致) | ✅ |
+| `crates/chimera-mas/Cargo.toml` | 内部依赖 | 24 个 workspace 成员 | ✅ |
+| `nuxus规则.md` §3.4 | 当前阶段 | 第三阶段(模块级系统性优化) | ✅ |
+| `.claude/CLAUDE.md` §1 | 工具链 | `D:\Chimera CLI\.toolchain\`,GNU stable | ✅ |
+| `project_memory.md` Hard Constraints | Critical 事件数 | 14(含 R2Freeze/R2Rollback/AffinityQuotaExhausted/CheckpointSaved/ConsensusReached/SlowConsumer/OrphanCall/SkepticVeto/VetoOverridden/RedTeamAudit/BudgetExceeded/AgentTaskFailed/AsaIntervention/R1ShadowRollback) | ✅ |
 
 ### 13.6 关键架构洞察(分布式分析沉淀)
 
 ★ **Insight 1 — L1 上帝 crate 现象**:`nexus-core` 被 **38 crate** 中 33 个依赖;`event-bus` 被 **38 crate** 中 30+ 个依赖。两者构成 L1 上帝节点,任何核心 API 变更需 major 版本升级。改进方向:内环/外环重组(参考 `三环循环_十层接口_元架构重组深度分析.md` Phase 0;**Phase 0 评估已于 2026-08-04 完成,P9-T1**);v5.0 P2 引入 `nexus-contracts` 零依赖契约层作为 L0 解耦基底(ADR-033)。
 
-★ **Insight 2 — L6 Router 星型耦合**:`osa-coordinator` 是 L6 5 个 router 的中心节点(kvbsr-router/faae-router/sesa-router/omega-learner 均依赖),形成 L6 内部星型。改进方向:将 `OmniSparseMasks` 提取到 `nexus-contracts` L0 作为零依赖共享类型(ADR-033 已落地)。
+★ **Insight 2 — L6 Router 耦合面(现状)**:`osa-coordinator` 曾被记为 L6 router 的星型中心;**该星型已消解** —— `kvbsr-router`/`faae-router`/`sesa-router`/`omega-learner` 的 manifest 现只依赖 L0 `nexus-contracts`(各 `Cargo.toml` 的 `nexus-contracts = { workspace = true }` 行),对 `osa-coordinator` **无依赖边**(仅注释提及)。共享类型定义点:`OmniSparseMasks` = `crates/nexus-contracts/src/omni_masks.rs:46`,`SparseMask<T>` = `crates/nexus-contracts/src/masks.rs:53`(ADR-033 基底 + P2-W5.2/P9-T3 上提)。
 
 ★ **Insight 3 — chimera-mas 协同广度**:`chimera-mas` 作为 L9 hub 协同 16 个跨层 crate(L1/L2/L3/L4/L6/L7/L8/L9 全部),是迄今依赖最广的单一 crate(24 个内部依赖 + 3 个外部),但严格遵守依赖铁律(只依赖 L(N-1) 及以下)。
 
 ★ **Insight 4 — 双通道事件总线的工程价值**:`event-bus` 的 Normal 通道(broadcast)+ Critical 通道(mpsc fan-out)设计,有效解决"事件静默丢失"问题(Week 6 SSRA 教训 + Week 7 4 crate 遵循)。
 
-★ **Insight 5 — 三重悖论在 Chimera 的具体映射**:① 记忆悖论:MLC 基于访问频率的冷热迁移无法区分任务相关性,OSA 静态稀疏掩码无法替代 MemCon 式自适应;② 推理悖论:**43 crate** 跨层协调成本存在阈值,SkepticVeto 可被策略性利用;③ 进化悖论:GSOE/AutoDPO 验证器层级为 L3(执行反馈),存在"奖励黑客"游戏化风险。改进方向:R2 形式化验证器(L4/L5)跃迁,落地前无条件冻结(ADR-042 已落地);P5.3 ImmuneSystem facade 三探针(ADR-046)实时监控悖论状态。
+★ **Insight 5 — 三重悖论在 Chimera 的具体映射**:① 记忆悖论:MLC 基于访问频率的冷热迁移无法区分任务相关性,OSA 静态稀疏掩码无法替代 MemCon 式自适应;② 推理悖论:**全 crate 面**(成员数见顶部三方一致块)跨层协调成本存在阈值,SkepticVeto 可被策略性利用;③ 进化悖论:GSOE/AutoDPO 验证器层级为 L3(执行反馈),存在"奖励黑客"游戏化风险。改进方向:R2 形式化验证器(L4/L5)跃迁,落地前无条件冻结(ADR-042 已落地);P5.3 ImmuneSystem facade 三探针(ADR-046)实时监控悖论状态。
 
 ### 13.7 后续工作建议
 

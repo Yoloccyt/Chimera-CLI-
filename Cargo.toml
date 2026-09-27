@@ -78,11 +78,32 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# v2.28.2-omega: 发布收口后治理批次 + TUI 四维评估三轮修复(高严重度清零)
-version = "2.28.2-omega"
+# v2.29.0-omega: 四维深审运行期质量批次 + mlc L2 分层检索（ADR-192）+ 治理门双源同构自修
+#   收口上一发布 v2.28.2-omega(2026-09-08)后的在途全部批次；
+#   版本号唯一权威源 = 本字段，派生文档(CODE_WIKI / nuxus规则 / CHANGELOG 节标题)须与之同批同步。
+version = "2.29.0-omega"
 edition = "2021"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"
+
+# ============================================================
+# E-5(四维深审 Phase 3)：lint 统一治理——本块对未 opt-in 的 crate 完全惰性
+# (成员需自带 `[lints] workspace = true` 才生效)，故零行为变更。
+# 棘轮方向：opt-in 集合只增不减，由 scripts/check_lint_ratchet.py 强制
+# (已登记 crate 实测 unwrap/expect 必须为 0 → 新代码不得引入回退)。
+# 存量分布(2026-09-25 实测，全 target)：41 crate 中 40 个 >5 处、最大 858，
+# 故无法“一把全开”；首个 opt-in = router-traits(src 生产码 0，唯一一处为
+# cfg(test) mock 的 lock().unwrap()，已改 poison-tolerant)。
+# ============================================================
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
+# tokio_unstable cfg 声明全局化（原 nexus-core 局部 [lints.rust] 提升）：
+# 全员 opt-in 后局部 lints 与 workspace=true 互斥；check-cfg 对不使用该 cfg
+# 的 crate 仅是放宽白名单，零行为影响。
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full", "tracing"] }
@@ -180,7 +201,7 @@ nexus-subagent = { path = "crates/nexus-subagent" }
 # L1 Core:核心运行时，事件总线
 nexus-core = { path = "crates/nexus-core" }
 event-bus = { path = "crates/event-bus" }
-mcp-mesh = { path = "crates/mcp-mesh" }
+mcp-mesh = { path = "crates/mcp-mesh" }  # L10 Interface(跨进程 MCP 网格);物理位置沿史留在 L1 段,层号以本行为准
 # L2 Memory:多模态编码，分层窗口，四级记忆
 nmc-encoder = { path = "crates/nmc-encoder" }
 hcw-window = { path = "crates/hcw-window" }
@@ -198,20 +219,20 @@ decay-engine = { path = "crates/decay-engine" }
 # L5 Knowledge:仓库知识库，在线进化
 repo-wiki = { path = "crates/repo-wiki" }
 gsoe-evolution = { path = "crates/gsoe-evolution" }
-# L6 Router:全维稀疏协调器，KV 块路由，函数即专家，门控激活，子专家稀疏激活，黏液适配，学习器
+# L6 Router:全维稀疏协调器，KV 块路由，函数即专家，子专家稀疏激活，学习器(gea-activator/ssra-fusion 两行历史错位,层号以行内标注为准)
 osa-coordinator = { path = "crates/osa-coordinator" }
 router-traits = { path = "crates/router-traits" }  # L6 Router Traits — 星型耦合消除
 kvbsr-router = { path = "crates/kvbsr-router" }
 faae-router = { path = "crates/faae-router" }
-gea-activator = { path = "crates/gea-activator" }
+gea-activator = { path = "crates/gea-activator" }  # L9 Quest(门控激活)
 sesa-router = { path = "crates/sesa-router" }
-ssra-fusion = { path = "crates/ssra-fusion" }
+ssra-fusion = { path = "crates/ssra-fusion" }  # L7 Execution(黏液式适配)
 omega-learner = { path = "crates/omega-learner" }
 # L7 Execution:生产验证层,聚集执行,多步预测,降级替代
 pvl-layer = { path = "crates/pvl-layer" }
 gqep-executor = { path = "crates/gqep-executor" }
 mtpe-executor = { path = "crates/mtpe-executor" }
-csn-substitutor = { path = "crates/csn-substitutor" }
+csn-substitutor = { path = "crates/csn-substitutor" }  # L10 Interface(能力替代网络;2026-09-24 层图收口,原随 L7 段)
 # L8 Parliament:议会系统,双档预算(DECB);acb-governor 已按 ADR-182 退役删除
 parliament = { path = "crates/parliament" }
 decb-governor = { path = "crates/decb-governor" }
@@ -380,19 +401,6 @@ path = "tests/e2e/r2_unfreeze_path_e2e.rs"
 [[test]]
 name = "tui_control_loop"
 path = "tests/e2e/tui_control_loop.rs"
-
-# ============================================================
-# P5.5 — RHI-CG 进化执行器 E2E 验收测试
-#
-# WHY 新增 test target:P5.5 验收任务位于 tests/e2e/ 子目录,
-# Cargo 默认 autodiscovery 不扫描子目录文件,必须通过 [[test]]
-# 显式注册。测试覆盖 P5.5.1 任务集定义 + P5.5.2 进化执行器 +
-# P5.5.3 北极星指标验证(KPI-01 累计胜率 ≥60% / KPI-02 误杀率 <5%)。
-# ============================================================
-
-[[test]]
-name = "rhi_cg_validation"
-path = "tests/e2e/rhi_cg_validation.rs"
 
 # ============================================================
 # ADR-042 R2 冻结违反处置 E2E 测试(P1-9)

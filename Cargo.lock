@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-cli"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-e2e-tests"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "anyhow",
  "chimera-cli",
@@ -656,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-mas"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "cmt-tiering",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-tui"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "chtc-bridge"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "criterion",
  "event-bus",
@@ -827,7 +827,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cmt-tiering"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1290,13 +1290,14 @@ dependencies = [
 
 [[package]]
 name = "csn-substitutor"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
  "event-bus",
  "nexus-contracts",
  "nexus-core",
+ "proptest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -1407,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "decay-engine"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1422,7 +1423,7 @@ dependencies = [
 
 [[package]]
 name = "decb-governor"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1609,7 +1610,7 @@ checksum = "15401da73a9ed8c80e3b2d4dc05fe10e7b72d7243b9f614e516a44fa99986e88"
 
 [[package]]
 name = "efficiency-monitor"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -1740,7 +1741,7 @@ dependencies = [
 
 [[package]]
 name = "event-bus"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -1779,7 +1780,7 @@ dependencies = [
 
 [[package]]
 name = "faae-router"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2023,7 +2024,7 @@ dependencies = [
 
 [[package]]
 name = "gea-activator"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
@@ -2133,7 +2134,7 @@ dependencies = [
 
 [[package]]
 name = "gqep-executor"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "async-trait",
  "criterion",
@@ -2154,7 +2155,7 @@ dependencies = [
 
 [[package]]
 name = "gsoe-evolution"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2253,7 +2254,7 @@ dependencies = [
 
 [[package]]
 name = "hcw-window"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -2895,7 +2896,7 @@ dependencies = [
 
 [[package]]
 name = "kvbsr-router"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
@@ -3092,7 +3093,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lsct-tiering"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
@@ -3145,7 +3146,7 @@ checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 
 [[package]]
 name = "mas-sched"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "nexus-contracts",
  "proptest",
@@ -3192,7 +3193,7 @@ dependencies = [
 
 [[package]]
 name = "mca-gateway"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3221,13 +3222,14 @@ dependencies = [
 
 [[package]]
 name = "mcp-mesh"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
  "dashmap",
  "event-bus",
  "futures",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",
@@ -3311,7 +3313,7 @@ dependencies = [
 
 [[package]]
 name = "mlc-engine"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3381,7 +3383,7 @@ dependencies = [
 
 [[package]]
 name = "mtpe-executor"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "criterion",
  "event-bus",
@@ -3451,7 +3453,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexus-app-server"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -3473,7 +3475,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-contracts"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3488,7 +3490,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -3512,7 +3514,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-hook"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "event-bus",
  "nexus-contracts",
@@ -3527,7 +3529,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-subagent"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "nexus-contracts",
  "proptest",
@@ -3552,7 +3554,7 @@ dependencies = [
 
 [[package]]
 name = "nmc-encoder"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "criterion",
  "event-bus",
@@ -3780,7 +3782,7 @@ dependencies = [
 
 [[package]]
 name = "omega-learner"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -3881,7 +3883,7 @@ dependencies = [
 
 [[package]]
 name = "osa-coordinator"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "cmt-tiering",
  "criterion",
@@ -3929,7 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "parliament"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "async-trait",
  "criterion",
@@ -4332,7 +4334,7 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
 name = "pvl-layer"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -4371,7 +4373,7 @@ dependencies = [
 
 [[package]]
 name = "qeep-protocol"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -4394,7 +4396,7 @@ dependencies = [
 
 [[package]]
 name = "quest-engine"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -4798,7 +4800,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "repo-wiki"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -4909,9 +4911,8 @@ dependencies = [
 
 [[package]]
 name = "router-traits"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
- "event-bus",
  "nexus-contracts",
  "thiserror 1.0.69",
  "tokio",
@@ -5073,7 +5074,7 @@ dependencies = [
 
 [[package]]
 name = "scc-cache"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -5109,7 +5110,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "seccore"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5263,7 +5264,7 @@ dependencies = [
 
 [[package]]
 name = "sesa-router"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "criterion",
  "dashmap",
@@ -5282,7 +5283,7 @@ dependencies = [
 
 [[package]]
 name = "session-store"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
@@ -5417,7 +5418,7 @@ dependencies = [
 
 [[package]]
 name = "ssra-fusion"
-version = "2.28.2-omega"
+version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
