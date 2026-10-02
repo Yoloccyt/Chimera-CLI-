@@ -6,7 +6,7 @@
 > **权威源**: 本文件是架构决策、模块职责、核心类型的唯一权威参考
 > **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 全 members 全绿)
 > **专家签名**: E01 首席架构师 · E02 安全架构师 · E03 记忆系统专家 · E04 路由算法专家 · E05 生产系统专家 · E06 认知科学专家 · E07 任务调度专家 · E08 前端交互专家
-> **三方一致性** (2026-09-20 架构减法批次后复核): `Cargo.toml` workspace.package.version = `2.29.0-omega`(代码实况,41 members;原 43 - auto-dpo/model-router + router-traits) ⇔ `CHANGELOG.md` 最新条目 = `[2.29.0-omega] 2026-09-27 发布` ⇔ 本文档 = **41 crates(32 生产可达 + 9 GATED + 0 冻结孤岛;2026-09-20 棘轮实测 reachable=32/frozen=0/new_gaps=0;历史:M13 decb/scc 重路由 11→9,M12 三岛链 14→11,P0-P3 批次剩余孤岛经 r2_island_repayment feature 全部偿还)· 151 NexusEvent 变体(types.rs 单表;L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后分布 20/11/120,三层锁同步;event\_types.rs 镜像已退役)· 测试规模不登记动态 passed(时点链 11587 = 2026-09-02 全量重测,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;→ 11794 = 2026-09-17 M13 提交态全量回归实测终值,回写提交 `d3840ba`;架构减法/三层锁变更后待重测,两值均不得当现势;静态两尺 11232 strict / 11276 loose = 2026-09-22 现取,旧"差值 = doctest + 宏展开"解释已被否证,见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md §24`)**
+> **三方一致性** (2026-10-02 复核): `Cargo.toml` workspace.package.version = `2.29.0-omega`(代码实况,**39 members**;原 43 - auto-dpo/model-router + router-traits,再经 ADR-193 两批次整并 `router-traits` 退役与 `lsct-tiering` 并入 `cmt-tiering`) ⇔ `CHANGELOG.md` 最新条目 = `[2.29.0-omega] 2026-09-27 发布` ⇔ 本文档 = **39 crates(30 生产可达 + 9 GATED + 0 冻结孤岛;2026-10-02 棘轮实测 `reachable=30 frozen=0 new_gaps=0`;历史:M13 decb/scc 重路由 11→9,M12 三岛链 14→11,P0-P3 批次剩余孤岛经 r2_island_repayment feature 全部偿还)· 152 NexusEvent 变体(types.rs单表;L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后分布 20/11/120,三层锁同步;event\_types.rs 镜像已退役)· 测试规模不登记动态 passed(时点链 11587 = 2026-09-02 全量重测,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;→ 11794 = 2026-09-17 M13 提交态全量回归实测终值,回写提交 `d3840ba`;架构减法/三层锁变更后待重测,两值均不得当现势;静态两尺 11232 strict / 11276 loose = 2026-09-22 现取,旧"差值 = doctest + 宏展开"解释已被否证,见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md §24`)**
 > **基线变更触发**: 任何 workspace.member / NexusEvent 变体 / `#[test]` 函数增删必须同步更新本文档的"§1.1 身份标识"与"§3 Crate 索引",并触发 `scripts/check_doc_consistency.ps1` 巡检
 
 ***
@@ -15,7 +15,7 @@
 
 1. [项目概览](#1-项目概览)
 2. [十层架构详解](#2-十层架构详解)
-3. [41 Crate 完整索引](#3-41-crate-完整索引)
+3. [39 Crate 完整索引](#3-39-crate-完整索引)
 4. [核心领域类型](#4-核心领域类型)
 5. [事件系统](#5-事件系统)
 6. [依赖关系铁律](#6-依赖关系铁律)
@@ -37,7 +37,7 @@
 | 项目名 | Chimera CLI |
 | 代号 | NEXUS-OMEGA (Omni-Model Engineering Generative Architecture) |
 | 根目录 | `D:\Chimera CLI` |
-| 技术栈 | Rust 2021 edition · Tokio async · Workspace × **41 crates** (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`;v2.29 架构减法:删 auto-dpo/model-router + 新增 L6 `router-traits`) |
+| 技术栈 | Rust 2021 edition · Tokio async · Workspace × **39 crates** (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`;v2.29 架构减法:删 auto-dpo/model-router + 新增 L6 `router-traits`;ADR-193 两批次:退役 `router-traits`、整并 `lsct-tiering` 入 `cmt-tiering`,41→39) |
 | 核心哲学 | OMEGA 十一定律: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize |
 | 设计来源 | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂 |
 | **当前版本** | `v2.29.0-omega` (**2026-09-27 发布**,收口四维深审运行期质量批次 + 架构减法 A/B/P0 治理 + mlc L2 分层检索（ADR-192）;上一发布 = v2.28.2-omega(2026-09-08 发布 / tag a1b4616 2026-09-14 落在 release 支线，main 未含该 merge;⚠ 双支线历史待治理，见 `docs/reports/arch-quality-deep-review-2026-09-25.md` §5.51);再早 v2.28.0-omega → 94499b4(2026-09-06);v2.28.2 收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;Phase 1-5 Ch12 波次 W1-W26 全部收尾 + 5 新 crate 落地 + ADR-095~160 治理 + 多轮冗余收敛(R1~R4→R9/R11);迭代链 v2.8.0 polish-v2.7 → v2.9.0~v2.13.0 L8/L10/MCA → v2.14.0\~v2.19.0 P3 Sprint → v2.20.0 PROBE → v2.21.0 CLI LLM → v2.22.0 MCA token → v2.24.0 Phase 9 → v2.25.0 Milestone B → v2.26.0 Concord TUI → v2.27.0 Phase 10 → v2.27.1 GPG 补发 → v2.28.0 Phase 1-5 治理 + 可达性棘轮 → v2.28.2 TUI 修复收口) |
@@ -160,7 +160,7 @@ L1   Core ─────── nexus-core · event-bus
 
 ***
 
-## 3. 41 Crate 完整索引
+## 3. 39 Crate 完整索引
 
 > **三方一致性原则**: 本节每个 crate 的"层归属"必须与 §2.1 分层映射图严格一致;
 > "主要依赖"必须与各 crate 的 `Cargo.toml` 实证一致;任何增删触发 `scripts/check_doc_consistency.ps1` 巡检。
@@ -736,7 +736,7 @@ L1   Core ─────── nexus-core · event-bus
 
 ### 3.11 生产可达性与冻结孤岛清单(ADR-160,2026-08-29 棘轮)
 
-> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。41 crate = **32 生产可达 + 9 GATED(feature 门控)+ 0 冻结孤岛**(2026-09-20 P0-P3 岛链偿还批次后,棘轮实测 `reachable=32 frozen=0 new_gaps=0`;v2.28.2-omega 同步:members 41 = 原 43 - 架构减法批次删除 auto-dpo/model-router + 新增 router-traits)。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
+> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。39 crate = **30 生产可达 + 9 GATED(feature 门控)+ 0 冻结孤岛**(2026-10-02 棘轮实测 `reachable=30 frozen=0 new_gaps=0`;成员数演进:43 - 架构减法批次删除 auto-dpo/model-router + 新增 router-traits,再经 ADR-193 两批次退役 router-traits、整并 lsct-tiering 入 cmt-tiering,41→39)。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
 >
 > **M10 偿还批次(2026-09-16,island-batch-promotion-a):冻结孤岛 16 → 14**。有效两岛:`acb-governor` 退役删除(ADR-182,零生产消费者,~2200 LOC);`lsct-tiering` 经 cmt-tiering 生产边转正(`src/lsct_policy.rs` 策略装配闭环,L3→L3 同层;lsct 自持 Tier 类型解除 cmt↔lsct 依赖环,ADR-179 真实生产调用路径)。
 >
@@ -1515,7 +1515,7 @@ D:\Chimera CLI\
 │       ├── fuzz.yml              # tag触发fuzz(8 target × 300s，Linux CI)
 │       ├── release.yml           # tag触发5平台build + docker + release
 │       └── test-install-scripts.yml
-├── crates/                       # **41 个 crate 源码**(v2.29.0-omega 在途,见 §3 索引 + §3.11 可达性清单;架构减法批次删 auto-dpo/model-router + 新增 router-traits,41 = 32 生产可达 + 9 GATED + 0 冻结孤岛,棘轮实测 reachable=32/frozen=0/new_gaps=0,口径以 check_crate_reachability.sh 输出为准)
+├── crates/                       # **39 个 crate 源码**(v2.29.0-omega 在途,见 §3 索引 + §3.11 可达性清单;架构减法批次删 auto-dpo/model-router + 新增 router-traits,ADR-193 两批次退役 router-traits、整并 lsct-tiering 入 cmt-tiering,39 = 30 生产可达 + 9 GATED + 0 冻结孤岛,棘轮实测 reachable=30/frozen=0/new_gaps=0,口径以 check_crate_reachability.sh 输出为准)
 │   ├── nexus-core/          (L1)
 │   ├── event-bus/           (L1)
 │   ├── nmc-encoder/         (L2)
