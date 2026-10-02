@@ -56,7 +56,7 @@ use clap::{Parser, Subcommand};
     about = "NEXUS-OMEGA AI Coding Agent — 全维稀疏架构的下一代编码代理",
     long_about = "NEXUS-OMEGA AI Coding Agent — 全维稀疏架构的下一代编码代理\n\
 \n\
-基于 OMEGA 九定律(Ω₁-Sparse / Ω₂-Compress / Ω₃-Evolve / Ω₄-Event / Ω₅-Credit / Ω₆-Reuse / Ω₇-Locate / Ω₈-Assess / Ω₉-Preserve)构建,\n\
+基于 OMEGA 十一定律(Ω₁-Sparse / Ω₂-Compress / Ω₃-Evolve / Ω₄-Event / Ω₅-Credit / Ω₆-Reuse / Ω₇-Locate / Ω₈-Assess / Ω₉-Preserve / Ω₁₀-Card / Ω₁₁-Synthesize)构建,\n\
 提供 Quest 长期任务管理、多模型议会审议、MCP 量子网格、红队安全审计等能力。\n\
 默认启动 TUI 交互界面,也可通过子命令进行脚本化操作。",
     // Task 5 of spec: 禁用 clap 自动生成的 `help` 子命令,避免与我们的 `Help` 变体冲突
