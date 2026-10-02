@@ -411,6 +411,7 @@ mod tests {
     use super::*;
     use crate::config::FaaeConfig;
     use nexus_contracts::util::xts_top_k_by;
+    use proptest::prelude::*;
 
     /// 构造测试用评分输入（固定种子 LCG 确定性生成）
     fn make_inputs(n: usize) -> Vec<ScoreInput> {
@@ -713,6 +714,94 @@ mod tests {
                 assert_eq!(
                     pre_offloaded_rows, pre_rows,
                     "n={n} parallel={parallel_enabled} 让出包装必须与直调等价"
+                );
+            }
+        }
+    }
+
+    // ============================================================
+    // 预计算路径 vs 旧路径等价性 —— 任意规模 n（属性测试）
+    // ============================================================
+
+    /// 任意规模的 n 策略 —— 必须跨过 `TaskKind::Generic` 的 10_000 阈值,
+    /// 又不能把"每次收缩步"都变成万级大用例
+    ///
+    /// 分两档加权取（3:1,小规模为主）:
+    /// - `0..=256`（3/4 权重）:覆盖空容器 / 单元素 / 非整 chunk 残块
+    ///   （如 65、129）/ `Inline` 串行分支。这些是规模无关的等价性主体,
+    ///   单例成本近零,因而可以铺开大量样本。
+    /// - `9_950..=10_050`（1/4 权重）:紧贴阈值两侧,确保 `dispatch_plan` 的
+    ///   `Inline → Rayon` 判定在两条路径上取到**同一次**决策（两条路径共用同一
+    ///   判定函数,一旦各自改了阈值,这一档会立刻炸出结果数/元素差异）。
+    ///
+    /// WHY 上界只到 10_050 而不取 12_000:跨阈值只需"≥ 10_000"这一点判别力,
+    /// 更大的余量买不到额外覆盖,却让每例的两次数据构造 + 两次 64 维评分
+    /// （debug 构建下是主要成本）线性上升。
+    fn prop_n_across_threshold() -> impl Strategy<Value = usize> {
+        prop_oneof![
+            3 => 0usize..=256,
+            1 => 9_950usize..=10_050,
+        ]
+    }
+
+    // WHY 本属性用 `.expect` 而非 `?` + `Ok::<(), TestCaseError>(())`:proptest! 宏
+    // 把函数体展开为 `let (): () = $body;`,体必须是 `()`。同模块其余测试亦用
+    // `.expect`,此处保持一致（模块级已带 unwrap/expect 的 E-5 豁免注释）。
+
+    proptest! {
+        // WHY 32 而非同款 tests/proptest.rs 的 64:本属性约 1/4 的样本是万级规模,
+        // 每例要做两遍 LCG 造数 + 两遍全量评分,case 数乘以大样本占比才是真实成本。
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// 生产入口（`score_experts_scoring_batch`）与旧入口（`score_experts_batch`）
+        /// 在**任意规模 n** 上逐元素等价
+        ///
+        /// WHY 固定规模表不够:`test_precomputed_path_matches_score_input_path` 钉住
+        /// 的是 {0, 1, 65, 90, 12_000} 这 5 个点,能证明"这 5 个点相等",却证明不了
+        /// "在任何 n 上都相等"。而两条路径各自实现了一遍分块(`div_ceil(CHUNK)`)
+        /// 与 `collect_chunks` 拼接 —— 残块、末块、恰好整除、跨阈值换分支,正是
+        /// 随 n 漂移的典型位置,作者当时想到的那几个数恰好覆盖不全。属性测试让
+        /// n 由机制漂,补的是这一层。
+        ///
+        /// WHY 用全等断言(`prop_assert_eq!`)而非 epsilon:两条路径共用 `score_parts`
+        /// 纯函数,同输入必须**位模式相同**。一旦有人给其中一条加了 epsilon 舍入或
+        /// 改换算顺序,近似断言会静默放过,全等断言会当场炸出可复现的反例。
+        ///
+        /// 注（`env` 交互,非本属性引入）:`parallel_enabled = true` 仍先过
+        /// `should_parallel` → `env_no_parallel()`。同进程内
+        /// `test_env_disable_falls_back_to_serial` 会把该 `OnceLock` 缓存为"关闭",
+        /// 此时本属性两路径一起退回 Inline —— 等价性断言仍成立（判定同源）,只是
+        /// Rayon 分支未被触达。此处按既有的进程级 env 语义处理,不额外改测试环境。
+        #[test]
+        fn precomputed_batch_matches_score_input_batch(
+            n in prop_n_across_threshold(),
+            parallel_enabled in any::<bool>(),
+        ) {
+            let clv = make_clv();
+            let legacy = Arc::new(make_inputs(n));
+            let precomputed = Arc::new(make_scoring_inputs(n));
+
+            let legacy_out =
+                score_experts_batch(&clv, &legacy, parallel_enabled).expect("旧路径评分失败");
+            let pre_out = score_experts_scoring_batch(&clv, &precomputed, parallel_enabled)
+                .expect("预计算路径评分失败");
+
+            prop_assert_eq!(legacy_out.len(), n, "旧路径结果数必须等于输入数");
+            prop_assert_eq!(pre_out.len(), n, "预计算路径结果数必须等于输入数");
+
+            for (i, ((legacy_id, legacy_score), (shared, pre_score))) in
+                legacy_out.iter().zip(pre_out.iter()).enumerate()
+            {
+                prop_assert_eq!(
+                    // WHY 显式取引用:`prop_assert_eq!` 按值接管实参(不像 `assert_eq!`
+                    // 那样自动借引用),而 `ToolId` 非 Copy。`legacy_id` 解构自
+                    // `&(ToolId, f32)`,本身已是 `&ToolId`,直接传即可。
+                    legacy_id, &shared.tool_id,
+                    "n={} parallel={} tool[{}] ToolId 必须一致", n, parallel_enabled, i
+                );
+                prop_assert_eq!(
+                    *legacy_score, *pre_score,
+                    "n={} parallel={} tool[{}] 评分必须逐位一致", n, parallel_enabled, i
                 );
             }
         }

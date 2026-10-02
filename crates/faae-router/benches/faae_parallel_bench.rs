@@ -5,13 +5,27 @@
 //!
 //! # 双口径对照
 //! - **热点层（主对照,与 v4.0 §7.5.1 预估对齐）**:直接测量注入热点
-//!   [`score_experts_batch`](faae_router::parallel::score_experts_batch)
+//!   [`score_experts_scoring_batch`](faae_router::parallel::score_experts_scoring_batch)
 //!   —— 纯 CPU 批量评分（512 维余弦 × priority）,无 IO/await/锁。
-//!   这是 ComputeBridge 注入收益的真实体现（§7.5.1 L-a 预估 3-6× 即此口径）。
+//!   它是 `FaaeRouter::route` 步骤 2 真正调用的入口（生产上经
+//!   `score_experts_scoring_batch_offloaded` 让出 worker,本 bench 无 tokio
+//!   worker 可让,直调等价),故热点层**就是生产评分热路径本身**,不是它的替身,
+//!   ComputeBridge 注入收益的真实体现（§7.5.1 L-a 预估 3-6× 即此口径）。
 //! - **端到端层（真实路径如实记录）**:`FaaeRouter::route` 全流程
-//!   —— 含快照读锁收集（24000 次 async 读锁 + expert_vector 全量 clone,
-//!   注入边界外的异步前置,禁入 rayon）等固定成本,结构性稀释注入收益,
+//!   —— 含快照读锁收集（24000 次 async 读锁 + `Arc<ExpertScoring>` 引用计数
+//!   自增,注入边界外的异步前置,禁入 rayon）等固定成本,结构性稀释注入收益,
 //!   实测显著低于热点层（本机 1.37-1.42×,低于门禁 1.5×）,报告如实记录。
+//!
+//! # 刻意不测量的路径:`ScoreInput` 入口
+//! `parallel::score_experts_batch`（`ScoreInput` 载体）在 `route()` 改走预计算
+//! `ExpertScoring` 载体后已无生产调用点,现仅作为**既有 pub 契约**（API 稳定性）
+//! 与**两条路径的等价性测试对象**存在,并登记在
+//! `scripts/check_dead_contract_apis.py` 台账（DEFERRED,`uses=0`）。
+//! 本 bench 因此**不为它保留"旧基线"对照组**:那样那条路径唯一的理由会退化成
+//! "bench 需要它",而 bench 唯一的理由又退化成"那条路径存在"——自洽的幽灵环,
+//! 正是幽灵基准要清掉的形态。等价性改由
+//! `parallel::tests::test_precomputed_path_matches_score_input_path` 及其 proptest
+//! 逐元素锁死,覆盖面不减。
 //!
 //! # 场景
 //! 24_000 个输入（固定种子确定性生成,超过 `TaskKind::Generic` 阈值
@@ -43,8 +57,8 @@ use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::EventBus;
-use faae_router::parallel::{score_experts_batch, ScoreInput};
-use faae_router::{ExpertProfile, FaaeConfig, FaaeRouter, ToolId};
+use faae_router::parallel::score_experts_scoring_batch;
+use faae_router::{ExpertProfile, ExpertScoring, FaaeConfig, FaaeRouter, ToolId};
 use tokio::runtime::Runtime;
 
 /// 专家数量 — 超过 Generic 阈值(10_000)触发 Rayon 分支;24k 使任务波次充足,
@@ -77,21 +91,6 @@ fn make_clv() -> Vec<f32> {
         .collect()
 }
 
-/// 构造热点层评分输入快照（固定种子确定性,与专家画像同分布）
-fn make_score_inputs(n: usize) -> Vec<ScoreInput> {
-    (0..n)
-        .map(|i| {
-            let mut v = vec![0.0f32; VEC_DIM];
-            v[i % VEC_DIM] = 1.0 + (i % 3) as f32 * 0.1;
-            ScoreInput {
-                tool_id: ToolId::new(format!("tool-{i}")),
-                expert_vector: v,
-                priority: 0.5 + (i % 10) as f32 / 10.0,
-            }
-        })
-        .collect()
-}
-
 /// 单次路由耗时（端到端:快照读锁 + 批量评分 + Top-K + usage 更新 + 事件发布）
 fn run_route(rt: &Runtime, router: &FaaeRouter, clv: &[f32], candidates: &[ToolId]) -> Duration {
     let start = Instant::now();
@@ -101,9 +100,13 @@ fn run_route(rt: &Runtime, router: &FaaeRouter, clv: &[f32], candidates: &[ToolI
 }
 
 /// 单次热点评分耗时（纯 CPU 批量评分,无 IO/await/锁）
-fn run_hot(clv: &[f32], inputs: &Arc<Vec<ScoreInput>>, parallel: bool) -> Duration {
+///
+/// 走 `score_experts_scoring_batch` —— `route()` 步骤 2 的同一入口（生产上多一层
+/// `block_in_place` 让出 worker;本 bench 是同步计时,无 tokio worker 可让,
+/// 直调即等价）。返回值整体交给 `black_box` 后丢弃,不留未使用变量。
+fn run_hot(clv: &[f32], inputs: &Arc<Vec<Arc<ExpertScoring>>>, parallel: bool) -> Duration {
     let start = Instant::now();
-    let out = score_experts_batch(clv, inputs, parallel);
+    let out = score_experts_scoring_batch(clv, inputs, parallel);
     criterion::black_box(out.expect("批量评分应成功"));
     start.elapsed()
 }
@@ -124,7 +127,18 @@ fn bench_faae_scoring(c: &mut Criterion) {
     // ExpertProfile 不实现 Clone:为两个 router 各生成一份,按所有权移入注册
     let candidates = make_candidates(N_EXPERTS);
     let clv = make_clv();
-    let inputs = Arc::new(make_score_inputs(N_EXPERTS));
+    // 热点层输入:取 `ExpertProfile` 注册期预计算好的 `scoring` 三元组
+    // （`ExpertProfile::new` 建副本,`route()` 步骤 2 的 `collect_scoring_snapshot`
+    // 只做 `Arc::clone(&profile.scoring)`）——复刻同一条构造链,故量到的就是
+    // 生产真正持有的那份共享数据。这批 profile 随后整体移入 `router_serial`,
+    // 两层口径共用同一批 `ExpertScoring`,不存在"bench 专用替身数据"。
+    let serial_experts = make_experts(N_EXPERTS);
+    let inputs: Arc<Vec<Arc<ExpertScoring>>> = Arc::new(
+        serial_experts
+            .iter()
+            .map(|p| Arc::clone(&p.scoring))
+            .collect(),
+    );
 
     // ========== 热点层:直测评分核心（注入收益真实体现） ==========
     let mut hot_group = c.benchmark_group("faae_hot_scoring");
@@ -187,7 +201,7 @@ fn bench_faae_scoring(c: &mut Criterion) {
         EventBus::new(),
         FaaeConfig::default().with_balance_enabled(false),
     );
-    for p in make_experts(N_EXPERTS) {
+    for p in serial_experts {
         rt.block_on(router_serial.register_expert(p));
     }
     for p in make_experts(N_EXPERTS) {

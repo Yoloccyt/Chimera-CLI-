@@ -102,8 +102,10 @@ CONTRACTS = [
         "pattern": r"::score_experts_batch\(",
         "status": "DEFERRED",
         "note": "ScoreInput-based batch: production-dead since the precomputed-Arc path "
-                "(P3). Retained as a bench comparison baseline and as the pre-existing pub "
-                "contract. Production hot path is score_experts_scoring_batch*. "
+                "(P3). Retained ONLY as the pre-existing pub contract (API stability) and "
+                "as the reference side of the two-path equivalence tests; the bench no "
+                "longer calls it, so it is not a perf proxy. Production hot path is "
+                "score_experts_scoring_batch*. "
                 "Counted cross-module only -- see pattern note for the intra-module hole.",
     },
     {
