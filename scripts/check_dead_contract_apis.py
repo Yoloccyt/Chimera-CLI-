@@ -85,6 +85,35 @@ CONTRACTS = [
         "note": "probe reaches production via spawn_saturation_reporter (ADR-197 A5); "
                 "sampler is constructed as a bare fn path, not a call -- see pattern note",
     },
+    {
+        "name": "faae::parallel::score_experts_batch",
+        # WHY `::`-anchored: this row asserts "is this free-function contract called
+        # from production code *outside its own module*". A bare `\(`-anchored
+        # pattern would (a) count its own `pub fn score_experts_batch(` declaration
+        # and (b) count the two calls made *by* the sibling `score_experts_batch_offloaded`
+        # wrapper -- both of which are artifacts, not wiring. Requiring a path
+        # qualifier is the same scoping the other rows already use (leading `\.` for
+        # method calls, path form for `UtilizationSampler`): a real external caller
+        # must write `faae_router::parallel::score_experts_batch(`.
+        # KNOWN HOLE, recorded rather than hidden: a re-wire from *inside*
+        # `parallel.rs` (unqualified call in the same file) would not be counted.
+        # That is an internal refactor of the module, not new external wiring; the
+        # sibling row below still tracks the wrapper itself.
+        "pattern": r"::score_experts_batch\(",
+        "status": "DEFERRED",
+        "note": "ScoreInput-based batch: production-dead since the precomputed-Arc path "
+                "(P3). Retained as a bench comparison baseline and as the pre-existing pub "
+                "contract. Production hot path is score_experts_scoring_batch*. "
+                "Counted cross-module only -- see pattern note for the intra-module hole.",
+    },
+    {
+        "name": "faae::parallel::score_experts_batch_offloaded",
+        "pattern": r"::score_experts_batch_offloaded\(",
+        "status": "DEFERRED",
+        "note": "RuntimeFlavor wrapper over the ScoreInput path; also production-dead "
+                "since P3. Its multi-thread block_in_place branch is therefore no longer "
+                "covered by any test that exercises a multi-thread runtime.",
+    },
 ]
 
 # `#[cfg(test)]` marks the start of a file's test tail **only when it precedes a

@@ -38,7 +38,93 @@ use nexus_contracts::util::xts_top_k_by;
 use crate::config::FaaeConfig;
 use crate::edsb::EdsbBalancer;
 use crate::error::FaaeError;
-use crate::types::{ExpertProfile, RoutingResult, ToolId};
+use crate::types::{ExpertProfile, ExpertScoring, RoutingResult, ToolId};
+
+// ============================================================================
+// 仅测试可见:`route()` 步骤 2 真实产出的快照探针
+//
+// WHY 需要这个旁路:只断言 `collect_scoring_snapshot` 自身,锁住的是**builder**。
+// 有人把拷贝循环重新内联回 `route()`、把 builder 原地留着不删时,那样的测试依旧
+// 全绿 —— 与 ADR-197 A6 要防的"锁错对象"是同一类假绿。要让"零拷贝"真正锁在
+// **接线**上,只能观测 `route()` 的产物,而不是测试自己调 builder 的产物。
+//
+// WHY `tokio::task_local!` 而非 `thread_local!`:探针要跟随的是**一次 `route()`
+// 调用所在的异步任务**,而非 OS 线程(一次 route 可能跨 worker 迁移)。另外
+// clippy 1.97 的 `missing_const_for_thread_local` 对 `thread_local!` 宏展开内部
+// 误报 "can be made const"(即使已用 Rust 1.88+ 推荐的 `const {}` 块写法),
+// 本仓已实测并以 crate 级 allow 绕过(`crates/chimera-tui/src/i18n/mod.rs:25`)——
+// 不为一个测试旁路向整个 crate 借一条永久 lint 豁免。
+// ============================================================================
+// WHY 存 `Arc<Mutex<..>>` 而非裸 `RefCell`:task_local 的值是**按值移入** future 的,
+// 测试要在 scope 之外读回它,必须自带一份可共享的句柄;而句柄要能跨 `.await`
+// 安全存在,故用 `Mutex` 而非 `RefCell`(后者非 `Sync`,`Arc<RefCell<_>>` 会被
+// clippy `arc_with_non_send_sync` 拒)。
+#[cfg(test)]
+tokio::task_local! {
+    static ROUTE_SNAPSHOT_PROBE: Arc<std::sync::Mutex<Option<Vec<Arc<ExpertScoring>>>>>;
+}
+
+/// 收集候选专家的评分快照 —— 借用注册表里已预计算好的不可变三元组
+///
+/// # WHY 只取 `Arc<ExpertScoring>` 而不现读三个字段
+/// 旧实现对每个候选做 `tool_id.clone()` + `expert_vector.clone()`(64 维 `Vec<f32>`
+/// 堆分配 + 整段 memcpy),12_000 专家实测 ~12.4ms —— 约为同规模并行评分本体
+/// (~2.1ms)的 6 倍,快照而非计算成了瓶颈。改为取注册期就建好的 `Arc` 共享三元组后,
+/// 每个候选只剩一次引用计数自增,即**每候选零分配、零深拷贝**(与候选数无关的
+/// 两次分配仍在:外层 `Vec::with_capacity(n)` 与 `route()` 里的 `Arc::new`)。
+///
+/// # 锁纪律（不变）
+/// 读锁仅在取 `Arc` 的瞬间持有,随迭代结束立即释放;不跨 await,不进 rayon 闭包。
+async fn collect_scoring_snapshot(
+    candidate_arcs: &[Arc<RwLock<ExpertProfile>>],
+) -> Vec<Arc<ExpertScoring>> {
+    let mut snapshot = Vec::with_capacity(candidate_arcs.len());
+    for profile_arc in candidate_arcs {
+        let profile = profile_arc.read().await;
+        // 承重不变式复核(m4):`scoring` 必须**仍与** profile 的活字段同源。若有人
+        // 在注册之后改写 `tool_id` / `priority` / `expert_vector`,本函数就会把
+        // 陈旧三元组送进评分 —— 不 panic、不报错,只是静默路由到错误的工具。
+        //
+        // WHY 这里不比 brief 建议的 `Arc::ptr_eq(&scoring, &scoring)`:下一步就是
+        // `Arc::clone(&profile.scoring)`,自己跟自己的克隆比地址恒为真,零判别力。
+        // 有判别力的是"预计算副本 == 当前活字段",下面三条正是这个等式。
+        //
+        // WHY 不逐元素比 `expert_vector`:那是每候选 O(64) 的比较,12_000 候选的
+        // hot loop 在 debug 构建下不可接受。此处比 O(1)/O(短串) 的 tool_id +
+        // priority 与 O(1) 的向量长度,足以覆盖"换成了另一份三元组"这一最可能的
+        // 破坏形式;全字段逐元素相等由测试
+        // `snapshot_shares_precomputed_scoring` 在测试构建中锁住。release 下
+        // `debug_assert!` 整体编译掉,零成本。
+        debug_assert_eq!(
+            profile.scoring.tool_id, profile.tool_id,
+            "ExpertScoring 已与 ExpertProfile.tool_id 失去同源 —— \
+             预计算副本陈旧化,评分会路由到错误的工具(见 types.rs 不变式说明)"
+        );
+        debug_assert_eq!(
+            profile.scoring.priority, profile.priority,
+            "ExpertScoring 已与 ExpertProfile.priority 失去同源 —— \
+             预计算副本陈旧化,评分权重与画像不符"
+        );
+        debug_assert_eq!(
+            profile.scoring.expert_vector.len(),
+            profile.expert_vector.len(),
+            "ExpertScoring.expert_vector 与 ExpertProfile.expert_vector 维度不符 —— \
+             预计算副本陈旧化,评分会在错误的子空间上做余弦"
+        );
+        snapshot.push(Arc::clone(&profile.scoring));
+    }
+    // 仅测试构建:把 `route()` 真实产出的快照交给旁路探针观测(见 ROUTE_SNAPSHOT_PROBE)。
+    // Arc clone 是每候选 O(1),且只存在于 test profile,不进生产二进制。
+    // `try_with` 在无 scope 的调用(如直接单测 builder)下返回 Err;锁中毒同样忽略 ——
+    // 探针是纯观测旁路,它的缺席或异常都不得影响生产行为(故此处不 `expect`)。
+    #[cfg(test)]
+    let _ = ROUTE_SNAPSHOT_PROBE.try_with(|probe| {
+        if let Ok(mut slot) = probe.lock() {
+            *slot = Some(snapshot.clone());
+        }
+    });
+    snapshot
+}
 
 /// FaaE 语义路由器 — 工具即专家的语义化路由调度
 ///
@@ -174,41 +260,38 @@ impl FaaeRouter {
         //
         // P1-T14: 原实现循环内每候选持 tokio 读锁 await + 计算,不满足 rayon
         // 闭包契约（闭包内禁 await/持锁,红线 §7.5.3 纪律⑥）。改造为快照分离:
-        //   a) 主线程异步读锁收集评分快照（tool_id / expert_vector / priority）,
-        //      读锁随收集结束立即释放（无锁跨 await）;
+        //   a) 主线程异步读锁收集评分快照,读锁随收集结束立即释放（无锁跨 await）;
         //   b) 纯计算评分经 ComputeBridge 路由:Inline（n < Generic 阈值,串行,
         //      与注入前行为逐位一致）或 Rayon（spawn_compute_batch 批量并行）。
         //      `FaaeConfig::parallel_expert_scoring` + `CHIMERA_NO_PARALLEL_FAAE`
         //      env 任一关闭 → 强制串行回退。
         // 注:原 scored 第三元素 Arc<RwLock<ExpertProfile>> 为死数据（步骤 5 起
         // 按 final_tool 重新查 registry）,已移除,简化并行化。
-        let score_inputs = {
-            let mut inputs = Vec::with_capacity(candidate_arcs.len());
-            for profile_arc in &candidate_arcs {
-                let profile = profile_arc.read().await;
-                inputs.push(crate::parallel::ScoreInput {
-                    tool_id: profile.tool_id.clone(),
-                    expert_vector: profile.expert_vector.clone(),
-                    priority: profile.priority,
-                });
-            }
-            inputs
-        };
-        // Arc 共享传入评分核心:并行闭包捕获同一容器 + 索引范围,零输入复制
-        // （ScoreInput 全量复制在 12000 专家场景 ~5ms,已消除）。
-        let score_inputs = Arc::new(score_inputs);
+        let scoring_snapshot = collect_scoring_snapshot(&candidate_arcs).await;
+        // Arc 包一层只为让 rayon 闭包能以 `'static` 捕获容器(O(1),与候选数无关)
+        let scoring_snapshot = Arc::new(scoring_snapshot);
 
-        // WHY 走 `score_experts_batch_offloaded` 而非直接调 `score_experts_batch`:
-        // 后者是同步的(内层为 ComputeBridge 的 rayon `pool.scope`,不是 Future),
-        // 在 12000 专家规模下会独占 tokio worker 数毫秒,期间该 worker 无法 poll
-        // 其它 task / 驱动 IO —— 这里是请求热路径。offloaded 层在多线程 runtime
-        // 上经 `block_in_place` 让出 worker(计算本体仍在 ComputeBridge 专用 rayon
-        // 池内,不新建 CPU 预算,§7.5.3 纪律④「桥接唯一」),current_thread 上直调
-        // 不 panic。
+        // 快照里存什么、不存什么(易误读处,故写明):
+        //   - 存:每个候选的 `Arc<ExpertScoring>` 引用 —— 一次引用计数自增,
+        //     **不拷贝 tool_id / expert_vector / priority**。这三项由
+        //     `ExpertProfile::new` 预计算一次并以 Arc 共享,构造后不变
+        //     (见 types.rs `ExpertScoring` 的不变式说明)。
+        //   - 不存:可变的 usage_count / last_used_at,它们本就不参与评分。
+        //   - 仍有一处拷贝:CLV 每批拷贝一次(进并行闭包),与候选数无关。
+        // 零拷贝语义的回归锁见 `snapshot_shares_precomputed_scoring`
+        // （该测试观测的是本函数产出的快照,而非 builder 自身）。
+        //
+        // WHY 走 `score_experts_scoring_batch_offloaded` 而非直接调
+        // `score_experts_scoring_batch`:后者是同步的(内层为 ComputeBridge 的
+        // rayon `pool.scope`,不是 Future),在 12000 专家规模下会独占 tokio
+        // worker 数毫秒,期间该 worker 无法 poll 其它 task / 驱动 IO ——
+        // 这里是请求热路径。offloaded 层在多线程 runtime 上经 `block_in_place`
+        // 让出 worker(计算本体仍在 ComputeBridge 专用 rayon 池内,不新建 CPU
+        // 预算,§7.5.3 纪律④「桥接唯一」),current_thread 上直调不 panic。
         // 两分支的完整理由见 `parallel::score_experts_batch_offloaded` 文档。
-        let scored: Vec<(ToolId, f32)> = crate::parallel::score_experts_batch_offloaded(
+        let scored = crate::parallel::score_experts_scoring_batch_offloaded(
             clv,
-            &score_inputs,
+            &scoring_snapshot,
             self.config.parallel_expert_scoring,
         )?;
 
@@ -216,10 +299,10 @@ impl FaaeRouter {
         // 平局确定性:分数降序 + 原始下标升序 —— 与"全排后截断"的稳定语义等价
         // (select_nth 分区会扰动相等元素相对顺序,必须在比较器内以原始下标消歧)。
         let k = self.config.top_k.min(scored.len());
-        let mut scored_idx: Vec<(usize, ToolId, f32)> = scored
+        let mut scored_idx: Vec<(usize, Arc<ExpertScoring>, f32)> = scored
             .into_iter()
             .enumerate()
-            .map(|(i, (t, s))| (i, t, s))
+            .map(|(i, (s, score))| (i, s, score))
             .collect();
         xts_top_k_by(&mut scored_idx, k, |a, b| {
             b.2.partial_cmp(&a.2)
@@ -228,9 +311,11 @@ impl FaaeRouter {
         });
 
         // 4. 构建候选列表(Top-K 工具 ID + 分数)
+        // WHY 只在此处 clone ToolId:评分结果携带的是 `Arc<ExpertScoring>`,
+        // 故 n 次 ToolId(String)堆分配降为 Top-K(k)次 —— 见 parallel 模块文档。
         let candidates: Vec<(ToolId, f32)> = scored_idx[..k]
             .iter()
-            .map(|(_, t, s)| (t.clone(), *s))
+            .map(|(_, s, score)| (s.tool_id.clone(), *score))
             .collect();
 
         let routed_tool = candidates[0].0.clone();
@@ -694,6 +779,93 @@ mod tests {
         (0..64).map(|i| ((i * 13) % 1000) as f32 / 1000.0).collect()
     }
 
+    /// 跑一次 `route()`,并取回它步骤 2 **真实构造**的快照
+    ///
+    /// WHY 必须整体包在 `ROUTE_SNAPSHOT_PROBE.scope` 里:探针按 tokio 任务作用域
+    /// 存放(`collect_scoring_snapshot` 用 `try_with` 写**当前任务**的槽),故写入
+    /// 方与读出方必须落在同一次 scope 内。探针槽用 `Arc` 是因为 task_local 的值
+    /// 须满足 `'static`。
+    #[cfg(test)]
+    async fn route_capturing_snapshot(
+        router: &FaaeRouter,
+        clv: &[f32],
+        candidates: &[ToolId],
+    ) -> (RoutingResult, Vec<Arc<ExpertScoring>>) {
+        let probe: Arc<std::sync::Mutex<Option<Vec<Arc<ExpertScoring>>>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let routed = ROUTE_SNAPSHOT_PROBE
+            .scope(Arc::clone(&probe), router.route(clv, candidates))
+            .await
+            .expect("批量路由应成功");
+        let snapshot = probe
+            .lock()
+            .expect("探针锁不应中毒")
+            .take()
+            .expect("route() 步骤 2 必须留下快照探针记录");
+        (routed, snapshot)
+    }
+
+    /// 零拷贝性质 —— `route()` 的快照只共享预计算副本,不复制评分数据
+    ///
+    /// # 本测试锁的是**接线**,不是 builder
+    /// 被断言的快照取自 `route()` 步骤 2 的**真实产物**(经 `#[cfg(test)]` 旁路探针
+    /// 观测),不是测试自己调 `collect_scoring_snapshot` 的结果。只测 builder 的话,
+    /// 有人把拷贝循环重新内联进 `route()`、builder 原地留着不删时测试照样全绿 ——
+    /// 这正是 ADR-197 A6 那一类"锁错对象"的假绿。
+    ///
+    /// # 为何 `Arc::ptr_eq` 能证明"共享"而非"复制"
+    /// 快照元素若经任何一环深拷贝,必然落在**新的分配**上,与 profile 上的
+    /// `scoring` 不同址,`Arc::ptr_eq` 即为 false;只有真的共享同一块
+    /// `ExpertScoring` 才会为 true。再取第二次 `route()` 的快照复核跨调用稳定共享。
+    ///
+    /// # 为何这锁得住回归
+    /// 任何人把 `route()` 步骤 2 改回 `.tool_id.clone()` / `.expert_vector.clone()`
+    /// 现场构造,本测试立即失败 —— 因为断言对象是 `route()` 的产物,不是 helper 的。
+    #[tokio::test]
+    async fn snapshot_shares_precomputed_scoring() {
+        const N: usize = 512;
+        let router = router_with_bulk_experts(N, true).await;
+        let clv = bulk_clv();
+        let candidates = bulk_candidates(N);
+
+        // 走端到端真实路径:route() 步骤 2 构造的快照会被探针记录
+        let (routed, snapshot) = route_capturing_snapshot(&router, &clv, &candidates).await;
+        assert_eq!(snapshot.len(), N, "route() 快照长度必须等于候选数");
+        assert_eq!(routed.candidates.len(), 8, "Top-K 默认 8");
+
+        // 与 profile 上的预计算副本同源 —— 零深拷贝的硬判据。
+        // 锁纪律:读锁内只取 Arc 引用随即释放,锁外再读 profile(同 route() 步骤 1/6)。
+        let registry = router.registry();
+        let profile_arcs: Vec<Arc<RwLock<ExpertProfile>>> = {
+            let guard = registry.read().await;
+            snapshot
+                .iter()
+                .map(|entry| guard.get(&entry.tool_id).cloned())
+                .collect::<Option<Vec<_>>>()
+                .expect("快照元素必须全部对应注册表里已注册的专家")
+        };
+        for (i, (entry, profile_arc)) in snapshot.iter().zip(profile_arcs.iter()).enumerate() {
+            let profile = profile_arc.read().await;
+            assert!(
+                Arc::ptr_eq(entry, &profile.scoring),
+                "route() 快照[{i}] 必须是 ExpertProfile 预计算的同一份(而非临时新建)"
+            );
+            assert_eq!(entry.tool_id, profile.tool_id);
+            assert_eq!(entry.priority, profile.priority);
+            assert_eq!(entry.expert_vector, profile.expert_vector);
+        }
+
+        // 跨调用稳定共享:第二次 route() 仍取到同一批分配,不得每次重建
+        let (_, second) = route_capturing_snapshot(&router, &clv, &candidates).await;
+        assert_eq!(second.len(), N, "二次 route() 快照长度必须等于候选数");
+        for (i, (a, b)) in snapshot.iter().zip(second.iter()).enumerate() {
+            assert!(
+                Arc::ptr_eq(a, b),
+                "快照[{i}] 两次 route() 必须共享同一份 ExpertScoring,不得各拷一份"
+            );
+        }
+    }
+
     /// T1 —— current_thread 上评分结果逐元素不变（分支回归锁）
     ///
     /// `#[tokio::test]` 默认 current_thread:① 若把 flavor 分支退化为裸
@@ -744,11 +916,19 @@ mod tests {
     /// 由 worker 轮询它,同步批才会真的占住 worker。
     ///
     /// # 为何测 wrapper 而非 `route()`
-    /// `route()` 全程还含 12000 次异步读锁的快照收集:debug 实测快照 ~12.4ms
-    /// 且自身让出 1 tick,而被测的批窗口仅 ~2.1ms —— 信噪比 ~1:1,把窗口包在
-    /// `route()` 外测无法区分「worker 被饿死」与「快照阶段让出过」。
-    /// `score_experts_batch_offloaded` 是 `route()` 步骤 2 的唯一实现,
-    /// 故直接测它即等价于测该分支;T1 另行锁住 `route()` 端到端接线。
+    /// `route()` 全程还含快照收集(自身让出 1 tick),而被测的批窗口仅 ~2.1ms
+    /// —— 信噪比 ~1:1,把窗口包在 `route()` 外测无法区分「worker 被饿死」与
+    /// 「快照阶段让出过」。`score_experts_scoring_batch_offloaded` 正是
+    /// `route()` 步骤 2 实际调用的实现,故直接测它即等价于测该分支;
+    /// T1 另行锁住 `route()` 端到端接线。
+    ///
+    /// # 注:输入载体已随 `route()` 一并切到预计算路径
+    /// 本测试原先测 `ScoreInput` 版 wrapper;`route()` 改用共享的
+    /// `ExpertScoring` 后,被测对象必须跟着换,否则测的是一个生产上
+    /// 已无人调用的分支。`ScoreInput` 版 wrapper 的 flavor 分支由
+    /// `parallel::tests::test_precomputed_path_matches_score_input_path`
+    /// 在无 tokio 上下文中复核(直调等价),两条 wrapper 共用同一
+    /// `on_multi_thread_runtime` 判据与同一 `block_in_place` 包装。
     ///
     /// # 为何用 yield 自旋 ticker 而非 `tokio::time::interval`
     /// 本机(Windows)系统定时器分辨率 ~15.6ms,`interval(1ms)` 实际每 ~15ms
@@ -775,15 +955,13 @@ mod tests {
         use std::sync::atomic::AtomicU64;
 
         let clv = bulk_clv();
+        // 走 `route()` 步骤 2 实际调用的那条路径（预计算 `ExpertScoring` + 让出包装）,
+        // 而非同族的 `ScoreInput` 版本 —— 见本测试文档「为何测这条路径」。
         let inputs = Arc::new(
             make_bulk_profiles(BULK_EXPERTS)
                 .into_iter()
-                .map(|p| crate::parallel::ScoreInput {
-                    tool_id: p.tool_id,
-                    expert_vector: p.expert_vector,
-                    priority: p.priority,
-                })
-                .collect::<Vec<_>>(),
+                .map(|p| Arc::clone(&p.scoring))
+                .collect::<Vec<Arc<crate::types::ExpertScoring>>>(),
         );
 
         let ticks = Arc::new(AtomicU64::new(0));
@@ -821,8 +999,9 @@ mod tests {
             let inputs = Arc::clone(&inputs);
             async move {
                 let t0 = Instant::now();
-                let scored = crate::parallel::score_experts_batch_offloaded(&clv, &inputs, true)
-                    .expect("多线程批量评分应成功");
+                let scored =
+                    crate::parallel::score_experts_scoring_batch_offloaded(&clv, &inputs, true)
+                        .expect("多线程批量评分应成功");
                 (t0.elapsed(), scored.len())
             }
         });

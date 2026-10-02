@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use tokio::sync::RwLock;
 
-use crate::types::{ExpertProfile, ExpertProfileSnapshot, ToolId};
+use crate::types::{ExpertProfile, ExpertProfileSnapshot, ExpertScoring, ToolId};
 
 impl ExpertProfile {
     /// 创建新的专家画像
@@ -28,23 +28,37 @@ impl ExpertProfile {
     /// - `expert_vector`:64 维语义向量
     /// - `capability_tags`:能力标签列表
     /// - `priority`:优先级 [0.0, 1.0]
+    ///
+    /// # WHY 此处多一次 vector / String 拷贝
+    /// 构造 [`ExpertScoring`] 预计算副本需要各拷一份。代价从"每次 `route()`
+    /// 为全部候选深拷贝一次"移到"每个专家注册一次"—— 注册是 O(1) 次事件,
+    /// 路由是请求热路径,后者才是该省的那一份。
     pub fn new(
         tool_id: impl Into<ToolId>,
         expert_vector: Vec<f32>,
         capability_tags: Vec<String>,
         priority: f32,
     ) -> Self {
+        let tool_id = tool_id.into();
+        let scoring = Arc::new(ExpertScoring {
+            tool_id: tool_id.clone(),
+            expert_vector: expert_vector.clone(),
+            priority,
+        });
         Self {
-            tool_id: tool_id.into(),
+            tool_id,
             expert_vector,
             capability_tags,
             usage_count: std::sync::atomic::AtomicU64::new(0),
             last_used_at: Arc::new(RwLock::new(Instant::now())),
             priority,
+            scoring,
         }
     }
 
     /// 创建带初始使用次数的专家画像(测试与快照恢复用)
+    ///
+    /// 委托 [`ExpertProfile::new`],故 `scoring` 预计算副本同样在此建立。
     pub fn with_usage_count(
         tool_id: impl Into<ToolId>,
         expert_vector: Vec<f32>,

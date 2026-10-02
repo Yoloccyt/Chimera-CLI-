@@ -8,8 +8,8 @@
 //!   —— 对每个候选专家计算 `cosine_similarity_slices(query, expert_vector) × priority`。
 //!   纯 CPU（64 维向量余弦 + 乘法）,无 IO;但原实现循环内持有 tokio 读锁 await,
 //!   不满足 rayon 闭包契约（闭包内禁 await/持锁）→ 改造为**快照分离**:
-//!   主线程异步读锁收集 `ScoreInput{tool_id, expert_vector, priority}` 快照,
-//!   释放锁后在纯数据上做批量评分（并行或串行）。
+//!   主线程异步读锁收集评分输入快照,释放锁后在纯数据上做批量评分
+//!   （并行或串行）。快照本身的成本随后又按下述"预计算"收口为零深拷贝。
 //! - **挂 ComputeBridge**:
 //!   [`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route) 按
 //!   `TaskKind::Generic` 三态判定 → `Inline`（n 小于阈值,串行路径）或 `Rayon`
@@ -32,16 +32,26 @@
 //! 故按 `CHUNK = 64`（与 Generic 表 chunk 对齐）分组,每个 rayon 闭包处理一个
 //! chunk 内的全部评分,显著降低任务调度开销。
 //!
+//! # 两条评分输入载体
+//! - [`ScoreInput`]:自有三元组快照,由调用方构造（bench / 外部可构造契约）。
+//!   P3 起生产侧已无调用点,登记在 `scripts/check_dead_contract_apis.py` 台账
+//!   （DEFERRED,`uses=0`）,保留供同口径对照。
+//! - [`ExpertScoring`]:由 `ExpertProfile::new` 预计算一次、以 `Arc` 共享的不可变
+//!   三元组,`route()` 热路径用之,使快照收集退化为引用计数自增:每个候选**零分配、
+//!   零深拷贝**（外层 `Vec::with_capacity(n)` 与 `Arc::new` 是与候选数无关的两次
+//!   分配,故此处不说"零堆分配"）。两者共用 `score_parts` 算术与 `dispatch_plan`
+//!   判定,结果逐元素一致（`test_precomputed_path_matches_score_input_path` 锁定）。
+//!
 //! # rayon 闭包契约
-//! 闭包捕获 `Arc<Vec<f32>>`（query）+ `Vec<ScoreInput>`（chunk 快照）,
+//! 闭包捕获 `Arc<Vec<f32>>`（query）+ 输入容器（chunk 快照）,
 //! 仅做纯计算;禁 IO / await / 持锁（红线 §7.5.3 纪律⑥）。
 
 use std::sync::{Arc, OnceLock};
 
-use nexus_core::compute::{bridge, DispatchPlan, TaskKind};
+use nexus_core::compute::{bridge, ComputeError, DispatchPlan, TaskKind};
 
 use crate::error::FaaeError;
-use crate::types::ToolId;
+use crate::types::{ExpertScoring, ToolId};
 
 /// 环境变量关闭开关名（`--no-parallel-faae` 的 env 形态,纪律⑤;仅测试/运维使用）
 const ENV_NO_PARALLEL: &str = "CHIMERA_NO_PARALLEL_FAAE";
@@ -84,15 +94,69 @@ pub(crate) fn should_parallel(config_flag: bool) -> bool {
     config_flag && !env_no_parallel()
 }
 
-/// 单个专家评分（纯函数,与 [`crate::router::FaaeRouter::route`] 原步骤 2 逐位一致）
+/// 评分核心算术 — 两条评分路径（`ScoreInput` / `ExpertScoring`）的唯一实现
 ///
 /// `query = clv[..min(clv.len(), expert_vector.len())]` 截取对齐,
 /// `final = cosine_similarity_slices(query, expert_vector) × priority`。
+///
+/// WHY 不收 `tool_id`:评分只用向量与权重,`tool_id` 是随结果返回的标签而非算子
+/// 的输入。两条入口各自把标签从自己的载体上取走,算术在此汇合。
+#[must_use]
+pub(crate) fn score_parts(clv: &[f32], expert_vector: &[f32], priority: f32) -> f32 {
+    let query = &clv[..clv.len().min(expert_vector.len())];
+    nexus_core::cosine_similarity_slices(query, expert_vector) * priority
+}
+
+/// 单个专家评分（纯函数,与 [`crate::router::FaaeRouter::route`] 原步骤 2 逐位一致）
 #[must_use]
 pub(crate) fn score_one(clv: &[f32], input: &ScoreInput) -> f32 {
-    let query = &clv[..clv.len().min(input.expert_vector.len())];
-    let sim = nexus_core::cosine_similarity_slices(query, &input.expert_vector);
-    sim * input.priority
+    score_parts(clv, &input.expert_vector, input.priority)
+}
+
+/// ComputeBridge 路由判定 — 两条评分路径共用的唯一决策点
+///
+/// 配置/env 关闭 → 直接 `Inline`（等价于 `should_parallel` 为 false）,
+/// 否则按 `TaskKind::Generic` 的规模阈值判 `Inline` / `Rayon`。
+#[must_use]
+fn dispatch_plan(n: usize, parallel_enabled: bool) -> DispatchPlan {
+    if should_parallel(parallel_enabled) {
+        bridge().route(TaskKind::Generic, n)
+    } else {
+        DispatchPlan::Inline
+    }
+}
+
+/// 当前是否运行在多线程 tokio runtime 上（让出 worker 的前提,理由见
+/// [`score_experts_batch_offloaded`]）
+#[must_use]
+fn on_multi_thread_runtime() -> bool {
+    matches!(
+        tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread)
+    )
+}
+
+/// 拼接各 chunk 结果,保持输入序
+///
+/// WHY 独立函数:两条评分路径的 chunk 任务只有输出元素类型不同,错误映射与
+/// 拼接顺序完全相同,各写一份必然漂移。`T` 为单个评分结果元素
+/// (`spawn_compute_batch` 的 `T` 是整个 chunk 的 `Vec<_>`)。
+fn collect_chunks<T: Send + 'static>(
+    results: Vec<Result<Vec<T>, ComputeError>>,
+    total: usize,
+) -> Result<Vec<T>, FaaeError> {
+    let mut out = Vec::with_capacity(total);
+    for r in results {
+        match r {
+            Ok(chunk_out) => out.extend(chunk_out),
+            Err(e) => {
+                return Err(FaaeError::RoutingFailed {
+                    reason: format!("并行专家评分失败: {e}"),
+                })
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// 批量专家评分入口（ComputeBridge 路由判定）
@@ -121,9 +185,7 @@ pub fn score_experts_batch(
     parallel_enabled: bool,
 ) -> Result<Vec<(ToolId, f32)>, FaaeError> {
     let n = inputs.len();
-    if !should_parallel(parallel_enabled)
-        || bridge().route(TaskKind::Generic, n) == DispatchPlan::Inline
-    {
+    if dispatch_plan(n, parallel_enabled) == DispatchPlan::Inline {
         Ok(score_serial(clv, inputs))
     } else {
         score_parallel(clv, inputs)
@@ -132,11 +194,16 @@ pub fn score_experts_batch(
 
 /// 路由热路径的批量评分入口 —— 多线程 tokio runtime 上让出 worker 后再算
 ///
-/// # 唯一调用点
-/// [`crate::router::FaaeRouter::route`] 步骤 2。抽成独立函数而非内联在
-/// `route()` 里,是为了让「让出 worker」这一行为可被 T2 单独测量:`route()`
-/// 全程还含 12000 次异步读锁的快照收集(debug 下 ~12ms,且自身会让出一次),
-/// 噪声与被测的 ~2ms 批窗口同量级,包在 `route()` 外测无法区分
+/// # 调用点与姊妹入口
+/// 本函数是 [`score_experts_scoring_batch_offloaded`] 的"自有快照"对应物:
+/// 两者共用同一 flavor 判据,只差评分输入载体(此处为自有数据的 [`ScoreInput`],
+/// 姊妹入口为共享的 [`ExpertScoring`])。`route()` 步骤 2 走的是后者
+/// （预计算零拷贝）。本入口保留为 [`ScoreInput`] 载体的公开包装,并被
+/// T2 并发测试直接测（该测试按构造只测让出窗口,故绕开 `route()` 的快照阶段）。
+///
+/// 抽成独立函数而非内联在 `route()` 里,是为了让「让出 worker」这一行为可被
+/// T2 单独测量:`route()` 全程还含快照收集(自身会让出一次),噪声与被测的
+/// ~2ms 批窗口同量级,包在 `route()` 外测无法区分
 /// 「worker 被饿死」与「快照阶段让出过一次」。
 ///
 /// # WHY 让出 worker
@@ -174,16 +241,25 @@ pub fn score_experts_batch(
 /// 非 tokio 执行器 poll 上层 future 时 `Handle::current()` 会 panic —— 那将
 /// 回归掉今天已可用的非 tokio 消费路径,属零收益的行为收紧。`try_current` 在
 /// 无 tokio 上下文时返回 `Err`,自然落到直调分支。
-pub(crate) fn score_experts_batch_offloaded(
+///
+/// # 为何是 `pub` 而非 `pub(crate)`
+/// 这是**先于 P3 存在的公开契约入口**,签名自落地起未变;`route()` 改走预计算路径
+/// 后 crate 内不再有调用点,但"公开 API 仍在、只是当前无生产调用方"与"被死代码
+/// lint 掩盖"是两件必须分开记账的事。故保持 `pub` 并把它登记进机器台账
+/// (`scripts/check_dead_contract_apis.py` 的 `faae::parallel::score_experts_batch*`
+/// 两行,状态 DEFERRED)—— 台账按 ADR-197 A6 的口径报"未接线",而不是让 rustc 的
+/// `dead_code` 沉默。
+///
+/// WHY NOT 靠降级可见性解决:把可见性从 `pub` 收到 `pub(crate)` 来"消掉"告警,
+/// 等于用"编译器看不见"换掉"人看得见"——公开项豁免 `dead_code` 正是 ADR-197 A6
+/// 要抓的那类缺陷(编译器与测试套件双双看不见),扩大同一豁免面只会让它更难被发现。
+/// 真正的账要记在台账里,不是记在可见性里。
+pub fn score_experts_batch_offloaded(
     clv: &[f32],
     inputs: &Arc<Vec<ScoreInput>>,
     parallel_enabled: bool,
 ) -> Result<Vec<(ToolId, f32)>, FaaeError> {
-    let on_multi_thread = matches!(
-        tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
-        Ok(tokio::runtime::RuntimeFlavor::MultiThread)
-    );
-    if on_multi_thread {
+    if on_multi_thread_runtime() {
         tokio::task::block_in_place(|| score_experts_batch(clv, inputs, parallel_enabled))
     } else {
         score_experts_batch(clv, inputs, parallel_enabled)
@@ -227,19 +303,106 @@ fn score_parallel(
         .collect();
 
     let results = bridge().spawn_compute_batch(TaskKind::Generic, tasks);
+    collect_chunks(results, inputs.len())
+}
 
-    let mut out = Vec::with_capacity(inputs.len());
-    for r in results {
-        match r {
-            Ok(chunk_out) => out.extend(chunk_out),
-            Err(e) => {
-                return Err(FaaeError::RoutingFailed {
-                    reason: format!("并行专家评分失败: {e}"),
-                })
-            }
-        }
+// ============================================================================
+// 预计算路径 —— 输入为 `Arc<ExpertScoring>` 共享的不可变三元组
+//
+// 与 `ScoreInput` 路径共用 `score_parts` 算术与 `dispatch_plan` 判定;两条路径
+// 结果逐元素一致（等价性测试锁定）。差异只在"标签怎么带出去"与"要不要拷贝":
+// `ExpertScoring` 由 `ExpertProfile::new` 预计算一次并以 `Arc` 共享,故
+//   ① 热路径快照收集只剩引用计数自增,每个候选零分配、零深拷贝
+//      （与候选数无关的两次分配:外层 `Vec::with_capacity(n)` 与 `Arc::new`）；
+//   ② 结果携带 `Arc<ExpertScoring>` 而非自有 `ToolId`,消费者只为自己留存的
+//      Top-K(k 通常为 8)付 `ToolId` clone,而不是为全部 n 个候选付。
+// ============================================================================
+
+/// 预计算评分入口 —— 输入为 `Arc<ExpertScoring>` 共享三元组
+///
+/// 路由判定与 [`score_experts_batch`] 完全一致（同一个 `dispatch_plan`）,
+/// 结果序 = 输入序,元素与 `ScoreInput` 路径逐位相同。
+///
+/// # 返回值携带 `Arc<ExpertScoring>` 而非 `ToolId`
+/// WHY:调用方只保留 Top-K,让 n 次 `ToolId`(String)堆分配降到 k 次;同时
+/// `ExpertScoring` 是不可变共享的,返回 `Arc` 使调用方无法误改评分输入。
+/// 需要 `ToolId` 时由调用方显式 `scoring.tool_id.clone()`。
+///
+/// # 保留 `ScoreInput` 入口的理由
+/// `ScoreInput` 仍是 bench(`faae_parallel_bench.rs`)与外部可构造快照的公开
+/// 契约,两条路径并存以便同口径对照,不构成重复实现（算术与判定均已共用）。
+pub fn score_experts_scoring_batch(
+    clv: &[f32],
+    inputs: &Arc<Vec<Arc<ExpertScoring>>>,
+    parallel_enabled: bool,
+) -> Result<Vec<(Arc<ExpertScoring>, f32)>, FaaeError> {
+    let n = inputs.len();
+    if dispatch_plan(n, parallel_enabled) == DispatchPlan::Inline {
+        Ok(score_scoring_serial(clv, inputs))
+    } else {
+        score_scoring_parallel(clv, inputs)
     }
-    Ok(out)
+}
+
+/// 预计算路径的让出包装 —— 与 [`score_experts_batch_offloaded`] 同一 flavor 判据
+///
+/// 理由(`block_in_place` 为何能让出而不新建 CPU 预算、为何需要两分支、
+/// LocalSet 下的已知边界)全部见 [`score_experts_batch_offloaded`] 文档,此处不重复。
+pub(crate) fn score_experts_scoring_batch_offloaded(
+    clv: &[f32],
+    inputs: &Arc<Vec<Arc<ExpertScoring>>>,
+    parallel_enabled: bool,
+) -> Result<Vec<(Arc<ExpertScoring>, f32)>, FaaeError> {
+    if on_multi_thread_runtime() {
+        tokio::task::block_in_place(|| score_experts_scoring_batch(clv, inputs, parallel_enabled))
+    } else {
+        score_experts_scoring_batch(clv, inputs, parallel_enabled)
+    }
+}
+
+/// 预计算路径 — 串行评分
+fn score_scoring_serial(
+    clv: &[f32],
+    inputs: &[Arc<ExpertScoring>],
+) -> Vec<(Arc<ExpertScoring>, f32)> {
+    inputs
+        .iter()
+        .map(|s| {
+            (
+                Arc::clone(s),
+                score_parts(clv, &s.expert_vector, s.priority),
+            )
+        })
+        .collect()
+}
+
+/// 预计算路径 — `spawn_compute_batch` 批量评分,结果序 = 输入序
+///
+/// 闭包捕获 `Arc<Vec<Arc<ExpertScoring>>>` + 索引范围:只增引用计数,不拷贝向量。
+fn score_scoring_parallel(
+    clv: &[f32],
+    inputs: &Arc<Vec<Arc<ExpertScoring>>>,
+) -> Result<Vec<(Arc<ExpertScoring>, f32)>, FaaeError> {
+    let query_arc: Arc<Vec<f32>> = Arc::new(clv.to_vec());
+    let n_chunks = inputs.len().div_ceil(CHUNK);
+    type ChunkTask = Box<dyn FnOnce() -> Vec<(Arc<ExpertScoring>, f32)> + Send>;
+    let tasks: Vec<ChunkTask> = (0..n_chunks)
+        .map(|ci| {
+            let q = Arc::clone(&query_arc);
+            let all = Arc::clone(inputs);
+            let start = ci * CHUNK;
+            let end = (start + CHUNK).min(all.len());
+            Box::new(move || {
+                all[start..end]
+                    .iter()
+                    .map(|s| (Arc::clone(s), score_parts(&q, &s.expert_vector, s.priority)))
+                    .collect()
+            }) as Box<dyn FnOnce() -> Vec<(Arc<ExpertScoring>, f32)> + Send>
+        })
+        .collect();
+
+    let results = bridge().spawn_compute_batch(TaskKind::Generic, tasks);
+    collect_chunks(results, inputs.len())
 }
 
 #[cfg(test)]
@@ -247,6 +410,7 @@ fn score_parallel(
 mod tests {
     use super::*;
     use crate::config::FaaeConfig;
+    use nexus_contracts::util::xts_top_k_by;
 
     /// 构造测试用评分输入（固定种子 LCG 确定性生成）
     fn make_inputs(n: usize) -> Vec<ScoreInput> {
@@ -274,6 +438,48 @@ mod tests {
     /// 固定种子 CLV（64 维确定性）
     fn make_clv() -> Vec<f32> {
         (0..64).map(|i| ((i * 13) % 1000) as f32 / 1000.0).collect()
+    }
+
+    /// 构造测试用预计算评分输入
+    ///
+    /// WHY 从 `make_inputs` 搬运而非另写一套 LCG:必须保证两条路径拿到的
+    /// `tool_id` / `expert_vector` / `priority` **逐字段相同**,否则等价性
+    /// 断言会把"数据不同"误判成"实现有 bug"。
+    fn make_scoring_inputs(n: usize) -> Vec<Arc<ExpertScoring>> {
+        make_inputs(n)
+            .into_iter()
+            .map(|i| {
+                Arc::new(ExpertScoring {
+                    tool_id: i.tool_id,
+                    expert_vector: i.expert_vector,
+                    priority: i.priority,
+                })
+            })
+            .collect()
+    }
+
+    /// 按 `route()` 步骤 3 的**同一个**选择器取 Top-K
+    ///
+    /// WHY 直接调 `xts_top_k_by` 而非测试内复刻 `sort_by` + `truncate`:
+    /// `route()` 选 Top-K 走的是 L0 公共助手 `xts_top_k_by`（`select_nth_unstable_by`
+    /// 分区 + 前 k 段稳定排序）。测试自带一份全排版比较器,即便逐字相同,也只锁住了
+    /// 一条**生产上并不走的**代码路径 —— 哪天有人换掉生产选择器,这个测试依旧全绿,
+    /// 与 ADR-197 A6 要防的"锁错对象"是同一类假绿。比较器（含同分平局的原始下标
+    /// 升序消歧）与 `router.rs` 步骤 3 逐字一致。
+    fn top_k(rows: &[(ToolId, f32)], k: usize) -> Vec<(ToolId, f32)> {
+        // 与 route() 同构：先按输入序带上原始下标,再交给公共选择器
+        let mut idx: Vec<(usize, ToolId, f32)> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, (t, s))| (i, t.clone(), *s))
+            .collect();
+        let top = xts_top_k_by(&mut idx, k, |a, b| {
+            b.2.partial_cmp(&a.2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        })
+        .to_vec();
+        top.into_iter().map(|(_, t, s)| (t, s)).collect()
     }
 
     // ============================================================
@@ -420,5 +626,95 @@ mod tests {
         let out = score_experts_batch(&clv, &inputs, disabled.parallel_expert_scoring)
             .expect("关闭后评分失败");
         assert_eq!(out.len(), 12_000);
+    }
+
+    // ============================================================
+    // 预计算路径（ExpertScoring）vs 旧路径（ScoreInput）等价性
+    // ============================================================
+
+    /// 预计算路径必须与 `ScoreInput` 路径**逐元素等价**,含 Top-K 截断结果
+    ///
+    /// 规模覆盖四种形态:0（空）/ 1（单元素）/ 65（1 整 chunk + 残块）/
+    /// 90（< Generic 阈值 10_000,Inline 串行）/ 12_000（≥ 阈值,Rayon 并行）,
+    /// 每种规模再各跑"并行开启"与"强制串行"两种配置。
+    ///
+    /// 三层断言:
+    /// ① 逐元素 `(ToolId, f32)` 全等 —— f32 用 `assert_eq!` 而非近似:
+    ///    两条路径共用 `score_parts` 纯函数,同输入必须同输出(位模式相同)。
+    /// ② Top-K 截断后候选序列全等(含同分平局的原始下标次序),且截断走的是
+    ///    `route()` 生产同款 `xts_top_k_by` + 同一比较器(见测试内 `top_k`)。
+    ///    注:本条在逐元素相等成立时是**被蕴含的**,独立价值在于它锁住了生产选择器
+    ///    本身的行为(分区 + 前 k 段稳定排序)与平局次序,而不是重复验一遍算术。
+    /// ③ 结果携带的是输入的**同一份** `ExpertScoring`(`Arc::ptr_eq`),
+    ///    锁住"零拷贝"这一契约,而不只是"分数碰巧相同"。
+    #[test]
+    fn test_precomputed_path_matches_score_input_path() {
+        for n in [0_usize, 1, 65, 90, 12_000] {
+            for parallel_enabled in [true, false] {
+                let clv = make_clv();
+                let legacy = Arc::new(make_inputs(n));
+                let precomputed = Arc::new(make_scoring_inputs(n));
+
+                let legacy_out = score_experts_batch(&clv, &legacy, parallel_enabled)
+                    .expect("ScoreInput 路径评分失败");
+                let pre_out = score_experts_scoring_batch(&clv, &precomputed, parallel_enabled)
+                    .expect("预计算路径评分失败");
+
+                assert_eq!(legacy_out.len(), n, "n={n} 旧路径结果数必须等于输入数");
+                assert_eq!(pre_out.len(), n, "n={n} 预计算路径结果数必须等于输入数");
+
+                for (i, ((legacy_id, legacy_score), (shared, pre_score))) in
+                    legacy_out.iter().zip(pre_out.iter()).enumerate()
+                {
+                    assert_eq!(
+                        *legacy_id, shared.tool_id,
+                        "n={n} parallel={parallel_enabled} tool[{i}] ToolId 必须一致"
+                    );
+                    assert_eq!(
+                        *legacy_score, *pre_score,
+                        "n={n} parallel={parallel_enabled} tool[{i}] 评分必须逐位一致"
+                    );
+                    assert!(
+                        Arc::ptr_eq(shared, &precomputed[i]),
+                        "n={n} tool[{i}] 必须共享输入的同一份 ExpertScoring（零拷贝）"
+                    );
+                }
+
+                // Top-K:两路径各自截断后的候选序列（含平局次序）必须完全相同
+                let pre_rows: Vec<(ToolId, f32)> = pre_out
+                    .iter()
+                    .map(|(s, score)| (s.tool_id.clone(), *score))
+                    .collect();
+                let k = 8.min(n);
+                assert_eq!(
+                    top_k(&legacy_out, k),
+                    top_k(&pre_rows, k),
+                    "n={n} parallel={parallel_enabled} Top-K 结果必须一致"
+                );
+
+                // 让出包装在无 tokio 上下文（本 `#[test]` 即是）下必须与直调等价:
+                // `try_current` 失败 → 直调分支,两个 wrapper 都锁住。
+                // WHY 锁这个:`route()` 改走预计算路径后,`ScoreInput` 版 wrapper
+                // 已无 crate 内调用点,若不复核,它的 flavor 分支将完全裸奔。
+                let legacy_offloaded =
+                    score_experts_batch_offloaded(&clv, &legacy, parallel_enabled)
+                        .expect("ScoreInput 让出包装评分失败");
+                let pre_offloaded =
+                    score_experts_scoring_batch_offloaded(&clv, &precomputed, parallel_enabled)
+                        .expect("预计算让出包装评分失败");
+                assert_eq!(
+                    legacy_offloaded, legacy_out,
+                    "n={n} parallel={parallel_enabled} 让出包装必须与直调等价"
+                );
+                let pre_offloaded_rows: Vec<(ToolId, f32)> = pre_offloaded
+                    .iter()
+                    .map(|(s, score)| (s.tool_id.clone(), *score))
+                    .collect();
+                assert_eq!(
+                    pre_offloaded_rows, pre_rows,
+                    "n={n} parallel={parallel_enabled} 让出包装必须与直调等价"
+                );
+            }
+        }
     }
 }
