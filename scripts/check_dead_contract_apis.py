@@ -73,10 +73,17 @@ CONTRACTS = [
     },
     {
         "name": "UtilizationSampler (double-probe)",
-        "pattern": r"UtilizationSampler::(?:new|with_probes)\s*\(",
-        "status": "DEFERRED",
-        "note": "probe reaches production via spawn_saturation_reporter; sampler "
-                "periodic wiring is Phase A5 follow-up",
+        # WHY 无 `\\s*\\(` 强制：生产调用是**无括号的函数路径引用**
+        #   （`SAMPLER.get_or_init(UtilizationSampler::default)`，
+        #   crates/nexus-core/src/compute/telemetry.rs），而非 `::default()` 调用。
+        #   要求括号会让本判据对已落地的 A5 接线报 uses=0 —— 即脚本自身构成它要防的
+        #   假绿（审计 finding：判据漏配型）。`\\b` 而非 `\\s*\\(` 既覆盖三种形态
+        #   （`::new(` / `::with_probes(` / `::default` 裸路径），又排除
+        #   `::defaults()` 之类的近似标识符。
+        "pattern": r"UtilizationSampler::(?:new|with_probes|default)\b",
+        "status": "WIRED",  # ADR-197 A5 已落地：spawn_saturation_reporter 周期采样
+        "note": "probe reaches production via spawn_saturation_reporter (ADR-197 A5); "
+                "sampler is constructed as a bare fn path, not a call -- see pattern note",
     },
 ]
 
@@ -218,6 +225,22 @@ def selftest() -> int:
             "fn real() { let _ = bridge().update_threshold(kind, 1, 1, src); }\n",
             encoding="utf-8",
         )
+        # UtilizationSampler is constructed as a BARE fn path (no call parens) in
+        # production -- the exact form that made the old `\\s*\\(` pattern report 0.
+        # This fixture is the regression lock for that finding: it must count as a
+        # production use. Its `#[cfg(test)] mod tests` twin below must not.
+        (src / "sampler_bare_path.rs").write_text(
+            "fn reporter() {\n"
+            "    let sampler = SAMPLER.get_or_init(UtilizationSampler::default);\n"
+            "    // lookalike must NOT count: UtilizationSampler::defaults()\n"
+            "    let _ = helper(UtilizationSampler::new());\n"
+            "    #[cfg(test)]\n"
+            "    mod tests {\n"
+            "        fn t() { let _ = SAMPLER.get_or_init(UtilizationSampler::default); }\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
         dead = root / "crates" / "dead-crate" / "src"
         dead.mkdir(parents=True)
         (dead / "quiet.rs").write_text("// no contract use here\n", encoding="utf-8")
@@ -233,6 +256,13 @@ def selftest() -> int:
             problems.append("selftest: spawn_compute_batch use not detected")
         if by_name.get("ComputeError::Saturated", 0) != 1:
             problems.append("selftest: Saturated construction not detected")
+        # true positive: the BARE fn path form must be counted, and the `#[cfg(test)]`
+        # twin must be excluded -> exactly 2 (bare path + `::new()` call), not 3.
+        if by_name.get("UtilizationSampler (double-probe)", 0) != 2:
+            problems.append(
+                "selftest: UtilizationSampler bare-path form not detected, or test tail "
+                f"leaked (uses={by_name.get('UtilizationSampler (double-probe)')}, expect 2)"
+            )
         # true negative: use inside a `#[cfg(test)] mod tests` tail must NOT count
         if by_name.get("ComputeBridge::update_threshold", -1) != 1:
             problems.append(
@@ -240,7 +270,7 @@ def selftest() -> int:
                 f"(update_threshold={by_name.get('ComputeBridge::update_threshold')}, expect 1)"
             )
         # dead file contributes nothing; docs/comments must not add hits
-        if sum(by_name.values()) != 4:
+        if sum(by_name.values()) != 6:
             problems.append(f"selftest: unexpected total count {by_name}")
 
     if problems:
