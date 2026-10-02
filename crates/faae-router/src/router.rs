@@ -197,7 +197,16 @@ impl FaaeRouter {
         // Arc 共享传入评分核心:并行闭包捕获同一容器 + 索引范围,零输入复制
         // （ScoreInput 全量复制在 12000 专家场景 ~5ms,已消除）。
         let score_inputs = Arc::new(score_inputs);
-        let scored: Vec<(ToolId, f32)> = crate::parallel::score_experts_batch(
+
+        // WHY 走 `score_experts_batch_offloaded` 而非直接调 `score_experts_batch`:
+        // 后者是同步的(内层为 ComputeBridge 的 rayon `pool.scope`,不是 Future),
+        // 在 12000 专家规模下会独占 tokio worker 数毫秒,期间该 worker 无法 poll
+        // 其它 task / 驱动 IO —— 这里是请求热路径。offloaded 层在多线程 runtime
+        // 上经 `block_in_place` 让出 worker(计算本体仍在 ComputeBridge 专用 rayon
+        // 池内,不新建 CPU 预算,§7.5.3 纪律④「桥接唯一」),current_thread 上直调
+        // 不 panic。
+        // 两分支的完整理由见 `parallel::score_experts_batch_offloaded` 文档。
+        let scored: Vec<(ToolId, f32)> = crate::parallel::score_experts_batch_offloaded(
             clv,
             &score_inputs,
             self.config.parallel_expert_scoring,
@@ -617,5 +626,234 @@ mod tests {
 
         // 清理:停止后台任务避免影响其他测试
         handle.abort();
+    }
+
+    // ============================================================
+    // 步骤 2 runtime flavor 分支 —— 批评分让出 tokio worker
+    //
+    // WHY 放在 router.rs:被测分支就在本文件 `route()` 内,端到端经 route()
+    // 才能触发;直接调 `parallel::score_experts_batch` 不经过该分支,锁不住回归。
+    // ============================================================
+
+    /// 大规模专家数 —— ≥ `TaskKind::Generic` 阈值 10_000 → 必走 rayon 批量分支
+    const BULK_EXPERTS: usize = 12_000;
+
+    /// 确定性批量专家画像（固定种子 LCG）
+    fn make_bulk_profiles(n: usize) -> Vec<ExpertProfile> {
+        (0..n)
+            .map(|i| {
+                let mut state = (i as u64)
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let mut next = move || {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    (state >> 33) as usize
+                };
+                ExpertProfile::new(
+                    format!("tool-{i}"),
+                    (0..64).map(|_| (next() % 1000) as f32 / 1000.0).collect(),
+                    vec!["bulk".into()],
+                    (next() % 100) as f32 / 100.0 + 0.01,
+                )
+            })
+            .collect()
+    }
+
+    /// 构造已装载 `n` 个专家的 router
+    ///
+    /// WHY 直写 registry 而非 `register_expert`:12_000 次 `ExpertRegistered`
+    /// 广播会淹没批评分耗时、污染 T2 的测量窗口;`registry()` 是 crate 公开
+    /// API（bench 同一用法），装配结果与 `register_expert` 等价。
+    ///
+    /// WHY 关 `balance_enabled`:EDSB 重分配是概率性的，会让 `routed_tool` 不可
+    /// 复现；本组测试只关心评分分支，`candidates` 不受均衡影响。
+    async fn router_with_bulk_experts(n: usize, parallel_scoring: bool) -> FaaeRouter {
+        let config = FaaeConfig::default()
+            .with_parallel_expert_scoring(parallel_scoring)
+            .with_balance_enabled(false);
+        let router = FaaeRouter::with_config(EventBus::new(), config);
+        let registry = router.registry();
+        {
+            let mut registry = registry.write().await;
+            for profile in make_bulk_profiles(n) {
+                registry.insert(profile.tool_id.clone(), Arc::new(RwLock::new(profile)));
+            }
+        }
+        router
+    }
+
+    /// 批量候选 ID 列表 —— 与 `make_bulk_profiles` 的命名规则一致
+    fn bulk_candidates(n: usize) -> Vec<ToolId> {
+        (0..n).map(|i| ToolId::new(format!("tool-{i}"))).collect()
+    }
+
+    /// 固定种子 CLV(64 维确定性)
+    fn bulk_clv() -> Vec<f32> {
+        (0..64).map(|i| ((i * 13) % 1000) as f32 / 1000.0).collect()
+    }
+
+    /// T1 —— current_thread 上评分结果逐元素不变（分支回归锁）
+    ///
+    /// `#[tokio::test]` 默认 current_thread:① 若把 flavor 分支退化为裸
+    /// `block_in_place`,此处与本模块既有全部路由测试会直接 panic;
+    /// ② 本测试锁定「让出逻辑不得改变评分结果」——同一批 12_000 专家在并行
+    /// 配置与串行配置两个 router 上,`route()` 的 Top-K 候选必须逐元素一致
+    /// (ToolId + f32 全等),`routed_tool` 亦同。
+    #[tokio::test]
+    async fn t1_current_thread_scores_are_invariant() {
+        let parallel_router = router_with_bulk_experts(BULK_EXPERTS, true).await;
+        let serial_router = router_with_bulk_experts(BULK_EXPERTS, false).await;
+        let clv = bulk_clv();
+        let candidates = bulk_candidates(BULK_EXPERTS);
+
+        let parallel = parallel_router
+            .route(&clv, &candidates)
+            .await
+            .expect("并行路由应成功");
+        let serial = serial_router
+            .route(&clv, &candidates)
+            .await
+            .expect("串行路由应成功");
+
+        assert_eq!(parallel.candidates.len(), 8, "Top-K 默认 8");
+        assert_eq!(parallel.candidates.len(), serial.candidates.len());
+        for (i, (p, s)) in parallel
+            .candidates
+            .iter()
+            .zip(serial.candidates.iter())
+            .enumerate()
+        {
+            assert_eq!(p.0, s.0, "Top-K[{i}] ToolId 必须一致");
+            assert_eq!(p.1, s.1, "Top-K[{i}] 评分必须与串行逐元素一致");
+        }
+        assert_eq!(
+            parallel.routed_tool, serial.routed_tool,
+            "routed_tool 必须一致"
+        );
+    }
+
+    /// T2 —— multi_thread 上批评分不饿死 worker
+    ///
+    /// # 为何必须 `tokio::spawn` 出去跑批
+    /// `#[tokio::test]` 的测试体经 `Runtime::block_on` 在**调用线程**上驱动,
+    /// 并不占用 runtime worker —— 实测在测试体里直接同步调批时,worker 上的
+    /// 自旋 ticker 照常以 ~7 万次/秒推进(与是否让出无关),即测试体根本阻塞
+    /// 不到任何 worker,本断言天生无效。必须把批 `spawn` 成真正的 runtime 任务,
+    /// 由 worker 轮询它,同步批才会真的占住 worker。
+    ///
+    /// # 为何测 wrapper 而非 `route()`
+    /// `route()` 全程还含 12000 次异步读锁的快照收集:debug 实测快照 ~12.4ms
+    /// 且自身让出 1 tick,而被测的批窗口仅 ~2.1ms —— 信噪比 ~1:1,把窗口包在
+    /// `route()` 外测无法区分「worker 被饿死」与「快照阶段让出过」。
+    /// `score_experts_batch_offloaded` 是 `route()` 步骤 2 的唯一实现,
+    /// 故直接测它即等价于测该分支;T1 另行锁住 `route()` 端到端接线。
+    ///
+    /// # 为何用 yield 自旋 ticker 而非 `tokio::time::interval`
+    /// 本机(Windows)系统定时器分辨率 ~15.6ms,`interval(1ms)` 实际每 ~15ms
+    /// 才 fire 一次 —— 实测纯 `std::thread::sleep(50ms)` 硬阻塞窗口内 ticker
+    /// 也只推进 4 次。**仪表分辨率低于被测的 ~2ms 批窗口,测不出差别。**
+    /// 自旋 ticker 不依赖定时器:worker 空闲时高速推进,被同步批占住时完全冻结。
+    ///
+    /// # `worker_threads = 1` 而非 2
+    /// 2 个 worker 时 ticker 落在**另一个**空闲 worker 上,无论批调用是否让出
+    /// 都会推进 —— 判别力为零。1 个 worker 时 ticker 与批任务必在同一 worker
+    /// 上,只有 `block_in_place` 交接出的替补 worker 能让 ticker 继续跑。
+    /// flavor 仍是 `MultiThread`(flavor 由调度器类型决定,与 worker 数无关),
+    /// 正是本分支的目标分支。
+    ///
+    /// # 断言口径(为何不是裸 `delta >= 1`)
+    /// 取「批调用前后 tick 计数差」而非最终值:最终值会被批调用之后的
+    /// await 淹没,使测试空过。但裸 `delta >= 1` 同样空过 —— 实测「读 `before`
+    /// → 批任务真正被 worker 轮询」之间仍有自旋泄漏,不让出时也能拿到 3~6 tick。
+    /// 故改为**自校准速率比**:先量 worker 空闲时的自旋速率作基线,再要求批窗口
+    /// 速率 ≥ 基线的 10%。实测让出时为基线的 63%~89%,不让出时仅 1.6%~2.8%,
+    /// 阈值两侧各有 >8× 余量,且不随核数/主频漂移。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn t2_multi_thread_batch_does_not_starve_worker() {
+        use std::sync::atomic::AtomicU64;
+
+        let clv = bulk_clv();
+        let inputs = Arc::new(
+            make_bulk_profiles(BULK_EXPERTS)
+                .into_iter()
+                .map(|p| crate::parallel::ScoreInput {
+                    tool_id: p.tool_id,
+                    expert_vector: p.expert_vector,
+                    priority: p.priority,
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        let ticks = Arc::new(AtomicU64::new(0));
+        let ticker = {
+            let ticks = Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    // 自旋让出:无定时器依赖,worker 被占住时完全冻结
+                    tokio::task::yield_now().await;
+                    ticks.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+
+        // 预热自旋 + 量「worker 空闲」基线速率,作为机器无关的判别标尺
+        for _ in 0..10_000 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            ticks.load(Ordering::Relaxed) > 0,
+            "ticker 未存活,本测试失去判别力"
+        );
+        let free_t0 = Instant::now();
+        let free_start = ticks.load(Ordering::Relaxed);
+        for _ in 0..200_000 {
+            tokio::task::yield_now().await;
+        }
+        let free_rate =
+            (ticks.load(Ordering::Relaxed) - free_start) as f64 / free_t0.elapsed().as_secs_f64();
+
+        let before = ticks.load(Ordering::Relaxed);
+        // 批必须 spawn 成 runtime 任务,才会真的占住 worker(见文档首节)
+        let task = tokio::spawn({
+            let clv = clv.clone();
+            let inputs = Arc::clone(&inputs);
+            async move {
+                let t0 = Instant::now();
+                let scored = crate::parallel::score_experts_batch_offloaded(&clv, &inputs, true)
+                    .expect("多线程批量评分应成功");
+                (t0.elapsed(), scored.len())
+            }
+        });
+        let (window, n) = task.await.expect("批任务应正常完成");
+        let after = ticks.load(Ordering::Relaxed);
+        ticker.abort();
+
+        let delta = after - before;
+        let batch_rate = delta as f64 / window.as_secs_f64();
+        println!(
+            "[T2] 批调用窗口 = {window:?}, 窗口内 tick delta = {delta}, \
+             批窗口速率 = {batch_rate:.0}/s, 空闲基线速率 = {free_rate:.0}/s"
+        );
+        assert_eq!(n, BULK_EXPERTS, "结果数必须等于输入数");
+        // WHY 断言速率占比而非 `delta >= 1`:绝对 tick 数随机器速度漂移。
+        // 实测本机让出时批窗口速率 ≈ 空闲基线的 100%(worker 交接给替补),
+        // 不让出时仅 ~2%(worker 被同步批占死,自旋几乎冻结)—— 取 10% 阈值,
+        // 两侧各有 >8× 余量,且不依赖具体核数/主频。
+        assert!(
+            batch_rate >= free_rate * 0.1,
+            "批调用窗口 {window:?} 内自旋速率 {batch_rate:.0}/s 仅为空闲基线 \
+             {free_rate:.0}/s 的 10% 以下 —— tokio worker 被同步批评分饿死 \
+             (multi_thread 上应经 block_in_place 让出)"
+        );
+
+        // route() 端到端接线:同一 runtime 上仍须走通且结果正确
+        let router = router_with_bulk_experts(BULK_EXPERTS, true).await;
+        let result = router
+            .route(&clv, &bulk_candidates(BULK_EXPERTS))
+            .await
+            .expect("多线程路由应成功");
+        assert_eq!(result.candidates.len(), 8, "Top-K 默认 8");
     }
 }

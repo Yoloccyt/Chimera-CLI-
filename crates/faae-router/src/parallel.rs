@@ -130,6 +130,66 @@ pub fn score_experts_batch(
     }
 }
 
+/// 路由热路径的批量评分入口 —— 多线程 tokio runtime 上让出 worker 后再算
+///
+/// # 唯一调用点
+/// [`crate::router::FaaeRouter::route`] 步骤 2。抽成独立函数而非内联在
+/// `route()` 里,是为了让「让出 worker」这一行为可被 T2 单独测量:`route()`
+/// 全程还含 12000 次异步读锁的快照收集(debug 下 ~12ms,且自身会让出一次),
+/// 噪声与被测的 ~2ms 批窗口同量级,包在 `route()` 外测无法区分
+/// 「worker 被饿死」与「快照阶段让出过一次」。
+///
+/// # WHY 让出 worker
+/// [`score_experts_batch`] 是同步的(内层为 ComputeBridge 的 rayon
+/// `pool.scope`,不是 Future),在 12000 专家规模下独占 tokio worker 数毫秒,
+/// 期间该 worker 无法 poll 其它 task / 驱动 IO。多线程 runtime 上用
+/// `block_in_place` 让出 worker;**计算本体仍在 ComputeBridge 专用 rayon 池内
+/// 执行**,不新建 CPU 预算(§7.5.3 纪律④「桥接唯一」—— 池线程数是全局资源预算,
+/// 见 `nexus_core::compute::bridge` 的单例说明与 `pool.scope` 注释)—— 故不用
+/// `spawn_blocking`。
+///
+/// # 澄清:blocking 池参与「交接」,不参与「计算」
+/// `block_in_place` 并非把 worker 闲置 —— 它把当前 worker 线程的 core 整体**交接**
+/// 出去:core 的剩余生命周期经 `runtime::spawn_blocking(move || run(worker))`
+/// 在 blocking 池上跑完(见 tokio `scheduler/multi_thread/worker.rs`),被占死的
+/// worker 由此空出来去 poll 别的 task。参与交接 ≠ 参与计算:评分全部仍在唯一 rayon
+/// 池内,blocking 池这段只执行 runtime 自身的 core 收尾。故「无第二份 CPU 预算」
+/// 成立,依据是**计算不落在 blocking 池**,而非 blocking 池未被触碰。
+///
+/// # WHY 两分支,而非裸 `block_in_place`
+/// `block_in_place` 在 current_thread runtime 上 **panic**。本 crate 既有
+/// `#[tokio::test]`(默认 current_thread)与下游库消费方都可能是 current_thread;
+/// faae-router 是库 crate,抬高其运行时要求等同破坏性变更。current_thread 上
+/// 本就没有并发 task 可让,直调与让出语义等价,零行为漂移。生产入口
+/// `chimera-cli/src/main.rs` 的 `#[tokio::main]` 无 flavor 覆盖(多线程),
+/// 正是让出兑现收益的场所。
+///
+/// # 已知边界:flavor 判据 ≠ `block_in_place` 的真实门
+/// tokio 实际把关的是内部 `allow_block_in_place` 标志,而非 runtime flavor:
+/// 在 `LocalSet` 内调用时**即便 flavor 为 MultiThread 也会 panic**(LocalSet 强制
+/// current_thread 语义,无可让出的 worker)。本分支只以 flavor 判别,故 LocalSet
+/// 内的调用方仍会 panic —— flavor 门控的固有局限,在此登记而非静默上线。
+///
+/// # WHY `try_current` 而非 `current`
+/// 非 tokio 执行器 poll 上层 future 时 `Handle::current()` 会 panic —— 那将
+/// 回归掉今天已可用的非 tokio 消费路径,属零收益的行为收紧。`try_current` 在
+/// 无 tokio 上下文时返回 `Err`,自然落到直调分支。
+pub(crate) fn score_experts_batch_offloaded(
+    clv: &[f32],
+    inputs: &Arc<Vec<ScoreInput>>,
+    parallel_enabled: bool,
+) -> Result<Vec<(ToolId, f32)>, FaaeError> {
+    let on_multi_thread = matches!(
+        tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread)
+    );
+    if on_multi_thread {
+        tokio::task::block_in_place(|| score_experts_batch(clv, inputs, parallel_enabled))
+    } else {
+        score_experts_batch(clv, inputs, parallel_enabled)
+    }
+}
+
 /// 串行路径 — 顺序评分（回退 + Inline 分支,与注入前行为逐位一致）
 #[must_use]
 fn score_serial(clv: &[f32], inputs: &[ScoreInput]) -> Vec<(ToolId, f32)> {

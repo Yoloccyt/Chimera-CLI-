@@ -512,15 +512,48 @@ impl OmniSparseCoordinator {
         // hash 在核心闭包内一并计算（serde_json + Sha256,端到端最大固定成本,
         // 240 profiles ≈ 20ms,已并行化）;主线程仅在 pruning 实际生效时重算。
         let provider = self.memory_strategy_provider.clone();
+        // WHY 双分支(而非裸 block_in_place / 而非 spawn_blocking):
+        // `compute_five_masks_batch` 最终落到 `ComputeBridge::spawn_compute_batch`,
+        // 内部是**同步** `rayon::ThreadPool::scope`(nexus-core compute/bridge.rs),
+        // 返回 Vec 而非 Future ⇒ 整批计算期间调用线程被占死,既不能 poll 同 runtime
+        // 的其它 task,也不能驱动 IO。上文 240 profiles ≈ 20ms 的 serde_json + Sha256
+        // 固定成本就是这段"worker 空转窗口"。
+        // ① 多线程运行时才值得让路:生产 `chimera-cli/src/main.rs:48` 的
+        //    `#[tokio::main]` 未覆盖 flavor ⇒ 即多线程,block_in_place 会把 worker
+        //    让给 runtime 去跑别的 task,本批计算照旧在原线程同步跑完。
+        // ② current_thread 必须直调:tokio 对 block_in_place 在 current_thread 运行时
+        //    上是 **panic**(没有可让出的 worker)。本 crate 是库,强制多线程运行时
+        //    属破坏性变更;`#[tokio::test]` 默认亦为 current_thread。
+        // ③ current_thread 直调 = 零行为漂移:该运行时按定义没有可并行的其它 task,
+        //    让路无处可让,同步直调与改动前逐位一致。
+        // WHY 不选 spawn_blocking:那会把批次挪到 tokio 独立的 blocking 池,等于凭空
+        // 开出第二份 CPU 预算,违反 §7.5.3 纪律④「桥接唯一」(池线程数是全局资源预算,
+        // 见 nexus-core compute/bridge.rs:108/515);批次必须继续在 ComputeBridge
+        // 既有的 rayon 池内执行。
+        // WHY `try_current` 而非 `current`(与 faae-router parallel.rs 同形):
+        // 本方法唯一的 await 是 `event_bus.publish`,而 `EventBus::publish`
+        // (event-bus/src/bus.rs:908)带 `#[allow(clippy::unused_async)]`、内部纯同步 ⇒ `futures::executor::block_on` /
+        // `pollster::block_on` / 自定义 waker 这类**非 tokio 执行器**驱动本 future
+        // 是今天已可用的消费路径。此时 `Handle::current()` 会 panic,等于用零收益
+        // 收紧运行时要求并打断既有调用方;`try_current` 在无 tokio 上下文时返回
+        // Err,自然落到下方直调分支,行为与改动前逐位一致。
+        // 已知边界(N2):flavor 只是本分支的**判据**,不是 `block_in_place` 的真实门。
+        // tokio 实际把关的是内部 `allow_block_in_place` 标志 —— 在 `LocalSet` 内调用
+        // 时即便 flavor 为 MultiThread 仍会 panic(LocalSet 强制 current_thread 语义)。
+        // 此为 flavor 门控的固有局限,在此登记而非静默上线。
+        let on_multi_thread = matches!(
+            tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
+            Ok(tokio::runtime::RuntimeFlavor::MultiThread)
+        );
+        let masks_batch: Vec<_> = if on_multi_thread {
+            tokio::task::block_in_place(|| {
+                crate::parallel::compute_five_masks_batch(&self.config, &profiles, provider)
+            })?
+        } else {
+            crate::parallel::compute_five_masks_batch(&self.config, &profiles, provider)?
+        };
         let mut out = Vec::with_capacity(profiles.len());
-        for (profile, item) in profiles
-            .iter()
-            .zip(crate::parallel::compute_five_masks_batch(
-                &self.config,
-                &profiles,
-                provider,
-            )?)
-        {
+        for (profile, item) in profiles.iter().zip(masks_batch) {
             // 3. 逐 profile 副作用（主线程,不进 rayon 闭包）
             let (mut masks_one, hash_pre) = item;
             // W1: routing 维度使用统计二次裁剪（与 compute_all_masks 一致）
@@ -1090,4 +1123,155 @@ mod tests {
         // base_k=16,k_multiplier=0.5 → 16×0.5=8.0 → ceil=8
         assert_eq!(mask.active_ids.len(), 8);
     }
+
+    // ============================================================
+    // 批次调用的 runtime-flavor 降级（block_in_place 让路 / current_thread 直调）
+    // ============================================================
+
+    /// 构造一批固定尺寸 profile(批次测试专用,单体尺寸同 make_sized_profile 形态)
+    fn make_batch(n: usize) -> Arc<Vec<TaskProfile>> {
+        Arc::new(
+            (0..n)
+                .map(|_| make_sized_profile(40, 1_500, 40, 80, 8))
+                .collect(),
+        )
+    }
+
+    /// T1: current_thread 运行时上批次行为不变(且不 panic)—— 本分支的回归锁
+    ///
+    /// WHY 这条测试有判别力:裸 `block_in_place` 实现在 current_thread 运行时上
+    /// **panic**(tokio 无可让出的 worker),而 `#[tokio::test]` 默认即
+    /// current_thread ⇒ 去掉 flavor 分支的写法会让本测试直接崩掉。
+    /// 断言同时锁住:① 产出数 ② 掩码与串行路逐位一致 ③ `mask_hash` 与闭包内
+    /// 预计算值一致(未注入 pruner ⇒ pruning 不生效 ⇒ 走 `hash_pre` 复用分支)。
+    #[tokio::test]
+    async fn batch_on_current_thread_matches_serial_including_hash() {
+        let coord = OmniSparseCoordinator::new(EventBus::new());
+        let profiles = make_batch(24); // 24×5=120 ≥ OsaMask 阈值 100
+        let out = coord
+            .compute_all_masks_batch(Arc::clone(&profiles))
+            .await
+            .expect("current_thread 批次计算应成功");
+        let serial = crate::parallel::compute_five_masks_serial(coord.config(), &profiles, None);
+
+        assert_eq!(out.len(), 24, "批次产出数必须等于输入 profile 数");
+        for (i, (got, (expect_masks, expect_hash))) in out.iter().zip(serial.iter()).enumerate() {
+            assert_eq!(got, expect_masks, "profile[{i}] 掩码必须与串行路逐位一致");
+            // 未注入 pruner ⇒ pruning 不生效 ⇒ 闭包内预计算 hash 被直接复用
+            assert_eq!(
+                compute_omni_mask_hash(got).expect("hash 可算"),
+                expect_hash.as_ref().expect("hash 应为 Ok").clone(),
+                "profile[{i}] mask_hash 必须与闭包内预计算值一致"
+            );
+        }
+    }
+
+    /// T2: 多线程运行时上批次不饿死 worker —— 批次窗口内自旋 ticker 速率须达空闲基线一定占比
+    ///
+    /// # 为何必须 `tokio::spawn` 出去跑批
+    /// `#[tokio::test]` 的测试体经 `Runtime::block_on` 在**调用线程**上驱动,
+    /// 并不占用 runtime worker ⇒ 在测试体里直接同步调批时,worker 上的 ticker
+    /// 照常推进(与是否让出无关),断言天生无效。必须把批 `spawn` 成真正的
+    /// runtime 任务,由 worker 轮询它,同步批才会真的占住 worker。
+    ///
+    /// # 为何用 yield 自旋 ticker 而非 `tokio::time::interval`
+    /// 本机(Windows)系统定时器分辨率 ~15.6ms,`interval(1ms)` 实际每 ~15ms 才
+    /// fire 一次 —— **仪表分辨率低于被测的 ~20ms 批窗口,且会随负载放大抖动**。
+    /// 自旋 ticker 不依赖定时器:worker 空闲时高速推进,被同步批占住时完全冻结。
+    ///
+    /// # `worker_threads = 1` 而非 2
+    /// 2 个 worker 时 ticker 常落在**另一条**空闲 worker 上,无论批调用是否让出
+    /// 都会推进 ⇒ 判别力接近零。1 个 worker 时 ticker 与批任务必在同一 worker 上,
+    /// 只有 `block_in_place` 交接出的替补 core 能让 ticker 继续跑。flavor 仍是
+    /// `MultiThread`(flavor 由调度器类型决定,与 worker 数无关),正是本分支的目标
+    /// 分支。
+    ///
+    /// # 断言口径:自校准速率比,而非裸 `delta >= 1`
+    /// 裸 `delta >= 1` 空过有两个独立来源:① 读 `before` 到批次 task 真正被 poll
+    /// 之间存在自旋泄漏;② 批后的 await 淹没终值。改为**自校准速率比**:先量
+    /// worker 空闲时的自旋速率作基线,再要求批次窗口内速率 ≥ 基线的一定占比。
+    /// 该比值口径与核数/主频无关,是能在 1 worker 上稳定判别的形式。
+    ///
+    /// # 判别力(本机实测,非推断;阈值 10%,见 `MIN_BATCH_TICK_RATIO`)
+    /// 补丁在位:7/7 轮 PASSED,批窗口速率为空闲基线的 **63%~86%**。
+    /// 强制撤 `block_in_place`:3/3 轮 FAILED(退出码 101),批窗口速率仅为基线的
+    /// **0.55%~0.79%**。阈值两侧各有 >6× 余量。另注:撤补丁那三轮窗口内 `delta`
+    /// 仍有 6~7 —— 裸 `delta >= 1` 在本设计下**依然空过**,故主断言只能是速率比。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn batch_yields_worker_on_multi_thread_runtime() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::Instant;
+
+        let coord = OmniSparseCoordinator::new(EventBus::new());
+        let profiles = make_batch(64); // 64×5=320 ≥ 阈值 100 ⇒ 走 ComputeBridge rayon 分支
+
+        let ticks = Arc::new(AtomicU64::new(0));
+        let ticker = {
+            let ticks = Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    // 自旋让出:无定时器依赖,worker 被同步批占住时完全冻结
+                    tokio::task::yield_now().await;
+                    ticks.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+
+        // 预热自旋 + 量「worker 空闲」基线速率,作为机器无关的判别标尺
+        for _ in 0..10_000 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            ticks.load(Ordering::Relaxed) > 0,
+            "ticker 未存活,本测试失去判别力"
+        );
+        let free_t0 = Instant::now();
+        let free_start = ticks.load(Ordering::Relaxed);
+        for _ in 0..200_000 {
+            tokio::task::yield_now().await;
+        }
+        let free_rate =
+            (ticks.load(Ordering::Relaxed) - free_start) as f64 / free_t0.elapsed().as_secs_f64();
+
+        let before = ticks.load(Ordering::Relaxed);
+        // 批必须 spawn 成 runtime 任务,才会真的占住 worker(见文档首节)
+        let batch_task = tokio::spawn(async move {
+            let t0 = Instant::now();
+            let res = coord.compute_all_masks_batch(profiles).await;
+            (t0.elapsed(), res)
+        });
+        let (window, res) = batch_task.await.expect("批次 task 应当完成");
+        let out = res.expect("多线程批次计算应成功");
+        let after = ticks.load(Ordering::Relaxed);
+        ticker.abort();
+
+        let delta = after - before;
+        let batch_rate = delta as f64 / window.as_secs_f64();
+        println!(
+            "[T2] 批调用窗口 = {window:?}, 窗口内 tick delta = {delta}, \
+             批窗口速率 = {batch_rate:.0}/s, 空闲基线速率 = {free_rate:.0}/s"
+        );
+
+        assert_eq!(out.len(), 64, "批次产出数必须等于输入 profile 数");
+        assert!(
+            batch_rate >= free_rate * MIN_BATCH_TICK_RATIO,
+            "批调用窗口 {window:?} 内自旋速率 {batch_rate:.0}/s 仅为空闲基线 \
+             {free_rate:.0}/s 的 {:.1}% 以下 —— tokio worker 被同步批次饿死 \
+             (multi_thread 上应经 block_in_place 让出)",
+            MIN_BATCH_TICK_RATIO * 100.0
+        );
+    }
+
+    /// T2 判别阈值 —— 批窗口自旋速率 / 空闲基线速率的下限
+    ///
+    /// 选 0.10 的依据是本机实测(非推断):本批次(64 profile,debug)窗口约 8~12ms。
+    /// 补丁在位时 7/7 轮通过,批窗口速率为空闲基线的 **63%~86%**;强制撤掉
+    /// `block_in_place` 分支时 3/3 轮 FAILED(退出码 101),批窗口速率仅为基线的
+    /// **0.55%~0.79%**。阈值两侧各有 >6× 余量,且比值口径已归一化机器速度,
+    /// 不随核数/主频漂移。
+    ///
+    /// 附:撤补丁那三轮的窗口内 `delta` 仍有 6~7 个 tick —— 换成自旋 ticker 后裸
+    /// `delta >= 1` 反而比 1ms interval 时更容易空过(自旋泄漏更快),这正是本测试
+    /// 改用速率比口径的原因。
+    const MIN_BATCH_TICK_RATIO: f64 = 0.10;
 }
