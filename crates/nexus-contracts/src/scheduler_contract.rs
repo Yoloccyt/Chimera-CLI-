@@ -120,6 +120,8 @@ pub enum DenyReason {
     DurationExceedsQuota,
     /// 影子模式拒绝（只决策不执行,影子期不真正授予）
     ShadowReject,
+    /// 认领频率超硬上限（v2.3 §(b.4)(2) broker 护栏：防轮询风暴,仅在启用限流时出现）
+    RateLimited,
 }
 
 /// 续期结果

@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::{virtual_scroll_window, FOOTER_TEXT};
+use crate::render::{scroll_offset_window, FOOTER_TEXT};
 use crate::types::{PanelId, TuiCommand, TuiState};
 use event_bus::NexusEvent;
 
@@ -394,7 +394,9 @@ impl Panel for ParliamentPanel {
         let header_p = Paragraph::new(Text::from(header_lines));
         Widget::render(header_p, header_area, buf);
 
-        let content_height = list_area.height.saturating_sub(3) as usize;
+        // chrome = body 标题 2 行 + 空行 + FOOTER(content() 首尾固定 4 行);
+        // 窗口行数多减会裁掉页脚、少减会让 Text 溢出 list_area 底部
+        let content_height = list_area.height.saturating_sub(4) as usize;
 
         // M4 二期:先按"上一窗口"试探缓存命中,命中则用缓存计数免去 O(n)
         // 事件过滤;随后按真实窗口二次校验,滚动/面积变化仍会正确失效。
@@ -419,8 +421,12 @@ impl Panel for ParliamentPanel {
         self.scroll_offset =
             list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
-        // P4.2 虚拟滚动:仅构建窗口内事件的 Text,减少内存与 CPU 开销
-        let window = virtual_scroll_window(count, self.scroll_offset, content_height);
+        // P4.2 虚拟滚动:仅构建窗口内事件的 Text,减少内存与 CPU 开销。
+        // 窗口算术(基=scroll_offset+钳制+贴底回填,六面板同款)提取于共享
+        // 纯函数,WHY 归并见 render.rs scroll_offset_window 文档;回填窗口
+        // 仍作为下方缓存键的 window 字段,起点回退自动失效缓存。
+        let (start, end) = scroll_offset_window(count, self.scroll_offset, content_height);
+        let window = (start, end);
         let key = ParliamentRenderKey {
             selected: self.selected,
             window,
@@ -432,8 +438,10 @@ impl Panel for ParliamentPanel {
             self.cached_window = Some(window);
             self.cached_key = if enable_cache { Some(key) } else { None };
         }
-        let paragraph =
-            Paragraph::new(self.cached_text.clone()).scroll((self.scroll_offset as u16, 0));
+        // WHY 不叠加 Paragraph::scroll:cached_text 已是窗口化文本(scroll_offset
+        // 体现为窗口基),再 scroll 即双重滚动 —— scroll.y ≥ Text 行数时整版空白、
+        // 选中高亮丢失(F-09;反模式书面记录见 event_stream.rs / log.rs render 注释)。
+        let paragraph = Paragraph::new(self.cached_text.clone());
         paragraph.render(list_area, buf);
     }
 

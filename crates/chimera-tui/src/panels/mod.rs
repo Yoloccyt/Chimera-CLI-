@@ -42,6 +42,10 @@ pub fn shortcuts_from_domain(
         .collect()
 }
 
+/// v2.3 §(b.6):/bench 基准面板(criterion 数据先行,trait 注入)
+pub mod bench;
+/// v2.3 §(b.6)/§(b.2):黑板浏览面板(MLC 协作态投影按 epistemic 过滤)
+pub mod blackboard;
 pub mod budget;
 pub mod chat;
 pub mod chtc;
@@ -72,6 +76,8 @@ pub mod parliament;
 pub mod pvl_score;
 pub mod quest;
 pub mod resource_monitor;
+/// v2.3 §(b.6)/§(b.4):审查队列面板(AdversarialReview 可视化;仅 Certify 渲染为已认证)
+pub mod review_queue;
 pub mod router;
 pub mod security;
 /// polish-v2.7 P1-5:自评仪表盘面板(五维度 Harness 自我评估,ADR-049)
@@ -80,6 +86,8 @@ pub mod sysinfo;
 pub mod task_manager;
 pub mod timeline;
 
+pub use bench::{BenchPanel, BenchStats, BenchStatsProvider};
+pub use blackboard::{BlackboardPanel, BoardItem};
 pub use budget::BudgetPanel;
 pub use chat::ChatPanel;
 pub use chtc::ChtcPanel;
@@ -105,6 +113,7 @@ pub use parliament::ParliamentPanel;
 pub use pvl_score::PvlScorePanel;
 pub use quest::QuestPanel;
 pub use resource_monitor::ResourceMonitorPanel;
+pub use review_queue::{ReviewItem, ReviewQueuePanel, ReviewStage};
 pub use router::RouterPanel;
 pub use security::SecurityPanel;
 pub use self_assessment::SelfAssessmentPanel;

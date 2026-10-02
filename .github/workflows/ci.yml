@@ -186,6 +186,8 @@ jobs:
           python3 scripts/check_doc_pointer_integrity.py
           python3 scripts/check_event_ownership.py --selftest
           python3 scripts/check_event_ownership.py
+          python3 scripts/check_certify_whitelist.py
+          python3 scripts/check_write_sensitive_instrumentation.py
           python3 scripts/check_gated_wiring_substance.py --selftest
           python3 scripts/check_gated_wiring_substance.py
           python3 scripts/check_impl_maturity_claims.py --selftest
@@ -311,33 +313,49 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # WHY 预编译安装(2026-09-28 工具链效率重构):原先 machete/typos/taplo 三个工具
+      # 各走 `cargo install --locked`,即在 2 核 runner 上从源码编译,单次 PR 合计
+      # 约 5-8 分钟纯工具编译开销;而 Swatinem/rust-cache 只缓存 registry 与 target/,
+      # 不缓存 $CARGO_HOME/bin 的安装产物 ⇒ 每一轮都重编一次。
+      # taiki-e/install-action 直接下载 GitHub Releases 预编译二进制并校验 SHA256,
+      # 秒级完成。C5 的"版本钉死"口径不变(仍逐一 @version);供应链姿态只升不降
+      # ——从"编译 crates.io 源码"变为"校验上游 release 校验和"。
+      # 本 action 已在本仓 cargo-nextest(ci.yml check/e2e/mca 三 job)、hyperfine
+      # (bench_check.yml)上在用,非新增依赖面。
+      - name: Install static-analysis CLIs (prebuilt, version-pinned)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete@0.9.2,typos@1.50.1,taplo@0.10.0
+
       # WHY: 无用依赖门禁(报告 §3.6 行动项 7)——cargo-machete 秒级扫描,
       # 返回码 0/1/2 适合 CI;误报用 workspace.metadata.cargo-machete 忽略表解决。
       - name: Unused dependencies (cargo-machete)
-        run: |
-          # C5(2026-09-04): --version 固定工具自身版本(--locked 仅锁依赖树),
-          # 防上游 breaking 造成 CI 间歇红;升级需显式改版本号并观察首轮结果。
-          cargo install cargo-machete --locked --version 0.9.2
-          cargo machete
+        run: cargo machete
 
       # E4(报告附录 E): 拼写检查门禁——typos 以"已知拼写错误修正表"设计保持低误报,
       # 可无监督跑 PR;词表配置见 _typos.toml(项目专有名词/标识符豁免)。
       - name: Spell check (typos)
-        run: |
-          # C5(2026-09-04): pin 1.50.1(注意: crate 名是 typos-cli,与 typos 库版本不同步)
-          cargo install typos-cli --locked --version 1.50.1
-          typos
+        run: typos
 
       # E4(报告附录 E, P1-3 基线): TOML 格式门禁——taplo 为 Even Better TOML 内核;
       # 范围限定配置文件(manifest 因依赖铁律注释布局豁免,见 .taplo.toml WHY);
       # 2026-08-17 已应用基线,本地 check 归零。
+      # 注:"profiles/deployment/*.toml" 已于 2026-09-28 摘除——该目录在仓内不存在
+      # (本机 taplo 实测匹配 0 文件、静默 rc=0),它是 mca-gateway spec_loader 期待的
+      # 部署档目录,属"待实现"而非"待格式化";留在列表里只会掩盖真实缺口。
+      #
+      # ⚠ 本地复跑须知(2026-09-28 实测,与 CLAUDE.md §5 的 cargo fmt 长路径问题同类):
+      # 本仓 core.autocrlf=true 且无根 .gitattributes ⇒ 工作树文件是 CRLF、git blob 是 LF,
+      # 而 taplo 对行尾敏感。故在 Windows 工作树上直接跑
+      #   taplo fmt --check .cargo/config.toml
+      # 会**恒红**——已证明与文件内容无关:把 HEAD 版本转成 CRLF 同样红,转回 LF 即绿。
+      # 要本地等效验证,先把待检文件归一化为 LF 再跑,否则极易误判为"自己改坏了格式"。
+      # CI(checkout 为 LF)不受此影响,这也是本门在 CI 侧长期为绿而本地为红的原因。
       - name: TOML format check (taplo)
         run: |
-          # C5(2026-09-04): pin 0.10.0
-          cargo install taplo-cli --locked --version 0.10.0
           taplo fmt --check -c .taplo.toml \
             "deny.toml" ".cargo/config.toml" ".config/nextest.toml" \
-            "fuzz/Cargo.toml" "examples/*.toml" "profiles/deployment/*.toml" \
+            "fuzz/Cargo.toml" "examples/*.toml" \
             "crates/mca-gateway/affinity.d/*.toml"
 
       - name: Install cargo-nextest
@@ -492,11 +510,15 @@ jobs:
       # E2(报告附录 E): feature 矩阵机械闸门——cargo-hack each-feature 穷举
       # 每个 crate 的 feature 组合,封堵"门控代码腐化、转 on 集中爆雷"风险(R5)。
       # --no-dev-deps 减少编译量;--exclude chimera-e2e-tests 避免重复编译 E2E。
+      # WHY 预编译安装:同 check job 论证——cargo-hack 源码编译约 1-2 分钟/轮,
+      # 而预编译二进制秒级;C5 的版本钉死口径不变。
+      - name: Install cargo-hack (prebuilt, version-pinned)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack@0.6.45
+
       - name: Feature matrix check (cargo-hack)
-        run: |
-          # C5(2026-09-04): pin 0.6.45
-          cargo install cargo-hack --locked --version 0.6.45
-          cargo hack check --workspace --each-feature --no-dev-deps --exclude chimera-e2e-tests
+        run: cargo hack check --workspace --each-feature --no-dev-deps --exclude chimera-e2e-tests
 
       - name: Test (workspace, --features mca)
         # WHY nextest + 排除 stress(2026-08-19 修复):cargo test 串行跑全部 target

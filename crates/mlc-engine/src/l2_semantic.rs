@@ -524,6 +524,47 @@ impl SemanticMemory {
         }
     }
 
+    /// v2.3 §(b.3) 一期：按 token 预算裁剪召回结果（复用 on_demand 贪心装包 idiom）。
+    ///
+    /// 先取 `top_k` 相似结果（相似度降序），再以「高分优先、贪心装包」累计每条
+    /// content 的估算 token（chars/4），预算不足者**跳过**（后续更短者仍可能装入，
+    /// 非前缀截断）。将固定 K 召回升级为**预算驱动裁剪**，与 residual 5% /
+    /// hcw rerank / on_demand_synthesizer 预算模式同族，使消费端可按上下文预算截断。
+    ///
+    /// WHY 独立方法而非改 `recall_by_clv` 签名：固定 K 是稳定契约（多处依赖），
+    /// 预算裁剪是新增消费面；分开保持向后兼容与可测性。
+    pub fn recall_within_token_budget(
+        &self,
+        query: &CLV,
+        top_k: usize,
+        token_budget: usize,
+    ) -> Result<Vec<(MemoryId, f32)>, MlcError> {
+        let candidates = self.recall_by_clv(query, top_k)?;
+        if candidates.is_empty() || token_budget == 0 {
+            return Ok(Vec::new());
+        }
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| MlcError::StorageError(format!("L2 rwlock poisoned: {e}")))?;
+        let mut used = 0usize;
+        let mut out: Vec<(MemoryId, f32)> = Vec::new();
+        for (id, score) in candidates {
+            let Some(entry) = inner.entries.get(&id) else {
+                continue;
+            };
+            // chars/4 估算（与 on_demand estimate_tokens 同量级的粗粒度启发式）；至少 1
+            let est = entry.content.chars().count().div_ceil(4).max(1);
+            if used + est > token_budget {
+                // 贪心装包：预算不足则跳过该条，继续尝试后续更短条目
+                continue;
+            }
+            used += est;
+            out.push((id, score));
+        }
+        Ok(out)
+    }
+
     /// 建图/重建窗口:取写锁全量重建后本次召回走近似层
     ///
     /// WHY `try_write` 而非 `write`:稳态下召回是热路,若多个读者长期持读锁,
@@ -950,6 +991,40 @@ mod tests {
         assert_eq!(results[0].0.as_str(), "m-1");
         // 相同向量余弦相似度 ≈ 1.0
         assert!((results[0].1 - 1.0).abs() < 1e-5);
+    }
+
+    /// §(b.3) 一期：预算充足时全部保留；预算=0 时空；贪心跳过装不下的高分大条目。
+    #[test]
+    fn recall_within_token_budget_greedy_skips_oversized() {
+        let mem = SemanticMemory::new(64);
+        let query = make_clv(1.0);
+        // A：与 query 同向(sim≈1.0，排首)，content 160 字→ 估算 40 token
+        mem.insert(
+            MemoryEntry::new("A", "x".repeat(160), MemoryTier::L2Semantic).with_clv(make_clv(1.0)),
+        )
+        .unwrap();
+        // B：与 query 弱相关(排序靠后)，content 8 字 → 估算 2 token
+        mem.insert(
+            MemoryEntry::new("B", "abcdefgh", MemoryTier::L2Semantic)
+                .with_clv(make_clv_with_value(0.5)),
+        )
+        .unwrap();
+
+        // 预算=10：A(40) 装不下→跳过；B(2) 装入→仅得 B（贪心非前缀截断）
+        let tight = mem.recall_within_token_budget(&query, 10, 10).unwrap();
+        assert_eq!(tight.len(), 1, "预算 10 应仅装下 B");
+        assert_eq!(tight[0].0.as_str(), "B");
+
+        // 预算=100：A(40)+B(2)=42 ≤ 100 → 两条均保留，保相似度降序
+        let loose = mem.recall_within_token_budget(&query, 10, 100).unwrap();
+        assert_eq!(loose.len(), 2);
+        assert_eq!(loose[0].0.as_str(), "A", "高分条目应排首");
+
+        // 预算=0：诚实返回空（不超预算）
+        assert!(mem
+            .recall_within_token_budget(&query, 10, 0)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

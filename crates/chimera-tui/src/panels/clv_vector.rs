@@ -315,10 +315,8 @@ impl Panel for ClvVectorPanel {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            // WHY 复用 virtual_scroll_window:Top-8 最多 8 项,虽不需要虚拟滚动性能优化,
-            // 但沿用 Timeline/EventStream 模式保持一致性,且为未来扩展更多维度预留
             let (start, end) =
-                render::virtual_scroll_window(count, self.scroll_offset, visible_rows);
+                render::scroll_offset_window(count, self.scroll_offset, visible_rows);
             for idx in start..end {
                 if let Some((dim, value)) = top_dims.get(idx) {
                     dim_lines.push(Self::format_top_dim_line(

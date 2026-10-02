@@ -165,6 +165,12 @@ fn g_prefix_keys_cover_ten_panels() {
         ('8', PanelId::DagViz),
         ('9', PanelId::PvlScore),
         ('0', PanelId::TaskManager),
+        // v2.3 §(b.6):`g b`(go bench)直达 /bench 基准面板
+        ('b', PanelId::Bench),
+        // v2.3 §(b.6)/§(b.4):`g r`(go review)直达审查队列面板
+        ('r', PanelId::ReviewQueue),
+        // v2.3 §(b.6)/§(b.2):`g d`(go board)直达黑板浏览面板
+        ('d', PanelId::Blackboard),
     ];
     for (ch, panel) in cases {
         assert_routes_to(key(KeyCode::Char(ch)), RouterMode::GPrefix, panel);

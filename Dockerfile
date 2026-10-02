@@ -63,15 +63,17 @@ ENV RUST_LOG=info
 # ⚠ 本默认值需在每次升 version 时同步(当前 = Cargo.toml workspace.package.version);
 #   release.yml 的 docker job 始终传 --build-arg VERSION=${github_ref_name},不依赖此默认值;
 #   受影响的是本地 `docker build -t chimera-cli:rc .`(发布检查单第 10 项)不带参数时会烧进此值。
-ARG VERSION=2.28.0-omega
+ARG VERSION=2.29.0-omega
 
 # OCI 标准 LABELS:镜像元数据,便于镜像仓库(GHCR/Docker Hub)索引与运维检索
 # WHY 缺失 LABELS 的镜像在仓库中无法被搜索/过滤,违反 OCI 镜像规范的可发现性要求;
-#      licenses 字段取自根 Cargo.toml 的 license = "Apache-2.0"(非 MIT,与项目实际一致)
+#      licenses 字段取自根 Cargo.toml 的 workspace.package.license = "MIT"
+#      (2026-09-28 订正:此前写 Apache-2.0 并附注"非 MIT",与 manifest 直接冲突——
+#       manifest 是本项目 license 的唯一权威源,镜像标签只是它的派生投影)
 LABEL org.opencontainers.image.title="Chimera CLI" \
       org.opencontainers.image.description="NEXUS-OMEGA AI Coding Agent — 全维稀疏架构的下一代编码代理" \
       org.opencontainers.image.source="https://github.com/Yoloccyt/Chimera-CLI-" \
-      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"
 
 # 构建产物 chimera 复制到镜像(与 CLI 命令入口一致)

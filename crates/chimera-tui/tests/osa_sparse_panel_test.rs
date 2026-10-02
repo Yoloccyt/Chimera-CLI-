@@ -304,3 +304,31 @@ fn test_osa_sparse_panel_zh_locale_renders_chinese_copy() {
         "Zh locale 下 OsaSparse 空状态应显示中文提示,实际: {content}"
     );
 }
+
+// ============================================================
+// H. 选中行可见性(批次三终审 #1:窗口化守护归属从 proptest 扩展到专项文件)
+// ============================================================
+
+#[test]
+fn test_osa_sparse_panel_selected_row_visible_after_scroll() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let mut panel = OsaSparsePanel::new();
+    let mut state = TuiState::new();
+    // 30 条互异 file_id,选中行文本 "osa-024" 全帧唯一可锚定
+    state.osa_context_mask = (0..30).map(|i| format!("osa-{i:03}")).collect();
+
+    // Down×24 → selected=24;100x40 全量四段布局列表段可见,
+    // adjust_scroll 保证选中行落在窗口基确定的窗口内
+    let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+    for _ in 0..24 {
+        panel.handle_key(down, &mut state);
+    }
+    let content = render_panel_to_string(&mut panel, &state, 100, 40);
+
+    // 帧内 "> " 唯一来源是选中行前缀(未选中行为 "  ",chrome 无 ">" 字样)
+    assert!(content.contains("> "), "选中行应带 > 前缀, got: {content}");
+    assert!(
+        content.contains("osa-024"),
+        "选中行文本应随前缀同帧可见, got: {content}"
+    );
+}

@@ -290,6 +290,12 @@ impl InputRouter {
             KeyCode::Char('8') => RouteTarget::PanelJump(PanelId::DagViz),
             KeyCode::Char('9') => RouteTarget::PanelJump(PanelId::PvlScore),
             KeyCode::Char('0') => RouteTarget::PanelJump(PanelId::TaskManager),
+            // v2.3 §(b.6):`g b`(go bench)直达 /bench 基准面板
+            KeyCode::Char('b') => RouteTarget::PanelJump(PanelId::Bench),
+            // v2.3 §(b.6)/§(b.4):`g r`(go review)直达审查队列面板
+            KeyCode::Char('r') => RouteTarget::PanelJump(PanelId::ReviewQueue),
+            // v2.3 §(b.6)/§(b.2):`g d`(go boar**d**)直达黑板浏览面板
+            KeyCode::Char('d') => RouteTarget::PanelJump(PanelId::Blackboard),
             _ => RouteTarget::ExitMode,
         }
     }

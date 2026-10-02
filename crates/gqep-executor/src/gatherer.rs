@@ -57,8 +57,9 @@ impl GqepExecutor {
         // P1-T12 接入(灰度验证「公共 API 零感知」):
         // GatherCompleted/OperationTimedOut 等高频非 Critical 事件走分片扇出
         // (worker 汇入既有 broadcast,订阅者 API 零变化);无 tokio runtime 时
-        // enable_sharding 返回 Err,let _ 忽略即降级单流(零回归)
-        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // enable_sharding 返回 Err 即降级单流(零回归)
+        // A3/ADR-197:启用结果可见化（内部按级别记日志），不再静默忽略 Err
+        event_bus.try_enable_sharding("gqep-executor");
         let default_timeout = std::time::Duration::from_millis(config.default_timeout_ms);
         let qeep = QeepProtocol::new(default_timeout);
         Self {

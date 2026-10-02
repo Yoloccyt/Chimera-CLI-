@@ -274,6 +274,53 @@ pub fn virtual_scroll_window(
     (start, end)
 }
 
+/// 滚动窗口计算(无缓冲版)— 窗口基 = scroll_offset,六面板虚拟滚动共享
+///
+/// 返回 `[start, end)` 半开区间渲染窗口,恒满足 `start <= end <= total`。
+/// 与 [`virtual_scroll_window`] 的区别:**不带上下 `VIRTUAL_SCROLL_BUFFER` 缓冲**。
+///
+/// # 设计决策(WHY,原六面板内联注释归并于彼处)
+/// Parliament / Log / EventStream / Timeline / OsaSparse / ClvVector 六面板
+/// 将窗口化 Text 整段交给 Paragraph 渲染且**无 `.scroll` 补偿**——若走
+/// [`virtual_scroll_window`],±5 缓冲原样进入 Text 会把可视带整体下移:
+/// 稳态下滚(`list_state::adjust_scroll` 钉选中于 Δ=visible_rows-1)时选中行
+/// 落在可视带之外恒不可见(R5 F-11 同族缺陷,批次一至三逐面板收口,批次三
+/// 终审第 3 条收敛为本函数)。
+///
+/// # 算术(提取前为六处内联复制,单点维护)
+/// - 窗口基直接取 `scroll_offset`;`end = scroll_offset + visible_rows` 钳到
+///   `total`;`start = scroll_offset` 钳到 `end`(B3-R 下溢钳制):贴底滞留
+///   (`scroll_to_bottom` 直接置 offset=旧 count-1,不经渲染)叠加数据收缩 +
+///   极小高度(visible_rows==0 时 `adjust_scroll` 原样返回滞留值)可令
+///   `scroll_offset > total`,无钳位则 `end - start` usize 下溢(debug panic);
+///   钳位与 [`virtual_scroll_window`] 的 `clamped_offset` 防御同义,滞留窗口
+///   自然回退列表底部。
+/// - **末端回填**:贴底(offset=total-1)时窗口 `[total-1, total)` 仅 1 条,
+///   列表区大面积空白易误读为"列表断了";当窗口末端贴住列表末端且不满屏时,
+///   起点回退 `total - visible_rows` 贴底填满,与 `adjust_scroll` 贴底语义
+///   (offset = selected-(visible_rows-1))一致。回填只改窗口基不改
+///   `scroll_offset`,选中项仍在回填窗口内。
+///
+/// # 边界情况
+/// - `total == 0`:返回 `(0, 0)`
+/// - `visible_rows == 0`:窗口长度为 0(不回填,`0 < 0` 恒假)
+/// - `scroll_offset > total`:钳到末端并回填为 `total - visible_rows` 贴底窗口
+pub fn scroll_offset_window(
+    total: usize,
+    scroll_offset: usize,
+    visible_rows: usize,
+) -> (usize, usize) {
+    // saturating_add 而非 `+`:六面板调用面两参数均有界(≤ 列表长度/终端行数),
+    // 与 `+` 完全等价;作为共享纯函数需对全域 usize 输入(proptest 任意值
+    // 驱动)不 panic。
+    let end = scroll_offset.saturating_add(visible_rows).min(total);
+    let mut start = scroll_offset.min(end);
+    if end == total && end - start < visible_rows {
+        start = total.saturating_sub(visible_rows);
+    }
+    (start, end)
+}
+
 /// 渲染条形热图 — 将标量值映射为带颜色编码的 Line
 ///
 /// 用于 OsaSparse 面板(稀疏度热图)与 ClvVector 面板(分块均值热图)。
@@ -808,6 +855,44 @@ mod tests {
         let (start, end) = virtual_scroll_window(50, 100, 20);
         assert_eq!(start, 44, "offset clamped to 49, start = 49 - 5");
         assert_eq!(end, 50, "end clamped to total_items");
+    }
+
+    // ============================================================
+    // scroll_offset_window(无缓冲窗口,六面板共享)测试
+    // ============================================================
+
+    #[test]
+    fn test_scroll_offset_window_total_zero() {
+        // total=0:窗口恒空,任意 offset/visible 均返回 (0,0)
+        assert_eq!(scroll_offset_window(0, 0, 10), (0, 0));
+        assert_eq!(scroll_offset_window(0, 42, 10), (0, 0));
+    }
+
+    #[test]
+    fn test_scroll_offset_window_zero_visible() {
+        // visible_rows=0:窗口长度 0,不触发回填(0 < 0 恒假)
+        assert_eq!(scroll_offset_window(100, 50, 0), (50, 50));
+        assert_eq!(scroll_offset_window(100, 150, 0), (100, 100));
+    }
+
+    #[test]
+    fn test_scroll_offset_window_offset_exceeds_total() {
+        // B3-R:offset > total 钳到末端并回填,不做 usize 下溢
+        assert_eq!(scroll_offset_window(50, 100, 20), (30, 50));
+    }
+
+    #[test]
+    fn test_scroll_offset_window_bottom_refill() {
+        // 贴底回填:offset=total-1 时窗口仅 1 条,起点回退填满 visible_rows
+        assert_eq!(scroll_offset_window(100, 99, 10), (90, 100));
+        // total < visible_rows:整表返回(回填起点钳为 0)
+        assert_eq!(scroll_offset_window(5, 4, 10), (0, 5));
+    }
+
+    #[test]
+    fn test_scroll_offset_window_mid_list() {
+        // 中部:窗口基=offset,未贴底不回填,窗口长恰为 visible_rows
+        assert_eq!(scroll_offset_window(10_000, 5_000, 20), (5_000, 5_020));
     }
 
     // ============================================================

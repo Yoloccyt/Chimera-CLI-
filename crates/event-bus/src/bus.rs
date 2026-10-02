@@ -43,24 +43,24 @@ pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 ///
 /// WHY 常量而非硬编码:双清单同步红线(MCA M0 起)要求新增 Critical 事件
 /// 必须同时修改 severity() 与 is_critical_mpsc_event 两处;此常量供
-/// 守护测试断言旁路清单规模不回退(14 ⊆ 18)。
+/// 守护测试断言旁路清单规模不回退(16 ⊆ 20)。
 /// L4 深度优化 P1-1:FormalVerificationFailed 升入旁路(13 → 14)——
 /// 验证器否决候选若丢失则违规候选继续进入后续阶段,与 FormalViolation 同语义。
-pub const CRITICAL_MPSC_VARIANTS: usize = 14;
+pub const CRITICAL_MPSC_VARIANTS: usize = 16;
 
 /// severity() 返回 Critical 的变体总数 — D-8 口径
 ///
-/// 18 = 14(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
+/// 20 = 16(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
 /// CheckpointSaved / ConsensusReached / SlowConsumerDropped / OrphanCallDetected)。
 /// 本任务不改变 4 个历史 Critical 事件的通道归属(既定设计,推演 D-8 裁决)。
-pub const CRITICAL_TOTAL: usize = 18;
+pub const CRITICAL_TOTAL: usize = 20;
 
-/// 分片禁区声明 — 18 个 Critical 变体名清单(T12 分片时使用)
+/// 分片禁区声明 — 20 个 Critical 变体名清单(T12 分片时使用)
 ///
 /// WHY 声明但不实现:T12 分片改造(SPSC 环阵列 + 分片总线)将按此清单
 /// 禁止把 Critical 单流切片 —— Critical 分片会破坏"发布方 → 订阅方"的
 /// 全序投递语义与 mpsc 旁路免背压保证(推演 9:Critical 背压 = 死锁源)。
-/// 本任务只声明常量 + 测试守护(断言 18 个名字与 severity() Critical 清单
+/// 本任务只声明常量 + 测试守护(断言 20 个名字与 severity() Critical 清单
 /// 一一对应),不实现分片总线。
 pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     "CheckpointSaved",
@@ -82,7 +82,25 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     "ErrorSignatureMatched",
     // L4 深度优化 P1-1:验证器失败升入 Critical(双清单同步)
     "FormalVerificationFailed",
+    // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 进分片禁区(Critical)
+    "CertifyIssued",
+    "FailureRegistered",
 ];
+
+/// §(b.1) 裁决权外置·消费辅助:供 UI/下游**只读**提取 CertifyIssued 的 claim_ref,
+/// 无需在允许白名单外的 crate 里拼写 `NexusEvent::CertifyIssued { field }`(那会被
+/// Certify 白名单门误判为构造/签发)。定义于 event-bus(白名单成员),为合法的
+/// 封装访问器。非 Certify 事件返回 `None`。
+impl NexusEvent {
+    /// 若本事件为 `CertifyIssued`,返回其被认证的 `claim_ref`。
+    #[must_use]
+    pub fn certify_claim_ref(&self) -> Option<&str> {
+        match self {
+            NexusEvent::CertifyIssued { claim_ref, .. } => Some(claim_ref),
+            _ => None,
+        }
+    }
+}
 
 /// 判断事件是否走 mpsc 旁路通道(Critical 安全/治理告警事件)
 ///
@@ -92,7 +110,7 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
 /// - `severity()` 是事件总线背压级别(同步函数,不依赖运行时值;
 ///   AsaIntervention 自 P1-W2.1.4 起统一返回 Critical,见 registry.rs 注册表定级)
 /// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,权威清单即下方 matches! 臂,
-///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 14)
+///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 16)
 ///
 /// WHY 单独定义:AsaIntervention 的 severity() 曾返回 Normal(P1-W2.1.4 修复前),
 /// 旁路判定因此独立于 severity() 存在;修复后两清单语义已对齐,由 D-8/R7
@@ -147,6 +165,10 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
             // 验证器否决候选必须确保投递(丢失则违规候选继续进入后续阶段,
             // 与 FormalViolation 同语义;双清单同步红线,registry.rs 定级对齐)
             | NexusEvent::FormalVerificationFailed { .. }
+            // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 走 mpsc 旁路(必达;
+            // 双清单同步——registry.rs severity() 已定 Critical,此处补齐旁路清单)
+            | NexusEvent::CertifyIssued { .. }
+            | NexusEvent::FailureRegistered { .. }
     )
 }
 
@@ -196,7 +218,7 @@ impl DsRuntime {
 ///
 /// # Critical 事件双通道(§6.2 红线,2026-06-29)
 /// Critical 安全/治理告警事件(权威清单 = [`is_critical_mpsc_event`],
-/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 14 类)额外走 mpsc 旁路通道,
+/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 16 类)额外走 mpsc 旁路通道,
 /// 确保在 broadcast Lagged 场景下仍能被订阅者接收。订阅者通过
 /// [`subscribe_critical_events`](Self::subscribe_critical_events)
 /// 获取 mpsc Receiver。旁路通道按需初始化(首次订阅时创建),无订阅者时
@@ -666,6 +688,56 @@ impl EventBus {
     // P1-T12 分片灰度开关 — 默认不启用,零回归
     // ============================================================
 
+    /// 启用分片并把结果显式化（ADR-197 A3）
+    ///
+    /// WHY 统一入口而不是各 crate 各自 `let _ =`：全仓 10 处调用点分布在 9 个 crate，
+    /// 静默忽略 Err 会让“本次运行为何没分片”成为不可归因的性能差异（审计 S-4）。
+    /// 本方法与 [`enable_sharding`](Self::enable_sharding) 的降级方向完全相同
+    /// （Err 不阻断、回落单流），只把结果按类别写进日志并返回是否可用。
+    ///
+    /// # 幂等与噪声控制
+    /// - `ShardingAlreadyEnabled` 属正常幂等（多实例/重复构造）→ `debug!`，返回 `true`；
+    /// - `ShardingRequiresRuntime` 属环境缺位 → 首次 `warn!`，后续同类降为 `debug!`
+    ///   （避免多实例构造刷屏）；其余错误同理。
+    ///
+    /// 本方法的核心价值是**副作用（日志可见）**，返回值仅供调用方自行决定是否
+    /// 追加记录，故不加 `#[must_use]`（避免调用点重新写回 `let _ =`）。
+    pub fn try_enable_sharding(&self, component: &str) -> bool {
+        match self.enable_sharding(crate::shard::DEFAULT_SHARD_COUNT) {
+            Ok(()) => {
+                tracing::debug!(component, "事件分片已启用");
+                true
+            }
+            Err(EventBusError::ShardingAlreadyEnabled) => {
+                // 幂等重复启用：分片事实上已可用，不得记为降级
+                tracing::debug!(component, "事件分片已处于启用态（幂等）");
+                true
+            }
+            Err(e) => {
+                static WARNED_ONCE: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                let first = WARNED_ONCE
+                    .compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::Relaxed,
+                    )
+                    .is_ok();
+                if first {
+                    tracing::warn!(
+                        component,
+                        error = %e,
+                        "事件分片未启用，回落单流（行为不变，仅影响吞吐量与尾延）；后续同类降级降为 debug"
+                    );
+                } else {
+                    tracing::debug!(component, error = %e, "事件分片未启用，回落单流");
+                }
+                false
+            }
+        }
+    }
+
     /// 启用分片(灰度开关,非 feature flag;手册 §8.5 / v4.0 WI-15)
     ///
     /// 启用后:非 Critical 且非顺序敏感的 `Unordered` 事件按 FNV-1a 哈希
@@ -984,6 +1056,25 @@ impl EventBus {
         self.send_critical_mpsc(&event);
         let _ = self.sender.send(event);
         Ok(())
+    }
+
+    /// v2.3 (b.1)②:裁决权分离的语义发布 API —— Claim(宣布)走普通广播。
+    ///
+    /// WHY 独立 API:为「Certify 白名单治理门」提供可静态检索的调用面 token。
+    /// 本方法不做运行时 ACL(agent 越权认证由静态门拦截,与 `publish_critical`
+    /// 现状一致 —— 编译期写隔离不可得,见 §(b.1) 修正②)。
+    pub async fn publish_claim(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        self.publish(event).await
+    }
+
+    /// v2.3 (b.1)②:验证器签发 Certify —— 走 Critical 双通道(必达,验证器语义独占)。
+    pub async fn publish_certify(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        self.publish_critical(event).await
+    }
+
+    /// v2.3 (b.1)②:agent 撤回此前 Claim(广播级,审计完整性)。
+    pub async fn publish_declaim(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        self.publish(event).await
     }
 
     /// 显式同步发布 Critical 事件到双通道(broadcast + mpsc 旁路)
@@ -1797,9 +1888,22 @@ pub fn deserialize_json(s: &str) -> Result<NexusEvent, EventBusError> {
 pub(crate) mod tests_helpers {
     use super::*;
 
-    /// 全量 14 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
+    /// 全量 16 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
     pub fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
         vec![
+            // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 进 mpsc 旁路清单(D-8 口径)
+            NexusEvent::CertifyIssued {
+                metadata: EventMetadata::new("t"),
+                claim_ref: "c".into(),
+                subject: "s".into(),
+                verifier: "GovernanceGate".into(),
+            },
+            NexusEvent::FailureRegistered {
+                metadata: EventMetadata::new("t"),
+                signature: "sig".into(),
+                affected_component: "crate".into(),
+                fix_status: "Open".into(),
+            },
             NexusEvent::SkepticVeto {
                 metadata: EventMetadata::new("t"),
                 quest_id: "q".into(),

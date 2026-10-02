@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     repo-wiki CI benchmark 阈值断言脚本(P1-7)
 .DESCRIPTION

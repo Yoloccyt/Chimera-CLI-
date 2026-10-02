@@ -9,11 +9,11 @@
 //!    变体即编译错误。即使未来 severity() 被误加回通配符(本 M1 修复的回归),
 //!    这道锁依然拦住未登记的变体。
 //! 2. **计数锁** `test_variant_count_lock` — 样本清单实际构造的变体数必须
-//!    等于 `VARIANT_COUNT_LOCK`(146);样本与序数表交叉断言一一对应
+//!    等于 `VARIANT_COUNT_LOCK`(151);样本与序数表交叉断言一一对应
 //!    (清单漏登/重登即失败)。
 //! 3. **分级分布锁** `test_severity_distribution_lock` — severity() 的
-//!    Critical/Info/Normal 分布必须等于 18/11/117;并与 bus.rs
-//!    `LANE_FORBIDDEN_SHARD` 的 18 个 Critical 名单双向互锁。
+//!    Critical/Info/Normal 分布必须等于 20/11/120;并与 bus.rs
+//!    `LANE_FORBIDDEN_SHARD` 的 20 个 Critical 名单双向互锁。
 //!
 //! # 维护规约(新增变体时必须同步修改)
 //! - enum 新增变体 → 编译器强制修改 severity()/type_name()/topic(),
@@ -39,16 +39,17 @@ use nexus_contracts::behavior_contract::ContractContext;
 use nexus_contracts::reward::RewardSignal;
 
 /// 变体总数锁定值(2026-09-20 实测 enum = 146,含 SecurityInterceptionReported;
-/// L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后 18/11/117 分布)
-const VARIANT_COUNT_LOCK: usize = 146;
-/// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 18 一致)
-const CRITICAL_LOCK: usize = 18;
+/// L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后 18/11/117 分布;
+/// ADR-197:+ComputePoolSaturated(Normal/System)= 152,分布 20/11/121)
+const VARIANT_COUNT_LOCK: usize = 152;
+/// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 20 一致)
+const CRITICAL_LOCK: usize = 20;
 /// severity 分布锁定值(Info)
 const INFO_LOCK: usize = 11;
 /// severity 分布锁定值(Normal)
-const NORMAL_LOCK: usize = 117;
+const NORMAL_LOCK: usize = 121;
 
-/// 构造全部 146 个 NexusEvent 变体的最小实例清单(enum 声明序)
+/// 构造全部 152 个 NexusEvent 变体的最小实例清单(enum 声明序)
 ///
 /// WHY 每变体一个构造器: 把"变体清单"变成编译期契约 —— 变体改名/删除立即
 /// 编译错误;新增变体未登记时,下方计数锁与序数表交叉断言失败。
@@ -922,6 +923,18 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             baseline_recall: 0.5,
             reason: "s".into(),
         },
+        // ADR-197:计算池饱和观测面事件样本(全整型/千分比,无浮点相等语义)
+        NexusEvent::ComputePoolSaturated {
+            metadata: EventMetadata::new("test"),
+            active_tasks: 1,
+            pool_threads: 2,
+            saturation_ratio_bp: 500,
+            combined_utilization_bp: 300,
+            threshold_bp: 900,
+            saturation_count: 1,
+            degraded_count: 0,
+            hottest_kind: "Generic".into(),
+        },
         NexusEvent::OverWindowFallbackTriggered {
             metadata: EventMetadata::new("test"),
             corpus_tokens: 1,
@@ -995,6 +1008,37 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             total_requests: 1,
             blocked_requests: 1,
             interception_rate: 0.5,
+        },
+        NexusEvent::ClaimIssued {
+            metadata: EventMetadata::new("test"),
+            claim_id: "s".into(),
+            subject: "s".into(),
+            claimant: "s".into(),
+        },
+        NexusEvent::CertifyIssued {
+            metadata: EventMetadata::new("test"),
+            claim_ref: "s".into(),
+            subject: "s".into(),
+            verifier: "s".into(),
+        },
+        NexusEvent::ClaimRetracted {
+            metadata: EventMetadata::new("test"),
+            claim_ref: "s".into(),
+            reason: "s".into(),
+        },
+        NexusEvent::FailureRegistered {
+            metadata: EventMetadata::new("test"),
+            signature: "s".into(),
+            affected_component: "s".into(),
+            fix_status: "s".into(),
+        },
+        NexusEvent::BlackboardEntry {
+            metadata: EventMetadata::new("test"),
+            key: "k".into(),
+            summary: "s".into(),
+            ttl_secs: 1,
+            epistemic: "Fact".into(),
+            provenance: None,
         },
     ]
 }
@@ -1151,6 +1195,13 @@ fn variant_ordinals(event: &NexusEvent) -> u32 {
         NexusEvent::AssessmentUpdated { .. } => 144,
         NexusEvent::BusThroughputReported { .. } => 145,
         NexusEvent::SecurityInterceptionReported { .. } => 146,
+        NexusEvent::ClaimIssued { .. } => 147,
+        NexusEvent::CertifyIssued { .. } => 148,
+        NexusEvent::ClaimRetracted { .. } => 149,
+        NexusEvent::FailureRegistered { .. } => 150,
+        NexusEvent::BlackboardEntry { .. } => 151,
+        // ADR-197:新增变体尾号登记(序数只增不改,避免历史序数全量位移)
+        NexusEvent::ComputePoolSaturated { .. } => 152,
     }
 }
 
@@ -1162,7 +1213,7 @@ fn test_variant_count_lock() {
         VARIANT_COUNT_LOCK,
         "NexusEvent 变体实际数量与锁定值不符: 清单需同步登记 enum 新变体"
     );
-    // 序数表与样本清单交叉锁: 146 个样本必须映射到 146 个不同序数
+    // 序数表与样本清单交叉锁: 152 个样本必须映射到 152 个不同序数
     // (清单漏登变体 → 样本数不足;序数表漏登 → 编译错误;双重登记 → 序数重复)
     let ordinals: HashSet<u32> = all.iter().map(variant_ordinals).collect();
     assert_eq!(
@@ -1206,7 +1257,7 @@ fn test_severity_distribution_lock() {
 
 #[test]
 fn test_critical_set_matches_lane_forbidden_shard() {
-    // 与 bus.rs LANE_FORBIDDEN_SHARD(17 个 Critical 变体名)双向互锁:
+    // 与 bus.rs LANE_FORBIDDEN_SHARD(20 个 Critical 变体名)双向互锁:
     // severity() 的 Critical 集合 == 分片禁区名单,任何一侧漂移即失败
     let critical_names: HashSet<&str> = all_variant_samples()
         .iter()

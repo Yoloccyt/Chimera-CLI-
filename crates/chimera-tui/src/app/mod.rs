@@ -22,11 +22,12 @@ use crate::data::{StubDataSource, TuiDataSource};
 use crate::error::TuiError;
 use crate::focus::FocusManager;
 use crate::panels::{
-    BudgetPanel, ChatPanel, ChtcPanel, ClvVectorPanel, DagVizPanel, DecayPanel, EventStreamPanel,
-    ExperienceCardVizPanel, HealthPanel, HelpPanel, InjectionStrategyPanel, LogPanel,
-    McpNodesPanel, MemoryPanel, MetricsDashboardPanel, OsaSparsePanel, OverWindowPanel, Panel,
-    ParliamentPanel, PvlScorePanel, QuestPanel, ResourceMonitorPanel, RouterPanel, SecurityPanel,
-    SelfAssessmentPanel, SysinfoPanel, TaskManagerPanel, TimelinePanel,
+    BenchPanel, BlackboardPanel, BudgetPanel, ChatPanel, ChtcPanel, ClvVectorPanel, DagVizPanel,
+    DecayPanel, EventStreamPanel, ExperienceCardVizPanel, HealthPanel, HelpPanel,
+    InjectionStrategyPanel, LogPanel, McpNodesPanel, MemoryPanel, MetricsDashboardPanel,
+    OsaSparsePanel, OverWindowPanel, Panel, ParliamentPanel, PvlScorePanel, QuestPanel,
+    ResourceMonitorPanel, ReviewQueuePanel, RouterPanel, SecurityPanel, SelfAssessmentPanel,
+    SysinfoPanel, TaskManagerPanel, TimelinePanel,
 };
 use crate::types::{PanelId, TuiState};
 use event_bus::EventBus;
@@ -170,6 +171,14 @@ pub struct TuiApp {
     /// WHY 可观测:每进入 `render_frame_v3` 计 1;测试据此断言渲染次数不超过
     /// 事件轮询次数(帧预算节流时会小于事件数)。无 cfg:统计字段恒 0 安全。
     v3_render_count: u64,
+    /// 最近一帧实际参与 diff 比较的行数(F-49 seam:可测性指标)
+    ///
+    /// WHY 可观测:P-2 行级跳过依赖静默帧 dirty 构造为"clear 后仅 mark 状态行";
+    /// 若构造回归为全脏(R5 F-49:DirtyTracker::new 初始全脏而未 clear),
+    /// diff 的 Change 集合与输出字节完全不变(内容本就相同),唯一可观测差异
+    /// 就是参与比较的行数 —— 测试据此断言该值等于状态行数而非整帧高度。
+    /// 无 cfg:统计字段恒 0 安全,赋值 O(h) 开销可忽略。
+    v3_quiescent_dirty_rows: u16,
     /// 上一次真实渲染的时刻(PS-1 帧预算节流用)
     ///
     /// WHY `Option`:首帧必须立即渲染(`None` 视为"到期"),避免启动后黑屏到
@@ -215,6 +224,12 @@ fn make_panel(id: PanelId) -> Box<dyn Panel> {
         // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板接线(trait 注入,默认未接线诚实展示)
         PanelId::ExperienceCardViz => Box::new(ExperienceCardVizPanel::new()),
         PanelId::InjectionStrategy => Box::new(InjectionStrategyPanel::new()),
+        // v2.3 §(b.6):/bench 基准面板接线(未接线时诚实展示,数据经 provider 注入)
+        PanelId::Bench => Box::new(BenchPanel::new()),
+        // v2.3 §(b.6)/§(b.4):审查队列面板接线(仅 Certify 渲染为已认证;数据经 provider 注入)
+        PanelId::ReviewQueue => Box::new(ReviewQueuePanel::new()),
+        // v2.3 §(b.6)/§(b.2):黑板浏览面板接线(按 epistemic 过滤;数据经 provider 注入)
+        PanelId::Blackboard => Box::new(BlackboardPanel::new()),
     }
 }
 
@@ -236,7 +251,7 @@ impl TuiApp {
     ) -> Result<Self, TuiError> {
         config.validate()?;
         // Concord T1.4(P5① 收口):面板注册序派生自 PanelId::REGISTERED_FOCUS_ORDER
-        // 单一事实源;26 面板全部注册(FC-05 下线 InjectionStrategy)。
+        // 单一事实源;29 面板全部注册(FC-05 下线 InjectionStrategy;v2.3 §(b.6) 新增 Bench/ReviewQueue/Blackboard)。
         // FocusManager 遍历序 == PanelId::next/prev 静态环,由 INV-F 不变量测试守护。
         let panels: Vec<Box<dyn Panel>> = PanelId::REGISTERED_FOCUS_ORDER
             .iter()
@@ -284,6 +299,7 @@ impl TuiApp {
             v3_frame_writer: None,
             v3_silent_hits: 0,
             v3_render_count: 0,
+            v3_quiescent_dirty_rows: 0,
             last_render_at: None,
         })
     }
@@ -381,6 +397,16 @@ impl TuiApp {
     #[cfg(all(test, feature = "v3-engine"))]
     pub(crate) fn render_count(&self) -> u64 {
         self.v3_render_count
+    }
+
+    /// 返回最近一帧实际参与 diff 比较的行数(F-49 测试 seam:可测性指标)
+    ///
+    /// WHY 可观测:验证 P-2 行级跳过真生效(静默帧该值 = 状态行数);
+    /// 全脏回归时 = 整帧高度,输出与 Change 均无差异,唯有此值可检。
+    /// WHY `test` 门控:同 `silent_hit_count`,仅测试消费。
+    #[cfg(all(test, feature = "v3-engine"))]
+    pub(crate) fn quiescent_dirty_rows(&self) -> u16 {
+        self.v3_quiescent_dirty_rows
     }
 
     /// 返回当前缓存帧引用(PS-1 测试 seam:静默帧字节等价性测试用)

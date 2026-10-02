@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
     用 git-cliff 生成 CHANGELOG 初稿（辅助手写，不替代）

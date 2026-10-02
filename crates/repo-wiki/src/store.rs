@@ -337,6 +337,21 @@ impl WikiStore {
     /// 写入线程返回是否真实新增,调用方据此原子更新计数缓存与 gauge,
     /// 既保证指标准确,又避免额外查询。
     pub async fn insert(&self, entry: WikiEntry) -> Result<(), WikiError> {
+        // v2.3 §(b.5) 写入敏感扫描门:知识条目落库前拦截私钥/凭证/令牌类硬载荷(Block)。
+        // 高熵/键名启发式设 Pass 以降误报;命中即拒绝入库(不阻断正常知识沉淀)。
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(
+            &format!("{}\n{}", entry.title, entry.content),
+            &scan_policy,
+        )
+        .is_blocked()
+        {
+            return Err(WikiError::SensitiveContent(entry.entry_id.clone()));
+        }
         let (tx, rx) = oneshot::channel();
         // WHY 在 `entry` 移入写线程前取指纹:此处借用 entry_id(零克隆),过了 send 就再也拿不到
         let wiki_hash = Self::wiki_update_hash(std::iter::once(entry.entry_id.as_str()));
@@ -372,7 +387,20 @@ impl WikiStore {
         if entries.is_empty() {
             return Ok(());
         }
-        // WHY 空批已在上面早退:那是一次"什么都没变"的调用,发事件会凭空抬高沉淀计数
+        // v2.3 §(b.5): 批量插入同走敏感扫描(否则绕过单条 insert 的守卫)。
+        // Block-only;高熵/键名设 Pass 防误报;任一条目命中硬敏感载荷则整批拒绝(与事务原子性一致)。
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if let Some(bad) = entries.iter().find(|e| {
+            nexus_contracts::sensitive::scan(&format!("{}\n{}", e.title, e.content), &scan_policy)
+                .is_blocked()
+        }) {
+            return Err(WikiError::SensitiveContent(bad.entry_id.clone()));
+        }
+        // WHY 空批已在上面早退：那是一次"什么都没变"的调用,发事件会凭空抬高沉淀计数
         let wiki_hash = Self::wiki_update_hash(entries.iter().map(|e| e.entry_id.as_str()));
         let (tx, rx) = oneshot::channel();
         self.write_tx

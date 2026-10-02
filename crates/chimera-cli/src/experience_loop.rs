@@ -310,6 +310,14 @@ pub async fn spawn_experience_loop(
         ));
     }
 
+    // A1/ADR-197: L1 计算池饱和观测周期报告器 —— 与上面两个报告器同族。
+    // WHY 在装配层启动:nexus-core 拥有池统计但不持 EventBus(热路径不引 IO 侧依赖),
+    // 而本层同时持有二者——零新增跨层依赖边（见 telemetry 模块头说明）。
+    join_handles.push(nexus_core::compute::spawn_saturation_reporter(
+        nexus_bus.clone(),
+        60,
+    ));
+
     Ok(ExperienceLoopHandles {
         card_bus,
         mlc,

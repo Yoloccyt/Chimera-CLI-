@@ -49,6 +49,12 @@ jobs:
         with:
           persist-credentials: false
 
+      # WHY 钉定工具链(与 ci.yml 同口径):coverage.yml 此前不装工具链、吃 runner
+      # 预装 stable,而下方 llvm-tools-preview 必须与 rustc 同版本才能插桩——
+      # 浮动 stable 一旦抢跑(如 1.98),LLVM 版本与缓存中的 llvm-cov 产物错配,
+      # 表现为"覆盖率数字突变"这种最难归因的红。钉死后测量基线才可比。
+      - uses: dtolnay/rust-toolchain@1.97.1
+
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
         with:

@@ -357,6 +357,25 @@ fn quest_matches_keyword(quest: &Quest, keyword: &str) -> bool {
     })
 }
 
+/// Quest 列表头部固定行数(body 标题 + 分隔线,见 [`QuestPanel::content`])
+const QUEST_HEADER_ROWS: usize = 2;
+
+/// 每个 Quest 占用的文本行数(标题 / 元信息 / 任务摘要 / 空行)
+///
+/// 末条 Quest 无尾随空行(文本总行数少 1),但不影响标题行定位公式。
+const QUEST_ROWS_PER_ITEM: usize = 4;
+
+/// 选中 Quest 的标题行号(0-based 文本行,即滚动单位)
+///
+/// WHY 行换算:`selected` 是 Quest 索引,而 [`list_state::adjust_scroll`] 与
+/// `Paragraph::scroll` 均以"1 单位 = 1 文本行"工作;直传索引造成单位错配
+/// (F-10)——超首屏后选中高亮永久丢失,空格多选/批操作作用于不可见条目。
+/// 公式按 `content()` 行结构推导,并由
+/// `selected_title_row_matches_content_layout` 单测对照真实输出锁定。
+fn selected_title_row(selected: usize) -> usize {
+    QUEST_HEADER_ROWS + selected * QUEST_ROWS_PER_ITEM
+}
+
 /// 构造带过滤器指示器的标题
 fn build_filter_title(state: &TuiState, base: &str) -> String {
     if let Some(kw) = &state.filter_keyword {
@@ -435,8 +454,10 @@ impl Panel for QuestPanel {
             Self::filtered_quests(state).len()
         };
         self.selected = list_state::clamp_selected(self.selected, count);
+        // F-10:scroll 单位是文本行,selected 是 Quest 索引 —— 先换算为选中标题行号
+        let selected_row = selected_title_row(self.selected);
         self.scroll_offset =
-            list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
+            list_state::adjust_scroll(selected_row, self.scroll_offset, content_height);
 
         if !hit {
             key.selected = self.selected;
@@ -656,7 +677,12 @@ impl Panel for QuestPanel {
     fn scroll_to_bottom(&mut self, state: &mut TuiState) {
         let count = Self::filtered_quests(state).len();
         self.selected = if count == 0 { 0 } else { count - 1 };
-        self.scroll_offset = self.selected;
+        // F-10:offset 单位为文本行;空列表不滚动以保持标题可见
+        self.scroll_offset = if count == 0 {
+            0
+        } else {
+            selected_title_row(self.selected)
+        };
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
@@ -1063,6 +1089,55 @@ mod tests {
             !rendered.contains("SENTINEL-CACHE-HIT"),
             "revision==0 时不应使用缓存(rendered={rendered})"
         );
+    }
+
+    /// 行换算公式与 content() 真实布局对照(F-10)
+    ///
+    /// 逐 cursor 定位 `> [N]` 标题行在 Text 中的实际行号,锁定
+    /// `selected_title_row` 公式;content() 行结构变化时本测试先行红灯,
+    /// 防止公式静默漂移。
+    #[test]
+    fn selected_title_row_matches_content_layout() {
+        let mut state = TuiState::new();
+        state.quest_list = (0..5)
+            .map(|i| sample_quest(&format!("q{}", i + 1), &format!("Quest {}", i + 1)))
+            .collect();
+        for cursor in 0..5usize {
+            let text = QuestPanel::content(&state, cursor, &HashSet::new()).to_string();
+            let title_row = text
+                .lines()
+                .position(|l| l.contains(&format!("> [{}]", cursor + 1)))
+                .expect("cursor 标题行应存在于 content() 输出中");
+            assert_eq!(
+                title_row,
+                selected_title_row(cursor),
+                "cursor={cursor} 标题行号与换算公式不符"
+            );
+        }
+    }
+
+    // F-10 滚动不变量(属性测试):任意 selected/视口高度/历史偏移组合下,
+    // 行单位换算后选中标题行必属 [scroll, scroll+content_height) 视口区间。
+    // WHY proptest 而非抽样用例:pre_offset 决定 adjust_scroll 走向上/向下/
+    // 已可见哪个分支,不变量须覆盖任意组合(仓库先例:本文件 M4 缓存键 proptest)。
+    proptest! {
+        #[test]
+        fn quest_scroll_invariant_keeps_selected_title_row_visible(
+            selected in 0usize..300,
+            viewport_rows in 1usize..40,
+            pre_offset in 0usize..1200,
+        ) {
+            let count = selected + 1; // 选中项必存在
+            let clamped = list_state::clamp_selected(selected, count);
+            prop_assert_eq!(clamped, selected, "选中项存在时 clamp 不应改变索引");
+            let row = selected_title_row(clamped);
+            let scroll = list_state::adjust_scroll(row, pre_offset, viewport_rows);
+            prop_assert!(
+                scroll <= row && row < scroll + viewport_rows,
+                "选中标题行 {row} 应属视口 [{scroll}, {})",
+                scroll + viewport_rows
+            );
+        }
     }
 
     // M4 二期属性测试:缓存键与多选集合的迭代顺序无关,且对选中项敏感。

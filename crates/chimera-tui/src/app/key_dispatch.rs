@@ -853,8 +853,16 @@ impl TuiApp {
 
     /// 执行 ScrollTop/ScrollBottom 目标(滚动当前焦点面板)
     fn route_execute_scroll(&mut self, target: RouteTarget, _key: KeyEvent) {
-        let focused = self.focus_manager.focused();
-        if let Some(idx) = self.panel_index(focused) {
+        // F-03:Chat 视图全屏渲染会话流(render_chat_mode 直取 Chat 实例),与焦点
+        // 面板脱钩;委托焦点面板会把 gg/G 落在被会话流遮挡的不可见面板(静默无反馈)。
+        // 与鼠标滚轮(mouse.rs)同口径直取 Chat 面板;j/k 的同款修复在
+        // delegate_key_to_active_panel(FocusPanel 委托链)。
+        let panel = if self.state.view_mode == crate::types::ViewMode::Chat {
+            PanelId::Chat
+        } else {
+            self.focus_manager.focused()
+        };
+        if let Some(idx) = self.panel_index(panel) {
             match target {
                 RouteTarget::ScrollTop => self.panels[idx].scroll_to_top(&mut self.state),
                 RouteTarget::ScrollBottom => self.panels[idx].scroll_to_bottom(&mut self.state),
@@ -1276,19 +1284,19 @@ mod tests {
         );
     }
 
-    /// 27 面板 × 常用键:每面板实例对每个常用键都给出确定性响应
+    /// 30 面板 × 常用键:每面板实例对每个常用键都给出确定性响应
     /// (Option<TuiCommand> —— 展示型面板返回 None 亦是合法路由,即"已路由到
     /// 面板且面板决定无操作",与"空路由/静默丢弃"不同);同时逐键断言应用层
     /// Normal 路由不产生 Ignored —— 所有面板经 FocusPanel 委托获得按键。
     ///
-    /// PanelId::ALL 为 27 变体穷举清单(新增变体时 types.rs 穷举 match 编译失败);
+    /// PanelId::ALL 为 30 变体穷举清单(新增变体时 types.rs 穷举 match 编译失败);
     /// Esc/q 不在常用键集合内 —— Normal 全局表将它们路由为 Quit(既有语义),
     /// 面板委托权被全局键截获。
     #[test]
     fn all_27_panels_common_keys_deterministic_route() {
         assert_eq!(
             PanelId::ALL.len(),
-            27,
+            30,
             "PanelId 变体数锚定(ALL 清单与 enum 的同步由 types.rs 穷举测试守护)"
         );
         // 跨面板通用交互键:导航/选中/翻页/触发(与 InputRouter Normal 表正交,
@@ -1323,8 +1331,8 @@ mod tests {
             );
         }
 
-        // 面板层:27 面板 × 常用键全量过键(不 panic/不挂起 = 确定性响应;
-        // make_panel 穷举 27 变体,未注册面板(InjectionStrategy)亦有实现可构造)
+        // 面板层:30 面板 × 常用键全量过键(不 panic/不挂起 = 确定性响应;
+        // make_panel 穷举 30 变体,未注册面板(InjectionStrategy)亦有实现可构造)
         for pid in PanelId::ALL {
             let mut panel = super::super::make_panel(*pid);
             let mut state = TuiState::new();

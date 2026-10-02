@@ -208,7 +208,7 @@ L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh
 
 ### 3.2 8 周推进历史
 
-8 周推进计划已全部完成,作为历史归档移到 **附录 §A.1**。当前不再作为决策依据,仅作回顾参考。
+8 周推进计划已于 2026-06-28 全部验收通过。该计划的逐周拆解**不再收录于本文件**(历史归档负债,2026-09-28 移除):需要回顾请查 `CHANGELOG.md` 第一阶段章节与 `docs/reports/` 的阶段执行报告。
 
 ### 3.3 第二阶段开发(GA 后演进 — v1.1.0~v1.8.0)
 
@@ -584,8 +584,11 @@ cargo test --workspace --jobs 4
 cargo test --workspace --release -- --ignored --test-threads=1 --nocapture   # 压测/性能红线(SLO 阈值在 debug 下会假失败)
 
 # 3. 安全审计(audit.yml 每日跑,发布前手动确认)
-#    ignore 条数不在此登记(旧记"5 个"已过期;2026-09-22 实测 `.github/workflows/audit.yml:65` 含 **6** 条),以该行为准。
-#    ⚠ 必须与 .github/workflows/audit.yml:65 逐字一致(2026-09-22 实测 `run:` 行号):自 P5-T5(2026-08-28)起用
+#    ignore 条数不在此登记(旧记"5 个"已过期;2026-09-22 实测含 **6** 条),以
+#    .github/workflows/audit.yml 的 `Run security audit` 步骤为准。
+#    ⚠ 必须与该步骤逐字一致(由 scripts/audit_cmd_sync.py 机械守,见 ADR-167 决策 4);
+#    引用一律走**步骤名**而非行号——行号会随任何一次 workflow 编辑漂移(2026-09-28 实测:
+#    一次 ci.yml 工具安装改造即让本文件里的 5 处 :行号 全部失效)。自 P5-T5(2026-08-28)起用
 #      `--deny unmaintained --deny unsound` 替代 `--deny warnings`(后者会被
 #      RUSTSEC-2024-0436 一类 warning 噪声直接卡死,反而诱使放宽整体门禁)。
 cargo audit --deny unmaintained --deny unsound `
@@ -666,10 +669,11 @@ git push origin v<x.y.z>-omega
 
 > **现状**:上述架构文档(CODE_WIKI / INDEX / ADR-026~028 / ARCHITECTURE_HEALTH_AUDIT / DEEP_RESEARCH / v3 工程手册 / 优化报告)均已存在于 `docs/architecture/`;`CHANGELOG.md` v2.0.0~v2.3.1 章节仍是 ADR 决策的完整复述,可与 ADR 文件互为对照。唯 `AETHER_NEXUS_OMEGA_ULTIMATE.md` 已被 CODE_WIKI + ADR-026~028 取代,不再恢复。
 
-<!-- v2.26.0-omega 同步: 2026-08-11(Concord TUI 重构 W0~W11 收尾) — 当前版本 v2.26.0-omega;38 crate(含 L0 nexus-contracts @ L0 / omega-learner @ L6 / mca-gateway @ L10);CHANGELOG 含 v2.20.0 PROBE / v2.21.0 CLI LLM / v2.22.0 MCA token / v2.24.0 Phase 9 / v2.25.0 Milestone B / v2.26.0 Concord TUI 六大版本章节;9954 passed / 0 failed(workspace 全量);`docs/architecture/` 子文档经复核**均已存在**,仅 ULTIMATE.md 缺失且已被取代 -->
-<!-- v2.27.1-omega 同步: 2026-08-20(Phase 10 §16 跨层协同闭环发布收编 + GPG 补发) — 当前版本 v2.27.1-omega;38 crate;CHANGELOG 含 v2.27.0 Phase 10 / v2.27.1 GPG 七版本章节;144 NexusEvent · 10836 passed / 0 failed(2026-08-19 workspace 全量实测) -->
-<!-- 历史同步: v1.7.0-omega 同步 2026-07-15;2026-07-21 复核订正 — 早期快照曾误记 docs 缺失,经复核 `docs/architecture/` 29 份文档齐备(仅 ULTIMATE.md 缺失,已被取代),CODE_WIKI.md 为架构权威源 -->
-<!-- 2026-09-06 同步(本文档即根 agents.md;`.trae/rules/nuxus规则.md` 为独立速查子集非镜像) — v2.28.0-omega 发布提交 af62e44 已落(tag 未推);测试基线 11587(2026-09-02 R9 口径);ADR 文件至 ADR-182;孤岛口径 14 冻结 + 1 GATED(mca-gateway,ADR-177);覆盖率引擎 tarpaulin→cargo-llvm-cov(实测 92.97%,基线 85);fuzz target 6→8(harness_spec_parse/sse_parse);CI 4 Rust job 钉定 1.97.1;phaseR 收口批次 c5a5327(WS-A/B/C)落档 -->
+<!-- 历史同步注释已于 2026-09-28 清除:此处原挂 4 条 v1.7.0~v2.28.0 的快照注释,内含
+     与本文件自述政策【CONFIG-REFACTOR-20260920「计数不再在此登记」】直接冲突的过期计数
+     (38 crate 而实测 39;144 NexusEvent 而实测 151;9954/10836 passed 而最新为 11794),
+     属"读的人会当真、权威源却是别处"的漂移债。需要历史数值请查 CHANGELOG.md 与
+     docs/reports/ 现取,本文不再留存快照。 -->
 
 ### 8.2 工程基建
 
@@ -716,8 +720,8 @@ git push origin v<x.y.z>-omega
 
 | Workflow | 触发 | 关键 job | 准入门槛 |
 |----------|------|---------|---------|
-| `ci.yml` | PR 到 main + push main + 手动 | check / e2e / mca-feature / benchmark | 4 job 全绿;`check` 跑 nextest ci-fast 档(`.github/workflows/ci.yml:311`)、内含 typos 拼写门(`:265`)与 taplo fmt 门(`:274`);`mca-feature` 含 cargo-hack 全特征编译门(`:435`)与 `--features mca` 运行门(`:443`);4 个 Rust job 钉定工具链 1.97.1 |
-| `audit.yml` | 每日 UTC 02:00 + PR 改 Cargo.lock/Cargo.toml + 手动 | audit / outdated | `audit` 必须 0 退出(命令逐字见 `.github/workflows/audit.yml:65`:`--deny unmaintained --deny unsound` + 6 条 ignore);`outdated` 为 continue-on-error 非阻塞 |
+| `ci.yml` | PR 到 main + push main + 手动 | check / e2e / mca-feature / benchmark | 4 job 全绿;`check` 跑 nextest ci-fast 档(步骤 `Test (workspace, 快速回归)`)、内含 typos 拼写门(步骤 `Spell check (typos)`)与 taplo fmt 门(步骤 `TOML format check (taplo)`);`mca-feature` 含 cargo-hack 全特征编译门(步骤 `Feature matrix check (cargo-hack)`)与 `--features mca` 运行门(步骤 `Test (workspace, --features mca)`);4 个 Rust job 钉定工具链 1.97.1 |
+| `audit.yml` | 每日 UTC 02:00 + PR 改 Cargo.lock/Cargo.toml + 手动 | audit / outdated | `audit` 必须 0 退出(命令逐字见 `.github/workflows/audit.yml` 的 `Run security audit` 步骤:`--deny unmaintained --deny unsound` + 6 条 ignore);`outdated` 为 continue-on-error 非阻塞 |
 | `deny.yml` | 每日 UTC 05:00 + PR 改 Cargo.lock/Cargo.toml/deny.toml + 手动 | deny | `cargo deny check licenses bans` 0 退出 |
 | `zizmor.yml` | 每日 UTC 06:00 + PR 改 .github/workflows/** + 手动 | zizmor | `zizmor . --min-severity=high` 0 退出(Actions 供应链自检) |
 | `coverage.yml` | 每晚 UTC 04:00 + 手动 | coverage | `python3 scripts/coverage_gate.py --check` 单点裁决;阈值只写在 `scripts/coverage_baseline.toml`(`min_line_coverage = 85`),不在工作流里写死数字 |
@@ -804,21 +808,6 @@ c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI\project_memory.md
 ---
 
 ## 附录 §A
-
-### §A.1 8 周推进计划速查(历史归档,已完成)
-
-> 8 周推进计划已于 2026-06-28 全部验收通过。本附录仅作历史回顾,不再作为决策依据。
-
-```
-Week 1: L0-L1 基础设施 ─── Event Bus · SecCore · Decay · QEEP · CLI 入口
-Week 2: L9+L5+L1 ──────── Quest Engine · Repo Wiki · Model Router · CACR
-Week 3: L5+L6 ─────────── MLC · HCW · CMT · OSA · KVBSR
-Week 4: L6+L7 ─────────── GEA · GQEP · PVL · MTPE · SCC · EDSB
-Week 5: L8+L4+L3 ──────── Parliament · ASA · AHIRT · TTG · DECB
-Week 6: L2+L10 ────────── SSRA · LSCT · GSOE · NMC · CHTC
-Week 7: MCP Mesh ──────── MCP 量子网格 · CSN 降级链 · 监控 · 集成
-Week 8: 打磨 ──────────── 性能 · 安全 · 文档 · 发布
-```
 
 ### §A.2 新建 crate 模板(历史归档,RC 阶段不再新建)
 

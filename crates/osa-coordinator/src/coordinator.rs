@@ -181,7 +181,8 @@ impl OmniSparseCoordinator {
         // OmniSparseMasksComputed 高频非 Critical 事件→ 分片扇出;
         // 幂等(重复启用返回 Err 忽略);无 tokio runtime 时 Err 降级回单流
         // (零回归;分片默认关闭=EventBus::new() 行为不变,P1-T12 先例)
-        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // A3/ADR-197:启用结果可见化（内部按级别记日志），不再静默忽略 Err
+        event_bus.try_enable_sharding("osa-coordinator");
         Self {
             event_bus,
             config,

@@ -28,6 +28,15 @@ proptest = { workspace = true }
 # 测试用时间控制(定时任务时间操纵)
 tokio = { workspace = true, features = ["full", "test-util"] }
 
+# v2.3 §(b.4)(2) D#1: 认领制 feature-gated 试点(默认 off)。
+# WHY 默认 off:无病灶不建全量分发面——派单制现状零轮询无回归;试点仅在
+# `claim_pilot` 后验证真实多消费者需求,转正/回滚双判据见 claim_pilot.rs。
+# 本试点为纯控制面消费者目标池(复用 in-crate scheduler + governor),无需新增
+# 外部依赖;事件面发布留待确认消费者后按依赖铁律声明 optional event-bus。
+[features]
+default = []
+claim_pilot = []
+
 # E-5 第二例 opt-in：生产码 unwrap/expect 实测 0（唯 8 处在两个 cfg(test) mod，
 # 已按惯用法 mod 级 allow）；由 check_lint_ratchet.py 棘轮守护。
 [lints]

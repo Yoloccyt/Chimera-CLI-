@@ -85,7 +85,8 @@ impl S9SessionIntegration {
         // P5-T3 分片扩量批次 3（ADR-153 Go 收官）:
         // StreamSessionCompleted 高频非 Critical 事件→ 分片扇出;
         // 幂等 + 无 runtime 时 Err 降级回单流（零回归,P1-T12 先例）
-        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // A3/ADR-197:启用结果可见化（内部按级别记日志），不再静默忽略 Err
+        event_bus.try_enable_sharding("omega-learner");
         Self {
             learner,
             event_bus,

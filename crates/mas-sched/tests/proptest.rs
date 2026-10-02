@@ -60,13 +60,14 @@ fn arb_est_ms() -> impl Strategy<Value = u64> {
     ]
 }
 
-/// 生成任意拒绝原因 —— 覆盖全部 4 个变体(含 ShadowReject 本身)
+/// 生成任意拒绝原因 —— 覆盖全部 5 个变体(含 ShadowReject / RateLimited 本身)
 fn arb_deny_reason() -> impl Strategy<Value = DenyReason> {
     prop_oneof![
         Just(DenyReason::QuotaExceeded),
         Just(DenyReason::TaskClaimed),
         Just(DenyReason::DurationExceedsQuota),
         Just(DenyReason::ShadowReject),
+        Just(DenyReason::RateLimited),
     ]
 }
 

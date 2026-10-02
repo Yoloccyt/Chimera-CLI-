@@ -130,6 +130,28 @@ pub struct CardSystemStatsView {
 }
 
 impl MlcEngine {
+    /// v2.3 §(b.3): 按认识类型把召回结果分为「派生结论(Observation)」与「原始事实」两库。
+    ///
+    /// 主线③「归纳结论与原始事实必须可区分」的 recall 结果面实现:调用方拿到
+    /// 召回集后据此把 `EpistemicType::Observation`(带 `evidence_ptrs` 的派生结论)
+    /// 与原始事实(Fact/Episode/MindModel)分离呈现。纯静态方法,无副作用、不依赖引擎状态。
+    #[must_use]
+    pub fn partition_by_epistemic(
+        entries: &[MemoryEntry],
+    ) -> (Vec<&MemoryEntry>, Vec<&MemoryEntry>) {
+        use nexus_contracts::EpistemicType;
+        let mut observations = Vec::new();
+        let mut facts = Vec::new();
+        for e in entries {
+            if e.epistemic_type == EpistemicType::Observation {
+                observations.push(e);
+            } else {
+                facts.push(e);
+            }
+        }
+        (observations, facts)
+    }
+
     /// 创建 MLC 引擎,使用指定配置与 EventBus
     ///
     /// 会自动打开 L3 SQLite 数据库(路径从 config 读取,展开 `~`)
@@ -280,9 +302,9 @@ impl MlcEngine {
     pub fn new_in_memory(event_bus: EventBus) -> Result<Self, MlcError> {
         // P1-T12 示范接入(灰度验证「公共 API 零感知」):
         // MemoryMetricsReported 每 100 次操作发布(高频非 Critical)→ 分片扇出;
-        // 无 tokio runtime 上下文时 enable_sharding 返回 Err,let _ 忽略即
-        // 降级回单流(零回归;分片默认关闭=EventBus::new() 行为与 v2.27.1 一致)
-        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // 无 tokio runtime 上下文时 enable_sharding 返回 Err 即降级回单流
+        // (零回归;分片默认关闭=EventBus::new() 行为与 v2.27.1 一致);ADR-197 起结果可见化
+        event_bus.try_enable_sharding("mlc-engine");
         let config = MlcConfig::default();
         let l3 = ProceduralMemory::open_in_memory()?;
         let mem_con_controller =
@@ -313,8 +335,8 @@ impl MlcEngine {
         config: MlcConfig,
         event_bus: EventBus,
     ) -> Result<Self, MlcError> {
-        // P1-T12 示范接入(与 new_in_memory 一致,见其注释)
-        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // P1-T12 示范接入(与 new_in_memory 一致,见其注释);ADR-197 起结果可见化
+        event_bus.try_enable_sharding("mlc-engine");
         config.validate()?;
         let l3 = ProceduralMemory::open_in_memory()?;
         let mem_con_controller =
@@ -839,6 +861,69 @@ impl MlcEngine {
     /// 按 Quest ID 查询关联的所有情节记忆(委托给 L1)
     pub async fn recall_by_quest(&self, quest_id: &str) -> Result<Vec<MemoryEntry>, MlcError> {
         self.l1.query_by_quest(quest_id)
+    }
+
+    /// 四路召回混合融合（v2.3 §(d)⑨「四路召回入口（二期启动）」引擎级编排）
+    ///
+    /// 把引擎内已有的三路有序召回 + 调用方传入的第四路经 L0 RRF 融合
+    /// （k=60，与 repo-wiki 同参）：
+    /// - **语义路**：`l2.recall_by_clv(query, top_k×2)`（§(b.3) 一期同款，策略/配额零扰）
+    /// - **情节路**：`quest_id`  Some 时的 `l1.query_by_quest`（L1 天然序）
+    /// - **认识路**：语义命中集经 [`partition_by_epistemic`](Self::partition_by_epistemic) 的派生结论前置序
+    ///   （主线③「归纳结论与原始事实分离」的序表达）
+    /// - **第四路（可选）**：图扩（`memory_graph::recall_with_graph`）等引擎外Ranked
+    ///   路径的 id 表——MemoryGraph 非引擎字段，由组合根传入；不传即三路，诚实不虚设。
+    ///
+    /// 边界：`quest_id=None` 且无 `extra_path_ids` 时退化为语义序前 `top_k`（合法非破坏）。
+    /// 完整四路**自动并行编排/跨路配额联动**属 Wave 4 触发条件（§(b.3) 明示，
+    /// 涉 omega-learner S7 接缝 R2 冻结面）；本方法为启动形态的确定性融合。
+    pub async fn recall_hybrid(
+        &self,
+        query: &CLV,
+        quest_id: Option<&str>,
+        extra_path_ids: Option<&[MemoryId]>,
+        top_k: usize,
+        tuning: crate::recall_fusion::FusionTuning,
+    ) -> Result<Vec<nexus_contracts::recall_fusion::FusedItem>, MlcError> {
+        use crate::recall_fusion::{fuse_recall_paths, RecallPath};
+
+        // 语义路过采样 2×top_k：给跨路重叠更多融合信号（有界，非全库）
+        let semantic = self
+            .l2
+            .recall_by_clv(query, top_k.saturating_mul(2).max(1))?;
+        let semantic_ids: Vec<MemoryId> = semantic.iter().map(|(id, _)| id.clone()).collect();
+
+        // 情节路
+        let episodic_ids: Vec<MemoryId> = match quest_id {
+            Some(q) => self
+                .l1
+                .query_by_quest(q)?
+                .into_iter()
+                .map(|e| e.id)
+                .collect(),
+            None => Vec::new(),
+        };
+
+        // 认识路：仅 Observation 派生结论计份（§(b.3) 主线③「归纳结论与原始事实分离」
+        // 的序表达；原始 Fact 已由语义路代表，重复计份会虚增 hits）
+        let epistemic_ids: Vec<MemoryId> = {
+            let entries: Vec<MemoryEntry> = semantic_ids
+                .iter()
+                .filter_map(|id| self.l2.get(id.as_str()).ok())
+                .collect();
+            let (observations, _facts) = Self::partition_by_epistemic(&entries);
+            observations.into_iter().map(|e| e.id.clone()).collect()
+        };
+
+        let mut paths = vec![
+            RecallPath::new("semantic", semantic_ids),
+            RecallPath::new("episodic", episodic_ids),
+            RecallPath::new("epistemic", epistemic_ids),
+        ];
+        if let Some(ids) = extra_path_ids {
+            paths.push(RecallPath::new("extra", ids.to_vec()));
+        }
+        fuse_recall_paths(&paths, tuning)
     }
 
     /// 按时间范围查询情节记忆(委托给 L1)

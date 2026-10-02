@@ -12,7 +12,7 @@
 //! - **自动贴底**:默认跟随最新消息(`follow`);用户上滚(↑/k)接管,`G` 恢复贴底,
 //!   借鉴 EventStream 的流式输出 UX。
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -153,6 +153,25 @@ impl Panel for ChatPanel {
                 None
             }
             KeyCode::Down | KeyCode::Char('j') => {
+                self.follow = false;
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, _state: &mut TuiState) -> Option<TuiCommand> {
+        // WHY:mouse.rs 的 Chat 视图滚轮直取本面板,但 trait 默认实现是静默 None,
+        // 滚轮此前无任何滚动语义(F-03 守护测试改真断言的前置)。语义与 j/k 键
+        // 一致——滚动即退出贴底跟随;越界由 render 按内容高度钳制。
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.follow = false;
+                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                None
+            }
+            MouseEventKind::ScrollDown => {
                 self.follow = false;
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
                 None

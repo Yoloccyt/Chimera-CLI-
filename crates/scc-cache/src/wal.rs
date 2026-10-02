@@ -426,6 +426,20 @@ impl SqliteWal {
     /// `spawn_blocking` 闭包需要 `'static + Send`,借用 `&WalEntry` 无法跨线程
     /// 转移。调用方需在调用前 `clone()`(WalEntry 已实现 Clone)。
     pub async fn write_ahead_log(&self, entry: WalEntry) -> Result<(), SccError> {
+        // v2.3 §(b.5): WAL 落盘前拦截私钥/凭证/令牌类硬载荷(Block)。
+        // 高熵/键名启发式设 Pass 防误报;benign 条目零影响;命中即拒绝写预写日志。
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(&String::from_utf8_lossy(&entry.payload), &scan_policy)
+            .is_blocked()
+        {
+            return Err(SccError::WalError {
+                reason: format!("WAL entry {} 含敏感硬载荷,拒绝写入预写日志", entry.entry_id),
+            });
+        }
         let conn = self.conn.clone();
         spawn_blocking(move || -> Result<(), SccError> {
             let conn = conn.lock().map_err(|p| SccError::WalError {

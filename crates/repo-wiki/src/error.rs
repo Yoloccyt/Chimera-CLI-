@@ -12,6 +12,10 @@ pub enum WikiError {
     #[error("database error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
+    /// v2.3 §(b.5): 写入敏感扫描拦截 — 知识条目含私钥/凭证/令牌类硬载荷,拒绝入库
+    #[error("sensitive payload blocked at wiki write: {0}")]
+    SensitiveContent(String),
+
     /// 向量索引错误 — 维度不匹配、KNN 检索失败、内部状态异常
     #[error("vector index error: {0}")]
     VectorIndexError(String),

@@ -420,6 +420,39 @@ pub mod util;
 /// 跨层边界结构化错误枚举 + 恢复策略五档；应用层 anyhow 包装。
 pub mod errors;
 
+/// 裁决权与认识类型契约 — Claim/Certify/Declaim 语义分离 + MLC 二维认识标签
+///
+/// 承载 `EpistemicType` / `VerifierKind` / `CertifyVerdict` / `ClaimPayload` /
+/// `CertifyPayload` / `DeclaimPayload` / `FailureFixStatus` / `FailureRecord`，
+/// 供 L1 event-bus 新增 Claim/Certify/Declaim/FailureRegistry 变体消费
+/// （两段式落点：payload 在 L0，枚举本体在 L1，v2.3 §(b.1)）。纯类型零逻辑（ADR-033）。
+pub mod adjudication;
+
+/// 写入敏感信息扫描引擎 — 记忆/上下文/会话持久化前的敏感载荷拦截（v2.3 §(b.5)）
+///
+/// 承载 `scan`（纯函数扫描）/ `ScanPolicy` / `ScanVerdict` / `ScanHit` /
+/// `SensitiveKind` / `SensitiveDisposition` / `looks_high_entropy`。零 crate 依赖
+/// （不用 `regex`，靠固定前缀/字面标记 + 熵启发式），供跨 L2–L10 写入口向下依赖（L0）。
+pub mod sensitive;
+
+/// 统一价格向量契约 — 聚合分散模型单价为可路由消费向量（v2.3 §(b.6)/(c)）
+///
+/// 承载 `PriceVector` / `ModelPrice`；价格数据已在（config / mca capability / cost.rs），
+/// 本模块补上"统一价格向量"聚合契约，供 `/bench` 可见性与成本感知路由（二期）消费。
+pub mod price_vector;
+
+/// 人机一致率校准契约 — 评测层「一致率锤点」（v2.3 §(b.6)）
+///
+/// 承载 `CalibrationSample` / `GateVerdict` / `HumanLabel` / `agreement_rate_milli` /
+/// `certifiable`：机评与人审对照的一致率与阈值（低于阈→自动化结果降级为 Claim）。
+pub mod calibration;
+
+/// 多路召回 RRF 融合原语 — 二期四路召回入口的 L0 共享算法（v2.3 §(b.3)/§(d)⑨）
+///
+/// `fuse_ranked_lists`/`WeightedList`/`FusedItem`：与 repo-wiki `rrf_fuse` 同参
+/// （k=60、rank 1-based、f32）的泛化 N 路版；供 mlc-engine 四路召回融合启动。
+pub mod recall_fusion;
+
 // ============================================================
 // 公开 API 导出
 // ============================================================
@@ -549,12 +582,29 @@ pub use app::{
     PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
 };
 pub use errors::{NexusError, Recoverable, RecoveryStrategy};
+// v2.3 (b.1)/(b.3): 裁决权与认识类型契约（Claim/Certify/Declaim payload + EpistemicType）
+pub use adjudication::{
+    CertifyPayload, CertifyVerdict, ClaimPayload, DeclaimPayload, EpistemicType, FailureFixStatus,
+    FailureRecord, VerifierKind,
+};
+// v2.3 (b.5): 写入敏感信息扫描引擎（纯函数，零依赖，L0）
+pub use sensitive::{
+    looks_high_entropy, redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition,
+    SensitiveKind,
+};
+// v2.3 (b.6): 统一价格向量聚合契约（纯类型 + 整数估算，L0）
 pub use event_v2::{
     Compressibility, DynamicEvent, EventMetadataV2, EventNamespace, EventPattern, EventTypeId,
     ImportanceScore, MetadataBridge, NamespaceQuotaV2,
 };
 pub use graph_identity::GraphIdentity;
 pub use mcsm::{identity, project_weights, sinkhorn_project, ProjectedMatrix, SinkhornParams};
+pub use price_vector::{ModelPrice, PriceVector};
+// v2.3 (b.6): 人机一致率校准契约（纯函数，零依赖，L0）
+pub use calibration::{
+    agreement_rate_milli, certifiable, CalibrationSample, GateVerdict, HumanLabel,
+    DEFAULT_AGREEMENT_THRESHOLD_MILLI,
+};
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
@@ -665,6 +715,17 @@ pub mod prelude {
         ItemStatus, PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
     };
     pub use crate::errors::{NexusError, Recoverable, RecoveryStrategy};
+    // v2.3 (b.1)/(b.3): 裁决权与认识类型契约（与顶层导出同集）
+    pub use crate::adjudication::{
+        CertifyPayload, CertifyVerdict, ClaimPayload, DeclaimPayload, EpistemicType,
+        FailureFixStatus, FailureRecord, VerifierKind,
+    };
+    // v2.3 (b.5): 写入敏感信息扫描引擎（与顶层导出同集）
+    pub use crate::sensitive::{
+        looks_high_entropy, redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition,
+        SensitiveKind,
+    };
+    // v2.3 (b.6): 统一价格向量（与顶层导出同集）
     pub use crate::event_v2::{
         Compressibility, DynamicEvent, EventMetadataV2, EventNamespace, EventPattern, EventTypeId,
         ImportanceScore, MetadataBridge, NamespaceQuotaV2,
@@ -672,5 +733,11 @@ pub mod prelude {
     pub use crate::graph_identity::GraphIdentity;
     pub use crate::mcsm::{
         identity, project_weights, sinkhorn_project, ProjectedMatrix, SinkhornParams,
+    };
+    pub use crate::price_vector::{ModelPrice, PriceVector};
+    // v2.3 (b.6): 人机一致率校准（与顶层导出同集）
+    pub use crate::calibration::{
+        agreement_rate_milli, certifiable, CalibrationSample, GateVerdict, HumanLabel,
+        DEFAULT_AGREEMENT_THRESHOLD_MILLI,
     };
 }

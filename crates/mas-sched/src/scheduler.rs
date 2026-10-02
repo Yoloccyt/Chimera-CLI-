@@ -13,9 +13,10 @@
 //! 单实例 `Arc<dyn PeerScheduler>` 共享,无自旋、无持锁跨 await（本模块无 async）。
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+use crate::broker_guardrail::ClaimRateGovernor;
 use crate::error::SchedError;
 use crate::types::{
     ClaimOutcome, DenyReason, Lease, Priority, RenewOutcome, ShouldRunVerdict, TaskId, TodoClaim,
@@ -37,12 +38,28 @@ pub trait PeerScheduler: Send + Sync {
 }
 
 /// 内存调度器 — 租约表 + 每 peer 并发计数 + 配额校验
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SimplePeerScheduler {
     /// 租约表（task_id → Lease）
     leases: RwLock<HashMap<TaskId, Lease>>,
     /// 每 peer 并发计数（peer_id → 活跃租约数）
     peer_concurrency: RwLock<HashMap<String, usize>>,
+    /// v2.3 §(b.4)(2) 认领频率护栏（默认 `None`=不限流，保既有 claim 测试不受影响；
+    /// 经 [`SimplePeerScheduler::with_rate_limit`] 启用，`claim` 取 `&self` 故用 `Mutex` 内部可变）
+    rate_governor: Option<Mutex<ClaimRateGovernor>>,
+    /// 限流窗口时钟基准（`claim` 内换算 `now_ms` 注入 governor，无忙等/无自旋）
+    claim_clock: Instant,
+}
+
+impl Default for SimplePeerScheduler {
+    fn default() -> Self {
+        Self {
+            leases: RwLock::new(HashMap::new()),
+            peer_concurrency: RwLock::new(HashMap::new()),
+            rate_governor: None,
+            claim_clock: Instant::now(),
+        }
+    }
 }
 
 impl SimplePeerScheduler {
@@ -50,6 +67,37 @@ impl SimplePeerScheduler {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 新建**带认领频率硬上限**的调度器（v2.3 §(b.4)(2) broker 护栏）。
+    ///
+    /// 单 peer 在一个 `window_ms` 窗口内至多 `max_claims_per_window` 次认领，
+    /// 超频即以 [`DenyReason::RateLimited`] 拒绝（防轮询风暴）。默认 [`new`](Self::new)
+    /// 不启用限流，此构造器为认领制 feature-gated 试点的显式接入点。
+    #[must_use]
+    pub fn with_rate_limit(max_claims_per_window: u32, window_ms: u64) -> Self {
+        Self {
+            rate_governor: Some(Mutex::new(ClaimRateGovernor::new(
+                max_claims_per_window,
+                window_ms,
+            ))),
+            ..Self::default()
+        }
+    }
+
+    /// 频率护栏校验（仅在启用限流时）：放行返回 `Ok(())`，超频返回 `Err(RateLimited)`。
+    fn check_rate_limit(&self, peer_id: &str) -> Result<(), DenyReason> {
+        if let Some(governor) = &self.rate_governor {
+            let now_ms = u64::try_from(self.claim_clock.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let admitted = governor
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .try_admit(peer_id, now_ms);
+            if !admitted {
+                return Err(DenyReason::RateLimited);
+            }
+        }
+        Ok(())
     }
 
     /// 校验配额 — 时长上限 + 并发上限（控制面硬约束）
@@ -94,6 +142,10 @@ impl SimplePeerScheduler {
 
 impl PeerScheduler for SimplePeerScheduler {
     fn claim(&self, claim: &TodoClaim) -> ClaimOutcome {
+        // 0. 频率硬上限护栏（feature-gated 试点默认 off：仅 with_rate_limit 构造时启用）
+        if let Err(reason) = self.check_rate_limit(&claim.peer_id) {
+            return ClaimOutcome::Denied(reason);
+        }
         // 1. 时长/并发配额校验（读锁,先决条件）
         if let Err(reason) = self.check_quota(claim) {
             return ClaimOutcome::Denied(reason);
@@ -363,5 +415,57 @@ mod tests {
         assert_eq!(granted, 8 * 4, "每 peer 恰 4 个授予（配额上限）");
         assert_eq!(denied, 8 * 6, "其余被配额拒绝");
         assert_eq!(s.lease_count(), 32, "全部授予必须可见");
+    }
+
+    /// 默认 new() 不限流 — 同一 peer 多次认领均成功（只要不超并发配额）
+    #[test]
+    fn default_new_has_no_rate_limit() {
+        let s = SimplePeerScheduler::new();
+        for i in 0..50 {
+            let mut c = TodoClaim::new(format!("t{i}"), "peer-a", Priority::Medium, 1_000);
+            c.quota.max_concurrent = 100; // 放宽并发,隔离出“无频率限制”
+            assert!(
+                matches!(s.claim(&c), ClaimOutcome::Granted(_)),
+                "默认调度器不得引入频率限制（§(b.4)(2) 默认 off）"
+            );
+        }
+    }
+
+    /// with_rate_limit 超频拒绝 — 同窗口内第 3 次认领遭 RateLimited
+    #[test]
+    fn rate_limit_denies_after_cap() {
+        // 窗口 100s（足以覆盖测试执行时长）→ 同一窗口内上限 2 次
+        let s = SimplePeerScheduler::with_rate_limit(2, 100_000);
+        let mut c1 = claim("t1", "peer-a");
+        c1.quota.max_concurrent = 100;
+        let mut c2 = claim("t2", "peer-a");
+        c2.quota.max_concurrent = 100;
+        let mut c3 = claim("t3", "peer-a");
+        c3.quota.max_concurrent = 100;
+        assert!(matches!(s.claim(&c1), ClaimOutcome::Granted(_)));
+        assert!(matches!(s.claim(&c2), ClaimOutcome::Granted(_)));
+        assert_eq!(
+            s.claim(&c3),
+            ClaimOutcome::Denied(DenyReason::RateLimited),
+            "超频率硬上限必须拒绝（防轮询风暴）"
+        );
+    }
+
+    /// 频率护栏按 peer 隔离 — a 超频不影响 b 的独立配额
+    #[test]
+    fn rate_limit_is_per_peer() {
+        let s = SimplePeerScheduler::with_rate_limit(1, 100_000);
+        let mut ca = claim("t1", "peer-a");
+        ca.quota.max_concurrent = 100;
+        let mut cb = claim("t2", "peer-b");
+        cb.quota.max_concurrent = 100;
+        assert!(matches!(s.claim(&ca), ClaimOutcome::Granted(_)));
+        let mut ca2 = claim("t3", "peer-a");
+        ca2.quota.max_concurrent = 100;
+        assert_eq!(s.claim(&ca2), ClaimOutcome::Denied(DenyReason::RateLimited));
+        assert!(
+            matches!(s.claim(&cb), ClaimOutcome::Granted(_)),
+            "peer-b 有独立频率配额,不因 a 超频受连累"
+        );
     }
 }

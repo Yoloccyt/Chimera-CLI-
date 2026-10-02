@@ -22,7 +22,7 @@
 #   (docs still say "9 categories" in crates/event-bus), workspace 43 members.
 # =============================================================================
 
-nexus_event_variants = 146
+nexus_event_variants = 152
 event_topic_variants = 10
 workspace_crates = 39
 

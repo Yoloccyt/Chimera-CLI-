@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # ============================================================
 # Chimera CLI 启动延迟基线检查脚本（P2-7 hyperfine 落地）
 #

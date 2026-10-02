@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # check_doc_consistency.ps1 - Architecture document three-way reconciliation
 # =============================================================================
 # Purpose: detect drift between Cargo.toml (code), docs/ (index), CHANGELOG.md (changelog)

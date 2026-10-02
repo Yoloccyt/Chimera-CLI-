@@ -129,6 +129,22 @@ impl ProceduralMemory {
                 .map_err(|e| MlcError::StorageError(format!("L3 mutex poisoned: {e}")))?;
 
             let pattern_key = entry.pattern_signature.to_key()?;
+
+            // v2.3 §(b.5) 写入敏感扫描门(首个记忆面写点插桩):程序记忆 output 落库前
+            // 拦截硬敏感载荷(私钥 PEM / 云凭证 / 服务令牌 → Block)。
+            // 刻意仅启用硬标记类:高熵与键名启发式设 Pass,避免误伤 context_hash 等合法
+            // 高熵串。命中即拒绝入库(打码类处置在后续写点按需启用)。见 nexus-contracts::sensitive。
+            let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+                on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+                on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+                ..Default::default()
+            };
+            if nexus_contracts::sensitive::scan(&entry.output, &scan_policy).is_blocked() {
+                return Err(MlcError::StorageError(format!(
+                    "L3 写入被敏感扫描拦截:pattern_key={pattern_key} 含私钥/凭证/令牌类敏感载荷"
+                )));
+            }
+
             let tool_seq_json = serde_json::to_string(&entry.pattern_signature.tool_sequence)?;
             let stats_json = serde_json::to_string(&entry.execution_stats)?;
             let created_iso = entry.created_at.to_rfc3339();
@@ -514,6 +530,20 @@ mod tests {
         let entry2 = ProceduralEntry::new(sig.clone(), "output-2");
         let err = mem.insert(&entry2).await.unwrap_err();
         assert!(matches!(err, MlcError::PatternConflict { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_insert_blocks_sensitive_output() {
+        // v2.3 §(b.5): 含私钥标记的 output 应被写入敏感扫描拦截,且不落库
+        let mem = ProceduralMemory::open_in_memory().unwrap();
+        let sig = make_signature("secret");
+        let entry = ProceduralEntry::new(sig, "-----BEGIN RSA PRIVATE KEY-----\nMIIBowe8...");
+        let err = mem.insert(&entry).await.unwrap_err();
+        assert!(
+            matches!(err, MlcError::StorageError(_)),
+            "敏感载荷应被拦截返回 StorageError,实际 {err:?}"
+        );
+        assert_eq!(mem.count().await.unwrap(), 0, "被拦截载荷不得落库");
     }
 
     #[tokio::test]

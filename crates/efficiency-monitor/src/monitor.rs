@@ -216,8 +216,9 @@ impl EfficiencyMonitor {
         // P1-T12 示范接入(灰度验证「公共 API 零感知」):
         // EfficiencyAlertTriggered 等非 Critical 事件走分片扇出(worker 汇入
         // 既有 broadcast,订阅者 API 零变化);无 tokio runtime 时 enable_sharding
-        // 返回 Err,let _ 忽略即降级单流(零回归,与分片默认关闭语义一致)
-        let _ = bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // 返回 Err 即降级单流(零回归,与分片默认关闭语义一致)
+        // A3/ADR-197:启用结果可见化（内部按级别记日志），不再静默忽略 Err
+        bus.try_enable_sharding("efficiency-monitor");
         let oscillation_detector = Self::create_oscillation_detector(&config);
         Self {
             config,

@@ -193,7 +193,8 @@ impl NmcEncoder {
         // P4-T10 分片扩量批次 1(ADR-153 Go,分批 3 crate × 回归门禁):
         // NmcEncoded 高频非 Critical 事件→ 分片扇出;
         // 幂等 + 无 runtime 时 Err 降级回单流(零回归,P1-T12 先例)
-        let _ = bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // A3/ADR-197:启用结果可见化（内部按级别记日志），不再静默忽略 Err
+        bus.try_enable_sharding("nmc-encoder");
         Ok(Self {
             text_perceptor: TextPerceptor::new(config.clone()),
             image_perceptor: ImagePerceptor::new(config.clone()),

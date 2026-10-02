@@ -56,7 +56,8 @@ impl EdsbBalancer {
         // P5-T2 分片扩量批次 2（ADR-153 Go 续批）:
         // EntropyBalanced 高频非 Critical 事件→ 分片扇出;
         // 幂等 + 无 runtime 时 Err 降级回单流（零回归,P1-T12 先例）
-        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // A3/ADR-197:启用结果可见化（内部按级别记日志），不再静默忽略 Err
+        event_bus.try_enable_sharding("faae-router");
         Self { config, event_bus }
     }
 

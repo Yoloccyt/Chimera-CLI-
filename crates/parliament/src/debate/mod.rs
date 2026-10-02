@@ -210,6 +210,36 @@ impl Parliament {
         }
     }
 
+    /// v2.3 §(b.4)(1)：对通过异构对抗审查的非参与者结论签发 Certify。
+    ///
+    /// 闭环 §(b.1) Claim/Certify 契约与 §(b.4)(1) [`AdversarialReview`](crate::adversarial_review::AdversarialReview)
+    /// 状态机：仅当 `review.is_certify_eligible()`（经**非参与者**审查批准）时，
+    /// 经 `publish_certify` 语义 API 向总线发布 `CertifyIssued`（Critical 旁路）。
+    /// 未达资格则不签发（返回 `false`）——落实「agent 不能自宣成功，须审查通过才 Certify」。
+    /// 发布失败按 `deliberate` 既有惯例仅告警、不阻断，返回 `false`。
+    pub async fn certify_if_reviewed(
+        &self,
+        review: &crate::adversarial_review::AdversarialReview,
+        verifier: &str,
+    ) -> bool {
+        if !review.is_certify_eligible() {
+            return false;
+        }
+        let event = event_bus::NexusEvent::CertifyIssued {
+            metadata: nexus_contracts::EventMetadata::new("parliament"),
+            claim_ref: review.claim_id().to_string(),
+            subject: format!("claim:{}", review.claim_id()),
+            verifier: verifier.to_string(),
+        };
+        match self.event_bus.publish_certify(event).await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, "Certify 事件发布失败(不影响审议)");
+                false
+            }
+        }
+    }
+
     /// 注入行为契约集合（可选）— 启用审议前置闸门（P1-4 生产接线）
     ///
     /// # 语义

@@ -454,6 +454,17 @@ impl TuiApp {
     /// WHY 活跃窗格优先:面板级键路由到 `active_pane` 指向的窗格面板(M3d 多窗格);
     /// 单窗格时即主焦点面板。路由器返回 `FocusPanel`(非全局键)时经此委托。
     pub(crate) fn delegate_key_to_active_panel(&mut self, key: KeyEvent) {
+        // F-03:Chat 视图会话流即 Chat 面板实例(render_chat_mode 直取渲染),与
+        // 活跃窗格/焦点面板脱钩;委托会把 j/k 落在被会话流遮挡的不可见面板。
+        // 与 mouse.rs 滚轮直取同口径;gg/G 的同款修复在 route_execute_scroll。
+        if self.state.view_mode == crate::types::ViewMode::Chat {
+            if let Some(idx) = self.panel_index(PanelId::Chat) {
+                if let Some(cmd) = self.panels[idx].handle_key(key, &mut self.state) {
+                    self.apply_command(cmd);
+                }
+            }
+            return;
+        }
         // M3d:路由到当前活跃窗格对应的面板(active_pane 是 pane_panels 循环序下标);
         // 越界(窗格数收缩未及钳制)兜底回主焦点面板。
         // Task 1.15.4:active_pane 移至 pane_manager
@@ -1844,6 +1855,12 @@ impl TuiApp {
         // 非静默帧全部行参与(全量路径由 V3Output 内部按首帧/区域变化处理)
         let mut dirty = crate::engine::DirtyTracker::new(h);
         if quiescent {
+            // R5 F-49:DirtyTracker::new 初始全脏(engine/buffer.rs:204-209),
+            // 不先复位则 compat 的 clean 行跳过(compat.rs:163-168)永不命中
+            // —— 静默帧每帧仍全帧 O(W×H) 翻译+比较,P-2 行级跳过 0% 生效。
+            // 先 clear 再仅 mark 状态行(正确用法同
+            // v3_engine_regression_test::diffed_skips_clean_rows 的示范)。
+            dirty.clear();
             if let Some(area) = status_area {
                 let end = area.y.saturating_add(area.height).min(h);
                 for row in area.y..end {
@@ -1853,6 +1870,10 @@ impl TuiApp {
         } else {
             dirty.mark_all();
         }
+        // F-49 seam:本帧实际参与 diff 比较的行数(字段注释见 mod.rs)。
+        // WHY 全帧统计而非分支内直记 mark 数:观测的是 dirty 终态本身,
+        // mark 越界/漏 mark 与构造回归为全脏都会如实反映,杜绝静默假绿。
+        self.v3_quiescent_dirty_rows = (0..h).filter(|&r| dirty.is_dirty(r)).count() as u16;
 
         // P-3:帧输出经 AtomicFrameWriter 原子提交(take 模式复用缓冲容量,
         // 避免 double-borrow 与每帧 8KB 再分配)

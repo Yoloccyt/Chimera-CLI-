@@ -48,6 +48,27 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         // Phase 10 §15.2b/§15.3: 经验卡片可视化 + 注入策略面板
         "panel.border.experience_card_viz" => " Card Viz ",
         "panel.border.injection_strategy" => " Injection ",
+        // v2.3 §(b.6):/bench 基准面板
+        "panel.border.bench" => " Bench ",
+        "panel.bench.subtitle" => "Benchmark summary (criterion data first)",
+        "panel.bench.awaiting" => "Awaiting bench provider (criterion pipeline not wired)",
+        "panel.bench.total_benches" => "Benches registered",
+        "panel.bench.slo_breaches" => "SLO breaches",
+        "panel.bench.retrieval_p99" => "Retrieval P99 (ms)",
+        "panel.bench.agreement" => "Judge agreement rate",
+        "panel.bench.certifiable" => "Auto-grade certifiable",
+        // v2.3 §(b.6)/§(b.4):审查队列面板
+        "panel.border.review_queue" => " Review Queue ",
+        "panel.review.subtitle" => "Adversarial review queue",
+        "panel.review.certified" => "Certified",
+        "panel.review.claim_pending" => "Claim (not certified)",
+        "panel.review.retracted" => "Retracted",
+        "panel.review.none" => "No review items",
+        // v2.3 §(b.6)/§(b.2):黑板浏览面板
+        "panel.border.blackboard" => " Blackboard ",
+        "panel.blackboard.subtitle" => "Blackboard collaboration state (by epistemic)",
+        "panel.blackboard.none" => "No board entries",
+        "panel.blackboard.filter" => "epistemic filter",
         "panel.budget.title" => "Budget",
         "panel.budget.tier" => "Current Tier",
         "panel.budget.coefficient" => "Coefficient",

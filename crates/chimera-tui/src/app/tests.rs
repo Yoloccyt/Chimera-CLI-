@@ -122,8 +122,8 @@ fn test_switch_panel_prev() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_prev();
     // Concord T1.4:FocusManager 注册序派生自 PanelId::REGISTERED_FOCUS_ORDER;
-    // FC-05:Quest 的上一个 = 环尾 ExperienceCardViz(InjectionStrategy 已下线)。
-    assert_eq!(app.current_panel(), PanelId::ExperienceCardViz);
+    // v2.3 §(b.6):Quest 的上一个 = 环尾 Blackboard(InjectionStrategy 已下线)。
+    assert_eq!(app.current_panel(), PanelId::Blackboard);
     Ok(())
 }
 

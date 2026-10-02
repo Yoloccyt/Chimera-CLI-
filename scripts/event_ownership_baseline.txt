@@ -22,4 +22,7 @@ RouterStatsReported  # prod_ctor=0 test_ctor=5 consumers=crates/chimera-tui/src/
 TuiActionProgressed  # prod_ctor=0 test_ctor=6 consumers=crates/chimera-cli/src/commands/chat.rs
 UserIntentEncoded  # prod_ctor=0 test_ctor=10 consumers=crates/chimera-tui/src/panels/event_stream.rs,crates/chimera-tui/src/panels/log.rs,crates/event-bus/src/membrane.rs
 VoteCastRequested  # HONEST-DEGRADE FC-A(CHANGELOG:61)：chimera-tui/app/event_loop.rs:1280 publish_vote 刻意不发(L8 消费通道未落地,注释在 :1274)；prod_ctor=0 test_ctor=5 consumers=-
-# total 146 variant(s): 133 owned / 13 without a production ctor
+ClaimIssued  # v2.3 (b.1): 裁决权分离·Claim 契约已落 Wave 1;in-repo emit 生产者待 Wave 2-3(orchestrator/AdversarialReview)接线;经 wire 帧仍可物化;prod_ctor=0 test_ctor=1 consumers=-
+ClaimRetracted  # v2.3 (b.1): 裁决权分离·Declaim 撤回契约已落 Wave 1;生产者待 Wave 2-3;prod_ctor=0 test_ctor=1 consumers=-
+BlackboardEntry  # v2.3 (b.2): 黑板条目契约已落 Wave 1;写入侧落 MLC 索引属 Wave 3 转正;当前无生产态构造,经 wire 帧可物化;prod_ctor=0 test_ctor=1 consumers=-
+# total 151 variant(s): 135 owned / 16 without a production ctor

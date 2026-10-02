@@ -12,6 +12,9 @@
 //!   (纳秒级查表,ADR-127);
 //! - `bridge_reduce`:经桥委托 [`reduce`](nexus_core::compute::reduce::reduce)
 //!   的 Deterministic / Audit 双模式归约延迟。
+//! - `bridge_spawn`:经 [`spawn_compute_batch`](ComputeBridge::spawn_compute_batch)
+//!   的批量卸载往返延迟（ADR-197 新增 —— 该路径上多了一对按类型计数与
+//!   一次饱和判定，旧 bench 完全测不到，故补此组作为现势基线）。
 //!
 //! # 参考样板
 //! 语法结构参照同目录完整保留的 `clv_bench.rs`。
@@ -67,5 +70,48 @@ fn bridge_reduce(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bridge_route, bridge_reduce);
+/// bench 3:批量卸载往返延迟（ADR-197 新增）
+///
+/// WHY 必须单独一组：`bridge_route` 只测查表，`bridge_reduce` 只测归约，
+/// 而饱和判定与计数都落在 `spawn_compute*` 路径上——若不测，本批改动的
+/// 性能影响就是“无数据可辩”。本组不新建 SLO 阈值（避免未实测先登记，
+/// ADR-190 反幽灵门），仅作为现势基线与后续 Phase B/D 的对照起点。
+fn bridge_spawn(c: &mut Criterion) {
+    let b: &ComputeBridge = bridge();
+    let mut group = c.benchmark_group("bridge_spawn");
+    for n in [1usize, 16, 128] {
+        group.bench_function(BenchmarkId::new("batch", n), |be| {
+            be.iter(|| {
+                // 每次迭代重建闭包集:连同 Vec 分配一起计入（真实调用方的形状）
+                let closures = (0..n).map(|i| move || criterion::black_box(i) as u64 + 1);
+                let results = b.spawn_compute_batch(TaskKind::ClvSimilarity, closures);
+                criterion::black_box(results.len());
+            });
+        });
+    }
+    group.finish();
+}
+
+/// bench 3b:饱和判定本身的开销上界（ADR-197）
+///
+/// WHY 单独测：batch 往返由 rayon scope + 槽位互斥量主导，若只报往返数字，
+/// 就无法回答“你新加的判定/计数到底贵不贵”。本组只测
+/// [`is_saturated`](ComputeBridge::is_saturated)（一次原子读 + 一次千分比
+/// 运算 + 一次阈值读），即本次改动在每调用上的成本上界。
+fn saturation_check(c: &mut Criterion) {
+    let b: &ComputeBridge = bridge();
+    let mut group = c.benchmark_group("bridge_saturation_check");
+    group.bench_function("is_saturated", |be| {
+        be.iter(|| criterion::black_box(b.is_saturated()));
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bridge_route,
+    bridge_reduce,
+    bridge_spawn,
+    saturation_check
+);
 criterion_main!(benches);

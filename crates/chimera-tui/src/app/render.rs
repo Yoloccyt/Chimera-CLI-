@@ -147,6 +147,14 @@ impl TuiApp {
             self.render_slash_overlay(frame, parts.stream);
         }
 
+        // M2.2/R5 F-01:命令面板作为居中 overlay 渲染在最上层。与 legacy/v3
+        // 路径(本文件 Dashboard 两分支)对齐 —— 键盘侧 event_loop 的 palette
+        // 分支不分视图全量接管,此处若不渲染即"打开即失明"。
+        // WHY 置于 Slash overlay 之后:palette 层级最高,覆盖其下的补全列表。
+        if self.chat_session.palette.is_some() {
+            self.render_palette(frame, frame.area());
+        }
+
         // 帧末清理 dirty(与 Dashboard 路径一致)
         self.state.clear_dirty();
     }

@@ -140,6 +140,76 @@ fn quiescent_frame_reuses_cache_bytewise_equal_outside_status_bar() {
 }
 
 // ============================================================
+// 1b. R5 F-49:静默帧行级脏跳过必须真生效(P-2)
+// ============================================================
+
+#[test]
+fn quiescent_frame_diff_covers_only_status_rows() {
+    let mut app = make_app();
+
+    // 首帧全量:建立 V3Output front 与 status_bar_area 记录
+    render_to_sink(&mut app, TEST_W, TEST_H);
+    let status_area = app
+        .status_bar_area
+        .expect("Dashboard 全量帧应记录状态栏区域");
+    // WHY 静默帧前快照 front:render_diffed 会把 front 原地演进为本帧,
+    // 事后重放 diff 需要的是"上一呈现帧"作比较基准
+    let front_before = {
+        let out = app.v3_output.as_ref().expect("v3 输出状态应已建立");
+        out.front().clone()
+    };
+
+    // 首帧后变更状态消息:静默帧重绘状态行时与 front 产生真实差异,
+    // 保证下方 Change 断言非空(避免零差异近恒真)
+    app.state_mut().status_message = Some(("diff probe".to_string(), crate::popup::Severity::Info));
+
+    arm_quiescent(&mut app);
+    render_to_sink(&mut app, TEST_W, TEST_H);
+    assert_eq!(app.silent_hit_count(), 1, "前置:静默帧应命中缓存复用分支");
+
+    // 断言 A(F-49 seam):静默帧实际参与 diff 比较的行数 = 状态行数。
+    // WHY 这是 F-49 的唯一可观测面:dirty 回归为全脏时 diff 的 Change 与
+    // 输出字节均不变(非状态行内容本就相同),唯有参与行数会从状态行数
+    // 变为整帧高度。
+    let compared = app.quiescent_dirty_rows();
+    assert_eq!(
+        compared, status_area.height,
+        "静默帧参与 diff 的行数应等于状态行数;若为整帧高度 {} 说明 dirty 构造回归为全脏(F-49)",
+        TEST_H
+    );
+
+    // 断言 B(任务书②字面):静默帧经 from_ratatui_buffer_diffed 产出的
+    // Change 只覆盖状态行 —— 用与生产修复后同语义的 dirty(clear 后仅
+    // mark 状态行,写法同 v3_engine_regression_test::diffed_skips_clean_rows)
+    // 对"上一呈现帧 → 本帧缓存"重放 diff
+    let rb = app.v3_cached_frame().expect("静默帧后缓存应存在").clone();
+    let mut dirty = crate::engine::DirtyTracker::new(TEST_H);
+    dirty.clear();
+    let status_end = status_area.y.saturating_add(status_area.height).min(TEST_H);
+    for row in status_area.y..status_end {
+        dirty.mark(row);
+    }
+    let changes = crate::engine::from_ratatui_buffer_diffed(&front_before, &rb, &dirty);
+    assert!(
+        !changes.is_empty(),
+        "状态消息已变更,状态行应产出真实 Change;零 Change 说明状态行未被 mark 或未重绘"
+    );
+    // 判别力注记:重放 dirty 仅 mark 状态行,本循环的"不越出状态行"系构造性
+    // 保证(from_ratatui_buffer_diffed 只在 dirty 行产出 Change)恒真;真正的
+    // 回归判别力在断言 A 的 seam 行数与上方非空检查,勿高估本子断言守卫强度。
+    for c in &changes {
+        let y = match c {
+            crate::engine::Change::Cell { y, .. } => *y,
+            crate::engine::Change::Span { y, .. } => *y,
+        };
+        assert!(
+            y >= status_area.y && y < status_end,
+            "Change 落在状态行之外(y={y}):静默帧 diff 不应越出状态行"
+        );
+    }
+}
+
+// ============================================================
 // 2. PS-1 修复验收:auto_scroll=true(生产默认)下静默帧应可命中
 // ============================================================
 

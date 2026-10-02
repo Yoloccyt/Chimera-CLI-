@@ -383,6 +383,49 @@ def mode_invariants(redlines, thresholds_doc, freeze):
     except OSError as exc:
         if not _check(f"I8 event-bus sources readable ({exc})", False):
             fails += 1
+
+    # I8b (R3-6 扩展, 2026-09-29): 覆盖原 I8 单一 "N 个 Critical 事件" phrasing
+    # 盲区 —— 历史滞后注释会以 "17 个,"/"个 Critical 变体名"/"个 Critical 永不进分片"
+    # 等形态出现而不被 I8 捕获。规则: 任何同线同时出现 LANE_FORBIDDEN_SHARD 令牌与
+    # "(\d+) 个 Critical" 计数, 该计数必须等于 CRITICAL_TOTAL。令牌约束天然豁免
+    # 语义无关的 "4096 个 Critical 事件"(通道容量)与历史 "6 个 Critical 事件"(spec.md:186)。
+    try:
+        import glob as _glob
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus.rs"),
+                  encoding="utf-8", errors="ignore") as fh:
+            _bus_src = fh.read()
+        _tot_m = re.search(r"CRITICAL_TOTAL\s*:\s*usize\s*=\s*(\d+)", _bus_src)
+        _tot_val = _tot_m.group(1) if _tot_m else None
+        _cnt_re = re.compile(r"(\d+)\s*个\s*Critical")
+        _offenders, _scanned = [], 0
+        if _tot_val:
+            for _path in _glob.glob(
+                    os.path.join(ROOT, "crates", "event-bus", "**", "*.rs"),
+                    recursive=True):
+                try:
+                    with open(_path, encoding="utf-8", errors="ignore") as fh:
+                        for _lineno, _line in enumerate(fh, 1):
+                            if "LANE_FORBIDDEN_SHARD" in _line:
+                                _cm = _cnt_re.search(_line)
+                                if _cm:
+                                    _scanned += 1
+                                    if _cm.group(1) != _tot_val:
+                                        _offenders.append(
+                                            "%s:%d=%s" % (
+                                                os.path.relpath(_path, ROOT),
+                                                _lineno, _cm.group(1)))
+                except OSError:
+                    continue
+            if not _check(
+                    "I8b LANE_FORBIDDEN_SHARD Critical-count comments == CRITICAL_TOTAL "
+                    "(scanned=%d, total=%s, offenders=%s)" % (
+                        _scanned, _tot_val, _offenders or "none"),
+                    _scanned >= 1 and not _offenders):
+                fails += 1
+    except OSError as exc:
+        if not _check(f"I8b event-bus sources readable ({exc})", False):
+            fails += 1
+
     verdict = f"FAIL ({fails} violation(s))" if fails else "PASS (all invariants hold)"
     print(f"\n  RESULT: {verdict}")
     return rc_from_findings(fails)

@@ -122,6 +122,22 @@ impl CheckpointManager {
         // 序列化 Checkpoint 为 MessagePack 并写入磁盘
         let bytes = rmp_serde::to_vec(&checkpoint)
             .map_err(|e| QuestError::SerializationError(format!("msgpack encode cp: {e}")))?;
+
+        // v2.3 §(b.5): 检查点落盘前拦截私钥/凭证/令牌类硬载荷(R3-1 补入的核心 Checkpoint 写点)。
+        // Block-only:高熵/键名启发式设 Pass;benign 检查点(无硬标记)零影响;命中即拒绝保存。
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(&String::from_utf8_lossy(&bytes), &scan_policy)
+            .is_blocked()
+        {
+            return Err(QuestError::CheckpointSaveFailed(format!(
+                "checkpoint {checkpoint_id_str} 含敏感硬载荷(私钥/凭证/令牌),拒绝落盘"
+            )));
+        }
+
         fs::write(&file_path, bytes).map_err(|e| {
             QuestError::CheckpointSaveFailed(format!("write {}: {e}", file_path.display()))
         })?;

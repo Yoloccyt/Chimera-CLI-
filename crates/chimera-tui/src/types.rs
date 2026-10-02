@@ -143,6 +143,23 @@ pub enum PanelId {
     /// 展示动态卡片/人格摘要/缓存统计，数据经 InjectionSnapshotProvider
     /// trait 注入（D-1 同款依赖倒置）。
     InjectionStrategy,
+    /// 基准面板 — `/bench` 数据先行(v2.3 §(b.6))
+    ///
+    /// 展示 criterion 基准总数/SLO 违约/检索 P99/裁判一致率/自动化可认证性,
+    /// 数据经 `BenchStatsProvider` trait 注入(未接线时诚实展示等待提示)。
+    Bench,
+    /// 审查队列面板 — AdversarialReview 待审/在审/已认证队列(v2.3 §(b.6)/§(b.4))
+    ///
+    /// 展示 Claim 的对抗审查进展;§(b.1) 铁律：**仅经 Certify 通过的项才渲染为已认证**,
+    /// 数据从 `latest_events` 派生(Claim/Certify/Retract 事件聚合,零管道侵入;
+    /// 无 Provider trait —— F-72 文档修正,原 `ReviewQueueProvider` 全仓无定义)。
+    ReviewQueue,
+    /// 黑板浏览面板 — MLC 协作态投影的按认识类型过滤浏览(v2.3 §(b.6)/§(b.2))
+    ///
+    /// 展示 BlackboardEntry 投影到记忆索引的协作态条目,按 epistemic 类型过滤;
+    /// 数据从 `latest_events` 派生(零管道侵入;无 Provider trait —— F-72 文档修正,
+    /// 原 `BlackboardBrowseProvider` 全仓无定义)。
+    Blackboard,
 }
 
 impl PanelId {
@@ -176,6 +193,9 @@ impl PanelId {
             PanelId::OverWindow => "OverWindow",
             PanelId::ExperienceCardViz => "ExperienceCardViz",
             PanelId::InjectionStrategy => "InjectionStrategy",
+            PanelId::Bench => "Bench",
+            PanelId::ReviewQueue => "ReviewQueue",
+            PanelId::Blackboard => "Blackboard",
         }
     }
 
@@ -209,6 +229,9 @@ impl PanelId {
             PanelId::OverWindow => " OverWindow ",
             PanelId::ExperienceCardViz => " Card Viz ",
             PanelId::InjectionStrategy => " Injection ",
+            PanelId::Bench => " Bench ",
+            PanelId::ReviewQueue => " Review Queue ",
+            PanelId::Blackboard => " Blackboard ",
         }
     }
 
@@ -251,9 +274,15 @@ impl PanelId {
         // (FC-05,2026-09-06 评估):无运行期数据源(mlc-engine 注入策略生产不
         // 构造),未列入本表 = 不参与焦点环,trait 注入桩保留代码可复测。
         PanelId::ExperienceCardViz,
+        // v2.3 §(b.6):/bench 基准面板注册(环尾,criterion 数据先行)
+        PanelId::Bench,
+        // v2.3 §(b.6)/§(b.4):审查队列面板注册(新环尾,AdversarialReview 可视化)
+        PanelId::ReviewQueue,
+        // v2.3 §(b.6)/§(b.2):黑板浏览面板注册(新环尾,MLC 协作态投影按 epistemic 过滤)
+        PanelId::Blackboard,
     ];
 
-    /// 全部 PanelId 变体清单(27 个)—— 完整性断言的穷举驱动源(M6 派发表治理)
+    /// 全部 PanelId 变体清单(30 个)—— 完整性断言的穷举驱动源(M6 派发表治理)
     ///
     /// WHY 手工清单而非编译期反射:工具链 rustc 1.97.1 的
     /// `std::mem::variant_count` 仍未稳定(实测 E0658),无法编译期取变体数;
@@ -289,6 +318,9 @@ impl PanelId {
         PanelId::TaskManager,
         PanelId::OverWindow,
         PanelId::ExperienceCardViz,
+        PanelId::Bench,
+        PanelId::ReviewQueue,
+        PanelId::Blackboard,
         PanelId::InjectionStrategy,
     ];
 
@@ -1651,11 +1683,14 @@ mod tests {
             | PanelId::TaskManager
             | PanelId::OverWindow
             | PanelId::ExperienceCardViz
+            | PanelId::Bench
+            | PanelId::ReviewQueue
+            | PanelId::Blackboard
             | PanelId::InjectionStrategy => {}
         }
 
-        // 27 变体锚定(当前实测数;上方穷举 match 保证清单与 enum 同步)
-        assert_eq!(PanelId::ALL.len(), 27, "PanelId::ALL 应穷举 27 个变体");
+        // 30 变体锚定(当前实测数;上方穷举 match 保证清单与 enum 同步)
+        assert_eq!(PanelId::ALL.len(), 30, "PanelId::ALL 应穷举 30 个变体");
 
         // ALL 与焦点环的集合关系:ALL == REGISTERED_FOCUS_ORDER ∪ {InjectionStrategy}
         // (无重复、无遗漏;InjectionStrategy 为 FC-05 下线的唯一未注册变体)
@@ -1697,12 +1732,8 @@ mod tests {
         }
         // 关键边抽查(循环闭合 + 历史接入点)
         assert_eq!(PanelId::Quest.next(), PanelId::Parliament);
-        // FC-05:环尾(ExperienceCardViz)回到环首 Quest,环必须闭合
-        assert_eq!(
-            PanelId::ExperienceCardViz.next(),
-            PanelId::Quest,
-            "环必须闭合"
-        );
+        // FC-05/v2.3 §(b.6):环尾(Blackboard)回到环首 Quest,环必须闭合
+        assert_eq!(PanelId::Blackboard.next(), PanelId::Quest, "环必须闭合");
         // InjectionStrategy 已下线(ADR,2026-09-06):未注册变体回退环首
         assert_eq!(
             PanelId::InjectionStrategy.next(),
@@ -1732,8 +1763,8 @@ mod tests {
             );
         }
         // 关键边抽查(循环闭合)
-        // FC-05:环尾由 ExperienceCardViz 闭合(Quest 的 prev = 环尾)
-        assert_eq!(PanelId::Quest.prev(), PanelId::ExperienceCardViz);
+        // FC-05/v2.3 §(b.6):环尾由 Blackboard 闭合(Quest 的 prev = 环尾 Blackboard)
+        assert_eq!(PanelId::Quest.prev(), PanelId::Blackboard);
         assert_eq!(PanelId::Timeline.prev(), PanelId::Chtc);
     }
 
@@ -1772,6 +1803,12 @@ mod tests {
             // Phase 10:ExperienceCardViz 加入往返验证;InjectionStrategy 已下线
             // (FC-05,2026-09-06 评估,未注册变体不参与循环)
             PanelId::ExperienceCardViz,
+            // v2.3 §(b.6):/bench 基准面板加入往返验证(环尾)
+            PanelId::Bench,
+            // v2.3 §(b.6):审查队列面板加入往返验证(新环尾)
+            PanelId::ReviewQueue,
+            // v2.3 §(b.6):黑板浏览面板加入往返验证(新环尾)
+            PanelId::Blackboard,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);

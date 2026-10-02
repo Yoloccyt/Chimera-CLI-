@@ -172,7 +172,7 @@ impl HtsTable {
 /// WHY 不用 HashMap:六类登记可穷举 match,索引 O(1) 且零哈希开销;
 /// match 穷举性在 [`TaskKind`] 新增变体时编译报错（六类不变的红线由编译期兜底）。
 #[must_use]
-const fn kind_index(kind: TaskKind) -> usize {
+pub(crate) const fn kind_index(kind: TaskKind) -> usize {
     match kind {
         TaskKind::ClvSimilarity => 0,
         TaskKind::OsaMask => 1,

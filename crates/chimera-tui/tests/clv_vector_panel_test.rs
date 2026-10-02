@@ -100,3 +100,68 @@ fn test_clv_vector_panel_help_key_returns_none() {
     let result = panel.handle_key(key, &mut state);
     assert_eq!(result, None);
 }
+
+// ============================================================
+// E. 选中行可见性(批次三终审 #1:窗口化守护归属从 proptest 扩展到专项文件)
+// ============================================================
+
+/// 宽字符感知的渲染收集(仿 osa_sparse_panel_test 同款口径:跳过 CJK 续格,
+/// 避免 zh chrome 文案被续格空格隔断导致 contains 失配)
+fn render_panel_to_string(
+    panel: &mut ClvVectorPanel,
+    state: &TuiState,
+    w: u16,
+    h: u16,
+) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, w, h);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    panel.render(state, area, &mut buf);
+    let mut out = String::new();
+    let mut prev_wide = false;
+    for cell in buf.content().iter() {
+        if cell.skip {
+            continue;
+        }
+        let s = cell.symbol();
+        if prev_wide {
+            prev_wide = false;
+            continue;
+        }
+        if s.is_empty() {
+            continue;
+        }
+        let ch = s.chars().next().unwrap_or(' ');
+        prev_wide = unicode_width::UnicodeWidthStr::width(s) >= 2;
+        out.push(ch);
+    }
+    out
+}
+
+#[test]
+fn test_clv_vector_panel_selected_row_visible_after_scroll() {
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let mut panel = ClvVectorPanel::new();
+    let mut state = TuiState::new();
+    // WHY 构造 ClvSummary:Top 维度表是本面板唯一列表区,空状态(None)
+    // 无选中行可言;24 条互异 dim 号保证选中行文本全帧唯一可锚定
+    state.clv_summary = Some(event_bus::ClvSummary {
+        block_means: vec![0.1; 8],
+        l2_norm: 2.5,
+        top_dims: (0..24).map(|i| (100 + i, 0.5_f32)).collect(),
+    });
+
+    // Down×18 → selected=18;100x40(inner 38)下 Top 维度表行数充足
+    // (对齐 proptest clv 用例 area_height ≥ 20 的布局守卫)
+    let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+    for _ in 0..18 {
+        panel.handle_key(down, &mut state);
+    }
+    let content = render_panel_to_string(&mut panel, &state, 100, 40);
+
+    // 帧内 "> " 唯一来源是选中行前缀(未选中行为 "  ",chrome 无 ">" 字样)
+    assert!(content.contains("> "), "选中行应带 > 前缀, got: {content}");
+    assert!(
+        content.contains("dim=118"),
+        "选中行文本应随前缀同帧可见, got: {content}"
+    );
+}

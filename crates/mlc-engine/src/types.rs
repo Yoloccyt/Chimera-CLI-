@@ -268,6 +268,22 @@ pub struct MemoryEntry {
     /// 不破坏现有持久化数据与测试。`None` 在召回时按 `Current` 处理(向后兼容)。
     #[serde(default)]
     pub temporal_meta: Option<TemporalMeta>,
+    /// v2.3 §(b.3):认识类型标签 —— 与 `tier`(保留/用途层级)**正交**的第二维。
+    /// tier 表达"在哪一层/因何保留",`epistemic_type` 表达"这是什么认识"
+    /// (Fact/Episode/Observation/MindModel)。默认 Fact(老数据反序列化不破坏)。
+    #[serde(default = "default_epistemic_type")]
+    pub epistemic_type: nexus_contracts::EpistemicType,
+    /// Observation/派生结论的证据指针(指向原始记录条目 id);空=非归纳条目。
+    #[serde(default)]
+    pub evidence_ptrs: Vec<String>,
+    /// 因果来源引用(ADR-132 接线后启用;一期可选,不被未接线组件阻塞)。
+    #[serde(default)]
+    pub provenance: Option<String>,
+}
+
+/// `epistemic_type` 的 serde 默认(向后兼容:老数据无此字段时反序列化为 Fact)。
+fn default_epistemic_type() -> nexus_contracts::EpistemicType {
+    nexus_contracts::EpistemicType::Fact
 }
 
 impl MemoryEntry {
@@ -294,12 +310,22 @@ impl MemoryEntry {
             last_accessed_at: now,
             access_count: 0,
             temporal_meta: None, // P3-W11.1: 默认 None(向后兼容,视为 Current)
+            epistemic_type: nexus_contracts::EpistemicType::Fact,
+            evidence_ptrs: Vec::new(),
+            provenance: None,
         }
     }
 
     /// 附带 CLV 向量(用于 L2 语义记忆)
     pub fn with_clv(mut self, clv: CLV) -> Self {
         self.clv = Some(clv);
+        self
+    }
+
+    /// v2.3 §(b.3):设置认识类型标签(与 `tier` 正交的第二维)。
+    #[must_use]
+    pub fn with_epistemic(mut self, epistemic: nexus_contracts::EpistemicType) -> Self {
+        self.epistemic_type = epistemic;
         self
     }
 

@@ -21,7 +21,6 @@
 
 # --- L3 Storage ---
 /crates/scc-cache/                             @Yoloccyt
-/crates/lsct-tiering/                          @Yoloccyt
 /crates/cmt-tiering/                           @Yoloccyt
 /crates/session-store/                         @Yoloccyt
 
