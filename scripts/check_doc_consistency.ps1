@@ -89,7 +89,13 @@ if (-not $verMatch.Success) {
 # B1. main docs contain current crate count (4 docs: README, CODE_WIKI, CLAUDE.md, nuxus-rules)
 # Note: adr_index.md is an ADR index, not a crate index, so it is NOT checked here.
 $b1Docs = @('docs/architecture/README.md', 'docs/architecture/CODE_WIKI.md', '.claude/CLAUDE.md', $nuxusRulesRel)
-$crateTokens = @("$nMembers crate", "${nMembers} crate", "$nMembers Crate", "$nMembers/$nMembers crate", "${nMembers}个crate", "${nMembers} 个crate")
+# The four emphasis variants exist for the same reason as the 4th alternative in
+# check_doc_consistency.sh: a correct document whose count is bolded ("**39** crates")
+# was reported stale purely because the token list matched a literal string instead
+# of the fact. They stay narrow on purpose -- they must not absorb an ordinal usage
+# ("<ordinal> 39 <ge> crate" = "the 39th crate") nor a stale "43 crate", either of
+# which would let a genuinely stale document pass.
+$crateTokens = @("$nMembers crate", "${nMembers} crate", "$nMembers Crate", "$nMembers/$nMembers crate", "${nMembers}个crate", "${nMembers} 个crate", "${nMembers}** crate", "${nMembers}** Crate", "${nMembers}__ crate", "${nMembers}__ Crate")
 # B1/B2 used to be silent on success, so the run reported fewer ids than checks actually
 # executed and the hardcoded "14 checks" total could never be reconciled with observation.
 # Every check must self-report on the green path too (see the derived footer count).

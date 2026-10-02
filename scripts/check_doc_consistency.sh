@@ -103,7 +103,16 @@ for f in "${b1_docs[@]}"; do
         report+=("[B1-warn] missing document: ${f} (gitignore *.md 策略,CI 环境无此文档,跳过)")
         continue
     fi
-    if ! grep -qE "${n_members}[[:space:]]*crate|${n_members}个crate|${n_members}[[:space:]]*Crate" "$f"; then
+    # The 4th alternative tolerates Markdown emphasis between the number and the
+    # noun (e.g. "**39** crates"). WITHOUT it a correct document is reported
+    # stale purely because the count is bolded -- a criterion that matches a
+    # literal string instead of the underlying fact.
+    #
+    # WHY it stays narrow on purpose: it must NOT absorb an ordinal usage such
+    # as "第 39 个 crate" ("the 39th crate", an addition index) nor a stale
+    # "43 crate". Absorbing either would let a genuinely stale document pass,
+    # which is the failure mode this check exists to prevent.
+    if ! grep -qE "${n_members}[[:space:]]*crate|${n_members}个crate|${n_members}[[:space:]]*Crate|${n_members}(\*\*|__)[[:space:]]*[Cc]rate" "$f"; then
         report+=("[GAP-B1] ${f} does not contain current crate count (${n_members}), possibly stale")
         status=1
     else
