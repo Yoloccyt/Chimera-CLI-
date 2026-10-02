@@ -54,6 +54,9 @@ use crate::error::FaaeError;
 use crate::types::{ExpertScoring, ToolId};
 
 /// 环境变量关闭开关名（`--no-parallel-faae` 的 env 形态,纪律⑤;仅测试/运维使用）
+///
+/// 注意:该开关的测试**不在**本文件的单元测试模块里 —— 它要写进程级
+/// `NO_PARALLEL_ENV`,必须独占一个测试进程,见 `tests/env_no_parallel.rs`。
 const ENV_NO_PARALLEL: &str = "CHIMERA_NO_PARALLEL_FAAE";
 
 /// 进程级 env 缓存 — 启动期读取一次,不在热路径（任务约束）
@@ -117,13 +120,45 @@ pub(crate) fn score_one(clv: &[f32], input: &ScoreInput) -> f32 {
 ///
 /// 配置/env 关闭 → 直接 `Inline`（等价于 `should_parallel` 为 false）,
 /// 否则按 `TaskKind::Generic` 的规模阈值判 `Inline` / `Rayon`。
+///
+/// # 为何是 `pub`（可见性加宽,仅此一处,加宽而非破坏）
+/// 决策结果是"本进程**真的**走了 rayon 分支"这一测试断言的唯一可观测点。
+/// `NO_PARALLEL_ENV` 是**进程级** `OnceLock`:一旦被缓存成"关闭",同一测试
+/// 二进制里的其它用例会静默只在 `Inline` 串行分支上自我印证（"并行 == 串行"
+/// 的等价性断言照样全绿）。把它暴露出来后,本模块单元测试、`router.rs` 的
+/// T1/T2 与集成测试都能在断言前**先证明分支确实取到**,把静默降级变成显式失败。
+/// 签名与判定逻辑零改动,无既有调用点 —— 纯加宽。
 #[must_use]
-fn dispatch_plan(n: usize, parallel_enabled: bool) -> DispatchPlan {
+pub fn dispatch_plan(n: usize, parallel_enabled: bool) -> DispatchPlan {
     if should_parallel(parallel_enabled) {
         bridge().route(TaskKind::Generic, n)
     } else {
         DispatchPlan::Inline
     }
+}
+
+/// A1 证据探针 —— 断言 `n` 确实落在 rayon 分支（仅测试用）
+///
+/// WHY 需要它:`NO_PARALLEL_ENV` 是**进程级** `OnceLock`,同一测试二进制里
+/// 任何一次"env 关闭"生效都会把整个进程钉死在 `Inline` 分支上,而
+/// "并行与串行逐元素一致"的断言依然全绿 —— 静默降级。凡是**声称**要覆盖
+/// rayon 分支的用例都必须先过这道前置断言,否则它锁住的是"串行路径自洽",
+/// 不是"并行与串行一致"。
+///
+/// 只断言 `Rayon` 方向（用例声称要覆盖的那一侧）,**不**反向断言小 n 的
+/// `Inline`:Inline 侧不是这些用例的证据目标,把阈值下沿钉死会让
+/// `TaskKind::Generic` 阈值的任何标定变更（ADR-198）都变成与本用例无关的
+/// 测试失败。
+#[cfg(test)]
+pub(crate) fn assert_rayon_branch(n: usize) {
+    let plan = dispatch_plan(n, true);
+    assert_eq!(
+        plan,
+        DispatchPlan::Rayon,
+        "n={n} 必须取到 rayon 分支,实际 {plan:?} —— 若 CHIMERA_NO_PARALLEL_FAAE \
+         曾在本进程生效（NO_PARALLEL_ENV 被缓存为关闭）,本用例只是在 Inline \
+         串行分支上自我印证,本断言必须失败"
+    );
 }
 
 /// 当前是否运行在多线程 tokio runtime 上（让出 worker 的前提,理由见
@@ -413,6 +448,14 @@ mod tests {
     use nexus_contracts::util::xts_top_k_by;
     use proptest::prelude::*;
 
+    /// `TaskKind::Generic` 的**文档化**并行阈值（与 `parallel.rs` 模块文档
+    /// 「阈值 10000」及 `nexus_core::compute::bridge` 的 `decide_three_way` 一致）
+    ///
+    /// 用途**仅限**回答"本用例是否**本应**落在 rayon 侧",供 `assert_rayon_branch`
+    /// 的前置条件使用;不作为行为锁定 —— 阈值若被标定下移（ADR-198）,小 n 用例
+    /// 静默改走 rayon 不构成假证据,不该因此报红。
+    const GENERIC_RAYON_THRESHOLD: usize = 10_000;
+
     /// 构造测试用评分输入（固定种子 LCG 确定性生成）
     fn make_inputs(n: usize) -> Vec<ScoreInput> {
         (0..n)
@@ -502,12 +545,20 @@ mod tests {
     #[test]
     fn test_should_parallel_gating() {
         // 配置开启 + env 未关 → 并行
-        // 注意:env_no_parallel() 依赖进程级 OnceLock（测试环境默认未设置 → false）
-        if !env_no_parallel() {
-            assert!(should_parallel(true));
-        }
+        //
+        // 无条件断言(不再用 `if !env_no_parallel()` 自我豁免):本测试二进制里已无
+        // 任何用例会去写 `NO_PARALLEL_ENV`(env 用例已迁到独立进程,见
+        // `tests/env_no_parallel.rs`),故它要么是 false(正常),要么就是环境把
+        // CHIMERA_NO_PARALLEL_FAAE 设成了关闭态 —— 后者会让同二进制的并行分支
+        // 测试集体作废,必须当场炸出来而不是静默跳过。
+        assert!(
+            !env_no_parallel(),
+            "CHIMERA_NO_PARALLEL_FAAE 在本进程生效:NO_PARALLEL_ENV 是进程级 OnceLock,\
+             本二进制内所有 rayon 分支测试均已失效,请清除该环境变量后重跑"
+        );
+        assert!(should_parallel(true), "配置开启 + env 未关 → 必须并行");
         // 配置关闭 → 强制串行（无论 env）
-        assert!(!should_parallel(false));
+        assert!(!should_parallel(false), "配置关闭 → 强制串行");
     }
 
     // ============================================================
@@ -518,6 +569,7 @@ mod tests {
     fn test_parallel_matches_serial_fixed_seed() {
         let clv = make_clv();
         let inputs = Arc::new(make_inputs(12_000)); // 12_000 ≥ Generic 阈值 10_000 → Rayon 分支
+        assert_rayon_branch(12_000); // A1 前置:证明本次真的取到 rayon 分支
         let serial = score_serial(&clv, &inputs);
         let parallel = score_experts_batch(&clv, &inputs, true).expect("批量评分失败");
         assert_eq!(serial.len(), 12_000);
@@ -584,31 +636,11 @@ mod tests {
         assert_eq!(disabled, serial, "配置关闭后结果必须与串行路径一致");
     }
 
-    /// env 关闭开关 → 走串行（集成验证:进程级 env 首次读取即生效,结果与串行一致）
-    ///
-    /// WHY OnceLock:本测试设置 env 后,`env_no_parallel()` 首次读取即缓存关闭态;
-    /// 若其他测试先调用导致已缓存 false,本测试跳过断言（不污染其他测试）。
-    #[test]
-    fn test_env_disable_falls_back_to_serial() {
-        if env_no_parallel() {
-            // 已有其他来源关闭 —— 缓存生效,直接验证串行一致性
-            let clv = make_clv();
-            let inputs = Arc::new(make_inputs(12_000));
-            let out = score_experts_batch(&clv, &inputs, true).expect("回退失败");
-            let serial = score_serial(&clv, &inputs);
-            assert_eq!(out, serial);
-            return;
-        }
-        // env 尚未缓存:设置后首次读取 → 关闭并行（OnceLock 一次性语义）
-        std::env::set_var(ENV_NO_PARALLEL, "1");
-        let clv = make_clv();
-        let inputs = Arc::new(make_inputs(12_000));
-        let out = score_experts_batch(&clv, &inputs, true).expect("回退失败");
-        let serial = score_serial(&clv, &inputs);
-        assert_eq!(out, serial, "env 关闭后结果必须与串行路径一致");
-        // 恢复 env,避免影响同进程其他测试（OnceLock 已缓存,恢复仅对子进程有意义）
-        std::env::remove_var(ENV_NO_PARALLEL);
-    }
+    // 注:`CHIMERA_NO_PARALLEL_FAAE` 的**env 关闭**用例不在本模块 —— 它必须在
+    // 独立进程里跑。该用例要写 `NO_PARALLEL_ENV`(进程级 OnceLock),而本二进制内
+    // 另有测试以"真的走 rayon 分支"为证据(见 assert_rayon_branch);同进程内共存
+    // 意味着谁先跑决定其余测试的分支,且失败仍是全绿。现已迁至
+    // `tests/env_no_parallel.rs`(cargo 为每个 tests/*.rs 生成独立可执行文件)。
 
     // ============================================================
     // 配置开关与路由接线
@@ -619,6 +651,11 @@ mod tests {
         let clv = make_clv();
         let inputs = Arc::new(make_inputs(12_000));
         let config = FaaeConfig::default();
+        // A1 前置:配置开启的一侧必须真的取到 rayon 分支,否则本测试锁住的只是
+        // "配置位被读到了",不是"配置位接到了 rayon 分支"。
+        if config.parallel_expert_scoring {
+            assert_rayon_branch(12_000);
+        }
         // 配置默认 true → 路由判定走 should_parallel(config.parallel_expert_scoring)
         let _ = score_experts_batch(&clv, &inputs, config.parallel_expert_scoring)
             .expect("默认配置评分失败");
@@ -652,6 +689,12 @@ mod tests {
     fn test_precomputed_path_matches_score_input_path() {
         for n in [0_usize, 1, 65, 90, 12_000] {
             for parallel_enabled in [true, false] {
+                // A1 前置:本用例声称在 rayon 分支上比对两路径;凡 n ≥ Generic 阈值的
+                // 并行档必须先证明分支取到,否则它只是在 Inline 上自我印证。
+                // n < 阈值的一侧不断言 Inline(见 assert_rayon_branch 的文档)。
+                if parallel_enabled && n >= GENERIC_RAYON_THRESHOLD {
+                    assert_rayon_branch(n);
+                }
                 let clv = make_clv();
                 let legacy = Arc::new(make_inputs(n));
                 let precomputed = Arc::new(make_scoring_inputs(n));
@@ -767,16 +810,28 @@ mod tests {
         /// 纯函数,同输入必须**位模式相同**。一旦有人给其中一条加了 epsilon 舍入或
         /// 改换算顺序,近似断言会静默放过,全等断言会当场炸出可复现的反例。
         ///
-        /// 注（`env` 交互,非本属性引入）:`parallel_enabled = true` 仍先过
-        /// `should_parallel` → `env_no_parallel()`。同进程内
-        /// `test_env_disable_falls_back_to_serial` 会把该 `OnceLock` 缓存为"关闭",
-        /// 此时本属性两路径一起退回 Inline —— 等价性断言仍成立（判定同源）,只是
-        /// Rayon 分支未被触达。此处按既有的进程级 env 语义处理,不额外改测试环境。
+        /// 注（`env` 交互）:`parallel_enabled = true` 仍先过
+        /// `should_parallel` → `env_no_parallel()`。为防"进程级 env 生效后
+        /// 全样本静默退回 Inline、却仍然全绿",阈值带内 **n ≥ 10_000** 的样本
+        /// 先断言决策确为 `Rayon`(见本体内 A1 前置)—— 即便真被退回 Inline,
+        /// 该样本也会**当场报红**并指出 NO_PARALLEL_ENV,而不是无声通过。
         #[test]
         fn precomputed_batch_matches_score_input_batch(
             n in prop_n_across_threshold(),
             parallel_enabled in any::<bool>(),
         ) {
+            // A1 前置:阈值带上半段(n ≥ 10_000)本应落在 rayon 分支。`parallel_enabled`
+            // 为 false 的样本刻意走串行,不参与本断言。
+            if parallel_enabled && n >= GENERIC_RAYON_THRESHOLD {
+                prop_assert_eq!(
+                    dispatch_plan(n, true),
+                    DispatchPlan::Rayon,
+                    "n={} ≥ Generic 阈值,本样本本应取到 rayon 分支。若 \
+                     CHIMERA_NO_PARALLEL_FAAE 曾在本进程生效(NO_PARALLEL_ENV 被缓存为 \
+                     关闭),本属性测试的并行档从未真正被触达",
+                    n
+                );
+            }
             let clv = make_clv();
             let legacy = Arc::new(make_inputs(n));
             let precomputed = Arc::new(make_scoring_inputs(n));

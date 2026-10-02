@@ -875,6 +875,10 @@ mod tests {
     /// (ToolId + f32 全等),`routed_tool` 亦同。
     #[tokio::test]
     async fn t1_current_thread_scores_are_invariant() {
+        // A1 前置:本用例声称"并行配置下的评分与串行逐元素一致"。若 NO_PARALLEL_ENV
+        // 被缓存为关闭,两侧其实都在 Inline 分支上,断言会静默自证 —— 必须先证明
+        // rayon 分支真的取到(探针文档见 parallel::assert_rayon_branch)。
+        crate::parallel::assert_rayon_branch(BULK_EXPERTS);
         let parallel_router = router_with_bulk_experts(BULK_EXPERTS, true).await;
         let serial_router = router_with_bulk_experts(BULK_EXPERTS, false).await;
         let clv = bulk_clv();
@@ -953,6 +957,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn t2_multi_thread_batch_does_not_starve_worker() {
         use std::sync::atomic::AtomicU64;
+
+        // A1 前置:批窗口的"让出 worker"结论只在真的走 rayon 批分支时才有意义。
+        // 若 NO_PARALLEL_ENV 被缓存为关闭,批退化为串行,本测试会把"串行没有饿死
+        // worker"当成"让出生效"而通过 —— 故先证明分支取到。
+        crate::parallel::assert_rayon_branch(BULK_EXPERTS);
 
         let clv = bulk_clv();
         // 走 `route()` 步骤 2 实际调用的那条路径（预计算 `ExpertScoring` + 让出包装）,
