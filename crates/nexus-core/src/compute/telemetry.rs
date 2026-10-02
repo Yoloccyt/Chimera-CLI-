@@ -34,6 +34,7 @@ use std::time::Duration;
 
 use event_bus::EventBus;
 
+use super::calibration;
 use super::dispatch::TaskKind;
 use super::hts::kind_index;
 use super::utilization::UtilizationSampler;
@@ -328,6 +329,26 @@ pub fn spawn_saturation_reporter(bus: EventBus, period_secs: u64) -> tokio::task
             tokio::time::sleep(period).await;
             // 去抖与发布在采样器内完成;返回值仅用于日志与后续指标导出
             sampler.sample_and_report(&bus);
+            // B1/ADR-198:写表也只在低频周期发生（非 apply 模式时为 no-op，
+            // 不把“改变运行期阈值”这种治理动作放进卸载热路径）
+            let applied = calibration::flush(super::bridge::bridge());
+            if applied > 0 {
+                tracing::info!(applied, "HTS 阈值表由 SPRT 校准写入（apply 模式）");
+            }
+            // 校准证据输出：每 kind 一行（阈值校准是否已发生必须可审计，而不是
+            // 只能靠“事后抽库”发现——本仓 Phase A 的教训就是静默无输出等于无守护）
+            for stat in calibration::snapshot() {
+                tracing::debug!(
+                    kind = ?stat.kind,
+                    inline_samples = stat.inline_samples,
+                    pool_samples = stat.pool_samples,
+                    decided = ?stat.decided,
+                    candidate_threshold = stat.candidate_threshold,
+                    applied = stat.applied,
+                    mode = ?calibration::mode(),
+                    "compute calibration evidence"
+                );
+            }
         }
     })
 }

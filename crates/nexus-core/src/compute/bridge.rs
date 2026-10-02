@@ -28,8 +28,11 @@
 use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use arc_swap::ArcSwap;
+
+use super::calibration::{self, CalibrationMode, ExecPath};
 
 use super::dispatch::{DispatchPlan, TaskKind};
 use super::hts::{HtsTable, ThresholdSource};
@@ -96,6 +99,8 @@ pub struct ComputeBridge {
     /// 单字段无锁读写即可表达,避开“双字段手工配对”这种可漂移的真值源（本仓
     /// shard_bus 已由 ArcSwap 收敛过同类问题）。
     mode_override: std::sync::atomic::AtomicU8,
+    /// B1/ADR-198:校准采样计数器（仅当 `CHIMERA_COMPUTE_CALIBRATION` ≠ off 时读写）
+    cal_counter: std::sync::atomic::AtomicU64,
 }
 
 /// 进程级单例 — 手册 §8.3 骨架（`OnceLock` 惰性初始化,线程安全,幂等）
@@ -137,6 +142,7 @@ impl ComputeBridge {
             counters: KindCounters::default(),
             sat_bp_override: std::sync::atomic::AtomicU32::new(0),
             mode_override: std::sync::atomic::AtomicU8::new(u8::MAX),
+            cal_counter: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -148,7 +154,7 @@ impl ComputeBridge {
     // （E-5 红线的适用域是生产代码,与 `mod tests` 顶部的同类放行一致）
     #[allow(clippy::expect_used)]
     #[cfg(test)]
-    fn test_bridge(threads: usize) -> Self {
+    pub(crate) fn test_bridge(threads: usize) -> Self {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
@@ -161,6 +167,7 @@ impl ComputeBridge {
             counters: KindCounters::default(),
             sat_bp_override: std::sync::atomic::AtomicU32::new(0),
             mode_override: std::sync::atomic::AtomicU8::new(u8::MAX),
+            cal_counter: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -198,6 +205,39 @@ impl ComputeBridge {
     #[must_use]
     pub fn kind_counters(&self) -> &KindCounters {
         &self.counters
+    }
+
+    /// B1/ADR-198:当前生效阈值（校准候选计算与测试断言用）
+    #[must_use]
+    pub fn threshold_of(&self, kind: TaskKind) -> usize {
+        self.hts.load().get(kind).threshold
+    }
+
+    /// B1/ADR-198:当前生效 chunk（写表时沿用现值,本批不主张 chunk 语义）
+    #[must_use]
+    pub fn chunk_of(&self, kind: TaskKind) -> usize {
+        self.hts.load().get(kind).chunk
+    }
+
+    /// B1/ADR-198:阈值来源描述串（可审计面:预填/校准/兜底三态必可区分）
+    ///
+    /// WHY 返回字符串而非 `ThresholdSource`:本方法只服务可观测面与测试断言,
+    /// 将枚举逐变异展开为串可避免在公API 里泄露 `hts` 内部类型。
+    #[must_use]
+    pub fn threshold_source_of(&self, kind: TaskKind) -> String {
+        use super::hts::ThresholdSource;
+        match self.hts.load().get(kind).source {
+            ThresholdSource::OfflineMeasured { measured_at } => {
+                format!("OfflineMeasured{{measured_at:{measured_at}}}")
+            }
+            ThresholdSource::SequentialTest {
+                promoted_at,
+                samples,
+            } => {
+                format!("SequentialTest{{promoted_at:{promoted_at},samples:{samples}}}")
+            }
+            ThresholdSource::ConservativeDefault => "ConservativeDefault".to_string(),
+        }
     }
 
     /// 当前占用是否已达饱和阈值（公开只读判定,供上层与测试使用）
@@ -418,6 +458,21 @@ impl ComputeBridge {
             return Vec::new();
         }
 
+        // B1/ADR-198：校准探测（默认 off ⇒ 不进本块，零开销、零行为变更）。
+        // 入参是 FnOnce 闭包——同一个闭包不能跑两遍，故成对样本只能靠
+        // “探测式分流”获得：被采样的调用按奇偶决定本次走池还是走 Inline。
+        // 两桶统一按 µs/项 记账，避免不同 n_items 的调用直接配对时把
+        // “任务更大”误判为“池更慢”。
+        let mut probe_start: Option<Instant> = None;
+        let mut probe_inline = false;
+        if calibration::mode() != CalibrationMode::Off {
+            let c = self.cal_counter.fetch_add(1, Ordering::Relaxed);
+            if calibration::should_sample(c) {
+                probe_start = Some(Instant::now());
+                probe_inline = calibration::explores_inline(c);
+            }
+        }
+
         // A1/ADR-197：超阈处置按策略分流；Observe 不 return（避免排队堆积把尾延
         // 拉成队头阻塞这件事交给 Degrade，需显式开启）
         if self.is_saturated() {
@@ -429,21 +484,23 @@ impl ComputeBridge {
                 }
                 SaturationMode::Degrade => {
                     self.counters.record_degradation();
-                    let _guard = self.active.enter();
-                    return items
-                        .into_iter()
-                        .map(|f| {
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(
-                                |_| {
-                                    self.counters.record_failure(kind);
-                                    ComputeError::Panicked
-                                },
-                            )
-                        })
-                        .collect();
+                    let out = self.run_inline_all(kind, items);
+                    if let Some(t0) = probe_start {
+                        calibration::observe(kind, ExecPath::Inline, n, t0.elapsed());
+                    }
+                    return out;
                 }
                 SaturationMode::Observe => {}
             }
+        }
+
+        // 探测位：本次改走 Inline（结果逐元素等价，仅延迟特征不同）
+        if probe_inline {
+            let out = self.run_inline_all(kind, items);
+            if let Some(t0) = probe_start {
+                calibration::observe(kind, ExecPath::Inline, n, t0.elapsed());
+            }
+            return out;
         }
 
         // 槽位共享:每任务写唯一索引槽(结果序 = 输入序);
@@ -478,11 +535,37 @@ impl ComputeBridge {
 
         // 理论不可达分支:scope 同步阻塞至全部任务完成,槽位必然已填;
         // None 兜底用 Cancelled(取消语义)而非 panic,保持库代码零 panic 红线
-        slots
+        let results: Vec<Result<T, ComputeError>> = slots
             .into_inner()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .into_iter()
             .map(|slot| slot.unwrap_or(Err(ComputeError::Cancelled)))
+            .collect();
+        if let Some(t0) = probe_start {
+            calibration::observe(kind, ExecPath::Pool, n, t0.elapsed());
+        }
+        results
+    }
+
+    /// 在当前线程逐个执行整批闭包（Degrade 降级与 B1 探测共用同一实现）
+    ///
+    /// WHY 抽函数:两条路径必须**逐元素等价**，各写一份就有静默分叉风险
+    /// （本仓曾因 publish/publish_blocking 双份实现踩过同类问题，现以宏收敛）。
+    /// 活跃计数守卫同样适用:Inline 也是占一份计算力的执行。
+    fn run_inline_all<F, T>(&self, kind: TaskKind, items: Vec<F>) -> Vec<Result<T, ComputeError>>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let _guard = self.active.enter();
+        items
+            .into_iter()
+            .map(|f| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| {
+                    self.counters.record_failure(kind);
+                    ComputeError::Panicked
+                })
+            })
             .collect()
     }
 }
@@ -736,15 +819,31 @@ mod tests {
     }
 
     /// 池探针并发可见性 — 8 并发 batch 交叉执行时峰值计数可达 >0
+    ///
+    /// WHY 用 `Arc<test_bridge>` 而不拿全局 `bridge()`:同文件
+    /// [`pool_active_probe_lifecycle`] 的注释早点名“全局单例被并行测试共享会污染
+    /// active 计数断言”——该污染是真实的（2026-10-02 全量跑中出现
+    /// “活跃数应为 0、实际为 1”的偶发失败）。独立实例 + Arc 既让 8 线程共享同一个桥,
+    /// 又与其他测试零串扰。
+    ///
+    /// 同时补上本测试名义上宣称却从未断言的语义：并发期间“峰值 > 0”。
     #[test]
     fn pool_active_probe_concurrent() {
-        let b = bridge();
+        let b = Arc::new(ComputeBridge::test_bridge(4));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let handles: Vec<_> = (0..8)
             .map(|_| {
+                let b = Arc::clone(&b);
+                let peak = Arc::clone(&peak);
                 std::thread::spawn(move || {
                     let items: Vec<_> = (0..8)
                         .map(|i| {
+                            // 每个任务闭包各自持一份桥与峰值计数器的句柄（'static 要求）
+                            let b = Arc::clone(&b);
+                            let peak = Arc::clone(&peak);
                             move || {
+                                // 先记录在途峰值（本测试要断言的并发可见性）,再自旋一小段
+                                peak.fetch_max(b.pool_active_tasks(), Ordering::Relaxed);
                                 let start = std::time::Instant::now();
                                 while start.elapsed() < std::time::Duration::from_millis(1) {
                                     std::hint::spin_loop();
@@ -761,6 +860,11 @@ mod tests {
         for h in handles {
             h.join().expect("并发线程应正常退出");
         }
+        assert!(
+            peak.load(Ordering::Relaxed) > 0,
+            "并发执行期间活跃峰值应 > 0（实测 {}）",
+            peak.load(Ordering::Relaxed)
+        );
         assert_eq!(b.pool_active_tasks(), 0, "全部并发任务完成后活跃数归零");
     }
 

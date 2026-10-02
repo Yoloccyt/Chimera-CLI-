@@ -944,5 +944,14 @@ kind = "light"
 test_kind = "cross_crate"
 note = "核验 tier-1 承诺写点(mlc L3/session-store 段/repo-wiki store/quest checkpoint/scc WAL/cmt warm,cold,ice/event-bus critical_sink/mcp-mesh WAL)源文件确引用 nexus_contracts::sensitive::scan,防插桩被无声摘除;tier-2 全量持久面随 Wave 2/3 接入后追加清单"
 
+[[gate]]
+id = "G-85"
+spec_ref = "ADR-198"
+cmd = "{python} scripts/check_ps1_bom_gate.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "Windows PowerShell 5.1 parity 守门:含非 ASCII 字节的 .ps1 必须携 UTF-8 BOM。实测 24 个 .ps1 的工作树副本中 17 个违规、其中 11 个在 5.1 下根本解析失败（合计 55 个 parse error，包括被根 e2e 调用的 check_dependency_rules.ps1）——因 CI 与 gate_manifest 均走 pwsh(默认 UTF-8)，该缺陷长期无人发现。HEAD blob 实测 20/24 本已带 BOM（4 个不带的是纯 ASCII），即丢失属本机工作树漂移而 git status 当时报无改动 ⇒ 本门不依赖 git 可见性，做逐字节判据，同时盖本机漂移与仓库未来回归"
+
 
 

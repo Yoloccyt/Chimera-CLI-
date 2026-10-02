@@ -98,6 +98,18 @@ jobs:
           python3 scripts/check_layer_map_parity.py --selftest
           python3 scripts/check_layer_map_parity.py
 
+      # WHY: PowerShell 5.1 parity 守门(ADR-198 G-85)——本仓将 .ps1 定位为
+      # “Windows 权威执行体”，但 CI 与 gate_manifest 均以 pwsh（默认 UTF-8）调用，
+      # 而无 BOM 且含非 ASCII 的文件在 5.1 下会按 ANSI 解码。2026-10-02 实测：
+      # 工作树副本 24 个 .ps1 中 17 个无 BOM 且含非 ASCII，其中 11 个在 5.1 下根本解析失败
+      # （含被根 e2e dependency_rules_inner_ring_test 调用的 check_dependency_rules.ps1），
+      # 而全量 cargo test 当时仍报绿——即“Windows 侧从未跑成”被沉默吞噬。
+      # 本门为字节级检查（不依赖平台），故 Linux runner 同样有效。
+      - name: PowerShell UTF-8 BOM gate (Windows 5.1 parity)
+        run: |
+          python3 scripts/check_ps1_bom_gate.py --selftest
+          python3 scripts/check_ps1_bom_gate.py
+
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
       # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期

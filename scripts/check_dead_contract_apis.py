@@ -67,8 +67,9 @@ CONTRACTS = [
     {
         "name": "ComputeBridge::update_threshold",
         "pattern": r"\.update_threshold\(",
-        "status": "DEFERRED",
-        "note": "needs the SPRT driver (Phase B1); wired by ADR-196 approval + B1",
+        "status": "WIRED",  # ADR-198 B1:由 calibration::apply_pending 在 apply 模式下写表
+        "note": "SPRT calibration driver landed (ADR-198); default off/observe means "
+                "it is not invoked unless CHIMERA_COMPUTE_CALIBRATION=apply",
     },
     {
         "name": "UtilizationSampler (double-probe)",
