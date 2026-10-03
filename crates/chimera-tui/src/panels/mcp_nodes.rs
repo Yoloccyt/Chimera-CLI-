@@ -37,7 +37,6 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::FOOTER_TEXT;
 use crate::types::{McpNodeStatus, NodeStatus, PanelId, TuiCommand, TuiState};
 
 /// 心跳超时阈值(秒)— 超过此时间未收到心跳的节点视为离线。
@@ -155,7 +154,7 @@ impl McpNodesPanel {
     /// # 布局
     /// 1. 离线告警横幅(若有 Offline 节点)— 红色加粗,每节点一行
     /// 2. 节点列表:每节点一行,格式 `[icon] node_id  throughput msg/s  last_seen: Xs ago`
-    /// 3. FOOTER_TEXT
+    /// 3. 页脚文案(panel.footer 键)
     ///
     /// `selected` 参数用于高亮当前选中行(黄色背景 + 黑色前景 + 加粗),
     /// 选中状态比状态颜色更高优先级(参考 LogPanel/ParliamentPanel)。
@@ -217,9 +216,9 @@ impl McpNodesPanel {
             }
         }
 
-        // 3. FOOTER
+        // 3. 页脚
         lines.push(Line::from(""));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
 
         Text::from(lines)
     }
@@ -381,10 +380,7 @@ impl Panel for McpNodesPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("↑/↓", crate::t!("shortcut.navigate")),
-            ("R", crate::t!("shortcut.refresh")),
-        ]
+        vec![("↑/↓", crate::t!("shortcut.navigate"))]
     }
 }
 

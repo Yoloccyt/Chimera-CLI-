@@ -47,17 +47,37 @@ pub enum TaskKind {
     CscCollapseScore,
     /// 未登记任务（保守默认阈值 10,000）
     Generic,
+    /// HCW 条目重要性评分批量计算（阈值 200）— ADR-196 C1 从 `CscCollapseScore` 拆位
+    /// 消费者:`crates/hcw-window/src/parallel.rs`(compress 评分段)
+    /// 阈值来源:S9 离线测定预填(measured_at=0,未 W 复测不作已校准结论)
+    /// 为何不用 `CscCollapseScore`:该位语义为「CSC 四级压缩折叠评分」,与本负载
+    /// (分层窗口条目评分)不同名同源,共用会使 SPRT 校准历史无法归属
+    HcwEntryScore,
+    /// NMC 多模态批量编码(阈值 1,000)— ADR-196 C1 从 `ClvSimilarity` 拆位
+    /// 消费者:`crates/nmc-encoder/src/parallel.rs`;与 `ClvSimilarity`(相似度配对语义)
+    /// 解耦,产出恰为 CLV 不代表输入语义同类
+    NmcEncode,
+    /// Faae 批量专家匹配评分(阈值 10,000,保守默认)— ADR-196 C1 从 `Generic` 拆出
+    /// 消费者:`crates/faae-router/src/parallel.rs`;使 decay 的阈值校准不再连带影响本负载
+    ExpertScore,
+    /// 能力批量衰减(快照语义)计算(阈值 10,000,保守默认)— ADR-196 C1 从 `Generic` 拆出
+    /// 消费者:`crates/decay-engine/src/parallel.rs`(与 `ExpertScore` 反向理由)
+    DecayBatch,
 }
 
 impl TaskKind {
-    /// 全部已登记任务 — 供测试与遍历（当前六类,手册 §8.4）
-    pub const ALL: [TaskKind; 6] = [
+    /// 全部已登记任务 — 供测试与遍历(十类,手册 §8.4 + ADR-196 C1 拆位)
+    pub const ALL: [TaskKind; 10] = [
         TaskKind::ClvSimilarity,
         TaskKind::OsaMask,
         TaskKind::KnnSearch,
         TaskKind::GsoeEvaluate,
         TaskKind::CscCollapseScore,
         TaskKind::Generic,
+        TaskKind::HcwEntryScore,
+        TaskKind::NmcEncode,
+        TaskKind::ExpertScore,
+        TaskKind::DecayBatch,
     ];
 
     /// IO 密集判定 — `true` 时 [`super::bridge::ComputeBridge::route`] 直投 [`DispatchPlan::Async`]
@@ -91,6 +111,12 @@ impl TaskKind {
             TaskKind::GsoeEvaluate => 500,
             TaskKind::CscCollapseScore => 200,
             TaskKind::Generic => 10_000,
+            // ADR-196 C1 拆位:以下四位均「原值迁移」,与 HtsTable::default() 表值逐项一致,
+            // 保证 route() 决策与拆位前逐位相同(行为零改变)
+            TaskKind::HcwEntryScore => 200,
+            TaskKind::NmcEncode => 1_000,
+            TaskKind::ExpertScore => 10_000,
+            TaskKind::DecayBatch => 10_000,
         }
     }
 }
@@ -159,6 +185,10 @@ mod tests {
             (TaskKind::GsoeEvaluate, 500),
             (TaskKind::CscCollapseScore, 200),
             (TaskKind::Generic, 10_000),
+            (TaskKind::HcwEntryScore, 200),
+            (TaskKind::NmcEncode, 1_000),
+            (TaskKind::ExpertScore, 10_000),
+            (TaskKind::DecayBatch, 10_000),
         ];
         for (kind, want) in expect {
             assert_eq!(kind.threshold(), want, "{kind:?} 阈值偏离手册 §8.4");

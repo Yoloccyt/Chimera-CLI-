@@ -354,6 +354,20 @@ impl Panel for MetricsDashboardPanel {
                 Some(cell) => Self::render_cell(cell, cell_area, buf),
                 None => Self::render_empty(cell_area, buf),
             }
+            // F-38:对选中 cell 叠加 accent 边框(复用 app/render.rs 多窗格
+            // 焦点高亮的 Block+border_style 模式),使 hjkl/方向键导航有视觉
+            // 反馈 —— 此前 selected 被导航修改但渲染路径零消费,按键后无反馈。
+            // WHY 硬编码 Cyan 而非 theme_accent():主题色是 TuiApp 的
+            // pub(crate) 方法,面板层(仅持 &TuiState)不可达;经 TuiState
+            // 透传 theme 属核心状态类型变更(需 ADR)。本面板 viz 色板
+            // (line_chart/bar_chart 等)本就硬编码,高亮沿用同一色板,
+            // Cyan 亦即 Dark 主题的 accent 值。
+            if idx == self.selected {
+                let highlight = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan));
+                Widget::render(highlight, cell_area, buf);
+            }
         }
     }
 
@@ -396,9 +410,12 @@ impl Panel for MetricsDashboardPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        // F-38:键帽如实化为实际导航键。'l' 已由全局键位表绑定
+        // view.switch_layout,InputRouter 先行截获(见 handle_key 注),
+        // 故键帽不得含 'l';方向键与 vim 键分列两条,描述同为导航。
         vec![
-            ("↑/↓", crate::t!("shortcut.navigate")),
-            ("R", crate::t!("shortcut.refresh")),
+            ("↑/↓/←/→", crate::t!("shortcut.navigate")),
+            ("h/j/k", crate::t!("shortcut.navigate")),
         ]
     }
 }

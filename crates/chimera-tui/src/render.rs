@@ -13,12 +13,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Sparkline};
 
-/// 通用帮助页脚文本
-///
-/// WHY 提取常量:Quest 面板与 Parliament 面板原使用相同文案,
-/// 避免两处维护导致不一致。
-pub const FOOTER_TEXT: &str = "Press Tab to switch panels, ':' for commands, 'q' to quit.";
-
 /// 虚拟滚动缓冲行数 — 上下各保留 5 行
 ///
 /// WHY 5 行:过小会导致快速滚动时出现空白闪烁(用户视线下移时缓冲已耗尽),
@@ -791,10 +785,25 @@ mod tests {
     }
 
     #[test]
-    fn test_footer_text_constant() {
-        assert!(FOOTER_TEXT.contains("Tab"));
-        assert!(FOOTER_TEXT.contains(":"));
-        assert!(FOOTER_TEXT.contains("q"));
+    fn test_footer_key_resolves_in_both_locales() {
+        // F-17:FOOTER_TEXT 常量已迁 panel.footer 键表(12 个面板消费点改 t!),
+        // 原常量断言随迁为键表解析断言——两种 locale 均须解析为译文而非回退 key。
+        let _guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
+        let en_footer = crate::t!("panel.footer");
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
+        let zh_footer = crate::t!("panel.footer");
+        assert_ne!(
+            en_footer, "panel.footer",
+            "En 页脚应解析为译文: {en_footer}"
+        );
+        assert_ne!(
+            zh_footer, "panel.footer",
+            "Zh 页脚应解析为译文: {zh_footer}"
+        );
+        // Tab/q 键帽语言中立,两种语言都必须保留
+        assert!(en_footer.contains("Tab") && en_footer.contains('q'));
+        assert!(zh_footer.contains("Tab") && zh_footer.contains('q'));
     }
 
     // ============================================================

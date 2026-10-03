@@ -395,10 +395,7 @@ impl Panel for TimelinePanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("↑/↓", crate::t!("shortcut.navigate")),
-            ("←/→", crate::t!("shortcut.time_jump")),
-        ]
+        vec![("↑/↓", crate::t!("shortcut.navigate"))]
     }
 }
 

@@ -1016,6 +1016,9 @@ fn test_refresh_command_publishes_request() {
     let bus = EventBus::new();
     let mut rx = bus.subscribe();
     let mut app = TuiApp::with_event_bus(app, bus);
+    // B5-G(评审 #2):断言经 t! 取值仍有 locale 翻转窗口,持 guard 全程互斥
+    // (先例:src/app/tests.rs dispatch_viz_switch_dimension_osa_honest_no_toggle)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
 
     app.state_mut().filter_keyword = Some("old".into());
     app.state_mut().filter_topic = Some("security".into());
@@ -1039,7 +1042,13 @@ fn test_refresh_command_publishes_request() {
         .as_ref()
         .unwrap()
         .0
-        .contains("RefreshStateRequested request published"));
+        // B4-I(F-04):断言经 t! 键期望串构造;读值仍随当前 locale,非与 locale 无关
+        // (B5-G 已在测试入口补 locale_test_guard 消除翻转窗口)
+        .contains(&chimera_tui::t!("status.request_published").replacen(
+            "{}",
+            "RefreshStateRequested",
+            1
+        )));
     // 过滤器保持原状,由上游订阅者决定是否响应刷新请求
     assert!(app.state().filter_keyword.is_some());
     assert!(app.state().filter_topic.is_some());

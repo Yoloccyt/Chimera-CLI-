@@ -184,6 +184,25 @@ pub struct TuiApp {
     /// WHY `Option`:首帧必须立即渲染(`None` 视为"到期"),避免启动后黑屏到
     /// 第一个帧预算到期。节流语义见 `event_loop.rs` 的 `MIN_FRAME_MS`。
     last_render_at: Option<std::time::Instant>,
+    /// ActionRegistry 缓存(B4-S F-13)— 供帮助路径快捷键自动派生共享
+    ///
+    /// WHY 构造期缓存:render.rs 的 help_context 注入(焦点变化时)与
+    /// open_help_action(`?` 键)两条帮助路径此前各自 `ActionRegistry::
+    /// with_builtin_domains()` 现场构造;渲染路径虽只在焦点变化时重建快照,
+    /// 但 registry 构造含全 domain 扫描,放渲染调用链内与 F-08 反模式同源。
+    /// 缓存后两条路径经同一实例调用 `shortcuts_with_registry`,与
+    /// panels/mod.rs `shortcuts_with_registry` 契约文档(调用方应优先使用
+    /// 本方法)同源成立。
+    action_registry: crate::actions::ActionRegistry,
+    /// SlashCommandRegistry 缓存(F-08)— 斜杠补全/解析/导航共享
+    ///
+    /// WHY 构造期缓存:render_slash_overlay 每渲染帧、slash_tab_complete /
+    /// submit_slash / handle_slash_key 每次调用此前各自
+    /// `with_builtin_commands()` 现场重建(内建命令逐条 register,含
+    /// name/别名 HashMap 双键插入)。注册表为编译期静态表
+    /// (`BUILTIN_COMMANDS`)派生的纯数据,无内部可变性,四处消费点全部
+    /// 只读——构造期建一次存字段,消费点经 `&self.slash_registry` 共享。
+    slash_registry: crate::actions::SlashCommandRegistry,
 }
 
 /// 按 PanelId 构造面板实例 — 注册序驱动的面板工厂(Concord T1.4)
@@ -301,6 +320,10 @@ impl TuiApp {
             v3_render_count: 0,
             v3_quiescent_dirty_rows: 0,
             last_render_at: None,
+            // B4-S(F-13):帮助路径共享的 registry(构造期一次,渲染路径零重建)
+            action_registry: crate::actions::ActionRegistry::with_builtin_domains(),
+            // F-08:斜杠注册表构造期一次,四处消费点(补全/提交/导航/渲染)零重建
+            slash_registry: crate::actions::SlashCommandRegistry::with_builtin_commands(),
         })
     }
 

@@ -51,7 +51,6 @@ use crate::panels::list_state;
 use crate::panels::quest::thinking_mode_label;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::FOOTER_TEXT;
 use crate::types::{PanelId, QuestAction, SortMode, TuiCommand, TuiState};
 use nexus_core::{Quest, TaskStatus};
 
@@ -393,7 +392,7 @@ impl TaskManagerPanel {
             status_line.push_str(&format!(" | Selected:{}", selected_count));
         }
         lines.push(Line::from(status_line));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
         Text::from(lines)
     }
 
@@ -944,7 +943,6 @@ impl Panel for TaskManagerPanel {
             ("+/-", crate::t!("shortcut.priority")),
             ("S", crate::t!("shortcut.sort")),
             ("Enter", crate::t!("shortcut.details")),
-            ("Esc", crate::t!("shortcut.clear_selection")),
             ("Space", crate::t!("shortcut.multi_select")),
             ("Ctrl+A", crate::t!("shortcut.select_all")),
         ]

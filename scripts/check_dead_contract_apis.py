@@ -124,6 +124,21 @@ CONTRACTS = [
                 "covered by any test that exercises a multi-thread runtime. "
                 "uses = cross-module only (exclude_files).",
     },
+    {
+        "name": "EventBus::shadow_stats",
+        # call sites `bus.shadow_stats()` / `self.shadow_stats()`; the
+        # `pub fn shadow_stats(` declaration carries no leading dot -> not matched.
+        "pattern": r"\.shadow_stats\(",
+        "status": "DEFERRED",
+        # Every real occurrence is bus.rs `#[cfg(test)]` tail + benches (both excluded
+        # by is_production_file / test-tail rule) -> uses=0 keeps it DEFERRED.
+        "note": "shard shed/merged distribution has no production consumer (four-dim "
+                "audit S-8); its disposition pointed at 'Phase A5' but ADR-197 D1-D5 "
+                "never carried it, so it was tracked nowhere (reconciliation finding "
+                "D-1, 2026-10-02). Registering as DEFERRED closes the accountability gap; "
+                "closing the observability loop is tracked in "
+                "docs/reports/cpu-plane-phase0-c0-2026-10-02.md.",
+    },
 ]
 
 # `#[cfg(test)]` marks the start of a file's test tail **only when it precedes a

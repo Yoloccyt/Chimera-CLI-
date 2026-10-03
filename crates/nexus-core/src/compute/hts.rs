@@ -64,10 +64,10 @@ pub enum ThresholdSource {
     ConservativeDefault,
 }
 
-/// HTS 动态阈值表 — 按 [`TaskKind`] 六类登记阈值与块大小（手册 §8.4）
+/// HTS 动态阈值表 — 按 [`TaskKind`] 十类登记阈值与块大小（手册 §8.4 + ADR-196 C1 拆位）
 ///
 /// # 存储
-/// `[Entry; 6]` 定长数组（六类任务,与 [`dispatch::TaskKind`] 穷举对应）:
+/// `[Entry; 10]` 定长数组（十类任务,与 [`dispatch::TaskKind`] 穷举对应）:
 /// - 读:`get(kind)` 经 `kind_index` 数组索引,**零分配、零锁**（在 ArcSwap 快照内）;
 /// - 写:`update` 改快照副本,由持有方（`ComputeBridge`）RCU store 全表替换。
 ///
@@ -81,8 +81,9 @@ pub enum ThresholdSource {
 /// CscCollapseScore=200/32、Generic=10000/64（手册 §8.4,标注"S9 离线测定,W1 复测"）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HtsTable {
-    /// 六类登记项,索引与 [`kind_index`] 一致（Clv=0, Osa=1, Knn=2, Gsoe=3, Csc=4, Gen=5）
-    entries: [Entry; 6],
+    /// 十类登记项,索引与 [`kind_index`] 一致（Clv=0, Osa=1, Knn=2, Gsoe=3, Csc=4, Gen=5,
+    /// Hcw=6, Nmc=7, Expert=8, Decay=9）— 后四位为 ADR-196 C1 拆位
+    entries: [Entry; 10],
 }
 
 impl Default for HtsTable {
@@ -129,6 +130,30 @@ impl Default for HtsTable {
                     chunk: 64,
                     source: ThresholdSource::ConservativeDefault,
                 },
+                // HcwEntryScore（ADR-196 C1 拆自 CscCollapseScore）:200/32 原值迁移,阈值零漂移
+                Entry {
+                    threshold: 200,
+                    chunk: 32,
+                    source: ThresholdSource::OfflineMeasured { measured_at: 0 },
+                },
+                // NmcEncode（拆自 ClvSimilarity）:1000/64 原值迁移
+                Entry {
+                    threshold: 1_000,
+                    chunk: 64,
+                    source: ThresholdSource::OfflineMeasured { measured_at: 0 },
+                },
+                // ExpertScore（从 Generic 拆出 faae）:10000/64 保守默认
+                Entry {
+                    threshold: 10_000,
+                    chunk: 64,
+                    source: ThresholdSource::ConservativeDefault,
+                },
+                // DecayBatch（从 Generic 拆出 decay）:10000/64 保守默认
+                Entry {
+                    threshold: 10_000,
+                    chunk: 64,
+                    source: ThresholdSource::ConservativeDefault,
+                },
             ],
         }
     }
@@ -169,8 +194,8 @@ impl HtsTable {
 
 /// [`TaskKind`] → 数组索引 — 与 [`HtsTable`] 的 `entries` 布局唯一对应
 ///
-/// WHY 不用 HashMap:六类登记可穷举 match,索引 O(1) 且零哈希开销;
-/// match 穷举性在 [`TaskKind`] 新增变体时编译报错（六类不变的红线由编译期兜底）。
+/// WHY 不用 HashMap:十类登记可穷举 match,索引 O(1) 且零哈希开销;
+/// match 穷举性在 [`TaskKind`] 新增变体时编译报错（新增登记位漏改由编译期兜底）。
 #[must_use]
 pub(crate) const fn kind_index(kind: TaskKind) -> usize {
     match kind {
@@ -180,6 +205,10 @@ pub(crate) const fn kind_index(kind: TaskKind) -> usize {
         TaskKind::GsoeEvaluate => 3,
         TaskKind::CscCollapseScore => 4,
         TaskKind::Generic => 5,
+        TaskKind::HcwEntryScore => 6,
+        TaskKind::NmcEncode => 7,
+        TaskKind::ExpertScore => 8,
+        TaskKind::DecayBatch => 9,
     }
 }
 
@@ -649,6 +678,10 @@ mod tests {
             (TaskKind::GsoeEvaluate, 500, 8),
             (TaskKind::CscCollapseScore, 200, 32),
             (TaskKind::Generic, 10_000, 64),
+            (TaskKind::HcwEntryScore, 200, 32),
+            (TaskKind::NmcEncode, 1_000, 64),
+            (TaskKind::ExpertScore, 10_000, 64),
+            (TaskKind::DecayBatch, 10_000, 64),
         ];
         for (kind, want_threshold, want_chunk) in expect {
             let e = table.get(kind);
@@ -1041,16 +1074,65 @@ mod tests {
         }
     }
 
-    /// kind_index — 六类映射互斥且覆盖 ALL（布局一致性防御）
+    /// kind_index — 十类映射互斥且覆盖 ALL（布局一致性防御）
     #[test]
     fn kind_index_bijective() {
         use std::collections::HashSet;
         let mut seen = HashSet::new();
         for kind in TaskKind::ALL {
             let idx = kind_index(kind);
-            assert!(idx < 6, "索引越界");
+            assert!(idx < 10, "索引越界");
             assert!(seen.insert(idx), "索引重复:kind_index 非单射");
         }
-        assert_eq!(seen.len(), 6, "六类必须映射到六个不同索引");
+        assert_eq!(seen.len(), 10, "十类必须映射到十个不同索引");
+    }
+
+    /// B2 价值证明(spec §7-3):faae(`ExpertScore`) 与 decay(`DecayBatch`) 从共享
+    /// `Generic` 解耦为**独立表项** —— 更新其一的阈值绝不影响另一的路由决策。
+    /// 这正是四维审计 §1.1 / ADR-196 要消除的「SPRT 连带升降」缺陷的回归锁。
+    #[test]
+    fn expert_score_and_decay_batch_entries_are_decoupled() {
+        // 解耦前提:两者落在不同 kind_index(共享 Generic 时会是同一索引)。
+        assert_ne!(
+            kind_index(TaskKind::ExpertScore),
+            kind_index(TaskKind::DecayBatch),
+            "ExpertScore 与 DecayBatch 必须是不同表项(解耦)"
+        );
+        let mut table = HtsTable::default();
+        assert_eq!(table.get(TaskKind::ExpertScore).threshold, 10_000);
+        assert_eq!(table.get(TaskKind::DecayBatch).threshold, 10_000);
+        // 只下调 ExpertScore 阈值 → DecayBatch 表项纹丝不动。
+        table.update(
+            TaskKind::ExpertScore,
+            5_000,
+            64,
+            ThresholdSource::ConservativeDefault,
+        );
+        assert_eq!(
+            table.get(TaskKind::ExpertScore).threshold,
+            5_000,
+            "ExpertScore 应被更新"
+        );
+        assert_eq!(
+            table.get(TaskKind::DecayBatch).threshold,
+            10_000,
+            "DecayBatch 不得被 ExpertScore 的写入连带影响(解耦核心断言)"
+        );
+        // 路由因此可独立标定:n=7_000 一侧 Rayon、另一侧仍 Inline。
+        assert_eq!(
+            decide(TaskKind::ExpertScore, false, 5_000, 7_000),
+            DispatchPlan::Rayon,
+            "ExpertScore 降阈值后 n=7000 应入 Rayon"
+        );
+        assert_eq!(
+            decide(
+                TaskKind::DecayBatch,
+                false,
+                table.get(TaskKind::DecayBatch).threshold,
+                7_000
+            ),
+            DispatchPlan::Inline,
+            "DecayBatch 保持 10_000,n=7000 应仍 Inline"
+        );
     }
 }

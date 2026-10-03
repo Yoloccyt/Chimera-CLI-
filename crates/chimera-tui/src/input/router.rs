@@ -16,7 +16,6 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::actions::ActionRegistry;
 use crate::types::PanelId;
 
 /// 路由模式 — 三态路由表的输入模式维度(§4.3)
@@ -258,13 +257,17 @@ impl InputRouter {
 
     /// 从 codegen 键位表查找按键对应的全局动作(Concord T1.3 第四通道消费点)
     ///
-    /// WHY 每次查表而非缓存:键位表仅 ~8 条,按键事件频率远低于帧预算,
-    /// 线性查找开销可忽略;避免引入静态缓存的生命周期/测试复杂度。
-    /// 键位声明在 `actions/domains/*.rs` 的 `default_key`/`alias_keys`,
-    /// 经 `codegen::key_bindings` 派生——声明即事实源,INV-K 不变量守护。
+    /// WHY 查表而非手写分支:键位声明在 `actions/domains/*.rs` 的
+    /// `default_key`/`alias_keys`,经 `codegen::key_bindings` 派生——声明即
+    /// 事实源,INV-K 不变量守护。键位表为个位数条目,线性查找开销可忽略
+    /// (原注释只论证了查找成本);但此前每次查表都 `with_builtin_domains()`
+    /// 现场重建注册表——20 条 ActionDescriptor 逐条注册的 Vec/HashMap 分配,
+    /// 在 Repeat 连发(Repeat 视同 Press)下逐键重复。router 全为关联函数
+    /// 拿不到实例字段,故改用 actions 模块的进程级 OnceLock 缓存
+    /// `builtin_registry()`(F-08),查找逻辑与键位表内容零变化。
     fn global_action_for(key: KeyEvent) -> Option<RouteTarget> {
-        let reg = ActionRegistry::with_builtin_domains();
-        crate::actions::codegen::key_bindings(&reg)
+        let reg = crate::actions::builtin_registry();
+        crate::actions::codegen::key_bindings(reg)
             .into_iter()
             .find(|b| b.key.code == key.code && b.key.modifiers == key.modifiers)
             .map(|b| RouteTarget::GlobalAction(b.action_id))

@@ -548,8 +548,10 @@ fn event_stream_panel_showing_and_footer_visible_at_bottom_with_10000_events() {
         "总数提示行应渲染在视口内(F-22 修复前被系统性裁剪), got: {}",
         &content[..content.len().min(400)]
     );
+    // F-17 迁键后页脚走 panel.footer 键:断言与键表同源(本用例 pin Zh,
+    // 原字面断言 "Press Tab to switch panels" 依赖迁键前的硬编码英文,已失效)
     assert!(
-        content.contains("Press Tab to switch panels"),
+        content.contains(chimera_tui::t!("panel.footer")),
         "页脚应渲染在视口内(F-22 修复前被系统性裁剪), got: {}",
         &content[..content.len().min(400)]
     );

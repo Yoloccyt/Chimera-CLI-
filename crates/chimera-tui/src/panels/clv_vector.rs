@@ -407,10 +407,6 @@ impl Panel for ClvVectorPanel {
         }
         None
     }
-
-    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("R", crate::t!("shortcut.refresh"))]
-    }
 }
 
 #[cfg(test)]

@@ -19,7 +19,6 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::FOOTER_TEXT;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use nexus_contracts::domain::ThinkingMode;
 use nexus_core::{Quest, TaskStatus};
@@ -287,7 +286,7 @@ impl QuestPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
         Text::from(lines)
     }
 
@@ -746,6 +745,11 @@ mod tests {
 
     #[test]
     fn test_quest_panel_empty_state() {
+        // i18n:断言默认中文文案,持 locale guard 并显式 pin Zh——guard 只保证
+        // 写入互斥,不阻止既有非持锁 En 窗口已写入的瞬时值,显式 pin 才使
+        // 读取确定(2026-10-02 全量回归实测 flake 根因)
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let state = TuiState::new();
         let content = QuestPanel::content(&state, 0, &HashSet::new()).to_string();
         assert!(content.contains("任务列表"));

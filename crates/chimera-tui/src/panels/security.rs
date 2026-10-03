@@ -17,7 +17,6 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::FOOTER_TEXT;
 use crate::types::{PanelId, TuiCommand, TuiState};
 
 /// Security 面板
@@ -367,7 +366,10 @@ impl Panel for SecurityPanel {
         let rows_paragraph = Paragraph::new(rows_text).scroll((self.scroll_offset as u16, 0));
         rows_paragraph.render(left_chunks[1], buf);
 
-        let footer = Paragraph::new(Text::from(vec![Line::from(""), Line::from(FOOTER_TEXT)]));
+        let footer = Paragraph::new(Text::from(vec![
+            Line::from(""),
+            Line::from(crate::t!("panel.footer")),
+        ]));
         footer.render(left_chunks[2], buf);
 
         // 右侧:冻结能力 + 子代理失败态势(PS-2 F-6 追加区块)

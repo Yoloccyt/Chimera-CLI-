@@ -32,7 +32,6 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::FOOTER_TEXT;
 use crate::types::{ChtcAdapterInfo, PanelId, TuiCommand, TuiState};
 
 /// 兼容性评分"需关注"阈值:低于此值显示黄色高亮警告
@@ -101,7 +100,7 @@ impl ChtcPanel {
     /// - 标题行:"CHTC Adapters"
     /// - 空状态:"No CHTC adapters connected" + 等待事件提示
     /// - 非空:每个适配器 3 行(ID/状态 + 进度条/评分 + 请求分布)
-    /// - 页脚:FOOTER_TEXT
+    /// - 页脚:panel.footer 键
     pub fn content(state: &TuiState) -> Text<'static> {
         let mut lines: Vec<Line<'static>> = vec![
             Line::from("CHTC Adapters"),
@@ -160,7 +159,7 @@ impl ChtcPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
         Text::from(lines)
     }
 
@@ -280,9 +279,9 @@ impl Panel for ChtcPanel {
         let count = state.chtc_state.adapters.len();
         self.selected = list_state::clamp_selected(self.selected, count);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" CHTC Adapters ");
+        // F-46:块标题改 self.title()(与 fn title() 同源 panel.border.chtc 键),
+        // 消除文件内 " CHTC Adapters " 双源
+        let block = Block::default().borders(Borders::ALL).title(self.title());
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -352,10 +351,7 @@ impl Panel for ChtcPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("↑/↓", crate::t!("shortcut.navigate")),
-            ("R", crate::t!("shortcut.refresh")),
-        ]
+        vec![("↑/↓", crate::t!("shortcut.navigate"))]
     }
 }
 

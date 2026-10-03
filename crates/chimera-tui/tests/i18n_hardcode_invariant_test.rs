@@ -3,13 +3,17 @@
 //! 对应架构层:L10 Interface
 //!
 //! # 守护语义
-//! panels/ 与 actions/ 的**生产代码段**(`#[cfg(test)]` 之前)不得出现
+//! panels/、actions/ 与 app/ 的**生产代码段**(`#[cfg(test)]` 之前)不得出现
 //! CJK 字面量——用户可见文案一律走 i18n 键表(crate::t!),保证 Ctrl+L
-//! 语言切换在面板层真实生效(方案 P6 承诺兑现)。
+//! 语言切换在面板层真实生效(方案 P6 承诺兑现)。B4-I(F-04)起扫描域
+//! 扩展到 src/app(状态栏/弹窗文案迁入键表后的防退化);B5-U(F-17)起
+//! 扩展到顶层文件 src/render.rs(FOOTER_TEXT 迁键后的防退化)。
 //!
 //! # 口径说明
 //! - 行尾 `//` 注释先剥离(注释是开发文档媒介,中文为项目约定);
-//! - `#[cfg(test)]` 之后的测试模块豁免(断言消息非渲染面);
+//! - `#[cfg(test)]` / `#[cfg(all(test, ...))]` 之后的测试模块豁免(断言消息
+//!   非渲染面);src/app 的 tests.rs / v3_render_tests.rs 整文件由 mod.rs 的
+//!   模块级 cfg 门控,非 test 编译不参与构建,经文件级豁免登记(见下);
 //! - 新增面板/动作时若确需豁免,经评审后加入 EXEMPT 清单并注明理由。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
@@ -30,7 +34,25 @@ fn locale_guard() -> std::sync::MutexGuard<'static, ()> {
 /// 2026-09-08 移除 task_manager.rs:批次-A 第 4 步 CJK 豁免棘轮——
 /// "数据源未接入"提示已迁入 `panel.task.no_provider` 键表,生产段零 CJK
 /// (棘轮只减不增)。
-const EXEMPT_PREFIXES: &[&str] = &[];
+///
+/// B4-I(F-04/F-65)src/app 域登记:以下两文件**整文件均为测试模块内容**,
+/// 模块级 cfg 标记在 app/mod.rs(`#[cfg(test)] mod tests;` /
+/// `#[cfg(all(test, feature = "v3-engine"))] mod v3_render_tests;`),
+/// 逐行扫描器看不到 mod.rs 的标记;且两文件在非 test 编译下不参与构建,
+/// 全局文件级豁免即既有"测试段豁免"语义的文件级延伸,无生产段放水风险。
+const EXEMPT_PREFIXES: &[&str] = &["src/app/tests.rs", "src/app/v3_render_tests.rs"];
+
+/// CJK 行级豁免片段(子串命中即豁免该行;逐条登记理由,只减不增)
+///
+/// WHY 行级而非文件级:app 域残留 CJK 均为诊断面字符串(错误/断言消息,
+/// 非用户可见文案),按消息片段精确豁免可保留该文件其余行的新增检测能力。
+const EXEMPT_CJK_SNIPPETS: &[&str] = &[
+    // TuiError::Render 内部接线漂移诊断(开发者面,非渲染文案;
+    // B4-I 2026-10-02 登记,随诊断消息迁英/删除后应移除)
+    "v3_term 未初始化",
+    // debug_assert_eq! 消息(仅 debug 构建断言失败时输出,纯调试面)
+    "全量帧宽度应与终端尺寸一致",
+];
 
 /// CJK 统一表意文字区间判定
 fn is_cjk(c: char) -> bool {
@@ -70,19 +92,30 @@ fn collect_rs_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// 测试模块开始行判定 — `#[cfg(test)]` 与 `#[cfg(all(test, ...))]` 均视为
+/// 测试段起点(后者用于 feature 门控的测试模块,如 render.rs 的
+/// v3_engine_tests;生产 feature 门控写作 `#[cfg(feature = ...)]` 不匹配)。
+fn marks_test_module(raw: &str) -> bool {
+    raw.contains("#[cfg(test)]") || raw.contains("#[cfg(all(test")
+}
+
 /// 扫描单个文件的生产代码段,返回含 CJK 的 (行号, 行内容) 列表
 fn scan_file(path: &Path) -> Vec<(usize, String)> {
     let content = std::fs::read_to_string(path).expect("test source readable");
     let mut hits = Vec::new();
     let mut in_test_module = false;
     for (i, raw) in content.lines().enumerate() {
-        if raw.contains("#[cfg(test)]") {
+        if marks_test_module(raw) {
             in_test_module = true;
         }
         if in_test_module {
             continue;
         }
         let code = strip_line_comment(raw);
+        // CJK 行级片段豁免(诊断面字符串,逐条登记于 EXEMPT_CJK_SNIPPETS)
+        if EXEMPT_CJK_SNIPPETS.iter().any(|s| code.contains(s)) {
+            continue;
+        }
         if code.chars().any(is_cjk) {
             hits.push((i + 1, raw.trim().to_string()));
         }
@@ -91,12 +124,19 @@ fn scan_file(path: &Path) -> Vec<(usize, String)> {
 }
 
 #[test]
-fn panels_and_actions_production_code_has_no_hardcoded_cjk() {
+fn panels_actions_and_app_production_code_has_no_hardcoded_cjk() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut violations: Vec<String> = Vec::new();
-    for sub in ["src/panels", "src/actions"] {
-        let dir = manifest.join(sub);
-        for file in collect_rs_files(&dir) {
+    // WHY 混合目录与顶层文件:扫描域除子目录外含顶层 src/render.rs(B5-U
+    // F-17 迁键后纳入)——路径是目录则递归收集,否则按单文件扫描
+    for sub in ["src/panels", "src/actions", "src/app", "src/render.rs"] {
+        let path = manifest.join(sub);
+        let files = if path.is_dir() {
+            collect_rs_files(&path)
+        } else {
+            vec![path]
+        };
+        for file in files {
             let rel = file
                 .strip_prefix(&manifest)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -131,24 +171,31 @@ const EXEMPT_ENGLISH_PREFIXES: &[&str] = &[
     // 2026-08-17 登记"待用户 i18n 化"),英文存量同批处理,此处冗余登记防混淆
     // — 注意 EXEMPT_PREFIXES 已覆盖,本条仅为可读性注释位。
     // === 以下为批次-B/后续批次迁移范围(逐文件登记) ===
+    //
+    // B5-U(F-46)棘轮出清记录:overwindow.rs(代码已全走 t!)、help.rs
+    // (滚动提示/命令语法/品牌行迁 help.scroll_hint / help.commands.line1-3 /
+    // help.brand)、dag_viz.rs(F-30 三处迁 panel.dag.title/awaiting/more 后
+    // 生产段英文清零)三条已移除——只减不增。
+    //
+    // 六面板(chtc/clv_vector/sysinfo/experience_card_viz/resource_monitor/
+    // metrics_dashboard)正文英文存量迁移留批次六,豁免条目暂留。
     "src/panels/budget.rs",              // Budget 面板正文/告警文案待迁移
     "src/panels/chat.rs",                // Chat 面板文案待迁移
-    "src/panels/chtc.rs",                // CHTC 适配器面板正文待迁移
-    "src/panels/clv_vector.rs",          // CLV 向量面板正文待迁移
-    "src/panels/dag_viz.rs",             // DAG 可视化面板正文待迁移
+    "src/panels/chtc.rs",                // CHTC 适配器面板正文待迁移(批次六)
+    "src/panels/clv_vector.rs",          // CLV 向量面板正文待迁移(批次六)
     "src/panels/decay.rs",               // Decay 面板残留文案待迁移
-    "src/panels/experience_card_viz.rs", // 经验卡片面板正文待迁移
+    "src/panels/experience_card_viz.rs", // 经验卡片面板正文待迁移(批次六)
     "src/panels/health.rs",              // Health 面板残留文案待迁移
-    "src/panels/help.rs",                // 帮助面板搜索提示待迁移
     "src/panels/memory.rs",              // Memory 面板残留文案待迁移
-    "src/panels/metrics_dashboard.rs",   // 指标仪表盘残留文案待迁移
-    "src/panels/overwindow.rs",          // 超窗面板残留文案待迁移
+    "src/panels/metrics_dashboard.rs",   // 指标仪表盘残留文案待迁移(批次六)
     "src/panels/parliament.rs",          // 议会面板残留文案待迁移
-    "src/panels/resource_monitor.rs",    // 资源监控残留文案待迁移
+    "src/panels/resource_monitor.rs",    // 资源监控残留文案待迁移(批次六)
     "src/panels/router.rs",              // 路由面板残留文案待迁移
     "src/panels/security.rs",            // 安全面板残留文案待迁移
-    "src/panels/sysinfo.rs",             // 系统信息残留文案待迁移
+    "src/panels/sysinfo.rs",             // 系统信息残留文案待迁移(批次六)
     "src/actions",                       // 动作域残留文案待迁移(与面板同批)
+                                         // (src/app 的 tests.rs / v3_render_tests.rs 已在 EXEMPT_PREFIXES 全局登记,
+                                         //  本清单不重复登记——英文扫描的豁免判定同时检查两份清单)
 ];
 
 /// 英文扫描的行级豁免片段(子串命中即豁免该行;逐条登记理由)
@@ -162,6 +209,41 @@ const EXEMPT_ENGLISH_SNIPPETS: &[&str] = &[
     "last_seen",
     // PgUp/PgDn:键盘键位标识符(语言中立,与 ↑/↓、Enter 同类,不译)
     "PgUp/PgDn",
+    // Shift+Tab / Ctrl+Up / Ctrl+Down:help.rs global_shortcuts 键帽列
+    // (键盘键位标识符,PgUp/PgDn 同类语言中立不译;B5-U help.rs 出清文件级
+    // 豁免时登记——键帽非文案,随键帽行迁键应保持,非放水口)
+    "Shift+Tab",
+    "Ctrl+Up",
+    "Ctrl+Down",
+    // ={} tok:overwindow 语料/窗口行的字节单位格式(紧凑技术格式,与 msg/s
+    // 同口径;数字插值居中,拆单键无收益。B5-U overwindow.rs 出清文件级豁免时
+    // 登记,该行整行迁键后应移除)
+    "={} tok",
+    // === B4-I(F-04)src/app 域登记(逐条理由;随文案迁移应移除,只减不增)===
+    // 事件源标识符(如 EventMetadata::new("chimera-tui")),机器协议面非文案
+    "EventMetadata::new",
+    // 确认弹窗内部协议命令(apply_confirm_command 的 strip_prefix 分发键)
+    "export:csv",
+    // 事件来源标识(publish_terminate 的 source 字段)
+    "operator:terminate",
+    // TuiHello 协议能力清单标识(与 chimera-cli handshake 约定,非文案)
+    "slash-commands",
+    "pane-mode",
+    // tracing::warn! 日志消息(日志面英文惯例,非 UI 文案)
+    "Failed to save TuiConfig",
+    "Failed to save TuiState",
+    // TuiError 错误诊断消息(错误面,非 UI 文案)
+    "terminal size:",
+    "v3 backend init:",
+    "v3_term",
+    // 环境变量名(语言中立标识符)
+    "CHIMERA_NO_V3_ENGINE",
+    // 终端能力白名单匹配串(term_program_supports_osc9 的技术比较,非文案)
+    "windows terminal",
+    // /status 与 /doctor 的键值诊断输出(quests=/budget= 等字段名协议化,
+    // locale 切换无意义;若未来迁入键表应移除本条)
+    "quests={} budget=",
+    "tick={}ms persist=",
 ];
 
 /// 判定字符串字面量是否为 i18n key 形状(如 `panel.log.keyword`)
@@ -237,7 +319,7 @@ fn scan_english_file(path: &Path) -> Vec<(usize, String)> {
     let mut hits = Vec::new();
     let mut in_test_module = false;
     for (i, raw) in content.lines().enumerate() {
-        if raw.contains("#[cfg(test)]") {
+        if marks_test_module(raw) {
             in_test_module = true;
         }
         if in_test_module {
@@ -262,12 +344,18 @@ fn scan_english_file(path: &Path) -> Vec<(usize, String)> {
 }
 
 #[test]
-fn panels_and_actions_production_code_has_no_hardcoded_english() {
+fn panels_actions_and_app_production_code_has_no_hardcoded_english() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut violations: Vec<String> = Vec::new();
-    for sub in ["src/panels", "src/actions"] {
-        let dir = manifest.join(sub);
-        for file in collect_rs_files(&dir) {
+    // WHY 混合目录与顶层文件:同 CJK 扫描口径(B5-U F-17 起纳入 src/render.rs)
+    for sub in ["src/panels", "src/actions", "src/app", "src/render.rs"] {
+        let path = manifest.join(sub);
+        let files = if path.is_dir() {
+            collect_rs_files(&path)
+        } else {
+            vec![path]
+        };
+        for file in files {
             let rel = file
                 .strip_prefix(&manifest)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -310,7 +398,7 @@ fn scan_debug_leak_file(path: &Path) -> Vec<(usize, String)> {
     let mut hits = Vec::new();
     let mut in_test_module = false;
     for (i, raw) in content.lines().enumerate() {
-        if raw.contains("#[cfg(test)]") {
+        if marks_test_module(raw) {
             in_test_module = true;
         }
         if in_test_module {

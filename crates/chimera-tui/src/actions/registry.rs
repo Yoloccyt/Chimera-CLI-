@@ -11,6 +11,7 @@
 //!   `is_over_budget()` 供 CI/评审检测,提示回到"核心功能 ≤3 键可达"重新裁剪。
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crate::actions::descriptor::{ActionDescriptor, ActionDomain};
 use crate::actions::domains;
@@ -134,6 +135,21 @@ impl ActionRegistry {
     }
 }
 
+/// 进程级内建注册表缓存(F-08)— 供无实例上下文的调用方共享
+///
+/// WHY OnceLock:`InputRouter` 全为关联函数拿不到 `TuiApp` 实例字段,其
+/// `global_action_for` 兜底路由此前每次按键(Repeat 连发视同 Press)都
+/// `with_builtin_domains()` 现场重建——20 条 ActionDescriptor 逐条注册,
+/// 每次付出注册表 Vec/HashMap 重建与五域 descriptors() 的分配。内建域
+/// 声明为编译期静态内容(`domains/*/descriptors` 纯静态 vec),构造结果
+/// 恒定,进程级缓存一次即可;注册表查询 API 均为 `&self` 只读,共享无碍。
+/// `TuiApp::action_registry` 字段(B4-S F-13)仍为独立实例,二者派生的
+/// 键位表逐项一致由 builtin_registry_cached_and_matches_fresh 测试守护。
+pub fn builtin_registry() -> &'static ActionRegistry {
+    static BUILTIN: OnceLock<ActionRegistry> = OnceLock::new();
+    BUILTIN.get_or_init(ActionRegistry::with_builtin_domains)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -146,6 +162,16 @@ mod tests {
         assert!(!reg.is_empty());
         assert!(!reg.is_over_budget(), "内建动作不应超过 40 熔断线");
         assert!(reg.len() < MAX_ACTIONS);
+    }
+
+    #[test]
+    fn builtin_registry_cached_and_matches_fresh_construction() {
+        // F-08:OnceLock 恒等——重复调用返回同一实例,兜底路由零重建
+        assert!(std::ptr::eq(builtin_registry(), builtin_registry()));
+        // 行为不变:缓存实例派生的全局键位表与现场构造逐项一致
+        let cached = crate::actions::codegen::key_bindings(builtin_registry());
+        let fresh = crate::actions::codegen::key_bindings(&ActionRegistry::with_builtin_domains());
+        assert_eq!(cached, fresh, "缓存注册表派生的键位表应与现场构造逐项一致");
     }
 
     #[test]

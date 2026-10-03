@@ -542,10 +542,6 @@ impl Panel for ResourceMonitorPanel {
         self.render_disk_section(&sys.disk, chunks[2], buf);
         self.render_network_section(&sys.network, chunks[3], buf);
     }
-
-    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("R", crate::t!("shortcut.refresh"))]
-    }
 }
 
 #[cfg(test)]

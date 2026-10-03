@@ -74,6 +74,7 @@ BENCH_WORKFLOW_PATH = os.path.join(ROOT, ".github", "workflows", "bench_check.ym
 # 只认 "us" -> 落入 else 分支按 ms 处理, 造成 1000 倍误判 (check_perf_redlines.sh
 # :178-182 的实测缺陷, 本表是其在 py 侧的归零点)。
 UNIT_TO_SEC = {
+    "ps": 1e-12,  # 皮秒: criterion 对 <1 ns 的值独立渲染为 ps (2026-10-02 实测 immune_probe readonly 组)
     "ns": 1e-9,
     "us": 1e-6,
     "\u00b5s": 1e-6,  # µ MICRO SIGN
@@ -683,12 +684,18 @@ def parse_criterion_time(txt):
     float('ns')):
       * criterion 2.x: 'lo est hi unit'                     -> 4 tokens
       * criterion 3.x: 'lo u est u hi u' (unit per value)   -> 6 tokens
+    criterion 0.5.1 对 CI 下界/点估计/上界各自独立选单位 (report.rs 逐值调
+    format_value: <1e3->ns / <1e6->us), 故三单位可不相等。旧分支要求
+    vals[1]==vals[3]==vals[5] 在亚微秒项 CI 跨档时 (下界落 ns、点估计落 us,
+    2026-10-02 实测 immune_probe) 会返回 None -> mode_slo SKIP -> rc=2, 把
+    仪器抖动误报成门失败。改为"每个单位槽都是已知单位"既接受混合单位行,
+    又仍拒绝垃圾行 (selftest-20e), 门不失牙。取点估计 vals[2] 配其自身单位 vals[3]。
     Returns (float, str), or None when the line matches neither shape.
     """
     vals = txt.split()
     if len(vals) == 4:
         est, unit = vals[1], vals[3]
-    elif len(vals) == 6 and vals[1] == vals[3] == vals[5]:
+    elif len(vals) == 6 and all(v in UNIT_TO_SEC for v in (vals[1], vals[3], vals[5])):
         est, unit = vals[2], vals[3]
     else:
         return None
@@ -1035,12 +1042,27 @@ def mode_selftest():
 
         # 第 7 枚地雷：criterion 3.x 逐值单位行曾使 mode_slo 崩溃（ValueError
         # float('ns')，2026-09-25 实测）；解析纯函数两方言各一枚断言 + 垃圾行兑底
-        expect("selftest-19a criterion 2.x line parses (mid, unit)",
+        # （编号取 20x 而非续用 19x：mode_compare 夹具已占 selftest-19a..19d，
+        #   本文件"标记须可机检且唯一"纪律——grep selftest-19a 曾同时命中两处。）
+        expect("selftest-20a criterion 2.x line parses (mid, unit)",
                parse_criterion_time("9.902 9.967 10.037 ns"), (9.967, "ns"))
-        expect("selftest-19b criterion 3.x per-value-unit line parses",
+        expect("selftest-20b criterion 3.x per-value-unit line parses",
                parse_criterion_time("68.439 ns 68.483 ns 68.661 ns"), (68.483, "ns"))
-        expect("selftest-19c garbage line yields None (SKIP not crash)",
+        expect("selftest-20c garbage line yields None (SKIP not crash)",
                parse_criterion_time("ns"), None)
+        # 20d：混合单位 6-token (criterion 0.5.1 逐值选单位, CI 跨档实测行) 须解析为
+        #   (点估计, 其单位); 旧"三单位全等"守卫会 None -> SKIP -> rc=2。
+        expect("selftest-20d mixed-unit per-value line parses (est, its unit)",
+               parse_criterion_time("960.53 ns 1.2215 \u00b5s 1.2868 \u00b5s"),
+               (1.2215, "\u00b5s"))
+        # 20e：6-token 但单位槽非已知单位 -> 仍 None (特异度对照, 保住门的牙)
+        expect("selftest-20e 6-token with unknown unit-token yields None",
+               parse_criterion_time("1.0 zz 2.0 zz 3.0 zz"), None)
+        # 20f：ps 单位须可解 (亚纳秒值渲染为 ps), 否则 window_select 等逼近 1 ns 会假红
+        expect("selftest-20f ps unit resolves",
+               ("ps" in UNIT_TO_SEC,
+                parse_criterion_time("500.0 ps 600.0 ps 700.0 ps")),
+               (True, (600.0, "ps")))
 
         # 断言 9：真实表必绿（防止自测只测红路径而把真表测挂）
         rc = _capture(lambda: mode_lint(real_rl),)

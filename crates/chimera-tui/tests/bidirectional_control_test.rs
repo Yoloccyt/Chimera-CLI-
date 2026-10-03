@@ -52,7 +52,12 @@ fn bidirectional_refresh_publishes_event() {
             .as_ref()
             .unwrap()
             .0
-            .contains("RefreshStateRequested request published"),
+            // B4-I(F-04):断言走 i18n 键期望串,任意 locale 下均成立
+            .contains(&chimera_tui::t!("status.request_published").replacen(
+                "{}",
+                "RefreshStateRequested",
+                1
+            )),
         "status should confirm publish"
     );
 }
@@ -67,7 +72,8 @@ fn bidirectional_pause_shows_confirm_then_publishes_on_yes() {
     assert!(!app.state().popup_stack.is_empty());
     match app.state().popup_stack.current() {
         Some(PopupKind::Confirm { prompt, .. }) => {
-            assert!(prompt.contains("Pause quest"));
+            // B4-I(F-04):prompt 文案走键表,断言经 t! 取值(locale 无关)
+            assert!(prompt.contains(chimera_tui::t!("status.pause_quest")));
             assert!(prompt.contains("q-42"));
         }
         other => panic!("expected Confirm popup, got {other:?}"),
@@ -151,7 +157,8 @@ fn bidirectional_event_bus_missing_reports_error() {
             .as_ref()
             .unwrap()
             .0
-            .contains("event bus not available"),
+            // B4-I(F-04):断言经 t! 取值,与 locale 无关
+            .contains(chimera_tui::t!("status.event_bus_unavailable")),
         "status should report missing event bus"
     );
     assert_eq!(

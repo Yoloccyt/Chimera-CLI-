@@ -105,7 +105,8 @@ fn test_press_d_shows_confirm_popup() {
             prompt, on_confirm, ..
         }) => {
             assert!(
-                prompt.contains("Cancel"),
+                // B4-I(F-04):prompt 文案走键表,断言经 t! 取值(locale 无关)
+                prompt.contains(chimera_tui::t!("status.cancel_quest")),
                 "prompt should mention Cancel, got: {prompt}"
             );
             assert!(

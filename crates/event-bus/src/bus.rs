@@ -1304,7 +1304,8 @@ impl EventBus {
         // WHY 在 retain 之前采样:retain 闭包内会 fetch_add 多次(每个满 Sender 一次),
         // 闭包后用差值得到本次发送的总丢弃数,单次 warn 记录避免日志噪声
         let dropped_before = self.critical_dropped_count.load(Ordering::Relaxed);
-        // 优先级采样丢弃:遍历所有 Sender,try_send 失败时按错误类型处理
+        // 遍历所有 Sender,try_send 失败时按错误类型处理（无优先级选择:容量满即丢,
+        // 丢弃数经 critical_dropped_count 计数可见）
         // - Full:递增丢弃计数,保留 Sender(临时满载)
         // - Closed:移除 Sender(receiver 已 drop)
         // delivered:本次成功投递到的活跃订阅者数(B-a 用于 stale 检测)
@@ -1315,7 +1316,7 @@ impl EventBus {
                 true // 投递成功,保留
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
-                // 容量满:按优先级采样丢弃,递增计数,保留 Sender
+                // 容量满:丢弃本条（无优先级判定）,递增计数,保留 Sender 待后续
                 // WHY fetch_add 而非 store(load + 1):原子操作避免读改写竞态
                 self.critical_dropped_count.fetch_add(1, Ordering::Relaxed);
                 true // 保留 Sender(临时满载,下次可能成功)

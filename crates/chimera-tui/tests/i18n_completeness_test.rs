@@ -660,3 +660,52 @@ fn seed_keys_are_used_in_code() {
         unused.join("\n  - ")
     );
 }
+
+// ============================================================================
+// 测试 4: panel.name.* 面板名键(B4-I F-65)zh/en 双表对齐与 border 文案一致
+// ============================================================================
+
+/// 验证 `PanelId::name_key()` 对全部面板变体返回的键在 zh/en 两表同时存在,
+/// 且值与 `panel.border.*` 文案对齐(共有后缀 trim 后一致)。
+///
+/// WHY 需要专项断言:`panel.name.*` 经运行时变量传入 `t!()`(tab 栏/状态栏
+/// 动态查表),源码中无 `t!("key")` 字面量调用点,`all_t_macro_keys_exist_in_
+/// both_tables` 与 `zh_and_en_tables_cover_same_seed_keys` 均覆盖不到;且按
+/// 既有策略(动态 tr 键不入 SEED_KEYS,见 zh.rs 同类注释)它们不在种子清单,
+/// 漏译会导致对应语言下 tab/状态栏回退显示键名本身(如 "panel.name.quest")。
+///
+/// WHY 遍历 `PanelId::ALL`:全变体单一事实源,新增变体须同步维护(types.rs
+/// 既有测试强制 ALL 与焦点环对账),本测试随 ALL 自动覆盖新变体。
+#[test]
+fn panel_name_keys_resolve_in_both_locales_and_align_with_border() {
+    for panel in chimera_tui::types::PanelId::ALL {
+        let key = panel.name_key();
+        let zh_value = chimera_tui::i18n::zh::lookup(key)
+            .unwrap_or_else(|| panic!("zh 表缺失面板名键: {key}"));
+        let en_value = chimera_tui::i18n::en::lookup(key)
+            .unwrap_or_else(|| panic!("en 表缺失面板名键: {key}"));
+        assert!(
+            !zh_value.is_empty() && !en_value.is_empty(),
+            "面板名键值不得为空: {key}"
+        );
+
+        // 与 panel.border.* 文案对齐:border 键存在时,面板名值 == 边框标题 trim
+        // (pvl_score/overwindow 无 border 键,跳过对齐检查仅验证存在性)
+        let suffix = key.strip_prefix("panel.name.").expect("name_key 前缀约定");
+        let border_key = format!("panel.border.{suffix}");
+        if let Some(border) = chimera_tui::i18n::zh::lookup(&border_key) {
+            assert_eq!(
+                zh_value.trim(),
+                border.trim(),
+                "zh 面板名应与边框标题对齐: {key}"
+            );
+        }
+        if let Some(border) = chimera_tui::i18n::en::lookup(&border_key) {
+            assert_eq!(
+                en_value.trim(),
+                border.trim(),
+                "en 面板名应与边框标题对齐: {key}"
+            );
+        }
+    }
+}

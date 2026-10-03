@@ -214,8 +214,10 @@ impl TuiApp {
             }
             Err(e) => {
                 // M1 清理项 #4:数据源失败时向用户展示状态栏警告,而非静默忽略。
-                self.state.status_message =
-                    Some((format!("data source unavailable: {e}"), Severity::Warning));
+                self.state.status_message = Some((
+                    crate::t!("status.data_source_unavailable").replacen("{}", &e.to_string(), 1),
+                    Severity::Warning,
+                ));
             }
         }
     }

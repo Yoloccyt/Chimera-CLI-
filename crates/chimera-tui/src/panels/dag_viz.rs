@@ -94,7 +94,7 @@ impl DagVizPanel {
     /// 构建面板文本内容 — 每个 Quest 一棵层级树
     pub fn content(state: &TuiState) -> Text<'static> {
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from("Quest Task DAG (depth-indented)"),
+            Line::from(crate::t!("panel.dag.title")),
             Line::from("──────────────────────────────────────"),
         ];
 
@@ -111,7 +111,7 @@ impl DagVizPanel {
 
         if state.quest_list.is_empty() {
             lines.push(Line::from(Span::styled(
-                "Awaiting QuestListUpdated...",
+                crate::t!("panel.dag.awaiting"),
                 Style::default().fg(Color::Gray),
             )));
             return Text::from(lines);
@@ -151,10 +151,12 @@ impl DagVizPanel {
         }
 
         if state.quest_list.len() > MAX_QUESTS_SHOWN {
+            // 占位键:溢出数(与 self_assessment findings_count 同 replacen 范式)
             lines.push(Line::from(Span::styled(
-                format!(
-                    "... {} more quests (see Quest panel)",
-                    state.quest_list.len() - MAX_QUESTS_SHOWN
+                crate::t!("panel.dag.more").replacen(
+                    "{}",
+                    &(state.quest_list.len() - MAX_QUESTS_SHOWN).to_string(),
+                    1,
                 ),
                 Style::default().fg(Color::Gray),
             )));
@@ -228,9 +230,16 @@ mod tests {
 
     #[test]
     fn test_content_awaiting_when_no_quests() {
+        // F-30 i18n 迁键后空态走 panel.dag.awaiting。WHY 双语 OR 断言而非
+        // locale 钉定:不写全局 locale,避免与未加锁的 zh 断言测试产生
+        // En 窗口竞态(同 self_assessment content_awaiting 口径)。
         let state = TuiState::new();
         let content = DagVizPanel::content(&state).to_string();
-        assert!(content.contains("Awaiting QuestListUpdated"));
+        assert!(
+            content.contains("Awaiting QuestListUpdated")
+                || content.contains("等待 QuestListUpdated"),
+            "无 Quest 时应显示等待提示(任意 locale), got: {content}"
+        );
     }
 
     #[test]
@@ -297,7 +306,11 @@ mod tests {
             state.quest_list.push(q);
         }
         let content = DagVizPanel::content(&state).to_string();
-        assert!(content.contains("2 more quests"));
+        // F-30 i18n 迁键:截断提示双语 OR 断言(同 awaiting 用例口径)
+        assert!(
+            content.contains("2 more quests") || content.contains("另有 2 个"),
+            "溢出 Quest 计数提示应渲染(任意 locale), got: {content}"
+        );
     }
 }
 

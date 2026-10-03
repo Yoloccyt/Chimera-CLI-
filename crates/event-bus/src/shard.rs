@@ -1,7 +1,7 @@
 //! ShardedBus 分片核心 — 非 Critical 事件的分片扇出(灰度增量)
 //!
 //! 状态(ADR-181 发现 1 订正):PRODUCTION-WIRED —— osa/faae/gqep/gsoe/
-//! efficiency-monitor 五处组合根运行时 opt-in `let _ = enable_sharding(...)`
+//! efficiency-monitor 五处组合根运行时 opt-in `try_enable_sharding(...)`
 //! (无 tokio runtime 自动降级单流,幂等拒绝重复启用);非"未接线"。
 //!
 //! 对应架构层:L1 Core(event-bus)

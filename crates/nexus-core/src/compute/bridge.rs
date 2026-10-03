@@ -20,9 +20,9 @@
 //! - **HTS 序贯检验判定已落地**（T9,[`super::hts::sequential_test`]）:本桥只转发
 //!   更新接口,真实运行时采样接线在 T14（注入时启用）。
 //! - `ComputeError::Saturated`（池饱和,D15）**自 ADR-197 起有真实触发路径**:
-//!   占用达 env 阈值时默认降级为 Inline 执行（变慢不变错）;仅当
-//!   `CHIMERA_COMPUTE_STRICT_POOL` 开启时才以 `Saturated` 返回错误
-//!   （判定与计数见 [`super::telemetry`]）。
+//!   饱和处置为 env 三态（判定与计数见 [`super::telemetry`]）——默认 `observe` 仅
+//!   记观测+发事件、任务仍走池（行为零变更）;`degrade` 才降级为 Inline 执行
+//!   （变慢不变错）;`strict`（旧 `CHIMERA_COMPUTE_STRICT_POOL`）才以 `Saturated` 返回错误。
 //! - 缝合点（Clock/Rng/Fs/Net,§10.8 Ω₇）见 [`super::seam`],T14 注入时才接线本桥。
 
 use std::future::Future;
@@ -61,8 +61,9 @@ pub enum ComputeError {
     /// 计算池饱和,可重试
     ///
     /// 触发条件（ADR-197）:池占用 ≥ [`threshold_bp`](super::telemetry::threshold_bp)
-    /// **且** 开启严格模式 `CHIMERA_COMPUTE_STRICT_POOL`;默认（非严格）模式下不返回本错误,
-    /// 而是降级为 Inline 执行并计入降级计数。
+    /// **且** 饱和处置模式为 `strict`（旧 `CHIMERA_COMPUTE_STRICT_POOL`）。默认 `observe`
+    /// 模式仅记观测不改分支（任务仍走池,不返回本错误）;`degrade` 模式降级为 Inline
+    /// 执行,二者均不产生本错误,后者计入降级计数。
     #[error("pool saturated, retryable")]
     Saturated,
 }

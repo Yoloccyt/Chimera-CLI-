@@ -136,7 +136,7 @@ pub mod shadow_diff;
 /// Lane 三车道判定(Critical/OrderSensitive/Unordered)+ 64 片无锁队列扇出
 /// + shard_worker 攒批汇入既有 broadcast。灰度开关:`EventBus::enable_sharding`。
 /// 状态(ADR-181 发现 1 订正):PRODUCTION-WIRED —— osa/faae/gqep/gsoe/
-/// efficiency-monitor 五处组合根运行时 opt-in `let _ = enable_sharding(...)`
+/// efficiency-monitor 五处组合根运行时 opt-in `try_enable_sharding(...)`
 /// (无 tokio runtime 自动 Err 降级单流,幂等拒绝重复启用),非"未接线"。
 /// 详见 [`shard::ShardedEventBus`]。
 pub mod shard;

@@ -36,7 +36,7 @@ pub use action_ids::{
 pub use codegen::{HelpLine, PaletteEntry, SlashCommand};
 pub use descriptor::{ActionDescriptor, ActionDomain};
 pub use panel_menu::panel_context_actions;
-pub use registry::{ActionRegistry, MAX_ACTIONS};
+pub use registry::{builtin_registry, ActionRegistry, MAX_ACTIONS};
 pub use slash_parser::{
     parse as parse_slash, plan as plan_slash, DispatchPlan, ParsedSlash, SlashEffect,
 };

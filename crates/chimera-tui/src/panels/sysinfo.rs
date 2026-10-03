@@ -252,8 +252,11 @@ impl Panel for SysinfoPanel {
     }
 
     fn handle_key(&mut self, key: KeyEvent, _state: &mut TuiState) -> Option<TuiCommand> {
-        // 'r' 键手动触发刷新(spec 隐含约定,运维调试时常需要)
-        if let crossterm::event::KeyCode::Char('r') = key.code {
+        // 'r'/'R' 键手动触发刷新(spec 隐含约定,运维调试时常需要);
+        // F-41:键帽声明为大写 R,大写一并接受以与键帽对齐
+        if let crossterm::event::KeyCode::Char('r') | crossterm::event::KeyCode::Char('R') =
+            key.code
+        {
             self.force_refresh();
         }
         None

@@ -1778,7 +1778,9 @@ pub enum NexusEvent {
         session_id: String,
         /// 用户查询原文
         query: String,
-        /// 若为斜杠命令,携带命令名(如 "plan"/"clear");纯对话为 None
+        /// 斜杠命令名(预留字段):当前 TUI 侧不填充(恒为 None),chat 内以
+        /// `/` 开头的输入按普通对话处理(B4-S F-57 契约收窄;生产代码无读取
+        /// 点,恢复填充需同步编排器消费与两端测试,消除只写不读的半途契约)
         slash_command: Option<String>,
     },
 

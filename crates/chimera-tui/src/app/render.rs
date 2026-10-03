@@ -48,9 +48,13 @@ impl TuiApp {
         if focused != PanelId::Help
             && self.state.help_context.as_ref().map(|(id, _)| *id) != Some(focused)
         {
+            // B4-S(F-13):与 open_help_action 同源 —— 经构造期缓存的
+            // action_registry 调 shortcuts_with_registry(含 ActionRegistry
+            // 派生功能动作),不再用裸 shortcuts();`?` 浮层与 Help 面板
+            // 章节两条帮助路径键位一致(panels/mod.rs 契约文档成立)。
             let shortcuts = self
                 .panel_index(focused)
-                .map(|i| self.panels[i].shortcuts())
+                .map(|i| self.panels[i].shortcuts_with_registry(&self.action_registry))
                 .unwrap_or_default();
             self.state.help_context = Some((focused, shortcuts));
         }
@@ -302,8 +306,8 @@ impl TuiApp {
     /// WHY 底部靠栏而非居中:补全与输入栏视觉连续(主流 Agent CLI 交互惯例)。
     fn render_slash_overlay(&self, frame: &mut Frame<'_>, main_area: Rect) {
         use ratatui::widgets::Widget;
-        let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
-        let cands = crate::slash_surface::candidates(&reg, &self.state.input_buffer);
+        let reg = &self.slash_registry;
+        let cands = crate::slash_surface::candidates(reg, &self.state.input_buffer);
         if cands.is_empty() || main_area.height < 3 || main_area.width < 8 {
             return;
         }
@@ -528,7 +532,8 @@ impl TuiApp {
             .focus_manager
             .panels()
             .iter()
-            .map(|&p| Line::from(format!(" {} ", p.as_str())))
+            // B4-I(F-65):面板名走 i18n 键表,Ctrl+L 切换语言随动
+            .map(|&p| Line::from(format!(" {} ", crate::t!(p.name_key()))))
             .collect();
 
         let focused = self.focus_manager.focused();
@@ -611,12 +616,14 @@ impl TuiApp {
         area: ratatui::layout::Rect,
     ) {
         self.status_bar_area = Some(area);
+        // B4-I(F-65):面板名走 i18n 键表(与 tab 栏同源),Ctrl+L 随动
+        let panel_name = crate::t!(self.current_panel().name_key());
         let (status, fg) = match &self.state.status_message {
             Some((msg, severity)) => (
                 format!(
                     " {}: {} | {}: {} | {}: {} | {} ",
                     crate::t!("status.panel"),
-                    self.current_panel().as_str(),
+                    panel_name,
                     crate::t!("status.tick"),
                     self.state.tick_mode.display(),
                     crate::t!("status.fps"),
@@ -629,7 +636,7 @@ impl TuiApp {
                 format!(
                     " {}: {} | {}: {} | {}: {} | {}: {} | {}: {} ",
                     crate::t!("status.panel"),
-                    self.current_panel().as_str(),
+                    panel_name,
                     crate::t!("status.tick"),
                     self.state.tick_mode.display(),
                     crate::t!("status.fps"),

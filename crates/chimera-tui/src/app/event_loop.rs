@@ -193,8 +193,8 @@ impl TuiApp {
     /// Tab 前缀补全:以选中候选的命令词替换输入缓冲(两词命令带尾随空格
     /// 便于继续输入参数;无候选时无操作)
     pub(crate) fn slash_tab_complete(&mut self) {
-        let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
-        let cands = crate::slash_surface::candidates(&reg, &self.state.input_buffer);
+        let reg = &self.slash_registry;
+        let cands = crate::slash_surface::candidates(reg, &self.state.input_buffer);
         if cands.is_empty() {
             return;
         }
@@ -227,8 +227,8 @@ impl TuiApp {
         }
 
         use crate::actions::slash_parser::{parse, plan, ParsedSlash};
-        let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
-        match parse(&input, &reg) {
+        let reg = &self.slash_registry;
+        match parse(&input, reg) {
             ParsedSlash::Empty => {}
             ParsedSlash::Command { desc, args } => {
                 self.apply_dispatch_plan(plan(desc, &args), &args)
@@ -298,12 +298,12 @@ impl TuiApp {
             SlashEffect::FilterTopic(topic) => {
                 if topic.is_empty() {
                     self.state
-                        .set_status("filter requires an argument", Severity::Error);
+                        .set_status(crate::t!("status.filter_requires_arg"), Severity::Error);
                 } else if crate::command_palette::is_valid_topic(&topic) {
                     self.state.filter_topic = Some(topic.to_lowercase());
                 } else {
                     self.state.set_status(
-                        format!("invalid topic '{topic}': expected quest|security|memory|health|parliament|budget|system"),
+                        crate::t!("status.invalid_topic").replacen("{}", &topic, 1),
                         Severity::Error,
                     );
                 }
@@ -311,14 +311,14 @@ impl TuiApp {
             SlashEffect::FilterLevel(level) => {
                 if level.is_empty() {
                     self.state
-                        .set_status("level requires an argument", Severity::Error);
+                        .set_status(crate::t!("status.level_requires_arg"), Severity::Error);
                 } else {
                     let l = level.to_lowercase();
                     if matches!(l.as_str(), "info" | "warn" | "error" | "critical") {
                         self.state.filter_level = Some(l);
                     } else {
                         self.state.set_status(
-                            format!("invalid level '{level}': expected info|warn|error|critical"),
+                            crate::t!("status.invalid_level").replacen("{}", &level, 1),
                             Severity::Error,
                         );
                     }
@@ -358,6 +358,14 @@ impl TuiApp {
                 "{}".to_string(),
                 ActionSource::Palette,
             ),
+            // B4-S(F-56):/export /config 与 Ctrl+E/config.edit 本地动作同效,
+            // 经 dispatch_action 查 LOCAL_ACTION_TABLE 即时执行
+            SlashEffect::ExportRun => {
+                self.dispatch_action("export.run", "{}".to_string(), ActionSource::Palette);
+            }
+            SlashEffect::ConfigEdit => {
+                self.dispatch_action("config.edit", "{}".to_string(), ActionSource::Palette);
+            }
             SlashEffect::Help => self.open_help_action(),
             SlashEffect::Exit => self.quit(),
             // /panel <name>:大小写不敏感匹配已注册面板 as_str
@@ -365,7 +373,7 @@ impl TuiApp {
                 let needle = name.trim().to_lowercase();
                 if needle.is_empty() {
                     self.state
-                        .set_status("panel requires a panel name", Severity::Error);
+                        .set_status(crate::t!("status.panel_requires_name"), Severity::Error);
                     return;
                 }
                 let target = self
@@ -375,9 +383,10 @@ impl TuiApp {
                     .find(|p| p.as_str().to_lowercase() == needle);
                 match target {
                     Some(id) => self.switch_panel_to(*id),
-                    None => self
-                        .state
-                        .set_status(format!("unknown panel '{name}'"), Severity::Error),
+                    None => self.state.set_status(
+                        crate::t!("status.unknown_panel").replacen("{}", &name, 1),
+                        Severity::Error,
+                    ),
                 }
             }
             // /status:诚实汇总当前可读状态(不伪造未接线能力)
@@ -515,9 +524,12 @@ impl TuiApp {
                 (id.to_string(), title)
             })
             .collect();
-        self.state
-            .popup_stack
-            .push(PopupKind::action_menu(focused.as_str(), entries));
+        // F-65:弹窗标题面板名与 tab 栏同源走 name_key() 动态键,随 locale 切换
+        // (原 as_str() 硬编码英文,zh 模式不随 Ctrl+L 切换)
+        self.state.popup_stack.push(PopupKind::action_menu(
+            crate::t!(focused.name_key()),
+            entries,
+        ));
     }
 
     /// 命令面板是否打开(测试与外部查询用)
@@ -761,11 +773,12 @@ impl TuiApp {
             // Task 1.15.4:bound_companion / companion_visible 移至 pane_manager
             self.pane_manager.bound_companion = Some(target);
             self.pane_manager.companion_visible = true;
+            // F-65:面板名与 tab 栏同源走 name_key() 动态键(原 as_str 硬编码英文)
             self.state.status_message = Some((
                 format!(
                     "{}: {}",
                     crate::t!("action.view.cycle_companion"),
-                    target.as_str()
+                    crate::t!(target.name_key())
                 ),
                 Severity::Info,
             ));
@@ -780,7 +793,12 @@ impl TuiApp {
         let n = self.pane_panels().len();
         if n <= 1 {
             self.state.status_message = Some((
-                format!("{}: n/a", crate::t!("action.view.focus_pane")),
+                // B4-I:n/a 属窗格技术标签,迁 status.pane.none 键表(zh:"无")
+                format!(
+                    "{}: {}",
+                    crate::t!("action.view.focus_pane"),
+                    crate::t!("status.pane.none")
+                ),
                 Severity::Warning,
             ));
             return;
@@ -789,9 +807,13 @@ impl TuiApp {
         self.pane_manager.active_pane = (self.pane_manager.active_pane + 1) % n;
         // 窗格标签:0 = 主区,其余按序号提示(2 窗格时 1 = companion,语义等价 Stage 2)
         let pane = if self.pane_manager.active_pane == 0 {
-            "main".to_string()
+            crate::t!("status.pane.main").to_string()
         } else {
-            format!("pane {}", self.pane_manager.active_pane + 1)
+            format!(
+                "{} {}",
+                crate::t!("status.pane.nth"),
+                self.pane_manager.active_pane + 1
+            )
         };
         self.state.status_message = Some((
             format!("{}: {}", crate::t!("action.view.focus_pane"), pane),
@@ -810,7 +832,12 @@ impl TuiApp {
         let rects = self.pane_rects(main);
         if rects.len() <= 1 {
             self.state.status_message = Some((
-                format!("{}: n/a", crate::t!("action.view.focus_pane")),
+                // B4-I:n/a 属窗格技术标签,迁 status.pane.none 键表(zh:"无")
+                format!(
+                    "{}: {}",
+                    crate::t!("action.view.focus_pane"),
+                    crate::t!("status.pane.none")
+                ),
                 Severity::Warning,
             ));
             return;
@@ -850,13 +877,24 @@ impl TuiApp {
                 // Task 1.15.4:active_pane 移至 pane_manager
                 self.pane_manager.active_pane = idx;
                 self.state.status_message = Some((
-                    format!("{}: pane {}", crate::t!("action.view.focus_pane"), idx + 1),
+                    // B4-I:窗格序号标签迁 status.pane.nth 键表(zh:"窗格 N")
+                    format!(
+                        "{}: {} {}",
+                        crate::t!("action.view.focus_pane"),
+                        crate::t!("status.pane.nth"),
+                        idx + 1
+                    ),
                     Severity::Info,
                 ));
             }
             None => {
                 self.state.status_message = Some((
-                    format!("{}: n/a", crate::t!("action.view.focus_pane")),
+                    // B4-I:n/a 属窗格技术标签,迁 status.pane.none 键表(zh:"无")
+                    format!(
+                        "{}: {}",
+                        crate::t!("action.view.focus_pane"),
+                        crate::t!("status.pane.none")
+                    ),
                     Severity::Warning,
                 ));
             }
@@ -895,18 +933,18 @@ impl TuiApp {
     ///
     /// 传入当前焦点面板的快捷键列表,帮助按上下文动态生成(§4.6 渐进披露)。
     pub(crate) fn open_help_action(&mut self) {
-        // Task 2.5:registry 构造提前,供 shortcuts_with_registry 自动派生功能动作快捷键
-        let registry = crate::actions::ActionRegistry::with_builtin_domains();
+        // Task 2.5 + B4-S(F-13):registry 用构造期缓存字段(与 render.rs 的
+        // help_context 注入同源),不再每次现场 with_builtin_domains()
         let shortcuts = self
             .panels
             .iter()
             .find(|p| p.id() == self.focus_manager.focused())
-            .map(|p| p.shortcuts_with_registry(&registry))
+            .map(|p| p.shortcuts_with_registry(&self.action_registry))
             .unwrap_or_default();
         // M2 增量3:帮助浮层追加 Registry 驱动的命令清单(与命令面板 Ctrl+P 同源),
         // 随 locale 动态生成。构造成本低(约 21 条),`?` 为低频操作,按需构建即可。
         let action_lines: Vec<(String, String)> =
-            crate::actions::codegen::help_lines(&registry, None)
+            crate::actions::codegen::help_lines(&self.action_registry, None)
                 .into_iter()
                 .map(|line| (line.key, line.title))
                 .collect();
@@ -926,11 +964,12 @@ impl TuiApp {
         self.state.layout_mode = LayoutMode::SinglePane;
         self.clamp_active_pane();
         let focused = self.focus_manager.focused();
+        // F-65:面板名与 tab 栏同源走 name_key() 动态键(原 as_str 硬编码英文)
         self.state.status_message = Some((
             format!(
                 "{}: {}",
                 crate::t!("action.panel.drill_down"),
-                focused.as_str()
+                crate::t!(focused.name_key())
             ),
             Severity::Info,
         ));
@@ -945,9 +984,9 @@ impl TuiApp {
         self.state.mark_dirty(PanelId::ResourceMonitor);
         self.state.mark_dirty(PanelId::Health);
         let msg = if self.state.monitor_paused {
-            "监控采样已暂停(显示冻结)"
+            crate::t!("status.monitor_paused")
         } else {
-            "监控采样已恢复"
+            crate::t!("status.monitor_resumed")
         };
         self.state.status_message = Some((msg.to_string(), Severity::Info));
     }
@@ -957,7 +996,8 @@ impl TuiApp {
         self.state.monitor_window = self.state.monitor_window.next();
         self.state.mark_dirty(PanelId::ResourceMonitor);
         self.state.status_message = Some((
-            format!("监控时间窗: 最近 {} 点", self.state.monitor_window.label()),
+            // B4-I(F-04):文案走键表,单占位符按 replacen 范式替换
+            crate::t!("status.monitor_window").replacen("{}", self.state.monitor_window.label(), 1),
             Severity::Info,
         ));
     }
@@ -973,15 +1013,18 @@ impl TuiApp {
                 self.state.clv_heatmap_autoscale = !self.state.clv_heatmap_autoscale;
                 self.state.mark_dirty(PanelId::ClvVector);
                 let mode = if self.state.clv_heatmap_autoscale {
-                    "自适应(按实际值域)"
+                    crate::t!("status.clv_range_autoscale")
                 } else {
-                    "固定 [-1, 1]"
+                    crate::t!("status.clv_range_fixed")
                 };
-                self.state.status_message = Some((format!("CLV 热图值域: {mode}"), Severity::Info));
+                self.state.status_message = Some((
+                    crate::t!("status.clv_range").replacen("{}", mode, 1),
+                    Severity::Info,
+                ));
             }
             other => {
                 self.state.status_message = Some((
-                    format!("{}: 当前面板暂无可切换维度", other.as_str()),
+                    crate::t!("status.no_viz_dimension").replacen("{}", other.as_str(), 1),
                     Severity::Info,
                 ));
             }
@@ -996,7 +1039,7 @@ impl TuiApp {
         let path = self.config.state_file_path.clone();
         if !path.exists() {
             self.state.status_message = Some((
-                "无已保存的视图(退出时自动保存布局)".to_string(),
+                crate::t!("status.no_saved_view").to_string(),
                 Severity::Info,
             ));
             return;
@@ -1008,7 +1051,8 @@ impl TuiApp {
         for panel_id in self.focus_manager.panels() {
             self.state.mark_dirty(*panel_id);
         }
-        self.state.status_message = Some(("已应用保存的视图".to_string(), Severity::Info));
+        self.state.status_message =
+            Some((crate::t!("status.view_applied").to_string(), Severity::Info));
     }
 
     /// 从另一 `TuiState` 拷贝视图字段(纯逻辑,便于测试)
@@ -1043,13 +1087,15 @@ impl TuiApp {
             }
             0 => {
                 self.switch_panel_to(PanelId::EventStream);
-                self.state
-                    .set_status("已切换事件流(当前无 Quest)", Severity::Info);
+                self.state.set_status(
+                    crate::t!("status.jumped_eventstream_no_quest"),
+                    Severity::Info,
+                );
             }
             _ => {
                 self.switch_panel_to(PanelId::EventStream);
                 self.state.set_status(
-                    "已切换事件流(多 Quest;Quest 面板选中后 Enter 可精确跳转)",
+                    crate::t!("status.jumped_eventstream_multi_quest"),
                     Severity::Info,
                 );
             }
@@ -1118,10 +1164,8 @@ impl TuiApp {
         for rid in &expired {
             self.state.pending_actions.remove(rid);
         }
-        self.state.set_status(
-            "action orchestrator not connected; request may not have executed",
-            Severity::Warning,
-        );
+        self.state
+            .set_status(crate::t!("status.action_timeout"), Severity::Warning);
     }
 
     /// 根据确认弹窗的命令字符串执行动作
@@ -1169,7 +1213,7 @@ impl TuiApp {
                 self.publish_vote(proposal_id, vote);
             } else {
                 self.state.set_status(
-                    format!("invalid vote in confirm command: {cmd}"),
+                    crate::t!("status.invalid_vote_cmd").replacen("{}", cmd, 1),
                     Severity::Error,
                 );
             }
@@ -1186,7 +1230,7 @@ impl TuiApp {
     /// 处理导出命令 — 弹出格式选择弹窗
     pub(crate) fn handle_export_command(&mut self) {
         self.state.popup_stack.push(PopupKind::Confirm {
-            prompt: "Export as CSV?".into(),
+            prompt: crate::t!("status.export_csv_prompt").into(),
             on_confirm: "export:csv".into(),
             confirmed: true,
         });
@@ -1208,17 +1252,31 @@ impl TuiApp {
                 let path = export_dir.join(&filename);
                 match snapshot.export_quests_to(format, &path) {
                     Ok(()) => {
-                        self.state.status_message =
-                            Some((format!("Exported: {}", path.display()), Severity::Info));
+                        // B4-I(F-65 补口):导出成功提示与 export_failed/export_blocked
+                        // 同属 export 特征路径,走 status.exported 键表——单词级英文
+                        // 硬编码逃过 english_token_count>=2 门禁,此处收口
+                        self.state.status_message = Some((
+                            crate::t!("status.exported").replacen(
+                                "{}",
+                                &path.display().to_string(),
+                                1,
+                            ),
+                            Severity::Info,
+                        ));
                     }
                     Err(e) => {
-                        self.state.status_message =
-                            Some((format!("Export failed: {e}"), Severity::Error));
+                        self.state.status_message = Some((
+                            crate::t!("status.export_failed").replacen("{}", &e.to_string(), 1),
+                            Severity::Error,
+                        ));
                     }
                 }
             }
             Err(e) => {
-                self.state.status_message = Some((format!("Cannot export: {e}"), Severity::Error));
+                self.state.status_message = Some((
+                    crate::t!("status.export_blocked").replacen("{}", &e.to_string(), 1),
+                    Severity::Error,
+                ));
             }
         }
     }
@@ -1338,19 +1396,22 @@ impl TuiApp {
         match &self.event_bus {
             Some(bus) => match bus.publish_blocking(event) {
                 Ok(()) => {
-                    let msg = format!("{type_name} request published");
+                    let msg = crate::t!("status.request_published").replacen("{}", type_name, 1);
                     self.state.set_status(msg, Severity::Info);
                 }
                 Err(e) => {
                     self.state.set_status(
-                        format!("failed to publish {type_name}: {e}"),
+                        // 双占位:先替换类型名,再替换错误详情
+                        crate::t!("status.publish_failed")
+                            .replacen("{}", type_name, 1)
+                            .replacen("{}", &e.to_string(), 1),
                         Severity::Error,
                     );
                 }
             },
             None => {
                 self.state
-                    .set_status("event bus not available", Severity::Error);
+                    .set_status(crate::t!("status.event_bus_unavailable"), Severity::Error);
             }
         }
     }
@@ -1363,16 +1424,17 @@ impl TuiApp {
             TuiCommand::ShowHelp => self.switch_panel_to(PanelId::Help),
             TuiCommand::OpenPopup(kind) => self.state.popup_stack.push(kind),
             // M4:破坏性控制命令先弹出确认框,由操作员二次确认后再发布事件
+            // (B4-I:prompt 文案走键表,control_confirm 拼接 "{prompt} {target}?")
             TuiCommand::RequestQuestPause(quest_id) => {
                 self.state.popup_stack.push(PopupKind::control_confirm(
-                    "Pause quest",
+                    crate::t!("status.pause_quest"),
                     &quest_id,
                     format!("pause:{quest_id}"),
                 ));
             }
             TuiCommand::RequestQuestResume(quest_id) => {
                 self.state.popup_stack.push(PopupKind::control_confirm(
-                    "Resume quest",
+                    crate::t!("status.resume_quest"),
                     &quest_id,
                     format!("resume:{quest_id}"),
                 ));
@@ -1380,7 +1442,7 @@ impl TuiApp {
             // M4 扩展:cancel 是破坏性操作,与 pause/resume 一致走确认流程
             TuiCommand::RequestQuestCancel(quest_id) => {
                 self.state.popup_stack.push(PopupKind::control_confirm(
-                    "Cancel quest",
+                    crate::t!("status.cancel_quest"),
                     &quest_id,
                     format!("cancel:{quest_id}"),
                 ));
@@ -1396,7 +1458,7 @@ impl TuiApp {
             TuiCommand::RequestVote { proposal_id, vote } => {
                 let vote_str = vote.as_str();
                 self.state.popup_stack.push(PopupKind::control_confirm(
-                    &format!("Vote {vote_str} on proposal"),
+                    &crate::t!("status.vote_on_proposal").replacen("{}", vote_str, 1),
                     &proposal_id,
                     format!("vote:{vote_str}:{proposal_id}"),
                 ));
@@ -1407,7 +1469,7 @@ impl TuiApp {
             TuiCommand::SetTickInterval(ms) => {
                 self.config.tick_interval_ms = ms;
                 self.state.status_message = Some((
-                    format!("Tick interval set to {}ms (applies next session)", ms),
+                    crate::t!("status.tick_interval_set").replacen("{}", &ms.to_string(), 1),
                     crate::popup::Severity::Info,
                 ));
             }
@@ -1422,7 +1484,7 @@ impl TuiApp {
                 self.state.filter_keyword = Some(quest_id.clone());
                 self.switch_panel_to(PanelId::EventStream);
                 self.state.set_status(
-                    format!("Jumped to EventStream, filter: {quest_id}"),
+                    crate::t!("status.jumped_eventstream_filtered").replacen("{}", &quest_id, 1),
                     Severity::Info,
                 );
             }
@@ -1443,21 +1505,21 @@ impl TuiApp {
                 match action {
                     QuestAction::Pause => {
                         self.state.popup_stack.push(PopupKind::control_confirm(
-                            "Pause quest",
+                            crate::t!("status.pause_quest"),
                             &id,
                             format!("pause:{id}"),
                         ));
                     }
                     QuestAction::Resume => {
                         self.state.popup_stack.push(PopupKind::control_confirm(
-                            "Resume quest",
+                            crate::t!("status.resume_quest"),
                             &id,
                             format!("resume:{id}"),
                         ));
                     }
                     QuestAction::Terminate => {
                         self.state.popup_stack.push(PopupKind::control_confirm(
-                            "Terminate quest",
+                            crate::t!("status.terminate_quest"),
                             &id,
                             format!("terminate:{id}"),
                         ));

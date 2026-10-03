@@ -119,6 +119,19 @@ pub fn explores_inline(counter: u64) -> bool {
     (counter / SAMPLE_EVERY).is_multiple_of(2)
 }
 
+/// 该 kind 是否允许被校准采样/写表 —— R2/离线学习通道一律排除。
+///
+/// WHY:ADR-195 D2 把 R2 冻结面列为「任何后端/非确定改造都不得触碰」的永久排除区。
+/// [`TaskKind::GsoeEvaluate`] 是离线学习通道（`dispatch.rs`「阈值 500,离线通道,R2 约束
+/// 不动」),其阈值不得由运行时统计经 `CHIMERA_COMPUTE_CALIBRATION=apply` 改写 ——
+/// 那会把 R2 解冻的判据从「影子期治理(ADR-042/052/053)」降格为「一个环境字符串」。
+/// 这是**结构性护栏**,优先于运行期默认值(`off`)。若未来扩容 TaskKind(Phase B2),须
+/// 同步复核此判别位。
+#[must_use]
+const fn calibration_eligible(kind: TaskKind) -> bool {
+    !matches!(kind, TaskKind::GsoeEvaluate)
+}
+
 /// 单个 kind 的双桶吞吐样本（µs/项）
 #[derive(Debug, Default)]
 struct Buckets {
@@ -182,6 +195,11 @@ impl Calibrator {
 
     /// 记录一条路径样本,并在两桶各够 `min_samples` 时做一次终局判定
     pub fn record(&self, kind: TaskKind, path: ExecPath, n_items: usize, elapsed: Duration) {
+        // R2/离线通道不采样(结构性护栏,见 [`calibration_eligible`]):不累积样本即不会产生
+        // 任何 Promote/Reject 判定,apply_pending 亦无从改写。
+        if !calibration_eligible(kind) {
+            return;
+        }
         let idx = kind_index(kind);
         let Some(slot) = self.slots.get(idx) else {
             return;
@@ -269,6 +287,10 @@ impl Calibrator {
             let Some(&kind) = TaskKind::ALL.get(idx) else {
                 continue;
             };
+            // 防御性二次把关:R2/离线通道绝不写表(即便上游 record 已排除,双保险)
+            if !calibration_eligible(kind) {
+                continue;
+            }
             let threshold = slot.candidate.load(Ordering::Relaxed) as usize;
             let samples = slot.samples.load(Ordering::Relaxed) as u32;
             // chunk 沿用表内现值:本批不主张 chunk 语义（该字段当前无消费者,ADR-196 D2-ter）
@@ -545,6 +567,43 @@ mod tests {
         }
         let after = c.snapshot()[kind_index(TaskKind::Generic)].decided;
         assert_eq!(after, first, "同一 kind 只允许一次终局判定(防 p-hacking)");
+    }
+
+    #[test]
+    fn r2_offline_kind_is_never_sampled_or_written() {
+        // ADR-195 D2:GsoeEvaluate 属 R2 冻结面(离线学习通道,dispatch.rs「R2 约束不动」)。
+        // 结构性护栏要求:即使喂入「池碾压 Inline」的极端优势样本,校准也不得为其
+        // 采样/判定,`apply` 模式更不得改写其阈值 —— 否则 R2 解冻判据会被降格为
+        // 一个环境字符串(CHIMERA_COMPUTE_CALIBRATION=apply)。
+        let c = Calibrator::new_with_kinds();
+        let min = SequentialTestConfig::default().min_samples;
+        for _ in 0..min {
+            c.record(
+                TaskKind::GsoeEvaluate,
+                ExecPath::Inline,
+                10,
+                Duration::from_micros(1000),
+            );
+            c.record(
+                TaskKind::GsoeEvaluate,
+                ExecPath::Pool,
+                10,
+                Duration::from_micros(2),
+            );
+        }
+        let snap = &c.snapshot()[kind_index(TaskKind::GsoeEvaluate)];
+        assert_eq!(snap.inline_samples, 0, "R2 kind 不得累积 inline 样本");
+        assert_eq!(snap.pool_samples, 0, "R2 kind 不得累积 pool 样本");
+        assert_eq!(snap.decided, Decided::Pending, "R2 kind 不得产生任何判定");
+        let bridge = super::super::bridge::bridge();
+        let before = bridge.threshold_of(TaskKind::GsoeEvaluate);
+        let written = c.apply_pending(bridge, CalibrationMode::Apply);
+        assert_eq!(written, 0, "apply 模式也不得为 R2 kind 写表");
+        assert_eq!(
+            bridge.threshold_of(TaskKind::GsoeEvaluate),
+            before,
+            "R2 kind 阈值必须纹丝不动"
+        );
     }
 
     #[test]

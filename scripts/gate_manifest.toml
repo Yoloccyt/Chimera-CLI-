@@ -953,5 +953,14 @@ kind = "light"
 test_kind = "cross_crate"
 note = "Windows PowerShell 5.1 parity 守门:含非 ASCII 字节的 .ps1 必须携 UTF-8 BOM。实测 24 个 .ps1 的工作树副本中 17 个违规、其中 11 个在 5.1 下根本解析失败（合计 55 个 parse error，包括被根 e2e 调用的 check_dependency_rules.ps1）——因 CI 与 gate_manifest 均走 pwsh(默认 UTF-8)，该缺陷长期无人发现。HEAD blob 实测 20/24 本已带 BOM（4 个不带的是纯 ASCII），即丢失属本机工作树漂移而 git status 当时报无改动 ⇒ 本门不依赖 git 可见性，做逐字节判据，同时盖本机漂移与仓库未来回归"
 
+[[gate]]
+id = "G-86"
+spec_ref = "ADR-195"
+cmd = "{python} scripts/check_accel_exclusion.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "加速器/推理栈排除门(ADR-195 V1/D5):把'零 GPU 依赖'从一次性人工核对升为机器判据。当前排除靠 feature 非激活而非结构隔离——nmc-encoder 直接依赖 mel_spec=\"0.4\",其可选 feature 面(wgpu→bytemuck+pollster / cuda / ort-tensor→ort,default=[])可在零 ADR、零评审可见决策下把 GPU/ONNX-Runtime 栈拖入 Cargo.lock;ort 仅 MSVC 破 windows-gnu 钉定,wgpu 路径触发 ADR-195 D5 E1 无先例的 forbid(unsafe)×bytemuck::Pod 未决。本门断言 Cargo.lock 中 wgpu/wgpu-core/wgpu-hal/naga/ash/d3d12/candle/burn/ort 族 0 命中。用户 2026-10-02 明确指令授权据 Proposed ADR-195 V1 建此门(替代人工核对)。"
+
 
 

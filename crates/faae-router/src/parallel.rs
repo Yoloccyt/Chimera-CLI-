@@ -12,7 +12,7 @@
 //!   （并行或串行）。快照本身的成本随后又按下述"预计算"收口为零深拷贝。
 //! - **挂 ComputeBridge**:
 //!   [`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route) 按
-//!   `TaskKind::Generic` 三态判定 → `Inline`（n 小于阈值,串行路径）或 `Rayon`
+//!   `TaskKind::ExpertScore` 三态判定 → `Inline`（n 小于阈值,串行路径）或 `Rayon`
 //!   （[`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序）。
 //! - **保留回退**:`FaaeConfig::parallel_expert_scoring` 配置开关 +
@@ -22,7 +22,7 @@
 //!   断言测试锁定）。
 //!
 //! # TaskKind 选择
-//! `TaskKind::Generic`（阈值 10000,chunk 64）—— 任务约束"不新增 TaskKind 变体";
+//! `TaskKind::ExpertScore`（阈值 10000,chunk 64）—— 任务约束"本位为 ADR-196 C1 拆位所得专用登记位";
 //! 专家评分语义与现有 ClvSimilarity 相近,但 ClvSimilarity 语义为"CLV 相似度
 //! 配对（CLV × 快照）",评分对象是"专家 × 查询"批量打分,用 Generic 更贴切
 //! （Generic 为通用纯计算批处理,阈值 10000 与批量专家场景吻合）。
@@ -119,7 +119,7 @@ pub(crate) fn score_one(clv: &[f32], input: &ScoreInput) -> f32 {
 /// ComputeBridge 路由判定 — 两条评分路径共用的唯一决策点
 ///
 /// 配置/env 关闭 → 直接 `Inline`（等价于 `should_parallel` 为 false）,
-/// 否则按 `TaskKind::Generic` 的规模阈值判 `Inline` / `Rayon`。
+/// 否则按 `TaskKind::ExpertScore` 的规模阈值判 `Inline` / `Rayon`。
 ///
 /// # 为何是 `pub`（可见性加宽,仅此一处,加宽而非破坏）
 /// 决策结果是"本进程**真的**走了 rayon 分支"这一测试断言的唯一可观测点。
@@ -131,7 +131,7 @@ pub(crate) fn score_one(clv: &[f32], input: &ScoreInput) -> f32 {
 #[must_use]
 pub fn dispatch_plan(n: usize, parallel_enabled: bool) -> DispatchPlan {
     if should_parallel(parallel_enabled) {
-        bridge().route(TaskKind::Generic, n)
+        bridge().route(TaskKind::ExpertScore, n)
     } else {
         DispatchPlan::Inline
     }
@@ -147,7 +147,7 @@ pub fn dispatch_plan(n: usize, parallel_enabled: bool) -> DispatchPlan {
 ///
 /// 只断言 `Rayon` 方向（用例声称要覆盖的那一侧）,**不**反向断言小 n 的
 /// `Inline`:Inline 侧不是这些用例的证据目标,把阈值下沿钉死会让
-/// `TaskKind::Generic` 阈值的任何标定变更（ADR-198）都变成与本用例无关的
+/// `TaskKind::ExpertScore` 阈值的任何标定变更（ADR-198）都变成与本用例无关的
 /// 测试失败。
 #[cfg(test)]
 pub(crate) fn assert_rayon_branch(n: usize) {
@@ -198,7 +198,7 @@ fn collect_chunks<T: Send + 'static>(
 ///
 /// 路由判定:
 /// ① `should_parallel(config_flag)` 为 false（配置/env 关闭）→ 串行;
-/// ② `bridge().route(TaskKind::Generic, n)` 为 `Inline` → 串行;
+/// ② `bridge().route(TaskKind::ExpertScore, n)` 为 `Inline` → 串行;
 /// ③ 否则 → `spawn_compute_batch` 并行（CHUNK 分组）。
 ///
 /// `inputs` 以 `&Arc<Vec<ScoreInput>>` 传入:并行闭包捕获同一 Arc + 索引范围,
@@ -337,7 +337,7 @@ fn score_parallel(
         })
         .collect();
 
-    let results = bridge().spawn_compute_batch(TaskKind::Generic, tasks);
+    let results = bridge().spawn_compute_batch(TaskKind::ExpertScore, tasks);
     collect_chunks(results, inputs.len())
 }
 
@@ -436,7 +436,7 @@ fn score_scoring_parallel(
         })
         .collect();
 
-    let results = bridge().spawn_compute_batch(TaskKind::Generic, tasks);
+    let results = bridge().spawn_compute_batch(TaskKind::ExpertScore, tasks);
     collect_chunks(results, inputs.len())
 }
 
@@ -448,7 +448,7 @@ mod tests {
     use nexus_contracts::util::xts_top_k_by;
     use proptest::prelude::*;
 
-    /// `TaskKind::Generic` 的**文档化**并行阈值（与 `parallel.rs` 模块文档
+    /// `TaskKind::ExpertScore` 的**文档化**并行阈值（与 `parallel.rs` 模块文档
     /// 「阈值 10000」及 `nexus_core::compute::bridge` 的 `decide_three_way` 一致）
     ///
     /// 用途**仅限**回答"本用例是否**本应**落在 rayon 侧",供 `assert_rayon_branch`
@@ -766,7 +766,7 @@ mod tests {
     // 预计算路径 vs 旧路径等价性 —— 任意规模 n（属性测试）
     // ============================================================
 
-    /// 任意规模的 n 策略 —— 必须跨过 `TaskKind::Generic` 的 10_000 阈值,
+    /// 任意规模的 n 策略 —— 必须跨过 `TaskKind::ExpertScore` 的 10_000 阈值,
     /// 又不能把"每次收缩步"都变成万级大用例
     ///
     /// 分两档加权取（3:1,小规模为主）:

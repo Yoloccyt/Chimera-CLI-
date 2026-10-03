@@ -102,7 +102,7 @@ pub use popup::{PopupKind, PopupStack, Severity};
 pub use render::{
     gauge, gauge_thresholded, horizontal_bar_chart, latency_line, sparkline, sparkline_dual,
     sparkline_dual_colored, sparkline_thresholded, utilization_bar, virtual_scroll_window,
-    GaugeThreshold, FOOTER_TEXT, VIRTUAL_SCROLL_BUFFER,
+    GaugeThreshold, VIRTUAL_SCROLL_BUFFER,
 };
 pub use subscriber::EventSubscriber;
 pub use types::{

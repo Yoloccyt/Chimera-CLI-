@@ -174,9 +174,15 @@ fn test_router_panel_renders_title() {
     app.update();
     app.switch_panel_to(PanelId::Router);
 
+    // i18n(B4-I):面板名随 locale 切换,期望串与渲染同源经 t! 求值、locale 无关;
+    // 持 guard 串行化但不写全局 locale——不新增 En 窗口,避免污染同二进制内
+    // 依赖默认中文的并行测试
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let panel_label = chimera_tui::t!(PanelId::Router.name_key());
     let content = render_to_string(&mut app, 100, 30);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Router"),
+        compact.contains(panel_label),
         "Router panel title should be rendered, got: {}",
         &content[..content.len().min(200)]
     );
@@ -448,9 +454,14 @@ fn test_router_panel_empty_hot_capabilities_renders_placeholder() {
     app.switch_panel_to(PanelId::Router);
 
     // 不应 panic
+    // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
+    // (WHY 见 test_router_panel_renders_title 注)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let panel_label = chimera_tui::t!(PanelId::Router.name_key());
     let content = render_to_string(&mut app, 120, 40);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Router"),
+        compact.contains(panel_label),
         "Router panel should render title with empty hot capabilities"
     );
 }

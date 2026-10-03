@@ -12,7 +12,7 @@
 //!   为无副作用纯计算(无 IO/await/持锁);事件发布(`publish_encoded_event`,
 //!   tokio broadcast,IO 侧)留主线程按序执行,禁入 rayon 闭包。
 //! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route)
-//!   按 `TaskKind::ClvSimilarity` 三态判定 → `Inline`(n 小于阈值,串行)或 `Rayon`
+//!   按 `TaskKind::NmcEncode` 三态判定 → `Inline`(n 小于阈值,串行)或 `Rayon`
 //!   ([`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序)。
 //! - **保留回退**:`NmcConfig::parallel_encode` 配置开关 + `CHIMERA_NO_PARALLEL_NMC`
@@ -20,7 +20,7 @@
 //! - **确定性**:并行与串行逐元素一致(感知为确定性纯函数,断言测试锁定)。
 //!
 //! # TaskKind 选择
-//! `TaskKind::ClvSimilarity`(阈值 1000,chunk 64)—— 任务约束"不新增 TaskKind 变体";
+//! `TaskKind::NmcEncode`(阈值 1000,chunk 64)—— 任务约束"本位为 ADR-196 C1 拆位所得专用登记位";
 //! 批量编码的产出正是 **CLV**(512 维潜在向量),与 ClvSimilarity("CLV 相似度配对")
 //! 语义最接近;批量 > 1000 输入触发 Rayon,与批量编码场景吻合
 //! (Generic 阈值 10000 过高,批量编码通常 < 10K 输入/波次)。
@@ -81,7 +81,7 @@ pub(crate) fn should_parallel(config_flag: bool) -> bool {
 ///
 /// 路由判定:
 /// ① `should_parallel(config_flag)` 为 false(配置/env 关闭)→ 串行;
-/// ② `bridge().route(TaskKind::ClvSimilarity, n)` 为 `Inline` → 串行;
+/// ② `bridge().route(TaskKind::NmcEncode, n)` 为 `Inline` → 串行;
 /// ③ 否则 → `spawn_compute_batch` 并行(CHUNK 分组)。
 ///
 /// `inputs` 以 `&Arc<Vec<PerceptionInput>>` 传入:并行闭包捕获同一 Arc + 索引范围,
@@ -105,7 +105,7 @@ pub fn perceive_batch(
 ) -> Vec<Result<ClvOutput, NmcError>> {
     let n = inputs.len();
     if !should_parallel(parallel_enabled)
-        || bridge().route(TaskKind::ClvSimilarity, n) == DispatchPlan::Inline
+        || bridge().route(TaskKind::NmcEncode, n) == DispatchPlan::Inline
     {
         perceive_serial(encoder, inputs)
     } else {
@@ -162,7 +162,7 @@ fn perceive_parallel(
         })
         .collect();
 
-    let results = bridge().spawn_compute_batch(TaskKind::ClvSimilarity, tasks);
+    let results = bridge().spawn_compute_batch(TaskKind::NmcEncode, tasks);
 
     let mut out = Vec::with_capacity(inputs.len());
     let mut input_idx = 0usize;

@@ -199,6 +199,49 @@ impl PanelId {
         }
     }
 
+    /// 返回面板名 i18n 键(`panel.name.*`,经 `t!()` 按当前 locale 解析)
+    ///
+    /// B4-I(F-65):tab 栏/状态栏的面板名由硬编码 `as_str()` 改走键表,
+    /// Ctrl+L 切换语言随动。键名 match 返回 `&'static str` 而非运行时
+    /// `format!` 派生:`i18n::tr` 契约是 `&'static str`(零分配、缺键回退
+    /// 键名),沿用 slash_parser.rs 的 match 键范式;后缀与 `panel.border.*`
+    /// 对齐(28 个共有 + pvl_score/overwindow),便于键表对账,对齐由
+    /// i18n_completeness_test 专项断言守护。
+    pub fn name_key(&self) -> &'static str {
+        match self {
+            PanelId::Quest => "panel.name.quest",
+            PanelId::Parliament => "panel.name.parliament",
+            PanelId::Budget => "panel.name.budget",
+            PanelId::Memory => "panel.name.memory",
+            PanelId::Security => "panel.name.security",
+            PanelId::Health => "panel.name.health",
+            PanelId::Log => "panel.name.log",
+            PanelId::Help => "panel.name.help",
+            PanelId::Decay => "panel.name.decay",
+            PanelId::EventStream => "panel.name.eventstream",
+            PanelId::Router => "panel.name.router",
+            PanelId::McpNodes => "panel.name.mcp",
+            PanelId::Chtc => "panel.name.chtc",
+            PanelId::Timeline => "panel.name.timeline",
+            PanelId::OsaSparse => "panel.name.osa",
+            PanelId::ClvVector => "panel.name.clv",
+            PanelId::ResourceMonitor => "panel.name.resources",
+            PanelId::MetricsDashboard => "panel.name.metrics",
+            PanelId::Sysinfo => "panel.name.sysinfo",
+            PanelId::Chat => "panel.name.chat",
+            PanelId::SelfAssessment => "panel.name.self_assessment",
+            PanelId::DagViz => "panel.name.dag_viz",
+            PanelId::PvlScore => "panel.name.pvl_score",
+            PanelId::TaskManager => "panel.name.task",
+            PanelId::OverWindow => "panel.name.overwindow",
+            PanelId::ExperienceCardViz => "panel.name.experience_card_viz",
+            PanelId::InjectionStrategy => "panel.name.injection_strategy",
+            PanelId::Bench => "panel.name.bench",
+            PanelId::ReviewQueue => "panel.name.review_queue",
+            PanelId::Blackboard => "panel.name.blackboard",
+        }
+    }
+
     /// 返回面板的标题(用于渲染边框)
     pub fn title(&self) -> &'static str {
         match self {

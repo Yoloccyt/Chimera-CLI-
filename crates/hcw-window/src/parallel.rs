@@ -14,7 +14,7 @@
 //!   (**段间保序**)→ 全局评分序列与串行路径**逐元素一致**。
 //!   Top-K 选择 + 贪心保留(依赖全局排序)仍串行执行,与注入前逐位一致。
 //! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route)
-//!   按 `TaskKind::CscCollapseScore` 三态判定 → `Inline`(n 小于阈值,串行)或 `Rayon`
+//!   按 `TaskKind::HcwEntryScore` 三态判定 → `Inline`(n 小于阈值,串行)或 `Rayon`
 //!   ([`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序)。
 //! - **保留回退**:`HcwConfig::parallel_compress` 配置开关 + `CHIMERA_NO_PARALLEL_HCW`
@@ -23,7 +23,7 @@
 //! - **确定性**:并行与串行逐元素一致 + 顺序断言(段序不变,断言测试锁定)。
 //!
 //! # TaskKind 选择
-//! `TaskKind::CscCollapseScore`(阈值 200,chunk 64)—— 任务约束"不新增 TaskKind 变体";
+//! `TaskKind::HcwEntryScore`(阈值 200,chunk 64)—— 任务约束"本位为 ADR-196 C1 拆位所得专用登记位";
 //! 压缩评分是对条目批量计算重要性分数,与 CscCollapseScore("压缩折叠评分")语义
 //! 最接近;窗口条目数 > 200 触发 Rayon(阈值低,窗口压缩场景条目数百~数千,吻合)。
 //!
@@ -75,7 +75,7 @@ pub(crate) fn should_parallel(config_flag: bool) -> bool {
 ///
 /// 路由判定:
 /// ① `should_parallel(config_flag)` 为 false(配置/env 关闭)→ 串行;
-/// ② `bridge().route(TaskKind::CscCollapseScore, n)` 为 `Inline` → 串行;
+/// ② `bridge().route(TaskKind::HcwEntryScore, n)` 为 `Inline` → 串行;
 /// ③ 否则 → 段间并行评分(CHUNK 分组)。
 ///
 /// **保序保证**:每个 chunk 段内按输入序逐条目评分(段内保序),各段按段序拼接
@@ -97,7 +97,7 @@ pub(crate) fn score_entries(
     parallel_enabled: bool,
 ) -> Vec<f32> {
     if !should_parallel(parallel_enabled)
-        || bridge().route(TaskKind::CscCollapseScore, entries.len()) == DispatchPlan::Inline
+        || bridge().route(TaskKind::HcwEntryScore, entries.len()) == DispatchPlan::Inline
     {
         return score_serial(
             entries,
@@ -195,7 +195,7 @@ fn score_parallel(
         })
         .collect();
 
-    let results = bridge().spawn_compute_batch(TaskKind::CscCollapseScore, tasks);
+    let results = bridge().spawn_compute_batch(TaskKind::HcwEntryScore, tasks);
 
     // 按段序拼接(段间保序),总长度 = 输入数
     let mut out = Vec::with_capacity(all.len());

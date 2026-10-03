@@ -98,6 +98,11 @@ pub enum SlashEffect {
     Status,
     /// 配置健康自检(诚实汇总配置要点)
     Doctor,
+    /// 导出数据(B4-S F-56:/export 与 Ctrl+E 同效;经 export.run 本地动作
+    /// 打开导出确认弹窗)
+    ExportRun,
+    /// 打开配置速调菜单(B4-S F-56:/config 与 config.edit 本地动作同效)
+    ConfigEdit,
     /// 退出 TUI
     Exit,
     /// 已登记未接线 — 诚实反馈(不伪造功能)
@@ -181,9 +186,13 @@ fn instant_effect(name: &str, args: &str) -> SlashEffect {
         "help" => SlashEffect::Help,
         "status" => SlashEffect::Status,
         "doctor" => SlashEffect::Doctor,
+        // B4-S(F-56):/export /config 接线既有本地动作(LOCAL_ACTION_TABLE
+        // 已登记 export.run/config.edit),此前落 HonestTodo 与功能真实存在矛盾
+        "export" => SlashEffect::ExportRun,
+        "config" => SlashEffect::ConfigEdit,
         "exit" => SlashEffect::Exit,
         // 已登记未接线(vim/statusline/mention/debug-config/
-        // new/clear/rename/export/diff/undo/redo/model/mode/plan/permissions 等;
+        // new/clear/rename/diff/undo/redo/model/mode/plan/permissions 等;
         // Concord W4:shell 直通经 submit_slash 前置 HonestTodo 处理)
         _ => SlashEffect::HonestTodo,
     }
