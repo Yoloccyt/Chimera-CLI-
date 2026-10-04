@@ -36,6 +36,11 @@ pub async fn execute(config: &ChimeraConfig) -> Result<()> {
         version = %config.nexus.version,
         "chimera serve: 真实核心装配完成（QuestBackend + critical 旁路订阅，C1/C12）"
     );
+    // A1/ADR-197 覆盖扩展（2026-10-04）:协议宿主路径同启 L1 计算池饱和观测报告器
+    // ——此前仅 experience_loop（TUI）启动,serve 宿主无饱和可见性。WHY 在本层:
+    // nexus-core 拥有池统计但不持 EventBus,组合根同时持有二者（同款接线先例
+    // 见 experience_loop.rs）;句柄命名绑定保活至进程退出（随 runtime 释放）。
+    let _saturation_reporter = nexus_core::compute::spawn_saturation_reporter(ctx.bus.clone(), 60);
     let server = crate::composition::build_app_server(ctx);
     let transport = StdinTransport::new();
 

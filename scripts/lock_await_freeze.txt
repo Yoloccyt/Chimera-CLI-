@@ -39,7 +39,6 @@ crates/nexus-app-server/src/transport.rs:169  # DESIGN stdio reader: read_line m
 crates/nexus-app-server/src/transport.rs:186  # DESIGN stdio writer: NDJSON frame written as one atomic unit
 crates/nexus-app-server/src/transport.rs:206  # DESIGN stdio writer: NDJSON error frame written as one atomic unit (send_decode_error)
 crates/nexus-app-server/src/sse.rs:121        # DESIGN SSE writer: single-connection frame atomicity
-crates/mlc-engine/src/engine.rs:912           # DESIGN migration_locks: one MemoryId migration = atomic txn incl. its completion event
 
 # --- (B) SCANNER-DEBT: value extracted from the lock, not a guard ------------
 # If check_lock_await.sh ever learns to see through value extraction, delete

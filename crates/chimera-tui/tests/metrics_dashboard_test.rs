@@ -246,3 +246,26 @@ fn test_selected_cell_border_highlighted_and_follows_navigation() {
         "非选中 cell 不应残留高亮色, got {corner_after:?}"
     );
 }
+
+#[test]
+fn test_selected_cell_highlight_consumes_injected_accent() {
+    // F-37:高亮色不再硬编码 Cyan,经 `Panel::set_accent` 注入
+    // (TuiApp 装配期 / cycle_theme_action 切主题时广播)。本用例锁定
+    // 面板消费注入值的路径:注入后选中格边框随注入色渲染。
+    let mut panel = MetricsDashboardPanel::new();
+    panel.set_accent(Color::Magenta);
+    let state = TuiState::new();
+    let (mut buf, area) = make_buffer(100, 20);
+
+    panel.render(&state, area, &mut buf);
+    let corner = buf
+        .cell(Position::new(0, 1))
+        .expect("corner cell exists")
+        .style()
+        .fg;
+    assert_eq!(
+        corner,
+        Some(Color::Magenta),
+        "注入 accent 后选中格边框应为注入色而非硬编码, got {corner:?}"
+    );
+}

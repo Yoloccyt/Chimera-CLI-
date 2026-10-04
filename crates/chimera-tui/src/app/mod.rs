@@ -292,7 +292,7 @@ impl TuiApp {
 
         // Task 1.15.4:先取出 main_panel_ratio,避免 config 在结构体字面量中被 move 后再使用
         let main_panel_ratio = config.main_panel_ratio;
-        Ok(Self {
+        let mut app = Self {
             config,
             state,
             data_source,
@@ -324,7 +324,24 @@ impl TuiApp {
             action_registry: crate::actions::ActionRegistry::with_builtin_domains(),
             // F-08:斜杠注册表构造期一次,四处消费点(补全/提交/导航/渲染)零重建
             slash_registry: crate::actions::SlashCommandRegistry::with_builtin_commands(),
-        })
+        };
+        // F-37:主题强调色装配期注入 —— 面板层仅持 &TuiState 不可达 TuiApp 主题
+        // (见 Panel::set_accent),切主题时亦经此广播(cycle_theme_action)。
+        app.broadcast_accent();
+        Ok(app)
+    }
+
+    /// 将主题强调色广播到全部面板(F-37)
+    ///
+    /// WHY 广播:主题色归 `TuiApp`(config.colors.resolve),面板层仅持
+    /// `&TuiState`;`Panel::set_accent` 默认 no-op,仅消费 accent 的面板
+    /// (现 MetricsDashboard 选中格)覆盖生效,其余面板零改动。
+    /// 调用点:装配期(`with_data_source`)与 `cycle_theme_action` 切主题后。
+    fn broadcast_accent(&mut self) {
+        let accent = self.theme_accent();
+        for panel in &mut self.panels {
+            panel.set_accent(accent);
+        }
     }
 
     /// 将 EventBus 绑定到已有 TUI 应用

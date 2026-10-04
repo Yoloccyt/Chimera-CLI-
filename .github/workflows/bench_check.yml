@@ -158,6 +158,10 @@ jobs:
           # 4ms redline，分层后 ≤2ms）。与 perf_thresholds.toml 三表同批（I7 机器断言兜底）；
           # 100k 档属 dev-only 手动取数（CHIMERA_HNSW_BENCH_FULL=1），不入 CI 日跑。
           run_bench hnsw_tiered        cargo bench -p mlc-engine --bench hnsw_tiered
+          # 静默窗口升格（2026-10-04,CPU 前置均值 6.8%）:faae_parallel_bench 由
+          # dev-only → registered。hot/scoring 组有绝对阈值守门（见下方 THRESHOLDS_NS）;
+          # concurrent 组随文件注册进 CI 运行,绝对阈值待 CI 首跑数据后校准（不假锁）。
+          run_bench faae_parallel      cargo bench -p faae-router --bench faae_parallel_bench
 
       - name: Assert thresholds
         # WHY 用 Python 解析 criterion 的 estimates.json:
@@ -288,6 +292,12 @@ jobs:
               "sigmoid_scalar":      500,
               "sigmoid_map":         200_000,
               "percentile_sorted":   1_000,
+              # 静默窗口重锁（2026-10-04）:faae 升格。依据 = 静默 release 单跑 median
+              # （docs/reports/cpu-plane-closeout-2026-10-04.md §4）:
+              #   faae_scoring/serial_24k 19.915ms（该键 max 组）→ ×2.5 余量 50ms
+              #   faae_hot_scoring/serial_24k 12.201ms（该键 max 组）→ ×2.5 余量 30ms
+              "faae_scoring":        50_000_000,
+              "faae_hot_scoring":    30_000_000,
           }
 
           # 路径关键词映射:criterion 目录名 → benchmark crate
@@ -381,6 +391,10 @@ jobs:
               "osa_sequential_baseline": ["sequential_compute_5_masks"],
               # (rhi_judge path_keyword 已随 auto-dpo 删除同步摘除，见 ADR-190)
               "bus_bench":           ["single_publish_latency", "concurrent_subscribe_throughput", "publish_batch_vs_serial"],
+              # 与 scripts/perf_thresholds.toml [path_keywords] 同步（faae 升格批次,
+              # I2 已核:与全部既有键双向互不为子串）
+              "faae_scoring":        ["faae_scoring/serial_24k", "faae_scoring/parallel_24k"],
+              "faae_hot_scoring":    ["faae_hot_scoring/serial_24k", "faae_hot_scoring/parallel_24k"],
           }
 
           criterion_dir = Path("target/criterion")

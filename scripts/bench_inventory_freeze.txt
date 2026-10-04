@@ -61,7 +61,11 @@ event-bus|bus_credit_bench|dev-only|信用记账路径开发基准
 event-bus|bus_shard_bench|dev-only|分片职责 benchmark,无 KPI 目标
 event-bus|pattern_index_bench|dev-only|模式索引路径开发基准
 event-bus|tui_action_dispatch_bench|dev-only|TUI 动作分发基准,功能层无性能契约
-faae-router|faae_parallel_bench|dev-only|FA 亲和并行基准,实验探针
+# faae-router|faae_parallel_bench 行已删除(2026-10-04,静默窗口升格 registered):
+#   run_bench faae_parallel 两源登记(perf_thresholds.toml [[run_bench]] + bench_check.yml)
+#   + faae_scoring/faae_hot_scoring 两阈值键(静默 median ×2.5);
+#   并发组 faae_concurrent_route 阈值待 CI 首跑数据校准(不假锁)。
+#   删除一行 = 该 bench 升格为受门禁守护 —— 本文件自订约定。
 faae-router|operator_select|dev-only|算子选择开发基准
 faae-router|route|dev-only|路由热路径补充开发基准
 gsoe-evolution|channel_b_benchmark|dev-only|Channel-B 进化通道实验基准

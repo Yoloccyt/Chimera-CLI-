@@ -90,6 +90,11 @@ pub struct MetricsDashboardPanel {
     cells: Vec<Option<Cell>>,
     /// 当前选中 cell 索引(键盘导航,默认 0)
     selected: usize,
+    /// 主题强调色(选中格边框高亮用;F-37 后经 `Panel::set_accent` 注入)
+    ///
+    /// WHY 默认 Cyan:`TuiApp` 装配/切主题时会广播实际值,默认值取 Dark
+    /// 主题预设 accent,使面板级测试无需构造 TuiApp 即可获得生产同款配色。
+    accent: Color,
 }
 
 impl Default for MetricsDashboardPanel {
@@ -105,6 +110,7 @@ impl MetricsDashboardPanel {
         Self {
             cells: (0..GRID_SIZE).map(|_| None).collect(),
             selected: 0,
+            accent: Color::Cyan,
         }
     }
 
@@ -265,6 +271,10 @@ impl Panel for MetricsDashboardPanel {
         PanelId::MetricsDashboard
     }
 
+    fn set_accent(&mut self, accent: ratatui::style::Color) {
+        self.accent = accent;
+    }
+
     fn title(&self) -> Line<'static> {
         // WHY BOLD 修饰:5×2 网格是密集视图,标题需醒目
         Line::from(crate::t!("panel.border.metrics")).style(
@@ -361,15 +371,14 @@ impl Panel for MetricsDashboardPanel {
             // F-38:对选中 cell 叠加 accent 边框(复用 app/render.rs 多窗格
             // 焦点高亮的 Block+border_style 模式),使 hjkl/方向键导航有视觉
             // 反馈 —— 此前 selected 被导航修改但渲染路径零消费,按键后无反馈。
-            // WHY 硬编码 Cyan 而非 theme_accent():主题色是 TuiApp 的
-            // pub(crate) 方法,面板层(仅持 &TuiState)不可达;经 TuiState
-            // 透传 theme 属核心状态类型变更(需 ADR)。本面板 viz 色板
-            // (line_chart/bar_chart 等)本就硬编码,高亮沿用同一色板,
-            // Cyan 亦即 Dark 主题的 accent 值。
+            // F-37:高亮色不再硬编码 —— 批次四时主题色是 TuiApp 的 pub(crate)
+            // 方法,面板层(仅持 &TuiState)不可达而暂用 Cyan(与本面板 viz
+            // 色板同族,亦即 Dark 主题预设 accent);现经 `Panel::set_accent`
+            // 注入(TuiApp 装配/切主题广播),随用户主题与 colors.accent 定制联动。
             if idx == self.selected {
                 let highlight = Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan));
+                    .border_style(Style::default().fg(self.accent));
                 Widget::render(highlight, cell_area, buf);
             }
         }

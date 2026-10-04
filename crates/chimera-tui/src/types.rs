@@ -1107,6 +1107,11 @@ pub struct TuiState {
     pub sys_metrics: SystemMetrics,
     /// 系统资源指标历史(sparkline: CPU 使用率 × 10 的 u64 表示)
     pub sys_metrics_history: Vec<u64>,
+    /// 网络 RX 速率历史(KB/s,F-39 喂数接线;DataSnapshot 同名字段同步,
+    /// ResourceMonitor 面板网络 sparkline fallback 消费)
+    pub net_rx_history: Vec<u64>,
+    /// 网络 TX 速率历史(KB/s,与 `net_rx_history` 成对推进)
+    pub net_tx_history: Vec<u64>,
     /// 当前 tick 模式(Normal/Eco),状态栏展示用
     #[serde(default)]
     pub tick_mode: TickMode,
@@ -1399,6 +1404,8 @@ impl TuiState {
             // P8 ResourceMonitor 面板默认值
             sys_metrics: SystemMetrics::default(),
             sys_metrics_history: Vec::new(),
+            net_rx_history: Vec::new(),
+            net_tx_history: Vec::new(),
             tick_mode: TickMode::default(),
             // M3b Chat 面板默认值(空历史 + 空闲状态)
             chat_messages: Vec::new(),

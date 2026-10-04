@@ -13,7 +13,7 @@
 //! 同一代码得出不可复现的数字（本仓实测同机跨轮方差可达 ±40%，不该再叠一个可变开关）。
 //!
 //! # 基准场景
-//! - `bridge_route`:六类 `TaskKind` 经 [`ComputeBridge::route`] 的三态派发延迟
+//! - `bridge_route`:全登记类（`TaskKind::ALL`）经 [`ComputeBridge::route`] 的三态派发延迟
 //!   (纳秒级查表,ADR-127);
 //! - `bridge_reduce`:经桥委托 [`reduce`](nexus_core::compute::reduce::reduce)
 //!   的 Deterministic / Audit 双模式归约延迟。
@@ -31,9 +31,9 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use nexus_core::compute::reduce::{reduce, ReduceMode};
 use nexus_core::compute::{bridge, ComputeBridge, TaskKind};
 
-/// bench 1:六类任务经 `bridge().route(kind, n)` 的路由派发延迟
+/// bench 1:全登记类任务经 `bridge().route(kind, n)` 的路由派发延迟
 ///
-/// WHY 覆盖六类登记:`TaskKind` 穷举六类,route 查表命中不同数组槽位,
+/// WHY 覆盖全登记类(遍历 `TaskKind::ALL` 单源):route 查表命中不同数组槽位,
 /// 验证 arc-swap RCU 快照 + 常数数组索引在每类上保持纳秒级下限。
 fn bridge_route(c: &mut Criterion) {
     let b: &ComputeBridge = bridge();

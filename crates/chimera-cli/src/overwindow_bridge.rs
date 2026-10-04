@@ -40,6 +40,10 @@ use repo_wiki::search::{hybrid_search, HybridSearchConfig};
 const DEFAULT_CHUNK_TOKENS: usize = 256;
 /// 默认精排 Top-K（≤ 候选上限由 OverWindowFallback 截断）
 const DEFAULT_TOP_K: usize = 128;
+/// 聚类块稀疏面文本上限（字符）：从成员 chunk 文本回填有界关键词面，
+/// 供 provider 稀疏道 `contains` 命中——修复聚类分支 `content=""` 致稀疏检索道
+/// 在生产恒 0 命中的缺陷；硬上限护 provider alloc/延迟（provider 为 alloc-bound）。
+const SPARSE_FACE_MAX_CHARS: usize = 512;
 
 /// 语料块（chunk 化 + kvbsr 聚类后的候选单元）
 struct CorpusBlock {
@@ -127,15 +131,30 @@ impl OverWindowBridge {
             for (i, (text, _tokens)) in chunks.iter().enumerate() {
                 new_table.push(CorpusBlock {
                     id: format!("chunk-{i}"),
-                    content: text.clone(),
+                    content: bounded_sparse_face(std::iter::once(text.as_str())),
                     clv: make_chunk_clv(i as u64),
                 });
             }
         } else {
+            // 稀疏面回填：SemanticBlock 保留成员 tool_id（"chunk-{i}"，与上面 ToolVector
+            // 构造同源），据此从 chunk 文本重建有界关键词面。修复前此处 content 恒空，
+            // provider 稀疏道对聚类块永远 0 命中→hybrid_search 退化为纯 dense。
+            let text_of: std::collections::HashMap<String, &str> = chunks
+                .iter()
+                .enumerate()
+                .map(|(i, (t, _))| (format!("chunk-{i}"), t.as_str()))
+                .collect();
             for block in &blocks {
+                // 稀疏面 = 成员 chunk 文本按 tool 序拼接、统一有界（bounded_sparse_face）。
+                let content = bounded_sparse_face(
+                    block
+                        .tools
+                        .iter()
+                        .filter_map(|tool_id| text_of.get(tool_id.as_str()).copied()),
+                );
                 new_table.push(CorpusBlock {
                     id: block.block_id.clone(),
-                    content: String::new(), // 聚类块无文本面（sparse 用块序兜底）
+                    content,
                     clv: CLV::from_vec(block.block_vector.clone())
                         .unwrap_or_else(|_| make_chunk_clv(0)),
                 });
@@ -225,6 +244,27 @@ fn chunk_corpus(corpus: &str, chunk_tokens: usize) -> Vec<(String, usize)> {
 /// 确定性 chunk CLV（SplitMix64 派生——与 eval harness 同源风格）
 fn make_chunk_clv(seed: u64) -> CLV {
     hcw_window::recall::eval::make_clv(seed ^ 0x9E37_79B9_7F4A_7C15, None, 0.0)
+}
+
+/// 按迭代顺序拼接成员文本为稀疏关键词面，char 级累加至 `SPARSE_FACE_MAX_CHARS`
+/// 截断（UTF-8 安全，沿用 `chunk_corpus` 的 char 纪律）。聚类/降级两分支统一走此
+/// 助手，使“稀疏面文本 ≤ 上限”成为全局不变量（护 provider `contains` 扫描成本上界）。
+fn bounded_sparse_face<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
+    let mut content = String::new();
+    let mut nchars = 0usize;
+    for part in parts {
+        if nchars >= SPARSE_FACE_MAX_CHARS {
+            break;
+        }
+        for c in part.chars() {
+            if nchars >= SPARSE_FACE_MAX_CHARS {
+                break;
+            }
+            content.push(c);
+            nchars += 1;
+        }
+    }
+    content
 }
 
 /// provider 确定性内核：对快照表计算喂给 RRF 之前的 dense_ids/sparse_ids。
@@ -573,5 +613,161 @@ mod tests {
             ],
             "sparse 全并列须按 id 字典序升序"
         );
+    }
+
+    /// TDD 驱动测：修复前聚类块 content 恒空 → 无块含关键词（红）；回填成员文本后（绿）。
+    #[test]
+    fn clustered_content_has_sparse_face() {
+        let bridge = OverWindowBridge::new(EventBus::new()).unwrap();
+        // 关键词置于首部：首块有界稀疏面（512 字符）必含它，不受分块/截断位置影响。
+        let mut corpus = String::from("ZZZSPARSEKEY 语义检索针块。");
+        for i in 0..40 {
+            corpus.push_str(&format!("普通内容块 {i} 无关文本。"));
+        }
+        bridge.set_corpus(&corpus);
+        let table = bridge
+            .corpus_blocks
+            .read()
+            .unwrap_or_else(|p| p.into_inner());
+        assert!(
+            table.iter().any(|b| b.content.contains("ZZZSPARSEKEY")),
+            "聚类块应回填成员 chunk 文本作为稀疏面（否则稀疏道在生产恒空失效）"
+        );
+    }
+
+    /// 有界性：任一块 content 字符数 ≤ SPARSE_FACE_MAX_CHARS。
+    #[test]
+    fn sparse_face_bounded_by_cap() {
+        let bridge = OverWindowBridge::new(EventBus::new()).unwrap();
+        let corpus = "很长的重复内容段落用于触发截断处理验证 ".repeat(4000);
+        bridge.set_corpus(&corpus);
+        let table = bridge
+            .corpus_blocks
+            .read()
+            .unwrap_or_else(|p| p.into_inner());
+        for b in table.iter() {
+            assert!(
+                b.content.chars().count() <= SPARSE_FACE_MAX_CHARS,
+                "稀疏文本超界：{} > {}",
+                b.content.chars().count(),
+                SPARSE_FACE_MAX_CHARS
+            );
+        }
+    }
+
+    /// 确定性：同语料两次 set_corpus，块 content 多重集一致（不依赖块序）。
+    #[test]
+    fn set_corpus_content_deterministic() {
+        let corpus = "模块A 路由。模块B 缓存。模块C 检索。重复填充以超过单块。".repeat(30);
+        let snapshot = || -> Vec<String> {
+            let b = OverWindowBridge::new(EventBus::new()).unwrap();
+            b.set_corpus(&corpus);
+            let mut v: Vec<String> = b
+                .corpus_blocks
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .map(|blk| blk.content.clone())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(snapshot(), snapshot(), "set_corpus 内容须可复现");
+    }
+
+    /// 端到端：稀疏道确实影响排序——含查询关键词的块（hits>0）必排 sparse_ids 首位。
+    /// 修复前 content 恒空→所有 hits=0→稀疏序退化为 block_id(Uuid) 序，首位未必是该块。
+    #[test]
+    fn clustered_sparse_lane_influences_provider_ranking() {
+        // 小 chunk_tokens 强制多块（空共现→每 chunk 独立成块）；关键词置首部→入首块稀疏面。
+        let bridge = OverWindowBridge::new(EventBus::new())
+            .unwrap()
+            .with_chunk_tokens(8);
+        let mut corpus = String::from("ZZQRY 关键词块。");
+        for i in 0..60 {
+            corpus.push_str(&format!("填充普通块{i}。"));
+        }
+        bridge.set_corpus(&corpus);
+        let table = bridge
+            .corpus_blocks
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let (_dense, sparse) = compute_provider_parts(&table, "ZZQRY", 128);
+        assert!(!sparse.is_empty(), "稀疏道应产出候选");
+        let hits_of = |id: &str| {
+            table
+                .iter()
+                .find(|b| b.id == id)
+                .map(|b| b.content.matches("ZZQRY").count())
+                .unwrap_or(0)
+        };
+        assert!(
+            hits_of(&sparse[0]) > 0,
+            "含关键词块须经稀疏命中排 sparse 首位（修复前 hits 恒 0、序退化为 id 序）"
+        );
+    }
+
+    /// bounded_sparse_face：顺序拼接 + 空→空 + 超界按 char 截断（多字节安全）。
+    #[test]
+    fn bounded_sparse_face_concat_and_cap() {
+        assert_eq!(bounded_sparse_face(["ab", "cd"].into_iter()), "abcd");
+        assert_eq!(bounded_sparse_face(std::iter::empty::<&str>()), "");
+        let long = "中".repeat(SPARSE_FACE_MAX_CHARS + 100);
+        let out = bounded_sparse_face(std::iter::once(long.as_str()));
+        assert_eq!(out.chars().count(), SPARSE_FACE_MAX_CHARS, "须截断到上限");
+        assert!(out.is_char_boundary(out.len()), "截断须落在 UTF-8 边界");
+    }
+
+    use proptest::prelude::*;
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        /// 属性：任意语料（含多字节/空白）× 任意 chunk_tokens → set_corpus 不 panic
+        /// 且每块稀疏文本恒 ≤ SPARSE_FACE_MAX_CHARS（验证截断对所有输入成立）。
+        #[test]
+        fn prop_sparse_face_always_bounded(
+            corpus in proptest::string::string_regex(".{0,1200}").unwrap(),
+            chunk_tokens in 1usize..64usize,
+        ) {
+            let bridge = OverWindowBridge::new(EventBus::new())
+                .unwrap()
+                .with_chunk_tokens(chunk_tokens);
+            bridge.set_corpus(&corpus);
+            let table = bridge
+                .corpus_blocks
+                .read()
+                .unwrap_or_else(|p| p.into_inner());
+            for b in table.iter() {
+                prop_assert!(
+                    b.content.chars().count() <= SPARSE_FACE_MAX_CHARS,
+                    "稀疏文本超界: {} > {}",
+                    b.content.chars().count(),
+                    SPARSE_FACE_MAX_CHARS
+                );
+            }
+        }
+
+        /// provider 级确定性：同一固定表上 compute_provider_parts 连续两次输出逐元素相等
+        /// （锁 provider 管线无 HashMap 迭代序泄漏；query 用小写 ASCII 以稳定分词）。
+        #[test]
+        fn prop_provider_deterministic_on_fixed_table(
+            corpus in proptest::string::string_regex(".{0,1200}").unwrap(),
+            chunk_tokens in 1usize..64usize,
+            query in proptest::string::string_regex("[a-z ]{0,8}").unwrap(),
+        ) {
+            let bridge = OverWindowBridge::new(EventBus::new())
+                .unwrap()
+                .with_chunk_tokens(chunk_tokens);
+            bridge.set_corpus(&corpus);
+            let table = bridge
+                .corpus_blocks
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            let a = compute_provider_parts(&table, &query, 128);
+            let b = compute_provider_parts(&table, &query, 128);
+            prop_assert_eq!(a.0, b.0, "dense_ids 跨调用须一致");
+            prop_assert_eq!(a.1, b.1, "sparse_ids 跨调用须一致（无迭代序泄漏）");
+        }
     }
 }

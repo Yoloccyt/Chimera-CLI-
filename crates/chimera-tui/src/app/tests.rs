@@ -732,6 +732,43 @@ fn test_theme_accent_dark() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// F-37:theme.rs yaml 示例(:173-182)承诺的 `colors.accent` 定制契约,
+/// ColorScheme::resolve 此前生产零调用 —— 本用例锁定
+/// config.colors → theme() → theme_accent 全链路:BrightBlue 覆盖生效,
+/// 未覆盖键沿用主题预设(覆盖只影响指定键,不整族替换)。
+#[test]
+fn test_yaml_accent_override_reaches_theme_accent() -> Result<(), Box<dyn std::error::Error>> {
+    let app = TuiApp::new(TuiConfig {
+        theme: Theme::Dark,
+        colors: crate::config::ColorScheme {
+            accent: Some(crate::config::ColorKind::BrightBlue),
+            ..Default::default()
+        },
+        ..Default::default()
+    })?;
+    assert_eq!(
+        app.theme_accent(),
+        Color::LightBlue,
+        "colors.accent 定制应经 resolve 生效(BrightBlue → ratatui LightBlue)"
+    );
+    assert_eq!(app.theme_fg(), Color::White, "未覆盖的 foreground 沿用 Dark 预设");
+    Ok(())
+}
+
+/// F-37:resolve 接入后主题默认配色须与旧硬编码 match 逐值等价 ——
+/// HighContrast 预设 accent=BrightYellow 映射即旧值 LightYellow,
+/// 本用例锁定「零视觉漂移」接入(预设或映射任一侧漂移即红)。
+#[test]
+fn test_theme_accent_high_contrast_unchanged() -> Result<(), Box<dyn std::error::Error>> {
+    let app = TuiApp::new(TuiConfig {
+        theme: Theme::HighContrast,
+        ..Default::default()
+    })?;
+    assert_eq!(app.theme_accent(), Color::LightYellow);
+    assert_eq!(app.theme_fg(), Color::White);
+    Ok(())
+}
+
 // ============================================================
 // P6.1/P6.2 handle_global_key 主题/布局切换测试
 // ============================================================
@@ -1816,6 +1853,77 @@ fn responsive_threshold_controls_companion_folding() {
         2,
         "阈值 70 时 80 列不应折叠(配置值生效)"
     );
+}
+
+// ============================================================
+// B7-C(F-36):窗格路由与几何单一事实源 —— 折叠判定收敛不变量
+// ============================================================
+
+#[test]
+fn pane_panels_len_matches_pane_rects_len_across_widths() -> Result<(), Box<dyn std::error::Error>>
+{
+    // 不变量:任意宽度下 pane_panels().len() == pane_rects(area).len()。
+    // 修复前 wants_multi_pane 只看 PaneMode 不看宽度,窄视口下路由列表(w 循环 /
+    // 面板级键委托)仍算 2 窗格而渲染几何已折叠为 1 —— 键可落到未被渲染的窗格。
+    let mut app = make_app()?;
+    app.state_mut().layout_mode = LayoutMode::VimSplit;
+    // 造出确定 context:先切 Quest 再切 Parliament → prev=Quest(pane_mode_test 同款)
+    app.switch_panel_to(PanelId::Quest);
+    app.switch_panel_to(PanelId::Parliament);
+
+    // 0 = last_area 哨兵(尚未渲染、无几何,不折叠);99/100/101 跨默认阈值边界
+    for width in [0u16, 1, 40, 59, 60, 80, 99, 100, 101, 120, u16::MAX] {
+        app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, width, 24);
+        let area = ratatui::layout::Rect::new(0, 0, width, 24);
+        let panels = app.pane_panels();
+        let rects = app.pane_rects(area);
+        assert_eq!(
+            panels.len(),
+            rects.len(),
+            "宽 {width}:pane_panels 与 pane_rects 长度必须一致(单一事实源)"
+        );
+        if width > 0 && width < 100 {
+            assert_eq!(
+                panels.len(),
+                1,
+                "宽 {width}:窄视口路由列表应同步折叠为单窗格"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn pane_panels_matches_pane_rects_ide_and_chat_modes() -> Result<(), Box<dyn std::error::Error>> {
+    // IDE 三窗格与 Chat companion opt-in 两条多窗格路径的折叠对拍:
+    // 宽视口两判定同长(3 / 2),窄视口(默认阈值 100)同步折叠为 1。
+    let mut app = make_app()?;
+    app.switch_panel_to(PanelId::Quest);
+    app.switch_panel_to(PanelId::Parliament);
+
+    // Chat PaneMode(Dual)companion 关闭:宽窄视口均为单窗格
+    app.state_mut().layout_mode = LayoutMode::DualPane;
+    app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 120, 24);
+    assert_eq!(app.pane_panels().len(), 1, "companion 关闭应为单窗格");
+    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24)).len(), 1);
+
+    // companion opt-in:宽视口 2 窗格、窄视口同步折叠 1
+    app.pane_manager.companion_visible = true;
+    assert_eq!(app.pane_panels().len(), 2);
+    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24)).len(), 2);
+    app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 40, 24);
+    assert_eq!(app.pane_panels().len(), 1, "窄视口路由列表应折叠");
+    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 40, 24)).len(), 1);
+
+    // IDE(Triple):宽视口 3 窗格(主 + context + 侧栏)、窄视口折叠 1
+    app.state_mut().layout_mode = LayoutMode::TriplePane;
+    app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 120, 24);
+    assert_eq!(app.pane_panels().len(), 3, "IDE 宽视口应有 3 逻辑窗格");
+    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24)).len(), 3);
+    app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 40, 24);
+    assert_eq!(app.pane_panels().len(), 1, "IDE 窄视口路由列表应折叠");
+    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 40, 24)).len(), 1);
+    Ok(())
 }
 
 // ============================================================

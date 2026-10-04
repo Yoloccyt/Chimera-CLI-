@@ -12,7 +12,6 @@ use ratatui::Frame;
 use std::time::Instant;
 
 use super::TuiApp;
-use crate::config::Theme;
 use crate::types::{InputMode, LayoutMode, PanelId};
 
 impl TuiApp {
@@ -577,7 +576,8 @@ impl TuiApp {
         }
 
         // M3d:按当前 PaneMode 计算可见窗格与区域,逐窗格渲染其面板。
-        // 单窗格模式 / 窄视口下 panes/rects 均退化为主区一块(与既有 companion 行为等价)。
+        // B7-C(F-36):pane_panels 与 pane_rects 共用 multi_pane_active 折叠判定,
+        // 单窗格模式 / 窄视口下两者长度恒一致(均退化为主区一块),zip 不再截断错位。
         let panes = self.pane_panels();
         let rects = self.pane_rects(area);
         for (panel_id, rect) in panes.iter().copied().zip(rects.iter().copied()) {
@@ -687,24 +687,54 @@ impl TuiApp {
         frame.render_widget(paragraph, area);
     }
 
-    /// 返回主题前景色
-    pub(crate) fn theme_fg(&self) -> Color {
-        match self.config.theme {
-            Theme::Dark => Color::White,
-            Theme::Light => Color::Black,
-            // P6.1:HighContrast 前景为白色(纯黑白最大对比度)
-            Theme::HighContrast => Color::White,
-        }
+    /// 主题最终配色单点入口(F-37):config 颜色覆盖 + 主题预设合并
+    ///
+    /// WHY 每次 resolve 而非构造期缓存:resolve 是 6 次 `Option::unwrap_or`
+    /// 的纯内存合并(纳秒级),调用点仅为渲染帧内个位数次;构造期缓存则需在
+    /// `cycle_theme_action` 与配置装载两处维护同步,徒增一致性分叉面。
+    pub(crate) fn theme(&self) -> crate::config::ThemeColors {
+        self.config.colors.resolve(self.config.theme)
     }
 
-    /// 返回主题强调色
+    /// 返回主题前景色(F-37:经 resolve,与 Theme::colors() 预设逐值等价,
+    /// yaml `colors.foreground` 覆盖自此生效)
+    pub(crate) fn theme_fg(&self) -> Color {
+        color_kind_to_ratatui(self.theme().foreground)
+    }
+
+    /// 返回主题强调色(F-37:经 resolve,theme.rs yaml 示例承诺的
+    /// `colors.accent` 定制契约自此生效)
     pub(crate) fn theme_accent(&self) -> Color {
-        match self.config.theme {
-            Theme::Dark => Color::Cyan,
-            Theme::Light => Color::Blue,
-            // P6.1:HighContrast 强调色为亮黄(高饱和度,色盲友好)
-            Theme::HighContrast => Color::LightYellow,
-        }
+        color_kind_to_ratatui(self.theme().accent)
+    }
+}
+
+/// ColorKind(配置层)→ ratatui 渲染色
+///
+/// WHY 放 app 侧而非 config:config 层不依赖 UI 框架(theme.rs 模块注释),
+/// 颜色翻译属渲染边界职责。映射规则:基础色同名直译;`Bright*` 族对应
+/// ratatui 的 ANSI bright 系列 `Light*`;`LightGray` → `Gray`(ratatui
+/// 无同名变体,8 色浅灰)。三主题预设经此映射与 F-37 前的硬编码
+/// match 逐值等价(Dark Cyan / Light Blue / HighContrast LightYellow)。
+fn color_kind_to_ratatui(c: crate::config::ColorKind) -> Color {
+    use crate::config::ColorKind;
+    match c {
+        ColorKind::Black => Color::Black,
+        ColorKind::White => Color::White,
+        ColorKind::Red => Color::Red,
+        ColorKind::Green => Color::Green,
+        ColorKind::Yellow => Color::Yellow,
+        ColorKind::Blue => Color::Blue,
+        ColorKind::Cyan => Color::Cyan,
+        ColorKind::Magenta => Color::Magenta,
+        ColorKind::LightGray => Color::Gray,
+        ColorKind::DarkGray => Color::DarkGray,
+        ColorKind::BrightRed => Color::LightRed,
+        ColorKind::BrightGreen => Color::LightGreen,
+        ColorKind::BrightYellow => Color::LightYellow,
+        ColorKind::BrightBlue => Color::LightBlue,
+        ColorKind::BrightCyan => Color::LightCyan,
+        ColorKind::BrightMagenta => Color::LightMagenta,
     }
 }
 

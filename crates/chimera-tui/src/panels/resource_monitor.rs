@@ -122,7 +122,10 @@ impl ResourceMonitorPanel {
 
     /// 推送所有资源采样点(一次性从 `SystemMetrics` 提取)
     ///
-    /// 由 `DataPipeline` 在每个 tick 调用,或测试中直接调用以填充面板历史。
+    /// WHY 文档修正(F-39 喂数接线后):生产喂数走
+    /// `DataPipeline` → `DataSnapshot.net_*_history` → `TuiState` 快照链路,
+    /// 管道与面板经快照解耦(无实例引用),本方法不再由管道直接调用;
+    /// 保留供测试喂数与未来直接喂数场景。
     pub fn push_all_samples(&mut self, sys: &crate::types::SystemMetrics) {
         self.push_cpu_sample(sys.cpu.global_usage);
         self.push_mem_sample(sys.memory.usage_percent);
@@ -204,6 +207,8 @@ impl ResourceMonitorPanel {
                 1,
             )
             .replacen("{}", paused_tag, 1);
+        // F-48:选中区块标题加 "> " 前缀;未选中补等宽空格保持标题列对齐
+        let title = format!("{}{title}", if self.selected == 0 { "> " } else { "  " });
         let title_span = Span::styled(
             &title,
             Style::default()
@@ -306,6 +311,8 @@ impl ResourceMonitorPanel {
                 ),
                 1,
             );
+        // F-48:选中指示(同 CPU 区块)
+        let title = format!("{}{title}", if self.selected == 1 { "> " } else { "  " });
         let style = Style::default()
             .fg(Self::mem_color(mem.usage_percent))
             .add_modifier(Modifier::BOLD);
@@ -390,6 +397,8 @@ impl ResourceMonitorPanel {
         let title = crate::t!("panel.resources.disk_title")
             .replacen("{}", &format!("{:.1}", read_mb), 1)
             .replacen("{}", &format!("{:.1}", write_mb), 1);
+        // F-48:选中指示(同 CPU 区块)
+        let title = format!("{}{title}", if self.selected == 2 { "> " } else { "  " });
         buf.set_line(
             area.x,
             area.y,
@@ -402,41 +411,32 @@ impl ResourceMonitorPanel {
             area.width,
         );
 
-        if self.collapsed.contains(&2) || area.height <= 2 {
-            return;
-        }
-
-        // 磁盘读写速率 dual sparkline
-        let chart_area = Rect::new(
-            area.x,
-            area.y + 1,
-            area.width,
-            area.height.saturating_sub(1),
-        );
-        // 使用当前速率构造单元素历史
-        let read_data = vec![disk.read_bytes_per_sec / 1024]; // KB/s
-        let write_data = vec![disk.write_bytes_per_sec / 1024]; // KB/s
-        sparkline_dual_colored(
-            &read_data,
-            &write_data,
-            chart_area,
-            buf,
-            Color::Green,
-            Color::Red,
-            None,
-        );
+        // F-39(诚实路径):磁盘 sparkline 移除 —— sysinfo 0.32 无磁盘 IO 速率
+        // 采集源(SysMetricsCollector 置 DiskMetrics::default(),见
+        // data/pipeline.rs 模块注释),面板亦无磁盘 history 字段;原实现以瞬时
+        // 值构造单元素历史画孤柱,速率>0 渲染满格色块、=0 全空白,均不反映
+        // 时间趋势(D-6 禁伪造数据)。标题数值保留;补速率采样属备选方案,
+        // 由计划评审另行裁决。
     }
 
     // ============================================================
     // 网络子区域渲染
     // ============================================================
 
-    fn render_network_section(&self, net: &NetworkMetrics, area: Rect, buf: &mut Buffer) {
+    fn render_network_section(
+        &self,
+        state: &TuiState,
+        net: &NetworkMetrics,
+        area: Rect,
+        buf: &mut Buffer,
+    ) {
         let rx_mb = net.rx_bytes_per_sec as f64 / 1024.0 / 1024.0;
         let tx_mb = net.tx_bytes_per_sec as f64 / 1024.0 / 1024.0;
         let title = crate::t!("panel.resources.net_title")
             .replacen("{}", &format!("{:.1}", rx_mb), 1)
             .replacen("{}", &format!("{:.1}", tx_mb), 1);
+        // F-48:选中指示(同 CPU 区块)
+        let title = format!("{}{title}", if self.selected == 3 { "> " } else { "  " });
         buf.set_line(
             area.x,
             area.y,
@@ -460,11 +460,36 @@ impl ResourceMonitorPanel {
             area.width,
             area.height.saturating_sub(1),
         );
-        let rx_data = vec![net.rx_bytes_per_sec / 1024];
-        let tx_data = vec![net.tx_bytes_per_sec / 1024];
+        // F-39:消费时间趋势历史而非单帧瞬时值(原实现单元素历史 max 归一化
+        // 自指,速率>0 渲染满格色块、=0 全空白)。两级数据源对齐 CPU 趋势
+        // 模式 fallback:面板自身 history(push_net_sample,单位 B/s)优先,
+        // 空时回退快照喂数的 state 历史(DataPipeline 重 tick 与 sysinfo 采集
+        // 同节奏推入,单位已是 KB/s,无需再除 1024)。
+        let points = state.monitor_window.points();
+        let rx_data: Vec<u64> =
+            if self.net_rx_history.is_empty() && !state.net_rx_history.is_empty() {
+                state.net_rx_history.clone()
+            } else {
+                self.net_rx_history
+                    .filtered_values()
+                    .iter()
+                    .map(|v| (v / 1024.0) as u64)
+                    .collect()
+            };
+        let tx_data: Vec<u64> =
+            if self.net_tx_history.is_empty() && !state.net_tx_history.is_empty() {
+                state.net_tx_history.clone()
+            } else {
+                self.net_tx_history
+                    .filtered_values()
+                    .iter()
+                    .map(|v| (v / 1024.0) as u64)
+                    .collect()
+            };
+        // monitor.time_window:仅取尾部 N 点(近况聚焦 / 全窗,与 CPU 同口径)
         sparkline_dual_colored(
-            &rx_data,
-            &tx_data,
+            window_tail(&rx_data, points),
+            window_tail(&tx_data, points),
             chart_area,
             buf,
             Color::Green,
@@ -550,7 +575,7 @@ impl Panel for ResourceMonitorPanel {
         self.render_cpu_section(state, &sys.cpu, chunks[0], buf);
         self.render_memory_section(&sys.memory, chunks[1], buf);
         self.render_disk_section(&sys.disk, chunks[2], buf);
-        self.render_network_section(&sys.network, chunks[3], buf);
+        self.render_network_section(state, &sys.network, chunks[3], buf);
     }
 }
 

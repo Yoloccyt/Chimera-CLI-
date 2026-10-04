@@ -80,6 +80,13 @@ impl TaskKind {
         TaskKind::DecayBatch,
     ];
 
+    /// 登记类数 — 数组长度/表项数的**唯一定义源**(E1 单源收敛)
+    ///
+    /// WHY: `HtsTable::entries` 的数组长度以本常量表达(非硬编码数字),
+    /// 使「表项数 = 登记类数」成为类型层约束——新增变体时 `ALL` 长度变化,
+    /// `ALL.map(default_entry)` 的赋值即编译错(编译期断言),不依赖人工核对。
+    pub const COUNT: usize = Self::ALL.len();
+
     /// IO 密集判定 — `true` 时 [`super::bridge::ComputeBridge::route`] 直投 [`DispatchPlan::Async`]
     ///
     /// # 当前登记（手册 §8.4 事实）
@@ -91,33 +98,22 @@ impl TaskKind {
         false
     }
 
-    /// 任务阈值（items）— 手册 §8.4 HTS-CPU 阈值表
+    /// 任务阈值（items）— 手册 §8.4 HTS-CPU 阈值表的**参照投影**
     ///
     /// 来源标注:七类为 **S9 离线测定初值,W1 复测**（诚实数据:未复测前仅作预填）;
     /// [`Generic`](TaskKind::Generic) 与 ExpertScore/DecayBatch 三类为保守默认值（10,000）。
     ///
-    /// # T9 迁移说明
-    /// 本方法已被 [`super::hts::HtsTable`] 动态表取代（route 读 arc-swap 动态表）,
-    /// 此处保留仅为本文件测试提供初始值参照（迁移等价性由
-    /// `hts::tests::default_table_matches_dispatch_static` 锁定）;运行期阈值一律经
-    /// [`super::hts::HtsTable`] 查询。
+    /// # T9/E1 迁移说明
+    /// 本方法已被 [`super::hts::HtsTable`] 动态表取代（route 读 arc-swap 动态表）。
+    /// E1 单源收敛后本方法**委托** [`super::hts::HtsTable::default_entry`]——值的唯一定义点
+    /// 在 `default_entry`,本方法仅保留「静态参照面」供本文件路由测试取边界值;
+    /// 运行期阈值一律经 [`super::hts::HtsTable`] 查询。值快照由
+    /// `dispatch::tests::thresholds_match_manual_s8_4`（独立 expect 数组）与
+    /// `hts::tests::default_table_matches_dispatch_static`（双路径对照）共同锁定。
     #[allow(dead_code)] // T9 迁移后仅测试引用（见上方迁移说明）
     #[must_use]
     pub(crate) const fn threshold(self) -> usize {
-        match self {
-            TaskKind::ClvSimilarity => 1_000,
-            TaskKind::OsaMask => 100,
-            TaskKind::KnnSearch => 5_000,
-            TaskKind::GsoeEvaluate => 500,
-            TaskKind::CscCollapseScore => 200,
-            TaskKind::Generic => 10_000,
-            // ADR-196 C1 拆位:以下四位均「原值迁移」,与 HtsTable::default() 表值逐项一致,
-            // 保证 route() 决策与拆位前逐位相同(行为零改变)
-            TaskKind::HcwEntryScore => 200,
-            TaskKind::NmcEncode => 1_000,
-            TaskKind::ExpertScore => 10_000,
-            TaskKind::DecayBatch => 10_000,
-        }
+        super::hts::HtsTable::default_entry(self).threshold
     }
 }
 
@@ -192,6 +188,69 @@ mod tests {
         ];
         for (kind, want) in expect {
             assert_eq!(kind.threshold(), want, "{kind:?} 阈值偏离手册 §8.4");
+        }
+    }
+
+    // ===== proptest 属性测试（mandate 要求；三态派发是路由正确性之根，
+    //       B2 新加 4 位需与旧 6 位共享同一派发契约）=====
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// 三态完备且互斥：decide 恒等于 {io⇒Async; n<thr⇒Inline; else Rayon}
+        #[test]
+        fn prop_decide_tristate(
+            kind_idx in 0..TaskKind::ALL.len(),
+            io in any::<bool>(),
+            thr in 0usize..65_536,
+            n in 0usize..131_072,
+        ) {
+            let kind = TaskKind::ALL[kind_idx];
+            let plan = crate::compute::bridge::decide(kind, io, thr, n);
+            let expected = if io {
+                DispatchPlan::Async
+            } else if n < thr {
+                DispatchPlan::Inline
+            } else {
+                DispatchPlan::Rayon
+            };
+            prop_assert_eq!(plan, expected);
+        }
+
+        /// 阈值是干净的切割点：恰 n-1⇒Inline、n⇒Rayon（io=false，thr=n）。
+        /// 捕捉 `<`/`<=` 的 off-by-one（spec B2 依赖此边界）。
+        #[test]
+        fn prop_threshold_is_clean_cut(
+            kind_idx in 0..TaskKind::ALL.len(),
+            n in 1usize..65_536,
+        ) {
+            let kind = TaskKind::ALL[kind_idx];
+            let thr = n;
+            prop_assert_eq!(
+                crate::compute::bridge::decide(kind, false, thr, n - 1),
+                DispatchPlan::Inline,
+                "n-1 < thr 应判 Inline"
+            );
+            prop_assert_eq!(
+                crate::compute::bridge::decide(kind, false, thr, n),
+                DispatchPlan::Rayon,
+                "n >= thr 应判 Rayon"
+            );
+        }
+
+        /// io 支配性：io_bound=true ⇒ Async，与阈值/条目数无关
+        #[test]
+        fn prop_io_bound_dominates(
+            kind_idx in 0..TaskKind::ALL.len(),
+            thr in any::<usize>(),
+            n in any::<usize>(),
+        ) {
+            let kind = TaskKind::ALL[kind_idx];
+            prop_assert_eq!(
+                crate::compute::bridge::decide(kind, true, thr, n),
+                DispatchPlan::Async
+            );
         }
     }
 }

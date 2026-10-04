@@ -253,3 +253,100 @@ fn test_minus_at_zero_does_nothing() {
         "- at 0 (min) should not publish event (boundary protection)"
     );
 }
+
+// ============================================================
+// F-12:多选集合按 quest_id 标识 — 过滤变化后批量目标与选择集一致
+// ============================================================
+
+/// 构造带多个 Quest + EventBus 的 TuiApp(默认焦点面板即 Quest)
+fn make_app_with_quests(quests: Vec<Quest>) -> (TuiApp, event_bus::EventReceiver) {
+    let bus = event_bus::EventBus::new();
+    // 先订阅,再注入 bus 到 app,确保后续 publish 的事件都能被接收
+    let rx = bus.subscribe();
+
+    let app = {
+        let mut __app = TuiApp::new(TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .expect("TuiApp with default config should succeed");
+        __app.state_mut().view_mode = chimera_tui::ViewMode::Dashboard;
+        __app
+    };
+    let mut app = TuiApp::with_event_bus(app, bus);
+    app.state_mut().quest_list = quests;
+
+    (app, rx)
+}
+
+/// F-12 场景 1:Space 多选 q1 后改变过滤词(仅 q2 可见),p 批量暂停目标
+/// 必须仍为选择集中的 q1。
+///
+/// 修复前(位置型选择集):选择集存过滤后下标 {0},过滤后位置 0 经
+/// filter_map 重映射为 q2,批量暂停错位作用于用户未勾选的 q2。
+/// 按 id 方案后 on_confirm 必须仍为 q1(该断言同时证明选择集未随过滤
+/// 清空——清空则 p 会回退单选暂停,直接发布事件而非弹确认弹窗)。
+#[test]
+fn test_multi_select_batch_pause_targets_survive_filter_change() {
+    let (mut app, _rx) = make_app_with_quests(vec![
+        make_quest("q1", 128),
+        make_quest("q2", 128),
+        make_quest("q3", 128),
+    ]);
+
+    // Space:选中光标位置 0 的 q1
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+    // 改变过滤词:仅标题含 "q2" 的 Quest 可见(make_quest 标题为 "Quest {id}")
+    app.state_mut().filter_keyword = Some("q2".into());
+
+    // p:多选非空 → 批量暂停确认弹窗(而非回退单选)
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+
+    match app.state().popup_stack.current() {
+        Some(PopupKind::Confirm { on_confirm, .. }) => {
+            assert_eq!(
+                on_confirm, "batch_pause:q1",
+                "过滤变化后批量暂停目标必须仍为原勾选的 q1, got {on_confirm}"
+            );
+        }
+        other => panic!(
+            "expected batch pause confirm popup, got {:?}",
+            other.map(|p| format!("{p:?}"))
+        ),
+    }
+}
+
+/// F-12 场景 2:Ctrl+A 全选后过滤收窄,c 批量取消目标仍覆盖全部勾选项
+/// (含被过滤隐藏但仍存在的 Quest——选择集不随过滤失效,也不静默丢弃)
+#[test]
+fn test_multi_select_batch_cancel_covers_hidden_quests_after_filter_change() {
+    let (mut app, _rx) = make_app_with_quests(vec![
+        make_quest("q1", 128),
+        make_quest("q2", 128),
+        make_quest("q3", 128),
+    ]);
+
+    // Ctrl+A:全选当前过滤列表(此时无过滤,3 条全选)
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+
+    // 过滤收窄:仅 q2 可见(q1/q3 被隐藏但仍存在)
+    app.state_mut().filter_keyword = Some("q2".into());
+
+    // c:批量取消 → 目标按 quest_id 解析,覆盖全部 3 个勾选项(字典序)
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+    match app.state().popup_stack.current() {
+        Some(PopupKind::Confirm { on_confirm, .. }) => {
+            assert_eq!(
+                on_confirm, "batch_cancel:q1,q2,q3",
+                "过滤收窄后批量取消应覆盖全部勾选项(含被隐藏的 q1/q3)"
+            );
+        }
+        other => panic!(
+            "expected batch cancel confirm popup, got {:?}",
+            other.map(|p| format!("{p:?}"))
+        ),
+    }
+}

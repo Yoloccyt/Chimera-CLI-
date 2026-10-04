@@ -4,4 +4,4 @@
 # Register each with a real justification; new DB-in-async calls must go through spawn_blocking instead.
 crates/cmt-tiering/src/experience_card_storage.rs:60  # baseline 2026-09-25
 crates/cmt-tiering/src/experience_card_storage.rs:66  # baseline 2026-09-25
-crates/mlc-engine/src/engine.rs:841  # baseline 2026-09-25
+crates/mlc-engine/src/engine.rs:863  # SCANNER false-positive: L1 EpisodicMemory::query_by_quest (l1_episodic.rs:207) is an in-memory RwLock<EpisodicInner> read, no rusqlite/Connection

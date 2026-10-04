@@ -121,6 +121,9 @@ impl TuiApp {
                 if !self.state.monitor_paused {
                     self.state.sys_metrics = snapshot.sys_metrics.clone();
                     self.state.sys_metrics_history = snapshot.sys_metrics_history.clone();
+                    // F-39:网络速率历史随同一守卫同步(暂停时冻结显示)
+                    self.state.net_rx_history = snapshot.net_rx_history.clone();
+                    self.state.net_tx_history = snapshot.net_tx_history.clone();
                 }
                 // Task 6:同步 tick 模式,供状态栏展示
                 self.state.tick_mode = snapshot.tick_mode;
@@ -290,7 +293,9 @@ impl TuiApp {
         // 保留手动 if 块:有 monitor_paused 守卫的条件映射,dirty_map! 宏不支持条件分支。
         if !self.state.monitor_paused
             && (self.state.sys_metrics != snapshot.sys_metrics
-                || self.state.sys_metrics_history != snapshot.sys_metrics_history)
+                || self.state.sys_metrics_history != snapshot.sys_metrics_history
+                || self.state.net_rx_history != snapshot.net_rx_history
+                || self.state.net_tx_history != snapshot.net_tx_history)
         {
             self.state.mark_dirty(PanelId::ResourceMonitor);
             self.state.mark_dirty(PanelId::Health);

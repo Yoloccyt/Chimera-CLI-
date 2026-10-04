@@ -168,6 +168,17 @@ pub trait Panel: Send {
     /// 需要 `state` 参数的原因同 `scroll_to_top`。
     fn scroll_to_bottom(&mut self, _state: &mut TuiState) {}
 
+    /// 注入主题强调色(F-37)
+    ///
+    /// 默认空实现;需要 accent 高亮的面板(现 MetricsDashboard 选中格)覆盖
+    /// 暂存并在渲染时消费。
+    ///
+    /// WHY 广播注入而非面板自取:主题色归 `TuiApp`(config.colors.resolve),
+    /// 面板层仅持 `&TuiState` 不可达(metrics_dashboard.rs 批次四登记);
+    /// `TuiApp` 在装配期与切主题时经 `broadcast_accent` 广播。默认 no-op
+    /// 使其余面板零改动(与 focus/scroll_to_* 默认实现同模式)。
+    fn set_accent(&mut self, _accent: ratatui::style::Color) {}
+
     /// 返回当前面板支持的快捷键列表（键名, 描述）
     ///
     /// 默认返回空列表；面板可覆盖以提供上下文感知的快捷键帮助。

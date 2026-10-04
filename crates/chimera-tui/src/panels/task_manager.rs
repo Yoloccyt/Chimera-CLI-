@@ -68,7 +68,7 @@ pub const PRIORITY_MIN: u8 = 0;
 /// ## 字段说明
 /// - `selected`:当前选中项在排序后列表中的索引
 /// - `scroll_offset`:列表滚动偏移(与 list_state 模块一致)
-/// - `selected_indices`:批量选中的索引集合(预留,本 Task 暂未启用)
+/// - `selected_ids`:批量选中的 quest_id 集合(Space 切换 / Ctrl+A 全选 / Esc 清除)
 /// - `sort_mode`:当前排序模式(P4.3 新增,默认 `SortMode::Priority`)
 /// - `created_at_index`:CreatedAt 模式的时间索引侧表(P4.3 新增,`quest_id` → 首次观察时间)
 #[derive(Debug, Default, Clone)]
@@ -77,8 +77,13 @@ pub struct TaskManagerPanel {
     selected: usize,
     /// 滚动偏移
     scroll_offset: usize,
-    /// 批量选中的索引集合(多选模式,Space 切换/Ctrl+A 全选/Esc 清除)
-    selected_indices: HashSet<usize>,
+    /// 批量选中的 quest_id 集合(多选模式,Space 切换/Ctrl+A 全选/Esc 清除)
+    ///
+    /// WHY 存 quest_id 而非"过滤+排序后位置"(F-23):位置是视图坐标,排序
+    /// 模式切换(S 键)与过滤关键字变化(f 搜索)都会重排/重截列表,同批位置
+    /// 解析为另一批 Quest,B/T/R 批量会作用于用户未勾选的条目;quest_id 是
+    /// 领域恒等键,选择集随视图变化保持指向原勾选项,`[*]` 标记亦按 id 判定。
+    selected_ids: HashSet<String>,
     /// 当前排序模式(P4.3 新增,默认 Priority)
     sort_mode: SortMode,
     /// CreatedAt 模式时间索引:`quest_id` → 面板首次观察到该 Quest 的 UTC 时间
@@ -183,9 +188,9 @@ impl TaskManagerPanel {
             state,
             &quests,
             self.selected,
-            &self.selected_indices,
+            &self.selected_ids,
             self.sort_mode,
-            self.selected_indices.len(),
+            self.selected_ids.len(),
         )
         .to_string()
     }
@@ -313,7 +318,7 @@ impl TaskManagerPanel {
         state: &TuiState,
         quests: &[&Quest],
         cursor: usize,
-        selected_indices: &HashSet<usize>,
+        selected_ids: &HashSet<String>,
         sort_mode: SortMode,
         selected_count: usize,
     ) -> Text<'static> {
@@ -341,7 +346,8 @@ impl TaskManagerPanel {
         } else {
             for (idx, quest) in quests.iter().enumerate() {
                 let is_cursor = idx == cursor;
-                let is_selected = selected_indices.contains(&idx);
+                // F-23:[*] 按 quest_id 判定,不随排序/过滤变化错位标记
+                let is_selected = selected_ids.contains(&quest.quest_id);
                 // 多选视觉:选中行用 [*] 前缀 + 青色背景,光标行用 > 前缀 + 黄色背景
                 let (prefix, style) = match (is_cursor, is_selected) {
                     (true, true) => (
@@ -368,12 +374,14 @@ impl TaskManagerPanel {
                     (false, false) => ("  ", Style::default()),
                 };
                 // WHY 显示 quest_id + 标题 + 优先级(便于操作员快速定位)
-                // 优先级列固定宽度 2 字符,左对齐
+                // F-32:优先级双单位展示 "P{用户面} ({内部值})"——裸显内部
+                // 0-255 值会与 +/- 键的 0-10 步进(P125→P150 视觉上像跳 25 级)
+                // 系统性误导,单显用户面值又丢失精确内部量
                 let line = format!(
-                    "{prefix}{id:<16} | {title} | P{priority:<2}",
+                    "{prefix}{id:<16} | {title} | {label}",
                     id = quest.quest_id,
                     title = quest.title,
-                    priority = quest.priority
+                    label = priority_label(quest.priority)
                 );
                 lines.push(Line::from(vec![Span::styled(line, style)]));
             }
@@ -410,7 +418,7 @@ impl TaskManagerPanel {
             crate::t!("panel.task.detail_id"),
             quest.quest_id,
             crate::t!("panel.task.detail_priority"),
-            quest.priority,
+            priority_label(quest.priority),
             crate::t!("panel.task.detail_tasks"),
             quest.tasks.len(),
             crate::t!("panel.task.detail_mode"),
@@ -482,16 +490,22 @@ impl TaskManagerPanel {
     ///
     /// WHY Space:与文件管理器/邮件客户端的多选语义一致,
     /// 操作员直觉式操作无需学习。不影响单行光标导航。
+    ///
+    /// WHY 按 quest_id 切换(F-23):选择集以领域恒等键标识勾选项,
+    /// 排序/过滤变化后 Space 仍作用于光标所指的同一 Quest。
     fn toggle_multi_select(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
         let quests = self.filtered_quests(state);
         if quests.is_empty() {
             return None;
         }
         let idx = list_state::clamp_selected(self.selected, quests.len());
-        if self.selected_indices.contains(&idx) {
-            self.selected_indices.remove(&idx);
-        } else {
-            self.selected_indices.insert(idx);
+        if let Some(quest) = quests.get(idx) {
+            let id = quest.quest_id.clone();
+            if self.selected_ids.contains(&id) {
+                self.selected_ids.remove(&id);
+            } else {
+                self.selected_ids.insert(id);
+            }
         }
         None
     }
@@ -500,9 +514,8 @@ impl TaskManagerPanel {
     ///
     /// WHY Ctrl+A:与编辑器全选语义一致,减少逐项选择的操作成本。
     fn select_all_filtered(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
-        let quests = self.filtered_quests(state);
-        for i in 0..quests.len() {
-            self.selected_indices.insert(i);
+        for quest in self.filtered_quests(state) {
+            self.selected_ids.insert(quest.quest_id.clone());
         }
         None
     }
@@ -512,7 +525,7 @@ impl TaskManagerPanel {
     /// 注意:生产环境中 Esc 由 app.rs 全局拦截为 quit,
     /// 面板级 Esc 仅在测试场景中生效。
     fn clear_multi_select(&mut self, _state: &mut TuiState) -> Option<TuiCommand> {
-        self.selected_indices.clear();
+        self.selected_ids.clear();
         None
     }
 
@@ -548,19 +561,37 @@ impl TaskManagerPanel {
         })
     }
 
+    /// 解析批量操作目标 quest_id 列表(F-23)
+    ///
+    /// WHY 对全量 `quest_list` 求存在性而非 `filtered_quests`:选择集按
+    /// quest_id 标识,排序/过滤变化后仍指向原勾选项;被过滤隐藏但仍存在的
+    /// 勾选项须照常纳入批量目标,仅剔除已从列表消失的 Quest。
+    /// WHY 排序:选择集为 HashSet 无稳定迭代序,排序让确认弹窗明细与
+    /// on_confirm 串在相同选择集下逐字节确定(可断言、可复现)。
+    fn resolve_batch_ids(&self, state: &TuiState) -> Vec<String> {
+        let existing: HashSet<&str> = state
+            .quest_list
+            .iter()
+            .map(|q| q.quest_id.as_str())
+            .collect();
+        let mut ids: Vec<String> = self
+            .selected_ids
+            .iter()
+            .filter(|id| existing.contains(id.as_str()))
+            .cloned()
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
     /// B 键:批量暂停(多选时批量;无多选时回退单选暂停,与 P 键一致)
     ///
     /// WHY B 键独立:操作员多选后按 B 批量暂停,无多选时 B 退化为单选暂停,
     /// 与 P 键语义一致,互不冲突。
     fn batch_pause_or_single(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
-        if !self.selected_indices.is_empty() {
-            let quests = self.filtered_quests(state);
-            let quest_ids: Vec<String> = self
-                .selected_indices
-                .iter()
-                .filter_map(|&i| quests.get(i))
-                .map(|q| q.quest_id.clone())
-                .collect();
+        if !self.selected_ids.is_empty() {
+            // F-23:目标按 quest_id 解析,选择集不随排序/过滤变化错位
+            let quest_ids = self.resolve_batch_ids(state);
             if quest_ids.is_empty() {
                 return None;
             }
@@ -588,14 +619,9 @@ impl TaskManagerPanel {
 
     /// T 键:终止 Quest(多选时批量;无多选时回退单选终止)
     fn terminate_batch_or_single(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
-        if !self.selected_indices.is_empty() {
-            let quests = self.filtered_quests(state);
-            let quest_ids: Vec<String> = self
-                .selected_indices
-                .iter()
-                .filter_map(|&i| quests.get(i))
-                .map(|q| q.quest_id.clone())
-                .collect();
+        if !self.selected_ids.is_empty() {
+            // F-23:目标按 quest_id 解析,选择集不随排序/过滤变化错位
+            let quest_ids = self.resolve_batch_ids(state);
             if quest_ids.is_empty() {
                 return None;
             }
@@ -675,14 +701,9 @@ impl TaskManagerPanel {
 
     /// R 键:恢复 Quest(多选时批量;无多选时回退单选恢复)
     fn resume_batch_or_single(&mut self, state: &mut TuiState) -> Option<TuiCommand> {
-        if !self.selected_indices.is_empty() {
-            let quests = self.filtered_quests(state);
-            let quest_ids: Vec<String> = self
-                .selected_indices
-                .iter()
-                .filter_map(|&i| quests.get(i))
-                .map(|q| q.quest_id.clone())
-                .collect();
+        if !self.selected_ids.is_empty() {
+            // F-23:目标按 quest_id 解析,选择集不随排序/过滤变化错位
+            let quest_ids = self.resolve_batch_ids(state);
             if quest_ids.is_empty() {
                 return None;
             }
@@ -878,12 +899,12 @@ impl Panel for TaskManagerPanel {
         self.scroll_offset =
             list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
-        let selected_count = self.selected_indices.len();
+        let selected_count = self.selected_ids.len();
         let paragraph = Paragraph::new(self.content(
             state,
             &quests,
             self.selected,
-            &self.selected_indices,
+            &self.selected_ids,
             self.sort_mode,
             selected_count,
         ))
@@ -972,6 +993,16 @@ impl Panel for TaskManagerPanel {
 /// min(PRIORITY_MAX):确保返回值在 [0, 10] 范围内。
 fn user_priority_from_internal(internal: u8) -> u8 {
     ((internal as u16 / 25).min(PRIORITY_MAX as u16)) as u8
+}
+
+/// 优先级双单位标签(F-32):用户面 0-10 + 括注内部 0-255 值,如 "P5 (125)"
+///
+/// WHY 双单位:列表行与详情弹窗若直显内部值,与 `+`/`-` 键经
+/// `user_priority_from_internal` 的 0-10 步进单位不一致(P125→P150 视觉上
+/// 像一次 +25 级),系统性误导;若单显用户面值则丢失精确内部量。
+/// WHY 复用换算函数:用户面值必须与 +/- 键的读取口径同源,勿重复实现。
+fn priority_label(internal: u8) -> String {
+    format!("P{} ({})", user_priority_from_internal(internal), internal)
 }
 
 #[cfg(test)]
@@ -1276,24 +1307,24 @@ mod tests {
             sample_quest("q-2", "Beta", 3),
         ];
 
-        // 第一次 Space:选中索引 0
-        panel.handle_key(
-            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
-            &mut state,
-        );
-        assert!(panel.selected_indices.contains(&0), "Space 应选中当前索引");
-        assert_eq!(panel.selected_indices.len(), 1);
-
-        // 第二次 Space:取消选中索引 0
+        // 第一次 Space:选中光标所指 Quest(F-23:选择集按 quest_id 标识)
         panel.handle_key(
             KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
             &mut state,
         );
         assert!(
-            !panel.selected_indices.contains(&0),
-            "再次 Space 应取消选中"
+            panel.selected_ids.contains("q-1"),
+            "Space 应选中当前光标项 q-1"
         );
-        assert!(panel.selected_indices.is_empty());
+        assert_eq!(panel.selected_ids.len(), 1);
+
+        // 第二次 Space:取消选中 q-1
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            &mut state,
+        );
+        assert!(!panel.selected_ids.contains("q-1"), "再次 Space 应取消选中");
+        assert!(panel.selected_ids.is_empty());
     }
 
     #[test]
@@ -1306,7 +1337,7 @@ mod tests {
             sample_quest("q-banana", "Banana", 5),
             sample_quest("q-cherry", "Cherry", 5),
         ];
-        // 过滤:quest_id 含 "a" → q-apple、q-banana（q-cherry 不含）
+        // 过滤:quest_id 含 "a" → q-apple、q-banana(q-cherry 不含)
         panel.filter_keyword = "a".to_string();
 
         panel.handle_key(
@@ -1315,26 +1346,26 @@ mod tests {
         );
 
         assert_eq!(
-            panel.selected_indices.len(),
+            panel.selected_ids.len(),
             2,
             "Ctrl+A 应全选过滤后的 2 个 Quest"
         );
-        assert!(panel.selected_indices.contains(&0));
-        assert!(panel.selected_indices.contains(&1));
+        assert!(panel.selected_ids.contains("q-apple"));
+        assert!(panel.selected_ids.contains("q-banana"));
     }
 
     #[test]
     fn test_esc_clears_selection() {
         let mut panel = TaskManagerPanel::new();
         let mut state = TuiState::new();
-        panel.selected_indices.insert(0);
-        panel.selected_indices.insert(2);
-        panel.selected_indices.insert(5);
-        assert_eq!(panel.selected_indices.len(), 3);
+        panel.selected_ids.insert("q-1".to_string());
+        panel.selected_ids.insert("q-3".to_string());
+        panel.selected_ids.insert("q-6".to_string());
+        assert_eq!(panel.selected_ids.len(), 3);
 
         panel.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut state);
 
-        assert!(panel.selected_indices.is_empty(), "Esc 应清空所有选中");
+        assert!(panel.selected_ids.is_empty(), "Esc 应清空所有选中");
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1424,7 +1455,7 @@ mod tests {
         let mut state = TuiState::new();
         state.quest_list = vec![sample_quest("q-1", "Alpha", 5)];
 
-        // selected_indices 为空，按 B 应回退单选暂停
+        // selected_ids 为空，按 B 应回退单选暂停
         let cmd = panel.handle_key(
             KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE),
             &mut state,
@@ -1585,13 +1616,89 @@ mod tests {
             sample_quest("q-1", "Alpha", 5),
             sample_quest("q-2", "Beta", 3),
         ];
-        // 选中索引 0,验证渲染输出包含 [*] 前缀
-        panel.selected_indices.insert(0);
+        // 选中 q-1(F-23:按 quest_id 判定),验证渲染输出包含 [*] 前缀
+        panel.selected_ids.insert("q-1".to_string());
         let text = panel.render_text(&state);
         assert!(text.contains("[*]"), "选中行应渲染 [*] 前缀:\n{text}");
         // 验证未选中行不含 [*]
         let star_count = text.matches("[*]").count();
         assert_eq!(star_count, 1, "应只有 1 个 [*] 前缀(选中 1 项)");
+    }
+
+    /// F-23:[*] 前缀按 quest_id 判定 — 排序变化后标记跟随原勾选 Quest,
+    /// 不再错位标记同位置的其他条目。
+    #[test]
+    fn test_multiselect_star_follows_quest_id_after_sort_change() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        // Priority 降序排序后:[q-high(8), q-mid(5), q-low(2)]
+        state.quest_list = vec![
+            sample_quest("q-low", "Low", 2),
+            sample_quest("q-mid", "Mid", 5),
+            sample_quest("q-high", "High", 8),
+        ];
+        // Down + Space:选中位置 1 的 q-mid
+        panel.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &mut state);
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            &mut state,
+        );
+        assert!(panel.selected_ids.contains("q-mid"));
+
+        // S 切到 Status 排序:全 Pending → 按 quest_id 字典序 [q-high, q-low, q-mid],
+        // 位置 1 已变为 q-low
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+            &mut state,
+        );
+        let text = panel.render_text(&state);
+        assert!(
+            text.contains("[*]q-mid"),
+            "排序变化后 [*] 应仍标记原勾选的 q-mid:\n{text}"
+        );
+        assert!(
+            !text.contains("[*]q-low"),
+            "排序变化后位置 1 已变为 q-low,不应被 [*] 错位标记:\n{text}"
+        );
+    }
+
+    /// F-23:过滤隐藏勾选项时该行不可见(无 [*]),但选择集不清空,
+    /// 后续批量操作仍覆盖被隐藏的勾选项。
+    #[test]
+    fn test_multiselect_selection_not_cleared_by_filter_change() {
+        let mut panel = TaskManagerPanel::new();
+        let mut state = TuiState::new();
+        state.quest_list = vec![
+            sample_quest("q-1", "Alpha", 5),
+            sample_quest("q-2", "Beta", 3),
+        ];
+        panel.selected_ids.insert("q-1".to_string());
+
+        // 过滤到只剩 q-2:q-1 行不可见
+        panel.filter_keyword = "beta".to_string();
+        let text = panel.render_text(&state);
+        assert!(
+            !text.contains("[*]"),
+            "被过滤隐藏的勾选项不渲染 [*]:\n{text}"
+        );
+        assert!(
+            panel.selected_ids.contains("q-1"),
+            "过滤变化不应清空选择集(按 id 方案根治位置型失效)"
+        );
+    }
+
+    /// F-23:批量目标解析 — 已从列表消失的 Quest 被剔除,输出按 id 排序确定。
+    #[test]
+    fn test_resolve_batch_ids_drops_deleted_and_sorts() {
+        let mut panel = TaskManagerPanel::new();
+        panel.selected_ids = ["q9", "q2", "q1"].iter().map(|s| s.to_string()).collect();
+        let mut state = TuiState::new();
+        state.quest_list = vec![sample_quest("q1", "A", 1), sample_quest("q2", "B", 1)];
+        assert_eq!(
+            panel.resolve_batch_ids(&state),
+            vec!["q1".to_string(), "q2".to_string()],
+            "已删除的 q9 应被剔除,剩余目标按 id 字典序输出"
+        );
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1804,8 +1911,8 @@ mod tests {
             "无选中时不应显示选中计数(标记 {marker:?}):\n{text_no_selection}"
         );
 
-        // 选中 1 项
-        panel.selected_indices.insert(0);
+        // 选中 1 项(F-23:选择集按 quest_id 标识)
+        panel.selected_ids.insert("q-1".to_string());
         let text_one = panel.render_text(&state);
         let expected_one = crate::t!("panel.task.selected_count").replace("{}", "1");
         assert!(
@@ -1814,7 +1921,7 @@ mod tests {
         );
 
         // 选中 2 项
-        panel.selected_indices.insert(1);
+        panel.selected_ids.insert("q-2".to_string());
         let text_two = panel.render_text(&state);
         let expected_two = crate::t!("panel.task.selected_count").replace("{}", "2");
         assert!(

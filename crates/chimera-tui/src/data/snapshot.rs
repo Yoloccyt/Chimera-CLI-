@@ -122,6 +122,13 @@ pub struct DataSnapshot {
     pub sys_metrics: crate::types::SystemMetrics,
     /// 系统资源指标历史(sparkline 数据)
     pub sys_metrics_history: Vec<u64>,
+    /// 网络 RX 速率历史(KB/s,F-39 喂数接线;DataPipeline 重 tick 与 sysinfo
+    /// 采集同节奏 push,ResourceMonitor 面板网络 sparkline 消费)
+    #[serde(default)]
+    pub net_rx_history: Vec<u64>,
+    /// 网络 TX 速率历史(KB/s,与 `net_rx_history` 成对推进)
+    #[serde(default)]
+    pub net_tx_history: Vec<u64>,
     /// SQLite 持久化的 CPU 历史回填(Concord T1.6,P4② 接线;重启后趋势图回溯)
     ///
     /// WHY 独立字段:内存滑动窗口仅 ~5 分钟,持久化层(MetricsHistory)提供

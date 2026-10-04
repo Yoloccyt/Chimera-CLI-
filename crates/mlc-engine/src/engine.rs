@@ -1046,6 +1046,11 @@ impl MlcEngine {
             );
         }
 
+        // G-27（持锁跨 await 红线）：迁移临界区（fetch/insert/remove，上方）已全部
+        // 同步完成，此处提前释放条目级迁移锁，避免 `_migration_lock` 跨下方
+        // tier_count / event publish 的 .await 持有（否则同 ID 并发迁移串行化会跨越异步 I/O）。
+        drop(_migration_lock);
+
         // 5. 发布 MemoryTiered 事件
         // SubTask 17.4:单条迁移填充 memory_id,供消费者(如 efficiency-monitor)
         // 定位被迁移的条目并更新位置索引。批量迁移场景应为 None。

@@ -452,6 +452,8 @@ impl TuiApp {
         for panel_id in self.focus_manager.panels() {
             self.state.mark_dirty(*panel_id);
         }
+        // F-37:切主题同步广播新 accent,面板侧高亮(MetricsDashboard 选中格)随动
+        self.broadcast_accent();
         self.state.status_message = Some((
             format!("{}: {}", crate::t!("status.theme"), new_theme.as_str()),
             Severity::Info,
@@ -564,7 +566,8 @@ impl TuiApp {
         self.pane_manager.active_pane
     }
 
-    /// 当前可见窗格数(M3d,由 PaneMode + companion_visible 决定;测试与外部查询用)
+    /// 当前可见窗格数(M3d,由 PaneMode + companion_visible + 窄视口折叠决定;
+    /// 测试与外部查询用。B7-C 后与渲染几何经 `multi_pane_active` 同源判定)
     pub fn pane_count(&self) -> usize {
         self.pane_panels().len()
     }
@@ -619,25 +622,40 @@ impl TuiApp {
             .find(|&p| p != focused && Some(p) != context)
     }
 
-    /// M3d:是否应显示次窗格(非 Focus 单窗格)—— pane_panels 与 pane_rects 共用判定
+    /// M3d:多窗格是否实际生效(单一事实源)—— pane_panels 与 pane_rects 共用判定
     ///
-    /// WHY 抽取:窗格计数(路由)与区域切分(渲染)必须用同一规则判断"是否多窗格",
-    /// 否则会出现路由认为 2 窗格、渲染只画 1 窗格的错位。Chat 尊重 companion_visible
+    /// B7-C(F-36):原 wants_multi_pane 只看 PaneMode 不看终端宽度,窄视口下
+    /// 路由列表(pane_panels)仍算多窗格而渲染几何(pane_rects)已折叠,`w` 可
+    /// 循环到未被渲染的窗格、面板级键落到不可见面板。现把 U-1 的宽度折叠判定
+    /// (经 `should_collapse_companion`,阈值 0 = 禁用折叠)并入本函数,
+    /// 路由与几何共用同一输入,不再分叉。Chat 尊重 companion_visible
     /// opt-in(Stage 2 语义);VimSplit/IDE 为内在多窗格。
-    fn wants_multi_pane(&self) -> bool {
+    ///
+    /// WHY 0 宽不折叠:`pane_manager.last_area` 的 `Rect::default()` 表示
+    /// "尚未渲染、无几何"哨兵而非零宽终端(渲染路径在 render() 顶部先刷新
+    /// last_area 再画窗格);此阶段窗格模型按纯 PaneMode 逻辑给出,任一帧
+    /// 渲染后即被真实终端宽度接管。
+    fn multi_pane_active(&self, terminal_width: u16) -> bool {
         use crate::engine::layout::PaneMode;
-        match self.state.layout_mode.to_pane_mode() {
+        let mode_wants = match self.state.layout_mode.to_pane_mode() {
             PaneMode::Focus => false,
             // Task 1.15.4:companion_visible 移至 pane_manager
             PaneMode::Chat => self.pane_manager.companion_visible,
             PaneMode::VimSplit | PaneMode::Ide => true,
+        };
+        if terminal_width == 0 {
+            return mode_wants;
         }
+        mode_wants && !self.should_collapse_companion(terminal_width)
     }
 
     /// M3d:当前 PaneMode 下可见窗格的面板列表(循环序 [主, (context), (侧栏)])
     ///
-    /// WHY 不含 rect:此列表供键盘路由(`delegate_key_to_active_panel`)与窗格计数
-    /// (`focus_pane_action` 的 `w` 循环)使用,与几何无关;渲染另经 `pane_rects` 取区域。
+    /// 此列表供键盘路由(`delegate_key_to_active_panel`)与窗格计数
+    /// (`focus_pane_action` 的 `w` 循环)使用;渲染另经 `pane_rects` 取区域。
+    /// B7-C(F-36):折叠判定与 pane_rects 共用 `multi_pane_active`(宽度取
+    /// `pane_manager.last_area` —— 渲染路径在 render() 顶部先刷新 last_area,
+    /// 与 pane_rects 的当帧 area.width 同源),窄视口下列表同步折叠为 [主]。
     /// - Focus:[主]
     /// - Chat:companion_visible ? [主, context] : [主](Stage 2 opt-in 保留)
     /// - VimSplit:[主, context](左右等分)
@@ -646,7 +664,7 @@ impl TuiApp {
         use crate::engine::layout::PaneMode;
         let main = self.focus_manager.focused();
         let mut panes = vec![main];
-        if !self.wants_multi_pane() {
+        if !self.multi_pane_active(self.pane_manager.last_area.width) {
             return panes;
         }
         if let Some(context) = self.companion_target() {
@@ -666,16 +684,14 @@ impl TuiApp {
     /// WHY 复用引擎 split:用自研 `engine::layout::split` 按 PaneMode 切分主内容区的列
     /// (外层 tabs/status 已由 `layout()` 处理)。返回顺序与 `pane_panels` 一致
     /// ([主, context, 侧栏]);单窗格模式 / 窄视口 / 无次窗格目标退化为 `vec![area]`
-    /// (与既有 companion_split 逐字节等价,零回归)。
+    /// (与既有 companion_split 逐字节等价,零回归)。B7-C(F-36)后折叠判定
+    /// 经 `multi_pane_active(area.width)` 与路由共用单一事实源。
     pub(super) fn pane_rects(&self, area: ratatui::layout::Rect) -> Vec<ratatui::layout::Rect> {
         use crate::engine::layout::{Constraint, Direction, PaneMode};
-        // U-1(2026-09-06 复评):折叠判定接入 `responsive_collapse_threshold`
-        // 配置(经 should_collapse_companion,阈值 0 = 禁用折叠)—— 此前硬编码
-        // COMPANION_MIN_WIDTH=60 致用户配置不生效(死配置,双轨漂移)。
-        if !self.wants_multi_pane()
-            || self.should_collapse_companion(area.width)
-            || self.companion_target().is_none()
-        {
+        // U-1(2026-09-06 复评)折叠判定接 `responsive_collapse_threshold` 配置;
+        // B7-C(F-36):该判定并入 multi_pane_active(含 0 宽哨兵与阈值 0 = 禁用
+        // 折叠语义),此处不再独立调 should_collapse_companion。
+        if !self.multi_pane_active(area.width) || self.companion_target().is_none() {
             return vec![area];
         }
         let eng_area = crate::engine::from_ratatui_rect(area);
@@ -714,7 +730,7 @@ impl TuiApp {
                 );
                 vec![to(cols[1]), to(cols[2]), to(cols[0])]
             }
-            // Focus 已在上方 wants_multi_pane=false 提前返回,此处兜底整块。
+            // Focus 已在上方 multi_pane_active=false 提前返回,此处兜底整块。
             PaneMode::Focus => vec![area],
         }
     }

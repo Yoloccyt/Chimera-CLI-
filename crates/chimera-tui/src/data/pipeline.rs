@@ -459,6 +459,10 @@ impl DataPipeline {
             let mut event_rate_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
             let mut decay_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
             let mut sys_metrics_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            // F-39 喂数接线:网络速率历史(重 tick 与 sysinfo 采集同节奏推进,
+            // KB/s —— 渲染端与瞬时值 /1024 口径一致)
+            let mut net_rx_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            let mut net_tx_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
 
             let mut timeline_snapshots: VecDeque<crate::types::TimelineSnapshot> =
                 VecDeque::with_capacity(max_snapshots);
@@ -669,6 +673,18 @@ impl DataPipeline {
                         (m.cpu.global_usage * 10.0) as u64,
                         max_history_len,
                     );
+                    // F-39:网络速率与 CPU 同点喂数(同一 sysinfo 采样内推入,
+                    // 节奏天然对齐;轻量 tick 复用上次采样故不重复推点)
+                    push_history(
+                        &mut net_rx_history,
+                        m.network.rx_bytes_per_sec / 1024,
+                        max_history_len,
+                    );
+                    push_history(
+                        &mut net_tx_history,
+                        m.network.tx_bytes_per_sec / 1024,
+                        max_history_len,
+                    );
                     last_sys_metrics = Some(m.clone());
                     m
                 };
@@ -792,6 +808,8 @@ impl DataPipeline {
                     recall_chain_success: osa_sync.recall_chain_success(),
                     sys_metrics,
                     sys_metrics_history: sys_metrics_history.iter().copied().collect(),
+                    net_rx_history: net_rx_history.iter().copied().collect(),
+                    net_tx_history: net_tx_history.iter().copied().collect(),
                     resource_cpu_backfill: cpu_backfill.clone(),
                     resource_mem_backfill: mem_backfill.clone(),
                     tick_mode,

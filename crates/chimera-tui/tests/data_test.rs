@@ -583,3 +583,41 @@ async fn event_wake_ticks_do_not_dilute_history() {
     );
     pipeline.shutdown().await;
 }
+
+/// F-39 喂数接线:DataPipeline 重 tick 与 sysinfo 采集同节奏推入网络速率历史
+///
+/// 喂数端此前全仓零调用(push_all_samples 等),网络 sparkline 消费端无数据;
+/// 本测试锁定"快照必须承载网络速率历史"的生产契约(RX/TX 成对推进)。
+/// WHY 只断言长度不断言数值:测试环境真实网络速率不可控(可为 0),长度
+/// 增长已足以锁定喂数节奏,值断言会引入环境依赖 flake。
+#[tokio::test]
+async fn pipeline_snapshot_includes_net_rate_history() {
+    let bus = EventBus::with_capacity(1024);
+    let subscriber = EventSubscriber::new(bus.clone());
+    let pipeline = DataPipeline::new(subscriber, test_config());
+
+    // 轮询等待 ≥3 个重 tick(50ms tick;无事件唤醒时全部为定时重 tick)
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let snap = pipeline.snapshot();
+        if snap.net_rx_history.len() >= 3 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for net rate history; rx len={} tx len={}",
+                snap.net_rx_history.len(),
+                snap.net_tx_history.len()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let snap = pipeline.snapshot();
+    assert_eq!(
+        snap.net_rx_history.len(),
+        snap.net_tx_history.len(),
+        "RX/TX 速率历史应成对推进"
+    );
+    pipeline.shutdown().await;
+}

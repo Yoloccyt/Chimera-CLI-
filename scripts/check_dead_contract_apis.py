@@ -154,6 +154,22 @@ CONTRACTS = [
                 "inherent search_batch/top_k_batch) and would yield misleading uses, so "
                 "they are tracked in the C1/C2 report instead (dual-channel negative).",
     },
+    {
+        "name": "faae::parallel::dispatch_plan",
+        # 词边界挡住同名近邻符号（chimera-tui 的 `apply_dispatch_plan`，下划线是 \w，
+        # `\bdispatch_plan` 在其内部不成立）；mod tests 尾与注释行按脚本规则排除。
+        "pattern": r"\bdispatch_plan\(",
+        # 自身模块文件：命中转入 self_uses（定义 1 + test 探针 1 + wrapper 2）。
+        "exclude_files": ["faae-router/src/parallel.rs"],
+        "self_uses_baseline": 4,
+        "status": "DEFERRED",
+        "note": "Routing decision point, pub widened for test observability (P5, "
+                "2026-10-03). Production consumers are same-module wrappers only "
+                "(score_experts_scoring_batch = live via route(); score_experts_batch = "
+                "dead since P3); cross-module callers are tests only "
+                "(tests/env_no_parallel.rs, not production scope). Registered to "
+                "close the ADR-197 A6 gap left open in cpu-plane-p0p1-progress SS24.",
+    },
 ]
 
 # `#[cfg(test)]` marks the start of a file's test tail **only when it precedes a

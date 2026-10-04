@@ -44,6 +44,14 @@
 //! → 1.42×;512 维/24k 端到端 → 1.37×（快照收集随 N 线性,稀释加剧）;
 //! 热点层 512 维/24k → 本档。
 //!
+//! # 并发组（P1 `block_in_place` 收益面,2026-10-04 新增）
+//! `faae_concurrent_route`:N（1/2/4/8）路并发 `route()` 的轮墙钟与单调用
+//! 延迟分位——`block_in_place` 的收益是「并发下 tokio worker 可用性」,
+//! 单调用序列原理上测不到（cpu-plane-p0p1-progress §4.3）,故以
+//! multi_thread runtime + N 个真 runtime 任务独立成组,判读为组内自对照
+//! （N 档间单调用均值的扩展性方向）。阈值与 registered 升格待静默复测后
+//! 与 scoring 组同批三源登记（无静默读数不锁阈值,诚实数据红线）。
+//!
 //! # 门禁
 //! 单 crate 1.5× 加速（对照 T1 基线,本机实测记录）。口径与 T8/T9 一致:
 //! `iter_custom` 测量阶段零打印,测量结束后固定采样打印 P50/P99 + speedup;
@@ -59,6 +67,8 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::EventBus;
 use faae_router::parallel::score_experts_scoring_batch;
 use faae_router::{ExpertProfile, ExpertScoring, FaaeConfig, FaaeRouter, ToolId};
+// ADR-159 决策 3 单源:新基准一律用 L0 共享分位函数（faae→nexus-contracts 边已在盘）
+use nexus_contracts::util::percentile_sorted;
 use tokio::runtime::Runtime;
 
 /// 专家数量 — 超过 Generic 阈值(10_000)触发 Rayon 分支;24k 使任务波次充足,
@@ -263,5 +273,158 @@ fn bench_faae_scoring(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_faae_scoring);
+/// 并发档位 runtime — worker 数 = 并发路数 N（P1 基准专用）
+///
+/// WHY 每档独立 runtime:worker 数是并发基准的自变量（1/2/4/8）,
+/// 必须与并发路数一致才能观测「N 个任务在 N 个 worker 上的让出行为」。
+fn concurrent_rt(workers: usize) -> Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .enable_all()
+        .build()
+        .expect("并发档位 runtime 构建")
+}
+
+/// 单轮并发 — N 个 runtime 任务各连续调用 K 次 `route()`
+///
+/// 返回（轮墙钟, 全部单调用延迟）。任务必须经 `tokio::spawn` 交由 worker
+/// 轮询（router.rs T2 文档:测试体经 `block_on` 驱动不占 worker,直调测不到饿死）。
+fn run_concurrent_round(
+    rt: &Runtime,
+    n: usize,
+    per_task_calls: usize,
+    router: &Arc<FaaeRouter>,
+    clv: &Arc<Vec<f32>>,
+    candidates: &Arc<Vec<ToolId>>,
+) -> (Duration, Vec<Duration>) {
+    let t0 = Instant::now();
+    let lats = rt.block_on(async {
+        let mut joins = Vec::with_capacity(n);
+        for _ in 0..n {
+            let router = Arc::clone(router);
+            let clv = Arc::clone(clv);
+            let candidates = Arc::clone(candidates);
+            joins.push(tokio::spawn(async move {
+                let mut lat = Vec::with_capacity(per_task_calls);
+                for _ in 0..per_task_calls {
+                    let t = Instant::now();
+                    let out = router
+                        .route(&clv[..], &candidates[..])
+                        .await
+                        .expect("并发路由应成功");
+                    criterion::black_box(out);
+                    lat.push(t.elapsed());
+                }
+                lat
+            }));
+        }
+        let mut all = Vec::with_capacity(n * per_task_calls);
+        for j in joins {
+            all.extend(j.await.expect("并发任务 join"));
+        }
+        all
+    });
+    (t0.elapsed(), lats)
+}
+
+/// P1 并发基准 — N 路并发 `route()` 轮墙钟与单调用延迟分位
+///
+/// # 为什么必须独立成组（单调用 criterion 原理上测不到）
+/// `block_in_place` 的收益是「并发下 tokio worker 可用性」:单调用序列里
+/// 让出 worker 只体现为线程交接开销（cpu-plane-p0p1-progress §4.3 实测
+/// 结论指出该量须以并发压测承担,criterion 单调用基准原理上无效）。
+///
+/// # 判读（组内自对照,无需修复前对照）
+/// 各档「单调用平均墙钟」= 轮墙钟 /(N×K):评分本体落同一 rayon 池
+/// （num_cpus−2 线程）,N≤8 时应因并发重叠而不随 N 线性放大;若均值随 N
+/// 接近 N 倍放大 → 并发饥饿/池争抢异常（回归信号）。门前采样另出单调用
+/// P50/P99（`iter_custom` 内零打印纪律,同本文件既有两组口径）。
+///
+/// # 登记状态（诚实声明）
+/// 本组当前为 dev-only（`scripts/bench_inventory_freeze.txt`）;registered
+/// 升格（run_bench 两源 + 阈值键）待静默复测后与 `faae_scoring` 组同批——
+/// 无静默读数不锁阈值（诚实数据红线,ADR-190 反幽灵门）。
+fn bench_faae_concurrent_route(c: &mut Criterion) {
+    const WORKERS: [usize; 4] = [1, 2, 4, 8];
+    const PER_TASK_CALLS: usize = 2;
+    const GATE_SAMPLES: usize = 16;
+
+    // setup runtime 仅承担 24k 专家注册与预热;route 调用在各档 runtime 上
+    let setup_rt = Runtime::new().expect("setup runtime 构建");
+    let clv = Arc::new(make_clv());
+    let candidates = Arc::new(make_candidates(N_EXPERTS));
+    let router = Arc::new(FaaeRouter::with_config(
+        EventBus::new(),
+        FaaeConfig::default().with_balance_enabled(false),
+    ));
+    for p in make_experts(N_EXPERTS) {
+        setup_rt.block_on(router.register_expert(p));
+    }
+    // 预热:rayon 池与快照路径就绪
+    for _ in 0..2 {
+        let _ = run_concurrent_round(&setup_rt, 1, 1, &router, &clv, &candidates);
+    }
+
+    let mut group = c.benchmark_group("faae_concurrent_route");
+    group.sample_size(10);
+    let mut summary: Vec<(usize, Duration)> = Vec::with_capacity(WORKERS.len());
+    for n in WORKERS {
+        let rt = concurrent_rt(n);
+        group.bench_function(
+            BenchmarkId::from_parameter(format!("w{n}_k{PER_TASK_CALLS}")),
+            |b| {
+                b.iter_custom(|iters| {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        let (wall, _) = run_concurrent_round(
+                            &rt,
+                            n,
+                            PER_TASK_CALLS,
+                            &router,
+                            &clv,
+                            &candidates,
+                        );
+                        total += wall;
+                    }
+                    total
+                });
+            },
+        );
+
+        // 门前采样（iter_custom 外,零干扰）
+        let mut all_lat: Vec<Duration> = Vec::with_capacity(GATE_SAMPLES * n * PER_TASK_CALLS);
+        let mut walls: Vec<Duration> = Vec::with_capacity(GATE_SAMPLES);
+        for _ in 0..GATE_SAMPLES {
+            let (wall, lats) =
+                run_concurrent_round(&rt, n, PER_TASK_CALLS, &router, &clv, &candidates);
+            walls.push(wall);
+            all_lat.extend(lats);
+        }
+        all_lat.sort_unstable();
+        let p50 = percentile_sorted(&all_lat, 0.50).expect("采样非空");
+        let p99 = percentile_sorted(&all_lat, 0.99).expect("采样非空");
+        let mean = walls.iter().sum::<Duration>() / (GATE_SAMPLES * n * PER_TASK_CALLS) as u32;
+        eprintln!(
+            "[faae_concurrent_route] workers={n} calls/round={} | per-call P50={:.2}ms P99={:.2}ms mean={:.2}ms",
+            n * PER_TASK_CALLS,
+            p50.as_secs_f64() * 1e3,
+            p99.as_secs_f64() * 1e3,
+            mean.as_secs_f64() * 1e3,
+        );
+        summary.push((n, mean));
+    }
+    group.finish();
+
+    // 跨档对照汇总（组内自对照:并发扩展性方向,供报告与后续阈值标定）
+    let line: Vec<String> = summary
+        .iter()
+        .map(|(n, mean)| format!("N={n}: {:.2}ms", mean.as_secs_f64() * 1e3))
+        .collect();
+    eprintln!(
+        "[faae_concurrent_route] 单调用均值(轮墙钟/NK) 跨档: {}",
+        line.join(" | ")
+    );
+}
+
+criterion_group!(benches, bench_faae_scoring, bench_faae_concurrent_route);
 criterion_main!(benches);
