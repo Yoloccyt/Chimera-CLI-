@@ -190,14 +190,14 @@ impl MetricsDashboardPanel {
                     .enumerate()
                     .map(|(i, &v)| (i as f64, v as f64))
                     .collect();
-                let widget = line_chart(&data, "Metric", Color::Cyan);
+                let widget = line_chart(&data, crate::t!("panel.metrics.cell_metric"), Color::Cyan);
                 Widget::render(widget, area, buf);
             }
             VizChartKind::Heatmap => {
                 // 热力图:取 budget_history 重组为 1xN 矩阵(spec 简化用法)
                 let values: Vec<f32> = snap.budget_history.iter().map(|&v| v as f32).collect();
                 let cols = values.len().max(1);
-                let widget = heatmap(&values, 1, cols, "Heatmap");
+                let widget = heatmap(&values, 1, cols, crate::t!("panel.metrics.cell_heatmap"));
                 Widget::render(widget, area, buf);
             }
             VizChartKind::BarChart => {
@@ -211,19 +211,23 @@ impl MetricsDashboardPanel {
                     .collect();
                 let label_refs: Vec<(&str, f64)> =
                     entries.iter().map(|(l, v)| (l.as_str(), *v)).collect();
-                let widget = bar_chart(&label_refs, "Bar", Color::Yellow);
+                let widget = bar_chart(
+                    &label_refs,
+                    crate::t!("panel.metrics.cell_bar"),
+                    Color::Yellow,
+                );
                 Widget::render(widget, area, buf);
             }
             VizChartKind::Gauge => {
                 // 仪表盘:取 budget utilization_rate [0, 1] × 100
                 let value = (snap.budget_metrics.utilization_rate as f64) * 100.0;
-                let widget = viz_gauge(value, 100.0, 80.0, "Util");
+                let widget = viz_gauge(value, 100.0, 80.0, crate::t!("panel.metrics.cell_util"));
                 Widget::render(widget, area, buf);
             }
             VizChartKind::Histogram => {
                 // 直方图:取 health_metrics.average_latency_ms
                 let data = vec![snap.health_metrics.average_latency_ms as f32];
-                let widget = histogram(&data, 4, "Latency");
+                let widget = histogram(&data, 4, crate::t!("panel.metrics.cell_latency"));
                 Widget::render(widget, area, buf);
             }
         }
@@ -231,14 +235,14 @@ impl MetricsDashboardPanel {
 
     /// 渲染空槽位占位符
     ///
-    /// WHY 独立函数:unbind 后槽位仍占 1 cell,显示 "(empty)" 提示,
+    /// WHY 独立函数:unbind 后槽位仍占 1 cell,显示 "(空)"(En: "(empty)")提示,
     /// 与 viz widget 风格一致(Border + 文字)。
     fn render_empty(area: Rect, buf: &mut Buffer) {
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" (empty) ")
+            .title(crate::t!("panel.metrics.empty_title"))
             .border_style(Style::default().fg(Color::DarkGray));
-        let paragraph = Paragraph::new(Line::from("(unbound)"))
+        let paragraph = Paragraph::new(Line::from(crate::t!("panel.metrics.unbound")))
             .style(Style::default().fg(Color::DarkGray))
             .block(block);
         Widget::render(paragraph, area, buf);
@@ -286,14 +290,14 @@ impl Panel for MetricsDashboardPanel {
         // **超时发生**次数,无法派生(且 gather 路径恒受保护,该值近乎恒为 100%),
         // 故如实标注"未上报",而非伪造一个百分比。
         let t = &state.gqep_timeouts;
+        // 键值含 4 个 {} 占位:3 个计数字段 + 覆盖率标注段(第 4 段经既有键拼入),
+        // 按序链式 replacen(per_op=/global=/orphan= 为协议字段名,两表同形)
         let gqep_summary = Line::from(vec![Span::styled(
-            format!(
-                "GQEP Timeout: per_op={}  global={}  orphan={}  {}",
-                t.per_op,
-                t.global,
-                t.orphan,
-                crate::t!("panel.metrics.coverage_unreported"),
-            ),
+            crate::t!("panel.metrics.gqep_summary")
+                .replacen("{}", &t.per_op.to_string(), 1)
+                .replacen("{}", &t.global.to_string(), 1)
+                .replacen("{}", &t.orphan.to_string(), 1)
+                .replacen("{}", crate::t!("panel.metrics.coverage_unreported"), 1),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),

@@ -389,7 +389,9 @@ impl TaskManagerPanel {
             .replacen("{}", &paused.to_string(), 1)
             .replacen("{}", &completed.to_string(), 1);
         if selected_count > 0 {
-            status_line.push_str(&format!(" | Selected:{}", selected_count));
+            status_line.push_str(
+                &crate::t!("panel.task.selected_count").replace("{}", &selected_count.to_string()),
+            );
         }
         lines.push(Line::from(status_line));
         lines.push(Line::from(crate::t!("panel.footer")));
@@ -803,6 +805,18 @@ impl Panel for TaskManagerPanel {
         // Task 3.9.2:注册为独立 PanelId::TaskManager,修复"未注册"问题。
         // 与 QuestPanel 共享数据源(state.quest_list),但提供不同视图(CRUD vs 监视)。
         PanelId::TaskManager
+    }
+
+    /// 返回选中 Quest 的 quest_id(§1.3b,供 quest.* 精确定位)
+    ///
+    /// WHY 覆写:Panel trait 契约点名列表型面板(Quest/TaskManager)须返回选中项
+    /// id——修复前默认 None,命令面板派发的 quest.pause/resume/cancel 经富化
+    /// (event_loop enrich_payload_with_focused_quest)拿不到 quest_id 无法定位。
+    /// 实时读过滤列表,selected 越界经 `.get()` 返回 None 安全(与 QuestPanel 同式)。
+    fn selected_context_id(&self, state: &TuiState) -> Option<String> {
+        self.filtered_quests(state)
+            .get(self.selected)
+            .map(|q| q.quest_id.clone())
     }
 
     fn title(&self) -> Line<'static> {
@@ -1772,6 +1786,10 @@ mod tests {
 
     #[test]
     fn test_status_counts_selected_display() {
+        // 选中计数文案已迁键 panel.task.selected_count(zh/en 异文),断言须按
+        // 键表现值构造;guard 防并行测试污染全局 locale(默认 locale 为 Zh)。
+        let _guard = crate::i18n::locale_test_guard();
+        let marker = crate::t!("panel.task.selected_count").replace("{}", "");
         let mut panel = TaskManagerPanel::new();
         let mut state = TuiState::new();
         state.quest_list = vec![
@@ -1779,27 +1797,29 @@ mod tests {
             sample_quest("q-2", "Beta", 3),
         ];
 
-        // 无选中时不显示 Selected
+        // 无选中时不显示批量选中计数
         let text_no_selection = panel.render_text(&state);
         assert!(
-            !text_no_selection.contains("Selected:"),
-            "无选中时不应显示 Selected"
+            !text_no_selection.contains(&marker),
+            "无选中时不应显示选中计数(标记 {marker:?}):\n{text_no_selection}"
         );
 
         // 选中 1 项
         panel.selected_indices.insert(0);
         let text_one = panel.render_text(&state);
+        let expected_one = crate::t!("panel.task.selected_count").replace("{}", "1");
         assert!(
-            text_one.contains("Selected:1"),
-            "选中 1 项时统计行应显示 'Selected:1':\n{text_one}"
+            text_one.contains(&expected_one),
+            "选中 1 项时统计行应显示 {expected_one:?}:\n{text_one}"
         );
 
         // 选中 2 项
         panel.selected_indices.insert(1);
         let text_two = panel.render_text(&state);
+        let expected_two = crate::t!("panel.task.selected_count").replace("{}", "2");
         assert!(
-            text_two.contains("Selected:2"),
-            "选中 2 项时统计行应显示 'Selected:2':\n{text_two}"
+            text_two.contains(&expected_two),
+            "选中 2 项时统计行应显示 {expected_two:?}:\n{text_two}"
         );
     }
 }

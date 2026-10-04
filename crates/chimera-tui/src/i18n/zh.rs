@@ -945,6 +945,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.sort_created_at" => "创建时间",
         "panel.task.no_matching" => "暂无匹配任务",
         "panel.task.status_summary" => "待处理:{} | 执行中:{} | 已暂停:{} | 已完成:{}",
+        "panel.task.selected_count" => " | 已选中:{}",
         "panel.task.quadrants_label" => "四象限: ",
         "panel.task.quadrant_q1" => "Q1(实现): A={} T={} WSJF={}",
         "panel.task.quadrant_q2" => "Q2(集成): A={} T={} WSJF={}",
@@ -959,6 +960,67 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.batch_pause_confirm" => "批量暂停 (Batch pause) {} 个任务",
         "panel.task.batch_terminate_confirm" => "批量终止 (Batch terminate) {} 个任务",
         "panel.task.batch_resume_confirm" => "批量恢复 (Batch resume) {} 个任务",
+        // ====================================================================
+        // B6-M(2026-10-04):六面板(chtc/clv_vector/sysinfo/experience_card_viz/
+        // resource_monitor/metrics_dashboard)正文英文全量迁移,EXEMPT_ENGLISH_
+        // PREFIXES 对应六条随迁移除(只减不增)。占位符均为 {},消费点按
+        // replacen 范式替换(多占位符链式,见 injection_strategy cache_line 先例)。
+        // ====================================================================
+        // chtc 面板(正文表头复用 panel.border.chtc 经 trim 消除双源;空态
+        // "(none)" 复用 common.none)
+        "panel.chtc.status_online" => "在线",
+        "panel.chtc.status_offline" => "离线",
+        "panel.chtc.no_adapters" => "未接入任何 CHTC 适配器",
+        "panel.chtc.awaiting_events" => "等待 chtc-bridge 的 ChtcAdapterStatus 事件...",
+        "panel.chtc.detail_id" => "适配器 ID: {}",
+        "panel.chtc.detail_type" => "类型: {}",
+        "panel.chtc.detail_score" => "兼容性评分: {}/100",
+        "panel.chtc.detail_status" => "状态: {}",
+        "panel.chtc.detail_score_warning" => "警告: 评分低于 {}(存在兼容性风险)",
+        "panel.chtc.detail_requests" => "最近请求:",
+        "panel.chtc.requests_label" => "  请求: ",
+        "panel.chtc.detail_title" => "CHTC 适配器: {}",
+        // clv_vector 面板(块标号 "B{}"、dim=/value= 为语言无关技术标识,不迁)
+        "panel.clv.l2_norm_label" => " L2 范数: {} ",
+        "panel.clv.block_means_title" => "块均值(8 × 64 维分块):",
+        "panel.clv.block_waiting" => "等待数据...",
+        "panel.clv.top_dims_title" => "Top 维度(按 |值|):",
+        "panel.clv.no_top_dims" => "暂无 Top 维度数据。",
+        "panel.clv.awaiting_encoder" => "等待 NMC 编码器数据...",
+        "panel.clv.showing_dims" => "... 显示 {} / {} 个维度",
+        // sysinfo 面板(GB/MB/B 为国际单位符号、UTC 时间戳后缀语言无关,不迁)
+        "panel.sysinfo.line_os" => "系统: {}  |  {}  |  架构: {}",
+        "panel.sysinfo.line_cpu" => "CPU: {}  |  核心数: {}",
+        "panel.sysinfo.line_memory" => "内存总量: {}",
+        "panel.sysinfo.line_boot" => "启动时间: {}",
+        "panel.sysinfo.line_process" => "Chimera 进程: PID {}  |  常驻内存: {}",
+        "panel.sysinfo.refresh_hint" => "按 'r' 刷新进程信息",
+        "panel.sysinfo.na" => "无",
+        "panel.sysinfo.unknown" => "未知",
+        // experience_card_viz 面板
+        "panel.exp_card.body_title" => "经验卡片可视化(OpenMLE)",
+        "panel.exp_card.awaiting_provider" => "等待统计提供者接入...",
+        "panel.exp_card.stats_summary" => "总卡片: {} | 已评估: {} | 唯一错误: {}",
+        "panel.exp_card.scores_summary" => "最佳分: {} | 平均分: {}",
+        "panel.exp_card.method_dist_title" => "方法分布:",
+        "panel.exp_card.no_cards" => "暂无卡片记录。",
+        // resource_monitor 面板(每核标签 "C{i}:" 为语言无关技术标识,不迁)
+        "panel.resources.cpu_title" => " CPU: {}{} ",
+        "panel.resources.paused_tag" => " [已暂停]",
+        "panel.resources.ram_title" => " 内存: {}/{} GB ({}) ",
+        "panel.resources.swap_title" => " 交换分区: {}/{} GB",
+        "panel.resources.disk_title" => " 磁盘: 读 {}MB/s  写 {}MB/s ",
+        "panel.resources.net_title" => " 网络: 收 {}MB/s  发 {}MB/s ",
+        // metrics_dashboard 面板(cell 标题 b{i} 类目标签为语言无关技术标识,不迁;
+        // gqep_summary 的 per_op=/global=/orphan= 为协议字段名,两表同形保留)
+        "panel.metrics.cell_metric" => "指标",
+        "panel.metrics.cell_heatmap" => "热力图",
+        "panel.metrics.cell_bar" => "柱状图",
+        "panel.metrics.cell_util" => "利用率",
+        "panel.metrics.cell_latency" => "延迟",
+        "panel.metrics.empty_title" => " (空) ",
+        "panel.metrics.unbound" => "(未绑定)",
+        "panel.metrics.gqep_summary" => "GQEP 超时: per_op={}  global={}  orphan={}  {}",
         // 通用
         "common.none" => "(无)",
         _ => return None,

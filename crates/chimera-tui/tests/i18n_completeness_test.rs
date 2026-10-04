@@ -581,8 +581,12 @@ fn no_hardcoded_cjk_in_panels() {
 /// 注意: 本测试为 advisory(建议性),某些 key 可能通过动态构造调用
 /// (如 `format!("panel.{}.title", name)`),这些 key 不会被静态扫描
 /// 捕获。若动态调用模式导致误报,请将对应 key 添加到豁免列表。
-#[test]
-fn seed_keys_are_used_in_code() {
+/// 收集 `src/` 全部 `.rs` 源码中 `t!()` / `tr()` 字面量调用的 key 集合
+///
+/// WHY 提取为函数:seed 测试与 B6-R 对账测试(`all_lookup_keys_are_consumed_
+/// or_whitelisted`)共用同一消费集口径,避免两处各写一份扫描逻辑造成口径漂移
+/// (原逻辑内联于 seed 测试函数体,等价提升,行为不变)。
+fn collect_used_keys() -> std::collections::HashSet<String> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let src_dir = Path::new(manifest_dir).join("src");
     let mut files = Vec::new();
@@ -598,56 +602,67 @@ fn seed_keys_are_used_in_code() {
             used_keys.insert(key);
         }
     }
+    used_keys
+}
 
-    // 已知通过动态构造调用的 key(静态扫描无法捕获),手动豁免
-    //
-    // WHY: 以下 key 通过 `t!(format!("panel.{}.title", name))` 等动态构造模式
-    // 调用,静态扫描无法捕获。它们在 SEED_KEYS 中声明且在 zh/en 表中翻译,
-    // 但在源码中没有直接的 `t!("key")` 字面量调用。若未来改为直接调用,
-    // 可从豁免列表移除。
-    let dynamically_constructed_keys: &[&str] = &[
-        "app.name",
-        "panel.task.title",
-        "panel.chat.title",
-        "panel.monitor.title",
-        "panel.log.title",
-        "panel.help.title",
-        "status.mode",
-        "status.view",
-        "status.chat_pending",
-        // PS-2(F-1):握手回执按 HandshakeLevel 选键后经 `t!(key)` 动态查表
-        // (app/state.rs 的 match 返回 &'static str),无字面量调用点。
-        // 若未来改为直连字面量,可从本豁免列表移除。
-        "status.handshake.full",
-        "status.handshake.degraded",
-        "status.handshake.refused",
-        "mode.normal",
-        "mode.insert",
-        "mode.command",
-        "action.agent.chat",
-        "action.quest.pause",
-        "action.overwindow.run",
-        "action.export.run",
-        "action.view.switch_layout",
-        "action.system.toggle_locale",
-        "action.monitor.pause_sampling",
-        "action.monitor.time_window",
-        "action.viz.switch_dimension",
-        "action.view.apply_saved",
-        "action.config.edit",
-        "action.quest.jump",
-        "hint.palette",
-        "hint.help",
-        // B1(2026-09-06 复评):UnwiredHint(&'static str) 经运行时变量传入
-        // t!(),源码中无字面量调用点(键名由 DispatchPlan::UnwiredHint 携带)
-        "slash.unwired.fork",
-        "slash.unwired.undo",
-        "slash.unwired.redo",
-    ];
+/// 已知通过动态构造调用的 key(静态 `t!("key")` 扫描无法捕获),手动豁免
+///
+/// WHY: 以下 key 通过 `t!(运行时变量)`(如 `t!(key)`,键名由 match 臂或注册
+/// 表字段以字符串字面量携带)或 `format!("panel.{}.title", name)` 等动态构造
+/// 模式调用,静态扫描无法捕获。若未来改为直接字面量调用,应从本列表移除
+/// (只减不增棘轮,反向断言见 B6-R 对账测试 ⑤b)。
+///
+/// B6-R(2026-10-04)自 seed 测试函数体提升为模块级常量,由 seed 测试与
+/// `all_lookup_keys_are_consumed_or_whitelisted` 共用,防两份清单漂移;同批
+/// 棘轮出清 4 条已获得 `t!` 字面调用点的条目(action.view.toggle_companion /
+/// action.view.cycle_companion / action.view.focus_pane / action.panel.
+/// drill_down,消费点 app/event_loop.rs 的动作标题渲染段)。
+const DYNAMICALLY_CONSTRUCTED_KEYS: &[&str] = &[
+    "app.name",
+    "panel.task.title",
+    "panel.chat.title",
+    "panel.monitor.title",
+    "panel.log.title",
+    "panel.help.title",
+    "status.mode",
+    "status.view",
+    "status.chat_pending",
+    // PS-2(F-1):握手回执按 HandshakeLevel 选键后经 `t!(key)` 动态查表
+    // (app/state.rs 的 match 返回 &'static str),无字面量调用点。
+    "status.handshake.full",
+    "status.handshake.degraded",
+    "status.handshake.refused",
+    "mode.normal",
+    "mode.insert",
+    "mode.command",
+    "action.agent.chat",
+    "action.quest.pause",
+    "action.overwindow.run",
+    "action.export.run",
+    "action.view.switch_layout",
+    "action.system.toggle_locale",
+    "action.monitor.pause_sampling",
+    "action.monitor.time_window",
+    "action.viz.switch_dimension",
+    "action.view.apply_saved",
+    "action.config.edit",
+    "action.quest.jump",
+    "hint.palette",
+    "hint.help",
+    // B1(2026-09-06 复评):UnwiredHint(&'static str) 经运行时变量传入
+    // t!(),源码中无字面量调用点(键名由 DispatchPlan::UnwiredHint 携带)
+    "slash.unwired.fork",
+    "slash.unwired.undo",
+    "slash.unwired.redo",
+];
+
+#[test]
+fn seed_keys_are_used_in_code() {
+    let used_keys = collect_used_keys();
 
     let mut unused: Vec<&str> = Vec::new();
     for &seed_key in chimera_tui::i18n::zh::SEED_KEYS {
-        if !used_keys.contains(seed_key) && !dynamically_constructed_keys.contains(&seed_key) {
+        if !used_keys.contains(seed_key) && !DYNAMICALLY_CONSTRUCTED_KEYS.contains(&seed_key) {
             unused.push(seed_key);
         }
     }
@@ -655,7 +670,7 @@ fn seed_keys_are_used_in_code() {
     assert!(
         unused.is_empty(),
         "SEED_KEYS 中有 {} 个 key 未在代码中通过 t!()/tr() 使用(可能为死 key):\n  - {}\n\
-         提示: 若为动态构造调用,请添加到 dynamically_constructed_keys 豁免列表",
+         提示: 若为动态构造调用,请添加到 DYNAMICALLY_CONSTRUCTED_KEYS 豁免列表",
         unused.len(),
         unused.join("\n  - ")
     );
@@ -708,4 +723,246 @@ fn panel_name_keys_resolve_in_both_locales_and_align_with_border() {
             );
         }
     }
+}
+
+// ============================================================================
+// 测试 5(B6-R,R5 F-45 建议②兑现): lookup 全键消费对账
+// ============================================================================
+
+/// 从 i18n 键表源文件解析 `lookup()` match 的全部键(臂首字面量)
+///
+/// WHY 源码解析而非运行时遍历:`lookup` 是 match 语句,返回 `&'static str`,
+/// 无法运行时枚举全键集;按纯测试侧方案仿 `extract_i18n_keys` 的逐行文本解析
+/// 范式,匹配行首 `"key" =>` 臂模式——多行值臂(`"key" => {`)与单行值臂均
+/// 命中,值文本行(行首引号后无 `=>`)天然排除,`_ =>` 尾臂为终止锚。
+fn extract_lookup_keys(path: &Path) -> std::collections::HashSet<String> {
+    let content = fs::read_to_string(path).expect("i18n key table readable");
+    let mut keys = std::collections::HashSet::new();
+    let mut in_lookup = false;
+    for line in content.lines() {
+        // 剥行尾注释,防注释文本干扰臂匹配(键臂行本身无行注释)
+        let code = match line.find("//") {
+            Some(idx) => &line[..idx],
+            None => line,
+        };
+        if code.contains("pub fn lookup") {
+            in_lookup = true;
+            continue;
+        }
+        if !in_lookup {
+            continue;
+        }
+        let trimmed = code.trim_start();
+        if let Some(rest) = trimmed.strip_prefix('"') {
+            if let Some(end) = rest.find('"') {
+                if rest[end + 1..].trim_start().starts_with("=>") {
+                    keys.insert(rest[..end].to_string());
+                }
+            }
+        }
+        // 尾臂 `_ => return None` 之后函数即结束(两表结构一致,同为尾臂)
+        if trimmed.starts_with("_ =>") {
+            break;
+        }
+    }
+    keys
+}
+
+/// 提取单行内全部字符串字面量内容(处理 `\` 转义)
+///
+/// WHY 与 i18n_hardcode_invariant_test.rs 的 extract_string_literals 同款
+/// 单行状态机:tests/ 各测试文件自治持有小工具是既有风格(各 panel test
+/// 自带 render_to_string 同理);键名均为单行字面量,无跨行场景。
+fn extract_line_string_literals(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_str = false;
+    let mut escaped = false;
+    for c in line.chars() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+                out.push(std::mem::take(&mut cur));
+            } else {
+                cur.push(c);
+            }
+        } else if c == '"' {
+            in_str = true;
+            cur.clear();
+        }
+    }
+    out
+}
+
+/// 收集 `src/` 源码(剥注释后)全部字符串字面量
+///
+/// WHY 需要字面量集口径:除 `t!("key")` 字面调用外,相当数量的键以**裸键名
+/// 字符串字面量**形态被消费——match 臂返回键名(app/event_loop.rs 的
+/// status.view_chat 分支)、注册表字段(actions/slash_registry.rs 的
+/// title_key)、跨行 `t!(\n "key"\n)`(panels/self_assessment.rs 的
+/// recent_findings)——单行 `t!(`/`tr(` 扫描全部漏抓。键名的动态消费必然以
+/// 字符串字面量落在源码某处,故"键名 ∈ 剥注释后的源码字面量集"是消费判定的
+/// 必要补充;真死键(B5-G 人工删除 shortcut.time_jump/clear_selection 的
+/// 形态)全库零字面量,仍被本门禁抓出。
+///
+/// WHY 剥注释:键名出现在注释中(如死键删除后遗留的溯源注记)不构成消费。
+///
+/// WHY 排除键表自身:zh.rs/en.rs 的 lookup 臂首字面量就是键集合本身,不排除
+/// 则任何键都"在字面量集里",门禁失效。
+fn collect_src_string_literals() -> std::collections::HashSet<String> {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let src_dir = Path::new(manifest_dir).join("src");
+    let mut files = Vec::new();
+    collect_rust_files(&src_dir, &mut files);
+
+    let mut literals: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for file in &files {
+        let rel = file
+            .strip_prefix(manifest_dir)
+            .unwrap_or(file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if rel == "src/i18n/zh.rs" || rel == "src/i18n/en.rs" {
+            continue;
+        }
+        let Ok(source) = fs::read_to_string(file) else {
+            continue;
+        };
+        // strip_comments(本文件既有工具)剥行/块注释并保留字符串字面量
+        for line in strip_comments(&source).lines() {
+            for lit in extract_line_string_literals(line) {
+                literals.insert(lit);
+            }
+        }
+    }
+    literals
+}
+
+/// 死键暂存区 — 已确认全库零消费、待删除的 lookup 键(B6-R 机证实测)
+///
+/// WHY 暂存而非直接删除:删除键表条目属生产代码(zh.rs/en.rs)变更,超出
+/// B6-R(纯测试侧对账门禁)的范围;暂存登记是 R5 F-45 "每键必须被消费或
+/// 登记" 中"登记"的落点,等价于键表条目的集中式 DEAD 注记。
+///
+/// 棘轮(只减不增):删除对应键表条目时同步移除本清单条目;条目若重新获得
+/// 消费点(见主测试 ⑤a 反向断言)也必须出清。后续批次应择机删除以下键
+/// (zh/en 双侧对称删除,B5-G 死键删除先例):
+///
+/// - panel.task.quadrant_q1..q4(4 键):消费点在 task_manager.rs 已删除的
+///   死代码分支中消亡(该文件 quadrant_footer 区注释自证
+///   quadrant_status_available() 恒为 false、原 if 分支为死代码);
+/// - panel.osa.sparsity_label:osa_sparse 面板正文实际消费 panel.osa.
+///   gauge_title,本键无消费点;
+/// - shortcut.export / shortcut.follow_bottom:全库零引用(B5-G 人工删除
+///   shortcut.time_jump/clear_selection 的同类,当时靠人工评审发现);
+/// - slash.error.hint / slash.error.unknown / slash.error.usage(3 键):
+///   斜杠界面仅消费 slash.surface.title 与 slash.tier.*/slash.agent_template.*,
+///   错误提示路径未消费此键族。
+const DEAD_KEYS_PENDING_REMOVAL: &[&str] = &[
+    "panel.task.quadrant_q1",
+    "panel.task.quadrant_q2",
+    "panel.task.quadrant_q3",
+    "panel.task.quadrant_q4",
+    "panel.osa.sparsity_label",
+    "shortcut.export",
+    "shortcut.follow_bottom",
+    "slash.error.hint",
+    "slash.error.unknown",
+    "slash.error.usage",
+];
+
+/// B6-R(R5 F-45 建议②兑现): lookup 全键消费对账
+///
+/// # 守护语义
+/// zh/en 两张 lookup 表(各约 570 键)中**每一个键**必须满足下列之一,否则
+/// 即为"键表里躺着、全库零引用"的死键(B5-G 删除 shortcut.time_jump/
+/// clear_selection 时靠人工评审发现,本测试把该判别力机器化):
+/// 1. 有 `t!()`/`tr()` 字面量调用点(used_keys,与 seed 测试同口径);
+/// 2. 键名字面量出现在 `src/` 剥注释后的源码中(match 臂键名返回/注册表
+///    字段/跨行 t! 调用等动态消费形态);
+/// 3. `panel.name.*` 经 `PanelId::ALL + name_key()` 程序化枚举命中;
+/// 4. 在 [`DYNAMICALLY_CONSTRUCTED_KEYS`](动态构造白名单)登记;
+/// 5. 在 [`DEAD_KEYS_PENDING_REMOVAL`](死键暂存区)登记(逐条死因,待删)。
+///
+/// # 双侧对账
+/// zh/en 两表键集必须完全一致——比 zh_and_en_tables_cover_same_seed_keys
+/// 的种子集对齐更强的**全量**对齐,防止单侧增删键(半译/半删)。
+#[test]
+fn all_lookup_keys_are_consumed_or_whitelisted() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
+    // ① 全键集:解析 zh/en lookup match 臂首字面量 + 双侧全量对账
+    let zh_keys = extract_lookup_keys(&Path::new(&manifest_dir).join("src/i18n/zh.rs"));
+    let en_keys = extract_lookup_keys(&Path::new(&manifest_dir).join("src/i18n/en.rs"));
+    assert!(
+        !zh_keys.is_empty(),
+        "zh 表 lookup 解析出 0 键,臂首字面量模式可能失效(防解析器静默放水)"
+    );
+    let zh_only: Vec<&String> = zh_keys.difference(&en_keys).collect();
+    let en_only: Vec<&String> = en_keys.difference(&zh_keys).collect();
+    assert!(
+        zh_only.is_empty() && en_only.is_empty(),
+        "zh/en lookup 键集不对账(zh 独有 {zh_only:?} / en 独有 {en_only:?}),禁止单侧增删键"
+    );
+
+    // ② 消费集:t!/tr 字面调用(①与 seed 测试同口径)+ src 剥注释字符串字面量
+    let used_keys = collect_used_keys();
+    let src_literals = collect_src_string_literals();
+
+    // ③ 白名单:动态构造键 + panel.name.*(PanelId::ALL 程序化枚举)+ 死键暂存区
+    let mut whitelist: std::collections::HashSet<String> = DYNAMICALLY_CONSTRUCTED_KEYS
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
+    for panel in chimera_tui::types::PanelId::ALL {
+        whitelist.insert(panel.name_key().to_string());
+    }
+    for &dead in DEAD_KEYS_PENDING_REMOVAL {
+        whitelist.insert(dead.to_string());
+    }
+
+    // ④ 全键消费对账:未消费键(失败信息给出完整清单,便于定位)
+    let mut unconsumed: Vec<&String> = zh_keys
+        .iter()
+        .filter(|k| {
+            !used_keys.contains(*k) && !src_literals.contains(*k) && !whitelist.contains(*k)
+        })
+        .collect();
+    unconsumed.sort();
+    assert!(
+        unconsumed.is_empty(),
+        "lookup 表发现 {} 个零消费键(无 t!()/tr() 字面调用,键名字面量不在 src/ \
+         源码中出现,亦未登记任何白名单)——疑似死键,请删除键或登记:\n  - {}",
+        unconsumed.len(),
+        unconsumed
+            .iter()
+            .map(|k| k.as_str())
+            .collect::<Vec<_>>()
+            .join("\n  - ")
+    );
+
+    // ⑤ 棘轮反向断言(只减不增的机器化:白名单条目获得消费点即必须出清)
+    // a. 死键暂存区条目一旦重新获得消费点(键被重新接线),必须出清;
+    let dead_resurfaced: Vec<&&str> = DEAD_KEYS_PENDING_REMOVAL
+        .iter()
+        .filter(|key| used_keys.contains(**key) || src_literals.contains(**key))
+        .collect();
+    assert!(
+        dead_resurfaced.is_empty(),
+        "死键暂存区条目已重新出现消费点,应从暂存区移除(键恢复消费即不再属于死键):{dead_resurfaced:?}"
+    );
+    // b. 动态构造白名单条目一旦获得 t!()/tr() 字面调用点(改为直连调用),
+    //    必须出清——本批已据此出清 action.view.toggle_companion 等 4 条;
+    let whitelist_resurfaced: Vec<&&str> = DYNAMICALLY_CONSTRUCTED_KEYS
+        .iter()
+        .filter(|key| used_keys.contains(**key))
+        .collect();
+    assert!(
+        whitelist_resurfaced.is_empty(),
+        "动态构造白名单条目已获得 t!()/tr() 字面调用点,应从白名单移除(只减不增):{whitelist_resurfaced:?}"
+    );
 }

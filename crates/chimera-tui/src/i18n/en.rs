@@ -602,6 +602,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.sort_created_at" => "CreatedAt",
         "panel.task.no_matching" => "No matching quests",
         "panel.task.status_summary" => "Pending:{} | Running:{} | Paused:{} | Completed:{}",
+        "panel.task.selected_count" => " | Selected:{}",
         "panel.task.quadrants_label" => "Quadrants: ",
         "panel.task.quadrant_q1" => "Q1(Impl): A={} T={} WSJF={}",
         "panel.task.quadrant_q2" => "Q2(Int): A={} T={} WSJF={}",
@@ -618,6 +619,72 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.batch_pause_confirm" => "Batch pause {} quests",
         "panel.task.batch_terminate_confirm" => "Batch terminate {} quests",
         "panel.task.batch_resume_confirm" => "Batch resume {} quests",
+        // ====================================================================
+        // B6-M(2026-10-04): six-panel English migration (chtc/clv_vector/
+        // sysinfo/experience_card_viz/resource_monitor/metrics_dashboard);
+        // EXEMPT_ENGLISH_PREFIXES entries for these files removed with it.
+        // Placeholders are {} and replaced at call sites via the replacen
+        // idiom (chained for multiple, see injection cache_line precedent).
+        // ====================================================================
+        // chtc panel (body header reuses panel.border.chtc via trim; empty
+        // "(none)" reuses common.none)
+        "panel.chtc.status_online" => "online",
+        "panel.chtc.status_offline" => "offline",
+        "panel.chtc.no_adapters" => "No CHTC adapters connected",
+        "panel.chtc.awaiting_events" => "Waiting for ChtcAdapterStatus events from chtc-bridge...",
+        "panel.chtc.detail_id" => "Adapter ID: {}",
+        "panel.chtc.detail_type" => "Type: {}",
+        "panel.chtc.detail_score" => "Compatibility Score: {}/100",
+        "panel.chtc.detail_status" => "Status: {}",
+        "panel.chtc.detail_score_warning" => "Warning: score below {} (compatibility risk)",
+        "panel.chtc.detail_requests" => "Recent Requests:",
+        "panel.chtc.requests_label" => "  Requests: ",
+        "panel.chtc.detail_title" => "CHTC Adapter: {}",
+        // clv_vector panel ("B{}" block ids, dim=/value= are locale-neutral
+        // technical identifiers, not migrated)
+        "panel.clv.l2_norm_label" => " L2 Norm: {} ",
+        "panel.clv.block_means_title" => "Block Means (8 x 64-dim blocks):",
+        "panel.clv.block_waiting" => "waiting...",
+        "panel.clv.top_dims_title" => "Top Dimensions (by |value|):",
+        "panel.clv.no_top_dims" => "No top dimensions available.",
+        "panel.clv.awaiting_encoder" => "Waiting for NMC encoder...",
+        "panel.clv.showing_dims" => "... showing {} of {} dimensions",
+        // sysinfo panel (GB/MB/B are SI unit symbols, UTC timestamp suffix
+        // locale-neutral, not migrated)
+        "panel.sysinfo.line_os" => "OS: {}  |  {}  |  arch: {}",
+        "panel.sysinfo.line_cpu" => "CPU: {}  |  cores: {}",
+        "panel.sysinfo.line_memory" => "Memory Total: {}",
+        "panel.sysinfo.line_boot" => "Boot: {}",
+        "panel.sysinfo.line_process" => "Chimera: PID {}  |  RSS: {}",
+        "panel.sysinfo.refresh_hint" => "Press 'r' to refresh process info",
+        "panel.sysinfo.na" => "n/a",
+        "panel.sysinfo.unknown" => "unknown",
+        // experience_card_viz panel
+        "panel.exp_card.body_title" => "Experience Card Viz (OpenMLE)",
+        "panel.exp_card.awaiting_provider" => "Awaiting stats provider...",
+        "panel.exp_card.stats_summary" => "Total: {} | Evaluated: {} | Unique errors: {}",
+        "panel.exp_card.scores_summary" => "Best score: {} | Average score: {}",
+        "panel.exp_card.method_dist_title" => "Method distribution:",
+        "panel.exp_card.no_cards" => "No cards recorded yet.",
+        // resource_monitor panel (per-core label "C{i}:" is locale-neutral,
+        // not migrated)
+        "panel.resources.cpu_title" => " CPU: {}{} ",
+        "panel.resources.paused_tag" => " [PAUSED]",
+        "panel.resources.ram_title" => " RAM: {}/{} GB ({}) ",
+        "panel.resources.swap_title" => " Swap: {}/{} GB",
+        "panel.resources.disk_title" => " Disk: R {}MB/s  W {}MB/s ",
+        "panel.resources.net_title" => " Net: RX {}MB/s  TX {}MB/s ",
+        // metrics_dashboard panel (cell "b{i}" category labels are
+        // locale-neutral; per_op=/global=/orphan= are protocol field names
+        // kept identical in both tables)
+        "panel.metrics.cell_metric" => "Metric",
+        "panel.metrics.cell_heatmap" => "Heatmap",
+        "panel.metrics.cell_bar" => "Bar",
+        "panel.metrics.cell_util" => "Util",
+        "panel.metrics.cell_latency" => "Latency",
+        "panel.metrics.empty_title" => " (empty) ",
+        "panel.metrics.unbound" => "(unbound)",
+        "panel.metrics.gqep_summary" => "GQEP Timeout: per_op={}  global={}  orphan={}  {}",
         // Common
         "common.none" => "(none)",
         _ => return None,

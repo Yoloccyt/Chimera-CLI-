@@ -6,7 +6,7 @@
 //! - **L-a 全局计算池**:独立 rayon `ThreadPool`（池 = num_cpus−2、栈 2MB、
 //!   线程名 `chimera-compute-*`）,与 tokio worker 隔离防互饿（v4.0 §7.5.2）。
 //! - **L-f 路由**:`route()` 纳秒级查表三态派发（Inline / Rayon / Async,ADR-127）。
-//! - **panic 隔离**:`spawn_compute` 用 `catch_unwind` + `tokio::sync::oneshot` 回传,
+//! - **panic 隔离**:`spawn_compute_batch` 逐任务 `catch_unwind` 回传,
 //!   池内 panic 永不跨线程传播到调用方（§11.1 不变式）。
 //!
 //! # 契约纪律（§7.5.3 纪律④⑥,CI 静态扫描兜底）
@@ -25,7 +25,6 @@
 //!   （变慢不变错）;`strict`（旧 `CHIMERA_COMPUTE_STRICT_POOL`）才以 `Saturated` 返回错误。
 //! - 缝合点（Clock/Rng/Fs/Net,§10.8 Ω₇）见 [`super::seam`],T14 注入时才接线本桥。
 
-use std::future::Future;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -55,7 +54,8 @@ pub enum ComputeError {
     /// 任务在计算池内 panic — 已被 catch_unwind 隔离,不跨线程传播
     #[error("task panicked in compute pool")]
     Panicked,
-    /// 调用方在完成前取消（oneshot 接收端失效）
+    /// 批量入口槽位理论不可达时的兜底错误（保持库代码零 panic；oneshot 取消路径已随
+    /// `spawn_compute` 退役,此变体仅由 [`spawn_compute_batch`] 的 None 兜底构造）。
     #[error("cancelled before completion")]
     Cancelled,
     /// 计算池饱和,可重试
@@ -124,7 +124,7 @@ impl ComputeBridge {
         // rayon build 失败仅当 OS 拒绝创建线程(进程级资源耗尽),此时计算桥不可用
         // 即进程不可用,无运行期降级路径(与 D15 运行期熔断杀池不同)——这是进程
         // 启动期致命前提的失败,panic 沿 OnceLock 惰性初始化传播(§11.1 不变式
-        // "spawn_compute 永不 panic 到调用方"仅约束运行期计算任务,不覆盖单例初始化前提)
+        // "计算任务永不 panic 到调用方"仅约束运行期批处理,不覆盖单例初始化前提)
         let pool = match rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .stack_size(STACK_SIZE_BYTES)
@@ -342,89 +342,10 @@ impl ComputeBridge {
     ///   （审计开销 ≤ 30% 门禁,见 `reduce_bench`）。
     #[must_use]
     pub fn reduce(&self, vals: &[f64], mode: ReduceMode) -> f64 {
-        // WHY 不走 spawn_compute:归约是标量级计算,池调度（微秒级）反成主导开销;
+        // WHY 不走 spawn_compute_batch:归约是标量级计算,池调度（微秒级）反成主导开销;
         // T14 接线时若输入规模超 HTS 阈值,再考虑 Rayon 分块并行（接口不变,
         // 返回类型 f64 无错误面）
         reduce_impl(vals, mode)
-    }
-
-    /// L-a 统一入口 — CPU 卸载单任务
-    ///
-    /// 契约（§11.1 不变式）:
-    /// - 池内闭包 panic 被 `catch_unwind` 捕获,返回 [`ComputeError::Panicked`],**永不 panic 到调用方**;
-    /// - 调用方在 await 前 drop future（取消）时,池任务完成后静默丢弃结果（oneshot 取消契约）;
-    /// - rayon 闭包内禁 `.await` / IO / 持锁跨闭包边界（§7.5.3 纪律④⑥,红线）。
-    ///
-    /// `kind` 用于**按类型归因遥测**（ADR-197,[`KindCounters`]）;不参与调度权重,
-    /// 后者仍由 [`route`](Self::route) 的 HTS 阈值表决定。
-    ///
-    /// # 饱和行为（ADR-197 D2）
-    /// 占用达阈值时按 [`saturation_mode`](Self::saturation_mode) 分流：
-    /// - `Observe`（**默认**）：只记超阈观测数并发观测事件，任务**仍走池**（行为零变更）;
-    /// - `Degrade`：在本线程直接执行 `f`（Inline 降级，结果与走池逐元素一致）;
-    /// - `Strict`：不执行 `f`，直接返回 [`ComputeError::Saturated`]（“不得阻塞调用线程”的批处理/压测场景）。
-    ///
-    /// WHY 默认是 Observe：计划的 A1 风险缓解要求“先以不改变分支的观测模式上线，
-    /// 拐点数据充足后再开降级”——降级是行为变更，无实测拐点前不当默认态。
-    pub fn spawn_compute<F, T>(
-        &self,
-        kind: TaskKind,
-        f: F,
-    ) -> impl Future<Output = Result<T, ComputeError>> + Send
-    where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
-    {
-        self.counters.record_spawn(kind);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        // WI-34 探针:执行即计（闭包内守卫 +1/Drop 归还）;排队阶段不计入活跃数
-        let active = Arc::clone(&self.active);
-
-        // A1/ADR-197：超阈处置按策略分流；Observe 不改分支（任务仍走下面的入池路径）。
-        // WHY 用 Option::take 而不用 bool 标记：`f` 与 `tx` 必须只被移动一次，
-        // 而运行时 flag 无法让借用检查器证明分支互斥；Option 把“已消费”编进类型。
-        let mut pending = Some(f);
-        let mut sender = Some(tx);
-        if self.is_saturated() {
-            self.counters.record_saturation();
-            match self.saturation_mode() {
-                SaturationMode::Strict => {
-                    self.counters.record_rejection();
-                    // 严格模式:不占用调用线程,也不入池 → 由调用方决定重试/改路径
-                    if let Some(tx) = sender.take() {
-                        let _ = tx.send(Err(ComputeError::Saturated));
-                    }
-                }
-                SaturationMode::Degrade => {
-                    self.counters.record_degradation();
-                    if let (Some(f), Some(tx)) = (pending.take(), sender.take()) {
-                        let _guard = active.enter();
-                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(
-                            |_| {
-                                self.counters.record_failure(kind);
-                                ComputeError::Panicked
-                            },
-                        );
-                        let _ = tx.send(r);
-                    }
-                }
-                // Observe：只观测不改分支，下面仍走同一个入池路径（单一实现，不拆两份）
-                SaturationMode::Observe => {}
-            }
-        }
-        if let (Some(f), Some(tx)) = (pending.take(), sender.take()) {
-            self.pool.spawn(move || {
-                let _guard = active.enter();
-                // AssertUnwindSafe:闭包 f 不跨 await/锁边界(契约纪律),panic 隔离无需全局可反射状态
-                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| {
-                    bridge().counters.record_failure(kind);
-                    ComputeError::Panicked
-                });
-                // 调用方已取消(drop rx)时 send 返回 Err,静默丢弃——取消安全
-                let _ = tx.send(r);
-            });
-        }
-        async move { rx.await.map_err(|_| ComputeError::Cancelled)? }
     }
 
     /// L-a 批量入口 — CPU 卸载批量任务（任意数量闭包,分块并行）
@@ -435,7 +356,7 @@ impl ComputeBridge {
     ///
     /// 单个任务 panic 不影响同批其他任务（逐个 catch_unwind 隔离）。
     ///
-    /// `kind` 用于按类型归因遥测（ADR-197,同 [`spawn_compute`](Self::spawn_compute)）。
+    /// `kind` 用于按类型归因遥测（ADR-197,[`KindCounters`]）。
     ///
     /// # 饱和行为（ADR-197 D2）
     /// 达阈值时按策略分流：`Observe`（默认）仍走池只记观测；`Degrade` 在当前线程逐个
@@ -573,7 +494,7 @@ impl ComputeBridge {
 
 /// 三态判定纯函数 — route 的核心逻辑,与 `is_io_bound` 判定/阈值查询解耦
 ///
-/// WHY 拆分(Ω₇):`is_io_bound` 当前对六类登记恒为 `false`(手册 §8.4 全 CPU 型),
+/// WHY 拆分(Ω₇):`is_io_bound` 当前对十类登记恒为 `false`(手册 §8.4 全 CPU 型),
 /// 直接经公开 `route` 无法覆盖 Async 分支;拆出纯函数后三态分支均可在
 /// IO 类任务登记(T9)之前被单测锁定,登记时零回归风险。
 ///
@@ -654,41 +575,7 @@ mod tests {
         );
     }
 
-    /// spawn_compute 正常路径 — 返回闭包结果,类型保真
-    #[tokio::test]
-    async fn spawn_compute_ok() {
-        let out = bridge()
-            .spawn_compute(TaskKind::Generic, || 42u64)
-            .await
-            .expect("正常任务应成功");
-        assert_eq!(out, 42);
-    }
-
-    /// spawn_compute panic 隔离 — 池内 panic 转为 ComputeError::Panicked,不跨线程传播
-    #[tokio::test]
-    async fn spawn_compute_panics_isolated() {
-        // 静音 panic hook:panic 消息预期出现(隔离语义),避免污染测试输出
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let res = bridge()
-            .spawn_compute(TaskKind::Generic, || -> u64 { panic!("boom") })
-            .await;
-        std::panic::set_hook(prev);
-        assert_eq!(res, Err(ComputeError::Panicked));
-    }
-
-    /// spawn_compute 取消契约 — oneshot 接收端失效后发送失败（取消安全）
-    ///
-    /// spawn_compute 依赖此契约:调用方 drop future 时,池内任务完成后的
-    /// tx.send 返回 Err 被静默丢弃,无泄漏无 panic。
-    #[test]
-    fn spawn_compute_oneshot_cancel_semantics() {
-        let (tx, rx) = tokio::sync::oneshot::channel::<u64>();
-        drop(rx);
-        assert!(tx.send(42).is_err(), "接收端 drop 后发送必须失败");
-    }
-
-    /// Cancelled 映射 — rx.await 在发送端失效时返回 ComputeError::Cancelled
+    /// Cancelled 映射 — oneshot 接收端在发送端失效时以 Err 收场
     #[tokio::test]
     async fn cancelled_mapping() {
         let (tx, rx) = tokio::sync::oneshot::channel::<u64>();
@@ -968,55 +855,6 @@ mod tests {
         (b, counter)
     }
 
-    #[test]
-    fn saturated_spawn_compute_degrades_to_inline_with_same_result() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let (b, counter) = saturated_bridge(SaturationMode::Degrade);
-        let _guards = (counter.enter(), counter.enter());
-        assert!(b.is_saturated(), "占池后必须判为饱和");
-        let before = b.kind_counters().degradations();
-        let got = rt.block_on(b.spawn_compute(TaskKind::ClvSimilarity, || 7u32));
-        assert_eq!(got, Ok(7), "降级方向=变慢不变错:结果必须与走池一致");
-        assert_eq!(
-            b.kind_counters().degradations(),
-            before + 1,
-            "降级必须被计数(上报器基线)"
-        );
-        assert_eq!(b.kind_counters().saturations(), 1, "超阈观测与降级分开计数");
-        assert_eq!(b.kind_counters().spawns_of(TaskKind::ClvSimilarity), 1);
-    }
-
-    #[test]
-    fn strict_pool_returns_saturated_without_running_closure() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let (b, counter) = saturated_bridge(SaturationMode::Strict);
-        let _guards = (counter.enter(), counter.enter());
-        // WHY Arc 而非 &局部:spawn_compute 的闭包要求 'static,借本地变量过不了生命周期检查
-        let executed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flag = Arc::clone(&executed);
-        let got = rt.block_on(b.spawn_compute(TaskKind::OsaMask, move || {
-            flag.store(true, Ordering::SeqCst);
-            1u32
-        }));
-        assert_eq!(got, Err(ComputeError::Saturated), "严格模式必须报饱和");
-        assert!(
-            !executed.load(Ordering::SeqCst),
-            "严格模式语义=不在调用线程执行"
-        );
-        assert_eq!(b.kind_counters().rejections(), 1);
-        assert_eq!(
-            b.kind_counters().degradations(),
-            0,
-            "报错与降级是两种处置,不得混计"
-        );
-    }
-
     /// A1 风险缓解的核心用例：默认 Observe 下只记观测，**分支不变**（任务仍走池）
     #[test]
     fn observe_mode_records_saturation_without_changing_branch() {
@@ -1032,6 +870,75 @@ mod tests {
             "Observe 必须零行为变更:不能把观测误记为降级"
         );
         assert_eq!(b.kind_counters().rejections(), 0);
+    }
+
+    /// spawn_compute_batch Degrade — 饱和时整批 Inline 执行,结果逐元素不变,降级计数+1
+    ///（与 spawn_compute 的 async Degrade 测同构,补 batch 入口覆盖，为 S-2-B 前置）。
+    #[test]
+    fn saturated_spawn_compute_batch_degrades_to_inline_with_same_results() {
+        let (b, counter) = saturated_bridge(SaturationMode::Degrade);
+        let _guards = (counter.enter(), counter.enter());
+        assert!(b.is_saturated(), "占池后必须判为饱和");
+        let results = b.spawn_compute_batch(TaskKind::KnnSearch, (0..4u32).map(|i| move || i * 2));
+        let vals: Vec<u32> = results
+            .into_iter()
+            .map(|r| r.expect("降级方向=变慢不变错"))
+            .collect();
+        assert_eq!(vals, vec![0, 2, 4, 6], "降级结果必须与走池逐元素一致");
+        assert_eq!(b.kind_counters().degradations(), 1, "整批降级计一次");
+        assert_eq!(b.kind_counters().saturations(), 1, "超阈观测与降级分开计数");
+        assert_eq!(b.kind_counters().rejections(), 0, "Degrade 非拒绝");
+    }
+
+    /// spawn_compute_batch Strict — 饱和时逐任务 Err(Saturated),任何闭包不执行,拒绝计数+1
+    #[test]
+    fn strict_pool_batch_rejects_all_without_running() {
+        let (b, counter) = saturated_bridge(SaturationMode::Strict);
+        let _guards = (counter.enter(), counter.enter());
+        let executed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let flag = Arc::clone(&executed);
+        let results = b.spawn_compute_batch(
+            TaskKind::OsaMask,
+            (0..3u32).map(move |_| {
+                let flag = Arc::clone(&flag);
+                move || {
+                    flag.fetch_add(1, Ordering::SeqCst);
+                    1u32
+                }
+            }),
+        );
+        assert_eq!(
+            results,
+            vec![Err(ComputeError::Saturated); 3],
+            "严格模式整批逐任务报饱和"
+        );
+        assert_eq!(
+            executed.load(Ordering::SeqCst),
+            0,
+            "严格模式语义=不执行任何闭包"
+        );
+        assert_eq!(b.kind_counters().rejections(), 1, "一次批量调用计一次拒绝");
+        assert_eq!(b.kind_counters().degradations(), 0, "拒绝与降级分开计数");
+    }
+
+    /// spawn_compute_batch panic 隔离 — 单任务 panic 转 Err(Panicked),同批其它任务不受影响
+    #[test]
+    fn spawn_compute_batch_panic_isolated_per_item() {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // 静音预期 panic,避免污染测试输出
+        let results = bridge().spawn_compute_batch(
+            TaskKind::Generic,
+            (0..3u64).map(|i| move || if i == 1 { panic!("boom") } else { i }),
+        );
+        std::panic::set_hook(prev);
+        assert_eq!(results.len(), 3, "结果数恒等于输入数");
+        assert_eq!(results[0], Ok(0), "panic 前项正常");
+        assert_eq!(
+            results[1],
+            Err(ComputeError::Panicked),
+            "panic 隔离为错误值,不跨线程传播"
+        );
+        assert_eq!(results[2], Ok(2), "panic 后项不受影响");
     }
 
     #[test]

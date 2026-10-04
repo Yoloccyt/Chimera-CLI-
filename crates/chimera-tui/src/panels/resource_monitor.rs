@@ -188,20 +188,22 @@ impl ResourceMonitorPanel {
             level.color()
         };
 
-        // 标题行(monitor.pause_sampling 暂停时追加 [PAUSED] 标记)
+        // 标题行(monitor.pause_sampling 暂停时追加 [已暂停] 标记,En: [PAUSED])
         let paused_tag = if state.monitor_paused {
-            " [PAUSED]"
+            crate::t!("panel.resources.paused_tag")
         } else {
             ""
         };
-        let title = format!(
-            " CPU: {}{} ",
-            crate::render::percent_from_value(
-                cpu.global_usage,
-                crate::render::PERCENT_PRECISION_DETAIL
-            ),
-            paused_tag
-        );
+        let title = crate::t!("panel.resources.cpu_title")
+            .replacen(
+                "{}",
+                &crate::render::percent_from_value(
+                    cpu.global_usage,
+                    crate::render::PERCENT_PRECISION_DETAIL,
+                ),
+                1,
+            )
+            .replacen("{}", paused_tag, 1);
         let title_span = Span::styled(
             &title,
             Style::default()
@@ -293,15 +295,17 @@ impl ResourceMonitorPanel {
     fn render_memory_section(&mut self, mem: &MemMetrics, area: Rect, buf: &mut Buffer) {
         let total_gb = mem.total_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
         let used_gb = mem.used_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
-        let title = format!(
-            " RAM: {:.1}/{:.1} GB ({}) ",
-            used_gb,
-            total_gb,
-            crate::render::percent_from_value(
-                mem.usage_percent,
-                crate::render::PERCENT_PRECISION_DETAIL
-            )
-        );
+        let title = crate::t!("panel.resources.ram_title")
+            .replacen("{}", &format!("{:.1}", used_gb), 1)
+            .replacen("{}", &format!("{:.1}", total_gb), 1)
+            .replacen(
+                "{}",
+                &crate::render::percent_from_value(
+                    mem.usage_percent,
+                    crate::render::PERCENT_PRECISION_DETAIL,
+                ),
+                1,
+            );
         let style = Style::default()
             .fg(Self::mem_color(mem.usage_percent))
             .add_modifier(Modifier::BOLD);
@@ -362,7 +366,9 @@ impl ResourceMonitorPanel {
         if area.height > 2 {
             let swap_used_gb = mem.swap_used_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
             let swap_total_gb = mem.swap_total_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
-            let swap_line = format!(" Swap: {:.1}/{:.1} GB", swap_used_gb, swap_total_gb);
+            let swap_line = crate::t!("panel.resources.swap_title")
+                .replacen("{}", &format!("{:.1}", swap_used_gb), 1)
+                .replacen("{}", &format!("{:.1}", swap_total_gb), 1);
             buf.set_line(area.x, area.y + 2, &Line::from(swap_line), area.width);
         }
     }
@@ -381,7 +387,9 @@ impl ResourceMonitorPanel {
     fn render_disk_section(&self, disk: &DiskMetrics, area: Rect, buf: &mut Buffer) {
         let read_mb = disk.read_bytes_per_sec as f64 / 1024.0 / 1024.0;
         let write_mb = disk.write_bytes_per_sec as f64 / 1024.0 / 1024.0;
-        let title = format!(" Disk: R {:.1}MB/s  W {:.1}MB/s ", read_mb, write_mb);
+        let title = crate::t!("panel.resources.disk_title")
+            .replacen("{}", &format!("{:.1}", read_mb), 1)
+            .replacen("{}", &format!("{:.1}", write_mb), 1);
         buf.set_line(
             area.x,
             area.y,
@@ -426,7 +434,9 @@ impl ResourceMonitorPanel {
     fn render_network_section(&self, net: &NetworkMetrics, area: Rect, buf: &mut Buffer) {
         let rx_mb = net.rx_bytes_per_sec as f64 / 1024.0 / 1024.0;
         let tx_mb = net.tx_bytes_per_sec as f64 / 1024.0 / 1024.0;
-        let title = format!(" Net: RX {:.1}MB/s  TX {:.1}MB/s ", rx_mb, tx_mb);
+        let title = crate::t!("panel.resources.net_title")
+            .replacen("{}", &format!("{:.1}", rx_mb), 1)
+            .replacen("{}", &format!("{:.1}", tx_mb), 1);
         buf.set_line(
             area.x,
             area.y,
@@ -548,6 +558,17 @@ impl Panel for ResourceMonitorPanel {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// 取键值首个 {} 占位符之前的固定前缀(trim 后即子区标题特征;
+    /// B6-M 断言范式:与键表同源,避免断言串与键值双源漂移)
+    fn title_prefix(key: &'static str) -> String {
+        crate::i18n::tr(key)
+            .split("{}")
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
 
     #[test]
     fn test_resource_monitor_panel_id() {
@@ -692,6 +713,11 @@ mod tests {
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
 
+        // B6-M:四子区标题迁键;TestBackend 全帧逐 cell 收集下 zh 宽字符会被
+        // 续格空格碎裂,故 pin En 后经 t! 前缀派生断言
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
+
         let mut panel = ResourceMonitorPanel::new();
         let mut state = TuiState::new();
         state.sys_metrics = crate::types::SystemMetrics {
@@ -728,16 +754,33 @@ mod tests {
             .iter()
             .map(|c| c.symbol().chars().next().unwrap_or(' '))
             .collect();
-        assert!(content.contains("CPU"), "should contain CPU section");
-        assert!(content.contains("RAM"), "should contain RAM section");
-        assert!(content.contains("Disk"), "should contain Disk section");
-        assert!(content.contains("Net"), "should contain Network section");
+        assert!(
+            content.contains(&title_prefix("panel.resources.cpu_title")),
+            "should contain CPU section"
+        );
+        assert!(
+            content.contains(&title_prefix("panel.resources.ram_title")),
+            "should contain RAM section"
+        );
+        assert!(
+            content.contains(&title_prefix("panel.resources.disk_title")),
+            "should contain Disk section"
+        );
+        assert!(
+            content.contains(&title_prefix("panel.resources.net_title")),
+            "should contain Network section"
+        );
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
     }
 
     #[test]
     fn test_collapsed_section_compact() {
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+
+        // B6-M:标题迁键,pin En + 经 t! 前缀派生断言(同 test_render_produces_content)
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
 
         let mut panel = ResourceMonitorPanel::new();
         // 折叠 CPU 和磁盘
@@ -772,15 +815,22 @@ mod tests {
             .collect();
         // CPU 和 Disk 标题仍应显示(折叠后仅标题行)
         assert!(
-            content.contains("CPU"),
+            content.contains(&title_prefix("panel.resources.cpu_title")),
             "CPU title should still show when collapsed"
         );
         assert!(
-            content.contains("Disk"),
+            content.contains(&title_prefix("panel.resources.disk_title")),
             "Disk title should still show when collapsed"
         );
-        assert!(content.contains("RAM"), "RAM should be expanded");
-        assert!(content.contains("Net"), "Net should be expanded");
+        assert!(
+            content.contains(&title_prefix("panel.resources.ram_title")),
+            "RAM should be expanded"
+        );
+        assert!(
+            content.contains(&title_prefix("panel.resources.net_title")),
+            "Net should be expanded"
+        );
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
     }
 
     #[test]

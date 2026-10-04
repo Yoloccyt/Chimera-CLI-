@@ -28,10 +28,9 @@
 //!   （含顺序断言:结果序 = 输入序）。
 //!
 //! # TaskKind 选择
-//! `TaskKind::DecayBatch`（阈值 10,000,chunk 64）—— 任务约束"本位为 ADR-196 C1 拆位所得专用登记位";
-//! 批量能力衰减不在六类登记语义内（非 CLV 相似度/掩码/KNN/GSOE/CSC 压缩评分）,
-//! 归入未登记任务的保守默认;≥ 10,000 能力的大批量衰减触发 Rayon
-//! （decay 单次计算微秒级,低于阈值时串行更优——调度开销反超计算量）。
+//! `TaskKind::DecayBatch`（阈值 10,000）—— ADR-196 C1 从 `Generic` 拆出的专用登记位;
+//! ≥ 10,000 能力的大批量衰减触发 Rayon（decay 单次计算微秒级,低于阈值时串行更优——调度开销反超计算量）;
+//! 拆位后与 faae 解耦，各自表项独立校准，SPRT 历史可归属到能力衰减负载。
 //!
 //! # rayon 闭包契约
 //! 闭包捕获 `Arc<Vec<(String, DecaySnapshot)>>` + `Arc<Vec<DecayEventParam>>`

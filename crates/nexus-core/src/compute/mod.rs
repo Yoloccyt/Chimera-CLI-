@@ -16,7 +16,7 @@
 //!   默认 `off`（不探测不写表），`observe` 只出证据，`apply` 才写表
 //!
 //! # 依赖关系（T14 预留）
-//! - T14(WI-34):各 crate CPU 热点经 [`bridge::spawn_compute`] 卸载,序贯检验采样接线
+//! - T14(WI-34):各 crate CPU 热点经 [`bridge::spawn_compute_batch`] 卸载,序贯检验采样接线
 //!   （已由 [`calibration`] 于 ADR-198 完成采样→判定→写表闭环，默认 off）;
 //!   缝合点注入生产实现;利用率采样器驱动中期验收
 //!

@@ -13,6 +13,17 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
+/// 取键值首个 {} 占位符之前的固定前缀(trim 后即子区标题特征;B6-M 断言范式:
+/// 与键表同源,避免断言串与键值双源漂移)
+fn title_prefix(key: &'static str) -> String {
+    chimera_tui::i18n::tr(key)
+        .split("{}")
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
 #[test]
 fn test_resource_monitor_panel_id() {
     let panel = ResourceMonitorPanel::new();
@@ -21,6 +32,10 @@ fn test_resource_monitor_panel_id() {
 
 #[test]
 fn test_resource_monitor_renders() {
+    // B6-M:四子区标题迁键;TestBackend 全帧逐 cell 收集下 zh 宽字符会被
+    // 续格空格碎裂,故 pin En 后经 t! 前缀派生断言(guard 防 locale 竞争)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut panel = ResourceMonitorPanel::new();
     let mut state = TuiState::new();
     // 填充示例系统指标
@@ -58,8 +73,15 @@ fn test_resource_monitor_renders() {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
-    assert!(content.contains("CPU"), "should contain CPU section");
-    assert!(content.contains("RAM"), "should contain RAM section");
+    assert!(
+        content.contains(&title_prefix("panel.resources.cpu_title")),
+        "should contain CPU section"
+    );
+    assert!(
+        content.contains(&title_prefix("panel.resources.ram_title")),
+        "should contain RAM section"
+    );
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
 }
 
 #[test]
@@ -73,6 +95,9 @@ fn test_resource_monitor_handle_key_navigation() {
 
 #[test]
 fn test_resource_monitor_toggle_collapse() {
+    // B6-M:标题迁键,pin En + 经 t! 前缀派生断言(同 test_resource_monitor_renders)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut panel = ResourceMonitorPanel::new();
     let mut state = TuiState::new();
 
@@ -110,7 +135,8 @@ fn test_resource_monitor_toggle_collapse() {
         .collect();
     // 折叠后 CPU 标题仍应可见
     assert!(
-        content.contains("CPU"),
+        content.contains(&title_prefix("panel.resources.cpu_title")),
         "CPU title should still be visible when collapsed"
     );
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
 }

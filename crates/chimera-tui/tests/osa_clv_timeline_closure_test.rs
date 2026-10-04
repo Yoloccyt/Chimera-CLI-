@@ -203,8 +203,17 @@ async fn osa_clv_recall_sync_through_real_pipeline() {
 
     app.switch_panel_to(PanelId::ClvVector);
     let content = render_to_string(&mut app, 120, 40);
+    // B6-M:L2 范数标签迁键(panel.clv.l2_norm_label)。与上方 OsaSparse 读数
+    // 行同范式:期望串经 t! 与渲染同源(locale 无关自洽;渲染到断言为同步执行,
+    // 无 await,无 locale 竞争窗口),去空白匹配以抗 CJK 续格空格碎裂。
+    let l2_expected: String = chimera_tui::t!("panel.clv.l2_norm_label")
+        .replacen("{}", "12.5000", 1)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let dense: String = content.chars().filter(|c| !c.is_whitespace()).collect();
     assert!(
-        content.contains("L2 Norm: 12.5000"),
+        dense.contains(&l2_expected),
         "ClvVector 面板应渲染实时 L2 范数,got: {}",
         debug_truncate(&content, 400)
     );

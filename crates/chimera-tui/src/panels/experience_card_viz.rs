@@ -81,39 +81,43 @@ impl ExperienceCardVizPanel {
     /// 构建面板文本内容
     ///
     /// 有提供者 → 总卡片/已评估/唯一错误/方法分布/最佳分/平均分(规范 §15.2 格式);
-    /// 无提供者 → "Awaiting stats provider..."(诚实展示)。
+    /// 无提供者 → panel.exp_card.awaiting_provider(诚实展示)。
     pub fn content(&self) -> Text<'static> {
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from("Experience Card Viz (OpenMLE)"),
+            Line::from(crate::t!("panel.exp_card.body_title")),
             Line::from("──────────────────────────────────────"),
         ];
 
         let Some(provider) = &self.provider else {
             lines.push(Line::from(Span::styled(
-                "Awaiting stats provider...",
+                crate::t!("panel.exp_card.awaiting_provider"),
                 Style::default().fg(Color::Gray),
             )));
             return Text::from(lines);
         };
 
         let stats = provider.global_stats();
-        lines.push(Line::from(format!(
-            "Total: {} | Evaluated: {} | Unique errors: {}",
-            stats.total_cards, stats.evaluated, stats.unique_errors
-        )));
-        lines.push(Line::from(format!(
-            "Best score: {:.2} | Average score: {:.2}",
-            stats.best_score, stats.average_score
-        )));
+        // 统计行的数值先格式化再按序链式 replacen(injection cache_line 先例范式)
+        lines.push(Line::from(
+            crate::t!("panel.exp_card.stats_summary")
+                .replacen("{}", &stats.total_cards.to_string(), 1)
+                .replacen("{}", &stats.evaluated.to_string(), 1)
+                .replacen("{}", &stats.unique_errors.to_string(), 1),
+        ));
+        lines.push(Line::from(
+            crate::t!("panel.exp_card.scores_summary")
+                .replacen("{}", &format!("{:.2}", stats.best_score), 1)
+                .replacen("{}", &format!("{:.2}", stats.average_score), 1),
+        ));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Method distribution:",
+            crate::t!("panel.exp_card.method_dist_title"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
 
         if stats.method_distribution.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No cards recorded yet.",
+                crate::t!("panel.exp_card.no_cards"),
                 Style::default().fg(Color::Gray),
             )));
         } else {
@@ -186,13 +190,17 @@ mod tests {
     #[test]
     fn content_awaiting_when_no_provider() {
         // 诚实展示:无提供者不渲染虚假统计
+        // B6-M:文案迁键,断言经 t! 期望串与渲染同源
+        let _locale_guard = crate::i18n::locale_test_guard();
         let panel = ExperienceCardVizPanel::new();
         let content = panel.content().to_string();
-        assert!(content.contains("Awaiting stats provider..."));
+        assert!(content.contains(crate::t!("panel.exp_card.awaiting_provider")));
     }
 
     #[test]
     fn content_renders_stats_with_provider() {
+        // B6-M:统计行迁键,期望串经 t! + 同序 replacen 与渲染完全同源
+        let _locale_guard = crate::i18n::locale_test_guard();
         let panel = ExperienceCardVizPanel::with_provider(Arc::new(MockProvider {
             stats: ExperienceCardVizStats {
                 total_cards: 42,
@@ -208,11 +216,15 @@ mod tests {
             },
         }));
         let content = panel.content().to_string();
-        assert!(content.contains("Total: 42"));
-        assert!(content.contains("Evaluated: 30"));
-        assert!(content.contains("Unique errors: 5"));
-        assert!(content.contains("Best score: 0.92"));
-        assert!(content.contains("Average score: 0.65"));
+        let expected_stats = crate::t!("panel.exp_card.stats_summary")
+            .replacen("{}", "42", 1)
+            .replacen("{}", "30", 1)
+            .replacen("{}", "5", 1);
+        assert!(content.contains(&expected_stats));
+        let expected_scores = crate::t!("panel.exp_card.scores_summary")
+            .replacen("{}", "0.92", 1)
+            .replacen("{}", "0.65", 1);
+        assert!(content.contains(&expected_scores));
     }
 
     #[test]
@@ -232,8 +244,10 @@ mod tests {
 
     #[test]
     fn empty_distribution_honest_message() {
+        // B6-M:空态文案迁键,断言经 t! 期望串
+        let _locale_guard = crate::i18n::locale_test_guard();
         let panel = ExperienceCardVizPanel::with_provider(Arc::new(MockProvider::default()));
         let content = panel.content().to_string();
-        assert!(content.contains("No cards recorded yet."));
+        assert!(content.contains(crate::t!("panel.exp_card.no_cards")));
     }
 }

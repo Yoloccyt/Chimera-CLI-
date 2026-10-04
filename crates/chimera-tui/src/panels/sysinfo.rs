@@ -176,17 +176,17 @@ impl SysinfoPanel {
     pub fn os_version(&self) -> String {
         System::long_os_version()
             .or_else(System::kernel_version)
-            .unwrap_or_else(|| "unknown".to_string())
+            .unwrap_or_else(|| crate::t!("panel.sysinfo.unknown").to_string())
     }
 
     /// 返回主机名
     pub fn host_name(&self) -> String {
-        System::host_name().unwrap_or_else(|| "unknown".to_string())
+        System::host_name().unwrap_or_else(|| crate::t!("panel.sysinfo.unknown").to_string())
     }
 
     /// 返回 CPU 架构
     pub fn cpu_arch(&self) -> String {
-        System::cpu_arch().unwrap_or_else(|| "unknown".to_string())
+        System::cpu_arch().unwrap_or_else(|| crate::t!("panel.sysinfo.unknown").to_string())
     }
 
     /// 返回上次刷新时间(测试用)
@@ -224,7 +224,7 @@ impl SysinfoPanel {
     fn format_boot_time(unix_secs: u64) -> String {
         DateTime::<Utc>::from_timestamp(unix_secs as i64, 0)
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-            .unwrap_or_else(|| "unknown".to_string())
+            .unwrap_or_else(|| crate::t!("panel.sysinfo.unknown").to_string())
     }
 }
 
@@ -282,10 +282,14 @@ impl Panel for SysinfoPanel {
         let chimera_rss = self
             .chimera_memory()
             .map(Self::format_bytes)
-            .unwrap_or_else(|| "n/a".to_string());
+            .unwrap_or_else(|| crate::t!("panel.sysinfo.na").to_string());
 
         // 行 1: OS 信息(hostname / os_version / arch)
-        let line1 = format!("OS: {}  |  {}  |  arch: {}", host, os_version, arch);
+        // 多占位符键按序链式 replacen(injection cache_line 先例范式)
+        let line1 = crate::t!("panel.sysinfo.line_os")
+            .replacen("{}", &host, 1)
+            .replacen("{}", &os_version, 1)
+            .replacen("{}", &arch, 1);
         buf.set_line(
             area.x,
             area.y,
@@ -295,7 +299,9 @@ impl Panel for SysinfoPanel {
 
         // 行 2: CPU 型号 + 核心数
         if area.height > 1 {
-            let line2 = format!("CPU: {}  |  cores: {}", cpu_brand, cpu_count);
+            let line2 = crate::t!("panel.sysinfo.line_cpu")
+                .replacen("{}", &cpu_brand, 1)
+                .replacen("{}", &cpu_count.to_string(), 1);
             buf.set_line(
                 area.x,
                 area.y + 1,
@@ -306,7 +312,7 @@ impl Panel for SysinfoPanel {
 
         // 行 3: 内存
         if area.height > 2 {
-            let line3 = format!("Memory Total: {}", total_mem);
+            let line3 = crate::t!("panel.sysinfo.line_memory").replacen("{}", &total_mem, 1);
             buf.set_line(
                 area.x,
                 area.y + 2,
@@ -317,7 +323,7 @@ impl Panel for SysinfoPanel {
 
         // 行 4: 启动时间
         if area.height > 3 {
-            let line4 = format!("Boot: {}", boot);
+            let line4 = crate::t!("panel.sysinfo.line_boot").replacen("{}", &boot, 1);
             buf.set_line(
                 area.x,
                 area.y + 3,
@@ -328,7 +334,9 @@ impl Panel for SysinfoPanel {
 
         // 行 5: Chimera 进程 PID + RSS
         if area.height > 4 {
-            let line5 = format!("Chimera: PID {}  |  RSS: {}", self.pid, chimera_rss);
+            let line5 = crate::t!("panel.sysinfo.line_process")
+                .replacen("{}", &self.pid.to_string(), 1)
+                .replacen("{}", &chimera_rss, 1);
             buf.set_line(
                 area.x,
                 area.y + 4,
@@ -344,7 +352,7 @@ impl Panel for SysinfoPanel {
 
         // 行 6: 操作提示
         if area.height > 5 {
-            let line6 = "Press 'r' to refresh process info";
+            let line6 = crate::t!("panel.sysinfo.refresh_hint");
             buf.set_line(
                 area.x,
                 area.y + 5,
@@ -478,11 +486,26 @@ mod tests {
         assert!(title.contains("System"));
     }
 
+    /// 取键值首个 {} 占位符之前的固定前缀(B6-M 断言范式:与键表同源的
+    /// 渲染行特征,避免断言串与键值双源漂移)
+    fn prefix_before_placeholder(key: &'static str) -> String {
+        crate::i18n::tr(key)
+            .split("{}")
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    }
+
     /// 验证 render 不 panic 且产生预期内容
     #[test]
     fn test_render_produces_content() {
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+
+        // B6-M:正文五行迁键;TestBackend 全帧逐 cell 收集下 zh 宽字符会被
+        // 续格空格碎裂,故 pin En 后经 t! 派生期望断言
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
 
         let mut panel = SysinfoPanel::new();
         let state = TuiState::new();
@@ -502,11 +525,20 @@ mod tests {
             .map(|c| c.symbol().chars().next().unwrap_or(' '))
             .collect();
 
-        assert!(content.contains("OS"), "should contain OS line");
-        assert!(content.contains("CPU"), "should contain CPU line");
+        // OS 行:键值经 panel 公开取值器按序回填(与 render 消费点完全同源)
+        let expected_os = crate::t!("panel.sysinfo.line_os")
+            .replacen("{}", &panel.host_name(), 1)
+            .replacen("{}", &panel.os_version(), 1)
+            .replacen("{}", &panel.cpu_arch(), 1);
+        assert!(content.contains(&expected_os), "should contain OS line");
         assert!(
-            content.contains("Chimera"),
+            content.contains(&prefix_before_placeholder("panel.sysinfo.line_cpu")),
+            "should contain CPU line"
+        );
+        assert!(
+            content.contains(&prefix_before_placeholder("panel.sysinfo.line_process")),
             "should contain Chimera PID line"
         );
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
     }
 }

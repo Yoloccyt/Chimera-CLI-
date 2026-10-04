@@ -227,6 +227,76 @@ fn make_chunk_clv(seed: u64) -> CLV {
     hcw_window::recall::eval::make_clv(seed ^ 0x9E37_79B9_7F4A_7C15, None, 0.0)
 }
 
+/// provider 确定性内核：对快照表计算喂给 RRF 之前的 dense_ids/sparse_ids。
+///
+/// 抽出为独立函数以便与“去克隆前”参考实现做 **pre-RRF 逐元素等价对拍**——
+/// post-RRF 因 `rrf_fuse` 用 std HashMap 其并列序本就跨调用非确定（既有性质），
+/// 不能作行为等价判据；故等价性在此确定性层证明。
+///
+/// - `table`: 语料块快照（provider 已在锁外持 Arc）；`query`: 查询；`k`: 精排上限。
+/// - dense 序：块 CLV 与查询 CLV 余弦降序，select_nth_unstable 部分选择后回填 top-k id。
+/// - sparse 序：查询关键词命中数降序、并列按 id 字典序（借 `ids` 侧表，避免
+///   朴素改索引序静默改变并列块选取——E03 实测 82.4% 偏差），回填 top-2k id。
+///
+/// 全程携 usize 索引、仅存活者 clone（2n → ~3k 分配）；比较器零随机访问。
+fn compute_provider_parts(
+    table: &Arc<Vec<CorpusBlock>>,
+    query: &str,
+    k: usize,
+) -> (Vec<String>, Vec<String>) {
+    let query_clv = make_chunk_clv(hash_str(query));
+    // 块 id 借用侧表：sparse 全并列时 tie-break 每次比较必达，借用比较避免分配
+    let ids: Vec<&str> = table.iter().map(|b| b.id.as_str()).collect();
+    // dense 序（Top-K 红线：select 先于 truncate；比较器只读 `.1`，String→usize 零影响）
+    let mut dense: Vec<(usize, f32)> = table
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (i, query_clv.cosine_similarity(&b.clv)))
+        .collect();
+    let n = dense.len();
+    let nth = k.min(n);
+    if nth > 0 && nth < n {
+        dense.select_nth_unstable_by(nth - 1, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        dense.truncate(nth);
+    }
+    dense.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let dense_ids: Vec<String> = dense
+        .into_iter()
+        .map(|(i, _)| table[i].id.clone())
+        .collect();
+    // sparse 序（并列按 id 字典序；select/sort 两处比较器逐字一致）
+    let keywords: Vec<&str> = query.split_whitespace().collect();
+    let mut sparse: Vec<(usize, usize)> = table
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            (
+                i,
+                keywords
+                    .iter()
+                    .filter(|kw| b.content.contains(**kw))
+                    .count(),
+            )
+        })
+        .collect();
+    let sn = sparse.len();
+    let snth = (2 * k).min(sn);
+    if snth > 0 && snth < sn {
+        sparse.select_nth_unstable_by(snth - 1, |a, b| {
+            b.1.cmp(&a.1).then_with(|| ids[a.0].cmp(ids[b.0]))
+        });
+        sparse.truncate(snth);
+    }
+    sparse.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| ids[a.0].cmp(ids[b.0])));
+    let sparse_ids: Vec<String> = sparse
+        .into_iter()
+        .map(|(i, _)| table[i].id.clone())
+        .collect();
+    (dense_ids, sparse_ids)
+}
+
 /// 构造 provider 闭包（kvbsr 候选 → dense/sparse → repo-wiki RRF → BlockScore）
 ///
 /// # 闭包捕获
@@ -243,51 +313,12 @@ fn build_provider(
             return Vec::new();
         }
         let k = top_k.min(cap);
-        // 查询 CLV（确定性：query 哈希为 seed）
-        let query_clv = make_chunk_clv(hash_str(query));
-        // dense 序：CLV 余弦降序——PROBE P3: select_nth_unstable 部分选择
-        // （O(N + k log k)，替代全量 sort_by O(N log N)；Top-K 红线）
-        let mut dense: Vec<(String, f32)> = table
-            .iter()
-            .map(|b| {
-                let sim = query_clv.cosine_similarity(&b.clv);
-                (b.id.clone(), sim)
-            })
-            .collect();
-        let n = dense.len();
-        let nth = k.min(n);
-        if nth > 0 && nth < n {
-            dense.select_nth_unstable_by(nth - 1, |a, b| {
-                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            dense.truncate(nth);
-        }
-        dense.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let dense_ids: Vec<String> = dense.iter().map(|(id, _)| id.clone()).collect();
-        // sparse 序：查询关键词命中数降序（简易检索面；无命中时块序）
-        let keywords: Vec<&str> = query.split_whitespace().collect();
-        let mut sparse: Vec<(String, usize)> = table
-            .iter()
-            .map(|b| {
-                let hits = keywords
-                    .iter()
-                    .filter(|kw| b.content.contains(**kw))
-                    .count();
-                (b.id.clone(), hits)
-            })
-            .collect();
-        let sn = sparse.len();
-        let snth = (2 * k).min(sn); // PROBE P3: 融合输入截断 top-2k（rank>2k RRF 贡献可忽略）
-        if snth > 0 && snth < sn {
-            sparse
-                .select_nth_unstable_by(snth - 1, |a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            sparse.truncate(snth);
-        }
-        sparse.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        let sparse_ids: Vec<String> = sparse.iter().map(|(id, _)| id.clone()).collect();
+        // PROBE P4（去克隆）：dense/sparse 确定性内核抽入 compute_provider_parts（可测 pre-RRF 等价），
+        // 仅存活 top-k/top-2k 索引回填 id（2n → ~3k 分配）。
+        let (dense_ids, sparse_ids) = compute_provider_parts(&table, query, k);
         // repo-wiki RRF 融合（纯函数；config 默认）
         let fused = hybrid_search(&dense_ids, &sparse_ids, &HybridSearchConfig::default(), k);
-        // → BlockScore（rrf_score 为精排分）
+        // → BlockScore（rrf_score 为精排分；doc_id 已 owned，move 免费）
         fused
             .into_iter()
             .map(|r| BlockScore::new(r.doc_id, r.rrf_score, 0.0, "overwindow", 0))
@@ -431,5 +462,116 @@ mod tests {
         let (w, r) = tokio::join!(writer, reader);
         w.unwrap();
         r.unwrap();
+    }
+
+    // ---- PROBE P4 去克隆：差分对拍等价测试（行为保持性守卫） ----
+
+    /// 去克隆前的参考实现（旧 String-tuple dense/sparse 逐字保留），仅 #[cfg(test)] 存活，
+    /// 与 `compute_provider_parts` 做 **pre-RRF 逐元素等价对拍**（rrf_fuse 为两版共用、
+    /// 其 post-RRF 并列非确定性不在此层，故确定性层才是等价判据）。
+    fn compute_provider_parts_reference(
+        table: &Arc<Vec<CorpusBlock>>,
+        query: &str,
+        k: usize,
+    ) -> (Vec<String>, Vec<String>) {
+        let query_clv = make_chunk_clv(hash_str(query));
+        let mut dense: Vec<(String, f32)> = table
+            .iter()
+            .map(|b| (b.id.clone(), query_clv.cosine_similarity(&b.clv)))
+            .collect();
+        let n = dense.len();
+        let nth = k.min(n);
+        if nth > 0 && nth < n {
+            dense.select_nth_unstable_by(nth - 1, |a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            dense.truncate(nth);
+        }
+        dense.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let dense_ids: Vec<String> = dense.iter().map(|(id, _)| id.clone()).collect();
+        let keywords: Vec<&str> = query.split_whitespace().collect();
+        let mut sparse: Vec<(String, usize)> = table
+            .iter()
+            .map(|b| {
+                (
+                    b.id.clone(),
+                    keywords
+                        .iter()
+                        .filter(|kw| b.content.contains(**kw))
+                        .count(),
+                )
+            })
+            .collect();
+        let sn = sparse.len();
+        let snth = (2 * k).min(sn);
+        if snth > 0 && snth < sn {
+            sparse
+                .select_nth_unstable_by(snth - 1, |a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            sparse.truncate(snth);
+        }
+        sparse.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let sparse_ids: Vec<String> = sparse.iter().map(|(id, _)| id.clone()).collect();
+        (dense_ids, sparse_ids)
+    }
+
+    /// 测试语料块构造（按名字段，不依赖字段声明顺序）
+    fn blk(id: &str, content: &str, seed: u64) -> CorpusBlock {
+        CorpusBlock {
+            id: id.to_string(),
+            content: content.to_string(),
+            clv: make_chunk_clv(seed),
+        }
+    }
+
+    #[test]
+    fn test_pre_rrf_parts_equivalence() {
+        // 确定性层等价：新（索引版）与旧（String-tuple 参考）的 dense_ids/sparse_ids
+        // 必须在多种语料×k 下逐元素相等（全并列/重复 id/字典序≠索引序均覆盖）。
+        // 若 sparse tie-break 未正确按 id 字典序，全并列语料会立即使 sparse 不等而红。
+        let corpora: Vec<Vec<CorpusBlock>> = vec![
+            vec![],
+            vec![blk("only", "语义 检索", 1)],
+            (0..400u64)
+                .map(|i| blk(&format!("chunk-{i}"), "普通内容", i))
+                .collect(),
+            (0..300u64)
+                .map(|i| blk(&format!("id{i:03}"), "", i))
+                .collect(),
+            (0..200u64).map(|i| blk("dup", "kw", i % 3)).collect(),
+        ];
+        let queries = ["语义 检索", "kw", "", "不存在词 foo"];
+        let ks = [0usize, 1, 7, 128];
+        for table in corpora {
+            let t = Arc::new(table);
+            for q in queries {
+                for &k in &ks {
+                    let (dn, sn) = compute_provider_parts(&t, q, k);
+                    let (dr, sr) = compute_provider_parts_reference(&t, q, k);
+                    assert_eq!(dn, dr, "dense pre-RRF 不等：q={q:?} k={k}");
+                    assert_eq!(sn, sr, "sparse pre-RRF 不等（锁 tie-break）：q={q:?} k={k}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_tie_break_is_id_lexicographic() {
+        // 锁定语义：sparse 全并列（hits=0）时按 id 字典序（"chunk-1"<"chunk-10"<"chunk-2"），
+        // 非索引序——朴素索引 tie-break 会破坏此序。无截断（k≥表大小）⇒ 确定性。
+        let t = Arc::new(vec![
+            blk("chunk-2", "", 7),
+            blk("chunk-10", "", 7),
+            blk("chunk-1", "", 7),
+        ]);
+        let (_d, s) = compute_provider_parts(&t, "nomatchword", 128);
+        assert_eq!(
+            s,
+            vec![
+                "chunk-1".to_string(),
+                "chunk-10".to_string(),
+                "chunk-2".to_string()
+            ],
+            "sparse 全并列须按 id 字典序升序"
+        );
     }
 }

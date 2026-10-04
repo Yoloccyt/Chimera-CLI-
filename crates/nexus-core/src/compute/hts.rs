@@ -25,12 +25,13 @@ use super::dispatch::TaskKind;
 /// HTS 阈值表条目 — 手册 §8.4 单行记录
 ///
 /// WHY 全 Copy:热路径 `route()` 每调用一次仅读取本结构的一个快照副本,
-/// 无堆分配、无借用逃逸（`[Entry; 6]` 数组索引拷贝）。
+/// 无堆分配、无借用逃逸（`[Entry; 10]` 数组索引拷贝）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry {
     /// 并行调度阈值（items）:条目数 >= 阈值时进 L-a rayon 池
     pub threshold: usize,
-    /// 并行块大小（chunk）:批量计算的分块粒度（T14 并行化接线消费）
+    /// 并行块大小（chunk）:分块粒度；当前无并行接线消费者（ADR-196 D2-ter /
+    /// C3：[`calibration`](super::calibration) 写表时回读现值即唯一读点）
     pub chunk: usize,
     /// 阈值来源 — 诚实数据红线:阈值必须可溯源（ADR-103 三重来源）
     pub source: ThresholdSource,
@@ -88,8 +89,8 @@ pub struct HtsTable {
 
 impl Default for HtsTable {
     /// 初始表 — 迁移 dispatch.rs 静态值（S9 离线测定预填,W1 复测）;
-    /// 五类标注 [`OfflineMeasured`](ThresholdSource::OfflineMeasured)（measured_at=0 预填占位）,
-    /// [`Generic`](TaskKind::Generic) 为 [`ConservativeDefault`](ThresholdSource::ConservativeDefault)
+    /// 七类标注 [`OfflineMeasured`](ThresholdSource::OfflineMeasured)（measured_at=0 预填占位）,
+    /// Generic/ExpertScore/DecayBatch 三类为 [`ConservativeDefault`](ThresholdSource::ConservativeDefault)
     /// （10,000,未测定兜底,来源标注见手册 §8.4）。
     fn default() -> Self {
         Self {
@@ -703,7 +704,7 @@ mod tests {
         }
     }
 
-    /// 初始来源标记 — 五类 OfflineMeasured 预填 + Generic 保守默认（诚实数据红线）
+    /// 初始来源标记 — 七类 OfflineMeasured 预填 + 三类保守默认(Generic/ExpertScore/DecayBatch)（诚实数据红线）
     #[test]
     fn initial_sources_are_honest() {
         let table = HtsTable::default();

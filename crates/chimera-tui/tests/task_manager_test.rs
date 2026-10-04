@@ -360,3 +360,38 @@ fn test_cycle_sort_mode_key_s_advances_to_next() {
     assert!(cmd3.is_none(), "S 键不应产生任何 TuiCommand");
     assert_eq!(panel.sort_mode(), SortMode::Priority);
 }
+
+/// F-28:TaskManagerPanel 须覆写 `Panel::selected_context_id`,使命令面板/
+/// 动作菜单派发的 quest.pause/resume/cancel 经富化(enrich_payload_with_focused_quest)
+/// 精确定位焦点面板选中项(修复前恒 None,quest_id 注入失效)。
+#[test]
+fn selected_context_id_returns_selected_quest_id() {
+    let mut panel = TaskManagerPanel::new();
+
+    // 空列表边界:无选中上下文 → None
+    assert_eq!(
+        panel.selected_context_id(&TuiState::new()),
+        None,
+        "空 Quest 列表应返回 None"
+    );
+
+    // 默认 Priority 降序排序:顶部选中项为 q-high(priority=8)
+    let state = state_with_quests();
+    assert_eq!(
+        panel.selected_context_id(&state).as_deref(),
+        Some("q-high"),
+        "默认排序下应返回选中项 q-high"
+    );
+
+    // ↓ 导航移动选中项后,访问器实时返回新选中项(富化实时性)
+    let mut state_after = state_with_quests();
+    panel.handle_key(
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        &mut state_after,
+    );
+    assert_eq!(
+        panel.selected_context_id(&state_after).as_deref(),
+        Some("q-mid"),
+        "Down 导航后应返回第二选中项 q-mid"
+    );
+}

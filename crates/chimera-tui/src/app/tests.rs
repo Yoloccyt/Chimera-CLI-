@@ -1834,6 +1834,12 @@ impl crate::panels::ExperienceCardStatsProvider for MockCardStatsProvider {
 
 #[test]
 fn install_experience_card_provider_wires_real_stats() -> Result<(), TuiError> {
+    // B6-M:ExperienceCardViz 面板文案迁键,期望串经 t! 与渲染同源。
+    // WHY 去空白匹配:Buffer::set_stringn 对宽字符续格调 Cell::reset(),
+    // symbol 重置为空格,zh 文案在逐 cell 收集后必然呈 "等 待 …",直接
+    // contains 永不命中(同 osa_clv_timeline_closure_test 先例口径);
+    // 期望串同步去空白保持与渲染同源。
+    let _locale_guard = crate::i18n::locale_test_guard();
     let mut app = make_app()?;
 
     // 默认(未接线):面板诚实展示等待提示
@@ -1846,11 +1852,19 @@ fn install_experience_card_provider_wires_real_stats() -> Result<(), TuiError> {
         ratatui::layout::Rect::new(0, 0, 60, 10),
         &mut buf,
     );
-    let text: String = buf.content.iter().map(|c| c.symbol()).collect();
-    assert!(
-        text.contains("Awaiting stats provider"),
-        "默认面板应诚实展示等待提示"
-    );
+    let dense: String = buf
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let awaiting: String = crate::t!("panel.exp_card.awaiting_provider")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(dense.contains(&awaiting), "默认面板应诚实展示等待提示");
 
     // 接线:替换为带提供者实例 → 渲染真实统计
     let provider = Arc::new(MockCardStatsProvider(
@@ -1876,12 +1890,24 @@ fn install_experience_card_provider_wires_real_stats() -> Result<(), TuiError> {
         ratatui::layout::Rect::new(0, 0, 60, 10),
         &mut buf2,
     );
-    let text2: String = buf2.content.iter().map(|c| c.symbol()).collect();
-    assert!(
-        text2.contains("Total: 42"),
-        "接线后应渲染真实统计(Total: 42)"
-    );
-    assert!(!text2.contains("Awaiting stats provider"));
+    let dense2: String = buf2
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    // 统计行期望串经 t! + 同序 replacen 与渲染完全同源(同步去空白)
+    let expected_stats = crate::t!("panel.exp_card.stats_summary")
+        .replacen("{}", "42", 1)
+        .replacen("{}", "7", 1)
+        .replacen("{}", "2", 1)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>();
+    assert!(dense2.contains(&expected_stats), "接线后应渲染真实统计");
+    assert!(!dense2.contains(&awaiting));
     Ok(())
 }
 

@@ -6,7 +6,7 @@
 //! - `DispatchPlan` 三态合并自 S8 RuntimeSwitcher（ADR-127 裁决）:
 //!   S8 的 50-200μs 运行时切换器被裁决并入 L-f route() 的纳秒级查表,
 //!   本文件只承载类型与静态阈值表,查表逻辑在 [`super::bridge`]。
-//! - 六类任务登记对应手册 §8.4 HTS-CPU 阈值表;阈值来源标注
+//! - 十类任务登记对应手册 §8.4 HTS-CPU 阈值表;阈值来源标注
 //!   "S9 离线测定,W1 复测"（诚实数据红线:W1 复测前为预填初值,不作已校准结论）。
 //!
 //! # 契约（Ω₃）
@@ -29,7 +29,7 @@ pub enum DispatchPlan {
     Async,
 }
 
-/// 计算任务类型登记 — 对应手册 §8.4 HTS-CPU 阈值表的六类
+/// 计算任务类型登记 — 对应手册 §8.4 HTS-CPU 阈值表的十类
 ///
 /// 语义约定:`is_io_bound() == true` 的任务**永不**进入 rayon 池
 /// （红线:IO 不上 rayon,§7.5.3 纪律⑥;v4.0 §7.5.1 分类表）。
@@ -83,7 +83,7 @@ impl TaskKind {
     /// IO 密集判定 — `true` 时 [`super::bridge::ComputeBridge::route`] 直投 [`DispatchPlan::Async`]
     ///
     /// # 当前登记（手册 §8.4 事实）
-    /// 六类均为 CPU 计算型,返回 `false`;IO 类任务（LLM 网络调用 / 网络检索等）
+    /// 十类均为 CPU 计算型,返回 `false`;IO 类任务（LLM 网络调用 / 网络检索等）
     /// 按 v4.0 §7.5.1 分类应归 L-b tokio 面,登记时经此处返回 `true`,
     /// 由 HTS 阈值表（T9 序贯检验）统一驱动——本骨架不预登记 IO 类。
     #[must_use]
@@ -93,8 +93,8 @@ impl TaskKind {
 
     /// 任务阈值（items）— 手册 §8.4 HTS-CPU 阈值表
     ///
-    /// 来源标注:五类为 **S9 离线测定初值,W1 复测**（诚实数据:未复测前仅作预填）;
-    /// [`Generic`](TaskKind::Generic) 为保守默认值（10,000）。
+    /// 来源标注:七类为 **S9 离线测定初值,W1 复测**（诚实数据:未复测前仅作预填）;
+    /// [`Generic`](TaskKind::Generic) 与 ExpertScore/DecayBatch 三类为保守默认值（10,000）。
     ///
     /// # T9 迁移说明
     /// 本方法已被 [`super::hts::HtsTable`] 动态表取代（route 读 arc-swap 动态表）,
@@ -153,21 +153,21 @@ mod tests {
 
     /// route() 三态判定 — Async 分支:IO 密集任务直投 tokio 面
     ///
-    /// 当前六类登记均非 IO 型(手册 §8.4),故 Async 分支在公开 API 上不可达;
+    /// 当前十类登记均非 IO 型(手册 §8.4),故 Async 分支在公开 API 上不可达;
     /// 分支逻辑经纯函数 [`crate::compute::bridge::decide`] 直接覆盖,
     /// 保证 IO 类任务登记(T9)时不破坏分支语义。
     #[test]
     fn route_async_for_io_bound() {
         let plan = crate::compute::bridge::decide(TaskKind::Generic, true, 10_000, 0);
         assert_eq!(plan, DispatchPlan::Async);
-        // 当前登记事实:六类均非 IO 型 → route 对全部类型永不返回 Async
+        // 当前登记事实:十类均非 IO 型 → route 对全部类型永不返回 Async
         for kind in TaskKind::ALL {
             assert!(!kind.is_io_bound(), "{kind:?} 应为 CPU 计算型(手册 §8.4)");
             assert_ne!(bridge().route(kind, usize::MAX), DispatchPlan::Async);
         }
     }
 
-    /// is_io_bound 契约 — 当前六类登记全部为 CPU 计算型
+    /// is_io_bound 契约 — 当前十类登记全部为 CPU 计算型
     #[test]
     fn is_io_bound_false_for_all_registered() {
         for kind in TaskKind::ALL {

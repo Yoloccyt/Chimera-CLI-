@@ -177,25 +177,24 @@ const EXEMPT_ENGLISH_PREFIXES: &[&str] = &[
     // help.brand)、dag_viz.rs(F-30 三处迁 panel.dag.title/awaiting/more 后
     // 生产段英文清零)三条已移除——只减不增。
     //
-    // 六面板(chtc/clv_vector/sysinfo/experience_card_viz/resource_monitor/
-    // metrics_dashboard)正文英文存量迁移留批次六,豁免条目暂留。
-    "src/panels/budget.rs",              // Budget 面板正文/告警文案待迁移
-    "src/panels/chat.rs",                // Chat 面板文案待迁移
-    "src/panels/chtc.rs",                // CHTC 适配器面板正文待迁移(批次六)
-    "src/panels/clv_vector.rs",          // CLV 向量面板正文待迁移(批次六)
-    "src/panels/decay.rs",               // Decay 面板残留文案待迁移
-    "src/panels/experience_card_viz.rs", // 经验卡片面板正文待迁移(批次六)
-    "src/panels/health.rs",              // Health 面板残留文案待迁移
-    "src/panels/memory.rs",              // Memory 面板残留文案待迁移
-    "src/panels/metrics_dashboard.rs",   // 指标仪表盘残留文案待迁移(批次六)
-    "src/panels/parliament.rs",          // 议会面板残留文案待迁移
-    "src/panels/resource_monitor.rs",    // 资源监控残留文案待迁移(批次六)
-    "src/panels/router.rs",              // 路由面板残留文案待迁移
-    "src/panels/security.rs",            // 安全面板残留文案待迁移
-    "src/panels/sysinfo.rs",             // 系统信息残留文案待迁移(批次六)
-    "src/actions",                       // 动作域残留文案待迁移(与面板同批)
-                                         // (src/app 的 tests.rs / v3_render_tests.rs 已在 EXEMPT_PREFIXES 全局登记,
-                                         //  本清单不重复登记——英文扫描的豁免判定同时检查两份清单)
+    // B6-M(2026-10-04)棘轮出清记录:六面板(chtc/clv_vector/sysinfo/
+    // experience_card_viz/resource_monitor/metrics_dashboard)正文英文全量迁移
+    // (键族 panel.chtc.* / panel.clv.* / panel.sysinfo.* / panel.exp_card.* /
+    // panel.resources.* / panel.metrics.*,zh/en 同步),六条豁免随迁移除——
+    // 只减不增。语言无关技术标识(B{i} 块标号、C{i}: 每核标签、b{i} 类目、
+    // dim=/value= 前缀、GB/MB/B 单位、UTC 时区后缀)经英文 token 口径
+    // (≥2 个双字母以上词)天然放行,无需豁免登记。
+    "src/panels/budget.rs",     // Budget 面板正文/告警文案待迁移
+    "src/panels/chat.rs",       // Chat 面板文案待迁移
+    "src/panels/decay.rs",      // Decay 面板残留文案待迁移
+    "src/panels/health.rs",     // Health 面板残留文案待迁移
+    "src/panels/memory.rs",     // Memory 面板残留文案待迁移
+    "src/panels/parliament.rs", // 议会面板残留文案待迁移
+    "src/panels/router.rs",     // 路由面板残留文案待迁移
+    "src/panels/security.rs",   // 安全面板残留文案待迁移
+    "src/actions",              // 动作域残留文案待迁移(与面板同批)
+                                // (src/app 的 tests.rs / v3_render_tests.rs 已在 EXEMPT_PREFIXES 全局登记,
+                                //  本清单不重复登记——英文扫描的豁免判定同时检查两份清单)
 ];
 
 /// 英文扫描的行级豁免片段(子串命中即豁免该行;逐条登记理由)
@@ -204,20 +203,26 @@ const EXEMPT_ENGLISH_PREFIXES: &[&str] = &[
 /// 会放过该文件其余文案的增量退化。
 const EXEMPT_ENGLISH_SNIPPETS: &[&str] = &[
     // msg/s + last_seen:MCP 节点行的单位符号与字段名标识符(紧凑技术格式,
-    // 译为中文会破坏列对齐;与 timeline 面板 ev/s:/bud: 紧凑列同口径)
+    // 译为中文会破坏列对齐;与 timeline 面板 ev/s:/bud: 紧凑列同口径)。
+    // B6-M(2026-10-04)复核:仍有实证依赖(mcp_nodes.rs 节点列表行格式串),
+    // 保留豁免。
     "msg/s",
     "last_seen",
     // PgUp/PgDn:键盘键位标识符(语言中立,与 ↑/↓、Enter 同类,不译)
     "PgUp/PgDn",
     // Shift+Tab / Ctrl+Up / Ctrl+Down:help.rs global_shortcuts 键帽列
     // (键盘键位标识符,PgUp/PgDn 同类语言中立不译;B5-U help.rs 出清文件级
-    // 豁免时登记——键帽非文案,随键帽行迁键应保持,非放水口)
+    // 豁免时登记——键帽非文案,随键帽行迁键应保持,非放水口)。
+    // B6-M 复核:键帽行已迁键(help.rs 键帽列仍为字面量),键帽本身语言无关,
+    // 登记为语言无关永久豁免。
     "Shift+Tab",
     "Ctrl+Up",
     "Ctrl+Down",
     // ={} tok:overwindow 语料/窗口行的字节单位格式(紧凑技术格式,与 msg/s
     // 同口径;数字插值居中,拆单键无收益。B5-U overwindow.rs 出清文件级豁免时
-    // 登记,该行整行迁键后应移除)
+    // 登记"整行迁键后应移除"。B6-M 复核:该行标签部分(语料/窗口)已走键表
+    // panel.overwindow.corpus/window,剩余 "{}={} tok" 为纯格式模板(tok 为
+    // token 字节单位,语言无关),裁决为语言无关永久豁免)
     "={} tok",
     // === B4-I(F-04)src/app 域登记(逐条理由;随文案迁移应移除,只减不增)===
     // 事件源标识符(如 EventMetadata::new("chimera-tui")),机器协议面非文案

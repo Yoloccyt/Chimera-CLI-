@@ -48,18 +48,11 @@ from pathlib import Path, PurePosixPath
 # ---------------------------------------------------------------------------
 CONTRACTS = [
     {
-        "name": "ComputeBridge::spawn_compute",
-        # call sites look like `bridge().spawn_compute(` or `b.spawn_compute(`
-        "pattern": r"\.spawn_compute\(",
-        "status": "DEFERRED",
-        "note": "single-task offload still has no production caller (audit S-2); "
-                "decide in ADR-197 follow-up: wire a real caller or drop the API",
-    },
-    {
         "name": "ComputeBridge::spawn_compute_batch",
         "pattern": r"\.spawn_compute_batch\(",
         "status": "WIRED",
-        "note": "batch offload points (P1-T14 / WI-34)",
+        "note": "batch offload points (P1-T14 / WI-34); sole ComputeBridge offload "
+                "entry since ADR-199 candidate-B retired spawn_compute (2026-10-03)",
     },
     {
         "name": "ComputeError::Saturated",
@@ -138,6 +131,28 @@ CONTRACTS = [
                 "D-1, 2026-10-02). Registering as DEFERRED closes the accountability gap; "
                 "closing the observability loop is tracked in "
                 "docs/reports/cpu-plane-phase0-c0-2026-10-02.md.",
+    },
+    {
+        "name": "DecayEngine::parallel_batch",
+        # `pub fn parallel_batch` decl has no leading dot; callers are bench-only.
+        "pattern": r"\.parallel_batch\(",
+        "status": "DEFERRED",
+        "note": "public batch-decay offload entry is bench-only -- no production caller "
+                "(C1/C2 scale-bounding matrix). Plan D1 demote disposition: do not "
+                "optimize its parallel/failure semantics until wired to real traffic "
+                "(negative-yield redline: don't invest in unreachable points).",
+    },
+    {
+        "name": "NmcEncoder::perceive_batch",
+        # lib.rs `pub use parallel::perceive_batch` is a re-export (no call parens); no `.perceive_batch(` anywhere.
+        "pattern": r"\.perceive_batch\(",
+        "status": "DEFERRED",
+        "note": "public batch-encode entry: re-exported but zero call sites including "
+                "production (C1/C2 matrix). Plan D1 demote as bench-only; distinct from "
+                "single-item perceive. Gsoe/Wiki/Osa batch points are NOT listed here -- "
+                "their names collide with same-named symbols (private sort select_elite; "
+                "inherent search_batch/top_k_batch) and would yield misleading uses, so "
+                "they are tracked in the C1/C2 report instead (dual-channel negative).",
     },
 ]
 
@@ -366,8 +381,6 @@ def selftest() -> int:
 
         problems = []
         # true positive: wired patterns present in production scope
-        if by_name.get("ComputeBridge::spawn_compute", 0) != 1:
-            problems.append("selftest: spawn_compute use not detected (regex too strict?)")
         if by_name.get("ComputeBridge::spawn_compute_batch", 0) != 1:
             problems.append("selftest: spawn_compute_batch use not detected")
         if by_name.get("ComputeError::Saturated", 0) != 1:
@@ -434,8 +447,9 @@ def selftest() -> int:
         if any(r["self_uses"] for r in rows if not r["exclude_files"]):
             problems.append("selftest: rows without exclude_files must not be self-scoped")
         # dead file contributes nothing; docs/comments must not add hits
-        # 6 from the legacy fixtures + 1 from the exclude_files caller fixture
-        if sum(by_name.values()) != 7:
+        # 5 from the legacy fixtures + 1 from the exclude_files caller fixture
+        # (spawn_compute retired by ADR-199 candidate-B -> its fixture hit matches no pattern)
+        if sum(by_name.values()) != 6:
             problems.append(f"selftest: unexpected total count {by_name}")
 
     if problems:
