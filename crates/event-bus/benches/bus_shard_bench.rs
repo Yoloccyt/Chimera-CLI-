@@ -5,11 +5,15 @@
 //!
 //! # 门禁口径(手册 §8.5 / T12)
 //! - 分片发布吞吐(`enable_sharding(64)` 后 `publish_blocking` 入片路径)
-//!   **> 500K msg/s** —— 分片是「发布端并行化」:主线程只做入片(信用 CAS +
-//!   Mutex + ArrayQueue push + Notify),broadcast send 由后台 worker 承担,
-//!   发布端吞吐不再被 broadcast 复制/接收者数拖累;
+//!   **> 500K msg/s** —— 分片是「发布端并行化」:主线程只做入片(ArcSwap 无锁读 +
+//!   信用 CAS + ArrayQueue 无锁 push + Notify),broadcast send 由后台 worker
+//!   承担,发布端吞吐不再被 broadcast 复制/接收者数拖累;
 //! - 对照:单流发布吞吐(`EventBus::new()` 默认关分片,与 v2.27.1 完全一致),
 //!   报告分片相对单流的加速比(对照基准,非门禁)。
+//!
+//! 第三轮 T1.3 纠漂:旧述曾把入片热路径列为「Mutex」——实为全程无锁
+//! (原 Mutex 读端已由 F-a 升级为 ArcSwapOption,`try_shard_publish` 亦无
+//! Mutex);此字与 ShardedBus「发布端并行化」的立身之本相悖,故删。
 //!
 //! # 门禁说明(诚实数据红线)
 //! 复用 T8/T9 单行采样模式:iter_custom 内零打印(只计时),测量阶段结束后

@@ -427,6 +427,15 @@ def mode_invariants(redlines, thresholds_doc, freeze):
         if not _check(f"I8b event-bus sources readable ({exc})", False):
             fails += 1
 
+    # I8 已知盲区登记(第三轮 T1.3,审计 F-P3 伴生;不改变判定,仅记录边界):
+    #   I8/I8b 只锁 “N 个 Critical 事件/变体” 措辞 == CRITICAL_TOTAL(=20 全量),
+    #   不校验 mpsc 旁路子数 “当前 N 类” 那一组自由文本(=16)。历史上 v2.3 补入
+    #   CertifyIssued/FailureRegistered 后旁路升为 16,正文却多处残留旧值 13/14/17/18
+    #   —— 全在本门监测面之外(CRITICAL_MPSC_VARIANTS 常量本身另由
+    #   test_critical_double_list_d8_counts + mpsc_bypass_exact_* + credit_flow_test 锁定)。
+    #   第三轮已将散落旧值作为注释修正对齐(T1.3);是否新增 I8c 机器断言
+    #   锁死 “N 类” 措辞(升格断言)留 T3 评估。
+
     verdict = f"FAIL ({fails} violation(s))" if fails else "PASS (all invariants hold)"
     print(f"\n  RESULT: {verdict}")
     return rc_from_findings(fails)

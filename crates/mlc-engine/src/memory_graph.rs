@@ -216,6 +216,9 @@ impl MemoryGraph {
         // WHY parallel_insert:hnsw_rs 内置 rayon 多核并行建索引,10K 规模下
         // 相比串行 insert 有显著加速(建索引是本路径主要耗时)。需物化 Vec<f32>
         // (parallel_insert 要求 &Vec 引用),10K×512×4B≈20MB 可接受。
+        // ⚠ 纪律④ 桥接唯一例外:parallel_insert 走 hnsw_rs 内置 rayon 全局池,
+        // 不经 ComputeBridge 专用池;破口登记与接线前迁桥/长期例外决策见
+        // `nexus-core/src/compute/bridge.rs`「骨架边界 · hnsw_rs 全局池例外」（第三轮 T2.5）。
         let vectors: Vec<Vec<f32>> = ids
             .iter()
             .map(|id| self.nodes[id].embedding.as_slice().to_vec())
@@ -230,6 +233,7 @@ impl MemoryGraph {
 
         // 并行查询全部节点近邻(复用已物化的 vectors,rayon 多核加速)。
         // 返回顺序与 vectors 一致:results[dataid] = 节点 dataid 的近邻表。
+        // ⚠ 同上 parallel_search 亦走 hnsw_rs 全局池(纪律④ 例外,见 bridge.rs 骨架边界）。
         let results = hnsw.parallel_search(&vectors, fetch_k, ef);
 
         // 先收集边(避免查询借用与 self 可变借用冲突)

@@ -1,0 +1,24 @@
+# G-88 baseline: synchronous-offload worker-yield guards (forced mode, decision 3).
+# format: crate/src/path.rs::anchor_fn|STATE      (STATE in GUARDED | NO_ASYNC_BOUNDARY)
+# GUARDED            -- anchor file must keep `block_in_place(` AND `try_current` (flavor dual-branch)
+# NO_ASYNC_BOUNDARY  -- call-site file has no async fn today; if async appears -> ASYNC_APPEARED,
+#                        the row must be re-adjudicated to GUARDED before any wiring.
+# LocalSet caveat (registered, NOT checked -- see script header): the flavor branch is not the
+# real gate; tokio's private allow_block_in_place decides, so LocalSet still panics on a
+# MultiThread handle. Runtime-review concern, mirrors the in-code docs
+# (osa-coordinator/src/coordinator.rs:540-548, faae-router/src/parallel.rs:268-276).
+#
+# Evidence: P1 batch 561374f (faae route / osa batch), N-2 in closeout §5 (hcw window),
+# faae ScoreInput twin wrapper shares the same on_multi_thread_runtime judgment.
+faae-router/src/parallel.rs::score_experts_batch_offloaded|GUARDED
+faae-router/src/parallel.rs::score_experts_scoring_batch_offloaded|GUARDED
+hcw-window/src/window.rs::select_window|GUARDED
+osa-coordinator/src/coordinator.rs::compute_all_masks_batch|GUARDED
+decay-engine/src/parallel.rs::decay_batch_parallel|NO_ASYNC_BOUNDARY
+faae-router/src/parallel.rs::score_parallel|NO_ASYNC_BOUNDARY
+faae-router/src/parallel.rs::score_scoring_parallel|NO_ASYNC_BOUNDARY
+gsoe-evolution/src/fitness_parallel.rs::score_batch|NO_ASYNC_BOUNDARY
+hcw-window/src/parallel.rs::score_parallel|NO_ASYNC_BOUNDARY
+nmc-encoder/src/parallel.rs::perceive_parallel|NO_ASYNC_BOUNDARY
+osa-coordinator/src/parallel.rs::compute_five_masks_parallel|NO_ASYNC_BOUNDARY
+repo-wiki/src/vector/parallel.rs::knn_batch_parallel|NO_ASYNC_BOUNDARY

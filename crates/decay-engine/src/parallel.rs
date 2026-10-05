@@ -4,6 +4,18 @@
 //! 对应架构层:L4 Security
 //! 对应创新点:连续权限流体衰减模型（ADR-002）
 //!
+//! ## 接线三要件（第三轮 T2.4 · 本入口 `parallel_batch` 当前 bench-only、G-87 判 DEAD）
+//! 若未来接线进生产,接线前须逐条满足（负收益红线:不预投不可达点位;G-87 权威判定见
+//! `scripts/compute_offload_reachability_freeze.txt` 行 `decay-engine/src/parallel.rs::decay_batch_parallel|DEAD`;
+//! 台账行见 `scripts/check_dead_contract_apis.py` `DecayEngine::parallel_batch`）:
+//! 1. **错误姿态评审** —— 依 ADR-197 D2 决策表评审 strict/degrade/observe 在真实流量下的
+//!    失败语义;T2.2 已定「降级项数独立计数、拒绝逐项 `active.enter`」,接线时不得把降级
+//!    计入并发占用而触发饱和自屏蔽。
+//! 2. **G-88 同步卸载保护** —— async 上下文裸调本同步阻塞入口须配 `block_in_place`/
+//!    `spawn_blocking` 让出并通过 `check_sync_offload_guard.py` 判 GUARDED。
+//! 3. **逐位断测复核** —— 接线后复跑双路径逐位等价测试（结果序=输入序、panic 逐个隔离、
+//!    Inline/Pool 逐元素一致）,确认行为契约不回退。
+//!
 //! # 注入模式（WI-34 七条纪律 ④桥接唯一 / ⑤逐一回滚 / ⑥IO 不上 rayon）
 //! - **识别热点**:[`crate::DecayEngine`] 的批量衰减路径 —— 对能力注册表内全部
 //!   能力应用衰减（`decay_bench` bulk_decay_throughput / `decay_compute` bulk 实测）:

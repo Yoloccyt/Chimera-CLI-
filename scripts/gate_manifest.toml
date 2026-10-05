@@ -962,5 +962,32 @@ kind = "light"
 test_kind = "cross_crate"
 note = "加速器/推理栈排除门(ADR-195 V1/D5):把'零 GPU 依赖'从一次性人工核对升为机器判据。当前排除靠 feature 非激活而非结构隔离——nmc-encoder 直接依赖 mel_spec=\"0.4\",其可选 feature 面(wgpu→bytemuck+pollster / cuda / ort-tensor→ort,default=[])可在零 ADR、零评审可见决策下把 GPU/ONNX-Runtime 栈拖入 Cargo.lock;ort 仅 MSVC 破 windows-gnu 钉定,wgpu 路径触发 ADR-195 D5 E1 无先例的 forbid(unsafe)×bytemuck::Pod 未决。本门断言 Cargo.lock 中 wgpu/wgpu-core/wgpu-hal/naga/ash/d3d12/candle/burn/ort 族 0 命中。用户 2026-10-02 明确指令授权据 Proposed ADR-195 V1 建此门(替代人工核对)。"
 
+[[gate]]
+id = "G-87"
+spec_ref = "ADR-196 §1 更正注 + 第三轮收口计划 T0.1(口径裁定)"
+cmd = "{python} scripts/check_compute_offload_reachability.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "并行卸载生产可达性冻结门(第三轮 F-U1):'可达链有几条'曾在四份文档留五个互斥数字(5/7/8/2-4/0)=口径争议非事实争议。本门以组合根(chimera-cli/nexus-app-server)为唯一口径冻结 8 个 spawn_compute_batch 调用点:调用点集漂移(NEW_ENTRY/ENTRY_GONE)、人证锚点失效(ANCHOR_STALE)、DEAD 链静默复活(DEAD_PROMOTED,含 gsoe select_elite 同名陷阱与 Self:: 排除规则)均判红;不因 DEAD 本身判红(负收益红线:不为不可达点位判罚)。机器算事实、人填裁决(verdict/anchors),棘轮禁止静默升降级——ADR-195 G-A 支撑论据再引用时必须先过本门。"
+
+[[gate]]
+id = "G-88"
+spec_ref = "第三轮收口计划 决策 3 / T0.2"
+cmd = "{python} scripts/check_sync_offload_guard.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "同步卸载 worker 让出保护强制模式门(决策 3 升格):spawn_compute_batch 同步阻塞,async 上下文裸调独占 tokio worker——P1/N-2 已以 flavor 双分支(Handle::try_current + block_in_place)修复 faae/osa/hcw 三面,本门把该模式从惯例升为强制:GUARDED 锚点丢 block_in_place 或丢 try_current 分支 → GUARD_MISSING;NO_ASYNC_BOUNDARY 链头文件出现 async fn → ASYNC_APPEARED(须改判 GUARDED 再接线);新调用文件无锚 → FILE_UNACCOUNTED。已知边界在脚本头登记:flavor 判据≠真实门(tokio 内部 allow_block_in_place,LocalSet 不可静态判定,沿 coordinator.rs:540-548/parallel.rs:268-276 自述)。"
+
+[[gate]]
+id = "G-89"
+spec_ref = "第三轮收口计划 T0.3(F-P3 热点片 / F-A2 静默丢发)"
+cmd = "{python} scripts/check_bus_shard_hotspot.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "分片总线热点事实与静默丢发门(第三轮 F-P3/F-A2):① 分片键 = FNV-1a(type_name) 与实例无关 ⇒ 最热类型恒独占 1/64 片(代码自陈),500K msg/s 门禁正是单热点片口径——本门冻结键文本标记 + DEFAULT_SHARD_COUNT=64/SHARD_CAPACITY=256 几何,改动者必须显式面对基线前提(边界:冻结的是文本标记非语义证明);② merged_total 无条件 fetch_add 使 sharded==merged 只证'入通道'不证送达(F-A2),`let _ = sender.send(` 全仓限 1 处且须邻近理据文本(第二处增殖/理据蒸发均判红);T1.1 落地后 JUSTIFICATION_TOKENS 收紧为 ADR- 引用。"
+
 
 

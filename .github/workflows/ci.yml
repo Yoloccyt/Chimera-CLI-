@@ -122,6 +122,25 @@ jobs:
           python3 scripts/check_accel_exclusion.py --selftest
           python3 scripts/check_accel_exclusion.py
 
+      # WHY: 第三轮收口(2026-10-05, F-U1/决策 3/F-P3+F-A2)——把"并行卸载生产可达性"
+      # (组合根唯一口径,棘轮禁静默升降级)、"同步卸载 async 边界必须 worker 让出保护"
+      # (flavor 双分支强制模式)与"分片总线热点片事实 + 静默丢发唯一豁免"三件事
+      # 从散文升为机器判据。均为零编译秒级 light 门,沿 --selftest 双向夹具先例。
+      - name: Compute offload reachability gate (G-87)
+        run: |
+          python3 scripts/check_compute_offload_reachability.py --selftest
+          python3 scripts/check_compute_offload_reachability.py
+
+      - name: Sync offload guard gate (G-88)
+        run: |
+          python3 scripts/check_sync_offload_guard.py --selftest
+          python3 scripts/check_sync_offload_guard.py
+
+      - name: Bus shard hotspot gate (G-89)
+        run: |
+          python3 scripts/check_bus_shard_hotspot.py --selftest
+          python3 scripts/check_bus_shard_hotspot.py
+
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
       # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期

@@ -24,6 +24,13 @@
 //!   记观测+发事件、任务仍走池（行为零变更）;`degrade` 才降级为 Inline 执行
 //!   （变慢不变错）;`strict`（旧 `CHIMERA_COMPUTE_STRICT_POOL`）才以 `Saturated` 返回错误。
 //! - 缝合点（Clock/Rng/Fs/Net,§10.8 Ω₇）见 [`super::seam`],T14 注入时才接线本桥。
+//! - **hnsw_rs 全局池例外（第三轮 T2.5 · 纪律④ 桥接唯一的已知破口）**：`mlc-engine`
+//!   语义建边（mlc-engine `memory_graph` >1K 路径）与 `repo-wiki` `HnswStore` 依赖
+//!   `hnsw_rs` 索引,其 search/insert 内部自行派发 **rayon 全局池**任务,不经本桥
+//!   专用 `self.pool`。本桥的 `pool.install`/`scope` **无法将 hnsw_rs 内部的全局池调度
+//!   排除/归并**（它直接调 rayon 全局 spawn,不继承外层 scope）,因此实际存在两个线程池并存。
+//!   接线前须显式决定：① 迁桥（包 hnsw_rs 调用入本桥任务——因上述 install 无法排除而不可行，
+//!   或需上游改造），或② 接受为**长期有界例外**并固定其线程上限。未决定前不得默认它已合规。
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -188,6 +195,13 @@ impl ComputeBridge {
     #[must_use]
     pub fn saturation_degradations(&self) -> u64 {
         self.counters.degradations()
+    }
+
+    /// 第三轮 T2.2:累计降级为 Inline 的**项数**（项粒度，与 `saturation_degradations`
+    /// 的批粒度口径不同；一批降级 n 项则本计数 +n、`saturation_degradations` +1）
+    #[must_use]
+    pub fn saturation_degraded_items(&self) -> u64 {
+        self.counters.degraded_items_total()
     }
 
     /// A1/ADR-197:累计超阈观测次数（三种策略均增长，上报器去抖基线）
@@ -406,6 +420,9 @@ impl ComputeBridge {
                 }
                 SaturationMode::Degrade => {
                     self.counters.record_degradation();
+                    // T2.2 独立项粒度遥测:降级批的 n 项计入 degraded_items_total,
+                    // 与 active.enter 解耦(不致饱和自屏蔽);批粒度 degradations 仍 +1。
+                    self.counters.record_degraded_items(n as u64);
                     let out = self.run_inline_all(kind, items);
                     if let Some(t0) = probe_start {
                         calibration::observe(kind, ExecPath::Inline, n, t0.elapsed());
@@ -956,6 +973,48 @@ mod tests {
             b.kind_counters().degradations(),
             1,
             "一批只记一次降级(批粒度)"
+        );
+    }
+
+    /// 第三轮 T2.2:降级项数与批数**双口径**独立计数（项粒度 vs 批粒度）；
+    /// Observe/Strict 不得误记项数（只 Degrade 分支才 +n）。
+    #[test]
+    fn degraded_items_counts_items_not_batches() {
+        // Degrade 一批 6 项:批粒度 +1、项粒度 +6
+        let (b, counter) = saturated_bridge(SaturationMode::Degrade);
+        let _guards = (counter.enter(), counter.enter());
+        let results = b.spawn_compute_batch(TaskKind::KnnSearch, (0..6u32).map(|i| move || i));
+        assert_eq!(results.len(), 6, "结果数不变(降级仅换执行路径)");
+        assert_eq!(b.saturation_degradations(), 1, "批粒度仍计一批");
+        assert_eq!(
+            b.saturation_degraded_items(),
+            6,
+            "项粒度计六项(T2.2 独立计数)"
+        );
+        // 二批再降级 3 项:批 +1(共 2)、项 +3(共 9)——两口径互不可互推
+        let _ = b.spawn_compute_batch(TaskKind::KnnSearch, (0..3u32).map(|i| move || i));
+        assert_eq!(b.saturation_degradations(), 2, "两批→批粒度 2");
+        assert_eq!(b.saturation_degraded_items(), 9, "6+3→项粒度 9");
+    }
+
+    /// T2.2 反侧:Observe/Strict 不降级，故 degraded_items 恒为 0
+    #[test]
+    fn observe_and_strict_do_not_count_degraded_items() {
+        let (o, oc) = saturated_bridge(SaturationMode::Observe);
+        let _og = (oc.enter(), oc.enter());
+        let _ = o.spawn_compute_batch(TaskKind::KnnSearch, (0..4u32).map(|i| move || i));
+        assert_eq!(
+            o.saturation_degraded_items(),
+            0,
+            "Observe 不降级→项计数不动"
+        );
+        let (s, sc) = saturated_bridge(SaturationMode::Strict);
+        let _sg = (sc.enter(), sc.enter());
+        let _ = s.spawn_compute_batch(TaskKind::KnnSearch, (0..4u32).map(|i| move || i));
+        assert_eq!(
+            s.saturation_degraded_items(),
+            0,
+            "Strict 拒绝不执行→项计数不动"
         );
     }
 

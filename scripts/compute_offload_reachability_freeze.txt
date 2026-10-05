@@ -1,0 +1,21 @@
+# G-87 baseline: parallel-offload entry reachability (drift-detector freeze).
+# format: crate/src-path::enclosing-fn|verdict|anchors(';-joined path::sym)|api(chain head for DEAD resurrection)
+# verdict caliber = COMPOSITION ROOT (chimera-cli / nexus-app-server) -- see script header.
+# Machine facts: call-site set, anchor existence, dead-chain resurrection. Human evidence: verdicts/anchors.
+# Ratchet: reality != freeze -> FAIL. Bless via --update-baseline THEN adjudicate every UNVERIFIED row.
+#
+# Adjudication evidence (2026-10-05, round-3 audit; C0 closeout cpu-plane-phase0-c0-2026-10-02.md §2
+# + external audit F-U1 chain table, reconciled at composition-root caliber):
+#   - ZERO entries are WIRED_COMPOSITION: no chimera-cli / nexus-app-server src calls any of
+#     these chains today (faae: only ApprovedVariantRegistry/spawn_variant_event_subscriber are
+#     imported, no FaaeRouter construction; repo-wiki batch delegate never reaches dyn trait).
+#   - CRATE_API_LIVE = live internal wiring exists but stops short of a composition root.
+#   - PUB_API_DIAGNOSTIC_ONLY = sole non-test consumer is the diagnostic sentinel (recall/eval).
+decay-engine/src/parallel.rs::decay_batch_parallel|DEAD||parallel_batch
+faae-router/src/parallel.rs::score_parallel|DEAD||score_experts_batch
+faae-router/src/parallel.rs::score_scoring_parallel|CRATE_API_LIVE|faae-router/src/router.rs::route|score_experts_scoring_batch
+gsoe-evolution/src/fitness_parallel.rs::score_batch|DEAD||select_elite
+hcw-window/src/parallel.rs::score_parallel|PUB_API_DIAGNOSTIC_ONLY|hcw-window/src/compressor.rs::compress;hcw-window/src/window.rs::select_window|score_entries
+nmc-encoder/src/parallel.rs::perceive_parallel|DEAD||perceive_batch
+osa-coordinator/src/parallel.rs::compute_five_masks_parallel|DEAD||compute_all_masks_batch
+repo-wiki/src/vector/parallel.rs::knn_batch_parallel|CRATE_API_LIVE|repo-wiki/src/vector.rs::search_batch|search_batch

@@ -51,8 +51,15 @@ const KIND_SLOTS: usize = TaskKind::ALL.len();
 /// 1000‰ = 池恰好满载,阈值取 900‰ 留出余量（避免临界抖动）。
 const DEFAULT_SATURATION_BP: u32 = 900;
 
-/// 合法阈值区间（千分比）：100‰ = 10% 到 10_000‰ = 1000%（允许"排队积压才算饱和"）
-const THRESHOLD_BP_RANGE: std::ops::RangeInclusive<u32> = 100..=10_000;
+/// 合法阈值区间（千分比）：100‰ = 10% 到 1_000‰ = 池恰好满载
+///
+/// 第三轮 T2.3 收窄（原 100..=10_000）:占用比 `saturation_ratio_bp = active×1000/threads`，
+/// 而 `active` 是并发守卫计数（rayon 每线程最多同时跑一个闭包，`enter()` 仅在
+/// 闭包被调度时发生），故实际 `active ≤ threads` → 占用比恒 ≤ 1000‰。旧上限
+/// 10_000‰ 隐含“排队积压也可超满载”的假设，但队列深度当前不可观测（F-U2），
+/// 且 >1000‰ 阈值永不触发——与 fail-safe 拒绝“0=永不降级”同危险（静默失效）。
+/// 队列深度真实可观测后属独立 ADR（本轮不做），故先把区间收紧到有语义上限。
+const THRESHOLD_BP_RANGE: std::ops::RangeInclusive<u32> = 100..=1_000;
 
 /// 饱和阈值 env 变量名（降级路径走配置/env,禁 feature 标志）
 const ENV_SATURATION_BP: &str = "CHIMERA_COMPUTE_SATURATION_BP";
@@ -132,6 +139,12 @@ pub struct KindCounters {
     /// WHY 与 `saturations` 分开：默认 Observe 策略下“超阈”发生了但“降级”没发生，
     /// 合用一个计数器会让事件谎报行为变更次数。
     degradations: AtomicU64,
+    /// 累计降级为 Inline 的**项数**(第三轮 T2.2):`degradations` 是批粒度
+    /// (一批只 +1),本计数是项粒度(一批降级 n 项则 +n)。二者口径不同不可互推。
+    /// WHY 独立计数而非逐项 `active.enter`:逐项 enter 会把降级本身计入并发
+    /// 占用→高负载下触发饱和自屏蔽(降级越多越饱和)的行为变更(T2.2 明确拒绝);
+    /// 纯遥测增量,不改变 `active` 语义。
+    degraded_items: AtomicU64,
     /// 累计超阈观测次数（三种策略下均递增，上报去抖基线）
     saturations: AtomicU64,
     /// 累计"严格模式下直接返回 `Saturated`"的拒绝次数
@@ -144,6 +157,7 @@ impl Default for KindCounters {
             spawns: std::array::from_fn(|_| AtomicU64::new(0)),
             failures: std::array::from_fn(|_| AtomicU64::new(0)),
             degradations: AtomicU64::new(0),
+            degraded_items: AtomicU64::new(0),
             saturations: AtomicU64::new(0),
             rejections: AtomicU64::new(0),
         }
@@ -166,6 +180,14 @@ impl KindCounters {
         self.degradations.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// 记录一批降级为 Inline 的**项数**(第三轮 T2.2 独立项粒度遥测)
+    ///
+    /// WHY 传 `n` 而非逐项调用:降级项数由调用方(`spawn_compute_batch`)一次传入,
+    /// 与 `active.enter`(并发占用)解耦——避免降级被计入饱和判据导致自屏蔽行为变更。
+    pub fn record_degraded_items(&self, n: u64) {
+        self.degraded_items.fetch_add(n, Ordering::Relaxed);
+    }
+
     /// 记录一次超阈观测（三种策略下均记，用于事件去抖基线）
     pub fn record_saturation(&self) {
         self.saturations.fetch_add(1, Ordering::Relaxed);
@@ -186,6 +208,12 @@ impl KindCounters {
     #[must_use]
     pub fn degradations(&self) -> u64 {
         self.degradations.load(Ordering::Relaxed)
+    }
+
+    /// 累计降级为 Inline 的项数(第三轮 T2.2;项粒度,≠ `degradations` 批粒度)
+    #[must_use]
+    pub fn degraded_items_total(&self) -> u64 {
+        self.degraded_items.load(Ordering::Relaxed)
     }
 
     /// 累计严格拒绝次数
@@ -379,12 +407,16 @@ mod tests {
         // 0 = "永不降级" —— 必须回落默认值（fail-safe 核心用例）
         assert_eq!(parse_threshold_bp(Some("0")), DEFAULT_SATURATION_BP);
         assert_eq!(parse_threshold_bp(Some("99")), DEFAULT_SATURATION_BP);
+        // 第三轮 T2.3 收窄区间至 100..=1000:>1000 与占用比不可能超过它等价
+        // （与 0=永不降级 同危险的静默失效），新上限外一律回落默认。
+        assert_eq!(parse_threshold_bp(Some("1001")), DEFAULT_SATURATION_BP);
+        assert_eq!(parse_threshold_bp(Some("1500")), DEFAULT_SATURATION_BP);
         assert_eq!(parse_threshold_bp(Some("10001")), DEFAULT_SATURATION_BP);
+        assert_eq!(parse_threshold_bp(Some("10000")), DEFAULT_SATURATION_BP);
         // 合法边界与典型值
         assert_eq!(parse_threshold_bp(Some("100")), 100);
         assert_eq!(parse_threshold_bp(Some("900")), 900);
-        assert_eq!(parse_threshold_bp(Some(" 1500 ")), 1_500);
-        assert_eq!(parse_threshold_bp(Some("10000")), 10_000);
+        assert_eq!(parse_threshold_bp(Some(" 1000 ")), 1_000); // 新上边界
     }
 
     /// 去抖判定：首次超阈报、期内无变化不报、计数变化再报、回落不报

@@ -112,11 +112,57 @@ fn saturation_check(c: &mut Criterion) {
     group.finish();
 }
 
+/// bench 4:结果汇聚路径定量（第三轮 T2.1，先量后改）
+///
+/// WHY 单独一组：`bridge.rs:429` 以「8 线程 × 槽位锁开销可忽略」为据选用
+/// 共享 `Mutex<Vec<Option<Result>>>` 逐任务写唯一槽位的汇聚方式（骨架阶段
+/// 正确性优先），但该断言从未经 n 增长的实测背书。本组隔成两条可对比分母/分子
+/// 的曲线（n 固定 100/1k/5k/10k，与 T3.3 静默窗口取数口径对齐）：
+///   - `pool_trivial`：闭包几乎零工作 → 时间≈「汇聚机器」开销（pool scope +
+///     每任务锁槽位 + 末尾 into_inner().collect），即被审计的那块开销；
+///   - `pool_with_work`：每闭包固定 64 次整数加（模拟真实轻任务的稳定基线）。
+///
+/// 判读（静默窗口取数后人算占比）：overhead_share = pool_trivial / pool_with_work。
+/// <5% ⇒ 维持 Mutex 方案、以实测替换 `bridge.rs:429` 注释后关闭；5-15% ⇒
+/// [Directional] 登记不动；≥15% ⇒ 触发 T2.2b（per-slot 原子汇聚，ADR-125 方向，先立 spec）。
+/// 不新建 SLO 阈值（避免未实测先登记，ADR-190 反幽灵门）；非静默窗口读数一律标
+/// [Directional] 且不得据此触发改造（R5）。
+fn batch_result_collect(c: &mut Criterion) {
+    let b: &ComputeBridge = bridge();
+    let mut group = c.benchmark_group("batch_result_collect");
+    for n in [100usize, 1_000, 5_000, 10_000] {
+        group.bench_function(BenchmarkId::new("pool_trivial", n), |be| {
+            be.iter(|| {
+                let closures = (0..n).map(|i| move || criterion::black_box(i) as u64);
+                let r = b.spawn_compute_batch(TaskKind::ClvSimilarity, closures);
+                criterion::black_box(r.len());
+            });
+        });
+        group.bench_function(BenchmarkId::new("pool_with_work", n), |be| {
+            be.iter(|| {
+                let closures = (0..n).map(|i| {
+                    move || {
+                        let mut acc = criterion::black_box(i) as u64;
+                        for _ in 0..64 {
+                            acc = acc.wrapping_add(1);
+                        }
+                        acc
+                    }
+                });
+                let r = b.spawn_compute_batch(TaskKind::ClvSimilarity, closures);
+                criterion::black_box(r.len());
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bridge_route,
     bridge_reduce,
     bridge_spawn,
-    saturation_check
+    saturation_check,
+    batch_result_collect
 );
 criterion_main!(benches);

@@ -103,7 +103,9 @@ CONTRACTS = [
                 "as the reference side of the two-path equivalence tests; the bench no "
                 "longer calls it, so it is not a perf proxy. Production hot path is "
                 "score_experts_scoring_batch*. uses = cross-module only (exclude_files); "
-                "same-module hits are tallied in self_uses.",
+                "same-module hits are tallied in self_uses. "
+                "[T2.4] bench-only 等接线; 接线三要件见 faae-router/src/parallel.rs 模块头; "
+                "可达性权威源=G-87 行 faae-router/src/parallel.rs::score_parallel verdict=DEAD.",
     },
     {
         "name": "faae::parallel::score_experts_batch_offloaded",
@@ -115,21 +117,23 @@ CONTRACTS = [
         "note": "RuntimeFlavor wrapper over the ScoreInput path; also production-dead "
                 "since P3. Its multi-thread block_in_place branch is therefore no longer "
                 "covered by any test that exercises a multi-thread runtime. "
-                "uses = cross-module only (exclude_files).",
+                "uses = cross-module only (exclude_files). "
+                "[T2.4] bench-only 等接线; 接线前须先补回多线程 block_in_place 路径覆盖 "
+                "(G-88 保护); 可达性权威源=G-87 行 faae-router/src/parallel.rs::score_parallel verdict=DEAD.",
     },
     {
         "name": "EventBus::shadow_stats",
         # call sites `bus.shadow_stats()` / `self.shadow_stats()`; the
         # `pub fn shadow_stats(` declaration carries no leading dot -> not matched.
         "pattern": r"\.shadow_stats\(",
-        "status": "DEFERRED",
-        # Every real occurrence is bus.rs `#[cfg(test)]` tail + benches (both excluded
-        # by is_production_file / test-tail rule) -> uses=0 keeps it DEFERRED.
-        "note": "shard shed/merged distribution has no production consumer (four-dim "
-                "audit S-8); its disposition pointed at 'Phase A5' but ADR-197 D1-D5 "
-                "never carried it, so it was tracked nowhere (reconciliation finding "
-                "D-1, 2026-10-02). Registering as DEFERRED closes the accountability gap; "
-                "closing the observability loop is tracked in "
+        "status": "WIRED",
+        # Third-round T1.1 closed the loop: `spawn_throughput_reporter` (bus.rs, production
+        # scope) now reads `shadow_stats().merge_closed_total` on a window cadence to
+        # surface zero-subscriber merge drops -> promoted DEFERRED->WIRED (ratchet: a future
+        # removal of that consumer regresses uses to 0 and FAILs, which is correct).
+        "note": "shard shed/merged + merge_closed_total distribution. Previously DEFERRED "
+                "(four-dim audit S-8 / reconciliation D-1); third-round T1.1 wired the "
+                "reporter consumer, so it now has production uses. Loop-closure tracked in "
                 "docs/reports/cpu-plane-phase0-c0-2026-10-02.md.",
     },
     {
@@ -140,7 +144,9 @@ CONTRACTS = [
         "note": "public batch-decay offload entry is bench-only -- no production caller "
                 "(C1/C2 scale-bounding matrix). Plan D1 demote disposition: do not "
                 "optimize its parallel/failure semantics until wired to real traffic "
-                "(negative-yield redline: don't invest in unreachable points).",
+                "(negative-yield redline: don't invest in unreachable points). "
+                "[T2.4] bench-only 等接线; 接线三要件见 decay-engine/src/parallel.rs 模块头; "
+                "可达性权威源=G-87 行 decay-engine/src/parallel.rs::decay_batch_parallel verdict=DEAD.",
     },
     {
         "name": "NmcEncoder::perceive_batch",
@@ -152,7 +158,9 @@ CONTRACTS = [
                 "single-item perceive. Gsoe/Wiki/Osa batch points are NOT listed here -- "
                 "their names collide with same-named symbols (private sort select_elite; "
                 "inherent search_batch/top_k_batch) and would yield misleading uses, so "
-                "they are tracked in the C1/C2 report instead (dual-channel negative).",
+                "they are tracked in the C1/C2 report instead (dual-channel negative). "
+                "[T2.4] bench-only 等接线; 接线三要件见 nmc-encoder/src/parallel.rs 模块头; "
+                "可达性权威源=G-87 行 nmc-encoder/src/parallel.rs::perceive_parallel verdict=DEAD.",
     },
     {
         "name": "faae::parallel::dispatch_plan",
