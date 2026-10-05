@@ -168,9 +168,29 @@ fn render_frame(panel: &mut ResourceMonitorPanel, state: &TuiState) -> String {
         .collect()
 }
 
-/// 提取 sparkline 柱状字符种类数('█'/'▄'/'▀')
+/// 提取 sparkline 柱状字符种类数（'█'/'▄'/'▀'）
 fn block_char_kinds(area: &str) -> HashSet<char> {
     area.chars().filter(|c| "█▄▀".contains(*c)).collect()
+}
+
+/// 按**字符**（非字节）从 80 列栅格取 [from_row, to_row) 行拼串。
+///
+/// WHY：`render_frame` 每个 buffer cell 映射为 1 个 Unicode 字符，而 '█'/'▄'/'▀'
+/// 等 block 字符占多个 UTF-8 字节——故 `content` 的**字节**长度 > 字符数，直接
+/// `&content[r*80..]` 是字节切片：遇多字节 cell 会行错位并触发
+/// “byte index is not a char boundary” panic（本测旧形即如此）。80 列 × N 行 = N*80
+/// 个字符，按字符 skip/take 才是正确的行栅格寻址。
+fn rows(content: &str, from_row: usize, to_row: usize) -> String {
+    content
+        .chars()
+        .skip(from_row * 80)
+        .take((to_row - from_row) * 80)
+        .collect()
+}
+
+/// 取第 `row` 行起始的 `n` 个**字符**（标题前缀列），同理避开字节切片陷阱。
+fn row_head(content: &str, row: usize, n: usize) -> String {
+    content.chars().skip(row * 80).take(n).collect()
 }
 
 /// F-39:喂数后网络 sparkline 反映时间趋势(多元素)
@@ -192,11 +212,11 @@ fn test_net_sparkline_renders_time_trend_after_push() {
     let state = TuiState::new();
 
     let content = render_frame(&mut panel, &state);
-    let net_area = &content[18 * 80..24 * 80];
-    let kinds = block_char_kinds(net_area);
+    let net_area = rows(&content, 18, 24);
+    let kinds = block_char_kinds(&net_area);
     assert!(
         kinds.len() >= 2,
-        "喂数后网络 sparkline 应呈现多元素趋势(≥2 种 block 字符),got {kinds:?}:\n{net_area}"
+        "喂数后网络 sparkline 应呈现多元素趋势（≥2 种 block 字符），got {kinds:?}：\n{net_area}"
     );
 }
 
@@ -213,11 +233,11 @@ fn test_net_sparkline_falls_back_to_snapshot_history() {
     state.net_tx_history = vec![500, 1000, 500, 1000, 500, 1000, 500];
 
     let content = render_frame(&mut panel, &state);
-    let net_area = &content[18 * 80..24 * 80];
-    let kinds = block_char_kinds(net_area);
+    let net_area = rows(&content, 18, 24);
+    let kinds = block_char_kinds(&net_area);
     assert!(
         kinds.len() >= 2,
-        "快照喂数路径下网络 sparkline 应呈现趋势(≥2 种 block 字符),got {kinds:?}:\n{net_area}"
+        "快照喂数路径下网络 sparkline 应呈现趋势（≥2 种 block 字符），got {kinds:?}：\n{net_area}"
     );
 }
 
@@ -237,7 +257,7 @@ fn test_disk_sparkline_removed_honest_path() {
     };
 
     let content = render_frame(&mut panel, &state);
-    let disk_area = &content[12 * 80..18 * 80];
+    let disk_area = rows(&content, 12, 18);
     assert!(
         !disk_area.chars().any(|c| "█▄▀".contains(c)),
         "磁盘孤柱 sparkline 应已移除(诚实路径),got:\n{disk_area}"
@@ -262,10 +282,10 @@ fn test_selected_section_title_indicator() {
 
     let content = render_frame(&mut panel, &state);
     let (cpu_row, ram_row, disk_row, net_row) = (
-        &content[0..2],
-        &content[6 * 80..6 * 80 + 2],
-        &content[12 * 80..12 * 80 + 2],
-        &content[18 * 80..18 * 80 + 2],
+        row_head(&content, 0, 2),
+        row_head(&content, 6, 2),
+        row_head(&content, 12, 2),
+        row_head(&content, 18, 2),
     );
     assert_eq!(disk_row, "> ", "选中区块(磁盘)标题应以 '> ' 前缀指示");
     assert_eq!(cpu_row, "  ", "未选中区块标题前缀应为等宽空格");
