@@ -160,4 +160,13 @@ chimera-cli|scc-cache          # L10->L3 down; commands/doctor.rs:576 check_scc_
 chimera-mas|gea-activator      # L9->L9 same-layer allowed; delegation.rs:393 Option<Arc<gea_activator::..>> (5 files)
 efficiency-monitor|decb-governor # L9->L8 down; auditor.rs:47 use decb_governor::Dec.. (auditor reads governor state synchronously)
 gsoe-evolution|decay-engine    # L5->L4 DOWNWARD, lawful under agents.md 2.2 ten-layer law; registered per ADR-187 (alpha-prime: Check A retired, was a strict subset of Check B with zero unique detections). Engine reads ShadowModeCircuitBreaker synchronously (engine.rs:255 breaker.is_tripped()); event-ization rejected (would turn a fail-closed safety read fail-open). Ref docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md
+# --- registered 2026-10-06: composition-root GATED / island-repayment wiring edges already in HEAD manifests but never frozen ---
+chimera-cli|chtc-bridge       # L10->L10 same-layer; composition-root optional GATED edge (r2_island_repayment, ADR-177)
+chimera-cli|csn-substitutor   # L10->L10 same-layer; composition-root optional GATED edge (island repayment, ADR-177)
+chimera-cli|mas-sched         # L10->L9 down; composition-root wiring of split scheduler control plane (ADR-145/160/177)
+chimera-cli|mtpe-executor     # L10->L7 down; composition-root optional GATED edge (island repayment, ADR-177)
+chimera-cli|nexus-hook        # L10->L9 down; composition-root optional GATED edge (lifecycle hooks, ADR-146/177)
+chimera-cli|sesa-router       # L10->L6 down; composition-root optional GATED edge (island repayment, ADR-177)
+chimera-cli|ssra-fusion       # L10->L7 down; composition-root optional GATED edge (island repayment, ADR-177)
+mcp-mesh|nexus-contracts      # L10->L0 down; consumes nexus-contracts event/affinity contract types (ADR-033)
 
