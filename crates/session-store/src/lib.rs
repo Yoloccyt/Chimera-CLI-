@@ -9,7 +9,9 @@
 //! session-store — 会话事件流存储（append-only 段 + CBMR 微批写）
 //!
 //! 对应架构层: **L3 Storage**（Phase 2 新增,ADR-141,workspace 第 40 个 crate）
-//! 对应任务: **P2-T2**（手册 W9 T-07 / ADR-108 CBMR 微批写 / v4.0 WI-18 存储面）
+//! 对应任务: **P2-T2 存储面 + P2-T3 归并回放/不变量 均已交付**（手册 W9 T-07 / ADR-108 CBMR 微批写 / ADR-109 k-way 归并 `replay` / v4.0 WI-18 model-visible `to_model_view`）
+//!
+//! > **文档-代码同步（2026-10-06 核验）**：本模块头此前标注「归并本身是 T3,本任务只做存储面 / 不变量打点属于 T3」为 **P2-T2 期陈旧文本**。现 `replay`（k-way BinaryHeap 归并 + from-offset 续读 + fork 前缀链 + 时间戳单调校验/`out_of_order_count` 打点）与 `to_model_view`（白名单投影 + 敏感剔除）**均已实现并测试**，且 replay 已接入 `nexus-app-server`（`with_session_store` 双写 + `replay_since` + 集成测试）。遗留开放项见文末。
 //!
 //! # 设计概览（Checkpoint 线性快照 → append-only 段 + 微批写）
 //!
@@ -31,17 +33,23 @@
 //!
 //! - **段文件**:`<session_id>.<segment_index>.jsonl`,长度前缀 + JSON 数据,
 //!   崩溃时截断半条尾部,`append` 返回 Ok 前 fsync（不丢已确认事件）
-//! - **Offset 双键**:`{ seq 全局单调, row 段内行号 }`——P2-T3 k-way 归并
-//!   回放的排序键（ADR-109;归并本身是 T3,本任务只实现追加与 Offset 语义）
+//! - **Offset 双键**:`{ seq 全局单调, row 段内行号 }`——`replay` k-way 归并
+//!   回放的排序键（seq 主序 + row 次序；ADR-109，已交付）
 //! - **CBMR 微批写**:SQLite 写操作从 N 次（单条直写）降为 ceil(N/64) 次,
 //!   基准输出 `syscall_reduction_pct`（T8/T9 模式固定 n 单次采样）
-//! - **model-visible 不变量打点**:属于 T3,本任务只做存储面
+//! - **model-visible 不变量打点**:`to_model_view` 白名单投影（WI-18，已交付为纯函数 API + 自测）；
+//!   **生产消费者为零**（见文末遗留开放项），logged ≠ model-visible 语义已在 `model_view` 文档固化
 //!
-//! # 已知约束（T3 承接）
+//! # 崩溃恢复（T3 已承接）
 //!
-//! 段 fsync 与索引 insert 非原子;崩溃后索引重建/续写幂等由 P2-T3
-//! k-way 归并回放承接,T2 边界内「已确认 = 段 fsync」语义成立
-//! （详见 [`writer::CbmrWriter::flush_sync`] 的 WHY 注释）。
+//! 段 fsync 与索引 insert 非原子；崩溃后「已确认 = 段 fsync」语义下，回放走**纯段文件扫描**
+//! （`replay` 只读路径不经 SQLite），索引缺失/陈旧不影响回放正确性——段文件为权威源。
+//!
+//! # 遗留开放项（需设计决策，非存储面缺陷）
+//!
+//! `to_model_view` 目前为「实现+测试但零生产消费者」的投影 API：`nexus-app-server::persist_turn`
+//! 写入事件类型 `"turn.submit"` 不在 `MODEL_VISIBLE_TYPES` 白名单内，接线须先对齐事件类型
+//! 分类学（turn.submit vs model.*/tool.*/state.update），属消费者侧语义决策，不在本 crate 单方面臆造。
 //!
 //! # 红线遵守
 //!
