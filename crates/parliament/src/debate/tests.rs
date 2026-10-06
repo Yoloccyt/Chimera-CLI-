@@ -32,6 +32,33 @@ fn make_proposal(risk_level: f32) -> Proposal {
     Proposal::new("p-1", "q-1", "测试提案", risk_level)
 }
 
+/// WI-D1：`with_cross_vendor` builder 将默认 None 的字段置为 Some（注入即激活）。
+#[test]
+fn parliament_with_cross_vendor_builder_sets_field() {
+    let bus = EventBus::new();
+    let cvd = crate::cross_vendor::CrossVendorDebate::from_provider_names(
+        &["chan-a".to_string(), "chan-b".to_string()],
+        crate::cross_vendor::CrossVendorFallback::FallbackToSame,
+        bus.clone(),
+    )
+    .expect("2 互异应激活");
+    let parliament = Parliament::new(ParliamentConfig::default(), bus).with_cross_vendor(cvd);
+    assert!(
+        parliament.cross_vendor_debate.is_some(),
+        "with_cross_vendor 应将字段置为 Some"
+    );
+}
+
+/// WI-D1：`Parliament::new()` 默认保持 cross_vendor_debate: None（主干恒绿、向后兼容）。
+#[test]
+fn parliament_new_default_cross_vendor_is_none() {
+    let parliament = make_parliament();
+    assert!(
+        parliament.cross_vendor_debate.is_none(),
+        "默认 new() 应为 None（未启用）"
+    );
+}
+
 #[tokio::test]
 async fn test_all_approve_reaches_consensus() {
     // 低风险 + 少任务 + Fast 模式 → 全赞成

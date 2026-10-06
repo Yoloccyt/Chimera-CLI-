@@ -254,6 +254,16 @@ impl Parliament {
         self
     }
 
+    /// WI-D1 / v2.3 §(b.4)：装配期注入跨厂商辩论策略（`Some` 即激活进程内异构）。
+    ///
+    /// 与 [`Parliament::new`] 默认 `cross_vendor_debate: None` 互补：`new()` 保持
+    /// 向后兼容（主干恒绿），仅当组合根显式调用本 builder 时才启用跨厂商去相关。
+    /// 注入后 `deliberate` 在辩论前经 `prepare_debate` 确定 Skeptic 异厂商通道（修复病理 D3）。
+    pub fn with_cross_vendor(mut self, debate: CrossVendorDebate) -> Self {
+        self.cross_vendor_debate = Some(debate);
+        self
+    }
+
     /// 契约守护审议 — 违反即否决（Milestone B-3c 生产接线，P1-4）
     ///
     /// `observed` 为调用方（编排器）提供的"已满足断言"观测集合。
