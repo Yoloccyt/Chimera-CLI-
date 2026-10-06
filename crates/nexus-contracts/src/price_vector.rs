@@ -7,8 +7,8 @@
 //! `mca-gateway` `capability.TOKEN_PRICE_MICRO`、`cost.rs` 预估/回算、`token_ledger`），
 //! 缺的不是数据而是一个**统一价格向量 + 路由消费面**（现状 `hcw_integration` 只读
 //! `context_window`，`CONSUMERS:0`）。本模块定义这个聚合契约：
-//! - **一期（本契约）**：可见性 —— 把各模型单价归一为一个 [`PriceVector`]，可被 `/bench`
-//!   展示与后续成本感知路由消费；
+//! - **一期（本契约）**：可见性 —— 把各模型单价归一为一个 [`PriceVector`]，已由 L10
+//!   `chimera cost` 只读子命令聚合并展示（`config.model_router.providers` → 本向量）；二期由成本感知路由消费；
 //! - **二期**：成本感知路由（Wave 4 条件触发），复用 `ModelAffinitySelected.cost_estimate_micro` 留痕。
 //!
 //! 单位沿用 mca 口径：`micro_per_1k` = 每 1000 tokens 的**微美元**（1e-6 USD），整数运算避免

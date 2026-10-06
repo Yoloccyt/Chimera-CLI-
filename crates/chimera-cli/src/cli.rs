@@ -491,6 +491,19 @@ chimera acp                                    # 启动 ACP 桥(等待 stdin 帧
 printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/new\",\"params\":{}}' | chimera acp"
     )]
     Acp,
+    /// 统一价格向量可见性（价格向量一期）— 只读展示各模型 token 单价与最便宜模型
+    ///
+    /// 把 `model_router.providers` 的 USD/1k 单价归一为 L0 `PriceVector`（micro USD/1k）
+    /// 并展示；纯只读、无副作用，空配置优雅降级“成本不可见”。成本感知路由属二期（Wave 4）。
+    #[command(
+        long_about = "统一价格向量可见性（价格向量一期）:\n\
+将 model_router.providers 各模型单价(USD/1k)归一为 micro USD/1k 的统一向量,\
+展示逐模型 in/out 单价、最便宜模型与样例成本估算。只读、无副作用。",
+        after_long_help = "EXAMPLES:\n  \
+chimera cost                                   # 人类可读价格向量\n  \
+chimera --json cost                            # JSON envelope(供脚本消费)"
+    )]
+    Cost,
 }
 
 /// Quest 子命令动作

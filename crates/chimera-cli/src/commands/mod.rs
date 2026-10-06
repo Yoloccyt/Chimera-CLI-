@@ -33,6 +33,8 @@ pub mod chat;
 pub mod completions;
 /// 配置管理子命令
 pub mod config;
+/// 价格向量一期可见性子命令（只读展示统一价格向量）
+pub mod cost;
 /// 系统健康检查子命令(Task 1.13)
 pub mod doctor;
 /// WI-02: 非交互执行契约（exec stdout 纪律 + 退出码四类语义）
@@ -155,6 +157,8 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         Some(Commands::Completions { shell }) => completions::execute(*shell).await,
         // Task 2 of spec: LLM Provider 管理 — 全局 --json 传递;perm 供 set-default/strategy 使用
         Some(Commands::Llm { action }) => llm::execute(action, cfg, cli.json, &perm).await,
+        // 价格向量一期可见性：只读展示，无副作用；不消费 ctx/perm/dry_run
+        Some(Commands::Cost) => cost::execute(cfg, cli.json).await,
         None => {
             // 无子命令:默认启动 TUI 交互界面(默认启用 v3-engine,非协议模式)
             // --help/--version 由 Clap 在 Cli::parse() 阶段内置处理,不会进入此分支
