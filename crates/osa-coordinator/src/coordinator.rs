@@ -146,6 +146,13 @@ pub struct OmniSparseCoordinator {
 /// 交点推算 ≈13.6× 实测慢位(2210) ≈ 30k,取整保守值:宁可对中等负载错失
 /// 并行收益,绝不再让小负载付 3× 惩罚(即现状病理)。大负载真收益需新
 /// 实测锚点后再下调(阈只减不增的对称约束靠 bench 守,见 P-6 登记链)。
+///
+/// 治理定性(2026-10-05):本常量是**刻意保留的第二阈值源**——后端为
+/// `std::thread::scope` 五 OS 线程(非 L-a 池),量纲为 `active_items`(非 HtsTable 的
+/// 条目数),故**不经** HtsTable/SPRT 校准;例外理由与复评条件登记于
+/// `docs/architecture/ADR-196-compute-backend-dispatch-extension.md` §7。
+/// 任何 HtsTable 阈值变更不得被解释为影响本路径(并行开关仅:本常量 +
+/// `config.parallel_masks` + env `CHIMERA_NO_PARALLEL_OSA`)。
 pub const PARALLEL_MIN_ACTIVE_ITEMS: usize = 30_000;
 
 /// 汇总 profile 五列表的活跃项总数(并行收益规模的代理变量)
