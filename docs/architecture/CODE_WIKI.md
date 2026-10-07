@@ -104,10 +104,10 @@ L10  Interface ── chimera-cli · chimera-tui · chtc-bridge · mcp-mesh · c
 L9   Quest ───── quest-engine · gea-activator · efficiency-monitor · chimera-mas · mas-sched · nexus-hook [ADR-145 调度控制面 + ADR-146 生命周期 Hook]
 L8   Parliament ─ parliament · decb-governor
 L7   Execution ── pvl-layer · gqep-executor · mtpe-executor · ssra-fusion · nexus-subagent [ADR-148 类型化子代理 + Task Auction]
-L6   Router ───── osa-coordinator · router-traits · kvbsr-router · faae-router · sesa-router · omega-learner [ADR-031 Bandit 学习 + v2.29 router-traits 抽象层]
+L6   Router ───── osa-coordinator · kvbsr-router · faae-router · sesa-router · omega-learner [ADR-031 Bandit 学习]
 L5   Knowledge ── repo-wiki · gsoe-evolution
 L4   Security ─── seccore · qeep-protocol · decay-engine
-L3   Storage ──── scc-cache · lsct-tiering · cmt-tiering · session-store [ADR-141 append-only 会话事件流]
+L3   Storage ──── scc-cache · cmt-tiering · session-store [ADR-141 append-only 会话事件流]
 L2   Memory ───── nmc-encoder · hcw-window · mlc-engine
 L1   Core ─────── nexus-core · event-bus
 ```
@@ -122,7 +122,7 @@ L1   Core ─────── nexus-core · event-bus
 > （2026-09-24 代价结构校正：**自述头不是可独立改的一处**——`scripts/crate_contract.py`(G-58/G-59) 的 LAYER 字段就是按 `layer_of()` **派生**再比对，
 > 把头改成 L10 会当场令 G-59 红；故真选项只有"改 4 处散文归 L7"（零铁律变化）或"改 `layer_of()` 2 处归 L10"（放松铁律，须 ADR；
 > 实测 csn 非 optional 依赖仅 `nexus-contracts`/`event-bus`/`nexus-core` ⇒ 抬层现状不放行任何新边，但会失去对未来 L8/L9 边的拦截）。
-> 其余 40 个 crate 在 6 份权威/派生文档与本表逐层一致（每份覆盖率 41/41，无幽灵名、无重复、无缺项）。
+> 其余 38 个 crate 在 6 份权威/派生文档与本表逐层一致（每份覆盖率 39/39，无幽灵名、无重复、无缺项）。
 > ✅ **2026-09-24 收口（ADR-189）**：采"改 `layer_of()` 归 L10"一支，双源 + 契约头 + 根 manifest 行内标注 + 4 份派生视图同批改；
 > 该 crate 非 optional 内部依赖仅 `nexus-contracts`/`event-bus`/`nexus-core` ⇒ 抬层不放行任何现存边。
 > 上文"抬层会失去对未来 L8/L9 边的拦截"**只对了一半**：植入 `csn→parliament` 探针边实测——依赖铁律 0 提及，
@@ -372,20 +372,25 @@ L1   Core ─────── nexus-core · event-bus
 
 ***
 
-### 3.6 L6 Router (6 crates,ADR-031 新增 omega-learner,v2.29 新增 router-traits)
+### 3.6 L6 Router (5 crates,ADR-031 新增 omega-learner)
 
 > **L6 星型耦合已解耦**（ADR-033）：kvbsr-router、faae-router、sesa-router 通过 L0 \[`nexus-contracts`] 共享 `ToolId` 等类型，不再依赖 `osa-coordinator`。`osa-coordinator` 保持为 L6 Router 的协调器，但并非其他路由器的依赖。
 
-#### [router-traits](file:///d:/Chimera%20CLI/crates/router-traits)
+#### router-traits(已退役,ADR-193 批次一)
+
+> **退役注记(2026-10-07)**:`router-traits` crate 已按 ADR-193 批次一整 crate 退役并从
+> workspace 物理移除。本表保留其能力描述以维持 L6 层图完整性,但**不再有 crate 载体**;
+> 下方指针不得再写回 `crates/router-traits/**`——那会让 `scripts/check_doc_pointer_integrity.py`
+> 报 dead-file 并阻塞 CI。
 
 | 项 | 说明 |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **架构层** | L6 Router |
+| **架构层** | L6 Router(退役前) |
 | **核心职责** | 路由层 trait 契约层(纯抽象,零运行时逻辑):SparseMaskProvider 稀疏掩码提供者接口 + RouterConfig 路由配置契约 + RouterId 身份枚举;星型耦合消除的依赖倒置扩展点 |
 | **关键类型** | `SparseMaskProvider` · `RouterConfig` · `RouterId` · `SparseMaskError` |
 | **实现方** | osa-coordinator(`impl SparseMaskProvider/RouterConfig for OmniSparseCoordinator`,fallback 返回五维空掩码) |
 | **主要依赖** | nexus-contracts (L0) · thiserror——收缩后零 event-bus 依赖(v2.29 收缩:security 模块因前提证伪删除,见 lib.rs 收缩记录) |
-| **治理状态** | 实现方已接线生产可达;消费方待批次 C 决策——v2.31 前仍零消费则整 crate 收缩删除(减法优先棘轮) |
+| **治理状态** | 已退役(ADR-193 批次一,2026-10-02 减法批次)——退役前实现方已接线生产可达,消费方为零 |
 
 #### [osa-coordinator](file:///d:/Chimera%20CLI/crates/osa-coordinator)
 
@@ -1522,7 +1527,6 @@ D:\Chimera CLI\
 │   ├── hcw-window/          (L2)
 │   ├── mlc-engine/          (L2)
 │   ├── scc-cache/           (L3)
-│   ├── lsct-tiering/        (L3)
 │   ├── cmt-tiering/         (L3)
 │   ├── seccore/             (L4)
 │   ├── decay-engine/        (L4)
@@ -1677,7 +1681,7 @@ my-crate/
 | ------- | ------ | ------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | **E01** | 首席架构师 | 分布式系统/架构治理 | **11 层架构(L0 + L1-L10) + 42 crate(M10 批次后 27 可达/14 孤岛 + 1 GATED)依赖铁律 + ADR 实证** |
 | **E02** | 安全架构师 | 零信任/红蓝对抗 | L4 Security(seccore/decay-engine/qeep-protocol)+ OWASP A01-A10 |
-| **E03** | 记忆系统专家 | 神经形态 AI/认知架构 | L2 Memory(nmc-encoder/hcw-window/mlc-engine) + L3 Storage(scc-cache/lsct-tiering/cmt-tiering) |
+| **E03** | 记忆系统专家 | 神经形态 AI/认知架构 | L2 Memory(nmc-encoder/hcw-window/mlc-engine) + L3 Storage(scc-cache/cmt-tiering) |
 | **E04** | 路由算法专家 | 运筹学/优化理论 | L6 Router(osa-coordinator/kvbsr-router/faae-router/sesa-router) + EDSB 概率均衡 |
 | **E05** | 生产系统专家 | SRE/DevOps | CI/CD 5 平台 matrix + Docker distroless + release pipeline + 5 platform binary |
 | **E06** | 认知科学专家 | 思维模型/任务分解 | L7 Execution(pvl-layer/gqep-executor/mtpe-executor/ssra-fusion) + L8 Parliament(parliament/acb-governor/decb-governor) |

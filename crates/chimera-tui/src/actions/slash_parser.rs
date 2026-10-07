@@ -177,6 +177,8 @@ fn instant_effect(name: &str, args: &str) -> SlashEffect {
         "theme" => SlashEffect::ThemeCycle,
         "layout" => SlashEffect::LayoutCycle,
         "panel" => SlashEffect::PanelByName(args.to_string()),
+        // v2.3 §(b.6):/bench 直达基准面板(等价 /panel bench),无参即切换
+        "bench" => SlashEffect::PanelByName("bench".to_string()),
         // W2 过渡:ChatMode 属 W3;此前 /chat 映射为 Chat 面板切换(既承接
         // 遗留 `:chat` 面板词,又是当前最接近的诚实行为)
         "chat" => SlashEffect::SwitchView(crate::types::ViewMode::Chat),
@@ -395,6 +397,24 @@ mod tests {
             plan(get("exit"), ""),
             DispatchPlan::Instant(SlashEffect::Exit)
         );
+    }
+
+    #[test]
+    fn parse_bench_maps_to_panel_by_name() {
+        let r = reg();
+        // v2.3 §(b.6)/v3.1 §5-B:/bench 直达基准面板,语义等价 `/panel bench`
+        // (沿用 quest list→PanelByName 先例,Instant 层本地切换,不绕编排域)
+        match parse("/bench", &r) {
+            ParsedSlash::Command { desc, args } => {
+                assert_eq!(desc.name, "bench");
+                assert_eq!(args, "");
+                assert_eq!(
+                    plan(desc, &args),
+                    DispatchPlan::Instant(SlashEffect::PanelByName("bench".into()))
+                );
+            }
+            other => panic!("应命中 bench 命令,got {other:?}"),
+        }
     }
 
     #[test]

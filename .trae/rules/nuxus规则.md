@@ -4,7 +4,7 @@
 >
 > **历史溯源**:早期为重定向占位(2026-08-11 之前的 nuxus规则.md 由 AGENTS.md 完全托管);自 2026-08-11 v2.26.0-omega 同步后,本文件升级为**速查 + 基线 + 硬约束**三重定位,与 `AGENTS.md`(全量规则)+ `project_memory.md`(持久记忆)形成"快速 / 详细 / 历史"三层规则体系。
 >
-> **最后更新**:2026-09-08(v2.28.2-omega 正式发布:收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;基线口径:crate 数以 `Cargo.toml` `workspace.members` 为准(批次 A 退役 `auto-dpo`/`model-router`,故低于 v2.28.0 时点的 43)+ ADR 至 185(索引见 `docs/architecture/adr_index.md`)+ 可达性棘轮由 `scripts/check_crate_reachability.sh` 现测(`mca-gateway` 经 ADR-177 重分类为 GATED)+ event_types.rs 镜像退役 + 三轮冗余收敛;上一已发 tag = v2.28.0-omega → 94499b4(2026-09-06);**RL 开发闸门决策持续有效**:Rust-First,Python 侧仅规划)
+> **最后更新**:2026-10-07(Wave 0 卫生批次:ADR-193 两批次 41→39(router-traits 整 crate 退役、lsct-tiering 整并入 cmt-tiering)+ TUI 面板 27→30(新增 Bench/ReviewQueue/Blackboard)+ /bench 斜杠命令接线,命令 53→54 条;基线口径:crate 数以 `Cargo.toml` `workspace.members` 为准 + ADR 索引见 `docs/architecture/adr_index.md` + 可达性棘轮由 `scripts/check_crate_reachability.sh` 现测(`mca-gateway` 经 ADR-177 重分类为 GATED);上一已发 tag = v2.28.2-omega(2026-09-08),现行 `Cargo.toml` = 2.29.0-omega(2026-09-27 本地发布,tag v2.29.0-omega 未 push);**RL 开发闸门决策持续有效**:Rust-First,Python 侧仅规划)
 > **生成方式**:trae-remote-official:staff-engineer-mode + superpowers-main + praxis + brooks-lint + product-lifecycle-workbench 多 agent 工具分布式深度分析
 
 ---
@@ -118,10 +118,10 @@ L10  Interface ── chimera-cli · chimera-tui · chtc-bridge · mcp-mesh · c
 L9   Quest ───── quest-engine · gea-activator · efficiency-monitor · chimera-mas · mas-sched · nexus-hook
 L8   Parliament ─ parliament · decb-governor
 L7   Execution ── pvl-layer · gqep-executor · mtpe-executor · ssra-fusion · nexus-subagent
-L6   Router ───── osa-coordinator · router-traits · kvbsr-router · faae-router · sesa-router · omega-learner
+L6   Router ───── osa-coordinator · kvbsr-router · faae-router · sesa-router · omega-learner
 L5   Knowledge ── repo-wiki · gsoe-evolution
 L4   Security ─── seccore · qeep-protocol · decay-engine
-L3   Storage ──── scc-cache · lsct-tiering · cmt-tiering · session-store
+L3   Storage ──── scc-cache · cmt-tiering · session-store
 L2   Memory ───── nmc-encoder · hcw-window · mlc-engine
 L1   Core ─────── nexus-core · event-bus
 ```

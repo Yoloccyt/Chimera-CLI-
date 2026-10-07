@@ -506,6 +506,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "slash.view.filter" => "主题过滤",
         "slash.view.level" => "级别过滤",
         "slash.view.panel" => "切换面板",
+        "slash.view.bench" => "基准面板",
         "slash.system.status" => "状态总览",
         "slash.system.doctor" => "配置健康自检",
         "slash.system.audit" => "审计日志查询",

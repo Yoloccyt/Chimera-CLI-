@@ -163,6 +163,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "slash.view.filter" => "Topic filter",
         "slash.view.level" => "Level filter",
         "slash.view.panel" => "Switch panel",
+        "slash.view.bench" => "Bench panel",
         "slash.system.status" => "Status overview",
         "slash.system.doctor" => "Config health check",
         "slash.system.audit" => "Audit log query",

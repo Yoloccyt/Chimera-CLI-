@@ -486,6 +486,16 @@ pub(crate) static BUILTIN_COMMANDS: &[SlashCommandDesc] = &[
         title_key: "slash.view.panel",
         action_id: None,
     },
+    // 基准面板直达(v2.3 §(b.6)/v3.1 §5-B):与 /panel 同域同层,语义等价
+    // `/panel bench`;面板本体已随 8e9d037 入树,此处补齐专属入口。
+    SlashCommandDesc {
+        name: "bench",
+        aliases: &[],
+        tier: SlashTier::Instant,
+        domain: SlashDomain::ViewConfig,
+        title_key: "slash.view.bench",
+        action_id: None,
+    },
     // ── 系统与诊断域(§9.7,6 条) ────────────────────────────────
     SlashCommandDesc {
         name: "status",
@@ -652,8 +662,12 @@ mod tests {
     fn builtin_table_registers_full_baseline() {
         let reg = SlashCommandRegistry::with_builtin_commands();
         // 重构方案 §9 六域基线 47 条 + Concord W2 补齐 6 条(quest pause/resume、
-        // search/filter/level、panel)= 53 条规范条目
-        assert_eq!(reg.len(), 53, "内建命令表规模应与 §9 基线 + W2 补齐一致");
+        // search/filter/level、panel)+ WI-⑩ 剩余 /bench = 54 条规范条目
+        assert_eq!(
+            reg.len(),
+            54,
+            "内建命令表规模应与 §9 基线 + W2 补齐 + WI-⑩ 一致"
+        );
         assert!(!reg.is_empty());
     }
 

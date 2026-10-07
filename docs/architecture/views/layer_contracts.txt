@@ -6,7 +6,6 @@ L2  hcw-window             BACKEND=memory   PROD=6   CONS=3   MATURITY=NOT-IMPL-
 L2  mlc-engine             BACKEND=sqlite   PROD=4   CONS=1   MATURITY=PLACEHOLDER-CN :: 四级潜在记忆引擎  L0-L3 神经形态记忆分级存储与检索
 L2  nmc-encoder            BACKEND=fs       PROD=1   CONS=3   MATURITY=DEFERRED|PLACEHOLDER-CN :: 神经多模态上下文编码器 — 将多模态输入编码为统一的潜在表示
 L3  cmt-tiering            BACKEND=sqlite   PROD=3   CONS=1   MATURITY=NOT-IMPL-CN :: 能力内存四级分层 — 热/温/冷/冰四级能力存储与自动迁移
-L3  lsct-tiering           BACKEND=memory   PROD=1   CONS=1   MATURITY=TRUE  :: 任务感知能力分层 — 按任务负载动态调整能力存储层级
 L3  scc-cache              BACKEND=sqlite   PROD=5   CONS=2   MATURITY=NOT-IMPL-CN|PLACEHOLDER-CN :: 推测上下文缓存 — 基于访问模式推测性预取的上下文缓存
 L3  session-store          BACKEND=sqlite   PROD=0   CONS=1   MATURITY=TRUE  :: session-store — 会话事件流存储（append-only 段 + CBMR 微批写）
 L4  decay-engine           BACKEND=memory   PROD=2   CONS=2   MATURITY=TRUE  :: 能力衰减引擎 — 连续 [0.0, 1.0] 权限流体衰减模型
@@ -18,7 +17,6 @@ L6  faae-router            BACKEND=memory   PROD=6   CONS=1   MATURITY=TRUE  :: 
 L6  kvbsr-router           BACKEND=memory   PROD=2   CONS=1   MATURITY=TRUE  :: KV 块语义路由器 — 两级块路由的键值缓存语义检索
 L6  omega-learner          BACKEND=memory   PROD=3   CONS=0   MATURITY=NOT-IMPL-CN :: NEXUS-OMEGA L6 学习层 — omega-learner Bandit 六接缝
 L6  osa-coordinator        BACKEND=memory   PROD=6   CONS=2   MATURITY=TRUE  :: 全维稀疏协调器 — 工具/上下文/记忆/审计/预算五维度稀疏化调度
-L6  router-traits          BACKEND=none     PROD=0   CONS=1   MATURITY=TRUE  :: L6 Router Traits — 路由层公共 trait 契约(星型耦合消除的抽象层)
 L6  sesa-router            BACKEND=memory   PROD=6   CONS=0   MATURITY=TRUE  :: SESA 子专家稀疏激活 — 对专家子集进行稀疏化激活以降低计算开销
 L7  gqep-executor          BACKEND=memory   PROD=4   CONS=1   MATURITY=SIMPLIFIED-CN :: 聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
 L7  mtpe-executor          BACKEND=memory   PROD=3   CONS=0   MATURITY=DEFERRED|PLACEHOLDER-CN|PSEUDO|SIMPLIFIED-CN :: 多步预测执行 — 多 Token 预测的执行器,加速推理吞吐

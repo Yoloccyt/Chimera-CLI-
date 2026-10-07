@@ -751,7 +751,11 @@ fn test_yaml_accent_override_reaches_theme_accent() -> Result<(), Box<dyn std::e
         Color::LightBlue,
         "colors.accent 定制应经 resolve 生效(BrightBlue → ratatui LightBlue)"
     );
-    assert_eq!(app.theme_fg(), Color::White, "未覆盖的 foreground 沿用 Dark 预设");
+    assert_eq!(
+        app.theme_fg(),
+        Color::White,
+        "未覆盖的 foreground 沿用 Dark 预设"
+    );
     Ok(())
 }
 
@@ -1905,24 +1909,44 @@ fn pane_panels_matches_pane_rects_ide_and_chat_modes() -> Result<(), Box<dyn std
     app.state_mut().layout_mode = LayoutMode::DualPane;
     app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 120, 24);
     assert_eq!(app.pane_panels().len(), 1, "companion 关闭应为单窗格");
-    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24)).len(), 1);
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24))
+            .len(),
+        1
+    );
 
     // companion opt-in:宽视口 2 窗格、窄视口同步折叠 1
     app.pane_manager.companion_visible = true;
     assert_eq!(app.pane_panels().len(), 2);
-    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24)).len(), 2);
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24))
+            .len(),
+        2
+    );
     app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 40, 24);
     assert_eq!(app.pane_panels().len(), 1, "窄视口路由列表应折叠");
-    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 40, 24)).len(), 1);
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 40, 24))
+            .len(),
+        1
+    );
 
     // IDE(Triple):宽视口 3 窗格(主 + context + 侧栏)、窄视口折叠 1
     app.state_mut().layout_mode = LayoutMode::TriplePane;
     app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 120, 24);
     assert_eq!(app.pane_panels().len(), 3, "IDE 宽视口应有 3 逻辑窗格");
-    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24)).len(), 3);
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24))
+            .len(),
+        3
+    );
     app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 40, 24);
     assert_eq!(app.pane_panels().len(), 1, "IDE 窄视口路由列表应折叠");
-    assert_eq!(app.pane_rects(ratatui::layout::Rect::new(0, 0, 40, 24)).len(), 1);
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 40, 24))
+            .len(),
+        1
+    );
     Ok(())
 }
 
