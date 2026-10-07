@@ -6,6 +6,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 
 use event_bus::EventBus;
+use mlc_engine::memory_graph::{MemoryGraph, MemoryNode, MemoryNodeType};
+use mlc_engine::recall_fusion::FusionTuning;
 use mlc_engine::{MemoryEntry, MemoryId, MemoryTier, MlcEngine};
 use nexus_contracts::recall_fusion::DEFAULT_RRF_K;
 use nexus_contracts::EpistemicType;
@@ -27,10 +29,27 @@ fn mid(s: &str) -> MemoryId {
     MemoryId::from(s.to_string())
 }
 
-fn default_tuning() -> mlc_engine::recall_fusion::FusionTuning {
-    mlc_engine::recall_fusion::FusionTuning {
+fn default_tuning() -> FusionTuning {
+    FusionTuning {
         rrf_k: DEFAULT_RRF_K,
         top_k: 10,
+        graph_weight: 1.0,
+    }
+}
+
+fn clv_dim1(v: f32) -> CLV {
+    let mut vec = vec![0.0f32; CLV::DIMENSION];
+    vec[1] = v;
+    CLV::from_vec(vec).expect("CLV 构造")
+}
+
+fn graph_node(id: &str, clv: CLV) -> MemoryNode {
+    MemoryNode {
+        node_id: id.to_string(),
+        content: format!("content-{id}"),
+        embedding: clv,
+        node_type: MemoryNodeType::Solution,
+        success_associated: true,
     }
 }
 
@@ -121,4 +140,91 @@ async fn epistemic_path_promotes_observation_with_exact_rrf_math() {
     let m2 = out2.iter().find(|f| f.id == "m-2").unwrap();
     assert_eq!(m2.list_hits, 3, "语义+情节+认识三路均命中 m-2");
     assert_eq!(out2[0].id, "m-2");
+}
+
+/// WI-G9:真实图扩链路 — `MemoryGraph::recall_with_graph_ids` → `recall_hybrid` 第四路
+///
+/// 覆盖"graph 路成为 recall_hybrid 生产可达"：种子向量检索（m-2 与 query 同向）
+/// + 共现边扩展（m-9 语义不相似但共现直连）→ 融合就绪 id 序 → RRF 融合。
+#[tokio::test]
+async fn graph_path_via_recall_with_graph_ids_promotes() {
+    let engine = MlcEngine::new_in_memory(EventBus::new()).unwrap();
+    engine
+        .l2()
+        .insert(l2_entry("m-1", EpistemicType::Fact))
+        .unwrap();
+    engine
+        .l2()
+        .insert(l2_entry("m-2", EpistemicType::Fact))
+        .unwrap();
+
+    // 图侧：m-2 种子（dim0 同向 sim=1.0）；m-9 正交（dim1）不可成种子,仅共现边可达
+    let mut graph = MemoryGraph::new();
+    graph.insert_node(graph_node("m-2", clv_dim0(1.0)));
+    graph.insert_node(graph_node("m-9", clv_dim1(1.0)));
+    graph.build_cooccurrence_edges(&[vec!["m-2".to_string(), "m-9".to_string()]]);
+
+    let graph_ids = graph.recall_with_graph_ids(&clv_dim0(1.0), 1, 8);
+    assert_eq!(
+        graph_ids,
+        vec![mid("m-2"), mid("m-9")],
+        "seed 首位 + BFS 序（位置即 rank）"
+    );
+
+    let out = engine
+        .recall_hybrid(
+            &clv_dim0(1.0),
+            None,
+            Some(graph_ids.as_slice()),
+            3,
+            default_tuning(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out[0].id, "m-2", "semantic+graph 双路共同命中应居首");
+    assert_eq!(out[0].list_hits, 2);
+    assert!(
+        out.iter().any(|f| f.id == "m-9"),
+        "图独有命中（共现扩展）应入融合结果"
+    );
+}
+
+/// WI-G9:`graph_weight` 语义 — 高权重顶前 / `<=0` 等效断路（回滚锚逐位对拍）
+#[tokio::test]
+async fn graph_weight_knobs_and_zero_equals_disconnect() {
+    let engine = MlcEngine::new_in_memory(EventBus::new()).unwrap();
+    engine
+        .l2()
+        .insert(l2_entry("m-1", EpistemicType::Fact))
+        .unwrap();
+    let extra = vec![mid("m-9")]; // 图独有（不在 L2）
+
+    // 高权重：3/61 > m-1 单路 1/61 → 图 rank1 顶前（hcw rerank 接入点实证）
+    let tuned = FusionTuning {
+        graph_weight: 3.0,
+        ..default_tuning()
+    };
+    let out = engine
+        .recall_hybrid(&clv_dim0(1.0), None, Some(extra.as_slice()), 2, tuned)
+        .await
+        .unwrap();
+    assert_eq!(out[0].id, "m-9", "高权重图路 rank1 应胜单路 m-1");
+
+    // 等效断路：graph_weight=0.0 与不传第四路逐位一致（回滚锚）
+    let zero = FusionTuning {
+        graph_weight: 0.0,
+        ..default_tuning()
+    };
+    let with_zero = engine
+        .recall_hybrid(&clv_dim0(1.0), None, Some(extra.as_slice()), 2, zero)
+        .await
+        .unwrap();
+    let disconnected = engine
+        .recall_hybrid(&clv_dim0(1.0), None, None, 2, default_tuning())
+        .await
+        .unwrap();
+    assert_eq!(
+        with_zero, disconnected,
+        "权重≤0 必须与不传第四路逐位一致（回滚锚）"
+    );
 }

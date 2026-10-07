@@ -27,6 +27,8 @@ use hnsw_rs::hnsw::Hnsw;
 use hnsw_rs::prelude::DistCosine;
 use nexus_core::CLV;
 
+use crate::types::MemoryId;
+
 /// 每节点语义边的近邻数上界(边数 = O(n·k))
 const SEMANTIC_EDGE_TOP_K: usize = 8;
 
@@ -354,6 +356,27 @@ impl MemoryGraph {
             }
         }
         results
+    }
+
+    /// 图扩召回 → 融合就绪 id 序（WI-G9：接 `MlcEngine::recall_hybrid` 第四路）
+    ///
+    /// 与 [`recall_with_graph`](Self::recall_with_graph) **同序**（seed 首位 + BFS 序，
+    /// 位置即 rank）;仅把 `&MemoryNode` 物化为 `MemoryId` 序，供
+    /// `recall_hybrid(query, quest_id, Some(&ids), top_k, tuning)` 的
+    /// `extra_path_ids` 直接消费。图与引擎同属 L2（mlc-engine），映射纪律
+    /// （node_id → MemoryId、序保真）收口一处，防两处漂移。
+    /// 零算法改动（BFS 序 = rank 序），`memory_graph_recall` 既有性能面不受影响。
+    #[must_use]
+    pub fn recall_with_graph_ids(
+        &self,
+        query: &CLV,
+        depth: u32,
+        max_results: usize,
+    ) -> Vec<MemoryId> {
+        self.recall_with_graph(query, depth, max_results)
+            .into_iter()
+            .map(|n| MemoryId::from(n.node_id.clone()))
+            .collect()
     }
 }
 
