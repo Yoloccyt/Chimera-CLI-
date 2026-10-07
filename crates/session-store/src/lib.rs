@@ -37,8 +37,9 @@
 //!   回放的排序键（seq 主序 + row 次序；ADR-109，已交付）
 //! - **CBMR 微批写**:SQLite 写操作从 N 次（单条直写）降为 ceil(N/64) 次,
 //!   基准输出 `syscall_reduction_pct`（T8/T9 模式固定 n 单次采样）
-//! - **model-visible 不变量打点**:`to_model_view` 白名单投影（WI-18，已交付为纯函数 API + 自测）；
-//!   **生产消费者为零**（见文末遗留开放项），logged ≠ model-visible 语义已在 `model_view` 文档固化
+//! - **model-visible 不变量打点**:`to_model_view` 白名单投影（WI-18）+ 投影时映射表
+//!   `MODEL_VISIBLE_MAPPING`（ADR-201 D1）;**生产消费者已接线**（`nexus-app-server::
+//!   model_visible_context`,ADR-201 D2/WI-G11）,logged ≠ model-visible 语义已在 `model_view` 文档固化
 //!
 //! # 崩溃恢复（T3 已承接）
 //!
@@ -47,9 +48,10 @@
 //!
 //! # 遗留开放项（需设计决策，非存储面缺陷）
 //!
-//! `to_model_view` 目前为「实现+测试但零生产消费者」的投影 API：`nexus-app-server::persist_turn`
-//! 写入事件类型 `"turn.submit"` 不在 `MODEL_VISIBLE_TYPES` 白名单内，接线须先对齐事件类型
-//! 分类学（turn.submit vs model.*/tool.*/state.update），属消费者侧语义决策，不在本 crate 单方面臆造。
+//! 原「`turn.submit` 不在白名单、接线须先对齐分类学」开放项已由 **ADR-201 裁决闭合**
+//! （D1 投影时映射 `turn.submit→model.request`;D2 首个生产消费方
+//! `AppServer::model_visible_context`）——追加映射行仍须评审（映射表为显式常量 + 测试锁）。
+//! 存留项:`model_view` 对中文/混淆键名的敏感启发式边界（`model_view.rs` 文档注明,维持现状）。
 //!
 //! # 红线遵守
 //!

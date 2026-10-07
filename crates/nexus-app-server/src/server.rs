@@ -20,7 +20,9 @@ use nexus_contracts::app::{
     AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId, ItemStatus,
     PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
 };
-use session_store::{CbmrWriter, Offset, SessionEvent, SessionId};
+use session_store::{
+    to_model_view, CbmrWriter, ModelVisibleEvent, Offset, SessionEvent, SessionId,
+};
 use thiserror::Error;
 
 /// 核心后端错误 — `CoreBackend` seam 的结构化错误契约
@@ -388,6 +390,38 @@ impl AppServer {
             .await
             .map_err(|e| ServerError::Store(format!("查询回合 Offset 失败: {e}")))?
             .ok_or_else(|| ServerError::Store("flush 后 Offset 缺失(状态不一致)".into()))
+    }
+
+    /// 模型可见上下文 — 白名单投影出口（ADR-201 D2;WI-G11 首个生产消费方）
+    ///
+    /// # 语义（「model-visible means logged」生产出口）
+    /// 读回该会话**已落盘**事件（[`CbmrWriter::read_events`],含 fork 前缀合并),
+    /// 逐条经 [`to_model_view`] 投影（白名单 + 投影时映射 + 敏感剔除）。
+    /// 宿主（`chimera serve` / `acp`）拼装模型请求上下文**必须取此出口**——
+    /// logged ⇒ 不泄漏 / 已泄漏面必已记录（不变量在生产路径可强制）。
+    ///
+    /// # 投影语义（ADR-201 D1，唯一出口）
+    /// - `turn.submit` → 输出 `event_type = "model.request"`（映射表
+    ///   [`session_store::model_view::MODEL_VISIBLE_MAPPING`]）;
+    /// - 非白名单类型剔除;敏感载荷剔除**优先于**映射（`payload = None`）;
+    /// - 存储面零改动（append-only 权威源不动;被剔除载荷仍可审计回看）。
+    ///
+    /// # 错误
+    /// store 未配置 → [`ServerError::StoreNotConfigured`]（与 `persist_turn` 同语义）。
+    pub async fn model_visible_context(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Vec<ModelVisibleEvent>, ServerError> {
+        let store = self.store.as_ref().ok_or(ServerError::StoreNotConfigured)?;
+        let session_id = SessionId::new(thread_id.as_str());
+        let stored = store
+            .read_events(&session_id, None)
+            .await
+            .map_err(|e| ServerError::Store(format!("模型视图读回失败: {e}")))?;
+        Ok(stored
+            .iter()
+            .filter_map(|s| to_model_view(&s.event, s.offset))
+            .collect())
     }
 
     /// 注入待审批请求（服务端审批源 → 客户端轮询队列）
@@ -927,6 +961,73 @@ mod tests {
         for (i, item) in items.iter().enumerate() {
             assert_eq!(item.offset.seq, i as u64, "回放顺序 = 写入顺序");
         }
+    }
+
+    // ============================================================
+    // ADR-201 D2 — model_visible_context 生产消费方（WI-G11）
+    // ============================================================
+
+    /// V2:persist_turn 双写后 model_visible_context 输出 = 白名单交集
+    #[tokio::test]
+    async fn model_visible_context_projects_whitelist_intersection() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cfg = session_store::StoreConfig::with_dir(dir.path());
+        cfg.spawn_flush_loop = false;
+        let store = session_store::CbmrWriter::new(cfg).expect("store");
+        let server = AppServer::with_session_store(
+            AppServerConfig::default(),
+            Box::new(InMemoryBackend),
+            store,
+        );
+        server
+            .handle_op(&AppOp::ThreadStart(sample_params()))
+            .await
+            .expect("启动成功");
+        let tid = ThreadId::new("goal-1::run-1");
+        server
+            .handle_op(&AppOp::TurnSubmit {
+                thread_id: tid.clone(),
+                input: UserInput::new("你好"),
+            })
+            .await
+            .expect("提交成功");
+        server
+            .persist_turn(&tid, &TurnId::new("turn-1"))
+            .await
+            .expect("落盘");
+
+        let views = server.model_visible_context(&tid).await.expect("模型视图");
+        assert_eq!(views.len(), 2, "两条 turn.submit 均映射进白名单交集");
+        for (i, v) in views.iter().enumerate() {
+            assert_eq!(
+                v.event_type, "model.request",
+                "投影时映射 canonical（ADR-201 D1）"
+            );
+            assert_eq!(v.offset, i as u64, "offset = 段文件 seq 镜像");
+            assert!(v.payload.is_some(), "turn_id JSON 非敏感载荷保留");
+        }
+
+        // 纯内存模式:与 persist_turn 同语义拒绝（StoreNotConfigured）
+        let pure = AppServer::new(AppServerConfig::default());
+        let err = pure
+            .model_visible_context(&tid)
+            .await
+            .expect_err("纯内存模式必须拒绝");
+        assert!(matches!(err, ServerError::StoreNotConfigured));
+    }
+
+    /// V2 附录:persist_turn 写入类型 ↔ 映射表一致性锁（跨 crate 常量对拍）
+    #[test]
+    fn persist_turn_written_type_is_mapped() {
+        // persist_turn 写入 "turn.submit"（本文件字面量）;该类型必须存在于
+        // session-store 映射表——否则模型视图永远看不到落盘回合（静默缺席）
+        let written = "turn.submit";
+        assert!(
+            session_store::model_view::MODEL_VISIBLE_MAPPING
+                .iter()
+                .any(|(raw, _)| *raw == written),
+            "persist_turn 写入类型 {written} 必须存在于 MODEL_VISIBLE_MAPPING"
+        );
     }
 
     #[tokio::test]
