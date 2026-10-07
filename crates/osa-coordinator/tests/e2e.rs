@@ -356,13 +356,19 @@ async fn test_e2e_performance_benchmarks() {
     let query = make_clv();
     // Warmup(10 次)
     for _ in 0..10 {
-        let _ = engine.recall_by_clv(&query, 10).await.expect("MLC 召回");
+        let _ = engine
+            .recall_by_clv(&query, 10, None)
+            .await
+            .expect("MLC 召回");
     }
     // 正式测量(100 次)
     let mut latencies = Vec::with_capacity(100);
     for _ in 0..100 {
         let start = Instant::now();
-        let _ = engine.recall_by_clv(&query, 10).await.expect("MLC 召回");
+        let _ = engine
+            .recall_by_clv(&query, 10, None)
+            .await
+            .expect("MLC 召回");
         latencies.push(start.elapsed().as_nanos() as f64);
     }
     latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());

@@ -302,6 +302,7 @@ L1   Core ─────── nexus-core · event-bus
 | **关键方法** | `append(ev)`(攒批→spawn\_blocking flush) · `read_events()`(SQLite 树索引,与写并发 WAL) · `fork(session, offset)` |
 | **主要依赖** | tokio · serde · serde\_json · rusqlite(spawn\_blocking 包装) · thiserror · nexus-contracts |
 | **设计模式** | append-only 段 · CBMR 微批写(N 次直写降为 ceil(N/64) 次) · Write-Ahead 长度前缀 · 崩溃尾部截断 |
+| **模型视图面** | `model_view` 白名单投影 + **投影时映射**（`MODEL_VISIBLE_MAPPING`,ADR-201 D1）;生产消费者 = `AppServer::model_visible_context`（首个真实消费方,ADR-201 D2 / WI-G11,2026-10-07 接线） |
 | **ADR 来源** | ADR-141(CSC 会话存储契约)/ ADR-108(CBMR 微批写)/ ADR-109(Offset 双键归并);对应 v4.0 WI-18、九源手册 W9 T-07 |
 
 ***
@@ -750,6 +751,8 @@ L1   Core ─────── nexus-core · event-bus
 > **M13 偿还批次(2026-09-17,decb-scc 重路由):冻结孤岛 11 → 9、生产可达 30 → 32**。M10 被依赖铁律驳回的两岛按重路由候选全量偿还,消费者决策论证(ADR-179 非空转判据)与决策全文如下——
 > **D1 decb 消费者 = efficiency-monitor::RuntimeAuditor(第 6 维 budget_discipline)**:efficiency-monitor 新增 decb-governor 生产依赖(L9→L8 向下、非内环,Check A/B 双绿)。RuntimeAuditor 是 chimera-cli 生产域唯一已接线 efficiency-monitor 组件(experience_loop 组合根装配,60s 周期 generate_report),故为唯一真实调用路径;每次报告经 `DecbGovernor::get_stats()` 采样预算快照,维度分 = 1 − 利用率(预算头寸健康度),未注入时中性 0.5(证据纪律同口径);`HarnessReportGenerated`/`AssessmentUpdated` 事件面分毫不动,该批未新增变体(其时 145；现数以 `types.rs` 枚举与 `check_doc_drift.sh` 自报为准);chimera-cli experience_loop 构造共享 DecbGovernor 注入(`with_decb_governor`),DECB 零消耗不发布事件,装配本身零行为变化。
 > **D2 scc 消费者 = chimera-cli 组合根 AppContext.scc + doctor 第 9 探针**:按 ADR-161 路径①组合根装配 `SccCache`(SccConfig::default 容量 256,零 IO 轻构造,与 bus 同生命周期);doctor 新增 `scc_cache` 探针(索引 8,尾部追加)每次运行真实消费装配实例 `stats()` 只读快照(非探针内 ephemeral 自建——那不构成对装配面的真实消费);否决备选 chat REPL 上下文缓存(缓存无人真实读 = 制造需求,CacheHit/Miss 事件侵入用户面)。探针数 8→9 为唯一对外可见变化(doctor 输出尾部追加一行,既有 8 探针内容/顺序/状态零变化;cli.rs/help.rs 陈旧"6 维度"文案顺带订正为 9)。freeze REMOVED 注记 + 棘轮 reachable=32/frozen=9/new_gaps=0 实测;ADR-186 物理文件留待 tower 合并侧补录(本批次决策以本节注记为权威记录,同 M10 先例)。 **【2026-10-07 补录完成】**：物理文件已落盘（`docs/architecture/ADR-186-dec-scc-rerouting-m13.md`，编号落位补录，权威记录仍以本节注记为准）。
+>
+> **2026-10-07 追加（W4-4 批 D 行为变更同步）**：① **doctor 探针 9→10**——新增 `storage_health`（L3 存储三后端聚合：scc 共享句柄 `stats()` / cmt 经验库目录 / session-store 段目录；`StorageHealth` 纯类型，双就绪 Ok / 缺席 Warn——缺席=未初始化非故障；索引 9 尾部追加，既有 9 探针内容/顺序/状态零变化；`共 10 项` 与 `"total": 10` 断言同步，WI-G12）。② **session-store model_view 生产消费者接线**（ADR-201 D1/D2，WI-G11）：`MODEL_VISIBLE_MAPPING`（`turn.submit→model.request` 投影时映射，显式常量+测试锁）+ `AppServer::model_visible_context`（read_events→白名单投影出口；「model-visible means logged」不变量首次具生产出口；append-only 权威源零改动）。探针 9 的 scc_cache 内容与读数零变化。
 >
 > **被依赖铁律驳回两岛(M10 回登记,已于 M13 按重路由候选偿还)**:M10 时 `decb-governor` 原计划经 parliament 转正——parliament 属内环 9 crate 白名单,decb 不在白名单亦非 L0/L1 基座(Check A 违规,M7"同层允许"裁定遗漏内环保守规则);`scc-cache` 原计划经 hcw-window 转正——hcw 同属内环,且 L2→L3 为向上依赖(Check B 违规,"L2→L3 向下合法"系方向误判)。M11 wiring 决策报告给出重路由候选方向(decb → efficiency-monitor;scc → chimera-cli 组合根,ADR-161 路径①),M13 完成消费者决策论证与接线,见上 M13 批次注记。
 
