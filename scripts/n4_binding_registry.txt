@@ -1,0 +1,26 @@
+# N-4 batch-failure-semantics binding registry (W4-2 WI-G6b, 2026-10-07; basis = ADR-196 sec.8 certification).
+#
+# ---- schema (parsed by crates/nexus-core/tests/n4_binding_test.rs) ----
+# binding:<key>|DEFERRED_UNTIL_WIRING|<trigger-expr>|owner=<evidence refs>
+# anchor:<crate/src-path.rs>|<posture>|api=<spawn_compute_batch call symbol>
+#
+# DEFERRED_UNTIL_WIRING semantics: the N-4 batch-failure-semantics unification is held
+#   on purpose -- transforming points with zero real traffic is the measured
+#   negative-yield pattern (cpu-plane-c1c2-scale-bounding-2026-10-02.md sec.3).
+# When the trigger expression becomes true, the binding obligation fires: N-4 must be
+#   re-adjudicated (the wiring test turns RED -- a machine hook, not a silent drift).
+# postures: fail-fast | item-wise | in-place-fallback
+#   (nmc/gsoe are signature-mandated legitimate exceptions; see
+#    cpu-plane-closeout-2026-10-04.md sec.7 for the verbatim 7-point inventory.)
+#
+# ---- binding row ----
+binding:n4_batch_failure_semantics|DEFERRED_UNTIL_WIRING|wired_composition>=1|owner=cpu-plane-c1c2-scale-bounding-2026-10-02.md sec3 + cpu-plane-closeout-2026-10-04.md sec7
+#
+# ---- 7-point posture baseline (verbatim from closeout-2026-10-04 sec.7; hooks = file exists + still calls spawn_compute_batch) ----
+anchor:crates/faae-router/src/parallel.rs|fail-fast|score_experts_batch
+anchor:crates/osa-coordinator/src/parallel.rs|fail-fast|compute_five_masks_batch
+anchor:crates/repo-wiki/src/vector/parallel.rs|fail-fast|search_batch
+anchor:crates/hcw-window/src/parallel.rs|fail-fast|score_entries
+anchor:crates/decay-engine/src/parallel.rs|fail-fast|parallel_batch
+anchor:crates/nmc-encoder/src/parallel.rs|item-wise|perceive_batch
+anchor:crates/gsoe-evolution/src/fitness_parallel.rs|in-place-fallback|select_elite
