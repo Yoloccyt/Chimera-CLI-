@@ -39,36 +39,36 @@ members = [
     "crates/gsoe-evolution", "crates/mcp-mesh",
     "crates/nmc-encoder", "crates/chtc-bridge", "crates/chimera-tui",
     "crates/chimera-cli", "crates/chimera-mas",
-    # L6 Router: omega-learner Bandit 六接缝(P4-W13.1,workspace 第 37 个 crate)
+    # L6 Router: omega-learner Bandit 六接缝(P4-W13.1,workspace 加入时第 37 个 crate)
     # WHY 排在最后: 学习层为环外新增,通过异步下发 SelectorPolicy::Learned 给调用方,
     # 不参与现有 crate 依赖环;依赖方向 L6 → L0(nexus-contracts)/L1(event-bus) 合规
     "crates/omega-learner",
-    # L10 Interface: mca-gateway 多通道亲和网关(ADR-065,workspace 第 38 个 crate)
+    # L10 Interface: mca-gateway 多通道亲和网关(ADR-065,workspace 加入时第 38 个 crate)
     # WHY 排在末位: MCA 体系新增,仅依赖 L0(nexus-contracts)/L1(event-bus),
     # 与 chtc-bridge 同构;流式数据面走 bounded mpsc 不进 event-bus(ADR-065 决策 4)
     "crates/mca-gateway",
-    # L10 Interface: nexus-app-server 核心-表面分离(WI-01,workspace 第 39 个 crate)
+    # L10 Interface: nexus-app-server 核心-表面分离(WI-01,workspace 加入时第 39 个 crate)
     # WHY 排在末位: 宿主层协议门面,仅依赖 L0(nexus-contracts)/L1(event-bus/nexus-core);
     # 外部协议面类型在 L0 app.rs(内闭外开 T6);48/53 crate 预算内(38+1=39)
     "crates/nexus-app-server",
-    # L3 Storage: session-store 会话事件流存储(Phase 2 新增,ADR-141,workspace 第 40 个 crate)
+    # L3 Storage: session-store 会话事件流存储(Phase 2 新增,ADR-141,workspace 加入时第 40 个 crate)
     # WHY 排在末位: 会话持久化从 Checkpoint 线性快照升级为 append-only 段 + CBMR 微批写
     # (手册 W9 T-07 / ADR-108 / v4.0 WI-18 存储面);仅依赖 L0(nexus-contracts),
     # 消费者为 nexus-app-server(装配期注入), 事件回放面 P2-T3 接入
     "crates/session-store",
-    # L9 Quest: mas-sched 多代理调度器控制面(Phase 3 新增,ADR-145,workspace 第 41 个 crate)
+    # L9 Quest: mas-sched 多代理调度器控制面(Phase 3 新增,ADR-145,workspace 加入时第 41 个 crate)
     # WHY 排在末位: 从 chimera-mas 拆出的控制面(PeerScheduler claim/renew/handoff/should_run),
     # 仅依赖 L0(nexus-contracts) 内部 1 个(WI-29),
     # 无消费者(影子模式先行,后续 chimera-mas 拆出经 L0 契约承接),加入 members 零影响
     # 注(ADR-160): 原注释所称"L1(nexus-core/event-bus) 内部 3 个"系声明先于实现,
     # 事件面未落地,虚假依赖声明已删;该 crate 现登记于 crate_reachability_freeze.txt
     "crates/mas-sched",
-    # L9 Quest: nexus-hook 生命周期 Hook 系统(Phase 3 新增,ADR-146,workspace 第 42 个 crate)
+    # L9 Quest: nexus-hook 生命周期 Hook 系统(Phase 3 新增,ADR-146,workspace 加入时第 42 个 crate)
     # WHY 排在末位: 13+ LifecycleEvent + TOML 挂载 + seccore ProcessFence 沙箱,
     # 依赖 L0(nexus-contracts)/L1(event-bus)/L4(seccore) 内部 3 个(≤6 门禁),
     # 无消费者(配置空载=现状,回退路径安全),加入 members 零影响
     "crates/nexus-hook",
-    # L7 Execution: nexus-subagent 类型化 SubAgent 运行时 + Task Auction（Phase 3 新增,ADR-148,workspace 第 43 个 crate）
+    # L7 Execution: nexus-subagent 类型化 SubAgent 运行时 + Task Auction（Phase 3 新增,ADR-148,workspace 加入时第 43 个 crate）
     # WHY 排在末位: 3 类型 + Arena + 禁嵌套 + 竞价;依赖 L0(nexus-contracts) 内部 1 个,
     # 消费者为 nexus-app-server(运行时先行,接入方经 spawn/join 驱动)
     # 注(ADR-160): 原注释所称"L1(nexus-core/event-bus) 内部 3 个"含未实现的事件面,

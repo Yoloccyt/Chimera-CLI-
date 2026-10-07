@@ -94,7 +94,7 @@ cmd = "bash scripts/check_dependency_rules.sh"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "依赖铁律与 forbid(unsafe_code)（43/43 层图；.sh 侧曾因 CRLF 空跑，见 RK-P35）"
+note = "依赖铁律与 forbid(unsafe_code)（39/39 层图；.sh 侧曾因 CRLF 空跑，见 RK-P35）"
 
 [[gate]]
 id = "G-09"
@@ -813,7 +813,7 @@ cmd = "{python} scripts/emit_architecture_views.py --verify"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "真树：5 份派生视图与 --emit 逐字等值（layers 13 行 / domains 12 / dependency.dot 184 / report 2 / layer_contracts 42 = 1 横幅 + 41 成员，行数与 members 闭合）。内容刻意无时间戳（否则每次 --write 都自我判红），故 G-64 另钉「连续两次 write 字节相同」。手改任一份即红并点名文件与首个不一致行"
+note = "真树：6 份派生视图与 --emit 逐字等值（layers 13 行 / domains 12 / dependency.dot 179 / report 2 / layer_contracts 40 = 1 横幅 + 39 成员 / architecture.svg 133，行数与 members 闭合）。内容刻意无时间戳（否则每次 --write 都自我判红），故 G-64 另钉「连续两次 write 字节相同」。手改任一份即红并点名文件与首个不一致行"
 
 # 代理指令面的 `path:line` 锚点完整性（设计文档 §8.1「量具自身静默失效」的对偶：
 # 锚点错了指令会主动把人引向不存在的文件，比不写更坏）。
