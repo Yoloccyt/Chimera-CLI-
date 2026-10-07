@@ -152,6 +152,16 @@ jobs:
           python3 scripts/check_nexus_core_dep_freeze.py --selftest
           python3 scripts/check_nexus_core_dep_freeze.py
 
+      # WHY: L0 契约">=2 消费者"门(WI-A1,2026-10-07)——契约类型诞生即须有两个以上
+      # 工作区消费方,否则"先占位后接线"的幽灵契约(recall_fusion/price_vector 先例)
+      # 会长期冒充能力。只减登记册 scripts/contract_consumer_baseline.txt 首跑为
+      # 全量豁免态;与 check_dead_contract_apis.py(ADR-197 A6)互认。
+      # 先 --selftest 证明门有牙(含 DEFS<50 真空守卫),再跑真实裁决;零 cargo、秒级。
+      - name: Contract consumers gate (G-91)
+        run: |
+          python3 scripts/check_contract_consumers.py --selftest
+          python3 scripts/check_contract_consumers.py
+
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
       # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期

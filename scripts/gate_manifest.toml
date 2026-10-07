@@ -998,5 +998,14 @@ kind = "light"
 test_kind = "cross_crate"
 note = "nexus-core 最小依赖机器门(WI-F1):① 生产 [dependencies] 集合冻结,NEW/STALE 双向棘轮——L1 枢纽 crate 的依赖面是最小性论证的事实基座,增减都必须过人工评审;② workspace 继承校验:每条生产声明必须 `{ workspace = true }`,关闭 ADR-196 D5 实录的空档(grep 式检查只认 workspace=true 行,`foo = \"1.0\"` 外部版本钉死声明静默漏检);③ fail-closed 形态守卫:[dependencies.x] 子表/target 依赖表/点号键等解析器不建模的形态一律判红,不留静默旁路;④ dev-dependencies 不在冻结面(测试/bench 依赖不进生产图)。parser 刻意不复用 check_declared_dep_usage.parse_declared:其 dict 语义后写覆盖先写,实测会把 nexus-core 的 serde_json 生产声明(Cargo.toml:14)被 dev 段同名列(:48)吃掉(prod=14 而实际 15)。豁免路径:新增依赖须人工最小性/层向评审后在 scripts/nexus_core_dep_freeze.txt 登记并附 reason 注释,删依赖同批删清单行,禁止判红后无评审直改清单;--emit 重生成基线须人工复核 diff 防棘轮洗白。"
 
+[[gate]]
+id = "G-91"
+spec_ref = "WI-A1 / v3.0 §5.2 + ADR-199 §7 Q2 互认 + v3.3 §2.1"
+cmd = "{python} scripts/check_contract_consumers.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0 契约'>=2 工作区消费者'门(WI-A1,2026-10-07 落地):nexus-contracts 全部 pub 类型/trait 逐一统计消费方 crate 数(production scope=crates/*/src，test 尾排除规则与 check_dead_contract_apis.py 同源；连接方言=direct nexus_contracts 路径/use 语句 + 1 跳 hub re-export 感知——2026-10-07 实测 10 个 hub/全显式名单/零 glob)，<2 者入 scripts/contract_consumer_baseline.txt 只减不增登记册；首跑=全量豁免态(236 defs/165 豁免)。NEW 未登记必红、接线后未删行 STALE 必红、畸形基线退 2、DEFS<50 真空守卫退 2(该守卫由'压平文本致定义失明'实缺陷促成——首版曾被 --selftest 捕获)。--selftest 13 项夹具(真实 tempdir 路径)。与 check_dead_contract_apis.py(ADR-197 A6)互认。"
+
 
 
