@@ -20,6 +20,8 @@
 //! - `bridge_spawn`:经 [`spawn_compute_batch`](ComputeBridge::spawn_compute_batch)
 //!   的批量卸载往返延迟（ADR-197 新增 —— 该路径上多了一对按类型计数与
 //!   一次饱和判定，旧 bench 完全测不到，故补此组作为现势基线）。
+//! - `overwindow_dense_knee`:超窗簇 provider 稠密内核「串行 vs 池」n* 拐点曲线
+//!   （WI-G6a；只产出数据不改默认，判读属静默窗口批次）。
 //!
 //! # 参考样板
 //! 语法结构参照同目录完整保留的 `clv_bench.rs`。
@@ -157,12 +159,111 @@ fn batch_result_collect(c: &mut Criterion) {
     group.finish();
 }
 
+/// bench 5:overwindow 桥 dense 内核 n* 拐点曲线（WI-G6a，先量后建议）
+///
+/// WHY: `cpu-plane-c1c2-scale-bounding-2026-10-02.md` §3 未闭合项——provider
+/// dense 段（块 CLV × 查询 CLV 余弦 + top-k 部分选择）生产可达 n ∈ [513, 3906]
+/// 块，是否值得卸载取决于「串行 vs 池」交叉点 n* 是否低于真实 p50。本组按
+/// 现状内核形状（CHUNK = 64 分段，段内保序）对拍两条曲线：
+///   - `serial`：逐块余弦 + `select_nth_unstable_by` + sort（现状路径形状）；
+///   - `offload`：CHUNK=64 → `spawn_compute_batch` → 段序拼接 + 同款 top-k。
+///
+/// 判读口径（R5）：offload < serial 的最小 n 即 n*；非静默窗口读数一律标
+/// `[Directional]` 且不得据此触发改造。本组**不新建 SLO 阈值、不改任何默认**
+/// （ADR-190 反幽灵门；apply 建议见 WI-G6a 报告）。
+///
+/// 内核复刻声明：`compute_provider_parts`（chimera-cli）为私有函数，本组按其
+/// dense 段形状（cosine + select + sort，k = 128）在 bench 侧复刻——形状等价、
+/// 非逐位对拍；数据只用于 n* 量级判读。
+#[allow(clippy::type_complexity)] // 卸载闭包包型与生产点位同形（hcw/faae 同范式）
+fn overwindow_dense_knee(c: &mut Criterion) {
+    use std::sync::Arc;
+
+    const K: usize = 128; // DEFAULT_TOP_K（chimera-cli/overwindow_bridge.rs）
+    const CHUNK: usize = 64; // 生产点位 CHUNK 对齐
+
+    /// 确定性块 CLV（SplitMix64 派生；512 维）
+    fn make_clv(seed: u64) -> nexus_core::CLV {
+        let mut s = seed
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(0x1234_5678);
+        let v: Vec<f32> = (0..512)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                ((s >> 40) as f32 / 16_777_216.0f32) - 0.5
+            })
+            .collect();
+        nexus_core::CLV::from_vec(v).expect("512 维构造")
+    }
+
+    /// top-k 部分选择 + 排序（与 provider dense 段同款比较器）
+    fn topk(scores: &mut Vec<(usize, f32)>, k: usize) {
+        let n = scores.len();
+        let nth = k.min(n);
+        if nth > 0 && nth < n {
+            scores.select_nth_unstable_by(nth - 1, |a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            scores.truncate(nth);
+        }
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    let b: &ComputeBridge = bridge();
+    let query = make_clv(0x00C0_FFEE);
+    let mut group = c.benchmark_group("overwindow_dense_knee");
+    for n in [256usize, 512, 1024, 2048, 4096, 8192, 16_384] {
+        let blocks: Arc<Vec<nexus_core::CLV>> =
+            Arc::new((0..n).map(|i| make_clv(i as u64 + 1)).collect());
+        group.bench_function(BenchmarkId::new("serial", n), |be| {
+            be.iter(|| {
+                let mut scores: Vec<(usize, f32)> = blocks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, blk)| (i, query.cosine_similarity(blk)))
+                    .collect();
+                topk(&mut scores, K);
+                criterion::black_box(scores.len())
+            });
+        });
+        group.bench_function(BenchmarkId::new("offload", n), |be| {
+            be.iter(|| {
+                let n_chunks = blocks.len().div_ceil(CHUNK);
+                let tasks: Vec<Box<dyn FnOnce() -> Vec<(usize, f32)> + Send>> = (0..n_chunks)
+                    .map(|ci| {
+                        let all = Arc::clone(&blocks);
+                        let q = query.clone();
+                        let start = ci * CHUNK;
+                        let end = (start + CHUNK).min(all.len());
+                        Box::new(move || {
+                            (start..end)
+                                .map(|i| (i, q.cosine_similarity(&all[i])))
+                                .collect()
+                        }) as Box<dyn FnOnce() -> Vec<(usize, f32)> + Send>
+                    })
+                    .collect();
+                let results = b.spawn_compute_batch(TaskKind::ClvSimilarity, tasks);
+                let mut scores: Vec<(usize, f32)> = Vec::with_capacity(n);
+                for r in results {
+                    scores.extend(r.unwrap());
+                }
+                topk(&mut scores, K);
+                criterion::black_box(scores.len())
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bridge_route,
     bridge_reduce,
     bridge_spawn,
     saturation_check,
-    batch_result_collect
+    batch_result_collect,
+    overwindow_dense_knee
 );
 criterion_main!(benches);
