@@ -581,7 +581,9 @@ pub use app::{
     AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId, ItemStatus,
     PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
 };
-pub use errors::{NexusError, Recoverable, RecoveryStrategy};
+pub use errors::{
+    ErrorLayer, EventFailure, NexusError, Recoverable, RecoveryStrategy, ToolFailure,
+};
 // v2.3 (b.1)/(b.3): 裁决权与认识类型契约（Claim/Certify/Declaim payload + EpistemicType）
 pub use adjudication::{
     CertifyPayload, CertifyVerdict, ClaimPayload, DeclaimPayload, EpistemicType, FailureFixStatus,
@@ -714,7 +716,9 @@ pub mod prelude {
         AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId,
         ItemStatus, PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
     };
-    pub use crate::errors::{NexusError, Recoverable, RecoveryStrategy};
+    pub use crate::errors::{
+        ErrorLayer, EventFailure, NexusError, Recoverable, RecoveryStrategy, ToolFailure,
+    };
     // v2.3 (b.1)/(b.3): 裁决权与认识类型契约（与顶层导出同集）
     pub use crate::adjudication::{
         CertifyPayload, CertifyVerdict, ClaimPayload, DeclaimPayload, EpistemicType,
