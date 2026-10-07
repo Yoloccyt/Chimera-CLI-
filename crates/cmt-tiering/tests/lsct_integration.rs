@@ -16,11 +16,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::time::Duration;
 
-use event_bus::EventBus;
 use cmt_tiering::lsct::Tier;
 use cmt_tiering::lsct::{
     compute_target_tier, LsctConfig, LsctCoordinator, TaskLoadProfile, TaskType, TierSwitchDecision,
 };
+use event_bus::EventBus;
 
 /// 辅助:创建带 EventBus 的 coordinator 与 receiver
 fn setup_with_bus() -> (LsctCoordinator, event_bus::EventReceiver) {
