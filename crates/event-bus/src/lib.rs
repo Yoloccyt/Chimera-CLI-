@@ -41,8 +41,8 @@
 
 /// P4-T6: CausalGraph 归因台账（ADR-132,diff 5s 窗口因果链回溯）
 ///
-/// 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 零生产消费方;接线路径=
-/// 遥测导出侧接入或降为内部结构,退役条件见 ADR-181 决策 2。
+/// 状态(ADR-200 D1/D2 终裁,2026-10-07):PRODUCTION-WIRED —— 经 AttributionTap
+/// 订阅侧接线(experience_loop 组合根启动);即 ADR-181 决策 2 的到点复核。
 pub mod attribution;
 pub mod backpressure;
 pub mod bus;
@@ -54,8 +54,8 @@ pub mod bus;
 ///
 /// 详见 [`causal::VectorClock`]。
 ///
-/// 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 消费方仅 attribution(本 crate
-/// 内部基座),零外部/生产接线;对外 API 面不扩大。
+/// 状态(ADR-200 D2 终裁,2026-10-07):PRODUCTION-WIRED(经 attribution tap);
+/// 对外 API 面不扩大。
 pub mod causal;
 /// CBF 信用流原语(P1-T11,手册 §8.5 / T-06 / v4.0 WI-08)
 ///
@@ -168,7 +168,9 @@ pub use bus::{
 // P3-T10: 事件双轨注册表公开 API（WI-21/ADR-149）
 // P4-T4: 双跑采集公开 API
 pub use attribution::{
-    AttributionNode, AttributionResult, CausalAttributionLedger, ATTRIBUTION_WINDOW_MS,
+    is_attribution_trigger, spawn_attribution_tap, AttributionNode, AttributionResult,
+    AttributionTapHandle, CausalAttributionLedger, ATTRIBUTION_DUMP_ENV,
+    ATTRIBUTION_TRIGGER_VARIANTS, ATTRIBUTION_WINDOW_MS,
 };
 pub use dynamic_registry::{
     DynamicEventRegistry, RegisterOutcome, RegistryAuditEntry, NAMESPACE_QUOTA,

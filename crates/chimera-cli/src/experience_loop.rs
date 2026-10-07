@@ -318,6 +318,13 @@ pub async fn spawn_experience_loop(
         60,
     ));
 
+    // ADR-200 D1(V5): 因果归因 tap —— 订阅侧常驻,零发布路径改动。
+    // 触发集事件(SlowConsumerDropped/BudgetExceeded)到达时自动产出 5s 窗口
+    // 因果链诊断(可选 JSONL 经 CHIMERA_ATTRIBUTION_DUMP_PATH 门控)。
+    // subscribe-before-spawn 由 spawn_attribution_tap 内部保证;句柄收进
+    // join_handles 同报告器族生命周期纪律(反模式 #7,不 fire-and-forget)。
+    join_handles.push(event_bus::attribution::spawn_attribution_tap(&nexus_bus).into_task());
+
     Ok(ExperienceLoopHandles {
         card_bus,
         mlc,

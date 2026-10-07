@@ -137,6 +137,15 @@ CONTRACTS = [
                 "docs/reports/cpu-plane-phase0-c0-2026-10-02.md.",
     },
     {
+        "name": "attribution::spawn_attribution_tap",
+        # 调用为裸函数路径(无前导点),须带模块路径锚定,避免命中声明行。
+        "pattern": r"event_bus::attribution::spawn_attribution_tap\(",
+        "status": "WIRED",  # ADR-200 D1:experience_loop 组合根启动(生产常驻 tap)
+        "note": "Subscription-side causal attribution tap (ADR-200 D1) started by the "
+                "chimera-cli composition root (W4-2 batch B). Regression of this "
+                "cross-module call site to zero is a FAIL on the next run (ratchet).",
+    },
+    {
         "name": "DecayEngine::parallel_batch",
         # `pub fn parallel_batch` decl has no leading dot; callers are bench-only.
         "pattern": r"\.parallel_batch\(",
