@@ -3,7 +3,7 @@
 //! v2.9.0-omega Task 1.13:提供类 `cargo doctor` 的环境诊断能力。
 //! Wave 2 Task 4:在原 5 维度基础上增加 LLM Provider 健康度检查。
 //!
-//! # 9 维度健康检查(SubTask 1.13.1 + Wave 2 Task 4 + WI-02 + M13)
+//! # 10 维度健康检查(SubTask 1.13.1 + Wave 2 Task 4 + WI-02 + M13 + WI-G12)
 //! 1. **配置文件**(Config File)— `omega.yaml` 路径存在且可解析
 //! 2. **Cargo.lock**(Dependency Lock)— 当前目录 `Cargo.lock` 存在(Rust 项目完整性)
 //! 3. **SQLite 数据库路径**(SQLite Path)— `repo_wiki.db_path` 父目录可写
@@ -13,6 +13,7 @@
 //! 7. **认证密钥**(Auth Keys)— 常见供应商 API key 环境变量自检(WI-02)
 //! 8. **SecCore 沙箱**(Sandbox)— 进程内沙箱可用性 + 命令分类在役验证(WI-02)
 //! 9. **SCC 缓存**(SCC Cache)— 组合根装配的 SccCache 统计快照健康度(M13 重路由)
+//! 10. **L3 存储三后端**(Storage Health)— scc/cmt/session-store 只读信号聚合(WI-G12)
 //!
 //! # 设计决策(WHY)
 //! - **不直接依赖 rusqlite**:`chimera-cli/Cargo.toml` 未声明 `rusqlite` 依赖
@@ -20,8 +21,8 @@
 //!   SQLite 检查降级为"路径有效性 + 父目录可写性"验证,满足 doctor 诊断需求。
 //! - **进程内 ephemeral 检查**:MCP/EventBus 检查创建临时实例验证可初始化,
 //!   不反映长生命周期 TUI 进程的真实状态(TUI 有独立 mesh + bus)。
-//! - **`--fix` 仅修复配置文件**:9 项中仅"配置文件缺失"可自动修复(生成默认 omega.yaml);
-//!   其余项(Cargo.lock / SQLite 路径 / MCP / EventBus / LLM Provider / 认证密钥 / 沙箱 / SCC 缓存)需用户手动处理。
+//! - **`--fix` 仅修复配置文件**:10 项中仅"配置文件缺失"可自动修复(生成默认 omega.yaml);
+//!   其余项(Cargo.lock / SQLite 路径 / MCP / EventBus / LLM Provider / 认证密钥 / 沙箱 / SCC 缓存 / L3 存储三后端)需用户手动处理。
 //! - **LLM 维**走独立 mock 探测(238ms sleep + 50/50 判定)而非调用 `llm::execute`,
 //!   避免 doctor → llm → dispatch → ... 链式回环;真实 mca-gateway 接入在后续 Task 完成。
 //! - **3s 超时**:`tokio::time::timeout` 包裹 LLM 探测,失败不阻塞其他 5 维度的渲染。
@@ -33,7 +34,7 @@ use nexus_contracts::command_validation::{Command, CommandPolicy, CommandValidat
 use seccore::command_validator::SecCoreCommandValidator;
 use seccore::Sandbox;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::{self, ChimeraConfig};
 use crate::output;
@@ -89,7 +90,7 @@ pub struct HealthSummary {
     pub total: usize,
 }
 
-/// 执行 doctor 子命令 — 9 维度健康检查（WI-02 增强: +认证密钥 / +沙箱;M13: +SCC 缓存）
+/// 执行 doctor 子命令 — 10 维度健康检查（WI-02 增强: +认证密钥 / +沙箱;M13: +SCC 缓存;WI-G12: +L3 存储三后端）
 ///
 /// `json` flag(Task 1.7):`true` 时输出 JSON envelope(完整 HealthReport)。
 /// `fix`(Task 1.13.4):`true` 时自动修复可修复项(当前仅配置文件缺失)。
@@ -101,26 +102,26 @@ pub async fn execute(cfg: &ChimeraConfig, json: bool, fix: bool) -> Result<()> {
     execute_with_ctx(&ctx, cfg, json, fix).await
 }
 
-/// doctor 子命令主体 — 9 探针经组合根共享 GQEP 执行器并行 gather(M12 / ADR-185 D3;
-/// M13 起 +SCC 缓存探针)
+/// doctor 子命令主体 — 10 探针经组合根共享 GQEP 执行器并行 gather(M12 / ADR-185 D3;
+/// M13 起 +SCC 缓存探针;WI-G12 起 +L3 存储三后端探针)
 ///
 /// ## 并行化决策(WHY GQEP 而非 tokio::join!)
 ///
-/// - **语义不变**:9 项检查内容/状态/汇总与串行版逐项一致(索引 tag 按注册序
+/// - **语义不变**:10 项检查内容/状态/汇总与串行版逐项一致(索引 tag 按注册序
 ///   还原,FuturesUnordered 完成序不保证输入序);仅时序由串行改并行
 /// - **零孤儿治理**:探针 future 全部经 QEEP `entangle` 包裹(单操作 5s 超时 +
 ///   OrphanGuard),比裸 `join!` 多双层超时防护,符合 §6.1 红线
 /// - **可观测**:gather 在共享总线发布 `GatherCompleted`(total/succeeded/failed),
 ///   TUI/审计可订阅;探针恒 `Ok` 返回(检查失败是结果而非错误),失败 tail 仅
-///   可能来自 gqep 超时——以 FAIL 占位兜底,报告恒 9 项
-/// - **可回滚**:单 commit revert 即恢复(M13 scc 探针同 commit 可独立 revert)
+///   可能来自 gqep 超时——以 FAIL 占位兜底,报告恒 10 项
+/// - **可回滚**:单 commit revert 即恢复(M13 scc 探针/WI-G12 storage_health 探针均同 commit 可独立 revert)
 pub async fn execute_with_ctx(
     ctx: &crate::composition::AppContext,
     cfg: &ChimeraConfig,
     json: bool,
     fix: bool,
 ) -> Result<()> {
-    tracing::info!(fix, "系统健康检查(9 维度, GQEP 并行 gather)");
+    tracing::info!(fix, "系统健康检查(10 维度, GQEP 并行 gather)");
 
     let checks = run_probes_parallel(ctx, cfg, fix).await;
     let probe_total = checks.len() as u32;
@@ -170,7 +171,7 @@ async fn run_probes_parallel(
     cfg: &ChimeraConfig,
     fix: bool,
 ) -> Vec<HealthCheck> {
-    const PROBE_COUNT: usize = 9;
+    const PROBE_COUNT: usize = 10;
 
     // cfg 以 owned clone 移入 future('static 约束);Clone 代价 = 一次配置结构拷贝,
     // 远小于 LLM 探针 238ms 睡眠——并行净收益不受影响。
@@ -178,8 +179,11 @@ async fn run_probes_parallel(
     // 组合根装配的共享缓存实例,而非探针内自建 ephemeral(那是装配态空转)。
     let cfg_owned = cfg.clone();
     let scc_owned = ctx.scc.clone();
+    // WI-G12 第 10 探针需要第二份 scc 句柄(Clone = Arc 引用计数,廉价)
+    let scc_owned_b = ctx.scc.clone();
 
-    // 探针注册序 = 报告输出序(与串行版一致,输出内容零变化;M13 起尾部追加 scc_cache)
+    // 探针注册序 = 报告输出序(与串行版一致,输出内容零变化;M13 起追加 scc_cache,
+    // WI-G12 追加 storage_health)
     let probes: Vec<gqep_executor::GqepFuture<(usize, HealthCheck)>> = vec![
         Box::pin(async move { Ok((0, check_config_file(fix).await)) }),
         Box::pin(async move { Ok((1, check_cargo_lock().await)) }),
@@ -190,6 +194,7 @@ async fn run_probes_parallel(
         Box::pin(async move { Ok((6, check_auth_keys())) }),
         Box::pin(async move { Ok((7, check_seccore())) }),
         Box::pin(async move { Ok((8, check_scc_cache(&scc_owned))) }),
+        Box::pin(async move { Ok((9, check_storage_health(&scc_owned_b))) }),
     ];
 
     let outcome = ctx.gqep.gather_collected(probes).await;
@@ -590,6 +595,100 @@ fn check_scc_cache(cache: &scc_cache::SccCache) -> HealthCheck {
     }
 }
 
+/// L3 存储三后端健康快照 — 纯类型（WI-G12;无 IO、可独立测试）
+///
+/// # 三后端只读信号
+/// - **scc**:组合根共享缓存 `stats()` 快照（条目数 / 累计访问）——在役即健康;
+/// - **cmt**:经验卡片库根目录就绪（`experience_loop::experience_db_path()` 父目录,
+///   与 L3 持久化入口同源路径）;
+/// - **session-store**:段数据目录就绪——锚点 = session-store crate 默认
+///   `StoreConfig::default().data_dir = "data/sessions"`（`session-store/src/types.rs`）;
+///   **chimera-cli 不持 session-store 直接依赖边**（零新增内部依赖边纪律）,
+///   故为同源字面锚点——session-store 若改默认值,须同批更新本锚点与测试。
+///   另:生产装配尚未构造 `CbmrWriter`（现测全库零生产构造点,WI-G11 读口已就绪待宿主接管）,
+///   缺席按"未启用/未初始化"记 Warn 而非 Fail（诚实登记,不虚构生产路径）。
+///
+/// 判定 = 纯函数:cmt 与 session 目录双就绪 → Ok;任一缺席 → Warn（未初始化/未启用,非故障）。
+/// probe 仅做 `Path::exists` 级静态检查（无 IO 阻塞语义、无 rusqlite 依赖）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StorageHealth {
+    /// scc 缓存条目数（stats() 只读快照）
+    pub scc_entries: usize,
+    /// scc 累计访问数
+    pub scc_accesses: u64,
+    /// cmt 经验卡片库根目录就绪
+    pub cmt_dir_ready: bool,
+    /// session-store 段数据目录就绪
+    pub session_dir_ready: bool,
+}
+
+impl StorageHealth {
+    /// 纯判定（三后端聚合;无 IO）
+    #[must_use]
+    pub fn verdict(&self) -> HealthStatus {
+        if self.cmt_dir_ready && self.session_dir_ready {
+            HealthStatus::Ok
+        } else {
+            HealthStatus::Warn
+        }
+    }
+
+    /// 人类可读消息（三后端逐项）
+    #[must_use]
+    pub fn message(&self) -> String {
+        format!(
+            "L3: scc 在役（条目 {} / 访问 {}）; cmt 经验库目录 {}; session-store 段目录 {}",
+            self.scc_entries,
+            self.scc_accesses,
+            if self.cmt_dir_ready {
+                "就绪"
+            } else {
+                "缺席（未初始化）"
+            },
+            if self.session_dir_ready {
+                "就绪"
+            } else {
+                "缺席（未启用/未初始化）"
+            },
+        )
+    }
+}
+
+/// 收集三后端就绪信号（目录参数注入以便测试;纯 `Path::exists` 静态检查）
+fn collect_storage_health(
+    cache: &scc_cache::SccCache,
+    cmt_root: &Path,
+    session_dir: &Path,
+) -> StorageHealth {
+    let stats = cache.stats();
+    StorageHealth {
+        scc_entries: stats.entry_count,
+        scc_accesses: cache.access_count(),
+        cmt_dir_ready: cmt_root.exists(),
+        session_dir_ready: session_dir.exists(),
+    }
+}
+
+/// 检查 10:L3 存储三后端（WI-G12）— scc（共享句柄统计）/ cmt（经验库目录）/
+/// session-store（段目录,锚点见 [`StorageHealth`] 注释）只读信号聚合
+///
+/// 只读:零变异、零事件发布;`Path::exists` 静态检查（无 IO 阻塞语义、无 rusqlite）。
+fn check_storage_health(cache: &scc_cache::SccCache) -> HealthCheck {
+    let cmt_root = crate::experience_loop::experience_db_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    // 锚点 = session-store 默认段目录（同源字面锚点,见 StorageHealth 注释）
+    let session_dir = PathBuf::from("data/sessions");
+    let health = collect_storage_health(cache, &cmt_root, &session_dir);
+    HealthCheck {
+        name: "storage_health",
+        description: "L3 存储三后端健康度",
+        status: health.verdict(),
+        message: health.message(),
+    }
+}
+
 /// 人类可读模式输出健康检查报告(SubTask 1.13.2)
 ///
 /// 格式:
@@ -706,17 +805,17 @@ mod tests {
         );
     }
 
-    /// 验证 `execute` 汇总 total = 9(确保 LLM / 沙箱 / SCC 维已纳入报告)。
+    /// 验证 `execute` 烟雾路径成功(汇总 total = 10:LLM / 沙箱 / SCC / L3 存储三后端已纳入报告)。
     #[tokio::test]
-    async fn test_execute_emits_nine_dimensions() {
+    async fn test_execute_emits_ten_dimensions() {
         // 调 execute (json=true 走最小路径,避免 stderr 输出污染测试)
         let cfg = ChimeraConfig::default();
         execute(&cfg, true, false)
             .await
             .expect("doctor execute 应成功");
-        // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 9 维检查
+        // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 10 维检查
         // 集成层在 tests/cli.rs::test_doctor_json_outputs_report_envelope
-        // 断言 `"total": 9` 以补充此处的覆盖。
+        // 断言 `"total": 10` 以补充此处的覆盖。
     }
 
     /// M13 / ADR-161 路径① 验收:第 9 探针 scc_cache 消费组合根共享缓存实例
@@ -745,14 +844,14 @@ mod tests {
         );
     }
 
-    /// M12 / ADR-185 D3 验收③(探针数 M13 起 8→9):并行 gather 路径产生
-    /// GatherCompleted(total=9) 事件
+    /// M12 / ADR-185 D3 验收③(探针数 M13 起 8→9;WI-G12 起 9→10):并行 gather 路径
+    /// 产生 GatherCompleted(total=10) 事件
     ///
-    /// 组合根共享 bus 订阅断言:9 探针经 gqep gather_collected 并行执行,
+    /// 组合根共享 bus 订阅断言:10 探针经 gqep gather_collected 并行执行,
     /// gqep 在 gather 完成时发布 GatherCompleted(total, succeeded, failed);
-    /// 探针 future 恒 Ok(检查失败是结果而非错误),故 succeeded 恒 = 9。
+    /// 探针 future 恒 Ok(检查失败是结果而非错误),故 succeeded 恒 = 10。
     #[tokio::test]
-    async fn test_execute_with_ctx_emits_gather_completed_with_nine_probes() {
+    async fn test_execute_with_ctx_emits_gather_completed_with_ten_probes() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
         // §4.4 反模式 3:subscribe 必须在 gather 调用之前同步调用
         let mut rx = ctx.bus.subscribe();
@@ -769,10 +868,93 @@ mod tests {
             event_bus::NexusEvent::GatherCompleted {
                 total, succeeded, ..
             } => {
-                assert_eq!(total, 9, "探针总数应为 9(M13 起 +scc_cache)");
-                assert_eq!(succeeded, 9, "探针恒 Ok,应全部成功");
+                assert_eq!(
+                    total, 10,
+                    "探针总数应为 10(M13 +scc_cache;WI-G12 +storage_health)"
+                );
+                assert_eq!(succeeded, 10, "探针恒 Ok,应全部成功");
             }
             other => panic!("期望 GatherCompleted,实际 {}", other.type_name()),
         }
+    }
+
+    // ============================================================
+    // WI-G12 — L3 存储三后端探针（StorageHealth 纯类型）
+    // ============================================================
+
+    /// 纯判定矩阵:双目录就绪 → Ok;任一缺席 → Warn（未初始化/未启用,非故障）
+    #[test]
+    fn storage_health_verdict_matrix() {
+        let base = StorageHealth {
+            scc_entries: 3,
+            scc_accesses: 9,
+            cmt_dir_ready: true,
+            session_dir_ready: true,
+        };
+        assert_eq!(base.verdict(), HealthStatus::Ok, "双就绪 → Ok");
+        assert_eq!(
+            StorageHealth {
+                cmt_dir_ready: false,
+                ..base.clone()
+            }
+            .verdict(),
+            HealthStatus::Warn,
+            "cmt 缺席 → Warn"
+        );
+        assert_eq!(
+            StorageHealth {
+                session_dir_ready: false,
+                ..base.clone()
+            }
+            .verdict(),
+            HealthStatus::Warn,
+            "session 缺席 → Warn"
+        );
+        // 消息包含三后端逐项信号
+        let msg = base.message();
+        assert!(msg.starts_with("L3:"), "message 前缀: {msg}");
+        assert!(msg.contains("scc 在役"), "{msg}");
+        assert!(msg.contains("cmt 经验库目录 就绪"), "{msg}");
+        assert!(msg.contains("session-store 段目录 就绪"), "{msg}");
+    }
+
+    /// 三后端集成:真实 scc 句柄 + 注入目录（tempdir）→ 信号逐项正确
+    #[test]
+    fn storage_health_collects_three_backend_signals() {
+        let cache = scc_cache::SccCache::new(scc_cache::SccConfig::new(), EventBus::new());
+        let dir = std::env::temp_dir().join(format!("doctor_storage_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("definitely-absent");
+
+        let health = collect_storage_health(&cache, &dir, &missing);
+        assert_eq!(health.scc_entries, 0, "装配初期 scc 空仓");
+        assert!(health.cmt_dir_ready, "注入目录存在 → cmt 就绪");
+        assert!(!health.session_dir_ready, "缺失目录 → session 缺席");
+        assert_eq!(health.verdict(), HealthStatus::Warn, "单缺席 → Warn");
+
+        let all_ready = collect_storage_health(&cache, &dir, &dir);
+        assert_eq!(all_ready.verdict(), HealthStatus::Ok, "双就绪 → Ok");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 探针壳:消费组合根共享 SccCache（装配态真实消费,非 ephemeral）
+    #[tokio::test]
+    async fn test_doctor_storage_health_probe_uses_assembled_cache() {
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        let check = check_storage_health(&ctx.scc);
+        assert_eq!(check.name, "storage_health");
+        assert_eq!(check.description, "L3 存储三后端健康度");
+        assert!(
+            matches!(check.status, HealthStatus::Ok | HealthStatus::Warn),
+            "缺席按 Warn 而非 Fail（未初始化非故障）,实际: {:?}",
+            check.status
+        );
+        assert!(
+            check.message.starts_with("L3:"),
+            "message: {}",
+            check.message
+        );
     }
 }
