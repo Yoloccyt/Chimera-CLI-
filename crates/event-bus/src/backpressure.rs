@@ -10,7 +10,7 @@
 //!
 //! # 实现说明
 //! 已实现双通道:broadcast + mpsc 旁路,2026-06-29。
-//! Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 14 类)在
+//! Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 16 类)在
 //! `EventBus::publish`/`publish_blocking` 中自动额外
 //! 投递到 mpsc 旁路通道(见 `bus.rs::is_critical_mpsc_event`)。订阅者通过
 //! `EventBus::subscribe_critical_events()` 获取 mpsc Receiver,确保在 broadcast

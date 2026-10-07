@@ -2,7 +2,7 @@
 # 语义：每行一个变体 + 实测证据。判据来自 scripts/check_event_ownership.py：
 #   prod_ctor=0 表示 crates/**/src 的生产作用域内没有 `NexusEvent::V { ... }` 构造点
 #   （`#[cfg(test)]` 与 tests/ 下的夹具不计入 —— event-bus 的 variant_count_test /
-#    shard.rs 测试工厂会构造全部 146 个变体，计入即等于永远全绿）。
+#    shard.rs 测试工厂会构造全部 152 个变体，计入即等于永远全绿）。
 # ⚠ 这不等于"该事件不可达"：NexusEvent 派生 Serialize/Deserialize(tag="type")，
 #   外部进程仍可经线帧反序列化物化任何变体。因此**不得**据本账本删事件契约，
 #   只能据它决定"要不要在本仓接一个 emit 点"。语义出处：ADR-188 决策 1 措辞边界。
@@ -25,4 +25,4 @@ VoteCastRequested  # HONEST-DEGRADE FC-A(CHANGELOG:61)：chimera-tui/app/event_l
 ClaimIssued  # v2.3 (b.1): 裁决权分离·Claim 契约已落 Wave 1;in-repo emit 生产者待 Wave 2-3(orchestrator/AdversarialReview)接线;经 wire 帧仍可物化;prod_ctor=0 test_ctor=1 consumers=-
 ClaimRetracted  # v2.3 (b.1): 裁决权分离·Declaim 撤回契约已落 Wave 1;生产者待 Wave 2-3;prod_ctor=0 test_ctor=1 consumers=-
 BlackboardEntry  # v2.3 (b.2): 黑板条目契约已落 Wave 1;写入侧落 MLC 索引属 Wave 3 转正;当前无生产态构造,经 wire 帧可物化;prod_ctor=0 test_ctor=1 consumers=-
-# total 151 variant(s): 135 owned / 16 without a production ctor
+# total 152 variant(s): 136 owned / 16 without a production ctor

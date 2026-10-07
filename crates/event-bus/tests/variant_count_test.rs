@@ -9,10 +9,10 @@
 //!    变体即编译错误。即使未来 severity() 被误加回通配符(本 M1 修复的回归),
 //!    这道锁依然拦住未登记的变体。
 //! 2. **计数锁** `test_variant_count_lock` — 样本清单实际构造的变体数必须
-//!    等于 `VARIANT_COUNT_LOCK`(151);样本与序数表交叉断言一一对应
+//!    等于 `VARIANT_COUNT_LOCK`(152);样本与序数表交叉断言一一对应
 //!    (清单漏登/重登即失败)。
 //! 3. **分级分布锁** `test_severity_distribution_lock` — severity() 的
-//!    Critical/Info/Normal 分布必须等于 20/11/120;并与 bus.rs
+//!    Critical/Info/Normal 分布必须等于 20/11/121;并与 bus.rs
 //!    `LANE_FORBIDDEN_SHARD` 的 20 个 Critical 名单双向互锁。
 //!
 //! # 维护规约(新增变体时必须同步修改)

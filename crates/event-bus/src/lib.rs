@@ -13,8 +13,8 @@
 //!
 //! # 核心职责
 //! - 提供类型安全的发布订阅(typed broadcast bus)
-//! - 定义 145 个 NexusEvent 跨层事件变体(2026-09-12 实测枚举,
-//!   v2.27.1 后新增 TuiChatHistoryReplaced),
+//! - 定义 152 个 NexusEvent 跨层事件变体(2026-09-12 实测枚举时点为 145,
+//!   2026-10-07 现测 152; v2.27.1 后新增 TuiChatHistoryReplaced),
 //!   修正 4 处依赖方向违规(Part A 分析)
 //! - 背压处理与慢消费者隔离,避免孤儿调用(架构红线)
 //! - MessagePack 序列化(ADR-004),支持跨进程投递
@@ -137,7 +137,7 @@ pub mod shadow_diff;
 /// + shard_worker 攒批汇入既有 broadcast。灰度开关:`EventBus::enable_sharding`。
 /// 状态(ADR-181 发现 1 订正;接线清单 2026-10-05 第三轮 T1.3 重测):PRODUCTION-WIRED
 /// —— cmt-tiering/efficiency-monitor/faae-router/gqep-executor/mlc-engine/nmc-encoder/
-/// osa-coordinator/scc-cache/omega-learner 九处运行时 opt-in `try_enable_sharding(...)`
+/// osa-coordinator/scc-cache/omega-learner 九文件十处运行时 opt-in `try_enable_sharding(...)`
 /// (无 tokio runtime 自动 Err 降级单流,幂等拒绝重复启用),非"未接线";旧述
 /// 「五处含 gsoe」已失实(gsoe 实测零调用)。
 /// 详见 [`shard::ShardedEventBus`]。
