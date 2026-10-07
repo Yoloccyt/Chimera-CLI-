@@ -2,7 +2,7 @@
 //! LAYER:    L9
 //! ROLE:     效率监控与告警 — 实时采集执行指标并触发告警
 //! BACKEND:  fs
-//! PRODUCERS: 21 AffinityCapabilityNegotiated,AsaIntervention,AssessmentUpdated,AuditFindingRaised,BudgetExceeded…
+//! PRODUCERS: 22 AffinityCapabilityNegotiated,AsaIntervention,AssessmentUpdated,AuditFindingRaised,BudgetExceeded…
 //! CONSUMERS: 1 chimera-cli
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END

@@ -2,7 +2,7 @@
 //! LAYER:    L1
 //! ROLE:     核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
 //! BACKEND:  fs
-//! PRODUCERS: 1 ClvSnapshotReported
+//! PRODUCERS: 2 ClvSnapshotReported,ComputePoolSaturated
 //! CONSUMERS: 23 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
 //! MATURITY: NOT-IMPL-CN
 //! CRATE-CONTRACT END

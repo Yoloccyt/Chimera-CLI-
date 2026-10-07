@@ -2,7 +2,7 @@
 //! LAYER:    L8
 //! ROLE:     对抗性议会 — 5 角色对抗性审议与决策治理
 //! BACKEND:  memory
-//! PRODUCERS: 19 AgentTaskCompleted,AgentTaskFailed,AhirtProbeCompleted,BudgetExceeded,CapabilityFrozen…
+//! PRODUCERS: 20 AgentTaskCompleted,AgentTaskFailed,AhirtProbeCompleted,BudgetExceeded,CapabilityFrozen…
 //! CONSUMERS: 2 chimera-cli,chimera-mas
 //! MATURITY: NOT-IMPL-CN|PLACEHOLDER-CN|SIMPLIFIED-CN
 //! CRATE-CONTRACT END

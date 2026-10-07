@@ -2,7 +2,7 @@
 //! LAYER:    L2
 //! ROLE:     四级潜在记忆引擎  L0-L3 神经形态记忆分级存储与检索
 //! BACKEND:  sqlite
-//! PRODUCERS: 4 GhostMemoryDetected,MemConStrategyAdjusted,MemoryMetricsReported,MemoryTiered
+//! PRODUCERS: 6 BlackboardEntry,GhostMemoryDetected,MemConStrategyAdjusted,MemoryMetricsReported,MemoryTiered…
 //! CONSUMERS: 1 chimera-cli
 //! MATURITY: PLACEHOLDER-CN
 //! CRATE-CONTRACT END
