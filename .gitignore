@@ -63,3 +63,8 @@ __pycache__/
 
 # lychee link checker cache
 .lycheecache
+
+# === NMC 模型资产 —— 二进制不入库（许可/体积;WI-C2/ADR-196 D4）===
+# 获取路径/SHA-256 清单见 assets/nmc/manifest.toml;
+# 下载/校验由 scripts/fetch_nmc_assets.{ps1,sh} 执行。
+assets/nmc/models/
