@@ -55,15 +55,25 @@ pub struct ExperienceCardStorage {
 
 impl ExperienceCardStorage {
     /// 创建内存数据库存储（测试/临时场景）
+    ///
+    /// WI-G15②:Connection::open 经 spawn_blocking 化（rusqlite 红线;原实现在
+    /// async 体内直调 open,被 G-78 命名扫描计入“异步构造”2 例——本批迁移后
+    /// `sqlite_blocking_allowlist.txt` 对应两行删除,只减不增）。
     pub async fn new_in_memory(hot_capacity: usize) -> Result<Self, CmtError> {
-        let conn =
-            Connection::open_in_memory().map_err(|e| CmtError::StorageError(e.to_string()))?;
+        let conn = tokio::task::spawn_blocking(Connection::open_in_memory)
+            .await
+            .map_err(|e| CmtError::StorageError(format!("open_in_memory 任务失败: {e}")))?
+            .map_err(|e| CmtError::StorageError(e.to_string()))?;
         Self::from_connection(conn, hot_capacity).await
     }
 
-    /// 创建文件数据库存储（生产持久化）
+    /// 创建文件数据库存储（生产持久化;WI-G15② 同 `new_in_memory`,open 入 spawn_blocking）
     pub async fn new(db_path: &str, hot_capacity: usize) -> Result<Self, CmtError> {
-        let conn = Connection::open(db_path).map_err(|e| CmtError::StorageError(e.to_string()))?;
+        let path = db_path.to_string();
+        let conn = tokio::task::spawn_blocking(move || Connection::open(&path))
+            .await
+            .map_err(|e| CmtError::StorageError(format!("open 任务失败: {e}")))?
+            .map_err(|e| CmtError::StorageError(e.to_string()))?;
         Self::from_connection(conn, hot_capacity).await
     }
 

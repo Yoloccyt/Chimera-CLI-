@@ -914,6 +914,16 @@ impl MlcEngine {
     }
 
     /// 按 Quest ID 查询关联的所有情节记忆(委托给 L1)
+    ///
+    /// # G-78 扫描假阳性复核注记（WI-G15③,2026-10-07）
+    /// `check_sqlite_blocking.py` 命名启发式会命中本方法体首行
+    ///（现 `:928`;原 `:863`——行号随批次漂移,台账同步更新）:
+    /// `l1.query_by_quest`（l1_episodic.rs）是**纯内存** `RwLock<EpisodicInner>`
+    /// 读（BTreeMap/HashMap 查表加 clone 返回）,**无 rusqlite/Connection**;
+    /// 按 `&self` 借用且非阻塞 DB——包 `spawn_blocking` 是反模式
+    ///（会把纯内存读推进阻塞池,徒增调度开销）。
+    /// 处置 = `scripts/sqlite_blocking_allowlist.txt` 逐行复核登记（附同款理由）;
+    /// 复核定性见 `docs/reports/cpu-plane-phase0-c0-2026-10-02.md`「假阳性」节;勿按扫描器提示“修复”。
     pub async fn recall_by_quest(&self, quest_id: &str) -> Result<Vec<MemoryEntry>, MlcError> {
         self.l1.query_by_quest(quest_id)
     }

@@ -2,6 +2,4 @@
 # Row = `<path>:<line>  # reason`. Take via:
 #   python scripts/check_sqlite_blocking.py --emit
 # Register each with a real justification; new DB-in-async calls must go through spawn_blocking instead.
-crates/cmt-tiering/src/experience_card_storage.rs:60  # baseline 2026-09-25
-crates/cmt-tiering/src/experience_card_storage.rs:66  # baseline 2026-09-25
-crates/mlc-engine/src/engine.rs:863  # SCANNER false-positive: L1 EpisodicMemory::query_by_quest (l1_episodic.rs:207) is an in-memory RwLock<EpisodicInner> read, no rusqlite/Connection
+crates/mlc-engine/src/engine.rs:928  # SCANNER false-positive (WI-G15③ 复核 2026-10-07,行号自 :863 漂移): L1 EpisodicMemory::query_by_quest (l1_episodic.rs:207) is an in-memory RwLock<EpisodicInner> read, no rusqlite/Connection; spawn_blocking would be the anti-pattern. In-code note at recall_by_quest.
