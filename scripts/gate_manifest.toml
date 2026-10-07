@@ -989,5 +989,14 @@ kind = "light"
 test_kind = "cross_crate"
 note = "分片总线热点事实与静默丢发门(第三轮 F-P3/F-A2):① 分片键 = FNV-1a(type_name) 与实例无关 ⇒ 最热类型恒独占 1/64 片(代码自陈),500K msg/s 门禁正是单热点片口径——本门冻结键文本标记 + DEFAULT_SHARD_COUNT=64/SHARD_CAPACITY=256 几何,改动者必须显式面对基线前提(边界:冻结的是文本标记非语义证明);② merged_total 无条件 fetch_add 使 sharded==merged 只证'入通道'不证送达(F-A2),`let _ = sender.send(` 全仓限 1 处且须邻近理据文本(第二处增殖/理据蒸发均判红);T1.1 落地后 JUSTIFICATION_TOKENS 收紧为 ADR- 引用。"
 
+[[gate]]
+id = "G-90"
+spec_ref = "v3.0 终局收敛版 §5.2 WI-F1 + v3.1 刷新版 §5-A1(2026-10-06 用户裁决解锁) + ADR-196 D5 治理空档"
+cmd = "{python} scripts/check_nexus_core_dep_freeze.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "nexus-core 最小依赖机器门(WI-F1):① 生产 [dependencies] 集合冻结,NEW/STALE 双向棘轮——L1 枢纽 crate 的依赖面是最小性论证的事实基座,增减都必须过人工评审;② workspace 继承校验:每条生产声明必须 `{ workspace = true }`,关闭 ADR-196 D5 实录的空档(grep 式检查只认 workspace=true 行,`foo = \"1.0\"` 外部版本钉死声明静默漏检);③ fail-closed 形态守卫:[dependencies.x] 子表/target 依赖表/点号键等解析器不建模的形态一律判红,不留静默旁路;④ dev-dependencies 不在冻结面(测试/bench 依赖不进生产图)。parser 刻意不复用 check_declared_dep_usage.parse_declared:其 dict 语义后写覆盖先写,实测会把 nexus-core 的 serde_json 生产声明(Cargo.toml:14)被 dev 段同名列(:48)吃掉(prod=14 而实际 15)。豁免路径:新增依赖须人工最小性/层向评审后在 scripts/nexus_core_dep_freeze.txt 登记并附 reason 注释,删依赖同批删清单行,禁止判红后无评审直改清单;--emit 重生成基线须人工复核 diff 防棘轮洗白。"
+
 
 

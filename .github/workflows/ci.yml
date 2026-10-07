@@ -141,6 +141,17 @@ jobs:
           python3 scripts/check_bus_shard_hotspot.py --selftest
           python3 scripts/check_bus_shard_hotspot.py
 
+      # WHY: nexus-core 最小依赖机器门(WI-F1,2026-10-06 用户裁决解锁)——L1 枢纽 crate
+      # 的生产依赖面是最小性论证的事实基座,本门把"集合不得无评审增减"升为机器判据
+      # (NEW/STALE 双向棘轮),同时校验全部生产声明走 workspace 继承,关闭 ADR-196 D5
+      # 实录的空档(grep 式检查只认 workspace=true 行,`foo = "1.0"` 外部版本钉死声明
+      # 静默漏检)。dev-dependencies 不在冻结面(测试/bench 依赖不进生产图)。
+      # 先 --selftest 证明门有牙再跑真实裁决;零 cargo、秒级。
+      - name: Nexus-core dependency freeze gate (G-90)
+        run: |
+          python3 scripts/check_nexus_core_dep_freeze.py --selftest
+          python3 scripts/check_nexus_core_dep_freeze.py
+
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
       # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期

@@ -1,0 +1,36 @@
+# nexus_core_dep_freeze.txt - nexus-core production dependency freeze baseline (G-90)
+# =============================================================================
+# Format: one production [dependencies] name per line
+#         (source: crates/nexus-core/Cargo.toml).
+#
+# Semantics (check_nexus_core_dep_freeze.py, two-way ratchet):
+#   - dep in tree but ABSENT from this file  -> FAIL (NEW; register with a
+#     reason comment AFTER human minimality / layer-direction review. Editing
+#     this list to silence a red without that review is forbidden.)
+#   - baseline line whose dep no longer exists -> FAIL (STALE; delete it in
+#     the same batch that removes the dependency)
+#
+# Exemption path: none by mechanism - every addition is a reviewed registration.
+# Regenerate with:
+#   python scripts/check_nexus_core_dep_freeze.py --emit > scripts/nexus_core_dep_freeze.txt
+# (then re-add this header block AND re-review the diff; a bulk regeneration
+# without diff review would launder unreviewed growth - see dep_edge_freeze.txt
+# discipline).
+#
+# Initial baseline: 2026-10-06, 15 production deps (all workspace-inherited;
+# dev-dependencies are not part of the frozen face).
+arc-swap
+async-trait
+chrono
+event-bus
+hex
+ndarray
+nexus-contracts
+rand
+rayon
+serde
+serde_json
+sha2
+thiserror
+tokio
+tracing
