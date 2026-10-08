@@ -942,7 +942,7 @@ cmd = "{python} scripts/check_write_sensitive_instrumentation.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "核验 tier-1 承诺写点(mlc L3/session-store 段/repo-wiki store/quest checkpoint/scc WAL/cmt warm,cold,ice/event-bus critical_sink/mcp-mesh WAL)源文件确引用 nexus_contracts::sensitive::scan,防插桩被无声摘除;tier-2 全量持久面随 Wave 2/3 接入后追加清单"
+note = "核验承诺写点(mlc L3/session-store 段/repo-wiki store/quest checkpoint/scc WAL/cmt warm,cold,ice/event-bus critical_sink/mcp-mesh WAL/mca session + v3.4 W5-1 R-1 tier-2 三处:cmt experience_card_storage、chimera-tui types、chimera-tui data/snapshot)源文件确引用 nexus_contracts::sensitive::scan,防插桩被无声摘除;现势 required=14(只增不减,清单与逐项口径见脚本内注释)。tier-2 全量实勘已完成(推翻 ADR-194 §3「mca-gateway 为唯一真实敏感文本面」,更正见 ADR-194 §3.2);等效覆盖/表级豁免证据链已入脚本注释区。仍待 ADR:将本门从「文件级字符串存在性」升格为「入口级断言」(清单条目携带函数名)"
 
 [[gate]]
 id = "G-85"

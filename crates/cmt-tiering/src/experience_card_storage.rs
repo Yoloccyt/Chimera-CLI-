@@ -21,6 +21,8 @@
 //!   （Connection 非 Sync，Mutex 短临界区在 spawn_blocking 闭包内同步执行）
 //! - **红线 R8**: 三因子 Top-K 用 `select_nth_unstable_by`（O(n)），禁 `sort_by`
 //! - **ADR-004**: metadata / 证据载荷用 MessagePack（rmp-serde）紧凑序列化
+//! - **v2.3 §(b.5)**: 训练证据落盘前经 `nexus_contracts::sensitive::scan` 拦截
+//!   硬敏感载荷（`token_evidence` 表携带工具调用入参与执行结果原文）
 
 use std::sync::{Arc, Mutex};
 
@@ -30,11 +32,44 @@ use nexus_contracts::experience_card::{ExecutionStatus, ThreeFactorScore};
 use nexus_contracts::token_evidence::TokenLedgerEntry;
 use nexus_contracts::{AtomicOperator, ExperienceCard};
 use rusqlite::{params, Connection};
+use tracing::warn;
 
 use crate::error::CmtError;
 
 /// 热缓存默认容量
 const DEFAULT_HOT_CAPACITY: usize = 256;
+
+/// v2.3 §(b.5) 落盘扫描策略：只拦截硬载荷（私钥 PEM / 云凭证 / 服务令牌 = `Block`），
+/// 高熵串与键名启发式降为 `Pass` 防误报。
+///
+/// WHY 与本 crate `ice.rs:78-82`、`repo-wiki/src/store.rs:342-346` 逐字同口径：
+/// 误报会让正常工具证据被无声丢弃，三份写面共用一套判定才可预期。
+fn evidence_scan_policy() -> nexus_contracts::sensitive::ScanPolicy {
+    nexus_contracts::sensitive::ScanPolicy {
+        on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        ..Default::default()
+    }
+}
+
+/// 提取待落盘条目的自由文本面（供扫描）。
+///
+/// WHY 只取 `tool_calls`：[`TokenLedgerEntry`] 其余字段是 ID / 枚举 / 数值
+/// （`nexus-contracts/src/token_evidence.rs:74-96`），而 `arguments`（JSON 字符串
+/// 形态，L0 不解析）与 `result`（执行结果文本）是用户与模型可控原文，也是
+/// 唯一可能夹带凭证、私钥的落盘面。
+fn evidence_scan_text(entry: &TokenLedgerEntry) -> String {
+    let mut text = String::new();
+    for tc in &entry.tool_calls {
+        text.push_str(&tc.tool_name);
+        text.push('\n');
+        text.push_str(&tc.arguments);
+        text.push('\n');
+        text.push_str(&tc.result);
+        text.push('\n');
+    }
+    text
+}
 
 /// 高分卡片入热缓存阈值（score > 此值必入缓存）
 const HOT_CACHE_SCORE_THRESHOLD: f32 = 0.7;
@@ -460,19 +495,35 @@ impl ExperienceCardStorage {
             return Ok(0);
         }
         // 序列化为 MessagePack 载荷（spawn_blocking 外准备，避免闭包借用）
-        let payloads: Vec<(String, String, i64, Vec<u8>)> = entries
-            .iter()
-            .map(|e| {
-                let payload =
-                    rmp_serde::to_vec(e).map_err(|err| CmtError::StorageError(err.to_string()))?;
-                Ok((
-                    e.entry_id.to_string(),
-                    e.session_id.to_string(),
-                    e.turn_id as i64,
-                    payload,
-                ))
-            })
-            .collect::<Result<Vec<_>, CmtError>>()?;
+        // v2.3 §(b.5) tier-2：工具调用原文落盘前扫描，命中硬敏感载荷的条目
+        // **逐条跳过**，其余照常落盘（跳过数经 warn 与返回值可观测）。
+        // WHY 逐条跳过而非整批拒绝：`token_evidence` 各行相互独立——本函数无事务
+        // 包裹，`ON CONFLICT DO NOTHING` 已使「部分落盘」成为既有语义；整批拒绝会让
+        // 一条污染条目抹掉整个会话的训练证据，违背 Ω₈ 证据完整性。
+        let scan_policy = evidence_scan_policy();
+        let mut payloads = Vec::with_capacity(entries.len());
+        let mut skipped = 0usize;
+        for e in entries {
+            if nexus_contracts::sensitive::scan(&evidence_scan_text(e), &scan_policy).is_blocked() {
+                skipped += 1;
+                continue;
+            }
+            let payload =
+                rmp_serde::to_vec(e).map_err(|err| CmtError::StorageError(err.to_string()))?;
+            payloads.push((
+                e.entry_id.to_string(),
+                e.session_id.to_string(),
+                e.turn_id as i64,
+                payload,
+            ));
+        }
+        if skipped > 0 {
+            warn!(
+                skipped,
+                total = entries.len(),
+                "token_evidence 落盘跳过含敏感硬载荷的训练证据条目(v2.3 §(b.5) tier-2)"
+            );
+        }
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -862,6 +913,97 @@ mod tests {
             .expect("重复落盘");
         assert_eq!(again, 0, "重复落盘应 DO NOTHING");
         assert_eq!(storage.evidence_count().await.expect("查询成功"), 2);
+    }
+
+    /// v2.3 §(b.5) tier-2（W5-1 R-1）：工具调用原文含私钥 PEM 的训练证据必须
+    /// 跳过落盘，同批其余条目照常落盘。
+    ///
+    /// WHY 分三步断言而非一次混批：本 crate 无证据回读 API，按集合拆开才能
+    /// 钉住“被拒的到底是哪一条”（仅泄漏项应落 0 条、仅良性项应落 1 条、
+    /// 混批只落良性项）。
+    #[tokio::test]
+    async fn store_evidence_batch_skips_sensitive_entry() {
+        let storage = ExperienceCardStorage::new_in_memory(16)
+            .await
+            .expect("创建成功");
+        let leaky = TokenLedgerEntry::new(
+            "leak-1",
+            0,
+            "s1",
+            "i1",
+            vec![1],
+            vec![2],
+            vec![0.5],
+            vec![true],
+            "v1",
+            vec![nexus_contracts::token_evidence::ToolCallRecord::new(
+                "bash",
+                "{\"cmd\":\"cat ~/.ssh/id_rsa\"}",
+                "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n",
+                7,
+            )],
+            None,
+            1_700_000_002_000,
+        );
+        let benign = TokenLedgerEntry::new(
+            "ok-1",
+            1,
+            "s1",
+            "i1",
+            vec![1],
+            vec![2],
+            vec![0.5],
+            vec![true],
+            "v1",
+            vec![nexus_contracts::token_evidence::ToolCallRecord::new(
+                "read_file",
+                "{\"path\":\"src/main.rs\"}",
+                "fn main() {}",
+                3,
+            )],
+            None,
+            1_700_000_003_000,
+        );
+
+        // 1) 仅含敏感原文的条目：一条也不得落盘
+        assert_eq!(
+            storage
+                .store_evidence_batch(std::slice::from_ref(&leaky))
+                .await
+                .expect("落盘成功"),
+            0,
+            "含私钥 PEM 的工具结果应被跳过"
+        );
+        assert_eq!(
+            storage.evidence_count().await.expect("查询成功"),
+            0,
+            "被跳过的条目不得以“残迹”形态落盘"
+        );
+
+        // 2) 良性条目：不得误拦
+        assert_eq!(
+            storage
+                .store_evidence_batch(std::slice::from_ref(&benign))
+                .await
+                .expect("落盘成功"),
+            1,
+            "良性工具证据应正常落盘"
+        );
+
+        // 3) 混批：逐条跳过而非整批拒绝（本表无事务包裹，部分落盘是既有语义）
+        assert_eq!(
+            storage
+                .store_evidence_batch(&[leaky, benign])
+                .await
+                .expect("落盘成功"),
+            0,
+            "良性条目已在第 2 步落盘→DO NOTHING"
+        );
+        assert_eq!(
+            storage.evidence_count().await.expect("查询成功"),
+            1,
+            "跳过后库内仅保留良性条目"
+        );
     }
 
     #[tokio::test]

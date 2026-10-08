@@ -571,6 +571,14 @@ impl DataSnapshot {
                 csv_escape(status)
             ));
         }
+        // v2.3 §(b.5) tier-2:导出文件是用户主动生成的“最易外传”自由文本出口
+        // (`Quest.title` 为人读文本),命中硬敏感载荷则拒写。路径与 JSON 导出一致。
+        if nexus_contracts::sensitive::scan(&wtr, &crate::types::persist_scan_policy()).is_blocked()
+        {
+            return Err(TuiError::SensitiveContent {
+                detail: "Quest 导出(CSV)含敏感硬载荷,拒写导出文件".into(),
+            });
+        }
         std::fs::write(path, wtr).map_err(|e| TuiError::ConfigError {
             detail: format!("CSV write failed: {e}"),
         })
@@ -581,6 +589,15 @@ impl DataSnapshot {
             serde_json::to_string_pretty(&self.quest_list).map_err(|e| TuiError::ConfigError {
                 detail: format!("JSON serialize failed: {e}"),
             })?;
+        // v2.3 §(b.5) tier-2:整只 `quest_list` 含 `Task.description`(自然语言),
+        // 与 CSV 导出同口径扫描后拒写。
+        if nexus_contracts::sensitive::scan(&json, &crate::types::persist_scan_policy())
+            .is_blocked()
+        {
+            return Err(TuiError::SensitiveContent {
+                detail: "Quest 导出(JSON)含敏感硬载荷,拒写导出文件".into(),
+            });
+        }
         std::fs::write(path, json).map_err(|e| TuiError::ConfigError {
             detail: format!("JSON write failed: {e}"),
         })

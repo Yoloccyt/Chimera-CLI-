@@ -1341,6 +1341,20 @@ pub struct ParliamentState {
     pub strategy_cap: Option<StrategyCapState>,
 }
 
+/// v2.3 §(b.5) 持久面落盘扫描策略：只拦截硬载荷（私钥 PEM / 云凭证 / 服务令牌
+/// = `Block`），高熵串与键名启发式降为 `Pass` 防误报。
+///
+/// WHY 单点定义：本 crate 两处持久面（`TuiState::save_to_file` 与
+/// `DataSnapshot::export_quests_*`）共用一套判定，口径与
+/// `cmt-tiering/src/ice.rs`、`repo-wiki/src/store.rs` 逐字一致，避免 triage 分歧。
+pub(crate) fn persist_scan_policy() -> nexus_contracts::sensitive::ScanPolicy {
+    nexus_contracts::sensitive::ScanPolicy {
+        on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        ..Default::default()
+    }
+}
+
 impl TuiState {
     /// 创建新的初始状态(默认 Quest 面板,运行中)
     pub fn new() -> Self {
@@ -1437,14 +1451,33 @@ impl TuiState {
     ///
     /// WHY 只保存布局字段:运行时数据(quest_list/latest_events/metrics)由
     /// DataPipeline 从 event-bus 重新填充,无需持久化。
+    ///
+    /// ⚠ 上述“只保存布局字段”与实现不一致：本函数 `serde_yaml::to_string(self)`
+    /// 序列化**整只**状态（`input_history`/`history_draft`/`input_buffer`/`quest_list`/
+    /// `latest_events`/`status_message`/`filter_keyword` 均无 `serde(skip)`，仅
+    /// `help_context` 有）。这些运行字段含用户输入与会话原文，故本函数必须做
+    /// 落盘前扫描（下行）。字段裁剪属行为变更（会去掉跨会话历史回读能力），
+    /// 已在 v3.4 方案 D-4 登记待裁决，本轮不动。
     pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), TuiError> {
-        // 创建父目录（最佳努力,目录已存在时忽略错误）
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
         let yaml = serde_yaml::to_string(self).map_err(|e| TuiError::ConfigError {
             detail: format!("YAML serialize failed: {e}"),
         })?;
+        // v2.3 §(b.5) tier-2:状态文件携带用户输入与会话事件原文(退出时一次性
+        // 写入,非每帧热路径),命中硬敏感载荷则**整份拒写**。
+        // WHY 整份拒写而非部分脱敏:YAML 是单一文档,`redact()` 会把空白归一为
+        // 单空格从而压平多行会话内容;拒写保留既有文件且由调用方 warn,
+        // 不会把敏感值写进家目录。
+        if nexus_contracts::sensitive::scan(&yaml, &persist_scan_policy()).is_blocked() {
+            return Err(TuiError::SensitiveContent {
+                detail: "TuiState 含敏感硬载荷(私钥/凭证/令牌),拒写状态文件(既有文件保持不变)"
+                    .into(),
+            });
+        }
+        // 创建父目录（最佳努力,目录已存在时忽略错误）
+        // WHY 在扫描之后:拒写路径不应留下建目录副作用
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
         std::fs::write(path, yaml).map_err(|e| TuiError::ConfigError {
             detail: format!("write state file failed: {e}"),
         })?;
@@ -2207,9 +2240,40 @@ mod state_persistence_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tui_state.yaml");
         std::fs::write(&path, "{{{ invalid yaml").unwrap();
-
         let state = TuiState::load_from_file(&path);
         assert!(state.running);
         assert_eq!(state.layout_mode, LayoutMode::DualPane);
+    }
+
+    /// v2.3 §(b.5) tier-2（W5-1 R-1）：状态文件含硬敏感载荷时整份拒写。
+    ///
+    /// WHY 断“文件不存在 + 父目录不存在”：拒写路径既不该落盘敏感值，也不该
+    /// 留下建目录副作用。反向对照（清空敏感输入后同一状态可存）证明守卫只拦
+    /// 硬载荷，不会把正常状态持久化整体打断。
+    ///
+    /// 本测试同时钉住一个事实：`save_to_file` 写的是整只状态（含 `input_history`
+    /// 等运行字段），而 `load_from_file` 只恢复视图字段——即“写多读少”，落盘
+    /// 即暂露面（v3.4 方案 D-4 已登记字段裁剪待裁决）。
+    #[test]
+    fn test_save_refuses_sensitive_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("tui_state.yaml");
+        let mut state = TuiState::new();
+        state.input_history.push_back(
+            "cat ~/.ssh/id_rsa 输出 -----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN".to_string(),
+        );
+
+        let err = state.save_to_file(&path).unwrap_err();
+        assert!(
+            matches!(err, TuiError::SensitiveContent { .. }),
+            "应报 SensitiveContent，实测 {err:?}"
+        );
+        assert!(!path.exists(), "拒写不得留下状态文件");
+        assert!(!path.parent().unwrap().exists(), "拒写不得留下建目录副作用");
+
+        // 反向对照：同一良性状态可正常落盘
+        state.input_history.clear();
+        state.save_to_file(&path).expect("良性状态应可保存");
+        assert!(path.exists());
     }
 }
