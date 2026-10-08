@@ -2253,7 +2253,7 @@ mod state_persistence_tests {
     ///
     /// 本测试同时钉住一个事实：`save_to_file` 写的是整只状态（含 `input_history`
     /// 等运行字段），而 `load_from_file` 只恢复视图字段——即“写多读少”，落盘
-    /// 即暂露面（v3.4 方案 D-4 已登记字段裁剪待裁决）。
+    /// 即暴露面（v3.4 方案 D-4 已登记字段裁剪待裁决）。
     #[test]
     fn test_save_refuses_sensitive_state() {
         let dir = tempfile::tempdir().unwrap();
