@@ -1157,15 +1157,15 @@ fn test_agent_spawn_parallel_creates_two_agents() {
 
 // === Task 1.13: chimera doctor 子命令集成测试(SubTask 1.13.6)===
 //
-// 验证 doctor 命令 10 维度健康检查(config / cargo_lock / sqlite / mcp / event_bus /
-// llm_provider / auth_keys / seccore / scc_cache / storage_health)。
-// Wave 2 Task 4:LLM Provider 维;WI-02:+认证密钥/+沙箱;M13:+SCC 缓存;WI-G12:+L3 存储三后端。
+// 验证 doctor 命令 11 维度健康检查(config / cargo_lock / sqlite / mcp / event_bus /
+// llm_provider / auth_keys / seccore / scc_cache / storage_health / model_asset_health)。
+// Wave 2 Task 4:LLM Provider 维;WI-02:+认证密钥/+沙箱;M13:+SCC 缓存;WI-G12:+L3 存储三后端;W5-1 R-2:+模型资产面。
 // 测试环境配置文件可能缺失(WARN),但不应 FAIL 到退出码非 0。
 
-/// 测试 `chimera doctor` 成功执行 10 维度健康检查(SubTask 1.13.2 + Wave 2 Task 4)
+/// 测试 `chimera doctor` 成功执行 11 维度健康检查(SubTask 1.13.2 + Wave 2 Task 4)
 ///
 /// 即使配置文件缺失(WARN),doctor 命令仍返回成功(退出码 0)。
-/// 输出包含 10 项检查结果 + 汇总统计。
+/// 输出包含 11 项检查结果 + 汇总统计。
 #[test]
 fn test_doctor_reports_all_probes_and_summary() {
     let bin = env!("CARGO_BIN_EXE_chimera");
@@ -1239,15 +1239,21 @@ fn test_doctor_reports_all_probes_and_summary() {
         "stderr 应包含 L3 存储三后端检查项(WI-G12),实际 stderr: {}",
         stderr
     );
-    // 汇总统计(共 10 项,WI-02 + M13 + WI-G12)
+    // W5-1 R-2:第 11 维 模型资产面（NMC 多模态）
+    assert!(
+        stderr.contains("模型资产面(NMC 多模态)"),
+        "stderr 应包含模型资产面检查项(W5-1 R-2),实际 stderr: {}",
+        stderr
+    );
+    // 汇总统计(共 11 项,WI-02 + M13 + WI-G12 + W5-1 R-2)
     assert!(
         stderr.contains("汇总"),
         "stderr 应包含汇总统计,实际 stderr: {}",
         stderr
     );
     assert!(
-        stderr.contains("共 10 项"),
-        "stderr 应包含 '共 10 项' 汇总,实际 stderr: {}",
+        stderr.contains("共 11 项"),
+        "stderr 应包含 '共 11 项' 汇总,实际 stderr: {}",
         stderr
     );
 }
@@ -1286,8 +1292,8 @@ fn test_doctor_json_outputs_report_envelope() {
         stdout
     );
     assert!(
-        stdout.contains("\"total\": 10"),
-        "stdout 应包含 total: 10(10 项检查,WI-02: +认证密钥 / +沙箱;M13: +SCC 缓存;WI-G12: +L3 存储三后端),实际: {}",
+        stdout.contains("\"total\": 11"),
+        "stdout 应包含 total: 11(11 项检查,WI-02: +认证密钥 / +沙箱;M13: +SCC 缓存;WI-G12: +L3 存储三后端;W5-1 R-2: +模型资产面),实际: {}",
         stdout
     );
 }

@@ -3,7 +3,7 @@
 //! v2.9.0-omega Task 1.13:提供类 `cargo doctor` 的环境诊断能力。
 //! Wave 2 Task 4:在原 5 维度基础上增加 LLM Provider 健康度检查。
 //!
-//! # 10 维度健康检查(SubTask 1.13.1 + Wave 2 Task 4 + WI-02 + M13 + WI-G12)
+//! # 11 维度健康检查(SubTask 1.13.1 + Wave 2 Task 4 + WI-02 + M13 + WI-G12 + W5-1 R-2)
 //! 1. **配置文件**(Config File)— `omega.yaml` 路径存在且可解析
 //! 2. **Cargo.lock**(Dependency Lock)— 当前目录 `Cargo.lock` 存在(Rust 项目完整性)
 //! 3. **SQLite 数据库路径**(SQLite Path)— `repo_wiki.db_path` 父目录可写
@@ -14,6 +14,7 @@
 //! 8. **SecCore 沙箱**(Sandbox)— 进程内沙箱可用性 + 命令分类在役验证(WI-02)
 //! 9. **SCC 缓存**(SCC Cache)— 组合根装配的 SccCache 统计快照健康度(M13 重路由)
 //! 10. **L3 存储三后端**(Storage Health)— scc/cmt/session-store 只读信号聚合(WI-G12)
+//! 11. **模型资产面**(Model Asset Health)— NMC 多模态 ONNX 资产就绪度(W5-1 R-2 / ADR-196 V6)
 //!
 //! # 设计决策(WHY)
 //! - **不直接依赖 rusqlite**:`chimera-cli/Cargo.toml` 未声明 `rusqlite` 依赖
@@ -21,8 +22,8 @@
 //!   SQLite 检查降级为"路径有效性 + 父目录可写性"验证,满足 doctor 诊断需求。
 //! - **进程内 ephemeral 检查**:MCP/EventBus 检查创建临时实例验证可初始化,
 //!   不反映长生命周期 TUI 进程的真实状态(TUI 有独立 mesh + bus)。
-//! - **`--fix` 仅修复配置文件**:10 项中仅"配置文件缺失"可自动修复(生成默认 omega.yaml);
-//!   其余项(Cargo.lock / SQLite 路径 / MCP / EventBus / LLM Provider / 认证密钥 / 沙箱 / SCC 缓存 / L3 存储三后端)需用户手动处理。
+//! - **`--fix` 仅修复配置文件**:11 项中仅"配置文件缺失"可自动修复(生成默认 omega.yaml);
+//!   其余项(Cargo.lock / SQLite 路径 / MCP / EventBus / LLM Provider / 认证密钥 / 沙箱 / SCC 缓存 / L3 存储三后端 / 模型资产面)需用户手动处理。
 //! - **LLM 维**走独立 mock 探测(238ms sleep + 50/50 判定)而非调用 `llm::execute`,
 //!   避免 doctor → llm → dispatch → ... 链式回环;真实 mca-gateway 接入在后续 Task 完成。
 //! - **3s 超时**:`tokio::time::timeout` 包裹 LLM 探测,失败不阻塞其他 5 维度的渲染。
@@ -90,7 +91,7 @@ pub struct HealthSummary {
     pub total: usize,
 }
 
-/// 执行 doctor 子命令 — 10 维度健康检查（WI-02 增强: +认证密钥 / +沙箱;M13: +SCC 缓存;WI-G12: +L3 存储三后端）
+/// 执行 doctor 子命令 — 11 维度健康检查（WI-02 增强: +认证密钥 / +沙箱;M13: +SCC 缓存;WI-G12: +L3 存储三后端;W5-1 R-2: +模型资产面）
 ///
 /// `json` flag(Task 1.7):`true` 时输出 JSON envelope(完整 HealthReport)。
 /// `fix`(Task 1.13.4):`true` 时自动修复可修复项(当前仅配置文件缺失)。
@@ -102,18 +103,18 @@ pub async fn execute(cfg: &ChimeraConfig, json: bool, fix: bool) -> Result<()> {
     execute_with_ctx(&ctx, cfg, json, fix).await
 }
 
-/// doctor 子命令主体 — 10 探针经组合根共享 GQEP 执行器并行 gather(M12 / ADR-185 D3;
-/// M13 起 +SCC 缓存探针;WI-G12 起 +L3 存储三后端探针)
+/// doctor 子命令主体 — 11 探针经组合根共享 GQEP 执行器并行 gather(M12 / ADR-185 D3;
+/// M13 起 +SCC 缓存探针;WI-G12 起 +L3 存储三后端探针;W5-1 R-2 起 +模型资产面探针)
 ///
 /// ## 并行化决策(WHY GQEP 而非 tokio::join!)
 ///
-/// - **语义不变**:10 项检查内容/状态/汇总与串行版逐项一致(索引 tag 按注册序
+/// - **语义不变**:11 项检查内容/状态/汇总与串行版逐项一致(索引 tag 按注册序
 ///   还原,FuturesUnordered 完成序不保证输入序);仅时序由串行改并行
 /// - **零孤儿治理**:探针 future 全部经 QEEP `entangle` 包裹(单操作 5s 超时 +
 ///   OrphanGuard),比裸 `join!` 多双层超时防护,符合 §6.1 红线
 /// - **可观测**:gather 在共享总线发布 `GatherCompleted`(total/succeeded/failed),
 ///   TUI/审计可订阅;探针恒 `Ok` 返回(检查失败是结果而非错误),失败 tail 仅
-///   可能来自 gqep 超时——以 FAIL 占位兜底,报告恒 10 项
+///   可能来自 gqep 超时——以 FAIL 占位兜底,报告恒 11 项
 /// - **可回滚**:单 commit revert 即恢复(M13 scc 探针/WI-G12 storage_health 探针均同 commit 可独立 revert)
 pub async fn execute_with_ctx(
     ctx: &crate::composition::AppContext,
@@ -121,7 +122,7 @@ pub async fn execute_with_ctx(
     json: bool,
     fix: bool,
 ) -> Result<()> {
-    tracing::info!(fix, "系统健康检查(10 维度, GQEP 并行 gather)");
+    tracing::info!(fix, "系统健康检查(11 维度, GQEP 并行 gather)");
 
     let checks = run_probes_parallel(ctx, cfg, fix).await;
     let probe_total = checks.len() as u32;
@@ -171,7 +172,7 @@ async fn run_probes_parallel(
     cfg: &ChimeraConfig,
     fix: bool,
 ) -> Vec<HealthCheck> {
-    const PROBE_COUNT: usize = 10;
+    const PROBE_COUNT: usize = 11;
 
     // cfg 以 owned clone 移入 future('static 约束);Clone 代价 = 一次配置结构拷贝,
     // 远小于 LLM 探针 238ms 睡眠——并行净收益不受影响。
@@ -183,7 +184,7 @@ async fn run_probes_parallel(
     let scc_owned_b = ctx.scc.clone();
 
     // 探针注册序 = 报告输出序(与串行版一致,输出内容零变化;M13 起追加 scc_cache,
-    // WI-G12 追加 storage_health)
+    // WI-G12 追加 storage_health,W5-1 R-2 追加 model_asset_health)
     let probes: Vec<gqep_executor::GqepFuture<(usize, HealthCheck)>> = vec![
         Box::pin(async move { Ok((0, check_config_file(fix).await)) }),
         Box::pin(async move { Ok((1, check_cargo_lock().await)) }),
@@ -195,6 +196,7 @@ async fn run_probes_parallel(
         Box::pin(async move { Ok((7, check_seccore())) }),
         Box::pin(async move { Ok((8, check_scc_cache(&scc_owned))) }),
         Box::pin(async move { Ok((9, check_storage_health(&scc_owned_b))) }),
+        Box::pin(async move { Ok((10, check_model_assets())) }),
     ];
 
     let outcome = ctx.gqep.gather_collected(probes).await;
@@ -689,6 +691,86 @@ fn check_storage_health(cache: &scc_cache::SccCache) -> HealthCheck {
     }
 }
 
+/// NMC 多模态资产目录约定落点（与 `scripts/fetch_nmc_assets.{ps1,sh}` 的
+/// `$TargetDir`/`TARGET_DIR` 默认值逐字一致，由
+/// `model_asset_paths_match_fetch_scripts` 测每仓钉住，防两处漂移）。
+const NMC_ASSET_DIR: &str = "assets/nmc/models";
+/// NMC 资产清单（模型名/期望 SHA-256 的登记表，同样来 fetch 脚本默认）。
+const NMC_MANIFEST_PATH: &str = "assets/nmc/manifest.toml";
+
+/// 检查 11:模型资产面（ADR-196 V6，WI-R2）— NMC 多模态 ONNX 资产就绪度
+///
+/// **语义硬约束（V6 原文判据）**:资产缺席 = Warn「未启用」，**不得**判 Error/Fail。
+/// 依据：`nmc-encoder` 的 `NmcConfig::model_dir` 默认是**空串**即“未启用 ONNX
+/// 推理”，image/video/audio 三感知器均以 `config.model_dir.is_empty()` 判
+/// `backend = None` 并按设计降级——所以“未下载资产”是受支持的运行形态，不是故障。
+///
+/// WHY 只查约定目录而不读 `NmcConfig`:chimera-cli **不依赖** nmc-encoder
+/// （现核 Cargo.toml 无该边），引入依赖去取默认 `model_dir` 会新增一条
+/// L10→L2 内部依赖边（违 G-33 零新增边）;故与第 10 探针同构，只做
+/// `Path::exists` 静态检查（零变异、零事件发布、无 rusqlite）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelAssetHealth {
+    /// NMC 资产目录就绪（存在 = 已 fetch）
+    pub nmc_asset_dir_ready: bool,
+    /// NMC 清单在位（供诊断：区分“从未 fetch”与“清了目录忘删清单”）
+    pub manifest_present: bool,
+}
+
+impl ModelAssetHealth {
+    /// 纯判定（无 IO）:目录就绪 → Ok;未就位 → Warn（未启用，非故障）
+    #[must_use]
+    pub fn verdict(&self) -> HealthStatus {
+        if self.nmc_asset_dir_ready {
+            HealthStatus::Ok
+        } else {
+            HealthStatus::Warn
+        }
+    }
+
+    /// 人读文案:未启用语义明写，并给出官方获取路径与“仍需显式配 model_dir”的事实
+    #[must_use]
+    pub fn message(&self) -> String {
+        if self.nmc_asset_dir_ready {
+            format!(
+                "NMC 资产目录已就位({NMC_ASSET_DIR});真实多模态推理仍需显式配置 nmc-encoder 的 `model_dir`（默认空 = 降级路径）"
+            )
+        } else {
+            let manifest = if self.manifest_present {
+                "清单在位"
+            } else {
+                "清单缺失"
+            };
+            format!(
+                "NMC 多模态资产未就位({NMC_ASSET_DIR};{manifest})— 未启用、非故障;获取:scripts/fetch_nmc_assets.{{ps1,sh}}（默认 dry-run）"
+            )
+        }
+    }
+}
+
+/// 收集模型资产面信号（路径参数注入以便测试;纯 `Path::exists` 静态检查）
+fn collect_model_asset_health(asset_dir: &Path, manifest_path: &Path) -> ModelAssetHealth {
+    ModelAssetHealth {
+        nmc_asset_dir_ready: asset_dir.exists(),
+        manifest_present: manifest_path.exists(),
+    }
+}
+
+/// 检查 11 入口:按约定路径采集模型资产面信号
+///
+/// 路径为**仓内约定相对路径**（与 fetch 脚本默认一致）；从任意工作目录跑
+/// 二进制时目录不存在 → 报 Warn「未启用」，与第 10 探针的 `data/sessions`
+/// 字面锚点同一口径。
+fn check_model_assets() -> HealthCheck {
+    let health = collect_model_asset_health(Path::new(NMC_ASSET_DIR), Path::new(NMC_MANIFEST_PATH));
+    HealthCheck {
+        name: "model_asset_health",
+        description: "模型资产面(NMC 多模态)",
+        status: health.verdict(),
+        message: health.message(),
+    }
+}
+
 /// 人类可读模式输出健康检查报告(SubTask 1.13.2)
 ///
 /// 格式:
@@ -805,17 +887,17 @@ mod tests {
         );
     }
 
-    /// 验证 `execute` 烟雾路径成功(汇总 total = 10:LLM / 沙箱 / SCC / L3 存储三后端已纳入报告)。
+    /// 验证 `execute` 烟雾路径成功(汇总 total = 11:LLM / 沙箱 / SCC / L3 存储三后端 / 模型资产面已纳入报告)。
     #[tokio::test]
-    async fn test_execute_emits_ten_dimensions() {
+    async fn test_execute_emits_eleven_dimensions() {
         // 调 execute (json=true 走最小路径,避免 stderr 输出污染测试)
         let cfg = ChimeraConfig::default();
         execute(&cfg, true, false)
             .await
             .expect("doctor execute 应成功");
-        // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 10 维检查
+        // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 11 维检查
         // 集成层在 tests/cli.rs::test_doctor_json_outputs_report_envelope
-        // 断言 `"total": 10` 以补充此处的覆盖。
+        // 断言 `"total": 11` 以补充此处的覆盖。
     }
 
     /// M13 / ADR-161 路径① 验收:第 9 探针 scc_cache 消费组合根共享缓存实例
@@ -844,14 +926,14 @@ mod tests {
         );
     }
 
-    /// M12 / ADR-185 D3 验收③(探针数 M13 起 8→9;WI-G12 起 9→10):并行 gather 路径
-    /// 产生 GatherCompleted(total=10) 事件
+    /// M12 / ADR-185 D3 验收③(探针数 M13 起 8→9;WI-G12 起 9→10;W5-1 R-2 起 10→11):并行 gather 路径
+    /// 产生 GatherCompleted(total=11) 事件
     ///
-    /// 组合根共享 bus 订阅断言:10 探针经 gqep gather_collected 并行执行,
+    /// 组合根共享 bus 订阅断言:11 探针经 gqep gather_collected 并行执行,
     /// gqep 在 gather 完成时发布 GatherCompleted(total, succeeded, failed);
-    /// 探针 future 恒 Ok(检查失败是结果而非错误),故 succeeded 恒 = 10。
+    /// 探针 future 恒 Ok(检查失败是结果而非错误),故 succeeded 恒 = 11。
     #[tokio::test]
-    async fn test_execute_with_ctx_emits_gather_completed_with_ten_probes() {
+    async fn test_execute_with_ctx_emits_gather_completed_with_eleven_probes() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
         // §4.4 反模式 3:subscribe 必须在 gather 调用之前同步调用
         let mut rx = ctx.bus.subscribe();
@@ -869,10 +951,10 @@ mod tests {
                 total, succeeded, ..
             } => {
                 assert_eq!(
-                    total, 10,
-                    "探针总数应为 10(M13 +scc_cache;WI-G12 +storage_health)"
+                    total, 11,
+                    "探针总数应为 11(M13 +scc_cache;WI-G12 +storage_health;W5-1 R-2 +model_asset_health)"
                 );
-                assert_eq!(succeeded, 10, "探针恒 Ok,应全部成功");
+                assert_eq!(succeeded, 11, "探针恒 Ok,应全部成功");
             }
             other => panic!("期望 GatherCompleted,实际 {}", other.type_name()),
         }
@@ -937,6 +1019,89 @@ mod tests {
         assert_eq!(all_ready.verdict(), HealthStatus::Ok, "双就绪 → Ok");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ============================================================
+    // W5-1 R-2 — 模型资产面探针（ModelAssetHealth 纯类型 / ADR-196 V6）
+    // ============================================================
+
+    /// 判定矩阵的**核心红线**（V6 原文）:资产缺席只能记 Warn「未启用」。
+    ///
+    /// 本测同时钉住“不可能判 Fail”:一旦有人把未启用改写成故障,
+    /// `doctor` 会在无资产机器上非零退出，把受支持的降级形态变成阻断。
+    #[test]
+    fn model_asset_health_verdict_matrix() {
+        let absent = ModelAssetHealth {
+            nmc_asset_dir_ready: false,
+            manifest_present: true,
+        };
+        assert_eq!(absent.verdict(), HealthStatus::Warn, "未就位 → Warn");
+        assert_ne!(absent.verdict(), HealthStatus::Fail, "V6 红线:不得判 Fail");
+
+        let ready = ModelAssetHealth {
+            nmc_asset_dir_ready: true,
+            manifest_present: true,
+        };
+        assert_eq!(ready.verdict(), HealthStatus::Ok, "已就位 → Ok");
+    }
+
+    /// 未就位文案必须说清三件事:未启用非故障 / 约定目录在哪 / 怎么获取
+    #[test]
+    fn model_asset_message_says_not_enabled_when_absent() {
+        let health = ModelAssetHealth {
+            nmc_asset_dir_ready: false,
+            manifest_present: false,
+        };
+        let msg = health.message();
+        assert!(msg.contains("未启用"), "应报「未启用」,实际: {msg}");
+        assert!(msg.contains("非故障"), "应明写非故障,实际: {msg}");
+        assert!(
+            msg.contains("fetch_nmc_assets"),
+            "应给出官方获取路径,实际: {msg}"
+        );
+        assert!(msg.contains(NMC_ASSET_DIR), "应点名约定目录,实际: {msg}");
+        assert!(
+            msg.contains("清单缺失"),
+            "manifest 缺席应可区分,实际: {msg}"
+        );
+    }
+
+    /// 探针入口:约定路径采集（仓库根跑时 manifest 在位;资产目录通常未 fetch）
+    #[test]
+    fn model_asset_probe_names_and_never_fail() {
+        let check = check_model_assets();
+        assert_eq!(check.name, "model_asset_health");
+        assert_eq!(check.description, "模型资产面(NMC 多模态)");
+        assert!(
+            matches!(check.status, HealthStatus::Ok | HealthStatus::Warn),
+            "探针只能 Ok/Warn,实际: {:?}",
+            check.status
+        );
+    }
+
+    /// 路径一致性钉:doctor 侧常量与 fetch 脚本默认落点逐字一致。
+    ///
+    /// WHY 机械钉而非注释约定:chimera-cli 不能依赖 nmc-encoder 去读
+    /// `NmcConfig` 默认值(G-33 零新增边),所以“未启用”判定用的目录约定
+    /// 只有 fetch 脚本一个同源。两处一旦漂移,探针会永远报 Warn。
+    #[test]
+    fn model_asset_paths_match_fetch_scripts() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        for name in ["fetch_nmc_assets.ps1", "fetch_nmc_assets.sh"] {
+            let path = std::path::Path::new(root).join("scripts").join(name);
+            let text =
+                std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读不到 {path:?}: {e}"));
+            assert!(
+                text.contains(&format!("$TargetDir = \"{NMC_ASSET_DIR}\""))
+                    || text.contains(&format!("TARGET_DIR=\"{NMC_ASSET_DIR}\"")),
+                "{name} 的默认目标目录与 doctor 常量 {NMC_ASSET_DIR:?} 不一致"
+            );
+            assert!(
+                text.contains(&format!("$Manifest = \"{NMC_MANIFEST_PATH}\""))
+                    || text.contains(&format!("MANIFEST=\"{NMC_MANIFEST_PATH}\"")),
+                "{name} 的默认清单路径与 doctor 常量 {NMC_MANIFEST_PATH:?} 不一致(ps1 写 $Manifest,sh 写 MANIFEST)"
+            );
+        }
     }
 
     /// 探针壳:消费组合根共享 SccCache（装配态真实消费,非 ephemeral）
