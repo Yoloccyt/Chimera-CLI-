@@ -14,7 +14,16 @@
 #    cpu-plane-closeout-2026-10-04.md sec.7 for the verbatim 7-point inventory.)
 #
 # ---- binding row ----
-binding:n4_batch_failure_semantics|DEFERRED_UNTIL_WIRING|wired_composition>=1|owner=cpu-plane-c1c2-scale-bounding-2026-10-02.md sec3 + cpu-plane-closeout-2026-10-04.md sec7
+# 状态变迁（机器钩实际走通的一次，不是改台账美化）：
+#   2026-10-07 W4-2 登记时为 DEFERRED_UNTIL_WIRING（零接线，freeze 无 WIRED_COMPOSITION 行）。
+#   2026-10-08 W5-2 R-4 把 overwindow dense 接入组合根 → freeze 出现首行
+#   WIRED_COMPOSITION，触发条件 wired_composition>=1 成立，本测按设计翻红，
+#   强制重新裁决——现记录裁决结果于下行 state：
+#   裁决 = 新消费者采用已存在的第三种姿态 `in-place-fallback`（任一段 Err 即整批
+#   回落 inline + warn，见 overwindow_bridge.rs::dense_scores_pooled）；7+1 点位的
+#   **API 级统一改造仍未做**，它从“被接线阻塞”转为“已解锁的独立工作项”（W6 候选）。
+#   本行不是“静默暂缓”，而是带日期、带影响面、可回滚的裁决记录。
+binding:n4_batch_failure_semantics|ADJUDICATED_IN_PLACE_FALLBACK_2026_10_08|wired_composition>=1|owner=cpu-plane-c1c2-scale-bounding-2026-10-02.md sec3 + cpu-plane-closeout-2026-10-04.md sec7 + v3.4 W5-2 R-4 裁决记录（本批报告 §3）
 #
 # ---- 7-point posture baseline (verbatim from closeout-2026-10-04 sec.7; hooks = file exists + still calls spawn_compute_batch) ----
 anchor:crates/faae-router/src/parallel.rs|fail-fast|score_experts_batch
@@ -24,3 +33,7 @@ anchor:crates/hcw-window/src/parallel.rs|fail-fast|score_entries
 anchor:crates/decay-engine/src/parallel.rs|fail-fast|parallel_batch
 anchor:crates/nmc-encoder/src/parallel.rs|item-wise|perceive_batch
 anchor:crates/gsoe-evolution/src/fitness_parallel.rs|in-place-fallback|select_elite
+# ---- 第 8 点位（W5-2 R-4,2026-10-08 新增；历史 7 点位盘点逐字保留未改）----
+# 该位姿态 = in-place-fallback：池化任一段 Err（饱和拒绝/任务 panic）即整批回落
+# inline 并 warn；逐位等价由 pooled_*_bitwise_equal_inline 两测实证（含牙齿探针）。
+anchor:crates/chimera-cli/src/overwindow_bridge.rs|in-place-fallback|dense_scores_pooled

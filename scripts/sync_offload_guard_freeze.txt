@@ -10,6 +10,13 @@
 #
 # Evidence: P1 batch 561374f (faae route / osa batch), N-2 in closeout §5 (hcw window),
 # faae ScoreInput twin wrapper shares the same on_multi_thread_runtime judgment.
+#
+# W5-2 R-4 (2026-10-08): overwindow dense 挂桥—— provider 的唯一生产上下文是
+# action_orchestrator.rs:375 的 tokio::spawn(async) 即 worker，而本链同步批卸载会
+# 独占 worker 数毫秒 → 按 faae 先例配 flavor 双分支（本文件
+# overwindow_bridge.rs::on_multi_thread_runtime + block_in_place）。
+# 已知边界同 LocalSet caveat（本链现无 spawn_blocking 内调用点，已在函数文档登记）。
+chimera-cli/src/overwindow_bridge.rs::dense_scores|GUARDED
 faae-router/src/parallel.rs::score_experts_batch_offloaded|GUARDED
 faae-router/src/parallel.rs::score_experts_scoring_batch_offloaded|GUARDED
 hcw-window/src/window.rs::select_window|GUARDED

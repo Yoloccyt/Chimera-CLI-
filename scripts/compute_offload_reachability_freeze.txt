@@ -6,11 +6,21 @@
 #
 # Adjudication evidence (2026-10-05, round-3 audit; C0 closeout cpu-plane-phase0-c0-2026-10-02.md §2
 # + external audit F-U1 chain table, reconciled at composition-root caliber):
-#   - ZERO entries are WIRED_COMPOSITION: no chimera-cli / nexus-app-server src calls any of
-#     these chains today (faae: only ApprovedVariantRegistry/spawn_variant_event_subscriber are
-#     imported, no FaaeRouter construction; repo-wiki batch delegate never reaches dyn trait).
+#   - ZERO entries were WIRED_COMPOSITION at the 2026-10-05 round-3 audit: no chimera-cli /
+#     nexus-app-server src called any of these chains then (faae: only
+#     ApprovedVariantRegistry/spawn_variant_event_subscriber are imported, no FaaeRouter
+#     construction; repo-wiki batch delegate never reaches dyn trait).
+#     ⚠ 2026-10-08 W5-2 R-4 后本句仅对 2026-10-05 时点成立：现存 **1 行** WIRED_COMPOSITION
+#     （overwindow dense 挂桥），它同时触发 ADR-196 §8 的 N-4 绑定钩（见
+#     scripts/n4_binding_registry.txt 与 crates/nexus-core/tests/n4_binding_test.rs）。
 #   - CRATE_API_LIVE = live internal wiring exists but stops short of a composition root.
 #   - PUB_API_DIAGNOSTIC_ONLY = sole non-test consumer is the diagnostic sentinel (recall/eval).
+# W5-2 R-4 (2026-10-08) 新增首行 WIRED_COMPOSITION：chimera-cli 组合根内的 overwindow
+# provider 现经 dense_scores → dense_scores_pooled 调用 spawn_compute_batch（键名 =
+# 实际调用点所在函数，与本门口径一致；前置闸：逐位等价测已过 + 牙齿探针已验证）。
+# 证据链：build_provider 把 provider 注入 hcw，bridge.run 由
+# action_orchestrator.rs:205 的 overwindow.run 分支（组合根 src）触发。
+chimera-cli/src/overwindow_bridge.rs::dense_scores_pooled|WIRED_COMPOSITION|chimera-cli/src/overwindow_bridge.rs::build_provider;chimera-cli/src/overwindow_bridge.rs::compute_provider_parts|dense_scores_pooled
 decay-engine/src/parallel.rs::decay_batch_parallel|DEAD||parallel_batch
 faae-router/src/parallel.rs::score_parallel|DEAD||score_experts_batch
 faae-router/src/parallel.rs::score_scoring_parallel|CRATE_API_LIVE|faae-router/src/router.rs::route|score_experts_scoring_batch

@@ -10,8 +10,13 @@
 //!    接线信号（`scripts/compute_offload_reachability_freeze.txt` 的
 //!    WIRED_COMPOSITION 行数）。零接线 ⇒ 维持 DEFERRED；**接线出现 ⇒ 本测试翻红**,
 //!    强制重新裁决 N-4（不许静默漂移）。
-//! 2. `n4_anchor_inventory_matches_code` —— 7 点位盘点与代码不失联：每个锚点文件
-//!    必须存在且仍调 `.spawn_compute_batch(`（点位消失/迁移 ⇒ 盘点基线失联,翻红）。
+//!    本钩已于 2026-10-08 W5-2 R-4 真实走通一次：overwindow dense 接入组合根后
+//!    本测翻红，随后以“新消费者采用 in-place-fallback 姿态 + API 级统一转独立
+//!    工作项”的裁决记录将绑定行置为 `ADJUDICATED_IN_PLACE_FALLBACK_2026_10_08`；
+//!    裁决全文见登记册头注与本批报告，不是只改台账。
+//! 2. `n4_anchor_inventory_matches_code` —— 点位盘点与代码不失联（10-04 盘点的 7 点位
+//!    加 W5-2 R-4 第 8 点位）：每个锚点文件必须存在且仍调 `.spawn_compute_batch(`
+//!    （点位消失或迁移 ⇒ 盘点基线失联,翻红）。
 //! 3. `n4_registry_is_wellformed` —— 登记册 schema 守卫（唯一绑定行 / 枚举姿势 /
 //!    可解析触发器）。
 //!
@@ -110,8 +115,9 @@ fn n4_anchor_inventory_matches_code() {
         anchors += 1;
     }
     assert_eq!(
-        anchors, 7,
-        "锚点数必须 = 7（cpu-plane-closeout-2026-10-04.md §7 逐字盘点）"
+        anchors, 8,
+        "锚点数必须 = 8（cpu-plane-closeout-2026-10-04.md §7 逐字盘点的 7 点位 + \
+         W5-2 R-4 新增的 overwindow dense 第 8 点位；历史 7 行不得被覆写）"
     );
 }
 
@@ -139,5 +145,8 @@ fn n4_registry_is_wellformed() {
         }
     }
     assert_eq!(binding_rows, 1, "绑定行必须唯一");
-    assert_eq!(rows, 8, "登记册 = 1 绑定行 + 7 锚行");
+    assert_eq!(
+        rows, 9,
+        "登记册 = 1 绑定行 + 8 锚行（7 历史 + W5-2 R-4 新增 1）"
+    );
 }

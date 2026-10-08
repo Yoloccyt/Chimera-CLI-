@@ -33,6 +33,7 @@ use hcw_window::recall::types::BlockScore;
 use kvbsr_router::blocks::BlockBuilder;
 use kvbsr_router::config::KvbsrConfig;
 use kvbsr_router::types::{CoOccurrenceMatrix, ToolVector};
+use nexus_core::compute::{bridge, ComputeError, DispatchPlan, TaskKind};
 use nexus_core::CLV;
 use repo_wiki::search::{hybrid_search, HybridSearchConfig};
 
@@ -267,7 +268,141 @@ fn bounded_sparse_face<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
     content
 }
 
+/// dense 面的执行形态选择 — 按 HTS 阈值在 Inline / Rayon 间路由（W5-2 R-4）
+///
+/// WHY 在此处路由：dense 是本桥 provider 唯一的 O(n) CPU 段（sparse 为
+/// `contains` 扫描、RRF 为 k 级融合），`n_items` 口径 = **块数**（本层元素即块，
+/// 与 hcw 传条目数同构但不同源，阈值表语义在此成立因为两者都是“待评单元数”）。
+/// `route` 为无副作用的纳秒级查表，每次 provider 调用仅读一次。
+#[must_use]
+fn dense_plan(n_blocks: usize) -> DispatchPlan {
+    bridge().route(TaskKind::ClvSimilarity, n_blocks)
+}
+
+/// Inline 基准实现（挂桥前的原样内核，逐字保留作为等价基准与回落路径）。
+fn dense_scores_inline(table: &[CorpusBlock], query_clv: &CLV) -> Vec<(usize, f32)> {
+    table
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (i, query_clv.cosine_similarity(&b.clv)))
+        .collect()
+}
+
+/// 逐段拼接池化结果（保留段序）；任一段 `Err` ⇒ [`None`]（调用方负责回落）。
+///
+/// 拆成纯函数是为了让“饱和/任务失败 → 回落”这条降级路径可被直接测到
+/// （真实饱和需维池排满，单测里不可靠也不该依赖）。
+fn join_chunked(results: &[Result<Vec<(usize, f32)>, ComputeError>]) -> Option<Vec<(usize, f32)>> {
+    let total = results.iter().map(|r| r.as_ref().map_or(0, Vec::len)).sum();
+    let mut out = Vec::with_capacity(total);
+    for r in results {
+        // `as_deref` 而非 `ok()`:入参是 `&Result`，`ok()` 会 move 出去
+        out.extend_from_slice(r.as_deref().ok()?);
+    }
+    Some(out)
+}
+
+/// 当前是否运行在多线程 tokio runtime 上（让出 worker 的前提）
+///
+/// 照 `faae-router/src/parallel.rs:178-183` 的同名判据逐字实现（三要件第 2 条），
+/// 理由不重复：`try_current` 而非 `current`——非 tokio 上下文（本 crate 普通
+/// `#[test]`、下游库消费方）必须落到直调分支，否则把可用路径回归成 panic。
+#[must_use]
+fn on_multi_thread_runtime() -> bool {
+    matches!(
+        tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
+        Ok(tokio::runtime::RuntimeFlavor::MultiThread)
+    )
+}
+
+/// dense 相似度面计算 — 按派发计划走调用线程或 L-a 计算池分批
+///
+/// # 为何要 `block_in_place`（G-88 同步卸载保护·三要件第 2 条）
+/// 本链唯一生产上下文是 `action_orchestrator.rs:375` 的 `tokio::spawn(async …)`
+/// → provider 跑在 **tokio worker** 上；而 `spawn_compute_batch` 本体是同步的
+/// （rayon `pool.scope`，不是 Future），在 16K 块规模下会独占 worker 数毫秒，
+/// 期间该 worker 无法 poll 其它 task / 驱动 IO。多线程 runtime 上先 `block_in_place`
+/// 让出 worker；**计算本体仍在 ComputeBridge 专用 rayon 池内**，不新建 CPU 预算
+/// （§7.5.3 纪律④「桥接唯一」），故不用 `spawn_blocking`。
+///
+/// # 已知边界（在此登记而非静默上线，与 faae 同口径）
+/// - **LocalSet**：tokio 实际把关的是内部 `allow_block_in_place` 标志而非 flavor；
+///   LocalSet 内即便 flavor 为 MultiThread 也会 panic。仓内无 LocalSet 使用点。
+/// - **`spawn_blocking` 内调用**：现核本链无此上下文（chimera-tui 的 `spawn_blocking`
+///   仅包 rusqlite），若未来有人把 provider 包进 blocking 闭包，`block_in_place`
+///   会在非 worker 线程 panic → 接线时须先改成本声明式入参而不是嗅探 flavor。
+/// - current_thread runtime 上本无可让出的 worker，直调与让出语义等价，零行为漂移。
+///
+/// # 等价性（W5-2 R-4 前置闸，实测而非推定）
+/// 池化分支只做“切段 + 并行算同一纯函数”：`cosine_similarity` 是确定性纯函数，
+/// [`ComputeBridge::spawn_compute_batch`] 契约保证结果数 = 输入数且**结果序 = 输入序**，
+/// 故按 `start..end` 逐段拼接后与 inline 逐位相同（含并列分数的索引序）。
+/// 由 `pooled_dense_scores_bitwise_equal_inline` 与
+/// `pooled_provider_parts_bitwise_equal_inline` 实测钉住（已做牙齿探针：把拼接
+/// 改为逆序后两测立即翻红）。
+///
+/// # 失败处置
+/// 任一段返回 `Err`（`Strict` 饱和整批拒绝 / 单任务 panic 被 catch_unwind 隔离）
+/// → **整批回落 inline**：召回率不得因计算面故障而下降，回落经 `warn` 可观测。
+fn dense_scores(
+    table: &Arc<Vec<CorpusBlock>>,
+    query_clv: &CLV,
+    plan: DispatchPlan,
+) -> Vec<(usize, f32)> {
+    if plan != DispatchPlan::Rayon {
+        return dense_scores_inline(table, query_clv);
+    }
+    // 在 worker 上先让出再跑同步批（理由见上方 G-88 段）
+    if on_multi_thread_runtime() {
+        tokio::task::block_in_place(|| dense_scores_pooled(table, query_clv))
+    } else {
+        dense_scores_pooled(table, query_clv)
+    }
+}
+
+/// 池化分支本体（不含让出包装）——拆开是为了让 `block_in_place` 只包一层，
+/// 且 G-88 文本判据（`block_in_place(` + `try_current`）在本文件真实成立。
+fn dense_scores_pooled(table: &Arc<Vec<CorpusBlock>>, query_clv: &CLV) -> Vec<(usize, f32)> {
+    let b = bridge();
+    let chunk = b.chunk_of(TaskKind::ClvSimilarity).max(1);
+    let n = table.len();
+    let tasks: Vec<_> = (0..n)
+        .step_by(chunk)
+        .map(|start| {
+            let end = (start + chunk).min(n);
+            let table = Arc::clone(table);
+            let query_clv = query_clv.clone();
+            move || {
+                (start..end)
+                    .map(|i| (i, query_clv.cosine_similarity(&table[i].clv)))
+                    .collect::<Vec<(usize, f32)>>()
+            }
+        })
+        .collect();
+    let results = b.spawn_compute_batch(TaskKind::ClvSimilarity, tasks);
+    join_chunked(&results).unwrap_or_else(|| {
+        tracing::warn!(
+            n,
+            chunk,
+            "overwindow dense 池化未完成，回落 inline（计算面饱和或任务失败）"
+        );
+        dense_scores_inline(table, query_clv)
+    })
+}
+
 /// provider 确定性内核：对快照表计算喂给 RRF 之前的 dense_ids/sparse_ids。
+///
+/// 生产入口：dense 面执行形态由 [`dense_plan`] 依块数与 HTS 阈值决定。
+#[must_use]
+fn compute_provider_parts(
+    table: &Arc<Vec<CorpusBlock>>,
+    query: &str,
+    k: usize,
+) -> (Vec<String>, Vec<String>) {
+    compute_provider_parts_with(table, query, k, dense_plan(table.len()))
+}
+
+/// provider 确定性内核（可指定 dense 执行形态）——供等价对拍测使用。
 ///
 /// 抽出为独立函数以便与“去克隆前”参考实现做 **pre-RRF 逐元素等价对拍**——
 /// post-RRF 因 `rrf_fuse` 用 std HashMap 其并列序本就跨调用非确定（既有性质），
@@ -279,20 +414,19 @@ fn bounded_sparse_face<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
 ///   朴素改索引序静默改变并列块选取——E03 实测 82.4% 偏差），回填 top-2k id。
 ///
 /// 全程携 usize 索引、仅存活者 clone（2n → ~3k 分配）；比较器零随机访问。
-fn compute_provider_parts(
+#[must_use]
+fn compute_provider_parts_with(
     table: &Arc<Vec<CorpusBlock>>,
     query: &str,
     k: usize,
+    plan: DispatchPlan,
 ) -> (Vec<String>, Vec<String>) {
     let query_clv = make_chunk_clv(hash_str(query));
     // 块 id 借用侧表：sparse 全并列时 tie-break 每次比较必达，借用比较避免分配
     let ids: Vec<&str> = table.iter().map(|b| b.id.as_str()).collect();
     // dense 序（Top-K 红线：select 先于 truncate；比较器只读 `.1`，String→usize 零影响）
-    let mut dense: Vec<(usize, f32)> = table
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (i, query_clv.cosine_similarity(&b.clv)))
-        .collect();
+    // 计算段本身按派发计划选 inline 或计算池（W5-2 R-4），结果序已由测钉为一致
+    let mut dense: Vec<(usize, f32)> = dense_scores(table, &query_clv, plan);
     let n = dense.len();
     let nth = k.min(n);
     if nth > 0 && nth < n {
@@ -592,6 +726,106 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ---- W5-2 R-4 前置闸：dense 池化 vs inline 的逐位等价（不过则不得挂桥）----
+
+    /// 造含**故意并列**的大表：seed 只取 8 个不同值 → 大量块 CLV 完全相同，
+    /// 余弦分数逐位并列。并列处正是 `select_nth_unstable` 对元素序敏感的区段，
+    /// 若池化改变了元素序，本组用例必红（逐位判定，不是“大概率相同”）。
+    fn tie_heavy_table(n: u64) -> Arc<Vec<CorpusBlock>> {
+        Arc::new(
+            (0..n)
+                .map(|i| blk(&format!("b{i:05}"), "语义 检索", i % 8))
+                .collect(),
+        )
+    }
+
+    /// 前置闸主体：分数向量在两种形态下逐项逐位相同（跨 chunk 边界取 n）。
+    #[test]
+    fn pooled_dense_scores_bitwise_equal_inline() {
+        let thr = bridge().threshold_of(TaskKind::ClvSimilarity);
+        assert!(thr > 1, "HTS 现值应可参与边界取样,实际 {thr}");
+        // 含 1 / chunk-1 / chunk / chunk+1 / 阈值前 / 阈值后,把分段边界全走一遍
+        let chunk = bridge().chunk_of(TaskKind::ClvSimilarity);
+        for n in [1usize, 2, chunk - 1, chunk, chunk + 1, thr, thr + 200] {
+            let t = tie_heavy_table(n as u64);
+            let q = make_chunk_clv(hash_str("语义 检索"));
+            let a = dense_scores(&t, &q, DispatchPlan::Inline);
+            let b = dense_scores(&t, &q, DispatchPlan::Rayon);
+            assert_eq!(a.len(), b.len(), "n={n} 结果数必须等于输入数");
+            for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+                assert_eq!(x.0, y.0, "n={n} 第 {i} 项索引序不等（池化改了序）");
+                assert_eq!(
+                    x.1.to_bits(),
+                    y.1.to_bits(),
+                    "n={n} 第 {i} 项分数非逐位相同"
+                );
+            }
+        }
+    }
+
+    /// 确定性层三方对拍：inline / pooled / 去克隆参考实现三者输出逐元素相等，
+    /// 钉住“挂桥 = 零行为变更”（RRF 下游共用同一融合函数，不在此层判）。
+    #[test]
+    fn pooled_provider_parts_bitwise_equal_inline() {
+        let t = tie_heavy_table(1_200);
+        for q in ["语义 检索", "kw", "", "不存在词 foo"] {
+            for k in [1usize, 7, 128] {
+                let inline = compute_provider_parts_with(&t, q, k, DispatchPlan::Inline);
+                let pooled = compute_provider_parts_with(&t, q, k, DispatchPlan::Rayon);
+                assert_eq!(inline, pooled, "q={q:?} k={k} 池化改变了输出序");
+                let reference = compute_provider_parts_reference(&t, q, k);
+                assert_eq!(inline.0, reference.0, "q={q:?} k={k} dense 与参考实现不等");
+                assert_eq!(inline.1, reference.1, "q={q:?} k={k} sparse 与参考实现不等");
+            }
+        }
+    }
+
+    /// 生产入口的计划由 route 决策：读 live 阈值（不写死 1000，防校准漂移），
+    /// 小表必须与显式 inline 完全一致。
+    #[test]
+    fn dense_plan_follows_live_hts_threshold() {
+        let thr = bridge().threshold_of(TaskKind::ClvSimilarity);
+        assert!(thr > 1, "HTS 现值异常: {thr}");
+        assert_eq!(
+            dense_plan(thr - 1),
+            DispatchPlan::Inline,
+            "阈值前必须 Inline"
+        );
+        assert_eq!(dense_plan(thr), DispatchPlan::Rayon, "达阈值必须 Rayon");
+
+        let t = tie_heavy_table(32);
+        assert_eq!(
+            compute_provider_parts(&t, "语义 检索", 7),
+            compute_provider_parts_with(&t, "语义 检索", 7, DispatchPlan::Inline),
+            "32 块表应经 route 落 Inline,与显式 inline 一致"
+        );
+    }
+
+    /// 降级路径可测：任一段 Err ⇒ [`None`]（调用方据此回落 inline）。
+    #[test]
+    fn join_chunked_falls_back_when_any_chunk_failed() {
+        let chunks: Vec<Result<Vec<(usize, f32)>, ComputeError>> =
+            vec![Ok(vec![(0, 0.5), (1, 0.25)]), Ok(vec![(2, 0.125)])];
+        assert_eq!(
+            join_chunked(&chunks),
+            Some(vec![(0, 0.5), (1, 0.25), (2, 0.125)]),
+            "拼接必须保留段序"
+        );
+
+        let bad: Vec<Result<Vec<(usize, f32)>, ComputeError>> =
+            vec![Ok(vec![(0, 0.5)]), Err(ComputeError::Saturated)];
+        assert!(
+            join_chunked(&bad).is_none(),
+            "任一段失败即整批不可用，触发回落 inline"
+        );
+        let empty: &[Result<Vec<(usize, f32)>, ComputeError>] = &[];
+        assert_eq!(
+            join_chunked(empty),
+            Some(Vec::new()),
+            "空批是 Some(空)而非 None（区分“无结果”与“失败”）"
+        );
     }
 
     #[test]
