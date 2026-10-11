@@ -11,7 +11,8 @@
 use nexus_contracts::BudgetTier;
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use proptest::prelude::*;
-use quest_engine::{TtgConfig, TtgGovernor};
+use quest_engine::dag::{sort_tasks_topologically, topological_order, validate_dag};
+use quest_engine::{QuestError, TtgConfig, TtgGovernor};
 
 /// 构造测试用 Quest
 fn make_quest(quest_id: &str, tasks: Vec<Task>) -> Quest {
@@ -162,6 +163,130 @@ fn proptest_non_degraded_allows_deep_override() {
             result.is_ok(),
             "HighTier 档位下覆盖 Deep 应被允许(quest_id={})",
             quest_id
+        );
+    });
+}
+
+// ============================================================
+// 公开 DAG API 契约 —— 黑盒属性测试（P1 接线批）
+//
+// 与 src/dag.rs 内部 proptest 的分工：内部测试证"实现正确"，本文件证
+// "对外承诺的契约成立"（从 crate 外只能看到 pub 面）。两者不是重复：
+// 日后重构 `kahn_core` 时，判据正是本文件的契约不得被破。
+// ============================================================
+
+/// 构造性无环任务图：节点 i 只依赖下标更小的节点（故必无环）
+fn arb_public_acyclic_tasks() -> impl Strategy<Value = Vec<Task>> {
+    proptest::collection::vec(any::<u16>(), 1..16).prop_map(|masks| {
+        masks
+            .iter()
+            .enumerate()
+            .map(|(i, &mask)| {
+                let dependencies = (0..i)
+                    .filter(|&j| mask & (1 << j) != 0)
+                    .map(|j| format!("task-{j}"))
+                    .collect();
+                Task {
+                    task_id: format!("task-{i}"),
+                    description: format!("do task {i}"),
+                    status: TaskStatus::Pending,
+                    dependencies,
+                }
+            })
+            .collect()
+    })
+}
+
+/// 循环右移 k 位：制造与依赖序不一致的输入序
+fn rotate(tasks: &[Task], k: usize) -> Vec<Task> {
+    let n = tasks.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let k = k % n;
+    tasks[n - k..]
+        .iter()
+        .chain(tasks[..n - k].iter())
+        .cloned()
+        .collect()
+}
+
+/// 公开定序 API 的四重契约：排列守恒 + 依赖先行 + 与 id 序同根 + 幂等
+#[test]
+fn proptest_public_sort_contract_permutation_dep_first_and_idempotent() {
+    proptest!(|(tasks in arb_public_acyclic_tasks(), k in 0usize..24usize)| {
+        let shuffled = rotate(&tasks, k);
+        let sorted = sort_tasks_topologically(shuffled.clone())?;
+
+        // 1. 排列守恒：不增不减
+        prop_assert_eq!(sorted.len(), shuffled.len());
+        let mut got: Vec<String> = sorted.iter().map(|t| t.task_id.clone()).collect();
+        let mut want: Vec<String> = shuffled.iter().map(|t| t.task_id.clone()).collect();
+        got.sort();
+        want.sort();
+        prop_assert_eq!(got, want, "定序不得增删任务");
+
+        // 2. 依赖先行
+        let pos: std::collections::HashMap<&str, usize> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.task_id.as_str(), i))
+            .collect();
+        for t in &sorted {
+            for d in &t.dependencies {
+                prop_assert!(
+                    pos[d.as_str()] < pos[t.task_id.as_str()],
+                    "依赖 {} 必须先于 {}",
+                    d,
+                    t.task_id
+                );
+            }
+        }
+
+        // 3. 与公开取序 API 同根：不得养出第二套定序语义
+        let ids: Vec<String> = sorted.iter().map(|t| t.task_id.clone()).collect();
+        prop_assert_eq!(
+            ids,
+            topological_order(&shuffled)?,
+            "实体序必须逐项等于 topological_order 的 id 序"
+        );
+
+        // 4. 幂等
+        prop_assert_eq!(
+            sorted.clone(),
+            sort_tasks_topologically(sorted)?,
+            "定序必须幂等"
+        );
+    });
+}
+
+/// 三个公开守门 API 对成环输入结论一致：定序不得绕过 `validate_dag` 分支
+///
+/// WHY 黑盒断三方一致：`create_quest` 同时走 `validate_dag` 与
+/// `sort_tasks_topologically`。若日后有人把定序改成"静默忽略环"，
+/// 单看定序自己的测试仍会绿（它只会不返 Err），但本测试会因
+/// 三方不一致而红——这才能真正钉住"校验未被绕过"。
+#[test]
+fn proptest_public_api_all_guards_agree_on_cycle() {
+    proptest!(|(tasks in arb_public_acyclic_tasks())| {
+        prop_assume!(tasks.len() >= 2);
+        let mut cyclic = tasks;
+        let last_id = cyclic.last().unwrap().task_id.clone();
+        let first_id = cyclic[0].task_id.clone();
+        // 双向往返边→必成环
+        cyclic[0].dependencies.push(last_id);
+        let n = cyclic.len() - 1;
+        cyclic[n].dependencies.push(first_id);
+
+        let v = validate_dag(&cyclic);
+        let t = topological_order(&cyclic);
+        let s = sort_tasks_topologically(cyclic.clone());
+
+        prop_assert!(matches!(v, Err(QuestError::CyclicDependency)), "validate_dag 应判环: {v:?}");
+        prop_assert!(matches!(t, Err(QuestError::CyclicDependency)), "topological_order 应判环: {t:?}");
+        prop_assert!(
+            matches!(s, Err(QuestError::CyclicDependency)),
+            "sort_tasks_topologically 应判环而非静默返回乱序表: {s:?}"
         );
     });
 }

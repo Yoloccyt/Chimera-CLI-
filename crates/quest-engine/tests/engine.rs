@@ -275,6 +275,168 @@ async fn test_topological_order_correctness() {
     assert!(pos("c") < pos("d"));
 }
 
+/// 生产路径不变量:`create_quest` 产出的 `quest.tasks` 必满足依赖先行
+///
+/// WHY 断在集成层而非单测层:本批接线的目的就是把"Vec 序恰好等于依赖序"
+/// 从 `decompose` 的巧合升为**生产不变量**,只有走真实入口才能证明接线
+/// 真的生效。下游多个消费者直接按 Vec 序取用(commands/quest.rs 编号
+/// 任务列表、ttg.rs::compute_dependency_depth、trajectory_exporter.rs)。
+#[tokio::test]
+async fn test_create_quest_tasks_are_topologically_ordered() {
+    let bus = EventBus::new();
+    let engine = QuestEngine::new(bus);
+    let quest = engine
+        .create_quest(make_intent(
+            "i-topo-1",
+            "采集需求。设计架构。实现代码。集成联调。回归验证。",
+        ))
+        .await
+        .unwrap();
+
+    let ids: Vec<String> = quest.tasks.iter().map(|t| t.task_id.clone()).collect();
+    // 1. 实体序逐项等于 topological_order 的 id 序(同根,不得养出第二套定序语义)
+    assert_eq!(
+        ids,
+        quest_engine::dag::topological_order(&quest.tasks).unwrap(),
+        "生产路径的 tasks 序必须等于拓扑序"
+    );
+
+    // 2. 依赖先行:每个 task 的全部依赖都排在其之前
+    let pos = |id: &str| ids.iter().position(|x| x == id).unwrap();
+    for task in &quest.tasks {
+        for dep in &task.dependencies {
+            assert!(
+                pos(dep) < pos(&task.task_id),
+                "依赖 {dep} 必须先于 {}",
+                task.task_id
+            );
+        }
+    }
+    assert_eq!(quest.tasks.len(), 5, "5 句应分解为 5 个 Task");
+}
+
+/// I1 逐位等价回归闸:接线不得改变现有唯一生产者的输出
+///
+/// WHY 这是本批最关键的一条回归护栏:`decompose` 产出按句子序的线性链,
+/// 其拓扑序恒等于句子序,故定序接入后输出应**逐位不变**(描述与 id 的
+/// 配对也不得被打乱)。若本测试转红,说明定序把生产路径改坏了。
+#[tokio::test]
+async fn test_create_quest_preserves_decompose_sentence_order() {
+    let bus = EventBus::new();
+    let engine = QuestEngine::new(bus);
+    let quest = engine
+        .create_quest(make_intent("i-topo-2", "甲步。乙步。丙步。"))
+        .await
+        .unwrap();
+
+    let ids: Vec<&str> = quest.tasks.iter().map(|t| t.task_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["task-0", "task-1", "task-2"],
+        "线性链定序后必须仍按句子序(逐位不变)"
+    );
+    // 描述与句子的配对关系不得随定序飘移
+    let descs: Vec<&str> = quest.tasks.iter().map(|t| t.description.as_str()).collect();
+    assert_eq!(
+        descs,
+        vec!["甲步", "乙步", "丙步"],
+        "任务描述必须与句子序一致"
+    );
+}
+
+/// 公开 API 层:乱序输入必被纠正 —— 证明定序不是恒等映射
+///
+/// WHY 单独立一条:上面两条走生产入口,输入序恰好等于依赖序,定序在此
+/// 是恒等映射(只能证"不改坏")。本条用故意打乱的菱形依赖证"能改对",
+/// 堵住 HashMap drain 错序/丢任务这类真 bug。
+#[tokio::test]
+async fn test_sort_tasks_topologically_fixes_shuffled_input() {
+    use nexus_core::Task;
+
+    let task = |id: &str, deps: Vec<&str>| Task {
+        task_id: id.into(),
+        description: id.into(),
+        status: TaskStatus::Pending,
+        dependencies: deps.into_iter().map(String::from).collect(),
+    };
+    // 输入序与依赖序故意不一致:d 排在最前,a 排在中间
+    let shuffled = vec![
+        task("d", vec!["b", "c"]),
+        task("b", vec!["a"]),
+        task("a", vec![]),
+        task("c", vec!["a"]),
+    ];
+
+    let sorted = quest_engine::dag::sort_tasks_topologically(shuffled).unwrap();
+    let ids: Vec<&str> = sorted.iter().map(|t| t.task_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["a", "b", "c", "d"],
+        "乱序输入必须被重排为依赖先行(同层 b/c 按字典序)"
+    );
+}
+
+/// create_quest 的双重守卫不得被绕过:成环与悬空依赖均拒
+///
+/// 取证边界(为何不直接走 `create_quest`):本会话实测 `decompose()` 是
+/// quest-engine 内**唯一**任务生产者(`engine.rs:412`,无接受外部 `Vec<Task>`
+/// 的公开 API),且它恒产 `task-{idx}` 线性链——经公开入口无法注入环。
+/// 故本测试在 `create_quest` 所使用的**同一双闸公开 API 层**断言两重守卫
+/// 语义一致且都不被绕过;若未来引入非线序生产者(checkpoint 恢复、
+/// agent 提议任务),本测试即升级为生产入口的直接守卫。
+///
+/// 守的是两个具体退化:(a) 把定序改成"静默忽略环"(则依赖环到执行期才爆);
+/// (b) 把 `validate_dag` 从 `create_quest` 删掉而定序又不判环。
+#[tokio::test]
+async fn test_create_quest_dag_guards_reject_cyclic_and_dangling() {
+    use nexus_core::Task;
+    use quest_engine::QuestError;
+
+    let task = |id: &str, deps: Vec<&str>| Task {
+        task_id: id.into(),
+        description: id.into(),
+        status: TaskStatus::Pending,
+        dependencies: deps.into_iter().map(String::from).collect(),
+    };
+
+    // 1. 成环输入:两重守卫必须给出同一个 `CyclicDependency`(与 create_quest 中的调用顺序同序)
+    let cyclic = vec![
+        task("a", vec!["c"]),
+        task("b", vec!["a"]),
+        task("c", vec!["b"]),
+    ];
+    let v = quest_engine::dag::validate_dag(&cyclic);
+    let s = quest_engine::dag::sort_tasks_topologically(cyclic.clone());
+    assert!(
+        matches!(v, Err(QuestError::CyclicDependency)),
+        "validate_dag 应判环,实际: {v:?}"
+    );
+    assert!(
+        matches!(s, Err(QuestError::CyclicDependency)),
+        "定序应判环而非静默返回乱序表(绕过校验),实际: {s:?}"
+    );
+
+    // 2. 悬空依赖:两重守卫均拒(防止执行期找不到前置任务)
+    let dangling = vec![task("a", vec![]), task("b", vec!["ghost"])];
+    assert!(matches!(
+        quest_engine::dag::validate_dag(&dangling),
+        Err(QuestError::DecompositionFailed(_))
+    ));
+    assert!(matches!(
+        quest_engine::dag::sort_tasks_topologically(dangling),
+        Err(QuestError::DecompositionFailed(_))
+    ));
+
+    // 3. 生产入口自身仍可用且输出合法(证明未把守卫改坏到拒掉正常输入)
+    let bus = EventBus::new();
+    let engine = QuestEngine::new(bus);
+    let quest = engine
+        .create_quest(make_intent("i-guard-1", "甲。乙。丙。"))
+        .await
+        .unwrap();
+    assert_eq!(quest.tasks.len(), 3, "正常输入应仍由 create_quest 接受");
+}
+
 #[tokio::test]
 async fn test_concurrent_quest_creation() {
     let bus = EventBus::new();
