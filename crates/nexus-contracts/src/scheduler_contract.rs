@@ -12,6 +12,8 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use crate::event_payload::TaskPriority;
+
 /// 任务 ID — 复用 L0 既有契约（ids.rs,五维度稀疏化 ID 之一）
 pub use crate::ids::TaskId;
 
@@ -148,6 +150,30 @@ pub enum ShouldRunVerdict {
     NoActionableWork,
 }
 
+/// 3 档优先级 → 4 档任务优先级（**无损单射**）
+///
+/// WHY 方向唯一：`Priority` 是 `TaskPriority` 的真子集，Low/Medium/High 逐档
+/// 同名同义，正向单射无损；反向 `From<TaskPriority> for Priority` **不可实现**
+/// —— `Critical` 无对应像。它携带抢占权且仅由任务域表达：总线信用流侧的
+/// `Priority`（`event-bus/src/credit_flow.rs:80-91`，仅 High/Normal）已明文将
+/// Critical 排除在外（走 mpsc 旁路无条件投递，属红线）。反向若有需求须走
+/// `TryFrom` 并另立 ADR（§13-bis #9 完整统一批）。
+///
+/// 本 impl 是 v2.0 §6-bis B.0.1「以 `TaskPriority`（4 档）为任务域唯一真值源」
+/// 的最小地基：**不改动任一枚举变体**，故 serde 线上值零变更。
+///
+/// match 不写 catch-all：`Priority` 未来若新增变体即编译错提醒同步此处映射
+///（沿本仓穷举守卫纪律，避免静默走默认分支造成优先级语义漂移）。
+impl From<Priority> for TaskPriority {
+    fn from(p: Priority) -> Self {
+        match p {
+            Priority::Low => TaskPriority::Low,
+            Priority::Medium => TaskPriority::Medium,
+            Priority::High => TaskPriority::High,
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
@@ -178,6 +204,60 @@ mod tests {
     fn priority_ordering() {
         assert!(Priority::High > Priority::Medium);
         assert!(Priority::Medium > Priority::Low);
+    }
+
+    /// 单射逐档映射 — Low/Medium/High 逐档同名同义，不得跨档接错
+    #[test]
+    fn priority_injects_into_task_priority_variant_by_variant() {
+        assert_eq!(TaskPriority::from(Priority::Low), TaskPriority::Low);
+        assert_eq!(TaskPriority::from(Priority::Medium), TaskPriority::Medium);
+        assert_eq!(TaskPriority::from(Priority::High), TaskPriority::High);
+    }
+
+    /// 单射性 — 像互异（三档输入必得三个不同的 4 档像）
+    ///
+    /// WHY 单独断：若未来有人把两档映射到同一像（合并档位），本仓调度
+    /// 语义会静默降级为更粗的粒度而无人察觉；本测试把该退化钉红。
+    #[test]
+    fn priority_injection_is_injective() {
+        let mapped = [
+            TaskPriority::from(Priority::Low),
+            TaskPriority::from(Priority::Medium),
+            TaskPriority::from(Priority::High),
+        ];
+        assert_eq!(mapped[0], TaskPriority::Low);
+        assert_ne!(mapped[0], mapped[1], "Low/Medium 不得塌缩到同一像");
+        assert_ne!(mapped[1], mapped[2], "Medium/High 不得塌缩到同一像");
+        assert_ne!(mapped[0], mapped[2], "Low/High 不得塌缩到同一像");
+    }
+
+    /// 保序性 — 映射后的相对优先级不得反转
+    ///
+    /// `TaskPriority` 未派生 `Ord`（避免 L1 承载调度语义，见
+    /// chimera-mas/src/scheduler.rs:97 注释），故此处按任务域秩函数
+    /// （Critical=3 > High=2 > Medium=1 > Low=0）同式比较，不依赖 `Ord`。
+    #[test]
+    fn priority_injection_preserves_relative_order() {
+        // 任务侧秩：与 chimera-mas::priority_rank 同定义（Critical=3 … Low=0）
+        let task_rank = |p: TaskPriority| match p {
+            TaskPriority::Low => 0,
+            TaskPriority::Medium => 1,
+            TaskPriority::High => 2,
+            TaskPriority::Critical => 3,
+        };
+        let lo = task_rank(TaskPriority::from(Priority::Low));
+        let med = task_rank(TaskPriority::from(Priority::Medium));
+        let hi = task_rank(TaskPriority::from(Priority::High));
+        assert!(lo < med, "Low→Medium 相对序不得反转");
+        assert!(med < hi, "Medium→High 相对序不得反转");
+        // 3 档枚举均不得映射到 Critical（Critical 携带抢占权，仅任务域可给）
+        for p in [Priority::Low, Priority::Medium, Priority::High] {
+            assert_ne!(
+                TaskPriority::from(p),
+                TaskPriority::Critical,
+                "调度侧不得凭空抬升出 Critical 抢占权"
+            );
+        }
     }
 
     /// 序列化 — 可编解码类型（Quota/DenyReason/RenewOutcome/ShouldRunVerdict）
