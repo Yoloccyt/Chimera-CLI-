@@ -87,6 +87,11 @@ pub struct ComputeBridge {
     /// WHY ArcSwap 而非 RwLock:route() 是纳秒级热路径（P99 < 1µs 门禁）,读路径
     /// 必须无锁;更新（T1 测定/T14 校准）低频,RCU store 全表替换代价可忽略。
     hts: ArcSwap<HtsTable>,
+    /// 阈值表写者串行锁 — 消除 `update_threshold` 的 load→clone→store lost-update
+    ///
+    /// WHY 单独一把 Mutex 而非 arc-swap CAS:见 [`update_threshold`](Self::update_threshold)
+    /// 文档。仅串行化低频写者,读路径 `route` 不碰此锁。
+    hts_write_lock: std::sync::Mutex<()>,
     /// WI-34 利用率探针 — 池活跃任务计数（spawn +1 / 完成 −1,T1 接线）
     ///
     /// WHY 独立 Arc:任务闭包需 `'static`,守卫持 Arc 克隆入闭包,RAII Drop 归还。
@@ -145,6 +150,7 @@ impl ComputeBridge {
             pool,
             // HTS 初始表:dispatch.rs 静态值迁移（S9 离线测定预填,W1 复测,§8.4）
             hts: ArcSwap::from_pointee(HtsTable::default()),
+            hts_write_lock: std::sync::Mutex::new(()),
             active: Arc::new(ActiveCounter::default()),
             thread_count: threads,
             counters: KindCounters::default(),
@@ -170,6 +176,7 @@ impl ComputeBridge {
         Self {
             pool,
             hts: ArcSwap::from_pointee(HtsTable::default()),
+            hts_write_lock: std::sync::Mutex::new(()),
             active: Arc::new(ActiveCounter::default()),
             thread_count: threads,
             counters: KindCounters::default(),
@@ -329,8 +336,14 @@ impl ComputeBridge {
 
     /// 运行期更新阈值表 — T1 测定值灌入 / T14 序贯检验校准的转发接口
     ///
-    /// WHY RCU store 而非原地改:读路径持无锁快照,更新必须全表替换（arc-swap 语义）;
-    /// 更新低频（测定/校准事件）,每次复制 6 条 Entry 的成本可忽略。
+    /// WHY 写者串行而非 arc-swap CAS:旧实现 `load_full → clone → store` 非原子,两个
+    /// 并发更新会互相覆盖(lost update)——旧注释"单写者"此前只靠"唯一写者=低频周期器且
+    /// 默认 Off"这一运行期约定成立,并非接口层保证(`update_threshold` 是 `pub`)。
+    /// `Shared`/`Guard` deref 到内层值而非 `Arc`,指针级 CAS 成功判据在本绑定(1.9.2)易踩
+    /// API 陷阱,且 `compare_and_swap` 自 1.6 soft-deprecated 会触发 `-D warnings`。故用
+    /// `hts_write_lock` 仅在**写者之间**串行——写者本就低频(T1 测定 / T14 周期器 flush),
+    /// **读路径 `route` 仍走 ArcSwap `load` 无锁,热路径零影响**。持锁仅跨一次 clone+store
+    /// (同步、无 await,不触"持锁跨 await"红线);中毒经 into_inner 兜底。
     /// `source` 为强制显式参数（诚实数据红线:阈值必须可溯源,见 [`ThresholdSource`]）。
     pub fn update_threshold(
         &self,
@@ -339,6 +352,12 @@ impl ComputeBridge {
         chunk: usize,
         source: ThresholdSource,
     ) {
+        // 写者串行:独占一次 load→clone→update→store,消除跨写者的 lost-update。
+        // 命名 `_guard`(非 `let _`)确保 RAII 持到作用域末;into_inner 兜底中毒(单值语义,无脏数据)。
+        let _guard = self
+            .hts_write_lock
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let current = self.hts.load_full();
         let mut next = (*current).clone();
         next.update(kind, threshold, chunk, source);
@@ -689,6 +708,39 @@ mod tests {
         assert_eq!(b.route(kind, 9), DispatchPlan::Inline);
         // 未更新的类别不受影响
         assert_eq!(b.route(TaskKind::KnnSearch, 5_000), DispatchPlan::Rayon);
+    }
+
+    /// 并发 update_threshold 无丢更新 — 锁住旧实现 load→clone→store 的非原子竞态
+    ///
+    /// WHY:旧实现裸 `store` 整表替换,多线程并发写**各不同的 kind**时会互相覆盖
+    /// (后写者基于自己早先 load 的快照,抹掉先写者对其他 kind 的更新)。distinct-kind
+    /// 设计不依赖各 kind 默认值、断言稳健:每个 kind 的哨兵写入都必须存活。CAS 环
+    /// (`rc_swap`)失败即基于最新快照重放,保证全部写入存活。本测在旧实现有概率红、
+    /// 新实现必绿(跨 kind 丢失更新被 CAS 消除)。用 `test_bridge` 独立实例避全局单例竞争。
+    #[test]
+    fn update_threshold_concurrent_no_lost_update() {
+        let b = Arc::new(ComputeBridge::test_bridge(4));
+        const SENTINEL: usize = 12_345;
+        let handles: Vec<_> = TaskKind::ALL
+            .iter()
+            .copied()
+            .map(|kind| {
+                let b = Arc::clone(&b);
+                std::thread::spawn(move || {
+                    b.update_threshold(kind, SENTINEL, 64, ThresholdSource::ConservativeDefault);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("并发 update_threshold 线程应正常退出");
+        }
+        for kind in TaskKind::ALL {
+            assert_eq!(
+                b.threshold_of(kind),
+                SENTINEL,
+                "{kind:?} 的阈值更新被他线程覆盖(lost update)"
+            );
+        }
     }
 
     /// 池探针语义 — 批量任务执行期间活跃数 > 0,完成后归零
