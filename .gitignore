@@ -52,6 +52,9 @@ dist/
 
 # === 文档/规格/规则文件 — 本地保留，不入远程仓库 ===
 *.md
+# 例外：ADR 法条须入库（G-99 硬前置，P0-④ / 调度层 v2.0 §7-bis）——CI 的干净克隆
+# 上需可核 ADR 存在性与条款引用（spec_ref 外键门等的核验域）；其余 .md 维持本地保留。
+!docs/architecture/ADR-*.md
 .claude/
 .trae/
 
