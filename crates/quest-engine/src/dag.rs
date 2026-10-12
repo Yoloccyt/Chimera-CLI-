@@ -13,13 +13,13 @@
 //!   criterion 基线:1000 节点 diamond 21.1ms),且 `topological_order`
 //!   前置调用它造成双重遍历;现统一用 dependents 反向邻接索引。
 //!
-//! # 确定性契约(下游 GQEP 调度依赖)
+//! # 确定性契约(定序结果由 `create_quest` 消费)
 //! 同层(入度同时归零)节点按 task_id 字典序入队——同一任务集的
 //! 拓扑序输出永远一致(proptest 守护:新旧实现判环一致 + 序确定性)。
 //!
 //! # 架构红线
 //! - 所有 Quest 在创建时必须通过 DAG 校验(防止执行时死锁)
-//! - GQEP 执行器按拓扑序调度 Task,确保依赖先完成
+//! - 定序在 `create_quest` 入口生效;`gqep-executor` 当前不消费 `Task::dependencies`
 
 use std::collections::{HashMap, HashSet, VecDeque};
 

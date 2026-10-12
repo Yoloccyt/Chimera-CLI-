@@ -81,8 +81,8 @@ pub enum ThinkingMode {
 
 /// 任务节点 — Quest 中的单个执行单元
 ///
-/// `dependencies` 存储前置 Task ID 列表,支持 DAG 依赖图。
-/// GQEP 执行器据此拓扑排序,确保依赖先完成。
+/// `dependencies` 存储前置 Task ID 列表,支持 DAG 依赖图。定序实际发生在 `quest-engine`
+/// 的 `create_quest`(调 `sort_tasks_topologically`);`gqep-executor` 当前不读取本字段。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Task {
     /// 任务唯一标识
