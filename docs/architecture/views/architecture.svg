@@ -3,7 +3,7 @@
   <desc>GENERATED artifact. Regenerate with `python scripts/emit_architecture_views.py --write`; `--verify` fails on any hand edit. Numbers below come from `layers.txt` / `domains.txt` / `dependency.dot` in this same directory.</desc>
   <rect x="0" y="0" width="1240" height="1062" fill="#ffffff"/>
   <text x="28" y="46" font-size="24" font-weight="bold" fill="#111827">Chimera CLI (NEXUS-OMEGA) architecture — emitted view</text>
-  <text x="28" y="72" font-size="13" fill="#4b5563">39 crates · 11 layers · 4 domains · 135 non-optional internal edges · upward-edge violations (iron law) = 0</text>
+  <text x="28" y="72" font-size="13" fill="#4b5563">39 crates · 11 layers · 4 domains · 136 non-optional internal edges · upward-edge violations (iron law) = 0</text>
   <text x="28" y="92" font-size="13" fill="#4b5563">Dependencies may only point down (L(N)→L(N−1)) or sideways; cross-layer communication goes through event-bus (L1) or mcp-mesh (L10) only.</text>
   <line x1="28" y1="108" x2="1212" y2="108" stroke="#e5e7eb"/>
   <rect x="84" y="724" width="808" height="130" rx="8" fill="#eef2ff" stroke="#c7d2fe"/>
@@ -21,7 +21,7 @@
   <rect x="84" y="166" width="808" height="130" rx="8" fill="#eff6ff" stroke="#bfdbfe"/>
   <rect x="92" y="172" width="6" height="118" rx="3" fill="#bfdbfe"/>
   <text x="912" y="188" font-size="13" font-weight="bold" fill="#374151">D3 编排与接口</text>
-  <text x="912" y="206" font-size="12" fill="#6b7280">L9-L10 · 13 crates · 10 intra-domain edges</text>
+  <text x="912" y="206" font-size="12" fill="#6b7280">L9-L10 · 13 crates · 11 intra-domain edges</text>
   <rect x="28" y="184" width="56" height="32" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
   <text x="42" y="206" font-size="14" font-weight="bold" fill="#374151">L10</text>
   <rect x="110" y="185" width="95" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>

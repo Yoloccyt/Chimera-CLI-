@@ -53,6 +53,7 @@ digraph chimera {
   "chimera-cli" -> "gsoe-evolution";
   "chimera-cli" -> "hcw-window";
   "chimera-cli" -> "kvbsr-router";
+  "chimera-cli" -> "mas-sched";
   "chimera-cli" -> "mcp-mesh";
   "chimera-cli" -> "mlc-engine";
   "chimera-cli" -> "nexus-app-server";
