@@ -102,6 +102,10 @@ pub struct AppContext {
     pub gea: Arc<gea_activator::GeaActivator>,
     /// GQEP 聚集执行器（M12 / ADR-185 D3；doctor 探针并行 gather 复用）
     pub gqep: Arc<gqep_executor::GqepExecutor>,
+    /// 多代理调度控制面（P1 候选③ / ADR-211 Accepted 2026-10-12；
+    /// `agent spawn` 前 claim 准入——claim/lease/quota，单任务即有真实语义）。
+    /// `with_rate_limit` 护栏随批装配（ephemeral 进程内生效；跨进程留待常驻宿主）。
+    pub sched: Arc<mas_sched::SimplePeerScheduler>,
     /// 推测上下文缓存（M13 / ADR-161 路径①；SccCache Clone=Arc 共享,
     /// doctor scc_cache 探针经此真实消费 stats()）
     pub scc: scc_cache::SccCache,
@@ -175,6 +179,11 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
     // E01-E08 静态编制 → gea 动态画像(幂等,启动期一次性)
     chimera_mas::gea_bridge::register_mas_experts(&gea);
     let gqep = gqep_executor::GqepExecutor::new(gqep_executor::GqepConfig::default(), bus.clone());
+    // P1 候选③（ADR-211 Accepted 2026-10-12）:mas-sched claim 准入调度器。
+    // WHY with_rate_limit: broker 护栏（防轮询风暴）随批携带；ephemeral 进程内
+    // 单次 claim 不触发阈值，跨进程防护留待常驻宿主（serve/tui）复用同一实例。
+    // 运行期开关为 env 三态 CHIMERA_SCHED_CLAIM（off 默认），非 feature。
+    let sched = mas_sched::SimplePeerScheduler::with_rate_limit(60, 60_000);
     // M13(ADR-161 路径①):scc-cache 组合根装配——默认配置(容量 256,零 IO 轻构造),
     // 与 bus 同生命周期;doctor scc_cache 探针每次运行经 ctx.scc 真实消费
     // stats()(非"构造即丢弃");CacheHit/Miss 事件仅由真实缓存访问触发,
@@ -228,6 +237,7 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
         server_config: AppServerConfig::default(),
         gea: Arc::new(gea),
         gqep: Arc::new(gqep),
+        sched: Arc::new(sched),
         scc,
         cross_vendor_providers,
         #[cfg(feature = "r2_unfreeze")]

@@ -2,7 +2,7 @@
 //! LAYER:    L10
 //! ROLE:     Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
 //! BACKEND:  fs
-//! PRODUCERS: 23 CacheHit,CoordinationRatioReported,GatherCompleted,OperationTimedOut,OverWindowFallbackTriggered…
+//! PRODUCERS: 25 CacheHit,ClaimIssued,ClaimRetracted,CoordinationRatioReported,GatherCompleted…
 //! CONSUMERS: 0 -
 //! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN|SIMPLIFIED-CN
 //! CRATE-CONTRACT END
@@ -77,6 +77,10 @@ pub mod experience_loop;
 pub mod handshake;
 /// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)
 pub mod orchestrator;
+/// P1 候选③（ADR-211 Accepted）：`agent spawn` 前 mas-sched claim 准入
+/// （env 三态 `CHIMERA_SCHED_CLAIM`，off 默认逐位等价）
+/// + `ClaimIssued`/`ClaimRetracted` 生产发出点（Normal/Parliament Topic）。
+mod sched_claim;
 // PROBE P3.2: 超窗兜底桥（kvbsr→repo-wiki→hcw 两级检索真实链路）
 pub mod overwindow_bridge;
 // PROBE P2.2: 选择器学习编排器（S4 → holder → window 注入链）

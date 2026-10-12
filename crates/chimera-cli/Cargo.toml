@@ -20,7 +20,7 @@ r2_unfreeze = ["dep:decay-engine", "dep:omega-learner"]
 # Phase 2:冻结孤岛偿还 (P1-T1)
 r2_island_repayment = [
     "dep:mtpe-executor", "dep:ssra-fusion", "dep:sesa-router",
-    "dep:csn-substitutor", "dep:chtc-bridge", "dep:mas-sched",
+    "dep:csn-substitutor", "dep:chtc-bridge",
     "dep:nexus-hook"
 ]
 
@@ -91,7 +91,12 @@ ssra-fusion = { workspace = true, optional = true }
 sesa-router = { workspace = true, optional = true }
 csn-substitutor = { workspace = true, optional = true }
 chtc-bridge = { workspace = true, optional = true }
-mas-sched = { workspace = true, optional = true }
+# P1 候选③（ADR-211 Accepted 2026-10-12）:mas-sched(L9 Quest 层)——
+# `agent spawn` 前 claim 准入（claim/lease/quota 控制面；单任务即有真实语义）。
+# 此前为 r2_island_repayment 下 optional 边（GATED-UNWIRED，src 零引用），
+# 接线后翻**生产边**：不再列 dep: 项（非 optional 依赖用 dep: 语法是 Cargo 硬错误）；
+# L10→L9 向下依赖合规（§2.2）。开关为运行期 env（CHIMERA_SCHED_CLAIM），非 feature。
+mas-sched = { workspace = true }
 nexus-hook = { workspace = true, optional = true }
 hcw-window = { workspace = true }
 # nexus-core:L1 核心类型,Task 1.10 agent spawn 构造 Task / TaskStatus 领域对象

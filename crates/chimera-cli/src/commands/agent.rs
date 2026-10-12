@@ -77,7 +77,7 @@ pub async fn execute_with_ctx(
     match action {
         AgentAction::List => list_agents(&orchestrator, json).await,
         AgentAction::Spawn { quadrant, task } => {
-            spawn_agent(&orchestrator, quadrant, task, parallel, json).await
+            spawn_agent(&orchestrator, ctx, quadrant, task, parallel, json).await
         }
         AgentAction::Inspect { id } => inspect_agent(&orchestrator, id, json).await,
         AgentAction::Cancel { id } => cancel_agent(&orchestrator, id, perm, json, dry_run).await,
@@ -140,8 +140,13 @@ async fn list_agents(orchestrator: &RootOrchestrator, json: bool) -> Result<()> 
 ///
 /// 验证象限参数后,构造 AgentTask 调用 `RootOrchestrator::delegate`。
 /// `--parallel` 使用 Medium 复杂度(创建 2 个并行 Agent),否则使用 Simple(1 个)。
+///
+/// P1 候选③（ADR-211 Accepted 2026-10-12）：delegate 前经 [`crate::sched_claim`]
+/// 向 mas-sched 申请 claim 准入（env 三态，off 默认逐位等价旧路径）；已授予的
+/// claim 在 delegate 失败时撤回（`ClaimRetracted`）。
 async fn spawn_agent(
     orchestrator: &RootOrchestrator,
+    ctx: &AppContext,
     quadrant: &str,
     task_desc: &str,
     parallel: bool,
@@ -164,6 +169,8 @@ async fn spawn_agent(
         status: TaskStatus::Pending,
         dependencies: vec![],
     };
+    // P1 候选③（ADR-211）：task 被 move 进 AgentTask 前留存 ID，供 claim/retract 复用
+    let task_id = task.task_id.clone();
 
     let agent_task = AgentTask::new(
         task,
@@ -173,13 +180,41 @@ async fn spawn_agent(
         QualityLevel::Standard,  // quality_requirement
     );
 
-    // 3. 调用 delegate 创建子 Agent
-    let handles = orchestrator
-        .delegate(agent_task)
-        .await
-        .map_err(|e| ChimeraCliError::EngineError(format!("Agent 创建失败: {e}")))?;
+    // 3. P1 候选③（ADR-211 Accepted 2026-10-12）：delegate 前 mas-sched claim 准入。
+    //    off（默认）档逐位等价旧路径；apply 档被拒阻断（回归 ADR-060 错误矩阵）；
+    //    est 取 acceptable_latency（60s，与 AgentTask::new 一致），恒过时长门。
+    let gate = crate::sched_claim::preflight(
+        crate::sched_claim::mode(),
+        &ctx.sched,
+        &ctx.bus,
+        &task_id,
+        task_desc,
+        quadrant,
+        60_000,
+    )
+    .await
+    .map_err(|reason| {
+        ChimeraCliError::EngineError(format!("sched claim 拒绝（apply 档）: {reason:?}"))
+    })?;
 
-    // 4. 输出
+    // 4. 调用 delegate 创建子 Agent（失败时撤回已授予的 claim——审计完整性，
+    //    成功路径不显式 retract：ephemeral 进程退出即释放，见 ADR-211 §7.3 裁量）
+    let handles = match orchestrator.delegate(agent_task).await {
+        Ok(handles) => handles,
+        Err(e) => {
+            if gate == crate::sched_claim::ClaimGate::Granted {
+                crate::sched_claim::publish_retract(
+                    &ctx.bus,
+                    &task_id,
+                    &format!("delegate failed: {e}"),
+                )
+                .await;
+            }
+            return Err(ChimeraCliError::EngineError(format!("Agent 创建失败: {e}")).into());
+        }
+    };
+
+    // 5. 输出
     if json {
         let agents: Vec<_> = handles
             .iter()

@@ -26,7 +26,6 @@ CalibrationSample
 CapabilityTokenStatus
 CertifyPayload
 CertifyVerdict
-ClaimOutcome
 ClaimPayload
 CommandValidationError
 Compressibility
@@ -40,7 +39,6 @@ ContractSpec
 CostEstimate
 Currency
 DeclaimPayload
-DenyReason
 EmptyFormalProvider
 EndpointSpec
 EnvironmentInfo
@@ -110,7 +108,6 @@ PlatformGroundingSpec
 PolicyFormat
 PriceVector
 PricingSpec
-Priority
 ProceduralBlueprint
 ProjectedMatrix
 PropertyCategory
@@ -153,7 +150,6 @@ StopStrategyConfig
 TaskOrchestrationContract
 ThinkingPreference
 Thread
-TodoClaim
 ToolCallRecord
 ToolDecl
 ToolFailure
