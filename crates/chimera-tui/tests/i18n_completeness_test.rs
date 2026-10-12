@@ -734,7 +734,12 @@ fn panel_name_keys_resolve_in_both_locales_and_align_with_border() {
 /// WHY 源码解析而非运行时遍历:`lookup` 是 match 语句,返回 `&'static str`,
 /// 无法运行时枚举全键集;按纯测试侧方案仿 `extract_i18n_keys` 的逐行文本解析
 /// 范式,匹配行首 `"key" =>` 臂模式——多行值臂(`"key" => {`)与单行值臂均
-/// 命中,值文本行(行首引号后无 `=>`)天然排除,`_ =>` 尾臂为终止锚。
+/// 命中,值文本行(行首引号后无 `=>`)天然排除。
+///
+/// 2026-10-09 v3.5 G-48 后的口径：键表已从单一 `pub fn lookup` 拆为若干
+/// `fn lookup_table_N`（单函数 ≤200 行红线），故入口条件包含两者；函数边界改由**顶格 `}`**
+/// 判定而非“见到 `_ =>` 就停”——分段后每段都有自己的 `_ =>` 尾臂，按旧锚点会在第一段就截断。
+/// 解析结果为空仍然红（“防解析器静默放水”那枚断言不变），所以改为“逐段扫描”不会把门改松。
 fn extract_lookup_keys(path: &Path) -> std::collections::HashSet<String> {
     let content = fs::read_to_string(path).expect("i18n key table readable");
     let mut keys = std::collections::HashSet::new();
@@ -745,7 +750,7 @@ fn extract_lookup_keys(path: &Path) -> std::collections::HashSet<String> {
             Some(idx) => &line[..idx],
             None => line,
         };
-        if code.contains("pub fn lookup") {
+        if code.contains("pub fn lookup") || code.contains("fn lookup_table_") {
             in_lookup = true;
             continue;
         }
@@ -753,16 +758,21 @@ fn extract_lookup_keys(path: &Path) -> std::collections::HashSet<String> {
             continue;
         }
         let trimmed = code.trim_start();
+        // 顶格 `}` = 当前表函数结束;下一个 `lookup_table_N` 会重新进入。
+        // WHY 比“trimmed == "}"”更严：表内存在**多行值臂**（如
+        // `"status.jumped_eventstream_multi_quest" => { … }`），其 8 空格缩进的收尾 `}`
+        // 不是函数结束;误判会静默截断后面所有表（实测 en 580 键只读到 329）。
+        // WHY 不在此 break：拆段后“一个函数到底”会漏读后面几段的全部键。
+        if code == "}" {
+            in_lookup = false;
+            continue;
+        }
         if let Some(rest) = trimmed.strip_prefix('"') {
             if let Some(end) = rest.find('"') {
                 if rest[end + 1..].trim_start().starts_with("=>") {
                     keys.insert(rest[..end].to_string());
                 }
             }
-        }
-        // 尾臂 `_ => return None` 之后函数即结束(两表结构一致,同为尾臂)
-        if trimmed.starts_with("_ =>") {
-            break;
         }
     }
     keys
