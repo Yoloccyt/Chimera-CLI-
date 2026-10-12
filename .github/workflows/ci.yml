@@ -268,6 +268,32 @@ jobs:
           python3 scripts/emit_architecture_views.py --check
           python3 scripts/emit_architecture_views.py --verify
 
+      # WHY: P0-③（调度层 v2.0 §7-bis）——把此前以 ci_exempt 豁免在册的判据门接进
+      # CI 阻塞轨，关闭「清单看着不是红、实际从未裁决」病理（§5.2 断点 2）。
+      # G-38/G-39 的 P3|Check A 分歧已随 ADR-187（α′）双侧退役消除（expect 翻 0）；
+      # G-93~G-98 为 v3.5 门底座（dev-dep 方向 / 形式化名册 / v3.4.0 提案三态）。
+      # 全部门 2026-10-12 本机实跑 rc=0、--selftest 全绿；零 cargo、秒级。
+      # 沿既有「先 --selftest 证明有牙，再跑真实裁决」范式。
+      - name: Gate predicate parity (G-38/G-39, Q15)
+        run: |
+          python3 scripts/check_gate_predicates_parity.py --selftest
+          python3 scripts/check_gate_predicates_parity.py
+
+      - name: Dev-dependency direction gate (G-93/G-94)
+        run: |
+          python3 scripts/check_dev_dep_direction.py --selftest
+          python3 scripts/check_dev_dep_direction.py
+
+      - name: Formal property ledger gate (G-95/G-96)
+        run: |
+          python3 scripts/check_formal_property_ledger.py --selftest
+          python3 scripts/check_formal_property_ledger.py
+
+      - name: v3.4.0 crate proposals tri-state gate (G-97/G-98)
+        run: |
+          python3 scripts/check_v340_crate_proposals.py --selftest
+          python3 scripts/check_v340_crate_proposals.py
+
       # WHY: 组合根装配门(架构重构方向 B-c 交付, gate_manifest G-28/G-29)——
       # chimera-cli/src/composition.rs 是唯一合法装配点;实测(2026-09-12)生产路径
       # 9 处 EventBus::new 中 8 条命令路径绕过组合根,导致 Critical 送达仅 1/9 生效

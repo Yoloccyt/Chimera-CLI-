@@ -437,7 +437,6 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "判据对拍门有牙齿（10 项：5 检测器 + 本门自身 3 类假阳性回归 + 基线抑制/失效两态）"
-ci_exempt = "元审计:双源规则结构对拍,收口时跑;CI 实跑体是 .sh 本身(G-08),.ps1 无 CI 调用方"
 
 # ★ RESOLVED 2026-09-24 (ADR-187, alpha-prime): the sole unregistered finding
 # P3|Check A (the semantic divergence .sh inner-ring no-layer-comparison vs .ps1
@@ -455,7 +454,6 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "双源判据对拍：Check A 已由 ADR-187（α′）从 .sh/.ps1 双侧退役，P3|Check A 分歧消除 ⇒ expect 由设计性红 1 翻 0；余 4 条 arity 差异仍按语言惯例登记于 gate_predicate_baseline.txt（只减不增）"
-ci_exempt = "同 G-38:元审计,收口时跑;Q3 已落地(α′),门转绿"
 
 # 文档"名单"门（F6，2026-09-21）。check_doc_drift 只钉基数（146/10/41），所以
 # CODE_WIKI §5.5 写出不存在的 `SecurityAuditCompleted`、把 `RouterStatsReported`
@@ -1030,7 +1028,6 @@ cmd = "{python} scripts/check_dev_dep_direction.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-ci_exempt = "观察期(一周期)本地必跑；暂不抢 CI 阻塞权——接 ci.yml 需随同类授权(同 G-44/G-41 口径)，且观察结果若为零新增违规则升阻塞无噪声成本"
 note = "向上 dev-dependency 边门(只减不增台账 dev_dep_freeze.txt)：新向上边未登记 [GAP-D] 红;登记行在盘上已不再向上(消边或改同层/向下)而仍留着 ⇒ [STALE] 红;成员在权威层表查不到/基线缺失或畸形/未知旗标 ⇒ 退 2(绝不「查不到就当合规」)。dev 段解析含 [target.<cfg>.dev-dependencies](盘上实测 0 条,但漏认就是静默旁路)。现读:39 成员/内部 dev 边 27/向上 2(均在台账并引到各自的注释型豁免源头 Cargo.toml:45-46 与 :58-59——本门就是把 C-52 定性为「注释即治理」的两条升成机器判据)/未登记 0。整链牙齿见 tmp/c52_teeth.py(向上边必红/基线漏行必红/向下边不误伤,三项均字节还原)"
 
 [[gate]]
@@ -1040,7 +1037,6 @@ cmd = "{python} scripts/check_dev_dep_direction.py --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-ci_exempt = "与 G-93 同口径（观察期）"
 note = "向上 dev 边门有牙(夹具数由 --selftest 自报)：同层/向下边不误伤/新向上边未登记必红/已登记存量放行/幽灵基线必红/已消边未删行必红/层号缺失退 2/成员集为空退 2(防 glob 失效被读成零违规)/target 限定 dev 段不得静默漏检/build-dep 与自依赖不计入/未知旗标退 2/层表派生失败退 2/基线文件缺失退 2(fail-closed)"
 
 # v3.5 C-43：形式化“7 属性”名册与实装 checker 的对账。名册内容属 ADR-052/053 引用的
@@ -1052,7 +1048,6 @@ cmd = "{python} scripts/check_formal_property_ledger.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-ci_exempt = "本轮新增；接 CI 阻塞待同类授权（同 G-44/G-93 口径）"
 note = "形式化名册 vs 实装 checker 对账门：名册源 = `nexus-contracts/src/formal_props.rs::EmptyFormalProvider`(唯一 src 侧枚举)；checker 靠脚本内 ROSTER 逐行指到文件并校存活性(文件在且含 `pub struct`)。判据：名册位无 checker 且未登记 ⇒ [GAP-P]；实装 checker 未入名册且未登记 ⇒ [GAP-P]；checker 文件被剔空 ⇒ [GAP-P]；登记失效(两边已对账或该属性已不在名册) ⇒ [STALE] 必删行；名册源读不出/checker 文件缺失/登记缺消解出口/未知旗标 ⇒ 退 2。现读：名册 7 / checker 7 / 登记错配 2 且均仍成立——**`preference-consistency` 无 checker(宿主 auto-dpo 已随 ADR-172 退役)，而 `ConsensusSafetyChecker`(parliament/src/formal/consensus_safety.rs:50) 不在名册**；两条消解出口(补/删)均改变 ADR-052/053 引用的证据集 ⇒ 需新 ADR，本轮只把错配固定为不可扩大且可见，不默许它继续增长"
 
 [[gate]]
@@ -1062,7 +1057,6 @@ cmd = "{python} scripts/check_formal_property_ledger.py --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-ci_exempt = "与 G-95 同口径"
 note = "对账门有牙(夹具数由 --selftest 自报)：一致且登记有效⇒绿/新名册位无 checker 未登记⇒红/带理由登记⇒绿/失效登记⇒红(防僵尸登记掩盖复发)/checker 文件被剔空⇒红/checker 文件缺失⇒退 2/名册源缺失⇒退 2/登记不写消解出口⇒退 2/未知旗标⇒退 2/真树形状断言(名册 7 且 checker 7)"
 
 [[gate]]
@@ -1072,7 +1066,6 @@ cmd = "{python} scripts/check_v340_crate_proposals.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-ci_exempt = "本轮新增；接 CI 阻塞待同类授权（同 G-44/G-93/G-95 口径）"
 note = "文档声称↔代码事实对账门（原则 3「主张必须可证伪」在 crate 预算轴上的形式）：候选名 = §4.1 架构图 `[...]` 括号组（**跨行折行且 L1 存在嵌套 `[`**，逐行正则会把整组漏光——上一版取证器就是这样报 0 个候选名） ∪ §4.2 表「组件/落地方案」两列反引号内 crate 形状 token。三条判据：INV-A §4.1 括号内的提案名不得成为 workspace 成员 crate（即原则 2『0 新增 crate』的机检形式；§4.2 组件列出现既有 crate 属「强化」项，不在论域）；INV-B 总账附录 4A 标记块里的判定表必须恰好覆盖候选名集合（缺行=主张又没证据 ⇒ [GAP-MISS]；多行=表与源文档漂移 ⇒ [GAP-STALE]）；INV-C 每行证据里的 `crates/...rs:NN` 必真存在且行号不越界（LANDED 无该行号 ⇒ [GAP-EV]；本门首跑就抓到一条我亲手写下的不可定位证据：给 `osa-coordinator/src/six_dimension.rs` 写了括号注释却没带 `:94`，门判 [GAP-EV]；校后补齐行号）。源文档缺失/§4.1 定位失败/候选名为空/附录块缺失/终判列未知取值 ⇒ 退 2（绝不「查不到就当合规」）。现读：候选名 101（§4.1 口径 70）/判定表 101 行/成员 crate 39/违规 0"
 
 [[gate]]
@@ -1082,7 +1075,6 @@ cmd = "{python} scripts/check_v340_crate_proposals.py --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-ci_exempt = "与 G-97 同口径"
 note = "对账门有牙（夹具数由 --selftest 末行自报，不在此登记）：一致⇒绿/§4.1 提案成为 crate⇒红/表缺行⇒红/表多行⇒红/证据行号越界⇒红/证据文件不存在⇒红/VOID 无理由⇒红/VOID 行里的假路径也被抓⇒红/未知终判⇒退 2/附录块缺失⇒退 2/§4.1 定位失败⇒退 2；夹具集合为空也退 2（禁止空集全绿）。注意：首版夹具自身就是错的（把 alpha-one 放在括号外、又漏了「落地方案」列反引号产生的 pvl-layer 候选行），导致「一致⇒绿」用例红了一轮——这是夹具的问题不是判据的问题，修的是夹具"
 
 
