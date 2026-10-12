@@ -12,6 +12,7 @@
 //!   WHY entangle:QEEP 内部维护 `pending_calls` 与 `OrphanDetector`,
 //!   future 正常完成标记 `completed=true`,异常 drop 则报告孤儿。
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -24,6 +25,26 @@ use tracing::warn;
 use crate::config::GqepConfig;
 use crate::error::GqepError;
 use crate::types::{GatherCollected, GatherResult, GqepFuture};
+
+/// `collect_bounded` 的采集统计（crate 私有）
+///
+/// WHY 结构体而非 4/6 元组：本批新增 `abandoned` / `not_started` 后，
+/// 多值返回靠位置区分会读错且编译器兜不住（两个都是 u32）；
+/// 命名字段同时戒掉「记账公式在两处各写一遍」的双源风险。
+struct GatherStats<T> {
+    /// 成功数
+    succeeded: u32,
+    /// 成功值（完成序）
+    values: Vec<T>,
+    /// 失败数（含单操作超时）
+    failed: u32,
+    /// 逐条错误（全局超时时额外含一条 `GlobalTimedOut`）
+    errors: Vec<GqepError>,
+    /// 已入流（被 poll 过）但被全局 deadline 放弃——有 `OrphanGuard` 归因
+    abandoned: u32,
+    /// 从未入流、从未被 poll——**没有** `OrphanGuard`，只能靠本字段显式归因
+    not_started: u32,
+}
 
 /// GQEP 执行器 — 并发异步操作的聚集汇聚核心
 ///
@@ -77,26 +98,46 @@ impl GqepExecutor {
     /// # 双层超时防护
     /// - **单操作超时**:`entangle` 内部用 `tokio::time::timeout` 包裹每个 future
     ///   (阈值取自 `config.default_timeout_ms`),超时返回 `OperationTimeout`。
-    /// - **全局超时**:整个 `stream.next()` 循环用 `tokio::time::timeout` 包裹
-    ///   (阈值取自 `config.gather_deadline_ms`),超时返回 `GlobalTimedOut` 并
+    /// - **全局超时**:整个采集循环用 `tokio::time::timeout_at` 包裹
+    ///   (阈值取自 `config.gather_deadline_ms`),超时追加 `GlobalTimedOut` 错误并
     ///   发布 `GatherTimedOut` 事件。`gather_deadline_ms = 0` 时禁用(向后兼容)。
     ///   WHY 全局超时:大规模 gather 时单操作超时累积可能导致整体执行时间失控,
     ///   全局 deadline 为整批操作兜底(对应架构红线"所有异步操作必须有 GQEP
-    ///   聚集/超时处理")。
+    ///   聚集/超时处理")。WHY `timeout_at`:并发上界下多批必须共享**同一个绝对
+    ///   时刻**,逐批重置相对超时会把总墙钟放大成 `deadline × 批数`(ADR-202 I4)。
+    ///
+    /// # 并发上界(ADR-202 Option B)与**契约变更**(Annex C-6)
+    /// 入参 `futures` **不再保证全部被执行**：实际在飞数受
+    /// [`GqepConfig::max_concurrency`] 约束（钳制到 `[1, MAX_GATHER_FANOUT]`），
+    /// 超出的部分排在 backlog 里等前一个完成才入流。若全局 deadline 先触发,
+    /// 留在 backlog 的元素**从未被 poll**，因而**不会触发 QEEP `OrphanGuard`**
+    /// （注册发生在 async 体首次执行）——它们不产生孤儿事件,只计入返回值的
+    /// `not_started` 与 `GatherTimedOut` 事件字段。
+    ///
+    /// WHY 调用方必须读这条：`not_started` 兼有**重试幂等判据**——它表示「根本没跑」,
+    /// 与 `abandoned`（已执行但被放弃）不可合并；副作用型/计费型调用方只有区分
+    /// 两者才能安全重试（合并则重试可能重复副作用或漏掉未做的工）。
+    /// 需要「全部必执行」的调用方应保证 `gather_deadline_ms = 0`（不限时）或把
+    /// `max_concurrency` 设为不小于入参数量。
     ///
     /// # 流程
     /// 1. 记录开始时间
     /// 2. 每个 future 经 `entangle` 包裹(实现孤儿检测 + 单操作超时)
-    /// 3. `collect_with_deadline` 流式处理 + 全局 deadline 包裹
-    /// 4. 检查 `orphan_reports`,发布 `OrphanCallDetected` 事件(Critical)
-    /// 5. 发布 `GatherCompleted` 事件
+    /// 3. 按上界分批入流，`collect_bounded` 流式处理 + 单一绝对 deadline 包裹
+    /// 4. 四段守恒记账（`succeeded + failed + abandoned + not_started == total`）
+    /// 5. 检查 `orphan_reports`,发布 `OrphanCallDetected` 事件(Critical)
+    /// 6. 发布 `GatherCompleted` 事件
     ///
     /// # 参数
-    /// - `futures`:待聚集的异步操作列表
+    /// - `futures`:待聚集的异步操作列表（见上「契约变更」：不保证全部被执行）
     ///
     /// # 返回
-    /// 聚集结果统计(总数/成功数/失败数/延迟/错误列表)。全局超时时,未完成的
-    /// future 计入 `failed`,`errors` 含一个 `GlobalTimedOut`(区分于单操作超时)。
+    /// 聚集结果统计（总数/成功数/失败数/放弃数/未启动数/延迟/错误列表）。
+    ///
+    /// 全局超时时，未完成的操作**不计入 `failed`**而是分成 `abandoned`（已入流
+    /// 被 poll、但被全局 deadline 放弃）与 `not_started`（从未入流），同时
+    /// `errors` 追加一个 `GlobalTimedOut`（区分于单操作超时，故此时
+    /// `errors.len() == failed + 1`）。
     pub async fn gather(&self, futures: Vec<GqepFuture<String>>) -> GatherResult {
         self.gather_generic(futures).await.stats
     }
@@ -105,7 +146,9 @@ impl GqepExecutor {
     ///
     /// 与 [`gather`](Self::gather) 共享同一泛型内核,行为契约完全一致:
     /// 相同的 QEEP entangle 孤儿检测、相同的双层超时防护、相同的
-    /// `GatherCompleted` 事件发布;唯一区别是本方法把成功操作的 `T` 值
+    /// **并发上界与「入参可能完全不执行」契约**（见 [`gather`](Self::gather)
+    /// 的「契约变更」段；`values.len()` 等于 `stats.succeeded` 而非入参个数）、
+    /// 相同的 `GatherCompleted` 事件发布;唯一区别是本方法把成功操作的 `T` 值
     /// 随统计一并返回,供调用方按自身 tag 还原顺序(见 `GatherCollected`)。
     ///
     /// WHY 泛型化而非 String 特判:chimera-cli doctor 探针并行化需要回传
@@ -138,30 +181,69 @@ impl GqepExecutor {
     ) -> GatherCollected<T> {
         let total = futures.len() as u32;
         let start = Instant::now();
+        // 并发上界首次成为真实约束（ADR-202 Option B）：bound 经
+        // `GqepConfig::effective_bound` 钳制到 [1, MAX_GATHER_FANOUT]，
+        // 故 `0` 等价串行、`10^9` 被截到静态帽，两者都不会退化为「无限制」。
+        let bound = self.config.effective_bound();
 
-        // 将每个 future 经 QEEP entangle 包裹后放入 FuturesUnordered
+        // 将每个 future 经 QEEP entangle 包裹。
         // WHY entangle:利用 OrphanGuard 在 future drop 时检测孤儿调用,
-        // 同时 entangle 内部用 tokio::time::timeout 提供单操作超时保护
-        let stream: FuturesUnordered<GqepFuture<T>> = FuturesUnordered::new();
-        for future in futures {
-            let qeep = self.qeep.clone();
-            // 将 GqepFuture<T> 经 entangle 包裹,转换为 GqepFuture<T>
-            // 内部做 GqepError <-> QeepError 错误映射(entangle 要求 QeepError)
-            let entangled: GqepFuture<T> = Box::pin(async move {
+        // 同时 entangle 内部用 tokio::time::timeout 提供单操作超时保护。
+        //
+        // WHY 先全部包装再分波入流（而非包装与入流合并）：包装本身**零副作用**——
+        // QEEP 注册与 OrphanGuard 创建都发生在 async 体**首次 poll**
+        // （`qeep-protocol/src/protocol.rs:283-284` 源码自述），故预包装不会
+        // 产生在飞额度；真正决定并发的是何时把元素 push 进 stream。
+        let qeep = self.qeep.clone();
+        let wrapped: Vec<GqepFuture<T>> = futures
+            .into_iter()
+            .map(move |future| -> GqepFuture<T> {
+                let qeep = qeep.clone();
                 // 将 GqepFuture 转换为 entangle 要求的 Future<Output=Result<T, QeepError>>
-                let mapped: Pin<Box<dyn Future<Output = Result<T, QeepErr>> + Send>> =
-                    Box::pin(async move { future.await.map_err(map_gqep_to_qeep) });
-                // entangle 提供孤儿检测 + 单操作超时
-                qeep.entangle(mapped).await.map_err(map_qeep_to_gqep)
-            });
-            stream.push(entangled);
+                // 内部做 GqepError <-> QeepError 错误映射(entangle 要求 QeepError)
+                Box::pin(async move {
+                    let mapped: Pin<Box<dyn Future<Output = Result<T, QeepErr>> + Send>> =
+                        Box::pin(async move { future.await.map_err(map_gqep_to_qeep) });
+                    // entangle 提供孤儿检测 + 单操作超时
+                    qeep.entangle(mapped).await.map_err(map_qeep_to_gqep)
+                })
+            })
+            .collect();
+
+        // 分批入流：首波至多 bound 个，其余留在 backlog 队尾等完成一个补一个。
+        // WHY 载体始终是 `FuturesUnordered`（不换成 buffer_unordered）：
+        // 后者未拉取的源项**从未被 poll**，在全局超时被 drop 时**无任何孤儿归因**，
+        // 直接把可观测的放弃面换成静默丢失（破 UNLEARNABLE #3）——ADR-202 因此否决。
+        // 本实现只改**入流节奏**，不改数据结构，故不违 `agents.md` 「并发收集用
+        // FuturesUnordered」红线（ADR-202 §6 裁决）。
+        let mut backlog: VecDeque<GqepFuture<T>> = wrapped.into_iter().collect();
+        // WHY 不加 `mut`：`FuturesUnordered::push` 取 `&self`（内部无锁队列），
+        // 只有下游消费它的地方才需要可变借用。
+        let stream: FuturesUnordered<GqepFuture<T>> = FuturesUnordered::new();
+        while stream.len() < bound {
+            let Some(next) = backlog.pop_front() else {
+                break;
+            };
+            stream.push(next);
         }
 
         // 流式收集结果,应用全局 gather deadline(双层超时的外层)
         // WHY 提取为独立方法:将"全局超时包裹"与"统计"职责分离,
         // 保持 gather 主方法简洁(架构红线:单函数 ≤200 行)
-        let (succeeded, values, failed, errors) =
-            self.collect_with_deadline(stream, start, total).await;
+        //
+        // 记账单点：四段守恒（I5）全部由 `collect_bounded` 算出，此处**只搬运**。
+        // WHY 不在此重算：公式写两处就成双源，一旦漂移（例如漏了补波后的
+        // backlog 变化）守恒会**假绿**——断测只比两边自洽，察不到公式分叉。
+        let GatherStats {
+            succeeded,
+            values,
+            failed,
+            errors,
+            abandoned,
+            not_started,
+        } = self
+            .collect_bounded(stream, &mut backlog, start, total)
+            .await;
 
         let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
 
@@ -176,6 +258,8 @@ impl GqepExecutor {
             total,
             succeeded,
             failed,
+            abandoned,
+            not_started,
             latency_ms,
             errors,
         };
@@ -220,19 +304,25 @@ impl GqepExecutor {
     /// 释放借用,再 match outcome(对应 §4.4 async 反模式经验)。
     ///
     /// # 参数
-    /// - `stream`:已 entangle 包裹的 FuturesUnordered
+    /// - `stream`:首波已入流的 `FuturesUnordered`（个数 ≤ bound）
+    /// - `backlog`:尚未入流的尾部。本方法按 FIFO 从队首补波；结束后其
+    ///   `len()` 即为**从未 poll** 的操作数（`not_started`）。
     /// - `start`:gather 开始时刻(用于计算 elapsed_ms)
     /// - `total`:总操作数(用于计算被放弃数,发布事件)
     ///
     /// # 返回
-    /// `(succeeded, values, failed, errors)` 四元组——`values` 为成功操作的
-    /// 返回值集合(完成序)。全局超时时 `errors` 含一个 `GlobalTimedOut`。
-    async fn collect_with_deadline<T: Send + 'static>(
+    /// [`GatherStats`]：四段守恒的全部计数 + 成功值 + 错误列表。
+    ///
+    /// WHY `backlog` 以 `&mut` 借入而非移入：`VecDeque` 一旦被 move 进采集闭包，
+    /// 超时 drop 后调用方就读不到剩余量了；借用使 `not_started` 的读取与
+    /// 归因责任能集中在本函数**单一记账点**。
+    async fn collect_bounded<T: Send + 'static>(
         &self,
         mut stream: FuturesUnordered<GqepFuture<T>>,
+        backlog: &mut VecDeque<GqepFuture<T>>,
         start: Instant,
         total: u32,
-    ) -> (u32, Vec<T>, u32, Vec<GqepError>) {
+    ) -> GatherStats<T> {
         let mut succeeded: u32 = 0;
         let mut values: Vec<T> = Vec::new();
         let mut failed: u32 = 0;
@@ -240,9 +330,11 @@ impl GqepExecutor {
 
         let deadline_ms = self.config.gather_deadline_ms;
 
-        // deadline_ms=0 表示禁用全局超时(向后兼容,行为与无全局超时一致)
-        // WHY 0=禁用:与 with_timeout 的 timeout_ms=0 语义保持一致
-        if deadline_ms == 0 {
+        // 采集 + 补波：每收到一个结果就从 backlog 取一个补进 stream，
+        // 故 stream 长度恒 ≤ bound（I6 在飞峰值的执行侧保证）。
+        // WHY 把 drain 逻辑写**一份**而不是 0 分支 / deadline 分支各一份：
+        // 两份副本一旦漏改其中一份就会静默分叉（本函数两分支只差一层 timeout 包裹）。
+        let collect = async {
             while let Some(result) = stream.next().await {
                 match result {
                     Ok(v) => {
@@ -254,61 +346,73 @@ impl GqepExecutor {
                         errors.push(e);
                     }
                 }
-            }
-            return (succeeded, values, failed, errors);
-        }
-
-        let deadline = Duration::from_millis(deadline_ms);
-
-        // collect_all 以引用方式捕获计数器,stream 被 move 进来;
-        // 全局超时 drop collect_all 时,已完成部分的计数得以保留
-        let collect_all = async {
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(v) => {
-                        succeeded += 1;
-                        values.push(v);
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        errors.push(e);
-                    }
+                // 补波：固定 FIFO 波序，禁止按结果价值重排（否则引入不确定性 / R4 尾部饥饿）
+                if let Some(next) = backlog.pop_front() {
+                    stream.push(next);
                 }
             }
         };
 
-        // 先绑定 outcome:使 Timeout 临时量在分号处 drop,释放对计数器的借用,
-        // 否则下方 match 分支无法 move succeeded/failed/errors(Edition 2021 临时量生命周期)
-        let outcome = tokio::time::timeout(deadline, collect_all).await;
+        // deadline_ms=0 表示禁用全局超时(向后兼容,行为与无全局超时一致)
+        // WHY 0=禁用:与 with_timeout 的 timeout_ms=0 语义保持一致。
+        // 限流下的语义：上界只**延后**不**拒绝**（I7），故全部操作终将执行。
+        let mut timed_out = false;
+        if deadline_ms == 0 {
+            collect.await;
+        } else {
+            // I4：所有批次共享同一个绝对时刻，而不是每批一个相对 duration。
+            // WHY `timeout_at` 而非 `timeout(relative)`：多批场景下若逐批重置，
+            // 总墙钟会变成 `deadline × 批数`——即 ADR-202 §7 R1 要防的放大路径。
+            let deadline_at = tokio::time::Instant::now() + Duration::from_millis(deadline_ms);
+            // 先绑定 outcome:使 Timeout 临时量在分号处 drop,释放对计数器与 backlog 的借用,
+            // 否则下方无法读 backlog.len()、也无法 move succeeded/failed/errors
+            // (Edition 2021 临时量生命周期)
+            let outcome = tokio::time::timeout_at(deadline_at, collect).await;
+            timed_out = outcome.is_err();
+        }
 
-        match outcome {
-            Ok(()) => (succeeded, values, failed, errors),
-            Err(_) => {
-                // 全局超时:记录 GlobalTimedOut(区分单操作超时,供调用者决策)
-                let elapsed_ms = start.elapsed().as_millis() as u64;
-                let abandoned = total.saturating_sub(succeeded + failed);
+        // 单一记账点（I5 四段守恒，红线级）：
+        // - `not_started` = backlog 剩余——它们从未 poll、**无** OrphanGuard、不会有孤儿事件，
+        //   本字段是唯一显式归因出口（没有它就是静默消失，违 UNLEARNABLE #3）。
+        // - `abandoned` = 已入流但未完成 = (total - not_started) - succeeded - failed。
+        let not_started = backlog.len() as u32;
+        let abandoned = (total - not_started).saturating_sub(succeeded + failed);
 
-                // 发布 GatherTimedOut 事件(可观测性:供 efficiency-monitor 记录全局超时指标)
-                let event = NexusEvent::GatherTimedOut {
-                    metadata: EventMetadata::new("gqep-executor"),
-                    deadline_ms,
-                    elapsed_ms,
-                    total,
-                    abandoned,
-                };
-                if let Err(e) = self.event_bus.publish(event).await {
-                    warn!(error = %e, "发布 gather 全局超时事件失败");
-                }
+        if timed_out {
+            // 全局超时:记录 GlobalTimedOut(区分单操作超时,供调用者决策)
+            let elapsed_ms = start.elapsed().as_millis() as u64;
 
-                // Phase 7 D-6: 全局超时真实计数点
-                crate::record_global_timeout();
-
-                errors.push(GqepError::GlobalTimedOut {
-                    deadline_ms,
-                    elapsed_ms,
-                });
-                (succeeded, values, failed, errors)
+            // 发布 GatherTimedOut 事件(可观测性:供 efficiency-monitor 记录全局超时指标)
+            // WHY 事件同时带 abandoned 与 not_started：两者语义不可合并（前者重试可能
+            // 重复副作用，后者可安全重试），监控面需要分开归因。
+            let event = NexusEvent::GatherTimedOut {
+                metadata: EventMetadata::new("gqep-executor"),
+                deadline_ms,
+                elapsed_ms,
+                total,
+                abandoned,
+                not_started,
+            };
+            if let Err(e) = self.event_bus.publish(event).await {
+                warn!(error = %e, "发布 gather 全局超时事件失败");
             }
+
+            // Phase 7 D-6: 全局超时真实计数点
+            crate::record_global_timeout();
+
+            errors.push(GqepError::GlobalTimedOut {
+                deadline_ms,
+                elapsed_ms,
+            });
+        }
+
+        GatherStats {
+            succeeded,
+            values,
+            failed,
+            errors,
+            abandoned,
+            not_started,
         }
     }
 

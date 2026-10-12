@@ -4,7 +4,9 @@
 //!
 //! # 机制
 //! `gather_atomic` 顺序执行批量操作,任一失败时:
-//! 1. 停止后续操作(未执行的操作不计入结果)
+//! 1. 停止后续操作（未执行的操作计入 `GatherResult::not_started`，
+//!    保证四段守恒 `succeeded + failed + abandoned + not_started == total`；
+//!    它们**从未被 poll**，因此不产生孤儿事件，只靠本字段显式归因）
 //! 2. 触发回滚回调(回滚已成功的操作)
 //! 3. 回滚操作本身也经 GQEP 聚集(避免孤儿调用)
 //!
@@ -39,7 +41,10 @@ impl GqepExecutor {
     /// 批量原子性聚集执行
     ///
     /// 顺序执行批量操作,任一操作失败时:
-    /// 1. 停止后续操作(未执行的操作不计入结果)
+    /// 1. 停止后续操作（未执行的操作计入 `not_started`：本入口顺序执行且无全局
+    ///    deadline，故 `abandoned` 恒为 0，`not_started = total - succeeded - failed`；
+    ///    这些尾部 future 被直接 drop、从未 poll、无 `OrphanGuard`，不计入本字段
+    ///    就是静默消失——ADR-202 Annex C-5/C-6）
     /// 2. 触发回滚回调(回滚已成功的操作)
     /// 3. 回滚操作本身也经 GQEP 聚集(避免孤儿调用)
     ///
@@ -137,6 +142,14 @@ impl GqepExecutor {
             total,
             succeeded,
             failed,
+            // 本入口是**顺序执行 + 失败即 break**，故不存在「已入流但被
+            // 全局 deadline 放弃」这一类：abandoned 恒为 0。
+            abandoned: 0,
+            // I5 红线级补齐（ADR-202 Annex C-5）：break 后随迭代器一起被 drop 的
+            // 尾部 future **从未被 poll**，因此不会触发 QEEP `OrphanGuard`
+            // （注册发生在 async 体首次执行）——以前它们在 total 里静默消失，
+            // 既不记 succeeded/failed，也无孤儿事件，现显式记为 not_started。
+            not_started: total - succeeded - failed,
             latency_ms,
             errors,
         };
