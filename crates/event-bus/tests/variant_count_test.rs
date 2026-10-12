@@ -49,12 +49,12 @@ const INFO_LOCK: usize = 11;
 /// severity 分布锁定值(Normal)
 const NORMAL_LOCK: usize = 121;
 
-/// 构造全部 152 个 NexusEvent 变体的最小实例清单(enum 声明序)
+/// 变体清单第 1 段（`NexusEvent::UserIntentEncoded` … `NexusEvent::ContextWindowSwitched`，声明序连续切片）
 ///
-/// WHY 每变体一个构造器: 把"变体清单"变成编译期契约 —— 变体改名/删除立即
-/// 编译错误;新增变体未登记时,下方计数锁与序数表交叉断言失败。
-/// 字段值一律取最小合法值(空集合/零值/None),与业务语义无关。
-fn all_variant_samples() -> Vec<NexusEvent> {
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_1() -> Vec<NexusEvent> {
     vec![
         NexusEvent::UserIntentEncoded {
             metadata: EventMetadata::new("test"),
@@ -235,6 +235,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             to_tier: "s".into(),
             reason: "s".into(),
         },
+    ]
+}
+
+/// 变体清单第 2 段（`NexusEvent::ContextCompressed` … `NexusEvent::BudgetStatsReported`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_2() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::ContextCompressed {
             metadata: EventMetadata::new("test"),
             original_size: 1,
@@ -415,6 +425,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             remaining_budget: 0.5,
             utilization_rate: 0.5,
         },
+    ]
+}
+
+/// 变体清单第 3 段（`NexusEvent::BudgetMetricsUpdated` … `NexusEvent::ChtcAdapterStatus`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_3() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::BudgetMetricsUpdated {
             metadata: EventMetadata::new("test"),
             metrics: BudgetMetricsPayload {
@@ -588,6 +608,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             recent_requests: vec![],
             is_online: true,
         },
+    ]
+}
+
+/// 变体清单第 4 段（`NexusEvent::ClvSnapshotReported` … `NexusEvent::AuditFindingRaised`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_4() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::ClvSnapshotReported {
             metadata: EventMetadata::new("test"),
             modality: "s".into(),
@@ -767,6 +797,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             evidence_kind: "s".into(),
             fix_hint: "s".into(),
         },
+    ]
+}
+
+/// 变体清单第 5 段（`NexusEvent::HarnessReportGenerated` … `NexusEvent::OverWindowFallbackTriggered`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_5() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::HarnessReportGenerated {
             metadata: EventMetadata::new("test"),
             task_comprehension: 0.5,
@@ -944,6 +984,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             candidate_count: 1,
             loaded_count: 1,
         },
+    ]
+}
+
+/// 变体清单第 6 段（`NexusEvent::ResourceRecovered` … `NexusEvent::BlackboardEntry`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_6() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::ResourceRecovered {
             metadata: EventMetadata::new("test"),
             resource_type: "s".into(),
@@ -1043,6 +1093,26 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             provenance: None,
         },
     ]
+}
+
+/// 构造全部 152 个 NexusEvent 变体的最小实例清单(enum 声明序)
+///
+/// WHY 每变体一个构造器: 把"变体清单"变成编译期契约 —— 变体改名/删除立即
+/// 编译错误;新增变体未登记时,下方计数锁与序数表交叉断言失败。
+/// 字段值一律取最小合法值(空集合/零值/None),与业务语义无关。
+///
+/// WHY 有序拼接：清单顺序 = enum 声明序（计数锁与序数表交叉断言依赖它），
+/// 段序不得调换;每段仍是同形 `vec![…]` 字面量 ⇒ 与原单函数逐项等价。
+fn all_variant_samples() -> Vec<NexusEvent> {
+    [
+        variant_samples_chunk_1(),
+        variant_samples_chunk_2(),
+        variant_samples_chunk_3(),
+        variant_samples_chunk_4(),
+        variant_samples_chunk_5(),
+        variant_samples_chunk_6(),
+    ]
+    .concat()
 }
 
 /// 变体序数表(enum 声明序,1..=146) — 编译期穷举锁

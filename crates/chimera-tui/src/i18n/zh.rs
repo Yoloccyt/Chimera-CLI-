@@ -353,11 +353,13 @@ pub const SEED_KEYS: &[&str] = &[
     "common.none",
 ];
 
-/// 查找中文译文;未命中返回 `None`(由 `i18n::tr` 回退到 key 本身)
+/// 译文表的第 1 段（键域 `app.name` … `status.view_dashboard`）
 ///
-/// WHY `match` 而非 HashMap:编译期常量表,`match` 零运行时初始化开销且
-/// 无需 `once_cell`/`phf` 依赖;分支数 < 500 时编译器可高效跳转表优化。
-pub fn lookup(key: &str) -> Option<&'static str> {
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_1(key: &str) -> Option<&'static str> {
     let v = match key {
         "app.name" => "Chimera 交互式终端",
         "panel.quest.title" => "任务",
@@ -534,6 +536,19 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "chat.composer_hint" => "按 i 开始输入,或按 / 打开命令",
         "status.view_chat" => "已切换到会话模式(\\ 切回仪表盘)",
         "status.view_dashboard" => "已切换到仪表盘模式(\\ 切回会话)",
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 译文表的第 2 段（键域 `chat.plan_card.title` … `status.data_source_unavailable`）
+///
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_2(key: &str) -> Option<&'static str> {
+    let v = match key {
         // Concord W3 T3.3:会话流内嵌卡片
         "chat.plan_card.title" => "计划：",
         "chat.reflection_card.title" => "失败复盘",
@@ -705,6 +720,19 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "status.tick_restart_hint" => "{}ms (重启生效)",
         "status.panel_not_registered" => "面板未注册: {}",
         "status.data_source_unavailable" => "数据源不可用: {}",
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 译文表的第 3 段（键域 `slash.unwired.fork` … `panel.osa.sparsity_history`）
+///
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_3(key: &str) -> Option<&'static str> {
+    let v = match key {
         // B1(2026-09-06 复评):未接线命令的具体指引
         "slash.unwired.fork" => "分叉:多会话存储未接线(预留)",
         "slash.unwired.undo" => "撤销:消息级撤销未接线,可用 Esc-Esc 回退",
@@ -872,6 +900,19 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.osa.no_context_files" => "暂无活跃上下文文件",
         "panel.osa.showing_files" => "... 显示 {} / {} 文件",
         "panel.osa.sparsity_history" => "稀疏度历史",
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 译文表的第 4 段（键域 `panel.self_assessment.body_title` … `common.none`）
+///
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_4(key: &str) -> Option<&'static str> {
+    let v = match key {
         // F-45(B5-U):原 panel.mcp.* 死键 14 条已删除(生产零消费,在用键族为
         // panel.mcp_nodes.*;死键残留会误导改错表,见 R5 报告 F-45)
         // self_assessment 面板
@@ -1031,4 +1072,18 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         _ => return None,
     };
     Some(v)
+}
+
+/// 查找中文译文;未命中返回 `None`(由 `i18n::tr` 回退到 key 本身)
+///
+/// WHY `match` 而非 HashMap:编译期常量表,`match` 零运行时初始化开销且
+/// 无需 `once_cell`/`phf` 依赖;分支数 < 500 时编译器可高效跳转表优化。
+///
+/// WHY 逐段尝试:段序 = 原巨型 `match` 的臂序,故首个命中者仍是原首个命中者;
+/// 未命中时多走几次跳转表分派(常数级,且本 crate 无在册 i18n bench,不作性能主张)。
+pub fn lookup(key: &str) -> Option<&'static str> {
+    lookup_table_1(key)
+        .or_else(|| lookup_table_2(key))
+        .or_else(|| lookup_table_3(key))
+        .or_else(|| lookup_table_4(key))
 }

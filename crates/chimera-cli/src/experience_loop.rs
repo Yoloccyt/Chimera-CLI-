@@ -150,34 +150,10 @@ pub async fn spawn_experience_loop(
         };
 
     // 2b. 双流持久化订阅(broadcast + Critical;subscribe-before-spawn 红线)
-    let mut rx_broadcast = card_bus.subscribe();
-    let mut rx_critical = card_bus.subscribe_critical();
-    let storage_for_loop = Arc::clone(&storage);
-    join_handles.push(tokio::spawn(async move {
-        loop {
-            // 两通道任意到达即持久化(Critical 高分卡不再丢失)
-            // WHY 类型差异:broadcast 分流 recv 返回 Result(Lagged 可观测);
-            // Critical 分流为 mpsc::UnboundedReceiver,recv 返回 Option(None=关闭)。
-            let card = tokio::select! {
-                r = rx_broadcast.recv() => match r {
-                    Ok(c) => c,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(lag = n, "卡片持久化 broadcast Lagged,丢弃 {n} 张");
-                        continue;
-                    }
-                    Err(_) => break,
-                },
-                r = rx_critical.recv() => match r {
-                    Some(c) => c,
-                    None => break,
-                },
-            };
-            let card_id = card.card_id.to_string();
-            if let Err(e) = storage_for_loop.store(&card).await {
-                warn!(card_id, error = %e, "经验卡片持久化失败");
-            }
-        }
-    }));
+    join_handles.push(spawn_card_persistence_subscriber(
+        &card_bus,
+        Arc::clone(&storage),
+    ));
 
     // 3. L2 记忆引擎 + 卡片总线消费(with_card_bus 内部 subscribe 后 spawn)
     let mlc = Arc::new(
@@ -333,6 +309,43 @@ pub async fn spawn_experience_loop(
         storage,
         sandbox,
         join_handles,
+    })
+}
+
+/// 2b. 卡片双流持久化订阅器：从 `spawn_experience_loop` 抽出入独立 fn 以守
+/// fn-length 棘轮(≤200)，行为与原内联逐字一致（先同步 subscribe 再 spawn，
+/// 遵 §4.4-3 红线；两个接收端均留在任务内，不上抛）。
+fn spawn_card_persistence_subscriber(
+    card_bus: &Arc<ExperienceCardBus>,
+    storage: Arc<ExperienceCardStorage>,
+) -> JoinHandle<()> {
+    let mut rx_broadcast = card_bus.subscribe();
+    let mut rx_critical = card_bus.subscribe_critical();
+    let storage_for_loop = Arc::clone(&storage);
+    tokio::spawn(async move {
+        loop {
+            // 两通道任意到达即持久化(Critical 高分卡不再丢失)
+            // WHY 类型差异:broadcast 分流 recv 返回 Result(Lagged 可观测);
+            // Critical 分流为 mpsc::UnboundedReceiver,recv 返回 Option(None=关闭)。
+            let card = tokio::select! {
+                r = rx_broadcast.recv() => match r {
+                    Ok(c) => c,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(lag = n, "卡片持久化 broadcast Lagged,丢弃 {n} 张");
+                        continue;
+                    }
+                    Err(_) => break,
+                },
+                r = rx_critical.recv() => match r {
+                    Some(c) => c,
+                    None => break,
+                },
+            };
+            let card_id = card.card_id.to_string();
+            if let Err(e) = storage_for_loop.store(&card).await {
+                warn!(card_id, error = %e, "经验卡片持久化失败");
+            }
+        }
     })
 }
 
