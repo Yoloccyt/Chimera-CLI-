@@ -1,6 +1,6 @@
 # ADR-211: mas-sched / PriorityScheduler 接线宿主与 optional→生产边翻转（P1 流量波）
 
-- **Status**: Proposed（草案，未 ACCEPTED，**不改码**）
+- **Status**: Accepted（2026-10-12 用户授权转正；授权链与最终落点见 §7；草案期「不改码」约束随之解除，实施批记录 §7.5）
 - **Date**: 2026-10-11
 - **⚠ 已于 2026-10-11 经实测修订：D2.1 落点不成立**（详见 §6 修订记录与
   `docs/reports/a-traffic-source-decision-pack-2026-10-11.md`）。本文下方 D1/D2 原文**按“历史只加注不改写”纪律保留**，
@@ -95,3 +95,76 @@ v2.0 判定二：任务域病理是机制在、装配/开关缺——PrioritySch
 **任何接线批必须同时指名它兑现了哪个现有机制的消费者**。若一个批次接完后
 `crates/*/src` 仍零生产调用方，则该批属装饰性接线（方案 §1.2「零载体设计名」），
 即使测试全绿也不得合入——这正是 D2.1 被否决的原因。
+
+---
+
+## 7. 实施批：授权记录与最终落点（2026-10-12 追加；只加注不改写正文）
+
+> 本节为实施批追加。用户于 2026-10-12 明确选定主线「P0 收尾 + P1 候选③
+> （mas-sched Claim 准入流）」并授权本 ADR 由 Proposed 转 Accepted。§6 的
+> 「先决问题是流量从哪来」按决策包推荐序收敛：**候选③ 先行**（单任务即有真实
+> 语义）、候选② 否决、候选① 留待独立产品决策。
+
+### 7.1 最终落点（替代被推翻的 D1-H-b）
+
+- **接线点**：组合根 `crates/chimera-cli/src/commands/agent.rs::spawn_agent()`，
+  在 `orchestrator.delegate(agent_task)` 之前做 claim 准入（`PeerScheduler::claim`
+  是 total function，无 Result 面）。`spawn_agent` 签名扩收 `&AppContext`。
+- **宿主装配**：`AppContext` 新增 `sched: Arc<mas_sched::SimplePeerScheduler>`
+  （沿 gea/gqep 既有装配模式）；D2.1 的「delegate→enqueue→dequeue」不采用
+  （§6.1 已证单任务恒等映射）。
+- **不做**：不新增 crate / 入口 / EventTopic / 第二调度器（清单 A 与 §5.3 不变）。
+
+### 7.2 开关与降级（承 D3，按实况细化）
+
+- env 三态 `CHIMERA_SCHED_CLAIM`：`off`（**默认**，逐位等价旧路径）| `observe`
+  （调 claim，拒绝 warn 不阻断）| `apply`（拒绝阻断，返回
+  `ChimeraCliError::EngineError`——不新增错误变体，保 ADR-060 7 变体矩阵）；
+  未知值 fail-safe 按 off（沿 `calibration.rs` 纯函数 + OnceLock 分层形制）。
+- claim 为 total function，**无「调用异常」面**——唯一失败面是 `Denied`；
+  D3 的「in-place-fallback」在本实现中体现为 **off 档零调用**（非异常回落）。
+- broker 护栏 `with_rate_limit(60, 60_000)` 随批装配（§9-4 限定：运行期行为
+  切换走 env，feature 只用于「是否参与编译/可达性记账」）；ephemeral 进程内
+  单次 claim 不触发阈值，跨进程防护留待常驻宿主（serve/tui）复用实例。
+  护栏**不作为**「兑现消费者」论证主体（论证落在 claim 首个生产调用 +
+  ClaimIssued/ClaimRetracted 首个生产发射点 + CRATE-CONTRACT CONSUMERS 0→1）。
+
+### 7.3 事件面（§6.3 边界正式关闭）
+
+- **Serialize 边界结论**：`ClaimIssued{metadata, claim_id, subject, claimant}`
+  与 `ClaimRetracted{metadata, claim_ref, reason}`（`types.rs:51/76`）**不含**
+  `Lease`/`ClaimOutcome` 字段 ⇒ **无需**为二类型补 `Serialize`（§6.3 的
+  「同进程内使用」路径成立，L0 公开类型零变更）。
+- **发布方 = 组合根**：chimera-cli 持 `ctx.bus`，Granted →
+  `bus.publish_claim(NexusEvent::ClaimIssued)`；delegate 返回 Err 且已 Granted →
+  `bus.publish_declaim(NexusEvent::ClaimRetracted)`。mas-sched **保持零 event-bus
+  依赖**（不采用 D2.4 的「mas-sched 自发事件」形态，规避 E-6 的依赖重声明成本）。
+- **语义裁量**（供后续批复核）：spawn 成功路径不显式 retract（ephemeral
+  进程退出即释放租约表）；retract 仅出现于 delegate 失败路径。两变体均获得
+  生产构造点 ⇒ `event_ownership_baseline` 删两行（台账净减，符合 I5）。
+- Certify 维持 G-83 白名单（mas-sched 禁签）；152 变体 / 16 mpsc / 20 Critical
+  三计数零变更；`ClaimIssued` 维持 Normal / Parliament Topic。
+
+### 7.4 台账联动（只减不增；均为实测驱动）
+
+- `gated_wiring_baseline.txt`：摘 `mas-sched|DECORATIVE`（DECORATIVE→WIRED）。
+- `declared_dep_exceptions.txt`：回收 `chimera-cli -> mas-sched` 行（自述「接线落地后须回收」）。
+- `event_ownership_baseline.txt`：删 `ClaimIssued`/`ClaimRetracted` 两行 + total 行同步（132→134 owned / 20→18 unowned）。
+- `contract_consumer_baseline.txt`：按 `check_contract_consumers.py` 现跑输出删 STALE 行
+  （至少 `TodoClaim`；视实现含 `ClaimOutcome`/`DenyReason`/`Priority` 等）。
+- `dep_edge_freeze.txt`：`chimera-cli|mas-sched` 行语义更新（GATED-UNWIRED → WIRED
+  生产边）+ 邻近注释按「历史只加订正注记」订正。
+- `crate_contract.py`：mas-sched `CONSUMERS: 0→1`（PRODUCERS 保持 0，mas-sched
+  不构造 NexusEvent）；chimera-cli header PRODUCERS 刷新（+ClaimIssued/ClaimRetracted）。
+- `crate_reachability_freeze.txt`：无活动行无需同步；mas-sched 由 GATED 入可达（30→31）。
+
+### 7.5 验收判据与回滚
+
+- I1 逐位等价（off 档不调 claim/不发事件，行为与接线前逐位一致）；I2 断测：
+  observe 档 Denied 不阻断 + apply 档 Denied 阻断（EngineError）+ Granted 发 ClaimIssued
+  （bus 订阅断言）+ delegate Err 发 ClaimRetracted。
+- 门集复跑：check_dependency_rules / check_dep_edge_freeze / check_crate_reachability /
+  check_gated_wiring_substance / check_event_ownership / check_contract_consumers /
+  check_declared_dep_usage / check_certify_whitelist（全部应保持 RC=0 或按只减方向变化）。
+- 回滚：代码 revert = 恢复 `optional = true` + feature 表 `dep:mas-sched` 项；
+  运行期回退 = `CHIMERA_SCHED_CLAIM=off`（零行为变更，无需 revert）。
