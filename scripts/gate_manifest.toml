@@ -532,7 +532,7 @@ cmd = "{python} scripts/check_layer_map_parity.py --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "层图对拍门有牙：fixture 注入证明「.ps1 层号改动 / .sh 名单丢项 / 未登记成员 / expected_crates 过期」四类都必红。CI 从 ci.yml:98 就在跑, 清单此前不知道；本机实测 EXIT=0"
+note = "层图对拍门有牙：夹具数由 --selftest 自报。覆盖「.ps1 层号改动 / .sh 名单丢项 / 未登记成员 / expected_crates 过期」四类，以及 2026-10-10 新增的第 6 源四类：文档层图解析形状/错层/漏项/幽灵项，与“读不出时拒判（绝不静默当作一致）”。并经真树变异反向验证（tmp/doc_layer_teeth.py：改一行层号⇒rc=1、删一个 crate⇒rc=1，均字节还原）。CI 从 ci.yml 就在跑, 清单此前不知道；本机实测 EXIT=0"
 
 [[gate]]
 id = "G-46"
@@ -541,7 +541,7 @@ cmd = "{python} scripts/check_layer_map_parity.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "十层映射 ↔ Cargo members 对拍（B0-6 清掉 auto-dpo/model-router 两个幽灵键后转绿；本条把它从「只有 CI 知道」变成台账可见）。本机实测 EXIT=0（2026-09-21）"
+note = "十层映射 ↔ Cargo members ↔ **人类可读层图** 对拍（B0-6 清掉 auto-dpo/model-router 两个幽灵键后转绿；本条把它从「只有 CI 知道」变成台账可见）。2026-10-10 按 v3.5 终局原则 1（“文档层图必须派生、禁手抄”）加入第 6 源：`docs/architecture/CODE_WIKI.md` §2.1 的 ASCII 层块。背景：views/ 下六份派生物已由 G-70 锁字节，但** contributor 先读的那张图**仍是无人比对的手抄镜像——2026-09-22 登记的 csn-substitutor L7/L10 分歧只能靠人重新读散文才会发现（现取：该分歧已由 ADR-189 收口为 L10，三处权威与文档一致，本门现读 39=39=39=39=39=39）"
 
 [[gate]]
 id = "G-47"
@@ -942,7 +942,7 @@ cmd = "{python} scripts/check_write_sensitive_instrumentation.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "核验承诺写点(mlc L3/session-store 段/repo-wiki store/quest checkpoint/scc WAL/cmt warm,cold,ice/event-bus critical_sink/mcp-mesh WAL/mca session + v3.4 W5-1 R-1 tier-2 三处:cmt experience_card_storage、chimera-tui types、chimera-tui data/snapshot)源文件确引用 nexus_contracts::sensitive::scan,防插桩被无声摘除;现势 required=14(只增不减,清单与逐项口径见脚本内注释)。tier-2 全量实勘已完成(推翻 ADR-194 §3「mca-gateway 为唯一真实敏感文本面」,更正见 ADR-194 §3.2);等效覆盖/表级豁免证据链已入脚本注释区。仍待 ADR:将本门从「文件级字符串存在性」升格为「入口级断言」(清单条目携带函数名)"
+note = "核验承诺写点(mlc L3/session-store 段/repo-wiki store/quest checkpoint/scc WAL/cmt warm,cold,ice/event-bus critical_sink/mcp-mesh WAL/mca session + v3.4 W5-1 R-1 tier-2 三处:cmt experience_card_storage、chimera-tui types、chimera-tui data/snapshot)。v3.5 P-5 已按 Spec 默认值采纳「入口级断言」(原判据仅文件级 MARKER 存在性,被推翻:该口径下 mlc l3_procedural / cmt warm / cmt cold 的批量入口 insert_batch 全部藏住——单条 insert 有 scan 而批量没有,门仍绿;升入口级当日即抓出这三处旁路并同批补齐)。现判据双层:[F] 文件级 MARKER + [E] 每个可携带自由文本的 pub 写入口必自带 scan 或在 ENTRY_EXEMPT 带证据豁免(11 条,两类:UPSTREAM-GUARDED 由本门机械核验委托关系;STRUCTURAL-WRITE 理由必须指到具体 SQL/字段)。入口口径取 pub*(私有 writer 是扫描下游,计入会误报 repo-wiki 7 处);花括号失衡/承诺文件缺失/豁免表格式错一律退 2 不静默放行。现读:入口 26 / 自带 scan 15 / 带证据豁免 11 / 缺口 0(计数不入台账,以门自报为准)。未解决面:签名不含文本面的新 pub 写入口(如 `fn put(id: u64)` 内部拼原文)本门看不见,靠契约复审;跨 crate ScanPolicy 副本仍多源。门自身有牙验证见 G-92"
 
 [[gate]]
 id = "G-85"
@@ -1006,6 +1006,84 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "L0 契约'>=2 工作区消费者'门(WI-A1,2026-10-07 落地):nexus-contracts 全部 pub 类型/trait 逐一统计消费方 crate 数(production scope=crates/*/src，test 尾排除规则与 check_dead_contract_apis.py 同源；连接方言=direct nexus_contracts 路径/use 语句 + 1 跳 hub re-export 感知——2026-10-07 实测 10 个 hub/全显式名单/零 glob)，<2 者入 scripts/contract_consumer_baseline.txt 只减不增登记册；首跑=全量豁免态(236 defs/165 豁免)。NEW 未登记必红、接线后未删行 STALE 必红、畸形基线退 2、DEFS<50 真空守卫退 2(该守卫由'压平文本致定义失明'实缺陷促成——首版曾被 --selftest 捕获)。--selftest 13 项夹具(真实 tempdir 路径)。与 check_dead_contract_apis.py(ADR-197 A6)互认。"
+
+# G-84 升入口级后的「门自身有牙」配对页(沿 G-20/G-22/G-26/G-28/G-30/G-32 的
+# 「先 --selftest 证明有牙、再跑真实裁决」成对登记惯例)。夹具全部在临时目录
+# 里跑合成源码,不碰真树;每条都同时断言 rc + 入口计数 + 诊断文本标记(只看 rc
+# 会把「夹具自身写错退 2」读成「门有牙」——本轮第一版真实踩过,已固化为 C10/C11)。
+[[gate]]
+id = "G-92"
+spec_ref = "v2.3 (b.5) / v3.5 需裁决事项 P-5(默认采纳入口级断言)"
+cmd = "{python} scripts/check_write_sensitive_instrumentation.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "写入敏感插桩门有牙(夹具数由 --selftest 自报、不在此登记:本轮先写死过 14 项,加 C15 后字面即陈旧,这正是该纪律的理由):未覆盖写入口必红/带证据豁免放行/自带 scan 放行/幽灵豁免必红/委托目标失守必红(上游被摘 scan 后不能仍有豁免)/非文本面签名不误计/测试段 pub 入口不计数/私有 helper 不误判/cfg(test) 修饰字段与函数不污染入口集/去 cfg 标记后同位置必红(双向)/字符串内花括号不带偏函数边界/非法豁免类别退 2/理由过短退 2/承诺文件缺失退 2/未知旗标退 2(入口契约 C3 牙齿,由 G-44 实测抓出)"
+
+# v3.5 C-52：依赖方向铁律的 **dev-dependencies 面**此前机器不可见(Check B 只读 [dependencies])。
+# 刻意不改 Check B 本体(它与 .sh/.ps1 逐字等价对账门绑定,单侧改判据必触 parity)，
+# 而按 Spec 默认值「做，独立 id 观察一周期」新开独立门；层号派生自唯一权威源 layer_of()。
+[[gate]]
+id = "G-93"
+spec_ref = "v3.5 C-52 / 《需你裁决事项》第 7 条(默认: 做，独立 id 观察一周期)"
+cmd = "{python} scripts/check_dev_dep_direction.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+ci_exempt = "观察期(一周期)本地必跑；暂不抢 CI 阻塞权——接 ci.yml 需随同类授权(同 G-44/G-41 口径)，且观察结果若为零新增违规则升阻塞无噪声成本"
+note = "向上 dev-dependency 边门(只减不增台账 dev_dep_freeze.txt)：新向上边未登记 [GAP-D] 红;登记行在盘上已不再向上(消边或改同层/向下)而仍留着 ⇒ [STALE] 红;成员在权威层表查不到/基线缺失或畸形/未知旗标 ⇒ 退 2(绝不「查不到就当合规」)。dev 段解析含 [target.<cfg>.dev-dependencies](盘上实测 0 条,但漏认就是静默旁路)。现读:39 成员/内部 dev 边 27/向上 2(均在台账并引到各自的注释型豁免源头 Cargo.toml:45-46 与 :58-59——本门就是把 C-52 定性为「注释即治理」的两条升成机器判据)/未登记 0。整链牙齿见 tmp/c52_teeth.py(向上边必红/基线漏行必红/向下边不误伤,三项均字节还原)"
+
+[[gate]]
+id = "G-94"
+spec_ref = "v3.5 C-52 配套(门自身有牙,沿 G-20/G-22/G-26/G-92 先例)"
+cmd = "{python} scripts/check_dev_dep_direction.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+ci_exempt = "与 G-93 同口径（观察期）"
+note = "向上 dev 边门有牙(夹具数由 --selftest 自报)：同层/向下边不误伤/新向上边未登记必红/已登记存量放行/幽灵基线必红/已消边未删行必红/层号缺失退 2/成员集为空退 2(防 glob 失效被读成零违规)/target 限定 dev 段不得静默漏检/build-dep 与自依赖不计入/未知旗标退 2/层表派生失败退 2/基线文件缺失退 2(fail-closed)"
+
+# v3.5 C-43：形式化“7 属性”名册与实装 checker 的对账。名册内容属 ADR-052/053 引用的
+# R2 解冻前置证据 ⇒ 换名册需新 ADR，但“两边对不上不得继续扩大/不得无人知道”本批可机检。
+[[gate]]
+id = "G-95"
+spec_ref = "v3.5 C-43 / ADR-052 §盘点 + ADR-053 §阶段① 判定"
+cmd = "{python} scripts/check_formal_property_ledger.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+ci_exempt = "本轮新增；接 CI 阻塞待同类授权（同 G-44/G-93 口径）"
+note = "形式化名册 vs 实装 checker 对账门：名册源 = `nexus-contracts/src/formal_props.rs::EmptyFormalProvider`(唯一 src 侧枚举)；checker 靠脚本内 ROSTER 逐行指到文件并校存活性(文件在且含 `pub struct`)。判据：名册位无 checker 且未登记 ⇒ [GAP-P]；实装 checker 未入名册且未登记 ⇒ [GAP-P]；checker 文件被剔空 ⇒ [GAP-P]；登记失效(两边已对账或该属性已不在名册) ⇒ [STALE] 必删行；名册源读不出/checker 文件缺失/登记缺消解出口/未知旗标 ⇒ 退 2。现读：名册 7 / checker 7 / 登记错配 2 且均仍成立——**`preference-consistency` 无 checker(宿主 auto-dpo 已随 ADR-172 退役)，而 `ConsensusSafetyChecker`(parliament/src/formal/consensus_safety.rs:50) 不在名册**；两条消解出口(补/删)均改变 ADR-052/053 引用的证据集 ⇒ 需新 ADR，本轮只把错配固定为不可扩大且可见，不默许它继续增长"
+
+[[gate]]
+id = "G-96"
+spec_ref = "v3.5 C-43 配套(门自身有牙，沿 G-20/G-22/G-26/G-92/G-94 先例)"
+cmd = "{python} scripts/check_formal_property_ledger.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+ci_exempt = "与 G-95 同口径"
+note = "对账门有牙(夹具数由 --selftest 自报)：一致且登记有效⇒绿/新名册位无 checker 未登记⇒红/带理由登记⇒绿/失效登记⇒红(防僵尸登记掩盖复发)/checker 文件被剔空⇒红/checker 文件缺失⇒退 2/名册源缺失⇒退 2/登记不写消解出口⇒退 2/未知旗标⇒退 2/真树形状断言(名册 7 且 checker 7)"
+
+[[gate]]
+id = "G-97"
+spec_ref = "v3.5 终局原则 2 / 总账 §4 附录 4A（v3.4.0 §4.1 括号内新 crate 逐项三态判定）"
+cmd = "{python} scripts/check_v340_crate_proposals.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+ci_exempt = "本轮新增；接 CI 阻塞待同类授权（同 G-44/G-93/G-95 口径）"
+note = "文档声称↔代码事实对账门（原则 3「主张必须可证伪」在 crate 预算轴上的形式）：候选名 = §4.1 架构图 `[...]` 括号组（**跨行折行且 L1 存在嵌套 `[`**，逐行正则会把整组漏光——上一版取证器就是这样报 0 个候选名） ∪ §4.2 表「组件/落地方案」两列反引号内 crate 形状 token。三条判据：INV-A §4.1 括号内的提案名不得成为 workspace 成员 crate（即原则 2『0 新增 crate』的机检形式；§4.2 组件列出现既有 crate 属「强化」项，不在论域）；INV-B 总账附录 4A 标记块里的判定表必须恰好覆盖候选名集合（缺行=主张又没证据 ⇒ [GAP-MISS]；多行=表与源文档漂移 ⇒ [GAP-STALE]）；INV-C 每行证据里的 `crates/...rs:NN` 必真存在且行号不越界（LANDED 无该行号 ⇒ [GAP-EV]；本门首跑就抓到一条我亲手写下的不可定位证据：给 `osa-coordinator/src/six_dimension.rs` 写了括号注释却没带 `:94`，门判 [GAP-EV]；校后补齐行号）。源文档缺失/§4.1 定位失败/候选名为空/附录块缺失/终判列未知取值 ⇒ 退 2（绝不「查不到就当合规」）。现读：候选名 101（§4.1 口径 70）/判定表 101 行/成员 crate 39/违规 0"
+
+[[gate]]
+id = "G-98"
+spec_ref = "v3.5 原则 2 配套（门自身有牙，沿 G-20/G-22/G-26/G-92/G-94/G-96 先例）"
+cmd = "{python} scripts/check_v340_crate_proposals.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+ci_exempt = "与 G-97 同口径"
+note = "对账门有牙（夹具数由 --selftest 末行自报，不在此登记）：一致⇒绿/§4.1 提案成为 crate⇒红/表缺行⇒红/表多行⇒红/证据行号越界⇒红/证据文件不存在⇒红/VOID 无理由⇒红/VOID 行里的假路径也被抓⇒红/未知终判⇒退 2/附录块缺失⇒退 2/§4.1 定位失败⇒退 2；夹具集合为空也退 2（禁止空集全绿）。注意：首版夹具自身就是错的（把 alpha-one 放在括号外、又漏了「落地方案」列反引号产生的 pvl-layer 候选行），导致「一致⇒绿」用例红了一轮——这是夹具的问题不是判据的问题，修的是夹具"
 
 
 
