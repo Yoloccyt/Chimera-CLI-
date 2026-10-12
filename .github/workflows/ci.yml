@@ -251,6 +251,7 @@ jobs:
           python3 scripts/check_event_ownership.py --selftest
           python3 scripts/check_event_ownership.py
           python3 scripts/check_certify_whitelist.py
+          python3 scripts/check_write_sensitive_instrumentation.py --selftest
           python3 scripts/check_write_sensitive_instrumentation.py
           python3 scripts/check_gated_wiring_substance.py --selftest
           python3 scripts/check_gated_wiring_substance.py
