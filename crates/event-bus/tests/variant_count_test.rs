@@ -295,6 +295,8 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             elapsed_ms: 1,
             total: 1,
             abandoned: 1,
+            // 四段守恒样本（ADR-202 I5）：total 1 = abandoned 1 + 其余三段 0
+            not_started: 0,
         },
         NexusEvent::OrphanCallDetected {
             metadata: EventMetadata::new("test"),

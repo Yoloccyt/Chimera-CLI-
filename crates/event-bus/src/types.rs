@@ -780,6 +780,12 @@ pub enum NexusEvent {
     /// 与 `OperationTimedOut`(单操作超时)互补,二者构成双层超时防护:
     /// 单操作超时保护单个 future,全局超时保护整个 gather 流程不因单操作
     /// 超时累积而失控。供 efficiency-monitor 等订阅者记录全局超时指标。
+    ///
+    /// ADR-202 I5 扩展:并发上界(分批入流)引入 `not_started` —— 它标识
+    /// **从未入流、因而从未被 poll** 的操作,这类操作**不会触发 QEEP
+    /// `OrphanGuard`**(注册发生在 async 体首次执行),故若无本字段则只能静默消失。
+    /// `abandoned` 与 `not_started` 语义不可合并:前者已执行过(重试可能重复副作用),
+    /// 后者根本没跑(可安全重试)。
     GatherTimedOut {
         /// 事件元数据
         metadata: EventMetadata,
@@ -789,8 +795,14 @@ pub enum NexusEvent {
         elapsed_ms: u64,
         /// 本次 gather 的总操作数
         total: u32,
-        /// 被放弃(未完成)的操作数
+        /// 已入流被 poll、但因全局 deadline 放弃而未完成的操作数
         abandoned: u32,
+        /// 从未入流、因而从未被 poll 的操作数(并发上界下的 backlog 尾部)
+        ///
+        /// WHY `#[serde(default)]`:本字段是后继追加的,旧版本持久化/投递的
+        /// payload 里没有它;不标则反序列化直接失败。沿用本枚举内已有惯例。
+        #[serde(default)]
+        not_started: u32,
     },
 
     /// GQEP 检测到孤儿调用 `[Critical]` — 系统健康告警

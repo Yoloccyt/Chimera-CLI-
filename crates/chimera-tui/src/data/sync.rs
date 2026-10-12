@@ -1693,6 +1693,9 @@ mod gqep_timeout_sync_tests {
             elapsed_ms: 1001,
             total: 4,
             abandoned: 2,
+            // 四段守恒示例（ADR-202 I5）：total 4 = succeeded+failed 2 + abandoned 2
+            // + not_started 0，即本夹具描述的是「已全部入流、仅因全局超时被放弃」形态。
+            not_started: 0,
         }
     }
 
