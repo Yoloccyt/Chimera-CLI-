@@ -115,10 +115,11 @@ fn with_provider_renders_stats_end_to_end() {
     let mut panel = BenchPanel::with_provider(Arc::new(MockProvider {
         stats: BenchStats {
             total_benches: 117,
-            slo_breaches: 2,
-            retrieval_p99_ms: 2.11,
-            agreement_rate: 0.93,
-            certifiable_ratio: 0.88,
+            slo_thresholds_total: 46,
+            slo_breaches: Some(2),
+            retrieval_p99_ms: Some(2.11),
+            agreement_rate: Some(0.93),
+            certifiable_ratio: Some(0.88),
         },
     }));
     let area = Rect::new(0, 0, 60, 12);
@@ -139,6 +140,10 @@ fn with_provider_renders_stats_end_to_end() {
     assert!(
         content.contains("Benches registered: 117"),
         "应渲染基准总数行, got: {content}"
+    );
+    assert!(
+        content.contains("SLO thresholds total: 46"),
+        "应渲染阈值总数行, got: {content}"
     );
     assert!(
         content.contains("Retrieval P99 (ms): 2.11"),

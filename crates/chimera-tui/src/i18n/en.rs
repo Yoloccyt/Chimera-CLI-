@@ -57,6 +57,8 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.bench.retrieval_p99" => "Retrieval P99 (ms)",
         "panel.bench.agreement" => "Judge agreement rate",
         "panel.bench.certifiable" => "Auto-grade certifiable",
+        "panel.bench.slo_thresholds_total" => "SLO thresholds total",
+        "panel.bench.unavailable" => "N/A (source not wired)",
         // v2.3 §(b.6)/§(b.4):审查队列面板
         "panel.border.review_queue" => " Review Queue ",
         "panel.review.subtitle" => "Adversarial review queue",

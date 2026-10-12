@@ -373,6 +373,19 @@ impl TuiApp {
         }
     }
 
+    /// WI(/bench 一期)：安装基准统计提供者（chimera-cli build.rs 静态计数 provider）。
+    ///
+    /// 与 `install_experience_card_provider` 同构（运行期按面板索引替换为带提供者实例）；
+    /// 未安装时 `BenchPanel` 维持 awaiting 诚实态。`PanelId::Bench` 已在面板集内，不新增面板。
+    pub fn install_bench_provider(
+        &mut self,
+        provider: std::sync::Arc<dyn crate::panels::BenchStatsProvider>,
+    ) {
+        if let Some(idx) = self.panel_index(crate::types::PanelId::Bench) {
+            self.panels[idx] = Box::new(crate::panels::BenchPanel::with_provider(provider));
+        }
+    }
+
     /// 返回配置引用
     pub fn config(&self) -> &TuiConfig {
         &self.config

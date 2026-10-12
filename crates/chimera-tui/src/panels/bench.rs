@@ -36,16 +36,18 @@ use crate::types::{PanelId, TuiCommand, TuiState};
 /// criterion 结果、perf-slo 报告、`latest_events` 聚合为本类型。
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct BenchStats {
-    /// criterion 基准总数(§(e) 现测 117 个 `[[bench]]`)
+    /// criterion 基准总数（build.rs 扫描清单得到的真实静态值）
     pub total_benches: u32,
-    /// SLO 违约数(perf_thresholds 46 条中被突破的条数)
-    pub slo_breaches: u32,
-    /// 检索 P99 延迟(毫秒;§(b.3) 分层检索 SLO 关联)
-    pub retrieval_p99_ms: f64,
-    /// 裁判一致率(0.0~1.0;§(b.6) 阈值 ≥90% 方可自动化认证)
-    pub agreement_rate: f64,
-    /// 自动化结果可认证比例(0.0~1.0;低于阈值相关门降级为 Claim)
-    pub certifiable_ratio: f64,
+    /// SLO 阈值/门禁段总数（build.rs 扫描 `perf_thresholds.toml` 得到的真实静态值）
+    pub slo_thresholds_total: u32,
+    /// SLO 违约数——CI 动态评定结果，**无运行时生产者时为 `None`**（诚实标 N/A，不回填 0）。
+    pub slo_breaches: Option<u32>,
+    /// 检索 P99 延迟（毫秒）——需 mlc 检索延迟直方图生产者；当前无源 → `None`。
+    pub retrieval_p99_ms: Option<f64>,
+    /// 裁判一致率（0.0~1.0）——需评测层运行时计数；当前无源 → `None`。
+    pub agreement_rate: Option<f64>,
+    /// 自动化结果可认证比例（0.0~1.0）——需认证闭环运行时计数；当前无源 → `None`。
+    pub certifiable_ratio: Option<f64>,
 }
 
 /// 基准统计提供者 — 依赖倒置注入点(D-1)
@@ -95,6 +97,8 @@ impl BenchPanel {
         };
 
         let s = provider.bench_stats();
+        // 无运行时生产者的字段诚实标 N/A（绝不回填 0 造假——数据先行红线）。
+        let unavailable = || crate::t!("panel.bench.unavailable").to_string();
         lines.push(Line::from(format!(
             "{}: {}",
             crate::t!("panel.bench.total_benches"),
@@ -102,25 +106,42 @@ impl BenchPanel {
         )));
         lines.push(Line::from(format!(
             "{}: {}",
-            crate::t!("panel.bench.slo_breaches"),
-            s.slo_breaches
+            crate::t!("panel.bench.slo_thresholds_total"),
+            s.slo_thresholds_total
         )));
         lines.push(Line::from(format!(
-            "{}: {:.2}",
+            "{}: {}",
+            crate::t!("panel.bench.slo_breaches"),
+            match s.slo_breaches {
+                Some(v) => v.to_string(),
+                None => unavailable(),
+            }
+        )));
+        lines.push(Line::from(format!(
+            "{}: {}",
             crate::t!("panel.bench.retrieval_p99"),
-            s.retrieval_p99_ms
+            match s.retrieval_p99_ms {
+                Some(v) => format!("{v:.2}"),
+                None => unavailable(),
+            }
         )));
         // 一致率/可认证比例为 0-1 比值,直传统一助手(基数歧义由函数名消除,
         // 与 osa_sparse.rs 同口径;percent_format_invariant_test 门禁此写法)
         lines.push(Line::from(format!(
             "{}: {}",
             crate::t!("panel.bench.agreement"),
-            crate::render::percent_detail(s.agreement_rate)
+            match s.agreement_rate {
+                Some(v) => crate::render::percent_detail(v),
+                None => unavailable(),
+            }
         )));
         lines.push(Line::from(format!(
             "{}: {}",
             crate::t!("panel.bench.certifiable"),
-            crate::render::percent_detail(s.certifiable_ratio)
+            match s.certifiable_ratio {
+                Some(v) => crate::render::percent_detail(v),
+                None => unavailable(),
+            }
         )));
 
         Text::from(lines)
@@ -198,14 +219,16 @@ mod tests {
         let panel = BenchPanel::with_provider(Arc::new(MockProvider {
             stats: BenchStats {
                 total_benches: 117,
-                slo_breaches: 2,
-                retrieval_p99_ms: 2.11,
-                agreement_rate: 0.93,
-                certifiable_ratio: 0.88,
+                slo_thresholds_total: 46,
+                slo_breaches: Some(2),
+                retrieval_p99_ms: Some(2.11),
+                agreement_rate: Some(0.93),
+                certifiable_ratio: Some(0.88),
             },
         }));
         let content = panel.content().to_string();
         assert!(content.contains("117"), "应展示基准总数");
+        assert!(content.contains("46"), "应展示阈值总数");
         // 行级匹配而非 contains('2'):同帧 retrieval_p99 的 "2.11" 亦含 '2',
         // 裸字符断言对 SLO 违约行是否渲染无判别力(批次一评审遗留)
         let slo_line = format!("{}: 2", crate::t!("panel.bench.slo_breaches"));
@@ -216,5 +239,25 @@ mod tests {
         assert!(content.contains("2.11"), "应展示检索 P99");
         assert!(content.contains("93.0%"), "应展示一致率百分比");
         assert!(content.contains("88.0%"), "应展示可认证比例");
+    }
+
+    #[test]
+    fn content_marks_unavailable_for_sourceless_fields() {
+        // 有源字段（静态计数）实填，无运行时生产者的四项诚实标 N/A（不回填 0）。
+        let panel = BenchPanel::with_provider(Arc::new(MockProvider {
+            stats: BenchStats {
+                total_benches: 117,
+                slo_thresholds_total: 46,
+                ..Default::default()
+            },
+        }));
+        let content = panel.content().to_string();
+        let na = crate::t!("panel.bench.unavailable").to_string();
+        assert!(content.contains("117"), "静态基准数应实填");
+        assert!(content.contains("46"), "静态阈值总数应实填");
+        assert!(
+            content.contains(&na),
+            "无运行时生产者的字段应标 N/A, got: {content}"
+        );
     }
 }

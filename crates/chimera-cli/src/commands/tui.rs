@@ -239,6 +239,11 @@ pub async fn execute_with_ctx(
         let mut app = chimera_tui::TuiApp::with_data_source(tui_config, Box::new(protocol_ds))
             .context("TUI 初始化失败")?;
         app = chimera_tui::TuiApp::with_event_bus(app, bus.clone());
+        // /bench 一期：安装 build.rs 静态计数 provider（总基准数/阈值总数真实，
+        // 运行时性能指标诚实 N/A）；未安装则面板维持 awaiting 态。
+        app.install_bench_provider(std::sync::Arc::new(
+            crate::bench_provider::StaticBenchProvider,
+        ));
 
         // Quest 编排器保留(EventBus 双向控制: TUI ↔ 编排器回环)
         let engine = Arc::new(quest_engine::QuestEngine::new(bus.clone()));

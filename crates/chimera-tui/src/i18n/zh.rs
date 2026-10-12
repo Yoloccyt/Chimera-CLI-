@@ -64,6 +64,8 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.bench.retrieval_p99",
     "panel.bench.agreement",
     "panel.bench.certifiable",
+    "panel.bench.slo_thresholds_total",
+    "panel.bench.unavailable",
     // v2.3 §(b.6)/§(b.4):审查队列面板(AdversarialReview 可视化；仅 Certify 渲染为已认证)
     "panel.border.review_queue",
     "panel.review.subtitle",
@@ -401,6 +403,8 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.bench.retrieval_p99" => "检索 P99（毫秒）",
         "panel.bench.agreement" => "裁判一致率",
         "panel.bench.certifiable" => "自动化结果可认证",
+        "panel.bench.slo_thresholds_total" => "SLO 阈值总数",
+        "panel.bench.unavailable" => "N/A（数据源未接线）",
         "panel.border.review_queue" => " 审查队列 ",
         "panel.review.subtitle" => "对抗审查队列",
         "panel.review.certified" => "已认证",

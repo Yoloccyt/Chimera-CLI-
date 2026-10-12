@@ -55,6 +55,8 @@
 pub mod action_orchestrator;
 /// 启动 banner 输出(品牌 ASCII art,可通过 `--no-banner` 关闭)
 pub mod banner;
+/// `/bench` 一期：build.rs 静态计数 provider（供 commands::tui 装配 BenchPanel）。
+mod bench_provider;
 /// 统一调用预算包装 — 超时 + CancellationToken 注入(M2,M1-方向5:
 /// chat/quest 主路径 LLM/长操作的本层兜底防护,超时发 OperationTimedOut 事件)
 pub mod call_budget;
