@@ -118,3 +118,73 @@ fn registry_is_deduped_and_snake_case() {
         "登记表不应少于实质性逻辑模块集",
     );
 }
+
+/// 不变量 4（承 ADR-033 追加节 2026-10-09 的量体订正 / ADR-213 §6.5 对 D-14 的处置）：
+/// **已登记为「受控逻辑例外」的模块，其模块头不得再以项目符号句式自称「纯类型零逻辑」**。
+///
+/// 为什么只判这一种句式（而非把「零逻辑」三字全局禁用）：盘上命中分两形，只有其一可机判——
+///   · 自我主张形 `//! - **纯类型 + 零逻辑**: 仅类型定义…`——是对本模块性质的断言；
+///   · 引用叙述形（`capability_token.rs:10`「本模块**不是**“零逻辑”」、`mcsm.rs:18`
+///     「显式声明为…的例外」、`util.rs:14`「受控例外」、`archive_monotonicity.rs:22`
+///     转述 ADR-033 原文）——是对该词的**谈论**，判红即假红。
+/// 两形语法区别清楚（行首 `//!` + `- **纯类型` + 含 `零逻辑**`），故本测只锁前一种。
+/// 未登记例外的模块使用主张形是**合法的**：登记表语义为「含实质逻辑者须登记」，
+/// 无逻辑者宣称无逻辑与实况一致（如 `core_domain/domain.rs`——生产面只有
+/// `default_priority`/`Default::default`，其余全在 `#[cfg(test)]` 之后，确不在表内）。
+#[test]
+fn registered_exception_never_claims_zero_logic() {
+    let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut checked = 0usize;
+    for file in rust_files(&src_root) {
+        let stem = file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if !ADR_033_EXCEPTION_MODULES.contains(&stem.as_str()) {
+            continue;
+        }
+        checked += 1;
+        let text = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", file.display()));
+        for (idx, line) in text.lines().enumerate() {
+            let t = line.trim_start();
+            let is_self_claim = t.starts_with("//! - **纯类型") && t.contains("零逻辑**");
+            assert!(
+                !is_self_claim,
+                "模块 `{stem}` 已登记于 ADR_033_EXCEPTION_MODULES（即承认含受控实质逻辑），\
+                 其模块头 {}:{} 却仍自称「纯类型零逻辑」——名实矛盾，读者会据该行误判本模块\
+                 是否需要读逻辑。改为陈述实际形状（「纯类型 + 受控纯逻辑（登记例外）」）或删除该断言行。\n  {t}",
+                file.display(),
+                idx + 1,
+            );
+        }
+    }
+    assert_eq!(
+        checked,
+        ADR_033_EXCEPTION_MODULES.len(),
+        "本测只解析到 {checked} 个登记例外的源文件，而登记表有 {} 项——有登记名解析不到文件，\
+         本测覆盖面已静默缩水（不变量 1 应同时红）",
+        ADR_033_EXCEPTION_MODULES.len()
+    );
+}
+
+/// 递归收集 `*.rs`。dev 上下文运行期 IO：G-99 只扫 `src/**` 生产面、不扫 `tests/`，
+/// 故本 helper 不触纯度门。排序保证输出稳定。
+fn rust_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(rust_files(&path));
+        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            out.push(path);
+        }
+    }
+    out.sort();
+    out
+}

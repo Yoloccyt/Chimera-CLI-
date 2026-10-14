@@ -11,11 +11,14 @@
 //! events(offset, session_id, segment_id, payload BLOB)  -- 复合主键 (session_id, offset)
 //! ```
 //!
-//! - `events.payload` = rmp-serde `to_vec_named`（map 编码,ADR-004 协议）序列化的
+//! - `events.payload` = rmp-serde `to_vec_named`（map 编码,归 ADR-213 决策 R8.1 的
+//!   Class A「长生命周期持久 envelope」）序列化的
 //!   `SessionEvent`;紧凑索引格式,与段文件 JSONL 人读格式双轨并存。
 //!   WHY named:EventMetadata.correlation_id 带 skip_serializing_if,array 位置编码
-//!   下字段错位（ADR-004 同坑,event-bus 先例 shard.rs/bus.rs）,map 按字段名
-//!   匹配不受 skip 影响
+//!   下字段错位（该 hazard 的实测出处是 nexus-contracts/tests/wire_format_compat.rs,
+//!   非 ADR-004——ADR-004 只裁「MessagePack 而非 JSON」与 LHQP 检查点持久化,
+//!   从未裁 array/map 形态,旧注把它当依据属过度归属,已在 ADR-214 登记 D-17 关闭）,
+//!   map 按字段名匹配不受 skip 影响
 //! - `parent_segment_id` 非 NULL 的行 = fork 复制行,指向父会话的段
 //! - 复合索引 `(session_id, offset)`:P2-T3 k-way 归并回放的按会话顺序扫描路径
 //!

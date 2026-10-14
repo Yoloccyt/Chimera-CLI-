@@ -180,6 +180,7 @@ L1   Core ─────── nexus-core · event-bus
 ```
 L(N) → L(N)   ✓ 同层互引允许
 L(N) → L(N-1) ✓ 向下依赖允许
+L(N) → L(0)    ✓ L0 Contracts 恒允许(ADR-033)
 L(N) → L(N+1) ✗ 向上依赖禁止
 L(N) ──event-bus── L(M)  ✓ 跨层通信只能走 Event Bus
 L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走 MCP Mesh

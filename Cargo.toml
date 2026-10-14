@@ -49,7 +49,9 @@ members = [
     "crates/mca-gateway",
     # L10 Interface: nexus-app-server 核心-表面分离(WI-01,workspace 加入时第 39 个 crate)
     # WHY 排在末位: 宿主层协议门面,仅依赖 L0(nexus-contracts)/L1(event-bus/nexus-core);
-    # 外部协议面类型在 L0 app.rs(内闭外开 T6);48/53 crate 预算内(38+1=39)
+    # 外部协议面类型在 L0 protocol/app.rs(内闭外开 T6;W3 子模块化后由 src/app.rs 迁入
+    # src/protocol/,经 lib.rs `pub use protocol::app;` 保持 nexus_contracts::app 旧路径);
+    # 48/53 crate 预算内(38+1=39)
     "crates/nexus-app-server",
     # L3 Storage: session-store 会话事件流存储(Phase 2 新增,ADR-141,workspace 加入时第 40 个 crate)
     # WHY 排在末位: 会话持久化从 Checkpoint 线性快照升级为 append-only 段 + CBMR 微批写

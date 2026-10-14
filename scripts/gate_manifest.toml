@@ -1211,3 +1211,36 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "双向对拍：`git log --diff-filter=D -- 'crates/*/Cargo.toml'` 穷举集 == CODE_WIKI §3.12 表首列反引号名集。2026-10-14 实测两侧同为 5（acb-governor/auto-dpo/model-router/router-traits/lsct-tiering）。判据刻意复用 §3.12 自己声明的那条命令，避免「门与文档各用一把尺」；未来 crate 删除未回灌文档枢纽 ⇒ 立即判红"
+
+# ============================================================
+# G-113/G-114：位置式（MessagePack array）持久类型的字段序冻结门（ADR-213 决策 R8.2 + R9）。
+# 取号说明：本轮开工时现读最大号为 G-110，落盘前复测已变 G-112（并发批次 2026-10-14 登记
+# check_deleted_crate_registry.py 占 111/112 且未接 ci.yml ⇒ 该批自身 audit_gate_parity 判红
+# 2 条，与本对门无关，亦不由本对门洗白）。故本对门取 113/114。
+# 补的洞是「裁决有文字、判据为零」：R8.2 冻结字段序、R9 禁增 default+skip，两条都写进了 ADR，
+# 但台账文件不存在、无任何门引用过它们。它们守护的失败模式恰是**唯一不产生任何信号的那种**，
+# 且是实测出来的而非推演的：crates/nexus-contracts/tests/wire_format_compat.rs 钉住的三行矩阵
+# 显示 array 形态下「两个同类型字段交换声明顺序」解码 Ok 而值静默互换——无编译错、无测试失败、
+# 无解码点异常；中间插入反而大声报 invalid length。具名 map 形态对此免疫，故本门刻意**只判
+# to_vec 站点、不判 to_vec_named**（判后者只会造出风险不存在的假红）。
+# 轴分工，禁止互抄基线（沿 registry.rs 双清单与 G-91/G-101/G-105 先例）：G-91 判 L0 pub 类型 ×
+# 消费 crate 数；G-101 判跨层契约成员 × 生产调用点；G-105 判 L0 pub fn 面；本门判**字节级位置
+# 绑定**（类型字段序 × 编码形态 × 写点），四者分母与基线文件互不相交。
+# ============================================================
+[[gate]]
+id = "G-113"
+spec_ref = "ADR-213 决策 R8.2（Class B 字段序冻结 + 只增尾必带默认）+ 决策 R9（位置式禁增 default+skip 字段）"
+cmd = "{python} scripts/check_positional_field_order_freeze.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "输入面 crates/*/src/**/*.rs（风险非 L0 局部：envelope 声明在 L0、落盘写在 L3/L9/L10），注释与字符串经 G-99 同一词法器 blank、#[cfg(test)] 尾经同一 test_tail_mask 遮蔽——**import 复用而非手抄**，两份「什么算生产码」正是 G-45/G-46 要治理的漂移病灶。四类判定：NEW（无行的位置式写点）/ STALE（行在点没了，含 EXEMPT 的僵尸豁免＝台账说谎）/ ORDER_DRIFT（实字段序≠冻结序且非纯尾部追加，即静默互换形态）/ UNREGISTERED_TAIL_APPEND·NO_DEFAULT_ON_APPEND·R9_SKIP_ON_ARRAY（尾部追加是许可的生长形状但须同批重发该行；追加字段缺 default 会响亮破坏旧 blob；新增 default+skip 在 array 下把非跳过值挤进被跳过邻字段位，邻字段同类型则静默错值）。键用 <文件>::<所在 fn> 而非行号：W3 物理搬移实测使全部 L0 行号漂移，行锚一搬整台账假红。**与 G-109 联动不可省**：src_module_reachability_freeze.txt 内文件的站点入 ORPHAN-EXCLUDED（不记账但打印计数），该文件一旦接线即离开 G-109 台账、落入本门面判 NEW——不做联动，接线当天就是静默漏判窗口。退码：0 干净 / 1 违规 / 2 不可判定（台账行畸形·未知键·证据<24 字符·重复 site·类型查无或多文件未 pin in=·非具名字段结构元组/枚举不可判形·扫描面低于 FLOOR 600），rc=2 一律 [TOOL-ERROR] 绝不 [FAIL]（G-44 曾因此判红 5 条 C4）。**诚实边界**：「该站点参数属于该类型」由行断言、仅以 pin 的 arg= 文本做机械反证（Rust 类型推断不在本门范围）；枚举变体序同样具位置意义，本门**不判**且不得称已覆盖。现取实况（2026-10-14，走 799 文件）：生产位置式写点恰 2 处——quest-engine/src/wal.rs::append_entry 属 G-109 孤儿被排除、chimera-tui/src/popup.rs::event_detail 经取证判 EXEMPT（:249 编码的字节在 :263 同函数内即被解回、只经 hex_string() 渲染上屏，payload_raw 无其它消费点且 popup.rs 全文无 fs/write/save，被编码物是 serde_json::Value 本无声明序可冻）。⇒ ADR-213 R8.1 的 Class B 现存 **0 员**，本门是**新增准入**而非存量清算。真树反事实：撤该行 EXEMPT ⇒ NEW 红 rc=1，还原 ⇒ rc=0 且 cmp 证台账逐字节相同；本地实测 0.70s。"
+
+[[gate]]
+id = "G-114"
+spec_ref = "G-113 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-109/G-111 先例）"
+cmd = "{python} scripts/check_positional_field_order_freeze.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "27 条断言，全部在 tempdir 真树上走**生产同一组抽取函数**（夹具不复实现解析器，否则证不到生产路径）：①三类诱饵（doc 注释 / 字符串字面量 / cfg(test) 尾）不得成站点 ②**植入一次同类型字段换序必须 ORDER_DRIFT 红**——这是整条门存在的理由，咬不住即假绿 ③新增未登记位置式写点红 ④R9：array 类型新增 default+skip 红，而**同一段代码一旦台账记录该 skip 即转绿**（证明判的是漂移不是形式，不是一刀切禁形态）⑤尾部追加未重发行红 + 缺 default 点名 ⑥arg 漂移红 ⑦四类不可判定各退 2（缺键/未知键/证据<24/重复 site 由 read_ledger 真解析、幽灵类型、元组结构、同名多文件未 pin in=）⑧FLOOR 断言 0<FLOOR<真实 walk 文件数（夹具树只有 2 文件，故该断言必须对真树取数，否则「夹具全绿而生产致盲」可蒙过）⑨**孤儿联动有牙**：从 G-109 台账副本删一行即令该站点翻 NEW ⑩撤站点不删行 STALE、同行同批撤转绿 ⑪EXEMPT 合法静默站点但僵尸豁免 STALE 红。任一断言不成立⇒退 1。首轮实跑即由本夹具抓到两处自身缺陷（字段正则漏掉 `pub ts: u64` 形态、按 sites[0] 断言取到字典序在前的孤儿文件），修正后全绿"

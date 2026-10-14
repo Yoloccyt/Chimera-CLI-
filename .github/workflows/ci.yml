@@ -213,6 +213,19 @@ jobs:
           python3 scripts/check_src_module_reachability.py --selftest
           python3 scripts/check_src_module_reachability.py
 
+      # WHY: ADR-213 R8.2 冻结了「位置式(MessagePack array)持久类型的字段序」、R9 禁止给这类
+      # 类型新增 default+skip 字段,但两条裁决此前**判据为零**(台账文件不存在、无门引用)。它们
+      # 守的是唯一不产生信号的失败形态,且是实测的:nexus-contracts/tests/wire_format_compat.rs
+      # 钉住的矩阵显示 array 下「同类型两字段交换声明顺序」解码 Ok 而值静默互换——无编译错、
+      # 无测试失败、无解码点异常(中间插入反而大声报 invalid length)。具名 map 形态免疫,故本门
+      # 刻意只判 to_vec 站点。现取实况:799 个 src 文件中 2 处生产位置式写点,一处在 G-109 孤儿
+      # 台账(wal.rs,不参与编译;一旦接线即落入本门面判 NEW),一处经取证为弹窗内存态 hex 预览
+      # (popup.rs,EXEMPT)⇒ Class B 现存 0 员,本门是新增准入而非存量清算。先 --selftest 证牙。
+      - name: Positional field-order freeze (G-113)
+        run: |
+          python3 scripts/check_positional_field_order_freeze.py --selftest
+          python3 scripts/check_positional_field_order_freeze.py
+
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
       # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期

@@ -6,8 +6,11 @@
 //!
 //! # 设计决策(WHY)
 //!
-//! - **纯类型零逻辑**: 遵循 ADR-033 约束,仅类型定义与基础构造函数,
-//!   契约的运行时校验由消费层(L9 efficiency-monitor RuntimeAuditor)实现
+//! - **纯类型 + 受控纯逻辑**: 类型定义与构造器之外,`BehaviorContract::enforce` 以子串
+//!   覆盖判定各条断言是否被观测命中(无 IO、无状态变更),故本模块已登记于
+//!   `ADR_033_EXCEPTION_MODULES`;契约的运行时**审计编排**(证据纪律、五维度打分)仍由
+//!   消费层(L9 efficiency-monitor RuntimeAuditor)实现——本模块只给得出「遵守/违反」,
+//!   不决定何时审计、如何呈现
 //! - **证据可验证**: `BehaviorContract` 的前置/后置/不变量均为可被
 //!   Runtime Auditor 审计的文本断言,配套 `ContractExample` 提供可执行示例
 //! - **消费层**: L9 efficiency-monitor(审计)/ L5 gsoe-evolution(AEGIS Evolver
