@@ -1244,3 +1244,21 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "27 条断言，全部在 tempdir 真树上走**生产同一组抽取函数**（夹具不复实现解析器，否则证不到生产路径）：①三类诱饵（doc 注释 / 字符串字面量 / cfg(test) 尾）不得成站点 ②**植入一次同类型字段换序必须 ORDER_DRIFT 红**——这是整条门存在的理由，咬不住即假绿 ③新增未登记位置式写点红 ④R9：array 类型新增 default+skip 红，而**同一段代码一旦台账记录该 skip 即转绿**（证明判的是漂移不是形式，不是一刀切禁形态）⑤尾部追加未重发行红 + 缺 default 点名 ⑥arg 漂移红 ⑦四类不可判定各退 2（缺键/未知键/证据<24/重复 site 由 read_ledger 真解析、幽灵类型、元组结构、同名多文件未 pin in=）⑧FLOOR 断言 0<FLOOR<真实 walk 文件数（夹具树只有 2 文件，故该断言必须对真树取数，否则「夹具全绿而生产致盲」可蒙过）⑨**孤儿联动有牙**：从 G-109 台账副本删一行即令该站点翻 NEW ⑩撤站点不删行 STALE、同行同批撤转绿 ⑪EXEMPT 合法静默站点但僵尸豁免 STALE 红。任一断言不成立⇒退 1。首轮实跑即由本夹具抓到两处自身缺陷（字段正则漏掉 `pub ts: u64` 形态、按 sites[0] 断言取到字典序在前的孤儿文件），修正后全绿"
+
+[[gate]]
+id = "G-115"
+spec_ref = "ADR-214 决策 3（D-22：`#[non_exhaustive]` 与 wire 字段序正交；per-type 开放/封闭政策须变机器锁）"
+cmd = "{python} scripts/check_l0_extensibility_class.py"
+expect = 0
+kind = "light"
+test_kind = "single_crate"
+note = "L0 公共类型可扩展性分级台账。补的洞有量纲性：实测 nexus-contracts 有 103 `pub enum` + 124 `pub struct`（门自报 227 生产面；未 blank 未遮尾的裸 grep 报 228，多的那个是 `vector_math/vector.rs:342 InMemoryVectorStore` 落在 cfg(test) 尾内）且 `#[non_exhaustive]` **命中 0** ⇒ 今天每个公共类型都是封闭的，新增任一变体/字段对 30+ 消费 crate 都是源码级破坏（`ExperienceCard` 61 处外部字面量、上一波漏跑 `--all-targets` 才暴露的 E0063 是同一敞口的两次显形）。**为何不是无脑加标**：本仓在承重位置刻意反着用它——`event-bus/src/registry.rs` 的 `define_event_registry!` 展开 5 个无通配 match，正是靠「新增变体必须被每个消费方处理」当安全属性；裁决类（verdict/failure/severity/strategy）保留封闭才对，展示/格式/词表类才适合开放。于是政策落成语义锁：`class=open ⇔ 带属性`、`class=closed ⇔ 不带属性`——**开一个类型必须同批做两件事**（翻行 + 加属性 + ≥24 字符理由），只做一半即 CLASS_MISMATCH 红；单加属性是「静默摘掉下游强制处理」，单翻行是「台账说谎」，两者都是本仓反复被咬的形态。新增公共类型无行⇒NEW 红；类型搬移/消失而行不撤⇒STALE 红（W3 式物理搬移须同批改键）。行畸形 / class 取值非法 / open 缺理由 / 重复行 / 抽取数<`TYPES_FLOOR(150)` ⇒ 退 2 不可判定，且 **floor 守卫刻意排在 `--emit` 之前**：致盲的解析器不得把自己的致盲写成一份「干净」基线（那等于把致盲洗白进台账）。现取基线：227 行全 closed（与「属性命中 0」的实况同构，emit 派生故首跑即自洽）——本门不新增任何决定，它把一个从未被显式声明的默认值变成可评审、可回退的登记，使第一次「开放某类型」成为有人签字的动作而非副产物。待开短名单（21 个零提及 enum + 64 个无外部字面量 struct）与其反面论证记于 ADR-214 D-22；其中范围教训值得留档：首轮只扫 `crates/*/src` 得 22 个候选，实测 `VerificationMethod` 在根 `tests/e2e` 三个文件里被匹配 ⇒ 下游面**必须含根 tests/**，否则候选集偏松、照它加标会在 e2e 的穷尽匹配处编译断裂。"
+
+[[gate]]
+id = "G-116"
+spec_ref = "G-115 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-109/G-111/G-114 先例）"
+cmd = "{python} scripts/check_l0_extensibility_class.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "single_crate"
+note = "15 条断言走生产同一组抽取函数（tempdir 真树 + `module_key` 复用 G-105 实现）：①生产面键集与期望**逐集相等**（crate 根文件是模块 `lib` 而非 `m`——本门首版该断言写成 `... or len(types)==6`，键全错仍报绿，即本仓反复禁止的恒真守卫，已改为严格集合相等并在源码注明原因）②`#[cfg(test)]` 尾内声明不得入册 ③属性识别精确命中两个声明为 open 的类型且不误报另两个 ④**doc 注释里出现的 `#[non_exhaustive]` 不算属性** ⑤class 与属性全一致⇒rc 0，且 open/closed 分开计数 ⑥植入属性不翻行⇒CLASS_MISMATCH ⑦**反向**翻行不加属性⇒同样 CLASS_MISMATCH（两向都要咬得住）⑧新类型无行⇒NEW ⑨类型消失而行留存⇒STALE ⑩成对撤除⇒转绿 ⑪四类不可判定各判 malformed（open 缺理由 / class 取值非法 / 未知键 / 重复行）⑫`0 < TYPES_FLOOR ≤ 真实抽取数`（夹具仅 6 类型，故该断言必须对真树取数）。任一断言不成立⇒退 1。开发期由本夹具连续现形三处真缺陷：`ne` 元组键 vs 字符串键、NEW 分支 `%` 优先级写错致 3 占位符只给 2 参数（TypeError＝该判据从未跑通）、`evaluate` 与调用方双打印"

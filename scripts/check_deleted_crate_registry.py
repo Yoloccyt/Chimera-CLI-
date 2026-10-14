@@ -146,4 +146,6 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import gate_rc  # crash -> exit 2, never a borrowed traceback exit 1
+
+    sys.exit(gate_rc.run(main))

@@ -226,6 +226,17 @@ jobs:
           python3 scripts/check_positional_field_order_freeze.py --selftest
           python3 scripts/check_positional_field_order_freeze.py
 
+      # WHY: L0 实测 103 pub enum + 124 pub struct 且 #[non_exhaustive] 命中 0 ⇒ 每个公共类型
+      # 都是封闭的,新增任一变体/字段即对 30+ 消费 crate 造成源码级破坏。但"全加 non_exhaustive"
+      # 也不对:本仓刻意依赖反向机制——event-bus/registry.rs 的 define_event_registry! 展开 5 个
+      # 无通配 match,靠"新变体必须被每个消费方处理"当安全属性。故政策按类型定档并锁成
+      # class=open ⇔ 带属性:开一个类型须同批翻行+加属性,只做一半即 CLASS_MISMATCH 红。
+      # floor 守卫排在 --emit 之前,致盲的解析器不得把致盲写成一份"干净"基线。
+      - name: L0 extensibility class ledger (G-115)
+        run: |
+          python3 scripts/check_l0_extensibility_class.py --selftest
+          python3 scripts/check_l0_extensibility_class.py
+
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
       # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期
@@ -310,6 +321,8 @@ jobs:
           python3 scripts/check_config_sample_parity.py
           python3 scripts/check_contract_consumers_parity.py --selftest
           python3 scripts/check_contract_consumers_parity.py
+          python3 scripts/check_deleted_crate_registry.py --selftest
+          python3 scripts/check_deleted_crate_registry.py
           python3 scripts/check_doc_pointer_integrity.py --selftest
           python3 scripts/check_doc_pointer_integrity.py
           python3 scripts/check_event_ownership.py --selftest
