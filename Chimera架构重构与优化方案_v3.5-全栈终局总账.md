@@ -102,9 +102,9 @@
 | `aegis-gsoe` | L5 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/gsoe-evolution/src/aegis/critic.rs:75 AegisCritic |
 | `ambient-mode` | L9 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：quest-engine） |
 | `ancestor-sibling-index` | L2 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/mlc-engine/src/on_demand_synthesizer.rs:255 find_ancestors / :275 find_siblings（函数级，无独立 index 模块） |
-| `atomic-operators` | L7 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/experience_card.rs:65 enum AtomicOperator；faae-router/src/operator_router.rs:130 OPERATOR_ORDER |
+| `atomic-operators` | L7 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/memory/experience_card.rs:65 enum AtomicOperator；faae-router/src/operator_router.rs:130 OPERATOR_ORDER |
 | `auto-builder` | L4 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：pvl-layer） |
-| `behavior-contracts` | L0 | §4.1 | ③ VOID | LANDED | crates/nexus-contracts/src/behavior_contract.rs:29 BehaviorContract |
+| `behavior-contracts` | L0 | §4.1 | ③ VOID | LANDED | crates/nexus-contracts/src/spec/behavior_contract.rs:29 BehaviorContract |
 | `behavior-localization` | L5/L8 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：repo-wiki） |
 | `checkpoint-preserver` | L5 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：gsoe-evolution） |
 | `chimera-tui` | L10 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/chimera-tui 在籍） |
@@ -119,15 +119,15 @@
 | `dynamic-verification-depth` | L7 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/pvl-layer/src/dynamic_depth.rs:28 enum VerificationDepth（异名：dynamic_depth） |
 | `entropy-weighted-scoring` | L7 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/pvl-layer/src/dynamic_depth.rs:199 pub struct EntropyWeightedScorer |
 | `error-signature-collector` | L4 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：seccore） |
-| `error-signature-contracts` | L0 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/experience_card.rs:169 struct ErrorSignature |
+| `error-signature-contracts` | L0 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/memory/experience_card.rs:169 struct ErrorSignature |
 | `error-signature-index` | L3 | §4.1+§4.2 | ③ VOID | LANDED | crates/cmt-tiering/src/experience_card_storage.rs:168 CREATE INDEX idx_error_hash |
 | `event-bus` | L1 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/event-bus 在籍） |
-| `execution-status-contracts` | L0 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/nexus-contracts/src/experience_card.rs:190 enum ExecutionStatus |
+| `execution-status-contracts` | L0 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/nexus-contracts/src/memory/experience_card.rs:190 enum ExecutionStatus |
 | `experience-card` | L0 | §4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：nexus-contracts） |
 | `experience-card-bus` | L1 | §4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：event-bus） |
 | `experience-card-cache` | L2 | §4.1 | ③ VOID | LANDED | crates/cmt-tiering/src/experience_card_storage.rs:222 update_hot_cache（卡片热缓存落在存储层，非独立模块） |
 | `experience-card-collector` | L9 | §4.1 | ③ VOID | VOID | CardCollector/card_collector 零命中；seccore 的 error_signature_collector 是另一提案 |
-| `experience-card-contracts` | L0 | §4.1 | ③ VOID | LANDED | crates/nexus-contracts/src/experience_card.rs:297 struct ExperienceCard |
+| `experience-card-contracts` | L0 | §4.1 | ③ VOID | LANDED | crates/nexus-contracts/src/memory/experience_card.rs:297 struct ExperienceCard |
 | `experience-card-generator` | L7 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：pvl-layer） |
 | `experience-card-storage` | L3 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：cmt-tiering） |
 | `experience-card-system` | L2 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：mlc-engine） |
@@ -136,7 +136,7 @@
 | `global-experience-board` | L2 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：mlc-engine） |
 | `grpo-trainer` | L5 | §4.2 | ②c PARTIAL | LANDED | crates/gsoe-evolution/src/policy/grpo.rs:69；types.rs:90 GrpoRollout |
 | `gtpo-trainer` | L7 | §4.2 | ②c PARTIAL | LANDED | crates/pvl-layer/src/gtpo.rs:30 struct GTPO |
-| `harness-config-manager` | L6 | §4.1 | ③ VOID | LANDED | crates/nexus-contracts/src/harness_spec.rs:421 struct HarnessSpec（异名） |
+| `harness-config-manager` | L6 | §4.1 | ③ VOID | LANDED | crates/nexus-contracts/src/spec/harness_spec.rs:421 struct HarnessSpec（异名） |
 | `hcw-window` | L2 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/hcw-window 在籍） |
 | `hils-attention` | L2 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：hcw-window） |
 | `hint-boosted-recovery` | L7 | §4.1 | ②c PARTIAL | LANDED | crates/pvl-layer/src/hint_recovery.rs:32 HintCategory / :63 HintRecovery |
@@ -145,17 +145,17 @@
 | `long-term-credit-assigner` | L9 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：quest-engine） |
 | `mappo-trainer` | L8 | §4.2 | ②c PARTIAL | LANDED | crates/parliament/src/mappo.rs:213 struct MAPPO（离线研究面，见报告 W6-4 撤主张） |
 | `memory-graph` | L2 | §4.1 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：mlc-engine） |
-| `memory-pyramid-contracts` | L0 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/memory_pyramid.rs:42 |
+| `memory-pyramid-contracts` | L0 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/memory/memory_pyramid.rs:42 |
 | `memory-sideagent` | L2 | §4.1 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：mlc-engine） |
 | `meta-agent-adapter` | L5 | §4.1 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：gsoe-evolution） |
 | `mlc-engine` | L2 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/mlc-engine 在籍） |
-| `msce-integration` | L5 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/memory_pyramid.rs:241 with_msce_elements |
+| `msce-integration` | L5 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/memory/memory_pyramid.rs:241 with_msce_elements |
 | `nexus-contracts` | L0 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/nexus-contracts 在籍） |
 | `nexus-core` | L1 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/nexus-core 在籍） |
 | `omni-message` | L0 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：nexus-contracts） |
 | `on-demand-synthesizer` | L2 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：mlc-engine） |
 | `openforge-proxy` | L1 | §4.2 | ③ VOID | VOID | 仅 //! 论文出处注释（event-bus/src/segment_per.rs:5、token_ledger.rs:5），无代码实体 |
-| `operator-contracts` | L0 | §4.1+§4.2 | ③ VOID | LANDED | 算子契约类型在 crates/nexus-contracts/src/experience_card.rs:65（无独立 operator_contracts.rs） |
+| `operator-contracts` | L0 | §4.1+§4.2 | ③ VOID | LANDED | 算子契约类型在 crates/nexus-contracts/src/memory/experience_card.rs:65（无独立 operator_contracts.rs） |
 | `operator-router` | L6 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：faae-router） |
 | `osa-coordinator` | L6 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/osa-coordinator 在籍） |
 | `output-validator` | L4 | §4.1 | ②c PARTIAL | VOID | OutputValidator/validate_output/output_validation 全库零命中 |
@@ -163,7 +163,7 @@
 | `parent-selector` | L6 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/faae-router/src/parent_context.rs:31 ParentSelection |
 | `parliament` | L8 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/parliament 在籍） |
 | `per-priority-sampler` | L3 | §4.1 | ③ VOID | VOID | PrioritySampler/per_priority 零命中（§4.1 原注即「预留」） |
-| `platform-grounding-specs` | L0 | §4.1 | ②c PARTIAL | LANDED | crates/nexus-contracts/src/platform_grounding.rs:57 PlatformGroundingSpec |
+| `platform-grounding-specs` | L0 | §4.1 | ②c PARTIAL | LANDED | crates/nexus-contracts/src/spec/platform_grounding.rs:57 PlatformGroundingSpec |
 | `ppo-trainer` | L6 | §4.2 | ②c PARTIAL | LANDED | crates/seccore/src/asa.rs:207 with_ppo(…PpoCritic)（异层：提案 L6 实落 L4） |
 | `procedural-blueprint` | L5 | §4.1 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：repo-wiki） |
 | `process-score-calculator` | L7 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/pvl-layer/src/process_score.rs:42（lib.rs:98 pub mod process_score） |
@@ -172,7 +172,7 @@
 | `quest-engine` | L9 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/quest-engine 在籍） |
 | `retrieval-three-way` | L2 | §4.2 | ②c PARTIAL | VOID | 唯一 three_way 命中是 nexus-core/src/compute/bridge.rs:577 的 #[test] fn decide_three_way，语义为算力三态而非记忆检索 |
 | `rl-client` | L1 | §4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：chimera-cli,nexus-core） |
-| `rl-hook-contracts` | L0 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/nexus-contracts/src/rl_hooks.rs:50 |
+| `rl-hook-contracts` | L0 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/nexus-contracts/src/seams/rl_hooks.rs:50 |
 | `rl-types` | L1 | §4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：nexus-contracts） |
 | `runtime-auditor` | L10 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：efficiency-monitor） |
 | `search-tree-manager` | L9 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：quest-engine） |
@@ -186,16 +186,16 @@
 | `six-dimension-contracts` | L0 | §4.1+§4.2 | ③ VOID | LANDED | crates/osa-coordinator/src/six_dimension.rs:94 pub struct SixDimensionAdjuster（六维控制面契约本体在 osa-coordinator，非 L0 独立模块） |
 | `skill-graph` | L5 | §4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：repo-wiki） |
 | `skill-lifecycle` | L5 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：nexus-contracts,repo-wiki） |
-| `skill-lifecycle-contracts` | L0 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/skill_lifecycle.rs:34 + crates/repo-wiki/src/skill_lifecycle.rs:30 |
+| `skill-lifecycle-contracts` | L0 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/memory/skill_lifecycle.rs:34 + crates/repo-wiki/src/skill_lifecycle.rs:30 |
 | `skills-progressive-loader` | L6 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：repo-wiki） |
 | `stat-learning-policy` | L1 | §4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：nexus-core） |
 | `stop-ruling` | L8 | §4.1 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：parliament） |
-| `stop-strategy` | L8/L9 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/harness_dimensions.rs:154 StopStrategyConfig |
+| `stop-strategy` | L8/L9 | §4.1+§4.2 | ③ VOID | LANDED | crates/nexus-contracts/src/spec/harness_dimensions.rs:154 StopStrategyConfig |
 | `three-factor` | L0 | §4.2 | ③ VOID | VOID | §4.2 表内反引号片段，不是完整提案名（解析噪声，已计入分母以示诚实） |
 | `three-factor-adjudicator` | L8 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：parliament） |
 | `three-factor-index` | L3 | §4.1+§4.2 | ③ VOID | LANDED | crates/cmt-tiering/src/experience_card_storage.rs:163 idx_three_factor + :312 query_by_three_factor |
 | `three-factor-selector` | L5 | §4.1+§4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：gsoe-evolution） |
-| `token-evidence-contracts` | L0 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/nexus-contracts/src/token_evidence.rs:39（模块在册；无同名 struct） |
+| `token-evidence-contracts` | L0 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/nexus-contracts/src/memory/token_evidence.rs:39（模块在册；无同名 struct） |
 | `token-ledger` | L1 | §4.2 | ② MODULE | IN-PLACE | 机械判定即终判（模块文件：event-bus） |
 | `tool-schema-pruner` | L6 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：osa-coordinator） |
 | `variant-parliament` | L8 | §4.1+§4.2 | ③ VOID | LANDED | crates/parliament/src/variant_pool.rs:31 VariantPool（异名） |

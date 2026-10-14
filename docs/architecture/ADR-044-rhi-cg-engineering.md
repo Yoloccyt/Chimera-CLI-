@@ -6,6 +6,8 @@
 
 已批准 (Accepted) (2026-07-26)
 
+> **🗑 2026-10-14 已删 crate 校正**：本文 **36 处 `auto-dpo` + 8 处 `model-router`（含 15 条 `file://` 死链）产物不在当前代码库**（批次 A `38c72e6`，2026-09-20，登记见 [`CODE_WIKI.md §3.12`](CODE_WIKI.md)）。依 R7「历史只加注不改写」保留正文。**实质影响（2026-10-14 全库复测）**：本文 P5.1 落地清单所列 `crates/auto-dpo/src/{rhi_channel_a,rhi_judge_client,self_history}.rs`、`tests/rhi_channel_a_e2e.rs`、`benches/rhi_channel_a_bench.rs` 随宿主整 crate 删除，其符号 `rhi_channel_a` / `rhi_judge_client` / `SelfComparisonHistory` / `LlmInvoker` / `auto-dpo::JudgeClient` 在 `crates/**/*.rs` **定义命中 0**；`JudgeClient` 仅在 `gsoe-evolution/src/ci_gate.rs:17,21,409` 作为**注释里的设计先例引用**残留（非迁移定义）。故"复用 `auto-dpo` 既有结构"这一决策前提已不成立，通道 A 的实施状态须按 §3.12 重判——本注记不代作裁决。
+
 > **状态说明**: 本 ADR 于 2026-07-26 由 P5.1 通道 A 实施回溯与 P5.2 通道 B 预留决策共同触发创建并批准。本 ADR 是 ADR-032 决策 1（通道 A 提议 L2 验证器）与决策 2（通道 B 否决 L3 验证器）的**工程实施层落地**——ADR-032 在 RHI-CG 双通道架构层面定义了"提议—否决分离"原则，本 ADR 将其落地为通道 A 的 trait 接缝、stub/mock 设计、KPI-04 性能可证伪证据，以及通道 B 的 CI 执行门接口、显著性检测算法、谱系存储方案等预留决策。属 append-only 扩展（对齐 ADR-028 决策 1 哲学），不修改 ADR-032 的裁决结论，不修改 ADR-042 的 R2 冻结范围。
 
 ## 背景

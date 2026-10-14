@@ -123,7 +123,10 @@ define_event_registry! {
     QuestListUpdated => Normal, Quest;
     QuestCompleted => Normal, Quest;
     ThinkingModeSwitched => Normal, Quest;
-    // [Critical·broadcast] 检查点保存:背压保护级别,非 mpsc 旁路 13 清单成员
+    // [Critical·broadcast] 检查点保存:背压保护级别,不属 mpsc 旁路清单
+    // (旁路成员的唯一权威是 `bus::is_critical_mpsc_event`,规模由
+    // `CRITICAL_MPSC_VARIANTS` 持有;本行不复述数字,避免注释与常量漂移——
+    // 历史上此处曾长期挂着已变的旧计数「13」。)
     CheckpointSaved => Critical, Quest;
     CheckpointLoaded => Normal, Quest;
     // [Critical·broadcast] 共识达成:同上,历史 Critical 只走 broadcast
@@ -332,7 +335,8 @@ define_event_registry! {
     // [Critical·mpsc] §16.4(Phase 10 Wave 4):停止裁决丢失导致 Quest 无界运行
     StopRulingIssued => Critical, Parliament;
     // §16.4(Phase 10 Wave 4):变体审议通过(L8 三因子裁决事件化;
-    // 定级 Normal —— 审议记录非"必须确保投递"类,不进 mpsc 13 清单)
+    // 定级 Normal —— 审议记录非"必须确保投递"类,故不属 mpsc 旁路清单;
+    // 清单规模只由 `CRITICAL_MPSC_VARIANTS` 持有,本行不复述数字)
     VariantApproved => Normal, Parliament;
     // §16.4(Phase 10 Wave 4):三因子父本选择结果(L5 → L6/L9)
     ParentSelected => Normal, Knowledge;

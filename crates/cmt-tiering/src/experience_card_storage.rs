@@ -42,14 +42,12 @@ const DEFAULT_HOT_CAPACITY: usize = 256;
 /// v2.3 §(b.5) 落盘扫描策略：只拦截硬载荷（私钥 PEM / 云凭证 / 服务令牌 = `Block`），
 /// 高熵串与键名启发式降为 `Pass` 防误报。
 ///
-/// WHY 与本 crate `ice.rs:78-82`、`repo-wiki/src/store.rs:342-346` 逐字同口径：
-/// 误报会让正常工具证据被无声丢弃，三份写面共用一套判定才可预期。
+/// 口径来自本 crate 的单一源 `crate::hard_payload_scan_policy()`（与 warm/cold/ice 同源）。
+/// WHY 不就地复制结构体：本函数曾是 crate 内第五份逐字拷贝（见
+/// `ice.rs` 与旧版本函数），策略分叉只能靠人记住。跨 crate 口径（repo-wiki /
+/// mlc-engine 等）仍各有一份，跨 crate 单源属 L0 契约库职责，未授权前先登记。
 fn evidence_scan_policy() -> nexus_contracts::sensitive::ScanPolicy {
-    nexus_contracts::sensitive::ScanPolicy {
-        on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-        on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-        ..Default::default()
-    }
+    crate::hard_payload_scan_policy()
 }
 
 /// 提取待落盘条目的自由文本面（供扫描）。
@@ -252,8 +250,10 @@ impl ExperienceCardStorage {
             .map_err(|e| CmtError::StorageError(e.to_string()))?;
         let status_json = serde_json::to_string(&card.execution_status)
             .map_err(|e| CmtError::StorageError(e.to_string()))?;
-        let metadata_blob =
-            rmp_serde::to_vec(&card.metadata).map_err(|e| CmtError::StorageError(e.to_string()))?;
+        // Class A 持久化 envelope(ADR-213 R8.1):卡片长期回读作恢复真值 ⇒ 具名 map。
+        // 旧的位置式 blob 仍可被 from_slice 回读(实测,见 nexus-contracts/tests/wire_format_compat.rs)。
+        let metadata_blob = rmp_serde::to_vec_named(&card.metadata)
+            .map_err(|e| CmtError::StorageError(e.to_string()))?;
         let skills_json = serde_json::to_string(&card.metadata.skills_used)
             .map_err(|e| CmtError::StorageError(e.to_string()))?;
         let created_at = card.created_at.to_rfc3339();
@@ -508,8 +508,9 @@ impl ExperienceCardStorage {
                 skipped += 1;
                 continue;
             }
-            let payload =
-                rmp_serde::to_vec(e).map_err(|err| CmtError::StorageError(err.to_string()))?;
+            // Class A(token ledger 条目长期留存、批量导出回读,不被压实)⇒ 具名 map
+            let payload = rmp_serde::to_vec_named(e)
+                .map_err(|err| CmtError::StorageError(err.to_string()))?;
             payloads.push((
                 e.entry_id.to_string(),
                 e.session_id.to_string(),

@@ -114,19 +114,28 @@ pub fn fuse_ranked_lists(lists: &[WeightedList<'_>], k: u32, top_k: usize) -> Ve
             },
         )
         .collect();
-    // 全序：score 降序 → best_rank 升序 → 首现列表索引升序 → 首现 rank 升序 → id 升序
-    fused.sort_by(|a, b| {
+    // 全序键：score 降序 → best_rank 升序 → 首现列表索引升序 → 首现 rank 升序 → id 升序。
+    // 红线 #8：Top-K 用 O(n) `select_nth_unstable_by` + O(k log k) 前段排序，
+    // 复用同 crate `util::xts_top_k_by`（本模块头 :3 所声明的“同先例”由注释落地为实调用），
+    // 取代此前“`sort_by` 全排后 `truncate`”反模式。xts 内部已含前段排序，
+    // 本模块不再出现独立的 sort-then-truncate 站点（无需新登记 topk 基线）。
+    fn cmp_fused(a: &FusedItem, b: &FusedItem) -> std::cmp::Ordering {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.best_rank.cmp(&b.best_rank))
             .then(a._ord.cmp(&b._ord))
             .then(a.id.cmp(&b.id))
-    });
-    fused.truncate(top_k);
-    for f in &mut fused {
-        f._ord = (0, 0); // 输出不携带内部排序元数据
     }
+    let k = top_k.min(fused.len());
+    {
+        // xts_top_k_by 就地将前 k 个重排为按 cmp_fused 的严格全序并返回前段切片。
+        let head = crate::util::xts_top_k_by(&mut fused, k, cmp_fused);
+        for f in head.iter_mut() {
+            f._ord = (0, 0); // 输出不携带内部排序元数据
+        }
+    }
+    fused.truncate(k);
     fused
 }
 
@@ -193,7 +202,8 @@ mod tests {
     }
 
     #[test]
-    fn top_k_truncates_after_full_sort() {
+    fn top_k_selects_largest_k_by_partial_sort() {
+        // 红线 #8：top_k 用 select_nth_unstable 部分选择，结果与“全排后截断”逐位一致
         let a = ids(&["a1", "a2", "a3", "a4"]);
         let lists = [WeightedList::new(&a)];
         let out = fuse_ranked_lists(&lists, DEFAULT_RRF_K, 2);

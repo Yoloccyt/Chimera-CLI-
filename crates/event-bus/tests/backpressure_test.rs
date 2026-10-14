@@ -46,7 +46,7 @@ use tokio::sync::mpsc;
 
 /// 构造一个走 mpsc 旁路的 Critical 安全告警事件(SkepticVeto)
 ///
-/// WHY 选 SkepticVeto:它是 `is_critical_mpsc_event` 判定的 4 类事件之一,
+/// WHY 选 SkepticVeto:它是 `is_critical_mpsc_event` 判定的 16 类事件之一,
 /// 必定走 Critical 通道。用于验证有界化后安全告警的投递保证。
 fn make_mpsc_critical_event(idx: u64) -> NexusEvent {
     NexusEvent::SkepticVeto {

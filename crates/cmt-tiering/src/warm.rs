@@ -162,11 +162,7 @@ impl WarmTier {
         entry.tier = Tier::Warm;
 
         // v2.3 §(b.5): Warm 层落库前拦截私钥/凭证/令牌类硬载荷(Block;高熵/键名 Pass 防误报)。
-        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
-            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            ..Default::default()
-        };
+        let scan_policy = crate::hard_payload_scan_policy();
         if nexus_contracts::sensitive::scan(&entry.content, &scan_policy).is_blocked() {
             return Err(CmtError::StorageError(
                 "Warm 能力 content 含敏感硬载荷,拒绝落库".into(),
@@ -209,6 +205,23 @@ impl WarmTier {
         // 强制设置 tier 为 Warm
         for entry in &mut entries {
             entry.tier = Tier::Warm;
+        }
+
+        // v2.3 §(b.5) 入口级补齐：批量入口原未插桩——单条 `insert` 有守卫而
+        // `insert_batch` 没有，等价于给 Warm 层留了一条绕过扫描的旁路
+        // （G-84 由文件级升入口级时实测抓出——见该节取证脚本）。
+        // 处置与单条同口径：任一条命中即整批拒绝。WHY 整批拒绝而非逐条跳过：
+        // 本函数以 `BEGIN;…COMMIT;` 单事务写入，“部分落盘”不是它的既有语义
+        // （对照 `experience_card_storage::store_evidence_batch`：无事务包裹且
+        // ON CONFLICT DO NOTHING 已使部分落盘成为语义，那里才应逐条跳过）。
+        let scan_policy = crate::hard_payload_scan_policy();
+        for (idx, entry) in entries.iter().enumerate() {
+            if nexus_contracts::sensitive::scan(&entry.content, &scan_policy).is_blocked() {
+                return Err(CmtError::StorageError(format!(
+                    "Warm 批量落库被敏感扫描拒绝:index={idx} cap_id={} 含私钥/凭证/令牌类硬载荷",
+                    entry.id
+                )));
+            }
         }
 
         self.pool
@@ -688,6 +701,34 @@ mod tests {
         // 验证条目内容
         let fetched = tier.peek("cap-2".to_string()).await.unwrap().unwrap();
         assert_eq!(fetched.content, "content-cap-2");
+    }
+
+    #[tokio::test]
+    async fn test_insert_batch_blocks_sensitive_content() {
+        // 入口级守卫的双向牙齿:
+        //   正向 —— 批量入口含私钥 PEM 必须整批拒绝且零落库(单条 insert 有守卫而批量曾无);
+        //   反向 —— 同批全为正常 content 时必须照常落库(防扫描误伤)。
+        let tier = WarmTier::open_in_memory(4096).unwrap();
+        tier.insert_batch(vec![make_entry("cap-a"), make_entry("cap-b")])
+            .await
+            .unwrap();
+        assert_eq!(tier.count().await.unwrap(), 2, "正常批量条目不得被扫描误伤");
+
+        let mut bad = make_entry("cap-bad");
+        bad.content = "-----BEGIN RSA PRIVATE KEY-----\nMIIBowe8...".into();
+        let err = tier
+            .insert_batch(vec![make_entry("cap-c"), bad])
+            .await
+            .expect_err("批内含私钥 PEM 必须整批拒绝");
+        assert!(
+            matches!(err, CmtError::StorageError(_)),
+            "应报 StorageError,实测 {err:?}"
+        );
+        assert_eq!(
+            tier.count().await.unwrap(),
+            2,
+            "整批拒绝:同批 benign 的 cap-c 也不得落库"
+        );
     }
 
     #[tokio::test]

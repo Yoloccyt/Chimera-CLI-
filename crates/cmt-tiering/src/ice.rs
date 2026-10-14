@@ -75,11 +75,7 @@ impl IceTier {
         entry.tier = Tier::Ice;
 
         // v2.3 §(b.5): Ice 层归档前拦截私钥/凭证/令牌类硬载荷(Block;高熵/键名 Pass 防误报)。
-        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
-            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            ..Default::default()
-        };
+        let scan_policy = crate::hard_payload_scan_policy();
         if nexus_contracts::sensitive::scan(&entry.content, &scan_policy).is_blocked() {
             return Err(CmtError::StorageError(
                 "Ice 能力 content 含敏感硬载荷,拒绝归档".into(),

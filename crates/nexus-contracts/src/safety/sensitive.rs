@@ -276,7 +276,8 @@ fn token_spans(text: &str) -> Vec<(&str, usize)> {
 ///
 /// - [`SensitiveDisposition::Pass`] → 原文返回（无命中）；
 /// - [`SensitiveDisposition::Block`] → 返回空串（调用方据 `verdict.is_blocked()` **拒绝入库**）；
-/// - [`SensitiveDisposition::Redact`] → 高熵 token 以 `__REDACTED__` 掩码后返回（打码入库）。
+/// - [`SensitiveDisposition::Redact`] → 按命中类别脱敏后返回：高熵 token 与键名秘密的**值**
+///   均以 `__REDACTED__` 掩码，保留可审计残迹（键名 / 良性词），空白按单空格归一。
 ///
 /// 纯函数、无 IO；上层写入口据此决定落盘内容。
 #[must_use = "脱敏结果决定写入内容，忽略返回值等于未脱敏"]
@@ -285,22 +286,55 @@ pub fn redact(text: &str, policy: &ScanPolicy) -> (String, ScanVerdict) {
     match verdict.disposition {
         SensitiveDisposition::Pass => (text.to_string(), verdict),
         SensitiveDisposition::Block => (String::new(), verdict),
-        SensitiveDisposition::Redact => (mask_high_entropy_tokens(text), verdict),
+        SensitiveDisposition::Redact => (mask_sensitive_tokens(text), verdict),
     }
 }
 
-/// 将文本中的高熵 token 替换为掩码（其余原样，空白按单空格归一）。
-fn mask_high_entropy_tokens(text: &str) -> String {
+/// Redact 处置的掩码实现（纯函数）：逐 token 处理，掩掉两类敏感载荷——
+/// ① 高熵 token；② 键名秘密的**值**（`key=value` / `key:value` 形态掩右值；
+/// 裸键名 token 则掩其后的值 token）。键名本身与良性词保留（可审计残迹）。
+///
+/// WHY（回归 B-P1-1）：此前 Redact 只掩高熵 token，低熵口令（`password=hunter2`、
+/// `password hunter2short`）命中 `SecretKeyValue` 却原样透传 → 敏感值泄露。
+fn mask_sensitive_tokens(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
+    let mut mask_next = false;
     for (i, (tok, _)) in token_spans(text).into_iter().enumerate() {
         if i > 0 {
             out.push(' ');
         }
+        // 上一 token 为裸键名（如 `password` / `api_key:`）→ 当前为其值，掩掉。
+        if mask_next {
+            out.push_str("__REDACTED__");
+            mask_next = false;
+            continue;
+        }
+        // ① 高熵 token 整体掩码。
         if looks_high_entropy(tok) {
             out.push_str("__REDACTED__");
-        } else {
-            out.push_str(tok);
+            continue;
         }
+        // ② `key=value` / `key:value`：键名（大小写不敏感含秘密词）命中则掩右值。
+        if let Some(pos) = tok.find(['=', ':']) {
+            let key_lower = tok[..pos].to_lowercase();
+            if SECRET_KEY_NAMES.iter().any(|k| key_lower.contains(k)) {
+                out.push_str(&tok[..pos]); // 保留键名（原文大小写）
+                out.push_str(&tok[pos..pos + 1]); // 保留分隔符 = 或 :
+                if pos + 1 < tok.len() {
+                    out.push_str("__REDACTED__"); // 值在本 token 内
+                } else {
+                    mask_next = true; // 值在下一个 token（`api_key: value`）
+                }
+                continue;
+            }
+        }
+        // ③ 裸键名 token（整词命中秘密表）：保留键名，掩其后的值 token。
+        if SECRET_KEY_NAMES.contains(&tok.to_lowercase().as_str()) {
+            out.push_str(tok);
+            mask_next = true;
+            continue;
+        }
+        out.push_str(tok);
     }
     out
 }
@@ -405,6 +439,27 @@ mod tests {
         let (out, v) = redact("-----BEGIN PRIVATE KEY----- xyz", &policy());
         assert!(v.is_blocked());
         assert!(out.is_empty(), "blocked payload must not be stored");
+    }
+
+    #[test]
+    fn redact_masks_secret_kv_value_not_leaked() {
+        // 回归 B-P1-1：Redact 此前只掩高熵 token，低熵口令原样透传 → 泄露。
+        // key=value 形态：掩右值、保留键名。
+        let (out, v) = redact("login password=hunter2 account u1", &policy());
+        assert_eq!(v.disposition, SensitiveDisposition::Redact);
+        assert!(
+            !out.contains("hunter2"),
+            "secret value must be masked, out={out}"
+        );
+        assert!(out.contains("password="), "审计残迹：键名保留");
+        // 裸键名 + 值形态：掩值 token。
+        let (out2, v2) = redact("config: password hunter2short", &policy());
+        assert_eq!(v2.disposition, SensitiveDisposition::Redact);
+        assert!(
+            !out2.contains("hunter2short"),
+            "bare-name value must be masked, out={out2}"
+        );
+        assert!(out2.contains("password"), "键名保留");
     }
 
     /// §(b.5) 误报率基线采样：写点采用的 Block-only 策略（高熵/键名设 Pass）

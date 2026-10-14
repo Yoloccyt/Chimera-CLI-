@@ -12,7 +12,7 @@
 //! 6. **LLM Provider**(LLM)— 复用 `llm::List` 的 8-name fallback 探测默认 Provider
 //! 7. **认证密钥**(Auth Keys)— 常见供应商 API key 环境变量自检(WI-02)
 //! 8. **SecCore 沙箱**(Sandbox)— 进程内沙箱可用性 + 命令分类在役验证(WI-02)
-//! 9. **SCC 缓存**(SCC Cache)— 组合根装配的 SccCache 统计快照健康度(M13 重路由)
+//! 9. **SCC 缓存**(SCC Cache)— 组合根装配的 SccCache 统计快照健康度(M13 重路由;零数据流记 WARN——见 `scc_probe_verdict`)
 //! 10. **L3 存储三后端**(Storage Health)— scc/cmt/session-store 只读信号聚合(WI-G12)
 //! 11. **模型资产面**(Model Asset Health)— NMC 多模态 ONNX 资产就绪度(W5-1 R-2 / ADR-196 V6)
 //!
@@ -578,29 +578,52 @@ fn check_seccore() -> HealthCheck {
 /// 那不构成对装配面的真实消费,ADR-179 非空转判据)。只读 `stats()` 快照 +
 /// `len()`/`access_count()` 计数,零变异、零事件发布(不触发 CacheHit/Miss)。
 ///
-/// - 缓存实例在役(构造成功即可达,默认容量 256)→ OK
-/// - 命中率随访问累计自然上升;装配初期 0 访问/0 命中为预期行为,不降级
+/// 判定本身在 [`scc_probe_verdict`]（纯函数,两向可测）。
 fn check_scc_cache(cache: &scc_cache::SccCache) -> HealthCheck {
     let stats = cache.stats();
     let accesses = cache.access_count();
+    let (status, message) = scc_probe_verdict(stats.entry_count, accesses, stats.hit_rate);
 
     HealthCheck {
         name: "scc_cache",
         description: "SCC 推测上下文缓存",
-        status: HealthStatus::Ok,
-        message: format!(
-            "SCC: ✓ 缓存在役（条目 {} / 命中率 {:.1}% / 累计访问 {}）",
-            stats.entry_count,
-            stats.hit_rate * 100.0,
-            accesses,
-        ),
+        status,
+        message,
     }
+}
+
+/// 第 9 探针的纯判定（无 IO、可独立测试；v3.5 W6-4 诚实降级）。
+///
+/// WHY 不再“恒 OK”：旧判据把“已装配”当“在役健康”，并把 `条目 0 / 访问 0` 叙述成
+/// “装配初期”——但生产链今天**没有任何 SccCache 写入方**（组合根只装配句柄、探针只读
+/// `stats()`），所以零条目不是初期状态而是**设计态**；拿“命中率会随访问自然上升”讲下去，
+/// 就是把一条未接线的通道叙述成待激活的健康面（终局原则 3：主张必须可证伪）。
+///
+/// 口径沿用本文件已有先例（第 10/11 探针：缺席/未启用记 Warn 而非 Fail）：
+/// - 条目与访问**均为 0** ⇒ `Warn` + 明确写出“零数据流、属设计态、不是故障”；
+/// - 其余（已有条目或已有访问）⇒ `Ok`，报真实命中率。
+#[must_use]
+pub fn scc_probe_verdict(entries: usize, accesses: u64, hit_rate: f32) -> (HealthStatus, String) {
+    if entries == 0 && accesses == 0 {
+        return (
+            HealthStatus::Warn,
+            "SCC: ⚠ 已装配但零数据流（条目 0 / 累计访问 0）——生产链尚无写入方，属设计态而非故障；\n      命中率要等推测执行接线后才有意义".into(),
+        );
+    }
+    (
+        HealthStatus::Ok,
+        format!(
+            "SCC: ✓ 缓存在役且有数据流（条目 {entries} / 命中率 {:.1}% / 累计访问 {accesses}）",
+            f64::from(hit_rate) * 100.0
+        ),
+    )
 }
 
 /// L3 存储三后端健康快照 — 纯类型（WI-G12;无 IO、可独立测试）
 ///
 /// # 三后端只读信号
-/// - **scc**:组合根共享缓存 `stats()` 快照（条目数 / 累计访问）——在役即健康;
+/// - **scc**:组合根共享缓存 `stats()` 快照（条目数 / 累计访问）——只报**已装配**与计数，
+///   不拿它当“健康”判据（零数据流的语义由第 9 探针 `scc_probe_verdict` 承担）;
 /// - **cmt**:经验卡片库根目录就绪（`experience_loop::experience_db_path()` 父目录,
 ///   与 L3 持久化入口同源路径）;
 /// - **session-store**:段数据目录就绪——锚点 = session-store crate 默认
@@ -639,7 +662,7 @@ impl StorageHealth {
     #[must_use]
     pub fn message(&self) -> String {
         format!(
-            "L3: scc 在役（条目 {} / 访问 {}）; cmt 经验库目录 {}; session-store 段目录 {}",
+            "L3: scc 已装配（条目 {} / 访问 {}）; cmt 经验库目录 {}; session-store 段目录 {}",
             self.scc_entries,
             self.scc_accesses,
             if self.cmt_dir_ready {
@@ -902,6 +925,9 @@ mod tests {
 
     /// M13 / ADR-161 路径① 验收:第 9 探针 scc_cache 消费组合根共享缓存实例
     /// (stats() 只读快照;非自建 ephemeral = 非装配态空转,ADR-179)
+    ///
+    /// v3.5 W6-4 诚实降级：今天零写入方 ⇒ 该探针应记 **Warn**，消息必须自陈“设计态”，
+    /// 不得再拿“✓ 缓存在役”与“装配初期”讲一个未接线的通道。
     #[tokio::test]
     async fn test_doctor_scc_cache_probe_consumes_assembled_cache() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
@@ -910,8 +936,8 @@ mod tests {
         assert_eq!(check.name, "scc_cache");
         assert_eq!(check.description, "SCC 推测上下文缓存");
         assert!(
-            matches!(check.status, HealthStatus::Ok),
-            "组合根缓存在役应恒 OK,实际: {:?}",
+            matches!(check.status, HealthStatus::Warn),
+            "零数据流应记 Warn（设计态，非故障也非健康）,实际: {:?}",
             check.status
         );
         assert!(
@@ -921,9 +947,35 @@ mod tests {
         );
         assert!(
             check.message.contains("条目 0"),
-            "装配初期缓存应为空,实际 message: {}",
+            "探针必须报出零条目实况,实际 message: {}",
             check.message
         );
+        assert!(
+            check.message.contains("设计态"),
+            "零数据流必须自陈设计态而非‘初期’,实际 message: {}",
+            check.message
+        );
+    }
+
+    /// 第 9 探针纯判定的两向锁（v3.5 W6-4）：
+    ///   反向——零条目零访问 ⇒ Warn 且文案含“尚无写入方”；
+    ///   正向——有访问或有条目 ⇒ Ok 且报命中率（防“一律降成 Warn”的另一方向误伤）。
+    #[test]
+    fn scc_probe_verdict_matrix() {
+        let (status, msg) = scc_probe_verdict(0, 0, 0.0);
+        assert_eq!(status, HealthStatus::Warn, "零数据流→Warn");
+        assert!(msg.contains("尚无写入方"), "{msg}");
+        assert!(!msg.contains("✓"), "零数据流不得给✓,实际: {msg}");
+
+        // 已接线但尚未命中（有访问无条目）也属于“有数据流”，不该报设计态
+        let (status, msg) = scc_probe_verdict(0, 12, 0.0);
+        assert_eq!(status, HealthStatus::Ok, "有访问→Ok");
+        assert!(msg.contains("累计访问 12"), "{msg}");
+
+        let (status, msg) = scc_probe_verdict(4, 20, 0.5);
+        assert_eq!(status, HealthStatus::Ok, "有条目→Ok");
+        assert!(msg.contains("条目 4"), "{msg}");
+        assert!(msg.contains("50.0%"), "命中率应换算成百分比,实际: {msg}");
     }
 
     /// M12 / ADR-185 D3 验收③(探针数 M13 起 8→9;WI-G12 起 9→10;W5-1 R-2 起 10→11):并行 gather 路径
@@ -995,7 +1047,7 @@ mod tests {
         // 消息包含三后端逐项信号
         let msg = base.message();
         assert!(msg.starts_with("L3:"), "message 前缀: {msg}");
-        assert!(msg.contains("scc 在役"), "{msg}");
+        assert!(msg.contains("scc 已装配"), "{msg}");
         assert!(msg.contains("cmt 经验库目录 就绪"), "{msg}");
         assert!(msg.contains("session-store 段目录 就绪"), "{msg}");
     }

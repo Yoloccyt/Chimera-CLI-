@@ -343,7 +343,8 @@ impl SearchTreeManager {
     /// # 错误
     /// - `QuestError::SerializationError`: MessagePack 编码失败
     pub fn to_bytes(&self) -> Result<Vec<u8>, crate::error::QuestError> {
-        rmp_serde::to_vec(self)
+        // 具名 map 编码(ADR-213 R7):见 from_bytes 侧实测——同一 from_slice 读得到新旧两种形态
+        rmp_serde::to_vec_named(self)
             .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))
     }
 

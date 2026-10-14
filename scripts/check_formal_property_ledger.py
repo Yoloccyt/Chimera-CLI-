@@ -5,7 +5,7 @@
 # Purpose: Spec C-43 记的是“9 属性主张 vs 枚举 4 / checker 7 / 名单 7（含 1 幽灵）”，
 #          并裁决“按实装对账修名单，属纠偏非扩面”。本轮现取复核（逐文件定位到行号）：
 #
-#            名册（唯一 src 侧枚举 = `nexus-contracts/src/formal_props.rs`
+#            名册（唯一 src 侧枚举 = `nexus-contracts/src/spec/formal_props.rs`
 #            `EmptyFormalProvider::collect_results()`，7 个 id）
 #              lineage-dag / critic-monotonicity / preference-consistency /
 #              causal-consistency / learning-monotonicity / decay-consistency /
@@ -39,7 +39,7 @@ import sys
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)
 
-PROVIDER = "crates/nexus-contracts/src/formal_props.rs"
+PROVIDER = "crates/nexus-contracts/src/spec/formal_props.rs"
 
 # 名册 id -> checker 落点（“checker” = 该属性唯一的 src 侧验证器文件或模块文件）。
 # 每条都是本轮现取的行号级证据；checker 文件被移动/删除 ⇒ 本门必红。

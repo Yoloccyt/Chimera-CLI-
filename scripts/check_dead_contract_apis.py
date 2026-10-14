@@ -545,4 +545,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import gate_rc  # crash exits 2, never borrows 1 (F32/F33)
+    sys.exit(gate_rc.run(main))

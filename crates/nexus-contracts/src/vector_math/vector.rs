@@ -4,6 +4,16 @@
 //! 对应 ADR: **ADR-033**（L0 nexus-contracts 契约层建立）
 //! 对应设计源: `NEXUS-OMEGA_v5.0_系统性完整设计文档.md` §C6 + spec.md P2-W7.3
 //!
+//! # 性质：本模块是 ADR-033“零逻辑”口径**仍成立**的那个模块（2026-10-09 v3.5 量体）
+//!
+//! 实测：非测试有体函数仅 **7 个且均 ≤7 行**（`is_near_capacity` / `capacity_tier` / `as_str` /
+//! `new` 等），另有 **8 个 trait 无体声明**（`upsert` / `top_k` / `remove` / `insert_batch` /
+//! `compact` / `default`）——后者是契约本身，不是逻辑。因此本模块无需例外登记。
+//!
+//! ⚠ 不得拿本模块当作“整个 nexus-contracts 零逻辑”的样本：同一口径下
+//! `harness_spec`（`validate` 143 行）与 `capability_token`（EWMA 状态机）已失真，
+//! 全 crate 总括口径已改为“纯类型 + 受控纯逻辑”（见 `ADR-033` 追加节与 `lib.rs` 顶部注记）。
+//!
 //! # 核心职责
 //!
 //! 抽象出统一的向量存储接口，消除 L5 `repo-wiki::VectorIndex` 的深模块问题（D4）：

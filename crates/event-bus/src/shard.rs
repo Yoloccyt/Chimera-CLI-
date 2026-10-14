@@ -17,8 +17,12 @@
 //! 主动路由。两者正交,合并会造成单文件双主题(维护者需跳跃理解),故独立成模块。
 //!
 //! # Lane 三车道(手册 §8.5)
-//! - `Critical`:20 个 Critical 事件(severity() == Critical,与 [`crate::bus::LANE_FORBIDDEN_SHARD`]
-//!   一一对应,守护测试保证)→ **永远走既有 mpsc/broadcast 通道,不进分片**(红线:
+//! - `Critical`：20 个 Critical 事件（`severity() == Critical`，与
+//!   [`crate::bus::LANE_FORBIDDEN_SHARD`] 一一对应，守护测试保证）
+//!   —— 上方数字**不是无人管的裸注释**：它由 `scripts/check_perf_redlines.py` 不变式 **I8**
+//!   机器校验必须等于 `bus::CRITICAL_TOTAL`（深审 E-7c：此处曾手工漂过 17→18，
+//!   I8 使其不可再现）；改常量而不同步本注释会直接判红，故与 `registry.rs` 里
+//!   **无门校验**、只能指向常量名的旁路计数注释属两种口径。→ **永远走既有 mpsc/broadcast 通道，不进分片**（红线：
 //!   Critical 分片会破坏"发布方 → 订阅方"全序投递语义与 mpsc 旁路免背压保证,
 //!   推演 9:Critical 背压 = 死锁源);
 //! - `OrderSensitive(SessionKey)`:携带会话键(白名单变体的 `session_id` 字段 /

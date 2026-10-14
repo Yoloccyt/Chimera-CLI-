@@ -66,6 +66,31 @@ def augment_path():
     mingw = r"D:\msys64\mingw64\bin"
     if os.path.isdir(mingw):
         extra.append(mingw)
+    # Git-for-Windows 的 bash 自带 coreutils，但它们与 bash.exe 同目录（usr/bin），
+    # 而 PATH 只包含 `.../cmd`（或调用方直接以绝对路径拉 bash.exe）。
+    # 后果（2026-10-09 实测）：`.sh` 门里的 `dirname`/`awk`/`grep`/`head` 全部
+    # `command not found`，REPO_ROOT 退化成空串，门报出 `[FAIL] ... file not found`
+    # 或被环境签名分类为 ENV-FAIL —— 四条 `.sh` 判据因此长期“不可判定”，
+    # 清单上看起来“不是红”，实际上**从未给出过判定**。
+    # 解法不是返现有目录，而是从已解析到的 bash 本体反推其安装目录，
+    # 对任何 Git 安装位置均成立；在 Linux/macOS 上 `dirname(which('bash'))`
+    # 本就是 /bin 或 /usr/bin（已在 PATH），因此去重后无作用、无风险。
+    # ★ 必须从 `usable_bash()` 拿路径，而不是 `shutil.which("bash")`：两者不同源时本
+    #   补强会静默失效——后台环境里 `which bash` 可能解析到 WSL 的 /bin/bash（其目录没有
+    #   dirname），而真正跑子进程的是 usable_bash() 候选表里选中的那个 bash。
+    #   “同一个解释器才对应同一套工具集”，这也是单一事实源要求。
+    bash_path, _note = usable_bash()
+    if bash_path:
+        core = os.path.dirname(os.path.abspath(bash_path))
+        # 注意扩展名：Windows 上 Git 的 coreutils 是 `dirname.exe`/`awk.exe`…，
+        # 只探裸名会恒判“不含 coreutils”而使本补强静默失效（2026-10-09 首次实测就中了这一条）。
+        # POSIX 侧无扩展名，因此两个名字都要探。
+        def has(tool):
+            return any(os.path.exists(os.path.join(core, name))
+                       for name in (tool, tool + ".exe"))
+
+        if core and all(has(t) for t in ("dirname", "awk", "grep", "head")):
+            extra.append(core)
     cur = os.environ.get("PATH", "")
     add = [p for p in extra if os.path.isdir(p) and p not in cur.split(os.pathsep)]
     if add:
@@ -278,7 +303,15 @@ def usable_bash():
         if not path or not os.path.isfile(path):
             continue
         try:
-            out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20).stdout
+            # 必须钉死 encoding/errors：本文件已把 sys.stdout 重配为 UTF-8（见顶部），但子进程
+            # 输出默认按**宿主 locale** 解码。Windows+GBK 宿主上任一个 bash 的 --version
+            # 输出含非 GBK 字节时，reader 线程报 UnicodeDecodeError 并把 stdout 置 None，
+            # 于是下面的 splitlines() 直接崩 —— 整张清单一行判据都跑不了（实测：PATH 里
+            # 出现 D:\msys64\usr\bin 后必现）。与 augment_path() / check_slash_vocab.sh 自检同族：
+            # 宿主方差只能钉死，不能靠“这台机器正好是 UTF-8”。
+            proc = subprocess.run([path, "--version"], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=20)
+            out = proc.stdout or ""
         except Exception as e:
             rejected.append(f"{path}: {type(e).__name__}")
             continue
@@ -351,10 +384,15 @@ def main(argv):
         os.makedirs(LOGDIR)
 
     bad, unknown, env_fail = [], [], []
+    # 记账闭合用：每一道判据必须落进五个状态之一（ok / mismatch / env-fail / unknown / skip）。
+    # WHY：本工具曾把开工读数记成“76 OK / 6 MISMATCH / 3 ENV-FAIL”（= 85），而 light 实为 84
+    # —— 数字对不上却没人发现，因为旧版只报分类列表、不报总数闭合。现在让工具自己报。
+    ok_ids, skipped = [], []
     for g in gates:
         heavy = g["kind"] == "heavy"
         if heavy and not with_heavy:
             print(f"  [{g['id']}] SKIP  heavy 未选择执行（--with-heavy 才跑）")
+            skipped.append(g["id"])
             continue
         need = g.get("disk_gb", 0)
         if heavy and free < need:
@@ -406,6 +444,7 @@ def main(argv):
             continue
         if verdict == "ok":
             print(f"  [{g['id']}] OK      rc={rc} expect={g['expect']}  {g['cmd']}")
+            ok_ids.append(g["id"])
             continue
         print(f"  [{g['id']}] MISMATCH rc={rc} expect={g['expect']}  {g['cmd']}")
         bad.append((g["id"], f"rc={rc}!={g['expect']}"))
@@ -413,6 +452,14 @@ def main(argv):
             print("        |", line.strip()[:118])
 
     print("-" * 96)
+    # 先查记账闭合，再下结论 —— 一道判据没被归入任何状态，上面所有数字都不可信。
+    accounted = len(ok_ids) + len(bad) + len(env_fail) + len(unknown) + len(skipped)
+    print(f"[SUM] ok={len(ok_ids)} mismatch={len(bad)} env-fail={len(env_fail)} "
+          f"unknown={len(unknown)} skip={len(skipped)} —— 合计 {accounted}/{len(gates)}")
+    if accounted != len(gates):
+        print(f"[TOOL-ERROR] 记账不闭合：有 {len(gates) - accounted} 条判据未归入任何状态"
+              " ⇒ 本次分类计数与退出码均不可引用（先修运行器，不得拿上面数字写台账）")
+        return 2
     if unknown:
         print(f"[UNKNOWN] 资源不足未能判定：{', '.join(unknown)} —— 不得当作通过")
     if env_fail:

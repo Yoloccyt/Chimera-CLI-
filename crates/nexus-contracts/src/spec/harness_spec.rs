@@ -4,6 +4,15 @@
 //! 对应 ADR: ADR-031（Harness-as-Spec 边界）/ ADR-033（L0 nexus-contracts）
 //! 对应阶段: P4-W13~16 Harness-as-Spec DSL + SpecRegistry
 //!
+//! # ADR-033 例外声明（例外 5，2026-10-09 v3.5 量体后显式登记）
+//!
+//! 本模块**不是**“零逻辑”：非测试有体函数 13 个，其中 `HarnessSpec::validate` 143 行
+//! （规格完整性校验）、`canonical_merkle_input` 95 行（Merkle 叶子序列化）。
+//! 它仍满足“受控纯逻辑”：无 IO / 无 async / 无网络 / 无随机 / 无外部业务依赖，
+//! 输入确定则输出确定（因此可逐字回放到审计链）。校验与规范化就住在 L0 的理由：
+//! 它们定义的是**契约自身的合法集**，下放到任何一个消费层都会出现“各层自己理解 Schema”的双源。
+//! 同类先例见 `test_scale`（例外 1）/ `archive_monotonicity`（例外 2）/ `capability_token`（例外 3）。
+//!
 //! # 设计决策(WHY)
 //!
 //! - **类型定义在 L0**: `HarnessSpec` / `ContractSpec` / `HopSpec` 需被 L5 `gsoe-evolution`
@@ -45,9 +54,8 @@ use serde::{Deserialize, Serialize};
 // - IDE 自动补全 + 重构友好
 //
 // 来源（设计文档 §7.2 + spec.md L346）:
-// - 13 条红线（nuxus规则.md §6.2）
-// - 6 个 Critical 事件清单（CheckpointSaved/SkepticVeto/RedTeamAudit/
-//   AsaIntervention/AgentTaskFailed/BudgetExceeded）
+// - 14 条架构红线（nuxus规则.md §5；完整版见 AGENTS.md §6.2；本枚经编码合并其中 8 条）
+// - Critical 事件清单（17 = 16 mpsc 旁路全覆盖 + CheckpointSaved broadcast-only）
 // - INV-7/INV-8/INV-9 不变量
 // - 沙箱/QEEP（seccore 沙箱策略 + QEEP 零孤儿协议）
 // - 验证器本身（验证器层级金字塔，含 FormalVerifier）
@@ -61,21 +69,22 @@ use serde::{Deserialize, Serialize};
 ///
 /// | 类别 | 变体数 | 来源 |
 /// |------|--------|------|
-/// | 13 条红线 | 8（编码合并） | nuxus规则.md §6.2 |
-/// | Critical 事件清单 | 6 | 设计文档 §6.2 |
+/// | 14 条红线（nuxus规则.md §5）| 8（本枚编码合并其中 8）| nuxus规则.md §5 / AGENTS.md §6.2 |
+/// | Critical 事件清单 | 17 | bus.rs CRITICAL_MPSC_VARIANTS(16) + CheckpointSaved |
 /// | 不变量 | 3 | INV-7/8/9 |
 /// | 沙箱/QEEP | 2 | seccore/qeep-protocol |
 /// | 验证器 | 1 | 验证器层级金字塔 |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ImmutableSurface {
-    // === 13 条红线（nuxus规则.md §6.2）===
+    // === 架构红线（nuxus规则.md §5，14 条中本枚编码合并 8 条）===
     /// R1: 禁止持锁 .await（DashMap/Mutex 写锁跨 await 导致死锁）
     RedlineLockAcrossAwait,
     /// R2: rusqlite 必须 spawn_blocking（rusqlite 非 async，直接调用阻塞 runtime）
     RedlineRusqliteBlocking,
     /// R3: broadcast 先 subscribe 再 spawn（避免事件静默丢失）
     RedlineSubscribeBeforeSpawn,
-    /// R4: BudgetExceeded severity 必须 = Critical（types.rs:1158，禁止降级）
+    /// R4: BudgetExceeded severity 必须 = Critical（真值源 = event-bus `registry.rs::severity`
+    /// 与 `bus.rs::is_critical_mpsc_event` 双清单；勿引行号，会漂移）
     RedlineBudgetExceededSeverity,
     /// R5: Critical 安全事件必须用 mpsc channel（确保送达）
     RedlineCriticalEventMpsc,
@@ -86,8 +95,12 @@ pub enum ImmutableSurface {
     /// R8: Top-K 必须用 select_nth_unstable（O(n) 替代 O(n log n) sort_by）
     RedlineTopKSelectNthUnstable,
 
-    // === 6 个 Critical 事件清单（设计文档 §6.2）===
-    /// C1: CheckpointSaved（任务检查点保存完成）
+    // === Critical 事件清单（17 = 16 mpsc 旁路全覆盖 + CheckpointSaved broadcast-only）===
+    // v3.5 深度复审 B-P1-5：补齐红线 #6「mpsc 旁路 = 16」（真值源 = event-bus
+    // `bus.rs::CRITICAL_MPSC_VARIANTS`=16 / `is_critical_mpsc_event` matches 臂）。
+    // 此前仅冻结 6 个（含 1 个 broadcast-only CheckpointSaved）→ 其余 11 个真
+    // mpsc Critical 事件的通道保障可被 spec 静默降级，护栏成洞。纯增量，不移除既有。
+    /// C1: CheckpointSaved（任务检查点保存完成；severity=Critical，历史仅走 broadcast）
     CriticalCheckpointSaved,
     /// C2: SkepticVeto（Parliament 怀疑者否决）
     CriticalSkepticVeto,
@@ -99,6 +112,28 @@ pub enum ImmutableSurface {
     CriticalAgentTaskFailed,
     /// C6: BudgetExceeded（预算超限，severity=Critical 红线不变）
     CriticalBudgetExceeded,
+    /// C7: VetoOverridden（否决被覆盖，mpsc 旁路）
+    CriticalVetoOverridden,
+    /// C8: R1ShadowRollbackFailed（R1 影子回滚失败，mpsc 旁路）
+    CriticalR1ShadowRollbackFailed,
+    /// C9: R2FreezeViolation（R2 冻结违反，mpsc 旁路）
+    CriticalR2FreezeViolation,
+    /// C10: R2FreezeRollbackFailed（R2 冻结回滚失败，mpsc 旁路）
+    CriticalR2FreezeRollbackFailed,
+    /// C11: AffinityQuotaExhausted（亲和配额耗尽，mpsc 旁路）
+    CriticalAffinityQuotaExhausted,
+    /// C12: FormalViolation（形式化验证违规，mpsc 旁路）
+    CriticalFormalViolation,
+    /// C13: StopRulingIssued（停止裁定发布，mpsc 旁路）
+    CriticalStopRulingIssued,
+    /// C14: ErrorSignatureMatched（错误签名匹配，mpsc 旁路）
+    CriticalErrorSignatureMatched,
+    /// C15: FormalVerificationFailed（形式化验证失败，mpsc 旁路）
+    CriticalFormalVerificationFailed,
+    /// C16: CertifyIssued（认证签发，mpsc 旁路）
+    CriticalCertifyIssued,
+    /// C17: FailureRegistered（失败登记，mpsc 旁路）
+    CriticalFailureRegistered,
 
     // === INV-7/8/9 不变量 ===
     /// INV-7: chimera-mas MemoryBudgetModel 117MB 预算（130MB×0.9）
@@ -121,7 +156,7 @@ pub enum ImmutableSurface {
 
 impl ImmutableSurface {
     /// 返回所有不可进化面（用于 validate() 全集检查）
-    pub const fn all() -> [ImmutableSurface; 20] {
+    pub const fn all() -> [ImmutableSurface; 31] {
         [
             // 8 条红线
             Self::RedlineLockAcrossAwait,
@@ -132,13 +167,24 @@ impl ImmutableSurface {
             Self::RedlineCargoLockDrift,
             Self::RedlineSqliteVecForbidden,
             Self::RedlineTopKSelectNthUnstable,
-            // 6 个 Critical 事件
+            // 17 个 Critical 事件（16 mpsc 旁路全覆盖 + CheckpointSaved）
             Self::CriticalCheckpointSaved,
             Self::CriticalSkepticVeto,
             Self::CriticalRedTeamAudit,
             Self::CriticalAsaIntervention,
             Self::CriticalAgentTaskFailed,
             Self::CriticalBudgetExceeded,
+            Self::CriticalVetoOverridden,
+            Self::CriticalR1ShadowRollbackFailed,
+            Self::CriticalR2FreezeViolation,
+            Self::CriticalR2FreezeRollbackFailed,
+            Self::CriticalAffinityQuotaExhausted,
+            Self::CriticalFormalViolation,
+            Self::CriticalStopRulingIssued,
+            Self::CriticalErrorSignatureMatched,
+            Self::CriticalFormalVerificationFailed,
+            Self::CriticalCertifyIssued,
+            Self::CriticalFailureRegistered,
             // 3 个不变量
             Self::Invariant7MemoryBudget,
             Self::Invariant8ArchiveMonotonic,
@@ -168,13 +214,24 @@ impl ImmutableSurface {
             Self::RedlineCargoLockDrift => "redline-cargo-lock-drift",
             Self::RedlineSqliteVecForbidden => "redline-sqlite-vec-forbidden",
             Self::RedlineTopKSelectNthUnstable => "redline-top-k-select-nth-unstable",
-            // 6 个 Critical 事件
+            // 17 个 Critical 事件
             Self::CriticalCheckpointSaved => "critical-checkpoint-saved",
             Self::CriticalSkepticVeto => "critical-skeptic-veto",
             Self::CriticalRedTeamAudit => "critical-red-team-audit",
             Self::CriticalAsaIntervention => "critical-asa-intervention",
             Self::CriticalAgentTaskFailed => "critical-agent-task-failed",
             Self::CriticalBudgetExceeded => "critical-budget-exceeded",
+            Self::CriticalVetoOverridden => "critical-veto-overridden",
+            Self::CriticalR1ShadowRollbackFailed => "critical-r1-shadow-rollback-failed",
+            Self::CriticalR2FreezeViolation => "critical-r2-freeze-violation",
+            Self::CriticalR2FreezeRollbackFailed => "critical-r2-freeze-rollback-failed",
+            Self::CriticalAffinityQuotaExhausted => "critical-affinity-quota-exhausted",
+            Self::CriticalFormalViolation => "critical-formal-violation",
+            Self::CriticalStopRulingIssued => "critical-stop-ruling-issued",
+            Self::CriticalErrorSignatureMatched => "critical-error-signature-matched",
+            Self::CriticalFormalVerificationFailed => "critical-formal-verification-failed",
+            Self::CriticalCertifyIssued => "critical-certify-issued",
+            Self::CriticalFailureRegistered => "critical-failure-registered",
             // 3 个不变量
             Self::Invariant7MemoryBudget => "inv-7-memory-budget",
             Self::Invariant8ArchiveMonotonic => "inv-8-archive-monotonic",
@@ -204,7 +261,18 @@ impl ImmutableSurface {
             | Self::CriticalRedTeamAudit
             | Self::CriticalAsaIntervention
             | Self::CriticalAgentTaskFailed
-            | Self::CriticalBudgetExceeded => "critical-event",
+            | Self::CriticalBudgetExceeded
+            | Self::CriticalVetoOverridden
+            | Self::CriticalR1ShadowRollbackFailed
+            | Self::CriticalR2FreezeViolation
+            | Self::CriticalR2FreezeRollbackFailed
+            | Self::CriticalAffinityQuotaExhausted
+            | Self::CriticalFormalViolation
+            | Self::CriticalStopRulingIssued
+            | Self::CriticalErrorSignatureMatched
+            | Self::CriticalFormalVerificationFailed
+            | Self::CriticalCertifyIssued
+            | Self::CriticalFailureRegistered => "critical-event",
 
             Self::Invariant7MemoryBudget
             | Self::Invariant8ArchiveMonotonic
@@ -226,7 +294,7 @@ impl ImmutableSurface {
     /// - L0 不实现 `FromStr` trait：其 Err 关联类型需单独定义 Display 实现，
     ///   而本项目 Option 语义更简洁（None 表示"不是不可进化面"，非错误）
     pub fn parse_surface(s: &str) -> Option<Self> {
-        // WHY 静态匹配而非 HashMap: 20 个变体的线性扫描性能足够（O(20)），
+        // WHY 静态匹配而非 HashMap: 31 个变体的线性扫描性能足够（O(31)），
         // 避免在 L0 引入 std::collections::HashMap 运行时开销
         for surface in Self::all().iter() {
             if surface.as_str() == s {
@@ -248,9 +316,9 @@ impl std::fmt::Display for ImmutableSurface {
 // ============================================================
 //
 // WHY 手动实现 std::error::Error 而非 thiserror:
-// - L0 nexus-contracts ADR-033 严禁依赖任何 crate（含 thiserror）
-// - thiserror 是 derive 宏，会在编译期生成 Display + Error 实现
-// - 手动实现等价功能，保持 L0 零依赖特性
+// - L0 依赖白名单 = {serde, chrono, uuid, thiserror}（ADR-033）；本枚 HarnessSpecError
+//   刻意手动实现而非用 thiserror derive，以保留精确的错误文案（errors.rs 则用 thiserror）；
+//   二者与「零 workspace 内部依赖」不矛盾（thiserror 仅外部基础库白名单成员）。
 // - 错误类型本身是数据（无逻辑），符合 L0 约束
 
 /// HarnessSpec 校验错误 — validate() 拒绝非法 spec 时返回（P4-W15.1.1）
@@ -913,7 +981,7 @@ impl HarnessSpec {
     /// WHY 提供: gsoe-evolution SpecRegistry（P4-W15.2）调用此方法
     /// 验证 spec 是否试图突破不可进化面。返回不可进化面全集，
     /// SpecRegistry 据此与 spec 字段引用对比
-    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 20] {
+    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 31] {
         &ImmutableSurface::ALL_CONST
     }
 }
@@ -929,7 +997,7 @@ impl ImmutableSurface {
     /// - all() 是 const fn，可在 const 上下文调用
     /// - ALL_CONST 是 const 静态关联常量，可返回 &'static 引用
     /// - immutable_surfaces() 需返回 &'static 引用，必须用 const 变量
-    pub const ALL_CONST: [ImmutableSurface; 20] = [
+    pub const ALL_CONST: [ImmutableSurface; 31] = [
         // 8 条红线
         ImmutableSurface::RedlineLockAcrossAwait,
         ImmutableSurface::RedlineRusqliteBlocking,
@@ -939,13 +1007,24 @@ impl ImmutableSurface {
         ImmutableSurface::RedlineCargoLockDrift,
         ImmutableSurface::RedlineSqliteVecForbidden,
         ImmutableSurface::RedlineTopKSelectNthUnstable,
-        // 6 个 Critical 事件
+        // 17 个 Critical 事件（16 mpsc 旁路全覆盖 + CheckpointSaved）
         ImmutableSurface::CriticalCheckpointSaved,
         ImmutableSurface::CriticalSkepticVeto,
         ImmutableSurface::CriticalRedTeamAudit,
         ImmutableSurface::CriticalAsaIntervention,
         ImmutableSurface::CriticalAgentTaskFailed,
         ImmutableSurface::CriticalBudgetExceeded,
+        ImmutableSurface::CriticalVetoOverridden,
+        ImmutableSurface::CriticalR1ShadowRollbackFailed,
+        ImmutableSurface::CriticalR2FreezeViolation,
+        ImmutableSurface::CriticalR2FreezeRollbackFailed,
+        ImmutableSurface::CriticalAffinityQuotaExhausted,
+        ImmutableSurface::CriticalFormalViolation,
+        ImmutableSurface::CriticalStopRulingIssued,
+        ImmutableSurface::CriticalErrorSignatureMatched,
+        ImmutableSurface::CriticalFormalVerificationFailed,
+        ImmutableSurface::CriticalCertifyIssued,
+        ImmutableSurface::CriticalFailureRegistered,
         // 3 个不变量
         ImmutableSurface::Invariant7MemoryBudget,
         ImmutableSurface::Invariant8ArchiveMonotonic,
@@ -1061,10 +1140,10 @@ mod tests {
     // ============================================================
 
     #[test]
-    fn test_immutable_surface_all_returns_20() {
-        // 验证不可进化面总数 = 20（8 红线 + 6 Critical + 3 INV + 2 沙箱/QEEP + 1 验证器）
+    fn test_immutable_surface_all_returns_31() {
+        // 验证不可进化面总数 = 31（8 红线 + 17 Critical + 3 INV + 2 沙箱/QEEP + 1 验证器）
         let all = ImmutableSurface::all();
-        assert_eq!(all.len(), 20);
+        assert_eq!(all.len(), 31);
     }
 
     #[test]
@@ -1600,9 +1679,9 @@ mod tests {
     #[test]
     fn test_immutable_surfaces_returns_static_ref() {
         let surfaces = HarnessSpec::immutable_surfaces();
-        assert_eq!(surfaces.len(), 20);
+        assert_eq!(surfaces.len(), 31);
         // 验证返回值与 ALL_CONST 内容一致
-        // WHY 不用 std::ptr::eq: immutable_surfaces() 返回 &[T; 20] 切片引用，
+        // WHY 不用 std::ptr::eq: immutable_surfaces() 返回 &[T; 31] 切片引用，
         // 在调用点可能产生临时切片，指针比较不稳定。值相等是更可靠的检查
         assert_eq!(surfaces, &ImmutableSurface::ALL_CONST);
         // 验证包含所有不可进化面类别

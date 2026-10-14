@@ -4,6 +4,8 @@
 
 已批准 (Accepted) (2026-07-23)
 
+> **🗑 2026-10-14 已删 crate 校正**：本文引用的 `crates/auto-dpo/`（**16 处、12 条 `file://` 死链**）与 `model-router`（**5 处**）**产物不在当前代码库**——两者已随批次 A（`38c72e6`，2026-09-20）物理删除，登记见 [`CODE_WIKI.md §3.12`](CODE_WIKI.md)。依 R7「历史只加注不改写」保留正文。**待治理复核**：通道 A（L2 提议）的落地前提是"复用 `PreferencePairGenerator::generate()` 既有实现"，其宿主 crate 已删 ⇒ 前提不再成立；本 ADR 的**架构裁决（提议/否决分离、验证器层级 L3→L4 跃迁路径）本身未被推翻**，但正文"已实现"字样的代码证据须按 §3.12 重判。本注记不代作裁决。
+
 ## 背景
 
 - v5.0 设计文档提出 **RHI-CG(Recursive Harness-Induced Code Generation)** 双通道进化机制:通过"提议—否决"分离的递归式 spec 进化,驱动 Chimera CLI 的 Harness(测试套件 / 基准 / lint 规则)自演化,而非依赖人工编写测试。

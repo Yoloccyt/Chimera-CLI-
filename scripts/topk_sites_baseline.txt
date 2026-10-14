@@ -4,5 +4,5 @@
 # Refresh ONLY as part of a reviewed migration batch: --emit-sites
 crates/chimera-tui/src/panels/experience_card_viz.rs::sorted.sort_by_key(|item| std::cmp::Reverse(item
 crates/mlc-engine/src/l2_semantic.rs::scored[..k].sort_by(|a, b| b.1.partial_cmp(&a.1)
-crates/nexus-contracts/src/util.rs::items[..k].sort_by(cmp);
+crates/nexus-contracts/src/vector_math/util.rs::items[..k].sort_by(cmp);
 crates/repo-wiki/src/search.rs::results[..k].sort_by(|a, b| {

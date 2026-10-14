@@ -2,9 +2,12 @@
 //!
 //! # 背景(P9-T2 测试运行时间优化)
 //!
-//! nexus-contracts 严格遵循 ADR-033 "纯类型 + 零逻辑" 约束。本模块作为该
-//! 约束的**第一个明确例外**(test-only utility),不引入任何领域逻辑,仅提供
-//! `CHIMERA_TEST_TIMEOUT_SCALE` 环境变量的读取与缩放函数。
+//! nexus-contracts 的口径是 ADR-033 追加节(2026-10-09)订正后的「纯类型 + 受控
+//! 纯逻辑」(旧「零逻辑」总括已被该追加节明令停用)。本模块是其中一个**已登记例外**,
+//! 不含任何领域逻辑,仅提供 `CHIMERA_TEST_TIMEOUT_SCALE` 环境变量的读取与缩放函数。
+//! 它同时是本 crate 两处「环境隐输入」(ADR-213 §4 定义的第五类杂质)之一:
+//! 返回值由进程环境而非入参决定,故仅限测试/CI 控制面使用,生产代码不得据此做业务决策;
+//! G-99 纯度门按 (文件 × AMBIENT-INPUT 类别) 精确豁免,见 `check_l0_purity.py::FILE_EXEMPT`。
 //! 后续例外: `archive_monotonicity`(INV-8 判定函数) / `capability_token`(EWMA 灰度状态机)。
 //!
 //! # 协议

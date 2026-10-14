@@ -612,10 +612,12 @@ path = "tests/stress/token_efficiency_stress.rs"
 name = "token_efficiency_benchmark_driver"
 path = "tests/e2e/token_efficiency_benchmark_driver.rs"
 
-# Phase 1: Dependency Rules Inner Ring Test (GAP-A validation)
-[[test]]
-name = "dependency_rules_inner_ring_test"
-path = "tests/dependency_rules_inner_ring_test.rs"
+# Phase 1: Dependency Rules Inner Ring Test — 已按 ADR-213 R3 退役(2026-10-13)。
+# 退役理由见 docs/reports/L0-contracts-residual-debt_2026-10-14.md §2:该 target 4/5 用例
+# 调 `powershell` + 硬编码 `current_dir("d:\\Chimera CLI")`,在 ci.yml 的 ubuntu-latest
+# runner 上 spawn 失败即 panic(本分支从未跑过 ci.yml,故此前未暴露);其 TC-1 断言
+# "[GAP-A] 不出现" 是恒真守卫(Check A 已随 ADR-187 双源删除),合法后继在
+# check_dependency_rules.sh 的 --selftest 内。其余判据由 G-08/G-45/G-46/G-14 承担。
 
 # Phase 1: Composition Root Omega-Learner Test (GAP-R validation)
 [[test]]
@@ -667,9 +669,9 @@ gqep-executor = { path = "crates/gqep-executor" }    # L7 Execution(聚集执行
 mtpe-executor = { path = "crates/mtpe-executor" }    # L7 Execution(多步预测)
 scc-cache = { path = "crates/scc-cache" }            # L3 Storage(推测缓存+WAL)
 # P5.5: nexus-contracts 用于 HarnessSpec/ContractSpec/HopSpec 类型 (P5.5.1 任务集定义)
-nexus-contracts = { path = "crates/nexus-contracts" }
+nexus-contracts = { path = "crates/nexus-contracts" } # L0 Contracts(契约层;此前无 inline 标,继承上上段 # L1 组头而被误判 L1)
 # L7 SubAgent 运行时（Phase 3 ADR-148;P4-T3 L10 组合根接线引用）
-nexus-subagent = { path = "crates/nexus-subagent" } # L0 Contracts(契约层)
+nexus-subagent = { path = "crates/nexus-subagent" }   # L7 Execution(子代理运行时;旧标 L0 系根 dev-deps 残留,ADR-213 W-E 订正)
 # P1-9: chimera-mas 用于 MasError::R2FreezeViolation 变体验证(ADR-042 决策 4)
 chimera-mas = { path = "crates/chimera-mas" }         # L9 Quest(MAS 错误类型)
 # P7-T6: omega-learner 用于 M1 属性 #5(学习单调性)与 S8 学习器真实轨迹集成

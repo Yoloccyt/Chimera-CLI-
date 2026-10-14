@@ -4,6 +4,8 @@
 
 提议 (Proposed) (2026-07-27)
 
+> **🗑 2026-10-14 已删 crate 校正**：本文 **4 处 `auto-dpo`（含 2 条 `file://` 死链）产物不在当前代码库**（批次 A `38c72e6`，2026-09-20，登记见 [`CODE_WIKI.md §3.12`](CODE_WIKI.md)）。依 R7「历史只加注不改写」保留正文。本 ADR 状态为**提议（Proposed）**，尚未落地 ⇒ 受影响面仅为**代码锚点悬空**：正式实施前须按 §3.12 校正引用点，勿据正文去 `crates/auto-dpo/` 寻找已不存在的载体。路线图本身未被推翻。
+
 > **ADR-159 定稿关联注记(2026-08-28)**:本 ADR 规划新增 `NexusEvent::FormalVerificationFailed`(Critical,mpsc 旁路)的事件化设计**未落实**。冗余审计维度2 确认代码中 `FormalVerificationFailed` 实为 `GsoeError` 的错误变体(gsoe-evolution/src/error.rs:98,由 aegis/critic 返回),按 ADR-159 定稿:**不为此伪造事件面**,从 Critical 文档清单剔除该称谓;若未来需事件化必须另行立项并注册旁路。本 ADR 正文保留为历史设计(当时规划合理,落地路径事后修正)。
 
 > **状态说明**: 本 ADR 于 2026-07-27 由 P0 优化实施阶段创建,作为 Phase 5 技术债盘点 P0-1 项的修复交付物。本 ADR 是 ADR-042( R2 冻结)决策 2 明确预期的"FormalVerifier 设计决策 ADR"——ADR-042 第 65 行写道:"新建 ADR(预计 ADR-043 或后续编号)记录 FormalVerifier 的设计决策(算法选型、属性语言、证明器集成)",因 ADR-043~046 已被 R1 影子模式 / RHI-CG 工程 / INV-9 命名 / ImmuneSystem facade 占用,本 ADR 编号确定为 ADR-047。本 ADR 落地后将成为 R2 解冻的前置条件之一(ADR-042 决策 2 的 5 项判定标准之第 2 项)。

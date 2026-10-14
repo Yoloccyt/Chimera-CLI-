@@ -207,11 +207,7 @@ impl ColdTier {
         entry.tier = Tier::Cold;
 
         // v2.3 §(b.5): Cold 层落库前拦截私钥/凭证/令牌类硬载荷(Block;高熵/键名 Pass 防误报)。
-        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
-            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            ..Default::default()
-        };
+        let scan_policy = crate::hard_payload_scan_policy();
         if nexus_contracts::sensitive::scan(&entry.content, &scan_policy).is_blocked() {
             return Err(CmtError::StorageError(
                 "Cold 能力 content 含敏感硬载荷,拒绝落库".into(),
@@ -256,6 +252,20 @@ impl ColdTier {
         // 强制设置 tier 为 Cold
         for entry in &mut entries {
             entry.tier = Tier::Cold;
+        }
+
+        // v2.3 §(b.5) 入口级补齐：与 Warm 层同病——单条 `insert` 有守卫而批量入口没有。
+        // Cold 层不只有协调器降级腿会写入（`coordinator.rs` Warm→Cold 迁移走本函数），
+        // 因此该旁路是真实可达路径，不是只存在于文档里。处置与单条同口径：
+        // 任一条命中即整批拒绝（单事务写入，部分落盘不是本函数语义）。
+        let scan_policy = crate::hard_payload_scan_policy();
+        for (idx, entry) in entries.iter().enumerate() {
+            if nexus_contracts::sensitive::scan(&entry.content, &scan_policy).is_blocked() {
+                return Err(CmtError::StorageError(format!(
+                    "Cold 批量落库被敏感扫描拒绝:index={idx} cap_id={} 含私钥/凭证/令牌类硬载荷",
+                    entry.id
+                )));
+            }
         }
 
         self.pool
@@ -616,6 +626,34 @@ mod tests {
         assert_eq!(fetched.tier, Tier::Cold);
         // insert 不增加 access_count(get 才增加)
         assert_eq!(fetched.access_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_insert_batch_blocks_sensitive_content() {
+        // 入口级守卫的双向牙齿(与 warm.rs 同名测同口径):
+        //   正向 —— 批量入口含私钥 PEM 必须整批拒绝且零落库;
+        //   反向 —— 同批全为正常 content 时必须照常落库(防扫描误伤)。
+        let tier = ColdTier::open_in_memory(65536).unwrap();
+        tier.insert_batch(vec![make_entry("cap-a"), make_entry("cap-b")])
+            .await
+            .unwrap();
+        assert_eq!(tier.count().await.unwrap(), 2, "正常批量条目不得被扫描误伤");
+
+        let mut bad = make_entry("cap-bad");
+        bad.content = "-----BEGIN RSA PRIVATE KEY-----\nMIIBowe8...".into();
+        let err = tier
+            .insert_batch(vec![make_entry("cap-c"), bad])
+            .await
+            .expect_err("批内含私钥 PEM 必须整批拒绝");
+        assert!(
+            matches!(err, CmtError::StorageError(_)),
+            "应报 StorageError,实测 {err:?}"
+        );
+        assert_eq!(
+            tier.count().await.unwrap(),
+            2,
+            "整批拒绝:同批 benign 的 cap-c 也不得落库"
+        );
     }
 
     #[tokio::test]

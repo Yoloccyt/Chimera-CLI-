@@ -1048,7 +1048,7 @@ cmd = "{python} scripts/check_formal_property_ledger.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "形式化名册 vs 实装 checker 对账门：名册源 = `nexus-contracts/src/formal_props.rs::EmptyFormalProvider`(唯一 src 侧枚举)；checker 靠脚本内 ROSTER 逐行指到文件并校存活性(文件在且含 `pub struct`)。判据：名册位无 checker 且未登记 ⇒ [GAP-P]；实装 checker 未入名册且未登记 ⇒ [GAP-P]；checker 文件被剔空 ⇒ [GAP-P]；登记失效(两边已对账或该属性已不在名册) ⇒ [STALE] 必删行；名册源读不出/checker 文件缺失/登记缺消解出口/未知旗标 ⇒ 退 2。现读：名册 7 / checker 7 / 登记错配 2 且均仍成立——**`preference-consistency` 无 checker(宿主 auto-dpo 已随 ADR-172 退役)，而 `ConsensusSafetyChecker`(parliament/src/formal/consensus_safety.rs:50) 不在名册**；两条消解出口(补/删)均改变 ADR-052/053 引用的证据集 ⇒ 需新 ADR，本轮只把错配固定为不可扩大且可见，不默许它继续增长"
+note = "形式化名册 vs 实装 checker 对账门：名册源 = `nexus-contracts/src/spec/formal_props.rs::EmptyFormalProvider`(唯一 src 侧枚举)；checker 靠脚本内 ROSTER 逐行指到文件并校存活性(文件在且含 `pub struct`)。判据：名册位无 checker 且未登记 ⇒ [GAP-P]；实装 checker 未入名册且未登记 ⇒ [GAP-P]；checker 文件被剔空 ⇒ [GAP-P]；登记失效(两边已对账或该属性已不在名册) ⇒ [STALE] 必删行；名册源读不出/checker 文件缺失/登记缺消解出口/未知旗标 ⇒ 退 2。现读：名册 7 / checker 7 / 登记错配 2 且均仍成立——**`preference-consistency` 无 checker(宿主 auto-dpo 已随 ADR-172 退役)，而 `ConsensusSafetyChecker`(parliament/src/formal/consensus_safety.rs:50) 不在名册**；两条消解出口(补/删)均改变 ADR-052/053 引用的证据集 ⇒ 需新 ADR，本轮只把错配固定为不可扩大且可见，不默许它继续增长"
 
 [[gate]]
 id = "G-96"
@@ -1077,5 +1077,137 @@ kind = "light"
 test_kind = "cross_crate"
 note = "对账门有牙（夹具数由 --selftest 末行自报，不在此登记）：一致⇒绿/§4.1 提案成为 crate⇒红/表缺行⇒红/表多行⇒红/证据行号越界⇒红/证据文件不存在⇒红/VOID 无理由⇒红/VOID 行里的假路径也被抓⇒红/未知终判⇒退 2/附录块缺失⇒退 2/§4.1 定位失败⇒退 2；夹具集合为空也退 2（禁止空集全绿）。注意：首版夹具自身就是错的（把 alpha-one 放在括号外、又漏了「落地方案」列反引号产生的 pvl-layer 候选行），导致「一致⇒绿」用例红了一轮——这是夹具的问题不是判据的问题，修的是夹具"
 
+[[gate]]
+id = "G-99"
+spec_ref = "ADR-033 追加节 2026-10-09 自陈缺口的收口 / ADR-212（本轮 L0 重构波）"
+cmd = "{python} scripts/check_l0_purity.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0 nexus-contracts 纯度门（真实扫描）：① [dependencies] 必须 ⊆ {serde,chrono,uuid,thiserror}（dev-deps 不校，与 ADR-033 一致）；② 逐 src/*.rs 先以 Rust 词法器 blank 掉行注释/可嵌套块注释/普通与 raw 字符串，再对残余代码体扫禁用符号 unsafe/async/.await/tokio/std::fs/std::net/std::io/std::process/TcpStream/rand::/getrandom/println! 等——先 blank 是门的关键，防止把文档里的 tokio::spawn/URL/红线枚举串误判为违规（即 ADR-033 追加节「先确认计数口径」教训的机器化）。时间 Utc::now 故意不禁（ADR-033 红线清单为 IO/async/网络/随机，时间戳构造器为可接受的基础构造器；ADR-212 决策 3 登记了该裁决）。③ ADR-213 §4 补第五类杂质 AMBIENT-INPUT：std::env::var/vars/var_os 读与 set_var/remove_var/set_current_dir 写——返回值由进程环境而非入参决定，无 IO 的可见副作用，却可被「设了变量的 CI」静默改变语义，故单列一类；豁免按 (文件 × 类别) 精确粒度登记在脚本内 FILE_EXEMPT（类别闭集 + 理由长度下限），且**幽灵豁免判红**（令牌已从生产面消失 ⇒ STALE ⇒ 必须同批删行）。生产面口径 = blank 后 + 剔除 `#[cfg(test)] mod` 尾（与 G-91/G-101 的 test-tail 同语义；尾按花括号深度闭合，不闭合会让文件里第一个测试模块把整份文件缴械）。现读基线（2026-10-13）：64 个源文件（53 叶子 + 10 组 mod.rs + lib.rs，W3 子模块化后）/0 未豁免违规/2 处 AMBIENT-INPUT 已豁免（util::perf_scale、testutil::test_scale，均为控制面专用）/依赖白名单 4 项。退出码 0=纯/1=有违规或幽灵豁免/2=用法错或豁免台账畸形（不可判定，绝不静默放过）"
+
+[[gate]]
+id = "G-100"
+spec_ref = "G-99 配套（门自身有牙，沿 G-20/G-22/G-26/G-92/G-94/G-96/G-98 先例）"
+cmd = "{python} scripts/check_l0_purity.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0 纯度门双向夹具：CLEAN 夹具（禁用词仅出现在注释/文档/字符串/forbid(unsafe_code) 属性里）⇒必须 0 误判（锁词法器 blank 正确）；DIRTY 夹具逐行注入 unsafe/async/await/tokio/std::fs/std::net/std::io/std::process/TcpStream/rand::/println! ⇒每条必须被抓；合成 Cargo.toml 含 tokio ⇒依赖白名单必须标红。任一断言未成立⇒退 1。证明门既不漏报也不误报。ADR-213 追加夹具：env-read/env-write 逐条必抓、注释/字符串里的 std::env::var 不误判、豁免只覆盖登记类别（同文件另一类杂质仍必红）、幽灵豁免判红、`#[cfg(test)] mod` 尾被剔除且**尾会闭合**（尾后的生产 `pub fn` 仍须被扫，嵌套块同理）、未知类别/理由过短/重复键三种台账畸形各自判红、真实台账须通过自家守卫"
+
+[[gate]]
+id = "G-101"
+spec_ref = "ADR-213 决策 R1（升格 ADR-197 A6/D5 的 advisory 账本）/ ADR-198 §3.4"
+cmd = "{python} scripts/check_dead_contract_apis.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "跨层契约成员接线账本（真实扫描）。**判据轴与 G-91 不同、禁止互抄基线**：本门逐条查的是手写 CONTRACTS 账本里 L1/L3/L6/L9 的契约成员（ComputeBridge::update_threshold / UtilizationSampler / faae::parallel::score_experts_batch / ComputeError::Saturated 等）在生产行里是否 ≥1 调用点；G-91 判的是 L0 nexus-contracts 的 pub 类型被多少个 crate 消费（≥2）。此前按 ADR-197 D5「暂不登记」以 advisory 形态存在、在 CI 从不执行（ci.yml 只在 :171 注释里提到它），故本行升格即「有牙但从未咬」的收口；升格同批必须删去 gate_provenance_exemptions.txt 对应行（该文件 :17-19 自订纪律：升为门未删行⇒豁免成为与清单冲突的第二真值源）。现读基线（2026-10-13）：11 行全 OK。残留已知项：账本自身 pattern 覆盖度是 batch W1 的开放事项，故本门只在「已登记成员失守」方向有牙，不声称穷举全部契约成员"
+
+[[gate]]
+id = "G-102"
+spec_ref = "G-101 配套（门自身有牙，沿 G-20/G-92/G-99 先例）"
+cmd = "{python} scripts/check_dead_contract_apis.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "G-101 的双向夹具：真阳（已登记成员零调用点⇒必红）与真阴（带证据的 WIRED 行⇒不误判）各自断言，含「裸函数路径引用（无括号）也算接线」这一正则形状教训。任一断言未成立⇒退 1"
+
+[[gate]]
+id = "G-103"
+spec_ref = "ADR-213 决策 R1（候选号 G-86，按 gate_provenance_exemptions.txt:25 自陈）"
+cmd = "{python} scripts/check_gates_provenance.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "门清单↔盘上脚本 双向对账（方向 A: manifest→disk 死判据；方向 B: disk→manifest 有 --selftest 却未登记的脚本）。把它升格的**自锁理由**：G-101/G-105 这类「新脚本入清单、旧豁免行须同批删」的动作，此前没有任何门能抓忘删——本门就是那条纪律的执行体。它首轮实跑即抓到自己（有 --selftest 而无清单条目），当时以自豁免诚实登记，本轮按 ADR-213 正式升格。现读基线（2026-10-13）：0 未登记候选"
+
+[[gate]]
+id = "G-104"
+spec_ref = "G-103 配套（门自身有牙）"
+cmd = "{python} scripts/check_gates_provenance.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "G-103 的双向夹具：合成「清单引用不存在的脚本」与「盘上有牙脚本未登记」两种坏例各自必红，且无豁免时不误报。任一断言未成立⇒退 1"
+
+[[gate]]
+id = "G-105"
+spec_ref = "ADR-213 决策 R4（L0 公共函数面零治理的收口）"
+cmd = "{python} scripts/check_l0_pubfn_ratchet.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0 `pub fn` 面只减不增棘轮。补的缺口是量纲级的：G-91 的 DEF_RE 只枚举 pub struct|enum|trait|type，函数声明不在该字符类里，故 L0 的全部 pub fn 曾不受任何门统计（新增公开 helper 不红、删除也无人知）。基线 scripts/l0_pubfn_freeze.txt 键 = 模块路径::函数名，**多重集**（同一模块内两个 impl 各有一个 new 时按 2 行计，set 去重会让第三个 new 逃判）。判据：NEW 未登记⇒红、STALE（函数已不存在而行未删）⇒红、行畸形或键缺 :: ⇒退 2、抽取数低于 DEFS_FLOOR(100) ⇒退 2（解析致盲会报得和「干净」一模一样）。生产面口径与 G-99 共享同一词法器与 test-tail 遮蔽（import 复用而非手抄，避免孪生漂移）。首跑=全量豁免态，现读基线（2026-10-13）：live=255 / listed=255（行级 grep 256，其中 1 处位于 cfg(test) 尾内）"
+
+[[gate]]
+id = "G-106"
+spec_ref = "G-105 配套（门自身有牙）"
+cmd = "{python} scripts/check_l0_pubfn_ratchet.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "G-105 夹具（真实 tempdir 路径，走与生产同一个 extract_defs/evaluate）：CLEAN 夹具须恰好剔除 doc 注释/行注释/`pub(crate)`/cfg(test) 尾并保留 impl 方法；植入同名模块新增函数必报 NEW；同名重复增长必报 NEW（证多重集语义）；删函数不删行必报 STALE；同行同批删除转绿；畸形键退 2；台账注释与行内理由不被当成行。任一断言未成立⇒退 1"
+
+[[gate]]
+id = "G-107"
+spec_ref = "ADR-213 决策 R5（W3 双路径面只冻结不增殖）"
+cmd = "{python} scripts/check_l0_root_surface.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0 根 re-export 面只减不增棘轮。W3（ADR-212 决策 5）把 53 个叶子收进 10 组时刻意保持 crate 根 facade 逐字不变，代价是每个叶子今日有两条公开路径（`nexus_contracts::<leaf>` 供 34 个消费方、`nexus_contracts::<组>::<叶>` 为内聚路径）。冻结既有双路径是可接受的，让集合继续长大不可接受：每多一个根 re-export 就多一条此后再也撤不掉的公开路径。判据：lib.rs 中 `pub use <组>::<叶>;` 声明（词法器 blank 后，且值级 `pub use crate::叶::{A,B};` 与 doc/字符串均不计入）须与台账 scripts/l0_root_reexport_freeze.txt 逐行相等；NEW⇒红、STALE（撤路径未同批删行）⇒红、行畸形或抽取数低于 DEFS_FLOOR(20)⇒退 2 不可判定。首跑=全量登记态，现读基线（2026-10-13）：live=53 / listed=53（与 ADR-212 决策 5 自陈的 53 叶子同值，两法交叉对照一致）"
+
+[[gate]]
+id = "G-108"
+spec_ref = "G-107 配套（门自身有牙，沿 G-20/G-92/G-99/G-105 先例）"
+cmd = "{python} scripts/check_l0_root_surface.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "G-107 夹具：doc 注释里出现的 `pub use ghost::leaf;`、字符串字面量里的同款、以及值级 `pub use crate::叶::{A,B};` 三者都不得计入（锁的是口径而非运气）；植入新根 re-export 必报 NEW；撤声明不撤行必报 STALE；同行同批撤除转绿；台账畸形行被抓；DEFS_FLOOR 低于真实面且大于 0；真实台账须与真树自洽（这条让「夹具全绿但生产空转」无法蒙过）。任一断言未成立⇒退 1"
+
+[[gate]]
+id = "G-109"
+spec_ref = "ADR-213 发现 D-18（孤儿源文件：crate 级可达性棘轮看不见的文件维度）"
+cmd = "{python} scripts/check_src_module_reachability.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "源文件级可达性只减台账。补的洞有量纲性：ADR-160 的可达性棘轮数的是 crate（能否从组合根沿生产 [dependencies] 边到达），而 cargo 对「某个 .rs 没有任何 `mod` 指向它」**一个警告都不给**——该文件从不被解析，其 `#[cfg(test)]` 测试永不运行、其 pub 项不在 API 里、它只是随时间腐坏。2026-10-13 实测发现 9 个此类文件（chimera-tui 5：actions/user_commands、app/notify、components/prefix_hint、data/pace_gate、data/sanitize；parliament 3：delegation、event_pipeline、scheduler；quest-engine 1：wal）。**三法交叉验证非扫描器假红**：①本门 BFS（`mod NAME;` 按 Rust 两规则 `dir/NAME.rs`→`dir/NAME/mod.rs` 解析 + `#[path]` 覆盖 + 注释里的 mod 不算声明）②裸 grep 该 crate 内 `mod NAME;` 命中数=0 ③行为侧 `cargo test -p parliament --lib -- --list` 中 scheduler/delegation/event_pipeline 测试计数=0。台账 scripts/src_module_reachability_freeze.txt 是**可见债务而非许可**：每一行须补 `mod` 或删文件并同批删行；NEW 必红、以其他方式消失必 STALE 红；crate 无 lib.rs/main.rs 时退 2 不可判定。注：pace_gate 等功能是否在别处另有已编译实现，本门不判（逐文件未验）"
+
+[[gate]]
+id = "G-110"
+spec_ref = "G-109 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107 先例）"
+cmd = "{python} scripts/check_src_module_reachability.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "G-109 夹具（真实 tempdir 树）：已声明模块须被解析（lib/live/nested/mod 三文件）；注释里的 `mod x;` 不得算声明；未声明文件须被判孤儿（dead.rs + nested/also_dead.rs 两形）；crate 根发现只取 lib.rs；**内联 `mod y { pub mod not_a_file; }` 不得产生幻影解析**（内联块没有子文件）。任一断言未成立⇒退 1。真树反事实另测：向 crates/nexus-contracts/src 放一个无 `mod` 指向的文件⇒NEW 红 rc=1，删除⇒rc=0"
 
 
+
+
+# --- 文档侧退役登记表完备性门（DOC-AUDIT-2026-10-14 发现 1）---
+# 动机：CODE_WIKI §3.12 自称"已删 crate 唯一登记表"并指派其他文档引用它而非各自复述，
+# 但它停在 2026-09-22 的"恰好 3 个"，而 2026-09-28 的 lsct-tiering/router-traits 两笔删除
+# 只回灌了工具侧 scripts/retired_crates.txt（5/5 齐全），文档侧枢纽 16 天未同步 ⇒ 枢纽
+# 静默不全时会把缺口传染给所有 obey 它、去查它的文档。G-54/G-55 管"可执行面残余"，
+# 本对门管"文档枢纽 vs git 真值"，两面合起来才是完整爆炸半径。
+[[gate]]
+id = "G-111"
+spec_ref = "DOCUMENT_LIFECYCLE_POLICY §5.1 触发器 T1/T6 回灌 / DOC-AUDIT-2026-10-14 §发现1"
+cmd = "{python} scripts/check_deleted_crate_registry.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "三向植入夹具走真 verdict 路径：①两侧对齐⇒rc=0 ②git 有删除但表内漏登⇒rc=1（即 2026-09-28→10-14 的真实缺陷态）③表内登记了 git 查无删除的幽灵行⇒rc=1（登记表腐烂）。任一断言不成立即退 1；判据缺失/表解析出 0 行 ⇒ 环境不可判定退 2（沿用 check_doc_drift.sh 的 fail-closed 方言，绝不静默放过）"
+
+[[gate]]
+id = "G-112"
+spec_ref = "DOCUMENT_LIFECYCLE_POLICY §5.1 触发器 T1/T6 回灌 / DOC-AUDIT-2026-10-14 §发现1"
+cmd = "{python} scripts/check_deleted_crate_registry.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "双向对拍：`git log --diff-filter=D -- 'crates/*/Cargo.toml'` 穷举集 == CODE_WIKI §3.12 表首列反引号名集。2026-10-14 实测两侧同为 5（acb-governor/auto-dpo/model-router/router-traits/lsct-tiering）。判据刻意复用 §3.12 自己声明的那条命令，避免「门与文档各用一把尺」；未来 crate 删除未回灌文档枢纽 ⇒ 立即判红"

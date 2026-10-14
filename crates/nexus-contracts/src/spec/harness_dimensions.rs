@@ -416,6 +416,15 @@ impl TaskOrchestrationContract {
 ///
 /// 对应 MemoHarness D5 维度：Memory 管理决定 Agent 如何维护长期记忆。
 /// 与 MLC 四级记忆（Ω₂-Compress）和 CMT 分层存储协同。
+///
+/// ⚠ 消费面诚实声明（2026-10-09 v3.5 W6-4 现取）：本契约的 `on_demand_synthesis` /
+/// `dual_experience_bank` / `global_experience_board` 三个旗标，全仓对它们的**唯一**
+/// `.字段` 引用是本文件自己的默认值断言测试；除定义处外，三个标识符在任何 crate
+/// 的源码里都不再出现（已连解构形式一起查过）⇒ 它们今日是“可序列化、可默认，但
+/// 无人据其分支”的配置面占位：**默认 true 不等于能力已启用**。
+/// 能力自身的真实状态并不一致：按需合成是真闭环（`mlc-engine::on_demand_synthesizer`，
+/// 由组合根 `with_synthesizer` 注入）；双层经验库与价值回填是②态（见 `mlc-engine`
+/// 对应模块头的「装配态」段）。把这三个旗标接成真实开关属行为变更，需 ADR。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryManagementContract {
     /// 记忆保留策略

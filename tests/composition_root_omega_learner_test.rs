@@ -100,6 +100,17 @@ mod tests {
     }
 
     /// TC-5: Verify omega-learner is reachable from production graph after fix
+    ///
+    /// WHY Windows-gated: this case shells out to `check_crate_reachability.ps1`, which is
+    /// the *local* twin of the reachability gate. CI judges reachability through the `.sh`
+    /// twin (ci.yml step "Crate reachability", G-09) on `ubuntu-latest`, where neither the
+    /// `powershell` binary nor a `.ps1` interpreter exists — `Command::output()` then fails
+    /// to spawn and the `.expect` below panics, turning a green local run into a red merge
+    /// gate. Same two-twin arrangement as `check_dependency_rules.{sh,ps1}`: the `.ps1`
+    /// stays a Windows affordance, the judgement itself is not lost (G-09 covers it).
+    /// `Command` stays imported-and-used by TC-4/TC-6, so gating this case cannot leave an
+    /// unused import on Unix (`clippy -D warnings` would otherwise go red).
+    #[cfg(windows)]
     #[test]
     fn test_omega_learner_reachable_after_fix() {
         let output = Command::new("powershell")

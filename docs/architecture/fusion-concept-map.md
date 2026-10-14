@@ -22,7 +22,7 @@
 | 文档源/概念 | 所属文档章节 | 现行落地 crate/子模块/文件 | 落地状态 | 可行性 | 备注/ADR 引用 |
 |---|---|---|---|---|---|
 | ComputeBridge / DetReduce（计算桥接/降维归约） | V4 §计算层 | `crates/nexus-core/src/compute/bridge.rs`、`crates/nexus-core/src/compute/reduce.rs`（`compute/` 下另有 `mod.rs`/`seam.rs`/`hts.rs`/`dispatch.rs`/`utilization.rs`） | 已落地 | 高 | — |
-| 分片总线 + ShardedBus + CBF（跨层信用流/背压/段性能） | V34 §事件总线 | `crates/event-bus/src/shard.rs`（分片）、`credit_flow.rs`（CBF）、`backpressure.rs`（背压）、`segment_per.rs`（段性能） | 已落地 | 高 | 144 事件双通道（broadcast + Critical mpsc）见 `bus.rs::is_critical_mpsc_event()` |
+| 分片总线 + ShardedBus + CBF（跨层信用流/背压/段性能） | V34 §事件总线 | `crates/event-bus/src/shard.rs`（分片）、`credit_flow.rs`（CBF）、`backpressure.rs`（背压）、`segment_per.rs`（段性能） | 已落地 | 高 | broadcast + Critical mpsc 双通道见 `bus.rs::is_critical_mpsc_event()`；**变体数不在此登记**（原写“144 事件”为 2026-09-02 时点值，已陈旧；现值以 `crates/event-bus/src/types.rs` 为准） |
 | CSC 四级压缩 + ThinkingPreserve（层次压缩+推理保留） | V34 §记忆压缩 | `crates/hcw-window/src/compressor.rs`、`crates/hcw-window/src/window.rs`（`HcwWindow`:90，四级窗口主体；无 pipeline.rs）、`crates/hcw-window/src/preserve.rs` | 已落地 | 高 | Ω₂-Compress；hcw 四级窗口 4K/32K/128K/1M |
 | HiLS（层次长短期记忆调度） | V34 §记忆调度 | `crates/hcw-window/src/hils.rs` | 已落地 | 高 | 与 recall/ 子模块协同 |
 | TSR × MoE（任务自路由×专家混合） | V4 §路由 | `crates/faae-router/src/tsr_moe.rs` + `crates/mas-sched/`（L9 调度面） | 已落地（TSR MoE）/部分（跨调度） | 中 | `mas-sched` = ADR-145，L9；`faae-router` 为 L6 |
@@ -43,7 +43,7 @@
 | Ω₁₀ / Ω₁₁（OMEGA 新增定律） | V4 §九定律扩展 | `docs/architecture/ADR-170-omega-11th-laws.md`（正式收录） | 已落地（ADR-170 收录） | 高 | **已由 ADR-170 收录（2026-09-02）**：Ω₁₀-Card / Ω₁₁-Synthesize 作为 Rust 侧扩展定律正式纳入（原"规划中无代码/ADR"表述失效）；守恒表述升级为"十一定律(九基座+两扩展)" |
 | 记忆策略自适应（MinimalRecall→…→AggressivePruning） | V34 §记忆策略 | `crates/mlc-engine/src/memory_strategy_learner.rs`（+ `src/mem_con/controller.rs`） | 已落地 | 高 | 三重悖论免疫·记忆悖论 |
 | 进化悖论 L4 形式化门 | V34 §进化 | `crates/gsoe-evolution/src/formal_gate.rs`、`src/formal/{mod,invariant_closure,critic_monotonicity,lineage_checker}.rs` | 已落地 | 高 | 进化悖论 L4 跃迁；R2 解冻影子期（ADR-053 rev4） |
-| 信用分配 SHARP / 三元分解奖励 | CAF §信用 | `crates/parliament/src/sharp.rs`、`src/mappo.rs` | 已落地 | 高 | Ω₅-Credit |
+| 信用分配 SHARP / 三元分解奖励 | CAF §信用 | `crates/parliament/src/sharp.rs`、`src/mappo.rs` | **模块已落地 / 生产零消费** | 高 | Ω₅-Credit；2026-10-09 v3.5 实测：两个类型仅在 `parliament/tests/mappo_sharp_e2e_test.rs` 被构造，全仓无生产装配点 ⇒ 本行不再写“已落地”单值（“导出/存在 ≠ 已接线”，终局原则 3） |
 | 关键路径动态识别（行为定位） | CAF §定位 | `crates/parliament/src/critical_path.rs` | 已落地 | 高 | Ω₇-Locate |
 | 变体隔离 + 停止策略 | CAF §保留 | `crates/parliament/src/variant_pool.rs`（`VariantPool`，导出 `lib.rs:202`；ADR-051 明示 L8 子模块不新建 crate）、`crates/gsoe-evolution/src/checkpoint_preserver.rs` | 已落地 | 高 | Ω₉-Preserve |
 | 稀疏全维掩码 + 按需激活 | CAF §稀疏 | `crates/osa-coordinator/src/`、`crates/sesa-router/src/{activation,sparsity}.rs` | 已落地 | 高 | Ω₁-Sparse；sesa 稀疏激活 |
@@ -86,4 +86,23 @@
 
 ---
 
-*本概念映射表于 2026-09-02 生成，所有路径经 Grep/Glob 实测核实，未经验证的映射项一律标注「缺失」而非编造路径。*
+## 4. ADR 临号作废回执（2026-10-08 / v3.5 W6-2，C-49）
+
+背景：六份融合文档各自“预留”了 ADR 号段，但仓库同一编号已被**不同主题**的实档占用 ⇒ 照号施工会引用错档。本表是唯一的“临号↔实档”调和记录。
+
+| 文档自拟号段 | 文档声称主题 | 仓库同实档异义（现取） | 处置 |
+|---|---|---|---|
+| V34 §20.2 ADR-077~095 | 上下文治理 / 渐进加载等 | `ADR-080-context-curation.md`、`ADR-081-context-curation.md`、`ADR-082-tui-hello-agent-tree.md`、`ADR-083-*`、`ADR-084-*` 均已是**另一主题**的实档 | 临号作废，不得引用 |
+| 三源 v5 ADR-095~102 | 混合运行时 / 手写 SIMD / 事件元数据 V3 | `ADR-095-134-phase1-consolidation.md` 实为 Phase 1 汇总；且 `adr_index.md:6` 注明 ADR-086~094（十源融合裁决）登记于 V4 §2.5、本目录无文件 | 临号作废（方案内 SIMD/第三运行时另被 ADR-SIMD-001 / v3.0 §2.2 否决） |
+| v6 §6.2 ADR-103~110 | GPU 落点（`compute/memory.rs`、`kernels/`、`gpu_*.rs`） | 这些路径全部不存在；GPU 已由 ADR-195 维持否决 + G-86 加速器族禁列机器门 | 临号作废（方案本体亦被否） |
+| 十六源 §0.4/§3.2 ADR-170~182 | “J-01 引入 GPU，**supersede ADR-123**” | `ADR-170-omega-11th-laws.md` 实为 Ω 十一定律（同号异义） | 临号作废 + 主张被 ADR-195 affirm 否决 |
+
+**取号与占位规则回执**：
+
+1. 新 ADR 一律自 **ADR-202** 起取号（现测最大主编号 201），取号前先查 `docs/architecture/adr_index.md` 与磁盘实档，避免同号异义复发。
+2. 占位号（`ADR-XXX-*`）落盘已被 `scripts/adr_index_sync.py` 的 `PLACEHOLDER` + `PLACEHOLDER_FREEZE` 拒绝（新占位号必红）；现存唯一 VOID 占位档 `ADR-XXX-inner-ring-bug-fix.md` 依该脚本自述协议（“最后一条引用退役才删盘并从冻结集移除”）**保留在盘**，且只可作历史取证，不可当有效 ADR 引用。
+3. **覆盖度诚实声明**：本表 §1 只映射 **4 个文档源**（V4 / V34 / 9YS / CAF）；三源 v5、十六源 v3、CPU_GPU v6 的主张裁决**不在本表**，其处置记录在 v3.0~v3.4 谱系、`CHANGELOG.md` 与 ADR-195/196/199。把“本表已覆盖全部六份”当作事实是错的（本轮全栈总账已逐条补裁，见 `Chimera架构重构与优化方案_v3.5-全栈终局总账.md`）。
+
+---
+
+*本概念映射表于 2026-09-02 生成，所有路径经 Grep/Glob 实测核实，未经验证的映射项一律标注「缺失」而非编造路径。ADR 临号作废回执与覆盖度声明于 2026-10-08（v3.5 W6-2）追加。*

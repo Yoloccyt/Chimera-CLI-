@@ -172,6 +172,16 @@ fn batch_result_collect(c: &mut Criterion) {
 /// `[Directional]` 且不得据此触发改造。本组**不新建 SLO 阈值、不改任何默认**
 /// （ADR-190 反幽灵门；apply 建议见 WI-G6a 报告）。
 ///
+/// # v3.5 M3 方法学升级（两个组 + 多轮同号判据）
+/// 历史单轮 7 点读数不足以定拐点（本轮已得反证：n=256 时 offload 快 1.295×，
+/// 与给出 `n*≈287` 那一轮符号相反）。因此本组现同时产出：
+///   - `overwindow_dense_knee`（正序，全 8 点）：同轮内 serial/offload 配对比值；
+///   - `overwindow_dense_knee_rev`（反序，拐点候选 3 点）：**次序对照**，用于识别
+///     “先跑者拿冷页/刚分配内存”的次序伪影。
+///
+/// 定拐点的硬判据：每点 ≥ 4/5 轮 median 同号，**且**两种注册次序下结论一致；
+/// 不满足即记“n* 不可辨识（落在噪声带或采样点左侧）”，不得据此改阈值。
+///
 /// 内核复刻声明：`compute_provider_parts`（chimera-cli）为私有函数，本组按其
 /// dense 段形状（cosine + select + sort，k = 128）在 bench 侧复刻——形状等价、
 /// 非逐位对拍；数据只用于 n* 量级判读。
@@ -213,48 +223,94 @@ fn overwindow_dense_knee(c: &mut Criterion) {
 
     let b: &ComputeBridge = bridge();
     let query = make_clv(0x00C0_FFEE);
+
+    // 采样点集。v3.5 M3 新增 **384**：历史读数 `n*≈287` 是由 {256, 512} 两点
+    // 线性插值得出的——点集**跨过 287 却不含任何落在 (256,512) 的点**，因此拐点
+    // 位置在结构上不可证伪（本轮实测已得 n=256 时 offload 已快 1.295×，与
+    // 给出 287 那一轮符号相反）。补 384 后 (256,512) 可被夹住。
+    const SIZES: [usize; 8] = [256, 384, 512, 1024, 2048, 4096, 8192, 16_384];
+    // 反向对照组只跑拐点候选区（控制成本；大 n 段两种次序已无歧义）。
+    const REV_SIZES: [usize; 3] = [256, 384, 512];
+
+    fn make_blocks(n: usize) -> Arc<Vec<nexus_core::CLV>> {
+        // 必须先把迭代器 collect 成 Vec 再包 Arc：`Arc<Vec<T>>` 不能直接从
+        // 迭代器 build（E0277，本轮实测踩到）。
+        Arc::new(
+            (0..n)
+                .map(|i| make_clv(i as u64 + 1))
+                .collect::<Vec<nexus_core::CLV>>(),
+        )
+    }
+
+    // 两个测量形状写成宏而非闭包：`BenchmarkGroup<'_, M>` 带生命周期参数且
+    // `ValueFormatter` 在 criterion 0.5 是 **trait**（把它当类型写会 E0782），
+    // 闭包参数标注代价高于收益；宏不需要类型标注，两组间亦不重复内核代码。
+    macro_rules! bench_serial {
+        ($group:expr, $blocks:expr, $n:expr) => {
+            $group.bench_function(BenchmarkId::new("serial", $n), |be| {
+                be.iter(|| {
+                    let mut scores: Vec<(usize, f32)> = $blocks
+                        .iter()
+                        .enumerate()
+                        .map(|(i, blk)| (i, query.cosine_similarity(blk)))
+                        .collect();
+                    topk(&mut scores, K);
+                    criterion::black_box(scores.len())
+                });
+            });
+        };
+    }
+
+    macro_rules! bench_offload {
+        ($group:expr, $blocks:expr, $n:expr) => {
+            $group.bench_function(BenchmarkId::new("offload", $n), |be| {
+                be.iter(|| {
+                    let n_chunks = $blocks.len().div_ceil(CHUNK);
+                    let tasks: Vec<Box<dyn FnOnce() -> Vec<(usize, f32)> + Send>> = (0..n_chunks)
+                        .map(|ci| {
+                            let all = Arc::clone($blocks);
+                            let q = query.clone();
+                            let start = ci * CHUNK;
+                            let end = (start + CHUNK).min(all.len());
+                            Box::new(move || {
+                                (start..end)
+                                    .map(|i| (i, q.cosine_similarity(&all[i])))
+                                    .collect()
+                            }) as Box<dyn FnOnce() -> Vec<(usize, f32)> + Send>
+                        })
+                        .collect();
+                    let results = b.spawn_compute_batch(TaskKind::ClvSimilarity, tasks);
+                    let mut scores: Vec<(usize, f32)> = Vec::with_capacity($n);
+                    for r in results {
+                        scores.extend(r.unwrap());
+                    }
+                    topk(&mut scores, K);
+                    criterion::black_box(scores.len())
+                });
+            });
+        };
+    }
+
+    // 主组：正序（serial → offload），覆盖全点集。
     let mut group = c.benchmark_group("overwindow_dense_knee");
-    for n in [256usize, 512, 1024, 2048, 4096, 8192, 16_384] {
-        let blocks: Arc<Vec<nexus_core::CLV>> =
-            Arc::new((0..n).map(|i| make_clv(i as u64 + 1)).collect());
-        group.bench_function(BenchmarkId::new("serial", n), |be| {
-            be.iter(|| {
-                let mut scores: Vec<(usize, f32)> = blocks
-                    .iter()
-                    .enumerate()
-                    .map(|(i, blk)| (i, query.cosine_similarity(blk)))
-                    .collect();
-                topk(&mut scores, K);
-                criterion::black_box(scores.len())
-            });
-        });
-        group.bench_function(BenchmarkId::new("offload", n), |be| {
-            be.iter(|| {
-                let n_chunks = blocks.len().div_ceil(CHUNK);
-                let tasks: Vec<Box<dyn FnOnce() -> Vec<(usize, f32)> + Send>> = (0..n_chunks)
-                    .map(|ci| {
-                        let all = Arc::clone(&blocks);
-                        let q = query.clone();
-                        let start = ci * CHUNK;
-                        let end = (start + CHUNK).min(all.len());
-                        Box::new(move || {
-                            (start..end)
-                                .map(|i| (i, q.cosine_similarity(&all[i])))
-                                .collect()
-                        }) as Box<dyn FnOnce() -> Vec<(usize, f32)> + Send>
-                    })
-                    .collect();
-                let results = b.spawn_compute_batch(TaskKind::ClvSimilarity, tasks);
-                let mut scores: Vec<(usize, f32)> = Vec::with_capacity(n);
-                for r in results {
-                    scores.extend(r.unwrap());
-                }
-                topk(&mut scores, K);
-                criterion::black_box(scores.len())
-            });
-        });
+    for n in SIZES {
+        let blocks = make_blocks(n);
+        bench_serial!(&mut group, &blocks, n);
+        bench_offload!(&mut group, &blocks, n);
     }
     group.finish();
+
+    // 对照组：反序（offload → serial），只跑拐点候选区。
+    // WHY：主组里 serial 恒先跑，会系统性地拿到“先跑者拿冷页/刚分配内存”的次序
+    // 偏置。拐点的判据是“每点 ≥ 4/5 轮 median 同号”，而**换序后仍同号**才能排除
+    // 次序伪影；若换序使符号翻转，那说明所谓拐点落在噪声带内，不得据此改阈值。
+    let mut rgroup = c.benchmark_group("overwindow_dense_knee_rev");
+    for n in REV_SIZES {
+        let blocks = make_blocks(n);
+        bench_offload!(&mut rgroup, &blocks, n);
+        bench_serial!(&mut rgroup, &blocks, n);
+    }
+    rgroup.finish();
 }
 
 criterion_group!(

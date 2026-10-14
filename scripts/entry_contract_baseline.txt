@@ -15,3 +15,5 @@ check_gated_wiring_substance.py::C1::cfg_sites::return n | n 是 feature-gate �
 check_gated_wiring_substance.py::C1::ci_enablements::return n | n 是 workflow 里启用该 feature 的行数, 同上只进比较链("计数>0 = 已接刃"的布尔前提), 不进退出码 ⇒ 非 rc-as-counter
 check_lint_ratchet.py::C1::count_offenders::return total | total 是已 opt-in crate 全 target 的 unwrap/expect 命中数, 仅作 V2 的 >0 比较数据, 退出码由 decide() 的 v1/v2/v3 集合在 main 决定 ⇒ 非 rc-as-counter
 check_lint_ratchet.py::C1::count_offenders_file::return total | 同上函数的单文件分量(cfg(test) 区豁免的行级扫描), 返回值只汇入 count_offenders 的 total 并进 >0 比较, 从不流 sys.exit ⇒ 非 rc-as-counter
+check_dead_contract_apis.py::C1::count_production_uses::return hits | hits 是对生产行的正则命中数, 唯一调用方(L303)把它累加进 rows[idx]["uses"]; evaluate() 只拿它与 0 做比较("status==WIRED 且 uses==0 ⇒ FAIL"), 真退出码由 main 的 `1 if fails else 0` 决定 ⇒ 非 rc-as-counter(同族先例 cfg_sites / ci_enablements)
+structure_displacement_report.py::C1::event_variants::return count | count 是 NexusEvent 变体数, 只写入 metrics["nexus_event_variants"] 供 JSON/报表打印; main() 两条返回路径恒 `return 0`(报表分位表不做判定), 值从不流向 sys.exit ⇒ 非 rc-as-counter

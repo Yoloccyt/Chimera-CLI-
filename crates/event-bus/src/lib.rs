@@ -19,6 +19,52 @@
 //! - 背压处理与慢消费者隔离,避免孤儿调用(架构红线)
 //! - MessagePack 序列化(ADR-004),支持跨进程投递
 //!
+//! # 装配态口径（2026-10-09 / v3.5 W6-3 全栈取证；只陈述现状，不改上方机器字段）
+//!
+//! 上方 `PRODUCERS/CONSUMERS` 由 `scripts/crate_contract.py` 从清单与代码派生，
+//! **它们描述的是“本 crate 定义了哪些事件与类型”，不是“这些子系统已在生产运行”**。
+//! 下列子系统在仓内**无任何生产装配点**（反查方式：排除本 crate 自身 `src`、
+//! `tests`、`benches` 后全库检索构造点），不得被当作已生效能力引用：
+//!
+//! | 子系统 | 规模 | 当前唯一引用面 |
+//! |---|---|---|
+//! | [`token_ledger`] | 约 0.6k 行 | 仅 chimera-tui 的跨目录漂移测 |
+//! | [`segment_per`] | 约 0.4k 行 | 仅本 crate 测试 |
+//! | `membrane`（`MembraneFilter`） | 约 1k 行 | 仅本 crate bench |
+//! | `pattern_index`（`PatternIndex`） | 约 0.3k 行 | 仅本 crate bench |
+//! | `dynamic_registry` | 404 行 | **零引用**（crate 内外均 0 处 `crate::dynamic_registry`/`event_bus::dynamic_registry`） |
+//!
+//! # 三个“看似同族、实则已接线”的模块（不得一并归入上表）
+//!
+//! 上游方案（v3.5 Spec W6-3）曾把 `causal` / `shadow_diff` / `credit_flow` 与上述
+//! 五个同列为“零装配子系统”（并给“8 个、约 2.2k 行”的规模）——**现取否证该清单**：
+//! - [`credit_flow`]：`EventBus` 的流控本体——`credit_flow: Arc<CreditFlow>` 是总线字段
+//!   （:329），三处构造点（:567/:596/:629），发送路径上 `try_acquire(1)`/`release(1)` 实际
+//!   生效（:443/:464/:900），并由 `shard` worker 持有与批量归还（`shard.rs:248/254/429`）。
+//! - [`causal`] / [`shadow_diff`]：均被**已接线**的 [`attribution`] 引用（`attribution.rs:40` 取
+//!   `causal::{CausalRelation, VectorClock}`、`:42` 取 `shadow_diff::event_fingerprint`，且 `VectorClock`
+//!   在 `:57/:114/:315` 真实构造），而 `spawn_attribution_tap` 经组合根 `experience_loop.rs` 装配
+//!   ⇒ **这两个模块处在已生效的归因链内，不是死码**。
+//!   粒度订正（本轮自查）：“模块被用”不等于“模块里每个公开类型都被构造”——`CausalConsistencyChecker`
+//!   与 `ShadowDiffRecorder` 本身仍无任何生产构造点。判“零装配”必须按**类型粒度**，否则就会把
+//!   已用部分与未用部分同批抹掉（这正是本批在上游清单上抓到的错的镜像面）。
+//!
+//! 因此本 crate 的“撤主张”面是上表五个（合计约 2.7k 行），而非八个。数字校正已入
+//! v3.5 总账 §7.2 漂移表；拿“八个”做后续工作量估算会高估约 1.5k 行可删面。
+//!
+//! 已被 crate **外部**真实装配的只有 [`attribution`]（`spawn_attribution_tap`）与
+//! [`experience_card_bus`]（`ExperienceCardBus`），两者均经组合根
+//! `chimera-cli/src/experience_loop.rs` 装配；本 crate 其余公开模块要么在上表（零装配），
+//! 要么在那两条已接链路的内部（见上节）。
+//!
+//! WHY 不拆分为独立 crate：那会新增 workspace 成员，违 ADR-049“0 新增 crate”与
+//! v3.5 总账的 crate 总账冻结原则；本 crate 因此**保留代码但撤掉 L1 语义主张**。
+//!
+//! 同名概念易错点（引用前必读）：本 crate 的 `TokenLedger` ≠ L0 的
+//! `nexus_contracts::token_evidence::TokenLedgerEntry`（后者是 cmt-tiering 实际落盘的
+//! 证据行）；本 crate `segment_per::PerBuffer` 与 `omega_learner::per_buffer::PerBuffer`
+//! 是两套独立实现，同名不同物。
+//!
 //! # 快速示例
 //! ```no_run
 //! use event_bus::{EventBus, NexusEvent, EventMetadata};

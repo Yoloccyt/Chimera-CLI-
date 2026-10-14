@@ -104,6 +104,17 @@ pub struct TokenLedgerEntry {
     /// 跳过字段导致反序列化长度不匹配（invalid length 12, expected 13）；
     /// Option 缺失字段反序列化自动 None（serde 默认），兼容性由 Option 语义保证。
     pub graph_identity: Option<GraphIdentity>,
+    /// 持久化 schema 版本(ADR-213 R7 F3 / R8.2)。
+    ///
+    /// 与 `graph_identity` 的区别是关键:那个字段**只 skip 不 default**，array 位置编码下
+    /// 会因长度不匹配而反序列化失败(本文件原 WHY 注释记录的正是这次踩坑)；本字段
+    /// `default` + `skip_serializing_if` **成对出现**——0 时不写入使字节与改动前逐字相同，
+    /// 读回时缺失的尾元素由 `default` 补 0。array 编码下"只 skip 不 default"仍是禁止组合。
+    #[serde(
+        default,
+        skip_serializing_if = "crate::core_domain::checkpoint::is_schema_version_unset"
+    )]
+    pub schema_version: u16,
 }
 
 impl TokenLedgerEntry {
@@ -152,6 +163,7 @@ impl TokenLedgerEntry {
             moe_routing,
             timestamp,
             graph_identity: None,
+            schema_version: 0,
         }
     }
 
@@ -191,7 +203,13 @@ pub enum SegmentCreationReason {
     /// 消息重写 — 消息内容被改写
     MessageRewrite,
     /// TITO 回退 — Token-In/Token-Out 一致性回退
-    Titofallback,
+    ///
+    /// `rename` 把线上字符串钉成 `titofallback`：枚举名按 `rename_all = "snake_case"`
+    /// 本会导出 `tito_fallback`，那是一次 wire 变更。此处只修 Rust 标识符的大小写
+    /// (TITO 是缩写词，ADR-213 D-9)，编码字节与旧 payload 逐字一致（D-10/F2 完成前
+    /// 不得改动该字符串，否则历史 SegmentMetadata 读不回）。
+    #[serde(rename = "titofallback")]
+    TitoFallback,
     /// 自然边界 — 任务阶段切换的自然分界
     NaturalBoundary,
     /// 达到最大长度 — 上下文长度上限触发
@@ -227,6 +245,14 @@ pub struct SegmentMetadata {
     pub end_turn: u32,
     /// 分段创建原因
     pub creation_reason: SegmentCreationReason,
+    /// 持久化 schema 版本(ADR-213 R7 F3)：0 = 本字段加入前的历史形态，0 时整字段不写入
+    /// ⇒ 编码字节与改动前逐字相同；`default` 与 `skip_serializing_if` 必须成对(见
+    /// `TokenLedgerEntry::schema_version` 注释记录的 array 编码踩坑)。
+    #[serde(
+        default,
+        skip_serializing_if = "crate::core_domain::checkpoint::is_schema_version_unset"
+    )]
+    pub schema_version: u16,
 }
 
 impl SegmentMetadata {
@@ -257,6 +283,7 @@ impl SegmentMetadata {
             start_turn,
             end_turn,
             creation_reason,
+            schema_version: 0,
         }
     }
 
@@ -457,7 +484,7 @@ mod tests {
             SegmentCreationReason::HistoryCompaction,
             SegmentCreationReason::ToolSchemaChange,
             SegmentCreationReason::MessageRewrite,
-            SegmentCreationReason::Titofallback,
+            SegmentCreationReason::TitoFallback,
             SegmentCreationReason::NaturalBoundary,
             SegmentCreationReason::MaxLengthReached,
         ];

@@ -427,14 +427,76 @@ def mode_invariants(redlines, thresholds_doc, freeze):
         if not _check(f"I8b event-bus sources readable ({exc})", False):
             fails += 1
 
-    # I8 已知盲区登记(第三轮 T1.3,审计 F-P3 伴生;不改变判定,仅记录边界):
-    #   I8/I8b 只锁 “N 个 Critical 事件/变体” 措辞 == CRITICAL_TOTAL(=20 全量),
-    #   不校验 mpsc 旁路子数 “当前 N 类” 那一组自由文本(=16)。历史上 v2.3 补入
-    #   CertifyIssued/FailureRegistered 后旁路升为 16,正文却多处残留旧值 13/14/17/18
-    #   —— 全在本门监测面之外(CRITICAL_MPSC_VARIANTS 常量本身另由
-    #   test_critical_double_list_d8_counts + mpsc_bypass_exact_* + credit_flow_test 锁定)。
-    #   第三轮已将散落旧值作为注释修正对齐(T1.3);是否新增 I8c 机器断言
-    #   锁死 “N 类” 措辞(升格断言)留 T3 评估。
+    # I8c (v3.5 W6-3, 2026-10-09): 关闭 I8/I8b 自陈的「mpsc 旁路 N 类」自由文本盲区。
+    # 两段断言（均仅读源文本，不依赖编译产物）：
+    #   (a) 常量 vs 臂数：CRITICAL_MPSC_VARIANTS 必须等于 `is_critical_mpsc_event` 体内
+    #       `NexusEvent::X { .. }` 模式数。此前该等式只由 Rust 侧
+    #       test_critical_double_list_d8_counts 锁，治理门本身看不见；
+    #   (b) 措辞：行内同时出现「旁路/mpsc/is_critical_mpsc_event」与**清单规模指标词**
+    #       （清单 / CRITICAL_MPSC_VARIANTS / 变体数 / 判定的）且写了「N 类」时，
+    #       N 必须等于该常量——这是 bus.rs:42-52 注释自己登记的已知盲区
+    #       （旧值 13/14/17/18 全在监测面外）。
+    #       为何需两个条件：单看「mpsc + N 类」会误伤“本测试覆盖 4 类事件”这类
+    #       **测试范围声明**（实测 4 处假阳性）——它们说的不是旁路清单规模。
+    # 取向沿用 I8b：`scanned >= 1` 才算有效（空扫描=判据失能，不许当干净）；
+    # 而 (a) 两侧任缺其一即红，不允许“没找到函数体”路径静默绿。
+    try:
+        import glob as _glob
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus.rs"),
+                  encoding="utf-8", errors="ignore") as fh:
+            _bus = fh.read()
+        _mpsc_m = re.search(r"CRITICAL_MPSC_VARIANTS\s*:\s*usize\s*=\s*(\d+)", _bus)
+        _fn_at = _bus.find("fn is_critical_mpsc_event")
+        # 函数体：从签名到下一个顶格 `}`（不剥缩进，否则会被嵌套臂收尾带偏）
+        _body = ""
+        if _fn_at >= 0:
+            _end = _bus.find("\n}\n", _fn_at)
+            _body = _bus[_fn_at:_end if _end > 0 else len(_bus)]
+        _arms = re.findall(r"NexusEvent::([A-Z]\w*)\s*\{\s*\.\.\s*\}", _body)
+        _n_mpsc = int(_mpsc_m.group(1)) if _mpsc_m else None
+        ok_a = bool(_arms) and _n_mpsc is not None and len(_arms) == _n_mpsc
+        if not _check(
+                "I8c CRITICAL_MPSC_VARIANTS == is_critical_mpsc_event arm-count "
+                "(const=%s arms=%d)" % (_n_mpsc, len(_arms)), ok_a):
+            fails += 1
+        _off, _seen = [], 0
+        # 规模指标词：只有把“N 类”归给「清单/常量/函数判定」的措辞才是规模声明。
+        _size_tokens = ("清单", "CRITICAL_MPSC_VARIANTS", "变体数", "判定的")
+        for _path in _glob.glob(os.path.join(ROOT, "crates", "event-bus", "**", "*.rs"),
+                                recursive=True):
+            try:
+                with open(_path, encoding="utf-8", errors="ignore") as fh:
+                    for _lineno, _line in enumerate(fh, 1):
+                        if not ("旁路" in _line or "mpsc" in _line
+                                or "is_critical_mpsc_event" in _line):
+                            continue
+                        if not any(_t in _line for _t in _size_tokens):
+                            continue
+                        _cm = re.search(r"(\d+)\s*类", _line)
+                        if not _cm:
+                            continue
+                        _seen += 1
+                        if _n_mpsc is None or _cm.group(1) != str(_n_mpsc):
+                            _off.append("%s:%d=%s类" % (
+                                os.path.relpath(_path, ROOT), _lineno, _cm.group(1)))
+            except OSError:
+                continue
+        if not _check(
+                "I8c mpsc-bypass list-size 'N 类' prose == CRITICAL_MPSC_VARIANTS "
+                "(scanned=%d, const=%s, offenders=%s)" % (
+                    _seen, _n_mpsc, _off or "none"),
+                _seen >= 1 and not _off):
+            fails += 1
+    except OSError as exc:
+        if not _check(f"I8c event-bus sources readable ({exc})", False):
+            fails += 1
+
+    # I8 盲区收敛记录（第三轮 T1.3 登记 → v3.5 W6-3 闭合）：
+    #   I8/I8b 锁 “N 个 Critical 事件/变体” 措辞 == CRITICAL_TOTAL(=20 全量)；
+    #   mpsc 旁路子数那一组自由文本（=16）与「常量 == is_critical_mpsc_event 臂数」
+    #   曾长期在本门监测面之外（历史上 v2.3 补入 CertifyIssued/FailureRegistered 后
+    #   正文多处残留旧值 13/14/17/18）。自 2026-10-09 起由 **I8c** 接住：
+    #   两个子断言均为静态源文扫描，不依赖编译产物，也不改动任何判定阈值。
 
     verdict = f"FAIL ({fails} violation(s))" if fails else "PASS (all invariants hold)"
     print(f"\n  RESULT: {verdict}")

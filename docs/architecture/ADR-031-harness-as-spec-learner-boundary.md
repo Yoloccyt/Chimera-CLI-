@@ -6,6 +6,8 @@
 
 已批准 (2026-07-23)
 
+> **🗑 2026-10-14 已删 crate 校正**：本文 **12 处 `auto-dpo` 引用（含 9 条 `file:///…/crates/auto-dpo/…` 链接）产物不在当前代码库**——`auto-dpo` 已随架构减法批次 A（`38c72e6`，2026-09-20）物理删除，登记见 [`CODE_WIKI.md §3.12`](CODE_WIKI.md)（已删 crate 唯一登记表）。依生命周期政策 R7「历史只加注不改写」，正文原样保留以维持决策审计痕迹。**对本 ADR 的实质影响**：决策 **C2（嫁接而非新建）** 的两个嫁接目标中，`auto-dpo`（DPO 偏好对）一侧已无代码载体，`gsoe-evolution`（GRPO 策略）一侧仍存活；附录 A 命名映射表内指向 `auto-dpo/generator.rs` 的行按**出处悬空**处置，引用前须改指 §3.12。
+
 ## 背景
 
 - 项目当前处于 v2.3.1-omega(第三阶段模块级系统性优化,35 crate 全覆盖,2877 测试全绿),`chimera-mas` 子系统 Stage A 骨架与 Stage B Part II 闭环能力均已落地(ADR-026/027/028),INV-7/INV-8 不变量经 proptest 验证。

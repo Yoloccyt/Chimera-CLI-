@@ -4,6 +4,8 @@
 
 已批准 (Accepted) (2026-07-25)
 
+> **🗑 2026-10-14 已删 crate 校正**：本文 **13 处 `auto-dpo` + 1 处 `model-router`（含 5 条 `file://` 死链）产物不在当前代码库**（批次 A `38c72e6`，2026-09-20，登记见 [`CODE_WIKI.md §3.12`](CODE_WIKI.md)）。依 R7「历史只加注不改写」保留正文。**实测澄清（排除一项疑似风险）**：本文 CI 检测一节设想"`release.yml` 新增 `r2-freeze-guard` job，扫描 `crates/gsoe-evolution/` 与 `crates/auto-dpo/src/`"，其中 auto-dpo 一侧**未按原样实施**——现役门 `scripts/check_r2_shadow_redlines.ps1:40-41` 实际只扫 `crates/gsoe-evolution/src/rtl_shadow.rs` 与 `crates/omega-learner/src/rtl_seam.rs` 两条存活路径 ⇒ **不存在"被扫目录消失导致门空转通过"的情形**（2026-10-14 实测）。R2 冻结裁决本身不受影响，其约束对象全部仍在盘。
+
 > **状态说明**: 本 ADR 于 2026-07-25 由 P4-W16.2.3 子任务创建并批准。本 ADR 是 ADR-032 决策 4（验证器层级跃迁路径）的**工程实施层具体化与硬约束落地**——ADR-032 决策 4 在 RHI-CG 双通道评估器架构层面定义了 R2 冻结规则,本 ADR 将其落地为代码层面的硬约束、解冻流程与违反处置预案。属 append-only 扩展(对齐 ADR-028 决策 1 哲学),不修改 ADR-032 的裁决结论。
 
 ## 背景

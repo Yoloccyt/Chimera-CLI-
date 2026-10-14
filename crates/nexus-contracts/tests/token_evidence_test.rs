@@ -145,7 +145,7 @@ fn creation_reasons_wire_format_frozen() {
             "tool_schema_change",
         ),
         (SegmentCreationReason::MessageRewrite, "message_rewrite"),
-        (SegmentCreationReason::Titofallback, "titofallback"),
+        (SegmentCreationReason::TitoFallback, "titofallback"),
         (SegmentCreationReason::NaturalBoundary, "natural_boundary"),
         (
             SegmentCreationReason::MaxLengthReached,

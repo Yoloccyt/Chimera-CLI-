@@ -174,6 +174,20 @@ impl OverWindowBridge {
         &self.fallback
     }
 
+    /// 当前块表长度（诊断/基准用）
+    ///
+    /// WHY 只读访问器：`dense_plan` 的输入就是 `table.len()`，而聚类后的实际块数≠
+    /// chunk 数——基准/诊断若拿估算值去推断路径，会把“已越阈”误读成“未越阈”
+    ///（v3.5 M6 实测中就是这样把同一路径的两个臂当成了不同路径，见 `ADR-196 §12`）。
+    /// 本方法只读锁取长度，不改变任何行为；取 guard 后立即释放，不跨 await。
+    #[must_use]
+    pub fn block_count(&self) -> usize {
+        self.corpus_blocks
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .len()
+    }
+
     /// 执行超窗兜底（判定 + 候选生成 + 事件发布）
     ///
     /// # 参数

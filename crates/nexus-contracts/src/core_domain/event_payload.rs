@@ -76,9 +76,9 @@ pub enum TaskPriority {
 /// Agent 生命周期状态 — AgentHeartbeat 事件携带的 Agent 运行时状态
 ///
 /// WHY 下沉 L0(ADR-054 决策 6): 同 TaskPriority,为纯分类标签。
-/// 变体语义与 chimera-mas::AgentStatus 保持一致(Idle/Running/Paused/
-/// Completed/Failed/Crashed),L9 发布心跳事件时经
-/// `From<chimera_mas::AgentStatus>` 转换映射到本类型。
+/// 变体语义与 chimera-mas 心跳事件的 Agent 运行时状态一致(Idle/Running/Paused/
+/// Completed/Failed/Crashed)。L9 直接复用本类型(`event_bus::AgentStatus`，单一真值源)，
+/// 不另设 `From<chimera_mas::AgentStatus>` 转换（历史上曾声明该转换但全库无实现，2026-10-13 校正）。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum AgentStatus {
     /// 空闲状态,等待任务分配

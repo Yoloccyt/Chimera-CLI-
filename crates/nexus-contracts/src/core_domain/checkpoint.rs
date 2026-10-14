@@ -48,6 +48,22 @@ pub struct Checkpoint {
     /// #[serde(default)] 确保旧格式(MessagePack/JSON)缺失此字段时反序列化不失败
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// 持久化 schema 版本(ADR-213 R7 的 F3 项)。
+    ///
+    /// `0` 表示"本字段加入前的历史形态",且 0 时**整字段不写入** ⇒ 当前所有编码字节与
+    /// 加字段前逐字相同,老档案无需迁移即可回读(`#[serde(default)]` 补齐缺失键/尾元素)。
+    /// 将来需要不兼容演进时写 1,读取侧按 `schema_version` 分支——这是"共存式"版本化,
+    /// 刻意不学 `mca-gateway/spec_loader.rs` 的 fail-closed(那会让全部历史 checkpoint 变砖)。
+    #[serde(default, skip_serializing_if = "is_schema_version_unset")]
+    pub schema_version: u16,
+}
+
+/// 版本号为 0(未标注)时省略该字段,保证 wire 字节与加字段前完全一致。
+///
+/// 标 `pub(crate)`:ADR-213 可见性约定——契约层内部辅助项默认不进入公开 API,
+/// 供本 crate 各持久化 envelope 模块共用(其余模块经 `crate::core_domain::checkpoint::` 引用)。
+pub(crate) fn is_schema_version_unset(v: &u16) -> bool {
+    *v == 0
 }
 
 impl Checkpoint {
@@ -65,6 +81,7 @@ impl Checkpoint {
             serialized_state,
             created_at: Utc::now(),
             description: None,
+            schema_version: 0,
         }
     }
 
@@ -83,6 +100,7 @@ impl Checkpoint {
             serialized_state,
             created_at: Utc::now(),
             description: Some(description.into()),
+            schema_version: 0,
         }
     }
 }

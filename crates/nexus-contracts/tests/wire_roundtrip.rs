@@ -3,7 +3,7 @@
 //! 对应方案: `Chimera架构重构与优化方案_v3.3-L0L3融合终版.md` §2.1 WI-G2
 //! （承 v3.2 WI-G2 / v3.0 L0-3「wire 类型往返 proptest 扩全」）
 //!
-//! # 覆盖范围（10 组 wire 类型，2026-10-07 现取）
+//! # 覆盖范围（9 组 wire 类型，2026-10-07 现取）
 //!
 //! | 组 | 类型 |
 //! |---|---|
@@ -775,6 +775,7 @@ fn any_token_ledger_entry() -> impl Strategy<Value = TokenLedgerEntry> {
                     moe_routing,
                     timestamp,
                     graph_identity,
+                    schema_version: 0,
                 }
             },
         )
@@ -790,7 +791,7 @@ proptest! {
             Just(SegmentCreationReason::HistoryCompaction),
             Just(SegmentCreationReason::ToolSchemaChange),
             Just(SegmentCreationReason::MessageRewrite),
-            Just(SegmentCreationReason::Titofallback),
+            Just(SegmentCreationReason::TitoFallback),
             Just(SegmentCreationReason::NaturalBoundary),
             Just(SegmentCreationReason::MaxLengthReached),
         ],
@@ -807,6 +808,7 @@ proptest! {
             is_anchor, token_entries: entries,
             context_snapshot: snapshot.into_boxed_slice(),
             start_turn: start, end_turn: end, creation_reason: reason,
+            schema_version: 0,
         };
         assert_roundtrip(&seg, "SegmentMetadata");
         assert_roundtrip(&ledger, "TokenLedgerEntry");

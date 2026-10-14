@@ -1,0 +1,17 @@
+# Orphan source-file ledger (G-109, ADR-213 D-18). ONLY-DECREASE.
+# A .rs file under crates/*/src that no `mod` declaration reaches is never parsed by
+# cargo: no warning, no tests run, no public items exist -- it just drifts. The crate
+# level reachability ratchet (ADR-160) cannot see it because it counts crates, not files.
+# Rows below are VISIBLE DEBT discovered 2026-10-13, not permission: each one must be
+# either wired up (add the missing `mod`) or deleted, and the row removed in that commit.
+# A NEW orphan turns red; a row that stops being an orphan without being deleted (i.e. the
+# file vanished another way) turns red as STALE.
+crates/chimera-tui/src/actions/user_commands.rs
+crates/chimera-tui/src/app/notify.rs
+crates/chimera-tui/src/components/prefix_hint.rs
+crates/chimera-tui/src/data/pace_gate.rs
+crates/chimera-tui/src/data/sanitize.rs
+crates/parliament/src/delegation.rs
+crates/parliament/src/event_pipeline.rs
+crates/parliament/src/scheduler.rs
+crates/quest-engine/src/wal.rs

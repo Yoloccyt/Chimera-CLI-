@@ -98,11 +98,25 @@ jobs:
           python3 scripts/check_layer_map_parity.py --selftest
           python3 scripts/check_layer_map_parity.py
 
+      # WHY: L0 契约层纯度机器门(G-99, ADR-033 追加节 2026-10-09 自陈缺口的收口)——
+      # ADR-033 规定 nexus-contracts 为「纯类型 + 受控纯逻辑」(无 IO/async/网络/随机,
+      # 依赖仅 serde/chrono/uuid/thiserror)。此前「受控」二字无机器判据,仅靠 WI-G1
+      # 人工审计 + 单测;check_dependency_rules.ps1 Check B 只拦 crate 级向上依赖,
+      # 不拦「经合法依赖或 std 引入的 impure 符号」。本门双刃:①[dependencies] 白名单,
+      # ②注释/字符串先 blank 后再扫禁用符号(避免误判文档里的 tokio::spawn/URL 提及,
+      # 正是 ADR-033 追加节「先确认计数口径」教训的机器化)。零编译秒级 light 门,
+      # 沿 check_layer_map_parity/check_accel_exclusion 的 --selftest 双向夹具先例。
+      - name: L0 contracts purity gate (G-99)
+        run: |
+          python3 scripts/check_l0_purity.py --selftest
+          python3 scripts/check_l0_purity.py
+
       # WHY: PowerShell 5.1 parity 守门(ADR-198 G-85)——本仓将 .ps1 定位为
       # “Windows 权威执行体”，但 CI 与 gate_manifest 均以 pwsh（默认 UTF-8）调用，
       # 而无 BOM 且含非 ASCII 的文件在 5.1 下会按 ANSI 解码。2026-10-02 实测：
       # 工作树副本 24 个 .ps1 中 17 个无 BOM 且含非 ASCII，其中 11 个在 5.1 下根本解析失败
-      # （含被根 e2e dependency_rules_inner_ring_test 调用的 check_dependency_rules.ps1），
+      # （此前由根 e2e dependency_rules_inner_ring_test 调用；该 target 已按 ADR-213 R3 退役，
+      #  本步骤判据不变——.ps1 孪生仍由本地 pwsh 与 check_gate_predicates_parity 对拍面调用），
       # 而全量 cargo test 当时仍报绿——即“Windows 侧从未跑成”被沉默吞噬。
       # 本门为字节级检查（不依赖平台），故 Linux runner 同样有效。
       - name: PowerShell UTF-8 BOM gate (Windows 5.1 parity)
@@ -161,6 +175,43 @@ jobs:
         run: |
           python3 scripts/check_contract_consumers.py --selftest
           python3 scripts/check_contract_consumers.py
+
+      # WHY: ADR-213 残余债务波把四支「有牙但从没咬」的检查升为阻塞门。
+      # G-101(check_dead_contract_apis.py)按 ADR-197 D5「暂不登记」长期以 advisory 存在、
+      # ci.yml 此前只在注释里提过它(原 :171)而从未执行;G-103(check_gates_provenance.py)
+      # 方向 B 专抓「脚本自带 --selftest 却未登记 gate_manifest」,而执行这条纪律的门自身
+      # 此前也未登记(它首轮实跑就抓到了自己)。两支升格已同批删除
+      # gate_provenance_exemptions.txt 对应豁免行——该文件 :17-19 自订纪律:升为门未删行
+      # ⇒豁免成为与清单冲突的第二真值源。
+      # G-105/G-107 是本轮新建的 L0 只减棘轮:G-91 的 DEF_RE 只枚举
+      # pub struct|enum|trait|type,L0 的 pub fn 面(现读 255)与 crate 根 re-export 面
+      # (现读 53,W3 刻意保留的双路径)此前不受任何门统计——新增公开项不会让任何东西变红。
+      # 四支门均先 --selftest 证明有牙(含真空守卫与畸形台账退 2),再跑真实裁决;零 cargo、秒级。
+      - name: L0 contract-surface ratchets (G-105, G-107)
+        run: |
+          python3 scripts/check_l0_pubfn_ratchet.py --selftest
+          python3 scripts/check_l0_pubfn_ratchet.py
+          python3 scripts/check_l0_root_surface.py --selftest
+          python3 scripts/check_l0_root_surface.py
+
+      - name: Gate provenance and contract-member ledger (G-101, G-103)
+        run: |
+          python3 scripts/check_dead_contract_apis.py --selftest
+          python3 scripts/check_dead_contract_apis.py
+          python3 scripts/check_gates_provenance.py --selftest
+          python3 scripts/check_gates_provenance.py
+
+      # WHY: 源文件级可达性门(ADR-213 D-18)。ADR-160 的可达性棘轮数的是 crate,而 cargo
+      # 对「某个 .rs 没有任何 mod 指向它」一个警告都不给:该文件从不被解析,其 #[cfg(test)]
+      # 测试永不运行,其 pub 项不在 API 里,只会随时间腐坏。2026-10-13 实测发现 9 个此类
+      # 文件(chimera-tui 5 / parliament 3 / quest-engine 1),其中 parliament 的
+      # delegation·event_pipeline·scheduler 三文件在 `cargo test -p parliament --lib --list`
+      # 里贡献 0 个测试——即"已交付"叙事下不参与编译的死码。台账是可见债务而非许可:
+      # 每行须补 mod 或删文件并同批删行;新增孤儿必红。先 --selftest 证明门有牙再跑真实裁决。
+      - name: Source-file reachability ledger (G-109)
+        run: |
+          python3 scripts/check_src_module_reachability.py --selftest
+          python3 scripts/check_src_module_reachability.py
 
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
@@ -460,7 +511,16 @@ jobs:
       - name: Test (workspace, 快速回归)
         # WHY 命令裁剪(2026-08-05 实测,冷全量 ~30min):
         # - --exclude chimera-e2e-tests:根 package 33 个 E2E/压测 [[test]] 独立二进制的
+        #   口径注（2026-10-10 现取，防下一轮误判为陈旧数字）：33 = `tests/e2e/*` 31 + `tests/stress/*` 2；
+        #   根 Cargo.toml 的 [[test]] 声明共 **41**，分解 = 37 个带 path（31 e2e + 6 非 e2e，
+        #   含 2 个 stress 与 owasp/dependency-rules/composition/nexus-contracts 定向测）+ 4 个未写 path
+        #   （走 Cargo 默认 `tests/<name>.rs`）——“41”与“33”不是同一个口径，不得互校。
         #   编译+链接+运行移出快轨,由下方 e2e job 并行承担(门禁不丢失);
+        #   “不丢失”的两端证据（2026-10-10 逐条核对）：排除是**按 package 级**
+        #   （`--exclude chimera-e2e-tests` 排除根包全部 41 个 [[test]]），而 e2e job 跑
+        #   `cargo nextest run -p chimera-e2e-tests -E 'not binary(/stress/)'` ⇒ 同一包内除压测外
+        #   全跑；剩下的压测由 `stress.yml`（nightly 03:00 UTC，`-E 'binary(/stress/)'`）接住。
+        #   ⇒ 改任何一个过滤式都会破这个闭合，三条（快轨 exclude / e2e -E / stress.yml -E）必须同批看。
         #   注:必须显式传入(2026-08-12 修复——此前命令缺失该参数,注释与命令漂移,
         #   导致 check job 重复编译运行 E2E target,拖慢快轨);
         # - nextest:不运行 doc-tests(~335s,占 cargo test 运行段 55%),

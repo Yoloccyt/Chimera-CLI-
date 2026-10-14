@@ -45,11 +45,13 @@ pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 /// 必须同时修改 severity() 与 is_critical_mpsc_event 两处;此常量供
 /// 守护测试断言旁路清单规模不回退(16 ⊆ 20)。
 /// 常量规模本身由 `test_critical_double_list_d8_counts` +
-/// `mpsc_bypass_exact_*` + `credit_flow_test` 三处机器锁定;但正文里
-/// 「当前 N 类」这类自由文本计数**不在 I8 门覆盖范围**(I8/I8b 只校验
-/// 「N 个 Critical 事件」措辞 == `CRITICAL_TOTAL`,不校验 mpsc 旁路子数),
-/// 属已知盲区 —— 第三轮 T1.3 据此把散落的旧值 13/14/17/18 一并纠为 16/20;
-/// 是否新增 I8c 机器断言锁死「N 类」措辞留 T3 评估。
+/// `mpsc_bypass_exact_*` + `credit_flow_test` 三处机器锁定;而正文里
+/// 「当前 N 类」这类自由文本计数、以及「常量 == `is_critical_mpsc_event` 臂数」
+/// 两个子断言,自 2026-10-09 起由 `check_perf_redlines.py` 的 **I8c** 锁死。
+/// 此前那是已知盲区(I8/I8b 只校验「N 个 Critical 事件」措辞 == `CRITICAL_TOTAL`,
+/// 不校验 mpsc 旁路子数),第三轮 T1.3 因此只能人工把散落的旧值 13/14/17/18
+/// 纠为 16/20;I8c 落地当日即抓到一处残留旧值(backpressure_test.rs 注释),
+/// 说明该盲区真实会咬人而不是理论风险。
 /// L4 深度优化 P1-1:FormalVerificationFailed 升入旁路(13 → 14)——
 /// 验证器否决候选若丢失则违规候选继续进入后续阶段,与 FormalViolation 同语义。
 pub const CRITICAL_MPSC_VARIANTS: usize = 16;
