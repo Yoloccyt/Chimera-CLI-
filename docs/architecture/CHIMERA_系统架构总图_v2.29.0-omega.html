@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Chimera CLI (NEXUS-OMEGA) 系统架构总图 · v2.29.0-omega</title>
+<style>
+:root{
+  --ink:#111a24; --ink2:#33475b; --line:#7f93a8; --paper:#eef3f7; --card:#fff;
+  --l0:#0b5d3b; --l1:#0a5c7a; --l2:#1f5fa8; --l3:#3b52a8; --l4:#8a1f4a; --l5:#6b3fa0;
+  --l6:#a85a10; --l7:#8a6d00; --l8:#4a6b12; --l9:#0f6b57; --l10:#37474f;
+  --red:#b0181b; --amber:#b06a00; --grey:#8d9aa6;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);
+  background-image:linear-gradient(#dfe8ef 1px,transparent 1px),linear-gradient(90deg,#dfe8ef 1px,transparent 1px);
+  background-size:22px 22px;color:var(--ink);
+  font:13px/1.55 "Segoe UI","Microsoft YaHei",Arial,sans-serif;}
+.wrap{max-width:1720px;margin:0 auto;padding:22px 26px 70px}
+h1{font-size:25px;margin:0 0 4px;letter-spacing:.5px}
+h2{font-size:16.5px;margin:34px 0 3px;padding:7px 12px;background:var(--ink);color:#fff;letter-spacing:.6px}
+h2 .tag{float:right;font-weight:400;font-size:11.5px;opacity:.75;letter-spacing:0}
+h3{font-size:13px;margin:16px 0 6px;color:var(--ink2);border-left:3px solid var(--ink2);padding-left:7px}
+.sub{color:var(--ink2);font-size:12.5px;margin:0 0 10px}
+.card{background:var(--card);border:1px solid #b9c7d4;padding:12px 14px;margin:0 0 12px;
+  box-shadow:3px 3px 0 #d6e0e8}
+code,.mono{font-family:"Cascadia Mono",Consolas,"Courier New",monospace;font-size:11.5px}
+code{background:#e9eff4;border:1px solid #cfdbe4;padding:0 3px}
+table{border-collapse:collapse;width:100%;font-size:11.8px}
+th,td{border:1px solid #b9c7d4;padding:4px 7px;vertical-align:top;text-align:left}
+th{background:#dbe5ec;font-weight:600}
+.grid{display:grid;gap:12px}
+/* ---- layer bands ---- */
+.band{display:grid;grid-template-columns:132px 1fr;gap:0;border-top:1px solid #b9c7d4}
+.band:last-child{border-bottom:1px solid #b9c7d4}
+.band>.lab{padding:8px 9px;color:#fff;font-weight:700;font-size:12.5px;display:flex;
+  flex-direction:column;justify-content:center}
+.band>.lab small{font-weight:400;font-size:10.5px;opacity:.88;display:block;margin-top:2px}
+.band>.body{padding:7px 8px;display:flex;flex-wrap:wrap;gap:5px;align-content:center}
+.crate{border:1.4px solid #2f3f4e;background:#f6f9fb;padding:3px 7px;font-size:11.6px;
+  font-family:"Cascadia Mono",Consolas,monospace;white-space:nowrap}
+.crate b{font-weight:700}
+.crate.gated{border-style:dashed;border-color:var(--amber);background:#fdf4e6;color:var(--amber)}
+.crate.hub{border-width:2.4px;background:#e2f0f7;font-weight:700}
+.crate.root0{border-width:2.6px;background:#e2f4ea}
+/* ---- arrows / rails ---- */
+.rails{display:grid;grid-template-columns:1fr 118px 118px;gap:0;margin:0 0 12px;border:1px solid #b9c7d4;background:#fff}
+.rails .stack{padding:7px 8px;border-right:1px solid #b9c7d4;min-height:520px;display:flex;flex-direction:column}
+.rail{flex:1;border:1.3px dashed #7b8ea0;display:flex;align-items:center;justify-content:center;
+  writing-mode:vertical-rl;text-orientation:mixed;font-size:11.3px;padding:6px 2px;background:#f0f5f9;
+  font-family:Consolas,monospace;margin-bottom:6px}
+.rail.ev{border-color:var(--l4);color:var(--l4);border-style:solid;background:#fbeef3}
+.rail.mcp{border-color:var(--l3);color:var(--l3);background:#eef0fa}
+.rail.last{margin-bottom:0}
+.dirnote{font-size:11.3px;color:var(--ink2);padding:6px 8px;border-top:1px dashed #b9c7d4;flex:none}
+/* ---- misc ---- */
+.kv{display:flex;flex-wrap:wrap;gap:5px 16px;font-size:11.8px;margin-top:6px}
+.kv span>em{font-style:normal;color:var(--ink2)}
+.pill{display:inline-block;border:1px solid var(--ink2);padding:0 6px;font-size:10.8px;
+  font-family:Consolas,monospace;background:#fff}
+.pill.red{border-color:var(--red);color:var(--red)}
+.pill.ok{border-color:var(--l0);color:var(--l0)}
+.pill.na{border-color:var(--grey);color:var(--grey)}
+.two{grid-template-columns:1fr 1fr}
+.three{grid-template-columns:1fr 1fr 1fr}
+.four{grid-template-columns:repeat(4,1fr)}
+.flow{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-family:Consolas,monospace;font-size:11.5px}
+.flow i{font-style:normal;border:1.2px solid var(--ink2);background:#fff;padding:2px 6px}
+.flow u{text-decoration:none;color:var(--l4);font-weight:700}
+.flow s{text-decoration:none;color:var(--grey)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:11.5px;margin-top:8px}
+.legend em{font-style:normal;display:inline-flex;align-items:center;gap:5px}
+.sw{width:26px;height:11px;border:1.4px solid #2f3f4e;display:inline-block}
+.foot{font-size:11.2px;color:var(--ink2);margin-top:5px}
+.warn{border-left:4px solid var(--red);background:#fdf0f0;padding:8px 10px;margin:10px 0;font-size:12px}
+.tree{font-family:Consolas,monospace;font-size:11.4px;line-height:1.75}
+.gatebox{border:1px solid #b9c7d4;background:#f7fafc;padding:6px 8px;font-size:11.4px}
+.gatebox b{color:var(--ink)}
+.n{font-family:Consolas,monospace;color:var(--l1);font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Chimera CLI <span style="color:var(--ink2);font-weight:400">(NEXUS-OMEGA)</span> — 系统架构总图</h1>
+<div class="sub mono">
+  版本 <b>2.29.0-omega</b> · workspace 成员 <b>39 crate</b> · 分层 <b>L0–L10（11 层语义 / 10 层编号）</b>
+  · 出图日期 2026-10-13 · 取数方式：<b>代码实测优先</b>（文档口径仅注为意图参照）
+</div>
+<div class="card" style="border-left:4px solid var(--l0)">
+  <b>阅读顺序</b>：<span class="mono">①上下文边界 → ②十层主图（含依赖铁律与三条轨道）→ ③事件总线双通道 → ④L0 契约层内部 → ⑤运行期数据流与记忆/存储 → ⑥治理门禁体系 → ⑦红线与不变量 → ⑧证据台账</span>
+  。每个数字后面都挂着它的<b>唯一权威源</b>；未取证的格子显式标 <span class="pill na">未取证</span>，不猜数。
+</div>
+
+<!-- ============ PANEL 1 ============ -->
+<h2>① 系统上下文与外部边界 <span class="tag">C4 Level 1–2</span></h2>
+<div class="grid four">
+  <div class="card">
+    <h3 style="margin-top:0">外部调用者</h3>
+    <div class="tree">人类终端用户 → <b>chimera</b> 可执行<br>IDE / 编辑器 → <b>chtc-bridge</b><br>宿主协议客户端 → <b>nexus-app-server</b><br>外部 Agent / 工具 → <b>mcp-mesh</b><br>CI runner、fuzz、Docker</div>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">系统本体</h3>
+    <div class="tree">Rust 2021 · Tokio async workspace<br>单二进制（内部代号 <code>aether</code>，外部名 <code>chimera</code>）<br>+ <code>chimera-e2e-tests</code> 根 package（仅承载测试，publish=false）</div>
+    <div class="foot">产物：release binary &lt; 50 MB · 镜像 &lt; 100 MB</div>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">外部依赖（受控面）</h3>
+    <div class="tree">LLM 渠道（Q/B/C/S 四渠道）↔ <b>mca-gateway</b><br>gVisor <code>runsc</code> ↔ <b>seccore</b>（非 Linux 降级进程隔离）<br>SQLite（bundled, FTS5）↔ repo-wiki / scc-cache / …<br>WASM/wasi ↔ wasmtime · ONNX ↔ tract</div>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">跨边界纪律</h3>
+    <div class="tree">跨层通信：<b>只走 event-bus</b><br>跨进程通信：<b>只走 mcp-mesh</b><br>外部调用：必经 SecCore 沙箱 + Decay 衰减<br>流式数据面：bounded mpsc，<b>不进 event-bus</b>（ADR-065 决策 4）</div>
+  </div>
+</div>
+
+<!-- ============ PANEL 2 ============ -->
+<h2>② 十层主图 · 39 crate 全量 + 依赖铁律 <span class="tag">层归属唯一权威源 = scripts/check_dependency_rules.sh 的 layer_of()（与 .ps1 $layerMap / crate 自述头 / 根 manifest 分组 / CODE_WIKI §2.1 六源对拍，门 G-45/G-46）</span></h2>
+
+<div class="warn"><b>依赖铁律（方向不可逆）</b>：
+<span class="mono">L(N)→L(N) ✓ 同层互引 · L(N)→L(N-1) ✓ 向下 · <span style="color:var(--red)">L(N)→L(N+1) ✗ 向上禁止</span> · L(N)──event-bus──L(M) ✓ 跨层唯一通道 · L(N)──mcp-mesh───L(M) ✓ 跨进程唯一通道</span>
+<br>校验器：Check B（向上依赖）/ Check C（图完备性 39=39）/ Check D（chimera-mas 内部边 ≤16，现 12）/ Check E（chimera-tui 不得直连 L2–L9）。Check A（内环边界）已随 <b>ADR-187</b> 从 .sh/.ps1 双侧退役 ⇒ 环分区现为 <b>NOT-ENFORCED 设计意图</b>，外环→内环只防增长（棘轮门 G-75/G-76，基线 9 条边）。</div>
+
+<div class="rails">
+  <div class="stack">
+    <div class="band"><div class="lab" style="background:var(--l10)">L10<small>Interface 接口层 · 7</small></div><div class="body">
+      <span class="crate"><b>chimera-cli</b> 组合根</span><span class="crate">chimera-tui Concord</span>
+      <span class="crate">nexus-app-server 宿主门面</span><span class="crate">chtc-bridge 5-IDE</span>
+      <span class="crate">mcp-mesh 跨进程</span><span class="crate">csn-substitutor 降级链</span>
+      <span class="crate gated">mca-gateway 渠道亲和 (GATED)</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l9)">L9<small>Quest 任务层 · 6</small></div><div class="body">
+      <span class="crate">quest-engine LHQP/TTG</span><span class="crate">chimera-mas MAS-Q</span>
+      <span class="crate">mas-sched 调度控制面</span><span class="crate">nexus-hook 生命周期</span>
+      <span class="crate">efficiency-monitor 审计</span><span class="crate">gea-activator 激活</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l8)">L8<small>Parliament 议会 · 2</small></div><div class="body">
+      <span class="crate">parliament SHARP/AHIRT</span><span class="crate">decb-governor 预算治理</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l7)">L7<small>Execution 执行 · 5</small></div><div class="body">
+      <span class="crate">pvl-layer 生成验证</span><span class="crate">gqep-executor 聚集</span>
+      <span class="crate">mtpe-executor 多步预测</span><span class="crate">ssra-fusion 适配</span>
+      <span class="crate">nexus-subagent 类型化子代理</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l6)">L6<small>Router 路由 · 5</small></div><div class="body">
+      <span class="crate hub">osa-coordinator Ω₁</span><span class="crate">kvbsr-router</span>
+      <span class="crate">faae-router</span><span class="crate">sesa-router</span>
+      <span class="crate">omega-learner LinUCB (R2 冻结)</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l5)">L5<small>Knowledge 知识 · 2</small></div><div class="body">
+      <span class="crate">repo-wiki ISCM/FTS5</span><span class="crate">gsoe-evolution 在线进化</span>
+      <span class="crate" style="border-style:dotted;color:var(--grey)">auto-dpo ✗ 已物理删除</span>
+      <span class="crate" style="border-style:dotted;color:var(--grey)">model-router ✗ 已物理删除</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l4)">L4<small>Security 安全 · 3</small></div><div class="body">
+      <span class="crate">seccore 沙箱/九层防御</span><span class="crate">decay-engine 能力衰减</span>
+      <span class="crate">qeep-protocol 纠缠执行</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l3)">L3<small>Storage 存储 · 3</small></div><div class="body">
+      <span class="crate">scc-cache 推测缓存 WAL</span><span class="crate">cmt-tiering 热温冷冰(含 lsct)</span>
+      <span class="crate">session-store append-only+CBMR</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l2)">L2<small>Memory 记忆 · 3</small></div><div class="body">
+      <span class="crate">nmc-encoder 感知编码</span><span class="crate">hcw-window 4K/32K/128K/1M</span>
+      <span class="crate">mlc-engine 四级记忆+L2检索</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l1)">L1<small>Core 内核 · 2</small></div><div class="body">
+      <span class="crate hub">nexus-core CLV(512)/NexusState</span>
+      <span class="crate hub">event-bus NexusEvent(152)</span></div></div>
+
+    <div class="band"><div class="lab" style="background:var(--l0)">L0<small>Contracts 契约 · 1</small></div><div class="body">
+      <span class="crate root0">nexus-contracts — 纯类型 + 受控纯逻辑 · 零 workspace 内部依赖（ADR-033 + 追加节）</span></div></div>
+
+    <div class="dirnote"><b>读法</b>：图自上而下即"允许依赖方向"（上层可依赖下层，反之禁止）。虚线琥珀框 = 需 <code>--features mca</code> 装配期注入的 GATED 成员；灰点线 = 已物理删除、不可再按名索引的 crate（唯一登记表 CODE_WIKI §3.12）。枢纽加粗框 = 被所有成员消费的上帝 crate（<code>nexus-core</code>/<code>event-bus</code>）与契约根 <code>nexus-contracts</code>。</div>
+  </div>
+
+  <div class="rail ev">event-bus 轨道 · 所有状态变更经此广播（跨层唯一通道，L2–L10 全覆盖）</div>
+  <div class="rail mcp">mcp-mesh 轨道 · 跨进程唯一通道</div>
+
+  <div style="padding:8px;font-size:11.2px;border-left:1px solid #b9c7d4">
+    <b>已裁决的<br>跨层特例</b>
+    <table style="margin-top:6px;font-size:10.6px">
+      <tr><td><b>gqep→qeep</b><br>L7→L4</td><td>合法向下边，ADR-048/185 收编；为残余唯一跨层渗透</td></tr>
+      <tr><td><b>gsoe→decay</b><br>L5→L4</td><td>十层律判合法，登记 <code>dep_edge_freeze.txt</code>（曾为 [GAP-A] 红项）</td></tr>
+      <tr><td><b>pvl→seccore</b></td><td>唯一 ADR 特批例外，两脚本例外表各 1 条</td></tr>
+      <tr><td><b>csn L10</b></td><td>2026-09-24 B5 由 L7 改判 L10；内部边仅 L0/L1 ⇒ 方向惰性、不翻转任何边</td></tr>
+      <tr><td><b>dev-deps</b></td><td>测试面可绕过生产方向，仅限 <code>tests/</code>，另由门 G-93/G-94 校方向</td></tr>
+    </table>
+    <div style="margin-top:8px"><b>装配面棘轮</b><br>内部生产边 <span class="n">143</span> 条只减不增，其中 <span class="n">32</span> 条指向 L0。</div>
+  </div>
+</div>
+
+<div class="legend">
+  <em><span class="sw" style="background:#e2f4ea;border-color:var(--l0)"></span>L0 契约根</em>
+  <em><span class="sw" style="background:#e2f0f7;border-width:2.4px"></span>枢纽 crate（上帝依赖面）</em>
+  <em><span class="sw" style="background:#fdf4e6;border-color:var(--amber);border-style:dashed"></span>GATED / feature 门控</em>
+  <em><span class="sw" style="background:#f6f9fb;border-style:dotted;border-color:var(--grey)"></span>已物理删除</em>
+  <em class="mono">层计数 1+2+3+3+3+2+5+5+2+6+7 = 39 ✓</em>
+</div>
+
+<!-- ============ PANEL 3 ============ -->
+<h2>③ 事件总线双通道 · L1 本体 + L0 词汇表 <span class="tag">权威源 crates/event-bus/{types,registry,bus,topic}.rs</span></h2>
+<div class="grid two">
+  <div class="card">
+    <h3 style="margin-top:0">通道拓扑（broadcast + Critical mpsc 旁路）</h3>
+    <div class="flow" style="margin:6px 0 10px">
+      <i>publisher</i> → <u>severity()</u> → <i>registry 宏判定</i>
+      → <span style="color:var(--ink2)">┬</span>
+    </div>
+    <div class="grid two" style="gap:8px">
+      <div class="gatebox"><b>Normal / Info</b><br>→ <code>tokio::broadcast</code> 广播<br>不缓存历史 ⇒ <b>先 subscribe 再 spawn</b>，否则静默丢失</div>
+      <div class="gatebox" style="border-color:var(--red)"><b style="color:var(--red)">Critical = 20 个</b><br>→ 其中 <b>16 个</b>走 <code>mpsc</code> 有界旁路保送达<br>→ 另 <b>4 个</b> broadcast-only：<code>CheckpointSaved</code> <code>ConsensusReached</code> <code>SlowConsumerDropped</code> <code>OrphanCallDetected</code></div>
+    </div>
+    <div class="kv">
+      <span><em>NexusEvent 变体</em> <span class="n">152</span></span>
+      <span><em>定级分布</em> Critical 20 / Info 11 / Normal 121</span>
+      <span><em>EventTopic</em> 10</span>
+      <span><em>CRITICAL_MPSC_VARIANTS</em> 16 · <em>CRITICAL_TOTAL</em> 20</span>
+      <span><em>LANE_FORBIDDEN_SHARD</em> 20 名</span>
+    </div>
+    <div class="foot">定级不可降级：<code>BudgetExceeded.severity() == Critical</code> 是硬红线。<code>define_event_registry!</code> 展开 <b>severity()/topic()/type_name()/metadata()</b> 四个<b>无通配 match</b> ⇒ 新增变体若不定级直接<b>编译失败</b>（这是最硬的一道牙）。双清单（bus.rs vs registry.rs）<b>刻意不同源</b>，防互锁测试退化为自比较。</div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">分层归属：变体在 L1，词汇在 L0</h3>
+    <table>
+      <tr><th>要素</th><th>归属</th><th>证据</th></tr>
+      <tr><td><code>enum NexusEvent</code> 本体 + <code>severity()</code></td><td><b>L1 event-bus</b></td><td class="mono">crates/event-bus/src/types.rs（全仓唯一 pub enum 命中）</td></tr>
+      <tr><td><code>EventMetadata</code>/<code>EventSeverity</code>/<code>AgentStatus</code>/<code>TaskPriority</code>/<code>EventNamespace</code>/<code>EventPattern</code>/<code>Compressibility</code></td><td><b>L0 nexus-contracts</b></td><td class="mono">core_domain/{event_metadata,event_payload,event_v2}.rs</td></tr>
+      <tr><td>缝合方式</td><td>L1 re-export L0</td><td class="mono">event-bus/src/payloads.rs: <code>pub use nexus_contracts::EventMetadata</code> …</td></tr>
+    </table>
+    <div class="warn" style="margin:10px 0 0"><b>改 L0 事件词汇 = 穿透 152 个变体的每个字段</b>。ADR-212 §2.4 红线：<b>Critical mpsc 判定不迁移进 L0</b>。</div>
+    <h3>新增 1 个变体必须同步的 6 个点位</h3>
+    <div class="tree">① types.rs enum → ② registry.rs 一行 <code>V =&gt; Sev, Topic;</code> → ③（若 Critical）bus.rs 三处：matches 臂 + <code>LANE_FORBIDDEN_SHARD</code> + 两个常量 → ④ <code>variant_count_test.rs</code> 计数锁 <code>152</code> + 三分布锁 + 样本清单 + 序数表 → ⑤ <code>doc_count_freeze.txt</code> + 两处文档锚 → ⑥ 无生产构造点则进 <code>event_ownership_baseline.txt</code>（现 18 条）</div>
+  </div>
+</div>
+
+<!-- ============ PANEL 4 ============ -->
+<h2>④ L0 契约层内部结构 <span class="tag">64 src 文件 / 25,369 行 / 10 组 + 53 叶模块 · 34 个生产消费 crate</span></h2>
+<div class="grid" style="grid-template-columns:1.35fr 1fr">
+  <div class="card">
+    <h3 style="margin-top:0">模块树（v3.5 W3 物理分组后 · facade 双路径）</h3>
+    <table>
+      <tr><th>组</th><th>叶模块（节选）</th><th>承载</th></tr>
+      <tr><td class="mono"><b>core_domain</b> ·8</td><td class="mono">domain task checkpoint temporal event_metadata event_payload event_v2 graph_identity</td><td><code>UserIntent</code>/<code>Quest</code>/<code>Checkpoint</code> + 事件词汇表</td></tr>
+      <tr><td class="mono">sparse ·3</td><td class="mono">ids masks omni_masks</td><td><code>SparseMask&lt;T&gt;</code>、五维 <code>OmniSparseMasks</code>（Ω₁）</td></tr>
+      <tr><td class="mono">spec ·9</td><td class="mono">harness_spec(1703) harness_dimensions behavior_contract blueprint variant formal_props platform_grounding tool_plan scheduler_contract</td><td>HarnessSpec 校验、形式化属性名册（门 G-95/96 的源）</td></tr>
+      <tr><td class="mono">seams ·12</td><td class="mono">capability_token(1503) rl_types rl_hooks reward density policy strategy memory_strategy prefetch parliament_policy decay_profile recall_quota</td><td>六类接缝契约 + RL 类型（Rust-First 闸门，Python 训练服务禁止实施）</td></tr>
+      <tr><td class="mono">memory ·6</td><td class="mono">experience_card memory_pyramid token_evidence archive_monotonicity skill_lifecycle quota</td><td>Ω₁₀ 经验卡片 + Ω₂ 压缩证据 + INV-8 归档单调</td></tr>
+      <tr><td class="mono">safety ·6</td><td class="mono">errors(814) command_validation calibration adjudication budget_tier sensitive</td><td><code>NexusError</code>(thiserror)、命令拦截 20 模式、熵启发式脱敏（无 regex）</td></tr>
+      <tr><td class="mono">vector_math ·4</td><td class="mono">util(935) vector(869) mcsm recall_fusion</td><td><code>cosine_similarity_slices</code> 权威实现、<code>VectorStore</code> trait、<code>xts_top_k*</code>（Top-K 唯一合规范式，门 G-20/21 冻结）</td></tr>
+      <tr><td class="mono">mca ·3</td><td class="mono">affinity(1176) price_vector omni_message</td><td>渠道亲和契约（含已删 <code>model-router</code> 的类型继承 <code>ProviderId</code>/<code>CacheSupport</code>）</td></tr>
+      <tr><td class="mono">protocol ·1</td><td class="mono">app</td><td>宿主协议面类型（内闭外开）</td></tr>
+      <tr><td class="mono" style="color:var(--amber)">testutil ·1</td><td class="mono">test_scale</td><td>读 <code>CHIMERA_TEST_TIMEOUT_SCALE</code> —— <b>测试工具进入 L0 生产公开面</b>（见 ⑦ 待办）</td></tr>
+    </table>
+    <div class="foot"><b>双路径</b>：<code>nexus_contracts::&lt;leaf&gt;::T</code>（旧，34 消费方在用）与 <code>nexus_contracts::&lt;group&gt;::&lt;leaf&gt;::T</code>（新）同时有效且类型同一。<code>lib.rs</code>(815 行) 把 53 叶全部根 re-export，并另设 <code>prelude</code>。</div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">纯度边界与公开面（实测）</h3>
+    <table>
+      <tr><td class="mono">[dependencies]</td><td class="mono">serde · chrono · uuid · thiserror（<b>4 项白名单，零 path 依赖</b>）</td></tr>
+      <tr><td class="mono">[dev-dependencies]</td><td class="mono">serde_json serde_yaml proptest criterion rmp-serde（门不校，与 ADR-033 一致）</td></tr>
+      <tr><td class="mono">crate 属性</td><td class="mono"><code>#![forbid(unsafe_code)]</code> + <code>#![warn(missing_docs)]</code></td></tr>
+      <tr><td class="mono">公开声明</td><td class="mono">pub type/trait ≈ 240（struct 127 / enum 103 / trait 9）· pub fn 256 · pub const 134 · pub use 159</td></tr>
+      <tr><td class="mono">crate 内可见性</td><td class="mono"><code>pub(crate)</code> 出现 <b>0 次</b> ⇒ 声明即公开，无内部边界</td></tr>
+      <tr><td class="mono">结构演进保护</td><td class="mono"><code>#[non_exhaustive]</code> 出现 <b>0 次</b> ⇒ append-only 仅靠惯例与测试</td></tr>
+      <tr><td class="mono">第三方类型外露</td><td class="mono">公开字段含 <code>DateTime&lt;Utc&gt;</code>×3、<code>Uuid</code>×1；trait 超类型面无泄漏（仅 <code>Send+Sync</code>/自定义）</td></tr>
+      <tr><td class="mono">浮点纪律</td><td class="mono">f32 站点 266 处；<b>无</b> f32 derive <code>Eq/Hash</code>；排序统一 <code>partial_cmp + unwrap_or(Equal)</code>；集合键为 String/newtype ID</td></tr>
+      <tr><td class="mono">消费面</td><td class="mono">34 生产 + 2 仅 dev（mtpe-executor、qeep-protocol）；反向依赖 <b>0</b></td></tr>
+      <tr><td class="mono">纯度门判据</td><td class="mono">G-99 = ① 依赖白名单 ⊆ 4 项 ② 注释/字符串经词法器 blank 后扫 <code>unsafe|async|.await|tokio|std::fs|std::net|std::io|std::process|TcpStream|rand::|getrandom|println!</code></td></tr>
+      <tr><td class="mono">受控逻辑登记</td><td class="mono"><code>ADR_033_EXCEPTION_MODULES</code> = 17 名，<code>tests/l0_exception_registry.rs</code> 双向相等锁</td></tr>
+    </table>
+    <div class="warn"><b>缺口（本轮实测确认）</b>：G-99 禁用符号表<b>不含 <code>std::env::var</code></b>，而 L0 有 2 处在公开面读环境变量——<code>vector_math/util.rs:478</code>（<code>CHIMERA_PERF_SCALE</code>）与 <code>testutil/test_scale.rs:52</code>。即"隐藏输入"这一类不纯度不在门内；<code>chrono::Utc::now</code> 已被 ADR-212 显式豁免，env 则从未被讨论。</div>
+  </div>
+</div>
+
+<!-- ============ PANEL 5 ============ -->
+<h2>⑤ 运行期数据流 + 记忆/存储分层 <span class="tag">链路为设计流；已删环节按 CODE_WIKI §3.12 修正</span></h2>
+<div class="card">
+<div class="flow">
+  <i>用户输入</i>→<i>nmc-encoder<br>L2 感知</i>→<i>mlc-engine<br>L2 四级记忆</i>→<i>hcw-window<br>L2 分层窗口</i>→<i>quest-engine<br>L9 分解 + TTG</i>→<i>parliament<br>L8 审议/SkepticVeto</i>→<i>decb-governor<br>L8 预算</i>→<i>pvl-layer<br>L7 生产-验证</i>→<i>osa-coordinator<br>L6 五维稀疏</i>→<i>kvbsr / faae / sesa<br>L6 路由</i>→<i>omega-learner<br>L6 LinUCB</i>→<i>gea-activator<br>L9 激活</i>→<i>mtpe-executor<br>L7 多步预测</i>→<i>gqep-executor<br>L7 聚集/超时</i>→<i>qeep-protocol<br>L4 纠缠</i>→<i>seccore + decay-engine<br>L4 沙箱/衰减</i>→<i>repo-wiki<br>L5 ISCM 沉淀</i>→<i>gsoe-evolution<br>L5 在线进化</i>→<u>event-bus L1 广播</u>→<s>Auto-DPO（原 crate 已删；<code>DpoPairGenerated</code> 事件契约仍在）</s>
+</div>
+<div class="kv"><span><em>经验卡片面</em> mlc-engine + cmt-tiering + event-bus（Ω₁₀-Card / Ω₁₁-Synthesize 按需合成，懒加载非阻塞、超时回退）</span></div>
+</div>
+
+<div class="grid four">
+  <div class="card"><h3 style="margin-top:0">上下文窗口</h3><div class="tree"><b>hcw-window</b> L2<br>4K / 32K / 128K / 1M<br>1M = 128K 实际 + 8× 稀疏压缩<br><span class="pill red">红线</span> 1M token 必须先分层+稀疏化再加载</div></div>
+  <div class="card"><h3 style="margin-top:0">记忆分层</h3><div class="tree"><b>mlc-engine</b> 四级（L0 原始→L3 人格）+ L2 HNSW 分层检索（ADR-192）<br><b>cmt-tiering</b> 热/温/冷/冰（含并入的 lsct）<br><b>INV-7</b> m_total ≤ 130 MB × 0.9 = 117 MB<br><b>INV-8</b> 归档单向降级，禁逆向</div></div>
+  <div class="card"><h3 style="margin-top:0">持久化</h3><div class="tree">SQLite（bundled，<code>SQLITE_ENABLE_FTS5=1</code>）<br>repo-wiki 全文索引 / scc-cache WAL<br><b>session-store</b> append-only 段 + CBMR 微批<br>序列化：<b>MessagePack</b>（rmp-serde，26 个 src 文件引用）<br><span class="pill red">红线</span> rusqlite 必须 <code>spawn_blocking</code><br><span class="pill na">禁用</span> sqlite-vec（需 unsafe，降级为内存 KNN）</div></div>
+  <div class="card"><h3 style="margin-top:0">委派与多代理</h3><div class="tree"><b>chimera-mas</b> L9 四象限 Q1–Q4 + WSJF<br>委托深度 ≤ 5（<code>MAX_AGENT_DEPTH</code>）<br><b>INV-9</b> 委托图必须是 DAG，违例 → <code>R2FreezeViolation</code><br><b>mas-sched</b> 控制面（影子模式先行）<br><b>nexus-subagent</b> Task Auction + 禁嵌套</div></div>
+</div>
+
+<!-- ============ PANEL 6 ============ -->
+<h2>⑥ 治理与门禁体系 <span class="tag">scripts/gate_manifest.toml = 100 条 [[gate]] · 引用 60 支唯一脚本</span></h2>
+<div class="grid" style="grid-template-columns:1.15fr 1fr">
+  <div class="card">
+    <h3 style="margin-top:0">L0 / 契约 / 依赖方向直接相关门（均 expect=0 阻塞）</h3>
+    <table style="font-size:11.2px">
+      <tr><th>门</th><th>脚本</th><th>检查什么</th><th>实测</th></tr>
+      <tr><td>G-08</td><td class="mono">check_dependency_rules.sh</td><td>Check B 向上依赖 / C 图完备 39=39 / D mas ≤16 / E L10 出边</td><td class="mono">EXIT 0，mas 12/16</td></tr>
+      <tr><td>G-45/46</td><td class="mono">check_layer_map_parity.py</td><td>六源层图交叉对拍（含 CODE_WIKI §2.1 文档块）</td><td class="mono">39=39=39=39=39=39</td></tr>
+      <tr><td>G-99/100</td><td class="mono">check_l0_purity.py</td><td>L0 依赖白名单 + 残体禁用符号（真实扫描 / 双向夹具）</td><td class="mono">64 文件 / 0 违规</td></tr>
+      <tr><td>G-91</td><td class="mono">check_contract_consumers.py</td><td>每个 L0 pub 类型需 ≥2 消费方，不足者入只减不增册</td><td class="mono">236 defs / 基线 161</td></tr>
+      <tr><td>G-62/63</td><td class="mono">check_contract_consumers_parity.py</td><td>契约面解析器 ↔ cargo 边集对拍</td><td class="mono">EXIT 0</td></tr>
+      <tr><td>G-32/33</td><td class="mono">check_dep_edge_freeze.py</td><td>内部生产装配边棘轮</td><td class="mono">143 = baseline</td></tr>
+      <tr><td>G-75/76</td><td class="mono">check_outer_inner_ratchet.py</td><td>外环→内环直连边只防增长</td><td class="mono">9 = baseline</td></tr>
+      <tr><td>G-93/94</td><td class="mono">check_dev_dep_direction.py</td><td>dev-dep 向上边门（层号派生自 layer_of）</td><td class="mono">内部 dev 边 27 / 登记 2</td></tr>
+      <tr><td>G-90</td><td class="mono">check_nexus_core_dep_freeze.py</td><td>L1 nexus-core 生产依赖双向棘轮（L0/L1 邻接）</td><td class="mono">15 deps</td></tr>
+      <tr><td>G-95/96</td><td class="mono">check_formal_property_ledger.py</td><td>L0 <code>spec/formal_props.rs</code> 名册 ↔ 实装 checker</td><td class="mono">EXIT 0</td></tr>
+      <tr><td>G-20/21</td><td class="mono">check_topk_registry.py</td><td>冻结"唯一 Top-K 合规范式 = L0 <code>xts_top_k*</code>"</td><td class="mono">ci.yml 亦跑</td></tr>
+      <tr><td>G-66/67</td><td class="mono">check_event_ownership.py</td><td>152 变体的生产构造点归属</td><td class="mono">有构造 134 / 无 18 = 账本</td></tr>
+      <tr><td>G-36/37</td><td class="mono">check_doc_drift.sh</td><td>钉住 3 个计数：152 / 10 / 39</td><td class="mono">0 registered drift</td></tr>
+      <tr><td style="color:var(--red)">— 无门 —</td><td class="mono">check_dead_contract_apis.py</td><td>契约活性分析（自称与 G-91 互认）</td><td class="mono"><span class="pill red">未登记 gate_manifest · ci.yml 仅注释 → 从未执行</span></td></tr>
+    </table>
+    <div class="foot">门纪律三问：入库了吗？CI 调不调？退出码是否编码判定？——上表最后一行三问中<b>第二问答"否"</b>，即"报告型门"，不参与发布判定。</div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">CI/CD 准入矩阵（11 workflow）</h3>
+    <table style="font-size:11.2px">
+      <tr><th>workflow</th><th>触发</th><th>阻断性</th></tr>
+      <tr><td class="mono">ci.yml</td><td>PR→main / push main / 手动<br><span class="mono">4 job 全 ubuntu-latest</span></td><td><b>check + e2e + mca-feature 阻塞</b>；benchmark = <code>continue-on-error</code>（全文件唯一）</td></tr>
+      <tr><td class="mono">audit.yml</td><td>每日 02:00 UTC + Cargo 变更 PR</td><td>audit 必 0；outdated 非阻塞</td></tr>
+      <tr><td class="mono">deny.yml</td><td>每日 05:00 + licenses 变更</td><td>阻塞</td></tr>
+      <tr><td class="mono">zizmor.yml</td><td>每日 06:00 + workflow 变更</td><td><code>--min-severity=high</code> 阻塞</td></tr>
+      <tr><td class="mono">coverage.yml</td><td>每晚 04:00</td><td>阻塞（去 continue-on-error）；<code>coverage_gate.py</code> 单点裁决</td></tr>
+      <tr><td class="mono">slo.yml / stress.yml / bench_check.yml</td><td>tag / 每日 / 改 benches**</td><td>slo 两 job 均 continue-on-error（先观测后阻塞）；bench_check 全阻塞</td></tr>
+      <tr><td class="mono">fuzz.yml</td><td>tag + 周一 03:00</td><td>非阻塞；nightly 8 target × 300s（Windows-GNU 跑不了，委托 Linux）</td></tr>
+      <tr><td class="mono">release.yml</td><td>tag <code>v*.*.*-omega</code></td><td>build+test+docker 全 pass 才 release；5 平台 matrix</td></tr>
+      <tr><td class="mono">test-install-scripts.yml</td><td>每日 + release published</td><td>3 平台 SHA256/--version 全链路</td></tr>
+    </table>
+    <h3>覆盖率口径（现取）</h3>
+    <div class="tree">阈值只写在 <code>scripts/coverage_baseline.toml</code>：<b>min_line_coverage = 85</b>（target 85 / buffer 5pp）<br>逐 crate 地板在 <code>coverage_per_crate_floor.toml</code>：<code>event-bus</code> 55（critical/ADR-160）· <code>nexus-core</code> 50（critical/ADR-033）· seccore/parliament/quest-engine/chimera-cli · <b>nexus-contracts 无专属条目 → 落 defaults 45</b></div>
+    <div class="warn"><b>合并门盲区（本轮实测）</b>：ci.yml 只在 <code>pull_request→main</code> / <code>push main</code> 触发。当前工作分支 <code>feat/c1-compute-plane-governance</code> <b>既非 main 也无 PR</b> ⇒ 已落地的 L0 波次（ADR-212 系列）<b>从未在 ubuntu runner 上跑过</b>，"本地全绿"不等于"合并门绿"。而 CI 的 e2e job 会执行 <code>cargo nextest run -p chimera-e2e-tests</code>，其中 <code>tests/dependency_rules_inner_ring_test.rs</code> 调 <code>Command::new("powershell")</code> 且硬编码 <code>.current_dir("d:\\Chimera CLI")</code> —— 在 ubuntu-latest 上两项都不成立，且它断言的是已退役的 <code>[GAP-A]</code>（恒真、零覆盖）并写死字面量 <code>12/16</code>。</div>
+  </div>
+</div>
+
+<!-- ============ PANEL 7 ============ -->
+<h2>⑦ 红线与不变量清单（工程判定用）</h2>
+<div class="grid three">
+  <div class="card"><h3 style="margin-top:0">并发 / async</h3><div class="tree">
+    <span class="pill red">禁止</span> 持锁跨 <code>.await</code>（快照→释放→await）<br>
+    <span class="pill red">必须</span> rusqlite 走 <code>spawn_blocking</code><br>
+    <span class="pill red">必须</span> <code>bus.subscribe()</code> 在 <code>tokio::spawn()</code> 之前同步调用<br>
+    <span class="pill red">必须</span> Critical 事件走 mpsc 旁路<br>
+    <span class="pill">模式</span> sync 方法用 <code>publish_blocking()</code><br>
+    <span class="pill">选型</span> <code>FuturesUnordered</code> 优于 <code>join_all</code><br>
+    <span class="pill red">禁</span> f32 隐式转 f64 比较（全程 f32）
+  </div></div>
+  <div class="card"><h3 style="margin-top:0">结构 / 质量</h3><div class="tree">
+    <span class="pill red">红线</span> 全部 crate <code>#![forbid(unsafe_code)]</code><br>
+    <span class="pill red">红线</span> 单函数 ≤ 200 行（现 <b>10 处超标</b> = 生产 6 + 测试 4；<code>audit_fnlen.py</code> 是<b>报告型</b>，CI 只跑自证夹具 ⇒ 该红线<b>未被判定达标</b>）<br>
+    <span class="pill red">红线</span> Top-K 用 <code>select_nth_unstable</code>（O(n)），禁 <code>sort_by</code> 做 Top-K<br>
+    <span class="pill red">红线</span> 零 <code>todo!()</code>/<code>unimplemented!()</code>、零 stub<br>
+    <span class="pill red">红线</span> 禁功能标志（用能力场进化替代）<br>
+    <span class="pill">错误</span> 库层 thiserror / 应用层 anyhow
+  </div></div>
+  <div class="card"><h3 style="margin-top:0">治理闸门</h3><div class="tree">
+    <b>Ω 十一定律</b>：Ω₁ Sparse · Ω₂ Compress · Ω₃ Evolve · Ω₄ Event · Ω₅ Credit · Ω₆ Reuse · Ω₇ Locate · Ω₈ Assess · Ω₉ Preserve · Ω₁₀ Card · Ω₁₁ Synthesize（权威源 CODE_WIKI §1.2 + ADR-170）<br>
+    <b>R2 冻结</b>：影子期 ≥14 天，待 ADR-053 rev4 + ADR-054 治理签署<br>
+    <b>★ RL 闸门</b>：Rust-First，Python 训练服务仅保留契约、<b>禁止实施</b><br>
+    <b>可达性</b>：30 生产可达 / 9 GATED / 0 冻结孤岛（2026-10-02 现取，<code>check_crate_reachability.sh</code>）<br>
+    <b>三重悖论</b>：记忆（幽灵记忆/阶段自适应）· 推理（协调成本 vs 增益）· 进化（L3 执行反馈 → L4 形式化验证，已跃迁）
+  </div></div>
+</div>
+
+<!-- ============ PANEL 8 ============ -->
+<h2>⑧ 证据台账 · 每个数字的来源与置信</h2>
+<div class="card">
+<table style="font-size:11.4px">
+  <tr><th>#</th><th>图中数值/主张</th><th>唯一权威源</th><th>本会话取证方式</th><th>置信</th></tr>
+  <tr><td>1</td><td>成员 39 · 版本 2.29.0-omega</td><td class="mono">Cargo.toml:27-77 members / :84 version</td><td>本会话直读原文 ✓</td><td><span class="pill ok">一手</span></td></tr>
+  <tr><td>2</td><td>层归属（11 层 / 各层成员）</td><td class="mono">scripts/check_dependency_rules.sh layer_of() + layered_crates + expected_crates=39</td><td>本会话直读原文 ✓，六源由 G-45/46 对拍</td><td><span class="pill ok">一手</span></td></tr>
+  <tr><td>3</td><td>L0 结构 64 文件 / 25,369 行 / 10 组 53 叶 / 例外表 17 名 / pub(crate)=0 / non_exhaustive=0</td><td class="mono">crates/nexus-contracts/src/**, lib.rs:503-522</td><td>例外表 17 名 + env 站点 + 计数为 0 本会话亲验 ✓；行数/文件数由子代理 wc 取</td><td><span class="pill ok">一手</span>（行数为二手）</td></tr>
+  <tr><td>4</td><td>34 生产消费 / 2 仅 dev</td><td class="mono">crates/*/Cargo.toml 分节解析 + lib.rs CONSUMERS:34 + crate_contract.py --check</td><td>三路一致（二手，含机器门复算）</td><td><span class="pill ok">交叉</span></td></tr>
+  <tr><td>5</td><td>NexusEvent 152 / Critical 20 / mpsc 16 / Topic 10</td><td class="mono">types.rs 计数 + registry.rs 注册行 + variant_count_test.rs 计数锁 + doc_count_freeze.txt</td><td>四路互验但<b>本会话未独立重跑</b></td><td><span class="pill">高置信二手</span></td></tr>
+  <tr><td>6</td><td>边棘轮 143（→L0 32）· 外环→内环 9 · nexus-core 15 · event_ownership 18 · dev_dep 2</td><td class="mono">各 *_freeze.txt / *_baseline.txt + 门自报输出</td><td>门实跑输出（二手）</td><td><span class="pill">高置信二手</span></td></tr>
+  <tr><td>7</td><td>100 门 / 60 脚本 · coverage 85 / 45 / 55 / 50</td><td class="mono">scripts/gate_manifest.toml · coverage_baseline.toml · coverage_per_crate_floor.toml</td><td>grep/读文（二手）</td><td><span class="pill">高置信二手</span></td></tr>
+  <tr><td>8</td><td>dead_contract 门从未执行</td><td class="mono">gate_manifest.toml（无 [[gate]] 条目）+ ci.yml:171（仅注释）</td><td><b>本会话亲验 ✓</b>（两子代理结论冲突，已裁定）</td><td><span class="pill ok">一手</span></td></tr>
+  <tr><td>9</td><td>CI 触发面 + e2e 执行 inner_ring + powershell/硬编码路径</td><td class="mono">ci.yml on: / :566 / tests/dependency_rules_inner_ring_test.rs:13-15</td><td><b>本会话亲验 ✓</b></td><td><span class="pill ok">一手</span></td></tr>
+  <tr><td>10</td><td>9 个 GATED 成员的<b>具体名单</b></td><td class="mono">scripts/check_crate_reachability.sh 实时输出</td><td><span class="pill na">未取证</span> 仅 mca-gateway 经 ADR-177 确认</td><td>—</td></tr>
+  <tr><td>11</td><td>inner_ring 测试在 ubuntu 上会失败</td><td class="mono">由 #9 推导（powershell 不在 PATH + 盘路径不存在 → spawn Err → expect panic）</td><td><span class="pill na">结构推导，待 CI 实测</span> 验证方式：<code>gh run view --log</code>（本会话 gh 未认证）或在 Linux 跑该 nextest filter</td><td>—</td></tr>
+</table>
+<div class="foot">
+<b>刻意不画的</b>：143 条装配边的逐条箭头（可读性优于完整性，改为棘轮计数 + 特例表）；两份历史设计蓝图（v3.4.0 §4.1 的 6 个 <code>*-contracts</code> 兄弟 crate、十六源手册 §8.1 的 <code>L0=nexus-core+nexus-telemetry</code>/GPU/UCL）——二者已被 <b>ADR-212 决策 1/2</b> 与 <b>ADR-195</b> 否决，画进图里会被误当现行法。
+<b>口径提醒</b>：本仓 <code>*.md</code> 被 .gitignore 忽略 ⇒ 文档面不可由 git 反推存在性；引用文档中的任何计数前须现取权威源。
+</div>
+</div>
+
+</div>
+</body>
+</html>
